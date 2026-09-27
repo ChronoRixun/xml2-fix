@@ -24,6 +24,7 @@ add_library(xml2_fix SHARED
 	src/iat_hook.cpp
 	src/openspy_redirect.cpp
 	src/net_trace.cpp
+	src/mod_loader.cpp
 	src/log.cpp
 	src/dinput.def
 	src/version.rc)

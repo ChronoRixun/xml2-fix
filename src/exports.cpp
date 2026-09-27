@@ -12,6 +12,7 @@
 #include "gamepad_fix.hpp"
 #include "iat_hook.hpp"
 #include "log.hpp"
+#include "mod_loader.hpp"
 #include "net_trace.hpp"
 #include "openspy_redirect.hpp"
 #include "pad_profile.hpp"
@@ -123,10 +124,15 @@ namespace
 			logger::write("online: redirect turned off in xml2-fix.ini");
 		}
 
-		if (GetPrivateProfileIntW(L"Debug", L"LogNetwork", 0, (logger::module_dir() / L"xml2-fix.ini").c_str()))
+		const auto ini = (logger::module_dir() / L"xml2-fix.ini").wstring();
+		if (GetPrivateProfileIntW(L"Debug", L"LogNetwork", 0, ini.c_str()))
 		{
 			net_trace::install(game);
 		}
+
+		// The game and the engine DLLs that read game data.
+		mod_loader::install({nullptr, "libIGCore.dll", "libIGGfx.dll", "libIGLua.dll", "libIGOpt.dll", "libCriMovie.dll"},
+		                    GetPrivateProfileIntW(L"Debug", L"LogFiles", 0, ini.c_str()) != 0);
 	}
 }
 
