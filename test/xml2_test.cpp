@@ -260,12 +260,24 @@ namespace
 int main(const int argc, char** argv)
 {
 	const bool show_live = argc > 1 && std::strcmp(argv[1], "--live") == 0;
+	std::setvbuf(stdout, nullptr, _IONBF, 0); // keep output up to a crash
 
 	std::printf("the fix is the dinput.dll this program loaded\n");
 	const auto fix = GetModuleHandleW(L"dinput.dll");
 	wchar_t path[MAX_PATH]{};
 	GetModuleFileNameW(fix, path, MAX_PATH);
 	CHECK(fix != nullptr && std::filesystem::path(path).parent_path() == module_dir());
+
+	std::printf("forwarded exports behave like Windows' own dinput.dll\n");
+	void* direct_input = nullptr;
+	CHECK(SUCCEEDED(DirectInputCreateEx(GetModuleHandleW(nullptr), 0x0700, IID_IDirectInput7A, &direct_input, nullptr)) && direct_input);
+	if (direct_input)
+	{
+		std::vector<found_device> devices;
+		CHECK(SUCCEEDED(slot<enum_devices_t>(direct_input, 4)(direct_input, 4 /* DIDEVTYPE_JOYSTICK; Windows' DirectInput 7 can crash listing all types */, &collect, &devices, DIEDFL_ATTACHEDONLY)));
+		std::printf("  info  %zu device(s) attached\n", devices.size());
+		static_cast<IUnknown*>(direct_input)->Release();
+	}
 
 	const int pads = connected_xinput_pads();
 	std::printf("  info  %d XInput pad(s) connected\n", pads);
