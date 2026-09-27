@@ -1,0 +1,63 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # to publish releases from tags
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure
+        run: cmake -S . -B build -A Win32
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test
+        run: build/bin/Release/xml2_test.exe
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { "dev-$($env:GITHUB_SHA.Substring(0, 7))" }
+          $name = "xml2-fix-$version"
+          New-Item -ItemType Directory "dist/$name" -Force | Out-Null
+          Copy-Item build/bin/Release/dinput.dll, LICENSE, packaging/INSTALL.txt "dist/$name/"
+          Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
+          "PACKAGE=dist/$name.zip" >> $env:GITHUB_ENV
+
+          # Loose DLL plus a patch manifest ([name, size, SHA-1, destination]) for launchers such as
+          # Ultimate Legends, which fetch releases/latest/download/ultimate-legends.json.
+          Copy-Item build/bin/Release/dinput.dll dist/dinput.dll
+          $dll = Get-Item dist/dinput.dll
+          $sha1 = (Get-FileHash dist/dinput.dll -Algorithm SHA1).Hash.ToUpperInvariant()
+          ConvertTo-Json -Compress -Depth 3 -InputObject @(, @('dinput.dll', $dll.Length, $sha1, 'game')) | Set-Content -NoNewline dist/ultimate-legends.json
+          Get-Content dist/ultimate-legends.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: xml2-fix
+          path: ${{ env.PACKAGE }}
+
+      - name: Publish release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = "packaging/release-notes/$($env:GITHUB_REF_NAME).md"
+          $assets = @($env:PACKAGE, 'dist/dinput.dll', 'dist/ultimate-legends.json')
+          if (Test-Path $notes) {
+            gh release create $env:GITHUB_REF_NAME @assets --title "XML2 Fix $($env:GITHUB_REF_NAME)" --notes-file $notes
+          } else {
+            gh release create $env:GITHUB_REF_NAME @assets --title "XML2 Fix $($env:GITHUB_REF_NAME)" --generate-notes
+          }

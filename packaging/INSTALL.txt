@@ -1,0 +1,24 @@
+XML2 Fix
+Xbox controllers & online play for X-Men Legends II (PC)
+https://github.com/ChronoRixun/xml2-fix
+
+INSTALL
+  Copy dinput.dll into the game's folder - the one that contains XMen2.exe.
+  Start the game: your controller is already bound (Options > Controls > Advanced to change it).
+
+UNINSTALL
+  Delete dinput.dll from the game folder.
+
+ONLINE
+  The game's GameSpy servers are gone; the fix sends its online lookups to OpenSpy
+  (openspy.net) instead. To use a different server, or to switch this off, create
+  xml2-fix.ini next to the DLL:
+    [Online]
+    Domain=openspy.net      (or your own server's domain, or: off)
+
+TROUBLESHOOTING
+  The fix writes xml2-fix.log next to itself each time the game starts.
+  If something is wrong, open an issue on GitHub and attach that file.
+
+MIT License - see LICENSE. Not affiliated with or endorsed by Activision, Marvel, Disney,
+Microsoft, Logitech or OpenSpy.
