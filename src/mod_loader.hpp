@@ -6,7 +6,8 @@
 
 // Loads mods without touching the game's files. A mod is a folder under <game>\mods laid out
 // like the game folder (e.g. mods\My Skin\actors\1101.igb); mods\load-order.txt lists which
-// mods are enabled and in what order:
+// mods are enabled and in what order (folders it doesn't list load after the listed ones,
+// alphabetically, so a mod copied in by hand just works):
 //
 //   # later lines win when two mods contain the same file
 //   +Better HUD

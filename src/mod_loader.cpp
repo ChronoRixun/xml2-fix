@@ -6,6 +6,7 @@
 #include <cwctype>
 #include <filesystem>
 #include <fstream>
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -358,7 +359,27 @@ namespace mod_loader
 		void build_index()
 		{
 			const std::filesystem::path root = std::filesystem::path(game_folder) / L"mods";
-			const auto order = read_load_order(root / L"load-order.txt");
+			auto order = read_load_order(root / L"load-order.txt");
+
+			// Mod folders the load order doesn't list yet (copied in by hand) load after the listed
+			// ones, alphabetically - the launcher adds them to the list the same way.
+			std::vector<std::wstring> unlisted;
+			std::error_code scan_error;
+			for (const auto& entry : std::filesystem::directory_iterator(root, scan_error))
+			{
+				const auto name = entry.path().filename().wstring();
+				const auto listed = std::any_of(order.begin(), order.end(), [&](const auto& e) { return lower(e.name) == lower(name); });
+				if (entry.is_directory(scan_error) && !name.empty() && name.front() != L'.' && !listed)
+				{
+					unlisted.push_back(name);
+				}
+			}
+			std::sort(unlisted.begin(), unlisted.end(), [](const auto& a, const auto& b) { return lower(a) < lower(b); });
+			for (const auto& name : unlisted)
+			{
+				order.push_back({name, true});
+			}
+
 			for (const auto& [name, enabled] : order)
 			{
 				const auto folder = root / name;
