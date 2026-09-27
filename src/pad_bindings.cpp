@@ -38,7 +38,40 @@ namespace xml2_pad_bindings
 			std::uint16_t control;
 		};
 
-		constexpr std::array<pad_binding, 23> layout{{
+		using layout_t = std::array<pad_binding, 23>;
+
+		// Raven's console layout, from the game's own console button map (the PlayStation
+		// names mapped to commands) moved to the same positions on an Xbox pad: Attack on the
+		// bottom face button, which the game's menus also use as "accept", Smash (menu "back")
+		// on the right one, Jump on top, Use on the left, powers on the right trigger.
+		constexpr layout_t console_layout{{
+			{"Forward", axis_below(y)},
+			{"Backward", axis_above(y)},
+			{"MoveLeft", axis_below(x)},
+			{"MoveRight", axis_above(x)},
+			{"LowAttack", button(pad_a)},
+			{"HighAttack", button(pad_b)},
+			{"Jump", button(pad_y)},
+			{"Guard", button(pad_x)},
+			{"Power", button(pad_rt)},
+			{"Ally", button(pad_rb)},
+			{"Solo", button(pad_lt)},
+			{"TargetLock", button(pad_lb)},
+			{"MapToggle", button(pad_rs)},
+			{"Stats", button(pad_back)},
+			{"Pause", button(pad_start)},
+			{"NextHero", hat_up},
+			{"PreviousHero", hat_down},
+			{"IncreaseHeroAggr", hat_right},
+			{"DecreaseHeroAggr", hat_left},
+			{"CameraUp", axis_below(rz)},
+			{"CameraDown", axis_above(rz)},
+			{"CameraLeft", axis_below(z)},
+			{"CameraRight", axis_above(z)},
+		}};
+
+		// Layouts earlier builds wrote to saved settings, by version; replaced when still untouched.
+		constexpr layout_t first_layout{{
 			{"Forward", axis_below(y)},
 			{"Backward", axis_above(y)},
 			{"MoveLeft", axis_below(x)},
@@ -63,6 +96,9 @@ namespace xml2_pad_bindings
 			{"CameraLeft", axis_below(z)},
 			{"CameraRight", axis_above(z)},
 		}};
+
+		constexpr DWORD layout_version = 2;
+		const layout_t& layout = console_layout;
 
 		constexpr int players = 4;
 		constexpr int slots = 2;
@@ -106,9 +142,9 @@ namespace xml2_pad_bindings
 			}
 		}
 
-		const pad_binding* layout_for(const char* action)
+		const pad_binding* layout_for(const char* action, const layout_t& which = layout)
 		{
-			for (const auto& binding : layout)
+			for (const auto& binding : which)
 			{
 				if (std::strcmp(binding.action, action) == 0)
 				{
@@ -167,7 +203,49 @@ namespace xml2_pad_bindings
 			return value != unbound && value != 0xFFFFFFFF && device >= first_gamepad && device < first_gamepad + 10;
 		}
 
-		// Adds the layout to settings saved before the fix was installed, once.
+		DWORD read_binding(HKEY key, const std::string& name)
+		{
+			DWORD value = unbound, size = sizeof(value);
+			return RegQueryValueExA(key, name.c_str(), nullptr, nullptr, reinterpret_cast<BYTE*>(&value), &size) == ERROR_SUCCESS ? value : unbound;
+		}
+
+		// Whether all of a player's gamepad bindings are exactly `old`, as an earlier build wrote them.
+		bool matches_layout(HKEY key, const int player, const layout_t& old)
+		{
+			for (size_t i = 0; i < action_count && stock_names[i]; ++i)
+			{
+				const auto* expected = layout_for(stock_names[i], old);
+				for (int slot = 0; slot < slots; ++slot)
+				{
+					const DWORD value = read_binding(key, std::string(stock_names[i]) + std::to_string(slot + 1));
+					const bool ours = expected && slot == pad_slot(player) && value == pad_binding_for(player, expected->control);
+					if (is_gamepad_binding(value) && !ours)
+					{
+						return false;
+					}
+				}
+			}
+			return true;
+		}
+
+		bool has_gamepad_bindings(HKEY key)
+		{
+			for (size_t i = 0; i < action_count && stock_names[i]; ++i)
+			{
+				for (int slot = 0; slot < slots; ++slot)
+				{
+					if (is_gamepad_binding(read_binding(key, std::string(stock_names[i]) + std::to_string(slot + 1))))
+					{
+						return true;
+					}
+				}
+			}
+			return false;
+		}
+
+		// Brings saved settings up to the current layout, once per layout version: players without
+		// gamepad bindings get it in unbound or stock-default slots, players still on a layout an
+		// earlier build wrote get it in place of that, anyone else keeps their own setup.
 		void migrate_saved_settings()
 		{
 			const std::wstring root = L"Software\\Activision\\X-Men Legends 2\\Controls";
@@ -178,7 +256,7 @@ namespace xml2_pad_bindings
 			}
 
 			DWORD done = 0, size = sizeof(done);
-			if (RegQueryValueExW(gamepads, L"Xml2FixPadBindings", nullptr, nullptr, reinterpret_cast<BYTE*>(&done), &size) == ERROR_SUCCESS && done)
+			if (RegQueryValueExW(gamepads, L"Xml2FixPadBindings", nullptr, nullptr, reinterpret_cast<BYTE*>(&done), &size) == ERROR_SUCCESS && done >= layout_version)
 			{
 				RegCloseKey(gamepads);
 				return;
@@ -193,46 +271,40 @@ namespace xml2_pad_bindings
 					continue;
 				}
 
-				// A player who already has any gamepad binding set up keeps their setup as is.
-				bool has_pad = false;
-				for (size_t i = 0; i < action_count && !has_pad && stock_names[i]; ++i)
-				{
-					for (int slot = 0; slot < slots && !has_pad; ++slot)
-					{
-						const auto name = std::string(stock_names[i]) + std::to_string(slot + 1);
-						DWORD value = 0, value_size = sizeof(value);
-						has_pad = RegQueryValueExA(key, name.c_str(), nullptr, nullptr, reinterpret_cast<BYTE*>(&value), &value_size) == ERROR_SUCCESS &&
-						          is_gamepad_binding(value);
-					}
-				}
-
+				const bool fresh = !has_gamepad_bindings(key);
+				const bool upgrade = !fresh && done >= 1 && matches_layout(key, player, first_layout);
 				int written = 0;
-				for (size_t i = 0; i < action_count && !has_pad && stock_names[i]; ++i)
+				for (size_t i = 0; i < action_count && (fresh || upgrade) && stock_names[i]; ++i)
 				{
-					const auto* binding = layout_for(stock_names[i]);
-					if (!binding)
-					{
-						continue;
-					}
-
 					const int slot = pad_slot(player);
 					const auto name = std::string(stock_names[i]) + std::to_string(slot + 1);
-					DWORD value = unbound, value_size = sizeof(value);
-					const bool saved = RegQueryValueExA(key, name.c_str(), nullptr, nullptr, reinterpret_cast<BYTE*>(&value), &value_size) == ERROR_SUCCESS;
-					const bool free = !saved || value == unbound || value == 0xFFFFFFFF || value == stock[i][player * slots + slot];
-					if (free)
+					const DWORD value = read_binding(key, name);
+					const DWORD stock_value = stock[i][player * slots + slot];
+					const auto* binding = layout_for(stock_names[i]);
+
+					DWORD wanted = value;
+					if (binding && (upgrade || value == unbound || value == 0xFFFFFFFF || value == stock_value))
 					{
-						const DWORD pad = pad_binding_for(player, binding->control);
-						RegSetValueExA(key, name.c_str(), 0, REG_DWORD, reinterpret_cast<const BYTE*>(&pad), sizeof(pad));
+						wanted = pad_binding_for(player, binding->control);
+					}
+					else if (!binding && upgrade && is_gamepad_binding(value))
+					{
+						wanted = stock_value; // an action the old layout used and this one doesn't
+					}
+					if (wanted != value)
+					{
+						RegSetValueExA(key, name.c_str(), 0, REG_DWORD, reinterpret_cast<const BYTE*>(&wanted), sizeof(wanted));
 						++written;
 					}
 				}
 				RegCloseKey(key);
 				logger::write("bindings: player %d %s", player + 1,
-				              has_pad ? "already has gamepad bindings - left as is" : (std::to_string(written) + " gamepad bindings added to saved settings").c_str());
+				              fresh     ? (std::to_string(written) + " gamepad bindings added to saved settings").c_str()
+				              : upgrade ? (std::to_string(written) + " gamepad bindings moved to the console layout").c_str()
+				                        : "has their own gamepad bindings - left as is");
 			}
 
-			done = 1;
+			done = layout_version;
 			RegSetValueExW(gamepads, L"Xml2FixPadBindings", 0, REG_DWORD, reinterpret_cast<const BYTE*>(&done), sizeof(done));
 			RegCloseKey(gamepads);
 		}

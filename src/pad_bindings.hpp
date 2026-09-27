@@ -2,14 +2,15 @@
 
 // X-Men Legends II (PC) ships keyboard-only default bindings: every gamepad starts unbound
 // and the game sends players to Advanced options to bind all 42 actions by hand. This gives
-// the pads a console-style layout instead (as a Logitech Dual Action - see pad_profile):
+// the pads Raven's console layout instead (as a Logitech Dual Action - see pad_profile),
+// taken from the game's own console button map, on an Xbox pad:
 //
-//   left stick   move                  right stick  camera
-//   A            Jump / Xtreme         X            Attack / Power 1
-//   Y            Smash / Power 2       B            Use / Boost
-//   RB (hold)    Use Powers            LB           Call Allies
-//   LT           Health Pack           RT           Energy Pack
-//   D-pad        choose hero           Back         map    Start  pause    RS click  stats
+//   left stick  move              right stick  camera
+//   A           Attack / Power 1  (menus: accept)     B   Smash / Power 2  (menus: back)
+//   Y           Jump / Xtreme     X            Use / Boost
+//   RT (hold)   Use Powers        RB           Energy Pack
+//   LT          Call Allies       LB           Health Pack
+//   D-pad       choose hero       Back  stats   Start  pause   RS click  map
 //
 // Player 1 gets pad 1 as its secondary binding (the keyboard stays primary); players 2-4
 // get pads 2-4 as their primary one.

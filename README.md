@@ -10,21 +10,21 @@
 </p>
 
 <p align="center">
-  <b>Drop in one file. Pick up your pad and play, alone, on the couch or online.</b>
+  <b>Drop in one file. Pick up your pad and play, alone or on the couch.</b>
 </p>
 
 ---
 
 **X-Men Legends II: Rise of Apocalypse** on PC detects your controller and then leaves it completely unbound. The PC version only ships keyboard defaults, so the game sends you to *Advanced options* to assign all 42 actions by hand, for every player. And its online mode has been dead since GameSpy shut down in 2014.
 
-**XML2 Fix** takes care of both:
+**XML2 Fix** takes care of the controls, and is working on online play:
 
 |                       | Without the fix | With the fix |
 | --------------------- | --------------- | ------------ |
 | First start with a pad | "go to Advanced options", nothing bound | console-style layout, ready to play |
 | Local co-op           | bind every pad yourself | players 2–4 get pads 2–4 automatically |
 | Modern Xbox pads (e.g. over Bluetooth) | odd axes and trigger behaviour | one consistent layout for every pad |
-| Online                | GameSpy servers gone | works through [OpenSpy](https://openspy.net) |
+| Online                | GameSpy servers gone | redirected to [OpenSpy](https://openspy.net) (lobby: [in progress](#-online)) |
 | Setup                 | — | copy one file |
 
 ## ⚡ Install
@@ -37,29 +37,31 @@
 
 ## 🎮 The layout
 
-The same layout the console versions use, on an Xbox pad:
+Raven's console layout, taken from the game's own console button map and put in the same positions on an Xbox pad:
 
 | Pad | Action | | Pad | Action |
 | --- | ------ | - | --- | ------ |
 | Left stick | Move | | Right stick | Camera |
-| **A** | Jump / Xtreme | | **X** | Attack / Power 1 |
-| **Y** | Smash / Power 2 | | **B** | Use / Boost |
-| **RB** (hold) | Use Powers | | **LB** | Call Allies |
-| **LT** | Health Pack | | **RT** | Energy Pack |
-| D-pad | Choose hero | | **Back** | Map |
-| **Start** | Pause | | Right stick click | Stats |
+| **A** | Attack / Power 1 | | **B** | Smash / Power 2 |
+| **Y** | Jump / Xtreme | | **X** | Use / Boost |
+| **RT** (hold) | Use Powers | | **RB** | Energy Pack |
+| **LT** | Call Allies | | **LB** | Health Pack |
+| D-pad | Choose hero | | Right stick click | Map |
+| **Start** | Pause | | **Back** | Stats |
 
-Hold **RB** with a face button for powers, as on console: **RB + X** Power 1, **RB + Y** Power 2, **RB + B** Boost, **RB + A** Xtreme.
+Hold **RT** with a face button for powers, as on console. In menus, **A** accepts and **B** goes back.
 
 - **Player 1** gets pad 1 *alongside* the keyboard (the pad is the secondary binding), so keyboard play keeps working.
 - **Players 2–4** get pads 2–4.
-- The fix only fills in bindings that are empty or still on the game's defaults, once. Anything you've customised is left alone, and you can rebind freely afterwards.
+- The fix only fills in bindings that are empty or still on the game's defaults (or on a layout an earlier version of the fix wrote). Anything you've customised is left alone, and you can rebind freely afterwards.
 
 **Controllers:** tested with an Xbox Wireless Controller (Series X|S) over Bluetooth. Other Xbox One / Series and Xbox 360 pads, and third-party XInput pads, use the same path and are expected to work. PlayStation and Switch pads work through a tool that presents them as an Xbox pad (Steam Input, DS4Windows); untested. Tried one? Please [open an issue](https://github.com/ChronoRixun/xml2-fix/issues) and say how it went.
 
 ## 🌐 Online
 
-The game finds servers and other players through GameSpy, which no longer exists. [OpenSpy](https://openspy.net) runs community replacements for GameSpy's services, and the fix points the game's lookups there (`xmenlegpc.master.gamespy.com` → `xmenlegpc.master.openspy.net`, and so on). Nothing else about online play changes.
+> **Work in progress.** The redirect below works, but XML2's online lobby isn't usable on OpenSpy yet: the game lists games by region, and OpenSpy has no regions set up for it, so the region list comes up empty. We're working on it.
+
+The game finds servers and other players through GameSpy, which no longer exists. [OpenSpy](https://openspy.net) runs community replacements for GameSpy's services, and the fix points the game's lookups there (`xmenlegpc.master.gamespy.com` → `xmenlegpc.master.openspy.net`, and so on).
 
 To use another server (for example one you host yourself) or to switch the redirect off, create `xml2-fix.ini` next to the DLL:
 
