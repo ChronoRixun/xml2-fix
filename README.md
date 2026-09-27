@@ -70,6 +70,13 @@ To use another server (for example one you host yourself) or to switch the redir
 Domain=openspy.net   ; or your server's domain, or: off
 ```
 
+**Diagnosing online problems:** add this to `xml2-fix.ini` and `xml2-fix.log` will list every connection and query the game makes:
+
+```ini
+[Debug]
+LogNetwork=1
+```
+
 ## 🔍 What was actually wrong
 
 - **No gamepad defaults.** The PC build's built-in bindings table has keyboard keys for player 1 and nothing at all for gamepads, for any player. Even a controller the game knows by name starts unbound.

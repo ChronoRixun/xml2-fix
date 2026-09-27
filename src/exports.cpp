@@ -12,6 +12,7 @@
 #include "gamepad_fix.hpp"
 #include "iat_hook.hpp"
 #include "log.hpp"
+#include "net_trace.hpp"
 #include "openspy_redirect.hpp"
 #include "pad_profile.hpp"
 #include "pad_bindings.hpp"
@@ -22,8 +23,6 @@
 
 #include <cstring>
 #include <string>
-
-#define FIX_VERSION "1.0.0"
 
 namespace
 {
@@ -122,6 +121,11 @@ namespace
 		else
 		{
 			logger::write("online: redirect turned off in xml2-fix.ini");
+		}
+
+		if (GetPrivateProfileIntW(L"Debug", L"LogNetwork", 0, (logger::module_dir() / L"xml2-fix.ini").c_str()))
+		{
+			net_trace::install(game);
 		}
 	}
 }

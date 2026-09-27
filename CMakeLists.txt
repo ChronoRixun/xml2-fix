@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(xml2_fix VERSION 1.0.0 LANGUAGES CXX RC)
+project(xml2_fix VERSION 1.1.1 LANGUAGES CXX RC)
 
 if(NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
 	message(FATAL_ERROR "Build with MSVC for Win32 (cmake -A Win32) - X-Men Legends II is a 32-bit game.")
@@ -23,11 +23,14 @@ add_library(xml2_fix SHARED
 	src/xinput_pad.cpp
 	src/iat_hook.cpp
 	src/openspy_redirect.cpp
+	src/net_trace.cpp
 	src/log.cpp
 	src/dinput.def
 	src/version.rc)
-target_compile_definitions(xml2_fix PRIVATE FIX_LOG_FILE=L"xml2-fix.log")
-target_link_libraries(xml2_fix PRIVATE dxguid)
+target_compile_definitions(xml2_fix PRIVATE FIX_LOG_FILE=L"xml2-fix.log"
+	FIX_VERSION="${PROJECT_VERSION}"
+	FIX_VERSION_NUMBERS=${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},0)
+target_link_libraries(xml2_fix PRIVATE dxguid ws2_32)
 # Output is dinput.dll; its import library gets a different name so it can't shadow the Windows SDK's.
 set_target_properties(xml2_fix PROPERTIES OUTPUT_NAME dinput ARCHIVE_OUTPUT_NAME xml2_fix)
 
