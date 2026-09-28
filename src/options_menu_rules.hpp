@@ -232,7 +232,8 @@ namespace options_menu_rules
 		return {{mode_choices(opts.window_mode), frame_rate_choices(opts.frame_rate, desktop_refresh), vsync_choices(opts.vsync), background_choices(opts.run_in_background)}};
 	}
 
-	// The stock defaults ("Revert to default"): the game's own fullscreen, 60 fps, no vsync, keep running.
+	// The stock defaults ("Revert to default"): the game's own fullscreen, 60 fps, no vsync, keep
+	// running - what each row shows when its key is absent.
 	inline std::array<int, row_count> default_selection(const panel_choices& shown)
 	{
 		const auto& frame_texts = shown.rows[static_cast<size_t>(row::frame_rate)].texts;
@@ -240,26 +241,47 @@ namespace options_menu_rules
 		return {0, sixty == frame_texts.end() ? 0 : static_cast<int>(sixty - frame_texts.begin()), 0, 1};
 	}
 
-	// One key to write.
+	// One key to write, or to remove (no value: the game's own behaviour).
 	struct ini_change
 	{
 		row which;
 		const wchar_t* key;
-		std::string value;
+		std::optional<std::string> value;
 		bool operator==(const ini_change&) const = default;
 	};
 
-	// The keys whose row the user changed (Accept writes only these, so the rest of the file and the
-	// launcher's other settings stay as they are).
-	inline std::vector<ini_change> ini_changes(const panel_choices& shown, const std::array<int, row_count>& now)
+	// What Accept does to xml2-fix.ini. A row the user moved to another value writes that value; a
+	// row on its stock value (default_selection) - moved there, or left there by "Revert to
+	// default" - removes its key when the ini has one, because each row's stock value stands for
+	// the key's absence: no Mode is the game's own fullscreen (Mode=fullscreen is the fix's
+	// variant), no FrameRate the game's own 60 fps spin (FrameRate=60 is the fix's limiter), no
+	// VSync the engine's own interval. Rows left alone are left alone, so the rest of the file and
+	// the launcher's settings stay as they are. `present`: which keys the ini had when the panel
+	// opened; `reverted`: "Revert to default" ran since.
+	inline std::vector<ini_change> ini_changes(const panel_choices& shown, const std::array<int, row_count>& now, const std::array<bool, row_count>& present = {},
+	                                           const bool reverted = false)
 	{
+		const auto defaults = default_selection(shown);
 		std::vector<ini_change> changes;
 		for (int i = 0; i < row_count; ++i)
 		{
 			const auto index = static_cast<size_t>(i);
 			const auto& offered = shown.rows[index];
 			const int chosen = now[index];
-			if (chosen == offered.selected || chosen < 0 || chosen >= static_cast<int>(offered.texts.size()))
+			if (chosen < 0 || chosen >= static_cast<int>(offered.texts.size()))
+			{
+				continue;
+			}
+			const bool changed = chosen != offered.selected;
+			if (chosen == defaults[index])
+			{
+				if (present[index] && (changed || reverted))
+				{
+					changes.push_back({static_cast<row>(i), row_keys[index], std::nullopt});
+				}
+				continue;
+			}
+			if (!changed)
 			{
 				continue;
 			}
@@ -273,6 +295,11 @@ namespace options_menu_rules
 			changes.push_back({static_cast<row>(i), row_keys[index], std::move(value)});
 		}
 		return changes;
+	}
+
+	inline bool changes_row(const std::vector<ini_change>& changes, const row which)
+	{
+		return std::ranges::any_of(changes, [which](const ini_change& change) { return change.which == which; });
 	}
 
 	// The line under the rows. The display mode always waits for a restart (owner decision 2);

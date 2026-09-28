@@ -23,7 +23,7 @@ namespace frame_rate
 		bool synced_window = false; // VSync=1 in a window: paced at the refresh rate
 		unsigned target = 0;        // fps; 0 = no pacing
 		bool spin_off = false;      // the game's 60 fps spin is patched away
-		bool spin_tried = false;    // the patch was attempted (once is enough: the bytes don't change)
+		bool spin_refused = false;  // the code isn't the retail build's: never patched (the bytes don't change)
 		LONGLONG frequency = 0;
 		LONGLONG margin = 0; // ticks the timer is trusted to within
 		pacer pace;
@@ -41,11 +41,11 @@ namespace frame_rate
 		}
 
 		// No C++ objects here: the read is guarded, in case this isn't XMen2.exe at all.
-		bool bytes_match(const code_patch& patch, const std::uint8_t* at)
+		bool bytes_match(const code_patch& patch, const std::uint8_t* at, const bool patched)
 		{
 			__try
 			{
-				return matches(patch, at);
+				return patched ? matches_patched(patch, at) : matches(patch, at);
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
 			{
@@ -53,36 +53,50 @@ namespace frame_rate
 			}
 		}
 
-		bool apply(const HMODULE game, const code_patch& patch)
+		// Writes the replacement (undo = false) or puts the original bytes back (undo = true), after
+		// checking the 16 bytes are exactly what that step expects.
+		bool apply(const HMODULE game, const code_patch& patch, const bool undo)
 		{
 			auto* at = reinterpret_cast<std::uint8_t*>(game) + patch.rva;
-			if (!bytes_match(patch, at))
+			if (!bytes_match(patch, at, undo))
 			{
-				logger::write("frame rate: XMen2.exe doesn't have the expected code for %s (not the retail build?) - left alone", patch.what);
+				logger::write("frame rate: XMen2.exe doesn't have the %s code for %s - left alone", undo ? "patched" : "expected (retail build's)", patch.what);
 				return false;
 			}
 			auto* target_bytes = at + patch.offset;
+			const std::uint8_t* source = undo ? patch.expected.data() + patch.offset : patch.replacement.data();
 			DWORD old_protect = 0;
 			if (!VirtualProtect(target_bytes, patch.replacement.size(), PAGE_EXECUTE_READWRITE, &old_protect))
 			{
 				logger::write("frame rate: can't unprotect %s (error %lu) - left alone", patch.what, GetLastError());
 				return false;
 			}
-			std::memcpy(target_bytes, patch.replacement.data(), patch.replacement.size());
+			std::memcpy(target_bytes, source, patch.replacement.size());
 			VirtualProtect(target_bytes, patch.replacement.size(), old_protect, &old_protect);
 			FlushInstructionCache(GetCurrentProcess(), target_bytes, patch.replacement.size());
 			return true;
 		}
 
-		// Switches the game's spin off, once; false when the code isn't the retail build's.
+		// Switches the game's spin off; false when the code isn't the retail build's (tried once).
 		bool switch_spin_off()
 		{
-			if (!spin_tried)
+			if (!spin_off && !spin_refused)
 			{
-				spin_tried = true;
-				spin_off = apply(game_module, stock_cap_patch);
+				spin_off = apply(game_module, stock_cap_patch, false);
+				spin_refused = !spin_off;
 			}
 			return spin_off;
+		}
+
+		// Puts the game's spin back (the rows returned FrameRate to the game's own cap). On the game's
+		// thread, from the panel's Accept: the frame function wrote this frame's minimum already, the
+		// next one writes 1/60 again.
+		void switch_spin_on()
+		{
+			if (spin_off && apply(game_module, stock_cap_patch, true))
+			{
+				spin_off = false;
+			}
 		}
 
 		void prepare_timer()
@@ -190,17 +204,25 @@ namespace frame_rate
 		{
 			switch_spin_off();
 		}
-		target = effective_target(setting, refresh, window_vsync);
-		synced_window = window_vsync && target != target_fps(setting, refresh);
+		else
+		{
+			switch_spin_on();
+		}
+		target = live_target(setting, refresh, window_vsync, spin_off);
+		synced_window = window_vsync && disables_stock_cap(setting) && target != target_fps(setting, refresh);
 		if (target)
 		{
 			prepare_timer();
 			pace.set_interval(ticks_for_fps(target, frequency));
 		}
+		else
+		{
+			pace.set_interval(0);
+		}
 		const char* how = "";
 		if (!disables_stock_cap(setting))
 		{
-			how = spin_off ? " (the game's spin is already off; nothing paces)" : "";
+			how = spin_off ? " - its spin couldn't be put back, so the fix paces at 60 until the next start" : " (its spin is back in charge; the fix doesn't pace)";
 		}
 		else if (!spin_off)
 		{

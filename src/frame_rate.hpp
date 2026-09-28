@@ -41,7 +41,8 @@ namespace frame_rate
 	void install(HMODULE game, const frame_rate_rules::cap& setting, unsigned desktop_refresh, bool window_vsync);
 
 	// A new setting while the game runs (the in-game Frame rate and VSync rows): switches the
-	// game's spin off if it still runs and the setting calls for it, and re-aims the pacer.
+	// game's spin off if it still runs and the setting calls for it - or, for the game's own cap,
+	// puts the spin back (the fix paces at 60 itself if it can't) - and re-aims the pacer.
 	// Called on the game's thread, from the panel's Accept.
 	void retarget(const frame_rate_rules::cap& setting, bool window_vsync);
 

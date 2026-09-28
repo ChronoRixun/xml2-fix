@@ -176,6 +176,27 @@ namespace frame_rate_rules
 		return std::memcmp(bytes, patch.expected.data(), patch.expected.size()) == 0;
 	}
 
+	// The bytes as the patch left them: the expected ones with the replacement in place (what may be
+	// put back when the in-game rows return FrameRate to the game's own cap).
+	inline bool matches_patched(const code_patch& patch, const std::uint8_t* bytes)
+	{
+		auto patched = patch.expected;
+		std::memcpy(patched.data() + patch.offset, patch.replacement.data(), patch.replacement.size());
+		return std::memcmp(bytes, patched.data(), patched.size()) == 0;
+	}
+
+	// What the fix paces at when the setting changes while the game runs. Back to the game's own
+	// cap (no FrameRate) the spin is put back where it can be; where it can't (spin_is_off), the
+	// fix paces at the game's 60 itself until the next start, so frames never run unpaced.
+	inline unsigned live_target(const cap& setting, const unsigned desktop_refresh, const bool window_vsync, const bool spin_is_off)
+	{
+		if (!disables_stock_cap(setting))
+		{
+			return spin_is_off ? stock_fps : 0;
+		}
+		return effective_target(setting, desktop_refresh, window_vsync);
+	}
+
 	// ---- Pacing -----------------------------------------------------------------------------------
 
 	// When each frame may end, in ticks of a clock: one interval after the previous deadline, so a

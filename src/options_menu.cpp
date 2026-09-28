@@ -109,14 +109,28 @@ namespace options_menu
 		struct open_panel
 		{
 			void* panel = nullptr;
-			void* bar = nullptr; // the toggle.png highlight bar (the FSAA row's callback userdata)
-			panel_choices shown; // what the rows offered and showed when the panel opened
+			void* bar = nullptr;                  // the toggle.png highlight bar (the FSAA row's callback userdata)
+			panel_choices shown;                  // what the rows offered and showed when the panel opened
+			std::array<bool, row_count> present{}; // which of the rows' keys xml2-fix.ini had then
+			bool reverted = false;                // "Revert to default" ran since
 		};
 		open_panel current;
 
 		std::wstring ini_path()
 		{
 			return (logger::module_dir() / L"xml2-fix.ini").wstring();
+		}
+
+		std::array<bool, row_count> keys_present()
+		{
+			const auto ini = ini_path();
+			std::array<bool, row_count> present{};
+			for (std::size_t i = 0; i < present.size(); ++i)
+			{
+				wchar_t value[8]{};
+				present[i] = GetPrivateProfileStringW(L"Display", row_keys[i], L"", value, static_cast<DWORD>(std::size(value)), ini.c_str()) > 0;
+			}
+			return present;
 		}
 
 		const char* text_of(const row which, const int index)
@@ -150,12 +164,9 @@ namespace options_menu
 			{
 				return;
 			}
-			const auto now = selection_now(panel);
-			const auto shown = current.shown.selected();
-			const bool mode_changed = now[static_cast<std::size_t>(row::mode)] != shown[static_cast<std::size_t>(row::mode)];
-			const bool vsync_changed = now[static_cast<std::size_t>(row::vsync)] != shown[static_cast<std::size_t>(row::vsync)];
-			const bool vsync_waits = vsync_changed && !display_rules::manages_window(display::current_options().window_mode);
-			set_text(status, status_text(mode_changed, vsync_waits).c_str());
+			const auto changes = ini_changes(current.shown, selection_now(panel), current.present, current.reverted);
+			const bool vsync_waits = changes_row(changes, row::vsync) && !display_rules::manages_window(display::current_options().window_mode);
+			set_text(status, status_text(changes_row(changes, row::mode), vsync_waits).c_str());
 		}
 
 		// ---- The highlight bar --------------------------------------------------------------------
@@ -289,6 +300,7 @@ namespace options_menu
 
 			const auto opts = display::read_ini_options();
 			current.shown = choices_for(opts, display::desktop_refresh_rate());
+			current.present = keys_present();
 
 			const auto op_new = game_function<operator_new_t>(game::operator_new);
 			const auto cycle_ctor = game_function<cycle_ctor_t>(game::cycle_ctor);
@@ -369,27 +381,32 @@ namespace options_menu
 
 		// ---- Hooks B, C, D: the close function's save, cancel and revert calls ----------------------------
 
+		// A removed key (no value) means the game's own behaviour again.
 		void apply_live(const ini_change& change)
 		{
+			const std::string value = change.value.value_or("");
 			switch (change.which)
 			{
 			case row::mode:
-				logger::write("options: display mode %s applies after a restart", change.value.c_str());
+				logger::write("options: display mode %s applies after a restart", change.value ? value.c_str() : "as the game has it (exclusive fullscreen)");
 				break;
 			case row::frame_rate:
-				if (const auto cap = frame_rate_rules::parse_frame_rate(change.value))
+				if (const auto cap = frame_rate_rules::parse_frame_rate(value)) // "" -> the game's own cap
 				{
 					display::set_frame_rate(*cap);
 				}
 				break;
 			case row::vsync:
-				if (!display::set_vsync(change.value == "1"))
+			{
+				const std::optional<bool> on = change.value ? std::optional<bool>(value == "1") : std::nullopt;
+				if (!display::set_vsync(on))
 				{
-					logger::write("options: VSync %s applies when the device is next created (a restart)", change.value == "1" ? "on" : "off");
+					logger::write("options: VSync %s applies when the device is next created (a restart)", !on ? "as the engine has it" : *on ? "on" : "off");
 				}
 				break;
+			}
 			case row::background:
-				display::set_run_in_background(change.value == "1");
+				display::set_run_in_background(!change.value || value == "1"); // no key = on
 				break;
 			}
 		}
@@ -403,7 +420,7 @@ namespace options_menu
 				logger::write("options: accepted, but the rows aren't in this panel - xml2-fix.ini untouched");
 				return;
 			}
-			const auto changes = ini_changes(current.shown, selection_now(panel));
+			const auto changes = ini_changes(current.shown, selection_now(panel), current.present, current.reverted);
 			if (changes.empty())
 			{
 				logger::write("options: accepted - no display row changed, xml2-fix.ini untouched");
@@ -412,14 +429,29 @@ namespace options_menu
 			const auto ini = ini_path();
 			for (const auto& change : changes)
 			{
-				const std::wstring value(change.value.begin(), change.value.end());
-				if (WritePrivateProfileStringW(L"Display", change.key, value.c_str(), ini.c_str()))
+				if (!change.value)
 				{
-					logger::write("options: [Display] %ls=%s written to xml2-fix.ini", change.key, change.value.c_str());
+					// The stock value: the key goes, the rest of the file stays.
+					if (WritePrivateProfileStringW(L"Display", change.key, nullptr, ini.c_str()))
+					{
+						logger::write("options: [Display] %ls removed from xml2-fix.ini (the game's own behaviour)", change.key);
+					}
+					else
+					{
+						logger::write("options: ERROR: couldn't remove [Display] %ls from xml2-fix.ini (error %lu)", change.key, GetLastError());
+					}
 				}
 				else
 				{
-					logger::write("options: ERROR: couldn't write [Display] %ls=%s to xml2-fix.ini (error %lu)", change.key, change.value.c_str(), GetLastError());
+					const std::wstring value(change.value->begin(), change.value->end());
+					if (WritePrivateProfileStringW(L"Display", change.key, value.c_str(), ini.c_str()))
+					{
+						logger::write("options: [Display] %ls=%s written to xml2-fix.ini", change.key, change.value->c_str());
+					}
+					else
+					{
+						logger::write("options: ERROR: couldn't write [Display] %ls=%s to xml2-fix.ini (error %lu)", change.key, change.value->c_str(), GetLastError());
+					}
 				}
 				apply_live(change);
 			}
@@ -451,8 +483,10 @@ namespace options_menu
 					set_selection(item, nullptr, defaults[static_cast<std::size_t>(i)]);
 				}
 			}
+			current.reverted = true;
 			update_status(panel);
-			logger::write("options: rows reverted to the defaults (Fullscreen, 60, VSync off, run in background on) - written only by Accept");
+			logger::write("options: rows reverted to the defaults (Fullscreen, 60, VSync off, run in background on) - Accept removes their keys from xml2-fix.ini "
+			              "(the game's own behaviour); Cancel keeps the file as it is");
 		}
 
 		// ---- Patching -------------------------------------------------------------------------------------

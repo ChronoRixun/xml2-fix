@@ -20,7 +20,8 @@
 // free slot 5) and three more call-site replacements in the panel's close function: Accept
 // (0x61f8a4, after the game's own registry save) writes the changed keys with
 // WritePrivateProfileStringW and applies what can apply live; Cancel (0x61f8be) discards;
-// Revert to default (0x61f667) puts the rows back to the stock values, persisted only by Accept.
+// Revert to default (0x61f667) puts the rows back to the stock values, persisted only by Accept,
+// which removes the key of every row on its stock value (options_menu_rules::ini_changes).
 //
 // Every address is the retail build's; the bytes at each call site and the first bytes of every
 // game function used are compared first, and on any difference the panel is left as it is (logged).

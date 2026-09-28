@@ -94,7 +94,11 @@ key only when the user changed that row (Accept), with `WritePrivateProfileStrin
   retarget, live; fullscreen: the next device creation or reset - "applies after restart"). The display mode is
   a restart. Hook C (`on_cancel`) and D (`on_revert`: setSelection to Fullscreen / 60 / Off / On, status refreshed)
   wrap the originals. Values: Mode fullscreen|borderless|windowed; FrameRate `<n>`|refresh|0 (Unlimited); VSync
-  0|1; RunInBackground 0|1. Absent keys show Fullscreen / 60 / Off / On; picking exactly those writes nothing.
+  0|1; RunInBackground 0|1. Absent keys show Fullscreen / 60 / Off / On. Review fix round: a row put on that
+  stock value (or left on it by Revert) **removes** its key on Accept when the ini has one - before, Revert +
+  Accept wrote Mode=fullscreen / FrameRate=60 / VSync=0 (the fix's variants), and nothing could return a key to
+  absent. FrameRate back to absent puts the game's 60 fps spin back live (`frame_rate::switch_spin_on`, byte
+  checked; if it can't, the fix paces at 60 until the next start).
 - Frame-rate options: presets 30 60 120 144 165 180 240, plus the desktop's refresh rate and the ini's own
   value when not among them, sorted, then Refresh and Unlimited; ten at most (a BXIGCycle holds ten), dropping
   165, 144, 240, 120, 30 in that order when room is needed (never the desktop's rate or the ini's value).

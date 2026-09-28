@@ -499,6 +499,16 @@ namespace
 		auto other = patch.expected;
 		other[15] ^= 1;
 		CHECK(!matches(patch, other.data()));
+		// Undoing it (the rows back to the game's own cap): only over exactly the patched bytes.
+		auto patched = patch.expected;
+		std::copy(patch.replacement.begin(), patch.replacement.end(), patched.begin() + static_cast<std::ptrdiff_t>(patch.offset));
+		CHECK(matches_patched(patch, patched.data()) && !matches_patched(patch, patch.expected.data()) && !matches(patch, patched.data()));
+		patched[3] ^= 1; // the 1/30 constant changed by someone else: not ours to touch
+		CHECK(!matches_patched(patch, patched.data()));
+		// Live changes: back to the game's cap = no pacing once its spin is back, 60 by the fix if it couldn't be.
+		CHECK(live_target(stock_cap, 180, false, false) == 0 && live_target(stock_cap, 180, true, false) == 0);
+		CHECK(live_target(stock_cap, 180, false, true) == 60 && live_target(stock_cap, 180, true, true) == 60);
+		CHECK(live_target(fixed_144, 180, false, true) == 144 && live_target(unlimited, 180, false, true) == 0 && live_target(unlimited, 180, true, true) == 180);
 		if (const auto exe = game_executable())
 		{
 			const auto at = file_offset(*exe, patch.rva);
@@ -658,18 +668,44 @@ namespace
 		CHECK((shown.selected() == std::array<int, 4>{2, 2, 1, 0}));
 		CHECK((default_selection(shown) == std::array<int, 4>{0, 1, 0, 1}));
 
-		// Accept writes only the rows that changed.
-		CHECK(ini_changes(shown, shown.selected()).empty());
-		auto changes = ini_changes(shown, {0, 2, 1, 0});
-		CHECK(changes.size() == 1 && changes[0].which == row::mode && std::wstring(changes[0].key) == L"Mode" && changes[0].value == "fullscreen");
-		changes = ini_changes(shown, {2, 7, 0, 1});
+		// Accept writes only the rows that changed; a row put on its stock value removes its key
+		// (absent = the game's own behaviour, which is what that value shows for).
+		const std::array<bool, 4> all_keys{true, true, true, true};
+		CHECK(ini_changes(shown, shown.selected(), all_keys).empty());
+		auto changes = ini_changes(shown, {1, 2, 1, 0}, all_keys);
+		CHECK(changes.size() == 1 && changes[0].which == row::mode && std::wstring(changes[0].key) == L"Mode" && changes[0].value == "borderless");
+		changes = ini_changes(shown, {0, 2, 1, 0}, all_keys); // Fullscreen: no Mode (the game's own), not Mode=fullscreen (the fix's variant)
+		CHECK(changes.size() == 1 && changes[0].which == row::mode && !changes[0].value.has_value());
+		changes = ini_changes(shown, {2, 7, 0, 1}, all_keys);
 		CHECK(changes.size() == 3);
 		CHECK(changes[0].which == row::frame_rate && changes[0].value == "refresh");
-		CHECK(changes[1].which == row::vsync && std::wstring(changes[1].key) == L"VSync" && changes[1].value == "0");
-		CHECK(changes[2].which == row::background && std::wstring(changes[2].key) == L"RunInBackground" && changes[2].value == "1");
-		changes = ini_changes(shown, {2, 8, 1, 0});
+		CHECK(changes[1].which == row::vsync && std::wstring(changes[1].key) == L"VSync" && !changes[1].value.has_value());
+		CHECK(changes[2].which == row::background && std::wstring(changes[2].key) == L"RunInBackground" && !changes[2].value.has_value());
+		changes = ini_changes(shown, {2, 8, 1, 0}, all_keys);
 		CHECK(changes.size() == 1 && changes[0].value == "0" && std::wstring(changes[0].key) == L"FrameRate"); // Unlimited
-		CHECK(ini_changes(shown, {2, 99, 1, 0}).empty());                                                        // out of range: ignored
+		changes = ini_changes(shown, {2, 1, 1, 0}, all_keys); // 60: the game's own cap again, not FrameRate=60 (the fix's limiter)
+		CHECK(changes.size() == 1 && changes[0].which == row::frame_rate && !changes[0].value.has_value());
+		CHECK(ini_changes(shown, {2, 99, 1, 0}, all_keys).empty()); // out of range: ignored
+		CHECK(changes_row(ini_changes(shown, {0, 2, 0, 0}, all_keys), row::mode) && changes_row(ini_changes(shown, {0, 2, 0, 0}, all_keys), row::vsync) &&
+		      !changes_row(ini_changes(shown, {0, 2, 0, 0}, all_keys), row::frame_rate));
+
+		// Revert to default, then Accept: every key the ini has goes, even one already on the stock
+		// value (Mode=fullscreen, FrameRate=60, VSync=0 are the fix's, not the game's); a row moved
+		// after the revert is written; no keys, nothing to do.
+		display_rules::options explicit_defaults;
+		explicit_defaults.window_mode = display_rules::mode::fullscreen;
+		explicit_defaults.frame_rate = {frame_rate_rules::cap::kind::fixed, 60};
+		explicit_defaults.vsync = false;
+		const auto shown_defaults = choices_for(explicit_defaults, 180);
+		const auto stock_rows = default_selection(shown_defaults);
+		CHECK(shown_defaults.selected() == stock_rows);
+		CHECK(ini_changes(shown_defaults, stock_rows, all_keys, false).empty()); // not reverted, not moved: left alone
+		changes = ini_changes(shown_defaults, stock_rows, all_keys, true);
+		CHECK(changes.size() == 4 && std::ranges::none_of(changes, [](const ini_change& c) { return c.value.has_value(); }));
+		CHECK(ini_changes(shown_defaults, stock_rows, {true, false, false, false}, true).size() == 1);
+		CHECK(ini_changes(shown_defaults, stock_rows, {}, true).empty());
+		changes = ini_changes(shown_defaults, {1, stock_rows[1], 0, 1}, all_keys, true);
+		CHECK(changes.size() == 4 && changes[0].value == "borderless" && !changes[1].value && !changes[2].value && !changes[3].value);
 
 		// The status line.
 		CHECK(status_text(false, false).empty());
@@ -677,32 +713,32 @@ namespace
 		CHECK(status_text(false, true) == "VSync applies after restart");
 		CHECK(status_text(true, true) == "Display mode, VSync apply after restart");
 
-		// Round trip through an ini the way the panel writes it: only the changed key, the rest of the file kept.
+		// Round trip through an ini the way the panel writes it: the changed key written, the one put
+		// back on its stock value removed, the rest of the file kept.
 		const auto ini = std::filesystem::temp_directory_path() / "xml2_test_options.ini";
 		{
 			std::ofstream out(ini, std::ios::binary);
-			out << "; test\r\n[Online]\r\nDomain=off\r\n[Display]\r\nMode=windowed\r\n; keep me\r\nTopmost=1\r\n";
+			out << "; test\r\n[Online]\r\nDomain=off\r\n[Display]\r\nMode=windowed\r\n; keep me\r\nTopmost=1\r\nFrameRate=120\r\nVSync=1\r\nRunInBackground=0\r\n";
 		}
 		const auto wide = ini.wstring();
-		for (const auto& change : ini_changes(shown, {2, 7, 0, 0}))
+		for (const auto& change : ini_changes(shown, {2, 7, 0, 0}, all_keys))
 		{
-			const std::wstring value(change.value.begin(), change.value.end());
-			CHECK(WritePrivateProfileStringW(L"Display", change.key, value.c_str(), wide.c_str()) != 0);
+			const std::wstring value = change.value ? std::wstring(change.value->begin(), change.value->end()) : std::wstring();
+			CHECK(WritePrivateProfileStringW(L"Display", change.key, change.value ? value.c_str() : nullptr, wide.c_str()) != 0);
 		}
 		wchar_t value[64]{};
 		GetPrivateProfileStringW(L"Display", L"FrameRate", L"", value, 64, wide.c_str());
 		CHECK(std::wstring(value) == L"refresh");
-		GetPrivateProfileStringW(L"Display", L"VSync", L"", value, 64, wide.c_str());
-		CHECK(std::wstring(value) == L"0");
+		CHECK(GetPrivateProfileStringW(L"Display", L"VSync", L"absent", value, 64, wide.c_str()) && std::wstring(value) == L"absent"); // stock value: key gone
 		GetPrivateProfileStringW(L"Display", L"Mode", L"", value, 64, wide.c_str());
 		CHECK(std::wstring(value) == L"windowed"); // unchanged row: untouched
-		CHECK(GetPrivateProfileIntW(L"Display", L"Topmost", 0, wide.c_str()) == 1 && GetPrivateProfileIntW(L"Display", L"RunInBackground", 1, wide.c_str()) == 1);
+		CHECK(GetPrivateProfileIntW(L"Display", L"Topmost", 0, wide.c_str()) == 1 && GetPrivateProfileIntW(L"Display", L"RunInBackground", 1, wide.c_str()) == 0);
 		GetPrivateProfileStringW(L"Online", L"Domain", L"", value, 64, wide.c_str());
 		CHECK(std::wstring(value) == L"off");
 		const auto text = read_file(ini);
-		CHECK(text.find("; keep me") != std::string::npos && text.find("; test") != std::string::npos);
+		CHECK(text.find("; keep me") != std::string::npos && text.find("; test") != std::string::npos && text.find("VSync") == std::string::npos);
 		// What the panel then shows: parsed back the way the display fix reads it.
-		CHECK(frame_rate_rules::parse_frame_rate("refresh")->what == frame_rate_rules::cap::kind::refresh && frame_rate_rules::parse_vsync("0") == frame_rate_rules::vsync::off);
+		CHECK(frame_rate_rules::parse_frame_rate("refresh")->what == frame_rate_rules::cap::kind::refresh && frame_rate_rules::parse_vsync("") == frame_rate_rules::vsync::untouched);
 		std::error_code ignored;
 		std::filesystem::remove(ini, ignored);
 
