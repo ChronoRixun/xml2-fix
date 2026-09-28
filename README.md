@@ -25,7 +25,7 @@
 | Local co-op           | bind every pad yourself | players 2–4 get pads 2–4 automatically |
 | Modern Xbox pads (e.g. over Bluetooth) | odd axes and trigger behaviour | one consistent layout for every pad |
 | Online                | GameSpy servers gone | redirected to [OpenSpy](https://openspy.net) (lobby: [in progress](#-online)) |
-| Display               | exclusive fullscreen only, switches your monitor's mode, no native resolution in the list | borderless or windowed at your desktop's resolution, [optional](#%EF%B8%8F-display) |
+| Display               | exclusive fullscreen only, switches your monitor's mode, no native resolution in the list, 60 fps | borderless or windowed at your desktop's resolution, frame rate and vsync of your choosing, [set in the game's own options](#%EF%B8%8F-display) |
 | Setup                 | — | copy one file |
 
 ## ⚡ Install
@@ -80,7 +80,11 @@ LogNetwork=1
 
 ## 🖥️ Display
 
-Out of the box the game runs in exclusive fullscreen, switches your monitor to the resolution in its settings (1920x1080, say, on a 2560x1440 screen) and doesn't offer your screen's own resolution in *Options → Video*. To change that, add to `xml2-fix.ini` next to the DLL:
+Out of the box the game runs in exclusive fullscreen, switches your monitor to the resolution in its settings (1920x1080, say, on a 2560x1440 screen), doesn't offer your screen's own resolution in *Options → Video* and caps itself at 60 fps.
+
+**In the game:** *Options → Controls → Advanced* gets four rows under *FSAA*: **Display mode** (Fullscreen / Borderless / Windowed), **Frame rate** (30 to 240, your desktop's refresh rate, Refresh, Unlimited), **VSync** (Off / On) and **Run in background** (Off / On). Left/right, Enter or a click cycle a value; *Accept* keeps it, *Back* or Esc asks before discarding, *Revert to default* puts the rows back to the stock values. Frame rate, Run in background and, in a window, VSync take effect at once; the display mode (and VSync in fullscreen) after a restart, and the panel says so. Nothing changes until you change a row: with the rows untouched the game runs exactly as before.
+
+The rows read and write `xml2-fix.ini` next to the DLL, the same keys you can set by hand (a launcher can edit them too):
 
 ```ini
 [Display]
@@ -91,6 +95,7 @@ Topmost=0            ; borderless/windowed: 1 keeps the game above other windows
 RunInBackground=1    ; borderless/windowed: 0 pauses the game when another window has the focus, like the stock game
 FrameRate=refresh    ; a number of fps, refresh (your desktop's rate) or 0 (unlimited); leave out for the game's own 60 fps cap
 VSync=0              ; 1 or 0; leave out for the engine's own setting
+InGameOptions=1      ; 0 hides the rows in Advanced Options
 ```
 
 - **borderless**: a window without borders covering the screen, at your desktop's resolution and refresh rate. Your monitor's mode never changes, alt-tab is instant and the game keeps running behind other windows.
@@ -119,6 +124,7 @@ the fix listens on the named pipe `\\.\pipe\xml2-fix-input`: one command per lin
 | `tap KEY [ms]` | press and release (80 ms) |
 | `hold KEY+KEY ms` | hold together, then release |
 | `down KEY` / `up KEY` | hold until released (10 s at most) |
+| `wm KEY [ms]` | post `WM_KEYDOWN`, then `WM_KEYUP` after `ms` (80), to the game window: what *Advanced Options* reads (it never looks at DirectInput) |
 | `release` | let go of everything |
 | `screenshot PATH` | save the frame the game just drew (`.png` or `.bmp`) |
 | `status`, `ping` | `status` includes the frames per second over the last second, so a frame cap can be checked from a script |
@@ -131,7 +137,7 @@ the fix listens on the named pipe `\\.\pipe\xml2-fix-input`: one command per lin
 - **Modern pads look odd to it.** The game reads pads through DirectInput. An Xbox Wireless Controller over Bluetooth, for example, reports both triggers on one shared axis and a different axis set to what 2005-era pads had, so even hand-made bindings behave oddly.
 - **GameSpy is gone,** and with it the servers the game looks up by name.
 - **Fullscreen only.** The game hard-codes exclusive fullscreen and builds its resolution list from the Direct3D 8 mode list, trimmed to 20 fixed slots; the engine's own windowed path is never used on PC.
-- **60 fps, burning a core.** The game's frame function rewrites its minimum frame time to 1/60 s every frame (so the engine's `max_fps` setting can never matter) and busy-waits until it has passed. Fullscreen presents never wait for the vertical blank either.
+- **60 fps, burning a core.** The game's frame function rewrites its minimum frame time to 1/60 s every frame (so the engine's `max_fps` setting can never matter) and busy-waits until it has passed. Fullscreen presents never wait for the vertical blank either. Its options panel has no row for any of this, and two hundred empty pixels where one could be.
 
 ## 🛠️ How the fix works
 
@@ -142,6 +148,7 @@ the fix listens on the named pipe `\\.\pipe\xml2-fix-input`: one command per lin
 3. **Redirects GameSpy host lookups to OpenSpy.**
 4. **Runs the game in a window when asked to** ([Display](#%EF%B8%8F-display)). The engine (Alchemy) creates its Direct3D 8 device fullscreen at the registry resolution; the fix hooks `IDirect3D8::CreateDevice` and `IDirect3DDevice8::Reset` to make the device windowed, places the engine's window itself (its `CreateWindowExA`, `SetWindowLongA`, `SetWindowPos` and `MoveWindow` calls), answers the game's read of its resolution setting with the desktop size so the HUD and aspect ratio match, and completes the Direct3D mode list the Video options are built from.
 5. **Paces frames when asked to** ([Display](#%EF%B8%8F-display)). With `FrameRate` set, the 1/60 s constant the game's frame function writes is patched to 0 (after checking the bytes are the retail build's), which ends its busy-wait at once, and frames are paced in the fix's `IDirect3DDevice8::Present` hook with a high-resolution waitable timer and a short spin. `VSync` is set in the same `CreateDevice`/`Reset` rewrite as the window mode.
+6. **Puts those settings in the game's own options panel.** *Advanced Options* is hand-drawn Direct3D UI (Beenox's `BXIG` widgets), not a menu file, so the fix builds its rows with the game's own option-cycler class, exactly as the game builds its *FSAA* row, from a function it puts in place of the panel builder's final call; three more call-site replacements in the panel's close function persist Accept, Cancel and Revert. The engine draws, animates and navigates the rows; the fix only answers their callbacks. Every call site's bytes are checked first, so on any other build the panel is left as it is.
 
 ```mermaid
 flowchart LR

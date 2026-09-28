@@ -6,10 +6,11 @@
 //     EnumObjects, ranges set by object id, c_dfDIJoystick2.
 // With an Xbox-compatible pad connected, both must see a Logitech Dual Action. Also checks
 // that GameSpy host lookups resolve through OpenSpy, and the display fix's decisions: the
-// rules in display_rules.hpp and frame_rate_rules.hpp against fixed inputs (the frame cap's
-// patch bytes against a copy of XMen2.exe when one is at hand), the Video options list the fix
-// would build from this PC's Direct3D 8 modes, and whether a windowed Direct3D 8 present waits
-// for the vertical blank here. The test input pipe is checked on its rules, on a
+// rules in display_rules.hpp, frame_rate_rules.hpp and options_menu_rules.hpp against fixed
+// inputs (the frame cap's patch bytes and the in-game options' call sites against a copy of
+// XMen2.exe when one is at hand), the Video options list the fix would build from this PC's
+// Direct3D 8 modes, and whether a windowed Direct3D 8 present waits for the vertical blank
+// here. The test input pipe is checked on its rules, on a
 // Direct3D 8 device of the test's own (the back buffer copy behind "screenshot"), and end to
 // end in a child process started with an xml2-fix.ini that turns the pipe on: it creates the
 // keyboard device the way XMen2.exe does and sees the pipe's keys in it.
@@ -28,6 +29,7 @@
 #include "frame_capture.hpp"
 #include "frame_rate_rules.hpp"
 #include "image_file.hpp"
+#include "options_menu_rules.hpp"
 #include "test_input_rules.hpp"
 
 #include <algorithm>
@@ -583,6 +585,160 @@ namespace
 		}
 	}
 
+	// The in-game Advanced Options rows (options_menu_rules.hpp): the rows and their choices, what a
+	// change writes to the ini (round trip through a temporary file), the status line, the navigation
+	// records, the highlight's geometry, and the four call sites and nine game functions the menu
+	// checks before patching, against the retail XMen2.exe when a copy is at hand.
+	void check_options_menu_rules()
+	{
+		using namespace options_menu_rules;
+		std::printf("in-game options rules (the Advanced Options rows)\n");
+
+		// Rows and ids: four rows under FSAA, above Accept, with ids the game doesn't use.
+		CHECK(row_count == 4 && item_id(row::mode) == 0x40 && item_id(row::background) == 0x43 && status_item_id == 0x4f);
+		CHECK(row_for_item_id(0x41) == row::frame_rate && !row_for_item_id(6) && !row_for_item_id(0x44) && !row_for_item_id(0x4f));
+		CHECK(row_y(0) == 170 && row_y(3) == 242 && row_y(0) > fsaa_y + row_h && row_y(3) + value_h < status_y && status_y + status_h <= accept_y);
+		CHECK(highlight_y(0) == 149 && highlight_x == 30 && fsaa_y + highlight_dy == 125); // the game's own FSAA highlight sits at y 125
+		CHECK(value_x + value_w == 177 + 40 && row_x + row_w == 229);                       // values end where FSAA's does; rows span the pane like FSAA
+		CHECK(label_style == 3 && value_style == 5 && status_style == 0);
+		CHECK(std::string(row_labels[3]) == "Run in background" && std::wstring(row_keys[1]) == L"FrameRate");
+
+		// Display mode: no Mode in the ini shows as Fullscreen.
+		auto mode = mode_choices(display_rules::mode::stock);
+		CHECK(mode.texts.size() == 3 && mode.selected == 0 && mode.texts[0] == "Fullscreen");
+		CHECK(mode_choices(display_rules::mode::borderless).selected == 1 && mode_choices(display_rules::mode::windowed).selected == 2);
+		CHECK(mode_value(1) == "borderless" && mode_value(2) == "windowed" && mode_value(0) == "fullscreen" && mode_value(9) == "fullscreen");
+
+		// Frame rate: the presets plus the desktop's rate and the ini's own value, ten at most.
+		const frame_rate_rules::cap stock_cap{};
+		auto frame = frame_rate_choices(stock_cap, 180);
+		CHECK((frame.texts == std::vector<std::string>{"30", "60", "120", "144", "165", "180", "240", "Refresh", "Unlimited"}));
+		CHECK(frame.selected == 1); // 60 when the ini has no FrameRate
+		CHECK(frame_rate_choices({frame_rate_rules::cap::kind::fixed, 144}, 180).selected == 3);
+		CHECK(frame_rate_choices({frame_rate_rules::cap::kind::refresh, 0}, 180).selected == 7);
+		CHECK(frame_rate_choices({frame_rate_rules::cap::kind::unlimited, 0}, 180).selected == 8);
+		frame = frame_rate_choices(stock_cap, 175); // an odd desktop rate is listed, in order
+		CHECK(frame.texts.size() == 10 && frame.texts[5] == "175" && frame.texts[6] == "180" && frame.selected == 1);
+		frame = frame_rate_choices({frame_rate_rules::cap::kind::fixed, 90}, 175); // both the desktop's rate and the ini's value: 165 makes room
+		CHECK((frame.texts == std::vector<std::string>{"30", "60", "90", "120", "144", "175", "180", "240", "Refresh", "Unlimited"}));
+		CHECK(frame.selected == 2);
+		frame = frame_rate_choices({frame_rate_rules::cap::kind::fixed, 165}, 175); // a preset as the ini's value needs no room: nothing dropped
+		CHECK(frame.texts.size() == 10 && frame.texts[4] == "165" && frame.texts[3] == "144" && frame.texts[5] == "175" && frame.selected == 4);
+		CHECK(frame_rate_choices(stock_cap, 0).texts.size() == 9); // no desktop rate known
+		CHECK(frame_rate_value("Refresh") == "refresh" && frame_rate_value("Unlimited") == "0" && frame_rate_value("144") == "144");
+
+		// VSync and Run in background: Off / On, absent VSync shows Off, absent RunInBackground shows On.
+		CHECK(vsync_choices(std::nullopt).selected == 0 && vsync_choices(true).selected == 1 && vsync_choices(false).texts[1] == "On");
+		CHECK(background_choices(true).selected == 1 && background_choices(false).selected == 0);
+
+		// The panel as a whole, from the ini, and its defaults.
+		display_rules::options opts;
+		auto shown = choices_for(opts, 180);
+		CHECK((shown.selected() == std::array<int, 4>{0, 1, 0, 1}));
+		CHECK((default_selection(shown) == std::array<int, 4>{0, 1, 0, 1}));
+		opts.window_mode = display_rules::mode::windowed;
+		opts.frame_rate = {frame_rate_rules::cap::kind::fixed, 120};
+		opts.vsync = true;
+		opts.run_in_background = false;
+		shown = choices_for(opts, 180);
+		CHECK((shown.selected() == std::array<int, 4>{2, 2, 1, 0}));
+		CHECK((default_selection(shown) == std::array<int, 4>{0, 1, 0, 1}));
+
+		// Accept writes only the rows that changed.
+		CHECK(ini_changes(shown, shown.selected()).empty());
+		auto changes = ini_changes(shown, {0, 2, 1, 0});
+		CHECK(changes.size() == 1 && changes[0].which == row::mode && std::wstring(changes[0].key) == L"Mode" && changes[0].value == "fullscreen");
+		changes = ini_changes(shown, {2, 7, 0, 1});
+		CHECK(changes.size() == 3);
+		CHECK(changes[0].which == row::frame_rate && changes[0].value == "refresh");
+		CHECK(changes[1].which == row::vsync && std::wstring(changes[1].key) == L"VSync" && changes[1].value == "0");
+		CHECK(changes[2].which == row::background && std::wstring(changes[2].key) == L"RunInBackground" && changes[2].value == "1");
+		changes = ini_changes(shown, {2, 8, 1, 0});
+		CHECK(changes.size() == 1 && changes[0].value == "0" && std::wstring(changes[0].key) == L"FrameRate"); // Unlimited
+		CHECK(ini_changes(shown, {2, 99, 1, 0}).empty());                                                        // out of range: ignored
+
+		// The status line.
+		CHECK(status_text(false, false).empty());
+		CHECK(status_text(true, false) == "Display mode applies after restart");
+		CHECK(status_text(false, true) == "VSync applies after restart");
+		CHECK(status_text(true, true) == "Display mode, VSync apply after restart");
+
+		// Round trip through an ini the way the panel writes it: only the changed key, the rest of the file kept.
+		const auto ini = std::filesystem::temp_directory_path() / "xml2_test_options.ini";
+		{
+			std::ofstream out(ini, std::ios::binary);
+			out << "; test\r\n[Online]\r\nDomain=off\r\n[Display]\r\nMode=windowed\r\n; keep me\r\nTopmost=1\r\n";
+		}
+		const auto wide = ini.wstring();
+		for (const auto& change : ini_changes(shown, {2, 7, 0, 0}))
+		{
+			const std::wstring value(change.value.begin(), change.value.end());
+			CHECK(WritePrivateProfileStringW(L"Display", change.key, value.c_str(), wide.c_str()) != 0);
+		}
+		wchar_t value[64]{};
+		GetPrivateProfileStringW(L"Display", L"FrameRate", L"", value, 64, wide.c_str());
+		CHECK(std::wstring(value) == L"refresh");
+		GetPrivateProfileStringW(L"Display", L"VSync", L"", value, 64, wide.c_str());
+		CHECK(std::wstring(value) == L"0");
+		GetPrivateProfileStringW(L"Display", L"Mode", L"", value, 64, wide.c_str());
+		CHECK(std::wstring(value) == L"windowed"); // unchanged row: untouched
+		CHECK(GetPrivateProfileIntW(L"Display", L"Topmost", 0, wide.c_str()) == 1 && GetPrivateProfileIntW(L"Display", L"RunInBackground", 1, wide.c_str()) == 1);
+		GetPrivateProfileStringW(L"Online", L"Domain", L"", value, 64, wide.c_str());
+		CHECK(std::wstring(value) == L"off");
+		const auto text = read_file(ini);
+		CHECK(text.find("; keep me") != std::string::npos && text.find("; test") != std::string::npos);
+		// What the panel then shows: parsed back the way the display fix reads it.
+		CHECK(frame_rate_rules::parse_frame_rate("refresh")->what == frame_rate_rules::cap::kind::refresh && frame_rate_rules::parse_vsync("0") == frame_rate_rules::vsync::off);
+		std::error_code ignored;
+		std::filesystem::remove(ini, ignored);
+
+		// Navigation: our rows between FSAA and Accept, left/right kept on the row.
+		int fsaa = 0, accept = 0, label = 0, rows[4]{};
+		nav_record fsaa_record{&fsaa, &fsaa, &fsaa, &label, &accept, 1, 0, {}};
+		nav_record accept_record{&accept, nullptr, nullptr, &fsaa, &label, 0, 0, {}};
+		nav_record label_record{&label, nullptr, nullptr, &accept, &fsaa, 1, 0, {}};
+		nav_record* records[] = {&label_record, &fsaa_record, &accept_record, nullptr};
+		CHECK(relink(records, 4, &fsaa, &accept, &rows[0], &rows[3]) == 2);
+		CHECK(fsaa_record.down == &rows[0] && accept_record.up == &rows[3] && fsaa_record.up == &label && label_record.down == &fsaa);
+		const auto record = row_record(&rows[1], &rows[0], &rows[2]);
+		CHECK(record.self == &rows[1] && record.left == &rows[1] && record.right == &rows[1] && record.up == &rows[0] && record.down == &rows[2]);
+		CHECK(record.keep_left_right == 1 && record.keep_up_down == 0);
+		CHECK(sizeof(nav_record) == 0x18 && sizeof(anim_slot) == 0x2c && highlight_slot == 5);
+		CHECK(interpolate(500, 149, 1.0f) == 149 && interpolate(100, 200, 0.5f) == 150 && interpolate(200, 100, 0.25f) == 175);
+
+		// The call sites: the expected bytes call where the table says, and rel32 lands on a replacement.
+		for (const auto* site : call_sites)
+		{
+			CHECK(site->expected[0] == 0xE8 && decoded_target(*site) == site->target_rva);
+			CHECK(matches(*site, site->expected.data()));
+			auto other = site->expected;
+			other[5] ^= 1;
+			CHECK(!matches(*site, other.data()));
+		}
+		CHECK(rel32(0x61f356, 0x6222b0) == 0x2f55 && rel32(0x61f8a4, 0x619440) == -0x6469);
+		CHECK(finish_panel_site.target_rva == game::set_all_anim && save_site.target_rva == game::save_settings && cancel_site.target_rva == game::load_settings &&
+		      revert_site.target_rva == game::load_defaults);
+		if (const auto exe = game_executable())
+		{
+			for (const auto* site : call_sites)
+			{
+				const auto at = file_offset(*exe, site->rva);
+				CHECK(at.has_value() && *at + 16 <= exe->size() && matches(*site, reinterpret_cast<const std::uint8_t*>(exe->data() + *at)));
+			}
+			for (const auto& function : game_functions)
+			{
+				const auto at = file_offset(*exe, function.rva);
+				CHECK(at.has_value() && *at + 16 <= exe->size() && matches(function, reinterpret_cast<const std::uint8_t*>(exe->data() + *at)));
+			}
+			const auto png = file_offset(*exe, game::toggle_png_string);
+			CHECK(png.has_value() && exe->compare(*png, 16, std::string("texs\\toggle.png\0", 16)) == 0);
+		}
+		else
+		{
+			std::printf("  skip  no XMen2.exe to check the call sites against\n");
+		}
+	}
+
 	// The Video options list the fix builds from this PC's Direct3D 8 modes (the game's list comes
 	// from the same IDirect3D8::EnumAdapterModes).
 	void check_d3d8_modes()
@@ -660,6 +816,25 @@ namespace
 		CHECK(parse_command("frob").what == command::kind::unknown && !parse_command("frob").error.empty());
 		CHECK(parse_command("tap NOSUCH").what == command::kind::unknown && parse_command("tap W x").what == command::kind::unknown);
 		CHECK(parse_command("PING").what == command::kind::ping && parse_command("status").what == command::kind::status);
+
+		// "wm": Win32 key messages for the Advanced Options panel.
+		cmd = parse_command("wm DOWN");
+		CHECK(cmd.what == command::kind::wm && (cmd.keys == std::vector<unsigned char>{0xD0}) && cmd.ms == 0);
+		cmd = parse_command("wm enter 120");
+		CHECK(cmd.what == command::kind::wm && (cmd.keys == std::vector<unsigned char>{0x1C}) && cmd.ms == 120);
+		CHECK(parse_command("wm").what == command::kind::unknown && parse_command("wm NOSUCH").what == command::kind::unknown);
+		CHECK((win32_key_for(0x1C) == win32_key{VK_RETURN, 0x1C, false}));
+		CHECK((win32_key_for(0xD0) == win32_key{VK_DOWN, 0x50, true}) && (win32_key_for(0xC8) == win32_key{VK_UP, 0x48, true}));
+		CHECK((win32_key_for(0xCB) == win32_key{VK_LEFT, 0x4B, true}) && (win32_key_for(0xCD) == win32_key{VK_RIGHT, 0x4D, true}));
+		CHECK((win32_key_for(0x01) == win32_key{VK_ESCAPE, 0x01, false}) && (win32_key_for(0x11) == win32_key{'W', 0x11, false}));
+		CHECK((win32_key_for(0x02) == win32_key{'1', 0x02, false}) && (win32_key_for(0x0B) == win32_key{'0', 0x0B, false}));
+		CHECK((win32_key_for(0x3B) == win32_key{VK_F1, 0x3B, false}) && (win32_key_for(0x58) == win32_key{VK_F12, 0x58, false}));
+		CHECK((win32_key_for(0x9C) == win32_key{VK_RETURN, 0x1C, true}) && (win32_key_for(0x4B) == win32_key{VK_NUMPAD4, 0x4B, false}));
+		CHECK(!win32_key_for(0x54) && !win32_key_for(0x00) && !win32_key_for(0xFF));
+		CHECK(key_lparam(0x1C, false, false) == 0x001C0001u); // repeat 1, scan code 0x1C
+		CHECK(key_lparam(0x1C, false, true) == 0xC01C0001u);  // + previous state and transition
+		CHECK(key_lparam(0x50, true, false) == 0x01500001u);  // + extended
+		CHECK(key_lparam(0x50, true, true) == 0xC1500001u);
 
 		synthetic_keys keys;
 		unsigned char state[256]{};
@@ -911,6 +1086,10 @@ namespace
 		CHECK(refused(ask(pipe, "tap NOSUCHKEY")));
 		CHECK(refused(ask(pipe, "screenshot")));
 		CHECK(refused(ask(pipe, "tap ENTER 20"))); // nothing reads a keyboard yet
+		const auto wm = ask(pipe, "wm ENTER 20");
+		std::printf("  info  %s\n", wm.c_str());
+		CHECK(refused(wm) && wm.find("no game window") != std::string::npos); // no engine window in this process
+		CHECK(refused(ask(pipe, "wm 0x54")));                                 // no virtual key for that scancode
 		const auto shot = ask(pipe, "screenshot " + (std::filesystem::temp_directory_path() / "xml2_test_pipe.png").string());
 		std::printf("  info  %s\n", shot.c_str());
 		CHECK(refused(shot)); // no Direct3D device in this process: times out
@@ -977,6 +1156,7 @@ namespace
 		CHECK(log.find("keyboard cooperative level 16 -> A (background, non-exclusive): ok") != std::string::npos); // FOREGROUND|NONEXCLUSIVE|NOWINKEY -> BACKGROUND|NONEXCLUSIVE
 		CHECK(log.find("the game reads its DirectInput keyboard") != std::string::npos);
 		CHECK(log.find("display: as the game has it") != std::string::npos && log.find("hooked for the test pipe") != std::string::npos);
+		CHECK(log.find("options: XMen2.exe doesn't have the expected code") != std::string::npos); // this isn't the game: the panel is left alone
 	}
 
 	// Starts this program again with an xml2-fix.ini next to it that turns the pipe on, so its
@@ -1090,6 +1270,7 @@ int main(const int argc, char** argv)
 	check_online();
 	check_display_rules();
 	check_frame_rate_rules();
+	check_options_menu_rules();
 	check_test_input_rules();
 	check_image_file();
 	check_d3d8_modes();
@@ -1098,6 +1279,7 @@ int main(const int argc, char** argv)
 	CHECK(log.find("hooked a DirectInput 7 instance") != std::string::npos);
 	CHECK(log.find("display: as the game has it") != std::string::npos); // no [Display] section next to the test
 	CHECK(log.find("test:") == std::string::npos);                       // and no [Test] section: no pipe
+	CHECK(log.find("options: XMen2.exe doesn't have the expected code") != std::string::npos && log.find("call sites patched") == std::string::npos); // not the game
 	CHECK(log.find("GameSpy servers redirected to openspy.net") != std::string::npos);
 	CHECK(log.find("xmenlegpc.master.gamespy.com -> xmenlegpc.master.openspy.net (resolved)") != std::string::npos);
 	if (pads > 0)

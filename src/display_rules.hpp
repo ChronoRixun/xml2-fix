@@ -37,6 +37,7 @@ namespace display_rules
 		bool run_in_background = true;
 		frame_rate_rules::cap frame_rate; // [Display] FrameRate; stock = the game's own 60 fps cap
 		std::optional<bool> vsync;        // [Display] VSync; nothing = the engine's own presentation interval
+		bool in_game_options = true;      // [Display] InGameOptions: the rows in the Advanced Options panel
 	};
 
 	struct size

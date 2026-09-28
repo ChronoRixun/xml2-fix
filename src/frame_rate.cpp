@@ -17,10 +17,13 @@ namespace frame_rate
 	{
 		using namespace frame_rate_rules;
 
+		HMODULE game_module = nullptr;
 		cap setting;
 		unsigned refresh = 0;
 		bool synced_window = false; // VSync=1 in a window: paced at the refresh rate
 		unsigned target = 0;        // fps; 0 = no pacing
+		bool spin_off = false;      // the game's 60 fps spin is patched away
+		bool spin_tried = false;    // the patch was attempted (once is enough: the bytes don't change)
 		LONGLONG frequency = 0;
 		LONGLONG margin = 0; // ticks the timer is trusted to within
 		pacer pace;
@@ -71,8 +74,23 @@ namespace frame_rate
 			return true;
 		}
 
+		// Switches the game's spin off, once; false when the code isn't the retail build's.
+		bool switch_spin_off()
+		{
+			if (!spin_tried)
+			{
+				spin_tried = true;
+				spin_off = apply(game_module, stock_cap_patch);
+			}
+			return spin_off;
+		}
+
 		void prepare_timer()
 		{
+			if (timer)
+			{
+				return;
+			}
 			timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
 			high_resolution = timer != nullptr;
 			if (!timer)
@@ -118,6 +136,7 @@ namespace frame_rate
 
 	void install(const HMODULE game, const cap& wanted, const unsigned desktop_refresh, const bool window_vsync)
 	{
+		game_module = game;
 		setting = wanted;
 		refresh = desktop_refresh;
 		LARGE_INTEGER freq;
@@ -131,7 +150,7 @@ namespace frame_rate
 			return;
 		}
 
-		const bool spin_off = apply(game, stock_cap_patch);
+		switch_spin_off();
 		target = effective_target(setting, refresh, window_vsync);
 		synced_window = window_vsync && target != target_fps(setting, refresh);
 		if (target)
@@ -158,6 +177,40 @@ namespace frame_rate
 		{
 			logger::write("frame rate: unlimited; the game's 60 fps spin is off");
 		}
+	}
+
+	void retarget(const cap& wanted, const bool window_vsync)
+	{
+		if (!frequency)
+		{
+			return; // install never ran (the display fix couldn't hook the device): nothing to pace with
+		}
+		setting = wanted;
+		if (disables_stock_cap(setting))
+		{
+			switch_spin_off();
+		}
+		target = effective_target(setting, refresh, window_vsync);
+		synced_window = window_vsync && target != target_fps(setting, refresh);
+		if (target)
+		{
+			prepare_timer();
+			pace.set_interval(ticks_for_fps(target, frequency));
+		}
+		const char* how = "";
+		if (!disables_stock_cap(setting))
+		{
+			how = spin_off ? " (the game's spin is already off; nothing paces)" : "";
+		}
+		else if (!spin_off)
+		{
+			how = " - but the game's 60 fps spin stays (not the retail build), so FrameRate can't raise it";
+		}
+		else
+		{
+			how = target ? ", paced by the fix from the next frame" : "; nothing paces";
+		}
+		logger::write("frame rate: now %s%s", describe().c_str(), how);
 	}
 
 	bool paces()

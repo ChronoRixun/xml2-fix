@@ -299,6 +299,44 @@ namespace test_input
 			return seen ? "ok" : "error the game didn't read the keyboard while the key was down (no DirectInput keyboard yet, or it isn't polling)";
 		}
 
+		// Win32 key messages to the game window, for the Advanced Options panel (it reads WM_KEYUP,
+		// never DirectInput). Posted, so the game's own thread handles them when it pumps messages;
+		// the window needn't have the focus.
+		std::string post_keys(const std::vector<unsigned char>& codes, const DWORD ms)
+		{
+			const HWND target = display::game_window();
+			if (!target)
+			{
+				return "error no game window yet (the engine hasn't created it)";
+			}
+			std::vector<win32_key> messages;
+			std::string virtual_keys;
+			for (const auto code : codes)
+			{
+				const auto key = win32_key_for(code);
+				if (!key)
+				{
+					return "error no Windows virtual key for " + name_of(code);
+				}
+				messages.push_back(*key);
+				char text[8];
+				std::snprintf(text, sizeof(text), "0x%02X", key->virtual_key);
+				virtual_keys += (virtual_keys.empty() ? "" : "+") + std::string(text);
+			}
+			for (const auto& key : messages)
+			{
+				PostMessageA(target, WM_KEYDOWN, key.virtual_key, static_cast<LPARAM>(key_lparam(key.scancode, key.extended, false)));
+			}
+			Sleep(ms);
+			for (auto it = messages.rbegin(); it != messages.rend(); ++it)
+			{
+				PostMessageA(target, WM_KEYUP, it->virtual_key, static_cast<LPARAM>(key_lparam(it->scancode, it->extended, true)));
+			}
+			logger::write("test: wm %s %lu ms -> window %p (virtual key%s %s)", keys_text(codes).c_str(), ms, static_cast<void*>(target), messages.size() == 1 ? "" : "s",
+			              virtual_keys.c_str());
+			return "ok";
+		}
+
 		std::string status()
 		{
 			int held = 0;
@@ -348,6 +386,8 @@ namespace test_input
 				return press_and_release(cmd.keys, cmd.ms ? cmd.ms : default_tap_ms, "tap");
 			case command::kind::hold:
 				return press_and_release(cmd.keys, cmd.ms, "hold");
+			case command::kind::wm:
+				return post_keys(cmd.keys, cmd.ms ? cmd.ms : default_tap_ms);
 			case command::kind::screenshot:
 				return screenshot(cmd.path);
 			default:

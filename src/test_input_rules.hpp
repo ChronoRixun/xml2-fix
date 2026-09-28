@@ -144,11 +144,85 @@ namespace test_input_rules
 		return text;
 	}
 
+	// ---- Win32 key messages ("wm") ----------------------------------------------------------------
+	// The game's Advanced Options panel takes its keys from WM_KEYUP messages, not from DirectInput,
+	// so the pipe can post those: WM_KEYDOWN and WM_KEYUP with the virtual key in wParam and, in
+	// lParam, the repeat count (1), the scan code, the extended-key bit and, for the release, the
+	// previous-state and transition bits, as a real key press produces them.
+
+	struct win32_key
+	{
+		unsigned char virtual_key;
+		unsigned char scancode; // the DirectInput code without its 0x80 "E0-prefixed" bit
+		bool extended;
+		bool operator==(const win32_key&) const = default;
+	};
+
+	struct virtual_key_entry
+	{
+		unsigned char dik;
+		unsigned char virtual_key;
+	};
+
+	// DirectInput codes whose virtual key isn't a letter, digit or function key.
+	inline constexpr virtual_key_entry special_virtual_keys[] = {
+		{0x01, VK_ESCAPE}, {0x0C, VK_OEM_MINUS}, {0x0D, VK_OEM_PLUS}, {0x0E, VK_BACK}, {0x0F, VK_TAB}, {0x1A, VK_OEM_4}, {0x1B, VK_OEM_6},
+		{0x1C, VK_RETURN}, {0x1D, VK_CONTROL}, {0x27, VK_OEM_1}, {0x28, VK_OEM_7}, {0x29, VK_OEM_3}, {0x2A, VK_SHIFT}, {0x2B, VK_OEM_5},
+		{0x33, VK_OEM_COMMA}, {0x34, VK_OEM_PERIOD}, {0x35, VK_OEM_2}, {0x36, VK_SHIFT}, {0x37, VK_MULTIPLY}, {0x38, VK_MENU}, {0x39, VK_SPACE},
+		{0x3A, VK_CAPITAL}, {0x45, VK_NUMLOCK}, {0x46, VK_SCROLL}, {0x47, VK_NUMPAD7}, {0x48, VK_NUMPAD8}, {0x49, VK_NUMPAD9}, {0x4A, VK_SUBTRACT},
+		{0x4B, VK_NUMPAD4}, {0x4C, VK_NUMPAD5}, {0x4D, VK_NUMPAD6}, {0x4E, VK_ADD}, {0x4F, VK_NUMPAD1}, {0x50, VK_NUMPAD2}, {0x51, VK_NUMPAD3},
+		{0x52, VK_NUMPAD0}, {0x53, VK_DECIMAL}, {0x57, VK_F11}, {0x58, VK_F12},
+		// extended (E0-prefixed) keys
+		{0x9C, VK_RETURN}, {0x9D, VK_CONTROL}, {0xB5, VK_DIVIDE}, {0xB8, VK_MENU}, {0xC5, VK_PAUSE}, {0xC7, VK_HOME}, {0xC8, VK_UP}, {0xC9, VK_PRIOR},
+		{0xCB, VK_LEFT}, {0xCD, VK_RIGHT}, {0xCF, VK_END}, {0xD0, VK_DOWN}, {0xD1, VK_NEXT}, {0xD2, VK_INSERT}, {0xD3, VK_DELETE}, {0xDB, VK_LWIN},
+		{0xDC, VK_RWIN}, {0xDD, VK_APPS},
+	};
+
+	// The Win32 key for a DirectInput code, or nothing when Windows has no virtual key for it.
+	inline std::optional<win32_key> win32_key_for(const unsigned char dik)
+	{
+		const win32_key base{0, static_cast<unsigned char>(dik & 0x7F), dik >= 0x80};
+		const auto with = [&](const unsigned char vk)
+		{
+			win32_key key = base;
+			key.virtual_key = vk;
+			return key;
+		};
+		for (const auto& entry : special_virtual_keys)
+		{
+			if (entry.dik == dik)
+			{
+				return with(entry.virtual_key);
+			}
+		}
+		if (dik >= 0x02 && dik <= 0x0A) return with(static_cast<unsigned char>('1' + (dik - 0x02))); // the digit row
+		if (dik == 0x0B) return with('0');
+		if (dik >= 0x3B && dik <= 0x44) return with(static_cast<unsigned char>(VK_F1 + (dik - 0x3B)));
+		for (const auto& entry : key_names) // letters: the first name of the code is the letter
+		{
+			if (entry.code == dik && entry.name[0] >= 'A' && entry.name[0] <= 'Z' && entry.name[1] == '\0')
+			{
+				return with(static_cast<unsigned char>(entry.name[0]));
+			}
+		}
+		return std::nullopt;
+	}
+
+	// lParam of WM_KEYDOWN (up = false: first press) or WM_KEYUP (up = true).
+	inline unsigned key_lparam(const unsigned char scancode, const bool extended, const bool up)
+	{
+		unsigned value = 1u | (static_cast<unsigned>(scancode) << 16);
+		if (extended) value |= 1u << 24;
+		if (up) value |= (1u << 30) | (1u << 31); // previous state down, transition to up
+		return value;
+	}
+
 	// One line from the pipe:
 	//   down KEYS [ms]      hold until "up" (or ms, or max_hold_ms)      KEYS: names or scancodes joined with '+'
 	//   up KEYS
 	//   tap KEYS [ms]       press and release (default_tap_ms)
 	//   hold KEYS ms        press, keep for ms, release
+	//   wm KEYS [ms]        post WM_KEYDOWN, wait ms (default_tap_ms), post WM_KEYUP to the game window
 	//   release             let go of everything
 	//   screenshot PATH     save the current frame (.bmp or .png)
 	//   status | ping
@@ -161,6 +235,7 @@ namespace test_input_rules
 			up,
 			tap,
 			hold,
+			wm,
 			release,
 			screenshot,
 			status,
@@ -201,8 +276,9 @@ namespace test_input_rules
 		else if (verb == "UP") result.what = command::kind::up;
 		else if (verb == "TAP") result.what = command::kind::tap;
 		else if (verb == "HOLD") result.what = command::kind::hold;
+		else if (verb == "WM") result.what = command::kind::wm;
 		else if (verb == "SCREENSHOT") result.what = command::kind::screenshot;
-		else return fail("unknown command '" + std::string(text.substr(0, space)) + "' (down, up, tap, hold, release, screenshot, status, ping)");
+		else return fail("unknown command '" + std::string(text.substr(0, space)) + "' (down, up, tap, hold, wm, release, screenshot, status, ping)");
 
 		if (result.what == command::kind::screenshot)
 		{
@@ -219,7 +295,8 @@ namespace test_input_rules
 			return result;
 		}
 
-		if (result.what == command::kind::down || result.what == command::kind::up || result.what == command::kind::tap || result.what == command::kind::hold)
+		if (result.what == command::kind::down || result.what == command::kind::up || result.what == command::kind::tap || result.what == command::kind::hold ||
+		    result.what == command::kind::wm)
 		{
 			const auto words = split(rest);
 			if (words.empty())

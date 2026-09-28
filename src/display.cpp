@@ -4,6 +4,7 @@
 #include "frame_rate.hpp"
 #include "iat_hook.hpp"
 #include "log.hpp"
+#include "options_menu.hpp"
 
 #include <Windows.h>
 
@@ -35,8 +36,7 @@ namespace display
 		bool have_applied = false;
 		bool stock_fallback = false; // our parameters were refused and the engine's own are in use
 		bool geometry_hooked = false;
-		bool emulate_pause = false; // RunInBackground=0: Present reports the device lost while unfocused
-		bool paused = false;
+		bool paused = false; // RunInBackground=0: Present reports the device lost while unfocused
 		void (*frame_hook)(void*) = nullptr;     // the test pipe's screenshots, before every Present
 		const char* no_multisampling = nullptr;  // why the device is made without multisampling, if it is
 		const char* no_activate = nullptr;       // why the window is shown without taking the focus, if it is
@@ -190,6 +190,18 @@ namespace display
 			return process == GetCurrentProcessId();
 		}
 
+		// RunInBackground=0 in a window of ours: the stock pause on losing the focus, emulated. Read
+		// every frame, since the in-game rows change RunInBackground while the game runs.
+		bool pauses_when_unfocused()
+		{
+			return !opts.run_in_background && manages_window(opts.window_mode) && !stock_fallback;
+		}
+
+		bool window_vsync()
+		{
+			return opts.vsync.value_or(false) && manages_window(opts.window_mode);
+		}
+
 		// ---- Direct3D 8 -------------------------------------------------------------------------
 
 		bool multisample_supported(void* self, const DWORD format, const DWORD type)
@@ -291,7 +303,7 @@ namespace display
 
 		HRESULT STDMETHODCALLTYPE hooked_test_cooperative_level(void* self)
 		{
-			if (!opts.run_in_background && !game_in_foreground())
+			if (pauses_when_unfocused() && !game_in_foreground())
 			{
 				return d3d8::err_device_lost;
 			}
@@ -304,7 +316,7 @@ namespace display
 			{
 				frame_hook(self); // the back buffer holds the finished frame
 			}
-			if (emulate_pause)
+			if (pauses_when_unfocused())
 			{
 				const bool foreground = game_in_foreground();
 				if (foreground == paused)
@@ -316,6 +328,11 @@ namespace display
 				{
 					return d3d8::err_device_lost; // the engine stops drawing until TestCooperativeLevel says otherwise
 				}
+			}
+			else if (paused)
+			{
+				paused = false;
+				logger::write("display: resuming - RunInBackground is on now");
 			}
 			const HRESULT result = real_present(self, source, destination, override, dirty);
 			if (SUCCEEDED(result))
@@ -408,12 +425,15 @@ namespace display
 			{
 				real_test_cooperative_level = current; // a second device shares the vtable, possibly already hooked
 			}
-			emulate_pause = !opts.run_in_background && manages_window(opts.window_mode) && !stock_fallback;
-			if (emulate_pause)
+			// The pause on losing the focus can be switched on from the in-game rows at any time, so a
+			// window of ours gets both hooks whatever RunInBackground says now; the rows' live frame
+			// rate needs Present in every mode.
+			const bool can_pause = manages_window(opts.window_mode) && !stock_fallback;
+			if (can_pause)
 			{
 				hook_slot(device, d3d8::device_slot::test_cooperative_level, &hooked_test_cooperative_level, real_test_cooperative_level);
 			}
-			if (emulate_pause || frame_hook || frame_rate::paces())
+			if (can_pause || frame_hook || frame_rate::paces() || options_menu::installed())
 			{
 				hook_slot(device, d3d8::device_slot::present, &hooked_present, real_present);
 			}
@@ -770,6 +790,7 @@ namespace display
 			result.height = static_cast<int>(GetPrivateProfileIntW(L"Display", L"Height", 0, ini.c_str()));
 			result.topmost = GetPrivateProfileIntW(L"Display", L"Topmost", 0, ini.c_str()) != 0;
 			result.run_in_background = GetPrivateProfileIntW(L"Display", L"RunInBackground", 1, ini.c_str()) != 0;
+			result.in_game_options = GetPrivateProfileIntW(L"Display", L"InGameOptions", 1, ini.c_str()) != 0;
 			if (!mode_text.empty() && result.window_mode == mode::stock)
 			{
 				logger::write("display: unknown Mode '%s' in xml2-fix.ini (fullscreen, borderless or windowed) - left as the game has it", mode_text.c_str());
@@ -822,27 +843,113 @@ namespace display
 		no_activate = why;
 	}
 
+	display_rules::options read_ini_options()
+	{
+		return read_options();
+	}
+
+	const display_rules::options& current_options()
+	{
+		return opts;
+	}
+
+	unsigned desktop_refresh_rate()
+	{
+		return desktop.refresh_rate;
+	}
+
+	void set_frame_rate(const frame_rate_rules::cap& setting)
+	{
+		std::lock_guard lock(mutex);
+		opts.frame_rate = setting;
+		frame_rate::retarget(setting, window_vsync());
+	}
+
+	bool set_vsync(const bool on)
+	{
+		std::lock_guard lock(mutex);
+		opts.vsync = on;
+		if (manages_window(opts.window_mode) && !stock_fallback)
+		{
+			logger::write("display: VSync %s in a window - %s", on ? "on" : "off", on ? "frames paced at the desktop's refresh rate from now on" : "frames run free again, up to FrameRate");
+			frame_rate::retarget(opts.frame_rate, on);
+			return true;
+		}
+		return false; // rewrite_present applies it when the device is next created or reset
+	}
+
+	void set_run_in_background(const bool on)
+	{
+		std::lock_guard lock(mutex);
+		opts.run_in_background = on;
+		logger::write("display: run in background %s%s", on ? "on" : "off",
+		              manages_window(opts.window_mode) ? "" : " (matters in the borderless and windowed modes; the game's own fullscreen always pauses without the focus)");
+	}
+
+	HWND game_window()
+	{
+		if (window && IsWindow(window))
+		{
+			return window;
+		}
+		// Before the device exists, or with nothing hooked: the engine's window class, in this process only.
+		struct search
+		{
+			DWORD process;
+			HWND found;
+		} state{GetCurrentProcessId(), nullptr};
+		EnumWindows(
+			[](const HWND candidate, const LPARAM param) -> BOOL
+			{
+				auto* s = reinterpret_cast<search*>(param);
+				DWORD process = 0;
+				GetWindowThreadProcessId(candidate, &process);
+				char class_name[64]{};
+				if (process == s->process && GetClassNameA(candidate, class_name, sizeof(class_name)) && std::strcmp(class_name, window_class) == 0)
+				{
+					s->found = candidate;
+					return FALSE;
+				}
+				return TRUE;
+			},
+			reinterpret_cast<LPARAM>(&state));
+		return state.found;
+	}
+
 	void install(const HMODULE game)
 	{
 		opts = read_options();
 		const bool caps_frames = frame_rate_rules::disables_stock_cap(opts.frame_rate);
-		if (opts.window_mode == mode::stock && !frame_hook && !caps_frames && !opts.vsync.has_value())
+		if (opts.window_mode == mode::stock && !frame_hook && !caps_frames && !opts.vsync.has_value() && !opts.in_game_options)
 		{
-			logger::write("display: as the game has it (no [Display] Mode, FrameRate or VSync in xml2-fix.ini)");
+			logger::write("display: as the game has it (no [Display] Mode, FrameRate or VSync in xml2-fix.ini, and InGameOptions=0)");
 			return;
 		}
 
 		desktop = current_desktop();
+		if (opts.in_game_options)
+		{
+			options_menu::install(game); // the rows in Advanced Options; checks the game's code first
+		}
+		else
+		{
+			logger::write("options: no rows in Advanced Options ([Display] InGameOptions=0)");
+		}
 		if (opts.window_mode == mode::stock)
 		{
 			std::string why;
 			for (const auto& [wanted, reason] : {std::pair{frame_hook != nullptr, "the test pipe's screenshots"}, std::pair{caps_frames, "the frame rate cap"},
-			                                     std::pair{opts.vsync.has_value(), "VSync"}})
+			                                     std::pair{opts.vsync.has_value(), "VSync"}, std::pair{options_menu::installed(), "the in-game options"}})
 			{
 				if (wanted)
 				{
 					why += (why.empty() ? "" : ", ") + std::string(reason);
 				}
+			}
+			if (why.empty())
+			{
+				logger::write("display: as the game has it (no [Display] Mode, FrameRate or VSync in xml2-fix.ini)");
+				return; // the in-game options aren't in place (not the retail build), so there is nothing to hook for
 			}
 			logger::write("display: as the game has it (no [Display] Mode in xml2-fix.ini); the Direct3D device is hooked for %s", why.c_str());
 		}
@@ -853,7 +960,6 @@ namespace display
 			              : opts.window_mode == mode::borderless ? "desktop" : "the game's setting",
 			              opts.topmost, opts.run_in_background, desktop.width, desktop.height, desktop.refresh_rate);
 		}
-		const bool window_vsync = opts.vsync.value_or(false) && manages_window(opts.window_mode);
 		if (opts.vsync.has_value())
 		{
 			if (manages_window(opts.window_mode))
@@ -882,7 +988,7 @@ namespace display
 		}
 
 		// The frame limiter paces frames from the Present hook, so it needs the device hooked above.
-		frame_rate::install(game, opts.frame_rate, desktop.refresh_rate, window_vsync);
+		frame_rate::install(game, opts.frame_rate, desktop.refresh_rate, window_vsync());
 
 		if (opts.window_mode == mode::stock)
 		{
