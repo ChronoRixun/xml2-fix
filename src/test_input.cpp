@@ -427,6 +427,7 @@ namespace test_input
 
 		display::set_frame_hook(&on_frame);
 		display::disable_multisampling("the test pipe copies the back buffer");
+		display::show_without_focus("the test pipe drives the game in the background");
 		logger::write("test: input pipe %s ([Test] InputPipe=1) - keys from it reach the game without the focus; the keyboard only with it", pipe_name);
 	}
 

@@ -38,6 +38,7 @@ namespace display
 		bool paused = false;
 		void (*frame_hook)(void*) = nullptr;     // the test pipe's screenshots, before every Present
 		const char* no_multisampling = nullptr;  // why the device is made without multisampling, if it is
+		const char* no_activate = nullptr;       // why the window is shown without taking the focus, if it is
 		HWND window = nullptr;
 		size client_size; // the client area the window should have (the back buffer size)
 
@@ -58,6 +59,13 @@ namespace display
 		using move_window_t = BOOL(WINAPI*)(HWND, int, int, int, int, BOOL);
 		using show_window_t = BOOL(WINAPI*)(HWND, int);
 		using reg_query_value_ex_a_t = LSTATUS(WINAPI*)(HKEY, LPCSTR, LPDWORD, LPDWORD, LPBYTE, LPDWORD);
+		using get_cursor_pos_t = BOOL(WINAPI*)(LPPOINT);
+		using set_cursor_pos_t = BOOL(WINAPI*)(int, int);
+		using clip_cursor_t = BOOL(WINAPI*)(const RECT*);
+
+		get_cursor_pos_t real_get_cursor_pos = nullptr;
+		set_cursor_pos_t real_set_cursor_pos = nullptr;
+		clip_cursor_t real_clip_cursor = nullptr;
 
 		create_window_ex_a_t real_create_window_ex_a = nullptr;
 		set_window_long_a_t real_set_window_long_a = nullptr;
@@ -560,6 +568,17 @@ namespace display
 				insert_after = HWND_TOPMOST;
 				flags &= ~static_cast<UINT>(SWP_NOZORDER);
 			}
+			if (no_activate)
+			{
+				// The engine shows its window with SWP_SHOWWINDOW, which activates it; the test harness
+				// keeps it behind the owner's window instead.
+				flags |= SWP_NOACTIVATE;
+				if (!opts.topmost)
+				{
+					insert_after = HWND_BOTTOM;
+					flags &= ~static_cast<UINT>(SWP_NOZORDER);
+				}
+			}
 			logger::write("display: engine %s %s -> %s", what, describe(asked).c_str(), describe(place.rect).c_str());
 			return real_set_window_pos(handle, insert_after, place.rect.left, place.rect.top, place.rect.right - place.rect.left,
 			                           place.rect.bottom - place.rect.top, flags);
@@ -585,11 +604,78 @@ namespace display
 
 		BOOL WINAPI hooked_show_window(const HWND handle, int command)
 		{
-			if (ours(handle) && manages_geometry() && command == SW_SHOWDEFAULT)
+			if (ours(handle) && manages_geometry())
 			{
-				command = SW_SHOW; // not whatever the launcher's STARTUPINFO says
+				if (command == SW_SHOWDEFAULT)
+				{
+					command = SW_SHOW; // not whatever the launcher's STARTUPINFO says
+				}
+				if (no_activate && (command == SW_SHOW || command == SW_SHOWNORMAL))
+				{
+					// The test harness: the window appears behind whatever the owner is using.
+					static bool logged = false;
+					if (!logged)
+					{
+						logged = true;
+						logger::write("display: window shown without taking the focus (%s)", no_activate);
+					}
+					command = command == SW_SHOW ? SW_SHOWNA : SW_SHOWNOACTIVATE;
+				}
 			}
 			return real_show_window(handle, command);
+		}
+
+		// ---- The cursor while another window has the focus ---------------------------------------
+		// The game reads the Windows cursor for its menus (GetCursorPos + ScreenToClient: hovering a
+		// button selects it) and moves and clips it (SetCursorPos, ClipCursor). In a window that keeps
+		// running in the background, that would let the owner's mouse, used in another program, pick
+		// menu items, and let the game move or trap that mouse. While the game doesn't have the focus it
+		// sees the cursor parked outside its window and can't move or clip it.
+
+		void note_cursor_parked()
+		{
+			static bool logged = false;
+			if (!logged)
+			{
+				logged = true;
+				logger::write("display: another window has the focus - the game sees the cursor outside its window and can't move or clip it");
+			}
+		}
+
+		BOOL WINAPI hooked_get_cursor_pos(const LPPOINT point)
+		{
+			const BOOL result = real_get_cursor_pos(point);
+			if (result && point && window && !game_in_foreground())
+			{
+				RECT rect{};
+				if (GetWindowRect(window, &rect))
+				{
+					point->x = rect.left - 256;
+					point->y = rect.top - 256;
+					note_cursor_parked();
+				}
+			}
+			return result;
+		}
+
+		BOOL WINAPI hooked_set_cursor_pos(const int x, const int y)
+		{
+			if (!game_in_foreground())
+			{
+				note_cursor_parked();
+				return TRUE;
+			}
+			return real_set_cursor_pos(x, y);
+		}
+
+		BOOL WINAPI hooked_clip_cursor(const RECT* rect)
+		{
+			if (rect && !game_in_foreground())
+			{
+				note_cursor_parked();
+				return TRUE;
+			}
+			return real_clip_cursor(rect);
 		}
 
 		// ---- The game's registry settings --------------------------------------------------------
@@ -689,6 +775,11 @@ namespace display
 		no_multisampling = why;
 	}
 
+	void show_without_focus(const char* why)
+	{
+		no_activate = why;
+	}
+
 	void install(const HMODULE game)
 	{
 		opts = read_options();
@@ -738,6 +829,30 @@ namespace display
 			{
 				logger::write("display: libIGDisplay.dll doesn't create the window the way this build expects - keeping exclusive fullscreen");
 				opts.window_mode = mode::fullscreen;
+			}
+			else
+			{
+				// The cursor, read and moved by both the game and the engine (see hooked_get_cursor_pos).
+				// The real functions are known before any import points at the hooks, so a call can never
+				// find them unset.
+				const HMODULE user32 = GetModuleHandleW(L"user32.dll");
+				real_get_cursor_pos = reinterpret_cast<get_cursor_pos_t>(GetProcAddress(user32, "GetCursorPos"));
+				real_set_cursor_pos = reinterpret_cast<set_cursor_pos_t>(GetProcAddress(user32, "SetCursorPos"));
+				real_clip_cursor = reinterpret_cast<clip_cursor_t>(GetProcAddress(user32, "ClipCursor"));
+				if (real_get_cursor_pos && real_set_cursor_pos && real_clip_cursor)
+				{
+					int hooked = 0;
+					for (const HMODULE module : {game, engine_display})
+					{
+						get_cursor_pos_t get = nullptr;
+						set_cursor_pos_t set = nullptr;
+						clip_cursor_t clip = nullptr;
+						hooked += hook_import(module, "USER32.dll", "GetCursorPos", &hooked_get_cursor_pos, get);
+						hooked += hook_import(module, "USER32.dll", "SetCursorPos", &hooked_set_cursor_pos, set);
+						hooked += hook_import(module, "USER32.dll", "ClipCursor", &hooked_clip_cursor, clip);
+					}
+					logger::write("display: %d cursor imports hooked (the game can't use the cursor while another window has the focus)", hooked);
+				}
 			}
 		}
 

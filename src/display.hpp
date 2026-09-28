@@ -37,4 +37,10 @@ namespace display
 	// Creates and resets the device without multisampling (a multisampled back buffer can't be
 	// copied). Set before install(); `why` goes in the log.
 	void disable_multisampling(const char* why);
+
+	// Borderless/windowed: shows the game's window without taking the focus, so an automated run
+	// starts behind whatever the owner is using. Set before install(); `why` goes in the log.
+	// (Independently of this, in borderless/windowed modes the game never sees, moves or clips the
+	// cursor while another window has the focus.)
+	void show_without_focus(const char* why);
 }
