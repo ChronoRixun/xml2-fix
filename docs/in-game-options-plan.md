@@ -1,7 +1,48 @@
 # In-game display options for X-Men Legends II - research findings and implementation plan
 
-Status: research complete (read-only spike, 2026-09-27/28), nothing implemented. Target: xml2-fix branch
-`display`, on top of `src/display.cpp` / `src/display_rules.hpp`.
+Status: research complete (read-only spike, 2026-09-27/28); **phase 1 implemented** (frame cap + VSync from
+the ini, `src/frame_rate.cpp` / `src/frame_rate_rules.hpp`, VSync in `rewrite_present`; see "Decisions" and
+1.6 for the windowed-vsync measurement). Phases 2-5 not started. Target: xml2-fix branch `display`, on top
+of `src/display.cpp` / `src/display_rules.hpp`.
+
+## Decisions (Owen, 2026-09-27 22:10) - binding
+
+1. **Default `FrameRate`** when the user never set it = stock behaviour: the game's own 60 fps cap, untouched.
+   The user picks e.g. 180 in the menu or the launcher.
+2. **Display mode and resolution changes apply on restart** (no live mode switch; phase 4 is out of scope).
+   The panel shows a clear "applies after restart" status line.
+3. The menu **includes a "Run in background" row**.
+4. **Windowed VSync: measure first** (done, 1.6). Only offer a real toggle where it takes effect; if windowed
+   presents always waited for the vertical blank, show a read-only "On (desktop)" row instead.
+5. The **HUD aspect fix at 21:9 is a separate follow-up**, not part of this work.
+6. **English labels first**; translations later.
+
+Single source of truth: `xml2-fix.ini` next to `dinput.dll`, `[Display]` section (the launcher writes the same
+keys): `Mode`, `Width`, `Height`, `Topmost`, `RunInBackground`, `FrameRate` (`<n>` | `refresh` | `0`; absent =
+stock 60 cap untouched), `VSync` (`0` | `1`; absent = the game's own presentation interval). The menu writes a
+key only when the user changed that row (Accept), with `WritePrivateProfileStringW`, creating the file if needed.
+
+### Phase 1 as implemented (2026-09-28)
+
+- `FrameRate` set -> the imm32 at 0x401db7 is patched to 0.0 after the 16 bytes 0x401dab-0x401dba are checked
+  (`frame_rate_rules::stock_cap_patch`; `xml2_test` checks them against `docs/research/XMen2.exe`); frames are
+  paced in the `Present` hook by `frame_rate::on_present` (high-resolution waitable timer for all but the last
+  0.6 ms, then a spin; `timeBeginPeriod(1)` + a 2 ms margin where the flag is unavailable). `refresh` = the
+  desktop rate from `EnumDisplaySettings` (60 if unknown). Late frames re-anchor the cadence (no catch-up burst).
+  The 1/30 constant at 0x401dae is untouched. Patch mismatch -> logged, the game's spin stays (the pacer
+  still runs, so a cap below 60 works; one above can't).
+- `VSync` on a fullscreen device (stock mode, `Mode=fullscreen`) -> `FullScreen_PresentationInterval` ONE / IMMEDIATE
+  in `rewrite_present`, only if `GetDeviceCaps().PresentationIntervals` offers it (else logged, engine's kept).
+- `VSync=1` in `borderless`/`windowed` -> **not** `COPY_VSYNC` (see 1.6: ~32 fps) but frames paced at the desktop
+  refresh rate by the limiter (`frame_rate_rules::effective_target`: never above `FrameRate`; with `FrameRate`
+  absent the stock 60 spin stays in charge, so VSync alone never raises the rate). `VSync=0` in a window only
+  undoes an engine-side alchemy `windowedVSync` swap effect. Consequence for phase 2: the VSync row is a real
+  On/Off toggle in every mode; in the windowed modes its help text should say "On = paced at your desktop's
+  refresh rate" rather than promise a vertical-blank wait.
+- The test pipe's `status` reply ends with `; fps <n.n>; frame rate <setting>` (Presents counted over the last
+  full second), so the cap is verifiable in game without screenshots.
+- Default-off verified by `xml2_test`: with none of the keys set the display fix returns before hooking anything
+  ("display: as the game has it (no [Display] Mode, FrameRate or VSync in xml2-fix.ini)").
 
 Goal (owner's request): expose display mode (fullscreen / borderless / windowed), a frame-rate cap, vsync
 and a modern resolution list inside the game's own *Advanced Options* panel, the way community clients
@@ -263,11 +304,27 @@ stock cap also means "vsync off" in fullscreen never showed >60 fps.
   - Windowed (`vc[0x180]==0`): `RefreshRate = request+0x2c`, `PresentationInterval = 0`
     (D3D8 requires DEFAULT when windowed), and ini `windowedVSync=true` sets
     `SwapEffect = 4 (D3DSWAPEFFECT_COPY_VSYNC)`, otherwise the requested swap effect. D3D8 has **no
-    IMMEDIATE interval for windowed devices**; COPY_VSYNC is its only windowed vsync switch. Under DWM
-    a windowed D3D8 present is a blit into the redirected surface (no tearing either way); whether the
-    legacy d3d8.dll waits for vblank with interval DEFAULT, and whether it still honours COPY_VSYNC on
-    Windows 11, is **UNVERIFIED** - measure (uncap and read the fps display) before exposing a windowed
-    vsync toggle.
+    IMMEDIATE interval for windowed devices**; COPY_VSYNC is its only windowed vsync switch.
+  - **MEASURED 2026-09-28** (`xml2_test` `check_windowed_presents`: a 64x48 unfocused tool window, 90 timed
+    Presents after 10 warm-up frames, Windows 11 26200, desktop 2560x1440 @ 180 Hz, RTX-class HAL device,
+    software vertex processing):
+
+    | windowed device | ms/frame | fps | waits for vblank? |
+    | --- | --- | --- | --- |
+    | DISCARD, interval DEFAULT, window hidden | 0.026-0.029 | ~35,000 | no |
+    | DISCARD, interval DEFAULT, window shown | 0.125-0.154 | 6,500-8,000 | **no** |
+    | COPY_VSYNC, interval DEFAULT, window shown | 31.1-31.8 | **~32** | waits, but far below 180 Hz |
+    | COPY_VSYNC, same, `timeBeginPeriod(1)` | 30.3 | 33 | same (not a scheduler-tick artefact) |
+    | COPY, interval DEFAULT, window shown | 0.125-0.205 | 4,900-8,000 | no |
+    | `CreateDevice` windowed, interval IMMEDIATE | - | - | **refused, D3DERR_INVALIDCALL (0x8876086C)** |
+    | `CreateDevice` windowed, interval ONE | - | - | refused, D3DERR_INVALIDCALL |
+
+    Conclusion: a windowed D3D8 present with the default interval **never waits** for the vertical blank
+    under DWM (the game runs free, capped only by its spin or our limiter), and COPY_VSYNC, the only
+    windowed sync D3D8 offers, is unusable (~32 fps on a 180 Hz desktop; DWM shows both without tearing).
+    Decision 4 therefore resolves to: VSync **is** a real toggle in the windowed modes, implemented as
+    "on = frames paced at the desktop refresh rate by the limiter", never as COPY_VSYNC; `VSync=0` there
+    only undoes the engine's own `windowedVSync`. Fullscreen VSync is the presentation interval as planned.
 - `endDraw` @1002eb70: `EndScene` (+0x8c) then `Present(0,0,0,0)` (+0x3c); `D3DERR_DEVICELOST` sets
   vc[0x15c]. `beginDraw` -> `getLastError` @1002dac0: `TestCooperativeLevel`, `resetDevice` @1002ae40
   (`releaseVolatileResources` + `Reset(vc+0x150)` + `restoreVolatileResources` + `setupAll`), else
@@ -353,11 +410,13 @@ fall back to `Sleep(1)` + spin), "Refresh" = the desktop refresh from `EnumDispl
 
 ### 2.3 Vsync: rewrite in `rewrite_present`
 
-Fullscreen: `FullScreen_PresentationInterval = ONE` (on) or `IMMEDIATE` (off, the stock value). Windowed /
-borderless: `SwapEffect = COPY_VSYNC (4)` with `BackBufferCount = 1` and no multisampling for "on",
-`DISCARD` for "off" (current behaviour); mark the windowed switch **experimental** until measured (1.6).
-Live apply: after Accept call the exported `igDxVisualContext::resetDevice` on the vc (pointer = display
-singleton `[0xa0a138]+0xc`, or `igWin32Window+8`); our `hooked_reset` rewrites the parameters.
+Fullscreen: `FullScreen_PresentationInterval = ONE` (on) or `IMMEDIATE` (off, the stock value), when the
+adapter's `PresentationIntervals` caps offer it. Windowed / borderless: **not** COPY_VSYNC (measured at ~32 fps,
+1.6) - "on" is the limiter pacing at the desktop refresh rate (`effective_target`, never above `FrameRate`),
+"off" = `DISCARD` (undoing only an engine-side `windowedVSync`). *Implemented in phase 1.*
+Live apply (phase 2): after Accept call the exported `igDxVisualContext::resetDevice` on the vc (pointer =
+display singleton `[0xa0a138]+0xc`, or `igWin32Window+8`); our `hooked_reset` rewrites the parameters. The
+windowed "on" needs no reset at all (a pacer retarget).
 
 ### 2.4 Display mode
 
@@ -472,8 +531,8 @@ game's rows, their `FUN_00617f10` greys only 0x15 and 6 - our event-4 handler gr
 | `Mode` | `fullscreen` / `borderless` / `windowed` (existing) | absent = stock | restart (phase 1), live (phase 4) |
 | `Width`, `Height` | existing | 0 | restart |
 | `Topmost`, `RunInBackground` | existing | 0 / 1 | live |
-| `FrameRate` | `0` (off) / `30` / `60` / `120` / `144` / `refresh` | `60` in fullscreen (stock feel), `refresh` in borderless/windowed | live |
-| `VSync` | `0` / `1` | `0` (stock fullscreen) | live via reset |
+| `FrameRate` | `0` (unlimited) / `10`..`1000` / `refresh` | absent = the game's own 60 fps cap, untouched (decision 1) | live (phase 1 done: start-up) |
+| `VSync` | `0` / `1` | absent = the engine's own interval | fullscreen: via reset; windowed: pacer retarget (phase 1 done: start-up) |
 | `InGameOptions` | `0` / `1` | `1` | start |
 | `ResolutionList` | `game` (20, trimmed) / `all` (relocated table) | `all` | start |
 
@@ -484,9 +543,10 @@ values fall back to the default and are logged.
 
 ## 4. Phases (each shippable)
 
-1. **Frame cap + vsync in the ini and the Present hook** (no UI): patch E, limiter in `hooked_present`,
-   vsync in `rewrite_present`, `[Display] FrameRate/VSync`, log the measured fps every 10 s in debug.
-   Test the windowed-vsync question (1.6) here.
+1. **Frame cap + vsync in the ini and the Present hook** (no UI) - **DONE 2026-09-28**: patch E, limiter in
+   `hooked_present` (`frame_rate::on_present`), vsync in `rewrite_present`, `[Display] FrameRate/VSync`, the
+   measured fps logged after the 2nd and 30th second and live in the pipe's `status`. The windowed-vsync
+   question (1.6) is answered by `xml2_test`.
 2. **In-game rows (display mode, frame rate, vsync, run in background)**: hooks A-D, rows, highlight,
    status label, ini persistence, live apply for cap/vsync/background; display mode = restart notice.
 3. **Resolution list**: relocate the table (F-L), 64 slots, curated list + render-scale presets; keep the
@@ -544,15 +604,15 @@ values fall back to the default and are logged.
 
 ---
 
-## 7. Open questions for the owner
+## 7. Open questions for the owner - answered, see "Decisions" at the top
 
-1. Default for `FrameRate` when the user never opens the panel: keep the stock 60 (safest) or "refresh"?
-2. Should Display mode try the live switch (phase 4) at all, or is "restart to apply" acceptable like the
-   game's own resolution change?
-3. Is a fifth row "Run in background" wanted, or keep it launcher/ini only?
-4. Windowed-mode VSync: expose it as "On (desktop)" read-only if D3D8 turns out to sync anyway, or hide it?
-5. HUD aspect correction at 21:9 (separate feature): worth a follow-up spike?
-6. Labels: English only in the first release, or ship the fre/ger/ita/spa strings too?
+1. Default for `FrameRate` when the user never opens the panel: **stock 60, untouched.**
+2. Display mode live switch (phase 4): **no; restart to apply**, with a status line.
+3. Fifth row "Run in background": **yes.**
+4. Windowed-mode VSync: **measured (1.6)** - D3D8 never syncs a window by default and its COPY_VSYNC is
+   ~32 fps, so the row is a real toggle whose "On" paces at the desktop refresh rate.
+5. HUD aspect correction at 21:9: **separate follow-up.**
+6. Labels: **English first.**
 
 ---
 
