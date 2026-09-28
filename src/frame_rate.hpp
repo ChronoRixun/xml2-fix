@@ -18,6 +18,13 @@
 // but the last part of the wait, then a short spin on QueryPerformanceCounter. The game's
 // simulation runs on wall-clock time, so the frame rate doesn't change its speed.
 //
+// Menus, popups and conversations run at 60 fps whatever FrameRate says (or at FrameRate when it
+// is lower): their timers and animations run on time too, but their buttons fire on a frame's
+// edge with no debounce, so at three times the frames a d-pad's bounce or a stick resting near
+// its threshold becomes a second press. Every frame the fix reads the state the game's own "a UI
+// screen is up" test reads (CClient::frame, 0x401ef8) and paces at 60 while one is; movies and the
+// loading screen keep FrameRate. frame_rate_rules.hpp has the research and the guarded bytes.
+//
 // VSync on a fullscreen device is the presentation interval, applied by the display fix when the
 // device is created or reset (display_rules.hpp, rewrite_present). In a window Direct3D 8 has no
 // usable vsync - xml2_test measures it: a present with the default interval never waits for the
@@ -46,10 +53,12 @@ namespace frame_rate
 	// Called on the game's thread, from the panel's Accept.
 	void retarget(const frame_rate_rules::cap& setting, bool window_vsync);
 
-	// Whether frames need pacing, so Present must be hooked.
+	// Whether frames need pacing, so Present must be hooked: FrameRate paces, or it is above 60 or
+	// unlimited and menus are held at 60.
 	bool paces();
 
-	// On the game's render thread, after every successful Present: paces the frame and counts it.
+	// On the game's render thread, after every successful Present: reads whether a menu, popup or
+	// conversation is up, paces the frame and counts it.
 	void on_present();
 
 	// Frames per second over the last full second, in tenths (0 until a second has passed), and

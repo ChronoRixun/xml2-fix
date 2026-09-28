@@ -5,7 +5,10 @@
 #include <timeapi.h>
 
 #include <atomic>
+#include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <string>
 
 #ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
@@ -31,7 +34,17 @@ namespace frame_rate
 		std::atomic<unsigned> fps_x10{0};
 		HANDLE timer = nullptr;
 		bool high_resolution = false;
-		unsigned seconds = 0;
+		unsigned seconds = 0; // since the start or the last change: the fps is logged after the 2nd and the 30th
+
+		// Menus, popups and conversations at 60 (frame_rate_rules.hpp).
+		const guard* screen_mismatch = nullptr; // the first retail byte that isn't: the screens aren't read
+		bool screens_checked = false;
+		bool screens_known = false; // every guard matched
+		bool screens_failed = false; // a read faulted: not read again
+		unsigned paced = 0;          // what the pacer runs at now (0: not at all)
+		std::atomic<bool> menu_rate{false}; // at 60 for a screen right now (the pipe's "status" reads it)
+		unsigned switches_logged = 0;
+		constexpr unsigned switches_to_log = 12;
 
 		LONGLONG now()
 		{
@@ -115,6 +128,125 @@ namespace frame_rate
 			margin = ticks_for_ms(high_resolution ? 0.6 : 2.0, frequency);
 		}
 
+		// ---- Which screen is up -----------------------------------------------------------------
+
+		// No C++ objects here: the reads are guarded.
+		const guard* first_screen_mismatch_guarded()
+		{
+			__try
+			{
+				return first_screen_mismatch(reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(image_base)));
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return &screen_guards[0];
+			}
+		}
+
+		// Once: whether this is the retail XMen2.exe whose menu, popup and conversation state the fix
+		// knows how to read.
+		void check_screens()
+		{
+			if (screens_checked)
+			{
+				return;
+			}
+			screens_checked = true;
+			if (reinterpret_cast<std::uintptr_t>(game_module) != image_base)
+			{
+				return; // not XMen2.exe at 0x400000: screen_mismatch stays null
+			}
+			screen_mismatch = first_screen_mismatch_guarded();
+			screens_known = screen_mismatch == nullptr;
+		}
+
+		std::uint32_t vtable_of(const std::uint32_t object)
+		{
+			return *reinterpret_cast<const std::uint32_t*>(static_cast<std::uintptr_t>(object));
+		}
+
+		template <typename T>
+		const T* cell(const DWORD va)
+		{
+			return *reinterpret_cast<T* const*>(static_cast<std::uintptr_t>(va));
+		}
+
+		// What the game's own functions would answer this frame (0x5d8870, 0x5e9e30, 0x458010,
+		// 0x5d8420); false if the memory couldn't be read.
+		bool read_screen(screen& out)
+		{
+			__try
+			{
+				out = screen{};
+				if (const auto* manager = cell<std::uint8_t>(menu_manager_cell))
+				{
+					out.menu = menu_up(manager);
+					out.movie = movie_playing(manager);
+					out.loading = loading_screen(manager, &vtable_of);
+				}
+				if (const auto* popups = cell<std::uint8_t>(popups_cell))
+				{
+					out.popup = popup_up(popups);
+				}
+				if (const auto* conversations = cell<std::uint8_t>(conversations_cell))
+				{
+					out.conversation = conversation_up(conversations);
+				}
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		// Whether the screens change anything: the fix paces (the game's spin is off), FrameRate is
+		// above 60 or unlimited, and the state can be read.
+		bool watches_screens()
+		{
+			return screens_known && !screens_failed && spin_off && menus_differ(target);
+		}
+
+		std::string fps_words(const unsigned fps)
+		{
+			return fps ? std::to_string(fps) + " fps" : std::string("unlimited");
+		}
+
+		// The setting in words, VSync in a window included.
+		std::string describe_setting()
+		{
+			if (synced_window)
+			{
+				return std::to_string(target) + " fps (the desktop's refresh rate, for VSync in a window; FrameRate " + frame_rate_rules::describe(setting, refresh) + ")";
+			}
+			return frame_rate_rules::describe(setting, refresh);
+		}
+
+		// What the log says about the screens after a setting is applied.
+		std::string screens_note()
+		{
+			if (!spin_off || !menus_differ(target))
+			{
+				return "";
+			}
+			if (watches_screens())
+			{
+				return "; menus, popups and conversations at 60 fps";
+			}
+			if (screens_failed)
+			{
+				return "; menus at " + fps_words(target) + " too - the game's menu state couldn't be read";
+			}
+			if (!screen_mismatch)
+			{
+				return "; menus at " + fps_words(target) + " too - XMen2.exe isn't loaded at 0x400000 (not the game?)";
+			}
+			char text[256];
+			std::snprintf(text, sizeof(text), "; menus at %s too - XMen2.exe doesn't have the expected code at 0x%08lX (%s)", fps_words(target).c_str(), screen_mismatch->va,
+			              screen_mismatch->what);
+			return text;
+		}
+
 		// Sleeps on the timer for the bulk of the wait, then spins for the rest.
 		void wait_until(const LONGLONG deadline)
 		{
@@ -156,6 +288,7 @@ namespace frame_rate
 		LARGE_INTEGER freq;
 		QueryPerformanceFrequency(&freq);
 		frequency = freq.QuadPart;
+		check_screens();
 
 		if (!disables_stock_cap(setting))
 		{
@@ -167,7 +300,8 @@ namespace frame_rate
 		switch_spin_off();
 		target = effective_target(setting, refresh, window_vsync);
 		synced_window = window_vsync && target != target_fps(setting, refresh);
-		if (target)
+		paced = target;
+		if (target || watches_screens())
 		{
 			prepare_timer();
 			pace.set_interval(ticks_for_fps(target, frequency));
@@ -184,12 +318,12 @@ namespace frame_rate
 		}
 		if (target)
 		{
-			logger::write("frame rate: %s, paced by the fix (%s timer + spin); the game's 60 fps spin is off", describe().c_str(),
-			              high_resolution ? "high-resolution" : "1 ms");
+			logger::write("frame rate: %s, paced by the fix (%s timer + spin); the game's 60 fps spin is off%s", describe_setting().c_str(),
+			              high_resolution ? "high-resolution" : "1 ms", screens_note().c_str());
 		}
 		else
 		{
-			logger::write("frame rate: unlimited; the game's 60 fps spin is off");
+			logger::write("frame rate: unlimited; the game's 60 fps spin is off%s", screens_note().c_str());
 		}
 	}
 
@@ -210,15 +344,16 @@ namespace frame_rate
 		}
 		target = live_target(setting, refresh, window_vsync, spin_off);
 		synced_window = window_vsync && disables_stock_cap(setting) && target != target_fps(setting, refresh);
-		if (target)
+		// The next frame starts a new cadence at the new rate; on_present moves it to 60 if a menu
+		// is up (the change is made from one, the Advanced Options panel).
+		paced = target;
+		menu_rate = false;
+		if (target || watches_screens())
 		{
 			prepare_timer();
-			pace.set_interval(ticks_for_fps(target, frequency));
 		}
-		else
-		{
-			pace.set_interval(0);
-		}
+		pace.set_interval(ticks_for_fps(target, frequency));
+		seconds = 0; // the fps is logged 2 and 30 seconds after the change
 		const char* how = "";
 		if (!disables_stock_cap(setting))
 		{
@@ -232,12 +367,12 @@ namespace frame_rate
 		{
 			how = target ? ", paced by the fix from the next frame" : "; nothing paces";
 		}
-		logger::write("frame rate: now %s%s", describe().c_str(), how);
+		logger::write("frame rate: now %s%s%s", describe_setting().c_str(), how, screens_note().c_str());
 	}
 
 	bool paces()
 	{
-		return target != 0;
+		return target != 0 || watches_screens();
 	}
 
 	void on_present()
@@ -247,7 +382,48 @@ namespace frame_rate
 			return;
 		}
 		LONGLONG time = now();
-		if (target)
+
+		// A menu, popup or conversation: 60 fps; play: FrameRate.
+		unsigned wanted = target;
+		if (watches_screens())
+		{
+			screen shown;
+			if (read_screen(shown))
+			{
+				const bool at_60 = at_menu_rate(shown);
+				wanted = paced_fps(target, at_60);
+				if (wanted != paced && switches_logged <= switches_to_log)
+				{
+					if (switches_logged == switches_to_log)
+					{
+						logger::write("frame rate: (further switches between menus and play aren't logged)");
+					}
+					else if (at_60)
+					{
+						logger::write("frame rate: %s while %s is on screen", fps_words(wanted).c_str(), describe_screen(shown).c_str());
+					}
+					else
+					{
+						logger::write("frame rate: %s again (%s)", fps_words(wanted).c_str(), describe_screen(shown).c_str());
+					}
+					++switches_logged;
+				}
+				menu_rate = at_60;
+			}
+			else
+			{
+				screens_failed = true;
+				menu_rate = false;
+				logger::write("frame rate: ERROR: the game's menu state couldn't be read - menus run at %s like play from now on", fps_words(target).c_str());
+			}
+		}
+		if (wanted != paced)
+		{
+			paced = wanted;
+			pace.set_interval(ticks_for_fps(paced, frequency)); // a new cadence from this frame
+		}
+
+		if (paced)
 		{
 			const LONGLONG deadline = pace.next(time);
 			if (deadline > time)
@@ -260,7 +436,7 @@ namespace frame_rate
 		{
 			fps_x10.store(counter.fps_x10());
 			++seconds;
-			if (seconds == 2 || seconds == 30) // once early, once settled; the pipe's "status" has it live
+			if (seconds == 2 || seconds == 30) // once early, once settled (after the start or a change); the pipe's "status" has it live
 			{
 				logger::write("frame rate: %s fps over the last second (%s)", fps_text(counter.fps_x10()).c_str(), describe().c_str());
 			}
@@ -274,10 +450,11 @@ namespace frame_rate
 
 	std::string describe()
 	{
-		if (synced_window)
+		std::string text = describe_setting();
+		if (watches_screens())
 		{
-			return std::to_string(target) + " fps (the desktop's refresh rate, for VSync in a window; FrameRate " + frame_rate_rules::describe(setting, refresh) + ")";
+			text += menu_rate ? " (60 now: a menu, popup or conversation is up)" : " (menus, popups and conversations at 60)";
 		}
-		return frame_rate_rules::describe(setting, refresh);
+		return text;
 	}
 }

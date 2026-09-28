@@ -3069,6 +3069,146 @@ namespace
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
 
+	// Menus, popups and conversations at 60 fps (frame_rate_rules.hpp): the rate rules on their own, then,
+	// when a copy of XMen2.exe is at hand, every guard against it and the game's own four functions (menu up
+	// 0x5d8870, movie 0x5d8420, popup up 0x5e9e30, conversation 0x458010) run on blocks of the test's in
+	// every state that matters, each answer compared with the fix's reading of the same block.
+	void check_menu_screens()
+	{
+		using namespace frame_rate_rules;
+		std::printf("frame rate: menus, popups and conversations at 60 fps\n");
+
+		// The rate: 60 on such a screen when FrameRate is above it or unlimited, FrameRate when lower.
+		CHECK(paced_fps(180, true) == 60 && paced_fps(180, false) == 180 && paced_fps(0, true) == 60 && paced_fps(0, false) == 0);
+		CHECK(paced_fps(144, true) == 60 && paced_fps(61, true) == 60 && paced_fps(60, true) == 60 && paced_fps(30, true) == 30 && paced_fps(30, false) == 30);
+		CHECK(menus_differ(180) && menus_differ(0) && menus_differ(61) && !menus_differ(60) && !menus_differ(30));
+		// Which screens: a menu, a popup or a conversation - not a movie, not the loading screen.
+		CHECK(!at_menu_rate({}) && at_menu_rate({true}) && at_menu_rate({false, true}) && at_menu_rate({false, false, true}));
+		CHECK(!at_menu_rate({true, false, false, true}) && !at_menu_rate({true, false, false, false, true}) && !at_menu_rate({false, true, false, false, true}));
+		CHECK(at_menu_rate({true, true, true}) && !at_menu_rate({false, false, false, true}));
+		CHECK(describe_screen({}) == "play" && describe_screen({true}) == "a menu" && describe_screen({true, true}) == "a popup" && describe_screen({false, false, true}) == "a conversation");
+		CHECK(describe_screen({true, false, false, true}) == "a movie" && describe_screen({true, false, false, false, true}) == "the loading screen");
+		std::set<DWORD> addresses;
+		bool guards_ok = true;
+		for (const auto& g : screen_guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
+		CHECK(guards_ok);
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the menu state's bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](const DWORD va) { return image + (va - image_base); };
+
+		const guard* mismatch = first_screen_mismatch(image);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
+		CHECK(mismatch == nullptr);
+		// The layout the fix reads is the one the functions' own bytes name (their displacements).
+		CHECK(operand_at(at(0x5d8870 + 2), 4) == menu_stack_count && operand_at(at(0x5d887a + 2), 4) == menu_stack_first);
+		CHECK(operand_at(at(0x5d8884 + 2), 4) == menu_current && operand_at(at(0x5d888e + 2), 4) == menu_pending && operand_at(at(0x5d8420 + 2), 4) == menu_flags);
+		CHECK(operand_at(at(0x5e9e30 + 2), 4) == popup_current && operand_at(at(0x5e9e3f + 2), 4) == popup_stride && operand_at(at(0x5e9e49 + 2), 4) == popup_active);
+		CHECK(operand_at(at(0x458010 + 2), 4) == conversation_flags && operand_at(at(0x5d8920 + 1), 4) == menu_manager_cell);
+		CHECK(operand_at(at(0x5eb300 + 1), 4) == popups_cell && operand_at(at(0x4583f0 + 1), 4) == conversations_cell && operand_at(at(0x5b81e3 + 2), 4) == loading_menu_vtable);
+		CHECK(operand_at(at(0x5d88c6 + 1), 4) == menu_manager_size && operand_at(at(0x5eb2ac + 1), 4) == popups_size && operand_at(at(0x45839c + 1), 4) == conversations_size);
+
+		// The game's answer (al) for a block, and the fix's for the same block.
+		const auto game_says = [&](const DWORD function, std::uint8_t* object)
+		{
+			void* result = nullptr;
+			const bool ran = run_thiscall(at(function), object, result);
+			return ran ? static_cast<int>(reinterpret_cast<std::uintptr_t>(result) & 0xff) : -1;
+		};
+
+		// The menu manager: stack count, its first entry, the current menu, a pending name, the movie bit.
+		test_block manager(menu_manager_size);
+		std::uint8_t* m = manager.data();
+		const auto put = [](std::uint8_t* object, const DWORD offset, const std::uint32_t value) { std::memcpy(object + offset, &value, sizeof(value)); };
+		struct menu_case
+		{
+			std::int32_t count;
+			std::uint32_t first, current;
+			const char* pending;
+			std::uint8_t flags;
+		};
+		const std::array<menu_case, 12> menu_cases{{
+			{0, 0, 0, "", 0},                    // at the start: nothing
+			{2, 0x1234, 0, "", 0},               // in play: the manager's two processes, no menu
+			{2, 0x1234, 0x5678, "", 0},          // a menu
+			{2, 0x1234, 0, "pause", 0},          // one about to open
+			{0, 0x1234, 0x5678, "main", 0},      // no stack: never
+			{-3, 0x1234, 0x5678, "", 0},         // a negative count
+			{2, 0, 0x5678, "main", 0},           // no first entry
+			{1, 0x1234, 0x5678, "", 0x20},       // a movie
+			{2, 0x1234, 0, "", 0x20},            // the movie bit alone
+			{2, 0x1234, 0x5678, "", 0xdf},       // every other flag
+			{2, 0x1234, 0x5678, "", 0xff},
+			{7, 0xffffffff, 0, "x", 0x40},
+		}};
+		bool menus_ok = true;
+		for (const auto& c : menu_cases)
+		{
+			std::fill_n(m, menu_manager_size, std::uint8_t{0});
+			put(m, menu_stack_count, static_cast<std::uint32_t>(c.count));
+			put(m, menu_stack_first, c.first);
+			put(m, menu_current, c.current);
+			std::memcpy(m + menu_pending, c.pending, std::strlen(c.pending) + 1);
+			m[menu_flags] = c.flags;
+			const int up = game_says(0x5d8870, m), movie = game_says(0x5d8420, m);
+			menus_ok &= up == (menu_up(m) ? 1 : 0) && movie == (movie_playing(m) ? 1 : 0);
+		}
+		CHECK(menus_ok && manager.slack_untouched());
+		// The loading screen: the current menu's vtable.
+		std::array<std::uint32_t, 4> loading_menu{loading_menu_vtable, 0, 0, 0}, other_menu{0x69f134, 0, 0, 0}; // CMenuLoading, CMenuMain
+		const auto read_vtable = [](const std::uint32_t object) { return *reinterpret_cast<const std::uint32_t*>(static_cast<std::uintptr_t>(object)); };
+		std::fill_n(m, menu_manager_size, std::uint8_t{0});
+		put(m, menu_stack_count, 2);
+		put(m, menu_stack_first, 0x1234);
+		CHECK(!loading_screen(m, read_vtable));
+		put(m, menu_current, static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(loading_menu.data())));
+		CHECK(loading_screen(m, read_vtable) && menu_up(m));
+		put(m, menu_current, static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(other_menu.data())));
+		CHECK(!loading_screen(m, read_vtable) && menu_up(m));
+
+		// The popups: the index (in range and out) and each popup's shown bit.
+		test_block popups(popups_size);
+		std::uint8_t* p = popups.data();
+		bool popups_ok = true;
+		int popups_up = 0;
+		for (int index = -2; index <= 4; ++index)
+		{
+			for (int shown = 0; shown < 8; ++shown)
+			{
+				std::fill_n(p, popups_size, std::uint8_t{0});
+				put(p, popup_current, static_cast<std::uint32_t>(index));
+				for (int i = 0; i < popup_count; ++i)
+				{
+					p[popup_first + static_cast<DWORD>(i) * popup_stride + popup_active] = static_cast<std::uint8_t>((shown >> i) & 1 ? 0xf1 : 0xf0);
+				}
+				const int up = game_says(0x5e9e30, p);
+				popups_ok &= up == (popup_up(p) ? 1 : 0);
+				popups_up += up == 1;
+			}
+		}
+		CHECK(popups_ok && popups_up == 28 && popups.slack_untouched()); // shown in half the patterns: the index's popup, popup 0's when out of range
+
+		// The conversations: every value of the flags byte.
+		test_block conversations(conversations_size);
+		std::uint8_t* c = conversations.data();
+		bool conversations_ok = true;
+		for (int flags = 0; flags < 256; ++flags)
+		{
+			c[conversation_flags] = static_cast<std::uint8_t>(flags);
+			conversations_ok &= game_says(0x458010, c) == (conversation_up(c) ? 1 : 0);
+		}
+		CHECK(conversations_ok && conversations.slack_untouched());
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
 	// [Game] MainMenuItems (main_menu_rules.hpp): the list's rules, the tables and guards on their own, then,
 	// when a copy of XMen2.exe is at hand, every guard against it, the push table complete for MAIN_MENU's code
 	// (every reference to the nine names in 0x5c9260..0x5c99ee is a site, and nothing else there), and the
@@ -3540,6 +3680,7 @@ int main(const int argc, char** argv)
 	check_online();
 	check_display_rules();
 	check_frame_rate_rules();
+	check_menu_screens();
 	check_options_menu_rules();
 	check_resolution_rules();
 	check_limits_rules();
