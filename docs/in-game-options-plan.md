@@ -172,6 +172,25 @@ key only when the user changed that row (Accept), with `WritePrivateProfileStrin
   for each, picking 2560x1440 or a render-scale preset -> `NEW_RESZ_RESTART` -> the size after the restart, and
   `Revert to default` re-syncing the slider to "640x480"/the default through the relocated table.
 
+### Review fix round (2026-09-28; three reviewers, `git diff 600bcc8..display`)
+
+Each finding was re-read in the binary before changing anything.
+
+1. **The pipe's `wm` couldn't drive the panel - confirmed, fixed.** The panel's keys come from the DirectInput
+   keyboard (1.1 "Input feed", corrected); `wm` removed (refused with a pointer to `tap`), docs corrected;
+   `xml2_test` checks the input-path bytes. Drive the panel with `tap UP/DOWN/LEFT/RIGHT/RETURN/ESCAPE`.
+2. **Default-off violated - confirmed, fixed.** Without `ResolutionList` nothing touches the Video list in the
+   stock mode (no hooks, no relocation; the fix's modes keep their pre-phase-3 list); the rows no longer force
+   a Present hook (hooked when the limiter starts); with no keys and no rows nothing is hooked at all. The
+   64-slot table as the default awaits Owen's OK (it fixes the stock overflow into the default bindings).
+3. **Revert + Accept wrote the fix's variants instead of stock - confirmed, fixed.** A row on its stock value
+   removes its key (when the user put it there or after Revert); FrameRate back to stock restores the game's
+   spin live (byte-checked undo; the fix paces at 60 if it can't), so frames are never left unpaced.
+4. **The 64-slot table could be relocated without the list clamp - confirmed (low likelihood), fixed.** Relocated
+   only after the `Direct3DCreate8` hook succeeded; the list hooks answer for every adapter (the writer asks 0).
+5. **Mouse messages still reached the unfocused game - confirmed, fixed.** In borderless/windowed the engine's
+   window gets a procedure in front that drops 0x200-0x20e while another process has the foreground.
+
 Goal (owner's request): expose display mode (fullscreen / borderless / windowed), a frame-rate cap, vsync
 and a modern resolution list inside the game's own *Advanced Options* panel, the way community clients
 (iw4x and friends) do, while `xml2-fix.ini` stays the single source of truth so the launcher can edit the
@@ -727,26 +746,68 @@ values fall back to the default and are logged.
 
 ---
 
-## 6. In-game test checklist
+## 6. In-game test checklist (final, after the review fix round)
 
-1. Start with no `[Display]` section: panel unchanged, fps display 60, log says "in-game options off"
-   (or on with stock defaults if `InGameOptions` defaults to 1 - decide; recommended: on).
-2. Options > Controls > Advanced: four new rows under FSAA, enter animation slides them in with the rest,
-   highlight bar follows mouse hover and keyboard up/down (Resolution -> FSAA -> Display mode -> Frame rate
-   -> VSync -> Run in background -> Accept -> wrap), left/right and Enter cycle values with the click sound.
-3. Change Frame rate to 30, Accept: fps display shows 30 immediately; `xml2-fix.ini` has `FrameRate=30`.
-   Change to Off in borderless on the 180 Hz desktop: fps display > 60 (note the value), game speed
-   unchanged (time a fixed tour step). Back to 60.
-4. VSync On/Off in fullscreen: fps pinned to refresh vs free; no device-lost hang after the reset.
-5. Cancel discards edits (rows show ini values on reopen); Revert to defaults resets rows to defaults and
-   the launcher-written ini values reappear after Cancel.
-6. Display mode row: change, Accept -> status line says restart required; restart -> mode applied.
-7. Resolution slider (phase 3): the list shows every curated size incl. 2560x1440 and 21:9 entries; pick
-   one, Accept -> NEW_RESZ_RESTART popup as stock; after restart the HUD is stretched to the new aspect
-   (known, 1.7).
-8. Edit the ini with the launcher while the game is at the main menu, open the panel: rows reflect it.
-9. Alt-tab, minimise/restore, and a popup (revert confirm) open/close leave the highlight and focus sane.
-10. Delete `dinput.dll`: stock panel, stock 60 fps cap, registry untouched.
+Setup for the focus-free runs: the branch's `build/bin/Release/dinput.dll` next to `XMen2.exe` and
+
+```ini
+[Display]
+Mode=windowed
+RunInBackground=1
+[Test]
+InputPipe=1
+```
+
+(no FrameRate/VSync/ResolutionList). Keys go through the pipe with `tap` (DirectInput names: UP, DOWN, LEFT,
+RIGHT, RETURN, ESCAPE; `tools/fixinput.py key down` etc.); `wm` is gone. Take a `screenshot` after each step
+that moves the highlight. If a tap right after a screen opens seems ignored, tap again.
+
+1. **Start, main menu** (~35 s): `status` ends with `fps ~60.0; frame rate the game's own 60 fps cap`. Log:
+   `display: mode windowed`, `the game's window ignores the mouse while another window has the focus`,
+   `resolution list: the game's own 20-slot table (no [Display] ResolutionList...)`, `Present hooked (the
+   window's pause without the focus)`, `options: Advanced Options gets the rows ...`.
+2. **To the panel.** Main menu (from `ui/menus/main.xmlb`: Begin Story (start) > Load Game > Danger Room >
+   Review > Options > Play Online): `tap DOWN` x4, screenshot (OPTIONS lit), `tap RETURN`. The Options screen's
+   help bar shows `<key> Advanced Options` (CMenuOptions sets it from `$MENU_OK`, and its per-frame handler
+   0x5cbdf0 runs `openmenu sebas` = the panel on that action): screenshot, read the key, `tap` it. Log:
+   `options: rows added to Advanced Options - Display mode Windowed, Frame rate 60, VSync Off, Run in background
+   On (4 navigation records, 2 relinked)`.
+3. **What the rows show** (under FSAA, same large font, values right-aligned ending where FSAA's does):
+   `Display mode  Windowed`, `Frame rate  60`, `VSync  Off`, `Run in background  On`; status line (small font,
+   y 272) empty. Frame rate choices on the 180 Hz desktop: 30 60 120 144 165 180 240 Refresh Unlimited.
+   Keyboard order from Accept (the initial focus): UP = Run in background, VSync, Frame rate, Display mode, FSAA,
+   Resolution; DOWN back. The highlight bar follows (0.05 s slide), the focused row turns white, hover sound.
+4. **Frame rate live.** `tap UP` x3 (Frame rate lit), `tap RIGHT` x4 (60 > 120 > 144 > 165 > 180; click sound
+   each), status line stays empty, `tap DOWN` x3 (Accept), `tap RETURN`. Then: `xml2-fix.ini` `[Display]` has
+   `FrameRate=180` added, `Mode`/`RunInBackground`/comments unchanged; log `options: [Display] FrameRate=180
+   written`, `frame rate: now 180 fps, paced by the fix from the next frame`; `status` `fps ~180; frame rate 180 fps`
+   (within ~2).
+5. **Back to stock.** Reopen the panel (rows now Windowed / 180 / Off / On), Frame rate `tap LEFT` x4 to 60,
+   Accept. The ini's `FrameRate` line is **gone** (not `FrameRate=60`); log `FrameRate removed from xml2-fix.ini
+   (the game's own behaviour)` and `frame rate: now the game's own 60 fps cap (its spin is back in charge; the
+   fix doesn't pace)`; `status` `fps ~60`.
+6. **VSync in a window.** Frame rate RIGHT to Unlimited, VSync RIGHT to On, Accept: ini `FrameRate=0`, `VSync=1`;
+   `status` `fps ~180` (`180 fps (the desktop's refresh rate, for VSync in a window; FrameRate unlimited)`).
+   VSync back to Off, Accept: `VSync` line removed, fps well above 180. Frame rate back to 60, Accept: removed, ~60.
+7. **Display mode (restart).** Display mode `tap LEFT` (Windowed > Borderless): status line `Display mode applies
+   after restart`. Accept: ini `Mode=borderless`. Restart: log `display: mode borderless`, a borderless window over
+   the whole monitor at 2560x1440, still behind the owner's windows, `status` ~60 fps. Put it back (Windowed,
+   Accept, restart). Picking Fullscreen removes `Mode` (the game's own fullscreen) - skip it while the owner
+   works: it takes the screen.
+8. **Cancel.** Change a row, `tap ESCAPE`: the game's discard warning appears (the rows set the panel's dirty
+   flag); confirm it (keys if its buttons take them, else see 10): ini untouched, log `options: cancelled`.
+9. **Mouse while unfocused** (owner, 10 s): move the mouse over the background game window with the panel
+   open: no hover sound, highlight doesn't move; log once `mouse messages to the game's window are dropped`.
+10. Mouse-only items (Revert to default, Back) and the look of the rows need the owner or a focused session:
+   Revert > yes shows Fullscreen / 60 / Off / On and `Display mode applies after restart`; Accept would then
+   remove every key the panel owns (Mode too: fullscreen at the next start), so Cancel it in the harness.
+11. Optional: `ResolutionList=all` > log `resolution list: ... replaced by one of 64 slots ... (7 references
+   patched)` and, on opening the panel, `video options list for adapter 0: 24 sizes`; the Resolution slider walks
+   them. Without the key the list is the pre-phase-3 20.
+12. Default-off (a short fullscreen launch, only when the owner OKs it): no `[Display]`, no `[Test]`: log
+   `display: as the game has it (no [Display] Mode in xml2-fix.ini); the Direct3D device is hooked for the
+   in-game options` and `frame rate: the game's own 60 fps cap`, and **no** `Present hooked`, `resolution list:`
+   or `video options list` lines; the Video list is the game's own.
 
 ---
 
