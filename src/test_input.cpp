@@ -11,6 +11,7 @@
 #include <dinput.h>
 
 #include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -27,6 +28,7 @@ namespace test_input
 		constexpr const char* pipe_name = "\\\\.\\pipe\\xml2-fix-input";
 		constexpr DWORD read_wait_ms = 500;     // for the game to poll the keyboard once
 		constexpr DWORD capture_wait_ms = 3000; // for the game to draw a frame
+		constexpr DWORD console_wait_ms = 2000; // for the game to read its keyboard with room in its console queue
 
 		bool enabled = false;
 
@@ -59,6 +61,16 @@ namespace test_input
 		frame_capture::frame captured;
 		std::string capture_error;
 		HANDLE capture_done = nullptr; // auto-reset
+
+		// A line for the game's console queue: the pipe thread leaves it here, the game's keyboard read
+		// queues it (test_input_rules.hpp: that read and the queue's runner share the game's thread).
+		std::mutex console_mutex;
+		std::atomic<bool> console_wanted{false};
+		std::string console_pending;  // empty: nothing waiting
+		bool console_taken = false;   // the game's thread is done with it
+		bool console_saw_full = false; // two commands were waiting at a read
+		std::string console_outcome;  // once taken: empty if queued, else why not
+		HANDLE console_done = nullptr; // auto-reset
 
 		// Replaces one vtable slot in place, once, keeping the original. Refuses a second, different
 		// vtable (another class) so there is one chain of originals.
@@ -108,6 +120,91 @@ namespace test_input
 			return text;
 		}
 
+		// ---- The game's console ------------------------------------------------------------------
+
+		// No C++ objects in these two: the reads and the calls are guarded, in case this isn't XMen2.exe.
+		bool code_matches(const DWORD va, const std::string_view hex)
+		{
+			__try
+			{
+				return limits_rules::matches(reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(va)), hex);
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		enum class handed
+		{
+			queued,
+			full,        // two commands already waiting: the next read tries again
+			not_console, // the getter's object isn't the console
+			refused,     // vt+0x1c said no with room in the queue
+			crashed,
+		};
+
+		using console_getter_t = void*(__cdecl*)();
+		using console_queue_t = bool(__fastcall*)(void* self, void* edx, const char* line); // __thiscall, ret 4: __fastcall with an unused edx calls it the same way
+
+		// On the game's thread.
+		handed hand_to_console(const char* line)
+		{
+			__try
+			{
+				void* console = reinterpret_cast<console_getter_t>(console_getter)();
+				if (!console || *static_cast<const DWORD*>(console) != console_vtable)
+				{
+					return handed::not_console;
+				}
+				if (*reinterpret_cast<const DWORD*>(static_cast<const std::uint8_t*>(console) + console_waiting) >= console_slots)
+				{
+					return handed::full;
+				}
+				return reinterpret_cast<console_queue_t>(console_queue)(console, nullptr, line) ? handed::queued : handed::refused;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return handed::crashed;
+			}
+		}
+
+		// From the game's keyboard read: queues the pipe's line, if there is one and room for it.
+		void pump_console()
+		{
+			if (!console_wanted.load())
+			{
+				return;
+			}
+			std::lock_guard lock(console_mutex);
+			if (console_pending.empty())
+			{
+				return;
+			}
+			switch (hand_to_console(console_pending.c_str()))
+			{
+			case handed::full:
+				console_saw_full = true;
+				return;
+			case handed::queued:
+				console_outcome.clear();
+				break;
+			case handed::not_console:
+				console_outcome = "the game's console getter (0x55c890) didn't hand out the console (vtable 0x69a81c)";
+				break;
+			case handed::refused:
+				console_outcome = "the game's console queue (0x55c410) refused the line with room in it";
+				break;
+			case handed::crashed:
+				console_outcome = "the game's console queue (0x55c410) faulted";
+				break;
+			}
+			console_pending.clear();
+			console_taken = true;
+			console_wanted = false;
+			SetEvent(console_done);
+		}
+
 		// ---- The game's keyboard -----------------------------------------------------------------
 
 		HRESULT STDMETHODCALLTYPE hooked_get_device_state(void* self, const DWORD size, LPVOID data)
@@ -117,6 +214,7 @@ namespace test_input
 			{
 				return result;
 			}
+			pump_console(); // the game's own thread, between two runs of its console queue, whatever the read gave
 			if (FAILED(result))
 			{
 				logger::write_once("test:read-failed", "test: a keyboard read failed (%08lX) - the game re-acquires; pipe keys wait for that", result);
@@ -248,6 +346,80 @@ namespace test_input
 			return "ok " + std::to_string(picture.width) + "x" + std::to_string(picture.height) + " " + utf8_path;
 		}
 
+		// ---- Script statements and console commands ---------------------------------------------------
+
+		// Empty when the guards' bytes are the retail build's, else why not (logged here, so once).
+		template <std::size_t N>
+		std::string check_guards(const std::array<guard, N>& guards, const char* off)
+		{
+			for (const auto& g : guards)
+			{
+				if (!code_matches(g.va, g.hex))
+				{
+					char why[256];
+					std::snprintf(why, sizeof(why), "XMen2.exe doesn't have the expected code at 0x%08lX, %s (not the retail build?) - %s", g.va, g.what, off);
+					logger::write("test: %s", why);
+					return why;
+				}
+			}
+			return {};
+		}
+
+		// Checked at the first use, then kept: the code doesn't change.
+		const std::string& console_refusal(const bool script)
+		{
+			static const std::string console = check_guards(console_guards, "script and console are off");
+			static const std::string runscript = console.empty() ? check_guards(runscript_guards, "script is off") : std::string();
+			return !console.empty() || !script ? console : runscript;
+		}
+
+		// Hands the line to the game's thread and waits until it is in the game's console queue, for
+		// console_wait_ms at most; the game runs it at its next frame.
+		std::string queue_console(const command& cmd)
+		{
+			const char* verb = cmd.what == command::kind::script ? "script" : "console";
+			if (const auto& refusal = console_refusal(cmd.what == command::kind::script); !refusal.empty())
+			{
+				logger::write("test: %s %s - not queued: the game's console code isn't the retail build's", verb, cmd.text.c_str());
+				return "error " + refusal;
+			}
+
+			ResetEvent(console_done);
+			{
+				std::lock_guard lock(console_mutex);
+				console_pending = cmd.text;
+				console_taken = false;
+				console_saw_full = false;
+				console_outcome.clear();
+			}
+			console_wanted = true;
+			WaitForSingleObject(console_done, console_wait_ms);
+
+			std::string outcome;
+			{
+				std::lock_guard lock(console_mutex);
+				if (console_taken)
+				{
+					outcome = console_outcome;
+				}
+				else
+				{
+					console_pending.clear(); // too late now: the game's thread mustn't queue it after we said no
+					console_wanted = false;
+					outcome = console_saw_full ? "the game's console queue stayed full (two commands waiting) for " + std::to_string(console_wait_ms) + " ms - nothing queued"
+					                           : "the game didn't read its keyboard within " + std::to_string(console_wait_ms) +
+					                                 " ms (no DirectInput keyboard yet, or it isn't polling) - nothing queued";
+				}
+			}
+			if (!outcome.empty())
+			{
+				logger::write("test: %s %s - not queued: %s", verb, cmd.text.c_str(), outcome.c_str());
+				return "error " + outcome;
+			}
+			logger::write("test: %s %s - queued for the game's next frame", verb, cmd.text.c_str());
+			return "ok queued " + cmd.text;
+		}
+
 		// ---- Commands ---------------------------------------------------------------------------------
 
 		void press(const std::vector<unsigned char>& codes, const DWORD ms)
@@ -351,6 +523,9 @@ namespace test_input
 				return press_and_release(cmd.keys, cmd.ms, "hold");
 			case command::kind::screenshot:
 				return screenshot(cmd.path);
+			case command::kind::script:
+			case command::kind::console:
+				return queue_console(cmd);
 			default:
 				logger::write("test: rejected '%s': %s", line.c_str(), cmd.error.c_str());
 				return "error " + cmd.error;
@@ -421,7 +596,8 @@ namespace test_input
 
 		read_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 		capture_done = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-		const HANDLE thread = read_event && capture_done ? CreateThread(nullptr, 0, &serve, nullptr, 0, nullptr) : nullptr;
+		console_done = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+		const HANDLE thread = read_event && capture_done && console_done ? CreateThread(nullptr, 0, &serve, nullptr, 0, nullptr) : nullptr;
 		if (!thread)
 		{
 			logger::write("test: ERROR: couldn't start the input pipe thread (error %lu)", GetLastError());

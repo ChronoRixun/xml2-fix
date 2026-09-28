@@ -21,10 +21,14 @@
 // WM_KEYDOWN). So "tap DOWN" / "tap ENTER" / "tap LEFT" drive the panel too.
 //
 // The pipe is \\.\pipe\xml2-fix-input, one command per line, one reply line per command
-// ("ok ..." or "error ..."): down/up/tap/hold KEYS [ms], release, screenshot PATH, status, ping
-// (test_input_rules.hpp has the grammar). Its thread never touches the game's; keys it holds
-// expire after 10 s so a dead client can't wedge one. "screenshot" copies the Direct3D 8 back
-// buffer just before Present (frame_capture.hpp), so it works with the window covered.
+// ("ok ..." or "error ..."): down/up/tap/hold KEYS [ms], release, screenshot PATH, script
+// STATEMENT, console COMMAND, status, ping (test_input_rules.hpp has the grammar). Its thread
+// never touches the game's; keys it holds expire after 10 s so a dead client can't wedge one.
+// "screenshot" copies the Direct3D 8 back buffer just before Present (frame_capture.hpp), so it
+// works with the window covered. "script" and "console" put a line in the game's own console
+// queue (two commands of 127 characters at most; "script" sends "runscript STATEMENT"): the
+// game's keyboard read queues it, on the thread that runs that queue, and the reply comes once
+// it is queued ("ok queued LINE") or after 2 s ("error ..."). The game runs it at its next frame.
 // tools/fixinput.py in the xml1-port repo is the client.
 
 namespace test_input

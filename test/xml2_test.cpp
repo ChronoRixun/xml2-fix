@@ -1437,6 +1437,28 @@ namespace
 		static_cast<IUnknown*>(d3d)->Release();
 	}
 
+	// The game's console queue (vt+0x1c, 0x55c410), called as the fix calls it. No C++ objects here.
+	using console_queue_t = bool(__fastcall*)(void* self, void* edx, const char* line);
+
+	bool run_console_queue(const std::uint8_t* function, void* console, const char* line, bool& queued)
+	{
+		__try
+		{
+			queued = reinterpret_cast<console_queue_t>(const_cast<std::uint8_t*>(function))(console, nullptr, line);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	// strncpy for the game's code in a mapped copy, where its import (0x672170: jmp [0x67f148]) isn't bound.
+	char* __cdecl strncpy_for_the_game(char* to, const char* from, const std::size_t count)
+	{
+		return std::strncpy(to, from, count);
+	}
+
 	// The test pipe's rules (test_input_rules.hpp): key names, commands, and the keys it holds.
 	void check_test_input_rules()
 	{
@@ -1472,6 +1494,44 @@ namespace
 		cmd = parse_command("wm DOWN");
 		CHECK(cmd.what == command::kind::unknown && cmd.error.find("use tap") != std::string::npos);
 		CHECK(parse_command("frob").error.find("wm") == std::string::npos); // not offered in the list of commands
+		CHECK(parse_command("frob").error.find("script, console") != std::string::npos);
+
+		// script: "runscript STATEMENT" for the game's console, which hands runscript one word - the
+		// spaces outside quotes go (the script tokenizer ends an argument at a space or a ',' alike),
+		// quotes stay as they are.
+		cmd = parse_command("script unlockCharacter(\"storm\", \"\")");
+		CHECK(cmd.what == command::kind::script && cmd.text == "runscript unlockCharacter(\"storm\",\"\")");
+		cmd = parse_command("SCRIPT   setGameFlag(\"x1join\", 1, 0 )  ");
+		CHECK(cmd.what == command::kind::script && cmd.text == "runscript setGameFlag(\"x1join\",1,0)");
+		CHECK(script_line("unlockCharacter('', 'astonishing')").text == "runscript unlockCharacter('','astonishing')"); // resetgame's own line (0x685538)
+		CHECK(script_line("say(\"it's\",'\"x\"')").text == "runscript say(\"it's\",'\"x\"')");                        // a quote inside the other kind
+		CHECK(script_line("\tf( 1,\t2 )").text == "runscript f(1,2)");
+		CHECK(script_line("f(1)\\n\\rg(2)").text == "runscript f(1)\\n\\rg(2)"); // two statements: the four characters \n\r
+		CHECK(script_line("menus/new_game").text == "runscript menus/new_game"); // no '(': scripts/menus/new_game.py
+		for (const char* bad : {"script", "script   ", "script hudMessage(1, 2.0, \"hello there\")", "script f(1);g(2)", "script f(\"caf\xe9\")", "script f(1)\rg(2)"})
+		{
+			cmd = parse_command(bad);
+			CHECK(cmd.what == command::kind::unknown && !cmd.error.empty() && cmd.text.empty());
+		}
+		CHECK(parse_command("script").error.find("needs a statement") != std::string::npos);
+		CHECK(script_line("hudMessage(1, 2.0, \"hello there\")").error.find("inside a quoted string") != std::string::npos);
+		CHECK(script_line("f(1);g(2)").error.find("';'") != std::string::npos);
+		CHECK(script_line("f(1)\ng(2)").error.find("0x0A") != std::string::npos && script_line("f(1)\rg(2)").error.find("no embedded newlines") != std::string::npos);
+		// 127 characters at most, "runscript " included, counted after the spaces go: f("...") is 5 + n.
+		CHECK(script_line("f(\"" + std::string(112, 'a') + "\")").text.size() == console_max);
+		CHECK(script_line("f(\"" + std::string(112, 'a') + "\" )").text.size() == console_max);
+		CHECK(script_line("f(\"" + std::string(113, 'a') + "\")").error.find("is 128 characters; the game's console keeps 127") != std::string::npos);
+
+		// console: as it is.
+		cmd = parse_command("console loadmap nyc/alison/nyc1_1_3 1");
+		CHECK(cmd.what == command::kind::console && cmd.text == "loadmap nyc/alison/nyc1_1_3 1");
+		CHECK(parse_command("CONSOLE runscript say('a b')").text == "runscript say('a b')");
+		CHECK(console_line(std::string(127, 'x')).text.size() == 127);
+		CHECK(console_line(std::string(128, 'x')).error.find("is 128 characters") != std::string::npos);
+		CHECK(parse_command("console").what == command::kind::unknown && parse_command("console").error.find("needs a command") != std::string::npos);
+		CHECK(!console_line("a\rb").error.empty() && console_line("a\rb").text.empty());
+		for (const auto& g : console_guards) CHECK(limits_rules::valid_hex(g.hex));
+		for (const auto& g : runscript_guards) CHECK(limits_rules::valid_hex(g.hex));
 		// Why, in the retail XMen2.exe: the window's message filter (0x6223d0) passes WM_KEYDOWN only
 		// (lea edx,[eax-2]; cmp edx,0xfe; ja drop: 0x101 - 2 is out, and its index table sends 0x100
 		// alone to handleMessage, which acts on WM_KEYUP only); the panel's per-frame input function
@@ -1499,6 +1559,53 @@ namespace
 				const bool same = at && *at + f.bytes.size() <= exe->size() && std::memcmp(exe->data() + *at, f.bytes.data(), f.bytes.size()) == 0;
 				if (!same) std::printf("  info  %s differs\n", f.what);
 				CHECK(same);
+			}
+
+			// script and console: the console code's retail bytes, then its queue (vt+0x1c) run on a
+			// console of the test's own, called as the fix calls it - two commands at most, 127
+			// characters kept, the count at +0x630.
+			DWORD image_size = 0;
+			std::uint8_t* image = map_image(*exe, image_size);
+			CHECK(image != nullptr);
+			if (image)
+			{
+				const auto at = [&](const DWORD va) { return image + (va - limits_rules::image_base); };
+				for (const auto& group : {std::span<const guard>(console_guards), std::span<const guard>(runscript_guards)})
+				{
+					for (const auto& g : group)
+					{
+						const bool same = limits_rules::matches(at(g.va), g.hex);
+						if (!same) std::printf("  info  %s differs\n", g.what);
+						CHECK(same);
+					}
+				}
+				CHECK(std::string_view(reinterpret_cast<const char*>(at(0x685538))) == "runscript unlockCharacter('','astonishing')"); // the game's own: no spaces
+
+				std::uint8_t* thunk = at(0x672170);
+				CHECK(thunk[0] == 0xFF && thunk[1] == 0x25); // jmp [strncpy's import]
+				const auto rel = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&strncpy_for_the_game) - reinterpret_cast<std::uintptr_t>(thunk + 5));
+				thunk[0] = 0xE9;
+				std::memcpy(thunk + 1, &rel, sizeof(rel));
+
+				auto* console = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+				void* built = nullptr;
+				CHECK(console && run_thiscall(at(0x55bdd0), console + 0x500, built) && built == console + 0x500); // the queue's own constructor
+				if (console && built)
+				{
+					const auto waiting = [&] { DWORD n = 0; std::memcpy(&n, console + console_waiting, sizeof(n)); return n; };
+					const auto queued_text = [&](const int slot) { return std::string(reinterpret_cast<const char*>(console + 0x500 + 8 + slot * 0x88)); };
+					const auto queue = at(console_queue);
+					bool queued = true;
+					CHECK(run_console_queue(queue, console, "", queued) && !queued && waiting() == 0);
+					CHECK(run_console_queue(queue, console, "loadmap nyc/alison/nyc1_1_3 1", queued) && queued && waiting() == 1);
+					const std::string long_line(200, 'x');
+					CHECK(run_console_queue(queue, console, long_line.c_str(), queued) && queued && waiting() == console_slots);
+					CHECK(queued_text(0) == "loadmap nyc/alison/nyc1_1_3 1" || queued_text(1) == "loadmap nyc/alison/nyc1_1_3 1");
+					CHECK(queued_text(0) == std::string(console_max, 'x') || queued_text(1) == std::string(console_max, 'x'));
+					CHECK(run_console_queue(queue, console, "runscript f()", queued) && !queued && waiting() == console_slots); // full
+				}
+				if (console) VirtualFree(console, 0, MEM_RELEASE);
+				VirtualFree(image, 0, MEM_RELEASE);
 			}
 		}
 
@@ -1759,6 +1866,18 @@ namespace
 		std::printf("  info  %s\n", shot.c_str());
 		CHECK(refused(shot)); // no Direct3D device in this process: times out
 
+		// script and console: this isn't XMen2.exe, so its console code isn't here - refused at once,
+		// before anything waits for the game's thread.
+		const ULONGLONG asked = GetTickCount64();
+		const auto script = ask(pipe, "script unlockCharacter(\"storm\", \"\")");
+		const auto console = ask(pipe, "console loadmap nyc/alison/nyc1_1_3 1");
+		std::printf("  info  %s\n", script.c_str());
+		CHECK(refused(script) && script.find("doesn't have the expected code at 0x0055C890") != std::string::npos);
+		CHECK(refused(console) && console.find("doesn't have the expected code at 0x0055C890") != std::string::npos);
+		CHECK(GetTickCount64() - asked < 1000);
+		CHECK(refused(ask(pipe, "script")) && refused(ask(pipe, "console " + std::string(128, 'x'))));
+		CHECK(ok(ask(pipe, "ping"))); // the pipe carries on
+
 		// The keyboard as XMen2.exe creates it: its own DirectInput 8, through the fix's wrapper.
 		wchar_t folder[MAX_PATH]{};
 		GetSystemDirectoryW(folder, MAX_PATH);
@@ -1820,6 +1939,10 @@ namespace
 		CHECK(log.find("test: input pipe") != std::string::npos);
 		CHECK(log.find("keyboard cooperative level 16 -> A (background, non-exclusive): ok") != std::string::npos); // FOREGROUND|NONEXCLUSIVE|NOWINKEY -> BACKGROUND|NONEXCLUSIVE
 		CHECK(log.find("the game reads its DirectInput keyboard") != std::string::npos);
+		const std::string guard_line = "test: XMen2.exe doesn't have the expected code at 0x0055C890";
+		CHECK(log.find(guard_line) != std::string::npos && log.find(guard_line) == log.rfind(guard_line)); // logged once
+		CHECK(log.find("test: script runscript unlockCharacter(\"storm\",\"\") - not queued") != std::string::npos);
+		CHECK(log.find("test: console loadmap nyc/alison/nyc1_1_3 1 - not queued") != std::string::npos);
 		CHECK(log.find("display: as the game has it") != std::string::npos && log.find("hooked for the test pipe") != std::string::npos);
 		CHECK(log.find("options: XMen2.exe doesn't have the expected code") != std::string::npos); // this isn't the game: the panel is left alone
 		// ResolutionList=all, but no libIGGfx.dll here, so no mode-list hooks: the table must not be

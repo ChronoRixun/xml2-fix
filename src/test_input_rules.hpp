@@ -1,8 +1,11 @@
 #pragma once
 
 // The test input pipe's rules, kept apart from the pipe and the hooks so xml2_test can check
-// them: DirectInput key names, the one-line commands, and the synthetic key state that is
-// merged into the keyboard state the game reads.
+// them: DirectInput key names, the one-line commands, the synthetic key state that is merged
+// into the keyboard state the game reads, and the lines "script" and "console" hand to the
+// game's console queue, with the retail code that queue is.
+
+#include "limits_rules.hpp" // guard, matches: retail bytes compared before use
 
 #include <Windows.h>
 
@@ -20,6 +23,164 @@ namespace test_input_rules
 	constexpr DWORD default_tap_ms = 80;
 	constexpr DWORD max_hold_ms = 10000;       // a key the pipe holds down is released after this whatever the client does
 	constexpr unsigned char key_down = 0x80;   // the "pressed" bit of a DirectInput keyboard state byte
+
+	// ---- The game's console queue (script, console) ---------------------------------------------------
+	//
+	// XMen2.exe's console is a static object at 0x7ac290, handed out by 0x55c890 (it builds it at the
+	// first call). Its vtable 0x69a81c: vt+0 (0x55c230) runs every queued command, vt+8 (0x55b670)
+	// reads one word, vt+0x18 (0x55beb0) runs a line now, vt+0x1c (0x55c410) queues one:
+	// `bool __thiscall queue(const char* line)`, ret 4, false when the line is empty or two commands
+	// are already waiting ([this+0x630] == 2); it keeps 127 characters (strncpy 0x80, then a NUL at
+	// [127]). The game's frame (0x401d70) runs the queue at 0x40220f and reads the keyboard at
+	// 0x402875 (0x61c300 -> 0x6285c0 -> GetDeviceState(256)), both on one thread, so the pipe queues
+	// from inside that keyboard read and the line runs at the next frame. The game queues this way
+	// itself: loadMapKeepTeam (0x4a0d03), the team menu's confirm, the Danger Room's loadmap.
+	//
+	// "script STATEMENT" queues "runscript STATEMENT". The runscript command (0x5f2350, registered
+	// at 0x5f4abf) takes ONE word: vt+8 stops at any byte up to 0x20 (a signed compare, so every
+	// non-ASCII byte too) and at ';'. Then the script interface (0x4a1670) loads the word (vt+0xc,
+	// 0x4a11c0: text with a '(' is inline code, split into statements at the four characters \n\r,
+	// 0x68d348; anything else is scripts/NAME.py), runs it at once (vt+0x3c, 0x4a1320) and frees it
+	// (vt+0x10, 0x4d94d0). So a statement goes without its spaces: outside quotes they are dropped -
+	// the script tokenizer (0x4d9740) ends an argument at a space, a tab, a ',' or a ')' alike, so
+	// unlockCharacter("storm", "") and unlockCharacter("storm","") are one call, and the game's own
+	// runscript lines have none (0x685538: runscript unlockCharacter('','astonishing')) - while
+	// inside quotes they can't be sent at all. Quotes go through as they are. Several statements
+	// fit on one line joined by the four characters \n\r; `if` needs a space after it, so no
+	// conditionals. A statement the game can't compile (unknown function, wrong argument count) is
+	// dropped without a word, as it is from a script file.
+
+	constexpr std::size_t console_max = 127;                // what the queue keeps of a line
+	constexpr std::string_view runscript_prefix = "runscript ";
+	constexpr DWORD console_getter = 0x55c890;              // void* __cdecl (): the console, 0x7ac290
+	constexpr DWORD console_vtable = 0x69a81c;
+	constexpr DWORD console_queue = 0x55c410;               // vt+0x1c
+	constexpr DWORD console_waiting = 0x630;                // commands queued, 0..2
+	constexpr DWORD console_slots = 2;
+
+	using limits_rules::guard;
+
+	// What "console" relies on; the getter and vt+0x1c are called.
+	inline constexpr std::array<guard, 5> console_guards{{
+		{0x55c890, "8a0dccca7a00b80100000084c875258b15ccca7a000bd0b990c27a008915ccca7a00e889feffff68d0e06700e85d58110083c404b890c27a00c3",
+		 "the console's getter (0x55c890)"},
+		{0x55c410, "8b44240481ec8000000085c0568bf17445803800744083be300600000274376880000000", "the console's queue (0x55c410)"},
+		{0x69a81c, "30c2550020c3550070b65500e0b65500e0c5550020be5500b0be550010c45500", "the console's vtable (0x69a81c)"},
+		{0x55c230, "81ec84000000a1f8386f00578bf9898424840000008b873006000085c0", "the console's queue runner (0x55c230)"},
+		{0x402205, "e886a615008b10568bc8ff12", "the frame's call of the queue runner (0x402205)"},
+	}};
+
+	// And what "script" relies on besides: the runscript command and the word it reads.
+	inline constexpr std::array<guard, 4> runscript_guards{{
+		{0x5f4abf, "6850235f0068e0386a00", "runscript's registration (0x5f4abf)"},
+		{0x6a38e0, "72756e73637269707400", "the name \"runscript\" (0x6a38e0)"},
+		{0x5f2350, "81ec04020000a1f8386f0089842400020000e829a5f6ff8b8c24080200008b10518bc8ff5208", "runscript's handler (0x5f2350)"},
+		{0x55b670, "56578b7c240c33f685ff8d813c060000c60000744b8b175385d2740b8a1a84db740580fb207e05803a3b750442ebe9908a1a80fb207e1480fb3b740f",
+		 "the console's word reader (0x55b670)"},
+	}};
+
+	// A line for the console queue, or why there isn't one.
+	struct queued_line
+	{
+		std::string text;
+		std::string error;
+	};
+
+	// Newlines and the like: one command per line.
+	inline std::optional<std::string> control_character(const std::string_view text)
+	{
+		for (const char c : text)
+		{
+			const auto byte = static_cast<unsigned char>(c);
+			if ((byte < 0x20 && c != '\t') || byte == 0x7f)
+			{
+				char what[64];
+				std::snprintf(what, sizeof(what), "a control character (0x%02X) in the line", byte);
+				return std::string(what) + " - one command per line, no embedded newlines";
+			}
+		}
+		return std::nullopt;
+	}
+
+	inline std::string too_long(const std::string_view what, const std::size_t length)
+	{
+		return std::string(what) + " is " + std::to_string(length) + " characters; the game's console keeps " + std::to_string(console_max);
+	}
+
+	// "script STATEMENT" -> "runscript STATEMENT", spaces outside quotes dropped.
+	inline queued_line script_line(const std::string_view statement)
+	{
+		queued_line result;
+		if (statement.empty())
+		{
+			result.error = "script needs a statement, e.g. script unlockCharacter(\"storm\", \"\")";
+			return result;
+		}
+		if (const auto control = control_character(statement))
+		{
+			result.error = *control;
+			return result;
+		}
+		std::string compact;
+		char quote = 0;
+		for (const char c : statement)
+		{
+			if (c == ' ' || c == '\t')
+			{
+				if (quote)
+				{
+					result.error = "a space inside a quoted string can't go through runscript: the game's console hands it the statement up to its first space";
+					return result;
+				}
+				continue; // between tokens: the script tokenizer doesn't need it
+			}
+			if (c == ';')
+			{
+				result.error = "';' ends a command in the game's console: runscript would get the statement only up to it";
+				return result;
+			}
+			if (static_cast<unsigned char>(c) >= 0x80)
+			{
+				result.error = "a non-ASCII character: the game's console ends runscript's word at it";
+				return result;
+			}
+			if (c == '"' || c == '\'')
+			{
+				quote = !quote ? c : quote == c ? 0 : quote;
+			}
+			compact += c;
+		}
+		result.text = std::string(runscript_prefix) + compact;
+		if (result.text.size() > console_max)
+		{
+			result.error = too_long("runscript with the statement", result.text.size());
+			result.text.clear();
+		}
+		return result;
+	}
+
+	// "console COMMAND" -> COMMAND, as it is.
+	inline queued_line console_line(const std::string_view command)
+	{
+		queued_line result;
+		if (command.empty())
+		{
+			result.error = "console needs a command, e.g. console loadmap nyc/alison/nyc1_1_3 1";
+		}
+		else if (const auto control = control_character(command))
+		{
+			result.error = *control;
+		}
+		else if (command.size() > console_max)
+		{
+			result.error = too_long("the command", command.size());
+		}
+		else
+		{
+			result.text = std::string(command);
+		}
+		return result;
+	}
 
 	struct key_name
 	{
@@ -151,6 +312,8 @@ namespace test_input_rules
 	//   hold KEYS ms        press, keep for ms, release
 	//   release             let go of everything
 	//   screenshot PATH     save the current frame (.bmp or .png)
+	//   script STATEMENT    queue "runscript STATEMENT" in the game's console (spaces outside quotes dropped)
+	//   console COMMAND     queue COMMAND in the game's console, as it is
 	//   status | ping
 	// Every screen reads these keys, the Advanced Options panel included: its per-frame input
 	// function (0x619070) turns released DirectInput keys (Esc, Enter, the arrows) and pad buttons
@@ -168,6 +331,8 @@ namespace test_input_rules
 			hold,
 			release,
 			screenshot,
+			script,
+			console,
 			status,
 			ping,
 			unknown
@@ -177,6 +342,7 @@ namespace test_input_rules
 		std::vector<unsigned char> keys;
 		DWORD ms = 0;      // 0: the command's default
 		std::string path;  // screenshot
+		std::string text;  // script, console: the line for the game's console queue
 		std::string error; // unknown: what was wrong
 	};
 
@@ -207,8 +373,21 @@ namespace test_input_rules
 		else if (verb == "TAP") result.what = command::kind::tap;
 		else if (verb == "HOLD") result.what = command::kind::hold;
 		else if (verb == "SCREENSHOT") result.what = command::kind::screenshot;
+		else if (verb == "SCRIPT") result.what = command::kind::script;
+		else if (verb == "CONSOLE") result.what = command::kind::console;
 		else if (verb == "WM") return fail("wm is gone: the Advanced Options panel reads the DirectInput keyboard like every other screen - use tap (tap DOWN, tap ENTER, tap LEFT)");
-		else return fail("unknown command '" + std::string(text.substr(0, space)) + "' (down, up, tap, hold, release, screenshot, status, ping)");
+		else return fail("unknown command '" + std::string(text.substr(0, space)) + "' (down, up, tap, hold, release, screenshot, script, console, status, ping)");
+
+		if (result.what == command::kind::script || result.what == command::kind::console)
+		{
+			auto queued = result.what == command::kind::script ? script_line(rest) : console_line(rest);
+			if (!queued.error.empty())
+			{
+				return fail(std::move(queued.error));
+			}
+			result.text = std::move(queued.text);
+			return result;
+		}
 
 		if (result.what == command::kind::screenshot)
 		{
