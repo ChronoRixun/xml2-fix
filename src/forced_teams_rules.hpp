@@ -376,6 +376,36 @@ namespace forced_teams_rules
 		party names;
 	};
 
+	// ---- One popParty per side mission's end ----------------------------------------------------------
+	//
+	// A queued command runs at the game's next frame (0x402205 -> the console's vt+0 0x55c230, which
+	// runs every command waiting: 0x55c245-0x55c2f9), and until then the zone's scripts can call
+	// popParty again: XML1's sent_fb end (nycfb4_finish) is the death script of the zone's sentinel
+	// spawners, run for every kill after the objective. A second "restorelastzone 0" would run right
+	// after the first, whose "loadmap <zone> 1" pops the record at once (0x5f48c9 loads through game
+	// vt+0x150, 0x5f48d3 -> 0x5f44a0 pops), and with no record left restorelastzone runs "mainmenuexit
+	// 1" (0x5f46bf): the main menu. So popParty remembers what it queued, and a call that finds it
+	// still waiting (the console holds commands, the stack and the zone are as they were) does
+	// nothing; so does one that finds its load under way (the zone manager names the new zone before
+	// it loads, 0x4840dc -> vt+0xbc 0x4841b0, and reports the load pending, vt+0x24, until it is in),
+	// in case the zone being left still runs a script. Anything else - the command has run and its
+	// zone is in, another zone, another stack - is a new end and goes ahead.
+	struct queued_pop
+	{
+		bool restore = false; // "restorelastzone 0"; else the team menu at `to`
+		int records = 0;      // the side-mission stack when it was queued
+		std::string from;     // the zone it was queued in (lowercase)
+		std::string to;       // the zone it loads (lowercase): the record's, or the fallback
+		std::string command;
+	};
+
+	// What the functions keep between calls (the game calls them on its one thread).
+	struct call_state
+	{
+		std::optional<queued_pop> pop;
+		std::string stack_warned; // the side-mission stack xml2fixFeature last warned about
+	};
+
 	// ---- The game's objects and functions -----------------------------------------------------------
 
 	constexpr DWORD game_getter = 0x46dce0;         // __cdecl: the game, 0x729960
@@ -403,6 +433,12 @@ namespace forced_teams_rules
 	constexpr DWORD console_vtable = 0x69a81c;
 	constexpr DWORD console_run_slot = 0x18;        // bool (const char* line): runs it now
 	constexpr DWORD console_queue_slot = 0x1c;      // bool (const char* line): queued for the next frame; false with two waiting
+	constexpr DWORD console_waiting = 0x630;        // int: the commands waiting, 0..2 (the queue's check 0x55c426, the frame's run 0x55c245)
+	constexpr DWORD zones_getter = 0x484990;        // __cdecl: the zone manager, 0x72a578 (game+0xc, 0x468e8a)
+	constexpr DWORD zones_vtable = 0x68878c;
+	constexpr DWORD zones_loading_slot = 0x24;      // bool (): a zone load is pending, [+0x220] & 3 (the HUD skips its frame while it is, 0x59f1d8)
+	constexpr DWORD zones_current_slot = 0x5c;      // const char* (): the current zone, +0x1e0 (0x40 bytes), named when its load is asked for
+	constexpr std::size_t zone_name_size = 0x40;
 	constexpr DWORD entity_by_name = 0x4a1700;      // __cdecl uint* (uint* out, const char* name): _ACTIVE_HERO_ and the like too
 	constexpr DWORD entity_of_handle = 0x4654b0;    // __thiscall entity* (const uint* handle)
 	constexpr DWORD character_class = 0x718448;     // dword: the class id; bit (id + 0x24) of the entity's class info +0x14 = a character
@@ -422,7 +458,7 @@ namespace forced_teams_rules
 
 	// Every byte of XMen2.exe the functions rely on, read from the retail build. All must match
 	// before anything is patched; xml2_test compares them with a copy of the exe.
-	inline constexpr std::array<guard, 75> guards{{
+	inline constexpr std::array<guard, 94> guards{{
 		// The registration and the tree.
 		{0x49fe30, "6808a968006821010000e8318903008bc8e85a770300c3", "the registration (0x49fe30: push table, push count, call 0x4d75a0)"},
 		{0x4d7637, "81bf4819000040010000", "the tree's 320-name cap (0x4d7637)"},
@@ -513,6 +549,30 @@ namespace forced_teams_rules
 		 "the HUD's getter (0x59ee20)"},
 		{0x59e75f, "c706a4dc6900", "the HUD's vtable (0x69dca4, stored at 0x59e75f)"},
 		{0x69dd24, "60925900", "HUD vt+0x80 (0x599260)"},
+		// What one popParty per side mission's end relies on (queued_pop).
+		{0x55c245, "8b873006000085c00f8eae000000", "the frame's run of the console queue starts on the count at +0x630 (0x55c245)"},
+		{0x55c2e5, "8b178d44240c508bcfff52188b873006000085c00f8f61ffffff", "and runs every command waiting (0x55c2e5)"},
+		{0x5f48ad, "85ff7405e83afeffffe82594e7ff8b4c24088b10518d4c2410518bc8ff925001000085ff7405e8c8fbffff",
+		 "\"loadmap <zone> 1\" loads (game vt+0x150) and pops the top record at once (0x5f48ad)"},
+		{0x5f44ee, "e8ed5be9ff8b108bc8ff5244ff88dc040000", "the pop (0x5f44fa: dec [stack+0x4dc])"},
+		{0x5f46bf, "e8cc81f6ff8b1068ccd168008bc8ff5218", "restorelastzone with no record runs \"mainmenuexit 1\" (0x5f46bf)"},
+		{0x68d1cc, "6d61696e6d656e7565786974203100", "the text \"mainmenuexit 1\" (0x68d1cc)"},
+		{0x686f6c, "f0984600", "game vt+0x150 (0x4698f0)"},
+		{0x4698f0, "568bf18b06ff904c0100008b44240c8b4e0c8b11508b44240c50ff523884c00f95c05ec20800", "game vt+0x150: the zone manager's vt+0x38 (0x4698f0)"},
+		{0x468e85, "e806bb010089460c", "game+0xc is the zone manager (0x468e85)"},
+		{0x484990, "64a1000000008a0d2caa72006aff68ce3b670050b80100000084c864892500000000752509052caa7200b978a57200c744240800000000e824f2ffff68d0db6700e848d71e0083c4048b0c24b878a5720064890d0000000083c40cc3",
+		 "the zone manager's getter (0x484990)"},
+		{0x483c1f, "c7068c876800", "the zone manager's vtable (0x68878c, stored at 0x483c1f)"},
+		{0x6887b0, "903e4800", "zone manager vt+0x24 (a load pending, 0x483e90)"},
+		{0x6887c4, "b0404800", "zone manager vt+0x38 (a zone load, 0x4840b0)"},
+		{0x6887e8, "303f4800", "zone manager vt+0x5c (the current zone, 0x483f30)"},
+		{0x688848, "b0414800", "zone manager vt+0xbc (names the current zone, 0x4841b0)"},
+		{0x483e90, "f6812002000003750333c0c3b801000000c3", "a load pending: [+0x220] & 3 (0x483e90)"},
+		{0x483f30, "8d81e0010000c3", "the current zone at +0x1e0 (0x483f30)"},
+		{0x4840dc, "8b4424088b16508bceff92bc000000e890e310008b108d8ee0010000518bc8ff92ac000000808e2002000003",
+		 "a zone load names the zone (vt+0xbc) and sets it pending (0x4840dc)"},
+		{0x4841b0, "56578bf16a008dbee00100006a0057e85ce3100083c40ce86446040084c074136a40686819680083c62056e8f07bf8ff83c40c8b44240c6a405057e8e07bf8ff83c40c5f5ec20400",
+		 "the zone's name into +0x1e0 (0x4841b0)"},
 	}};
 
 	// ---- Reading a handler's arguments (no C++ objects: the reads are SEH-guarded) --------------------
@@ -581,8 +641,10 @@ namespace forced_teams_rules
 	//   std::optional<int> costume(int index); std::optional<bool> has_variant(int index, int costume); bool set_costume(int index, int costume);
 	//   std::optional<int> side_records(); std::optional<side_record> side_record_at(int i);
 	//   character_lookup find_character(const std::string&, int& id);
-	//   bool run_now(const std::string&); std::optional<bool> queue(const std::string&);
+	//   bool run_now(const std::string&); std::optional<bool> queue(const std::string&); std::optional<int> waiting();
 	//   std::optional<std::string> current_menu(); void leave_hud();
+	//   std::optional<std::string> current_zone(); std::optional<bool> zone_loading();
+	//   call_state& state();                                           - kept from call to call
 	//   std::optional<bool> add_hero(const std::string&);
 	//   void log(const std::string&);
 
@@ -617,6 +679,41 @@ namespace forced_teams_rules
 	{
 		const auto slots = read_party(e);
 		return slots ? describe(*slots) : std::string("(party unreadable)");
+	}
+
+	template <typename Engine>
+	std::string record_text(Engine& e, const int index)
+	{
+		const auto record = e.side_record_at(index);
+		return record ? record->zone + " with " + describe(record->names) : std::string("(record unreadable)");
+	}
+
+	// ForcedTeams off with records on the side-mission stack: pushParty's, from a game saved inside a
+	// flashback with ForcedTeams=1 (the switch is read once, at start-up) or begun with it and ended
+	// without xml2-fix. Only popParty pops them, and the script asking is about to open the team menu,
+	// so they stay - saved with the game (0x46bcd4) until a New Game (resetgame 0x5f2e70 runs
+	// "clearsidemissions", 0x5f2efe); meanwhile every zone load runs as a side mission's (0x5f47e0) and
+	// a later pushParty has a place fewer. Logged once for each stack seen.
+	template <typename Engine>
+	void warn_left_records(Engine& e)
+	{
+		auto& warned = e.state().stack_warned;
+		const auto records = e.side_records();
+		if (!records || *records <= 0)
+		{
+			warned.clear();
+			return;
+		}
+		const auto top = record_text(e, *records - 1);
+		const auto stack = std::to_string(*records) + " " + top;
+		if (warned == stack)
+		{
+			return;
+		}
+		warned = stack;
+		e.log(std::string(prefix) + "WARNING: ForcedTeams is off but the side-mission stack holds " + (*records == 1 ? std::string("a record") : std::to_string(*records) + " records") +
+		      " (the top: " + top + ") - pushParty's, from a flashback begun with ForcedTeams=1 (a game saved inside it?). With ForcedTeams off its end opens the team menu and "
+		      "nothing pops the record: it stays, saved with the game, until a New Game. With ForcedTeams=1 the flashback's end returns to it.");
 	}
 
 	// Every name must be a character the game knows with a herostat entry: the slot setter takes any
@@ -691,6 +788,10 @@ namespace forced_teams_rules
 			on = e.forced_teams() && e.add_hero_on() ? 1 : 0;
 		}
 		e.log(std::string(prefix) + call_text("xml2fixFeature", *values) + " -> " + std::to_string(on) + (which ? "" : " (not a feature: forcedteams, addhero)"));
+		if (which == feature::forced_teams && !on)
+		{
+			warn_left_records(e);
+		}
 		return e.make_int(on);
 	}
 
@@ -868,13 +969,6 @@ namespace forced_teams_rules
 		return nullptr;
 	}
 
-	template <typename Engine>
-	std::string record_text(Engine& e, const int index)
-	{
-		const auto record = e.side_record_at(index);
-		return record ? record->zone + " with " + describe(record->names) : std::string("(record unreadable)");
-	}
-
 	// pushParty(entity): XML1's beginSideMission, first half - "pushsidemission <entity id>" run now
 	// through the console (vt+0x18), as extractionPointChange does (0x4a7060-0x4a70df): the record
 	// takes the zone, the party of the moment and the entity's spot, so it must come before the
@@ -927,7 +1021,8 @@ namespace forced_teams_rules
 			e.log(call + ": " + command + " pushed nothing (no zone loaded?) - " + (after ? std::to_string(*after) : std::string("?")) + " record(s)");
 			return nullptr;
 		}
-		e.log(call + " -> " + command + ": record " + std::to_string(*after) + " of " + std::to_string(side_records_max) + ", " + record_text(e, *after - 1));
+		e.log(call + " -> " + command + ": record " + std::to_string(*after) + " of " + std::to_string(side_records_max) + ", " + record_text(e, *after - 1) +
+		      (*before > 0 ? " (below it " + record_text(e, *before - 1) + ": a side mission inside a side mission, or left by one that ended in the team menu)" : std::string()));
 		return nullptr;
 	}
 
@@ -938,13 +1033,37 @@ namespace forced_teams_rules
 		       std::ranges::all_of(zone, [](const char c) { return static_cast<unsigned char>(c) > 0x20 && static_cast<unsigned char>(c) < 0x7f && c != ';'; });
 	}
 
+	// Why this popParty repeats the one queued before it (queued_pop), or "" when it doesn't - then
+	// what was queued is forgotten.
+	template <typename Engine>
+	std::string repeated_pop(Engine& e, const int records)
+	{
+		auto& last = e.state().pop;
+		if (!last)
+		{
+			return {};
+		}
+		const auto zone = lowercase(e.current_zone().value_or(""));
+		if (const auto waiting = e.waiting(); waiting && *waiting > 0 && records == last->records && zone == last->from)
+		{
+			return "'" + last->command + "' is queued already, from " + last->from + " (the game runs it at its next frame)";
+		}
+		if (const auto loading = e.zone_loading(); loading && *loading && zone == last->to && records == last->records - (last->restore ? 1 : 0))
+		{
+			return "'" + last->command + "' has run and the load of " + last->to + " is under way";
+		}
+		last.reset();
+		return {};
+	}
+
 	// popParty(fallbackZone): XML1's endSideMission - "restorelastzone 0" queued (console vt+0x1c) as
 	// the game's restorelastzone script function queues it (0x4a0760, not while the loading menu is
 	// up), then the HUD call every script load function makes. The command seats the top record's
 	// names, restores the game-state block and loads its zone at its spot, which pops it. With no
 	// record (an old save, a flashback begun with ForcedTeams=0, a debug start) it queues the team
 	// menu at `fallbackZone` instead, as loadMapChooseTeam does ("loadmap %s 0 1", 0x4a0d30) - where
-	// the game's own command would drop to the main menu. The queue holds two commands.
+	// the game's own command would drop to the main menu. The queue holds two commands. A call while
+	// the last one's command still waits, or its load is under way, does nothing (queued_pop).
 	template <typename Engine>
 	void* pop_party(Engine& e, void* args)
 	{
@@ -961,8 +1080,14 @@ namespace forced_teams_rules
 			e.log(call + ": ERROR: the side-mission stack (0x48a0e0 -> vt+0x44) couldn't be read - nothing done");
 			return nullptr;
 		}
+		if (const auto repeat = repeated_pop(e, *records); !repeat.empty())
+		{
+			e.log(call + ": " + repeat + " - nothing done (one popParty per side mission's end)");
+			return nullptr;
+		}
 		std::string command;
 		std::string where;
+		std::string to;
 		if (*records <= 0)
 		{
 			if (!usable_zone(zone))
@@ -972,6 +1097,7 @@ namespace forced_teams_rules
 			}
 			command = "loadmap " + zone + " 0 1";
 			where = "no side-mission record: the team menu at " + zone;
+			to = zone;
 		}
 		else
 		{
@@ -982,6 +1108,8 @@ namespace forced_teams_rules
 			}
 			command = "restorelastzone 0";
 			where = "back to " + record_text(e, *records - 1) + " (record " + std::to_string(*records) + ")";
+			const auto record = e.side_record_at(*records - 1);
+			to = record ? record->zone : std::string();
 		}
 		const auto queued = e.queue(command);
 		if (!queued)
@@ -994,6 +1122,7 @@ namespace forced_teams_rules
 			e.log(call + ": ERROR: the console's queue refused '" + command + "' (two commands waiting already) - nothing done");
 			return nullptr;
 		}
+		e.state().pop = queued_pop{*records > 0, *records, lowercase(e.current_zone().value_or("")), lowercase(to), command};
 		e.leave_hud();
 		e.log(call + " -> " + command + " queued, " + where);
 		return nullptr;

@@ -10,7 +10,8 @@
 //   seatParty("magma", "", "", "")       the party becomes exactly these heroes; the next statement loads
 //   setSkinset("civilian", "magma")      XML1's mission costume for the listed heroes, default for the rest
 //   pushParty("_ACTIVE_HERO_")           XML1's beginSideMission: zone, party and spot saved (2 at most)
-//   popParty("mansion/man2/subbasement2") XML1's endSideMission: back to them, or the team menu at that zone
+//   popParty("mansion/man2/subbasement2") XML1's endSideMission: back to them, or the team menu at that zone;
+//                                        a repeat before the first has run (or while its load runs) does nothing
 //   addHero("cyclops")                   XML1's addHero: seated mid-zone by the game's own unused routine
 //   getPartyMember(0)                    slot 0's hero, "" when empty
 //

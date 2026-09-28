@@ -20,6 +20,9 @@ namespace forced_teams
 		std::atomic<bool> forced_teams_on{false};
 		std::atomic<bool> add_hero_switch{false};
 
+		// What the functions keep from call to call; the game calls them on its one thread.
+		call_state kept;
+
 		// The game's tree keeps a pointer to each entry (0x4d7648-0x4d768a), and every script compile
 		// reads the entry through it: the table lives as long as the process.
 		func_entry table[table_count]{};
@@ -67,6 +70,8 @@ namespace forced_teams
 		using class_info_t = const std::uint8_t*(__fastcall*)(void* entity, void* edx);
 		using side_stack_t = std::uint8_t*(__fastcall*)(void* missions, void* edx);
 		using menu_name_t = const char*(__fastcall*)(void* menus, void* edx);
+		using zone_name_t = const char*(__fastcall*)(void* zones, void* edx);
+		using zone_flag_t = bool(__fastcall*)(void* zones, void* edx);
 		using hud_leave_t = void(__fastcall*)(void* hud, void* edx);
 
 		// ---- Calls into XMen2.exe. No C++ objects in these: every one is SEH-guarded, so a fault in the
@@ -391,6 +396,60 @@ namespace forced_teams
 			}
 		}
 
+		bool read_waiting(int& count)
+		{
+			__try
+			{
+				const auto* console = static_cast<const std::uint8_t*>(object(console_getter, console_vtable));
+				if (!console)
+				{
+					return false;
+				}
+				std::memcpy(&count, console + console_waiting, sizeof(count));
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		bool call_current_zone(char (&out)[zone_name_size + 1])
+		{
+			__try
+			{
+				void* zones = object(zones_getter, zones_vtable);
+				if (!zones)
+				{
+					return false;
+				}
+				copy_text(method<zone_name_t>(zones, zones_current_slot)(zones, nullptr), out);
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		bool call_zone_loading(bool& loading)
+		{
+			__try
+			{
+				void* zones = object(zones_getter, zones_vtable);
+				if (!zones)
+				{
+					return false;
+				}
+				loading = method<zone_flag_t>(zones, zones_loading_slot)(zones, nullptr);
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
 		bool call_current_menu(char (&out)[argument_max + 1])
 		{
 			__try
@@ -563,10 +622,33 @@ namespace forced_teams
 				return call_console(console_queue_slot, line.c_str(), accepted) ? std::optional<bool>(accepted) : std::nullopt;
 			}
 
+			std::optional<int> waiting()
+			{
+				int count = 0;
+				return read_waiting(count) ? std::optional<int>(count) : std::nullopt;
+			}
+
 			std::optional<std::string> current_menu()
 			{
 				char name[argument_max + 1];
 				return call_current_menu(name) ? std::optional<std::string>(name) : std::nullopt;
+			}
+
+			std::optional<std::string> current_zone()
+			{
+				char name[zone_name_size + 1];
+				return call_current_zone(name) ? std::optional<std::string>(name) : std::nullopt;
+			}
+
+			std::optional<bool> zone_loading()
+			{
+				bool loading = false;
+				return call_zone_loading(loading) ? std::optional<bool>(loading) : std::nullopt;
+			}
+
+			call_state& state()
+			{
+				return kept;
 			}
 
 			void leave_hud()

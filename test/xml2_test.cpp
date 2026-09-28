@@ -1475,7 +1475,10 @@ namespace
 		};
 		std::vector<hero> heroes; // the herostat hero list
 		std::vector<forced_teams_rules::side_record> records;
-		std::string zone = "mansion/man1b/subbasement2"; // "": no zone, pushsidemission pushes nothing
+		std::string zone = "mansion/man1b/subbasement2"; // the current zone; "": none, pushsidemission pushes nothing
+		bool loading = false;  // the zone manager's load pending (vt+0x24)
+		bool deferred = false; // a load the frame's run of the queue starts leaves pending (the zone being left runs on)
+		forced_teams_rules::call_state kept;
 		std::map<std::string, int> characters;           // entity name -> id; -1: not a character
 		std::vector<std::string> ran, queued;
 		std::size_t queue_room = 2;
@@ -1548,8 +1551,37 @@ namespace
 			queued.push_back(line);
 			return true;
 		}
+		std::optional<int> waiting() { return static_cast<int>(queued.size()); }
 		std::optional<std::string> current_menu() { return menu; }
 		void leave_hud() { ++hud_leaves; }
+		std::optional<std::string> current_zone() { return zone; }
+		std::optional<bool> zone_loading() { return loading; }
+		forced_teams_rules::call_state& state() { return kept; }
+		// The frame's run of the console queue (0x55c230): every command waiting, in order. As the game's:
+		// restorelastzone with no record runs "mainmenuexit 1" (0x5f46bf); with one it seats the record's
+		// names and runs "loadmap <zone> 1", which names the zone, loads it and pops the record at once.
+		void drain()
+		{
+			for (const auto& line : queued)
+			{
+				if (line != "restorelastzone 0")
+				{
+					ran.push_back(line); // "loadmap <zone> 0 1": the team menu, then the zone
+					continue;
+				}
+				if (records.empty())
+				{
+					ran.push_back("mainmenuexit 1");
+					continue;
+				}
+				slots = records.back().names;
+				zone = records.back().zone;
+				records.pop_back();
+				loading = deferred;
+				ran.push_back("loadmap " + zone + " 1");
+			}
+			queued.clear();
+		}
 		std::optional<bool> add_hero(const std::string& name) // 0x46c9f0: true if seated or seated already, slot = count
 		{
 			added.push_back(name);
@@ -1617,14 +1649,25 @@ namespace
 		__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 	}
 
+	// The zone manager's vt+0x5c (a pointer) and vt+0x24 (0 or 1 in eax), run on a block of the test's own.
+	using zone_accessor_t = std::uintptr_t(__fastcall*)(void* zones, void* edx);
+	bool run_zone_accessor(const std::uint8_t* code, void* zones, std::uintptr_t& out)
+	{
+		__try { out = reinterpret_cast<zone_accessor_t>(const_cast<std::uint8_t*>(code))(zones, nullptr); return true; }
+		__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+	}
+
 	// The same cast in a registry laid out as the game's (the hero list's count at +0x12330 and
 	// indices at +0x120dc, 0x1c-byte entries at +0x9b28 with the stats handle at +0x10 and the flags
 	// at +0x18, the handle mask at +0x9b20, stats objects of 0x4f8 bytes from +4), read with the
-	// game's own accessors: what the DLL calls through the registry's vtable.
+	// game's own accessors: what the DLL calls through the registry's vtable. The current zone and its
+	// load pending come the same way, from a zone manager block (the name at +0x1e0, the flags at +0x220)
+	// read by the game's vt+0x5c (0x483f30) and vt+0x24 (0x483e90).
 	struct retail_registry_engine : fake_engine
 	{
 		const std::uint8_t* image = nullptr;
 		std::vector<std::uint8_t> block = std::vector<std::uint8_t>(0x12334 + 0x100, 0);
+		std::array<std::uint8_t, 0x230> zones{};
 		const std::uint8_t* code(const DWORD va) const { return image + (va - limits_rules::image_base); }
 		void put32(const std::size_t offset, const std::uint32_t value) { std::memcpy(block.data() + offset, &value, 4); }
 		void put16(const std::size_t offset, const std::uint16_t value) { std::memcpy(block.data() + offset, &value, 2); }
@@ -1692,6 +1735,21 @@ namespace
 			auto* s = stats(index);
 			if (s) s[forced_teams_rules::stats_costume] = static_cast<std::uint8_t>(costume);
 			return s != nullptr;
+		}
+		std::optional<std::string> current_zone()
+		{
+			std::memset(zones.data() + 0x1e0, 0, forced_teams_rules::zone_name_size);
+			std::memcpy(zones.data() + 0x1e0, zone.data(), std::min(zone.size(), forced_teams_rules::zone_name_size - 1));
+			std::uintptr_t name = 0;
+			if (!run_zone_accessor(code(0x483f30), zones.data(), name) || name != reinterpret_cast<std::uintptr_t>(zones.data() + 0x1e0)) return std::nullopt;
+			return std::string(reinterpret_cast<const char*>(name));
+		}
+		std::optional<bool> zone_loading()
+		{
+			zones[0x220] = static_cast<std::uint8_t>(loading ? 0x02 | 0x04 : 0x04); // bit 1: the load asked for; bit 2 isn't a pending load
+			std::uintptr_t pending = 0;
+			if (!run_zone_accessor(code(0x483e90), zones.data(), pending) || pending > 1) return std::nullopt;
+			return pending == 1;
 		}
 	};
 
@@ -1815,31 +1873,93 @@ namespace
 			CHECK(push_party(e, &c.args) == nullptr);
 			CHECK(e.records.size() == 1 && e.ran.back() == "pushsidemission 77");
 			CHECK(e.last() == "forced teams: pushParty(\"_ACTIVE_HERO_\") -> pushsidemission 77: record 1 of 2, mansion/man1b/subbasement2 with magma / - / - / -");
-			// the flashback party, then back
+			// the flashback party in its zone, then back
 			script_call s(vtables);
 			s.text("cyclops").text("colossus").text("iceman").text("phoenix");
 			seat_party(e, &s.args);
 			CHECK((e.slots == party{"cyclops", "colossus", "iceman", "phoenix"}));
+			e.zone = "mansion/jugrnt/jugrnt01";
 			script_call p(vtables);
 			p.text("mansion/man1b/subbasement1b");
 			CHECK(pop_party(e, &p.args) == nullptr);
 			CHECK(e.queued.size() == 1 && e.queued[0] == "restorelastzone 0" && e.hud_leaves == 1);
 			CHECK(e.last() == "forced teams: popParty(\"mansion/man1b/subbasement1b\") -> restorelastzone 0 queued, back to mansion/man1b/subbasement2 with magma / - / - / - (record 1)");
+			// XML1's sent_fb end is every sentinel's death script: a second end before the frame runs the
+			// queue queues nothing, so the stack is popped once and never found empty ("mainmenuexit 1")
+			const auto lines_before = e.lines.size();
+			CHECK(pop_party(e, &p.args) == nullptr);
+			CHECK(e.queued.size() == 1 && e.hud_leaves == 1 && e.lines.size() == lines_before + 1 &&
+			      e.last() == "forced teams: popParty(\"mansion/man1b/subbasement1b\"): 'restorelastzone 0' is queued already, from mansion/jugrnt/jugrnt01 (the game runs it at its next frame) - "
+			                  "nothing done (one popParty per side mission's end)");
+			e.drain();
+			CHECK(e.records.empty() && (e.slots == party{"magma", "", "", ""}) && e.zone == "mansion/man1b/subbasement2" && e.ran.back() == "loadmap mansion/man1b/subbasement2 1" &&
+			      std::ranges::count(e.ran, std::string("mainmenuexit 1")) == 0);
+			// what the check keeps from happening: two restores in one run of the queue
+			e.records = {{"mansion/man1b/subbasement2", {"magma", "", "", ""}}};
+			e.queued = {"restorelastzone 0", "restorelastzone 0"};
+			e.drain();
+			CHECK(e.records.empty() && e.ran.back() == "mainmenuexit 1");
+			e.ran.clear();
+		}
+		{
+			// A load not in at once, the zone being left still running a script: the zone manager names the
+			// new zone first and reports the load pending until it is in.
+			e.records = {{"mansion/man2/mansion2_1", {"magma", "", "", ""}}};
+			e.zone = "nyc/fb/nyc_fb4";
+			e.deferred = true;
+			script_call p(vtables);
+			p.text("mansion/man2/mansion2_1");
+			pop_party(e, &p.args);
+			e.drain();
+			CHECK(e.records.empty() && e.zone == "mansion/man2/mansion2_1" && e.loading && e.queued.empty());
+			pop_party(e, &p.args);
+			CHECK(e.queued.empty() &&
+			      e.last().find("popParty(\"mansion/man2/mansion2_1\"): 'restorelastzone 0' has run and the load of mansion/man2/mansion2_1 is under way - nothing done") != std::string::npos);
+			e.loading = false; // in: a popParty now is another end (with no record: the team menu)
+			pop_party(e, &p.args);
+			CHECK(e.queued.size() == 1 && e.queued[0] == "loadmap mansion/man2/mansion2_1 0 1");
+			pop_party(e, &p.args); // the team menu, twice before the queue runs: once
+			CHECK(e.queued.size() == 1 && e.last().find("'loadmap mansion/man2/mansion2_1 0 1' is queued already, from mansion/man2/mansion2_1") != std::string::npos);
+			e.drain(); // the team menu is up; a call now asks for it again, as loadMapChooseTeam twice would
+			pop_party(e, &p.args);
+			CHECK(e.queued.size() == 1 && e.last().find("-> loadmap mansion/man2/mansion2_1 0 1 queued") != std::string::npos);
+			e.drain();
+			e.deferred = false;
+		}
+		{
+			// A side mission inside one: each end goes back one record.
+			e.records = {{"x1/a0", {"magma", "", "", ""}}, {"X1/A1", {"cyclops", "", "", ""}}};
+			e.zone = "x1/b";
+			script_call p(vtables);
+			p.text("x1/fallback");
+			pop_party(e, &p.args);
+			e.drain();
+			CHECK(e.records.size() == 1 && e.zone == "X1/A1" && (e.slots == party{"cyclops", "", "", ""}));
+			pop_party(e, &p.args); // from X1/A1, its load in: the next end
+			CHECK(e.queued.size() == 1 && e.queued[0] == "restorelastzone 0" && e.last().find("back to x1/a0 with magma") != std::string::npos);
+			e.drain();
+			CHECK(e.records.empty() && e.zone == "x1/a0" && (e.slots == party{"magma", "", "", ""}));
+			e.ran.clear();
+			e.zone = "mansion/man1b/subbasement2";
 		}
 		{
 			e.queued.clear();
 			e.records.clear();
+			const auto leaves = e.hud_leaves;
 			script_call p(vtables); // no record: the team menu at the fallback zone, as loadMapChooseTeam
 			p.text(" mansion/man2/subbasement2 ");
 			pop_party(e, &p.args);
-			CHECK(e.queued.size() == 1 && e.queued[0] == "loadmap mansion/man2/subbasement2 0 1" && e.hud_leaves == 2 && e.last().find("no side-mission record: the team menu at") != std::string::npos);
+			CHECK(e.queued.size() == 1 && e.queued[0] == "loadmap mansion/man2/subbasement2 0 1" && e.hud_leaves == leaves + 1 &&
+			      e.last().find("no side-mission record: the team menu at") != std::string::npos);
+			e.queued.clear();
 			script_call bad(vtables);
 			bad.text("two words");
 			pop_party(e, &bad.args);
-			CHECK(e.queued.size() == 1 && e.last().find("can't go in a loadmap command - nothing done") != std::string::npos);
+			CHECK(e.queued.empty() && e.last().find("can't go in a loadmap command - nothing done") != std::string::npos);
 			e.queue_room = 1; // one command waiting already
+			e.queued = {"loadmap nyc/fb/nyc_fb1 1"};
 			pop_party(e, &p.args);
-			CHECK(e.queued.size() == 1 && e.hud_leaves == 2 && e.last().find("ERROR: the console's queue refused 'loadmap mansion/man2/subbasement2 0 1'") != std::string::npos);
+			CHECK(e.queued.size() == 1 && e.hud_leaves == leaves + 1 && e.last().find("ERROR: the console's queue refused 'loadmap mansion/man2/subbasement2 0 1'") != std::string::npos);
 			e.queue_room = 2;
 			e.queued.clear();
 			e.records = {{"nyc/fb/nyc_fb1", {"magma", "", "", ""}}};
@@ -1855,6 +1975,11 @@ namespace
 			c.text("_ACTIVE_HERO_");
 			push_party(e, &c.args);
 			CHECK(e.ran.empty() && e.records.size() == 2 && e.last().find("the side-mission stack is full (2 records) - nothing pushed; popParty returns to b with - / - / - / -") != std::string::npos);
+			e.records = {{"a", {}}};
+			push_party(e, &c.args);
+			CHECK(e.records.size() == 2 &&
+			      e.last().find("record 2 of 2, mansion/man1b/subbasement2 with magma / - / - / - (below it a with - / - / - / -: a side mission inside a side mission") != std::string::npos);
+			e.ran.clear();
 			e.records.clear();
 			script_call m(vtables);
 			m.text("nobody");
@@ -1869,6 +1994,35 @@ namespace
 			push_party(e, &c.args);
 			CHECK(e.ran.size() == 1 && e.records.empty() && e.last().find("pushsidemission 77 pushed nothing (no zone loaded?)") != std::string::npos);
 			e.zone = "mansion/man1b/subbasement2";
+		}
+		{
+			// ForcedTeams off with a record on the stack (pushed with it on, a game saved in the flashback):
+			// nothing will pop it - warned once for each stack seen.
+			e.records = {{"mansion/man2/mansion2_1", {"magma", "", "", ""}}};
+			e.forced = false;
+			script_call c(vtables);
+			c.text("forcedteams");
+			const auto lines_before = e.lines.size();
+			CHECK(fake_engine::as_int(xml2fix_feature(e, &c.args)) == 0 && e.lines.size() == lines_before + 2 &&
+			      e.last().find("WARNING: ForcedTeams is off but the side-mission stack holds a record (the top: mansion/man2/mansion2_1 with magma / - / - / -)") != std::string::npos);
+			xml2fix_feature(e, &c.args);
+			CHECK(e.lines.size() == lines_before + 3);
+			e.records.push_back({"nyc/fb/nyc_fb4", {"cyclops", "", "", ""}});
+			xml2fix_feature(e, &c.args);
+			CHECK(e.lines.size() == lines_before + 5 && e.last().find("holds 2 records (the top: nyc/fb/nyc_fb4 with cyclops") != std::string::npos);
+			script_call a(vtables);
+			a.text("addhero");
+			xml2fix_feature(e, &a.args);
+			e.forced = true;
+			CHECK(fake_engine::as_int(xml2fix_feature(e, &c.args)) == 1 && e.lines.size() == lines_before + 7);
+			e.forced = false;
+			e.records.clear();
+			xml2fix_feature(e, &c.args);
+			e.records = {{"mansion/man2/mansion2_1", {"magma", "", "", ""}}};
+			xml2fix_feature(e, &c.args);
+			CHECK(e.lines.size() == lines_before + 10 && e.last().find("WARNING") != std::string::npos);
+			e.forced = true;
+			e.records.clear();
 		}
 
 		// addHero: off by default; on, the game's own routine seats at slot = count.
@@ -1964,7 +2118,7 @@ namespace
 		bool guards_ok = true;
 		std::set<DWORD> addresses;
 		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
-		CHECK(guards_ok && guards.size() == 75);
+		CHECK(guards_ok && guards.size() == 94);
 
 		// The functions over a game of the test's own, arguments through the test's own reader.
 		const value_vtables own(reinterpret_cast<void*>(&test_value_payload));
@@ -2055,6 +2209,25 @@ namespace
 
 		// The strings the handlers send are the game's own.
 		CHECK(text_at(0x68d584) == "pushsidemission %d" && text_at(0x68d284) == "restorelastzone %s" && text_at(0x68d31c) == "loadmap %s 0 1" && text_at(0x688874) == loading_menu);
+		CHECK(text_at(0x68d1cc) == "mainmenuexit 1" && text_at(0x6a3744) == "loadmap %s %d");
+
+		// The zone manager's vtable slots the DLL calls, and the two accessors run on a block of the test's own.
+		CHECK(dword_at(zones_vtable + zones_loading_slot) == 0x483e90 && dword_at(zones_vtable + zones_current_slot) == 0x483f30 && dword_at(0x4849dd) == 0x72a578);
+		{
+			std::array<std::uint8_t, 0x230> zones{};
+			std::memcpy(zones.data() + 0x1e0, "nyc/fb/nyc_fb4", 15);
+			std::uintptr_t name = 0, pending = 9;
+			CHECK(run_zone_accessor(at(0x483f30), zones.data(), name) && name == reinterpret_cast<std::uintptr_t>(zones.data() + 0x1e0));
+			bool flags_ok = true;
+			const std::uint8_t flags[] = {0x00, 0x01, 0x02, 0x03, 0xfc}; // bits 0 and 1: a load pending
+			const std::uintptr_t wanted[] = {0, 1, 1, 1, 0};
+			for (std::size_t i = 0; i < std::size(flags); ++i)
+			{
+				zones[0x220] = flags[i];
+				flags_ok &= run_zone_accessor(at(0x483e90), zones.data(), pending) && pending == wanted[i];
+			}
+			CHECK(flags_ok);
+		}
 
 		// The functions again, their arguments read by the game's own getter (0x4d5830) and value
 		// accessor (0x55d7e0), and setSkinset on a registry read by the game's own accessors.

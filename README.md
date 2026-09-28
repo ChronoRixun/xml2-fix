@@ -159,7 +159,7 @@ AddHero=0       ; 1 (with ForcedTeams=1): addHero seats a hero mid-level - exper
 | `seatParty("magma", "", "", "")` | the party becomes exactly these heroes (herostat heroes only; empty strings are empty slots); the script's next statement loads the zone |
 | `setSkinset("civilian", "magma")` | the costume for the listed heroes that have it, default for every hero in a mission costume (default, 60s, 70s, weaponx, civilian); a player's own pick (astonishing, aoa, future, winter) stays |
 | `pushParty("_ACTIVE_HERO_")` | saves the zone, the party and that hero's spot on the game's side-mission stack (two at most), before a flashback |
-| `popParty("mansion/man2/subbasement2")` | back to the saved zone, party and spot; with nothing saved, the team menu at the zone given |
+| `popParty("mansion/man2/subbasement2")` | back to the saved zone, party and spot; with nothing saved, the team menu at the zone given. Once per end: a second call before the first has taken the player away (every sentinel's death script ends one flashback) does nothing |
 | `addHero("cyclops")` | with `AddHero=1`, the hero joins the party on the spot, no reload (the game's own unused routine for it); 0 when off, so the script can fall back |
 | `getPartyMember(0)` | slot 0's hero, `""` when empty |
 
@@ -177,7 +177,7 @@ else
 endif
 ```
 
-The game drops a call to a function it doesn't know when the script compiles, and nothing else: without the fix, or without `ForcedTeams`, the `xml2fixFeature` line goes, `x1ft` stays 0 and the team menu opens as before. `ForcedTeams=0` keeps the functions but has them report off. The functions are registered by pointing the game's own registration at a longer copy of its function table, after every byte they rely on is checked against the retail build (on any other build nothing is added); every call and what it did goes to `xml2-fix.log`.
+The game drops a call to a function it doesn't know when the script compiles, and nothing else: without the fix, or without `ForcedTeams`, the `xml2fixFeature` line goes, `x1ft` stays 0 and the team menu opens as before. `ForcedTeams=0` keeps the functions but has them report off. Switching it off between a flashback's start and its end (a game saved inside a flashback, loaded with `ForcedTeams=0` or without the fix) leaves the saved party on the game's side-mission stack: the end opens the team menu, nothing takes the record off, and it stays in the saves until a New Game (zone loads meanwhile take the game's side-mission path, and the stack has one place left); with the fix and `ForcedTeams=0`, `xml2-fix.log` warns about it. The functions are registered by pointing the game's own registration at a longer copy of its function table, after every byte they rely on is checked against the retail build (on any other build nothing is added); every call and what it did goes to `xml2-fix.log`.
 
 ## 🔍 What was actually wrong
 
