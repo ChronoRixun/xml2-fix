@@ -29,6 +29,7 @@
 #include "frame_capture.hpp"
 #include "frame_rate_rules.hpp"
 #include "image_file.hpp"
+#include "new_game.hpp"
 #include "options_menu_rules.hpp"
 #include "resolution_rules.hpp"
 #include "test_input_rules.hpp"
@@ -1443,6 +1444,23 @@ namespace
 		CHECK(other != nullptr); // non-GameSpy names are untouched
 		WSACleanup();
 	}
+
+	void check_save_folder()
+	{
+		std::printf("[Game] SaveFolder names\n");
+		using new_game::valid_save_folder;
+		CHECK(valid_save_folder("X-Men Legends"));
+		CHECK(valid_save_folder("X-Men Legends (port tests)"));
+		CHECK(valid_save_folder(std::string(new_game::save_folder_max, 'a')));
+		CHECK(!valid_save_folder(std::string(new_game::save_folder_max + 1, 'a')));
+		CHECK(!valid_save_folder(""));
+		CHECK(!valid_save_folder(".") && !valid_save_folder(".."));
+		CHECK(!valid_save_folder(" lead") && !valid_save_folder("trail ") && !valid_save_folder("dot."));
+		for (const char* bad : {"a\\b", "a/b", "c:", "a*", "a?", "a\"b", "a<b", "a>b", "a|b", "100%s", "tab\there", "caf\xe9", "del\x7f"})
+		{
+			CHECK(!valid_save_folder(bad));
+		}
+	}
 }
 
 int main(const int argc, char** argv)
@@ -1491,6 +1509,7 @@ int main(const int argc, char** argv)
 	check_resolution_rules();
 	check_test_input_rules();
 	check_image_file();
+	check_save_folder();
 	check_d3d8_modes();
 
 	const auto log = read_file(module_dir() / "xml2-fix.log");

@@ -41,8 +41,15 @@ namespace new_game
 			{0x5f32ef, 0x6a37b4},
 		}};
 
+		// The folder format strings: 0x55e760 sprintf's the save folder (then mkdir -p, 0x629850), the
+		// screenshot code at 0x4019f0 the same way. The Demo variants (0x55e78b, 0x4019cb) only run in the demo.
+		constexpr operand save_folder_format{0x55e7ae, 0x69ab14};       // "%s\Activision\X-Men Legends 2\Save\"
+		constexpr operand screenshot_folder_format{0x4019f1, 0x680048}; // "%s\Activision\X-Men Legends 2\Screenshots\"
+
 		// Names the patched pushes point at: they must live as long as the process.
 		char team_names[4][32]{};
+		char save_format[128]{};
+		char screenshot_format[128]{};
 
 		bool readable_and_expected(const operand& op)
 		{
@@ -165,6 +172,31 @@ namespace new_game
 			}
 			logger::write("new game: resetgame unlocks no heroes ([Game] ResetUnlocks=0; the mod's scripts unlock them)");
 		}
+
+		void move_save_folder(const std::string& folder)
+		{
+			if (!valid_save_folder(folder))
+			{
+				logger::write("new game: [Game] SaveFolder=%s isn't a plain folder name (no \\ / : * ? \" < > | %%, at most %zu characters) - saves stay in X-Men Legends 2",
+				              folder.c_str(), save_folder_max);
+				return;
+			}
+			if (!readable_and_expected(save_folder_format) || !readable_and_expected(screenshot_folder_format))
+			{
+				logger::write("new game: the save folder code isn't the retail code - saves stay in X-Men Legends 2");
+				return;
+			}
+			sprintf_s(save_format, "%%s\\Activision\\%s\\Save\\", folder.c_str());
+			sprintf_s(screenshot_format, "%%s\\Activision\\%s\\Screenshots\\", folder.c_str());
+			if (!write(save_folder_format.address, static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(save_format))) ||
+			    !write(screenshot_folder_format.address, static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(screenshot_format))))
+			{
+				logger::write("new game: ERROR: couldn't patch the save folder (error %lu)", GetLastError());
+				return;
+			}
+			logger::write("new game: saves, settings.dat (hero unlocks) and screenshots in Documents\\Activision\\%s ([Game] SaveFolder), not X-Men Legends 2's",
+			              folder.c_str());
+		}
 	}
 
 	void install(const HMODULE game)
@@ -188,6 +220,17 @@ namespace new_game
 		if (GetPrivateProfileIntW(L"Game", L"ResetUnlocks", 1, ini.c_str()) == 0)
 		{
 			clear_default_unlocks();
+		}
+		wchar_t folder[save_folder_max + 2]{}; // one over the limit, so a longer name is refused, not cut
+		GetPrivateProfileStringW(L"Game", L"SaveFolder", L"", folder, static_cast<DWORD>(std::size(folder)), ini.c_str());
+		if (folder[0])
+		{
+			std::string narrow;
+			for (const wchar_t* p = folder; *p; ++p)
+			{
+				narrow += *p < 128 ? static_cast<char>(*p) : '\x7f'; // non-ASCII is refused by valid_save_folder
+			}
+			move_save_folder(narrow);
 		}
 	}
 }
