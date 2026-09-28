@@ -149,7 +149,18 @@ ResetUnlocks=0
 SaveFolder=X-Men Legends
 ForcedTeams=1   ; 1: the mod's scripts seat the parties its missions want; 0: they open the team menu
 AddHero=0       ; 1 (with ForcedTeams=1): addHero seats a hero mid-level - experimental
+PostgameScript=x1/menus/postgame   ; after the end credits, Scripts\x1\menus\postgame.py instead of XML2's last zone
 ```
+
+**After the credits.** When a campaign ends (the credits menu opened with `endgame="true"`, as XML2's `credits_end` is), the game saves once the credits have rolled and then loads XML2's last zone, `act5/egypt/egypt6`. With `PostgameScript` the credits run that script instead, `Scripts\<name>.py`; the save still comes first, and the credits opened from the main menu are unchanged. The name is the script's path under `Scripts` without `.py`: letters, digits, `_` and `/` only, at most 117 characters (the game's console takes the line `runscript <name>` as one word, 127 characters at most). The X-Men Legends I port's plays XML1's closing movie and goes back to the main menu:
+
+```python
+startMovie("r505", "s")
+waitsignal("s")
+mainMenuExit()
+```
+
+It works by pointing the one push in the credits menu that hands the console XML2's line at a line of the fix's own, after every byte it relies on (the credits menu's two end-of-game steps, the console, `runscript` and the script loader) is checked against the retail build; on any other build, or with a name the game couldn't read as one, the credits load `egypt6` as before and `xml2-fix.log` says why. The log also warns when the script isn't in the game folder or under `mods`.
 
 **Forced parties.** XML2 always lets the player pick the team. X-Men Legends I often didn't: Magma alone in the mansion, flashbacks with fixed heroes in period costumes, Cyclops joining mid-level. With `ForcedTeams` set the fix adds seven functions to the game's script language:
 

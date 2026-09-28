@@ -24,6 +24,7 @@
 #include "openspy_redirect.hpp"
 #include "pad_profile.hpp"
 #include "pad_bindings.hpp"
+#include "postgame.hpp"
 #include "test_input.hpp"
 
 #define DIRECTINPUT_VERSION 0x0800
@@ -144,6 +145,8 @@ namespace
 		}
 
 		new_game::install(game);
+		// What the end credits run: one push operand in CREDITS_MENU, used only when a campaign ends.
+		postgame::install(game);
 		// The forced parties' script functions (seatParty and the rest). The game registers its script
 		// functions exactly once, from its own init: 0x40197b -> game vt+0x13c (0x46b750) -> the
 		// script interface's vt+0 (0x49fe30), which pushes its table and count and calls 0x4d75a0. That

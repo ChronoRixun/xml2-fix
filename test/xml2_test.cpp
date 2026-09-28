@@ -16,7 +16,9 @@
 // forced parties' script functions (forced_teams_rules.hpp) are checked on their rules, run on a
 // game of the test's own (arguments read by the game's own getter, costumes through the game's own
 // registry accessors when a copy of XMen2.exe is at hand), and every byte they rely on, the table
-// they register and its two operands against that copy. The test input pipe is checked on its rules, on a
+// they register and its two operands against that copy. [Game] PostgameScript (postgame_rules.hpp)
+// is checked on its name rules, every byte it relies on and its one operand write against that
+// copy, and the game's own console word reader on the line. The test input pipe is checked on its rules, on a
 // Direct3D 8 device of the test's own (the back buffer copy behind "screenshot"), and end to
 // end in a child process started with an xml2-fix.ini that turns the pipe on: it creates the
 // keyboard device the way XMen2.exe does and sees the pipe's keys in it.
@@ -39,6 +41,7 @@
 #include "limits_rules.hpp"
 #include "new_game.hpp"
 #include "options_menu_rules.hpp"
+#include "postgame_rules.hpp"
 #include "resolution_rules.hpp"
 #include "test_input_rules.hpp"
 
@@ -2715,6 +2718,13 @@ namespace
 	void check_pipe()
 	{
 		std::printf("test input pipe ([Test] InputPipe=1, this is the child process)\n");
+		// First, as it needs no pipe: [Game] PostgameScript set, but this isn't XMen2.exe - the
+		// credits' push is left alone (the DLL logged it while this process loaded it).
+		const auto start_log = read_file(module_dir() / "xml2-fix.log");
+		CHECK(start_log.find("postgame: XMen2.exe isn't loaded at 0x400000 (not the game?) - the end credits load XML2's act5/egypt/egypt6 as before") != std::string::npos ||
+		      start_log.find("isn't the retail code (CREDITS_MENU") != std::string::npos);
+		CHECK(start_log.find("now points at") == std::string::npos);
+
 		HANDLE pipe = INVALID_HANDLE_VALUE;
 		for (int attempt = 0; attempt < 50 && pipe == INVALID_HANDLE_VALUE; ++attempt)
 		{
@@ -2845,7 +2855,7 @@ namespace
 		}
 		{
 			std::ofstream out(ini, std::ios::binary);
-			out << "[Test]\r\nInputPipe=1\r\n[Display]\r\nResolutionList=all\r\n[Limits]\r\nActorSlots=127\r\n[Game]\r\nForcedTeams=1\r\nAddHero=1\r\n";
+			out << "[Test]\r\nInputPipe=1\r\n[Display]\r\nResolutionList=all\r\n[Limits]\r\nActorSlots=127\r\n[Game]\r\nForcedTeams=1\r\nAddHero=1\r\nPostgameScript=x1/menus/postgame ; XML1's r505\r\n";
 		}
 
 		wchar_t exe[MAX_PATH]{};
@@ -2916,6 +2926,122 @@ namespace
 			CHECK(!valid_save_folder(bad));
 		}
 	}
+
+	// The game's console word reader (0x55b670, __thiscall char* (const char** cursor), ret 4) on a
+	// console block of the test's own: the next word, and the cursor moved past it.
+	std::string run_word_reader(const std::uint8_t* function, test_block& console, const char*& cursor)
+	{
+		int word = 0;
+		if (!run_thiscall_int(function, console.data(), static_cast<int>(reinterpret_cast<std::uintptr_t>(&cursor)), word) || !word)
+		{
+			return "(faulted)";
+		}
+		return std::string(reinterpret_cast<const char*>(static_cast<std::uintptr_t>(static_cast<unsigned>(word))));
+	}
+
+	// [Game] PostgameScript (postgame_rules.hpp): the value's rules, the guards on their own, then,
+	// when a copy of XMen2.exe is at hand, every guard against it, the change applied to that copy
+	// (exactly the four bytes of the push operand) and the game's own word reader on the line.
+	void check_postgame_rules()
+	{
+		using namespace postgame_rules;
+		std::printf("[Game] PostgameScript (after the end credits)\n");
+
+		CHECK(parse_script("x1/menus/postgame").name == "x1/menus/postgame" && parse_script("x1/menus/postgame").error.empty());
+		CHECK(parse_script("  x1/menus/postgame \t; XML1's r505, then the main menu").name == "x1/menus/postgame");
+		CHECK(parse_script("Menus/Post_Game2").name == "Menus/Post_Game2" && parse_script("postgame").name == "postgame");
+		const auto unset = parse_script("   ; nothing");
+		CHECK(unset.name.empty() && unset.error.empty() && parse_script("").name.empty() && parse_script("").error.empty());
+		CHECK(parse_script(std::string(name_max, 'a')).name.size() == name_max && name_max == 117);
+		CHECK(command_line(std::string(name_max, 'a')).size() == console_max);
+		CHECK(parse_script(std::string(name_max + 1, 'a')).error == "is 118 characters; the game's console keeps 127, 117 after \"runscript \"");
+		for (const char* bad : {"x1/menus/post game", "x1/menus/postgame.py", "x1\\menus\\postgame", "x1/menus/post-game", "loadZone('a','')", "a(b)", "\"x1/postgame\"",
+		                        "100%s", "a\tb", "caf\xe9", "del\x7f", "/x1/postgame", "x1/postgame/", "x1//postgame", "/", "scripts/x1/postgame", "Scripts/x1/postgame",
+		                        "x1/myscripts/postgame"})
+		{
+			const auto refused = parse_script(bad);
+			if (refused.error.empty()) std::printf("  info  \"%s\" was taken\n", bad);
+			CHECK(refused.name.empty() && !refused.error.empty());
+		}
+		CHECK(parse_script("x1/postgame.py").error.find("without its .py") != std::string::npos);
+		CHECK(parse_script("x1\\postgame").error.find("separate folders with /") != std::string::npos);
+		CHECK(parse_script("x1/post game").error.find("space or byte 0x20") != std::string::npos);
+		CHECK(parse_script("Scripts/x1/postgame").error.find("under the Scripts folder") != std::string::npos);
+		CHECK(command_line("x1/menus/postgame") == "runscript x1/menus/postgame");
+		CHECK(script_file("x1/menus/postgame") == "Scripts\\x1\\menus\\postgame.py");
+
+		// The guards on their own: well-formed, one per address, none overlapping; the operand inside one.
+		bool guards_ok = true;
+		std::set<DWORD> addresses;
+		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
+		CHECK(guards_ok);
+		bool apart = true, covered = false;
+		for (std::size_t i = 0; i < guards.size(); ++i)
+		{
+			const DWORD end = guards[i].va + static_cast<DWORD>(limits_rules::hex_size(guards[i].hex));
+			covered |= guards[i].va <= load_push && load_operand + 4 <= end;
+			for (std::size_t j = 0; j < guards.size(); ++j)
+			{
+				if (i != j && guards[j].va >= guards[i].va && guards[j].va < end) apart = false;
+			}
+		}
+		CHECK(apart && covered);
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the end credits' bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](const DWORD va) { return image + (va - image_base); };
+		const auto text_at = [&](const DWORD va) { return std::string_view(reinterpret_cast<const char*>(at(va))); };
+
+		// Every guard: the retail bytes; the two pushes and their lines.
+		const guard* mismatch = first_mismatch(image);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
+		CHECK(mismatch == nullptr && operand_is_retail(image));
+		CHECK(at(save_push)[0] == 0x68 && operand_at(at(save_push + 1), 4) == retail_save_line && operand_at(at(load_operand), 4) == retail_load_line);
+		CHECK(text_at(retail_load_line) == retail_load_text && text_at(retail_save_line) == retail_save_text);
+
+		// The change on a copy: the four bytes of the operand, nothing else.
+		std::vector<std::uint8_t> before(image, image + image_size);
+		constexpr std::uint32_t dll_line = 0x10203040;
+		apply(image, dll_line);
+		std::vector<DWORD> changed;
+		for (DWORD i = 0; i < image_size; ++i)
+		{
+			if (image[i] != before[i]) changed.push_back(image_base + i);
+		}
+		CHECK((changed == std::vector<DWORD>{load_operand, load_operand + 1, load_operand + 2, load_operand + 3}));
+		CHECK(operand_at(at(load_operand), 4) == dll_line && at(load_push)[0] == 0x68 && operand_at(at(save_push + 1), 4) == retail_save_line);
+		// Patched (or any other build): the state 2 guard no longer matches, so nothing would be written.
+		mismatch = first_mismatch(image);
+		CHECK(mismatch && mismatch->va == 0x5b1c81 && !operand_is_retail(image));
+		std::memcpy(image, before.data(), image_size);
+
+		// What the console makes of the line: the game's own word reader gives runscript the whole
+		// name as one word (a space would have cut it: why the rules refuse one).
+		test_block console(0x63c + 0x201);
+		const auto reader = at(0x55b670);
+		const std::string line = command_line("x1/menus/postgame");
+		const char* cursor = line.c_str();
+		CHECK(run_word_reader(reader, console, cursor) == "runscript");
+		CHECK(run_word_reader(reader, console, cursor) == "x1/menus/postgame" && *cursor == '\0');
+		const std::string longest = command_line(std::string(name_max, 'z'));
+		cursor = longest.c_str();
+		run_word_reader(reader, console, cursor);
+		CHECK(run_word_reader(reader, console, cursor) == std::string(name_max, 'z'));
+		const std::string spaced = "runscript x1/menus/post game";
+		cursor = spaced.c_str();
+		run_word_reader(reader, console, cursor);
+		CHECK(run_word_reader(reader, console, cursor) == "x1/menus/post");
+		CHECK(console.slack_untouched());
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
 }
 
 int main(const int argc, char** argv)
@@ -2967,6 +3093,7 @@ int main(const int argc, char** argv)
 	check_test_input_rules();
 	check_image_file();
 	check_save_folder();
+	check_postgame_rules();
 	check_d3d8_modes();
 
 	const auto log = read_file(module_dir() / "xml2-fix.log");
@@ -2981,6 +3108,7 @@ int main(const int argc, char** argv)
 	CHECK(log.find("limits: the game's own caps - 40 actor slots, 450 resource names (no [Limits] in xml2-fix.ini)") != std::string::npos && log.find("raised from") == std::string::npos);
 	// No [Game] ForcedTeams: no script functions.
 	CHECK(log.find("forced teams: off (no [Game] ForcedTeams in xml2-fix.ini)") != std::string::npos && log.find("script functions added") == std::string::npos);
+	CHECK(log.find("postgame:") == std::string::npos); // no [Game] PostgameScript: not a word, nothing patched
 	CHECK(log.find("xmenlegpc.master.gamespy.com -> xmenlegpc.master.openspy.net (resolved)") != std::string::npos);
 	if (pads > 0)
 	{
