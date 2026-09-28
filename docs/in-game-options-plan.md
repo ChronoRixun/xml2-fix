@@ -4,8 +4,10 @@ Status: research complete (read-only spike, 2026-09-27/28); **phase 1 implemente
 the ini, `src/frame_rate.cpp` / `src/frame_rate_rules.hpp`, VSync in `rewrite_present`; see "Decisions" and
 1.6 for the windowed-vsync measurement); **phase 2 implemented** (the rows, `src/options_menu.cpp` /
 `src/options_menu_rules.hpp`) together with the pipe's `wm` command from phase 5 - see "Phase 2 as
-implemented"; both await the in-game test. Phases 3 and 4 not started. Target: xml2-fix branch `display`,
-on top of `src/display.cpp` / `src/display_rules.hpp`.
+implemented"; **phase 3 implemented** (the 64-slot resolution table, `src/resolution_list.cpp` /
+`src/resolution_rules.hpp` - see "Phase 3 as implemented"); all three await the in-game test. Phase 4 not
+started (out of scope by decision 2). Target: xml2-fix branch `display`, on top of `src/display.cpp` /
+`src/display_rules.hpp`.
 
 ## Decisions (Owen, 2026-09-27 22:10) - binding
 
@@ -103,6 +105,50 @@ key only when the user changed that row (Accept), with `WritePrivateProfileStrin
   the large font: "Run in background" vs a right-aligned "Fullscreen"; the small-font status line within 196 px),
   the enter slide of the new items, highlight travel and colours, keyboard order, sounds, Back/Esc asking on a
   dirty panel, and a live frame-rate change showing in the fps display / pipe `status`.
+
+### Phase 3 as implemented (2026-09-28; patches F-L, the 64-slot table)
+
+- **Re-verified with capstone over the whole image** (`docs/research/petools.py xref` plus a dword scan of every
+  section): exactly seven dwords equal 0x6e9800 (the sites F-L below) and none falls anywhere else in
+  0x6e9700..0x6e9a00 - no reference to the table's interior or its end, and nothing in .data/.rdata points at
+  it. Ten dwords equal the count 0xa68da8, every one used as `count` (the two index-search loops at 0x61e626 and
+  0x61f68d compare against it) or `count - 1` (the slider maths at 0x618179/0x618199, 0x61d5d7, 0x61e599/0x61e5b9,
+  0x61f533, 0x61f80e); the only `cmp ..., 0x14` in the panel code (0x61968f, 0x619a03) are the 42-action binding
+  loops, unrelated. The engine DLLs never call `GetAdapterModeCount`/`EnumAdapterModes` (checked over libIGGfx and
+  libIGDisplay: no vtable call at +0x18/+0x1c on the IDirect3D8 at vc+0x140); the game's only caller is the list
+  builder `FUN_00619ac0`, reached from the panel builder alone (0x61dc51). So the count needs no change and the
+  hooks that feed the list are safe in the stock mode too.
+- `resolution_list::install` (from `display::install`, `[Display] ResolutionList` = `all` default | `game`)
+  compares the 16 bytes at each of the seven instructions with the retail build's (`resolution_rules::table_sites`:
+  F 0x6181bf `lea eax,[edx*4+imm]`, G 0x619b95 `mov ebx,imm`, H 0x61d61f `lea`, I 0x61e636 `mov eax,imm`,
+  J 0x61f57b `lea`, K 0x61f6a1 `mov ebp,imm`, L 0x61f843 `lea`; imm at +3 / +1), copies the game's 20 slots (the
+  shipped "640x480".."1600x1200" defaults) into a 64 x 12-byte table in the DLL, unprotects all seven sites, then
+  writes the table's address into each imm32. Any mismatch -> "resolution list: XMen2.exe doesn't have the expected
+  code for ... - the game's own 20-slot table stays and the Video options list is trimmed to it" and the capacity
+  stays 20. `xml2_test` checks the seven sites (consistency: decoded imm == 0x6e9800, opcode vs imm offset,
+  address order) and their bytes against `docs/research/XMen2.exe`, read-only.
+- The list (`resolution_rules::build_list`, fed through the display fix's `GetAdapterModeCount`/`EnumAdapterModes`
+  hooks, now installed in **every** mode, the stock one included, so the table can never overflow again): the
+  adapter's sizes >= 640x480, one per size, the desktop's, the forced `Width`x`Height`, and in borderless/windowed
+  (`extra_sizes`) the common sizes of the desktop's aspect ratio (within 1 %, so 1366x768 is 16:9 and 2560x1080 /
+  3440x1440 are one 21:9) up to the desktop plus 1/2 and 3/4 of the desktop rounded to even numbers (render-scale
+  presets; borderless stretches them). Exclusive fullscreen (stock and `Mode=fullscreen`) gets adapter sizes only,
+  since a mode the adapter lacks would fail `CreateDevice`. Sorted ascending, every text <= 9 characters (the
+  registry read at 0x61983e is 10 bytes; five-digit widths are dropped), at most the table's slots (the smallest go
+  when there are more - unchanged rule, now rarely reached). On the development PC: 24 sizes in both modes (all the
+  16:9 extras are adapter modes already).
+- Nothing else changed in the game's flow: the slider's step is 1/(n-1) of `count`, Accept compares the chosen
+  entry with `Settings\Display\Resolution` and raises `NEW_RESZ_RESTART` / `CheckRez` as before, the close
+  function saves the entry to the registry; a resolution applies at the next start (decision 2). `Width`/`Height`
+  in the ini still shows as the selected entry because the registry read is answered with it and `build_list`
+  lists it.
+- Default-on element (flagged, like `InGameOptions`): the mode-enumeration hooks and the seven-site patch are on
+  with no ini key set, because the alternative is the stock memory corruption; `ResolutionList=game` keeps the
+  game's own table (the list trimmed to 20 - also a change from stock, a bug fix). There is deliberately no
+  "leave the overflow in" value.
+- **Not yet verified in game**: the slider walking 24 entries (3 virtual px per step at 192 px), the value label
+  for each, picking 2560x1440 or a render-scale preset -> `NEW_RESZ_RESTART` -> the size after the restart, and
+  `Revert to default` re-syncing the slider to "640x480"/the default through the relocated table.
 
 Goal (owner's request): expose display mode (fullscreen / borderless / windowed), a frame-rate cap, vsync
 and a modern resolution list inside the game's own *Advanced Options* panel, the way community clients
@@ -594,7 +640,7 @@ game's rows, their `FUN_00617f10` greys only 0x15 and 6 - our event-4 handler gr
 | `FrameRate` | `0` (unlimited) / `10`..`1000` / `refresh` | absent = the game's own 60 fps cap, untouched (decision 1) | live (phase 1 done: start-up) |
 | `VSync` | `0` / `1` | absent = the engine's own interval | fullscreen: via reset; windowed: pacer retarget (phase 1 done: start-up) |
 | `InGameOptions` | `0` / `1` | `1` | start |
-| `ResolutionList` | `game` (20, trimmed) / `all` (relocated table) | `all` | start |
+| `ResolutionList` | `game` (the game's 20 slots, the list trimmed to them) / `all` (the relocated 64-slot table) | `all` | start (phase 3 done) |
 
 The in-game cycles show exactly these values; "Refresh" reads as "Refresh rate (180 Hz)". Unknown ini
 values fall back to the default and are logged.
@@ -611,7 +657,8 @@ values fall back to the default and are logged.
    status label, ini persistence, live apply for cap/vsync/background; display mode = restart notice -
    **DONE 2026-09-28** (see "Phase 2 as implemented"), in-game verification pending.
 3. **Resolution list**: relocate the table (F-L), 64 slots, curated list + render-scale presets; keep the
-   game's NEW_RESZ_RESTART flow (WarningRes) as is.
+   game's NEW_RESZ_RESTART flow (WarningRes) as is - **DONE 2026-09-28** (see "Phase 3 as implemented"),
+   in-game verification pending.
 4. **Live display-mode switch (experimental, ini-gated `LiveModeSwitch=1`)**: `setFullScreenState`
    through our window/device hooks, 15 s revert prompt reusing the game's popup builder pattern
    (`FUN_0061c740` is the template; result codes 1/3 are read in `FUN_0061f380`).
@@ -638,6 +685,10 @@ values fall back to the default and are logged.
 - **Frame-rate-dependent code** at >60 fps (UNVERIFIED): watch camera lerps, UI fades, particle spawn
   rates during the tour; the ini keeps 60 as the fullscreen default so the stock feel is unchanged.
 - **Font glyphs**: keep labels ASCII; "Hz" fine, avoid `×`.
+- **The relocated table's address is an imm32 in game code**: the seven sites are verified by bytes that embed
+  the absolute 0x6e9800, so a relocated (ASLR'd) or patched exe fails the check and keeps its own table (the list
+  then trimmed to 20). The retail exe has no relocations and loads at 0x400000. The DLL's table is a static array,
+  alive as long as the DLL (always, for a dinput.dll).
 - **Test pipe cannot drive the panel** (WM_KEYUP based) until phase 5 - resolved: `wm KEYS [ms]` (phase 2 commit).
 
 ---
