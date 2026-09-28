@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(xml2_fix VERSION 1.1.1 LANGUAGES CXX RC)
+project(xml2_fix VERSION 1.2.0 LANGUAGES CXX RC)
 
 if(NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
 	message(FATAL_ERROR "Build with MSVC for Win32 (cmake -A Win32) - X-Men Legends II is a 32-bit game.")
@@ -25,6 +25,7 @@ add_library(xml2_fix SHARED
 	src/openspy_redirect.cpp
 	src/net_trace.cpp
 	src/mod_loader.cpp
+	src/display.cpp
 	src/log.cpp
 	src/dinput.def
 	src/version.rc)
@@ -38,4 +39,5 @@ set_target_properties(xml2_fix PROPERTIES OUTPUT_NAME dinput ARCHIVE_OUTPUT_NAME
 # Checks the built DLL the way the game loads it (imported from next to the executable).
 add_executable(xml2_test test/xml2_test.cpp)
 target_compile_definitions(xml2_test PRIVATE _WINSOCK_DEPRECATED_NO_WARNINGS)
+target_include_directories(xml2_test PRIVATE src) # display_rules.hpp: the display decisions, checked without the game
 target_link_libraries(xml2_test PRIVATE xml2_fix dinput8.lib dxguid xinput ws2_32) # dinput8.lib: only for c_dfDIJoystick(2)

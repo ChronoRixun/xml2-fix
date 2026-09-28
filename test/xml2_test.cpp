@@ -5,7 +5,9 @@
 //   - the game's own DirectInput 8: dinput8.dll loaded from the system folder by full path,
 //     EnumObjects, ranges set by object id, c_dfDIJoystick2.
 // With an Xbox-compatible pad connected, both must see a Logitech Dual Action. Also checks
-// that GameSpy host lookups resolve through OpenSpy.
+// that GameSpy host lookups resolve through OpenSpy, and the display fix's decisions: the
+// rules in display_rules.hpp against fixed inputs, and the Video options list the fix would
+// build from this PC's Direct3D 8 modes.
 //
 //   xml2_test.exe          run the checks
 //   xml2_test.exe --live   also show live pad input, as the game sees it, for 20 seconds
@@ -15,6 +17,8 @@
 #include <Windows.h>
 #include <dinput.h>
 #include <Xinput.h>
+
+#include "display_rules.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -236,6 +240,155 @@ namespace
 		input->Release();
 	}
 
+	// The display fix's decisions, on fixed inputs (display_rules.hpp).
+	void check_display_rules()
+	{
+		using namespace display_rules;
+		std::printf("display rules ([Display] in xml2-fix.ini)\n");
+
+		CHECK(parse_mode("Borderless") == mode::borderless);
+		CHECK(parse_mode("windowed") == mode::windowed);
+		CHECK(parse_mode("FULLSCREEN") == mode::fullscreen);
+		CHECK(parse_mode("") == mode::stock && parse_mode("sideways") == mode::stock);
+
+		const size desktop{2560, 1440};
+		const d3d8::display_mode desktop_mode{2560, 1440, 180, d3d8::format_x8r8g8b8};
+		options borderless;
+		borderless.window_mode = mode::borderless;
+		options windowed;
+		windowed.window_mode = mode::windowed;
+		options fullscreen;
+		fullscreen.window_mode = mode::fullscreen;
+
+		// What the game is told its resolution is.
+		CHECK((resolution_override(borderless, desktop) == size{2560, 1440}));
+		CHECK(!resolution_override(windowed, desktop).has_value());
+		CHECK(!resolution_override(fullscreen, desktop).has_value());
+		windowed.width = 1280;
+		windowed.height = 720;
+		CHECK((resolution_override(windowed, desktop) == size{1280, 720}));
+
+		// The Video options list: one entry per size, nothing below 640x480, the desktop added,
+		// ascending, and no more than the game's 20 slots (the smallest go).
+		std::vector<d3d8::display_mode> adapter;
+		for (const UINT width : {320u, 640u, 720u, 800u, 1024u, 1152u, 1176u, 1280u, 1360u, 1366u, 1440u, 1600u, 1680u, 1768u, 1920u, 2048u, 2560u})
+		{
+			for (const UINT height : {240u, 480u, 600u, 720u, 768u, 900u, 1080u})
+			{
+				adapter.push_back({width, height, 60, d3d8::format_x8r8g8b8});
+				adapter.push_back({width, height, 144, d3d8::format_x8r8g8b8});
+				adapter.push_back({width, height, 60, 23 /* R5G6B5 */});
+			}
+		}
+		const auto list = curate_modes(adapter, desktop, 180, std::nullopt, 20);
+		CHECK(list.size() == 20);
+		CHECK(list.back().width == 2560 && list.back().height == 1440 && list.back().refresh_rate == 180);
+		CHECK(std::ranges::is_sorted(list, [](const auto& a, const auto& b) { return a.width != b.width ? a.width < b.width : a.height < b.height; }));
+		CHECK(std::ranges::none_of(list, [](const auto& m) { return m.width < 640 || m.height < 480; }));
+		CHECK(std::ranges::count_if(list, [](const auto& m) { return m.width == 1920 && m.height == 1080; }) == 1);
+		const auto few = curate_modes({{800, 600, 60, 22}, {1024, 768, 60, 22}}, desktop, 180, size{1280, 720}, 20);
+		CHECK(few.size() == 4 && few[2].width == 1280 && few[3].width == 2560);
+
+		// Present parameters: the engine's exclusive fullscreen ones at the registry resolution.
+		const d3d8::present_parameters stock{1920, 1080, d3d8::format_x8r8g8b8, 1, 4, d3d8::swap_discard, nullptr, FALSE, TRUE, d3d8::format_d24s8, 1, 0, 0x80000000};
+		const auto msaa_ok = [](DWORD, DWORD) { return true; };
+		const auto msaa_no = [](DWORD, DWORD) { return false; };
+		const auto format_ok = [](DWORD) { return true; };
+		std::string notes;
+
+		auto pp = rewrite_present(stock, borderless, desktop_mode, msaa_ok, format_ok, notes);
+		CHECK(pp.windowed == TRUE && pp.fullscreen_refresh_rate == 0 && pp.fullscreen_presentation_interval == 0);
+		CHECK(pp.back_buffer_width == 1920 && pp.back_buffer_height == 1080 && pp.multi_sample_type == 4 && pp.swap_effect == d3d8::swap_discard);
+		pp = rewrite_present(stock, windowed, desktop_mode, msaa_no, format_ok, notes);
+		CHECK(pp.windowed == TRUE && pp.multi_sample_type == d3d8::multisample_none && !notes.empty());
+		auto copy_vsync = stock;
+		copy_vsync.swap_effect = d3d8::swap_copy_vsync;
+		pp = rewrite_present(copy_vsync, borderless, desktop_mode, msaa_ok, format_ok, notes);
+		CHECK(pp.multi_sample_type == d3d8::multisample_none && pp.swap_effect == d3d8::swap_copy_vsync);
+		pp = rewrite_present(stock, borderless, desktop_mode, msaa_ok, [](DWORD) { return false; }, notes);
+		CHECK(pp.back_buffer_format == d3d8::format_x8r8g8b8); // already the desktop's: not checked, not changed
+		auto sixteen_bit = stock;
+		sixteen_bit.back_buffer_format = 23;
+		pp = rewrite_present(sixteen_bit, borderless, desktop_mode, msaa_ok, [](DWORD) { return false; }, notes);
+		CHECK(pp.back_buffer_format == d3d8::format_x8r8g8b8);
+		pp = rewrite_present(stock, fullscreen, desktop_mode, msaa_ok, format_ok, notes);
+		CHECK(pp.windowed == FALSE && pp.fullscreen_refresh_rate == 0 && pp.multi_sample_type == 4); // not the desktop size: untouched
+		auto native = stock;
+		native.back_buffer_width = 2560;
+		native.back_buffer_height = 1440;
+		pp = rewrite_present(native, fullscreen, desktop_mode, msaa_ok, format_ok, notes);
+		CHECK(pp.windowed == FALSE && pp.fullscreen_refresh_rate == 180);
+		options stock_options;
+		pp = rewrite_present(stock, stock_options, desktop_mode, msaa_ok, format_ok, notes);
+		CHECK(std::memcmp(&pp, &stock, sizeof(pp)) == 0);
+
+		// Window placement: the engine asks for a maximised popup at 0,0 (style 0x85000000).
+		const RECT monitor{0, 0, 2560, 1440};
+		const RECT work{0, 0, 2560, 1392};
+		auto place = place_window(borderless, monitor, work, {2560, 1440}, 0x85000000, WS_EX_TOPMOST);
+		CHECK(place.style == (WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN) && place.ex_style == 0);
+		CHECK(std::memcmp(&place.rect, &monitor, sizeof(RECT)) == 0);
+		borderless.topmost = true;
+		CHECK(place_window(borderless, monitor, work, {2560, 1440}, 0x85000000, 0).ex_style == WS_EX_TOPMOST);
+
+		place = place_window(windowed, monitor, work, {1280, 720}, 0x85000000 | WS_VISIBLE, 0);
+		CHECK((place.style & (WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE)) == (WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE));
+		CHECK(!(place.style & (WS_THICKFRAME | WS_MAXIMIZEBOX | WS_POPUP)));
+		RECT frame{0, 0, 0, 0};
+		AdjustWindowRectEx(&frame, place.style, FALSE, place.ex_style);
+		CHECK(place.rect.right - place.rect.left - (frame.right - frame.left) == 1280);
+		CHECK(place.rect.bottom - place.rect.top - (frame.bottom - frame.top) == 720);
+		CHECK(std::abs((place.rect.left + place.rect.right) / 2 - 1280) <= 1 && std::abs((place.rect.top + place.rect.bottom) / 2 - 696) <= 1);
+		place = place_window(windowed, monitor, work, {2560, 1440}, 0x85000000, 0); // bigger than the work area: caption stays on screen
+		CHECK(place.rect.left == 0 && place.rect.top == 0);
+	}
+
+	// The Video options list the fix builds from this PC's Direct3D 8 modes (the game's list comes
+	// from the same IDirect3D8::EnumAdapterModes).
+	void check_d3d8_modes()
+	{
+		std::printf("Direct3D 8 modes (the game's Video options list)\n");
+		wchar_t folder[MAX_PATH]{};
+		GetSystemDirectoryW(folder, MAX_PATH);
+		const auto d3d8_dll = LoadLibraryW((std::wstring(folder) + L"\\d3d8.dll").c_str());
+		const auto create = d3d8_dll ? reinterpret_cast<d3d8::direct3d_create8_t>(GetProcAddress(d3d8_dll, "Direct3DCreate8")) : nullptr;
+		void* d3d = create ? create(d3d8::sdk_version) : nullptr;
+		if (!d3d)
+		{
+			std::printf("  skip  Direct3D 8 isn't available here\n");
+			return;
+		}
+
+		d3d8::display_mode desktop{};
+		CHECK(SUCCEEDED(d3d8::method<d3d8::get_adapter_display_mode_t>(d3d, d3d8::d3d_slot::get_adapter_display_mode)(d3d, 0, &desktop)));
+		std::printf("  info  desktop %ux%u @ %u Hz, format %lu\n", desktop.width, desktop.height, desktop.refresh_rate, desktop.format);
+
+		const UINT count = d3d8::method<d3d8::get_adapter_mode_count_t>(d3d, d3d8::d3d_slot::get_adapter_mode_count)(d3d, 0);
+		std::vector<d3d8::display_mode> adapter;
+		for (UINT i = 0; i < count; ++i)
+		{
+			d3d8::display_mode mode{};
+			if (SUCCEEDED(d3d8::method<d3d8::enum_adapter_modes_t>(d3d, d3d8::d3d_slot::enum_adapter_modes)(d3d, 0, i, &mode)))
+			{
+				adapter.push_back(mode);
+			}
+		}
+		const auto everything = display_rules::curate_modes(adapter, {}, 0, std::nullopt, 1000);
+		std::printf("  info  %u adapter modes, %zu sizes:", count, everything.size());
+		for (const auto& mode : everything) std::printf(" %ux%u", mode.width, mode.height);
+		std::printf("\n");
+		const bool desktop_listed = std::ranges::any_of(everything, [&](const auto& m) { return m.width == desktop.width && m.height == desktop.height; });
+		std::printf("  info  Direct3D 8 %s the desktop size itself\n", desktop_listed ? "lists" : "does NOT list");
+
+		const auto list = display_rules::curate_modes(adapter, {desktop.width, desktop.height}, desktop.refresh_rate, std::nullopt, 20);
+		std::printf("  info  the game gets %zu:", list.size());
+		for (const auto& mode : list) std::printf(" %ux%u", mode.width, mode.height);
+		std::printf("\n");
+		CHECK(list.size() <= 20);
+		CHECK(std::ranges::any_of(list, [&](const auto& m) { return m.width == desktop.width && m.height == desktop.height; }));
+		static_cast<IUnknown*>(d3d)->Release();
+	}
+
 	void check_online()
 	{
 		std::printf("online (GameSpy -> OpenSpy)\n");
@@ -291,9 +444,12 @@ int main(const int argc, char** argv)
 		std::printf("  skip  pad checks (connect an Xbox-compatible pad)\n");
 	}
 	check_online();
+	check_display_rules();
+	check_d3d8_modes();
 
 	const auto log = read_file(module_dir() / "xml2-fix.log");
 	CHECK(log.find("hooked a DirectInput 7 instance") != std::string::npos);
+	CHECK(log.find("display: as the game has it") != std::string::npos); // no [Display] section next to the test
 	CHECK(log.find("GameSpy servers redirected to openspy.net") != std::string::npos);
 	CHECK(log.find("xmenlegpc.master.gamespy.com -> xmenlegpc.master.openspy.net (resolved)") != std::string::npos);
 	if (pads > 0)

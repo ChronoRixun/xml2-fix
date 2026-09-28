@@ -25,6 +25,7 @@
 | Local co-op           | bind every pad yourself | players 2–4 get pads 2–4 automatically |
 | Modern Xbox pads (e.g. over Bluetooth) | odd axes and trigger behaviour | one consistent layout for every pad |
 | Online                | GameSpy servers gone | redirected to [OpenSpy](https://openspy.net) (lobby: [in progress](#-online)) |
+| Display               | exclusive fullscreen only, switches your monitor's mode, no native resolution in the list | borderless or windowed at your desktop's resolution, [optional](#%EF%B8%8F-display) |
 | Setup                 | — | copy one file |
 
 ## ⚡ Install
@@ -77,11 +78,31 @@ Domain=openspy.net   ; or your server's domain, or: off
 LogNetwork=1
 ```
 
+## 🖥️ Display
+
+Out of the box the game runs in exclusive fullscreen, switches your monitor to the resolution in its settings (1920x1080, say, on a 2560x1440 screen) and doesn't offer your screen's own resolution in *Options → Video*. To change that, add to `xml2-fix.ini` next to the DLL:
+
+```ini
+[Display]
+Mode=borderless      ; fullscreen, borderless or windowed; leave out for the game's own behaviour
+Width=0              ; force a resolution; 0 = your desktop's size (borderless) or the game's own setting
+Height=0
+Topmost=0            ; borderless/windowed: 1 keeps the game above other windows
+RunInBackground=1    ; borderless/windowed: 0 pauses the game when another window has the focus, like the stock game
+```
+
+- **borderless**: a window without borders covering the screen, at your desktop's resolution and refresh rate. Your monitor's mode never changes, alt-tab is instant and the game keeps running behind other windows.
+- **windowed**: a normal, centred window with a caption, the size of the resolution the game is set to (or `Width` x `Height`).
+- **fullscreen**: the game's own exclusive fullscreen, but the desktop resolution is offered in *Options → Video*, and at that resolution the desktop's refresh rate is kept.
+
+In every mode the Video options list shows your desktop resolution. In borderless mode with `Width`/`Height` at 0 the game starts at the desktop size every time; a resolution picked in the menu applies for that session (it is stretched to the screen). Everything the fix decides about the window and the Direct3D device is written to `xml2-fix.log`.
+
 ## 🔍 What was actually wrong
 
 - **No gamepad defaults.** The PC build's built-in bindings table has keyboard keys for player 1 and nothing at all for gamepads, for any player. Even a controller the game knows by name starts unbound.
 - **Modern pads look odd to it.** The game reads pads through DirectInput. An Xbox Wireless Controller over Bluetooth, for example, reports both triggers on one shared axis and a different axis set to what 2005-era pads had, so even hand-made bindings behave oddly.
 - **GameSpy is gone,** and with it the servers the game looks up by name.
+- **Fullscreen only.** The game hard-codes exclusive fullscreen and builds its resolution list from the Direct3D 8 mode list, trimmed to 20 fixed slots; the engine's own windowed path is never used on PC.
 
 ## 🛠️ How the fix works
 
@@ -90,6 +111,7 @@ LogNetwork=1
 1. **Presents every Xbox-compatible pad as a Logitech Dual Action** (`046D:C216`), a classic pad from the game's era with digital triggers and the right stick on Z / Rz. It builds that pad's DirectInput state from XInput, in the Dual Action's exact layout (buttons, hat, both sticks, respecting the game's own axis ranges). The game reads pads through two separate DirectInput versions, and both see the same pad.
 2. **Adds the layout above to the game's bindings.** It patches it into the game's built-in defaults in memory, so first runs and *Revert to defaults* include it, and adds it once to settings you already have.
 3. **Redirects GameSpy host lookups to OpenSpy.**
+4. **Runs the game in a window when asked to** ([Display](#%EF%B8%8F-display)). The engine (Alchemy) creates its Direct3D 8 device fullscreen at the registry resolution; the fix hooks `IDirect3D8::CreateDevice` and `IDirect3DDevice8::Reset` to make the device windowed, places the engine's window itself (its `CreateWindowExA`, `SetWindowLongA`, `SetWindowPos` and `MoveWindow` calls), answers the game's read of its resolution setting with the desktop size so the HUD and aspect ratio match, and completes the Direct3D mode list the Video options are built from.
 
 ```mermaid
 flowchart LR

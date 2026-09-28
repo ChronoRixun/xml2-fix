@@ -16,6 +16,18 @@ ONLINE
     [Online]
     Domain=openspy.net      (or your own server's domain, or: off)
 
+DISPLAY (optional)
+  The game only runs in exclusive fullscreen and switches your monitor to the resolution
+  in its settings. To run it in a window at your desktop's resolution instead, add to
+  xml2-fix.ini next to the DLL:
+    [Display]
+    Mode=borderless         (fullscreen, borderless or windowed; leave out for the game's own)
+    Width=0                 (force a resolution; 0 = the desktop size (borderless) or the game's setting)
+    Height=0
+    Topmost=0               (1 keeps the game above other windows)
+    RunInBackground=1       (0 pauses the game when it loses the focus, like the stock game)
+  In every mode your desktop resolution appears in Options > Video.
+
 TROUBLESHOOTING
   The fix writes xml2-fix.log next to itself each time the game starts.
   If something is wrong, open an issue on GitHub and attach that file.

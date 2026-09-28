@@ -7,8 +7,10 @@
 // Both are shown a Logitech Dual Action, and the game's bindings get a console-style layout
 // for it (the PC version ships keyboard-only defaults).
 //
-// Loading also redirects the game's GameSpy lookups to OpenSpy, for online play.
+// Loading also redirects the game's GameSpy lookups to OpenSpy, for online play, and, when
+// xml2-fix.ini asks for it, runs the game windowed or borderless at the desktop's resolution.
 
+#include "display.hpp"
 #include "gamepad_fix.hpp"
 #include "iat_hook.hpp"
 #include "log.hpp"
@@ -129,6 +131,8 @@ namespace
 		{
 			net_trace::install(game);
 		}
+
+		display::install(game);
 
 		// The game and the engine DLLs that read game data.
 		mod_loader::install({nullptr, "libIGCore.dll", "libIGGfx.dll", "libIGLua.dll", "libIGOpt.dll", "libCriMovie.dll"},
