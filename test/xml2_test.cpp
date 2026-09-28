@@ -13,7 +13,10 @@
 // here. The engine limit adjuster (limits_rules.hpp) is checked on its ini rules and layouts, and
 // against a copy of XMen2.exe mapped in memory: every patch site's retail bytes, the patch applied
 // to that copy, and the patched constructors and allocators run on blocks of the test's own. The
-// test input pipe is checked on its rules, on a
+// forced parties' script functions (forced_teams_rules.hpp) are checked on their rules, run on a
+// game of the test's own (arguments read by the game's own getter, costumes through the game's own
+// registry accessors when a copy of XMen2.exe is at hand), and every byte they rely on, the table
+// they register and its two operands against that copy. The test input pipe is checked on its rules, on a
 // Direct3D 8 device of the test's own (the back buffer copy behind "screenshot"), and end to
 // end in a child process started with an xml2-fix.ini that turns the pipe on: it creates the
 // keyboard device the way XMen2.exe does and sees the pipe's keys in it.
@@ -29,6 +32,7 @@
 #include <Xinput.h>
 
 #include "display_rules.hpp"
+#include "forced_teams_rules.hpp"
 #include "frame_capture.hpp"
 #include "frame_rate_rules.hpp"
 #include "image_file.hpp"
@@ -39,12 +43,17 @@
 #include "test_input_rules.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -1378,6 +1387,690 @@ namespace
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
 
+	// ---- Forced parties (forced_teams_rules.hpp) ------------------------------------------------------
+
+	// A script call's arguments as the game hands them to a handler: args->get(i) (0x4d5830) reads
+	// [args + 4i] below the count at +0x1c, and a value's vt+0x10 / vt+0x14 is its number / text
+	// (0x55d7e0 for both in the game: mov eax, [ecx+4]).
+	struct fake_value
+	{
+		void* const* vtable;
+		std::uintptr_t payload;
+	};
+
+	struct fake_args
+	{
+		void* values[7];
+		int count;
+	};
+	static_assert(offsetof(fake_args, count) == 0x1c);
+
+	std::uintptr_t __fastcall test_value_payload(void* value, void*)
+	{
+		return static_cast<const fake_value*>(value)->payload;
+	}
+
+	void* __fastcall test_get_argument(void* args, void*, const int index)
+	{
+		const auto* a = static_cast<const fake_args*>(args);
+		return index >= 0 && index < a->count ? a->values[index] : nullptr;
+	}
+
+	// Value vtables: slot 4 the number, slot 5 the text.
+	struct value_vtables
+	{
+		void* text[6]{};
+		void* number[6]{};
+		explicit value_vtables(void* accessor)
+		{
+			text[5] = accessor;
+			number[4] = accessor;
+		}
+	};
+
+	// One call's arguments; built in place (the values point into it).
+	struct script_call
+	{
+		std::array<std::string, 7> texts{};
+		std::array<fake_value, 7> values{};
+		fake_args args{};
+		const value_vtables& vtables;
+		explicit script_call(const value_vtables& v) : vtables(v) {}
+		script_call(const script_call&) = delete;
+		script_call& operator=(const script_call&) = delete;
+		script_call& text(const std::string& s)
+		{
+			const int i = args.count++;
+			texts[i] = s;
+			values[i] = {vtables.text, reinterpret_cast<std::uintptr_t>(texts[i].c_str())};
+			args.values[i] = &values[i];
+			return *this;
+		}
+		script_call& number(const int n)
+		{
+			const int i = args.count++;
+			values[i] = {vtables.number, static_cast<std::uintptr_t>(static_cast<std::uint32_t>(n))};
+			args.values[i] = &values[i];
+			return *this;
+		}
+	};
+
+	// The game as the functions see it, in plain C++: its party slots, the registry's names and
+	// herostat heroes with their costumes, the side-mission stack, the console, the menus.
+	struct fake_engine
+	{
+		forced_teams_rules::get_argument_t get = &test_get_argument;
+		bool forced = true;
+		bool add_on = false;
+		std::map<std::string, int> indices; // registry vt+0x3c: 0 = no such character
+		std::set<int> herostats;            // registry vt+0x7c
+		forced_teams_rules::party slots{};
+		int seat_fault_at = -1;             // the slot setter faults at this slot
+		struct hero
+		{
+			int index = 0;
+			int costume = 0;
+			std::array<std::uint8_t, 10> variants{};
+			bool stats = true;
+		};
+		std::vector<hero> heroes; // the herostat hero list
+		std::vector<forced_teams_rules::side_record> records;
+		std::string zone = "mansion/man1b/subbasement2"; // "": no zone, pushsidemission pushes nothing
+		std::map<std::string, int> characters;           // entity name -> id; -1: not a character
+		std::vector<std::string> ran, queued;
+		std::size_t queue_room = 2;
+		std::string menu;
+		int hud_leaves = 0;
+		std::vector<std::string> added;
+		std::deque<int> ints;
+		std::deque<std::string> strings;
+		std::vector<std::string> lines;
+
+		std::optional<std::string> text_argument(void* args, const int i)
+		{
+			char text[forced_teams_rules::argument_max + 1];
+			if (!forced_teams_rules::read_text_argument(get, args, i, text)) return std::nullopt;
+			return std::string(text);
+		}
+		std::optional<int> int_argument(void* args, const int i)
+		{
+			int value = 0;
+			if (!forced_teams_rules::read_int_argument(get, args, i, value)) return std::nullopt;
+			return value;
+		}
+		void* make_int(const int value) { ints.push_back(value); return &ints.back(); }
+		void* make_string(const std::string& text) { strings.push_back(text); return &strings.back(); }
+		bool forced_teams() { return forced; }
+		bool add_hero_on() { return add_on; }
+		std::optional<int> hero_index(const std::string& name) { const auto f = indices.find(name); return f == indices.end() ? 0 : f->second; }
+		std::optional<bool> herostat(const int index) { return herostats.count(index) != 0; }
+		std::optional<std::string> slot(const int i) { return slots[static_cast<std::size_t>(i)]; }
+		bool seat(const int i, const std::string& name)
+		{
+			if (i == seat_fault_at) return false;
+			slots[static_cast<std::size_t>(i)] = name;
+			return true;
+		}
+		hero* find(const int index)
+		{
+			for (auto& h : heroes) if (h.index == index) return &h;
+			return nullptr;
+		}
+		std::optional<int> hero_count() { return static_cast<int>(heroes.size()); }
+		std::optional<int> hero_at(const int i) { return heroes[static_cast<std::size_t>(i)].index; }
+		std::optional<bool> has_stats(const int index) { return find(index) && find(index)->stats; }
+		std::optional<int> costume(const int index) { return find(index)->costume; }
+		std::optional<bool> has_variant(const int index, const int costume) { return find(index)->variants[static_cast<std::size_t>(costume)] != 0; }
+		bool set_costume(const int index, const int costume) { find(index)->costume = costume; return true; }
+		std::optional<int> side_records() { return static_cast<int>(records.size()); }
+		std::optional<forced_teams_rules::side_record> side_record_at(const int i)
+		{
+			if (i < 0 || i >= static_cast<int>(records.size())) return std::nullopt;
+			return records[static_cast<std::size_t>(i)];
+		}
+		forced_teams_rules::character_lookup find_character(const std::string& name, int& id)
+		{
+			const auto f = characters.find(name);
+			if (f == characters.end()) return forced_teams_rules::character_lookup::missing;
+			if (f->second < 0) return forced_teams_rules::character_lookup::not_character;
+			id = f->second;
+			return forced_teams_rules::character_lookup::found;
+		}
+		bool run_now(const std::string& line) // pushsidemission, as 0x5f3630: a record when there is a zone and room
+		{
+			ran.push_back(line);
+			if (line.rfind("pushsidemission ", 0) == 0 && !zone.empty() && records.size() < 2) records.push_back({zone, slots});
+			return true;
+		}
+		std::optional<bool> queue(const std::string& line)
+		{
+			if (queued.size() >= queue_room) return false;
+			queued.push_back(line);
+			return true;
+		}
+		std::optional<std::string> current_menu() { return menu; }
+		void leave_hud() { ++hud_leaves; }
+		std::optional<bool> add_hero(const std::string& name) // 0x46c9f0: true if seated or seated already, slot = count
+		{
+			added.push_back(name);
+			std::size_t count = 0;
+			for (const auto& s : slots) count += !s.empty();
+			if (std::find(slots.begin(), slots.end(), name) != slots.end()) return true;
+			if (count >= 4) return false;
+			slots[count] = name;
+			return true;
+		}
+		void log(const std::string& line) { lines.push_back(line); }
+
+		bool logged(const std::string_view text) const
+		{
+			return std::ranges::any_of(lines, [&](const std::string& l) { return l.find(text) != std::string::npos; });
+		}
+		std::string last() const { return lines.empty() ? std::string() : lines.back(); }
+		static int as_int(void* value) { return *static_cast<const int*>(value); }
+		static std::string as_text(void* value) { return *static_cast<const std::string*>(value); }
+	};
+
+	// A small cast: Iceman in civilian, Magma in default, Colossus in astonishing (a player's pick),
+	// Cyclops in 60s and without a civilian costume, Wolverine without a stats object yet;
+	// ProfXGladiator known to the registry but not a herostat hero.
+	void cast(fake_engine& e)
+	{
+		e.indices = {{"magma", 5}, {"iceman", 9}, {"colossus", 12}, {"cyclops", 20}, {"wolverine", 21}, {"phoenix", 22}, {"profxgladiator", 40}};
+		e.herostats = {5, 9, 12, 20, 21, 22};
+		e.heroes.clear();
+		fake_engine::hero magma{5, 0, {}, true}, iceman{9, 8, {}, true}, colossus{12, 1, {}, true}, cyclops{20, 3, {}, true}, wolverine{21, 0, {}, false}, phoenix{22, 0, {}, true};
+		magma.variants = {1, 0, 0, 0, 0, 0, 0, 0, 3, 0};    // default, civilian (the port's magmacivilian)
+		iceman.variants = {1, 2, 0, 0, 0, 0, 0, 0, 5, 0};   // default, astonishing, civilian
+		colossus.variants = {1, 2, 0, 0, 0, 0, 0, 0, 4, 0}; // default, astonishing, civilian
+		cyclops.variants = {1, 2, 3, 4, 5, 0, 0, 0, 0, 0};  // default .. 70s, no civilian
+		phoenix.variants = {1, 0, 0, 4, 5, 0, 0, 0, 0, 0};
+		e.heroes = {magma, iceman, colossus, cyclops, wolverine, phoenix};
+		e.slots = {"wolverine", "", "", ""};
+	}
+
+	// The game's own registry accessors (vt+0x48, +0x4c, +0x74, +0x78, +0x7c), run on a registry of the
+	// test's own. No C++ objects: an exception is a failure.
+	using registry_count_t = int(__fastcall*)(void* registry, void* edx);
+	using registry_short_t = short(__fastcall*)(void* registry, void* edx, int argument);
+	using registry_flag_t = bool(__fastcall*)(void* registry, void* edx, int argument);
+	using registry_stats_t = std::uint8_t*(__fastcall*)(void* registry, void* edx, int argument);
+
+	bool run_registry_count(const std::uint8_t* code, void* registry, int& out)
+	{
+		__try { out = reinterpret_cast<registry_count_t>(const_cast<std::uint8_t*>(code))(registry, nullptr); return true; }
+		__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+	}
+	bool run_registry_short(const std::uint8_t* code, void* registry, const int argument, int& out)
+	{
+		__try { out = reinterpret_cast<registry_short_t>(const_cast<std::uint8_t*>(code))(registry, nullptr, argument); return true; }
+		__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+	}
+	bool run_registry_flag(const std::uint8_t* code, void* registry, const int argument, bool& out)
+	{
+		__try { out = reinterpret_cast<registry_flag_t>(const_cast<std::uint8_t*>(code))(registry, nullptr, argument); return true; }
+		__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+	}
+	bool run_registry_stats(const std::uint8_t* code, void* registry, const int argument, std::uint8_t*& out)
+	{
+		__try { out = reinterpret_cast<registry_stats_t>(const_cast<std::uint8_t*>(code))(registry, nullptr, argument); return true; }
+		__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+	}
+
+	// The same cast in a registry laid out as the game's (the hero list's count at +0x12330 and
+	// indices at +0x120dc, 0x1c-byte entries at +0x9b28 with the stats handle at +0x10 and the flags
+	// at +0x18, the handle mask at +0x9b20, stats objects of 0x4f8 bytes from +4), read with the
+	// game's own accessors: what the DLL calls through the registry's vtable.
+	struct retail_registry_engine : fake_engine
+	{
+		const std::uint8_t* image = nullptr;
+		std::vector<std::uint8_t> block = std::vector<std::uint8_t>(0x12334 + 0x100, 0);
+		const std::uint8_t* code(const DWORD va) const { return image + (va - limits_rules::image_base); }
+		void put32(const std::size_t offset, const std::uint32_t value) { std::memcpy(block.data() + offset, &value, 4); }
+		void put16(const std::size_t offset, const std::uint16_t value) { std::memcpy(block.data() + offset, &value, 2); }
+
+		explicit retail_registry_engine(const std::uint8_t* mapped) : image(mapped)
+		{
+			cast(*this);
+			put32(0x9b20, 0x1f); // the handle mask
+			std::uint32_t slot_number = 3;
+			for (std::size_t i = 0; i < heroes.size(); ++i)
+			{
+				const auto& h = heroes[i];
+				const std::size_t entry = static_cast<std::size_t>(h.index) * 0x1c;
+				put16(0x120dc + 2 * i, static_cast<std::uint16_t>(h.index));
+				block[entry + 0x9b40] = herostats.count(h.index) ? 1 : 0;
+				if (h.stats)
+				{
+					put32(entry + 0x9b38, 0x2000 | slot_number); // a handle: generation bits above the mask
+					std::uint8_t* stats = block.data() + 4 + slot_number * 0x4f8;
+					stats[forced_teams_rules::stats_costume] = static_cast<std::uint8_t>(h.costume);
+					std::memcpy(stats + forced_teams_rules::stats_variants, h.variants.data(), h.variants.size());
+					slot_number += 4;
+				}
+			}
+			put32(0x12330, static_cast<std::uint32_t>(heroes.size()));
+			block[40 * 0x1c + 0x9b40] = 0; // profxgladiator: a character, not a herostat hero
+		}
+		std::uint8_t* stats(const int index)
+		{
+			std::uint8_t* s = nullptr;
+			return run_registry_stats(code(0x44b890), block.data(), index, s) ? s : nullptr;
+		}
+		std::optional<int> hero_count()
+		{
+			int n = 0;
+			return run_registry_count(code(0x44b6b0), block.data(), n) ? std::optional<int>(n) : std::nullopt;
+		}
+		std::optional<int> hero_at(const int i)
+		{
+			int index = 0;
+			return run_registry_short(code(0x44b6e0), block.data(), i, index) ? std::optional<int>(index) : std::nullopt;
+		}
+		std::optional<bool> has_stats(const int index)
+		{
+			bool value = false;
+			return run_registry_flag(code(0x44b7a0), block.data(), index, value) ? std::optional<bool>(value) : std::nullopt;
+		}
+		std::optional<bool> herostat(const int index)
+		{
+			bool value = false;
+			return run_registry_flag(code(0x44b7c0), block.data(), index, value) ? std::optional<bool>(value) : std::nullopt;
+		}
+		std::optional<int> costume(const int index)
+		{
+			const auto* s = stats(index);
+			return s ? std::optional<int>(s[forced_teams_rules::stats_costume]) : std::nullopt;
+		}
+		std::optional<bool> has_variant(const int index, const int costume)
+		{
+			const auto* s = stats(index);
+			return s ? std::optional<bool>(s[forced_teams_rules::stats_variants + costume] != 0) : std::nullopt;
+		}
+		bool set_costume(const int index, const int costume)
+		{
+			auto* s = stats(index);
+			if (s) s[forced_teams_rules::stats_costume] = static_cast<std::uint8_t>(costume);
+			return s != nullptr;
+		}
+	};
+
+	// The functions' work on a game of the test's own. `vtables` and the engine's `get` are the test's
+	// own argument reader, or the game's (0x4d5830, 0x55d7e0 in a copy of XMen2.exe).
+	template <typename Engine>
+	void check_forced_team_functions(Engine& e, const value_vtables& vtables)
+	{
+		using namespace forced_teams_rules;
+		const auto costume_of = [&](const int index) { return e.costume(index).value_or(-1); };
+
+		// xml2fixFeature: the switches at the call.
+		{
+			script_call c(vtables);
+			c.text("forcedteams");
+			e.forced = true;
+			e.add_on = false;
+			CHECK(fake_engine::as_int(xml2fix_feature(e, &c.args)) == 1 && e.logged("xml2fixFeature(\"forcedteams\") -> 1"));
+			script_call a(vtables);
+			a.text(" AddHero ");
+			CHECK(fake_engine::as_int(xml2fix_feature(e, &a.args)) == 0);
+			e.add_on = true;
+			CHECK(fake_engine::as_int(xml2fix_feature(e, &a.args)) == 1);
+			e.forced = false; // AddHero counts only with ForcedTeams
+			CHECK(fake_engine::as_int(xml2fix_feature(e, &a.args)) == 0 && fake_engine::as_int(xml2fix_feature(e, &c.args)) == 0);
+			script_call u(vtables);
+			u.text("xml2fixversion");
+			e.forced = true;
+			CHECK(fake_engine::as_int(xml2fix_feature(e, &u.args)) == 0 && e.last().find("not a feature") != std::string::npos);
+			e.add_on = false;
+		}
+
+		// seatParty: exactly these heroes, compacted; all or nothing.
+		cast(e);
+		{
+			script_call c(vtables);
+			c.text("Magma").text("").text("").text("");
+			CHECK(seat_party(e, &c.args) == nullptr);
+			CHECK((e.slots == party{"magma", "", "", ""}));
+			CHECK(e.last() == "forced teams: seatParty(\"Magma\", \"\", \"\", \"\") -> magma / - / - / - (was wolverine / - / - / -)");
+		}
+		{
+			script_call c(vtables);
+			c.text("").text("wolverine").text("").text("cyclops");
+			seat_party(e, &c.args);
+			CHECK((e.slots == party{"wolverine", "cyclops", "", ""}));
+		}
+		{
+			script_call c(vtables);
+			c.text("cyclops").text("phoenix").text("CYCLOPS").text("wolverine");
+			seat_party(e, &c.args);
+			CHECK((e.slots == party{"cyclops", "phoenix", "wolverine", ""}) && e.last().find("(cyclops named twice - seated once)") != std::string::npos);
+		}
+		{
+			script_call c(vtables);
+			c.text("profxgladiator").text("").text("").text("");
+			seat_party(e, &c.args);
+			CHECK((e.slots == party{"cyclops", "phoenix", "wolverine", ""}) && e.last().find("'profxgladiator' isn't a herostat hero - party left as it is") != std::string::npos);
+			script_call n(vtables);
+			n.text("magma").text("nobody").text("").text("");
+			seat_party(e, &n.args);
+			CHECK((e.slots == party{"cyclops", "phoenix", "wolverine", ""}) && e.last().find("'nobody' isn't a character the game knows") != std::string::npos);
+			script_call z(vtables);
+			z.text("").text(" ").text("").text("");
+			seat_party(e, &z.args);
+			CHECK((e.slots == party{"cyclops", "phoenix", "wolverine", ""}) && e.last().find("no hero named - party left as it is") != std::string::npos);
+			script_call s(vtables); // three arguments: the game's compiler drops such a call, but the handler must cope
+			s.text("magma").text("").text("");
+			seat_party(e, &s.args);
+			CHECK((e.slots == party{"cyclops", "phoenix", "wolverine", ""}) && e.last().find("couldn't read argument 4 - nothing done") != std::string::npos);
+		}
+		{
+			e.seat_fault_at = 2;
+			script_call c(vtables);
+			c.text("magma").text("iceman").text("colossus").text("");
+			seat_party(e, &c.args);
+			CHECK(e.last().find("ERROR: the game's slot setter (game vt+0xf0) faulted at slot 2") != std::string::npos);
+			e.seat_fault_at = -1;
+		}
+
+		// setSkinset: the listed heroes that have the costume, default for every other mission costume.
+		cast(e);
+		{
+			script_call c(vtables);
+			c.text("civilian").text("magma");
+			CHECK(set_skinset(e, &c.args) == nullptr);
+			CHECK(costume_of(5) == 8 && costume_of(9) == 0 && costume_of(12) == 1 && costume_of(20) == 0 && costume_of(22) == 0);
+			CHECK(e.last() == "forced teams: setSkinset(\"civilian\", \"magma\") -> magma civilian; 2 other heroes back to default from a mission costume");
+		}
+		{
+			script_call c(vtables); // XML1's civilian skinset: only Iceman and Colossus had skin_civilian
+			c.text("civilian").text("iceman,colossus, CYCLOPS,beast");
+			set_skinset(e, &c.args);
+			CHECK(costume_of(5) == 0 && costume_of(9) == 8 && costume_of(12) == 1 && costume_of(20) == 0);
+			CHECK(e.last().find("iceman civilian, colossus keeps astonishing (the player's pick), cyclops default (has no civilian costume); 1 other hero back to default") != std::string::npos &&
+			      e.last().find("not herostat heroes, skipped: beast") != std::string::npos);
+		}
+		{
+			script_call c(vtables);
+			c.text("60s").text("beast,cyclops,iceman,phoenix,wolverine");
+			set_skinset(e, &c.args);
+			CHECK(costume_of(20) == 3 && costume_of(9) == 0 && costume_of(22) == 3 && costume_of(12) == 1 && costume_of(5) == 0);
+			CHECK(e.last().find("cyclops 60s, iceman default (has no 60s costume), phoenix 60s, wolverine skipped (no stats object yet); 0 other heroes") != std::string::npos);
+			script_call d(vtables);
+			d.text("default").text("");
+			set_skinset(e, &d.args);
+			CHECK(costume_of(20) == 0 && costume_of(22) == 0 && costume_of(12) == 1 && e.last().find("2 other heroes back to default") != std::string::npos);
+			script_call m(vtables);
+			m.text("magmacivilian").text("magma");
+			set_skinset(e, &m.args);
+			CHECK(costume_of(5) == 0 && e.last().find("'magmacivilian' isn't one of the game's costumes") != std::string::npos);
+		}
+
+		// pushParty / popParty: XML1's side missions on the side-mission stack.
+		cast(e);
+		e.slots = {"magma", "", "", ""};
+		e.characters = {{"_ACTIVE_HERO_", 77}, {"sp_crate01", -1}};
+		{
+			script_call c(vtables);
+			c.text("_ACTIVE_HERO_");
+			CHECK(push_party(e, &c.args) == nullptr);
+			CHECK(e.records.size() == 1 && e.ran.back() == "pushsidemission 77");
+			CHECK(e.last() == "forced teams: pushParty(\"_ACTIVE_HERO_\") -> pushsidemission 77: record 1 of 2, mansion/man1b/subbasement2 with magma / - / - / -");
+			// the flashback party, then back
+			script_call s(vtables);
+			s.text("cyclops").text("colossus").text("iceman").text("phoenix");
+			seat_party(e, &s.args);
+			CHECK((e.slots == party{"cyclops", "colossus", "iceman", "phoenix"}));
+			script_call p(vtables);
+			p.text("mansion/man1b/subbasement1b");
+			CHECK(pop_party(e, &p.args) == nullptr);
+			CHECK(e.queued.size() == 1 && e.queued[0] == "restorelastzone 0" && e.hud_leaves == 1);
+			CHECK(e.last() == "forced teams: popParty(\"mansion/man1b/subbasement1b\") -> restorelastzone 0 queued, back to mansion/man1b/subbasement2 with magma / - / - / - (record 1)");
+		}
+		{
+			e.queued.clear();
+			e.records.clear();
+			script_call p(vtables); // no record: the team menu at the fallback zone, as loadMapChooseTeam
+			p.text(" mansion/man2/subbasement2 ");
+			pop_party(e, &p.args);
+			CHECK(e.queued.size() == 1 && e.queued[0] == "loadmap mansion/man2/subbasement2 0 1" && e.hud_leaves == 2 && e.last().find("no side-mission record: the team menu at") != std::string::npos);
+			script_call bad(vtables);
+			bad.text("two words");
+			pop_party(e, &bad.args);
+			CHECK(e.queued.size() == 1 && e.last().find("can't go in a loadmap command - nothing done") != std::string::npos);
+			e.queue_room = 1; // one command waiting already
+			pop_party(e, &p.args);
+			CHECK(e.queued.size() == 1 && e.hud_leaves == 2 && e.last().find("ERROR: the console's queue refused 'loadmap mansion/man2/subbasement2 0 1'") != std::string::npos);
+			e.queue_room = 2;
+			e.queued.clear();
+			e.records = {{"nyc/fb/nyc_fb1", {"magma", "", "", ""}}};
+			e.menu = "Loading";
+			pop_party(e, &p.args);
+			CHECK(e.queued.empty() && e.last().find("the game is loading - nothing done") != std::string::npos);
+			e.menu.clear();
+		}
+		{
+			e.records = {{"a", {}}, {"b", {}}};
+			e.ran.clear();
+			script_call c(vtables);
+			c.text("_ACTIVE_HERO_");
+			push_party(e, &c.args);
+			CHECK(e.ran.empty() && e.records.size() == 2 && e.last().find("the side-mission stack is full (2 records) - nothing pushed; popParty returns to b with - / - / - / -") != std::string::npos);
+			e.records.clear();
+			script_call m(vtables);
+			m.text("nobody");
+			push_party(e, &m.args);
+			script_call n(vtables);
+			n.text("sp_crate01");
+			const auto lines_before = e.lines.size();
+			push_party(e, &n.args);
+			CHECK(e.ran.empty() && e.records.empty() && e.lines.size() == lines_before + 1 && e.logged("pushParty(\"nobody\"): no entity by that name - nothing pushed") &&
+			      e.last().find("that entity isn't a character - nothing pushed") != std::string::npos);
+			e.zone.clear(); // no zone loaded: the game pushes nothing
+			push_party(e, &c.args);
+			CHECK(e.ran.size() == 1 && e.records.empty() && e.last().find("pushsidemission 77 pushed nothing (no zone loaded?)") != std::string::npos);
+			e.zone = "mansion/man1b/subbasement2";
+		}
+
+		// addHero: off by default; on, the game's own routine seats at slot = count.
+		cast(e);
+		e.slots = {"magma", "", "", ""};
+		{
+			script_call c(vtables);
+			c.text("cyclops");
+			e.add_on = false;
+			CHECK(fake_engine::as_int(add_hero(e, &c.args)) == 0 && e.added.empty() && e.last().find("-> 0: [Game] AddHero is off") != std::string::npos);
+			e.add_on = true;
+			CHECK(fake_engine::as_int(add_hero(e, &c.args)) == 1 && (e.slots == party{"magma", "cyclops", "", ""}) && e.added.size() == 1);
+			CHECK(e.last() == "forced teams: addHero(\"cyclops\") -> 1: magma / cyclops / - / - (was magma / - / - / -)");
+			script_call g(vtables);
+			g.text("profxgladiator");
+			CHECK(fake_engine::as_int(add_hero(e, &g.args)) == 0 && e.added.size() == 1);
+			e.slots = {"magma", "iceman", "colossus", "phoenix"};
+			CHECK(fake_engine::as_int(add_hero(e, &c.args)) == 0 && e.last().find("refused (party full?)") != std::string::npos);
+			e.add_on = false;
+		}
+
+		// getPartyMember.
+		{
+			script_call c(vtables);
+			c.number(1);
+			CHECK(fake_engine::as_text(get_party_member(e, &c.args)) == "iceman" && e.last() == "forced teams: getPartyMember(1) -> \"iceman\"");
+			script_call o(vtables);
+			o.number(4);
+			CHECK(fake_engine::as_text(get_party_member(e, &o.args)).empty());
+		}
+	}
+
+	void check_forced_teams_rules()
+	{
+		using namespace forced_teams_rules;
+		std::printf("forced parties ([Game] ForcedTeams and AddHero: seatParty, setSkinset, pushParty, popParty, addHero)\n");
+
+		// The functions: seven, signatures the game's compiler knows, room in its tree.
+		CHECK(functions.size() == 7 && table_count == 0x128 && builtin_count + table_count == 315 && table_count + builtin_count <= tree_capacity);
+		bool signatures_ok = true;
+		for (const auto& f : functions)
+		{
+			signatures_ok &= std::strlen(f.ret) == 1 && std::strchr("nis", f.ret[0]) && std::strlen(f.args) >= 1 && std::strlen(f.args) <= 7 &&
+			                 std::strspn(f.args, "sia") == std::strlen(f.args);
+		}
+		CHECK(signatures_ok);
+		CHECK(std::string_view(functions[1].name) == "seatParty" && std::string_view(functions[1].args) == "ssss" && std::string_view(functions[0].name) == "xml2fixFeature" &&
+		      std::string_view(functions[static_cast<std::size_t>(function::get_party_member)].name) == "getPartyMember");
+		const auto writes = registration_writes(0x12345678);
+		CHECK(writes[0].va == 0x49fe31 && writes[0].value == 0x12345678 && writes[1].va == 0x49fe36 && writes[1].value == 0x128 && writes[0].size == 4 && writes[1].size == 4);
+
+		// The ini: absent = nothing; 0 = registered, off; 1 = on; AddHero only with ForcedTeams=1.
+		auto chosen = decide(std::nullopt, std::nullopt);
+		CHECK(!chosen.registered && !chosen.forced_teams && !chosen.add_hero && chosen.notes.empty());
+		chosen = decide("1", std::nullopt);
+		CHECK(chosen.registered && chosen.forced_teams && !chosen.add_hero && chosen.notes.empty());
+		chosen = decide("0", "1");
+		CHECK(chosen.registered && !chosen.forced_teams && !chosen.add_hero && chosen.notes.size() == 1 && chosen.notes[0].find("needs ForcedTeams=1") != std::string::npos);
+		chosen = decide("1   ; the mod forces its parties", "1 ; experimental");
+		CHECK(chosen.registered && chosen.forced_teams && chosen.add_hero && chosen.notes.empty());
+		chosen = decide("1", "0");
+		CHECK(chosen.forced_teams && !chosen.add_hero && chosen.notes.empty());
+		chosen = decide("yes", "1");
+		CHECK(chosen.registered && !chosen.forced_teams && !chosen.add_hero && chosen.notes.size() == 2 && chosen.notes[0] == "ForcedTeams=yes isn't 0 or 1 - taken as 0");
+		chosen = decide(std::nullopt, "1");
+		CHECK(!chosen.registered && chosen.notes.size() == 1 && chosen.notes[0].find("nothing registered") != std::string::npos);
+		chosen = decide("1", "2");
+		CHECK(chosen.forced_teams && !chosen.add_hero && chosen.notes.size() == 1);
+		CHECK(feature_named("forcedteams") == feature::forced_teams && feature_named(" AddHero") == feature::add_hero && !feature_named("forced_teams") && !feature_named(""));
+
+		// Names: cleaned, repeats dropped, compacted.
+		CHECK((split_heroes("magma,,x") == std::vector<std::string>{"magma", "x"}));
+		CHECK((split_heroes(" Iceman , COLOSSUS,iceman,") == std::vector<std::string>{"iceman", "colossus"}) && split_heroes("").empty() && split_heroes(" , ,").empty());
+		CHECK((split_heroes("beast,cyclops,iceman,phoenix,wolverine").size() == 5));
+		auto order = seat_order({"", " Wolverine", "", "cyclops"});
+		CHECK((order.slots == party{"wolverine", "cyclops", "", ""}) && order.dropped.empty());
+		order = seat_order({"magma", "MAGMA", "magma ", "iceman"});
+		CHECK((order.slots == party{"magma", "iceman", "", ""}) && (order.dropped == std::vector<std::string>{"magma", "magma"}));
+		CHECK(seat_order({"", "", "", ""}).slots[0].empty());
+		CHECK(describe({"magma", "", "", ""}) == "magma / - / - / -" && call_text("seatParty", {"magma", "", "", ""}) == "seatParty(\"magma\", \"\", \"\", \"\")");
+
+		// Costumes: the game's names; magmacivilian is XML1's, the pipeline maps it to civilian + "magma".
+		CHECK(costume_index("CIVILIAN") == 8 && costume_index(" 60s ") == 3 && costume_index("default") == 0 && costume_index("weaponx") == 5 && costume_index("70s") == 4);
+		CHECK(!costume_index("magmacivilian") && !costume_index("") && !costume_index("civ"));
+		CHECK(costume_name(8) == "civilian" && costume_name(9) == "costume 9");
+		CHECK(skinset_costume(0, true, 8, true) == 8 && skinset_costume(0, true, 8, false) == 0 && skinset_costume(0, false, 8, true) == 0);
+		CHECK(skinset_costume(8, false, 3, true) == 0 && skinset_costume(5, true, 5, true) == 5 && skinset_costume(4, true, 0, true) == 0);
+		CHECK(skinset_costume(1, true, 8, true) == 1 && skinset_costume(2, false, 0, false) == 2 && skinset_costume(6, true, 3, true) == 6 && skinset_costume(7, false, 8, true) == 7 &&
+		      skinset_costume(9, true, 8, true) == 9);
+		CHECK(usable_zone("mansion/man2/subbasement2") && !usable_zone("") && !usable_zone("a b") && !usable_zone("a;b") && !usable_zone(std::string(116, 'z')) && usable_zone(std::string(115, 'z')));
+
+		// The guards on their own: well-formed, one per address.
+		bool guards_ok = true;
+		std::set<DWORD> addresses;
+		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
+		CHECK(guards_ok && guards.size() == 75);
+
+		// The functions over a game of the test's own, arguments through the test's own reader.
+		const value_vtables own(reinterpret_cast<void*>(&test_value_payload));
+		fake_engine own_engine;
+		check_forced_team_functions(own_engine, own);
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the forced parties' bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](const DWORD va) { return image + (va - limits_rules::image_base); };
+		const auto text_at = [&](const DWORD va) { return std::string_view(reinterpret_cast<const char*>(at(va))); };
+		const auto dword_at = [&](const DWORD va) { return operand_at(at(va), 4); };
+
+		// Every guard: the retail bytes.
+		bool retail = true;
+		for (const auto& g : guards)
+		{
+			if (!limits_rules::matches(at(g.va), g.hex))
+			{
+				std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", g.va, g.what);
+				retail = false;
+			}
+		}
+		CHECK(retail);
+
+		// The game's names: its 289 functions and 19 builtins; none of the seven is among them, nor
+		// anywhere in the exe's bytes (any case).
+		std::set<std::string> retail_names;
+		for (DWORD i = 0; i < retail_count; ++i) retail_names.insert(lowercase(text_at(dword_at(retail_table + i * 16 + 4))));
+		for (DWORD i = 0; i < builtin_count; ++i) retail_names.insert(lowercase(text_at(dword_at(builtin_table + i * 16 + 4))));
+		CHECK(retail_names.size() == retail_count + builtin_count && retail_names.count("seatparty") == 0 && retail_names.count("restorelastzone") == 1 && retail_names.count("iadd") == 1);
+		const auto lower_exe = lowercase(*exe);
+		bool unique = true;
+		for (const auto& f : functions)
+		{
+			unique &= retail_names.count(lowercase(f.name)) == 0 && lower_exe.find(lowercase(f.name)) == std::string::npos;
+		}
+		CHECK(unique);
+		CHECK(text_at(dword_at(retail_table + 4)) == "setRotZ" && text_at(dword_at(retail_table + (retail_count - 1) * 16 + 4)) == "SetDontShowWarningOff" &&
+		      text_at(dword_at(builtin_table + 4)) == "==");
+
+		// The table the DLL builds: the game's 289 entries byte for byte, then the seven.
+		std::vector<func_entry> built(table_count);
+		std::array<const void*, functions.size()> handlers{};
+		for (std::size_t i = 0; i < handlers.size(); ++i) handlers[i] = reinterpret_cast<const void*>(0x1000 + i);
+		build_table(reinterpret_cast<const func_entry*>(at(retail_table)), handlers, built.data());
+		CHECK(std::memcmp(built.data(), at(retail_table), retail_count * sizeof(func_entry)) == 0);
+		bool extras_ok = true;
+		for (std::size_t i = 0; i < functions.size(); ++i)
+		{
+			const auto& entry = built[retail_count + i];
+			extras_ok &= entry.handler == handlers[i] && std::string_view(entry.name) == functions[i].name && std::string_view(entry.args) == functions[i].args &&
+			             std::string_view(entry.ret) == functions[i].ret;
+		}
+		CHECK(extras_ok);
+
+		// The costume table: the game's names and indices, then {"", -1}.
+		bool costumes_ok = true;
+		for (std::size_t i = 0; i < costumes.size(); ++i)
+		{
+			costumes_ok &= text_at(dword_at(costume_table + static_cast<DWORD>(i) * 8)) == costumes[i].name && static_cast<int>(dword_at(costume_table + static_cast<DWORD>(i) * 8 + 4)) == costumes[i].index;
+		}
+		CHECK(costumes_ok && text_at(dword_at(costume_table + 9 * 8)).empty() && dword_at(costume_table + 9 * 8 + 4) == 0xffffffff);
+
+		// The registration patched in the copy: the two operands and nothing else.
+		const std::vector<std::uint8_t> before(image, image + image_size);
+		for (const auto& w : registration_writes(0x12345678)) limits_rules::apply_write(image, w);
+		std::size_t changed = 0, outside = 0;
+		for (std::size_t i = 0; i < image_size; ++i)
+		{
+			if (image[i] != before[i])
+			{
+				++changed;
+				const DWORD va = limits_rules::image_base + static_cast<DWORD>(i);
+				outside += !(va >= table_operand && va < table_operand + 4) && !(va >= count_operand && va < count_operand + 4);
+			}
+		}
+		CHECK(changed == 5 && outside == 0); // 0x0068a908 -> 0x12345678, 0x121 -> 0x128
+		CHECK(limits_rules::matches(at(registration), "68785634126828010000e8318903008bc8e85a770300c3"));
+		std::memcpy(image, before.data(), image_size);
+
+		// The strings the handlers send are the game's own.
+		CHECK(text_at(0x68d584) == "pushsidemission %d" && text_at(0x68d284) == "restorelastzone %s" && text_at(0x68d31c) == "loadmap %s 0 1" && text_at(0x688874) == loading_menu);
+
+		// The functions again, their arguments read by the game's own getter (0x4d5830) and value
+		// accessor (0x55d7e0), and setSkinset on a registry read by the game's own accessors.
+		const value_vtables game_values(at(0x55d7e0));
+		fake_engine game_reader;
+		game_reader.get = reinterpret_cast<get_argument_t>(at(argument_getter));
+		check_forced_team_functions(game_reader, game_values);
+		retail_registry_engine registry(image);
+		registry.get = game_reader.get;
+		CHECK(registry.hero_count() == 6 && registry.hero_at(3) == 20 && registry.has_stats(21) == false && registry.has_stats(9) == true && registry.herostat(9) == true &&
+		      registry.herostat(40) == false && registry.costume(9) == 8 && registry.has_variant(20, 8) == false && registry.has_variant(20, 3) == true);
+		check_forced_team_functions(registry, game_values);
+
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
 	// The Video options list the fix builds from this PC's Direct3D 8 modes (the game's list comes
 	// from the same IDirect3D8::EnumAdapterModes).
 	void check_d3d8_modes()
@@ -1954,6 +2647,8 @@ namespace
 		CHECK(log.find("ResourceNames=1024, as no ResourceNames says otherwise") != std::string::npos);
 		CHECK(log.find("the resource name table stays at 450 names") != std::string::npos && log.find("limits: the actor table stays at 40 slots") != std::string::npos);
 		CHECK(log.find("raised from") == std::string::npos);
+		// [Game] ForcedTeams=1, but this isn't XMen2.exe: nothing registered, the mod's scripts open the team menu.
+		CHECK(log.find("- no script functions registered; the mod's scripts open the team menu") != std::string::npos && log.find("script functions added") == std::string::npos);
 	}
 
 	// Starts this program again with an xml2-fix.ini next to it that turns the pipe on, so its
@@ -1969,7 +2664,7 @@ namespace
 		}
 		{
 			std::ofstream out(ini, std::ios::binary);
-			out << "[Test]\r\nInputPipe=1\r\n[Display]\r\nResolutionList=all\r\n[Limits]\r\nActorSlots=127\r\n";
+			out << "[Test]\r\nInputPipe=1\r\n[Display]\r\nResolutionList=all\r\n[Limits]\r\nActorSlots=127\r\n[Game]\r\nForcedTeams=1\r\nAddHero=1\r\n";
 		}
 
 		wchar_t exe[MAX_PATH]{};
@@ -2087,6 +2782,7 @@ int main(const int argc, char** argv)
 	check_options_menu_rules();
 	check_resolution_rules();
 	check_limits_rules();
+	check_forced_teams_rules();
 	check_test_input_rules();
 	check_image_file();
 	check_save_folder();
@@ -2102,6 +2798,8 @@ int main(const int argc, char** argv)
 	CHECK(log.find("GameSpy servers redirected to openspy.net") != std::string::npos);
 	// No [Limits]: the engine's caps untouched (and this isn't the game anyway).
 	CHECK(log.find("limits: the game's own caps - 40 actor slots, 450 resource names (no [Limits] in xml2-fix.ini)") != std::string::npos && log.find("raised from") == std::string::npos);
+	// No [Game] ForcedTeams: no script functions.
+	CHECK(log.find("forced teams: off (no [Game] ForcedTeams in xml2-fix.ini)") != std::string::npos && log.find("script functions added") == std::string::npos);
 	CHECK(log.find("xmenlegpc.master.gamespy.com -> xmenlegpc.master.openspy.net (resolved)") != std::string::npos);
 	if (pads > 0)
 	{

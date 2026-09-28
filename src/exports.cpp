@@ -13,6 +13,7 @@
 // through which tests press keys and take screenshots without the focus.
 
 #include "display.hpp"
+#include "forced_teams.hpp"
 #include "gamepad_fix.hpp"
 #include "iat_hook.hpp"
 #include "limits.hpp"
@@ -143,6 +144,15 @@ namespace
 		}
 
 		new_game::install(game);
+		// The forced parties' script functions (seatParty and the rest). The game registers its script
+		// functions exactly once, from its own init: 0x40197b -> game vt+0x13c (0x46b750) -> the
+		// script interface's vt+0 (0x49fe30), which pushes its table and count and calls 0x4d75a0. That
+		// runs long after this DllMain (below: before the exe's entry point), so the two push operands
+		// are re-pointed at the DLL's longer table here, and every script - they compile from the first
+		// menu on, which is when names are looked up - sees the new functions. After new_game: both
+		// patch push operands of script-facing code; nothing here depends on limits or test_input (the
+		// pipe's "script" command compiles its statement when it runs, with the functions in place).
+		forced_teams::install(game);
 		// Before any of XMen2.exe's own code runs, as the engine limit adjuster must be: this DLL is a
 		// static import of libIGDisplay.dll, which XMen2.exe imports statically, so Windows runs this
 		// DllMain while it loads the process - before the exe's entry point (0x6725f4, the CRT start-up

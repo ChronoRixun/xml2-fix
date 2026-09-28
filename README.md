@@ -135,6 +135,50 @@ the fix listens on the named pipe `\\.\pipe\xml2-fix-input`: one command per lin
 
 `KEY` is a DirectInput key name (`ENTER`, `ESCAPE`, `W`, `UP`, `F1`, `NUMPAD4`, …) or scancode (`0x1C`). Every screen reads these keys, *Advanced Options* included (its widgets take key messages, but the panel makes them from the same DirectInput keyboard, so `tap DOWN`, `tap ENTER` and `tap LEFT` move and change its rows). Keys from the pipe reach the game whether or not it has the focus; the real keyboard only counts while it does, so typing in another window stays there, and in the borderless and windowed modes the game ignores the mouse meanwhile (it sees no cursor and gets no mouse messages, so moving your mouse over its window hovers nothing). Screenshots copy the Direct3D back buffer inside the game, so they work with the window covered (multisampling is off while the pipe is on). Meant for `Mode=windowed` with `RunInBackground=1`; everything the pipe does is in `xml2-fix.log`. Off without the `[Test]` section.
 
+## 🧬 Mods with their own campaign
+
+For total conversions that bring their own story, roster and saves (the X-Men Legends I port, for one). Each key does nothing until it is set. `NewGameTeam` and `SaveFolder` take the whole rest of their line, so their comments go on a line of their own:
+
+```ini
+[Game]
+; New Game's party: up to four heroes, comma separated; missing slots stay empty
+NewGameTeam=wolverine
+; 0: New Game unlocks no heroes (the mod's scripts unlock them)
+ResetUnlocks=0
+; saves, settings.dat (hero unlocks) and screenshots in Documents\Activision\<SaveFolder>, not X-Men Legends 2's
+SaveFolder=X-Men Legends
+ForcedTeams=1   ; 1: the mod's scripts seat the parties its missions want; 0: they open the team menu
+AddHero=0       ; 1 (with ForcedTeams=1): addHero seats a hero mid-level - experimental
+```
+
+**Forced parties.** XML2 always lets the player pick the team. X-Men Legends I often didn't: Magma alone in the mansion, flashbacks with fixed heroes in period costumes, Cyclops joining mid-level. With `ForcedTeams` set the fix adds seven functions to the game's script language:
+
+| Function | Does |
+| -------- | ---- |
+| `xml2fixFeature("forcedteams")` | 1 when `ForcedTeams=1` (`"addhero"`: `AddHero=1` too), else 0 |
+| `seatParty("magma", "", "", "")` | the party becomes exactly these heroes (herostat heroes only; empty strings are empty slots); the script's next statement loads the zone |
+| `setSkinset("civilian", "magma")` | the costume for the listed heroes that have it, default for every hero in a mission costume (default, 60s, 70s, weaponx, civilian); a player's own pick (astonishing, aoa, future, winter) stays |
+| `pushParty("_ACTIVE_HERO_")` | saves the zone, the party and that hero's spot on the game's side-mission stack (two at most), before a flashback |
+| `popParty("mansion/man2/subbasement2")` | back to the saved zone, party and spot; with nothing saved, the team menu at the zone given |
+| `addHero("cyclops")` | with `AddHero=1`, the hero joins the party on the spot, no reload (the game's own unused routine for it); 0 when off, so the script can fall back |
+| `getPartyMember(0)` | slot 0's hero, `""` when empty |
+
+A script asks first, into a variable it declares, so the same script works with and without the fix:
+
+```python
+x1ft = iadd(0, 0 )
+x1ft = xml2fixFeature("forcedteams" )
+if x1ft == 1
+     seatParty("magma", "", "", "" )
+     setSkinset("civilian", "magma" )
+     loadMapKeepTeam("mansion/man1a/mansion1a_1" )
+else
+     loadMapChooseTeam("mansion/man1a/mansion1a_1" )
+endif
+```
+
+The game drops a call to a function it doesn't know when the script compiles, and nothing else: without the fix, or without `ForcedTeams`, the `xml2fixFeature` line goes, `x1ft` stays 0 and the team menu opens as before. `ForcedTeams=0` keeps the functions but has them report off. The functions are registered by pointing the game's own registration at a longer copy of its function table, after every byte they rely on is checked against the retail build (on any other build nothing is added); every call and what it did goes to `xml2-fix.log`.
+
 ## 🔍 What was actually wrong
 
 - **No gamepad defaults.** The PC build's built-in bindings table has keyboard keys for player 1 and nothing at all for gamepads, for any player. Even a controller the game knows by name starts unbound.
@@ -154,6 +198,7 @@ the fix listens on the named pipe `\\.\pipe\xml2-fix-input`: one command per lin
 5. **Paces frames when asked to** ([Display](#%EF%B8%8F-display)). With `FrameRate` set, the 1/60 s constant the game's frame function writes is patched to 0 (after checking the bytes are the retail build's), which ends its busy-wait at once, and frames are paced in the fix's `IDirect3DDevice8::Present` hook with a high-resolution waitable timer and a short spin. `VSync` is set in the same `CreateDevice`/`Reset` rewrite as the window mode.
 6. **Puts those settings in the game's own options panel.** *Advanced Options* is hand-drawn Direct3D UI (Beenox's `BXIG` widgets), not a menu file, so the fix builds its rows with the game's own option-cycler class, exactly as the game builds its *FSAA* row, from a function it puts in place of the panel builder's final call; three more call-site replacements in the panel's close function persist Accept, Cancel and Revert. The engine draws, animates and navigates the rows; the fix only answers their callbacks. Every call site's bytes are checked first, so on any other build the panel is left as it is.
 7. **Gives the resolution list room when asked to** (`ResolutionList=all`). The game `sprintf`s its list into 20 twelve-byte slots in its data and reads them back through the count next to them, so the seven instructions that carry the table's address (the writer, the slider, Accept, the builder's and the revert's index searches, the close function's two reads) get the address of a 64-slot table in the DLL instead, again after a byte check of each, and only once the engine's Direct3D is hooked. The list itself comes from the fix's `IDirect3D8::GetAdapterModeCount`/`EnumAdapterModes` hooks and never exceeds the table in use.
+8. **Adds script functions for a mod's campaign when asked to** ([Mods](#-mods-with-their-own-campaign)). The game registers its 289 script functions once at start-up, by pushing its table and its count and handing them to its script system; before any of the game's code runs, the fix points those two pushes at a copy of the table with its seven functions after the game's own. They do what the game's own code does for its party changes (the party slot setter, the side-mission stack's `pushsidemission` and `restorelastzone`, a hero's costume byte), calling the game's functions.
 
 ```mermaid
 flowchart LR
