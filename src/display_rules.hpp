@@ -84,6 +84,15 @@ namespace display_rules
 		return m == mode::borderless || m == mode::windowed;
 	}
 
+	// The mouse's client-area messages (WM_MOUSEMOVE 0x200 .. WM_MOUSEHWHEEL 0x20e: moves, buttons,
+	// wheels). Windows sends them to the window under the cursor whether or not it has the focus
+	// (the wheel too, with "scroll inactive windows" on), and the game's menus hover and click on
+	// their lParam; a window of ours drops them while another window has the focus.
+	inline bool is_pointer_message(const UINT message)
+	{
+		return message >= 0x200 && message <= 0x20e;
+	}
+
 	// "" (absent) -> stock; "all" -> all; "game" -> game; anything else -> nothing (the caller logs it).
 	inline std::optional<resolution_list> parse_resolution_list(std::string_view text)
 	{

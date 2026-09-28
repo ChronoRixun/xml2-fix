@@ -266,6 +266,12 @@ namespace
 		CHECK(parse_mode("windowed") == mode::windowed);
 		CHECK(parse_mode("FULLSCREEN") == mode::fullscreen);
 		CHECK(parse_mode("") == mode::stock && parse_mode("sideways") == mode::stock);
+		// The mouse messages a window of ours drops while another window has the focus: the client-area
+		// ones the game's menus act on, and nothing else (keys, activation, painting, non-client).
+		CHECK(is_pointer_message(WM_MOUSEMOVE) && is_pointer_message(WM_LBUTTONDOWN) && is_pointer_message(WM_LBUTTONUP) && is_pointer_message(WM_RBUTTONDOWN));
+		CHECK(is_pointer_message(WM_MOUSEWHEEL) && is_pointer_message(0x20e /* WM_MOUSEHWHEEL */) && is_pointer_message(WM_XBUTTONUP) && is_pointer_message(WM_MBUTTONDBLCLK));
+		CHECK(!is_pointer_message(WM_KEYUP) && !is_pointer_message(WM_KEYDOWN) && !is_pointer_message(WM_ACTIVATE) && !is_pointer_message(WM_MOUSEACTIVATE));
+		CHECK(!is_pointer_message(WM_NCMOUSEMOVE) && !is_pointer_message(WM_SETCURSOR) && !is_pointer_message(WM_PAINT) && !is_pointer_message(0x20f) && !is_pointer_message(0x1ff));
 		CHECK(parse_resolution_list("") == resolution_list::stock && parse_resolution_list("ALL") == resolution_list::all && parse_resolution_list("game") == resolution_list::game);
 		CHECK(!parse_resolution_list("off").has_value() && !parse_resolution_list("64").has_value());
 		CHECK(std::string(name(resolution_list::game)) == "game" && std::string(name(resolution_list::all)) == "all" && std::string(name(resolution_list::stock)) == "stock");

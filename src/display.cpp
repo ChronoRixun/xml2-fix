@@ -556,6 +556,47 @@ namespace display
 			return handle && handle == window;
 		}
 
+		// The engine's window procedure, behind ours (see filtered_window_procedure).
+		WNDPROC engine_window_procedure = nullptr;
+
+		// Mouse messages reach a window under the cursor whether or not it has the focus, and the
+		// game hovers and clicks its menus on their coordinates (the window callback 0x5faa20 ->
+		// 0x5f9eb0, or the Advanced Options panel's hit-test 0x621ea0), with no focus check. While
+		// another window has the focus they are dropped, so the owner's mouse passing over a game
+		// running in the background (the test harness) neither hovers nor clicks anything.
+		LRESULT CALLBACK filtered_window_procedure(const HWND handle, const UINT message, const WPARAM wparam, const LPARAM lparam)
+		{
+			if (is_pointer_message(message) && !game_in_foreground())
+			{
+				static bool logged = false;
+				if (!logged)
+				{
+					logged = true;
+					logger::write("display: another window has the focus - mouse messages to the game's window are dropped until it has it again");
+				}
+				return 0;
+			}
+			return engine_window_procedure ? CallWindowProcA(engine_window_procedure, handle, message, wparam, lparam) : DefWindowProcA(handle, message, wparam, lparam);
+		}
+
+		// Puts filtered_window_procedure in front of the engine's (an ANSI window: igWin32Window
+		// registers its class with the A functions and never replaces the procedure itself).
+		void filter_mouse_messages(const HWND handle)
+		{
+			engine_window_procedure = reinterpret_cast<WNDPROC>(GetWindowLongPtrA(handle, GWLP_WNDPROC));
+			if (!engine_window_procedure)
+			{
+				logger::write("display: couldn't read the game's window procedure (error %lu) - no mouse filter; its menus may react to the mouse while unfocused", GetLastError());
+				return;
+			}
+			if (!SetWindowLongPtrA(handle, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&filtered_window_procedure)))
+			{
+				logger::write("display: couldn't put the mouse filter on the game's window (error %lu) - its menus may react to the mouse while unfocused", GetLastError());
+				return;
+			}
+			logger::write("display: the game's window ignores the mouse while another window has the focus");
+		}
+
 		HWND WINAPI hooked_create_window_ex_a(const DWORD ex_style, const LPCSTR class_name, const LPCSTR title, const DWORD style, const int x, const int y,
 		                                      const int width, const int height, const HWND parent, const HMENU menu, const HINSTANCE instance, const LPVOID param)
 		{
@@ -587,6 +628,7 @@ namespace display
 				window = result;
 				logger::write("display: %s window: style %08lX ex %08lX %s, client %ux%u", name(opts.window_mode), place.style, place.ex_style,
 				              describe(place.rect).c_str(), client_size.width, client_size.height);
+				filter_mouse_messages(result);
 			}
 			else
 			{
@@ -686,7 +728,8 @@ namespace display
 		// button selects it) and moves and clips it (SetCursorPos, ClipCursor). In a window that keeps
 		// running in the background, that would let the owner's mouse, used in another program, pick
 		// menu items, and let the game move or trap that mouse. While the game doesn't have the focus it
-		// sees the cursor parked outside its window and can't move or clip it.
+		// sees the cursor parked outside its window and can't move or clip it. (The menus also hover
+		// on mouse messages; filtered_window_procedure drops those meanwhile.)
 
 		void note_cursor_parked()
 		{

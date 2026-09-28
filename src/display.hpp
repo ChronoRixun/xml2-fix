@@ -75,6 +75,6 @@ namespace display
 	// Borderless/windowed: shows the game's window without taking the focus, so an automated run
 	// starts behind whatever the owner is using. Set before install(); `why` goes in the log.
 	// (Independently of this, in borderless/windowed modes the game never sees, moves or clips the
-	// cursor while another window has the focus.)
+	// cursor, nor gets mouse messages, while another window has the focus.)
 	void show_without_focus(const char* why);
 }
