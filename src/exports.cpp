@@ -9,8 +9,9 @@
 //
 // Loading also redirects the game's GameSpy lookups to OpenSpy, for online play, and, when
 // xml2-fix.ini asks for it, runs the game windowed or borderless at the desktop's resolution,
-// raises engine caps (the actor and resource name tables, limits.hpp) and opens a named pipe
-// through which tests press keys and take screenshots without the focus.
+// raises engine caps (the actor and resource name tables, limits.hpp), gives a mod's campaign what
+// it needs (its New Game, saves, main menu, ending, forced parties, X-Men Legends 1's XP curve) and
+// opens a named pipe through which tests press keys and take screenshots without the focus.
 
 #include "display.hpp"
 #include "forced_teams.hpp"
@@ -27,6 +28,7 @@
 #include "pad_bindings.hpp"
 #include "postgame.hpp"
 #include "test_input.hpp"
+#include "xp_curve.hpp"
 
 #define DIRECTINPUT_VERSION 0x0800
 #include <Windows.h>
@@ -151,6 +153,12 @@ namespace
 		// The main menu's item names: the push operands of MAIN_MENU's own code (mouse, Quit), used from the
 		// first main menu on.
 		main_menu::install(game);
+		// X-Men Legends 1's level table, cap and kill XP. Here, in DllMain, before the exe's entry point: the game
+		// first asks for a level's XP (0x448a90, which builds XML2's table on that call) when it loads the herostat at
+		// start-up (0x4ba1d9, every hero's starting level), and its first kill, level check or XP bar come later still,
+		// so every read of the table and the cap is the patched one. Independent of the other patches here: none of
+		// its sites or guards is anyone else's.
+		xp_curve::install(game);
 		// The forced parties' script functions (seatParty and the rest). The game registers its script
 		// functions exactly once, from its own init: 0x40197b -> game vt+0x13c (0x46b750) -> the
 		// script interface's vt+0 (0x49fe30), which pushes its table and count and calls 0x4d75a0. That

@@ -20,7 +20,10 @@
 // is checked on its name rules, every byte it relies on and its one operand write against that
 // copy, and the game's own console word reader on the line. [Game] MainMenuItems (main_menu_rules.hpp) is checked on
 // its list rules, every byte it relies on, the completeness of its push table in MAIN_MENU's code and exactly the
-// operands it writes against that copy. The test input pipe is checked on its rules, on a
+// operands it writes against that copy. [Game] XPCurve (xp_curve_rules.hpp) is checked on its value rules, XML1's
+// tables against default.xbe's formulas worked out again, the level and kill lookups at their edges and the kill
+// split, then every byte it relies on, exactly the bytes it writes and the patched lookup, cap and kill XP jump run
+// on that copy. The test input pipe is checked on its rules, on a
 // Direct3D 8 device of the test's own (the back buffer copy behind "screenshot"), and end to
 // end in a child process started with an xml2-fix.ini that turns the pipe on: it creates the
 // keyboard device the way XMen2.exe does and sees the pipe's keys in it.
@@ -47,16 +50,19 @@
 #include "postgame_rules.hpp"
 #include "resolution_rules.hpp"
 #include "test_input_rules.hpp"
+#include "xp_curve_rules.hpp"
 
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -2731,6 +2737,10 @@ namespace
 		CHECK(start_log.find("main menu: XMen2.exe isn't loaded at 0x400000 (not the game?) - the main menu keeps XML2's item names") != std::string::npos ||
 		      start_log.find("main menu: 0x005B855D isn't the retail code") != std::string::npos);
 		CHECK(start_log.find("name pushes re-pointed") == std::string::npos);
+		// [Game] XPCurve=xml1 likewise.
+		CHECK(start_log.find("xp curve: XMen2.exe isn't loaded at 0x400000 (not the game?) - XML2's own levels and kill XP stay") != std::string::npos ||
+		      start_log.find("xp curve: 0x00448A90 isn't the retail code") != std::string::npos);
+		CHECK(start_log.find("xp curve: X-Men Legends 1's") == std::string::npos);
 
 		HANDLE pipe = INVALID_HANDLE_VALUE;
 		for (int attempt = 0; attempt < 50 && pipe == INVALID_HANDLE_VALUE; ++attempt)
@@ -2870,7 +2880,8 @@ namespace
 		}
 		{
 			std::ofstream out(ini, std::ios::binary);
-			out << "[Test]\r\nInputPipe=1\r\n[Display]\r\nResolutionList=all\r\n[Limits]\r\nActorSlots=127\r\n[Game]\r\nForcedTeams=1\r\nAddHero=1\r\nPostgameScript=x1/menus/postgame ; XML1's r505\r\nMainMenuItems=button1,button2,button3,button4,button5,button6,button7 ; XML1's buttons\r\n";
+			out << "[Test]\r\nInputPipe=1\r\n[Display]\r\nResolutionList=all\r\n[Limits]\r\nActorSlots=127\r\n[Game]\r\nForcedTeams=1\r\nAddHero=1\r\nPostgameScript=x1/menus/postgame ; XML1's r505\r\nMainMenuItems=button1,button2,button3,button4,button5,button6,button7 ; XML1's buttons\r\n"
+			       "XPCurve=xml1 ; XML1's levels and kill XP\r\n";
 		}
 
 		wchar_t exe[MAX_PATH]{};
@@ -3219,6 +3230,272 @@ namespace
 		std::memcpy(image, before.data(), image_size);
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
+
+	// The DLL's kill XP function, as xp_curve.cpp has it: what the patched vt+0xcc jumps to.
+	int __fastcall test_kill_xp(void* /*registry*/, void* /*edx*/, const int level)
+	{
+		return xp_curve_rules::kill_xp(level);
+	}
+
+	// The game's code on the patched copy. No C++ objects here: an exception is a failure.
+	using xp_lookup_t = std::uint32_t(__stdcall*)(int level);
+	using level_cap_t = int(__stdcall*)();
+	using kill_xp_t = int(__fastcall*)(void* registry, void* edx, int level);
+
+	bool run_xp_lookup(const std::uint8_t* function, const int level, std::uint32_t& xp)
+	{
+		__try
+		{
+			xp = reinterpret_cast<xp_lookup_t>(const_cast<std::uint8_t*>(function))(level);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	bool run_level_cap(const std::uint8_t* function, int& cap)
+	{
+		__try
+		{
+			cap = reinterpret_cast<level_cap_t>(const_cast<std::uint8_t*>(function))();
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	bool run_kill_xp(const std::uint8_t* function, const int level, int& xp)
+	{
+		__try
+		{
+			xp = reinterpret_cast<kill_xp_t>(const_cast<std::uint8_t*>(function))(nullptr, nullptr, level);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	// [Game] XPCurve (xp_curve_rules.hpp): the value's rules; XML1's tables against default.xbe's formulas worked out
+	// again here, the lookups at the table's edges, the kill split; the sites and guards on their own; then, when a
+	// copy of XMen2.exe is at hand, every guard against it, the change applied to that copy (exactly the sites'
+	// bytes) and the patched code run there: the table lookup, the cap and the kill XP jump.
+	void check_xp_curve_rules()
+	{
+		using namespace xp_curve_rules;
+		std::printf("[Game] XPCurve (X-Men Legends 1's levels and kill XP)\n");
+
+		const auto xml1 = parse_curve("xml1");
+		CHECK(xml1.set && xml1.value == curve::xml1 && xml1.error.empty());
+		CHECK(parse_curve("  XML1 \t; X-Men Legends 1's levels").set && parse_curve("  XML1 \t; X-Men Legends 1's levels").value == curve::xml1);
+		CHECK(parse_curve("xml2").set && parse_curve("Xml2").value == curve::xml2);
+		const auto unset = parse_curve("   ; nothing");
+		CHECK(!unset.set && unset.error.empty() && !parse_curve("").set && parse_curve("").error.empty());
+		for (const char* bad : {"xml3", "1", "on", "xml", "xml1 xml2", "xml1,xml2", "x-men legends", "caf\xe9"})
+		{
+			const auto refused = parse_curve(bad);
+			if (refused.error.empty()) std::printf("  info  \"%s\" was taken\n", bad);
+			CHECK(!refused.set && !refused.error.empty());
+		}
+
+		// f(L) = trunc(2.5 x (4/3)^(L-1)) (default.xbe 0x54800), in double precision here: none of them is within a
+		// thousandth of a whole number, so XML1's own double pow gave the same (the closest, f(40) = 186444.998, is
+		// the one a 24-bit multiply would round up).
+		bool kills_ok = true;
+		double closest = 1.0;
+		double power = 0.75; // (4/3)^(0 - 1)
+		for (int level = 0; level <= xml1_max_level; ++level, power *= 4.0 / 3.0)
+		{
+			const double value = 2.5 * power;
+			const double fraction = value - std::floor(value);
+			closest = std::min({closest, fraction, 1.0 - fraction});
+			kills_ok &= xml1_kill_xp_table[static_cast<std::size_t>(level)] == static_cast<std::int32_t>(std::floor(value));
+		}
+		std::printf("  info  closest f(L) to a whole number: %.4f away\n", closest);
+		CHECK(kills_ok && closest > 1e-3);
+		// T1 (default.xbe 0x541e0): -1, 0, then T1(n-1) + 5 (n + 8) f(n-1) up to 45, then 0x7fffffff.
+		bool table_ok = xml1_level_xp[0] == 0xffffffff && xml1_level_xp[1] == 0 && xml1_level_xp[46] == 0x7fffffff;
+		for (int n = 2; n <= xml1_max_level; ++n)
+		{
+			table_ok &= xml1_level_xp[static_cast<std::size_t>(n)] ==
+			            xml1_level_xp[static_cast<std::size_t>(n - 1)] + 5u * static_cast<std::uint32_t>(n + 8) * static_cast<std::uint32_t>(xml1_kill_xp_table[static_cast<std::size_t>(n - 1)]);
+		}
+		CHECK(table_ok);
+		// research/heroes/levels.md section 4's rows.
+		CHECK(xp_for_level(5) == 830 && xp_for_level(10) == 6880 && xp_for_level(20) == 220650 && xp_for_level(26) == 1543300 && xp_for_level(30) == 5510355 &&
+		      xp_for_level(35) == 26544400 && xp_for_level(40) == 125847705);
+		CHECK(kill_xp(5) == 7 && kill_xp(10) == 33 && kill_xp(20) == 591 && kill_xp(26) == 3322 && kill_xp(30) == 10499 && kill_xp(35) == 44244 && kill_xp(40) == 186444);
+
+		// The lookups at the table's edges: the patched 0x448a90 reads 1..46; the cap; the XP a hero can have.
+		CHECK(xp_for_level(1) == 0 && xp_for_level(2) == 100 && xp_for_level(45) == 589254820);
+		CHECK(xp_for_level(0) == 0x7fffffff && xp_for_level(-1) == 0x7fffffff && xp_for_level(46) == 0x7fffffff && xp_for_level(47) == 0x7fffffff &&
+		      xp_for_level(99) == 0x7fffffff && xp_for_level(100) == 0x7fffffff && xp_for_level(101) == 0x7fffffff);
+		CHECK(max_xp() == 589254821);
+		CHECK(level_for_xp(0) == 1 && level_for_xp(99) == 1 && level_for_xp(100) == 2);
+		CHECK(level_for_xp(1543299) == 25 && level_for_xp(1543300) == 26 && level_for_xp(2124649) == 26 && level_for_xp(2124650) == 27);
+		CHECK(level_for_xp(589254819) == 44 && level_for_xp(589254820) == 45 && level_for_xp(max_xp()) == 45 && level_for_xp(0xffffffff) == 45);
+		// The port's cases: awardXPToPlayable(2000000) -> 26 (XML2's table: 40); act 9's 500000 alone -> 22;
+		// asteroid_m's setXP(..., 1125000) -> 25 (a top-up; XML2's table: level 32).
+		CHECK(level_for_xp(2000000) == 26 && xml2_level_for_xp(2000000) == 40 && xml2_xp_for_level(40) == 1988935 && xml2_xp_for_level(41) == 2124300);
+		CHECK(level_for_xp(500000) == 22 && level_for_xp(1125000) == 25 && xml2_level_for_xp(1125000) == 32);
+		CHECK(xml2_xp_for_level(1) == 0 && xml2_xp_for_level(5) == 17910 && xml2_xp_for_level(15) == 172935 && xml2_xp_for_level(100) == 0x7fffffff);
+
+		// Kill XP: f(L), the enemy level capped at 45, XML1's formula below 0.
+		CHECK(kill_xp(0) == 1 && kill_xp(1) == 2 && kill_xp(45) == 785677);
+		CHECK(kill_xp(-1) == 1 && kill_xp(-2) == 1 && kill_xp(-3) == 0 && kill_xp(-100) == 0 && kill_xp(std::numeric_limits<int>::min()) == 0);
+		CHECK(kill_xp(46) == 785677 && kill_xp(99) == 785677 && kill_xp(255) == 785677 && kill_xp(std::numeric_limits<int>::max()) == 785677);
+		// The split: every hero (the bench included) half, each party hero 3 (half + 1) more; XML2's bench 1 at most.
+		const auto level20 = xml1_shares(591);
+		CHECK(level20.every_hero == 295 && level20.party == 888 && xml2_bench_share(591) == 1);
+		CHECK(xml1_shares(1).every_hero == 0 && xml1_shares(1).party == 3 && xml1_shares(2).every_hero == 1 && xml1_shares(2).party == 6);
+		CHECK(xml2_bench_share(1) == 0 && xml2_bench_share(2) == 0 && xml2_bench_share(3) == 1 && xml2_bench_share(1000000) == 1);
+		const auto biggest = xml1_shares(3u * 785677u); // a level-45 kill with XML2's x3 flag: no overflow into the loop's signed int
+		CHECK(biggest.every_hero == 1178515 && biggest.party == 3535548 && biggest.party < 0x7fffffffu);
+		// An AI teammate: all of the base beside the kill, a third just inside 300 units, nothing beyond; XML1's
+		// (1 - x)(2 (half + 1)) + (half + 1) within a unit of the game's float.
+		CHECK(std::fabs(teammate_factor(0.0f) - 1.0f) < 1e-6f && std::fabs(teammate_factor(89999.9f) - 1.0f / 3.0f) < 1e-5f && teammate_factor(90000.0f) == 0.0f &&
+		      teammate_factor(1e6f) == 0.0f);
+		bool teammates_ok = true;
+		for (const float d2 : {0.0f, 900.0f, 22500.0f, 45000.0f, 80000.0f})
+		{
+			const std::uint32_t half = level20.every_hero;
+			const auto patched = static_cast<long long>(static_cast<float>(level20.party) * teammate_factor(d2));
+			const auto xml1_share = static_cast<long long>((1.0f - d2 / 90000.0f) * static_cast<float>(2 * (half + 1)) + static_cast<float>(half + 1));
+			teammates_ok &= patched - xml1_share <= 1 && xml1_share - patched <= 1;
+		}
+		CHECK(teammates_ok);
+
+		// The sites and guards on their own: well-formed, apart; every site inside one guard with its retail bytes;
+		// an address site 4 bytes (the jump 5), a fixed one as long as what it replaces.
+		bool guards_ok = true;
+		std::set<DWORD> addresses_seen;
+		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses_seen.insert(g.va).second && g.what && *g.what;
+		bool apart = true;
+		for (std::size_t i = 0; i < guards.size(); ++i)
+		{
+			const DWORD end = guards[i].va + static_cast<DWORD>(limits_rules::hex_size(guards[i].hex));
+			for (std::size_t j = 0; j < guards.size(); ++j)
+			{
+				if (i != j && guards[j].va >= guards[i].va && guards[j].va < end) apart = false;
+			}
+		}
+		CHECK(guards_ok && apart);
+		bool sites_ok = true;
+		for (std::size_t i = 0; i < sites.size(); ++i)
+		{
+			const auto& s = sites[i];
+			const std::size_t size = limits_rules::hex_size(s.retail);
+			sites_ok &= limits_rules::valid_hex(s.retail) && s.what && *s.what;
+			if (s.kind == value_kind::fixed) sites_ok &= limits_rules::valid_hex(s.patched) && limits_rules::hex_size(s.patched) == size && s.patched != s.retail;
+			else sites_ok &= s.patched.empty() && size == (s.kind == value_kind::kill_xp_jump ? 5u : 4u);
+			int covering = 0;
+			for (const auto& g : guards)
+			{
+				const DWORD end = g.va + static_cast<DWORD>(limits_rules::hex_size(g.hex));
+				if (g.va <= s.va && s.va + size <= end)
+				{
+					++covering;
+					for (std::size_t b = 0; b < size; ++b) sites_ok &= limits_rules::hex_byte(g.hex, s.va - g.va + b) == limits_rules::hex_byte(s.retail, b);
+				}
+			}
+			if (covering != 1) std::printf("  info  site 0x%08lX is inside %d guards\n", s.va, covering);
+			sites_ok &= covering == 1;
+			for (std::size_t j = i + 1; j < sites.size(); ++j)
+			{
+				const auto& t = sites[j];
+				sites_ok &= t.va >= s.va + size || s.va >= t.va + limits_rules::hex_size(t.retail);
+			}
+		}
+		CHECK(sites_ok);
+		const addresses fake{0x10001000, 0x10002000, 0x10003000, 0x10003004, 0x10003008};
+		const auto fake_writes = writes_for(fake);
+		bool sizes_ok = fake_writes.size() == sites.size();
+		for (std::size_t i = 0; i < fake_writes.size() && sizes_ok; ++i) sizes_ok &= fake_writes[i].va == sites[i].va && fake_writes[i].bytes.size() == limits_rules::hex_size(sites[i].retail);
+		CHECK(sizes_ok);
+		CHECK((bytes_for(sites[12], fake) == std::vector<std::uint8_t>{0xe9, 0x0b, 0x76, 0xbb, 0x0f})); // jmp 0x10002000 from 0x44a9f0
+		CHECK((bytes_for(sites[1], fake) == std::vector<std::uint8_t>{0x00, 0x10, 0x00, 0x10}));
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the XP curve's bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](const DWORD va) { return image + (va - image_base); };
+
+		// Every guard: the retail bytes; the cap runs as the retail 99 first.
+		const guard* mismatch = first_mismatch(image);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
+		CHECK(mismatch == nullptr);
+		int cap = 0;
+		CHECK(run_level_cap(at(0x44b690), cap) && cap == xml2_max_level);
+
+		// The change on a copy: exactly the bytes of the sites that differ, each site its new bytes; the DLL's
+		// addresses here are the test's own, the jump's aimed so that it lands on test_kill_xp in this copy.
+		std::vector<std::uint8_t> before(image, image + image_size);
+		addresses mine;
+		mine.level_table = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(xml1_level_xp.data()));
+		mine.kill_xp_function = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&test_kill_xp)) - (static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(image)) - image_base);
+		mine.far_teammate = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&xp_curve_rules::far_teammate));
+		mine.teammate_floor = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&xp_curve_rules::teammate_floor));
+		mine.teammate_falloff = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&xp_curve_rules::teammate_falloff));
+		const auto writes = writes_for(mine);
+		apply(image, writes);
+		std::set<DWORD> changed;
+		for (DWORD i = 0; i < image_size; ++i)
+		{
+			if (image[i] != before[i]) changed.insert(image_base + i);
+		}
+		std::set<DWORD> expected;
+		bool written_ok = true;
+		for (const auto& w : writes)
+		{
+			for (std::size_t b = 0; b < w.bytes.size(); ++b)
+			{
+				if (w.bytes[b] != before[w.va - image_base + b]) expected.insert(w.va + static_cast<DWORD>(b));
+				written_ok &= at(w.va)[b] == w.bytes[b];
+			}
+		}
+		std::printf("  info  %zu bytes changed at %zu sites\n", changed.size(), writes.size());
+		CHECK(changed == expected && written_ok);
+		// The 23 bytes of the shares, exactly: fstp st(0); mov edi, ebx; shr edi, 1; lea eax, [edi+edi*2+3];
+		// mov [esp+0x1c], eax; a 7- and a 2-byte nop - and the push 1 and the fild after them.
+		CHECK(std::memcmp(at(0x437199), "\xdd\xd8\x8b\xfb\xd1\xef\x8d\x44\x7f\x03\x89\x44\x24\x1c\x0f\x1f\x80\x00\x00\x00\x00\x66\x90", 23) == 0);
+		CHECK(std::memcmp(at(0x4371b7), "\x6a\x01\x57", 3) == 0 && std::memcmp(at(0x4373d1), "\xdb\x44\x24\x1c", 4) == 0);
+		CHECK(operand_at(at(0x448afd), 3) == 0x85048b && operand_at(at(0x448b00), 4) == mine.level_table && at(0x448afa)[0] == 0x2f); // mov eax, [eax*4 + table]; cmp eax, 47
+
+		// The patched code, run: the lookup's tail (0x448af0: [esp+4] in 1..46 -> the table, else 0x7fffffff) for
+		// every level around the table; the cap; the kill XP through the jump.
+		bool lookups_ok = true;
+		for (int level = -2; level <= 102; ++level)
+		{
+			std::uint32_t xp = 0;
+			lookups_ok &= run_xp_lookup(at(0x448af0), level, xp) && xp == xp_for_level(level);
+		}
+		CHECK(lookups_ok);
+		CHECK(run_level_cap(at(0x44b690), cap) && cap == xml1_max_level);
+		bool kills_run_ok = true;
+		for (const int level : {-5, -2, 0, 1, 20, 40, 45, 46, 99, 255})
+		{
+			int xp = -1;
+			kills_run_ok &= run_kill_xp(at(0x44a9f0), level, xp) && xp == kill_xp(level);
+		}
+		CHECK(kills_run_ok);
+		// Patched (or any other build): the guards no longer match, so nothing would be written twice.
+		mismatch = first_mismatch(image);
+		CHECK(mismatch && mismatch->va == 0x448a90);
+		std::memcpy(image, before.data(), image_size);
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
 }
 
 int main(const int argc, char** argv)
@@ -3272,6 +3549,7 @@ int main(const int argc, char** argv)
 	check_save_folder();
 	check_postgame_rules();
 	check_main_menu_rules();
+	check_xp_curve_rules();
 	check_d3d8_modes();
 
 	const auto log = read_file(module_dir() / "xml2-fix.log");
@@ -3288,6 +3566,7 @@ int main(const int argc, char** argv)
 	CHECK(log.find("forced teams: off (no [Game] ForcedTeams in xml2-fix.ini)") != std::string::npos && log.find("script functions added") == std::string::npos);
 	CHECK(log.find("postgame:") == std::string::npos); // no [Game] PostgameScript: not a word, nothing patched
 	CHECK(log.find("main menu:") == std::string::npos); // no [Game] MainMenuItems: not a word, nothing patched
+	CHECK(log.find("xp curve:") == std::string::npos);  // no [Game] XPCurve: not a word, nothing patched
 	CHECK(log.find("xmenlegpc.master.gamespy.com -> xmenlegpc.master.openspy.net (resolved)") != std::string::npos);
 	if (pads > 0)
 	{
