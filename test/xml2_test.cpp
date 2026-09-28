@@ -18,7 +18,9 @@
 // registry accessors when a copy of XMen2.exe is at hand), and every byte they rely on, the table
 // they register and its two operands against that copy. [Game] PostgameScript (postgame_rules.hpp)
 // is checked on its name rules, every byte it relies on and its one operand write against that
-// copy, and the game's own console word reader on the line. The test input pipe is checked on its rules, on a
+// copy, and the game's own console word reader on the line. [Game] MainMenuItems (main_menu_rules.hpp) is checked on
+// its list rules, every byte it relies on, the completeness of its push table in MAIN_MENU's code and exactly the
+// operands it writes against that copy. The test input pipe is checked on its rules, on a
 // Direct3D 8 device of the test's own (the back buffer copy behind "screenshot"), and end to
 // end in a child process started with an xml2-fix.ini that turns the pipe on: it creates the
 // keyboard device the way XMen2.exe does and sees the pipe's keys in it.
@@ -39,6 +41,7 @@
 #include "frame_rate_rules.hpp"
 #include "image_file.hpp"
 #include "limits_rules.hpp"
+#include "main_menu_rules.hpp"
 #include "new_game.hpp"
 #include "options_menu_rules.hpp"
 #include "postgame_rules.hpp"
@@ -2724,6 +2727,10 @@ namespace
 		CHECK(start_log.find("postgame: XMen2.exe isn't loaded at 0x400000 (not the game?) - the end credits load XML2's act5/egypt/egypt6 as before") != std::string::npos ||
 		      start_log.find("isn't the retail code (CREDITS_MENU") != std::string::npos);
 		CHECK(start_log.find("now points at") == std::string::npos);
+		// [Game] MainMenuItems likewise: parsed, then refused as this isn't the game.
+		CHECK(start_log.find("main menu: XMen2.exe isn't loaded at 0x400000 (not the game?) - the main menu keeps XML2's item names") != std::string::npos ||
+		      start_log.find("main menu: 0x005B855D isn't the retail code") != std::string::npos);
+		CHECK(start_log.find("name pushes re-pointed") == std::string::npos);
 
 		HANDLE pipe = INVALID_HANDLE_VALUE;
 		for (int attempt = 0; attempt < 50 && pipe == INVALID_HANDLE_VALUE; ++attempt)
@@ -2855,7 +2862,7 @@ namespace
 		}
 		{
 			std::ofstream out(ini, std::ios::binary);
-			out << "[Test]\r\nInputPipe=1\r\n[Display]\r\nResolutionList=all\r\n[Limits]\r\nActorSlots=127\r\n[Game]\r\nForcedTeams=1\r\nAddHero=1\r\nPostgameScript=x1/menus/postgame ; XML1's r505\r\n";
+			out << "[Test]\r\nInputPipe=1\r\n[Display]\r\nResolutionList=all\r\n[Limits]\r\nActorSlots=127\r\n[Game]\r\nForcedTeams=1\r\nAddHero=1\r\nPostgameScript=x1/menus/postgame ; XML1's r505\r\nMainMenuItems=button1,button2,button3,button4,button5,button6,button7 ; XML1's buttons\r\n";
 		}
 
 		wchar_t exe[MAX_PATH]{};
@@ -3042,6 +3049,168 @@ namespace
 		CHECK(console.slack_untouched());
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
+
+	// [Game] MainMenuItems (main_menu_rules.hpp): the list's rules, the tables and guards on their own, then,
+	// when a copy of XMen2.exe is at hand, every guard against it, the push table complete for MAIN_MENU's code
+	// (every reference to the nine names in 0x5c9260..0x5c99ee is a site, and nothing else there), and the
+	// change applied to that copy: exactly the operands of the slots that change, nothing else - not the cells
+	// the Danger Room and Play Online compare with, not the item parser's or the other menu's pushes.
+	void check_main_menu_rules()
+	{
+		using namespace main_menu_rules;
+		std::printf("[Game] MainMenuItems (the main menu's item names)\n");
+
+		const std::string xml1 = "button1,button2,button3,button4,button5,button6,button7";
+		const auto port = parse_items(xml1);
+		CHECK(port.set && port.error.empty());
+		bool names_ok = true;
+		for (std::size_t i = 0; i < slot_count; ++i)
+		{
+			names_ok &= i < 7 ? port.names[i] == "button" + std::to_string(i + 1) && changes(port, i) : port.names[i].empty() && !changes(port, i);
+		}
+		CHECK(names_ok && effective(port, quit_slot) == "button7" && effective(port, 7) == "debug" && effective(port, 8) == "debug_focus");
+		const auto commented = parse_items("  button1 , button2,button3 ;  XML1's buttons, not a name");
+		CHECK(commented.set && commented.error.empty() && commented.names[1] == "button2" && commented.names[2] == "button3" && commented.names[3].empty());
+		const auto unset = parse_items("   ; nothing");
+		CHECK(!unset.set && unset.error.empty() && !parse_items("").set && parse_items("").error.empty());
+		const auto gaps = parse_items(",,button3,,,,quit_item");
+		CHECK(gaps.set && gaps.error.empty() && gaps.names[0].empty() && gaps.names[2] == "button3" && gaps.names[6] == "quit_item" && !changes(gaps, 0) && changes(gaps, 6));
+		const auto own = parse_items("label_option04,label_option05");
+		CHECK(own.set && own.error.empty() && !changes(own, 0) && !changes(own, 1));
+		CHECK(parse_items("a,b,c,d,e,f,g,h,i").error.empty() && parse_items(std::string(name_max, 'a')).error.empty());
+		for (const char* bad : {"a,b,c,d,e,f,g,h,i,j", "button 1", "button-1", "button1.igb", "\"button1\"", "caf\xe9", "del\x7f", "button1\tbutton2", "a/b",
+		                        "button1,button1", "Button1,button1", "a,b,c,d,e,f,debug", "debug_text", ",,,,,,,debug_text", "label_option05,label_option05"})
+		{
+			const auto refused = parse_items(bad);
+			if (refused.error.empty()) std::printf("  info  \"%s\" was taken\n", bad);
+			CHECK(!refused.set && !refused.error.empty());
+		}
+		CHECK(!parse_items(std::string(name_max + 1, 'a')).error.empty());
+		CHECK(parse_items("a,b,c,d,e,f,g,h,i,j").error.find("more than 9 names") != std::string::npos);
+		CHECK(parse_items("button1,Button1").error.find("two slots (label_option04 and label_option05)") != std::string::npos);
+		CHECK(parse_items("a,b,c,d,e,f,debug").error.find("\"debug\" to two slots (debug_text and debug)") != std::string::npos);
+
+		// The tables on their own: every site's slot exists, its push inside MAIN_MENU's code and the write span,
+		// inside a guard, with its slot's retail string as the guard's operand; the guards well-formed, apart.
+		bool sites_ok = true;
+		std::set<DWORD> pushes;
+		std::array<int, slot_count> per_slot{};
+		for (const auto& s : sites)
+		{
+			sites_ok &= s.slot < slot_count && s.push >= code_begin && s.push + 5 <= code_end && s.push + 1 >= span_begin && s.push + 5 <= span_end && pushes.insert(s.push).second;
+			++per_slot[s.slot];
+			bool covered = false;
+			for (const auto& g : guards)
+			{
+				const DWORD end = g.va + static_cast<DWORD>(limits_rules::hex_size(g.hex));
+				if (g.va <= s.push && s.push + 5 <= end)
+				{
+					const std::size_t offset = s.push - g.va;
+					covered = limits_rules::hex_byte(g.hex, offset) == push_imm32 && operand_in(g.hex, offset + 1, 4) == slots[s.slot].retail_va;
+				}
+			}
+			if (!covered) std::printf("  info  site 0x%08lX isn't covered by a guard with its retail push\n", s.push);
+			sites_ok &= covered;
+		}
+		CHECK(sites_ok && (per_slot == std::array<int, slot_count>{1, 1, 2, 2, 1, 2, 8, 1, 1}));
+		CHECK((span_end - 1) / 0x1000 == span_begin / 0x1000); // one page
+		bool guards_ok = true;
+		std::set<DWORD> addresses;
+		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
+		bool apart = true;
+		for (std::size_t i = 0; i < guards.size(); ++i)
+		{
+			const DWORD end = guards[i].va + static_cast<DWORD>(limits_rules::hex_size(guards[i].hex));
+			for (std::size_t j = 0; j < guards.size(); ++j)
+			{
+				if (i != j && guards[j].va >= guards[i].va && guards[j].va < end) apart = false;
+			}
+		}
+		CHECK(guards_ok && apart);
+		// The port's list: 17 writes, one per site of slots 0..6; the slots 7 and 8 left as they are.
+		std::array<std::uint32_t, slot_count> pointers{};
+		for (std::size_t i = 0; i < slot_count; ++i) pointers[i] = 0x10203000 + static_cast<std::uint32_t>(i) * 0x40;
+		const auto writes = writes_for(port, pointers);
+		bool writes_ok = writes.size() == 17;
+		for (const auto& w : writes)
+		{
+			const auto site = std::find_if(sites.begin(), sites.end(), [&](const auto& s) { return s.push + 1 == w.va; });
+			writes_ok &= site != sites.end() && w.size == 4 && site->slot < 7 && w.value == pointers[site->slot];
+		}
+		CHECK(writes_ok && writes_for(own, pointers).empty() && writes_for(parse_items("a,b,c,d,e,f,g,h,i"), pointers).size() == sites.size());
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the main menu's bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](const DWORD va) { return image + (va - image_base); };
+		const auto text_at = [&](const DWORD va) { return std::string_view(reinterpret_cast<const char*>(at(va))); };
+
+		// Every guard: the retail bytes; every push its slot's string; the strings the names.
+		const guard* mismatch = first_mismatch(image);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
+		CHECK(mismatch == nullptr && sites_are_retail(image));
+		bool strings_ok = true;
+		for (const auto& s : slots) strings_ok &= text_at(s.retail_va) == s.retail;
+		CHECK(strings_ok && text_at(0x68d184) == danger_room_line);
+		CHECK(operand_at(at(0x6e6628), 4) == slots[2].retail_va && operand_at(at(0x6e662c), 4) == slots[5].retail_va);
+
+		// Complete: in MAIN_MENU's code every dword naming one of the nine strings is a site's operand, and every
+		// site is found. Outside it, the pushes of the same strings the change must leave: the item parser's and
+		// another menu class's.
+		std::set<DWORD> found;
+		for (DWORD va = code_begin; va + 4 <= code_end; ++va)
+		{
+			const auto value = operand_at(at(va), 4);
+			for (const auto& s : slots)
+			{
+				if (value == s.retail_va) found.insert(va - 1);
+			}
+		}
+		CHECK(found == pushes);
+		const std::array<std::pair<DWORD, std::size_t>, 10> elsewhere{{
+			{0x5bc9c8, 7}, {0x5bca21, 6}, {0x5bca57, 8}, {0x5bca69, 7},
+			{0x5cc426, 0}, {0x5cc436, 1}, {0x5cc446, 2}, {0x5cc456, 3}, {0x5cc466, 4}, {0x5cc476, 5},
+		}};
+		bool elsewhere_ok = true;
+		for (const auto& [push, slot] : elsewhere) elsewhere_ok &= at(push)[0] == push_imm32 && operand_at(at(push + 1), 4) == slots[slot].retail_va;
+		CHECK(elsewhere_ok);
+
+		// The change on a copy: exactly the operands of the 17 sites, each its slot's pointer.
+		std::vector<std::uint8_t> before(image, image + image_size);
+		apply(image, writes);
+		std::set<DWORD> changed;
+		for (DWORD i = 0; i < image_size; ++i)
+		{
+			if (image[i] != before[i]) changed.insert(image_base + i);
+		}
+		std::set<DWORD> expected;
+		for (const auto& w : writes)
+		{
+			for (DWORD b = 0; b < 4; ++b) expected.insert(w.va + b);
+		}
+		CHECK(changed == expected);
+		bool applied = true;
+		for (const auto& s : sites)
+		{
+			applied &= at(s.push)[0] == push_imm32 && operand_at(at(s.push + 1), 4) == (s.slot < 7 ? pointers[s.slot] : slots[s.slot].retail_va);
+		}
+		CHECK(applied);
+		elsewhere_ok = true;
+		for (const auto& [push, slot] : elsewhere) elsewhere_ok &= operand_at(at(push + 1), 4) == slots[slot].retail_va;
+		CHECK(elsewhere_ok && operand_at(at(0x6e6628), 4) == slots[2].retail_va && operand_at(at(0x6e662c), 4) == slots[5].retail_va);
+		// Patched (or any other build): the guards no longer match, so nothing would be written twice.
+		mismatch = first_mismatch(image);
+		CHECK(mismatch && mismatch->va == 0x5c92a5 && !sites_are_retail(image));
+		std::memcpy(image, before.data(), image_size);
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
 }
 
 int main(const int argc, char** argv)
@@ -3094,6 +3263,7 @@ int main(const int argc, char** argv)
 	check_image_file();
 	check_save_folder();
 	check_postgame_rules();
+	check_main_menu_rules();
 	check_d3d8_modes();
 
 	const auto log = read_file(module_dir() / "xml2-fix.log");
@@ -3109,6 +3279,7 @@ int main(const int argc, char** argv)
 	// No [Game] ForcedTeams: no script functions.
 	CHECK(log.find("forced teams: off (no [Game] ForcedTeams in xml2-fix.ini)") != std::string::npos && log.find("script functions added") == std::string::npos);
 	CHECK(log.find("postgame:") == std::string::npos); // no [Game] PostgameScript: not a word, nothing patched
+	CHECK(log.find("main menu:") == std::string::npos); // no [Game] MainMenuItems: not a word, nothing patched
 	CHECK(log.find("xmenlegpc.master.gamespy.com -> xmenlegpc.master.openspy.net (resolved)") != std::string::npos);
 	if (pads > 0)
 	{
