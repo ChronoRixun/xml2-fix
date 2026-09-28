@@ -16,6 +16,7 @@
 #include "iat_hook.hpp"
 #include "log.hpp"
 #include "mod_loader.hpp"
+#include "new_game.hpp"
 #include "net_trace.hpp"
 #include "openspy_redirect.hpp"
 #include "pad_profile.hpp"
@@ -138,6 +139,8 @@ namespace
 		{
 			net_trace::install(game);
 		}
+
+		new_game::install(game);
 
 		test_input::install(); // first: its screenshots need the display fix's device hook
 		display::install(game);

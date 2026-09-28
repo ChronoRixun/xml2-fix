@@ -28,6 +28,7 @@ add_library(xml2_fix SHARED
 	src/display.cpp
 	src/frame_rate.cpp
 	src/options_menu.cpp
+	src/new_game.cpp
 	src/resolution_list.cpp
 	src/frame_capture.cpp
 	src/test_input.cpp
