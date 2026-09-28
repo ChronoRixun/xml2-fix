@@ -14,13 +14,17 @@
 // every state the game reads has the pipe's keys OR-ed in. The real keyboard still only counts
 // while the game has the focus, so typing in another window stays there.
 //
+// That keyboard drives every screen, the Advanced Options panel (options_menu.hpp) included: its
+// widgets handle WM_KEYUP, but the panel's per-frame input function (0x619070) makes those from
+// DirectInput key releases (Esc, Enter, the arrows) and pad buttons; key messages posted to the
+// window never reach them (its message filter, 0x6223d0, drops WM_KEYUP and the widgets ignore
+// WM_KEYDOWN). So "tap DOWN" / "tap ENTER" / "tap LEFT" drive the panel too.
+//
 // The pipe is \\.\pipe\xml2-fix-input, one command per line, one reply line per command
-// ("ok ..." or "error ..."): down/up/tap/hold KEYS [ms], wm KEYS [ms], release, screenshot PATH,
-// status, ping (test_input_rules.hpp has the grammar). Its thread never touches the game's; keys
-// it holds expire after 10 s so a dead client can't wedge one. "screenshot" copies the Direct3D 8
-// back buffer just before Present (frame_capture.hpp), so it works with the window covered. "wm"
-// posts WM_KEYDOWN/WM_KEYUP to the game window instead of touching DirectInput: the Advanced
-// Options panel (options_menu.hpp) is the one part of the game that reads Windows key messages.
+// ("ok ..." or "error ..."): down/up/tap/hold KEYS [ms], release, screenshot PATH, status, ping
+// (test_input_rules.hpp has the grammar). Its thread never touches the game's; keys it holds
+// expire after 10 s so a dead client can't wedge one. "screenshot" copies the Direct3D 8 back
+// buffer just before Present (frame_capture.hpp), so it works with the window covered.
 // tools/fixinput.py in the xml1-port repo is the client.
 
 namespace test_input

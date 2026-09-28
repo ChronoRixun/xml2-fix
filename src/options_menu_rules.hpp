@@ -289,7 +289,9 @@ namespace options_menu_rules
 	// ---- The panel's navigation records --------------------------------------------------------------
 	// BXIGWindow keeps an array of pointers to these (window+0x18, count window+0x28); on WM_KEYUP it
 	// moves the keyboard selection along them (FUN_00621ea0). A neighbour equal to self, or a set
-	// keep flag, forwards the key to the item instead of moving (left/right cycle the value).
+	// keep flag, forwards the key to the item instead of moving (left/right cycle the value). Those
+	// WM_KEYUPs are made every frame by the panel's input function (0x619070) from DirectInput key
+	// releases and pad buttons, not taken from the window's messages.
 
 	struct nav_record
 	{

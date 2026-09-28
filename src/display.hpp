@@ -60,9 +60,6 @@ namespace display
 	bool set_vsync(bool on);
 	void set_run_in_background(bool on);
 
-	// The engine's window in this process, or nullptr before it exists (the test pipe's "wm").
-	HWND game_window();
-
 	// For the test pipe's screenshots: `hook` runs on the game's render thread with its
 	// IDirect3DDevice8 just before every Present. Set before install().
 	void set_frame_hook(void (*hook)(void* device));

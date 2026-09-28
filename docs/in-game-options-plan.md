@@ -3,8 +3,7 @@
 Status: research complete (read-only spike, 2026-09-27/28); **phase 1 implemented** (frame cap + VSync from
 the ini, `src/frame_rate.cpp` / `src/frame_rate_rules.hpp`, VSync in `rewrite_present`; see "Decisions" and
 1.6 for the windowed-vsync measurement); **phase 2 implemented** (the rows, `src/options_menu.cpp` /
-`src/options_menu_rules.hpp`) together with the pipe's `wm` command from phase 5 - see "Phase 2 as
-implemented"; **phase 3 implemented** (the 64-slot resolution table, `src/resolution_list.cpp` /
+`src/options_menu_rules.hpp`) - see "Phase 2 as implemented"; **phase 3 implemented** (the 64-slot resolution table, `src/resolution_list.cpp` /
 `src/resolution_rules.hpp` - see "Phase 3 as implemented"); all three await the in-game test. Phase 4 not
 started (out of scope by decision 2). Target: xml2-fix branch `display`, on top of `src/display.cpp` /
 `src/display_rules.hpp`.
@@ -48,7 +47,7 @@ key only when the user changed that row (Accept), with `WritePrivateProfileStrin
 - Default-off verified by `xml2_test`: with none of the keys set the display fix returns before hooking anything
   ("display: as the game has it (no [Display] Mode, FrameRate or VSync in xml2-fix.ini)").
 
-### Phase 2 as implemented (2026-09-28; hooks A-D, the pipe's `wm`)
+### Phase 2 as implemented (2026-09-28; hooks A-D)
 
 - `options_menu::install` (from `display::install`, `[Display] InGameOptions` default 1) compares the 16 bytes at
   each of the four call sites (A 0x61f356, B 0x61f8a4, C 0x61f8be, D 0x61f667) and the first 16 bytes of the nine
@@ -92,15 +91,15 @@ key only when the user changed that row (Accept), with `WritePrivateProfileStrin
   165, 144, 240, 120, 30 in that order when room is needed (never the desktop's rate or the ini's value).
 - Status line: "Display mode applies after restart" / "VSync applies after restart" / "Display mode, VSync apply
   after restart" (fullscreen only for VSync), refreshed on every change and on revert.
-- Test pipe: `wm KEYS [ms]` posts WM_KEYDOWN (lParam: repeat 1, scan code, extended bit) then, after ms (80),
-  WM_KEYUP (+ previous-state and transition bits) to the engine's window of this process (`display::game_window`,
-  the device window or an EnumWindows by class `igWin32WindowClass` and pid); DirectInput names map to virtual
-  keys (`test_input_rules::win32_key_for`). `tools/fixinput.py` (xml1-port) gained `wm(names, hold)` and `wm KEY`.
+- Test pipe: a `wm KEYS [ms]` command (posted WM_KEYDOWN/WM_KEYUP) was added here and **removed in the review
+  fix round**: the panel reads the DirectInput keyboard (1.1, "Input feed", corrected), so posted key messages
+  did nothing and the pipe's existing `tap` drives it. `wm` now answers "error wm is gone ... use tap".
+  (`tools/fixinput.py` in xml1-port had gained an uncommitted `wm`; it should go too.)
 - `xml2_test`: row tables, frame-rate list rules, ini_changes, status text, an ini round trip through a temp file
   (only the changed keys written, comments and other keys kept), relink on fake records, anim/nav struct sizes,
-  call-site tables (decoded targets, rel32) and the game-function fingerprints against XMen2.exe, `wm` grammar,
-  virtual-key mapping and lParam bits; the pipe child confirms `wm` is refused without a game window and that a
-  non-game process leaves the panel alone.
+  call-site tables (decoded targets, rel32) and the game-function fingerprints against XMen2.exe, the bytes of
+  the panel's input path (why `tap` drives it); the pipe child confirms `wm` is refused with a pointer to `tap`
+  and that a non-game process leaves the panel alone.
 - **Not yet verified in game** (the main session's job, see section 6): the rows' look (label/value widths in
   the large font: "Run in background" vs a right-aligned "Fullscreen"; the small-font status line within 196 px),
   the enter slide of the new items, highlight travel and colours, keyboard order, sounds, Back/Esc asking on a
@@ -276,11 +275,21 @@ Mouse (0x200/0x201/0x202/0x20a): hit-test every item's scaled rect (+4..+0x10) a
 the one under the cursor; `window+0x10` is the captured item. ESC -> `FUN_00621e80` -> window callback
 event 5 (`FUN_00617d10`: result 2, exit animation).
 
-**Input feed. VERIFIED:** the only path into `FUN_006223d0` (window message filter) is the game's window
-procedure `FUN_005faa20` -> `FUN_006193e0` (0x5faa3b), i.e. **real Win32 keyboard/mouse messages only**.
-No pad-to-message translation was found; the panel is a keyboard/mouse panel (the pad path is DirectInput
-polling). Consequence for testing: the xml2-fix `[Test]` pipe injects DirectInput scancodes, which this
-panel never sees; a `PostMessage(hwnd, WM_KEYUP, VK_x, 0)` variant is needed to drive it from a script.
+**Input feed. VERIFIED (corrected 2026-09-28 in the review fix round; the first reading was backwards):**
+the panel's **keys and pad buttons come from DirectInput**, not from window messages. `FUN_006223d0` (the
+window message filter, reached only from the game's window callback `FUN_005faa20` -> `FUN_006193e0`)
+passes WM_KEYDOWN alone to `FUN_00621ea0` (`cmp eax,0x102` / `lea edx,[eax-2]; cmp edx,0xfe; ja drop`: 0x101
+- 2 = 0xff is dropped, and the index table at 0x62245c maps only 0x100 to the call), and `FUN_00621ea0`
+acts on keys only for WM_KEYUP (0x621ebf) - so a real or posted key message never reaches a widget.
+The keys the panel acts on are made by `FUN_00619070`, run every frame through the `CMenuSebas` vtable
+0x6a1f64 +0x38 (0x5d1e90 -> `jmp 0x619070`; +0x10 of the same vtable, 0x5d1dd0, is what calls the builder):
+released-key edges of the game's DirectInput keyboard (`FUN_00627100`: byte `[obj+0x26e4+dik]` set, the
+previous frame, and `[obj+0x25e4+dik]` clear, the current one; DIK Esc/Enter/Up/Down/Left/Right) and pad
+buttons (`FUN_00618f20`) become VK 0x1B/0x0D/0x26/0x28/0x25/0x27 in a synthetic `FUN_00621ea0(0x101, vk, ..)`
+call (0x6192c7). The keyboard state is `IDirectInputDevice8::GetDeviceState(0x100, obj+0x25e4)` at 0x62861e
+(vtable +0x24, slot 9) - the slot the `[Test]` pipe hooks, so **`tap DOWN` / `tap ENTER` / `tap LEFT` drive
+the panel**. Mouse messages (0x200-0x20a) do pass the filter and are hit-tested on lParam. (`xml2_test`
+checks these bytes against the retail exe.)
 
 **Panel lifetime.** `DAT_00a6ad34` = the panel; `DAT_00a6ad38/3c/40/44` = popups (revert-defaults confirm,
 NEW_RESZ_RESTART warning `FUN_0061cbf0`, CANCEL_WARNING `FUN_0061c740`, unbound-keys warning
@@ -662,8 +671,9 @@ values fall back to the default and are logged.
 4. **Live display-mode switch (experimental, ini-gated `LiveModeSwitch=1`)**: `setFullScreenState`
    through our window/device hooks, 15 s revert prompt reusing the game's popup builder pattern
    (`FUN_0061c740` is the template; result codes 1/3 are read in `FUN_0061f380`).
-5. **Polish**: translations for fre/ger/ita/spa from the loaded `igct*.bnx` language, pipe command
-   `wm KEY` (PostMessage WM_KEYUP) so the tour can drive the panel (**done** with phase 2), README/launcher fields.
+5. **Polish**: translations for fre/ger/ita/spa from the loaded `igct*.bnx` language, README/launcher fields.
+   (A pipe command posting WM_KEYUP was planned here to drive the panel; not needed - the panel reads the
+   DirectInput keyboard, so `tap` drives it - and removed.)
 
 ---
 
@@ -689,7 +699,8 @@ values fall back to the default and are logged.
   the absolute 0x6e9800, so a relocated (ASLR'd) or patched exe fails the check and keeps its own table (the list
   then trimmed to 20). The retail exe has no relocations and loads at 0x400000. The DLL's table is a static array,
   alive as long as the DLL (always, for a dinput.dll).
-- **Test pipe cannot drive the panel** (WM_KEYUP based) until phase 5 - resolved: `wm KEYS [ms]` (phase 2 commit).
+- **Test pipe and the panel**: not a risk after all - the panel's keys come from the DirectInput keyboard the
+  pipe feeds (1.1, corrected), so `tap` drives it; the `wm` command added for it was removed.
 
 ---
 

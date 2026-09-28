@@ -938,24 +938,40 @@ namespace
 		CHECK(parse_command("tap NOSUCH").what == command::kind::unknown && parse_command("tap W x").what == command::kind::unknown);
 		CHECK(parse_command("PING").what == command::kind::ping && parse_command("status").what == command::kind::status);
 
-		// "wm": Win32 key messages for the Advanced Options panel.
+		// "wm" (posted key messages) is gone: the Advanced Options panel reads the DirectInput
+		// keyboard, so a stale client is told to use tap.
 		cmd = parse_command("wm DOWN");
-		CHECK(cmd.what == command::kind::wm && (cmd.keys == std::vector<unsigned char>{0xD0}) && cmd.ms == 0);
-		cmd = parse_command("wm enter 120");
-		CHECK(cmd.what == command::kind::wm && (cmd.keys == std::vector<unsigned char>{0x1C}) && cmd.ms == 120);
-		CHECK(parse_command("wm").what == command::kind::unknown && parse_command("wm NOSUCH").what == command::kind::unknown);
-		CHECK((win32_key_for(0x1C) == win32_key{VK_RETURN, 0x1C, false}));
-		CHECK((win32_key_for(0xD0) == win32_key{VK_DOWN, 0x50, true}) && (win32_key_for(0xC8) == win32_key{VK_UP, 0x48, true}));
-		CHECK((win32_key_for(0xCB) == win32_key{VK_LEFT, 0x4B, true}) && (win32_key_for(0xCD) == win32_key{VK_RIGHT, 0x4D, true}));
-		CHECK((win32_key_for(0x01) == win32_key{VK_ESCAPE, 0x01, false}) && (win32_key_for(0x11) == win32_key{'W', 0x11, false}));
-		CHECK((win32_key_for(0x02) == win32_key{'1', 0x02, false}) && (win32_key_for(0x0B) == win32_key{'0', 0x0B, false}));
-		CHECK((win32_key_for(0x3B) == win32_key{VK_F1, 0x3B, false}) && (win32_key_for(0x58) == win32_key{VK_F12, 0x58, false}));
-		CHECK((win32_key_for(0x9C) == win32_key{VK_RETURN, 0x1C, true}) && (win32_key_for(0x4B) == win32_key{VK_NUMPAD4, 0x4B, false}));
-		CHECK(!win32_key_for(0x54) && !win32_key_for(0x00) && !win32_key_for(0xFF));
-		CHECK(key_lparam(0x1C, false, false) == 0x001C0001u); // repeat 1, scan code 0x1C
-		CHECK(key_lparam(0x1C, false, true) == 0xC01C0001u);  // + previous state and transition
-		CHECK(key_lparam(0x50, true, false) == 0x01500001u);  // + extended
-		CHECK(key_lparam(0x50, true, true) == 0xC1500001u);
+		CHECK(cmd.what == command::kind::unknown && cmd.error.find("use tap") != std::string::npos);
+		CHECK(parse_command("frob").error.find("wm") == std::string::npos); // not offered in the list of commands
+		// Why, in the retail XMen2.exe: the window's message filter (0x6223d0) passes WM_KEYDOWN only
+		// (lea edx,[eax-2]; cmp edx,0xfe; ja drop: 0x101 - 2 is out, and its index table sends 0x100
+		// alone to handleMessage, which acts on WM_KEYUP only); the panel's per-frame input function
+		// makes its WM_KEYUP from DirectInput key releases (mov esi,0x101 ... call 0x621ea0); and the
+		// keyboard state it reads comes from GetDeviceState(256), vtable +0x24 = slot 9, the one the
+		// pipe hooks.
+		if (const auto exe = game_executable())
+		{
+			struct fact
+			{
+				const char* what;
+				DWORD rva;
+				std::vector<std::uint8_t> bytes;
+			};
+			const fact facts[] = {
+				{"message filter", 0x2223fb, {0x3D, 0x02, 0x01, 0x00, 0x00, 0x77, 0x1B, 0x74, 0x32, 0x8D, 0x50, 0xFE, 0x81, 0xFA, 0xFE, 0x00, 0x00, 0x00, 0x77, 0xE6}},
+				{"filter index for 0x100", 0x22245c + 0xfe, {0x01}},
+				{"per-frame WM_KEYUP", 0x219272, {0xBE, 0x01, 0x01, 0x00, 0x00}},
+				{"per-frame handleMessage call", 0x2192c4, {0x52, 0x50, 0x56, 0xE8, 0xD4, 0x8B, 0x00, 0x00}},
+				{"keyboard GetDeviceState(256)", 0x228614, {0x68, 0x00, 0x01, 0x00, 0x00, 0xF3, 0xA5, 0x8B, 0x08, 0x50, 0xFF, 0x51, 0x24}},
+			};
+			for (const auto& f : facts)
+			{
+				const auto at = file_offset(*exe, f.rva);
+				const bool same = at && *at + f.bytes.size() <= exe->size() && std::memcmp(exe->data() + *at, f.bytes.data(), f.bytes.size()) == 0;
+				if (!same) std::printf("  info  %s differs\n", f.what);
+				CHECK(same);
+			}
+		}
 
 		synthetic_keys keys;
 		unsigned char state[256]{};
@@ -1208,9 +1224,7 @@ namespace
 		CHECK(refused(ask(pipe, "screenshot")));
 		CHECK(refused(ask(pipe, "tap ENTER 20"))); // nothing reads a keyboard yet
 		const auto wm = ask(pipe, "wm ENTER 20");
-		std::printf("  info  %s\n", wm.c_str());
-		CHECK(refused(wm) && wm.find("no game window") != std::string::npos); // no engine window in this process
-		CHECK(refused(ask(pipe, "wm 0x54")));                                 // no virtual key for that scancode
+		CHECK(refused(wm) && wm.find("use tap") != std::string::npos); // the panel reads DirectInput: tap drives it
 		const auto shot = ask(pipe, "screenshot " + (std::filesystem::temp_directory_path() / "xml2_test_pipe.png").string());
 		std::printf("  info  %s\n", shot.c_str());
 		CHECK(refused(shot)); // no Direct3D device in this process: times out

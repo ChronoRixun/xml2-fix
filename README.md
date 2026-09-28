@@ -127,12 +127,11 @@ the fix listens on the named pipe `\\.\pipe\xml2-fix-input`: one command per lin
 | `tap KEY [ms]` | press and release (80 ms) |
 | `hold KEY+KEY ms` | hold together, then release |
 | `down KEY` / `up KEY` | hold until released (10 s at most) |
-| `wm KEY [ms]` | post `WM_KEYDOWN`, then `WM_KEYUP` after `ms` (80), to the game window: what *Advanced Options* reads (it never looks at DirectInput) |
 | `release` | let go of everything |
 | `screenshot PATH` | save the frame the game just drew (`.png` or `.bmp`) |
 | `status`, `ping` | `status` includes the frames per second over the last second, so a frame cap can be checked from a script |
 
-`KEY` is a DirectInput key name (`ENTER`, `ESCAPE`, `W`, `UP`, `F1`, `NUMPAD4`, …) or scancode (`0x1C`). Keys from the pipe reach the game whether or not it has the focus; the real keyboard only counts while it does, so typing in another window stays there. Screenshots copy the Direct3D back buffer inside the game, so they work with the window covered (multisampling is off while the pipe is on). Meant for `Mode=windowed` with `RunInBackground=1`; everything the pipe does is in `xml2-fix.log`. Off without the `[Test]` section.
+`KEY` is a DirectInput key name (`ENTER`, `ESCAPE`, `W`, `UP`, `F1`, `NUMPAD4`, …) or scancode (`0x1C`). Every screen reads these keys, *Advanced Options* included (its widgets take key messages, but the panel makes them from the same DirectInput keyboard, so `tap DOWN`, `tap ENTER` and `tap LEFT` move and change its rows). Keys from the pipe reach the game whether or not it has the focus; the real keyboard only counts while it does, so typing in another window stays there. Screenshots copy the Direct3D back buffer inside the game, so they work with the window covered (multisampling is off while the pipe is on). Meant for `Mode=windowed` with `RunInBackground=1`; everything the pipe does is in `xml2-fix.log`. Off without the `[Test]` section.
 
 ## 🔍 What was actually wrong
 

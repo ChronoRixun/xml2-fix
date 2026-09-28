@@ -897,36 +897,6 @@ namespace display
 		              manages_window(opts.window_mode) ? "" : " (matters in the borderless and windowed modes; the game's own fullscreen always pauses without the focus)");
 	}
 
-	HWND game_window()
-	{
-		if (window && IsWindow(window))
-		{
-			return window;
-		}
-		// Before the device exists, or with nothing hooked: the engine's window class, in this process only.
-		struct search
-		{
-			DWORD process;
-			HWND found;
-		} state{GetCurrentProcessId(), nullptr};
-		EnumWindows(
-			[](const HWND candidate, const LPARAM param) -> BOOL
-			{
-				auto* s = reinterpret_cast<search*>(param);
-				DWORD process = 0;
-				GetWindowThreadProcessId(candidate, &process);
-				char class_name[64]{};
-				if (process == s->process && GetClassNameA(candidate, class_name, sizeof(class_name)) && std::strcmp(class_name, window_class) == 0)
-				{
-					s->found = candidate;
-					return FALSE;
-				}
-				return TRUE;
-			},
-			reinterpret_cast<LPARAM>(&state));
-		return state.found;
-	}
-
 	void install(const HMODULE game)
 	{
 		opts = read_options();
