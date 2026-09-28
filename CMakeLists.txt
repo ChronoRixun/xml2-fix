@@ -26,6 +26,7 @@ add_library(xml2_fix SHARED
 	src/net_trace.cpp
 	src/mod_loader.cpp
 	src/display.cpp
+	src/frame_rate.cpp
 	src/frame_capture.cpp
 	src/test_input.cpp
 	src/log.cpp
@@ -34,12 +35,12 @@ add_library(xml2_fix SHARED
 target_compile_definitions(xml2_fix PRIVATE FIX_LOG_FILE=L"xml2-fix.log"
 	FIX_VERSION="${PROJECT_VERSION}"
 	FIX_VERSION_NUMBERS=${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},0)
-target_link_libraries(xml2_fix PRIVATE dxguid ws2_32)
+target_link_libraries(xml2_fix PRIVATE dxguid ws2_32 winmm) # winmm: timeBeginPeriod for the frame limiter's fallback timer
 # Output is dinput.dll; its import library gets a different name so it can't shadow the Windows SDK's.
 set_target_properties(xml2_fix PROPERTIES OUTPUT_NAME dinput ARCHIVE_OUTPUT_NAME xml2_fix)
 
 # Checks the built DLL the way the game loads it (imported from next to the executable).
 add_executable(xml2_test test/xml2_test.cpp src/frame_capture.cpp) # frame_capture: the back buffer copy, checked on a device of its own
 target_compile_definitions(xml2_test PRIVATE _WINSOCK_DEPRECATED_NO_WARNINGS)
-target_include_directories(xml2_test PRIVATE src) # display_rules.hpp, test_input_rules.hpp, image_file.hpp: the decisions, checked without the game
-target_link_libraries(xml2_test PRIVATE xml2_fix dinput8.lib dxguid xinput ws2_32) # dinput8.lib: only for c_dfDIJoystick(2)
+target_include_directories(xml2_test PRIVATE src) # display_rules.hpp, frame_rate_rules.hpp, test_input_rules.hpp, image_file.hpp: the decisions, checked without the game
+target_link_libraries(xml2_test PRIVATE xml2_fix dinput8.lib dxguid xinput ws2_32 winmm) # dinput8.lib: only for c_dfDIJoystick(2); winmm: timeBeginPeriod in the present timing

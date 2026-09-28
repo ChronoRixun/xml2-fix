@@ -1,6 +1,7 @@
 #include "test_input.hpp"
 #include "display.hpp"
 #include "frame_capture.hpp"
+#include "frame_rate.hpp"
 #include "log.hpp"
 #include "test_input_rules.hpp"
 
@@ -310,8 +311,11 @@ namespace test_input
 				std::lock_guard lock(devices_mutex);
 				devices = keyboards.size();
 			}
+			// fps: Presents counted over the last full second (0 until then), so a frame cap can be
+			// checked from a script.
 			return "ok XML2 Fix " FIX_VERSION "; keyboard devices " + std::to_string(devices) + "; reads " + std::to_string(reads.load()) + "; keys held " +
-			       std::to_string(held) + "; game " + (game_in_foreground() ? "has" : "doesn't have") + " the focus";
+			       std::to_string(held) + "; game " + (game_in_foreground() ? "has" : "doesn't have") + " the focus; fps " +
+			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe();
 		}
 
 		std::string handle(const std::string& line)

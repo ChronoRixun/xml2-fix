@@ -12,6 +12,8 @@
 //   Height = 0
 //   Topmost = 0              ; borderless/windowed: keep the window above others
 //   RunInBackground = 1      ; borderless/windowed: keep playing when another window has the focus
+//   FrameRate = 120          ; fps, "refresh" or 0 (unlimited); unset = the game's own 60 fps cap (frame_rate.hpp)
+//   VSync = 1                ; 1 / 0; unset = the engine's own presentation interval
 //
 // The engine (Alchemy: libIGDisplay's igWin32Window, libIGGfx's igDx8VisualContext) creates a
 // Direct3D 8 device with Windowed = FALSE at the registry resolution. Borderless and windowed
@@ -22,12 +24,15 @@
 // registry: that read is answered with the desktop size in borderless mode, so its HUD and
 // aspect ratio match the back buffer. The Video options list comes from
 // IDirect3D8::EnumAdapterModes: it is completed with the desktop resolution and trimmed to the
-// 20 entries the game has room for.
+// 20 entries the game has room for. FrameRate and VSync work in any mode, the game's own
+// included: VSync through the same CreateDevice/Reset rewrite, FrameRate through the frame
+// limiter (frame_rate.hpp) run from the Present hook.
 
 namespace display
 {
-	// Reads [Display] from xml2-fix.ini and installs the hooks it calls for. Without a Mode, nothing
-	// changes - unless a frame hook was set, which needs the Direct3D device hooked whatever the mode.
+	// Reads [Display] from xml2-fix.ini and installs the hooks it calls for. Without a Mode,
+	// FrameRate or VSync, nothing changes - unless a frame hook was set, which needs the Direct3D
+	// device hooked whatever the mode.
 	void install(HMODULE game);
 
 	// For the test pipe's screenshots: `hook` runs on the game's render thread with its

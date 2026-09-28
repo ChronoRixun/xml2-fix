@@ -89,6 +89,8 @@ Width=0              ; force a resolution; 0 = your desktop's size (borderless) 
 Height=0
 Topmost=0            ; borderless/windowed: 1 keeps the game above other windows
 RunInBackground=1    ; borderless/windowed: 0 pauses the game when another window has the focus, like the stock game
+FrameRate=refresh    ; a number of fps, refresh (your desktop's rate) or 0 (unlimited); leave out for the game's own 60 fps cap
+VSync=0              ; 1 or 0; leave out for the engine's own setting
 ```
 
 - **borderless**: a window without borders covering the screen, at your desktop's resolution and refresh rate. Your monitor's mode never changes, alt-tab is instant and the game keeps running behind other windows.
@@ -96,6 +98,10 @@ RunInBackground=1    ; borderless/windowed: 0 pauses the game when another windo
 - **fullscreen**: the game's own exclusive fullscreen, but the desktop resolution is offered in *Options → Video*, and at that resolution the desktop's refresh rate is kept.
 
 In every mode the Video options list shows your desktop resolution. In borderless mode with `Width`/`Height` at 0 the game starts at the desktop size every time; a resolution picked in the menu applies for that session (it is stretched to the screen). Everything the fix decides about the window and the Direct3D device is written to `xml2-fix.log`.
+
+**Frame rate.** The game caps itself at 60 fps by spinning on a core at the end of every frame, whatever your monitor does. `FrameRate` switches that spin off and paces frames with a high-resolution timer instead: `FrameRate=144` for 144 fps, `FrameRate=refresh` for your desktop's refresh rate, `FrameRate=0` for no cap at all. The game's simulation runs on wall-clock time, so a higher frame rate doesn't change its speed. `FrameRate` and `VSync` work in every mode, the game's own included; without them nothing about the frame timing changes.
+
+**VSync.** In `fullscreen` (and the game's own mode) `VSync=1` waits for the vertical blank and `VSync=0` never does (the engine's own default). In `borderless` and `windowed` Direct3D 8 has no usable vsync (the only one it offers runs at about 32 fps on a modern desktop), so there `VSync=1` means frames are paced at your desktop's refresh rate, never above `FrameRate`, and the desktop compositor shows them without tearing; with `FrameRate` left out the game's own 60 fps cap stays in charge.
 
 ## 🧪 Driving the game from a script
 
@@ -115,7 +121,7 @@ the fix listens on the named pipe `\\.\pipe\xml2-fix-input`: one command per lin
 | `down KEY` / `up KEY` | hold until released (10 s at most) |
 | `release` | let go of everything |
 | `screenshot PATH` | save the frame the game just drew (`.png` or `.bmp`) |
-| `status`, `ping` | |
+| `status`, `ping` | `status` includes the frames per second over the last second, so a frame cap can be checked from a script |
 
 `KEY` is a DirectInput key name (`ENTER`, `ESCAPE`, `W`, `UP`, `F1`, `NUMPAD4`, …) or scancode (`0x1C`). Keys from the pipe reach the game whether or not it has the focus; the real keyboard only counts while it does, so typing in another window stays there. Screenshots copy the Direct3D back buffer inside the game, so they work with the window covered (multisampling is off while the pipe is on). Meant for `Mode=windowed` with `RunInBackground=1`; everything the pipe does is in `xml2-fix.log`. Off without the `[Test]` section.
 
@@ -125,6 +131,7 @@ the fix listens on the named pipe `\\.\pipe\xml2-fix-input`: one command per lin
 - **Modern pads look odd to it.** The game reads pads through DirectInput. An Xbox Wireless Controller over Bluetooth, for example, reports both triggers on one shared axis and a different axis set to what 2005-era pads had, so even hand-made bindings behave oddly.
 - **GameSpy is gone,** and with it the servers the game looks up by name.
 - **Fullscreen only.** The game hard-codes exclusive fullscreen and builds its resolution list from the Direct3D 8 mode list, trimmed to 20 fixed slots; the engine's own windowed path is never used on PC.
+- **60 fps, burning a core.** The game's frame function rewrites its minimum frame time to 1/60 s every frame (so the engine's `max_fps` setting can never matter) and busy-waits until it has passed. Fullscreen presents never wait for the vertical blank either.
 
 ## 🛠️ How the fix works
 
@@ -134,6 +141,7 @@ the fix listens on the named pipe `\\.\pipe\xml2-fix-input`: one command per lin
 2. **Adds the layout above to the game's bindings.** It patches it into the game's built-in defaults in memory, so first runs and *Revert to defaults* include it, and adds it once to settings you already have.
 3. **Redirects GameSpy host lookups to OpenSpy.**
 4. **Runs the game in a window when asked to** ([Display](#%EF%B8%8F-display)). The engine (Alchemy) creates its Direct3D 8 device fullscreen at the registry resolution; the fix hooks `IDirect3D8::CreateDevice` and `IDirect3DDevice8::Reset` to make the device windowed, places the engine's window itself (its `CreateWindowExA`, `SetWindowLongA`, `SetWindowPos` and `MoveWindow` calls), answers the game's read of its resolution setting with the desktop size so the HUD and aspect ratio match, and completes the Direct3D mode list the Video options are built from.
+5. **Paces frames when asked to** ([Display](#%EF%B8%8F-display)). With `FrameRate` set, the 1/60 s constant the game's frame function writes is patched to 0 (after checking the bytes are the retail build's), which ends its busy-wait at once, and frames are paced in the fix's `IDirect3DDevice8::Present` hook with a high-resolution waitable timer and a short spin. `VSync` is set in the same `CreateDevice`/`Reset` rewrite as the window mode.
 
 ```mermaid
 flowchart LR

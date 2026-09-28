@@ -24,7 +24,9 @@ namespace d3d8
 	constexpr DWORD swap_copy_vsync = 4;
 
 	constexpr DWORD multisample_none = 0;
-	constexpr UINT present_interval_default = 0;
+	constexpr UINT present_interval_default = 0;            // the only value a windowed device accepts
+	constexpr UINT present_interval_one = 1;                // fullscreen: wait for one vertical blank (vsync on)
+	constexpr UINT present_interval_immediate = 0x80000000; // fullscreen: never wait (vsync off)
 	constexpr DWORD device_type_hal = 1;
 	constexpr DWORD back_buffer_type_mono = 0; // D3DBACKBUFFER_TYPE_MONO
 	constexpr DWORD lock_read_only = 0x10;     // D3DLOCK_READONLY
@@ -80,6 +82,19 @@ namespace d3d8
 		void* bits;
 	};
 
+	// D3DCAPS8 (220 bytes): only PresentationIntervals is read.
+	struct caps8
+	{
+		DWORD device_type;
+		DWORD adapter_ordinal;
+		DWORD caps;
+		DWORD caps2;
+		DWORD caps3;
+		DWORD presentation_intervals; // present_interval_* bits the adapter supports
+		DWORD rest[49];
+	};
+	static_assert(sizeof(caps8) == 220);
+
 	// IDirect3D8 vtable slots.
 	namespace d3d_slot
 	{
@@ -88,6 +103,7 @@ namespace d3d8
 		constexpr int get_adapter_display_mode = 8;
 		constexpr int check_device_type = 9;
 		constexpr int check_device_multi_sample_type = 11;
+		constexpr int get_device_caps = 13;
 		constexpr int create_device = 15;
 	}
 
@@ -117,6 +133,7 @@ namespace d3d8
 	using get_adapter_display_mode_t = HRESULT(STDMETHODCALLTYPE*)(void*, UINT, display_mode*);
 	using check_device_type_t = HRESULT(STDMETHODCALLTYPE*)(void*, UINT, DWORD, DWORD, DWORD, BOOL);
 	using check_device_multi_sample_type_t = HRESULT(STDMETHODCALLTYPE*)(void*, UINT, DWORD, DWORD, BOOL, DWORD);
+	using get_device_caps_t = HRESULT(STDMETHODCALLTYPE*)(void*, UINT, DWORD, caps8*);
 	using create_device_t = HRESULT(STDMETHODCALLTYPE*)(void*, UINT, DWORD, HWND, DWORD, present_parameters*, void**);
 	using test_cooperative_level_t = HRESULT(STDMETHODCALLTYPE*)(void*);
 	using reset_t = HRESULT(STDMETHODCALLTYPE*)(void*, present_parameters*);

@@ -1,6 +1,7 @@
 #include "display.hpp"
 #include "d3d8_min.hpp"
 #include "display_rules.hpp"
+#include "frame_rate.hpp"
 #include "iat_hook.hpp"
 #include "log.hpp"
 
@@ -203,11 +204,19 @@ namespace display
 			return SUCCEEDED(check(self, adapter, device_type, desktop.format, format, TRUE));
 		}
 
+		bool presentation_interval_supported(void* self, const UINT interval)
+		{
+			d3d8::caps8 caps{};
+			const auto get = d3d8::method<d3d8::get_device_caps_t>(self, d3d8::d3d_slot::get_device_caps);
+			return SUCCEEDED(get(self, adapter, device_type, &caps)) && (caps.presentation_intervals & interval) != 0;
+		}
+
 		d3d8::present_parameters rewrite(void* self, const d3d8::present_parameters& requested, std::string& notes)
 		{
 			auto pp = rewrite_present(requested, opts, desktop,
 			                          [&](const DWORD format, const DWORD type) { return multisample_supported(self, format, type); },
-			                          [&](const DWORD format) { return back_buffer_format_supported(self, format); }, notes);
+			                          [&](const DWORD format) { return back_buffer_format_supported(self, format); },
+			                          [&](const UINT interval) { return presentation_interval_supported(self, interval); }, notes);
 			if (no_multisampling && pp.multi_sample_type != d3d8::multisample_none)
 			{
 				pp.multi_sample_type = d3d8::multisample_none;
@@ -308,7 +317,12 @@ namespace display
 					return d3d8::err_device_lost; // the engine stops drawing until TestCooperativeLevel says otherwise
 				}
 			}
-			return real_present(self, source, destination, override, dirty);
+			const HRESULT result = real_present(self, source, destination, override, dirty);
+			if (SUCCEEDED(result))
+			{
+				frame_rate::on_present(); // paces the frame (FrameRate) and counts it (the pipe's "status")
+			}
+			return result;
 		}
 
 		HRESULT STDMETHODCALLTYPE hooked_reset(void* self, d3d8::present_parameters* pp)
@@ -399,7 +413,7 @@ namespace display
 			{
 				hook_slot(device, d3d8::device_slot::test_cooperative_level, &hooked_test_cooperative_level, real_test_cooperative_level);
 			}
-			if (emulate_pause || frame_hook)
+			if (emulate_pause || frame_hook || frame_rate::paces())
 			{
 				hook_slot(device, d3d8::device_slot::present, &hooked_present, real_present);
 			}
@@ -733,26 +747,54 @@ namespace display
 
 		// ---- Setup ----------------------------------------------------------------------------------
 
-		options read_options()
+		std::string read_text(const std::wstring& ini, const wchar_t* key)
 		{
-			const auto ini = (logger::module_dir() / L"xml2-fix.ini").wstring();
-			wchar_t mode[64]{};
-			GetPrivateProfileStringW(L"Display", L"Mode", L"", mode, static_cast<DWORD>(std::size(mode)), ini.c_str());
+			wchar_t value[64]{};
+			GetPrivateProfileStringW(L"Display", key, L"", value, static_cast<DWORD>(std::size(value)), ini.c_str());
 			std::string narrow;
-			for (const wchar_t c : std::wstring(mode))
+			for (const wchar_t c : std::wstring(value))
 			{
 				narrow += static_cast<char>(c);
 			}
+			return narrow;
+		}
+
+		options read_options()
+		{
+			const auto ini = (logger::module_dir() / L"xml2-fix.ini").wstring();
+			const auto mode_text = read_text(ini, L"Mode");
 
 			options result;
-			result.window_mode = parse_mode(narrow);
+			result.window_mode = parse_mode(mode_text);
 			result.width = static_cast<int>(GetPrivateProfileIntW(L"Display", L"Width", 0, ini.c_str()));
 			result.height = static_cast<int>(GetPrivateProfileIntW(L"Display", L"Height", 0, ini.c_str()));
 			result.topmost = GetPrivateProfileIntW(L"Display", L"Topmost", 0, ini.c_str()) != 0;
 			result.run_in_background = GetPrivateProfileIntW(L"Display", L"RunInBackground", 1, ini.c_str()) != 0;
-			if (!narrow.empty() && result.window_mode == mode::stock)
+			if (!mode_text.empty() && result.window_mode == mode::stock)
 			{
-				logger::write("display: unknown Mode '%s' in xml2-fix.ini (fullscreen, borderless or windowed) - left as the game has it", narrow.c_str());
+				logger::write("display: unknown Mode '%s' in xml2-fix.ini (fullscreen, borderless or windowed) - left as the game has it", mode_text.c_str());
+			}
+
+			const auto frame_rate_text = read_text(ini, L"FrameRate");
+			if (const auto parsed = frame_rate_rules::parse_frame_rate(frame_rate_text))
+			{
+				result.frame_rate = *parsed;
+			}
+			else
+			{
+				logger::write("display: unknown FrameRate '%s' in xml2-fix.ini (%u-%u, refresh or 0) - the game's own 60 fps cap stays", frame_rate_text.c_str(),
+				              frame_rate_rules::min_fps, frame_rate_rules::max_fps);
+			}
+
+			const auto vsync_text = read_text(ini, L"VSync");
+			switch (frame_rate_rules::parse_vsync(vsync_text))
+			{
+			case frame_rate_rules::vsync::on: result.vsync = true; break;
+			case frame_rate_rules::vsync::off: result.vsync = false; break;
+			case frame_rate_rules::vsync::invalid:
+				logger::write("display: unknown VSync '%s' in xml2-fix.ini (1 or 0) - left as the engine has it", vsync_text.c_str());
+				break;
+			default: break;
 			}
 			return result;
 		}
@@ -783,16 +825,26 @@ namespace display
 	void install(const HMODULE game)
 	{
 		opts = read_options();
-		if (opts.window_mode == mode::stock && !frame_hook)
+		const bool caps_frames = frame_rate_rules::disables_stock_cap(opts.frame_rate);
+		if (opts.window_mode == mode::stock && !frame_hook && !caps_frames && !opts.vsync.has_value())
 		{
-			logger::write("display: as the game has it (no [Display] Mode in xml2-fix.ini)");
+			logger::write("display: as the game has it (no [Display] Mode, FrameRate or VSync in xml2-fix.ini)");
 			return;
 		}
 
 		desktop = current_desktop();
 		if (opts.window_mode == mode::stock)
 		{
-			logger::write("display: as the game has it (no [Display] Mode in xml2-fix.ini); the Direct3D device is hooked for the test pipe's screenshots");
+			std::string why;
+			for (const auto& [wanted, reason] : {std::pair{frame_hook != nullptr, "the test pipe's screenshots"}, std::pair{caps_frames, "the frame rate cap"},
+			                                     std::pair{opts.vsync.has_value(), "VSync"}})
+			{
+				if (wanted)
+				{
+					why += (why.empty() ? "" : ", ") + std::string(reason);
+				}
+			}
+			logger::write("display: as the game has it (no [Display] Mode in xml2-fix.ini); the Direct3D device is hooked for %s", why.c_str());
 		}
 		else
 		{
@@ -801,19 +853,40 @@ namespace display
 			              : opts.window_mode == mode::borderless ? "desktop" : "the game's setting",
 			              opts.topmost, opts.run_in_background, desktop.width, desktop.height, desktop.refresh_rate);
 		}
+		const bool window_vsync = opts.vsync.value_or(false) && manages_window(opts.window_mode);
+		if (opts.vsync.has_value())
+		{
+			if (manages_window(opts.window_mode))
+			{
+				logger::write("display: VSync %s in a window ([Display] VSync): Direct3D 8 can't sync a windowed present usefully (its copy_vsync runs at ~32 fps under the "
+				              "desktop compositor), so %s",
+				              *opts.vsync ? "on" : "off",
+				              *opts.vsync ? "the frame limiter paces at the desktop's refresh rate instead; the compositor shows the frames without tearing"
+				                          : "frames run free, up to FrameRate or the game's own 60 fps cap");
+			}
+			else
+			{
+				logger::write("display: VSync %s ([Display] VSync) - presentation interval %s when the engine creates or resets its device", *opts.vsync ? "on" : "off",
+				              *opts.vsync ? "one" : "immediate");
+			}
+		}
 
 		// The engine's Direct3D 8: device creation, resets and the mode list.
 		const HMODULE gfx = GetModuleHandleA("libIGGfx.dll");
 		if (!hook_import(gfx, "d3d8.dll", "Direct3DCreate8", &hooked_direct3d_create8, real_direct3d_create8))
 		{
-			logger::write("display: libIGGfx.dll doesn't import Direct3DCreate8 - display left as the game has it%s",
-			              frame_hook ? " (and no frames for the test pipe)" : "");
+			logger::write("display: libIGGfx.dll doesn't import Direct3DCreate8 - display left as the game has it%s%s",
+			              frame_hook ? " (and no frames for the test pipe)" : "", caps_frames ? " (and no frame rate cap: the game's own 60 fps stays)" : "");
 			opts.window_mode = mode::stock;
 			return;
 		}
+
+		// The frame limiter paces frames from the Present hook, so it needs the device hooked above.
+		frame_rate::install(game, opts.frame_rate, desktop.refresh_rate, window_vsync);
+
 		if (opts.window_mode == mode::stock)
 		{
-			return; // only the device hooks, for the frame hook
+			return; // only the device hooks, for the frame hook, the frame limiter and VSync
 		}
 
 		if (manages_window(opts.window_mode))

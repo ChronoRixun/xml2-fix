@@ -6,8 +6,10 @@
 //     EnumObjects, ranges set by object id, c_dfDIJoystick2.
 // With an Xbox-compatible pad connected, both must see a Logitech Dual Action. Also checks
 // that GameSpy host lookups resolve through OpenSpy, and the display fix's decisions: the
-// rules in display_rules.hpp against fixed inputs, and the Video options list the fix would
-// build from this PC's Direct3D 8 modes. The test input pipe is checked on its rules, on a
+// rules in display_rules.hpp and frame_rate_rules.hpp against fixed inputs (the frame cap's
+// patch bytes against a copy of XMen2.exe when one is at hand), the Video options list the fix
+// would build from this PC's Direct3D 8 modes, and whether a windowed Direct3D 8 present waits
+// for the vertical blank here. The test input pipe is checked on its rules, on a
 // Direct3D 8 device of the test's own (the back buffer copy behind "screenshot"), and end to
 // end in a child process started with an xml2-fix.ini that turns the pipe on: it creates the
 // keyboard device the way XMen2.exe does and sees the pipe's keys in it.
@@ -19,18 +21,22 @@
 #include <WinSock2.h>
 #include <Windows.h>
 #include <dinput.h>
+#include <timeapi.h>
 #include <Xinput.h>
 
 #include "display_rules.hpp"
 #include "frame_capture.hpp"
+#include "frame_rate_rules.hpp"
 #include "image_file.hpp"
 #include "test_input_rules.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -301,33 +307,67 @@ namespace
 		const auto msaa_ok = [](DWORD, DWORD) { return true; };
 		const auto msaa_no = [](DWORD, DWORD) { return false; };
 		const auto format_ok = [](DWORD) { return true; };
+		const auto interval_ok = [](UINT) { return true; };
 		std::string notes;
 
-		auto pp = rewrite_present(stock, borderless, desktop_mode, msaa_ok, format_ok, notes);
+		auto pp = rewrite_present(stock, borderless, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
 		CHECK(pp.windowed == TRUE && pp.fullscreen_refresh_rate == 0 && pp.fullscreen_presentation_interval == 0);
 		CHECK(pp.back_buffer_width == 1920 && pp.back_buffer_height == 1080 && pp.multi_sample_type == 4 && pp.swap_effect == d3d8::swap_discard);
-		pp = rewrite_present(stock, windowed, desktop_mode, msaa_no, format_ok, notes);
+		pp = rewrite_present(stock, windowed, desktop_mode, msaa_no, format_ok, interval_ok, notes);
 		CHECK(pp.windowed == TRUE && pp.multi_sample_type == d3d8::multisample_none && !notes.empty());
 		auto copy_vsync = stock;
 		copy_vsync.swap_effect = d3d8::swap_copy_vsync;
-		pp = rewrite_present(copy_vsync, borderless, desktop_mode, msaa_ok, format_ok, notes);
-		CHECK(pp.multi_sample_type == d3d8::multisample_none && pp.swap_effect == d3d8::swap_copy_vsync);
-		pp = rewrite_present(stock, borderless, desktop_mode, msaa_ok, [](DWORD) { return false; }, notes);
+		copy_vsync.back_buffer_count = 2;
+		pp = rewrite_present(copy_vsync, borderless, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		CHECK(pp.multi_sample_type == d3d8::multisample_none && pp.swap_effect == d3d8::swap_copy_vsync && pp.back_buffer_count == 1);
+		pp = rewrite_present(stock, borderless, desktop_mode, msaa_ok, [](DWORD) { return false; }, interval_ok, notes);
 		CHECK(pp.back_buffer_format == d3d8::format_x8r8g8b8); // already the desktop's: not checked, not changed
 		auto sixteen_bit = stock;
 		sixteen_bit.back_buffer_format = 23;
-		pp = rewrite_present(sixteen_bit, borderless, desktop_mode, msaa_ok, [](DWORD) { return false; }, notes);
+		pp = rewrite_present(sixteen_bit, borderless, desktop_mode, msaa_ok, [](DWORD) { return false; }, interval_ok, notes);
 		CHECK(pp.back_buffer_format == d3d8::format_x8r8g8b8);
-		pp = rewrite_present(stock, fullscreen, desktop_mode, msaa_ok, format_ok, notes);
+		pp = rewrite_present(stock, fullscreen, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
 		CHECK(pp.windowed == FALSE && pp.fullscreen_refresh_rate == 0 && pp.multi_sample_type == 4); // not the desktop size: untouched
 		auto native = stock;
 		native.back_buffer_width = 2560;
 		native.back_buffer_height = 1440;
-		pp = rewrite_present(native, fullscreen, desktop_mode, msaa_ok, format_ok, notes);
+		pp = rewrite_present(native, fullscreen, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
 		CHECK(pp.windowed == FALSE && pp.fullscreen_refresh_rate == 180);
 		options stock_options;
-		pp = rewrite_present(stock, stock_options, desktop_mode, msaa_ok, format_ok, notes);
+		pp = rewrite_present(stock, stock_options, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
 		CHECK(std::memcmp(&pp, &stock, sizeof(pp)) == 0);
+
+		// VSync. Fullscreen (the game's own mode and Mode=fullscreen): the presentation interval,
+		// when the adapter offers it. Windowed: the COPY_VSYNC swap effect, one back buffer, no
+		// multisampling; off = the discard swap effect.
+		options vsync_on;
+		vsync_on.vsync = true;
+		pp = rewrite_present(stock, vsync_on, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		CHECK(pp.windowed == FALSE && pp.fullscreen_presentation_interval == d3d8::present_interval_one && pp.multi_sample_type == 4);
+		CHECK(notes.find("vsync: on") != std::string::npos);
+		options vsync_off;
+		vsync_off.vsync = false;
+		auto synced = stock;
+		synced.fullscreen_presentation_interval = d3d8::present_interval_one; // alchemy.ini presentationInterval=1
+		pp = rewrite_present(synced, vsync_off, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		CHECK(pp.fullscreen_presentation_interval == d3d8::present_interval_immediate);
+		pp = rewrite_present(stock, vsync_off, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		CHECK(std::memcmp(&pp, &stock, sizeof(pp)) == 0 && notes.empty()); // already immediate
+		pp = rewrite_present(stock, vsync_on, desktop_mode, msaa_ok, format_ok, [](UINT) { return false; }, notes);
+		CHECK(pp.fullscreen_presentation_interval == 0x80000000 && notes.find("doesn't offer") != std::string::npos);
+		vsync_on.window_mode = mode::fullscreen;
+		pp = rewrite_present(native, vsync_on, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		CHECK(pp.fullscreen_refresh_rate == 180 && pp.fullscreen_presentation_interval == d3d8::present_interval_one);
+		// In a window, on = paced at the refresh rate by the limiter (never copy_vsync), the device unchanged.
+		vsync_on.window_mode = mode::borderless;
+		pp = rewrite_present(stock, vsync_on, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		CHECK(pp.windowed == TRUE && pp.swap_effect == d3d8::swap_discard && pp.multi_sample_type == 4 && pp.fullscreen_presentation_interval == d3d8::present_interval_default);
+		CHECK(notes.find("paced at the desktop's refresh rate") != std::string::npos);
+		vsync_off.window_mode = mode::windowed;
+		pp = rewrite_present(copy_vsync, vsync_off, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		CHECK(pp.swap_effect == d3d8::swap_discard && pp.multi_sample_type == 4); // the engine's own windowedVSync undone
+		pp = rewrite_present(stock, vsync_off, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		CHECK(pp.swap_effect == d3d8::swap_discard && notes.empty());
 
 		// Window placement: the engine asks for a maximised popup at 0,0 (style 0x85000000).
 		const RECT monitor{0, 0, 2560, 1440};
@@ -351,6 +391,197 @@ namespace
 	}
 
 	void check_d3d8_capture(void* d3d);
+	void check_windowed_presents(void* d3d, const d3d8::display_mode& desktop);
+
+	// A file offset for a virtual address of a PE image, or nothing.
+	std::optional<size_t> file_offset(const std::string& image, const DWORD rva)
+	{
+		if (image.size() < 0x40) return std::nullopt;
+		const auto u16 = [&](const size_t at) { return static_cast<DWORD>(static_cast<unsigned char>(image[at]) | (static_cast<unsigned char>(image[at + 1]) << 8)); };
+		const auto u32 = [&](const size_t at) { return u16(at) | (u16(at + 2) << 16); };
+		const size_t pe = u32(0x3c);
+		if (pe + 24 > image.size() || image.compare(pe, 4, "PE\0\0", 4) != 0) return std::nullopt;
+		const size_t sections = u16(pe + 6);
+		const size_t section_table = pe + 24 + u16(pe + 20);
+		for (size_t i = 0; i < sections; ++i)
+		{
+			const size_t header = section_table + i * 40;
+			if (header + 40 > image.size()) return std::nullopt;
+			const DWORD virtual_size = u32(header + 8), virtual_address = u32(header + 12), raw_size = u32(header + 16), raw_offset = u32(header + 20);
+			if (rva >= virtual_address && rva < virtual_address + std::max(virtual_size, raw_size))
+			{
+				return raw_offset + (rva - virtual_address);
+			}
+		}
+		return std::nullopt;
+	}
+
+	// A copy of XMen2.exe to check the patch sites against: the research copy in the repository
+	// (docs/research, git-ignored), or the installed game, read only. Neither is on the CI runner.
+	std::optional<std::string> game_executable()
+	{
+		std::vector<std::filesystem::path> candidates;
+		for (auto dir = module_dir(); !dir.empty() && dir != dir.root_path(); dir = dir.parent_path())
+		{
+			candidates.push_back(dir / "docs" / "research" / "XMen2.exe");
+		}
+		candidates.emplace_back(L"D:\\Games\\X-Men Legends II\\XMen2.exe");
+		for (const auto& path : candidates)
+		{
+			std::error_code ignored;
+			if (std::filesystem::is_regular_file(path, ignored))
+			{
+				std::printf("  info  reading %s\n", path.string().c_str());
+				return read_file(path);
+			}
+		}
+		return std::nullopt;
+	}
+
+	// The frame limiter's decisions (frame_rate_rules.hpp): the ini keys, the target, the bytes of the
+	// game's own 60 fps spin, the pacing and the fps count.
+	void check_frame_rate_rules()
+	{
+		using namespace frame_rate_rules;
+		std::printf("frame rate rules ([Display] FrameRate and VSync)\n");
+
+		const cap stock_cap{};
+		const cap unlimited{cap::kind::unlimited, 0};
+		const cap refresh{cap::kind::refresh, 0};
+		const cap fixed_144{cap::kind::fixed, 144};
+		CHECK(parse_frame_rate("") == stock_cap);
+		CHECK(parse_frame_rate("0") == unlimited && parse_frame_rate("Off") == unlimited && parse_frame_rate("unlimited") == unlimited);
+		CHECK(parse_frame_rate("refresh") == refresh && parse_frame_rate("REFRESH") == refresh);
+		CHECK(parse_frame_rate("144") == fixed_144 && parse_frame_rate("30")->fps == 30 && parse_frame_rate("1000")->fps == 1000);
+		CHECK(!parse_frame_rate("5") && !parse_frame_rate("1001") && !parse_frame_rate("60fps") && !parse_frame_rate("-60") && !parse_frame_rate("6e1") && !parse_frame_rate("00060"));
+		CHECK(parse_vsync("") == vsync::untouched && parse_vsync("1") == vsync::on && parse_vsync("On") == vsync::on && parse_vsync("true") == vsync::on);
+		CHECK(parse_vsync("0") == vsync::off && parse_vsync("off") == vsync::off && parse_vsync("maybe") == vsync::invalid && parse_vsync("2") == vsync::invalid);
+
+		CHECK(target_fps(stock_cap, 180) == 0 && target_fps(unlimited, 180) == 0);
+		CHECK(target_fps(fixed_144, 180) == 144);
+		CHECK(target_fps(refresh, 180) == 180 && target_fps(refresh, 0) == 60);
+		CHECK(!disables_stock_cap(stock_cap) && disables_stock_cap(unlimited) && disables_stock_cap(fixed_144));
+		// VSync=1 in a window: paced at the refresh rate, never above FrameRate, never without one.
+		CHECK(effective_target(stock_cap, 180, true) == 0 && effective_target(stock_cap, 180, false) == 0);
+		CHECK(effective_target(unlimited, 180, false) == 0 && effective_target(unlimited, 180, true) == 180 && effective_target(unlimited, 0, true) == 60);
+		const cap fixed_240{cap::kind::fixed, 240};
+		CHECK(effective_target(fixed_144, 180, true) == 144 && effective_target(fixed_240, 180, true) == 180 && effective_target(fixed_240, 180, false) == 240);
+		CHECK(effective_target(refresh, 180, true) == 180 && effective_target(refresh, 180, false) == 180);
+		CHECK(describe(refresh, 180) == "the desktop's refresh rate (180 fps)" && describe(stock_cap, 0) == "the game's own 60 fps cap");
+		CHECK(describe(fixed_144, 0) == "144 fps" && describe(unlimited, 0) == "unlimited");
+
+		// The patch: the checked bytes hold the two frame-time constants, the replacement zeroes the 1/60.
+		const auto& patch = stock_cap_patch;
+		CHECK(patch.offset + patch.replacement.size() <= patch.expected.size());
+		std::array<std::uint8_t, 4> sixty{}, thirty{};
+		std::copy_n(patch.expected.begin() + static_cast<std::ptrdiff_t>(patch.offset), 4, sixty.begin());
+		std::copy_n(patch.expected.begin() + 3, 4, thirty.begin());
+		CHECK(std::bit_cast<float>(sixty) == 1.0f / 60.0f && std::bit_cast<float>(thirty) == 1.0f / 30.0f);
+		CHECK(std::bit_cast<float>(patch.replacement) == 0.0f);
+		CHECK(patch.expected[0] == 0xC7 && patch.expected[9] == 0xC7 && patch.expected[7] == 0xEB && patch.expected[8] == 0x07); // mov [esi+18], imm32; jmp +7; mov
+		CHECK(matches(patch, patch.expected.data()));
+		auto other = patch.expected;
+		other[15] ^= 1;
+		CHECK(!matches(patch, other.data()));
+		if (const auto exe = game_executable())
+		{
+			const auto at = file_offset(*exe, patch.rva);
+			CHECK(at.has_value() && *at + patch.expected.size() <= exe->size());
+			if (at && *at + patch.expected.size() <= exe->size())
+			{
+				CHECK(matches(patch, reinterpret_cast<const std::uint8_t*>(exe->data() + *at)));
+				CHECK(*at == 0x1dab); // .text is mapped 1:1 in this build
+			}
+		}
+		else
+		{
+			std::printf("  skip  no XMen2.exe to check the patch bytes against\n");
+		}
+
+		// Pacing, on a 1 kHz clock with a 100-tick interval: cadence kept when early, restarted when late.
+		pacer pace;
+		CHECK(pace.next(5) == 5); // nothing to pace
+		pace.set_interval(100);
+		CHECK(pace.next(1000) == 1000); // the first frame ends at once
+		CHECK(pace.next(1010) == 1100);
+		CHECK(pace.next(1100) == 1200);
+		CHECK(pace.next(1190) == 1300);
+		CHECK(pace.next(1500) == 1500); // late: no wait, no catch-up burst
+		CHECK(pace.next(1550) == 1600);
+		CHECK(ticks_for_fps(60, 10'000'000) == 166'666 && ticks_for_fps(0, 10'000'000) == 0);
+		CHECK(ticks_for_ms(0.6, 10'000'000) == 6000);
+
+		// The wait: a timer for all but the margin, then a spin; short waits spin only.
+		constexpr LONGLONG mhz10 = 10'000'000, margin = 6000; // 0.6 ms
+		auto plan = plan_wait(50'000, mhz10, margin);         // 5 ms
+		CHECK(plan.spin && plan.timer_100ns == 44'000);       // 4.4 ms on the timer
+		plan = plan_wait(8'000, mhz10, margin);               // 0.8 ms
+		CHECK(plan.spin && plan.timer_100ns == 0);
+		plan = plan_wait(12'001, mhz10, margin);
+		CHECK(plan.spin && plan.timer_100ns == 6'001);
+		CHECK(!plan_wait(0, mhz10, margin).spin && !plan_wait(-5, mhz10, margin).spin && !plan_wait(100, 0, margin).spin);
+
+		// Counting: 100 frames in the second after the first one -> 100.0 fps; then 2 frames in a second.
+		fps_counter counter;
+		bool completed = false;
+		CHECK(!counter.count(0, 1000) && counter.fps_x10() == 0);
+		for (LONGLONG t = 10; t <= 1000; t += 10) completed = counter.count(t, 1000);
+		CHECK(completed && counter.fps_x10() == 1000);
+		CHECK(!counter.count(1500, 1000) && !counter.count(1999, 1000) && counter.count(2000, 1000) && counter.fps_x10() == 30);
+		CHECK(fps_text(599) == "59.9" && fps_text(1800) == "180.0" && fps_text(0) == "0.0");
+
+		// The wait against the real clock, the way frame_rate.cpp does it (a high-resolution waitable
+		// timer for the bulk, a spin for the last 0.6 ms): 60 frames paced at 120 fps take 0.5 s.
+		LARGE_INTEGER frequency{};
+		QueryPerformanceFrequency(&frequency);
+		const auto now = []
+		{
+			LARGE_INTEGER count{};
+			QueryPerformanceCounter(&count);
+			return count.QuadPart;
+		};
+		const HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, 0x00000002 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
+		std::printf("  info  high-resolution waitable timer: %s\n", timer ? "available" : "NOT available (the fix falls back to timeBeginPeriod(1))");
+		CHECK(timer != nullptr);
+		if (timer)
+		{
+			const LONGLONG real_margin = ticks_for_ms(0.6, frequency.QuadPart);
+			const LONGLONG interval = ticks_for_fps(120, frequency.QuadPart);
+			pacer real;
+			real.set_interval(interval);
+			LONGLONG worst_late = 0;
+			int late_frames = 0; // over 0.5 ms past the deadline: a preempted wake-up
+			const LONGLONG begin = now();
+			for (int frame = 0; frame < 60; ++frame)
+			{
+				const LONGLONG deadline = real.next(now());
+				for (;;)
+				{
+					const auto step = plan_wait(deadline - now(), frequency.QuadPart, real_margin);
+					if (!step.spin) break;
+					if (step.timer_100ns > 0)
+					{
+						LARGE_INTEGER due{};
+						due.QuadPart = -step.timer_100ns;
+						if (SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) WaitForSingleObject(timer, 100);
+						continue;
+					}
+					while (now() < deadline) YieldProcessor();
+					break;
+				}
+				const LONGLONG late = now() - deadline;
+				worst_late = std::max(worst_late, late);
+				late_frames += late > ticks_for_ms(0.5, frequency.QuadPart);
+			}
+			const double total_ms = static_cast<double>(now() - begin) * 1000.0 / static_cast<double>(frequency.QuadPart);
+			std::printf("  info  60 frames paced at 120 fps took %.1f ms (expected 491.7: 59 intervals); %d frame(s) over 0.5 ms late, the worst by %.3f ms\n",
+			            total_ms, late_frames, static_cast<double>(worst_late) * 1000.0 / static_cast<double>(frequency.QuadPart));
+			CHECK(total_ms >= 491.0 && total_ms < 530.0);
+			CHECK(worst_late < interval); // a preempted wake-up is absorbed by the next frame; never a whole frame late
+			CHECK(late_frames <= 6);      // the odd preemption on a busy desktop, not the rule
+			CloseHandle(timer);
+		}
+	}
 
 	// The Video options list the fix builds from this PC's Direct3D 8 modes (the game's list comes
 	// from the same IDirect3D8::EnumAdapterModes).
@@ -396,6 +627,7 @@ namespace
 		CHECK(list.size() <= 20);
 		CHECK(std::ranges::any_of(list, [&](const auto& m) { return m.width == desktop.width && m.height == desktop.height; }));
 		check_d3d8_capture(d3d);
+		check_windowed_presents(d3d, desktop);
 		static_cast<IUnknown*>(d3d)->Release();
 	}
 
@@ -524,6 +756,115 @@ namespace
 		UnregisterClassW(wc.lpszClassName, wc.hInstance);
 	}
 
+	// Whether a windowed Direct3D 8 present waits for the vertical blank on this desktop, which
+	// decides what VSync can mean in the borderless and windowed modes (docs/in-game-options-plan.md,
+	// owner decision 4). Times Presents on a small window of our own, shown without taking the focus,
+	// with each swap effect, and confirms which presentation intervals a windowed device refuses.
+	void check_windowed_presents(void* d3d, const d3d8::display_mode& desktop)
+	{
+		std::printf("Direct3D 8 windowed presentation (does a window sync to the vertical blank?)\n");
+		if (!desktop.refresh_rate)
+		{
+			std::printf("  skip  the desktop's refresh rate is unknown\n");
+			return;
+		}
+		WNDCLASSW wc{};
+		wc.lpfnWndProc = DefWindowProcW;
+		wc.hInstance = GetModuleHandleW(nullptr);
+		wc.lpszClassName = L"xml2_test_present";
+		RegisterClassW(&wc);
+		// Bottom right of the primary monitor, a tool window that never activates.
+		const HWND hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, wc.lpszClassName, L"xml2_test", WS_POPUP,
+		                                  static_cast<int>(desktop.width) - 80, static_cast<int>(desktop.height) - 120, 64, 48, nullptr, nullptr, wc.hInstance, nullptr);
+		CHECK(hwnd != nullptr);
+
+		LARGE_INTEGER frequency{};
+		QueryPerformanceFrequency(&frequency);
+		const double refresh_ms = 1000.0 / desktop.refresh_rate;
+
+		// Average milliseconds per Present over 90 frames, after 10 to settle.
+		const auto measure = [&](void* device, const char* what) -> double
+		{
+			const auto clear = d3d8::method<d3d8::clear_t>(device, d3d8::device_slot::clear);
+			const auto present = d3d8::method<d3d8::present_t>(device, d3d8::device_slot::present);
+			for (int i = 0; i < 10; ++i)
+			{
+				clear(device, 0, nullptr, d3d8::clear_target, 0xFF204060, 1.0f, 0);
+				present(device, nullptr, nullptr, nullptr, nullptr);
+			}
+			LARGE_INTEGER start{}, end{};
+			QueryPerformanceCounter(&start);
+			constexpr int frames = 90;
+			for (int i = 0; i < frames; ++i)
+			{
+				clear(device, 0, nullptr, d3d8::clear_target, 0xFF204060, 1.0f, 0);
+				present(device, nullptr, nullptr, nullptr, nullptr);
+			}
+			QueryPerformanceCounter(&end);
+			const double ms = static_cast<double>(end.QuadPart - start.QuadPart) * 1000.0 / static_cast<double>(frequency.QuadPart) / frames;
+			std::printf("  info  %-46s %8.3f ms/frame = %7.1f fps  (%s the %u Hz refresh)\n", what, ms, 1000.0 / ms,
+			            ms >= refresh_ms * 0.85 ? "waits for" : "ignores", desktop.refresh_rate);
+			return ms;
+		};
+		const auto synced = [&](const double ms) { return ms >= refresh_ms * 0.85; };
+
+		d3d8::present_parameters pp{64, 48, d3d8::format_x8r8g8b8, 1, d3d8::multisample_none, d3d8::swap_discard, hwnd, TRUE, FALSE, 0, 0, 0, d3d8::present_interval_default};
+		const auto create = d3d8::method<d3d8::create_device_t>(d3d, d3d8::d3d_slot::create_device);
+		void* device = nullptr;
+		HRESULT result = create(d3d, 0, d3d8::device_type_hal, hwnd, 0x20 /* software vertex processing */, &pp, &device);
+		if (FAILED(result) || !device)
+		{
+			std::printf("  skip  no Direct3D 8 device here (%08lX)\n", result);
+			DestroyWindow(hwnd);
+			UnregisterClassW(wc.lpszClassName, wc.hInstance);
+			return;
+		}
+		const auto reset = d3d8::method<d3d8::reset_t>(device, d3d8::device_slot::reset);
+
+		const double hidden_default = measure(device, "discard, default interval, window hidden");
+		ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+		Sleep(200); // the compositor picks the window up
+		const double shown_default = measure(device, "discard, default interval, window shown");
+		pp.swap_effect = d3d8::swap_copy_vsync;
+		result = reset(device, &pp);
+		CHECK(SUCCEEDED(result));
+		const double shown_copy_vsync = SUCCEEDED(result) ? measure(device, "copy_vsync, default interval, window shown") : 0.0;
+		timeBeginPeriod(1); // does the runtime's wait poll on the scheduler's tick?
+		const double shown_copy_vsync_1ms = SUCCEEDED(result) ? measure(device, "copy_vsync, window shown, timeBeginPeriod(1)") : 0.0;
+		timeEndPeriod(1);
+		pp.swap_effect = d3d8::swap_copy;
+		result = reset(device, &pp);
+		CHECK(SUCCEEDED(result));
+		const double shown_copy = SUCCEEDED(result) ? measure(device, "copy, default interval, window shown") : 0.0;
+		pp.swap_effect = d3d8::swap_discard;
+		reset(device, &pp);
+		ShowWindow(hwnd, SW_HIDE);
+		static_cast<IUnknown*>(device)->Release();
+		device = nullptr;
+
+		// The intervals: Direct3D 8 only allows DEFAULT windowed.
+		for (const auto [interval, name] : {std::pair{d3d8::present_interval_immediate, "immediate"}, std::pair{d3d8::present_interval_one, "one"}})
+		{
+			pp.fullscreen_presentation_interval = interval;
+			result = create(d3d, 0, d3d8::device_type_hal, hwnd, 0x20, &pp, &device);
+			std::printf("  info  windowed device with presentation interval %-9s -> %08lX%s\n", name, result, result == d3d8::err_invalid_call ? " (D3DERR_INVALIDCALL)" : "");
+			CHECK(result == d3d8::err_invalid_call && device == nullptr);
+			if (device)
+			{
+				static_cast<IUnknown*>(device)->Release();
+				device = nullptr;
+			}
+		}
+
+		std::printf("  info  conclusion: a windowed present with the default interval %s for the vertical blank on this desktop; copy_vsync %s (%.1f fps; %.1f with a 1 ms tick)%s\n",
+		            synced(shown_default) ? "WAITS" : "does NOT wait", synced(shown_copy_vsync) ? "waits" : "does not wait",
+		            shown_copy_vsync > 0 ? 1000.0 / shown_copy_vsync : 0.0, shown_copy_vsync_1ms > 0 ? 1000.0 / shown_copy_vsync_1ms : 0.0,
+		            synced(hidden_default) ? "; a hidden window waits too" : "; a hidden window doesn't wait");
+		(void)shown_copy;
+		DestroyWindow(hwnd);
+		UnregisterClassW(wc.lpszClassName, wc.hInstance);
+	}
+
 	// ---- The pipe, end to end -----------------------------------------------------------------------
 
 	constexpr const char* pipe_name = "\\\\.\\pipe\\xml2-fix-input";
@@ -565,6 +906,7 @@ namespace
 		const auto status = ask(pipe, "status");
 		std::printf("  info  %s\n", status.c_str());
 		CHECK(ok(status));
+		CHECK(status.find("; fps 0.0; frame rate the game's own 60 fps cap") != std::string::npos); // no frames drawn here, no [Display] FrameRate
 		CHECK(refused(ask(pipe, "frob")));
 		CHECK(refused(ask(pipe, "tap NOSUCHKEY")));
 		CHECK(refused(ask(pipe, "screenshot")));
@@ -747,6 +1089,7 @@ int main(const int argc, char** argv)
 	}
 	check_online();
 	check_display_rules();
+	check_frame_rate_rules();
 	check_test_input_rules();
 	check_image_file();
 	check_d3d8_modes();

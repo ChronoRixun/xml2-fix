@@ -2,9 +2,10 @@
 
 // The decisions behind the display fix, kept apart from the hooks so xml2_test can check them:
 // which resolution the game should believe it runs at, what the Video options list offers, how
-// the Direct3D present parameters change for each mode, and where the window goes.
+// the Direct3D present parameters change for each mode and for VSync, and where the window goes.
 
 #include "d3d8_min.hpp"
+#include "frame_rate_rules.hpp"
 
 #include <Windows.h>
 
@@ -34,6 +35,8 @@ namespace display_rules
 		int height = 0;
 		bool topmost = false;
 		bool run_in_background = true;
+		frame_rate_rules::cap frame_rate; // [Display] FrameRate; stock = the game's own 60 fps cap
+		std::optional<bool> vsync;        // [Display] VSync; nothing = the engine's own presentation interval
 	};
 
 	struct size
@@ -136,10 +139,21 @@ namespace display_rules
 
 	// The present parameters to use in place of the engine's. `multisample_ok(format, type)` and
 	// `back_buffer_format_ok(format)` answer whether the adapter supports these for a windowed
-	// device. `notes` receives what changed and why.
+	// device, `presentation_interval_ok(interval)` whether it offers that interval fullscreen.
+	// `notes` receives what changed and why.
+	//
+	// VSync: a fullscreen device syncs through its presentation interval (the engine's default is
+	// IMMEDIATE, i.e. off, when the driver allows it; ONE is on). A windowed Direct3D 8 device
+	// can't set an interval - DEFAULT is the only value it accepts, and a present with it never
+	// waits for the vertical blank - and its one synchronised presentation, the COPY_VSYNC swap
+	// effect, runs at about 32 fps under the desktop compositor (both measured by xml2_test on
+	// Windows 11; see docs/in-game-options-plan.md). So in a window VSync=1 is not a swap effect but
+	// frames paced at the desktop's refresh rate (frame_rate_rules::effective_target), which the
+	// compositor shows without tearing; VSync=0 only undoes an engine-side windowedVSync.
 	inline d3d8::present_parameters rewrite_present(const d3d8::present_parameters& requested, const options& opts, const d3d8::display_mode& desktop,
 	                                                const std::function<bool(DWORD, DWORD)>& multisample_ok,
-	                                                const std::function<bool(DWORD)>& back_buffer_format_ok, std::string& notes)
+	                                                const std::function<bool(DWORD)>& back_buffer_format_ok,
+	                                                const std::function<bool(UINT)>& presentation_interval_ok, std::string& notes)
 	{
 		auto pp = requested;
 		notes.clear();
@@ -154,38 +168,68 @@ namespace display_rules
 				pp.fullscreen_refresh_rate = desktop.refresh_rate;
 				notes += "refresh rate: the desktop's; ";
 			}
-			return pp;
 		}
-
-		if (!manages_window(opts.window_mode))
+		else if (manages_window(opts.window_mode))
 		{
-			return pp;
-		}
-
-		pp.windowed = TRUE;
-		pp.fullscreen_refresh_rate = 0;                                   // must be 0 for a windowed device
-		pp.fullscreen_presentation_interval = d3d8::present_interval_default; // the only value Direct3D 8 allows windowed
-		if (pp.swap_effect == d3d8::swap_flip)
-		{
-			pp.swap_effect = d3d8::swap_discard;
-			notes += "swap effect: discard; ";
-		}
-		if (pp.back_buffer_format != desktop.format && !back_buffer_format_ok(pp.back_buffer_format))
-		{
-			notes += "back buffer format: the desktop's (" + std::to_string(pp.back_buffer_format) + " isn't supported windowed); ";
-			pp.back_buffer_format = desktop.format;
-		}
-		if (pp.multi_sample_type != d3d8::multisample_none)
-		{
-			if (pp.swap_effect != d3d8::swap_discard)
+			pp.windowed = TRUE;
+			pp.fullscreen_refresh_rate = 0;                                   // must be 0 for a windowed device
+			pp.fullscreen_presentation_interval = d3d8::present_interval_default; // the only value Direct3D 8 allows windowed
+			if (pp.swap_effect == d3d8::swap_flip)
 			{
-				notes += "multisampling: off (needs the discard swap effect); ";
-				pp.multi_sample_type = d3d8::multisample_none;
+				pp.swap_effect = d3d8::swap_discard;
+				notes += "swap effect: discard; ";
 			}
-			else if (!multisample_ok(pp.back_buffer_format, pp.multi_sample_type))
+			if (opts.vsync.has_value())
 			{
-				notes += "multisampling: off (" + std::to_string(pp.multi_sample_type) + " samples aren't supported windowed); ";
-				pp.multi_sample_type = d3d8::multisample_none;
+				if (*opts.vsync)
+				{
+					notes += "vsync: on in a window = frames paced at the desktop's refresh rate (Direct3D 8's copy_vsync would run at ~32 fps); ";
+				}
+				else if (pp.swap_effect == d3d8::swap_copy_vsync)
+				{
+					pp.swap_effect = d3d8::swap_discard;
+					notes += "vsync: off (discard swap effect instead of the engine's copy_vsync); ";
+				}
+			}
+			if (pp.swap_effect == d3d8::swap_copy_vsync || pp.swap_effect == d3d8::swap_copy)
+			{
+				pp.back_buffer_count = 1; // the copy swap effects allow no more
+			}
+			if (pp.back_buffer_format != desktop.format && !back_buffer_format_ok(pp.back_buffer_format))
+			{
+				notes += "back buffer format: the desktop's (" + std::to_string(pp.back_buffer_format) + " isn't supported windowed); ";
+				pp.back_buffer_format = desktop.format;
+			}
+			if (pp.multi_sample_type != d3d8::multisample_none)
+			{
+				if (pp.swap_effect != d3d8::swap_discard)
+				{
+					notes += "multisampling: off (needs the discard swap effect); ";
+					pp.multi_sample_type = d3d8::multisample_none;
+				}
+				else if (!multisample_ok(pp.back_buffer_format, pp.multi_sample_type))
+				{
+					notes += "multisampling: off (" + std::to_string(pp.multi_sample_type) + " samples aren't supported windowed); ";
+					pp.multi_sample_type = d3d8::multisample_none;
+				}
+			}
+		}
+
+		// VSync on a fullscreen device (the stock mode's and the fullscreen mode's).
+		if (opts.vsync.has_value() && !pp.windowed)
+		{
+			const UINT wanted = *opts.vsync ? d3d8::present_interval_one : d3d8::present_interval_immediate;
+			if (pp.fullscreen_presentation_interval != wanted)
+			{
+				if (presentation_interval_ok(wanted))
+				{
+					pp.fullscreen_presentation_interval = wanted;
+					notes += *opts.vsync ? "vsync: on (presentation interval one); " : "vsync: off (presentation interval immediate); ";
+				}
+				else
+				{
+					notes += std::string("vsync: the adapter doesn't offer presentation interval ") + (*opts.vsync ? "one" : "immediate") + " - left as the engine has it; ";
+				}
 			}
 		}
 		return pp;

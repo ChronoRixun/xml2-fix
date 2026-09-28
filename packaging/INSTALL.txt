@@ -26,7 +26,11 @@ DISPLAY (optional)
     Height=0
     Topmost=0               (1 keeps the game above other windows)
     RunInBackground=1       (0 pauses the game when it loses the focus, like the stock game)
-  In every mode your desktop resolution appears in Options > Video.
+    FrameRate=refresh       (fps, "refresh" = your desktop's rate, or 0 = unlimited; leave out for the game's own 60 fps cap)
+    VSync=0                 (1 or 0; leave out for the engine's own setting)
+  In every mode your desktop resolution appears in Options > Video. FrameRate and VSync work in
+  any mode, the game's own included. In a window VSync=1 paces frames at your desktop's refresh
+  rate (Direct3D 8 has no usable vsync there); it never goes above FrameRate.
 
 TROUBLESHOOTING
   The fix writes xml2-fix.log next to itself each time the game starts.
