@@ -266,9 +266,19 @@ namespace
 		CHECK(parse_mode("windowed") == mode::windowed);
 		CHECK(parse_mode("FULLSCREEN") == mode::fullscreen);
 		CHECK(parse_mode("") == mode::stock && parse_mode("sideways") == mode::stock);
-		CHECK(parse_resolution_list("") == resolution_list::all && parse_resolution_list("ALL") == resolution_list::all && parse_resolution_list("game") == resolution_list::game);
+		CHECK(parse_resolution_list("") == resolution_list::stock && parse_resolution_list("ALL") == resolution_list::all && parse_resolution_list("game") == resolution_list::game);
 		CHECK(!parse_resolution_list("off").has_value() && !parse_resolution_list("64").has_value());
-		CHECK(std::string(name(resolution_list::game)) == "game" && std::string(name(resolution_list::all)) == "all" && options{}.resolutions == resolution_list::all);
+		CHECK(std::string(name(resolution_list::game)) == "game" && std::string(name(resolution_list::all)) == "all" && std::string(name(resolution_list::stock)) == "stock");
+		// Default-off: no keys = the game's own list in its own mode (no mode-list hooks, no relocation);
+		// the fix's list in its own modes, as before; ResolutionList asks for it in the game's mode too.
+		CHECK(options{}.resolutions == resolution_list::stock && !fix_builds_mode_list(options{}));
+		{
+			options with_mode;
+			with_mode.window_mode = mode::fullscreen;
+			options with_list;
+			with_list.resolutions = resolution_list::game;
+			CHECK(fix_builds_mode_list(with_mode) && fix_builds_mode_list(with_list));
+		}
 
 		const size desktop{2560, 1440};
 		const d3d8::display_mode desktop_mode{2560, 1440, 180, d3d8::format_x8r8g8b8};
@@ -847,6 +857,24 @@ namespace
 		// A size too long for the game's registry read is left out, even the desktop's.
 		list = build_list({{10240, 4320, 60, 22}, {1920, 1080, 60, 22}}, {10240, 4320}, 60, size{12800, 7200}, mode::borderless, slots);
 		CHECK(std::ranges::none_of(list, [](const auto& m) { return m.width >= 10000; }) && lists(list, 1920, 1080) && lists(list, 5120, 2160));
+
+		// By [Display] ResolutionList. Absent: exactly the list the fix gave its own modes before the
+		// 64-slot table (curate_modes into the game's 20 slots, no window extras), whatever table size
+		// is passed; game: build_list within 20; all: within the table in use.
+		using display_rules::resolution_list;
+		const auto same = [](const std::vector<d3d8::display_mode>& a, const std::vector<d3d8::display_mode>& b)
+		{
+			return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size() * sizeof(d3d8::display_mode)) == 0;
+		};
+		CHECK(same(video_list(many, {2560, 1440}, 180, std::nullopt, mode::borderless, resolution_list::stock, slots),
+		           display_rules::curate_modes(many, {2560, 1440}, 180, std::nullopt, stock_slots)));
+		CHECK(same(video_list(adapter, {2560, 1440}, 180, size{1600, 1000}, mode::borderless, resolution_list::stock, slots),
+		           display_rules::curate_modes(adapter, {2560, 1440}, 180, size{1600, 1000}, stock_slots)));
+		CHECK(video_list(many, {2560, 1440}, 180, std::nullopt, mode::fullscreen, resolution_list::game, slots).size() == stock_slots);
+		CHECK(video_list(many, {2560, 1440}, 180, std::nullopt, mode::fullscreen, resolution_list::all, slots).size() == slots);
+		CHECK(video_list(many, {2560, 1440}, 180, std::nullopt, mode::fullscreen, resolution_list::all, stock_slots).size() == stock_slots); // relocation refused
+		CHECK(same(video_list(adapter, {2560, 1440}, 180, size{1600, 1000}, mode::borderless, resolution_list::all, slots),
+		           build_list(adapter, {2560, 1440}, 180, size{1600, 1000}, mode::borderless, slots)));
 	}
 
 	// The Video options list the fix builds from this PC's Direct3D 8 modes (the game's list comes
@@ -1292,7 +1320,11 @@ namespace
 		CHECK(log.find("the game reads its DirectInput keyboard") != std::string::npos);
 		CHECK(log.find("display: as the game has it") != std::string::npos && log.find("hooked for the test pipe") != std::string::npos);
 		CHECK(log.find("options: XMen2.exe doesn't have the expected code") != std::string::npos); // this isn't the game: the panel is left alone
-		CHECK(log.find("resolution list: XMen2.exe doesn't have the expected code") != std::string::npos && log.find("references patched") == std::string::npos); // and its table stays
+		// ResolutionList=all, but no libIGGfx.dll here, so no mode-list hooks: the table must not be
+		// relocated at all (the game's writer has no bounds check; only the hooks keep it within 64).
+		CHECK(log.find("hooked for the test pipe's screenshots, the Video options list (ResolutionList)") != std::string::npos);
+		CHECK(log.find("the Video options list and its table stay the game's own") != std::string::npos);
+		CHECK(log.find("resolution list:") == std::string::npos && log.find("references patched") == std::string::npos);
 	}
 
 	// Starts this program again with an xml2-fix.ini next to it that turns the pipe on, so its
@@ -1308,7 +1340,7 @@ namespace
 		}
 		{
 			std::ofstream out(ini, std::ios::binary);
-			out << "[Test]\r\nInputPipe=1\r\n";
+			out << "[Test]\r\nInputPipe=1\r\n[Display]\r\nResolutionList=all\r\n";
 		}
 
 		wchar_t exe[MAX_PATH]{};
@@ -1417,7 +1449,8 @@ int main(const int argc, char** argv)
 	CHECK(log.find("display: as the game has it") != std::string::npos); // no [Display] section next to the test
 	CHECK(log.find("test:") == std::string::npos);                       // and no [Test] section: no pipe
 	CHECK(log.find("options: XMen2.exe doesn't have the expected code") != std::string::npos && log.find("call sites patched") == std::string::npos); // not the game
-	CHECK(log.find("resolution list: XMen2.exe doesn't have the expected code") != std::string::npos && log.find("references patched") == std::string::npos);
+	// Default-off: no keys and no rows (not the game) -> nothing hooked, the resolution table never looked at.
+	CHECK(log.find("nothing hooked") != std::string::npos && log.find("resolution list:") == std::string::npos && log.find("references patched") == std::string::npos);
 	CHECK(log.find("GameSpy servers redirected to openspy.net") != std::string::npos);
 	CHECK(log.find("xmenlegpc.master.gamespy.com -> xmenlegpc.master.openspy.net (resolved)") != std::string::npos);
 	if (pads > 0)

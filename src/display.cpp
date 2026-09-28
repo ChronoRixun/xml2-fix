@@ -32,6 +32,8 @@ namespace display
 
 		// The engine's Direct3D 8 and device.
 		void* d3d = nullptr;
+		void* device = nullptr; // the engine's IDirect3DDevice8, once created
+		bool present_hooked = false;
 		UINT adapter = 0;
 		DWORD device_type = d3d8::device_type_hal;
 		d3d8::present_parameters applied{};
@@ -46,7 +48,8 @@ namespace display
 		size client_size; // the client area the window should have (the back buffer size)
 
 		std::vector<d3d8::display_mode> modes;
-		bool modes_built = false;
+		constexpr UINT no_adapter = ~0u;
+		UINT modes_adapter = no_adapter; // the adapter `modes` was built for
 
 		d3d8::direct3d_create8_t real_direct3d_create8 = nullptr;
 		d3d8::get_adapter_mode_count_t real_get_adapter_mode_count = nullptr;
@@ -344,6 +347,20 @@ namespace display
 			return result;
 		}
 
+		// Present is hooked only when something needs it: the pause of RunInBackground=0 in a window,
+		// the test pipe's screenshots, or the frame limiter - at device creation, or later when the
+		// in-game rows start the limiter. Called with the mutex held, on the game's thread.
+		void hook_present(const char* why)
+		{
+			if (present_hooked || !device)
+			{
+				return;
+			}
+			hook_slot(device, d3d8::device_slot::present, &hooked_present, real_present);
+			present_hooked = true;
+			logger::write("display: Present hooked (%s)", why);
+		}
+
 		HRESULT STDMETHODCALLTYPE hooked_reset(void* self, d3d8::present_parameters* pp)
 		{
 			if (!pp || stock_fallback)
@@ -420,7 +437,7 @@ namespace display
 			}
 			copy_back(*pp, wanted);
 
-			void* device = *out;
+			device = *out;
 			hook_slot(device, d3d8::device_slot::reset, &hooked_reset, real_reset);
 			if (const auto current = d3d8::method<d3d8::test_cooperative_level_t>(device, d3d8::device_slot::test_cooperative_level);
 			    current != &hooked_test_cooperative_level)
@@ -428,69 +445,70 @@ namespace display
 				real_test_cooperative_level = current; // a second device shares the vtable, possibly already hooked
 			}
 			// The pause on losing the focus can be switched on from the in-game rows at any time, so a
-			// window of ours gets both hooks whatever RunInBackground says now; the rows' live frame
-			// rate needs Present in every mode.
+			// window of ours gets both hooks whatever RunInBackground says now. Otherwise Present waits
+			// until something needs it (hook_present; the rows' frame rate, for one).
 			const bool can_pause = manages_window(opts.window_mode) && !stock_fallback;
 			if (can_pause)
 			{
 				hook_slot(device, d3d8::device_slot::test_cooperative_level, &hooked_test_cooperative_level, real_test_cooperative_level);
 			}
-			if (can_pause || frame_hook || frame_rate::paces() || options_menu::installed())
+			present_hooked = present_hooked && d3d8::method<void*>(device, d3d8::device_slot::present) == reinterpret_cast<void*>(&hooked_present);
+			if (can_pause || frame_hook || frame_rate::paces())
 			{
-				hook_slot(device, d3d8::device_slot::present, &hooked_present, real_present);
+				hook_present(can_pause ? "the window's pause without the focus" : frame_hook ? "the test pipe's screenshots" : "the frame limiter");
 			}
 			logger::write("display: device created - %s", describe(wanted).c_str());
 			return result;
 		}
 
-		void build_modes(void* self)
+		// The list for `which`: the game's list builder (FUN_00619ac0) asks adapter 0 whatever
+		// adapter the device is on, and must get a list that fits its table either way.
+		void build_modes(void* self, const UINT which)
 		{
 			std::vector<d3d8::display_mode> adapter_modes;
-			const UINT count = real_get_adapter_mode_count(self, adapter);
+			const UINT count = real_get_adapter_mode_count(self, which);
 			for (UINT i = 0; i < count; ++i)
 			{
 				d3d8::display_mode mode{};
-				if (SUCCEEDED(real_enum_adapter_modes(self, adapter, i, &mode)))
+				if (SUCCEEDED(real_enum_adapter_modes(self, which, i, &mode)))
 				{
 					adapter_modes.push_back(mode);
 				}
 			}
 
-			modes = resolution_rules::build_list(adapter_modes, desktop_size(), desktop.refresh_rate, resolution_override(opts, desktop_size()), opts.window_mode, mode_slots);
-			modes_built = true;
+			modes = resolution_rules::video_list(adapter_modes, desktop_size(), desktop.refresh_rate, resolution_override(opts, desktop_size()), opts.window_mode,
+			                                     opts.resolutions, mode_slots);
+			modes_adapter = which;
 
 			std::string list;
 			for (const auto& mode : modes)
 			{
 				list += (list.empty() ? "" : " ") + resolution_rules::text_of(mode.width, mode.height);
 			}
-			logger::write("display: video options list: %zu sizes from %u adapter modes (%zu-slot table): %s", modes.size(), count, mode_slots, list.c_str());
+			logger::write("display: video options list for adapter %u: %zu sizes from %u adapter modes (%zu-slot table, ResolutionList %s): %s", which, modes.size(), count,
+			              mode_slots, name(opts.resolutions), list.c_str());
 		}
 
 		UINT STDMETHODCALLTYPE hooked_get_adapter_mode_count(void* self, const UINT which)
 		{
-			if (which != adapter)
-			{
-				return real_get_adapter_mode_count(self, which);
-			}
 			std::lock_guard lock(mutex);
-			if (!modes_built)
+			if (modes_adapter != which)
 			{
-				build_modes(self);
+				build_modes(self, which);
 			}
 			return static_cast<UINT>(modes.size());
 		}
 
 		HRESULT STDMETHODCALLTYPE hooked_enum_adapter_modes(void* self, const UINT which, const UINT index, d3d8::display_mode* out)
 		{
-			if (which != adapter || !out)
+			if (!out)
 			{
 				return real_enum_adapter_modes(self, which, index, out);
 			}
 			std::lock_guard lock(mutex);
-			if (!modes_built)
+			if (modes_adapter != which)
 			{
-				build_modes(self);
+				build_modes(self, which);
 			}
 			if (index >= modes.size())
 			{
@@ -511,12 +529,15 @@ namespace display
 
 			std::lock_guard lock(mutex);
 			d3d = result;
-			modes_built = false;
+			modes_adapter = no_adapter;
 			hook_slot(result, d3d8::d3d_slot::create_device, &hooked_create_device, real_create_device);
-			// The Video options list, in every mode: the game writes it into a fixed table with no
-			// bounds check (resolution_list.hpp), so the list is kept within that table's slots.
-			hook_slot(result, d3d8::d3d_slot::get_adapter_mode_count, &hooked_get_adapter_mode_count, real_get_adapter_mode_count);
-			hook_slot(result, d3d8::d3d_slot::enum_adapter_modes, &hooked_enum_adapter_modes, real_enum_adapter_modes);
+			// The Video options list: the game writes it into a fixed table with no bounds check
+			// (resolution_list.hpp), so the fix's list is kept within that table's slots.
+			if (fix_builds_mode_list(opts))
+			{
+				hook_slot(result, d3d8::d3d_slot::get_adapter_mode_count, &hooked_get_adapter_mode_count, real_get_adapter_mode_count);
+				hook_slot(result, d3d8::d3d_slot::enum_adapter_modes, &hooked_enum_adapter_modes, real_enum_adapter_modes);
+			}
 
 			d3d8::display_mode current{};
 			const auto get_display_mode = d3d8::method<d3d8::get_adapter_display_mode_t>(result, d3d8::d3d_slot::get_adapter_display_mode);
@@ -804,7 +825,7 @@ namespace display
 			}
 			else
 			{
-				logger::write("display: unknown ResolutionList '%s' in xml2-fix.ini (all or game) - taken as all", list_text.c_str());
+				logger::write("display: unknown ResolutionList '%s' in xml2-fix.ini (all or game) - taken as absent", list_text.c_str());
 			}
 
 			const auto frame_rate_text = read_text(ini, L"FrameRate");
@@ -874,16 +895,25 @@ namespace display
 		std::lock_guard lock(mutex);
 		opts.frame_rate = setting;
 		frame_rate::retarget(setting, window_vsync());
+		if (frame_rate::paces())
+		{
+			hook_present("the frame limiter, from the in-game rows");
+		}
 	}
 
-	bool set_vsync(const bool on)
+	bool set_vsync(const std::optional<bool> on)
 	{
 		std::lock_guard lock(mutex);
 		opts.vsync = on;
 		if (manages_window(opts.window_mode) && !stock_fallback)
 		{
-			logger::write("display: VSync %s in a window - %s", on ? "on" : "off", on ? "frames paced at the desktop's refresh rate from now on" : "frames run free again, up to FrameRate");
-			frame_rate::retarget(opts.frame_rate, on);
+			logger::write("display: VSync %s in a window - %s", on.value_or(false) ? "on" : "off",
+			              on.value_or(false) ? "frames paced at the desktop's refresh rate from now on" : "frames run free again, up to FrameRate");
+			frame_rate::retarget(opts.frame_rate, on.value_or(false));
+			if (frame_rate::paces())
+			{
+				hook_present("the frame limiter, from the in-game rows");
+			}
 			return true;
 		}
 		return false; // rewrite_present applies it when the device is next created or reset
@@ -911,21 +941,26 @@ namespace display
 		{
 			logger::write("options: no rows in Advanced Options ([Display] InGameOptions=0)");
 		}
-		// The Video options list is built through the Direct3D hooks in every mode: the game's own
-		// table overflows with more than 20 sizes (resolution_list.hpp), so the display fix always
-		// gets this far.
-		mode_slots = ::resolution_list::install(game, opts.resolutions); // the namespace, not display_rules::resolution_list
+		const bool list_hooked = fix_builds_mode_list(opts);
 		if (opts.window_mode == mode::stock)
 		{
+			// Without a Mode the engine's Direct3D is hooked only for what asks for it; the rows need
+			// the device to start the frame limiter live, but every hook passes the engine's calls
+			// through unchanged until a value is set (Present itself waits for that: hook_present).
 			std::string why;
 			for (const auto& [wanted, reason] : {std::pair{frame_hook != nullptr, "the test pipe's screenshots"}, std::pair{caps_frames, "the frame rate cap"},
 			                                     std::pair{opts.vsync.has_value(), "VSync"}, std::pair{options_menu::installed(), "the in-game options"},
-			                                     std::pair{true, "the Video options list"}})
+			                                     std::pair{list_hooked, "the Video options list (ResolutionList)"}})
 			{
 				if (wanted)
 				{
 					why += (why.empty() ? "" : ", ") + std::string(reason);
 				}
+			}
+			if (why.empty())
+			{
+				logger::write("display: as the game has it (no [Display] Mode, FrameRate, VSync or ResolutionList in xml2-fix.ini, no in-game rows) - nothing hooked");
+				return;
 			}
 			logger::write("display: as the game has it (no [Display] Mode in xml2-fix.ini); the Direct3D device is hooked for %s", why.c_str());
 		}
@@ -957,10 +992,18 @@ namespace display
 		const HMODULE gfx = GetModuleHandleA("libIGGfx.dll");
 		if (!hook_import(gfx, "d3d8.dll", "Direct3DCreate8", &hooked_direct3d_create8, real_direct3d_create8))
 		{
-			logger::write("display: libIGGfx.dll doesn't import Direct3DCreate8 - display left as the game has it%s%s",
-			              frame_hook ? " (and no frames for the test pipe)" : "", caps_frames ? " (and no frame rate cap: the game's own 60 fps stays)" : "");
+			logger::write("display: libIGGfx.dll doesn't import Direct3DCreate8 - display left as the game has it%s%s%s",
+			              frame_hook ? " (and no frames for the test pipe)" : "", caps_frames ? " (and no frame rate cap: the game's own 60 fps stays)" : "",
+			              list_hooked ? " (and the Video options list and its table stay the game's own)" : "");
 			opts.window_mode = mode::stock;
 			return;
+		}
+
+		// The resolution table is only ever relocated behind the mode-list hooks, which keep the list
+		// within its slots (the game's writer has no bounds check): they are certain from here on.
+		if (list_hooked)
+		{
+			mode_slots = ::resolution_list::install(game, opts.resolutions); // the namespace, not display_rules::resolution_list
 		}
 
 		// The frame limiter paces frames from the Present hook, so it needs the device hooked above.

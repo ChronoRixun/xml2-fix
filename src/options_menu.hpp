@@ -25,7 +25,9 @@
 // Every address is the retail build's; the bytes at each call site and the first bytes of every
 // game function used are compared first, and on any difference the panel is left as it is (logged).
 // With the rows never touched the game behaves as before: no key is written and nothing but the
-// four call sites is patched. [Display] InGameOptions=0 turns the rows off.
+// four call sites is patched (the display fix's Direct3D create/reset hooks, there so a frame rate
+// picked here can start the limiter at once, pass every call through unchanged; Present is hooked
+// only when the limiter starts). [Display] InGameOptions=0 turns the rows off.
 
 #include <Windows.h>
 

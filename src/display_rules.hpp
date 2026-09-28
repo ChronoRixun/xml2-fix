@@ -31,8 +31,10 @@ namespace display_rules
 	// [Display] ResolutionList: where the Video options list lives (resolution_rules.hpp).
 	enum class resolution_list
 	{
-		game, // the game's own 20-slot table; the list is trimmed to 20 so it can't overflow it
-		all   // the table is replaced by one of 64 slots (the default)
+		stock, // no key: as before the 64-slot table existed - in the fix's own modes (Mode set) the list is
+		       // the fix's, trimmed to the game's 20 slots; in the game's own mode it is the game's, untouched
+		game,  // the game's own 20-slot table, the fix's list trimmed to it in every mode (so it can't overflow)
+		all    // the table is replaced by one of 64 slots, the fix's list in every mode
 	};
 
 	struct options
@@ -45,7 +47,7 @@ namespace display_rules
 		frame_rate_rules::cap frame_rate; // [Display] FrameRate; stock = the game's own 60 fps cap
 		std::optional<bool> vsync;        // [Display] VSync; nothing = the engine's own presentation interval
 		bool in_game_options = true;      // [Display] InGameOptions: the rows in the Advanced Options panel
-		resolution_list resolutions = resolution_list::all; // [Display] ResolutionList
+		resolution_list resolutions = resolution_list::stock; // [Display] ResolutionList
 	};
 
 	struct size
@@ -82,19 +84,33 @@ namespace display_rules
 		return m == mode::borderless || m == mode::windowed;
 	}
 
-	// "" (absent) and "all" -> all; "game" -> game; anything else -> nothing (the caller logs it).
+	// "" (absent) -> stock; "all" -> all; "game" -> game; anything else -> nothing (the caller logs it).
 	inline std::optional<resolution_list> parse_resolution_list(std::string_view text)
 	{
 		std::string lower(text);
 		std::ranges::transform(lower, lower.begin(), [](const char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); });
-		if (lower.empty() || lower == "all") return resolution_list::all;
+		if (lower.empty()) return resolution_list::stock;
+		if (lower == "all") return resolution_list::all;
 		if (lower == "game") return resolution_list::game;
 		return std::nullopt;
 	}
 
 	inline const char* name(const resolution_list list)
 	{
-		return list == resolution_list::game ? "game" : "all";
+		switch (list)
+		{
+		case resolution_list::game: return "game";
+		case resolution_list::all: return "all";
+		default: return "stock";
+		}
+	}
+
+	// Whether the Video options list is the fix's (IDirect3D8::GetAdapterModeCount/EnumAdapterModes
+	// hooked): always in the fix's own modes, as before; in the game's own mode only when
+	// ResolutionList asks for it, so with no [Display] keys the game's list is its own.
+	inline bool fix_builds_mode_list(const options& opts)
+	{
+		return opts.window_mode != mode::stock || opts.resolutions != resolution_list::stock;
 	}
 
 	// The resolution the game should believe it runs at (its Settings\Display\Resolution), when

@@ -20,6 +20,13 @@ started (out of scope by decision 2). Target: xml2-fix branch `display`, on top 
 5. The **HUD aspect fix at 21:9 is a separate follow-up**, not part of this work.
 6. **English labels first**; translations later.
 
+Default-off (the brief's rule, applied in the review fix round): with no new ini key set and the rows never
+used, the game behaves as before this work; the rows themselves may appear (the four call-site patches A-D are
+what puts them there). Everything else waits for a value: no Present hook, no frame-limiter patch, no mode-list
+hooks and no resolution-table relocation in the stock mode without `ResolutionList` (the Direct3D create/reset
+hooks the rows need to start the limiter live pass every call through unchanged). Reverting a row to its stock
+value removes its key again (see "Review fix round" below).
+
 Single source of truth: `xml2-fix.ini` next to `dinput.dll`, `[Display]` section (the launcher writes the same
 keys): `Mode`, `Width`, `Height`, `Topmost`, `RunInBackground`, `FrameRate` (`<n>` | `refresh` | `0`; absent =
 stock 60 cap untouched), `VSync` (`0` | `1`; absent = the game's own presentation interval). The menu writes a
@@ -79,7 +86,9 @@ key only when the user changed that row (Accept), with `WritePrivateProfileStrin
 - Hook B (`on_save`, after the game's `FUN_00619440`): reads each row's +0x1e0, `ini_changes` (only rows whose
   index differs from the one shown at open) -> `WritePrivateProfileStringW(L"Display", key, value, xml2-fix.ini)`
   -> live apply: `display::set_frame_rate` (-> `frame_rate::retarget`: patches the 60 fps spin now if it never
-  was, re-aims the pacer; Present is hooked from the start whenever the rows are in place),
+  was, re-aims the pacer; Present is hooked then, if nothing hooked it at device creation - review fix round:
+  the rows no longer force a Present hook from the start; the device is known from the pass-through
+  `CreateDevice` hook, installed in the stock mode when the rows are in place),
   `display::set_run_in_background` (the Present/TestCooperativeLevel hooks read the flag every frame now, and a
   window of ours gets both hooks whatever RunInBackground says at start), `display::set_vsync` (a window: pacer
   retarget, live; fullscreen: the next device creation or reset - "applies after restart"). The display mode is
@@ -127,7 +136,7 @@ key only when the user changed that row (Accept), with `WritePrivateProfileStrin
   stays 20. `xml2_test` checks the seven sites (consistency: decoded imm == 0x6e9800, opcode vs imm offset,
   address order) and their bytes against `docs/research/XMen2.exe`, read-only.
 - The list (`resolution_rules::build_list`, fed through the display fix's `GetAdapterModeCount`/`EnumAdapterModes`
-  hooks, now installed in **every** mode, the stock one included, so the table can never overflow again): the
+  hooks - installed in every mode with `ResolutionList` set, see the default-off note below): the
   adapter's sizes >= 640x480, one per size, the desktop's, the forced `Width`x`Height`, and in borderless/windowed
   (`extra_sizes`) the common sizes of the desktop's aspect ratio (within 1 %, so 1366x768 is 16:9 and 2560x1080 /
   3440x1440 are one 21:9) up to the desktop plus 1/2 and 3/4 of the desktop rounded to even numbers (render-scale
@@ -141,10 +150,20 @@ key only when the user changed that row (Accept), with `WritePrivateProfileStrin
   function saves the entry to the registry; a resolution applies at the next start (decision 2). `Width`/`Height`
   in the ini still shows as the selected entry because the registry read is answered with it and `build_list`
   lists it.
-- Default-on element (flagged, like `InGameOptions`): the mode-enumeration hooks and the seven-site patch are on
-  with no ini key set, because the alternative is the stock memory corruption; `ResolutionList=game` keeps the
-  game's own table (the list trimmed to 20 - also a change from stock, a bug fix). There is deliberately no
-  "leave the overflow in" value.
+- ~~Default-on element~~ **Made opt-in in the review fix round** (the brief's default-off rule: no new key, no
+  change): `ResolutionList` absent = exactly the behaviour before phase 3 - in the stock mode no mode-list hooks
+  and no patch (the game's own list, including its overflow on a >20-size adapter), in the fix's own modes the
+  pre-phase-3 list (`curate_modes` into 20 slots, no window extras; `resolution_rules::video_list`).
+  `ResolutionList=all` = the 64-slot table + `build_list` in every mode; `game` = the game's 20 slots,
+  `build_list` trimmed to 20 in every mode (the overflow fix alone). **For Owen:** the overflow at 0x6e98f0+
+  corrupts the default key bindings on the development PC (24 sizes), so `all` as the default is a one-line
+  change in `display_rules::options` once he OKs it; until then the launcher can write `ResolutionList=all`.
+- Safety of the 64-slot table (review fix round): the relocation now happens only after the `Direct3DCreate8`
+  import hook succeeded (before, a failed hook left the table relocated with no list clamp: the writer's
+  unbounded loop could run past the DLL's 64 slots), and the two hooks build the list for whatever adapter is
+  asked (the writer always asks adapter 0; before, they passed other adapters through unclamped whenever the
+  device was on another one). `xml2_test`'s pipe child runs with `ResolutionList=all` and no libIGGfx.dll and
+  checks that the table is never touched.
 - **Not yet verified in game**: the slider walking 24 entries (3 virtual px per step at 192 px), the value label
   for each, picking 2560x1440 or a render-scale preset -> `NEW_RESZ_RESTART` -> the size after the restart, and
   `Revert to default` re-syncing the slider to "640x480"/the default through the relocated table.
@@ -649,7 +668,7 @@ game's rows, their `FUN_00617f10` greys only 0x15 and 6 - our event-4 handler gr
 | `FrameRate` | `0` (unlimited) / `10`..`1000` / `refresh` | absent = the game's own 60 fps cap, untouched (decision 1) | live (phase 1 done: start-up) |
 | `VSync` | `0` / `1` | absent = the engine's own interval | fullscreen: via reset; windowed: pacer retarget (phase 1 done: start-up) |
 | `InGameOptions` | `0` / `1` | `1` | start |
-| `ResolutionList` | `game` (the game's 20 slots, the list trimmed to them) / `all` (the relocated 64-slot table) | `all` | start (phase 3 done) |
+| `ResolutionList` | `game` (the game's 20 slots, the fix's list trimmed to them in every mode) / `all` (the relocated 64-slot table, the fix's list in every mode) | absent = as before phase 3 (the fix's list only with a `Mode`, 20 slots) | start (phase 3 done) |
 
 The in-game cycles show exactly these values; "Refresh" reads as "Refresh rate (180 Hz)". Unknown ini
 values fall back to the default and are logged.

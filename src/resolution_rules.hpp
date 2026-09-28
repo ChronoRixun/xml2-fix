@@ -2,7 +2,8 @@
 
 // The Video options list's decisions, kept apart from the hooks so xml2_test can check them: the
 // seven places in XMen2.exe that address the game's 20-slot resolution table (which the fix
-// relocates to a 64-slot table of its own), and which sizes the list offers in each display mode.
+// relocates to a 64-slot table of its own with [Display] ResolutionList=all), and which sizes the
+// list offers in each display mode.
 // Every address is the retail build's, read from its disassembly (docs/in-game-options-plan.md,
 // 1.4 and 3.1).
 
@@ -169,5 +170,20 @@ namespace resolution_rules
 		const auto listed_desktop = fits(desktop.width, desktop.height) ? desktop : display_rules::size{};
 		const auto listed_forced = forced && fits(forced->width, forced->height) ? forced : std::nullopt;
 		return display_rules::curate_modes(candidates, listed_desktop, refresh_rate, listed_forced, cap);
+	}
+
+	// The list the fix's mode-list hooks answer with, by [Display] ResolutionList. Without the key
+	// it is exactly what the fix listed before the 64-slot table existed (only reached in its own
+	// modes: the adapter's sizes, the desktop's and the forced one, in the game's 20 slots); game
+	// and all get build_list within `cap`, the slots of the table in use.
+	inline std::vector<d3d8::display_mode> video_list(const std::vector<d3d8::display_mode>& adapter_modes, const display_rules::size& desktop,
+	                                                  const UINT refresh_rate, const std::optional<display_rules::size>& forced, const display_rules::mode mode,
+	                                                  const display_rules::resolution_list setting, const std::size_t cap)
+	{
+		if (setting == display_rules::resolution_list::stock)
+		{
+			return display_rules::curate_modes(adapter_modes, desktop, refresh_rate, forced, stock_slots);
+		}
+		return build_list(adapter_modes, desktop, refresh_rate, forced, mode, std::min(cap, setting == display_rules::resolution_list::all ? slots : stock_slots));
 	}
 }

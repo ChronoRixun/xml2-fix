@@ -15,8 +15,9 @@
 //   FrameRate = 120          ; fps, "refresh" or 0 (unlimited); unset = the game's own 60 fps cap (frame_rate.hpp)
 //   VSync = 1                ; 1 / 0; unset = the engine's own presentation interval
 //   InGameOptions = 1        ; the rows for these in the game's Advanced Options panel (options_menu.hpp)
-//   ResolutionList = all     ; all = a 64-slot resolution table in place of the game's 20 (resolution_list.hpp);
-//                            ; game = the game's own table, the list trimmed to 20
+//   ResolutionList = all     ; all = a 64-slot resolution table in place of the game's 20, the fix's list in
+//                            ; every mode (resolution_list.hpp); game = the game's own table, the fix's list
+//                            ; trimmed to 20 in every mode; unset = the fix's list only when Mode is set
 //
 // The engine (Alchemy: libIGDisplay's igWin32Window, libIGGfx's igDx8VisualContext) creates a
 // Direct3D 8 device with Windowed = FALSE at the registry resolution. Borderless and windowed
@@ -26,22 +27,24 @@
 // so the desktop mode is never changed. The game's idea of its resolution comes from the
 // registry: that read is answered with the desktop size in borderless mode, so its HUD and
 // aspect ratio match the back buffer. The Video options list comes from
-// IDirect3D8::EnumAdapterModes, hooked in every mode: it is completed with the desktop
-// resolution (and, in a window, the common sizes of its aspect ratio) and kept within the
-// resolution table's slots, since the game writes it there without a bounds check. FrameRate and
-// VSync work in any mode, the game's own included: VSync through the same CreateDevice/Reset
-// rewrite, FrameRate through the frame limiter (frame_rate.hpp) run from the Present hook. The
-// in-game rows (options_menu.hpp) change FrameRate, VSync (in a window) and RunInBackground while
-// the game runs, through set_* below.
+// IDirect3D8::EnumAdapterModes, hooked in the fix's modes (and in the game's own with
+// ResolutionList): it is completed with the desktop resolution (and, with ResolutionList, in a
+// window, the common sizes of its aspect ratio) and kept within the resolution table's slots,
+// since the game writes it there without a bounds check. FrameRate and VSync work in any mode,
+// the game's own included: VSync through the same CreateDevice/Reset rewrite, FrameRate through
+// the frame limiter (frame_rate.hpp) run from the Present hook. The in-game rows
+// (options_menu.hpp) change FrameRate, VSync (in a window) and RunInBackground while the game
+// runs, through set_* below.
 
 #include "display_rules.hpp"
 
 namespace display
 {
 	// Reads [Display] from xml2-fix.ini and installs the hooks it calls for. Without a Mode,
-	// FrameRate or VSync, nothing about the window or the frame timing changes; the engine's
-	// Direct3D 8 is hooked in every case, for the Video options list (and Present, when a frame
-	// hook was set or the in-game options are on).
+	// FrameRate, VSync or ResolutionList nothing about the window, the frame timing or the Video
+	// options list changes: the engine's Direct3D 8 is then hooked only for the test pipe or the
+	// in-game rows (which need the device to start the frame limiter live), with every call passed
+	// through unchanged, and Present only once something paces or pauses frames.
 	void install(HMODULE game);
 
 	// [Display] as xml2-fix.ini has it now (the in-game rows show this when the panel opens; the
@@ -53,11 +56,12 @@ namespace display
 	unsigned desktop_refresh_rate();
 
 	// Live changes from the in-game rows (Accept). The frame rate retargets the limiter, switching
-	// the game's own 60 fps spin off first if it still runs; VSync is a pacing change in a window
-	// (returns true) and the presentation interval of the next device creation or reset in
-	// fullscreen (false); RunInBackground takes effect at the next frame.
+	// the game's own 60 fps spin off first if it still runs, and hooks Present if it wasn't; VSync
+	// (nothing = the engine's own) is a pacing change in a window (returns true) and the
+	// presentation interval of the next device creation or reset in fullscreen (false);
+	// RunInBackground takes effect at the next frame.
 	void set_frame_rate(const frame_rate_rules::cap& setting);
-	bool set_vsync(bool on);
+	bool set_vsync(std::optional<bool> on);
 	void set_run_in_background(bool on);
 
 	// For the test pipe's screenshots: `hook` runs on the game's render thread with its

@@ -57,6 +57,11 @@ namespace resolution_list
 			logger::write("resolution list: the game's own %zu-slot table ([Display] ResolutionList=game); the Video options list is trimmed to it, so it can't overflow", stock_slots);
 			return slots_in_use;
 		}
+		if (setting != display_rules::resolution_list::all)
+		{
+			logger::write("resolution list: the game's own %zu-slot table (no [Display] ResolutionList; all gives it 64); the fix's Video options list is trimmed to it", stock_slots);
+			return slots_in_use;
+		}
 
 		auto* base = reinterpret_cast<std::uint8_t*>(game);
 		for (const auto& site : table_sites)
