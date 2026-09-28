@@ -28,6 +28,13 @@ namespace display_rules
 		windowed    // a normal, centred window with a caption; Direct3D runs windowed
 	};
 
+	// [Display] ResolutionList: where the Video options list lives (resolution_rules.hpp).
+	enum class resolution_list
+	{
+		game, // the game's own 20-slot table; the list is trimmed to 20 so it can't overflow it
+		all   // the table is replaced by one of 64 slots (the default)
+	};
+
 	struct options
 	{
 		mode window_mode = mode::stock;
@@ -38,6 +45,7 @@ namespace display_rules
 		frame_rate_rules::cap frame_rate; // [Display] FrameRate; stock = the game's own 60 fps cap
 		std::optional<bool> vsync;        // [Display] VSync; nothing = the engine's own presentation interval
 		bool in_game_options = true;      // [Display] InGameOptions: the rows in the Advanced Options panel
+		resolution_list resolutions = resolution_list::all; // [Display] ResolutionList
 	};
 
 	struct size
@@ -74,6 +82,21 @@ namespace display_rules
 		return m == mode::borderless || m == mode::windowed;
 	}
 
+	// "" (absent) and "all" -> all; "game" -> game; anything else -> nothing (the caller logs it).
+	inline std::optional<resolution_list> parse_resolution_list(std::string_view text)
+	{
+		std::string lower(text);
+		std::ranges::transform(lower, lower.begin(), [](const char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); });
+		if (lower.empty() || lower == "all") return resolution_list::all;
+		if (lower == "game") return resolution_list::game;
+		return std::nullopt;
+	}
+
+	inline const char* name(const resolution_list list)
+	{
+		return list == resolution_list::game ? "game" : "all";
+	}
+
 	// The resolution the game should believe it runs at (its Settings\Display\Resolution), when
 	// the mode changes it: a forced Width x Height, or the desktop size in borderless mode.
 	inline std::optional<size> resolution_override(const options& opts, const size& desktop)
@@ -96,7 +119,8 @@ namespace display_rules
 	// The Video options list. The game lists every adapter mode of at least 640x480, one entry per
 	// width x height, sorted ascending, into a table of `cap` fixed slots. This does the same from
 	// the adapter's modes and adds the desktop size and the forced resolution, so they can be
-	// picked; when there are too many, the smallest go.
+	// picked; when there are too many, the smallest go. (resolution_rules::build_list adds the
+	// sizes each display mode can offer beyond the adapter's, and sets `cap` from the table in use.)
 	inline std::vector<d3d8::display_mode> curate_modes(const std::vector<d3d8::display_mode>& adapter_modes, const size& desktop,
 	                                                    const UINT refresh_rate, const std::optional<size>& extra, const size_t cap)
 	{

@@ -15,6 +15,8 @@
 //   FrameRate = 120          ; fps, "refresh" or 0 (unlimited); unset = the game's own 60 fps cap (frame_rate.hpp)
 //   VSync = 1                ; 1 / 0; unset = the engine's own presentation interval
 //   InGameOptions = 1        ; the rows for these in the game's Advanced Options panel (options_menu.hpp)
+//   ResolutionList = all     ; all = a 64-slot resolution table in place of the game's 20 (resolution_list.hpp);
+//                            ; game = the game's own table, the list trimmed to 20
 //
 // The engine (Alchemy: libIGDisplay's igWin32Window, libIGGfx's igDx8VisualContext) creates a
 // Direct3D 8 device with Windowed = FALSE at the registry resolution. Borderless and windowed
@@ -24,19 +26,22 @@
 // so the desktop mode is never changed. The game's idea of its resolution comes from the
 // registry: that read is answered with the desktop size in borderless mode, so its HUD and
 // aspect ratio match the back buffer. The Video options list comes from
-// IDirect3D8::EnumAdapterModes: it is completed with the desktop resolution and trimmed to the
-// 20 entries the game has room for. FrameRate and VSync work in any mode, the game's own
-// included: VSync through the same CreateDevice/Reset rewrite, FrameRate through the frame
-// limiter (frame_rate.hpp) run from the Present hook. The in-game rows (options_menu.hpp) change
-// FrameRate, VSync (in a window) and RunInBackground while the game runs, through set_* below.
+// IDirect3D8::EnumAdapterModes, hooked in every mode: it is completed with the desktop
+// resolution (and, in a window, the common sizes of its aspect ratio) and kept within the
+// resolution table's slots, since the game writes it there without a bounds check. FrameRate and
+// VSync work in any mode, the game's own included: VSync through the same CreateDevice/Reset
+// rewrite, FrameRate through the frame limiter (frame_rate.hpp) run from the Present hook. The
+// in-game rows (options_menu.hpp) change FrameRate, VSync (in a window) and RunInBackground while
+// the game runs, through set_* below.
 
 #include "display_rules.hpp"
 
 namespace display
 {
 	// Reads [Display] from xml2-fix.ini and installs the hooks it calls for. Without a Mode,
-	// FrameRate or VSync, nothing about the display changes; the Direct3D device is still hooked
-	// when a frame hook was set or the in-game options are on (both need Present).
+	// FrameRate or VSync, nothing about the window or the frame timing changes; the engine's
+	// Direct3D 8 is hooked in every case, for the Video options list (and Present, when a frame
+	// hook was set or the in-game options are on).
 	void install(HMODULE game);
 
 	// [Display] as xml2-fix.ini has it now (the in-game rows show this when the panel opens; the

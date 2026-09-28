@@ -5,6 +5,8 @@
 #include "iat_hook.hpp"
 #include "log.hpp"
 #include "options_menu.hpp"
+#include "resolution_list.hpp"
+#include "resolution_rules.hpp"
 
 #include <Windows.h>
 
@@ -21,7 +23,7 @@ namespace display
 		using namespace display_rules;
 
 		constexpr const char* window_class = "igWin32WindowClass";
-		constexpr size_t game_mode_slots = 20; // XMen2.exe's resolution string table (12 bytes each, 0x6e9800)
+		size_t mode_slots = resolution_rules::stock_slots; // the resolution table's slots: the game's 20, or the fix's 64 (resolution_list.hpp)
 
 		options opts;
 		std::recursive_mutex mutex; // hooks re-enter through window messages
@@ -454,15 +456,15 @@ namespace display
 				}
 			}
 
-			modes = curate_modes(adapter_modes, desktop_size(), desktop.refresh_rate, resolution_override(opts, desktop_size()), game_mode_slots);
+			modes = resolution_rules::build_list(adapter_modes, desktop_size(), desktop.refresh_rate, resolution_override(opts, desktop_size()), opts.window_mode, mode_slots);
 			modes_built = true;
 
 			std::string list;
 			for (const auto& mode : modes)
 			{
-				list += (list.empty() ? "" : " ") + std::to_string(mode.width) + "x" + std::to_string(mode.height);
+				list += (list.empty() ? "" : " ") + resolution_rules::text_of(mode.width, mode.height);
 			}
-			logger::write("display: video options list: %zu of %u adapter modes: %s", modes.size(), count, list.c_str());
+			logger::write("display: video options list: %zu sizes from %u adapter modes (%zu-slot table): %s", modes.size(), count, mode_slots, list.c_str());
 		}
 
 		UINT STDMETHODCALLTYPE hooked_get_adapter_mode_count(void* self, const UINT which)
@@ -511,11 +513,10 @@ namespace display
 			d3d = result;
 			modes_built = false;
 			hook_slot(result, d3d8::d3d_slot::create_device, &hooked_create_device, real_create_device);
-			if (opts.window_mode != mode::stock) // the Video options list stays the game's own in stock mode
-			{
-				hook_slot(result, d3d8::d3d_slot::get_adapter_mode_count, &hooked_get_adapter_mode_count, real_get_adapter_mode_count);
-				hook_slot(result, d3d8::d3d_slot::enum_adapter_modes, &hooked_enum_adapter_modes, real_enum_adapter_modes);
-			}
+			// The Video options list, in every mode: the game writes it into a fixed table with no
+			// bounds check (resolution_list.hpp), so the list is kept within that table's slots.
+			hook_slot(result, d3d8::d3d_slot::get_adapter_mode_count, &hooked_get_adapter_mode_count, real_get_adapter_mode_count);
+			hook_slot(result, d3d8::d3d_slot::enum_adapter_modes, &hooked_enum_adapter_modes, real_enum_adapter_modes);
 
 			d3d8::display_mode current{};
 			const auto get_display_mode = d3d8::method<d3d8::get_adapter_display_mode_t>(result, d3d8::d3d_slot::get_adapter_display_mode);
@@ -796,6 +797,16 @@ namespace display
 				logger::write("display: unknown Mode '%s' in xml2-fix.ini (fullscreen, borderless or windowed) - left as the game has it", mode_text.c_str());
 			}
 
+			const auto list_text = read_text(ini, L"ResolutionList");
+			if (const auto parsed = parse_resolution_list(list_text))
+			{
+				result.resolutions = *parsed;
+			}
+			else
+			{
+				logger::write("display: unknown ResolutionList '%s' in xml2-fix.ini (all or game) - taken as all", list_text.c_str());
+			}
+
 			const auto frame_rate_text = read_text(ini, L"FrameRate");
 			if (const auto parsed = frame_rate_rules::parse_frame_rate(frame_rate_text))
 			{
@@ -920,11 +931,6 @@ namespace display
 	{
 		opts = read_options();
 		const bool caps_frames = frame_rate_rules::disables_stock_cap(opts.frame_rate);
-		if (opts.window_mode == mode::stock && !frame_hook && !caps_frames && !opts.vsync.has_value() && !opts.in_game_options)
-		{
-			logger::write("display: as the game has it (no [Display] Mode, FrameRate or VSync in xml2-fix.ini, and InGameOptions=0)");
-			return;
-		}
 
 		desktop = current_desktop();
 		if (opts.in_game_options)
@@ -935,21 +941,21 @@ namespace display
 		{
 			logger::write("options: no rows in Advanced Options ([Display] InGameOptions=0)");
 		}
+		// The Video options list is built through the Direct3D hooks in every mode: the game's own
+		// table overflows with more than 20 sizes (resolution_list.hpp), so the display fix always
+		// gets this far.
+		mode_slots = ::resolution_list::install(game, opts.resolutions); // the namespace, not display_rules::resolution_list
 		if (opts.window_mode == mode::stock)
 		{
 			std::string why;
 			for (const auto& [wanted, reason] : {std::pair{frame_hook != nullptr, "the test pipe's screenshots"}, std::pair{caps_frames, "the frame rate cap"},
-			                                     std::pair{opts.vsync.has_value(), "VSync"}, std::pair{options_menu::installed(), "the in-game options"}})
+			                                     std::pair{opts.vsync.has_value(), "VSync"}, std::pair{options_menu::installed(), "the in-game options"},
+			                                     std::pair{true, "the Video options list"}})
 			{
 				if (wanted)
 				{
 					why += (why.empty() ? "" : ", ") + std::string(reason);
 				}
-			}
-			if (why.empty())
-			{
-				logger::write("display: as the game has it (no [Display] Mode, FrameRate or VSync in xml2-fix.ini)");
-				return; // the in-game options aren't in place (not the retail build), so there is nothing to hook for
 			}
 			logger::write("display: as the game has it (no [Display] Mode in xml2-fix.ini); the Direct3D device is hooked for %s", why.c_str());
 		}
@@ -992,7 +998,7 @@ namespace display
 
 		if (opts.window_mode == mode::stock)
 		{
-			return; // only the device hooks, for the frame hook, the frame limiter and VSync
+			return; // only the Direct3D hooks: the mode list, the frame hook, the frame limiter and VSync
 		}
 
 		if (manages_window(opts.window_mode))

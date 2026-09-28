@@ -30,6 +30,7 @@
 #include "frame_rate_rules.hpp"
 #include "image_file.hpp"
 #include "options_menu_rules.hpp"
+#include "resolution_rules.hpp"
 #include "test_input_rules.hpp"
 
 #include <algorithm>
@@ -265,6 +266,9 @@ namespace
 		CHECK(parse_mode("windowed") == mode::windowed);
 		CHECK(parse_mode("FULLSCREEN") == mode::fullscreen);
 		CHECK(parse_mode("") == mode::stock && parse_mode("sideways") == mode::stock);
+		CHECK(parse_resolution_list("") == resolution_list::all && parse_resolution_list("ALL") == resolution_list::all && parse_resolution_list("game") == resolution_list::game);
+		CHECK(!parse_resolution_list("off").has_value() && !parse_resolution_list("64").has_value());
+		CHECK(std::string(name(resolution_list::game)) == "game" && std::string(name(resolution_list::all)) == "all" && options{}.resolutions == resolution_list::all);
 
 		const size desktop{2560, 1440};
 		const d3d8::display_mode desktop_mode{2560, 1440, 180, d3d8::format_x8r8g8b8};
@@ -739,6 +743,112 @@ namespace
 		}
 	}
 
+	// The Video options list's rules (resolution_rules.hpp): the seven places the game addresses its
+	// resolution table, checked against the retail XMen2.exe when a copy is at hand, and what the
+	// list offers in each mode.
+	void check_resolution_rules()
+	{
+		using namespace resolution_rules;
+		using display_rules::mode;
+		using display_rules::size;
+		std::printf("resolution list rules (the 64-slot table and what the Video options list offers)\n");
+
+		CHECK(stock_slots == 20 && slots == 64 && slot_bytes == 12 && slots * slot_bytes == 768 && max_text == 9);
+		CHECK(stock_table_va - stock_table_rva == 0x400000 && stock_table_va + stock_slots * slot_bytes == 0x6e98f0); // the default bindings start right after
+		CHECK(table_sites.size() == 7);
+		DWORD previous = 0;
+		for (const auto& site : table_sites)
+		{
+			CHECK(site.rva > previous && site.rva > 0x218000 && site.rva < 0x220000); // the panel's code, in address order
+			previous = site.rva;
+			CHECK(decoded_address(site) == stock_table_va);
+			CHECK(matches(site, site.expected.data()));
+			// lea eax, [reg*4 + imm32] (8D 04 85/95) carries the address at +3, mov reg, imm32 (B8+reg) at +1.
+			CHECK((site.expected[0] == 0x8D && site.expected[1] == 0x04 && site.imm_offset == 3) || ((site.expected[0] & 0xF8) == 0xB8 && site.imm_offset == 1));
+			auto other = site.expected;
+			other[site.imm_offset] ^= 1;
+			CHECK(!matches(site, other.data()));
+		}
+		CHECK(table_sites[0].rva == 0x2181bf && table_sites[1].rva == 0x219b95 && table_sites[2].rva == 0x21d61f && table_sites[3].rva == 0x21e636);
+		CHECK(table_sites[4].rva == 0x21f57b && table_sites[5].rva == 0x21f6a1 && table_sites[6].rva == 0x21f843);
+		if (const auto exe = game_executable())
+		{
+			for (const auto& site : table_sites)
+			{
+				const auto at = file_offset(*exe, site.rva);
+				CHECK(at.has_value() && *at + 16 <= exe->size() && matches(site, reinterpret_cast<const std::uint8_t*>(exe->data() + *at)));
+			}
+			// The table as shipped: "640x480" first, "1600x1200" last of seven, the rest empty.
+			const auto table = file_offset(*exe, stock_table_rva);
+			CHECK(table.has_value() && *table + stock_slots * slot_bytes <= exe->size());
+			if (table)
+			{
+				CHECK(exe->compare(*table, 8, std::string("640x480\0", 8)) == 0 && exe->compare(*table + 6 * slot_bytes, 10, std::string("1600x1200\0", 10)) == 0);
+				CHECK(std::ranges::all_of(exe->substr(*table + 7 * slot_bytes, 13 * slot_bytes), [](const char c) { return c == 0; }));
+			}
+		}
+		else
+		{
+			std::printf("  skip  no XMen2.exe to check the table's references against\n");
+		}
+
+		// Texts: what the game sprintf's, within the nine characters its registry read allows.
+		CHECK(text_of(2560, 1440) == "2560x1440" && text_of(640, 480) == "640x480");
+		CHECK(fits(640, 480) && fits(3840, 2160) && fits(5120, 2880) && !fits(10240, 4320) && !fits(1920, 10800));
+		for (const auto& common : common_sizes) CHECK(fits(common.width, common.height) && common.width >= 640 && common.height >= 480);
+
+		// Aspect ratios: one per cent of slack takes 1366x768 as 16:9 and the two 21:9 sizes as one.
+		CHECK(same_aspect(1366, 768, 2560, 1440) && same_aspect(1920, 1080, 3840, 2160) && same_aspect(3440, 1440, 2560, 1080) && same_aspect(3840, 1600, 3440, 1440));
+		CHECK(!same_aspect(1280, 1024, 1280, 960) && !same_aspect(1920, 1200, 1920, 1080) && !same_aspect(0, 0, 1920, 1080));
+
+		// Extra sizes: none for exclusive fullscreen; in a window the desktop's aspect ratio's common
+		// sizes up to the desktop, plus half and three quarters of the desktop.
+		CHECK(extra_sizes({2560, 1440}, mode::stock).empty() && extra_sizes({2560, 1440}, mode::fullscreen).empty() && extra_sizes({0, 0}, mode::borderless).empty());
+		const auto has = [](const std::vector<size>& list, const UINT w, const UINT h) { return std::ranges::find(list, size{w, h}) != list.end(); };
+		auto extras = extra_sizes({2560, 1440}, mode::borderless);
+		CHECK(has(extras, 1280, 720) && has(extras, 1366, 768) && has(extras, 1600, 900) && has(extras, 1920, 1080) && has(extras, 2560, 1440));
+		CHECK(!has(extras, 3840, 2160) && !has(extras, 1280, 800) && !has(extras, 1024, 768)); // above the desktop, other ratios
+		extras = extra_sizes({3440, 1440}, mode::windowed);
+		CHECK(has(extras, 2560, 1080) && has(extras, 3440, 1440) && has(extras, 1720, 720) && has(extras, 2580, 1080) && !has(extras, 1920, 1080));
+		extras = extra_sizes({1920, 1200}, mode::borderless);
+		CHECK(has(extras, 1280, 800) && has(extras, 1440, 900) && has(extras, 1680, 1050) && has(extras, 1920, 1200) && has(extras, 960, 600) && !has(extras, 1920, 1080));
+		extras = extra_sizes({2560, 1080}, mode::borderless); // an odd desktop: half of it is 1280x540, rounded to even numbers
+		CHECK(has(extras, 1280, 540) && has(extras, 1920, 810) && has(extras, 2560, 1080) && !has(extras, 3440, 1440));
+
+		// The list itself. Exclusive fullscreen: the adapter's sizes and the desktop's, nothing the
+		// adapter can't switch to.
+		const std::vector<d3d8::display_mode> adapter{{640, 480, 60, 22}, {800, 600, 60, 22}, {1024, 768, 60, 22}, {1280, 1024, 60, 22},
+		                                              {1920, 1080, 60, 22}, {1920, 1080, 144, 22}, {1920, 1080, 60, 23}, {320, 240, 60, 22}};
+		const auto sorted = [](const std::vector<d3d8::display_mode>& list)
+		{
+			return std::ranges::is_sorted(list, [](const auto& a, const auto& b) { return a.width != b.width ? a.width < b.width : a.height < b.height; });
+		};
+		const auto lists = [](const std::vector<d3d8::display_mode>& list, const UINT w, const UINT h)
+		{
+			return std::ranges::count_if(list, [&](const auto& m) { return m.width == w && m.height == h; }) == 1;
+		};
+		auto list = build_list(adapter, {2560, 1440}, 180, std::nullopt, mode::stock, slots);
+		CHECK(list.size() == 6 && sorted(list) && lists(list, 640, 480) && lists(list, 1920, 1080) && lists(list, 2560, 1440) && !lists(list, 1280, 720) && !lists(list, 320, 240));
+		CHECK(list.back().refresh_rate == 180 && list.back().format == d3d8::format_x8r8g8b8);
+		const auto again = build_list(adapter, {2560, 1440}, 180, std::nullopt, mode::fullscreen, slots); // Mode=fullscreen: the same
+		CHECK(again.size() == list.size() && std::memcmp(again.data(), list.data(), list.size() * sizeof(d3d8::display_mode)) == 0);
+		// A window: the aspect ratio's sizes and the render-scale presets join, the forced size too.
+		list = build_list(adapter, {2560, 1440}, 180, size{1600, 1000}, mode::borderless, slots);
+		CHECK(list.size() == 10 && sorted(list) && lists(list, 1280, 720) && lists(list, 1366, 768) && lists(list, 1600, 900) && lists(list, 1600, 1000) && lists(list, 2560, 1440));
+		CHECK(std::ranges::all_of(list, [](const auto& m) { return fits(m.width, m.height) && m.width >= 640 && m.height >= 480; }));
+		CHECK(build_list(adapter, {2560, 1440}, 180, std::nullopt, mode::windowed, slots).size() == 9);
+		// Too many: the smallest go, the desktop stays; the game's own table takes 20.
+		std::vector<d3d8::display_mode> many;
+		for (UINT i = 0; i < 80; ++i) many.push_back({1000 + i * 10, 800, 60, 22});
+		list = build_list(many, {2560, 1440}, 180, std::nullopt, mode::fullscreen, slots);
+		CHECK(list.size() == slots && sorted(list) && lists(list, 2560, 1440) && list.front().width == 1000 + 17 * 10 && !lists(list, 1000, 800));
+		list = build_list(many, {2560, 1440}, 180, std::nullopt, mode::fullscreen, stock_slots);
+		CHECK(list.size() == stock_slots && lists(list, 2560, 1440) && list.front().width == 1000 + 61 * 10);
+		// A size too long for the game's registry read is left out, even the desktop's.
+		list = build_list({{10240, 4320, 60, 22}, {1920, 1080, 60, 22}}, {10240, 4320}, 60, size{12800, 7200}, mode::borderless, slots);
+		CHECK(std::ranges::none_of(list, [](const auto& m) { return m.width >= 10000; }) && lists(list, 1920, 1080) && lists(list, 5120, 2160));
+	}
+
 	// The Video options list the fix builds from this PC's Direct3D 8 modes (the game's list comes
 	// from the same IDirect3D8::EnumAdapterModes).
 	void check_d3d8_modes()
@@ -777,11 +887,22 @@ namespace
 		std::printf("  info  Direct3D 8 %s the desktop size itself\n", desktop_listed ? "lists" : "does NOT list");
 
 		const auto list = display_rules::curate_modes(adapter, {desktop.width, desktop.height}, desktop.refresh_rate, std::nullopt, 20);
-		std::printf("  info  the game gets %zu:", list.size());
+		std::printf("  info  the game's own 20-slot table gets %zu:", list.size());
 		for (const auto& mode : list) std::printf(" %ux%u", mode.width, mode.height);
 		std::printf("\n");
 		CHECK(list.size() <= 20);
 		CHECK(std::ranges::any_of(list, [&](const auto& m) { return m.width == desktop.width && m.height == desktop.height; }));
+		// The 64-slot table, in the game's own fullscreen and in a borderless window.
+		const auto fullscreen = resolution_rules::build_list(adapter, {desktop.width, desktop.height}, desktop.refresh_rate, std::nullopt, display_rules::mode::stock, resolution_rules::slots);
+		const auto borderless = resolution_rules::build_list(adapter, {desktop.width, desktop.height}, desktop.refresh_rate, std::nullopt, display_rules::mode::borderless, resolution_rules::slots);
+		std::printf("  info  the 64-slot table gets %zu fullscreen, %zu borderless:", fullscreen.size(), borderless.size());
+		for (const auto& mode : borderless) std::printf(" %ux%u", mode.width, mode.height);
+		std::printf("\n");
+		CHECK(fullscreen.size() <= resolution_rules::slots && fullscreen.size() >= list.size());
+		CHECK(fullscreen.size() == everything.size() + (desktop_listed ? 0 : 1)); // every adapter size, none dropped, the desktop's added if it wasn't there
+		CHECK(borderless.size() <= resolution_rules::slots && borderless.size() >= fullscreen.size());
+		CHECK(std::ranges::any_of(fullscreen, [&](const auto& m) { return m.width == desktop.width && m.height == desktop.height; }));
+		CHECK(std::ranges::all_of(borderless, [](const auto& m) { return resolution_rules::fits(m.width, m.height); }));
 		check_d3d8_capture(d3d);
 		check_windowed_presents(d3d, desktop);
 		static_cast<IUnknown*>(d3d)->Release();
@@ -1157,6 +1278,7 @@ namespace
 		CHECK(log.find("the game reads its DirectInput keyboard") != std::string::npos);
 		CHECK(log.find("display: as the game has it") != std::string::npos && log.find("hooked for the test pipe") != std::string::npos);
 		CHECK(log.find("options: XMen2.exe doesn't have the expected code") != std::string::npos); // this isn't the game: the panel is left alone
+		CHECK(log.find("resolution list: XMen2.exe doesn't have the expected code") != std::string::npos && log.find("references patched") == std::string::npos); // and its table stays
 	}
 
 	// Starts this program again with an xml2-fix.ini next to it that turns the pipe on, so its
@@ -1271,6 +1393,7 @@ int main(const int argc, char** argv)
 	check_display_rules();
 	check_frame_rate_rules();
 	check_options_menu_rules();
+	check_resolution_rules();
 	check_test_input_rules();
 	check_image_file();
 	check_d3d8_modes();
@@ -1280,6 +1403,7 @@ int main(const int argc, char** argv)
 	CHECK(log.find("display: as the game has it") != std::string::npos); // no [Display] section next to the test
 	CHECK(log.find("test:") == std::string::npos);                       // and no [Test] section: no pipe
 	CHECK(log.find("options: XMen2.exe doesn't have the expected code") != std::string::npos && log.find("call sites patched") == std::string::npos); // not the game
+	CHECK(log.find("resolution list: XMen2.exe doesn't have the expected code") != std::string::npos && log.find("references patched") == std::string::npos);
 	CHECK(log.find("GameSpy servers redirected to openspy.net") != std::string::npos);
 	CHECK(log.find("xmenlegpc.master.gamespy.com -> xmenlegpc.master.openspy.net (resolved)") != std::string::npos);
 	if (pads > 0)
