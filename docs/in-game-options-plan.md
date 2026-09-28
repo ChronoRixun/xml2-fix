@@ -2,8 +2,10 @@
 
 Status: research complete (read-only spike, 2026-09-27/28); **phase 1 implemented** (frame cap + VSync from
 the ini, `src/frame_rate.cpp` / `src/frame_rate_rules.hpp`, VSync in `rewrite_present`; see "Decisions" and
-1.6 for the windowed-vsync measurement). Phases 2-5 not started. Target: xml2-fix branch `display`, on top
-of `src/display.cpp` / `src/display_rules.hpp`.
+1.6 for the windowed-vsync measurement); **phase 2 implemented** (the rows, `src/options_menu.cpp` /
+`src/options_menu_rules.hpp`) together with the pipe's `wm` command from phase 5 - see "Phase 2 as
+implemented"; both await the in-game test. Phases 3 and 4 not started. Target: xml2-fix branch `display`,
+on top of `src/display.cpp` / `src/display_rules.hpp`.
 
 ## Decisions (Owen, 2026-09-27 22:10) - binding
 
@@ -43,6 +45,64 @@ key only when the user changed that row (Accept), with `WritePrivateProfileStrin
   full second), so the cap is verifiable in game without screenshots.
 - Default-off verified by `xml2_test`: with none of the keys set the display fix returns before hooking anything
   ("display: as the game has it (no [Display] Mode, FrameRate or VSync in xml2-fix.ini)").
+
+### Phase 2 as implemented (2026-09-28; hooks A-D, the pipe's `wm`)
+
+- `options_menu::install` (from `display::install`, `[Display] InGameOptions` default 1) compares the 16 bytes at
+  each of the four call sites (A 0x61f356, B 0x61f8a4, C 0x61f8be, D 0x61f667) and the first 16 bytes of the nine
+  game functions the rows call (operator new 0x671fc2, BXIGCycle ctor 0x623e10, BXIGLabel ctor 0x6229a0,
+  setRect 0x61fe20, addOption 0x6216a0, setOptionRect 0x621750, setSelection 0x621730, registerNav 0x621e00,
+  findItem 0x621d60) before writing a single byte; any difference -> logged ("options: XMen2.exe doesn't have
+  the expected code for ...") and the panel stays stock. `xml2_test` checks the tables against
+  `docs/research/XMen2.exe`. Then the four rel32s are rewritten (all unprotected first, so a failure leaves nothing
+  half-patched).
+- Hook A (`__fastcall finish_panel(panel, edx, slot)` in place of the `__thiscall FUN_006222b0(panel, 0)` call):
+  reads the ini afresh (`display::read_ini_options`, so a launcher edit shows), builds four `BXIGCycle`s exactly
+  as the FSAA row is built (new 0x208 -> ctor with `texs\toggle.png` -> setRect (33, y, 196, 12) -> setText ->
+  style 3 -> addOption x n -> setOptionRect (120, y, 97, 18, style 5: right-aligned, ending at 217 like FSAA's) ->
+  callback + userdata = the toggle bar (read from FSAA's +0x6c) -> setSelection -> the FSAA item's slot 0/1
+  enter/exit descriptors copied), at y = 170, 194, 218, 242, plus a `BXIGLabel` status line (id 0x4f, (33, 272,
+  196, 24), style 0 = small font) and four nav records `{row, row, row, up, down, 1, 0}` through registerNav;
+  FSAA's record gets `down` = row 0 and Accept's `up` = row 3 (`options_menu_rules::relink`). Then the original
+  `FUN_006222b0(panel, 0)` runs. Item ids 0x40-0x43. `BXIGCycle::handleInput` (0x623bf0, read from the asm): WM_KEYUP
+  RETURN/RIGHT = next option, LEFT = previous (both fire events 1 then 2), UP/DOWN = focus in/out by the +0x1ac
+  flag (events 3/4); WM_MOUSEMOVE hit-tests the row rect (events 3/4), WM_LBUTTONUP = next. `setSelection`
+  (0x621730) fires event 1 only (it rewrites its argument to 1 and tail-jumps to the callback), which is why the
+  row callback acts on event 2, like the game's FSAA callback.
+- Highlight: `highlight_animation` in the bar's slot 5 (an `anim_slot` of 11 dwords: fn, start x/y, target x/y,
+  delay, duration, elapsed, two spare - the target row goes in one -, slot index); on its first frame it hides
+  item 0x12, greys 0x15, 6 and our rows and whitens the target, then moves the bar to (30, row y - 21) in 0.05 s
+  (at once when the bar is still off-screen, y >= 481, as `FUN_00617f10` does). Slots 0/1 (the panel's slides)
+  are never interrupted; the bar's +0x74/+0x70 are set directly because `FUN_006200c0` refuses a move within the
+  same slot.
+- Hook B (`on_save`, after the game's `FUN_00619440`): reads each row's +0x1e0, `ini_changes` (only rows whose
+  index differs from the one shown at open) -> `WritePrivateProfileStringW(L"Display", key, value, xml2-fix.ini)`
+  -> live apply: `display::set_frame_rate` (-> `frame_rate::retarget`: patches the 60 fps spin now if it never
+  was, re-aims the pacer; Present is hooked from the start whenever the rows are in place),
+  `display::set_run_in_background` (the Present/TestCooperativeLevel hooks read the flag every frame now, and a
+  window of ours gets both hooks whatever RunInBackground says at start), `display::set_vsync` (a window: pacer
+  retarget, live; fullscreen: the next device creation or reset - "applies after restart"). The display mode is
+  a restart. Hook C (`on_cancel`) and D (`on_revert`: setSelection to Fullscreen / 60 / Off / On, status refreshed)
+  wrap the originals. Values: Mode fullscreen|borderless|windowed; FrameRate `<n>`|refresh|0 (Unlimited); VSync
+  0|1; RunInBackground 0|1. Absent keys show Fullscreen / 60 / Off / On; picking exactly those writes nothing.
+- Frame-rate options: presets 30 60 120 144 165 180 240, plus the desktop's refresh rate and the ini's own
+  value when not among them, sorted, then Refresh and Unlimited; ten at most (a BXIGCycle holds ten), dropping
+  165, 144, 240, 120, 30 in that order when room is needed (never the desktop's rate or the ini's value).
+- Status line: "Display mode applies after restart" / "VSync applies after restart" / "Display mode, VSync apply
+  after restart" (fullscreen only for VSync), refreshed on every change and on revert.
+- Test pipe: `wm KEYS [ms]` posts WM_KEYDOWN (lParam: repeat 1, scan code, extended bit) then, after ms (80),
+  WM_KEYUP (+ previous-state and transition bits) to the engine's window of this process (`display::game_window`,
+  the device window or an EnumWindows by class `igWin32WindowClass` and pid); DirectInput names map to virtual
+  keys (`test_input_rules::win32_key_for`). `tools/fixinput.py` (xml1-port) gained `wm(names, hold)` and `wm KEY`.
+- `xml2_test`: row tables, frame-rate list rules, ini_changes, status text, an ini round trip through a temp file
+  (only the changed keys written, comments and other keys kept), relink on fake records, anim/nav struct sizes,
+  call-site tables (decoded targets, rel32) and the game-function fingerprints against XMen2.exe, `wm` grammar,
+  virtual-key mapping and lParam bits; the pipe child confirms `wm` is refused without a game window and that a
+  non-game process leaves the panel alone.
+- **Not yet verified in game** (the main session's job, see section 6): the rows' look (label/value widths in
+  the large font: "Run in background" vs a right-aligned "Fullscreen"; the small-font status line within 196 px),
+  the enter slide of the new items, highlight travel and colours, keyboard order, sounds, Back/Esc asking on a
+  dirty panel, and a live frame-rate change showing in the fps display / pipe `status`.
 
 Goal (owner's request): expose display mode (fullscreen / borderless / windowed), a frame-rate cap, vsync
 and a modern resolution list inside the game's own *Advanced Options* panel, the way community clients
@@ -548,14 +608,15 @@ values fall back to the default and are logged.
    measured fps logged after the 2nd and 30th second and live in the pipe's `status`. The windowed-vsync
    question (1.6) is answered by `xml2_test`.
 2. **In-game rows (display mode, frame rate, vsync, run in background)**: hooks A-D, rows, highlight,
-   status label, ini persistence, live apply for cap/vsync/background; display mode = restart notice.
+   status label, ini persistence, live apply for cap/vsync/background; display mode = restart notice -
+   **DONE 2026-09-28** (see "Phase 2 as implemented"), in-game verification pending.
 3. **Resolution list**: relocate the table (F-L), 64 slots, curated list + render-scale presets; keep the
    game's NEW_RESZ_RESTART flow (WarningRes) as is.
 4. **Live display-mode switch (experimental, ini-gated `LiveModeSwitch=1`)**: `setFullScreenState`
    through our window/device hooks, 15 s revert prompt reusing the game's popup builder pattern
    (`FUN_0061c740` is the template; result codes 1/3 are read in `FUN_0061f380`).
 5. **Polish**: translations for fre/ger/ita/spa from the loaded `igct*.bnx` language, pipe command
-   `wm KEY` (PostMessage WM_KEYUP) so the tour can drive the panel, README/launcher fields.
+   `wm KEY` (PostMessage WM_KEYUP) so the tour can drive the panel (**done** with phase 2), README/launcher fields.
 
 ---
 
@@ -577,7 +638,7 @@ values fall back to the default and are logged.
 - **Frame-rate-dependent code** at >60 fps (UNVERIFIED): watch camera lerps, UI fades, particle spawn
   rates during the tour; the ini keeps 60 as the fullscreen default so the stock feel is unchanged.
 - **Font glyphs**: keep labels ASCII; "Hz" fine, avoid `×`.
-- **Test pipe cannot drive the panel** (WM_KEYUP based) until phase 5.
+- **Test pipe cannot drive the panel** (WM_KEYUP based) until phase 5 - resolved: `wm KEYS [ms]` (phase 2 commit).
 
 ---
 
