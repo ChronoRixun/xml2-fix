@@ -234,11 +234,19 @@ namespace display
 
 		// Creates or resets the device with `wanted`; if Direct3D refuses, once more without
 		// multisampling, then with the engine's own `requested` (exclusive fullscreen), so the game
-		// still starts. `wanted` ends up as what was used.
+		// still starts. `wanted` ends up as what was used. A reset that fails because the device is
+		// lost is not a refusal of our parameters: the engine (igDxVisualContext::getLastError)
+		// retries it every 200 ms once TestCooperativeLevel allows, so that error goes straight back.
 		template <typename Call>
-		HRESULT apply_with_fallbacks(Call call, d3d8::present_parameters& wanted, const d3d8::present_parameters& requested, const char* what)
+		HRESULT apply_with_fallbacks(Call call, d3d8::present_parameters& wanted, const d3d8::present_parameters& requested, const char* what,
+		                             const bool engine_retries)
 		{
 			HRESULT result = call(wanted);
+			if (result == d3d8::err_device_lost && engine_retries)
+			{
+				logger::write("display: %s: the device is lost right now - left to the engine's retry", what);
+				return result;
+			}
 			if (FAILED(result) && wanted.multi_sample_type != d3d8::multisample_none && manages_window(opts.window_mode))
 			{
 				logger::write("display: %s failed (%08lX) - trying without multisampling", what, result);
@@ -320,14 +328,14 @@ namespace display
 			{
 				logger::write("display: reset applied   %s%s%s", describe(wanted).c_str(), notes.empty() ? "" : " - ", notes.c_str());
 			}
-			const HRESULT result = apply_with_fallbacks([&](d3d8::present_parameters& pp_to_use) { return real_reset(self, &pp_to_use); }, wanted, requested, "reset");
+			const HRESULT result = apply_with_fallbacks([&](d3d8::present_parameters& pp_to_use) { return real_reset(self, &pp_to_use); }, wanted, requested, "reset", true);
 			if (SUCCEEDED(result))
 			{
 				remember_applied(wanted);
 				copy_back(*pp, wanted);
 				logger::write("display: reset ok");
 			}
-			else
+			else if (result != d3d8::err_device_lost)
 			{
 				logger::write("display: ERROR: reset failed (%08lX)", result);
 			}
@@ -357,7 +365,7 @@ namespace display
 
 			const HRESULT result = apply_with_fallbacks(
 				[&](d3d8::present_parameters& pp_to_use) { return real_create_device(self, which, type, focus, behaviour, &pp_to_use, out); },
-				wanted, requested, "device creation");
+				wanted, requested, "device creation", false);
 			if (FAILED(result) || !*out)
 			{
 				logger::write("display: ERROR: device creation failed (%08lX)", result);
@@ -538,6 +546,12 @@ namespace display
 		BOOL reposition(const HWND handle, const char* what, const RECT& asked, UINT flags, HWND insert_after)
 		{
 			std::lock_guard lock(mutex);
+			// The engine sizes a frameless popup, so what it asks for is the client area it wants;
+			// until the window's creation or the device has told us the size, that is the size.
+			if ((!client_size.width || !client_size.height) && !(flags & SWP_NOSIZE) && asked.right > asked.left && asked.bottom > asked.top)
+			{
+				client_size = {static_cast<UINT>(asked.right - asked.left), static_cast<UINT>(asked.bottom - asked.top)};
+			}
 			const auto place = placement_for(MonitorFromWindow(handle, MONITOR_DEFAULTTOPRIMARY), static_cast<DWORD>(GetWindowLongA(handle, GWL_STYLE)),
 			                                 static_cast<DWORD>(GetWindowLongA(handle, GWL_EXSTYLE)));
 			flags &= ~static_cast<UINT>(SWP_NOMOVE | SWP_NOSIZE);
