@@ -1,0 +1,573 @@
+# In-game display options for X-Men Legends II - research findings and implementation plan
+
+Status: research complete (read-only spike, 2026-09-27/28), nothing implemented. Target: xml2-fix branch
+`display`, on top of `src/display.cpp` / `src/display_rules.hpp`.
+
+Goal (owner's request): expose display mode (fullscreen / borderless / windowed), a frame-rate cap, vsync
+and a modern resolution list inside the game's own *Advanced Options* panel, the way community clients
+(iw4x and friends) do, while `xml2-fix.ini` stays the single source of truth so the launcher can edit the
+same settings.
+
+All addresses are for the retail `XMen2.exe` (base 0x400000, .text 0x401000-0x67e7b5, 3,129,344 bytes,
+Sep 2005) and the engine DLLs shipped with it (`libIGGfx.dll`, `libIGDisplay.dll`, image base 0x10000000).
+Everything marked **VERIFIED** was read in the disassembly/decompilation (Ghidra 12.1.3 headless project in
+`docs/research/ghidra`, decompiles in `docs/research/decomp_*.c`, full listing `docs/research/xml2_text.asm`,
+helper `docs/research/petools.py`). **UNVERIFIED** items are inferences to confirm at implementation time.
+
+---
+
+## 1. Findings
+
+### 1.1 The Advanced Options panel is hand-coded Direct3D UI (Beenox "BXIG" widgets)
+
+**VERIFIED.** The panel is not an XMLB menu. It is built by one 5,990-byte function,
+`FUN_0061dc10` (0x61dc10-0x61f375), called from `FUN_005d1dd0` (0x5d1de4, the Controller options menu's
+"Advanced" action). The widget classes have RTTI (`.?AVBXIG...@@`, read via the complete-object locators):
+
+| Class (RTTI) | vtable | constructor | `new` size | used for |
+| --- | --- | --- | --- | --- |
+| `BXIGItem` (base) | 0x6a543c | `FUN_00622770(this, window, id)` | - | common item state |
+| `BXIGImage` | 0x6a55e4 | `FUN_00622850(this, window, id, "texs\\x.png")` | 0x1b0 | col/title/bg/help/toggle/tab images |
+| `BXIGLabel` | 0x6a5634 | `FUN_006229a0(this, window, id)` | 0x1b0 | text labels ("Advanced Options", resolution value, help text) |
+| `BXIGClickableLabel` | 0x6a5724 | `FUN_00624190(this, window, id)` | 0x1b4 | text buttons (Back 0x3f6, REVERT_TO_DEFAULT, Defaults 1-3) |
+| `BXIGClickableLabelToggle` | 0x6a5774 | `FUN_006242d0(this, window, id)` | 0x1b4 | the "Resolution" row label (id 0x15) |
+| `BXIGClickableImage` | 0x6a56d4 | `FUN_006240b0(this, window, id, png)` | 0x1b4 | `selecteds.png` (id 0x12), `bgright.png` |
+| `BXIGSlider` | 0x6a54dc | `FUN_006231b0(this, window, id, "texs\\slider.png")` | 0x1cc | resolution slider (id 7) |
+| `BXIGCycle` | 0x6a557c | `FUN_00623e10(this, window, id, "texs\\toggle.png")` | 0x208 | **FSAA (id 6): the "OFF/2x/4x/6x/8x" option cycler - the widget we want for our rows** |
+| `BXIGButton` | 0x6a548c | `FUN_00622ca0(this, window, id, "texs\\button.png")` | 0x1b8 | Accept (id 1) |
+| `BXIGTabButton` | 0x6a5684 | `FUN_00622f10(this, window, id, "texs\\tabbtn.png")` | 0x1b8 | Player 1-4 tabs (ids 0xa-0xd) |
+| `BXIGControlList` | 0x6a57ec | `FUN_00625eb0(...)` | 0x6e0 | key-binding list (id 0xe) |
+| `BXIGScrollBar` | 0x6a552c | `FUN_006236e0(...)` | 0x1e4 | list scrollbar (id 0xf) |
+| `BXIGWindow` | 0x6a55cc | `FUN_00621ca0(this, d3dDevice, d3d)` | - | item container, input routing, animation |
+| `XML2IGConfig : BXIGWindow` | 0x6a4c6c | `FUN_0061c590(this, [0xa0a004], [0xa0a098])`, size 0x285cc | the panel and its popups |
+
+Memory is allocated with `FUN_00671fc2` (operator new, cdecl, arg = size); the builder always does
+`new(size)` -> ctor(this=eax, window=[0xa6ad34], id, png).
+
+**Drawing** is raw Direct3D 8 on the engine's device: `[0xa0a098]` = `IDirect3DDevice8*` (vc+0x144),
+`[0xa0a09c]` = `IDirect3D8*` (vc+0x140), both set in `FUN_005f7050`. Items own a 0x70-byte vertex buffer
+(FVF 0x144 = XYZRHW|DIFFUSE|TEX1, `CreateVertexBuffer` slot +0x5c, `Lock` +0x2c, `Unlock` +0x30) and draw
+with `SetTexture`(+0xf4) / `SetRenderState`(+0xc8) / `SetTextureStageState`(+0xfc) / `SetVertexShader`(+0x130)
+/ `SetStreamSource`(+0x14c) / `DrawPrimitive`(+0x118). Textures come from loose PNGs through
+`FUN_00645434(device, "texs\\x.png", w, h, 1, 0, 0x15, 1, 3, 3, 0, &info, 0, &tex)` (the same loader the HUD
+uses). Because everything is pre-transformed vertices, **our rows draw with the game's own code as long as we
+construct the game's own widget objects.**
+
+**Coordinate system.** All `setRect` calls use a 640x480 virtual space; `BXIGWindow` scales by
+`+0x38 = width/640` (`_DAT_006a3be8` = 1/640) and `+0x3c = height/480` (`_DAT_006a3be4` = 1/480)
+(`FUN_00621ca0`). The panel scale float `[panel+0x40]` comes from the display singleton
+(`thunk_FUN_005f6df0()->vtbl+0x2c`). Consequence: the panel (and the whole 2D HUD, see 1.7) is stretched to
+the screen's aspect ratio.
+
+**Item layout (`BXIGItem`, 0x1b0 bytes).** From `FUN_00622770` and the users:
+
+| offset | meaning |
+| --- | --- |
+| +0x00 | vtable |
+| +0x04..+0x10 | scaled rect x1,y1,x2,y2 (pixels; recomputed by vtable slot 10 `FUN_0061fe50` / slot 6 `FUN_0061ff70`) |
+| +0x14..+0x20 | virtual x,y,w,h (set by `FUN_0061fe20(this,x,y,w,h)` which then calls vtbl+0x28) |
+| +0x24 | texture; +0x28 vertex buffer; +0x2c parent `BXIGWindow` |
+| +0x30 | visible (vtbl+0x14 `FUN_0061fde0(bool)`); +0x31 enabled |
+| +0x34 | text (malloc'd copy; vtbl+0x2c `FUN_0061fd50(const char*)`) |
+| +0x38 | has text rect; +0x3c..+0x48 text rect (`FUN_0061fdf0(x,y,w,h)`) |
+| +0x5c | item id (looked up by `FUN_00621d60(window, id)`) |
+| +0x60 | text style/alignment int (vtbl+0x34 `FUN_00538310`; the builder uses 3 for cycles/buttons, 0 for the Resolution label, 4 for the title, 2 for the value label) |
+| +0x64 | text colour ARGB (vtbl+0x30 `FUN_0061fd40`; 0xffffffff selected, 0xffcccccc idle) |
+| +0x68 / +0x6c | callback function / callback userdata (`FUN_00620160(this, fn, userdata)`) |
+| +0x70 / +0x74 | current / previous animation slot (-1 = none) |
+| +0x78.. | 7 animation slots x 0x2c bytes (0x78 + 7*0x2c = 0x1ac, the end of the object) |
+| +0x1ac | (byte, first byte after the slots) "keyboard-selected" flag, used by the navigation code; the Accept button starts with it set (0x61f03d) |
+
+`BXIGCycle` extras (0x208 bytes): +0x1b4 hovered flag; +0x1b8..+0x1dc up to 10 option strings
+(`FUN_006216a0(this, index<10, text)`); +0x1e0 **selected index**; +0x1e4..+0x1f0 scaled option rect;
++0x1f4..+0x200 virtual option rect and +0x204 style (`FUN_00621750(this, x, y, w, h, style)`);
+`FUN_00621730(this, index)` sets the selection and redraws. `BXIGSlider`: +0x1b4 value 0..1 (`FUN_00620d10`
+reads it), +0x1c4 step (`FUN_00620dd0`), +0x1c8 (`FUN_00469300`), +0x1b8 knob scale (`FUN_00620b70`),
+`FUN_00620d20(this, value, force)` sets it.
+
+**Item vtable (BXIGItem 0x6a543c; Cycle 0x6a557c overrides in brackets).** slot 0 (+0x00)
+`FUN_0061fd10` fire callback(event) - prints "BXIGItem callback for type %d not implemented" if none;
+1 (+0x04) rebuild quad [`FUN_00621b00`]; 3/4 enable/disable; 5 (+0x14) setVisible; 6 (+0x18) move
+[`FUN_00621810`]; 7 (+0x1c) mouse-left notification; 8 (+0x20) draw [`FUN_006218f0`]; 9 (+0x24) per-frame
+update(dt); 10 (+0x28) recompute rect; 11 (+0x2c) setText; 12 (+0x30) setColour; 13 (+0x34) setStyle;
+16 (+0x40) `handleInput(msg, wParam, lParam)` [`FUN_00623bf0`]; 17 (+0x44) destructor.
+
+**Callback protocol.** `void cb(BXIGItem* item, int event, void* userdata)`, events: **1** value changed,
+**2** activated/clicked, **3** focus/hover gained, **4** focus lost, **5** window-level "back" (fired by
+`BXIGWindow` vtbl+8 `FUN_00621e80` on ESC). Every builder callback gets `userdata` = the `toggle.png`
+highlight bar item (see below). UI sounds: `FUN_005d8920()->vtbl+0xe8(6)` click, `(0)` hover.
+
+**Animation slots** (`FUN_00620090(this, slot, struct[11 dwords])` copies into `item+0x78+slot*0x2c` and
+writes the slot index at +0x28): f0 = anim function `int fn(BXIGItem*, float dt)` (returns 1 while running),
+f1/f2 start x,y, f3/f4 target x,y, f5 delay, f6 duration, f7 elapsed, f10 = slot index. Slot 0/1 are the
+panel's enter/exit slides (`FUN_00618ad0`, duration 0.13 s). `BXIGWindow::setAllAnim(slot)`
+(`FUN_006222b0(window, slot)`, 0x6222b0) switches every item that is in a slot >= 2 or in none, and is called
+with 0 at the end of the builder (enter) and with 1 on Accept/Cancel (exit). `FUN_00622300` (per frame from
+`FUN_0061f380`) advances the animations; `FUN_006223b0` reports "exit animation finished" (+0x44).
+
+**The row highlight.** The `toggle.png` `BXIGImage` (created at 0x61dfc3, pos (30,500) = off-screen,
+196x38) is the moving highlight bar. Its slots 2/3/4 use `FUN_00617f10`: slot 2 -> off-screen (Accept row),
+slot 3 -> also off-screen but shows `selecteds.png` (id 0x12) and whitens label 0x15 (Resolution row),
+slot 4 -> y = 0x7d (125), whitens cycle id 6 (FSAA row), 0.05 s. Row callbacks call
+`FUN_006200c0(toggle, slot)` (0x6200c0: sets +0x70 = slot, +0x74 = old, elapsed = 0, no-op if already in that
+slot) on event 3. `FUN_00617f10` hard-codes ids 0x12/0x15/6, so **our rows need their own highlight
+function** (see 4.3).
+
+**Navigation records.** `FUN_00621e00(window, rec)` (0x621e00) appends an 0x18-byte record to
+`window+0x18` (count `window+0x28`, capacity `window+0x30`, grows by 100):
+`{ BXIGItem* self; left; right; up; down; byte keepFocusLR (+0x14); byte keepFocusUD (+0x15) }`.
+The builder registers three: Resolution `{label 0x15, slider, slider, Accept, FSAA, 1, 0}`, FSAA
+`{cycle 6, cycle 6, cycle 6, label 0x15, Accept, 1, 0}`, Accept `{button 1, 0, 0, cycle 6, label 0x15, 0, 0}`
+(0x61e469-0x61e4a6, 0x61e81a-0x61e861, 0x61f047-0x61f089).
+`BXIGWindow::handleMessage` (`FUN_00621ea0`, 0x621ea0) implements keyboard navigation on **WM_KEYUP
+(0x101)**: it finds the record whose `self->+0x1ac` is set, picks the neighbour for VK_RETURN (self),
+VK_LEFT (+4), VK_UP (+0xc), VK_RIGHT (+8), VK_DOWN (+0x10); if the neighbour is self or the keep flag is set,
+the key is forwarded to the neighbour without moving focus (left/right on the Resolution row drive the
+slider), otherwise focus moves: `target->+0x1ac = 1`, `target->handleInput(0x101,...)` (a `BXIGCycle` with
++0x1ac set fires event 3), `self->+0x1ac = 0`, `self->handleInput(0x101,...)` (fires event 4).
+Mouse (0x200/0x201/0x202/0x20a): hit-test every item's scaled rect (+4..+0x10) and call `handleInput` on
+the one under the cursor; `window+0x10` is the captured item. ESC -> `FUN_00621e80` -> window callback
+event 5 (`FUN_00617d10`: result 2, exit animation).
+
+**Input feed. VERIFIED:** the only path into `FUN_006223d0` (window message filter) is the game's window
+procedure `FUN_005faa20` -> `FUN_006193e0` (0x5faa3b), i.e. **real Win32 keyboard/mouse messages only**.
+No pad-to-message translation was found; the panel is a keyboard/mouse panel (the pad path is DirectInput
+polling). Consequence for testing: the xml2-fix `[Test]` pipe injects DirectInput scancodes, which this
+panel never sees; a `PostMessage(hwnd, WM_KEYUP, VK_x, 0)` variant is needed to drive it from a script.
+
+**Panel lifetime.** `DAT_00a6ad34` = the panel; `DAT_00a6ad38/3c/40/44` = popups (revert-defaults confirm,
+NEW_RESZ_RESTART warning `FUN_0061cbf0`, CANCEL_WARNING `FUN_0061c740`, unbound-keys warning
+`FUN_0061d0a0`; each is a fresh `XML2IGConfig` with two `BXIGClickableLabelToggle` yes/no buttons
+(string ids 0x7ea/0x7eb) and a Back button (0x3f6)). `[panel+0x48]` = result: 1 accept, 2 cancel, 3 = popup
+"yes"; `[panel+0x285c8]` = dirty flag; `[0xa6ad48]` = force-close. Per frame `FUN_0061f380` (0x61f380)
+advances animations and, once the exit animation has finished, applies (see 1.3) and destroys the panel
+(`FUN_00617870` + `operator delete`). `FUN_00619390` draws (`FUN_006223a0` -> `BXIGWindow::draw`
+0x624520 which calls each item's slot 8).
+
+### 1.2 The builder, row by row (`FUN_0061dc10`)
+
+Prologue: `FUN_00619770` (load Settings\Display\* + Controls from the registry into globals),
+`FUN_00619ac0([0xa0a09c])` (rebuild the resolution table, 1.4), `new(0x285cc)` + `FUN_0061c590` -> panel,
+`panel->vtbl+4(FUN_00617d10, 0)` (window callback).
+
+| # | at | widget | id | png / text | rect (x,y,w,h) virtual | callback | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1-2 | 0x61dd30, 0x61dd7c | Image | 0 | col.png | (-66,0,62,480), (635,0,62,480) | - | side columns |
+| 3 | 0x61ddcb | Image | 0 | title.png | (-45,14,275,55) | - | |
+| 4 | 0x61de5d | Label | 0 | lookup("Advanced Options"), style 4 | (0,33,239,24) | - | |
+| 5 | 0x61df0a | Image | 0 | bgleft.png | (-45,77,280,276) | - | **left pane background: rows live here** |
+| 6 | 0x61dfcd | Image | 0 | toggle.png | (30,500,196,38) | - | highlight bar; anim slots 2,3,4 |
+| 7 | 0x61e10d | Image | 0 | helpb.png | (-45,415,721,60) | - | |
+| 8 | 0x61e1a8 | ClickableLabel | 0 | string id 0x3f6 (Back), style 3 | (80,428,80,30) | `FUN_00617bb0` | cancel |
+| 9 | 0x61e263 | ClickableLabel | 0 | lookup("REVERT_TO_DEFAULT"), style 3 | (378,428,150,30) | `FUN_0061dba0` | opens revert popup |
+| 10 | 0x61e322 | ClickableImage | 0x12 | selecteds.png | (30,102,196,20) | - | hidden (`setVisible(0)`) |
+| 11 | 0x61e3c4 | ClickableLabelToggle | 0x15 | lookup("Resolution"), style 0 | (33,102,192,36) | `FUN_00618bc0` | nav record 1 |
+| 12 | 0x61e4d6 | Label | 8 | (value text, style 2) | (30,103,187,12) | - | shows "WxH", updated by the slider callback |
+| 13 | 0x61e56a | Slider | 7 | slider.png | (30,124,192,12) | `FUN_006180e0` | knob 0.84, step 1/(n-1), value = index/(n-1) of the current resolution |
+| 14 | 0x61e6d6 | **Cycle** | **6** | toggle.png; text lookup("FSAA") style 3; options 0..4 = OFF/2x/4x/6x/8x (2x..8x only if `[0xa09e84..87]` support bytes are set); option rect `FUN_00621750(177,146,40,18,5)`; `FUN_00621730([0xa68c98])` | **(33,146,196,12)** | `FUN_00618c00` | nav record 2; **the template for our rows** |
+| 15 | 0x61e896 | Image | 0 | tabimg.png | (269,33,408,44) | - | right pane |
+| 16-19 | 0x61e936.. | TabButton | 0xa-0xd | Player 1-4 | (281/363/445/527,50,77,16) | `FUN_00618270` | |
+| 20 | 0x61ec1b | ClickableImage | 0 | bgright.png | (244,74,433,250) | `FUN_00618c50` | |
+| 21 | 0x61ece8 | ControlList | 0xe | controllist/mouse/joy1-4.png | (284,91,300,140) | `FUN_00618390` | 42 actions x 0x94 from 0xa68f98 |
+| 22 | 0x61ee3b | ScrollBar | 0xf | scrollbar.png | (584,91,12,140) | - | |
+| 23 | 0x61eedb | Label | 9 | "" style 0 | (284,239,312,62) | - | help text |
+| 24 | 0x61ef82 | Button | 1 | button.png, lookup("Accept") | (-45,335,280,61) | `FUN_0061d550` | +0x1ac = 1 (initial focus); nav record 3 |
+| 25 | 0x61f0bd | Image | 0 | tabimg2.png | (270,327,408,44) | - | |
+| 26-28 | 0x61f147.. | ClickableLabel | 0x16-0x18 | Defaults 1/2/3, style 4 | (291/394/497,340,85,25) | `FUN_006188c0` (userdata 0/1/2) | |
+| end | 0x61f356 | `call FUN_006222b0(panel, 0)` | | | | | **hook site A** (bytes `E8 55 2F 00 00`) |
+
+Every item also gets slot 0 and slot 1 copies of the enter/exit descriptors (two `FUN_00620090` calls).
+The left pane (bgleft: y 77..353) holds only rows at y=102 (Resolution), 124 (slider), 146 (FSAA); **y 165
+to ~330 is empty** - room for six 22-px rows before the Accept button at y=335. Text through
+`FUN_00629ba0([0xa6b174], key)` (1.8).
+
+### 1.3 Read-on-open, Accept, Cancel, Revert - and what "apply" means today
+
+**VERIFIED.**
+- Open: `FUN_00619770` loads `Settings\Display\FSAA` -> `DAT_00a68c98`, `Resolution` -> `DAT_00a68d9c`
+  (10-byte buffer, "WxH"), etc.; the builder positions the slider/cycle from these globals.
+- Accept (`FUN_0061d550`, event 2): reads slider (`FUN_00620d10` -> index) and cycle `+0x1e0`, checks
+  unbound keys, compares with the current globals; unchanged -> result 1; changed and `WarningRes`
+  (`DAT_00a68dac`) -> `FUN_0061cbf0` popup **"NEW_RESZ_RESTART"** (yes -> result 1, "no more warnings" ->
+  result 3 clears WarningRes); changed and no warning -> `FUN_0061c110` (`Settings\CheckRez = 1`) +
+  result 1. Then `FUN_006222b0(1)` (exit animation).
+- Close (`FUN_0061f380`, after the exit animation): result 1 -> copies cycle 6 into `DAT_00a68c98`, the
+  slider's table entry into `DAT_00a68d9c`, gamepad names and bindings, then **`FUN_00619440` (0x61f8a4,
+  hook site B)** writes everything to `HKCU\Software\Activision\X-Men Legends 2\...` through
+  `FUN_00616b20` (`RegCreateKeyA`/`RegSetValueExA`; `FUN_00616df0` DWORD, `FUN_00616dc0` string,
+  `FUN_00616f20` bool). Result 2 -> **`FUN_00619770` (0x61f8be, hook site C)** reloads from the registry
+  (discard). Revert popup accepted -> **`FUN_006196c0` (0x61f667, hook site D)** loads defaults into the
+  globals, then re-syncs slider (0x61f706), cycle (0x61f728), tabs and list.
+- **Resolution and FSAA never apply live.** No device reset follows Accept; the new values take effect at
+  the next launch (`FUN_005fac10` creates the device from the registry at startup; `CheckRez`/`RestartOldRez`
+  are the crash guard: 0x61bf80 on boot, `FUN_0061c1d0` clears `RestartOldRez` once a frame has rendered,
+  0x401f50). XMen2.exe imports no `CreateProcess`/`ShellExecute`: it cannot restart itself. The stock
+  UX is therefore already "Accept, then restart".
+
+### 1.4 The resolution list
+
+**VERIFIED.** `FUN_00619ac0(IDirect3D8*)` (0x619ac0): `GetAdapterModeCount` / `EnumAdapterModes`,
+filter `FUN_00619a40` (>= 640x480, unique WxH), `qsort` `FUN_00617170` (width, height, refresh, format),
+count -> `DAT_00a68da8`, and `sprintf("%dx%d")` into **20 x 12-byte slots at 0x6e9800 with no bounds
+check**. The bytes right after the table (0x6e98f0..) belong to the default-bindings data (`0x6e9940 +
+n*0x1848` is the "Defaults 1-3" table used by `FUN_006188c0`), so a stock overflow (24 modes on the owner's
+PC) corrupts binding defaults. xml2-fix's `curate_modes` currently trims the list to 20 for that reason.
+
+Users of the table base (all imm32, patchable): `0x6181bf lea eax,[edx*4+0x6e9800]` (+`lea` x3 = x12),
+`0x61d61f`, `0x61f57b`, `0x61f843` (same pattern), `0x619b95 mov ebx,0x6e9800` (writer), `0x61e636 mov
+eax,0x6e9800` (builder: find current index), `0x61f6a1 mov ebp,0x6e9800` (revert re-sync). The count is a
+plain global; the slider maps index/(count-1). The registry string is read into a 10-byte buffer
+(`FUN_00616e10(...,&DAT_00a68d9c,10)` at 0x61983e/0x61b4d1), so entries must stay <= 9 characters
+("3840x2160" fits; five-digit widths do not).
+
+### 1.5 Frame timing - VERIFIED, with one UNVERIFIED flag
+
+`CClient` is a static singleton at **0x6f3ac4** (vtable 0x67fff4, RTTI `.?AVCClient@@`; `FUN_00401b00`
+returns its address). `CClient::frame` = **`FUN_00401d70`** (vtable slot 3), decompiled in
+`decomp_batch4.c`:
+
+1. `+0x18` (0x6f3adc) **minimum frame time is rewritten every frame**: `1/60` (imm32 0x3c888889 at
+   **0x401db7**, instruction `C7 46 18 89 88 88 3C` at 0x401db4) or `1/30` (0x3d088889 at 0x401dae,
+   instruction at 0x401dab) when `FUN_00610d20(FUN_00612be0())` (byte +0x420 of the 0xa53058 object) is
+   set. The `[DISPLAY_OPTIONS] max_fps` config key read in `CClient::init` (`FUN_004016f0`, 0x4017df,
+   default 60, `> 60` => 0 = uncapped) is therefore overwritten before it can matter. **Stock XML2 is
+   hard-capped at 60 fps (30 in that mode).** UNVERIFIED: what the +0x420 flag means (movie, loading or
+   network game are the candidates).
+2. Real time: `FUN_0055b610()->vtbl+0x28(0)` = `FUN_0055b470(this, gameTime)`: `(*(this+4)->vtbl+0x60)()
+   * _DAT_0069a7b0` - the engine igTimer (libIGCore `igWin32LongTimer`, QueryPerformanceCounter-based)
+   converted to seconds; `getTime(1)` is game time, frozen while paused (+0x30/+0x34).
+3. `+0x8 = now - +0x4` (**variable dt**, no clamp seen in this function); optional fixed step `+0x10`
+   (`FUN_00401660`, clamped to 0.017 s by `_DAT_006801b0`) is 0 in normal play. Game update
+   `FUN_005d8920()->vtbl+0x2c(dt)` receives `now - +0x20`.
+4. The limiter (0x401f9c-0x40200c) is a **busy spin**: `while (now - +0x1c < +0x18) now = getTime(0);`
+   skipped when `FUN_005d8920()->vtbl+0x1b4()` is true (movie playing, UNVERIFIED name). A 10-frame
+   average feeds the fps display `_DAT_0081d6c0`.
+
+Conclusion: game speed is wall-clock driven, so an uncapped 180 Hz window or a 30 fps cap does not change
+the simulation speed by design (animation/physics take dt; script `waittimed` counts game time). What a
+higher cap can expose is per-frame-increment code that assumes ~60 Hz (camera smoothing, UI fades) -
+UNVERIFIED, to be checked in the test tour (compare a timed tour step at 60 vs 144 vs uncapped). The
+stock cap also means "vsync off" in fullscreen never showed >60 fps.
+
+### 1.6 Present parameters, vsync and windowed mode (libIGGfx `igDxVisualContext`)
+
+**VERIFIED** (`decomp_gfx.c`, `decomp_gfx2.c`):
+- `setDeviceParameters(int)` @1002cfe0 fills the `D3DPRESENT_PARAMETERS` at vc+0x150 from the request
+  at vc+0x154 and `alchemy.ini` `[GFX]`: `multiSampleType`, `lockableBackbuffer` (Flags |= 1),
+  `BackBufferFormat = getRenderTargetFormat`, `Windowed = !vc[0x180]`.
+  - Fullscreen: size from the render destination, `FullScreen_RefreshRateInHz = getRefreshRate` (ini
+    `refreshRate`, default 0), `FullScreen_PresentationInterval = FUN_1002cae0(caps)`: ini
+    `presentationInterval` 0 (default) -> **IMMEDIATE (0x80000000) if the caps allow it** (they do on any
+    modern driver), 1 -> ONE, 2 -> TWO, 3 -> THREE, 4 -> FOUR, each falling back to the next supported.
+    So stock fullscreen runs **vsync off**, limited only by the 60 fps cap above; vsync on = interval ONE.
+  - Windowed (`vc[0x180]==0`): `RefreshRate = request+0x2c`, `PresentationInterval = 0`
+    (D3D8 requires DEFAULT when windowed), and ini `windowedVSync=true` sets
+    `SwapEffect = 4 (D3DSWAPEFFECT_COPY_VSYNC)`, otherwise the requested swap effect. D3D8 has **no
+    IMMEDIATE interval for windowed devices**; COPY_VSYNC is its only windowed vsync switch. Under DWM
+    a windowed D3D8 present is a blit into the redirected surface (no tearing either way); whether the
+    legacy d3d8.dll waits for vblank with interval DEFAULT, and whether it still honours COPY_VSYNC on
+    Windows 11, is **UNVERIFIED** - measure (uncap and read the fps display) before exposing a windowed
+    vsync toggle.
+- `endDraw` @1002eb70: `EndScene` (+0x8c) then `Present(0,0,0,0)` (+0x3c); `D3DERR_DEVICELOST` sets
+  vc[0x15c]. `beginDraw` -> `getLastError` @1002dac0: `TestCooperativeLevel`, `resetDevice` @1002ae40
+  (`releaseVolatileResources` + `Reset(vc+0x150)` + `restoreVolatileResources` + `setupAll`), else
+  `Sleep(200)`. `resetDevice` and `setVideoMode(igVideoFormat*)` @1002f040 are **exported by name**, so
+  xml2-fix can call them for a live vsync change.
+- `igWin32Window::setVideoMode(fullscreen, w, h, bpp)` @10005fc0 (libIGDisplay, exported): toggles the
+  style bits (0xcf0000) with `SetWindowLongA`, calls `vc->vtbl+0x3f8` with `{fullscreen, 2, 1, 60.0}`, and
+  for fullscreen re-creates the render destination (+0xc0/+0xc4/+0xc8/+0xcc), `setViewport` (+0x2e8),
+  `MoveWindow(0,0,w,h)`; `setFullScreenState(bool)` @10006250 = `setVideoMode(b,-1,-1,-1)`. This is the
+  engine's own live mode switch and is the candidate for a live display-mode change (5.).
+
+### 1.7 HUD and aspect ratio at 21:9 / 32:9
+
+**VERIFIED:** `FUN_005fac10` stores `w`, `h` in `[0xa09ffc]`/`[0xa0a000]` and `aspect = w/h` in the display
+singleton (+0x10, read through `FUN_005f5f90` and used by the projection getters `FUN_005f6000`/`FUN_005f6010`
+= aspect-scaled frustum), so the 3D view gets the true aspect (Hor+ behaviour is **UNVERIFIED** but the
+projection is built from w/h and a fixed vertical constant `+0x48`, which is Hor+). The 2D layer (HUD
+`FUN_005fc100`, menus, mouse `FUN_005f9eb0`, the BXIG panel) multiplies normalised or 640x480 coordinates by
+`w/640` and `h/480` separately (`_DAT_006e83e8/_DAT_006e83ec`, `fimul [0xa09ffc]`/`[0xa0a000]`): **the HUD is
+stretched at any non-4:3 ratio** - already at 16:9 today, more so at 21:9 and 32:9. `_DAT_006e8488 =
+(4/3)/aspect` is computed at 0x5fad76 and never read (dead). No FOV option exists. An aspect-correct HUD
+(letterbox the 2D layer at 4:3-scaled size, centred) is a separate feature; out of scope here but the two
+scale globals and the panel's `+0x38/+0x3c` are the levers.
+
+### 1.8 Localisation of labels
+
+**VERIFIED.** `FUN_00629ba0(table, key)` (0x629ba0) looks `key=` up in `[0xa6b174]`, a `KEY=value`
+line table loaded by `FUN_00403220` from **`igct<lang>.bnx`** in the game folder (`igct.bnx` English,
+`igctfre/ger/ita/spa/pol/rus.bnx`; language code at 0x6d4b90, "none" until set) via `FUN_006299b0`
+(fopen "rb", split on newlines). **If the key is missing the key itself is returned**, so we can pass
+our own English strings ("Display mode", "Frame rate") and they render as-is; the engine font renders
+ASCII. For other languages we ship our own tiny table keyed by the loaded language (read 0x6d4b90 or the
+`igct*.bnx` name) - no game file is modified. Beware the 0x61e29a-style strings such as
+"REVERT_TO_DEFAULT" are keys that exist in `igct.bnx`; ours must not collide (prefix `XF_`).
+
+---
+
+## 2. Approach
+
+### 2.1 Chosen: extend the left pane with the game's own `BXIGCycle` rows (hook A) + hook the four
+apply/discard sites (B, C, D) + persist to `xml2-fix.ini`
+
+- One call-site patch at **0x61f356** (`call FUN_006222b0` -> `call xf_finish_panel`), reached only from the
+  builder, with `ecx = panel` and the pushed `0`. Our function builds the extra rows with the game's
+  constructors, fixes the navigation graph, then tail-calls the original `FUN_006222b0(panel, 0)`. No
+  mid-function detour, no relocation of game code.
+- Rows are `BXIGCycle` objects created exactly like the FSAA row (0x61e6a6-0x61e861 is the template),
+  placed at y = 170, 194, 218, 242 (22-24 px pitch, under FSAA at 146, above Accept at 335; bgleft ends at
+  353). Same texture (`texs\toggle.png`), same style 3, same option rect geometry shifted in y, same
+  enter/exit animation descriptors (copy slots 0 and 1 from the FSAA cycle item: `memcpy(new+0x78,
+  fsaa+0x78, 2*0x2c)` and set +0x70 = -1 so `FUN_006222b0(0)` starts them).
+- Rows: **Display mode** (Fullscreen / Borderless / Windowed), **Frame rate** (Off / 30 / 60 / 120 / 144 /
+  Refresh), **VSync** (Off / On), later **Resolution list** handled by widening the existing slider (1.4,
+  phase 3) rather than a new row. A fifth optional row **Run in background** (Off/On) fits.
+- The engine draws, animates, hit-tests and navigates them; we only supply the callback (event 1 -> store
+  pending value + set `[panel+0x285c8] = 1`; event 3/4 -> highlight on/off) and the accept/discard logic.
+- Persistence: on hook B (`FUN_00619440` from `FUN_0061f380`, result 1) write `[Display]` keys with
+  `WritePrivateProfileStringW` to `xml2-fix.ini` and apply what can apply live; on hook C (result 2) drop
+  pending values; on hook D (revert) reset pending values to the defaults and re-sync our cycles
+  (`FUN_00621730`). The launcher keeps editing the same ini; at panel open we read the ini afresh so a
+  launcher edit made while the game runs shows correctly.
+
+Why this and not the alternatives:
+- **A second tab / repurposed pane**: the tabs (Player 1-4) belong to the key-binding list and the right
+  pane is 100% occupied; the left pane has ~180 px of empty space designed for exactly this kind of row.
+  A new tab would need a new list widget and page switching - all custom drawing. Rejected.
+- **Hooking `FUN_00621e00` (nav registration) or the builder entry**: more sites, fragile ordering; the
+  finalize call site is unique and late. Rejected.
+- **Replacing the panel with our own D3D-drawn UI**: throws away the animation/input/sound/localisation
+  the engine already provides and looks foreign. Rejected.
+- **An XMLB menu entry**: the Video menu is data-driven (`CMenuOptions`), but adding items there means
+  patching game data files, which the project refuses to do. Rejected.
+- **Patching `max_fps`**: dead (1.5). Rejected.
+
+### 2.2 Frame cap: our limiter in the `Present` hook, the game's spin disabled
+
+Patch the imm32 at **0x401db7** (1/60 -> 0.0f) so `CClient::frame` never spins in normal play; leave the
+1/30 constant at 0x401dae alone so whatever mode uses it still gets its cap (UNVERIFIED semantics).
+Implement the cap in `display.cpp`'s `hooked_present` (install it whenever a cap or vsync option is active,
+not only with `emulate_pause || frame_hook`): QPC-based target interval, hybrid wait (a high-resolution
+waitable timer `CreateWaitableTimerExW(CREATE_WAITABLE_TIMER_HIGH_RESOLUTION)` with a 0.5 ms spin tail;
+fall back to `Sleep(1)` + spin), "Refresh" = the desktop refresh from `EnumDisplaySettings`.
+
+### 2.3 Vsync: rewrite in `rewrite_present`
+
+Fullscreen: `FullScreen_PresentationInterval = ONE` (on) or `IMMEDIATE` (off, the stock value). Windowed /
+borderless: `SwapEffect = COPY_VSYNC (4)` with `BackBufferCount = 1` and no multisampling for "on",
+`DISCARD` for "off" (current behaviour); mark the windowed switch **experimental** until measured (1.6).
+Live apply: after Accept call the exported `igDxVisualContext::resetDevice` on the vc (pointer = display
+singleton `[0xa0a138]+0xc`, or `igWin32Window+8`); our `hooked_reset` rewrites the parameters.
+
+### 2.4 Display mode
+
+Phase 1: the row edits the ini and shows "restart to apply" (the stock UX for resolution, 1.3).
+Phase 4 (experimental): live switch through `igWin32Window::setFullScreenState` @10006250 with our
+`SetWindowLongA`/`MoveWindow`/`Reset` hooks already in place; keep a 15 s revert timer like iw4x
+(revert on ESC/no confirmation) because a failed Reset leaves the device lost.
+
+### 2.5 Resolution list beyond 20
+
+Relocate the 12-byte string table to a 64-slot buffer in the DLL by patching the seven imm32 users listed
+in 1.4 (all `lea`/`mov` immediates; the count global and slider maths need no change), and lift the
+`game_mode_slots` cap in `curate_modes`. Curated content: adapter modes >= 640x480, the desktop size,
+common 16:9 / 16:10 / 21:9 sizes not above the desktop, plus render-scale presets (0.5x/0.75x of the
+desktop) in borderless mode; keep every string <= 9 chars.
+
+---
+
+## 3. Hook points and data (exact)
+
+### 3.1 Code patches (all in XMen2.exe .text; `VirtualProtect` + write, verify the original bytes first)
+
+| site | address | original bytes | patch | when |
+| --- | --- | --- | --- | --- |
+| A finalize | 0x61f356 | `E8 55 2F 00 00` (`call 0x6222b0`) | `call xf_finish_panel` | `[Display] InGameOptions=1` (default) |
+| B save | 0x61f8a4 | `E8 97 9B FF FF` (`call 0x619440`) | `call xf_on_accept` (calls 0x619440 first) | same |
+| C cancel | 0x61f8be | `E8 AD 9E FF FF` (`call 0x619770`) | `call xf_on_cancel` (calls 0x619770 first) | same |
+| D revert | 0x61f667 | `E8 54 A0 FF FF` (`call 0x6196c0`) | `call xf_on_revert` (calls 0x6196c0, then re-syncs our cycles) | same |
+| E 60 fps spin | 0x401db7 | `89 88 88 3C` (imm32 of `C7 46 18 ..` at 0x401db4) | `00 00 00 00` | a frame cap or "Off" is configured |
+| F-L table base | 0x6181c2, 0x61d622, 0x61f57e, 0x61f846 (`8D 04 95/85 imm32` = `lea eax,[reg*4+imm32]`, imm at +3), 0x619b96, 0x61e637, 0x61f6a2 (`BB/B8/BD imm32` = `mov ebx/eax/ebp, imm32`, imm at +1) | `00 98 6E 00` | address of our 64x12 table | phase 3 |
+
+Read the bytes at each site and compare before patching (the exe has one known retail build; refuse
+politely and log if they differ). Also verify `DAT_00a6ad34` is the panel at hook A (`ecx`).
+
+### 3.2 Game functions we call (thiscall unless noted)
+
+| purpose | address | signature |
+| --- | --- | --- |
+| operator new | 0x671fc2 | cdecl `void* (size_t)` |
+| BXIGCycle ctor | 0x623e10 | `BXIGCycle* (this, XML2IGConfig* window, int id, const char* png)` |
+| BXIGLabel ctor | 0x6229a0 | `(this, window, int id)` (for a "restart required" status line) |
+| set rect | 0x61fe20 | `(this, int x, int y, int w, int h)` virtual 640x480 |
+| set text | vtbl+0x2c (0x61fd50) | `(this, const char*)` (copies) |
+| set style | vtbl+0x34 (0x538310) | `(this, int)` use 3 |
+| set colour | vtbl+0x30 (0x61fd40) | `(this, DWORD argb)` |
+| add option | 0x6216a0 | `(this, int index 0..9, const char*)` |
+| option rect | 0x621750 | `(this, int x, int y, int w, int h, int style=5)` |
+| set selection | 0x621730 | `(this, int index)` |
+| get selection | `*(int*)(cycle+0x1e0)` | |
+| set anim slot | 0x620090 | `(this, int slot, struct anim[11])` by value (44 bytes pushed) |
+| set callback | 0x620160 | `(this, void (*cb)(BXIGItem*, int, void*), void* userdata)` |
+| register nav | 0x621e00 | `(window, xf_nav_record*)` record is `new`'d 0x18 bytes, game frees it |
+| find item by id | 0x621d60 | `BXIGItem* (window, int id)` |
+| select highlight | 0x6200c0 | `(toggleItem, int slot)` |
+| lookup text | 0x629ba0 | cdecl `const char* (table = [0xa6b174], const char* key)` |
+| UI sound | `FUN_005d8920()->vtbl+0xe8(int)` | 6 click, 0 hover |
+| engine reset | libIGGfx `?resetDevice@igDxVisualContext@Gfx@Gap@@QAE_NXZ` | `bool (this)` |
+| engine mode switch | libIGDisplay `?setFullScreenState@igWin32Window@Display@Gap@@UAEX_N@Z` | `(this, bool)` |
+
+Item ids for our rows: 0x40 (mode), 0x41 (frame rate), 0x42 (vsync), 0x43 (run in background),
+0x4f (status label). `FUN_00621d60` is used by the game only for ids 1, 6-9, 0xa-0xf, 0x12-0x18.
+
+### 3.3 Row construction (mirror of 0x61e6a6-0x61e861)
+
+```
+cycle = new(0x208); FUN_00623e10(cycle, panel, id, "texs\\toggle.png");
+FUN_0061fe20(cycle, 33, y, 196, 12);            // label rect, y = 170 + 24*n
+setText(cycle, xf_text("XF_DISPLAY_MODE"));     // fallback = our English string
+setStyle(cycle, 3);
+for i: FUN_006216a0(cycle, i, xf_text(option_i));
+FUN_00621750(cycle, 177, y, 40, 18, 5);          // value column, same x as FSAA
+FUN_00621730(cycle, current_index);
+memcpy(cycle+0x78, fsaa+0x78, 2*0x2c); cycle+0x70 = -1;   // enter/exit slides like every row
+FUN_00620160(cycle, xf_row_callback, toggle);   // toggle = the highlight bar; it has id 0 so it cannot be
+                                                // found with FUN_00621d60 - read it from the FSAA cycle's
+                                                // callback userdata: toggle = *(BXIGItem**)(fsaa + 0x6c)
+rec = new(0x18); rec = {cycle, cycle, cycle, prev_row_item, next_row_item, 1, 0}; FUN_00621e00(panel, rec);
+```
+Relink: walk `panel+0x18[0..count)` (count at `panel+0x28`), find the record whose `self` is the FSAA cycle
+(`self+0x5c == 6`) and set its `down` to our first row; find the Accept record (`self+0x5c == 1`) and set
+its `up` to our last row; our last row's `down` = Accept, first row's `up` = FSAA cycle. Keep the toggle
+highlight bar pointer (`fsaa_cycle+0x6c`) for `FUN_006200c0`.
+
+Callback (`xf_row_callback(item, event, toggle)`): event 1 -> pending value = `item+0x1e0`, panel dirty
+(`*(byte*)(panel+0x285c8) = 1`), refresh the status label ("Restart required: display mode"), sound 6;
+event 3 -> `xf_highlight(toggle, item)` + colour 0xffffffff + sound 0; event 4 -> colour 0xffcccccc.
+
+`xf_highlight(toggle, item)`: our own anim function in **slot 5** of the toggle item (slots 0-4 are the
+game's; 5 and 6 are free of the 7): write `f0 = xf_toggle_anim, f3 = 30, f4 = item_y - 21, f5 = 0,
+f6 = 0.05`, force `toggle+0x74 = toggle+0x70; toggle+0x70 = 5; slot5.elapsed = 0` (bypassing
+`FUN_006200c0`'s same-slot early-out so moving between two of our rows re-animates). `xf_toggle_anim` copies
+`FUN_00617f10`'s behaviour: on elapsed == 0 capture the current position, hide item 0x12, grey label 0x15,
+cycle 6 and our cycles, whiten the target; then interpolate with `FUN_0061fe20`. When focus returns to the
+game's rows, their `FUN_00617f10` greys only 0x15 and 6 - our event-4 handler greys ours.
+
+### 3.4 Accept / cancel / revert glue
+
+- `xf_on_accept()` (hook B, after the original save): write ini; apply live: frame cap (atomic store),
+  vsync (`resetDevice`), `RunInBackground`; if display mode changed and live switching is off, log
+  "restart required". Values that need a restart are shown in the status label while the panel is open
+  (the game itself uses the NEW_RESZ_RESTART popup for resolution; we do not add popups in phase 1).
+- `xf_on_cancel()` (hook C): pending = current.
+- `xf_on_revert()` (hook D, after `FUN_006196c0`): pending = defaults, `FUN_00621730` our cycles
+  (find by id through `FUN_00621d60` - the panel pointer is `DAT_00a6ad34`).
+- Panel destruction: our item pointers are owned by the window (`FUN_00624490` frees items); we keep only
+  ids and re-find through `FUN_00621d60`. Reset our statics when `DAT_00a6ad34` becomes 0.
+
+### 3.5 ini keys (`xml2-fix.ini`, `[Display]`) - the launcher writes the same
+
+| key | values | default | applies |
+| --- | --- | --- | --- |
+| `Mode` | `fullscreen` / `borderless` / `windowed` (existing) | absent = stock | restart (phase 1), live (phase 4) |
+| `Width`, `Height` | existing | 0 | restart |
+| `Topmost`, `RunInBackground` | existing | 0 / 1 | live |
+| `FrameRate` | `0` (off) / `30` / `60` / `120` / `144` / `refresh` | `60` in fullscreen (stock feel), `refresh` in borderless/windowed | live |
+| `VSync` | `0` / `1` | `0` (stock fullscreen) | live via reset |
+| `InGameOptions` | `0` / `1` | `1` | start |
+| `ResolutionList` | `game` (20, trimmed) / `all` (relocated table) | `all` | start |
+
+The in-game cycles show exactly these values; "Refresh" reads as "Refresh rate (180 Hz)". Unknown ini
+values fall back to the default and are logged.
+
+---
+
+## 4. Phases (each shippable)
+
+1. **Frame cap + vsync in the ini and the Present hook** (no UI): patch E, limiter in `hooked_present`,
+   vsync in `rewrite_present`, `[Display] FrameRate/VSync`, log the measured fps every 10 s in debug.
+   Test the windowed-vsync question (1.6) here.
+2. **In-game rows (display mode, frame rate, vsync, run in background)**: hooks A-D, rows, highlight,
+   status label, ini persistence, live apply for cap/vsync/background; display mode = restart notice.
+3. **Resolution list**: relocate the table (F-L), 64 slots, curated list + render-scale presets; keep the
+   game's NEW_RESZ_RESTART flow (WarningRes) as is.
+4. **Live display-mode switch (experimental, ini-gated `LiveModeSwitch=1`)**: `setFullScreenState`
+   through our window/device hooks, 15 s revert prompt reusing the game's popup builder pattern
+   (`FUN_0061c740` is the template; result codes 1/3 are read in `FUN_0061f380`).
+5. **Polish**: translations for fre/ger/ita/spa from the loaded `igct*.bnx` language, pipe command
+   `wm KEY` (PostMessage WM_KEYUP) so the tour can drive the panel, README/launcher fields.
+
+---
+
+## 5. Risks
+
+- **Retail build only**: every patch is address-bound; check bytes, log and skip on mismatch (demo exe has
+  the same code but different addresses - `DAT_006f3c2d` demo flag exists, but we do not support it).
+- **Stack/register assumptions at hook A**: `ecx = panel` and one pushed arg; our function must be
+  `__thiscall`-compatible and preserve `ebx/esi/edi/ebp` (the builder uses ebx = FSAA cycle, ebp = last
+  button afterwards only for the return, but be safe).
+- **Anim slot 5/6 of the toggle bar**: the object is exactly 0x1b0 bytes and slot 6 ends at +0x1ac (the
+  byte the nav code uses); slot 5 is safe, slot 6 overlaps nothing but stay on 5.
+- **`FUN_00621e00` records are freed by the game** (`FUN_00624490`, UNVERIFIED which function frees them) -
+  allocate them with the game's `operator new` (0x671fc2) so `operator delete` matches (MSVCR71 heap).
+- **Device reset for vsync** while the game renders: call it from the render thread (inside our Present
+  hook on the next frame), not from the UI callback.
+- **Windowed vsync/limiter measurements** may show D3D8 already syncing in windowed mode; then "VSync" in
+  borderless is informational only.
+- **Frame-rate-dependent code** at >60 fps (UNVERIFIED): watch camera lerps, UI fades, particle spawn
+  rates during the tour; the ini keeps 60 as the fullscreen default so the stock feel is unchanged.
+- **Font glyphs**: keep labels ASCII; "Hz" fine, avoid `×`.
+- **Test pipe cannot drive the panel** (WM_KEYUP based) until phase 5.
+
+---
+
+## 6. In-game test checklist
+
+1. Start with no `[Display]` section: panel unchanged, fps display 60, log says "in-game options off"
+   (or on with stock defaults if `InGameOptions` defaults to 1 - decide; recommended: on).
+2. Options > Controls > Advanced: four new rows under FSAA, enter animation slides them in with the rest,
+   highlight bar follows mouse hover and keyboard up/down (Resolution -> FSAA -> Display mode -> Frame rate
+   -> VSync -> Run in background -> Accept -> wrap), left/right and Enter cycle values with the click sound.
+3. Change Frame rate to 30, Accept: fps display shows 30 immediately; `xml2-fix.ini` has `FrameRate=30`.
+   Change to Off in borderless on the 180 Hz desktop: fps display > 60 (note the value), game speed
+   unchanged (time a fixed tour step). Back to 60.
+4. VSync On/Off in fullscreen: fps pinned to refresh vs free; no device-lost hang after the reset.
+5. Cancel discards edits (rows show ini values on reopen); Revert to defaults resets rows to defaults and
+   the launcher-written ini values reappear after Cancel.
+6. Display mode row: change, Accept -> status line says restart required; restart -> mode applied.
+7. Resolution slider (phase 3): the list shows every curated size incl. 2560x1440 and 21:9 entries; pick
+   one, Accept -> NEW_RESZ_RESTART popup as stock; after restart the HUD is stretched to the new aspect
+   (known, 1.7).
+8. Edit the ini with the launcher while the game is at the main menu, open the panel: rows reflect it.
+9. Alt-tab, minimise/restore, and a popup (revert confirm) open/close leave the highlight and focus sane.
+10. Delete `dinput.dll`: stock panel, stock 60 fps cap, registry untouched.
+
+---
+
+## 7. Open questions for the owner
+
+1. Default for `FrameRate` when the user never opens the panel: keep the stock 60 (safest) or "refresh"?
+2. Should Display mode try the live switch (phase 4) at all, or is "restart to apply" acceptable like the
+   game's own resolution change?
+3. Is a fifth row "Run in background" wanted, or keep it launcher/ini only?
+4. Windowed-mode VSync: expose it as "On (desktop)" read-only if D3D8 turns out to sync anyway, or hide it?
+5. HUD aspect correction at 21:9 (separate feature): worth a follow-up spike?
+6. Labels: English only in the first release, or ship the fre/ger/ita/spa strings too?
+
+---
+
+## Appendix: research artifacts (`docs/research/`, git-ignored)
+
+`XMen2.exe`, `libIGGfx.dll`, `libIGDisplay.dll`, `libIGCore.dll`, `alchemy.ini` copies; `petools.py`
+(strings/xref/dis/func/fulldis/bytes/dwords); `xml2_text.asm` (full .text listing);
+`adv_options_builder.asm` (0x61dc00-0x61f4ff); Ghidra project `ghidra/xml2opts` (all three binaries
+analysed) + `ghidra_scripts/DecompAt.java`; decompiles `decomp_batch1.c` (builder, resolution, display init,
+widget ctors), `decomp_batch2.c` (base ctor, layout, callbacks, registry), `decomp_batch3.c` (nav registry,
+Accept, handlers, cycle widget, config system, timers), `decomp_batch4.c` (highlight, popups, CClient
+frame/init, HUD), `decomp_batch5.c` (widget methods, window input, wndproc), `decomp_batch6.c`
+(panel driver, timers), `decomp_batch7.c`-`decomp_batch11.c` (localisation, close/apply function
+`FUN_0061f380`, window message dispatch, display getters, defaults), `decomp_gfx.c`/`decomp_gfx2.c`
+(setDeviceParameters, createDevice, endDraw, resetDevice, getLastError, presentation interval),
+`decomp_display.c` (igWin32Window setVideoMode, open, dispatchEvent, ...). Re-run any decompile with
+`analyzeHeadless.bat <proj> xml2opts -process XMen2.exe -noanalysis -scriptPath ghidra_scripts
+-postScript DecompAt.java out.c <hex addrs>` (JAVA_HOME = D:\tools\jdk-21.0.12.1+1).
