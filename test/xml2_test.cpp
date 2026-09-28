@@ -2854,6 +2854,14 @@ namespace
 	int run_pipe_child()
 	{
 		std::printf("test input pipe: starting a child with [Test] InputPipe=1\n");
+		// The pipe has one well-known name: with a game already serving it, the child's checks would connect to
+		// the game and drive it (2026-09-28: taps, a queued unlockCharacter and a loadmap went into a running
+		// harness game). Skip rather than touch someone else's game.
+		if (WaitNamedPipeW(LR"(\\.\pipe\xml2-fix-input)", 1) || GetLastError() == ERROR_SEM_TIMEOUT)
+		{
+			std::printf("  skip  another process (a running game?) already serves \\\\.\\pipe\\xml2-fix-input - pipe checks not run\n");
+			return 0;
+		}
 		const auto ini = module_dir() / "xml2-fix.ini";
 		if (std::filesystem::exists(ini))
 		{
