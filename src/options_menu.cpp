@@ -547,13 +547,20 @@ namespace options_menu
 				return;
 			}
 		}
+		// Write every site before restoring any protection: three of the four sites share a page
+		// (0x61f356, 0x61f667, 0x61f8a4, 0x61f8be), so restoring the first site's protection re-locks
+		// the page for the others (in game: access violation writing 0x61f8a5 at startup). The
+		// protections are restored in reverse order so the page ends with its original protection.
 		for (std::size_t i = 0; i < replacements.size(); ++i)
 		{
 			std::uint8_t* at = base + replacements[i].site->rva;
 			const std::int32_t rel = rel32(reinterpret_cast<std::uintptr_t>(at), reinterpret_cast<std::uintptr_t>(replacements[i].function));
 			std::memcpy(at + 1, &rel, sizeof(rel));
 			FlushInstructionCache(GetCurrentProcess(), at, 5);
-			VirtualProtect(at, 5, protection[i], &protection[i]);
+		}
+		for (std::size_t i = replacements.size(); i-- > 0;)
+		{
+			VirtualProtect(base + replacements[i].site->rva, 5, protection[i], &protection[i]);
 		}
 		patched = true;
 		logger::write("options: Advanced Options gets the rows Display mode, Frame rate, VSync and Run in background (four call sites patched); Accept writes the changed ones to [Display] in xml2-fix.ini");

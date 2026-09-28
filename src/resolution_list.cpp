@@ -95,12 +95,17 @@ namespace resolution_list
 			}
 		}
 		const auto address = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(table));
+		// Write every site before restoring any protection (sites share pages; restoring one re-locks the
+		// page for the next - the same bug crashed the options menu at startup), then restore in reverse.
 		for (std::size_t i = 0; i < table_sites.size(); ++i)
 		{
 			std::uint8_t* at = base + table_sites[i].rva;
 			std::memcpy(at + table_sites[i].imm_offset, &address, sizeof(address));
 			FlushInstructionCache(GetCurrentProcess(), at, table_sites[i].expected.size());
-			VirtualProtect(at, table_sites[i].expected.size(), protection[i], &protection[i]);
+		}
+		for (std::size_t i = table_sites.size(); i-- > 0;)
+		{
+			VirtualProtect(base + table_sites[i].rva, table_sites[i].expected.size(), protection[i], &protection[i]);
 		}
 		slots_in_use = slots;
 		moved = true;
