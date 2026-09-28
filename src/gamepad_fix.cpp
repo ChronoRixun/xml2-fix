@@ -497,7 +497,7 @@ namespace gamepad_fix
 		HRESULT STDMETHODCALLTYPE get_device_state(void* self, const DWORD size, LPVOID data)
 		{
 			const auto result = reinterpret_cast<get_device_state_t>(original(self, slot_get_device_state))(self, size, data);
-			if (FAILED(result) || !data || (size != sizeof(DIJOYSTATE) && size != sizeof(DIJOYSTATE2)))
+			if (!data || (size != sizeof(DIJOYSTATE) && size != sizeof(DIJOYSTATE2)))
 			{
 				return result;
 			}
@@ -506,6 +506,16 @@ namespace gamepad_fix
 			if (!record.spoofed)
 			{
 				return result;
+			}
+			if (FAILED(result))
+			{
+				// The pad's own DirectInput read can fail while its state comes from XInput anyway - e.g. in a
+				// borderless/windowed game the device isn't acquired (in game 2026-09-27: the pad was never read
+				// during play, XInput first loaded when the Options menu made a new DirectInput instance). Its
+				// state is filled from XInput regardless.
+				logger::write_once("pad-read-failed", "dinput: the pad's own read failed (%08lX) - its state comes from XInput anyway",
+				                   static_cast<unsigned long>(result));
+				std::memset(data, 0, size);
 			}
 			if (!record.axes_loaded)
 			{
@@ -520,7 +530,7 @@ namespace gamepad_fix
 			}
 
 			active->fill_state(*static_cast<DIJOYSTATE*>(data), pad, record.axes);
-			return result;
+			return DI_OK;
 		}
 
 		struct interface_id
