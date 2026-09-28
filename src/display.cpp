@@ -34,7 +34,10 @@ namespace display
 		bool have_applied = false;
 		bool stock_fallback = false; // our parameters were refused and the engine's own are in use
 		bool geometry_hooked = false;
+		bool emulate_pause = false; // RunInBackground=0: Present reports the device lost while unfocused
 		bool paused = false;
+		void (*frame_hook)(void*) = nullptr;     // the test pipe's screenshots, before every Present
+		const char* no_multisampling = nullptr;  // why the device is made without multisampling, if it is
 		HWND window = nullptr;
 		size client_size; // the client area the window should have (the back buffer size)
 
@@ -194,9 +197,15 @@ namespace display
 
 		d3d8::present_parameters rewrite(void* self, const d3d8::present_parameters& requested, std::string& notes)
 		{
-			return rewrite_present(requested, opts, desktop,
-			                       [&](const DWORD format, const DWORD type) { return multisample_supported(self, format, type); },
-			                       [&](const DWORD format) { return back_buffer_format_supported(self, format); }, notes);
+			auto pp = rewrite_present(requested, opts, desktop,
+			                          [&](const DWORD format, const DWORD type) { return multisample_supported(self, format, type); },
+			                          [&](const DWORD format) { return back_buffer_format_supported(self, format); }, notes);
+			if (no_multisampling && pp.multi_sample_type != d3d8::multisample_none)
+			{
+				pp.multi_sample_type = d3d8::multisample_none;
+				notes += std::string("multisampling: off (") + no_multisampling + "); ";
+			}
+			return pp;
 		}
 
 		void remember_applied(const d3d8::present_parameters& pp)
@@ -266,7 +275,11 @@ namespace display
 
 		HRESULT STDMETHODCALLTYPE hooked_present(void* self, const RECT* source, const RECT* destination, const HWND override, const void* dirty)
 		{
-			if (!opts.run_in_background)
+			if (frame_hook)
+			{
+				frame_hook(self); // the back buffer holds the finished frame
+			}
+			if (emulate_pause)
 			{
 				const bool foreground = game_in_foreground();
 				if (foreground == paused)
@@ -365,9 +378,13 @@ namespace display
 			{
 				real_test_cooperative_level = current; // a second device shares the vtable, possibly already hooked
 			}
-			if (!opts.run_in_background && manages_window(opts.window_mode) && !stock_fallback)
+			emulate_pause = !opts.run_in_background && manages_window(opts.window_mode) && !stock_fallback;
+			if (emulate_pause)
 			{
 				hook_slot(device, d3d8::device_slot::test_cooperative_level, &hooked_test_cooperative_level, real_test_cooperative_level);
+			}
+			if (emulate_pause || frame_hook)
+			{
 				hook_slot(device, d3d8::device_slot::present, &hooked_present, real_present);
 			}
 			logger::write("display: device created - %s", describe(wanted).c_str());
@@ -444,8 +461,11 @@ namespace display
 			d3d = result;
 			modes_built = false;
 			hook_slot(result, d3d8::d3d_slot::create_device, &hooked_create_device, real_create_device);
-			hook_slot(result, d3d8::d3d_slot::get_adapter_mode_count, &hooked_get_adapter_mode_count, real_get_adapter_mode_count);
-			hook_slot(result, d3d8::d3d_slot::enum_adapter_modes, &hooked_enum_adapter_modes, real_enum_adapter_modes);
+			if (opts.window_mode != mode::stock) // the Video options list stays the game's own in stock mode
+			{
+				hook_slot(result, d3d8::d3d_slot::get_adapter_mode_count, &hooked_get_adapter_mode_count, real_get_adapter_mode_count);
+				hook_slot(result, d3d8::d3d_slot::enum_adapter_modes, &hooked_enum_adapter_modes, real_enum_adapter_modes);
+			}
 
 			d3d8::display_mode current{};
 			const auto get_display_mode = d3d8::method<d3d8::get_adapter_display_mode_t>(result, d3d8::d3d_slot::get_adapter_display_mode);
@@ -645,28 +665,50 @@ namespace display
 		}
 	}
 
+	void set_frame_hook(void (*hook)(void* device))
+	{
+		frame_hook = hook;
+	}
+
+	void disable_multisampling(const char* why)
+	{
+		no_multisampling = why;
+	}
+
 	void install(const HMODULE game)
 	{
 		opts = read_options();
-		if (opts.window_mode == mode::stock)
+		if (opts.window_mode == mode::stock && !frame_hook)
 		{
 			logger::write("display: as the game has it (no [Display] Mode in xml2-fix.ini)");
 			return;
 		}
 
 		desktop = current_desktop();
-		logger::write("display: mode %s, size %s, topmost %d, run in background %d; desktop %ux%u @ %u Hz", name(opts.window_mode),
-		              opts.width > 0 && opts.height > 0 ? (std::to_string(opts.width) + "x" + std::to_string(opts.height)).c_str()
-		              : opts.window_mode == mode::borderless ? "desktop" : "the game's setting",
-		              opts.topmost, opts.run_in_background, desktop.width, desktop.height, desktop.refresh_rate);
+		if (opts.window_mode == mode::stock)
+		{
+			logger::write("display: as the game has it (no [Display] Mode in xml2-fix.ini); the Direct3D device is hooked for the test pipe's screenshots");
+		}
+		else
+		{
+			logger::write("display: mode %s, size %s, topmost %d, run in background %d; desktop %ux%u @ %u Hz", name(opts.window_mode),
+			              opts.width > 0 && opts.height > 0 ? (std::to_string(opts.width) + "x" + std::to_string(opts.height)).c_str()
+			              : opts.window_mode == mode::borderless ? "desktop" : "the game's setting",
+			              opts.topmost, opts.run_in_background, desktop.width, desktop.height, desktop.refresh_rate);
+		}
 
 		// The engine's Direct3D 8: device creation, resets and the mode list.
 		const HMODULE gfx = GetModuleHandleA("libIGGfx.dll");
 		if (!hook_import(gfx, "d3d8.dll", "Direct3DCreate8", &hooked_direct3d_create8, real_direct3d_create8))
 		{
-			logger::write("display: libIGGfx.dll doesn't import Direct3DCreate8 - display left as the game has it");
+			logger::write("display: libIGGfx.dll doesn't import Direct3DCreate8 - display left as the game has it%s",
+			              frame_hook ? " (and no frames for the test pipe)" : "");
 			opts.window_mode = mode::stock;
 			return;
+		}
+		if (opts.window_mode == mode::stock)
+		{
+			return; // only the device hooks, for the frame hook
 		}
 
 		if (manages_window(opts.window_mode))

@@ -26,6 +26,15 @@
 
 namespace display
 {
-	// Reads [Display] from xml2-fix.ini and installs the hooks it calls for. Without a Mode, nothing changes.
+	// Reads [Display] from xml2-fix.ini and installs the hooks it calls for. Without a Mode, nothing
+	// changes - unless a frame hook was set, which needs the Direct3D device hooked whatever the mode.
 	void install(HMODULE game);
+
+	// For the test pipe's screenshots: `hook` runs on the game's render thread with its
+	// IDirect3DDevice8 just before every Present. Set before install().
+	void set_frame_hook(void (*hook)(void* device));
+
+	// Creates and resets the device without multisampling (a multisampled back buffer can't be
+	// copied). Set before install(); `why` goes in the log.
+	void disable_multisampling(const char* why);
 }

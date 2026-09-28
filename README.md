@@ -97,6 +97,28 @@ RunInBackground=1    ; borderless/windowed: 0 pauses the game when another windo
 
 In every mode the Video options list shows your desktop resolution. In borderless mode with `Width`/`Height` at 0 the game starts at the desktop size every time; a resolution picked in the menu applies for that session (it is stretched to the screen). Everything the fix decides about the window and the Direct3D device is written to `xml2-fix.log`.
 
+## 🧪 Driving the game from a script
+
+For automated tests (the X-Men Legends I port's test runner, for one) that need to press keys and grab frames without taking the PC away from whoever is using it. With
+
+```ini
+[Test]
+InputPipe=1
+```
+
+the fix listens on the named pipe `\\.\pipe\xml2-fix-input`: one command per line, one reply line each (`ok …` or `error …`).
+
+| Command | Effect |
+| ------- | ------ |
+| `tap KEY [ms]` | press and release (80 ms) |
+| `hold KEY+KEY ms` | hold together, then release |
+| `down KEY` / `up KEY` | hold until released (10 s at most) |
+| `release` | let go of everything |
+| `screenshot PATH` | save the frame the game just drew (`.png` or `.bmp`) |
+| `status`, `ping` | |
+
+`KEY` is a DirectInput key name (`ENTER`, `ESCAPE`, `W`, `UP`, `F1`, `NUMPAD4`, …) or scancode (`0x1C`). Keys from the pipe reach the game whether or not it has the focus; the real keyboard only counts while it does, so typing in another window stays there. Screenshots copy the Direct3D back buffer inside the game, so they work with the window covered (multisampling is off while the pipe is on). Meant for `Mode=windowed` with `RunInBackground=1`; everything the pipe does is in `xml2-fix.log`. Off without the `[Test]` section.
+
 ## 🔍 What was actually wrong
 
 - **No gamepad defaults.** The PC build's built-in bindings table has keyboard keys for player 1 and nothing at all for gamepads, for any player. Even a controller the game knows by name starts unbound.

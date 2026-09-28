@@ -26,6 +26,8 @@ add_library(xml2_fix SHARED
 	src/net_trace.cpp
 	src/mod_loader.cpp
 	src/display.cpp
+	src/frame_capture.cpp
+	src/test_input.cpp
 	src/log.cpp
 	src/dinput.def
 	src/version.rc)
@@ -37,7 +39,7 @@ target_link_libraries(xml2_fix PRIVATE dxguid ws2_32)
 set_target_properties(xml2_fix PROPERTIES OUTPUT_NAME dinput ARCHIVE_OUTPUT_NAME xml2_fix)
 
 # Checks the built DLL the way the game loads it (imported from next to the executable).
-add_executable(xml2_test test/xml2_test.cpp)
+add_executable(xml2_test test/xml2_test.cpp src/frame_capture.cpp) # frame_capture: the back buffer copy, checked on a device of its own
 target_compile_definitions(xml2_test PRIVATE _WINSOCK_DEPRECATED_NO_WARNINGS)
-target_include_directories(xml2_test PRIVATE src) # display_rules.hpp: the display decisions, checked without the game
+target_include_directories(xml2_test PRIVATE src) # display_rules.hpp, test_input_rules.hpp, image_file.hpp: the decisions, checked without the game
 target_link_libraries(xml2_test PRIVATE xml2_fix dinput8.lib dxguid xinput ws2_32) # dinput8.lib: only for c_dfDIJoystick(2)

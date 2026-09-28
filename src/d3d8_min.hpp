@@ -12,6 +12,9 @@ namespace d3d8
 	// D3DFORMAT values the engine and the desktop use.
 	constexpr DWORD format_a8r8g8b8 = 21;
 	constexpr DWORD format_x8r8g8b8 = 22;
+	constexpr DWORD format_r5g6b5 = 23;
+	constexpr DWORD format_x1r5g5b5 = 24;
+	constexpr DWORD format_a1r5g5b5 = 25;
 	constexpr DWORD format_d24s8 = 75;
 
 	// D3DSWAPEFFECT
@@ -23,6 +26,9 @@ namespace d3d8
 	constexpr DWORD multisample_none = 0;
 	constexpr UINT present_interval_default = 0;
 	constexpr DWORD device_type_hal = 1;
+	constexpr DWORD back_buffer_type_mono = 0; // D3DBACKBUFFER_TYPE_MONO
+	constexpr DWORD lock_read_only = 0x10;     // D3DLOCK_READONLY
+	constexpr DWORD clear_target = 1;          // D3DCLEAR_TARGET
 
 	constexpr HRESULT err_device_lost = static_cast<HRESULT>(0x88760868);
 	constexpr HRESULT err_invalid_call = static_cast<HRESULT>(0x8876086C);
@@ -54,6 +60,26 @@ namespace d3d8
 	};
 	static_assert(sizeof(present_parameters) == 52);
 
+	// D3DSURFACE_DESC (32 bytes) and D3DLOCKED_RECT.
+	struct surface_desc
+	{
+		DWORD format;
+		DWORD type;
+		DWORD usage;
+		DWORD pool;
+		UINT size;
+		DWORD multi_sample_type;
+		UINT width;
+		UINT height;
+	};
+	static_assert(sizeof(surface_desc) == 32);
+
+	struct locked_rect
+	{
+		INT pitch;
+		void* bits;
+	};
+
 	// IDirect3D8 vtable slots.
 	namespace d3d_slot
 	{
@@ -71,6 +97,18 @@ namespace d3d8
 		constexpr int test_cooperative_level = 3;
 		constexpr int reset = 14;
 		constexpr int present = 15;
+		constexpr int get_back_buffer = 16;
+		constexpr int create_image_surface = 27;
+		constexpr int copy_rects = 28;
+		constexpr int clear = 36;
+	}
+
+	// IDirect3DSurface8 vtable slots.
+	namespace surface_slot
+	{
+		constexpr int get_desc = 8;
+		constexpr int lock_rect = 9;
+		constexpr int unlock_rect = 10;
 	}
 
 	using direct3d_create8_t = void*(WINAPI*)(UINT);
@@ -83,6 +121,13 @@ namespace d3d8
 	using test_cooperative_level_t = HRESULT(STDMETHODCALLTYPE*)(void*);
 	using reset_t = HRESULT(STDMETHODCALLTYPE*)(void*, present_parameters*);
 	using present_t = HRESULT(STDMETHODCALLTYPE*)(void*, const RECT*, const RECT*, HWND, const void*);
+	using get_back_buffer_t = HRESULT(STDMETHODCALLTYPE*)(void*, UINT, DWORD, void**);
+	using create_image_surface_t = HRESULT(STDMETHODCALLTYPE*)(void*, UINT, UINT, DWORD, void**);
+	using copy_rects_t = HRESULT(STDMETHODCALLTYPE*)(void*, void*, const RECT*, UINT, void*, const POINT*);
+	using clear_t = HRESULT(STDMETHODCALLTYPE*)(void*, DWORD, const void*, DWORD, DWORD, float, DWORD);
+	using get_desc_t = HRESULT(STDMETHODCALLTYPE*)(void*, surface_desc*);
+	using lock_rect_t = HRESULT(STDMETHODCALLTYPE*)(void*, locked_rect*, const RECT*, DWORD);
+	using unlock_rect_t = HRESULT(STDMETHODCALLTYPE*)(void*);
 
 	template <typename T>
 	T method(void* object, const int slot)

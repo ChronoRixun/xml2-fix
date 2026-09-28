@@ -8,7 +8,8 @@
 // for it (the PC version ships keyboard-only defaults).
 //
 // Loading also redirects the game's GameSpy lookups to OpenSpy, for online play, and, when
-// xml2-fix.ini asks for it, runs the game windowed or borderless at the desktop's resolution.
+// xml2-fix.ini asks for it, runs the game windowed or borderless at the desktop's resolution
+// and opens a named pipe through which tests press keys and take screenshots without the focus.
 
 #include "display.hpp"
 #include "gamepad_fix.hpp"
@@ -19,6 +20,7 @@
 #include "openspy_redirect.hpp"
 #include "pad_profile.hpp"
 #include "pad_bindings.hpp"
+#include "test_input.hpp"
 
 #define DIRECTINPUT_VERSION 0x0800
 #include <Windows.h>
@@ -72,7 +74,12 @@ namespace
 
 	HRESULT WINAPI game_direct_input8_create(HINSTANCE instance, DWORD version, REFIID riid, LPVOID* out, LPUNKNOWN outer)
 	{
-		return hooked(real_direct_input8_create(instance, version, riid, out, outer), out);
+		const HRESULT result = hooked(real_direct_input8_create(instance, version, riid, out, outer), out);
+		if (SUCCEEDED(result) && out && *out)
+		{
+			test_input::hook_direct_input8(*out); // the game's keyboard device comes from here
+		}
+		return result;
 	}
 
 	using get_proc_address_t = FARPROC(WINAPI*)(HMODULE, LPCSTR);
@@ -132,6 +139,7 @@ namespace
 			net_trace::install(game);
 		}
 
+		test_input::install(); // first: its screenshots need the display fix's device hook
 		display::install(game);
 
 		// The game and the engine DLLs that read game data.

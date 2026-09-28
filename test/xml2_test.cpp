@@ -7,7 +7,10 @@
 // With an Xbox-compatible pad connected, both must see a Logitech Dual Action. Also checks
 // that GameSpy host lookups resolve through OpenSpy, and the display fix's decisions: the
 // rules in display_rules.hpp against fixed inputs, and the Video options list the fix would
-// build from this PC's Direct3D 8 modes.
+// build from this PC's Direct3D 8 modes. The test input pipe is checked on its rules, on a
+// Direct3D 8 device of the test's own (the back buffer copy behind "screenshot"), and end to
+// end in a child process started with an xml2-fix.ini that turns the pipe on: it creates the
+// keyboard device the way XMen2.exe does and sees the pipe's keys in it.
 //
 //   xml2_test.exe          run the checks
 //   xml2_test.exe --live   also show live pad input, as the game sees it, for 20 seconds
@@ -19,6 +22,9 @@
 #include <Xinput.h>
 
 #include "display_rules.hpp"
+#include "frame_capture.hpp"
+#include "image_file.hpp"
+#include "test_input_rules.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -26,6 +32,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 extern "C" HRESULT WINAPI DirectInputCreateEx(HINSTANCE, DWORD, REFIID, LPVOID*, LPUNKNOWN); // imported from the fix
@@ -343,6 +350,8 @@ namespace
 		CHECK(place.rect.left == 0 && place.rect.top == 0);
 	}
 
+	void check_d3d8_capture(void* d3d);
+
 	// The Video options list the fix builds from this PC's Direct3D 8 modes (the game's list comes
 	// from the same IDirect3D8::EnumAdapterModes).
 	void check_d3d8_modes()
@@ -386,7 +395,294 @@ namespace
 		std::printf("\n");
 		CHECK(list.size() <= 20);
 		CHECK(std::ranges::any_of(list, [&](const auto& m) { return m.width == desktop.width && m.height == desktop.height; }));
+		check_d3d8_capture(d3d);
 		static_cast<IUnknown*>(d3d)->Release();
+	}
+
+	// The test pipe's rules (test_input_rules.hpp): key names, commands, and the keys it holds.
+	void check_test_input_rules()
+	{
+		using namespace test_input_rules;
+		std::printf("test input rules ([Test] InputPipe commands)\n");
+
+		CHECK(parse_key("ENTER") == 0x1C && parse_key("return") == 0x1C && parse_key("DIK_RETURN") == 0x1C);
+		CHECK(parse_key("esc") == 0x01 && parse_key("w") == 0x11 && parse_key("UP") == 0xC8 && parse_key("numpad4") == 0x4B);
+		CHECK(parse_key("1") == 0x02 && parse_key("0") == 0x0B);      // single digits are the digit keys
+		CHECK(parse_key("28") == 0x1C && parse_key("0x1C") == 0x1C); // longer numbers are scancodes
+		CHECK(!parse_key("bogus") && !parse_key("") && !parse_key("0x100") && !parse_key("00"));
+		CHECK(name_of(0x1C) == "RETURN" && name_of(0x54) == "0x54");
+
+		auto cmd = parse_command("tap ENTER 120\r");
+		CHECK(cmd.what == command::kind::tap && (cmd.keys == std::vector<unsigned char>{0x1C}) && cmd.ms == 120);
+		cmd = parse_command("hold w+d 1500");
+		CHECK(cmd.what == command::kind::hold && (cmd.keys == std::vector<unsigned char>{0x11, 0x20}) && cmd.ms == 1500);
+		CHECK(parse_command("hold w").what == command::kind::unknown); // needs a duration
+		cmd = parse_command("down LSHIFT");
+		CHECK(cmd.what == command::kind::down && cmd.keys.size() == 1 && cmd.ms == 0);
+		CHECK(parse_command("tap W 99999").ms == max_hold_ms); // clamped
+		CHECK(parse_command("up all").what == command::kind::release);
+		cmd = parse_command("screenshot \"C:\\shots\\frame 1.png\"");
+		CHECK(cmd.what == command::kind::screenshot && cmd.path == "C:\\shots\\frame 1.png");
+		CHECK(parse_command("screenshot").what == command::kind::unknown);
+		CHECK(parse_command("  ").what == command::kind::empty);
+		CHECK(parse_command("frob").what == command::kind::unknown && !parse_command("frob").error.empty());
+		CHECK(parse_command("tap NOSUCH").what == command::kind::unknown && parse_command("tap W x").what == command::kind::unknown);
+		CHECK(parse_command("PING").what == command::kind::ping && parse_command("status").what == command::kind::status);
+
+		synthetic_keys keys;
+		unsigned char state[256]{};
+		state[0x11] = key_down; // the real keyboard holds W
+		std::vector<unsigned char> expired;
+		keys.press(0x1C, 1000);
+		keys.merge(state, 500, expired);
+		CHECK(state[0x1C] == key_down && state[0x11] == key_down && expired.empty() && keys.held() == 1);
+		std::memset(state, 0, sizeof(state));
+		keys.merge(state, 1000, expired); // time's up
+		CHECK(state[0x1C] == 0 && (expired == std::vector<unsigned char>{0x1C}) && keys.held() == 0 && !keys.is_down(0x1C));
+		keys.press(0x20, 5000);
+		keys.press(0x21, 5000);
+		keys.release(0x20);
+		CHECK(keys.held() == 1 && keys.is_down(0x21));
+		keys.release_all();
+		CHECK(keys.held() == 0);
+	}
+
+	// The screenshot files (image_file.hpp): checksums against known values, and the layouts.
+	void check_image_file()
+	{
+		std::printf("image files (the test pipe's screenshots)\n");
+		const std::uint8_t digits[] = {'1', '2', '3', '4', '5', '6', '7', '8', '9'};
+		CHECK(image_file::crc32(digits) == 0xCBF43926);
+		CHECK(image_file::crc32(std::span(digits).subspan(4), image_file::crc32(std::span(digits).first(4))) == 0xCBF43926);
+		const std::uint8_t wiki[] = {'W', 'i', 'k', 'i', 'p', 'e', 'd', 'i', 'a'};
+		CHECK(image_file::adler32(wiki) == 0x11E60398);
+
+		// 2x2: red, green / blue, white, as BGRX.
+		const std::uint8_t pixels[] = {0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0};
+		const auto bmp = image_file::encode_bmp(2, 2, pixels);
+		CHECK(bmp.size() == 54 + 2 * 8); // 6-byte rows padded to 8
+		CHECK(bmp[0] == 'B' && bmp[1] == 'M' && bmp[28] == 24);
+		CHECK(bmp[54] == 255 && bmp[55] == 0 && bmp[56] == 0); // bottom row first: blue
+		CHECK(bmp[62] == 0 && bmp[63] == 0 && bmp[64] == 255); // top row: red
+
+		const auto png = image_file::encode_png(2, 2, pixels);
+		CHECK(png.size() == 8 + 25 + (12 + 2 + 5 + 14 + 4) + 12);
+		CHECK(png[0] == 0x89 && png[1] == 'P' && png[2] == 'N' && png[3] == 'G');
+		const std::uint32_t ihdr_crc = (static_cast<std::uint32_t>(png[29]) << 24) | (png[30] << 16) | (png[31] << 8) | png[32];
+		CHECK(ihdr_crc == 0xFDD49A73); // zlib.crc32(b"IHDR" + 2x2, 8-bit RGB)
+		CHECK(png[41] == 0x78 && png[42] == 0x01);                                             // zlib header
+		CHECK(png[43] == 1 && png[44] == 14 && png[45] == 0 && png[46] == 0xF1 && png[47] == 0xFF); // one final stored block of 14 bytes
+		CHECK(png[48] == 0 && png[49] == 255 && png[50] == 0 && png[51] == 0);                // filter 0, then red as RGB
+		CHECK(png[png.size() - 8] == 'I' && png[png.size() - 7] == 'E' && png[png.size() - 6] == 'N' && png[png.size() - 5] == 'D');
+	}
+
+	// The back buffer copy behind "screenshot", on a windowed device of our own (never shown).
+	void check_d3d8_capture(void* d3d)
+	{
+		std::printf("Direct3D 8 back buffer capture (the test pipe's screenshot)\n");
+		WNDCLASSW wc{};
+		wc.lpfnWndProc = DefWindowProcW;
+		wc.hInstance = GetModuleHandleW(nullptr);
+		wc.lpszClassName = L"xml2_test_capture";
+		RegisterClassW(&wc);
+		const HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"xml2_test", WS_OVERLAPPEDWINDOW, 0, 0, 64, 48, nullptr, nullptr, wc.hInstance, nullptr);
+		CHECK(hwnd != nullptr);
+
+		d3d8::present_parameters pp{64, 48, d3d8::format_x8r8g8b8, 1, d3d8::multisample_none, d3d8::swap_discard, hwnd, TRUE, FALSE, 0, 0, 0, d3d8::present_interval_default};
+		void* device = nullptr;
+		const HRESULT created = d3d8::method<d3d8::create_device_t>(d3d, d3d8::d3d_slot::create_device)(d3d, 0, d3d8::device_type_hal, hwnd, 0x20 /* software vertex processing */, &pp, &device);
+		if (FAILED(created) || !device)
+		{
+			std::printf("  skip  no Direct3D 8 device here (%08lX)\n", created);
+			DestroyWindow(hwnd);
+			return;
+		}
+
+		CHECK(SUCCEEDED(d3d8::method<d3d8::clear_t>(device, d3d8::device_slot::clear)(device, 0, nullptr, d3d8::clear_target, 0xFF3366CC, 1.0f, 0)));
+		frame_capture::frame picture;
+		const auto error = frame_capture::read_back_buffer(device, picture);
+		if (!error.empty()) std::printf("  info  %s\n", error.c_str());
+		CHECK(error.empty());
+		CHECK(picture.width == 64 && picture.height == 48 && picture.bgrx.size() == 64 * 48 * 4);
+		if (picture.bgrx.size() == 64 * 48 * 4)
+		{
+			const auto* pixel = picture.bgrx.data() + (10 * 64 + 10) * 4;
+			CHECK(pixel[0] == 0xCC && pixel[1] == 0x66 && pixel[2] == 0x33); // the cleared colour, as BGR
+		}
+
+		const auto png_path = std::filesystem::temp_directory_path() / "xml2_test_capture.png";
+		CHECK(frame_capture::save(picture, png_path).empty());
+		const auto png = read_file(png_path);
+		CHECK(png.size() == 8 + 25 + (12 + 2 + 5 + 48 * (1 + 64 * 3) + 4) + 12 && png.compare(1, 3, "PNG") == 0);
+		const auto bmp_path = std::filesystem::temp_directory_path() / "xml2_test_capture.bmp";
+		CHECK(frame_capture::save(picture, bmp_path).empty() && std::filesystem::file_size(bmp_path) == 54 + 64 * 3 * 48);
+		CHECK(!frame_capture::save({}, png_path).empty()); // nothing captured
+		std::printf("  info  wrote %s and .bmp\n", png_path.string().c_str());
+
+		static_cast<IUnknown*>(device)->Release();
+		DestroyWindow(hwnd);
+		UnregisterClassW(wc.lpszClassName, wc.hInstance);
+	}
+
+	// ---- The pipe, end to end -----------------------------------------------------------------------
+
+	constexpr const char* pipe_name = "\\\\.\\pipe\\xml2-fix-input";
+
+	// One request, one reply line.
+	std::string ask(const HANDLE pipe, const std::string& line)
+	{
+		const auto request = line + "\n";
+		DWORD written = 0;
+		if (!WriteFile(pipe, request.c_str(), static_cast<DWORD>(request.size()), &written, nullptr)) return "error write failed";
+		std::string reply;
+		char buffer[256];
+		DWORD got = 0;
+		while (reply.find('\n') == std::string::npos)
+		{
+			if (!ReadFile(pipe, buffer, sizeof(buffer), &got, nullptr) || !got) return "error pipe closed";
+			reply.append(buffer, got);
+		}
+		return reply.substr(0, reply.find('\n'));
+	}
+
+	bool ok(const std::string& reply) { return reply.rfind("ok", 0) == 0; }
+	bool refused(const std::string& reply) { return reply.rfind("error", 0) == 0; }
+
+	// Runs in the child process (run_pipe_child), whose dinput.dll saw [Test] InputPipe=1.
+	void check_pipe()
+	{
+		std::printf("test input pipe ([Test] InputPipe=1, this is the child process)\n");
+		HANDLE pipe = INVALID_HANDLE_VALUE;
+		for (int attempt = 0; attempt < 50 && pipe == INVALID_HANDLE_VALUE; ++attempt)
+		{
+			pipe = CreateFileA(pipe_name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+			if (pipe == INVALID_HANDLE_VALUE) Sleep(100);
+		}
+		CHECK(pipe != INVALID_HANDLE_VALUE);
+		if (pipe == INVALID_HANDLE_VALUE) return;
+
+		CHECK(ok(ask(pipe, "ping")));
+		const auto status = ask(pipe, "status");
+		std::printf("  info  %s\n", status.c_str());
+		CHECK(ok(status));
+		CHECK(refused(ask(pipe, "frob")));
+		CHECK(refused(ask(pipe, "tap NOSUCHKEY")));
+		CHECK(refused(ask(pipe, "screenshot")));
+		CHECK(refused(ask(pipe, "tap ENTER 20"))); // nothing reads a keyboard yet
+		const auto shot = ask(pipe, "screenshot " + (std::filesystem::temp_directory_path() / "xml2_test_pipe.png").string());
+		std::printf("  info  %s\n", shot.c_str());
+		CHECK(refused(shot)); // no Direct3D device in this process: times out
+
+		// The keyboard as XMen2.exe creates it: its own DirectInput 8, through the fix's wrapper.
+		wchar_t folder[MAX_PATH]{};
+		GetSystemDirectoryW(folder, MAX_PATH);
+		const auto dinput8 = LoadLibraryW((std::wstring(folder) + L"\\dinput8.dll").c_str());
+		const auto create = dinput8 ? reinterpret_cast<decltype(&DirectInput8Create)>(GetProcAddress(dinput8, "DirectInput8Create")) : nullptr;
+		IDirectInput8A* input = nullptr;
+		IDirectInputDevice8A* keyboard = nullptr;
+		if (create) create(GetModuleHandleW(nullptr), 0x0800, IID_IDirectInput8A, reinterpret_cast<void**>(&input), nullptr);
+		if (input) input->CreateDevice(GUID_SysKeyboard, &keyboard, nullptr);
+		if (!keyboard)
+		{
+			std::printf("  skip  no DirectInput keyboard device here\n");
+			CloseHandle(pipe);
+			return;
+		}
+		CHECK(SUCCEEDED(keyboard->SetDataFormat(&c_dfDIKeyboard)));
+		CHECK(SUCCEEDED(keyboard->SetCooperativeLevel(GetConsoleWindow(), DISCL_FOREGROUND | DISCL_NONEXCLUSIVE | DISCL_NOWINKEY))); // the game's flags
+		CHECK(SUCCEEDED(keyboard->Acquire()));
+		BYTE state[256]{};
+		CHECK(SUCCEEDED(keyboard->GetDeviceState(sizeof(state), state)));
+
+		// A tap over the pipe while this thread polls the device like the game does.
+		const auto poll = [&](const int times, const BYTE code)
+		{
+			bool seen = false;
+			for (int i = 0; i < times; ++i)
+			{
+				if (SUCCEEDED(keyboard->GetDeviceState(sizeof(state), state)) && (state[code] & 0x80)) seen = true;
+				Sleep(5);
+			}
+			return seen;
+		};
+		std::string reply;
+		std::thread tapper([&] { reply = ask(pipe, "tap RETURN 300"); });
+		const bool seen_down = poll(300, DIK_RETURN);
+		tapper.join();
+		CHECK(seen_down);
+		CHECK(ok(reply));
+		CHECK(!poll(10, DIK_RETURN)); // released again
+
+		CHECK(ok(ask(pipe, "down W+D")));
+		CHECK(poll(4, DIK_W) && (state[DIK_D] & 0x80));
+		CHECK(ok(ask(pipe, "up W")));
+		CHECK(!poll(4, DIK_W) && (state[DIK_D] & 0x80));
+		CHECK(ok(ask(pipe, "release")));
+		CHECK(!poll(4, DIK_D));
+
+		std::thread tapper2([&] { reply = ask(pipe, "tap 0x1C"); }); // by scancode, the default 80 ms
+		CHECK(poll(200, DIK_RETURN));
+		tapper2.join();
+		CHECK(ok(reply));
+
+		keyboard->Unacquire();
+		keyboard->Release();
+		input->Release();
+		CloseHandle(pipe);
+
+		const auto log = read_file(module_dir() / "xml2-fix.log");
+		CHECK(log.find("test: input pipe") != std::string::npos);
+		CHECK(log.find("keyboard cooperative level 16 -> A (background, non-exclusive): ok") != std::string::npos); // FOREGROUND|NONEXCLUSIVE|NOWINKEY -> BACKGROUND|NONEXCLUSIVE
+		CHECK(log.find("the game reads its DirectInput keyboard") != std::string::npos);
+		CHECK(log.find("display: as the game has it") != std::string::npos && log.find("hooked for the test pipe") != std::string::npos);
+	}
+
+	// Starts this program again with an xml2-fix.ini next to it that turns the pipe on, so its
+	// dinput.dll runs check_pipe's side. Last, because that DLL starts xml2-fix.log over.
+	int run_pipe_child()
+	{
+		std::printf("test input pipe: starting a child with [Test] InputPipe=1\n");
+		const auto ini = module_dir() / "xml2-fix.ini";
+		if (std::filesystem::exists(ini))
+		{
+			std::printf("  skip  an xml2-fix.ini already sits next to the test\n");
+			return 0;
+		}
+		{
+			std::ofstream out(ini, std::ios::binary);
+			out << "[Test]\r\nInputPipe=1\r\n";
+		}
+
+		wchar_t exe[MAX_PATH]{};
+		GetModuleFileNameW(nullptr, exe, MAX_PATH);
+		std::wstring command = std::wstring(L"\"") + exe + L"\" --pipe-child";
+		STARTUPINFOW startup{};
+		startup.cb = sizeof(startup);
+		PROCESS_INFORMATION process{};
+		int result = 1;
+		if (CreateProcessW(exe, command.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr, &startup, &process))
+		{
+			if (WaitForSingleObject(process.hProcess, 60000) == WAIT_OBJECT_0)
+			{
+				DWORD code = 1;
+				GetExitCodeProcess(process.hProcess, &code);
+				result = static_cast<int>(code);
+			}
+			else
+			{
+				TerminateProcess(process.hProcess, 1);
+				std::printf("  FAIL  the child didn't finish in 60 s\n");
+			}
+			CloseHandle(process.hThread);
+			CloseHandle(process.hProcess);
+		}
+		else
+		{
+			std::printf("  FAIL  couldn't start the child (error %lu)\n", GetLastError());
+		}
+		std::error_code ignored;
+		std::filesystem::remove(ini, ignored);
+		return result;
 	}
 
 	void check_online()
@@ -414,6 +710,12 @@ int main(const int argc, char** argv)
 {
 	const bool show_live = argc > 1 && std::strcmp(argv[1], "--live") == 0;
 	std::setvbuf(stdout, nullptr, _IONBF, 0); // keep output up to a crash
+
+	if (argc > 1 && std::strcmp(argv[1], "--pipe-child") == 0)
+	{
+		check_pipe();
+		return failures; // added to the parent's
+	}
 
 	std::printf("the fix is the dinput.dll this program loaded\n");
 	const auto fix = GetModuleHandleW(L"dinput.dll");
@@ -445,11 +747,14 @@ int main(const int argc, char** argv)
 	}
 	check_online();
 	check_display_rules();
+	check_test_input_rules();
+	check_image_file();
 	check_d3d8_modes();
 
 	const auto log = read_file(module_dir() / "xml2-fix.log");
 	CHECK(log.find("hooked a DirectInput 7 instance") != std::string::npos);
 	CHECK(log.find("display: as the game has it") != std::string::npos); // no [Display] section next to the test
+	CHECK(log.find("test:") == std::string::npos);                       // and no [Test] section: no pipe
 	CHECK(log.find("GameSpy servers redirected to openspy.net") != std::string::npos);
 	CHECK(log.find("xmenlegpc.master.gamespy.com -> xmenlegpc.master.openspy.net (resolved)") != std::string::npos);
 	if (pads > 0)
@@ -457,6 +762,8 @@ int main(const int argc, char** argv)
 		CHECK(log.find("hooked a DirectInput 8 instance") != std::string::npos);
 		CHECK(log.find("as Logitech Dual Action #2") == std::string::npos); // one pad seen by both paths
 	}
+
+	failures += run_pipe_child();
 
 	std::printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures, failures == 1 ? "" : "s");
 	return failures ? 1 : 0;
