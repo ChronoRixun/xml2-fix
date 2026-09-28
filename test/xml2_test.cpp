@@ -1462,6 +1462,7 @@ namespace
 		forced_teams_rules::get_argument_t get = &test_get_argument;
 		bool forced = true;
 		bool add_on = false;
+		bool add_claims_only = false; // 0x46c9f0 as seen in game: true, nobody seated
 		std::map<std::string, int> indices; // registry vt+0x3c: 0 = no such character
 		std::set<int> herostats;            // registry vt+0x7c
 		forced_teams_rules::party slots{};
@@ -1585,6 +1586,7 @@ namespace
 		std::optional<bool> add_hero(const std::string& name) // 0x46c9f0: true if seated or seated already, slot = count
 		{
 			added.push_back(name);
+			if (add_claims_only) return true;
 			std::size_t count = 0;
 			for (const auto& s : slots) count += !s.empty();
 			if (std::find(slots.begin(), slots.end(), name) != slots.end()) return true;
@@ -2041,6 +2043,12 @@ namespace
 			CHECK(fake_engine::as_int(add_hero(e, &g.args)) == 0 && e.added.size() == 1);
 			e.slots = {"magma", "iceman", "colossus", "phoenix"};
 			CHECK(fake_engine::as_int(add_hero(e, &c.args)) == 0 && e.last().find("refused (party full?)") != std::string::npos);
+			// In game the routine returned true and seated nobody: that is a 0, so the script's T7 fallback runs.
+			e.slots = {"wolverine", "", "", ""};
+			e.add_claims_only = true;
+			CHECK(fake_engine::as_int(add_hero(e, &c.args)) == 0 && e.last().find("is in no party slot") != std::string::npos);
+			e.add_claims_only = false;
+			e.slots = {"magma", "iceman", "colossus", "phoenix"};
 			e.add_on = false;
 		}
 

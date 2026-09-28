@@ -1165,8 +1165,18 @@ namespace forced_teams_rules
 			e.log(call + " -> 0: ERROR: the game's addHero (0x46c9f0) faulted - party now " + party_text(e));
 			return e.make_int(0);
 		}
-		e.log(call + " -> " + (*seated ? "1: " : "0: the game's addHero (0x46c9f0) refused (party full?) - ") + party_text(e) + " (was " + before + ")");
-		return e.make_int(*seated ? 1 : 0);
+		// The routine's bool isn't proof: in game (2026-09-28, nyc1_1_3) it returned true and seated nobody.
+		// Only a party slot holding the hero counts, so the script's fallback runs whenever it didn't join.
+		const auto slots = read_party(e);
+		const bool in_party = slots && std::find(slots->begin(), slots->end(), name) != slots->end();
+		if (*seated && !in_party)
+		{
+			e.log(call + " -> 0: the game's addHero (0x46c9f0) reported success but " + name + " is in no party slot - " + party_text(e) +
+			      " (was " + before + "); the script's fallback runs");
+			return e.make_int(0);
+		}
+		e.log(call + " -> " + (in_party ? "1: " : "0: the game's addHero (0x46c9f0) refused (party full?) - ") + party_text(e) + " (was " + before + ")");
+		return e.make_int(in_party ? 1 : 0);
 	}
 
 	// getPartyMember(i): slot i's hero, "" when empty or i isn't 0..3.
