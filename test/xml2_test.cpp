@@ -715,9 +715,16 @@ namespace
 
 		// The status line.
 		CHECK(status_text(false, false).empty());
-		CHECK(status_text(true, false) == "Display mode applies after restart");
-		CHECK(status_text(false, true) == "VSync applies after restart");
-		CHECK(status_text(true, true) == "Display mode, VSync apply after restart");
+		CHECK(status_text(true, false) == "Restart for the new mode");
+		CHECK(status_text(false, true) == "Restart to apply VSync");
+		CHECK(status_text(true, true) == "Restart to apply both");
+		for (const bool mode_changed : {false, true})
+		{
+			for (const bool vsync : {false, true})
+			{
+				CHECK(status_text(mode_changed, vsync).size() <= status_max_chars); // the panel doesn't clip
+			}
+		}
 
 		// Round trip through an ini the way the panel writes it: the changed key written, the one put
 		// back on its stock value removed, the rest of the file kept.

@@ -102,8 +102,9 @@ key only when the user changed that row (Accept), with `WritePrivateProfileStrin
 - Frame-rate options: presets 30 60 120 144 165 180 240, plus the desktop's refresh rate and the ini's own
   value when not among them, sorted, then Refresh and Unlimited; ten at most (a BXIGCycle holds ten), dropping
   165, 144, 240, 120, 30 in that order when room is needed (never the desktop's rate or the ini's value).
-- Status line: "Display mode applies after restart" / "VSync applies after restart" / "Display mode, VSync apply
-  after restart" (fullscreen only for VSync), refreshed on every change and on revert.
+- Status line: "Restart for the new mode" / "Restart to apply VSync" / "Restart to apply both" (fullscreen only for
+  VSync), refreshed on every change and on revert; at most 25 characters (the panel doesn't clip - the first
+  wording, "Display mode applies after restart", ran into the key-binding pane in game).
 - Test pipe: a `wm KEYS [ms]` command (posted WM_KEYDOWN/WM_KEYUP) was added here and **removed in the review
   fix round**: the panel reads the DirectInput keyboard (1.1, "Input feed", corrected), so posted key messages
   did nothing and the pipe's existing `tap` drives it. `wm` now answers "error wm is gone ... use tap".
@@ -799,7 +800,7 @@ that moves the highlight. If a tap right after a screen opens seems ignored, tap
 9. **Mouse while unfocused** (owner, 10 s): move the mouse over the background game window with the panel
    open: no hover sound, highlight doesn't move; log once `mouse messages to the game's window are dropped`.
 10. Mouse-only items (Revert to default, Back) and the look of the rows need the owner or a focused session:
-   Revert > yes shows Fullscreen / 60 / Off / On and `Display mode applies after restart`; Accept would then
+   Revert > yes shows Fullscreen / 60 / Off / On and `Restart for the new mode`; Accept would then
    remove every key the panel owns (Mode too: fullscreen at the next start), so Cancel it in the harness.
 11. Optional: `ResolutionList=all` > log `resolution list: ... replaced by one of 64 slots ... (7 references
    patched)` and, on opening the panel, `video options list for adapter 0: 24 sizes`; the Resolution slider walks
@@ -810,6 +811,27 @@ that moves the highlight. If a tap right after a screen opens seems ignored, tap
    or `video options list` lines; the Video list is the game's own.
 
 ---
+
+### 6.1 Results, 2026-09-28 (harness on build/_subway, remote session: desktop 1920x1080 @ 32 Hz)
+
+| step | result |
+|---|---|
+| 1 start | pass: every log line; `fps 59.9`, the game's own cap |
+| 2 to the panel | pass, with a correction: Options (main menu) opens the plain Options screen; its help bar says `[Space] Advanced Options`, so `tap SPACE` opens the panel |
+| 3 rows | pass: Windowed / 60 / Off / On under FSAA, values end where FSAA's does, status line empty, UP from Accept = Run in background, the bar follows |
+| 4 frame rate live | pass: 60 > 120 > 144, Accept: `FrameRate=144` added, the rest kept; `fps 142.8` |
+| 5 back to stock | pass: the key removed, `fps 59.9` |
+| 6 VSync in a window | pass: choices 30 60 120 144 165 180 240 Refresh Unlimited (wraps; 32 joins them when the desktop runs at 32 Hz, by design); Unlimited + VSync On: `FrameRate=0`, `VSync=1`, `fps 31.9` (the 32 Hz desktop); VSync Off: key removed, `fps 600.8` |
+| 7 display mode | pass: status line shown, `Mode=borderless` written; restart: borderless 1920x1080 window, shown without the focus, `fps 59.9`. **Fixed**: the status text ran past the pane (shortened, `status_max_chars`) |
+| 8 cancel | pass: the game's "Do you want to Cancel?" dialog, Yes: `options: cancelled - xml2-fix.ini untouched` |
+| 9, 10 mouse | not run (owner) |
+| 11 ResolutionList=all | pass: `replaced by one of 64 slots ... (7 references patched)`; list `960x540 1280x720 1366x768 1440x810 1600x900 1920x1080` (the remote adapter reports one mode); the slider walks them |
+| 12 default-off fullscreen | not run (takes the screen) |
+
+Known cosmetic: toggle.png draws a small value box (two ticks) at the bar's right end, sized for FSAA's "4x";
+the longer values (Windowed, Borderless, Refresh, Unlimited) start left of the first tick, so it crosses the
+text on the focused row. Readable; scaling the bar can't fix it (the box scales with it).
+
 
 ## 7. Open questions for the owner - answered, see "Decisions" at the top
 

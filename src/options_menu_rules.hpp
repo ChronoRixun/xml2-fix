@@ -305,11 +305,16 @@ namespace options_menu_rules
 	// The line under the rows. The display mode always waits for a restart (owner decision 2);
 	// VSync does in fullscreen (the presentation interval is set when the device is created), while
 	// in a window it is a pacing change that applies at once.
+	// The panel doesn't clip or wrap text: the line must fit the left pane. Its font draws a capital
+	// ~7 units wide (10.4 px at 720p), so 26 characters from status_x reach the pane's border (measured
+	// in game: "Display mode applies after restart", 34, ran into the key-binding pane).
+	constexpr std::size_t status_max_chars = 25;
+
 	inline std::string status_text(const bool mode_changed, const bool vsync_waits_for_restart)
 	{
-		if (mode_changed && vsync_waits_for_restart) return "Display mode, VSync apply after restart";
-		if (mode_changed) return "Display mode applies after restart";
-		if (vsync_waits_for_restart) return "VSync applies after restart";
+		if (mode_changed && vsync_waits_for_restart) return "Restart to apply both";
+		if (mode_changed) return "Restart for the new mode";
+		if (vsync_waits_for_restart) return "Restart to apply VSync";
 		return "";
 	}
 
