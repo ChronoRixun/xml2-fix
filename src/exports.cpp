@@ -8,12 +8,14 @@
 // for it (the PC version ships keyboard-only defaults).
 //
 // Loading also redirects the game's GameSpy lookups to OpenSpy, for online play, and, when
-// xml2-fix.ini asks for it, runs the game windowed or borderless at the desktop's resolution
-// and opens a named pipe through which tests press keys and take screenshots without the focus.
+// xml2-fix.ini asks for it, runs the game windowed or borderless at the desktop's resolution,
+// raises engine caps (the actor and resource name tables, limits.hpp) and opens a named pipe
+// through which tests press keys and take screenshots without the focus.
 
 #include "display.hpp"
 #include "gamepad_fix.hpp"
 #include "iat_hook.hpp"
+#include "limits.hpp"
 #include "log.hpp"
 #include "mod_loader.hpp"
 #include "new_game.hpp"
@@ -141,6 +143,13 @@ namespace
 		}
 
 		new_game::install(game);
+		// Before any of XMen2.exe's own code runs, as the engine limit adjuster must be: this DLL is a
+		// static import of libIGDisplay.dll, which XMen2.exe imports statically, so Windows runs this
+		// DllMain while it loads the process - before the exe's entry point (0x6725f4, the CRT start-up
+		// that runs its static initialisers and then WinMain; the exe has no TLS callbacks). The game
+		// first asks for the actor table (getter 0x56b8e0) and the resource name table (0x55af80) from
+		// the CPrecacheMgr constructor, during its start-up.
+		limits::install(game);
 
 		test_input::install(); // first: its screenshots need the display fix's device hook
 		display::install(game);

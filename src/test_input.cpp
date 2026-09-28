@@ -2,6 +2,7 @@
 #include "display.hpp"
 #include "frame_capture.hpp"
 #include "frame_rate.hpp"
+#include "limits.hpp"
 #include "log.hpp"
 #include "test_input_rules.hpp"
 
@@ -312,10 +313,10 @@ namespace test_input
 				devices = keyboards.size();
 			}
 			// fps: Presents counted over the last full second (0 until then), so a frame cap can be
-			// checked from a script.
+			// checked from a script. Then the engine tables' use, live/cap ([Limits], limits.hpp).
 			return "ok XML2 Fix " FIX_VERSION "; keyboard devices " + std::to_string(devices) + "; reads " + std::to_string(reads.load()) + "; keys held " +
 			       std::to_string(held) + "; game " + (game_in_foreground() ? "has" : "doesn't have") + " the focus; fps " +
-			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe();
+			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + limits::status();
 		}
 
 		std::string handle(const std::string& line)

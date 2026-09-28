@@ -10,7 +10,10 @@
 // inputs (the frame cap's patch bytes and the in-game options' call sites against a copy of
 // XMen2.exe when one is at hand), the Video options list the fix would build from this PC's
 // Direct3D 8 modes, and whether a windowed Direct3D 8 present waits for the vertical blank
-// here. The test input pipe is checked on its rules, on a
+// here. The engine limit adjuster (limits_rules.hpp) is checked on its ini rules and layouts, and
+// against a copy of XMen2.exe mapped in memory: every patch site's retail bytes, the patch applied
+// to that copy, and the patched constructors and allocators run on blocks of the test's own. The
+// test input pipe is checked on its rules, on a
 // Direct3D 8 device of the test's own (the back buffer copy behind "screenshot"), and end to
 // end in a child process started with an xml2-fix.ini that turns the pipe on: it creates the
 // keyboard device the way XMen2.exe does and sees the pipe's keys in it.
@@ -29,6 +32,7 @@
 #include "frame_capture.hpp"
 #include "frame_rate_rules.hpp"
 #include "image_file.hpp"
+#include "limits_rules.hpp"
 #include "new_game.hpp"
 #include "options_menu_rules.hpp"
 #include "resolution_rules.hpp"
@@ -927,6 +931,453 @@ namespace
 		           build_list(adapter, {2560, 1440}, 180, size{1600, 1000}, mode::borderless, slots)));
 	}
 
+	// ---- The engine limit adjuster ------------------------------------------------------------------
+
+	// A little-endian operand out of a hex string of retail bytes.
+	std::uint32_t operand_in(const std::string_view hex, const std::size_t offset, const std::size_t size)
+	{
+		std::uint32_t value = 0;
+		for (std::size_t i = size; i-- > 0;)
+		{
+			value = value << 8 | limits_rules::hex_byte(hex, offset + i);
+		}
+		return value;
+	}
+
+	std::uint32_t operand_at(const std::uint8_t* at, const std::size_t size)
+	{
+		std::uint32_t value = 0;
+		std::memcpy(&value, at, size);
+		return value;
+	}
+
+	// XMen2.exe as Windows maps it (the headers, then each section at its virtual address, the rest
+	// zero), in memory of the test's own that may run code. Freed by the caller (VirtualFree).
+	std::uint8_t* map_image(const std::string& file, DWORD& size_of_image)
+	{
+		const auto u16 = [&](const size_t at) { return static_cast<DWORD>(static_cast<unsigned char>(file[at]) | (static_cast<unsigned char>(file[at + 1]) << 8)); };
+		const auto u32 = [&](const size_t at) { return u16(at) | (u16(at + 2) << 16); };
+		if (file.size() < 0x40) return nullptr;
+		const size_t pe = u32(0x3c);
+		if (pe + 24 + 64 > file.size() || file.compare(pe, 4, "PE\0\0", 4) != 0) return nullptr;
+		const size_t optional_header = pe + 24;
+		size_of_image = u32(optional_header + 56);
+		const DWORD size_of_headers = u32(optional_header + 60);
+		auto* image = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, size_of_image, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+		if (!image) return nullptr;
+		std::memcpy(image, file.data(), std::min<size_t>(size_of_headers, file.size()));
+		const size_t sections = u16(pe + 6);
+		const size_t section_table = optional_header + u16(pe + 20);
+		for (size_t i = 0; i < sections; ++i)
+		{
+			const size_t header = section_table + i * 40;
+			const DWORD virtual_size = u32(header + 8), virtual_address = u32(header + 12), raw_size = u32(header + 16), raw_offset = u32(header + 20);
+			const size_t mapped = std::min<size_t>({raw_size, (virtual_size + 0xfffu) & ~0xfffu, file.size() - std::min<size_t>(raw_offset, file.size()), size_of_image - virtual_address});
+			std::memcpy(image + virtual_address, file.data() + raw_offset, mapped);
+		}
+		return image;
+	}
+
+	// The game's code, run on blocks of the test's own. No C++ objects here: an exception is a failure.
+	using thiscall_t = void*(__fastcall*)(void* self, void* edx);
+	using thiscall_int_t = int(__fastcall*)(void* self, void* edx, int argument);
+	using find_next_t = int(__fastcall*)(void* bits, void* edx, int from, int want_set);
+
+	bool run_thiscall(const std::uint8_t* function, void* self, void*& result)
+	{
+		__try
+		{
+			result = reinterpret_cast<thiscall_t>(const_cast<std::uint8_t*>(function))(self, nullptr);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	bool run_thiscall_int(const std::uint8_t* function, void* self, const int argument, int& result)
+	{
+		__try
+		{
+			result = reinterpret_cast<thiscall_int_t>(const_cast<std::uint8_t*>(function))(self, nullptr, argument);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	int run_find_next(const std::uint8_t* function, void* bits, const int from, const bool want_set)
+	{
+		__try
+		{
+			return reinterpret_cast<find_next_t>(const_cast<std::uint8_t*>(function))(bits, nullptr, from, want_set ? 1 : 0);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return -1;
+		}
+	}
+
+	// A block for the game's code to build a structure in: `size` bytes of zeros, then a page of
+	// 0xCD that must still be 0xCD afterwards (nothing written past the structure).
+	struct test_block
+	{
+		std::vector<std::uint8_t> bytes;
+		std::size_t size;
+		explicit test_block(const std::size_t structure_size) : bytes(structure_size + 0x1000, std::uint8_t{0xCD}), size(structure_size)
+		{
+			std::fill_n(bytes.begin(), structure_size, std::uint8_t{0});
+		}
+		std::uint8_t* data() { return bytes.data(); }
+		DWORD dword(const std::size_t offset) const { return operand_at(bytes.data() + offset, 4); }
+		bool slack_untouched() const { return std::all_of(bytes.begin() + static_cast<std::ptrdiff_t>(size), bytes.end(), [](const std::uint8_t b) { return b == 0xCD; }); }
+	};
+
+	// The engine limit adjuster's rules (limits_rules.hpp): [Limits] in the ini, the layouts, the
+	// patch tables on their own; then, when a copy of XMen2.exe is at hand, the tables against it.
+	void check_limits_rules()
+	{
+		using namespace limits_rules;
+		std::printf("engine limits rules ([Limits] ActorSlots and ResourceNames)\n");
+
+		// The values: digits, with spaces and an inline comment around them.
+		CHECK(parse_count("127") == 127 && parse_count(" 1024\t") == 1024 && parse_count("127        ; 40 = the game's own") == 127 && parse_count("40;") == 40);
+		CHECK(!parse_count("") && !parse_count("; 127") && !parse_count("abc") && !parse_count("12x") && !parse_count("-5") && !parse_count("+5"));
+		CHECK(!parse_count("0x7f") && !parse_count("1e3") && !parse_count("1234567") && !parse_count("1 27") && !parse_count("127.0"));
+		CHECK(names_needed(40) == 450 && names_needed(41) == 451 && names_needed(127) == 537);
+
+		// Absent: the game's own, nothing said.
+		auto chosen = decide(std::nullopt, std::nullopt);
+		CHECK(chosen.actor_slots == 40 && chosen.resource_names == 450 && chosen.notes.empty());
+		chosen = decide("40", std::nullopt);
+		CHECK(chosen.actor_slots == 40 && chosen.resource_names == 450 && chosen.notes.empty());
+		chosen = decide(std::nullopt, "1024");
+		CHECK(chosen.actor_slots == 40 && chosen.resource_names == 1024 && chosen.notes.empty());
+		chosen = decide("40", "450");
+		CHECK(chosen.actor_slots == 40 && chosen.resource_names == 450 && chosen.notes.empty());
+		// ActorSlots brings the name table along: 1024 without ResourceNames, at least 450 + 1 per slot with it.
+		chosen = decide("127", std::nullopt);
+		CHECK(chosen.actor_slots == 127 && chosen.resource_names == 1024 && chosen.notes.size() == 1 && chosen.notes[0].find("ResourceNames=1024") != std::string::npos);
+		chosen = decide("127", "2048");
+		CHECK(chosen.actor_slots == 127 && chosen.resource_names == 2048 && chosen.notes.empty());
+		chosen = decide("127", "500");
+		CHECK(chosen.actor_slots == 127 && chosen.resource_names == 537 && chosen.notes.size() == 1 && chosen.notes[0].find("using 537") != std::string::npos);
+		chosen = decide("127", "450");
+		CHECK(chosen.actor_slots == 127 && chosen.resource_names == 537);
+		chosen = decide("41", "450");
+		CHECK(chosen.actor_slots == 41 && chosen.resource_names == 451);
+		chosen = decide("64", "4096");
+		CHECK(chosen.actor_slots == 64 && chosen.resource_names == 4096 && chosen.notes.empty());
+		// Out of range or not a number: logged, the game's own.
+		for (const char* bad : {"128", "39", "0", "1000", "abc", "", "-127", "0x7f", "127.5"})
+		{
+			chosen = decide(bad, std::nullopt);
+			CHECK(chosen.actor_slots == 40 && chosen.resource_names == 450 && chosen.notes.size() == 1 && chosen.notes[0].find("stays at 40 slots") != std::string::npos);
+		}
+		for (const char* bad : {"449", "4097", "0", "many", "1024x"})
+		{
+			chosen = decide(std::nullopt, bad);
+			CHECK(chosen.actor_slots == 40 && chosen.resource_names == 450 && chosen.notes.size() == 1 && chosen.notes[0].find("ignored") != std::string::npos);
+		}
+		chosen = decide("64", "lots"); // a bad ResourceNames is as good as none: the actor table still gets its 1024
+		CHECK(chosen.actor_slots == 64 && chosen.resource_names == 1024 && chosen.notes.size() == 2);
+		chosen = decide("128", "1024");
+		CHECK(chosen.actor_slots == 40 && chosen.resource_names == 1024 && chosen.notes.size() == 1);
+
+		// The keys as a user writes them, read the way the DLL reads them: the profile API keeps the
+		// inline comments, the parser drops them.
+		const auto ini = std::filesystem::temp_directory_path() / "xml2_test_limits.ini";
+		{
+			std::ofstream out(ini, std::ios::binary);
+			out << "[Limits]\r\nActorSlots = 127        ; 40 = the game's own; accept 41..127\r\nResourceNames = 1024    ; 450 = the game's own\r\n";
+		}
+		const auto ini_value = [&](const wchar_t* key)
+		{
+			wchar_t value[128]{};
+			GetPrivateProfileStringW(L"Limits", key, L"", value, 128, ini.wstring().c_str());
+			std::string narrow;
+			for (const wchar_t* p = value; *p; ++p) narrow += static_cast<char>(*p);
+			return narrow;
+		};
+		const auto actor_text = ini_value(L"ActorSlots");
+		const auto names_text = ini_value(L"ResourceNames");
+		CHECK(actor_text.find(';') != std::string::npos); // the comment comes along
+		chosen = decide(actor_text, names_text);
+		CHECK(chosen.actor_slots == 127 && chosen.resource_names == 1024 && chosen.notes.empty());
+		std::error_code ignored;
+		std::filesystem::remove(ini, ignored);
+
+		// The actor table's layout: the retail one from N = 40, field for field (actor-table.md 2), and
+		// N = 127 (7.1). The object ends where the init guard 0x7b7a58 starts.
+		const auto retail_actors = actor_layout_for(stock_actor_slots);
+		CHECK(retail_actors.bitmap_words == 2 && retail_actors.bitmap_a == 0x7300 && retail_actors.ring == 0x7308 && retail_actors.ring_write == 0x73ac && retail_actors.ring_read == 0x73b0);
+		CHECK(retail_actors.ring_count == 0x73b4 && retail_actors.bitmap_b == 0x73b8 && retail_actors.live == 0x73c0 && retail_actors.ids == 0x73c4 && retail_actors.mask == 0x7464);
+		CHECK(retail_actors.shift == 0x7468 && retail_actors.pool_size == 0x746c && retail_actors.object_size == 0x7470 && retail_actors.id_mask == 0x3f && retail_actors.id_shift == 6);
+		CHECK(actor_object_retail + retail_actors.object_size == actor_init_guard && actor_live_retail == 0x7b79ac);
+		const auto actors = actor_layout_for(max_actor_slots);
+		CHECK(actors.bitmap_words == 4 && actors.bitmap_a == 0x16d20 && actors.ring == 0x16d30 && actors.ring_write == 0x16f30 && actors.ring_read == 0x16f34 && actors.ring_count == 0x16f38);
+		CHECK(actors.bitmap_b == 0x16f3c && actors.live == 0x16f4c && actors.ids == 0x16f50 && actors.mask == 0x1714c && actors.shift == 0x17150 && actors.pool_size == 0x17154);
+		CHECK(actors.object_size == 0x17158 && actors.id_mask == 0x7f && actors.id_shift == 7);
+		CHECK(actor_layout_for(64).id_mask == 0x3f && actor_layout_for(65).id_mask == 0x7f && actor_layout_for(64).bitmap_words == 2 && actor_layout_for(65).bitmap_words == 3);
+		bool actor_layouts_ok = true;
+		for (int n = stock_actor_slots; n <= max_actor_slots; ++n)
+		{
+			const auto l = actor_layout_for(n);
+			const auto slots = static_cast<DWORD>(n);
+			actor_layouts_ok &= l.live + 4 == l.ids && l.mask + 4 == l.shift; // one displacement serves both bases
+			actor_layouts_ok &= l.ring_read - l.ring == (slots + 1) * 4 + 4 && l.ids + slots * 4 == l.mask && l.object_size == l.pool_size + 4;
+			actor_layouts_ok &= l.bitmap_words * 32 >= slots && (l.bitmap_words - 1) * 32 < slots;
+			actor_layouts_ok &= l.id_mask == (1u << l.id_shift) - 1 && l.id_mask >= slots - 1 && l.id_mask / 2 < slots - 1; // the smallest mask that holds every index
+		}
+		CHECK(actor_layouts_ok);
+
+		// The name table's layout: retail from M = 450 (igb-cache.md 8.1), and M = 1024 - with its count
+		// right after the node bitmap, as retail (0x150a0: the node count seen map-relative, not 0x150a4),
+		// and the entries at 8 mod 16.
+		const auto retail_names = name_layout_for(stock_resource_names);
+		CHECK(retail_names.bitmap_words == 15 && retail_names.node_ring == 0x8ca4 && retail_names.node_ring_write == 0x93b0 && retail_names.node_ring_read == 0x93b4);
+		CHECK(retail_names.node_ring_count == 0x93b8 && retail_names.node_bitmap == 0x93bc && retail_names.node_live == 0x93f8 && retail_names.count == 0x9404);
+		CHECK(retail_names.entries == 0x9408 && retail_names.entry_bitmap == 0xb028 && retail_names.size == 0xb064);
+		CHECK(value_of(name_field::entry_owner_index, retail_names) == 0x941 && value_of(name_field::ring_write_via_ring, retail_names) == 0x70c &&
+		      value_of(name_field::entry_bitmap_via_entries, retail_names) == 0x1c20);
+		const auto names = name_layout_for(default_resource_names);
+		CHECK(names.bitmap_words == 32 && names.node_ring == 0x14004 && names.node_ring_write == 0x15008 && names.node_ring_read == 0x1500c && names.node_ring_count == 0x15010);
+		CHECK(names.node_bitmap == 0x15014 && names.node_live == 0x15094 && names.count == 0x150a0 && names.entries == 0x150a8 && names.entry_bitmap == 0x190a8 && names.size == 0x19128);
+		CHECK(value_of(name_field::entry_owner_index, names) == 0x150b && value_of(name_field::ring_count_via_ring, names) == 0x100c && value_of(name_field::entry_bitmap_via_entries, names) == 0x4000);
+		bool name_layouts_ok = true;
+		for (int m = stock_resource_names; m <= max_resource_names; ++m)
+		{
+			const auto l = name_layout_for(m);
+			const auto capacity = static_cast<DWORD>(m);
+			name_layouts_ok &= l.entries % 16 == 8 && l.entries >= l.count + 4 && l.entries < l.count + 4 + 16 && l.count == l.node_live + name_pool_offset;
+			name_layouts_ok &= l.node_ring_write - l.node_ring == (capacity + 1) * 4 && l.node_ring == capacity * name_node_size + 4;
+			name_layouts_ok &= l.entry_bitmap == l.entries + capacity * 16 && l.size == l.entry_bitmap + l.bitmap_words * 4;
+			name_layouts_ok &= l.bitmap_words * 32 >= capacity && (l.bitmap_words - 1) * 32 < capacity;
+			name_layouts_ok &= value_of(name_field::entry_owner_index, l) * 16 == l.entries + 8;
+		}
+		CHECK(name_layouts_ok);
+
+		// The tables on their own: well-formed bytes, the operand inside its instruction and holding its
+		// retail value, in address order - and the retail layout giving back every retail value, so the
+		// layout and each row's field agree. imm8 operands stay within 0x7f at N = 127.
+		bool actor_rows_ok = true;
+		DWORD previous = 0;
+		for (const auto& s : actor_sites)
+		{
+			const bool row_ok = valid_hex(s.hex) && static_cast<std::size_t>(s.offset + s.size) <= hex_size(s.hex) && (s.size == 1 || s.size == 4) && operand_in(s.hex, s.offset, s.size) == s.retail &&
+			                    value_of(s.field, retail_actors) == s.retail && s.va >= previous && (s.size == 4 || value_of(s.field, actors) <= 0x7f);
+			if (!row_ok) std::printf("  info  actor table row 0x%08lX doesn't add up\n", s.va);
+			actor_rows_ok &= row_ok;
+			previous = s.va;
+		}
+		CHECK(actor_rows_ok);
+		CHECK(actor_sites.size() == 74 && std::ranges::count_if(actor_sites, [](const actor_site& s) { return s.size == 1; }) == 13 &&
+		      std::ranges::count_if(actor_sites, [](const actor_site& s) { return s.field == actor_field::last_slot; }) == 3); // + 3 imm8 and 2 imm32 in the clone: 16 imm8, 5 imm32, 58 disp32
+		bool references_ok = true;
+		for (const auto& s : actor_references)
+		{
+			references_ok &= valid_hex(s.hex) && hex_size(s.hex) == 5 && s.offset == 1 && s.size == 4 && operand_in(s.hex, 1, 4) == s.retail &&
+			                 reference_value(s, actor_object_retail, find_next_40_va) == s.retail; // the retail addresses give back the retail operands
+		}
+		CHECK(references_ok && actor_references.size() == 5);
+		CHECK(rel32(0x56b027, find_next_40_va) == 0xffeea4b4 && hex_byte(actor_references[0].hex, 0) == 0xE8 && hex_byte(actor_references[1].hex, 0) == 0xE8);
+
+		bool name_rows_ok = true;
+		previous = 0;
+		for (const auto& s : name_sites)
+		{
+			const bool row_ok = valid_hex(s.hex) && static_cast<std::size_t>(s.offset + s.size) <= hex_size(s.hex) && s.size == 4 && operand_in(s.hex, s.offset, s.size) == s.retail &&
+			                    value_of(s.field, retail_names) == s.retail && s.va >= previous;
+			if (!row_ok) std::printf("  info  name table row 0x%08lX doesn't add up\n", s.va);
+			name_rows_ok &= row_ok;
+			previous = s.va;
+		}
+		CHECK(name_rows_ok && name_sites.size() == 71); // igb-cache.md 8.1's 67 and 0x55a6c0, 0x55a6c7, 0x55ae88, 0x55af40
+		CHECK(std::ranges::count_if(name_sites, [](const name_site& s) { return s.va == 0x55a6c0 || s.va == 0x55a6c7 || s.va == 0x55ae88 || s.va == 0x55af40; }) == 4);
+
+		// The clone's source: 0x8f bytes, its five N operands, and no rel32 anywhere (no E8/E9 byte, no 0F 8x pair).
+		const auto& clone = find_next_40;
+		bool clone_ok = valid_hex(clone.hex) && hex_size(clone.hex) == 0x8f && clone.rel32_count == 0;
+		for (const auto& f : clone.fields)
+		{
+			clone_ok &= operand_in(clone.hex, f.offset, f.size) == f.retail && value_of(f.field, retail_actors) == f.retail;
+		}
+		for (std::size_t i = 0; i < hex_size(clone.hex); ++i)
+		{
+			const auto b = hex_byte(clone.hex, i);
+			clone_ok &= b != 0xE8 && b != 0xE9 && !(b == 0x0F && i + 1 < hex_size(clone.hex) && (hex_byte(clone.hex, i + 1) & 0xF0) == 0x80);
+		}
+		CHECK(clone_ok);
+		for (const auto& g : actor_guards) CHECK(valid_hex(g.hex));
+		for (const auto& g : name_guards) CHECK(valid_hex(g.hex));
+		CHECK(valid_hex(motion_counter_guards[0].hex) && valid_hex(motion_counter_guards[1].hex) && valid_hex(igb_counter_guards[0].hex) && valid_hex(igb_counter_guards[1].hex));
+		CHECK(igb_live_retail == 0x7bf39c);
+
+		// Moving code: a rel32 keeps its target. E8 FB 0F 00 00 at 0x1000 calls 0x2000; copied to 0x5000 it reads 0x2000 - 0x5005.
+		std::uint8_t call[] = {0xE8, 0xFB, 0x0F, 0x00, 0x00, 0xC3};
+		const std::uint8_t call_offsets[] = {1};
+		relocate_rel32(call, call_offsets, 0x1000, 0x5000);
+		CHECK(operand_at(call + 1, 4) == 0x2000u - 0x5005u && call[0] == 0xE8 && call[5] == 0xC3);
+
+		// No two writes share a byte (0x56b2c3 and 0x55ae07 carry two operands each, apart).
+		auto all_writes = actor_writes(actors, 0x12340000, 0x00a80000);
+		const auto name_part = name_writes(names);
+		all_writes.insert(all_writes.end(), name_part.begin(), name_part.end());
+		std::ranges::sort(all_writes, [](const operand_write& a, const operand_write& b) { return a.va < b.va; });
+		bool apart = true;
+		for (std::size_t i = 1; i < all_writes.size(); ++i) apart &= all_writes[i - 1].va + all_writes[i - 1].size <= all_writes[i].va;
+		CHECK(apart && all_writes.size() == 74 + 5 + 71);
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the patch sites against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr && image_size == 0x6744c6); // SizeOfImage, as the exe has it (not page-aligned)
+		if (!image) return;
+		const auto at = [&](const DWORD va) { return image + (va - image_base); };
+
+		// Every site, reference, guard and the clone's source: the retail bytes.
+		bool retail = true;
+		const auto expect = [&](const DWORD va, const std::string_view hex)
+		{
+			if (!matches(at(va), hex))
+			{
+				std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says\n", va);
+				retail = false;
+			}
+		};
+		for (const auto& s : actor_sites) expect(s.va, s.hex);
+		for (const auto& s : actor_references) expect(s.va, s.hex);
+		for (const auto& g : actor_guards) expect(g.va, g.hex);
+		expect(clone.va, clone.hex);
+		for (const auto& s : name_sites) expect(s.va, s.hex);
+		for (const auto& g : name_guards) expect(g.va, g.hex);
+		for (const auto& g : motion_counter_guards) expect(g.va, g.hex);
+		for (const auto& g : igb_counter_guards) expect(g.va, g.hex);
+		CHECK(retail);
+		const std::vector<std::uint8_t> before(image, image + image_size);
+
+		// The stock caps write back exactly the retail bytes (with the retail object and findNext).
+		for (const auto& w : actor_writes(retail_actors, actor_object_retail, find_next_40_va)) apply_write(image, w);
+		for (const auto& w : name_writes(retail_names)) apply_write(image, w);
+		CHECK(std::memcmp(image, before.data(), image_size) == 0);
+
+		// N = 127, M = 1024: the listed operand bytes change, to their new values, and nothing else does.
+		constexpr DWORD object = 0x12340000, clone_va = 0x00a80000; // any addresses: only the arithmetic is looked at
+		auto writes = actor_writes(actors, object, clone_va);
+		const auto more = name_writes(names);
+		writes.insert(writes.end(), more.begin(), more.end());
+		for (const auto& w : writes) apply_write(image, w);
+		std::vector<bool> listed(image_size, false);
+		bool new_values = true;
+		for (const auto& w : writes)
+		{
+			for (std::size_t i = 0; i < w.size; ++i) listed[w.va - image_base + i] = true;
+			new_values &= operand_at(at(w.va), w.size) == w.value;
+		}
+		std::size_t changed = 0, outside = 0;
+		for (std::size_t i = 0; i < image_size; ++i)
+		{
+			if (image[i] != before[i])
+			{
+				++changed;
+				outside += !listed[i];
+			}
+		}
+		std::printf("  info  %zu operands written for 127 actor slots and 1024 names, %zu bytes changed\n", writes.size(), changed);
+		CHECK(new_values && outside == 0 && changed > 0);
+		// Spot checks against actor-table.md 5/5.1 and igb-cache.md 8.1.
+		CHECK(operand_at(at(0x56b2c3 + 2), 4) == 0x16f50 && *at(0x56b2c3 + 6) == 0x7f && operand_at(at(0x455a50 + 2), 4) == 0x204 && operand_at(at(0x56abfd + 3), 4) == 0x16d30);
+		CHECK(operand_at(at(0x56ac5d + 1), 4) == 0x7e && operand_at(at(0x56b16b + 2), 4) == 0x17150 && operand_at(at(0x56b848 + 3), 4) == 0x16d20 && *at(0x455a5d + 2) == 0x7f);
+		CHECK(operand_at(at(0x56b90a + 1), 4) == object && operand_at(at(0x56b92c + 1), 4) == object && operand_at(at(0x67e160 + 1), 4) == object);
+		CHECK(operand_at(at(0x56b027 + 1), 4) == clone_va - (0x56b027 + 5) && operand_at(at(0x56b086 + 1), 4) == clone_va - (0x56b086 + 5));
+		CHECK(operand_at(at(0x55a6a0 + 2), 4) == 0x150a0 && operand_at(at(0x55ae07 + 2), 4) == 0x150a0 && operand_at(at(0x55ae07 + 6), 4) == 0x400 && operand_at(at(0x55af8d + 1), 4) == 0x19128);
+		CHECK(operand_at(at(0x55aba8 + 2), 4) == 0x150b && operand_at(at(0x55acd5 + 1), 4) == 0x150b && operand_at(at(0x55ae88 + 3), 4) == 0x4000 && operand_at(at(0x55af40 + 2), 4) == 0x150a8);
+		CHECK(operand_at(at(0x55a735 + 1), 4) == 0x20 && operand_at(at(0x55a8b1 + 1), 4) == 0x3ff && operand_at(at(0x55a880 + 2), 4) == 0x1004 && operand_at(at(0x55a818 + 3), 4) == 0x14004);
+		CHECK(std::memcmp(at(clone.va), before.data() + (clone.va - image_base), hex_size(clone.hex)) == 0); // the original keeps its 40 bits for its other caller
+
+		// The clone: the five operands and nothing else, all 127.
+		std::vector<std::uint8_t> clone_code(at(clone.va), at(clone.va) + hex_size(clone.hex));
+		finish_clone(clone_code.data(), clone, actors, clone_va);
+		std::size_t clone_changed = 0;
+		for (std::size_t i = 0; i < clone_code.size(); ++i) clone_changed += clone_code[i] != hex_byte(clone.hex, i);
+		CHECK(clone_changed == 5 && clone_code[0x06] == 0x7f && clone_code[0x3b] == 0x7f && clone_code[0x82] == 0x7f && operand_at(&clone_code[0x0d], 4) == 0x7f && operand_at(&clone_code[0x86], 4) == 0x7f);
+
+		// The patched code at work, on blocks of the test's own (those functions use no globals and call
+		// only each other). The pool constructor builds 127 slots, alloc hands out all 127, and the clone
+		// scans the 127-bit "live" bitmap.
+		void* result = nullptr;
+		test_block pool(actors.pool_size);
+		CHECK(run_thiscall(at(0x56ac10), pool.data(), result) && result == pool.data() && pool.slack_untouched());
+		bool ring_ok = true, ids_ok = true;
+		for (DWORD i = 0; i < 127; ++i)
+		{
+			ring_ok &= pool.dword(actors.ring + i * 4) == i;
+			ids_ok &= pool.dword(actors.ids + i * 4) == (0x80 | i);
+		}
+		CHECK(ring_ok && ids_ok && pool.dword(actors.ring_write) == 0 && pool.dword(actors.ring_read) == 0 && pool.dword(actors.ring_count) == 127 && pool.dword(actors.live) == 0);
+		CHECK(pool.dword(actors.mask) == 0x7f && pool.dword(actors.shift) == 7);
+		bool records_ok = true;
+		for (DWORD i = 0; i < 127; ++i)
+		{
+			records_ok &= run_thiscall(at(0x56b5f0), pool.data(), result) && result == pool.data() + i * actor_record_size;
+		}
+		CHECK(records_ok && pool.dword(actors.live) == 127 && pool.dword(actors.ring_count) == 0 && pool.dword(actors.ring_read) == 0 && pool.slack_untouched());
+		CHECK(pool.dword(actors.bitmap_a) == 0xffffffff && pool.dword(actors.bitmap_a + 12) == 0x7fffffff && pool.dword(actors.bitmap_b + 8) == 0xffffffff && pool.dword(actors.bitmap_b + 12) == 0x7fffffff);
+		auto* clone_exec = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, clone_code.size(), MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+		CHECK(clone_exec != nullptr);
+		if (clone_exec)
+		{
+			std::memcpy(clone_exec, clone_code.data(), clone_code.size());
+			std::uint8_t* live_bits = pool.data() + actors.bitmap_b;
+			CHECK(run_find_next(clone_exec, live_bits, 0, true) == 0 && run_find_next(clone_exec, live_bits, 126, true) == 126 && run_find_next(clone_exec, live_bits, 127, true) == 127);
+			CHECK(run_find_next(clone_exec, live_bits, 0, false) == 127); // every slot live: no free one below 127
+			std::uint32_t bits[4] = {1u << 3, 0, 1u << (70 - 64), 1u << (126 - 96)};
+			CHECK(run_find_next(clone_exec, bits, 0, true) == 3 && run_find_next(clone_exec, bits, 4, true) == 70 && run_find_next(clone_exec, bits, 71, true) == 126);
+			CHECK(run_find_next(clone_exec, bits, 127, true) == 127 && run_find_next(clone_exec, bits, 3, false) == 4);
+			VirtualFree(clone_exec, 0, MEM_RELEASE);
+		}
+
+		// The name table's constructor builds 1024 free nodes; the node allocator (add's, 0x55aaa0) hands
+		// out 1024 and isFull says so at the 1024th, not before; freeing one (vtable slot 4) makes room.
+		test_block table(names.size);
+		CHECK(run_thiscall(at(name_table_constructor), table.data(), result) && result == table.data() && table.slack_untouched());
+		CHECK(table.dword(0) == name_table_vtable && table.dword(4) == 0x3fffffff && table.dword(8) == 0xffffffff);
+		bool nodes_ok = true;
+		for (DWORD i = 0; i < 1024; ++i) nodes_ok &= table.dword(name_pool_offset + names.node_ring + i * 4) == i;
+		CHECK(nodes_ok && table.dword(name_pool_offset + names.node_ring_count) == 1024 && table.dword(name_pool_offset + names.node_ring_read) == 0 && table.dword(names.count) == 0);
+		const auto is_full = [&](bool& full) // isFull (0x55a6a0): xor eax, eax; cmp; setge al
+		{
+			void* answer = nullptr;
+			const bool ran = run_thiscall(at(0x55a6a0), table.data(), answer);
+			full = answer != nullptr;
+			return ran && reinterpret_cast<std::uintptr_t>(answer) <= 1;
+		};
+		bool full = true;
+		CHECK(is_full(full) && !full);
+		bool allocations_ok = true;
+		for (DWORD i = 0; i < 1024; ++i)
+		{
+			allocations_ok &= run_thiscall(at(0x55aaa0), table.data(), result) && result == table.data() + name_pool_offset + i * name_node_size + 0xc && table.dword(8) == i;
+			if (i == 1022) allocations_ok &= is_full(full) && !full;
+		}
+		CHECK(allocations_ok && table.dword(names.count) == 1024 && table.dword(name_pool_offset + names.node_live) == 1024 && table.slack_untouched());
+		CHECK(is_full(full) && full);
+		int ignored_result = 0;
+		CHECK(run_thiscall_int(at(0x55ada0), table.data(), 700, ignored_result) && table.dword(names.count) == 1023); // free node 700 (ret 4)
+		CHECK(is_full(full) && !full);
+		CHECK(run_thiscall(at(0x55aaa0), table.data(), result) && table.dword(8) == 700 && table.dword(names.count) == 1024 && table.slack_untouched());
+
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
 	// The Video options list the fix builds from this PC's Direct3D 8 modes (the game's list comes
 	// from the same IDirect3D8::EnumAdapterModes).
 	void check_d3d8_modes()
@@ -1297,6 +1748,7 @@ namespace
 		std::printf("  info  %s\n", status.c_str());
 		CHECK(ok(status));
 		CHECK(status.find("; fps 0.0; frame rate the game's own 60 fps cap") != std::string::npos); // no frames drawn here, no [Display] FrameRate
+		CHECK(status.find("; actors -; names -; motions -; igb -") != std::string::npos);            // not XMen2.exe: no engine tables to count
 		CHECK(refused(ask(pipe, "frob")));
 		CHECK(refused(ask(pipe, "tap NOSUCHKEY")));
 		CHECK(refused(ask(pipe, "screenshot")));
@@ -1375,6 +1827,10 @@ namespace
 		CHECK(log.find("hooked for the test pipe's screenshots, the Video options list (ResolutionList)") != std::string::npos);
 		CHECK(log.find("the Video options list and its table stay the game's own") != std::string::npos);
 		CHECK(log.find("resolution list:") == std::string::npos && log.find("references patched") == std::string::npos);
+		// [Limits] ActorSlots=127, but this isn't XMen2.exe: the name table it needs isn't raised, so neither is it.
+		CHECK(log.find("ResourceNames=1024, as no ResourceNames says otherwise") != std::string::npos);
+		CHECK(log.find("the resource name table stays at 450 names") != std::string::npos && log.find("limits: the actor table stays at 40 slots") != std::string::npos);
+		CHECK(log.find("raised from") == std::string::npos);
 	}
 
 	// Starts this program again with an xml2-fix.ini next to it that turns the pipe on, so its
@@ -1390,7 +1846,7 @@ namespace
 		}
 		{
 			std::ofstream out(ini, std::ios::binary);
-			out << "[Test]\r\nInputPipe=1\r\n[Display]\r\nResolutionList=all\r\n";
+			out << "[Test]\r\nInputPipe=1\r\n[Display]\r\nResolutionList=all\r\n[Limits]\r\nActorSlots=127\r\n";
 		}
 
 		wchar_t exe[MAX_PATH]{};
@@ -1507,6 +1963,7 @@ int main(const int argc, char** argv)
 	check_frame_rate_rules();
 	check_options_menu_rules();
 	check_resolution_rules();
+	check_limits_rules();
 	check_test_input_rules();
 	check_image_file();
 	check_save_folder();
@@ -1520,6 +1977,8 @@ int main(const int argc, char** argv)
 	// Default-off: no keys and no rows (not the game) -> nothing hooked, the resolution table never looked at.
 	CHECK(log.find("nothing hooked") != std::string::npos && log.find("resolution list:") == std::string::npos && log.find("references patched") == std::string::npos);
 	CHECK(log.find("GameSpy servers redirected to openspy.net") != std::string::npos);
+	// No [Limits]: the engine's caps untouched (and this isn't the game anyway).
+	CHECK(log.find("limits: the game's own caps - 40 actor slots, 450 resource names (no [Limits] in xml2-fix.ini)") != std::string::npos && log.find("raised from") == std::string::npos);
 	CHECK(log.find("xmenlegpc.master.gamespy.com -> xmenlegpc.master.openspy.net (resolved)") != std::string::npos);
 	if (pads > 0)
 	{

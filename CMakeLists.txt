@@ -29,6 +29,7 @@ add_library(xml2_fix SHARED
 	src/frame_rate.cpp
 	src/options_menu.cpp
 	src/new_game.cpp
+	src/limits.cpp
 	src/resolution_list.cpp
 	src/frame_capture.cpp
 	src/test_input.cpp
@@ -45,5 +46,5 @@ set_target_properties(xml2_fix PROPERTIES OUTPUT_NAME dinput ARCHIVE_OUTPUT_NAME
 # Checks the built DLL the way the game loads it (imported from next to the executable).
 add_executable(xml2_test test/xml2_test.cpp src/frame_capture.cpp) # frame_capture: the back buffer copy, checked on a device of its own
 target_compile_definitions(xml2_test PRIVATE _WINSOCK_DEPRECATED_NO_WARNINGS)
-target_include_directories(xml2_test PRIVATE src) # display_rules.hpp, frame_rate_rules.hpp, options_menu_rules.hpp, resolution_rules.hpp, test_input_rules.hpp, image_file.hpp: the decisions, checked without the game
+target_include_directories(xml2_test PRIVATE src) # display_rules.hpp, frame_rate_rules.hpp, options_menu_rules.hpp, resolution_rules.hpp, limits_rules.hpp, test_input_rules.hpp, image_file.hpp: the decisions, checked without the game
 target_link_libraries(xml2_test PRIVATE xml2_fix dinput8.lib dxguid xinput ws2_32 winmm) # dinput8.lib: only for c_dfDIJoystick(2); winmm: timeBeginPeriod in the present timing
