@@ -1,6 +1,7 @@
 #include "mod_loader.hpp"
 #include "iat_hook.hpp"
 #include "log.hpp"
+#include "mod_order.hpp"
 
 #include <cstdio>
 #include <cwctype>
@@ -21,14 +22,7 @@ namespace mod_loader
 		std::wstring game_dir;                                // lower case, ends with '\'
 		std::unordered_map<std::wstring, std::wstring> files; // lower-case path relative to the game -> file in a mod
 
-		std::wstring lower(std::wstring text)
-		{
-			for (auto& c : text)
-			{
-				c = static_cast<wchar_t>(std::towlower(c));
-			}
-			return text;
-		}
+		using mod_order::lower;
 
 		std::wstring widen(const char* text)
 		{
@@ -320,75 +314,13 @@ namespace mod_loader
 			hook_runtime<2>(module);
 		}
 
-		struct load_order_entry
-		{
-			std::wstring name;
-			bool enabled;
-		};
-
-		std::vector<load_order_entry> read_load_order(const std::filesystem::path& file)
-		{
-			std::vector<load_order_entry> entries;
-			std::ifstream in(file);
-			std::string line;
-			while (std::getline(in, line))
-			{
-				while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
-				{
-					line.pop_back();
-				}
-				if (line.size() >= 3 && static_cast<unsigned char>(line[0]) == 0xEF) // UTF-8 byte order mark
-				{
-					line.erase(0, 3);
-				}
-				if (line.size() < 2 || line[0] == '#' || (line[0] != '+' && line[0] != '-'))
-				{
-					continue;
-				}
-
-				const std::string name = line.substr(1);
-				const int length = MultiByteToWideChar(CP_UTF8, 0, name.c_str(), static_cast<int>(name.size()), nullptr, 0);
-				std::wstring wide(length, L'\0');
-				MultiByteToWideChar(CP_UTF8, 0, name.c_str(), static_cast<int>(name.size()), wide.data(), length);
-				entries.push_back({wide, line[0] == '+'});
-			}
-			return entries;
-		}
-
-		// Indexes the enabled mods' files; later mods override earlier ones.
+		// Indexes the enabled mods' files; later mods override earlier ones. Which mods, in what order:
+		// mod_order.hpp (Discord's port detection asks it the same way).
 		void build_index()
 		{
-			const std::filesystem::path root = std::filesystem::path(game_folder) / L"mods";
-			auto order = read_load_order(root / L"load-order.txt");
-
-			// Mod folders the load order doesn't list yet (copied in by hand) load after the listed
-			// ones, alphabetically - the launcher adds them to the list the same way.
-			std::vector<std::wstring> unlisted;
-			std::error_code scan_error;
-			for (const auto& entry : std::filesystem::directory_iterator(root, scan_error))
+			for (const auto& [name, folder] : mod_order::enabled_mods(std::filesystem::path(game_folder) / L"mods"))
 			{
-				const auto name = entry.path().filename().wstring();
-				const auto listed = std::any_of(order.begin(), order.end(), [&](const auto& e) { return lower(e.name) == lower(name); });
-				if (entry.is_directory(scan_error) && !name.empty() && name.front() != L'.' && !listed)
-				{
-					unlisted.push_back(name);
-				}
-			}
-			std::sort(unlisted.begin(), unlisted.end(), [](const auto& a, const auto& b) { return lower(a) < lower(b); });
-			for (const auto& name : unlisted)
-			{
-				order.push_back({name, true});
-			}
-
-			for (const auto& [name, enabled] : order)
-			{
-				const auto folder = root / name;
 				std::error_code error;
-				if (!enabled || !std::filesystem::is_directory(folder, error))
-				{
-					continue;
-				}
-
 				int count = 0;
 				for (auto it = std::filesystem::recursive_directory_iterator(folder, error); !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
 				{

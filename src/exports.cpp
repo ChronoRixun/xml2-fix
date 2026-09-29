@@ -190,7 +190,9 @@ namespace
 		                    GetPrivateProfileIntW(L"Debug", L"LogFiles", 0, ini.c_str()) != 0);
 
 		// Discord Rich Presence ([Discord], on by default): a thread of its own that reads the game's state and
-		// talks to Discord's local pipe; it hooks only the game's ExitProcess, to clear the presence on quitting.
+		// talks to Discord's local pipe; it hooks only ExitProcess (the game's import and msvcr71.dll's), to
+		// clear the presence on quitting. Its X-Men Legends I port detection reads mods\load-order.txt as the
+		// mod loader above does (mod_order.hpp).
 		discord_presence::install(game);
 	}
 }

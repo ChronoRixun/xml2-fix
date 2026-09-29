@@ -52,11 +52,13 @@
 #include "forced_teams_rules.hpp"
 #include "frame_capture.hpp"
 #include "frame_rate_rules.hpp"
+#include "iat_hook.hpp"
 #include "image_file.hpp"
 #include "limits_rules.hpp"
 #include "local_ip.hpp"
 #include "local_ip_rules.hpp"
 #include "main_menu_rules.hpp"
+#include "mod_order.hpp"
 #include "new_game.hpp"
 #include "new_game_plus_rules.hpp"
 #include "online_rules.hpp"
@@ -69,6 +71,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cmath>
 #include <cstddef>
@@ -4613,6 +4616,30 @@ namespace
 		CHECK(parse_switch("1", false) && parse_switch("true", false) && parse_switch("TRUE", false) && parse_switch("Yes", false) && parse_switch("on", false));
 		CHECK(!parse_switch("0", true) && !parse_switch("false", true) && !parse_switch("False", true) && !parse_switch("NO", true) && !parse_switch("off", true));
 		CHECK(!parse_switch(" 0 ", true) && !parse_switch("0   ; the launcher's switch", true) && parse_switch("on;", false));
+		// An inline comment and the spaces or tabs around the value, as the launcher reads them too; nothing
+		// left once the comment is cut: the default, as for an absent key.
+		CHECK(!parse_switch("0\t; tab", true) && !parse_switch("\toff  \t;private", true) && parse_switch("1 ; x ; y", false) && !parse_switch("No;", true));
+		CHECK(parse_switch("; only a comment", true) && !parse_switch("; only a comment", false) && parse_switch("  ;", true) && parse_switch("2 ; odd", true));
+		{
+			// What GetPrivateProfileString hands over for the README's lines: the value with its comment.
+			const auto ini = std::filesystem::temp_directory_path() / ("xml2_test-discord-" + std::to_string(GetCurrentProcessId()) + ".ini");
+			{
+				std::ofstream out(ini, std::ios::binary);
+				out << "[Discord]\r\nEnabled=0        ; no presence at all (0, false, no or off; anything else, or no key: on)\r\nShowZone = off\t; private\r\n"
+				       "ShowParty= ; nothing\r\nLargeImage=none   ; no art\r\n";
+			}
+			const auto raw = [&](const char* key)
+			{
+				char value[512]{};
+				GetPrivateProfileStringA("Discord", key, "\x7f", value, static_cast<DWORD>(std::size(value)), ini.string().c_str());
+				return std::string(value);
+			};
+			CHECK(raw("Enabled").find("; no presence") != std::string::npos && !parse_switch(raw("Enabled"), true));
+			CHECK(!parse_switch(raw("ShowZone"), true) && raw("ShowParty") == "; nothing" && parse_switch(raw("ShowParty"), true));
+			CHECK(choose_images(raw("LargeImage"), std::nullopt).large.empty());
+			std::error_code ignored;
+			std::filesystem::remove(ini, ignored);
+		}
 
 		// Which game: [Discord] Game first, then the port's own clues.
 		CHECK(choose_game({"xml1"}).which == game::xml1 && choose_game({"XML2 ; forced", true}).which == game::xml2 && choose_game({"xml2", true}).why == "[Discord] Game=xml2");
@@ -4627,9 +4654,26 @@ namespace
 		CHECK(valid_client_id("1554317812661493791") && !valid_client_id("15543178126614937x1") && !valid_client_id("12345") && !valid_client_id(""));
 		CHECK(valid_asset("xml2_logo") && valid_asset("https://example.org/a.png") && !valid_asset("two words") && !valid_asset("a\"b") && !valid_asset(""));
 
+		// The art: the logo and each mode's badge unless LargeImage / SmallImage say otherwise.
+		const auto art = choose_images(std::nullopt, std::nullopt);
+		CHECK(art.large == "logo" && !art.badge && art.note.empty());
+		CHECK(choose_images("", std::nullopt).large.empty() && choose_images("  none ; no art", std::nullopt).large.empty() && choose_images("NONE", "online").badge == "");
+		CHECK(choose_images("my_logo ; mine", std::nullopt).large == "my_logo" && choose_images(std::nullopt, "badge").badge == "badge");
+		CHECK(choose_images(std::nullopt, "").badge == "" && choose_images(std::nullopt, "none").badge == "" && choose_images("logo", "None").large == "logo");
+		const auto odd_art = choose_images("two words", "a\"b");
+		CHECK(odd_art.large == "logo" && !odd_art.badge && odd_art.note.find("LargeImage isn't an asset key") != std::string::npos && odd_art.note.find("SmallImage") != std::string::npos);
+
 		// Text: the game's Windows-1252 as UTF-8, JSON escapes, Discord's 128 characters.
 		CHECK(utf8_from_game("Queen's Lair") == "Queen's Lair" && utf8_from_game("Caf\xe9") == "Caf\xC3\xA9" && utf8_from_game("It\x92s") == "It\xE2\x80\x99s");
 		CHECK(utf8_from_game("a\x01\nb\x7f") == "ab" && utf8_from_game("\x81") == "?");
+		// Every byte of 0x80 and up: two or three bytes of UTF-8, never lost, never invalid.
+		std::string high_bytes;
+		for (int b = 0x80; b <= 0xff; ++b) high_bytes += static_cast<char>(b);
+		const auto high_utf8 = utf8_from_game(high_bytes);
+		CHECK(characters(high_utf8) == 128 && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, high_utf8.data(), static_cast<int>(high_utf8.size()), nullptr, 0) == 128);
+		CHECK(utf8_from_game("Monta\xF1" "a \xC0 \xFF \x80") == "Monta\xC3\xB1" "a \xC3\x80 \xC3\xBF \xE2\x82\xAC");
+		CHECK(lower_game('A') == 'a' && lower_game('\xC9') == '\xE9' && lower_game('\xD7') == '\xD7' && lower_game('\x8A') == '\x9A' && lower_game('\x9F') == '\xFF' && lower_game('1') == '1');
+		CHECK(upper_game('a') == 'A' && upper_game('\xE9') == '\xC9' && upper_game('\xF7') == '\xF7' && upper_game('\x9C') == '\x8C' && upper_game('\xFF') == '\x9F');
 		CHECK(json_escape("a\"b\\c\n\x01") == "a\\\"b\\\\c\\n\\u0001" && json_escape("Act 1 \xC2\xB7 X") == "Act 1 \xC2\xB7 X");
 		CHECK(clip("short") == "short" && characters(clip(std::string(130, 'a'))) == 128 && clip(std::string(130, 'a')).ends_with("a\xE2\x80\xA6"));
 		std::string accents;
@@ -4640,6 +4684,10 @@ namespace
 		CHECK(pretty_zone("mansion/man1a/mansion1a_1") == "Mansion" && pretty_zone("mansion/man3/danger_room") == "Danger Room");
 		CHECK(pretty_zone("mansion/man7/status_meeting") == "Status Meeting" && pretty_zone("act1/sanctuary/sanctuary1") == "Sanctuary" && pretty_zone("xjet/123") == "Xjet");
 		CHECK(pretty_zone("") == "" && pretty_zone("1/2") == "");
+		CHECK(pretty_zone("mods/monta\xF1" "a1") == "Monta\xC3\xB1" "a" && pretty_zone("maps/\xE9" "cole_\xC9T\xC9") == "\xC3\x89" "cole \xC3\x89t\xC3\xA9");
+		// A zone path's torn read has a control character; the game's code page doesn't make one.
+		CHECK(game_reader<fake_memory>::valid_path("mods/monta\xF1" "a1") && game_reader<fake_memory>::valid_path("\xE9t\xE9") && !game_reader<fake_memory>::valid_path("nyc/al\x01son") &&
+		      !game_reader<fake_memory>::valid_path("a\x7f"));
 		CHECK(zone_line(1, "East Manhattan", "nyc/alison/nyc1_1_3") == "Act 1 \xC2\xB7 East Manhattan" && zone_line(0, "", "mansion/man1a/mansion1a_1") == "Mansion");
 		CHECK(zone_line(4, "", "") == "Act 4" && zone_line(0, "Prison Outpost", "act0/tutorial/tutorial1") == "Prison Outpost");
 		CHECK(is_menu_zone("") && is_menu_zone("menu/main_back") && is_menu_zone("Menu/Main_Back") && !is_menu_zone("act1/sanctuary/sanctuary1"));
@@ -4655,7 +4703,7 @@ namespace
 		snapshot menu;
 		menu.zone = "menu/main_back";
 		menu.party = {{"Wolverine", 3}};
-		CHECK((build(menu, all) == activity{"In the menus", "", 0, 0, ""} && build({}, all) == in_the_menus()));
+		CHECK((build(menu, all) == activity{"In the menus", "", 0, 0, "menu", "In the menus"} && build({}, all) == in_the_menus()));
 		snapshot port;
 		port.zone = "nyc/alison/nyc1_1_3";
 		port.zone_title = "East Manhattan";
@@ -4663,19 +4711,19 @@ namespace
 		port.party = {{"Wolverine", 3}, {"Cyclops", 1}};
 		const auto port_activity = build(port, all);
 		CHECK(port_activity && port_activity->details == "Act 1 \xC2\xB7 East Manhattan" && port_activity->state == "Wolverine Lv 3 \xC2\xB7 Cyclops Lv 1" &&
-		      port_activity->small_text == "Wolverine" && port_activity->party_max == 0);
+		      port_activity->small_image.empty() && port_activity->small_text.empty() && port_activity->party_max == 0); // plain play: no badge
 		snapshot hub;
 		hub.zone = "act1/sanctuary/sanctuary1";
 		hub.zone_title = "Sanctuary";
 		hub.act = 1;
 		hub.party = {{"Wolverine", 12}, {"Storm", 11}, {"Cyclops", 11}, {"Iceman", 10}};
-		CHECK((build(hub, all) == activity{"Act 1 \xC2\xB7 Sanctuary", "Wolverine, Storm +2 \xC2\xB7 Lv 10-12", 0, 0, "Wolverine"}));
+		CHECK((build(hub, all) == activity{"Act 1 \xC2\xB7 Sanctuary", "Wolverine, Storm +2 \xC2\xB7 Lv 10-12", 0, 0, "", ""}));
 		snapshot online = hub;
 		online.session = true;
 		online.hosting = true;
 		online.players = 2;
 		online.max_players = 4;
-		CHECK((build(online, all) == activity{"Act 1 \xC2\xB7 Sanctuary", "Online co-op \xC2\xB7 hosting", 2, 4, "Online co-op"}));
+		CHECK((build(online, all) == activity{"Act 1 \xC2\xB7 Sanctuary", "Online co-op \xC2\xB7 hosting", 2, 4, "online", "Online co-op"}));
 		online.hosting = false;
 		CHECK(build(online, all)->state == "Online co-op \xC2\xB7 joined");
 		snapshot lobby;
@@ -4683,23 +4731,24 @@ namespace
 		lobby.session = true;
 		lobby.players = 3;
 		lobby.max_players = 4;
-		CHECK((build(lobby, all) == activity{"Online lobby", "Joined", 3, 4, "Online co-op"}));
+		CHECK((build(lobby, all) == activity{"Online lobby", "Joined", 3, 4, "online", "Online co-op"}));
 		snapshot browsing = menu;
 		browsing.online_menus = true;
-		CHECK((build(browsing, all) == activity{"In the menus", "Play Online", 0, 0, ""}));
+		CHECK((build(browsing, all) == activity{"In the menus", "Play Online", 0, 0, "menu", "In the menus"}));
 		snapshot danger = port;
 		danger.zone = "arena/arena_dr";
 		danger.danger_room = true;
 		danger.course = "Setting 101 - Hidden Goods";
 		CHECK(build(danger, all)->details == "Danger Room \xC2\xB7 Setting 101 - Hidden Goods" && build(danger, all)->state == port_activity->state);
+		CHECK(build(danger, all)->small_image == "dangerroom" && build(danger, all)->small_text == "Danger Room");
 		danger.course.clear();
 		CHECK(build(danger, all)->details == "Danger Room");
 		snapshot movie = port;
 		movie.movie = true;
-		CHECK((build(movie, all) == activity{"Watching a cutscene", "Act 1 \xC2\xB7 East Manhattan", 0, 0, "Wolverine"}));
+		CHECK((build(movie, all) == activity{"Watching a cutscene", "Act 1 \xC2\xB7 East Manhattan", 0, 0, "cutscene", "Watching a cutscene"}));
 		snapshot intro = menu;
 		intro.movie = true;
-		CHECK(build(intro, all)->details == "Watching a cutscene" && build(intro, all)->state.empty());
+		CHECK(build(intro, all)->details == "Watching a cutscene" && build(intro, all)->state.empty() && build(intro, all)->small_image == "cutscene");
 		snapshot loading = port;
 		loading.loading = true;
 		CHECK(!build(loading, all) && build(snapshot{"menu/main_back", "", 0, true}, all) == in_the_menus()); // a load holds the last activity, but the menus are the menus
@@ -4707,7 +4756,7 @@ namespace
 		CHECK(build(port, {false, true})->details == "Playing" && build(port, {true, false})->state.empty() && build(port, {true, false})->small_text.empty());
 		danger.course = "Setting 101";
 		CHECK(build(danger, {false, true})->details == "Danger Room" && build(movie, {false, true})->state.empty());
-		CHECK((build(online, {false, false}) == activity{"Playing", "Online co-op \xC2\xB7 joined", 2, 4, "Online co-op"}));
+		CHECK((build(online, {false, false}) == activity{"Playing", "Online co-op \xC2\xB7 joined", 2, 4, "online", "Online co-op"}));
 		snapshot unnamed = port;
 		unnamed.zone = "mansion/man1a/mansion1a_1";
 		unnamed.zone_title.clear();
@@ -4716,6 +4765,45 @@ namespace
 		long_title.zone_title = std::string(200, 'x');
 		CHECK(characters(build(long_title, all)->details) == 128);
 		CHECK(describe(*build(online, all)) == "Act 1 \xC2\xB7 Sanctuary | Online co-op \xC2\xB7 joined (2 of 4)" && describe(activity{}) == "(no details)");
+		// The team menu: a hero it seats shows once the menu closes (Accept), not while it's up.
+		party_hold hold;
+		snapshot team = port;
+		hold.apply(team);
+		CHECK((team.party == std::vector<hero>{{"Wolverine", 3}, {"Cyclops", 1}}));
+		team.menu = true;
+		team.party = {{"Wolverine", 3}, {"Cyclops", 1}, {"Jean Grey", 9}};
+		hold.apply(team);
+		CHECK((team.party == std::vector<hero>{{"Wolverine", 3}, {"Cyclops", 1}} && build(team, all) == port_activity));
+		team.party = {{"Wolverine", 3}}; // another pick, or Back: still the party from before the menu
+		hold.apply(team);
+		CHECK(team.party.size() == 2);
+		team.menu = false;
+		team.party = {{"Wolverine", 3}, {"Jean Grey", 9}};
+		hold.apply(team);
+		CHECK((team.party == std::vector<hero>{{"Wolverine", 3}, {"Jean Grey", 9}})); // accepted: it shows
+		snapshot elsewhere = team; // a menu up in a zone whose party wasn't read yet: as read
+		elsewhere.zone = "act1/sanctuary/sanctuary1";
+		elsewhere.menu = true;
+		elsewhere.party = {{"Storm", 11}};
+		hold.apply(elsewhere);
+		CHECK((elsewhere.party == std::vector<hero>{{"Storm", 11}}));
+		snapshot main_menu = menu; // the main menu forgets it
+		hold.apply(main_menu);
+		team.menu = true;
+		team.party = {{"Rogue", 7}};
+		hold.apply(team);
+		CHECK((team.party == std::vector<hero>{{"Rogue", 7}}));
+		party_hold loads;
+		snapshot during = port;
+		loads.apply(during);
+		during.loading = true; // a load reseats the party as it goes: not what stands for a menu after it
+		during.party = {{"Storm", 11}};
+		loads.apply(during);
+		during.loading = false;
+		during.menu = true;
+		during.party = {{"Rogue", 7}};
+		loads.apply(during);
+		CHECK((during.party == std::vector<hero>{{"Wolverine", 3}, {"Cyclops", 1}}));
 
 		// Pacing: one update per 5 s, and an activity counts once read twice in a row.
 		gate pacing;
@@ -4744,6 +4832,39 @@ namespace
 		CHECK(second && second->op == op_ping && second->json == "{\"n\":1}" && !frames.next() && !frames.broken());
 		frames.feed(std::string("\x01\0\0\0\xff\xff\xff\x7f", 8));
 		CHECK(!frames.next() && frames.broken());
+		// Many frames in one read come out whole and in order, however the read was cut.
+		std::string many;
+		for (int i = 0; i < 100; ++i) many += encode(op_frame, std::to_string(i));
+		frame_reader lots;
+		int in_order = 0;
+		lots.feed(many.substr(0, many.size() - 3));
+		while (const auto m = lots.next()) in_order += m->json == std::to_string(in_order);
+		lots.feed(many.substr(many.size() - 3));
+		while (const auto m = lots.next()) in_order += m->json == std::to_string(in_order);
+		CHECK(in_order == 100 && !lots.broken());
+
+		// The inbox holds the pipe to what Discord sends: 64 frames waiting at once are fine, the 65th is a
+		// flood - everything is dropped, and nothing more is taken or handed out until clear() (the next
+		// connection). The connection reads at most 64 KiB a poll, so a flood is caught in the first one.
+		CHECK(max_read_per_poll == 64 * 1024 && max_queued == 64 && max_frame == 64 * 1024);
+		inbox box;
+		std::string sixty_four;
+		for (std::size_t i = 0; i < max_queued; ++i) sixty_four += encode(op_frame, "");
+		CHECK(box.take(sixty_four) && box.waiting() == 64 && !box.problem());
+		CHECK(!box.take(encode(op_ping, "{}")) && box.waiting() == 0 && box.problem() && std::string(box.problem()) == "more than 64 frames at once" && !box.pop());
+		CHECK(!box.take(encode(op_frame, "{}")) && !box.pop());
+		box.clear();
+		CHECK(!box.problem() && box.take(encode(op_frame, "{\"evt\":\"READY\"}") + encode(op_close, "{}")) && box.pop()->op == op_frame && box.pop()->op == op_close && !box.pop());
+		std::string flood;
+		for (std::size_t i = 0; i < max_read_per_poll / 8; ++i) flood += encode(op_frame, ""); // one poll's worth of empty frames
+		CHECK(!box.take(flood) && box.waiting() == 0);
+		box.clear();
+		bool steady = true; // popped as they come, a steady stream never fills it
+		for (int i = 0; i < 1000 && steady; ++i) steady = box.take(encode(op_ping, "{}")) && box.pop().has_value();
+		CHECK(steady && !box.problem());
+		CHECK(!box.take(std::string("\x01\0\0\0\x01\0\x01\0", 8)) && std::string(box.problem()) == "a frame longer than 64 KiB");
+		box.clear();
+		CHECK(box.take(encode(op_frame, std::string(max_frame, 'x'))) && box.pop()->json.size() == max_frame); // the longest there may be
 
 		// JSON.
 		CHECK(handshake_json("123") == "{\"v\":1,\"client_id\":\"123\"}");
@@ -4752,13 +4873,50 @@ namespace
 		CHECK(set_activity_json(1234, *port_activity, x, 7) ==
 		      "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":1234,\"activity\":{\"details\":\"Act 1 \xC2\xB7 East Manhattan\",\"state\":\"Wolverine Lv 3 \xC2\xB7 Cyclops Lv 1\","
 		      "\"timestamps\":{\"start\":1790000000}}},\"nonce\":\"7\"}");
-		x.large_image = "xml2";
+		// The art: the logo with the game's name, and each mode's badge with the mode.
+		x.large_image = "logo";
 		x.large_text = "X-Men Legends II";
-		x.small_image = "coop";
-		x.party_id = "xml2fix-1";
+		x.party_id = "xml2fix-0123456789abcdef";
+		const auto assets_of = [&](const activity& a)
+		{
+			const auto json = set_activity_json(1234, a, x, 8);
+			const auto at = json.find("\"assets\":{");
+			return at == std::string::npos ? std::string("(none)") : json.substr(at + 10, json.find('}', at) - at - 10);
+		};
+		const std::string logo = "\"large_image\":\"logo\",\"large_text\":\"X-Men Legends II\"";
+		CHECK(assets_of(in_the_menus()) == logo + ",\"small_image\":\"menu\",\"small_text\":\"In the menus\"");
+		CHECK(assets_of(*build(browsing, all)) == logo + ",\"small_image\":\"menu\",\"small_text\":\"In the menus\"");
+		CHECK(assets_of(*build(movie, all)) == logo + ",\"small_image\":\"cutscene\",\"small_text\":\"Watching a cutscene\"");
+		CHECK(assets_of(*build(intro, all)) == logo + ",\"small_image\":\"cutscene\",\"small_text\":\"Watching a cutscene\"");
+		CHECK(assets_of(*build(danger, all)) == logo + ",\"small_image\":\"dangerroom\",\"small_text\":\"Danger Room\"");
+		CHECK(assets_of(*build(lobby, all)) == logo + ",\"small_image\":\"online\",\"small_text\":\"Online co-op\"");
+		CHECK(assets_of(*build(online, all)) == logo + ",\"small_image\":\"online\",\"small_text\":\"Online co-op\"");
+		CHECK(assets_of(*port_activity) == logo && assets_of(*build(hub, all)) == logo && assets_of(activity{}) == logo); // plain play, or a build it can't read: the logo alone
 		const auto full = set_activity_json(1234, *build(online, all), x, 8);
-		CHECK(full.find("\"assets\":{\"large_image\":\"xml2\",\"large_text\":\"X-Men Legends II\",\"small_image\":\"coop\",\"small_text\":\"Online co-op\"}") != std::string::npos);
-		CHECK(full.find("\"party\":{\"id\":\"xml2fix-1\",\"size\":[2,4]}") != std::string::npos && full.ends_with("},\"nonce\":\"8\"}"));
+		CHECK(full == "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":1234,\"activity\":{\"details\":\"Act 1 \xC2\xB7 Sanctuary\",\"state\":\"Online co-op \xC2\xB7 joined\","
+		              "\"timestamps\":{\"start\":1790000000},\"assets\":{" + logo + ",\"small_image\":\"online\",\"small_text\":\"Online co-op\"},"
+		              "\"party\":{\"id\":\"xml2fix-0123456789abcdef\",\"size\":[2,4]}}},\"nonce\":\"8\"}");
+		// SmallImage=key: that key for every badge (still none in plain play); SmallImage=none: no badges;
+		// LargeImage=none: no images at all.
+		x.small_image = "coop";
+		CHECK(assets_of(*build(online, all)) == logo + ",\"small_image\":\"coop\",\"small_text\":\"Online co-op\"" && assets_of(*port_activity) == logo);
+		x.small_image = "";
+		CHECK(assets_of(in_the_menus()) == logo && assets_of(*build(danger, all)) == logo);
+		x.large_image.clear();
+		x.small_image.reset();
+		CHECK(assets_of(in_the_menus()) == "(none)" && set_activity_json(1234, *build(online, all), x, 8).find("\"party\"") != std::string::npos);
+
+		// The online party's id: random, nothing about this PC (no process id, no uptime).
+		CHECK(party_id_of(0x1234, 0xabcdef) == "xml2fix-0000123400abcdef" && party_id_of(0xffffffff, 0) == "xml2fix-ffffffff00000000");
+		const auto id_shape = [](const std::string& id)
+		{
+			return id.size() == 24 && id.starts_with("xml2fix-") && std::all_of(id.begin() + 8, id.end(), [](const char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
+		};
+		const auto party_a = random_party_id();
+		const auto party_b = random_party_id();
+		char pid_hex[16]{};
+		std::snprintf(pid_hex, sizeof(pid_hex), "%08lx", GetCurrentProcessId());
+		CHECK(id_shape(party_a) && id_shape(party_b) && party_a != party_b && party_a.find(pid_hex) == std::string::npos);
 		CHECK(set_activity_json(1, activity{"A", "", 0, 0, ""}, extras{}, 1) == "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":1,\"activity\":{}},\"nonce\":\"1\"}"); // under two characters: left out
 		CHECK(set_activity_json(1, activity{"Quote \"here\"", "", 0, 0, ""}, extras{}, 2).find("\"details\":\"Quote \\\"here\\\"\"") != std::string::npos);
 		CHECK(clear_activity_json(1234, 9) == "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":1234},\"nonce\":\"9\"}");
@@ -4821,6 +4979,50 @@ namespace
 		state = fake.read();
 		CHECK(state && state->loading);
 		fake.memory.u32(fake_game::manager + frame_rate_rules::menu_current, 0);
+		// A menu up, as the game tests it (a stack, its first entry, a current menu or one about to open).
+		fake.memory.u32(fake_game::manager + frame_rate_rules::menu_stack_count, 1);
+		fake.memory.u32(fake_game::manager + frame_rate_rules::menu_stack_first, 0x30000000);
+		fake.memory.u32(fake_game::manager + frame_rate_rules::menu_current, 0x30000010); // not the loading screen
+		state = fake.read();
+		CHECK(state && state->menu && !state->loading);
+		fake.memory.u32(fake_game::manager + frame_rate_rules::menu_current, 0);
+		fake.memory.u8(fake_game::manager + frame_rate_rules::menu_pending, 't');
+		state = fake.read();
+		CHECK(state && state->menu);
+		fake.memory.u8(fake_game::manager + frame_rate_rules::menu_pending, 0);
+		state = fake.read();
+		CHECK(state && !state->menu);
+		{
+			// The team menu seats Jean Grey before Accept: the presence keeps Cyclops until it closes.
+			party_hold team_menu;
+			state = fake.read();
+			team_menu.apply(*state);
+			fake.memory.u32(fake_game::manager + frame_rate_rules::menu_current, 0x30000010);
+			fake.party({"wolverine", "phoenix"});
+			state = fake.read();
+			if (state) team_menu.apply(*state);
+			CHECK((state && state->menu && state->party == std::vector<hero>{{"Wolverine", 3}, {"Cyclops", 1}}));
+			fake.memory.u32(fake_game::manager + frame_rate_rules::menu_current, 0);
+			state = fake.read();
+			if (state) team_menu.apply(*state);
+			CHECK((state && !state->menu && state->party == std::vector<hero>{{"Wolverine", 3}, {"Jean Grey", 9}}));
+		}
+		fake.memory.u32(fake_game::manager + frame_rate_rules::menu_stack_count, 0);
+		fake.party({"wolverine", "cyclops"});
+		// The game's code page (Windows-1252) in a mod's zone path, a savename and a hero's name: read, never
+		// a failed read, and shown as UTF-8.
+		fake.zone("mods/monta\xF1" "a1", "");
+		state = fake.read();
+		CHECK(state && build(*state, all) && build(*state, all)->details == "Act 1 \xC2\xB7 Monta\xC3\xB1" "a");
+		fake.zone("mods/monta\xF1" "a1", "La Monta\xF1" "a");
+		fake.memory.u32(fake_game::registry + registry_entries + 9 * entry_size + entry_character, fake.intern("F\xE9nix"));
+		fake.party({"phoenix"});
+		state = fake.read();
+		CHECK((state && state->zone_title == "La Monta\xC3\xB1" "a" && state->party == std::vector<hero>{{"F\xC3\xA9nix", 9}}));
+		const auto spanish = state ? build(*state, all) : std::nullopt;
+		CHECK(spanish && spanish->details == "Act 1 \xC2\xB7 La Monta\xC3\xB1" "a" && spanish->state == "F\xC3\xA9nix Lv 9");
+		CHECK(spanish && set_activity_json(1, *spanish, extras{}, 1).find("\"details\":\"Act 1 \xC2\xB7 La Monta\xC3\xB1" "a\",\"state\":\"F\xC3\xA9nix Lv 9\"") != std::string::npos);
+		fake.party({"wolverine", "cyclops"});
 		// The zone's text torn mid-copy, an unknown zone manager, none yet, and the registry unreadable.
 		fake.zone("nyc/al\x01son", "East Manhattan");
 		CHECK(!fake.read());
@@ -4838,11 +5040,46 @@ namespace
 		CHECK(state && state->zone.empty() && build(*state, all) == in_the_menus());
 
 		// The guards: well formed, one per address; against XMen2.exe, every byte, and the displacements
-		// the reads use are the ones in the game's own code.
+		// the reads use are the ones in the game's own code - each of them inside a guard, so the game
+		// checks it too (the +0x421 host flag's getter and setter among them).
 		std::set<DWORD> addresses;
 		bool guards_ok = true;
 		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
 		CHECK(guards_ok);
+		struct operand
+		{
+			DWORD va;
+			std::size_t size;
+			std::uint32_t value;
+		};
+		const operand operands[] = {
+			{0x4849ba + 1, 4, zones}, {0x483c1f + 2, 4, zones_vtable}, {0x483f30 + 2, 4, zone_path}, {0x483e90 + 2, 4, zone_loading},
+			{0x484f60 + 2, 4, zone_savename}, {0x4850d5 + 1, 1, zone_text_size}, {0x46dd0a + 1, 4, game_object}, {0x468e6d + 2, 4, game_vtable},
+			{0x469c40 + 3, 4, game_act}, {0x46c883 + 3, 1, game_party}, {0x60218e + 1, 4, pool}, {0x425bdd + 3, 4, pool_text},
+			{0x44b8fe + 1, 4, registry_cell}, {0x44b541 + 2, 4, registry_vtable}, {0x44b6b0 + 2, 4, registry_hero_count}, {0x44b6e4 + 4, 4, registry_heroes},
+			{0x44b708 + 3, 4, registry_entries}, {0x44b728 + 3, 4, registry_entries + entry_character}, {0x44b788 + 4, 4, registry_entries + entry_team},
+			{0x449d45 + 2, 4, registry_stats_mask - 4}, {0x449d4d + 2, 4, stats_size}, {0x4b87c5 + 4, 1, stats_level}, {0x4c87a0 + 2, 4, danger_room_state},
+			{0x4c9c18 + 1, 4, courses}, {0x4c9c15 + 2, 1, course_size}, {0x4d450c + 2, 1, course_title}, {0x60b23a + 1, 4, network},
+			{0x60a770 + 6, 4, network_mode}, {0x612c0a + 1, 4, session}, {0x612136 + 2, 4, session_vtable}, {0x610d20 + 2, 4, session_active},
+			{0x610d10 + 2, 4, session_hosting}, {0x611059 + 2, 4, session_hosting}, {0x615916 + 2, 4, session_max}, {0x61591c + 2, 4, session_players},
+		};
+		const auto guarded = [&](const operand& o)
+		{
+			const auto inside = [&](const guard& g) { return o.va >= g.va && o.va + o.size <= g.va + g.hex.size() / 2; };
+			return std::any_of(guards.begin(), guards.end(), inside) || std::any_of(frame_rate_rules::screen_guards.begin(), frame_rate_rules::screen_guards.end(), inside);
+		};
+		std::string unguarded;
+		for (const auto& o : operands)
+		{
+			if (!guarded(o))
+			{
+				char text[16]{};
+				std::snprintf(text, sizeof(text), " 0x%06lx", o.va);
+				unguarded += text;
+			}
+		}
+		if (!unguarded.empty()) std::printf("  info  operands outside every guard:%s\n", unguarded.c_str());
+		CHECK(unguarded.empty());
 		const auto exe = game_executable();
 		if (!exe)
 		{
@@ -4857,21 +5094,361 @@ namespace
 		const guard* mismatch = discord_rules::first_mismatch(image);
 		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
 		CHECK(mismatch == nullptr);
-		CHECK(operand_at(at(0x4849ba + 1), 4) == zones && operand_at(at(0x483c1f + 2), 4) == zones_vtable && operand_at(at(0x483f30 + 2), 4) == zone_path);
-		CHECK(operand_at(at(0x483e90 + 2), 4) == zone_loading && operand_at(at(0x484f60 + 2), 4) == zone_savename && operand_at(at(0x4850d5 + 1), 1) == zone_text_size);
-		CHECK(operand_at(at(0x46dd0a + 1), 4) == game_object && operand_at(at(0x468e6d + 2), 4) == game_vtable && operand_at(at(0x469c40 + 3), 4) == game_act);
-		CHECK(operand_at(at(0x46c883 + 3), 1) == game_party && operand_at(at(0x60218e + 1), 4) == pool && operand_at(at(0x425bdd + 3), 4) == pool_text);
-		CHECK(operand_at(at(0x44b8fe + 1), 4) == registry_cell && operand_at(at(0x44b541 + 2), 4) == registry_vtable && operand_at(at(0x44b6b0 + 2), 4) == registry_hero_count);
-		CHECK(operand_at(at(0x44b6e4 + 4), 4) == registry_heroes && operand_at(at(0x44b708 + 3), 4) == registry_entries && operand_at(at(0x44b728 + 3), 4) == registry_entries + entry_character);
-		CHECK(operand_at(at(0x44b788 + 4), 4) == registry_entries + entry_team && operand_at(at(0x449d45 + 2), 4) + 4 == registry_stats_mask && operand_at(at(0x449d4d + 2), 4) == stats_size);
-		CHECK(operand_at(at(0x4b87c5 + 4), 1) == stats_level && operand_at(at(0x4c87a0 + 2), 4) == danger_room_state && operand_at(at(0x4c9c18 + 1), 4) == courses);
-		CHECK(operand_at(at(0x4c9c15 + 2), 1) == course_size && operand_at(at(0x4d450c + 2), 1) == course_title && operand_at(at(0x60b23a + 1), 4) == network);
-		CHECK(operand_at(at(0x60a770 + 6), 4) == network_mode && operand_at(at(0x612c0a + 1), 4) == session && operand_at(at(0x612136 + 2), 4) == session_vtable);
-		CHECK(operand_at(at(0x610d20 + 2), 4) == session_active && operand_at(at(0x610d10 + 2), 4) == session_hosting && operand_at(at(0x615916 + 2), 4) == session_max &&
-		      operand_at(at(0x61591c + 2), 4) == session_players);
+		std::string wrong;
+		for (const auto& o : operands)
+		{
+			if (operand_at(at(o.va), o.size) != o.value)
+			{
+				char text[16]{};
+				std::snprintf(text, sizeof(text), " 0x%06lx", o.va);
+				wrong += text;
+			}
+		}
+		if (!wrong.empty()) std::printf("  info  operands that aren't the table's:%s\n", wrong.c_str());
+		CHECK(wrong.empty());
 		// The Danger Room's state and the session are in the exe's zero-filled data: 0 until the game sets them.
 		CHECK(operand_at(at(danger_room_state), 4) == 0 && operand_at(at(session), 4) == 0 && operand_at(at(network + network_mode), 4) == 0);
 		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
+	// A Discord of the test's own: a pipe server at \\.\pipe\xml2_test-discord-<pid>-<tag>-0 that takes
+	// the handshake and then runs `script` on a thread of its own, for discord_ipc::connection to talk to
+	// as to Discord - without the Discord on this PC ever seeing it.
+	class fake_discord
+	{
+	public:
+		std::wstring pipes;
+		std::string handshake;                   // the handshake's JSON, as it came
+		std::vector<discord_rules::message> got; // what the script read after it
+
+		template <typename Script>
+		fake_discord(const std::wstring& tag, Script script)
+		{
+			pipes = L"\\\\.\\pipe\\xml2_test-discord-" + std::to_wstring(GetCurrentProcessId()) + L"-" + tag + L"-";
+			server_ = CreateNamedPipeW((pipes + L"0").c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1,
+			                           64 * 1024, 64 * 1024, 0, nullptr);
+			go_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+			thread_ = std::thread([this, script]
+			{
+				if (!ConnectNamedPipe(server_, nullptr) && GetLastError() != ERROR_PIPE_CONNECTED) return;
+				const auto first = read();
+				if (!first) return;
+				handshake = first->json;
+				script(*this);
+			});
+		}
+		~fake_discord()
+		{
+			finish();
+			CloseHandle(go_);
+		}
+		fake_discord(const fake_discord&) = delete;
+		fake_discord& operator=(const fake_discord&) = delete;
+
+		// Ends the script (cutting short a read or write it's stuck in) and hangs up.
+		void finish()
+		{
+			if (thread_.joinable())
+			{
+				stopping_ = true;
+				while (WaitForSingleObject(thread_.native_handle(), 50) == WAIT_TIMEOUT)
+				{
+					SetEvent(go_);
+					CancelSynchronousIo(thread_.native_handle());
+				}
+				thread_.join();
+			}
+			hang_up();
+		}
+		// Waits up to `timeout_ms` for the script to end by itself.
+		bool done(const DWORD timeout_ms)
+		{
+			return WaitForSingleObject(thread_.native_handle(), timeout_ms) == WAIT_OBJECT_0;
+		}
+		void go()
+		{
+			SetEvent(go_);
+		}
+
+		// For the script.
+		bool stopping() const
+		{
+			return stopping_;
+		}
+		void wait_for_go()
+		{
+			WaitForSingleObject(go_, INFINITE);
+		}
+		bool write(const std::string& bytes)
+		{
+			std::size_t total = 0;
+			while (total < bytes.size())
+			{
+				DWORD done = 0;
+				if (!WriteFile(server_, bytes.data() + total, static_cast<DWORD>(bytes.size() - total), &done, nullptr)) return false;
+				total += done;
+			}
+			return true;
+		}
+		bool send(const std::uint32_t op, const std::string_view json)
+		{
+			return write(discord_rules::encode(op, json));
+		}
+		std::optional<discord_rules::message> read()
+		{
+			char header[8]{};
+			if (!read_exactly(header, 8)) return std::nullopt;
+			std::uint32_t op = 0;
+			std::uint32_t length = 0;
+			std::memcpy(&op, header, 4);
+			std::memcpy(&length, header + 4, 4);
+			if (length > discord_rules::max_frame) return std::nullopt;
+			std::string json(length, '\0');
+			if (length && !read_exactly(json.data(), length)) return std::nullopt;
+			return discord_rules::message{op, json};
+		}
+		// Discord's end closes - its handle, as Discord does: what it wrote can still be read.
+		void hang_up()
+		{
+			if (server_ != INVALID_HANDLE_VALUE)
+			{
+				CloseHandle(server_);
+				server_ = INVALID_HANDLE_VALUE;
+			}
+		}
+
+	private:
+		HANDLE server_ = INVALID_HANDLE_VALUE;
+		HANDLE go_ = nullptr;
+		std::atomic<bool> stopping_{false};
+		std::thread thread_;
+
+		bool read_exactly(char* out, const DWORD size)
+		{
+			DWORD total = 0;
+			while (total < size)
+			{
+				DWORD done = 0;
+				if (!ReadFile(server_, out + total, size - total, &done, nullptr) || done == 0) return false;
+				total += done;
+			}
+			return true;
+		}
+	};
+
+	// The connection (discord_ipc.cpp) against the test's own Discord: READY, PING/PONG, Discord's CLOSE
+	// and its reason, the handshake's deadline, a peer that floods the pipe, and quitting mid-handshake.
+	void check_discord_pipe()
+	{
+		using namespace discord_rules;
+		std::printf("discord: the pipe, against a Discord of the test's own\n");
+		const std::string ready = "{\"cmd\":\"DISPATCH\",\"data\":{\"v\":1},\"evt\":\"READY\",\"nonce\":null}";
+		const std::string refusal = "{\"code\":4000,\"message\":\"Invalid Client ID\"}";
+		std::string empty_frames;
+		for (int i = 0; i < 8192; ++i) empty_frames += encode(op_frame, ""); // 64 KiB of the smallest frames there are
+		std::string name;
+		std::string error;
+
+		{
+			discord_ipc::connection pipe;
+			CHECK(!pipe.open("123", name, error, 100, L"\\\\.\\pipe\\xml2_test-nobody-") && error.starts_with("Discord isn't running"));
+		}
+		{
+			// READY after a PING (answered with a PONG of its body); later Discord's CLOSE, and its end closes
+			// right after, as Discord's does: the CLOSE and its reason are still handed out.
+			fake_discord discord(L"ready", [&](fake_discord& d)
+			{
+				d.send(op_ping, "{\"n\":7}");
+				d.send(op_frame, ready);
+				if (const auto pong = d.read()) d.got.push_back(*pong);
+				d.wait_for_go();
+				if (d.stopping()) return;
+				d.send(op_close, refusal);
+				d.hang_up();
+			});
+			discord_ipc::connection pipe;
+			const bool opened = pipe.open("1554317812661493791", name, error, 2000, discord.pipes);
+			CHECK(opened && pipe.is_open() && name.starts_with("xml2_test-discord-") && name.ends_with("-ready-0"));
+			discord.go();
+			CHECK(discord.done(3000)); // it wrote its CLOSE and closed its end before the connection looked
+			std::vector<message> frames;
+			const bool received = pipe.receive(frames);
+			CHECK(received && !pipe.is_open() && frames.size() == 1 && frames[0].op == op_close && json_value(frames[0].json, "code") == "4000" && pipe.problem().empty());
+			std::vector<message> more;
+			CHECK(!pipe.receive(more) && more.empty());
+			discord.finish();
+			CHECK(discord.handshake == "{\"v\":1,\"client_id\":\"1554317812661493791\"}");
+			CHECK(discord.got.size() == 1 && discord.got[0].op == op_pong && discord.got[0].json == "{\"n\":7}");
+		}
+		{
+			// Refused during the handshake (an unknown application): the log gets Discord's reason.
+			fake_discord discord(L"refused", [&](fake_discord& d)
+			{
+				d.send(op_close, refusal);
+				d.hang_up();
+			});
+			discord_ipc::connection pipe;
+			CHECK(!pipe.open("123", name, error, 2000, discord.pipes) && error == "Discord refused the connection (4000: Invalid Client ID)" && !pipe.is_open());
+		}
+		{
+			// Frames that keep coming but never READY: the deadline holds.
+			fake_discord discord(L"deadline", [&](fake_discord& d)
+			{
+				while (!d.stopping() && d.send(op_frame, "{\"cmd\":\"DISPATCH\",\"evt\":\"SOMETHING_ELSE\"}")) Sleep(5);
+			});
+			discord_ipc::connection pipe;
+			const DWORD start = GetTickCount();
+			const bool opened = pipe.open("123", name, error, 300, discord.pipes);
+			const DWORD took = GetTickCount() - start;
+			std::printf("  info  a handshake that never ends gave up after %lu ms (deadline 300)\n", took);
+			CHECK(!opened && error.starts_with("Discord didn't answer the handshake on ") && took >= 250 && took < 1500 && !pipe.is_open());
+		}
+		{
+			// A peer that floods the pipe with valid frames from the start: dropped at once.
+			fake_discord discord(L"flood", [&](fake_discord& d)
+			{
+				while (!d.stopping() && d.write(empty_frames)) {}
+			});
+			discord_ipc::connection pipe;
+			const DWORD start = GetTickCount();
+			const bool opened = pipe.open("123", name, error, 3000, discord.pipes);
+			const DWORD took = GetTickCount() - start;
+			std::printf("  info  a flood during the handshake: \"%s\" after %lu ms\n", error.c_str(), took);
+			CHECK(!opened && error.find("sent more than 64 frames at once - that isn't Discord") != std::string::npos && took < 1500 && !pipe.is_open());
+		}
+		{
+			// And one that floods it later: the poll after it reads at most 64 KiB and drops the connection.
+			fake_discord discord(L"flood-later", [&](fake_discord& d)
+			{
+				d.send(op_frame, ready);
+				d.wait_for_go();
+				while (!d.stopping() && d.write(empty_frames)) {}
+			});
+			discord_ipc::connection pipe;
+			CHECK(pipe.open("123", name, error, 2000, discord.pipes));
+			discord.go();
+			Sleep(100);
+			std::vector<message> frames;
+			bool still = true;
+			const DWORD start = GetTickCount();
+			while (still && GetTickCount() - start < 2000)
+			{
+				still = pipe.receive(frames);
+				Sleep(10);
+			}
+			CHECK(!still && !pipe.is_open() && pipe.problem() == "sent more than 64 frames at once - that isn't Discord" && frames.size() <= max_queued);
+		}
+		{
+			// The game quitting mid-handshake: open() gives up at once (and doesn't start one after).
+			fake_discord discord(L"quiet", [&](fake_discord& d) { d.wait_for_go(); });
+			const HANDLE quitting = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+			discord_ipc::connection pipe;
+			pipe.cancel_on(quitting);
+			std::thread quit([&] { Sleep(100); SetEvent(quitting); });
+			const DWORD start = GetTickCount();
+			const bool opened = pipe.open("123", name, error, 5000, discord.pipes);
+			const DWORD took = GetTickCount() - start;
+			quit.join();
+			CHECK(!opened && error == "the game is quitting" && took < 600 && !pipe.is_open());
+			CHECK(!pipe.open("123", name, error, 5000, discord.pipes) && error == "the game is quitting");
+			CloseHandle(quitting);
+		}
+	}
+
+	// mods\load-order.txt, as the mod loader and Discord's X-Men Legends I port detection read it: a mod it
+	// switches off, or a leftover .staging folder, doesn't count.
+	void check_mod_order()
+	{
+		namespace fs = std::filesystem;
+		std::printf("mods: the load order (mod_order.hpp)\n");
+		const auto root = fs::temp_directory_path() / ("xml2_test-mods-" + std::to_string(GetCurrentProcessId()));
+		std::error_code ignored;
+		fs::remove_all(root, ignored);
+		const auto file = [&](const fs::path& relative, const std::string& text)
+		{
+			fs::create_directories((root / relative).parent_path(), ignored);
+			std::ofstream(root / relative, std::ios::binary) << text;
+		};
+		const fs::path x1 = fs::path(L"Scripts") / L"x1";
+		CHECK(!mod_order::enabled_mod_has_files(root, x1) && mod_order::load_order(root).empty()); // no mods folder at all
+		file(L"A/Scripts/x1/a.py", "x");
+		file(L".staging-00000001/Scripts/x1/b.py", "x"); // a launcher import cut short
+		file(L"B/Scripts/x1/c.py", "x");
+		fs::create_directories(root / L"C" / x1, ignored); // an empty Scripts\x1
+		file(L"load-order.txt", "\xEF\xBB\xBF# the launcher's list\r\n-A\r\n+C\r\n\r\nnot an entry\r\n");
+		const auto order = mod_order::load_order(root);
+		CHECK(order.size() == 3 && order[0].name == L"A" && !order[0].enabled && order[1].name == L"C" && order[1].enabled && order[2].name == L"B" && order[2].enabled);
+		const auto mods = mod_order::enabled_mods(root);
+		CHECK(mods.size() == 2 && mods[0].first == L"C" && mods[1].first == L"B" && mods[1].second == root / L"B");
+		CHECK(mod_order::enabled_mod_has_files(root, x1)); // B isn't listed: it loads
+		file(L"load-order.txt", "-A\r\n+C\r\n-B\r\n");
+		CHECK(!mod_order::enabled_mod_has_files(root, x1)); // A and B off, C's folder empty, the staging folder never counts
+		file(L"load-order.txt", "+A\n-B\n");
+		CHECK(mod_order::enabled_mod_has_files(root, x1) && mod_order::enabled_mods(root).size() == 2); // A on; C unlisted, after it
+		file(L"load-order.txt", "+a\n-b\n"); // names in any case
+		CHECK(mod_order::enabled_mod_has_files(root, x1) && mod_order::load_order(root).size() == 3);
+		fs::remove_all(root, ignored);
+	}
+
+	// How the game quits normally: WinMain returns into msvcr71.dll's exit(), and exit() calls ExitProcess
+	// through msvcr71.dll's own import - not through XMen2.exe's, whose only caller is the runtime's abort
+	// path (0x67215a). The fix hooks both. xml2_test --crt-exit-child <msvcr71.dll> does what the fix does
+	// to the game's copy of the runtime, then quits the game's way, exit(7): the hook turns it into 107.
+	using exit_process_t = void(WINAPI*)(UINT);
+	exit_process_t crt_real_exit = nullptr;
+
+	void WINAPI crt_exit_hook(const UINT code)
+	{
+		crt_real_exit(code + 100);
+	}
+
+	int run_crt_exit_child(const char* path)
+	{
+		const HMODULE crt = LoadLibraryA(path);
+		if (!crt) return 2;
+		crt_real_exit = reinterpret_cast<exit_process_t>(iat_hook::hook(crt, "KERNEL32.dll", "ExitProcess", 0, reinterpret_cast<void*>(&crt_exit_hook)));
+		if (!crt_real_exit) return 3;
+		const auto crt_exit = reinterpret_cast<void(__cdecl*)(int)>(GetProcAddress(crt, "exit"));
+		if (!crt_exit) return 4;
+		crt_exit(7);
+		return 5; // exit() doesn't return
+	}
+
+	void check_crt_exit()
+	{
+		std::printf("discord: quitting the game's way (msvcr71.dll's exit()) reaches the hooked ExitProcess\n");
+		std::vector<std::filesystem::path> candidates;
+		for (auto dir = module_dir(); !dir.empty() && dir != dir.root_path(); dir = dir.parent_path())
+		{
+			candidates.push_back(dir / "docs" / "research" / "msvcr71.dll");
+		}
+		candidates.emplace_back(L"D:\\Games\\X-Men Legends II\\msvcr71.dll");
+		std::error_code ignored;
+		const auto found = std::find_if(candidates.begin(), candidates.end(), [&](const auto& path) { return std::filesystem::is_regular_file(path, ignored); });
+		if (found == candidates.end())
+		{
+			std::printf("  skip  no msvcr71.dll (the game's C runtime) to quit through\n");
+			return;
+		}
+		std::printf("  info  %s\n", found->string().c_str());
+		wchar_t exe[MAX_PATH]{};
+		GetModuleFileNameW(nullptr, exe, MAX_PATH);
+		std::wstring command = std::wstring(L"\"") + exe + L"\" --crt-exit-child \"" + found->wstring() + L"\"";
+		STARTUPINFOW startup{};
+		startup.cb = sizeof(startup);
+		PROCESS_INFORMATION process{};
+		DWORD code = 0;
+		if (CreateProcessW(exe, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &startup, &process))
+		{
+			if (WaitForSingleObject(process.hProcess, 20000) != WAIT_OBJECT_0)
+			{
+				TerminateProcess(process.hProcess, 1);
+			}
+			GetExitCodeProcess(process.hProcess, &code);
+			CloseHandle(process.hThread);
+			CloseHandle(process.hProcess);
+		}
+		CHECK(code == 107);
 	}
 
 	// xml2_test --discord-live: a real round trip with the Discord client on this PC, as X-Men Legends II -
@@ -4910,8 +5487,10 @@ namespace
 		GetSystemTimeAsFileTime(&now);
 		extras x;
 		x.start = static_cast<std::int64_t>(((static_cast<ULONGLONG>(now.dwHighDateTime) << 32 | now.dwLowDateTime) - 116444736000000000ULL) / 10000000ULL);
-		x.party_id = "xml2fix-test";
-		const activity test{"xml2_test: Discord pipe check", "Online co-op \xC2\xB7 hosting", 1, 4, ""};
+		x.large_image = std::string(large_image_key);
+		x.large_text = "X-Men Legends II";
+		x.party_id = random_party_id();
+		const activity test{"xml2_test: Discord pipe check", "Online co-op \xC2\xB7 hosting", 1, 4, std::string(badge_online), "Online co-op"};
 		CHECK(pipe.send(op_frame, set_activity_json(GetCurrentProcessId(), test, x, 1)));
 		expect("set", "1");
 		Sleep(4000);
@@ -4931,6 +5510,10 @@ int main(const int argc, char** argv)
 	{
 		check_pipe(argv[2]);
 		return failures; // added to the parent's
+	}
+	if (argc > 2 && std::strcmp(argv[1], "--crt-exit-child") == 0)
+	{
+		return run_crt_exit_child(argv[2]);
 	}
 	if (argc > 1 && std::strcmp(argv[1], "--discord-live") == 0)
 	{
@@ -4987,6 +5570,8 @@ int main(const int argc, char** argv)
 	check_xp_curve_rules();
 	check_pad_prompts_rules();
 	check_discord_rules();
+	check_discord_pipe();
+	check_mod_order();
 	check_d3d8_modes();
 
 	const auto log = read_file(module_dir() / "xml2-fix.log");
@@ -5018,6 +5603,7 @@ int main(const int argc, char** argv)
 	}
 
 	failures += run_pipe_child();
+	check_crt_exit(); // after the log checks: the child writes a log of its own
 
 	std::printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures, failures == 1 ? "" : "s");
 	return failures ? 1 : 0;

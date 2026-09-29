@@ -144,26 +144,26 @@ In borderless mode with `Width`/`Height` at 0 the game starts at the desktop siz
 
 ## 💬 Discord
 
-With the Discord app running on the same PC, your Discord profile shows what you're doing in the game while it runs, as it does for newer games:
+With the Discord app running on the same PC, your Discord profile shows what you're doing in the game while it runs, with the game's logo and a badge for the mode, as it does for newer games:
 
 > **X-Men Legends II**<br>
 > Act 1 · Sanctuary<br>
 > Wolverine, Storm +2 · Lv 10-12<br>
 > 00:42 elapsed
 
-The X-Men Legends I port shows as **X-Men Legends**, XML2 as **X-Men Legends II**. The fix tells them apart by the port's `Scripts\x1` folder (in the game folder or a mod's) or its `[Game] PostgameScript=x1/...` or `SaveFolder=X-Men Legends`.
+The X-Men Legends I port shows as **X-Men Legends**, XML2 as **X-Men Legends II**. The fix tells them apart by the port's `Scripts\x1` folder (in the game folder, or in a mod that loads: one `mods\load-order.txt` switches off doesn't count) or its `[Game] PostgameScript=x1/...` or `SaveFolder=X-Men Legends`.
 
-| In the game | Discord shows |
-| ----------- | ------------- |
-| The main menu, and before the first zone | In the menus |
-| A zone | The act and the zone's name as the save screen has it (*Act 1 · East Manhattan*), then your party: one or two heroes with their levels (*Wolverine Lv 3 · Cyclops Lv 1*), three or four shortened (*Wolverine, Cyclops +2 · Lv 3-5*). Heroes by the names the game shows (*Jean Grey*, not `phoenix`) |
-| A cutscene | Watching a cutscene, and the zone |
-| The Danger Room | Danger Room · the course's title |
-| Play Online | *In the menus · Play Online*; in a game's lobby *Online lobby · Hosting* or *Joined*; in a zone the zone and *Online co-op · hosting* or *joined*, with the players, e.g. (2 of 4) |
+| In the game | Discord shows | Badge on the logo |
+| ----------- | ------------- | ----------------- |
+| The main menu, and before the first zone | In the menus | *menu*: In the menus |
+| A zone | The act and the zone's name as the save screen has it (*Act 1 · East Manhattan*), then your party: one or two heroes with their levels (*Wolverine Lv 3 · Cyclops Lv 1*), three or four shortened (*Wolverine, Cyclops +2 · Lv 3-5*). Heroes by the names the game shows (*Jean Grey*, not `phoenix`). While a menu is open (the team menu, say) the party stays as it was until the menu closes, so a hero shows once you accept him | none |
+| A cutscene | Watching a cutscene, and the zone | *cutscene*: Watching a cutscene |
+| The Danger Room | Danger Room · the course's title | *dangerroom*: Danger Room |
+| Play Online | *In the menus · Play Online*; in a game's lobby *Online lobby · Hosting* or *Joined*; in a zone the zone and *Online co-op · hosting* or *joined*, with the players, e.g. (2 of 4) | *online* (lobby and zone): Online co-op |
 
-The time counts from the game's start. A loading screen keeps what was there. An update goes out at most every 5 seconds (Discord takes about five in 20 seconds).
+The time counts from the game's start. A loading screen keeps what was there. An update goes out at most every 5 seconds (Discord takes about five in 20 seconds). Names from the game's files in other languages or from mods (*Montaña*, *Fénix*) come through as they are.
 
-**What's shared:** only that text: the zone, your heroes and their levels, the mode (menus, cutscene, Danger Room, online) and the number of players online. No player names, no PC, network or account details. It goes to the Discord app on your own PC through its local pipe, which shows it to whoever Discord shows your activity to (Discord's *User Settings → Activity Privacy* decides who).
+**What's shared:** only that text: the zone, your heroes and their levels, the mode (menus, cutscene, Danger Room, online) and the number of players online. No player names, no PC, network or account details: the id Discord gets for an online party is random, made anew each time the game starts. It goes to the Discord app on your own PC through its local pipe, which shows it to whoever Discord shows your activity to (Discord's *User Settings → Activity Privacy* decides who).
 
 **Switching it off:** in the Ultimate Legends launcher, or in `xml2-fix.ini`:
 
@@ -177,13 +177,15 @@ ShowParty=0      ; your heroes stay private
 Discord's own *Share your detected activities with others* switch hides it too. For the future and for testing:
 
 ```ini
-LargeImage=      ; an art asset's key in the Discord application (none by default)
-SmallImage=
+LargeImage=none  ; no images at all; or another art asset's key instead of the logo (no key: logo)
+SmallImage=none  ; no badges; or one asset's key for every badge (no key: the mode's own)
 Game=xml1        ; which application, if the detection is wrong: xml1 or xml2
 ClientId=        ; another Discord application's id
 ```
 
-Discord not running? The fix looks for it every 20 seconds, quietly, and connects once it starts. `xml2-fix.log` says when (`discord: connected as X-Men Legends II (discord-ipc-0)`) and lists each new presence (`discord: presence -> Act 1 · Sanctuary | Wolverine, Storm +2 · Lv 10-12`). Quitting the game clears the presence; if the game is closed any other way, Discord clears it when the fix's connection goes. It reads the game's own state once a second: the zone manager's zone and save name, the act, the party, the stats registry's names and levels, the Danger Room's course and the online session, after checking every byte it relies on is the retail build's. On any other build the presence shows the game's name only, and `xml2-fix.log` says why.
+Both Discord applications carry the same art: `logo`, and the badges `menu`, `cutscene`, `dangerroom` and `online`. An application of your own (`ClientId=`) needs art under those keys, or `LargeImage=none`.
+
+Discord not running? The fix looks for it every 20 seconds, quietly, and connects once it starts. `xml2-fix.log` says when (`discord: connected as X-Men Legends II (discord-ipc-0)`) and lists each new presence (`discord: presence -> Act 1 · Sanctuary | Wolverine, Storm +2 · Lv 10-12`). Quitting the game clears the presence (`discord: presence cleared (the game is quitting)`; the game waits at most 1.5 seconds for it); if the game is closed any other way, Discord clears it when the fix's connection goes. It reads the game's own state once a second: the zone manager's zone and save name, the act, the party, the stats registry's names and levels, the Danger Room's course, the online session and whether a menu is open, after checking every byte it relies on is the retail build's. On any other build the presence shows the game's name only, and `xml2-fix.log` says why. Nothing the presence does can take the game down: whatever is on the other end of the pipe is held to what Discord sends (frames of at most 64 KiB, a few at a time; anything else is dropped and looked for again later), and a failure in its thread only closes the connection.
 
 ## 🧪 Driving the game from a script
 
@@ -298,7 +300,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 7. **Gives the resolution list room when asked to** (`ResolutionList=all`). The game `sprintf`s its list into 20 twelve-byte slots in its data and reads them back through the count next to them, so the seven instructions that carry the table's address (the writer, the slider, Accept, the builder's and the revert's index searches, the close function's two reads) get the address of a 64-slot table in the DLL instead, again after a byte check of each, and only once the engine's Direct3D is hooked. The list itself comes from the fix's `IDirect3D8::GetAdapterModeCount`/`EnumAdapterModes` hooks and never exceeds the table in use.
 8. **Adds script functions for a mod's campaign when asked to** ([Mods](#-mods-with-their-own-campaign)). The game registers its 289 script functions once at start-up, by pushing its table and its count and handing them to its script system; before any of the game's code runs, the fix points those two pushes at a copy of the table with its eight functions after the game's own. They do what the game's own code does for its party changes (the party slot setter, the side-mission stack's `pushsidemission`, `restorelastzone` and `cancelsidemission`, a hero's costume byte), calling the game's functions.
 9. **Names the pad's buttons in prompts.** Every prompt goes through one function that turns an action into its label; the game asks it for the first bound of a player's binding slots in a fixed order in which the keyboard always comes before the pad. The fix replaces that one call with its own, which reads the same bindings but picks the pad's for a player on a pad, and names it after the pad layout above. It learns who uses what from the input state the game has just read each frame (keyboard, mouse buttons, pads), and colours the face buttons through the one instruction that gives a single-character label its colour. Every byte involved is checked first; on any other build the prompts are left as they are.
-10. **Tells Discord what you're playing** ([Discord](#-discord)). A thread of the fix's own reads the game's state once a second (every read guarded, so a zone load in progress can't hurt the game) and talks to the Discord app through its local RPC pipe, `\\.\pipe\discord-ipc-0` to `9`, as Discord's SDKs do, without them. The game's `ExitProcess` is hooked, so quitting clears the presence first.
+10. **Tells Discord what you're playing** ([Discord](#-discord)). A thread of the fix's own reads the game's state once a second (every read guarded, so a zone load in progress can't hurt the game) and talks to the Discord app through its local RPC pipe, `\\.\pipe\discord-ipc-0` to `9`, as Discord's SDKs do, without them. `ExitProcess` is hooked where the game calls it - `msvcr71.dll`'s import, which `exit()` uses when the game quits normally, and the game's own, its C runtime's abort path - so quitting clears the presence first.
 
 ```mermaid
 flowchart LR

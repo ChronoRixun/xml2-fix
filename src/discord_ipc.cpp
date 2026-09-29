@@ -1,5 +1,6 @@
 #include "discord_ipc.hpp"
 
+#include <algorithm>
 #include <string>
 
 namespace discord_ipc
@@ -25,6 +26,18 @@ namespace discord_ipc
 			}
 			return GetOverlappedResult(pipe, &overlapped, &transferred, FALSE) != FALSE;
 		}
+
+		// A pipe's name for the log: what follows \\.\pipe\ (ASCII, as the names here are).
+		std::string short_name(const std::wstring& name)
+		{
+			const auto slash = name.find_last_of(L'\\');
+			std::string out;
+			for (const wchar_t c : name.substr(slash == std::wstring::npos ? 0 : slash + 1))
+			{
+				out += c < 128 ? static_cast<char>(c) : '?';
+			}
+			return out;
+		}
 	}
 
 	connection::~connection()
@@ -41,9 +54,31 @@ namespace discord_ipc
 		return pipe_ != INVALID_HANDLE_VALUE;
 	}
 
-	bool connection::open(const std::string_view client_id, std::string& pipe, std::string& error, const DWORD timeout_ms)
+	void connection::cancel_on(const HANDLE event)
+	{
+		cancel_ = event;
+	}
+
+	bool connection::cancelled() const
+	{
+		return cancel_ && WaitForSingleObject(cancel_, 0) == WAIT_OBJECT_0;
+	}
+
+	const std::string& connection::problem() const
+	{
+		return problem_;
+	}
+
+	bool connection::open(const std::string_view client_id, std::string& pipe, std::string& error, const DWORD timeout_ms, const std::wstring_view pipes)
 	{
 		close();
+		inbox_.clear(); // nothing from an earlier connection
+		problem_.clear();
+		if (cancelled())
+		{
+			error = "the game is quitting";
+			return false;
+		}
 		if (!event_)
 		{
 			event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -56,11 +91,11 @@ namespace discord_ipc
 		DWORD last_error = ERROR_FILE_NOT_FOUND;
 		for (int i = 0; i < 10 && pipe_ == INVALID_HANDLE_VALUE; ++i)
 		{
-			const std::wstring name = L"\\\\.\\pipe\\discord-ipc-" + std::to_wstring(i);
+			const std::wstring name = std::wstring(pipes) + std::to_wstring(i);
 			pipe_ = CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
 			if (pipe_ != INVALID_HANDLE_VALUE)
 			{
-				pipe = "discord-ipc-" + std::to_string(i);
+				pipe = short_name(name);
 			}
 			else if (GetLastError() != ERROR_FILE_NOT_FOUND)
 			{
@@ -80,14 +115,33 @@ namespace discord_ipc
 			close();
 			return false;
 		}
-		const DWORD deadline = GetTickCount() + timeout_ms;
+		// The deadline holds however many frames arrive meanwhile: only READY, an error or a CLOSE ends
+		// the handshake before it.
+		const DWORD start = GetTickCount();
 		for (;;)
 		{
-			const DWORD now = GetTickCount();
-			const auto reply = wait(static_cast<LONG>(deadline - now) > 0 ? deadline - now : 0);
+			const DWORD elapsed = GetTickCount() - start;
+			if (elapsed >= timeout_ms)
+			{
+				error = "Discord didn't answer the handshake on " + pipe;
+				close();
+				return false;
+			}
+			const auto reply = wait(timeout_ms - elapsed);
 			if (!reply)
 			{
-				error = is_open() ? "Discord didn't answer the handshake on " + pipe : "Discord closed " + pipe + " during the handshake";
+				if (!problem_.empty())
+				{
+					error = pipe + " " + problem_;
+				}
+				else if (cancelled())
+				{
+					error = "the game is quitting";
+				}
+				else
+				{
+					error = is_open() ? "Discord didn't answer the handshake on " + pipe : "Discord closed " + pipe + " during the handshake";
+				}
 				close();
 				return false;
 			}
@@ -142,20 +196,23 @@ namespace discord_ipc
 		return true;
 	}
 
-	bool connection::read_available()
+	// At most max_read_per_poll bytes a call, so a peer that never stops writing can't hold the caller:
+	// the rest waits for the next poll, and the inbox's cap ends it before long.
+	connection::poll_result connection::read_available()
 	{
-		for (;;)
+		std::size_t taken = 0;
+		while (taken < discord_rules::max_read_per_poll)
 		{
 			DWORD available = 0;
 			if (!PeekNamedPipe(pipe_, nullptr, 0, nullptr, &available, nullptr))
 			{
-				return false;
+				return poll_result::gone;
 			}
 			if (available == 0)
 			{
-				return true;
+				return poll_result::open;
 			}
-			std::string chunk(std::min<DWORD>(available, 16 * 1024), '\0');
+			std::string chunk(std::min<std::size_t>({static_cast<std::size_t>(available), std::size_t{16 * 1024}, discord_rules::max_read_per_poll - taken}), '\0');
 			OVERLAPPED overlapped{};
 			overlapped.hEvent = event_;
 			ResetEvent(event_);
@@ -163,37 +220,51 @@ namespace discord_ipc
 			const BOOL started = ReadFile(pipe_, chunk.data(), static_cast<DWORD>(chunk.size()), &done, &overlapped);
 			if (!finish(pipe_, overlapped, started, done, 1000))
 			{
-				return false;
+				return poll_result::gone;
 			}
-			reader_.feed(std::string_view(chunk.data(), done));
-			while (auto m = reader_.next())
+			if (done == 0)
 			{
-				queued_.push_back(std::move(*m));
+				return poll_result::open;
 			}
-			if (reader_.broken())
+			taken += done;
+			if (!inbox_.take(std::string_view(chunk.data(), done)))
 			{
-				return false; // a frame no Discord sends: the stream can't be trusted any more
+				return poll_result::untrusted;
 			}
+		}
+		return poll_result::open;
+	}
+
+	void connection::poll()
+	{
+		if (!is_open())
+		{
+			return;
+		}
+		switch (read_available())
+		{
+		case poll_result::open:
+			break;
+		case poll_result::gone:
+			close(); // what Discord sent before its end closed (a CLOSE and its reason) is still handed out
+			break;
+		case poll_result::untrusted:
+			problem_ = std::string("sent ") + inbox_.problem() + " - that isn't Discord";
+			close();
+			break;
 		}
 	}
 
 	bool connection::receive(std::vector<discord_rules::message>& out)
 	{
-		if (!is_open())
+		poll();
+		bool got = false;
+		while (auto m = inbox_.pop())
 		{
-			return false;
+			out.push_back(std::move(*m));
+			got = true;
 		}
-		if (!read_available())
-		{
-			close();
-			return false;
-		}
-		for (auto& m : queued_)
-		{
-			out.push_back(std::move(m));
-		}
-		queued_.clear();
-		return true;
+		return is_open() || got;
 	}
 
 	std::optional<discord_rules::message> connection::wait(const DWORD timeout_ms)
@@ -201,29 +272,23 @@ namespace discord_ipc
 		const DWORD start = GetTickCount();
 		for (;;)
 		{
-			if (!is_open())
+			poll();
+			if (auto m = inbox_.pop())
 			{
-				return std::nullopt;
-			}
-			if (!read_available())
-			{
-				close();
-				return std::nullopt;
-			}
-			if (!queued_.empty())
-			{
-				auto m = std::move(queued_.front());
-				queued_.erase(queued_.begin());
 				return m;
 			}
-			if (GetTickCount() - start >= timeout_ms)
+			if (!is_open() || GetTickCount() - start >= timeout_ms)
 			{
 				return std::nullopt;
 			}
-			Sleep(15);
+			if (cancel_ ? WaitForSingleObject(cancel_, 15) == WAIT_OBJECT_0 : (Sleep(15), false))
+			{
+				return std::nullopt;
+			}
 		}
 	}
 
+	// Closes the pipe; what was read from it stays in the inbox until it's handed out or the next open().
 	void connection::close()
 	{
 		if (pipe_ != INVALID_HANDLE_VALUE)
@@ -232,7 +297,5 @@ namespace discord_ipc
 			CloseHandle(pipe_);
 			pipe_ = INVALID_HANDLE_VALUE;
 		}
-		reader_.clear();
-		queued_.clear();
 	}
 }

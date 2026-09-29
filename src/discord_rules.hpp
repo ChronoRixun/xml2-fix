@@ -37,16 +37,22 @@
 //   Online    The network manager, a static at 0xa3df68 (0x60b210): +0x1c0 is 1 from Play Online on and
 //             0 again at the main menu (0x5caf56, 0x5c9289). The session, a static at 0xa53058
 //             (0x612be0, vtable 0x6a481c): +0x420 a game is set up (host or join, 0x610d20), +0x421 1
-//             when this PC hosts it (0x609f5f) and 0 when it joined one (0x60a123), +0x3dc the players
-//             in it (copied from its peer list, 0x61204e), +0x3dd the most it takes (4; 0x615910).
-//   Screens   The menu manager ([0x8aff18]): a movie plays, or the loading screen is up - as the frame
-//             limiter reads them (frame_rate_rules.hpp, its screen_guards).
+//             when this PC hosts it (0x609f5f) and 0 when it joined one (0x60a123) - both through its
+//             setter 0x611050, read by its getter 0x610d10 - +0x3dc the players in it (copied from its
+//             peer list, 0x61204e), +0x3dd the most it takes (4; 0x615910).
+//   Screens   The menu manager ([0x8aff18]): a movie plays, the loading screen is up, or a menu is (the
+//             team menu, the pause menu: the game's own test, 0x5d8870) - as the frame limiter reads
+//             them (frame_rate_rules.hpp, its screen_guards).
 //
 // Discord's side: a named pipe \\.\pipe\discord-ipc-0..9 of the running Discord client; each frame is
 // [uint32 opcode][uint32 length][JSON], little-endian. HANDSHAKE (0) {"v":1,"client_id":...} answered
 // by a READY dispatch, then FRAME (1) commands such as SET_ACTIVITY with a nonce, answered in kind;
 // CLOSE (2) ends it, PING (3) wants a PONG (4) with the same body. Discord clears a connection's
-// activity when its pipe closes, and allows about five updates in 20 seconds.
+// activity when its pipe closes, and allows about five updates in 20 seconds. Whatever is on the
+// other end of the pipe is held to what Discord sends: frames of at most 64 KiB, a few at a time.
+//
+// The art: both Discord applications have the same Rich Presence assets - "logo", the game's large
+// image, and the small badges "menu", "cutscene", "dangerroom" and "online" for the mode.
 
 #include "frame_rate_rules.hpp" // the menu manager's movie and loading-screen reads, and their guards
 #include "limits_rules.hpp"     // guard, matches, image_base
@@ -56,8 +62,11 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <deque>
 #include <optional>
+#include <random>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -95,7 +104,8 @@ namespace discord_rules
 		return text;
 	}
 
-	// An ini value without a comment after it ("1   ; on by default" -> "1") or the spaces around it.
+	// An ini value without a comment after it ("1   ; on by default" -> "1") or the spaces and tabs around
+	// it. GetPrivateProfileString hands the comment over with the value; the launcher cuts it the same way.
 	inline std::string_view value_text(std::string_view text)
 	{
 		const auto comment = text.find(';');
@@ -126,7 +136,7 @@ namespace discord_rules
 	struct game_clues
 	{
 		std::string override_value;  // [Discord] Game: xml1 or xml2
-		bool x1_scripts = false;     // Scripts\x1 in the game folder or in a mod's folder
+		bool x1_scripts = false;     // Scripts\x1 in the game folder or in a mod that loads (load-order.txt)
 		std::string postgame_script; // [Game] PostgameScript
 		std::string save_folder;     // [Game] SaveFolder
 	};
@@ -193,11 +203,62 @@ namespace discord_rules
 	}
 
 	// [Discord] LargeImage / SmallImage: an art asset's key in the Discord application (or an image URL),
-	// printable ASCII without spaces or quotes, at most 256 characters. Empty: no image.
+	// printable ASCII without spaces or quotes, at most 256 characters.
 	inline bool valid_asset(const std::string_view key)
 	{
 		return !key.empty() && key.size() <= 256 &&
 		       std::all_of(key.begin(), key.end(), [](const char c) { return c > ' ' && c < 0x7f && c != '"' && c != '\\'; });
+	}
+
+	// The art both applications have: the game's large image, and a small badge for each mode.
+	inline constexpr std::string_view large_image_key = "logo";
+	inline constexpr std::string_view badge_menu = "menu";
+	inline constexpr std::string_view badge_cutscene = "cutscene";
+	inline constexpr std::string_view badge_danger_room = "dangerroom";
+	inline constexpr std::string_view badge_online = "online";
+
+	// The images the activity shows, from [Discord] LargeImage and SmallImage.
+	struct images
+	{
+		std::string large{large_image_key}; // "": no images at all
+		std::optional<std::string> badge;   // SmallImage: nullopt, each mode's own badge; "": no badge; else this key for every badge
+		std::string note;                   // a value the rules refused, for the log
+	};
+
+	// LargeImage: absent, the game's logo; empty or none, no images at all; else that asset. SmallImage:
+	// absent, the mode's badge; empty or none, no badge; else that asset wherever a badge shows. A value
+	// that isn't an asset key is ignored (as if absent).
+	inline images choose_images(const std::optional<std::string_view> large_value, const std::optional<std::string_view> small_value)
+	{
+		images chosen;
+		const auto pick = [&](const std::optional<std::string_view> value, const char* key) -> std::optional<std::string>
+		{
+			if (!value)
+			{
+				return std::nullopt;
+			}
+			const auto text = value_text(*value);
+			if (text.empty() || lowercase(text) == "none")
+			{
+				return std::string();
+			}
+			if (valid_asset(text))
+			{
+				return std::string(text);
+			}
+			chosen.note += std::string(chosen.note.empty() ? "" : "; ") + "[Discord] " + key + " isn't an asset key (no spaces or quotes, at most 256 characters) - ignored";
+			return std::nullopt;
+		};
+		if (const auto own = pick(large_value, "LargeImage"))
+		{
+			chosen.large = *own;
+		}
+		chosen.badge = pick(small_value, "SmallImage");
+		if (chosen.large.empty())
+		{
+			chosen.badge = std::string(); // no images at all
+		}
+		return chosen;
 	}
 
 	// ---- Text -------------------------------------------------------------------------------------
@@ -252,6 +313,26 @@ namespace discord_rules
 			append_utf8(out, byte);
 		}
 		return out;
+	}
+
+	// A Windows-1252 letter in lower or upper case: A-Z, the Latin-1 letters (À-Þ / à-þ, but × and ÷)
+	// and Š Œ Ž / š œ ž, Ÿ / ÿ. Anything else as it is.
+	inline char lower_game(const char c)
+	{
+		const auto b = static_cast<unsigned char>(c);
+		if ((b >= 'A' && b <= 'Z') || (b >= 0xc0 && b <= 0xde && b != 0xd7)) return static_cast<char>(b + 0x20);
+		if (b == 0x8a || b == 0x8c || b == 0x8e) return static_cast<char>(b + 0x10);
+		if (b == 0x9f) return static_cast<char>(0xff);
+		return c;
+	}
+
+	inline char upper_game(const char c)
+	{
+		const auto b = static_cast<unsigned char>(c);
+		if ((b >= 'a' && b <= 'z') || (b >= 0xe0 && b <= 0xfe && b != 0xf7)) return static_cast<char>(b - 0x20);
+		if (b == 0x9a || b == 0x9c || b == 0x9e) return static_cast<char>(b - 0x10);
+		if (b == 0xff) return static_cast<char>(0x9f);
+		return c;
 	}
 
 	// The characters (code points) in UTF-8 text.
@@ -327,6 +408,7 @@ namespace discord_rules
 
 	// A zone path's last part as words, for a zone whose zoneinfo has no savename: "mansion1a_1" ->
 	// "Mansion", "danger_room" -> "Danger Room". Each part between underscores is cut at its first digit.
+	// The path is the game's Windows-1252 (a mod's folder may be "montaña"); the words come out as UTF-8.
 	inline std::string pretty_zone(const std::string_view path)
 	{
 		const auto words_of = [](const std::string_view leaf)
@@ -342,8 +424,9 @@ namespace discord_rules
 				word = word.substr(0, digit);
 				if (!word.empty())
 				{
-					std::string pretty = lowercase(word);
-					pretty[0] = static_cast<char>(pretty[0] >= 'a' && pretty[0] <= 'z' ? pretty[0] - 'a' + 'A' : pretty[0]);
+					std::string pretty(word);
+					for (auto& c : pretty) c = lower_game(c);
+					pretty[0] = upper_game(pretty[0]);
 					if (pretty != last)
 					{
 						if (!out.empty()) out += ' ';
@@ -431,6 +514,7 @@ namespace discord_rules
 		int act = 0;            // the game's current act (0: none yet)
 		bool loading = false;   // a zone load is pending, or the loading screen is up
 		bool movie = false;
+		bool menu = false;      // a menu is up (the game's own test): the team menu, the pause menu, the main menu
 		bool danger_room = false;
 		std::string course; // the Danger Room course's title ("" in its free-play modes)
 		std::vector<hero> party;
@@ -455,13 +539,29 @@ namespace discord_rules
 		std::string state;   // the second
 		int party_size = 0;  // with party_max: "(2 of 4)" after the state
 		int party_max = 0;
-		std::string small_text; // the small image's tooltip, when there is one
+		std::string small_image; // the mode's badge (badge_menu...), "" in plain single-player play
+		std::string small_text;  // its tooltip: the mode
 		bool operator==(const activity&) const = default;
 	};
 
 	inline activity in_the_menus()
 	{
-		return {"In the menus", "", 0, 0, ""};
+		return {"In the menus", "", 0, 0, std::string(badge_menu), "In the menus"};
+	}
+
+	// The small badge and its tooltip for what `s` is doing: a cutscene, an online game (its lobby or a
+	// zone), the menus, the Danger Room; none in plain single-player play.
+	inline void set_badge(activity& a, const snapshot& s)
+	{
+		const auto badge = [&](const std::string_view key, const std::string_view text)
+		{
+			a.small_image = std::string(key);
+			a.small_text = std::string(text);
+		};
+		if (s.movie) badge(badge_cutscene, "Watching a cutscene");
+		else if (s.session) badge(badge_online, "Online co-op");
+		else if (is_menu_zone(s.zone)) badge(badge_menu, "In the menus");
+		else if (s.danger_room) badge(badge_danger_room, "Danger Room");
 	}
 
 	// The activity for `s`; nullopt while a zone loads (the last one stays up: a load is a few seconds,
@@ -523,19 +623,47 @@ namespace discord_rules
 			a.party_size = s.players;
 			a.party_max = s.max_players;
 		}
-		if (s.session)
-		{
-			a.small_text = "Online co-op";
-		}
-		else if (show.party && !s.party.empty() && !is_menu_zone(s.zone))
-		{
-			a.small_text = s.party.front().name;
-		}
+		set_badge(a, s);
 		a.details = clip(a.details);
 		a.state = clip(a.state);
-		a.small_text = clip(a.small_text);
 		return a;
 	}
+
+	// While a menu is up in a zone the party the game holds can be one still being chosen - the team menu
+	// seats a hero as soon as he's picked, before Accept or Back - so the party last read with no menu up,
+	// in that zone, stands until the menu closes. A zone the party hasn't been read in yet shows it as read.
+	class party_hold
+	{
+	public:
+		void apply(snapshot& s)
+		{
+			if (is_menu_zone(s.zone))
+			{
+				held_.reset();
+				return;
+			}
+			if (s.menu)
+			{
+				if (held_ && held_->zone == s.zone)
+				{
+					s.party = held_->party;
+				}
+				return;
+			}
+			if (!s.loading) // a load reseats the party as it goes
+			{
+				held_ = held{s.zone, s.party};
+			}
+		}
+
+	private:
+		struct held
+		{
+			std::string zone;
+			std::vector<hero> party;
+		};
+		std::optional<held> held_;
+	};
 
 	// One line for the log: "Act 1 · East Manhattan | Wolverine Lv 3 (2 of 4)".
 	inline std::string describe(const activity& a)
@@ -619,7 +747,10 @@ namespace discord_rules
 		op_pong = 4,
 	};
 
-	inline constexpr std::uint32_t max_frame = 64 * 1024;
+	inline constexpr std::uint32_t max_frame = 64 * 1024;   // no frame of Discord's is near this long
+	inline constexpr std::size_t max_read_per_poll = 64 * 1024; // bytes read from the pipe in one go; the rest waits for the next
+	inline constexpr std::size_t max_queued = 64;               // frames waiting to be handled: Discord answers each command
+	                                                            // once and pings now and then - more is a flood, not Discord
 
 	inline std::string encode(const std::uint32_t op, const std::string_view json)
 	{
@@ -640,24 +771,30 @@ namespace discord_rules
 		std::string json;
 	};
 
-	// Frames out of the bytes read from the pipe, however they were split.
+	// Frames out of the bytes read from the pipe, however they were split. Each frame costs its own
+	// length, not the buffer's: what was handed out is dropped once per feed.
 	class frame_reader
 	{
 	public:
 		void feed(const std::string_view bytes)
 		{
+			if (start_ > 0)
+			{
+				buffer_.erase(0, start_);
+				start_ = 0;
+			}
 			buffer_.append(bytes);
 		}
 		std::optional<message> next()
 		{
-			if (broken_ || buffer_.size() < 8)
+			if (broken_ || buffer_.size() - start_ < 8)
 			{
 				return std::nullopt;
 			}
 			const auto u32 = [&](const std::size_t at)
 			{
 				std::uint32_t value = 0;
-				for (int i = 3; i >= 0; --i) value = (value << 8) | static_cast<unsigned char>(buffer_[at + static_cast<std::size_t>(i)]);
+				for (int i = 3; i >= 0; --i) value = (value << 8) | static_cast<unsigned char>(buffer_[start_ + at + static_cast<std::size_t>(i)]);
 				return value;
 			};
 			const auto op = u32(0);
@@ -667,12 +804,17 @@ namespace discord_rules
 				broken_ = true;
 				return std::nullopt;
 			}
-			if (buffer_.size() < 8 + static_cast<std::size_t>(length))
+			if (buffer_.size() - start_ < 8 + static_cast<std::size_t>(length))
 			{
 				return std::nullopt;
 			}
-			message m{op, buffer_.substr(8, length)};
-			buffer_.erase(0, 8 + static_cast<std::size_t>(length));
+			message m{op, buffer_.substr(start_ + 8, length)};
+			start_ += 8 + static_cast<std::size_t>(length);
+			if (start_ == buffer_.size())
+			{
+				buffer_.clear();
+				start_ = 0;
+			}
 			return m;
 		}
 		bool broken() const
@@ -682,12 +824,83 @@ namespace discord_rules
 		void clear()
 		{
 			buffer_.clear();
+			start_ = 0;
 			broken_ = false;
 		}
 
 	private:
 		std::string buffer_;
+		std::size_t start_ = 0; // the first byte not handed out yet
 		bool broken_ = false;
+	};
+
+	// The frames read from the pipe, waiting to be handled - held to what Discord sends. A frame longer
+	// than max_frame, or more than max_queued frames waiting at once, means whatever is on the other end
+	// isn't Discord (or is broken): the stream can't be trusted any more, everything waiting is dropped,
+	// and nothing more is taken or handed out until clear() - the caller closes the pipe.
+	class inbox
+	{
+	public:
+		bool take(const std::string_view bytes)
+		{
+			if (problem_)
+			{
+				return false;
+			}
+			reader_.feed(bytes);
+			while (auto m = reader_.next())
+			{
+				if (queued_.size() >= max_queued)
+				{
+					fail("more than 64 frames at once");
+					return false;
+				}
+				queued_.push_back(std::move(*m));
+			}
+			if (reader_.broken())
+			{
+				fail("a frame longer than 64 KiB");
+				return false;
+			}
+			return true;
+		}
+		std::optional<message> pop()
+		{
+			if (problem_ || queued_.empty())
+			{
+				return std::nullopt;
+			}
+			auto m = std::move(queued_.front());
+			queued_.pop_front();
+			return m;
+		}
+		std::size_t waiting() const
+		{
+			return queued_.size();
+		}
+		// Why the stream can't be trusted; null while it can.
+		const char* problem() const
+		{
+			return problem_;
+		}
+		void clear()
+		{
+			reader_.clear();
+			queued_.clear();
+			problem_ = nullptr;
+		}
+
+	private:
+		void fail(const char* why)
+		{
+			problem_ = why;
+			queued_.clear();
+			reader_.clear();
+		}
+
+		frame_reader reader_;
+		std::deque<message> queued_;
+		const char* problem_ = nullptr;
 	};
 
 	inline std::string handshake_json(const std::string_view client_id)
@@ -695,13 +908,31 @@ namespace discord_rules
 		return "{\"v\":1,\"client_id\":\"" + json_escape(client_id) + "\"}";
 	}
 
+	// The online party's id, as Discord shows it to whoever sees the activity: "xml2fix-" and 16 hex
+	// digits of `high` and `low` - random ones (random_party_id), so it says nothing about this PC.
+	inline std::string party_id_of(const std::uint32_t high, const std::uint32_t low)
+	{
+		char text[32]{};
+		std::snprintf(text, sizeof(text), "xml2fix-%08x%08x", static_cast<unsigned>(high), static_cast<unsigned>(low));
+		return text;
+	}
+
+	// A new party id for this run of the game: the OS's random numbers (rand_s), nothing else. Throws
+	// when there are none; call it off the loader lock (it may load the system's random number DLL).
+	inline std::string random_party_id()
+	{
+		std::random_device random;
+		const auto high = static_cast<std::uint32_t>(random());
+		return party_id_of(high, static_cast<std::uint32_t>(random()));
+	}
+
 	struct extras
 	{
-		std::int64_t start = 0;  // the elapsed timer's start, Unix seconds; 0: none
-		std::string large_image; // [Discord] LargeImage
-		std::string large_text;  // its tooltip: the game's title
-		std::string small_image; // [Discord] SmallImage
-		std::string party_id;    // this session's party, when online
+		std::int64_t start = 0;                 // the elapsed timer's start, Unix seconds; 0: none
+		std::string large_image;                // "": no images at all
+		std::string large_text;                 // its tooltip: the game's title
+		std::optional<std::string> small_image; // [Discord] SmallImage: nullopt, each mode's badge; "": none; else it
+		std::string party_id;                   // this run's party, when online; "": no party size
 	};
 
 	inline std::string set_activity_json(const DWORD pid, const activity& a, const extras& x, const unsigned nonce)
@@ -727,11 +958,13 @@ namespace discord_rules
 		{
 			add_asset("\"large_image\":\"" + json_escape(x.large_image) + "\"");
 			if (characters(x.large_text) >= 2) add_asset("\"large_text\":\"" + json_escape(x.large_text) + "\"");
-		}
-		if (!x.small_image.empty())
-		{
-			add_asset("\"small_image\":\"" + json_escape(x.small_image) + "\"");
-			if (characters(a.small_text) >= 2) add_asset("\"small_text\":\"" + json_escape(a.small_text) + "\"");
+			// The mode's badge, or SmallImage's key in its place; nothing in plain single-player play.
+			const std::string& badge = x.small_image && !a.small_image.empty() ? *x.small_image : a.small_image;
+			if (!badge.empty())
+			{
+				add_asset("\"small_image\":\"" + json_escape(badge) + "\"");
+				if (characters(a.small_text) >= 2) add_asset("\"small_text\":\"" + json_escape(clip(a.small_text)) + "\"");
+			}
 		}
 		if (!assets.empty()) add("\"assets\":{" + assets + "}");
 		if (a.party_max > 0 && !x.party_id.empty())
@@ -884,7 +1117,7 @@ namespace discord_rules
 
 	// Every byte the reads rely on, from the retail build. Checked once in the game: when one doesn't
 	// match, nothing is read and the presence shows only the game's name.
-	inline constexpr std::array<guard, 41> guards{{
+	inline constexpr std::array<guard, 44> guards{{
 		// The zone manager.
 		{0x4849ba, "b978a57200c744240800000000e824f2ffff68d0db6700e848d71e0083c4048b0c24b878a57200", "the zone manager is built at 0x72a578 and handed out (0x484990)"},
 		{0x483c1f, "c7068c876800", "its constructor sets the vtable 0x68878c (0x483c1f)"},
@@ -930,7 +1163,10 @@ namespace discord_rules
 		{0x612c0a, "b95830a500", "the session is built at 0xa53058 (0x612c0a)"},
 		{0x612136, "c7061c486a00", "its constructor sets the vtable 0x6a481c (0x612136)"},
 		{0x610d20, "8a8120040000c3", "a game is set up: +0x420 (0x610d20)"},
-		{0x609f5f, "6a01e87a8c00008bc8e8e3700000", "hosting sets +0x421 to 1 (0x609f5f, 0x611050)"},
+		{0x609f5f, "6a01e87a8c00008bc8e8e3700000", "hosting sets +0x421 to 1 through 0x611050 (0x609f5f)"},
+		{0x60a123, "6a00e8b68a00008bc8e81f6f0000", "joining sets +0x421 to 0 through 0x611050 (0x60a123)"},
+		{0x611050, "8a44240484c0568bf1888621040000", "0x611050 stores its argument at +0x421 (0x611050)"},
+		{0x610d10, "8a8121040000c3", "this PC hosts: +0x421 (0x610d10)"},
 		{0x615910, "53e8cad2ffff8a98dd0300008a88dc03000005a403000033d23acb0f9cc2", "its players at +0x3dc, at most +0x3dd (0x615910)"},
 		{0x61204e, "8a8f78020000888fdc030000", "+0x3dc is the peer list's count (0x61204e)"},
 	}};
@@ -1055,12 +1291,20 @@ namespace discord_rules
 			return text(pool + pool_text + *offset, name_text_size);
 		}
 
-		// A zone path is printable ASCII (a mod's zones too); anything else is a read that raced a load.
-		static bool valid_path(const std::string& path)
+	public:
+		// A zone path has no control characters; one that has any is a read that raced a load. Bytes of
+		// 0x80 and up are the game's code page, Windows-1252 (a mod's "montaña"): pretty_zone turns them
+		// into UTF-8, and they never fail the read.
+		static bool valid_path(const std::string_view path)
 		{
-			return std::all_of(path.begin(), path.end(), [](const char c) { return c >= 0x20 && c < 0x7f; });
+			return std::none_of(path.begin(), path.end(), [](const char c)
+			{
+				const auto b = static_cast<unsigned char>(c);
+				return b < 0x20 || b == 0x7f;
+			});
 		}
 
+	private:
 		void read_screens(snapshot& s)
 		{
 			const auto manager = u32(frame_rate_rules::menu_manager_cell);
@@ -1072,10 +1316,17 @@ namespace discord_rules
 			{
 				s.movie = (*flags & frame_rate_rules::menu_movie_bit) != 0;
 			}
-			if (const auto current = u32(*manager + frame_rate_rules::menu_current); current && *current)
+			const auto current = u32(*manager + frame_rate_rules::menu_current);
+			if (current && *current)
 			{
 				s.loading = s.loading || u32(*current) == frame_rate_rules::loading_menu_vtable;
 			}
+			// A menu is up as the game tests it (0x5d8870): a stack, its first entry, and a current menu or
+			// the name of one about to open.
+			const auto count = u32(*manager + frame_rate_rules::menu_stack_count);
+			const auto first = u32(*manager + frame_rate_rules::menu_stack_first);
+			const auto pending = u8(*manager + frame_rate_rules::menu_pending);
+			s.menu = count && first && current && pending && static_cast<std::int32_t>(*count) > 0 && *first != 0 && (*current != 0 || *pending != 0);
 		}
 
 		void read_game(snapshot& s)

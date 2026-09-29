@@ -3,6 +3,7 @@
 #include "discord_rules.hpp"
 #include "iat_hook.hpp"
 #include "log.hpp"
+#include "mod_order.hpp"
 
 #include <Windows.h>
 
@@ -23,16 +24,18 @@ namespace discord_presence
 	{
 		using namespace discord_rules;
 
-		// Set before the thread starts; read only after.
+		// Set before the thread starts; read only after (the thread itself adds the party id).
 		game which = game::xml2;
 		std::string client_id;
 		display show;
 		extras presence_extras;
 		bool game_readable = false; // every guard matched: the presence reads the game's state
-		DWORD pid = 0;
+		DWORD pid = 0;              // for the Discord client on this PC only (args.pid), never in the activity
 
-		HANDLE stop_event = nullptr;
+		HANDLE stop_event = nullptr; // the game is quitting
+		HANDLE done_event = nullptr; // the presence's thread has cleared the activity (or has nothing to clear)
 		HANDLE thread = nullptr;
+		DWORD thread_id = 0;
 
 		// ---- xml2-fix.ini -------------------------------------------------------------------------
 
@@ -59,7 +62,8 @@ namespace discord_presence
 			return text ? std::optional<std::string_view>(*text) : std::nullopt;
 		}
 
-		// The port's scripts, in the game folder or in a mod's.
+		// The port's scripts, in the game folder or in a mod that loads: mods\load-order.txt decides, as it
+		// does for the mod loader (a "-Name" mod, or a leftover .staging folder, doesn't count).
 		bool has_x1_scripts()
 		{
 			std::error_code ignored;
@@ -68,14 +72,14 @@ namespace discord_presence
 			{
 				return true;
 			}
-			for (std::filesystem::directory_iterator mod(dir / L"mods", ignored), end; !ignored && mod != end; mod.increment(ignored))
+			try
 			{
-				if (mod->is_directory(ignored) && std::filesystem::is_directory(mod->path() / L"Scripts" / L"x1", ignored))
-				{
-					return true;
-				}
+				return mod_order::enabled_mod_has_files(dir / L"mods", std::filesystem::path(L"Scripts") / L"x1");
 			}
-			return false;
+			catch (...)
+			{
+				return false; // out of memory: the other clues decide
+			}
 		}
 
 		std::int64_t unix_now()
@@ -169,172 +173,263 @@ namespace discord_presence
 		// ---- The thread ---------------------------------------------------------------------------
 
 		constexpr unsigned changes_to_log = 100;
+		constexpr DWORD quit_wait_ms = 1500; // the most quitting waits for the presence to be cleared
 
-		DWORD WINAPI run(void*)
+		// Everything the presence's thread does. No C++ exception leaves it: a failure while reading the
+		// game or talking to Discord (out of memory in the 32-bit game, say) drops that one round - the
+		// connection is closed and Discord looked for again later - instead of taking XMen2.exe down.
+		class presence
 		{
-			discord_ipc::connection pipe;
-			gate pacing;
-			settle settled;
-			game_memory memory;
-			game_reader<game_memory> reader(memory);
-			std::optional<activity> wanted; // settled from the game's state
-			std::optional<activity> sent;   // on this connection
-			std::uint64_t next_attempt = 0;
-			std::string last_problem;
-			std::string last_refusal;
-			unsigned nonce = 0;
-			unsigned changes = 0;
-			bool read_failed = false;
-
-			if (WaitForSingleObject(stop_event, static_cast<DWORD>(first_connect_ms)) != WAIT_OBJECT_0)
+		public:
+			void run()
 			{
-				for (;;)
+				pipe_.cancel_on(stop_event);
+				try
 				{
-					const std::uint64_t now = GetTickCount64();
+					// The online party's id: random, made here - off the loader lock, before anything is sent.
+					presence_extras.party_id = random_party_id();
+				}
+				catch (...)
+				{
+					// None: Discord shows no "(2 of 4)" online, and nothing else changes.
+				}
 
-					// What the game is doing.
-					if (game_readable)
+				if (WaitForSingleObject(stop_event, static_cast<DWORD>(first_connect_ms)) != WAIT_OBJECT_0)
+				{
+					for (;;)
 					{
-						std::optional<snapshot> state;
+						const std::uint64_t now = GetTickCount64();
+						read_game();
 						try
 						{
-							state = reader.read();
+							talk(now);
 						}
 						catch (...)
 						{
-							if (!read_failed)
+							pipe_.close();
+							sent_.reset();
+							next_attempt_ = now + retry_ms;
+							if (!talk_failed_)
 							{
-								logger::write("discord: ERROR: reading the game's state failed - the presence stays as it is");
-								read_failed = true;
+								logger::write("discord: ERROR: talking to Discord failed (out of memory?) - connection closed, looking again every 20 s");
+								talk_failed_ = true;
 							}
 						}
-						if (state)
+						if (WaitForSingleObject(stop_event, static_cast<DWORD>(sample_ms)) == WAIT_OBJECT_0)
 						{
-							if (auto shown = settled.seen(build(*state, show)))
+							break;
+						}
+					}
+				}
+				clear();
+			}
+
+		private:
+			discord_ipc::connection pipe_;
+			gate pacing_;
+			settle settled_;
+			party_hold hold_;
+			game_memory memory_;
+			game_reader<game_memory> reader_{memory_};
+			std::optional<activity> wanted_; // settled from the game's state
+			std::optional<activity> sent_;   // on this connection
+			std::uint64_t next_attempt_ = 0;
+			std::string last_problem_;
+			std::string last_refusal_;
+			unsigned nonce_ = 0;
+			unsigned changes_ = 0;
+			bool read_failed_ = false;
+			bool talk_failed_ = false;
+
+			// What the game is doing.
+			void read_game()
+			{
+				if (!game_readable)
+				{
+					return;
+				}
+				try
+				{
+					if (auto state = reader_.read())
+					{
+						hold_.apply(*state); // the team menu's picks show once it's accepted
+						if (auto shown = settled_.seen(build(*state, show)))
+						{
+							wanted_ = std::move(shown);
+						}
+					}
+				}
+				catch (...)
+				{
+					if (!read_failed_)
+					{
+						logger::write("discord: ERROR: reading the game's state failed - the presence stays as it is");
+						read_failed_ = true;
+					}
+				}
+			}
+
+			// Discord: connect when it's time, handle what it sent, send the activity when it changed.
+			void talk(const std::uint64_t now)
+			{
+				const activity target = game_readable ? wanted_.value_or(in_the_menus()) : activity{};
+				if (!pipe_.is_open() && now >= next_attempt_)
+				{
+					std::string name;
+					std::string problem;
+					if (pipe_.open(client_id, name, problem))
+					{
+						logger::write("discord: connected as %.*s (%s)", static_cast<int>(title_of(which).size()), title_of(which).data(), name.c_str());
+						last_problem_.clear();
+						last_refusal_.clear();
+						sent_.reset();
+						pacing_.reset();
+					}
+					else
+					{
+						next_attempt_ = now + retry_ms;
+						if (problem != last_problem_)
+						{
+							logger::write("discord: %s - looking again every %u s", problem.c_str(), static_cast<unsigned>(retry_ms / 1000));
+							last_problem_ = problem;
+						}
+					}
+				}
+				if (!pipe_.is_open())
+				{
+					return;
+				}
+				bool said_why = false;
+				std::vector<message> incoming;
+				if (pipe_.receive(incoming))
+				{
+					for (const auto& m : incoming)
+					{
+						if (m.op == op_ping)
+						{
+							pipe_.send(op_pong, m.json);
+						}
+						else if (m.op == op_close)
+						{
+							logger::write("discord: Discord closed the connection (%s: %s) - looking again every %u s", json_value(m.json, "code").value_or("?").c_str(),
+							              json_value(m.json, "message").value_or("no reason given").c_str(), static_cast<unsigned>(retry_ms / 1000));
+							pipe_.close();
+							said_why = true;
+							break;
+						}
+						else if (m.op == op_frame && json_value(m.json, "evt") == "ERROR")
+						{
+							const auto why = json_value(m.json, "message").value_or("no message");
+							if (why != last_refusal_)
 							{
-								wanted = std::move(shown);
+								logger::write("discord: Discord refused the presence (%s)", why.c_str());
+								last_refusal_ = why;
 							}
 						}
 					}
-					const activity target = game_readable ? wanted.value_or(in_the_menus()) : activity{};
-
-					// Discord.
-					if (!pipe.is_open() && now >= next_attempt)
+				}
+				if (pipe_.is_open() && (!sent_ || *sent_ != target) && pacing_.may_send(now))
+				{
+					if (pipe_.send(op_frame, set_activity_json(pid, target, presence_extras, ++nonce_)))
 					{
-						std::string name;
-						std::string problem;
-						if (pipe.open(client_id, name, problem))
+						pacing_.sent(now);
+						sent_ = target;
+						if (changes_ < changes_to_log)
 						{
-							logger::write("discord: connected as %.*s (%s)", static_cast<int>(title_of(which).size()), title_of(which).data(), name.c_str());
-							last_problem.clear();
-							last_refusal.clear();
-							sent.reset();
-							pacing.reset();
+							logger::write("discord: presence -> %s", describe(target).c_str());
+						}
+						else if (changes_ == changes_to_log)
+						{
+							logger::write("discord: (further presence changes aren't logged)");
+						}
+						++changes_;
+					}
+				}
+				if (!pipe_.is_open())
+				{
+					if (!said_why)
+					{
+						if (!pipe_.problem().empty())
+						{
+							logger::write("discord: the pipe %s - closed, looking again every %u s", pipe_.problem().c_str(), static_cast<unsigned>(retry_ms / 1000));
 						}
 						else
 						{
-							next_attempt = now + retry_ms;
-							if (problem != last_problem)
-							{
-								logger::write("discord: %s - looking again every %u s", problem.c_str(), static_cast<unsigned>(retry_ms / 1000));
-								last_problem = problem;
-							}
+							logger::write("discord: the connection to Discord is gone - looking again every %u s", static_cast<unsigned>(retry_ms / 1000));
 						}
 					}
-					if (pipe.is_open())
-					{
-						bool said_why = false;
-						std::vector<message> incoming;
-						if (pipe.receive(incoming))
-						{
-							for (const auto& m : incoming)
-							{
-								if (m.op == op_ping)
-								{
-									pipe.send(op_pong, m.json);
-								}
-								else if (m.op == op_close)
-								{
-									logger::write("discord: Discord closed the connection (%s: %s) - looking again every %u s", json_value(m.json, "code").value_or("?").c_str(),
-									              json_value(m.json, "message").value_or("no reason given").c_str(), static_cast<unsigned>(retry_ms / 1000));
-									pipe.close();
-									said_why = true;
-									break;
-								}
-								else if (m.op == op_frame && json_value(m.json, "evt") == "ERROR")
-								{
-									const auto why = json_value(m.json, "message").value_or("no message");
-									if (why != last_refusal)
-									{
-										logger::write("discord: Discord refused the presence (%s)", why.c_str());
-										last_refusal = why;
-									}
-								}
-							}
-						}
-						if (pipe.is_open() && (!sent || *sent != target) && pacing.may_send(now))
-						{
-							if (pipe.send(op_frame, set_activity_json(pid, target, presence_extras, ++nonce)))
-							{
-								pacing.sent(now);
-								sent = target;
-								if (changes < changes_to_log)
-								{
-									logger::write("discord: presence -> %s", describe(target).c_str());
-								}
-								else if (changes == changes_to_log)
-								{
-									logger::write("discord: (further presence changes aren't logged)");
-								}
-								++changes;
-							}
-						}
-						if (!pipe.is_open())
-						{
-							if (!said_why)
-							{
-								logger::write("discord: the connection to Discord is gone - looking again every %u s", static_cast<unsigned>(retry_ms / 1000));
-							}
-							last_problem = "gone";
-							next_attempt = now + retry_ms;
-						}
-					}
-
-					if (WaitForSingleObject(stop_event, static_cast<DWORD>(sample_ms)) == WAIT_OBJECT_0)
-					{
-						break;
-					}
+					last_problem_ = "gone";
+					next_attempt_ = now + retry_ms;
 				}
 			}
 
-			// The game is quitting: clear the activity rather than leave it to Discord noticing the pipe close.
-			if (pipe.is_open())
+			// The game is quitting: clear the activity rather than leave it to Discord noticing the pipe
+			// close - quickly, as the game waits for it (at most quit_wait_ms).
+			void clear()
 			{
-				if (pipe.send(op_frame, clear_activity_json(pid, ++nonce), 300))
+				try
 				{
-					pipe.wait(300);
+					pipe_.cancel_on(nullptr); // the stop event is set: waiting for Discord's answer is wanted now
+					if (pipe_.is_open())
+					{
+						if (pipe_.send(op_frame, clear_activity_json(pid, ++nonce_), 300))
+						{
+							pipe_.wait(300);
+						}
+						pipe_.close();
+						logger::write("discord: presence cleared (the game is quitting)");
+					}
 				}
-				pipe.close();
-				logger::write("discord: presence cleared (the game is quitting)");
+				catch (...)
+				{
+					pipe_.close(); // Discord clears it when the pipe closes
+				}
 			}
+		};
+
+		DWORD WINAPI run(void*)
+		{
+			try
+			{
+				presence().run();
+			}
+			catch (...)
+			{
+				// Only a presence that couldn't be made (out of memory); its pipe, if any, is closed.
+			}
+			SetEvent(done_event);
 			return 0;
 		}
 
 		// ---- Quitting -----------------------------------------------------------------------------
 
 		using exit_process_t = void(WINAPI*)(UINT);
-		exit_process_t real_exit_process = nullptr;
+		exit_process_t real_game_exit = nullptr; // XMen2.exe's own import of ExitProcess: its CRT's abort path
+		exit_process_t real_crt_exit = nullptr;  // msvcr71.dll's: exit() and _exit(), a normal quit (WinMain returns)
 
-		// The game's own ExitProcess (its CRT's exit): the presence's thread still runs here, so it
-		// clears the activity and closes the pipe before the process goes.
+		// Stops the presence's thread and waits - at most quit_wait_ms - for it to clear the activity and
+		// close the pipe. Only an event is waited on, not the thread's end, so this holds even when the
+		// caller has the loader lock (a thread's end needs it); a second call finds the event set.
+		void stop_presence()
+		{
+			if (!stop_event || !done_event || GetCurrentThreadId() == thread_id)
+			{
+				return;
+			}
+			SetEvent(stop_event);
+			WaitForSingleObject(done_event, quit_wait_ms);
+		}
+
 		void WINAPI game_exit_process(const UINT code)
 		{
-			if (stop_event && thread)
-			{
-				SetEvent(stop_event);
-				WaitForSingleObject(thread, 1500);
-			}
-			real_exit_process(code);
+			stop_presence();
+			real_game_exit(code);
+		}
+
+		void WINAPI crt_exit_process(const UINT code)
+		{
+			stop_presence();
+			real_crt_exit(code);
 		}
 	}
 
@@ -387,28 +482,17 @@ namespace discord_presence
 		}
 		show.zone = parse_switch(view(ini_text(L"Discord", L"ShowZone")), true);
 		show.party = parse_switch(view(ini_text(L"Discord", L"ShowParty")), true);
-		for (const auto& [key, field] : {std::pair{L"LargeImage", &presence_extras.large_image}, std::pair{L"SmallImage", &presence_extras.small_image}})
+		const auto art = choose_images(view(ini_text(L"Discord", L"LargeImage")), view(ini_text(L"Discord", L"SmallImage")));
+		if (!art.note.empty())
 		{
-			const std::string asset(value_text(ini_text(L"Discord", key).value_or("")));
-			if (asset.empty())
-			{
-				continue;
-			}
-			if (valid_asset(asset))
-			{
-				*field = asset;
-			}
-			else
-			{
-				logger::write("discord: [Discord] %ls isn't an asset key (no spaces or quotes, at most 256 characters) - ignored", key);
-			}
+			logger::write("discord: %s", art.note.c_str());
 		}
+		presence_extras.large_image = art.large;
+		presence_extras.small_image = art.badge;
 		pid = GetCurrentProcessId();
 		presence_extras.start = unix_now(); // the elapsed time counts from the game's start, not each zone's
 		presence_extras.large_text = std::string(title_of(which));
-		char party[32];
-		std::snprintf(party, sizeof(party), "xml2fix-%08lx%08lx", static_cast<unsigned long>(pid), static_cast<unsigned long>(GetTickCount()));
-		presence_extras.party_id = party;
+		// The online party's id is the presence's thread's to make (random, off the loader lock).
 
 		if (mismatch)
 		{
@@ -417,15 +501,35 @@ namespace discord_presence
 		}
 
 		stop_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-		thread = stop_event ? CreateThread(nullptr, 0, &run, nullptr, 0, nullptr) : nullptr;
+		done_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+		thread = stop_event && done_event ? CreateThread(nullptr, 0, &run, nullptr, 0, &thread_id) : nullptr;
 		if (!thread)
 		{
 			logger::write("discord: ERROR: couldn't start the presence's thread (error %lu) - no presence", GetLastError());
 			return;
 		}
-		real_exit_process = reinterpret_cast<exit_process_t>(iat_hook::hook(game_module, "KERNEL32.dll", "ExitProcess", 0, reinterpret_cast<void*>(&game_exit_process)));
+		// Quitting clears the presence first. A normal quit returns from WinMain into msvcr71.dll's exit(),
+		// which calls ExitProcess through msvcr71.dll's own import; the game's own import is its CRT's
+		// abort path. Both are hooked (by name: no addresses of the game's).
+		real_game_exit = reinterpret_cast<exit_process_t>(iat_hook::hook(game_module, "KERNEL32.dll", "ExitProcess", 0, reinterpret_cast<void*>(&game_exit_process)));
+		real_crt_exit = reinterpret_cast<exit_process_t>(
+			iat_hook::hook(GetModuleHandleW(L"msvcr71.dll"), "KERNEL32.dll", "ExitProcess", 0, reinterpret_cast<void*>(&crt_exit_process)));
+		std::string notes;
+		if (art.large.empty())
+		{
+			notes += "; no images (LargeImage=none)";
+		}
+		else
+		{
+			if (art.large != large_image_key) notes += "; LargeImage=" + art.large;
+			if (art.badge) notes += art.badge->empty() ? "; no badges (SmallImage=none)" : "; SmallImage=" + *art.badge;
+		}
+		if (!real_crt_exit)
+		{
+			notes += real_game_exit ? "; msvcr71.dll's ExitProcess isn't hooked - on a normal quit Discord clears it when the game's pipe closes"
+			                        : "; ExitProcess isn't hooked - Discord clears it when the game's pipe closes";
+		}
 		logger::write("discord: presence on as %.*s (application %s; %s)%s%s%s", static_cast<int>(title_of(which).size()), title_of(which).data(), client_id.c_str(),
-		              choice.why.c_str(), show.zone ? "" : "; ShowZone=0", show.party ? "" : "; ShowParty=0",
-		              real_exit_process ? "" : "; the game doesn't import ExitProcess - Discord clears it when the game's pipe closes");
+		              choice.why.c_str(), show.zone ? "" : "; ShowZone=0", show.party ? "" : "; ShowParty=0", notes.c_str());
 	}
 }
