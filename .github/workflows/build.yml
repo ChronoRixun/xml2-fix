@@ -28,6 +28,12 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
+          # A release tag must match the version built into the DLL (project(... VERSION) in CMakeLists.txt),
+          # which the log and the file's properties report.
+          $built = (Get-Item build/bin/Release/dinput.dll).VersionInfo.ProductVersion
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and "v$($built)" -ne $env:GITHUB_REF_NAME) {
+            throw "Tag $($env:GITHUB_REF_NAME), but dinput.dll is version $($built): update project(... VERSION) in CMakeLists.txt"
+          }
           $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { "dev-$($env:GITHUB_SHA.Substring(0, 7))" }
           $name = "xml2-fix-$version"
           New-Item -ItemType Directory "dist/$name" -Force | Out-Null
