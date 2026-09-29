@@ -9,7 +9,7 @@ the ini, `src/frame_rate.cpp` / `src/frame_rate_rules.hpp`, VSync in `rewrite_pr
 started (out of scope by decision 2). Target: xml2-fix branch `display`, on top of `src/display.cpp` /
 `src/display_rules.hpp`.
 
-## Decisions (Owen, 2026-09-27 22:10) - binding
+## Decisions (maintainer, 2026-09-27 22:10) - binding
 
 1. **Default `FrameRate`** when the user never set it = stock behaviour: the game's own 60 fps cap, untouched.
    The user picks e.g. 180 in the menu or the launcher.
@@ -57,7 +57,7 @@ key only when the user changed that row (Accept), with `WritePrivateProfileStrin
 
 ### Menus at 60 fps (2026-09-28, after the first in-game run at 180)
 
-Reported in game at `FrameRate=180` (harness `_nb2` and Owen, borderless): holding Down 300 ms in the pause menu
+Reported in game at `FrameRate=180` (harness `_nb2` and the maintainer, borderless): holding Down 300 ms in the pause menu
 moved the highlight 1 item at 60 fps and 2 at 180; the XML1 main menu's highlight disk "spun faster", the
 highlight skipped, *Begin Story* was hard to hit. Gameplay was fine (same walk distance per second at 60 and 180).
 
@@ -107,7 +107,7 @@ the game's 60 fps spin is off; menus, popups and conversations at 60 fps`, then 
 (`frame rate: 60 fps while a menu is on screen`, `frame rate: 180 fps again (play)`). The pipe's `status`:
 `frame rate 180 fps (menus, popups and conversations at 60)`, or `(60 now: a menu, popup or conversation is up)`.
 
-**The borderless live-switch "lock-up".** Owen switched 60 -> 180 from the Advanced Options panel in borderless
+**The borderless live-switch "lock-up".** The maintainer switched 60 -> 180 from the Advanced Options panel in borderless
 and the game locked up; the log ended at `frame rate: now 180 fps, paced by the fix from the next frame` - which
 is also the last line of a good run (nothing more was logged after a live change). Read again: `retarget`
 patches the spin's imm32 on the game thread (the instruction isn't executing), creates the timer, restarts the
@@ -225,7 +225,7 @@ still being presented and where.
   and no patch (the game's own list, including its overflow on a >20-size adapter), in the fix's own modes the
   pre-phase-3 list (`curate_modes` into 20 slots, no window extras; `resolution_rules::video_list`).
   `ResolutionList=all` = the 64-slot table + `build_list` in every mode; `game` = the game's 20 slots,
-  `build_list` trimmed to 20 in every mode (the overflow fix alone). **For Owen:** the overflow at 0x6e98f0+
+  `build_list` trimmed to 20 in every mode (the overflow fix alone). **For the maintainer:** the overflow at 0x6e98f0+
   corrupts the default key bindings on the development PC (24 sizes), so `all` as the default is a one-line
   change in `display_rules::options` once he OKs it; until then the launcher can write `ResolutionList=all`.
 - Safety of the 64-slot table (review fix round): the relocation now happens only after the `Direct3DCreate8`
@@ -248,7 +248,7 @@ Each finding was re-read in the binary before changing anything.
 2. **Default-off violated - confirmed, fixed.** Without `ResolutionList` nothing touches the Video list in the
    stock mode (no hooks, no relocation; the fix's modes keep their pre-phase-3 list); the rows no longer force
    a Present hook (hooked when the limiter starts); with no keys and no rows nothing is hooked at all. The
-   64-slot table as the default awaits Owen's OK (it fixes the stock overflow into the default bindings).
+   64-slot table as the default awaits the maintainer's OK (it fixes the stock overflow into the default bindings).
 3. **Revert + Accept wrote the fix's variants instead of stock - confirmed, fixed.** A row on its stock value
    removes its key (when the user put it there or after Revert); FrameRate back to stock restores the game's
    spin live (byte-checked undo; the fix paces at 60 if it can't), so frames are never left unpaced.
@@ -925,4 +925,4 @@ frame/init, HUD), `decomp_batch5.c` (widget methods, window input, wndproc), `de
 (setDeviceParameters, createDevice, endDraw, resetDevice, getLastError, presentation interval),
 `decomp_display.c` (igWin32Window setVideoMode, open, dispatchEvent, ...). Re-run any decompile with
 `analyzeHeadless.bat <proj> xml2opts -process XMen2.exe -noanalysis -scriptPath ghidra_scripts
--postScript DecompAt.java out.c <hex addrs>` (JAVA_HOME = D:\tools\jdk-21.0.12.1+1).
+-postScript DecompAt.java out.c <hex addrs>` (JAVA_HOME = <JDK folder>).

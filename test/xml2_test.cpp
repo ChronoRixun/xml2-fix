@@ -3784,12 +3784,12 @@ namespace
 		CHECK(setting_text(choose("")) == "auto" && setting_text(choose("FIRST")) == "first" && setting_text(choose("010.0.0.2")) == "10.0.0.2");
 
 		// This PC's name: any of its spellings, any case, a trailing root dot allowed; nothing else.
-		const std::vector<std::string> own = {"OJAMD", "OJAMD", "OJAMD.lan"};
-		CHECK(is_own_host("OJAMD", own) && is_own_host("ojamd", own) && is_own_host("OjAmD.", own) && is_own_host("ojamd.LAN", own));
-		CHECK(!is_own_host("localhost", own) && !is_own_host("", own) && !is_own_host(".", own) && !is_own_host("OJAMD2", own) && !is_own_host("ojamd.lan.example", own));
-		CHECK(!is_own_host("xmenlegpc.master.gamespy.com", own) && !is_own_host("OJAMD", std::vector<std::string>{}) && !is_own_host("x", std::vector<std::string>{""}));
+		const std::vector<std::string> own = {"MYPC", "MYPC", "MYPC.lan"};
+		CHECK(is_own_host("MYPC", own) && is_own_host("mypc", own) && is_own_host("MyPc.", own) && is_own_host("mypc.LAN", own));
+		CHECK(!is_own_host("localhost", own) && !is_own_host("", own) && !is_own_host(".", own) && !is_own_host("MYPC2", own) && !is_own_host("mypc.lan.example", own));
+		CHECK(!is_own_host("xmenlegpc.master.gamespy.com", own) && !is_own_host("MYPC", std::vector<std::string>{}) && !is_own_host("x", std::vector<std::string>{""}));
 
-		// Owen's PC as Windows lists it: WSL's vEthernet, Docker, Tailscale, then the LAN card with the default route.
+		// A development PC as Windows lists it: WSL's vEthernet, Docker, Tailscale, then the LAN card with the default route.
 		const auto at = [](const char* dotted) { return *parse_address(dotted); };
 		const std::vector<address> windows = {at("172.18.0.1"), at("172.17.0.1"), at("100.64.0.10"), at("192.168.1.20")};
 		const auto arranged = [&](const decision& made)
