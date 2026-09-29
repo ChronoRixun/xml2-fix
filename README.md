@@ -210,6 +210,29 @@ the fix listens on the named pipe `\\.\pipe\xml2-fix-input` (or `\\.\pipe\` + `P
 
 `KEY` is a DirectInput key name (`ENTER`, `ESCAPE`, `W`, `UP`, `F1`, `NUMPAD4`, …) or scancode (`0x1C`). Every screen reads these keys, *Advanced Options* included (its widgets take key messages, but the panel makes them from the same DirectInput keyboard, so `tap DOWN`, `tap ENTER` and `tap LEFT` move and change its rows). Keys from the pipe reach the game whether or not it has the focus; the real keyboard only counts while it does, so typing in another window stays there, and in the borderless and windowed modes the game ignores the mouse meanwhile (it sees no cursor and gets no mouse messages, so moving your mouse over its window hovers nothing). Screenshots copy the Direct3D back buffer inside the game, so they work with the window covered (multisampling is off while the pipe is on). Meant for `Mode=windowed` with `RunInBackground=1`; everything the pipe does is in `xml2-fix.log`. Off without the `[Test]` section.
 
+### Virtual pads: controllers and local co-op from a script
+
+```ini
+[Test]
+InputPipe=1
+VirtualPads=2   ; 0-4: pads the game sees with nothing plugged in (default 0: none)
+```
+
+With `VirtualPads=N` the game sees N Logitech Dual Actions in both of the lists it reads pads from (the engine's DirectInput 7 and the game's own DirectInput 8), whether or not a controller is connected. They're always listed in the same order, so virtual pad N lands in the game's pad slot N, which is player N's pad in the fix's layout: pad 2 pressing **Start** is player 2 joining. The pipe then presses their buttons:
+
+| Command | Effect |
+| ------- | ------ |
+| `pad N BUTTON[+BUTTON] [ms]` | press and release (80 ms), e.g. `pad 1 A`, `pad 2 START` |
+| `padhold N BUTTONS ms` | hold together, then release |
+| `paddown N BUTTONS [ms]` / `padup N BUTTONS` | hold until released (10 s at most); `padup N ALL` lets go of everything on pad N |
+| `padrelease [N]` | let go of everything on pad N, or on every pad (`release` does keys and pads) |
+| `stick N L\|R X Y [ms]` | a stick at X, Y (-1 to 1, Y up): with `ms`, held that long and then centred; without, it stays there until the next `stick` for it (`0 0` lets go), `padup N ALL` or 10 s |
+| `trigger N L\|R VALUE [ms]` | a trigger at VALUE (0 to 1), the same way |
+
+`N` is 1-4. `BUTTON` is an Xbox name: `A B X Y LB RB LT RT BACK START LS RS UP DOWN LEFT RIGHT` (`LT`/`RT` as buttons pull the trigger all the way). They go through the same Dual Action layout as a real pad, so `A` is the Dual Action's button 2, the menus' accept and Attack, and the D-pad is its hat. Taps, holds and timed sticks answer once they're over and the game has read the pad in the meantime, or with `error …` if it hasn't (a pad the game doesn't have, say); `status` adds the pad count, each pad's reads and what the pipe holds.
+
+Virtual pads **replace** real controllers rather than joining them: while `VirtualPads` is set, the game's lists show no real controller, and XInput pad N's input goes into virtual pad N while the game has the focus. So `pad 1` is always the game's pad 1, whatever is plugged in, wakes up or goes to sleep during a run (the game re-lists its pads every few seconds and moves them between slots when the list changes), a real pad still plays as the same player, and a test game in the background never takes the pad someone is using in another window. The virtual pads have no force feedback, and they report state only (no buffered input, which the game doesn't use). The game remembers its pads by the GUIDs in `Controls\Gamepads`, as it does for any pad; a real one plugged in later simply takes a free slot again.
+
 ## 🧬 Mods with their own campaign
 
 For total conversions that bring their own story, roster and saves (the X-Men Legends I port, for one). Each key does nothing until it is set. `NewGameTeam` and `SaveFolder` take the whole rest of their line, so their comments go on a line of their own:
@@ -329,7 +352,7 @@ cmake --build build --config Release
 build\bin\Release\xml2_test.exe          # add --live to watch your pad as the game sees it
 ```
 
-The output is `build\bin\Release\dinput.dll`. `xml2_test.exe` loads it the way the game does, then reads a connected controller through both of the game's DirectInput paths and checks the OpenSpy redirect. Release builds are produced by [GitHub Actions](.github/workflows/build.yml) from tagged source.
+The output is `build\bin\Release\dinput.dll`. `xml2_test.exe` loads it the way the game does, then reads a connected controller through both of the game's DirectInput paths and checks the OpenSpy redirect; with no controller connected it still checks both paths on two virtual pads, driven through the test pipe. Release builds are produced by [GitHub Actions](.github/workflows/build.yml) from tagged source.
 
 Also by the same author: [MUA Controller Fix](https://github.com/ChronoRixun/mua-controller-fix), for Marvel: Ultimate Alliance 1 & 2 (2016 PC).
 

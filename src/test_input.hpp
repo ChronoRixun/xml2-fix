@@ -23,8 +23,10 @@
 //
 // The pipe is \\.\pipe\xml2-fix-input (or \\.\pipe\<PipeName>), one command per line, one reply line per command
 // ("ok ..." or "error ..."): down/up/tap/hold KEYS [ms], release, screenshot PATH, script
-// STATEMENT, console COMMAND, status, ping (test_input_rules.hpp has the grammar). Its thread
-// never touches the game's; keys it holds expire after 10 s so a dead client can't wedge one.
+// STATEMENT, console COMMAND, status, ping (test_input_rules.hpp has the grammar), and the pad
+// commands pad/padhold/paddown/padup/padrelease/stick/trigger (pad_input_rules.hpp; pads with
+// nothing plugged in come from [Test] VirtualPads, virtual_pad.hpp). Its thread never touches the
+// game's; keys and pad inputs it holds expire after 10 s so a dead client can't wedge one.
 // "screenshot" copies the Direct3D 8 back buffer just before Present (frame_capture.hpp), so it
 // works with the window covered. "script" and "console" put a line in the game's own console
 // queue (two commands of 127 characters at most; "script" sends "runscript STATEMENT"): the

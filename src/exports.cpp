@@ -13,7 +13,8 @@
 // xml2-fix.ini asks for it, runs the game windowed or borderless at the desktop's resolution,
 // raises engine caps (the actor and resource name tables, limits.hpp), gives a mod's campaign what
 // it needs (its New Game, saves, main menu, ending, forced parties, X-Men Legends 1's XP curve) and
-// opens a named pipe through which tests press keys and take screenshots without the focus. It also
+// opens a named pipe through which tests press keys and pad buttons (on virtual pads, [Test]
+// VirtualPads, when nothing is plugged in) and take screenshots without the focus. It also
 // shows what the game is doing in Discord (Rich Presence, [Discord]; on unless switched off).
 
 #include "discord_presence.hpp"
@@ -33,6 +34,7 @@
 #include "pad_prompts.hpp"
 #include "postgame.hpp"
 #include "test_input.hpp"
+#include "virtual_pad.hpp"
 #include "xp_curve.hpp"
 
 #define DIRECTINPUT_VERSION 0x0800
@@ -128,6 +130,8 @@ namespace
 	{
 		logger::write("XML2 Fix " FIX_VERSION);
 		gamepad_fix::use_profile(pad_profile::logitech_dual_action);
+		// [Test] VirtualPads: pads with nothing plugged in, in both DirectInput paths below - read before either exists.
+		virtual_pad::install();
 		xml2_pad_bindings::install();
 
 		const HMODULE game = GetModuleHandleW(nullptr);
