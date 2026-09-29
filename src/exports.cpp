@@ -26,6 +26,7 @@
 #include "openspy_redirect.hpp"
 #include "pad_profile.hpp"
 #include "pad_bindings.hpp"
+#include "pad_prompts.hpp"
 #include "postgame.hpp"
 #include "test_input.hpp"
 #include "xp_curve.hpp"
@@ -125,6 +126,9 @@ namespace
 		xml2_pad_bindings::install();
 
 		const HMODULE game = GetModuleHandleW(nullptr);
+		// The button prompts: the pad's names for a player on a pad, the power wheel's buttons of play. Code and
+		// data the game runs from its first menu on; none of the sites is another module's.
+		pad_prompts::install(game);
 		real_get_proc_address = reinterpret_cast<get_proc_address_t>(
 			iat_hook::hook(game, "KERNEL32.dll", "GetProcAddress", 0, reinterpret_cast<void*>(&game_get_proc_address)));
 		if (!real_get_proc_address)

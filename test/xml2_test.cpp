@@ -47,6 +47,7 @@
 #include "main_menu_rules.hpp"
 #include "new_game.hpp"
 #include "options_menu_rules.hpp"
+#include "pad_prompts_rules.hpp"
 #include "postgame_rules.hpp"
 #include "resolution_rules.hpp"
 #include "test_input_rules.hpp"
@@ -3806,6 +3807,325 @@ namespace
 		std::memcpy(image, before.data(), image_size);
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
+
+	// [Input] Prompts (pad_prompts_rules.hpp): the ini values, the UI codes, the pad's names, the colour table; the
+	// slot shown on binding maps of the test's own, the device chosen on an input object as the game's poll leaves
+	// it; the writes, and the colour stub run the way the renderer runs it; then, when a copy of XMen2.exe is at
+	// hand, every guard against it, the action table against 0x619c40's, maps built by the game's own setter and
+	// the change applied to that copy.
+	struct fake_map
+	{
+		std::vector<std::uint8_t> bytes = std::vector<std::uint8_t>(0x980, 0);
+		std::uint8_t* data() { return bytes.data(); }
+		void set(const int action, const int slot, const std::uint32_t device, const std::uint32_t control)
+		{
+			using namespace pad_prompts_rules;
+			auto* record = bytes.data() + map_records + (static_cast<std::size_t>(action) * slot_count + slot) * record_size;
+			std::memcpy(record, &device, 4);
+			std::memcpy(record + 4, &control, 4);
+			std::uint32_t count = 0;
+			std::memcpy(&count, bytes.data(), 4);
+			count = std::max<std::uint32_t>(count, static_cast<std::uint32_t>(action) + 1);
+			std::memcpy(bytes.data(), &count, 4);
+			if (pad_device(device)) std::memcpy(bytes.data() + map_pad_device, &device, 4);
+		}
+	};
+
+	using set_binding_t = void(__fastcall*)(void* map, void* edx, int action, int slot, int device, int control);
+	using get_binding_t = void(__fastcall*)(void* map, void* edx, int action, int slot, int* device, int* control);
+	using no_argument_t = void(__fastcall*)(void* self, void* edx);
+
+	bool run_set_binding(const std::uint8_t* function, void* map, const int action, const int slot, const int device, const int control)
+	{
+		__try
+		{
+			reinterpret_cast<set_binding_t>(const_cast<std::uint8_t*>(function))(map, nullptr, action, slot, device, control);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	bool run_get_binding(const std::uint8_t* function, void* map, const int action, const int slot, int& device, int& control)
+	{
+		__try
+		{
+			reinterpret_cast<get_binding_t>(const_cast<std::uint8_t*>(function))(map, nullptr, action, slot, &device, &control);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	bool run_no_argument(const std::uint8_t* function, void* self)
+	{
+		__try
+		{
+			reinterpret_cast<no_argument_t>(const_cast<std::uint8_t*>(function))(self, nullptr);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	// The colour stub run the way the renderer runs it (thunk in `memory`): bl = the label's character, esi = the
+	// slot, the word read back from [esp + esi*2 + 0x80]; -1 when edx didn't come back as it went in.
+	int run_colour_stub(std::uint8_t* memory, const int character, const int slot)
+	{
+		using thunk_t = int(__cdecl*)(int character, int slot);
+		__try
+		{
+			return reinterpret_cast<thunk_t>(memory)(character, slot);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return -2;
+		}
+	}
+
+	void check_pad_prompts_rules()
+	{
+		using namespace pad_prompts_rules;
+		std::printf("[Input] Prompts (the button prompts for the pad)\n");
+
+		// The ini.
+		CHECK(!parse_mode("").set && parse_mode("").value == mode::automatic && parse_mode("  ; nothing").error.empty());
+		CHECK(parse_mode("auto").value == mode::automatic && parse_mode(" PAD ").value == mode::pad && parse_mode("Keyboard ; comment").value == mode::keyboard);
+		CHECK(parse_mode("off").set && parse_mode("off").value == mode::off);
+		bool refused_ok = true;
+		for (const char* bad : {"1", "on", "xbox", "pad keyboard", "automatic", "gamepad"}) refused_ok &= !parse_mode(bad).error.empty();
+		CHECK(refused_ok);
+		CHECK(parse_switch("").value && !parse_switch("").set && parse_switch("0").set && !parse_switch("0").value && !parse_switch("Off").value && parse_switch("yes").value);
+		CHECK(!parse_switch("2").error.empty() && !parse_switch("colour").error.empty());
+
+		// UI codes: the wheel's tokens, the menus' and the per-player ones.
+		CHECK(action_of(4) == 4 && action_of(5) == 5 && action_of(6) == 6 && action_of(8) == 7); // ATTACK LowAttack, SMASH HighAttack, MOVE Jump, GUARD Guard
+		CHECK(action_of(0x15) == 5 && action_of(0x14) == 0x11 && action_of(0x18) == 6 && action_of(0xd) == 0xa && action_of(9) == 9); // MENU_BACK, MENU_OK, MENU_OTHER, MENU_DROP, MENU_DETAILS
+		CHECK(action_of(0xe) == -1 && action_of(0x34) == -1 && action_of(-1) == -1 && action_of(0x33) == 0x29);
+		CHECK(stock_target(0x36).code == 8 && stock_target(0x36).player == 2 && !stock_target(0x36).play_row);  // GUAR3
+		CHECK(stock_target(0x4f).code == 10 && stock_target(0x4f).player == 3 && !stock_target(0x4f).play_row); // SOL4
+		CHECK(stock_target(0x51).code == 4 && stock_target(0x52).code == 5 && stock_target(0x50).code == 8 && stock_target(0x53).code == 10);
+		CHECK(stock_target(0x51).play_row && stock_target(0x52).play_row && stock_target(0x50).play_row && stock_target(0x53).play_row);
+		CHECK(!stock_target(5).play_row && !stock_target(6).play_row); // the game reads SMASH and MOVE in the current row...
+		CHECK(prompt_target(5).play_row && prompt_target(6).play_row); // ... the fix in play's
+		CHECK(!prompt_target(4).play_row && !prompt_target(8).play_row && !prompt_target(0x15).play_row && !prompt_target(0x18).play_row); // ATTACK = MENU_ACCEPT, GUARD = MENU_SUBTRACT: as the game
+
+		// The pad's names: the console layout pad_bindings.cpp gives.
+		CHECK(pad_label(0x16, false) == "[A]" && pad_label(0x17, false) == "[B]" && pad_label(0x18, false) == "[Y]" && pad_label(0x15, false) == "[X]");
+		CHECK(pad_label(0x16, true) == "A" && pad_label(0x17, true) == "B" && pad_label(0x18, true) == "Y" && pad_label(0x15, true) == "X");
+		CHECK(pad_label(0x1c, true) == "[RT]" && pad_label(0x1b, true) == "[LT]" && pad_label(0x1a, true) == "[RB]" && pad_label(0x19, true) == "[LB]");
+		CHECK(pad_label(0x1d, true) == "[Back]" && pad_label(0x1e, true) == "[Start]" && pad_label(0x1f, true) == "[LS]" && pad_label(0x20, true) == "[RS]");
+		CHECK(pad_label(20, true) == "[D-pad Up]" && pad_label(19, true) == "[D-pad Down]" && pad_label(18, true) == "[D-pad Left]" && pad_label(17, true) == "[D-pad Right]");
+		CHECK(pad_label(4, true) == "[LS Up]" && pad_label(3, true) == "[LS Down]" && pad_label(2, true) == "[LS Left]" && pad_label(1, true) == "[LS Right]"); // Forward: Y below centre
+		CHECK(pad_label(12, true) == "[RS Up]" && pad_label(11, true) == "[RS Down]" && pad_label(6, true) == "[RS Left]" && pad_label(5, true) == "[RS Right]");
+		CHECK(pad_label(0x21, true) == "[Button 13]" && pad_label(7, true) == "[Axis 4+]" && pad_label(16, true) == "[Axis 8-]" && pad_label(0, true) == "[???]");
+		const auto table = label_colours();
+		CHECK(table['A'] == 1014 && table['B'] == 1016 && table['X'] == 1015 && table['Y'] == 1017);
+		CHECK(table['E'] == 1041 && table[0xa4] == 1041 && table[0] == 1041 && std::count(table.begin(), table.end(), std::uint16_t{1041}) == 252);
+
+		// The slot shown. Player 1 in the team menu's row as 0x61b030 leaves it: HighAttack KP6 (slot 0), the pad's
+		// B (slot 1), the menus' Esc (slot 2); LowAttack the pad's A and the menus' J; Pause Enter, KP Enter in slot 3.
+		fake_map team;
+		team.set(5, 0, 1, 0x4d);
+		team.set(5, 1, 3, 0x17);
+		team.set(5, 2, 1, 0x01);
+		team.set(4, 1, 3, 0x16);
+		team.set(4, 2, 1, 0x24);
+		team.set(0x11, 2, 1, 0x1c);
+		team.set(0x11, 3, 1, 0x9c);
+		team.set(41, 0, 1, 0x0c); // QuickPower11, the last action
+		const auto smash = read_bindings(team.data(), 5);
+		CHECK(smash[0].device == 1 && smash[0].control == 0x4d && smash[1].device == 3 && smash[1].control == 0x17 && smash[2].control == 1 && smash[3].device == 0);
+		CHECK(stock_slot(smash) == 2);    // the game: [Esc]
+		CHECK(keyboard_slot(smash) == 2); // the keyboard in a menu row: the menu's key, as the game
+		CHECK(pad_slot(smash) == 1);      // the pad: B
+		CHECK(pad_slot(read_bindings(team.data(), 4)) == 1 && keyboard_slot(read_bindings(team.data(), 4)) == 2);
+		CHECK(stock_slot(read_bindings(team.data(), 0x11)) == 2 && pad_slot(read_bindings(team.data(), 0x11)) == 2); // no pad binding: the keyboard's
+		CHECK(stock_slot(read_bindings(team.data(), 7)) == -1 && pad_slot(read_bindings(team.data(), 7)) == -1 && keyboard_slot(read_bindings(team.data(), 7)) == -1);
+		CHECK(read_bindings(team.data(), 42)[0].device == 0 && read_bindings(team.data(), -1)[0].device == 0 && read_bindings(team.data(), 41)[0].control == 0x0c);
+		CHECK(has_keyboard(team.data()) && pad_of(team.data()) == 0);
+		// Row 0, the bindings of play: KP6 first for the keyboard.
+		fake_map play;
+		play.set(5, 0, 1, 0x4d);
+		play.set(5, 1, 3, 0x17);
+		CHECK(keyboard_slot(read_bindings(play.data(), 5)) == 0 && pad_slot(read_bindings(play.data(), 5)) == 1);
+		// Player 2: the second pad only; the game's own order shows it too.
+		fake_map second;
+		second.set(6, 0, 4, 0x18);
+		CHECK(keyboard_slot(read_bindings(second.data(), 6)) == 0 && stock_slot(read_bindings(second.data(), 6)) == 0 && !has_keyboard(second.data()) && pad_of(second.data()) == 1);
+		// A keyboard binding after a pad one: the keyboard shows it.
+		fake_map mixed;
+		mixed.set(6, 0, 3, 0x18);
+		mixed.set(6, 1, 2, 0x01);
+		CHECK(keyboard_slot(read_bindings(mixed.data(), 6)) == 1 && stock_slot(read_bindings(mixed.data(), 6)) == 0 && pad_slot(read_bindings(mixed.data(), 6)) == 0);
+		fake_map none;
+		CHECK(!has_keyboard(none.data()) && pad_of(none.data()) == -1);
+
+		// Which device: an input object as the poll leaves it.
+		std::vector<std::uint8_t> input(input_size, 0);
+		const auto put = [&](const std::size_t offset, const std::uint32_t value) { std::memcpy(input.data() + offset, &value, 4); };
+		const auto pad_at = [](const int pad, const bool now) { return (now ? pad_now : pad_before) + pad_stride * static_cast<std::size_t>(pad); };
+		const auto settle = [&] {
+			std::memcpy(input.data() + keyboard_before, input.data() + keyboard_now, 256);
+			std::memcpy(input.data() + mouse_buttons_before, input.data() + mouse_buttons_now, 4);
+			for (int p = 0; p < pad_count; ++p) std::memcpy(input.data() + pad_at(p, false), input.data() + pad_at(p, true), pad_stride);
+		};
+		for (int p = 0; p < pad_count; ++p) put(pad_at(p, true) + pad_pov, 0xffffffff);
+		settle();
+		activity seen;
+		put(pads_read, 1); // pad 0 read
+		seen.sample(input.data());
+		CHECK(seen.frame == 1 && seen.keyboard == 0 && seen.pads[0] == 0 && seen.pads_present == 1);
+		CHECK(choose(mode::automatic, true, 0, seen) == shown::pad);       // nothing pressed yet, the pad connected
+		CHECK(choose(mode::automatic, true, 1, seen) == shown::keyboard);  // its pad not read
+		CHECK(choose(mode::automatic, true, -1, seen) == shown::keyboard); // no pad bindings
+		CHECK(choose(mode::automatic, false, 0, seen) == shown::pad);      // no keyboard bindings
+		CHECK(choose(mode::pad, true, -1, seen) == shown::pad && choose(mode::keyboard, true, 0, seen) == shown::keyboard);
+		input[keyboard_now + 0x12] = 0x80; // E
+		seen.sample(input.data());
+		CHECK(seen.keyboard == 2 && choose(mode::automatic, true, 0, seen) == shown::keyboard);
+		settle();
+		seen.sample(input.data()); // E held: nothing new
+		CHECK(seen.keyboard == 2 && seen.frame == 3);
+		input[pad_at(0, true) + pad_buttons + 1] = 0x80; // A
+		seen.sample(input.data());
+		CHECK(seen.pads[0] == 4 && choose(mode::automatic, true, 0, seen) == shown::pad);
+		settle();
+		input[mouse_buttons_now] = 0x80; // a click
+		seen.sample(input.data());
+		CHECK(seen.keyboard == 5 && choose(mode::automatic, true, 0, seen) == shown::keyboard);
+		settle();
+		put(pad_at(0, true) + pad_pov, 0); // the D-pad up
+		seen.sample(input.data());
+		CHECK(seen.pads[0] == 6 && choose(mode::automatic, true, 0, seen) == shown::pad);
+		settle();
+		input[keyboard_now + 0x1c] = 0x80; // Enter
+		seen.sample(input.data());
+		settle();
+		put(pad_at(0, true) + pad_axes + 4, static_cast<std::uint32_t>(-400)); // the left stick up, not half way
+		seen.sample(input.data());
+		CHECK(seen.pads[0] == 6 && choose(mode::automatic, true, 0, seen) == shown::keyboard);
+		settle();
+		put(pad_at(0, true) + pad_axes + 4, static_cast<std::uint32_t>(-900)); // past half way
+		seen.sample(input.data());
+		CHECK(seen.pads[0] == 9 && choose(mode::automatic, true, 0, seen) == shown::pad);
+		settle();
+		input[pad_at(3, true) + pad_buttons] = 0x80; // pad 3 pressed but not read this frame: not counted
+		seen.sample(input.data());
+		CHECK(seen.pads[3] == 0);
+		put(pads_read, 0); // pad 0 unplugged
+		seen.sample(input.data());
+		CHECK(seen.pads_present == 0 && choose(mode::automatic, true, 0, seen) == shown::keyboard);
+
+		// The patch on its own: the writes, and the colour stub run.
+		addresses fake;
+		fake.label = 0x10001000;
+		fake.poll = 0x10002000;
+		fake.colour_stub = 0x10003000;
+		fake.wheel = {0x10004000, 0x10004008, 0x10004010};
+		const auto writes = writes_for(fake);
+		CHECK(writes.size() == 6 && writes[0].va == label_call && writes[1].va == poll_call && writes[5].va == colour_site && writes[5].bytes.size() == colour_site_size);
+		CHECK((writes[0].bytes == std::vector<std::uint8_t>{0xe8, 0xc2, 0x38, 0xb4, 0x0f})); // call 0x10001000 from 0x4bd739
+		CHECK((writes[2].bytes == std::vector<std::uint8_t>{0x00, 0x40, 0x00, 0x10}) && writes[3].va == wheel_tokens + 4 && writes[4].va == wheel_tokens + 8);
+		fake.colour_stub = 0;
+		CHECK(writes_for(fake).size() == 5);
+		auto* code = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+		CHECK(code != nullptr);
+		if (code)
+		{
+			const auto stub = colour_stub(static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(table.data())));
+			std::memcpy(code + 0x80, stub.data(), stub.size());
+			// push ebx; push esi; mov bl, [esp+0xc]; mov esi, [esp+0x10]; sub esp, 0x100; mov edx, 0x12345678; call stub;
+			// movzx eax, word [esp+esi*2+0x80]; cmp edx, 0x12345678; je +5; mov eax, -1; add esp, 0x100; pop esi; pop ebx; ret
+			std::vector<std::uint8_t> thunk{0x53, 0x56, 0x8a, 0x5c, 0x24, 0x0c, 0x8b, 0x74, 0x24, 0x10, 0x81, 0xec, 0x00, 0x01, 0x00, 0x00, 0xba, 0x78, 0x56, 0x34, 0x12, 0xe8, 0, 0, 0, 0};
+			const std::uint32_t rel = 0x80 - static_cast<std::uint32_t>(thunk.size());
+			std::memcpy(thunk.data() + thunk.size() - 4, &rel, 4);
+			thunk.insert(thunk.end(), {0x0f, 0xb7, 0x84, 0x74, 0x80, 0x00, 0x00, 0x00, 0x81, 0xfa, 0x78, 0x56, 0x34, 0x12, 0x74, 0x05, 0xb8, 0xff, 0xff, 0xff, 0xff,
+			                           0x81, 0xc4, 0x00, 0x01, 0x00, 0x00, 0x5e, 0x5b, 0xc3});
+			std::memcpy(code, thunk.data(), thunk.size());
+			FlushInstructionCache(GetCurrentProcess(), code, 0x1000);
+			CHECK(run_colour_stub(code, 'A', 0) == 1014 && run_colour_stub(code, 'B', 3) == 1016 && run_colour_stub(code, 'X', 17) == 1015 && run_colour_stub(code, 'Y', 63) == 1017);
+			CHECK(run_colour_stub(code, 'E', 5) == 1041 && run_colour_stub(code, 0xa4, 1) == 1041);
+			VirtualFree(code, 0, MEM_RELEASE);
+		}
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the prompts' bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](const DWORD va) { return image + (va - image_base); };
+
+		const guard* mismatch = first_mismatch(image);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
+		CHECK(mismatch == nullptr);
+
+		// The action table against 0x619c40's jump table: mov eax, imm32 / xor eax, eax / or eax, -1.
+		bool actions_ok = true;
+		for (int c = 0; c < static_cast<int>(actions.size()); ++c)
+		{
+			const auto* target = at(operand_at(at(0x619d54 + 4 * static_cast<DWORD>(c)), 4));
+			const int value = target[0] == 0xb8 ? static_cast<int>(operand_at(target + 1, 4)) : target[0] == 0x33 ? 0 : target[0] == 0x83 && target[2] == 0xff ? -1 : -99;
+			actions_ok &= value == action_of(c);
+		}
+		CHECK(actions_ok && at(0x619d4d)[0] == 0x83); // anything above 0x33: -1
+		// 0x619e30's own pre-map: the byte table of its switch on code - 0x34 (4 GUAR, 20 others, 4 SOL, GUAR9 ATTAC9 SMAS9 SOL9).
+		CHECK(std::memcmp(at(0x619fb8), "\x00\x00\x00\x00\x06\x06\x06\x06\x06\x06\x06\x06\x06\x06\x06\x06\x06\x06\x06\x06\x06\x06\x06\x06\x01\x01\x01\x01\x02\x03\x04\x05", 32) == 0);
+
+		// Maps built by the game's own setter: the layout the rules read, the pad the game keeps at +0x964.
+		test_block map(0x980);
+		CHECK(run_set_binding(at(0x6297a0), map.data(), 5, 0, 1, 0x4d) && run_set_binding(at(0x6297a0), map.data(), 5, 1, 3, 0x17) &&
+		      run_set_binding(at(0x6297a0), map.data(), 5, 2, 1, 0x01) && run_set_binding(at(0x6297a0), map.data(), 41, 3, 1, 0x9c));
+		const auto game_smash = read_bindings(map.data(), 5);
+		CHECK(game_smash[0].device == 1 && game_smash[0].control == 0x4d && game_smash[1].device == 3 && game_smash[1].control == 0x17 && game_smash[2].control == 1);
+		CHECK(read_bindings(map.data(), 41)[3].control == 0x9c && map.dword(0) == 42 && pad_of(map.data()) == 0 && has_keyboard(map.data()) && map.slack_untouched());
+		int device = -1, control = -1;
+		CHECK(run_get_binding(at(0x6294b0), map.data(), 5, 1, device, control) && device == 3 && control == 0x17);
+		CHECK(stock_slot(game_smash) == 2 && pad_slot(game_smash) == 1 && pad_label(game_smash[1].control, true) == "B");
+		CHECK(run_set_binding(at(0x6297a0), map.data(), 5, 1, 0, 0) && run_no_argument(at(0x6295a0), map.data()) && pad_of(map.data()) == -1); // the pad unbound: +0x964 back to 0
+
+		// The change on a copy: exactly the writes' bytes, the calls landing where they should.
+		std::vector<std::uint8_t> before(image, image + image_size);
+		addresses mine;
+		mine.label = 0x10001000;
+		mine.poll = 0x10002000;
+		mine.colour_stub = 0x10003000;
+		mine.wheel = {0x10004000, 0x10004008, 0x10004010};
+		const auto patch = writes_for(mine);
+		apply(image, patch);
+		std::set<DWORD> changed, expected;
+		for (DWORD i = 0; i < image_size; ++i)
+		{
+			if (image[i] != before[i]) changed.insert(image_base + i);
+		}
+		for (const auto& w : patch)
+		{
+			for (std::size_t b = 0; b < w.bytes.size(); ++b)
+			{
+				if (w.bytes[b] != before[w.va - image_base + b]) expected.insert(w.va + static_cast<DWORD>(b));
+			}
+		}
+		CHECK(changed == expected);
+		const auto call_target = [&](const DWORD va) { return at(va)[0] == 0xe8 ? va + 5 + operand_at(at(va) + 1, 4) : 0; };
+		CHECK(call_target(label_call) == mine.label && call_target(poll_call) == mine.poll && call_target(colour_site) == mine.colour_stub);
+		CHECK(std::memcmp(at(colour_site + 5), "\x0f\x1f\x44\x00\x00", 5) == 0 && std::memcmp(at(colour_site + 10), "\x66\xc7\x84\x74\x82", 5) == 0); // then the game's own "end colour" word
+		CHECK(operand_at(at(wheel_tokens), 4) == mine.wheel[0] && operand_at(at(wheel_tokens + 12), 4) == 0x6a275c); // $MOVE stays
+		mismatch = first_mismatch(image);
+		CHECK(mismatch && mismatch->va == 0x4bd720); // patched: the guards no longer match
+		std::memcpy(image, before.data(), image_size);
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
 }
 
 int main(const int argc, char** argv)
@@ -3861,6 +4181,7 @@ int main(const int argc, char** argv)
 	check_postgame_rules();
 	check_main_menu_rules();
 	check_xp_curve_rules();
+	check_pad_prompts_rules();
 	check_d3d8_modes();
 
 	const auto log = read_file(module_dir() / "xml2-fix.log");
@@ -3878,6 +4199,10 @@ int main(const int argc, char** argv)
 	CHECK(log.find("postgame:") == std::string::npos); // no [Game] PostgameScript: not a word, nothing patched
 	CHECK(log.find("main menu:") == std::string::npos); // no [Game] MainMenuItems: not a word, nothing patched
 	CHECK(log.find("xp curve:") == std::string::npos);  // no [Game] XPCurve: not a word, nothing patched
+	// No [Input]: Prompts is auto, but this isn't XMen2.exe - nothing patched.
+	CHECK(log.find("prompts: XMen2.exe isn't loaded at 0x400000 (not the game?) - the game's own prompts") != std::string::npos ||
+	      log.find("prompts: 0x004BD720 isn't the retail code") != std::string::npos);
+	CHECK(log.find("prompts: button prompts show") == std::string::npos);
 	CHECK(log.find("xmenlegpc.master.gamespy.com -> xmenlegpc.master.openspy.net (resolved)") != std::string::npos);
 	if (pads > 0)
 	{

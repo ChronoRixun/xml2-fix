@@ -56,6 +56,18 @@ Hold **RT** with a face button for powers, as on console. In menus, **A** accept
 - **Players 2–4** get pads 2–4.
 - The fix only fills in bindings that are empty or still on the game's defaults (or on a layout an earlier version of the fix wrote). Anything you've customised is left alone, and you can rebind freely afterwards.
 
+### Button prompts
+
+The PC version names every prompt after the keyboard, pad or not: *[E] Talk to Jean*, *[P] Assign*, the tutorial hints, the skills screen's power wheel. With the fix, a player on a pad sees the pad's buttons, as on console: **A**, **B**, **X** and **Y** as the letter in its Xbox colour, the rest as *[LB]*, *[Start]*, *[D-pad Up]*. Each player's prompts follow the device they last pressed something on, so switching between keyboard and pad switches them too.
+
+The power wheel also shows the buttons that fire its powers in play: the stock game labels it with the team menu's own keys (*[Esc]* on the right, the menus' back key), not the ones you hold *Power* with in a fight.
+
+```ini
+[Input]
+Prompts=auto       ; auto (the default): the device each player last used; pad; keyboard; off: the game's own prompts
+PromptColors=1     ; 0: every pad button as [A]-style text
+```
+
 **Controllers:** tested with an Xbox Wireless Controller (Series X|S) over Bluetooth. Other Xbox One / Series and Xbox 360 pads, and third-party XInput pads, use the same path and are expected to work. PlayStation and Switch pads work through a tool that presents them as an Xbox pad (Steam Input, DS4Windows); untested. Tried one? Please [open an issue](https://github.com/ChronoRixun/xml2-fix/issues) and say how it went.
 
 ## 🌐 Online
@@ -205,6 +217,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 - **GameSpy is gone,** and with it the servers the game looks up by name.
 - **Fullscreen only.** The game hard-codes exclusive fullscreen and builds its resolution list from the Direct3D 8 mode list into 20 fixed slots with no bounds check - a modern adapter offers more sizes than that, and the rest overwrite the default key bindings stored right after the table; the engine's own windowed path is never used on PC.
 - **60 fps, burning a core.** The game's frame function rewrites its minimum frame time to 1/60 s every frame (so the engine's `max_fps` setting can never matter) and busy-waits until it has passed. Fullscreen presents never wait for the vertical blank either. Its options panel has no row for any of this, and two hundred empty pixels where one could be.
+- **Keyboard prompts for everyone.** The label behind every on-screen prompt shows a player's first bound key in a fixed order in which the keyboard comes before the pad, and inside menus a fixed menu key first of all, which is why the skills screen's power wheel offers *[Esc]* for Smash.
 
 ## 🛠️ How the fix works
 
@@ -218,6 +231,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 6. **Puts those settings in the game's own options panel.** *Advanced Options* is hand-drawn Direct3D UI (Beenox's `BXIG` widgets), not a menu file, so the fix builds its rows with the game's own option-cycler class, exactly as the game builds its *FSAA* row, from a function it puts in place of the panel builder's final call; three more call-site replacements in the panel's close function persist Accept, Cancel and Revert. The engine draws, animates and navigates the rows; the fix only answers their callbacks. Every call site's bytes are checked first, so on any other build the panel is left as it is.
 7. **Gives the resolution list room when asked to** (`ResolutionList=all`). The game `sprintf`s its list into 20 twelve-byte slots in its data and reads them back through the count next to them, so the seven instructions that carry the table's address (the writer, the slider, Accept, the builder's and the revert's index searches, the close function's two reads) get the address of a 64-slot table in the DLL instead, again after a byte check of each, and only once the engine's Direct3D is hooked. The list itself comes from the fix's `IDirect3D8::GetAdapterModeCount`/`EnumAdapterModes` hooks and never exceeds the table in use.
 8. **Adds script functions for a mod's campaign when asked to** ([Mods](#-mods-with-their-own-campaign)). The game registers its 289 script functions once at start-up, by pushing its table and its count and handing them to its script system; before any of the game's code runs, the fix points those two pushes at a copy of the table with its eight functions after the game's own. They do what the game's own code does for its party changes (the party slot setter, the side-mission stack's `pushsidemission`, `restorelastzone` and `cancelsidemission`, a hero's costume byte), calling the game's functions.
+9. **Names the pad's buttons in prompts.** Every prompt goes through one function that turns an action into its label; the game asks it for the first bound of a player's binding slots in a fixed order in which the keyboard always comes before the pad. The fix replaces that one call with its own, which reads the same bindings but picks the pad's for a player on a pad, and names it after the pad layout above. It learns who uses what from the input state the game has just read each frame (keyboard, mouse buttons, pads), and colours the face buttons through the one instruction that gives a single-character label its colour. Every byte involved is checked first; on any other build the prompts are left as they are.
 
 ```mermaid
 flowchart LR
