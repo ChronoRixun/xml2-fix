@@ -91,7 +91,7 @@ PromptColors=1     ; 0: every pad button as [A]-style text
 
 ## 🌐 Online
 
-> **Work in progress.** The redirect below works, but XML2's online lobby isn't usable on OpenSpy yet: the game lists games by region, and OpenSpy has no regions set up for it, so the region list comes up empty. Details and next steps: [docs/online-status.md](docs/online-status.md).
+> **Status:** hosting works on OpenSpy (the game registers and shows in Join Game's list; the PC version has no region step), and host-to-join co-op sessions were tested end to end. A join across two different home networks (NAT traversal) hasn't been tested yet - reports welcome. Details: [docs/online-status.md](docs/online-status.md).
 
 The game finds servers and other players through GameSpy, which no longer exists. [OpenSpy](https://openspy.net) runs community replacements for GameSpy's services, and the fix points the game's lookups there (`xmenlegpc.master.gamespy.com` → `xmenlegpc.master.openspy.net`, and so on).
 

@@ -1,83 +1,56 @@
 # Online play: status and next steps
 
-_Last updated 2026-09-28._
+_Last updated 2026-09-29._
 
-## What works
+## What works (tested)
 
-- The fix redirects every GameSpy host the game looks up to OpenSpy, and they all resolve:
-  `xmenlegpc.available`, `xmenlegpc.master`, `xmenlegpc.ms<N>`, `natneg1`, `natneg2`.
-- In testing, the game reached the online menu and looked up `xmenlegpc.available.openspy.net`
-  and `xmenlegpc.ms7.openspy.net` successfully.
-- The game's own address (the Play Online screen's LocalIP, its game socket on UDP 5165, and the
-  heartbeat's `localip0`) is the first address Windows gives for the PC's name, which on a PC with
-  WSL/Hyper-V/Docker/VPN adapters is often a virtual one. The fix now puts the default route's
-  address first (`[Online] LocalIP=auto`, local_ip_rules.hpp has the exe's call sites).
+- **The redirect.** The fix points every GameSpy host the game looks up at OpenSpy, and they
+  all resolve: `xmenlegpc.available`, `xmenlegpc.master`, `xmenlegpc.ms<N>`, `natneg1`, `natneg2`.
+- **Hosting on openspy.net.** With the fix, Play Online -> Host Game -> Post Game registers the
+  game (challenge and keepalive replies from OpenSpy's master), and it appears on
+  openspy.net's server list for "X-Men Legends PC" (`xmenlegpc`).
+- **Joining and playing.** Two copies of the game on one PC, through a private OpenSpy stack:
+  Join Game -> Search listed the hosted game, Join put both in the lobby, and Start Game ran the
+  campaign in sync for both players (1P and 2P heroes). The Join screen also offers *Connect by
+  IP* ([Del]) and finds games on the same network by broadcast (UDP 5165).
+- **No region step on PC.** Join Game's Search asks the server list for games with
+  `groupid is null`; the PC version never shows a Region List. OpenSpy having no groups for
+  `xmenlegpc` therefore doesn't matter on PC (the old "empty Region List" reports are from the
+  PS2 version and from 2012-2013).
 
-## What doesn't work yet: the lobby
+## What was wrong: the game's own address
 
-XML2's online mode is built on the GameSpy **Peer** SDK (lobby rooms on GameSpy's IRC-style chat
-server). The executable contains the whole chat command table (`PRIVMSG`, `JOIN`, numeric
-replies) and Peer's room-name format `#GSP!%s!…`.
+The game's own address (the Play Online screen's LocalIP, which is display-only; its game socket
+on UDP 5165; the heartbeat's `localip0`) is the first address Windows gives for the PC's name
+(`gethostbyname("localhost")` -> the PC's name -> `h_addr_list[0]`, 0x615d30). On a PC with
+WSL / Hyper-V / Docker / VPN adapters that is often a virtual adapter's address, from which the
+heartbeats never reach the internet: the game then never registers, with no error on screen.
+The fix puts the address Windows reaches the internet from first (`[Online] LocalIP=auto`, the
+default; `local_ip_rules.hpp` has the call sites). With it, hosting registered on openspy.net;
+without it, the same PC's heartbeats got no reply.
 
-1. The **Region List** screen is Peer's list of *group rooms*. The game asks the server-list
-   service (`xmenlegpc.ms<N>`) for the groups of `xmenlegpc`, with the fields
-   `\hostname\numwaiting\maxwaiting\numservers\numplayers`.
-2. Picking a region joins that group room on the chat server, and the game list is then
-   filtered with `groupid=<id>`. Hosted games advertise their `groupid` in their heartbeats.
+## Not tested yet
 
-OpenSpy supports groups: its server-list service has a `GetGroups` query, and its database
-has a group table (`gameid`, `groupid`, `maxwaiting`, `name`, `other`), with lobbies set up
-for other games such as the Tony Hawk series. **No groups exist for `xmenlegpc`**, so the
-Region List comes back empty and no games can be found. The PS2 Online Gaming community
-reports the same for the PS2 version: the region list is blank, and hosted games don't show
-on OpenSpy's status pages.
+- **A join across two different home networks.** Both tested players were on one PC. A join
+  from another network goes through NAT negotiation (`natneg1`/`natneg2`, UDP 27901); if it
+  fails, *Connect by IP* over a VPN such as Tailscale is the fallback. Reports welcome.
+- Three or four players.
 
-`[Debug] LogNetwork=1` in `xml2-fix.ini` logs the queries the game sends and the size of
-each reply. One pass through the online menu shows the exact group query and how much
-OpenSpy returns.
+## Notes
 
-**No chat server.** Despite the Peer code, XMen2.exe never connects to GameSpy's chat server:
-it has no `peerchat` host name, and its only TCP connection is the server list's (`connect`
-at 0x63f714, to `%s.ms%d.gamespy.com` port 28910); its other sockets are UDP (QR2, natneg,
-the game's own traffic). So the Region List needs only the server list's groups, and hosted
-games only their QR2 heartbeats with `groupid` - nothing on OpenSpy's peerchat.
+- `[Debug] LogNetwork=1` in `xml2-fix.ini` logs the queries the game sends and the size of each
+  reply.
+- **No chat server.** Despite the GameSpy Peer code in the executable, XMen2.exe never connects to
+  GameSpy's chat server: it has no `peerchat` host name, and its only TCP connection is the server
+  list's (`connect` at 0x63f714, to `%s.ms%d.gamespy.com` port 28910); its other sockets are UDP
+  (QR2, natneg, the game's own traffic).
+- **Mods that are another game** (such as the X-Men Legends I port) should set
+  `[Online] GameVersion` so their hosts and XML2's never see each other's games.
 
 ## Testing against a private OpenSpy
 
-`[Online] Server=127.0.0.1` sends every GameSpy name the game looks up to one address, so a
-private OpenSpy stack (their `openspy/compose` images in Docker, ports on 127.0.0.1 only) can
-stand in for openspy.net without DNS. With three `xmenlegpc` groups in its `grouplist` table
-(gameid 1158: "North America", "Europe", "Rest of World", maxwaiting 100) a group query with the
-game's field list gets a 197-byte (encrypted) reply, against 154 bytes for a game with no groups.
-Two games on one PC (two copies of the game folder) can each be driven through their own
-test pipe with `[Test] PipeName`.
-
-## Options
-
-1. **Ask OpenSpy to add regions for X-Men Legends II** (recommended first step: it fixes the
-   PC and PS2 versions for everyone, with no server of our own). Draft request below.
-2. **Self-host OpenSpy** (their `openspy/compose` Docker setup) with XML2 groups added to our
-   own database, and point players at it with `xml2-fix.ini` → `[Online] Domain=`. Players
-   need a public server and wildcard DNS (`*.our-domain` → server), or a fix option that maps
-   every GameSpy host to one address. OpenSpy's repositories have no licence: we can run
-   their software but must not copy their code.
-3. **Our own lobby service**, as part of Ultimate Legends' planned relay, written from the
-   documented GameSpy protocols. It's the most work, but gives full control and works with
-   the launcher's community features.
-
-## Draft request to OpenSpy
-
-> **X-Men Legends II: Rise of Apocalypse (PC, `xmenlegpc`): region list is empty**
->
-> Hi! XML2 PC (and PS2, per the PS2 Online Gaming list) reaches OpenSpy fine, but its online
-> lobby uses GameSpy Peer group rooms: the first screen is a Region List built from the
-> group query for `xmenlegpc` (fields `\hostname\numwaiting\maxwaiting\numservers\numplayers`),
-> and game lists are then filtered by `groupid`. There are no groups for `xmenlegpc` on
-> OpenSpy, so the list is empty and nobody can host or join.
->
-> Could you add a few group rooms for `xmenlegpc`, for example "North America",
-> "Europe" and "Rest of World", with a sensible `maxwaiting` (say 100)? We can test straight
-> away and report back. We maintain a small open-source fix for the PC version that points
-> the game at OpenSpy: github.com/ChronoRixun/xml2-fix.
->
-> Thanks for keeping these games alive!
+`[Online] Server=<IPv4>` sends every GameSpy name the game looks up to one address, so a private
+OpenSpy stack (their `openspy/compose` images in Docker) can stand in for openspy.net without DNS.
+The game binds its game socket to its LocalIP, so publish the stack's ports on an address that
+LocalIP can reach (with `LocalIP` set to match), not only on 127.0.0.1. Two games on one PC (two
+copies of the game folder) can each be driven through their own test pipe with `[Test] PipeName`.
