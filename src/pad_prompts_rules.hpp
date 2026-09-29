@@ -118,7 +118,7 @@ namespace pad_prompts_rules
 	constexpr std::size_t pad_now = 0x4f0, pad_before = 0x4f0 + 0xaa0, pad_stride = 0x110; // DIJOYSTATE2
 	constexpr std::size_t pads_read = 0x129cc;                                         // bit i: pad i's state was read
 	constexpr int pad_count = 10;
-	constexpr std::size_t input_size = 0x12a10; // what 0x61bae0 allocates
+	constexpr std::size_t input_size = 0x12a10; // what 0x6176e0 allocates for it
 	// DIJOYSTATE2
 	constexpr std::size_t pad_axes = 0x0, pad_pov = 0x20, pad_buttons = 0x30;
 	constexpr int pad_axis_count = 6, pad_button_count = 128;
