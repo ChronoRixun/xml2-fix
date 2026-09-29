@@ -1,6 +1,7 @@
 # In-game display options for X-Men Legends II - research findings and implementation plan
 
-Status: research complete (read-only spike, 2026-09-27/28); **phase 1 implemented** (frame cap + VSync from
+Status: research complete (read-only spike, 2026-09-27/28); **menus at 60 fps implemented** (2026-09-28, see
+"Menus at 60 fps"); **phase 1 implemented** (frame cap + VSync from
 the ini, `src/frame_rate.cpp` / `src/frame_rate_rules.hpp`, VSync in `rewrite_present`; see "Decisions" and
 1.6 for the windowed-vsync measurement); **phase 2 implemented** (the rows, `src/options_menu.cpp` /
 `src/options_menu_rules.hpp`) - see "Phase 2 as implemented"; **phase 3 implemented** (the 64-slot resolution table, `src/resolution_list.cpp` /
@@ -53,6 +54,70 @@ key only when the user changed that row (Accept), with `WritePrivateProfileStrin
   full second), so the cap is verifiable in game without screenshots.
 - Default-off verified by `xml2_test`: with none of the keys set the display fix returns before hooking anything
   ("display: as the game has it (no [Display] Mode, FrameRate or VSync in xml2-fix.ini)").
+
+### Menus at 60 fps (2026-09-28, after the first in-game run at 180)
+
+Reported in game at `FrameRate=180` (harness `_nb2` and Owen, borderless): holding Down 300 ms in the pause menu
+moved the highlight 1 item at 60 fps and 2 at 180; the XML1 main menu's highlight disk "spun faster", the
+highlight skipped, *Begin Story* was hard to hit. Gameplay was fine (same walk distance per second at 60 and 180).
+
+**Read, not guessed (Ghidra: `docs/research/decomp_fps1.c` .. `decomp_fps8.c`).** Nothing in the menu layer counts
+frames; it all runs on the menu manager's time:
+
+| What | Where | Driven by |
+| --- | --- | --- |
+| menu time and dt | `CClient::frame` 0x4021c5 -> `CMenuMgr` vt+0x2c 0x5d4570: `+0x86048 = dt`, `+0x86044 += dt` (skipped when dt <= 0) | the frame's real dt (game time, `getTime(1)`) |
+| navigation auto-repeat (every menu, popup and conversation choice) | mgr vt+0x1f8 0x5da1a0: fires on the press, again after 0.3 s held (0x3e99999a, 0x5da1f2), then every 0.1 s (0x6e70a4); x2 on a list after 1.4 s (0x68602c) | sums of dt (vt+0x28 0x5d81e0) |
+| menu model items (loops, one-shots) | item vt+0x20 0x5c5060 -> 0x5c4cf0: position += dt / length | dt |
+| rigid (igTransformSequence) model animations, e.g. XML1's `model_button_highlight` disk | `CRigidAnimCtrl` 0x5721f0: bias + scale * menu time, or Alchemy's global timer (QPC) | time |
+| text glow / highlight fade | 0x5d8ae0 (sin of the menu time), 0x5c6030 (dt) | time |
+| main menu idle timer | `CMenuMain` vt+0x38 0x5c9640: `+0x192c += dt` | dt |
+| menu effects | mgr vt+0x3c 0x5d6d60 -> effect manager vt+0x10(time, max(dt, 1 ms)) | dt |
+| Cerebro backdrop camera (`cameraFollowMotionPath`) | `CCamera` vt+0xec 0x448390, update 0x447730: game time minus the path's start | time |
+| mouse button held | 0x61a600: 0.2 s of game time | time |
+| conversation choices | 0x45d1a0: the same navigation (0x45d405) | dt |
+| HUD | 0x59f1a0 hands its parts a time (vt+0x8c); messages fade by time (0x5a7a30) | time |
+
+The 300 ms measurement sits exactly on the 0.3 s repeat delay: 300 ms of hold is 17-19 frames at 60 and 53-57 at
+180 depending on where the pipe's tick-count hold lands, so one or two moves at either rate. What does depend on
+the frame rate is the *sampling*: a direction fires on a frame where it is down and wasn't the frame before (the
+controller's edge, `CController` vt+0x18 0x550b70), with no debounce, and the sticks fire on crossing +-0.5
+(0x682ff4 / 0x680488) with no hysteresis (edge bytes 0x8b0ce0 / 0x8b0cd6). At 180 fps the game looks three
+times as often, so a d-pad contact bounce or a stick resting near 0.5 becomes a second press - the skipping
+highlight. Frame-counted timers to scale by dt (fix (a)): none found, so none patched.
+
+**Fix (b), implemented.** While a menu, popup or conversation is on screen the fix paces at 60 (at `FrameRate` when
+that is lower) and returns to `FrameRate` in play; `frame_rate::on_present` decides it every frame.
+"On screen" is the game's own test - `CClient::frame` skips its pause-button handling on exactly these three
+(0x401ef8): popup manager `[0x8b13ec]` vt+0x78 0x5e9e30 (popup `+0x403c`'s byte `+0x18 + i*0x1560 + 0x155d`
+bit 0, popup 0's when the index is out of range), `CMenuMgr` `[0x8aff18]` vt+0x204 0x5d8870 (stack count
+`+0x86068` > 0, first entry `+0x8605c`, and a current menu `+0x86090` or a pending name `+0x85db0`),
+`CConversationSystem` `[0x717aac]` vt+0x20 0x458010 (`+0x21b24` bit 1). The fix reads those fields directly (no
+calls, no getter that would construct the singletons), under SEH. Kept at `FrameRate`: movies (mgr vt+0x1b4
+0x5d8420, `+0x85cec` bit 5 - the stock loop skips its spin for them too, 0x401fb1) and the loading screen (the
+current menu's vtable is `CMenuLoading` 0x69fa1c): no input there, and pacing a load lower only slows it.
+All-or-nothing: 23 retail-byte guards (`frame_rate_rules::screen_guards`: the frame's test, the three getters,
+the constructors that store the objects and set their vtables, the four vtable slots, the four functions,
+CMenuLoading's RTTI); a mismatch logs `menus at <FrameRate> too - XMen2.exe doesn't have the expected code at ...`
+and every frame is paced at `FrameRate` as before. `xml2_test` runs the game's four functions from a mapped
+copy of the exe on blocks of its own (every menu case, 56 popup states, all 256 conversation flag bytes) and
+compares each answer with the fix's reading. Only when it matters: the spin is off and `FrameRate` is above 60
+or unlimited (`FrameRate=0` now hooks `Present` for it). Log: `frame rate: 180 fps, paced by the fix (...);
+the game's 60 fps spin is off; menus, popups and conversations at 60 fps`, then the first 12 switches
+(`frame rate: 60 fps while a menu is on screen`, `frame rate: 180 fps again (play)`). The pipe's `status`:
+`frame rate 180 fps (menus, popups and conversations at 60)`, or `(60 now: a menu, popup or conversation is up)`.
+
+**The borderless live-switch "lock-up".** Owen switched 60 -> 180 from the Advanced Options panel in borderless
+and the game locked up; the log ended at `frame rate: now 180 fps, paced by the fix from the next frame` - which
+is also the last line of a good run (nothing more was logged after a live change). Read again: `retarget`
+patches the spin's imm32 on the game thread (the instruction isn't executing), creates the timer, restarts the
+cadence; `on_present` waits at most one interval per frame (timer waits capped at 100 ms, re-planned every
+wake); the display mutex is recursive and not held by `Present`; the stock Accept applies no display change
+(1.3), so no `Reset` follows. No hang path found in the fix, and nothing in it differs between borderless and
+windowed. Two changes make a repeat both less likely and diagnosable: the switch happens in a menu, which now
+stays at 60, so the first 180 fps frame comes only in play; and the fps is logged 2 and 30 s after every live
+change (not only after the start), with each menu/play switch - a repeat's log shows whether frames were
+still being presented and where.
 
 ### Phase 2 as implemented (2026-09-28; hooks A-D)
 
@@ -735,8 +800,9 @@ values fall back to the default and are logged.
   hook on the next frame), not from the UI callback.
 - **Windowed vsync/limiter measurements** may show D3D8 already syncing in windowed mode; then "VSync" in
   borderless is informational only.
-- **Frame-rate-dependent code** at >60 fps (UNVERIFIED): watch camera lerps, UI fades, particle spawn
-  rates during the tour; the ini keeps 60 as the fullscreen default so the stock feel is unchanged.
+- **Frame-rate-dependent code** at >60 fps: gameplay measured fine at 180 (walk distance); the menu layer read
+  and found time-based, its input sampling not - menus, popups and conversations now run at 60 (see "Menus at
+  60 fps"). Still worth watching in the tour: camera lerps and particle spawn rates in play.
 - **Font glyphs**: keep labels ASCII; "Hz" fine, avoid `×`.
 - **The relocated table's address is an imm32 in game code**: the seven sites are verified by bytes that embed
   the absolute 0x6e9800, so a relocated (ASLR'd) or patched exe fails the check and keeps its own table (the list
