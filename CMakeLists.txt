@@ -20,6 +20,7 @@ add_library(xml2_fix SHARED
 	src/gamepad_fix.cpp
 	src/pad_profile.cpp
 	src/pad_bindings.cpp
+	src/pad_prompts.cpp
 	src/xinput_pad.cpp
 	src/iat_hook.cpp
 	src/openspy_redirect.cpp
@@ -50,5 +51,5 @@ set_target_properties(xml2_fix PROPERTIES OUTPUT_NAME dinput ARCHIVE_OUTPUT_NAME
 # Checks the built DLL the way the game loads it (imported from next to the executable).
 add_executable(xml2_test test/xml2_test.cpp src/frame_capture.cpp) # frame_capture: the back buffer copy, checked on a device of its own
 target_compile_definitions(xml2_test PRIVATE _WINSOCK_DEPRECATED_NO_WARNINGS)
-target_include_directories(xml2_test PRIVATE src) # display_rules.hpp, frame_rate_rules.hpp, options_menu_rules.hpp, resolution_rules.hpp, limits_rules.hpp, forced_teams_rules.hpp, postgame_rules.hpp, main_menu_rules.hpp, xp_curve_rules.hpp, test_input_rules.hpp, image_file.hpp: the decisions, checked without the game
+target_include_directories(xml2_test PRIVATE src) # display_rules.hpp, frame_rate_rules.hpp, options_menu_rules.hpp, resolution_rules.hpp, limits_rules.hpp, forced_teams_rules.hpp, postgame_rules.hpp, main_menu_rules.hpp, xp_curve_rules.hpp, pad_prompts_rules.hpp, test_input_rules.hpp, image_file.hpp: the decisions, checked without the game
 target_link_libraries(xml2_test PRIVATE xml2_fix dinput8.lib dxguid xinput ws2_32 winmm) # dinput8.lib: only for c_dfDIJoystick(2); winmm: timeBeginPeriod in the present timing
