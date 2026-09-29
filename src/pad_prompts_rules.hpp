@@ -147,18 +147,10 @@ namespace pad_prompts_rules
 		std::string error;
 	};
 
-	inline std::string_view trimmed(std::string_view s)
+	// The value without an inline comment, trimmed: the fix's one ini rule (ini_rules.hpp).
+	inline std::string_view trimmed(const std::string_view s)
 	{
-		if (const auto comment = s.find(';'); comment != std::string_view::npos)
-		{
-			s = s.substr(0, comment);
-		}
-		const auto first = s.find_first_not_of(" \t");
-		if (first == std::string_view::npos)
-		{
-			return {};
-		}
-		return s.substr(first, s.find_last_not_of(" \t") - first + 1);
+		return ini_rules::value_text(s);
 	}
 
 	inline std::string lower(std::string_view s)

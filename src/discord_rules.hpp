@@ -105,15 +105,11 @@ namespace discord_rules
 	}
 
 	// An ini value without a comment after it ("1   ; on by default" -> "1") or the spaces and tabs around
-	// it. GetPrivateProfileString hands the comment over with the value; the launcher cuts it the same way.
-	inline std::string_view value_text(std::string_view text)
+	// it: the fix's one ini rule (ini_rules.hpp), which the launcher follows too. GetPrivateProfileString
+	// hands the comment over with the value.
+	inline std::string_view value_text(const std::string_view text)
 	{
-		const auto comment = text.find(';');
-		if (comment != std::string_view::npos)
-		{
-			text = text.substr(0, comment);
-		}
-		return trim(text);
+		return ini_rules::value_text(text); // the fix's one rule
 	}
 
 	// A yes/no key of [Discord] (Enabled, ShowZone, ShowParty): 1/0, true/false, yes/no, on/off, in any
@@ -125,10 +121,7 @@ namespace discord_rules
 		{
 			return fallback;
 		}
-		const auto text = lowercase(value_text(*value));
-		if (text == "1" || text == "true" || text == "yes" || text == "on") return true;
-		if (text == "0" || text == "false" || text == "no" || text == "off") return false;
-		return fallback;
+		return ini_rules::flag(value).value_or(fallback); // the fix's one rule for switches
 	}
 
 	// What says which game this is. The port is XML1's content on XMen2.exe: its scripts are in
@@ -225,9 +218,9 @@ namespace discord_rules
 		std::string note;                   // a value the rules refused, for the log
 	};
 
-	// LargeImage: absent, the game's logo; empty or none, no images at all; else that asset. SmallImage:
-	// absent, the mode's badge; empty or none, no badge; else that asset wherever a badge shows. A value
-	// that isn't an asset key is ignored (as if absent).
+	// LargeImage: not set (absent or empty, as every key of the fix), the game's logo; none, no images at
+	// all; else that asset. SmallImage: not set, the mode's badge; none, no badge; else that asset
+	// wherever a badge shows. A value that isn't an asset key is ignored (as if not set).
 	inline images choose_images(const std::optional<std::string_view> large_value, const std::optional<std::string_view> small_value)
 	{
 		images chosen;
@@ -238,7 +231,11 @@ namespace discord_rules
 				return std::nullopt;
 			}
 			const auto text = value_text(*value);
-			if (text.empty() || lowercase(text) == "none")
+			if (text.empty())
+			{
+				return std::nullopt; // "LargeImage=   ; later": not set
+			}
+			if (lowercase(text) == "none")
 			{
 				return std::string();
 			}

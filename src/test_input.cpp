@@ -3,6 +3,7 @@
 #include "frame_capture.hpp"
 #include "frame_rate.hpp"
 #include "limits.hpp"
+#include "ini.hpp"
 #include "log.hpp"
 #include "test_input_rules.hpp"
 
@@ -587,21 +588,13 @@ namespace test_input
 
 	void install()
 	{
-		const auto ini = (logger::module_dir() / L"xml2-fix.ini").wstring();
-		enabled = GetPrivateProfileIntW(L"Test", L"InputPipe", 0, ini.c_str()) != 0;
+		enabled = ini::flag(L"Test", L"InputPipe", false);
 		if (!enabled)
 		{
 			return;
 		}
 
-		wchar_t name[256]{};
-		GetPrivateProfileStringW(L"Test", L"PipeName", L"", name, static_cast<DWORD>(std::size(name)), ini.c_str());
-		std::string name_text;
-		for (const wchar_t c : std::wstring(name))
-		{
-			name_text += c < 0x80 ? static_cast<char>(c) : '?'; // anything else isn't a pipe name character anyway
-		}
-		const auto pipe = choose_pipe(name_text);
+		const auto pipe = choose_pipe(ini::text(L"Test", L"PipeName").value_or("")); // non-ASCII comes as 0x7f: not a pipe name character
 		if (!pipe.error.empty())
 		{
 			logger::write("test: [Test] %s - using %s", pipe.error.c_str(), pipe.name.c_str());

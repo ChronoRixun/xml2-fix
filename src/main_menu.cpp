@@ -1,5 +1,6 @@
 #include "main_menu.hpp"
 
+#include "ini.hpp"
 #include "log.hpp"
 #include "main_menu_rules.hpp"
 
@@ -70,14 +71,7 @@ namespace main_menu
 
 	void install(const HMODULE game)
 	{
-		const auto ini = (logger::module_dir() / L"xml2-fix.ini").wstring();
-		wchar_t value[512]{};
-		GetPrivateProfileStringW(L"Game", L"MainMenuItems", L"", value, static_cast<DWORD>(std::size(value)), ini.c_str());
-		std::string narrow;
-		for (const wchar_t* p = value; *p; ++p)
-		{
-			narrow += *p < 128 ? static_cast<char>(*p) : '\x7f'; // non-ASCII is refused by parse_items
-		}
+		const auto narrow = ini::text(L"Game", L"MainMenuItems").value_or(""); // non-ASCII comes as 0x7f, refused by parse_items
 		const auto chosen = parse_items(narrow);
 		if (!chosen.error.empty())
 		{
@@ -134,8 +128,10 @@ namespace main_menu
 			described += std::string(slots[i].retail) + " (" + slots[i].role + ") -> ";
 			described += changes(chosen, i) ? chosen.names[i] : std::string("as the game has it");
 		}
-		logger::write("main menu: MAIN_MENU's item names ([Game] MainMenuItems): %s - %zu name pushes re-pointed; the Danger Room gate and Play Online still "
+		const bool eight = eight_items(chosen);
+		logger::write("main menu: MAIN_MENU's item names ([Game] MainMenuItems): %s - %zu name pushes re-pointed%s; the Danger Room gate and Play Online still "
 		              "answer to label_option06 / label_option09 only",
-		              described.c_str(), writes.size());
+		              described.c_str(), writes.size() - (eight ? 1 : 0),
+		              eight ? ", and the mouse's clamp at 0x5c944b moved from 6 to 8, so a click on the eighth item is that item's, not Quit's" : "");
 	}
 }

@@ -2,6 +2,7 @@
 #include "discord_ipc.hpp"
 #include "discord_rules.hpp"
 #include "iat_hook.hpp"
+#include "ini.hpp"
 #include "log.hpp"
 #include "mod_order.hpp"
 
@@ -39,22 +40,10 @@ namespace discord_presence
 
 		// ---- xml2-fix.ini -------------------------------------------------------------------------
 
+		// [section] key of xml2-fix.ini by the fix's one rule (ini_rules.hpp): nullopt when it isn't set.
 		std::optional<std::string> ini_text(const wchar_t* section, const wchar_t* key)
 		{
-			const auto ini = (logger::module_dir() / L"xml2-fix.ini").wstring();
-			constexpr wchar_t absent[] = L"\x7f";
-			wchar_t value[512]{};
-			GetPrivateProfileStringW(section, key, absent, value, static_cast<DWORD>(std::size(value)), ini.c_str());
-			if (std::wcscmp(value, absent) == 0)
-			{
-				return std::nullopt;
-			}
-			std::string narrow;
-			for (const wchar_t* p = value; *p; ++p)
-			{
-				narrow += *p < 128 ? static_cast<char>(*p) : '?';
-			}
-			return narrow;
+			return ini::text(section, key);
 		}
 
 		std::optional<std::string_view> view(const std::optional<std::string>& text)
@@ -468,7 +457,7 @@ namespace discord_presence
 			logger::write("discord: %s", choice.note.c_str());
 		}
 		client_id = std::string(client_id_for(which));
-		const std::string own_id(value_text(ini_text(L"Discord", L"ClientId").value_or("")));
+		const std::string own_id = ini_text(L"Discord", L"ClientId").value_or("");
 		if (!own_id.empty())
 		{
 			if (valid_client_id(own_id))

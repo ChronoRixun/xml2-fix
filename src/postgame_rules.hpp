@@ -1,9 +1,10 @@
 #pragma once
 
 // [Game] PostgameScript: what runs after the end credits, for a mod with its own campaign (the
-// X-Men Legends 1 port plays XML1's r505 and goes back to the main menu), kept apart from the
-// patching so xml2_test can check it without the game: the ini value's rules, the line the game is
-// handed, every retail byte the change relies on and the one operand it writes.
+// X-Men Legends 1 port plays XML1's r505 and goes back to the main menu), and [Game] EndHeroUnlock,
+// the hero XML2's ending unlocks with its popup (Deadpool), kept apart from the patching so xml2_test
+// can check them without the game: the ini values' rules, the line the game is handed, every retail
+// byte the changes rely on and what they write.
 //
 // The research is in the xml1-port repository, research/frontend/M2_DESIGN.md (D.1); every address
 // below was read again from the retail XMen2.exe for this code (image base 0x400000, no
@@ -40,6 +41,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -71,18 +73,13 @@ namespace postgame_rules
 	// no / at either end or two together; not "scripts/" inside it (the loader would leave its own
 	// "scripts/" out); at most name_max characters, so "runscript <name>" fits the console's 127. A
 	// ';' starts a comment: no name has one.
-	inline script_choice parse_script(std::string_view raw)
+	inline script_choice parse_script(const std::string_view raw)
 	{
-		if (const auto comment = raw.find(';'); comment != std::string_view::npos)
-		{
-			raw = raw.substr(0, comment);
-		}
-		const auto first = raw.find_first_not_of(" \t");
-		if (first == std::string_view::npos)
+		const std::string name(ini_rules::value_text(raw));
+		if (name.empty())
 		{
 			return {};
 		}
-		const std::string name(raw.substr(first, raw.find_last_not_of(" \t") - first + 1));
 
 		script_choice refused;
 		for (const char c : name)
@@ -241,5 +238,91 @@ namespace postgame_rules
 	inline void apply(std::uint8_t* image, const std::uint32_t line)
 	{
 		std::memcpy(image + (load_operand - image_base), &line, sizeof(line));
+	}
+
+	// ---- [Game] EndHeroUnlock: the hero the ending unlocks, and its popup ---------------------------------
+	//
+	// State 3 of the credits' step (0x5b1ce3-0x5b1dbb), when the popup manager has nothing up (0x5eb300
+	// vt+0x78) and endgame is set, records the win:
+	//   1. the profile (settings.dat, 0x48fed0 -> 0x72c530; vtable 0x689994) vt+0xa4(1) at 0x5b1d21: the
+	//      game has been won (bit 0 of +0x229, 0x48f6e0);
+	//   2. when the difficulty (the game's vt+0x268, 0x46dce0) is 1, Normal: the profile's vt+0xac(1) at
+	//      0x5b1d44 - Hard unlocked (bit 2 of +0x229, 0x48f710);
+	//   3. the hero registry (0x44b8f0, vtable 0x68544c) looks up "deadpool" (vt+0x3c 0x44acc0, string
+	//      0x68253c) and unlocks it (vt+0x2c 0x449c00: the hero's unlocked bit, the list of new heroes, the
+	//      profile's vt+0x28), 0x5b1d4a-0x5b1d67;
+	//   4. below Hard (difficulty < 2, 0x5b1d79) the popup manager shows string 0x4aa = 1194, "Deadpool is
+	//      now unlocked and available to play." (Data/strings; 0x5b1d7e-0x5b1da4), and the credits wait
+	//      for it to be closed;
+	//   then state 4 (0x5b1da9), the end-of-game save, and state 2, the line above.
+	// A campaign whose ending unlocks no hero (the X-Men Legends 1 port: XML1's credits end the game, and
+	// its roster has no Deadpool) turns the call that starts step 3 (0x5b1d4a) into a jmp to the end of
+	// step 4 (0x5b1da7, where the step's own epilogue pops ebp and edi, which steps 3 and 4 used, and sets
+	// state 4). The stack is the same at both ends (nothing is pushed between them that isn't taken off
+	// again), steps 1 and 2 run as before, and so do the save, the credits' close and PostgameScript.
+	constexpr DWORD unlock_call = 0x5b1d4a;   // call 0x44b8f0, the hero registry, the start of step 3
+	constexpr DWORD unlock_skip_to = 0x5b1da7; // pop ebp, after step 4's popup
+	constexpr std::array<std::uint8_t, 5> retail_unlock_call{0xe8, 0xa1, 0x9b, 0xe9, 0xff};
+	constexpr std::array<std::uint8_t, 5> skip_unlock{0xe9, static_cast<std::uint8_t>(unlock_skip_to - (unlock_call + 5)), 0x00, 0x00, 0x00};
+
+	// 0: the ending unlocks no hero and shows no popup for one; 1 (or not set): XML2's Deadpool.
+	struct unlock_choice
+	{
+		bool skip = false;
+		std::string error;
+	};
+
+	// `value`: [Game] EndHeroUnlock as the fix's ini rule has it (up to a ';', trimmed; nullopt when not set).
+	inline unlock_choice parse_end_unlock(const std::optional<std::string_view> value)
+	{
+		if (!value)
+		{
+			return {};
+		}
+		const auto text = ini_rules::value_text(*value);
+		if (text.empty() || text == "1")
+		{
+			return {};
+		}
+		if (text == "0")
+		{
+			return {true, {}};
+		}
+		unlock_choice refused;
+		refused.error = "=" + std::string(text) + " isn't 0 (no hero unlocked, no popup) or 1 (the game's own)";
+		return refused;
+	}
+
+	// Every byte of XMen2.exe the change relies on, read from the retail build: the credits menu's step
+	// function and all of state 3 around the jump, and the name it unlocks. All must match before the jump
+	// is written; xml2_test compares them with a copy of the exe.
+	inline constexpr std::array<guard, 4> unlock_guards{{
+		{0x5b7e5f, "c706d4f16900", "CREDITS_MENU's constructor sets its vtable 0x69f1d4 (0x5b7e5f)"},
+		{0x69f20c, "601c5b00", "CREDITS_MENU vt+0x38 = its step function 0x5b1c60 (0x69f20c)"},
+		{0x5b1ce3,
+		 "8b865819000055bd030000003bc50f85c5000000e8049603008b108bc8ff527884c00f85b1000000849e541900000f8490000000e8b4e1edff8b10538bc8ff92a4000000e8b4bfeb"
+		 "ff8b108bc8ff92680200003bc37510e891e1edff8b10538bc8ff92ac000000e8a19be9ff8b10683c2568008bc8ff523c8bf8e88e9be9ff8b10578bc8ff522ce871bfebff8b108bc8"
+		 "ff926802000083f8027d29e8adbdf0ff8bf8e8769503006a008bd88b078b2b680000803f68aa0400008bcfff5008508bcbff550c5d5fc78658190000040000008bce5e5be9b49500"
+		 "00",
+		 "state 3: the win, Hard after Normal, the hero unlock and its popup (string 0x4aa), then state 4 (0x5b1ce3-0x5b1dbb)"},
+		{0x68253c, "64656164706f6f6c00", "the hero it unlocks, \"deadpool\" (0x68253c)"},
+	}};
+
+	inline const guard* first_unlock_mismatch(const std::uint8_t* image)
+	{
+		for (const auto& g : unlock_guards)
+		{
+			if (!limits_rules::matches(image + (g.va - image_base), g.hex))
+			{
+				return &g;
+			}
+		}
+		return nullptr;
+	}
+
+	// The change: the call at 0x5b1d4a becomes jmp 0x5b1da7.
+	inline void apply_skip_unlock(std::uint8_t* image)
+	{
+		std::memcpy(image + (unlock_call - image_base), skip_unlock.data(), skip_unlock.size());
 	}
 }

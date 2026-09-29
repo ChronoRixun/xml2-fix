@@ -14,14 +14,15 @@
 //
 //   Domain=openspy.net   the default: *.gamespy.com -> the same host under that domain, the
 //                        OpenSpy way (xmenlegpc.master.gamespy.com -> xmenlegpc.master.openspy.net).
-//                        "off" or empty: no redirect.
+//                        "off": no redirect. Not set (or empty): openspy.net.
 //   Server=127.0.0.1     every GameSpy or OpenSpy name (*.gamespy.com, *.openspy.net) resolves to
 //                        that IPv4 address: a server of your own that has no DNS names, such as a
 //                        private OpenSpy stack on this PC. Wins over Domain. A value that isn't an
 //                        address is ignored (and logged), leaving Domain in charge.
-// A ';' starts a comment in either value (the profile API keeps those).
+// Both values are read by the fix's one ini rule (ini_rules.hpp): a ';' starts a comment, and an
+// empty value is the same as none.
 
-#include "limits_rules.hpp" // value_text
+#include "ini_rules.hpp" // value_text
 
 #include <algorithm>
 #include <cctype>
@@ -93,12 +94,11 @@ namespace online_rules
 		std::string problem; // why a Server value was ignored, when it was
 	};
 
-	// `domain` and `server` as the ini has them: Domain is "openspy.net" when the key is absent (the
-	// profile API's default), Server "" when it is.
+	// `domain` and `server` as the ini has them, "" when a key isn't set: no Domain is openspy.net.
 	inline plan choose(const std::string_view domain, const std::string_view server)
 	{
 		plan chosen;
-		if (const auto server_text = limits_rules::value_text(server); !server_text.empty())
+		if (const auto server_text = ini_rules::value_text(server); !server_text.empty())
 		{
 			if (const auto address = parse_ipv4(server_text))
 			{
@@ -108,10 +108,11 @@ namespace online_rules
 			}
 			chosen.problem = "[Online] Server=" + std::string(server_text) + " isn't an IPv4 address (a.b.c.d)";
 		}
-		if (const auto domain_text = limits_rules::value_text(domain); !domain_text.empty() && !same_text(domain_text, "off"))
+		const auto domain_text = ini_rules::value_text(domain);
+		if (!same_text(domain_text, "off"))
 		{
 			chosen.how = plan::mode::domain;
-			chosen.target = std::string(domain_text);
+			chosen.target = std::string(domain_text.empty() ? default_domain : domain_text);
 		}
 		return chosen;
 	}

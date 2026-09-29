@@ -23,9 +23,9 @@
 //                    such a route, or with its address not in the list, Windows' order stays.
 //   LocalIP=first    Windows' order, as the game has it without the fix.
 //   LocalIP=a.b.c.d  that address first, when it is one of this PC's; otherwise auto (logged).
-// A ';' starts a comment (the profile API keeps those).
+// Read by the fix's one ini rule (ini_rules.hpp): a ';' starts a comment, an empty value is auto.
 
-#include "limits_rules.hpp" // value_text
+#include "ini_rules.hpp" // value_text
 #include "online_rules.hpp" // parse_ipv4, same_text
 
 #include <algorithm>
@@ -91,11 +91,11 @@ namespace local_ip_rules
 		std::string problem; // why a value was ignored, when it was
 	};
 
-	// `value` as the ini has it: "auto" when the key is absent (the profile API's default).
+	// `value` as the ini has it, "" when the key isn't set (auto).
 	inline choice choose(const std::string_view value)
 	{
 		choice chosen;
-		const auto setting = limits_rules::value_text(value);
+		const auto setting = ini_rules::value_text(value);
 		if (setting.empty() || online_rules::same_text(setting, "auto"))
 		{
 			return chosen;

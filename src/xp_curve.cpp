@@ -1,5 +1,6 @@
 #include "xp_curve.hpp"
 
+#include "ini.hpp"
 #include "log.hpp"
 #include "xp_curve_rules.hpp"
 
@@ -94,14 +95,7 @@ namespace xp_curve
 
 	void install(const HMODULE game)
 	{
-		const auto ini = (logger::module_dir() / L"xml2-fix.ini").wstring();
-		wchar_t value[64]{};
-		GetPrivateProfileStringW(L"Game", L"XPCurve", L"", value, static_cast<DWORD>(std::size(value)), ini.c_str());
-		std::string narrow;
-		for (const wchar_t* p = value; *p; ++p)
-		{
-			narrow += *p < 128 ? static_cast<char>(*p) : '?';
-		}
+		const auto narrow = ini::text(L"Game", L"XPCurve").value_or("");
 		const auto chosen = parse_curve(narrow);
 		if (!chosen.error.empty())
 		{

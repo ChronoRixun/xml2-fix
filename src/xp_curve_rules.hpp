@@ -90,13 +90,9 @@ namespace xp_curve_rules
 	};
 
 	// "xml1" or "xml2", any case; a ';' starts a comment.
-	inline curve_choice parse_curve(std::string_view raw)
+	inline curve_choice parse_curve(const std::string_view raw)
 	{
-		if (const auto comment = raw.find(';'); comment != std::string_view::npos)
-		{
-			raw = raw.substr(0, comment);
-		}
-		const auto value = limits_rules::trimmed(raw);
+		const auto value = ini_rules::value_text(raw);
 		if (value.empty())
 		{
 			return {};

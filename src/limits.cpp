@@ -1,5 +1,6 @@
 #include "limits.hpp"
 #include "limits_rules.hpp"
+#include "ini.hpp"
 #include "log.hpp"
 
 #include <Windows.h>
@@ -314,19 +315,9 @@ namespace limits
 			return true;
 		}
 
-		std::optional<std::string> ini_value(const std::wstring& ini, const wchar_t* key)
+		std::optional<std::string> ini_value(const wchar_t* key)
 		{
-			wchar_t value[128]{};
-			if (GetPrivateProfileStringW(L"Limits", key, L"", value, static_cast<DWORD>(std::size(value)), ini.c_str()) == 0)
-			{
-				return std::nullopt;
-			}
-			std::string narrow;
-			for (const wchar_t* p = value; *p; ++p)
-			{
-				narrow += *p < 128 ? static_cast<char>(*p) : '?';
-			}
-			return narrow;
+			return ini::text(L"Limits", key); // the fix's one rule, ini_rules.hpp
 		}
 
 		std::string counter(const std::optional<DWORD> live, const int cap)
@@ -353,9 +344,8 @@ namespace limits
 			igb_readable = !first_mismatch(igb_counter_guards);
 		}
 
-		const auto ini = (logger::module_dir() / L"xml2-fix.ini").wstring();
-		const auto actor_slots = ini_value(ini, L"ActorSlots");
-		const auto resource_names = ini_value(ini, L"ResourceNames");
+		const auto actor_slots = ini_value(L"ActorSlots");
+		const auto resource_names = ini_value(L"ResourceNames");
 		if (!actor_slots && !resource_names)
 		{
 			logger::write("limits: the game's own caps - 40 actor slots, 450 resource names (no [Limits] in xml2-fix.ini)");

@@ -521,6 +521,12 @@ namespace gamepad_fix
 			{
 				load_axes(self, record);
 			}
+			// XInput is still starting on its own thread (xinput_pad.hpp): an idle pad until it's ready.
+			if (xinput_pad::starting())
+			{
+				active->fill_state(*static_cast<DIJOYSTATE*>(data), xinput_pad::raw_state{}, record.axes);
+				return DI_OK;
+			}
 
 			const auto connected = xinput_pad::connected_indices();
 			xinput_pad::raw_state pad{};

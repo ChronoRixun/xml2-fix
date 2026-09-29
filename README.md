@@ -84,6 +84,8 @@ To use another server (for example one you host yourself) or to switch the redir
 Domain=openspy.net   ; or your server's domain, or: off
 ```
 
+**How `xml2-fix.ini` is read** (every key, every section, and the Ultimate Legends launcher reads it the same way): a value ends at the first `;`, and the spaces around it don't count, so `Domain=off   ; for now` is `off`. A `#` is part of the value. A key with nothing before its `;` (`Domain=   ; later`) is the same as no key at all: the default.
+
 **A server of your own without DNS names** (a self-hosted OpenSpy, for example [its Docker setup](https://github.com/openspy/compose) on your own PC or LAN): give its IPv4 address instead, and every GameSpy (and OpenSpy) host name the game looks up resolves to it.
 
 ```ini
@@ -101,6 +103,15 @@ LocalIP=auto         ; the default. Or: first (Windows' order, as without the fi
 ```
 
 An address that isn't this PC's is ignored and `auto` applies. Without a route to the internet, Windows' order stays. `xml2-fix.log` shows the list once, before and after (`online: this PC's addresses (MYPC): 172.18.0.1, 192.168.1.20` then `online: LocalIP: 192.168.1.20 first (...): 192.168.1.20, 172.18.0.1`).
+
+**A mod that is another game** (the X-Men Legends I port) uses the same GameSpy name as XML2, `xmenlegpc`, so without a version of its own its hosted games would show up in XML2's lists and the other way round, and a join would load the host's zones on the other game's install. The game tells GameSpy and other players its version, `1.30`, and finds no games of another version (in the server list, on the LAN or by *Connect by IP*); `GameVersion` gives it another:
+
+```ini
+[Online]
+GameVersion=X1.0     ; 1 to 4 letters, digits, '.', '-' or '_'; leave out for the game's own 1.30
+```
+
+It is written into the game's version string before the game starts (it copies it at start-up), after the bytes are checked against the retail build; `xml2-fix.log` says so (`online: GameSpy game version X1.0 ...`). Players on different versions don't see or join each other's games.
 
 **Diagnosing online problems:** add this to `xml2-fix.ini` and `xml2-fix.log` will list every connection and query the game makes:
 
@@ -177,10 +188,10 @@ ShowParty=0      ; your heroes stay private
 Discord's own *Share your detected activities with others* switch hides it too. For the future and for testing:
 
 ```ini
-LargeImage=none  ; no images at all; or another art asset's key instead of the logo (no key: logo)
-SmallImage=none  ; no badges; or one asset's key for every badge (no key: the mode's own)
-Game=xml1        ; which application, if the detection is wrong: xml1 or xml2
-ClientId=        ; another Discord application's id
+LargeImage=none  ; no images at all; or another art asset's key instead of the logo (no key, or empty: logo)
+SmallImage=none  ; no badges; or one asset's key for every badge (no key, or empty: the mode's own)
+Game=xml1        ; which application, if the detection is wrong: xml1 or xml2 (empty: detected)
+ClientId=        ; another Discord application's id (empty: the game's own)
 ```
 
 Both Discord applications carry the same art: `logo`, and the badges `menu`, `cutscene`, `dangerroom` and `online`. An application of your own (`ClientId=`) needs art under those keys, or `LargeImage=none`.
@@ -214,26 +225,25 @@ the fix listens on the named pipe `\\.\pipe\xml2-fix-input` (or `\\.\pipe\` + `P
 
 ## 🧬 Mods with their own campaign
 
-For total conversions that bring their own story, roster and saves (the X-Men Legends I port, for one). Each key does nothing until it is set. `NewGameTeam` and `SaveFolder` take the whole rest of their line, so their comments go on a line of their own:
+For total conversions that bring their own story, roster and saves (the X-Men Legends I port, for one). Each key does nothing until it is set:
 
 ```ini
 [Game]
-; New Game's party: up to four heroes, comma separated; missing slots stay empty
-NewGameTeam=wolverine
-; 0: New Game unlocks no heroes (the mod's scripts unlock them)
-ResetUnlocks=0
-; saves, settings.dat (hero unlocks) and screenshots in Documents\Activision\<SaveFolder>, not X-Men Legends 2's
-SaveFolder=X-Men Legends
+NewGameTeam=wolverine     ; New Game's party: up to four heroes, comma separated; missing slots stay empty
+ResetUnlocks=0            ; 0: New Game unlocks no heroes (the mod's scripts unlock them)
+SaveFolder=X-Men Legends  ; saves, settings.dat (hero unlocks) and screenshots in Documents\Activision\<SaveFolder>, not X-Men Legends 2's
+WindowTitle=X-Men Legends ; the game window's, its taskbar button's and alt-tab's name instead of X-Men Legends 2
 NewGamePlus=0   ; 0: New Game never offers "use saved game statistics" (after a win on Normal); it starts with the defaults
 ForcedTeams=1   ; 1: the mod's scripts seat the parties its missions want; 0: they open the team menu
 AddHero=0       ; 1 (with ForcedTeams=1): addHero seats a hero mid-level - experimental
 JoinHero=1      ; with ForcedTeams=1, the default: joinHero adds a hero to the party with a reload on the spot; 0: it reports off
 PostgameScript=x1/menus/postgame   ; after the end credits, Scripts\x1\menus\postgame.py instead of XML2's last zone
-MainMenuItems=button1,button2,button3,button4,button5,button6,button7   ; the main menu's own item names (mouse, Quit)
+EndHeroUnlock=0 ; 0: the ending unlocks no hero and shows no "Deadpool is now unlocked" popup
+MainMenuItems=button1,button2,button3,button4,button5,button6,button7,button8   ; the main menu's own item names (mouse, Quit)
 XPCurve=xml1    ; X-Men Legends I's level table (cap 45) and kill XP; xml2 or no key: the game's own
 ```
 
-**The main menu.** The game's main menu finds some of its items by XML2's names: its mouse handler hit-tests only the items named `label_option04`..`label_option09`, `debug_text`, `debug` and `debug_focus`, and Quit is whatever item is named `debug_text` (the game gives it the text "Quit" and quits when it is accepted; no console command or script function quits). A mod whose menu names its items otherwise lists its names in `MainMenuItems`, in that order: the first six are the mouse's slots, the seventh is Quit, the last two the Quit button's models (a click on them counts as Quit). A name left out keeps the game's. The X-Men Legends I port uses XML1's menu, its text on `button1`..`button7` with Quit last. Every other button does its job through its own `usecmd`, so keys and the pad work without the key; the mouse and Quit need it. The Danger Room's story-level-6 gate and Play Online stay on items named `label_option06` / `label_option09` (the game compares the focused item's name with those two itself), so a menu that renames its Danger Room item gives it XML2's line `set drmode 1;openmenu danger_room` as its `usecmd`, without the gate. Names are letters, digits and `_`, at most 31 characters, and no two slots may end up with the same item. It works by pointing the 19 pushes of those names in the main menu's code at the fix's copies, after every byte it relies on is checked against the retail build; the item parser and another menu that push the same strings are left alone. On any other build, or with a list the rules refuse, the menu keeps XML2's names and `xml2-fix.log` says why.
+**The main menu.** The game's main menu finds some of its items by XML2's names: its mouse handler hit-tests only the items named `label_option04`..`label_option09`, `debug_text`, `debug` and `debug_focus`, and Quit is whatever item is named `debug_text` (the game gives it the text "Quit" and quits when it is accepted; no console command or script function quits). A mod whose menu names its items otherwise lists its names in `MainMenuItems`, in that order: the first six are the mouse's slots, the seventh is Quit, the last two the Quit button's models (a click on them counts as Quit). A name left out keeps the game's. A menu with one item more than XML2's gives that item the eighth name: the eighth slot is then a mouse slot like the first six (a click focuses and accepts that item, not Quit), and only the ninth is still a model of the Quit button. The X-Men Legends I port uses XML1's menu, its text on `button1`..`button8`: Quit seventh, Play Online (`usecmd="openmenu online"`) eighth. Every other button does its job through its own `usecmd`, so keys and the pad work without the key; the mouse and Quit need it. The Danger Room's story-level-6 gate and Play Online stay on items named `label_option06` / `label_option09` (the game compares the focused item's name with those two itself), so a menu that renames its Danger Room item gives it XML2's line `set drmode 1;openmenu danger_room` as its `usecmd`, without the gate. Names are letters, digits and `_`, at most 31 characters, and no two slots may end up with the same item. It works by pointing the 19 pushes of those names in the main menu's code at the fix's copies (and, with an eighth name, the mouse handler's `cmp edi, 6` - which sends a click on slots 6 to 8 to Quit - at 8), after every byte it relies on is checked against the retail build; the item parser and another menu that push the same strings are left alone. On any other build, or with a list the rules refuse, the menu keeps XML2's names and `xml2-fix.log` says why.
 
 **New Game+.** Once a win on Normal has unlocked Hard (the end credits record it in the profile), choosing a difficulty at New Game no longer starts the game: XML2 first asks whether to load character statistics from a saved game or use the default ones. `NewGamePlus=0` is for a campaign that had no such choice (X-Men Legends I asked for neither a difficulty nor statistics): New Game starts at once with the default statistics, as it does before Hard is unlocked. The profile, the Hard option and everything else stay as they are. It works by turning the one branch in `setDifficultyLevel` that tests the profile into a jump to its normal start, after every byte it relies on is checked against the retail build; on any other build New Game keeps the choice and `xml2-fix.log` says why.
 
@@ -246,6 +256,10 @@ mainMenuExit()
 ```
 
 It works by pointing the one push in the credits menu that hands the console XML2's line at a line of the fix's own, after every byte it relies on (the credits menu's two end-of-game steps, the console, `runscript` and the script loader) is checked against the retail build; on any other build, or with a name the game couldn't read as one, the credits load `egypt6` as before and `xml2-fix.log` says why. The log also warns when the script isn't in the game folder or under `mods`.
+
+**The hero the ending unlocks.** Once the credits have rolled, XML2's ending records the win in the profile (and unlocks Hard after a win on Normal), then unlocks Deadpool and, below Hard, stops the credits with the popup *Deadpool is now unlocked and available to play.* A campaign whose ending unlocks nobody (XML1's) sets `EndHeroUnlock=0`: the win, Hard, the end-of-game save and `PostgameScript` stay, the unlock and its popup go. It works by turning the call that starts the unlock (0x5b1d4a) into a jump past the popup, after every byte of that step is checked against the retail build; on any other build the ending stays as it is and `xml2-fix.log` says why.
+
+**The window's title.** The game names its window (and so its taskbar button and its alt-tab entry) *X-Men Legends 2*. `WindowTitle` gives it another, printable ASCII, at most 127 characters. The same string is the game's registry key and the start of its save folder, so it isn't changed: the engine's two calls that title the window (`CreateWindowExA` and `SetWindowTextA` in `libIGDisplay.dll`) pass the new one, for the game's window only, in every display mode.
 
 **X-Men Legends I's levels.** XML2's levels go to 99 on a roughly cubic curve (level 40 at 1,988,935 XP); XML1's go to 45 on an exponential one (level 40 at 125,847,705), and its kills are worth more the higher the enemy. A campaign that carries XML1's XP amounts - objectives worth 2,000,000, script awards, npcstat `xpaward` - takes a level-1 hero to 40 with one objective on XML2's curve. With `XPCurve=xml1` the game uses XML1's: its level table and cap, from XML1's own code (`default.xbe`); a kill worth 2.5 × (4/3)^(level − 1) XP, with no party-level multiplier; half of each kill to every hero, the bench included (XML2 gives the bench 1 XP); 3 × (half + 1) more to each hero in the party, an AI teammate that didn't make the kill a share of that by its distance (all of it close by, a third at 300 units, nothing beyond). XML2's level-up code, XP bars, level-up popups and skill points work on the new table unchanged; everything that carries the cap 99 (the level recompute, level-up by N, the most XP a hero can have, the shop's level-up item, the every-hero-to-the-top cheat) gets 45. The Danger Room's fixed level 30 and Hard's start at 45 are within XML1's cap and stay. It works by pointing the game's one read of its level table at XML1's in the fix, writing the new cap into those instructions, jumping the kill XP function to the fix's, and changing the kill's share code in place (19 sites), after every byte it relies on is checked against the retail build; on any other build the game keeps its own curve and `xml2-fix.log` says why. Levels in a save made on the other curve follow the new table from the hero's next XP gain.
 
@@ -291,7 +305,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 
 `dinput.dll` sits in the game folder, where Windows loads it in place of its own copy. It forwards everything to the real DirectInput and:
 
-1. **Presents every Xbox-compatible pad as a Logitech Dual Action** (`046D:C216`), a classic pad from the game's era with digital triggers and the right stick on Z / Rz. It builds that pad's DirectInput state from XInput, in the Dual Action's exact layout (buttons, hat, both sticks, respecting the game's own axis ranges). The game reads pads through two separate DirectInput versions, and both see the same pad.
+1. **Presents every Xbox-compatible pad as a Logitech Dual Action** (`046D:C216`), a classic pad from the game's era with digital triggers and the right stick on Z / Rz. It builds that pad's DirectInput state from XInput, in the Dual Action's exact layout (buttons, hat, both sticks, respecting the game's own axis ranges). The game reads pads through two separate DirectInput versions, and both see the same pad. XInput itself is loaded on a thread of the fix's own as the game starts: its first call finds the controllers through Windows' device broker and can take seconds, which on the game's thread froze the start-up long enough for Windows to call the game "not responding". Until it has answered, the pad reads as idle (the logos and the first menu don't wait for it).
 2. **Adds the layout above to the game's bindings.** It patches it into the game's built-in defaults in memory, so first runs and *Revert to defaults* include it, and adds it once to settings you already have.
 3. **Redirects GameSpy host lookups to OpenSpy,** through the game's `gethostbyname`. The same hook answers the game's lookup of the PC's own name (how it picks its LocalIP, and the local addresses its GameSpy code reports) with the default route's address first ([Online](#-online)).
 4. **Runs the game in a window when asked to** ([Display](#%EF%B8%8F-display)). The engine (Alchemy) creates its Direct3D 8 device fullscreen at the registry resolution; the fix hooks `IDirect3D8::CreateDevice` and `IDirect3DDevice8::Reset` to make the device windowed, places the engine's window itself (its `CreateWindowExA`, `SetWindowLongA`, `SetWindowPos` and `MoveWindow` calls), answers the game's read of its resolution setting with the desktop size so the HUD and aspect ratio match, and completes the Direct3D mode list the Video options are built from.

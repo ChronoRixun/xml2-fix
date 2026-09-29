@@ -1,5 +1,6 @@
 #include "pad_prompts.hpp"
 
+#include "ini.hpp"
 #include "log.hpp"
 #include "pad_prompts_rules.hpp"
 
@@ -213,15 +214,7 @@ namespace pad_prompts
 
 		std::string read_ini(const wchar_t* key)
 		{
-			const auto ini = (logger::module_dir() / L"xml2-fix.ini").wstring();
-			wchar_t value[128]{};
-			GetPrivateProfileStringW(L"Input", key, L"", value, static_cast<DWORD>(std::size(value)), ini.c_str());
-			std::string narrow;
-			for (const wchar_t* p = value; *p; ++p)
-			{
-				narrow += *p < 128 ? static_cast<char>(*p) : '?';
-			}
-			return narrow;
+			return ini::text(L"Input", key).value_or(""); // the fix's one rule, ini_rules.hpp
 		}
 	}
 

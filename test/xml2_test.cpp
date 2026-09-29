@@ -52,8 +52,10 @@
 #include "forced_teams_rules.hpp"
 #include "frame_capture.hpp"
 #include "frame_rate_rules.hpp"
+#include "game_version_rules.hpp"
 #include "iat_hook.hpp"
 #include "image_file.hpp"
+#include "ini_rules.hpp"
 #include "limits_rules.hpp"
 #include "local_ip.hpp"
 #include "local_ip_rules.hpp"
@@ -68,6 +70,7 @@
 #include "resolution_rules.hpp"
 #include "test_input_rules.hpp"
 #include "xp_curve_rules.hpp"
+#include "window_title_rules.hpp"
 
 #include <algorithm>
 #include <array>
@@ -3213,10 +3216,13 @@ namespace
 		CHECK(!parse_ipv4("1..2.3") && !parse_ipv4("1.2.3.1234") && !parse_ipv4("-1.2.3.4") && !parse_ipv4("localhost") && !parse_ipv4("") && !parse_ipv4("1.2.3.4 "));
 		CHECK(!parse_ipv4("0x7f.0.0.1") && !parse_ipv4("::1") && !parse_ipv4("1.2.3.4:6667"));
 
-		// The plan: Domain as before (the default "openspy.net" when the key is absent, off/empty = no redirect)...
+		// The plan: Domain as before (openspy.net when the key isn't set - absent or empty, the fix's one ini rule -
+		// and off = no redirect)...
 		auto chosen = choose("openspy.net", "");
 		CHECK(chosen.how == mode::domain && chosen.target == "openspy.net" && chosen.problem.empty());
-		CHECK(choose("off", "").how == mode::off && choose("", "").how == mode::off && choose("OFF ; no online", "").how == mode::off);
+		CHECK(choose("off", "").how == mode::off && choose("OFF ; no online", "").how == mode::off);
+		chosen = choose("", "");
+		CHECK(chosen.how == mode::domain && chosen.target == "openspy.net" && choose("   ; later", "").target == "openspy.net");
 		chosen = choose("example.org   ; my own server", "");
 		CHECK(chosen.how == mode::domain && chosen.target == "example.org"); // the README's inline comment isn't part of the domain
 		// ...and a Server address wins over it, with or without a comment.
@@ -3739,7 +3745,11 @@ namespace
 		{
 			names_ok &= i < 7 ? port.names[i] == "button" + std::to_string(i + 1) && changes(port, i) : port.names[i].empty() && !changes(port, i);
 		}
-		CHECK(names_ok && effective(port, quit_slot) == "button7" && effective(port, 7) == "debug" && effective(port, 8) == "debug_focus");
+		CHECK(names_ok && effective(port, quit_slot) == "button7" && effective(port, 7) == "debug" && effective(port, 8) == "debug_focus" && !eight_items(port));
+		// The port's menu with Play Online: an eighth name is a seventh mouse slot, the ninth stays debug_focus.
+		const auto port8 = parse_items(xml1 + ",button8   ; Play Online");
+		CHECK(port8.set && port8.error.empty() && port8.names[7] == "button8" && effective(port8, 7) == "button8" && effective(port8, 8) == "debug_focus" && eight_items(port8));
+		CHECK(!eight_items(parse_items("a,b,c,d,e,f,g,debug")) && !eight_items(parse_items("a,b,c,d,e,f,g,,i")) && eight_items(parse_items(",,,,,,,button8")));
 		const auto commented = parse_items("  button1 , button2,button3 ;  XML1's buttons, not a name");
 		CHECK(commented.set && commented.error.empty() && commented.names[1] == "button2" && commented.names[2] == "button3" && commented.names[3].empty());
 		const auto unset = parse_items("   ; nothing");
@@ -3808,7 +3818,37 @@ namespace
 			const auto site = std::find_if(sites.begin(), sites.end(), [&](const auto& s) { return s.push + 1 == w.va; });
 			writes_ok &= site != sites.end() && w.size == 4 && site->slot < 7 && w.value == pointers[site->slot];
 		}
-		CHECK(writes_ok && writes_for(own, pointers).empty() && writes_for(parse_items("a,b,c,d,e,f,g,h,i"), pointers).size() == sites.size());
+		CHECK(writes_ok && writes_for(own, pointers).empty() && writes_for(parse_items("a,b,c,d,e,f,g,h,i"), pointers).size() == sites.size() + 1);
+		// The eight-item list: the 17, slot 7's one site, and the clamp's imm8 (6 -> 8) at 0x5c944d.
+		const auto writes8 = writes_for(port8, pointers);
+		bool writes8_ok = writes8.size() == 19 && clamp_operand == 0x5c944d && clamp_operand >= span_begin && clamp_operand < span_end;
+		std::size_t clamp_writes = 0;
+		for (const auto& w : writes8)
+		{
+			if (w.va == clamp_operand)
+			{
+				++clamp_writes;
+				writes8_ok &= w.size == 1 && w.value == eight_item_clamp && eight_item_clamp == 8;
+				continue;
+			}
+			const auto site = std::find_if(sites.begin(), sites.end(), [&](const auto& s) { return s.push + 1 == w.va; });
+			writes8_ok &= site != sites.end() && w.size == 4 && site->slot < 8 && w.value == pointers[site->slot];
+		}
+		CHECK(writes8_ok && clamp_writes == 1);
+		// The clamp's instruction inside the mouse handler's guard, with its retail imm8.
+		bool clamp_covered = false;
+		for (const auto& g : guards)
+		{
+			const DWORD end = g.va + static_cast<DWORD>(limits_rules::hex_size(g.hex));
+			if (g.va <= clamp_compare && clamp_compare + 8 <= end)
+			{
+				const std::size_t offset = clamp_compare - g.va;
+				clamp_covered = limits_rules::hex_byte(g.hex, offset) == 0x83 && limits_rules::hex_byte(g.hex, offset + 1) == 0xff &&
+				                limits_rules::hex_byte(g.hex, offset + 2) == retail_clamp && limits_rules::hex_byte(g.hex, offset + 3) == 0xbb &&
+				                operand_in(g.hex, offset + 4, 4) == retail_clamp;
+			}
+		}
+		CHECK(clamp_covered);
 
 		const auto exe = game_executable();
 		if (!exe)
@@ -3879,6 +3919,30 @@ namespace
 		// Patched (or any other build): the guards no longer match, so nothing would be written twice.
 		mismatch = first_mismatch(image);
 		CHECK(mismatch && mismatch->va == 0x5c92a5 && !sites_are_retail(image));
+		std::memcpy(image, before.data(), image_size);
+
+		// The eight-item list on a copy: the operands of slots 0..7 and the one clamp byte, nothing else. The
+		// clamp: cmp edi, 8 / mov ebx, 6 / jge / mov ebx, edi - slot 7 keeps its own index, slot 8 is Quit's.
+		CHECK(at(clamp_compare)[0] == 0x83 && at(clamp_compare)[1] == 0xff && at(clamp_operand)[0] == retail_clamp && at(clamp_compare + 3)[0] == 0xbb &&
+		      operand_at(at(clamp_compare + 4), 4) == retail_clamp && at(clamp_compare + 8)[0] == 0x7d && at(clamp_compare + 10)[0] == 0x8b && at(clamp_compare + 11)[0] == 0xdf);
+		apply(image, writes8);
+		changed.clear();
+		for (DWORD i = 0; i < image_size; ++i)
+		{
+			if (image[i] != before[i]) changed.insert(image_base + i);
+		}
+		expected.clear();
+		for (const auto& w : writes8)
+		{
+			for (DWORD b = 0; b < w.size; ++b) expected.insert(w.va + b);
+		}
+		CHECK(changed == expected && at(clamp_operand)[0] == eight_item_clamp && operand_at(at(clamp_compare + 4), 4) == retail_clamp);
+		applied = true;
+		for (const auto& s : sites)
+		{
+			applied &= operand_at(at(s.push + 1), 4) == (s.slot < 8 ? pointers[s.slot] : slots[s.slot].retail_va);
+		}
+		CHECK(applied);
 		std::memcpy(image, before.data(), image_size);
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
@@ -4657,9 +4721,11 @@ namespace
 		// The art: the logo and each mode's badge unless LargeImage / SmallImage say otherwise.
 		const auto art = choose_images(std::nullopt, std::nullopt);
 		CHECK(art.large == "logo" && !art.badge && art.note.empty());
-		CHECK(choose_images("", std::nullopt).large.empty() && choose_images("  none ; no art", std::nullopt).large.empty() && choose_images("NONE", "online").badge == "");
+		// An empty value is the same as no key (the fix's one ini rule): the logo, the mode's badges.
+		CHECK(choose_images("", std::nullopt).large == "logo" && choose_images("   ; later", std::nullopt).large == "logo" && !choose_images(std::nullopt, "").badge);
+		CHECK(choose_images("  none ; no art", std::nullopt).large.empty() && choose_images("NONE", "online").badge == "");
 		CHECK(choose_images("my_logo ; mine", std::nullopt).large == "my_logo" && choose_images(std::nullopt, "badge").badge == "badge");
-		CHECK(choose_images(std::nullopt, "").badge == "" && choose_images(std::nullopt, "none").badge == "" && choose_images("logo", "None").large == "logo");
+		CHECK(choose_images(std::nullopt, "none").badge == "" && choose_images("logo", "None").large == "logo" && choose_images("logo", "None").badge == "");
 		const auto odd_art = choose_images("two words", "a\"b");
 		CHECK(odd_art.large == "logo" && !odd_art.badge && odd_art.note.find("LargeImage isn't an asset key") != std::string::npos && odd_art.note.find("SmallImage") != std::string::npos);
 
@@ -5499,6 +5565,337 @@ namespace
 		pipe.close();
 		return failed;
 	}
+
+	// Another file of the game, next to the copy of XMen2.exe the checks use (read only), or nothing.
+	std::optional<std::string> game_file(const wchar_t* name)
+	{
+		std::vector<std::filesystem::path> candidates;
+		for (auto dir = module_dir(); !dir.empty() && dir != dir.root_path(); dir = dir.parent_path())
+		{
+			candidates.push_back(dir / "docs" / "research" / name);
+		}
+		candidates.push_back(std::filesystem::path(L"D:\\Games\\X-Men Legends II") / name);
+		for (const auto& path : candidates)
+		{
+			std::error_code ignored;
+			if (std::filesystem::is_regular_file(path, ignored))
+			{
+				std::printf("  info  reading %s\n", path.string().c_str());
+				return read_file(path);
+			}
+		}
+		return std::nullopt;
+	}
+
+	// The one ini rule (ini_rules.hpp): the helpers on their own, then a file of the test's own with the
+	// README's lines (inline comments and all) read through ini_rules::read, as the fix reads xml2-fix.ini,
+	// into every section's parser.
+	void check_ini_rules()
+	{
+		std::printf("xml2-fix.ini: one rule for every key (a value ends at ';', empty = not set)\n");
+		using ini_rules::value_text;
+		CHECK(value_text("borderless   ; the desktop's size") == "borderless" && value_text("\t 0\t;x") == "0" && value_text("1 ; x ; y") == "1");
+		CHECK(value_text("; only a comment").empty() && value_text("   ").empty() && value_text("").empty() && value_text("a;b") == "a");
+		CHECK(value_text("X-Men #1   ; a hash is part of the value") == "X-Men #1" && value_text("on#x") == "on#x" && value_text(" two words ") == "two words");
+		CHECK(!ini_rules::value(std::nullopt) && !ini_rules::value("") && !ini_rules::value("   ; later") && ini_rules::value(" 0 ; off") == "0");
+		CHECK(ini_rules::number(std::nullopt, 7) == 7 && ini_rules::number("", 7) == 7 && ini_rules::number("  ; later", 1) == 1 && ini_rules::number("0 ; off", 1) == 0);
+		CHECK(ini_rules::number("1440", 0) == 1440 && ini_rules::number("144fps", 0) == 144 && ini_rules::number("-5", 0) == -5 && ini_rules::number("+3", 0) == 3);
+		CHECK(ini_rules::number("on", 1) == 0 && ini_rules::number("0x10", 0) == 16 && ini_rules::number("0x1F ; hex", 0) == 31 && ini_rules::number("1 # not a comment", 0) == 1);
+		// Switches: the launcher's words, anything else (a '#' "comment" included) the key's default.
+		CHECK(ini_rules::flag("1") == true && ini_rules::flag("On ; x") == true && ini_rules::flag("YES") == true && ini_rules::flag("true") == true);
+		CHECK(ini_rules::flag("0") == false && ini_rules::flag(" off\t; later") == false && ini_rules::flag("No") == false && ini_rules::flag("FALSE") == false);
+		CHECK(!ini_rules::flag(std::nullopt) && !ini_rules::flag("") && !ini_rules::flag("  ; later") && !ini_rules::flag("2") && !ini_rules::flag("off # pause behind other windows"));
+		CHECK(ini_rules::narrow(L"abc") == "abc" && ini_rules::narrow(L"caf\u00e9") == "caf\x7f" && ini_rules::narrow(L"\u65e5") == "\x7f");
+
+		const auto file = std::filesystem::temp_directory_path() / ("xml2_test-ini-" + std::to_string(GetCurrentProcessId()) + ".ini");
+		{
+			std::ofstream out(file, std::ios::binary);
+			out << "; xml2-fix.ini as the README and the port's builder write it\r\n"
+			       "[Display]\r\n"
+			       "Mode=borderless      ; fullscreen, borderless or windowed; leave out for the game's own behaviour\r\n"
+			       "Width=0              ; force a resolution; 0 = your desktop's size\r\n"
+			       "Height=   ; later\r\n"
+			       "Topmost=1\t; keep it on top\r\n"
+			       "RunInBackground=     ; not decided\r\n"
+			       "FrameRate=144 ; x\r\n"
+			       "VSync=1 ; 0\r\n"
+			       "ResolutionList=all   ; all: up to 64 entries\r\n"
+			       "[Online]\r\n"
+			       "Domain=   ; later\r\n"
+			       "Server=127.0.0.1     ; every *.gamespy.com lookup -> this address\r\n"
+			       "LocalIP=auto # a hash doesn't start a comment\r\n"
+			       "GameVersion=X1.0     ; the X-Men Legends 1 port\r\n"
+			       "[Game]\r\n"
+			       "NewGameTeam=wolverine   ; Wolverine alone\r\n"
+			       "SaveFolder=X-Men Legends   ; its own saves\r\n"
+			       "WindowTitle=X-Men Legends   ; the window's and the taskbar's name\r\n"
+			       "EndHeroUnlock=0   ; no Deadpool after the credits\r\n"
+			       "MainMenuItems=button1,button2,button3,button4,button5,button6,button7,button8   ; XML1's menu with Play Online\r\n"
+			       "PostgameScript=x1/menus/postgame   ; r505, then the main menu\r\n"
+			       "NewGamePlus=0   ; no saved statistics\r\n"
+			       "ResetUnlocks=  ; later\r\n"
+			       "XPCurve=xml1    ; XML1's levels\r\n"
+			       "[Discord]\r\n"
+			       "Enabled=0        ; no presence at all (0, false, no or off; anything else, or no key: on)\r\n"
+			       "ShowParty=OFF # later\r\n"
+			       "LargeImage=     ; none: no images; another asset's key instead of the logo (no key: the logo)\r\n"
+			       "[Test]\r\n"
+			       "InputPipe=1 ; on\r\n"
+			       "PipeName=my-pipe   ; mine\r\n"
+			       "[Limits]\r\n"
+			       "ActorSlots=127   ; headroom\r\n";
+		}
+		const auto read = [&](const wchar_t* section, const wchar_t* key) { return ini_rules::read(file, section, key); };
+		const auto number = [&](const wchar_t* section, const wchar_t* key, const int fallback) { return ini_rules::read_number(file, section, key, fallback); };
+		const auto flag = [&](const wchar_t* section, const wchar_t* key, const bool fallback) { return ini_rules::read_flag(file, section, key, fallback); };
+		const auto view = [](const std::optional<std::string>& text) { return text ? std::optional<std::string_view>(*text) : std::nullopt; };
+
+		// [Display]: the text keys without their comments (display.cpp's read_text), the numbers as before but
+		// an empty one is its default.
+		CHECK(read(L"Display", L"Mode") == "borderless" && display_rules::parse_mode(read(L"Display", L"Mode").value_or("")) == display_rules::mode::borderless);
+		CHECK(number(L"Display", L"Width", 0) == 0 && number(L"Display", L"Height", 5) == 5 && flag(L"Display", L"Topmost", false) && flag(L"Display", L"RunInBackground", true));
+		CHECK(frame_rate_rules::parse_frame_rate(read(L"Display", L"FrameRate").value_or("")) == (frame_rate_rules::cap{frame_rate_rules::cap::kind::fixed, 144}));
+		CHECK(frame_rate_rules::parse_vsync(read(L"Display", L"VSync").value_or("")) == frame_rate_rules::vsync::on);
+		CHECK(display_rules::parse_resolution_list(read(L"Display", L"ResolutionList").value_or("")) == display_rules::resolution_list::all);
+		CHECK(!read(L"Display", L"Height") && !read(L"Display", L"RunInBackground") && !read(L"Display", L"Missing") && number(L"Display", L"Missing", 42) == 42);
+		// [Online]: an empty Domain is openspy.net; Server wins; a '#' is part of LocalIP's value (refused, logged).
+		const auto plan = online_rules::choose(read(L"Online", L"Domain").value_or(""), read(L"Online", L"Server").value_or(""));
+		CHECK(plan.how == online_rules::plan::mode::server && plan.target == "127.0.0.1");
+		CHECK(online_rules::choose(read(L"Online", L"Domain").value_or(""), "").target == "openspy.net");
+		CHECK(read(L"Online", L"LocalIP") == "auto # a hash doesn't start a comment" && !local_ip_rules::choose(read(L"Online", L"LocalIP").value_or("")).problem.empty());
+		CHECK(game_version_rules::parse_version(view(read(L"Online", L"GameVersion"))).version == "X1.0");
+		// [Game]: every key takes an inline comment now, NewGameTeam and SaveFolder included.
+		CHECK(read(L"Game", L"NewGameTeam") == "wolverine" && read(L"Game", L"SaveFolder") == "X-Men Legends" && new_game::valid_save_folder(*read(L"Game", L"SaveFolder")));
+		CHECK(window_title_rules::parse_title(view(read(L"Game", L"WindowTitle"))).title == "X-Men Legends");
+		CHECK(postgame_rules::parse_end_unlock(view(read(L"Game", L"EndHeroUnlock"))).skip);
+		const auto items = main_menu_rules::parse_items(read(L"Game", L"MainMenuItems").value_or(""));
+		CHECK(items.set && items.error.empty() && items.names[7] == "button8" && main_menu_rules::eight_items(items));
+		CHECK(postgame_rules::parse_script(read(L"Game", L"PostgameScript").value_or("")).name == "x1/menus/postgame");
+		CHECK(!flag(L"Game", L"NewGamePlus", true) && flag(L"Game", L"ResetUnlocks", true));
+		CHECK(xp_curve_rules::parse_curve(read(L"Game", L"XPCurve").value_or("")).value == xp_curve_rules::curve::xml1);
+		// [Discord]: the README's line is off; "OFF # later" isn't a switch value (the default, on); the old
+		// template's empty LargeImage is the logo, not "no art".
+		CHECK(!discord_rules::parse_switch(view(read(L"Discord", L"Enabled")), true) && discord_rules::parse_switch(view(read(L"Discord", L"ShowParty")), true));
+		CHECK(!read(L"Discord", L"LargeImage") && discord_rules::choose_images(view(read(L"Discord", L"LargeImage")), std::nullopt).large == "logo");
+		// [Test], [Limits].
+		CHECK(flag(L"Test", L"InputPipe", false) && test_input_rules::choose_pipe(read(L"Test", L"PipeName").value_or("")).name == "my-pipe");
+		CHECK(limits_rules::decide(view(read(L"Limits", L"ActorSlots")), std::nullopt).actor_slots == 127);
+		std::error_code ignored;
+		std::filesystem::remove(file, ignored);
+		CHECK(!read(L"Display", L"Mode") && number(L"Display", L"Width", 3) == 3); // no file: nothing set
+	}
+
+	// [Game] WindowTitle (window_title_rules.hpp): the value's rules, then, when the game's files are at hand,
+	// what the hooks rely on: libIGDisplay.dll creates its window of class igWin32WindowClass with
+	// CreateWindowExA and retitles it with SetWindowTextA, and XMen2.exe's title is also its registry root.
+	void check_window_title_rules()
+	{
+		using namespace window_title_rules;
+		std::printf("[Game] WindowTitle (the game window's title)\n");
+		CHECK(parse_title("X-Men Legends").title == "X-Men Legends" && parse_title("  X-Men Legends   ; the port").title == "X-Men Legends");
+		CHECK(parse_title(std::nullopt).title.empty() && parse_title(std::nullopt).error.empty() && parse_title("   ; later").title.empty() && parse_title("").error.empty());
+		CHECK(parse_title("X-Men Legends #1: Rise!").title == "X-Men Legends #1: Rise!" && parse_title(std::string(title_max, 'x')).title.size() == title_max);
+		CHECK(!parse_title(std::string(title_max + 1, 'x')).error.empty() && !parse_title("caf\x7f").error.empty() && !parse_title("a\tb").error.empty());
+		CHECK(parse_title("caf\x7f").title.empty() && is_engine_class("igWin32WindowClass") && !is_engine_class("igwin32windowclass") && !is_engine_class("ConsoleWindowClass"));
+
+		if (const auto exe = game_executable())
+		{
+			DWORD size = 0;
+			std::uint8_t* image = map_image(*exe, size);
+			CHECK(image != nullptr);
+			if (image)
+			{
+				const auto at = [&](const DWORD va) { return image + (va - 0x400000); };
+				// The window's title is the registry root's string too: why the string stays and the calls are hooked.
+				CHECK(std::string_view(reinterpret_cast<const char*>(at(0x6a3a70))) == "X-Men Legends 2" && at(0x5faf43)[0] == 0x68 && operand_at(at(0x5faf44), 4) == 0x6a3a70);
+				CHECK(at(0x5f5215)[0] == 0x68 && operand_at(at(0x5f5216), 4) == 0x6a3a70 && at(0x5f521a)[0] == 0x68 && operand_at(at(0x5f521b), 4) == 0x6a3a64);
+				VirtualFree(image, 0, MEM_RELEASE);
+			}
+		}
+		const auto display = game_file(L"libIGDisplay.dll");
+		if (!display)
+		{
+			std::printf("  skip  no libIGDisplay.dll to check the window calls against\n");
+			return;
+		}
+		DWORD size = 0;
+		std::uint8_t* image = map_image(*display, size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto module = reinterpret_cast<HMODULE>(image);
+		const auto at = [&](const DWORD va) { return image + (va - 0x10000000); };
+		// igWin32Window: CreateWindowExA(0, "igWin32WindowClass", title, ...) at 0x10005894, SetWindowTextA(hwnd, title)
+		// at 0x10005a62 - both through the import table the hooks change.
+		CHECK(std::string_view(reinterpret_cast<const char*>(at(0x1000ae0c))) == engine_class);
+		CHECK(at(0x1000588d)[0] == 0x68 && operand_at(at(0x1000588e), 4) == 0x1000ae0c && at(0x10005894)[0] == 0xff && at(0x10005894)[1] == 0x15 &&
+		      operand_at(at(0x10005896), 4) == 0x100090b4);
+		CHECK(at(0x10005a62)[0] == 0xff && at(0x10005a62)[1] == 0x15 && operand_at(at(0x10005a64), 4) == 0x100090ac);
+		int dummy = 0;
+		CHECK(iat_hook::hook(module, "USER32.dll", "CreateWindowExA", 0, &dummy) != nullptr && operand_at(at(0x100090b4), 4) == reinterpret_cast<std::uintptr_t>(&dummy));
+		CHECK(iat_hook::hook(module, "USER32.dll", "SetWindowTextA", 0, &dummy) != nullptr && operand_at(at(0x100090ac), 4) == reinterpret_cast<std::uintptr_t>(&dummy));
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
+	// [Online] GameVersion (game_version_rules.hpp): the value's rules, the guards on their own, then against a
+	// copy of XMen2.exe every place that reads the version (each reads at most five bytes) and the change
+	// applied to that copy.
+	void check_game_version_rules()
+	{
+		using namespace game_version_rules;
+		std::printf("[Online] GameVersion (the version GameSpy and other players see)\n");
+		CHECK(parse_version("X1.0").version == "X1.0" && parse_version(" X1.0   ; the port").version == "X1.0" && parse_version("2").version == "2" && parse_version("a_b-").version == "a_b-");
+		CHECK(parse_version(std::nullopt).version.empty() && parse_version(std::nullopt).error.empty() && parse_version("  ; later").version.empty() && parse_version("  ; later").error.empty());
+		for (const char* bad : {"X1.01", "1.30a", "X 10", "a\\b", "1/2", "caf\x7f", "\"1\"", "1,2"})
+		{
+			const auto refused = parse_version(bad);
+			if (refused.error.empty()) std::printf("  info  \"%s\" was taken\n", bad);
+			CHECK(refused.version.empty() && !refused.error.empty());
+		}
+		CHECK(parse_version("X1.01").error.find("keeps 4") != std::string::npos);
+		const auto bytes = bytes_for("X1.0");
+		CHECK((bytes == std::array<std::uint8_t, 5>{'X', '1', '.', '0', 0}) && (bytes_for("2") == std::array<std::uint8_t, 5>{'2', 0, 0, 0, 0}));
+
+		bool guards_ok = true;
+		std::set<DWORD> addresses;
+		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
+		CHECK(guards_ok && guards[0].va == version_va && limits_rules::hex_size(guards[0].hex) == 8);
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the version's bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](const DWORD va) { return image + (va - image_base); };
+		const guard* mismatch = first_mismatch(image);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
+		CHECK(mismatch == nullptr && std::string_view(reinterpret_cast<const char*>(at(version_va))) == retail_version);
+		CHECK(std::string_view(reinterpret_cast<const char*>(at(version_va + 8))) == "NoName");
+		// Complete: every dword in the exe naming a byte of the version (0x6a49b0..0x6a49b7) lies in a guard.
+		std::vector<DWORD> references;
+		for (DWORD i = 0; i + 4 <= image_size; ++i)
+		{
+			const auto value = operand_at(image + i, 4);
+			if (value >= version_va && value < version_va + 8) references.push_back(image_base + i);
+		}
+		bool covered = references.size() == 12;
+		for (const DWORD r : references)
+		{
+			bool inside = false;
+			for (const auto& g : guards) inside |= g.va != version_va && g.va <= r && r + 4 <= g.va + limits_rules::hex_size(g.hex);
+			if (!inside) std::printf("  info  0x%08lX reads the version outside the guards\n", r);
+			covered &= inside;
+		}
+		CHECK(covered);
+
+		// The change on a copy: the version's bytes, nothing else; then the guard no longer matches.
+		std::vector<std::uint8_t> before(image, image + image_size);
+		apply(image, "X1.0");
+		std::vector<DWORD> changed;
+		for (DWORD i = 0; i < image_size; ++i)
+		{
+			if (image[i] != before[i]) changed.push_back(image_base + i);
+		}
+		CHECK((changed == std::vector<DWORD>{version_va, version_va + 1, version_va + 2}) && // "1.30" -> "X1.0": the 0 stays
+		      std::string_view(reinterpret_cast<const char*>(at(version_va))) == "X1.0");
+		mismatch = first_mismatch(image);
+		CHECK(mismatch && mismatch->va == version_va);
+		std::memcpy(image, before.data(), image_size);
+		apply(image, "2");
+		CHECK(std::string_view(reinterpret_cast<const char*>(at(version_va))) == "2" && at(version_va + 4)[0] == 0 && std::string_view(reinterpret_cast<const char*>(at(version_va + 8))) == "NoName");
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
+	// [Game] EndHeroUnlock (postgame_rules.hpp): the value's rules, the guards on their own, then against a copy
+	// of XMen2.exe what state 3 does (the calls, the name, the popup's string) and the jump applied to it.
+	void check_end_unlock_rules()
+	{
+		using namespace postgame_rules;
+		std::printf("[Game] EndHeroUnlock (the ending's Deadpool unlock and popup)\n");
+		CHECK(parse_end_unlock("0").skip && parse_end_unlock(" 0 ; the port").skip && parse_end_unlock("0").error.empty());
+		CHECK(!parse_end_unlock(std::nullopt).skip && !parse_end_unlock("1").skip && parse_end_unlock("1").error.empty() && !parse_end_unlock("  ; later").skip);
+		CHECK(!parse_end_unlock("no").skip && !parse_end_unlock("no").error.empty() && !parse_end_unlock("2").error.empty());
+		CHECK(skip_unlock[0] == 0xe9 && operand_at(skip_unlock.data() + 1, 4) == unlock_skip_to - (unlock_call + 5) && unlock_skip_to - (unlock_call + 5) == 0x58);
+
+		bool guards_ok = true, covered = false;
+		std::set<DWORD> addresses;
+		for (const auto& g : unlock_guards)
+		{
+			guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
+			const DWORD end = g.va + static_cast<DWORD>(limits_rules::hex_size(g.hex));
+			covered |= g.va <= unlock_call && unlock_skip_to + 2 <= end;
+		}
+		CHECK(guards_ok && covered);
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the ending's bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](const DWORD va) { return image + (va - image_base); };
+		const guard* mismatch = first_unlock_mismatch(image);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
+		CHECK(mismatch == nullptr && std::equal(retail_unlock_call.begin(), retail_unlock_call.end(), at(unlock_call)));
+		// What state 3 does: the win (profile vt+0xa4) and Hard (vt+0xac) before the jump, the registry's lookup of
+		// "deadpool", its unlock and the popup's string 1194 inside what it skips, and the step's epilogue after.
+		const auto call_target = [&](const DWORD va) { return va + 5 + operand_at(at(va + 1), 4); };
+		CHECK(call_target(0x5b1d17) == 0x48fed0 && at(0x5b1d21)[0] == 0xff && operand_at(at(0x5b1d23), 4) == 0xa4);
+		CHECK(call_target(0x5b1d3a) == 0x48fed0 && at(0x5b1d44)[0] == 0xff && operand_at(at(0x5b1d46), 4) == 0xac && at(0x5b1d38)[0] == 0x75 && 0x5b1d3a + at(0x5b1d39)[0] == unlock_call);
+		CHECK(call_target(unlock_call) == 0x44b8f0 && at(0x5b1d51)[0] == 0x68 && operand_at(at(0x5b1d52), 4) == 0x68253c && call_target(0x5b1d5d) == 0x44b8f0);
+		CHECK(at(0x5b1d97)[0] == 0x68 && operand_at(at(0x5b1d98), 4) == 1194 && std::string_view(reinterpret_cast<const char*>(at(0x68253c))) == "deadpool");
+		CHECK(at(unlock_skip_to)[0] == 0x5d && at(unlock_skip_to + 1)[0] == 0x5f && at(unlock_skip_to + 2)[0] == 0xc7 && operand_at(at(unlock_skip_to + 4), 4) == 0x1958 &&
+		      operand_at(at(unlock_skip_to + 8), 4) == 4);
+		// The one branch in state 3 that isn't inside the skipped block lands on the jump itself: jne 0x5b1d4a.
+		CHECK(at(0x5b1d7c)[0] == 0x7d && 0x5b1d7e + at(0x5b1d7d)[0] == unlock_skip_to); // (the popup's jge, inside it, lands after it)
+
+		// The change on a copy: the five bytes of the call, nothing else; then the guard no longer matches.
+		std::vector<std::uint8_t> before(image, image + image_size);
+		apply_skip_unlock(image);
+		std::vector<DWORD> changed;
+		for (DWORD i = 0; i < image_size; ++i)
+		{
+			if (image[i] != before[i]) changed.push_back(image_base + i);
+		}
+		CHECK((changed == std::vector<DWORD>{unlock_call, unlock_call + 1, unlock_call + 2, unlock_call + 3, unlock_call + 4}));
+		CHECK(at(unlock_call)[0] == 0xe9 && unlock_call + 5 + operand_at(at(unlock_call + 1), 4) == unlock_skip_to);
+		mismatch = first_unlock_mismatch(image);
+		CHECK(mismatch && mismatch->va == 0x5b1ce3 && postgame_rules::first_mismatch(image) == nullptr); // PostgameScript's guards don't see it
+		std::memcpy(image, before.data(), image_size);
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
+	// XInput on a thread of its own (xinput_pad.hpp): the fix's log says it was ready after some time on
+	// another thread than this program's main one, which never waited for it.
+	void check_xinput_thread(const DWORD main_thread)
+	{
+		std::printf("xinput: loaded off the game's thread\n");
+		std::string line;
+		for (int i = 0; i < 150 && line.empty(); ++i)
+		{
+			const auto log = read_file(module_dir() / "xml2-fix.log");
+			if (const auto at = log.find("xinput: ready after "); at != std::string::npos)
+			{
+				line = log.substr(at, log.find('\n', at) - at);
+			}
+			else
+			{
+				Sleep(100);
+			}
+		}
+		std::printf("  info  %s\n", line.empty() ? "(no xinput line in the log)" : line.c_str());
+		const auto thread_at = line.find(" on thread ");
+		const auto thread = thread_at == std::string::npos ? 0ul : std::strtoul(line.c_str() + thread_at + 11, nullptr, 10);
+		CHECK(!line.empty() && thread != 0 && thread != main_thread && line.find("(its own, not the game's") != std::string::npos);
+	}
 }
 
 int main(const int argc, char** argv)
@@ -5522,6 +5919,7 @@ int main(const int argc, char** argv)
 		return failures ? 1 : 0;
 	}
 
+	const DWORD main_thread = GetCurrentThreadId();
 	std::printf("the fix is the dinput.dll this program loaded\n");
 	const auto fix = GetModuleHandleW(L"dinput.dll");
 	wchar_t path[MAX_PATH]{};
@@ -5565,14 +5963,20 @@ int main(const int argc, char** argv)
 	check_image_file();
 	check_save_folder();
 	check_postgame_rules();
+	check_end_unlock_rules();
 	check_new_game_plus_rules();
 	check_main_menu_rules();
+	check_window_title_rules();
+	check_game_version_rules();
+	check_ini_rules();
 	check_xp_curve_rules();
 	check_pad_prompts_rules();
 	check_discord_rules();
 	check_discord_pipe();
 	check_mod_order();
 	check_d3d8_modes();
+
+	check_xinput_thread(main_thread);
 
 	const auto log = read_file(module_dir() / "xml2-fix.log");
 	CHECK(log.find("hooked a DirectInput 7 instance") != std::string::npos);
@@ -5589,6 +5993,8 @@ int main(const int argc, char** argv)
 	CHECK(log.find("postgame:") == std::string::npos); // no [Game] PostgameScript: not a word, nothing patched
 	CHECK(log.find("main menu:") == std::string::npos); // no [Game] MainMenuItems: not a word, nothing patched
 	CHECK(log.find("xp curve:") == std::string::npos);  // no [Game] XPCurve: not a word, nothing patched
+	CHECK(log.find("title:") == std::string::npos);     // no [Game] WindowTitle: not a word, nothing hooked
+	CHECK(log.find("online: GameSpy game version") == std::string::npos && log.find("GameVersion") == std::string::npos); // no [Online] GameVersion
 	// No [Input]: Prompts is auto, but this isn't XMen2.exe - nothing patched.
 	CHECK(log.find("prompts: XMen2.exe isn't loaded at 0x400000 (not the game?) - the game's own prompts") != std::string::npos ||
 	      log.find("prompts: 0x004BD720 isn't the retail code") != std::string::npos);

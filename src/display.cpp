@@ -3,6 +3,7 @@
 #include "display_rules.hpp"
 #include "frame_rate.hpp"
 #include "iat_hook.hpp"
+#include "ini.hpp"
 #include "log.hpp"
 #include "options_menu.hpp"
 #include "resolution_list.hpp"
@@ -832,36 +833,29 @@ namespace display
 
 		// ---- Setup ----------------------------------------------------------------------------------
 
-		std::string read_text(const std::wstring& ini, const wchar_t* key)
+		// [Display] key by the fix's one rule (ini_rules.hpp): up to a ';', trimmed; "" when it isn't set.
+		std::string read_text(const wchar_t* key)
 		{
-			wchar_t value[64]{};
-			GetPrivateProfileStringW(L"Display", key, L"", value, static_cast<DWORD>(std::size(value)), ini.c_str());
-			std::string narrow;
-			for (const wchar_t c : std::wstring(value))
-			{
-				narrow += static_cast<char>(c);
-			}
-			return narrow;
+			return ini::text(L"Display", key).value_or("");
 		}
 
 		options read_options()
 		{
-			const auto ini = (logger::module_dir() / L"xml2-fix.ini").wstring();
-			const auto mode_text = read_text(ini, L"Mode");
+			const auto mode_text = read_text(L"Mode");
 
 			options result;
 			result.window_mode = parse_mode(mode_text);
-			result.width = static_cast<int>(GetPrivateProfileIntW(L"Display", L"Width", 0, ini.c_str()));
-			result.height = static_cast<int>(GetPrivateProfileIntW(L"Display", L"Height", 0, ini.c_str()));
-			result.topmost = GetPrivateProfileIntW(L"Display", L"Topmost", 0, ini.c_str()) != 0;
-			result.run_in_background = GetPrivateProfileIntW(L"Display", L"RunInBackground", 1, ini.c_str()) != 0;
-			result.in_game_options = GetPrivateProfileIntW(L"Display", L"InGameOptions", 1, ini.c_str()) != 0;
+			result.width = ini::number(L"Display", L"Width", 0);
+			result.height = ini::number(L"Display", L"Height", 0);
+			result.topmost = ini::flag(L"Display", L"Topmost", false);
+			result.run_in_background = ini::flag(L"Display", L"RunInBackground", true);
+			result.in_game_options = ini::flag(L"Display", L"InGameOptions", true);
 			if (!mode_text.empty() && result.window_mode == mode::stock)
 			{
 				logger::write("display: unknown Mode '%s' in xml2-fix.ini (fullscreen, borderless or windowed) - left as the game has it", mode_text.c_str());
 			}
 
-			const auto list_text = read_text(ini, L"ResolutionList");
+			const auto list_text = read_text(L"ResolutionList");
 			if (const auto parsed = parse_resolution_list(list_text))
 			{
 				result.resolutions = *parsed;
@@ -871,7 +865,7 @@ namespace display
 				logger::write("display: unknown ResolutionList '%s' in xml2-fix.ini (all or game) - taken as absent", list_text.c_str());
 			}
 
-			const auto frame_rate_text = read_text(ini, L"FrameRate");
+			const auto frame_rate_text = read_text(L"FrameRate");
 			if (const auto parsed = frame_rate_rules::parse_frame_rate(frame_rate_text))
 			{
 				result.frame_rate = *parsed;
@@ -882,7 +876,7 @@ namespace display
 				              frame_rate_rules::min_fps, frame_rate_rules::max_fps);
 			}
 
-			const auto vsync_text = read_text(ini, L"VSync");
+			const auto vsync_text = read_text(L"VSync");
 			switch (frame_rate_rules::parse_vsync(vsync_text))
 			{
 			case frame_rate_rules::vsync::on: result.vsync = true; break;

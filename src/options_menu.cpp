@@ -1,5 +1,6 @@
 #include "options_menu.hpp"
 #include "display.hpp"
+#include "ini.hpp"
 #include "log.hpp"
 #include "options_menu_rules.hpp"
 
@@ -121,14 +122,13 @@ namespace options_menu
 			return (logger::module_dir() / L"xml2-fix.ini").wstring();
 		}
 
+		// The rows' keys that are set, by the fix's one ini rule (ini_rules.hpp): "Mode=   ; later" isn't.
 		std::array<bool, row_count> keys_present()
 		{
-			const auto ini = ini_path();
 			std::array<bool, row_count> present{};
 			for (std::size_t i = 0; i < present.size(); ++i)
 			{
-				wchar_t value[8]{};
-				present[i] = GetPrivateProfileStringW(L"Display", row_keys[i], L"", value, static_cast<DWORD>(std::size(value)), ini.c_str()) > 0;
+				present[i] = ini::text(L"Display", row_keys[i]).has_value();
 			}
 			return present;
 		}

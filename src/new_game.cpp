@@ -1,6 +1,7 @@
 #include "new_game.hpp"
 #include "new_game_plus_rules.hpp"
 
+#include "ini.hpp"
 #include "log.hpp"
 
 #include <Windows.h>
@@ -244,36 +245,22 @@ namespace new_game
 		{
 			return;
 		}
-		const auto ini = (logger::module_dir() / L"xml2-fix.ini").wstring();
-		wchar_t team[160]{};
-		GetPrivateProfileStringW(L"Game", L"NewGameTeam", L"", team, static_cast<DWORD>(std::size(team)), ini.c_str());
-		if (team[0])
+		// Every key by the fix's one ini rule (ini_rules.hpp): up to a ';', trimmed; empty = not set.
+		if (const auto team = ini::text(L"Game", L"NewGameTeam"))
 		{
-			std::string narrow;
-			for (const wchar_t* p = team; *p; ++p)
-			{
-				narrow += *p < 128 ? static_cast<char>(*p) : '?';
-			}
-			seat_team(narrow);
+			seat_team(*team);
 		}
-		if (GetPrivateProfileIntW(L"Game", L"ResetUnlocks", 1, ini.c_str()) == 0)
+		if (!ini::flag(L"Game", L"ResetUnlocks", true))
 		{
 			clear_default_unlocks();
 		}
-		if (GetPrivateProfileIntW(L"Game", L"NewGamePlus", 1, ini.c_str()) == 0)
+		if (!ini::flag(L"Game", L"NewGamePlus", true))
 		{
 			skip_new_game_plus();
 		}
-		wchar_t folder[save_folder_max + 2]{}; // one over the limit, so a longer name is refused, not cut
-		GetPrivateProfileStringW(L"Game", L"SaveFolder", L"", folder, static_cast<DWORD>(std::size(folder)), ini.c_str());
-		if (folder[0])
+		if (const auto folder = ini::text(L"Game", L"SaveFolder"))
 		{
-			std::string narrow;
-			for (const wchar_t* p = folder; *p; ++p)
-			{
-				narrow += *p < 128 ? static_cast<char>(*p) : '\x7f'; // non-ASCII is refused by valid_save_folder
-			}
-			move_save_folder(narrow);
+			move_save_folder(*folder); // non-ASCII comes as 0x7f, refused by valid_save_folder; so is a name too long for it
 		}
 	}
 }

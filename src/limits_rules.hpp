@@ -25,6 +25,8 @@
 //   by 71 fields; the DLL builds the table with the game's own constructor and stores it where the
 //   game's getter looks, before the game asks for it.
 
+#include "ini_rules.hpp"
+
 #include <Windows.h>
 
 #include <algorithm>
@@ -67,14 +69,11 @@ namespace limits_rules
 		return text.substr(first, text.find_last_not_of(" \t") - first + 1);
 	}
 
-	// What the ini says, without an inline "; comment" (the profile API keeps those).
-	inline std::string_view value_text(std::string_view text)
+	// What the ini says, without an inline "; comment" (the profile API keeps those): the fix's one
+	// rule, ini_rules.hpp.
+	inline std::string_view value_text(const std::string_view text)
 	{
-		if (const auto semicolon = text.find(';'); semicolon != std::string_view::npos)
-		{
-			text = text.substr(0, semicolon);
-		}
-		return trimmed(text);
+		return ini_rules::value_text(text);
 	}
 
 	// A count: decimal digits only (no sign, no hex), at most six of them.

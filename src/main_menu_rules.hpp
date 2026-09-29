@@ -17,10 +17,12 @@
 //   - the mouse (vt+0x80, 0x5c9320) looks up nine items into an array: label_option04, 05, 06, 07,
 //     08, 09, debug_text, debug, debug_focus (pushes 0x5c933f..0x5c93bf). Each one that is there and
 //     enabled (+0x54 bit 8) is hit-tested against its screen rectangle (+0x70..+0x76, the IGB node's
-//     bounds, 0x5bc530); the hit slot, clamped to 6 (0x5c944b), is focused, and a left-button release
-//     on the focused slot presses accept for the player (0x5c947c). Missing items are skipped (only
-//     the e3 build's "retail only" popup, [0x6f3c2d], would read one). After a focus change it sets
-//     the Quit item's text (0x5c95f4, 0x5c961d).
+//     bounds, 0x5bc530); the hit slot, clamped to 6 (0x5c944b: cmp edi, 6 / mov ebx, 6 / jge / mov
+//     ebx, edi), is focused (vt+4 with the array's item of that slot, 0x5c95b7), and a left-button
+//     release on the focused slot presses accept for the player (0x5c947c). The clamp is what makes a
+//     click on the two Quit models (slots 7 and 8) a click on Quit (slot 6). Missing items are skipped
+//     (only the e3 build's "retail only" popup, [0x6f3c2d], would read one). After a focus change it
+//     sets the Quit item's text (0x5c95f4, 0x5c961d).
 //   - the update (vt+0x38, 0x5c9640): the Quit item (debug_text, 0x5c9691) reads "Quit" ("~20Quit"
 //     while focused, 0x5c96c2 / 0x5c96f8), and accept on it sets the quit flag 0x6f3a2d (0x5c96dd) -
 //     the only way out: no console command or script function quits. Then the focused item's name is
@@ -37,8 +39,12 @@
 // in those four functions (19, `sites`) is pointed at the DLL's copy of the name given; a slot left
 // empty keeps the game's. So the first six are mouse slots (and the e3 disables), the seventh is Quit
 // in every respect, the last two the Quit button's model and focus model (a click on them counts as
-// the seventh). The two cells are left alone: the Danger Room gate and Play Online stay on items
-// named label_option06 / label_option09 (a mod gives its Danger Room item a usecmd instead). Nothing
+// the seventh). A menu with one item more than XML2's (the X-Men Legends 1 port's eighth, Play
+// Online) gives the eighth slot a name: the clamp's compare becomes cmp edi, 8 (its imm8 at
+// 0x5c944d), so a click on slot 7 focuses and accepts that item itself, like the first six, and only
+// slot 8 (debug_focus, or the ninth name) still counts as Quit. The two cells are left alone: the
+// Danger Room gate and Play Online stay on items named label_option06 / label_option09 (a mod gives
+// its Danger Room item a usecmd instead, the port's Play Online "openmenu online"). Nothing
 // outside the four functions changes: the item parser (0x5bca21 / 0x5bca57, the "debug" exception
 // of menu "main") and another menu class (0x5cc426..0x5cc476) push the same strings.
 
@@ -81,7 +87,7 @@ namespace main_menu_rules
 		{"label_option08", 0x6a133c, "mouse slot 4"},
 		{"label_option09", 0x6a1280, "mouse slot 5"}, // Play Online compares the cell 0x6e662c, left alone
 		{"debug_text", 0x6a0000, "Quit"},
-		{"debug", 0x68c51c, "the Quit button's model"},
+		{"debug", 0x68c51c, "a seventh mouse slot when named (the Quit button's model otherwise)"},
 		{"debug_focus", 0x69fff4, "the Quit button's focus model"},
 	}};
 
@@ -120,6 +126,13 @@ namespace main_menu_rules
 	constexpr DWORD code_end = 0x5c99ee;
 
 	constexpr std::uint8_t push_imm32 = 0x68;
+
+	// The mouse's clamp: cmp edi, 6 at 0x5c944b; a named slot 7 moves it to 8 (see above).
+	constexpr std::size_t own_mouse_slot = 7;    // the slot that becomes a mouse slot when named
+	constexpr DWORD clamp_compare = 0x5c944b;    // 83 ff 06: cmp edi, 6
+	constexpr DWORD clamp_operand = clamp_compare + 2;
+	constexpr std::uint8_t retail_clamp = 6;     // slots 6, 7 and 8 focus Quit
+	constexpr std::uint8_t eight_item_clamp = 8; // only slot 8 does
 
 	// ---- The ini value --------------------------------------------------------------------------------
 
@@ -163,18 +176,15 @@ namespace main_menu_rules
 		return choice.names[i].empty() ? slots[i].retail : std::string_view(choice.names[i]);
 	}
 
-	// "button1,button2,button3,button4,button5,button6,button7": up to nine names, comma separated, for
-	// label_option04, 05, 06, 07, 08, 09, debug_text, debug, debug_focus in that order; an empty entry or a
-	// missing one keeps the game's name. A name is letters, digits and _ (an item name of the menu file), at
-	// most name_max characters. No two slots may end up with the same name, the game's included (ignoring
-	// case): the mouse would count one item twice and move the focus back and forth. A ';' starts a comment.
+	// "button1,button2,button3,button4,button5,button6,button7,button8": up to nine names, comma separated,
+	// for label_option04, 05, 06, 07, 08, 09, debug_text, debug, debug_focus in that order; an empty entry
+	// or a missing one keeps the game's name. An eighth name is a seventh mouse slot (see above). A name
+	// is letters, digits and _ (an item name of the menu file), at most name_max characters. No two slots
+	// may end up with the same name, the game's included (ignoring case): the mouse would count one item
+	// twice and move the focus back and forth. A ';' starts a comment (the fix's one ini rule).
 	inline items_choice parse_items(std::string_view raw)
 	{
-		if (const auto comment = raw.find(';'); comment != std::string_view::npos)
-		{
-			raw = raw.substr(0, comment);
-		}
-		raw = trimmed(raw);
+		raw = ini_rules::value_text(raw);
 		if (raw.empty())
 		{
 			return {};
@@ -318,8 +328,15 @@ namespace main_menu_rules
 		return nullptr;
 	}
 
+	// Whether slot 7 is a mouse slot of its own (the clamp moved to 8), not a model of the Quit button.
+	inline bool eight_items(const items_choice& choice)
+	{
+		return changes(choice, own_mouse_slot);
+	}
+
 	// The operand writes: every site of a slot that changes takes that slot's pointer (the DLL's copy of
-	// its name). `pointers[i]` is ignored for a slot that keeps the game's name.
+	// its name), and a named slot 7 moves the mouse's clamp to 8. `pointers[i]` is ignored for a slot
+	// that keeps the game's name.
 	inline std::vector<operand_write> writes_for(const items_choice& choice, const std::array<std::uint32_t, slot_count>& pointers)
 	{
 		std::vector<operand_write> writes;
@@ -329,6 +346,10 @@ namespace main_menu_rules
 			{
 				writes.push_back({s.push + 1, 4, pointers[s.slot]});
 			}
+		}
+		if (eight_items(choice))
+		{
+			writes.push_back({clamp_operand, 1, eight_item_clamp});
 		}
 		return writes;
 	}

@@ -19,8 +19,10 @@
 #include "discord_presence.hpp"
 #include "display.hpp"
 #include "forced_teams.hpp"
+#include "game_version.hpp"
 #include "gamepad_fix.hpp"
 #include "iat_hook.hpp"
+#include "ini.hpp"
 #include "limits.hpp"
 #include "log.hpp"
 #include "main_menu.hpp"
@@ -33,6 +35,8 @@
 #include "pad_prompts.hpp"
 #include "postgame.hpp"
 #include "test_input.hpp"
+#include "window_title.hpp"
+#include "xinput_pad.hpp"
 #include "xp_curve.hpp"
 
 #define DIRECTINPUT_VERSION 0x0800
@@ -109,24 +113,18 @@ namespace
 		return result;
 	}
 
-	// An [Online] value as the ini has it (ASCII: host names and addresses).
-	std::string online_value(const wchar_t* key, const wchar_t* fallback)
+	// An [Online] value by the fix's one rule (ini_rules.hpp): "" when it isn't set.
+	std::string online_value(const wchar_t* key)
 	{
-		const auto ini = (logger::module_dir() / L"xml2-fix.ini").wstring();
-		wchar_t value[256]{};
-		GetPrivateProfileStringW(L"Online", key, fallback, value, static_cast<DWORD>(std::size(value)), ini.c_str());
-
-		std::string text;
-		for (const wchar_t c : std::wstring(value))
-		{
-			text += static_cast<char>(c);
-		}
-		return text;
+		return ini::text(L"Online", key).value_or("");
 	}
 
 	void install()
 	{
 		logger::write("XML2 Fix " FIX_VERSION);
+		// XInput's first call can take seconds (xinput_pad.hpp): made on a thread of its own, which runs once
+		// the loader is done, so the game's thread never waits for it; pads read as idle until then.
+		xinput_pad::start();
 		gamepad_fix::use_profile(pad_profile::logitech_dual_action);
 		xml2_pad_bindings::install();
 
@@ -144,14 +142,16 @@ namespace
 		// [Online] LocalIP: which of this PC's addresses the game takes for its own (its LocalIP, its game
 		// socket's and its heartbeats' first address) - it resolves its own host name, from the Play Online
 		// screen on, so the same gethostbyname hook arranges that answer.
-		openspy_redirect::install(game, online_rules::choose(online_value(L"Domain", L"openspy.net"), online_value(L"Server", L"")),
-		                          local_ip_rules::choose(online_value(L"LocalIP", L"auto")));
+		openspy_redirect::install(game, online_rules::choose(online_value(L"Domain"), online_value(L"Server")),
+		                          local_ip_rules::choose(online_value(L"LocalIP")));
 
-		const auto ini = (logger::module_dir() / L"xml2-fix.ini").wstring();
-		if (GetPrivateProfileIntW(L"Debug", L"LogNetwork", 0, ini.c_str()))
+		if (ini::flag(L"Debug", L"LogNetwork", false))
 		{
 			net_trace::install(game);
 		}
+		// [Online] GameVersion: the string the game copies into its network code at start-up and when online
+		// opens - here, before any of its code runs.
+		game_version::install(game);
 
 		new_game::install(game);
 		// What the end credits run: one push operand in CREDITS_MENU, used only when a campaign ends.
@@ -184,10 +184,13 @@ namespace
 
 		test_input::install(); // first: its screenshots need the display fix's device hook
 		display::install(game);
+		// [Game] WindowTitle: after the display fix, whose CreateWindowExA hook (borderless / windowed) it then
+		// calls with the new title; either order chains.
+		window_title::install();
 
 		// The game and the engine DLLs that read game data.
 		mod_loader::install({nullptr, "libIGCore.dll", "libIGGfx.dll", "libIGLua.dll", "libIGOpt.dll", "libCriMovie.dll"},
-		                    GetPrivateProfileIntW(L"Debug", L"LogFiles", 0, ini.c_str()) != 0);
+		                    ini::flag(L"Debug", L"LogFiles", false));
 
 		// Discord Rich Presence ([Discord], on by default): a thread of its own that reads the game's state and
 		// talks to Discord's local pipe; it hooks only ExitProcess (the game's import and msvcr71.dll's), to

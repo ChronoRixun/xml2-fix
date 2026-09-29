@@ -1,5 +1,6 @@
 #include "forced_teams.hpp"
 #include "forced_teams_rules.hpp"
+#include "ini.hpp"
 #include "log.hpp"
 
 #include <Windows.h>
@@ -785,26 +786,15 @@ namespace forced_teams
 			return true;
 		}
 
-		std::optional<std::string> ini_value(const std::wstring& ini, const wchar_t* key)
+		std::optional<std::string> ini_value(const wchar_t* key)
 		{
-			wchar_t value[128]{};
-			if (GetPrivateProfileStringW(L"Game", key, L"", value, static_cast<DWORD>(std::size(value)), ini.c_str()) == 0)
-			{
-				return std::nullopt;
-			}
-			std::string narrow;
-			for (const wchar_t* p = value; *p; ++p)
-			{
-				narrow += *p < 128 ? static_cast<char>(*p) : '?';
-			}
-			return narrow;
+			return ini::text(L"Game", key); // the fix's one rule, ini_rules.hpp
 		}
 	}
 
 	void install(const HMODULE game)
 	{
-		const auto ini = (logger::module_dir() / L"xml2-fix.ini").wstring();
-		const auto chosen = decide(ini_value(ini, L"ForcedTeams"), ini_value(ini, L"AddHero"), ini_value(ini, L"JoinHero"));
+		const auto chosen = decide(ini_value(L"ForcedTeams"), ini_value(L"AddHero"), ini_value(L"JoinHero"));
 		for (const auto& note : chosen.notes)
 		{
 			logger::write("forced teams: %s", note.c_str());
