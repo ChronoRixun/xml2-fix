@@ -1,4 +1,5 @@
 #include "new_game.hpp"
+#include "new_game_plus_rules.hpp"
 
 #include "log.hpp"
 
@@ -173,6 +174,44 @@ namespace new_game
 			logger::write("new game: resetgame unlocks no heroes ([Game] ResetUnlocks=0; the mod's scripts unlock them)");
 		}
 
+		const limits_rules::guard* first_new_game_plus_mismatch()
+		{
+			__try
+			{
+				return new_game_plus_rules::first_mismatch(reinterpret_cast<const std::uint8_t*>(image_base));
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return &new_game_plus_rules::guards[0];
+			}
+		}
+
+		// [Game] NewGamePlus=0: setDifficultyLevel starts the game with the default statistics even when
+		// the profile has Hard unlocked, instead of offering XML2's saved-statistics choice (new_game_plus_rules.hpp).
+		void skip_new_game_plus()
+		{
+			using namespace new_game_plus_rules;
+			constexpr const char* as_before = "New Game keeps XML2's saved-statistics choice once Hard is unlocked";
+			if (const auto* g = first_new_game_plus_mismatch())
+			{
+				logger::write("new game: 0x%08lX isn't the retail code (%s) - %s", g->va, g->what, as_before);
+				return;
+			}
+			auto* target = reinterpret_cast<void*>(static_cast<std::uintptr_t>(offer_branch));
+			DWORD old_protect = 0;
+			if (!VirtualProtect(target, patched_branch.size(), PAGE_EXECUTE_READWRITE, &old_protect))
+			{
+				logger::write("new game: ERROR: can't unprotect XMen2.exe's code at 0x%08lX (error %lu) - %s", offer_branch, GetLastError(), as_before);
+				return;
+			}
+			apply(reinterpret_cast<std::uint8_t*>(static_cast<std::uintptr_t>(image_base)));
+			VirtualProtect(target, patched_branch.size(), old_protect, &old_protect);
+			FlushInstructionCache(GetCurrentProcess(), target, patched_branch.size());
+			logger::write("new game: no New Game+ ([Game] NewGamePlus=0): with Hard unlocked, New Game starts with the default statistics "
+			              "instead of offering saved ones (setDifficultyLevel's branch at 0x%08lX always goes to 0x%08lX)",
+			              offer_branch, start_path);
+		}
+
 		void move_save_folder(const std::string& folder)
 		{
 			if (!valid_save_folder(folder))
@@ -220,6 +259,10 @@ namespace new_game
 		if (GetPrivateProfileIntW(L"Game", L"ResetUnlocks", 1, ini.c_str()) == 0)
 		{
 			clear_default_unlocks();
+		}
+		if (GetPrivateProfileIntW(L"Game", L"NewGamePlus", 1, ini.c_str()) == 0)
+		{
+			skip_new_game_plus();
 		}
 		wchar_t folder[save_folder_max + 2]{}; // one over the limit, so a longer name is refused, not cut
 		GetPrivateProfileStringW(L"Game", L"SaveFolder", L"", folder, static_cast<DWORD>(std::size(folder)), ini.c_str());

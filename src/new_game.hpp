@@ -25,6 +25,11 @@
 //   NewGameTeam = wolverine        ; up to four names, comma separated; missing slots are empty
 //   ResetUnlocks = 0               ; 0 = resetgame unlocks nobody (the mod's scripts unlock heroes)
 //   SaveFolder = X-Men Legends     ; saves in Documents\Activision\<SaveFolder>\Save (and Screenshots)
+//   NewGamePlus = 0                ; 0 = no "use saved game statistics" choice once Hard is unlocked
+//
+// NewGamePlus: after a win on Normal the profile has Hard unlocked, and New Game's setDifficultyLevel then
+// offers XML2's New Game+ (default or saved statistics) instead of starting; a campaign that had none
+// (XML1) starts at once with the default statistics. The bytes are in new_game_plus_rules.hpp.
 //
 // Without the keys nothing is patched. Every push operand is checked against the retail value first.
 namespace new_game

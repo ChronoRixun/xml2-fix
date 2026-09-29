@@ -52,6 +52,7 @@
 #include "local_ip_rules.hpp"
 #include "main_menu_rules.hpp"
 #include "new_game.hpp"
+#include "new_game_plus_rules.hpp"
 #include "online_rules.hpp"
 #include "options_menu_rules.hpp"
 #include "pad_prompts_rules.hpp"
@@ -3506,6 +3507,71 @@ namespace
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
 
+	// [Game] NewGamePlus=0 (new_game_plus_rules.hpp): the guards on their own, then, when a copy of
+	// XMen2.exe is at hand, every guard against it, the retail branch and where it goes, and the change
+	// applied to that copy (exactly the two opcode bytes of the je; the jump lands where the je did).
+	void check_new_game_plus_rules()
+	{
+		using namespace new_game_plus_rules;
+		std::printf("[Game] NewGamePlus (no saved-statistics choice at New Game)\n");
+
+		bool guards_ok = true;
+		std::set<DWORD> addresses;
+		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
+		CHECK(guards_ok);
+		bool apart = true, covered = false, path_covered = false;
+		for (std::size_t i = 0; i < guards.size(); ++i)
+		{
+			const DWORD end = guards[i].va + static_cast<DWORD>(limits_rules::hex_size(guards[i].hex));
+			covered |= guards[i].va <= offer_branch && offer_branch + retail_branch.size() <= end;
+			path_covered |= guards[i].va == start_path;
+			for (std::size_t j = 0; j < guards.size(); ++j)
+			{
+				if (i != j && guards[j].va >= guards[i].va && guards[j].va < end) apart = false;
+			}
+		}
+		CHECK(apart && covered && path_covered);
+		// The two encodings land in the same place: je rel32 from 0x4a099e, nop + jmp rel32 from 0x4a099f.
+		const std::array<std::uint8_t, 6> je = retail_branch, jmp = patched_branch;
+		CHECK(branch_target(je.data(), offer_branch) == start_path);
+		CHECK(branch_target(jmp.data(), offer_branch) == start_path);
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check setDifficultyLevel's bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](const DWORD va) { return image + (va - image_base); };
+
+		const guard* mismatch = first_mismatch(image);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
+		CHECK(mismatch == nullptr);
+		CHECK(std::memcmp(at(offer_branch), retail_branch.data(), retail_branch.size()) == 0 && branch_target(at(offer_branch), offer_branch) == start_path);
+		// The not-unlocked path queues the retail line: push 0x6872a0 "runscript startFirstMission()".
+		CHECK(at(start_path + 0x15)[0] == 0x68 && operand_at(at(start_path + 0x16), 4) == 0x6872a0);
+		CHECK(std::string_view(reinterpret_cast<const char*>(at(0x6872a0))) == "runscript startFirstMission()");
+
+		std::vector<std::uint8_t> before(image, image + image_size);
+		apply(image);
+		std::vector<DWORD> changed;
+		for (DWORD i = 0; i < image_size; ++i)
+		{
+			if (image[i] != before[i]) changed.push_back(image_base + i);
+		}
+		CHECK((changed == std::vector<DWORD>{offer_branch, offer_branch + 1}));
+		CHECK(at(offer_branch)[0] == 0x90 && at(offer_branch + 1)[0] == 0xe9 && branch_target(at(offer_branch), offer_branch) == start_path);
+		// Patched (or any other build): setDifficultyLevel's guard no longer matches, so nothing would be written again.
+		mismatch = first_mismatch(image);
+		CHECK(mismatch && mismatch->va == 0x4a0930);
+		std::memcpy(image, before.data(), image_size);
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
 	// Menus, popups and conversations at 60 fps (frame_rate_rules.hpp): the rate rules on their own, then,
 	// when a copy of XMen2.exe is at hand, every guard against it and the game's own four functions (menu up
 	// 0x5d8870, movie 0x5d8420, popup up 0x5e9e30, conversation 0x458010) run on blocks of the test's in
@@ -4448,6 +4514,7 @@ int main(const int argc, char** argv)
 	check_image_file();
 	check_save_folder();
 	check_postgame_rules();
+	check_new_game_plus_rules();
 	check_main_menu_rules();
 	check_xp_curve_rules();
 	check_pad_prompts_rules();
