@@ -8,7 +8,8 @@
 // for it (the PC version ships keyboard-only defaults).
 //
 // Loading also redirects the game's GameSpy lookups to OpenSpy (or to one server of your own,
-// [Online] Server), for online play, and, when
+// [Online] Server) and puts the address this PC reaches the internet from first among the game's
+// own ([Online] LocalIP), for online play, and, when
 // xml2-fix.ini asks for it, runs the game windowed or borderless at the desktop's resolution,
 // raises engine caps (the actor and resource name tables, limits.hpp), gives a mod's campaign what
 // it needs (its New Game, saves, main menu, ending, forced parties, X-Men Legends 1's XP curve) and
@@ -138,7 +139,11 @@ namespace
 			logger::write("the game doesn't import GetProcAddress - its own DirectInput 8 stays unfixed");
 		}
 
-		openspy_redirect::install(game, online_rules::choose(online_value(L"Domain", L"openspy.net"), online_value(L"Server", L"")));
+		// [Online] LocalIP: which of this PC's addresses the game takes for its own (its LocalIP, its game
+		// socket's and its heartbeats' first address) - it resolves its own host name, from the Play Online
+		// screen on, so the same gethostbyname hook arranges that answer.
+		openspy_redirect::install(game, online_rules::choose(online_value(L"Domain", L"openspy.net"), online_value(L"Server", L"")),
+		                          local_ip_rules::choose(online_value(L"LocalIP", L"auto")));
 
 		const auto ini = (logger::module_dir() / L"xml2-fix.ini").wstring();
 		if (GetPrivateProfileIntW(L"Debug", L"LogNetwork", 0, ini.c_str()))

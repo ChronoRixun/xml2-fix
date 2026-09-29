@@ -6,7 +6,9 @@
 //     EnumObjects, ranges set by object id, c_dfDIJoystick2.
 // With an Xbox-compatible pad connected, both must see a Logitech Dual Action. Also checks
 // that GameSpy host lookups resolve through OpenSpy ([Online] Server's rules in online_rules.hpp,
-// and its 127.0.0.1 in the pipe child), and the display fix's decisions: the
+// and its 127.0.0.1 in the pipe child), that this PC's own name resolves with the address Windows
+// reaches the internet from first ([Online] LocalIP's rules in local_ip_rules.hpp, auto here and an
+// address that isn't this PC's in the pipe child), and the display fix's decisions: the
 // rules in display_rules.hpp, frame_rate_rules.hpp and options_menu_rules.hpp against fixed
 // inputs (the frame cap's patch bytes and the in-game options' call sites against a copy of
 // XMen2.exe when one is at hand), the Video options list the fix would build from this PC's
@@ -46,6 +48,8 @@
 #include "frame_rate_rules.hpp"
 #include "image_file.hpp"
 #include "limits_rules.hpp"
+#include "local_ip.hpp"
+#include "local_ip_rules.hpp"
 #include "main_menu_rules.hpp"
 #include "new_game.hpp"
 #include "online_rules.hpp"
@@ -2967,6 +2971,26 @@ namespace
 		CHECK(online_log.find("GameSpy servers redirected to") == std::string::npos); // Server wins over the default Domain
 		CHECK(online_log.find(".invalid ->") == std::string::npos);
 
+		// [Online] LocalIP=203.0.113.9, which isn't this PC's: this PC's name resolves as with auto, and the log says so.
+		CHECK(online_log.find("online: LocalIP=203.0.113.9 - that address first when the game looks up this PC's name") != std::string::npos);
+		{
+			WSAStartup(MAKEWORD(2, 2), &wsa);
+			char own[256]{};
+			CHECK(gethostname(own, sizeof(own)) == 0);
+			const hostent* mine = gethostbyname(own);
+			CHECK(mine != nullptr && mine->h_addr_list[0] != nullptr);
+			const auto route = local_ip::default_route_address();
+			if (mine && mine->h_addr_list[0] && route)
+			{
+				bool listed = false;
+				for (auto** entry = mine->h_addr_list; *entry; ++entry) listed = listed || reinterpret_cast<const in_addr*>(*entry)->s_addr == *route;
+				CHECK(!listed || reinterpret_cast<const in_addr*>(mine->h_addr_list[0])->s_addr == *route);
+			}
+			WSACleanup();
+			const auto local_log = read_file(module_dir() / "xml2-fix.log");
+			CHECK(local_log.find("online: LocalIP: [Online] LocalIP=203.0.113.9 isn't one of this PC's addresses - auto: ") != std::string::npos);
+		}
+
 		HANDLE pipe = INVALID_HANDLE_VALUE;
 		for (int attempt = 0; attempt < 50 && pipe == INVALID_HANDLE_VALUE; ++attempt)
 		{
@@ -3102,7 +3126,7 @@ namespace
 		{
 			std::ofstream out(ini, std::ios::binary);
 			out << "[Test]\r\nInputPipe=1\r\nPipeName=" << pipe_name << " ; this test's own\r\n[Display]\r\nResolutionList=all\r\n[Limits]\r\nActorSlots=127\r\n[Game]\r\nForcedTeams=1\r\nAddHero=1\r\nPostgameScript=x1/menus/postgame ; XML1's r505\r\nMainMenuItems=button1,button2,button3,button4,button5,button6,button7 ; XML1's buttons\r\n"
-			       "XPCurve=xml1 ; XML1's levels and kill XP\r\n[Online]\r\nServer=127.0.0.1 ; a private OpenSpy stack\r\n";
+			       "XPCurve=xml1 ; XML1's levels and kill XP\r\n[Online]\r\nServer=127.0.0.1 ; a private OpenSpy stack\r\nLocalIP=203.0.113.9 ; not this PC's\r\n";
 		}
 
 		wchar_t exe[MAX_PATH]{};
@@ -3215,6 +3239,138 @@ namespace
 		}
 		CHECK(!redirect("localhost", server_plan) && !redirect("www.example.com", server_plan) && !redirect("gamespy.com", server_plan));
 		CHECK(!redirect("xmenlegpc.master.gamespy.com", choose("off", "")));
+	}
+
+	void check_local_ip_rules()
+	{
+		using namespace local_ip_rules;
+		using mode = choice::mode;
+		constexpr auto npos = std::string::npos;
+		std::printf("local IP rules ([Online] LocalIP)\n");
+
+		// Addresses as in_addr holds them.
+		CHECK(parse_address("192.168.1.20") == 0x1401a8c0u && parse_address("127.0.0.1") == 0x0100007fu);
+		CHECK(parse_address("172.18.0.1") == inet_addr("172.18.0.1") && parse_address("100.64.0.10") == inet_addr("100.64.0.10"));
+		CHECK(!parse_address("192.168.1") && !parse_address("host") && !parse_address("") && !parse_address("1.2.3.256"));
+		CHECK(text(0x1401a8c0u) == "192.168.1.20" && text(inet_addr("100.64.0.10")) == "100.64.0.10" && text(0) == "0.0.0.0");
+
+		// The setting: auto by default, first, or an address; anything else is auto and says why.
+		CHECK(choose("").how == mode::automatic && choose("auto").how == mode::automatic && choose(" AUTO ; the default").how == mode::automatic);
+		CHECK(choose("").problem.empty() && choose("auto").problem.empty() && choose("; first, commented out").how == mode::automatic);
+		CHECK(choose("first").how == mode::first && choose("First ; Windows' order").how == mode::first && choose("first").problem.empty());
+		auto chosen = choose(" 192.168.1.20 ; the LAN card");
+		CHECK(chosen.how == mode::address && chosen.wanted == inet_addr("192.168.1.20") && chosen.problem.empty());
+		chosen = choose("ethernet");
+		CHECK(chosen.how == mode::automatic && chosen.problem.find("[Online] LocalIP=ethernet isn't auto, first or an IPv4 address") == 0);
+		chosen = choose("192.168.1.256");
+		CHECK(chosen.how == mode::automatic && !chosen.problem.empty());
+		CHECK(setting_text(choose("")) == "auto" && setting_text(choose("FIRST")) == "first" && setting_text(choose("010.0.0.2")) == "10.0.0.2");
+
+		// This PC's name: any of its spellings, any case, a trailing root dot allowed; nothing else.
+		const std::vector<std::string> own = {"OJAMD", "OJAMD", "OJAMD.lan"};
+		CHECK(is_own_host("OJAMD", own) && is_own_host("ojamd", own) && is_own_host("OjAmD.", own) && is_own_host("ojamd.LAN", own));
+		CHECK(!is_own_host("localhost", own) && !is_own_host("", own) && !is_own_host(".", own) && !is_own_host("OJAMD2", own) && !is_own_host("ojamd.lan.example", own));
+		CHECK(!is_own_host("xmenlegpc.master.gamespy.com", own) && !is_own_host("OJAMD", std::vector<std::string>{}) && !is_own_host("x", std::vector<std::string>{""}));
+
+		// Owen's PC as Windows lists it: WSL's vEthernet, Docker, Tailscale, then the LAN card with the default route.
+		const auto at = [](const char* dotted) { return *parse_address(dotted); };
+		const std::vector<address> windows = {at("172.18.0.1"), at("172.17.0.1"), at("100.64.0.10"), at("192.168.1.20")};
+		const auto arranged = [&](const decision& made)
+		{
+			auto list = windows;
+			if (made.front) move_to_front(list.data(), *made.front);
+			return list_text(list);
+		};
+		CHECK(list_text(windows) == "172.18.0.1, 172.17.0.1, 100.64.0.10, 192.168.1.20" && list_text(std::vector<address>{}) == "(none)");
+		auto made = decide(choose("auto"), windows, at("192.168.1.20"));
+		CHECK(made.front == 3u && arranged(made) == "192.168.1.20, 172.18.0.1, 172.17.0.1, 100.64.0.10");
+		CHECK(made.why == "192.168.1.20 first (the address Windows reaches the internet from, [Online] LocalIP=auto)");
+		made = decide(choose("first"), windows, at("192.168.1.20"));
+		CHECK(!made.front && arranged(made) == list_text(windows) && made.why == "Windows' order ([Online] LocalIP=first)");
+		made = decide(choose("100.64.0.10"), windows, at("192.168.1.20"));
+		CHECK(made.front == 2u && arranged(made) == "100.64.0.10, 172.18.0.1, 172.17.0.1, 192.168.1.20");
+		made = decide(choose("172.18.0.1"), windows, at("192.168.1.20")); // already first
+		CHECK(made.front == 0u && arranged(made) == list_text(windows));
+		// An address that isn't this PC's: auto, and the log line says so.
+		made = decide(choose("10.9.9.9"), windows, at("192.168.1.20"));
+		CHECK(made.front == 3u && made.why == "[Online] LocalIP=10.9.9.9 isn't one of this PC's addresses - auto: 192.168.1.20 first (the address Windows reaches the internet from)");
+		made = decide(choose("10.9.9.9"), windows, std::nullopt);
+		CHECK(!made.front && made.why.find("isn't one of this PC's addresses") != npos && made.why.find("no route to the internet") != npos);
+		// No route to the internet, or one from an address the lookup doesn't list: Windows' order.
+		made = decide(choose("auto"), windows, std::nullopt);
+		CHECK(!made.front && made.why == "no route to the internet - Windows' order kept");
+		made = decide(choose("auto"), windows, at("10.8.0.2"));
+		CHECK(!made.front && made.why == "the internet route's address 10.8.0.2 isn't in the list - Windows' order kept");
+		made = decide(choose("auto"), windows, at("172.18.0.1"));
+		CHECK(made.front == 0u && arranged(made) == list_text(windows));
+		// One address, none, the same one twice (the first one moves).
+		CHECK(decide(choose("auto"), std::vector<address>{at("192.168.1.20")}, at("192.168.1.20")).front == 0u);
+		CHECK(!decide(choose("auto"), std::vector<address>{}, at("192.168.1.20")).front && !decide(choose("10.0.0.1"), std::vector<address>{}, std::nullopt).front);
+		CHECK(decide(choose("auto"), std::vector<address>{at("10.0.0.1"), at("192.168.1.20"), at("10.0.0.1"), at("192.168.1.20")}, at("192.168.1.20")).front == 1u);
+
+		// On a hostent's list: the pointers move, the addresses stay where they are, the terminator stays last.
+		in_addr stored[4]{};
+		char* list[5] = {reinterpret_cast<char*>(&stored[0]), reinterpret_cast<char*>(&stored[1]), reinterpret_cast<char*>(&stored[2]), reinterpret_cast<char*>(&stored[3]), nullptr};
+		move_to_front(list, 3);
+		CHECK(list[0] == reinterpret_cast<char*>(&stored[3]) && list[1] == reinterpret_cast<char*>(&stored[0]) && list[2] == reinterpret_cast<char*>(&stored[1]) &&
+		      list[3] == reinterpret_cast<char*>(&stored[2]) && list[4] == nullptr);
+		move_to_front(list, 0);
+		CHECK(list[0] == reinterpret_cast<char*>(&stored[3]) && list[3] == reinterpret_cast<char*>(&stored[2]));
+	}
+
+	// This PC's own name through the fix (xml2_test's gethostbyname is hooked like the game's; with no
+	// xml2-fix.ini next to the test, LocalIP=auto), against Winsock's own answer and the route Windows reports.
+	void check_local_ip()
+	{
+		using local_ip_rules::address;
+		std::printf("local IP ([Online] LocalIP=auto, this PC's own name)\n");
+		WSADATA wsa{};
+		WSAStartup(MAKEWORD(2, 2), &wsa);
+		using gethostbyname_t = hostent*(WSAAPI*)(const char*);
+		const auto winsock = reinterpret_cast<gethostbyname_t>(GetProcAddress(GetModuleHandleW(L"ws2_32.dll"), "gethostbyname")); // not the hooked import
+		const auto addresses = [](const hostent* found)
+		{
+			std::vector<address> list;
+			if (found && found->h_addrtype == AF_INET)
+			{
+				for (auto** entry = found->h_addr_list; *entry; ++entry) list.push_back(reinterpret_cast<const in_addr*>(*entry)->s_addr);
+			}
+			return list;
+		};
+		char name[256]{};
+		CHECK(gethostname(name, sizeof(name)) == 0);
+		CHECK(winsock != nullptr);
+		const auto windows = winsock ? addresses(winsock(name)) : std::vector<address>{};
+		const auto fixed = addresses(gethostbyname(name)); // GameSpy's way (getlocalhost, 0x641fe0)
+		const auto route = local_ip::default_route_address();
+		std::printf("  info  %s: Windows lists %s; the fix answers %s; the internet route leaves from %s\n", name, local_ip_rules::list_text(windows).c_str(),
+		            local_ip_rules::list_text(fixed).c_str(), route ? local_ip_rules::text(*route).c_str() : "(no route)");
+		CHECK(!windows.empty());
+		CHECK(std::is_permutation(fixed.begin(), fixed.end(), windows.begin(), windows.end()));
+		auto expected = windows;
+		if (route)
+		{
+			if (const auto found = std::ranges::find(expected, *route); found != expected.end()) std::rotate(expected.begin(), found, found + 1);
+		}
+		CHECK(fixed == expected);
+		// The game's own way (0x615d30): "localhost", then the name that answer carries - Winsock's own buffer, passed back in.
+		const hostent* localhost = gethostbyname("localhost");
+		CHECK(localhost != nullptr && localhost->h_name != nullptr);
+		if (localhost && localhost->h_name)
+		{
+			std::printf("  info  \"localhost\" answers with the name %s\n", localhost->h_name);
+			CHECK(addresses(gethostbyname(localhost->h_name)) == expected);
+		}
+		CHECK(addresses(gethostbyname("localhost")) == std::vector<address>{inet_addr("127.0.0.1")}); // not this PC's name: untouched
+		WSACleanup();
+
+		const auto log = read_file(module_dir() / "xml2-fix.log");
+		CHECK(log.find("online: LocalIP=auto - the address Windows reaches the internet from goes first when the game looks up this PC's name") != std::string::npos);
+		const auto before = "online: this PC's addresses (" + std::string(name) + "): " + local_ip_rules::list_text(windows);
+		const auto after = "online: LocalIP: " + local_ip_rules::decide(local_ip_rules::choice{}, windows, route).why + ": " + local_ip_rules::list_text(expected);
+		std::printf("  info  %s\n", after.c_str());
+		CHECK(log.find(before) != std::string::npos && log.find(before) == log.rfind(before)); // once, however often the game asks
+		CHECK(log.find(after) != std::string::npos && log.find(after) == log.rfind(after));
 	}
 
 	void check_save_folder()
@@ -4279,6 +4435,8 @@ int main(const int argc, char** argv)
 	}
 	check_online();
 	check_online_rules();
+	check_local_ip_rules();
+	check_local_ip();
 	check_display_rules();
 	check_frame_rate_rules();
 	check_menu_screens();

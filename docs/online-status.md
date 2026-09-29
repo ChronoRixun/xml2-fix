@@ -8,6 +8,10 @@ _Last updated 2026-09-28._
   `xmenlegpc.available`, `xmenlegpc.master`, `xmenlegpc.ms<N>`, `natneg1`, `natneg2`.
 - In testing, the game reached the online menu and looked up `xmenlegpc.available.openspy.net`
   and `xmenlegpc.ms7.openspy.net` successfully.
+- The game's own address (the Play Online screen's LocalIP, its game socket on UDP 5165, and the
+  heartbeat's `localip0`) is the first address Windows gives for the PC's name, which on a PC with
+  WSL/Hyper-V/Docker/VPN adapters is often a virtual one. The fix now puts the default route's
+  address first (`[Online] LocalIP=auto`, local_ip_rules.hpp has the exe's call sites).
 
 ## What doesn't work yet: the lobby
 

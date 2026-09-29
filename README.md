@@ -92,6 +92,15 @@ Server=127.0.0.1     ; every *.gamespy.com / *.openspy.net lookup -> this addres
 
 The game looks up `xmenlegpc.available` and `xmenlegpc.master` (UDP 27900: the availability check and a hosted game's heartbeats), `xmenlegpc.ms<N>` (TCP 28910: the game and region lists) and `natneg1`/`natneg2` (UDP 27901), all under `gamespy.com`, so that server needs those ports. `xml2-fix.log` lists each name the first time it is sent there (`online: xmenlegpc.master.gamespy.com -> 127.0.0.1 ([Online] Server)`). A value that isn't an IPv4 address is ignored, with a line in the log, and `Domain` applies.
 
+**The game's own address (LocalIP).** The Play Online screen shows a *LocalIP*: the address the game binds its game socket to (UDP 5165) and lists first in a hosted game's heartbeats. The game takes the first address Windows gives for the PC's own name, and Windows lists them in adapter order, not by route - so on a PC with WSL, Hyper-V, Docker or a VPN, it is often a virtual adapter's (`172.18.x.x`, say) that can't reach the internet, and hosting online fails. The fix puts the address Windows reaches the internet from (the default route's) first instead; the others follow in Windows' order, so LAN players still see them all.
+
+```ini
+[Online]
+LocalIP=auto         ; the default. Or: first (Windows' order, as without the fix), or one of this PC's addresses, e.g. 192.168.1.20
+```
+
+An address that isn't this PC's is ignored and `auto` applies. Without a route to the internet, Windows' order stays. `xml2-fix.log` shows the list once, before and after (`online: this PC's addresses (MYPC): 172.18.0.1, 192.168.1.20` then `online: LocalIP: 192.168.1.20 first (...): 192.168.1.20, 172.18.0.1`).
+
 **Diagnosing online problems:** add this to `xml2-fix.ini` and `xml2-fix.log` will list every connection and query the game makes:
 
 ```ini
@@ -235,7 +244,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 
 1. **Presents every Xbox-compatible pad as a Logitech Dual Action** (`046D:C216`), a classic pad from the game's era with digital triggers and the right stick on Z / Rz. It builds that pad's DirectInput state from XInput, in the Dual Action's exact layout (buttons, hat, both sticks, respecting the game's own axis ranges). The game reads pads through two separate DirectInput versions, and both see the same pad.
 2. **Adds the layout above to the game's bindings.** It patches it into the game's built-in defaults in memory, so first runs and *Revert to defaults* include it, and adds it once to settings you already have.
-3. **Redirects GameSpy host lookups to OpenSpy.**
+3. **Redirects GameSpy host lookups to OpenSpy,** through the game's `gethostbyname`. The same hook answers the game's lookup of the PC's own name (how it picks its LocalIP, and the local addresses its GameSpy code reports) with the default route's address first ([Online](#-online)).
 4. **Runs the game in a window when asked to** ([Display](#%EF%B8%8F-display)). The engine (Alchemy) creates its Direct3D 8 device fullscreen at the registry resolution; the fix hooks `IDirect3D8::CreateDevice` and `IDirect3DDevice8::Reset` to make the device windowed, places the engine's window itself (its `CreateWindowExA`, `SetWindowLongA`, `SetWindowPos` and `MoveWindow` calls), answers the game's read of its resolution setting with the desktop size so the HUD and aspect ratio match, and completes the Direct3D mode list the Video options are built from.
 5. **Paces frames when asked to** ([Display](#%EF%B8%8F-display)). With `FrameRate` set, the 1/60 s constant the game's frame function writes is patched to 0 (after checking the bytes are the retail build's), which ends its busy-wait at once, and frames are paced in the fix's `IDirect3DDevice8::Present` hook with a high-resolution waitable timer and a short spin. Each frame the hook also reads the fields behind the game's own check for a menu, popup or conversation on screen (the menu manager's, the popup manager's and the conversation system's, the bytes of all three checked first) and paces at 60 while one is up. `VSync` is set in the same `CreateDevice`/`Reset` rewrite as the window mode.
 6. **Puts those settings in the game's own options panel.** *Advanced Options* is hand-drawn Direct3D UI (Beenox's `BXIG` widgets), not a menu file, so the fix builds its rows with the game's own option-cycler class, exactly as the game builds its *FSAA* row, from a function it puts in place of the panel builder's final call; three more call-site replacements in the panel's close function persist Accept, Cancel and Revert. The engine draws, animates and navigates the rows; the fix only answers their callbacks. Every call site's bytes are checked first, so on any other build the panel is left as it is.
