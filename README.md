@@ -26,6 +26,7 @@
 | Modern Xbox pads (e.g. over Bluetooth) | odd axes and trigger behaviour | one consistent layout for every pad |
 | Online                | GameSpy servers gone | redirected to [OpenSpy](https://openspy.net) (lobby: [in progress](#-online)) |
 | Display               | exclusive fullscreen only, switches your monitor's mode, no native resolution in the list, 60 fps | borderless or windowed at your desktop's resolution, frame rate and vsync of your choosing, [set in the game's own options](#%EF%B8%8F-display) |
+| Discord               | — | shows what you're playing on your profile: the zone, your heroes, online co-op ([details](#-discord), easy to switch off) |
 | Setup                 | — | copy one file |
 
 ## ⚡ Install
@@ -141,6 +142,49 @@ In borderless mode with `Width`/`Height` at 0 the game starts at the desktop siz
 
 **VSync.** In `fullscreen` (and the game's own mode) `VSync=1` waits for the vertical blank and `VSync=0` never does (the engine's own default). In `borderless` and `windowed` Direct3D 8 has no usable vsync (the only one it offers runs at about 32 fps on a modern desktop), so there `VSync=1` means frames are paced at your desktop's refresh rate, never above `FrameRate`, and the desktop compositor shows them without tearing; with `FrameRate` left out the game's own 60 fps cap stays in charge.
 
+## 💬 Discord
+
+With the Discord app running on the same PC, your Discord profile shows what you're doing in the game while it runs, as it does for newer games:
+
+> **X-Men Legends II**<br>
+> Act 1 · Sanctuary<br>
+> Wolverine, Storm +2 · Lv 10-12<br>
+> 00:42 elapsed
+
+The X-Men Legends I port shows as **X-Men Legends**, XML2 as **X-Men Legends II**. The fix tells them apart by the port's `Scripts\x1` folder (in the game folder or a mod's) or its `[Game] PostgameScript=x1/...` or `SaveFolder=X-Men Legends`.
+
+| In the game | Discord shows |
+| ----------- | ------------- |
+| The main menu, and before the first zone | In the menus |
+| A zone | The act and the zone's name as the save screen has it (*Act 1 · East Manhattan*), then your party: one or two heroes with their levels (*Wolverine Lv 3 · Cyclops Lv 1*), three or four shortened (*Wolverine, Cyclops +2 · Lv 3-5*). Heroes by the names the game shows (*Jean Grey*, not `phoenix`) |
+| A cutscene | Watching a cutscene, and the zone |
+| The Danger Room | Danger Room · the course's title |
+| Play Online | *In the menus · Play Online*; in a game's lobby *Online lobby · Hosting* or *Joined*; in a zone the zone and *Online co-op · hosting* or *joined*, with the players, e.g. (2 of 4) |
+
+The time counts from the game's start. A loading screen keeps what was there. An update goes out at most every 5 seconds (Discord takes about five in 20 seconds).
+
+**What's shared:** only that text: the zone, your heroes and their levels, the mode (menus, cutscene, Danger Room, online) and the number of players online. No player names, no PC, network or account details. It goes to the Discord app on your own PC through its local pipe, which shows it to whoever Discord shows your activity to (Discord's *User Settings → Activity Privacy* decides who).
+
+**Switching it off:** in the Ultimate Legends launcher, or in `xml2-fix.ini`:
+
+```ini
+[Discord]
+Enabled=0        ; no presence at all (0, false, no or off; anything else, or no key: on)
+ShowZone=0       ; where you are stays private: "Playing"
+ShowParty=0      ; your heroes stay private
+```
+
+Discord's own *Share your detected activities with others* switch hides it too. For the future and for testing:
+
+```ini
+LargeImage=      ; an art asset's key in the Discord application (none by default)
+SmallImage=
+Game=xml1        ; which application, if the detection is wrong: xml1 or xml2
+ClientId=        ; another Discord application's id
+```
+
+Discord not running? The fix looks for it every 20 seconds, quietly, and connects once it starts. `xml2-fix.log` says when (`discord: connected as X-Men Legends II (discord-ipc-0)`) and lists each new presence (`discord: presence -> Act 1 · Sanctuary | Wolverine, Storm +2 · Lv 10-12`). Quitting the game clears the presence; if the game is closed any other way, Discord clears it when the fix's connection goes. It reads the game's own state once a second: the zone manager's zone and save name, the act, the party, the stats registry's names and levels, the Danger Room's course and the online session, after checking every byte it relies on is the retail build's. On any other build the presence shows the game's name only, and `xml2-fix.log` says why.
+
 ## 🧪 Driving the game from a script
 
 For automated tests (the X-Men Legends I port's test runner, for one) that need to press keys and grab frames without taking the PC away from whoever is using it. With
@@ -254,6 +298,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 7. **Gives the resolution list room when asked to** (`ResolutionList=all`). The game `sprintf`s its list into 20 twelve-byte slots in its data and reads them back through the count next to them, so the seven instructions that carry the table's address (the writer, the slider, Accept, the builder's and the revert's index searches, the close function's two reads) get the address of a 64-slot table in the DLL instead, again after a byte check of each, and only once the engine's Direct3D is hooked. The list itself comes from the fix's `IDirect3D8::GetAdapterModeCount`/`EnumAdapterModes` hooks and never exceeds the table in use.
 8. **Adds script functions for a mod's campaign when asked to** ([Mods](#-mods-with-their-own-campaign)). The game registers its 289 script functions once at start-up, by pushing its table and its count and handing them to its script system; before any of the game's code runs, the fix points those two pushes at a copy of the table with its eight functions after the game's own. They do what the game's own code does for its party changes (the party slot setter, the side-mission stack's `pushsidemission`, `restorelastzone` and `cancelsidemission`, a hero's costume byte), calling the game's functions.
 9. **Names the pad's buttons in prompts.** Every prompt goes through one function that turns an action into its label; the game asks it for the first bound of a player's binding slots in a fixed order in which the keyboard always comes before the pad. The fix replaces that one call with its own, which reads the same bindings but picks the pad's for a player on a pad, and names it after the pad layout above. It learns who uses what from the input state the game has just read each frame (keyboard, mouse buttons, pads), and colours the face buttons through the one instruction that gives a single-character label its colour. Every byte involved is checked first; on any other build the prompts are left as they are.
+10. **Tells Discord what you're playing** ([Discord](#-discord)). A thread of the fix's own reads the game's state once a second (every read guarded, so a zone load in progress can't hurt the game) and talks to the Discord app through its local RPC pipe, `\\.\pipe\discord-ipc-0` to `9`, as Discord's SDKs do, without them. The game's `ExitProcess` is hooked, so quitting clears the presence first.
 
 ```mermaid
 flowchart LR

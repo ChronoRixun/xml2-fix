@@ -34,6 +34,10 @@
 //
 //   xml2_test.exe          run the checks
 //   xml2_test.exe --live   also show live pad input, as the game sees it, for 20 seconds
+//   xml2_test.exe --discord-live   only a round trip with this PC's Discord: a test presence as X-Men
+//                          Legends II for four seconds, then cleared (discord_rules.hpp's decisions,
+//                          its reads of the game's memory over blocks of the test's own and its bytes
+//                          against XMen2.exe are part of the normal run)
 
 #define DIRECTINPUT_VERSION 0x0800
 #include <WinSock2.h>
@@ -42,6 +46,8 @@
 #include <timeapi.h>
 #include <Xinput.h>
 
+#include "discord_ipc.hpp"
+#include "discord_rules.hpp"
 #include "display_rules.hpp"
 #include "forced_teams_rules.hpp"
 #include "frame_capture.hpp"
@@ -4458,6 +4464,462 @@ namespace
 		std::memcpy(image, before.data(), image_size);
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
+
+	// ---- Discord Rich Presence (discord_rules.hpp) --------------------------------------------------
+
+	// Blocks of memory at the game's addresses, for discord_rules::game_reader: what isn't in a block
+	// can't be read.
+	struct fake_memory
+	{
+		std::map<DWORD, std::vector<std::uint8_t>> blocks;
+
+		std::uint8_t* at(const DWORD va, const std::size_t size = 1)
+		{
+			auto it = blocks.upper_bound(va);
+			if (it == blocks.begin()) return nullptr;
+			--it;
+			if (va - it->first + size > it->second.size()) return nullptr;
+			return it->second.data() + (va - it->first);
+		}
+		bool read(const DWORD va, void* out, const std::size_t size)
+		{
+			const auto* p = at(va, size);
+			if (!p) return false;
+			std::memcpy(out, p, size);
+			return true;
+		}
+		void block(const DWORD va, const std::size_t size)
+		{
+			blocks[va].assign(size, 0);
+		}
+		void u32(const DWORD va, const std::uint32_t value)
+		{
+			std::memcpy(at(va, 4), &value, 4);
+		}
+		void u16(const DWORD va, const std::uint16_t value)
+		{
+			std::memcpy(at(va, 2), &value, 2);
+		}
+		void u8(const DWORD va, const std::uint8_t value)
+		{
+			*at(va) = value;
+		}
+		void text(const DWORD va, const std::string_view value)
+		{
+			std::memcpy(at(va, value.size() + 1), value.data(), value.size());
+			*at(va + static_cast<DWORD>(value.size())) = 0;
+		}
+	};
+
+	// The game's state as XMen2.exe keeps it: the zone manager, the game object with its party and act,
+	// the string pool, the stats registry with three herostat entries (Wolverine with his stats loaded,
+	// Cyclops without, the port's hidden Magneto placeholder), the menu manager, the Danger Room, the
+	// network manager and the session.
+	struct fake_game
+	{
+		fake_memory memory;
+		std::uint32_t next_string = 0;
+		static constexpr DWORD registry = 0x10000000;
+		static constexpr DWORD manager = 0x20000000;
+
+		std::uint32_t intern(const std::string_view text)
+		{
+			using namespace discord_rules;
+			const std::uint32_t index = ++next_string;
+			const std::uint32_t offset = index * 64;
+			memory.u32(pool + pool_offsets + index * 4, offset);
+			memory.text(pool + pool_text + offset, text);
+			return 0x01000000 | index; // the handle's high byte isn't the index
+		}
+
+		fake_game()
+		{
+			using namespace discord_rules;
+			memory.block(zones, 0x230);
+			memory.u32(zones, zones_vtable);
+			memory.block(game_object, 0x600);
+			memory.u32(game_object, game_vtable);
+			memory.block(pool, pool_text + 0x2000);
+			memory.block(registry_cell, 4);
+			memory.u32(registry_cell, registry);
+			memory.block(registry, 0x12400);
+			memory.u32(registry, registry_vtable);
+			memory.block(frame_rate_rules::menu_manager_cell, 4);
+			memory.u32(frame_rate_rules::menu_manager_cell, manager);
+			memory.block(manager, frame_rate_rules::menu_current + 4);
+			memory.u32(manager, menu_manager_vtable);
+			memory.block(danger_room_state, 4);
+			memory.u8(danger_room_state, danger_room_off);
+			memory.block(courses, course_size * 4);
+			memory.block(network, 0x200);
+			memory.block(session, 0x430);
+
+			zone("nyc/alison/nyc1_1_3", "East Manhattan");
+			memory.u8(game_object + game_act, 1);
+			memory.u32(registry + registry_stats_mask, 0x1f);
+			const auto entry = [&](const std::uint16_t k, const std::string_view name, const std::string_view shown, const std::uint32_t stats, const std::uint8_t level,
+			                       const std::uint8_t team)
+			{
+				const DWORD at = registry + registry_entries + k * entry_size;
+				memory.u32(at + entry_name, intern(name));
+				memory.u32(at + entry_character, intern(shown));
+				memory.u32(at + entry_stats, stats);
+				memory.u8(at + entry_level, level);
+				memory.u8(at + entry_team, team);
+				memory.u8(at + entry_flags, 1);
+			};
+			entry(3, "Wolverine", "Wolverine", 0x00010002, 1, team_hero); // stats slot 2
+			entry(5, "Cyclops", "Cyclops", 0, 1, team_hero);                // no stats yet: the entry's level
+			entry(7, "Magneto", "defaultman", 0, 1, 0);                     // the port's placeholder: no team
+			entry(9, "Phoenix", "Jean Grey", 0x00020004, 1, team_hero);
+			const std::uint16_t heroes[] = {3, 5, 7, 9};
+			for (std::uint16_t i = 0; i < 4; ++i) memory.u16(registry + registry_heroes + i * 2, heroes[i]);
+			memory.u32(registry + registry_hero_count, 4);
+			memory.u8(registry + registry_stats + 2 * stats_size + stats_level, 3); // Wolverine: level 3
+			memory.u8(registry + registry_stats + 4 * stats_size + stats_level, 9); // Phoenix: level 9
+			party({"wolverine", "cyclops"});
+		}
+
+		void zone(const std::string_view path, const std::string_view title)
+		{
+			using namespace discord_rules;
+			memory.text(zones + zone_path, path);
+			memory.text(zones + zone_savename, title);
+		}
+
+		void party(const std::vector<std::string_view>& names)
+		{
+			using namespace discord_rules;
+			for (DWORD slot = 0; slot < 4; ++slot)
+			{
+				memory.u32(game_object + game_party + slot * 4, slot < names.size() && !names[slot].empty() ? intern(names[slot]) : 0);
+			}
+		}
+
+		std::optional<discord_rules::snapshot> read()
+		{
+			discord_rules::game_reader<fake_memory> reader(memory);
+			return reader.read();
+		}
+	};
+
+	void check_discord_rules()
+	{
+		using namespace discord_rules;
+		std::printf("discord: Rich Presence\n");
+
+		// [Discord]'s switches: 1/0, true/false, yes/no, on/off in any case; absent, empty or anything else: on.
+		CHECK(parse_switch(std::nullopt, true) && parse_switch("", true) && parse_switch("  ", true) && parse_switch("maybe", true) && !parse_switch("maybe", false));
+		CHECK(parse_switch("1", false) && parse_switch("true", false) && parse_switch("TRUE", false) && parse_switch("Yes", false) && parse_switch("on", false));
+		CHECK(!parse_switch("0", true) && !parse_switch("false", true) && !parse_switch("False", true) && !parse_switch("NO", true) && !parse_switch("off", true));
+		CHECK(!parse_switch(" 0 ", true) && !parse_switch("0   ; the launcher's switch", true) && parse_switch("on;", false));
+
+		// Which game: [Discord] Game first, then the port's own clues.
+		CHECK(choose_game({"xml1"}).which == game::xml1 && choose_game({"XML2 ; forced", true}).which == game::xml2 && choose_game({"xml2", true}).why == "[Discord] Game=xml2");
+		const auto odd = choose_game({"xml3", true});
+		CHECK(odd.which == game::xml1 && odd.why == "Scripts\\x1 is here" && odd.note == "[Discord] Game=xml3 isn't xml1 or xml2 - ignored");
+		CHECK(choose_game({"", false, "x1/menus/postgame   ; after the credits"}).which == game::xml1);
+		CHECK(choose_game({"", false, "", "X-Men Legends"}).which == game::xml1 && choose_game({"", false, "", "X-Men Legends 2"}).which == game::xml2);
+		const auto plain = choose_game({});
+		CHECK(plain.which == game::xml2 && plain.note.empty() && plain.why == "no X-Men Legends I port here");
+		CHECK(client_id_for(game::xml1) == "1554317674606235738" && client_id_for(game::xml2) == "1554317812661493791");
+		CHECK(title_of(game::xml1) == "X-Men Legends" && title_of(game::xml2) == "X-Men Legends II");
+		CHECK(valid_client_id("1554317812661493791") && !valid_client_id("15543178126614937x1") && !valid_client_id("12345") && !valid_client_id(""));
+		CHECK(valid_asset("xml2_logo") && valid_asset("https://example.org/a.png") && !valid_asset("two words") && !valid_asset("a\"b") && !valid_asset(""));
+
+		// Text: the game's Windows-1252 as UTF-8, JSON escapes, Discord's 128 characters.
+		CHECK(utf8_from_game("Queen's Lair") == "Queen's Lair" && utf8_from_game("Caf\xe9") == "Caf\xC3\xA9" && utf8_from_game("It\x92s") == "It\xE2\x80\x99s");
+		CHECK(utf8_from_game("a\x01\nb\x7f") == "ab" && utf8_from_game("\x81") == "?");
+		CHECK(json_escape("a\"b\\c\n\x01") == "a\\\"b\\\\c\\n\\u0001" && json_escape("Act 1 \xC2\xB7 X") == "Act 1 \xC2\xB7 X");
+		CHECK(clip("short") == "short" && characters(clip(std::string(130, 'a'))) == 128 && clip(std::string(130, 'a')).ends_with("a\xE2\x80\xA6"));
+		std::string accents;
+		for (int i = 0; i < 130; ++i) accents += "\xC3\xA9";
+		CHECK(characters(clip(accents)) == 128 && clip(accents).substr(0, 4) == "\xC3\xA9\xC3\xA9" && clip(accents, 3) == "\xC3\xA9\xC3\xA9\xE2\x80\xA6");
+
+		// Where: the savename, else the path's words; the act when there is one.
+		CHECK(pretty_zone("mansion/man1a/mansion1a_1") == "Mansion" && pretty_zone("mansion/man3/danger_room") == "Danger Room");
+		CHECK(pretty_zone("mansion/man7/status_meeting") == "Status Meeting" && pretty_zone("act1/sanctuary/sanctuary1") == "Sanctuary" && pretty_zone("xjet/123") == "Xjet");
+		CHECK(pretty_zone("") == "" && pretty_zone("1/2") == "");
+		CHECK(zone_line(1, "East Manhattan", "nyc/alison/nyc1_1_3") == "Act 1 \xC2\xB7 East Manhattan" && zone_line(0, "", "mansion/man1a/mansion1a_1") == "Mansion");
+		CHECK(zone_line(4, "", "") == "Act 4" && zone_line(0, "Prison Outpost", "act0/tutorial/tutorial1") == "Prison Outpost");
+		CHECK(is_menu_zone("") && is_menu_zone("menu/main_back") && is_menu_zone("Menu/Main_Back") && !is_menu_zone("act1/sanctuary/sanctuary1"));
+
+		// Who: one or two heroes with their levels, three or four shortened.
+		CHECK(party_text({}) == "" && party_text({{"Wolverine", 3}}) == "Wolverine Lv 3" && party_text({{"Wolverine", 0}}) == "Wolverine");
+		CHECK(party_text({{"Wolverine", 3}, {"Cyclops", 1}}) == "Wolverine Lv 3 \xC2\xB7 Cyclops Lv 1");
+		CHECK(party_text({{"Wolverine", 12}, {"Storm", 11}, {"Cyclops", 11}, {"Iceman", 10}}) == "Wolverine, Storm +2 \xC2\xB7 Lv 10-12");
+		CHECK(party_text({{"Wolverine", 7}, {"Storm", 7}, {"Rogue", 7}}) == "Wolverine, Storm +1 \xC2\xB7 Lv 7" && party_text({{"A", 0}, {"B", 0}, {"C", 0}}) == "A, B +1");
+
+		// The activities.
+		const display all;
+		snapshot menu;
+		menu.zone = "menu/main_back";
+		menu.party = {{"Wolverine", 3}};
+		CHECK((build(menu, all) == activity{"In the menus", "", 0, 0, ""} && build({}, all) == in_the_menus()));
+		snapshot port;
+		port.zone = "nyc/alison/nyc1_1_3";
+		port.zone_title = "East Manhattan";
+		port.act = 1;
+		port.party = {{"Wolverine", 3}, {"Cyclops", 1}};
+		const auto port_activity = build(port, all);
+		CHECK(port_activity && port_activity->details == "Act 1 \xC2\xB7 East Manhattan" && port_activity->state == "Wolverine Lv 3 \xC2\xB7 Cyclops Lv 1" &&
+		      port_activity->small_text == "Wolverine" && port_activity->party_max == 0);
+		snapshot hub;
+		hub.zone = "act1/sanctuary/sanctuary1";
+		hub.zone_title = "Sanctuary";
+		hub.act = 1;
+		hub.party = {{"Wolverine", 12}, {"Storm", 11}, {"Cyclops", 11}, {"Iceman", 10}};
+		CHECK((build(hub, all) == activity{"Act 1 \xC2\xB7 Sanctuary", "Wolverine, Storm +2 \xC2\xB7 Lv 10-12", 0, 0, "Wolverine"}));
+		snapshot online = hub;
+		online.session = true;
+		online.hosting = true;
+		online.players = 2;
+		online.max_players = 4;
+		CHECK((build(online, all) == activity{"Act 1 \xC2\xB7 Sanctuary", "Online co-op \xC2\xB7 hosting", 2, 4, "Online co-op"}));
+		online.hosting = false;
+		CHECK(build(online, all)->state == "Online co-op \xC2\xB7 joined");
+		snapshot lobby;
+		lobby.zone = "menu/main_back";
+		lobby.session = true;
+		lobby.players = 3;
+		lobby.max_players = 4;
+		CHECK((build(lobby, all) == activity{"Online lobby", "Joined", 3, 4, "Online co-op"}));
+		snapshot browsing = menu;
+		browsing.online_menus = true;
+		CHECK((build(browsing, all) == activity{"In the menus", "Play Online", 0, 0, ""}));
+		snapshot danger = port;
+		danger.zone = "arena/arena_dr";
+		danger.danger_room = true;
+		danger.course = "Setting 101 - Hidden Goods";
+		CHECK(build(danger, all)->details == "Danger Room \xC2\xB7 Setting 101 - Hidden Goods" && build(danger, all)->state == port_activity->state);
+		danger.course.clear();
+		CHECK(build(danger, all)->details == "Danger Room");
+		snapshot movie = port;
+		movie.movie = true;
+		CHECK((build(movie, all) == activity{"Watching a cutscene", "Act 1 \xC2\xB7 East Manhattan", 0, 0, "Wolverine"}));
+		snapshot intro = menu;
+		intro.movie = true;
+		CHECK(build(intro, all)->details == "Watching a cutscene" && build(intro, all)->state.empty());
+		snapshot loading = port;
+		loading.loading = true;
+		CHECK(!build(loading, all) && build(snapshot{"menu/main_back", "", 0, true}, all) == in_the_menus()); // a load holds the last activity, but the menus are the menus
+		// ShowZone=0 and ShowParty=0.
+		CHECK(build(port, {false, true})->details == "Playing" && build(port, {true, false})->state.empty() && build(port, {true, false})->small_text.empty());
+		danger.course = "Setting 101";
+		CHECK(build(danger, {false, true})->details == "Danger Room" && build(movie, {false, true})->state.empty());
+		CHECK((build(online, {false, false}) == activity{"Playing", "Online co-op \xC2\xB7 joined", 2, 4, "Online co-op"}));
+		snapshot unnamed = port;
+		unnamed.zone = "mansion/man1a/mansion1a_1";
+		unnamed.zone_title.clear();
+		CHECK(build(unnamed, all)->details == "Act 1 \xC2\xB7 Mansion");
+		snapshot long_title = port;
+		long_title.zone_title = std::string(200, 'x');
+		CHECK(characters(build(long_title, all)->details) == 128);
+		CHECK(describe(*build(online, all)) == "Act 1 \xC2\xB7 Sanctuary | Online co-op \xC2\xB7 joined (2 of 4)" && describe(activity{}) == "(no details)");
+
+		// Pacing: one update per 5 s, and an activity counts once read twice in a row.
+		gate pacing;
+		CHECK(pacing.may_send(0));
+		pacing.sent(1000);
+		CHECK(!pacing.may_send(1000) && !pacing.may_send(5999) && pacing.may_send(6000));
+		pacing.reset();
+		CHECK(pacing.may_send(1001));
+		settle settled;
+		const activity a{"A place", "Somebody", 0, 0, ""};
+		const activity b{"Another place", "Somebody", 0, 0, ""};
+		CHECK(!settled.seen(a) && settled.seen(a) == a && settled.seen(a) == a);
+		CHECK(!settled.seen(b) && !settled.seen(std::nullopt) && !settled.seen(b) && settled.seen(b) == b);
+
+		// Frames.
+		CHECK(encode(op_frame, "{}") == std::string("\x01\0\0\0\x02\0\0\0{}", 10) && encode(op_handshake, "").size() == 8);
+		const auto two = encode(op_frame, "{\"evt\":\"READY\"}") + encode(op_ping, "{\"n\":1}");
+		frame_reader frames;
+		frames.feed(two.substr(0, 5));
+		CHECK(!frames.next());
+		frames.feed(two.substr(5, 20));
+		const auto first = frames.next();
+		CHECK(first && first->op == op_frame && first->json == "{\"evt\":\"READY\"}" && !frames.next());
+		frames.feed(two.substr(25));
+		const auto second = frames.next();
+		CHECK(second && second->op == op_ping && second->json == "{\"n\":1}" && !frames.next() && !frames.broken());
+		frames.feed(std::string("\x01\0\0\0\xff\xff\xff\x7f", 8));
+		CHECK(!frames.next() && frames.broken());
+
+		// JSON.
+		CHECK(handshake_json("123") == "{\"v\":1,\"client_id\":\"123\"}");
+		extras x;
+		x.start = 1790000000;
+		CHECK(set_activity_json(1234, *port_activity, x, 7) ==
+		      "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":1234,\"activity\":{\"details\":\"Act 1 \xC2\xB7 East Manhattan\",\"state\":\"Wolverine Lv 3 \xC2\xB7 Cyclops Lv 1\","
+		      "\"timestamps\":{\"start\":1790000000}}},\"nonce\":\"7\"}");
+		x.large_image = "xml2";
+		x.large_text = "X-Men Legends II";
+		x.small_image = "coop";
+		x.party_id = "xml2fix-1";
+		const auto full = set_activity_json(1234, *build(online, all), x, 8);
+		CHECK(full.find("\"assets\":{\"large_image\":\"xml2\",\"large_text\":\"X-Men Legends II\",\"small_image\":\"coop\",\"small_text\":\"Online co-op\"}") != std::string::npos);
+		CHECK(full.find("\"party\":{\"id\":\"xml2fix-1\",\"size\":[2,4]}") != std::string::npos && full.ends_with("},\"nonce\":\"8\"}"));
+		CHECK(set_activity_json(1, activity{"A", "", 0, 0, ""}, extras{}, 1) == "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":1,\"activity\":{}},\"nonce\":\"1\"}"); // under two characters: left out
+		CHECK(set_activity_json(1, activity{"Quote \"here\"", "", 0, 0, ""}, extras{}, 2).find("\"details\":\"Quote \\\"here\\\"\"") != std::string::npos);
+		CHECK(clear_activity_json(1234, 9) == "{\"cmd\":\"SET_ACTIVITY\",\"args\":{\"pid\":1234},\"nonce\":\"9\"}");
+		const std::string ready = "{\"cmd\":\"DISPATCH\",\"data\":{\"v\":1,\"config\":{\"api_endpoint\":\"//discord.com/api\"}},\"evt\":\"READY\",\"nonce\":null}";
+		CHECK(json_value(ready, "evt") == "READY" && json_value(ready, "nonce") == "null" && json_value(ready, "v") == "1" && !json_value(ready, "code"));
+		const std::string refused = "{\"code\":4000,\"message\":\"Invalid Client ID\"}";
+		CHECK(json_value(refused, "code") == "4000" && json_value(refused, "message") == "Invalid Client ID");
+		CHECK(json_value("{\"message\":\"a \\\"b\\\" \\u00e9\\/\"}", "message") == "a \"b\" \xC3\xA9/" && json_value("{\"x\":\"evt\",\"evt\":\"ERROR\"}", "evt") == "ERROR");
+		CHECK(!json_value("{\"message\":\"unterminated", "message") && !json_value("{}", "evt"));
+
+		// Reading the game: a party, its levels and names as the game shows them, the act and the savename.
+		fake_game fake;
+		auto state = fake.read();
+		CHECK(state && state->zone == "nyc/alison/nyc1_1_3" && state->zone_title == "East Manhattan" && state->act == 1 && !state->loading && !state->movie);
+		CHECK((state && state->party == std::vector<hero>{{"Wolverine", 3}, {"Cyclops", 1}} && !state->danger_room && !state->session && !state->online_menus));
+		CHECK(state && build(*state, all) == port_activity);
+		fake.party({"phoenix", "", "magneto", "wolverine"}); // the charactername; the placeholder isn't a hero
+		state = fake.read();
+		CHECK((state && state->party == std::vector<hero>{{"Jean Grey", 9}, {"Wolverine", 3}}));
+		fake.party({"nobody"});
+		state = fake.read();
+		CHECK(state && state->party.empty() && build(*state, all)->state.empty());
+		fake.party({"wolverine", "cyclops"});
+		// The Danger Room: a course and its title; free play; off.
+		fake.memory.u32(courses + 2 * course_size + course_title, fake.intern("Setting 101 - Hidden Goods"));
+		fake.memory.u8(danger_room_state, 2);
+		state = fake.read();
+		CHECK(state && state->danger_room && state->course == "Setting 101 - Hidden Goods");
+		fake.memory.u8(danger_room_state, 0xfe);
+		state = fake.read();
+		CHECK(state && state->danger_room && state->course.empty());
+		fake.memory.u8(danger_room_state, danger_room_off);
+		// Online: Play Online, then a hosted game with two players of four.
+		fake.memory.u32(network + network_mode, 1);
+		state = fake.read();
+		CHECK(state && state->online_menus && !state->session);
+		fake.memory.u32(session, session_vtable);
+		state = fake.read();
+		CHECK(state && !state->session); // the session is built, but no game is set up
+		fake.memory.u8(session + session_active, 1);
+		fake.memory.u8(session + session_hosting, 1);
+		fake.memory.u8(session + session_players, 2);
+		fake.memory.u8(session + session_max, 4);
+		state = fake.read();
+		CHECK(state && state->session && state->hosting && state->players == 2 && state->max_players == 4);
+		fake.memory.u8(session + session_active, 0);
+		fake.memory.u32(network + network_mode, 0);
+		// A load, a movie, the loading screen.
+		fake.memory.u32(zones + zone_loading, 2);
+		state = fake.read();
+		CHECK(state && state->loading && !build(*state, all));
+		fake.memory.u32(zones + zone_loading, 0);
+		fake.memory.u8(fake_game::manager + frame_rate_rules::menu_flags, frame_rate_rules::menu_movie_bit);
+		state = fake.read();
+		CHECK(state && state->movie && !state->loading);
+		fake.memory.u8(fake_game::manager + frame_rate_rules::menu_flags, 0);
+		fake.memory.block(0x30000000, 4);
+		fake.memory.u32(0x30000000, frame_rate_rules::loading_menu_vtable);
+		fake.memory.u32(fake_game::manager + frame_rate_rules::menu_current, 0x30000000);
+		state = fake.read();
+		CHECK(state && state->loading);
+		fake.memory.u32(fake_game::manager + frame_rate_rules::menu_current, 0);
+		// The zone's text torn mid-copy, an unknown zone manager, none yet, and the registry unreadable.
+		fake.zone("nyc/al\x01son", "East Manhattan");
+		CHECK(!fake.read());
+		fake.zone("menu/main_back", "");
+		state = fake.read();
+		CHECK(state && build(*state, all) == in_the_menus());
+		fake.memory.u32(registry_cell, 0x40000000);
+		fake.zone("nyc/alison/nyc1_1_3", "East Manhattan");
+		state = fake.read();
+		CHECK(state && state->party.empty() && state->act == 1);
+		fake.memory.u32(zones, 0x12345678);
+		CHECK(!fake.read());
+		fake.memory.u32(zones, 0);
+		state = fake.read();
+		CHECK(state && state->zone.empty() && build(*state, all) == in_the_menus());
+
+		// The guards: well formed, one per address; against XMen2.exe, every byte, and the displacements
+		// the reads use are the ones in the game's own code.
+		std::set<DWORD> addresses;
+		bool guards_ok = true;
+		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
+		CHECK(guards_ok);
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the presence's bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](const DWORD va) { return image + (va - limits_rules::image_base); };
+		const guard* mismatch = discord_rules::first_mismatch(image);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
+		CHECK(mismatch == nullptr);
+		CHECK(operand_at(at(0x4849ba + 1), 4) == zones && operand_at(at(0x483c1f + 2), 4) == zones_vtable && operand_at(at(0x483f30 + 2), 4) == zone_path);
+		CHECK(operand_at(at(0x483e90 + 2), 4) == zone_loading && operand_at(at(0x484f60 + 2), 4) == zone_savename && operand_at(at(0x4850d5 + 1), 1) == zone_text_size);
+		CHECK(operand_at(at(0x46dd0a + 1), 4) == game_object && operand_at(at(0x468e6d + 2), 4) == game_vtable && operand_at(at(0x469c40 + 3), 4) == game_act);
+		CHECK(operand_at(at(0x46c883 + 3), 1) == game_party && operand_at(at(0x60218e + 1), 4) == pool && operand_at(at(0x425bdd + 3), 4) == pool_text);
+		CHECK(operand_at(at(0x44b8fe + 1), 4) == registry_cell && operand_at(at(0x44b541 + 2), 4) == registry_vtable && operand_at(at(0x44b6b0 + 2), 4) == registry_hero_count);
+		CHECK(operand_at(at(0x44b6e4 + 4), 4) == registry_heroes && operand_at(at(0x44b708 + 3), 4) == registry_entries && operand_at(at(0x44b728 + 3), 4) == registry_entries + entry_character);
+		CHECK(operand_at(at(0x44b788 + 4), 4) == registry_entries + entry_team && operand_at(at(0x449d45 + 2), 4) + 4 == registry_stats_mask && operand_at(at(0x449d4d + 2), 4) == stats_size);
+		CHECK(operand_at(at(0x4b87c5 + 4), 1) == stats_level && operand_at(at(0x4c87a0 + 2), 4) == danger_room_state && operand_at(at(0x4c9c18 + 1), 4) == courses);
+		CHECK(operand_at(at(0x4c9c15 + 2), 1) == course_size && operand_at(at(0x4d450c + 2), 1) == course_title && operand_at(at(0x60b23a + 1), 4) == network);
+		CHECK(operand_at(at(0x60a770 + 6), 4) == network_mode && operand_at(at(0x612c0a + 1), 4) == session && operand_at(at(0x612136 + 2), 4) == session_vtable);
+		CHECK(operand_at(at(0x610d20 + 2), 4) == session_active && operand_at(at(0x610d10 + 2), 4) == session_hosting && operand_at(at(0x615916 + 2), 4) == session_max &&
+		      operand_at(at(0x61591c + 2), 4) == session_players);
+		// The Danger Room's state and the session are in the exe's zero-filled data: 0 until the game sets them.
+		CHECK(operand_at(at(danger_room_state), 4) == 0 && operand_at(at(session), 4) == 0 && operand_at(at(network + network_mode), 4) == 0);
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
+	// xml2_test --discord-live: a real round trip with the Discord client on this PC, as X-Men Legends II -
+	// a test activity for a few seconds, then cleared. Not part of the normal run: it changes the
+	// profile's presence while it runs.
+	int run_discord_live()
+	{
+		using namespace discord_rules;
+		std::printf("discord: live round trip with this PC's Discord (as X-Men Legends II)\n");
+		discord_ipc::connection pipe;
+		std::string name;
+		std::string error;
+		if (!pipe.open(xml2_client_id, name, error))
+		{
+			std::printf("  FAIL  %s\n", error.c_str());
+			return 1;
+		}
+		std::printf("  ok    connected (%s), READY\n", name.c_str());
+		int failed = 0;
+		const auto expect = [&](const char* what, const std::string& nonce)
+		{
+			for (int i = 0; i < 20; ++i)
+			{
+				const auto reply = pipe.wait(250);
+				if (!reply) continue;
+				if (reply->op != op_frame || json_value(reply->json, "nonce") != nonce) continue;
+				const bool ok = json_value(reply->json, "cmd") == "SET_ACTIVITY" && json_value(reply->json, "evt") != "ERROR";
+				std::printf("  %s  %s: %s\n", ok ? "ok  " : "FAIL", what, reply->json.substr(0, 400).c_str());
+				failed += !ok;
+				return;
+			}
+			std::printf("  FAIL  %s: no answer\n", what);
+			++failed;
+		};
+		FILETIME now{};
+		GetSystemTimeAsFileTime(&now);
+		extras x;
+		x.start = static_cast<std::int64_t>(((static_cast<ULONGLONG>(now.dwHighDateTime) << 32 | now.dwLowDateTime) - 116444736000000000ULL) / 10000000ULL);
+		x.party_id = "xml2fix-test";
+		const activity test{"xml2_test: Discord pipe check", "Online co-op \xC2\xB7 hosting", 1, 4, ""};
+		CHECK(pipe.send(op_frame, set_activity_json(GetCurrentProcessId(), test, x, 1)));
+		expect("set", "1");
+		Sleep(4000);
+		CHECK(pipe.send(op_frame, clear_activity_json(GetCurrentProcessId(), 2)));
+		expect("cleared", "2");
+		pipe.close();
+		return failed;
+	}
 }
 
 int main(const int argc, char** argv)
@@ -4469,6 +4931,12 @@ int main(const int argc, char** argv)
 	{
 		check_pipe(argv[2]);
 		return failures; // added to the parent's
+	}
+	if (argc > 1 && std::strcmp(argv[1], "--discord-live") == 0)
+	{
+		failures += run_discord_live();
+		std::printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures, failures == 1 ? "" : "s");
+		return failures ? 1 : 0;
 	}
 
 	std::printf("the fix is the dinput.dll this program loaded\n");
@@ -4518,6 +4986,7 @@ int main(const int argc, char** argv)
 	check_main_menu_rules();
 	check_xp_curve_rules();
 	check_pad_prompts_rules();
+	check_discord_rules();
 	check_d3d8_modes();
 
 	const auto log = read_file(module_dir() / "xml2-fix.log");
@@ -4539,6 +5008,8 @@ int main(const int argc, char** argv)
 	CHECK(log.find("prompts: XMen2.exe isn't loaded at 0x400000 (not the game?) - the game's own prompts") != std::string::npos ||
 	      log.find("prompts: 0x004BD720 isn't the retail code") != std::string::npos);
 	CHECK(log.find("prompts: button prompts show") == std::string::npos);
+	// Discord Rich Presence is on by default, but only ever in XMen2.exe: never this test's own presence.
+	CHECK(log.find("discord: XMen2.exe isn't loaded at 0x400000 (not the game?) - no presence") != std::string::npos && log.find("discord: presence on") == std::string::npos);
 	CHECK(log.find("xmenlegpc.master.gamespy.com -> xmenlegpc.master.openspy.net (resolved)") != std::string::npos);
 	if (pads > 0)
 	{

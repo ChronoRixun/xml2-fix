@@ -13,8 +13,10 @@
 // xml2-fix.ini asks for it, runs the game windowed or borderless at the desktop's resolution,
 // raises engine caps (the actor and resource name tables, limits.hpp), gives a mod's campaign what
 // it needs (its New Game, saves, main menu, ending, forced parties, X-Men Legends 1's XP curve) and
-// opens a named pipe through which tests press keys and take screenshots without the focus.
+// opens a named pipe through which tests press keys and take screenshots without the focus. It also
+// shows what the game is doing in Discord (Rich Presence, [Discord]; on unless switched off).
 
+#include "discord_presence.hpp"
 #include "display.hpp"
 #include "forced_teams.hpp"
 #include "gamepad_fix.hpp"
@@ -186,6 +188,10 @@ namespace
 		// The game and the engine DLLs that read game data.
 		mod_loader::install({nullptr, "libIGCore.dll", "libIGGfx.dll", "libIGLua.dll", "libIGOpt.dll", "libCriMovie.dll"},
 		                    GetPrivateProfileIntW(L"Debug", L"LogFiles", 0, ini.c_str()) != 0);
+
+		// Discord Rich Presence ([Discord], on by default): a thread of its own that reads the game's state and
+		// talks to Discord's local pipe; it hooks only the game's ExitProcess, to clear the presence on quitting.
+		discord_presence::install(game);
 	}
 }
 
