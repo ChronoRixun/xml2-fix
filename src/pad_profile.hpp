@@ -11,7 +11,10 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdio>
+#include <cwchar>
 #include <span>
+#include <type_traits>
 
 namespace pad_profile
 {
@@ -60,4 +63,27 @@ namespace pad_profile
 
 	// value in [-1, 1] -> the axis range, applying the axis deadzone like DirectInput does.
 	LONG to_axis(float value, const axis_range& axis);
+
+	// An object as EnumObjects / GetObjectInfo report it (DIDEVICEOBJECTINSTANCEA or W), at `offset`
+	// in the caller's data format.
+	template <typename ObjectInstance>
+	void describe(ObjectInstance& out, const object& object, const DWORD offset)
+	{
+		out = {};
+		out.dwSize = sizeof(out);
+		out.guidType = *object.type;
+		out.dwOfs = offset;
+		out.dwType = object.id;
+		out.dwFlags = object.flags;
+		out.wUsagePage = object.usage_page;
+		out.wUsage = object.usage;
+		if constexpr (std::is_same_v<ObjectInstance, DIDEVICEOBJECTINSTANCEW>)
+		{
+			std::swprintf(out.tszName, MAX_PATH, L"%hs", object.name);
+		}
+		else
+		{
+			std::snprintf(out.tszName, MAX_PATH, "%s", object.name);
+		}
+	}
 }

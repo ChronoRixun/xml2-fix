@@ -65,10 +65,13 @@
 #include "new_game_plus_rules.hpp"
 #include "online_rules.hpp"
 #include "options_menu_rules.hpp"
+#include "pad_input_rules.hpp"
+#include "pad_profile.hpp"
 #include "pad_prompts_rules.hpp"
 #include "postgame_rules.hpp"
 #include "resolution_rules.hpp"
 #include "test_input_rules.hpp"
+#include "virtual_pad_rules.hpp"
 #include "xp_curve_rules.hpp"
 #include "window_title_rules.hpp"
 
@@ -2725,6 +2728,230 @@ namespace
 		CHECK(keys.held() == 0);
 	}
 
+	// The test pipe's pad commands (pad_input_rules.hpp): names, commands, and what a pad holds.
+	void check_pad_input_rules()
+	{
+		using namespace pad_input_rules;
+		using kind = pad_command::kind;
+		std::printf("pad input rules (the test pipe's pad commands)\n");
+		const auto button = [](const char* name) { return static_cast<int>(parse_button(name).value_or(0)); };
+
+		CHECK(button("a") == XINPUT_GAMEPAD_A && button("START") == XINPUT_GAMEPAD_START && button("lb") == XINPUT_GAMEPAD_LEFT_SHOULDER);
+		CHECK(button("LT") == static_cast<int>(left_trigger_bit) && button("rt") == static_cast<int>(right_trigger_bit) && button("Up") == XINPUT_GAMEPAD_DPAD_UP);
+		CHECK(button("select") == XINPUT_GAMEPAD_BACK && button("L3") == XINPUT_GAMEPAD_LEFT_THUMB && button("dpadright") == XINPUT_GAMEPAD_DPAD_RIGHT);
+		CHECK(!parse_button("") && !parse_button("Z") && !parse_button("A1"));
+		CHECK(buttons_text(XINPUT_GAMEPAD_START | XINPUT_GAMEPAD_A) == "A+START" && buttons_text(XINPUT_GAMEPAD_BACK) == "BACK" && buttons_text(0) == "nothing");
+		for (const auto& entry : button_names) CHECK(parse_button(entry.name) == entry.mask); // every name parses back
+
+		auto cmd = parse_pad_command("pad", "1 A");
+		CHECK(cmd.what == kind::tap && cmd.pad == 1 && cmd.buttons == XINPUT_GAMEPAD_A && cmd.ms == 0 && cmd.error.empty());
+		cmd = parse_pad_command("PAD", "2 a+start 120");
+		CHECK(cmd.what == kind::tap && cmd.pad == 2 && cmd.buttons == (XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_START) && cmd.ms == 120);
+		CHECK(parse_pad_command("pad", "1 A 99999").ms == max_hold_ms); // clamped
+		cmd = parse_pad_command("padhold", "4 LB 500");
+		CHECK(cmd.what == kind::hold && cmd.pad == 4 && cmd.buttons == XINPUT_GAMEPAD_LEFT_SHOULDER && cmd.ms == 500);
+		CHECK(parse_pad_command("padhold", "1 LB").error.find("needs a duration") != std::string::npos);
+		cmd = parse_pad_command("paddown", "3 RT");
+		CHECK(cmd.what == kind::down && cmd.pad == 3 && cmd.buttons == right_trigger_bit && cmd.ms == 0);
+		cmd = parse_pad_command("padup", "1 A");
+		CHECK(cmd.what == kind::up && cmd.buttons == XINPUT_GAMEPAD_A);
+		cmd = parse_pad_command("padup", "4 all");
+		CHECK(cmd.what == kind::release && cmd.pad == 4);
+		CHECK(parse_pad_command("padup", "1 A 100").what == kind::up && !parse_pad_command("padup", "1 A 100").error.empty());
+		cmd = parse_pad_command("padrelease", "");
+		CHECK(cmd.what == kind::release && cmd.pad == 0 && cmd.error.empty());
+		CHECK(parse_pad_command("padrelease", "2").pad == 2 && !parse_pad_command("padrelease", "5").error.empty());
+		CHECK(parse_pad_command("tap", "1 A").what == kind::none); // the keyboard's verb: someone else's line
+		for (const char* bad : {"5 A", "0 A", "A", "", "12 A", "1", "1 FOO", "1 A+", "1 +A", "1 A x", "1 A 10 20"})
+		{
+			cmd = parse_pad_command("pad", bad);
+			if (cmd.what != kind::tap || cmd.error.empty())
+			{
+				std::printf("  FAIL  pad %s accepted\n", bad);
+				++failures;
+			}
+		}
+		CHECK(parse_pad_command("pad", "5 A").error.find("1 to 4") != std::string::npos);
+		CHECK(parse_pad_command("pad", "1 FOO").error.find("unknown pad button 'FOO'") != std::string::npos);
+
+		cmd = parse_pad_command("stick", "1 L 0 1");
+		CHECK(cmd.what == kind::stick && cmd.pad == 1 && cmd.side == 0 && cmd.x == 0.0f && cmd.y == 1.0f && cmd.ms == 0);
+		cmd = parse_pad_command("STICK", "2 r -0.5 .25 300");
+		CHECK(cmd.what == kind::stick && cmd.side == 1 && cmd.x == -0.5f && cmd.y == 0.25f && cmd.ms == 300);
+		CHECK(parse_pad_command("stick", "1 LS 1.0 -1.0").side == 0 && parse_pad_command("stick", "1 RS 1 0").side == 1);
+		cmd = parse_pad_command("trigger", "1 R 1");
+		CHECK(cmd.what == kind::trigger && cmd.side == 1 && cmd.value == 1.0f && cmd.ms == 0);
+		cmd = parse_pad_command("trigger", "3 lt 0.5 200");
+		CHECK(cmd.what == kind::trigger && cmd.pad == 3 && cmd.side == 0 && cmd.value == 0.5f && cmd.ms == 200);
+		for (const auto& [verb, bad] : std::initializer_list<std::pair<const char*, const char*>>{
+		         {"stick", "1 L 2 0"}, {"stick", "1 L 0 -1.5"}, {"stick", "1 M 0 0"}, {"stick", "1 L 0"}, {"stick", "1 L 0 0 1 2"}, {"stick", "1 L x 0"},
+		         {"stick", "1 L nan 0"}, {"stick", "1 L inf 0"}, {"stick", "1 L 0 0 -5"}, {"trigger", "1 R 1.5"}, {"trigger", "1 R -0.1"}, {"trigger", "1 RS 1"},
+		         {"trigger", "1 R"}, {"stick", "9 L 0 0"}})
+		{
+			cmd = parse_pad_command(verb, bad);
+			if (cmd.error.empty())
+			{
+				std::printf("  FAIL  %s %s accepted\n", verb, bad);
+				++failures;
+			}
+		}
+		CHECK(parse_pad_command("stick", "1 L 2 0").error.find("from -1 to 1") != std::string::npos);
+		CHECK(parse_pad_command("trigger", "1 R 1.5").error.find("from 0 to 1") != std::string::npos);
+
+		// Through the pipe's own parser: the pad verbs are one kind, their errors its errors.
+		{
+			const auto line = test_input_rules::parse_command("pad 1 a 50\r");
+			CHECK(line.what == test_input_rules::command::kind::pad && line.pad.what == kind::tap && line.pad.buttons == XINPUT_GAMEPAD_A && line.pad.ms == 50);
+			const auto refused_line = test_input_rules::parse_command("stick 9 L 0 0");
+			CHECK(refused_line.what == test_input_rules::command::kind::unknown && refused_line.error.find("1 to 4") != std::string::npos);
+			CHECK(test_input_rules::parse_command("  PADRELEASE  ").what == test_input_rules::command::kind::pad);
+			CHECK(test_input_rules::parse_command("frob").error.find("pad, padhold, paddown, padup, padrelease, stick, trigger") != std::string::npos);
+		}
+
+		// What a pad holds, merged into a read: buttons added, triggers raised, sticks replaced - until their time.
+		synthetic_pad pad;
+		xinput_pad::raw_state state{XINPUT_GAMEPAD_X, 50, 200, 1000, -2000, 0, 0}; // the real pad: X, triggers, left stick
+		std::vector<std::string> expired;
+		pad.press(XINPUT_GAMEPAD_A | left_trigger_bit, 1000);
+		pad.set_stick(0, 0.0f, 1.0f, 1000);
+		pad.set_trigger(1, 0.5f, 1000);
+		CHECK(pad.held() == 4 && pad.buttons_down() == (XINPUT_GAMEPAD_A | left_trigger_bit) && pad.stick_held(0) && pad.trigger_held(1));
+		pad.merge(state, 500, expired);
+		CHECK(state.buttons == (XINPUT_GAMEPAD_X | XINPUT_GAMEPAD_A) && state.left_trigger == 255 && state.right_trigger == 200); // 0.5 = 128 < the real 200
+		CHECK(state.left_x == 0 && state.left_y == 32767 && state.right_x == 0 && expired.empty());
+		state = {0, 0, 50, 1000, -2000, 0, 0};
+		pad.merge(state, 999, expired);
+		CHECK(state.right_trigger == 128 && state.left_trigger == 255);
+		state = {0, 0, 0, 1000, -2000, 0, 0};
+		pad.merge(state, 1000, expired); // time's up: everything let go, the real state stands
+		CHECK(state.buttons == 0 && state.left_trigger == 0 && state.right_trigger == 0 && state.left_x == 1000 && state.left_y == -2000);
+		CHECK(pad.held() == 0 && expired.size() == 4);
+		CHECK(std::ranges::find(expired, "A") != expired.end() && std::ranges::find(expired, "LT") != expired.end());
+		CHECK(std::ranges::find(expired, "left stick") != expired.end() && std::ranges::find(expired, "right trigger") != expired.end());
+		pad.set_stick(1, -1.0f, 0.0f, 5000);
+		CHECK(pad.stick_held(1));
+		pad.set_stick(1, 0.0f, 0.0f, 5000); // 0 0 lets go
+		CHECK(!pad.stick_held(1));
+		pad.set_trigger(0, 0.0f, 5000);
+		CHECK(!pad.trigger_held(0));
+		pad.press(XINPUT_GAMEPAD_B | XINPUT_GAMEPAD_Y, 5000);
+		pad.release(XINPUT_GAMEPAD_B);
+		CHECK(pad.buttons_down() == XINPUT_GAMEPAD_Y);
+		pad.release_all();
+		CHECK(pad.held() == 0);
+		CHECK(stick_value(1.0f) == 32767 && stick_value(-1.0f) == -32767 && stick_value(0.5f) == 16384 && trigger_value(1.0f) == 255 && trigger_value(0.5f) == 128);
+
+		// Through the Dual Action profile, as the game reads a pad: A is button 2, START 10, LT 7, the d-pad the hat,
+		// the left stick up the top of Y's range.
+		pad.press(XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_START | left_trigger_bit | XINPUT_GAMEPAD_DPAD_UP, 1000);
+		pad.set_stick(0, 0.0f, 1.0f, 1000);
+		pad.set_stick(1, 1.0f, 0.0f, 1000);
+		state = {};
+		pad.merge(state, 0, expired);
+		pad_profile::axis_ranges axes{};
+		for (auto& axis : axes) axis = {-1000, 1000, 0};
+		DIJOYSTATE2 joy{};
+		pad_profile::logitech_dual_action.fill_state(*reinterpret_cast<DIJOYSTATE*>(&joy), state, axes);
+		CHECK(joy.rgbButtons[1] == 0x80 && joy.rgbButtons[9] == 0x80 && joy.rgbButtons[6] == 0x80);
+		CHECK(joy.rgbButtons[0] == 0 && joy.rgbButtons[2] == 0 && joy.rgbButtons[7] == 0 && joy.rgbButtons[8] == 0);
+		CHECK(joy.rgdwPOV[0] == 0 && joy.lY == -1000 && joy.lX == 0 && joy.lZ == 1000 && joy.lRz == 0);
+	}
+
+	// [Test] VirtualPads (virtual_pad_rules.hpp): the ini value, the pads' identity, the lists they're in, and how
+	// their state reaches a caller's data format.
+	void check_virtual_pad_rules()
+	{
+		using namespace virtual_pad_rules;
+		std::printf("virtual pad rules ([Test] VirtualPads)\n");
+
+		CHECK(choose_count("").count == 0 && choose_count("").error.empty());
+		CHECK(choose_count("2").count == 2 && choose_count("2").error.empty());
+		CHECK(choose_count(" 3 ; players 1-3").count == 3 && choose_count("0").count == 0);
+		CHECK(choose_count("9").count == 4 && choose_count("9").error.find("4 virtual pads") != std::string::npos);
+		CHECK(choose_count("two").count == 0 && choose_count("two").error.find("isn't a number") != std::string::npos);
+		CHECK(choose_count("-1").count == 0 && !choose_count("-1").error.empty());
+
+		CHECK(!IsEqualGUID(instance_guid(0), instance_guid(1)) && pad_of(instance_guid(1), 2) == 1 && pad_of(instance_guid(0), 2) == 0);
+		CHECK(!pad_of(instance_guid(2), 2) && !pad_of(instance_guid(0), 0) && !pad_of(GUID_SysKeyboard, 4));
+		// The product GUID the game picks the Dual Action's console map by (its string at 0x551b90's table).
+		wchar_t text[64]{};
+		StringFromGUID2(product_guid(0x046D, 0xC216), text, 64);
+		CHECK(std::wstring(text) == L"{C216046D-0000-0000-0000-504944564944}");
+		CHECK(device_type(true) == 0x00010215 && device_type(false) == 0x00010404);
+
+		CHECK(lists_pads(true, DI8DEVCLASS_GAMECTRL, DIEDFL_ATTACHEDONLY) && lists_pads(true, DI8DEVCLASS_ALL, 0) && lists_pads(true, DI8DEVTYPE_GAMEPAD, 0));
+		CHECK(!lists_pads(true, DI8DEVCLASS_KEYBOARD, 0) && !lists_pads(true, DI8DEVCLASS_POINTER, 0) && !lists_pads(true, DI8DEVTYPE_JOYSTICK, 0));
+		CHECK(!lists_pads(true, DI8DEVCLASS_GAMECTRL, DIEDFL_ATTACHEDONLY | DIEDFL_FORCEFEEDBACK));
+		CHECK(lists_pads(false, 4, DIEDFL_ATTACHEDONLY) && lists_pads(false, 0, 0) && lists_pads(false, 4 | (4 << 8), 0));
+		CHECK(!lists_pads(false, 2, 0) && !lists_pads(false, 3, 0) && !lists_pads(false, 4 | (2 << 8), 0));
+		CHECK(is_game_controller(true, 0x00010215) && is_game_controller(true, 0x00010114) && is_game_controller(true, DI8DEVTYPE_DRIVING));
+		CHECK(!is_game_controller(true, DI8DEVTYPE_KEYBOARD) && !is_game_controller(true, DI8DEVTYPE_MOUSE) && !is_game_controller(true, DI8DEVTYPE_SUPPLEMENTAL));
+		CHECK(is_game_controller(false, 0x00010404) && !is_game_controller(false, 3) && !is_game_controller(false, 2));
+
+		// The standard formats, as the game and the engine set them: every Dual Action object where DIJOYSTATE(2) has it.
+		const auto objects = pad_profile::logitech_dual_action.objects;
+		CHECK(objects.size() == 17);
+		CHECK((c_dfDIJoystick2.rgodf[0].dwType & optional_object) && c_dfDIJoystick2.dwDataSize == sizeof(DIJOYSTATE2)); // the SDK's formats mark every object optional
+		for (const auto* format : {&c_dfDIJoystick, &c_dfDIJoystick2})
+		{
+			const auto layout = map_format(*format, objects);
+			CHECK(layout.error.empty() && layout.size == format->dwDataSize && layout.fields.size() == 17);
+			CHECK(std::ranges::all_of(layout.fields, [](const field& f) { return f.from == f.to; }));
+			CHECK((layout.empty_povs == std::vector<DWORD>{DIJOFS_POV(1), DIJOFS_POV(2), DIJOFS_POV(3)}));
+		}
+
+		// A format of the caller's own: button instance 1 (A), then Rz and the hat, packed.
+		DIOBJECTDATAFORMAT own[] = {
+			{nullptr, 0, DIDFT_BUTTON | DIDFT_MAKEINSTANCE(1), 0},
+			{&GUID_RzAxis, 4, DIDFT_AXIS | DIDFT_ANYINSTANCE, 0},
+			{&GUID_POV, 8, DIDFT_POV | DIDFT_ANYINSTANCE, 0},
+			{&GUID_POV, 12, DIDFT_POV | DIDFT_ANYINSTANCE | optional_object, 0},
+		};
+		DIDATAFORMAT format{sizeof(DIDATAFORMAT), sizeof(DIOBJECTDATAFORMAT), DIDF_ABSAXIS, 16, static_cast<DWORD>(std::size(own)), own};
+		const auto layout = map_format(format, objects);
+		CHECK(layout.error.empty() && layout.fields.size() == 3 && (layout.empty_povs == std::vector<DWORD>{12}));
+		DIJOYSTATE2 joy{};
+		joy.rgbButtons[1] = 0x80;
+		joy.lRz = 777;
+		joy.rgdwPOV[0] = 9000;
+		BYTE out[16];
+		std::memset(out, 0x55, sizeof(out));
+		translate(layout, reinterpret_cast<const BYTE*>(&joy), out);
+		LONG rz = 0;
+		DWORD pov = 0, empty_pov = 0;
+		std::memcpy(&rz, out + 4, 4);
+		std::memcpy(&pov, out + 8, 4);
+		std::memcpy(&empty_pov, out + 12, 4);
+		CHECK(out[0] == 0x80 && out[1] == 0 && out[2] == 0 && out[3] == 0 && rz == 777 && pov == 9000 && empty_pov == 0xFFFFFFFF);
+		// By offset, the caller's; by id, by usage; an axis' DIJOYSTATE index.
+		const int rz_object = find_object(objects, &layout, 4, DIPH_BYOFFSET);
+		CHECK(rz_object >= 0 && std::string(objects[rz_object].name) == "Z Rotation" && axis_of(objects[rz_object]) == 5);
+		CHECK(find_object(objects, &layout, 16, DIPH_BYOFFSET) == -1);
+		CHECK(find_object(objects, nullptr, DIJOFS_Y, DIPH_BYOFFSET) >= 0 && axis_of(objects[find_object(objects, nullptr, DIJOFS_Y, DIPH_BYOFFSET)]) == 1);
+		CHECK(find_object(objects, nullptr, DIDFT_ABSAXIS | DIDFT_MAKEINSTANCE(5), DIPH_BYID) == rz_object);
+		CHECK(find_object(objects, nullptr, DIDFT_ABSAXIS | DIDFT_MAKEINSTANCE(3), DIPH_BYID) == -1); // Rx: not on a Dual Action
+		CHECK(find_object(objects, nullptr, MAKELONG(0x35, 0x01), DIPH_BYUSAGE) == rz_object);
+		const int button_2 = find_object(objects, nullptr, DIDFT_PSHBUTTON | DIDFT_MAKEINSTANCE(1), DIPH_BYID);
+		CHECK(button_2 >= 0 && std::string(objects[button_2].name) == "Button 2" && axis_of(objects[button_2]) == -1);
+		// Ranges and deadzones: the pad's axes where the caller's format has them, and all six standard ones answer
+		// (Rx, Ry too), as for a real pad presented as a Dual Action; a button or a stranger offset doesn't.
+		CHECK(addressed_axis(objects, &layout, 4, DIPH_BYOFFSET) == 5 && addressed_axis(objects, nullptr, DIJOFS_RZ, DIPH_BYOFFSET) == 5);
+		CHECK(addressed_axis(objects, nullptr, DIJOFS_RX, DIPH_BYOFFSET) == 3 && addressed_axis(objects, nullptr, DIDFT_ABSAXIS | DIDFT_MAKEINSTANCE(4), DIPH_BYID) == 4);
+		CHECK(addressed_axis(objects, nullptr, DIJOFS_BUTTON(0), DIPH_BYOFFSET) == -1 && addressed_axis(objects, nullptr, DIJOFS_X + 2, DIPH_BYOFFSET) == -1);
+		CHECK(addressed_axis(objects, nullptr, DIDFT_PSHBUTTON | DIDFT_MAKEINSTANCE(1), DIPH_BYID) == -1 && addressed_axis(objects, nullptr, DIDFT_ABSAXIS | DIDFT_MAKEINSTANCE(6), DIPH_BYID) == -1);
+
+		// Refused: an object the pad hasn't that the format requires, sizes that aren't a DIDATAFORMAT's, data out of bounds.
+		DIOBJECTDATAFORMAT slider[] = {{&GUID_Slider, 0, DIDFT_AXIS | DIDFT_ANYINSTANCE, 0}};
+		DIDATAFORMAT needs_slider{sizeof(DIDATAFORMAT), sizeof(DIOBJECTDATAFORMAT), DIDF_ABSAXIS, 4, 1, slider};
+		CHECK(map_format(needs_slider, objects).error.find("required") != std::string::npos);
+		DIDATAFORMAT wrong = format;
+		wrong.dwObjSize = 12;
+		CHECK(!map_format(wrong, objects).error.empty());
+		DIOBJECTDATAFORMAT outside[] = {{&GUID_XAxis, 4, DIDFT_AXIS | DIDFT_ANYINSTANCE, 0}};
+		DIDATAFORMAT past_end{sizeof(DIDATAFORMAT), sizeof(DIOBJECTDATAFORMAT), DIDF_ABSAXIS, 4, 1, outside};
+		CHECK(map_format(past_end, objects).error.find("outside") != std::string::npos);
+	}
+
 	// The screenshot files (image_file.hpp): checksums against known values, and the layouts.
 	void check_image_file()
 	{
@@ -2940,8 +3167,249 @@ namespace
 	bool ok(const std::string& reply) { return reply.rfind("ok", 0) == 0; }
 	bool refused(const std::string& reply) { return reply.rfind("error", 0) == 0; }
 
+	// In the pipe child, whose xml2-fix.ini says [Test] VirtualPads=2: both of the game's DirectInput paths list
+	// exactly two Dual Actions, the virtual pads (any real controller hidden), and the pipe's pad commands reach
+	// them - a round trip of every pad verb, read the way the game and the engine read their pads.
+	void check_virtual_pads(const HANDLE pipe)
+	{
+		std::printf("virtual pads ([Test] VirtualPads=2, this is the child process)\n");
+		using get_device_status_t = HRESULT(STDMETHODCALLTYPE*)(void*, REFGUID);
+		const auto is_virtual = [](const found_device& d) { return virtual_pad_rules::pad_of(d.instance, 2).has_value(); };
+
+		const auto status = ask(pipe, "status");
+		CHECK(status.find("; virtual pads 2; pad reads 0/0/0/0; pad inputs held 0; ") != std::string::npos);
+
+		// The engine: libIGDisplay.dll's DirectInput 7.
+		void* input7 = nullptr;
+		CHECK(SUCCEEDED(DirectInputCreateEx(GetModuleHandleW(nullptr), 0x0700, IID_IDirectInput7A, &input7, nullptr)) && input7);
+		if (!input7) return;
+		std::vector<found_device> engine_pads;
+		CHECK(SUCCEEDED(slot<enum_devices_t>(input7, 4)(input7, 4 /* DIDEVTYPE_JOYSTICK */, &collect, &engine_pads, DIEDFL_ATTACHEDONLY)));
+		CHECK(engine_pads.size() == 2 && std::ranges::all_of(engine_pads, is_virtual)); // a real pad, if one is on, is hidden
+		CHECK(engine_pads.size() == 2 && virtual_pad_rules::pad_of(engine_pads[0].instance, 2) == 0 && virtual_pad_rules::pad_of(engine_pads[1].instance, 2) == 1);
+		CHECK(std::ranges::all_of(engine_pads, [](const found_device& d) { return d.product == dual_action && d.name == "Logitech Dual Action"; }));
+		std::vector<found_device> mice;
+		slot<enum_devices_t>(input7, 4)(input7, 2 /* DIDEVTYPE_MOUSE */, &collect, &mice, DIEDFL_ATTACHEDONLY);
+		CHECK(std::ranges::none_of(mice, is_virtual));
+		CHECK(slot<get_device_status_t>(input7, 5)(input7, virtual_pad_rules::instance_guid(1)) == DI_OK);
+		if (engine_pads.size() != 2)
+		{
+			static_cast<IUnknown*>(input7)->Release();
+			return;
+		}
+
+		IUnknown* created = nullptr;
+		CHECK(SUCCEEDED(slot<create_device_t>(input7, 3)(input7, engine_pads[0].instance, reinterpret_cast<void**>(&created), nullptr)) && created);
+		void* engine_view = nullptr;
+		CHECK(created && SUCCEEDED(created->QueryInterface(IID_IDirectInputDevice2A, &engine_view)));
+		if (created) created->Release();
+		auto* engine = static_cast<IDirectInputDevice8A*>(engine_view); // the first 26 slots match IDirectInputDevice2A
+		if (!engine)
+		{
+			static_cast<IUnknown*>(input7)->Release();
+			return;
+		}
+		CHECK(SUCCEEDED(engine->SetDataFormat(&c_dfDIJoystick)));
+		CHECK(SUCCEEDED(engine->SetCooperativeLevel(GetConsoleWindow(), DISCL_EXCLUSIVE | DISCL_FOREGROUND)));
+		bool engine_ranges = true;
+		for (DWORD offset = 0; offset <= DIJOFS_RZ; offset += sizeof(LONG))
+		{
+			DIPROPRANGE range{{sizeof(DIPROPRANGE), sizeof(DIPROPHEADER), offset, DIPH_BYOFFSET}, -1000, 1000};
+			engine_ranges &= SUCCEEDED(engine->SetProperty(DIPROP_RANGE, &range.diph)); // Rx and Ry too, as for a real pad presented as one
+		}
+		CHECK(engine_ranges);
+		DIDEVCAPS caps{sizeof(caps)};
+		CHECK(SUCCEEDED(engine->GetCapabilities(&caps)) && caps.dwAxes == 4 && caps.dwButtons == 12 && caps.dwPOVs == 1 && (caps.dwFlags & DIDC_ATTACHED));
+		CHECK(caps.dwDevType == virtual_pad_rules::device_type(false));
+		DIDEVICEINSTANCEA info{sizeof(info)};
+		CHECK(SUCCEEDED(engine->GetDeviceInfo(&info)) && info.guidProduct.Data1 == dual_action && IsEqualGUID(info.guidInstance, engine_pads[0].instance));
+		CHECK(SUCCEEDED(engine->Acquire()) && SUCCEEDED(engine->Poll()));
+		DIJOYSTATE engine_state{};
+		CHECK(SUCCEEDED(engine->GetDeviceState(sizeof(engine_state), &engine_state)));
+		CHECK(engine_state.lX == 0 && engine_state.lY == 0 && engine_state.lZ == 0 && engine_state.lRz == 0 && engine_state.rgdwPOV[0] == 0xFFFFFFFF);
+		CHECK(engine->GetDeviceState(sizeof(DIJOYSTATE2), &engine_state) == DIERR_INVALIDPARAM); // not the format it set
+
+		// The game: XMen2.exe's own DirectInput 8, as 0x628e20 / 0x628b40 / 0x6285c0 use it.
+		wchar_t folder[MAX_PATH]{};
+		GetSystemDirectoryW(folder, MAX_PATH);
+		const auto dinput8 = LoadLibraryW((std::wstring(folder) + L"\\dinput8.dll").c_str());
+		const auto create = dinput8 ? reinterpret_cast<decltype(&DirectInput8Create)>(GetProcAddress(dinput8, "DirectInput8Create")) : nullptr;
+		IDirectInput8A* input8 = nullptr;
+		if (create) create(GetModuleHandleW(nullptr), 0x0800, IID_IDirectInput8A, reinterpret_cast<void**>(&input8), nullptr);
+		CHECK(input8 != nullptr);
+		if (!input8)
+		{
+			engine->Release();
+			static_cast<IUnknown*>(input7)->Release();
+			return;
+		}
+		std::vector<found_device> game_pads;
+		CHECK(SUCCEEDED(input8->EnumDevices(DI8DEVCLASS_GAMECTRL, &collect, &game_pads, DIEDFL_ATTACHEDONLY)));
+		CHECK(game_pads.size() == 2 && std::ranges::all_of(game_pads, is_virtual));
+		std::vector<found_device> keyboards;
+		input8->EnumDevices(DI8DEVCLASS_KEYBOARD, &collect, &keyboards, DIEDFL_ATTACHEDONLY);
+		CHECK(!keyboards.empty() && std::ranges::none_of(keyboards, is_virtual));
+		CHECK(input8->GetDeviceStatus(virtual_pad_rules::instance_guid(0)) == DI_OK);
+		if (game_pads.size() != 2)
+		{
+			input8->Release();
+			engine->Release();
+			static_cast<IUnknown*>(input7)->Release();
+			return;
+		}
+
+		std::array<IDirectInputDevice8A*, 2> pads{};
+		for (int i = 0; i < 2; ++i)
+		{
+			CHECK(SUCCEEDED(input8->CreateDevice(game_pads[i].instance, &pads[i], nullptr)) && pads[i]);
+			if (!pads[i]) continue;
+			CHECK(SUCCEEDED(pads[i]->SetDataFormat(&c_dfDIJoystick2)));
+			CHECK(SUCCEEDED(pads[i]->SetCooperativeLevel(GetConsoleWindow(), DISCL_BACKGROUND | DISCL_NONEXCLUSIVE)));
+			object_list objects{pads[i]};
+			CHECK(SUCCEEDED(pads[i]->EnumObjects(&range_object, &objects, DIDFT_AXIS)) && objects.names.size() == 4 && objects.ranges_ok); // the game's filter, 3
+			CHECK(SUCCEEDED(pads[i]->Acquire()));
+		}
+		if (!pads[0] || !pads[1])
+		{
+			for (auto* p : pads) if (p) p->Release();
+			input8->Release();
+			engine->Release();
+			static_cast<IUnknown*>(input7)->Release();
+			return;
+		}
+		object_list all{pads[0]};
+		CHECK(SUCCEEDED(pads[0]->EnumObjects(&range_object, &all, DIDFT_ALL)) && all.names.size() == 17);
+		DIPROPDWORD vidpid{{sizeof(DIPROPDWORD), sizeof(DIPROPHEADER), 0, DIPH_DEVICE}};
+		CHECK(SUCCEEDED(pads[1]->GetProperty(DIPROP_VIDPID, &vidpid.diph)) && vidpid.dwData == dual_action);
+		DIPROPRANGE rz{{sizeof(DIPROPRANGE), sizeof(DIPROPHEADER), DIJOFS_RZ, DIPH_BYOFFSET}};
+		CHECK(SUCCEEDED(pads[1]->GetProperty(DIPROP_RANGE, &rz.diph)) && rz.lMin == -1000 && rz.lMax == 1000);
+		DIPROPSTRING name{{sizeof(DIPROPSTRING), sizeof(DIPROPHEADER), 0, DIPH_DEVICE}};
+		CHECK(SUCCEEDED(pads[1]->GetProperty(DIPROP_PRODUCTNAME, &name.diph)) && std::wstring(name.wsz) == L"Logitech Dual Action");
+		DIDEVICEOBJECTINSTANCEA object{sizeof(object)};
+		CHECK(SUCCEEDED(pads[0]->GetObjectInfo(&object, DIJOFS_BUTTON(9), DIPH_BYOFFSET)) && std::string(object.tszName) == "Button 10");
+		CHECK(pads[0]->GetObjectInfo(&object, DIJOFS_BUTTON(12), DIPH_BYOFFSET) == DIERR_OBJECTNOTFOUND);
+		IUnknown* effect = reinterpret_cast<IUnknown*>(1);
+		CHECK(FAILED(pads[0]->CreateEffect(GUID_ConstantForce, nullptr, reinterpret_cast<IDirectInputEffect**>(&effect), nullptr)) && effect == nullptr);
+
+		const auto read_game = [&](const int i)
+		{
+			DIJOYSTATE2 state{};
+			if (FAILED(pads[i]->Poll()) || FAILED(pads[i]->GetDeviceState(sizeof(state), &state))) state.lX = 12345; // no read: fails the checks
+			return state;
+		};
+		const auto read_engine = [&]
+		{
+			DIJOYSTATE state{};
+			engine->Poll();
+			engine->GetDeviceState(sizeof(state), &state);
+			return state;
+		};
+		// Polls both pads (and the engine's pad 1) like the game's frames, 5 ms apart, until `seen` or `times` reads.
+		const auto poll = [&](const int times, auto seen)
+		{
+			for (int n = 0; n < times; ++n)
+			{
+				const auto one = read_game(0), two = read_game(1);
+				const auto engine_one = read_engine();
+				if (seen(one, two, engine_one)) return true;
+				Sleep(5);
+			}
+			return false;
+		};
+		const auto idle = [](const DIJOYSTATE2& s)
+		{
+			return s.lX == 0 && s.lY == 0 && s.lZ == 0 && s.lRz == 0 && s.rgdwPOV[0] == 0xFFFFFFFF &&
+			       std::all_of(s.rgbButtons, s.rgbButtons + 128, [](const BYTE b) { return b == 0; });
+		};
+		CHECK(idle(read_game(0)) && idle(read_game(1)));
+
+		// pad 1 A: the Dual Action's button 2 on pad 1, in both paths, and nothing on pad 2 meanwhile.
+		std::string reply;
+		bool pad_two_touched = false;
+		std::thread tapper([&] { reply = ask(pipe, "pad 1 A 300"); });
+		CHECK(poll(300, [&](const DIJOYSTATE2& one, const DIJOYSTATE2& two, const DIJOYSTATE& engine_one)
+		           {
+			           pad_two_touched = pad_two_touched || !idle(two);
+			           return one.rgbButtons[1] == 0x80 && engine_one.rgbButtons[1] == 0x80 && one.rgbButtons[0] == 0 && one.rgbButtons[2] == 0;
+		           }));
+		tapper.join();
+		CHECK(ok(reply) && !pad_two_touched);
+		CHECK(idle(read_game(0)) && read_engine().rgbButtons[1] == 0); // let go again
+
+		// paddown / padup on pad 2: START, the Dual Action's button 10 - player 2's join and pause.
+		CHECK(ok(ask(pipe, "paddown 2 START")));
+		CHECK(poll(4, [](const auto& one, const auto& two, const auto&) { return two.rgbButtons[9] == 0x80 && one.rgbButtons[9] == 0; }));
+		const auto held_status = ask(pipe, "status");
+		CHECK(held_status.find("pad inputs held 1") != std::string::npos && held_status.find("pad reads 0/") == std::string::npos);
+		CHECK(ok(ask(pipe, "padup 2 START")));
+		CHECK(idle(read_game(1)));
+
+		// Sticks: X, Y up; the right stick on Z / Rz, as the Dual Action has it. Without ms they stay until changed.
+		CHECK(ok(ask(pipe, "stick 1 L 0 1")));
+		CHECK(poll(4, [](const auto& one, const auto&, const auto& engine_one) { return one.lY == -1000 && one.lX == 0 && engine_one.lY == -1000; }));
+		CHECK(ok(ask(pipe, "stick 1 R -1 0")));
+		CHECK(poll(4, [](const auto& one, const auto&, const auto&) { return one.lZ == -1000 && one.lY == -1000; }));
+		CHECK(ok(ask(pipe, "stick 1 L 0 0")));
+		CHECK(poll(4, [](const auto& one, const auto&, const auto&) { return one.lY == 0 && one.lZ == -1000; }));
+		CHECK(ok(ask(pipe, "padup 1 ALL")));
+		CHECK(idle(read_game(0)));
+		// With ms: held that long, then centred, the reply once it's over.
+		std::thread sticker([&] { reply = ask(pipe, "stick 2 L 0.5 -0.5 200"); });
+		CHECK(poll(200, [](const auto&, const auto& two, const auto&) { return two.lX == 500 && two.lY == 500; }));
+		sticker.join();
+		CHECK(ok(reply) && idle(read_game(1)));
+
+		// Triggers: the Dual Action's buttons 7 (LT) and 8 (RT), past XInput's threshold.
+		CHECK(ok(ask(pipe, "trigger 2 R 1")));
+		CHECK(poll(4, [](const auto&, const auto& two, const auto&) { return two.rgbButtons[7] == 0x80 && two.rgbButtons[6] == 0; }));
+		CHECK(ok(ask(pipe, "trigger 2 R 0")));
+		CHECK(ok(ask(pipe, "paddown 2 LT")));
+		CHECK(poll(4, [](const auto&, const auto& two, const auto&) { return two.rgbButtons[6] == 0x80 && two.rgbButtons[7] == 0; }));
+		CHECK(ok(ask(pipe, "padrelease 2")));
+		CHECK(idle(read_game(1)));
+
+		// The d-pad is the hat; padhold blocks for its duration.
+		CHECK(ok(ask(pipe, "paddown 1 UP+RIGHT")));
+		CHECK(poll(4, [](const auto& one, const auto&, const auto& engine_one) { return one.rgdwPOV[0] == 4500 && engine_one.rgdwPOV[0] == 4500; }));
+		CHECK(ok(ask(pipe, "release"))); // keys and pads
+		CHECK(idle(read_game(0)));
+		std::thread holder([&] { reply = ask(pipe, "padhold 2 LB+Y 200"); });
+		CHECK(poll(200, [](const auto&, const auto& two, const auto&) { return two.rgbButtons[4] == 0x80 && two.rgbButtons[3] == 0x80; }));
+		holder.join();
+		CHECK(ok(reply) && idle(read_game(1)));
+
+		// Refused: a pad the game hasn't (after waiting for a read of it), and lines that aren't pad commands.
+		const auto missing = ask(pipe, "pad 3 A");
+		std::printf("  info  %s\n", missing.c_str());
+		CHECK(refused(missing) && missing.find("VirtualPads=2: the game has pads 1 to 2") != std::string::npos);
+		CHECK(refused(ask(pipe, "pad 5 A")) && refused(ask(pipe, "stick 1 L 3 0")) && refused(ask(pipe, "padhold 1 A")));
+		const auto after = ask(pipe, "status");
+		std::printf("  info  %s\n", after.c_str());
+		CHECK(after.find("pad inputs held 0") != std::string::npos);
+
+		for (auto* p : pads) p->Release();
+		input8->Release();
+		engine->Unacquire();
+		engine->Release();
+		static_cast<IUnknown*>(input7)->Release();
+
+		const auto log = read_file(module_dir() / "xml2-fix.log");
+		CHECK(log.find("virtual pads: the game sees 2 Logitech Dual Action pads ([Test] VirtualPads) in place of any real controller") != std::string::npos);
+		CHECK(log.find("virtual pads: DirectInput 7 lists the game 2 virtual pads") != std::string::npos && log.find("virtual pads: DirectInput 8 lists the game 2 virtual pads") != std::string::npos);
+		CHECK(log.find("virtual pads: DirectInput 7 creates virtual pad 1") != std::string::npos && log.find("virtual pads: DirectInput 8 creates virtual pad 2") != std::string::npos);
+		CHECK(log.find("virtual pads: the game reads virtual pad 1 through DirectInput 7") != std::string::npos);
+		CHECK(log.find("virtual pads: the game reads virtual pad 2 through DirectInput 8") != std::string::npos);
+		CHECK(log.find("test: the game reads pad 1 - pipe pad commands reach it") != std::string::npos);
+		CHECK(log.find("test: pad 1 tap A 300 ms") != std::string::npos && log.find("test: pad 2 hold Y+LB 200 ms") != std::string::npos);
+		CHECK(log.find("test: pad 3 tap A 80 ms - the game didn't read the pad meanwhile") != std::string::npos);
+		if (connected_xinput_pads() > 0)
+		{
+			CHECK(log.find("virtual pads: the game doesn't see the real controller") != std::string::npos);
+		}
+	}
+
 	// Runs in the child process (run_pipe_child), whose dinput.dll saw [Test] InputPipe=1 with
-	// PipeName=`name`, and [Online] Server=127.0.0.1.
+	// PipeName=`name`, VirtualPads=2, and [Online] Server=127.0.0.1.
 	void check_pipe(const std::string& name)
 	{
 		const auto pipe_path = "\\\\.\\pipe\\" + name;
@@ -3041,6 +3509,8 @@ namespace
 		CHECK(refused(ask(pipe, "script")) && refused(ask(pipe, "console " + std::string(128, 'x'))));
 		CHECK(ok(ask(pipe, "ping"))); // the pipe carries on
 
+		check_virtual_pads(pipe);
+
 		// The keyboard as XMen2.exe creates it: its own DirectInput 8, through the fix's wrapper.
 		wchar_t folder[MAX_PATH]{};
 		GetSystemDirectoryW(folder, MAX_PATH);
@@ -3138,7 +3608,7 @@ namespace
 		}
 		{
 			std::ofstream out(ini, std::ios::binary);
-			out << "[Test]\r\nInputPipe=1\r\nPipeName=" << pipe_name << " ; this test's own\r\n[Display]\r\nResolutionList=all\r\n[Limits]\r\nActorSlots=127\r\n[Game]\r\nForcedTeams=1\r\nAddHero=1\r\nPostgameScript=x1/menus/postgame ; XML1's r505\r\nMainMenuItems=button1,button2,button3,button4,button5,button6,button7 ; XML1's buttons\r\n"
+			out << "[Test]\r\nInputPipe=1\r\nPipeName=" << pipe_name << " ; this test's own\r\nVirtualPads=2 ; two pads with nothing plugged in\r\n[Display]\r\nResolutionList=all\r\n[Limits]\r\nActorSlots=127\r\n[Game]\r\nForcedTeams=1\r\nAddHero=1\r\nPostgameScript=x1/menus/postgame ; XML1's r505\r\nMainMenuItems=button1,button2,button3,button4,button5,button6,button7 ; XML1's buttons\r\n"
 			       "XPCurve=xml1 ; XML1's levels and kill XP\r\n[Online]\r\nServer=127.0.0.1 ; a private OpenSpy stack\r\nLocalIP=203.0.113.9 ; not this PC's\r\n";
 		}
 
@@ -5939,6 +6409,7 @@ int main(const int argc, char** argv)
 		std::vector<found_device> devices;
 		CHECK(SUCCEEDED(slot<enum_devices_t>(direct_input, 4)(direct_input, 4 /* DIDEVTYPE_JOYSTICK; Windows' DirectInput 7 can crash listing all types */, &collect, &devices, DIEDFL_ATTACHEDONLY)));
 		std::printf("  info  %zu device(s) attached\n", devices.size());
+		CHECK(std::ranges::none_of(devices, [](const found_device& d) { return virtual_pad_rules::pad_of(d.instance, virtual_pad_rules::max_pads).has_value(); })); // no [Test] VirtualPads here
 		static_cast<IUnknown*>(direct_input)->Release();
 	}
 
@@ -5965,6 +6436,8 @@ int main(const int argc, char** argv)
 	check_limits_rules();
 	check_forced_teams_rules();
 	check_test_input_rules();
+	check_pad_input_rules();
+	check_virtual_pad_rules();
 	check_image_file();
 	check_save_folder();
 	check_postgame_rules();
@@ -5987,6 +6460,7 @@ int main(const int argc, char** argv)
 	CHECK(log.find("hooked a DirectInput 7 instance") != std::string::npos);
 	CHECK(log.find("display: as the game has it") != std::string::npos); // no [Display] section next to the test
 	CHECK(log.find("test:") == std::string::npos);                       // and no [Test] section: no pipe
+	CHECK(log.find("virtual pads:") == std::string::npos);               // nor virtual pads
 	CHECK(log.find("options: XMen2.exe doesn't have the expected code") != std::string::npos && log.find("call sites patched") == std::string::npos); // not the game
 	// Default-off: no keys and no rows (not the game) -> nothing hooked, the resolution table never looked at.
 	CHECK(log.find("nothing hooked") != std::string::npos && log.find("resolution list:") == std::string::npos && log.find("references patched") == std::string::npos);

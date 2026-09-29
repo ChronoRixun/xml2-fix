@@ -3,9 +3,11 @@
 // The test input pipe's rules, kept apart from the pipe and the hooks so xml2_test can check
 // them: DirectInput key names, the one-line commands, the synthetic key state that is merged
 // into the keyboard state the game reads, and the lines "script" and "console" hand to the
-// game's console queue, with the retail code that queue is.
+// game's console queue, with the retail code that queue is. The pad commands (pad, padhold,
+// paddown, padup, padrelease, stick, trigger) are pad_input_rules.hpp's.
 
 #include "limits_rules.hpp" // guard, matches: retail bytes compared before use
+#include "pad_input_rules.hpp"
 
 #include <Windows.h>
 
@@ -348,6 +350,7 @@ namespace test_input_rules
 	//   screenshot PATH     save the current frame (.bmp or .png)
 	//   script STATEMENT    queue "runscript STATEMENT" in the game's console (spaces outside quotes dropped)
 	//   console COMMAND     queue COMMAND in the game's console, as it is
+	//   pad, padhold, paddown, padup, padrelease, stick, trigger   a pad's buttons, sticks and triggers (pad_input_rules.hpp)
 	//   status | ping
 	// Every screen reads these keys, the Advanced Options panel included: its per-frame input
 	// function (0x619070) turns released DirectInput keys (Esc, Enter, the arrows) and pad buttons
@@ -367,6 +370,7 @@ namespace test_input_rules
 			screenshot,
 			script,
 			console,
+			pad, // pad_input_rules.hpp's verbs: `pad` says which
 			status,
 			ping,
 			unknown
@@ -377,6 +381,7 @@ namespace test_input_rules
 		DWORD ms = 0;      // 0: the command's default
 		std::string path;  // screenshot
 		std::string text;  // script, console: the line for the game's console queue
+		pad_input_rules::pad_command pad;
 		std::string error; // unknown: what was wrong
 	};
 
@@ -399,6 +404,17 @@ namespace test_input_rules
 			return result;
 		};
 
+		if (auto pad = pad_input_rules::parse_pad_command(text.substr(0, space), rest); pad.what != pad_input_rules::pad_command::kind::none)
+		{
+			if (!pad.error.empty())
+			{
+				return fail(std::move(pad.error));
+			}
+			result.what = command::kind::pad;
+			result.pad = std::move(pad);
+			return result;
+		}
+
 		if (verb == "PING") result.what = command::kind::ping;
 		else if (verb == "STATUS") result.what = command::kind::status;
 		else if (verb == "RELEASE") result.what = command::kind::release;
@@ -410,7 +426,8 @@ namespace test_input_rules
 		else if (verb == "SCRIPT") result.what = command::kind::script;
 		else if (verb == "CONSOLE") result.what = command::kind::console;
 		else if (verb == "WM") return fail("wm is gone: the Advanced Options panel reads the DirectInput keyboard like every other screen - use tap (tap DOWN, tap ENTER, tap LEFT)");
-		else return fail("unknown command '" + std::string(text.substr(0, space)) + "' (down, up, tap, hold, release, screenshot, script, console, status, ping)");
+		else return fail("unknown command '" + std::string(text.substr(0, space)) +
+		                 "' (down, up, tap, hold, release, screenshot, script, console, pad, padhold, paddown, padup, padrelease, stick, trigger, status, ping)");
 
 		if (result.what == command::kind::script || result.what == command::kind::console)
 		{

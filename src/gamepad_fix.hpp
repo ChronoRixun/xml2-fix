@@ -14,6 +14,10 @@ namespace gamepad_fix
 	// The controller to present. Defaults to pad_profile::logitech_dual_action.
 	void use_profile(const pad_profile::profile& profile);
 
-	// Hooks a freshly created DirectInput object (IDirectInput, 2, 7 or 8; A or W) and the devices it creates.
+	// The one presented (the virtual pads are one too).
+	const pad_profile::profile& profile();
+
+	// Hooks a freshly created DirectInput object (IDirectInput, 2, 7 or 8; A or W) and the devices it creates;
+	// its device lists and CreateDevice also serve the virtual pads ([Test] VirtualPads, virtual_pad.hpp).
 	void hook_direct_input(void* direct_input);
 }

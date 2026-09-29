@@ -1,6 +1,9 @@
 #include "gamepad_fix.hpp"
 #include "log.hpp"
+#include "pad_input.hpp"
 #include "pad_profile.hpp"
+#include "virtual_pad.hpp"
+#include "virtual_pad_rules.hpp"
 #include "xinput_pad.hpp"
 
 #define DIRECTINPUT_VERSION 0x0800
@@ -31,6 +34,7 @@ namespace gamepad_fix
 		// COM vtable slots. Every IDirectInput version shares the first ones, as do the device interfaces.
 		constexpr int slot_create_device = 3;
 		constexpr int slot_enum_devices = 4;
+		constexpr int slot_get_device_status = 5;
 		constexpr int slot_create_device_ex = 9; // IDirectInput7 only
 		constexpr int slot_get_capabilities = 3;
 		constexpr int slot_enum_objects = 4;
@@ -53,11 +57,13 @@ namespace gamepad_fix
 		{
 			std::unordered_map<int, void*> originals; // by slot
 			bool wide = false;                        // a W interface
+			int version = 0;                          // a DirectInput object's: 8, 7, 5 or 3 (0: a device's)
 		};
 
 		using create_device_t = HRESULT(STDMETHODCALLTYPE*)(void*, REFGUID, void**, LPUNKNOWN);
 		using create_device_ex_t = HRESULT(STDMETHODCALLTYPE*)(void*, REFGUID, REFIID, void**, LPUNKNOWN);
 		using enum_devices_t = HRESULT(STDMETHODCALLTYPE*)(void*, DWORD, LPDIENUMDEVICESCALLBACKW, LPVOID, DWORD);
+		using get_device_status_t = HRESULT(STDMETHODCALLTYPE*)(void*, REFGUID);
 		using get_capabilities_t = HRESULT(STDMETHODCALLTYPE*)(void*, LPDIDEVCAPS);
 		using enum_objects_t = HRESULT(STDMETHODCALLTYPE*)(void*, void*, LPVOID, DWORD);
 		using get_property_t = HRESULT(STDMETHODCALLTYPE*)(void*, REFGUID, LPDIPROPHEADER);
@@ -185,12 +191,23 @@ namespace gamepad_fix
 			return vtables[*static_cast<void***>(self)].wide;
 		}
 
-		void patch_vtable(void* object, const int slot, void* replacement, const bool wide)
+		// A DirectInput 8 object (dinput8.dll's; the older interfaces are dinput.dll's).
+		bool is_di8(void* self)
+		{
+			std::lock_guard lock(mutex);
+			return vtables[*static_cast<void***>(self)].version == 8;
+		}
+
+		void patch_vtable(void* object, const int slot, void* replacement, const bool wide, const int version = 0)
 		{
 			std::lock_guard lock(mutex);
 			auto** vtable = *static_cast<void***>(object);
 			auto& record = vtables[vtable];
 			record.wide = wide;
+			if (version)
+			{
+				record.version = version;
+			}
 			if (record.originals.contains(slot))
 			{
 				return;
@@ -425,27 +442,6 @@ namespace gamepad_fix
 			return result;
 		}
 
-		template <typename ObjectInstance>
-		void describe(ObjectInstance& out, const pad_profile::object& object)
-		{
-			out = {};
-			out.dwSize = sizeof(out);
-			out.guidType = *object.type;
-			out.dwOfs = object.offset;
-			out.dwType = object.id;
-			out.dwFlags = object.flags;
-			out.wUsagePage = object.usage_page;
-			out.wUsage = object.usage;
-			if constexpr (std::is_same_v<ObjectInstance, DIDEVICEOBJECTINSTANCEW>)
-			{
-				std::swprintf(out.tszName, MAX_PATH, L"%hs", object.name);
-			}
-			else
-			{
-				std::snprintf(out.tszName, MAX_PATH, "%s", object.name);
-			}
-		}
-
 		HRESULT STDMETHODCALLTYPE enum_objects(void* self, void* callback, LPVOID user, const DWORD flags)
 		{
 			const auto real = reinterpret_cast<enum_objects_t>(original(self, slot_enum_objects));
@@ -477,13 +473,13 @@ namespace gamepad_fix
 				if (wide)
 				{
 					DIDEVICEOBJECTINSTANCEW instance;
-					describe(instance, object);
+					pad_profile::describe(instance, object, object.offset);
 					more = reinterpret_cast<LPDIENUMDEVICEOBJECTSCALLBACKW>(callback)(&instance, user);
 				}
 				else
 				{
 					DIDEVICEOBJECTINSTANCEA instance;
-					describe(instance, object);
+					pad_profile::describe(instance, object, object.offset);
 					more = reinterpret_cast<LPDIENUMDEVICEOBJECTSCALLBACKA>(callback)(&instance, user);
 				}
 				if (more == DIENUM_STOP)
@@ -535,6 +531,7 @@ namespace gamepad_fix
 				return result;
 			}
 
+			pad_input::on_read(record.ordinal, pad, false); // the test pipe's "pad N" is the N-th pad presented
 			active->fill_state(*static_cast<DIJOYSTATE*>(data), pad, record.axes);
 			return DI_OK;
 		}
@@ -581,6 +578,10 @@ namespace gamepad_fix
 
 		HRESULT STDMETHODCALLTYPE create_device(void* self, REFGUID instance, void** device, LPUNKNOWN outer)
 		{
+			if (virtual_pad::is_virtual(instance))
+			{
+				return outer ? CLASS_E_NOAGGREGATION : virtual_pad::create(instance, nullptr, is_di8(self), is_wide(self), device);
+			}
 			const auto result = reinterpret_cast<create_device_t>(original(self, slot_create_device))(self, instance, device, outer);
 			if (SUCCEEDED(result) && device && *device)
 			{
@@ -591,6 +592,10 @@ namespace gamepad_fix
 
 		HRESULT STDMETHODCALLTYPE create_device_ex(void* self, REFGUID instance, REFIID iid, void** device, LPUNKNOWN outer)
 		{
+			if (virtual_pad::is_virtual(instance))
+			{
+				return outer ? CLASS_E_NOAGGREGATION : virtual_pad::create(instance, &iid, is_di8(self), is_wide(self), device);
+			}
 			const auto result = reinterpret_cast<create_device_ex_t>(original(self, slot_create_device_ex))(self, instance, iid, device, outer);
 			if (SUCCEEDED(result) && device && *device)
 			{
@@ -603,14 +608,28 @@ namespace gamepad_fix
 		{
 			LPDIENUMDEVICESCALLBACKW callback; // or the A version; only the instance layout differs
 			LPVOID user;
+			bool di8;
+			bool stopped = false; // the caller's callback said DIENUM_STOP
 		};
 
 		BOOL CALLBACK enum_callback(LPCDIDEVICEINSTANCEW instance, LPVOID ref)
 		{
-			const auto* context = static_cast<enum_context*>(ref);
+			auto* context = static_cast<enum_context*>(ref);
 			if (!instance || instance->dwSize < offsetof(DIDEVICEINSTANCEW, guidProduct) + sizeof(GUID))
 			{
-				return context->callback(instance, context->user);
+				const BOOL more = context->callback(instance, context->user);
+				context->stopped = more == DIENUM_STOP;
+				return more;
+			}
+
+			// [Test] VirtualPads: the virtual pads stand in for every real controller (virtual_pad.hpp).
+			if (virtual_pad::count() > 0 && instance->dwSize >= offsetof(DIDEVICEINSTANCEW, dwDevType) + sizeof(DWORD) &&
+			    virtual_pad_rules::is_game_controller(context->di8, instance->dwDevType))
+			{
+				logger::write_once(std::string("virtual-hide:") + std::to_string(instance->guidProduct.Data1),
+				                   "virtual pads: the game doesn't see the real controller %04X:%04X - [Test] VirtualPads puts virtual pads in its place",
+				                   vid_of(instance->guidProduct), pid_of(instance->guidProduct));
+				return DIENUM_CONTINUE;
 			}
 
 			// Copy exactly what the caller was given (A or W, current or DirectX 3 size).
@@ -621,7 +640,9 @@ namespace gamepad_fix
 			                   "dinput: game sees device %04X:%04X (type %08lX)", vid_of(instance->guidProduct), pid_of(instance->guidProduct), instance->dwDevType);
 
 			spoof_instance(copy, "EnumDevices");
-			return context->callback(reinterpret_cast<LPCDIDEVICEINSTANCEW>(copy), context->user);
+			const BOOL more = context->callback(reinterpret_cast<LPCDIDEVICEINSTANCEW>(copy), context->user);
+			context->stopped = more == DIENUM_STOP;
+			return more;
 		}
 
 		HRESULT STDMETHODCALLTYPE enum_devices(void* self, DWORD type, LPDIENUMDEVICESCALLBACKW callback, LPVOID user, DWORD flags)
@@ -632,8 +653,24 @@ namespace gamepad_fix
 				return real(self, type, callback, user, flags);
 			}
 
-			enum_context context{callback, user};
-			return real(self, type, &enum_callback, &context, flags);
+			enum_context context{callback, user, is_di8(self)};
+			const HRESULT result = real(self, type, &enum_callback, &context, flags);
+			// The virtual pads after the real devices, so each is always the same pad in the game's list.
+			if (SUCCEEDED(result) && !context.stopped && virtual_pad::count() > 0 && virtual_pad_rules::lists_pads(context.di8, type, flags))
+			{
+				virtual_pad::enumerate(context.di8, is_wide(self), reinterpret_cast<void*>(callback), user);
+			}
+			return result;
+		}
+
+		// A virtual pad is always attached.
+		HRESULT STDMETHODCALLTYPE get_device_status(void* self, REFGUID instance)
+		{
+			if (virtual_pad::is_virtual(instance))
+			{
+				return DI_OK;
+			}
+			return reinterpret_cast<get_device_status_t>(original(self, slot_get_device_status))(self, instance);
 		}
 
 		struct direct_input_id
@@ -657,6 +694,11 @@ namespace gamepad_fix
 		active = &profile;
 	}
 
+	const pad_profile::profile& profile()
+	{
+		return *active;
+	}
+
 	void hook_direct_input(void* direct_input)
 	{
 		int newest = 0;
@@ -669,11 +711,12 @@ namespace gamepad_fix
 			}
 
 			newest = std::max(newest, version);
-			patch_vtable(view, slot_create_device, reinterpret_cast<void*>(&create_device), wide);
-			patch_vtable(view, slot_enum_devices, reinterpret_cast<void*>(&enum_devices), wide);
+			patch_vtable(view, slot_create_device, reinterpret_cast<void*>(&create_device), wide, version);
+			patch_vtable(view, slot_enum_devices, reinterpret_cast<void*>(&enum_devices), wide, version);
+			patch_vtable(view, slot_get_device_status, reinterpret_cast<void*>(&get_device_status), wide, version);
 			if (has_create_device_ex)
 			{
-				patch_vtable(view, slot_create_device_ex, reinterpret_cast<void*>(&create_device_ex), wide);
+				patch_vtable(view, slot_create_device_ex, reinterpret_cast<void*>(&create_device_ex), wide, version);
 			}
 			static_cast<IUnknown*>(view)->Release();
 		}

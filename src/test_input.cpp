@@ -5,6 +5,7 @@
 #include "limits.hpp"
 #include "ini.hpp"
 #include "log.hpp"
+#include "pad_input.hpp"
 #include "test_input_rules.hpp"
 
 #define DIRECTINPUT_VERSION 0x0800
@@ -488,7 +489,7 @@ namespace test_input
 			// fps: Presents counted over the last full second (0 until then), so a frame cap can be
 			// checked from a script. Then the engine tables' use, live/cap ([Limits], limits.hpp).
 			return "ok XML2 Fix " FIX_VERSION "; keyboard devices " + std::to_string(devices) + "; reads " + std::to_string(reads.load()) + "; keys held " +
-			       std::to_string(held) + "; game " + (game_in_foreground() ? "has" : "doesn't have") + " the focus; fps " +
+			       std::to_string(held) + "; " + pad_input::status() + "; game " + (game_in_foreground() ? "has" : "doesn't have") + " the focus; fps " +
 			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + limits::status();
 		}
 
@@ -513,9 +514,12 @@ namespace test_input
 				return "ok";
 			case command::kind::release:
 			{
-				std::lock_guard lock(keys_mutex);
-				keys.release_all();
-				logger::write("test: release all");
+				{
+					std::lock_guard lock(keys_mutex);
+					keys.release_all();
+				}
+				pad_input::release_all();
+				logger::write("test: release all (keys and pads)");
 				return "ok";
 			}
 			case command::kind::tap:
@@ -527,6 +531,8 @@ namespace test_input
 			case command::kind::script:
 			case command::kind::console:
 				return queue_console(cmd);
+			case command::kind::pad:
+				return pad_input::handle(cmd.pad);
 			default:
 				logger::write("test: rejected '%s': %s", line.c_str(), cmd.error.c_str());
 				return "error " + cmd.error;
@@ -613,6 +619,7 @@ namespace test_input
 		}
 		CloseHandle(thread);
 
+		pad_input::enable(); // the pad commands' reads, merged and counted from now on
 		display::set_frame_hook(&on_frame);
 		display::disable_multisampling("the test pipe copies the back buffer");
 		display::show_without_focus("the test pipe drives the game in the background");
