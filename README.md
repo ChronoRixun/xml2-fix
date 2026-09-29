@@ -17,16 +17,19 @@
 
 **X-Men Legends II: Rise of Apocalypse** on PC detects your controller and then leaves it completely unbound. The PC version only ships keyboard defaults, so the game sends you to *Advanced options* to assign all 42 actions by hand, for every player. And its online mode has been dead since GameSpy shut down in 2014.
 
-**XML2 Fix** takes care of the controls, and is working on online play:
+**XML2 Fix** takes care of the controls and the display, shows what you're playing on Discord, lets mods live in their own folder, and is working on online play:
 
 |                       | Without the fix | With the fix |
 | --------------------- | --------------- | ------------ |
 | First start with a pad | "go to Advanced options", nothing bound | console-style layout, ready to play |
 | Local co-op           | bind every pad yourself | players 2–4 get pads 2–4 automatically |
 | Modern Xbox pads (e.g. over Bluetooth) | odd axes and trigger behaviour | one consistent layout for every pad |
-| Online                | GameSpy servers gone | redirected to [OpenSpy](https://openspy.net) (lobby: [in progress](#-online)) |
+| Button prompts        | keyboard keys everywhere, pad or not ("[E] Talk") | the pad's buttons for a player on a pad, **A B X Y** in their colours ([details](#button-prompts)) |
+| Online                | GameSpy servers gone | redirected to [OpenSpy](https://openspy.net), with the right address on PCs with WSL, Hyper-V, Docker or a VPN (lobby: [in progress](#-online)) |
 | Display               | exclusive fullscreen only, switches your monitor's mode, no native resolution in the list, 60 fps | borderless or windowed at your desktop's resolution, frame rate and vsync of your choosing, [set in the game's own options](#%EF%B8%8F-display) |
 | Discord               | — | shows what you're playing on your profile: the zone, your heroes, online co-op ([details](#-discord), easy to switch off) |
+| Mods                  | copied over the game's files, hard to undo | a `mods` folder with a load order; the game's files stay untouched ([details](#-mods)) |
+| Big mods              | 40 actors per zone, then a crash | up to 127 when a mod asks for it ([details](#bigger-zones)) |
 | Setup                 | — | copy one file |
 
 ## ⚡ Install
@@ -35,7 +38,22 @@
 2. Copy **`dinput.dll`** into the game folder, the one that contains **`XMen2.exe`**.
 3. Start the game. Your controller is already bound.
 
-**Uninstall:** delete `dinput.dll` from the game folder. Your bindings stay as they are and can be changed or reset in the game's *Options → Controls → Advanced*.
+**Uninstall:** delete `dinput.dll` from the game folder (and `xml2-fix.ini` / `xml2-fix.log` if they are there). Your bindings stay as they are and can be changed or reset in the game's *Options → Controls → Advanced*.
+
+### What's on by default
+
+No settings file is needed. Without one, the fix does the following; everything else in this README stays off until you set it in `xml2-fix.ini`, a plain text file you create next to `dinput.dll` ([every key](#%EF%B8%8F-settings-xml2-fixini)). The [Ultimate Legends launcher](https://github.com/ChronoRixun/ultimate-legends) can edit the same file for you.
+
+| On by default | What it does | To switch it off |
+| ------------- | ------------ | ---------------- |
+| Pad support and the [layout](#-the-layout) | pads are presented to the game as one it understands; the console layout is added to empty or default bindings | uninstall; rebind in *Advanced options* (your own bindings are never overwritten) |
+| [Button prompts](#button-prompts) | a player on a pad sees the pad's buttons in prompts | `[Input]` `Prompts=off` |
+| [Discord Rich Presence](#-discord) | with the Discord app running, your profile shows the zone, your heroes and the mode | `[Discord]` `Enabled=0` |
+| [OpenSpy redirect](#-online) | the game's GameSpy lookups go to OpenSpy | `[Online]` `Domain=off` |
+| [LocalIP](#-online) | the game takes the address this PC reaches the internet from as its own, not a virtual adapter's | `[Online]` `LocalIP=first` |
+| [Four rows in *Advanced options*](#%EF%B8%8F-display) | display mode, frame rate, VSync and run in background; they change nothing until you change them | `[Display]` `InGameOptions=0` |
+| [Mods folder](#-mods) | files in `mods\` next to the game are used in place of the game's; with no files there, nothing is hooked | remove or empty `mods\`, or switch a mod off in `mods\load-order.txt` |
+| `xml2-fix.log` | what the game saw and what the fix did, written next to the DLL at every start | — |
 
 ## 🎮 The layout
 
@@ -84,7 +102,9 @@ To use another server (for example one you host yourself) or to switch the redir
 Domain=openspy.net   ; or your server's domain, or: off
 ```
 
-**How `xml2-fix.ini` is read** (every key, every section, and the Ultimate Legends launcher reads it the same way): a value ends at the first `;`, and the spaces around it don't count, so `Domain=off   ; for now` is `off`. A `#` is part of the value. A key with nothing before its `;` (`Domain=   ; later`) is the same as no key at all: the default.
+`Domain=off` is the only way to switch the redirect off: an empty `Domain=` is the default, `openspy.net` (in 1.1 it switched the redirect off). How every value is read, comments included: [Settings](#%EF%B8%8F-settings-xml2-fixini).
+
+**What OpenSpy sees.** OpenSpy is an independent community service, not part of this project. The game talks to it only from its *Play Online* menu on, and sends what it sent to GameSpy: your public IP address (as with any server), the game's name and version, and, when you host, the hosted game's details and this PC's local address in its heartbeats. Players in a game together connect to each other directly, so they see each other's addresses, as in any peer-to-peer game. The fix itself sends nothing to OpenSpy or anywhere else; it only changes where the game's lookups go.
 
 **A server of your own without DNS names** (a self-hosted OpenSpy, for example [its Docker setup](https://github.com/openspy/compose) on your own PC or LAN): give its IPv4 address instead, and every GameSpy (and OpenSpy) host name the game looks up resolves to it.
 
@@ -155,7 +175,7 @@ In borderless mode with `Width`/`Height` at 0 the game starts at the desktop siz
 
 ## 💬 Discord
 
-With the Discord app running on the same PC, your Discord profile shows what you're doing in the game while it runs, with the game's logo and a badge for the mode, as it does for newer games:
+On by default. With the Discord app running on the same PC, your Discord profile shows what you're doing in the game while it runs, with a picture for the game and a badge for the mode, as it does for newer games:
 
 > **X-Men Legends II**<br>
 > Act 1 · Sanctuary<br>
@@ -164,7 +184,7 @@ With the Discord app running on the same PC, your Discord profile shows what you
 
 The X-Men Legends I port shows as **X-Men Legends**, XML2 as **X-Men Legends II**. The fix tells them apart by the port's `Scripts\x1` folder (in the game folder, or in a mod that loads: one `mods\load-order.txt` switches off doesn't count) or its `[Game] PostgameScript=x1/...` or `SaveFolder=X-Men Legends`.
 
-| In the game | Discord shows | Badge on the logo |
+| In the game | Discord shows | Badge |
 | ----------- | ------------- | ----------------- |
 | The main menu, and before the first zone | In the menus | *menu*: In the menus |
 | A zone | The act and the zone's name as the save screen has it (*Act 1 · East Manhattan*), then your party: one or two heroes with their levels (*Wolverine Lv 3 · Cyclops Lv 1*), three or four shortened (*Wolverine, Cyclops +2 · Lv 3-5*). Heroes by the names the game shows (*Jean Grey*, not `phoenix`). While a menu is open (the team menu, say) the party stays as it was until the menu closes, so a hero shows once you accept him | none |
@@ -194,7 +214,7 @@ Game=xml1        ; which application, if the detection is wrong: xml1 or xml2 (e
 ClientId=        ; another Discord application's id (empty: the game's own)
 ```
 
-Both Discord applications carry the same art: `logo`, and the badges `menu`, `cutscene`, `dangerroom` and `online`. An application of your own (`ClientId=`) needs art under those keys, or `LargeImage=none`.
+Both Discord applications carry the same art: `logo`, and the badges `menu`, `cutscene`, `dangerroom` and `online`. An application of your own (`ClientId=`) needs art under those keys, or `LargeImage=none`. The pictures are the project's own art ([docs/discord-art](docs/discord-art), with their SVG sources): no game or publisher artwork.
 
 Discord not running? The fix looks for it every 20 seconds, quietly, and connects once it starts. `xml2-fix.log` says when (`discord: connected as X-Men Legends II (discord-ipc-0)`) and lists each new presence (`discord: presence -> Act 1 · Sanctuary | Wolverine, Storm +2 · Lv 10-12`). Quitting the game clears the presence (`discord: presence cleared (the game is quitting)`; the game waits at most 1.5 seconds for it); if the game is closed any other way, Discord clears it when the fix's connection goes. It reads the game's own state once a second: the zone manager's zone and save name, the act, the party, the stats registry's names and levels, the Danger Room's course, the online session and whether a menu is open, after checking every byte it relies on is the retail build's. On any other build the presence shows the game's name only, and `xml2-fix.log` says why. Nothing the presence does can take the game down: whatever is on the other end of the pipe is held to what Discord sends (frames of at most 64 KiB, a few at a time; anything else is dropped and looked for again later), and a failure in its thread only closes the connection.
 
@@ -246,9 +266,52 @@ With `VirtualPads=N` the game sees N Logitech Dual Actions in both of the lists 
 
 Virtual pads **replace** real controllers rather than joining them: while `VirtualPads` is set, the game's lists show no real controller, and XInput pad N's input goes into virtual pad N while the game has the focus. So `pad 1` is always the game's pad 1, whatever is plugged in, wakes up or goes to sleep during a run (the game re-lists its pads every few seconds and moves them between slots when the list changes), a real pad still plays as the same player, and a test game in the background never takes the pad someone is using in another window. The virtual pads have no force feedback, and they report state only (no buffered input, which the game doesn't use). The game remembers its pads by the GUIDs in `Controls\Gamepads`, as it does for any pad; a real one plugged in later simply takes a free slot again.
 
+## 📦 Mods
+
+Mods for XML2 usually replace some of the game's files: a costume's skin, a hero's stats, a zone. Copied into the game folder they overwrite the originals, and taking a mod out means reinstalling the game. With the fix, each mod goes in a folder of its own under `mods` instead, laid out like the game folder, and the game's own files stay as they are:
+
+```
+X-Men Legends II\
+  XMen2.exe
+  dinput.dll
+  mods\
+    load-order.txt
+    Better Costumes\
+      Actors\0101.igb
+    Harder Bosses\
+      Data\npcstat.engb
+```
+
+When the game opens a file for reading, the fix looks in the mods first: a mod's file with the same path wins over the game's. `mods\load-order.txt` decides which mod wins when two have the same file (the later line wins) and which are on:
+
+```
+# lowest priority first; later lines win
++Better Costumes
+# "-" keeps a mod in its place but switched off
+-Harder Bosses
+```
+
+A folder that isn't listed loads after the listed ones, in alphabetical order, switched on; folders whose names start with `.` are skipped, and so are a mod's own `mod.json`, `readme.txt` and `readme.md` at its top level. The file is UTF-8 (a byte order mark is fine). The [Ultimate Legends launcher](https://github.com/ChronoRixun/ultimate-legends) has a Mods section that adds mods from a `.zip` or a folder, switches them on and off and changes the order, in this same file.
+
+The mods are read once, when the game starts: add or change one, then restart the game. A file that exists only in a mod is found when the game asks for it by name, but it doesn't show up when the game lists a folder's contents with a wildcard. Saves, settings and screenshots are written where they always are (see `SaveFolder` below for a mod that wants its own).
+
+It works by hooking the game's file lookups for reading (`CreateFile`, `GetFileAttributes`, `FindFirstFile` and the C runtime's `fopen` / `_findfirst`) in `XMen2.exe` and the engine's libraries; writes are never redirected. With no files under `mods`, nothing is hooked. `xml2-fix.log` lists each file a mod replaces, once (`mods: CreateFileA ... -> mods\Better Costumes\...`); `[Debug] LogFiles=1` adds every other file the game opens ([Troubleshooting](#-troubleshooting)).
+
+### Bigger zones
+
+The game keeps the skins and animation sets of the characters it has loaded in a table of 40 slots, and the names of every loaded resource in a table of 450. When a zone needs a 41st slot the game gets nothing back, without a word, and crashes at the first animation of the character that didn't get one. Leaving a zone frees its slots, but characters loaded on demand stay until the main menu, so a long session can creep up to 40 and crash in a zone that loaded fine an hour earlier. A mod with crowded zones hits it sooner. `[Limits]` raises both tables:
+
+```ini
+[Limits]
+ActorSlots=127       ; 41 to 127 actor slots (the game's own: 40)
+ResourceNames=1024   ; 451 to 4096 resource names (the game's own: 450); with ActorSlots above 40 and no ResourceNames: 1024
+```
+
+Nothing changes without the keys. Every slot takes a name, so `ResourceNames` is raised to at least 450 plus the extra slots, and the actor table only grows together with the name table. 127 is the most the game's code can count to: sixteen of its checks compare the slot count as a single signed byte. The X-Men Legends I port uses `ActorSlots=127` and `ResourceNames=1024`. It works by moving the actor table into a block of the fix's memory that the game's own constructor builds and its own destructor tears down, and by building a bigger name table with the game's own constructor where the game's getter looks for it, all before the game's start-up asks for either, and after every byte it relies on is checked against the retail build. All or nothing: on any other build the game keeps both tables, a value out of range is ignored, and `xml2-fix.log` says why. The test pipe's `status` shows how full they are (`actors 23/127; names 301/1024; ...`). The game's other fixed limit, the 200 records of its IGB (model file) cache, is not raised yet.
+
 ## 🧬 Mods with their own campaign
 
-For total conversions that bring their own story, roster and saves (the X-Men Legends I port, for one). Each key does nothing until it is set:
+For total conversions that bring their own story, roster and saves (the X-Men Legends I community port, for one). **These keys are for mod makers and the port, which sets them itself; for XML2 as it ships, leave them out.** Each key does nothing until it is set:
 
 ```ini
 [Game]
@@ -320,6 +383,106 @@ A fixed party stays fixed at the Xtraction Points too: with `ForcedTeams=1`, whi
 
 The game drops a call to a function it doesn't know when the script compiles, and nothing else: without the fix, or without `ForcedTeams`, the `xml2fixFeature` line goes, `x1ft` stays 0 and the team menu opens as before. `ForcedTeams=0` keeps the functions but has them report off. Switching it off between a flashback's start and its end (a game saved inside a flashback, loaded with `ForcedTeams=0` or without the fix) leaves the saved party on the game's side-mission stack: the end opens the team menu, nothing takes the record off, and it stays in the saves until a New Game (zone loads meanwhile take the game's side-mission path, and the stack has one place left); with the fix and `ForcedTeams=0`, `xml2-fix.log` warns about it. The functions are registered by pointing the game's own registration at a longer copy of its function table, after every byte they rely on is checked against the retail build (on any other build nothing is added); every call and what it did goes to `xml2-fix.log`.
 
+## ⚙️ Settings: xml2-fix.ini
+
+`xml2-fix.ini` sits next to `dinput.dll`, in the game folder. It is optional: every key has a default, and no file means every default ([what's on by default](#whats-on-by-default)). The game's *Advanced options* rows and the Ultimate Legends launcher write the same file. Keys are read when the game starts.
+
+**How it's read** (every key of every section; the launcher reads it the same way):
+
+- A value ends at the first `;`, and the spaces around it don't count: `Domain=off   ; for now` is `off`. A `#` is part of the value.
+- A key with nothing before its `;` (`Domain=   ; later`), or with nothing after its `=` (`ShowZone=`), is the same as no key at all: the default.
+- Switches take `1`/`0`, `true`/`false`, `yes`/`no` or `on`/`off`, in any case; anything else is the key's default.
+- A value the fix refuses (out of range, misspelt) is written to `xml2-fix.log` with the reason, and the default applies.
+
+**[Display]** ([details](#%EF%B8%8F-display))
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `Mode` | *(the game's own)* | `fullscreen`, `borderless` or `windowed`; unset: the game's exclusive fullscreen, as it ships |
+| `Width`, `Height` | `0` | force a resolution; `0`: the desktop's size (borderless) or the game's own setting |
+| `Topmost` | `0` | borderless/windowed: `1` keeps the game above other windows |
+| `RunInBackground` | `1` | borderless/windowed: `0` pauses the game while another window has the focus, like the stock game |
+| `FrameRate` | *(the game's own 60 fps cap)* | `10` to `1000` fps, `refresh` (your desktop's rate) or `0` (unlimited); menus stay at 60 |
+| `VSync` | *(the engine's own: off)* | `1` or `0`; in a window, `1` paces frames at the desktop's refresh rate |
+| `ResolutionList` | *(the game's own list)* | `all`: up to 64 sizes in *Options → Video*, in every mode; `game`: the game's 20, never overflowing |
+| `InGameOptions` | `1` | `0` hides the four rows in *Options → Controls → Advanced* |
+
+**[Input]** ([details](#button-prompts))
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `Prompts` | `auto` | `auto`: each player's prompts follow the device they last used; `pad`; `keyboard`; `off`: the game's own prompts |
+| `PromptColors` | `1` | `0`: every pad button as plain `[A]`-style text |
+
+**[Online]** ([details](#-online))
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `Domain` | `openspy.net` | GameSpy lookups go to the same host under this domain; `off`: no redirect |
+| `Server` | *(none)* | an IPv4 address every GameSpy and OpenSpy host name resolves to (a self-hosted OpenSpy); wins over `Domain` |
+| `LocalIP` | `auto` | `auto`: the address Windows reaches the internet from goes first; `first`: Windows' order, as without the fix; or one of this PC's addresses |
+| `GameVersion` | *(the game's own, `1.30`)* | 1 to 4 letters, digits, `.`, `-` or `_`; only players on the same version see each other's games (for mods that are another game, such as the X-Men Legends I port) |
+
+**[Discord]** ([details](#-discord))
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `Enabled` | `1` | `0`: no presence at all |
+| `ShowZone` | `1` | `0`: where you are stays private ("Playing") |
+| `ShowParty` | `1` | `0`: your heroes stay private |
+| `LargeImage` | *(the game's picture)* | `none`: no images; or another art asset's key |
+| `SmallImage` | *(the mode's badge)* | `none`: no badges; or one asset's key for every badge |
+| `Game` | *(detected)* | `xml1` or `xml2`, if the detection is wrong |
+| `ClientId` | *(the game's own application)* | another Discord application's id |
+
+**[Game]**: for mods with their own campaign and the X-Men Legends I port, which sets these itself. Leave them out for XML2 as it ships. ([details](#-mods-with-their-own-campaign))
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `NewGameTeam` | *(the game's own)* | New Game's party: up to four heroes, comma separated |
+| `ResetUnlocks` | `1` | `0`: New Game unlocks no heroes (the mod's scripts unlock them) |
+| `SaveFolder` | *(the game's own)* | saves, `settings.dat` and screenshots in `Documents\Activision\<SaveFolder>` |
+| `WindowTitle` | *(the game's own)* | the name of the game's window, taskbar button and alt-tab entry |
+| `NewGamePlus` | `1` | `0`: New Game never offers "use saved game statistics" |
+| `ForcedTeams` | *(not registered)* | `1`: eight script functions seat the parties a mod's missions want; `0`: the functions report off |
+| `AddHero` | `0` | with `ForcedTeams=1`: `addHero` seats a hero mid-level (experimental) |
+| `JoinHero` | `1` | with `ForcedTeams=1`: `joinHero` adds a hero to the party with a reload on the spot; `0`: it reports off |
+| `PostgameScript` | *(the game's own)* | after the end credits, run `Scripts\<name>.py` instead of loading XML2's last zone |
+| `EndHeroUnlock` | `1` | `0`: the ending unlocks no hero and shows no popup |
+| `MainMenuItems` | *(XML2's names)* | the main menu's item names for the mouse slots and Quit, comma separated |
+| `ReviewStats` | `1` | `0`: the Review menu has no Stats tab |
+| `XPCurve` | `xml2` | `xml1`: X-Men Legends I's level table (cap 45) and kill XP |
+
+**[Limits]** ([details](#bigger-zones))
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `ActorSlots` | *(the game's own, 40)* | `41` to `127` slots for loaded characters' skins and animations |
+| `ResourceNames` | *(the game's own, 450; `1024` with `ActorSlots`)* | `451` to `4096` resource names |
+
+**[Test]**: for automated testing ([details](#-driving-the-game-from-a-script))
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `InputPipe` | `0` | `1`: a named pipe through which a script presses keys and pad buttons, runs script statements and saves screenshots |
+| `PipeName` | `xml2-fix-input` | the pipe's name: letters, digits, `-` and `_`, up to 64 |
+| `VirtualPads` | `0` | `1` to `4`: pads the game sees with nothing plugged in, in place of real controllers |
+
+**[Debug]**
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `LogNetwork` | `0` | `1`: `xml2-fix.log` lists every connection and query the game makes |
+| `LogFiles` | `0` | `1`: `xml2-fix.log` lists every file the game opens |
+
+## 🔒 Privacy
+
+- **The fix makes no network connections of its own:** no telemetry, no update check, no account.
+- **Discord** (on by default): the presence goes to the Discord app on your own PC through its local pipe, and Discord shows it to whoever it shows your activity to. It holds the zone, your heroes and their levels, the mode and the number of players online; no player names, no PC, network or account details. `[Discord] Enabled=0` switches it off; `ShowZone=0` and `ShowParty=0` share less. [Details](#-discord).
+- **Online** (on by default, used only from the game's *Play Online* menu on): the game's GameSpy traffic goes to OpenSpy, an independent service ([what it sees](#-online)). `[Online] Domain=off` switches the redirect off.
+- **`xml2-fix.log`** stays on your PC. It can hold this PC's name and local network addresses (once you open *Play Online*) and folder paths: look it over before posting it publicly.
+- **The test pipe** (`[Test] InputPipe`, off by default): while it is on, any program running as you on this PC can press keys in the game and save screenshots through it.
+
 ## 🔍 What was actually wrong
 
 - **No gamepad defaults.** The PC build's built-in bindings table has keyboard keys for player 1 and nothing at all for gamepads, for any player. Even a controller the game knows by name starts unbound.
@@ -328,6 +491,8 @@ The game drops a call to a function it doesn't know when the script compiles, an
 - **Fullscreen only.** The game hard-codes exclusive fullscreen and builds its resolution list from the Direct3D 8 mode list into 20 fixed slots with no bounds check - a modern adapter offers more sizes than that, and the rest overwrite the default key bindings stored right after the table; the engine's own windowed path is never used on PC.
 - **60 fps, burning a core.** The game's frame function rewrites its minimum frame time to 1/60 s every frame (so the engine's `max_fps` setting can never matter) and busy-waits until it has passed. Fullscreen presents never wait for the vertical blank either. Its options panel has no row for any of this, and two hundred empty pixels where one could be.
 - **Keyboard prompts for everyone.** The label behind every on-screen prompt shows a player's first bound key in a fixed order in which the keyboard comes before the pad, and inside menus a fixed menu key first of all, which is why the skills screen's power wheel offers *[Esc]* for Smash.
+- **No room for bigger zones.** The table for loaded characters' skins and animations has 40 slots, the table of loaded resource names 450, and both fail silently when full: the crash comes later, somewhere else.
+- **No place for mods.** The game only reads its own folder, so mods overwrite its files.
 
 ## 🛠️ How the fix works
 
@@ -343,6 +508,8 @@ The game drops a call to a function it doesn't know when the script compiles, an
 8. **Adds script functions for a mod's campaign when asked to** ([Mods](#-mods-with-their-own-campaign)). The game registers its 289 script functions once at start-up, by pushing its table and its count and handing them to its script system; before any of the game's code runs, the fix points those two pushes at a copy of the table with its eight functions after the game's own. They do what the game's own code does for its party changes (the party slot setter, the side-mission stack's `pushsidemission`, `restorelastzone` and `cancelsidemission`, a hero's costume byte), calling the game's functions.
 9. **Names the pad's buttons in prompts.** Every prompt goes through one function that turns an action into its label; the game asks it for the first bound of a player's binding slots in a fixed order in which the keyboard always comes before the pad. The fix replaces that one call with its own, which reads the same bindings but picks the pad's for a player on a pad, and names it after the pad layout above. It learns who uses what from the input state the game has just read each frame (keyboard, mouse buttons, pads), and colours the face buttons through the one instruction that gives a single-character label its colour. Every byte involved is checked first; on any other build the prompts are left as they are.
 10. **Tells Discord what you're playing** ([Discord](#-discord)). A thread of the fix's own reads the game's state once a second (every read guarded, so a zone load in progress can't hurt the game) and talks to the Discord app through its local RPC pipe, `\\.\pipe\discord-ipc-0` to `9`, as Discord's SDKs do, without them. `ExitProcess` is hooked where the game calls it - `msvcr71.dll`'s import, which `exit()` uses when the game quits normally, and the game's own, its C runtime's abort path - so quitting clears the presence first.
+11. **Serves mods' files** ([Mods](#-mods)). The game's file lookups for reading go through the fix, which answers them from `mods\` in load order before the game's own folder.
+12. **Raises two engine limits when asked to** ([Bigger zones](#bigger-zones)). The actor table moves into a bigger block in the DLL and the resource name table is rebuilt larger, both with the game's own constructors, before the game's start-up first asks for them.
 
 ```mermaid
 flowchart LR
@@ -360,12 +527,14 @@ It doesn't touch the game's files or saves, and it doesn't need an installer.
 
 - **Nothing changed?** Make sure `dinput.dll` is in the same folder as `XMen2.exe`, not a subfolder.
 - **Bindings still empty?** The fix only adds its layout to players with no gamepad bindings at all. If you had already bound a pad for a player, that player keeps your setup. Use *Revert to defaults* in *Advanced options* to get the fix's layout.
-- **Every launch writes `xml2-fix.log`** next to the DLL. It lists what the game saw and what the fix did. Attach it to any bug report.
+- **Every launch writes `xml2-fix.log`** next to the DLL. It lists what the game saw and what the fix did. Attach it to any bug report (it can hold this PC's name, local addresses and folder paths: see [Privacy](#-privacy)).
 - **Using Steam Input** (for a non-Steam shortcut) and buttons are off? Turn it off for the game, so the game sees your pad directly.
+- **A setting has no effect?** Check the section name and the key's spelling against [Settings](#%EF%B8%8F-settings-xml2-fixini); `xml2-fix.log` says when it refuses a value, and why.
+- **A mod's file isn't used?** `xml2-fix.log` lists every file a mod replaces (`mods: ... -> ...`). If yours isn't there, add `LogFiles=1` under `[Debug]` in `xml2-fix.ini`: the log then lists every other file the game opens, with the path it asks for. Check the mod's folder layout matches that path and its line in `mods\load-order.txt` starts with `+`.
 
 ## 🏗️ Building from source
 
-Requires Visual Studio 2022 with the C++ workload (which includes CMake).
+Requires Visual Studio 2022 or later with the C++ workload (which includes CMake).
 
 ```powershell
 cmake -S . -B build -A Win32
@@ -377,8 +546,14 @@ The output is `build\bin\Release\dinput.dll`. `xml2_test.exe` loads it the way t
 
 Also by the same author: [MUA Controller Fix](https://github.com/ChronoRixun/mua-controller-fix), for Marvel: Ultimate Alliance 1 & 2 (2016 PC).
 
-## 📜 License & disclaimer
+## 📜 License, credits & disclaimer
 
 [MIT](LICENSE). Use it, share it, build on it.
 
-This is an unofficial fan fix. It is not affiliated with or endorsed by Activision, Marvel, Disney, Microsoft, Logitech or OpenSpy. It contains no game files or game code; you need your own copy of the game.
+**Credits.** [OpenSpy](https://openspy.net) runs the community replacements for GameSpy's services that the online redirect points at. The banner and the Discord pictures are the project's own art, under the same licence (fonts: Anton and Barlow Semi Condensed, SIL Open Font License).
+
+**Not affiliated, trademarks, your own copy.** XML2 Fix is an unofficial, non-commercial fan fix. It is not affiliated with, endorsed, sponsored or approved by Activision, Marvel, Disney, Raven Software, Beenox, Microsoft, Logitech, Discord or OpenSpy. Marvel, X-Men, X-Men Legends and all related character names are trademarks of Marvel. Activision is a trademark of Activision Publishing, Inc. Xbox is a trademark of the Microsoft group of companies. Discord is a trademark of Discord Inc. All other trademarks belong to their respective owners; the names are used only to say which game this fix works with.
+
+It contains no game files or game code and doesn't change any file of the game: you need your own copy of *X-Men Legends II* for PC. Please don't post or link game files in issues or pull requests. Rights holders with a concern: please [open an issue](https://github.com/ChronoRixun/xml2-fix/issues) and it will be answered promptly and in good faith.
+
+The software is provided "as is", without warranty of any kind; see [LICENSE](LICENSE).
