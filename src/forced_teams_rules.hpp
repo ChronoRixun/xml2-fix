@@ -2,7 +2,7 @@
 
 // Forced parties for a mod's own campaign (the X-Men Legends 1 port: Magma alone in the mansion,
 // the flashbacks with their fixed heroes and costumes), kept apart from the patching so xml2_test
-// can check it without the game: the seven script functions and their signatures, the function
+// can check it without the game: the eight script functions and their signatures, the function
 // table the game's registration is pointed at, every retail byte they rely on, [Game] ForcedTeams
 // and AddHero, the hero-name and costume rules, and what each function does, written over an
 // "engine" - the game's own calls in the DLL (forced_teams.cpp), fakes and the game's own code on
@@ -55,6 +55,7 @@ namespace forced_teams_rules
 		pop_party,        // n(s): XML1 endSideMission - back to the pushed zone, party and spot, or the team menu at the zone given
 		add_hero,         // i(s): XML1 addHero - seat a hero mid-zone through the game's own dormant 0x46c9f0 ([Game] AddHero)
 		get_party_member, // s(i): slot i's hero, "" when empty
+		join_hero,        // i(s): XML1 addHero as a reload - the spot saved, the hero added to the saved party, the zone reloaded there
 	};
 
 	struct function_spec
@@ -66,7 +67,7 @@ namespace forced_teams_rules
 
 	// None of these names is in XMen2.exe (xml2_test walks both of its tables). The exe has no "ssss",
 	// so the DLL owns its signature strings.
-	inline constexpr std::array<function_spec, 7> functions{{
+	inline constexpr std::array<function_spec, 8> functions{{
 		{"xml2fixFeature", "i", "s"},
 		{"seatParty", "n", "ssss"},
 		{"setSkinset", "n", "ss"},
@@ -74,6 +75,7 @@ namespace forced_teams_rules
 		{"popParty", "n", "s"},
 		{"addHero", "i", "s"},
 		{"getPartyMember", "s", "i"},
+		{"joinHero", "i", "s"},
 	}};
 
 	// ---- The table the registration is pointed at ----------------------------------------------------
@@ -111,7 +113,7 @@ namespace forced_teams_rules
 	constexpr DWORD script_system_pointer = 0x787740;
 	constexpr DWORD tree_count_offset = 0x1948;
 
-	// The DLL's table: the game's 289 entries as they are, then the seven, handlers in `functions` order.
+	// The DLL's table: the game's 289 entries as they are, then the fix's, handlers in `functions` order.
 	inline void build_table(const func_entry* retail, const std::array<const void*, functions.size()>& handlers, func_entry* out)
 	{
 		std::memcpy(out, retail, retail_count * sizeof(func_entry));
@@ -121,21 +123,24 @@ namespace forced_teams_rules
 		}
 	}
 
-	// ---- [Game] ForcedTeams and AddHero ----------------------------------------------------------------
+	// ---- [Game] ForcedTeams, AddHero and JoinHero -------------------------------------------------------
 
 	struct switches
 	{
 		bool registered = false;   // the functions are added (ForcedTeams present)
 		bool forced_teams = false; // xml2fixFeature("forcedteams")
 		bool add_hero = false;     // xml2fixFeature("addhero"), and addHero itself
+		bool join_hero = false;    // xml2fixFeature("joinhero"), and joinHero itself
 		std::vector<std::string> notes; // for the log, in order
 	};
 
 	// ForcedTeams absent: nothing registered (a script's xml2fixFeature line is dropped at compile and
 	// its variable stays 0, so it opens the team menu). ForcedTeams=0: registered, reporting off.
 	// ForcedTeams=1: registered, on. AddHero=1 counts only with ForcedTeams=1. Anything but 0 or 1 is
-	// logged and taken as 0 (the team menu: the stock behaviour).
-	inline switches decide(const std::optional<std::string_view> forced_teams, const std::optional<std::string_view> add_hero)
+	// logged and taken as 0 (the team menu: the stock behaviour). JoinHero is on with ForcedTeams=1
+	// unless it is 0 (a value that isn't 0 or 1 is logged and taken as that default, 1).
+	inline switches decide(const std::optional<std::string_view> forced_teams, const std::optional<std::string_view> add_hero,
+	                       const std::optional<std::string_view> join_hero = std::nullopt)
 	{
 		switches result;
 		const auto flag = [&](const std::string_view key, const std::string_view text) -> std::optional<bool>
@@ -152,6 +157,10 @@ namespace forced_teams_rules
 			{
 				result.notes.push_back("AddHero is set but ForcedTeams isn't - nothing registered");
 			}
+			if (join_hero && limits_rules::value_text(*join_hero) != "0")
+			{
+				result.notes.push_back("JoinHero is set but ForcedTeams isn't - nothing registered");
+			}
 			return result;
 		}
 		result.registered = true;
@@ -165,6 +174,24 @@ namespace forced_teams_rules
 			}
 			result.add_hero = wanted && result.forced_teams;
 		}
+		bool join_wanted = true;
+		if (join_hero)
+		{
+			const auto value = limits_rules::value_text(*join_hero);
+			if (value == "0")
+			{
+				join_wanted = false;
+			}
+			else if (value != "1")
+			{
+				result.notes.push_back("JoinHero=" + std::string(value) + " isn't 0 or 1 - taken as 1 (the default)");
+			}
+			else if (!result.forced_teams)
+			{
+				result.notes.push_back("JoinHero=1 needs ForcedTeams=1 - joinHero reports off");
+			}
+		}
+		result.join_hero = join_wanted && result.forced_teams;
 		return result;
 	}
 
@@ -172,6 +199,7 @@ namespace forced_teams_rules
 	{
 		forced_teams,
 		add_hero,
+		join_hero,
 	};
 
 	inline std::string lowercase(std::string_view text)
@@ -196,6 +224,7 @@ namespace forced_teams_rules
 		const auto clean = clean_name(name);
 		if (clean == "forcedteams") return feature::forced_teams;
 		if (clean == "addhero") return feature::add_hero;
+		if (clean == "joinhero") return feature::join_hero;
 		return std::nullopt;
 	}
 
@@ -358,10 +387,14 @@ namespace forced_teams_rules
 
 	// Two records of 0x26c bytes at 0x72b5b0 (mission manager 0x48a0e0 -> vt+0x44), the count after
 	// them at +0x4dc (0x5f3684, 0x5f36d9). A record: the zone at +0 (0x40 bytes), the party's four
-	// names at +0xa4 (0x20 bytes each; restorelastzone reads them at 0x5f4614 = its copy + 0xa4).
-	// pushsidemission (0x5f3630) fills one from the party of the moment and the entity's spot; the
-	// command "restorelastzone 0" (0x5f4580) seats its names, restores the game-state block and runs
-	// "loadmap <zone> 1", whose load puts the party on that spot and pops the record. The stack is
+	// names at +0xa4 (0x20 bytes each, by slot; the fill 0x48a2a3-0x48a320 copies each slot's name
+	// with strncpy 0x20 and a 0 at +0x1f, "" for an empty slot; restorelastzone reads them at 0x5f4614
+	// = its copy + 0xa4). pushsidemission (0x5f3630) fills one from the party of the moment and the
+	// entity's spot; the command "restorelastzone <n>" (0x5f4580) seats its names when n is 0 (any
+	// other n keeps the party as it is - the team menu's accept runs restorelastzone('1') after
+	// seating the menu's picks), restores the game-state block and runs "loadmap <zone> 1" either
+	// way (0x5f4678: always 1), whose load puts the party on that spot and pops the record (0x5f48d3).
+	// "cancelsidemission" (0x5f2ce0) takes the top record off without loading anything. The stack is
 	// saved with the game (0x46bcd4) and loaded with it (0x46e3ec).
 	constexpr DWORD side_record_size = 0x26c;
 	constexpr DWORD side_count_offset = 0x4dc;
@@ -390,6 +423,8 @@ namespace forced_teams_rules
 	// it loads, 0x4840dc -> vt+0xbc 0x4841b0, and reports the load pending, vt+0x24, until it is in),
 	// in case the zone being left still runs a script. Anything else - the command has run and its
 	// zone is in, another zone, another stack - is a new end and goes ahead.
+	// joinHero queues the same "restorelastzone 0" after pushing its record, and is remembered the
+	// same way: a second joinHero or popParty while it waits or its load runs does nothing.
 	struct queued_pop
 	{
 		bool restore = false; // "restorelastzone 0"; else the team menu at `to`
@@ -397,6 +432,7 @@ namespace forced_teams_rules
 		std::string from;     // the zone it was queued in (lowercase)
 		std::string to;       // the zone it loads (lowercase): the record's, or the fallback
 		std::string command;
+		std::string joined;   // joinHero's hero ("" for popParty)
 	};
 
 	// What the functions keep between calls (the game calls them on its one thread).
@@ -458,7 +494,7 @@ namespace forced_teams_rules
 
 	// Every byte of XMen2.exe the functions rely on, read from the retail build. All must match
 	// before anything is patched; xml2_test compares them with a copy of the exe.
-	inline constexpr std::array<guard, 94> guards{{
+	inline constexpr std::array<guard, 101> guards{{
 		// The registration and the tree.
 		{0x49fe30, "6808a968006821010000e8318903008bc8e85a770300c3", "the registration (0x49fe30: push table, push count, call 0x4d75a0)"},
 		{0x4d7637, "81bf4819000040010000", "the tree's 320-name cap (0x4d7637)"},
@@ -573,6 +609,17 @@ namespace forced_teams_rules
 		 "a zone load names the zone (vt+0xbc) and sets it pending (0x4840dc)"},
 		{0x4841b0, "56578bf16a008dbee00100006a0057e85ce3100083c40ce86446040084c074136a40686819680083c62056e8f07bf8ff83c40c8b44240c6a405057e8e07bf8ff83c40c5f5ec20400",
 		 "the zone's name into +0x1e0 (0x4841b0)"},
+		// What joinHero relies on besides pushParty's and popParty's.
+		{0x48a2a3, "8b7c241033ed81c7a4000000906a20686819680057e8b37e1e0083c40c885f1fe8183afeff8b10558bc8ff92e000000085c07442e8043afeff8b10558bc8ff92e00000008b303bf37507b868196800eb16e8477e170081e6ffffff008b4cb0048d8401088000006a205057e85d7e1e0083c40c885f1f4583c72083fd047c8e",
+		 "a record's party names: slot i's at +0xa4 + 0x20 i, strncpy 0x20 and a 0 at +0x1f, \"\" when empty (0x48a2a3)"},
+		{0x5f466e, "8b108bc8ff92040200006a018d842494000000508d4c24186844376a0051885c2420e857da070083c410e8f381f6ff8b108d4c2410518bc8ff5218",
+		 "restorelastzone restores the game-state block and runs \"loadmap <zone> 1\" now, whatever its argument (0x5f466e)"},
+		{0x5f4a0f, "68e02c5f006830396a00", "cancelsidemission's registration (0x5f4a0f)"},
+		{0x6a3930, "63616e63656c736964656d697373696f6e00", "the text \"cancelsidemission\" (0x6a3930)"},
+		{0x5f2ce0, "e8fb73e9ff8b108bc8ff52448b88dc04000085c97e12e8e573e9ff8b108bc8ff5244ff88dc040000c3",
+		 "cancelsidemission takes the top record off (0x5f2ce0)"},
+		{0x55c2dd, "518bcee86bf9ffff", "the frame's run of the queue unlinks a command before running it (0x55c2dd)"},
+		{0x55bcb0, "8b8830010000495f898830010000", "and the unlink counts it off (0x55bcb0)"},
 	}};
 
 	// ---- Reading a handler's arguments (no C++ objects: the reads are SEH-guarded) --------------------
@@ -633,13 +680,14 @@ namespace forced_teams_rules
 	// Over an engine `e` with (every call reports a fault in the game's code as nullopt / false):
 	//   std::optional<std::string> text_argument(void* args, int i); std::optional<int> int_argument(void* args, int i);
 	//   void* make_int(int); void* make_string(const std::string&);
-	//   bool forced_teams(); bool add_hero_on();                       - the switches, as they are now
+	//   bool forced_teams(); bool add_hero_on(); bool join_hero_on();  - the switches, as they are now
 	//   std::optional<int> hero_index(const std::string&);             - registry vt+0x3c, 0 = none
 	//   std::optional<bool> herostat(int index);                       - registry vt+0x7c
 	//   std::optional<std::string> slot(int i); bool seat(int i, const std::string&);
 	//   std::optional<int> hero_count(); std::optional<int> hero_at(int i); std::optional<bool> has_stats(int index);
 	//   std::optional<int> costume(int index); std::optional<bool> has_variant(int index, int costume); bool set_costume(int index, int costume);
 	//   std::optional<int> side_records(); std::optional<side_record> side_record_at(int i);
+	//   bool set_side_name(int record, int slot, const std::string& name); - a record's party name, as the fill writes it
 	//   character_lookup find_character(const std::string&, int& id);
 	//   bool run_now(const std::string&); std::optional<bool> queue(const std::string&); std::optional<int> waiting();
 	//   std::optional<std::string> current_menu(); void leave_hud();
@@ -787,7 +835,11 @@ namespace forced_teams_rules
 		{
 			on = e.forced_teams() && e.add_hero_on() ? 1 : 0;
 		}
-		e.log(std::string(prefix) + call_text("xml2fixFeature", *values) + " -> " + std::to_string(on) + (which ? "" : " (not a feature: forcedteams, addhero)"));
+		else if (which == feature::join_hero)
+		{
+			on = e.forced_teams() && e.join_hero_on() ? 1 : 0;
+		}
+		e.log(std::string(prefix) + call_text("xml2fixFeature", *values) + " -> " + std::to_string(on) + (which ? "" : " (not a feature: forcedteams, addhero, joinhero)"));
 		if (which == feature::forced_teams && !on)
 		{
 			warn_left_records(e);
@@ -1202,5 +1254,203 @@ namespace forced_teams_rules
 		}
 		e.log(std::string(prefix) + "getPartyMember(" + std::to_string(*index) + ") -> \"" + name + "\"");
 		return e.make_string(name);
+	}
+
+	// ---- joinHero ------------------------------------------------------------------------------------------
+	//
+	// XML1's addHero took an NPC into the party where it stood. XML2 has no working call for that (the
+	// dormant 0x46c9f0 returns true and seats nobody), and its extraction-point path opens the team menu.
+	// joinHero does what that path does after the menu's accept, without the menu:
+	//   1. "pushsidemission <_ACTIVE_HERO_'s id>", run now, as extractionPointChange does (0x4a70df):
+	//      the zone, the party and the active hero's spot go on the side-mission stack;
+	//   2. the hero's name into the first empty party slot of that record (+0xa4 + 0x20 slot, as the
+	//      fill 0x48a2a3 writes names) - the state the game itself records for a party member with no
+	//      living body at the push (its spot is the zero vector, 0x48a278);
+	//   3. "restorelastzone 0" queued (console vt+0x1c), as popParty and the game's restorelastzone
+	//      script function queue it (0x4a07d1), then the HUD call they make. At the next frame the command
+	//      seats the record's names through the slot setter (0x5f4612-0x5f4667), restores the game-state
+	//      block and runs "loadmap <zone> 1" (0x5f4678), which reloads the zone, puts the party back on
+	//      the spot and pops the record (0x5f48d3): nothing stays on the stack.
+	// The team menu's accept (0x5e0800) instead seats the picks live, then queues "runscript
+	// restorelastzone('1')" (setblackbirdparms' code, 0x4a70e3), whose "restorelastzone 1" keeps the
+	// seated party and does the same reload. joinHero leaves the live party alone until the command that
+	// reloads seats it, so no frame runs with a hero in a slot and no body in the world, and a refusal
+	// at any step changes nothing: a record pushed by a call that then fails comes off again through the
+	// game's own "cancelsidemission" (0x5f2ce0), run now.
+	// 1: the reload is queued (or was, by the same joinHero, and hasn't run yet). 2: the hero is in the
+	// party already - nothing to do. 0: refused (logged): the script's own fallback runs.
+	constexpr const char* join_entity = "_ACTIVE_HERO_";
+
+	template <typename Engine>
+	bool cancel_record(Engine& e, const std::string& call, const int records)
+	{
+		const bool ran = e.run_now("cancelsidemission");
+		const auto now = e.side_records();
+		if (ran && now && *now == records)
+		{
+			e.log(call + ": the record pushed for it came off again (cancelsidemission) - the stack is as it was, " + std::to_string(records) + " record(s)");
+			return true;
+		}
+		e.log(call + ": ERROR: cancelsidemission " + (ran ? std::string("left ") + (now ? std::to_string(*now) : std::string("?")) + " record(s), not " + std::to_string(records)
+		                                                    : std::string("faulted")) +
+		      " - a record may stay on the side-mission stack (the next restorelastzone would return to it)");
+		return false;
+	}
+
+	template <typename Engine>
+	void* join_hero(Engine& e, void* args)
+	{
+		const auto values = text_arguments(e, args, 1, "joinHero");
+		if (!values)
+		{
+			return e.make_int(0);
+		}
+		const auto call = std::string(prefix) + call_text("joinHero", *values);
+		const auto refuse = [&](const std::string& why)
+		{
+			e.log(call + " -> 0: " + why + " - nothing done, the script's own fallback runs");
+			return e.make_int(0);
+		};
+		if (!e.forced_teams() || !e.join_hero_on())
+		{
+			return refuse(!e.forced_teams() ? "[Game] ForcedTeams is off" : "[Game] JoinHero=0");
+		}
+		const auto name = clean_name((*values)[0]);
+		if (name.empty())
+		{
+			return refuse("no hero named");
+		}
+		if (name.size() >= side_name_size)
+		{
+			return refuse("'" + name + "' is longer than a side-mission record's names (31 characters)");
+		}
+		if (const auto refusal = refuse_heroes(e, {name, "", "", ""}); !refusal.empty())
+		{
+			return refuse(refusal);
+		}
+		const auto slots = read_party(e);
+		if (!slots)
+		{
+			return refuse("ERROR: the party slots couldn't be read");
+		}
+		if (std::find(slots->begin(), slots->end(), name) != slots->end())
+		{
+			e.log(call + " -> 2: " + name + " is in the party already (" + describe(*slots) + ") - nothing to do");
+			return e.make_int(2);
+		}
+		if (std::none_of(slots->begin(), slots->end(), [](const std::string& s) { return s.empty(); }))
+		{
+			return refuse("the party is full (" + describe(*slots) + ")");
+		}
+		const auto records = e.side_records();
+		if (!records)
+		{
+			return refuse("ERROR: the side-mission stack (0x48a0e0 -> vt+0x44) couldn't be read");
+		}
+		// The same trigger or script again before the first call's reload has taken the player away: that
+		// reload already adds the hero. Another popParty's or joinHero's on its way: refused.
+		const auto pending = e.state().pop;
+		if (const auto repeat = repeated_pop(e, *records); !repeat.empty())
+		{
+			if (pending && pending->joined == name)
+			{
+				e.log(call + " -> 1: " + repeat + " - it adds " + name + " already, nothing more done");
+				return e.make_int(1);
+			}
+			return refuse(repeat);
+		}
+		if (const auto menu = e.current_menu(); menu && lowercase(*menu) == loading_menu)
+		{
+			return refuse("the game is loading");
+		}
+		if (const auto loading = e.zone_loading(); !loading || *loading)
+		{
+			return refuse(loading ? "a zone load is under way" : "ERROR: the zone manager (vt+0x24) couldn't be read");
+		}
+		// The reload must be the only command waiting: one queued before it would run first, in the same
+		// frame (0x55c2f9: the queue runs until it is empty), and a load there would race the reload.
+		if (const auto waiting = e.waiting(); !waiting || *waiting != 0)
+		{
+			return refuse(waiting ? std::to_string(*waiting) + " console command(s) waiting already (the reload must be the only one)" : "ERROR: the console's queue couldn't be read");
+		}
+		if (*records >= side_records_max)
+		{
+			return refuse("the side-mission stack is full (" + std::to_string(*records) + " records; the top: " + record_text(e, *records - 1) + ")");
+		}
+		int id = 0;
+		switch (e.find_character(join_entity, id))
+		{
+		case character_lookup::found:
+			break;
+		case character_lookup::missing:
+			return refuse(std::string("no ") + join_entity + " entity");
+		case character_lookup::not_character:
+			return refuse(std::string(join_entity) + " isn't a character");
+		case character_lookup::fault:
+			return refuse(std::string("ERROR: looking ") + join_entity + " up (0x4a1700, 0x4654b0) faulted");
+		}
+
+		// 1. The record: zone, party, the active hero's spot.
+		const auto push = "pushsidemission " + std::to_string(id);
+		if (!e.run_now(push))
+		{
+			const auto now = e.side_records();
+			if (now && *now == *records + 1)
+			{
+				cancel_record(e, call, *records);
+			}
+			return refuse("ERROR: the console (vt+0x18) faulted running '" + push + "'");
+		}
+		const auto after = e.side_records();
+		if (!after || *after != *records + 1)
+		{
+			return refuse(push + " pushed nothing (no zone loaded?) - " + (after ? std::to_string(*after) : std::string("?")) + " record(s)");
+		}
+		const int top = *after - 1;
+		const auto undo = [&](const std::string& why)
+		{
+			cancel_record(e, call, *records);
+			return refuse(why);
+		};
+
+		// 2. The hero in the record's first empty slot.
+		const auto record = e.side_record_at(top);
+		if (!record)
+		{
+			return undo("ERROR: the pushed record couldn't be read");
+		}
+		if (std::find(record->names.begin(), record->names.end(), name) != record->names.end())
+		{
+			return undo("the pushed record has " + name + " already (" + describe(record->names) + "), unlike the party slots");
+		}
+		const auto empty = std::find(record->names.begin(), record->names.end(), std::string());
+		if (empty == record->names.end())
+		{
+			return undo("the pushed record's party is full (" + describe(record->names) + ")");
+		}
+		const int slot = static_cast<int>(empty - record->names.begin());
+		if (!e.set_side_name(top, slot, name))
+		{
+			return undo("ERROR: writing the name into record " + std::to_string(*after) + " faulted");
+		}
+		const auto written = e.side_record_at(top);
+		if (!written || written->names[static_cast<std::size_t>(slot)] != name)
+		{
+			return undo("ERROR: record " + std::to_string(*after) + " doesn't read back " + name + " in slot " + std::to_string(slot + 1));
+		}
+
+		// 3. The reload.
+		const std::string command = "restorelastzone 0";
+		const auto queued = e.queue(command);
+		if (!queued || !*queued)
+		{
+			return undo(!queued ? "ERROR: the console's queue (vt+0x1c) faulted on '" + command + "'" : "the console's queue refused '" + command + "'");
+		}
+		e.state().pop = queued_pop{true, *after, lowercase(e.current_zone().value_or("")), lowercase(written->zone), command, name};
+		e.leave_hud();
+		e.log(call + " -> 1: " + push + " (record " + std::to_string(*after) + " of " + std::to_string(side_records_max) + "), " + name + " added to its party in slot " +
+		      std::to_string(slot + 1) + ", " + command + " queued: " + written->zone + " reloads at the saved spot with " + describe(written->names) + " (was " + describe(*slots) +
+		      ") and the record comes off");
+		return e.make_int(1);
 	}
 }

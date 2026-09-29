@@ -1474,7 +1474,10 @@ namespace
 		forced_teams_rules::get_argument_t get = &test_get_argument;
 		bool forced = true;
 		bool add_on = false;
+		bool join_on = true;
 		bool add_claims_only = false; // 0x46c9f0 as seen in game: true, nobody seated
+		bool name_fault = false;      // writing a record's name faults
+		bool cancel_fault = false;    // cancelsidemission faults
 		std::map<std::string, int> indices; // registry vt+0x3c: 0 = no such character
 		std::set<int> herostats;            // registry vt+0x7c
 		forced_teams_rules::party slots{};
@@ -1518,6 +1521,7 @@ namespace
 		void* make_string(const std::string& text) { strings.push_back(text); return &strings.back(); }
 		bool forced_teams() { return forced; }
 		bool add_hero_on() { return add_on; }
+		bool join_hero_on() { return join_on; }
 		std::optional<int> hero_index(const std::string& name) { const auto f = indices.find(name); return f == indices.end() ? 0 : f->second; }
 		std::optional<bool> herostat(const int index) { return herostats.count(index) != 0; }
 		std::optional<std::string> slot(const int i) { return slots[static_cast<std::size_t>(i)]; }
@@ -1544,6 +1548,12 @@ namespace
 			if (i < 0 || i >= static_cast<int>(records.size())) return std::nullopt;
 			return records[static_cast<std::size_t>(i)];
 		}
+		bool set_side_name(const int record, const int slot, const std::string& name) // as the fill: 31 characters at most
+		{
+			if (name_fault || record < 0 || record >= static_cast<int>(records.size()) || slot < 0 || slot > 3) return false;
+			records[static_cast<std::size_t>(record)].names[static_cast<std::size_t>(slot)] = name.substr(0, forced_teams_rules::side_name_size - 1);
+			return true;
+		}
 		forced_teams_rules::character_lookup find_character(const std::string& name, int& id)
 		{
 			const auto f = characters.find(name);
@@ -1552,10 +1562,15 @@ namespace
 			id = f->second;
 			return forced_teams_rules::character_lookup::found;
 		}
-		bool run_now(const std::string& line) // pushsidemission, as 0x5f3630: a record when there is a zone and room
+		bool run_now(const std::string& line) // pushsidemission, as 0x5f3630: a record when there is a zone and room; cancelsidemission, as 0x5f2ce0
 		{
 			ran.push_back(line);
 			if (line.rfind("pushsidemission ", 0) == 0 && !zone.empty() && records.size() < 2) records.push_back({zone, slots});
+			if (line == "cancelsidemission")
+			{
+				if (cancel_fault) return false;
+				if (!records.empty()) records.pop_back();
+			}
 			return true;
 		}
 		std::optional<bool> queue(const std::string& line)
@@ -2073,15 +2088,156 @@ namespace
 			o.number(4);
 			CHECK(fake_engine::as_text(get_party_member(e, &o.args)).empty());
 		}
+
+		// joinHero: the spot saved with the hero in the record's party, then restorelastzone 0 - the zone
+		// reloads with him and the record comes off. A refusal changes nothing.
+		const auto join_setup = [&](const party& slots)
+		{
+			cast(e);
+			e.slots = slots;
+			e.records.clear();
+			e.queued.clear();
+			e.ran.clear();
+			e.kept = {};
+			e.queue_room = 2;
+			e.menu.clear();
+			e.loading = false;
+			e.deferred = false;
+			e.forced = true;
+			e.join_on = true;
+			e.name_fault = false;
+			e.cancel_fault = false;
+			e.zone = "nyc/alison/nyc1_1_3";
+			e.characters = {{"_ACTIVE_HERO_", 77}};
+		};
+		join_setup({"wolverine", "", "", ""});
+		{
+			script_call c(vtables);
+			c.text(" Cyclops ");
+			const auto leaves = e.hud_leaves;
+			CHECK(fake_engine::as_int(join_hero(e, &c.args)) == 1);
+			CHECK(e.ran.size() == 1 && e.ran[0] == "pushsidemission 77" && e.records.size() == 1 && (e.records[0].names == party{"wolverine", "cyclops", "", ""}) &&
+			      e.records[0].zone == "nyc/alison/nyc1_1_3" && (e.slots == party{"wolverine", "", "", ""}) && e.queued.size() == 1 && e.queued[0] == "restorelastzone 0" &&
+			      e.hud_leaves == leaves + 1);
+			CHECK(e.last() == "forced teams: joinHero(\" Cyclops \") -> 1: pushsidemission 77 (record 1 of 2), cyclops added to its party in slot 2, restorelastzone 0 queued: "
+			                  "nyc/alison/nyc1_1_3 reloads at the saved spot with wolverine / cyclops / - / - (was wolverine / - / - / -) and the record comes off");
+			// The trigger again before the frame runs the queue: that reload adds him already.
+			const auto lines_before = e.lines.size();
+			CHECK(fake_engine::as_int(join_hero(e, &c.args)) == 1 && e.records.size() == 1 && e.queued.size() == 1 && e.ran.size() == 1 && e.lines.size() == lines_before + 1 &&
+			      e.last().find("'restorelastzone 0' is queued already, from nyc/alison/nyc1_1_3 (the game runs it at its next frame) - it adds cyclops already") != std::string::npos);
+			// So does a popParty meanwhile: one restorelastzone, one record.
+			script_call p(vtables);
+			p.text("mansion/man2/subbasement2");
+			pop_party(e, &p.args);
+			CHECK(e.queued.size() == 1 && e.last().find("nothing done (one popParty per side mission's end)") != std::string::npos);
+			// The frame: restorelastzone 0 seats the record's names, reloads the zone and pops the record.
+			e.drain();
+			CHECK(e.records.empty() && (e.slots == party{"wolverine", "cyclops", "", ""}) && e.zone == "nyc/alison/nyc1_1_3" && e.ran.back() == "loadmap nyc/alison/nyc1_1_3 1" &&
+			      std::ranges::count(e.ran, std::string("mainmenuexit 1")) == 0);
+			// In the party now: nothing to do, and not 0 (the script's team-menu fallback stays shut).
+			CHECK(fake_engine::as_int(join_hero(e, &c.args)) == 2 && e.queued.empty() && e.records.empty() && e.ran.size() == 2 &&
+			      e.last() == "forced teams: joinHero(\" Cyclops \") -> 2: cyclops is in the party already (wolverine / cyclops / - / -) - nothing to do");
+		}
+		{
+			// Magma alone (dr_mag2's mag_nyc4), and a party with a gap: the first empty slot.
+			join_setup({"magma", "", "", ""});
+			script_call c(vtables);
+			c.text("cyclops");
+			CHECK(fake_engine::as_int(join_hero(e, &c.args)) == 1 && (e.records[0].names == party{"magma", "cyclops", "", ""}));
+			join_setup({"wolverine", "", "phoenix", ""});
+			CHECK(fake_engine::as_int(join_hero(e, &c.args)) == 1 && (e.records[0].names == party{"wolverine", "cyclops", "phoenix", ""}));
+			e.drain();
+			CHECK((e.slots == party{"wolverine", "cyclops", "phoenix", ""}) && e.records.empty());
+			// A load the frame starts but doesn't finish: a call meanwhile finds him seated.
+			join_setup({"wolverine", "", "", ""});
+			e.deferred = true;
+			join_hero(e, &c.args);
+			e.drain();
+			CHECK(e.loading && fake_engine::as_int(join_hero(e, &c.args)) == 2 && e.queued.empty());
+		}
+		{
+			// Refusals: 0, nothing pushed, nothing queued, the party as it was.
+			const auto refused = [&](const std::string& hero, const std::string& why)
+			{
+				script_call c(vtables);
+				c.text(hero);
+				const auto slots = e.slots;
+				const auto records = e.records.size();
+				const auto queued = e.queued.size();
+				const bool zero = fake_engine::as_int(join_hero(e, &c.args)) == 0;
+				const bool unchanged = e.slots == slots && e.records.size() == records && e.queued.size() == queued;
+				const bool logged = e.last().find(" -> 0: " + why) != std::string::npos && e.last().find("the script's own fallback runs") != std::string::npos;
+				if (!zero || !unchanged || !logged) std::printf("  info  joinHero(%s): %s\n", hero.c_str(), e.last().c_str());
+				return zero && unchanged && logged;
+			};
+			join_setup({"wolverine", "", "", ""});
+			e.join_on = false;
+			CHECK(refused("cyclops", "[Game] JoinHero=0") && e.ran.empty());
+			e.join_on = true;
+			e.forced = false;
+			CHECK(refused("cyclops", "[Game] ForcedTeams is off"));
+			e.forced = true;
+			CHECK(refused("", "no hero named") && refused("profxgladiator", "'profxgladiator' isn't a herostat hero") && refused("nobody", "'nobody' isn't a character the game knows"));
+			CHECK(refused(std::string(32, 'x'), "'" + std::string(32, 'x') + "' is longer than a side-mission record's names (31 characters)"));
+			e.slots = {"wolverine", "magma", "iceman", "colossus"};
+			CHECK(refused("cyclops", "the party is full (wolverine / magma / iceman / colossus)"));
+			e.slots = {"wolverine", "", "", ""};
+			e.menu = "Loading";
+			CHECK(refused("cyclops", "the game is loading"));
+			e.menu.clear();
+			e.loading = true;
+			CHECK(refused("cyclops", "a zone load is under way"));
+			e.loading = false;
+			e.queued = {"loadmap nyc/alison/nyc1_1_4 0 0"};
+			CHECK(refused("cyclops", "1 console command(s) waiting already (the reload must be the only one)"));
+			e.queued.clear();
+			e.records = {{"a", {}}, {"b", {}}};
+			CHECK(refused("cyclops", "the side-mission stack is full (2 records; the top: b with - / - / - / -)"));
+			e.records.clear();
+			e.characters.clear();
+			CHECK(refused("cyclops", "no _ACTIVE_HERO_ entity"));
+			e.characters = {{"_ACTIVE_HERO_", -1}};
+			CHECK(refused("cyclops", "_ACTIVE_HERO_ isn't a character"));
+			e.characters = {{"_ACTIVE_HERO_", 77}};
+			CHECK(e.ran.empty());
+			e.zone.clear(); // no zone loaded: the game pushes nothing
+			CHECK(refused("cyclops", "pushsidemission 77 pushed nothing (no zone loaded?)") && e.ran.size() == 1);
+			e.zone = "nyc/alison/nyc1_1_3";
+			// A popParty's reload on its way: not a join of this hero - refused (its record, its command).
+			e.records = {{"mansion/man2/mansion2_1", {"magma", "", "", ""}}};
+			script_call p(vtables);
+			p.text("mansion/man2/mansion2_1");
+			pop_party(e, &p.args);
+			CHECK(e.queued.size() == 1 && refused("cyclops", "'restorelastzone 0' is queued already"));
+			e.drain();
+			CHECK(e.records.empty() && (e.slots == party{"magma", "", "", ""}));
+			// After the push: the record comes off again through the game's cancelsidemission.
+			join_setup({"wolverine", "", "", ""});
+			e.name_fault = true;
+			CHECK(refused("cyclops", "ERROR: writing the name into record 1 faulted") && e.ran.size() == 2 && e.ran[1] == "cancelsidemission" &&
+			      e.logged("the record pushed for it came off again (cancelsidemission) - the stack is as it was, 0 record(s)"));
+			e.name_fault = false;
+			e.queue_room = 0; // the queue refuses (in the game only with two waiting, checked before the push)
+			CHECK(refused("cyclops", "the console's queue refused 'restorelastzone 0'") && e.ran.back() == "cancelsidemission");
+			e.queue_room = 2;
+			e.records = {{"a", {"wolverine", "", "", ""}}};
+			e.name_fault = true;
+			e.cancel_fault = true;
+			script_call c(vtables);
+			c.text("cyclops");
+			CHECK(fake_engine::as_int(join_hero(e, &c.args)) == 0 && e.records.size() == 2 &&
+			      e.logged("ERROR: cancelsidemission faulted - a record may stay on the side-mission stack"));
+			join_setup({"wolverine", "", "", ""});
+		}
 	}
 
 	void check_forced_teams_rules()
 	{
 		using namespace forced_teams_rules;
-		std::printf("forced parties ([Game] ForcedTeams and AddHero: seatParty, setSkinset, pushParty, popParty, addHero)\n");
+		std::printf("forced parties ([Game] ForcedTeams, AddHero and JoinHero: seatParty, setSkinset, pushParty, popParty, addHero, joinHero)\n");
 
-		// The functions: seven, signatures the game's compiler knows, room in its tree.
-		CHECK(functions.size() == 7 && table_count == 0x128 && builtin_count + table_count == 315 && table_count + builtin_count <= tree_capacity);
+		// The functions: eight, signatures the game's compiler knows, room in its tree.
+		CHECK(functions.size() == 8 && table_count == 0x129 && builtin_count + table_count == 316 && table_count + builtin_count <= tree_capacity);
 		bool signatures_ok = true;
 		for (const auto& f : functions)
 		{
@@ -2091,8 +2247,10 @@ namespace
 		CHECK(signatures_ok);
 		CHECK(std::string_view(functions[1].name) == "seatParty" && std::string_view(functions[1].args) == "ssss" && std::string_view(functions[0].name) == "xml2fixFeature" &&
 		      std::string_view(functions[static_cast<std::size_t>(function::get_party_member)].name) == "getPartyMember");
+		CHECK(std::string_view(functions[static_cast<std::size_t>(function::join_hero)].name) == "joinHero" && std::string_view(functions[static_cast<std::size_t>(function::join_hero)].ret) == "i" &&
+		      std::string_view(functions[static_cast<std::size_t>(function::join_hero)].args) == "s");
 		const auto writes = registration_writes(0x12345678);
-		CHECK(writes[0].va == 0x49fe31 && writes[0].value == 0x12345678 && writes[1].va == 0x49fe36 && writes[1].value == 0x128 && writes[0].size == 4 && writes[1].size == 4);
+		CHECK(writes[0].va == 0x49fe31 && writes[0].value == 0x12345678 && writes[1].va == 0x49fe36 && writes[1].value == 0x129 && writes[0].size == 4 && writes[1].size == 4);
 
 		// The ini: absent = nothing; 0 = registered, off; 1 = on; AddHero only with ForcedTeams=1.
 		auto chosen = decide(std::nullopt, std::nullopt);
@@ -2111,7 +2269,19 @@ namespace
 		CHECK(!chosen.registered && chosen.notes.size() == 1 && chosen.notes[0].find("nothing registered") != std::string::npos);
 		chosen = decide("1", "2");
 		CHECK(chosen.forced_teams && !chosen.add_hero && chosen.notes.size() == 1);
-		CHECK(feature_named("forcedteams") == feature::forced_teams && feature_named(" AddHero") == feature::add_hero && !feature_named("forced_teams") && !feature_named(""));
+		// JoinHero: on with ForcedTeams=1 unless 0.
+		CHECK(decide("1", std::nullopt).join_hero && decide("1", "0", "1").join_hero && decide("1", "0", " 1 ; the join reloads").join_hero);
+		chosen = decide("1", std::nullopt, "0 ; the team menu instead");
+		CHECK(chosen.forced_teams && !chosen.join_hero && chosen.notes.empty());
+		chosen = decide("0", std::nullopt, "1");
+		CHECK(chosen.registered && !chosen.join_hero && chosen.notes.size() == 1 && chosen.notes[0] == "JoinHero=1 needs ForcedTeams=1 - joinHero reports off");
+		CHECK(!decide("0", std::nullopt).join_hero && decide("0", std::nullopt).notes.empty());
+		chosen = decide("1", std::nullopt, "yes");
+		CHECK(chosen.join_hero && chosen.notes.size() == 1 && chosen.notes[0] == "JoinHero=yes isn't 0 or 1 - taken as 1 (the default)");
+		chosen = decide(std::nullopt, std::nullopt, "1");
+		CHECK(!chosen.registered && !chosen.join_hero && chosen.notes.size() == 1 && chosen.notes[0].find("JoinHero is set but ForcedTeams isn't") != std::string::npos);
+		CHECK(feature_named("forcedteams") == feature::forced_teams && feature_named(" AddHero") == feature::add_hero && feature_named("JoinHero") == feature::join_hero &&
+		      !feature_named("forced_teams") && !feature_named(""));
 
 		// Names: cleaned, repeats dropped, compacted.
 		CHECK((split_heroes("magma,,x") == std::vector<std::string>{"magma", "x"}));
@@ -2138,7 +2308,7 @@ namespace
 		bool guards_ok = true;
 		std::set<DWORD> addresses;
 		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
-		CHECK(guards_ok && guards.size() == 94);
+		CHECK(guards_ok && guards.size() == 101);
 
 		// The functions over a game of the test's own, arguments through the test's own reader.
 		const value_vtables own(reinterpret_cast<void*>(&test_value_payload));
@@ -2171,7 +2341,7 @@ namespace
 		}
 		CHECK(retail);
 
-		// The game's names: its 289 functions and 19 builtins; none of the seven is among them, nor
+		// The game's names: its 289 functions and 19 builtins; none of the eight is among them, nor
 		// anywhere in the exe's bytes (any case).
 		std::set<std::string> retail_names;
 		for (DWORD i = 0; i < retail_count; ++i) retail_names.insert(lowercase(text_at(dword_at(retail_table + i * 16 + 4))));
@@ -2187,7 +2357,7 @@ namespace
 		CHECK(text_at(dword_at(retail_table + 4)) == "setRotZ" && text_at(dword_at(retail_table + (retail_count - 1) * 16 + 4)) == "SetDontShowWarningOff" &&
 		      text_at(dword_at(builtin_table + 4)) == "==");
 
-		// The table the DLL builds: the game's 289 entries byte for byte, then the seven.
+		// The table the DLL builds: the game's 289 entries byte for byte, then the eight.
 		std::vector<func_entry> built(table_count);
 		std::array<const void*, functions.size()> handlers{};
 		for (std::size_t i = 0; i < handlers.size(); ++i) handlers[i] = reinterpret_cast<const void*>(0x1000 + i);
@@ -2223,8 +2393,8 @@ namespace
 				outside += !(va >= table_operand && va < table_operand + 4) && !(va >= count_operand && va < count_operand + 4);
 			}
 		}
-		CHECK(changed == 5 && outside == 0); // 0x0068a908 -> 0x12345678, 0x121 -> 0x128
-		CHECK(limits_rules::matches(at(registration), "68785634126828010000e8318903008bc8e85a770300c3"));
+		CHECK(changed == 5 && outside == 0); // 0x0068a908 -> 0x12345678, 0x121 -> 0x129
+		CHECK(limits_rules::matches(at(registration), "68785634126829010000e8318903008bc8e85a770300c3"));
 		std::memcpy(image, before.data(), image_size);
 
 		// The strings the handlers send are the game's own.

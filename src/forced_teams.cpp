@@ -19,6 +19,7 @@ namespace forced_teams
 		// Read by the functions at every call (xml2fixFeature, addHero), not when a script compiles.
 		std::atomic<bool> forced_teams_on{false};
 		std::atomic<bool> add_hero_switch{false};
+		std::atomic<bool> join_hero_switch{false};
 
 		// What the functions keep from call to call; the game calls them on its one thread.
 		call_state kept;
@@ -348,6 +349,31 @@ namespace forced_teams
 			}
 		}
 
+		// A record's party name `slot`, as the fill writes it (0x48a2a3-0x48a320): the 0x20 bytes cleared,
+		// the name, a 0 at +0x1f. The caller keeps names under 0x20 characters.
+		bool write_side_name(const int i, const int slot, const char* name)
+		{
+			__try
+			{
+				std::uint8_t* stack = side_stack();
+				if (!stack || i < 0 || i >= side_records_max || slot < 0 || slot >= 4)
+				{
+					return false;
+				}
+				std::uint8_t* field = stack + i * side_record_size + side_names_offset + slot * side_name_size;
+				std::memset(field, 0, side_name_size);
+				for (std::size_t c = 0; name[c] && c + 1 < side_name_size; ++c)
+				{
+					field[c] = static_cast<std::uint8_t>(name[c]);
+				}
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
 		// As extractionPointChange resolves its entity (0x4a7060-0x4a70a1): by name, then the class
 		// info's character bit, and the entity's id for pushsidemission.
 		character_lookup call_find_character(const char* name, int& id)
@@ -529,6 +555,11 @@ namespace forced_teams
 				return add_hero_switch.load();
 			}
 
+			bool join_hero_on()
+			{
+				return join_hero_switch.load();
+			}
+
 			std::optional<int> hero_index(const std::string& name)
 			{
 				int index = 0;
@@ -603,6 +634,11 @@ namespace forced_teams
 					return std::nullopt;
 				}
 				return side_record{zone, {names[0], names[1], names[2], names[3]}};
+			}
+
+			bool set_side_name(const int record, const int slot, const std::string& name)
+			{
+				return name.size() < side_name_size && write_side_name(record, slot, name.c_str());
 			}
 
 			character_lookup find_character(const std::string& name, int& id)
@@ -697,8 +733,9 @@ namespace forced_teams
 			reinterpret_cast<const void*>(&handler<&pop_party<game_engine>, 'n'>),
 			reinterpret_cast<const void*>(&handler<&add_hero<game_engine>, 'i'>),
 			reinterpret_cast<const void*>(&handler<&get_party_member<game_engine>, 's'>),
+			reinterpret_cast<const void*>(&handler<&join_hero<game_engine>, 'i'>),
 		};
-		static_assert(static_cast<std::size_t>(function::get_party_member) + 1 == functions.size());
+		static_assert(static_cast<std::size_t>(function::join_hero) + 1 == functions.size());
 
 		bool copy_retail_table()
 		{
@@ -767,7 +804,7 @@ namespace forced_teams
 	void install(const HMODULE game)
 	{
 		const auto ini = (logger::module_dir() / L"xml2-fix.ini").wstring();
-		const auto chosen = decide(ini_value(ini, L"ForcedTeams"), ini_value(ini, L"AddHero"));
+		const auto chosen = decide(ini_value(ini, L"ForcedTeams"), ini_value(ini, L"AddHero"), ini_value(ini, L"JoinHero"));
 		for (const auto& note : chosen.notes)
 		{
 			logger::write("forced teams: %s", note.c_str());
@@ -812,14 +849,16 @@ namespace forced_teams
 		}
 		forced_teams_on = chosen.forced_teams;
 		add_hero_switch = chosen.add_hero;
+		join_hero_switch = chosen.join_hero;
 
 		std::string names;
 		for (const auto& f : functions)
 		{
 			names += (names.empty() ? "" : ", ") + std::string(f.name);
 		}
-		logger::write("forced teams: %zu script functions added (%s); ForcedTeams=%d AddHero=%d - the game's registration (0x49fe30) takes the DLL's table at 0x%08lX, "
+		logger::write("forced teams: %zu script functions added (%s); ForcedTeams=%d AddHero=%d JoinHero=%d - the game's registration (0x49fe30) takes the DLL's table at 0x%08lX, "
 		              "its %lu entries and these (%lu of the tree's 320 names with the 19 builtins)",
-		              functions.size(), names.c_str(), chosen.forced_teams ? 1 : 0, chosen.add_hero ? 1 : 0, table_address, retail_count, builtin_count + table_count);
+		              functions.size(), names.c_str(), chosen.forced_teams ? 1 : 0, chosen.add_hero ? 1 : 0, chosen.join_hero ? 1 : 0, table_address, retail_count,
+		              builtin_count + table_count);
 	}
 }
