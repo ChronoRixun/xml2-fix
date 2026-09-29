@@ -4,7 +4,8 @@
 // the flashbacks with their fixed heroes and costumes), kept apart from the patching so xml2_test
 // can check it without the game: the eight script functions and their signatures, the function
 // table the game's registration is pointed at, every retail byte they rely on, [Game] ForcedTeams
-// and AddHero, the hero-name and costume rules, and what each function does, written over an
+// and AddHero, the hero-name and costume rules, Change Team greyed out in the Xtraction menus while
+// a mission's party is fixed (game flag "teamlock"), and what each function does, written over an
 // "engine" - the game's own calls in the DLL (forced_teams.cpp), fakes and the game's own code on
 // blocks of the test's in xml2_test.
 //
@@ -442,6 +443,64 @@ namespace forced_teams_rules
 		std::string stack_warned; // the side-mission stack xml2fixFeature last warned about
 	};
 
+	// ---- Change Team while a mission's party is fixed ---------------------------------------------------
+	//
+	// Seating a party isn't all of it: an Xtraction Point's menu offers "Change Team" wherever it stands
+	// (extractionPoint 0x4a6b50 always, extractionPointLite 0x4a6d80 when its first flag is "TRUE"), and
+	// its team menu lets every player pick any unlocked hero - online, a player on standby (more players
+	// than heroes in the party) takes an empty slot, and the Xtraction menu belongs to whichever player's
+	// hero opened it. X-Men Legends I kept a mission's REQUIRED heroes and its hero count there. So a mod
+	// says when its party is fixed - game flag "teamlock" bit 1, set at a forced mission's start and
+	// cleared at every other start - and with ForcedTeams=1 the fix's handlers for the two functions show
+	// Change Team greyed out while it is set: they write the option's `disabled` argument, then run the
+	// game's own handler. The option is added with the dialog's vt+0x1c (addOption 0x5e97d0: text, script,
+	// script2, closes, resumes, disabled); `push 0` at 0x4a6ccd (extractionPoint) and 0x4a6fb8
+	// (extractionPointLite) is its `disabled`, and the online Game Type menu greys Danger Room out the
+	// same way (0x5b93e4: setl al; push eax). A greyed-out option can be highlighted but not chosen. A game
+	// flag is part of the game: saved with it, sent to every joiner with the host's save, set by the
+	// same scripts on every machine - so every machine builds the same menu.
+	constexpr const char* team_lock_flag = "teamlock"; // < 12 characters: the flag setter 0x4d7130 takes no longer name
+	constexpr int team_lock_bit = 1;
+	constexpr DWORD game_flags_getter = 0x4a1670;   // __cdecl: the script interface (0x756a78)
+	constexpr DWORD game_flags_vtable = 0x68d36c;
+	constexpr DWORD game_flags_get_slot = 0x54;     // int (const char* name, int bit), ret 8: getGameFlag's read (0x4a0190), 0 or 1
+
+	struct xpoint_menu
+	{
+		DWORD handler;  // the game's script function
+		DWORD entry;    // its entry in the game's function table (0x68a908)
+		DWORD disabled; // the imm8 of the Change Team option's `push 0` (addOption's `disabled`)
+		const char* name;
+	};
+	inline constexpr std::array<xpoint_menu, 2> xpoint_menus{{
+		{0x4a6b50, 0x68b3f8, 0x4a6cce, "extractionPoint"},
+		{0x4a6d80, 0x68b408, 0x4a6fb9, "extractionPointLite"},
+	}};
+
+	// Whether the Xtraction menu shows Change Team greyed out: ForcedTeams=1 and the flag read as set. A
+	// flag that couldn't be read leaves the game's menu as it is.
+	constexpr bool change_team_disabled(const bool forced_teams, const std::optional<int> flag)
+	{
+		return forced_teams && flag.value_or(0) != 0;
+	}
+
+	// The DLL's table (build_table's copy of the game's) with the two Xtraction menus' handlers replaced by
+	// `handlers` (in xpoint_menus order). Returns how many it replaced: 2, when the entries are the game's.
+	inline int wrap_xpoint_menus(func_entry* table, const std::array<const void*, xpoint_menus.size()>& handlers)
+	{
+		int wrapped = 0;
+		for (std::size_t k = 0; k < xpoint_menus.size(); ++k)
+		{
+			auto& entry = table[(xpoint_menus[k].entry - retail_table) / sizeof(func_entry)];
+			if (reinterpret_cast<std::uintptr_t>(entry.handler) == xpoint_menus[k].handler)
+			{
+				entry.handler = handlers[k];
+				++wrapped;
+			}
+		}
+		return wrapped;
+	}
+
 	// ---- The game's objects and functions -----------------------------------------------------------
 
 	constexpr DWORD game_getter = 0x46dce0;         // __cdecl: the game, 0x729960
@@ -494,7 +553,7 @@ namespace forced_teams_rules
 
 	// Every byte of XMen2.exe the functions rely on, read from the retail build. All must match
 	// before anything is patched; xml2_test compares them with a copy of the exe.
-	inline constexpr std::array<guard, 101> guards{{
+	inline constexpr std::array<guard, 110> guards{{
 		// The registration and the tree.
 		{0x49fe30, "6808a968006821010000e8318903008bc8e85a770300c3", "the registration (0x49fe30: push table, push count, call 0x4d75a0)"},
 		{0x4d7637, "81bf4819000040010000", "the tree's 320-name cap (0x4d7637)"},
@@ -620,6 +679,20 @@ namespace forced_teams_rules
 		 "cancelsidemission takes the top record off (0x5f2ce0)"},
 		{0x55c2dd, "518bcee86bf9ffff", "the frame's run of the queue unlinks a command before running it (0x55c2dd)"},
 		{0x55bcb0, "8b8830010000495f898830010000", "and the unlink counts it off (0x55bcb0)"},
+		// Change Team while a mission's party is fixed (the Xtraction menus, a game flag's bit).
+		{0x4a1670, "8a0d046b7500b80100000084c8752e8b0d046b75000bc833c0890d046b7500c705786a75006cd36800",
+		 "the script interface's getter (0x4a1670) and its vtable (0x68d36c)"},
+		{0x68d3c0, "90014a00", "script interface vt+0x54 (a game flag's bit, 0x4a0190)"},
+		{0x4a0190, "8b4424045650e8d58503008bc8e8fe6603008b74240c8bc833c085f67e2083fe207f1b85c974178b11ff52108d4effba01000000d3e223c2f7d81bc0f7d85ec20800",
+		 "a game flag's bit (0x4a0190): the flag by name, bits 1..32, 0 or 1, ret 8"},
+		{0x68b3f8, "506b4a0024c36800189c68002cce6800", "extractionPoint's table entry (0x68b3f8: 0x4a6b50, n(a))"},
+		{0x68b408, "806d4a0010c36800189c6800c4ca6800", "extractionPointLite's table entry (0x68b408: 0x4a6d80, n(asss))"},
+		{0x4a6ca9, "8b431c5068c4d468008d4c24206a4051e832980b0083c410e86a6e01008bf0e8334614006a006a016a016a008d5424288bf88b068b1f5268d10700008bceff5008508bcfff531c",
+		 "extractionPoint's Change Team option: addOption(2001, \"extractionPointChange(%d,0)\", 0, 1, 1, push 0 at 0x4a6ccd = disabled) (0x4a6ca9)"},
+		{0x4a6f93, "8b421c515068f8d468008d4c24306a4051e847950b0083c414e87f6b01008bf0e8484314006a006a016a016a008d5424348bf88b068b1f5268d10700008bceff5008508bcfff531c",
+		 "extractionPointLite's Change Team option: push 0 at 0x4a6fb8 = disabled (0x4a6f93)"},
+		{0x6a3348, "d0975e00", "the dialog's vt+0x1c (addOption, 0x5e97d0)"},
+		{0x5b93e1, "83f8100f9cc08d4c2410506a006a016a005168fd0f0000", "the online Game Type menu greys Danger Room out with addOption's 6th argument (0x5b93e4)"},
 	}};
 
 	// ---- Reading a handler's arguments (no C++ objects: the reads are SEH-guarded) --------------------

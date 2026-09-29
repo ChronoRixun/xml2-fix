@@ -2332,7 +2332,14 @@ namespace
 		bool guards_ok = true;
 		std::set<DWORD> addresses;
 		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
-		CHECK(guards_ok && guards.size() == 101);
+		CHECK(guards_ok && guards.size() == 110);
+
+		// Change Team in the Xtraction menus: greyed out only with ForcedTeams=1 and the flag read as set.
+		CHECK(change_team_disabled(true, 1) && !change_team_disabled(true, 0) && !change_team_disabled(true, std::nullopt) && !change_team_disabled(false, 1) &&
+		      change_team_disabled(true, -1));
+		CHECK(std::string_view(team_lock_flag).size() < 12 && team_lock_bit >= 1 && team_lock_bit <= 32);
+		CHECK(xpoint_menus[0].entry == retail_table + 175 * 16 && xpoint_menus[1].entry == retail_table + 176 * 16 && xpoint_menus[0].disabled == 0x4a6ccd + 1 &&
+		      xpoint_menus[1].disabled == 0x4a6fb8 + 1);
 
 		// The functions over a game of the test's own, arguments through the test's own reader.
 		const value_vtables own(reinterpret_cast<void*>(&test_value_payload));
@@ -2395,6 +2402,29 @@ namespace
 			             std::string_view(entry.ret) == functions[i].ret;
 		}
 		CHECK(extras_ok);
+
+		// The Xtraction menus: their entries in the game's table, the Change Team option's `disabled` a push 0,
+		// the game flag read through the script interface; the DLL's table with exactly those two handlers replaced.
+		bool xpoint_ok = true;
+		for (const auto& m : xpoint_menus)
+		{
+			xpoint_ok &= dword_at(m.entry) == m.handler && text_at(dword_at(m.entry + 4)) == m.name && at(m.disabled - 1)[0] == 0x6a && at(m.disabled)[0] == 0x00 &&
+			             at(m.disabled + 1)[0] == 0x6a && at(m.disabled + 2)[0] == 0x01;
+		}
+		CHECK(xpoint_ok && text_at(0x68d4c4) == "extractionPointChange(%d,0)" && text_at(0x68d4f8) == "extractionPointChange(%d,%i)");
+		CHECK(dword_at(game_flags_vtable + game_flags_get_slot) == 0x4a0190 && dword_at(0x4a1695) == game_flags_vtable && dword_at(0x6a332c + 0x1c) == 0x5e97d0);
+		{
+			std::vector<func_entry> wrapped_table(built);
+			const std::array<const void*, xpoint_menus.size()> wrappers{reinterpret_cast<const void*>(0x2000), reinterpret_cast<const void*>(0x2001)};
+			CHECK(wrap_xpoint_menus(wrapped_table.data(), wrappers) == 2);
+			std::size_t differ = 0;
+			for (std::size_t i = 0; i < wrapped_table.size(); ++i) differ += std::memcmp(&wrapped_table[i], &built[i], sizeof(func_entry)) != 0;
+			// (the copied entries' names point into the game's image: read them through it)
+			CHECK(differ == 2 && wrapped_table[175].handler == wrappers[0] && wrapped_table[176].handler == wrappers[1] &&
+			      text_at(static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(wrapped_table[175].name))) == "extractionPoint" &&
+			      text_at(static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(wrapped_table[176].args))) == "asss");
+			CHECK(wrap_xpoint_menus(wrapped_table.data(), wrappers) == 0); // wrapped already: the game's handler isn't there any more
+		}
 
 		// The costume table: the game's names and indices, then {"", -1}.
 		bool costumes_ok = true;

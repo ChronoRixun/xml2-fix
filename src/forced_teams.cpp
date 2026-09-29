@@ -75,6 +75,8 @@ namespace forced_teams
 		using zone_name_t = const char*(__fastcall*)(void* zones, void* edx);
 		using zone_flag_t = bool(__fastcall*)(void* zones, void* edx);
 		using hud_leave_t = void(__fastcall*)(void* hud, void* edx);
+		using game_flag_t = int(__fastcall*)(void* flags, void* edx, const char* name, int bit);
+		using script_handler_t = void*(__cdecl*)(void* args);
 
 		// ---- Calls into XMen2.exe. No C++ objects in these: every one is SEH-guarded, so a fault in the
 		// game's code is logged by the caller instead of taking the game down. --------------------------
@@ -513,6 +515,74 @@ namespace forced_teams
 			}
 		}
 
+		// A game flag's bit, as getGameFlag reads it (0x4a5de7 -> the script interface's vt+0x54).
+		bool call_game_flag(const char* name, const int bit, int& value)
+		{
+			__try
+			{
+				void* flags = object(game_flags_getter, game_flags_vtable);
+				if (!flags)
+				{
+					return false;
+				}
+				value = method<game_flag_t>(flags, game_flags_get_slot)(flags, nullptr, name, bit);
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		// One byte of XMen2.exe's code (the Change Team option's `disabled`), written on the game's thread
+		// just before the code that reads it runs.
+		bool write_code_byte(const DWORD va, const std::uint8_t value)
+		{
+			void* where = at<void*>(va);
+			DWORD protection = 0;
+			if (!VirtualProtect(where, 1, PAGE_EXECUTE_READWRITE, &protection))
+			{
+				return false;
+			}
+			*static_cast<std::uint8_t*>(where) = value;
+			FlushInstructionCache(GetCurrentProcess(), where, 1);
+			VirtualProtect(where, 1, protection, &protection);
+			return true;
+		}
+
+		// The Xtraction menus' handlers: Change Team enabled or greyed out (change_team_disabled), then the
+		// game's own handler builds the menu.
+		template <std::size_t k>
+		void* __cdecl xpoint_menu_handler(void* args)
+		{
+			const auto& menu = xpoint_menus[k];
+			const bool on = forced_teams_on.load();
+			int value = 0;
+			const bool read = on && call_game_flag(team_lock_flag, team_lock_bit, value);
+			const bool disabled = change_team_disabled(on, read ? std::optional<int>(value) : std::nullopt);
+			const auto wanted = static_cast<std::uint8_t>(disabled ? 1 : 0);
+			if (*at<const std::uint8_t*>(menu.disabled) != wanted && !write_code_byte(menu.disabled, wanted))
+			{
+				logger::write("forced teams: %s: ERROR: can't write Change Team's disabled flag at 0x%08lX (error %lu) - the menu as it was last", menu.name, menu.disabled,
+				              GetLastError());
+			}
+			else if (disabled)
+			{
+				logger::write("forced teams: %s: the mission's party is fixed (game flag %s bit %d) - Change Team greyed out", menu.name, team_lock_flag, team_lock_bit);
+			}
+			else if (on && !read)
+			{
+				logger::write("forced teams: %s: ERROR: game flag %s couldn't be read - Change Team as the game has it", menu.name, team_lock_flag);
+			}
+			return at<script_handler_t>(menu.handler)(args);
+		}
+
+		const std::array<const void*, xpoint_menus.size()> xpoint_handlers{
+			reinterpret_cast<const void*>(&xpoint_menu_handler<0>),
+			reinterpret_cast<const void*>(&xpoint_menu_handler<1>),
+		};
+		static_assert(xpoint_menus.size() == 2);
+
 		// The engine forced_teams_rules' functions work over: XMen2.exe.
 		struct game_engine
 		{
@@ -831,6 +901,8 @@ namespace forced_teams
 			logger::write("forced teams: ERROR: the game's function table (0x68a908) couldn't be read - %s", refused);
 			return;
 		}
+		// The guards matched both entries: the copy's are the game's, so both are replaced.
+		const int wrapped = wrap_xpoint_menus(table, xpoint_handlers);
 		const auto table_address = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&table[0]));
 		if (!write_operands(registration_writes(table_address)))
 		{
@@ -850,5 +922,7 @@ namespace forced_teams
 		              "its %lu entries and these (%lu of the tree's 320 names with the 19 builtins)",
 		              functions.size(), names.c_str(), chosen.forced_teams ? 1 : 0, chosen.add_hero ? 1 : 0, chosen.join_hero ? 1 : 0, table_address, retail_count,
 		              builtin_count + table_count);
+		logger::write("forced teams: %d of %zu Xtraction menus (extractionPoint, extractionPointLite) run the fix's handler first: %s", wrapped, xpoint_menus.size(),
+		              chosen.forced_teams ? "Change Team greyed out while game flag teamlock bit 1 is set (a mission's fixed party)" : "ForcedTeams=0 - Change Team as the game has it");
 	}
 }

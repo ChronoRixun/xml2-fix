@@ -26,6 +26,10 @@
 //                     ; mod's scripts use their own fallback
 //   JoinHero = 0      ; with ForcedTeams=1: joinHero returns 0 (the mod's fallback); absent or 1: it works
 //
+// With ForcedTeams=1 the Xtraction menus (extractionPoint, extractionPointLite) show Change Team greyed
+// out while game flag "teamlock" bit 1 is set - the mod sets it at a forced mission's start and clears
+// it at every other - so nobody swaps a fixed party's heroes there, online players included.
+//
 // A script checks xml2fixFeature first, into a variable declared with iadd(0, 0 ): without the fix (or
 // without ForcedTeams) that line is dropped when the script compiles, the variable stays 0 and the
 // script opens the team menu as before. Registration: the two push operands of the game's own
