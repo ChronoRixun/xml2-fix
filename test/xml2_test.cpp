@@ -70,6 +70,7 @@
 #include "pad_prompts_rules.hpp"
 #include "postgame_rules.hpp"
 #include "resolution_rules.hpp"
+#include "review_menu_rules.hpp"
 #include "test_input_rules.hpp"
 #include "virtual_pad_rules.hpp"
 #include "xp_curve_rules.hpp"
@@ -4087,6 +4088,117 @@ namespace
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
 
+	// [Game] ReviewStats=0 (review_menu_rules.hpp): the tables on their own (every site inside a guard, with
+	// its instruction and retail byte there, inside the write span), the tab change as the exe does it with
+	// either set of bytes, then, when a copy of XMen2.exe is at hand, every guard against it, the tab table's
+	// names, and the change applied to that copy (exactly the five bytes).
+	void check_review_menu_rules()
+	{
+		using namespace review_menu_rules;
+		std::printf("[Game] ReviewStats (the Review menu without its Stats tab)\n");
+
+		bool guards_ok = true;
+		std::set<DWORD> addresses;
+		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
+		CHECK(guards_ok);
+		bool apart = true;
+		for (std::size_t i = 0; i < guards.size(); ++i)
+		{
+			const DWORD end = guards[i].va + static_cast<DWORD>(limits_rules::hex_size(guards[i].hex));
+			for (std::size_t j = 0; j < guards.size(); ++j)
+			{
+				if (i != j && guards[j].va >= guards[i].va && guards[j].va < end) apart = false;
+			}
+		}
+		CHECK(apart);
+		// Each site: its instruction (cmp r32, imm8 = 83 /7 ib; mov esi, imm32 = be id) and retail byte in a guard.
+		bool sites_ok = true;
+		std::set<DWORD> written;
+		for (const auto& s : sites)
+		{
+			sites_ok &= s.va >= span_begin && s.va < span_end && written.insert(s.va).second && s.retail != s.without_stats && s.what && *s.what;
+			bool covered = false;
+			for (const auto& g : guards)
+			{
+				const DWORD end = g.va + static_cast<DWORD>(limits_rules::hex_size(g.hex));
+				if (g.va <= s.instruction && s.va < end)
+				{
+					const auto at = [&](const DWORD va) { return limits_rules::hex_byte(g.hex, va - g.va); };
+					const bool compare = at(s.instruction) == 0x83 && (at(s.instruction + 1) & 0xf8) == 0xf8 && s.va == s.instruction + 2;
+					const bool move = at(s.instruction) == 0xbe && s.va == s.instruction + 1 && s.va + 4 <= end && at(s.va + 1) == 0 && at(s.va + 2) == 0 && at(s.va + 3) == 0;
+					covered = (compare || move) && at(s.va) == s.retail;
+				}
+			}
+			if (!covered) std::printf("  info  site 0x%08lX isn't covered by a guard with its retail instruction\n", s.va);
+			sites_ok &= covered;
+		}
+		CHECK(sites_ok && written.size() == 5);
+		CHECK(writes().size() == sites.size() && writes().front().size == 1 && writes().front().value == 4);
+
+		// The tab change (0x5d17d0) as the exe does it: tab + step; >= wrap -> 0; <= -1 -> last.
+		const auto change = [](const int tab, const int step, const int wrap, const int last)
+		{
+			const int next = tab + step;
+			return next >= wrap ? 0 : next <= -1 ? last : next;
+		};
+		const auto go_round = [&](const int step, const int wrap, const int last)
+		{
+			std::vector<int> seen{0};
+			for (int tab = change(0, step, wrap, last); tab != 0 && seen.size() < 10; tab = change(tab, step, wrap, last)) seen.push_back(tab);
+			return seen;
+		};
+		CHECK((go_round(1, 5, 4) == std::vector<int>{0, 1, 2, 3, 4} && go_round(-1, 5, 4) == std::vector<int>{0, 4, 3, 2, 1}));
+		CHECK((go_round(1, 4, 3) == std::vector<int>{0, 1, 2, 3} && go_round(-1, 4, 3) == std::vector<int>{0, 3, 2, 1}));
+		CHECK(retail_tabs == 5 && tabs_without_stats == 4 && sites[0].without_stats == tabs_without_stats && sites[1].without_stats == tabs_without_stats - 1);
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check REVIEW_PATHS_MENU's bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](const DWORD va) { return image + (va - image_base); };
+
+		const guard* mismatch = first_mismatch(image);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
+		CHECK(mismatch == nullptr);
+		// The tab table: option01_text .. option05_text, the fifth being Stats; the pushes of the mouse the same five.
+		bool tabs_ok = true;
+		for (int i = 0; i < retail_tabs; ++i)
+		{
+			const DWORD name = operand_at(at(tab_names + 4 * i), 4);
+			tabs_ok &= std::string_view(reinterpret_cast<const char*>(at(name))) == "option0" + std::to_string(i + 1) + "_text";
+			tabs_ok &= at(0x5d04ef + 0x10 * i + (i ? 2 : 0))[0] == 0x68 && operand_at(at(0x5d04ef + 0x10 * i + (i ? 2 : 0) + 1), 4) == name;
+		}
+		CHECK(tabs_ok);
+		// The list: Stats (0x5d0c20) when the tab is 4.
+		CHECK(at(0x5d1780)[0] == 0x83 && at(0x5d1780)[6] == 4 && operand_at(at(0x5d178d), 4) == static_cast<std::uint32_t>(0x5d0c20 - 0x5d1791));
+		for (const auto& s : sites)
+		{
+			CHECK(*at(s.va) == s.retail);
+		}
+
+		std::vector<std::uint8_t> before(image, image + image_size);
+		apply(image);
+		std::vector<DWORD> changed;
+		for (DWORD i = 0; i < image_size; ++i)
+		{
+			if (image[i] != before[i]) changed.push_back(image_base + i);
+		}
+		CHECK((changed == std::vector<DWORD>{0x5d05b3, 0x5d17f8, 0x5d180a, 0x5d1817, 0x5d1c89}));
+		// The tab change's own bytes, read back: four tabs each way.
+		CHECK((go_round(1, *at(0x5d180a), *at(0x5d1817)) == std::vector<int>{0, 1, 2, 3} && go_round(-1, *at(0x5d180a), *at(0x5d1817)) == std::vector<int>{0, 3, 2, 1}));
+		// Patched (or any other build): the mouse handler's guard no longer matches, so nothing would be written again.
+		mismatch = first_mismatch(image);
+		CHECK(mismatch && mismatch->va == 0x5d04d0);
+		std::memcpy(image, before.data(), image_size);
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
 	// Menus, popups and conversations at 60 fps (frame_rate_rules.hpp): the rate rules on their own, then,
 	// when a copy of XMen2.exe is at hand, every guard against it and the game's own four functions (menu up
 	// 0x5d8870, movie 0x5d8420, popup up 0x5e9e30, conversation 0x458010) run on blocks of the test's in
@@ -6473,6 +6585,7 @@ int main(const int argc, char** argv)
 	check_postgame_rules();
 	check_end_unlock_rules();
 	check_new_game_plus_rules();
+	check_review_menu_rules();
 	check_main_menu_rules();
 	check_window_title_rules();
 	check_game_version_rules();

@@ -35,6 +35,7 @@
 #include "pad_bindings.hpp"
 #include "pad_prompts.hpp"
 #include "postgame.hpp"
+#include "review_menu.hpp"
 #include "test_input.hpp"
 #include "virtual_pad.hpp"
 #include "window_title.hpp"
@@ -163,6 +164,8 @@ namespace
 		// The main menu's item names: the push operands of MAIN_MENU's own code (mouse, Quit), used from the
 		// first main menu on.
 		main_menu::install(game);
+		// The Review menu's tabs: five imm8s in REVIEW_PATHS_MENU's own code, used from the first Review on.
+		review_menu::install(game);
 		// X-Men Legends 1's level table, cap and kill XP. Here, in DllMain, before the exe's entry point: the game
 		// first asks for a level's XP (0x448a90, which builds XML2's table on that call) when it loads the herostat at
 		// start-up (0x4ba1d9, every hero's starting level), and its first kill, level check or XP bar come later still,
