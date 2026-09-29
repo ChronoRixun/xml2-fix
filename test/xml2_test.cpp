@@ -5,7 +5,8 @@
 //   - the game's own DirectInput 8: dinput8.dll loaded from the system folder by full path,
 //     EnumObjects, ranges set by object id, c_dfDIJoystick2.
 // With an Xbox-compatible pad connected, both must see a Logitech Dual Action. Also checks
-// that GameSpy host lookups resolve through OpenSpy, and the display fix's decisions: the
+// that GameSpy host lookups resolve through OpenSpy ([Online] Server's rules in online_rules.hpp,
+// and its 127.0.0.1 in the pipe child), and the display fix's decisions: the
 // rules in display_rules.hpp, frame_rate_rules.hpp and options_menu_rules.hpp against fixed
 // inputs (the frame cap's patch bytes and the in-game options' call sites against a copy of
 // XMen2.exe when one is at hand), the Video options list the fix would build from this PC's
@@ -25,7 +26,8 @@
 // split, then every byte it relies on, exactly the bytes it writes and the patched lookup, cap and kill XP jump run
 // on that copy. The test input pipe is checked on its rules, on a
 // Direct3D 8 device of the test's own (the back buffer copy behind "screenshot"), and end to
-// end in a child process started with an xml2-fix.ini that turns the pipe on: it creates the
+// end in a child process started with an xml2-fix.ini that turns the pipe on under a name of its
+// own ([Test] PipeName, so a running game's pipe is never touched): it creates the
 // keyboard device the way XMen2.exe does and sees the pipe's keys in it.
 //
 //   xml2_test.exe          run the checks
@@ -46,6 +48,7 @@
 #include "limits_rules.hpp"
 #include "main_menu_rules.hpp"
 #include "new_game.hpp"
+#include "online_rules.hpp"
 #include "options_menu_rules.hpp"
 #include "pad_prompts_rules.hpp"
 #include "postgame_rules.hpp"
@@ -2520,7 +2523,28 @@ namespace
 	void check_test_input_rules()
 	{
 		using namespace test_input_rules;
-		std::printf("test input rules ([Test] InputPipe commands)\n");
+		std::printf("test input rules ([Test] InputPipe commands, PipeName)\n");
+
+		// [Test] PipeName: letters, digits, '-', '_', at most 64; unset or refused -> xml2-fix-input.
+		auto pipe = choose_pipe("");
+		CHECK(pipe.name == "xml2-fix-input" && pipe.path == "\\\\.\\pipe\\xml2-fix-input" && pipe.error.empty());
+		pipe = choose_pipe("xml2-host_1");
+		CHECK(pipe.name == "xml2-host_1" && pipe.path == "\\\\.\\pipe\\xml2-host_1" && pipe.error.empty());
+		pipe = choose_pipe("  xml2-join   ; the second window");
+		CHECK(pipe.name == "xml2-join" && pipe.error.empty());
+		CHECK(choose_pipe("; commented out").name == "xml2-fix-input" && choose_pipe("; commented out").error.empty());
+		CHECK(choose_pipe(std::string(64, 'a')).name == std::string(64, 'a'));
+		for (const char* bad : {"has space", "back\\slash", "sl/ash", "dot.name", "colon:", "star*", "quote\"", "tést"})
+		{
+			pipe = choose_pipe(bad);
+			if (pipe.name != "xml2-fix-input" || pipe.error.empty())
+			{
+				std::printf("  FAIL  PipeName=%s accepted\n", bad);
+				++failures;
+			}
+		}
+		pipe = choose_pipe(std::string(65, 'a'));
+		CHECK(pipe.name == "xml2-fix-input" && pipe.error.find("at most 64") != std::string::npos);
 
 		CHECK(parse_key("ENTER") == 0x1C && parse_key("return") == 0x1C && parse_key("DIK_RETURN") == 0x1C);
 		CHECK(parse_key("esc") == 0x01 && parse_key("w") == 0x11 && parse_key("UP") == 0xC8 && parse_key("numpad4") == 0x4B);
@@ -2872,7 +2896,12 @@ namespace
 
 	// ---- The pipe, end to end -----------------------------------------------------------------------
 
-	constexpr const char* pipe_name = "\\\\.\\pipe\\xml2-fix-input";
+	// The child's pipe has a name of its own ([Test] PipeName), so a game serving the default
+	// \\.\pipe\xml2-fix-input (a harness run, say) is never touched by these checks.
+	std::string child_pipe_name()
+	{
+		return "xml2-fix-test-" + std::to_string(GetCurrentProcessId());
+	}
 
 	// One request, one reply line.
 	std::string ask(const HANDLE pipe, const std::string& line)
@@ -2894,9 +2923,11 @@ namespace
 	bool ok(const std::string& reply) { return reply.rfind("ok", 0) == 0; }
 	bool refused(const std::string& reply) { return reply.rfind("error", 0) == 0; }
 
-	// Runs in the child process (run_pipe_child), whose dinput.dll saw [Test] InputPipe=1.
-	void check_pipe()
+	// Runs in the child process (run_pipe_child), whose dinput.dll saw [Test] InputPipe=1 with
+	// PipeName=`name`, and [Online] Server=127.0.0.1.
+	void check_pipe(const std::string& name)
 	{
+		const auto pipe_path = "\\\\.\\pipe\\" + name;
 		std::printf("test input pipe ([Test] InputPipe=1, this is the child process)\n");
 		// First, as it needs no pipe: [Game] PostgameScript set, but this isn't XMen2.exe - the
 		// credits' push is left alone (the DLL logged it while this process loaded it).
@@ -2913,10 +2944,33 @@ namespace
 		      start_log.find("xp curve: 0x00448A90 isn't the retail code") != std::string::npos);
 		CHECK(start_log.find("xp curve: X-Men Legends 1's") == std::string::npos);
 
+		// [Online] Server=127.0.0.1: every GameSpy and OpenSpy name resolves to it, each logged once.
+		WSADATA wsa{};
+		WSAStartup(MAKEWORD(2, 2), &wsa);
+		const auto resolved = [](const char* host) -> std::string
+		{
+			const hostent* found = gethostbyname(host);
+			return found && found->h_addr_list[0] ? inet_ntoa(*reinterpret_cast<in_addr*>(found->h_addr_list[0])) : "";
+		};
+		CHECK(resolved("xmenlegpc.master.gamespy.com") == "127.0.0.1");
+		CHECK(resolved("xmenlegpc.master.gamespy.com") == "127.0.0.1"); // again: logged once
+		CHECK(resolved("xmenlegpc.available.gamespy.com") == "127.0.0.1" && resolved("xmenlegpc.ms7.gamespy.com") == "127.0.0.1");
+		CHECK(resolved("natneg1.gamespy.com") == "127.0.0.1" && resolved("natneg2.gamespy.com") == "127.0.0.1" && resolved("peerchat.gamespy.com") == "127.0.0.1");
+		CHECK(resolved("xmenlegpc.ms7.openspy.net") == "127.0.0.1");
+		CHECK(resolved("xmenlegpc.gamespy.com.invalid") != "127.0.0.1"); // not GameSpy's: a real lookup (.invalid never resolves)
+		WSACleanup();
+		const auto online_log = read_file(module_dir() / "xml2-fix.log");
+		CHECK(online_log.find("online: every GameSpy and OpenSpy host resolves to 127.0.0.1 ([Online] Server)") != std::string::npos);
+		const std::string mapped = "online: xmenlegpc.master.gamespy.com -> 127.0.0.1 ([Online] Server)";
+		CHECK(online_log.find(mapped) != std::string::npos && online_log.find(mapped) == online_log.rfind(mapped));
+		CHECK(online_log.find("online: natneg1.gamespy.com -> 127.0.0.1 ([Online] Server)") != std::string::npos);
+		CHECK(online_log.find("GameSpy servers redirected to") == std::string::npos); // Server wins over the default Domain
+		CHECK(online_log.find(".invalid ->") == std::string::npos);
+
 		HANDLE pipe = INVALID_HANDLE_VALUE;
 		for (int attempt = 0; attempt < 50 && pipe == INVALID_HANDLE_VALUE; ++attempt)
 		{
-			pipe = CreateFileA(pipe_name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+			pipe = CreateFileA(pipe_path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
 			if (pipe == INVALID_HANDLE_VALUE) Sleep(100);
 		}
 		CHECK(pipe != INVALID_HANDLE_VALUE);
@@ -3008,7 +3062,7 @@ namespace
 		CloseHandle(pipe);
 
 		const auto log = read_file(module_dir() / "xml2-fix.log");
-		CHECK(log.find("test: input pipe") != std::string::npos);
+		CHECK(log.find("test: input pipe " + pipe_path + " ([Test] InputPipe=1, PipeName " + name + ")") != std::string::npos);
 		CHECK(log.find("keyboard cooperative level 16 -> A (background, non-exclusive): ok") != std::string::npos); // FOREGROUND|NONEXCLUSIVE|NOWINKEY -> BACKGROUND|NONEXCLUSIVE
 		CHECK(log.find("the game reads its DirectInput keyboard") != std::string::npos);
 		const std::string guard_line = "test: XMen2.exe doesn't have the expected code at 0x0055C890";
@@ -3034,15 +3088,11 @@ namespace
 	// dinput.dll runs check_pipe's side. Last, because that DLL starts xml2-fix.log over.
 	int run_pipe_child()
 	{
-		std::printf("test input pipe: starting a child with [Test] InputPipe=1\n");
-		// The pipe has one well-known name: with a game already serving it, the child's checks would connect to
-		// the game and drive it (2026-09-28: taps, a queued unlockCharacter and a loadmap went into a running
-		// harness game). Skip rather than touch someone else's game.
-		if (WaitNamedPipeW(LR"(\\.\pipe\xml2-fix-input)", 1) || GetLastError() == ERROR_SEM_TIMEOUT)
-		{
-			std::printf("  skip  another process (a running game?) already serves \\\\.\\pipe\\xml2-fix-input - pipe checks not run\n");
-			return 0;
-		}
+		// The child serves a pipe named after this process ([Test] PipeName), never the default one: with the
+		// default name and a game already serving it, the checks connected to that game and drove it (2026-09-28:
+		// taps, a queued unlockCharacter and a loadmap went into a running harness game).
+		const auto pipe_name = child_pipe_name();
+		std::printf("test input pipe: starting a child with [Test] InputPipe=1, PipeName=%s\n", pipe_name.c_str());
 		const auto ini = module_dir() / "xml2-fix.ini";
 		if (std::filesystem::exists(ini))
 		{
@@ -3051,13 +3101,13 @@ namespace
 		}
 		{
 			std::ofstream out(ini, std::ios::binary);
-			out << "[Test]\r\nInputPipe=1\r\n[Display]\r\nResolutionList=all\r\n[Limits]\r\nActorSlots=127\r\n[Game]\r\nForcedTeams=1\r\nAddHero=1\r\nPostgameScript=x1/menus/postgame ; XML1's r505\r\nMainMenuItems=button1,button2,button3,button4,button5,button6,button7 ; XML1's buttons\r\n"
-			       "XPCurve=xml1 ; XML1's levels and kill XP\r\n";
+			out << "[Test]\r\nInputPipe=1\r\nPipeName=" << pipe_name << " ; this test's own\r\n[Display]\r\nResolutionList=all\r\n[Limits]\r\nActorSlots=127\r\n[Game]\r\nForcedTeams=1\r\nAddHero=1\r\nPostgameScript=x1/menus/postgame ; XML1's r505\r\nMainMenuItems=button1,button2,button3,button4,button5,button6,button7 ; XML1's buttons\r\n"
+			       "XPCurve=xml1 ; XML1's levels and kill XP\r\n[Online]\r\nServer=127.0.0.1 ; a private OpenSpy stack\r\n";
 		}
 
 		wchar_t exe[MAX_PATH]{};
 		GetModuleFileNameW(nullptr, exe, MAX_PATH);
-		std::wstring command = std::wstring(L"\"") + exe + L"\" --pipe-child";
+		std::wstring command = std::wstring(L"\"") + exe + L"\" --pipe-child " + std::wstring(pipe_name.begin(), pipe_name.end());
 		STARTUPINFOW startup{};
 		startup.cb = sizeof(startup);
 		PROCESS_INFORMATION process{};
@@ -3105,6 +3155,66 @@ namespace
 		const hostent* other = gethostbyname("localhost");
 		CHECK(other != nullptr); // non-GameSpy names are untouched
 		WSACleanup();
+	}
+
+	void check_online_rules()
+	{
+		using namespace online_rules;
+		using mode = plan::mode;
+		std::printf("online rules ([Online] Domain, Server)\n");
+
+		// Which names are GameSpy's: a host under gamespy.com, any case, not the bare domain or a look-alike.
+		CHECK(is_gamespy_host("xmenlegpc.master.gamespy.com") && is_gamespy_host("natneg1.gamespy.com") && is_gamespy_host("XMENLEGPC.MS7.GameSpy.Com"));
+		CHECK(is_gamespy_host("peerchat.gamespy.com") && is_gamespy_host("gpcm.gamespy.com") && is_gamespy_host("xmenlegpc.available.gamespy.com"));
+		CHECK(!is_gamespy_host("gamespy.com") && !is_gamespy_host(".gamespy.com") && !is_gamespy_host("notgamespy.com") && !is_gamespy_host("xgamespy.com"));
+		CHECK(!is_gamespy_host("gamespy.com.example") && !is_gamespy_host("master.gamespy.co") && !is_gamespy_host("") && !is_gamespy_host("localhost"));
+		// Server also catches OpenSpy's names (already renamed ones land on the same server).
+		CHECK(is_server_host("xmenlegpc.ms7.openspy.net") && is_server_host("natneg2.OPENSPY.NET") && is_server_host("natneg2.gamespy.com"));
+		CHECK(!is_server_host("openspy.net") && !is_server_host("myopenspy.net") && !is_server_host("openspy.net.invalid") && !is_server_host("example.com"));
+
+		// Addresses: dotted quads only, leading zeros dropped.
+		CHECK(parse_ipv4("127.0.0.1") == "127.0.0.1" && parse_ipv4("192.168.1.20") == "192.168.1.20" && parse_ipv4("0.0.0.0") == "0.0.0.0");
+		CHECK(parse_ipv4("255.255.255.255") == "255.255.255.255" && parse_ipv4("127.000.0.01") == "127.0.0.1");
+		CHECK(!parse_ipv4("256.0.0.1") && !parse_ipv4("1.2.3") && !parse_ipv4("1.2.3.4.5") && !parse_ipv4("1.2.3.") && !parse_ipv4(".1.2.3"));
+		CHECK(!parse_ipv4("1..2.3") && !parse_ipv4("1.2.3.1234") && !parse_ipv4("-1.2.3.4") && !parse_ipv4("localhost") && !parse_ipv4("") && !parse_ipv4("1.2.3.4 "));
+		CHECK(!parse_ipv4("0x7f.0.0.1") && !parse_ipv4("::1") && !parse_ipv4("1.2.3.4:6667"));
+
+		// The plan: Domain as before (the default "openspy.net" when the key is absent, off/empty = no redirect)...
+		auto chosen = choose("openspy.net", "");
+		CHECK(chosen.how == mode::domain && chosen.target == "openspy.net" && chosen.problem.empty());
+		CHECK(choose("off", "").how == mode::off && choose("", "").how == mode::off && choose("OFF ; no online", "").how == mode::off);
+		chosen = choose("example.org   ; my own server", "");
+		CHECK(chosen.how == mode::domain && chosen.target == "example.org"); // the README's inline comment isn't part of the domain
+		// ...and a Server address wins over it, with or without a comment.
+		chosen = choose("openspy.net", "127.0.0.1");
+		CHECK(chosen.how == mode::server && chosen.target == "127.0.0.1" && chosen.problem.empty());
+		chosen = choose("off", " 192.168.1.20 ; the stack on the LAN box");
+		CHECK(chosen.how == mode::server && chosen.target == "192.168.1.20");
+		CHECK(choose("openspy.net", "; 127.0.0.1 commented out").how == mode::domain);
+		// A Server that isn't an address is ignored, and says so; Domain stays in charge.
+		chosen = choose("openspy.net", "my.server.example");
+		CHECK(chosen.how == mode::domain && chosen.target == "openspy.net" && chosen.problem.find("Server=my.server.example isn't an IPv4 address") != std::string::npos);
+		chosen = choose("off", "127.0.0.256");
+		CHECK(chosen.how == mode::off && !chosen.problem.empty());
+
+		// Lookups under each plan.
+		const auto domain_plan = choose("openspy.net", "");
+		CHECK(redirect("xmenlegpc.master.gamespy.com", domain_plan) == "xmenlegpc.master.openspy.net");
+		CHECK(redirect("xmenlegpc.ms7.gamespy.com", domain_plan) == "xmenlegpc.ms7.openspy.net");
+		CHECK(redirect("NatNeg1.GameSpy.com", domain_plan) == "NatNeg1.openspy.net"); // the host's own part kept as it is
+		CHECK(!redirect("xmenlegpc.master.openspy.net", domain_plan) && !redirect("localhost", domain_plan) && !redirect("gamespy.com", domain_plan));
+		const auto server_plan = choose("openspy.net", "127.0.0.1");
+		for (const char* host : {"xmenlegpc.available.gamespy.com", "xmenlegpc.master.gamespy.com", "xmenlegpc.ms7.gamespy.com", "natneg1.gamespy.com",
+		                         "natneg2.gamespy.com", "peerchat.gamespy.com", "gpcm.gamespy.com", "gpsp.gamespy.com", "xmenlegpc.ms7.openspy.net"})
+		{
+			if (redirect(host, server_plan) != "127.0.0.1")
+			{
+				std::printf("  FAIL  %s isn't sent to [Online] Server\n", host);
+				++failures;
+			}
+		}
+		CHECK(!redirect("localhost", server_plan) && !redirect("www.example.com", server_plan) && !redirect("gamespy.com", server_plan));
+		CHECK(!redirect("xmenlegpc.master.gamespy.com", choose("off", "")));
 	}
 
 	void check_save_folder()
@@ -4133,9 +4243,9 @@ int main(const int argc, char** argv)
 	const bool show_live = argc > 1 && std::strcmp(argv[1], "--live") == 0;
 	std::setvbuf(stdout, nullptr, _IONBF, 0); // keep output up to a crash
 
-	if (argc > 1 && std::strcmp(argv[1], "--pipe-child") == 0)
+	if (argc > 2 && std::strcmp(argv[1], "--pipe-child") == 0)
 	{
-		check_pipe();
+		check_pipe(argv[2]);
 		return failures; // added to the parent's
 	}
 
@@ -4168,6 +4278,7 @@ int main(const int argc, char** argv)
 		std::printf("  skip  pad checks (connect an Xbox-compatible pad)\n");
 	}
 	check_online();
+	check_online_rules();
 	check_display_rules();
 	check_frame_rate_rules();
 	check_menu_screens();

@@ -83,6 +83,15 @@ To use another server (for example one you host yourself) or to switch the redir
 Domain=openspy.net   ; or your server's domain, or: off
 ```
 
+**A server of your own without DNS names** (a self-hosted OpenSpy, for example [its Docker setup](https://github.com/openspy/compose) on your own PC or LAN): give its IPv4 address instead, and every GameSpy (and OpenSpy) host name the game looks up resolves to it.
+
+```ini
+[Online]
+Server=127.0.0.1     ; every *.gamespy.com / *.openspy.net lookup -> this address; wins over Domain
+```
+
+The game looks up `xmenlegpc.available` and `xmenlegpc.master` (UDP 27900: the availability check and a hosted game's heartbeats), `xmenlegpc.ms<N>` (TCP 28910: the game and region lists) and `natneg1`/`natneg2` (UDP 27901), all under `gamespy.com`, so that server needs those ports. `xml2-fix.log` lists each name the first time it is sent there (`online: xmenlegpc.master.gamespy.com -> 127.0.0.1 ([Online] Server)`). A value that isn't an IPv4 address is ignored, with a line in the log, and `Domain` applies.
+
 **Diagnosing online problems:** add this to `xml2-fix.ini` and `xml2-fix.log` will list every connection and query the game makes:
 
 ```ini
@@ -130,9 +139,10 @@ For automated tests (the X-Men Legends I port's test runner, for one) that need 
 ```ini
 [Test]
 InputPipe=1
+PipeName=xml2-fix-input   ; the default; optional
 ```
 
-the fix listens on the named pipe `\\.\pipe\xml2-fix-input`: one command per line, one reply line each (`ok …` or `error …`).
+the fix listens on the named pipe `\\.\pipe\xml2-fix-input` (or `\\.\pipe\` + `PipeName`): one command per line, one reply line each (`ok …` or `error …`). To drive two games at once, run them from two copies of the game folder (the game has no single-instance check) and give each its own `PipeName`: letters, digits, `-` and `_`, up to 64 of them. A name outside those rules is refused in `xml2-fix.log` and the default is used.
 
 | Command | Effect |
 | ------- | ------ |

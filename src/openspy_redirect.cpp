@@ -11,51 +11,61 @@ namespace openspy_redirect
 	namespace
 	{
 		constexpr WORD gethostbyname_ordinal = 52;
-		constexpr std::string_view gamespy_suffix = ".gamespy.com";
 
 		using gethostbyname_t = hostent*(WSAAPI*)(const char*);
 		gethostbyname_t real_gethostbyname = nullptr;
-		std::string target_domain;
-
-		bool ends_with_gamespy(const std::string& name)
-		{
-			return name.size() > gamespy_suffix.size() &&
-			       _stricmp(name.c_str() + name.size() - gamespy_suffix.size(), gamespy_suffix.data()) == 0;
-		}
+		online_rules::plan active;
 
 		hostent* WSAAPI redirected_gethostbyname(const char* name)
 		{
-			if (!name)
+			const auto target = name ? online_rules::redirect(name, active) : std::nullopt;
+			if (!target)
 			{
 				return real_gethostbyname(name);
 			}
 
-			std::string host(name);
-			if (!ends_with_gamespy(host))
+			// Server mode hands Winsock the dotted address, which it answers without a lookup, in its
+			// own per-thread hostent - the same memory a real answer lives in.
+			auto* result = real_gethostbyname(target->c_str());
+			if (active.how == online_rules::plan::mode::server)
 			{
-				return real_gethostbyname(name);
+				logger::write_once(std::string("host:") + name, "online: %s -> %s ([Online] Server)", name, target->c_str());
 			}
-
-			host.replace(host.size() - gamespy_suffix.size() + 1, std::string::npos, target_domain);
-			auto* result = real_gethostbyname(host.c_str());
-			logger::write_once("host:" + host, "online: %s -> %s (%s)", name, host.c_str(), result ? "resolved" : "lookup failed");
+			else
+			{
+				logger::write_once("host:" + *target, "online: %s -> %s (%s)", name, target->c_str(), result ? "resolved" : "lookup failed");
+			}
 			return result;
 		}
 	}
 
-	void install(const HMODULE module, const char* domain)
+	void install(const HMODULE module, const online_rules::plan& chosen)
 	{
-		target_domain = domain;
+		if (!chosen.problem.empty())
+		{
+			logger::write("online: %s - ignored", chosen.problem.c_str());
+		}
+		if (chosen.how == online_rules::plan::mode::off)
+		{
+			logger::write("online: redirect turned off in xml2-fix.ini");
+			return;
+		}
+
+		active = chosen;
 		// Runs while the game is still loading, before any lookups.
 		real_gethostbyname = reinterpret_cast<gethostbyname_t>(
 			iat_hook::hook(module, "WS2_32.dll", "gethostbyname", gethostbyname_ordinal, reinterpret_cast<void*>(&redirected_gethostbyname)));
-		if (real_gethostbyname)
+		if (!real_gethostbyname)
 		{
-			logger::write("online: GameSpy servers redirected to %s", domain);
+			logger::write("online: the game doesn't look up hosts through gethostbyname - no redirect");
+		}
+		else if (chosen.how == online_rules::plan::mode::server)
+		{
+			logger::write("online: every GameSpy and OpenSpy host resolves to %s ([Online] Server)", chosen.target.c_str());
 		}
 		else
 		{
-			logger::write("online: the game doesn't look up hosts through gethostbyname - no redirect");
+			logger::write("online: GameSpy servers redirected to %s", chosen.target.c_str());
 		}
 	}
 }

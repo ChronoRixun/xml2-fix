@@ -7,7 +7,8 @@
 // Both are shown a Logitech Dual Action, and the game's bindings get a console-style layout
 // for it (the PC version ships keyboard-only defaults).
 //
-// Loading also redirects the game's GameSpy lookups to OpenSpy, for online play, and, when
+// Loading also redirects the game's GameSpy lookups to OpenSpy (or to one server of your own,
+// [Online] Server), for online play, and, when
 // xml2-fix.ini asks for it, runs the game windowed or borderless at the desktop's resolution,
 // raises engine caps (the actor and resource name tables, limits.hpp), gives a mod's campaign what
 // it needs (its New Game, saves, main menu, ending, forced parties, X-Men Legends 1's XP curve) and
@@ -105,18 +106,19 @@ namespace
 		return result;
 	}
 
-	std::string online_domain()
+	// An [Online] value as the ini has it (ASCII: host names and addresses).
+	std::string online_value(const wchar_t* key, const wchar_t* fallback)
 	{
 		const auto ini = (logger::module_dir() / L"xml2-fix.ini").wstring();
 		wchar_t value[256]{};
-		GetPrivateProfileStringW(L"Online", L"Domain", L"openspy.net", value, static_cast<DWORD>(std::size(value)), ini.c_str());
+		GetPrivateProfileStringW(L"Online", key, fallback, value, static_cast<DWORD>(std::size(value)), ini.c_str());
 
-		std::string domain;
+		std::string text;
 		for (const wchar_t c : std::wstring(value))
 		{
-			domain += static_cast<char>(c);
+			text += static_cast<char>(c);
 		}
-		return domain;
+		return text;
 	}
 
 	void install()
@@ -136,14 +138,7 @@ namespace
 			logger::write("the game doesn't import GetProcAddress - its own DirectInput 8 stays unfixed");
 		}
 
-		if (const auto domain = online_domain(); !domain.empty() && domain != "off")
-		{
-			openspy_redirect::install(game, domain.c_str());
-		}
-		else
-		{
-			logger::write("online: redirect turned off in xml2-fix.ini");
-		}
+		openspy_redirect::install(game, online_rules::choose(online_value(L"Domain", L"openspy.net"), online_value(L"Server", L"")));
 
 		const auto ini = (logger::module_dir() / L"xml2-fix.ini").wstring();
 		if (GetPrivateProfileIntW(L"Debug", L"LogNetwork", 0, ini.c_str()))

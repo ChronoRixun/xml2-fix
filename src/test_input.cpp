@@ -25,7 +25,7 @@ namespace test_input
 	{
 		using namespace test_input_rules;
 
-		constexpr const char* pipe_name = "\\\\.\\pipe\\xml2-fix-input";
+		std::string pipe_path; // \\.\pipe\ + [Test] PipeName (choose_pipe), set before the pipe thread starts
 		constexpr DWORD read_wait_ms = 500;     // for the game to poll the keyboard once
 		constexpr DWORD capture_wait_ms = 3000; // for the game to draw a frame
 		constexpr DWORD console_wait_ms = 2000; // for the game to read its keyboard with room in its console queue
@@ -538,10 +538,10 @@ namespace test_input
 		{
 			for (;;)
 			{
-				const HANDLE pipe = CreateNamedPipeA(pipe_name, PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, 4096, 4096, 0, nullptr);
+				const HANDLE pipe = CreateNamedPipeA(pipe_path.c_str(), PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, 4096, 4096, 0, nullptr);
 				if (pipe == INVALID_HANDLE_VALUE)
 				{
-					logger::write_once("test:pipe-create", "test: ERROR: CreateNamedPipe %s failed (error %lu) - another game with the pipe on?", pipe_name, GetLastError());
+					logger::write_once("test:pipe-create", "test: ERROR: CreateNamedPipe %s failed (error %lu) - another game with the pipe on? ([Test] PipeName gives each game its own)", pipe_path.c_str(), GetLastError());
 					Sleep(2000);
 					continue;
 				}
@@ -594,6 +594,20 @@ namespace test_input
 			return;
 		}
 
+		wchar_t name[256]{};
+		GetPrivateProfileStringW(L"Test", L"PipeName", L"", name, static_cast<DWORD>(std::size(name)), ini.c_str());
+		std::string name_text;
+		for (const wchar_t c : std::wstring(name))
+		{
+			name_text += c < 0x80 ? static_cast<char>(c) : '?'; // anything else isn't a pipe name character anyway
+		}
+		const auto pipe = choose_pipe(name_text);
+		if (!pipe.error.empty())
+		{
+			logger::write("test: [Test] %s - using %s", pipe.error.c_str(), pipe.name.c_str());
+		}
+		pipe_path = pipe.path;
+
 		read_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 		capture_done = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 		console_done = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -609,7 +623,7 @@ namespace test_input
 		display::set_frame_hook(&on_frame);
 		display::disable_multisampling("the test pipe copies the back buffer");
 		display::show_without_focus("the test pipe drives the game in the background");
-		logger::write("test: input pipe %s ([Test] InputPipe=1) - keys from it reach the game without the focus; the keyboard only with it", pipe_name);
+		logger::write("test: input pipe %s ([Test] InputPipe=1, PipeName %s) - keys from it reach the game without the focus; the keyboard only with it", pipe_path.c_str(), pipe.name.c_str());
 	}
 
 	void hook_direct_input8(void* direct_input)

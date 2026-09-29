@@ -1,6 +1,6 @@
 # Online play: status and next steps
 
-_Last updated 2026-09-27._
+_Last updated 2026-09-28._
 
 ## What works
 
@@ -31,6 +31,22 @@ on OpenSpy's status pages.
 `[Debug] LogNetwork=1` in `xml2-fix.ini` logs the queries the game sends and the size of
 each reply. One pass through the online menu shows the exact group query and how much
 OpenSpy returns.
+
+**No chat server.** Despite the Peer code, XMen2.exe never connects to GameSpy's chat server:
+it has no `peerchat` host name, and its only TCP connection is the server list's (`connect`
+at 0x63f714, to `%s.ms%d.gamespy.com` port 28910); its other sockets are UDP (QR2, natneg,
+the game's own traffic). So the Region List needs only the server list's groups, and hosted
+games only their QR2 heartbeats with `groupid` - nothing on OpenSpy's peerchat.
+
+## Testing against a private OpenSpy
+
+`[Online] Server=127.0.0.1` sends every GameSpy name the game looks up to one address, so a
+private OpenSpy stack (their `openspy/compose` images in Docker, ports on 127.0.0.1 only) can
+stand in for openspy.net without DNS. With three `xmenlegpc` groups in its `grouplist` table
+(gameid 1158: "North America", "Europe", "Rest of World", maxwaiting 100) a group query with the
+game's field list gets a 197-byte (encrypted) reply, against 154 bytes for a game with no groups.
+Two games on one PC (two copies of the game folder) can each be driven through their own
+test pipe with `[Test] PipeName`.
 
 ## Options
 

@@ -6,6 +6,7 @@
 //
 //   [Test]
 //   InputPipe = 1
+//   PipeName = xml2-fix-input   ; the default; another name per game folder to drive two games at once
 //
 // XMen2.exe reads the keyboard through its own DirectInput 8 device (GUID_SysKeyboard,
 // c_dfDIKeyboard, GetDeviceState(256) every frame; the engine's window messages aren't used),
@@ -20,7 +21,7 @@
 // window never reach them (its message filter, 0x6223d0, drops WM_KEYUP and the widgets ignore
 // WM_KEYDOWN). So "tap DOWN" / "tap ENTER" / "tap LEFT" drive the panel too.
 //
-// The pipe is \\.\pipe\xml2-fix-input, one command per line, one reply line per command
+// The pipe is \\.\pipe\xml2-fix-input (or \\.\pipe\<PipeName>), one command per line, one reply line per command
 // ("ok ..." or "error ..."): down/up/tap/hold KEYS [ms], release, screenshot PATH, script
 // STATEMENT, console COMMAND, status, ping (test_input_rules.hpp has the grammar). Its thread
 // never touches the game's; keys it holds expire after 10 s so a dead client can't wedge one.

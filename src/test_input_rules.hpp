@@ -24,6 +24,40 @@ namespace test_input_rules
 	constexpr DWORD max_hold_ms = 10000;       // a key the pipe holds down is released after this whatever the client does
 	constexpr unsigned char key_down = 0x80;   // the "pressed" bit of a DirectInput keyboard state byte
 
+	// ---- [Test] PipeName ---------------------------------------------------------------------------
+	//
+	// The pipe's name under \\.\pipe\, so two games (two copies of the game folder: XMen2.exe has no
+	// single-instance check) can each be driven through a pipe of their own. Letters, digits, '-'
+	// and '_', at most 64 of them; a ';' starts a comment. Unset: xml2-fix-input. A value that isn't
+	// a name is refused (logged) and the default is used.
+
+	constexpr std::string_view default_pipe_name = "xml2-fix-input";
+	constexpr std::string_view pipe_prefix = "\\\\.\\pipe\\";
+	constexpr std::size_t pipe_name_max = 64;
+
+	struct pipe_choice
+	{
+		std::string name;  // what the ini asked for, or the default
+		std::string path;  // \\.\pipe\<name>
+		std::string error; // why the ini's value was refused, when it was
+	};
+
+	// `value`: [Test] PipeName as the ini has it, "" when the key is absent.
+	inline pipe_choice choose_pipe(const std::string_view value)
+	{
+		pipe_choice chosen;
+		const auto text = limits_rules::value_text(value);
+		const bool valid = text.size() <= pipe_name_max &&
+		                   std::all_of(text.begin(), text.end(), [](const char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_'; });
+		if (!text.empty() && !valid)
+		{
+			chosen.error = "PipeName=" + std::string(text) + " isn't a pipe name (letters, digits, '-' and '_', at most " + std::to_string(pipe_name_max) + ")";
+		}
+		chosen.name = !text.empty() && valid ? std::string(text) : std::string(default_pipe_name);
+		chosen.path = std::string(pipe_prefix) + chosen.name;
+		return chosen;
+	}
+
 	// ---- The game's console queue (script, console) ---------------------------------------------------
 	//
 	// XMen2.exe's console is a static object at 0x7ac290, handed out by 0x55c890 (it builds it at the
