@@ -39,10 +39,12 @@
 // in those four functions (19, `sites`) is pointed at the DLL's copy of the name given; a slot left
 // empty keeps the game's. So the first six are mouse slots (and the e3 disables), the seventh is Quit
 // in every respect, the last two the Quit button's model and focus model (a click on them counts as
-// the seventh). A menu with one item more than XML2's (the X-Men Legends 1 port's eighth, Play
-// Online) gives the eighth slot a name: the clamp's compare becomes cmp edi, 8 (its imm8 at
-// 0x5c944d), so a click on slot 7 focuses and accepts that item itself, like the first six, and only
-// slot 8 (debug_focus, or the ninth name) still counts as Quit. The two cells are left alone: the
+// the seventh). A menu with one item more than XML2's (the X-Men Legends 1 port's Play Online, its
+// button7; its Quit is button8, the seventh name) gives the eighth slot a name: the clamp's compare
+// becomes cmp edi, 8 (its imm8 at 0x5c944d; the mov ebx, 6 after it stays: slot 8 still gets Quit's
+// index), so a click on slot 7 focuses and accepts that item itself, like the first six, and only
+// slot 8 (debug_focus, or the ninth name) still counts as Quit. The slot array itself has nine
+// entries (the loop's cmp edi, 9 at 0x5c9540) and nothing else sizes it. The two cells are left alone: the
 // Danger Room gate and Play Online stay on items named label_option06 / label_option09 (a mod gives
 // its Danger Room item a usecmd instead, the port's Play Online "openmenu online"). Nothing
 // outside the four functions changes: the item parser (0x5bca21 / 0x5bca57, the "debug" exception
@@ -176,7 +178,7 @@ namespace main_menu_rules
 		return choice.names[i].empty() ? slots[i].retail : std::string_view(choice.names[i]);
 	}
 
-	// "button1,button2,button3,button4,button5,button6,button7,button8": up to nine names, comma separated,
+	// "button1,button2,button3,button4,button5,button6,button8,button7": up to nine names, comma separated,
 	// for label_option04, 05, 06, 07, 08, 09, debug_text, debug, debug_focus in that order; an empty entry
 	// or a missing one keeps the game's name. An eighth name is a seventh mouse slot (see above). A name
 	// is letters, digits and _ (an item name of the menu file), at most name_max characters. No two slots

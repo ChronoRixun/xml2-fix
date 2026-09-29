@@ -3750,6 +3750,11 @@ namespace
 		const auto port8 = parse_items(xml1 + ",button8   ; Play Online");
 		CHECK(port8.set && port8.error.empty() && port8.names[7] == "button8" && effective(port8, 7) == "button8" && effective(port8, 8) == "debug_focus" && eight_items(port8));
 		CHECK(!eight_items(parse_items("a,b,c,d,e,f,g,debug")) && !eight_items(parse_items("a,b,c,d,e,f,g,,i")) && eight_items(parse_items(",,,,,,,button8")));
+		// The port's own list (tools/harness.py): Play Online is its button7, Quit its button8 - Quit in the seventh
+		// slot, Play Online in the eighth.
+		const auto port_online = parse_items("button1,button2,button3,button4,button5,button6,button8,button7");
+		CHECK(port_online.set && port_online.error.empty() && effective(port_online, quit_slot) == "button8" && effective(port_online, 7) == "button7" &&
+		      effective(port_online, 8) == "debug_focus" && eight_items(port_online));
 		const auto commented = parse_items("  button1 , button2,button3 ;  XML1's buttons, not a name");
 		CHECK(commented.set && commented.error.empty() && commented.names[1] == "button2" && commented.names[2] == "button3" && commented.names[3].empty());
 		const auto unset = parse_items("   ; nothing");
@@ -5630,7 +5635,7 @@ namespace
 			       "SaveFolder=X-Men Legends   ; its own saves\r\n"
 			       "WindowTitle=X-Men Legends   ; the window's and the taskbar's name\r\n"
 			       "EndHeroUnlock=0   ; no Deadpool after the credits\r\n"
-			       "MainMenuItems=button1,button2,button3,button4,button5,button6,button7,button8   ; XML1's menu with Play Online\r\n"
+			       "MainMenuItems=button1,button2,button3,button4,button5,button6,button8,button7   ; XML1's menu: Quit button8, Play Online button7\r\n"
 			       "PostgameScript=x1/menus/postgame   ; r505, then the main menu\r\n"
 			       "NewGamePlus=0   ; no saved statistics\r\n"
 			       "ResetUnlocks=  ; later\r\n"
@@ -5669,7 +5674,7 @@ namespace
 		CHECK(window_title_rules::parse_title(view(read(L"Game", L"WindowTitle"))).title == "X-Men Legends");
 		CHECK(postgame_rules::parse_end_unlock(view(read(L"Game", L"EndHeroUnlock"))).skip);
 		const auto items = main_menu_rules::parse_items(read(L"Game", L"MainMenuItems").value_or(""));
-		CHECK(items.set && items.error.empty() && items.names[7] == "button8" && main_menu_rules::eight_items(items));
+		CHECK(items.set && items.error.empty() && items.names[6] == "button8" && items.names[7] == "button7" && main_menu_rules::eight_items(items));
 		CHECK(postgame_rules::parse_script(read(L"Game", L"PostgameScript").value_or("")).name == "x1/menus/postgame");
 		CHECK(!flag(L"Game", L"NewGamePlus", true) && flag(L"Game", L"ResetUnlocks", true));
 		CHECK(xp_curve_rules::parse_curve(read(L"Game", L"XPCurve").value_or("")).value == xp_curve_rules::curve::xml1);
