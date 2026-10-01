@@ -17,6 +17,7 @@
 // VirtualPads, when nothing is plugged in) and take screenshots without the focus. It also
 // shows what the game is doing in Discord (Rich Presence, [Discord]; on unless switched off).
 
+#include "conversations.hpp"
 #include "discord_presence.hpp"
 #include "display.hpp"
 #include "forced_teams.hpp"
@@ -181,6 +182,10 @@ namespace
 		// patch push operands of script-facing code; nothing here depends on limits or test_input (the
 		// pipe's "script" command compiles its statement when it runs, with the functions in place).
 		forced_teams::install(game);
+		// Conversations written for XML1's engine ([Game] AutoAdvance, ReplyVoices, ReplyCursor; on by default):
+		// three code sites of the conversation system, used from the first conversation on; independent of the
+		// patches above (none of its sites or guards is anyone else's).
+		conversations::install(game);
 		// Before any of XMen2.exe's own code runs, as the engine limit adjuster must be: this DLL is a
 		// static import of libIGDisplay.dll, which XMen2.exe imports statically, so Windows runs this
 		// DllMain while it loads the process - before the exe's entry point (0x6725f4, the CRT start-up

@@ -11,7 +11,7 @@
 // research/limits/actor-table.md (sections 5, 7) and igb-cache.md (section 8.1); the rows below were
 // regenerated from the exe with capstone, which found four fields of the name table the notes had
 // missed (0x55a6c0, 0x55a6c7, 0x55ae88, 0x55af40) and that its node count is one field seen from two
-// bases. Two structures:
+// bases. Three structures (the third, the item enhancement pool, below the other two):
 //
 // - The actor table, CAnimMotionCache: a static object at 0x7b05e8 with 40 slots for actor skins and
 //   animation databases. When all 40 are in use, precache (0x56b1c0) quietly returns NULL, a
@@ -51,6 +51,8 @@ namespace limits_rules
 	constexpr int stock_resource_names = 450;
 	constexpr int max_resource_names = 4096;
 	constexpr int default_resource_names = 1024; // what ActorSlots brings along when ResourceNames is absent
+	constexpr int stock_item_enhancements = 375;  // the item manager's enhancement record pool
+	constexpr int max_item_enhancements = 1024;
 
 	// Every record of the actor table takes a name, so the name table has to grow by at least the
 	// actor table's growth. (The IGB cache's raise, when it comes, adds its own growth here.)
@@ -96,6 +98,7 @@ namespace limits_rules
 	{
 		int actor_slots = stock_actor_slots;
 		int resource_names = stock_resource_names;
+		int item_enhancements = stock_item_enhancements;
 		std::vector<std::string> notes; // for the log, in order
 	};
 
@@ -103,9 +106,24 @@ namespace limits_rules
 	// left stock. ResourceNames: 451..4096 raises the name table, 450 is the game's own, anything else
 	// is logged and ignored. ActorSlots above 40 needs a bigger name table: without a (usable)
 	// ResourceNames it gets 1024, and a ResourceNames too small for it is raised to what it needs.
-	inline choice decide(const std::optional<std::string_view> actor_slots, const std::optional<std::string_view> resource_names)
+	// ItemEnhancements: 376..1024 raises the item manager's enhancement record pool, 375 is the game's
+	// own, anything else is logged and left stock; independent of the two tables.
+	inline choice decide(const std::optional<std::string_view> actor_slots, const std::optional<std::string_view> resource_names,
+	                     const std::optional<std::string_view> item_enhancements = std::nullopt)
 	{
 		choice result;
+		if (item_enhancements)
+		{
+			const auto value = parse_count(*item_enhancements);
+			if (value && *value >= stock_item_enhancements && *value <= max_item_enhancements)
+			{
+				result.item_enhancements = *value;
+			}
+			else
+			{
+				result.notes.push_back("ItemEnhancements=" + std::string(value_text(*item_enhancements)) + " isn't a number from 376 to 1024 (375 is the game's own) - the enhancement pool stays at 375 records");
+			}
+		}
 		if (actor_slots)
 		{
 			const auto value = parse_count(*actor_slots);
@@ -798,5 +816,207 @@ namespace limits_rules
 			std::memcpy(code + f.offset, &value, f.size);
 		}
 		relocate_rel32(code, std::span<const std::uint8_t>(clone.rel32.data(), clone.rel32_count), clone.va, dest_va);
+	}
+
+	// ---- The item manager's enhancement record pool ---------------------------------------------------
+	//
+	// The item manager (one object of 0x7a00 bytes, allocated at 0x480a21 by the game's allocator and
+	// built by 0x480700; its pointer at 0x72a514) keeps every <enhancement> of Data/items - the prefix,
+	// suffix and tr_item affixes, then each item's own - as a record of 0x28 bytes in a pool of 375:
+	// the records at manager+0x2594, the pool's allocated bitmap (12 dwords) at +0x602c, the prefix /
+	// suffix / total counts at +0x605c / +0x6060 / +0x6064. The loader (0x480400) stops at the 376th
+	// record (0x4804a6: cmp [mgr+0x6064], 0x177; jge -> the load aborts), so the item that overflows and
+	// every item after it never exist; XML2's own table uses 374, and the X-Men Legends 1 port's 19 Danger
+	// Room rewards (54 enhancements) all but one fall off. Saves store enhancement RECORD NUMBERS (each
+	// item instance's own and random affixes as u16 record indices, 0x481610 / 0x482b40), so nothing
+	// before record 374 can move: the pool can only grow (research: xml1-port SPEC.md section 32.3).
+	//
+	// Raised to N by moving the records and the bitmap to the END of a bigger manager: the allocation
+	// becomes 0x7a00 + N * 0x28 + the bitmap's dwords, the 21 instructions that reach the records at
+	// +0x2594 and the 7 that reach the bitmap at +0x602c get the new offsets, the 8 compares with 375
+	// get N, the two `rep stosd` counts that clear the bitmap (the constructor's and the pool clear's)
+	// get its new dword count, and the pool clear (0x47dc00, which takes the records' address) gets the
+	// bitmap's new distance from them. The pool clear's bitset<375>::findNext (0x45e5f0) is shared with an
+	// unrelated 375-bit set (0x45f309), so the pool clear's call gets a clone of it with N in its five
+	// places - position-independent, short jumps only, as bitset<40>::findNext is. Everything else of
+	// the manager (the definitions, the instance pool, the inventory map, the counts) stays where it is.
+	// The pool's old 0x3aa8 bytes go unused. Every record index the game stores or saves is widened by
+	// nothing: they are u16 already (0x47bad0 bounds a lookup by the capacity, patched too).
+
+	constexpr DWORD item_manager_pointer = 0x72a514; // the manager, built at the first 0x480a00
+	constexpr DWORD item_manager_size = 0x7a00;
+	constexpr DWORD item_record_size = 0x28;
+	constexpr DWORD item_records_retail = 0x2594;
+	constexpr DWORD item_bitmap_retail = 0x602c;
+	constexpr DWORD item_count_offset = 0x6064;     // the records in use (what the test pipe's status reports)
+	constexpr DWORD item_find_next_va = 0x45e5f0;    // bitset<375>::findNext, cloned
+	constexpr DWORD item_find_next_call = 0x47dc69;  // the pool clear's call of it (the one re-aimed)
+
+	struct item_layout
+	{
+		int records;
+		DWORD records_offset;   // manager-relative
+		DWORD bitmap_offset;    // manager-relative
+		DWORD bitmap_dwords;
+		DWORD bitmap_in_pool;   // records-relative: records * 0x28
+		DWORD manager_size;
+	};
+
+	constexpr item_layout item_layout_for(const int records)
+	{
+		item_layout l{};
+		l.records = records;
+		if (records == stock_item_enhancements)
+		{
+			l.records_offset = item_records_retail;
+			l.bitmap_offset = item_bitmap_retail;
+			l.bitmap_dwords = 12;
+			l.bitmap_in_pool = item_bitmap_retail - item_records_retail;
+			l.manager_size = item_manager_size;
+			return l;
+		}
+		l.records_offset = item_manager_size;
+		l.bitmap_in_pool = static_cast<DWORD>(records) * item_record_size;
+		l.bitmap_offset = l.records_offset + l.bitmap_in_pool;
+		l.bitmap_dwords = dwords_for_bits(records);
+		l.manager_size = l.bitmap_offset + l.bitmap_dwords * 4;
+		return l;
+	}
+
+	enum class item_field : std::uint8_t
+	{
+		records_offset, // disp32: the records' manager-relative offset
+		bitmap_offset,  // disp32: the bitmap's
+		bitmap_dwords,  // imm32: the rep stosd counts
+		capacity,       // imm32: N
+		bitmap_in_pool, // disp32: the pool clear's records-relative bitmap
+		manager_size,   // imm32: the allocation
+		clone_call,     // rel32: the pool clear's call of findNext
+	};
+
+	using item_site = site<item_field>;
+
+	constexpr std::uint32_t value_of(const item_field field, const item_layout& l)
+	{
+		switch (field)
+		{
+		case item_field::records_offset: return l.records_offset;
+		case item_field::bitmap_offset: return l.bitmap_offset;
+		case item_field::bitmap_dwords: return l.bitmap_dwords;
+		case item_field::capacity: return static_cast<std::uint32_t>(l.records);
+		case item_field::bitmap_in_pool: return l.bitmap_in_pool;
+		case item_field::manager_size: return l.manager_size;
+		case item_field::clone_call: return 0; // needs the clone's address
+		}
+		return 0;
+	}
+
+	// Every N-dependent number of the item manager's code, with its retail bytes.
+	inline constexpr std::array<item_site, 41> item_sites{{
+		// The records at manager+0x2594.
+		{0x47bb01, "8d84c294250000", 3, 4, 0x2594, item_field::records_offset}, // the record lookup by index (0x47bad0, vt+0x10)
+		{0x47ca6e, "8d84d694250000", 3, 4, 0x2594, item_field::records_offset}, // the loader: a prefix's record
+		{0x47cab1, "8b84d694250000", 3, 4, 0x2594, item_field::records_offset},
+		{0x47cab8, "8d8cd694250000", 3, 4, 0x2594, item_field::records_offset},
+		{0x47cb67, "8d84d694250000", 3, 4, 0x2594, item_field::records_offset}, // a suffix's
+		{0x47cbb0, "8b84d694250000", 3, 4, 0x2594, item_field::records_offset},
+		{0x47cbb7, "8d8cd694250000", 3, 4, 0x2594, item_field::records_offset},
+		{0x47cd6e, "8d84d694250000", 3, 4, 0x2594, item_field::records_offset}, // a tr_item's
+		{0x47cdb3, "8b84d694250000", 3, 4, 0x2594, item_field::records_offset},
+		{0x47cdba, "8d8cd694250000", 3, 4, 0x2594, item_field::records_offset},
+		{0x47cf40, "8db394250000", 2, 4, 0x2594, item_field::records_offset},   // 0x47ce80: the walk over every record
+		{0x47d017, "8b94c394250000", 3, 4, 0x2594, item_field::records_offset},
+		{0x47d01e, "8d8cc394250000", 3, 4, 0x2594, item_field::records_offset},
+		{0x47e6d4, "8d9cce94250000", 3, 4, 0x2594, item_field::records_offset}, // the random prefix picker
+		{0x47eec6, "81c394250000", 2, 4, 0x2594, item_field::records_offset},   // the random suffix picker
+		{0x4804ce, "8d84d694250000", 3, 4, 0x2594, item_field::records_offset}, // the loader: an item's own record
+		{0x480513, "8b84d694250000", 3, 4, 0x2594, item_field::records_offset},
+		{0x48051a, "8d8cd694250000", 3, 4, 0x2594, item_field::records_offset},
+		{0x48097f, "8d8e94250000", 2, 4, 0x2594, item_field::records_offset},   // the destructor's pool clear
+		{0x673a4e, "81c194250000", 2, 4, 0x2594, item_field::records_offset},   // the constructor's unwind
+		{0x673ade, "81c194250000", 2, 4, 0x2594, item_field::records_offset},   // the destructor's unwind
+		// The allocated bitmap at manager+0x602c.
+		{0x47baf4, "85b48a2c600000", 3, 4, 0x602c, item_field::bitmap_offset},
+		{0x47ca56, "8d948e2c600000", 3, 4, 0x602c, item_field::bitmap_offset},
+		{0x47cb4f, "8d948e2c600000", 3, 4, 0x602c, item_field::bitmap_offset},
+		{0x47cd56, "8d948e2c600000", 3, 4, 0x602c, item_field::bitmap_offset},
+		{0x47cf61, "8594832c600000", 3, 4, 0x602c, item_field::bitmap_offset},
+		{0x4804b6, "8d948e2c600000", 3, 4, 0x602c, item_field::bitmap_offset},
+		{0x480741, "8dbe2c600000", 2, 4, 0x602c, item_field::bitmap_offset},    // the constructor's clear
+		// The bitmap's dword count (rep stosd).
+		{0x480747, "b90c000000", 1, 4, 0xc, item_field::bitmap_dwords},          // the constructor
+		{0x47dc75, "b90c000000", 1, 4, 0xc, item_field::bitmap_dwords},          // the pool clear
+		// The capacity.
+		{0x47badb, "3d77010000", 1, 4, 0x177, item_field::capacity},            // the record lookup's bound
+		{0x47ca46, "3d77010000", 1, 4, 0x177, item_field::capacity},            // the loader: a prefix
+		{0x47cb3f, "3d77010000", 1, 4, 0x177, item_field::capacity},            // a suffix
+		{0x47cd46, "3d77010000", 1, 4, 0x177, item_field::capacity},            // a tr_item
+		{0x4804a6, "3d77010000", 1, 4, 0x177, item_field::capacity},            // an item's own (the cut-off)
+		{0x47dc19, "81fa77010000", 2, 4, 0x177, item_field::capacity},          // the pool clear
+		{0x47dc59, "81fa77010000", 2, 4, 0x177, item_field::capacity},
+		{0x47dc6e, "3d77010000", 1, 4, 0x177, item_field::capacity},
+		// The pool clear's bitmap, records-relative.
+		{0x47dc00, "8b81983a0000", 2, 4, 0x3a98, item_field::bitmap_in_pool},
+		{0x47dc07, "8db9983a0000", 2, 4, 0x3a98, item_field::bitmap_in_pool},
+		// The allocation.
+		{0x480a25, "68007a0000", 1, 4, 0x7a00, item_field::manager_size},
+	}};
+
+	// The pool clear's call of bitset<375>::findNext: re-aimed at the clone.
+	inline constexpr item_site item_clone_call{0x47dc69, "e88209feff", 1, 4, static_cast<std::uint32_t>(item_find_next_va - (0x47dc69 + 5)), item_field::clone_call};
+
+	inline constexpr std::array<guard, 3> item_guards{{
+		{0x480a0e, "a114a572006489250000000083ec0885c0754e", "the manager's getter reads 0x72a514 and allocates when it is 0 (0x480a0e)"},
+		{0x480a21, "6a3b6a0e68007a0000e8b1fb0d00", "the allocation (0x480a21): 0x7a00 bytes from the game's allocator"},
+		{0x45f309, "e8e2f2ffff", "the other caller of bitset<375>::findNext (0x45f309, an unrelated set) - left as it is"},
+	}};
+
+	// bitset<375>::findNext (0x45e5f0): 0x99 bytes, position-independent (short jumps only, no calls, no
+	// globals); N in five places.
+	struct item_clone_field
+	{
+		std::uint8_t offset;
+		std::uint8_t size;
+		std::uint32_t retail;
+	};
+
+	struct item_function_clone
+	{
+		DWORD va;
+		std::string_view hex;
+		std::array<item_clone_field, 5> fields;
+	};
+
+	inline constexpr item_function_clone item_find_next{
+		item_find_next_va,
+		"8b4424043d77010000568bf17c09b8770100005ec20800538a5c24108bc8c1f90584db8b148e7502f7d28bc883e11fd3ea85d2751f83e0e083c0203d770100007d4d8bd0c1fa0584db8b14967502f7d285d274e1f7c2ffff0000750683c010c1ea1084d2750683c008c1ea08f6c20f750683c004c1ea04f6c201750c8d642400d1ea40f6c20174f83d770100007c05b8770100005b5ec20800",
+		{{
+			{0x05, 4, 0x177}, // cmp eax, 0x177 (the start index)
+			{0x0f, 4, 0x177}, // mov eax, 0x177 (none)
+			{0x3c, 4, 0x177}, // cmp eax, 0x177 (next word)
+			{0x89, 4, 0x177}, // cmp eax, 0x177 (the found index)
+			{0x90, 4, 0x177}, // mov eax, 0x177 (none)
+		}},
+	};
+
+	inline void finish_item_clone(std::uint8_t* code, const item_layout& layout)
+	{
+		for (const auto& f : item_find_next.fields)
+		{
+			const std::uint32_t value = static_cast<std::uint32_t>(layout.records);
+			std::memcpy(code + f.offset, &value, f.size);
+		}
+	}
+
+	// Everything the pool's raise writes into XMen2.exe for `layout`, with the clone at `clone`.
+	inline std::vector<operand_write> item_writes(const item_layout& layout, const DWORD clone)
+	{
+		std::vector<operand_write> writes;
+		for (const auto& s : item_sites)
+		{
+			writes.push_back({s.va + s.offset, s.size, value_of(s.field, layout)});
+		}
+		writes.push_back({item_clone_call.va + item_clone_call.offset, item_clone_call.size, rel32(item_clone_call.va, clone)});
+		return writes;
 	}
 }

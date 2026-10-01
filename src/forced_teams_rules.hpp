@@ -2,7 +2,7 @@
 
 // Forced parties for a mod's own campaign (the X-Men Legends 1 port: Magma alone in the mansion,
 // the flashbacks with their fixed heroes and costumes), kept apart from the patching so xml2_test
-// can check it without the game: the eight script functions and their signatures, the function
+// can check it without the game: the nine script functions and their signatures, the function
 // table the game's registration is pointed at, every retail byte they rely on, [Game] ForcedTeams
 // and AddHero, the hero-name and costume rules, Change Team greyed out in the Xtraction menus while
 // a mission's party is fixed (game flag "teamlock"), and what each function does, written over an
@@ -57,6 +57,7 @@ namespace forced_teams_rules
 		add_hero,         // i(s): XML1 addHero - seat a hero mid-zone through the game's own dormant 0x46c9f0 ([Game] AddHero)
 		get_party_member, // s(i): slot i's hero, "" when empty
 		join_hero,        // i(s): XML1 addHero as a reload - the spot saved, the hero added to the saved party, the zone reloaded there
+		skill_points,     // n(ai): addSkillPoints(actor, n) - n unspent skill points to the character(s) the name means (an item's '_ACTIVATOR_': the hero who took it)
 	};
 
 	struct function_spec
@@ -68,7 +69,7 @@ namespace forced_teams_rules
 
 	// None of these names is in XMen2.exe (xml2_test walks both of its tables). The exe has no "ssss",
 	// so the DLL owns its signature strings.
-	inline constexpr std::array<function_spec, 8> functions{{
+	inline constexpr std::array<function_spec, 9> functions{{
 		{"xml2fixFeature", "i", "s"},
 		{"seatParty", "n", "ssss"},
 		{"setSkinset", "n", "ss"},
@@ -77,6 +78,7 @@ namespace forced_teams_rules
 		{"addHero", "i", "s"},
 		{"getPartyMember", "s", "i"},
 		{"joinHero", "i", "s"},
+		{"addSkillPoints", "n", "ai"},
 	}};
 
 	// ---- The table the registration is pointed at ----------------------------------------------------
@@ -201,6 +203,7 @@ namespace forced_teams_rules
 		forced_teams,
 		add_hero,
 		join_hero,
+		skill_points, // addSkillPoints is registered with the rest: 1 whenever the functions are
 	};
 
 	inline std::string lowercase(std::string_view text)
@@ -226,6 +229,7 @@ namespace forced_teams_rules
 		if (clean == "forcedteams") return feature::forced_teams;
 		if (clean == "addhero") return feature::add_hero;
 		if (clean == "joinhero") return feature::join_hero;
+		if (clean == "skillpoints") return feature::skill_points;
 		return std::nullopt;
 	}
 
@@ -551,9 +555,51 @@ namespace forced_teams_rules
 	constexpr std::string_view loading_menu = "loading"; // restorelastzone's script function does nothing while it is up (0x4a0791-0x4a07a9)
 	constexpr std::size_t console_max = 127;             // what the console keeps of a line
 
+	// ---- Skill points (addSkillPoints) -------------------------------------------------------------------
+	//
+	// The game's "points to spend" test (0x4b7b00, on a hero's stats): nothing for an xpexempt hero (bit
+	// 0x20 of CStats+0x2ad); else the two words of the saved block at CStats+4 - the unspent skill points
+	// at block+0x14 (CStats+0x18, read by 0x544a30, written by 0x43a5b0 when the stats have talents,
+	// block+0xb8 > 0) and the unspent attribute points at block+0x16 (0x544a40 / 0x43a3f0) - summed
+	// above 0, or levels the hero hasn't been given their points for yet (the level byte CStats+0x1c
+	// past the XP object's processed count, CStats+0xc0 vt+0x14). Each level processed gives one skill
+	// point and four attribute points (the autospend's 0x4bbb54-0x4bbb75: +1 to the word at +0x14, +4
+	// to the one at +0x16); the skills screen spends from the word at +0x14 (0x5e5dff -> 0x43a5b0). The
+	// block is saved with the hero (0x43a520), so a point granted keeps across a save. XML1's SKILL
+	// pickup was one free skill point to the hero who took it; XMen2.exe has no script function for one.
+	//
+	// addSkillPoints(name, n) resolves the name as setXP does (0x4a8660: 0x4a7e30 lists the entities the
+	// name means in [0x756138] - a named entity, _ACTIVE_HERO_, _HERO1_.., _ALL_HEROES_; the script
+	// compiler has turned an item's '_ACTIVATOR_' into the activator's name by then), keeps the ones
+	// whose class info has the stats class bit (bit [0x70b840]+0x24 of class info +0x14, setXP's test)
+	// and a stats object at entity+0x35c, and adds n to each one's word through the game's own setter.
+	constexpr DWORD entities_by_name = 0x4a7e30; // __cdecl int (const char* name): the entities into entity_list, their count
+	constexpr DWORD entity_list = 0x756138;      // entity* [count]
+	constexpr DWORD stats_class = 0x70b840;      // dword: the class id setXP tests on each entity
+	constexpr DWORD entity_stats = 0x35c;        // entity+0x35c: its stats (CStats), 0 for none
+	constexpr DWORD stats_block = 4;             // CStats+4: the saved block
+	constexpr DWORD skill_points_get = 0x544a30; // __thiscall short (): block+0x14, the unspent skill points
+	constexpr DWORD skill_points_set = 0x43a5b0; // __thiscall void (short), ret 4: writes it when block+0xb8 (the talent count) > 0
+	constexpr DWORD stats_name = 0x150;          // CStats+0x150: the stats name, 0x20 bytes
+	constexpr DWORD stats_flags = 0x2ad;         // CStats+0x2ad: bit 0x20 xpexempt
+	constexpr std::uint8_t stats_xpexempt = 0x20;
+	constexpr int skill_points_max = 20;         // n per call
+	constexpr std::size_t grant_max = 8;         // entities one name can mean (_ALL_HEROES_ is four)
+
+	// One entity the name meant.
+	struct grant
+	{
+		char name[0x21];
+		int before = 0;
+		int after = 0;
+		bool character = false; // the stats class bit
+		bool stats = false;     // a stats object
+		bool exempt = false;    // xpexempt: the game shows it no points
+	};
+
 	// Every byte of XMen2.exe the functions rely on, read from the retail build. All must match
 	// before anything is patched; xml2_test compares them with a copy of the exe.
-	inline constexpr std::array<guard, 110> guards{{
+	inline constexpr std::array<guard, 118> guards{{
 		// The registration and the tree.
 		{0x49fe30, "6808a968006821010000e8318903008bc8e85a770300c3", "the registration (0x49fe30: push table, push count, call 0x4d75a0)"},
 		{0x4d7637, "81bf4819000040010000", "the tree's 320-name cap (0x4d7637)"},
@@ -693,6 +739,19 @@ namespace forced_teams_rules
 		 "extractionPointLite's Change Team option: push 0 at 0x4a6fb8 = disabled (0x4a6f93)"},
 		{0x6a3348, "d0975e00", "the dialog's vt+0x1c (addOption, 0x5e97d0)"},
 		{0x5b93e1, "83f8100f9cc08d4c2410506a006a016a005168fd0f0000", "the online Game Type menu greys Danger Room out with addOption's 6th argument (0x5b93e4)"},
+		// Skill points (addSkillPoints).
+		{0x4a7e30, "64a1000000006aff68c0416700506489250000000083ec285355568b74244433db3bf3570f84b102000056e8dca41c0083c4043bc38944241074338d4c2410e85cd6fbff84c074268d4c2410e82fd6fbffa338617500b8010000008b4c243864890d000000005f5e5d5b83c434c3",
+		 "the script name resolver (0x4a7e30): a named entity into [0x756138], count 1"},
+		{0x4a8660,
+		 "5155568b742410576a008bcee8bfd102008b108bc8ff52146a018bce8bf8e8add102008b108bc8ff5210578be8e89ef7ffff83c40433ff85c08944240c7e61538b34bd3861750085f6744b8b068bceff108b1540b8700083c2248bca83e11fbb01000000d3e3c1fa05855c9014742785ed8bce557d07e8c56ff7ffeb05e86e9cf7fff686d803000001750b6a0055e8ad6ef7ff83c4088b442410473bf87ca15b5f5e33c05d59c3",
+		 "setXP (0x4a8660): the name's entities, the stats class bit [0x70b840]+0x24, the XP gain on each"},
+		{0x422350, "568bf18b8e5c03000085c97426", "the XP gain reads the stats at entity+0x35c (0x422350)"},
+		{0x4b7b00, "578bf9f687ad02000020740432c05fc353568d77048bcee814cf08008bce0fbfd8e81acf08000fbfc003c385c05e5b7f1c8b8fc00000008b11ff52140fb64f1c0fb6c02bc885c97f0433c05fc3b8010000005fc3",
+		 "the game's points-to-spend test (0x4b7b00): none for xpexempt; the two words of the block at CStats+4, or levels not yet processed"},
+		{0x544a30, "668b4114c3", "the unspent skill points: the word at block+0x14 (0x544a30)"},
+		{0x43a5b0, "8b81b800000085c07e09668b44240466894114c20400", "their setter (0x43a5b0): written when the stats have talents (block+0xb8 > 0)"},
+		{0x4bbb54, "8bcee8e58e08008bce83c00450e88ae8f7ff8bcee8c38e08008bce4050e83aeaf7ff", "a level processed: +4 attribute points (block+0x16), +1 skill point (block+0x14) (0x4bbb54-0x4bbb75)"},
+		{0x5e5dff, "e8ac47e5ff", "the skills screen spends from the word at block+0x14 (0x5e5dff -> 0x43a5b0)"},
 	}};
 
 	// ---- Reading a handler's arguments (no C++ objects: the reads are SEH-guarded) --------------------
@@ -757,6 +816,7 @@ namespace forced_teams_rules
 	//   std::optional<int> hero_index(const std::string&);             - registry vt+0x3c, 0 = none
 	//   std::optional<bool> herostat(int index);                       - registry vt+0x7c
 	//   std::optional<std::string> slot(int i); bool seat(int i, const std::string&);
+	//   std::optional<std::vector<grant>> grant_skill_points(const std::string& name, int n); - setXP's name resolution, the word at block+0x14
 	//   std::optional<int> hero_count(); std::optional<int> hero_at(int i); std::optional<bool> has_stats(int index);
 	//   std::optional<int> costume(int index); std::optional<bool> has_variant(int index, int costume); bool set_costume(int index, int costume);
 	//   std::optional<int> side_records(); std::optional<side_record> side_record_at(int i);
@@ -912,12 +972,69 @@ namespace forced_teams_rules
 		{
 			on = e.forced_teams() && e.join_hero_on() ? 1 : 0;
 		}
-		e.log(std::string(prefix) + call_text("xml2fixFeature", *values) + " -> " + std::to_string(on) + (which ? "" : " (not a feature: forcedteams, addhero, joinhero)"));
+		else if (which == feature::skill_points)
+		{
+			on = 1; // registered with the rest, whatever the switches
+		}
+		e.log(std::string(prefix) + call_text("xml2fixFeature", *values) + " -> " + std::to_string(on) + (which ? "" : " (not a feature: forcedteams, addhero, joinhero, skillpoints)"));
 		if (which == feature::forced_teams && !on)
 		{
 			warn_left_records(e);
 		}
 		return e.make_int(on);
+	}
+
+	// addSkillPoints(name, n): n unspent skill points (1..skill_points_max) to every character the name
+	// means that has a stats object, through the game's own setter; nothing else changes. The skills
+	// screen shows them as unspent; the game's level-up bookkeeping (a point per level) is untouched.
+	template <typename Engine>
+	void* add_skill_points(Engine& e, void* args)
+	{
+		const auto name = e.text_argument(args, 0);
+		const auto count = e.int_argument(args, 1);
+		if (!name || !count)
+		{
+			e.log(std::string(prefix) + "addSkillPoints: ERROR: couldn't read " + (!name ? "the name (argument 1)" : "the count (argument 2)") + " - nothing done");
+			return nullptr;
+		}
+		const auto call = std::string(prefix) + "addSkillPoints(\"" + *name + "\", " + std::to_string(*count) + ")";
+		if (*count < 1 || *count > skill_points_max)
+		{
+			e.log(call + ": the count isn't 1 to " + std::to_string(skill_points_max) + " - nothing done");
+			return nullptr;
+		}
+		const auto grants = e.grant_skill_points(*name, *count);
+		if (!grants)
+		{
+			e.log(call + ": ERROR: the game's name resolver (0x4a7e30) or the stats faulted - nothing done");
+			return nullptr;
+		}
+		if (grants->empty())
+		{
+			e.log(call + ": no entity of that name - nothing done");
+			return nullptr;
+		}
+		std::string text;
+		for (const auto& g : *grants)
+		{
+			text += text.empty() ? "" : "; ";
+			if (!g.character)
+			{
+				text += std::string(g.name[0] ? g.name : "(unnamed)") + ": not a character, skipped";
+			}
+			else if (!g.stats)
+			{
+				text += std::string(g.name[0] ? g.name : "(unnamed)") + ": no stats, skipped";
+			}
+			else
+			{
+				text += std::string(g.name) + ": unspent skill points " + std::to_string(g.before) + " -> " + std::to_string(g.after) +
+				        (g.after != g.before + *count ? " (NOT " + std::to_string(g.before + *count) + ": the game's setter writes only for stats with talents)" : "") +
+				        (g.exempt ? " (xpexempt: the game shows this hero no points)" : "");
+			}
+		}
+		e.log(call + " -> " + text);
+		return nullptr;
 	}
 
 	// seatParty(h1, h2, h3, h4): the party becomes exactly these heroes, through the game's slot

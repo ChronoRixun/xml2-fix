@@ -27,6 +27,8 @@ namespace limits
 		int name_cap = stock_resource_names;
 		bool motions_readable = false;
 		bool igb_readable = false;
+		int item_cap = stock_item_enhancements;
+		bool items_readable = false;
 
 		std::uint8_t* at(const DWORD va)
 		{
@@ -121,6 +123,23 @@ namespace limits
 				return va;
 			}
 			return bytes_match(find_next_40.va, find_next_40.hex) ? 0 : find_next_40.va;
+		}
+
+		DWORD items_mismatch()
+		{
+			if (const DWORD va = first_mismatch(item_sites))
+			{
+				return va;
+			}
+			if (const DWORD va = first_mismatch(item_guards))
+			{
+				return va;
+			}
+			if (!bytes_match(item_clone_call.va, item_clone_call.hex))
+			{
+				return item_clone_call.va;
+			}
+			return bytes_match(item_find_next.va, item_find_next.hex) ? 0 : item_find_next.va;
 		}
 
 		// Writes every operand. The pages they are on are made writable first, all of them, so a refusal
@@ -315,6 +334,54 @@ namespace limits
 			return true;
 		}
 
+		// The item manager's enhancement record pool: its records and bitmap moved to the end of a bigger
+		// manager (allocated by the game at its first use, after this), its code patched for `records`,
+		// the pool clear's findNext pointed at a clone of the DLL's.
+		bool raise_items(const int records)
+		{
+			constexpr const char* stays = "the item enhancement pool stays at 375 records";
+			if (const DWORD va = items_mismatch())
+			{
+				logger::write("limits: XMen2.exe doesn't have the expected code at 0x%08lX (not the retail build?) - %s", va, stays);
+				return false;
+			}
+			DWORD built = 0;
+			if (!read_dword(item_manager_pointer, built) || built)
+			{
+				logger::write("limits: the game has built its item manager already (0x72a514 = 0x%08lX) - %s", built, stays);
+				return false;
+			}
+			const auto layout = item_layout_for(records);
+			const auto clone_size = hex_size(item_find_next.hex);
+			auto* clone = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, clone_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+			if (!clone)
+			{
+				logger::write("limits: can't allocate the findNext clone (error %lu) - %s", GetLastError(), stays);
+				return false;
+			}
+			std::memcpy(clone, at(item_find_next.va), clone_size); // compared with the retail bytes above
+			finish_item_clone(clone, layout);
+			DWORD old_protection = 0;
+			if (!VirtualProtect(clone, clone_size, PAGE_EXECUTE_READ, &old_protection))
+			{
+				logger::write("limits: can't make the findNext clone executable (error %lu) - %s", GetLastError(), stays);
+				VirtualFree(clone, 0, MEM_RELEASE);
+				return false;
+			}
+			FlushInstructionCache(GetCurrentProcess(), clone, clone_size);
+			if (!patch(item_writes(layout, address_of(clone)), stays))
+			{
+				VirtualFree(clone, 0, MEM_RELEASE);
+				return false;
+			}
+			item_cap = records;
+			logger::write("limits: item enhancement pool raised from 375 to %d records - the item manager grows from 0x7a00 to 0x%lX bytes (allocated by the game at its first use), "
+			              "its records move from +0x2594 to +0x%lX and their bitmap from +0x602c to +0x%lX (%lu dwords); %zu fields and 1 call patched, bitset<375>::findNext cloned to 0x%08lX "
+			              "with its %zu; records in use at [0x72a514]+0x6064",
+			              records, layout.manager_size, layout.records_offset, layout.bitmap_offset, layout.bitmap_dwords, item_sites.size(), address_of(clone), item_find_next.fields.size());
+			return true;
+		}
+
 		std::optional<std::string> ini_value(const wchar_t* key)
 		{
 			return ini::text(L"Limits", key); // the fix's one rule, ini_rules.hpp
@@ -342,20 +409,29 @@ namespace limits
 			}
 			motions_readable = !first_mismatch(motion_counter_guards);
 			igb_readable = !first_mismatch(igb_counter_guards);
+			items_readable = !items_mismatch();
 		}
 
 		const auto actor_slots = ini_value(L"ActorSlots");
 		const auto resource_names = ini_value(L"ResourceNames");
-		if (!actor_slots && !resource_names)
+		const auto item_enhancements = ini_value(L"ItemEnhancements");
+		if (!actor_slots && !resource_names && !item_enhancements)
 		{
-			logger::write("limits: the game's own caps - 40 actor slots, 450 resource names (no [Limits] in xml2-fix.ini)");
+			logger::write("limits: the game's own caps - 40 actor slots, 450 resource names, 375 item enhancements (no [Limits] in xml2-fix.ini)");
 			return;
 		}
 		const auto chosen = decide(actor_slots ? std::optional<std::string_view>(*actor_slots) : std::nullopt,
-		                           resource_names ? std::optional<std::string_view>(*resource_names) : std::nullopt);
+		                           resource_names ? std::optional<std::string_view>(*resource_names) : std::nullopt,
+		                           item_enhancements ? std::optional<std::string_view>(*item_enhancements) : std::nullopt);
 		for (const auto& note : chosen.notes)
 		{
 			logger::write("limits: %s", note.c_str());
+		}
+		// The item enhancement pool: on its own, before the game's first item load (the manager is built
+		// at its first use, long after DllMain).
+		if (chosen.item_enhancements > stock_item_enhancements && base)
+		{
+			raise_items(chosen.item_enhancements);
 		}
 		if (chosen.actor_slots == stock_actor_slots && chosen.resource_names == stock_resource_names)
 		{
@@ -401,7 +477,15 @@ namespace limits
 				motions = read(*pool + motion_pool_live);
 			}
 		}
+		std::optional<DWORD> items;
+		if (items_readable)
+		{
+			if (const auto manager = read(item_manager_pointer); manager && *manager)
+			{
+				items = read(*manager + item_count_offset);
+			}
+		}
 		return "actors " + counter(read(actor_live_va), actor_cap) + "; names " + counter(names, name_cap) + "; motions " + counter(motions, motion_pool_capacity) + "; igb " +
-		       counter(igb_readable ? read(igb_live_retail) : std::nullopt, igb_capacity);
+		       counter(igb_readable ? read(igb_live_retail) : std::nullopt, igb_capacity) + "; items " + counter(items, item_cap);
 	}
 }

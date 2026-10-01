@@ -10,6 +10,7 @@
 #include <cstring>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace forced_teams
 {
@@ -583,6 +584,65 @@ namespace forced_teams
 		};
 		static_assert(xpoint_menus.size() == 2);
 
+		using entities_by_name_t = int(__cdecl*)(const char* name);
+		using class_info_t_ = const std::uint8_t*(__fastcall*)(void* entity, void* edx);
+		using skill_get_t = short(__fastcall*)(void* block, void* edx);
+		using skill_set_t = void(__fastcall*)(void* block, void* edx, int value);
+
+		// As setXP resolves its name and walks the entities (0x4a8660-0x4a86fd), then the word at block+0x14
+		// through the game's own getter and setter. No C++ objects: `out` is filled, `count` set.
+		bool call_grant_skill_points(const char* name, const int n, grant (&out)[grant_max], int& count)
+		{
+			__try
+			{
+				count = 0;
+				int found = at<entities_by_name_t>(entities_by_name)(name);
+				if (found > static_cast<int>(grant_max))
+				{
+					found = static_cast<int>(grant_max);
+				}
+				for (int i = 0; i < found; ++i)
+				{
+					std::uint8_t* entity = at<std::uint8_t**>(entity_list)[i];
+					if (!entity)
+					{
+						continue;
+					}
+					grant& g = out[count++];
+					g.name[0] = 0;
+					g.before = g.after = 0;
+					g.character = g.stats = g.exempt = false;
+					const std::uint8_t* info = method<class_info_t_>(entity, 0)(entity, nullptr);
+					const DWORD bit = *at<const DWORD*>(stats_class) + 0x24;
+					DWORD word = 0;
+					std::memcpy(&word, info + 0x14 + (bit >> 5) * 4, sizeof(word));
+					if (!(word & (1u << (bit & 31))))
+					{
+						continue;
+					}
+					g.character = true;
+					std::uint8_t* stats = nullptr;
+					std::memcpy(&stats, entity + entity_stats, sizeof(stats));
+					if (!stats)
+					{
+						continue;
+					}
+					g.stats = true;
+					copy_text(reinterpret_cast<const char*>(stats + stats_name), g.name);
+					g.exempt = (stats[stats_flags] & stats_xpexempt) != 0;
+					void* block = stats + stats_block;
+					g.before = at<skill_get_t>(skill_points_get)(block, nullptr);
+					at<skill_set_t>(skill_points_set)(block, nullptr, g.before + n);
+					g.after = at<skill_get_t>(skill_points_get)(block, nullptr);
+				}
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
 		// The engine forced_teams_rules' functions work over: XMen2.exe.
 		struct game_engine
 		{
@@ -629,6 +689,17 @@ namespace forced_teams
 			bool join_hero_on()
 			{
 				return join_hero_switch.load();
+			}
+
+			std::optional<std::vector<grant>> grant_skill_points(const std::string& name, const int n)
+			{
+				grant found[grant_max]{};
+				int count = 0;
+				if (!call_grant_skill_points(name.c_str(), n, found, count))
+				{
+					return std::nullopt;
+				}
+				return std::vector<grant>(found, found + count);
 			}
 
 			std::optional<int> hero_index(const std::string& name)
@@ -805,8 +876,9 @@ namespace forced_teams
 			reinterpret_cast<const void*>(&handler<&add_hero<game_engine>, 'i'>),
 			reinterpret_cast<const void*>(&handler<&get_party_member<game_engine>, 's'>),
 			reinterpret_cast<const void*>(&handler<&join_hero<game_engine>, 'i'>),
+			reinterpret_cast<const void*>(&handler<&add_skill_points<game_engine>, 'n'>),
 		};
-		static_assert(static_cast<std::size_t>(function::join_hero) + 1 == functions.size());
+		static_assert(static_cast<std::size_t>(function::skill_points) + 1 == functions.size());
 
 		bool copy_retail_table()
 		{

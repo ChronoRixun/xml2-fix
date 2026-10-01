@@ -49,6 +49,7 @@
 #include "discord_ipc.hpp"
 #include "discord_rules.hpp"
 #include "display_rules.hpp"
+#include "conversations_rules.hpp"
 #include "forced_teams_rules.hpp"
 #include "frame_capture.hpp"
 #include "frame_rate_rules.hpp"
@@ -1087,7 +1088,7 @@ namespace
 	void check_limits_rules()
 	{
 		using namespace limits_rules;
-		std::printf("engine limits rules ([Limits] ActorSlots and ResourceNames)\n");
+		std::printf("engine limits rules ([Limits] ActorSlots, ResourceNames and ItemEnhancements)\n");
 
 		// The values: digits, with spaces and an inline comment around them.
 		CHECK(parse_count("127") == 127 && parse_count(" 1024\t") == 1024 && parse_count("127        ; 40 = the game's own") == 127 && parse_count("40;") == 40);
@@ -1277,6 +1278,63 @@ namespace
 		for (std::size_t i = 1; i < all_writes.size(); ++i) apart &= all_writes[i - 1].va + all_writes[i - 1].size <= all_writes[i].va;
 		CHECK(apart && all_writes.size() == 74 + 5 + 71);
 
+		// ItemEnhancements: 376..1024 raises the pool, 375 is the game's own, anything else is a note; on its own.
+		CHECK(decide(std::nullopt, std::nullopt).item_enhancements == 375 && decide(std::nullopt, std::nullopt, "512").item_enhancements == 512 &&
+		      decide(std::nullopt, std::nullopt, "375").item_enhancements == 375 && decide(std::nullopt, std::nullopt, "1024 ; the most").item_enhancements == 1024);
+		chosen = decide(std::nullopt, std::nullopt, "1025");
+		CHECK(chosen.item_enhancements == 375 && chosen.notes.size() == 1 && chosen.notes[0].find("ItemEnhancements=1025 isn't a number from 376 to 1024") != std::string::npos);
+		chosen = decide("127", "1024", "512");
+		CHECK(chosen.actor_slots == 127 && chosen.resource_names == 1024 && chosen.item_enhancements == 512 && chosen.notes.empty());
+		chosen = decide(std::nullopt, std::nullopt, "lots");
+		CHECK(chosen.item_enhancements == 375 && chosen.actor_slots == 40 && chosen.notes.size() == 1);
+
+		// The item layout: the retail one for 375; for N the records and the bitmap at the end of a bigger manager.
+		const auto retail_items = item_layout_for(stock_item_enhancements);
+		CHECK(retail_items.records_offset == 0x2594 && retail_items.bitmap_offset == 0x602c && retail_items.bitmap_dwords == 12 && retail_items.bitmap_in_pool == 0x3a98 &&
+		      retail_items.manager_size == 0x7a00);
+		const auto items_512 = item_layout_for(512);
+		CHECK(items_512.records_offset == 0x7a00 && items_512.bitmap_in_pool == 512 * 0x28 && items_512.bitmap_offset == 0x7a00 + 512 * 0x28 && items_512.bitmap_dwords == 16 &&
+		      items_512.manager_size == 0x7a00 + 512 * 0x28 + 64);
+		CHECK(item_layout_for(376).bitmap_dwords == 12 && item_layout_for(1024).bitmap_dwords == 32 && item_layout_for(1024).manager_size == 0x7a00 + 1024 * 0x28 + 128);
+		// The sites on their own: well-formed, the operand inside the instruction, the retail value in the bytes, 21 + 7 + 2 + 8 + 2 + 1.
+		bool item_rows_ok = true;
+		std::map<item_field, int> item_counts;
+		for (const auto& st : item_sites)
+		{
+			item_rows_ok &= valid_hex(st.hex) && static_cast<std::size_t>(st.offset) + st.size <= hex_size(st.hex) && operand_in(st.hex, st.offset, st.size) == st.retail && st.size == 4;
+			item_rows_ok &= value_of(st.field, retail_items) == st.retail;
+			++item_counts[st.field];
+		}
+		CHECK(item_rows_ok && item_sites.size() == 41 && item_counts[item_field::records_offset] == 21 && item_counts[item_field::bitmap_offset] == 7 &&
+		      item_counts[item_field::bitmap_dwords] == 2 && item_counts[item_field::capacity] == 8 && item_counts[item_field::bitmap_in_pool] == 2 && item_counts[item_field::manager_size] == 1);
+		CHECK(valid_hex(item_clone_call.hex) && item_clone_call.va == 0x47dc69 && operand_in(item_clone_call.hex, 1, 4) == item_clone_call.retail && item_clone_call.retail == 0x45e5f0 - (0x47dc69 + 5));
+		CHECK(valid_hex(item_find_next.hex) && hex_size(item_find_next.hex) == 0x99 && item_find_next.va == 0x45e5f0);
+		bool clone_fields_ok = true;
+		for (const auto& f : item_find_next.fields) clone_fields_ok &= operand_in(item_find_next.hex, f.offset, f.size) == 0x177 && f.size == 4;
+		CHECK(clone_fields_ok);
+		{
+			// no E8/E9 and no 0F 8x in the clone: it moves without relocation
+			bool pic = true;
+			for (std::size_t i = 0; i < hex_size(item_find_next.hex); ++i)
+			{
+				const auto b = hex_byte(item_find_next.hex, i);
+				pic &= b != 0xe8 && b != 0xe9 && !(b == 0x0f && i + 1 < hex_size(item_find_next.hex) && (hex_byte(item_find_next.hex, i + 1) & 0xf0) == 0x80);
+			}
+			CHECK(pic);
+			std::vector<std::uint8_t> code(hex_size(item_find_next.hex));
+			for (std::size_t i = 0; i < code.size(); ++i) code[i] = hex_byte(item_find_next.hex, i);
+			finish_item_clone(code.data(), items_512);
+			bool five = true;
+			for (const auto& f : item_find_next.fields) five &= operand_at(code.data() + f.offset, 4) == 512;
+			CHECK(five);
+		}
+		// The writes for N = 512 with a clone at 0x00b00000: every site, then the call.
+		const auto item_w = item_writes(items_512, 0x00b00000);
+		CHECK(item_w.size() == 42 && item_w.back().va == 0x47dc6a && item_w.back().value == 0x00b00000u - (0x47dc69 + 5) && item_w[0].va == 0x47bb04 && item_w[0].value == 0x7a00);
+		CHECK(std::ranges::count_if(item_w, [](const operand_write& w) { return w.value == 512; }) == 8 && std::ranges::count_if(item_w, [](const operand_write& w) { return w.value == 0x7a00; }) == 21 &&
+		      std::ranges::count_if(item_w, [](const operand_write& w) { return w.value == 0x7a00 + 512 * 0x28; }) == 7 && std::ranges::count_if(item_w, [](const operand_write& w) { return w.value == 16; }) == 2 &&
+		      std::ranges::count_if(item_w, [](const operand_write& w) { return w.value == 512 * 0x28; }) == 2 && std::ranges::count_if(item_w, [](const operand_write& w) { return w.value == 0x7a00 + 512 * 0x28 + 64; }) == 1);
+
 		const auto exe = game_executable();
 		if (!exe)
 		{
@@ -1307,13 +1365,37 @@ namespace
 		for (const auto& g : name_guards) expect(g.va, g.hex);
 		for (const auto& g : motion_counter_guards) expect(g.va, g.hex);
 		for (const auto& g : igb_counter_guards) expect(g.va, g.hex);
+		for (const auto& st : item_sites) expect(st.va, st.hex);
+		for (const auto& g : item_guards) expect(g.va, g.hex);
+		expect(item_clone_call.va, item_clone_call.hex);
+		expect(item_find_next.va, item_find_next.hex);
 		CHECK(retail);
 		const std::vector<std::uint8_t> before(image, image + image_size);
 
 		// The stock caps write back exactly the retail bytes (with the retail object and findNext).
 		for (const auto& w : actor_writes(retail_actors, actor_object_retail, find_next_40_va)) apply_write(image, w);
 		for (const auto& w : name_writes(retail_names)) apply_write(image, w);
+		for (const auto& w : item_writes(retail_items, item_find_next_va)) apply_write(image, w);
 		CHECK(std::memcmp(image, before.data(), image_size) == 0);
+
+		// N = 512 for the item pool: the 42 operands change, to their values, and nothing else does.
+		{
+			for (const auto& w : item_writes(items_512, 0x00b00000)) apply_write(image, w);
+			std::size_t changed = 0, outside = 0;
+			for (std::size_t i = 0; i < image_size; ++i)
+			{
+				if (image[i] == before[i]) continue;
+				++changed;
+				const DWORD va = image_base + static_cast<DWORD>(i);
+				bool inside = false;
+				for (const auto& w : item_writes(items_512, 0x00b00000)) inside |= va >= w.va && va < w.va + w.size;
+				outside += !inside;
+			}
+			CHECK(outside == 0 && changed > 0 && changed <= 42 * 4);
+			CHECK(operand_at(at(0x4804a7), 4) == 512 && operand_at(at(0x480a26), 4) == items_512.manager_size && operand_at(at(0x47bb04), 4) == 0x7a00 && operand_at(at(0x480743), 4) == items_512.bitmap_offset &&
+			      operand_at(at(0x47dc02), 4) == 512 * 0x28 && operand_at(at(0x47dc6a), 4) == 0x00b00000u - (0x47dc69 + 5) && operand_at(at(0x480748), 4) == 16);
+			std::memcpy(image, before.data(), image_size);
+		}
 
 		// N = 127, M = 1024: the listed operand bytes change, to their new values, and nothing else does.
 		constexpr DWORD object = 0x12340000, clone_va = 0x00a80000; // any addresses: only the arithmetic is looked at
@@ -1607,6 +1689,43 @@ namespace
 		std::optional<int> waiting() { return static_cast<int>(queued.size()); }
 		std::optional<std::string> current_menu() { return menu; }
 		void leave_hud() { ++hud_leaves; }
+		// addSkillPoints: the entities a script name means (0x4a7e30), each with its stats name, its word at
+		// block+0x14, whether it is a character with stats, whether the stats have talents (the setter writes
+		// only then) and xpexempt.
+		struct fake_actor
+		{
+			std::string stats_name;
+			int points = 0;
+			bool character = true;
+			bool stats = true;
+			bool talents = true;
+			bool exempt = false;
+		};
+		std::map<std::string, std::vector<fake_actor>> actors;
+		bool grant_fault = false;
+		std::optional<std::vector<forced_teams_rules::grant>> grant_skill_points(const std::string& name, const int n)
+		{
+			if (grant_fault) return std::nullopt;
+			std::vector<forced_teams_rules::grant> out;
+			const auto f = actors.find(name);
+			if (f == actors.end()) return out;
+			for (auto& a : f->second)
+			{
+				forced_teams_rules::grant g{};
+				std::strncpy(g.name, a.stats_name.c_str(), sizeof(g.name) - 1);
+				g.character = a.character;
+				g.stats = a.character && a.stats;
+				g.exempt = a.exempt;
+				if (g.stats)
+				{
+					g.before = a.points;
+					if (a.talents) a.points += n;
+					g.after = a.points;
+				}
+				out.push_back(g);
+			}
+			return out;
+		}
 		std::optional<std::string> current_zone() { return zone; }
 		std::optional<bool> zone_loading() { return loading; }
 		forced_teams_rules::call_state& state() { return kept; }
@@ -2254,15 +2373,59 @@ namespace
 			      e.logged("ERROR: cancelsidemission faulted - a record may stay on the side-mission stack"));
 			join_setup({"wolverine", "", "", ""});
 		}
+
+		// addSkillPoints: n to the word at block+0x14 of every character the name means, through the
+		// game's own setter; a refusal changes nothing.
+		{
+			e.actors = {{"wolverine", {{"Wolverine", 2}}},
+			            {"_ALL_HEROES_", {{"Wolverine", 2}, {"Magma", 0, true, true, true, true}, {"", 0, false}, {"Ghost", 0, true, false}}},
+			            {"dummy", {{"Dummy", 5, true, true, false}}}};
+			script_call c(vtables);
+			c.text("wolverine").number(1);
+			CHECK(add_skill_points(e, &c.args) == nullptr && e.actors["wolverine"][0].points == 3 &&
+			      e.last() == "forced teams: addSkillPoints(\"wolverine\", 1) -> Wolverine: unspent skill points 2 -> 3");
+			script_call all(vtables);
+			all.text("_ALL_HEROES_").number(2);
+			CHECK(add_skill_points(e, &all.args) == nullptr && e.actors["_ALL_HEROES_"][0].points == 4 && e.actors["_ALL_HEROES_"][1].points == 2 &&
+			      e.last() == "forced teams: addSkillPoints(\"_ALL_HEROES_\", 2) -> Wolverine: unspent skill points 2 -> 4; Magma: unspent skill points 0 -> 2 (xpexempt: the game shows this "
+			                  "hero no points); (unnamed): not a character, skipped; Ghost: no stats, skipped");
+			script_call d(vtables);
+			d.text("dummy").number(1);
+			CHECK(add_skill_points(e, &d.args) == nullptr && e.actors["dummy"][0].points == 5 &&
+			      e.last() == "forced teams: addSkillPoints(\"dummy\", 1) -> Dummy: unspent skill points 5 -> 5 (NOT 6: the game's setter writes only for stats with talents)");
+			const auto refused = [&](const std::string& name, const int n, const std::string& why)
+			{
+				const int before = e.actors["wolverine"][0].points;
+				script_call r(vtables);
+				r.text(name).number(n);
+				const bool none = add_skill_points(e, &r.args) == nullptr && e.actors["wolverine"][0].points == before && e.last().find(why) != std::string::npos;
+				if (!none) std::printf("  info  addSkillPoints(%s, %d): %s\n", name.c_str(), n, e.last().c_str());
+				return none;
+			};
+			CHECK(refused("wolverine", 0, "the count isn't 1 to 20 - nothing done") && refused("wolverine", 21, "the count isn't 1 to 20") && refused("wolverine", -1, "the count isn't 1 to 20"));
+			CHECK(refused("nobody", 1, "no entity of that name - nothing done"));
+			e.grant_fault = true;
+			CHECK(refused("wolverine", 1, "ERROR: the game's name resolver (0x4a7e30) or the stats faulted - nothing done"));
+			e.grant_fault = false;
+			script_call one(vtables);
+			one.text("wolverine"); // no count
+			CHECK(add_skill_points(e, &one.args) == nullptr && e.actors["wolverine"][0].points == 3 && e.last() == "forced teams: addSkillPoints: ERROR: couldn't read the count (argument 2) - nothing done");
+			script_call feature(vtables);
+			feature.text("skillpoints");
+			CHECK(fake_engine::as_int(xml2fix_feature(e, &feature.args)) == 1 && e.last() == "forced teams: xml2fixFeature(\"skillpoints\") -> 1");
+			e.forced = false;
+			CHECK(fake_engine::as_int(xml2fix_feature(e, &feature.args)) == 1); // registered with the rest, whatever the switches
+			e.forced = true;
+		}
 	}
 
 	void check_forced_teams_rules()
 	{
 		using namespace forced_teams_rules;
-		std::printf("forced parties ([Game] ForcedTeams, AddHero and JoinHero: seatParty, setSkinset, pushParty, popParty, addHero, joinHero)\n");
+		std::printf("forced parties ([Game] ForcedTeams, AddHero and JoinHero: seatParty, setSkinset, pushParty, popParty, addHero, joinHero, addSkillPoints)\n");
 
-		// The functions: eight, signatures the game's compiler knows, room in its tree.
-		CHECK(functions.size() == 8 && table_count == 0x129 && builtin_count + table_count == 316 && table_count + builtin_count <= tree_capacity);
+		// The functions: nine, signatures the game's compiler knows, room in its tree.
+		CHECK(functions.size() == 9 && table_count == 0x12a && builtin_count + table_count == 317 && table_count + builtin_count <= tree_capacity);
 		bool signatures_ok = true;
 		for (const auto& f : functions)
 		{
@@ -2275,7 +2438,9 @@ namespace
 		CHECK(std::string_view(functions[static_cast<std::size_t>(function::join_hero)].name) == "joinHero" && std::string_view(functions[static_cast<std::size_t>(function::join_hero)].ret) == "i" &&
 		      std::string_view(functions[static_cast<std::size_t>(function::join_hero)].args) == "s");
 		const auto writes = registration_writes(0x12345678);
-		CHECK(writes[0].va == 0x49fe31 && writes[0].value == 0x12345678 && writes[1].va == 0x49fe36 && writes[1].value == 0x129 && writes[0].size == 4 && writes[1].size == 4);
+		CHECK(writes[0].va == 0x49fe31 && writes[0].value == 0x12345678 && writes[1].va == 0x49fe36 && writes[1].value == 0x12a && writes[0].size == 4 && writes[1].size == 4);
+		CHECK(std::string_view(functions[static_cast<std::size_t>(function::skill_points)].name) == "addSkillPoints" && std::string_view(functions[static_cast<std::size_t>(function::skill_points)].ret) == "n" &&
+		      std::string_view(functions[static_cast<std::size_t>(function::skill_points)].args) == "ai" && skill_points_max == 20 && grant_max >= 4);
 
 		// The ini: absent = nothing; 0 = registered, off; 1 = on; AddHero only with ForcedTeams=1.
 		auto chosen = decide(std::nullopt, std::nullopt);
@@ -2306,7 +2471,7 @@ namespace
 		chosen = decide(std::nullopt, std::nullopt, "1");
 		CHECK(!chosen.registered && !chosen.join_hero && chosen.notes.size() == 1 && chosen.notes[0].find("JoinHero is set but ForcedTeams isn't") != std::string::npos);
 		CHECK(feature_named("forcedteams") == feature::forced_teams && feature_named(" AddHero") == feature::add_hero && feature_named("JoinHero") == feature::join_hero &&
-		      !feature_named("forced_teams") && !feature_named(""));
+		      feature_named("SkillPoints") == feature::skill_points && !feature_named("forced_teams") && !feature_named(""));
 
 		// Names: cleaned, repeats dropped, compacted.
 		CHECK((split_heroes("magma,,x") == std::vector<std::string>{"magma", "x"}));
@@ -2333,7 +2498,7 @@ namespace
 		bool guards_ok = true;
 		std::set<DWORD> addresses;
 		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
-		CHECK(guards_ok && guards.size() == 110);
+		CHECK(guards_ok && guards.size() == 118);
 
 		// Change Team in the Xtraction menus: greyed out only with ForcedTeams=1 and the flag read as set.
 		CHECK(change_team_disabled(true, 1) && !change_team_disabled(true, 0) && !change_team_disabled(true, std::nullopt) && !change_team_disabled(false, 1) &&
@@ -2373,7 +2538,7 @@ namespace
 		}
 		CHECK(retail);
 
-		// The game's names: its 289 functions and 19 builtins; none of the eight is among them, nor
+		// The game's names: its 289 functions and 19 builtins; none of the nine is among them, nor
 		// anywhere in the exe's bytes (any case).
 		std::set<std::string> retail_names;
 		for (DWORD i = 0; i < retail_count; ++i) retail_names.insert(lowercase(text_at(dword_at(retail_table + i * 16 + 4))));
@@ -2389,7 +2554,7 @@ namespace
 		CHECK(text_at(dword_at(retail_table + 4)) == "setRotZ" && text_at(dword_at(retail_table + (retail_count - 1) * 16 + 4)) == "SetDontShowWarningOff" &&
 		      text_at(dword_at(builtin_table + 4)) == "==");
 
-		// The table the DLL builds: the game's 289 entries byte for byte, then the eight.
+		// The table the DLL builds: the game's 289 entries byte for byte, then the nine.
 		std::vector<func_entry> built(table_count);
 		std::array<const void*, functions.size()> handlers{};
 		for (std::size_t i = 0; i < handlers.size(); ++i) handlers[i] = reinterpret_cast<const void*>(0x1000 + i);
@@ -2448,8 +2613,8 @@ namespace
 				outside += !(va >= table_operand && va < table_operand + 4) && !(va >= count_operand && va < count_operand + 4);
 			}
 		}
-		CHECK(changed == 5 && outside == 0); // 0x0068a908 -> 0x12345678, 0x121 -> 0x129
-		CHECK(limits_rules::matches(at(registration), "68785634126829010000e8318903008bc8e85a770300c3"));
+		CHECK(changed == 5 && outside == 0); // 0x0068a908 -> 0x12345678, 0x121 -> 0x12a
+		CHECK(limits_rules::matches(at(registration), "6878563412682a010000e8318903008bc8e85a770300c3"));
 		std::memcpy(image, before.data(), image_size);
 
 		// The strings the handlers send are the game's own.
@@ -3922,6 +4087,150 @@ namespace
 	// [Game] PostgameScript (postgame_rules.hpp): the value's rules, the guards on their own, then,
 	// when a copy of XMen2.exe is at hand, every guard against it, the change applied to that copy
 	// (exactly the four bytes of the push operand) and the game's own word reader on the line.
+	// The conversation hooks' decisions (conversations_rules.hpp): the ini keys, the auto-advance over a
+	// line's frames, the pending reply's wait, the cursor clamp, the patch bytes and the guards.
+	void check_conversations_rules()
+	{
+		using namespace conversations_rules;
+		std::printf("conversations ([Game] AutoAdvance, ReplyVoices, ReplyCursor)\n");
+
+		// The ini: on unless 0; anything else is on with a note.
+		std::string error;
+		auto chosen = decide(std::nullopt, std::nullopt, std::nullopt, error);
+		CHECK(chosen.auto_advance && chosen.reply_voices && chosen.reply_cursor && error.empty());
+		chosen = decide("0", "0 ; the game's own", " 0", error);
+		CHECK(!chosen.auto_advance && !chosen.reply_voices && !chosen.reply_cursor && error.empty());
+		chosen = decide("1", "off", "yes", error);
+		CHECK(chosen.auto_advance && !chosen.reply_voices && chosen.reply_cursor && error.empty());
+		chosen = decide("maybe", "", "2", error);
+		CHECK(chosen.auto_advance && chosen.reply_voices && chosen.reply_cursor && error == "AutoAdvance=maybe isn't 1 or 0 - taken as 1; ReplyCursor=2 isn't 1 or 0 - taken as 1");
+
+		// The auto-advance over a line: unmarked lines and menus are never the fix's; a marked line with a
+		// voice goes once the voice was heard playing and then not (plus a breath); without one, after
+		// |timeDelay|; never inside the game's first-second lock-out; a pick is retried after a while.
+		line_state s;
+		frame_view v;
+		v.line_id = 7;
+		v.time_delay = 0.5f; // unmarked
+		v.visible = 1;
+		v.now = 10;
+		v.accept_from = 1;
+		CHECK(auto_advance_step(s, v) == verdict::none && s.line_id == 7 && s.shown_at == 10);
+		v.time_delay = -3;
+		v.visible = 2; // a menu
+		CHECK(auto_advance_step(s, v) == verdict::none);
+		v.visible = 1;
+		v.menu_up = true;
+		CHECK(auto_advance_step(s, v) == verdict::none);
+		v.menu_up = false;
+		v.now = 11;
+		CHECK(auto_advance_step(s, v) == verdict::wait); // no voice: 1 s of 3 shown
+		v.now = 12.9f;
+		CHECK(auto_advance_step(s, v) == verdict::wait);
+		v.now = 13;
+		CHECK(auto_advance_step(s, v) == verdict::advance && s.advanced && s.advanced_at == 13);
+		v.now = 13.5f;
+		CHECK(auto_advance_step(s, v) == verdict::wait); // picked already: the next line comes, or a retry later
+		v.now = 15.1f;
+		CHECK(auto_advance_step(s, v) == verdict::advance);
+		// A new line with a voice.
+		v.line_id = 8;
+		v.now = 20;
+		v.voice = true;
+		v.playing = true;
+		CHECK(auto_advance_step(s, v) == verdict::wait && s.line_id == 8 && s.shown_at == 20 && s.seen_playing);
+		v.now = 40; // long past |timeDelay|: the voice decides
+		CHECK(auto_advance_step(s, v) == verdict::wait);
+		v.playing = false;
+		CHECK(auto_advance_step(s, v) == verdict::wait && s.ended_at == 40); // the breath
+		v.now = 40.1f;
+		CHECK(auto_advance_step(s, v) == verdict::wait);
+		v.now = 40.3f;
+		CHECK(auto_advance_step(s, v) == verdict::advance);
+		// A voice that never plays (the sound system couldn't start it): the time.
+		v.line_id = 9;
+		v.now = 50;
+		v.playing = false;
+		CHECK(auto_advance_step(s, v) == verdict::wait && !s.seen_playing);
+		v.now = 52.9f;
+		CHECK(auto_advance_step(s, v) == verdict::wait);
+		v.now = 53;
+		CHECK(auto_advance_step(s, v) == verdict::advance);
+		// The lock-out: the conversation's first second, whatever the line says.
+		v.line_id = 10;
+		v.time_delay = -0.1f;
+		v.now = 60;
+		v.accept_from = 61;
+		CHECK(auto_advance_step(s, v) == verdict::wait);
+		v.now = 61.01f;
+		CHECK(auto_advance_step(s, v) == verdict::advance);
+		// A line id seen again later is a new line (the state resets on any change).
+		v.line_id = 7;
+		v.now = 70;
+		v.time_delay = -1;
+		CHECK(auto_advance_step(s, v) == verdict::wait && s.shown_at == 70 && !s.advanced);
+
+		// The pending reply: wait while its voice plays and accept isn't pressed.
+		CHECK(pending_wait(true, true, false) && !pending_wait(true, true, true) && !pending_wait(true, false, false) && !pending_wait(false, false, false) && !pending_wait(false, true, false));
+		CHECK(clamped_cursor(3) == 2 && clamped_cursor(1) == 0 && clamped_cursor(0) == 0);
+
+		// The patch bytes: a call rel32 and a nop over the 6-byte call, jumps over the 5- and 7-byte sites.
+		const auto call = accept_call_bytes(0x10001000);
+		CHECK(call[0] == 0xe8 && operand_at(call.data() + 1, 4) == 0x10001000u - (accept_call + 5) && call[5] == 0x90);
+		const auto jump = pending_jump_bytes(0x10002000);
+		CHECK(jump[0] == 0xe9 && operand_at(jump.data() + 1, 4) == 0x10002000u - (pending_call + 5));
+		const auto cursor = cursor_jump_bytes(0x10003000);
+		CHECK(cursor[0] == 0xe9 && operand_at(cursor.data() + 1, 4) == 0x10003000u - (cursor_store + 5) && cursor[5] == 0x90 && cursor[6] == 0x90);
+		CHECK(pending_continue == pending_call + 5 && cursor_continue == cursor_store + 7 && accept_call + 6 == 0x45d344);
+
+		// The guards on their own: well-formed, one per address; each site inside one.
+		bool guards_ok = true;
+		std::set<DWORD> addresses;
+		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
+		for (const auto& g : menu_guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
+		CHECK(guards_ok);
+		const auto covered = [&](const DWORD from, const DWORD size)
+		{
+			for (const auto& g : guards)
+			{
+				if (g.va <= from && from + size <= g.va + limits_rules::hex_size(g.hex)) return true;
+			}
+			return false;
+		};
+		CHECK(covered(accept_call, 6) && covered(pending_call, 5) && covered(cursor_store, 7) && covered(pending_continue, 1) && covered(pending_wait_at, 1) && covered(cursor_continue, 1));
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the conversation hooks' bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const guard* mismatch = first_mismatch(image);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
+		CHECK(mismatch == nullptr);
+		CHECK(accept_site_is_retail(image) && pending_site_is_retail(image) && cursor_site_is_retail(image));
+		// The sites' own bytes: the call through vt+0x138, the call to the audio getter, the store of di.
+		CHECK(operand_at(image + (pending_call + 1 - limits_rules::image_base), 4) == audio_getter - (pending_call + 5));
+		CHECK(operand_at(image + (0x45d33e + 2 - limits_rules::image_base), 4) == menus_accept_slot);
+		CHECK(operand_at(image + (cursor_store + 3 - limits_rules::image_base), 4) == cs_cursor);
+		// What the hooks read: the vtable slots the guards name.
+		CHECK(operand_at(image + (audio_vtable + audio_playing_slot - limits_rules::image_base), 4) == 0x5909a0 && operand_at(image + (audio_vtable + audio_stop_slot - limits_rules::image_base), 4) == 0x590780);
+		CHECK(operand_at(image + (cs_vtable + cs_pick_slot - limits_rules::image_base), 4) == 0x45d5d0 && operand_at(image + (cs_vtable + 0xc - limits_rules::image_base), 4) == 0x45d1a0);
+		CHECK(operand_at(image + (game_vtable + game_time_slot - limits_rules::image_base), 4) == 0x469740 && operand_at(image + (menus_vtable + menus_accept_slot - limits_rules::image_base), 4) == 0x5d4950 &&
+		      operand_at(image + (menus_vtable + menus_name_slot - limits_rules::image_base), 4) == 0x5d8640);
+		CHECK(operand_at(image + (none_handle_va - limits_rules::image_base), 4) == none_handle);
+		// The patches applied to the copy: the written bytes, nothing else on the page changed.
+		std::vector<std::uint8_t> copy(image, image + image_size);
+		const auto fixed = accept_call_bytes(0x10001000);
+		std::memcpy(copy.data() + (accept_call - limits_rules::image_base), fixed.data(), fixed.size());
+		CHECK(!accept_site_is_retail(copy.data()) && std::memcmp(copy.data() + (accept_call + 6 - limits_rules::image_base), image + (accept_call + 6 - limits_rules::image_base), 64) == 0);
+		UnmapViewOfFile(image);
+	}
+
 	void check_postgame_rules()
 	{
 		using namespace postgame_rules;
@@ -6577,6 +6886,7 @@ int main(const int argc, char** argv)
 	check_resolution_rules();
 	check_limits_rules();
 	check_forced_teams_rules();
+	check_conversations_rules();
 	check_test_input_rules();
 	check_pad_input_rules();
 	check_virtual_pad_rules();
@@ -6609,10 +6919,12 @@ int main(const int argc, char** argv)
 	CHECK(log.find("nothing hooked") != std::string::npos && log.find("resolution list:") == std::string::npos && log.find("references patched") == std::string::npos);
 	CHECK(log.find("GameSpy servers redirected to openspy.net") != std::string::npos);
 	// No [Limits]: the engine's caps untouched (and this isn't the game anyway).
-	CHECK(log.find("limits: the game's own caps - 40 actor slots, 450 resource names (no [Limits] in xml2-fix.ini)") != std::string::npos && log.find("raised from") == std::string::npos);
+	CHECK(log.find("limits: the game's own caps - 40 actor slots, 450 resource names, 375 item enhancements (no [Limits] in xml2-fix.ini)") != std::string::npos && log.find("raised from") == std::string::npos);
 	// No [Game] ForcedTeams: no script functions.
 	CHECK(log.find("forced teams: off (no [Game] ForcedTeams in xml2-fix.ini)") != std::string::npos && log.find("script functions added") == std::string::npos);
 	CHECK(log.find("postgame:") == std::string::npos); // no [Game] PostgameScript: not a word, nothing patched
+	// Conversations: on by default, but only ever in XMen2.exe - nothing patched here.
+	CHECK(log.find("conversations: XMen2.exe isn't loaded at 0x400000 (not the game?)") != std::string::npos && log.find("conversations: AutoAdvance on") == std::string::npos);
 	CHECK(log.find("main menu:") == std::string::npos); // no [Game] MainMenuItems: not a word, nothing patched
 	CHECK(log.find("xp curve:") == std::string::npos);  // no [Game] XPCurve: not a word, nothing patched
 	CHECK(log.find("title:") == std::string::npos);     // no [Game] WindowTitle: not a word, nothing hooked
