@@ -4184,7 +4184,7 @@ namespace
 		CHECK(auto_advance_step(s, v) == verdict::advance); // 1.5 s shown, |timeDelay| = 1
 		// ... and a voiced line heard playing in the first run isn't taken as ended in the second.
 		v.line_id = 8;
-		v.now = 90;
+		v.now = 92;
 		v.accept_from = 91;
 		v.time_delay = -5;
 		v.voice = true;
