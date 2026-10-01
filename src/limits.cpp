@@ -334,6 +334,22 @@ namespace limits
 			return true;
 		}
 
+		// The loader's end, in place of its call of the record walk (0x47ce80, __thiscall, no arguments):
+		// the walk, then the affix counts against the random pickers' stack arrays.
+		using record_walk_t = void(__fastcall*)(void* manager, void* edx);
+
+		void __fastcall loader_end(void* manager, void* /*edx*/)
+		{
+			reinterpret_cast<record_walk_t>(static_cast<std::uintptr_t>(item_record_walk))(manager, nullptr);
+			DWORD prefixes = 0, suffixes = 0;
+			if (manager && read_dword(address_of(manager) + item_prefix_count, prefixes) && read_dword(address_of(manager) + item_suffix_count, suffixes) && !affixes_fit(prefixes, suffixes))
+			{
+				logger::write_once("limits:affixes", "limits: WARNING: Data/items has %lu prefixes and %lu suffixes - the game's random affix pickers (0x47e690, 0x47ee90) keep room for 375 of each on the stack, "
+				                                     "whatever the enhancement pool holds; past 375 they overrun it. Keep the prefixes and the suffixes at 375 or fewer",
+				                   static_cast<unsigned long>(prefixes), static_cast<unsigned long>(suffixes));
+			}
+		}
+
 		// The item manager's enhancement record pool: its records and bitmap moved to the end of a bigger
 		// manager (allocated by the game at its first use, after this), its code patched for `records`,
 		// the pool clear's findNext pointed at a clone of the DLL's.
@@ -369,15 +385,15 @@ namespace limits
 				return false;
 			}
 			FlushInstructionCache(GetCurrentProcess(), clone, clone_size);
-			if (!patch(item_writes(layout, address_of(clone)), stays))
+			if (!patch(item_writes(layout, address_of(clone), address_of(reinterpret_cast<const void*>(&loader_end))), stays))
 			{
 				VirtualFree(clone, 0, MEM_RELEASE);
 				return false;
 			}
 			item_cap = records;
 			logger::write("limits: item enhancement pool raised from 375 to %d records - the item manager grows from 0x7a00 to 0x%lX bytes (allocated by the game at its first use), "
-			              "its records move from +0x2594 to +0x%lX and their bitmap from +0x602c to +0x%lX (%lu dwords); %zu fields and 1 call patched, bitset<375>::findNext cloned to 0x%08lX "
-			              "with its %zu; records in use at [0x72a514]+0x6064",
+			              "its records move from +0x2594 to +0x%lX and their bitmap from +0x602c to +0x%lX (%lu dwords); %zu fields and 2 calls patched, bitset<375>::findNext cloned to 0x%08lX "
+			              "with its %zu; records in use at [0x72a514]+0x6064; the loader's end (0x4806ad) checks the prefix and suffix counts against the random pickers' 375",
 			              records, layout.manager_size, layout.records_offset, layout.bitmap_offset, layout.bitmap_dwords, item_sites.size(), address_of(clone), item_find_next.fields.size());
 			return true;
 		}

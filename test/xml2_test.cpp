@@ -1331,6 +1331,9 @@ namespace
 		// The writes for N = 512 with a clone at 0x00b00000: every site, then the call.
 		const auto item_w = item_writes(items_512, 0x00b00000);
 		CHECK(item_w.size() == 42 && item_w.back().va == 0x47dc6a && item_w.back().value == 0x00b00000u - (0x47dc69 + 5) && item_w[0].va == 0x47bb04 && item_w[0].value == 0x7a00);
+		const auto item_w2 = item_writes(items_512, 0x00b00000, 0x00b01000);
+		CHECK(item_w2.size() == 43 && item_w2.back().va == 0x4806ae && item_w2.back().value == 0x00b01000u - (0x4806ad + 5));
+		CHECK(affixes_fit(85, 79) && affixes_fit(375, 375) && !affixes_fit(376, 0) && !affixes_fit(0, 376) && item_affix_stack == 375);
 		CHECK(std::ranges::count_if(item_w, [](const operand_write& w) { return w.value == 512; }) == 8 && std::ranges::count_if(item_w, [](const operand_write& w) { return w.value == 0x7a00; }) == 21 &&
 		      std::ranges::count_if(item_w, [](const operand_write& w) { return w.value == 0x7a00 + 512 * 0x28; }) == 7 && std::ranges::count_if(item_w, [](const operand_write& w) { return w.value == 16; }) == 2 &&
 		      std::ranges::count_if(item_w, [](const operand_write& w) { return w.value == 512 * 0x28; }) == 2 && std::ranges::count_if(item_w, [](const operand_write& w) { return w.value == 0x7a00 + 512 * 0x28 + 64; }) == 1);
@@ -1392,6 +1395,7 @@ namespace
 				outside += !inside;
 			}
 			CHECK(outside == 0 && changed > 0 && changed <= 42 * 4);
+			CHECK(operand_at(at(0x4806ae), 4) == 0x47ce80 - (0x4806ad + 5)); // the loader-end call untouched without a check
 			CHECK(operand_at(at(0x4804a7), 4) == 512 && operand_at(at(0x480a26), 4) == items_512.manager_size && operand_at(at(0x47bb04), 4) == 0x7a00 && operand_at(at(0x480743), 4) == items_512.bitmap_offset &&
 			      operand_at(at(0x47dc02), 4) == 512 * 0x28 && operand_at(at(0x47dc6a), 4) == 0x00b00000u - (0x47dc69 + 5) && operand_at(at(0x480748), 4) == 16);
 			std::memcpy(image, before.data(), image_size);
@@ -4169,6 +4173,31 @@ namespace
 		v.now = 70;
 		v.time_delay = -1;
 		CHECK(auto_advance_step(s, v) == verdict::wait && s.shown_at == 70 && !s.advanced);
+		// The same conversation run again: its first line has the same id (ids are per file), but the accept
+		// lock-out time is new - the state resets, so the line waits its |timeDelay| again instead of going at once.
+		v.now = 71;
+		CHECK(auto_advance_step(s, v) == verdict::advance && s.advanced);
+		v.now = 80;
+		v.accept_from = 81; // a new start at 80
+		CHECK(auto_advance_step(s, v) == verdict::wait && s.shown_at == 80 && !s.advanced && s.accept_from == 81);
+		v.now = 81.5f;
+		CHECK(auto_advance_step(s, v) == verdict::advance); // 1.5 s shown, |timeDelay| = 1
+		// ... and a voiced line heard playing in the first run isn't taken as ended in the second.
+		v.line_id = 8;
+		v.now = 90;
+		v.accept_from = 91;
+		v.time_delay = -5;
+		v.voice = true;
+		v.playing = true;
+		CHECK(auto_advance_step(s, v) == verdict::wait && s.seen_playing);
+		v.now = 100;
+		v.accept_from = 101; // run again: the voice not yet started (the handle set, not playing)
+		v.playing = false;
+		CHECK(auto_advance_step(s, v) == verdict::wait && !s.seen_playing && s.shown_at == 100);
+		v.now = 104.9f;
+		CHECK(auto_advance_step(s, v) == verdict::wait);
+		v.now = 105;
+		CHECK(auto_advance_step(s, v) == verdict::advance);
 
 		// The pending reply: wait while its voice plays and accept isn't pressed.
 		CHECK(pending_wait(true, true, false) && !pending_wait(true, true, true) && !pending_wait(true, false, false) && !pending_wait(false, false, false) && !pending_wait(false, true, false));

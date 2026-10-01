@@ -208,6 +208,9 @@ namespace conversations_rules
 	struct line_state
 	{
 		int line_id = 0;
+		float accept_from = 0;     // the conversation this line belongs to: CS+0x21b5c is rewritten at every start (0x45c87a),
+		                           // and line ids are per file (0x4573f0 hashes into the file's 40 slots), so the same id comes
+		                           // back when the same conversation runs again
 		float shown_at = 0;        // the game's time when the line was first seen
 		bool seen_playing = false; // its voice was heard playing
 		float ended_at = 0;        // the game's time when the voice was first found ended
@@ -227,10 +230,11 @@ namespace conversations_rules
 
 	inline verdict auto_advance_step(line_state& s, const frame_view& v)
 	{
-		if (v.line_id != s.line_id)
+		if (v.line_id != s.line_id || v.accept_from != s.accept_from)
 		{
 			s = line_state{};
 			s.line_id = v.line_id;
+			s.accept_from = v.accept_from;
 			s.shown_at = v.now;
 		}
 		if (v.time_delay >= 0 || v.visible != 1 || v.menu_up)

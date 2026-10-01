@@ -842,6 +842,14 @@ namespace limits_rules
 	// the manager (the definitions, the instance pool, the inventory map, the counts) stays where it is.
 	// The pool's old 0x3aa8 bytes go unused. Every record index the game stores or saves is widened by
 	// nothing: they are u16 already (0x47bad0 bounds a lookup by the capacity, patched too).
+	//
+	// Not patched: the random prefix and suffix pickers (0x47e690 and 0x47ee90) keep a stack array of
+	// 375 ints each (sub esp, 0x5f4; cleared by the loops at 0x47e6a8 / 0x47eeaa) for the candidate
+	// records, filled from the prefix records (0 .. [+0x605c]) and the suffix records ([+0x605c] ..
+	// +[+0x6060]) - bounded by those counts, not by the pool, and not an operand that can be widened.
+	// So a mod may have at most 375 prefixes and 375 suffixes whatever the pool; the loader's end
+	// (0x4806ad, the one call of 0x47ce80, the walk over every record) is pointed at the fix, which
+	// runs the walk and then logs a warning when either count is past 375.
 
 	constexpr DWORD item_manager_pointer = 0x72a514; // the manager, built at the first 0x480a00
 	constexpr DWORD item_manager_size = 0x7a00;
@@ -851,6 +859,11 @@ namespace limits_rules
 	constexpr DWORD item_count_offset = 0x6064;     // the records in use (what the test pipe's status reports)
 	constexpr DWORD item_find_next_va = 0x45e5f0;    // bitset<375>::findNext, cloned
 	constexpr DWORD item_find_next_call = 0x47dc69;  // the pool clear's call of it (the one re-aimed)
+	constexpr DWORD item_prefix_count = 0x605c;      // manager-relative: the prefix records, then the suffixes
+	constexpr DWORD item_suffix_count = 0x6060;
+	constexpr int item_affix_stack = 375;            // the random pickers' stack arrays (0x47e690, 0x47ee90)
+	constexpr DWORD item_record_walk = 0x47ce80;     // __thiscall (): the loader's walk over every record, called once
+	constexpr DWORD item_loader_end_call = 0x4806ad; // call 0x47ce80 at the loader's end - re-aimed at the fix's check
 
 	struct item_layout
 	{
@@ -965,8 +978,12 @@ namespace limits_rules
 	// The pool clear's call of bitset<375>::findNext: re-aimed at the clone.
 	inline constexpr item_site item_clone_call{0x47dc69, "e88209feff", 1, 4, static_cast<std::uint32_t>(item_find_next_va - (0x47dc69 + 5)), item_field::clone_call};
 
-	inline constexpr std::array<guard, 3> item_guards{{
+	inline constexpr std::array<guard, 7> item_guards{{
 		{0x480a0e, "a114a572006489250000000083ec0885c0754e", "the manager's getter reads 0x72a514 and allocates when it is 0 (0x480a0e)"},
+		{0x4806a5, "8bce89869c6c0000e8cec7ffff33c0", "the loader's end: the one call of the record walk 0x47ce80 (0x4806ad)"},
+		{0x47d059, "5e5f5d5b81c49c000000c3", "the record walk returns with no stack argument (0x47d059)"},
+		{0x47e690, "81ecf405000055568bf133d28974240c895424088d44241cb977010000", "the random prefix picker's stack array of 375 ints (0x47e690)"},
+		{0x47ee90, "81ecf405000053558bd933ed895c240c896c240833d28d44241cb977010000", "the random suffix picker's stack array of 375 ints (0x47ee90)"},
 		{0x480a21, "6a3b6a0e68007a0000e8b1fb0d00", "the allocation (0x480a21): 0x7a00 bytes from the game's allocator"},
 		{0x45f309, "e8e2f2ffff", "the other caller of bitset<375>::findNext (0x45f309, an unrelated set) - left as it is"},
 	}};
@@ -1008,8 +1025,9 @@ namespace limits_rules
 		}
 	}
 
-	// Everything the pool's raise writes into XMen2.exe for `layout`, with the clone at `clone`.
-	inline std::vector<operand_write> item_writes(const item_layout& layout, const DWORD clone)
+	// Everything the pool's raise writes into XMen2.exe for `layout`, with the clone at `clone` and the
+	// loader-end check at `check` (0: the call stays the game's).
+	inline std::vector<operand_write> item_writes(const item_layout& layout, const DWORD clone, const DWORD check = 0)
 	{
 		std::vector<operand_write> writes;
 		for (const auto& s : item_sites)
@@ -1017,6 +1035,16 @@ namespace limits_rules
 			writes.push_back({s.va + s.offset, s.size, value_of(s.field, layout)});
 		}
 		writes.push_back({item_clone_call.va + item_clone_call.offset, item_clone_call.size, rel32(item_clone_call.va, clone)});
+		if (check)
+		{
+			writes.push_back({item_loader_end_call + 1, 4, rel32(item_loader_end_call, check)});
+		}
 		return writes;
+	}
+
+	// Whether the affix counts fit the pickers' stack arrays; the warning when they don't.
+	inline bool affixes_fit(const DWORD prefixes, const DWORD suffixes)
+	{
+		return prefixes <= static_cast<DWORD>(item_affix_stack) && suffixes <= static_cast<DWORD>(item_affix_stack);
 	}
 }
