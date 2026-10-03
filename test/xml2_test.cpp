@@ -1511,6 +1511,170 @@ namespace
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
 
+	// Fighting style pool tests execute the retail node allocator/free/clear on synthetic blocks.
+	int test_style_capacity = 19;
+	void* __fastcall test_construct_style_ring(void* self, void*)
+	{
+		return limits_rules::style_ring_construct(self, test_style_capacity);
+	}
+	DWORD __fastcall test_push_style_ring(void* self, void*, const DWORD* value)
+	{
+		return limits_rules::style_ring_push(self, *value, test_style_capacity);
+	}
+	std::vector<DWORD> destroyed_style_slots;
+	void __fastcall test_destroy_style(void* self, void*, int)
+	{
+		destroyed_style_slots.push_back(operand_at(static_cast<std::uint8_t*>(self) + 4, 4));
+	}
+
+	void check_fight_style_rules()
+	{
+		using namespace limits_rules;
+		std::printf("fighting style registry ([Limits] FightStyles)\n");
+		CHECK(decide(std::nullopt, std::nullopt).fight_styles == 19);
+		for (const auto text : {"19", "20", "22", "31", "32 ; headroom"})
+		{
+			const auto c = decide(std::nullopt, std::nullopt, std::nullopt, text);
+			CHECK(c.fight_styles == *parse_count(text) && c.notes.empty());
+		}
+		for (const auto bad : {"18", "33", "127", "0", "-1", "0x20", "32x", ""})
+		{
+			const auto c = decide(std::nullopt, std::nullopt, std::nullopt, bad);
+			CHECK(c.fight_styles == 19 && c.notes.size() == 1 && c.notes[0].find("stays at 19") != std::string::npos);
+		}
+		const auto combined = decide("127", "1024", "512", "32");
+		CHECK(combined.actor_slots == 127 && combined.resource_names == 1024 && combined.item_enhancements == 512 && combined.fight_styles == 32);
+		const auto stock = style_layout_for(19), raised = style_layout_for(32);
+		CHECK(stock.node_ring == 0x134 && stock.node_ring_write == 0x184 && stock.node_bitmap == 0x190 && stock.count == 0x1a4);
+		CHECK(stock.styles == 0x1a8 && stock.bitmap == 0x11a80 && stock.auxiliary == 0x11a8c && stock.manager_size == 0x29a18);
+		CHECK(raised.node_ring == 0x204 && raised.node_ring_write == 0x288 && raised.count == 0x2a8 && raised.styles == 0x2ac);
+		CHECK(raised.bitmap == 0x1dbac && raised.auxiliary == 0x1dbb8 && raised.manager_size == 0x35b44);
+		for (int n = 19; n <= 32; ++n)
+		{
+			const auto l = style_layout_for(n);
+			CHECK(l.node_ring_write - l.node_ring == static_cast<DWORD>((n + 1) * 4) && l.count + 4 == l.styles && l.bitmap - l.styles == n * style_record_size);
+			CHECK(l.auxiliary - l.bitmap == 12 && l.manager_size - l.auxiliary == 0x17f8c && dwords_for_bits(n) == 1);
+		}
+		bool rows_ok = true;
+		for (const auto& s : style_sites)
+		{
+			rows_ok &= valid_hex(s.hex) && static_cast<std::size_t>(s.offset) + s.size <= hex_size(s.hex) && operand_in(s.hex, s.offset, s.size) == s.retail;
+			rows_ok &= value_of(s.field, stock) == s.retail && (s.size == 4 || (s.size == 1 && value_of(s.field, raised) <= 127));
+		}
+		for (const auto& g : style_guards) rows_ok &= valid_hex(g.hex) && g.what && *g.what;
+		CHECK(rows_ok);
+		auto writes = style_writes(raised, 0x12340000, 0x12340100);
+		std::ranges::sort(writes, {}, &operand_write::va);
+		bool apart = true;
+		for (std::size_t i = 1; i < writes.size(); ++i) apart &= writes[i - 1].va + writes[i - 1].size <= writes[i].va;
+		CHECK(apart && writes.size() == 74);
+
+		// The ring implementation independently preserves FIFO order across the signed-disp8 boundary.
+		for (int n : {19, 20, 29, 30, 31, 32})
+		{
+			std::vector<DWORD> ring(n + 5, 0xcccccccc);
+			CHECK(style_ring_construct(ring.data(), n) == ring.data());
+			for (DWORD i = 0; i < static_cast<DWORD>(n); ++i) style_ring_push(ring.data(), 1000 + i, n);
+			CHECK(ring[n + 1] == 0 && ring[n + 2] == 0 && ring[n + 3] == static_cast<DWORD>(n) && ring[n] == 0xcccccccc && ring[n + 4] == 0xcccccccc);
+			for (DWORD i = 0; i < static_cast<DWORD>(n); ++i) CHECK(ring[i] == 1000 + i);
+		}
+
+		const auto exe = game_executable();
+		if (!exe) { std::printf("  skip  no XMen2.exe for fighting style execution tests\n"); return; }
+		DWORD image_size = 0;
+		auto* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](DWORD va) { return image + (va - image_base); };
+		const auto mismatch = [&] { return style_first_mismatch([&](DWORD va, std::string_view hex) { return matches(at(va), hex); }); };
+		CHECK(mismatch() == 0);
+		if (mismatch()) { VirtualFree(image, 0, MEM_RELEASE); return; }
+		const std::vector<std::uint8_t> original(image, image + image_size);
+		for (const auto& w : style_writes(stock)) apply_write(image, w);
+		CHECK(std::memcmp(image, original.data(), image_size) == 0);
+		// Every guarded byte, including opcodes and branch behavior, rejects a changed executable.
+		bool rejects = true;
+		const auto corrupt = [&](DWORD va, std::string_view hex)
+		{
+			for (std::size_t i = 0; i < hex_size(hex); ++i)
+			{
+				at(va)[i] ^= 1;
+				rejects &= mismatch() != 0;
+				at(va)[i] ^= 1;
+			}
+		};
+		for (const auto& s : style_sites) corrupt(s.va, s.hex);
+		for (const auto& g : style_guards) corrupt(g.va, g.hex);
+		CHECK(rejects && mismatch() == 0);
+
+		const auto hook_target = [&](const void* p)
+		{
+			return image_base + static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(p) - reinterpret_cast<std::uintptr_t>(image));
+		};
+		for (int n : {19, 20, 22, 30, 31, 32})
+		{
+			std::memcpy(image, original.data(), image_size);
+			test_style_capacity = n;
+			const auto l = style_layout_for(n);
+			const auto patch = style_writes(l, hook_target(reinterpret_cast<const void*>(&test_construct_style_ring)), hook_target(reinterpret_cast<const void*>(&test_push_style_ring)));
+			std::vector<bool> covered(image_size);
+			for (const auto& w : patch)
+			{
+				apply_write(image, w);
+				for (DWORD i = 0; i < w.size; ++i) covered[w.va - image_base + i] = true;
+				CHECK(operand_at(at(w.va), w.size) == w.value);
+			}
+			bool only_listed = true;
+			for (DWORD i = 0; i < image_size; ++i) only_listed &= image[i] == original[i] || covered[i];
+			CHECK(only_listed);
+			FlushInstructionCache(GetCurrentProcess(), image, image_size);
+			test_block nodes(l.node_count + 4);
+			void* result = nullptr;
+			CHECK(run_thiscall(at(0x4ff7a0), nodes.data(), result) && result == nodes.data() && nodes.slack_untouched());
+			CHECK(nodes.dword(l.node_ring_count) == static_cast<DWORD>(n) && nodes.dword(l.node_count) == 0 && nodes.dword(l.node_bitmap) == 0);
+			bool allocations = true;
+			for (DWORD i = 0; i < static_cast<DWORD>(n); ++i)
+			{
+				allocations &= nodes.dword(l.node_ring + i * 4) == i;
+				allocations &= run_thiscall(at(0x4feb10), nodes.data(), result) && reinterpret_cast<std::uintptr_t>(result) == i;
+			}
+			CHECK(allocations && nodes.dword(l.node_count) == static_cast<DWORD>(n) && nodes.dword(l.node_ring_count) == 0 && nodes.slack_untouched());
+			const DWORD all_bits = 0xffffffffu >> (32 - n);
+			CHECK(nodes.dword(l.node_bitmap) == all_bits);
+			// Exercise release/reuse on both sides of the old limit, including bit 31 and ring wrap.
+			for (int cycle = 0; cycle < n + 2; ++cycle)
+			{
+				int answer = 0;
+				const int index = cycle % 2 ? n - 1 : 18;
+				const auto prior_head = nodes.dword(l.node_ring_write);
+				CHECK(run_thiscall_int(at(0x4ffa30), nodes.data(), index, answer) && static_cast<DWORD>(answer) == prior_head);
+				CHECK(nodes.dword(l.node_count) == static_cast<DWORD>(n - 1) && nodes.dword(l.node_ring_count) == 1 && !(nodes.dword(l.node_bitmap) & (1u << index)));
+				CHECK(run_thiscall(at(0x4feb10), nodes.data(), result) && reinterpret_cast<std::uintptr_t>(result) == static_cast<std::uintptr_t>(index));
+				CHECK(nodes.dword(l.node_count) == static_cast<DWORD>(n) && nodes.dword(l.node_bitmap) == all_bits && nodes.slack_untouched());
+			}
+			// The real style-pool destructor must visit high slots and leave the following fields intact.
+			test_block objects(n * style_record_size + 4);
+			DWORD vtable[] = {static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&test_destroy_style))};
+			const DWORD vtable_address = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(vtable));
+			std::vector<DWORD> expected{0, 18, static_cast<DWORD>(n - 1)};
+			std::ranges::sort(expected);
+			expected.erase(std::unique(expected.begin(), expected.end()), expected.end());
+			DWORD bits = 0;
+			for (const DWORD i : expected)
+			{
+				std::memcpy(objects.data() + i * style_record_size, &vtable_address, 4);
+				std::memcpy(objects.data() + i * style_record_size + 4, &i, 4);
+				bits |= 1u << i;
+			}
+			std::memcpy(objects.data() + n * style_record_size, &bits, 4);
+			destroyed_style_slots.clear();
+			CHECK(run_thiscall(at(0x4fe9c0), objects.data(), result));
+			CHECK(destroyed_style_slots == expected && objects.dword(n * style_record_size) == 0 && objects.slack_untouched());
+			CHECK(run_thiscall(at(0x4fe9c0), objects.data(), result) && destroyed_style_slots == expected); // empty clear does not destroy twice
+		}
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
 	// ---- Forced parties (forced_teams_rules.hpp) ------------------------------------------------------
 
 	// A script call's arguments as the game hands them to a handler: args->get(i) (0x4d5830) reads
@@ -7041,6 +7205,12 @@ namespace
 
 int main(const int argc, char** argv)
 {
+	if (argc > 1 && std::strcmp(argv[1], "--fight-style-rules") == 0)
+	{
+		check_fight_style_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--state-rules") == 0)
 	{
 		check_test_input_rules();
@@ -7107,6 +7277,7 @@ int main(const int argc, char** argv)
 	check_options_menu_rules();
 	check_resolution_rules();
 	check_limits_rules();
+	check_fight_style_rules();
 	check_forced_teams_rules();
 	check_conversations_rules();
 	check_test_input_rules();
