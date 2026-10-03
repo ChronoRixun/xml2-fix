@@ -2753,6 +2753,16 @@ namespace
    void put(address a,std::uint32_t v) {std::memcpy(bytes.data()+a-0x400000,&v,4);}
   } m;
   reader<memory> r(m);
+  // The same stats name on an NPC must never replace the seated hero, in either order.
+  snapshot doubles;doubles.party[0].name="hero_test";
+  actor hero;hero.name="Hero_Test";hero.id=17;hero.health=80.f;hero.party_member=true;
+  actor npc=hero;npc.id=29;npc.health=20.f;npc.party_member=false;
+  doubles.actors={hero,npc};bind_party(doubles);CHECK(doubles.party[0].id==17);
+  doubles.party[0]=actor{};doubles.party[0].name="hero_test";
+  doubles.actors={npc,hero};bind_party(doubles);CHECK(doubles.party[0].id==17);
+  doubles.party[0]=actor{};doubles.party[0].name="hero_test";npc.party_member=true;
+  doubles.actors={hero,npc};bind_party(doubles);
+  CHECK(doubles.party[0].id==0 && !doubles.party[0].health && doubles.party[0].binding=="ambiguous");
   CHECK(!r.read(1).mode);
   CHECK(!r.get<float>(0xffffffff));
   m.put(0x729960,0x686e1c);m.put(0x72a578,0x68878c);
@@ -2765,6 +2775,7 @@ namespace
   m.put(0x907d78,76);CHECK(!r.read(101).objectives);
   // A live synthetic character; stale generations and non-finite values must fail closed.
   m.put(0x778b70+0x818,1);m.put(0x778b74,0x910000);m.put(0x778b70+0x83c,17);
+  m.put(0x910004,1u<<20);m.put(0x9103d4,0);
   m.put(0x91001c,17);m.put(0x910000,0x680100);m.put(0x680100,0x401100);
   m.put(0x401100,0x920000b8);m.put(0x401104,0x0000c300); // mov eax,0x920000; ret
   m.put(0x70b840,0);m.put(0x920000+0x18,16);

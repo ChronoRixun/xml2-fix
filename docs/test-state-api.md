@@ -49,3 +49,12 @@ queue overflow/draining, and vertical-speed reset at zone boundaries.
 
 This API is a companion dependency for the Legends Classic autopilot draft.
 No campaign acceptance result follows from the synthetic tests.
+
+Party binding uses a unique stats-name candidate passing the engine party collector's
+membership flag and controller-assignment tests. An NPC double is excluded even
+if it shares the hero's stats name. Multiple qualifying actors return
+`binding="ambiguous"` and null body fields; no match returns `unresolved`.
+
+The `gameover`/`game_over` menu aliases are **unverified in live play**. Their
+transition event must not be treated as a verified game-over-screen detector.
+Clients can separately report observed party deaths, with that evidence labeled.
