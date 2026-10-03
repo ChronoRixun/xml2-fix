@@ -73,6 +73,7 @@
 #include "resolution_rules.hpp"
 #include "review_menu_rules.hpp"
 #include "test_input_rules.hpp"
+#include "test_state_rules.hpp"
 #include "virtual_pad_rules.hpp"
 #include "xp_curve_rules.hpp"
 #include "window_title_rules.hpp"
@@ -2740,6 +2741,69 @@ namespace
 	}
 
 	// The test pipe's rules (test_input_rules.hpp): key names, commands, and the keys it holds.
+
+ void check_test_state_rules() {
+  using namespace test_state_rules;
+  struct memory {
+   std::vector<unsigned char> bytes=std::vector<unsigned char>(0x700000);
+   bool read(address a,void* dst,std::size_t n) {
+    if(a<0x400000 || a-0x400000+n>bytes.size())return false;
+    std::memcpy(dst,bytes.data()+a-0x400000,n);return true;
+   }
+   void put(address a,std::uint32_t v) {std::memcpy(bytes.data()+a-0x400000,&v,4);}
+  } m;
+  reader<memory> r(m);
+  CHECK(!r.read(1).mode);
+  CHECK(!r.get<float>(0xffffffff));
+  m.put(0x729960,0x686e1c);m.put(0x72a578,0x68878c);
+  m.put(0x729f40,3);m.put(0x72b108,0x900000);m.put(0x900000,0x6892d4);
+  m.put(0x907d78,1);m.put(0x900008,0x006b7361); // invented identifier "ask"
+  m.put(0x900008+0x1a9,0x00000402);m.put(0x72b118+2,0x000000c3);
+  auto s=r.read(100);CHECK(s.act==3);CHECK(s.objectives && s.objectives->size()==1);
+  CHECK((*s.objectives)[0].name=="ask" && (*s.objectives)[0].count==3 && (*s.objectives)[0].goal==4);
+  CHECK((*s.objectives)[0].complete && !(*s.objectives)[0].shown);
+  m.put(0x907d78,76);CHECK(!r.read(101).objectives);
+  // A live synthetic character; stale generations and non-finite values must fail closed.
+  m.put(0x778b70+0x818,1);m.put(0x778b74,0x910000);m.put(0x778b70+0x83c,17);
+  m.put(0x91001c,17);m.put(0x910000,0x680100);m.put(0x680100,0x401100);
+  m.put(0x401100,0x920000b8);m.put(0x401104,0x0000c300); // mov eax,0x920000; ret
+  m.put(0x70b840,0);m.put(0x920000+0x18,16);
+  m.put(0x91035c,0x930000);m.put(0x930150,0x006b7341);
+  m.put(0x91027c,0x41200000);m.put(0x910284,0x41a00000);
+  m.put(0x910768,0xbf800000);m.put(0x729974,1);m.put(0xa0a828,0);m.put(0xa12828,0x006b7361);
+  auto live=r.read(102);CHECK(live.party[0].id==17 && live.party[0].health==10.f && live.party[0].ai==true);
+  m.put(0x910020,0x7f800000);CHECK(!r.read(103).party[0].pos[0]);
+  m.put(0x91001c,18);CHECK(r.read(104).actors.empty() && !r.read(104).party[0].health);
+  m.put(0x9404b0,0x941000);m.put(0x941000,0x942000);m.put(0x942000,'f');
+  m.put(0x940008,0);m.put(0x94001c,0x942000);m.put(0x94032c,0x970000);
+  m.put(0x97059c,63);m.put(0x9704fc+3*4,3);m.put(0x9704f0,8);
+  m.put(0x97039c+3*4,0x980000);m.put(0x980064,0x990000);m.put(0x990000,0x006b7341);
+  CHECK(r.speaker(0x940000,3)=="Ask");
+  m.put(0x9704fc+3*4,67);CHECK(!r.speaker(0x940000,3));
+  m.put(0x94001c,0x942008);m.put(0x942008,'a');m.put(0x940018,0);
+  CHECK(!r.speaker(0x940000,3)); // corrupt tree cycles, bounded traversal
+  CHECK(json(std::optional<float>(INFINITY))=="null");
+  CHECK(json(std::optional<float>(1.5f))=="1.5");
+  CHECK(quote("a\"\\\n")=="\"a\\\"\\\\\\u000a\"");
+  CHECK(state_json(snapshot{}).find("\"health\":null")!=std::string::npos);
+  CHECK(objectives_json(snapshot{}).find("\"objectives\":null")!=std::string::npos);
+  using K=test_input_rules::command::kind;
+  CHECK(test_input_rules::parse_command(" STATE ").what==K::state);
+  CHECK(test_input_rules::parse_command("objectives").what==K::objectives);
+  CHECK(test_input_rules::parse_command("events").what==K::events);
+  CHECK(test_input_rules::parse_command("state extra").what==K::unknown);
+  tracker tr;s={};s.ms=100;s.zone="synthetic/room";s.loading=false;s.conversation=false;
+  s.party[0].id=17;s.party[0].name="hero_test";s.party[0].health=8.f;s.party[0].pos[2]=10.f;
+  tr.observe(s);tr.drain();s.ms=200;s.party[0].health=0.f;s.party[0].pos[2]=8.f;s.conversation=true;
+  tr.observe(s);CHECK(s.party[0].vz && std::abs(*s.party[0].vz+20)<.001f);
+  auto ev=tr.drain();CHECK(ev.find("hero_death")!=std::string::npos && ev.find("conversation_start")!=std::string::npos);
+  CHECK(tr.drain().find("\"events\":[]")!=std::string::npos);
+  s.ms=300;s.zone="synthetic/other";s.party[0].vz.reset();s.party[0].pos[2]=-200.f;
+  tr.observe(s);CHECK(!s.party[0].vz);tr.drain();
+  for(unsigned i=0;i<520;++i)tr.emit(s,"synthetic_event");
+  CHECK(tr.drain().find("\"dropped\":8")!=std::string::npos);
+ }
+
 	void check_test_input_rules()
 	{
 		using namespace test_input_rules;
@@ -6917,6 +6981,7 @@ int main(const int argc, char** argv)
 	check_forced_teams_rules();
 	check_conversations_rules();
 	check_test_input_rules();
+	check_test_state_rules();
 	check_pad_input_rules();
 	check_virtual_pad_rules();
 	check_image_file();

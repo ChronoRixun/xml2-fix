@@ -1,4 +1,5 @@
 #include "test_input.hpp"
+#include "test_state.hpp"
 #include "display.hpp"
 #include "frame_capture.hpp"
 #include "frame_rate.hpp"
@@ -216,6 +217,7 @@ namespace test_input
 			{
 				return result;
 			}
+			test_state::sample();
 			pump_console(); // the game's own thread, between two runs of its console queue, whatever the read gave
 			if (FAILED(result))
 			{
@@ -531,6 +533,9 @@ namespace test_input
 			case command::kind::script:
 			case command::kind::console:
 				return queue_console(cmd);
+			case command::kind::state: return test_state::reply("state");
+			case command::kind::objectives: return test_state::reply("objectives");
+			case command::kind::events: return test_state::reply("events");
 			case command::kind::pad:
 				return pad_input::handle(cmd.pad);
 			default:

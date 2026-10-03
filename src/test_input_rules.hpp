@@ -372,6 +372,9 @@ namespace test_input_rules
 			console,
 			pad, // pad_input_rules.hpp's verbs: `pad` says which
 			status,
+			state,
+			objectives,
+			events,
 			ping,
 			unknown
 		};
@@ -415,6 +418,12 @@ namespace test_input_rules
 			return result;
 		}
 
+		if (verb == "STATE" || verb == "OBJECTIVES" || verb == "EVENTS")
+		{
+			if (!rest.empty()) return fail("observation commands take no arguments");
+			result.what = verb == "STATE" ? command::kind::state : verb == "OBJECTIVES" ? command::kind::objectives : command::kind::events;
+			return result;
+		}
 		if (verb == "PING") result.what = command::kind::ping;
 		else if (verb == "STATUS") result.what = command::kind::status;
 		else if (verb == "RELEASE") result.what = command::kind::release;

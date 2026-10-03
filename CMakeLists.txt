@@ -46,6 +46,7 @@ add_library(xml2_fix SHARED
 	src/resolution_list.cpp
 	src/frame_capture.cpp
 	src/test_input.cpp
+	src/test_state.cpp
 	src/discord_ipc.cpp
 	src/discord_presence.cpp
 	src/log.cpp
