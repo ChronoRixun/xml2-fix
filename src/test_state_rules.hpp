@@ -14,7 +14,7 @@
 // stats identifier +0x150 (0x46c590). AI branch: +0x3d8 bit 0 OR +0x768 < -0.5
 // OR +0x768 > game clock (0x434540). This is control routing, not a promise of motion.
 // Conversation singleton [0x717aac]: +0x21b24 bit 1 active; signed short +0x21b28
-// responses; +0x4bc line id; +0x2399c talk-animation entity handle (0x45bddd).
+// responses; signed short +0x21b26 selected response; +0x4bc line id; +0x2399c talk-animation entity handle (0x45bddd).
 // Speaker: 0x4573f0 resolves the current file via the tree subobject CS+4:
 // root +8, nodes +0x14 (stride 20, left/right/name at +0/+4/+8), value pointers
 // CS+0x32c. Current filename key [CS+0x4b0] points to a char* (0x456440).
@@ -78,7 +78,7 @@ struct objective {
 struct snapshot {
  std::uint64_t ms=0;
  std::optional<std::string> zone,mode,menu,speaker;
- std::optional<int> act,responses;
+ std::optional<int> act,responses,selected;
  std::optional<bool> loading,conversation,popup,menu_open;
  std::optional<address> line;
  std::array<actor,4> party;
@@ -140,6 +140,7 @@ public:
    s.conversation=bit(*cs+0x21b24,2);s.line=get<address>(*cs+0x4bc);
    if(s.conversation==true && s.line)s.speaker=speaker(*cs,*s.line);
    if(auto n=get<short>(*cs+0x21b28);n && *n>=0 && *n<=256)s.responses=*n;
+   if(auto n=get<short>(*cs+0x21b26);n && *n>=0 && *n<=256)s.selected=*n;
   }
   namespace f=frame_rate_rules;
   auto menus=get<address>(f::menu_manager_cell);
@@ -213,7 +214,7 @@ inline std::string objectives_json(const snapshot& s) {
  return r+"]}";
 }
 inline std::string state_json(const snapshot& s) {
- std::string r="{\"schema\":1,\"sampled_ms\":"+std::to_string(s.ms)+",\"mode\":"+json(s.mode)+",\"zone\":"+json(s.zone)+",\"act\":"+json(s.act)+",\"loading\":"+json(s.loading)+",\"menu\":"+json(s.menu)+",\"menu_open\":"+json(s.menu_open)+",\"popup\":"+json(s.popup)+",\"conversation\":{\"open\":"+json(s.conversation)+",\"speaker\":"+json(s.speaker)+",\"responses\":"+json(s.responses)+",\"line_id\":"+json(s.line)+"},\"party\":[";
+ std::string r="{\"schema\":1,\"sampled_ms\":"+std::to_string(s.ms)+",\"mode\":"+json(s.mode)+",\"zone\":"+json(s.zone)+",\"act\":"+json(s.act)+",\"loading\":"+json(s.loading)+",\"menu\":"+json(s.menu)+",\"menu_open\":"+json(s.menu_open)+",\"popup\":"+json(s.popup)+",\"conversation\":{\"open\":"+json(s.conversation)+",\"speaker\":"+json(s.speaker)+",\"responses\":"+json(s.responses)+",\"selected\":"+json(s.selected)+",\"line_id\":"+json(s.line)+"},\"party\":[";
  for(unsigned i=0;i<4;++i){if(i)r+=',';r+=actor_json(s.party[i]);}
  r+="],\"actors\":[";bool first=true;for(auto& a:s.actors){if(!first)r+=',';first=false;r+=actor_json(a);}
  return r+"],\"script_errors_available\":false,\"events_source\":\"sampled\"}";

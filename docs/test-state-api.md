@@ -16,7 +16,7 @@ live body has null health/position rather than a fabricated death.
   `menu_open` can be true during in-zone play. `menu` is the internal menu name.
 - `zone` is the requested/current path, named before loading finishes. `loading`
   distinguishes that interval. `act` is the engine's current act number.
-- `conversation`: active flag, current line id, visible response count, and
+- `conversation`: active flag, current line id, visible response count, selected response index, and
   `speaker` (the current node's internal speaker key, possibly the X-Team
   placeholder; null when the current file/node cannot safely be resolved).
 - `popup`: current popup's active flag. Ordinary menus use `menu_open`.

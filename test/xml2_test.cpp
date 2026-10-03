@@ -2779,6 +2779,10 @@ namespace
   m.put(0x97059c,63);m.put(0x9704fc+3*4,3);m.put(0x9704f0,8);
   m.put(0x97039c+3*4,0x980000);m.put(0x980064,0x990000);m.put(0x990000,0x006b7341);
   CHECK(r.speaker(0x940000,3)=="Ask");
+  m.put(0x717aac,0x940000);m.put(0x940000,0x685e04);m.put(0x940000+0x21b26,0x00030002);
+  auto cursor=r.read(106);CHECK(cursor.selected==2 && cursor.responses==3);
+  CHECK(state_json(cursor).find("\"selected\":2")!=std::string::npos);
+
   m.put(0x9704fc+3*4,67);CHECK(!r.speaker(0x940000,3));
   m.put(0x94001c,0x942008);m.put(0x942008,'a');m.put(0x940018,0);
   CHECK(!r.speaker(0x940000,3)); // corrupt tree cycles, bounded traversal
