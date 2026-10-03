@@ -29,6 +29,8 @@ namespace limits
 		bool igb_readable = false;
 		int item_cap = stock_item_enhancements;
 		bool items_readable = false;
+		int style_cap = stock_fight_styles;
+		DWORD style_count_offset = 0;
 
 		std::uint8_t* at(const DWORD va)
 		{
@@ -123,6 +125,11 @@ namespace limits
 				return va;
 			}
 			return bytes_match(find_next_40.va, find_next_40.hex) ? 0 : find_next_40.va;
+		}
+
+		DWORD styles_mismatch()
+		{
+			return style_first_mismatch([](const DWORD va, const std::string_view hex) { return bytes_match(va, hex); });
 		}
 
 		DWORD items_mismatch()
@@ -398,6 +405,50 @@ namespace limits
 			return true;
 		}
 
+		void* __fastcall construct_style_ring(void* self, void*)
+		{
+			return style_ring_construct(self, style_cap);
+		}
+
+		DWORD __fastcall push_style_ring(void* self, void*, const DWORD* value)
+		{
+			return style_ring_push(self, *value, style_cap);
+		}
+
+		bool raise_styles(const int capacity)
+		{
+			constexpr const char* stays = "the fighting style registry stays at 19 entries";
+			if (!base)
+			{
+				logger::write("limits: XMen2.exe isn't loaded at 0x400000 (not the game?) - %s", stays);
+				return false;
+			}
+			if (const DWORD va = styles_mismatch())
+			{
+				logger::write("limits: XMen2.exe doesn't have the expected code at 0x%08lX (not the retail build?) - %s", va, stays);
+				return false;
+			}
+			DWORD existing = 0;
+			if (!read_dword(style_manager_pointer, existing) || existing)
+			{
+				logger::write("limits: the game has built its fighting style manager already (0x%08lX) - %s", existing, stays);
+				return false;
+			}
+			const auto layout = style_layout_for(capacity);
+			const auto writes = style_writes(layout, address_of(reinterpret_cast<const void*>(&construct_style_ring)), address_of(reinterpret_cast<const void*>(&push_style_ring)));
+			style_cap = capacity; // the helpers must see the new size before any patched caller can run
+			if (!patch(writes, stays))
+			{
+				style_cap = stock_fight_styles;
+				return false;
+			}
+			style_count_offset = layout.count;
+			logger::write("limits: fighting style registry raised from 19 to %d entries - manager allocated by the game at first use grows from 0x29a18 to 0x%lX bytes; "
+			              "tree nodes and free ring expanded, styles at +0x%lX, bitmap at +0x%lX, auxiliary manager at +0x%lX; %zu fields and 2 ring calls patched; count at +0x%lX",
+			              capacity, layout.manager_size, layout.styles, layout.bitmap, layout.auxiliary, style_sites.size(), layout.count);
+			return true;
+		}
+
 		std::optional<std::string> ini_value(const wchar_t* key)
 		{
 			return ini::text(L"Limits", key); // the fix's one rule, ini_rules.hpp
@@ -426,23 +477,27 @@ namespace limits
 			motions_readable = !first_mismatch(motion_counter_guards);
 			igb_readable = !first_mismatch(igb_counter_guards);
 			items_readable = !items_mismatch();
+			if (!styles_mismatch()) style_count_offset = style_layout_for(stock_fight_styles).count;
 		}
 
 		const auto actor_slots = ini_value(L"ActorSlots");
 		const auto resource_names = ini_value(L"ResourceNames");
 		const auto item_enhancements = ini_value(L"ItemEnhancements");
-		if (!actor_slots && !resource_names && !item_enhancements)
+		const auto fight_styles = ini_value(L"FightStyles");
+		if (!actor_slots && !resource_names && !item_enhancements && !fight_styles)
 		{
 			logger::write("limits: the game's own caps - 40 actor slots, 450 resource names, 375 item enhancements (no [Limits] in xml2-fix.ini)");
 			return;
 		}
 		const auto chosen = decide(actor_slots ? std::optional<std::string_view>(*actor_slots) : std::nullopt,
 		                           resource_names ? std::optional<std::string_view>(*resource_names) : std::nullopt,
-		                           item_enhancements ? std::optional<std::string_view>(*item_enhancements) : std::nullopt);
+		                           item_enhancements ? std::optional<std::string_view>(*item_enhancements) : std::nullopt,
+		                           fight_styles ? std::optional<std::string_view>(*fight_styles) : std::nullopt);
 		for (const auto& note : chosen.notes)
 		{
 			logger::write("limits: %s", note.c_str());
 		}
+		if (chosen.fight_styles > stock_fight_styles) raise_styles(chosen.fight_styles);
 		// The item enhancement pool: on its own, before the game's first item load (the manager is built
 		// at its first use, long after DllMain).
 		if (chosen.item_enhancements > stock_item_enhancements && base)
@@ -501,7 +556,12 @@ namespace limits
 				items = read(*manager + item_count_offset);
 			}
 		}
+		std::optional<DWORD> styles;
+		if (style_count_offset)
+		{
+			if (const auto manager = read(style_manager_pointer); manager && *manager) styles = read(*manager + style_count_offset);
+		}
 		return "actors " + counter(read(actor_live_va), actor_cap) + "; names " + counter(names, name_cap) + "; motions " + counter(motions, motion_pool_capacity) + "; igb " +
-		       counter(igb_readable ? read(igb_live_retail) : std::nullopt, igb_capacity) + "; items " + counter(items, item_cap);
+		       counter(igb_readable ? read(igb_live_retail) : std::nullopt, igb_capacity) + "; items " + counter(items, item_cap) + "; styles " + counter(styles, style_cap);
 	}
 }
