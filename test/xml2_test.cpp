@@ -2916,6 +2916,14 @@ namespace
 			tr.emit(s, "synthetic_event");
 		}
 		CHECK(tr.drain().find("\"dropped\":8") != std::string::npos);
+
+		// events carries the observer error like state/objectives, instead of an empty queue
+		tracker quiet;
+		quiet.emit(s, "synthetic_event");
+		CHECK(events_reply("no game-thread sample", quiet) == "{\"schema\":1,\"error\":\"no game-thread sample\"}");
+		CHECK(events_reply("unsupported executable layout", quiet).find("\"error\":\"unsupported executable layout\"") != std::string::npos);
+		CHECK(events_reply("", quiet).find("synthetic_event") != std::string::npos);
+		CHECK(events_reply("", quiet).find("\"events\":[]") != std::string::npos);
 	}
 
 	void check_test_input_rules()

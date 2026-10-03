@@ -23,7 +23,8 @@ namespace test_state
 		};
 		std::mutex lock;
 		test_state_rules::tracker history;
-		std::string state = "{\"schema\":1,\"error\":\"no game-thread sample\"}";
+		std::string error = "no game-thread sample"; // cleared by the first supported sample
+		std::string state = test_state_rules::error_json(error);
 		std::string objectives = state;
 		std::uint64_t last = 0;
 		// Refuse unsupported code layouts before following any object pointers. These
@@ -61,13 +62,15 @@ namespace test_state
 		if (!valid)
 		{
 			std::lock_guard guard(lock);
-			state = objectives = "{\"schema\":1,\"error\":\"unsupported executable layout\"}";
+			error = "unsupported executable layout";
+			state = objectives = test_state_rules::error_json(error);
 			return;
 		}
 		memory mem;
 		test_state_rules::reader<memory> reader(mem);
 		auto s = reader.read(now);
 		std::lock_guard guard(lock);
+		error.clear();
 		history.observe(s);
 		state = test_state_rules::state_json(s);
 		objectives = test_state_rules::objectives_json(s);
@@ -83,6 +86,6 @@ namespace test_state
 		{
 			return objectives;
 		}
-		return history.drain();
+		return test_state_rules::events_reply(error, history);
 	}
 } // namespace test_state

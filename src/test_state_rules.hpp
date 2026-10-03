@@ -673,4 +673,18 @@ namespace test_state_rules
 			return r + "]}";
 		}
 	};
+
+	// The observer's error, or empty once a supported sample has run (before the first game-thread sample: "no
+	// game-thread sample"; on an unrecognised executable: "unsupported executable layout").
+	inline std::string error_json(const std::string& error)
+	{
+		return "{\"schema\":1,\"error\":" + quote(error) + "}";
+	}
+
+	// `events` reports the same observer error as `state` and `objectives`: an empty queue from an observer that
+	// never sampled would read as "nothing happened" and hide every transition from the client.
+	inline std::string events_reply(const std::string& error, tracker& history)
+	{
+		return error.empty() ? history.drain() : error_json(error);
+	}
 } // namespace test_state_rules
