@@ -89,7 +89,8 @@ namespace test_state_rules
 	{
 		return x ? (*x ? "true" : "false") : "null";
 	}
-	template <class T> std::string json(const std::optional<T>& x)
+	template <class T>
+	std::string json(const std::optional<T>& x)
 	{
 		if (!x)
 		{
@@ -132,7 +133,7 @@ namespace test_state_rules
 		std::uint64_t ms = 0;
 		std::optional<std::string> zone, mode, menu, speaker;
 		std::optional<int> act, responses, selected;
-		std::optional<bool> loading, conversation, popup, menu_open;
+		std::optional<bool> loading, conversation, popup, menu_open, script_controls_locked;
 		std::optional<address> line;
 		std::array<actor, 4> party;
 		std::vector<actor> actors;
@@ -146,7 +147,14 @@ namespace test_state_rules
 	{
 		for (auto& slot : s.party)
 		{
-			if (!slot.name || slot.name->empty())
+			auto name = slot.name;
+			slot = actor{};
+			slot.name = name;
+			if (!slot.name)
+			{
+				continue;
+			}
+			if (slot.name->empty())
 			{
 				slot.binding = "empty";
 				continue;
@@ -174,15 +182,17 @@ namespace test_state_rules
 			}
 		}
 	}
-	template <class Memory> class reader
+	template <class Memory>
+	class reader
 	{
 		Memory& m;
 
-	  public:
+	public:
 		explicit reader(Memory& mem) : m(mem)
 		{
 		}
-		template <class T> std::optional<T> get(address a)
+		template <class T>
+		std::optional<T> get(address a)
 		{
 			T v{};
 			if (a < 0x10000 || a > 0x7fffffff - sizeof(T) || !m.read(a, &v, sizeof v))
@@ -324,6 +334,14 @@ namespace test_state_rules
 				s.act = *a;
 			}
 			auto clock = get<float>(0x729d48);
+			// lockControls: 0x469130 writes game+0x3f4; 0x469180 treats a negative
+			// value as indefinite and a future game-time deadline as locked.
+			// This is the script lock only; menus and popups have separate fields.
+			auto lock_until = get<float>(0x729d54);
+			if (clock && lock_until)
+			{
+				s.script_controls_locked = *lock_until < 0 || *lock_until > *clock;
+			}
 			for (unsigned i = 0; i < 4; ++i)
 			{
 				if (auto h = get<address>(0x729974 + 4 * i))
@@ -531,9 +549,10 @@ namespace test_state_rules
 	inline std::string state_json(const snapshot& s)
 	{
 		std::string r = "{\"schema\":1,\"sampled_ms\":" + std::to_string(s.ms) + ",\"mode\":" + json(s.mode) + ",\"zone\":" + json(s.zone) +
-						",\"act\":" + json(s.act) + ",\"loading\":" + json(s.loading) + ",\"menu\":" + json(s.menu) + ",\"menu_open\":" + json(s.menu_open) +
-						",\"popup\":" + json(s.popup) + ",\"conversation\":{\"open\":" + json(s.conversation) + ",\"speaker\":" + json(s.speaker) +
-						",\"responses\":" + json(s.responses) + ",\"selected\":" + json(s.selected) + ",\"line_id\":" + json(s.line) + "},\"party\":[";
+						",\"act\":" + json(s.act) + ",\"loading\":" + json(s.loading) + ",\"script_controls_locked\":" + json(s.script_controls_locked) +
+						",\"menu\":" + json(s.menu) + ",\"menu_open\":" + json(s.menu_open) + ",\"popup\":" + json(s.popup) +
+						",\"conversation\":{\"open\":" + json(s.conversation) + ",\"speaker\":" + json(s.speaker) + ",\"responses\":" + json(s.responses) +
+						",\"selected\":" + json(s.selected) + ",\"line_id\":" + json(s.line) + "},\"party\":[";
 		for (unsigned i = 0; i < 4; ++i)
 		{
 			if (i)
@@ -561,7 +580,7 @@ namespace test_state_rules
 		std::deque<std::string> events;
 		unsigned dropped = 0;
 
-	  public:
+	public:
 		void emit(const snapshot& s, const std::string& type, const std::string& detail = "")
 		{
 			if (events.size() == 512)
@@ -600,7 +619,7 @@ namespace test_state_rules
 						}
 					}
 					emit(s, "menu_changed", menu);
-					if (menu == "team_menu")
+					if (menu == "team" || menu == "team_menu")
 					{
 						emit(s, "team_menu_open");
 					}

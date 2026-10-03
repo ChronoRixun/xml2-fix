@@ -58,3 +58,15 @@ if it shares the hero's stats name. Multiple qualifying actors return
 The `gameover`/`game_over` menu aliases are **unverified in live play**. Their
 transition event must not be treated as a verified game-over-screen detector.
 Clients can separately report observed party deaths, with that evidence labeled.
+
+`script_controls_locked` reads lockControls' game-time deadline (negative means
+indefinite). Navigation and assists must wait while it is true, and may not treat
+an unreadable value as permission to assist. Menu/popup locks remain separate.
+
+Round 2 live checks verified the current menu name `team` during a generated
+mission-start team selection, and active conversation speaker/cursor fields in
+stock tutorial/Genosha conversations. The game-over aliases remain unverified.
+
+`xml2_test.exe --state-rules` runs the observer and input-parser fixtures without
+requiring a connected controller or a renderer. The default full suite also checks
+physical controller state; a non-centered pad can fail its unrelated idle assertion.
