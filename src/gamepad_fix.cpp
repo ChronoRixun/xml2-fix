@@ -40,7 +40,9 @@ namespace gamepad_fix
 		constexpr int slot_enum_objects = 4;
 		constexpr int slot_get_property = 5;
 		constexpr int slot_set_property = 6;
+		constexpr int slot_acquire = 7;
 		constexpr int slot_get_device_state = 9;
+		constexpr int slot_poll = 25; // IDirectInputDevice2 and later
 		constexpr int slot_get_device_info = 15;
 
 		// Per spoofed DirectInput device.
@@ -490,6 +492,8 @@ namespace gamepad_fix
 			return DI_OK;
 		}
 
+		bool game_in_foreground();
+
 		HRESULT STDMETHODCALLTYPE get_device_state(void* self, const DWORD size, LPVOID data)
 		{
 			const auto result = reinterpret_cast<get_device_state_t>(original(self, slot_get_device_state))(self, size, data);
@@ -524,6 +528,13 @@ namespace gamepad_fix
 				return DI_OK;
 			}
 
+			// Another window has the focus: an idle pad, as with the game's own foreground-only device.
+			if (!game_in_foreground())
+			{
+				active->fill_state(*static_cast<DIJOYSTATE*>(data), xinput_pad::raw_state{}, record.axes);
+				return DI_OK;
+			}
+
 			const auto connected = xinput_pad::connected_indices();
 			xinput_pad::raw_state pad{};
 			if (record.ordinal < 0 || record.ordinal >= static_cast<int>(connected.size()) || !xinput_pad::read_raw(connected[record.ordinal], pad))
@@ -534,6 +545,44 @@ namespace gamepad_fix
 			pad_input::on_read(record.ordinal, pad, false); // the test pipe's "pad N" is the N-th pad presented
 			active->fill_state(*static_cast<DIJOYSTATE*>(data), pad, record.axes);
 			return DI_OK;
+		}
+
+		// The game reads a pad only after its DirectInput device let it: each frame it calls Poll, on a failure Acquire
+		// and Poll again, and without both it zeroes the pad's state and never calls GetDeviceState (0x6287f0). The
+		// device is foreground-only (SetCooperativeLevel 5 or 6, 0x628d16), and DirectInput can refuse Acquire for the
+		// whole session (E_ACCESSDENIED; in game 2026-10-04: every Acquire refused in a game whose window opened
+		// without the focus, also once it had the focus - the pad was dead while keyboard and mouse worked). A pad whose
+		// state comes from XInput doesn't need the device, so for it a refused Acquire or Poll counts as done;
+		// get_device_state keeps the pad idle while another window has the focus, as the foreground device would.
+		using device_call_t = HRESULT(STDMETHODCALLTYPE*)(void*);
+
+		bool game_in_foreground()
+		{
+			DWORD process = 0;
+			const HWND foreground = GetForegroundWindow();
+			return foreground && GetWindowThreadProcessId(foreground, &process) && process == GetCurrentProcessId();
+		}
+
+		HRESULT served_from_xinput(void* self, const int slot, const char* what)
+		{
+			const auto result = reinterpret_cast<device_call_t>(original(self, slot))(self);
+			if (SUCCEEDED(result) || !record_for(self).spoofed)
+			{
+				return result;
+			}
+			logger::write_once(std::string("pad-") + what, "dinput: the pad's %s was refused (%08lX) - its state comes from XInput, so the game reads it anyway",
+			                   what, static_cast<unsigned long>(result));
+			return DI_OK;
+		}
+
+		HRESULT STDMETHODCALLTYPE acquire(void* self)
+		{
+			return served_from_xinput(self, slot_acquire, "Acquire");
+		}
+
+		HRESULT STDMETHODCALLTYPE poll(void* self)
+		{
+			return served_from_xinput(self, slot_poll, "Poll");
 		}
 
 		struct interface_id
@@ -565,6 +614,11 @@ namespace gamepad_fix
 				patch_vtable(view, slot_get_device_info, reinterpret_cast<void*>(&get_device_info), wide);
 				patch_vtable(view, slot_get_property, reinterpret_cast<void*>(&get_property), wide);
 				patch_vtable(view, slot_get_device_state, reinterpret_cast<void*>(&get_device_state), wide);
+				patch_vtable(view, slot_acquire, reinterpret_cast<void*>(&acquire), wide);
+				if (iid != &IID_IDirectInputDeviceA && iid != &IID_IDirectInputDeviceW) // the first version has no Poll
+				{
+					patch_vtable(view, slot_poll, reinterpret_cast<void*>(&poll), wide);
+				}
 				if (presents_objects())
 				{
 					patch_vtable(view, slot_get_capabilities, reinterpret_cast<void*>(&get_capabilities), wide);
