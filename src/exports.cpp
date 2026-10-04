@@ -18,6 +18,7 @@
 // shows what the game is doing in Discord (Rich Presence, [Discord]; on unless switched off).
 
 #include "conversations.hpp"
+#include "objective_text.hpp"
 #include "discord_presence.hpp"
 #include "display.hpp"
 #include "forced_teams.hpp"
@@ -187,6 +188,7 @@ namespace
 		// three code sites of the conversation system, used from the first conversation on; independent of the
 		// patches above (none of its sites or guards is anyone else's).
 		conversations::install(game);
+		objective_text::install(game);
 		// Before any of XMen2.exe's own code runs, as the engine limit adjuster must be: this DLL is a
 		// static import of libIGDisplay.dll, which XMen2.exe imports statically, so Windows runs this
 		// DllMain while it loads the process - before the exe's entry point (0x6725f4, the CRT start-up

@@ -486,6 +486,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `AutoAdvance` | `1` | a conversation line with a negative `timeDelay` goes on by itself once its voice has played; `0`: every line waits for accept |
 | `ReplyVoices` | `1` | a chosen reply's voice plays out before its answer; `0`: cut one frame in, as the game has it |
 | `ReplyCursor` | `1` | a reply menu come back to keeps a reply highlighted; `0`: the game's clamp |
+| `ObjectiveDescriptions` | `0` | `1`: mission `updatedescription` appears in the journal while the objective is complete ([details](docs/objective-descriptions.md)) |
 | `GeometrySharingBlendIndices` | `0` | `1`: skinned models share geometry only when their packed blend indices match too ([details](#geometry-sharing)) |
 
 **[Limits]** ([details](#bigger-zones))
