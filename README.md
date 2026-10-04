@@ -53,6 +53,7 @@ No settings file is needed. Without one, the fix does the following; everything 
 | [LocalIP](#-online) | the game takes the address this PC reaches the internet from as its own, not a virtual adapter's | `[Online]` `LocalIP=first` |
 | [Four rows in *Advanced options*](#%EF%B8%8F-display) | display mode, frame rate, VSync and run in background; they change nothing until you change them | `[Display]` `InGameOptions=0` |
 | [Mods folder](#-mods) | files in `mods\` next to the game are used in place of the game's; with no files there, nothing is hooked | remove or empty `mods\`, or switch a mod off in `mods\load-order.txt` |
+| [Geometry sharing](#geometry-sharing) | prevents skinned geometry with different packed blend indices from sharing drawable data | `[Game]` `GeometrySharingBlendIndices=0` |
 | `xml2-fix.log` | what the game saw and what the fix did, written next to the DLL at every start | — |
 
 ## 🎮 The layout
@@ -315,6 +316,19 @@ Nothing changes without the keys. Every slot takes a name, so `ResourceNames` is
 
 **Fighting and power styles.** A zone, its enemies and the party share a registry of 19 style files, including fighting styles, power styles and secondary movesets. When it fills, a later hero can lose their powers even though the files and talents are present. `FightStyles=32` gives the registry room for 32 distinct styles. The game allocates a larger manager; its tree nodes, free ring, style objects, bitmaps and following fields use the expanded layout. Every affected instruction is checked before any write. Missing or `FightStyles=19` keeps the stock limit; values outside `19..32` are logged and ignored. This limit is independent of the other three keys. The test pipe reports `styles 20/32`. See [the layout and verification notes](docs/fight-styles.md). This feature needs a release containing the change; the existing 1.3.0 release does not support it.
 
+### Geometry sharing
+
+The retail engine can share two skinned meshes when their positions and weights match even though their bone indices differ. An NPC's black outline can then deform into large spikes. The fix compares the packed blend-index contents before reusing a candidate and continues looking for an equal candidate when they differ. It does not alter the model files.
+
+This correctness fix is **on by default** for the guarded retail executable and verified legacy geometry/vertex-array layout. Identical index fields remain eligible for sharing; unsupported array versions, extended formats and unreadable data keep the game's own comparison. To switch it off:
+
+```ini
+[Game]
+GeometrySharingBlendIndices=0
+```
+
+`xml2-fix.log` says whether it is active, disabled, or refused by a code/layout guard. The test pipe's `status` reports aggregate comparison, rejection and fallback counts. More distinct geometry can use more memory; the fix does not raise any resource limit.
+
 ## 🧬 Mods with their own campaign
 
 For total conversions that bring their own story, roster and saves (the X-Men Legends I community port, for one). **These keys are for mod makers and the port, which sets them itself; for XML2 as it ships, leave them out.** Each key does nothing until it is set:
@@ -452,6 +466,8 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `SmallImage` | *(the mode's badge)* | `none`: no badges; or one asset's key for every badge |
 | `Game` | *(detected)* | `xml1` or `xml2`, if the detection is wrong |
 | `ClientId` | *(the game's own application)* | another Discord application's id |
+
+**[Game]** `GeometrySharingBlendIndices` defaults to `1` for all games, including stock XML2; `0` restores retail geometry sharing ([details](#geometry-sharing)). The other keys below are for mods.
 
 **[Game]**: for mods with their own campaign and the X-Men Legends I port, which sets these itself. Leave them out for XML2 as it ships. ([details](#-mods-with-their-own-campaign))
 

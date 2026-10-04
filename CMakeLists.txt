@@ -16,6 +16,7 @@ add_compile_options(/W4 /permissive- /utf-8)
 
 # The fix: a drop-in dinput.dll for the game folder.
 add_library(xml2_fix SHARED
+	src/geometry_sharing.cpp
 	src/exports.cpp
 	src/gamepad_fix.cpp
 	src/pad_profile.cpp

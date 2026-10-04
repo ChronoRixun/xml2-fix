@@ -58,6 +58,7 @@
 #include "image_file.hpp"
 #include "ini_rules.hpp"
 #include "limits_rules.hpp"
+#include "geometry_sharing_rules.hpp"
 #include "local_ip.hpp"
 #include "local_ip_rules.hpp"
 #include "main_menu_rules.hpp"
@@ -7203,8 +7204,173 @@ namespace
 	}
 }
 
+namespace {
+std::uint32_t geometry_bridge_choice=1,geometry_x87_bits=0;
+std::uint32_t __cdecl geometry_bridge_callback(std::uint32_t a,std::uint32_t b)
+{
+ __asm pxor xmm0,xmm0
+ __asm fninit
+ return a==0x123000&&b==0x456000?geometry_bridge_choice:9;
+}
+__declspec(naked) void geometry_accept_landing()
+{
+ __asm fstp dword ptr [geometry_x87_bits]
+ __asm jc failed
+ __asm jnz failed
+ __asm cmp ecx,[esp+52]
+ __asm jne failed
+ __asm cmp edx,0x13579bdf
+ __asm jne failed
+ __asm cmp edi,0x123000
+ __asm jne failed
+ __asm cmp eax,0x12345678
+ __asm jne failed
+ __asm test esi,esi
+ __asm jnz failed
+ __asm cmp ebx,0x11223344
+ __asm jne failed
+ __asm cmp ebp,0x55667788
+ __asm jne failed
+ __asm movd ecx,xmm0
+ __asm cmp ecx,0xaabbccdd
+ __asm jne failed
+ __asm mov eax,1
+ __asm jmp done
+ failed:
+ __asm xor eax,eax
+ done:
+ __asm add esp,32
+ __asm pop edi
+ __asm pop esi
+ __asm pop ebx
+ __asm pop ebp
+ __asm ret
+}
+__declspec(naked) void geometry_reject_landing()
+{
+ __asm fstp dword ptr [geometry_x87_bits]
+ __asm jnc failed
+ __asm cmp ecx,[esp+52]
+ __asm jne failed
+ __asm cmp edx,0x13579bdf
+ __asm jne failed
+ __asm cmp eax,0xaabbccdd
+ __asm jne failed
+ __asm cmp esi,0x456000
+ __asm jne failed
+ __asm cmp edi,0x123000
+ __asm jne failed
+ __asm cmp ebx,0x11223344
+ __asm jne failed
+ __asm cmp ebp,0x55667788
+ __asm jne failed
+ __asm movd ecx,xmm0
+ __asm cmp ecx,0xaabbccdd
+ __asm jne failed
+ __asm mov eax,2
+ __asm jmp done
+ failed:
+ __asm xor eax,eax
+ done:
+ __asm add esp,32
+ __asm pop edi
+ __asm pop esi
+ __asm pop ebx
+ __asm pop ebp
+ __asm ret
+}
+__declspec(naked) std::uint32_t __cdecl invoke_geometry_bridge(void*)
+{
+ __asm push ebp
+ __asm push ebx
+ __asm push esi
+ __asm push edi
+ __asm sub esp,32
+ __asm mov edi,0x123000
+ __asm mov esi,0x456000
+ __asm mov dword ptr [esp+20],0x12345678
+ __asm mov ebx,0x11223344
+ __asm mov ebp,0x55667788
+ __asm mov eax,0xaabbccdd
+ __asm movd xmm0,eax
+ __asm mov ecx,[esp+52]
+ __asm mov edx,0x13579bdf
+ __asm fld1
+ __asm stc
+ __asm jmp ecx
+}
+void check_geometry_sharing_rules()
+{
+ using namespace geometry_sharing_rules;
+ std::printf("geometry sharing blend-index rules\n");
+ struct memory {
+  std::vector<std::uint8_t> bytes=std::vector<std::uint8_t>(0x8000);
+  bool read(address a,void* out,std::size_t n){if(a<0x10000||n>bytes.size()||a-0x10000>bytes.size()-n)return false;std::memcpy(out,bytes.data()+a-0x10000,n);return true;}
+  void word(address a,address v){std::memcpy(bytes.data()+a-0x10000,&v,4);}
+  void byte(address a,std::uint8_t v){bytes[a-0x10000]=v;}
+ } mem;
+ constexpr layout types{0x90000,0xa0000};
+ const auto make=[&](address g,address v,address m,address data){
+  mem.word(g,types.geometry_vtable);mem.word(g+12,v);mem.word(v,types.vertex_vtable);mem.word(v+8,m);mem.word(v+12,5);mem.word(v+28,1|(3<<4)|(3<<8));mem.byte(v+56,32);mem.byte(v+61,28);mem.word(m+80,data);
+  for(address i=0;i<5;++i)mem.word(data+i*32+28,0x00030201);
+ };
+ make(0x10100,0x10200,0x10300,0x11000);make(0x14100,0x14200,0x14300,0x15000);
+ CHECK(compare(mem,0x10100,0x14100,types)==comparison::equal);
+ mem.byte(0x15000+4*32+29,7);
+ CHECK(compare(mem,0x10100,0x14100,types)==comparison::different);
+ mem.byte(0x15000+4*32+29,2);
+ // A non-index field is still the retail comparator's decision.
+ mem.byte(0x15000+9,19);
+ CHECK(compare(mem,0x10100,0x14100,types)==comparison::equal);
+ // Identical packed data across every basic supported count/format combination.
+ for(address indices=1;indices<=4;++indices)for(address weights=0;weights<=4;++weights)for(address uv=0;uv<=8;++uv){
+  const address format=7|(weights<<4)|(indices<<8)|(uv<<16);
+  mem.word(0x10200+28,format);mem.word(0x14200+28,format);
+  CHECK(compare(mem,0x10100,0x14100,types)==comparison::equal);
+ }
+ mem.word(0x10200+28,0x331);mem.word(0x14200+28,0x331);
+ const auto saved=mem.bytes;
+ const auto unsupported=[&](address at,address value){mem.bytes=saved;mem.word(at,value);CHECK(compare(mem,0x10100,0x14100,types)==comparison::unsupported);};
+ unsupported(0x14100,0x90004);unsupported(0x14200,0xa0004);
+ unsupported(0x14200+28,0x00400331);unsupported(0x14200+28,0x00000531);
+ unsupported(0x14200+28,0x00000351);unsupported(0x14200+28,0x00090331);
+ unsupported(0x14200+12,4);unsupported(0x14300+80,0xfffffff0);
+ unsupported(0x14300+80,0x17fff);
+ mem.bytes=saved;mem.byte(0x14200+61,255);CHECK(compare(mem,0x10100,0x14100,types)==comparison::unsupported);
+ mem.bytes=saved;mem.byte(0x14200+56,2);CHECK(compare(mem,0x10100,0x14100,types)==comparison::unsupported);
+ mem.bytes=saved;mem.word(0x10200+28,1);mem.word(0x14200+28,1);CHECK(compare(mem,0x10100,0x14100,types)==comparison::equal);
+ // Rejection must reach another candidate, not terminate the original search.
+ mem.bytes=saved;mem.byte(0x15000+28,8);make(0x15100,0x15200,0x15300,0x16000);
+ CHECK(compare(mem,0x10100,0x14100,types)==comparison::different);
+ CHECK(compare(mem,0x10100,0x15100,types)==comparison::equal);
+ const auto guard_tests=[&](const auto& guards){
+  for(const auto& g:guards){std::vector<std::uint8_t> bytes(g.hex.size()/2);for(std::size_t i=0;i<bytes.size();++i)bytes[i]=static_cast<std::uint8_t>(std::stoi(std::string(g.hex.substr(2*i,2)),nullptr,16));
+   CHECK(limits_rules::matches(bytes.data(),g.hex));for(std::size_t i=0;i<bytes.size();++i){bytes[i]^=1;CHECK(!limits_rules::matches(bytes.data(),g.hex));bytes[i]^=1;}}
+ };
+ guard_tests(exe_guards);guard_tests(gfx_guards);guard_tests(attrs_guards);
+ CHECK(!first_mismatch(exe_guards,[](address,std::string_view){return true;}));
+ for(const auto& g:exe_guards)CHECK(first_mismatch(exe_guards,[&](address a,std::string_view){return a!=g.va;})==&g);
+ if(const auto exe=game_executable()){
+  for(const auto& g:exe_guards){const auto off=file_offset(*exe,g.va-0x400000);CHECK(off&&*off+g.hex.size()/2<=exe->size());if(off&&*off+g.hex.size()/2<=exe->size())CHECK(limits_rules::matches(reinterpret_cast<const std::uint8_t*>(exe->data()+*off),g.hex));}
+  for(const auto& spec:std::array<std::pair<const wchar_t*,bool>,2>{{{L"libIGGfx.dll",true},{L"libIGAttrs.dll",false}}}){
+   if(const auto file=game_file(spec.first)){
+    const auto& guards=spec.second?std::vector<guard>(gfx_guards.begin(),gfx_guards.end()):std::vector<guard>(attrs_guards.begin(),attrs_guards.end());
+    for(const auto& g:guards){const auto off=file_offset(*file,g.va);CHECK(off&&*off+g.hex.size()/2<=file->size());if(off&&*off+g.hex.size()/2<=file->size())CHECK(limits_rules::matches(reinterpret_cast<const std::uint8_t*>(file->data()+*off),g.hex));}
+    const auto check_slot=[&](address rva,address target){const auto off=file_offset(*file,rva);CHECK(off&&*off+4<=file->size());if(off&&*off+4<=file->size()){address ptr=0;std::memcpy(&ptr,file->data()+*off,4);CHECK(ptr==0x10000000+target);}};
+    if(spec.second){check_slot(vertex_vtable_rva+0x5c,0x4010);check_slot(vertex_vtable_rva+0x70,0x46040);}else check_slot(geometry_vtable_rva+0x54,0x17000);
+   }
+  }
+ }else std::printf("  skip  no local executable for geometry sharing guards\n");
+ const auto code=bridge(static_cast<address>(reinterpret_cast<std::uintptr_t>(&geometry_bridge_callback)),static_cast<address>(reinterpret_cast<std::uintptr_t>(&geometry_accept_landing)),static_cast<address>(reinterpret_cast<std::uintptr_t>(&geometry_reject_landing)));
+ auto* stub=VirtualAlloc(nullptr,code.size(),MEM_RESERVE|MEM_COMMIT,PAGE_EXECUTE_READWRITE);CHECK(stub!=nullptr);
+ if(stub){std::memcpy(stub,code.data(),code.size());FlushInstructionCache(GetCurrentProcess(),stub,code.size());geometry_bridge_choice=1;CHECK(invoke_geometry_bridge(stub)==1);CHECK(geometry_x87_bits==0x3f800000);geometry_bridge_choice=0;CHECK(invoke_geometry_bridge(stub)==2);CHECK(geometry_x87_bits==0x3f800000);VirtualFree(stub,0,MEM_RELEASE);}
+ const auto patch=jump(hook_va,0x12345678);address rel=0;std::memcpy(&rel,patch.data()+1,4);CHECK(patch[0]==0xe9&&patch[5]==0x90&&hook_va+5+rel==0x12345678);
+}
+}
+
 int main(const int argc, char** argv)
 {
+	if (argc > 1 && std::strcmp(argv[1], "--geometry-sharing-rules") == 0) { check_geometry_sharing_rules(); return failures ? 1 : 0; }
 	if (argc > 1 && std::strcmp(argv[1], "--fight-style-rules") == 0)
 	{
 		check_fight_style_rules();
@@ -7276,6 +7442,7 @@ int main(const int argc, char** argv)
 	check_menu_screens();
 	check_options_menu_rules();
 	check_resolution_rules();
+	check_geometry_sharing_rules();
 	check_limits_rules();
 	check_fight_style_rules();
 	check_forced_teams_rules();

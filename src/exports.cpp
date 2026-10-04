@@ -26,6 +26,7 @@
 #include "iat_hook.hpp"
 #include "ini.hpp"
 #include "limits.hpp"
+#include "geometry_sharing.hpp"
 #include "log.hpp"
 #include "main_menu.hpp"
 #include "mod_loader.hpp"
@@ -193,6 +194,7 @@ namespace
 		// first asks for the actor table (getter 0x56b8e0) and the resource name table (0x55af80) from
 		// the CPrecacheMgr constructor, during its start-up.
 		limits::install(game);
+		geometry_sharing::install(game);
 
 		test_input::install(); // first: its screenshots need the display fix's device hook
 		display::install(game);
