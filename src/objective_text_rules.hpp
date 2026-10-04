@@ -20,6 +20,8 @@ namespace objective_text_rules
     constexpr std::uint32_t allocate_continue = 0x489a07;
     constexpr std::uint32_t journal_site = 0x5cd5e7;
     constexpr std::uint32_t journal_continue = 0x5cd5ed;
+    constexpr std::uint32_t primary_site = 0x5ce1c9;
+    constexpr std::uint32_t primary_continue = 0x5ce1d5;
 
     inline bool same_field(std::string_view text, std::string_view expected) noexcept
     {
@@ -50,11 +52,12 @@ namespace objective_text_rules
     };
 
     struct guard { std::uint32_t va; std::string_view hex; };
-    // Retail instructions checked before all three hooks are installed together.
-    constexpr std::array<guard, 6> guards{{
+    // Retail instructions checked before all four hooks are installed together.
+    constexpr std::array<guard, 7> guards{{
         {attribute_parser, "56578b7c240c6878926800578bf1"},
         {attribute_call, "e85ceeffff8b442410"},
         {allocate_site, "8890a90100008b5d0c42"},
+        {primary_site, "8a8636ffffff8dbe36ffffff83c40c84c07438"},
         {journal_site, "8d96e0000000528d842434010000"},
         {0x488ab0, "0fb681a90100008a8018b17200c0e8062401c3"},
         {0x488430, "535556578b7c24146a208bf15756"}, // whole-record copy used by objective sorting

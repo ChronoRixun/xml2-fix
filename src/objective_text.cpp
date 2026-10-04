@@ -13,6 +13,7 @@ namespace objective_text
         using parser_t = void(__fastcall*)(void*, void*, const char*, const char*);
         DWORD allocate_return = allocate_continue;
         DWORD journal_return = journal_continue;
+        DWORD primary_return = primary_continue;
 
         // The allocation callback runs before attributes, including on act reload
         // and save restoration. Clear just this slot: an act can load several files.
@@ -86,6 +87,24 @@ namespace objective_text
             }
         }
 
+        __declspec(naked) void primary_stub()
+        {
+            __asm
+            {
+                pushfd
+                pushad
+                push ebx
+                call choose_text
+                add esp, 4
+                mov dword ptr [esp], eax // saved EDI: selected description
+                mov al, byte ptr [eax]
+                mov byte ptr [esp + 28], al // saved AL: native empty-description test
+                popad
+                popfd
+                jmp dword ptr [primary_return]
+            }
+        }
+
         bool retail_bytes()
         {
             __try
@@ -111,24 +130,25 @@ namespace objective_text
         const auto parser = branch<5>(attribute_call, reinterpret_cast<DWORD>(&attribute_hook), true);
         const auto allocation = branch<6>(allocate_site, reinterpret_cast<DWORD>(&allocate_stub));
         const auto journal = branch<6>(journal_site, reinterpret_cast<DWORD>(&journal_stub));
+        const auto primary = branch<12>(primary_site, reinterpret_cast<DWORD>(&primary_stub));
         struct patch { DWORD site; const std::uint8_t* bytes; std::size_t size; };
         patch patches[] = {{attribute_call, parser.data(), parser.size()},
                            {allocate_site, allocation.data(), allocation.size()},
-                           {journal_site, journal.data(), journal.size()}};
-        // Protect each page only once: parser and allocation share a page. Acquire
-        // both before writing any bytes, so failure cannot leave a partial feature.
-        DWORD first_protection = 0, second_protection = 0, ignored = 0;
-        auto* first_page = reinterpret_cast<void*>(attribute_call & ~DWORD(0xfff));
-        auto* second_page = reinterpret_cast<void*>(journal_site & ~DWORD(0xfff));
-        if (!VirtualProtect(first_page, 0x1000, PAGE_EXECUTE_READWRITE, &first_protection))
+                           {journal_site, journal.data(), journal.size()},
+                           {primary_site, primary.data(), primary.size()}};
+        // Acquire all pages before any hook is written. Allocation and parser
+        // share one page; primary and secondary journal loops occupy two others.
+        const DWORD pages[] = {attribute_call & ~DWORD(0xfff),
+                               journal_site & ~DWORD(0xfff), primary_site & ~DWORD(0xfff)};
+        DWORD protections[3]{};
+        DWORD ignored = 0;
+        for (unsigned i = 0; i < 3; ++i)
         {
-            logger::write("objective descriptions: could not protect parser page; disabled");
-            return;
-        }
-        if (!VirtualProtect(second_page, 0x1000, PAGE_EXECUTE_READWRITE, &second_protection))
-        {
-            VirtualProtect(first_page, 0x1000, first_protection, &ignored);
-            logger::write("objective descriptions: could not protect journal page; disabled");
+            if (VirtualProtect(reinterpret_cast<void*>(pages[i]), 0x1000,
+                               PAGE_EXECUTE_READWRITE, &protections[i])) continue;
+            for (unsigned j = 0; j < i; ++j)
+                VirtualProtect(reinterpret_cast<void*>(pages[j]), 0x1000, protections[j], &ignored);
+            logger::write("objective descriptions: could not protect all hook pages; disabled");
             return;
         }
         for (const auto& p : patches)
@@ -136,8 +156,8 @@ namespace objective_text
             std::memcpy(reinterpret_cast<void*>(p.site), p.bytes, p.size);
             FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(p.site), p.size);
         }
-        VirtualProtect(second_page, 0x1000, second_protection, &ignored);
-        VirtualProtect(first_page, 0x1000, first_protection, &ignored);
+        for (unsigned i = 0; i < 3; ++i)
+            VirtualProtect(reinterpret_cast<void*>(pages[i]), 0x1000, protections[i], &ignored);
         logger::write("objective descriptions: enabled; journal completion text follows the saved completion bit");
     }
 }
