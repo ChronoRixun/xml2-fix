@@ -315,6 +315,19 @@ Nothing changes without the keys. Every slot takes a name, so `ResourceNames` is
 
 **Fighting and power styles.** A zone, its enemies and the party share a registry of 19 style files, including fighting styles, power styles and secondary movesets. When it fills, a later hero can lose their powers even though the files and talents are present. `FightStyles=32` gives the registry room for 32 distinct styles. The game allocates a larger manager; its tree nodes, free ring, style objects, bitmaps and following fields use the expanded layout. Every affected instruction is checked before any write. Missing or `FightStyles=19` keeps the stock limit; values outside `19..32` are logged and ignored. This limit is independent of the other three keys. The test pipe reports `styles 20/32`. See [the layout and verification notes](docs/fight-styles.md). This feature needs a release containing the change; the existing 1.3.0 release does not support it.
 
+### Geometry sharing
+
+When the game loads a skinned model, it looks for one already loaded with the same geometry and shares it instead of keeping a second copy. Its comparison checks the vertices' positions and weights but not their packed blend indices (which bones each vertex follows), so two models that differ only there end up sharing one, and one of them is drawn with the other's bones. In the X-Men Legends I port, that turns some characters' black outlines into large spikes. Nobody has seen it happen in XML2 as it ships.
+
+**This key is for the port, which sets it itself, and for mods; for XML2 as it ships, leave it out.** Like the other `[Game]` keys, it does nothing until it is set:
+
+```ini
+[Game]
+GeometrySharingBlendIndices=1   ; skinned models share geometry only when their blend indices match too
+```
+
+With it, a model whose packed blend indices differ from a candidate's is not shared with that candidate, and the game goes on looking for one that matches; models with the same indices share as before. The model files are not changed. It works by hooking the game's loop over the candidates, after every byte it relies on in `XMen2.exe`, `libIGGfx.dll` and `libIGAttrs.dll` is checked against the retail build; vertex layouts the fix doesn't know (other array versions, extended formats) and data it can't read keep the game's own comparison. On any other build nothing is hooked. `xml2-fix.log` says whether it is on, off (no key, or `0`) or unavailable, and why; the test pipe's `status` adds `geometry sharing on; geometry comparisons ...; geometry rejected ...; geometry fallback ...`. More distinct geometry can use more memory; the fix doesn't raise any limit for it.
+
 ## 🧬 Mods with their own campaign
 
 For total conversions that bring their own story, roster and saves (the X-Men Legends I community port, for one). **These keys are for mod makers and the port, which sets them itself; for XML2 as it ships, leave them out.** Each key does nothing until it is set:
@@ -473,6 +486,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `AutoAdvance` | `1` | a conversation line with a negative `timeDelay` goes on by itself once its voice has played; `0`: every line waits for accept |
 | `ReplyVoices` | `1` | a chosen reply's voice plays out before its answer; `0`: cut one frame in, as the game has it |
 | `ReplyCursor` | `1` | a reply menu come back to keeps a reply highlighted; `0`: the game's clamp |
+| `GeometrySharingBlendIndices` | `0` | `1`: skinned models share geometry only when their packed blend indices match too ([details](#geometry-sharing)) |
 
 **[Limits]** ([details](#bigger-zones))
 
