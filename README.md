@@ -315,6 +315,14 @@ Nothing changes without the keys. Every slot takes a name, so `ResourceNames` is
 
 **Fighting and power styles.** A zone, its enemies and the party share a registry of 19 style files, including fighting styles, power styles and secondary movesets. When it fills, a later hero can lose their powers even though the files and talents are present. `FightStyles=32` gives the registry room for 32 distinct styles. The game allocates a larger manager; its tree nodes, free ring, style objects, bitmaps and following fields use the expanded layout. Every affected instruction is checked before any write. Missing or `FightStyles=19` keeps the stock limit; values outside `19..32` are logged and ignored. This limit is independent of the other three keys. The test pipe reports `styles 20/32`. See [the layout and verification notes](docs/fight-styles.md). This feature needs a release containing the change; the existing 1.3.0 release does not support it.
 
+### Character ladder paths (planned 1.3.2)
+
+Legends Classic derives descent paths from the player's original ladder animations.
+`[Game] CharacterLadderPaths=1` lets characters evaluate those two paths with the
+native movement timer. It is off by default, checks the retail engine before hooking,
+and does not enable arbitrary paths on characters. Both the builder conversion and
+this companion are required. See [implementation and validation](docs/character-ladder-paths.md).
+
 ### Geometry sharing
 
 When the game loads a skinned model, it looks for one already loaded with the same geometry and shares it instead of keeping a second copy. Its comparison checks the vertices' positions and weights but not their packed blend indices (which bones each vertex follows), so two models that differ only there end up sharing one, and one of them is drawn with the other's bones. In the X-Men Legends I port, that turns some characters' black outlines into large spikes. Nobody has seen it happen in XML2 as it ships.

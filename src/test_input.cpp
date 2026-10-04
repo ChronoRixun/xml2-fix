@@ -5,6 +5,7 @@
 #include "frame_rate.hpp"
 #include "limits.hpp"
 #include "geometry_sharing.hpp"
+#include "ladder_paths.hpp"
 #include "ini.hpp"
 #include "log.hpp"
 #include "pad_input.hpp"
@@ -493,7 +494,7 @@ namespace test_input
 			// checked from a script. Then the engine tables' use, live/cap ([Limits], limits.hpp).
 			return "ok XML2 Fix " FIX_VERSION "; keyboard devices " + std::to_string(devices) + "; reads " + std::to_string(reads.load()) + "; keys held " +
 			       std::to_string(held) + "; " + pad_input::status() + "; game " + (game_in_foreground() ? "has" : "doesn't have") + " the focus; fps " +
-			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + limits::status() + "; " + geometry_sharing::status();
+			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + limits::status() + "; " + geometry_sharing::status() + "; " + ladder_paths::status();
 		}
 
 		std::string handle(const std::string& line)
