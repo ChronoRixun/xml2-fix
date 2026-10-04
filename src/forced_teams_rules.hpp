@@ -58,6 +58,7 @@ namespace forced_teams_rules
 		get_party_member, // s(i): slot i's hero, "" when empty
 		join_hero,        // i(s): XML1 addHero as a reload - the spot saved, the hero added to the saved party, the zone reloaded there
 		skill_points,     // n(ai): addSkillPoints(actor, n) - n unspent skill points to the character(s) the name means (an item's '_ACTIVATOR_': the hero who took it)
+		stat_points,      // n(ai): addStatPoints(actor, n), unspent attribute points
 	};
 
 	struct function_spec
@@ -69,7 +70,7 @@ namespace forced_teams_rules
 
 	// None of these names is in XMen2.exe (xml2_test walks both of its tables). The exe has no "ssss",
 	// so the DLL owns its signature strings.
-	inline constexpr std::array<function_spec, 9> functions{{
+	inline constexpr std::array<function_spec, 10> functions{{
 		{"xml2fixFeature", "i", "s"},
 		{"seatParty", "n", "ssss"},
 		{"setSkinset", "n", "ss"},
@@ -79,6 +80,7 @@ namespace forced_teams_rules
 		{"getPartyMember", "s", "i"},
 		{"joinHero", "i", "s"},
 		{"addSkillPoints", "n", "ai"},
+		{"addStatPoints", "n", "ai"},
 	}};
 
 	// ---- The table the registration is pointed at ----------------------------------------------------
@@ -203,6 +205,7 @@ namespace forced_teams_rules
 		forced_teams,
 		add_hero,
 		join_hero,
+		stat_points,
 		skill_points, // addSkillPoints is registered with the rest: 1 whenever the functions are
 	};
 
@@ -230,6 +233,7 @@ namespace forced_teams_rules
 		if (clean == "addhero") return feature::add_hero;
 		if (clean == "joinhero") return feature::join_hero;
 		if (clean == "skillpoints") return feature::skill_points;
+		if (clean == "statpoints") return feature::stat_points;
 		return std::nullopt;
 	}
 
@@ -584,6 +588,16 @@ namespace forced_teams_rules
 	constexpr DWORD stats_flags = 0x2ad;         // CStats+0x2ad: bit 0x20 xpexempt
 	constexpr std::uint8_t stats_xpexempt = 0x20;
 	constexpr int skill_points_max = 20;         // n per call
+	// Saved block+0x16; the character screen spends from this word. Unlike the
+	// skill setter, the native attribute setter has no talent-count prerequisite.
+	constexpr DWORD stat_points_get = 0x544a40;
+	constexpr DWORD stat_points_set = 0x43a3f0;
+	inline std::optional<int> stat_point_total(int before, int count)
+	{
+		if (count < 1 || count > skill_points_max || before < 0 || before > 32767 - count) return std::nullopt;
+		return before + count;
+	}
+
 	constexpr std::size_t grant_max = 8;         // entities one name can mean (_ALL_HEROES_ is four)
 
 	// One entity the name meant.
@@ -599,7 +613,7 @@ namespace forced_teams_rules
 
 	// Every byte of XMen2.exe the functions rely on, read from the retail build. All must match
 	// before anything is patched; xml2_test compares them with a copy of the exe.
-	inline constexpr std::array<guard, 118> guards{{
+	inline constexpr std::array<guard, 120> guards{{
 		// The registration and the tree.
 		{0x49fe30, "6808a968006821010000e8318903008bc8e85a770300c3", "the registration (0x49fe30: push table, push count, call 0x4d75a0)"},
 		{0x4d7637, "81bf4819000040010000", "the tree's 320-name cap (0x4d7637)"},
@@ -740,6 +754,8 @@ namespace forced_teams_rules
 		{0x6a3348, "d0975e00", "the dialog's vt+0x1c (addOption, 0x5e97d0)"},
 		{0x5b93e1, "83f8100f9cc08d4c2410506a006a016a005168fd0f0000", "the online Game Type menu greys Danger Room out with addOption's 6th argument (0x5b93e4)"},
 		// Skill points (addSkillPoints).
+		{stat_points_get, "668b4116c3", "unspent attribute points at saved block+0x16"},
+		{stat_points_set, "668b44240466894116c20400", "native attribute-point setter, ret 4"},
 		{0x4a7e30, "64a1000000006aff68c0416700506489250000000083ec285355568b74244433db3bf3570f84b102000056e8dca41c0083c4043bc38944241074338d4c2410e85cd6fbff84c074268d4c2410e82fd6fbffa338617500b8010000008b4c243864890d000000005f5e5d5b83c434c3",
 		 "the script name resolver (0x4a7e30): a named entity into [0x756138], count 1"},
 		{0x4a8660,
@@ -972,11 +988,11 @@ namespace forced_teams_rules
 		{
 			on = e.forced_teams() && e.join_hero_on() ? 1 : 0;
 		}
-		else if (which == feature::skill_points)
+		else if (which == feature::skill_points || which == feature::stat_points)
 		{
 			on = 1; // registered with the rest, whatever the switches
 		}
-		e.log(std::string(prefix) + call_text("xml2fixFeature", *values) + " -> " + std::to_string(on) + (which ? "" : " (not a feature: forcedteams, addhero, joinhero, skillpoints)"));
+		e.log(std::string(prefix) + call_text("xml2fixFeature", *values) + " -> " + std::to_string(on) + (which ? "" : " (not a feature: forcedteams, addhero, joinhero, skillpoints, statpoints)"));
 		if (which == feature::forced_teams && !on)
 		{
 			warn_left_records(e);
@@ -1034,6 +1050,32 @@ namespace forced_teams_rules
 			}
 		}
 		e.log(call + " -> " + text);
+		return nullptr;
+	}
+
+	// One spendable attribute point, not a fixed stat boost; activation names the collector.
+	template <typename Engine>
+	void* add_stat_points(Engine& e, void* args)
+	{
+		const auto name = e.text_argument(args, 0);
+		const auto count = e.int_argument(args, 1);
+		if (!name || !count || !stat_point_total(0, *count))
+		{
+			e.log(std::string(prefix) + "addStatPoints: invalid actor/count - nothing done");
+			return nullptr;
+		}
+		const auto grants = e.grant_stat_points(*name, *count);
+		if (!grants)
+		{
+			e.log(std::string(prefix) + "addStatPoints: name resolution or stats unavailable");
+			return nullptr;
+		}
+		for (const auto& g : *grants)
+		{
+			if (!g.character || !g.stats) continue;
+			e.log(std::string(prefix) + "addStatPoints: unspent attribute points " +
+			      std::to_string(g.before) + " -> " + std::to_string(g.after));
+		}
 		return nullptr;
 	}
 

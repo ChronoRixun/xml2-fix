@@ -2594,8 +2594,8 @@ namespace
 		using namespace forced_teams_rules;
 		std::printf("forced parties ([Game] ForcedTeams, AddHero and JoinHero: seatParty, setSkinset, pushParty, popParty, addHero, joinHero, addSkillPoints)\n");
 
-		// The functions: nine, signatures the game's compiler knows, room in its tree.
-		CHECK(functions.size() == 9 && table_count == 0x12a && builtin_count + table_count == 317 && table_count + builtin_count <= tree_capacity);
+		// The functions: ten, signatures the game's compiler knows, room in its tree.
+		CHECK(functions.size() == 10 && table_count == 0x12b && builtin_count + table_count == 318 && table_count + builtin_count <= tree_capacity);
 		bool signatures_ok = true;
 		for (const auto& f : functions)
 		{
@@ -2608,7 +2608,7 @@ namespace
 		CHECK(std::string_view(functions[static_cast<std::size_t>(function::join_hero)].name) == "joinHero" && std::string_view(functions[static_cast<std::size_t>(function::join_hero)].ret) == "i" &&
 		      std::string_view(functions[static_cast<std::size_t>(function::join_hero)].args) == "s");
 		const auto writes = registration_writes(0x12345678);
-		CHECK(writes[0].va == 0x49fe31 && writes[0].value == 0x12345678 && writes[1].va == 0x49fe36 && writes[1].value == 0x12a && writes[0].size == 4 && writes[1].size == 4);
+		CHECK(writes[0].va == 0x49fe31 && writes[0].value == 0x12345678 && writes[1].va == 0x49fe36 && writes[1].value == 0x12b && writes[0].size == 4 && writes[1].size == 4);
 		CHECK(std::string_view(functions[static_cast<std::size_t>(function::skill_points)].name) == "addSkillPoints" && std::string_view(functions[static_cast<std::size_t>(function::skill_points)].ret) == "n" &&
 		      std::string_view(functions[static_cast<std::size_t>(function::skill_points)].args) == "ai" && skill_points_max == 20 && grant_max >= 4);
 
@@ -2668,7 +2668,7 @@ namespace
 		bool guards_ok = true;
 		std::set<DWORD> addresses;
 		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
-		CHECK(guards_ok && guards.size() == 118);
+		CHECK(guards_ok && guards.size() == 120);
 
 		// Change Team in the Xtraction menus: greyed out only with ForcedTeams=1 and the flag read as set.
 		CHECK(change_team_disabled(true, 1) && !change_team_disabled(true, 0) && !change_team_disabled(true, std::nullopt) && !change_team_disabled(false, 1) &&
@@ -2708,7 +2708,24 @@ namespace
 		}
 		CHECK(retail);
 
-		// The game's names: its 289 functions and 19 builtins; none of the nine is among them, nor
+		// Run only the guarded native attribute accessor on a synthetic saved block.
+		if (retail)
+		{
+			using point_get = short(__fastcall*)(void*, void*);
+			using point_set = void(__fastcall*)(void*, void*, int);
+			std::array<std::uint8_t, 0xc0> block{};
+			block[0x14] = 9; // independent skill-point counter
+			block[0x16] = 4;
+			auto expected = block;
+			expected[0x16] = 5;
+			const auto get = reinterpret_cast<point_get>(at(stat_points_get));
+			const auto set = reinterpret_cast<point_set>(at(stat_points_set));
+			CHECK(get(block.data(), nullptr) == 4);
+			set(block.data(), nullptr, 5);
+			CHECK(get(block.data(), nullptr) == 5 && block == expected);
+		}
+
+		// The game's names: its 289 functions and 19 builtins; none of the ten is among them, nor
 		// anywhere in the exe's bytes (any case).
 		std::set<std::string> retail_names;
 		for (DWORD i = 0; i < retail_count; ++i) retail_names.insert(lowercase(text_at(dword_at(retail_table + i * 16 + 4))));
@@ -2724,7 +2741,7 @@ namespace
 		CHECK(text_at(dword_at(retail_table + 4)) == "setRotZ" && text_at(dword_at(retail_table + (retail_count - 1) * 16 + 4)) == "SetDontShowWarningOff" &&
 		      text_at(dword_at(builtin_table + 4)) == "==");
 
-		// The table the DLL builds: the game's 289 entries byte for byte, then the nine.
+		// The table the DLL builds: the game's 289 entries byte for byte, then the ten.
 		std::vector<func_entry> built(table_count);
 		std::array<const void*, functions.size()> handlers{};
 		for (std::size_t i = 0; i < handlers.size(); ++i) handlers[i] = reinterpret_cast<const void*>(0x1000 + i);
@@ -2784,7 +2801,7 @@ namespace
 			}
 		}
 		CHECK(changed == 5 && outside == 0); // 0x0068a908 -> 0x12345678, 0x121 -> 0x12a
-		CHECK(limits_rules::matches(at(registration), "6878563412682a010000e8318903008bc8e85a770300c3"));
+		CHECK(limits_rules::matches(at(registration), "6878563412682b010000e8318903008bc8e85a770300c3"));
 		std::memcpy(image, before.data(), image_size);
 
 		// The strings the handlers send are the game's own.
@@ -7552,6 +7569,12 @@ namespace
 
 int main(const int argc, char** argv)
 {
+	if (argc > 1 && std::strcmp(argv[1], "--script-rules") == 0)
+	{
+		check_forced_teams_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--geometry-sharing-rules") == 0)
 	{
 		check_geometry_sharing_rules();

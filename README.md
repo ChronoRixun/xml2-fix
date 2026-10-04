@@ -382,7 +382,7 @@ It works by pointing the one push in the credits menu that hands the console XML
 
 It works by pointing one call (the accept check), one call (the pending reply's voice) and one store (the cursor) in the conversation system's code at the fix, after every byte they rely on is checked against the retail build; on any other build the conversations stay as the game has them and `xml2-fix.log` says why. Every line that goes on by itself and every reply voice waited for is logged.
 
-**Forced parties.** XML2 always lets the player pick the team. X-Men Legends I often didn't: Magma alone in the mansion, flashbacks with fixed heroes in period costumes, Cyclops joining mid-level. With `ForcedTeams` set the fix adds nine functions to the game's script language (the ninth, `addSkillPoints`, is for pickups rather than parties; it is registered with the rest and works whatever `ForcedTeams` says):
+**Forced parties.** XML2 always lets the player pick the team. X-Men Legends I often didn't: Magma alone in the mansion, flashbacks with fixed heroes in period costumes, Cyclops joining mid-level. With `ForcedTeams` set the fix adds ten functions to the game's script language (`addSkillPoints` and `addStatPoints` are for pickups rather than parties; both are registered with the rest and work whatever `ForcedTeams` says):
 
 | Function | Does |
 | -------- | ---- |
@@ -394,6 +394,7 @@ It works by pointing one call (the accept check), one call (the pending reply's 
 | `addHero("cyclops")` | with `AddHero=1`, the hero joins the party on the spot, no reload (the game's own unused routine for it); 0 when off, so the script can fall back |
 | `getPartyMember(0)` | slot 0's hero, `""` when empty |
 | `addSkillPoints("_ACTIVATOR_", 1)` | 1 to 20 unspent skill points to the character the name means (an item's `onactivate` names the hero who took it as `_ACTIVATOR_`; `_ACTIVE_HERO_`, `_HERO1_`.. and `_ALL_HEROES_` work as in `setXP`): the game's own counter the skills screen spends from and the save keeps; nothing else changes. X-Men Legends I's free-skill-point pickup; the game has no call of its own for one |
+| `addStatPoints("_ACTIVATOR_", 1)` | 1 to 20 unspent attribute points to the character the name resolves to, using the native saved counter. The player chooses which stat to raise. Invalid amounts or signed-counter overflow are refused; no XP or fixed stat is changed |
 | `joinHero("cyclops")` | the hero joins the party without the team menu: the active hero's spot and the party are saved on the side-mission stack with the hero added to the saved party, and the zone reloads there with it (the game's own `restorelastzone`, which takes the record off again). 1 when the reload is on its way, 2 when the hero is in the party already, 0 when it can't (off, party full, stack full, another load waiting - the log says which), so the script can fall back. The script's next console command must wait for the reload: it is queued, and the game runs it at the next frame |
 
 A script asks first, into a variable it declares, so the same script works with and without the fix:
@@ -475,7 +476,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `SaveFolder` | *(the game's own)* | saves, `settings.dat` and screenshots in `Documents\Activision\<SaveFolder>` |
 | `WindowTitle` | *(the game's own)* | the name of the game's window, taskbar button and alt-tab entry |
 | `NewGamePlus` | `1` | `0`: New Game never offers "use saved game statistics" |
-| `ForcedTeams` | *(not registered)* | `1`: nine script functions seat the parties a mod's missions want (and `addSkillPoints`); `0`: the party functions report off |
+| `ForcedTeams` | *(not registered)* | `1`: ten script functions seat the parties a mod's missions want (and the pickup point functions); `0`: the party functions report off |
 | `AddHero` | `0` | with `ForcedTeams=1`: `addHero` seats a hero mid-level (experimental) |
 | `JoinHero` | `1` | with `ForcedTeams=1`: `joinHero` adds a hero to the party with a reload on the spot; `0`: it reports off |
 | `PostgameScript` | *(the game's own)* | after the end credits, run `Scripts\<name>.py` instead of loading XML2's last zone |

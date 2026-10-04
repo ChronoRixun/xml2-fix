@@ -591,7 +591,7 @@ namespace forced_teams
 
 		// As setXP resolves its name and walks the entities (0x4a8660-0x4a86fd), then the word at block+0x14
 		// through the game's own getter and setter. No C++ objects: `out` is filled, `count` set.
-		bool call_grant_skill_points(const char* name, const int n, grant (&out)[grant_max], int& count)
+		bool call_grant_points(const char* name, const int n, grant (&out)[grant_max], int& count, bool attributes = false)
 		{
 			__try
 			{
@@ -631,9 +631,12 @@ namespace forced_teams
 					copy_text(reinterpret_cast<const char*>(stats + stats_name), g.name);
 					g.exempt = (stats[stats_flags] & stats_xpexempt) != 0;
 					void* block = stats + stats_block;
-					g.before = at<skill_get_t>(skill_points_get)(block, nullptr);
-					at<skill_set_t>(skill_points_set)(block, nullptr, g.before + n);
-					g.after = at<skill_get_t>(skill_points_get)(block, nullptr);
+					const DWORD getter = attributes ? stat_points_get : skill_points_get;
+					const DWORD setter = attributes ? stat_points_set : skill_points_set;
+					g.before = g.after = at<skill_get_t>(getter)(block, nullptr);
+					if (attributes && !stat_point_total(g.before, n)) continue;
+					at<skill_set_t>(setter)(block, nullptr, g.before + n);
+					g.after = at<skill_get_t>(getter)(block, nullptr);
 				}
 				return true;
 			}
@@ -695,10 +698,18 @@ namespace forced_teams
 			{
 				grant found[grant_max]{};
 				int count = 0;
-				if (!call_grant_skill_points(name.c_str(), n, found, count))
+				if (!call_grant_points(name.c_str(), n, found, count))
 				{
 					return std::nullopt;
 				}
+				return std::vector<grant>(found, found + count);
+			}
+
+			std::optional<std::vector<grant>> grant_stat_points(const std::string& name, const int n)
+			{
+				grant found[grant_max]{};
+				int count = 0;
+				if (!call_grant_points(name.c_str(), n, found, count, true)) return std::nullopt;
 				return std::vector<grant>(found, found + count);
 			}
 
@@ -877,8 +888,9 @@ namespace forced_teams
 			reinterpret_cast<const void*>(&handler<&get_party_member<game_engine>, 's'>),
 			reinterpret_cast<const void*>(&handler<&join_hero<game_engine>, 'i'>),
 			reinterpret_cast<const void*>(&handler<&add_skill_points<game_engine>, 'n'>),
+			reinterpret_cast<const void*>(&handler<&add_stat_points<game_engine>, 'n'>),
 		};
-		static_assert(static_cast<std::size_t>(function::skill_points) + 1 == functions.size());
+		static_assert(static_cast<std::size_t>(function::stat_points) + 1 == functions.size());
 
 		bool copy_retail_table()
 		{
