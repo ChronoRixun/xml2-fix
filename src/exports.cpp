@@ -12,11 +12,13 @@
 // own ([Online] LocalIP), for online play, and, when
 // xml2-fix.ini asks for it, runs the game windowed or borderless at the desktop's resolution,
 // raises engine caps (the actor and resource name tables, limits.hpp), gives a mod's campaign what
-// it needs (its New Game, saves, main menu, ending, forced parties, X-Men Legends 1's XP curve) and
+// it needs (its New Game, saves, main menu, ending, forced parties, X-Men Legends 1's XP curve and its rule
+// for breaking objects) and
 // opens a named pipe through which tests press keys and pad buttons (on virtual pads, [Test]
 // VirtualPads, when nothing is plugged in) and take screenshots without the focus. It also
 // shows what the game is doing in Discord (Rich Presence, [Discord]; on unless switched off).
 
+#include "break_rule.hpp"
 #include "conversations.hpp"
 #include "discord_presence.hpp"
 #include "display.hpp"
@@ -195,6 +197,10 @@ namespace
 		// the CPrecacheMgr constructor, during its start-up.
 		limits::install(game);
 		geometry_sharing::install(game);
+		// X-Men Legends 1's rule for breaking objects ([Game] BreakRule=xml1): one vtable slot of the combat object and
+		// two code sites of the objects' own (their structure read and their damage gate), used from the first zone on;
+		// none of its sites or guards is anyone else's.
+		break_rule::install(game);
 
 		test_input::install(); // first: its screenshots need the display fix's device hook
 		display::install(game);
