@@ -4480,7 +4480,7 @@ namespace
 		}
 		{
 			std::ofstream out(ini, std::ios::binary);
-			out << "[Test]\r\nInputPipe=1\r\nPipeName=" << pipe_name << " ; this test's own\r\nVirtualPads=2 ; two pads with nothing plugged in\r\n[Display]\r\nResolutionList=all\r\n[Limits]\r\nActorSlots=127\r\n[Game]\r\nForcedTeams=1\r\nAddHero=1\r\nPostgameScript=x1/menus/postgame ; XML1's r505\r\nMainMenuItems=button1,button2,button3,button4,button5,button6,button7 ; XML1's buttons\r\n"
+			out << "[Test]\r\nInputPipe=1\r\nPipeName=" << pipe_name << " ; this test's own\r\nVirtualPads=2 ; two pads with nothing plugged in\r\n[Display]\r\nResolutionList=all\r\n[Limits]\r\nActorSlots=127\r\nEffectCurves=3600\r\n[Game]\r\nForcedTeams=1\r\nAddHero=1\r\nPostgameScript=x1/menus/postgame ; XML1's r505\r\nMainMenuItems=button1,button2,button3,button4,button5,button6,button7 ; XML1's buttons\r\n"
 			       "XPCurve=xml1 ; XML1's levels and kill XP\r\nBreakRule=xml1 ; XML1's rule for breaking objects\r\n[Online]\r\nServer=127.0.0.1 ; a private OpenSpy stack\r\nLocalIP=203.0.113.9 ; not this PC's\r\n";
 		}
 
