@@ -1680,6 +1680,299 @@ namespace
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
 
+	// ---- The effect curve pool ([Limits] EffectCurves) ---------------------------------------------------
+
+	// The game's allocator (0x416120, __thiscall, eight floats by value) on a block of the test's own.
+	using curve_alloc_t = int(__fastcall*)(void* self, void* edx, float a, float b, float c, float low, float high, float f, float g, float h);
+
+	int run_curve_alloc(const std::uint8_t* function, void* pool, const float first)
+	{
+		__try
+		{
+			return reinterpret_cast<curve_alloc_t>(const_cast<std::uint8_t*>(function))(pool, nullptr, first, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return -1;
+		}
+	}
+
+	int run_curve_alloc_zero(const std::uint8_t* function, void* pool)
+	{
+		__try
+		{
+			return reinterpret_cast<curve_alloc_t>(const_cast<std::uint8_t*>(function))(pool, nullptr, 0.0f, 0.0f, 0.0f, 10000.0f, -10000.0f, 0.0f, 0.0f, 0.0f);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return -1;
+		}
+	}
+
+	// The effect curve pool's rules (limits_rules.hpp): the key, the layouts and the patch table on their
+	// own; then, when a copy of XMen2.exe is at hand, the table against it, a changed executable refused at
+	// every guarded byte, and the game's own constructor, allocator, free and clear at work on bigger pools.
+	void check_effect_curve_rules()
+	{
+		using namespace limits_rules;
+		std::printf("effect curve pool ([Limits] EffectCurves)\n");
+
+		// The key: 901..16384 raises the pool, 900 is the game's own, anything else is a note; on its own.
+		CHECK(decide(std::nullopt, std::nullopt).effect_curves == 900);
+		for (const auto text : {"900", "901", "3600", "3600 ; four times the game's own", "16384"})
+		{
+			const auto c = decide(std::nullopt, std::nullopt, std::nullopt, std::nullopt, text);
+			CHECK(c.effect_curves == *parse_count(text) && c.notes.empty() && c.actor_slots == 40 && c.resource_names == 450 && c.item_enhancements == 375 && c.fight_styles == 19);
+		}
+		for (const auto bad : {"899", "16385", "65536", "0", "-1", "0xe10", "3600x", "", "many"})
+		{
+			const auto c = decide(std::nullopt, std::nullopt, std::nullopt, std::nullopt, bad);
+			CHECK(c.effect_curves == 900 && c.notes.size() == 1 && c.notes[0].find("the effect curve pool stays at 900 curves") != std::string::npos &&
+			      c.notes[0].find("EffectCurves=" + std::string(bad)) == 0);
+		}
+		const auto combined = decide("127", "1024", "512", "32", "3600");
+		CHECK(combined.actor_slots == 127 && combined.resource_names == 1024 && combined.item_enhancements == 512 && combined.fight_styles == 32 && combined.effect_curves == 3600 && combined.notes.empty());
+
+		// The layout: the retail one from 900, field for field (the object ends where its init guard starts), and 3600.
+		const auto stock = curve_layout_for(stock_effect_curves), raised = curve_layout_for(3600);
+		CHECK(stock.bitmap_words == 29 && stock.bitmap_a == 0x7080 && stock.ring == 0x70f4 && stock.ring_write == 0x7f08 && stock.ring_read == 0x7f0c && stock.ring_count == 0x7f10);
+		CHECK(stock.bitmap_b == 0x7f14 && stock.live == 0x7f88 && stock.presets == 0x7f8c && stock.preset_count == 0x81bc && stock.size == 0x81c0);
+		CHECK(curve_object_retail + stock.size == curve_init_guard);
+		CHECK(raised.bitmap_words == 113 && raised.bitmap_a == 0x1c200 && raised.ring == 0x1c3c4 && raised.ring_write == 0x1fc08 && raised.ring_read == 0x1fc0c && raised.ring_count == 0x1fc10);
+		CHECK(raised.bitmap_b == 0x1fc14 && raised.live == 0x1fdd8 && raised.presets == 0x1fddc && raised.preset_count == 0x2000c && raised.size == 0x20010);
+		bool layouts_ok = true;
+		for (int n = stock_effect_curves; n <= max_effect_curves; ++n)
+		{
+			const auto l = curve_layout_for(n);
+			const auto capacity = static_cast<DWORD>(n);
+			layouts_ok &= l.bitmap_a == capacity * curve_record_size && l.ring == l.bitmap_a + l.bitmap_words * 4 && l.ring_write - l.ring == (capacity + 1) * 4;
+			layouts_ok &= l.ring_read == l.ring_write + 4 && l.ring_count == l.ring_read + 4 && l.bitmap_b == l.ring_count + 4 && l.live == l.bitmap_b + l.bitmap_words * 4;
+			layouts_ok &= l.presets == l.live + 4 && l.preset_count == l.presets + 140 * 4 && l.size == l.preset_count + 4;
+			layouts_ok &= l.bitmap_words * 32 >= capacity && (l.bitmap_words - 1) * 32 < capacity;
+		}
+		CHECK(layouts_ok);
+		CHECK(max_effect_curves <= 0x10000 && curve_presets == 140); // an id is a 16-bit word: 65536 by its width
+
+		// The table on its own: well-formed bytes, each operand inside its instruction and holding its retail
+		// value, in address order, every one a dword - and the retail layout giving back every retail value.
+		bool rows_ok = true;
+		DWORD previous = 0;
+		std::map<curve_field, int> counts;
+		for (const auto& s : curve_sites)
+		{
+			const bool row_ok = valid_hex(s.hex) && static_cast<std::size_t>(s.offset) + s.size <= hex_size(s.hex) && s.size == 4 && operand_in(s.hex, s.offset, s.size) == s.retail &&
+			                    value_of(s.field, stock) == s.retail && s.va >= previous && s.field != curve_field::object;
+			if (!row_ok) std::printf("  info  curve pool row 0x%08lX doesn't add up\n", s.va);
+			rows_ok &= row_ok;
+			previous = s.va;
+			++counts[s.field];
+		}
+		CHECK(rows_ok && curve_sites.size() == 98);
+		CHECK(counts[curve_field::capacity] == 14 && counts[curve_field::last_index] == 2 && counts[curve_field::bitmap_words] == 3 && counts[curve_field::bitmap_a] == 6 && counts[curve_field::ring] == 4 &&
+		      counts[curve_field::ring_write] == 8 && counts[curve_field::ring_read] == 10 && counts[curve_field::ring_count] == 8 && counts[curve_field::bitmap_b] == 17 && counts[curve_field::live] == 7 &&
+		      counts[curve_field::presets] == 16 && counts[curve_field::preset_count] == 3);
+		bool references_ok = true;
+		for (const auto& s : curve_references)
+		{
+			references_ok &= valid_hex(s.hex) && hex_size(s.hex) == 5 && s.offset == 1 && s.size == 4 && operand_in(s.hex, 1, 4) == curve_object_retail && s.retail == curve_object_retail &&
+			                 s.field == curve_field::object && (hex_byte(s.hex, 0) == 0xb8 || hex_byte(s.hex, 0) == 0xb9);
+		}
+		CHECK(references_ok && curve_references.size() == 5);
+		bool guards_ok = true;
+		for (const auto& g : curve_guards) guards_ok &= valid_hex(g.hex) && g.what && *g.what;
+		CHECK(guards_ok);
+
+		// The writes for 3600 with the object at 0x12340000: every site and reference once, no two sharing a byte
+		// (0x4161aa carries two operands, apart).
+		constexpr DWORD object = 0x12340000;
+		auto writes = curve_writes(raised, object);
+		CHECK(writes.size() == 103 && std::ranges::count_if(writes, [](const operand_write& w) { return w.value == 0x12340000; }) == 5 &&
+		      std::ranges::count_if(writes, [](const operand_write& w) { return w.value == 3600; }) == 14 && std::ranges::count_if(writes, [](const operand_write& w) { return w.value == 3599; }) == 2 &&
+		      std::ranges::count_if(writes, [](const operand_write& w) { return w.value == 113; }) == 3 && std::ranges::count_if(writes, [](const operand_write& w) { return w.value == 0x1fc14; }) == 17);
+		std::ranges::sort(writes, {}, &operand_write::va);
+		bool apart = true;
+		for (std::size_t i = 1; i < writes.size(); ++i) apart &= writes[i - 1].va + writes[i - 1].size <= writes[i].va;
+		CHECK(apart);
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the effect curve pool against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		auto* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](const DWORD va) { return image + (va - image_base); };
+		const auto mismatch = [&] { return curve_first_mismatch([&](const DWORD va, const std::string_view hex) { return matches(at(va), hex); }); };
+		CHECK(mismatch() == 0);
+		if (mismatch())
+		{
+			std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says\n", mismatch());
+			VirtualFree(image, 0, MEM_RELEASE);
+			return;
+		}
+		const std::vector<std::uint8_t> original(image, image + image_size);
+
+		// The stock capacity writes back exactly the retail bytes (with the retail object).
+		for (const auto& w : curve_writes(stock, curve_object_retail)) apply_write(image, w);
+		CHECK(std::memcmp(image, original.data(), image_size) == 0);
+
+		// A changed executable is refused: every byte of every site, reference and guard, one at a time.
+		bool rejects = true;
+		const auto corrupt = [&](const DWORD va, const std::string_view hex)
+		{
+			for (std::size_t i = 0; i < hex_size(hex); ++i)
+			{
+				at(va)[i] ^= 1;
+				rejects &= mismatch() != 0;
+				at(va)[i] ^= 1;
+			}
+		};
+		for (const auto& s : curve_sites) corrupt(s.va, s.hex);
+		for (const auto& s : curve_references) corrupt(s.va, s.hex);
+		for (const auto& g : curve_guards) corrupt(g.va, g.hex);
+		CHECK(rejects && mismatch() == 0);
+		at(0x4161b0)[0] ^= 0x10; // one example by name: another build's cap in the allocator's full check
+		CHECK(mismatch() == 0x4161aa);
+		at(0x4161b0)[0] ^= 0x10;
+		CHECK(mismatch() == 0);
+
+		// The ledger's whole-image facts: the object's address appears five times, where the references are;
+		// no other dword of the image points into the object; bitset<900>::findNext, the allocator, free and
+		// the getter are called from where the ledger says and nowhere else.
+		std::size_t object_hits = 0, object_listed = 0, inside_hits = 0;
+		for (DWORD i = 0x1000; i + 4 <= image_size; ++i)
+		{
+			const DWORD value = operand_at(image + i, 4);
+			if (value == curve_object_retail)
+			{
+				++object_hits;
+				for (const auto& s : curve_references) object_listed += s.va + s.offset == image_base + i;
+			}
+			else if (value > curve_object_retail && value < curve_init_guard && i % 4 == 0 && i >= 0x27f000)
+			{
+				++inside_hits; // an aligned dword of the data sections that would be a pointer into the object
+			}
+		}
+		CHECK(object_hits == 5 && object_listed == 5);
+		std::printf("  info  %zu aligned data dwords with a value inside the old object (text, not pointers)\n", inside_hits);
+		const auto callers = [&](const DWORD target)
+		{
+			std::vector<DWORD> found;
+			for (DWORD va = 0x401000; va < 0x67f000 - 5; ++va)
+			{
+				if ((*at(va) == 0xe8 || *at(va) == 0xe9) && va + 5 + operand_at(at(va + 1), 4) == target) found.push_back(va);
+			}
+			return found;
+		};
+		CHECK(callers(0x415910) == std::vector<DWORD>{0x415d49});                       // findNext: the pool clear only
+		CHECK(callers(0x415ce0) == std::vector<DWORD>{0x4163f5});                       // the pool clear: the destructor's tail
+		CHECK(callers(0x415de0) == std::vector<DWORD>{0x4161c1});                       // pop: the allocator
+		CHECK(callers(0x416040) == std::vector<DWORD>{0x4162f5});                       // ring fill: the constructor
+		CHECK(callers(0x4162b0) == (std::vector<DWORD>{0x416582, 0x4167a3}));           // the constructor: the getter and its inlined copy
+		CHECK(callers(0x4163d0) == std::vector<DWORD>{0x67d9d5});                       // the destructor: the atexit thunk
+		CHECK(callers(0x415ec0) == std::vector<DWORD>{0x4167ba});                       // define a preset: the preset loader
+		CHECK(callers(0x416120).size() == 15 && callers(0x415f20).size() == 15);        // 14 + 1 allocations; 14 releases + the destructor's presets
+		CHECK(callers(0x416560).size() == 44);                                          // 13 readers, 15 allocations, 14 releases, 2 that only build it
+
+		// The epsilon the allocator compares curves with is a global (0x681a98): for the copy, which isn't
+		// mapped at 0x400000, its eight references are re-aimed at the copy's own (the test's doing only).
+		const auto aim_epsilon = [&]
+		{
+			std::size_t aimed = 0;
+			const DWORD here = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(at(0x681a98)));
+			for (const auto& [from, to] : {std::pair<DWORD, DWORD>{0x415440, 0x4154b8}, {0x416120, 0x416200}})
+			{
+				for (DWORD va = from; va + 6 <= to; ++va)
+				{
+					if (matches(at(va), "d81d981a6800"))
+					{
+						std::memcpy(at(va + 2), &here, 4);
+						++aimed;
+					}
+				}
+			}
+			return aimed;
+		};
+
+		for (const int n : {900, 901, 1024, 3600, 16384})
+		{
+			std::memcpy(image, original.data(), image_size);
+			const auto l = curve_layout_for(n);
+			const auto capacity = static_cast<DWORD>(n);
+			test_block pool(l.size);
+			const DWORD pool_address = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(pool.data()));
+			const auto patch = curve_writes(l, pool_address);
+			std::vector<bool> covered(image_size);
+			bool values = true;
+			for (const auto& w : patch)
+			{
+				apply_write(image, w);
+				for (DWORD i = 0; i < w.size; ++i) covered[w.va - image_base + i] = true;
+				values &= operand_at(at(w.va), w.size) == w.value;
+			}
+			bool only_listed = true;
+			for (DWORD i = 0; i < image_size; ++i) only_listed &= image[i] == original[i] || covered[i];
+			CHECK(values && only_listed);
+			CHECK(operand_at(at(0x416595), 4) == pool_address && operand_at(at(0x67d9d1), 4) == pool_address && operand_at(at(0x4161b0), 4) == capacity &&
+			      operand_at(at(0x4161ac), 4) == l.live && operand_at(at(0x415915), 4) == capacity && operand_at(at(0x415f82), 4) == capacity - 1 &&
+			      operand_at(at(0x4162c4), 4) == l.bitmap_words && operand_at(at(0x417bc2), 4) == l.presets && operand_at(at(0x40a76a), 4) == l.bitmap_b);
+			CHECK(aim_epsilon() == 8);
+			FlushInstructionCache(GetCurrentProcess(), image, image_size);
+
+			// The constructor: the ring holds every id, the 140 presets are taken (ids 0..139, each a constant 0
+			// between its clamps), nothing written past the object.
+			void* result = nullptr;
+			CHECK(run_thiscall(at(0x4162b0), pool.data(), result) && result == pool.data() && pool.slack_untouched());
+			bool built = pool.dword(l.live) == 140 && pool.dword(l.ring_count) == capacity - 140 && pool.dword(l.ring_read) == 140 && pool.dword(l.ring_write) == 0 && pool.dword(l.preset_count) == 1;
+			for (DWORD i = 0; i < capacity; ++i) built &= pool.dword(l.ring + i * 4) == i;
+			for (DWORD i = 0; i < 140; ++i) built &= pool.dword(l.presets + i * 4) == i && pool.dword(i * 32 + 0xc) == 0x461c4000 && pool.dword(i * 32 + 0x10) == 0xc61c4000 && pool.dword(i * 32) == 0;
+			for (DWORD word = 0; word < l.bitmap_words; ++word)
+			{
+				const DWORD expect = word < 4 ? 0xffffffffu : word == 4 ? 0xfffu : 0u; // 140 bits
+				built &= pool.dword(l.bitmap_a + word * 4) == expect && pool.dword(l.bitmap_b + word * 4) == expect;
+			}
+			CHECK(built);
+
+			// The allocator: a curve equal to a preset is shared (id 0, nothing taken); every other one gets the
+			// next id, up to the capacity; then, and only then, it refuses (0) - and nothing is written past the object.
+			CHECK(run_curve_alloc_zero(at(0x416120), pool.data()) == 0 && pool.dword(l.live) == 140);
+			bool allocated = true;
+			for (DWORD id = 140; id < capacity; ++id)
+			{
+				allocated &= run_curve_alloc(at(0x416120), pool.data(), 1000.0f + static_cast<float>(id)) == static_cast<int>(id);
+			}
+			float first_of_last = 0.0f;
+			std::memcpy(&first_of_last, pool.data() + (capacity - 1) * 32, 4);
+			CHECK(allocated && pool.dword(l.live) == capacity && pool.dword(l.ring_count) == 0 && first_of_last == 1000.0f + static_cast<float>(capacity - 1) && pool.slack_untouched());
+			CHECK(pool.dword(l.bitmap_b + (l.bitmap_words - 1) * 4) == (capacity % 32 ? (1u << (capacity % 32)) - 1 : 0xffffffffu) && pool.dword(l.bitmap_a + (l.bitmap_words - 1) * 4) == pool.dword(l.bitmap_b + (l.bitmap_words - 1) * 4));
+			CHECK(run_curve_alloc(at(0x416120), pool.data(), 5.0f) == 0 && pool.dword(l.live) == capacity); // full: curve 0, as the game's own at 900
+
+			// Free two (the last id and one in the middle) and take them again: first freed, first reused.
+			int answer = 0;
+			CHECK(run_thiscall_int(at(0x415f20), pool.data(), static_cast<int>(capacity - 1), answer) && run_thiscall_int(at(0x415f20), pool.data(), 500, answer));
+			CHECK(pool.dword(l.live) == capacity - 2 && pool.dword(l.ring_count) == 2 && !(pool.dword(l.bitmap_b + 15 * 4) & (1u << (500 % 32))) && !(pool.dword(l.bitmap_a + 15 * 4) & (1u << (500 % 32))));
+			CHECK(run_curve_alloc(at(0x416120), pool.data(), 7.0f) == static_cast<int>(capacity - 1) && run_curve_alloc(at(0x416120), pool.data(), 8.0f) == 500 && pool.dword(l.live) == capacity);
+			CHECK(pool.slack_untouched());
+
+			// bitset<N>::findNext, patched in place: the bound and the "none" are N.
+			std::vector<std::uint32_t> bits(l.bitmap_words + 1, 0);
+			bits[(capacity - 1) / 32] = 1u << ((capacity - 1) % 32);
+			CHECK(run_find_next(at(0x415910), bits.data(), 0, true) == static_cast<int>(capacity - 1) && run_find_next(at(0x415910), bits.data(), static_cast<int>(capacity), true) == static_cast<int>(capacity));
+			bits[(capacity - 1) / 32] = 0;
+			CHECK(run_find_next(at(0x415910), bits.data(), 0, true) == static_cast<int>(capacity) && run_find_next(at(0x415910), bits.data(), 0, false) == 0);
+
+			// The destructor: the 140 presets freed, then the pool clear empties the "built" bitmap, all of it.
+			CHECK(run_thiscall(at(0x4163d0), pool.data(), result));
+			bool cleared = pool.dword(l.live) == capacity - 140;
+			for (DWORD word = 0; word < l.bitmap_words; ++word) cleared &= pool.dword(l.bitmap_a + word * 4) == 0;
+			CHECK(cleared && pool.slack_untouched());
+		}
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
 	// ---- Forced parties (forced_teams_rules.hpp) ------------------------------------------------------
 
 	// A script call's arguments as the game hands them to a handler: args->get(i) (0x4d5830) reads
@@ -4063,6 +4356,7 @@ namespace
 		CHECK(ok(status));
 		CHECK(status.find("; fps 0.0; frame rate the game's own 60 fps cap") != std::string::npos); // no frames drawn here, no [Display] FrameRate
 		CHECK(status.find("; actors -; names -; motions -; igb -") != std::string::npos);            // not XMen2.exe: no engine tables to count
+		CHECK(status.find("; styles -; curves -") != std::string::npos);
 		CHECK(refused(ask(pipe, "frob")));
 		CHECK(refused(ask(pipe, "tap NOSUCHKEY")));
 		CHECK(refused(ask(pipe, "screenshot")));
@@ -4162,6 +4456,8 @@ namespace
 		// [Limits] ActorSlots=127, but this isn't XMen2.exe: the name table it needs isn't raised, so neither is it.
 		CHECK(log.find("ResourceNames=1024, as no ResourceNames says otherwise") != std::string::npos);
 		CHECK(log.find("the resource name table stays at 450 names") != std::string::npos && log.find("limits: the actor table stays at 40 slots") != std::string::npos);
+		// [Limits] EffectCurves=3600, the same: refused (not at 0x400000, or not the game's code there), the pool stays.
+		CHECK(log.find("(not the game?) - the effect curve pool stays at 900 curves") != std::string::npos || log.find("(not the retail build?) - the effect curve pool stays at 900 curves") != std::string::npos);
 		CHECK(log.find("raised from") == std::string::npos);
 		// [Game] ForcedTeams=1, but this isn't XMen2.exe: nothing registered, the mod's scripts open the team menu.
 		CHECK(log.find("- no script functions registered; the mod's scripts open the team menu") != std::string::npos && log.find("script functions added") == std::string::npos);
@@ -8007,6 +8303,12 @@ int main(const int argc, char** argv)
 		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
 		return failures ? 1 : 0;
 	}
+	if (argc > 1 && std::strcmp(argv[1], "--effect-curve-rules") == 0)
+	{
+		check_effect_curve_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--state-rules") == 0)
 	{
 		check_test_input_rules();
@@ -8075,6 +8377,7 @@ int main(const int argc, char** argv)
 	check_geometry_sharing_rules();
 	check_limits_rules();
 	check_fight_style_rules();
+	check_effect_curve_rules();
 	check_forced_teams_rules();
 	check_conversations_rules();
 	check_test_input_rules();

@@ -307,6 +307,7 @@ ActorSlots=127       ; 41 to 127 actor slots (the game's own: 40)
 ResourceNames=1024   ; 451 to 4096 resource names (the game's own: 450); with ActorSlots above 40 and no ResourceNames: 1024
 ItemEnhancements=512 ; 376 to 1024 item enhancement records (the game's own: 375)
 FightStyles=32       ; 20 to 32 fighting/power styles and movesets (the game's own: 19)
+EffectCurves=3600    ; 901 to 16384 effect curves (the game's own: 900)
 ```
 
 Nothing changes without the keys. Every slot takes a name, so `ResourceNames` is raised to at least 450 plus the extra slots, and the actor table only grows together with the name table. 127 is the most the game's code can count to: sixteen of its checks compare the slot count as a single signed byte. The X-Men Legends I port uses `ActorSlots=127` and `ResourceNames=1024`. It works by moving the actor table into a block of the fix's memory that the game's own constructor builds and its own destructor tears down, and by building a bigger name table with the game's own constructor where the game's getter looks for it, all before the game's start-up asks for either, and after every byte it relies on is checked against the retail build. All or nothing: on any other build the game keeps both tables, a value out of range is ignored, and `xml2-fix.log` says why. The test pipe's `status` shows how full they are (`actors 23/127; names 301/1024; ...`). The game's other fixed limit, the 200 records of its IGB (model file) cache, is not raised yet.
@@ -315,13 +316,15 @@ Nothing changes without the keys. Every slot takes a name, so `ResourceNames` is
 
 **Fighting and power styles.** A zone, its enemies and the party share a registry of 19 style files, including fighting styles, power styles and secondary movesets. When it fills, a later hero can lose their powers even though the files and talents are present. `FightStyles=32` gives the registry room for 32 distinct styles. The game allocates a larger manager; its tree nodes, free ring, style objects, bitmaps and following fields use the expanded layout. Every affected instruction is checked before any write. Missing or `FightStyles=19` keeps the stock limit; values outside `19..32` are logged and ignored. This limit is independent of the other three keys. The test pipe reports `styles 20/32`. See [the layout and verification notes](docs/fight-styles.md). New in 1.3.1.
 
-### Character ladder paths (planned 1.3.2)
+**Effect curves.** Every loaded effect keeps its animation curves (a particle's size, transparency, rotation over its life) in one pool of 900. A zone's effects and the effects of a four-hero party can need more, and when the pool is full the game hands out an empty curve without a word: the effects loaded last are drawn without their particles - a fire is only a faint glow that still burns, or a hero's power loses its particles. `EffectCurves=3600` gives the pool room for 3600. It moves into a block of the fix's memory that the game's own code builds and tears down; every instruction that carries the old size or the old address is checked before anything is patched, and on any difference the pool stays at 900. Curves are not written to saves. The test pipe's `status` reports `curves used/capacity`. [docs/effect-curves.md](docs/effect-curves.md) has the layout, the patch list and the measurements.
+
+### Character ladder paths
 
 Legends Classic derives descent paths from the player's original ladder animations.
 `[Game] CharacterLadderPaths=1` lets characters evaluate those two paths with the
 native movement timer. It is off by default, checks the retail engine before hooking,
 and does not enable arbitrary paths on characters. Both the builder conversion and
-this companion are required. See [implementation and validation](docs/character-ladder-paths.md).
+this companion are required. See [implementation and validation](docs/character-ladder-paths.md). New in 1.3.2.
 
 ### Geometry sharing
 
@@ -496,6 +499,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `ReviewStats` | `1` | `0`: the Review menu has no Stats tab |
 | `XPCurve` | `xml2` | `xml1`: X-Men Legends I's level table (cap 45) and kill XP |
 | `BreakRule` | `xml2` | `xml1`: an object whose definition carries `xml1structure` breaks only to an attack of that level on X-Men Legends I's scale ([details](docs/break-rule.md)) |
+| `CharacterLadderPaths` | `0` | `1`: characters follow the descent paths a mod gives their ladder animations ([details](docs/character-ladder-paths.md)) |
 | `AutoAdvance` | `1` | a conversation line with a negative `timeDelay` goes on by itself once its voice has played; `0`: every line waits for accept |
 | `ReplyVoices` | `1` | a chosen reply's voice plays out before its answer; `0`: cut one frame in, as the game has it |
 | `ReplyCursor` | `1` | a reply menu come back to keeps a reply highlighted; `0`: the game's clamp |
@@ -510,6 +514,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `ResourceNames` | *(the game's own, 450; `1024` with `ActorSlots`)* | `451` to `4096` resource names |
 | `ItemEnhancements` | *(the game's own, 375)* | `376` to `1024` item enhancement records (`Data/items` stops loading past the pool) |
 | `FightStyles` | *(the game's own, 19)* | `20` to `32` distinct fighting/power styles and movesets |
+| `EffectCurves` | *(the game's own, 900)* | `901` to `16384` animation curves of loaded effects (past the pool, effects lose their particles) |
 
 **[Test]**: for automated testing ([details](#-driving-the-game-from-a-script))
 
