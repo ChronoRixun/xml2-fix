@@ -74,3 +74,6 @@ target_include_directories(xml2_ladder_paths_test PRIVATE src)
 # Pure rules; no game process or graphics.
 add_executable(xml2_objective_text_test test/objective_text_test.cpp)
 target_include_directories(xml2_objective_text_test PRIVATE src)
+
+add_executable(xml2_stat_points_test test/stat_points_test.cpp)
+target_include_directories(xml2_stat_points_test PRIVATE src)
