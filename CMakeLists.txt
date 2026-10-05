@@ -43,6 +43,7 @@ add_library(xml2_fix SHARED
 	src/review_menu.cpp
 	src/forced_teams.cpp
 	src/conversations.cpp
+	src/objective_text.cpp
 	src/xp_curve.cpp
 	src/limits.cpp
 	src/resolution_list.cpp
@@ -69,3 +70,7 @@ target_link_libraries(xml2_test PRIVATE xml2_fix dinput8.lib dxguid xinput ws2_3
 
 add_executable(xml2_ladder_paths_test test/ladder_paths_test.cpp)
 target_include_directories(xml2_ladder_paths_test PRIVATE src)
+
+# Pure rules; no game process or graphics.
+add_executable(xml2_objective_text_test test/objective_text_test.cpp)
+target_include_directories(xml2_objective_text_test PRIVATE src)
