@@ -11,7 +11,8 @@
 // research/limits/actor-table.md (sections 5, 7) and igb-cache.md (section 8.1); the rows below were
 // regenerated from the exe with capstone, which found four fields of the name table the notes had
 // missed (0x55a6c0, 0x55a6c7, 0x55ae88, 0x55af40) and that its node count is one field seen from two
-// bases. Three structures (the third, the item enhancement pool, below the other two):
+// bases. Five structures (the item enhancement pool, the fighting style registry and the effect
+// curve pool below the first two):
 //
 // - The actor table, CAnimMotionCache: a static object at 0x7b05e8 with 40 slots for actor skins and
 //   animation databases. When all 40 are in use, precache (0x56b1c0) quietly returns NULL, a
@@ -55,6 +56,8 @@ namespace limits_rules
 	constexpr int max_item_enhancements = 1024;
 	constexpr int stock_fight_styles = 19;
 	constexpr int max_fight_styles = 32; // both pool bitmaps remain one dword
+	constexpr int stock_effect_curves = 900; // the effect curve pool (every loaded effect's animation curves)
+	constexpr int max_effect_curves = 16384; // the ini's ceiling; the ids are 16-bit (65536 by their width, see curve_layout)
 
 	// Every record of the actor table takes a name, so the name table has to grow by at least the
 	// actor table's growth. (The IGB cache's raise, when it comes, adds its own growth here.)
@@ -102,6 +105,7 @@ namespace limits_rules
 		int resource_names = stock_resource_names;
 		int item_enhancements = stock_item_enhancements;
 		int fight_styles = stock_fight_styles;
+		int effect_curves = stock_effect_curves;
 		std::vector<std::string> notes; // for the log, in order
 	};
 
@@ -111,11 +115,26 @@ namespace limits_rules
 	// ResourceNames it gets 1024, and a ResourceNames too small for it is raised to what it needs.
 	// ItemEnhancements: 376..1024 raises the item manager's enhancement record pool, 375 is the game's
 	// own, anything else is logged and left stock; independent of the two tables.
+	// EffectCurves: 901..16384 raises the effect curve pool, 900 is the game's own, anything else is
+	// logged and left stock; independent of the others.
 	inline choice decide(const std::optional<std::string_view> actor_slots, const std::optional<std::string_view> resource_names,
 	                     const std::optional<std::string_view> item_enhancements = std::nullopt,
-	                     const std::optional<std::string_view> fight_styles = std::nullopt)
+	                     const std::optional<std::string_view> fight_styles = std::nullopt,
+	                     const std::optional<std::string_view> effect_curves = std::nullopt)
 	{
 		choice result;
+		if (effect_curves)
+		{
+			const auto value = parse_count(*effect_curves);
+			if (value && *value >= stock_effect_curves && *value <= max_effect_curves)
+			{
+				result.effect_curves = *value;
+			}
+			else
+			{
+				result.notes.push_back("EffectCurves=" + std::string(value_text(*effect_curves)) + " isn't a number from 901 to 16384 (900 is the game's own) - the effect curve pool stays at 900 curves");
+			}
+		}
 		if (fight_styles)
 		{
 			const auto value = parse_count(*fight_styles);
@@ -1267,6 +1286,277 @@ namespace limits_rules
 		for (const auto& s : style_sites) writes.push_back({s.va + s.offset, s.size, value_of(s.field, layout)});
 		writes.push_back({style_ring_construct_call + 1, 4, rel32(style_ring_construct_call, construct)});
 		writes.push_back({style_ring_push_call + 1, 4, rel32(style_ring_push_call, push)});
+		return writes;
+	}
+
+	// ---- The effect curve pool ----------------------------------------------------------------------
+	//
+	// Every loaded effect's animation curves (size, alpha, rotation ... over a particle's life: 32
+	// bytes, eight floats) live in one pool of 900, a static object at 0x6fe4b8 that the getter
+	// 0x416560 builds at its first call (init guard 0x706678, the dword right after the object;
+	// destructor 0x4163d0 by atexit). A primitive definition holds 14 curve ids as 16-bit words (+0x54
+	// +0x8c +0xd4 +0xd6 +0xd8 +0xda +0xdc +0xde +0xe0 +0xe2 +0xe4 +0xe6 +0x100 +0x102), given by the
+	// allocator 0x416120 when the definition is built (0x416a30) and when one of its curves is read
+	// from the effect file (0x4171e0), and released by its destructor (0x417bb0). The allocator shares
+	// a curve only with the 140 presets (ids 0..139: record 0, a constant 0, and those the preset
+	// loader 0x416600 defines), and when 900 are in use it returns 0 without a word: every curve of an
+	// effect loaded after that reads record 0, so its particles have no size. A zone and a four-hero
+	// party need more than 900 (legends-classic issue 68).
+	//
+	// The object: N records, the "built" bitmap, a ring of N+1 free ids with its write position, read
+	// position and count, the "in use" bitmap, the count of ids in use, the 140 preset ids (dwords) and
+	// the count of presets defined. Nothing in the image refers to it but the getter (twice), the preset
+	// loader's inlined copy of the getter (twice) and the atexit thunk - every other function gets it
+	// from the getter, each one checked: the 13 readers (which test the "in use" bit of the id and read
+	// record 0 when it is clear), the allocator's callers, the destructor's 14 releases, two callers
+	// that only want it built. So it moves into a zero-filled block of the DLL, built and torn down by
+	// the game's own code, as the actor table does: the 98 displacements and immediates below get the
+	// layout's values, the five references the block's address. bitset<900>::findNext (0x415910) has
+	// one caller, the pool clear, so its five 900s are patched in place (no clone). The init guard
+	// stays where it is. The 140 presets stay 140 (their own compares, 0x8b and 0x8c, aren't touched).
+	//
+	// The ids: every holder is a word, stored with `mov word ptr [..], ax` (the 14 stores of 0x416a30,
+	// the one of 0x4171e0) and read zero-extended (movzx, or xor + mov ax) by every reader and release;
+	// nothing compares an id with a constant or keeps one in a narrower or signed field. So the width
+	// allows 65536 curves; the ini stops at 16384 (0x80000 bytes of records), which nothing measured
+	// comes near. Curve ids are run-time handles: no save and no network message carries one.
+	// curve_layout_for(900) is the retail layout (0x81c0 bytes).
+	constexpr DWORD curve_object_retail = 0x6fe4b8;
+	constexpr DWORD curve_init_guard = 0x706678; // bit 0: the getter has built the object
+	constexpr DWORD curve_record_size = 0x20;
+	constexpr int curve_presets = 140;
+
+	struct curve_layout
+	{
+		int capacity = 0;
+		DWORD bitmap_words = 0;
+		DWORD bitmap_a = 0; // the records' "built" bits; the records are at +0
+		DWORD ring = 0;
+		DWORD ring_write = 0;
+		DWORD ring_read = 0;
+		DWORD ring_count = 0;
+		DWORD bitmap_b = 0; // the ids in use
+		DWORD live = 0;
+		DWORD presets = 0;
+		DWORD preset_count = 0;
+		DWORD size = 0;
+	};
+
+	constexpr curve_layout curve_layout_for(const int capacity)
+	{
+		curve_layout l;
+		const auto n = static_cast<DWORD>(capacity);
+		l.capacity = capacity;
+		l.bitmap_words = dwords_for_bits(capacity);
+		l.bitmap_a = n * curve_record_size;
+		l.ring = l.bitmap_a + l.bitmap_words * 4;
+		l.ring_write = l.ring + (n + 1) * 4;
+		l.ring_read = l.ring_write + 4;
+		l.ring_count = l.ring_read + 4;
+		l.bitmap_b = l.ring_count + 4;
+		l.live = l.bitmap_b + l.bitmap_words * 4;
+		l.presets = l.live + 4;
+		l.preset_count = l.presets + static_cast<DWORD>(curve_presets) * 4;
+		l.size = l.preset_count + 4;
+		return l;
+	}
+
+	enum class curve_field : std::uint8_t
+	{
+		capacity,     // N: the full check, the ring's wrap, the bound of every scan, the "none" of findNext
+		last_index,   // N-1: the ring's last slot
+		bitmap_words, // the rep stosd counts that clear a bitmap
+		bitmap_a,     // object-relative, as the layout
+		ring,
+		ring_write,
+		ring_read,
+		ring_count,
+		bitmap_b,
+		live,
+		presets,
+		preset_count,
+		object,       // the object's address (imm32)
+	};
+
+	using curve_site = site<curve_field>;
+
+	constexpr std::uint32_t value_of(const curve_field field, const curve_layout& l)
+	{
+		switch (field)
+		{
+		case curve_field::capacity: return static_cast<std::uint32_t>(l.capacity);
+		case curve_field::last_index: return static_cast<std::uint32_t>(l.capacity - 1);
+		case curve_field::bitmap_words: return l.bitmap_words;
+		case curve_field::bitmap_a: return l.bitmap_a;
+		case curve_field::ring: return l.ring;
+		case curve_field::ring_write: return l.ring_write;
+		case curve_field::ring_read: return l.ring_read;
+		case curve_field::ring_count: return l.ring_count;
+		case curve_field::bitmap_b: return l.bitmap_b;
+		case curve_field::live: return l.live;
+		case curve_field::presets: return l.presets;
+		case curve_field::preset_count: return l.preset_count;
+		case curve_field::object: return 0; // an address, see curve_writes
+		}
+		return 0;
+	}
+
+	// Every N-dependent number of the code that works on the pool, with its retail bytes.
+	inline constexpr std::array<curve_site, 98> curve_sites{{
+		// the readers: an id that isn't in use reads record 0 (0x405fd0, 0x406040, 0x406090, and the ten curves of the primitive update 0x409380)
+		{0x405fee, "859488147f0000", 3, 4, 0x7f14, curve_field::bitmap_b},
+		{0x40605d, "859488147f0000", 3, 4, 0x7f14, curve_field::bitmap_b},
+		{0x4060ad, "859488147f0000", 3, 4, 0x7f14, curve_field::bitmap_b},
+		{0x40a767, "859488147f0000", 3, 4, 0x7f14, curve_field::bitmap_b},
+		{0x40a7be, "859488147f0000", 3, 4, 0x7f14, curve_field::bitmap_b},
+		{0x40a818, "859488147f0000", 3, 4, 0x7f14, curve_field::bitmap_b},
+		{0x40a872, "859488147f0000", 3, 4, 0x7f14, curve_field::bitmap_b},
+		{0x40a8cc, "859488147f0000", 3, 4, 0x7f14, curve_field::bitmap_b},
+		{0x40a926, "859488147f0000", 3, 4, 0x7f14, curve_field::bitmap_b},
+		{0x40a992, "859488147f0000", 3, 4, 0x7f14, curve_field::bitmap_b},
+		{0x40a9ec, "859488147f0000", 3, 4, 0x7f14, curve_field::bitmap_b},
+		{0x40af01, "859488147f0000", 3, 4, 0x7f14, curve_field::bitmap_b},
+		{0x40af3b, "859488147f0000", 3, 4, 0x7f14, curve_field::bitmap_b},
+		// bitset<900>::findNext (0x415910; its only caller is the pool clear, 0x415d49)
+		{0x415914, "3d84030000", 1, 4, 0x384, curve_field::capacity},
+		{0x41591e, "b884030000", 1, 4, 0x384, curve_field::capacity},
+		{0x41594b, "3d84030000", 1, 4, 0x384, curve_field::capacity},
+		{0x415998, "3d84030000", 1, 4, 0x384, curve_field::capacity},
+		{0x41599f, "b884030000", 1, 4, 0x384, curve_field::capacity},
+		// pool clear (0x415ce0, the destructor's tail)
+		{0x415ce0, "8b8180700000", 2, 4, 0x7080, curve_field::bitmap_a},
+		{0x415ce7, "8db980700000", 2, 4, 0x7080, curve_field::bitmap_a},
+		{0x415cf9, "81fa84030000", 2, 4, 0x384, curve_field::capacity},
+		{0x415d39, "81fa84030000", 2, 4, 0x384, curve_field::capacity},
+		{0x415d4e, "3d84030000", 1, 4, 0x384, curve_field::capacity},
+		{0x415d55, "b91d000000", 1, 4, 0x1d, curve_field::bitmap_words},
+		// pop a free id (0x415de0)
+		{0x415de2, "8b820c7f0000", 2, 4, 0x7f0c, curve_field::ring_read},
+		{0x415de8, "8b8482f4700000", 3, 4, 0x70f4, curve_field::ring},
+		{0x415df5, "8db48a147f0000", 3, 4, 0x7f14, curve_field::bitmap_b},
+		{0x415e0b, "8bb20c7f0000", 2, 4, 0x7f0c, curve_field::ring_read},
+		{0x415e14, "81f984030000", 2, 4, 0x384, curve_field::capacity},
+		{0x415e1a, "89b20c7f0000", 2, 4, 0x7f0c, curve_field::ring_read},
+		{0x415e22, "c7820c7f000000000000", 2, 4, 0x7f0c, curve_field::ring_read},
+		{0x415e2c, "ff8a107f0000", 2, 4, 0x7f10, curve_field::ring_count},
+		{0x415e32, "8b8a887f0000", 2, 4, 0x7f88, curve_field::live},
+		{0x415e3a, "898a887f0000", 2, 4, 0x7f88, curve_field::live},
+		// define the next preset (0x415ec0): the preset count
+		{0x415ec0, "8b81bc810000", 2, 4, 0x81bc, curve_field::preset_count},
+		{0x415f0a, "ff81bc810000", 2, 4, 0x81bc, curve_field::preset_count},
+		// free an id (0x415f20)
+		{0x415f3c, "8bbc0180700000", 3, 4, 0x7080, curve_field::bitmap_a},
+		{0x415f47, "89bc0180700000", 3, 4, 0x7080, curve_field::bitmap_a},
+		{0x415f4e, "219401147f0000", 3, 4, 0x7f14, curve_field::bitmap_b},
+		{0x415f55, "8b88087f0000", 2, 4, 0x7f08, curve_field::ring_write},
+		{0x415f5b, "8b90107f0000", 2, 4, 0x7f10, curve_field::ring_count},
+		{0x415f63, "81f984030000", 2, 4, 0x384, curve_field::capacity},
+		{0x415f69, "8988087f0000", 2, 4, 0x7f08, curve_field::ring_write},
+		{0x415f6f, "8990107f0000", 2, 4, 0x7f10, curve_field::ring_count},
+		{0x415f77, "c780087f000000000000", 2, 4, 0x7f08, curve_field::ring_write},
+		{0x415f81, "b983030000", 1, 4, 0x383, curve_field::last_index},
+		{0x415f89, "89b488f4700000", 3, 4, 0x70f4, curve_field::ring},
+		{0x415f90, "8b88887f0000", 2, 4, 0x7f88, curve_field::live},
+		{0x415f98, "8988887f0000", 2, 4, 0x7f88, curve_field::live},
+		// ring fill (0x416040)
+		{0x416044, "89b1087f0000", 2, 4, 0x7f08, curve_field::ring_write},
+		{0x41604a, "89b10c7f0000", 2, 4, 0x7f0c, curve_field::ring_read},
+		{0x416050, "89b1107f0000", 2, 4, 0x7f10, curve_field::ring_count},
+		{0x416060, "8b81087f0000", 2, 4, 0x7f08, curve_field::ring_write},
+		{0x416066, "8bb9107f0000", 2, 4, 0x7f10, curve_field::ring_count},
+		{0x41606e, "3d84030000", 1, 4, 0x384, curve_field::capacity},
+		{0x416073, "8981087f0000", 2, 4, 0x7f08, curve_field::ring_write},
+		{0x416079, "89b9107f0000", 2, 4, 0x7f10, curve_field::ring_count},
+		{0x416081, "89b1087f0000", 2, 4, 0x7f08, curve_field::ring_write},
+		{0x416087, "b883030000", 1, 4, 0x383, curve_field::last_index},
+		{0x41608f, "899481f4700000", 3, 4, 0x70f4, curve_field::ring},
+		{0x416097, "81fa84030000", 2, 4, 0x384, curve_field::capacity},
+		// allocate (0x416120): the in-use test of a preset, the full check, the new record's bit
+		{0x416141, "85848f147f0000", 3, 4, 0x7f14, curve_field::bitmap_b},
+		{0x4161aa, "81bf887f000084030000", 2, 4, 0x7f88, curve_field::live},
+		{0x4161aa, "81bf887f000084030000", 6, 4, 0x384, curve_field::capacity},
+		{0x4161dd, "8d848f80700000", 3, 4, 0x7080, curve_field::bitmap_a},
+		// constructor (0x4162b0)
+		{0x4162b9, "8dae80700000", 2, 4, 0x7080, curve_field::bitmap_a},
+		{0x4162c3, "b91d000000", 1, 4, 0x1d, curve_field::bitmap_words},
+		{0x4162cc, "8d9e147f0000", 2, 4, 0x7f14, curve_field::bitmap_b},
+		{0x4162d2, "8996087f0000", 2, 4, 0x7f08, curve_field::ring_write},
+		{0x4162d8, "89960c7f0000", 2, 4, 0x7f0c, curve_field::ring_read},
+		{0x4162de, "8996107f0000", 2, 4, 0x7f10, curve_field::ring_count},
+		{0x4162e4, "b91d000000", 1, 4, 0x1d, curve_field::bitmap_words},
+		{0x4162ef, "8996887f0000", 2, 4, 0x7f88, curve_field::live},
+		{0x4162fa, "8d868c7f0000", 2, 4, 0x7f8c, curve_field::presets},
+		{0x416310, "8b8e0c7f0000", 2, 4, 0x7f0c, curve_field::ring_read},
+		{0x416316, "8b948ef4700000", 3, 4, 0x70f4, curve_field::ring},
+		{0x416334, "8b8e0c7f0000", 2, 4, 0x7f0c, curve_field::ring_read},
+		{0x41633b, "81f984030000", 2, 4, 0x384, curve_field::capacity},
+		{0x416341, "898e0c7f0000", 2, 4, 0x7f0c, curve_field::ring_read},
+		{0x416349, "c7860c7f000000000000", 2, 4, 0x7f0c, curve_field::ring_read},
+		{0x416353, "ff8e107f0000", 2, 4, 0x7f10, curve_field::ring_count},
+		{0x416359, "ff86887f0000", 2, 4, 0x7f88, curve_field::live},
+		{0x4163ba, "c786bc81000001000000", 2, 4, 0x81bc, curve_field::preset_count},
+		// destructor (0x4163d0)
+		{0x4163d5, "8db78c7f0000", 2, 4, 0x7f8c, curve_field::presets},
+		// the primitive definition's destructor (0x417bb0): the preset list, for each of its 14 curve ids
+		{0x417bc0, "8db08c7f0000", 2, 4, 0x7f8c, curve_field::presets},
+		{0x417bec, "8db08c7f0000", 2, 4, 0x7f8c, curve_field::presets},
+		{0x417c18, "8db08c7f0000", 2, 4, 0x7f8c, curve_field::presets},
+		{0x417c46, "8db08c7f0000", 2, 4, 0x7f8c, curve_field::presets},
+		{0x417c76, "8db08c7f0000", 2, 4, 0x7f8c, curve_field::presets},
+		{0x417ca6, "8db08c7f0000", 2, 4, 0x7f8c, curve_field::presets},
+		{0x417cd6, "8db08c7f0000", 2, 4, 0x7f8c, curve_field::presets},
+		{0x417d06, "8db08c7f0000", 2, 4, 0x7f8c, curve_field::presets},
+		{0x417d36, "8db08c7f0000", 2, 4, 0x7f8c, curve_field::presets},
+		{0x417d66, "8db08c7f0000", 2, 4, 0x7f8c, curve_field::presets},
+		{0x417d96, "8db08c7f0000", 2, 4, 0x7f8c, curve_field::presets},
+		{0x417dc6, "8db08c7f0000", 2, 4, 0x7f8c, curve_field::presets},
+		{0x417df6, "8db08c7f0000", 2, 4, 0x7f8c, curve_field::presets},
+		{0x417e26, "8db08c7f0000", 2, 4, 0x7f8c, curve_field::presets},
+	}};
+
+	inline constexpr std::array<curve_site, 5> curve_references{{
+		{0x416577, "b9b8e46f00", 1, 4, 0x6fe4b8, curve_field::object}, // getter: mov ecx, object (the constructor's this)
+		{0x416594, "b8b8e46f00", 1, 4, 0x6fe4b8, curve_field::object}, // getter: mov eax, object (returned)
+		{0x416798, "b9b8e46f00", 1, 4, 0x6fe4b8, curve_field::object}, // the preset loader's inlined getter: the constructor's this
+		{0x4167b5, "b9b8e46f00", 1, 4, 0x6fe4b8, curve_field::object}, // the preset loader: the this of define-the-next-preset
+		{0x67d9d0, "b9b8e46f00", 1, 4, 0x6fe4b8, curve_field::object}, // atexit thunk: mov ecx, object; jmp 0x4163d0
+	}};
+
+	// Retail bytes the raise relies on and doesn't change (some hold a patched operand too: compared
+	// before anything is written, like the sites).
+	inline constexpr std::array<guard, 11> curve_guards{{
+		{0x416560, "8a0d78667000b80100000084c875258b15786670000bd0b9b8e46f00891578667000e829fdffff68d0d96700e88dbb250083c404b8b8e46f00c3",
+		 "the curve pool's getter (0x416560): the guard dword, the constructor call, the atexit registration"},
+		{0x416782, "f60578667000018964243075268b157866700083ca01b9b8e46f00891578667000e808fbffff68d0d96700e86cb9250083c404b9b8e46f00e801f7ffff",
+		 "the preset loader's inlined getter and its call of define-the-next-preset (0x416782)"},
+		{0x67d9d0, "b9b8e46f00e9f689d9ff", "the curve pool's atexit thunk (0x67d9d0)"},
+		{0x415d49, "e8c2fbffff", "the pool clear's call of bitset<900>::findNext (0x415d49), its only caller"},
+		{0x41619e, "4683c52081fe8b0000007e8681bf887f00008403000075095f5e5d33c05bc220008bcfe81afcffff",
+		 "the allocator shares with the 140 presets only, returns 0 when the pool is full, else pops an id (0x41619e)"},
+		{0x4161c8, "8d542414c1e0055203c750e888faffff", "the allocator's record: 32 bytes each, from the object's start (0x4161c8)"},
+		{0x416300, "89442410c74424148c000000", "the constructor takes 140 preset ids (0x416300)"},
+		{0x415ec6, "3d8b0000007f438b542404c1e005891408", "presets are defined in records 1..139 (0x415ec6)"},
+		{0x4163db, "bb8c000000", "the destructor frees the 140 presets (0x4163db)"},
+		{0x417bce, "81fa8b000000", "the primitive definition's destructor keeps the 140 presets (0x417bce)"},
+		{0x4172b6, "e865eeffff8b4c2438668901", "a curve id is stored as a 16-bit word (0x4172b6)"},
+	}};
+
+	// Shared by the runtime and the tests: the first site, reference or guard that `check` refuses.
+	template <typename Matches>
+	DWORD curve_first_mismatch(Matches&& check)
+	{
+		for (const auto& s : curve_sites) if (!check(s.va, s.hex)) return s.va;
+		for (const auto& s : curve_references) if (!check(s.va, s.hex)) return s.va;
+		for (const auto& g : curve_guards) if (!check(g.va, g.hex)) return g.va;
+		return 0;
+	}
+
+	// Everything the pool's raise writes into XMen2.exe for `layout`, with the object at `object`.
+	inline std::vector<operand_write> curve_writes(const curve_layout& layout, const DWORD object)
+	{
+		std::vector<operand_write> writes;
+		for (const auto& s : curve_sites) writes.push_back({s.va + s.offset, s.size, value_of(s.field, layout)});
+		for (const auto& s : curve_references) writes.push_back({s.va + s.offset, s.size, object});
 		return writes;
 	}
 
