@@ -26,7 +26,10 @@
 // operands it writes against that copy. [Game] XPCurve (xp_curve_rules.hpp) is checked on its value rules, XML1's
 // tables against default.xbe's formulas worked out again, the level and kill lookups at their edges and the kill
 // split, then every byte it relies on, exactly the bytes it writes and the patched lookup, cap and kill XP jump run
-// on that copy. The test input pipe is checked on its rules, on a
+// on that copy. [Game] BreakRule (break_rule_rules.hpp) is checked on its value rules, XML1's level sum and the
+// structure pairing, the decision, what the fix remembers between the game's calls, its guards, both bridges run
+// for real, then every byte it relies on, the three writes and the game's own level function on that copy.
+// The test input pipe is checked on its rules, on a
 // Direct3D 8 device of the test's own (the back buffer copy behind "screenshot"), and end to
 // end in a child process started with an xml2-fix.ini that turns the pipe on under a name of its
 // own ([Test] PipeName, so a running game's pipe is never touched): it creates the
@@ -46,6 +49,7 @@
 #include <timeapi.h>
 #include <Xinput.h>
 
+#include "break_rule_rules.hpp"
 #include "discord_ipc.hpp"
 #include "discord_rules.hpp"
 #include "display_rules.hpp"
@@ -3996,6 +4000,10 @@ namespace
 		CHECK(start_log.find("xp curve: XMen2.exe isn't loaded at 0x400000 (not the game?) - XML2's own levels and kill XP stay") != std::string::npos ||
 		      start_log.find("xp curve: 0x00448A90 isn't the retail code") != std::string::npos);
 		CHECK(start_log.find("xp curve: X-Men Legends 1's") == std::string::npos);
+		// [Game] BreakRule=xml1 likewise.
+		CHECK(start_log.find("break rule: XMen2.exe isn't loaded at 0x400000 (not the game?) - objects break by the game's own rule") != std::string::npos ||
+		      start_log.find("break rule: 0x00685A98 isn't the retail code") != std::string::npos);
+		CHECK(start_log.find("break rule: X-Men Legends 1's") == std::string::npos);
 
 		// [Online] Server=127.0.0.1: every GameSpy and OpenSpy name resolves to it, each logged once.
 		WSADATA wsa{};
@@ -4177,7 +4185,7 @@ namespace
 		{
 			std::ofstream out(ini, std::ios::binary);
 			out << "[Test]\r\nInputPipe=1\r\nPipeName=" << pipe_name << " ; this test's own\r\nVirtualPads=2 ; two pads with nothing plugged in\r\n[Display]\r\nResolutionList=all\r\n[Limits]\r\nActorSlots=127\r\n[Game]\r\nForcedTeams=1\r\nAddHero=1\r\nPostgameScript=x1/menus/postgame ; XML1's r505\r\nMainMenuItems=button1,button2,button3,button4,button5,button6,button7 ; XML1's buttons\r\n"
-			       "XPCurve=xml1 ; XML1's levels and kill XP\r\n[Online]\r\nServer=127.0.0.1 ; a private OpenSpy stack\r\nLocalIP=203.0.113.9 ; not this PC's\r\n";
+			       "XPCurve=xml1 ; XML1's levels and kill XP\r\nBreakRule=xml1 ; XML1's rule for breaking objects\r\n[Online]\r\nServer=127.0.0.1 ; a private OpenSpy stack\r\nLocalIP=203.0.113.9 ; not this PC's\r\n";
 		}
 
 		wchar_t exe[MAX_PATH]{};
@@ -6959,6 +6967,7 @@ namespace
 			       "ResetUnlocks=  ; later\r\n"
 			       "XPCurve=xml1    ; XML1's levels\r\n"
 			       "GeometrySharingBlendIndices=1   ; the port's skinned models\r\n"
+			       "BreakRule=xml1  ; XML1's rule for breaking objects\r\n"
 			       "[Discord]\r\n"
 			       "Enabled=0        ; no presence at all (0, false, no or off; anything else, or no key: on)\r\n"
 			       "ShowParty=OFF # later\r\n"
@@ -6997,6 +7006,7 @@ namespace
 		CHECK(postgame_rules::parse_script(read(L"Game", L"PostgameScript").value_or("")).name == "x1/menus/postgame");
 		CHECK(!flag(L"Game", L"NewGamePlus", true) && flag(L"Game", L"ResetUnlocks", true));
 		CHECK(xp_curve_rules::parse_curve(read(L"Game", L"XPCurve").value_or("")).value == xp_curve_rules::curve::xml1);
+		CHECK(break_rule_rules::parse_rule(read(L"Game", L"BreakRule").value_or("")).value == break_rule_rules::rule::xml1 && !read(L"Display", L"BreakRule"));
 		CHECK(flag(L"Game", L"GeometrySharingBlendIndices", geometry_sharing_rules::enabled_by_default) && !flag(L"Display", L"GeometrySharingBlendIndices", geometry_sharing_rules::enabled_by_default));
 		// [Discord]: the README's line is off; "OFF # later" isn't a switch value (the default, on); the old
 		// template's empty LargeImage is the logo, not "no art".
@@ -7567,6 +7577,411 @@ namespace
 	}
 }
 
+namespace
+{
+	// ---- [Game] BreakRule: the bridges run for real --------------------------------------------------------
+
+	std::uint32_t break_callback_object = 0;
+	std::uint32_t break_callback_other = 0;
+	std::uint32_t break_callback_calls = 0;
+	std::uint32_t break_gate_choice = 1;
+	std::uint32_t break_x87_bits = 0;
+	std::uint32_t break_landing_al = 0;
+	std::uint32_t break_hit_word = 0;
+
+	// What the parse bridge calls: it wipes xmm0 and the x87 stack, which the bridge must put back.
+	void __cdecl break_parse_callback(std::uint32_t object, std::uint32_t reader)
+	{
+		__asm pxor xmm0, xmm0
+		__asm fninit
+		break_callback_object = object;
+		break_callback_other = reader;
+		++break_callback_calls;
+	}
+
+	// What the gate bridge calls: the same, and its answer is break_gate_choice.
+	std::uint32_t __cdecl break_gate_callback(std::uint32_t object, std::uint32_t hit)
+	{
+		__asm pxor xmm0, xmm0
+		__asm fninit
+		break_callback_object = object;
+		break_callback_other = hit;
+		break_hit_word = *reinterpret_cast<const std::uint32_t*>(static_cast<std::uintptr_t>(hit));
+		++break_callback_calls;
+		return break_gate_choice;
+	}
+
+	// Where a bridge comes out: every register but eax, xmm0 and the x87 stack as invoke_break_bridge left them
+	// (not the flags: the compare each bridge runs sets them, as it does in the game). eax is the exit's number
+	// when they all are, 0 when not; al as the bridge left it goes to break_landing_al (the parse bridge's clamp).
+	// Then back to invoke_break_bridge's caller.
+	std::uint32_t break_landing_id = 0;
+
+	__declspec(naked) void break_landing()
+	{
+		__asm pop dword ptr [break_landing_id]
+		__asm fstp dword ptr [break_x87_bits]
+		__asm movzx eax, al
+		__asm mov dword ptr [break_landing_al], eax
+		__asm cmp ecx, 0x0badf00d
+		__asm jne failed
+		__asm cmp edx, 0x13579bdf
+		__asm jne failed
+		__asm cmp edi, 0x123000
+		__asm jne failed
+		__asm cmp ebx, 0x11223344
+		__asm jne failed
+		__asm cmp ebp, 0x55667788
+		__asm jne failed
+		__asm movd ecx, xmm0
+		__asm cmp ecx, 0xaabbccdd
+		__asm jne failed
+		__asm mov eax, dword ptr [break_landing_id]
+		__asm jmp done
+	failed:
+		__asm xor eax, eax
+	done:
+		__asm add esp, 0x80
+		__asm pop edi
+		__asm pop esi
+		__asm pop ebx
+		__asm pop ebp
+		__asm ret
+	}
+
+	__declspec(naked) void break_resume_landing()
+	{
+		__asm push 1
+		__asm jmp break_landing
+	}
+
+	__declspec(naked) void break_refused_landing()
+	{
+		__asm push 2
+		__asm jmp break_landing
+	}
+
+	__declspec(naked) void break_allowed_landing()
+	{
+		__asm push 3
+		__asm jmp break_landing
+	}
+
+	// Jumps to the bridge at `stub` as a hook does: esi the object, edi the reader, `at_10` at [esp+0x10] (where
+	// the game's structure read left its number), a known value in every other register, xmm0, the x87 stack
+	// (1.0). The gate's copy of the hit is esp + 0x24 here: its first word is 0x5eed1234.
+	__declspec(naked) std::uint32_t __cdecl invoke_break_bridge(void* /*stub*/, void* /*object*/, std::uint32_t /*at_10*/)
+	{
+		__asm push ebp
+		__asm push ebx
+		__asm push esi
+		__asm push edi
+		__asm sub esp, 0x80
+		__asm mov eax, [esp + 0x80 + 16 + 12]
+		__asm mov [esp + 0x10], eax
+		__asm mov dword ptr [esp + 0x24], 0x5eed1234
+		__asm mov esi, [esp + 0x80 + 16 + 8]
+		__asm mov eax, [esp + 0x80 + 16 + 4]
+		__asm push eax
+		__asm mov edi, 0x123000
+		__asm mov ebx, 0x11223344
+		__asm mov ebp, 0x55667788
+		__asm mov eax, 0xaabbccdd
+		__asm movd xmm0, eax
+		__asm mov ecx, 0x0badf00d
+		__asm mov edx, 0x13579bdf
+		__asm fld1
+		__asm pop eax
+		__asm jmp eax
+	}
+
+	// XMen2.exe's level function (0x44f770 in a mapped copy), guarded: a fault is a failure, not a crash.
+	bool run_game_level(const std::uint8_t* function, void* actor, void* hit, int& result)
+	{
+		__try
+		{
+			result = reinterpret_cast<int(__fastcall*)(void*, void*, void*, void*)>(const_cast<std::uint8_t*>(function))(nullptr, nullptr, actor, hit);
+			return true;
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			return false;
+		}
+	}
+
+	// [Game] BreakRule (break_rule_rules.hpp): the value's rules; XML1's level sum and the structure pairing; the
+	// decision; what the fix remembers; the guards on their own; both bridges run for real; then, when a copy of
+	// XMen2.exe is at hand, every guard against it, the three writes on that copy and the game's own level function
+	// run there (the cap the feature leaves in place, and the bytes it reads).
+	void check_break_rule_rules()
+	{
+		using namespace break_rule_rules;
+		std::printf("[Game] BreakRule (X-Men Legends 1's rule for breaking objects)\n");
+
+		const auto xml1 = parse_rule("xml1");
+		CHECK(xml1.set && xml1.value == rule::xml1 && xml1.error.empty());
+		CHECK(parse_rule("  XML1 \t; the first game's walls").set && parse_rule("  XML1 \t; the first game's walls").value == rule::xml1);
+		CHECK(parse_rule("xml2").set && parse_rule("Xml2").value == rule::xml2);
+		const auto unset = parse_rule("   ; nothing");
+		CHECK(!unset.set && unset.error.empty() && !parse_rule("").set && parse_rule("").error.empty());
+		for (const char* bad : {"xml3", "1", "on", "xml", "xml1 xml2", "xml1,xml2", "walls"})
+		{
+			const auto refused = parse_rule(bad);
+			CHECK(!refused.set && !refused.error.empty() && refused.value == rule::xml2);
+		}
+
+		// XML1's level (default.xbe 0x59a50): authored + 0/3/6/8 by Might (above 3 counts as 3) + the affecter
+		// toward zero, at most 9, never below 0.
+		CHECK(might_level(0) == 0 && might_level(1) == 3 && might_level(2) == 6 && might_level(3) == 8 && might_level(4) == 8 && might_level(15) == 8 && might_level(-1) == 0);
+		CHECK(xml1_level(1, 0, 0.0f) == 1);  // a plain punch
+		CHECK(xml1_level(3, 0, 0.0f) == 3);  // a level-3 power
+		CHECK(xml1_level(1, 1, 0.0f) == 4 && xml1_level(1, 2, 0.0f) == 7 && xml1_level(1, 3, 0.0f) == 9); // Might 1, 2, 3 (1 + 8 = 9)
+		CHECK(xml1_level(3, 3, 0.0f) == 9 && xml1_level(5, 0, 7.0f) == 9 && xml1_level(255, 3, 100.0f) == 9); // the cap
+		CHECK(xml1_level(1, 0, 3.0f) == 4 && xml1_level(1, 0, 2.99f) == 3 && xml1_level(1, 0, 0.99f) == 1); // toward zero, as ftol
+		CHECK(xml1_level(1, 0, -0.99f) == 1 && xml1_level(1, 0, -1.0f) == 0 && xml1_level(0, 0, -5.0f) == 0 && xml1_level(0, 0, 0.0f) == 0);
+		CHECK(whole(std::numeric_limits<float>::quiet_NaN()) == 0 && whole(1e30f) == 1000 && whole(-1e30f) == -1000);
+		CHECK(xml1_level(1, 0, std::numeric_limits<float>::infinity()) == 9 && xml1_level(9, 3, -std::numeric_limits<float>::infinity()) == 0);
+
+		// The structure byte each XML1 structure comes with (the port builder's conversion): 0-1 -> 0, 2-9 -> 1,
+		// 10 -> 2.
+		bool pairing = true;
+		for (int s = 0; s <= xml1_max_structure; ++s)
+		{
+			pairing &= engine_structure(s) == (s <= 1 ? 0 : s <= 9 ? 1 : 2);
+		}
+		CHECK(pairing && xml1_max_structure == 10 && xml1_max_level == 9);
+
+		// The decision, for a hit the game lets through. A wall of XML1 structure 2 (byte 1): a punch (1) no, a
+		// level-2 hit yes; structure 1 (byte 0): level 0 no, a punch yes; structure 0: everything.
+		CHECK(decide(2, 1, 1) == verdict::refused && decide(2, 1, 2) == verdict::allowed && decide(2, 1, 9) == verdict::allowed);
+		CHECK(decide(9, 1, 8) == verdict::refused && decide(9, 1, 9) == verdict::allowed);
+		CHECK(decide(1, 0, 0) == verdict::refused && decide(1, 0, 1) == verdict::allowed && decide(0, 0, 0) == verdict::allowed);
+		// Every pair the builder writes decides; every other pair - the byte changed since, or a number out of
+		// range - and an object without the attribute leave the game's decision alone.
+		bool table = true;
+		for (int s = -2; s <= 12; ++s)
+		{
+			for (int byte = 0; byte <= 2; ++byte)
+			{
+				for (int level = 0; level <= 9; ++level)
+				{
+					const auto got = decide(s, byte, level);
+					const bool usable = s >= 0 && s <= 10 && engine_structure(s) == byte;
+					table &= got == (!usable ? verdict::no_structure : level < s ? verdict::refused : verdict::allowed);
+				}
+			}
+		}
+		CHECK(table);
+		CHECK(decide(std::nullopt, 1, 0) == verdict::no_structure && decide(std::nullopt, 0, 9) == verdict::no_structure);
+		CHECK(decide(5, 0, 1) == verdict::no_structure && decide(5, 2, 9) == verdict::no_structure && decide(10, 1, 9) == verdict::no_structure); // a script changed the byte
+		CHECK(decide(10, 2, 9) == verdict::refused); // never reached in the game (byte 2 is refused before), and still a refusal
+
+		// The structures, by handle: only the handle that was stored answers; a new object in the slot replaces it;
+		// an object read without the attribute (or with a number out of range) forgets what the slot held.
+		{
+			auto store = std::make_unique<structure_store>();
+			CHECK(!store->get(0x801) && !store->get(0));
+			store->set(0x801, 2);
+			store->set(0x802, 10);
+			store->set(0x803, 0);
+			CHECK(store->get(0x801) == 2 && store->get(0x802) == 10 && store->get(0x803) == 0);
+			CHECK(!store->get(0x801 + structure_store::slots) && !store->get(0x1801)); // the slot's next tenant, not read yet
+			store->set(0x801 + structure_store::slots, 5);
+			CHECK(store->get(0x801 + structure_store::slots) == 5 && !store->get(0x801));
+			store->set(0x802, std::nullopt);
+			CHECK(!store->get(0x802));
+			store->set(0x803, 11);
+			CHECK(!store->get(0x803));
+			store->set(0x803, -1);
+			CHECK(!store->get(0x803));
+			store->set(0, 4);
+			CHECK(!store->get(0)); // no handle, no object
+		}
+
+		// The melee records: the attacker and the attack both have to match, the newest record of a pair wins, and
+		// the 65th record pushes the first out. A hit with no record carries its own level.
+		{
+			attack_ring ring;
+			CHECK(!ring.find(0, 0) && !ring.find(0x801, 0x143));
+			CHECK(hit_level(ring, 0x801, 0x143, 3) == 3);
+			ring.record(0x801, 0x143, 1);
+			CHECK(ring.find(0x801, 0x143) == 1 && !ring.find(0x802, 0x143) && !ring.find(0x801, 0x144));
+			CHECK(hit_level(ring, 0x801, 0x143, 1) == 1 && hit_level(ring, 0x801, 0x144, 5) == 5);
+			ring.record(0x801, 0x143, 4);
+			CHECK(ring.find(0x801, 0x143) == 4);
+			ring.record(0x802, 0x143, 9);
+			CHECK(ring.find(0x801, 0x143) == 4 && ring.find(0x802, 0x143) == 9);
+			for (std::uint32_t i = 0; i < attack_ring::size - 1; ++i)
+			{
+				ring.record(0x900, i, 2);
+			}
+			CHECK(ring.find(0x802, 0x143) == 9 && !ring.find(0x801, 0x143)); // 64 newer ones: both 0x801 records are gone
+			ring.record(0x900, 1000, 2);
+			CHECK(!ring.find(0x802, 0x143) && ring.find(0x900, 0) == 2 && ring.find(0x900, 1000) == 2);
+		}
+
+		// The guards: well-formed and apart; each matches its own bytes and refuses a change to any one of them.
+		// The two code sites start a guard, with the bytes their jumps replace; the slot's guard is the function's
+		// address.
+		bool guards_ok = true;
+		for (std::size_t i = 0; i < guards.size(); ++i)
+		{
+			const auto& g = guards[i];
+			guards_ok &= limits_rules::valid_hex(g.hex) && g.what && *g.what;
+			const DWORD end = g.va + static_cast<DWORD>(limits_rules::hex_size(g.hex));
+			for (std::size_t j = 0; j < guards.size(); ++j)
+			{
+				guards_ok &= i == j || guards[j].va >= end || guards[j].va + limits_rules::hex_size(guards[j].hex) <= g.va;
+			}
+			std::vector<std::uint8_t> bytes(limits_rules::hex_size(g.hex));
+			for (std::size_t b = 0; b < bytes.size(); ++b) bytes[b] = limits_rules::hex_byte(g.hex, b);
+			guards_ok &= limits_rules::matches(bytes.data(), g.hex);
+			for (std::size_t b = 0; b < bytes.size(); ++b)
+			{
+				bytes[b] ^= 1;
+				guards_ok &= !limits_rules::matches(bytes.data(), g.hex);
+				bytes[b] ^= 1;
+			}
+		}
+		CHECK(guards_ok);
+		const auto guard_at = [&](const DWORD va) -> const guard*
+		{
+			for (const auto& g : guards)
+			{
+				if (g.va == va) return &g;
+			}
+			return nullptr;
+		};
+		CHECK(guard_at(parse_hook_va) && guard_at(parse_hook_va)->hex.substr(0, parse_displaced.size()) == parse_displaced);
+		CHECK(guard_at(gate_hook_va) && guard_at(gate_hook_va)->hex.substr(0, gate_displaced.size()) == gate_displaced);
+		CHECK(guard_at(level_slot_va) && guard_at(level_slot_va)->hex == "70f74400" && guard_at(level_function_va));
+		CHECK(parse_resume_va == parse_hook_va + limits_rules::hex_size(parse_displaced) && gate_refused_va == gate_hook_va + limits_rules::hex_size(gate_displaced));
+
+		// The jumps: e9 and the distance from the end of it, nops for the rest of what they replace.
+		const auto parse_jump = jump(parse_hook_va, 0x12345678, limits_rules::hex_size(parse_displaced));
+		const auto gate_jump = jump(gate_hook_va, 0x02345678, limits_rules::hex_size(gate_displaced));
+		address relative = 0;
+		std::memcpy(&relative, parse_jump.data() + 1, 4);
+		CHECK(parse_jump.size() == 10 && parse_jump[0] == 0xe9 && parse_hook_va + 5 + relative == 0x12345678 && std::count(parse_jump.begin() + 5, parse_jump.end(), std::uint8_t{0x90}) == 5);
+		std::memcpy(&relative, gate_jump.data() + 1, 4);
+		CHECK(gate_jump.size() == 9 && gate_jump[0] == 0xe9 && gate_hook_va + 5 + relative == 0x02345678 && std::count(gate_jump.begin() + 5, gate_jump.end(), std::uint8_t{0x90}) == 4);
+
+		// The bridges, run. The parse bridge: the callback gets the object and the reader, then the clamp the jump
+		// replaced has run (al is [esp+0x10], at most 2) and everything else is as it was.
+		const auto as_address = [](const void* p) { return static_cast<address>(reinterpret_cast<std::uintptr_t>(p)); };
+		std::array<std::uint8_t, 0x400> object{};
+		const auto parse = parse_bridge(as_address(&break_parse_callback), as_address(&break_resume_landing));
+		const auto gate = gate_bridge(as_address(&break_gate_callback), as_address(&break_refused_landing), as_address(&break_allowed_landing));
+		auto* stub = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, parse.size() + gate.size(), MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+		CHECK(stub != nullptr);
+		if (stub)
+		{
+			std::memcpy(stub, parse.data(), parse.size());
+			std::memcpy(stub + parse.size(), gate.data(), gate.size());
+			FlushInstructionCache(GetCurrentProcess(), stub, parse.size() + gate.size());
+			for (const std::uint32_t read : {0u, 1u, 2u, 3u, 10u, 255u})
+			{
+				break_callback_calls = 0;
+				break_callback_object = break_callback_other = 0;
+				CHECK(invoke_break_bridge(stub, object.data(), read) == 1);
+				CHECK(break_callback_calls == 1 && break_callback_object == as_address(object.data()) && break_callback_other == 0x123000);
+				CHECK(break_landing_al == std::min<std::uint32_t>(read, 2) && break_x87_bits == 0x3f800000);
+			}
+
+			// The gate bridge. Structure byte 2 (or more): the game's own refusal, the fix isn't asked. Below 2: the
+			// fix decides, and is handed the object and the gate's copy of the hit (esp + 0x24 at the hook).
+			for (const std::uint8_t byte : {std::uint8_t{2}, std::uint8_t{3}, std::uint8_t{255}})
+			{
+				object[entity_structure] = byte;
+				break_callback_calls = 0;
+				break_gate_choice = 1;
+				CHECK(invoke_break_bridge(stub + parse.size(), object.data(), 0) == 2 && break_callback_calls == 0 && break_x87_bits == 0x3f800000);
+			}
+			std::uint32_t hit_seen = 0;
+			for (const std::uint8_t byte : {std::uint8_t{0}, std::uint8_t{1}})
+			{
+				object[entity_structure] = byte;
+				for (const std::uint32_t choice : {1u, 0u, 0x100u, 0x80000000u})
+				{
+					break_callback_calls = 0;
+					break_callback_object = break_callback_other = break_hit_word = 0;
+					break_gate_choice = choice;
+					CHECK(invoke_break_bridge(stub + parse.size(), object.data(), 0) == (choice ? 3u : 2u)); // the whole of eax counts
+					CHECK(break_callback_calls == 1 && break_callback_object == as_address(object.data()) && break_x87_bits == 0x3f800000);
+					CHECK(break_hit_word == 0x5eed1234); // esp + 0x24 at the hook
+					CHECK(!hit_seen || hit_seen == break_callback_other); // the same frame every run
+					hit_seen = break_callback_other;
+				}
+			}
+			// And it is in invoke_break_bridge's frame, below this function's.
+			const auto frame = as_address(&hit_seen);
+			CHECK(hit_seen != 0 && hit_seen < frame && frame - hit_seen < 0x1000);
+			VirtualFree(stub, 0, MEM_RELEASE);
+		}
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the break rule's bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](const DWORD va) { return image + (va - image_base); };
+		const guard* mismatch = first_mismatch(image);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
+		CHECK(mismatch == nullptr);
+		// The string the game asks its reader for, and the one caller of the object's parser.
+		CHECK(std::strcmp(reinterpret_cast<const char*>(at(0x689db8)), "structure") == 0);
+		CHECK(std::memcmp(at(0x49992a), "\xe8\xd1\xef\xff\xff", 5) == 0); // call 0x498900
+
+		// The game's own level function, run on an actor and a hit of the test's own: authored + the
+		// might_structure nibble + the damageLevel affecter, capped at 1 - what the fix's slot hands back
+		// unchanged - and the hit's byte left as it was (the caller stores the result). The lift value is bits 3-6
+		// of actor+0x57a, the affecter the float at actor+0x530: what the fix reads for XML1's sum.
+		std::vector<std::uint8_t> actor(0x800), hit(0x80);
+		const auto level_of = [&](const std::uint8_t authored, const std::uint8_t might_structure, const float affecter, const std::uint8_t lift)
+		{
+			actor[actor_lift] = static_cast<std::uint8_t>(lift << 3); // bit 0 clear: the sums are up to date
+			actor[0x57b] = might_structure;
+			std::memcpy(actor.data() + actor_affecter, &affecter, 4);
+			hit[hit_level_byte] = authored;
+			int result = -1;
+			const bool ran = run_game_level(at(level_function_va), actor.data(), hit.data(), result);
+			return ran && hit[hit_level_byte] == authored ? result : -1;
+		};
+		CHECK(level_of(0, 0, 0.0f, 0) == 0 && level_of(1, 0, 0.0f, 0) == 1 && level_of(3, 0, 0.0f, 0) == 1 && level_of(9, 1, 3.0f, 3) == 1);
+		CHECK(level_of(0, 1, 0.0f, 1) == 1 && level_of(0, 0, 3.0f, 0) == 1 && level_of(0, 0, 0.99f, 0) == 0); // toward zero
+		CHECK(xml1_level(3, 0, 0.0f) == 3 && xml1_level(9, 3, 3.0f) == 9 && xml1_level(0, 1, 0.0f) == 3); // XML1's, for the same inputs
+
+		// The three writes on the copy: exactly their bytes change.
+		std::vector<std::uint8_t> before(image, image + image_size);
+		const address mine = 0x10203040;
+		std::memcpy(at(level_slot_va), &mine, 4);
+		const auto pj = jump(parse_hook_va, 0x10001000, limits_rules::hex_size(parse_displaced));
+		const auto gj = jump(gate_hook_va, 0x10001100, limits_rules::hex_size(gate_displaced));
+		std::memcpy(at(parse_hook_va), pj.data(), pj.size());
+		std::memcpy(at(gate_hook_va), gj.data(), gj.size());
+		std::size_t changed = 0;
+		bool inside = true;
+		for (DWORD i = 0; i < image_size; ++i)
+		{
+			if (image[i] != before[i])
+			{
+				++changed;
+				const DWORD va = image_base + i;
+				inside &= (va >= level_slot_va && va < level_slot_va + 4) || (va >= parse_hook_va && va < parse_resume_va) || (va >= gate_hook_va && va < gate_refused_va);
+			}
+		}
+		std::printf("  info  %zu bytes changed at 3 sites\n", changed);
+		CHECK(inside && changed == 23);
+		CHECK(mismatch || first_mismatch(image) != nullptr); // and the guards no longer match: never patched twice
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+}
+
 int main(const int argc, char** argv)
 {
 	if (argc > 1 && std::strcmp(argv[1], "--script-rules") == 0)
@@ -7578,6 +7993,12 @@ int main(const int argc, char** argv)
 	if (argc > 1 && std::strcmp(argv[1], "--geometry-sharing-rules") == 0)
 	{
 		check_geometry_sharing_rules();
+		return failures ? 1 : 0;
+	}
+	if (argc > 1 && std::strcmp(argv[1], "--break-rule-rules") == 0)
+	{
+		check_break_rule_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
 		return failures ? 1 : 0;
 	}
 	if (argc > 1 && std::strcmp(argv[1], "--fight-style-rules") == 0)
@@ -7671,6 +8092,7 @@ int main(const int argc, char** argv)
 	check_game_version_rules();
 	check_ini_rules();
 	check_xp_curve_rules();
+	check_break_rule_rules();
 	check_pad_prompts_rules();
 	check_discord_rules();
 	check_discord_pipe();
@@ -7697,6 +8119,7 @@ int main(const int argc, char** argv)
 	CHECK(log.find("conversations: XMen2.exe isn't loaded at 0x400000 (not the game?)") != std::string::npos && log.find("conversations: AutoAdvance on") == std::string::npos);
 	CHECK(log.find("main menu:") == std::string::npos); // no [Game] MainMenuItems: not a word, nothing patched
 	CHECK(log.find("xp curve:") == std::string::npos);  // no [Game] XPCurve: not a word, nothing patched
+	CHECK(log.find("break rule:") == std::string::npos); // no [Game] BreakRule: not a word, nothing patched
 	CHECK(log.find("title:") == std::string::npos);     // no [Game] WindowTitle: not a word, nothing hooked
 	CHECK(log.find("online: GameSpy game version") == std::string::npos && log.find("GameVersion") == std::string::npos); // no [Online] GameVersion
 	// No [Input]: Prompts is auto, but this isn't XMen2.exe - nothing patched.
