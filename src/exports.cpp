@@ -27,6 +27,7 @@
 #include "ini.hpp"
 #include "limits.hpp"
 #include "geometry_sharing.hpp"
+#include "ladder_paths.hpp"
 #include "log.hpp"
 #include "main_menu.hpp"
 #include "mod_loader.hpp"
@@ -195,6 +196,7 @@ namespace
 		// the CPrecacheMgr constructor, during its start-up.
 		limits::install(game);
 		geometry_sharing::install(game);
+		ladder_paths::install(game);
 
 		test_input::install(); // first: its screenshots need the display fix's device hook
 		display::install(game);
