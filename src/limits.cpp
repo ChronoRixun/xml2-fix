@@ -31,6 +31,8 @@ namespace limits
 		bool items_readable = false;
 		int style_cap = stock_fight_styles;
 		DWORD style_count_offset = 0;
+		int curve_cap = stock_effect_curves;
+		DWORD curve_live_va = 0;
 
 		std::uint8_t* at(const DWORD va)
 		{
@@ -130,6 +132,11 @@ namespace limits
 		DWORD styles_mismatch()
 		{
 			return style_first_mismatch([](const DWORD va, const std::string_view hex) { return bytes_match(va, hex); });
+		}
+
+		DWORD curves_mismatch()
+		{
+			return curve_first_mismatch([](const DWORD va, const std::string_view hex) { return bytes_match(va, hex); });
 		}
 
 		DWORD items_mismatch()
@@ -449,6 +456,50 @@ namespace limits
 			return true;
 		}
 
+		// The effect curve pool: its code patched for `capacity`, the getter (and the preset loader's
+		// copy of it) and the atexit thunk pointed at a zero-filled block of the DLL. The game builds the
+		// block with its own constructor at the first call of the getter, as it did the static, and tears
+		// it down at exit.
+		bool raise_curves(const int capacity)
+		{
+			constexpr const char* stays = "the effect curve pool stays at 900 curves";
+			if (!base)
+			{
+				logger::write("limits: XMen2.exe isn't loaded at 0x400000 (not the game?) - %s", stays);
+				return false;
+			}
+			if (const DWORD va = curves_mismatch())
+			{
+				logger::write("limits: XMen2.exe doesn't have the expected code at 0x%08lX (not the retail build?) - %s", va, stays);
+				return false;
+			}
+			DWORD built = 0;
+			if (!read_dword(curve_init_guard, built) || (built & 1))
+			{
+				logger::write("limits: the game has built its effect curve pool already (0x706678 = 0x%08lX) - %s", built, stays);
+				return false;
+			}
+			const auto layout = curve_layout_for(capacity);
+			void* object = VirtualAlloc(nullptr, layout.size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE); // zero-filled, as the static was
+			if (!object)
+			{
+				logger::write("limits: can't allocate %lu bytes for the effect curve pool (error %lu) - %s", layout.size, GetLastError(), stays);
+				return false;
+			}
+			const auto writes = curve_writes(layout, address_of(object));
+			if (!patch(writes, stays))
+			{
+				VirtualFree(object, 0, MEM_RELEASE);
+				return false;
+			}
+			curve_cap = capacity;
+			curve_live_va = address_of(object) + layout.live;
+			logger::write("limits: effect curve pool raised from 900 to %d curves - the pool moves from 0x6fe4b8 to 0x%08lX (%lu bytes), built and torn down by the game's own code; "
+			              "curves in use at 0x%08lX (was 0x706440); %zu fields and %zu references patched, bitset<900>::findNext in place; the 140 presets stay",
+			              capacity, address_of(object), layout.size, curve_live_va, curve_sites.size(), curve_references.size());
+			return true;
+		}
+
 		std::optional<std::string> ini_value(const wchar_t* key)
 		{
 			return ini::text(L"Limits", key); // the fix's one rule, ini_rules.hpp
@@ -478,13 +529,15 @@ namespace limits
 			igb_readable = !first_mismatch(igb_counter_guards);
 			items_readable = !items_mismatch();
 			if (!styles_mismatch()) style_count_offset = style_layout_for(stock_fight_styles).count;
+			if (!curves_mismatch()) curve_live_va = curve_object_retail + curve_layout_for(stock_effect_curves).live;
 		}
 
 		const auto actor_slots = ini_value(L"ActorSlots");
 		const auto resource_names = ini_value(L"ResourceNames");
 		const auto item_enhancements = ini_value(L"ItemEnhancements");
 		const auto fight_styles = ini_value(L"FightStyles");
-		if (!actor_slots && !resource_names && !item_enhancements && !fight_styles)
+		const auto effect_curves = ini_value(L"EffectCurves");
+		if (!actor_slots && !resource_names && !item_enhancements && !fight_styles && !effect_curves)
 		{
 			logger::write("limits: the game's own caps - 40 actor slots, 450 resource names, 375 item enhancements (no [Limits] in xml2-fix.ini)");
 			return;
@@ -492,12 +545,16 @@ namespace limits
 		const auto chosen = decide(actor_slots ? std::optional<std::string_view>(*actor_slots) : std::nullopt,
 		                           resource_names ? std::optional<std::string_view>(*resource_names) : std::nullopt,
 		                           item_enhancements ? std::optional<std::string_view>(*item_enhancements) : std::nullopt,
-		                           fight_styles ? std::optional<std::string_view>(*fight_styles) : std::nullopt);
+		                           fight_styles ? std::optional<std::string_view>(*fight_styles) : std::nullopt,
+		                           effect_curves ? std::optional<std::string_view>(*effect_curves) : std::nullopt);
 		for (const auto& note : chosen.notes)
 		{
 			logger::write("limits: %s", note.c_str());
 		}
 		if (chosen.fight_styles > stock_fight_styles) raise_styles(chosen.fight_styles);
+		// The effect curve pool: on its own, before the game's first effect (the getter builds the pool
+		// at its first call, in the game's start-up, after DllMain).
+		if (chosen.effect_curves > stock_effect_curves) raise_curves(chosen.effect_curves);
 		// The item enhancement pool: on its own, before the game's first item load (the manager is built
 		// at its first use, long after DllMain).
 		if (chosen.item_enhancements > stock_item_enhancements && base)
@@ -562,6 +619,7 @@ namespace limits
 			if (const auto manager = read(style_manager_pointer); manager && *manager) styles = read(*manager + style_count_offset);
 		}
 		return "actors " + counter(read(actor_live_va), actor_cap) + "; names " + counter(names, name_cap) + "; motions " + counter(motions, motion_pool_capacity) + "; igb " +
-		       counter(igb_readable ? read(igb_live_retail) : std::nullopt, igb_capacity) + "; items " + counter(items, item_cap) + "; styles " + counter(styles, style_cap);
+		       counter(igb_readable ? read(igb_live_retail) : std::nullopt, igb_capacity) + "; items " + counter(items, item_cap) + "; styles " + counter(styles, style_cap) + "; curves " +
+		       counter(read(curve_live_va), curve_cap);
 	}
 }

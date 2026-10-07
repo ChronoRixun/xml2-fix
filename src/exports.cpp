@@ -12,12 +12,15 @@
 // own ([Online] LocalIP), for online play, and, when
 // xml2-fix.ini asks for it, runs the game windowed or borderless at the desktop's resolution,
 // raises engine caps (the actor and resource name tables, limits.hpp), gives a mod's campaign what
-// it needs (its New Game, saves, main menu, ending, forced parties, X-Men Legends 1's XP curve) and
+// it needs (its New Game, saves, main menu, ending, forced parties, X-Men Legends 1's XP curve and its rule
+// for breaking objects) and
 // opens a named pipe through which tests press keys and pad buttons (on virtual pads, [Test]
 // VirtualPads, when nothing is plugged in) and take screenshots without the focus. It also
 // shows what the game is doing in Discord (Rich Presence, [Discord]; on unless switched off).
 
+#include "break_rule.hpp"
 #include "conversations.hpp"
+#include "objective_text.hpp"
 #include "discord_presence.hpp"
 #include "display.hpp"
 #include "forced_teams.hpp"
@@ -27,6 +30,7 @@
 #include "ini.hpp"
 #include "limits.hpp"
 #include "geometry_sharing.hpp"
+#include "ladder_paths.hpp"
 #include "log.hpp"
 #include "main_menu.hpp"
 #include "mod_loader.hpp"
@@ -42,6 +46,7 @@
 #include "virtual_pad.hpp"
 #include "window_title.hpp"
 #include "xinput_pad.hpp"
+#include "xtract.hpp"
 #include "xp_curve.hpp"
 
 #define DIRECTINPUT_VERSION 0x0800
@@ -168,6 +173,9 @@ namespace
 		main_menu::install(game);
 		// The Review menu's tabs: five imm8s in REVIEW_PATHS_MENU's own code, used from the first Review on.
 		review_menu::install(game);
+		// An Xtraction Point's Xtract choice ([Game] Xtract=0): two bytes in extractionPoint's own
+		// code, used from the first Xtraction Point on.
+		xtract::install(game);
 		// X-Men Legends 1's level table, cap and kill XP. Here, in DllMain, before the exe's entry point: the game
 		// first asks for a level's XP (0x448a90, which builds XML2's table on that call) when it loads the herostat at
 		// start-up (0x4ba1d9, every hero's starting level), and its first kill, level check or XP bar come later still,
@@ -187,6 +195,7 @@ namespace
 		// three code sites of the conversation system, used from the first conversation on; independent of the
 		// patches above (none of its sites or guards is anyone else's).
 		conversations::install(game);
+		objective_text::install(game);
 		// Before any of XMen2.exe's own code runs, as the engine limit adjuster must be: this DLL is a
 		// static import of libIGDisplay.dll, which XMen2.exe imports statically, so Windows runs this
 		// DllMain while it loads the process - before the exe's entry point (0x6725f4, the CRT start-up
@@ -195,6 +204,11 @@ namespace
 		// the CPrecacheMgr constructor, during its start-up.
 		limits::install(game);
 		geometry_sharing::install(game);
+		ladder_paths::install(game);
+		// X-Men Legends 1's rule for breaking objects ([Game] BreakRule=xml1): one vtable slot of the combat object and
+		// two code sites of the objects' own (their structure read and their damage gate), used from the first zone on;
+		// none of its sites or guards is anyone else's.
+		break_rule::install(game);
 
 		test_input::install(); // first: its screenshots need the display fix's device hook
 		display::install(game);
