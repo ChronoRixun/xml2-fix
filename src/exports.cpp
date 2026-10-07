@@ -46,6 +46,7 @@
 #include "virtual_pad.hpp"
 #include "window_title.hpp"
 #include "xinput_pad.hpp"
+#include "xtract.hpp"
 #include "xp_curve.hpp"
 
 #define DIRECTINPUT_VERSION 0x0800
@@ -172,6 +173,9 @@ namespace
 		main_menu::install(game);
 		// The Review menu's tabs: five imm8s in REVIEW_PATHS_MENU's own code, used from the first Review on.
 		review_menu::install(game);
+		// An Xtraction Point's Xtract choice ([Game] Xtract=0): two bytes in extractionPoint's own
+		// code, used from the first Xtraction Point on.
+		xtract::install(game);
 		// X-Men Legends 1's level table, cap and kill XP. Here, in DllMain, before the exe's entry point: the game
 		// first asks for a level's XP (0x448a90, which builds XML2's table on that call) when it loads the herostat at
 		// start-up (0x4ba1d9, every hero's starting level), and its first kill, level check or XP bar come later still,

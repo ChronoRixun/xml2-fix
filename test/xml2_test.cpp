@@ -82,6 +82,7 @@
 #include "virtual_pad_rules.hpp"
 #include "xp_curve_rules.hpp"
 #include "window_title_rules.hpp"
+#include "xtract_rules.hpp"
 
 #include <algorithm>
 #include <array>
@@ -5098,6 +5099,70 @@ namespace
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
 
+	// [Game] Xtract=0 (xtract_rules.hpp): the guards on their own, then, when a copy of XMen2.exe
+	// is at hand, every guard against it, the block's retail bytes and the choice's line, and the
+	// change applied to that copy (exactly the two bytes; the jump lands where the block ends).
+	void check_xtract_rules()
+	{
+		using namespace xtract_rules;
+		std::printf("[Game] Xtract (no world map at an Xtraction Point)\n");
+
+		bool guards_ok = true;
+		std::set<DWORD> addresses;
+		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
+		CHECK(guards_ok);
+		bool apart = true, covered = false, target_covered = false;
+		for (std::size_t i = 0; i < guards.size(); ++i)
+		{
+			const DWORD end = guards[i].va + static_cast<DWORD>(limits_rules::hex_size(guards[i].hex));
+			covered |= guards[i].va <= choice_block && choice_block + patched_jump.size() <= end;
+			target_covered |= guards[i].va == next_choice;
+			for (std::size_t j = 0; j < guards.size(); ++j)
+			{
+				if (i != j && guards[j].va >= guards[i].va && guards[j].va < end) apart = false;
+			}
+		}
+		CHECK(apart && covered && target_covered);
+		// The jump: jmp rel8 from the block's first byte to the Change Team add; it replaces the
+		// first two bytes of the block's call.
+		CHECK(jump_target(patched_jump.data(), choice_block) == next_choice);
+		CHECK(retail_op[0] == 0xe8 && jump_target(retail_op.data(), choice_block) == 0);
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check extractionPoint's bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](const DWORD va) { return image + (va - image_base); };
+		const auto text_at = [&](const DWORD va) { return std::string_view(reinterpret_cast<const char*>(at(va))); };
+
+		const guard* mismatch = first_mismatch(image);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
+		CHECK(mismatch == nullptr);
+		CHECK(std::memcmp(at(choice_block), retail_op.data(), retail_op.size()) == 0);
+		CHECK(text_at(0x68d4e0) == "openmenu('worldmap')" && text_at(0x68d4c4) == "extractionPointChange(%d,0)");
+
+		std::vector<std::uint8_t> before(image, image + image_size);
+		apply(image);
+		std::vector<DWORD> changed;
+		for (DWORD i = 0; i < image_size; ++i)
+		{
+			if (image[i] != before[i]) changed.push_back(image_base + i);
+		}
+		CHECK((changed == std::vector<DWORD>{choice_block, choice_block + 1}));
+		CHECK(jump_target(at(choice_block), choice_block) == next_choice);
+		// Patched (or any other build): the block's guard no longer matches, so nothing would be written again.
+		mismatch = first_mismatch(image);
+		CHECK(mismatch && mismatch->va == choice_block);
+		std::memcpy(image, before.data(), image_size);
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
 	// [Game] ReviewStats=0 (review_menu_rules.hpp): the tables on their own (every site inside a guard, with
 	// its instruction and retail byte there, inside the write span), the tab change as the exe does it with
 	// either set of bytes, then, when a copy of XMen2.exe is at hand, every guard against it, the tab table's
@@ -8389,6 +8454,7 @@ int main(const int argc, char** argv)
 	check_postgame_rules();
 	check_end_unlock_rules();
 	check_new_game_plus_rules();
+	check_xtract_rules();
 	check_review_menu_rules();
 	check_main_menu_rules();
 	check_window_title_rules();
