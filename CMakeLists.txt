@@ -42,6 +42,7 @@ add_library(xml2_fix SHARED
 	src/window_title.cpp
 	src/main_menu.cpp
 	src/review_menu.cpp
+	src/xtract.cpp
 	src/forced_teams.cpp
 	src/conversations.cpp
 	src/objective_text.cpp
