@@ -1,6 +1,6 @@
 # Spendable attribute point grants
 
-Planned for XML2 Fix 1.3.2. `addStatPoints(actor, count)` grants 1..20 unspent attribute points through the native saved counter. Existing script function indices remain unchanged. No XP, level, skill points or fixed attribute is changed. Negative counters and signed overflow are refused.
+New in XML2 Fix 1.3.2. `addStatPoints(actor, count)` grants 1..20 unspent attribute points through the native saved counter. Existing script function indices remain unchanged. No XP, level, skill points or fixed attribute is changed. Negative counters and signed overflow are refused.
 
 Offline tests cover arguments, collector routing, registry capacity and native accessor behavior on a synthetic saved block. A controlled in-game comparison collected the original STAT pickup through native
 touch handling with a two-hero party. The old activation raised Body with no unspent

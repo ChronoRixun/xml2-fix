@@ -38,7 +38,7 @@ the feature off and the source completion description with it on. Reversal resto
 but its rendered display remains unverified; see the companion builder validation record.
 The first runtime test exposed the separate primary renderer, which is now hooked
 alongside the secondary renderer. The Legends Classic builder's completion-text change
-depends on this feature in the planned 1.3.2 release; neither PR is a release action.
+depends on this feature, new in XML2 Fix 1.3.2.
 
 Fresh-process save reload, act transitions, multiplayer and secondary-objective
 rendering remain unverified. Runtime proof currently covers the primary journal.

@@ -1,7 +1,6 @@
 # Character ladder paths
 
-Planned for XML2 Fix 1.3.2. Version 1.3.1 remains reserved for FightStyles and the
-geometry-sharing correction. No release version or tag is changed by this draft.
+New in XML2 Fix 1.3.2.
 
 Legends Classic issue #32 converts the source animation's Motion keys into relative
 native paths named `x1_ladders/sewers/mp_cabinet` and `x1_ladders/arbiter/mp_cabinet`.
