@@ -376,6 +376,7 @@ namespace test_input_rules
 			objectives,
 			events,
 			ping,
+			save, // save_format's commands: `text` is the rest of the line
 			unknown
 		};
 
@@ -424,6 +425,12 @@ namespace test_input_rules
 			result.what = verb == "STATE" ? command::kind::state : verb == "OBJECTIVES" ? command::kind::objectives : command::kind::events;
 			return result;
 		}
+		if (verb == "SAVE")
+		{
+			result.what = command::kind::save;
+			result.text = std::string(rest);
+			return result;
+		}
 		if (verb == "PING") result.what = command::kind::ping;
 		else if (verb == "STATUS") result.what = command::kind::status;
 		else if (verb == "RELEASE") result.what = command::kind::release;
@@ -436,7 +443,7 @@ namespace test_input_rules
 		else if (verb == "CONSOLE") result.what = command::kind::console;
 		else if (verb == "WM") return fail("wm is gone: the Advanced Options panel reads the DirectInput keyboard like every other screen - use tap (tap DOWN, tap ENTER, tap LEFT)");
 		else return fail("unknown command '" + std::string(text.substr(0, space)) +
-		                 "' (down, up, tap, hold, release, screenshot, script, console, pad, padhold, paddown, padup, padrelease, stick, trigger, status, ping)");
+		                 "' (down, up, tap, hold, release, screenshot, script, console, pad, padhold, paddown, padup, padrelease, stick, trigger, status, ping, save)");
 
 		if (result.what == command::kind::script || result.what == command::kind::console)
 		{

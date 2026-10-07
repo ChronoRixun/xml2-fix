@@ -363,7 +363,12 @@ BreakRule=xml1  ; X-Men Legends I's rule for breaking objects (a punch no longer
 AutoAdvance=1   ; a conversation line the mod marks goes on by itself once its voice has played (on by default)
 ReplyVoices=1   ; a chosen reply's voice plays out before its answer (on by default; the game cut it one frame in)
 ReplyCursor=1   ; a reply menu come back to keeps a reply highlighted (on by default; the game's clamp lost it)
+
+[Save]
+Format=lc       ; the LC save format: saves in SaveLC as .lcsave files with permanent identities; the old saves converted once
 ```
+
+**The LC save format.** XML2's own save file stores every item, talent, objective and zone object by its position in the tables the game loaded, so a campaign that keeps growing (the X-Men Legends I port) turns every older save into another save. With `Format=lc` the game's own serializer and loader are left alone, and the one object that moves their stream to and from the disk - the memory card's nine file methods - becomes the fix's: a slot is read from `SaveLC\saveslot<N>.lcsave` (the library rebuilds the engine's stream from permanent identities), written there atomically with a backup, listed from the file's own description; the profile goes to `SaveLC\profile.lcsave`. At the first file operation the build's tables (`Data\lcsave\catalogue.lcc` and the bind files beside the data files) are loaded and verified - when they don't verify, nothing is read or written in either folder and the slot list says why - and the old `Save` folder is converted once, with a ledger (`SaveLC\legacy-import.txt`); the originals are never written. A save made before a hero got a talent gets it on load at rank 0. See [the disk seam, the start-up and what stays undone](docs/save-format.md).
 
 **X-Men Legends I's rule for breaking objects.** Both games refuse a hit on an object when the attack's damage level is below the object's `structure`, but XML1 counts structure from 0 to 10 and a melee hit's level up to 9 (the attack's authored level, plus 3 / 6 / 8 for Might rank 1 / 2 / 3, plus the `damageLevel` affecter), while XML2 clamps structure to 0..2 and caps the melee level at 1. A plain punch is level 1 in both, so in XML2 it breaks everything that can be broken at all, and a port that keeps XML1's sturdier walls breakable lets a punch open what XML1 kept for powers. With `BreakRule=xml1`, an object whose entity definition carries `xml1structure="N"` (XML1's own number, next to the `structure` the game reads) is damaged only by a hit of at least level N on XML1's scale; an object without the attribute, and everything about characters, is as before. The fix reads the attribute with the game's own reader where the game reads `structure`, works out XML1's level where the game works out its own (and hands the game's own result back unchanged), and adds the comparison at the object's damage gate: three hooks, after every byte they rely on is checked against the retail build. Neither the hit's level byte nor any structure byte changes, so attacks do to enemies exactly what they did, and nothing is saved. On any other build objects break by the game's own rule and `xml2-fix.log` says why; the test pipe's `status` ends with `break rule xml1; object hits judged ...; refused ...; without xml1structure ...`. See [the rule, the hooks and what stays the game's](docs/break-rule.md).
 
@@ -390,6 +395,23 @@ It works by pointing the one push in the credits menu that hands the console XML
 **The window's title.** The game names its window (and so its taskbar button and its alt-tab entry) *X-Men Legends 2*. `WindowTitle` gives it another, printable ASCII, at most 127 characters. The same string is the game's registry key and the start of its save folder, so it isn't changed: the engine's two calls that title the window (`CreateWindowExA` and `SetWindowTextA` in `libIGDisplay.dll`) pass the new one, for the game's window only, in every display mode.
 
 **X-Men Legends I's levels.** XML2's levels go to 99 on a roughly cubic curve (level 40 at 1,988,935 XP); XML1's go to 45 on an exponential one (level 40 at 125,847,705), and its kills are worth more the higher the enemy. A campaign that carries XML1's XP amounts - objectives worth 2,000,000, script awards, npcstat `xpaward` - takes a level-1 hero to 40 with one objective on XML2's curve. With `XPCurve=xml1` the game uses XML1's: its level table and cap, from XML1's own code (`default.xbe`); a kill worth 2.5 × (4/3)^(level − 1) XP, with no party-level multiplier; half of each kill to every hero, the bench included (XML2 gives the bench 1 XP); 3 × (half + 1) more to each hero in the party, an AI teammate that didn't make the kill a share of that by its distance (all of it close by, a third at 300 units, nothing beyond). XML2's level-up code, XP bars, level-up popups and skill points work on the new table unchanged; everything that carries the cap 99 (the level recompute, level-up by N, the most XP a hero can have, the shop's level-up item, the every-hero-to-the-top cheat) gets 45. The Danger Room's fixed level 30 and Hard's start at 45 are within XML1's cap and stay. It works by pointing the game's one read of its level table at XML1's in the fix, writing the new cap into those instructions, jumping the kill XP function to the fix's, and changing the kill's share code in place (19 sites), after every byte it relies on is checked against the retail build; on any other build the game keeps its own curve and `xml2-fix.log` says why. Levels in a save made on the other curve follow the new table from the hero's next XP gain.
+
+**X-Men Legends I's combat numbers.** Most of what makes the port easier than the first game is the engine's formulas, not the data: XML2 gives an enemy 3 health per body point (X-Men Legends I: 10), a hit 0.05 per strength point (0.1), lets a slow enemy land 5 % of its punches on a hero where XML1's formula lands 65-80 %, gives power attacks the stat bonus XML1 withheld from them, rounds every bonus up where XML1 rounded down, and has no damage from the talent `might` (XML1: 5 % a rank). The `[Balance]` section restores each of these from the ini, one key each; a key that isn't set leaves that part of the game exactly as it is, so the port can tune them one at a time. The port's builder writes the section for a balance build (and gives such a build its own `[Online] GameVersion`, `X1.1`, so its lobbies don't mix with other port builds'). Every key is checked against the retail build before anything is written; on any other build that key's part stays the game's own and `xml2-fix.log` says why. [Details](docs/balance.md).
+
+```ini
+[Balance]
+EnemyHealthPerBody=10   ; 1 to 50: health per body point of every character whose stats the mod didn't scale (the game's own: 3)
+HeroStatScale=4         ; 1 to 8: what the mod multiplied its heroes' four stats by (the port: 4)
+NativeStatHeroes=ProfXAstral,ProfXGladiator   ; herostat entries it didn't scale
+StrengthBonus=0.1       ; 0 to 1: a hit's bonus per strength point (the game's own: 0.05); scaled heroes get it per HeroStatScale points
+MindBonus=0.1           ; 0 to 1: the same for mind, on mental and telekinetic attacks (the game's own: 0.01); also what the stats screen shows
+MightBonus=0.05         ; 0 to 0.5: every hit x (1 + this x the attacker's rank of the talent might), ranks above 3 as 3 (the game's own: nothing)
+PowerAttacks=xml1       ; xml1: an attack with DamageScale="x1power" gets no stat bonus and never misses, as XML1's power attacks (xml2 or no key: it is `normal`)
+HitChance=xml1          ; xml1: XML1's melee hit chance, (30 + the attacker's speed and level - the defender's) x 2.5 %, at least 10 % (xml2 or no key: the game's own)
+Rounding=xml1           ; xml1: a hit's stat and affecter bonuses are worked out on the roll and rounded down, as XML1 does (xml2 or no key: each rounded up)
+```
+
+For tuning: `HitChanceBase` (0 to 60, XML1's 30: 75 % at equal speed and level) and `HitChancePerPoint` (0.001 to 0.1, XML1's 0.025) change the formula's two numbers; `HeroStrengthBonus` and `HeroMindBonus` (0 to 1, per stored point) set the scaled heroes' bonus apart from the enemies'; `HeroHealthPerBody` (1 to 50) gives the scaled heroes another number than the game's 3 (a hero's saved health is clamped to the new maximum when a save loads). `EnemyHealthPerBody=3`, `StrengthBonus=0.05`, `MindBonus=0.01`, `MightBonus=0`, `PowerAttacks=xml2`, `HitChance=xml2`, `Rounding=xml2` give the game's own behaviour back key by key. A scaled hero is a herostat character whose name isn't in `NativeStatHeroes`; an allied NPC or an enemy copy of a hero is an npcstat character and counts as unscaled. The stats screen's attack and defense ratings are XML2's display either way; with `HitChance=xml1` they no longer decide the roll. The test pipe's `status` reports what was applied (`balance health=10/3 str=0.1/0.025 ...`). Nothing is saved: stats, levels and XP stay as they are in the data and in a save; an enemy's current health in a saved zone is an absolute number, so one saved at 29 of 29 comes back at 29 of 40 once the key is on.
 
 **Conversations written for the other engine.** Three things XML2's conversation code does that X-Men Legends I's data was not written for; each is on unless its key is `0`. `AutoAdvance` changes nothing for XML2's own conversations (none of its lines carries the mark); `ReplyVoices` and `ReplyCursor` do reach them - XML2 has six voiced replies (Storm's and Emma Frost's), which now play out, and 35 conversations whose hub menu could come back with nothing highlighted, which now keep a reply highlighted.
 
@@ -509,6 +531,29 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `ReplyCursor` | `1` | a reply menu come back to keeps a reply highlighted; `0`: the game's clamp |
 | `ObjectiveDescriptions` | `0` | `1`: mission `updatedescription` appears in the journal while the objective is complete ([details](docs/objective-descriptions.md)) |
 | `GeometrySharingBlendIndices` | `0` | `1`: skinned models share geometry only when their packed blend indices match too ([details](#geometry-sharing)) |
+
+**[Balance]**: X-Men Legends I's combat numbers, for the port, which sets these itself ([details](docs/balance.md)). Every key is on its own; leave them out for XML2 as it ships.
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `EnemyHealthPerBody` | *(the game's own, 3)* | `1` to `50`: health per body point of every character whose stats the mod didn't scale |
+| `HeroHealthPerBody` | *(the game's own, 3)* | `1` to `50`: the same for the scaled heroes (tuning) |
+| `HeroStatScale` | `1` | `1` to `8`: what the mod multiplied its heroes' stats by; the keys below divide by it for scaled heroes |
+| `NativeStatHeroes` | *(none)* | herostat entries the mod didn't scale, comma separated |
+| `StrengthBonus` | *(the game's own, 0.05)* | `0` to `1`: a hit's bonus per strength point |
+| `MindBonus` | *(the game's own, 0.01)* | `0` to `1`: a mental hit's bonus per mind point (the stats screen shows it) |
+| `HeroStrengthBonus`, `HeroMindBonus` | *(StrengthBonus / MindBonus over HeroStatScale)* | `0` to `1`: the scaled heroes' bonus per stored point (tuning) |
+| `MightBonus` | *(the game's own, none)* | `0` to `0.5`: every hit x (1 + this x the attacker's rank of `might`), ranks above 3 as 3 |
+| `PowerAttacks` | `xml2` | `xml1`: `DamageScale="x1power"` reads as `none` (no stat bonus, never a miss), as XML1's power attacks |
+| `HitChance` | `xml2` | `xml1`: XML1's melee hit chance, (30 + attacker's speed and level - defender's) x 2.5 %, at least 10 % |
+| `HitChanceBase`, `HitChancePerPoint` | `30`, `0.025` | with `HitChance=xml1`: the formula's two numbers (`0` to `60`; `0.001` to `0.1`) (tuning) |
+| `Rounding` | `xml2` | `xml1`: a hit's stat and affecter bonuses worked out on the whole-number roll and rounded down, as XML1's |
+
+**[Save]** ([details](docs/save-format.md))
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `Format` | `xml2` | `lc`: saves as `.lcsave` files in `SaveLC` with permanent identities, the old saves converted once; `off` / `xml2` / no key: the game's own files, untouched |
 
 **[Limits]** ([details](#bigger-zones))
 
