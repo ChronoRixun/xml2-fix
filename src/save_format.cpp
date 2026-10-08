@@ -1040,6 +1040,9 @@ namespace save_format
 			}
 			else retained_profile=result.bytes;
 			write_count.fetch_add(1);
+			// CORE-BEGIN: native dangling-item normalization must remain visible after a successful write.
+			if (!result.ledger.empty()) logger::write("save core: write ledger: %s",result.ledger.c_str());
+			// CORE-END
 			logger::write("save format: wrote %s (%zu bytes, sequence %lu, serial %016llx%s)", path.c_str(), result.bytes.size(), static_cast<unsigned long>(context.save_sequence),
 			              static_cast<unsigned long long>(context.campaign_serial), result.parked ? (", " + std::to_string(result.parked) + " parked records carried").c_str() : "");
 			return true;

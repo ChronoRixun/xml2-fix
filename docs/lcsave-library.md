@@ -126,3 +126,10 @@ and unowned world handles survive. Preflight rejects numbered states with duplic
 unsupported capture bits are validated before resets. Successful `new_to_old_stream` results can have a nonempty
 `ledger`: callers must log its explanations and notify the player of selective resets. The synthetic parity runner
 also accepts `reverse` (full native stream bytes) and `refuse` (no stream plus expected error) fixture modes.
+
+`old_stream_to_new` tolerates only a known native normalization: an unnumbered item state whose world slot is absent
+is omitted, with a `Result.ledger` explanation. The native item-restoration lookup treats an absent slot as no item
+instance. Numbered dangling references and unrelated translation drops still refuse. Successful runtime writes
+log the ledger after the atomic write. Legacy conversion retains its previous drop counts and LGCY bytes.
+Synthetic `native-campaign` parity cases provide input.raw, metadata.lcsave and expected.lcsave, testing a complete
+native-save direction with observed capture metadata and retained legacy provenance.

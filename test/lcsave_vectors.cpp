@@ -1170,6 +1170,34 @@ namespace
 			"same-name twin cache ordinal matches translated native map");
 	}
 
+	void test_native_dangling_world_state(const fs::path& folder)
+	{
+		auto t = make_tables(folder, "sh_might", false); Tables tables; tables.data = t;
+		const auto base = make_old_save({0,3,4},10);
+		const auto imported = convert_old_to_new(write_slot(base),tables);
+		check(imported.ok,"dangling world fixture import");if(!imported.ok)return;
+		NewFileContext context;context.require_capture_metadata=true;std::string error;
+		check(loaded_zone_metadata(imported.bytes,tables,context.zone_captures,error),"dangling fixture metadata");
+		for(int scenario=0;scenario<3;++scenario)
+		{
+			auto native=make_old_save({0,3,4},10);native.world.clear();
+			for(u32 h=0;h<13;++h)native.world.push_back({h,instance(3,{{7,1}})});
+			auto& z=native.zones[0];auto& state=z.states[scenario==2?1:4];
+			state.payload[0]=13;state.payload[1]=1;for(int k=2;k<8;++k)state.payload[k]=0;
+			state.flags_a=1;state.flags_b=7;
+			z.tail.dynamic_count=scenario==1?1:0;z.tail.smart_count=scenario==0?1:0;z.tail.smart[0]=4;
+			const auto result=old_stream_to_new(write_slot(native),tables,context);
+			if(scenario==2){check(!result.ok&&result.bytes.empty(),"numbered dangling reference still refuses");continue;}
+			check(result.ok,"unnumbered dangling reference saves "+std::to_string(scenario)+": "+result.error);
+			check(contains(result.ledger,"dangling world item slot 13")&&contains(result.ledger,"native load"),"dangling normalization has ledger explanation");
+			if(!result.ok)continue;
+			const auto legacy=convert_old_to_new(write_slot(native),tables);
+			check(legacy.ok&&read_file(legacy.bytes.data(),legacy.bytes.size()).data("LGCY")["other_dropped"].as_int()==1,"legacy importer keeps its recorded drop policy");
+			const auto reverse=new_to_old_stream(result.bytes,tables);check(reverse.ok,"normalized dangling state reloads");
+			if(reverse.ok){const auto m=read_slot(reverse.bytes.data(),reverse.bytes.size());check(m.world.size()==13&&m.zones[0].tail.dynamic_count==0&&m.zones[0].tail.smart_count==0,"no ghost item state, live world items intact");}
+		}
+	}
+
 	void test_review_resets(const fs::path& folder)
 	{
 		auto t = make_tables(folder, "sh_might", false);
@@ -1279,6 +1307,7 @@ void run_vectors(const fs::path& scratch)
 	test_api(scratch / "api");
 	test_capture_twins(scratch / "twins");
 	test_review_resets(scratch / "review");
+	test_native_dangling_world_state(scratch / "dangling-world");
 	test_native_table_budgets(scratch / "native-budgets");
 }
 

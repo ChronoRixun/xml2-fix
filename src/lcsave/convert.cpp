@@ -515,6 +515,15 @@ namespace lcsave::detail
 					std::memcpy(&qty, s.payload + 1, 2);
 					if (!world_handles.count(slot))
 					{
+						// Native item restore (0x479fc0) tolerates an absent slot. An unnumbered item
+						// with no instance is a ghost, not a reconstructable pickup. Keep numbered
+						// identity loss strict and keep the legacy importer's recorded drop policy.
+						if (context && kind != 1)
+						{
+							c.res.notes.push_back(what + ": dangling world item slot " + str(slot) +
+								": unnumbered item state omitted (native load has no item instance)");
+							return false;
+						}
 						++c.res.dropped.states;
 						c.res.notes.push_back(what + ": a state owns world item slot " + str(slot) + " that the item section does not list: dropped");
 						return false;
