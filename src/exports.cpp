@@ -46,6 +46,8 @@
 #include "review_menu.hpp"
 #include "personal_item_text.hpp"
 #include "save_format.hpp"
+#include "save_content_guards.hpp"
+#include "save_trace.hpp"
 #include "test_input.hpp"
 #include "virtual_pad.hpp"
 #include "window_title.hpp"
@@ -168,6 +170,7 @@ namespace
 		// [Online] GameVersion: the string the game copies into its network code at start-up and when online
 		// opens - here, before any of its code runs.
 		game_version::install(game);
+		if (!game_version::startup_allowed()) return;
 
 		new_game::install(game);
 		// [Save] Format=lc: the LC save format's disk seam (the card's nine file methods, the stream helpers'
@@ -175,6 +178,8 @@ namespace
 		// [Game] SaveFolder re-points the folder the card builds at start-up and this reads at its first file
 		// operation; none of its sites or guards is anyone else's.
 		save_format::install(game);
+		save_content_guards::install(game);
+		save_trace::install(game);
 		// What the end credits run: one push operand in CREDITS_MENU, used only when a campaign ends.
 		postgame::install(game);
 		// The main menu's item names: the push operands of MAIN_MENU's own code (mouse, Quit), used from the
@@ -248,6 +253,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, const DWORD reason, LPVOID)
 	{
 		DisableThreadLibraryCalls(instance);
 		install();
+		if (!game_version::startup_allowed()) return FALSE;
 	}
 	return TRUE;
 }

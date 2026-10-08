@@ -59,6 +59,14 @@ namespace save_core_rules
    if(placed_match(entry.placement_index,entry.definition_name,entry.instance_name,index,definition,name))return &entry;
   return nullptr;
  }
+ struct completion_decision { bool native_ok,confirm_campaign,refuse_campaign; };
+ inline completion_decision native_completion(int mode,bool pending,int slot,bool returned,bool overflow,
+                                               bool capture_failed,bool registry_failed)
+ {
+  const bool ok=returned&&!overflow&&!capture_failed&&!registry_failed;
+  const bool disk=full_campaign_load(mode)&&pending&&slot>=0&&slot<save_format_rules::slot_count;
+  return {ok,ok&&disk,!ok&&disk};
+ }
  struct lifetime
  {
   std::uint64_t serial=0;

@@ -176,7 +176,8 @@ namespace save_format_rules
 
 	// Every byte of XMen2.exe the hooks rely on, read from the retail build. All must match before anything is
 	// written; xml2_test compares them with a copy of the exe.
-	inline constexpr std::array<guard, 23> guards{{
+	inline constexpr std::array<guard, 24> guards{{
+		{0x55f190, "81ec48020000", "native campaign-file count used by device info and Load Game"},
 		{card_vtable + 0x28, "f0f6550050f8550010f9550040e8550050e8550040e8550060e8550070e8550080e8550090e85500f0f35100a0f95500b0fc5500f0f2550000e9550070fe5500207c510000ff550030e95500b0e95500",
 		 "CMemoryCardWin32's vtable slots +0x28..+0x74 (0x69aab4)"},
 		{0x6e03d0, "7caa69006caa6900", "the slot extension and profile name pointers (0x6e03d0: \".save\", 0x6e03d4: \"settings.dat\")"},

@@ -3,6 +3,10 @@
 
 #include "save_format_rules.hpp"
 #include "save_core_rules.hpp"
+// Guards integration: policy and file operations live outside capture/lifetime.
+#include "save_guard_rules.hpp"
+#include "save_content_guards.hpp"
+#include "save_trace.hpp"
 #include "ini.hpp"
 #include "log.hpp"
 #include "lcsave/lcsave.hpp"
@@ -46,6 +50,7 @@ namespace save_format
 		readiness ready = readiness::untried;
 		std::string failure;          // why ready == failed (shown as the notice, logged once)
 		lcsave::Tables tables;
+		save_guard_rules::refusal_latches write_refusals;
 		std::string old_folder;       // "...\Save\" as the card built it
 		std::string lc_dir;           // "...\SaveLC\"
 		std::string pending_reason;   // appended to the next message the card formats (a refused read / write / delete)
@@ -567,7 +572,8 @@ namespace save_format
 			}
 			std::string error;
 			const auto build = logger::module_dir().wstring();
-			if (!lcsave::load_tables(build, tables, error))
+			if (!save_content_guards::verify_mods(std::filesystem::path(build), error) ||
+			    !lcsave::load_tables(build, tables, error))
 			{
 				fail_closed("the save tables of this build don't verify: " + error);
 				return;
@@ -668,6 +674,16 @@ namespace save_format
 		void store_device(void* card, const int device)
 		{
 			std::memcpy(static_cast<std::uint8_t*>(card) + 0x31c, &device, 4);
+		}
+
+		std::uint32_t __fastcall card_count_campaigns(void* card, void*, const int device)
+		{
+			store_device(card, device);
+			ensure_ready();
+			// D11/import notices must remain reachable even when no campaign can be listed.
+			if (ready != readiness::ok) return 1;
+			const auto count = save_guard_rules::count_lc_slots(lc_dir);
+			return count || notice.empty() ? count : 1;
 		}
 
 		std::uint32_t __fastcall card_delete_all(void* card, void*, const int device)
@@ -884,13 +900,21 @@ namespace save_format
 			native_loading=true; overflow_flag=0;
 			const bool returned=run_native_load(game,buffer,mode);
 			native_loading=false;
-			const bool ok=returned && !overflow_flag && !core_lifetime.write_blocked;
+			// Combined Core/Guards: translated bytes do not establish native application success.
+			const int loaded_slot=pending_campaign.slot;
+			const auto completed=save_core_rules::native_completion(mode,pending_campaign.loaded,loaded_slot,
+				returned,overflow_flag!=0,core_lifetime.write_blocked,!save_content_guards::runtime_failure().empty());
+			const bool ok=completed.native_ok;
 			core_lifetime.finish_native(mode,ok);
 			if (ok && campaign_load && pending_campaign.loaded)
 			{
 				current=std::move(pending_campaign);cached_captures=std::move(pending_captures);
 				core_lifetime.commit_save(current.serial,current.sequence);
+				if(completed.confirm_campaign)confirm_load_success(kind_campaign,loaded_slot);
 			}
+			// Keep the failed file protected even if a later resetgame clears session state.
+			if(completed.refuse_campaign)
+				write_refusals.refuse(slot_path(loaded_slot),"native application failed; original remains protected");
 			if (campaign_load){pending_campaign={};pending_captures.clear();}
 			if (!ok) {current={};cached_captures.clear();refuse("native load failed or skipped stream bytes; campaign writes blocked; return to menu");}
 			else native_loads_completed.fetch_add(1);
@@ -917,6 +941,35 @@ namespace save_format
 		// A write of a kind: the engine's bytes re-expressed and written as SPEC 1.6 says.
 		bool write_lc(const std::uint8_t kind, const int slot, const char* description, const std::uint8_t* data, const std::size_t size)
 		{
+			// Guards: refuse automatic/default writes to an unreadable or unresolved original.
+			const std::string path = kind == kind_profile ? lc_dir + profile_file : slot_path(slot);
+			const auto latched = write_refusals.reason(path);
+			const auto runtime = save_content_guards::runtime_failure();
+			if (!latched.empty() || !runtime.empty())
+			{
+				refuse(path + ": " + (latched.empty() ? runtime : latched));
+				return false;
+			}
+			const auto previous = load_lc(path,kind);
+			if (previous.exists)
+			{
+				std::string why;
+				bool usable = previous.info.status == file_status::ok &&
+				              save_content_guards::verify_keys(previous.bytes,why);
+				if (usable)
+				{
+					const auto check = kind == kind_profile ? lcsave::new_to_old_profile(previous.bytes,tables) : lcsave::new_to_old_stream(previous.bytes,tables);
+					usable = check.ok;
+					why = check.error;
+				}
+				if (!usable)
+				{
+					why = why.empty() ? previous.info.why : why;
+					write_refusals.refuse(path,why);
+					refuse(path + ": original refused (" + why + "); automatic writes locked until an explicit deletion or successful load");
+					return false;
+				}
+			}
 			if (overflow_flag)
 			{
 				overflow_flag = 0;
@@ -968,10 +1021,10 @@ namespace save_format
 				refuse("the file about to be written doesn't pass the reader (" + info.why + "); nothing was written");
 				return false;
 			}
-			const std::string path = kind == kind_profile ? lc_dir + profile_file : slot_path(slot);
 			std::string error;
-			if (!write_atomically(path, result.bytes, error))
+			if (!save_content_guards::verify_keys(result.bytes,error) || !save_guard_rules::write_lc_atomically(path, result.bytes, error))
 			{
+				// I/O can be retried; existing-file identity refusals remain latched by preflight/read.
 				refuse("writing " + path + " failed: " + error);
 				return false;
 			}
@@ -1003,6 +1056,20 @@ namespace save_format
 				refuse("no " + path);
 				return false;
 			}
+			// Guards: every refused existing file is protected, including the independent profile.
+			struct read_attempt
+			{
+				std::string path;
+				bool accepted = false;
+				~read_attempt() { if (!accepted) write_refusals.refuse(path,pending_reason); }
+			} attempt{path};
+			std::string key_error;
+			const auto runtime = save_content_guards::runtime_failure();
+			if (!runtime.empty())
+			{
+				refuse(runtime);
+				return false;
+			}
 			if (file.info.status == file_status::damaged)
 			{
 				refuse(path + " is damaged (" + file.info.why + ") and has no usable backup");
@@ -1016,6 +1083,11 @@ namespace save_format
 			if (file.info.status == file_status::wrong_kind)
 			{
 				refuse(path + " is " + file.info.why);
+				return false;
+			}
+			if (!save_content_guards::verify_keys(file.bytes,key_error))
+			{
+				refuse(path + ": " + key_error);
 				return false;
 			}
 			auto result = kind == kind_profile ? lcsave::new_to_old_profile(file.bytes, tables) : lcsave::new_to_old_stream(file.bytes, tables);
@@ -1054,6 +1126,8 @@ namespace save_format
 				core_lifetime.stage_load();
 			}
 			if (kind==kind_profile) retained_profile=file.bytes; // CORE: independent profile retention
+			attempt.accepted = true;
+			// A translation is not native load completion; Core confirms success through confirm_load_success().
 			reads.fetch_add(1);
 			// CORE-BEGIN: successful translation can still discard zones or reset conversation bits.
 			save_core_rules::forward_load_ledger(result.ledger,notice,[](const std::string& line)
@@ -1246,6 +1320,7 @@ namespace save_format
 			}
 			if (ok)
 			{
+				write_refusals.explicit_delete(path);
 				logger::write("save format: slot %d deleted (%s and its backup)", slot, path.c_str());
 				if (current.slot == slot)
 				{
@@ -1601,7 +1676,14 @@ namespace save_format
 		return "save format " + state + "; reads " + std::to_string(reads.load()) + "; writes " + std::to_string(write_count.load()) + "; refusals " + std::to_string(refusals.load()) +
 		       "; core captures " + std::to_string(captures_seen.load()) + "; numbered " + std::to_string(numbered_seen.load()) + "; capture failures " + std::to_string(capture_failures.load()) + "; identity resets " + std::to_string(identity_resets.load()) + "; campaign resets " + std::to_string(resets_seen.load()) + "; native completions " + std::to_string(native_loads_completed.load()) + "; W11 open; campaign writes " + (core_lifetime.may_save()?"allowed":"blocked") +
 		       "; imported " + std::to_string(converted.load()) + "; talents added " + std::to_string(talents_added.load()) + "; zones hashed " + std::to_string(zones_hashed.load()) +
-		       " (" + std::to_string(zone_hash_mismatches.load()) + " differ from the tables; last " + (zone_opened_name.empty() ? "none" : zone_opened_name + " " + zone_opened_sha1) + ")";
+		       " (" + std::to_string(zone_hash_mismatches.load()) + " differ from the tables; last " + (zone_opened_name.empty() ? "none" : zone_opened_name + " " + zone_opened_sha1) + ")" + save_trace::status();
+	}
+
+	// Guards integration: Core calls this only after native load/application has succeeded.
+	void confirm_load_success(const std::uint8_t kind, const int slot)
+	{
+		if (ready == readiness::ok && (kind == kind_profile || (kind == kind_campaign && slot >= 0 && slot < slot_count)))
+			write_refusals.successful_load(kind == kind_profile ? lc_dir + profile_file : slot_path(slot));
 	}
 
 	void install(const HMODULE game)
@@ -1659,6 +1741,7 @@ namespace save_format
 		const address base = address_of(memory);
 		const address flag = address_of(const_cast<std::uint8_t*>(&overflow_flag));
 		std::vector<write> writes;
+		writes.push_back({0x55f190, jump(0x55f190, address_of(&card_count_campaigns), 6)});
 		for (std::size_t i = 0; i < flag_sites.size(); ++i)
 		{
 			stub_at[i] = base + static_cast<address>(block.size());

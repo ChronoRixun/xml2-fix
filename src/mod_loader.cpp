@@ -341,6 +341,11 @@ namespace mod_loader
 		}
 	}
 
+	std::vector<std::pair<std::wstring, std::wstring>> effective_files()
+	{
+		return {files.begin(), files.end()};
+	}
+
 	void install(const std::initializer_list<const char*> modules, const bool trace_files)
 	{
 		tracing = trace_files;

@@ -3,6 +3,9 @@
 #include <Windows.h>
 
 #include <initializer_list>
+#include <string>
+#include <utility>
+#include <vector>
 
 // Loads mods without touching the game's files. A mod is a folder under <game>\mods laid out
 // like the game folder (e.g. mods\My Skin\actors\1101.igb); mods\load-order.txt lists which
@@ -22,5 +25,7 @@ namespace mod_loader
 {
 	// Reads the load order and hooks file access in the given modules (the game and the
 	// engine DLLs that read game data). Logs every access when `trace` is set.
+	std::vector<std::pair<std::wstring, std::wstring>> effective_files();
+
 	void install(std::initializer_list<const char*> modules, bool trace);
 }

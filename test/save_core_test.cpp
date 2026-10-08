@@ -1,4 +1,5 @@
 #include "save_core_rules.hpp"
+#include "save_guard_rules.hpp"
 #include <cstdio>
 using namespace save_core_rules;
 int main()
@@ -76,6 +77,22 @@ int main()
   notice="pending notice";logged.clear();
   forward_load_ledger("zone zone/x/y: legacy capture provenance inferred (unknown completeness)",notice,[&](const std::string& line){logged.push_back(line);});
   check(logged.size()==1 && notice=="pending notice","inferred provenance logs without a reset notice");
+ }
+ {
+  const auto good=native_completion(0,true,3,true,false,false,false);
+  check(good.native_ok&&good.confirm_campaign&&!good.refuse_campaign,"completed disk application confirms only its campaign");
+  const auto registry=native_completion(0,true,3,true,false,false,true);
+  check(!registry.native_ok&&!registry.confirm_campaign&&registry.refuse_campaign,"registry refusal during native application is not success");
+  const auto failed=native_completion(0,true,3,false,false,false,false);
+  save_guard_rules::refusal_latches paths;
+  if(failed.refuse_campaign)paths.refuse("campaign3","native failure");
+  lifetime reset;reset.new_game();
+  check(!paths.reason("campaign3").empty(),"new campaign reset cannot unlock a failed disk-load destination");
+  paths.refuse("profile","profile still awaiting proven native application");
+  if(good.confirm_campaign)paths.successful_load("campaign3");
+  check(paths.reason("campaign3").empty()&&!paths.reason("profile").empty(),"campaign completion leaves profile refusal independent");
+  const auto stats=native_completion(1,true,3,true,false,false,false);
+  check(stats.native_ok&&!stats.confirm_campaign&&!stats.refuse_campaign,"stats-only application cannot confirm campaign or profile");
  }
  std::printf("core runtime rules: %d failures\n",failures);
  return failures?1:0;
