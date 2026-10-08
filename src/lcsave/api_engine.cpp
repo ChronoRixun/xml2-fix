@@ -172,6 +172,43 @@ namespace lcsave
 		return ok;
 	}
 
+	bool native_zone_metadata(const std::vector<std::uint8_t>& stream, const Tables& tables,
+		std::vector<ZoneCaptureMetadata>& out, std::string& error)
+	{
+		out.clear(); error.clear();
+		// Reuse the strict same-build native translator to validate numbering/names and scalar ranges.
+		// This temporary container is never written or installed; it supplies inferred associations only.
+		NewFileContext context;
+		const auto translated=old_stream_to_new(stream,tables,context);
+		if(!translated.ok){error=translated.error;return false;}
+		// Do not reverse this temporary file: reverse computes conversation digests, which can
+		// stall an online join on a cold filesystem. The translator already verified these names.
+		const bool ok=guarded(error,[&]
+		{
+			const auto file=detail::read_file(translated.bytes.data(),translated.bytes.size(),kind_campaign);
+			for(const auto& record:file.data("ZONE")["records"].as_list())
+			{
+				const auto zone=tables.data->p_zone.find(static_cast<std::uint32_t>(record["zone"].as_int()));
+				if(zone==tables.data->p_zone.end())detail::fail("unknown native zone metadata");
+				ZoneCaptureMetadata metadata;metadata.zone=zone->second;
+				metadata.time_stamp=static_cast<float>(record["time_stamp"].as_real());metadata.capture_flags=2;
+				std::memcpy(metadata.placement_sha1.data(),record["content_hash"].as_bytes().data(),20);
+				const auto& names=record["names"].as_list();
+				for(const auto& state:record["states"].as_list())if(state["list"].as_int()==1)
+				{
+					PlacedEntityMetadata entity;
+					entity.ordinal=static_cast<std::uint32_t>(state["ordinal"].as_int());
+					entity.placement_index=static_cast<std::uint32_t>(state["placement_index"].as_int());
+					entity.definition_name=names.at(static_cast<std::size_t>(state["def_name"].as_int())).as_text();
+					entity.instance_name=names.at(static_cast<std::size_t>(state["inst_name"].as_int())).as_text();
+					metadata.entities.push_back(std::move(entity));
+				}
+				out.push_back(std::move(metadata));
+			}
+		});
+		if(!ok)out.clear();return ok;
+	}
+
 	bool native_load_demand(const std::vector<std::uint8_t>& stream, NativeLoadDemand& out, std::string& error)
 	{
 		out = {}; error.clear();

@@ -98,6 +98,9 @@ namespace lcsave
 	};
 	bool loaded_zone_metadata(const std::vector<std::uint8_t>& file, const Tables& tables,
 		std::vector<ZoneCaptureMetadata>& out, std::string& error);
+	// Same-build native transfers lack an LC sidecar; infer only validated current-table associations.
+	bool native_zone_metadata(const std::vector<std::uint8_t>& stream, const Tables& tables,
+		std::vector<ZoneCaptureMetadata>& out, std::string& error);
 	bool conversation_digest(const Tables& tables, std::array<std::uint8_t, 32>& out, std::string& error);
 	struct NativeLoadDemand
 	{

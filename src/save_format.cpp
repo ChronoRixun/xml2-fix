@@ -849,7 +849,13 @@ namespace save_format
 				expected=save_core_rules::placement_source(meta->entities,observed->placement_index,def,name);
 			if (!visit_known || !meta || !observed || observed->ordinal!=ordinal ||
 			    meta->placement_sha1!=active_visit.placement_sha1)
-			{reset_zone_record(record,record_zone(record));return true;}
+			{
+				logger::write("save core: restore reset diagnostic zone=%s visit=%d meta=%d observed=%d ordinal=%lu observed_ordinal=%lu placement=%lu cache=%zu pending=%zu hash_match=%d",
+				              record_zone(record).c_str(),visit_known?1:0,meta?1:0,observed?1:0,static_cast<unsigned long>(ordinal),
+				              observed?static_cast<unsigned long>(observed->ordinal):0,observed?static_cast<unsigned long>(observed->placement_index):0,
+				              cached_captures.size(),pending_captures.size(),meta&&meta->placement_sha1==active_visit.placement_sha1?1:0);
+				reset_zone_record(record,record_zone(record));return true;
+			}
 			std::uint16_t state_index=0;
 			if (!expected)
 			{
@@ -890,12 +896,23 @@ namespace save_format
 
 		void __fastcall native_load_hook(void* game,void*,void* buffer,const int mode)
 		{
+			logger::write("save core: load entry diagnostic mode=%d pending=%d cached=%zu pending_metadata=%zu buffer=%p",mode,pending_campaign.loaded?1:0,cached_captures.size(),pending_captures.size(),buffer);
 			const bool campaign_load=core_lifetime.begin_native(mode,pending_campaign.loaded);
 			if (campaign_load && !pending_campaign.loaded)
 			{
 				// Mode1 is only saved stats. Only a FULL fresh transfer replaces campaign retention.
 				current={};cached_captures.clear();campaign_origin=mode==2?2:0;
 				active_visit={};visit_known=false;restore_record=nullptr;
+				// Native online transfers contain zone records but no LC sidecar. Missing metadata is
+				// not a placement mismatch: validate/infer it before the native loader sees the stream.
+				std::vector<std::uint8_t> source(stream_capacity);std::string error;
+				if(!buffer || !try_copy(source.data(),buffer,source.size()) ||
+				   !lcsave::native_zone_metadata(source,tables,cached_captures,error))
+				{
+					core_lifetime.finish_native(mode,false);
+					refuse("native transfer metadata could not be validated: "+(error.empty()?std::string("unreadable stream"):error));return;
+				}
+				logger::write("save core: native transfer mode %d: %zu zone metadata record(s) inferred from validated stream",mode,cached_captures.size());
 			}
 			native_loading=true; overflow_flag=0;
 			const bool returned=run_native_load(game,buffer,mode);
