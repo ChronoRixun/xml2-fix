@@ -144,3 +144,9 @@ The decisions, every retail byte the hooks rely on and the pure rules (names, th
 list reads it, the ledger, the hero blocks and the talent heap, the stubs and bridges) are in
 `src/save_format_rules.hpp`; `xml2_test.exe --save-format-rules` checks them without the game, and against a copy
 of `XMen2.exe` when one is at hand.
+
+Revision 2.4 review follow-up: load translation removes world handles owned exclusively by discarded zone records,
+retaining shared or unowned handles. Numbered states must have unique placement destinations even when a record
+would otherwise be reset. Unsupported capture-status bits refuse before reset decisions. Successful runtime loads
+log each reverse-reader explanation and display a notice for zone-state or conversation-bit resets. These fixes
+change no field widths, section revisions or container major version. W11 remains open.

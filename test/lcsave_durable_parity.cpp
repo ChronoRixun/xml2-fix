@@ -83,13 +83,32 @@ namespace
 		const auto folder = root / fs::path(name);
 		const auto build = root / fs::path(fields[1]);
 		if (!inside(root, folder) || !inside(root, build) || !inside(root, folder / "actual.lcsave")) return report("case/build path escapes fixture root");
-		if (mode != "campaign" && mode != "profile" && mode != "profile-import") return report("unsupported mode");
+		if (mode != "campaign" && mode != "profile" && mode != "profile-import" && mode != "reverse" && mode != "refuse") return report("unsupported mode");
 		std::vector<std::uint8_t> input, expected;
 		if (!read_bytes(folder / (mode == "profile-import" ? "input.raw" : "input.lcsave"), input)) return report("cannot read input");
-		if (!read_bytes(folder / "expected.lcsave", expected)) return report("cannot read expected.lcsave");
+		const auto expected_name = mode == "reverse" ? "expected.old" : mode == "refuse" ? "expected.error" : "expected.lcsave";
+		if (!read_bytes(folder / expected_name, expected)) return report("cannot read expected output");
 		lcsave::Tables tables;
 		std::string error;
 		if (!lcsave::load_tables(build.wstring(), tables, error)) return report("tables: " + error);
+		if (mode == "reverse" || mode == "refuse")
+		{
+			const auto translated = lcsave::new_to_old_stream(input, tables);
+			if (mode == "refuse")
+			{
+				const std::string reason(expected.begin(), expected.end());
+				if (translated.ok || !translated.bytes.empty() || translated.error.find(reason) == std::string::npos)
+					return report("expected refusal before exposing a stream: " + reason + "; got " + translated.error);
+			}
+			else
+			{
+				if (!translated.ok) return report("reverse: " + translated.error);
+				if (!inside(root, folder / "actual.old") || !write_and_verify(folder / "actual.old", translated.bytes)) return report("actual.old verification failed");
+				if (translated.bytes != expected) return report("native stream bytes differ from Python");
+			}
+			std::cout << name << '\t' << mode << "\tPASS\t" << expected.size() << " expected bytes\n";
+			return true;
+		}
 		lcsave::Result result;
 		if (mode == "profile-import")
 		{

@@ -90,12 +90,13 @@ namespace lcsave::detail
 				const auto& names = z["names"].as_list();
 				const auto& fog = z["fog"];
 				if (fog["encoding"].as_int() != 1 || fog["width"].as_int() != 82 || fog["height"].as_int() != 82 || fog["data"].as_bytes().size() != old_fog_bytes) fail("unsupported native fog");
-				std::set<u32> ordinals;
+				std::set<u32> ordinals, placements;
 				for (const auto& state : z["states"].as_list())
 				{
 					for (const auto key : {"def_name", "inst_name"}) if (U(state[key]) >= names.size()) fail("state name index outside names");
 					const auto list = state["list"].as_int(); if (list < 1 || list > 3) fail("unknown native state list");
 					if (list == 1 && (!ordinals.insert(U(state["ordinal"])).second || U(state["ordinal"]) < 1 || U(state["ordinal"]) > old_zone_ordinals)) fail("duplicate or invalid ordinal");
+					if (list == 1 && !placements.insert(U(state["placement_index"])).second) fail("duplicate destination placement");
 					for (const auto& value : state["position"].as_list()) { const auto x = value.as_real(); if (!std::isfinite(x) || x < -32768 || x > 32767 || x != std::nearbyint(x)) fail("state position not representable"); }
 					B(state["flags_a"]); B(state["flags_b"]);
 					const auto& payload = state["payload"].as_bytes();
@@ -272,6 +273,18 @@ namespace lcsave::detail
 
 		void zone_records(const Pos& pos, const Value& recs, OldSlot& m, std::vector<std::string>& notes)
 		{
+			// Drop only dependencies owned exclusively by rejected records. Shared and unowned handles survive.
+			std::set<u32> owned, applied;
+			auto dependencies = [](const Value& record, std::set<u32>& handles)
+			{
+				for (const auto& state : record["states"].as_list()) if (state["payload_kind"].as_int() == 2)
+				{
+					u32 handle = 0;
+					std::memcpy(&handle, state["payload"].as_bytes().data(), sizeof handle); // preflight checked framing
+					handles.insert(handle);
+				}
+			};
+			for (const auto& record : recs.as_list()) dependencies(record, owned);
 			auto& strings = *m.zone_strings;
 			std::memset(&strings, 0, sizeof strings);
 			strings.used = 2;
@@ -306,16 +319,16 @@ namespace lcsave::detail
 				const auto* num = pos.b.zone_numbering(zone);
 				if (!num) fail("zone " + py_repr(zone, Enc::latin1) + " has no placement file in this build");
 				if (r["identity_mode"].as_int() != 2) fail("identity mode 1 (entity tags) is not implemented by the reverse reader");
+				if (r["capture_flags"].as_int() & ~3ll) fail("unsupported capture status bits");
+				if (r["capture_flags"].as_int() & 2) notes.push_back("zone " + zone + ": legacy capture provenance inferred (unknown completeness)");
+				if (r["capture_flags"].as_int() & 1)
+				{ notes.push_back("zone " + zone + ": incomplete capture: record not applied"); continue; }
 				if (r["content_hash"].as_bytes() != std::string(reinterpret_cast<const char*>(num->sha1.data()), 20))
 				{
 					notes.push_back("zone " + py_repr(zone, Enc::latin1) + ": placement file changed since the record was made: record not applied");
 					continue;
 				}
 
-				if (r["capture_flags"].as_int() & 2) notes.push_back("zone " + zone + ": legacy capture provenance inferred (unknown completeness)");
-				if (r["capture_flags"].as_int() & ~3ll) fail("unsupported capture status bits");
-				if (r["capture_flags"].as_int() & 1)
-				{ notes.push_back("zone " + zone + ": incomplete capture: record not applied"); continue; }
 				std::map<std::int64_t, std::size_t> mapped;
 				bool differs = false;
 				const auto& saved_names = r["names"].as_list();
@@ -420,7 +433,10 @@ namespace lcsave::detail
 				z.tail.time_stamp = static_cast<float>(r["time_stamp"].as_real());
 				z.tail.flag = B(r["flag"]);
 				m.zones.push_back(std::move(z));
+				dependencies(r, applied);
 			}
+			m.world.erase(std::remove_if(m.world.begin(), m.world.end(), [&](const OldWorld& item)
+			{ return owned.count(item.slot) && !applied.count(item.slot); }), m.world.end());
 			if (m.zones.size() > ceil_zone_records) fail("more zone records than the container holds");
 		}
 

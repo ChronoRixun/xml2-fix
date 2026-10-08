@@ -1055,6 +1055,10 @@ namespace save_format
 			}
 			if (kind==kind_profile) retained_profile=file.bytes; // CORE: independent profile retention
 			reads.fetch_add(1);
+			// CORE-BEGIN: successful translation can still discard zones or reset conversation bits.
+			save_core_rules::forward_load_ledger(result.ledger,notice,[](const std::string& line)
+			{logger::write("save core: load: %s",line.c_str());});
+			// CORE-END
 			logger::write("save format: read %s (%zu bytes, sequence %lu, origin %u%s%s)", file.path.c_str(), file.bytes.size(), static_cast<unsigned long>(file.info.save_sequence),
 			              file.info.origin, file.from_backup ? ", from the backup" : "", result.parked ? (", " + std::to_string(result.parked) + " parked").c_str() : "");
 			return true;

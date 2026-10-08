@@ -7,6 +7,25 @@
 // Core save recording/lifetime rules. Guards' atomic/refusal policy stays in save_format_rules.hpp.
 namespace save_core_rules
 {
+ // The reverse reader may load successfully after a selective reset. Surface every explanation;
+ // only reset/discard lines replace the pending menu notice, not inferred legacy provenance.
+ template<class Log> void forward_load_ledger(const std::string& ledger,std::string& notice,Log&& log)
+ {
+  std::string resets;
+  for(std::size_t first=0;first<ledger.size();)
+  {
+   const auto end=ledger.find('\n',first);
+   const auto line=ledger.substr(first,end==std::string::npos?std::string::npos:end-first);
+   if(!line.empty())
+   {
+    log(line);
+    if(line.find("record not applied")!=std::string::npos || line.find("bits reset")!=std::string::npos)
+     resets+=(resets.empty()?"":"; ")+line;
+   }
+   if(end==std::string::npos)break;first=end+1;
+  }
+  if(!resets.empty())notice="LC save: zone state or conversation bits reset; "+resets;
+ }
  using save_format_rules::address;
  constexpr std::uint32_t capture_incomplete=0x00000001;
  constexpr std::uint32_t capture_unobserved=0x00000002;
