@@ -7,9 +7,30 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <set>
 
 namespace lcsave::detail
 {
+	// Installed engine budgets are shared by both runtime saver directions and native loaders.
+	void validate_native_tables(const TablesData& tables)
+	{
+		if (!tables.build) fail("native translation needs build tables");
+		const auto& b = *tables.build;
+		if (b.item.size() > 160 || b.T.ITEM.size() > 160) fail("native item definition budget exceeded (160)");
+		if (b.hero_count > 21 || b.T.hero_count > 21) fail("native hero record budget exceeded (21)");
+		// Conservatively 297 total slots, including reserved index 0, until the registry boundary is proven.
+		if (b.stat.size() > 297 || b.T.STAT.size() > 297) fail("native stats table budget exceeded (297 slots including reserved zero)");
+		if (b.T.NAMA.size() > 32) fail("native flat name budget exceeded (32)");
+		for (const auto& [category, names] : b.T.NAMB) { (void)category; if (names.size() > 4) fail("native category name budget exceeded (4)"); }
+		if (b.T.TRIT.size() > 128) fail("native special item budget exceeded (128)");
+		for (const auto& [owner, costumes] : b.T.COST)
+		{
+			(void)owner;
+			if (costumes.size() > 10) fail("native costume budget exceeded (10)");
+			for (const auto& [slot, id] : costumes) { (void)id; if (slot >= 10) fail("native costume slot outside 0..9"); }
+		}
+	}
+
 	namespace
 	{
 		const char* const key_item_names[6] = {"KEY1", "KEY2", "KEY3", "KEYCARD1", "KEYCARD2", "KEYCARD3"};
@@ -43,27 +64,75 @@ namespace lcsave::detail
 		u16 H(const Value& v) { return narrow<u16>(v.as_int(), 0, 65535, "H"); }
 		u32 U(const Value& v) { return narrow<u32>(v.as_int(), 0, 0xffffffffll, "I"); }
 
+		void finite_values(const Value& v)
+		{
+			if (v.type == Value::Type::real && !std::isfinite(v.as_real())) fail("nonfinite native value");
+			for (const auto& x : v.l) finite_values(x);
+			for (const auto& x : v.d) finite_values(x.value);
+		}
+		void unique(const Value& rows, const char* key)
+		{
+			std::set<std::int64_t> seen;
+			for (const auto& row : rows.as_list()) if (!seen.insert(row[key].as_int()).second) fail(std::string("duplicate ") + key);
+		}
+		void preflight(const FileIn& f)
+		{
+			for (const auto& [tag, sec] : f.sections) if (sec.known) finite_values(sec.data);
+			if (f.header.kind == kind_profile) return;
+			const auto& item = f.data("ITEM");
+			unique(item["world"], "handle"); unique(item["def_state"], "item");
+			std::set<u32> handles;
+			for (const auto& w : item["world"].as_list()) { const auto h = U(w["handle"]); if (h >= 150) fail("world handle outside native pool"); handles.insert(h); }
+			unique(f.data("HERO")["heroes"], "hero"); unique(f.data("REST")["records"], "owner"); unique(f.data("ZONE")["records"], "zone");
+			for (const auto& snap : f.data("MISS")["snapshots"].as_list()) { unique(snap["seats"], "seat"); unique(snap["objectives"], "objective"); }
+			for (const auto& z : f.data("ZONE")["records"].as_list())
+			{
+				const auto& names = z["names"].as_list();
+				const auto& fog = z["fog"];
+				if (fog["encoding"].as_int() != 1 || fog["width"].as_int() != 82 || fog["height"].as_int() != 82 || fog["data"].as_bytes().size() != old_fog_bytes) fail("unsupported native fog");
+				std::set<u32> ordinals;
+				for (const auto& state : z["states"].as_list())
+				{
+					for (const auto key : {"def_name", "inst_name"}) if (U(state[key]) >= names.size()) fail("state name index outside names");
+					const auto list = state["list"].as_int(); if (list < 1 || list > 3) fail("unknown native state list");
+					if (list == 1 && (!ordinals.insert(U(state["ordinal"])).second || U(state["ordinal"]) < 1 || U(state["ordinal"]) > old_zone_ordinals)) fail("duplicate or invalid ordinal");
+					for (const auto& value : state["position"].as_list()) { const auto x = value.as_real(); if (!std::isfinite(x) || x < -32768 || x > 32767 || x != std::nearbyint(x)) fail("state position not representable"); }
+					B(state["flags_a"]); B(state["flags_b"]);
+					const auto& payload = state["payload"].as_bytes();
+					if (state["payload_kind"].as_int() == 2)
+					{ u32 handle = 0; if (payload.size() != 13 || !(state["flags_a"].as_int() & 1)) fail("world payload contract"); std::memcpy(&handle, payload.data(), 4); if (!handles.count(handle)) fail("state world item reference missing"); i32 qty = 0; std::memcpy(&qty, payload.data() + 4, 4); if (qty < -32768 || qty > 32767) fail("world quantity outside native range"); }
+					else if (state["payload_kind"].as_int() != 1 || payload.size() != 8 || (state["flags_a"].as_int() & 1)) fail("engine payload contract");
+				}
+			}
+		}
+
 		struct Pos
 		{
 			const TablesData& t;
 			const Build& b;
 
-			u32 stat(std::int64_t v) const { return get(t.p_stat, v, "character"); }
-			u32 item(std::int64_t v) const { return get(t.p_item, v, "item"); }
+			// Installed native arrays, independent of the LC reader's future-facing ceilings (SPEC 2.16).
+			Pos(const TablesData& tables, const Build& build) : t(tables), b(build)
+			{
+				validate_native_tables(tables);
+			}
+
+			u32 stat(std::int64_t v) const { return narrow<u32>(get(t.p_stat, v, "character"), 1, 296, "native stats index"); }
+			u32 item(std::int64_t v) const { return narrow<u32>(get(t.p_item, v, "item"), 0, 159, "native item definition"); }
 			u32 course(std::int64_t v) const { return get(t.p_course, v, "course"); }
 			u32 grade(std::int64_t v) const { return get(t.p_grade, v, "grade"); }
 			u32 xpoint(std::int64_t v) const { return get(t.p_xp, v, "town centre"); }
 			std::pair<int, int> trivia(std::int64_t v) const { return get(t.p_triv, v, "trivia"); }
 			const std::string& zone_name(std::int64_t v) const { return get(t.p_zone, v, "zone"); }
-			u32 costume_slot(std::int64_t v) const { return get(t.p_cost, v, "costume"); }
+			u32 costume_slot(std::int64_t v) const { return narrow<u32>(get(t.p_cost, v, "costume"), 0, 9, "native costume slot"); }
 
 			OldInstance instance(const Value& r) const
 			{
 				OldInstance inst;
 				inst.head.definition = narrow<u8>(item(r["definition"].as_int()), 0, 255, "B");
-				inst.head.name_a = r["name_a"].truthy() ? narrow<u8>(get(t.p_nama, r["name_a"].as_int(), "item name"), 0, 255, "B") : 0xff;
-				inst.head.name_b = r["name_b"].truthy() ? narrow<u8>(get(t.p_namb, r["name_b"].as_int(), "item name"), 0, 255, "B") : 0xff;
-				inst.head.special = r["special"].truthy() ? narrow<u8>(get(t.p_trit, r["special"].as_int(), "special item"), 0, 255, "B") : 0xff;
+				inst.head.name_a = r["name_a"].truthy() ? narrow<u8>(get(t.p_nama, r["name_a"].as_int(), "item name"), 0, 31, "native flat name index") : 0xff;
+				inst.head.name_b = r["name_b"].truthy() ? narrow<u8>(get(t.p_namb, r["name_b"].as_int(), "item name"), 0, 3, "native category name index") : 0xff;
+				inst.head.special = r["special"].truthy() ? narrow<u8>(get(t.p_trit, r["special"].as_int(), "special item"), 0, 127, "native special item index") : 0xff;
 				inst.head.location = B(r["location"]);
 				const char* const lists[3] = {"prefixes", "own", "suffixes"};
 				for (int k = 0; k < 3; ++k)
@@ -76,11 +145,26 @@ namespace lcsave::detail
 						inst.lists[k].push_back(el);
 					}
 				}
+				const auto& era = b.T;
+				if (r["name_b"].truthy())
+				{
+					const auto category = inst.head.definition < era.ITEM_cat.size() ? era.ITEM_cat[inst.head.definition] : 0;
+					const auto found = era.NAMB.find(category);
+					if (found == era.NAMB.end() || std::find(found->second.begin(), found->second.end(), r["name_b"].as_int()) == found->second.end()) fail("item name category does not match definition");
+				}
+				for (const auto& e : inst.lists[0]) if (e.record < era.prefix[0] || e.record >= era.prefix[1]) fail("prefix enhancement not a prefix");
+				for (const auto& e : inst.lists[2]) if (e.record < era.suffix[0] || e.record >= era.suffix[1]) fail("suffix enhancement not a suffix");
+				std::set<u32> allowed;
+				if (inst.head.definition < era.ITEM_own.size()) allowed.insert(era.ITEM_own[inst.head.definition].begin(), era.ITEM_own[inst.head.definition].end());
+				if (inst.head.special != 0xff && inst.head.special < era.TRIT_own.size()) allowed.insert(era.TRIT_own[inst.head.special].begin(), era.TRIT_own[inst.head.special].end());
+				for (const auto& e : inst.lists[1]) if (e.record >= era.ENHC.size() || !allowed.count(era.ENHC[e.record])) fail("own enhancement does not belong to definition");
 				return inst;
 			}
 
 			void hero_block(const Value& h, OldAttributes& a, OldEquipment& eq) const
 			{
+				unique(h["talents"], "talent");
+				const auto owner = stat(h[h.has("hero") ? "hero" : "owner"].as_int());
 				const auto& tr = h["traits"].as_list();
 				if (tr.size() != 16) fail("traits");
 				a = OldAttributes{};
@@ -102,9 +186,10 @@ namespace lcsave::detail
 				{
 					OldTalentEntry e{};
 					e.id = narrow<u16>(get(t.p_tal, tv["talent"].as_int(), "talent"), 0, 65535, "H");
-					e.rank_bits = static_cast<u8>(tv["rank"].as_int() & 0x3f);
-					e.pending_cap_bits = static_cast<u8>((tv["pending"].as_int() & 0x3f) | ((tv["cap"].as_int() & 3) << 6));
-					e.base_bits = static_cast<u8>(tv["base"].as_int() & 3);
+					if (e.id >= 100 && static_cast<u32>(e.id / 100) != owner + 1) fail("talent does not belong to hero");
+					e.rank_bits = static_cast<u8>(narrow<u8>(tv["rank"].as_int(), 0, 63, "talent rank"));
+					e.pending_cap_bits = static_cast<u8>((narrow<u8>(tv["pending"].as_int(), 0, 63, "talent pending")) | ((narrow<u8>(tv["cap"].as_int(), 0, 3, "talent cap")) << 6));
+					e.base_bits = static_cast<u8>(narrow<u8>(tv["base"].as_int(), 0, 3, "talent base"));
 					e.byte5 = B(tv["byte5"]);
 					ents.push_back(e);
 				}
@@ -120,7 +205,7 @@ namespace lcsave::detail
 				for (const auto& x : h["equipped"].as_list()) eq.equipped.push_back(instance(x));
 				eq.tail.health = static_cast<float>(h["health"].as_real());
 				eq.tail.energy = static_cast<float>(h["energy"].as_real());
-				eq.tail.player_seat = narrow<i32>(h["player_seat"].as_int(), -2147483648ll, 2147483647ll, "i");
+				eq.tail.player_seat = narrow<i32>(h["player_seat"].as_int(), -1, 3, "player seat");
 				eq.tail.vitals_valid = B(h["vitals_valid"]);
 				eq.tail.experience = U(h["experience"]);
 				eq.tail.ack_level = B(h["ack_level"]);
@@ -130,7 +215,7 @@ namespace lcsave::detail
 				eq.tail.points_bought = B(h["points_bought"]);
 				eq.tail.respec_count = B(h["respec_count"]);
 				eq.tail.skirmish_boost = B(h["skirmish_boost"]);
-				eq.tail.flags = static_cast<u8>(h["flags"].as_int() & 0x1f);
+				eq.tail.flags = static_cast<u8>(narrow<u8>(h["flags"].as_int(), 0, 31, "hero flags"));
 				if (eq.equipped.size() > 3) fail("more than 3 equipped items do not fit the engine");
 			}
 
@@ -156,7 +241,7 @@ namespace lcsave::detail
 				{
 					const auto i = get(t.p_obj, o["objective"].as_int(), "objective");
 					if (i >= 300) fail("IndexError: list assignment index out of range");
-					out.objectives[i] = static_cast<u8>((o["counter"].as_int() & 0x3f) | ((o["flags"].as_int() & 3) << 6));
+					out.objectives[i] = static_cast<u8>((narrow<u8>(o["counter"].as_int(), 0, 63, "objective counter")) | ((narrow<u8>(o["flags"].as_int(), 0, 3, "objective flags")) << 6));
 				}
 				const auto& ap = s["anchor_pos"].as_list();
 				const auto& ao = s["anchor_orient"].as_list();
@@ -226,6 +311,27 @@ namespace lcsave::detail
 					notes.push_back("zone " + py_repr(zone, Enc::latin1) + ": placement file changed since the record was made: record not applied");
 					continue;
 				}
+
+				if (r["capture_flags"].as_int() & 2) notes.push_back("zone " + zone + ": legacy capture provenance inferred (unknown completeness)");
+				if (r["capture_flags"].as_int() & ~3ll) fail("unsupported capture status bits");
+				if (r["capture_flags"].as_int() & 1)
+				{ notes.push_back("zone " + zone + ": incomplete capture: record not applied"); continue; }
+				std::map<std::int64_t, std::size_t> mapped;
+				bool differs = false;
+				const auto& saved_names = r["names"].as_list();
+				for (const auto& state : r["states"].as_list()) if (state["list"].as_int() == 1)
+				{
+					const auto placement = state["placement_index"].as_int();
+					const auto it = std::find(num->placement.begin(), num->placement.end(), placement);
+					if (it == num->placement.end()) { differs = true; break; }
+					const auto current = static_cast<std::size_t>(it - num->placement.begin());
+					const auto& dn = saved_names.at(static_cast<std::size_t>(state["def_name"].as_int()));
+					const auto& in = saved_names.at(static_cast<std::size_t>(state["inst_name"].as_int()));
+					if (key_hash1(dn.as_text(), dn.enc) != num->names[current].first || key_hash1(in.as_text(), in.enc) != num->names[current].second)
+					{ differs = true; break; }
+					mapped[state["ordinal"].as_int()] = current + 1;
+				}
+				if (differs) { notes.push_back("zone " + zone + ": entity placement/name changed: record not applied"); continue; }
 				OldZone z;
 				z.states.assign(old_zone_states, OldStateRecord{});
 				std::size_t n = 1;
@@ -265,21 +371,22 @@ namespace lcsave::detail
 					const auto& pp = s["position"].as_list();
 					for (int k = 0; k < 3; ++k)
 					{
-						const double x = std::nearbyint(pp.at(static_cast<std::size_t>(k)).as_real());   // round half to even
-						st.position[k] = static_cast<i16>(std::max(-32767.0, std::min(32767.0, x)));
+						const double x = pp.at(static_cast<std::size_t>(k)).as_real();
+						if (!std::isfinite(x) || x < -32768 || x > 32767 || x != std::nearbyint(x)) fail("state position not representable");   // round half to even
+						st.position[k] = narrow<i16>(static_cast<std::int64_t>(x), -32768, 32767, "state position");
 					}
 					const auto& dn = name(s["def_name"]);
 					st.def_name = intern(dn.as_text(), dn.enc);
 					const auto& in = name(s["inst_name"]);
 					st.inst_name = intern(in.as_text(), in.enc);
-					st.flags_a = static_cast<u8>(s["flags_a"].as_int() & 0xff);
-					st.flags_b = static_cast<u8>(s["flags_b"].as_int() & 0xff);
+					st.flags_a = static_cast<u8>(B(s["flags_a"]));
+					st.flags_b = static_cast<u8>(B(s["flags_b"]));
 					const auto idx = static_cast<u16>(n);
 					z.states[n++] = st;
 					const auto list = s["list"].as_int();
 					if (list == 1)
 					{
-						const auto k = s["ordinal"].as_int();
+						const auto k = static_cast<std::int64_t>(mapped.at(s["ordinal"].as_int()));
 						if (!(1 <= k && k <= old_zone_ordinals)) fail("ordinal " + std::to_string(k) + " outside the engine map");
 						if (k > static_cast<std::int64_t>(num->placement.size()))
 						{
@@ -302,7 +409,14 @@ namespace lcsave::detail
 				std::memcpy(z.tail.fog, fog.data(), old_fog_bytes);
 				const auto& conv = r["conversation"].as_list();
 				if (conv.size() != 5) fail("pack expected 5 items for packing");
-				for (int k = 0; k < 5; ++k) z.tail.conversation[k] = U(conv[static_cast<std::size_t>(k)]);
+				Hash current_digest{};
+				Tables tables; tables.data = std::shared_ptr<const TablesData>(&pos.t, [](const TablesData*) {});
+				std::string error;
+				if (!conversation_digest(tables, current_digest, error)) fail(error);
+				const auto& recorded_digest = r["conversation_digest"].as_bytes();
+				const bool digest_matches = recorded_digest != std::string(32, '\0') && recorded_digest == std::string(reinterpret_cast<const char*>(current_digest.data()), 32);
+				if (!digest_matches) notes.push_back("zone " + zone + ": conversation digest unknown or changed: bits reset");
+				for (int k = 0; k < 5; ++k) z.tail.conversation[k] = digest_matches ? U(conv[static_cast<std::size_t>(k)]) : 0;
 				z.tail.time_stamp = static_cast<float>(r["time_stamp"].as_real());
 				z.tail.flag = B(r["flag"]);
 				m.zones.push_back(std::move(z));
@@ -412,7 +526,7 @@ namespace lcsave::detail
 			const auto& O = f.data("PRFO");
 			const auto& P = f.data("PRFP");
 			const auto& Sc = f.data("PRFS");
-			const auto options = O["options"].as_int();
+			const auto options = narrow<u32>(O["options"].as_int(), 0, 0xffffff, "profile options");
 			profile.head.options[0] = static_cast<u8>(options & 0xff);
 			profile.head.options[1] = static_cast<u8>((options >> 8) & 0xff);
 			profile.head.options[2] = static_cast<u8>((options >> 16) & 0xff);
@@ -451,6 +565,7 @@ namespace lcsave::detail
 	{
 		const auto f = read_file(new_bytes.data(), new_bytes.size(), kind_campaign);
 		if (!t.build) fail("the reverse reader needs the build (--build)");
+		preflight(f);
 		const Pos pos{t, *t.build};
 		const auto& b = *t.build;
 		OldSlot m;
@@ -470,7 +585,7 @@ namespace lcsave::detail
 			if (bit < 0 || bit >= 256) fail("IndexError: list index out of range");
 			trivia[bit / 32] |= 1u << (bit % 32);
 		}
-		const auto fl = G["flags"].as_int();
+		const auto fl = narrow<u16>(G["flags"].as_int(), 0, 1023, "game flags");
 		auto& g = m.game;
 		g.timer_threshold = static_cast<float>(G["timer_threshold"].as_real());
 		g.timer_remaining = static_cast<float>(G["timer_remaining"].as_real());
@@ -489,8 +604,8 @@ namespace lcsave::detail
 		g.value_608 = U(G["value_608"]);
 		g.difficulty = U(G["difficulty"]);
 		g.play_time = static_cast<float>(G["play_time"].as_real());
-		g.flags_d8 = static_cast<u8>((G["team_potion"].as_int() & 3) | ((G["counter_a"].as_int() & 0x1f) << 2));
-		g.flags_d9 = static_cast<u8>((G["counter_b"].as_int() & 0x1f) | ((fl & 7) << 5));
+		g.flags_d8 = static_cast<u8>(narrow<u8>(G["team_potion"].as_int(), 0, 3, "team potion") | (narrow<u8>(G["counter_a"].as_int(), 0, 31, "counter a") << 2));
+		g.flags_d9 = static_cast<u8>((narrow<u8>(G["counter_b"].as_int(), 0, 31, "counter b")) | ((fl & 7) << 5));
 		g.flags_da = static_cast<u8>((fl >> 3) & 0x7f);
 		// ---- ITEM
 		const auto& IT = f.data("ITEM");
@@ -498,24 +613,28 @@ namespace lcsave::detail
 		{
 			const auto i = pos.item(e["item"].as_int());
 			if (i >= old_def_state_pairs) fail("IndexError: list assignment index out of range");
-			m.items.def_state[2 * i] = static_cast<u8>(e["quantity"].as_int() & 0xff);
+			m.items.def_state[2 * i] = static_cast<u8>(narrow<u8>(e["quantity"].as_int(), 0, 255, "quantity"));
 			m.items.def_state[2 * i + 1] = B(e["flag"]);
 		}
+		unique(IT["key_counts"], "item");
 		for (const auto& e : IT["key_counts"].as_list())
 		{
 			// the six counters by definition name (the reference compares the build's display name with "KEY1"...; the
 			// bind files carry the canonical key, so the comparison is on that)
 			const auto& n = b.item[pos.item(e["item"].as_int())];
+			bool found = false;
 			for (int k = 0; k < 6; ++k)
 			{
 				if (n == canonical_field(key_item_names[k], Enc::latin1))
 				{
 					m.items.key_counts[k] = U(e["quantity"]);
+					found = true;
 					break;
 				}
 			}
+			if (!found) fail("key counter definition is not a native key item");
 		}
-		m.items.def_count = narrow<u8>(static_cast<std::int64_t>(b.item.size()), 0, 255, "B");
+		m.items.def_count = narrow<u8>(static_cast<std::int64_t>(b.item.size()), 0, 160, "native definition count");
 		m.items.tech_bits = U(IT["tech_bits"]);
 		m.items.health_items = U(IT["health_items"]);
 		m.items.energy_items = U(IT["energy_items"]);
@@ -530,6 +649,13 @@ namespace lcsave::detail
 		// ---- HERO
 		for (const auto& h : f.data("HERO")["heroes"].as_list())
 		{
+			const auto owner = pos.stat(h["hero"].as_int());
+			if (owner != m.heroes.size() + 1) fail("hero block order/identity differs from native table");
+			const auto* costumes = b.T.cost(owner);
+			if (!costumes) fail("hero has no costume table");
+			bool costume_ok = false;
+			for (const auto& [slot, costume] : *costumes) { (void)slot; costume_ok |= costume == h["costume"].as_int(); }
+			if (!costume_ok) fail("costume does not belong to hero");
 			OldHero hb;
 			pos.hero_block(h, hb.attributes, hb.equipment);
 			// convert.power_slots: a slot the file does not list is empty and usable (flag byte 1). Each listed slot carries
@@ -550,14 +676,18 @@ namespace lcsave::detail
 			u32 mask = 0;
 			for (const auto& v : h["costumes_unlocked"].as_list())
 			{
+				bool belongs = false;
+				for (const auto& [slot, costume] : *costumes) { (void)slot; belongs |= costume == v.as_int(); }
+				if (!belongs) fail("unlocked costume does not belong to hero");
 				const auto s = pos.costume_slot(v.as_int());
-				if (s >= 32) fail("'I' format requires 0 <= number <= 4294967295");
+				if (s >= 10) fail("native costume slot outside 0..9");
 				mask |= 1u << s;
 			}
 			hb.costume.costume_mask = mask;
 			m.heroes.push_back(std::move(hb));
 		}
 		// ---- ULCK
+		if (m.heroes.size() != b.hero_count) fail("hero block count differs from build");
 		const auto& ul = f.data("ULCK")["unlocked"].as_list();
 		if (ul.size() > old_unlocked_slots) fail("IndexError: list assignment index out of range");
 		for (std::size_t i = 0; i < ul.size(); ++i) m.unlocked[i] = narrow<i16>(pos.stat(ul[i].as_int()), -32768, 32767, "h");
@@ -583,7 +713,7 @@ namespace lcsave::detail
 		// ---- MISS
 		const auto& MISS = f.data("MISS");
 		const auto& snaps = MISS["snapshots"].as_list();
-		if (snaps.empty()) fail("IndexError: list index out of range");
+		if (MISS["stack_depth"].as_int() > old_side_frames || snaps.size() != 1 + MISS["stack_depth"].as_int()) fail("mission stack snapshots/depth not representable");
 		m.mission = pos.snapshot(snaps[0]);
 		for (std::size_t k = 1; k < snaps.size(); ++k)
 		{
@@ -595,6 +725,7 @@ namespace lcsave::detail
 		// ---- DNGR
 		const auto& DN = f.data("DNGR");
 		std::vector<const Value*> by_course(b.course.size(), nullptr);
+		unique(DN["courses"], "course");
 		for (const auto& c : DN["courses"].as_list())
 		{
 			const auto i = pos.course(c["course"].as_int());
@@ -632,6 +763,7 @@ namespace lcsave::detail
 		}
 		if (m.courses.size() > old_dr_courses) fail("more courses than the engine holds");
 		m.course_residue.assign(old_dr_courses - m.courses.size(), 0);
+		unique(DN["grades"], "grade");
 		for (const auto& gr : DN["grades"].as_list())
 		{
 			const auto i = pos.grade(gr["grade"].as_int());
@@ -672,6 +804,10 @@ namespace lcsave::detail
 			mask |= 1u << i;
 		}
 		m.town_centres = mask;
+		NativeLoadDemand demand;
+		std::string demand_error;
+		if (!native_load_demand(write_slot(m), demand, demand_error)) fail(demand_error);
+		if (demand.instances > 256 || demand.attached_enhancements > 375 || demand.world_items > 150) fail("native instance/enhancement/world pool exhausted");
 		if (tmpl) apply_template(m, *tmpl);
 		return m;
 	}
@@ -680,6 +816,7 @@ namespace lcsave::detail
 	{
 		const auto f = read_file(new_bytes.data(), new_bytes.size(), kind_profile);
 		if (!t.build) fail("the reverse reader needs the build (--build)");
+		preflight(f);
 		const Pos pos{t, *t.build};
 		OldProfile profile;
 		profile_from_sections(pos, f, profile);

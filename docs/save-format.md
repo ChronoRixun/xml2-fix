@@ -41,8 +41,9 @@ in the slot list; a file that is intact but written by a newer format or build (
 feature, an unknown REQUIRED section, a known section's higher major or a higher minor without the droppable flag)
 is listed as `(needs a newer version)`, refused with that message when loaded, and its backup is never tried (D10).
 
-The campaign's identity (the file's serial and sequence) is carried from the file last loaded to the next write;
-a save whose play time went backwards is taken as a new campaign. The new-game reset itself isn't hooked yet.
+The campaign's serial, sequence and retained sections are staged by the card read and committed after the native
+load returns without an observed stream failure. The actual resetgame path clears campaign retention; play time is
+not a campaign identity. Profile retention has its own lifetime. Only a successful atomic write advances sequence.
 
 ## Start-up: tables, then the old saves
 
@@ -108,20 +109,36 @@ and compared line by line with the file last loaded; the result is logged). The 
 the builder's `python -m lcsave dump`, so the file a `save dump` writes can be compared with any other by the
 builder's tools.
 
+## Capture and preservation
+
+At the placement loop, the fix records the actual zero-based placement index, ordinal and entity names before
+restoration. At capture it pairs those observations with the opened placement SHA-1, conversation digest and native
+record timestamp. Cached records keep their own provenance through later saves. A placement/name mismatch resets
+that record before a wrong restore; a skipped factory is matched by placement before an empty ordinal is interpreted
+as a removed entity. Explicit tombstones preserve the placement identity of removed numbered entities.
+
+Capture status uses bit 0 (mask 1) for incomplete and bit 1 (mask 2) for historical/inferred provenance. Bounds are
+checked before the native ordinal access and capture lists can overflow. A new incomplete/unverified runtime capture
+blocks campaign writes. Legacy inferred records remain marked unknown. Zero/different conversation digests reset
+only conversation bits with a diagnostic. Reader ceilings remain broader than native capacities; unsupported
+quantities, positions, stack shapes, references and native allocation demands refuse before narrowing/loading.
+
+Campaign and profile imports carry LGCY, and continuing saves retain LGCY and unknown KEEP payloads with their
+original KEYS index prefix. Full-file Python/C++ parity includes canonical KEYS text. Unknown identities still
+refuse intact; this is not partial parking. Opaque extensions must use the documented stable/self-contained
+reference contract. Native pool preflight uses a conservative serialized demand bound including restore equipment.
+
 ## Not done, and why
 
-- **The zone loader's per-entity check** (SPEC 3.8 mode 2, the numbering at 0x48624c and the restore at 0x486260):
-  not hooked. The record's zone file SHA-1 is checked by the library before a record is applied, which covers a
-  changed placement file; the residual case - a changed entity *definition* that shifts the numbering with the
-  placement file unchanged - is not caught yet. Entity tags (mode 1) need the builder's `.lcent` tables first.
-- **Post-load verification inside the game** (W11): re-running the game's serializer right after the loader
-  returns would capture or refresh the menu zone into the zone records and the mission snapshot (`CMap` save,
-  0x484a60 -> 0x466960 / 0x4657b0), so it isn't done automatically; `save check` does it from the pipe at a safe
-  moment.
-- **Parked records and KEEP sections** (SPEC 3.6, 1.4): a later save of a campaign doesn't yet carry the `LGCY`
-  section or parked records of the file it was loaded from.
-- **The new-game reset** (X4): a new campaign is recognised by its play time going backwards.
-- Co-op (the network seam), the mods' bind rule (D9), Danger Room arena numbering: not part of this release.
+- **W11:** no side-effect-free full post-load observer is proved. The native return/overflow check is narrower;
+  automatic serialization in the menu remains unsafe. The manual pipe check is diagnostic and is not W11.
+- **Full parking:** unresolved identities are refused. Complete decode/partition/merge is due before the first
+  content retirement update; originals must remain protected by the companion refusal safeguards.
+- **Mode 1:** persistent entity tags and .lcent provenance remain deferred; mode-2 records stay readable.
+- The kind-3 network transfer and full mod-keyref/effective-overlay support remain deferred. Official online/version,
+  mod refusal, newer-original protection and DR/local/online acceptance belong to the companion release work.
+- Core runtime hooks are statically guarded and synthetically tested; these statements do not replace live
+  save/load, capture/reset and multiplayer acceptance on the combined release.
 
 The decisions, every retail byte the hooks rely on and the pure rules (names, the container header as the slot
 list reads it, the ledger, the hero blocks and the talent heap, the stubs and bridges) are in

@@ -105,3 +105,11 @@ add_executable(lcsave_test test/lcsave_test.cpp test/lcsave_vectors.cpp)
 target_link_libraries(lcsave_test PRIVATE lcsave)
 add_executable(xml2_confirmation_release_test test/confirmation_release_test.cpp)
 target_include_directories(xml2_confirmation_release_test PRIVATE src)
+
+# Core save capture/lifetime rules, synthetic and independent of game/graphics.
+add_executable(xml2_save_core_test test/save_core_test.cpp)
+target_include_directories(xml2_save_core_test PRIVATE src)
+
+# Exact bytes for Python-generated synthetic recording/retention vectors.
+add_executable(lcsave_durable_parity test/lcsave_durable_parity.cpp)
+target_link_libraries(lcsave_durable_parity PRIVATE lcsave)

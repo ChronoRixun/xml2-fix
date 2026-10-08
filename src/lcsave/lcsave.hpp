@@ -81,11 +81,38 @@ namespace lcsave
 	Result new_to_old_stream(const std::vector<std::uint8_t>& new_file, const Tables& tables);
 
 	// What a save written by the game carries besides the stream (SPEC 1.1 header, 2.2 META)
+	// Ordinal is the native map slot used by this capture (or reconstructed by the loader).
+	struct PlacedEntityMetadata
+	{
+		std::uint32_t ordinal = 0, placement_index = 0;
+		std::string definition_name, instance_name;
+	};
+	struct ZoneCaptureMetadata
+	{
+		std::string zone;
+		float time_stamp = 0;
+		std::array<std::uint8_t, 20> placement_sha1{};
+		std::array<std::uint8_t, 32> conversation_digest{};
+		std::uint32_t capture_flags = 2; // bit 0 incomplete; bit 1 unobserved legacy provenance
+		std::vector<PlacedEntityMetadata> entities;
+	};
+	bool loaded_zone_metadata(const std::vector<std::uint8_t>& file, const Tables& tables,
+		std::vector<ZoneCaptureMetadata>& out, std::string& error);
+	bool conversation_digest(const Tables& tables, std::array<std::uint8_t, 32>& out, std::string& error);
+	struct NativeLoadDemand
+	{
+		std::uint32_t instances = 0, attached_enhancements = 0, world_items = 0;
+	};
+	// Conservative demand: all serialized hero and restore equipment, carried and world instances.
+	bool native_load_demand(const std::vector<std::uint8_t>& stream, NativeLoadDemand& out, std::string& error);
+	bool validate_native_stream(const std::vector<std::uint8_t>& stream, const Tables& tables, std::string& error);
+
 	struct NewFileContext
 	{
 		std::string description;                       // META description (cp1252; the card's description text)
 		std::uint64_t saved_at = 0;                    // FILETIME (UTC) of the write
 		std::uint8_t slot = 0;
+		std::uint8_t origin = 0;                      // 0 native, 2 own online campaign
 		std::uint64_t campaign_serial = 0;             // random at a campaign's first save, then copied
 		std::uint32_t save_sequence = 1;               // 1 for the first save, + 1 on every later one
 		std::uint32_t writer_version = 0x01040000;     // major, minor, patch, kind (0 = XML2 Fix)
@@ -93,6 +120,9 @@ namespace lcsave
 		std::vector<std::string> mods;                 // META mods, in load order
 		bool has_conversation_digest = false;          // the running build's conversation digest (SPEC 2.12)
 		std::uint8_t conversation_digest[32]{};
+		std::vector<ZoneCaptureMetadata> zone_captures;
+		bool require_capture_metadata = false;
+		std::vector<std::uint8_t> retained_file;
 	};
 
 	// the engine's stream (the whole old slot image, or the 0x2fc00 payload alone) -> LC campaign file, numbered

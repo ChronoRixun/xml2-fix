@@ -138,7 +138,9 @@ namespace
 			tables.catalogue_revision(), tables.content_version(), tables.hero_count(), tables.stats_count(), tables.item_count(),
 			tables.course_count(), tables.objective_count());
 		int files = 0, lcsave_equal = 0, lcsave_keys = 0, old_equal = 0, new_equal = 0, reverse_agree = 0, reverse_identical = 0, all_equal = 0;
-		int saver_ok = 0, saver_same = 0, adds_files = 0, adds_total = 0;
+		int saver_ok = 0, saver_same = 0, saver_policy_same = 0, conversation_resets = 0, retained_ok = 0, adds_files = 0, adds_total = 0;
+		Hash running_digest{};
+		if (!conversation_digest(tables, running_digest, error)) { std::printf("FAIL: conversation digest: %s\n", error.c_str()); return 1; }
 		std::vector<fs::path> paths;
 		for (const auto& e : fs::recursive_directory_iterator(corpus))
 		{
@@ -146,12 +148,9 @@ namespace
 			if (e.is_regular_file() && name.rfind("saveslot", 0) == 0 && e.path().extension() == ".save") paths.push_back(e.path());
 		}
 		std::sort(paths.begin(), paths.end());
-		// a dump without the given key and with every zone record's states sorted (dump.semantic_diff compares them as
-		// multisets: the converter orders numbered states by the save era's ordinals, the saver by the build's)
-		auto without = [](Value d, const char* key)
+		// Preserve every semantic field, including LGCY; only state-list order is irrelevant (a multiset).
+		auto canonical_semantics = [](Value out)
 		{
-			Value out = Value::dict();
-			for (const auto& it : d.d) if (!(it.key.type == Value::Type::text && it.key.s == key)) out.set(it.key, it.value);
 			if (out.has("zones"))
 			{
 				Value zones = out["zones"];
@@ -164,6 +163,24 @@ namespace
 				out.set("zones", std::move(zones));
 			}
 			return out;
+		};
+
+		// Unknown record/section extensions are absent from dump_new; check them separately rather than hiding loss.
+		auto extensions = [](const Value& value)
+		{
+			std::map<std::string, std::string> found;
+			auto visit = [&](auto&& self, const Value& item, const std::string& path) -> void
+			{
+				for (const auto& member : item.d)
+				{
+					const auto key = to_json(member.key);
+					if (member.key.type == Value::Type::text && member.key.s == "_extra" && member.value.truthy()) found[path + "." + key] = to_json(member.value);
+					else self(self, member.value, path + "." + key);
+				}
+				for (std::size_t i = 0; i < item.l.size(); ++i) self(self, item.l[i], path + "[" + std::to_string(i) + "]");
+			};
+			visit(visit, value, "");
+			return found;
 		};
 		for (const auto& p : paths)
 		{
@@ -189,7 +206,7 @@ namespace
 			}
 			const auto r = convert_old_to_new(old_bytes, tables, options);
 			std::string status;
-			bool same_bytes = false, same_but_keys = false, same_old = false, same_new = false, same_reverse = false;
+			bool same_bytes = false, same_old = false, same_new = false, same_reverse = false, same_policy = false, retained = false;
 			if (!r.ok)
 			{
 				status = " REFUSED: " + r.error;
@@ -198,8 +215,7 @@ namespace
 			{
 				same_bytes = r.bytes == py_lcsave;
 				std::string why;
-				same_but_keys = !same_bytes && equal_but_keys_text(r.bytes, py_lcsave, why);
-				if (!same_bytes && !same_but_keys) status += " [lcsave: " + why + "]";
+				if (!same_bytes) status += " [lcsave full bytes differ]";
 				std::string err;
 				const auto new_json = dump(r.bytes, tables, err);
 				same_new = !new_json.empty() && new_json == py_new;
@@ -214,8 +230,8 @@ namespace
 					std::vector<std::string> notes;
 					const auto back = reverse_slot(r.bytes, *tables.data, &old, notes);
 					reversed_identical = write_slot(back) == old_bytes;
-					// the loader's direction without a template, then the saver's direction on that stream: the game state
-					// must come back as the converter wrote it (the dumps equal but for LGCY, which only a conversion writes)
+					// Exercise the runtime metadata/retention contract, then require every semantic field to survive.
+					// The only permitted value change is a conversation reset justified by this input record's digest.
 					const auto plain = new_to_old_stream(r.bytes, tables);
 					if (!plain.ok || plain.bytes.size() != old_slot_size)
 					{
@@ -227,6 +243,9 @@ namespace
 						ctx.description = cstr(reinterpret_cast<const char*>(old.description_raw), 0x80);
 						ctx.saved_at = options.saved_at;
 						ctx.campaign_serial = 1;
+						ctx.retained_file = r.bytes;
+						ctx.require_capture_metadata = true;
+						if (!loaded_zone_metadata(r.bytes, tables, ctx.zone_captures, error)) fail("loaded capture metadata: " + error);
 						const std::vector<std::uint8_t> payload(plain.bytes.begin() + old_envelope, plain.bytes.end());
 						const auto saved = old_stream_to_new(payload, tables, ctx);
 						if (!saved.ok)
@@ -236,10 +255,82 @@ namespace
 						else
 						{
 							++saver_ok;
-							const bool same = to_json(without(dump_new(saved.bytes, *tables.data), "lgcy")) ==
-								to_json(without(dump_new(r.bytes, *tables.data), "lgcy"));
+							const auto input_file = read_file(r.bytes.data(), r.bytes.size(), kind_campaign);
+							const auto saved_file = read_file(saved.bytes.data(), saved.bytes.size(), kind_campaign);
+							const auto actual = canonical_semantics(dump_new(saved.bytes, *tables.data));
+							const auto original = canonical_semantics(dump_new(r.bytes, *tables.data));
+							const bool same = to_json(actual) == to_json(original);
 							saver_same += same;
-							if (!same)
+							Value expected = original;
+							Value zones = expected["zones"];
+							const auto& records = input_file.data("ZONE")["records"].as_list();
+							if (zones.l.size() != records.size()) fail("semantic zone records do not match input container");
+							int resets = 0;
+							for (std::size_t i = 0; i < records.size(); ++i)
+							{
+								const auto& digest = records[i]["conversation_digest"].as_bytes();
+								const bool invalid = digest == std::string(32, '\0') || digest != std::string(reinterpret_cast<const char*>(running_digest.data()), running_digest.size());
+								if (!invalid) continue;
+								Value cleared = Value::list();
+								bool had_bits = false;
+								for (const auto& word : records[i]["conversation"].as_list()) { had_bits |= word.as_int() != 0; cleared.push(Value::integer(0)); }
+								if (had_bits) ++resets;
+								zones.l[i].set("conversation", std::move(cleared));
+							}
+							expected.set("zones", std::move(zones));
+							same_policy = to_json(actual) == to_json(expected);
+							retained = true;
+							bool opaque_keep = false;
+							for (const auto& [tag, section] : input_file.sections)
+							{
+								const auto found = saved_file.sections.find(tag);
+								const bool preserve_raw = tag == "LGCY" || !section.known;
+								opaque_keep |= !section.known && (section.entry.flags & section_keep);
+								if (preserve_raw && (found == saved_file.sections.end() || found->second.payload != section.payload ||
+									found->second.entry.major != section.entry.major || found->second.entry.minor != section.entry.minor ||
+									found->second.entry.flags != section.entry.flags || found->second.entry.records != section.entry.records))
+								{ retained = false; status += " [retained payload/entry differs: " + tag + "]"; }
+								if (section.known && (found == saved_file.sections.end() || extensions(section.data) != extensions(found->second.data)))
+								{ retained = false; status += " [unknown fields differ: " + tag + "]"; }
+							}
+							if (opaque_keep)
+							{
+								const auto& keys = input_file.data("KEYS")["keys"].as_list();
+								const auto& saved_keys = saved_file.data("KEYS")["keys"].as_list();
+								if (saved_keys.size() < keys.size()) retained = false;
+								else for (std::size_t i = 0; i < keys.size(); ++i) if (keys[i] != saved_keys[i]) retained = false;
+							}
+
+							// These recording fields are intentionally absent from the human-facing semantic dump.
+							// Require the saver to use the cached metadata, including compatibility-normalized status.
+							for (const auto& record : saved_file.data("ZONE")["records"].as_list())
+							{
+								const auto zone = tables.data->p_zone.find(static_cast<u32>(record["zone"].as_int()));
+								const ZoneCaptureMetadata* capture = nullptr;
+								if (zone != tables.data->p_zone.end()) for (const auto& candidate : ctx.zone_captures)
+									if (candidate.zone == zone->second && candidate.time_stamp == record["time_stamp"].as_real()) capture = &candidate;
+								if (!capture || record["capture_flags"].as_int() != capture->capture_flags ||
+									record["content_hash"].as_bytes() != std::string(reinterpret_cast<const char*>(capture->placement_sha1.data()), capture->placement_sha1.size()) ||
+									record["conversation_digest"].as_bytes() != std::string(reinterpret_cast<const char*>(capture->conversation_digest.data()), capture->conversation_digest.size()))
+								{ retained = false; status += " [cached capture provenance differs]"; continue; }
+								const auto& names = record["names"].as_list();
+								for (const auto& entity : capture->entities)
+								{
+									bool preserved = false;
+									for (const auto& state : record["states"].as_list())
+										if (state["list"].as_int() == 1 && state["ordinal"].as_int() == entity.ordinal &&
+											state["placement_index"].as_int() == entity.placement_index &&
+											names.at(static_cast<std::size_t>(state["def_name"].as_int())).as_text() == entity.definition_name &&
+											names.at(static_cast<std::size_t>(state["inst_name"].as_int())).as_text() == entity.instance_name) preserved = true;
+									if (!preserved) { retained = false; status += " [cached placement/name association differs]"; }
+								}
+							}
+							retained_ok += retained;
+							saver_policy_same += same_policy;
+							if (same_policy) conversation_resets += resets;
+							if (!same_policy) status += " [UNEXPLAINED saver round-trip difference]";
+							else if (resets) status += " [digest-confirmed conversation resets: " + std::to_string(resets) + "]";
+							if (!same_policy || !retained)
 							{
 								status += " [saver round trip differs]";
 								if (!out.empty())
@@ -271,25 +362,24 @@ namespace
 					write_all(out / (rel.string() + ".old.json"), old_json.data(), old_json.size());
 					write_all(out / (rel.string() + ".new.json"), new_json.data(), new_json.size());
 				}
-				status += std::string(same_bytes ? " lcsave=equal" : same_but_keys ? " lcsave=equal-but-KEYS-text" : " lcsave=DIFFERS") +
+				status += std::string(same_bytes ? " lcsave=equal" : " lcsave=DIFFERS") +
 					(same_old ? " old.json=equal" : " old.json=DIFFERS") + (same_new ? " new.json=equal" : " new.json=DIFFERS") +
 					" reverse_identical=" + (reversed_identical ? "yes" : "no") + (same_reverse ? " (as Python)" : " (NOT as Python)");
 			}
 			lcsave_equal += same_bytes;
-			lcsave_keys += same_but_keys;
 			old_equal += same_old;
 			new_equal += same_new;
 			reverse_agree += same_reverse;
-			const bool all = (same_bytes || same_but_keys) && same_old && same_new && same_reverse;
+			const bool all = same_bytes && same_old && same_new && same_reverse;
 			all_equal += all;
-			std::printf("%s %s:%s\n", all ? "equal  " : "DIFFERS", rel.string().c_str(), status.c_str());
+			std::printf("%s %s:%s\n", all && same_policy && retained ? "equal  " : "DIFFERS", rel.string().c_str(), status.c_str());
 		}
 		std::printf("corpus: %d files; .lcsave byte-identical %d, identical but for the KEYS text %d; old dump equal %d; new dump equal %d; "
 			"reverse byte-exact %d (agrees with the Python report %d); all equal %d\n", files, lcsave_equal, lcsave_keys, old_equal, new_equal,
 			reverse_identical, reverse_agree, all_equal);
-		std::printf("loader -> saver round trip: saved %d, same game state %d; missing herostat talents: %d files, %d talents\n", saver_ok,
-			saver_same, adds_files, adds_total);
-		return files && all_equal == files ? 0 : 1;
+		std::printf("loader -> saver round trip: saved %d, raw unchanged game state %d, policy round trip %d, conversation resets %d, retained payloads/unknown fields %d; missing herostat talents: %d files, %d talents\n", saver_ok,
+			saver_same, saver_policy_same, conversation_resets, retained_ok, adds_files, adds_total);
+		return files && lcsave_equal == files && all_equal == files && saver_ok == files && saver_policy_same == files && retained_ok == files ? 0 : 1;
 	}
 }
 

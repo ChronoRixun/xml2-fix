@@ -4,6 +4,9 @@
 #include "internal.hpp"
 
 #include <cstring>
+#include <algorithm>
+#include <filesystem>
+#include <cmath>
 
 namespace lcsave
 {
@@ -97,4 +100,117 @@ namespace lcsave
 		}
 		return r;
 	}
+	bool conversation_digest(const Tables& tables, std::array<std::uint8_t, 32>& out, std::string& error)
+	{
+		error.clear();
+		return guarded(error, [&]
+		{
+			if (!tables.loaded() || !tables.data->build) detail::fail("conversation digest needs build tables");
+			const auto root = std::filesystem::path(tables.data->build->data_root) / L"Conversations";
+			std::vector<std::pair<std::string, std::filesystem::path>> paths;
+			if (std::filesystem::exists(root)) for (const auto& entry : std::filesystem::recursive_directory_iterator(root))
+				if (entry.is_regular_file()) paths.emplace_back(py_lower(entry.path().lexically_relative(root).generic_string(), Enc::latin1), entry.path());
+			std::sort(paths.begin(), paths.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+			std::vector<std::uint8_t> input;
+			std::string previous;
+			for (const auto& [name, path] : paths)
+			{
+				if (name == previous) detail::fail("duplicate conversation path after case normalization");
+				previous = name;
+				std::vector<std::uint8_t> bytes;
+				if (!detail::read_file_bytes(path.wstring(), bytes)) detail::fail("conversation file cannot be read");
+				const auto hash = sha1(bytes.data(), bytes.size());
+				input.insert(input.end(), name.begin(), name.end()); input.push_back(0);
+				input.insert(input.end(), hash.begin(), hash.end());
+			}
+			out = sha256(input.data(), input.size());
+		});
+	}
+
+	bool loaded_zone_metadata(const std::vector<std::uint8_t>& file, const Tables& tables,
+		std::vector<ZoneCaptureMetadata>& out, std::string& error)
+	{
+		out.clear(); error.clear();
+		const bool ok = guarded(error, [&]
+		{
+			if (!tables.loaded() || !tables.data->build) detail::fail("loaded metadata needs build tables");
+			std::vector<std::string> notes;
+			const auto native = detail::reverse_slot(file, *tables.data, nullptr, notes);
+			const auto f = detail::read_file(file.data(), file.size(), kind_campaign);
+			for (const auto& record : f.data("ZONE")["records"].as_list())
+			{
+				const auto found = tables.data->p_zone.find(static_cast<std::uint32_t>(record["zone"].as_int()));
+				if (found == tables.data->p_zone.end()) detail::fail("unknown zone metadata");
+				bool applied = false;
+				for (const auto& z : native.zones) if (detail::zone_string(*native.zone_strings, z.name_handle) == found->second) applied = true;
+				if (!applied) continue;
+				ZoneCaptureMetadata metadata;
+				metadata.zone = found->second;
+				metadata.time_stamp = static_cast<float>(record["time_stamp"].as_real());
+				metadata.capture_flags = static_cast<std::uint32_t>(record["capture_flags"].as_int());
+				std::memcpy(metadata.placement_sha1.data(), record["content_hash"].as_bytes().data(), 20);
+				std::memcpy(metadata.conversation_digest.data(), record["conversation_digest"].as_bytes().data(), 32);
+				if (f.data("META")["origin"].as_int() == 1 || std::all_of(metadata.conversation_digest.begin(), metadata.conversation_digest.end(), [](u8 b) { return b == 0; }))
+					metadata.capture_flags |= 2; // earlier candidates wrote zero despite unobserved provenance
+				const auto* numbering = tables.data->build->zone_numbering(metadata.zone);
+				const auto& names = record["names"].as_list();
+				for (const auto& state : record["states"].as_list()) if (state["list"].as_int() == 1)
+				{
+					PlacedEntityMetadata entity;
+					entity.placement_index = static_cast<std::uint32_t>(state["placement_index"].as_int());
+					entity.definition_name = names.at(static_cast<std::size_t>(state["def_name"].as_int())).as_text();
+					entity.instance_name = names.at(static_cast<std::size_t>(state["inst_name"].as_int())).as_text();
+					// The loader remaps by actual placement; cache the native ordinal it reconstructed.
+					const auto it = std::find(numbering->placement.begin(), numbering->placement.end(), entity.placement_index);
+					entity.ordinal = static_cast<std::uint32_t>(it - numbering->placement.begin() + 1);
+					metadata.entities.push_back(std::move(entity));
+				}
+				out.push_back(std::move(metadata));
+			}
+		});
+		if (!ok) out.clear();
+		return ok;
+	}
+
+	bool native_load_demand(const std::vector<std::uint8_t>& stream, NativeLoadDemand& out, std::string& error)
+	{
+		out = {}; error.clear();
+		return guarded(error, [&]
+		{
+			std::vector<std::uint8_t> image = stream;
+			if (stream.size() == old_payload)
+			{
+				image.assign(old_envelope, 0);
+				const std::uint32_t size = old_payload;
+				std::memcpy(image.data() + 0x80, &size, 4);
+				image.insert(image.end(), stream.begin(), stream.end());
+			}
+			const auto old = detail::read_slot(image.data(), image.size());
+			auto count = [&](const detail::OldInstance& instance)
+			{
+				++out.instances;
+				for (const auto& list : instance.lists) out.attached_enhancements += static_cast<std::uint32_t>(list.size());
+			};
+			for (const auto& instance : old.carried) count(instance);
+			for (const auto& world : old.world) count(world.instance);
+			for (const auto& hero : old.heroes) for (const auto& instance : hero.equipment.equipped) count(instance);
+			// Every restore block is serialized and read even when its valid flag is clear. Include it conservatively.
+			for (const auto& restore : old.restore) for (const auto& instance : restore.equipment.equipped) count(instance);
+			out.world_items = static_cast<std::uint32_t>(old.world.size());
+		});
+	}
+
+	bool validate_native_stream(const std::vector<std::uint8_t>& stream, const Tables& tables, std::string& error)
+	{
+		NativeLoadDemand demand;
+		if (!tables.loaded()) { error = "tables not loaded"; return false; }
+		if (!native_load_demand(stream, demand, error)) return false;
+		if (demand.instances > 256 || demand.attached_enhancements > 375 || demand.world_items > 150)
+		{ error = "native instance/enhancement/world pool exhausted"; return false; }
+		NewFileContext context;
+		const auto result = old_stream_to_new(stream, tables, context);
+		error = result.error;
+		return result.ok;
+	}
+
 }

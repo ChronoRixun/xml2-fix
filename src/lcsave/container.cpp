@@ -505,14 +505,14 @@ namespace lcsave::detail
 		for (const auto& s : secs)
 		{
 			const auto* sc = section_schema(s.tag);
-			if (!sc) fail("KeyError: " + s.tag);
+			if (!sc && s.data.type != Value::Type::bytes) fail("KeyError: " + s.tag);
 			u32 nrec = 0;
-			if (sc->lists.count)
+			if (sc && sc->lists.count && s.data.type != Value::Type::bytes)
 			{
 				const char* first = sc->lists.fields[0].name;
 				if (s.data.has(first)) nrec = static_cast<u32>(s.data[first].as_list().size());
 			}
-			payloads.push_back(P{&s, encode_section(s.tag, s.data), nrec});
+			payloads.push_back(P{&s, s.data.type == Value::Type::bytes ? s.data.as_bytes() : encode_section(s.tag, s.data), s.data.type == Value::Type::bytes ? s.retained_records : nrec});
 			keys |= s.tag == "KEYS";
 		}
 		const u32 table_off = new_header_size;

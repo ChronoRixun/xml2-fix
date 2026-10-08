@@ -103,3 +103,20 @@ Two things are read from the build's data files instead of bind files, exactly a
   entries, every era's tables, every bind file's rows) as JSON, for a table-by-table comparison with the builder's own
   readers (`lcsave.lcfiles`); on builder 0.2.0's build: 1988 catalogue entries, 8 eras / 144 tables and 35 bind files /
   1688 rows, all equal.
+
+
+### Revision 2.4 recording and retention APIs
+
+`NewFileContext.zone_captures` holds per-record `ZoneCaptureMetadata` (zone and native f32 timestamp, actual
+placement SHA-1, conversation digest, capture status and ordinal/placement/names). With
+`require_capture_metadata=true`, missing or incomplete metadata refuses a fresh campaign write. Known historical
+metadata remains explicitly unobserved. `loaded_zone_metadata` produces associations aligned with the reconstructed
+native map; the runtime resolves actual placements before any removal/restore decision.
+
+`NewFileContext.retained_file` retains LGCY and opaque KEEP sections and pins their original KEYS prefix for campaign
+and profile resaves. Unknown extensions cannot assume mutable world-item/list indices stay stable. The profile
+converter now emits LGCY. Non-converter unhandled drops refuse. `conversation_digest` provides the deterministic
+reference digest. `native_load_demand` is a conservative serialized upper bound, not measured live allocation reuse.
+The engine wrapper separately checks available native item/attached capacity.
+
+W11 is open. A native return without observed stream skips is not section-by-section load verification.

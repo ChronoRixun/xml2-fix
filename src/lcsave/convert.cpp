@@ -420,10 +420,22 @@ namespace lcsave::detail
 
 		// convert._zone_record: one old zone record -> ZREC, or nothing (dropped, the reason noted)
 		bool zone_record(const Conv& c, const OldSlot& old, const OldZone& z, const std::vector<const EraTables*>& candidates,
-			const std::string& what, Value& out, const Hash* digest_override)
+			const std::string& what, Value& out, const Hash* digest_override, const NewFileContext* context)
 		{
 			const auto& strings = *old.zone_strings;
 			const auto zone = py_lower(zone_string(strings, z.name_handle), Enc::cp1252);
+			const ZoneCaptureMetadata* capture = nullptr;
+			if (context) for (const auto& candidate : context->zone_captures)
+			{
+				if (py_lower(candidate.zone, Enc::cp1252) == zone && candidate.time_stamp == z.tail.time_stamp)
+				{
+					if (capture) fail(what + ": duplicate capture metadata");
+					capture = &candidate;
+				}
+			}
+			if (context && context->require_capture_metadata && !capture) fail(what + ": missing observed capture metadata");
+			if (capture && (capture->capture_flags & ~3u)) fail(what + ": unsupported capture status bits");
+			if (capture && (capture->capture_flags & 1u)) fail(what + ": incomplete capture cannot be saved");
 			const auto& build = *c.t.build;
 			const auto zone_hash = key_hash1(zone, Enc::cp1252);
 			const u32 zid = c.id_of(ZONE, zone_hash);
@@ -458,7 +470,7 @@ namespace lcsave::detail
 						key_hash1(zone_string(strings, s.inst_name), Enc::cp1252)));
 				}
 			}
-			const auto eras = zone_record_eras(names_by_ordinal, zid, candidates, ref_hashes);
+			const auto eras = capture ? std::vector<const EraTables*>{&c.ref} : zone_record_eras(names_by_ordinal, zid, candidates, ref_hashes);
 			if (eras.empty())
 			{
 				c.res.notes.push_back(what + ": zone " + repr(zone) + ": no builder release numbers its " + str(static_cast<std::int64_t>(names_by_ordinal.size())) +
@@ -470,9 +482,8 @@ namespace lcsave::detail
 			Value names = L();
 			names.push(Tx(""));
 			std::vector<std::string> name_list{""};
-			auto nm = [&](u32 handle) -> std::int64_t
+			auto name_text = [&](const std::string& text) -> std::int64_t
 			{
-				const auto text = zone_string(strings, handle);
 				for (std::size_t k = 0; k < name_list.size(); ++k)
 				{
 					if (name_list[k] == text) return static_cast<std::int64_t>(k);
@@ -481,6 +492,7 @@ namespace lcsave::detail
 				names.push(Tx(text));
 				return static_cast<std::int64_t>(name_list.size() - 1);
 			};
+			auto nm = [&](u32 handle) { return name_text(zone_string(strings, handle)); };
 			std::set<u32> world_handles;
 			for (const auto& w : old.world) world_handles.insert(w.slot);
 			Value states = L();
@@ -526,7 +538,7 @@ namespace lcsave::detail
 			for (const auto& [k, nh] : names_by_ordinal)
 			{
 				u32 ref_k = k;
-				if (delta)
+				if (delta && !capture)
 				{
 					ref_k = k <= delta->map.size() ? delta->map[k - 1] : 0;
 					const bool amb = std::find(delta->ambiguous.begin(), delta->ambiguous.end(), k) != delta->ambiguous.end();
@@ -538,24 +550,61 @@ namespace lcsave::detail
 						continue;
 					}
 				}
-				if (ref_k > num->placement.size()) fail("IndexError: list index out of range");
-				const auto placement = num->placement[ref_k - 1];
+				u32 placement = 0;
+				if (capture)
+				{
+					const PlacedEntityMetadata* entity = nullptr;
+					for (const auto& e : capture->entities) if (e.ordinal == k)
+					{
+						if (entity) fail(what + ": duplicate captured ordinal");
+						entity = &e;
+					}
+					if (!entity || key_hash1(entity->definition_name, Enc::cp1252) != nh.first ||
+						key_hash1(entity->instance_name, Enc::cp1252) != nh.second) fail(what + ": captured entity association missing or differs");
+					placement = entity->placement_index;
+				}
+				else
+				{
+					if (ref_k > num->placement.size()) fail("IndexError: list index out of range");
+					placement = num->placement[ref_k - 1];
+				}
 				state_rec(z.states[z.tail.ordinal_map[k - 1]], 1, ref_k, placement);
+			}
+
+			if (capture)
+			{
+				std::set<u32> ordinals, placements;
+				for (const auto& e : capture->entities)
+				{
+					if (!e.ordinal || e.ordinal > old_zone_ordinals || !ordinals.insert(e.ordinal).second || !placements.insert(e.placement_index).second)
+						fail(what + ": invalid or duplicate observed entity association");
+					if (!z.tail.ordinal_map[e.ordinal - 1])
+					{
+						// An observed entity absent from the native state map is dead/removed. Preserve that identity explicitly.
+						states.push(Value::dict({{"list", I(1)}, {"entity_tag", I(0)}, {"ordinal", I(e.ordinal)}, {"placement_index", I(e.placement_index)},
+							{"def_name", I(name_text(e.definition_name))}, {"inst_name", I(name_text(e.instance_name))}, {"flags_a", I(0)}, {"flags_b", I(0)},
+							{"position", Value::list()}, {"payload_kind", I(1)}, {"payload", Value::bytes(std::string(8, '\0'))}}));
+						Value position = L(); for (int k = 0; k < 3; ++k) position.push(R(0));
+						states.l.back().set("position", std::move(position));
+					}
+				}
 			}
 			for (u32 k = 0; k < z.tail.dynamic_count; ++k) state_rec(z.states[z.tail.dynamic[k]], 2, 0, 0);
 			for (u32 k = 0; k < z.tail.smart_count; ++k) state_rec(z.states[z.tail.smart[k]], 3, 0, 0);
+			if (states.as_list().size() >= old_zone_states) fail(what + ": capture identities exceed native state capacity");
 			Hash digest{};
-			if (digest_override) digest = *digest_override;
+			if (capture) digest = capture->conversation_digest;
+			else if (digest_override) digest = *digest_override;
 			else if (era.has_digest) digest = era.conversation_digest;
 			Value conv = L();
 			for (const auto w : z.tail.conversation) conv.push(I(w));
 			out = Value::dict();
 			out.set("zone", I(zid));
 			out.set("identity_mode", I(2));
-			out.set("content_hash", Value::bytes(num->sha1.data(), 20));
+			out.set("content_hash", Value::bytes(capture ? capture->placement_sha1.data() : num->sha1.data(), 20));
 			out.set("time_stamp", R(z.tail.time_stamp));
 			out.set("flag", I(z.tail.flag));
-			out.set("capture_flags", I(0));
+			out.set("capture_flags", I(capture ? capture->capture_flags : 2));
 			out.set("conversation", std::move(conv));
 			out.set("conversation_digest", Value::bytes(digest.data(), 32));
 			out.set("names", std::move(names));
@@ -703,6 +752,7 @@ namespace lcsave::detail
 			const EraTables* start = nullptr;
 			const EraTables* items = nullptr;
 			const Hash* digest = nullptr;
+			const NewFileContext* context = nullptr;
 		};
 
 		std::vector<SectionOut> profile_sections(const Conv& c, const OldProfile& p, const EraTables& era)
@@ -889,7 +939,7 @@ namespace lcsave::detail
 			for (std::size_t i = 0; i < old.zones.size(); ++i)
 			{
 				Value rec;
-				if (!zone_record(c, old, old.zones[i], plan.eras_ok, "zone record " + std::to_string(i), rec, plan.digest))
+				if (!zone_record(c, old, old.zones[i], plan.eras_ok, "zone record " + std::to_string(i), rec, plan.digest, plan.context))
 				{
 					++res.dropped.zone_records;
 					continue;
@@ -914,7 +964,7 @@ namespace lcsave::detail
 			Value mods_v = L();
 			for (const auto& m : mods) mods_v.push(Tx(m));
 			sections.push_back({"META", 1, 0, section_required, Value::dict({{"saved_at", I(static_cast<std::int64_t>(saved_at))},
-				{"description", Tx(description)}, {"origin", I(plan.converter ? 1 : 0)}, {"zone", I(cur_zone_id)}, {"act", I(g.act)},
+				{"description", Tx(description)}, {"origin", I(plan.converter ? 1 : (plan.context ? plan.context->origin : 0))}, {"zone", I(cur_zone_id)}, {"act", I(g.act)},
 				{"difficulty", I(g.difficulty)}, {"play_time", R(g.play_time)}, {"writer", Tx(writer)}, {"slot", I(slot)},
 				{"mods", std::move(mods_v)}})});
 			// ---- GAME
@@ -1193,6 +1243,37 @@ namespace lcsave::detail
 			}
 			sections.insert(sections.begin() + 1, SectionOut{"KEYS", 1, 0, section_keep, Value::dict({{"keys", std::move(keys)}})});
 		}
+		void retain_sections(std::vector<SectionOut>& sections, const std::vector<u8>& retained, int kind)
+		{
+			if (retained.empty()) return;
+			const auto prior = read_file(retained.data(), retained.size(), kind);
+			bool opaque = false;
+			for (const auto& tag : prior.order)
+			{
+				const auto& sec = prior.sections.at(tag);
+				if (tag != "KEYS" && (tag == "LGCY" || (!sec.known && (sec.entry.flags & section_keep))))
+				{
+					sections.push_back({tag, sec.entry.major, sec.entry.minor, sec.entry.flags, Value::bytes(sec.payload), sec.entry.records});
+					opaque |= !sec.known;
+				}
+			}
+			if (!opaque) return;
+			if (!prior.sections.count("KEYS")) fail("opaque KEEP without KEYS contract cannot be resaved");
+			for (auto& sec : sections) if (sec.tag == "KEYS")
+			{
+				if (prior.data("KEYS").has("_extra") && prior.data("KEYS")["_extra"].truthy()) fail("opaque KEEP with extended KEYS contract cannot be resaved");
+				Value merged = prior.data("KEYS")["keys"];
+				for (const auto& key : merged.as_list()) if (key.has("_extra") && key["_extra"].truthy()) fail("opaque KEEP with extended KEYS record cannot be resaved");
+				for (const auto& key : sec.data["keys"].as_list())
+				{
+					bool present = false;
+					for (const auto& old : merged.as_list()) if (old["id"] == key["id"] && old["domain"] == key["domain"] && old["key"] == key["key"]) present = true;
+					if (!present) merged.push(key);
+				}
+				sec.data.set("keys", std::move(merged));
+			}
+		}
+
 	}
 
 	const EraTables* detect_talent_era(const OldSlot& old, const std::vector<const EraTables*>& eras, const EraTables& ref,
@@ -1233,6 +1314,7 @@ namespace lcsave::detail
 	std::vector<std::uint8_t> stream_to_new(const std::vector<std::uint8_t>& stream, const TablesData& t, const NewFileContext& context,
 		ConvertState& state)
 	{
+		validate_native_tables(t);
 		std::vector<std::uint8_t> image;
 		if (stream.size() == old_payload)
 		{
@@ -1246,18 +1328,24 @@ namespace lcsave::detail
 		{
 			image = stream;
 		}
+		if (!t.build) fail("the saver needs build tables");
+		if (context.origin > 2) fail("unsupported saver origin");
 		const auto old = read_slot(image.data(), image.size());
 		const auto& T = t.build->T;
 		Conv c{t, state, T};
 		Plan plan;
 		plan.converter = false;
+		plan.context = &context;
 		plan.eras_ok.push_back(&T);
 		Hash digest{};
 		if (context.has_conversation_digest) std::memcpy(digest.data(), context.conversation_digest, 32);
 		plan.digest = &digest;
 		const auto description = context.description.empty() ? cstr(reinterpret_cast<const char*>(old.description_raw), 0x80) : context.description;
 		auto sections = translate(c, old, plan, std::string(), image, context.slot, context.saved_at, context.writer, context.mods, description);
+		if (state.dropped.zone_records || state.dropped.world_items || state.dropped.zone_vars || state.dropped.other || state.dropped.talents || state.dropped.states)
+			fail("native save translation would drop state; original retained");
 		add_keys_section(sections, t);
+		retain_sections(sections, context.retained_file, kind_campaign);
 		HeaderIn h;
 		h.writer_version = context.writer_version;
 		h.content_version = t.catalogue.content_version;
@@ -1274,7 +1362,7 @@ namespace lcsave::detail
 	{
 		std::vector<std::uint8_t> profile_file(const OldProfile& p, const TablesData& t, const EraTables& era, const bool converter,
 			const std::string& description, u8 slot, std::uint64_t saved_at, const std::string& writer, const std::vector<std::string>& mods,
-			const HeaderIn& header, ConvertState& state)
+			const HeaderIn& header, ConvertState& state, const SectionOut* legacy = nullptr, const std::vector<u8>& retained = {})
 		{
 			Conv c{t, state, era};
 			std::vector<SectionOut> sections;
@@ -1284,7 +1372,9 @@ namespace lcsave::detail
 				{"description", Tx(description)}, {"origin", I(converter ? 1 : 0)}, {"zone", I(0)}, {"act", I(0)}, {"difficulty", I(0)},
 				{"play_time", R(0.0)}, {"writer", Tx(writer)}, {"slot", I(slot)}, {"mods", std::move(mods_v)}})});
 			for (auto& sec : profile_sections(c, p, era)) sections.push_back(std::move(sec));
+			if (legacy) sections.push_back(*legacy);
 			add_keys_section(sections, t);
+			retain_sections(sections, retained, kind_profile);
 			auto file = write_file(kind_profile, sections, header);
 			read_file(file.data(), file.size(), kind_profile);
 			return file;
@@ -1302,13 +1392,19 @@ namespace lcsave::detail
 		h.catalogue_revision = t.catalogue.revision;
 		h.campaign_serial = 0;
 		h.save_sequence = 0;
+		const auto digest = sha1(old_bytes.data(), old_bytes.size());
+		const SectionOut lgcy{"LGCY", 1, 0, section_keep, Value::dict({{"original_name", Tx(options.original_name)},
+			{"original_size", I(old_bytes.size())}, {"sha1", Value::bytes(digest.data(), 20)}, {"start_era", I(t.reference.cv)},
+			{"writer_era", I(t.reference.cv)}, {"def_count_byte", I(0)}, {"zone_records_dropped", I(0)}, {"world_items_dropped", I(0)},
+			{"zone_vars_dropped", I(0)}, {"other_dropped", I(0)}, {"notes", L()}})};
 		return profile_file(p, t, t.reference, true, description, options.slot, options.fixed_saved_at ? options.saved_at : now_filetime(),
-			options.writer, {}, h, state);
+			options.writer, {}, h, state, &lgcy);
 	}
 
 	std::vector<std::uint8_t> profile_to_new(const std::vector<std::uint8_t>& old_stream, const TablesData& t, const NewFileContext& context,
 		ConvertState& state)
 	{
+		validate_native_tables(t);
 		if (!t.build) fail("the saver's direction needs the build");
 		std::vector<std::uint8_t> image;
 		if (old_stream.size() == old_profile_payload)
@@ -1332,6 +1428,6 @@ namespace lcsave::detail
 		h.catalogue_revision = t.catalogue.revision;
 		h.campaign_serial = 0;
 		h.save_sequence = 0;
-		return profile_file(p, t, t.build->T, false, description, context.slot, context.saved_at, context.writer, context.mods, h, state);
+		return profile_file(p, t, t.build->T, false, description, context.slot, context.saved_at, context.writer, context.mods, h, state, nullptr, context.retained_file);
 	}
 }
