@@ -716,11 +716,13 @@ namespace save_format
 
 		bool entity_names(void* entity,std::string& definition,std::string& instance)
 		{
-			const char* def=nullptr; const char* name=nullptr;
+			std::uint32_t def=0,name=0;
 			if (!entity || !try_copy(&def,static_cast<const std::uint8_t*>(entity)+0x14,4) ||
 			    !try_copy(&name,static_cast<const std::uint8_t*>(entity)+0x18,4)) return false;
-			definition=game_text(def); instance=game_text(name);
-			return !definition.empty();
+			// CEntity stores general-table handles here. Read without calling its lazy table getter.
+			auto read=[](std::uint32_t offset,void* out,std::size_t n){return try_copy(out,in_game(0xa2c440+offset),n);};
+			return save_core_rules::general_name(def,read,definition) && !definition.empty() &&
+			       save_core_rules::general_name(name,read,instance);
 		}
 
 		void __cdecl numbering_hook(void* entity,const std::uint32_t placement,const std::uint32_t ordinal)
@@ -733,6 +735,10 @@ namespace save_format
 			{
 				active_visit.capture_flags|=save_core_rules::capture_incomplete;
 				core_lifetime.write_blocked=true;
+				logger::write("save core: number observation failed: entity=%p ordinal=%lu placement=%lu raw_names=%08lx/%08lx def=%s inst=%s",
+				              entity,static_cast<unsigned long>(ordinal),static_cast<unsigned long>(placement),
+				              static_cast<unsigned long>(at<std::uint32_t>(entity,0x14)),static_cast<unsigned long>(at<std::uint32_t>(entity,0x18)),
+				              item.definition_name.c_str(),item.instance_name.c_str());
 				return;
 			}
 			active_visit.entities.push_back(std::move(item));

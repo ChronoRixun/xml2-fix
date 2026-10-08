@@ -18,6 +18,20 @@ namespace save_core_rules
  inline bool placed_match(std::uint32_t saved_index,const std::string& saved_def,const std::string& saved_name,
                           std::uint32_t actual_index,const std::string& actual_def,const std::string& actual_name)
  { return saved_index==actual_index && folded(saved_def)==folded(actual_def) && folded(saved_name)==folded(actual_name); }
+ // Entity names use the GENERAL4096-slot table; zone record names use a separate2048-slot table.
+ template<class Read> bool general_name(std::uint32_t handle,Read&& read,std::string& text)
+ {
+  text.clear();if(!handle)return true;
+  const auto slot=handle&0x00ffffff;
+  std::uint32_t used=0,offset=0;
+  if(slot>=4096 || !read(0x4004,&used,4) || used>0x7800 || !read(4+slot*4,&offset,4) || offset>=used)return false;
+  for(std::uint32_t i=0;i<256 && i<used-offset;++i)
+  {
+   char c=0;if(!read(0x4008+offset+i,&c,1))return false;
+   if(!c)return true;text.push_back(c);
+  }
+  text.clear();return false;
+ }
  constexpr bool full_campaign_load(int mode){return mode!=1;}
  template<class T> const T* placement_source(const std::vector<T>& entries,std::uint32_t index,
                                              const std::string& definition,const std::string& name)

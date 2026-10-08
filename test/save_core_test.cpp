@@ -19,6 +19,16 @@ int main()
  check(selected && frozen[selected->ordinal-1]==7 && frozen[0]==0,"matched placement bypasses modeled empty death slot");
  check(selected && selected->ordinal==2,"same-name skipped factory resolves actual placement before map-slot death");
  check(!placement_source(mapping,0,"prop_a","twin"),"previously skipped placement cannot inherit a captured twin");
+ std::vector<std::uint8_t> strings(0x4008+0x7800);
+ auto put=[&](std::size_t offset,std::uint32_t value){std::memcpy(strings.data()+offset,&value,4);};
+ put(0x4004,20);put(4+0x123*4,2);std::memcpy(strings.data()+0x4008+2,"Prop_A",7);
+ auto read=[&](std::uint32_t offset,void* out,std::size_t n){if(offset+n>strings.size())return false;std::memcpy(out,strings.data()+offset,n);return true;};
+ std::string resolved;
+ check(general_name(0x0b000123,read,resolved)&&resolved=="Prop_A","entity name is a general interned handle, not a pointer");
+ check(general_name(0,read,resolved)&&resolved.empty(),"empty instance handle is valid");
+ check(!general_name(4096,read,resolved),"general string slot bound");
+ put(0x4004,0x7801);check(!general_name(0x123,read,resolved),"general arena bound");
+ put(0x4004,4);put(4+0x123*4,4);check(!general_name(0x123,read,resolved),"name offset must be inside used arena");
  lifetime s;
  s.stage_load();
  check(!s.may_save(),"pending native load blocks all slots");
