@@ -120,3 +120,9 @@ reference digest. `native_load_demand` is a conservative serialized upper bound,
 The engine wrapper separately checks available native item/attached capacity.
 
 W11 is open. A native return without observed stream skips is not section-by-section load verification.
+
+Reverse-reader review follow-up: discarded zone records release their exclusive world-item dependencies. Shared
+and unowned world handles survive. Preflight rejects numbered states with duplicate placement destinations, and
+unsupported capture bits are validated before resets. Successful `new_to_old_stream` results can have a nonempty
+`ledger`: callers must log its explanations and notify the player of selective resets. The synthetic parity runner
+also accepts `reverse` (full native stream bytes) and `refuse` (no stream plus expected error) fixture modes.

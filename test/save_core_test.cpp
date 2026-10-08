@@ -63,6 +63,20 @@ int main()
   const auto n=limits_rules::hex_size(site.compare);
   check(b[n]==0x0f&&b[n+1]==0x82,"capacity guard preserves whole compare and checks unsigned below");
  }
+ {
+  std::vector<std::string> logged; std::string notice;
+  const std::string ledger="zone zone/x/y: legacy capture provenance inferred (unknown completeness)\n"
+    "zone zone/x/y: conversation digest unknown or changed: bits reset\n"
+    "zone zone/x/z: entity placement/name changed: record not applied\n";
+  forward_load_ledger(ledger,notice,[&](const std::string& line){logged.push_back(line);});
+  check(logged.size()==3,"load ledger logs every explanation separately");
+  check(notice.find("zone state or conversation bits reset")!=std::string::npos &&
+        notice.find("conversation digest")!=std::string::npos && notice.find("record not applied")!=std::string::npos,
+        "load reset notice includes conversation and zone discard reasons");
+  notice="pending notice";logged.clear();
+  forward_load_ledger("zone zone/x/y: legacy capture provenance inferred (unknown completeness)",notice,[&](const std::string& line){logged.push_back(line);});
+  check(logged.size()==1 && notice=="pending notice","inferred provenance logs without a reset notice");
+ }
  std::printf("core runtime rules: %d failures\n",failures);
  return failures?1:0;
 }

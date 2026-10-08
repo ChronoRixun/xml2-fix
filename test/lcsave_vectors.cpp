@@ -1170,6 +1170,64 @@ namespace
 			"same-name twin cache ordinal matches translated native map");
 	}
 
+	void test_review_resets(const fs::path& folder)
+	{
+		auto t = make_tables(folder, "sh_might", false);
+		Tables tables; tables.data = t;
+		const auto imported = convert_old_to_new(write_slot(make_old_save({0, 3, 4}, 10)), tables);
+		check(imported.ok, "review fixture import"); if (!imported.ok) return;
+		fs::copy_file(folder / "Maps/zone/x/y.engb", folder / "Maps/zone/x/z.engb", fs::copy_options::overwrite_existing);
+		const auto original = read_file(imported.bytes.data(), imported.bytes.size());
+		for (int scenario = 0; scenario < 7; ++scenario)
+		{
+			std::vector<SectionOut> sections;
+			for (const auto& tag : original.order)
+			{
+				const auto& sec = original.sections.at(tag); Value data = sec.data;
+				if (tag == "ZONE")
+				{
+					auto records = data["records"]; auto r = records.l[0];
+					if (scenario == 0 || scenario == 4) r.set("content_hash", Value::bytes(std::string(20, '\0')));
+					if (scenario == 1) { auto states = r["states"]; states.l[0].set("placement_index", Value::integer(999)); r.set("states", states); }
+					if (scenario == 2 || scenario == 5) r.set("capture_flags", Value::integer(1));
+					if (scenario == 3)
+					{
+						auto states = r["states"]; auto duplicate = states.l[0];
+						duplicate.set("ordinal", Value::integer(4)); duplicate.set("payload", Value::bytes(std::string(8, '\x99')));
+						states.push(duplicate); r.set("states", states);
+					}
+					if (scenario == 4) r.set("capture_flags", Value::integer(4));
+					if (scenario == 6) r.set("conversation_digest", Value::bytes(std::string(32, '\0')));
+					records.l[0] = r;
+					if (scenario == 5)
+					{
+						auto survivor = data["records"].l[0]; survivor.set("zone", Value::integer(t->build->T.ZONE[1]));
+						records.push(survivor);
+					}
+					data.set("records", records);
+				}
+				if (tag == "ITEM" && scenario < 3)
+				{
+					auto world = data["world"]; auto unowned = world.l[0]; unowned.set("handle", Value::integer(6));
+					world.push(unowned); data.set("world", world);
+				}
+				sections.push_back({tag, sec.entry.major, sec.entry.minor, sec.entry.flags, data});
+			}
+			const auto result = new_to_old_stream(write_file(kind_campaign, sections, HeaderIn{}), tables);
+			if (scenario == 3 || scenario == 4)
+			{
+				check(!result.ok && result.bytes.empty() && contains(result.error, scenario == 3 ? "duplicate destination placement" : "unsupported capture status bits"),
+				      "review refused before stream exposed " + std::to_string(scenario)); continue;
+			}
+			check(result.ok, "review reset accepted " + std::to_string(scenario) + ": " + result.error); if (!result.ok) continue;
+			const auto native = read_slot(result.bytes.data(), result.bytes.size());
+			if (scenario < 3) check(native.zones.empty() && native.world.size() == 1 && native.world[0].slot == 6 && contains(result.ledger, "record not applied"),
+			                       "discard removes exclusively owned world item and explains reset " + std::to_string(scenario));
+			if (scenario == 5) check(native.zones.size() == 1 && native.world.size() == 1 && native.world[0].slot == 5, "discard preserves shared world dependency");
+			if (scenario == 6) check(native.zones[0].tail.conversation[0] == 0 && contains(result.ledger, "conversation digest unknown or changed: bits reset"), "conversation reset ledger available to runtime");
+		}
+	}
+
 	void test_native_table_budgets(const fs::path& folder)
 	{
 		for (int scenario = 0; scenario < 12; ++scenario)
@@ -1220,6 +1278,7 @@ void run_vectors(const fs::path& scratch)
 	test_talent_era(scratch / "era");
 	test_api(scratch / "api");
 	test_capture_twins(scratch / "twins");
+	test_review_resets(scratch / "review");
 	test_native_table_budgets(scratch / "native-budgets");
 }
 
