@@ -2,6 +2,7 @@
 #include "save_format.hpp"
 
 #include "save_format_rules.hpp"
+#include "save_core_rules.hpp"
 #include "ini.hpp"
 #include "log.hpp"
 #include "lcsave/lcsave.hpp"
@@ -61,6 +62,24 @@ namespace save_format
 			float play_time = 0;
 			int slot = -1;
 		} current;
+
+		// CORE-BEGIN: recording metadata and lifetime (independent of Guards' file protection).
+		campaign pending_campaign;
+		save_core_rules::lifetime core_lifetime;
+		std::vector<std::uint8_t> retained_profile;
+		std::vector<lcsave::ZoneCaptureMetadata> cached_captures, pending_captures;
+		lcsave::ZoneCaptureMetadata active_visit;
+		bool visit_known = false, visit_restore_disabled = false, native_loading = false;
+		std::uint8_t campaign_origin = 0;
+		lcsave::ZoneCaptureMetadata* capturing = nullptr;
+		void* restore_record = nullptr;
+		std::array<std::uint16_t,256> original_restore_map{};
+		std::atomic<unsigned> numbered_seen{0}, captures_seen{0}, capture_failures{0}, identity_resets{0}, resets_seen{0}, native_loads_completed{0};
+		using capture_t = bool(__fastcall*)(void*, void*, const char*, int, float);
+		using native_load_t = void(__fastcall*)(void*, void*, void*, int);
+		capture_t retail_capture = nullptr;
+		// CORE-END
+
 
 		// Counters for status().
 		std::atomic<unsigned> reads{0}, write_count{0}, refusals{0}, converted{0}, talents_added{0};
@@ -585,20 +604,19 @@ namespace save_format
 		}
 
 		// Inserts the talents the library reports into the stream's hero heaps (SPEC-old-save 1.6 b), logged per hero.
-		void add_missing_talents(std::vector<std::uint8_t>& image)
+		bool add_missing_talents(std::vector<std::uint8_t>& image)
 		{
 			std::vector<lcsave::TalentAdd> adds;
-			if (!lcsave::missing_talents(image, tables, adds) || adds.empty())
-			{
-				return;
-			}
+			if (!lcsave::missing_talents(image, tables, adds)) return false;
+			if (adds.empty()) return true;
 			const auto heaps = hero_heaps(image.data(), image.size());
 			if (!heaps)
 			{
 				logger::write("save format: the stream's hero blocks don't parse - no talent added");
-				return;
+				return false;
 			}
 			unsigned added = 0, full = 0, powers = 0;
+			bool valid=true;
 			for (const auto& a : adds)
 			{
 				// Only the shared talents (grab, SPEC 61): a hero's own powers are the engine's to grant when the hero
@@ -613,7 +631,7 @@ namespace save_format
 				{
 					logger::write("save format: talent %u for stats index %lu names hero block %lu of %zu - skipped", a.talent_id, static_cast<unsigned long>(a.stats_index),
 					              static_cast<unsigned long>(a.hero_block), heaps->size());
-					continue;
+					valid=false;continue;
 				}
 				switch (insert_talent(image.data() + (*heaps)[a.hero_block].heap, a.talent_id))
 				{
@@ -630,6 +648,7 @@ namespace save_format
 					              static_cast<unsigned long>(a.stats_index), a.talent_id);
 					break;
 				case heap_insert::invalid:
+					valid=false;
 					logger::write("save format: hero block %lu (stats index %lu): talent id %u NOT added - the heap's count or bitmap isn't the engine's",
 					              static_cast<unsigned long>(a.hero_block), static_cast<unsigned long>(a.stats_index), a.talent_id);
 					break;
@@ -640,6 +659,7 @@ namespace save_format
 			{
 				logger::write("save format: %u missing shared talent(s) added, %u refused (heap full); %u hero power(s) the save lacks left to the engine", added, full, powers);
 			}
+			return valid && full==0;
 		}
 
 		// ---- the card's methods (__thiscall: this in ecx, the arguments on the stack, callee cleans) -------------
@@ -668,6 +688,226 @@ namespace save_format
 			return file_exists(lc_dir + profile_file) || file_exists(lc_dir + profile_file + ".bak") ? 1 : 0;
 		}
 
+
+		// CORE-BEGIN: actual capture provenance, bounds, per-entity checks and campaign reset.
+		std::string game_text(const char* pointer)
+		{
+			std::string text;
+			if (!pointer) return text;
+			for (std::size_t i=0;i<256;++i)
+			{
+				char c=0;
+				if (!try_copy(&c,pointer+i,1)) return {};
+				if (!c) return text;
+				text.push_back(c);
+			}
+			return {}; // never label a truncated name as verified
+		}
+
+		std::string record_zone(void* record)
+		{
+			std::uint32_t handle=0, offset=0, used=0;
+			if (!record || !try_copy(&handle,record,4)) return {};
+			const auto slot=handle&0x00ffffff;
+			if (!slot || slot>=2048 || !try_copy(&used,in_game(0xa26c30+0x2004),4) || used>0x3800 ||
+			    !try_copy(&offset,in_game(0xa26c30+4+slot*4),4) || offset>=used) return {};
+			return save_core_rules::folded(game_text(static_cast<const char*>(in_game(0xa26c30+0x2008+offset))));
+		}
+
+		bool entity_names(void* entity,std::string& definition,std::string& instance)
+		{
+			const char* def=nullptr; const char* name=nullptr;
+			if (!entity || !try_copy(&def,static_cast<const std::uint8_t*>(entity)+0x14,4) ||
+			    !try_copy(&name,static_cast<const std::uint8_t*>(entity)+0x18,4)) return false;
+			definition=game_text(def); instance=game_text(name);
+			return !definition.empty();
+		}
+
+		void __cdecl numbering_hook(void* entity,const std::uint32_t placement,const std::uint32_t ordinal)
+		{
+			numbered_seen.fetch_add(1);
+			if (!visit_known) return;
+			lcsave::PlacedEntityMetadata item;
+			item.ordinal=ordinal; item.placement_index=placement;
+			if (!save_core_rules::ordinal_fits(ordinal) || !entity_names(entity,item.definition_name,item.instance_name))
+			{
+				active_visit.capture_flags|=save_core_rules::capture_incomplete;
+				core_lifetime.write_blocked=true;
+				return;
+			}
+			active_visit.entities.push_back(std::move(item));
+		}
+
+		lcsave::ZoneCaptureMetadata* metadata_for(void* record)
+		{
+			const auto zone=record_zone(record);
+			float stamp=0;
+			if (zone.empty() || !try_copy(&stamp,static_cast<const std::uint8_t*>(record)+0x55d8,4)) return nullptr;
+			for (auto& meta:cached_captures) if (meta.zone==zone && meta.time_stamp==stamp) return &meta;
+			return nullptr;
+		}
+
+		void __cdecl capture_overflow(void*)
+		{
+			if (capturing) capturing->capture_flags|=save_core_rules::capture_incomplete;
+			if (visit_known) active_visit.capture_flags|=save_core_rules::capture_incomplete;
+			capture_failures.fetch_add(1);
+			core_lifetime.write_blocked=true;
+		}
+
+		bool __fastcall capture_hook(void* record,void*,const char* name,const int flag,const float stamp)
+		{
+			lcsave::ZoneCaptureMetadata meta=active_visit;
+			meta.zone=save_core_rules::folded(game_text(name)); meta.time_stamp=stamp;
+			if (!visit_known || meta.zone!=active_visit.zone)
+				meta.capture_flags|=save_core_rules::capture_unobserved;
+			std::string error;
+			if (ready!=readiness::ok || !lcsave::conversation_digest(tables,meta.conversation_digest,error))
+				meta.capture_flags|=save_core_rules::capture_unobserved;
+			capturing=&meta;
+			const bool ok=retail_capture(record,nullptr,name,flag,stamp);
+			capturing=nullptr;
+			if (!ok) meta.capture_flags|=save_core_rules::capture_incomplete;
+			if (meta.capture_flags&save_core_rules::capture_incomplete) core_lifetime.write_blocked=true;
+			// A zero hash or model-inferred mapping must never become an observed capture.
+			if (meta.capture_flags&save_core_rules::capture_unobserved)
+			{
+				core_lifetime.write_blocked=true;
+				logger::write("save core: capture of %s has no verified visit provenance; writes blocked",meta.zone.c_str());
+			}
+			cached_captures.erase(std::remove_if(cached_captures.begin(),cached_captures.end(),[&](const auto& old){return old.zone==meta.zone;}),cached_captures.end());
+			cached_captures.push_back(std::move(meta)); captures_seen.fetch_add(1);
+			logger::write("save core: captured %s at %.9g; %zu observed numbered entities; status 0x%08lx",
+			              cached_captures.back().zone.c_str(),static_cast<double>(stamp),cached_captures.back().entities.size(),
+			              static_cast<unsigned long>(cached_captures.back().capture_flags));
+			return ok;
+		}
+
+		void reset_zone_record(void* record,const std::string& zone)
+		{
+			// Native clear(1) disposes dependent world items, not just ordinal slots. Keep the named empty
+			// cache record so its manager count remains valid; capture later replaces it with observed state.
+			std::uint32_t handle=0; float stamp=0;
+			try_copy(&handle,record,4); try_copy(&stamp,static_cast<const std::uint8_t*>(record)+0x55d8,4);
+			using clear_t=void(__fastcall*)(void*,void*,int);
+			reinterpret_cast<clear_t>(in_game(0x465ec0))(record,nullptr,1);
+			std::memcpy(record,&handle,4);
+			const std::uint32_t count=1;
+			std::memcpy(static_cast<std::uint8_t*>(record)+0x4808,&count,4);
+			std::memcpy(static_cast<std::uint8_t*>(record)+0x55d8,&stamp,4);
+			visit_restore_disabled=true; identity_resets.fetch_add(1);
+			notice="LC save: "+zone+" changed or its numbering differs; zone state reset";
+			logger::write("save core: %s: mode-2 numbering/placement mismatch; remaining restores disabled and dependent items cleared",zone.c_str());
+			cached_captures.erase(std::remove_if(cached_captures.begin(),cached_captures.end(),[&](const auto& old){return old.zone==zone;}),cached_captures.end());
+			if (visit_known)
+			{
+				auto fresh=active_visit;fresh.time_stamp=stamp;cached_captures.push_back(std::move(fresh));
+			}
+		}
+
+		bool __fastcall restore_hook(void* record,void*,void* entity)
+		{
+			if (!record || !entity || visit_restore_disabled) return true;
+			std::uint16_t ordinal=0;
+			if (!try_copy(&ordinal,static_cast<const std::uint8_t*>(entity)+0x6e,2) || !save_core_rules::ordinal_fits(ordinal))
+			{core_lifetime.write_blocked=true;return true;}
+			if (restore_record!=record)
+			{
+				// Freeze the reconstructed model map before changing any actual ordinal slot. Otherwise an
+				// earlier remap could overwrite the source needed by a later identical-name placement.
+				if (!try_copy(original_restore_map.data(),static_cast<const std::uint8_t*>(record)+0x480c,512))
+				{core_lifetime.write_blocked=true;return true;}
+				restore_record=record;
+			}
+			std::string def,name;
+			const auto* meta=metadata_for(record);
+			const auto* observed=active_visit.entities.empty()?nullptr:&active_visit.entities.back();
+			const lcsave::PlacedEntityMetadata* expected=nullptr;
+			if (meta && observed && observed->ordinal==ordinal && entity_names(entity,def,name))
+				expected=save_core_rules::placement_source(meta->entities,observed->placement_index,def,name);
+			if (!visit_known || !meta || !observed || observed->ordinal!=ordinal ||
+			    meta->placement_sha1!=active_visit.placement_sha1)
+			{reset_zone_record(record,record_zone(record));return true;}
+			std::uint16_t state_index=0;
+			if (!expected)
+			{
+				// An old inferred capture lacks explicit tombstones. Its original zero slot is legacy
+				// removal semantics, never permission to apply another saved twin's record.
+				if ((meta->capture_flags&save_core_rules::capture_unobserved) && original_restore_map[ordinal-1]==0)
+					return false;
+				reset_zone_record(record,record_zone(record));return true;
+			}
+			if (!save_core_rules::ordinal_fits(expected->ordinal))
+			{reset_zone_record(record,record_zone(record));return true;}
+			state_index=original_restore_map[expected->ordinal-1];
+			if (state_index>=768){core_lifetime.write_blocked=true;return true;}
+			// Match actual placement BEFORE the zero-map/death decision. A skipped factory changes native
+			// ordinals even when placement bytes and names are identical. Tombstones retain flags_b=0.
+			std::memcpy(static_cast<std::uint8_t*>(record)+0x480c+2*(ordinal-1),&state_index,2);
+			using restore_t=bool(__fastcall*)(void*,void*,void*);
+			return reinterpret_cast<restore_t>(in_game(0x465c10))(record,nullptr,entity);
+		}
+
+		void __cdecl campaign_reset_hook()
+		{
+			if (native_loading) return; // a reset performed as part of native load belongs to the pending load
+			current={}; pending_campaign={};cached_captures.clear();pending_captures.clear();
+			core_lifetime.new_game(); campaign_origin=0; visit_known=false;active_visit={};restore_record=nullptr;
+			resets_seen.fetch_add(1);
+			logger::write("save core: resetgame: campaign retention, identity and capture metadata cleared; profile retained");
+		}
+
+		bool run_native_load(void* game,void* buffer,const int mode)
+		{
+			__try
+			{
+				reinterpret_cast<native_load_t>(in_game(game_load))(game,nullptr,buffer,mode);return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER){return false;}
+		}
+
+		void __fastcall native_load_hook(void* game,void*,void* buffer,const int mode)
+		{
+			const bool campaign_load=core_lifetime.begin_native(mode,pending_campaign.loaded);
+			if (campaign_load && !pending_campaign.loaded)
+			{
+				// Mode1 is only saved stats. Only a FULL fresh transfer replaces campaign retention.
+				current={};cached_captures.clear();campaign_origin=mode==2?2:0;
+				active_visit={};visit_known=false;restore_record=nullptr;
+			}
+			native_loading=true; overflow_flag=0;
+			const bool returned=run_native_load(game,buffer,mode);
+			native_loading=false;
+			const bool ok=returned && !overflow_flag && !core_lifetime.write_blocked;
+			core_lifetime.finish_native(mode,ok);
+			if (ok && campaign_load && pending_campaign.loaded)
+			{
+				current=std::move(pending_campaign);cached_captures=std::move(pending_captures);
+				core_lifetime.commit_save(current.serial,current.sequence);
+			}
+			if (campaign_load){pending_campaign={};pending_captures.clear();}
+			if (!ok) {current={};cached_captures.clear();refuse("native load failed or skipped stream bytes; campaign writes blocked; return to menu");}
+			else native_loads_completed.fetch_add(1);
+			logger::write("save core: native load mode %d returned=%d overflow=%u; retained state committed=%d; W11 remains unverified",
+			              mode,returned?1:0,static_cast<unsigned>(overflow_flag),(ok&&campaign_load)?1:0);
+		}
+
+		bool available_capacity(const std::vector<std::uint8_t>& image,std::string& error)
+		{
+			lcsave::NativeLoadDemand demand;
+			if (!lcsave::native_load_demand(image,demand,error)) return false;
+			std::uint32_t attached=0,instances=0,pointer=0;
+			if (!try_copy(&pointer,in_game(0x717b30),4) || !pointer || !try_copy(&attached,in_game(pointer+0x239c),4) ||
+			    !try_copy(&pointer,in_game(0x72a524),4) || !pointer || !try_copy(&instances,in_game(pointer+0x3854),4))
+			{error="native item/attached pool occupancy cannot be read";return false;}
+			if (!save_core_rules::capacity_fits(demand.instances,instances,256))
+			{error="native item-instance free capacity (256) is insufficient";return false;}
+			if (!save_core_rules::capacity_fits(demand.attached_enhancements,attached,375))
+			{error="native attached-enhancement free capacity (375) is insufficient";return false;}
+			return true;
+		}
+		// CORE-END
+
 		// A write of a kind: the engine's bytes re-expressed and written as SPEC 1.6 says.
 		bool write_lc(const std::uint8_t kind, const int slot, const char* description, const std::uint8_t* data, const std::size_t size)
 		{
@@ -688,10 +928,12 @@ namespace save_format
 			context.save_sequence = 0;
 			if (kind == kind_campaign)
 			{
-				// The campaign in play: the one loaded, unless the play time went backwards (a new game since; the
-				// new-game reset isn't hooked yet, X4).
-				const auto play_time = old_play_time(image.data(), image.size());
-				const bool continues = current.loaded && play_time && *play_time >= current.play_time;
+				// CORE: real reset owns lifetime; play time cannot identify a new campaign.
+				if (!core_lifetime.may_save())
+				{
+					refuse("campaign capture/load is incomplete or pending; nothing written; return to menu");return false;
+				}
+				const bool continues = current.loaded;
 				if (continues)
 				{
 					context.campaign_serial = current.serial;
@@ -703,6 +945,11 @@ namespace save_format
 					context.save_sequence = 1;
 				}
 			}
+			// CORE: live and cached records each carry their own capture provenance; never relabel old bits.
+			context.retained_file=kind==kind_profile?retained_profile:current.file;
+			context.zone_captures=cached_captures;
+			context.origin=kind==kind_campaign?campaign_origin:0;
+			context.require_capture_metadata=kind==kind_campaign;
 			const auto result = kind == kind_profile ? lcsave::old_profile_to_new(image, tables, context) : lcsave::old_stream_to_new(image, tables, context);
 			if (!result.ok)
 			{
@@ -730,7 +977,9 @@ namespace save_format
 				current.sequence = context.save_sequence;
 				current.play_time = info.play_time;
 				current.slot = slot;
+				core_lifetime.commit_save(context.campaign_serial,context.save_sequence);
 			}
+			else retained_profile=result.bytes;
 			write_count.fetch_add(1);
 			logger::write("save format: wrote %s (%zu bytes, sequence %lu, serial %016llx%s)", path.c_str(), result.bytes.size(), static_cast<unsigned long>(context.save_sequence),
 			              static_cast<unsigned long long>(context.campaign_serial), result.parked ? (", " + std::to_string(result.parked) + " parked records carried").c_str() : "");
@@ -776,20 +1025,29 @@ namespace save_format
 			}
 			if (kind == kind_campaign)
 			{
-				add_missing_talents(result.bytes);
+				std::string error;
+				std::vector<lcsave::ZoneCaptureMetadata> metadata;
+				if (!available_capacity(result.bytes,error) || !lcsave::loaded_zone_metadata(file.bytes,tables,metadata,error))
+				{refuse("native preflight: "+error);return false;}
+				pending_captures=std::move(metadata);
+				if (!add_missing_talents(result.bytes))
+				{refuse("required shared talents do not fit the native hero heap; load refused");return false;}
 			}
 			std::memcpy(data, result.bytes.data() + old_envelope, capacity);
 			*size = static_cast<std::uint32_t>(capacity);
 			overflow_flag = 0;
 			if (kind == kind_campaign)
 			{
-				current.loaded = true;
-				current.file = file.bytes;
-				current.serial = file.info.campaign_serial;
-				current.sequence = file.info.save_sequence;
-				current.play_time = file.info.play_time;
-				current.slot = slot;
+				// CORE: stage retention; card-buffer success is not native load completion.
+				pending_campaign.loaded = true;
+				pending_campaign.file = file.bytes;
+				pending_campaign.serial = file.info.campaign_serial;
+				pending_campaign.sequence = file.info.save_sequence;
+				pending_campaign.play_time = file.info.play_time;
+				pending_campaign.slot = slot;
+				core_lifetime.stage_load();
 			}
+			if (kind==kind_profile) retained_profile=file.bytes; // CORE: independent profile retention
 			reads.fetch_add(1);
 			logger::write("save format: read %s (%zu bytes, sequence %lu, origin %u%s%s)", file.path.c_str(), file.bytes.size(), static_cast<unsigned long>(file.info.save_sequence),
 			              file.info.origin, file.from_backup ? ", from the backup" : "", result.parked ? (", " + std::to_string(result.parked) + " parked").c_str() : "");
@@ -1087,6 +1345,11 @@ namespace save_format
 					break;
 				}
 			}
+			// CORE: this is the actual opened buffer; the loop below fills actual placement associations.
+			active_visit={};active_visit.zone=zone;active_visit.capture_flags=0;visit_restore_disabled=false;restore_record=nullptr;
+			visit_known=zone_opened_sha1.size()==40;
+			if (visit_known) for(std::size_t i=0;i<20;++i)
+				active_visit.placement_sha1[i]=static_cast<std::uint8_t>(std::strtoul(zone_opened_sha1.substr(i*2,2).c_str(),nullptr,16));
 			lcsave::Sha1Digest expected{};
 			zone_tables_sha1.clear();
 			if (ready == readiness::ok && lcsave::zone_file_sha1(tables, zone, expected))
@@ -1171,6 +1434,8 @@ namespace save_format
 			context.writer = writer_name;
 			context.campaign_serial = current.loaded ? current.serial : 0;
 			context.save_sequence = current.loaded ? current.sequence : 0;
+			context.origin=campaign_origin;context.zone_captures=cached_captures;context.require_capture_metadata=true;
+			context.retained_file=current.file; // CORE: dump reflects preservation too
 			const auto result = lcsave::old_stream_to_new(image, tables, context);
 			if (!result.ok)
 			{
@@ -1324,6 +1589,7 @@ namespace save_format
 	{
 		std::string state = !enabled ? "off" : ready == readiness::untried ? "lc (tables not loaded yet)" : ready == readiness::ok ? "lc" : "lc DISABLED: " + failure;
 		return "save format " + state + "; reads " + std::to_string(reads.load()) + "; writes " + std::to_string(write_count.load()) + "; refusals " + std::to_string(refusals.load()) +
+		       "; core captures " + std::to_string(captures_seen.load()) + "; numbered " + std::to_string(numbered_seen.load()) + "; capture failures " + std::to_string(capture_failures.load()) + "; identity resets " + std::to_string(identity_resets.load()) + "; campaign resets " + std::to_string(resets_seen.load()) + "; native completions " + std::to_string(native_loads_completed.load()) + "; W11 open; campaign writes " + (core_lifetime.may_save()?"allowed":"blocked") +
 		       "; imported " + std::to_string(converted.load()) + "; talents added " + std::to_string(talents_added.load()) + "; zones hashed " + std::to_string(zones_hashed.load()) +
 		       " (" + std::to_string(zone_hash_mismatches.load()) + " differ from the tables; last " + (zone_opened_name.empty() ? "none" : zone_opened_name + " " + zone_opened_sha1) + ")";
 	}
@@ -1355,6 +1621,21 @@ namespace save_format
 			return;
 		}
 
+		// CORE-BEGIN: capture/reset guard validation before installing any Core patch.
+		for(const auto& g:save_core_rules::guards)
+		{
+			std::vector<std::uint8_t> bytes(limits_rules::hex_size(g.hex));
+			if(!try_copy(bytes.data(),in_game(g.va),bytes.size()) || !limits_rules::matches(bytes.data(),g.hex))
+			{failure="LC capture guard mismatch at "+std::to_string(g.va);ready=readiness::failed;logger::write("save core: %s",failure.c_str());return;}
+		}
+		{
+			const auto& g=save_core_rules::ordinal_write_guard;
+			std::vector<std::uint8_t> bytes(limits_rules::hex_size(g.hex));
+			if(!try_copy(bytes.data(),in_game(g.va),bytes.size()) || !limits_rules::matches(bytes.data(),g.hex))
+			{failure="LC ordinal guard mismatch";ready=readiness::failed;return;}
+		}
+		// CORE-END
+
 		// The stubs and bridges go in one block of the fix's own, made executable once written.
 		std::vector<std::uint8_t> block;
 		std::vector<address> stub_at(flag_sites.size());
@@ -1381,6 +1662,29 @@ namespace save_format
 		const address zone_at = base + static_cast<address>(block.size());
 		const auto zb = zone_open_bridge(zone_at, address_of(const_cast<std::uint8_t*>(&zone_open_flag)), address_of(const_cast<std::uint32_t*>(&zone_open_return)));
 		block.insert(block.end(), zb.begin(), zb.end());
+		// CORE-BEGIN: independent guarded bridges; no edits to Guards' atomic wrapper.
+		const address number_at=base+static_cast<address>(block.size());
+		save_core_rules::append(block,save_core_rules::numbering_bridge(number_at,address_of(&numbering_hook)));
+		writes.push_back({0x48624c,jump(0x48624c,number_at,7)});
+		writes.push_back({0x486260,call(0x486260,address_of(&restore_hook),5)});
+		const address reset_at=base+static_cast<address>(block.size());
+		save_core_rules::append(block,save_core_rules::reset_bridge(reset_at,address_of(&campaign_reset_hook)));
+		writes.push_back({0x5f2e70,jump(0x5f2e70,reset_at,6)});
+		const address capture_at=base+static_cast<address>(block.size());
+		save_core_rules::append(block,save_core_rules::capture_trampoline(capture_at));
+		retail_capture=reinterpret_cast<capture_t>(in_game(capture_at));
+		writes.push_back({0x4664d0,jump(0x4664d0,address_of(&capture_hook),5)});
+		for(const auto& site:save_core_rules::capture_bounds)
+		{
+			const address bound_at=base+static_cast<address>(block.size());
+			save_core_rules::append(block,save_core_rules::bound_bridge(site,bound_at,address_of(&capture_overflow)));
+			writes.push_back({site.va,jump(site.va,bound_at,site.length)});
+		}
+		const address ordinal_at=base+static_cast<address>(block.size());
+		save_core_rules::append(block,save_core_rules::ordinal_write_bridge(ordinal_at,address_of(&capture_overflow)));
+		writes.push_back({0x46667a,jump(0x46667a,ordinal_at,8)});
+		writes.push_back({game_vtable+0x20c,dword_bytes(address_of(&native_load_hook))});
+		// CORE-END
 		if (block.size() > block_reserve)
 		{
 			logger::write("save format: ERROR: the stubs don't fit their block - %s", as_before);
@@ -1421,6 +1725,7 @@ namespace save_format
 			return;
 		}
 		enabled = true;
+		logger::write("save core: guarded actual numbering/capture/reset and load lifetime installed; capture masks 1/2; W11 open");
 		logger::write("save format: LC ([Save] Format=lc): the card's nine file methods (vtable 0x%08lX) are the fix's - saves are read and written as .lcsave files in SaveLC "
 		              "through the LC library; the old Save folder is converted once at the first file operation and never written; %zu stream-skip sites flagged; the zone "
 		              "placement file hashed at 0x%08lX / 0x%08lX",

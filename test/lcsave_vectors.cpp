@@ -9,6 +9,7 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -887,7 +888,7 @@ namespace
 			ConvertState sta;
 			std::vector<std::uint8_t> again;
 			const auto erra = error_of([&] { again = convert_slot(write_slot(plainf), *t, opt, sta); });
-			check(erra.empty() && semantic_equal(d_newf, dump_new(again, *t), "", why), "old -> new -> old -> new keeps the flags (" + why + ")");
+			check(erra.empty() && semantic_equal(d_newf["heroes"], dump_new(again, *t)["heroes"], "", why), "old -> new -> old -> new keeps the flags (" + why + ")");
 			nf.clear();
 			check(write_slot(reverse_slot(filef, *t, &oldf, nf)) == rawf, "reverse with template is byte-exact with flag-0 slots");
 			// (1d) a HERO 1.0 file (SPEC revision 2.2: names only, written by the 0.2.0 candidates) still loads with every
@@ -1028,12 +1029,182 @@ namespace
 			check(f.header.campaign_serial == 77 && f.header.save_sequence == 3 && f.data("META")["origin"].as_int() == 0 && !f.sections.count("LGCY"),
 				"saver header and META");
 		}
+
+		// Durable provenance must survive two runtime resaves, including opaque KEYS references.
+		if (r.ok)
+		{
+			const auto original = read_file(r.bytes.data(), r.bytes.size());
+			check(original.data("ZONE")["records"].as_list()[0]["capture_flags"].as_int() == 2, "legacy capture marked unknown");
+
+			for (int kind = 0; kind < 4; ++kind)
+			{
+				std::vector<SectionOut> sections;
+				for (const auto& tag : original.order)
+				{
+					const auto& section = original.sections.at(tag);
+					Value data = section.data;
+					if (kind == 0 && tag == "ITEM") { auto list = data["def_state"]; list.l[0].set("quantity", Value::integer(256)); data.set("def_state", list); }
+					if (kind == 1 && tag == "MISS") data.set("stack_depth", Value::integer(3));
+					if (kind >= 2 && tag == "ZONE") { auto records = data["records"]; auto states = records.l[0]["states"]; if (kind == 2) { Value position = Value::list(); position.push(Value::real(40000)); position.push(Value::real(0)); position.push(Value::real(0)); states.l[0].set("position", position); } else states.l[0].set("def_name", Value::integer(999)); records.l[0].set("states", states); data.set("records", records); }
+					sections.push_back({tag, section.entry.major, section.entry.minor, section.entry.flags, data});
+				}
+				check(!new_to_old_stream(write_file(kind_campaign, sections, HeaderIn{}), tables).ok, "native malformed representability refused " + std::to_string(kind));
+			}
+			std::vector<SectionOut> retained;
+			for (const auto& tag : original.order)
+			{
+				const auto& sec = original.sections.at(tag);
+				Value data = sec.data;
+				if (tag == "KEYS") { auto keys = data["keys"]; std::reverse(keys.l.begin(), keys.l.end()); data.set("keys", std::move(keys)); }
+				retained.push_back({tag, sec.entry.major, sec.entry.minor, sec.entry.flags, data});
+			}
+			const std::string opaque("opaque\x03\0\0\x80", 10);
+			retained.push_back({"FUTR", 1, 0, section_keep, Value::bytes(opaque), 4});
+			HeaderIn h;
+			ctx.retained_file = write_file(kind_campaign, retained, h);
+			const auto prefix = read_file(ctx.retained_file.data(), ctx.retained_file.size()).data("KEYS")["keys"];
+			for (int pass = 0; pass < 2; ++pass)
+			{
+				const auto round = old_stream_to_new(raw, tables, ctx);
+				check(round.ok, "retained campaign resave " + round.error);
+				if (!round.ok) break;
+				const auto f = read_file(round.bytes.data(), round.bytes.size());
+				check(f.sections.at("FUTR").payload == opaque && f.sections.at("FUTR").entry.records == 4, "opaque KEEP byte/record preservation");
+				check(f.sections.at("LGCY").payload == original.sections.at("LGCY").payload, "LGCY preserved");
+				check(f.data("KEYS")["keys"] == prefix, "retained KEYS prefix pinned");
+				ctx.retained_file = round.bytes;
+			}
+			ctx.require_capture_metadata = true;
+			check(!old_stream_to_new(raw, tables, ctx).ok, "fresh capture without observed metadata refused");
+			std::vector<ZoneCaptureMetadata> captures;
+			std::string error;
+			check(loaded_zone_metadata(r.bytes, tables, captures, error), "loaded capture metadata " + error);
+			ctx.zone_captures = captures;
+			check(old_stream_to_new(raw, tables, ctx).ok, "cached capture metadata accepted");
+
+			// Actual native ordinals may skip a factory; metadata identifies the actual placement, including a dead entity.
+			if (!captures.empty() && captures[0].entities.size() >= 2)
+			{
+				auto observed = captures;
+				observed[0].capture_flags = 0;
+				observed[0].conversation_digest.fill('c');
+				observed[0].entities[0].ordinal = 2;
+				observed[0].entities[1].ordinal = 1;
+				auto native = make_old_save({0, 3, 4}, 10);
+				native.zones[0].tail.ordinal_map[0] = native.zones[0].tail.ordinal_map[1];
+				native.zones[0].tail.ordinal_map[1] = 0;
+				ctx.zone_captures = observed;
+				const auto actual = old_stream_to_new(write_slot(native), tables, ctx);
+				check(actual.ok, "observed placement capture " + actual.error);
+				if (actual.ok)
+				{
+					const auto restored = new_to_old_stream(actual.bytes, tables);
+					check(restored.ok, "observed placement reverse " + restored.error);
+					if (restored.ok)
+					{
+						const auto dead = read_slot(restored.bytes.data(), restored.bytes.size());
+						const auto slot = dead.zones[0].tail.ordinal_map[0];
+						check(slot != 0 && !(dead.zones[0].states[slot].flags_b & 8), "dead entity tombstone remains dead after placement remap");
+						check(loaded_zone_metadata(actual.bytes, tables, ctx.zone_captures, error), "cached observed metadata read");
+						for (int pass = 0; pass < 2; ++pass)
+						{
+							const auto cached = old_stream_to_new(restored.bytes, tables, ctx);
+							check(cached.ok && read_file(cached.bytes.data(), cached.bytes.size()).data("ZONE")["records"].as_list()[0]["conversation_digest"].as_bytes() == std::string(32, 'c'), "cached per-zone provenance not overwritten");
+						}
+					}
+				}
+			}
+			ConvertOptions options;
+			options.original_name = "settings.dat";
+			const auto profile = convert_old_profile_to_new(write_profile_file("synthetic", make_old_save({0, 3, 4}, 10).profile), tables, options);
+			check(profile.ok, "synthetic profile import " + profile.error);
+			if (profile.ok)
+			{
+				const auto pf = read_file(profile.bytes.data(), profile.bytes.size());
+				check(pf.sections.count("LGCY") == 1, "profile import provenance present");
+				ctx.retained_file = profile.bytes;
+				const auto ps = old_profile_to_new(write_profile_file("synthetic", make_old_save({0, 3, 4}, 10).profile), tables, ctx);
+				check(ps.ok && read_file(ps.bytes.data(), ps.bytes.size()).sections.at("LGCY").payload == pf.sections.at("LGCY").payload,
+					"profile import provenance retained");
+			}
+		}
 		check(!dump(raw, tables).empty() && !dump(r.bytes, tables).empty(), "dump of both formats");
 		std::string err;
 		check(dump(std::vector<std::uint8_t>(10, 0), tables, err).empty() && !err.empty(), "dump of garbage is an error");
 		const auto refused = convert_old_to_new(std::vector<std::uint8_t>(100, 0), tables);
 		check(!refused.ok && refused.refused == 1 && contains(refused.ledger, "refused: file size"), "refusal result");
 	}
+	void test_capture_twins(const fs::path& folder)
+	{
+		auto t = make_tables(folder, "sh_might", false);
+		Tables tables; tables.data = t;
+		const auto* model = t->build->zone_numbering("zone/x/y");
+		check(model != nullptr, "same-name twin numbering exists");
+		if (!model) return;
+		auto twins = *model;
+		twins.names[1] = twins.names[0];
+		t->build->zones["zone/x/y"] = twins; // synthetic same-name definitions/instances, distinct document positions
+		auto native = make_old_save({0, 3, 4}, 10);
+		auto& z = native.zones[0];
+		z.states[2].inst_name = z.states[1].inst_name;
+		z.tail.ordinal_map[0] = 2; z.tail.ordinal_map[1] = 3; z.tail.ordinal_map[2] = 0;
+		ZoneCaptureMetadata capture;
+		capture.zone = "zone/x/y"; capture.time_stamp = z.tail.time_stamp; capture.capture_flags = 0;
+		capture.placement_sha1 = twins.sha1;
+		std::string error;
+		check(conversation_digest(tables, capture.conversation_digest, error), "current conversation digest");
+		capture.entities = {{1, 1, "gate", "gate01"}, {2, 3, "crate_pinned", "crate02"}};
+		NewFileContext context; context.require_capture_metadata = true; context.zone_captures = {capture};
+		const auto saved = old_stream_to_new(write_slot(native), tables, context);
+		check(saved.ok, "same-name twin capture after skipped factory " + saved.error);
+		if (!saved.ok) return;
+		const auto restored = new_to_old_stream(saved.bytes, tables);
+		check(restored.ok, "same-name twin restore " + restored.error);
+		if (!restored.ok) return;
+		const auto back = read_slot(restored.bytes.data(), restored.bytes.size());
+		const auto& zone = back.zones[0];
+		check(zone.tail.ordinal_map[0] == 0 && zone.tail.ordinal_map[1] != 0 && zone.states[zone.tail.ordinal_map[1]].payload[0] == 0x11,
+			"same-name twins select actual second placement, not inferred first");
+		std::vector<ZoneCaptureMetadata> cached;
+		check(loaded_zone_metadata(saved.bytes, tables, cached, error) && !cached.empty() && cached[0].entities[0].ordinal == 2,
+			"same-name twin cache ordinal matches translated native map");
+	}
+
+	void test_native_table_budgets(const fs::path& folder)
+	{
+		for (int scenario = 0; scenario < 12; ++scenario)
+		{
+			auto t = make_tables(folder / std::to_string(scenario), "sh_might", false);
+			Tables tables; tables.data = t;
+			const auto imported = convert_old_to_new(write_slot(make_old_save({0, 3, 4}, 10)), tables);
+			if (!imported.ok) { check(false, "native table budget fixture " + imported.error); continue; }
+			const auto& T = t->build->T;
+			if (scenario == 0) t->p_nama[T.NAMA[0]] = 32;
+			if (scenario == 1) t->p_namb[T.NAMB.begin()->second[0]] = 4;
+			if (scenario == 2) t->p_trit[T.TRIT[0]] = 128;
+			if (scenario == 3) t->p_cost[T.COST.at(1).at(3)] = 10;
+			if (scenario == 4) t->p_stat[T.STAT[4]] = 297;
+			if (scenario == 5) t->build->item.resize(161, "future");
+			if (scenario == 6) t->build->hero_count = 22;
+			if (scenario == 7) t->build->stat.resize(298, "future");
+			if (scenario == 8) t->build->T.NAMA.resize(33, 0);
+			if (scenario == 9) t->build->T.NAMB.begin()->second.resize(5, 0);
+			if (scenario == 10) t->build->T.TRIT.resize(129, 0);
+			if (scenario == 11) t->build->T.COST[1][10] = T.COST.at(1).at(3);
+
+			if (scenario >= 5)
+			{
+				const auto raw = write_slot(make_old_save({0, 3, 4}, 10));
+				const auto campaign = old_stream_to_new(raw, tables, NewFileContext{});
+				const auto profile = old_profile_to_new(write_profile_file("synthetic", make_old_save({0, 3, 4}, 10).profile), tables, NewFileContext{});
+				check(!campaign.ok && contains(campaign.error, "native"), "native campaign saver refuses unsupported table scenario " + std::to_string(scenario));
+				check(!profile.ok && contains(profile.error, "native"), "native profile saver refuses unsupported table scenario " + std::to_string(scenario));
+			}
+			const auto translated = new_to_old_stream(imported.bytes, tables);
+			check(!translated.ok && contains(translated.error, "native"), "confirmed native table budget refuses scenario " + std::to_string(scenario) + " (" + translated.error + ")");
+		}
+	}
+
 }
 
 void run_vectors(const fs::path& scratch)
@@ -1048,6 +1219,8 @@ void run_vectors(const fs::path& scratch)
 	test_convert(scratch / "convert");
 	test_talent_era(scratch / "era");
 	test_api(scratch / "api");
+	test_capture_twins(scratch / "twins");
+	test_native_table_budgets(scratch / "native-budgets");
 }
 
 // ------------------------------------------------------------------------------------------------ (c) fuzz

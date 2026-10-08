@@ -147,7 +147,8 @@ namespace lcsave::detail
 		u8 major = 1;
 		u8 minor = 0;
 		u16 flags = 0;
-		Value data;
+		Value data; // bytes = retained opaque payload
+		u32 retained_records = 0;
 	};
 	struct HeaderIn
 	{
@@ -333,6 +334,7 @@ namespace lcsave::detail
 		std::vector<std::pair<std::int64_t, std::int64_t>>& unexplained);
 	std::vector<std::uint8_t> convert_slot(const std::vector<std::uint8_t>& old_bytes, const TablesData& t,
 		const ConvertOptions& options, ConvertState& state);
+	void validate_native_tables(const TablesData& tables); // installed engine budgets, not reader ceilings
 	OldSlot reverse_slot(const std::vector<std::uint8_t>& new_bytes, const TablesData& t, const OldSlot* tmpl,
 		std::vector<std::string>& notes);
 	std::vector<std::uint8_t> stream_to_new(const std::vector<std::uint8_t>& old_stream, const TablesData& t,
