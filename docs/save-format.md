@@ -150,3 +150,10 @@ retaining shared or unowned handles. Numbered states must have unique placement 
 would otherwise be reset. Unsupported capture-status bits refuse before reset decisions. Successful runtime loads
 log each reverse-reader explanation and display a notice for zone-state or conversation-bit resets. These fixes
 change no field widths, section revisions or container major version. W11 remains open.
+
+Native dangling-item normalization: an unnumbered dynamic/smart item state can survive after its world-item slot
+has been released (for example, a zone-record reset during online loading). Native item restore tolerates an
+absent slot and cannot bind an item instance. The live writer omits that unusable state with an explicit ledger
+explanation, rather than refusing the whole campaign. Numbered identity loss still refuses; valid referenced items,
+carried/key-item counts, capture provenance and other strict no-drop checks are unchanged. Legacy importers keep
+their existing recorded-drop/LGCY policy. This is a native bookkeeping normalization, not a wire-layout change.
