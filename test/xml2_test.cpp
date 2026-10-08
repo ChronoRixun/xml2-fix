@@ -52,6 +52,7 @@
 #include <Xinput.h>
 
 #include "break_rule_rules.hpp"
+#include "personal_item_text_rules.hpp"
 #include "save_format_rules.hpp"
 #include "discord_ipc.hpp"
 #include "discord_rules.hpp"
@@ -5177,6 +5178,66 @@ namespace
 	// its instruction and retail byte there, inside the write span), the tab change as the exe does it with
 	// either set of bytes, then, when a copy of XMen2.exe is at hand, every guard against it, the tab table's
 	// names, and the change applied to that copy (exactly the five bytes).
+
+	void check_personal_item_text_rules()
+	{
+		using namespace personal_item_text_rules;
+		std::printf("[Game] PersonalItemText: scoped depth, byte guards and one call patch\n");
+		std::array<std::uint8_t, depth_offset + 8> menu{};
+		std::memcpy(menu.data(), &personal_vtable, 4);
+		std::memcpy(menu.data() + depth_offset, &retail_depth, 2);
+		const auto before = menu;
+		CHECK(configure_menu(menu.data()));
+		std::int16_t depth = 0;
+		std::memcpy(&depth, menu.data() + depth_offset, 2);
+		CHECK(depth == 10);
+		auto expected = before;
+		const std::int16_t ten = 10;
+		std::memcpy(expected.data() + depth_offset, &ten, 2);
+		CHECK(menu == expected); // exactly the signed depth field; nothing else
+		CHECK(!configure_menu(nullptr));
+		menu = before; menu[0] ^= 1;
+		const auto other_menu = menu;
+		CHECK(!configure_menu(menu.data()) && menu == other_menu);
+		menu = before; const std::int16_t custom = 27;
+		std::memcpy(menu.data() + depth_offset, &custom, 2);
+		const auto custom_menu = menu;
+		CHECK(!configure_menu(menu.data()) && menu == custom_menu);
+
+		std::vector<std::uint8_t> image(0x2b0000, 0xa5);
+		for (const auto& g : guards)
+		{
+			CHECK(limits_rules::valid_hex(g.hex));
+			for (std::size_t i = 0; i < limits_rules::hex_size(g.hex); ++i)
+				image[g.va - image_base + i] = limits_rules::hex_byte(g.hex, i);
+		}
+		const auto pristine = image;
+		std::array<std::uint8_t, 5> patch{};
+		patch.fill(0xcc); const auto untouched = patch;
+		CHECK(!make_patch(image.data(), false, 0x12345678, patch) && patch == untouched);
+		CHECK(make_patch(image.data(), true, 0x12345678, patch));
+		DWORD displacement = 0; std::memcpy(&displacement, patch.data() + 1, 4);
+		CHECK(patch[0] == 0xe8 && constructor_call + 5 + displacement == 0x12345678);
+		CHECK(image == pristine); // planning never mutates executable bytes
+		bool refused = true;
+		for (const auto& g : guards)
+			for (std::size_t i = 0; i < limits_rules::hex_size(g.hex); ++i)
+			{
+				const auto offset = g.va - image_base + i;
+				image[offset] ^= 1; patch = untouched;
+				refused &= !make_patch(image.data(), true, 0x12345678, patch) && patch == untouched;
+				image[offset] ^= 1;
+			}
+		CHECK(refused && image == pristine);
+		if (const auto exe = game_executable())
+		{
+			DWORD size = 0; auto mapped = map_image(*exe, size);
+			CHECK(mapped != nullptr);
+			if (mapped) { CHECK(first_mismatch(mapped) == nullptr); VirtualFree(mapped, 0, MEM_RELEASE); }
+		}
+		else std::printf("  skip  no executable for retail guard comparison\n");
+	}
+
 	void check_review_menu_rules()
 	{
 		using namespace review_menu_rules;
@@ -9656,6 +9717,12 @@ namespace
 
 int main(const int argc, char** argv)
 {
+	if (argc > 1 && std::strcmp(argv[1], "--personal-item-text-rules") == 0)
+	{
+		check_personal_item_text_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--script-rules") == 0)
 	{
 		check_forced_teams_rules();
@@ -9779,6 +9846,7 @@ int main(const int argc, char** argv)
 	check_end_unlock_rules();
 	check_new_game_plus_rules();
 	check_xtract_rules();
+	check_personal_item_text_rules();
 	check_review_menu_rules();
 	check_main_menu_rules();
 	check_window_title_rules();

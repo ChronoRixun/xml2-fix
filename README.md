@@ -523,6 +523,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `EndHeroUnlock` | `1` | `0`: the ending unlocks no hero and shows no popup |
 | `MainMenuItems` | *(XML2's names)* | the main menu's item names for the mouse slots and Quit, comma separated |
 | `ReviewStats` | `1` | `0`: the Review menu has no Stats tab |
+| `PersonalItemText` | `1` | Personal-item pictures sit behind their descriptions; `0` retains the original image depth. Other menus and explicit menu `depth` values are unchanged ([details](docs/personal-item-text.md)). |
 | `Xtract` | `1` | `0`: an Xtraction Point's menu has no "Xtract" world map choice |
 | `XPCurve` | `xml2` | `xml1`: X-Men Legends I's level table (cap 45) and kill XP |
 | `BreakRule` | `xml2` | `xml1`: an object whose definition carries `xml1structure` breaks only to an attack of that level on X-Men Legends I's scale ([details](docs/break-rule.md)) |
