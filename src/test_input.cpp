@@ -1,5 +1,6 @@
 #include "test_input.hpp"
 #include "test_state.hpp"
+#include "balance.hpp"
 #include "display.hpp"
 #include "frame_capture.hpp"
 #include "frame_rate.hpp"
@@ -10,6 +11,7 @@
 #include "ini.hpp"
 #include "log.hpp"
 #include "pad_input.hpp"
+#include "save_format.hpp"
 #include "test_input_rules.hpp"
 
 #define DIRECTINPUT_VERSION 0x0800
@@ -222,6 +224,7 @@ namespace test_input
 			}
 			test_state::sample();
 			pump_console(); // the game's own thread, between two runs of its console queue, whatever the read gave
+			save_format::pump(); // the pipe's `save dump` / `save check`: the game's serializer, on its own thread
 			if (FAILED(result))
 			{
 				logger::write_once("test:read-failed", "test: a keyboard read failed (%08lX) - the game re-acquires; pipe keys wait for that", result);
@@ -495,7 +498,7 @@ namespace test_input
 			// checked from a script. Then the engine tables' use, live/cap ([Limits], limits.hpp).
 			return "ok XML2 Fix " FIX_VERSION "; keyboard devices " + std::to_string(devices) + "; reads " + std::to_string(reads.load()) + "; keys held " +
 			       std::to_string(held) + "; " + pad_input::status() + "; game " + (game_in_foreground() ? "has" : "doesn't have") + " the focus; fps " +
-			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + limits::status() + "; " + geometry_sharing::status() + "; " + ladder_paths::status() + "; " + break_rule::status();
+			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + limits::status() + "; " + geometry_sharing::status() + "; " + ladder_paths::status() + "; " + break_rule::status() + "; " + save_format::status() + "; " + balance::status();
 		}
 
 		std::string handle(const std::string& line)
@@ -541,6 +544,8 @@ namespace test_input
 			case command::kind::events: return test_state::reply("events");
 			case command::kind::pad:
 				return pad_input::handle(cmd.pad);
+			case command::kind::save:
+				return save_format::pipe(cmd.text);
 			default:
 				logger::write("test: rejected '%s': %s", line.c_str(), cmd.error.c_str());
 				return "error " + cmd.error;

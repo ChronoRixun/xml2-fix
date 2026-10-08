@@ -1,0 +1,514 @@
+// lcsave_test: (a) the vectors of legends-classic tests/unit/test_lcsave.py (numbers copied, data invented in code),
+// (b) with --corpus: convert / reverse / dump every saveslot*.save under a folder and compare with the Python
+// reference's outputs next to the same relative path (<python>/<rel>.lcsave, .old.json, .new.json, .report.json),
+// (c) a fuzz of the old-file and new-file readers (truncated and mutated inputs: an error, never a crash).
+//
+//   lcsave_test                                    vectors and fuzz (CI)
+//   lcsave_test --corpus DIR --python DIR --data BUILD --binds BINDTREE [--out DIR] [--fuzz N]
+
+#include "internal.hpp"
+#include "lcsave.hpp"
+
+#include <Windows.h>
+
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <string>
+#include <vector>
+
+namespace fs = std::filesystem;
+using namespace lcsave;
+using namespace lcsave::detail;
+
+namespace
+{
+	int failures = 0;
+	void check(bool ok, const std::string& what)
+	{
+		if (!ok)
+		{
+			++failures;
+			std::printf("FAIL: %s\n", what.c_str());
+		}
+	}
+
+	std::vector<std::uint8_t> read_all(const fs::path& p)
+	{
+		std::ifstream f(p, std::ios::binary);
+		return std::vector<std::uint8_t>((std::istreambuf_iterator<char>(f)), {});
+	}
+
+	// the reference wrote its dumps through a Windows text-mode file: CRLF line ends; json.dumps itself gives LF
+	std::string read_text(const fs::path& p)
+	{
+		std::ifstream f(p, std::ios::binary);
+		std::string s((std::istreambuf_iterator<char>(f)), {});
+		std::string out;
+		out.reserve(s.size());
+		for (std::size_t k = 0; k < s.size(); ++k)
+		{
+			if (!(s[k] == 13 && k + 1 < s.size() && s[k + 1] == 10)) out.push_back(s[k]);
+		}
+		return out;
+	}
+
+	void write_all(const fs::path& p, const void* data, std::size_t n)
+	{
+		fs::create_directories(p.parent_path());
+		std::ofstream f(p, std::ios::binary);
+		f.write(static_cast<const char*>(data), static_cast<std::streamsize>(n));
+	}
+
+	struct Rng
+	{
+		std::uint64_t s;
+		std::uint32_t next()
+		{
+			s ^= s << 13;
+			s ^= s >> 7;
+			s ^= s << 17;
+			return static_cast<std::uint32_t>(s);
+		}
+	};
+
+	// the two files are equal but for the KEYS documentation text: same header fields (but the length and CRCs), same
+	// sections with identical payloads, and KEYS with the same ids and domains whose texts agree once the reference's
+	// display text ('/'.join(fields)) is lower-cased and ours (the catalogue's canonical key) is unescaped
+	bool equal_but_keys_text(const std::vector<std::uint8_t>& a, const std::vector<std::uint8_t>& b, std::string& why)
+	{
+		try
+		{
+			const auto fa = read_file(a.data(), a.size(), kind_campaign);
+			const auto fb = read_file(b.data(), b.size(), kind_campaign);
+			auto ha = fa.header, hb = fb.header;
+			ha.file_length = hb.file_length = 0;
+			ha.body_crc = hb.body_crc = 0;
+			ha.header_crc = hb.header_crc = 0;
+			if (std::memcmp(&ha, &hb, sizeof ha) != 0) { why = "header"; return false; }
+			if (fa.order != fb.order) { why = "section order"; return false; }
+			for (const auto& tag : fa.order)
+			{
+				const auto& sa = fa.sections.at(tag);
+				const auto& sb = fb.sections.at(tag);
+				if (sa.entry.major != sb.entry.major || sa.entry.minor != sb.entry.minor || sa.entry.flags != sb.entry.flags ||
+					sa.entry.records != sb.entry.records)
+				{
+					why = "section entry " + tag;
+					return false;
+				}
+				if (tag != "KEYS")
+				{
+					if (sa.payload != sb.payload) { why = "section " + tag; return false; }
+					continue;
+				}
+				const auto& ka = sa.data["keys"].as_list();
+				const auto& kb = sb.data["keys"].as_list();
+				if (ka.size() != kb.size()) { why = "KEYS count"; return false; }
+				for (std::size_t k = 0; k < ka.size(); ++k)
+				{
+					if (ka[k]["id"] != kb[k]["id"] || ka[k]["domain"] != kb[k]["domain"]) { why = "KEYS id"; return false; }
+					const auto mine = py_lower(unescape_key(ka[k]["key"].as_text()), Enc::latin1);
+					const auto theirs = py_lower(kb[k]["key"].as_text(), Enc::latin1);
+					if (mine != theirs) { why = "KEYS text " + mine + " / " + theirs; return false; }
+				}
+			}
+			return true;
+		}
+		catch (const Error& e)
+		{
+			why = e.message;
+			return false;
+		}
+	}
+
+	// ------------------------------------------------------------------------------------------------ corpus
+	int run_corpus(const fs::path& corpus, const fs::path& python, const std::wstring& data, const std::wstring& binds, const fs::path& out)
+	{
+		Tables tables;
+		std::string error;
+		if (!load_tables(data, binds, tables, error))
+		{
+			std::printf("FAIL: load_tables: %s\n", error.c_str());
+			return 1;
+		}
+		std::printf("tables: catalogue revision %u, content version %u, %u heroes, %u stats, %u items, %u courses, %u objectives\n",
+			tables.catalogue_revision(), tables.content_version(), tables.hero_count(), tables.stats_count(), tables.item_count(),
+			tables.course_count(), tables.objective_count());
+		int files = 0, lcsave_equal = 0, lcsave_keys = 0, old_equal = 0, new_equal = 0, reverse_agree = 0, reverse_identical = 0, all_equal = 0;
+		int saver_ok = 0, saver_same = 0, adds_files = 0, adds_total = 0;
+		std::vector<fs::path> paths;
+		for (const auto& e : fs::recursive_directory_iterator(corpus))
+		{
+			const auto name = e.path().filename().string();
+			if (e.is_regular_file() && name.rfind("saveslot", 0) == 0 && e.path().extension() == ".save") paths.push_back(e.path());
+		}
+		std::sort(paths.begin(), paths.end());
+		// a dump without the given key and with every zone record's states sorted (dump.semantic_diff compares them as
+		// multisets: the converter orders numbered states by the save era's ordinals, the saver by the build's)
+		auto without = [](Value d, const char* key)
+		{
+			Value out = Value::dict();
+			for (const auto& it : d.d) if (!(it.key.type == Value::Type::text && it.key.s == key)) out.set(it.key, it.value);
+			if (out.has("zones"))
+			{
+				Value zones = out["zones"];
+				for (auto& z : zones.l)
+				{
+					Value states = z["states"];
+					std::stable_sort(states.l.begin(), states.l.end(), [](const Value& x, const Value& y) { return to_json(x) < to_json(y); });
+					z.set("states", std::move(states));
+				}
+				out.set("zones", std::move(zones));
+			}
+			return out;
+		};
+		for (const auto& p : paths)
+		{
+			++files;
+			const auto rel = fs::relative(p, corpus);
+			const auto base = python / rel;
+			const auto old_bytes = read_all(p);
+			const auto py_lcsave = read_all(base.string() + ".lcsave");
+			const auto py_old = read_text(base.string() + ".old.json");
+			const auto py_new = read_text(base.string() + ".new.json");
+			const auto py_report = read_text(base.string() + ".report.json");
+			ConvertOptions options;
+			options.original_name = p.filename().string();
+			try
+			{
+				const auto f = read_file(py_lcsave.data(), py_lcsave.size(), kind_campaign);
+				options.fixed_saved_at = true;
+				options.saved_at = static_cast<std::uint64_t>(f.data("META")["saved_at"].as_int());
+			}
+			catch (const Error& e)
+			{
+				std::printf("  %s: the Python .lcsave does not read (%s)\n", rel.string().c_str(), e.message.c_str());
+			}
+			const auto r = convert_old_to_new(old_bytes, tables, options);
+			std::string status;
+			bool same_bytes = false, same_but_keys = false, same_old = false, same_new = false, same_reverse = false;
+			if (!r.ok)
+			{
+				status = " REFUSED: " + r.error;
+			}
+			else
+			{
+				same_bytes = r.bytes == py_lcsave;
+				std::string why;
+				same_but_keys = !same_bytes && equal_but_keys_text(r.bytes, py_lcsave, why);
+				if (!same_bytes && !same_but_keys) status += " [lcsave: " + why + "]";
+				std::string err;
+				const auto new_json = dump(r.bytes, tables, err);
+				same_new = !new_json.empty() && new_json == py_new;
+				ConvertState st;
+				std::string old_json;
+				bool reversed_identical = false;
+				try
+				{
+					convert_slot(old_bytes, *tables.data, options, st);
+					const auto old = read_slot(old_bytes.data(), old_bytes.size());
+					old_json = to_json(dump_old(old, *tables.data, st.start_era, st.items_era));
+					std::vector<std::string> notes;
+					const auto back = reverse_slot(r.bytes, *tables.data, &old, notes);
+					reversed_identical = write_slot(back) == old_bytes;
+					// the loader's direction without a template, then the saver's direction on that stream: the game state
+					// must come back as the converter wrote it (the dumps equal but for LGCY, which only a conversion writes)
+					const auto plain = new_to_old_stream(r.bytes, tables);
+					if (!plain.ok || plain.bytes.size() != old_slot_size)
+					{
+						status += " [loader stream failed: " + plain.error + "]";
+					}
+					else
+					{
+						NewFileContext ctx;
+						ctx.description = cstr(reinterpret_cast<const char*>(old.description_raw), 0x80);
+						ctx.saved_at = options.saved_at;
+						ctx.campaign_serial = 1;
+						const std::vector<std::uint8_t> payload(plain.bytes.begin() + old_envelope, plain.bytes.end());
+						const auto saved = old_stream_to_new(payload, tables, ctx);
+						if (!saved.ok)
+						{
+							status += " [saver refused: " + saved.error + "]";
+						}
+						else
+						{
+							++saver_ok;
+							const bool same = to_json(without(dump_new(saved.bytes, *tables.data), "lgcy")) ==
+								to_json(without(dump_new(r.bytes, *tables.data), "lgcy"));
+							saver_same += same;
+							if (!same)
+							{
+								status += " [saver round trip differs]";
+								if (!out.empty())
+								{
+									const auto a = to_json(dump_new(saved.bytes, *tables.data));
+									write_all(out / (rel.string() + ".saver.json"), a.data(), a.size());
+								}
+							}
+						}
+					}
+					std::vector<TalentAdd> adds;
+					if (missing_talents(old_bytes, tables, adds) && !adds.empty())
+					{
+						++adds_files;
+						adds_total += static_cast<int>(adds.size());
+					}
+				}
+				catch (const Error& e)
+				{
+					status += " [reverse/dump error: " + e.message + "]";
+				}
+				same_old = !old_json.empty() && old_json == py_old;
+				const bool py_identical = py_report.find("\"reverse_identical\": true") != std::string::npos;
+				same_reverse = reversed_identical == py_identical;
+				if (reversed_identical) ++reverse_identical;
+				if (!out.empty())
+				{
+					write_all(out / (rel.string() + ".lcsave"), r.bytes.data(), r.bytes.size());
+					write_all(out / (rel.string() + ".old.json"), old_json.data(), old_json.size());
+					write_all(out / (rel.string() + ".new.json"), new_json.data(), new_json.size());
+				}
+				status += std::string(same_bytes ? " lcsave=equal" : same_but_keys ? " lcsave=equal-but-KEYS-text" : " lcsave=DIFFERS") +
+					(same_old ? " old.json=equal" : " old.json=DIFFERS") + (same_new ? " new.json=equal" : " new.json=DIFFERS") +
+					" reverse_identical=" + (reversed_identical ? "yes" : "no") + (same_reverse ? " (as Python)" : " (NOT as Python)");
+			}
+			lcsave_equal += same_bytes;
+			lcsave_keys += same_but_keys;
+			old_equal += same_old;
+			new_equal += same_new;
+			reverse_agree += same_reverse;
+			const bool all = (same_bytes || same_but_keys) && same_old && same_new && same_reverse;
+			all_equal += all;
+			std::printf("%s %s:%s\n", all ? "equal  " : "DIFFERS", rel.string().c_str(), status.c_str());
+		}
+		std::printf("corpus: %d files; .lcsave byte-identical %d, identical but for the KEYS text %d; old dump equal %d; new dump equal %d; "
+			"reverse byte-exact %d (agrees with the Python report %d); all equal %d\n", files, lcsave_equal, lcsave_keys, old_equal, new_equal,
+			reverse_identical, reverse_agree, all_equal);
+		std::printf("loader -> saver round trip: saved %d, same game state %d; missing herostat talents: %d files, %d talents\n", saver_ok,
+			saver_same, adds_files, adds_total);
+		return files && all_equal == files ? 0 : 1;
+	}
+}
+
+// everything load_tables parsed, as JSON (keys in hex): compare_tables.py checks it against the builder's own readers
+// (legends-classic lcsave.lcfiles read_catalogue_lcc / read_legacy_lcm / read_lcbind) table by table
+static std::string tables_json(const Tables& tables)
+{
+	const auto& t = *tables.data;
+	auto I = [](std::int64_t v) { return Value::integer(v); };
+	auto H = [](const std::string& s) { return Value::text(hex(reinterpret_cast<const std::uint8_t*>(s.data()), s.size())); };
+	auto row = [&](u32 g, u32 p, u32 id)
+	{
+		Value r = Value::list();
+		r.push(I(g));
+		r.push(I(p));
+		r.push(I(id));
+		return r;
+	};
+	Value cat = Value::dict({{"revision", I(t.catalogue.revision)}, {"content_version", I(t.catalogue.content_version)}});
+	Value entries = Value::list();
+	for (const auto& e : t.catalogue.entries)
+	{
+		Value aliases = Value::list();
+		for (const auto& a : e.aliases) aliases.push(H(a));
+		entries.push(Value::dict({{"domain", I(e.domain)}, {"id", I(e.id)}, {"attributes", I(e.attributes)}, {"flags", I(e.retired ? 1 : 0)},
+			{"successor", I(e.successor)}, {"key", H(e.key)}, {"aliases", aliases}}));
+	}
+	cat.set("entries", entries);
+	Value eras = Value::list();
+	for (const auto& e : t.eras)
+	{
+		Value tabs = Value::dict();
+		auto list = [&](const char* tag, const std::vector<u32>& l)
+		{
+			Value rows = Value::list();
+			for (u32 i = 0; i < l.size(); ++i) rows.push(row(0, i, l[i]));
+			tabs.set(tag, rows);
+		};
+		list("STAT", e.STAT);
+		list("ENHC", e.ENHC);
+		list("NAMA", e.NAMA);
+		list("TRIT", e.TRIT);
+		list("MSNF", e.MSNF);
+		list("OBJV", e.OBJV);
+		list("DRCS", e.DRCS);
+		list("DRGR", e.DRGR);
+		list("XPNT", e.XPNT);
+		list("ZONE", e.ZONE);
+		Value item = Value::list(), namb = Value::list(), taln = Value::list(), cost = Value::list(), revw = Value::list(), triv = Value::list(),
+			iown = Value::list(), town = Value::list();
+		for (u32 i = 0; i < e.ITEM.size(); ++i) item.push(row(i < e.ITEM_cat.size() ? e.ITEM_cat[i] : 0, i, e.ITEM[i]));
+		for (const auto& [c, l] : e.NAMB) for (u32 i = 0; i < l.size(); ++i) namb.push(row(c, i, l[i]));
+		for (u32 i = 0; i < e.TALN_shared.size(); ++i) taln.push(row(0, i, e.TALN_shared[i]));
+		for (const auto& [si, l] : e.TALN_hero) for (u32 i = 0; i < l.size(); ++i) taln.push(row(si, i, l[i]));
+		for (const auto& [si, slots] : e.COST) for (const auto& [s, id] : slots) cost.push(row(si, s, id));
+		for (const auto& [k, id] : e.REVW) revw.push(row(static_cast<u32>(k.first), static_cast<u32>(k.second), id));
+		for (const auto& [k, id] : e.TRIV) triv.push(row(static_cast<u32>(k.first), static_cast<u32>(k.second), id));
+		for (u32 d = 0; d < e.ITEM_own.size(); ++d) for (u32 k = 0; k < e.ITEM_own[d].size(); ++k) iown.push(row(d, k, e.ITEM_own[d][k]));
+		for (u32 d = 0; d < e.TRIT_own.size(); ++d) for (u32 k = 0; k < e.TRIT_own[d].size(); ++k) town.push(row(d, k, e.TRIT_own[d][k]));
+		tabs.set("ITEM", item);
+		tabs.set("NAMB", namb);
+		tabs.set("TALN", taln);
+		tabs.set("COST", cost);
+		tabs.set("REVW", revw);
+		tabs.set("TRIV", triv);
+		tabs.set("IOWN", iown);
+		tabs.set("TOWN", town);
+		Value zones = Value::dict();
+		for (const auto& [zid, d] : e.zones)
+		{
+			Value m = Value::list(), a = Value::list();
+			for (const auto x : d.map) m.push(I(x));
+			for (const auto x : d.ambiguous) a.push(I(x));
+			zones.set(Value::text(std::to_string(zid)), Value::dict({{"map", m}, {"ambiguous", a}}));
+		}
+		Value hold = Value::dict();
+		for (const auto& [sid, l] : e.holdable)
+		{
+			Value v = Value::list();
+			for (const auto x : l) v.push(I(x));
+			hold.set(Value::text(std::to_string(sid)), v);
+		}
+		Value ranges = Value::list();
+		for (const auto* r : {e.prefix, e.suffix, e.trit, e.own})
+		{
+			Value p = Value::list();
+			p.push(I(r[0]));
+			p.push(I(r[1]));
+			ranges.push(p);
+		}
+		eras.push(Value::dict({{"content_version", I(e.cv)}, {"tables", tabs}, {"zones", zones}, {"hero_shared_holdable", hold},
+			{"conversation_digest", Value::text(e.has_digest ? hex(e.conversation_digest) : std::string())}, {"hero_count", I(e.hero_count)},
+			{"enhc_ranges", ranges}}));
+	}
+	Value legacy = Value::dict({{"map_id", I(t.legacy_map_id)}, {"catalogue_revision", I(t.legacy_catalogue_revision)}, {"eras", eras},
+		{"checks", Value::dict({{"hero_blocks", I(t.check_heroes)}, {"courses", I(t.check_courses)}, {"grades", I(t.check_grades)},
+			{"objectives", I(t.check_objectives)}})}});
+	Value binds = Value::list();
+	for (const auto& f : t.build->bind_files)
+	{
+		Value lists = Value::list();
+		for (const auto& l : f.lists)
+		{
+			Value rows = Value::list();
+			for (const auto& r : l.rows)
+			{
+				Value x = row(r.group, r.position, r.id);
+				x.push(H(r.key));
+				rows.push(x);
+			}
+			lists.push(Value::dict({{"tag", Value::text(l.tag)}, {"rule", I(l.rule)}, {"rows", rows}}));
+		}
+		binds.push(Value::dict({{"path", Value::text(f.path)}, {"sha1", H(f.sha1)}, {"lists", lists}}));
+	}
+	Value counts = Value::dict({{"heroes", I(tables.hero_count())}, {"stats", I(tables.stats_count())}, {"items", I(tables.item_count())},
+		{"courses", I(tables.course_count())}, {"objectives", I(tables.objective_count())}});
+	return to_json(Value::dict({{"catalogue", cat}, {"legacy", legacy}, {"binds", binds}, {"counts", counts}}));
+}
+
+extern int vector_failures;
+void run_vectors(const fs::path& scratch);
+void run_fuzz(const fs::path& scratch, int iterations, const std::vector<std::vector<std::uint8_t>>& extra_old);
+void fuzz_core(const Tables& tables, const std::vector<std::vector<std::uint8_t>>& olds, int iterations, const char* label);
+
+int main(int argc, char** argv)
+{
+	std::map<std::string, std::string> args;
+	for (int k = 1; k + 1 < argc; k += 2) args[argv[k]] = argv[k + 1];
+	const auto scratch = fs::temp_directory_path() / ("lcsave_test_" + std::to_string(GetCurrentProcessId()));
+	int result = 0;
+	std::vector<std::vector<std::uint8_t>> corpus_files;
+	if (args.count("--tables"))
+	{
+		// load a build's real set (bind files beside the data) and write what was parsed
+		Tables tables;
+		std::string error;
+		const auto dir = fs::path(args["--tables"]).wstring();
+		if (!load_tables(dir, args.count("--binds") ? fs::path(args["--binds"]).wstring() : dir, tables, error))
+		{
+			std::printf("FAIL: load_tables: %s\n", error.c_str());
+			return 1;
+		}
+		const auto text = tables_json(tables);
+		std::ofstream(args["--json"], std::ios::binary).write(text.data(), static_cast<std::streamsize>(text.size()));
+		std::printf("load_tables OK: %u bind files, catalogue revision %u, content version %u (reference %u), %u heroes, %u stats, %u items, "
+			"%u courses, %u objectives\n", static_cast<unsigned>(tables.data->build->bind_files.size()), tables.catalogue_revision(),
+			tables.data->catalogue.content_version, tables.content_version(), tables.hero_count(), tables.stats_count(), tables.item_count(),
+			tables.course_count(), tables.objective_count());
+		return 0;
+	}
+	if (args.count("--corpus"))
+	{
+		auto widen = [](const std::string& s) { return fs::path(s).wstring(); };
+		result = run_corpus(args["--corpus"], args["--python"], widen(args["--data"]), widen(args["--binds"]),
+			args.count("--out") ? fs::path(args["--out"]) : fs::path());
+		// (c) on real saves with the real tables: every 8th corpus file
+		Tables tables;
+		std::string error;
+		if (load_tables(widen(args["--data"]), widen(args["--binds"]), tables, error))
+		{
+			std::vector<fs::path> paths;
+			for (const auto& e : fs::recursive_directory_iterator(args["--corpus"]))
+			{
+				const auto name = e.path().filename().string();
+				if (e.is_regular_file() && name.rfind("saveslot", 0) == 0 && e.path().extension() == ".save") paths.push_back(e.path());
+			}
+			std::sort(paths.begin(), paths.end());
+			for (std::size_t k = 0; k < paths.size(); k += 8) corpus_files.push_back(read_all(paths[k]));
+			fuzz_core(tables, corpus_files, args.count("--real-fuzz") ? std::atoi(args["--real-fuzz"].c_str()) : 1000, "real saves, real tables");
+			corpus_files.clear();
+		}
+	}
+	if (args.count("--profile"))
+	{
+		// the profile file's three directions over a settings.dat: convert, reverse (bytes back), save direction, reverse
+		auto widen = [](const std::string& s) { return fs::path(s).wstring(); };
+		Tables tables;
+		std::string error;
+		if (!load_tables(widen(args["--data"]), widen(args["--binds"]), tables, error))
+		{
+			std::printf("tables: %s\n", error.c_str());
+			return 1;
+		}
+		const auto old = read_all(args["--profile"]);
+		ConvertOptions options;
+		options.original_name = "settings.dat";
+		const auto converted = convert_old_profile_to_new(old, tables, options);
+		check(converted.ok, "convert profile: " + converted.error);
+		if (!converted.ok) return 1;
+		const auto back = new_to_old_profile(converted.bytes, tables);
+		check(back.ok, "reverse profile: " + back.error);
+		check(back.ok && back.bytes == old, "reverse profile gives the original bytes");
+		if (back.ok && back.bytes != old)
+		{
+			for (std::size_t i = 0; i < old.size() && i < back.bytes.size(); ++i)
+			{
+				if (old[i] != back.bytes[i]) { std::printf("first difference at 0x%zx: %02x vs %02x\n", i, old[i], back.bytes[i]); break; }
+			}
+		}
+		NewFileContext context;
+		context.description = "Settings";
+		const auto saved = old_profile_to_new(old, tables, context);
+		check(saved.ok, "profile save direction: " + saved.error);
+		const auto back2 = saved.ok ? new_to_old_profile(saved.bytes, tables) : Result{};
+		check(back2.ok && back2.bytes == old, "profile save direction reverses to the original bytes");
+		std::string e1, e2;
+		const auto d1 = dump(converted.bytes, tables, e1);
+		std::printf("profile: converted %zu bytes, saved %zu bytes, dump %zu chars %s\n", converted.bytes.size(), saved.bytes.size(), d1.size(), e1.c_str());
+		std::printf("%s: %d failures\n", failures ? "FAILED" : "passed", failures);
+		return failures ? 1 : 0;
+	}
+	// (a) the reference's vectors, (c) the fuzz (on the synthetic saves; the corpus run adds nothing to it: the real
+	// saves need the real tables, which the fuzz's synthetic tables can not read)
+	run_vectors(scratch);
+	const int iterations = args.count("--fuzz") ? std::atoi(args["--fuzz"].c_str()) : 2000;
+	run_fuzz(scratch, iterations, corpus_files);
+	std::error_code ec;
+	fs::remove_all(scratch, ec);
+	failures += vector_failures;
+	std::printf("%s: %d failures\n", failures ? "FAILED" : "passed", failures);
+	return failures || result ? 1 : 0;
+}

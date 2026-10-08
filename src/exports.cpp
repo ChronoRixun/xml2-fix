@@ -18,8 +18,10 @@
 // VirtualPads, when nothing is plugged in) and take screenshots without the focus. It also
 // shows what the game is doing in Discord (Rich Presence, [Discord]; on unless switched off).
 
+#include "balance.hpp"
 #include "break_rule.hpp"
 #include "conversations.hpp"
+#include "confirmation_release.hpp"
 #include "objective_text.hpp"
 #include "discord_presence.hpp"
 #include "display.hpp"
@@ -42,6 +44,7 @@
 #include "pad_prompts.hpp"
 #include "postgame.hpp"
 #include "review_menu.hpp"
+#include "save_format.hpp"
 #include "test_input.hpp"
 #include "virtual_pad.hpp"
 #include "window_title.hpp"
@@ -166,6 +169,11 @@ namespace
 		game_version::install(game);
 
 		new_game::install(game);
+		// [Save] Format=lc: the LC save format's disk seam (the card's nine file methods, the stream helpers'
+		// skip branches, the zone placement file's bytes), used from the first save menu on. After new_game, whose
+		// [Game] SaveFolder re-points the folder the card builds at start-up and this reads at its first file
+		// operation; none of its sites or guards is anyone else's.
+		save_format::install(game);
 		// What the end credits run: one push operand in CREDITS_MENU, used only when a campaign ends.
 		postgame::install(game);
 		// The main menu's item names: the push operands of MAIN_MENU's own code (mouse, Quit), used from the
@@ -182,6 +190,9 @@ namespace
 		// so every read of the table and the cap is the patched one. Independent of the other patches here: none of
 		// its sites or guards is anyone else's.
 		xp_curve::install(game);
+		// [Balance]: X-Men Legends 1's combat numbers. Calls and one jump in the health, damage and roll functions and the
+		// style reader, first run when a character or a style loads; none of its sites or guards is anyone else's.
+		balance::install(game);
 		// The forced parties' script functions (seatParty and the rest). The game registers its script
 		// functions exactly once, from its own init: 0x40197b -> game vt+0x13c (0x46b750) -> the
 		// script interface's vt+0 (0x49fe30), which pushes its table and count and calls 0x4d75a0. That
@@ -195,6 +206,7 @@ namespace
 		// three code sites of the conversation system, used from the first conversation on; independent of the
 		// patches above (none of its sites or guards is anyone else's).
 		conversations::install(game);
+		confirmation_release::install(game);
 		objective_text::install(game);
 		// Before any of XMen2.exe's own code runs, as the engine limit adjuster must be: this DLL is a
 		// static import of libIGDisplay.dll, which XMen2.exe imports statically, so Windows runs this
