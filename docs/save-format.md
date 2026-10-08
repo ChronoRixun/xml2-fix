@@ -154,7 +154,7 @@ change no field widths, section revisions or container major version. W11 remain
 Native dangling-item normalization: an unnumbered dynamic/smart item state can survive after its world-item slot
 has been released (for example, a zone-record reset during online loading). Native item restore tolerates an
 absent slot and cannot bind an item instance. The live writer omits that unusable state with an explicit ledger
-explanation, rather than refusing the whole campaign. Numbered identity loss still refuses; valid referenced items,
+explanation, rather than refusing the whole campaign. Live numbered identity loss still refuses; valid referenced items,
 carried/key-item counts, capture provenance and other strict no-drop checks are unchanged. Legacy importers keep
 their existing recorded-drop/LGCY policy. This is a native bookkeeping normalization, not a wire-layout change.
 
@@ -163,3 +163,14 @@ sidecar. Their current-table numbering/names are validated before native applica
 is installed first. Missing metadata is no longer treated as evidence of a placement change. Unsupported inference
 refuses before application. This preserves saved zone object/fog state on same-build transfers without claiming
 observed capture provenance. The inference path does not hash conversation files or rewrite the incoming bytes.
+
+Dead numbered items with a missing world slot retain their placement/name identity as a tombstone. The native
+factory checks `flags_b & 8` at 0x465c35 before item restoration and removes the authored entity when clear.
+The writer keeps `flags_b`, position and identity, clears the unreachable item flag/payload, and records the
+normalization in its ledger. Alive numbered items remain strict; legacy imports keep their recorded-drop policy.
+This revision 2.4 follow-up changes no field widths or section versions.
+
+For a campaign refusal, the runtime now logs the complete translation ledger. Optional
+`[Debug] SaveDumpRefused=1` also retains the actual native image as `SaveLC/refused-native-<FILETIME>.save` in the
+configured save folder. It defaults off and never replaces the campaign. The dump alone lacks the runtime's
+capture sidecar, so an offline replay may infer associations differently from the original capture-aware write.

@@ -1029,6 +1029,16 @@ namespace save_format
 			const auto result = kind == kind_profile ? lcsave::old_profile_to_new(image, tables, context) : lcsave::old_stream_to_new(image, tables, context);
 			if (!result.ok)
 			{
+				// CORE-BEGIN: retain the actual refused campaign stream while its image is alive.
+				logger::write("save core: refused write ledger: %s",result.ledger.c_str());
+				if(kind==kind_campaign && ini::flag(L"Debug",L"SaveDumpRefused",false))
+				{
+					std::string dump_error;
+					const auto dump_path=lc_dir+"refused-native-"+std::to_string(now_filetime())+".save";
+					const bool dumped=write_atomically(dump_path,image,dump_error);
+					logger::write("save core: refused native dump %s: %s",dump_path.c_str(),dumped?"written":dump_error.c_str());
+				}
+				// CORE-END
 				refuse("the save couldn't be expressed in the LC format: " + result.error);
 				return false;
 			}

@@ -83,9 +83,9 @@ namespace
 		const auto folder = root / fs::path(name);
 		const auto build = root / fs::path(fields[1]);
 		if (!inside(root, folder) || !inside(root, build) || !inside(root, folder / "actual.lcsave")) return report("case/build path escapes fixture root");
-		if (mode != "campaign" && mode != "profile" && mode != "profile-import" && mode != "reverse" && mode != "refuse" && mode != "native-campaign" && mode != "native-transfer") return report("unsupported mode");
+		if (mode != "campaign" && mode != "profile" && mode != "profile-import" && mode != "reverse" && mode != "refuse" && mode != "native-campaign" && mode != "native-transfer" && mode != "native-dead-item") return report("unsupported mode");
 		std::vector<std::uint8_t> input, expected;
-		if (!read_bytes(folder / (mode == "profile-import" || mode == "native-campaign" || mode == "native-transfer" ? "input.raw" : "input.lcsave"), input)) return report("cannot read input");
+		if (!read_bytes(folder / (mode == "profile-import" || mode == "native-campaign" || mode == "native-transfer" || mode == "native-dead-item" ? "input.raw" : "input.lcsave"), input)) return report("cannot read input");
 		const auto expected_name = mode == "reverse" ? "expected.old" : mode == "refuse" ? "expected.error" : "expected.lcsave";
 		if (!read_bytes(folder / expected_name, expected)) return report("cannot read expected output");
 		lcsave::Tables tables;
@@ -118,7 +118,7 @@ namespace
 			options.saved_at = 0;
 			result = lcsave::convert_old_profile_to_new(input, tables, options);
 		}
-		else if (mode == "native-campaign" || mode == "native-transfer")
+		else if (mode == "native-campaign" || mode == "native-transfer" || mode == "native-dead-item")
 		{
 			lcsave::NewFileContext context;
 			context.description = description(input);
@@ -133,6 +133,7 @@ namespace
 			         !lcsave::loaded_zone_metadata(context.retained_file,tables,context.zone_captures,error)) return report("metadata: "+error);
 			result = lcsave::old_stream_to_new(input,tables,context);
 			if (mode == "native-campaign" && result.ledger.find("dangling world item slot 13") == std::string::npos) return report("normalization ledger missing");
+			if (mode == "native-dead-item" && result.ledger.find("dead numbered item slot 13") == std::string::npos) return report("dead item normalization ledger missing");
 		}
 		else
 		{
