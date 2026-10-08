@@ -43,6 +43,7 @@
 #include "pad_prompts.hpp"
 #include "postgame.hpp"
 #include "review_menu.hpp"
+#include "personal_item_text.hpp"
 #include "save_format.hpp"
 #include "test_input.hpp"
 #include "virtual_pad.hpp"
@@ -180,6 +181,7 @@ namespace
 		main_menu::install(game);
 		// The Review menu's tabs: five imm8s in REVIEW_PATHS_MENU's own code, used from the first Review on.
 		review_menu::install(game);
+		personal_item_text::install(game);
 		// An Xtraction Point's Xtract choice ([Game] Xtract=0): two bytes in extractionPoint's own
 		// code, used from the first Xtraction Point on.
 		xtract::install(game);
