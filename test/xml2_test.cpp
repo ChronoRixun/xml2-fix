@@ -9656,6 +9656,12 @@ namespace
 
 int main(const int argc, char** argv)
 {
+	if (argc > 1 && std::strcmp(argv[1], "--game-version-rules") == 0)
+	{
+		check_game_version_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--script-rules") == 0)
 	{
 		check_forced_teams_rules();

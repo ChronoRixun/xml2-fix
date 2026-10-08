@@ -160,6 +160,7 @@ namespace lcsave::detail
 					r.position = in.get<u32>();
 					r.id = in.get<u32>();
 					r.key = in.str();
+					if (!r.id) fail(what + ": unsupported ID-0/unknown keyref " + r.key);
 					const u32 expect = r.key.empty() ? 0 : cat.lookup(dom, hash_of_key(r.key));
 					if (expect != r.id)
 					{

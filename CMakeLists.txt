@@ -53,6 +53,8 @@ add_library(xml2_fix SHARED
 	src/options_menu.cpp
 	src/new_game.cpp
 	src/save_format.cpp
+	src/save_content_guards.cpp
+	src/save_trace.cpp
 	src/postgame.cpp
 	src/game_version.cpp
 	src/window_title.cpp
@@ -102,3 +104,14 @@ target_include_directories(xml2_stat_points_test PRIVATE src)
 # command line), and a fuzz of the readers.
 add_executable(lcsave_test test/lcsave_test.cpp test/lcsave_vectors.cpp)
 target_link_libraries(lcsave_test PRIVATE lcsave)
+
+# Save protection and compatibility decisions on synthetic fixtures.
+add_executable(xml2_save_guards_test test/save_guard_rules_test.cpp)
+target_include_directories(xml2_save_guards_test PRIVATE src)
+
+# Effective mod winners and unsupported keyrefs, using original synthetic files.
+add_executable(xml2_save_content_guards_test test/save_content_guards_test.cpp
+    src/save_content_guards.cpp src/mod_loader.cpp src/iat_hook.cpp src/ini.cpp src/log.cpp src/game_version.cpp)
+target_include_directories(xml2_save_content_guards_test PRIVATE src)
+target_link_libraries(xml2_save_content_guards_test PRIVATE lcsave ws2_32)
+target_compile_definitions(xml2_save_content_guards_test PRIVATE FIX_LOG_FILE=L"save-guard-test.log")

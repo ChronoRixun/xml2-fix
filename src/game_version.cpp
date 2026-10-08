@@ -1,4 +1,7 @@
+#include <WinSock2.h>
 #include "game_version.hpp"
+#include "iat_hook.hpp"
+#include "save_guard_rules.hpp"
 
 #include "game_version_rules.hpp"
 #include "ini.hpp"
@@ -13,6 +16,21 @@ namespace game_version
 	namespace
 	{
 		using namespace game_version_rules;
+
+		bool lc_required = false;
+		bool version_verified = false;
+		using socket_t = SOCKET(WSAAPI*)(int,int,int);
+		socket_t real_socket = nullptr;
+		SOCKET WSAAPI guarded_socket(int family, int type, int protocol)
+		{
+			if (!save_guard_rules::online_allowed(lc_required,version_verified))
+			{
+				WSASetLastError(WSAEACCES);
+				logger::write_once("lc-online-refused","online: LC host/join refused: the four-character release version patch did not verify");
+				return INVALID_SOCKET;
+			}
+			return real_socket(family,type,protocol);
+		}
 
 		constexpr const char* as_before = "online games stay on the game's own version, 1.30";
 
@@ -34,12 +52,33 @@ namespace game_version
 		}
 	}
 
+	bool startup_allowed()
+	{
+		return save_guard_rules::startup_allowed(lc_required,real_socket != nullptr);
+	}
+
 	void install(const HMODULE game)
 	{
+		version_verified = false;
+		lc_required = save_format_rules::parse_mode(ini::text(L"Save",L"Format").value_or("")).value == save_format_rules::mode::lc;
+		if (lc_required)
+		{
+			real_socket = reinterpret_cast<socket_t>(iat_hook::hook(game,"WS2_32.dll","socket",23,reinterpret_cast<void*>(&guarded_socket)));
+			if (!real_socket)
+			{
+				logger::write("online: ERROR: LC socket exclusion hook could not be installed");
+				return;
+			}
+		}
 		const auto chosen = parse_version(ini::text(L"Online", L"GameVersion"));
 		if (!chosen.error.empty())
 		{
-			logger::write("online: [Online] GameVersion %s - %s", chosen.error.c_str(), as_before);
+			logger::write("online: [Online] GameVersion %s - %s", chosen.error.c_str(), (lc_required ? "LC host/join sockets refused" : as_before));
+			return;
+		}
+		if (lc_required && (chosen.version.size() != version_max || chosen.version == retail_version))
+		{
+			logger::write("online: LC requires an assigned four-character release token; host/join sockets refused");
 			return;
 		}
 		if (chosen.version.empty())
@@ -53,12 +92,12 @@ namespace game_version
 		}
 		if (!game || reinterpret_cast<std::uintptr_t>(game) != image_base)
 		{
-			logger::write("online: XMen2.exe isn't loaded at 0x400000 (not the game?) - %s", as_before);
+			logger::write("online: XMen2.exe isn't loaded at 0x400000 (not the game?) - %s", (lc_required ? "LC host/join sockets refused" : as_before));
 			return;
 		}
 		if (const guard* g = first_mismatch_guarded())
 		{
-			logger::write("online: 0x%08lX isn't the retail code (%s) - %s", g->va, g->what, as_before);
+			logger::write("online: 0x%08lX isn't the retail code (%s) - %s", g->va, g->what, (lc_required ? "LC host/join sockets refused" : as_before));
 			return;
 		}
 
@@ -66,11 +105,19 @@ namespace game_version
 		DWORD protection = 0;
 		if (!VirtualProtect(target, patched_bytes, PAGE_READWRITE, &protection))
 		{
-			logger::write("online: ERROR: can't unprotect XMen2.exe's data at 0x%08lX (error %lu) - %s", version_va, GetLastError(), as_before);
+			logger::write("online: ERROR: can't unprotect XMen2.exe's data at 0x%08lX (error %lu) - %s", version_va, GetLastError(), (lc_required ? "LC host/join sockets refused" : as_before));
 			return;
 		}
 		game_version_rules::apply(game_image(), chosen.version);
-		VirtualProtect(target, patched_bytes, protection, &protection);
+		DWORD ignored = 0;
+		VirtualProtect(target, patched_bytes, protection, &ignored);
+		const auto expected = bytes_for(chosen.version);
+		version_verified = std::memcmp(target,expected.data(),expected.size()) == 0;
+		if (!version_verified)
+		{
+			logger::write("online: version patch readback failed; LC host/join sockets refused");
+			return;
+		}
 		logger::write("online: GameSpy game version %s ([Online] GameVersion; the game's own is 1.30, at 0x%08lX) - games of another version don't list or join",
 		              chosen.version.c_str(), version_va);
 	}

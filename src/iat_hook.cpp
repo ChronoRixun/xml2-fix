@@ -48,7 +48,7 @@ namespace iat_hook
 				}
 
 				DWORD old_protect = 0;
-				VirtualProtect(&addresses->u1.Function, sizeof(void*), PAGE_READWRITE, &old_protect);
+				if (!VirtualProtect(&addresses->u1.Function, sizeof(void*), PAGE_READWRITE, &old_protect)) return nullptr;
 				auto* previous = reinterpret_cast<void*>(addresses->u1.Function);
 				addresses->u1.Function = reinterpret_cast<ULONG_PTR>(replacement);
 				VirtualProtect(&addresses->u1.Function, sizeof(void*), old_protect, &old_protect);

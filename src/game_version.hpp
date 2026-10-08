@@ -13,5 +13,7 @@
 // game_version_rules.hpp. Without the key nothing is patched.
 namespace game_version
 {
+	// LC may start only with a working exclusion hook, including when the version patch is refused.
+	bool startup_allowed();
 	void install(HMODULE game);
 }

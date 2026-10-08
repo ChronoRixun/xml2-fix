@@ -7,6 +7,7 @@
 #include <Windows.h>
 
 #include <string>
+#include <cstdint>
 
 namespace save_format
 {
@@ -14,6 +15,10 @@ namespace save_format
 	// site byte-guarded, nothing patched when one differs. The tables and the import run at the first file
 	// operation (the game's thread).
 	void install(HMODULE game);
+
+	// Game thread only, after a proven successful native load (not just translation into the card buffer).
+	// Until that confirmation, a prior refused path stays protected; menu Delete also clears its latch.
+	void confirm_load_success(std::uint8_t kind, int slot);
 
 	// One line for the pipe's status.
 	std::string status();
