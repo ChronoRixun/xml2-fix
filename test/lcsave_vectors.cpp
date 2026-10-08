@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <fstream>
 #include <functional>
 #include <map>
@@ -1170,6 +1171,40 @@ namespace
 			"same-name twin cache ordinal matches translated native map");
 	}
 
+	void test_native_transfer_metadata(const fs::path& folder)
+	{
+		auto t=make_tables(folder,"sh_might",false);Tables tables;tables.data=t;
+		auto native=make_old_save({0,3,4},10);std::memset(native.zones[0].states[1].payload,0xa5,8);std::memset(native.zones[0].tail.fog,0x55,old_fog_bytes);
+		const auto raw=write_slot(native);
+		for(int envelope=0;envelope<2;++envelope)
+		{
+			const std::vector<std::uint8_t> stream(raw.begin()+(envelope?old_envelope:0),raw.end());
+			std::vector<ZoneCaptureMetadata> captures;std::string error;
+			const bool ok=native_zone_metadata(stream,tables,captures,error);
+			check(ok&&captures.size()==1,"native transfer metadata available before restore: "+error);if(!ok||captures.empty())continue;
+			check(captures[0].capture_flags==2&&captures[0].conversation_digest==Hash{}&&captures[0].entities[0].ordinal==1,"native provenance inferred, not relabeled observed");
+			NewFileContext context;context.zone_captures=captures;context.require_capture_metadata=true;
+			const auto saved=old_stream_to_new(stream,tables,context);check(saved.ok,"native transfer recording with inferred associations: "+saved.error);
+			if(saved.ok){const auto loaded=new_to_old_stream(saved.bytes,tables);check(loaded.ok,"native transfer reloaded");if(loaded.ok){const auto m=read_slot(loaded.bytes.data(),loaded.bytes.size());const auto& z=m.zones[0];check(z.states[z.tail.ordinal_map[0]].payload[0]==0xa5&&z.tail.fog[0]==0x55,"door/object payload and fog survive native transfer");}}
+			check(write_slot(native)==raw,"native metadata extraction does not mutate source");
+		}
+		native.zones[0].states[1].def_name=native.zones[0].states[3].def_name;
+		std::vector<ZoneCaptureMetadata> captures;std::string error;
+		check(!native_zone_metadata(write_slot(native),tables,captures,error)&&captures.empty(),"unsupported native numbering refuses before application");
+		for(const auto stamp : {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity()})
+		{
+			auto invalid=read_slot(raw.data(),raw.size());invalid.zones[0].tail.time_stamp=stamp;
+			check(!native_zone_metadata(write_slot(invalid),tables,captures,error)&&captures.empty(),"nonfinite inferred timestamp refuses before native application");
+		}
+		{
+			auto invalid=read_slot(raw.data(),raw.size());invalid.zones.push_back(invalid.zones[0]);
+			check(!native_zone_metadata(write_slot(invalid),tables,captures,error)&&captures.empty(),"duplicate inferred zone refuses before native application");
+		}
+		// A regular file cannot be walked as a conversation directory. Metadata extraction must not touch it.
+		std::ofstream(folder/"Conversations")<<"synthetic non-directory";
+		check(native_zone_metadata(raw,tables,captures,error)&&captures.size()==1,"native transfer avoids conversation hashing on the join path");
+	}
+
 	void test_native_dangling_world_state(const fs::path& folder)
 	{
 		auto t = make_tables(folder, "sh_might", false); Tables tables; tables.data = t;
@@ -1308,6 +1343,7 @@ void run_vectors(const fs::path& scratch)
 	test_capture_twins(scratch / "twins");
 	test_review_resets(scratch / "review");
 	test_native_dangling_world_state(scratch / "dangling-world");
+	test_native_transfer_metadata(scratch / "native-transfer");
 	test_native_table_budgets(scratch / "native-budgets");
 }
 

@@ -83,9 +83,9 @@ namespace
 		const auto folder = root / fs::path(name);
 		const auto build = root / fs::path(fields[1]);
 		if (!inside(root, folder) || !inside(root, build) || !inside(root, folder / "actual.lcsave")) return report("case/build path escapes fixture root");
-		if (mode != "campaign" && mode != "profile" && mode != "profile-import" && mode != "reverse" && mode != "refuse" && mode != "native-campaign") return report("unsupported mode");
+		if (mode != "campaign" && mode != "profile" && mode != "profile-import" && mode != "reverse" && mode != "refuse" && mode != "native-campaign" && mode != "native-transfer") return report("unsupported mode");
 		std::vector<std::uint8_t> input, expected;
-		if (!read_bytes(folder / (mode == "profile-import" || mode == "native-campaign" ? "input.raw" : "input.lcsave"), input)) return report("cannot read input");
+		if (!read_bytes(folder / (mode == "profile-import" || mode == "native-campaign" || mode == "native-transfer" ? "input.raw" : "input.lcsave"), input)) return report("cannot read input");
 		const auto expected_name = mode == "reverse" ? "expected.old" : mode == "refuse" ? "expected.error" : "expected.lcsave";
 		if (!read_bytes(folder / expected_name, expected)) return report("cannot read expected output");
 		lcsave::Tables tables;
@@ -118,17 +118,21 @@ namespace
 			options.saved_at = 0;
 			result = lcsave::convert_old_profile_to_new(input, tables, options);
 		}
-		else if (mode == "native-campaign")
+		else if (mode == "native-campaign" || mode == "native-transfer")
 		{
 			lcsave::NewFileContext context;
 			context.description = description(input);
 			context.saved_at = 0; context.writer_version = 0x01040000; context.writer = "XML2 Fix";
 			context.slot = 0; context.campaign_serial = 17; context.save_sequence = sequence;
 			context.require_capture_metadata = true;
-			if (!read_bytes(folder / "metadata.lcsave",context.retained_file) ||
-			    !lcsave::loaded_zone_metadata(context.retained_file,tables,context.zone_captures,error)) return report("metadata: "+error);
+			if (mode == "native-transfer")
+			{
+				if (!lcsave::native_zone_metadata(input,tables,context.zone_captures,error)) return report("transfer metadata: "+error);
+			}
+			else if (!read_bytes(folder / "metadata.lcsave",context.retained_file) ||
+			         !lcsave::loaded_zone_metadata(context.retained_file,tables,context.zone_captures,error)) return report("metadata: "+error);
 			result = lcsave::old_stream_to_new(input,tables,context);
-			if (result.ledger.find("dangling world item slot 13") == std::string::npos) return report("normalization ledger missing");
+			if (mode == "native-campaign" && result.ledger.find("dangling world item slot 13") == std::string::npos) return report("normalization ledger missing");
 		}
 		else
 		{

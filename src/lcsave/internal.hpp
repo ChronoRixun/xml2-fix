@@ -334,6 +334,7 @@ namespace lcsave::detail
 		std::vector<std::pair<std::int64_t, std::int64_t>>& unexplained);
 	std::vector<std::uint8_t> convert_slot(const std::vector<std::uint8_t>& old_bytes, const TablesData& t,
 		const ConvertOptions& options, ConvertState& state);
+	void validate_native_sections(const FileIn& file); // semantic preflight, no conversation I/O
 	void validate_native_tables(const TablesData& tables); // installed engine budgets, not reader ceilings
 	OldSlot reverse_slot(const std::vector<std::uint8_t>& new_bytes, const TablesData& t, const OldSlot* tmpl,
 		std::vector<std::string>& notes);

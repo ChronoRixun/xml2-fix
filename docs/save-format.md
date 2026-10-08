@@ -157,3 +157,9 @@ absent slot and cannot bind an item instance. The live writer omits that unusabl
 explanation, rather than refusing the whole campaign. Numbered identity loss still refuses; valid referenced items,
 carried/key-item counts, capture provenance and other strict no-drop checks are unchanged. Legacy importers keep
 their existing recorded-drop/LGCY policy. This is a native bookkeeping normalization, not a wire-layout change.
+
+Native transfer provenance: host mode0 and peer mode2 loads can carry old native zone records without an LC file
+sidecar. Their current-table numbering/names are validated before native application, and inferred flag2 metadata
+is installed first. Missing metadata is no longer treated as evidence of a placement change. Unsupported inference
+refuses before application. This preserves saved zone object/fog state on same-build transfers without claiming
+observed capture provenance. The inference path does not hash conversation files or rewrite the incoming bytes.

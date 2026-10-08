@@ -133,3 +133,9 @@ instance. Numbered dangling references and unrelated translation drops still ref
 log the ledger after the atomic write. Legacy conversion retains its previous drop counts and LGCY bytes.
 Synthetic `native-campaign` parity cases provide input.raw, metadata.lcsave and expected.lcsave, testing a complete
 native-save direction with observed capture metadata and retained legacy provenance.
+
+`native_zone_metadata` accepts a native payload or old envelope and supplies validated current-table associations,
+exact f32 timestamps, flag2 and a zero conversation digest for incoming native transfers with no LC sidecar. It
+extracts associations directly from an in-memory temporary translation; it never runs reverse or hashes conversation
+files. The runtime installs this metadata before native application. Same-name ambiguity/source factory skips still
+need an actual capture sidecar; metadata extraction does not replace available-pool preflight.

@@ -577,6 +577,11 @@ namespace lcsave::detail
 		}
 	}
 
+	void validate_native_sections(const FileIn& file)
+	{
+		preflight(file);
+	}
+
 	OldSlot reverse_slot(const std::vector<std::uint8_t>& new_bytes, const TablesData& t, const OldSlot* tmpl, std::vector<std::string>& notes)
 	{
 		const auto f = read_file(new_bytes.data(), new_bytes.size(), kind_campaign);
