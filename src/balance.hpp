@@ -2,7 +2,9 @@
 
 #include <Windows.h>
 
+#include <optional>
 #include <string>
+#include <vector>
 
 // X-Men Legends 1's combat numbers, for a mod that carries XML1's characters (the X-Men Legends 1 port):
 //
@@ -27,6 +29,21 @@ namespace balance
 	// Reads [Balance] and patches XMen2.exe for it. From DllMain (see exports.cpp): the style files, whose
 	// DamageScale names the parser reads, load with the first character.
 	void install(HMODULE game);
+
+	// For the stats screen's help text (stat_help): the scaled heroes' live per-point numbers, or false when
+	// that part of the game has no applied override (or its patch was refused) - what the health
+	// maximums and the hits actually use, so the text never names a number the game doesn't apply.
+	bool hero_health_per_body(float* out);
+	bool hero_strength_per_point(float* out);
+
+	struct native_stat_help
+	{
+		std::vector<std::string> heroes;
+		std::optional<float> health_per_body;
+		std::optional<float> strength_per_point;
+	};
+	// Exceptions use the unscaled rates, but only for patches that actually applied.
+	native_stat_help native_stat_help_values();
 
 	// For the test pipe's status: "balance health=10/3 str=0.1/0.025 mind=0.1/0.025 might=0.05 power=xml1
 	// hit=xml1(30,0.025) rounding=xml1", or "balance off".

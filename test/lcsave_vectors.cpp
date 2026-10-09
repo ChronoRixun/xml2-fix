@@ -1213,16 +1213,23 @@ namespace
 		check(imported.ok,"dangling world fixture import");if(!imported.ok)return;
 		NewFileContext context;context.require_capture_metadata=true;std::string error;
 		check(loaded_zone_metadata(imported.bytes,tables,context.zone_captures,error),"dangling fixture metadata");
-		for(int scenario=0;scenario<3;++scenario)
+		for(int scenario=0;scenario<4;++scenario)
 		{
 			auto native=make_old_save({0,3,4},10);native.world.clear();
 			for(u32 h=0;h<13;++h)native.world.push_back({h,instance(3,{{7,1}})});
-			auto& z=native.zones[0];auto& state=z.states[scenario==2?1:4];
+			auto& z=native.zones[0];auto& state=z.states[scenario>=2?1:4];
 			state.payload[0]=13;state.payload[1]=1;for(int k=2;k<8;++k)state.payload[k]=0;
-			state.flags_a=1;state.flags_b=7;
+			state.flags_a=1;state.flags_b=scenario==3?15:7;
 			z.tail.dynamic_count=scenario==1?1:0;z.tail.smart_count=scenario==0?1:0;z.tail.smart[0]=4;
 			const auto result=old_stream_to_new(write_slot(native),tables,context);
-			if(scenario==2){check(!result.ok&&result.bytes.empty(),"numbered dangling reference still refuses");continue;}
+			if(scenario==3){check(!result.ok&&result.bytes.empty(),"live numbered dangling reference still refuses");continue;}
+			if(scenario==2)
+			{
+				check(result.ok,"dead numbered missing item preserves removed identity: "+result.error);
+				check(contains(result.ledger,"dead numbered item")&&contains(result.ledger,"slot 13"),"dead item normalization ledger");
+				if(result.ok){const auto reverse=new_to_old_stream(result.bytes,tables);check(reverse.ok,"dead item tombstone reloads");if(reverse.ok){const auto m=read_slot(reverse.bytes.data(),reverse.bytes.size());const auto& rz=m.zones[0];const auto& dead=rz.states[rz.tail.ordinal_map[0]];check(rz.tail.ordinal_map[0]&&!(dead.flags_b&8)&&!(dead.flags_a&1)&&dead.flags_b==7,"native factory still removes authored entity without missing item reference");check(rz.states[rz.tail.ordinal_map[1]].payload[0]==0x11,"neighbour remains unchanged");}}
+				continue;
+			}
 			check(result.ok,"unnumbered dangling reference saves "+std::to_string(scenario)+": "+result.error);
 			check(contains(result.ledger,"dangling world item slot 13")&&contains(result.ledger,"native load"),"dangling normalization has ledger explanation");
 			if(!result.ok)continue;

@@ -515,8 +515,22 @@ namespace lcsave::detail
 					std::memcpy(&qty, s.payload + 1, 2);
 					if (!world_handles.count(slot))
 					{
+						// CORE-BEGIN: native factory 0x465c35 rejects a numbered record with
+						// alive bit 8 clear before its virtual item restore can read the slot.
+						// Preserve that removed placement; its stale item payload is unreachable.
+						if (context && kind == 1 && !(s.flags_b & 8))
+						{
+							rec.set("flags_a", I(0));
+							rec.set("payload_kind", I(1));
+							rec.set("payload", Value::bytes(std::string(8, '\0')));
+							states.push(std::move(rec));
+							c.res.notes.push_back(what + ": dead numbered item slot " + str(slot) +
+								": removed placement retained without stale item reference (native load skips item restore)");
+							return true;
+						}
+						// CORE-END
 						// Native item restore (0x479fc0) tolerates an absent slot. An unnumbered item
-						// with no instance is a ghost, not a reconstructable pickup. Keep numbered
+						// with no instance is a ghost, not a reconstructable pickup. Keep live numbered
 						// identity loss strict and keep the legacy importer's recorded drop policy.
 						if (context && kind != 1)
 						{

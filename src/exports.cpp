@@ -48,6 +48,7 @@
 #include "save_format.hpp"
 #include "save_content_guards.hpp"
 #include "save_trace.hpp"
+#include "stat_help.hpp"
 #include "test_input.hpp"
 #include "virtual_pad.hpp"
 #include "window_title.hpp"
@@ -200,6 +201,10 @@ namespace
 		// [Balance]: X-Men Legends 1's combat numbers. Calls and one jump in the health, damage and roll functions and the
 		// style reader, first run when a character or a style loads; none of its sites or guards is anyone else's.
 		balance::install(game);
+		// The stats screen's help text: the two literals that name [Balance] numbers (health per body, the
+		// strike bonus) follow the same applied values, through the string manager's vt+8; every other
+		// string passes to the game's getter. After balance: it reads what balance applied.
+		stat_help::install(game);
 		// The forced parties' script functions (seatParty and the rest). The game registers its script
 		// functions exactly once, from its own init: 0x40197b -> game vt+0x13c (0x46b750) -> the
 		// script interface's vt+0 (0x49fe30), which pushes its table and count and calls 0x4d75a0. That
