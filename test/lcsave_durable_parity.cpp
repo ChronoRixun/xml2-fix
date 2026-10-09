@@ -83,10 +83,10 @@ namespace
 		const auto folder = root / fs::path(name);
 		const auto build = root / fs::path(fields[1]);
 		if (!inside(root, folder) || !inside(root, build) || !inside(root, folder / "actual.lcsave")) return report("case/build path escapes fixture root");
-		if (mode != "campaign" && mode != "profile" && mode != "profile-import" && mode != "reverse" && mode != "refuse" && mode != "native-campaign" && mode != "native-transfer" && mode != "native-dead-item") return report("unsupported mode");
+		if (mode != "campaign" && mode != "profile" && mode != "legacy-refuse" && mode != "legacy-import" && mode != "profile-import" && mode != "reverse" && mode != "refuse" && mode != "native-campaign" && mode != "native-transfer" && mode != "native-dead-item") return report("unsupported mode");
 		std::vector<std::uint8_t> input, expected;
-		if (!read_bytes(folder / (mode == "profile-import" || mode == "native-campaign" || mode == "native-transfer" || mode == "native-dead-item" ? "input.raw" : "input.lcsave"), input)) return report("cannot read input");
-		const auto expected_name = mode == "reverse" ? "expected.old" : mode == "refuse" ? "expected.error" : "expected.lcsave";
+		if (!read_bytes(folder / (mode == "legacy-refuse" || mode == "legacy-import" || mode == "profile-import" || mode == "native-campaign" || mode == "native-transfer" || mode == "native-dead-item" ? "input.raw" : "input.lcsave"), input)) return report("cannot read input");
+		const auto expected_name = mode == "reverse" ? "expected.old" : (mode == "refuse" || mode == "legacy-refuse") ? "expected.error" : "expected.lcsave";
 		if (!read_bytes(folder / expected_name, expected)) return report("cannot read expected output");
 		lcsave::Tables tables;
 		std::string error;
@@ -110,7 +110,20 @@ namespace
 			return true;
 		}
 		lcsave::Result result;
-		if (mode == "profile-import")
+		if (mode == "legacy-import" || mode == "legacy-refuse")
+		{
+			lcsave::ConvertOptions options;
+			options.original_name = "synthetic.save"; options.fixed_saved_at = true; options.saved_at = 0;
+			result = lcsave::convert_old_to_new(input, tables, options);
+			if (mode == "legacy-refuse")
+			{
+				const std::string reason(expected.begin(), expected.end());
+				if (result.ok || !result.bytes.empty() || result.error.find(reason) == std::string::npos) return report("expected legacy refusal: " + result.error);
+				std::cout << name << '\t' << mode << "\tPASS\trefused before exposing output\n";
+				return true;
+			}
+		}
+		else if (mode == "profile-import")
 		{
 			lcsave::ConvertOptions options;
 			options.original_name = "settings.dat";

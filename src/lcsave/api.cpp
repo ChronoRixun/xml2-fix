@@ -62,6 +62,7 @@ namespace lcsave
 		}
 		r.parked = state.parked;
 		r.ledger = ledger_line(state, r.ok ? "converted" : "refused: " + r.error);
+		for (const auto& n : state.notes) r.ledger += "\n" + n;
 		return r;
 	}
 

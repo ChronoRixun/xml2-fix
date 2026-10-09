@@ -817,6 +817,56 @@ namespace
 		check(cat.c.lookup(3, key_hash1("item_b", Enc::cp1252)) == 0, "a hash belongs to its domain");
 	}
 
+	void test_forge_import(const fs::path& scratch)
+	{
+		const auto t = make_tables(scratch / "forge", "sh_might", true);
+		Tables tables; tables.data = t;
+		const char* note = "Forge contact unlock granted (0.1.x builds did not record it)";
+		Cat cat; cat.c = t->catalogue;
+		for (const auto& e : cat.c.entries) cat.next[e.domain] = std::max(cat.next[e.domain], e.id & 0xffffffu);
+		for (const char* zone : {"nyc/alison/early", "mansion/man1a/first", "haarp/ext/later", "mansion/man8/later", "mansion/jugrnt/flashback", "arena/training", "nyc/riots/later", "haarp/extensive/unknown"})
+		{
+			const auto id = cat.add(15, {zone});
+			t->reference.ZONE.push_back(id); t->p_zone[id] = zone; t->names[id] = zone;
+		}
+		t->catalogue = cat.c;
+		for (int scenario = 0; scenario < 15; ++scenario)
+		{
+			auto old = scenario == 12 ? make_old_save({0, 2, 3}) : make_old_save();
+			const char* zone = scenario == 0 ? "nyc/alison/early" : scenario == 1 ? "mansion/man1a/first" : scenario == 3 ? "mansion/man8/later" : scenario == 4 ? "mansion/jugrnt/flashback" : scenario == 5 ? "arena/training" : scenario == 6 ? "nyc/riots/later" : scenario == 7 ? "haarp/extensive/unknown" : "haarp/ext/later";
+			set_cstr(old.mission.zone, zone);
+			if (scenario < 9) { set_cstr(old.game_vars[1].name, "X1V03"); old.game_vars[1].value_be[0] = scenario == 8 ? 0xc0 : 0x80; old.game_vars[1].value_be[3] = 5; }
+			if (scenario == 10 || scenario == 11 || scenario == 13) { set_cstr(old.mission.zone, "mansion/man1a/first"); set_cstr(old.side_frames[0].zone, "haarp/ext/later"); old.side.count = scenario == 10 ? 1 : 0; }
+			if (scenario == 13)
+			{
+				old.side.count = 0;
+				auto& strings = *old.zone_strings;
+				const std::string historical = "haarp/ext/later";
+				strings.offsets[40] = strings.used;
+				std::memcpy(strings.arena + strings.used, historical.c_str(), historical.size() + 1);
+				strings.used += static_cast<u32>(historical.size() + 1);
+				old.zones[0].name_handle = (1u << 24) | 40;
+			}
+			if (scenario == 14) for (u32 i = 0; i < old_script_game_vars; ++i) set_cstr(old.game_vars[i].name, "v" + std::to_string(i));
+			const auto raw = write_slot(old);
+			const auto r = convert_old_to_new(raw, tables);
+			if (scenario == 14) { check(!r.ok && r.bytes.empty() && contains(r.error, "Forge contact unlock: game-variable store is full"), "Forge store capacity refuses without losing a variable"); continue; }
+			check(r.ok, "Forge legacy import " + r.error); if (!r.ok) continue;
+			const bool grant = scenario == 2 || scenario == 3 || scenario == 6 || scenario == 9 || scenario == 10 || scenario == 12 || scenario == 13;
+			const auto f = read_file(r.bytes.data(), r.bytes.size(), kind_campaign);
+			const auto& vars = f.data("SVAR")["game_vars"].l;
+			const auto expected = scenario < 9 ? ((grant || scenario == 8) ? 0xc0000005u : 0x80000005u) : 0x40000000u;
+			check(vars.size() == (scenario == 11 ? 1u : 2u), "Forge variable count");
+			if (scenario != 11 && vars.size() > 1) check(vars[1]["value"].as_int() == expected, "Forge grant preserves other bits");
+			check((r.ledger.find(note) != std::string::npos) == grant, "Forge one import ledger grant");
+			if (scenario == 13) continue;
+			NewFileContext ctx; ctx.saved_at = 0;
+			const auto native = old_stream_to_new(raw, tables, ctx);
+			check(native.ok, "Forge native isolation " + native.error);
+			if (native.ok) { const auto nf = read_file(native.bytes.data(), native.bytes.size(), kind_campaign); check(nf.data("SVAR")["game_vars"].l.size() == (scenario < 9 ? 2u : 1u) && native.ledger.find(note) == std::string::npos, "Forge normal saver never grants"); if (scenario < 9) check(nf.data("SVAR")["game_vars"].l[1]["value"].as_int() == (scenario == 8 ? 0xc0000005u : 0x80000005u), "Forge native flags untouched"); }
+		}
+	}
+
 	void test_align()
 	{
 		using S = std::vector<std::string>;
@@ -1344,6 +1394,7 @@ void run_vectors(const fs::path& scratch)
 	test_container();
 	test_catalogue();
 	test_align();
+	test_forge_import(scratch);
 	test_convert(scratch / "convert");
 	test_talent_era(scratch / "era");
 	test_api(scratch / "api");
