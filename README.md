@@ -525,6 +525,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `ReviewStats` | `1` | `0`: the Review menu has no Stats tab |
 | `PersonalItemText` | `1` | Personal-item pictures sit behind their descriptions; `0` retains the original image depth. Other menus and explicit menu `depth` values are unchanged ([details](docs/personal-item-text.md)). |
 | `Xtract` | `1` | `0`: an Xtraction Point's menu has no "Xtract" world map choice |
+| `XtractionShop` | `0` | `1`: let a companion builder append its permitted equipment-shop option through `extractionPointServices` ([details](docs/xtraction-shop.md)) |
 | `XPCurve` | `xml2` | `xml1`: X-Men Legends I's level table (cap 45) and kill XP |
 | `BreakRule` | `xml2` | `xml1`: an object whose definition carries `xml1structure` breaks only to an attack of that level on X-Men Legends I's scale ([details](docs/break-rule.md)) |
 | `CharacterLadderPaths` | `0` | `1`: characters follow the descent paths a mod gives their ladder animations ([details](docs/character-ladder-paths.md)) |

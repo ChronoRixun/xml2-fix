@@ -88,6 +88,7 @@
 #include "balance_rules.hpp"
 #include "window_title_rules.hpp"
 #include "xtract_rules.hpp"
+#include "xtraction_shop_rules.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2899,7 +2900,7 @@ namespace
 		std::printf("forced parties ([Game] ForcedTeams, AddHero and JoinHero: seatParty, setSkinset, pushParty, popParty, addHero, joinHero, addSkillPoints)\n");
 
 		// The functions: ten, signatures the game's compiler knows, room in its tree.
-		CHECK(functions.size() == 10 && table_count == 0x12b && builtin_count + table_count == 318 && table_count + builtin_count <= tree_capacity);
+		CHECK(functions.size() == 11 && table_count == 0x12c && builtin_count + table_count == 319 && table_count + builtin_count <= tree_capacity);
 		bool signatures_ok = true;
 		for (const auto& f : functions)
 		{
@@ -2912,7 +2913,7 @@ namespace
 		CHECK(std::string_view(functions[static_cast<std::size_t>(function::join_hero)].name) == "joinHero" && std::string_view(functions[static_cast<std::size_t>(function::join_hero)].ret) == "i" &&
 		      std::string_view(functions[static_cast<std::size_t>(function::join_hero)].args) == "s");
 		const auto writes = registration_writes(0x12345678);
-		CHECK(writes[0].va == 0x49fe31 && writes[0].value == 0x12345678 && writes[1].va == 0x49fe36 && writes[1].value == 0x12b && writes[0].size == 4 && writes[1].size == 4);
+		CHECK(writes[0].va == 0x49fe31 && writes[0].value == 0x12345678 && writes[1].va == 0x49fe36 && writes[1].value == 0x12c && writes[0].size == 4 && writes[1].size == 4);
 		CHECK(std::string_view(functions[static_cast<std::size_t>(function::skill_points)].name) == "addSkillPoints" && std::string_view(functions[static_cast<std::size_t>(function::skill_points)].ret) == "n" &&
 		      std::string_view(functions[static_cast<std::size_t>(function::skill_points)].args) == "ai" && skill_points_max == 20 && grant_max >= 4);
 
@@ -3105,7 +3106,7 @@ namespace
 			}
 		}
 		CHECK(changed == 5 && outside == 0); // 0x0068a908 -> 0x12345678, 0x121 -> 0x12a
-		CHECK(limits_rules::matches(at(registration), "6878563412682b010000e8318903008bc8e85a770300c3"));
+		CHECK(limits_rules::matches(at(registration), "6878563412682c010000e8318903008bc8e85a770300c3"));
 		std::memcpy(image, before.data(), image_size);
 
 		// The strings the handlers send are the game's own.
@@ -5115,6 +5116,11 @@ namespace
 	// change applied to that copy (exactly the two bytes; the jump lands where the block ends).
 	void check_xtract_rules()
 	{
+		CHECK(!xtraction_shop_rules::should_add(false, false));
+		CHECK(!xtraction_shop_rules::should_add(false, true));
+		CHECK(!xtraction_shop_rules::should_add(true, false));
+		CHECK(xtraction_shop_rules::should_add(true, true));
+		CHECK(xtraction_shop_rules::finalize_call + 5 == 0x4a6d38);
 		using namespace xtract_rules;
 		std::printf("[Game] Xtract (no world map at an Xtraction Point)\n");
 
@@ -5156,6 +5162,14 @@ namespace
 		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
 		CHECK(mismatch == nullptr);
 		CHECK(std::memcmp(at(choice_block), retail_op.data(), retail_op.size()) == 0);
+		for (const auto& g : xtraction_shop_rules::guards)
+		{
+			CHECK(limits_rules::matches(at(g.va), g.hex));
+			const auto first = at(g.va)[0];
+			at(g.va)[0] ^= 1;
+			CHECK(!limits_rules::matches(at(g.va), g.hex));
+			at(g.va)[0] = first;
+		}
 		CHECK(text_at(0x68d4e0) == "openmenu('worldmap')" && text_at(0x68d4c4) == "extractionPointChange(%d,0)");
 
 		std::vector<std::uint8_t> before(image, image + image_size);
@@ -9717,6 +9731,12 @@ namespace
 
 int main(const int argc, char** argv)
 {
+	if (argc > 1 && std::strcmp(argv[1], "--xtraction-shop-rules") == 0)
+	{
+		check_xtract_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--personal-item-text-rules") == 0)
 	{
 		check_personal_item_text_rules();
