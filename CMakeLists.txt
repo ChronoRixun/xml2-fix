@@ -31,6 +31,7 @@ target_include_directories(lcsave PUBLIC src/lcsave)
 
 # The fix: a drop-in dinput.dll for the game folder.
 add_library(xml2_fix SHARED
+	src/stat_help.cpp
 	src/geometry_sharing.cpp
 	src/ladder_paths.cpp
 	src/break_rule.cpp
@@ -101,6 +102,9 @@ target_include_directories(xml2_objective_text_test PRIVATE src)
 
 add_executable(xml2_stat_points_test test/stat_points_test.cpp)
 target_include_directories(xml2_stat_points_test PRIVATE src)
+
+add_executable(xml2_stat_help_test test/stat_help_test.cpp)
+target_include_directories(xml2_stat_help_test PRIVATE src)
 
 # lcsave: the reference's test vectors, the real-save corpus against the Python outputs (folders given on the
 # command line), and a fuzz of the readers.

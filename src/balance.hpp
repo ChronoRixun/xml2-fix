@@ -28,6 +28,12 @@ namespace balance
 	// DamageScale names the parser reads, load with the first character.
 	void install(HMODULE game);
 
+	// For the stats screen's help text (stat_help): the scaled heroes' live per-point numbers, or false when
+	// that part of the game stays the retail one (the key unset, or the patch refused) - what the health
+	// maximums and the hits actually use, so the text never names a number the game doesn't apply.
+	bool hero_health_per_body(float* out);
+	bool hero_strength_per_point(float* out);
+
 	// For the test pipe's status: "balance health=10/3 str=0.1/0.025 mind=0.1/0.025 might=0.05 power=xml1
 	// hit=xml1(30,0.025) rounding=xml1", or "balance off".
 	std::string status();

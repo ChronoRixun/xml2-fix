@@ -306,4 +306,24 @@ namespace balance
 	{
 		return status_text(live.chosen, applied);
 	}
+
+	bool hero_health_per_body(float* out)
+	{
+		if (!(applied & health) || !live.chosen.hero_health_per_body)
+		{
+			return false;
+		}
+		*out = *live.chosen.hero_health_per_body;
+		return true;
+	}
+
+	bool hero_strength_per_point(float* out)
+	{
+		if (!(applied & strength) || !(live.chosen.strength_bonus || live.chosen.hero_strength_bonus))
+		{
+			return false;
+		}
+		*out = live.chosen.strength_per_point(true);
+		return true;
+	}
 }
