@@ -768,6 +768,47 @@ namespace lcsave::detail
 			return out;
 		}
 
+		void legacy_forge_recovery(const OldSlot& old, const TablesData& tables, ConvertState& res, Value& game_vars)
+		{
+			// Campaign directories after mansion1's HAARP departure; no training/flashback/act heuristic.
+			static constexpr const char* later_dirs[] = {
+				"haarp/ext/", "haarp/int/", "haarp/ice_sq/",
+				"mansion/man2/", "mansion/man3/", "mansion/man4/", "mansion/man5/",
+					"mansion/man6/", "mansion/man7/", "mansion/man8/",
+				"muir_is/muir1/", "muir_is/muir2/", "muir_is/muir3/",
+				"sewers/hub/", "sewers/healer/", "sewers/grso/", "arbiter/deck/", "arbiter/a_int/",
+				"nuke_plant/nuke/", "astral/ast1/", "astral/ast3/", "astral/savepx/",
+				"weapon_x/old/", "weapon_x/secret/", "mount/mount/", "nyc/riots/",
+				"hive/h_ext/", "hive/h_int/", "astroid_m/visit1/", "mastermold/"
+			};
+			auto later = [&](const std::string& name)
+			{
+				const auto zone = py_lower(name, Enc::cp1252);
+				if (!tables.catalogue.lookup(ZONE, key_hash1(zone, Enc::cp1252))) return false;
+				for (const auto* dir : later_dirs) if (zone.find(dir) == 0) return true;
+				return zone == "arbiter/arb_fd1" || zone == "arbiter/arb_fd2";
+			};
+			bool progressed = later(cstr(old.mission.zone));
+			for (u32 i = 0; i < old.side.count; ++i) progressed |= later(cstr(old.side_frames[i].zone));
+			for (const auto& z : old.zones) progressed |= later(zone_string(*old.zone_strings, z.name_handle));
+			if (!progressed) return;
+			Value* target = nullptr;
+			for (auto& v : game_vars.l) if (py_lower(v["name"].s, Enc::cp1252) == "x1v03") { target = &v; break; }
+			if (!target)
+			{
+				if (game_vars.l.size() >= old_script_game_vars) fail("Forge contact unlock: game-variable store is full");
+				game_vars.push(Value::dict({{"name", Tx("x1v03")}, {"value", I(0)}}));
+				target = &game_vars.l.back();
+			}
+			// Script flag indices are one based; bit 31 is 0x40000000, not the sign bit.
+			const auto value = static_cast<u32>((*target)["value"].as_int());
+			if (!(value & 0x40000000u))
+			{
+				target->set("value", I(value | 0x40000000u));
+				res.notes.push_back("Forge contact unlock granted (0.1.x builds did not record it)");
+			}
+		}
+
 		struct Plan
 		{
 			bool converter = true;                 // false: the saver's direction (one era: the running build)
@@ -1185,8 +1226,10 @@ namespace lcsave::detail
 				}
 				return out;
 			};
+			auto game_vars = vars(old.game_vars, old_script_game_vars);
+			if (plan.converter) legacy_forge_recovery(old, c.t, res, game_vars);
 			sections.push_back({"SVAR", 1, 0, 0, Value::dict({{"zone_vars", vars(old.zone_vars, old_script_zone_vars)},
-				{"game_vars", vars(old.game_vars, old_script_game_vars)}})});
+				{"game_vars", std::move(game_vars)}})});
 			// ---- XTRC
 			Value xp = L();
 			for (const int i : bits(&old.town_centres, 32))

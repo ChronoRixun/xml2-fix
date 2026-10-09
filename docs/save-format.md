@@ -174,3 +174,16 @@ For a campaign refusal, the runtime now logs the complete translation ledger. Op
 `[Debug] SaveDumpRefused=1` also retains the actual native image as `SaveLC/refused-native-<FILETIME>.save` in the
 configured save folder. It defaults off and never replaces the campaign. The dump alone lacks the runtime's
 capture sidecar, so an offline replay may infer associations differently from the original capture-aware write.
+
+Legacy Forge contact recovery (maintainer import policy): only pre-LC campaign imports receive the one-based
+`x1v03` bit 31 (`0x40000000`) when a catalogue-known current zone, used side-mission return frame, or retained
+zone record proves the campaign reached HAARP or a later main-campaign directory. Later mansion hubs count;
+NYC's opening mission, the first mansion, training/flashbacks and unknown zones alone do not. The source
+first-mansion briefing starts HAARP; subsequent missions preserve the contact flag. Zone names are stored
+literally in every supported legacy era, so the gate does not depend on era-specific objective numbering.
+An already-set flag is unchanged. A missing word is appended if the native 100-variable store has room;
+otherwise import refuses rather than losing an unrelated variable. Only the flag changes, and the import's
+LGCY/external ledger records once: "Forge contact unlock granted (0.1.x builds did not record it)".
+Native saving, new games and LC resaves never run this repair. Previously imported LC files are not repaired
+retroactively. The Python verifier lists this deliberate change in `legacy_repairs` while checking all other
+semantics. No wire layout, section version, catalogue or content-version change is needed.
