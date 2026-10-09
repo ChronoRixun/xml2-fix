@@ -271,7 +271,7 @@ namespace lcsave::detail
 			return h;
 		}
 
-		void zone_records(const Pos& pos, const Value& recs, OldSlot& m, std::vector<std::string>& notes)
+		void zone_records(const Pos& pos, const Value& recs, OldSlot& m, std::vector<std::string>& notes, bool legacy_import)
 		{
 			// Drop only dependencies owned exclusively by rejected records. Shared and unowned handles survive.
 			std::set<u32> owned, applied;
@@ -345,6 +345,29 @@ namespace lcsave::detail
 					mapped[state["ordinal"].as_int()] = current + 1;
 				}
 				if (differs) { notes.push_back("zone " + zone + ": entity placement/name changed: record not applied"); continue; }
+				// Legacy lists can contain placements that later builds pin. A list entry proves
+				// existence; the missing numbered slot does not mean removal in this case.
+				std::map<std::size_t, std::size_t> promoted;
+				if (legacy_import || (r["capture_flags"].as_int() & 2))
+				{
+					std::map<std::size_t, std::size_t> candidates;
+					std::map<std::size_t, std::size_t> counts;
+					const auto& states = r["states"].as_list();
+					for (std::size_t i = 0; i < states.size(); ++i)
+					{
+						const auto& state = states[i];
+						if (state["list"].as_int() != 2 && state["list"].as_int() != 3) continue;
+						const auto& dn = saved_names.at(static_cast<std::size_t>(state["def_name"].as_int()));
+						const auto& in = saved_names.at(static_cast<std::size_t>(state["inst_name"].as_int()));
+						const auto pair = std::make_pair(key_hash1(dn.as_text(), dn.enc), key_hash1(in.as_text(), in.enc));
+						std::size_t ordinal = 0, matches = 0;
+						for (std::size_t k = 0; k < num->names.size(); ++k)
+							if (num->names[k] == pair) { ordinal = k + 1; ++matches; }
+						if (matches != 1 || std::any_of(mapped.begin(), mapped.end(), [&](const auto& e) { return e.second == ordinal; })) continue;
+						candidates[i] = ordinal; ++counts[ordinal];
+					}
+					for (const auto& [i, ordinal] : candidates) if (counts[ordinal] == 1) promoted[i] = ordinal;
+				}
 				OldZone z;
 				z.states.assign(old_zone_states, OldStateRecord{});
 				std::size_t n = 1;
@@ -356,8 +379,10 @@ namespace lcsave::detail
 					if (k < 0 || k >= static_cast<std::int64_t>(names.size())) fail("IndexError: list index out of range");
 					return names[static_cast<std::size_t>(k)];
 				};
+				std::size_t state_index = 0;
 				for (const auto& s : r["states"].as_list())
 				{
+					const auto promotion = promoted.find(state_index++);
 					if (n >= old_zone_states) fail("more states than the engine record holds");
 					OldStateRecord st{};
 					const auto& payload = s["payload"].as_bytes();
@@ -406,6 +431,14 @@ namespace lcsave::detail
 							fail("ordinal " + std::to_string(k) + " beyond the zone numbering (" + std::to_string(num->placement.size()) + ")");
 						}
 						z.tail.ordinal_map[k - 1] = idx;
+					}
+					else if (promotion != promoted.end())
+					{
+						const auto k = promotion->second;
+						if (k > old_zone_ordinals) fail("promoted ordinal outside the engine map");
+						z.tail.ordinal_map[k - 1] = idx;
+						z.states[idx].flags_b |= 8;
+						notes.push_back("zone " + py_repr(zone, Enc::latin1) + ": legacy unnumbered state restored as numbered placement " + std::to_string(k));
 					}
 					else if (list == 2) dynamic.push_back(idx);
 					else smart.push_back(idx);
@@ -796,7 +829,7 @@ namespace lcsave::detail
 		pos.review_words(RV["unlocked"], m.review.unlocked);
 		pos.review_words(RV["seen"], m.review.seen);
 		// ---- ZONE
-		zone_records(pos, f.data("ZONE")["records"], m, notes);
+		zone_records(pos, f.data("ZONE")["records"], m, notes, f.data("META")["origin"].as_int() == 1);
 		// ---- profile
 		profile_from_sections(pos, f, m.profile);
 		// ---- script variables, town centres

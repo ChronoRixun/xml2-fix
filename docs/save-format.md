@@ -12,6 +12,22 @@ This page is about the fix's side: where it sits in the game, what it does at st
 **The key does nothing in XML2 as it ships.** Without `[Save] Format=lc` (or with `off` / `xml2`) nothing on this
 page is active and the game reads and writes its own files, byte for byte. The port's builder writes the key.
 
+## Legacy streamed placements that later builds pin
+
+A legacy-import or inferred zone record can store an existing placed entity in its smart/dynamic list even
+though the current build numbers that placement. On load, the reverse reader promotes that saved state only
+when the definition/instance pair identifies one current placement and one saved unnumbered state, and no
+explicit numbered state owns the slot. Explicit tombstones win; absent and ambiguous identities retain the
+existing removal policy. Observed native captures without legacy provenance are excluded.
+
+Promotion preserves position, payload and flags, adds native alive bit 8 (the unnumbered list entry proves
+existence even when dormant), and removes the entry from its old list. Loaded capture metadata follows the
+reconstructed numbered map, including promotions. This prevents a factory's missing inferred ordinal from
+silently removing a retained cutscene target. Later saves record the promoted identity as numbered.
+
+The Python reference and C++ reverse/metadata implementations share the rule. Conversion bytes, wire format,
+compiled placement data and catalogue are unchanged; previously imported LC files receive the repair on load.
+
 ## Where the fix sits: the disk seam
 
 The game's own serializer (`CGame` vt+0x208, 0x46baf0) and loader (vt+0x20c, 0x46e2b0) are not touched: they keep

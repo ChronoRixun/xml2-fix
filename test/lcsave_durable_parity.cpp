@@ -105,6 +105,19 @@ namespace
 				if (!translated.ok) return report("reverse: " + translated.error);
 				if (!inside(root, folder / "actual.old") || !write_and_verify(folder / "actual.old", translated.bytes)) return report("actual.old verification failed");
 				if (translated.bytes != expected) return report("native stream bytes differ from Python");
+				if (fs::exists(folder / "expected.metadata"))
+				{
+					std::vector<lcsave::ZoneCaptureMetadata> captures;
+					if (!lcsave::loaded_zone_metadata(input, tables, captures, error)) return report("metadata: " + error);
+					std::string actual;
+					for (const auto& capture : captures) for (const auto& entity : capture.entities)
+						actual += capture.zone + "\t" + std::to_string(entity.ordinal) + "\t" + std::to_string(entity.placement_index) +
+						          "\t" + entity.definition_name + "\t" + entity.instance_name + "\n";
+					std::vector<std::uint8_t> metadata;
+					if (!read_bytes(folder / "expected.metadata", metadata) || actual != std::string(metadata.begin(), metadata.end()))
+						return report("reconstructed placement metadata differs from Python");
+				}
+
 			}
 			std::cout << name << '\t' << mode << "\tPASS\t" << expected.size() << " expected bytes\n";
 			return true;
