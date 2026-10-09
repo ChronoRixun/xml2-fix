@@ -153,16 +153,18 @@ namespace lcsave
 				if (f.data("META")["origin"].as_int() == 1 || std::all_of(metadata.conversation_digest.begin(), metadata.conversation_digest.end(), [](u8 b) { return b == 0; }))
 					metadata.capture_flags |= 2; // earlier candidates wrote zero despite unobserved provenance
 				const auto* numbering = tables.data->build->zone_numbering(metadata.zone);
-				const auto& names = record["names"].as_list();
-				for (const auto& state : record["states"].as_list()) if (state["list"].as_int() == 1)
+				const auto restored = std::find_if(native.zones.begin(), native.zones.end(), [&](const auto& z)
+				{ return detail::zone_string(*native.zone_strings, z.name_handle) == metadata.zone; });
+				// Metadata must describe the reconstructed map, including promoted legacy placements.
+				for (std::size_t k = 0; k < old_zone_ordinals; ++k)
 				{
+					const auto idx = restored->tail.ordinal_map[k];
+					if (!idx) continue;
 					PlacedEntityMetadata entity;
-					entity.placement_index = static_cast<std::uint32_t>(state["placement_index"].as_int());
-					entity.definition_name = names.at(static_cast<std::size_t>(state["def_name"].as_int())).as_text();
-					entity.instance_name = names.at(static_cast<std::size_t>(state["inst_name"].as_int())).as_text();
-					// The loader remaps by actual placement; cache the native ordinal it reconstructed.
-					const auto it = std::find(numbering->placement.begin(), numbering->placement.end(), entity.placement_index);
-					entity.ordinal = static_cast<std::uint32_t>(it - numbering->placement.begin() + 1);
+					entity.ordinal = static_cast<std::uint32_t>(k + 1);
+					entity.placement_index = numbering->placement.at(k);
+					entity.definition_name = detail::zone_string(*native.zone_strings, restored->states[idx].def_name);
+					entity.instance_name = detail::zone_string(*native.zone_strings, restored->states[idx].inst_name);
 					metadata.entities.push_back(std::move(entity));
 				}
 				out.push_back(std::move(metadata));
