@@ -144,6 +144,18 @@ original KEYS index prefix. Full-file Python/C++ parity includes canonical KEYS 
 refuse intact; this is not partial parking. Opaque extensions must use the documented stable/self-contained
 reference contract. Native pool preflight uses a conservative serialized demand bound including restore equipment.
 
+## Later features that do not require new save fields
+
+- **#6 loot / shops:** LC records item-definition states by key in packed `DEFSTATE`, with a reader ceiling of
+  65536 definitions. The 160-definition limit is the native engine budget, checked when reconstructing a native
+  save (`convert.py::_validate_native_build`). The current build has 88 definitions; adding the original's
+  116-item loot table would exceed 160. That requires an engine / DLL limit raise and converter budget change,
+  rather than an LC format change.
+- **#35 talent costs:** `TAL` records ranks per talent, `HREC` records level and unspent skill points, and the
+  header records `content_version`. A later two-point rank cost can grandfather or reprice existing saves by
+  content version without a new field. The policy will be decided when #35 lands.
+- **#5 solo mode:** this changes runtime party behaviour only; nothing new is persisted.
+
 ## Not done, and why
 
 - **W11:** no side-effect-free full post-load observer is proved. The native return/overflow check is narrower;
