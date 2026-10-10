@@ -66,6 +66,7 @@
 #include "image_file.hpp"
 #include "ini_rules.hpp"
 #include "limits_rules.hpp"
+#include "move_triggers_rules.hpp"
 #include "geometry_sharing_rules.hpp"
 #include "local_ip.hpp"
 #include "local_ip_rules.hpp"
@@ -1684,6 +1685,330 @@ namespace
 			CHECK(run_thiscall(at(0x4fe9c0), objects.data(), result));
 			CHECK(destroyed_style_slots == expected && objects.dword(n * style_record_size) == 0 && objects.slack_untouched());
 			CHECK(run_thiscall(at(0x4fe9c0), objects.data(), result) && destroyed_style_slots == expected); // empty clear does not destroy twice
+		}
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
+
+	// Isolated native instructions: preserve the test caller, load adversarial registers,
+	// run one patched handle access, then capture all registers and flags before C++ runs.
+	DWORD move_access_self = 0, move_access_index = 0, move_access_value = 0;
+	DWORD move_access_edi = 0;
+	void* move_access_function = nullptr;
+	DWORD move_access_result[9]{};
+	__declspec(naked) void run_move_access()
+	{
+		__asm {
+			pushad
+			pushfd
+			mov esi, move_access_self
+			mov ebp, move_access_self
+			mov edi, move_access_edi
+			mov eax, move_access_index
+			mov ecx, move_access_index
+			mov edx, move_access_value
+			mov ebx, move_access_value
+			stc
+			call dword ptr [move_access_function]
+			pushfd
+			pushad
+			mov esi, esp
+			mov edi, offset move_access_result
+			mov ecx, 9
+			rep movsd
+			popad
+			popfd
+			popfd
+			popad
+			ret
+		}
+	}
+
+
+	DWORD move_manager_vtable[11]{};
+	DWORD* move_manager = move_manager_vtable;
+	std::array<std::array<DWORD, 0x54 / 4>, 127> move_events{};
+	std::vector<DWORD> move_freed;
+	void* __cdecl move_manager_get() { return &move_manager; }
+	void* __fastcall move_event_pool(void*, void*) { return &move_manager; }
+	void* __fastcall move_event_resolve(void*, void*, DWORD handle)
+	{
+		return handle >= 1 && handle <= move_events.size() ? move_events[handle - 1].data() : nullptr;
+	}
+	void __fastcall move_event_free(void*, void*, DWORD handle) { move_freed.push_back(handle); }
+
+
+	std::vector<move_triggers_rules::actor_times> test_actor_times;
+	int test_timer_capacity = 64;
+	float test_clock_value = 10.0f;
+	std::array<DWORD, 127> test_event_modes{};
+	std::vector<int> test_timers_fired;
+	DWORD test_timer_vtable[4]{}, test_move_vtable[9]{};
+	DWORD* test_timer_manager = test_timer_vtable;
+	using init_timer_t = void(__fastcall*)(void*, void*, void*, float);
+	using tick_timer_t = void(__fastcall*)(void*, void*, float);
+	init_timer_t test_original_init = nullptr;
+	tick_timer_t test_original_tick = nullptr;
+	auto& test_times(void* actor) { return *move_triggers_rules::times_for(test_actor_times, static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(actor))); }
+	void* __cdecl test_scheduled(void* actor) { return test_times(actor).scheduled.data(); }
+	void* __cdecl test_sources(void* actor, void* packet) {
+		auto& t = test_times(actor); std::memcpy(t.source.data(), static_cast<std::uint8_t*>(packet) + 8, 19 * 4); return t.source.data();
+	}
+	void __cdecl test_collect(void*, void*, void*) {}
+	void __cdecl test_clear(void* actor) { test_times(actor).scheduled.fill(0xbf800000); }
+	void __fastcall test_initialize(void* actor, void*, void* packet, float scale) {
+		test_original_init(actor, nullptr, packet, scale);
+		std::memcpy(static_cast<std::uint8_t*>(actor) + 0x640, test_times(actor).scheduled.data(), 19 * 4);
+	}
+	void __fastcall test_tick(void* actor, void*, float delta) {
+		test_original_tick(actor, nullptr, delta);
+		std::memcpy(static_cast<std::uint8_t*>(actor) + 0x640, test_times(actor).scheduled.data(), 19 * 4);
+	}
+	float __cdecl test_timer_clock() { return test_clock_value; }
+	float __fastcall test_motion_time(void*, void*, int) { return 0.9f; }
+	void* __cdecl test_timer_get_manager() { return &test_timer_manager; }
+	bool __fastcall test_based(void*, void*, const DWORD* event) { return event && *event == 1; }
+	bool __fastcall test_unscaled(void*, void*, const DWORD* event) { return event && *event == 2; }
+	void* __fastcall test_get_timer_event(void*, void*, int i) { return i >= 0 && i < test_timer_capacity ? &test_event_modes[i] : nullptr; }
+	bool __fastcall test_fire_timer(void*, void*, int i, void*, void*) { test_timers_fired.push_back(i); return true; }
+	bool run_timer_init(const void* fn, void* actor, void* packet, float scale) {
+		__try { reinterpret_cast<init_timer_t>(const_cast<void*>(fn))(actor, nullptr, packet, scale); return true; }
+		__except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+	}
+	bool run_timer_tick(const void* fn, void* actor, float delta) {
+		__try { reinterpret_cast<tick_timer_t>(const_cast<void*>(fn))(actor, nullptr, delta); return true; }
+		__except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+	}
+	void check_actor_trigger_timing()
+	{
+		using namespace move_triggers_rules;
+		const auto exe = game_executable();
+		if (!exe) return;
+		DWORD size = 0; auto* image = map_image(*exe, size);
+		CHECK(image != nullptr); if (!image) return;
+		const auto at = [&](DWORD va) { return image + (va - image_base); };
+		const auto va = [&](const void* p) { return image_base + static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(p) - reinterpret_cast<std::uintptr_t>(image)); };
+		const auto hook = [&](DWORD where, const void* p) { at(where)[0] = 0xe9; DWORD r = rel32(where, va(p)); std::memcpy(at(where) + 1, &r, 4); };
+		hook(0x45fe60, reinterpret_cast<const void*>(&test_timer_clock));
+		hook(0x4f6190, reinterpret_cast<const void*>(&test_timer_get_manager));
+		hook(0x42a940, reinterpret_cast<const void*>(&test_motion_time));
+		// Rebase the local fixture's absolute floating-point zero. Production code retains
+		// the game's original addresses; only this copied image runs away from 0x400000.
+		for (const auto range : {std::pair{0x42c390u, 0x42c513u}, std::pair{0x430a00u, 0x430c24u}}) {
+			for (DWORD p = range.first; p + 4 <= range.second; ++p) {
+				DWORD raw = 0; std::memcpy(&raw, at(p), 4);
+				if (raw == 0x680030) { DWORD address = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(at(raw))); std::memcpy(at(p), &address, 4); }
+			}
+		}
+		const auto baseline = std::vector<std::uint8_t>(image, image + size);
+		test_timer_vtable[2] = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&test_based));
+		test_timer_vtable[3] = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&test_unscaled));
+		test_move_vtable[4] = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&test_fire_timer));
+		test_move_vtable[6] = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&test_get_timer_event));
+		DWORD* move_vtable = test_move_vtable;
+		const DWORD move_address = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&move_vtable));
+		auto* code = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+		CHECK(code != nullptr); if (!code) { VirtualFree(image, 0, MEM_RELEASE); return; }
+		const scheduler_hooks callbacks{va(reinterpret_cast<const void*>(&test_scheduled)), va(reinterpret_cast<const void*>(&test_sources)),
+			va(reinterpret_cast<const void*>(&test_collect)), va(reinterpret_cast<const void*>(&test_clear)),
+			va(reinterpret_cast<const void*>(&test_initialize)), va(reinterpret_cast<const void*>(&test_tick))};
+		for (int n : {20, 27, 64, 127}) {
+			std::memcpy(image, baseline.data(), size); test_timer_capacity = n; test_clock_value = 10.0f;
+			test_block stock_actor(0x844), actor(0x844), stock_packet(0x68), packet(0x68);
+			std::memcpy(stock_actor.data() + 0x378, &move_address, 4); std::memcpy(actor.data() + 0x378, &move_address, 4);
+			std::array<DWORD, 127> fractions{};
+			for (int i = 0; i < n; ++i) { const float f = i == n - 1 ? -1.0f : 0.1f + i * 0.001f; std::memcpy(&fractions[i], &f, 4); test_event_modes[i] = i % 3; }
+			std::memcpy(stock_packet.data() + 8, fractions.data(), 19 * 4);
+			std::memcpy(packet.data() + 8, fractions.data(), 19 * 4);
+			const DWORD inactive = 0xbf800000;
+			for (DWORD offset : {0x58u, 0x5cu, 0x60u}) { std::memcpy(stock_packet.data() + offset, &inactive, 4); std::memcpy(packet.data() + offset, &inactive, 4); }
+			CHECK(run_timer_init(at(0x42c390), stock_actor.data(), stock_packet.data(), 2.0f));
+			test_actor_times.assign(timer_slots, {});
+			auto& times = test_times(actor.data()); times.source = fractions;
+			const auto plan = make_plan(n, 0x10000000, va(code), &callbacks);
+			std::memcpy(code, plan.code.data(), plan.code.size());
+			std::vector<bool> changed(size);
+			for (const auto& w : plan.writes) { for (DWORD i = 0; i < w.size; ++i) { CHECK(!changed[w.va - image_base + i]); changed[w.va - image_base + i] = true; } apply_write(image, w); }
+			CHECK(plan.code.size() < 4096 && plan.original_initialize && plan.original_tick);
+			test_original_init = reinterpret_cast<init_timer_t>(at(plan.original_initialize));
+			test_original_tick = reinterpret_cast<tick_timer_t>(at(plan.original_tick));
+			// Trampoline addresses are expressed in the copied image's virtual coordinate system.
+			FlushInstructionCache(GetCurrentProcess(), image, size); FlushInstructionCache(GetCurrentProcess(), code, 4096);
+			CHECK(run_timer_init(at(0x42c390), actor.data(), packet.data(), 2.0f));
+			CHECK(std::memcmp(stock_actor.data(), actor.data(), 0x844) == 0); // every native field, first 19 timers included
+			CHECK(times.scheduled[n - 1] == inactive);
+			CHECK(actor.slack_untouched() && packet.slack_untouched());
+			for (int i = 19; i < n - 1; ++i) CHECK(times.scheduled[i] != inactive);
+			// Paused dispatch shifts only world-time events, not animation-relative ones.
+			actor.data()[0x579] |= 0x40;
+			const auto old = times.scheduled;
+			CHECK(run_timer_tick(at(0x430a00), actor.data(), 0.5f));
+			for (int i = 0; i < n; ++i) {
+				float a = 0, b = 0; std::memcpy(&a, &old[i], 4); std::memcpy(&b, &times.scheduled[i], 4);
+				CHECK(b == (a > 0 && test_event_modes[i] != 1 ? a + 0.5f : a));
+			}
+			CHECK(std::memcmp(actor.data() + 0x640, times.scheduled.data(), 19 * 4) == 0);
+			actor.data()[0x579] &= ~0x40;
+			for (DWORD offset : {0x690u, 0x694u, 0x698u}) std::memcpy(actor.data() + offset, &inactive, 4);
+			test_clock_value = 20.0f; test_timers_fired.clear();
+			CHECK(run_timer_tick(at(0x430a00), actor.data(), 0.1f));
+			CHECK(test_timers_fired.size() == static_cast<std::size_t>(n - 1));
+			for (int i = 0; i < n - 1 && i < static_cast<int>(test_timers_fired.size()); ++i) CHECK(test_timers_fired[i] == i);
+			CHECK(run_timer_tick(at(0x430a00), actor.data(), 0.1f) && test_timers_fired.size() == static_cast<std::size_t>(n - 1));
+			CHECK(std::memcmp(actor.data() + 0x640, times.scheduled.data(), 19 * 4) == 0 && actor.slack_untouched());
+			std::fill(times.scheduled.begin(), times.scheduled.end(), DWORD{0});
+			// A null active move makes the native cancellation take its direct clear path.
+			const DWORD zero = 0; std::memcpy(actor.data() + 0x378, &zero, 4);
+			void* result = nullptr; CHECK(run_thiscall(at(0x42c270), actor.data(), result));
+			CHECK(std::all_of(times.scheduled.begin(), times.scheduled.end(), [&](DWORD value) { return value == inactive; }));
+			CHECK(actor.slack_untouched());
+		}
+		VirtualFree(code, 0, MEM_RELEASE); VirtualFree(image, 0, MEM_RELEASE);
+	}
+
+	void check_move_trigger_rules()
+	{
+		using namespace move_triggers_rules;
+		CHECK(capacity(std::nullopt) == 19);
+		for (const auto n : {"19", "20", "64 ; headroom", "127"}) CHECK(capacity(std::string(n)) == *parse_count(n));
+		for (const auto n : {"0", "18", "128", "-1", "0x40", "64x", ""}) CHECK(capacity(std::string(n)) == 19);
+		CHECK(move_triggers_rules::slot(0x10000, 0x10000) == 0 && move_triggers_rules::slot(0x10000, 0x10000 + 331 * record_size) == 331);
+		CHECK(!move_triggers_rules::slot(0, 0) && !move_triggers_rules::slot(0x10000, 0xffff) && !move_triggers_rules::slot(0x10000, 0x10001));
+		CHECK(!move_triggers_rules::slot(0x10000, 0x10000 + record_count * record_size));
+		// Actor-address cache isolation, collisions, exhaustion and packet lifetime.
+		std::vector<actor_times> slots(timer_slots);
+		CHECK(times_for(slots, 0) == nullptr);
+		for (DWORD i = 1; i <= timer_slots; ++i) {
+			auto* t = times_for(slots, i * 0x2000);
+			CHECK(t && t->actor == i * 0x2000 && t->scheduled[126] == 0xbf800000);
+			t->scheduled[126] = i;
+		}
+		CHECK(!times_for(slots, (timer_slots + 1) * 0x2000));
+		for (DWORD i = 1; i <= timer_slots; ++i) CHECK(times_for(slots, i * 0x2000)->scheduled[126] == i);
+		auto& context = *times_for(slots, 0x2000);
+		context.packet = 10; context.move = 20; context.source[50] = 42;
+		const source_scope outer(context);
+		context.packet = 30; context.move = 40; context.source[50] = 99;
+		outer.finish(context, 20);
+		CHECK(context.packet == 10 && context.move == 20 && context.source[50] == 42);
+		outer.finish(context, 40);
+		CHECK(context.packet == 0 && context.move == 0);
+		const source_scope none(context);
+		context.packet = 100; context.move = 200;
+		none.finish(context, 200);
+		CHECK(context.packet == 0 && context.move == 0);
+		// Every thunk, including both indexed stores and count-1 pop, runs above slot 19.
+		for (int cap : {20, 27, 64, 127})
+		{
+			test_block move(record_size), handles((cap + 2) * 4);
+			std::fill_n(handles.data(), (cap + 2) * 4, std::uint8_t{0xcc});
+			const DWORD array = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(handles.data() + 4));
+			std::memcpy(move.data() + array_pointer, &array, 4);
+			for (const auto& access : accesses)
+			{
+				std::vector<std::uint8_t> bytes;
+				const auto hex = access.thunk.empty() ? access.retail : access.thunk;
+				for (std::size_t i = 0; i < hex_size(hex); ++i) bytes.push_back(hex_byte(hex, i));
+				if (access.thunk.empty()) bytes[0] = 0x8b;
+				bytes.push_back(0xc3);
+				auto* fn = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, bytes.size(), MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+				CHECK(fn != nullptr);
+				if (!fn) continue;
+				std::memcpy(fn, bytes.data(), bytes.size());
+				FlushInstructionCache(GetCurrentProcess(), fn, bytes.size());
+				move_access_function = fn;
+				move_access_self = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(move.data()));
+				for (DWORD index : std::array<DWORD, 4>{0, 18, 19, static_cast<DWORD>(cap - 1)})
+				{
+					for (int i = 0; i < cap; ++i) { DWORD v = 0x80000000u + i; std::memcpy(handles.data() + 4 + i * 4, &v, 4); }
+					move_access_index = index;
+					move_access_value = 0x12345678;
+					move_access_edi = access.thunk.empty() ? move_access_self : index;
+					const bool pop = access.va == 0x4f6420 || access.va == 0x4f6987 || access.va == 0x4f8046;
+					if (pop) ++move_access_index;
+					run_move_access();
+					// pushad order: edi, esi, ebp, esp, ebx, edx, ecx, eax, then flags.
+					CHECK((move_access_result[8] & 1) == 1);
+					CHECK(move_access_result[2] == move_access_self && move_access_result[5] == move_access_value);
+					const DWORD value = 0x80000000u + index;
+					if (pop) CHECK(move_access_result[0] == value);
+					else if (access.va == 0x4f64c6 || access.va == 0x4f64d6) CHECK(move_access_result[6] == value);
+					else if (access.va == 0x4f6aff || access.va == 0x4f7e35) CHECK(handles.dword(4 + index * 4) == move_access_value);
+					else if (access.va == 0x4f6518) CHECK(move_access_result[4] == array);
+					else if (access.va == 0x4f6562) CHECK(move_access_result[1] == array);
+					else if (access.va == 0x4f7dab) CHECK(move_access_result[6] == array);
+					CHECK(move.dword(array_pointer) == array && move.slack_untouched() && handles.slack_untouched());
+					CHECK(handles.dword(0) == 0xcccccccc && handles.dword((cap + 1) * 4) == 0xcccccccc);
+				}
+				VirtualFree(fn, 0, MEM_RELEASE);
+			}
+		}
+		const auto exe = game_executable();
+		if (!exe) { std::printf("skip: no local executable for move-trigger guards/native loops\n"); return; }
+		DWORD image_size = 0;
+		auto* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](DWORD va) { return image + (va - image_base); };
+		const auto mismatched = [&] { return mismatch([&](DWORD va, std::string_view hex) { return matches(at(va), hex); }); };
+		CHECK(mismatched() == 0);
+		bool rejects = true;
+		const auto corrupt = [&](DWORD va, std::string_view hex) {
+			for (std::size_t i = 0; i < hex_size(hex); ++i) {
+				at(va)[i] ^= 1; rejects &= mismatched() != 0; at(va)[i] ^= 1;
+			}
+		};
+		for (const auto& a : accesses) corrupt(a.va, a.retail);
+		for (const auto& g : guards) corrupt(g.va, g.hex);
+		CHECK(rejects && mismatched() == 0);
+		const auto original = std::vector<std::uint8_t>(image, image + image_size);
+		const auto plan = make_plan(64, 0x10000000, 0x20000000);
+		std::vector<bool> changed(image_size);
+		for (const auto& w : plan.writes) {
+			apply_write(image, w);
+			for (DWORD i = 0; i < w.size; ++i) { CHECK(!changed[w.va - image_base + i]); changed[w.va - image_base + i] = true; }
+		}
+		bool bounded = true;
+		for (DWORD i = 0; i < image_size; ++i) bounded &= image[i] == original[i] || changed[i];
+		CHECK(bounded && plan.code.size() < 4096 && at(0x4f6aad)[0] == 64);
+
+		// Native getter and destructor, with only external event-pool dependencies stubbed.
+		// Their actual loops and redirected accesses must visit all high slots in reverse on free.
+		auto* code = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+		CHECK(code != nullptr);
+		if (code) {
+			const auto virtual_address = [&](const void* p) { return image_base + static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(p) - reinterpret_cast<std::uintptr_t>(image)); };
+			const auto hook = [&](DWORD va, const void* p) { at(va)[0] = 0xe9; const DWORD r = rel32(va, virtual_address(p)); std::memcpy(at(va) + 1, &r, 4); };
+			hook(0x4ffe20, reinterpret_cast<const void*>(&move_manager_get));
+			hook(0x4faac0, reinterpret_cast<const void*>(&move_event_resolve));
+			hook(0x4fbd40, reinterpret_cast<const void*>(&move_event_free));
+			move_manager_vtable[10] = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&move_event_pool));
+			const auto executable_plan = make_plan(64, 0x10000000, virtual_address(code));
+			std::memcpy(code, executable_plan.code.data(), executable_plan.code.size());
+			for (const auto& w : executable_plan.writes) apply_write(image, w);
+			FlushInstructionCache(GetCurrentProcess(), image, image_size);
+			FlushInstructionCache(GetCurrentProcess(), code, executable_plan.code.size());
+			for (int n : {20, 27, 64, 127}) {
+				test_block object(record_size), handles(n * 4);
+				const DWORD pointer = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(handles.data()));
+				std::memcpy(object.data() + array_pointer, &pointer, 4);
+				std::memcpy(object.data() + count_offset, &n, 4);
+				for (int i = 0; i < n; ++i) { const DWORD handle = i + 1; std::memcpy(handles.data() + i * 4, &handle, 4); }
+				for (int i = 0; i < n; ++i) {
+					const int result = reinterpret_cast<thiscall_int_t>(at(0x4f64b0))(object.data(), nullptr, i);
+					CHECK(static_cast<DWORD>(result) == static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(move_events[i].data())));
+				}
+				CHECK(reinterpret_cast<thiscall_int_t>(at(0x4f64b0))(object.data(), nullptr, -1) == 0);
+				CHECK(reinterpret_cast<thiscall_int_t>(at(0x4f64b0))(object.data(), nullptr, n) == 0);
+				move_freed.clear();
+				void* result = nullptr;
+				CHECK(run_thiscall(at(0x4f6410), object.data(), result));
+				CHECK(object.dword(count_offset) == 0 && move_freed.size() == static_cast<std::size_t>(n));
+				for (int i = 0; i < n; ++i) CHECK(move_freed[i] == static_cast<DWORD>(n - i));
+				CHECK(run_thiscall(at(0x4f6410), object.data(), result) && move_freed.size() == static_cast<std::size_t>(n));
+				CHECK(object.dword(array_pointer) == pointer && object.slack_untouched() && handles.slack_untouched());
+			}
+			VirtualFree(code, 0, MEM_RELEASE);
 		}
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
@@ -9417,7 +9742,7 @@ namespace
 		}
 
 		// Folder and file names.
-		CHECK(lc_folder("C:\\Users\\x\\Documents\\Activision\\X-Men Legends\\Save\\") == "C:\\Users\\x\\Documents\\Activision\\X-Men Legends\\SaveLC\\");
+		CHECK(lc_folder("C:\\Fixture\\Documents\\Activision\\X-Men Legends\\Save\\") == "C:\\Fixture\\Documents\\Activision\\X-Men Legends\\SaveLC\\");
 		CHECK(lc_folder("Save\\") == "SaveLC\\" && lc_folder("a/Save/") == "a/SaveLC/");
 		CHECK(!lc_folder("") && !lc_folder("Save") && !lc_folder("C:\\x\\Saves\\") && !lc_folder("C:\\x\\save\\") && !lc_folder("XSave\\"));
 		CHECK(slot_file(0) == "saveslot0.lcsave" && slot_file(9) == "saveslot9.lcsave" && old_slot_file(4) == "saveslot4.save");
@@ -9779,6 +10104,13 @@ int main(const int argc, char** argv)
 		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
 		return failures ? 1 : 0;
 	}
+	if (argc > 1 && std::strcmp(argv[1], "--move-trigger-rules") == 0)
+	{
+		check_move_trigger_rules();
+		check_actor_trigger_timing();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--fight-style-rules") == 0)
 	{
 		check_fight_style_rules();
@@ -9859,6 +10191,8 @@ int main(const int argc, char** argv)
 	check_geometry_sharing_rules();
 	check_limits_rules();
 	check_fight_style_rules();
+	check_move_trigger_rules();
+	check_actor_trigger_timing();
 	check_effect_curve_rules();
 	check_forced_teams_rules();
 	check_conversations_rules();

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added `[Limits] MoveTriggers` (20..127, port default 64): preserves full gun bursts and authored model events
+  through guarded handle side storage; native move layout and save data remain unchanged.
+
 - Fix legacy imports whose equipped items were written in a different era from the campaign's talents.
   Translate hero and restore-bank equipment with the detected item era, including semantic dumps.
 - Key talent-era evidence by actual stats index so restore-bank records belong to the correct hero.
