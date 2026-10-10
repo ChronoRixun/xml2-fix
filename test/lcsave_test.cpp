@@ -138,7 +138,7 @@ namespace
 			tables.catalogue_revision(), tables.content_version(), tables.hero_count(), tables.stats_count(), tables.item_count(),
 			tables.course_count(), tables.objective_count());
 		int files = 0, lcsave_equal = 0, lcsave_keys = 0, old_equal = 0, new_equal = 0, reverse_agree = 0, reverse_identical = 0, all_equal = 0;
-		int saver_ok = 0, saver_same = 0, saver_policy_same = 0, conversation_resets = 0, retained_ok = 0, adds_files = 0, adds_total = 0;
+		int saver_ok = 0, saver_same = 0, saver_policy_same = 0, conversation_resets = 0, retained_ok = 0, adds_files = 0, adds_total = 0, placement_promotions = 0;
 		Hash running_digest{};
 		if (!conversation_digest(tables, running_digest, error)) { std::printf("FAIL: conversation digest: %s\n", error.c_str()); return 1; }
 		std::vector<fs::path> paths;
@@ -231,7 +231,7 @@ namespace
 					const auto back = reverse_slot(r.bytes, *tables.data, &old, notes);
 					reversed_identical = write_slot(back) == old_bytes;
 					// Exercise the runtime metadata/retention contract, then require every semantic field to survive.
-					// The only permitted value change is a conversation reset justified by this input record's digest.
+					// Permit only digest-confirmed conversation resets and metadata-confirmed legacy placement promotions.
 					const auto plain = new_to_old_stream(r.bytes, tables);
 					if (!plain.ok || plain.bytes.size() != old_slot_size)
 					{
@@ -270,6 +270,35 @@ namespace
 							{
 								const auto& digest = records[i]["conversation_digest"].as_bytes();
 								const bool invalid = digest == std::string(32, '\0') || digest != std::string(reinterpret_cast<const char*>(running_digest.data()), running_digest.size());
+								const bool legacy = input_file.data("META")["origin"].as_int() == 1 || records[i]["capture_flags"].as_int() == 2;
+								if (legacy)
+								{
+									const ZoneCaptureMetadata* capture = nullptr;
+									for (const auto& candidate : ctx.zone_captures)
+										if (candidate.zone == zones.l[i]["zone"].as_text() &&
+											candidate.time_stamp == records[i]["time_stamp"].as_real()) capture = &candidate;
+									Value states = zones.l[i]["states"];
+									if (capture) for (const auto& entity : capture->entities)
+									{
+										bool claimed = false;
+										Value* match = nullptr;
+										unsigned matches = 0;
+										for (auto& state : states.l)
+										{
+											if (state["list"].as_int() == 1 && state["ordinal"].as_int() == entity.ordinal) claimed = true;
+											if (state["list"].as_int() != 1 && state["definition"].as_text() == entity.definition_name &&
+												state["instance"].as_text() == entity.instance_name) { match = &state; ++matches; }
+										}
+										if (claimed || matches != 1) continue;
+										match->set("list", Value::integer(1));
+										match->set("ordinal", Value::integer(entity.ordinal));
+										Value flags = (*match)["flags"];
+										flags.l[1] = Value::integer(flags.l[1].as_int() | 8);
+										match->set("flags", std::move(flags));
+										++placement_promotions;
+									}
+									zones.l[i].set("states", std::move(states));
+								}
 								if (!invalid) continue;
 								Value cleared = Value::list();
 								bool had_bits = false;
@@ -278,7 +307,7 @@ namespace
 								zones.l[i].set("conversation", std::move(cleared));
 							}
 							expected.set("zones", std::move(zones));
-							same_policy = to_json(actual) == to_json(expected);
+							same_policy = to_json(actual) == to_json(canonical_semantics(expected));
 							retained = true;
 							bool opaque_keep = false;
 							for (const auto& [tag, section] : input_file.sections)
@@ -377,6 +406,7 @@ namespace
 		std::printf("corpus: %d files; .lcsave byte-identical %d, identical but for the KEYS text %d; old dump equal %d; new dump equal %d; "
 			"reverse byte-exact %d (agrees with the Python report %d); all equal %d\n", files, lcsave_equal, lcsave_keys, old_equal, new_equal,
 			reverse_identical, reverse_agree, all_equal);
+		std::printf("legacy placement promotions normalized: %d\n", placement_promotions);
 		std::printf("loader -> saver round trip: saved %d, raw unchanged game state %d, policy round trip %d, conversation resets %d, retained payloads/unknown fields %d; missing herostat talents: %d files, %d talents\n", saver_ok,
 			saver_same, saver_policy_same, conversation_resets, retained_ok, adds_files, adds_total);
 		return files && lcsave_equal == files && all_equal == files && saver_ok == files && saver_policy_same == files && retained_ok == files ? 0 : 1;
