@@ -275,7 +275,6 @@ namespace lcsave::detail
 		{
 			// Drop only dependencies owned exclusively by rejected records. Shared and unowned handles survive.
 			std::set<u32> owned, applied;
-			std::optional<Hash> current_conversation_digest;
 			auto dependencies = [](const Value& record, std::set<u32>& handles)
 			{
 				for (const auto& state : record["states"].as_list()) if (state["payload_kind"].as_int() == 2)
@@ -454,7 +453,7 @@ namespace lcsave::detail
 				const auto& fog = r["fog"]["data"].as_bytes();
 				if (fog.size() != old_fog_bytes) fail("fog: " + std::to_string(fog.size()) + " bytes, layout says 844");
 				std::memcpy(z.tail.fog, fog.data(), old_fog_bytes);
-				restore_conversation(r, zone, pos.t, z.tail.conversation, notes, current_conversation_digest);
+				restore_conversation(r, zone, pos.t, z.tail.conversation, notes);
 				z.tail.time_stamp = static_cast<float>(r["time_stamp"].as_real());
 				z.tail.flag = B(r["flag"]);
 				m.zones.push_back(std::move(z));

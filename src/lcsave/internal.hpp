@@ -311,8 +311,9 @@ namespace lcsave::detail
 	};
 
 	std::vector<Hash> conversation_bits(const Build& build, const std::string& zone);
+	Hash conversation_package_digest(const Hash& zone, const std::vector<Hash>& bits);
 	void restore_conversation(const Value& record, const std::string& zone, const TablesData& tables,
-		u32 (&words)[5], std::vector<std::string>& notes, std::optional<Hash>& current_digest);
+		u32 (&words)[5], std::vector<std::string>& notes);
 	std::string unescape_key(const std::string& canonical);
 	bool read_catalogue(const std::vector<std::uint8_t>& file, Catalogue& out, std::string& error);
 	bool read_legacy(const std::vector<std::uint8_t>& file, TablesData& out, std::string& error);

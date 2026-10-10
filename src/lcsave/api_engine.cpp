@@ -127,6 +127,16 @@ namespace lcsave
 		});
 	}
 
+	bool conversation_digest(const Tables& tables, const std::string& zone, std::array<std::uint8_t, 32>& out, std::string& error)
+	{
+		error.clear();
+		return guarded(error, [&]
+		{
+			if (!tables.loaded() || !tables.data->build) detail::fail("conversation digest needs build tables");
+			out = detail::conversation_package_digest(key_hash1(zone, Enc::latin1), detail::conversation_bits(*tables.data->build, zone));
+		});
+	}
+
 	bool loaded_zone_metadata(const std::vector<std::uint8_t>& file, const Tables& tables,
 		std::vector<ZoneCaptureMetadata>& out, std::string& error)
 	{
@@ -137,8 +147,6 @@ namespace lcsave
 			std::vector<std::string> notes;
 			const auto native = detail::reverse_slot(file, *tables.data, nullptr, notes);
 			const auto f = detail::read_file(file.data(), file.size(), kind_campaign);
-			std::array<std::uint8_t, 32> current_digest{};
-			if (!conversation_digest(tables, current_digest, error)) detail::fail(error);
 			for (const auto& record : f.data("ZONE")["records"].as_list())
 			{
 				const auto found = tables.data->p_zone.find(static_cast<std::uint32_t>(record["zone"].as_int()));
@@ -151,7 +159,7 @@ namespace lcsave
 				metadata.time_stamp = static_cast<float>(record["time_stamp"].as_real());
 				metadata.capture_flags = static_cast<std::uint32_t>(record["capture_flags"].as_int());
 				std::memcpy(metadata.placement_sha1.data(), record["content_hash"].as_bytes().data(), 20);
-				metadata.conversation_digest = current_digest;
+				if (!conversation_digest(tables, metadata.zone, metadata.conversation_digest, error)) detail::fail(error);
 				if (f.data("META")["origin"].as_int() == 1 || record["conversation_digest"].as_bytes() == std::string(32, '\0'))
 					metadata.capture_flags |= 2; // earlier candidates wrote zero despite unobserved provenance
 				const auto* numbering = tables.data->build->zone_numbering(metadata.zone);

@@ -784,7 +784,7 @@ namespace save_format
 			if (!visit_known || meta.zone!=active_visit.zone)
 				meta.capture_flags|=save_core_rules::capture_unobserved;
 			std::string error;
-			if (ready!=readiness::ok || !lcsave::conversation_digest(tables,meta.conversation_digest,error))
+			if (ready!=readiness::ok || !lcsave::conversation_digest(tables,meta.zone,meta.conversation_digest,error))
 				meta.capture_flags|=save_core_rules::capture_unobserved;
 			capturing=&meta;
 			const bool ok=retail_capture(record,nullptr,name,flag,stamp);

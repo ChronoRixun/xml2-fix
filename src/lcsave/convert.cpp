@@ -617,6 +617,7 @@ namespace lcsave::detail
 			if (states.as_list().size() >= old_zone_states) fail(what + ": capture identities exceed native state capacity");
 			Hash digest{};
 			if (capture) digest = capture->conversation_digest;
+			else if (context) digest = conversation_package_digest(key_hash1(zone, Enc::latin1), conversation_bits(*c.t.build, zone));
 			else if (digest_override) digest = *digest_override;
 			else if (era.has_digest) digest = era.conversation_digest;
 			Value conv = L();

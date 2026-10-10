@@ -49,30 +49,37 @@ namespace lcsave::detail
 		}
 		return bits;
 	}
+	Hash conversation_package_digest(const Hash& zone, const std::vector<Hash>& bits)
+	{
+		const char prefix[8] = {'L','C','C','O','N','V','2',0};
+		std::vector<std::uint8_t> raw(prefix, prefix + 8);
+		raw.insert(raw.end(), zone.begin(), zone.end());
+		const u32 count = static_cast<u32>(bits.size());
+		for (int shift = 0; shift < 32; shift += 8) raw.push_back(static_cast<std::uint8_t>(count >> shift));
+		for (const auto& identity : bits) raw.insert(raw.end(), identity.begin(), identity.end());
+		return sha256(raw.data(), raw.size());
+	}
 	void restore_conversation(const Value& record, const std::string& zone, const TablesData& t,
-		u32 (&words)[5], std::vector<std::string>& notes, std::optional<Hash>& current_digest)
+		u32 (&words)[5], std::vector<std::string>& notes)
 	{
 		const auto& conv = record["conversation"].as_list();
 		if (conv.size() != 5) fail("pack expected 5 items for packing");
 		bool any = false;
 		for (int k = 0; k < 5; ++k) { words[k] = static_cast<u32>(conv[k].as_int()); any |= words[k] != 0; }
 		if (!any) return;
-		if (!current_digest)
-		{
-			Hash current{};
-			Tables tables; tables.data = std::shared_ptr<const TablesData>(&t, [](const TablesData*) {});
-			std::string error;
-			if (!conversation_digest(tables, current, error)) fail(error);
-			current_digest = current;
-		}
+		const auto target = conversation_bits(*t.build, zone);
+		const auto current_digest = conversation_package_digest(key_hash1(zone, Enc::latin1), target);
 		const auto& recorded = record["conversation_digest"].as_bytes();
 		if (recorded.size() != 32) fail("conversation mapping: invalid digest");
 		Hash digest{}; std::memcpy(digest.data(), recorded.data(), 32);
-		if (digest != Hash{} && digest == *current_digest) return;
+		if (digest == current_digest) return;
 		const auto source = t.conversation_tables.find({digest, key_hash1(zone, Enc::latin1)});
 		if (source == t.conversation_tables.end())
-			fail("zone " + zone + ": conversation mapping unavailable: heard marks retained in source save");
-		const auto target = conversation_bits(*t.build, zone);
+		{
+			notes.push_back("zone " + zone + ": conversation provenance unknown: heard marks dropped");
+			std::fill(std::begin(words), std::end(words), 0);
+			return;
+		}
 		std::map<Hash, std::size_t> positions;
 		for (std::size_t k = 0; k < target.size(); ++k)
 			if (!positions.emplace(target[k], k).second) fail("conversation mapping: duplicate identity");
@@ -80,13 +87,19 @@ namespace lcsave::detail
 		for (std::size_t bit = 0; bit < 160; ++bit)
 		{
 			if (!(words[bit / 32] & (u32(1) << (bit % 32)))) continue;
-			if (bit >= source->second.size()) fail("conversation mapping: set bit has no historical identity");
+			if (bit >= source->second.size())
+			{
+				notes.push_back("zone " + zone + ": conversation bit " + std::to_string(bit) + ": historical identity unknown: heard mark dropped");
+				continue;
+			}
 			const auto& identity = source->second[bit];
 			const auto found = positions.find(identity);
 			if (found == positions.end())
 				notes.push_back("zone " + zone + ": conversation identity " + hex(identity) + ": absent in current package: heard mark dropped");
 			else out[found->second / 32] |= u32(1) << (found->second % 32);
 		}
+		if (!std::equal(std::begin(out), std::end(out), std::begin(words)) && std::any_of(std::begin(out), std::end(out), [](u32 w) { return w != 0; }))
+			notes.push_back("zone " + zone + ": conversation identities remapped to current package");
 		std::copy(std::begin(out), std::end(out), std::begin(words));
 	}
 }

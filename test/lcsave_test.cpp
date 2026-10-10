@@ -224,7 +224,7 @@ namespace
 		for (std::size_t bit = 0; bit < 160; ++bit)
 		{
 			if (!(static_cast<u32>(words.l.at(bit / 32).as_int()) & (u32(1) << (bit % 32)))) continue;
-			if (bit >= source.size()) fail("corpus oracle: heard bit has no historical identity");
+			if (bit >= source.size()) { ++dropped; continue; }
 			const auto at = std::find(target.begin(), target.end(), source[bit]);
 			if (at == target.end()) { ++dropped; continue; }
 			const auto position = static_cast<std::size_t>(at - target.begin());
@@ -431,7 +431,10 @@ namespace
 							for (std::size_t i = 0; i < records.size(); ++i)
 							{
 								const auto& digest = records[i]["conversation_digest"].as_bytes();
-								const bool invalid = digest == std::string(32, '\0') || digest != std::string(reinterpret_cast<const char*>(running_digest.data()), running_digest.size());
+								const auto zone = zones.l[i]["zone"].as_text();
+								const auto ranking = conversation_bits(*tables.data->build, zone);
+								const auto package_digest = conversation_package_digest(key_hash1(zone, Enc::latin1), ranking);
+								const bool invalid = digest != std::string(reinterpret_cast<const char*>(package_digest.data()), package_digest.size());
 								const bool legacy = input_file.data("META")["origin"].as_int() == 1 || records[i]["capture_flags"].as_int() == 2;
 								if (legacy)
 								{
@@ -446,11 +449,14 @@ namespace
 								for (const auto& word : records[i]["conversation"].as_list()) had_bits |= word.as_int() != 0;
 								if (!had_bits) continue;
 								Hash recorded{}; std::memcpy(recorded.data(), digest.data(), 32);
-								const auto zone = zones.l[i]["zone"].as_text();
 								const auto source = tables.data->conversation_tables.find({recorded, key_hash1(zone, Enc::latin1)});
-								if (source == tables.data->conversation_tables.end()) fail("corpus oracle: conversation mapping unavailable");
+								if (source == tables.data->conversation_tables.end())
+								{
+									Value zero = Value::list(); for (int k = 0; k < 5; ++k) zero.push(Value::integer(0));
+									zones.l[i].set("conversation", zero); ++resets; continue;
+								}
 								zones.l[i].set("conversation", normalized_heard(records[i]["conversation"], source->second,
-									conversation_bits(*tables.data->build, zone), resets));
+									ranking, resets));
 							}
 							expected.set("zones", std::move(zones));
 							same_policy = to_json(actual) == to_json(canonical_semantics(expected));
