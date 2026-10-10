@@ -137,6 +137,8 @@ namespace lcsave
 			std::vector<std::string> notes;
 			const auto native = detail::reverse_slot(file, *tables.data, nullptr, notes);
 			const auto f = detail::read_file(file.data(), file.size(), kind_campaign);
+			std::array<std::uint8_t, 32> current_digest{};
+			if (!conversation_digest(tables, current_digest, error)) detail::fail(error);
 			for (const auto& record : f.data("ZONE")["records"].as_list())
 			{
 				const auto found = tables.data->p_zone.find(static_cast<std::uint32_t>(record["zone"].as_int()));
@@ -149,8 +151,8 @@ namespace lcsave
 				metadata.time_stamp = static_cast<float>(record["time_stamp"].as_real());
 				metadata.capture_flags = static_cast<std::uint32_t>(record["capture_flags"].as_int());
 				std::memcpy(metadata.placement_sha1.data(), record["content_hash"].as_bytes().data(), 20);
-				std::memcpy(metadata.conversation_digest.data(), record["conversation_digest"].as_bytes().data(), 32);
-				if (f.data("META")["origin"].as_int() == 1 || std::all_of(metadata.conversation_digest.begin(), metadata.conversation_digest.end(), [](u8 b) { return b == 0; }))
+				metadata.conversation_digest = current_digest;
+				if (f.data("META")["origin"].as_int() == 1 || record["conversation_digest"].as_bytes() == std::string(32, '\0'))
 					metadata.capture_flags |= 2; // earlier candidates wrote zero despite unobserved provenance
 				const auto* numbering = tables.data->build->zone_numbering(metadata.zone);
 				const auto restored = std::find_if(native.zones.begin(), native.zones.end(), [&](const auto& z)

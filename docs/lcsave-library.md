@@ -139,3 +139,28 @@ exact f32 timestamps, flag2 and a zero conversation digest for incoming native t
 extracts associations directly from an in-memory temporary translation; it never runs reverse or hashes conversation
 files. The runtime installs this metadata before native application. Same-name ambiguity/source factory skips still
 need an actual capture sidecar; metadata extraction does not replace available-pool preflight.
+
+## Conversation heard marks across builder eras
+
+Native heard state is five words. The engine ranks loaded conversation files by case-insensitive name,
+then indexes four consumption lanes per file (0x45cb5a, 0x45c56e, 0x45c679). A lane counts previously consumed
+run-once starts; it is not a line id or a startCondition document ordinal.
+
+`conversation.lcm` carries historical `(conversation digest, zone key hash)` tables of SHA-256 identities
+`key_hash(relative conversation name, decimal lane)`. The builder derives file names from each era's generated
+zone package, sorted and deduplicated as the engine does. Every supported era has its table in the hash-only
+legacy JSON; identical eras resolve through the reference table. At load, a matching nonzero digest keeps the
+words. A known historical digest maps set bits into the current package by identity. Only identities absent
+from the current package are dropped, each with a ledger explanation. A nonzero mark with unknown provenance
+or no assigned historical lane refuses translation, retaining the original save. Zero marks need no mapping.
+
+Loaded capture metadata uses the running digest after remapping so later cached-zone saves do not remap
+already translated words a second time. No LC container field, catalogue identity, or legacy import byte layout
+changes. Existing imported LC files receive this repair during native reconstruction.
+
+The sidecar is `LCCONV1` plus a NUL (8 bytes), u32 version=1, u32 table count, u32 file length, u32 CRC-32 of
+the body. Each table has digest[32], zone-key-hash[32], u32 bit count, then bit-count identity hashes[32]. Counts
+are multiples of four, at most 128; duplicate keys/identities, bad framing/version/CRC refuse. Readers accept
+older builds without the sidecar but cannot apply unmatched nonzero heard marks without it. V39 verifies the
+sidecar against the generated set. Rebuild only savefiles when the era ledger changes; prepared asset caches
+remain valid because game content is unchanged. CONTENT_VERSION remains the release integrator's responsibility.

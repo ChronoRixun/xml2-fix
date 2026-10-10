@@ -315,6 +315,15 @@ namespace
 		const auto raw = encode_xmlb(zone_file(default_zone));
 		std::ofstream(folder / "Maps" / "zone" / "x" / "y.engb", std::ios::binary).write(reinterpret_cast<const char*>(raw.data()),
 			static_cast<std::streamsize>(raw.size()));
+		// Historical fixture digests are invented; supply their file/lane identities explicitly.
+		const auto package_dir = folder / "Packages/generated/maps/zone/x";
+		fs::create_directories(package_dir);
+		const auto package = encode_xmlb(E{"packagedef", {}, {E{"xml", {{"filename", "conversations/invented"}}, {}}}});
+		for (const auto* name : {"y.pkgb", "z.pkgb"})
+			std::ofstream(package_dir / name, std::ios::binary).write(reinterpret_cast<const char*>(package.data()), static_cast<std::streamsize>(package.size()));
+		const auto bits = conversation_bits(*t->build, "zone/x/y");
+		for (const auto& era : t->eras) for (const auto* zone : {"zone/x/y", "zone/x/z"})
+			t->conversation_tables[{era.conversation_digest, key_hash1(zone, Enc::latin1)}] = bits;
 		return t;
 	}
 
@@ -1074,6 +1083,11 @@ namespace
 			const auto raw0 = write_slot(make_old_save({0, 3, 4}, 10, true, 3, {1, 1, 0, 1}));
 			NewFileContext c0;
 			c0.description = "desc";
+			c0.has_conversation_digest = true;
+			std::string digest_error;
+			Hash digest{};
+			check(conversation_digest(tables, digest, digest_error), "flag-0 fixture digest");
+			std::copy(digest.begin(), digest.end(), c0.conversation_digest);
 			const auto s0 = old_stream_to_new(std::vector<std::uint8_t>(raw0.begin() + old_envelope, raw0.end()), tables, c0);
 			check(s0.ok, "saver with a flag-0 slot (" + s0.error + ")");
 			if (s0.ok)
@@ -1160,7 +1174,7 @@ namespace
 			{
 				auto observed = captures;
 				observed[0].capture_flags = 0;
-				observed[0].conversation_digest.fill('c');
+				observed[0].conversation_digest = t->reference.conversation_digest;
 				observed[0].entities[0].ordinal = 2;
 				observed[0].entities[1].ordinal = 1;
 				auto native = make_old_save({0, 3, 4}, 10);
@@ -1182,7 +1196,7 @@ namespace
 						for (int pass = 0; pass < 2; ++pass)
 						{
 							const auto cached = old_stream_to_new(restored.bytes, tables, ctx);
-							check(cached.ok && read_file(cached.bytes.data(), cached.bytes.size()).data("ZONE")["records"].as_list()[0]["conversation_digest"].as_bytes() == std::string(32, 'c'), "cached per-zone provenance not overwritten");
+							check(cached.ok && read_file(cached.bytes.data(), cached.bytes.size()).data("ZONE")["records"].as_list()[0]["conversation_digest"].as_bytes() == std::string(reinterpret_cast<const char*>(captures[0].conversation_digest.data()), 32), "cached digest rebased after native reconstruction");
 						}
 					}
 				}
@@ -1246,7 +1260,7 @@ namespace
 	void test_native_transfer_metadata(const fs::path& folder)
 	{
 		auto t=make_tables(folder,"sh_might",false);Tables tables;tables.data=t;
-		auto native=make_old_save({0,3,4},10);std::memset(native.zones[0].states[1].payload,0xa5,8);std::memset(native.zones[0].tail.fog,0x55,old_fog_bytes);
+		auto native=make_old_save({0,3,4},10);native.zones[0].tail.conversation[0]=0;std::memset(native.zones[0].states[1].payload,0xa5,8);std::memset(native.zones[0].tail.fog,0x55,old_fog_bytes);
 		const auto raw=write_slot(native);
 		for(int envelope=0;envelope<2;++envelope)
 		{
@@ -1356,9 +1370,9 @@ namespace
 				sections.push_back({tag, sec.entry.major, sec.entry.minor, sec.entry.flags, data});
 			}
 			const auto result = new_to_old_stream(write_file(kind_campaign, sections, HeaderIn{}), tables);
-			if (scenario == 3 || scenario == 4)
+			if (scenario == 3 || scenario == 4 || scenario == 6)
 			{
-				check(!result.ok && result.bytes.empty() && contains(result.error, scenario == 3 ? "duplicate destination placement" : "unsupported capture status bits"),
+				check(!result.ok && result.bytes.empty() && contains(result.error, scenario == 3 ? "duplicate destination placement" : scenario == 4 ? "unsupported capture status bits" : "conversation mapping unavailable"),
 				      "review refused before stream exposed " + std::to_string(scenario)); continue;
 			}
 			check(result.ok, "review reset accepted " + std::to_string(scenario) + ": " + result.error); if (!result.ok) continue;
@@ -1366,7 +1380,6 @@ namespace
 			if (scenario < 3) check(native.zones.empty() && native.world.size() == 1 && native.world[0].slot == 6 && contains(result.ledger, "record not applied"),
 			                       "discard removes exclusively owned world item and explains reset " + std::to_string(scenario));
 			if (scenario == 5) check(native.zones.size() == 1 && native.world.size() == 1 && native.world[0].slot == 5, "discard preserves shared world dependency");
-			if (scenario == 6) check(native.zones[0].tail.conversation[0] == 0 && contains(result.ledger, "conversation digest unknown or changed: bits reset"), "conversation reset ledger available to runtime");
 		}
 	}
 

@@ -147,8 +147,8 @@ as a removed entity. Explicit tombstones preserve the placement identity of remo
 
 Capture status uses bit 0 (mask 1) for incomplete and bit 1 (mask 2) for historical/inferred provenance. Bounds are
 checked before the native ordinal access and capture lists can overflow. A new incomplete/unverified runtime capture
-blocks campaign writes. Legacy inferred records remain marked unknown. Zero/different conversation digests reset
-only conversation bits with a diagnostic. Reader ceilings remain broader than native capacities; unsupported
+blocks campaign writes. Legacy inferred records remain marked unknown. Changed conversation digests use the historical identity map;
+unknown nonzero heard marks refuse translation, and removed identities receive individual ledger notes. Reader ceilings remain broader than native capacities; unsupported
 quantities, positions, stack shapes, references and native allocation demands refuse before narrowing/loading.
 
 Campaign and profile imports carry LGCY, and continuing saves retain LGCY and unknown KEEP payloads with their
@@ -227,3 +227,28 @@ LGCY/external ledger records once: "Forge contact unlock granted (0.1.x builds d
 Native saving, new games and LC resaves never run this repair. Previously imported LC files are not repaired
 retroactively. The Python verifier lists this deliberate change in `legacy_repairs` while checking all other
 semantics. No wire layout, section version, catalogue or content-version change is needed.
+
+## Conversation heard marks across builder eras
+
+Native heard state is five words. The engine ranks loaded conversation files by case-insensitive name,
+then indexes four consumption lanes per file (0x45cb5a, 0x45c56e, 0x45c679). A lane counts previously consumed
+run-once starts; it is not a line id or a startCondition document ordinal.
+
+`conversation.lcm` carries historical `(conversation digest, zone key hash)` tables of SHA-256 identities
+`key_hash(relative conversation name, decimal lane)`. The builder derives file names from each era's generated
+zone package, sorted and deduplicated as the engine does. Every supported era has its table in the hash-only
+legacy JSON; identical eras resolve through the reference table. At load, a matching nonzero digest keeps the
+words. A known historical digest maps set bits into the current package by identity. Only identities absent
+from the current package are dropped, each with a ledger explanation. A nonzero mark with unknown provenance
+or no assigned historical lane refuses translation, retaining the original save. Zero marks need no mapping.
+
+Loaded capture metadata uses the running digest after remapping so later cached-zone saves do not remap
+already translated words a second time. No LC container field, catalogue identity, or legacy import byte layout
+changes. Existing imported LC files receive this repair during native reconstruction.
+
+The sidecar is `LCCONV1` plus a NUL (8 bytes), u32 version=1, u32 table count, u32 file length, u32 CRC-32 of
+the body. Each table has digest[32], zone-key-hash[32], u32 bit count, then bit-count identity hashes[32]. Counts
+are multiples of four, at most 128; duplicate keys/identities, bad framing/version/CRC refuse. Readers accept
+older builds without the sidecar but cannot apply unmatched nonzero heard marks without it. V39 verifies the
+sidecar against the generated set. Rebuild only savefiles when the era ledger changes; prepared asset caches
+remain valid because game content is unchanged. CONTENT_VERSION remains the release integrator's responsibility.
