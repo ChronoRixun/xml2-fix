@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -122,6 +123,142 @@ namespace
 			why = e.message;
 			return false;
 		}
+	}
+
+	// Expected associations come from the build's numbered placements, never loader metadata.
+	unsigned normalize_promotions(Value& states, const ZoneNumbering& numbering)
+	{
+		using Names = std::pair<Hash, Hash>;
+		std::map<Names, std::vector<std::size_t>> placements, saved;
+		std::set<std::size_t> claimed;
+		for (std::size_t i = 0; i < numbering.names.size(); ++i) placements[numbering.names[i]].push_back(i + 1);
+		for (std::size_t i = 0; i < states.l.size(); ++i)
+		{
+			const auto& state = states.l[i];
+			if (state["list"].as_int() == 1) claimed.insert(static_cast<std::size_t>(state["ordinal"].as_int()));
+			else if (state["list"].as_int() == 2 || state["list"].as_int() == 3)
+			{
+				const auto& definition = state["definition"];
+				const auto& instance = state["instance"];
+				saved[{key_hash1(definition.as_text(), definition.enc), key_hash1(instance.as_text(), instance.enc)}].push_back(i);
+			}
+		}
+		unsigned promoted = 0;
+		for (const auto& [names, indices] : saved)
+		{
+			const auto found = placements.find(names);
+			if (indices.size() != 1 || found == placements.end() || found->second.size() != 1) continue;
+			const auto ordinal = found->second.front();
+			if (claimed.count(ordinal)) continue;
+			auto& state = states.l[indices.front()];
+			state.set("list", Value::integer(1));
+			state.set("ordinal", Value::integer(static_cast<std::int64_t>(ordinal)));
+			Value flags = state["flags"];
+			flags.l[1] = Value::integer(flags.l[1].as_int() | 8);
+			state.set("flags", std::move(flags));
+			++promoted;
+		}
+		return promoted;
+	}
+
+	bool associations_match_build(const ZoneCaptureMetadata& capture, const ZoneNumbering& numbering)
+	{
+		std::set<u32> ordinals;
+		for (const auto& entity : capture.entities)
+		{
+			if (!entity.ordinal || entity.ordinal > numbering.names.size() || entity.ordinal > numbering.placement.size() ||
+				!ordinals.insert(entity.ordinal).second) return false;
+			const auto i = entity.ordinal - 1;
+			if (entity.placement_index != numbering.placement[i] ||
+				key_hash1(entity.definition_name, Enc::cp1252) != numbering.names[i].first ||
+				key_hash1(entity.instance_name, Enc::cp1252) != numbering.names[i].second) return false;
+		}
+		return true;
+	}
+
+	Value oracle_list(std::initializer_list<Value> values)
+	{
+		Value out = Value::list();
+		for (const auto& value : values) out.push(value);
+		return out;
+	}
+
+	Value oracle_states()
+	{
+		auto state = [](const char* definition, const char* instance, int list, int flag)
+		{
+			return Value::dict({{"definition", Value::text(definition)}, {"instance", Value::text(instance)},
+				{"list", Value::integer(list)}, {"ordinal", Value::integer(0)},
+				{"flags", oracle_list({Value::integer(0), Value::integer(flag)})},
+				{"position", oracle_list({Value::real(1), Value::real(2), Value::real(3)})},
+				{"payload", Value::text("0123456789abcdef")}});
+		};
+		return oracle_list({state("gate", "door_a", 2, 3), state("crate", "box_a", 3, 1)});
+	}
+
+	bool oracle_accepts_wrong_associations()
+	{
+		ZoneNumbering numbering;
+		numbering.names = {{key_hash1("gate", Enc::latin1), key_hash1("door_a", Enc::latin1)},
+			{key_hash1("crate", Enc::latin1), key_hash1("box_a", Enc::latin1)}};
+		numbering.placement = {5, 9};
+		ZoneCaptureMetadata bad;
+		bad.entities = {{2, 9, "gate", "door_a"}, {1, 5, "crate", "box_a"}};
+		Value expected = oracle_states();
+		normalize_promotions(expected, numbering);
+		// Wrong loader output and matching wrong metadata; values are hand-derived from the injected swap.
+		Value actual = oracle_states();
+		for (std::size_t i = 0; i < 2; ++i)
+		{
+			actual.l[i].set("list", Value::integer(1));
+			actual.l[i].set("ordinal", Value::integer(i == 0 ? 2 : 1));
+			actual.l[i].set("flags", oracle_list({Value::integer(0), Value::integer(i == 0 ? 11 : 9)}));
+		}
+		return to_json(expected) == to_json(actual) || associations_match_build(bad, numbering);
+	}
+
+	void test_corpus_oracle()
+	{
+		const auto before = failures;
+		unsigned checks = 0;
+		auto expect = [&](bool ok, const char* what) { ++checks; check(ok, what); };
+		expect(!oracle_accepts_wrong_associations(), "corpus oracle rejects swapped promotion ordinals with matching bad metadata");
+		ZoneNumbering numbering;
+		numbering.names = {{key_hash1("gate", Enc::latin1), key_hash1("door_a", Enc::latin1)},
+			{key_hash1("crate", Enc::latin1), key_hash1("box_a", Enc::latin1)}};
+		numbering.placement = {5, 9};
+		ZoneCaptureMetadata good;
+		good.entities = {{1, 5, "gate", "door_a"}, {2, 9, "crate", "box_a"}};
+		expect(associations_match_build(good, numbering), "correct build ordinals and placement indices accepted");
+		auto wrong_placement = good;
+		wrong_placement.entities[0].placement_index = 9;
+		expect(!associations_match_build(wrong_placement, numbering), "wrong placement index rejected");
+		auto out_of_range = good;
+		out_of_range.entities[0].ordinal = 3;
+		expect(!associations_match_build(out_of_range, numbering), "out-of-range ordinal rejected");
+		auto duplicate_ordinal = good;
+		duplicate_ordinal.entities.push_back(good.entities[0]);
+		expect(!associations_match_build(duplicate_ordinal, numbering), "duplicate association rejected");
+		Value states = oracle_states();
+		Value literal = states;
+		literal.l[0].set("list", Value::integer(1)); literal.l[0].set("ordinal", Value::integer(1));
+		literal.l[0].set("flags", oracle_list({Value::integer(0), Value::integer(11)}));
+		literal.l[1].set("list", Value::integer(1)); literal.l[1].set("ordinal", Value::integer(2));
+		literal.l[1].set("flags", oracle_list({Value::integer(0), Value::integer(9)}));
+		expect(normalize_promotions(states, numbering) == 2 && states == literal, "unique names derive literal build ordinals; payload and position retained");
+		auto twins = numbering;
+		twins.names.push_back(numbering.names[0]); twins.placement.push_back(12);
+		states = oracle_states();
+		expect(normalize_promotions(states, twins) == 1 && states.l[0]["list"].as_int() == 2, "ambiguous build placements are not promoted");
+		states = oracle_states(); states.push(states.l[0]);
+		expect(normalize_promotions(states, numbering) == 1 && states.l[0]["list"].as_int() == 2 && states.l[2]["list"].as_int() == 2,
+			"duplicate saved names are not promoted");
+		states = oracle_states(); Value tombstone = states.l[0];
+		tombstone.set("list", Value::integer(1)); tombstone.set("ordinal", Value::integer(1));
+		tombstone.set("flags", oracle_list({Value::integer(0), Value::integer(0)})); states.push(tombstone);
+		expect(normalize_promotions(states, numbering) == 1 && states.l[0]["list"].as_int() == 2 && states.l[2] == tombstone,
+			"claimed tombstone ordinal blocks promotion and remains removed");
+		std::printf("corpus oracle: %u checks, %d failures\n", checks, failures - before);
 	}
 
 	// ------------------------------------------------------------------------------------------------ corpus
@@ -231,7 +368,7 @@ namespace
 					const auto back = reverse_slot(r.bytes, *tables.data, &old, notes);
 					reversed_identical = write_slot(back) == old_bytes;
 					// Exercise the runtime metadata/retention contract, then require every semantic field to survive.
-					// Permit only digest-confirmed conversation resets and metadata-confirmed legacy placement promotions.
+					// Permit only digest-confirmed conversation resets and independently build-confirmed legacy placement promotions.
 					const auto plain = new_to_old_stream(r.bytes, tables);
 					if (!plain.ok || plain.bytes.size() != old_slot_size)
 					{
@@ -273,30 +410,10 @@ namespace
 								const bool legacy = input_file.data("META")["origin"].as_int() == 1 || records[i]["capture_flags"].as_int() == 2;
 								if (legacy)
 								{
-									const ZoneCaptureMetadata* capture = nullptr;
-									for (const auto& candidate : ctx.zone_captures)
-										if (candidate.zone == zones.l[i]["zone"].as_text() &&
-											candidate.time_stamp == records[i]["time_stamp"].as_real()) capture = &candidate;
 									Value states = zones.l[i]["states"];
-									if (capture) for (const auto& entity : capture->entities)
-									{
-										bool claimed = false;
-										Value* match = nullptr;
-										unsigned matches = 0;
-										for (auto& state : states.l)
-										{
-											if (state["list"].as_int() == 1 && state["ordinal"].as_int() == entity.ordinal) claimed = true;
-											if (state["list"].as_int() != 1 && state["definition"].as_text() == entity.definition_name &&
-												state["instance"].as_text() == entity.instance_name) { match = &state; ++matches; }
-										}
-										if (claimed || matches != 1) continue;
-										match->set("list", Value::integer(1));
-										match->set("ordinal", Value::integer(entity.ordinal));
-										Value flags = (*match)["flags"];
-										flags.l[1] = Value::integer(flags.l[1].as_int() | 8);
-										match->set("flags", std::move(flags));
-										++placement_promotions;
-									}
+									const auto* numbering = tables.data->build->zone_numbering(zones.l[i]["zone"].as_text());
+									if (!numbering || !numbering->problems.empty()) fail("corpus oracle: invalid build numbering");
+									placement_promotions += normalize_promotions(states, *numbering);
 									zones.l[i].set("states", std::move(states));
 								}
 								if (!invalid) continue;
@@ -342,6 +459,9 @@ namespace
 									record["content_hash"].as_bytes() != std::string(reinterpret_cast<const char*>(capture->placement_sha1.data()), capture->placement_sha1.size()) ||
 									record["conversation_digest"].as_bytes() != std::string(reinterpret_cast<const char*>(capture->conversation_digest.data()), capture->conversation_digest.size()))
 								{ retained = false; status += " [cached capture provenance differs]"; continue; }
+								const auto* numbering = tables.data->build->zone_numbering(capture->zone);
+								if (!numbering || !numbering->problems.empty() || !associations_match_build(*capture, *numbering))
+								{ retained = false; status += " [capture association differs from build numbering]"; }
 								const auto& names = record["names"].as_list();
 								for (const auto& entity : capture->entities)
 								{
@@ -538,6 +658,12 @@ int main(int argc, char** argv)
 {
 	std::map<std::string, std::string> args;
 	for (int k = 1; k + 1 < argc; k += 2) args[argv[k]] = argv[k + 1];
+	if (args.count("--oracle-negative"))
+	{
+		const bool accepted = oracle_accepts_wrong_associations();
+		std::printf("corpus oracle negative: %s swapped ordinals with matching bad metadata\n", accepted ? "ACCEPTED" : "REJECTED");
+		return accepted ? 0 : 1;
+	}
 	const auto scratch = fs::temp_directory_path() / ("lcsave_test_" + std::to_string(GetCurrentProcessId()));
 	int result = 0;
 	std::vector<std::vector<std::uint8_t>> corpus_files;
@@ -623,6 +749,7 @@ int main(int argc, char** argv)
 	}
 	// (a) the reference's vectors, (c) the fuzz (on the synthetic saves; the corpus run adds nothing to it: the real
 	// saves need the real tables, which the fuzz's synthetic tables can not read)
+	test_corpus_oracle();
 	run_vectors(scratch);
 	const int iterations = args.count("--fuzz") ? std::atoi(args["--fuzz"].c_str()) : 2000;
 	run_fuzz(scratch, iterations, corpus_files);
