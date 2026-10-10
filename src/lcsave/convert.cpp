@@ -1034,7 +1034,13 @@ namespace lcsave::detail
 			Value trivia = L();
 			for (const int b : bits(g.trivia, 250))
 			{
-				const int act = b / trivia_per_act + 1, q = b % trivia_per_act;
+				int act = b / trivia_per_act + 1, q = b % trivia_per_act;
+				if (!plan.converter)
+				{
+					const auto found = std::find_if(ref.trivia_bits.begin(), ref.trivia_bits.end(), [b](const auto& row) { return row.second == b; });
+					if (found == ref.trivia_bits.end()) fail("native trivia bit " + str(b) + " names no question in this build");
+					act = found->first.first; q = found->first.second;
+				}
 				const auto it = ref.TRIV.find({act, q});
 				if (it == ref.TRIV.end())
 				{

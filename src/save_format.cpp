@@ -7,6 +7,7 @@
 #include "save_guard_rules.hpp"
 #include "save_content_guards.hpp"
 #include "save_trace.hpp"
+#include "trivia_rules.hpp"
 #include "ini.hpp"
 #include "log.hpp"
 #include "lcsave/lcsave.hpp"
@@ -107,6 +108,43 @@ namespace save_format
 		using serialize_t = void(__fastcall*)(void*, void*, void*);
 		using game_getter_t = void*(__cdecl*)();
 		constexpr address game_getter = 0x46dce0;
+
+		trivia_rules::cursors trivia_cursors;
+		void ensure_ready();
+
+		bool __fastcall trivia_get(void* game, void*, const int act, const int question)
+		{
+			ensure_ready();
+			if (ready != readiness::ok) return true; // refuse rewards when persistence cannot be verified
+			const int bit = lcsave::trivia_bit(tables, act, question);
+			if (bit < 0 || bit >= 250) return false;
+			const auto* words = reinterpret_cast<const std::uint32_t*>(static_cast<const std::uint8_t*>(game) + 0x5e8);
+			return (words[bit / 32] & (1u << (bit % 32))) != 0;
+		}
+
+		void __fastcall trivia_set(void* game, void*, const int act, const int question)
+		{
+			ensure_ready();
+			if (ready != readiness::ok) return;
+			const int bit = lcsave::trivia_bit(tables, act, question);
+			if (bit < 0 || bit >= 250) return;
+			auto* words = reinterpret_cast<std::uint32_t*>(static_cast<std::uint8_t*>(game) + 0x5e8);
+			words[bit / 32] |= 1u << (bit % 32);
+		}
+
+		int __fastcall trivia_cursor_get(void* game, void*, const int act)
+		{
+			ensure_ready();
+			if (ready != readiness::ok) return 0;
+			return trivia_cursors.get(act, lcsave::trivia_question_count(tables, act),
+				[&](int question) { return trivia_get(game, nullptr, act, question); });
+		}
+
+		void __fastcall trivia_cursor_set(void*, void*, const int act, const int question)
+		{
+			ensure_ready();
+			if (ready == readiness::ok) trivia_cursors.set(act, lcsave::trivia_question_count(tables, act), question);
+		}
 
 		// ---- helpers --------------------------------------------------------------------------------------
 
@@ -880,6 +918,7 @@ namespace save_format
 		{
 			if (native_loading) return; // a reset performed as part of native load belongs to the pending load
 			current={}; pending_campaign={};cached_captures.clear();pending_captures.clear();
+			trivia_cursors.clear();
 			core_lifetime.new_game(); campaign_origin=0; visit_known=false;active_visit={};restore_record=nullptr;
 			resets_seen.fetch_add(1);
 			logger::write("save core: resetgame: campaign retention, identity and capture metadata cleared; profile retained");
@@ -923,6 +962,7 @@ namespace save_format
 				returned,overflow_flag!=0,core_lifetime.write_blocked,!save_content_guards::runtime_failure().empty());
 			const bool ok=completed.native_ok;
 			core_lifetime.finish_native(mode,ok);
+			if (ok && campaign_load) trivia_cursors.clear();
 			if (ok && campaign_load && pending_campaign.loaded)
 			{
 				current=std::move(pending_campaign);cached_captures=std::move(pending_captures);
@@ -1771,6 +1811,10 @@ namespace save_format
 		const address base = address_of(memory);
 		const address flag = address_of(const_cast<std::uint8_t*>(&overflow_flag));
 		std::vector<write> writes;
+		writes.push_back({0x46a690, jump(0x46a690, address_of(&trivia_cursor_get), 12)});
+		writes.push_back({0x46a6a0, jump(0x46a6a0, address_of(&trivia_cursor_set), 15)});
+		writes.push_back({0x469e10, jump(0x469e10, address_of(&trivia_get), 7)});
+		writes.push_back({0x469e60, jump(0x469e60, address_of(&trivia_set), 8)});
 		writes.push_back({0x55f190, jump(0x55f190, address_of(&card_count_campaigns), 6)});
 		for (std::size_t i = 0; i < flag_sites.size(); ++i)
 		{
@@ -1848,6 +1892,7 @@ namespace save_format
 			return;
 		}
 		enabled = true;
+		logger::write("save format: guarded trivia getter/setter and independent per-act cursors installed; TRIV bind rule 2 uses compact native bits; rule 1 retains legacy positions");
 		logger::write("save core: guarded actual numbering/capture/reset and load lifetime installed; capture masks 1/2; W11 open");
 		logger::write("save format: LC ([Save] Format=lc): the card's nine file methods (vtable 0x%08lX) are the fix's - saves are read and written as .lcsave files in SaveLC "
 		              "through the LC library; the old Save folder is converted once at the first file operation and never written; %zu stream-skip sites flagged; the zone "

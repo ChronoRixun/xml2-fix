@@ -206,6 +206,8 @@ namespace lcsave::detail
 		std::map<std::pair<int, int>, u32> REVW, TRIV;          // (category, position) / (act, position) -> id
 		std::vector<std::vector<u32>> ITEM_own, TRIT_own;       // own enhancement ids per definition / special item
 		u32 prefix[2]{}, suffix[2]{}, trit[2]{}, own[2]{};
+		bool trivia_compact = false;
+		std::map<std::pair<int, int>, int> trivia_bits;       // current native mapping only; legacy TRIV remains unchanged
 		u32 hero_count = 0;
 		bool has_digest = false;
 		Hash conversation_digest{};
@@ -346,6 +348,6 @@ namespace lcsave::detail
 	std::vector<std::uint8_t> profile_to_new(const std::vector<std::uint8_t>& old_stream, const TablesData& t,
 		const NewFileContext& context, ConvertState& state);
 	std::vector<std::uint8_t> reverse_profile(const std::vector<std::uint8_t>& new_bytes, const TablesData& t);
-	Value dump_old(const OldSlot& old, const TablesData& t, int start_cv, int items_cv);
+	Value dump_old(const OldSlot& old, const TablesData& t, int start_cv, int items_cv, bool native = false);
 	Value dump_new(const std::vector<std::uint8_t>& file, const TablesData& t);
 }

@@ -227,3 +227,37 @@ LGCY/external ledger records once: "Forge contact unlock granted (0.1.x builds d
 Native saving, new games and LC resaves never run this repair. Previously imported LC files are not repaired
 retroactively. The Python verifier lists this deliberate change in `legacy_repairs` while checking all other
 semantics. No wire layout, section version, catalogue or content-version change is needed.
+
+### Trivia persistence (section number assigned at merge; V-TBD)
+
+The question split in section 21.4 stays unchanged. The generated trivia root declares
+`persistence="compact"`; its TRIV bind list uses rule 2. Row group/position and catalogue key
+remain `(act, question)` and `act/qN`. The native bit is the zero-based rank of `(act, position)`
+in numeric sorted order. The current 50 questions occupy bits 0..49, leaving 200 native slots
+unused. Every act must be positive, each act may contain at most 50 questions, and the total
+may not exceed 250. The builder validates the declaration and these bounds.
+
+XML2 Fix with `[Save] Format=lc` guards and replaces the native getter/setter at 0x469e10 /
+0x469e60. They take act and zero-based question index and access the existing CGame bitmap
+at +0x5e8 using the verified current bind mapping. Native capture, disk reconstruction and
+online stream translation use the same map. Rule-1 builds retain the sparse layout. A DLL
+that does not know rule 2 refuses its bind, rather than accepting a mismatched layout.
+
+The one-time importer always decodes historical bits as `(act-1)*50+question`; LC GAME.trivia
+continues storing the existing identities. Imported LC answers are reconstructed at the
+current build's compact positions. No catalogue renumbering or LC wire change is required.
+Late-act answers that an older native engine never recorded cannot be recovered from those saves.
+
+Rebuild `frontend,savefiles` together in an existing build. Prepared disc/table/script/sound/music
+inputs are unchanged and remain reusable; generated trivia XMLB/ENGB and its SHA-1-bound
+sidecar must be regenerated together. The release integrator sets CONTENT_VERSION.
+
+The native per-act cursor accessors at 0x46a690 / 0x46a6a0 have no bounds check:
+they access CGame+0x5e0+act. The original five cursor bytes end at +0x5e5; acts 8/9
+alias the answer bitmap itself. Guarded replacements keep cursors in independent storage
+for every act in the verified question table. Resetgame and completed full campaign loads
+clear this transient storage; first access derives the first unanswered question from
+restored identities (or question zero once all are answered). Stats-only loads preserve it.
+Cursor advancement therefore cannot mutate another question's persisted answer. Native
+stream dimensions and LC records remain unchanged. Old cursor-overlap damage cannot be
+unambiguously distinguished from genuine early-act answers in already-written files.

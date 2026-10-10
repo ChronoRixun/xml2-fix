@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Persist late-act trivia with the builder's TRIV bind rule 2. Guarded native getter/setter hooks,
+  capture and restore share compact bitmap positions while LC question identities stay unchanged.
+  Legacy native imports still read their historical sparse positions; rule-1 builds keep that layout.
+  Move per-act question cursors out of the native array whose late-act entries overlap answer bits;
+  cold loads resume at the first unanswered identity without changing the LC format.
+
 - Fix legacy imports whose equipped items were written in a different era from the campaign's talents.
   Translate hero and restore-bank equipment with the detected item era, including semantic dumps.
 - Key talent-era evidence by actual stats index so restore-bank records belong to the correct hero.

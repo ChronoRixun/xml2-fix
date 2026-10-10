@@ -131,3 +131,7 @@ add_executable(xml2_save_content_guards_test test/save_content_guards_test.cpp
 target_include_directories(xml2_save_content_guards_test PRIVATE src)
 target_link_libraries(xml2_save_content_guards_test PRIVATE lcsave ws2_32)
 target_compile_definitions(xml2_save_content_guards_test PRIVATE FIX_LOG_FILE=L"save-guard-test.log")
+
+# Trivia cursors must never alias the native answer bitmap.
+add_executable(xml2_trivia_test test/trivia_test.cpp)
+target_include_directories(xml2_trivia_test PRIVATE src)

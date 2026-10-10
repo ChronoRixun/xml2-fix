@@ -97,6 +97,7 @@ namespace lcsave::detail
 		};
 		struct BindFile
 		{
+			std::map<std::string, u32> rules;
 			std::vector<std::pair<std::string, std::vector<Row>>> lists;
 			const std::vector<Row>& list(const char* tag) const
 			{
@@ -150,7 +151,8 @@ namespace lcsave::detail
 				const unsigned dom = domain_number(tag);
 				if (!dom) fail(what + ": unknown domain tag " + py_repr(tag, Enc::latin1));
 				const auto rule = in.get<u32>();
-				if (rule != 1) fail(what + ": list " + tag + " has bind rule " + std::to_string(rule) + "; this XML2 Fix knows rule 1");
+				if (rule != 1 && !(tag == "TRIV" && rule == 2)) fail(what + ": list " + tag + " has bind rule " + std::to_string(rule) + "; this XML2 Fix knows rule 1 and TRIV rule 2");
+				if (!out.rules.emplace(tag, rule).second) fail(what + ": duplicate bind list " + tag);
 				const auto n = in.get<u32>();
 				std::vector<Row> rows;
 				for (u32 k = 0; k < n; ++k)
@@ -658,10 +660,19 @@ namespace lcsave::detail
 				if (r.id) t.p_xp[r.id] = r.position;
 			}
 			load_bind(B, cat, L"trivia", tv, true);
+			T.trivia_compact = tv.rules["TRIV"] == 2;
 			for (const auto& r : tv.list("TRIV"))
 			{
-				T.TRIV[{static_cast<int>(r.group), static_cast<int>(r.position)}] = r.id;
-				if (r.id) t.p_triv[r.id] = {static_cast<int>(r.group), static_cast<int>(r.position)};
+				if (r.group < 1 || r.group > 0x7fffffff || r.position >= 50) fail("invalid trivia act/question position");
+				if (!T.TRIV.emplace(std::pair{static_cast<int>(r.group), static_cast<int>(r.position)}, r.id).second) fail("duplicate trivia act/question position");
+				if (!t.p_triv.emplace(r.id, std::pair{static_cast<int>(r.group), static_cast<int>(r.position)}).second) fail("duplicate trivia identity in build");
+			}
+			if (T.trivia_compact && T.TRIV.size() > 250) fail("native trivia budget exceeded (250)");
+			int trivia_index = 0;
+			for (const auto& [position, id] : T.TRIV)
+			{
+				const auto bit = T.trivia_compact ? trivia_index++ : (static_cast<std::int64_t>(position.first) - 1) * 50 + position.second;
+				T.trivia_bits[position] = bit < 250 ? static_cast<int>(bit) : -1;
 			}
 			// ---- zones: the catalogue's zone keys (the writing build's zoneinfo)
 			for (const auto& e : cat.entries)

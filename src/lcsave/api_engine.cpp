@@ -31,6 +31,24 @@ namespace lcsave
 		}
 	}
 
+	int trivia_question_count(const Tables& tables, const int act)
+	{
+		if (!tables.loaded() || !tables.data->build || act < 1) return 0;
+		const auto& questions = tables.data->build->T.TRIV;
+		int count = 0;
+		for (auto it = questions.lower_bound({act, 0}); it != questions.end() && it->first.first == act; ++it)
+			count = std::max(count, it->first.second + 1);
+		return count;
+	}
+
+	int trivia_bit(const Tables& tables, const int act, const int question)
+	{
+		if (!tables.loaded() || !tables.data->build) return -1;
+		const auto& bits = tables.data->build->T.trivia_bits;
+		const auto found = bits.find({act, question});
+		return found == bits.end() ? -1 : found->second;
+	}
+
 	bool zone_file_sha1(const Tables& tables, const std::string& zone, Sha1Digest& out)
 	{
 		if (!tables.loaded() || !tables.data->build)

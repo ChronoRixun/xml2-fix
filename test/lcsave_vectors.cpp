@@ -283,6 +283,7 @@ namespace
 		b->data_root = folder.wstring();
 		b->bind_root = folder.wstring();
 		b->T = ref;
+		for (const auto& [position, id] : ref.TRIV) b->T.trivia_bits[position] = (position.first - 1) * 50 + position.second;
 		b->hero_count = 2;
 		b->stat.push_back(std::string());
 		for (const auto& h : heroes) b->stat.push_back(h);

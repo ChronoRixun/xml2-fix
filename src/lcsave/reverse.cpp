@@ -635,8 +635,10 @@ namespace lcsave::detail
 		for (const auto& v : G["trivia"].as_list())
 		{
 			const auto [act, q] = pos.trivia(v.as_int());
-			const int bit = (act - 1) * 50 + q;
-			if (bit < 0 || bit >= 256) fail("IndexError: list index out of range");
+			const auto mapped = t.build->T.trivia_bits.find({act, q});
+			if (mapped == t.build->T.trivia_bits.end()) fail("trivia question has no native mapping in this build");
+			const int bit = mapped->second;
+			if (bit < 0 || bit >= 250) fail("trivia question outside native persistence range 0..249");
 			trivia[bit / 32] |= 1u << (bit % 32);
 		}
 		const auto fl = narrow<u16>(G["flags"].as_int(), 0, 1023, "game flags");
