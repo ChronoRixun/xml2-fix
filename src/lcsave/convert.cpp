@@ -189,7 +189,7 @@ namespace lcsave::detail
 				return rec;
 			}
 
-			Value hero_record(const EraTables& era, std::int64_t stats_index, const OldAttributes& a, const OldEquipment& eq,
+			Value hero_record(const EraTables& era, const EraTables& item_era, std::int64_t stats_index, const OldAttributes& a, const OldEquipment& eq,
 				const std::string& what) const
 			{
 				const auto stat_hash = era_list(era, "STAT", stats_index, what + ": stats index");
@@ -256,7 +256,7 @@ namespace lcsave::detail
 				Value equipped = L();
 				for (std::size_t k = 0; k < eq.equipped.size(); ++k)
 				{
-					equipped.push(instance_keys(era, eq.equipped[k], what + ": equipped item " + str(static_cast<std::int64_t>(k))));
+					equipped.push(instance_keys(item_era, eq.equipped[k], what + ": equipped item " + str(static_cast<std::int64_t>(k))));
 				}
 				rec.set("equipped", std::move(equipped));
 				const auto& tl = eq.tail;
@@ -280,9 +280,9 @@ namespace lcsave::detail
 				return rec;
 			}
 
-			Value hero_full(const EraTables& era, std::int64_t stats_index, const OldHero& h, const std::string& what) const
+			Value hero_full(const EraTables& era, const EraTables& item_era, std::int64_t stats_index, const OldHero& h, const std::string& what) const
 			{
-				Value rec = hero_record(era, stats_index, h.attributes, h.equipment, what);
+				Value rec = hero_record(era, item_era, stats_index, h.attributes, h.equipment, what);
 				Value powers = L();
 				// SPEC 2.6 (HERO minor 1): button, name and the slot's whole flag byte (bit 0 = usable); a slot is listed when
 				// it has a name or its byte is not 1 (an unlisted slot reads back as empty and usable)
@@ -665,7 +665,7 @@ namespace lcsave::detail
 		const EraTables* talent_era(const OldSlot& old, const std::vector<const EraTables*>& eras, const EraTables& ref,
 			std::vector<std::pair<std::int64_t, std::int64_t>>& unexplained_out)
 		{
-			// shared_ids_by_hero: hero blocks, then restore records merged by number
+			// Evidence is keyed by stats index: hero block n -> n + 1; restore record n -> n.
 			std::vector<std::pair<std::int64_t, std::set<u32>>> held;
 			auto slot_of = [&](std::int64_t n) -> std::set<u32>*
 			{
@@ -677,7 +677,7 @@ namespace lcsave::detail
 				std::set<u32> ids;
 				const auto& a = old.heroes[n].attributes;
 				for (u32 k = 0; k < a.tail.count; ++k) if (a.talents[k].id < 100) ids.insert(a.talents[k].id);
-				held.emplace_back(static_cast<std::int64_t>(n), std::move(ids));
+				held.emplace_back(static_cast<std::int64_t>(n + 1), std::move(ids));
 			}
 			for (std::size_t n = 0; n < old.restore.size(); ++n)
 			{
@@ -695,9 +695,8 @@ namespace lcsave::detail
 			{
 				std::int64_t good = 0;
 				std::vector<std::pair<std::int64_t, std::int64_t>> unexplained;
-				for (const auto& [block, ids] : held)
+				for (const auto& [si, ids] : held)
 				{
-					const std::int64_t si = block < static_cast<std::int64_t>(old.heroes.size()) ? block + 1 : block;
 					const u32 hero = si < static_cast<std::int64_t>(ref.STAT.size()) ? ref.STAT[static_cast<std::size_t>(si)] : 0;
 					const std::vector<u32>* hold = nullptr;
 					if (hero)
@@ -709,7 +708,7 @@ namespace lcsave::detail
 					{
 						const bool holdable = hold && std::find(hold->begin(), hold->end(), tid) != hold->end();
 						if (tid < era->TALN_shared.size() && holdable) ++good;
-						else unexplained.emplace_back(block, tid);
+						else unexplained.emplace_back(si, tid);
 					}
 				}
 				if (!best || good > best_good)
@@ -1112,7 +1111,7 @@ namespace lcsave::detail
 			Value heroes = L();
 			for (std::size_t n = 0; n < old.heroes.size(); ++n)
 			{
-				heroes.push(c.hero_full(era_tal, static_cast<std::int64_t>(n + 1), old.heroes[n], "hero block " + std::to_string(n)));
+				heroes.push(c.hero_full(era_tal, era_items, static_cast<std::int64_t>(n + 1), old.heroes[n], "hero block " + std::to_string(n)));
 			}
 			sections.push_back({"HERO", 1, section_minor("HERO"), 0, Value::dict({{"heroes", std::move(heroes)}})});
 			// ---- ULCK
@@ -1140,7 +1139,7 @@ namespace lcsave::detail
 					res.notes.push_back("restore record 0 (the reserved stats entry) is not default: dropped");
 					continue;
 				}
-				Value rec = c.hero_record(era_tal, static_cast<std::int64_t>(n), r.attributes, r.equipment, "restore record " + std::to_string(n));
+				Value rec = c.hero_record(era_tal, era_items, static_cast<std::int64_t>(n), r.attributes, r.equipment, "restore record " + std::to_string(n));
 				Value out = Value::dict();
 				out.set("owner", rec["hero"]);
 				for (auto& item : rec.d)

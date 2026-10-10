@@ -12,6 +12,18 @@ This page is about the fix's side: where it sits in the game, what it does at st
 **The key does nothing in XML2 as it ships.** Without `[Save] Format=lc` (or with `off` / `xml2`) nothing on this
 page is active and the game reads and writes its own files, byte for byte. The port's builder writes the key.
 
+## Legacy equipment era and restore-bank ownership
+
+The legacy importer detects talent/start and item/writer eras independently. HERO and REST equipped lists use
+the item era for every item identity and enhancement, just as carried and world items do; hero identities,
+talents and costumes retain the start era. Semantic dumps use the same split. Writer-era detection checks the
+serialized definition count and all instances' own-record ownership before translation.
+
+Talent-era evidence uses explicit stats indices: main hero block n belongs to stats index n+1; restore-bank
+record n belongs to stats index n. Both sources merge under their actual owner, including bank slot 16.
+Unexplained evidence reports stats indices. This correction changes neither the LC format nor wire revision.
+Synthetic mixed-era imports and restore-owner vectors must agree byte-for-byte with the Python reference.
+
 ## Legacy streamed placements that later builds pin
 
 A legacy-import or inferred zone record can store an existing placed entity in its smart/dynamic list even

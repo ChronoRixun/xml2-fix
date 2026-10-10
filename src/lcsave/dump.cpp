@@ -153,7 +153,7 @@ namespace lcsave::detail
 				return l;
 			}
 
-			Value hero_old(const EraTables& era, std::int64_t si, const OldAttributes& a, const OldEquipment& eq) const
+			Value hero_old(const EraTables& era, const EraTables& item_era, std::int64_t si, const OldAttributes& a, const OldEquipment& eq) const
 			{
 				Value traits = L();
 				for (int k = 0; k < 4; ++k)
@@ -166,7 +166,7 @@ namespace lcsave::detail
 					traits.push(std::move(t4));
 				}
 				Value equipped = L();
-				for (const auto& i : eq.equipped) equipped.push(instance_old(era, i));
+				for (const auto& i : eq.equipped) equipped.push(instance_old(item_era, i));
 				Value vitals = L();
 				vitals.push(I(eq.tail.vitals_valid & 1));
 				vitals.push(R3(eq.tail.health));
@@ -400,7 +400,7 @@ namespace lcsave::detail
 		for (std::size_t n = 0; n < old.heroes.size(); ++n)
 		{
 			const auto& oh = old.heroes[n];
-			Value h = dd.hero_old(*era_t, static_cast<std::int64_t>(n + 1), oh.attributes, oh.equipment);
+			Value h = dd.hero_old(*era_t, *era_i, static_cast<std::int64_t>(n + 1), oh.attributes, oh.equipment);
 			Value powers = Value::dict();
 			for (int k = 0; k < 4; ++k)
 			{
@@ -428,7 +428,7 @@ namespace lcsave::detail
 			const auto& r = old.restore[n];
 			if (r.attributes.tail.count || !r.equipment.equipped.empty() || r.equipment.tail.experience)
 			{
-				records.set(Tx(std::to_string(n)), dd.hero_old(*era_t, static_cast<std::int64_t>(n), r.attributes, r.equipment));
+				records.set(Tx(std::to_string(n)), dd.hero_old(*era_t, *era_i, static_cast<std::int64_t>(n), r.attributes, r.equipment));
 			}
 		}
 		d.set("restore", Value::dict({{"valid", I(old.restore_flag)}, {"records", records}}));

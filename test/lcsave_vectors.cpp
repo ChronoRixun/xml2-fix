@@ -1015,6 +1015,28 @@ namespace
 		check(e1 && e1->cv == 5 && unexplained.empty(), "talent era: the reading that keeps the ranks");
 		const auto* e2 = detect_talent_era(make_old_save({0, 3, 4}), eras, t->reference, unexplained);
 		check(e2 && e2->cv == 13, "talent era: both explain it, the newest wins");
+
+		// Invented analogue of restore slot 16 being mistaken for stats index 17.
+		EraTables reference, newer, older;
+		reference.STAT.resize(22);
+		for (u32 i = 1; i < 22; ++i) reference.STAT[i] = make_id(1, i);
+		newer.cv = 13; older.cv = 12;
+		newer.TALN_shared.resize(61); older.TALN_shared.resize(61);
+		const std::vector<u32> ids{1, 9, 10, 59, 60};
+		newer.holdable[reference.STAT[17]] = ids;
+		older.holdable[reference.STAT[16]] = ids;
+		OldSlot old;
+		old.heroes.resize(21); old.restore.resize(22);
+		auto& a = old.restore[16].attributes;
+		a.tail.count = static_cast<u32>(ids.size());
+		for (std::size_t i = 0; i < ids.size(); ++i) a.talents[i].id = static_cast<u16>(ids[i]);
+		std::vector<const EraTables*> bank_eras{&newer, &older};
+		const auto* bank = detect_talent_era(old, bank_eras, reference, unexplained);
+		check(bank && bank->cv == 12 && unexplained.empty(), "restore slot 16 uses stats index 16");
+		old.heroes[15].attributes = a;
+		bank = detect_talent_era(old, bank_eras, reference, unexplained);
+		check(bank && bank->cv == 12 && unexplained.empty(), "hero block 15 and restore 16 share ownership");
+
 	}
 
 	// the API on the synthetic tables: missing talents, the saver's direction, dump of both formats
