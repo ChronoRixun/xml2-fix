@@ -61,6 +61,7 @@ add_library(xml2_fix SHARED
 	src/window_title.cpp
 	src/main_menu.cpp
 	src/classic_main_backdrop.cpp
+	src/classic_main_panels.cpp
 	src/review_menu.cpp
 	src/personal_item_text.cpp
 	src/xtract.cpp
@@ -104,6 +105,10 @@ target_include_directories(xml2_objective_text_test PRIVATE src)
 add_executable(xml2_classic_main_backdrop_test test/classic_main_backdrop_test.cpp)
 target_include_directories(xml2_classic_main_backdrop_test PRIVATE src)
 target_compile_options(xml2_classic_main_backdrop_test PRIVATE /UNDEBUG)
+
+add_executable(xml2_classic_main_panels_test test/classic_main_panels_test.cpp)
+target_include_directories(xml2_classic_main_panels_test PRIVATE src)
+target_compile_options(xml2_classic_main_panels_test PRIVATE /UNDEBUG)
 
 add_executable(xml2_stat_points_test test/stat_points_test.cpp)
 target_include_directories(xml2_stat_points_test PRIVATE src)

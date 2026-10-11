@@ -119,10 +119,10 @@ The game looks up `xmenlegpc.available` and `xmenlegpc.master` (UDP 27900: the a
 
 ```ini
 [Online]
-LocalIP=auto         ; the default. Or: first (Windows' order, as without the fix), or one of this PC's addresses, e.g. 192.168.1.20
+LocalIP=auto         ; the default. Or: first (Windows' order, as without the fix), or this PC's LAN IPv4 address
 ```
 
-An address that isn't this PC's is ignored and `auto` applies. Without a route to the internet, Windows' order stays. `xml2-fix.log` shows the list once, before and after (`online: this PC's addresses (MYPC): 172.18.0.1, 192.168.1.20` then `online: LocalIP: 192.168.1.20 first (...): 192.168.1.20, 172.18.0.1`).
+An address that isn't this PC's is ignored and `auto` applies. Without a route to the internet, Windows' order stays. `xml2-fix.log` shows the list once, before and after (`online: this PC's addresses (<PC_NAME>): <VIRTUAL_IP>, <LAN_IP>` then `online: LocalIP: <LAN_IP> first (...): <LAN_IP>, <VIRTUAL_IP>`; placeholders stand for the adapter addresses).
 
 **A mod that is another game** (the X-Men Legends I port) uses the same GameSpy name as XML2, `xmenlegpc`, so without a version of its own its hosted games would show up in XML2's lists and the other way round, and a join would load the host's zones on the other game's install. The game tells GameSpy and other players its version, `1.30`, and finds no games of another version (in the server list, on the LAN or by *Connect by IP*); `GameVersion` gives it another:
 
@@ -325,6 +325,17 @@ front end; the default is off. The guarded engine hook applies only to known opa
 shaders in `menu/main_back` with the original reflection value. It preserves the reflection
 pass and the lit menu logo. Unsupported engine exports, instruction bytes or pass layouts
 leave retail rendering in place and write a diagnostic to the log. No save data changes.
+
+Shaders must also belong to the retained directory loaded for `maps/menu/main_back.igb`.
+Each check uses the directory's current resolved object references; the zone and a matching
+label alone cannot select another asset's shader. One room-directory reference is retained
+until replacement, when the previous reference is released. Allocation/protection failures
+are logged. The same original room remains bright behind native PC Options.
+
+`[Game] ClassicMainPanelBounds=1` (default off) makes the classic menu's eight hit regions
+cover their visible panel widths. Overlapping borders are divided at row midpoints; Online
+and Quit remain separate. Local offsets follow the rectangle changes to retain text centering.
+The MAIN_MENU update and complete item layout are guarded. Stock menus retain their bounds.
 
 ### Character ladder paths
 

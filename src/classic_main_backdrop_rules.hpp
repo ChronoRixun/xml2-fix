@@ -40,6 +40,37 @@ namespace classic_main_backdrop_rules
 		return where >= 0x10000 && memory.read(where, &value, sizeof value);
 	}
 
+	// igDirectory::getRef (Core RVA 0x296a0): resolved sharing list if present,
+	// otherwise each directory entry's object at +0x18. Check membership afresh;
+	// labels and zone names alone never establish ownership.
+	template <typename Memory>
+	bool owned_by_directory(Memory& memory, address directory, address shader, address object_entry_vtable)
+	{
+		address count = 0, capacity = 0, entries = 0, refs = 0, resolved = 0;
+		if (!word(memory, directory + 8, count) || !count || count > 4096 ||
+		    !word(memory, directory + 12, capacity) || capacity < count || capacity > 8192 ||
+		    !word(memory, directory + 16, entries) || !word(memory, directory + 0x2c, refs)) return false;
+		if (refs)
+		{
+			address resolved_count = 0;
+			if (!word(memory, refs + 8, resolved_count) || resolved_count != count ||
+			    !word(memory, refs + 12, capacity) || capacity < count || capacity > 8192 ||
+			    !word(memory, refs + 16, resolved)) return false;
+		}
+		bool found = false;
+		for (address index = 0; index < count; ++index)
+		{
+			address entry = 0, object = 0, table = 0;
+			if (!word(memory, entries + 4 * index, entry)) return false;
+			if (!word(memory, entry, table)) return false;
+			if (table != object_entry_vtable) continue; // memory and external entries are not owned objects
+			if (refs) { if (!word(memory,resolved+4*index,object)) return false; }
+			else if (!word(memory, entry + 0x18, object)) return false;
+			found |= object == shader;
+		}
+		return found;
+	}
+
 	template <typename Memory>
 	bool first_list(Memory& memory, address container, address diffuse, address lighting,
 	                address& first, bool& missing)

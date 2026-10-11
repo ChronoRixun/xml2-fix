@@ -72,5 +72,21 @@ int main()
 		assert(result.begin == 0xabcdef && result.end == 0xfedcba);
 	}
 	assert(!plan(m, 0x10000, 0, result));
+	// Identical label/zone/material properties are insufficient without asset ownership.
+	m = fixture();
+	m.put(0x10108, 1); m.put(0x1010c, 1); m.put(0x10110, 0x10500);
+	m.put(0x1012c, 0); m.put(0x10500, 0x10200); m.put(0x10218, 0x10000); m.put(0x10200,0x70000);
+	assert(owned_by_directory(m, 0x10100, 0x10000,0x70000));
+	assert(!owned_by_directory(m, 0x10100, 0x10080,0x70000)); // same label outside the room stays untouched
+	const auto outside_before=m.bytes;
+	const bool same_properties=in_scene("menu/synthetic","menu/synthetic","tileA",labels,.1f,true);
+	assert(same_properties && !owned_by_directory(m,0x10100,0x10080,0x70000));
+	assert(m.bytes==outside_before); // ownership refusal is read-only; no pass mutations occur
+	m.put(0x1012c, 0x10300); m.put(0x10308, 1); m.put(0x1030c, 1);
+	m.put(0x10310, 0x10600); m.put(0x10600, 0x10080);
+	assert(!owned_by_directory(m, 0x10100, 0x10000,0x70000)); // sharing uses resolved pointers, not stale entries
+	assert(owned_by_directory(m, 0x10100, 0x10080,0x70000));
+	m.put(0x10308, 2);
+	assert(!owned_by_directory(m, 0x10100, 0x10080,0x70000)); // unsupported layout fails closed
 	std::puts("classic main backdrop: scope, paired-list planning, duplicates and malformed layouts PASS");
 }
