@@ -49,6 +49,7 @@ namespace save_format
 
 		bool enabled = false;         // [Save] Format=lc and every guard matched
 		readiness ready = readiness::untried;
+		std::string installation_failure; // nonempty until every requested startup hook is installed
 		std::string failure;          // why ready == failed (shown as the notice, logged once)
 		lcsave::Tables tables;
 		save_guard_rules::refusal_latches write_refusals;
@@ -111,6 +112,21 @@ namespace save_format
 
 		trivia_rules::cursors trivia_cursors;
 		void ensure_ready();
+
+		void reject_install(const std::string& reason)
+		{
+			installation_failure = reason;
+			failure = reason;
+			ready = readiness::failed;
+			logger::write("save format: startup refused: %s; required LC save/trivia hooks were not installed", reason.c_str());
+		}
+
+		std::string install_guard_error(const guard& site, const char* kind)
+		{
+			char text[512]{};
+			std::snprintf(text, sizeof text, "%s at 0x%08lX (%s)", kind, static_cast<unsigned long>(site.va), site.what);
+			return text;
+		}
 
 		bool __fastcall trivia_get(void* game, void*, const int act, const int question)
 		{
@@ -1756,30 +1772,39 @@ namespace save_format
 			write_refusals.successful_load(kind == kind_profile ? lc_dir + profile_file : slot_path(slot));
 	}
 
-	void install(const HMODULE game)
+	bool startup_allowed()
+	{
+		return installation_failure.empty();
+	}
+
+	const std::string& startup_error()
+	{
+		return installation_failure;
+	}
+
+	void install(const HMODULE game) try
 	{
 		const auto text = ini::text(L"Save", L"Format").value_or("");
 		const auto chosen = parse_mode(text);
 		if (!chosen.error.empty())
 		{
-			logger::write("save format: [Save] Format=%s %s - %s", text.c_str(), chosen.error.c_str(), as_before);
+			reject_install("invalid [Save] Format=" + text + ": " + chosen.error);
 			return;
 		}
 		if (!chosen.set || chosen.value == mode::off)
 		{
 			return; // no key: the game's own format, nothing patched
 		}
+		// Default denial also covers any future early return before successful installation.
+		installation_failure = "required LC save/trivia hooks were not installed";
 		if (!game || reinterpret_cast<std::uintptr_t>(game) != image_base)
 		{
-			logger::write("save format: XMen2.exe isn't loaded at 0x400000 (not the game?) - %s", as_before);
+			reject_install("XMen2.exe is not loaded at the required image base 0x400000");
 			return;
 		}
 		if (const guard* g = first_mismatch_guarded())
 		{
-			logger::write("save format: 0x%08lX isn't the retail code (%s) - %s (D11: the key asks for the LC format, so saving and loading are OFF)", g->va, g->what, as_before);
-			// Fail closed: the card is left alone, but the mode is marked disabled so that the pipe and the log say why.
-			ready = readiness::failed;
-			failure = "XMen2.exe isn't the retail build at " + std::to_string(g->va);
+			reject_install(install_guard_error(*g, "LC save/trivia guard mismatch"));
 			return;
 		}
 
@@ -1788,13 +1813,13 @@ namespace save_format
 		{
 			std::vector<std::uint8_t> bytes(limits_rules::hex_size(g.hex));
 			if(!try_copy(bytes.data(),in_game(g.va),bytes.size()) || !limits_rules::matches(bytes.data(),g.hex))
-			{failure="LC capture guard mismatch at "+std::to_string(g.va);ready=readiness::failed;logger::write("save core: %s",failure.c_str());return;}
+			{reject_install(install_guard_error(g, "LC capture guard mismatch"));return;}
 		}
 		{
 			const auto& g=save_core_rules::ordinal_write_guard;
 			std::vector<std::uint8_t> bytes(limits_rules::hex_size(g.hex));
 			if(!try_copy(bytes.data(),in_game(g.va),bytes.size()) || !limits_rules::matches(bytes.data(),g.hex))
-			{failure="LC ordinal guard mismatch";ready=readiness::failed;return;}
+			{reject_install(install_guard_error(g, "LC ordinal guard mismatch"));return;}
 		}
 		// CORE-END
 
@@ -1805,7 +1830,7 @@ namespace save_format
 		auto* memory = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, block_reserve, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
 		if (!memory)
 		{
-			logger::write("save format: ERROR: no memory for the stubs (error %lu) - %s", GetLastError(), as_before);
+			reject_install("cannot allocate LC stubs (Windows error " + std::to_string(GetLastError()) + ")");
 			return;
 		}
 		const address base = address_of(memory);
@@ -1854,7 +1879,7 @@ namespace save_format
 		// CORE-END
 		if (block.size() > block_reserve)
 		{
-			logger::write("save format: ERROR: the stubs don't fit their block - %s", as_before);
+			reject_install("LC stubs exceed their allocated block");
 			VirtualFree(memory, 0, MEM_RELEASE);
 			return;
 		}
@@ -1862,7 +1887,7 @@ namespace save_format
 		DWORD old = 0;
 		if (!VirtualProtect(memory, block_reserve, PAGE_EXECUTE_READ, &old))
 		{
-			logger::write("save format: ERROR: can't make the stubs executable (error %lu) - %s", GetLastError(), as_before);
+			reject_install("cannot make LC stubs executable (Windows error " + std::to_string(GetLastError()) + ")");
 			VirtualFree(memory, 0, MEM_RELEASE);
 			return;
 		}
@@ -1888,15 +1913,21 @@ namespace save_format
 		}
 		if (!patch(writes))
 		{
+			reject_install("cannot install the required LC card/trivia patches");
 			VirtualFree(memory, 0, MEM_RELEASE);
 			return;
 		}
 		enabled = true;
+		installation_failure.clear();
 		logger::write("save format: guarded trivia getter/setter and independent per-act cursors installed; TRIV bind rule 2 uses compact native bits; rule 1 retains legacy positions");
 		logger::write("save core: guarded actual numbering/capture/reset and load lifetime installed; capture masks 1/2; W11 open");
 		logger::write("save format: LC ([Save] Format=lc): the card's nine file methods (vtable 0x%08lX) are the fix's - saves are read and written as .lcsave files in SaveLC "
 		              "through the LC library; the old Save folder is converted once at the first file operation and never written; %zu stream-skip sites flagged; the zone "
 		              "placement file hashed at 0x%08lX / 0x%08lX",
 		              static_cast<unsigned long>(card_vtable), flag_sites.size(), static_cast<unsigned long>(zone_open_call), static_cast<unsigned long>(xmlb_convert_call_insn));
+	}
+	catch (const std::exception& error)
+	{
+		reject_install(std::string("LC hook installation failed: ") + error.what());
 	}
 }

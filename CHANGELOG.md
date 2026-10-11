@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Refuse executable startup when required LC save/trivia hooks cannot be installed. Guard,
+  allocation and patch-protection failures now reach the DLL startup veto with an explicit
+  notice and log; background XInput initialization starts only after the required hooks verify.
+
 - Persist late-act trivia with the builder's TRIV bind rule 2. Guarded native getter/setter hooks,
   capture and restore share compact bitmap positions while LC question identities stay unchanged.
   Legacy native imports still read their historical sparse positions; rule-1 builds keep that layout.

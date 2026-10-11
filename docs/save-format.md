@@ -261,3 +261,29 @@ restored identities (or question zero once all are answered). Stats-only loads p
 Cursor advancement therefore cannot mutate another question's persisted answer. Native
 stream dimensions and LC records remain unchanged. Old cursor-overlap damage cannot be
 unambiguously distinguished from genuine early-act answers in already-written files.
+
+
+## Startup refusal when LC hooks cannot install
+
+With `[Save] Format=lc`, save/card/trivia hooks are a startup requirement. A rejected retail
+signature, capture/ordinal guard, unsupported image base, failed stub allocation/protection,
+failed patch installation or installation exception prevents the executable from starting.
+The startup denial remains set until the complete installation succeeds. An invalid Save
+format setting also refuses startup; an absent key or explicit off retains native behavior.
+
+`exports.cpp` checks the save installation result immediately, then `DllMain` applies the
+same loader veto as the LC network prerequisite. It logs the failure, shows a clear refusal
+notice including the guard address/reason, and returns FALSE. The game's statically imported
+DLL dependency therefore cannot initialize; retail saving does not remain available as a
+fallback. Background XInput work is deferred until these prerequisites pass.
+
+This is separate from later table/file refusals: after successful installation the LC card
+hooks already prevent native fallback, and their existing runtime protection remains active.
+No LC wire, identity, mapping or converter behavior changes.
+
+`xml2_save_startup_test` loads the production DLL in owned synthetic Win32 child processes.
+It mutates all 56 save/trivia/stream/capture/ordinal guard sites, checks loader rejection
+(ERROR_DLL_INIT_FAILED) and an informative notice, and includes invalid-mode, valid-LC and
+disabled-LC controls. Notices run on a hidden test desktop and only owned fixture windows
+are observed/dismissed. Run from an isolated folder containing this test executable and
+`dinput.dll`; its children write only that folder's test INI/log, never game save files.

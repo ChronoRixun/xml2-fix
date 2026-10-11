@@ -135,3 +135,9 @@ target_compile_definitions(xml2_save_content_guards_test PRIVATE FIX_LOG_FILE=L"
 # Trivia cursors must never alias the native answer bitmap.
 add_executable(xml2_trivia_test test/trivia_test.cpp)
 target_include_directories(xml2_trivia_test PRIVATE src)
+
+# Real DLL initialization against an owned synthetic Win32 image; no game/save inputs.
+add_executable(xml2_save_startup_test test/save_startup_test.cpp)
+target_include_directories(xml2_save_startup_test PRIVATE src)
+target_link_libraries(xml2_save_startup_test PRIVATE ws2_32)
+target_link_options(xml2_save_startup_test PRIVATE /DYNAMICBASE:NO /BASE:0x400000 /MERGE:.rdata=.fixture_data /MERGE:.text=.fixture_code)
