@@ -1,4 +1,4 @@
-"""V-TBD (number assigned at merge): run the actual pinned capture/restore regression."""
+"""C1: run the actual pinned capture/restore regression."""
 from pathlib import Path
 import argparse
 import subprocess

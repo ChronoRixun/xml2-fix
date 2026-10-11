@@ -1,4 +1,4 @@
-// V-TBD: exercise the engine capture API and the real restore consumer, with real mod lookup.
+// C1: exercise the engine capture API and the real restore consumer, with real mod lookup.
 // Only invented packages/files; the child runs in an owned temporary folder, never a game.
 #include "internal.hpp"
 #include "mod_loader.hpp"

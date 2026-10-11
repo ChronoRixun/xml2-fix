@@ -1,4 +1,4 @@
-"""Hook wiring complements the executable provenance tests (V-TBD at merge)."""
+"""Hook wiring complements the executable provenance tests (C1)."""
 from pathlib import Path
 import re
 import unittest

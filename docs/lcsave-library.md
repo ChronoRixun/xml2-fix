@@ -199,5 +199,5 @@ The format and both digest algorithms remain unchanged.
 
 `lcsave_conversation_packages_test` exercises the called capture API and restore
 consumer with actual mod indexing, exclusively locked package data, invalidation,
-lookup contexts and first-capture/preparation failures. The V-TBD Python gate runs
+lookup contexts and first-capture/preparation failures. The C1 Python gate runs
 that executable; it does not inspect source strings.

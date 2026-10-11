@@ -256,7 +256,7 @@ Each table has provenance[32], zone-key-hash[32], u32 bit count, then identity h
 four, at most 128. Duplicate keys/identities, bad framing/version/CRC refuse malformed table files. V39 checks
 the generated set. Rebuild savefiles after the era ledger changes; game asset preparation caches remain valid.
 
-### Trivia persistence (section number assigned at merge; V-TBD)
+### Trivia persistence (builder SPEC 82; V17)
 
 The question split in section 21.4 stays unchanged. The generated trivia root declares
 `persistence="compact"`; its TRIV bind list uses rule 2. Row group/position and catalogue key
@@ -352,7 +352,7 @@ restart; no partially prepared or older cache is used after failure. Cold prepar
 may delay the front end. Save layout, digest ordering and algorithms are unchanged.
 `[Debug] SaveTiming=1` retains capture/digest/write diagnostics.
 
-## SPEC: V-TBD (number assigned at merge)
+## SPEC: C1 Prepared conversation provenance
 
 `python test/validate_coop_save_cache.py --build ../xbuild` runs
 `lcsave_conversation_packages_test`, exercising the same prepared capture API and
