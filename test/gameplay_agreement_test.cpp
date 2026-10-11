@@ -91,16 +91,18 @@ std::array<std::uint8_t,32> sender{},descriptor{};
 void put(std::size_t offset,std::uint32_t value){std::memcpy(context.data()+offset,&value,4);}
 std::uint32_t get(std::size_t offset){std::uint32_t value;std::memcpy(&value,context.data()+offset,4);return value;}
 int popups=0,menus=0,statuses=0,freed=0,timers=0,unregistered=0,forwarded=0;
+void* last_freed=nullptr;void* last_timer=nullptr;
 std::string visible;
 void* popup_vt[4]{};void* menu_vt[30]{};void** popup_object=popup_vt;void** menu_object=menu_vt;
 void* popup_get(){return &popup_object;}void* menu_get(){return &menu_object;}
 void __fastcall show_popup(void*,void*,const char* text,float wait,int flags){++popups;visible=text;check(wait==-1.0f && flags==0,"native dialog receives actionable non-timeout prompt");}
 void __fastcall close_menu(void*,void*,int a,int b){++menus;check(a==0 && b==0,"native failure closes pending join menu");}
 void __cdecl status(int reason,void*,void*){statuses+=reason==9;}
-void* descriptor_get(){return descriptor.data();}void* session_get(){return context.data();}
+std::uint8_t* selected_descriptor=descriptor.data();void* selected_session=context.data();
+void* descriptor_get(){return selected_descriptor;}void* session_get(){return selected_session;}
 int __fastcall no_peer(void*,void*){return 0;}void __fastcall noop(void*,void*){}
-void __cdecl free_buffer(void*){++freed;}void* __stdcall timer_get(void* p){return p;}
-void __fastcall timer_destroy(void*,void*){++timers;}void __fastcall unregister(void*,void*){++unregistered;}
+void __cdecl free_buffer(void* p){++freed;last_freed=p;}void* __stdcall timer_get(void* p){return p;}
+void __fastcall timer_destroy(void* p,void*){++timers;last_timer=p;}void __fastcall unregister(void*,void*){++unregistered;}
 int admitted(void*){++forwarded;return 73;}
 int timeout_trap(){++failures;return 0;}
 void pending_context(){context.fill(0);put(4,0x12345678);put(0x2250,0x22222222);context[0x2294]=1;for(auto n:{0x21f4,0x21f8,0x21fc,0x2200,0x2204,0x222c,0x2234,0x2230})put(n,1);put(0x22bc,0x33333333);put(0x2298,std::uint32_t(reinterpret_cast<std::uintptr_t>(&status)));descriptor[0]=1;}
@@ -127,6 +129,35 @@ void boundary_standins(){
  jump(join_resume,&join_continuation);
 }
 record runtime_peer(bool on){record r;r.add(2,1,{on ? 1u : 0u,0,0,0},true);r.add(3,7,{1,3,0,0},true);r.finalize();return r;}
+void separate_host_joiner()
+{
+ auto info_receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(info_registration+1)));
+ auto rejection_receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(rejection_registration+1)));
+ for(bool legacy:{false,true}){
+  pending_context();put(0x22bc,0);for(std::size_t n=0x22c4;n<=0x22d8;n+=4)put(n,0x77777777);
+  std::array<std::uint8_t,32> existing_participant{};existing_participant.fill(0x5a);existing_participant[0x19]=1;
+  sender[0x19]=1;const auto host_snapshot=context;const auto descriptor_snapshot=descriptor;const auto participant_snapshot=existing_participant;
+  auto joiner=context;std::uint32_t timer=0x55555555,buffer=0x44444444;std::memcpy(joiner.data()+0x22bc,&timer,4);std::memcpy(joiner.data()+0x2250,&buffer,4);
+  std::array<std::uint8_t,32> joiner_sender{},joiner_descriptor{};joiner_sender[0x19]=1;joiner_descriptor[0]=1;
+  const auto off=runtime_peer(false);input.fill(0);std::memcpy(input.data()+info_size,off.bytes().data(),off.bytes().size());
+  event incoming{0x1a,input.data(),std::uint16_t(info_size+(legacy ? 0 : off.bytes().size())),0,context.data(),sender.data()};
+  const auto callbacks_before=statuses,free_before=freed,timer_before=timers,unregister_before=unregistered,menu_before=menus,popup_before=popups;send_count=0;forwarded=0;
+  check(info_receiver(&incoming)==0 && context==host_snapshot && descriptor==descriptor_snapshot && existing_participant==participant_snapshot && sender[0x19]==0 && forwarded==0,
+        legacy ? "legacy 0x1a keeps active host/session/participants; disconnects only rejected peer" : "mismatched 0x1a keeps active host/session/participants; disconnects only rejected peer");
+  check(statuses==callbacks_before && freed==free_before && timers==timer_before && unregistered==unregister_before && menus==menu_before && popups==popup_before+1,
+        "host refusal shows dialog without status9, buffer release, callback teardown or menu close");
+  check(send_count==1 && output_type==0x1d && output_size==0 && output_arg==reinterpret_cast<std::uintptr_t>(sender.data()+12),"host sends native rejection to refused joining endpoint");
+  selected_descriptor=joiner_descriptor.data();selected_session=joiner.data();
+  event remote{output_type,nullptr,0,0,joiner.data(),joiner_sender.data()};
+  check(rejection_receiver(&remote)==2 && statuses==callbacks_before+1 && freed==free_before+1 && timers==timer_before+1 && unregistered==unregister_before+1 && menus==menu_before+1 && popups==popup_before+2,
+        "separate pending joiner receives rejection and executes actual native cleanup/dialog");
+  auto field=[&](std::size_t at){std::uint32_t v;std::memcpy(&v,joiner.data()+at,4);return v;};
+  check(field(0x2250)==0 && field(0x22bc)==0 && field(0x2230)==0 && field(0x21f4)==0 && field(0x221c)==0xffffffff && joiner_sender[0x19]==0 && last_freed==reinterpret_cast<void*>(buffer) && last_timer==reinterpret_cast<void*>(timer),
+        "cleanup releases only joiner-owned transfer buffer/timer and clears joiner state");
+  check(context==host_snapshot && descriptor==descriptor_snapshot && existing_participant==participant_snapshot,"remote joiner cleanup cannot mutate distinct host state or participants");
+  selected_descriptor=descriptor.data();selected_session=context.data();
+ }
+}
 void runtime(){
  guards(failure_guards);guards(transport_guards);guards(game_version_rules::guards);
  native_bytes(native_failure,0xa7);native_bytes(native_cleanup,0x10c);native_bytes(native_peer_disconnect,10);
@@ -171,16 +202,17 @@ void runtime(){
   check(output_this==0x12345678 && (mode==2 ? output_arg==0xffffffffu && output_extra==2 : output_arg==0x23456789 && output_extra==(mode==0 ? 123 : 0)),"native sender adapter preserves this, stack arguments and cleanup");
   check(header[8]==base && *reinterpret_cast<const std::uint8_t*const*>(header.data())==input.data(),"native original header/body storage remains intact");
  }
- for(const auto [registration,opcode,base,joining]:std::array<std::array<std::uint32_t,4>,4>{{{request_registration,0x18,request_size,0},{reply_registration,0x1f,reply_size,1},{info_registration,0x1a,info_size,1},{ack_registration,0x1b,ack_size,0}}}){
+ separate_host_joiner();
+ for(const auto [registration,opcode,base,joining]:std::array<std::array<std::uint32_t,4>,4>{{{request_registration,0x18,request_size,0},{reply_registration,0x1f,reply_size,1},{info_registration,0x1a,info_size,0},{ack_registration,0x1b,ack_size,1}}}){
   auto receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(registration+1)));
   input.fill(0);std::memcpy(input.data()+base,local.bytes().data(),local.bytes().size());event e{opcode,input.data(),std::uint16_t(base+local.bytes().size()),0,context.data(),sender.data()};
   put(0x22bc,0);forwarded=0;check(receiver(&e)==73 && forwarded==1,"matching full record forwards registered native admission once");
   auto off=runtime_peer(false);std::memcpy(input.data()+base,off.bytes().data(),off.bytes().size());
-  if(joining)pending_context();else {context.fill(0);put(4,0x12345678);put(0x2250,0x22222222);}
+  if(joining){pending_context();if(opcode==0x1b)put(0x22bc,0);}else {context.fill(0);put(4,0x12345678);put(0x2250,0x22222222);put(0x22bc,0x33333333);}
   sender[0x19]=1;const auto shown_before=popups;send_count=0;const auto response=receiver(&e);
   check(response==(joining ? 2 : 0) && forwarded==1 && popups==shown_before+1 && send_count==1 && output_type==0x1d && output_size==0,"mismatch sends native remote rejection and immediate visible local failure without admission");
-  check(sender[0x19]==0 && (joining ? cleaned() : get(0x2250)==0x22222222),"retail peer flag clears; joining state cleans while active host preserves existing participants");
-  if(!joining){pending_context();event remote{output_type,nullptr,0,0,context.data(),sender.data()};auto remote_receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(rejection_registration+1)));const auto visible_before=popups;check(remote_receiver(&remote)==2 && cleaned() && popups==visible_before+1,"remote native incompatibility reception ends pending join through actual failure cleanup");}
+  check(sender[0x19]==0 && (joining ? cleaned() : get(0x2250)==0x22222222 && get(0x22bc)==0x33333333),"retail peer flag clears; joining state cleans while active host preserves existing participants");
+  if(!joining){pending_context();if(opcode==0x1a)put(0x22bc,0);event remote{output_type,nullptr,0,0,context.data(),sender.data()};auto remote_receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(rejection_registration+1)));const auto visible_before=popups;check(remote_receiver(&remote)==2 && cleaned() && popups==visible_before+1,"remote native incompatibility reception ends pending join through actual failure cleanup");}
   e.length=std::uint16_t(base);put(0x22bc,0);const auto legacy_before=forwarded;check(receiver(&e)==(joining ? 2 : 0) && forwarded==legacy_before,"legacy body without full record refuses before native admission");
  }
  ini::lc=false;ini::requested=false;game_version::install(reinterpret_cast<HMODULE>(0x400000));check(game_version::needs_gameplay_agreement() && !game_version::gameplay_online_allowed(),"explicit non-LC off configuration still requires verified shared agreement");

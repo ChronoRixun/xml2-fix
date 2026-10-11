@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Correct native agreement receiver roles: rejecting client host-info packets preserves the host session;
+  follow-up/rejection packets clean the joining endpoint independently of pending-timer state.
+
 - Generalize online agreement to a finalized record of explicit effective gameplay values and entity/token
   layout, with a registration API for capacity and controller installers. Native refusal now presents
   an actionable message, sends the remote incompatibility response and clears pending joins immediately.

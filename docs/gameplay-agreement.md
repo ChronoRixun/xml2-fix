@@ -37,6 +37,18 @@ The entire record is appended to each original native body: request 0x18 (116 or
 
 Receive rejects missing/unknown protocol, malformed bounds/count/order, unknown/missing/duplicate IDs, revision differences or any effective-value difference before native admission. Exact canonical equality is required, including disabled participating entries. An older single-boolean agreement record or an untagged older peer is refused.
 
+## Receiver endpoint roles
+
+| Opcode | Receiver | Native registration / setup | Refusal |
+|---|---|---|---|
+| 0x18 | Host/accepting endpoint | 0x6096a3 in 0x609660; joining sender 0x607cd0 | Disconnect refused peer and show dialog; preserve session |
+| 0x1a | Host | 0x609cc3 in host setup 0x609f50 -> 0x609c80; joiner responds to 0x16 via 0x607770 | Disconnect refused peer and show dialog; preserve session |
+| 0x1b | Joiner | 0x609dec in joiner setup 0x60a0a0 -> 0x609d80; host responds from 0x609970 | Native failure/cleanup and dialog |
+| 0x1f | Joiner/receiving participant | 0x609ee2 in 0x609d80; host sender 0x608350 | Native failure/cleanup and dialog |
+| 0x1d | Joiner | 0x609e3e in 0x609d80 | Native failure/cleanup and dialog, with no echo |
+
+Host admission refusal never invokes shared-session cleanup, even if a timer exists. Joiner refusal invokes it even when its pending timer is absent. A timer is not an endpoint-role discriminator.
+
 ## Native refusal and failure handling
 
 Patch acquisition records each distinct code page once; readback/cache verification and restoration preserve its original protection. Startup/socket exclusion remains closed until the entire record, transport and participating installer states verify.

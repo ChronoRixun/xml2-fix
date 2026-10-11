@@ -60,11 +60,6 @@ namespace gameplay_agreement
    __try { if(!raw)return false;std::memcpy(&e,raw,sizeof(e));return e.context!=nullptr; }
    __except(EXCEPTION_EXECUTE_HANDLER){return false;}
   }
-  bool pending(void* context)
-  {
-   __try { return *reinterpret_cast<const std::uint32_t*>(static_cast<const std::uint8_t*>(context)+0x22bc)!=0; }
-   __except(EXCEPTION_EXECUTE_HANDLER){return false;}
-  }
   int fail_local(event e,bool joining)
   {
    if(failure_ready && e.sender){using disconnect=void(__thiscall*)(void*,bool);reinterpret_cast<disconnect>(native_peer_disconnect)(e.sender,false);}
@@ -86,13 +81,14 @@ namespace gameplay_agreement
     size=e->length-base;std::memcpy(bytes.data(),static_cast<const std::uint8_t*>(e->body)+base,size);return true;
    }__except(EXCEPTION_EXECUTE_HANDLER){return false;}
   }
-  int receive(void* raw,std::size_t base,std::uint32_t native,bool joining)
+  enum class endpoint { host,joiner };
+  int receive(void* raw,std::size_t base,std::uint32_t native,endpoint role)
   {
    std::array<std::uint8_t,gameplay_capabilities::max_size> bytes{};std::size_t size=0;
    const auto match=extract(raw,base,bytes,size) ? capabilities.compare({bytes.data(),size}) : gameplay_capabilities::result::malformed;
    if(!transport_ready || match!=gameplay_capabilities::result::match){
     logger::write("online: gameplay capabilities refused (reason=%u); no native admission",unsigned(match));
-    event e{};if(event_fields(raw,e)){notify_remote(e);return fail_local(e,joining || pending(e.context));}dialog(false);return 0;
+    event e{};if(event_fields(raw,e)){notify_remote(e);return fail_local(e,role==endpoint::joiner);}dialog(false);return 0;
    }
    return reinterpret_cast<callback>(native)(raw);
   }
@@ -131,7 +127,7 @@ namespace gameplay_agreement
   int receive_rejection(void* raw)
   {
    event e{};if(!event_fields(raw,e)){dialog(false);return 0;}
-   return fail_local(e,pending(e.context)); // no response loop; only the pending endpoint is torn down
+   return fail_local(e,true); // opcode 0x1d is registered by joiner setup; no response loop
   }
   int __fastcall begin_join(void* context,void*,const void* address,int port)
   {
@@ -146,10 +142,11 @@ namespace gameplay_agreement
  bool register_entity_layout(std::uint16_t revision,std::uint32_t actors,std::uint32_t generic,std::uint32_t world,std::uint32_t token_bits,bool verified)
  { const bool enabled=enlist();const bool ok=capabilities.layout(revision,{actors,generic,world,token_bits},verified && enabled);if(!ok)game_version::bind_gameplay_agreement(false);return ok; }
  void show_install_failure(){dialog(true);}
- int receive_request(void* e){return receive(e,request_size,native_request,false);}
- int receive_reply(void* e){return receive(e,reply_size,native_reply,true);}
- int receive_info(void* e){return receive(e,info_size,native_info,true);}
- int receive_ack(void* e){return receive(e,ack_size,native_ack,false);}
+ // Endpoint roles follow native registration and packet direction, never timer presence.
+ int receive_request(void* e){return receive(e,request_size,native_request,endpoint::host);}
+ int receive_reply(void* e){return receive(e,reply_size,native_reply,endpoint::joiner);}
+ int receive_info(void* e){return receive(e,info_size,native_info,endpoint::host);}
+ int receive_ack(void* e){return receive(e,ack_size,native_ack,endpoint::joiner);}
  bool prepare(HMODULE game)
  {
   if(failure_ready)return true;
