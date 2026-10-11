@@ -12,7 +12,8 @@ struct patch {
     std::uint32_t address;
     std::vector<unsigned char> before, after;
 };
-template<class Memory> bool apply(Memory& mem, const std::vector<patch>& writes) {
+template<class Memory> bool apply(Memory& mem, const std::vector<patch>& writes, bool* safe_to_run=nullptr) {
+    if(safe_to_run)*safe_to_run=true;
     struct page { std::uint32_t address, protection; };
     std::vector<page> pages;
     for (const auto& p : writes) {
@@ -42,11 +43,22 @@ template<class Memory> bool apply(Memory& mem, const std::vector<patch>& writes)
         if(ok)ok=mem.flush();
         if(!ok) {
             // All destinations are still writable, including overlapping pages.
-            for(const auto& p:writes)mem.write(p.address,p.before.data(),p.before.size());
-            mem.flush();
+            bool restored=true;
+            for(const auto& p:writes)if(!mem.write(p.address,p.before.data(),p.before.size()))restored=false;
+            for(const auto& p:writes){
+                std::vector<unsigned char> bytes(p.before.size());
+                if(!mem.read(p.address,bytes.data(),bytes.size())||bytes!=p.before)restored=false;
+            }
+            if(!mem.flush())restored=false;
+            if(!restored&&safe_to_run)*safe_to_run=false;
         }
     }
-    while(acquired) { --acquired; mem.restore(pages[acquired].address,pages[acquired].protection); }
+    while(acquired) {
+        --acquired;
+        if(!mem.restore(pages[acquired].address,pages[acquired].protection)){
+            ok=false;if(safe_to_run)*safe_to_run=false;
+        }
+    }
     return ok;
 }
 inline std::vector<unsigned char> pointer_bytes(const void* p) {

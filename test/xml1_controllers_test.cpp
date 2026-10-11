@@ -37,7 +37,7 @@ struct fake_memory {
     std::vector<unsigned char> bytes=std::vector<unsigned char>(12288,0x11);
     std::map<std::uint32_t,std::uint32_t> protections{{0,2},{4096,2},{8192,2}};
     int acquire_calls=0,fail_acquire=0,write_calls=0,fail_write=0,flush_calls=0;
-    bool bad_readback=false,fail_flush=false;
+    bool bad_readback=false,fail_flush=false,persistent_write_failure=false,persistent_flush_failure=false,fail_restore=false;
     bool read(std::uint32_t a,void* p,std::size_t n){
         if(a+n>bytes.size())return false;
         std::memcpy(p,bytes.data()+a,n);
@@ -45,7 +45,7 @@ struct fake_memory {
         return true;
     }
     bool write(std::uint32_t a,const void* p,std::size_t n){
-        if(++write_calls==fail_write)return false;
+        if(++write_calls==fail_write||(persistent_write_failure&&write_calls>=fail_write))return false;
         if(a+n>bytes.size()||protections[a&~4095u]!=0x40)return false;
         std::memcpy(bytes.data()+a,p,n);return true;
     }
@@ -53,8 +53,8 @@ struct fake_memory {
         if(++acquire_calls==fail_acquire)return false;
         old=protections[a];protections[a]=0x40;return true;
     }
-    void restore(std::uint32_t a,std::uint32_t old){protections[a]=old;}
-    bool flush(){return !(++flush_calls==1&&fail_flush);}
+    bool restore(std::uint32_t a,std::uint32_t old){if(fail_restore)return false;protections[a]=old;return true;}
+    bool flush(){return !(++flush_calls==1&&fail_flush)&&!persistent_flush_failure;}
 };
 int main(){
     // Catch the old extra 360-unit center-distance restriction and nearest-core
@@ -102,6 +102,17 @@ int main(){
     CHECK(!apply(mismatch,writes));CHECK(mismatch.acquire_calls==0);CHECK(mismatch.bytes==original);
     fake_memory empty;CHECK(!apply(empty,{{12,{},{}}}));CHECK(empty.acquire_calls==0);
 
+    // A failed rollback or page restoration cannot be called native fallback.
+    for(int failure=0;failure<4;++failure){
+        fake_memory mem;bool safe=true;
+        mem.fail_write=failure==0?2:0;mem.persistent_write_failure=failure==0;
+        mem.persistent_flush_failure=failure==1;
+        mem.fail_restore=failure==2;mem.bad_readback=failure==3;
+        CHECK(!apply(mem,writes,&safe));CHECK(!safe);
+    }
+    fake_memory transient;bool safe=false;transient.fail_write=2;
+    CHECK(!apply(transient,writes,&safe));CHECK(safe);
+
     using socket_t=SOCKET(WSAAPI*)(int,int,int);
     for(const auto* key:{L"Game/Xml1MasterMold",L"Game/Xml1Turrets",L"Test/NativeProjectileProbe"}){
         ini::values={{key,"1"}};iat_hook::fail=false;game_version::install(nullptr);
@@ -118,6 +129,8 @@ int main(){
     ini::values.clear();iat_hook::fail=false;const auto calls=iat_hook::calls;
     game_version::install(nullptr);CHECK(game_version::startup_allowed());
     CHECK(!game_version::offline_gameplay_ready());CHECK(iat_hook::calls==calls);
+    game_version::refuse_startup();CHECK(!game_version::startup_allowed());
+    ini::values.clear();CHECK(!game_version::startup_allowed());
     ini::values={{L"Save/Format","lc"},{L"Game/Xml1MasterMold","1"},{L"Online/GameVersion","LC24"}};
     game_version::install(nullptr);CHECK(game_version::startup_allowed());
     CHECK(reinterpret_cast<socket_t>(iat_hook::installed)(AF_INET,SOCK_DGRAM,IPPROTO_UDP)==INVALID_SOCKET);

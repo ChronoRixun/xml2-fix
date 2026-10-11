@@ -30,8 +30,9 @@ the action class descriptor is `0x70b678`. XML1 team bits none/enemy/altenemy
 
 All controller entry replacements and the beam patch are acquired, written and
 read back as one startup transaction. Signature, protection, write, readback or
-cache-flush failures refuse activation. Disabled or refused activation retains
-the existing unshielded encounter fallback. The query wrapper checks availability
+cache-flush failures refuse activation. A verified rollback retains the existing
+unshielded encounter fallback; failed rollback, cache flush or page-protection
+restoration refuses process startup. The query wrapper checks availability
 of both native temporary pools before acquiring either and releases them before
 starting combat.
 

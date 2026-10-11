@@ -20,6 +20,8 @@ namespace game_version
 	bool require_gameplay_agreement(HMODULE game);
 	void bind_gameplay_agreement(bool verified);
 	void bind_gameplay_refusal(void (*show)());
+	// Sticky for this installation when a controller cannot restore native code.
+	void refuse_startup();
 	// Temporary exclusion until the shared agreement represents these rules.
 	bool offline_gameplay_ready();
 	void install(HMODULE game);

@@ -5,6 +5,7 @@
 #include "limits_rules.hpp"
 #include "xml1_hook_memory.hpp"
 #include "mold_query.hpp"
+#include "game_version.hpp"
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -155,7 +156,9 @@ void install(HMODULE game){
         {spawn,pointer_bytes(real_default_target),pointer_bytes(&spawn_hook)},
         {0x694994,pointer_bytes(real_default),pointer_bytes(&default_hook)}};
     xml1_hook_transaction::memory memory;
-    if(xml1_hook_transaction::apply(memory,writes)){enabled=true;logger::write("mold controller: scoped opt-in requests and native AI update installed (no external scheduled events)");}
-    else logger::write("mold controller: dependency transaction refused; native fallback retained");
+    bool safe=true;
+    if(xml1_hook_transaction::apply(memory,writes,&safe)){enabled=true;logger::write("mold controller: scoped opt-in requests and native AI update installed (no external scheduled events)");}
+    else if(safe)logger::write("mold controller: dependency transaction refused; native fallback retained");
+    else {game_version::refuse_startup();logger::write("mold controller: rollback/protection verification failed; process startup refused");}
 }
 }

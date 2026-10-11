@@ -228,6 +228,7 @@ namespace
 		forced_teams::install(game);
 		xml1_turrets::install(game);
 		mold_controller::install(game);
+		if (!game_version::startup_allowed()) return;
 		// Conversations written for XML1's engine ([Game] AutoAdvance, ReplyVoices, ReplyCursor; on by default):
 		// three code sites of the conversation system, used from the first conversation on; independent of the
 		// patches above (none of its sites or guards is anyone else's).

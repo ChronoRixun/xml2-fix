@@ -24,6 +24,7 @@ namespace game_version
 		// These experimental rules have no shared gameplay-capability entry yet.
 		// Capture the request once: later INI edits cannot reopen a patched process.
 		bool experimental_offline = false;
+		bool installation_unsafe = false;
 		using socket_t = SOCKET(WSAAPI*)(int,int,int);
 		socket_t real_socket = nullptr;
 		SOCKET WSAAPI guarded_socket(int family, int type, int protocol)
@@ -67,8 +68,9 @@ namespace game_version
 
 	bool startup_allowed()
 	{
-		return save_guard_rules::startup_allowed(lc_required || gameplay_required || experimental_offline,real_socket != nullptr);
+		return !installation_unsafe && save_guard_rules::startup_allowed(lc_required || gameplay_required || experimental_offline,real_socket != nullptr);
 	}
+	void refuse_startup() { installation_unsafe = true; }
 
 	bool offline_gameplay_ready() { return experimental_offline && real_socket != nullptr; }
 
@@ -87,6 +89,7 @@ namespace game_version
 	void install(const HMODULE game)
 	{
 		version_verified = false;
+		installation_unsafe = false;
 		real_socket = nullptr;
 		experimental_offline = ini::flag(L"Game",L"Xml1MasterMold",false) ||
 			ini::flag(L"Game",L"Xml1Turrets",false) || ini::number(L"Test",L"NativeProjectileProbe",0) == 1;

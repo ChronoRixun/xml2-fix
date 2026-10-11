@@ -17,8 +17,8 @@ struct memory {
         if(!VirtualProtect(reinterpret_cast<void*>(a),4096,PAGE_EXECUTE_READWRITE,&protection))return false;
         old=protection; return true;
     }
-    void restore(std::uint32_t a,std::uint32_t old) {
-        DWORD ignored=0; VirtualProtect(reinterpret_cast<void*>(a),4096,old,&ignored);
+    bool restore(std::uint32_t a,std::uint32_t old) {
+        DWORD ignored=0; return VirtualProtect(reinterpret_cast<void*>(a),4096,old,&ignored)!=0;
     }
     bool flush(){return FlushInstructionCache(GetCurrentProcess(),nullptr,0)!=0;}
 };

@@ -45,7 +45,6 @@ float damage = 0, speed = 0;
 // retains views into the XMLB buffer is a separate production-lifetime gate.
 std::array<unsigned char,12> definition_reader{};
 bool loaded=false;
-bool installed_beam=false;
 u32 beam_resume=0x452312;
 u32 active_caster=0, active_core=0;
 float active_until=0;
@@ -192,26 +191,22 @@ void install(HMODULE) {
     speed=static_cast<float>(ini::number(L"Test",L"ProjectileSpeed",0));
     if(!supported())return;
     if(diagnostic&&(source_name.empty()||target_name.empty()||(probe_mode=="corebeam" ? probe_node.empty() : (entity_name.empty()||entity_file.empty()||damage<=0||speed<=0))))return;
-    if(probe_mode=="corebeam"||mold) {
-        std::array<unsigned char,7> patch{0xe9,0,0,0,0,0x90,0x90};
-        const u32 delta=static_cast<u32>(reinterpret_cast<std::uintptr_t>(&beam_stub))-0x452310;
-        std::memcpy(patch.data()+1,&delta,4);
-        DWORD old=0;
-        if(!VirtualProtect(reinterpret_cast<void*>(0x45230b),patch.size(),PAGE_EXECUTE_READWRITE,&old)) return;
-        std::memcpy(reinterpret_cast<void*>(0x45230b),patch.data(),patch.size());
-        FlushInstructionCache(GetCurrentProcess(),reinterpret_cast<void*>(0x45230b),patch.size());
-        VirtualProtect(reinterpret_cast<void*>(0x45230b),patch.size(),old,&old);
-        installed_beam=true;
+    std::vector<xml1_hook_transaction::patch> writes;
+    if(probe_mode=="corebeam") {
+        xml1_hook_transaction::patch beam;
+        if(!prepare_beam(beam))return;
+        writes.push_back(beam);
     }
-    if(!diagnostic)return;
     // ForcedTeams has already installed its extended table, if requested. Patch
     // the active table's existing unused no-op rather than add another name.
     const auto table=read<u32>(reinterpret_cast<const void*>(0x49fe31),0);
-    auto* slot=reinterpret_cast<void**>(table+(0x68b028-0x68a908));
-    DWORD old=0;
-    if(!VirtualProtect(slot,sizeof(void*),PAGE_READWRITE,&old)) return;
-    *slot=reinterpret_cast<void*>(&probe);
-    VirtualProtect(slot,sizeof(void*),old,&old);
+    const auto slot=table+(0x68b028-0x68a908);
+    writes.push_back({slot,{0xf0,0xaf,0x5a,0},xml1_hook_transaction::pointer_bytes(&probe)});
+    xml1_hook_transaction::memory memory;bool safe=true;
+    if(!xml1_hook_transaction::apply(memory,writes,&safe)){
+        if(!safe){game_version::refuse_startup();logger::write("turret probe: rollback/protection verification failed; process startup refused");}
+        return;
+    }
     logger::write("turret probe: installed opt-in diagnostic; invoke causeTroubleForAutotest()");
 }
 bool prepare_beam(xml1_hook_transaction::patch& patch){
