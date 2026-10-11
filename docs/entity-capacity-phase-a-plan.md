@@ -820,3 +820,15 @@ and why the change stays within the reviewed design.
     point the E10A2 profile is bound: failing to join the transaction is fatal (startup refused), and any later
     transaction refusal refuses the LC seam too, so a populated world never mixes layouts. MoveTriggers runs the same
     read-only pre-check of its own guards and keeps 19 triggers on a mismatch instead of refusing the transaction.
+
+### Known limits of this implementation
+
+- **Old saves with an unverified typed registry lock that slot.** The typed entity-id registry is generated from the
+  shipped Scripts tree and verified against the installed one (deviation 6). When it is unverified (for example a mod
+  ships scripts), an old 0.2.0i-format file cannot be migrated: its load is refused with the reason, and the refusal
+  latch also refuses writes to that slot until a load of it succeeds, so the old file is never overwritten by a
+  build that could not read it. Restoring the matching scripts (or loading another slot) is the way out.
+- **One save-manager claim per process.** The prepared E10A2 save manager (0x80c24 bytes) is claimed by the game's
+  single CMap allocation at 0x487344 and returned at its normal release. A second concurrent allocation, a
+  construction on a foreign backing, or any constructor failure poisons the claim and stops the process (fail-stop,
+  section 6); the backing is never freed while the process lives. The retail game allocates one manager per process.

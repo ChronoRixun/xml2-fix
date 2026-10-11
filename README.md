@@ -320,6 +320,16 @@ Nothing changes without the keys. Every slot takes a name, so `ResourceNames` is
 
 **Effect curves.** Every loaded effect keeps its animation curves (a particle's size, transparency, rotation over its life) in one pool of 900. A zone's effects and the effects of a four-hero party can need more, and when the pool is full the game hands out an empty curve without a word: the effects loaded last are drawn without their particles - a fire is only a faint glow that still burns, or a hero's power loses its particles. `EffectCurves=3600` gives the pool room for 3600. It moves into a block of the fix's memory that the game's own code builds and tears down; every instruction that carries the old size or the old address is checked before anything is patched, and on any difference the pool stays at 900. Curves are not written to saves. The test pipe's `status` reports `curves used/capacity`. [docs/effect-curves.md](docs/effect-curves.md) has the layout, the patch list and the measurements.
 
+**Entity capacity.** `[Limits] EntityCapacity=1` raises the engine's entity domain to 32 actor / 768 generic / 1024 World handles ([docs/entity-capacity.md](docs/entity-capacity.md)): the stock generic arena refuses every prop, projectile or trigger past the 224th live one without a word, which is why crowded rooms lose objects and the HAARP freeze gun never fires. All of it is installed as one checked transaction (535 guards, 31 region hashes) before the game's own code runs; it needs LC saves, marks its saves with a required-feature bit a retail-layout build refuses, and refuses online peers of another layout at admission (GCAP; the receive-lifecycle hooks of the design are not installed, see [the plan](docs/entity-capacity-phase-a-plan.md) deviation 17). If the executable's entity code is not the expected retail code, the capacity alone falls back to stock (logged) and everything else installs.
+
+**Triggers per move.** `[Limits] MoveTriggers=64` gives each native move a preallocated handle side array. Missing key or 19 keeps
+stock behavior; invalid values are logged and ignored. The port needs 27 for its largest restored burst;
+64 leaves 37 spare slots. The count and all other native move fields stay at their existing offsets.
+The constructor, copy, lookup, reset and destruction paths share the handle side storage. Actor timing
+initialization, pause, dispatch and cancellation also expand; the first nineteen native timer fields are
+mirrored byte for byte. Stack packets retain their native layout; no save format changes.
+The patch refuses unexpected bytes or an already-created move pool. See [move-triggers.md](docs/move-triggers.md).
+
 ### Classic main-menu backdrop
 
 `[Game] ClassicMainBackdrop=1` enables the original main-room diffuse textures for a classic
@@ -689,15 +699,3 @@ Also by the same author: [MUA Controller Fix](https://github.com/ChronoRixun/mua
 It contains no game files or game code and doesn't change any file of the game: you need your own copy of *X-Men Legends II* for PC. Please don't post or link game files in issues or pull requests. Rights holders with a concern: please [open an issue](https://github.com/ChronoRixun/xml2-fix/issues) and it will be answered promptly and in good faith.
 
 The software is provided "as is", without warranty of any kind; see [LICENSE](LICENSE).
-
-### Triggers per move
-
-`[Limits] EntityCapacity=1` raises the engine's entity domain to 32 actor / 768 generic / 1024 World handles ([docs/entity-capacity.md](docs/entity-capacity.md)): the stock generic arena refuses every prop, projectile or trigger past the 224th live one without a word, which is why crowded rooms lose objects and the HAARP freeze gun never fires. All of it is installed as one checked transaction (535 guards, 31 region hashes) before the game's own code runs; it needs LC saves, marks its saves with a required-feature bit a retail-layout build refuses, and refuses online peers of another layout.
-
-`[Limits] MoveTriggers=64` gives each native move a preallocated handle side array. Missing key or 19 keeps
-stock behavior; invalid values are logged and ignored. The port needs 27 for its largest restored burst;
-64 leaves 37 spare slots. The count and all other native move fields stay at their existing offsets.
-The constructor, copy, lookup, reset and destruction paths share the handle side storage. Actor timing
-initialization, pause, dispatch and cancellation also expand; the first nineteen native timer fields are
-mirrored byte for byte. Stack packets retain their native layout; no save format changes.
-The patch refuses unexpected bytes or an already-created move pool. See [move-triggers.md](docs/move-triggers.md).
