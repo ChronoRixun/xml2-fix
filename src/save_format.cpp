@@ -1842,21 +1842,6 @@ namespace save_format
 		return installation_failure;
 	}
 
-	namespace
-	{
-		// The capture-count immediate each bound site compares with under the installed profile (0: retail).
-		std::uint32_t capture_bound_for(const save_core_rules::capture_bound& site)
-		{
-			switch (site.va)
-			{
-			case 0x466659: return layout_profile.states;
-			case 0x46668a: return layout_profile.dynamic;
-			case 0x4666e7: case 0x4666f3: return layout_profile.smart;
-			default: return 0; // 0x41a427: the zone string arena is not part of the expanded layout
-			}
-		}
-	}
-
 	void use_native_profile(const native_profile& chosen)
 	{
 		if (contributed) return;
@@ -1962,15 +1947,12 @@ namespace save_format
 		save_core_rules::append(block,save_core_rules::capture_trampoline(capture_at));
 		retail_capture=reinterpret_cast<capture_t>(in_game(capture_at));
 		writes.push_back({0x4664d0,jump(0x4664d0,address_of(&capture_hook),5)});
-		for(const auto& site:save_core_rules::capture_bounds)
 		{
-			const address bound_at=base+static_cast<address>(block.size());
-			save_core_rules::append(block,save_core_rules::bound_bridge(site,bound_at,address_of(&capture_overflow),capture_bound_for(site)));
-			writes.push_back({site.va,jump(site.va,bound_at,site.length)});
+			const address bridges_at=base+static_cast<address>(block.size());
+			const auto bridges=save_core_rules::capture_bridges(bridges_at,address_of(&capture_overflow),layout_profile);
+			save_core_rules::append(block,bridges.bytes);
+			for(const auto& j:bridges.jumps)writes.push_back({j.va,jump(j.va,j.target,j.length)});
 		}
-		const address ordinal_at=base+static_cast<address>(block.size());
-		save_core_rules::append(block,save_core_rules::ordinal_write_bridge(ordinal_at,address_of(&capture_overflow),layout_profile.ordinals));
-		writes.push_back({0x46667a,jump(0x46667a,ordinal_at,8)});
 		writes.push_back({game_vtable+0x20c,dword_bytes(address_of(&native_load_hook))});
 		// CORE-END
 		if (block.size() > block_reserve)

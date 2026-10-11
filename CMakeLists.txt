@@ -240,6 +240,22 @@ add_executable(xml2_entity_frames_test test/entity_frames_test.cpp "${CMAKE_CURR
 target_include_directories(xml2_entity_frames_test PRIVATE src)
 target_link_options(xml2_entity_frames_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
+# Tests that execute retail code (or bridges that jump into it) at its own addresses own the image range: the same
+# 4 MB code-class block in .text$a as the frames test, sorted before the compiler's .text$mn.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm"
+".386
+.MODEL FLAT
+fixture_seg SEGMENT PARA PUBLIC 'CODE' ALIAS('.text$a')
+PUBLIC _fixture_space
+_fixture_space DB 400000h DUP(0)
+fixture_seg ENDS
+END
+")
+# The save-core capture bridges executed as emitted under the retail and E10A2 profiles (Phase A, review P1).
+add_executable(xml2_save_capture_bridge_test test/save_capture_bridge_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_save_capture_bridge_test PRIVATE src)
+target_link_options(xml2_save_capture_bridge_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
 # The entity-capacity install's game-free decisions: ledger shape and binding, allocator ring, save claim, transfer
 # bounds, startup quiescence, layout contract.
 add_executable(xml2_entity_capacity_test test/entity_capacity_test.cpp src/patch_transaction.cpp)

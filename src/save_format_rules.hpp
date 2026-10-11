@@ -133,6 +133,19 @@ namespace save_format_rules
 	static_assert(4 + e10a2_profile.states * 0x18 + 4 + 4 + e10a2_profile.ordinals * 2 + 4 + e10a2_profile.dynamic * 2 + 4 + 4 + e10a2_profile.smart * 2 + 4 + 4 + 0x34c + 20 + 4 + 4 == e10a2_profile.record_size);
 	static_assert(5 * e10a2_profile.record_size + (0x1afdc - 5 * 0x55e0) == e10a2_profile.manager_size);
 	static_assert(e10a2_profile.wrapper - e10a2_profile.payload == stream_wrapper - stream_capacity);
+	// The record fields after the ordinal map, derived from the profile (retail 0x4a10 / 0x4c6c / 0x4c70 / 0x5274; E10A2
+	// 0x18810 / 0x19014 / 0x19018 / 0x1981c, the values of the ledger's literal sites at 0x466698..0x466728). The capture
+	// bridges replay instructions that address these fields, so they take the installed profile's offsets.
+	constexpr std::uint32_t dynamic_list(const native_profile& p) { return p.ordinal_map + p.ordinals * 2 + 4; }
+	constexpr std::uint32_t dynamic_count(const native_profile& p) { return dynamic_list(p) + p.dynamic * 2 + 4; }
+	constexpr std::uint32_t smart_list(const native_profile& p) { return dynamic_count(p) + 4; }
+	constexpr std::uint32_t smart_count(const native_profile& p) { return smart_list(p) + p.smart * 2 + 4; }
+	// The native ordinal writer addresses the map with the 1-based ordinal: [record + ordinal*2 + (map - 2)].
+	constexpr std::uint32_t ordinal_write_displacement(const native_profile& p) { return p.ordinal_map - 2; }
+	static_assert(dynamic_list(retail_profile) == 0x4a10 && dynamic_count(retail_profile) == 0x4c6c && smart_list(retail_profile) == 0x4c70 && smart_count(retail_profile) == 0x5274 &&
+	              ordinal_write_displacement(retail_profile) == 0x480a);
+	static_assert(dynamic_list(e10a2_profile) == 0x18810 && dynamic_count(e10a2_profile) == 0x19014 && smart_list(e10a2_profile) == 0x19018 && smart_count(e10a2_profile) == 0x1981c &&
+	              ordinal_write_displacement(e10a2_profile) == 0x1800a);
 	constexpr std::size_t profile_size = 0x228;
 	constexpr std::size_t old_envelope = 0x84;           // 0x80 description + u32 length
 	constexpr std::size_t old_slot_file_size = old_envelope + stream_capacity;

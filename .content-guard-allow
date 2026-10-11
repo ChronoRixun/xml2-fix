@@ -41,3 +41,4 @@ PRIVATE_IP  test/xml2_test.cpp  # Invented RFC1918 address-classification and lo
 LONG_ID  test/xml2_test.cpp  # Public Discord application identifiers and invented IPC test ids.
 GAME_TEXT_ATTR  src/save_format_rules.hpp  # Original save-status UI labels concatenated with a description variable, not decoded game text.
 LONG_ID  src/discord_rules.hpp  # Public project Discord application identifiers documented by the integration; not personal ids.
+DISASM  test/save_capture_bridge_test.cpp  # Authored inline assembly that enters the emitted capture bridges and records the landing address; not game disassembly.

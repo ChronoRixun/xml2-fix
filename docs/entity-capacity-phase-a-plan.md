@@ -745,3 +745,15 @@ and why the change stays within the reviewed design.
     returns the policy and `QueryApi_004ab7d0` its argument (native `mov eax, [esp+4]`, no
     caller consumes it). A capstone sweep of every E9-bridged native against the port's
     declarations found no other dropped return (tools: PROGRESS.md 2026-10-11 16:05).
+13. **Capture bridges take the installed profile's offsets, not only its bounds (section 6; review P1).** The five
+    save-core bound bridges and the ordinal writer replay the instruction they overwrite. Under E10A2 the replay kept
+    retail record displacements: the ordinal writer stored at `+0x480a + ordinal*2` (inside the E10A2 state storage)
+    instead of `+0x1800a`, and the smart-count compare at 0x4666f3 read `+0x5274` instead of `+0x1981c`; 0x4666e7
+    compared the STATE count (ESI = [ebp+state_count]) with the smart bound (1024) instead of the state bound (4096).
+    `save_core_rules::capture_bridges(base, hook, profile)` now builds every bridge from the profile (bounds and the
+    derived record offsets `dynamic_list/dynamic_count/smart_list/smart_count/ordinal_write_displacement`, statically
+    checked against the ledger's literal sites for both profiles); save_format emits exactly that block, and
+    `test/save_capture_bridge_test.cpp` EXECUTES it under both profiles with landing pads at every native continuation
+    (below/at each bound, the hook's record argument, and the ordinal map writes compared against a whole-record
+    expectation). Audit of the other save bridges: the stream flag stubs already take `usable_end`; the numbering,
+    reset, capture trampoline, XMLB, zone-open and string-arena bridges address no record field of the native layout.
