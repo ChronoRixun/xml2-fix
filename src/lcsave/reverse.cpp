@@ -453,16 +453,7 @@ namespace lcsave::detail
 				const auto& fog = r["fog"]["data"].as_bytes();
 				if (fog.size() != old_fog_bytes) fail("fog: " + std::to_string(fog.size()) + " bytes, layout says 844");
 				std::memcpy(z.tail.fog, fog.data(), old_fog_bytes);
-				const auto& conv = r["conversation"].as_list();
-				if (conv.size() != 5) fail("pack expected 5 items for packing");
-				Hash current_digest{};
-				Tables tables; tables.data = std::shared_ptr<const TablesData>(&pos.t, [](const TablesData*) {});
-				std::string error;
-				if (!conversation_digest(tables, current_digest, error)) fail(error);
-				const auto& recorded_digest = r["conversation_digest"].as_bytes();
-				const bool digest_matches = recorded_digest != std::string(32, '\0') && recorded_digest == std::string(reinterpret_cast<const char*>(current_digest.data()), 32);
-				if (!digest_matches) notes.push_back("zone " + zone + ": conversation digest unknown or changed: bits reset");
-				for (int k = 0; k < 5; ++k) z.tail.conversation[k] = digest_matches ? U(conv[static_cast<std::size_t>(k)]) : 0;
+				restore_conversation(r, zone, pos.t, z.tail.conversation, notes);
 				z.tail.time_stamp = static_cast<float>(r["time_stamp"].as_real());
 				z.tail.flag = B(r["flag"]);
 				m.zones.push_back(std::move(z));

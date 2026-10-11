@@ -217,6 +217,23 @@ namespace
 		return to_json(expected) == to_json(actual) || associations_match_build(bad, numbering);
 	}
 
+	// Independent expected-value calculation: never call the runtime remapper for the corpus oracle.
+	Value normalized_heard(const Value& words, const std::vector<Hash>& source, const std::vector<Hash>& target, int& dropped)
+	{
+		u32 out[5]{};
+		for (std::size_t bit = 0; bit < 160; ++bit)
+		{
+			if (!(static_cast<u32>(words.l.at(bit / 32).as_int()) & (u32(1) << (bit % 32)))) continue;
+			if (bit >= source.size()) { ++dropped; continue; }
+			const auto at = std::find(target.begin(), target.end(), source[bit]);
+			if (at == target.end()) { ++dropped; continue; }
+			const auto position = static_cast<std::size_t>(at - target.begin());
+			out[position / 32] |= u32(1) << (position % 32);
+		}
+		Value value = Value::list(); for (auto word : out) value.push(Value::integer(word));
+		return value;
+	}
+
 	void test_corpus_oracle()
 	{
 		const auto before = failures;
@@ -258,6 +275,14 @@ namespace
 		tombstone.set("flags", oracle_list({Value::integer(0), Value::integer(0)})); states.push(tombstone);
 		expect(normalize_promotions(states, numbering) == 1 && states.l[0]["list"].as_int() == 2 && states.l[2] == tombstone,
 			"claimed tombstone ordinal blocks promotion and remains removed");
+		const auto a = key_hash1("invented_a", Enc::latin1), b = key_hash1("invented_b", Enc::latin1);
+		const auto heard = oracle_list({Value::integer(1), Value::integer(0), Value::integer(0), Value::integer(0), Value::integer(0)});
+		int drops = 0;
+		expect(normalized_heard(heard, {a, b}, {b, a}, drops).l[0].as_int() == 2 && drops == 0,
+			"heard oracle moves surviving identity rather than clearing changed digest");
+		drops = 0;
+		expect(normalized_heard(heard, {a, b}, {b}, drops).l[0].as_int() == 0 && drops == 1,
+			"heard oracle drops only removed identity");
 		std::printf("corpus oracle: %u checks, %d failures\n", checks, failures - before);
 	}
 
@@ -368,7 +393,7 @@ namespace
 					const auto back = reverse_slot(r.bytes, *tables.data, &old, notes);
 					reversed_identical = write_slot(back) == old_bytes;
 					// Exercise the runtime metadata/retention contract, then require every semantic field to survive.
-					// Permit only digest-confirmed conversation resets and independently build-confirmed legacy placement promotions.
+					// Permit only digest-confirmed conversation marks dropped and independently build-confirmed legacy placement promotions.
 					const auto plain = new_to_old_stream(r.bytes, tables);
 					if (!plain.ok || plain.bytes.size() != old_slot_size)
 					{
@@ -406,7 +431,10 @@ namespace
 							for (std::size_t i = 0; i < records.size(); ++i)
 							{
 								const auto& digest = records[i]["conversation_digest"].as_bytes();
-								const bool invalid = digest == std::string(32, '\0') || digest != std::string(reinterpret_cast<const char*>(running_digest.data()), running_digest.size());
+								const auto zone = zones.l[i]["zone"].as_text();
+								const auto ranking = conversation_bits(*tables.data->build, zone);
+								const auto package_digest = conversation_package_digest(key_hash1(zone, Enc::latin1), ranking);
+								const bool invalid = digest != std::string(reinterpret_cast<const char*>(package_digest.data()), package_digest.size());
 								const bool legacy = input_file.data("META")["origin"].as_int() == 1 || records[i]["capture_flags"].as_int() == 2;
 								if (legacy)
 								{
@@ -417,11 +445,18 @@ namespace
 									zones.l[i].set("states", std::move(states));
 								}
 								if (!invalid) continue;
-								Value cleared = Value::list();
 								bool had_bits = false;
-								for (const auto& word : records[i]["conversation"].as_list()) { had_bits |= word.as_int() != 0; cleared.push(Value::integer(0)); }
-								if (had_bits) ++resets;
-								zones.l[i].set("conversation", std::move(cleared));
+								for (const auto& word : records[i]["conversation"].as_list()) had_bits |= word.as_int() != 0;
+								if (!had_bits) continue;
+								Hash recorded{}; std::memcpy(recorded.data(), digest.data(), 32);
+								const auto source = tables.data->conversation_tables.find({recorded, key_hash1(zone, Enc::latin1)});
+								if (source == tables.data->conversation_tables.end())
+								{
+									Value zero = Value::list(); for (int k = 0; k < 5; ++k) zero.push(Value::integer(0));
+									zones.l[i].set("conversation", zero); ++resets; continue;
+								}
+								zones.l[i].set("conversation", normalized_heard(records[i]["conversation"], source->second,
+									ranking, resets));
 							}
 							expected.set("zones", std::move(zones));
 							same_policy = to_json(actual) == to_json(canonical_semantics(expected));
@@ -478,7 +513,7 @@ namespace
 							saver_policy_same += same_policy;
 							if (same_policy) conversation_resets += resets;
 							if (!same_policy) status += " [UNEXPLAINED saver round-trip difference]";
-							else if (resets) status += " [digest-confirmed conversation resets: " + std::to_string(resets) + "]";
+							else if (resets) status += " [digest-confirmed conversation marks dropped: " + std::to_string(resets) + "]";
 							if (!same_policy || !retained)
 							{
 								status += " [saver round trip differs]";
@@ -527,7 +562,7 @@ namespace
 			"reverse byte-exact %d (agrees with the Python report %d); all equal %d\n", files, lcsave_equal, lcsave_keys, old_equal, new_equal,
 			reverse_identical, reverse_agree, all_equal);
 		std::printf("legacy placement promotions normalized: %d\n", placement_promotions);
-		std::printf("loader -> saver round trip: saved %d, raw unchanged game state %d, policy round trip %d, conversation resets %d, retained payloads/unknown fields %d; missing herostat talents: %d files, %d talents\n", saver_ok,
+		std::printf("loader -> saver round trip: saved %d, raw unchanged game state %d, policy round trip %d, conversation marks dropped %d, retained payloads/unknown fields %d; missing herostat talents: %d files, %d talents\n", saver_ok,
 			saver_same, saver_policy_same, conversation_resets, retained_ok, adds_files, adds_total);
 		return files && lcsave_equal == files && all_equal == files && saver_ok == files && saver_policy_same == files && retained_ok == files ? 0 : 1;
 	}

@@ -139,3 +139,31 @@ exact f32 timestamps, flag2 and a zero conversation digest for incoming native t
 extracts associations directly from an in-memory temporary translation; it never runs reverse or hashes conversation
 files. The runtime installs this metadata before native application. Same-name ambiguity/source factory skips still
 need an actual capture sidecar; metadata extraction does not replace available-pool preflight.
+
+## Conversation heard marks across builder eras
+
+The engine ranks loaded conversation files by case-insensitive name, then indexes four consumption lanes per
+file (0x45cb5a, 0x45c56e, 0x45c679). A lane counts consumed run-once starts, not line ids or startCondition
+ordinals. Historical tables contain hashes of file name plus decimal lane; identical eras share a reference.
+
+New native `ZREC.conversation_digest` is package-aware: SHA-256 of `LCCONV2` plus NUL, the canonical zone key
+hash[32], little-endian u32 lane count, and every ordered file/lane identity hash[32]. Dialogue edits do not
+renumber these identities. Only an exact current package-ranking digest permits positional reuse. Bare global
+conversation-tree digests are legacy provenance keys, never evidence that current ranks match. The pinned
+release snapshot for the previously shipped global digest also protects earlier native LC resaves.
+
+`conversation.lcm` emits both historical global keys and qualified package keys, plus the writing build's
+current package snapshots. A different package ranking maps surviving identities into their current positions;
+removed or unassigned identities get individual ledger notes. Unknown/zero provenance drops heard words with
+a note and continues loading. This keeps successful native/online-transfer saves loadable even when their
+capture metadata has no authenticated conversation provenance. Other state remains intact. Unknown marks
+are not asserted to be retained by this fallback.
+
+Loaded metadata rebases to the reconstructed package digest and retains inferred capture status. Cached-zone
+resaves therefore do not remap translated words a second time. Capture hooks and fresh native recording also
+write package-aware provenance. Legacy import bytes, LC field widths/layout, and catalogue identities are unchanged.
+
+Sidecar framing remains `LCCONV1` plus NUL, u32 version=1, u32 table count, u32 file length, and u32 body CRC-32.
+Each table has provenance[32], zone-key-hash[32], u32 bit count, then identity hashes[32]. Counts are multiples of
+four, at most 128. Duplicate keys/identities, bad framing/version/CRC refuse malformed table files. V39 checks
+the generated set. Rebuild savefiles after the era ledger changes; game asset preparation caches remain valid.

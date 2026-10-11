@@ -713,6 +713,32 @@ namespace lcsave::detail
 		}
 	}
 
+	void read_conversation_tables(const std::vector<std::uint8_t>& bytes, TablesData& t)
+	{
+		std::vector<u32> vals;
+		auto in = header(bytes, "LCCONV1\0", vals, 2, "conversation.lcm");
+		if (vals[0] != 1) fail("conversation.lcm: unsupported version");
+		for (u32 k = 0; k < vals[1]; ++k)
+		{
+			Hash digest{}, zone{};
+			const auto d = in.take(32), z = in.take(32);
+			std::memcpy(digest.data(), d.data(), 32); std::memcpy(zone.data(), z.data(), 32);
+			const auto n = in.get<u32>();
+			if (n > 128 || n % 4) fail("conversation.lcm: invalid bit count");
+			std::vector<Hash> bits;
+			std::set<Hash> seen;
+			for (u32 j = 0; j < n; ++j)
+			{
+				Hash identity{}; const auto h = in.take(32); std::memcpy(identity.data(), h.data(), 32);
+				if (!seen.insert(identity).second) fail("conversation.lcm: duplicate identity or table");
+				bits.push_back(identity);
+			}
+			if (!t.conversation_tables.emplace(std::make_pair(digest, zone), std::move(bits)).second)
+				fail("conversation.lcm: duplicate identity or table");
+		}
+		if (!in.end()) fail("conversation.lcm: trailing bytes");
+	}
+
 	// ------------------------------------------------------------------------------------------------ zones
 	const ZoneNumbering* Build::zone_numbering(const std::string& zone_in) const
 	{
@@ -796,6 +822,12 @@ namespace lcsave
 				return false;
 			}
 			if (!read_legacy(bytes, *t, error)) return false;
+			const auto conversation_path = lc + L"conversation.lcm";
+			if (GetFileAttributesW(conversation_path.c_str()) != INVALID_FILE_ATTRIBUTES)
+			{
+				if (!read_file_bytes(conversation_path, bytes)) fail("conversation.lcm: unreadable");
+				read_conversation_tables(bytes, *t);
+			}
 			if (t->legacy_catalogue_revision != t->catalogue.revision)
 			{
 				error = "legacy.lcm was made against catalogue revision " + std::to_string(t->legacy_catalogue_revision) +

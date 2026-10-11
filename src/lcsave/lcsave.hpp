@@ -102,6 +102,8 @@ namespace lcsave
 	bool native_zone_metadata(const std::vector<std::uint8_t>& stream, const Tables& tables,
 		std::vector<ZoneCaptureMetadata>& out, std::string& error);
 	bool conversation_digest(const Tables& tables, std::array<std::uint8_t, 32>& out, std::string& error);
+	// Native heard provenance includes the zone package ranking; the overload above is legacy-only.
+	bool conversation_digest(const Tables& tables, const std::string& zone, std::array<std::uint8_t, 32>& out, std::string& error);
 	struct NativeLoadDemand
 	{
 		std::uint32_t instances = 0, attached_enhancements = 0, world_items = 0;
@@ -121,7 +123,7 @@ namespace lcsave
 		std::uint32_t writer_version = 0x01040000;     // major, minor, patch, kind (0 = XML2 Fix)
 		std::string writer = "XML2 Fix";               // META writer
 		std::vector<std::string> mods;                 // META mods, in load order
-		bool has_conversation_digest = false;          // the running build's conversation digest (SPEC 2.12)
+		bool has_conversation_digest = false;          // legacy hint; fresh native records derive per-zone package provenance
 		std::uint8_t conversation_digest[32]{};
 		std::vector<ZoneCaptureMetadata> zone_captures;
 		bool require_capture_metadata = false;

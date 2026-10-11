@@ -24,6 +24,7 @@ add_library(lcsave STATIC
 	src/lcsave/tables.cpp
 	src/lcsave/convert.cpp
 	src/lcsave/reverse.cpp
+	src/lcsave/conversations.cpp
 	src/lcsave/dump.cpp
 	src/lcsave/api.cpp
 	src/lcsave/api_engine.cpp)
