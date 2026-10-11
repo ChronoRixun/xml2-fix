@@ -65,6 +65,7 @@ add_library(xml2_fix SHARED
 	src/xtract.cpp
 	src/forced_teams.cpp
 	src/conversations.cpp
+	src/explosive_first_hit.cpp
 	src/confirmation_release.cpp
 	src/objective_text.cpp
 	src/xp_curve.cpp
@@ -131,3 +132,8 @@ add_executable(xml2_save_content_guards_test test/save_content_guards_test.cpp
 target_include_directories(xml2_save_content_guards_test PRIVATE src)
 target_link_libraries(xml2_save_content_guards_test PRIVATE lcsave ws2_32)
 target_compile_definitions(xml2_save_content_guards_test PRIVATE FIX_LOG_FILE=L"save-guard-test.log")
+
+add_executable(xml2_explosive_first_hit_test test/explosive_first_hit_test.cpp src/explosive_first_hit.cpp)
+target_include_directories(xml2_explosive_first_hit_test PRIVATE src)
+# This test reserves the retail image address for isolated native code.
+target_link_options(xml2_explosive_first_hit_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)

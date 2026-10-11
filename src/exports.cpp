@@ -22,6 +22,7 @@
 #include "break_rule.hpp"
 #include "conversations.hpp"
 #include "confirmation_release.hpp"
+#include "explosive_first_hit.hpp"
 #include "objective_text.hpp"
 #include "discord_presence.hpp"
 #include "display.hpp"
@@ -219,6 +220,7 @@ namespace
 		// patches above (none of its sites or guards is anyone else's).
 		conversations::install(game);
 		confirmation_release::install(game);
+		explosive_first_hit::install(game);
 		objective_text::install(game);
 		// Before any of XMen2.exe's own code runs, as the engine limit adjuster must be: this DLL is a
 		// static import of libIGDisplay.dll, which XMen2.exe imports statically, so Windows runs this

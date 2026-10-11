@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add opt-in `[Game] ExplosiveFirstHit=1`: explosions use the original game's fresh attack ID for
+  the first-contact victim and native area victims. A guarded two-byte branch patch leaves stock
+  settings, activation, damage records and saves unchanged ([details](docs/explosive-first-hit.md)).
+
 - Fix legacy imports whose equipped items were written in a different era from the campaign's talents.
   Translate hero and restore-bank equipment with the detected item era, including semantic dumps.
 - Key talent-era evidence by actual stats index so restore-bank records belong to the correct hero.
