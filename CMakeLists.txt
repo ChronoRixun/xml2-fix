@@ -32,6 +32,8 @@ target_include_directories(lcsave PUBLIC src/lcsave)
 
 # The fix: a drop-in dinput.dll for the game folder.
 add_library(xml2_fix SHARED
+	src/xml1_turrets.cpp
+	src/mold_controller.cpp
 	src/stat_help.cpp
 	src/geometry_sharing.cpp
 	src/ladder_paths.cpp
