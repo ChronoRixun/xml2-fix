@@ -8,6 +8,9 @@
 #include "patch_transaction.hpp"
 
 #include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <iterator>
 #include <cstring>
 #include <map>
 #include <set>
@@ -151,6 +154,26 @@ int main()
 		}
 		check(descoped == 21 && descoped_other_owner == 0, "21 receive-lifecycle ledger sites are descoped, all of them gameplay_agreement symbols");
 		check(written == 12 && neither == 0, "every other gameplay_agreement ledger site is one of the twelve operands gameplay_agreement writes");
+	}
+	{ // manager tail coverage (deviation 19). The instruction sites of the retail executable whose operand addresses the
+	  // save manager's tail (retail [0x1ad60, 0x1afdc): record count, side frame, flag, time, size), from an instruction-
+	  // level sweep of the whole program export (the 0x1aefc-byte object at 0x4f7570..0x500450 excluded: not the save
+	  // manager). Each must be rewritten by the install: a ledger site or an extra literal.
+		struct tail_site { std::uint32_t va, offset; };
+		static constexpr tail_site tail_sites[] = {{0x4657b9, 0x1ad68}, {0x465da7, 0x1ad64}, {0x465ded, 0x1ad64}, {0x465e20, 0x1ad64}, {0x465e2b, 0x1afd8}, {0x465e42, 0x1afd8}, {0x465e51, 0x1afd8}, {0x465e57, 0x1ad64}, {0x465f94, 0x1ad64}, {0x465faf, 0x1ad64}, {0x465fc1, 0x1ad64}, {0x465fc7, 0x1afd4}, {0x465fcd, 0x1afd8}, {0x466039, 0x1ad64}, {0x4660fb, 0x1ad64}, {0x466278, 0x1ad64}, {0x46630e, 0x1ad64}, {0x4663a3, 0x1ad64}, {0x466422, 0x1ad64}, {0x466996, 0x1ad64}, {0x4669ff, 0x1ad64}, {0x466a05, 0x1ad64}, {0x466a1a, 0x1afd8}, {0x466a50, 0x1afd8}, {0x466a60, 0x1ad68}, {0x48438f, 0x1afd4}, {0x48492d, 0x1afd4}, {0x484adf, 0x1ad64}, {0x484b4e, 0x1ad68}, {0x484b91, 0x1ad64}, {0x484bd8, 0x1ad64}, {0x484bdf, 0x1ad64}, {0x484c25, 0x1ad68}, {0x484c4f, 0x1afd4}, {0x484c76, 0x1ae0c}, {0x484cbf, 0x1ad68}, {0x485198, 0x1afd4}, {0x4851af, 0x1ad68}, {0x4862ce, 0x1afd4}, {0x4862d8, 0x1afd4}, {0x4862e5, 0x1ad68}, {0x48733d, 0x1afdc}, {0x487476, 0x1ad64}, {0x48747c, 0x1ad68}, {0x673cdb, 0x1ad68}};
+		auto covered = [&](std::uint32_t va) {
+			for (const auto& r : relocation_sites) if (va >= r.va && va < r.va + r.old_hex.size() / 2) return true;
+			for (const auto& r : literal_sites) if (va >= r.va && va < r.va + r.old_hex.size() / 2) return true;
+			for (const auto& r : extra_literals) if (va >= r.va && va < r.va + r.old_hex.size() / 2) return true;
+			return false;
+		};
+		std::string missing;
+		for (const auto& t : tail_sites) if (!covered(t.va)) { char b[24]; std::snprintf(b, sizeof b, "0x%x ", t.va); missing += b; }
+		std::printf("manager tail: %zu instruction sites, uncovered: %s\n", std::size(tail_sites), missing.empty() ? "none" : missing.c_str());
+		check(std::size(tail_sites) == 45 && missing.empty(), "every instruction addressing the save manager's tail is rewritten (ledger or the extra 0x484c76 literal)");
+		const auto& x = extra_literals[0];
+		check(x.va == 0x484c76 && x.old_hex == "8d84170cae0100" && x.new_hex == "8d8417540a0800" && 0x1ae0cu + 5u * (0x19b88u - 0x55e0u) == 0x80a54u,
+		      "the extra literal moves manager + 0x1ae0c to + 0x80a54 (the E10A2 tail shift 0x65c48)");
 	}
 	std::printf("entity capacity rules: %d failure(s)\n", failures);
 	return failures ? 1 : 0;

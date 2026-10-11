@@ -161,6 +161,23 @@ namespace entity_capacity_rules
 	inline constexpr std::array<extra_relocation, 1> extra_relocations{{
 		{0x44ea40, "8b44240c8b542404", "e9", "entity_capacity::Physics_0044ea40", 3, "CCollide slot 3: complete frame replacement with a 128-byte set clear"},
 	}};
+	// Literal sites the reviewed ledger missed (plan section 10, deviation 19). 0x484c76 is the zone manager loader's
+	// read of the last side frame's four party names, `lea eax,[edi+edx+0x1ae0c]` = manager + 0x1ad68 (the side frame)
+	// + 0xa4: every other field of that frame and of the manager tail is in the ledger, this derived one was not, so a
+	// raised cold load seated four names read from E10A2 zone-state storage (an empty party). Under E10A2 every manager
+	// tail field moves by 5 * (0x19b88 - 0x55e0) = 0x65c48.
+	struct extra_literal { std::uint32_t va; std::string_view old_hex, new_hex; const char* role; };
+	inline constexpr std::array<extra_literal, 1> extra_literals{{
+		{0x484c76, "8d84170cae0100", "8d8417540a0800", "zone manager load: last side frame party names (manager + 0x1ae0c -> + 0x80a54)"},
+	}};
+	// Manager tail fields (retail [0x1ad60, 0x1afdc)) that belong to OTHER objects of the same size class and must not
+	// be moved: the 0x1aefc-byte object of 0x4f7570..0x5003c0 (fields 0x1aec0..0x1aef8). The capacity test scans the
+	// retail .text for every 4-byte value in the tail range and requires each occurrence to be a ledger/extra site or
+	// one of these.
+	struct foreign_tail { std::uint32_t lo, hi_inclusive; const char* what; };
+	inline constexpr std::array<foreign_tail, 1> foreign_tail_ranges{{
+		{0x4f7570, 0x500450, "the 0x1aefc-byte object (fields 0x1aec0..0x1aefc), not the save manager"},
+	}};
 	struct extra_region { const char* name; std::uint32_t lo, hi_exclusive; std::string_view sha256; };
 	inline constexpr std::array<extra_region, 1> extra_regions{{
 		{"physics slot 3 (0x44ea40)", 0x44ea40, 0x44eaf6, "629c487136d717b8751b749df1f7fcc9724146f6864e51b77eaf45d142a17e7e"},

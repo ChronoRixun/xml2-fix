@@ -289,6 +289,11 @@ namespace entity_capacity
 			for (const auto& r : region_hashes) c.regions.push_back({std::string(r.name), r.lo, r.hi_exclusive, patch_transaction::sha256_of(r.sha256)});
 			for (const auto& r : extra_regions) c.regions.push_back({r.name, r.lo, r.hi_exclusive, patch_transaction::sha256_of(r.sha256)});
 			for (const auto& s : literal_sites) c.writes.push_back({s.va, patch_transaction::bytes_of(s.new_hex), std::string(s.role)});
+			for (const auto& s : extra_literals)
+			{
+				c.guards.push_back({s.va, patch_transaction::bytes_of(s.old_hex), std::string("extra literal: ") + s.role});
+				c.writes.push_back({s.va, patch_transaction::bytes_of(s.new_hex), s.role});
+			}
 			std::string unresolved;
 			std::size_t descoped = 0;
 			for (const auto& s : relocation_sites)

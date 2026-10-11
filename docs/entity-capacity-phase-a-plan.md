@@ -832,3 +832,13 @@ and why the change stays within the reviewed design.
   single CMap allocation at 0x487344 and returned at its normal release. A second concurrent allocation, a
   construction on a foreign backing, or any constructor failure poisons the claim and stops the process (fail-stop,
   section 6); the backing is never freed while the process lives. The retail game allocates one manager per process.
+19. **Missing ledger site 0x484c76 (section 6; found by the live save -> cold-load gate).** The zone manager loader
+    (0x484b70) reads the last side frame's four party names at `manager + 0x1ae0c` (= the frame at +0x1ad68, plus
+    0xa4). Every other manager-tail field was in the ledger; this derived displacement was not, so a raised cold load
+    read the names from E10A2 zone-state storage, seated a one-byte "\xff" name in slots 0 and 3 and spawned no
+    heroes (empty party, HUD at level 1). Stock cold loads of the same procedure restore the party; the old DLL
+    (aca180b9) showed the same empty party, so the defect predates the review fixes. The site is an extra literal
+    (`entity_capacity_rules::extra_literals`, guarded) moving it to `+ 0x80a54` (the E10A2 tail shift 0x65c48). An
+    instruction-level sweep of the whole program for operands in the manager tail [0x1ad60, 0x1afdc) found 45 sites
+    (plus the unrelated 0x1aefc-byte object at 0x4f7570..0x500450); the capacity test pins all 45 and requires each to
+    be rewritten. A sweep of record-field residues (k*0x55e0 + field) found no other uncovered save-manager site.
