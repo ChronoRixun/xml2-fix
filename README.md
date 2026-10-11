@@ -318,6 +318,14 @@ Nothing changes without the keys. Every slot takes a name, so `ResourceNames` is
 
 **Effect curves.** Every loaded effect keeps its animation curves (a particle's size, transparency, rotation over its life) in one pool of 900. A zone's effects and the effects of a four-hero party can need more, and when the pool is full the game hands out an empty curve without a word: the effects loaded last are drawn without their particles - a fire is only a faint glow that still burns, or a hero's power loses its particles. `EffectCurves=3600` gives the pool room for 3600. It moves into a block of the fix's memory that the game's own code builds and tears down; every instruction that carries the old size or the old address is checked before anything is patched, and on any difference the pool stays at 900. Curves are not written to saves. The test pipe's `status` reports `curves used/capacity`. [docs/effect-curves.md](docs/effect-curves.md) has the layout, the patch list and the measurements.
 
+### Classic main-menu backdrop
+
+`[Game] ClassicMainBackdrop=1` enables the original main-room diffuse textures for a classic
+front end; the default is off. The guarded engine hook applies only to known opaque room
+shaders in `menu/main_back` with the original reflection value. It preserves the reflection
+pass and the lit menu logo. Unsupported engine exports, instruction bytes or pass layouts
+leave retail rendering in place and write a diagnostic to the log. No save data changes.
+
 ### Character ladder paths
 
 Legends Classic derives descent paths from the player's original ladder animations.
