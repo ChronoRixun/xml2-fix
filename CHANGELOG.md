@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Generalize online agreement to a finalized record of explicit effective gameplay values and entity/token
+  layout, with a registration API for capacity and controller installers. Native refusal now presents
+  an actionable message, sends the remote incompatibility response and clears pending joins immediately.
+  Shared code pages restore their original protections ([API](docs/gameplay-agreement.md)).
+
 - Bind the effective installed explosive first-hit rule to native host-info/join agreement.
   Refuse differing or unverified rules before admission without changing the release identity.
   Legacy peers without the tagged agreement are refused; ordinary XML2 without the opt-in stays native.

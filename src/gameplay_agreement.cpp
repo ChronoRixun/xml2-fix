@@ -1,157 +1,169 @@
 #include "gameplay_agreement.hpp"
 #include "gameplay_agreement_rules.hpp"
+#include "game_version.hpp"
 #include "log.hpp"
 #include <cstring>
 
 namespace gameplay_agreement
 {
-	namespace
-	{
-		using namespace gameplay_agreement_rules;
-		std::uint32_t advertised = wire(false);
-		bool local_rule = false;
-		const std::uint32_t request_resume = request_next, reply_resume = reply_next, info_resume = info_next;
-		using callback = int(__cdecl*)(void*);
-		bool read_word(void* event, std::size_t offset, std::size_t size, std::uint32_t& value)
-		{
-			// Native callbacks receive their decoded fixed-size body at event+4.
-			// The parser supplies the decoded body length as a ushort at event+8.
-			__try {
-				const auto* body = *reinterpret_cast<const std::uint8_t* const*>(static_cast<const std::uint8_t*>(event)+4);
-				if (!body || *reinterpret_cast<const std::uint16_t*>(static_cast<const std::uint8_t*>(event)+8) != size) return false;
-				std::memcpy(&value,body+offset,4);
-				return true;
-			}
-			__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
-		}
-		int receive(void* event, std::size_t offset, std::size_t size, std::uint32_t native, const char* role)
-		{
-			std::uint32_t peer = 0;
-			const bool readable = read_word(event,offset,size,peer);
-			if (!readable || !agrees(local_rule,peer))
-			{
-				const auto why = readable ? refusal(local_rule,peer) : std::string_view("invalid native join body");
-				logger::write("online: %s refused: %.*s (local installed rule=%u, peer agreement=0x%08lX); peers must agree on the successfully installed rule",
-							  role,static_cast<int>(why.size()),why.data(),local_rule ? 1u : 0u,static_cast<unsigned long>(peer));
-				return 0; // native callback convention; admission/state mutation is never called
-			}
-			return reinterpret_cast<callback>(static_cast<std::uintptr_t>(native))(event);
-		}
-		__declspec(naked) void request_bridge()
-		{
-			__asm { push eax }
-			__asm { mov eax, dword ptr [advertised] }
-			__asm { mov [esp + 0x84], eax }
-			__asm { pop eax }
-			__asm { mov [esp + 0x84], eax }
-			__asm { jmp dword ptr [request_resume] }
-		}
-		__declspec(naked) void reply_bridge()
-		{
-			__asm { push eax }
-			__asm { mov eax, dword ptr [advertised] }
-			__asm { mov [esp + 0x58], eax }
-			__asm { pop eax }
-			__asm { mov [esp + 0x58], ebp }
-			__asm { jmp dword ptr [reply_resume] }
-		}
-		__declspec(naked) void info_bridge()
-		{
-			__asm { push ecx }
-			__asm { mov ecx, dword ptr [advertised] }
-			__asm { mov [eax + 0x408], ecx }
-			__asm { pop ecx }
-			__asm { add eax, 0x3e8 }
-			__asm { jmp dword ptr [info_resume] }
-		}
-		void __fastcall send_ack(void* session, void*, void* transport, const std::uint8_t* header, int flags)
-		{
-			// The native send synchronously copies the header/body into its queue.
-			// Keep the original eight bytes; append the full rule tag in owned locals.
-			std::array<std::uint8_t,0x14> copy{};
-			std::array<std::uint8_t,ack_size> body{};
-			std::memcpy(copy.data(),header,copy.size());
-			const auto* original = *reinterpret_cast<const std::uint8_t* const*>(header);
-			std::memcpy(body.data(),original,8);
-			std::memcpy(body.data()+ack_word,&advertised,4);
-			const auto* pointer = body.data();
-			std::memcpy(copy.data(),&pointer,4);
-			const std::uint16_t length = ack_size;
-			std::memcpy(copy.data()+8,&length,2);
-			using send = void(__thiscall*)(void*,void*,const std::uint8_t*,int);
-			reinterpret_cast<send>(static_cast<std::uintptr_t>(native_send))(session,transport,copy.data(),flags);
-		}
-		const limits_rules::guard* mismatch()
-		{
-			__try { return first_mismatch(reinterpret_cast<const std::uint8_t*>(limits_rules::image_base)); }
-			__except (EXCEPTION_EXECUTE_HANDLER) { return &guards[0]; }
-		}
-	}
-	int receive_request(void* event) { return receive(event,request_word,request_size,native_request,"host join request"); }
-	int receive_reply(void* event) { return receive(event,reply_word,reply_size,native_reply,"client join reply"); }
-
-	int receive_info(void* event) { return receive(event,info_word,info_size,native_info,"client host-info reply"); }
-
-	int receive_ack(void* event) { return receive(event,ack_word,ack_size,native_ack,"host follow-up reply"); }
-
-	bool install(const HMODULE game, const bool installed_rule)
-	{
-		if (reinterpret_cast<std::uintptr_t>(game) != limits_rules::image_base || mismatch())
-		{
-			logger::write("online: gameplay agreement does not match retail; host/join must stay blocked");
-			return false;
-		}
-		const std::array<std::uint32_t,8> sites{request_writer,reply_writer,info_writer,ack_writer,request_registration+1,reply_registration+1,info_registration+1,ack_registration+1};
-		const std::array<std::size_t,8> sizes{14,8,5,5,4,4,4,4};
-		std::array<DWORD,8> protections{};
-		for (std::size_t i=0;i<sites.size();++i)
-		{
-			if (!VirtualProtect(reinterpret_cast<void*>(sites[i]),sizes[i],PAGE_EXECUTE_READWRITE,&protections[i]))
-			{
-				for (std::size_t j=i;j-- > 0;) { DWORD unused; VirtualProtect(reinterpret_cast<void*>(sites[j]),sizes[j],protections[j],&unused); }
-				logger::write("online: gameplay agreement cannot unprotect 0x%08lX; host/join must stay blocked",sites[i]);
-				return false;
-			}
-		}
-		local_rule = installed_rule;
-		advertised = wire(installed_rule);
-		const auto jump = [](std::uint32_t site, const void* target, std::size_t length) {
-			auto* code = reinterpret_cast<std::uint8_t*>(site);
-			std::memset(code,0x90,length);code[0]=0xe9;
-			const auto rel=static_cast<std::int32_t>(reinterpret_cast<std::uintptr_t>(target)-site-5);
-			std::memcpy(code+1,&rel,4);
-		};
-		jump(request_writer,&request_bridge,14);jump(reply_writer,&reply_bridge,8);jump(info_writer,&info_bridge,5);jump(ack_writer,&send_ack,5);
-		*reinterpret_cast<std::uint8_t*>(ack_writer)=0xe8; // replace CALL, not JMP; fastcall adapter cleans the native three stack arguments
-		const auto ack_target = reinterpret_cast<std::uintptr_t>(&receive_ack);
-		const auto request_target = reinterpret_cast<std::uintptr_t>(&receive_request);
-		const auto info_target = reinterpret_cast<std::uintptr_t>(&receive_info);
-		const auto reply_target = reinterpret_cast<std::uintptr_t>(&receive_reply);
-		std::memcpy(reinterpret_cast<void*>(request_registration+1),&request_target,4);
-		std::memcpy(reinterpret_cast<void*>(reply_registration+1),&reply_target,4);
-		std::memcpy(reinterpret_cast<void*>(info_registration+1),&info_target,4);
-		std::memcpy(reinterpret_cast<void*>(ack_registration+1),&ack_target,4);
-		bool verified = true;
-		for (std::size_t i=0;i<sites.size();++i)
-		{
-			verified = FlushInstructionCache(GetCurrentProcess(),reinterpret_cast<void*>(sites[i]),sizes[i]) && verified;
-			DWORD unused; VirtualProtect(reinterpret_cast<void*>(sites[i]),sizes[i],protections[i],&unused);
-		}
-		std::uint32_t request_readback = 0, reply_readback = 0, info_readback = 0, ack_readback = 0;
-		std::memcpy(&request_readback,reinterpret_cast<const void*>(request_registration+1),4);
-		std::memcpy(&reply_readback,reinterpret_cast<const void*>(reply_registration+1),4);
-		std::memcpy(&info_readback,reinterpret_cast<const void*>(info_registration+1),4);
-		std::memcpy(&ack_readback,reinterpret_cast<const void*>(ack_registration+1),4);
-		const auto jump_verified = [](std::uint32_t site, const void* target, std::size_t size, std::uint8_t opcode=0xe9) {
-			const auto* code = reinterpret_cast<const std::uint8_t*>(site);
-			std::int32_t delta = 0; std::memcpy(&delta,code+1,4);
-			if (code[0]!=opcode || site+5+delta!=reinterpret_cast<std::uintptr_t>(target)) return false;
-			for (std::size_t i=5;i<size;++i) if (code[i]!=0x90) return false;
-			return true;
-		};
-		verified = verified && request_readback == request_target && reply_readback == reply_target && info_readback == info_target && ack_readback == ack_target &&
-				   jump_verified(request_writer,&request_bridge,14) && jump_verified(reply_writer,&reply_bridge,8) && jump_verified(info_writer,&info_bridge,5) && jump_verified(ack_writer,&send_ack,5,0xe8);
-		logger::write("online: ExplosiveFirstHit agreement %s, installed rule=%u; release identity unchanged",verified ? "installed" : "failed",installed_rule ? 1u : 0u);
-		return verified;
-	}
+ namespace
+ {
+  using namespace gameplay_agreement_rules;
+  gameplay_capabilities::record capabilities;
+  bool failure_ready=false,transport_ready=false;
+  constexpr char incompatibility[]="Incompatible gameplay or an unverified installation. Both players must use the same build and effective gameplay settings. Restart after fixing the installation.";
+  using callback=int(__cdecl*)(void*);
+  using direct=int(__thiscall*)(void*,const void*,int,const std::uint8_t*);
+  using send=void(__thiscall*)(void*,void*,const std::uint8_t*,int);
+  using broadcast=int(__thiscall*)(void*,const std::uint8_t*,int,int,int);
+  struct event { std::uint32_t type;void* body;std::uint16_t length,reserved;void* context;void* sender; };
+  struct patch { std::uint32_t site;std::array<std::uint8_t,5> bytes;std::size_t size; };
+  patch branch(std::uint32_t site,const void* target,std::uint8_t opcode)
+  {
+   patch p{site,{opcode},5};const auto delta=std::int32_t(reinterpret_cast<std::uintptr_t>(target)-site-5);std::memcpy(p.bytes.data()+1,&delta,4);return p;
+  }
+  patch pointer(std::uint32_t site,const void* target)
+  {
+   patch p{site,{},4};const auto address=reinterpret_cast<std::uintptr_t>(target);std::memcpy(p.bytes.data(),&address,4);return p;
+  }
+  template<std::size_t N> bool apply(const std::array<patch,N>& patches)
+  {
+   struct page { std::uintptr_t address;DWORD protection; };
+   std::array<page,N> pages{};std::size_t count=0;SYSTEM_INFO info{};GetSystemInfo(&info);
+   for(const auto&p:patches){const auto address=p.site-p.site%info.dwPageSize;bool found=false;for(std::size_t i=0;i<count;++i)found|=pages[i].address==address;if(found)continue;
+    DWORD old=0;if(!VirtualProtect(reinterpret_cast<void*>(address),info.dwPageSize,PAGE_EXECUTE_READWRITE,&old)){
+     for(std::size_t i=count;i-- >0;){DWORD unused;VirtualProtect(reinterpret_cast<void*>(pages[i].address),info.dwPageSize,pages[i].protection,&unused);}return false;
+    }pages[count++]={address,old};
+   }
+   for(const auto&p:patches)std::memcpy(reinterpret_cast<void*>(p.site),p.bytes.data(),p.size);
+   bool ok=true;
+   for(std::size_t i=count;i-- >0;){ok=FlushInstructionCache(GetCurrentProcess(),reinterpret_cast<void*>(pages[i].address),info.dwPageSize)!=FALSE && ok;DWORD unused;ok=VirtualProtect(reinterpret_cast<void*>(pages[i].address),info.dwPageSize,pages[i].protection,&unused)!=FALSE && ok;}
+   for(const auto&p:patches)ok=std::memcmp(reinterpret_cast<const void*>(p.site),p.bytes.data(),p.size)==0 && ok;
+   return ok;
+  }
+  template<std::size_t N> bool retail(HMODULE game,const std::array<limits_rules::guard,N>& guards)
+  {
+   if(reinterpret_cast<std::uintptr_t>(game)!=limits_rules::image_base)return false;
+   __try { return !first_mismatch(reinterpret_cast<const std::uint8_t*>(game),guards); }
+   __except(EXCEPTION_EXECUTE_HANDLER){return false;}
+  }
+  void dialog(bool close_menu)
+  {
+   if(!failure_ready)return;
+   using getter=void*(__cdecl*)();using popup=void(__thiscall*)(void*,const char*,float,int);using close=void(__thiscall*)(void*,int,int);
+   void* manager=reinterpret_cast<getter>(native_dialog)();auto** vt=*reinterpret_cast<void***>(manager);
+   reinterpret_cast<popup>(vt[3])(manager,incompatibility,-1.0f,0);
+   if(close_menu){manager=reinterpret_cast<getter>(native_menu)();vt=*reinterpret_cast<void***>(manager);reinterpret_cast<close>(vt[0x74/4])(manager,0,0);}
+  }
+  bool event_fields(void* raw,event& e)
+  {
+   __try { if(!raw)return false;std::memcpy(&e,raw,sizeof(e));return e.context!=nullptr; }
+   __except(EXCEPTION_EXECUTE_HANDLER){return false;}
+  }
+  bool pending(void* context)
+  {
+   __try { return *reinterpret_cast<const std::uint32_t*>(static_cast<const std::uint8_t*>(context)+0x22bc)!=0; }
+   __except(EXCEPTION_EXECUTE_HANDLER){return false;}
+  }
+  int fail_local(event e,bool joining)
+  {
+   if(failure_ready && e.sender){using disconnect=void(__thiscall*)(void*,bool);reinterpret_cast<disconnect>(native_peer_disconnect)(e.sender,false);}
+   if(joining && failure_ready && e.context){e.type=0x1d;return reinterpret_cast<callback>(native_failure)(&e);}
+   dialog(false);return 0; // a host has not admitted this peer; preserve other participants
+  }
+  void notify_remote(const event& e)
+  {
+   if(!e.context || !e.sender)return;
+   using address=const void*(__thiscall*)(void*);using port=std::uint16_t(__thiscall*)(void*);
+   std::array<std::uint8_t,0x14> header{};header[0x10]=0x1d;header[0x11]=1;
+   auto* transport=*reinterpret_cast<void**>(static_cast<std::uint8_t*>(e.context)+4);
+   if(transport)reinterpret_cast<direct>(native_direct)(transport,reinterpret_cast<address>(native_address)(e.sender),reinterpret_cast<port>(native_port)(e.sender),header.data());
+  }
+  bool extract(void* raw,std::size_t base,std::array<std::uint8_t,gameplay_capabilities::max_size>& bytes,std::size_t& size)
+  {
+   __try {
+    const auto* e=static_cast<const event*>(raw);if(!e || !e->body || e->length<base+gameplay_capabilities::header_size || e->length>base+bytes.size())return false;
+    size=e->length-base;std::memcpy(bytes.data(),static_cast<const std::uint8_t*>(e->body)+base,size);return true;
+   }__except(EXCEPTION_EXECUTE_HANDLER){return false;}
+  }
+  int receive(void* raw,std::size_t base,std::uint32_t native,bool joining)
+  {
+   std::array<std::uint8_t,gameplay_capabilities::max_size> bytes{};std::size_t size=0;
+   const auto match=extract(raw,base,bytes,size) ? capabilities.compare({bytes.data(),size}) : gameplay_capabilities::result::malformed;
+   if(!transport_ready || match!=gameplay_capabilities::result::match){
+    logger::write("online: gameplay capabilities refused (reason=%u); no native admission",unsigned(match));
+    event e{};if(event_fields(raw,e)){notify_remote(e);return fail_local(e,joining || pending(e.context));}dialog(false);return 0;
+   }
+   return reinterpret_cast<callback>(native)(raw);
+  }
+  struct packet
+  {
+   std::array<std::uint8_t,0x14> header{};
+   std::array<std::uint8_t,request_size+gameplay_capabilities::max_size> body{};
+   bool build(const std::uint8_t* original)
+   {
+    if(!transport_ready || !capabilities.ready())return false;
+    std::memcpy(header.data(),original,header.size());std::uint16_t size=0;std::memcpy(&size,original+8,2);
+    const auto opcode=original[0x10];const auto expected=opcode==0x18 ? request_size : opcode==0x1f ? reply_size : opcode==0x1a ? info_size : opcode==0x1b ? ack_size : 0;
+    if(!expected || size!=expected)return false;
+    std::memcpy(body.data(),*reinterpret_cast<const void*const*>(original),size);
+    const auto record=capabilities.bytes();std::memcpy(body.data()+size,record.data(),record.size());
+    size=static_cast<std::uint16_t>(size+record.size());const auto* data=body.data();std::memcpy(header.data(),&data,4);std::memcpy(header.data()+8,&size,2);return true;
+   }
+  };
+  int __fastcall send_direct(void* transport,void*,const void* address,int port,const std::uint8_t* header)
+  { packet p;if(!p.build(header)){show_install_failure();return 0;}return reinterpret_cast<direct>(native_direct)(transport,address,port,p.header.data()); }
+  void __fastcall send_single(void* session,void*,void* transport,const std::uint8_t* header,int flags)
+  { packet p;if(!p.build(header)){show_install_failure();return;}reinterpret_cast<send>(native_send)(session,transport,p.header.data(),flags); }
+  int __fastcall send_broadcast(void* session,void*,const std::uint8_t* header,int exclude,int participants,int mode)
+  { packet p;if(!p.build(header)){show_install_failure();return 0;}return reinterpret_cast<broadcast>(native_broadcast)(session,p.header.data(),exclude,participants,mode); }
+  bool enlist()
+  {
+   if(game_version::needs_gameplay_agreement())return true;
+   const auto game=GetModuleHandleW(nullptr);
+   return game_version::require_gameplay_agreement(game) && prepare(game);
+  }
+  const std::uint32_t join_next=join_resume;
+  __declspec(naked) void original_join()
+  {
+   __asm { sub esp,0x1c } __asm { push ebx } __asm { push ebp } __asm { jmp dword ptr [join_next] }
+  }
+  int receive_rejection(void* raw)
+  {
+   event e{};if(!event_fields(raw,e)){dialog(false);return 0;}
+   return fail_local(e,pending(e.context)); // no response loop; only the pending endpoint is torn down
+  }
+  int __fastcall begin_join(void* context,void*,const void* address,int port)
+  {
+   if(!transport_ready || !capabilities.ready() || !game_version::gameplay_online_allowed()){
+    event e{0x1d,nullptr,0,0,context,nullptr};fail_local(e,true);return 0;
+   }
+   using join=int(__thiscall*)(void*,const void*,int);return reinterpret_cast<join>(&original_join)(context,address,port);
+  }
+ }
+ bool register_rule(std::uint16_t id,std::uint16_t revision,std::array<std::uint32_t,4> effective,bool verified)
+ { const bool enabled=enlist();const bool ok=capabilities.add(id,revision,effective,verified && enabled);if(!ok)game_version::bind_gameplay_agreement(false);return ok; }
+ bool register_entity_layout(std::uint16_t revision,std::uint32_t actors,std::uint32_t generic,std::uint32_t world,std::uint32_t token_bits,bool verified)
+ { const bool enabled=enlist();const bool ok=capabilities.layout(revision,{actors,generic,world,token_bits},verified && enabled);if(!ok)game_version::bind_gameplay_agreement(false);return ok; }
+ void show_install_failure(){dialog(true);}
+ int receive_request(void* e){return receive(e,request_size,native_request,false);}
+ int receive_reply(void* e){return receive(e,reply_size,native_reply,true);}
+ int receive_info(void* e){return receive(e,info_size,native_info,true);}
+ int receive_ack(void* e){return receive(e,ack_size,native_ack,false);}
+ bool prepare(HMODULE game)
+ {
+  if(failure_ready)return true;
+  if(!retail(game,failure_guards)){logger::write("online: native refusal path guard failed; agreement unavailable");return false;}
+  const std::array patches{branch(native_join,&begin_join,0xe9),pointer(failure_text+1,incompatibility),pointer(rejection_registration+1,reinterpret_cast<void*>(&receive_rejection))};
+  failure_ready=apply(patches);if(failure_ready)game_version::bind_gameplay_refusal(&show_install_failure);return failure_ready;
+ }
+ bool finalize(HMODULE game)
+ {
+  if(transport_ready)return capabilities.ready();
+  if(!failure_ready || !capabilities.finalize() || !retail(game,transport_guards)){logger::write("online: capabilities/failure/transport installation unverified; online remains blocked");return false;}
+  const std::array patches{
+   branch(request_send,&send_direct,0xe8),branch(reply_broadcast,&send_broadcast,0xe8),branch(reply_send,&send_single,0xe8),branch(info_send,&send_single,0xe8),branch(ack_send,&send_single,0xe8),
+   pointer(request_registration+1,reinterpret_cast<void*>(&receive_request)),pointer(reply_registration+1,reinterpret_cast<void*>(&receive_reply)),pointer(info_registration+1,reinterpret_cast<void*>(&receive_info)),pointer(ack_registration+1,reinterpret_cast<void*>(&receive_ack))};
+  transport_ready=apply(patches);logger::write("online: shared gameplay capability record %s (%u bytes); release identity unchanged",transport_ready ? "verified" : "failed",unsigned(capabilities.bytes().size()));return transport_ready;
+ }
 }

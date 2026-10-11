@@ -20,15 +20,17 @@ namespace game_version
 		bool lc_required = false;
 		bool version_verified = false;
 		bool gameplay_required = false, gameplay_verified = false;
+		void (*show_refusal)() = nullptr;
 		using socket_t = SOCKET(WSAAPI*)(int,int,int);
 		socket_t real_socket = nullptr;
 		SOCKET WSAAPI guarded_socket(int family, int type, int protocol)
 		{
 			if (!save_guard_rules::online_allowed(lc_required,version_verified,gameplay_required,gameplay_verified))
 			{
+				if (show_refusal) show_refusal();
 				WSASetLastError(WSAEACCES);
 				logger::write_once("lc-online-refused", "online: host/join refused: %s",
-				                  gameplay_required && !gameplay_verified ? "effective ExplosiveFirstHit agreement was not installed/verified" : "the four-character release version patch did not verify");
+				                  gameplay_required && !gameplay_verified ? "effective gameplay capability record was not installed/verified" : "the four-character release version patch did not verify");
 				return INVALID_SOCKET;
 			}
 			return real_socket(family,type,protocol);
@@ -59,7 +61,17 @@ namespace game_version
 		return save_guard_rules::startup_allowed(lc_required || gameplay_required,real_socket != nullptr);
 	}
 
+	bool require_gameplay_agreement(HMODULE game)
+	{
+		gameplay_required = true;
+		gameplay_verified = false;
+		if (!real_socket)
+			real_socket = reinterpret_cast<socket_t>(iat_hook::hook(game,"WS2_32.dll","socket",23,reinterpret_cast<void*>(&guarded_socket)));
+		return real_socket != nullptr;
+	}
+	bool gameplay_online_allowed() { return save_guard_rules::online_allowed(lc_required,version_verified,gameplay_required,gameplay_verified); }
 	bool needs_gameplay_agreement() { return gameplay_required; }
+	void bind_gameplay_refusal(void (*show)()) { show_refusal = show; }
 	void bind_gameplay_agreement(bool verified) { gameplay_verified = verified; }
 	void install(const HMODULE game)
 	{

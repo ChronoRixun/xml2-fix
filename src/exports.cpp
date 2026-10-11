@@ -24,6 +24,7 @@
 #include "confirmation_release.hpp"
 #include "explosive_first_hit.hpp"
 #include "gameplay_agreement.hpp"
+#include "gameplay_capabilities.hpp"
 #include "objective_text.hpp"
 #include "discord_presence.hpp"
 #include "display.hpp"
@@ -174,6 +175,7 @@ namespace
 		// opens - here, before any of its code runs.
 		game_version::install(game);
 		if (!game_version::startup_allowed()) return;
+		if (game_version::needs_gameplay_agreement()) gameplay_agreement::prepare(game);
 
 		new_game::install(game);
 		// [Save] Format=lc: the LC save format's disk seam (the card's nine file methods, the stream helpers'
@@ -223,7 +225,7 @@ namespace
 		confirmation_release::install(game);
 		explosive_first_hit::install(game);
 		if (game_version::needs_gameplay_agreement())
-			game_version::bind_gameplay_agreement(gameplay_agreement::install(game, explosive_first_hit::installed()) && explosive_first_hit::verified());
+			gameplay_agreement::register_rule(gameplay_capabilities::explosive_first_hit_id,1,{explosive_first_hit::installed() ? 1u : 0u,0,0,0},explosive_first_hit::verified());
 		objective_text::install(game);
 		// Before any of XMen2.exe's own code runs, as the engine limit adjuster must be: this DLL is a
 		// static import of libIGDisplay.dll, which XMen2.exe imports statically, so Windows runs this
@@ -254,6 +256,10 @@ namespace
 		// clear the presence on quitting. Its X-Men Legends I port detection reads mods\load-order.txt as the
 		// mod loader above does (mod_order.hpp).
 		discord_presence::install(game);
+
+		// Freeze only after every participating gameplay installer has registered its effective values.
+		if (game_version::needs_gameplay_agreement())
+			game_version::bind_gameplay_agreement(gameplay_agreement::finalize(game));
 	}
 }
 
