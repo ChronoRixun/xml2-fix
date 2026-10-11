@@ -119,10 +119,10 @@ The game looks up `xmenlegpc.available` and `xmenlegpc.master` (UDP 27900: the a
 
 ```ini
 [Online]
-LocalIP=auto         ; the default. Or: first (Windows' order, as without the fix), or one of this PC's addresses, e.g. 192.168.1.20
+LocalIP=auto         ; the default. Or: first (Windows' order, as without the fix), or one of this PC's addresses, e.g. 192.0.2.20
 ```
 
-An address that isn't this PC's is ignored and `auto` applies. Without a route to the internet, Windows' order stays. `xml2-fix.log` shows the list once, before and after (`online: this PC's addresses (MYPC): 172.18.0.1, 192.168.1.20` then `online: LocalIP: 192.168.1.20 first (...): 192.168.1.20, 172.18.0.1`).
+An address that isn't this PC's is ignored and `auto` applies. Without a route to the internet, Windows' order stays. `xml2-fix.log` shows the list once, before and after (`online: this PC's addresses (MYPC): 198.51.100.1, 192.0.2.20` then `online: LocalIP: 192.0.2.20 first (...): 192.0.2.20, 198.51.100.1`).
 
 **A mod that is another game** (the X-Men Legends I port) uses the same GameSpy name as XML2, `xmenlegpc`, so without a version of its own its hosted games would show up in XML2's lists and the other way round, and a join would load the host's zones on the other game's install. The game tells GameSpy and other players its version, `1.30`, and finds no games of another version (in the server list, on the LAN or by *Connect by IP*); `GameVersion` gives it another:
 
@@ -308,6 +308,7 @@ ResourceNames=1024   ; 451 to 4096 resource names (the game's own: 450); with Ac
 ItemEnhancements=512 ; 376 to 1024 item enhancement records (the game's own: 375)
 FightStyles=32       ; 20 to 32 fighting/power styles and movesets (the game's own: 19)
 EffectCurves=3600    ; 901 to 16384 effect curves (the game's own: 900)
+MoveTriggers=64      ; 20 to 127 triggers per move (the game's own: 19)
 ```
 
 Nothing changes without the keys. Every slot takes a name, so `ResourceNames` is raised to at least 450 plus the extra slots, and the actor table only grows together with the name table. 127 is the most the game's code can count to: sixteen of its checks compare the slot count as a single signed byte. The X-Men Legends I port uses `ActorSlots=127` and `ResourceNames=1024`. It works by moving the actor table into a block of the fix's memory that the game's own constructor builds and its own destructor tears down, and by building a bigger name table with the game's own constructor where the game's getter looks for it, all before the game's start-up asks for either, and after every byte it relies on is checked against the retail build. All or nothing: on any other build the game keeps both tables, a value out of range is ignored, and `xml2-fix.log` says why. The test pipe's `status` shows how full they are (`actors 23/127; names 301/1024; ...`). The game's other fixed limit, the 200 records of its IGB (model file) cache, is not raised yet.
@@ -668,3 +669,13 @@ Also by the same author: [MUA Controller Fix](https://github.com/ChronoRixun/mua
 It contains no game files or game code and doesn't change any file of the game: you need your own copy of *X-Men Legends II* for PC. Please don't post or link game files in issues or pull requests. Rights holders with a concern: please [open an issue](https://github.com/ChronoRixun/xml2-fix/issues) and it will be answered promptly and in good faith.
 
 The software is provided "as is", without warranty of any kind; see [LICENSE](LICENSE).
+
+### Triggers per move
+
+`[Limits] MoveTriggers=64` gives each native move a preallocated handle side array. Missing key or 19 keeps
+stock behavior; invalid values are logged and ignored. The port needs 27 for its largest restored burst;
+64 leaves 37 spare slots. The count and all other native move fields stay at their existing offsets.
+The constructor, copy, lookup, reset and destruction paths share the handle side storage. Actor timing
+initialization, pause, dispatch and cancellation also expand; the first nineteen native timer fields are
+mirrored byte for byte. Stack packets retain their native layout; no save format changes.
+The patch refuses unexpected bytes or an already-created move pool. See [move-triggers.md](docs/move-triggers.md).
