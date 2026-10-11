@@ -786,3 +786,27 @@ and why the change stays within the reviewed design.
     call for the retail code and the port (1116 / 1268 calls); the query differential records AL/EAX of 0x10,
     0x80/0x84/0x88, 0x2c and Order 0x8 for both and a raised synthetic check covers all of them; the grid
     differential compares slot 0x38's EAX on every reset step.
+17. **Receive-lifecycle machinery of section 5 descoped (review P1).** The ledger names 21 network sites as
+    gameplay_agreement symbols (0x6097f0, 0x60d9c0, 0x60dbe0, 0x60dc60, 0x60dca0, 0x60e300, 0x60eac0, 0x60ece0,
+    0x60f010, 0x60f070, 0x60f0a0, 0x60f620, 0x60f940, 0x60ff00, 0x6101b0, 0x610680, 0x6106f0, 0x610950, 0x610a50,
+    0x616340, 0x616600): certificate epochs, the dispatch floor at 0x60dbe0, reliable/fragment epochs, deferred
+    topology operations and the Node purge. This implementation does not install them; the install no longer skips
+    them silently (`descoped_receive_sites`, logged at publication) and every OTHER composed site is now a
+    `requires_written` of the startup transaction (an unwritten one refuses it; the capacity test cross-checks that
+    the twelve remaining agreement sites are exactly the operands gameplay_agreement writes). Why stale or unagreed
+    traffic stays harmless without them:
+    - The layout is fixed for the life of each process (section 7: never hot-disabled or shrunk), on both peers.
+    - Admission is gated: the GCAP record rides on 18/1A/1B/1F and is compared BEFORE the native admission callback;
+      a mismatched, failed-install or older (revision-1) peer gets 1D, the dialog, and native cleanup, and is never
+      admitted. An honest refused peer never receives the campaign transfer (47/48) or reaches gameplay. A new join on
+      a reused address is a new 18 and is checked again.
+    - Records buffered from an earlier, admitted peer were produced by a process with the same fixed layout (it
+      matched), so delivering them later cannot mix layouts. Phase A adds no new stale-traffic hazard; the retail
+      behaviour for such records is unchanged.
+    - Memory safety does not rest on the peer: World token lookups bound the index (< world) and compare the full
+      generation, so a stock-layout token is null or a different live entity, never out of bounds; the expanded
+      campaign receiver bounds every chunk before copying (deviation 14).
+    What is NOT protected (the residual risk the section-5 design addressed): a modified or malicious peer that sends
+    gameplay opcodes without completing admission is dispatched by the retail code as before; same-address reuse
+    races inside one receive pump are as in retail. The live co-op gate (matching peers, stock-capacity peer refused
+    on both sides) is the evidence for the admission half. GCAP protocol revision stays 2 (0.2.0i peers refuse).

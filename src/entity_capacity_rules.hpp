@@ -133,6 +133,21 @@ namespace entity_capacity_rules
 		       symbol.starts_with("entity_capacity::StreamBound_") || symbol.starts_with("entity_capacity::SaveCore_");
 	}
 
+	// The receive-lifecycle sites of plan section 5 (certificate epochs, dispatch floor, reliable/fragment epochs,
+	// deferred topology, Node purge) that this implementation does NOT install (plan section 10, deviation 17): the
+	// ledger names them as gameplay_agreement symbols; no contribution writes them, and the install reports them as
+	// descoped instead of skipping them silently. Every OTHER composed ledger site must be written by its owner in the
+	// same transaction (patch_transaction requires_written), or the transaction refuses.
+	inline constexpr std::array<std::uint32_t, 21> descoped_receive_sites{{
+		0x6097f0, 0x60d9c0, 0x60dbe0, 0x60dc60, 0x60dca0, 0x60e300, 0x60eac0, 0x60ece0, 0x60f010, 0x60f070, 0x60f0a0,
+		0x60f620, 0x60f940, 0x60ff00, 0x6101b0, 0x610680, 0x6106f0, 0x610950, 0x610a50, 0x616340, 0x616600,
+	}};
+	constexpr bool descoped_receive_site(std::uint32_t va)
+	{
+		for (const auto d : descoped_receive_sites) if (d == va) return true;
+		return false;
+	}
+
 	// Guards the ledger's region hashes do not cover but the ports depend on.
 	struct extra_guard { std::uint32_t va; std::string_view hex; const char* what; };
 	inline constexpr std::array<extra_guard, 2> extra_guards{{

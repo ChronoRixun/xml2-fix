@@ -325,10 +325,18 @@ namespace entity_capacity
 		for (const auto& r : extra_regions) c.regions.push_back({r.name, r.lo, r.hi_exclusive, patch_transaction::sha256_of(r.sha256)});
 		for (const auto& s : literal_sites) c.writes.push_back({s.va, patch_transaction::bytes_of(s.new_hex), std::string(s.role)});
 		std::string unresolved;
+		std::size_t descoped = 0;
 		for (const auto& s : relocation_sites)
 		{
 			const auto name = symbol_names[static_cast<std::size_t>(s.target)];
-			if (owned_elsewhere(name)) continue; // save_format / gameplay_agreement write these themselves
+			if (owned_elsewhere(name))
+			{
+				// save_format / gameplay_agreement write these themselves, in this transaction: required, so a composed site
+				// nobody writes refuses the install. The section-5 receive-lifecycle sites are descoped (deviation 17).
+				if (descoped_receive_site(s.va)) { ++descoped; continue; }
+				c.requires_written.push_back({s.va + static_cast<std::uint32_t>(s.prefix_hex.size() / 2), std::string(name)});
+				continue;
+			}
 			const auto found = symbols.find(name);
 			if (found == symbols.end()) { unresolved += std::string(name) + " "; continue; }
 			c.writes.push_back(patch_transaction::relocation(s.va, s.prefix_hex, s.kind == relocation_kind::rel32, found->second, s.pad, std::string(s.role)));
@@ -346,8 +354,11 @@ namespace entity_capacity
 			release_prepared();
 			return;
 		}
-		c.publish = []
+		const auto required = c.requires_written.size();
+		c.publish = [descoped, required]
 		{
+			logger::write("entity capacity: %zu composed ledger sites written by save_format/gameplay_agreement (verified in this transaction); %zu receive-lifecycle sites of plan section 5 descoped (deviation 17: admission refusal + process-fixed layout)",
+			              required, descoped);
 			published = prepared_descriptor;
 			install_published = true;
 			gameplay_agreement::register_entity_layout(layout_revision_raised, raised_actors, raised_generic, raised_world, raised_index_bits, true);

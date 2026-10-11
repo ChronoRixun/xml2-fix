@@ -8,8 +8,11 @@
 namespace gameplay_capabilities
 {
  constexpr std::uint16_t entity_layout_id=1, explosive_first_hit_id=2;
- // Protocol revision 2: the receive-lifecycle contract (certificate epochs, dispatch floor before any application
- // callback, quiescent peer retirement) of docs/entity-capacity-phase-a-plan.md section 5. Revision-1 peers refuse.
+ // Protocol revision 2: the Phase A agreement - the record appended to the admission messages 18/1A/1B/1F, compared
+ // before the native admission callback, a mismatch refused with 1D and the dialog on both sides, and the entity-layout
+ // rule with the actor+generic <= world headroom condition. Revision-1 peers (0.2.0i and older) refuse. The plan's
+ // receive-lifecycle machinery (certificate epochs, a dispatch floor, quiescent retirement, Node purge; section 5) is
+ // NOT part of it: docs/entity-capacity-phase-a-plan.md section 10, deviation 17.
  constexpr std::uint16_t protocol_revision=2;
  constexpr std::uint32_t magic=0x50414347; // GCAP, little endian
  constexpr std::size_t max_entries=8, header_size=12, entry_size=20, max_size=header_size+entry_size*max_entries;

@@ -4,6 +4,7 @@
 #include "entity_capacity_layout.hpp"
 #include "entity_capacity_rules.hpp"
 #include "entity_capacity_sites.hpp"
+#include "gameplay_agreement_rules.hpp"
 #include "patch_transaction.hpp"
 
 #include <cstdio>
@@ -132,6 +133,24 @@ int main()
 		check(next_set(words, 0, 1024) == 72 && next_set(words, 73, 1024) == 287 && next_set(words, 288, 1024) == 1024 && next_set(words, 0, 256) == 72 && next_set(words, 73, 256) == 256,
 		      "next_set walks dwords lowest bit first and stops at the capacity");
 		check(extra_guards[0].va == 0x614280 && extra_guards[0].hex == "8d411cc3", "the grid slot-8 body guard is the retail lea/ret");
+	}
+	{ // composed sites: every gameplay_agreement ledger site is either written by gameplay_agreement::contribute (its
+	  // operand address is one of the twelve it writes) or one of the 21 descoped receive-lifecycle sites (deviation 17)
+		namespace ga = gameplay_agreement_rules;
+		const std::set<std::uint32_t> agreement_writes{ga::request_send + 1, ga::reply_broadcast + 1, ga::reply_send + 1, ga::info_send + 1, ga::ack_send + 1,
+		                                               ga::request_registration + 1, ga::reply_registration + 1, ga::info_registration + 1, ga::ack_registration + 1,
+		                                               ga::rejection_registration + 1, ga::failure_text + 1, ga::native_join + 1};
+		std::size_t written = 0, descoped = 0, neither = 0, descoped_other_owner = 0;
+		for (const auto& s : relocation_sites)
+		{
+			const auto name = symbol_names[static_cast<std::size_t>(s.target)];
+			const auto operand = s.va + static_cast<std::uint32_t>(s.prefix_hex.size() / 2);
+			if (descoped_receive_site(s.va)) { ++descoped; descoped_other_owner += !name.starts_with("gameplay_agreement::"); continue; }
+			if (!name.starts_with("gameplay_agreement::")) continue;
+			if (agreement_writes.count(operand)) ++written; else ++neither;
+		}
+		check(descoped == 21 && descoped_other_owner == 0, "21 receive-lifecycle ledger sites are descoped, all of them gameplay_agreement symbols");
+		check(written == 12 && neither == 0, "every other gameplay_agreement ledger site is one of the twelve operands gameplay_agreement writes");
 	}
 	std::printf("entity capacity rules: %d failure(s)\n", failures);
 	return failures ? 1 : 0;
