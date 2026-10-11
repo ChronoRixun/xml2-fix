@@ -147,8 +147,8 @@ as a removed entity. Explicit tombstones preserve the placement identity of remo
 
 Capture status uses bit 0 (mask 1) for incomplete and bit 1 (mask 2) for historical/inferred provenance. Bounds are
 checked before the native ordinal access and capture lists can overflow. A new incomplete/unverified runtime capture
-blocks campaign writes. Legacy inferred records remain marked unknown. Zero/different conversation digests reset
-only conversation bits with a diagnostic. Reader ceilings remain broader than native capacities; unsupported
+blocks campaign writes. Legacy inferred records remain marked unknown. Changed conversation digests use the historical identity map;
+unknown nonzero heard marks drop with a ledger note, and removed identities receive individual notes. Reader ceilings remain broader than native capacities; unsupported
 quantities, positions, stack shapes, references and native allocation demands refuse before narrowing/loading.
 
 Campaign and profile imports carry LGCY, and continuing saves retain LGCY and unknown KEEP payloads with their
@@ -227,3 +227,141 @@ LGCY/external ledger records once: "Forge contact unlock granted (0.1.x builds d
 Native saving, new games and LC resaves never run this repair. Previously imported LC files are not repaired
 retroactively. The Python verifier lists this deliberate change in `legacy_repairs` while checking all other
 semantics. No wire layout, section version, catalogue or content-version change is needed.
+
+## Conversation heard marks across builder eras
+
+The engine ranks loaded conversation files by case-insensitive name, then indexes four consumption lanes per
+file (0x45cb5a, 0x45c56e, 0x45c679). A lane counts consumed run-once starts, not line ids or startCondition
+ordinals. Historical tables contain hashes of file name plus decimal lane; identical eras share a reference.
+
+New native `ZREC.conversation_digest` is package-aware: SHA-256 of `LCCONV2` plus NUL, the canonical zone key
+hash[32], little-endian u32 lane count, and every ordered file/lane identity hash[32]. Dialogue edits do not
+renumber these identities. Only an exact current package-ranking digest permits positional reuse. Bare global
+conversation-tree digests are legacy provenance keys, never evidence that current ranks match. The pinned
+release snapshot for the previously shipped global digest also protects earlier native LC resaves.
+
+`conversation.lcm` emits both historical global keys and qualified package keys, plus the writing build's
+current package snapshots. A different package ranking maps surviving identities into their current positions;
+removed or unassigned identities get individual ledger notes. Unknown/zero provenance drops heard words with
+a note and continues loading. This keeps successful native/online-transfer saves loadable even when their
+capture metadata has no authenticated conversation provenance. Other state remains intact. Unknown marks
+are not asserted to be retained by this fallback.
+
+Loaded metadata rebases to the reconstructed package digest and retains inferred capture status. Cached-zone
+resaves therefore do not remap translated words a second time. Capture hooks and fresh native recording also
+write package-aware provenance. Legacy import bytes, LC field widths/layout, and catalogue identities are unchanged.
+
+Sidecar framing remains `LCCONV1` plus NUL, u32 version=1, u32 table count, u32 file length, and u32 body CRC-32.
+Each table has provenance[32], zone-key-hash[32], u32 bit count, then identity hashes[32]. Counts are multiples of
+four, at most 128. Duplicate keys/identities, bad framing/version/CRC refuse malformed table files. V39 checks
+the generated set. Rebuild savefiles after the era ledger changes; game asset preparation caches remain valid.
+
+### Trivia persistence (section number assigned at merge; V-TBD)
+
+The question split in section 21.4 stays unchanged. The generated trivia root declares
+`persistence="compact"`; its TRIV bind list uses rule 2. Row group/position and catalogue key
+remain `(act, question)` and `act/qN`. The native bit is the zero-based rank of `(act, position)`
+in numeric sorted order. The current 50 questions occupy bits 0..49, leaving 200 native slots
+unused. Every act must be positive, each act may contain at most 50 questions, and the total
+may not exceed 250. The builder validates the declaration and these bounds.
+
+XML2 Fix with `[Save] Format=lc` guards and replaces the native getter/setter at 0x469e10 /
+0x469e60. They take act and zero-based question index and access the existing CGame bitmap
+at +0x5e8 using the verified current bind mapping. Native capture, disk reconstruction and
+online stream translation use the same map. Rule-1 builds retain the sparse layout. A DLL
+that does not know rule 2 refuses its bind, rather than accepting a mismatched layout.
+
+The one-time importer always decodes historical bits as `(act-1)*50+question`; LC GAME.trivia
+continues storing the existing identities. Imported LC answers are reconstructed at the
+current build's compact positions. No catalogue renumbering or LC wire change is required.
+Late-act answers that an older native engine never recorded cannot be recovered from those saves.
+
+Rebuild `frontend,savefiles` together in an existing build. Prepared disc/table/script/sound/music
+inputs are unchanged and remain reusable; generated trivia XMLB/ENGB and its SHA-1-bound
+sidecar must be regenerated together. The release integrator sets CONTENT_VERSION.
+
+The native per-act cursor accessors at 0x46a690 / 0x46a6a0 have no bounds check:
+they access CGame+0x5e0+act. The original five cursor bytes end at +0x5e5; acts 8/9
+alias the answer bitmap itself. Guarded replacements keep cursors in independent storage
+for every act in the verified question table. Resetgame and completed full campaign loads
+clear this transient storage; first access derives the first unanswered question from
+restored identities (or question zero once all are answered). Stats-only loads preserve it.
+Cursor advancement therefore cannot mutate another question's persisted answer. Native
+stream dimensions and LC records remain unchanged. Old cursor-overlap damage cannot be
+unambiguously distinguished from genuine early-act answers in already-written files.
+
+
+## Startup refusal when LC hooks cannot install
+
+With `[Save] Format=lc`, save/card/trivia hooks are a startup requirement. A rejected retail
+signature, capture/ordinal guard, unsupported image base, failed stub allocation/protection,
+failed patch installation or installation exception prevents the executable from starting.
+The startup denial remains set until the complete installation succeeds. An invalid Save
+format setting also refuses startup; an absent key or explicit off retains native behavior.
+
+`exports.cpp` checks the save installation result immediately, then `DllMain` applies the
+same loader veto as the LC network prerequisite. It logs the failure, shows a clear refusal
+notice including the guard address/reason, and returns FALSE. The game's statically imported
+DLL dependency therefore cannot initialize; retail saving does not remain available as a
+fallback. Background XInput work is deferred until these prerequisites pass.
+
+This is separate from later table/file refusals: after successful installation the LC card
+hooks already prevent native fallback, and their existing runtime protection remains active.
+No LC wire, identity, mapping or converter behavior changes.
+
+`xml2_save_startup_test` loads the production DLL in owned synthetic Win32 child processes.
+It mutates all 56 save/trivia/stream/capture/ordinal guard sites, checks loader rejection
+(ERROR_DLL_INIT_FAILED) and an informative notice, and includes invalid-mode, valid-LC and
+disabled-LC controls. Notices run on a hidden test desktop and only owned fixture windows
+are observed/dismissed. Run from an isolated folder containing this test executable and
+`dinput.dll`; its children write only that folder's test INI/log, never game save files.
+
+Every save-installation `VirtualProtect` and `FlushInstructionCache` result is checked.
+A failed stub flush refuses startup before any engine patch bytes change. A failed site
+flush stops further writes, and cleanup attempts every previously changed protection.
+Restoration failure also retains the veto, including during preflight cleanup. Bytes may
+already be changed when a later API fails; returning FALSE from DLL initialization is
+required, so the executable never proceeds through partially installed save hooks.
+
+For API faults, configure with `-DXML2_SAVE_STARTUP_FAULT_TEST=ON` and also copy
+`save-startup-faults.dll` next to the isolated startup test. This opt-in DLL compiles the
+same sources with wrappers limited to the save-installation APIs; production `dinput.dll`
+has no fault controls. The 69-case suite covers the 59 production loader cases plus a
+fault-disabled DLL control and nine API failures: allocation, executable stub protection,
+first/third writable preflight calls, rollback restoration, final restoration, stub flush,
+and first/third patch flushes. It checks the injected call was reached, no guard bytes
+changed before writing, and changed bytes exist for failures after writes. Every failure
+must show the LC refusal notice and return ERROR_DLL_INIT_FAILED before simulated startup.
+
+## Online saves and conversation identity
+
+LC readiness precomputes effective per-zone package identities through the mod
+loader's native lookup, including later-mod winners, before player-file import/load.
+Native capture and restore use those pinned package identities with nonblocking
+notification and lookup-context checks. They never read/decode conversation packages,
+enumerate files or refresh provenance on a gameplay frame. Historical global tree
+hashes remain mapping keys; they cannot label live package-ranked heard marks.
+
+Package, conversation and mod dependency trees are watched, including order changes
+and new/replaced roots. Known directory-only metadata notifications do not invalidate
+identity; changed files/names, overflow or watcher failure do. Preparation and table
+root must match the initialized native lookup and working directory. Unsupported
+conversation overrides/topology, nested packages, unwatchable/reparse dependencies
+or sources outside watched roots refuse clearly. Any detected change requires a
+restart; no partially prepared or older cache is used after failure. Cold preparation
+may delay the front end. Save layout, digest ordering and algorithms are unchanged.
+`[Debug] SaveTiming=1` retains capture/digest/write diagnostics.
+
+## SPEC: V-TBD (number assigned at merge)
+
+`python test/validate_coop_save_cache.py --build ../xbuild` runs
+`lcsave_conversation_packages_test`, exercising the same prepared capture API and
+restore consumer used by the engine. Invented fixtures verify later-mod package
+winners; capture and nonzero-mark restore with package data exclusively locked;
+ranking/byte changes, added overrides, load-order/index changes and lookup context
+mismatches; unprepared capture and preparation failure. Windows notification
+completion is asynchronous: fixture mutations await detection without reading
+package data, and successful captures during delivery retain the already-loaded
+pinned identity. Detected changes refuse rather than re-label loaded marks from disk.
+Standalone historical-tree cache mutation tests remain separate. No source-string
+match can substitute for these behavioral checks.

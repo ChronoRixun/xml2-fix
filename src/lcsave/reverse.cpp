@@ -453,16 +453,7 @@ namespace lcsave::detail
 				const auto& fog = r["fog"]["data"].as_bytes();
 				if (fog.size() != old_fog_bytes) fail("fog: " + std::to_string(fog.size()) + " bytes, layout says 844");
 				std::memcpy(z.tail.fog, fog.data(), old_fog_bytes);
-				const auto& conv = r["conversation"].as_list();
-				if (conv.size() != 5) fail("pack expected 5 items for packing");
-				Hash current_digest{};
-				Tables tables; tables.data = std::shared_ptr<const TablesData>(&pos.t, [](const TablesData*) {});
-				std::string error;
-				if (!conversation_digest(tables, current_digest, error)) fail(error);
-				const auto& recorded_digest = r["conversation_digest"].as_bytes();
-				const bool digest_matches = recorded_digest != std::string(32, '\0') && recorded_digest == std::string(reinterpret_cast<const char*>(current_digest.data()), 32);
-				if (!digest_matches) notes.push_back("zone " + zone + ": conversation digest unknown or changed: bits reset");
-				for (int k = 0; k < 5; ++k) z.tail.conversation[k] = digest_matches ? U(conv[static_cast<std::size_t>(k)]) : 0;
+				restore_conversation(r, zone, pos.t, z.tail.conversation, notes);
 				z.tail.time_stamp = static_cast<float>(r["time_stamp"].as_real());
 				z.tail.flag = B(r["flag"]);
 				m.zones.push_back(std::move(z));
@@ -635,8 +626,10 @@ namespace lcsave::detail
 		for (const auto& v : G["trivia"].as_list())
 		{
 			const auto [act, q] = pos.trivia(v.as_int());
-			const int bit = (act - 1) * 50 + q;
-			if (bit < 0 || bit >= 256) fail("IndexError: list index out of range");
+			const auto mapped = t.build->T.trivia_bits.find({act, q});
+			if (mapped == t.build->T.trivia_bits.end()) fail("trivia question has no native mapping in this build");
+			const int bit = mapped->second;
+			if (bit < 0 || bit >= 250) fail("trivia question outside native persistence range 0..249");
 			trivia[bit / 32] |= 1u << (bit % 32);
 		}
 		const auto fl = narrow<u16>(G["flags"].as_int(), 0, 1023, "game flags");

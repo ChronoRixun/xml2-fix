@@ -97,6 +97,7 @@ namespace lcsave::detail
 		};
 		struct BindFile
 		{
+			std::map<std::string, u32> rules;
 			std::vector<std::pair<std::string, std::vector<Row>>> lists;
 			const std::vector<Row>& list(const char* tag) const
 			{
@@ -150,7 +151,8 @@ namespace lcsave::detail
 				const unsigned dom = domain_number(tag);
 				if (!dom) fail(what + ": unknown domain tag " + py_repr(tag, Enc::latin1));
 				const auto rule = in.get<u32>();
-				if (rule != 1) fail(what + ": list " + tag + " has bind rule " + std::to_string(rule) + "; this XML2 Fix knows rule 1");
+				if (rule != 1 && !(tag == "TRIV" && rule == 2)) fail(what + ": list " + tag + " has bind rule " + std::to_string(rule) + "; this XML2 Fix knows rule 1 and TRIV rule 2");
+				if (!out.rules.emplace(tag, rule).second) fail(what + ": duplicate bind list " + tag);
 				const auto n = in.get<u32>();
 				std::vector<Row> rows;
 				for (u32 k = 0; k < n; ++k)
@@ -658,10 +660,19 @@ namespace lcsave::detail
 				if (r.id) t.p_xp[r.id] = r.position;
 			}
 			load_bind(B, cat, L"trivia", tv, true);
+			T.trivia_compact = tv.rules["TRIV"] == 2;
 			for (const auto& r : tv.list("TRIV"))
 			{
-				T.TRIV[{static_cast<int>(r.group), static_cast<int>(r.position)}] = r.id;
-				if (r.id) t.p_triv[r.id] = {static_cast<int>(r.group), static_cast<int>(r.position)};
+				if (r.group < 1 || r.group > 0x7fffffff || r.position >= 50) fail("invalid trivia act/question position");
+				if (!T.TRIV.emplace(std::pair{static_cast<int>(r.group), static_cast<int>(r.position)}, r.id).second) fail("duplicate trivia act/question position");
+				if (!t.p_triv.emplace(r.id, std::pair{static_cast<int>(r.group), static_cast<int>(r.position)}).second) fail("duplicate trivia identity in build");
+			}
+			if (T.trivia_compact && T.TRIV.size() > 250) fail("native trivia budget exceeded (250)");
+			int trivia_index = 0;
+			for (const auto& [position, id] : T.TRIV)
+			{
+				const auto bit = T.trivia_compact ? trivia_index++ : (static_cast<std::int64_t>(position.first) - 1) * 50 + position.second;
+				T.trivia_bits[position] = bit < 250 ? static_cast<int>(bit) : -1;
 			}
 			// ---- zones: the catalogue's zone keys (the writing build's zoneinfo)
 			for (const auto& e : cat.entries)
@@ -711,6 +722,32 @@ namespace lcsave::detail
 			error = e.message;
 			return false;
 		}
+	}
+
+	void read_conversation_tables(const std::vector<std::uint8_t>& bytes, TablesData& t)
+	{
+		std::vector<u32> vals;
+		auto in = header(bytes, "LCCONV1\0", vals, 2, "conversation.lcm");
+		if (vals[0] != 1) fail("conversation.lcm: unsupported version");
+		for (u32 k = 0; k < vals[1]; ++k)
+		{
+			Hash digest{}, zone{};
+			const auto d = in.take(32), z = in.take(32);
+			std::memcpy(digest.data(), d.data(), 32); std::memcpy(zone.data(), z.data(), 32);
+			const auto n = in.get<u32>();
+			if (n > 128 || n % 4) fail("conversation.lcm: invalid bit count");
+			std::vector<Hash> bits;
+			std::set<Hash> seen;
+			for (u32 j = 0; j < n; ++j)
+			{
+				Hash identity{}; const auto h = in.take(32); std::memcpy(identity.data(), h.data(), 32);
+				if (!seen.insert(identity).second) fail("conversation.lcm: duplicate identity or table");
+				bits.push_back(identity);
+			}
+			if (!t.conversation_tables.emplace(std::make_pair(digest, zone), std::move(bits)).second)
+				fail("conversation.lcm: duplicate identity or table");
+		}
+		if (!in.end()) fail("conversation.lcm: trailing bytes");
 	}
 
 	// ------------------------------------------------------------------------------------------------ zones
@@ -796,6 +833,12 @@ namespace lcsave
 				return false;
 			}
 			if (!read_legacy(bytes, *t, error)) return false;
+			const auto conversation_path = lc + L"conversation.lcm";
+			if (GetFileAttributesW(conversation_path.c_str()) != INVALID_FILE_ATTRIBUTES)
+			{
+				if (!read_file_bytes(conversation_path, bytes)) fail("conversation.lcm: unreadable");
+				read_conversation_tables(bytes, *t);
+			}
 			if (t->legacy_catalogue_revision != t->catalogue.revision)
 			{
 				error = "legacy.lcm was made against catalogue revision " + std::to_string(t->legacy_catalogue_revision) +

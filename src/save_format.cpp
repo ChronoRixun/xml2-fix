@@ -6,7 +6,9 @@
 // Guards integration: policy and file operations live outside capture/lifetime.
 #include "save_guard_rules.hpp"
 #include "save_content_guards.hpp"
+#include "mod_loader.hpp"
 #include "save_trace.hpp"
+#include "trivia_rules.hpp"
 #include "ini.hpp"
 #include "log.hpp"
 #include "lcsave/lcsave.hpp"
@@ -28,6 +30,10 @@
 #include <string>
 #include <vector>
 
+#ifdef XML2_SAVE_STARTUP_FAULT_TEST
+#include "../test/save_startup_faults.hpp"
+#endif
+
 namespace save_format
 {
 	namespace
@@ -48,6 +54,7 @@ namespace save_format
 
 		bool enabled = false;         // [Save] Format=lc and every guard matched
 		readiness ready = readiness::untried;
+		std::string installation_failure; // nonempty until every requested startup hook is installed
 		std::string failure;          // why ready == failed (shown as the notice, logged once)
 		lcsave::Tables tables;
 		save_guard_rules::refusal_latches write_refusals;
@@ -108,6 +115,58 @@ namespace save_format
 		using game_getter_t = void*(__cdecl*)();
 		constexpr address game_getter = 0x46dce0;
 
+		trivia_rules::cursors trivia_cursors;
+		void ensure_ready();
+
+		void reject_install(const std::string& reason)
+		{
+			installation_failure = reason;
+			failure = reason;
+			ready = readiness::failed;
+			logger::write("save format: startup refused: %s; required LC save/trivia hooks were not installed", reason.c_str());
+		}
+
+		std::string install_guard_error(const guard& site, const char* kind)
+		{
+			char text[512]{};
+			std::snprintf(text, sizeof text, "%s at 0x%08lX (%s)", kind, static_cast<unsigned long>(site.va), site.what);
+			return text;
+		}
+
+		bool __fastcall trivia_get(void* game, void*, const int act, const int question)
+		{
+			ensure_ready();
+			if (ready != readiness::ok) return true; // refuse rewards when persistence cannot be verified
+			const int bit = lcsave::trivia_bit(tables, act, question);
+			if (bit < 0 || bit >= 250) return false;
+			const auto* words = reinterpret_cast<const std::uint32_t*>(static_cast<const std::uint8_t*>(game) + 0x5e8);
+			return (words[bit / 32] & (1u << (bit % 32))) != 0;
+		}
+
+		void __fastcall trivia_set(void* game, void*, const int act, const int question)
+		{
+			ensure_ready();
+			if (ready != readiness::ok) return;
+			const int bit = lcsave::trivia_bit(tables, act, question);
+			if (bit < 0 || bit >= 250) return;
+			auto* words = reinterpret_cast<std::uint32_t*>(static_cast<std::uint8_t*>(game) + 0x5e8);
+			words[bit / 32] |= 1u << (bit % 32);
+		}
+
+		int __fastcall trivia_cursor_get(void* game, void*, const int act)
+		{
+			ensure_ready();
+			if (ready != readiness::ok) return 0;
+			return trivia_cursors.get(act, lcsave::trivia_question_count(tables, act),
+				[&](int question) { return trivia_get(game, nullptr, act, question); });
+		}
+
+		void __fastcall trivia_cursor_set(void*, void*, const int act, const int question)
+		{
+			ensure_ready();
+			if (ready == readiness::ok) trivia_cursors.set(act, lcsave::trivia_question_count(tables, act), question);
+		}
+
 		// ---- helpers --------------------------------------------------------------------------------------
 
 		template <typename T>
@@ -165,32 +224,47 @@ namespace save_format
 			std::vector<std::uint8_t> bytes;
 		};
 
-		// Every write or none: each site is made writable first, so a refusal leaves the game as it was.
+		// Preflight every site before writing. Any write/cache/protection failure vetoes startup,
+		// including failures after bytes changed; cleanup still attempts every protection restore.
 		bool patch(const std::vector<write>& writes)
 		{
 			std::vector<DWORD> protection(writes.size());
+			const auto restore = [&](std::size_t count)
+			{
+				bool ok = true;
+				for (std::size_t i = count; i-- > 0;)
+				{
+					DWORD ignored = 0;
+					if (!VirtualProtect(in_game(writes[i].va), writes[i].bytes.size(), protection[i], &ignored))
+					{
+						logger::write("save format: ERROR: can't restore XMen2.exe protection at 0x%08lX (error %lu); startup refused", static_cast<unsigned long>(writes[i].va), GetLastError());
+						ok = false;
+					}
+				}
+				return ok;
+			};
 			for (std::size_t i = 0; i < writes.size(); ++i)
 			{
 				if (!VirtualProtect(in_game(writes[i].va), writes[i].bytes.size(), PAGE_EXECUTE_READWRITE, &protection[i]))
 				{
-					logger::write("save format: ERROR: can't unprotect XMen2.exe at 0x%08lX (error %lu) - %s", static_cast<unsigned long>(writes[i].va), GetLastError(), as_before);
-					for (std::size_t j = i; j-- > 0;)
-					{
-						VirtualProtect(in_game(writes[j].va), writes[j].bytes.size(), protection[j], &protection[j]);
-					}
+					logger::write("save format: ERROR: can't unprotect XMen2.exe at 0x%08lX (error %lu); startup refused", static_cast<unsigned long>(writes[i].va), GetLastError());
+					if (!restore(i)) logger::write("save format: ERROR: preflight protection cleanup failed; startup remains refused");
 					return false;
 				}
 			}
+			bool ok = true;
 			for (const auto& w : writes)
 			{
 				std::memcpy(in_game(w.va), w.bytes.data(), w.bytes.size());
-				FlushInstructionCache(GetCurrentProcess(), in_game(w.va), w.bytes.size());
+				if (!FlushInstructionCache(GetCurrentProcess(), in_game(w.va), w.bytes.size()))
+				{
+					logger::write("save format: ERROR: can't flush XMen2.exe instructions at 0x%08lX (error %lu); startup refused", static_cast<unsigned long>(w.va), GetLastError());
+					ok = false;
+					break;
+				}
 			}
-			for (std::size_t i = writes.size(); i-- > 0;)
-			{
-				VirtualProtect(in_game(writes[i].va), writes[i].bytes.size(), protection[i], &protection[i]);
-			}
-			return true;
+			const bool restored = restore(writes.size());
+			return ok && restored;
 		}
 
 		std::vector<std::uint8_t> dword_bytes(const std::uint32_t v)
@@ -578,6 +652,22 @@ namespace save_format
 				fail_closed("the save tables of this build don't verify: " + error);
 				return;
 			}
+			// Prepare content identity before the front end can enter an online session.
+			// Captures and overwrite preflight use a nonblocking change check, never a tree scan.
+			const auto digest_start = GetTickCount64();
+			const auto generation = mod_loader::generation();
+			lcsave::ConversationSources sources;
+			sources.lookup_root = mod_loader::game_root();
+			sources.mod_files = mod_loader::effective_files();
+			sources.resolve = &mod_loader::resolve_file;
+			sources.unchanged = [generation, build] { return generation != 0 && mod_loader::generation() == generation && mod_loader::matches_build(build); };
+			if (!lcsave::prepare_conversation_packages(tables, sources, error))
+			{
+				fail_closed("the conversation identity of this build cannot be prepared: " + error);
+				return;
+			}
+			logger::write("save format: conversation identity prepared in %llu ms before play",
+				static_cast<unsigned long long>(GetTickCount64()-digest_start));
 			logger::write("save format: tables of %ls verified: content version %lu, catalogue revision %lu; %lu heroes, %lu stats names, %lu items, %lu courses, %lu objectives",
 			              build.c_str(), static_cast<unsigned long>(tables.content_version()), static_cast<unsigned long>(tables.catalogue_revision()),
 			              static_cast<unsigned long>(tables.hero_count()), static_cast<unsigned long>(tables.stats_count()), static_cast<unsigned long>(tables.item_count()),
@@ -779,13 +869,19 @@ namespace save_format
 
 		bool __fastcall capture_hook(void* record,void*,const char* name,const int flag,const float stamp)
 		{
+			const auto capture_start = GetTickCount64();
+			if (ini::flag(L"Debug", L"SaveTiming", false)) logger::write("save timing: capture begin");
 			lcsave::ZoneCaptureMetadata meta=active_visit;
 			meta.zone=save_core_rules::folded(game_text(name)); meta.time_stamp=stamp;
 			if (!visit_known || meta.zone!=active_visit.zone)
 				meta.capture_flags|=save_core_rules::capture_unobserved;
 			std::string error;
-			if (ready!=readiness::ok || !lcsave::conversation_digest(tables,meta.conversation_digest,error))
+			if (ready!=readiness::ok || !lcsave::prepared_conversation_digest(tables,meta.zone,meta.conversation_digest,error))
+			{
 				meta.capture_flags|=save_core_rules::capture_unobserved;
+				if (!error.empty()) logger::write("save core: conversation provenance refused: %s",error.c_str());
+			}
+			if (ini::flag(L"Debug", L"SaveTiming", false)) logger::write("save timing: conversation digest %llu ms", static_cast<unsigned long long>(GetTickCount64()-capture_start));
 			capturing=&meta;
 			const bool ok=retail_capture(record,nullptr,name,flag,stamp);
 			capturing=nullptr;
@@ -802,6 +898,7 @@ namespace save_format
 			logger::write("save core: captured %s at %.9g; %zu observed numbered entities; status 0x%08lx",
 			              cached_captures.back().zone.c_str(),static_cast<double>(stamp),cached_captures.back().entities.size(),
 			              static_cast<unsigned long>(cached_captures.back().capture_flags));
+			if (ini::flag(L"Debug", L"SaveTiming", false)) logger::write("save timing: capture total %llu ms", static_cast<unsigned long long>(GetTickCount64()-capture_start));
 			return ok;
 		}
 
@@ -880,6 +977,7 @@ namespace save_format
 		{
 			if (native_loading) return; // a reset performed as part of native load belongs to the pending load
 			current={}; pending_campaign={};cached_captures.clear();pending_captures.clear();
+			trivia_cursors.clear();
 			core_lifetime.new_game(); campaign_origin=0; visit_known=false;active_visit={};restore_record=nullptr;
 			resets_seen.fetch_add(1);
 			logger::write("save core: resetgame: campaign retention, identity and capture metadata cleared; profile retained");
@@ -923,6 +1021,7 @@ namespace save_format
 				returned,overflow_flag!=0,core_lifetime.write_blocked,!save_content_guards::runtime_failure().empty());
 			const bool ok=completed.native_ok;
 			core_lifetime.finish_native(mode,ok);
+			if (ok && campaign_load) trivia_cursors.clear();
 			if (ok && campaign_load && pending_campaign.loaded)
 			{
 				current=std::move(pending_campaign);cached_captures=std::move(pending_captures);
@@ -958,6 +1057,7 @@ namespace save_format
 		// A write of a kind: the engine's bytes re-expressed and written as SPEC 1.6 says.
 		bool write_lc(const std::uint8_t kind, const int slot, const char* description, const std::uint8_t* data, const std::size_t size)
 		{
+			const auto write_start = GetTickCount64();
 			// Guards: refuse automatic/default writes to an unreadable or unresolved original.
 			const std::string path = kind == kind_profile ? lc_dir + profile_file : slot_path(slot);
 			const auto latched = write_refusals.reason(path);
@@ -1072,6 +1172,7 @@ namespace save_format
 			// CORE-END
 			logger::write("save format: wrote %s (%zu bytes, sequence %lu, serial %016llx%s)", path.c_str(), result.bytes.size(), static_cast<unsigned long>(context.save_sequence),
 			              static_cast<unsigned long long>(context.campaign_serial), result.parked ? (", " + std::to_string(result.parked) + " parked records carried").c_str() : "");
+			if (ini::flag(L"Debug", L"SaveTiming", false)) logger::write("save timing: write kind %u total %llu ms", kind, static_cast<unsigned long long>(GetTickCount64()-write_start));
 			return true;
 		}
 
@@ -1716,30 +1817,39 @@ namespace save_format
 			write_refusals.successful_load(kind == kind_profile ? lc_dir + profile_file : slot_path(slot));
 	}
 
-	void install(const HMODULE game)
+	bool startup_allowed()
+	{
+		return installation_failure.empty();
+	}
+
+	const std::string& startup_error()
+	{
+		return installation_failure;
+	}
+
+	void install(const HMODULE game) try
 	{
 		const auto text = ini::text(L"Save", L"Format").value_or("");
 		const auto chosen = parse_mode(text);
 		if (!chosen.error.empty())
 		{
-			logger::write("save format: [Save] Format=%s %s - %s", text.c_str(), chosen.error.c_str(), as_before);
+			reject_install("invalid [Save] Format=" + text + ": " + chosen.error);
 			return;
 		}
 		if (!chosen.set || chosen.value == mode::off)
 		{
 			return; // no key: the game's own format, nothing patched
 		}
+		// Default denial also covers any future early return before successful installation.
+		installation_failure = "required LC save/trivia hooks were not installed";
 		if (!game || reinterpret_cast<std::uintptr_t>(game) != image_base)
 		{
-			logger::write("save format: XMen2.exe isn't loaded at 0x400000 (not the game?) - %s", as_before);
+			reject_install("XMen2.exe is not loaded at the required image base 0x400000");
 			return;
 		}
 		if (const guard* g = first_mismatch_guarded())
 		{
-			logger::write("save format: 0x%08lX isn't the retail code (%s) - %s (D11: the key asks for the LC format, so saving and loading are OFF)", g->va, g->what, as_before);
-			// Fail closed: the card is left alone, but the mode is marked disabled so that the pipe and the log say why.
-			ready = readiness::failed;
-			failure = "XMen2.exe isn't the retail build at " + std::to_string(g->va);
+			reject_install(install_guard_error(*g, "LC save/trivia guard mismatch"));
 			return;
 		}
 
@@ -1748,13 +1858,13 @@ namespace save_format
 		{
 			std::vector<std::uint8_t> bytes(limits_rules::hex_size(g.hex));
 			if(!try_copy(bytes.data(),in_game(g.va),bytes.size()) || !limits_rules::matches(bytes.data(),g.hex))
-			{failure="LC capture guard mismatch at "+std::to_string(g.va);ready=readiness::failed;logger::write("save core: %s",failure.c_str());return;}
+			{reject_install(install_guard_error(g, "LC capture guard mismatch"));return;}
 		}
 		{
 			const auto& g=save_core_rules::ordinal_write_guard;
 			std::vector<std::uint8_t> bytes(limits_rules::hex_size(g.hex));
 			if(!try_copy(bytes.data(),in_game(g.va),bytes.size()) || !limits_rules::matches(bytes.data(),g.hex))
-			{failure="LC ordinal guard mismatch";ready=readiness::failed;return;}
+			{reject_install(install_guard_error(g, "LC ordinal guard mismatch"));return;}
 		}
 		// CORE-END
 
@@ -1765,12 +1875,16 @@ namespace save_format
 		auto* memory = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, block_reserve, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
 		if (!memory)
 		{
-			logger::write("save format: ERROR: no memory for the stubs (error %lu) - %s", GetLastError(), as_before);
+			reject_install("cannot allocate LC stubs (Windows error " + std::to_string(GetLastError()) + ")");
 			return;
 		}
 		const address base = address_of(memory);
 		const address flag = address_of(const_cast<std::uint8_t*>(&overflow_flag));
 		std::vector<write> writes;
+		writes.push_back({0x46a690, jump(0x46a690, address_of(&trivia_cursor_get), 12)});
+		writes.push_back({0x46a6a0, jump(0x46a6a0, address_of(&trivia_cursor_set), 15)});
+		writes.push_back({0x469e10, jump(0x469e10, address_of(&trivia_get), 7)});
+		writes.push_back({0x469e60, jump(0x469e60, address_of(&trivia_set), 8)});
 		writes.push_back({0x55f190, jump(0x55f190, address_of(&card_count_campaigns), 6)});
 		for (std::size_t i = 0; i < flag_sites.size(); ++i)
 		{
@@ -1810,7 +1924,7 @@ namespace save_format
 		// CORE-END
 		if (block.size() > block_reserve)
 		{
-			logger::write("save format: ERROR: the stubs don't fit their block - %s", as_before);
+			reject_install("LC stubs exceed their allocated block");
 			VirtualFree(memory, 0, MEM_RELEASE);
 			return;
 		}
@@ -1818,11 +1932,16 @@ namespace save_format
 		DWORD old = 0;
 		if (!VirtualProtect(memory, block_reserve, PAGE_EXECUTE_READ, &old))
 		{
-			logger::write("save format: ERROR: can't make the stubs executable (error %lu) - %s", GetLastError(), as_before);
+			reject_install("cannot make LC stubs executable (Windows error " + std::to_string(GetLastError()) + ")");
 			VirtualFree(memory, 0, MEM_RELEASE);
 			return;
 		}
-		FlushInstructionCache(GetCurrentProcess(), memory, block.size());
+		if (!FlushInstructionCache(GetCurrentProcess(), memory, block.size()))
+		{
+			reject_install("cannot flush LC stub instructions (Windows error " + std::to_string(GetLastError()) + ")");
+			VirtualFree(memory, 0, MEM_RELEASE);
+			return;
+		}
 		writes.push_back({xmlb_convert_call_insn, call(xmlb_convert_call_insn, xmlb_at, 5)});
 		writes.push_back({zone_open_call, call(zone_open_call, zone_at, 5)});
 
@@ -1844,14 +1963,21 @@ namespace save_format
 		}
 		if (!patch(writes))
 		{
+			reject_install("cannot install the required LC card/trivia patches");
 			VirtualFree(memory, 0, MEM_RELEASE);
 			return;
 		}
 		enabled = true;
+		installation_failure.clear();
+		logger::write("save format: guarded trivia getter/setter and independent per-act cursors installed; TRIV bind rule 2 uses compact native bits; rule 1 retains legacy positions");
 		logger::write("save core: guarded actual numbering/capture/reset and load lifetime installed; capture masks 1/2; W11 open");
 		logger::write("save format: LC ([Save] Format=lc): the card's nine file methods (vtable 0x%08lX) are the fix's - saves are read and written as .lcsave files in SaveLC "
 		              "through the LC library; the old Save folder is converted once at the first file operation and never written; %zu stream-skip sites flagged; the zone "
 		              "placement file hashed at 0x%08lX / 0x%08lX",
 		              static_cast<unsigned long>(card_vtable), flag_sites.size(), static_cast<unsigned long>(zone_open_call), static_cast<unsigned long>(xmlb_convert_call_insn));
+	}
+	catch (const std::exception& error)
+	{
+		reject_install(std::string("LC hook installation failed: ") + error.what());
 	}
 }

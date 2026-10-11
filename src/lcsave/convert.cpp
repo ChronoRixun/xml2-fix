@@ -617,6 +617,7 @@ namespace lcsave::detail
 			if (states.as_list().size() >= old_zone_states) fail(what + ": capture identities exceed native state capacity");
 			Hash digest{};
 			if (capture) digest = capture->conversation_digest;
+			else if (context) digest = conversation_package_digest(key_hash1(zone, Enc::latin1), conversation_bits(*c.t.build, zone));
 			else if (digest_override) digest = *digest_override;
 			else if (era.has_digest) digest = era.conversation_digest;
 			Value conv = L();
@@ -1034,7 +1035,13 @@ namespace lcsave::detail
 			Value trivia = L();
 			for (const int b : bits(g.trivia, 250))
 			{
-				const int act = b / trivia_per_act + 1, q = b % trivia_per_act;
+				int act = b / trivia_per_act + 1, q = b % trivia_per_act;
+				if (!plan.converter)
+				{
+					const auto found = std::find_if(ref.trivia_bits.begin(), ref.trivia_bits.end(), [b](const auto& row) { return row.second == b; });
+					if (found == ref.trivia_bits.end()) fail("native trivia bit " + str(b) + " names no question in this build");
+					act = found->first.first; q = found->first.second;
+				}
 				const auto it = ref.TRIV.find({act, q});
 				if (it == ref.TRIV.end())
 				{

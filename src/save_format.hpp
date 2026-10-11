@@ -16,6 +16,11 @@ namespace save_format
 	// operation (the game's thread).
 	void install(HMODULE game);
 
+	// A requested LC installation must finish before the executable may start.
+	// Runtime table/file refusals remain protected by the already-installed card hooks.
+	bool startup_allowed();
+	const std::string& startup_error();
+
 	// Game thread only, after a proven successful native load (not just translation into the card buffer).
 	// Until that confirmation, a prior refused path stays protected; menu Delete also clears its latch.
 	void confirm_load_success(std::uint8_t kind, int slot);

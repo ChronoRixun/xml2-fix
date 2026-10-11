@@ -5,8 +5,8 @@
 // (CONVERTER-PORT.md; SPEC-new-save revision 2.2, SPEC-old-save revision 2). Byte for byte: the same old file
 // and tables give the same converted file and the same canonical dump as the Python.
 //
-// Nothing here throws: every call returns a result with an error string. Nothing touches the disk except
-// load_tables (which reads the build's catalogue, era model and bind files; docs/lcsave-formats.md).
+// Nothing here throws: every call returns a result with an error string. Table loading and conversation
+// identity validation read build files; the conversion and reverse APIs never write player files.
 //
 // Tables: catalogue.lcc (ids), legacy.lcm (what every builder release numbered how) and the bind files of the
 // player's build (names and the running build's numbering). load_tables verifies them (SPEC 3.5 static part:
@@ -14,6 +14,8 @@
 // runtime proofs (registration traces, live counts) are the engine side's.
 
 #include <array>
+#include <functional>
+#include <utility>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -102,6 +104,22 @@ namespace lcsave
 	bool native_zone_metadata(const std::vector<std::uint8_t>& stream, const Tables& tables,
 		std::vector<ZoneCaptureMetadata>& out, std::string& error);
 	bool conversation_digest(const Tables& tables, std::array<std::uint8_t, 32>& out, std::string& error);
+	// Native heard provenance includes the zone package ranking; the overload above is legacy-only.
+	bool conversation_digest(const Tables& tables, const std::string& zone, std::array<std::uint8_t, 32>& out, std::string& error);
+
+	// Engine-only: pin a verified digest before play, refusing later tree changes without scanning.
+	bool prepare_conversation_digest(const Tables& tables, std::string& error);
+	struct ConversationSources
+	{
+		std::wstring lookup_root; // executable root used by the actual mod lookup
+		std::vector<std::pair<std::wstring, std::wstring>> mod_files;
+		std::function<std::wstring(const std::wstring&)> resolve;
+		std::function<bool()> unchanged; // verifies the loader index generation without I/O
+	};
+	// Native capture/restore preparation: effective zone packages, not the historical tree hash.
+	bool prepare_conversation_packages(const Tables& tables, const ConversationSources& sources, std::string& error);
+	bool prepared_conversation_digest(const Tables& tables, const std::string& zone,
+		std::array<std::uint8_t, 32>& out, std::string& error);
 	struct NativeLoadDemand
 	{
 		std::uint32_t instances = 0, attached_enhancements = 0, world_items = 0;
@@ -121,7 +139,7 @@ namespace lcsave
 		std::uint32_t writer_version = 0x01040000;     // major, minor, patch, kind (0 = XML2 Fix)
 		std::string writer = "XML2 Fix";               // META writer
 		std::vector<std::string> mods;                 // META mods, in load order
-		bool has_conversation_digest = false;          // the running build's conversation digest (SPEC 2.12)
+		bool has_conversation_digest = false;          // legacy hint; fresh native records derive per-zone package provenance
 		std::uint8_t conversation_digest[32]{};
 		std::vector<ZoneCaptureMetadata> zone_captures;
 		bool require_capture_metadata = false;
@@ -161,6 +179,9 @@ namespace lcsave
 	// The SHA-1 the tables hold for a zone's placement file (its .lcent, or the file itself when the tables read
 	// it); false when the build has no such zone. The fix logs it beside the hash of the bytes the engine opened
 	// (SPEC 3.8, N14 c).
+	// Current native trivia mapping; rule-1 builds retain the retail sparse layout.
+	int trivia_bit(const Tables& tables, int act, int question);
+	int trivia_question_count(const Tables& tables, int act);
 	bool zone_file_sha1(const Tables& tables, const std::string& zone, Sha1Digest& out);
 
 	// The profile file (SPEC 1.5 profile.lcsave, kind 2: META, KEYS, PRFO, PRFP, PRFS): the same three directions
