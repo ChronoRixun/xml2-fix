@@ -38,9 +38,24 @@ float distance2(const void* a,const void* b){
     for(u32 i=0;i<3;++i){const auto d=at<float>(a,0x20+4*i)-at<float>(b,0x20+4*i);result+=d*d;}
     return result;
 }
+bool pool_available(){
+    auto* pool=fn<getter_t>(0x4ab550)();
+    bool query_free=false,results_free=false;
+    for(u32 i=0;i<3;++i){
+        query_free|=at<unsigned char>(pool,0x33+i*0x1e4)==0;
+        results_free|=at<unsigned char>(pool,0xdc0+i*0x814)==0;
+    }
+    return query_free&&results_free;
+}
+}
+bool is_a(void* entity,u32 descriptor){
+    if(!entity)return false;
+    const auto* concrete=at<void*(__fastcall*)(void*,void*)>(at<const void*>(entity,0),0)(entity,nullptr);
+    const auto bit=at<u32>(reinterpret_cast<const void*>(descriptor),4)+0x24;
+    return (at<u32>(concrete,0x14+4*(bit>>5))&(1u<<(bit&31)))!=0;
 }
 bool supported(){
-    constexpr std::array<limits_rules::guard,10> guards{{
+    constexpr std::array<limits_rules::guard,11> guards{{
         {0x4ab550,"64a1000000008a0d0089","query pool getter"},
         {0x4ab6d0,"568bf1e878feffff33c9","query acquisition"},
         {0x4ab770,"e8dbfdffff33c98d90c00d0000","query results acquisition and retail layout"},
@@ -50,7 +65,8 @@ bool supported(){
         {0x4aacf0,"8b54240856578b7c240c","query flags"},
         {0x4a93e0,"8b411083ec0c83f80775","query ordering metric"},
         {0x41a820,"51568bf18b4604c1e814","activation eligibility"},
-        {0x679e90,"6824206800" "6830206800","actionent class registration"}}};
+        {0x679e90,"6824206800" "6830206800","actionent class registration"},
+        {0x67af40,"68302068006890f5680068f4000000","waypoint class registration"}}};
     xml1_hook_transaction::memory memory;
     for(const auto& g:guards){
         std::array<unsigned char,16> bytes{};
@@ -72,13 +88,7 @@ u32 select(void* actor,bool forced){
     }
     // The native pool constructors assume availability. Reserve neither pool
     // when either is full; all calls run synchronously on the native AI thread.
-    auto* pool=fn<getter_t>(0x4ab550)();
-    bool query_free=false,results_free=false;
-    for(u32 i=0;i<3;++i){
-        query_free|=at<unsigned char>(pool,0x33+i*0x1e4)==0;
-        results_free|=at<unsigned char>(pool,0xdc0+i*0x814)==0;
-    }
-    if(!query_free||!results_free)return 0;
+    if(!pool_available())return 0;
     query q;
     fn<query_t>(0x4ab6d0)(&q.value,nullptr,reinterpret_cast<const void*>(0x70b678),&exclusion);
     const auto* vt=at<const void*>(q.value,0);
@@ -110,5 +120,26 @@ u32 select(void* actor,bool forced){
         c.activation_distance=at<radius_t>(at<const void*>(entity,0),0xe0)(entity,nullptr);
     }
     return mold_target_rules::choose(forced,hero_distance,{candidates.data(),static_cast<std::size_t>(count)});
+}
+u32 waypoint(void* hero){
+    if(!hero||!pool_available())return 0;
+    query q;u32 exclusion=0;
+    fn<query_t>(0x4ab6d0)(&q.value,nullptr,reinterpret_cast<const void*>(0x778b3c),&exclusion);
+    metric order{0x683ed0,{},3};
+    std::memcpy(order.position,static_cast<const unsigned char*>(hero)+0x20,12);
+    at<sphere_t>(at<const void*>(q.value,0),0x68)(q.value,nullptr,order.position,800.f,0,0);
+    q.results=fn<results_t>(0x4ab770)(q.value,&order);
+    if(!q.results)return 0;
+    const auto* vt=at<const void*>(q.results,0);
+    const auto count=at<count_t>(vt,0)(q.results,nullptr);
+    if(count<0||count>256)return 0;
+    for(int i=0;i<count;++i){
+        auto* entity=at<item_t>(vt,4)(q.results,nullptr,i);
+        if(entity){
+            const auto* name=fn<const char*(__fastcall*)(void*,void*)>(0x41fbb0)(entity,nullptr);
+            if(name&&std::strstr(name,"moldyspot"))return at<u32>(entity,0x1c);
+        }
+    }
+    return 0;
 }
 }

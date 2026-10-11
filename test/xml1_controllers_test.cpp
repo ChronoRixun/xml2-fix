@@ -4,6 +4,7 @@
 #include "iat_hook.hpp"
 #include "xml1_hook_transaction.hpp"
 #include "mold_target_rules.hpp"
+#include "mold_combat_rules.hpp"
 #include <iostream>
 #include <map>
 
@@ -57,6 +58,31 @@ struct fake_memory {
     bool flush(){return !(++flush_calls==1&&fail_flush)&&!persistent_flush_failure;}
 };
 int main(){
+    using namespace mold_combat_rules;
+    const auto binding=parse_binding("fictional_stage:2:5");
+    CHECK(binding&&binding->flag=="fictional_stage"&&binding->first==2&&binding->width==5);
+    CHECK(parse_binding("test:32:1").has_value());
+    for(const auto* text:{"","test:0:5","test:30:5","test:1:0","test:1:33","test:1:2:x","test:-1:5","test:1x:5","../test:1:5"})CHECK(!parse_binding(text));
+    CHECK(ready_core(false,true,true)==core_action::wait);
+    CHECK(ready_core(true,false,true)==core_action::abandon);
+    CHECK(ready_core(true,false,false)==core_action::abandon);
+    CHECK(ready_core(true,true,false)==core_action::wait);
+    CHECK(ready_core(true,true,true)==core_action::fire);
+    deadlines schedule(100);
+    CHECK(schedule.floor_due(100)==1);
+    schedule.floor_result(1,100,false);
+    CHECK(schedule.floor_due(100)==2);
+    CHECK(schedule.floor_due(100.5f)==2);
+    schedule.floor_result(2,100.5f,true);
+    CHECK(schedule.floor_due(100.5f)==-1);
+    CHECK(schedule.floor_due(100.51f)==1);
+    schedule.floor_result(1,101,true);
+    CHECK(schedule.floor_due(110)==-1);
+    CHECK(schedule.floor_due(110.01f)==0);
+    CHECK(ranged_choice(.249f)==0x90);
+    CHECK(ranged_choice(.25f)==0xc0);
+    CHECK(ranged_choice(.499f)==0xc0);
+    CHECK(ranged_choice(.5f)==0x180);
     // Catch the old extra 360-unit center-distance restriction and nearest-core
     // policy. These synthetic query results overlap the native search sphere;
     // their centers need not lie within that radius.

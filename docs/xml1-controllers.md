@@ -12,8 +12,22 @@ core handle survives ordinary AI target clearing; the beam bridge corrects the
 direction after the native muzzle calculation. Collision, damage, structure
 requirements and death scripts remain native.
 
+The prototype also implements the original platform-marker selection and native
+death dispatch, phase-change catwalk activation, stomp/ranged/floor attack
+decisions, and waypoint movement. Floor attacks keep three independent deadlines
+and the original priority: an unavailable due action postpones that action by
+half a second without trying a later action during the same update. Successful
+floor attacks wait one second and renew their deadline by ten seconds. The native
+brain deadline is honored alongside adapter waits. A target is checked again
+after aiming, immediately before a core attack; a missing target starts the
+original nine-second retry delay without firing.
+
 The authored spawn script's `setDefaultTarget` call resets transient controller
-state before that script reissues the saved phase request. No DLL-owned event is
+state before that script reissues the saved phase request. `Game.Xml1MoldStage`
+must bind the builder's packed stage as `flag:first_bit:width` (one-based bits).
+The native saved-flag reader reconstructs later combat after a post-shield load,
+whose spawn script does not reissue a pattern. Missing/invalid binding refuses
+installation. No DLL-owned event is
 left in the native scheduler, and no new save field is introduced. A staged
 combat fixture has exercised both health thresholds, native core deaths and a
 Save Game -> process restart -> Load Game cycle with the shield and broken-core
@@ -46,7 +60,8 @@ common record. This branch does not claim multiplayer authority or agreement.
 
 `xml2_xml1_controllers_test` exercises selection counterexamples, transaction
 rollback and the production socket gate with isolated providers and no sockets.
-Remaining gates include full puzzle/fight/story completion, original party-attack
-timing, original-game geometry comparisons, interruption/revisit behavior, and
+Remaining gates include full fight/story completion, full live party-attack
+timing, companion coordination, core tethers, original-game geometry comparisons,
+interruption/revisit behavior, and
 the scanner/weapon controllers. The projectile diagnostic alone is not a turret
 restoration.
