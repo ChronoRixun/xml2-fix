@@ -67,6 +67,7 @@
 #include "ini_rules.hpp"
 #include "limits_rules.hpp"
 #include "move_triggers_rules.hpp"
+#include "move_triggers_runtime.hpp"
 #include "geometry_sharing_rules.hpp"
 #include "local_ip.hpp"
 #include "local_ip_rules.hpp"
@@ -1750,19 +1751,25 @@ namespace
 	init_timer_t test_original_init = nullptr;
 	tick_timer_t test_original_tick = nullptr;
 	auto& test_times(void* actor) { return *move_triggers_rules::times_for(test_actor_times, static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(actor))); }
-	void* __cdecl test_scheduled(void* actor) { return test_times(actor).scheduled.data(); }
-	void* __cdecl test_sources(void* actor, void* packet) {
-		auto& t = test_times(actor); std::memcpy(t.source.data(), static_cast<std::uint8_t*>(packet) + 8, 19 * 4); return t.source.data();
-	}
-	void __cdecl test_collect(void*, void*, void*) {}
-	void __cdecl test_clear(void* actor) { test_times(actor).scheduled.fill(0xbf800000); }
-	void __fastcall test_initialize(void* actor, void*, void* packet, float scale) {
-		test_original_init(actor, nullptr, packet, scale);
-		std::memcpy(static_cast<std::uint8_t*>(actor) + 0x640, test_times(actor).scheduled.data(), 19 * 4);
-	}
-	void __fastcall test_tick(void* actor, void*, float delta) {
-		test_original_tick(actor, nullptr, delta);
-		std::memcpy(static_cast<std::uint8_t*>(actor) + 0x640, test_times(actor).scheduled.data(), 19 * 4);
+	move_triggers_rules::actor_times* test_lookup(void* actor) { return move_triggers_rules::times_for(test_actor_times, static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(actor))); }
+	std::array<DWORD, 127> test_fractions{};
+	std::vector<int> test_captured_indices;
+	float __fastcall test_get_fraction(void*, void*, int i) { test_captured_indices.push_back(i); float f; std::memcpy(&f, &test_fractions[i], 4); return f; }
+	std::array<DWORD, 8> test_start_args{};
+	void* test_start_move_object = nullptr;
+	void* test_start_packet = nullptr;
+	bool test_nested_restored = false;
+	void __fastcall test_native_start(void* actor, void*, DWORD a, DWORD b, DWORD c, DWORD d, DWORD e, DWORD f, DWORD g, DWORD h)
+	{
+		if (a == 999) return; // failed nested action leaves old move current
+		test_start_args = {a,b,c,d,e,f,g,h};
+		move_triggers_runtime::capture_times(actor, test_start_move_object, test_start_packet);
+		const auto before = test_times(actor).source;
+		move_triggers_runtime::start_move(actor, nullptr, 999,2,3,4,5,6,7,8);
+		test_nested_restored = test_times(actor).packet == move_triggers_runtime::address(test_start_packet) && test_times(actor).source == before;
+		const DWORD move = move_triggers_runtime::address(test_start_move_object);
+		std::memcpy(static_cast<std::uint8_t*>(actor) + 0x378, &move, 4);
+		move_triggers_runtime::initialize_times(actor, nullptr, test_start_packet, 2.0f);
 	}
 	float __cdecl test_timer_clock() { return test_clock_value; }
 	float __fastcall test_motion_time(void*, void*, int) { return 0.9f; }
@@ -1779,6 +1786,26 @@ namespace
 		__try { reinterpret_cast<tick_timer_t>(const_cast<void*>(fn))(actor, nullptr, delta); return true; }
 		__except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 	}
+	bool run_capture_fragment(const void* fn, void* actor, void* move)
+	{
+		__try {
+			__asm {
+				push esi
+				push edi
+				push ebp
+				mov esi, actor
+				mov edi, move
+				sub esp, 0xc0
+				call fn
+				add esp, 0xc0
+				pop ebp
+				pop edi
+				pop esi
+			}
+			return true;
+		} __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+	}
+	move_triggers_rules::actor_times* test_cache_full(void*) { return nullptr; }
 	void check_actor_trigger_timing()
 	{
 		using namespace move_triggers_rules;
@@ -1804,14 +1831,17 @@ namespace
 		test_timer_vtable[2] = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&test_based));
 		test_timer_vtable[3] = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&test_unscaled));
 		test_move_vtable[4] = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&test_fire_timer));
+		test_move_vtable[8] = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&test_get_fraction));
 		test_move_vtable[6] = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&test_get_timer_event));
 		DWORD* move_vtable = test_move_vtable;
 		const DWORD move_address = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&move_vtable));
 		auto* code = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
 		CHECK(code != nullptr); if (!code) { VirtualFree(image, 0, MEM_RELEASE); return; }
-		const scheduler_hooks callbacks{va(reinterpret_cast<const void*>(&test_scheduled)), va(reinterpret_cast<const void*>(&test_sources)),
-			va(reinterpret_cast<const void*>(&test_collect)), va(reinterpret_cast<const void*>(&test_clear)),
-			va(reinterpret_cast<const void*>(&test_initialize)), va(reinterpret_cast<const void*>(&test_tick))};
+		move_triggers_runtime::lookup = &test_lookup;
+		const scheduler_hooks callbacks{va(reinterpret_cast<const void*>(&move_triggers_runtime::scheduled_times)), va(reinterpret_cast<const void*>(&move_triggers_runtime::source_times)),
+			va(reinterpret_cast<const void*>(&move_triggers_runtime::capture_times)), va(reinterpret_cast<const void*>(&move_triggers_runtime::clear_times)),
+			va(reinterpret_cast<const void*>(&move_triggers_runtime::initialize_times)), va(reinterpret_cast<const void*>(&move_triggers_runtime::tick_times)),
+			va(reinterpret_cast<const void*>(&move_triggers_runtime::start_move))};
 		for (int n : {20, 27, 64, 127}) {
 			std::memcpy(image, baseline.data(), size); test_timer_capacity = n; test_clock_value = 10.0f;
 			test_block stock_actor(0x844), actor(0x844), stock_packet(0x68), packet(0x68);
@@ -1824,7 +1854,11 @@ namespace
 			for (DWORD offset : {0x58u, 0x5cu, 0x60u}) { std::memcpy(stock_packet.data() + offset, &inactive, 4); std::memcpy(packet.data() + offset, &inactive, 4); }
 			CHECK(run_timer_init(at(0x42c390), stock_actor.data(), stock_packet.data(), 2.0f));
 			test_actor_times.assign(timer_slots, {});
-			auto& times = test_times(actor.data()); times.source = fractions;
+			auto& times = test_times(actor.data()); test_fractions = fractions; test_captured_indices.clear();
+			move_triggers_runtime::cap = n;
+			move_triggers_runtime::capture_times(actor.data(), &move_vtable, packet.data());
+			CHECK(test_captured_indices.size() == static_cast<std::size_t>(n - 19));
+			for (int i = 19; i < n; ++i) CHECK(test_captured_indices[i - 19] == i && times.source[i] == fractions[i]);
 			const auto plan = make_plan(n, 0x10000000, va(code), &callbacks);
 			std::memcpy(code, plan.code.data(), plan.code.size());
 			std::vector<bool> changed(size);
@@ -1832,11 +1866,34 @@ namespace
 			CHECK(plan.code.size() < 4096 && plan.original_initialize && plan.original_tick);
 			test_original_init = reinterpret_cast<init_timer_t>(at(plan.original_initialize));
 			test_original_tick = reinterpret_cast<tick_timer_t>(at(plan.original_tick));
+			move_triggers_runtime::original_initialize = test_original_init;
+			move_triggers_runtime::original_tick = test_original_tick;
 			// Trampoline addresses are expressed in the copied image's virtual coordinate system.
 			FlushInstructionCache(GetCurrentProcess(), image, size); FlushInstructionCache(GetCurrentProcess(), code, 4096);
+			// Actual native nineteen-value producer followed by the production capture thunk.
+			at(0x430fa1)[0] = 0xc3;
+			test_captured_indices.clear();
+			CHECK(run_capture_fragment(at(0x430f86), actor.data(), &move_vtable));
+			CHECK(test_captured_indices.size() == static_cast<std::size_t>(n));
+			for (int i = 0; i < n; ++i) CHECK(test_captured_indices[i] == i && times.source[i] == fractions[i]);
+			move_triggers_runtime::capture_times(actor.data(), &move_vtable, packet.data());
 			CHECK(run_timer_init(at(0x42c390), actor.data(), packet.data(), 2.0f));
 			CHECK(std::memcmp(stock_actor.data(), actor.data(), 0x844) == 0); // every native field, first 19 timers included
 			CHECK(times.scheduled[n - 1] == inactive);
+			// Run the patched eight-argument entry and its real prologue trampoline.
+			// Stub only the remaining native start body, preserving the eight arguments.
+			at(0x430d46)[0] = 0x81; at(0x430d46)[1] = 0xc4;
+			const DWORD frame = 0xb4; std::memcpy(at(0x430d48), &frame, 4);
+			hook(0x430d4c, reinterpret_cast<const void*>(&test_native_start));
+			move_triggers_runtime::original_start = reinterpret_cast<move_triggers_runtime::start_t>(at(plan.original_start));
+			test_start_move_object = &move_vtable; test_start_packet = packet.data(); test_nested_restored = false;
+			times.packet = 0; times.move = 0;
+			const DWORD old_move = 123; std::memcpy(actor.data() + 0x378, &old_move, 4);
+			reinterpret_cast<move_triggers_runtime::start_t>(at(0x430d40))(actor.data(), nullptr, 1,2,3,4,5,6,7,0x12345678);
+			CHECK(test_start_args == (std::array<DWORD,8>{1,2,3,4,5,6,7,0x12345678}) && test_nested_restored);
+			CHECK(times.packet == 0 && times.move == 0);
+			for (int i = 19; i < n - 1; ++i) CHECK(times.scheduled[i] != inactive);
+
 			CHECK(actor.slack_untouched() && packet.slack_untouched());
 			for (int i = 19; i < n - 1; ++i) CHECK(times.scheduled[i] != inactive);
 			// Paused dispatch shifts only world-time events, not animation-relative ones.
@@ -1862,6 +1919,19 @@ namespace
 			void* result = nullptr; CHECK(run_thiscall(at(0x42c270), actor.data(), result));
 			CHECK(std::all_of(times.scheduled.begin(), times.scheduled.end(), [&](DWORD value) { return value == inactive; }));
 			CHECK(actor.slack_untouched());
+			// Exhaustion stays alive, schedules the native nineteen, and never dispatches extras.
+			test_block overflow_actor(0x844), overflow_packet(0x68);
+			std::memcpy(overflow_actor.data() + 0x378, &move_address, 4);
+			std::memcpy(overflow_packet.data(), stock_packet.data(), 0x68);
+			for (DWORD offset : {0x58u, 0x5cu, 0x60u}) std::memcpy(overflow_packet.data() + offset, &inactive, 4);
+			test_clock_value = 10.0f; move_triggers_runtime::lookup = &test_cache_full;
+			CHECK(run_timer_init(at(0x42c390), overflow_actor.data(), overflow_packet.data(), 2.0f));
+			CHECK(std::memcmp(stock_actor.data(), overflow_actor.data(), 0x844) == 0);
+			for (DWORD offset : {0x690u, 0x694u, 0x698u}) std::memcpy(overflow_actor.data() + offset, &inactive, 4);
+			test_clock_value = 20.0f; test_timers_fired.clear();
+			CHECK(run_timer_tick(at(0x430a00), overflow_actor.data(), 0.1f));
+			CHECK(test_timers_fired.size() == 19 && overflow_actor.slack_untouched() && overflow_packet.slack_untouched());
+			move_triggers_runtime::lookup = &test_lookup;
 		}
 		VirtualFree(code, 0, MEM_RELEASE); VirtualFree(image, 0, MEM_RELEASE);
 	}
@@ -1885,17 +1955,26 @@ namespace
 		}
 		CHECK(!times_for(slots, (timer_slots + 1) * 0x2000));
 		for (DWORD i = 1; i <= timer_slots; ++i) CHECK(times_for(slots, i * 0x2000)->scheduled[126] == i);
+		retire_times(slots);
+		CHECK(times_for(slots, (timer_slots + 1) * 0x2000) != nullptr);
+		for (DWORD epoch = 1; epoch <= 8; ++epoch) {
+			retire_times(slots);
+			for (DWORD i = 1; i <= timer_slots; ++i) CHECK(times_for(slots, (epoch * timer_slots + i) * 0x2000) != nullptr);
+		}
+		retire_times(slots);
+
 		auto& context = *times_for(slots, 0x2000);
 		context.packet = 10; context.move = 20; context.source[50] = 42;
 		const source_scope outer(context);
 		context.packet = 30; context.move = 40; context.source[50] = 99;
-		outer.finish(context, 20);
+		outer.finish(context); // failed nested start leaves old A current, enclosing B is still pending
 		CHECK(context.packet == 10 && context.move == 20 && context.source[50] == 42);
-		outer.finish(context, 40);
-		CHECK(context.packet == 0 && context.move == 0);
+		outer.finish(context);
+		CHECK(context.packet == 10 && context.move == 20);
+		context.packet = 0; context.move = 0;
 		const source_scope none(context);
 		context.packet = 100; context.move = 200;
-		none.finish(context, 200);
+		none.finish(context);
 		CHECK(context.packet == 0 && context.move == 0);
 		// Every thunk, including both indexed stores and count-1 pop, runs above slot 19.
 		for (int cap : {20, 27, 64, 127})
@@ -1952,6 +2031,9 @@ namespace
 		const auto at = [&](DWORD va) { return image + (va - image_base); };
 		const auto mismatched = [&] { return mismatch([&](DWORD va, std::string_view hex) { return matches(at(va), hex); }); };
 		CHECK(mismatched() == 0);
+		at(0x430f97)[0] = 64;
+		CHECK(mismatched() != 0); // packet producer must remain at native nineteen
+		at(0x430f97)[0] = 19;
 		bool rejects = true;
 		const auto corrupt = [&](DWORD va, std::string_view hex) {
 			for (std::size_t i = 0; i < hex_size(hex); ++i) {

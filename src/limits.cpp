@@ -1,6 +1,7 @@
 #include "limits.hpp"
 #include "limits_rules.hpp"
 #include "move_triggers_rules.hpp"
+#include "move_triggers_runtime.hpp"
 #include "ini.hpp"
 #include "log.hpp"
 
@@ -38,6 +39,9 @@ namespace limits
 		DWORD* move_trigger_arrays = nullptr;
 		move_triggers_rules::actor_times* actor_trigger_times = nullptr;
 		SRWLOCK actor_trigger_lock = SRWLOCK_INIT;
+		DWORD actor_trigger_epoch = 0;
+		bool actor_trigger_trace = false;
+		void(__cdecl* original_retire_times)() = nullptr;
 		using initialize_times_t = void(__fastcall*)(void*, void*, void*, float);
 		using tick_times_t = void(__fastcall*)(void*, void*, float);
 		initialize_times_t original_initialize_times = nullptr;
@@ -529,83 +533,33 @@ namespace limits
 			return self;
 		}
 
-		move_triggers_rules::actor_times& actor_times_for(void* actor)
+		move_triggers_rules::actor_times* actor_times_for(void* actor)
 		{
 			using namespace move_triggers_rules;
 			AcquireSRWLockExclusive(&actor_trigger_lock);
 			auto* slot = times_for(std::span(actor_trigger_times, timer_slots), address_of(actor));
 			ReleaseSRWLockExclusive(&actor_trigger_lock);
-			if (!slot)
-			{
-				logger::write("limits: MoveTriggers: actor timing cache exhausted (%lu addresses), actor 0x%08lX - refusing unsafe storage", timer_slots, address_of(actor));
-				RaiseFailFastException(nullptr, nullptr, 0);
-			}
-			return *slot;
+			if (!slot) logger::write_once("move-trigger-cache-full", "limits: MoveTriggers: actor timing cache full (%lu live addresses); actor 0x%08lX uses native nineteen triggers", timer_slots, address_of(actor));
+			return slot;
 		}
 
-		void* __cdecl scheduled_times(void* actor)
+		void trace_actor_times(const char* event, void* actor)
 		{
-			return actor_times_for(actor).scheduled.data();
+			if (!actor_trigger_trace) return;
+			AcquireSRWLockExclusive(&actor_trigger_lock);
+			const auto occupancy = std::count_if(actor_trigger_times, actor_trigger_times + move_triggers_rules::timer_slots, [](const auto& t) { return t.actor != 0; });
+			ReleaseSRWLockExclusive(&actor_trigger_lock);
+			logger::write("MoveTriggers trace: %s actor=%08lX generation=%08lX epoch=%lu occupancy=%zu thread=%lu", event, address_of(actor), dword_at(actor, 0x1c), actor_trigger_epoch, static_cast<std::size_t>(occupancy), GetCurrentThreadId());
 		}
 
-		void __cdecl capture_times(void* actor, void* move, void* packet)
+		void __cdecl retire_actor_times()
 		{
-			auto& times = actor_times_for(actor);
-			times.packet = address_of(packet);
-			times.move = address_of(move);
-			std::memcpy(times.source.data(), static_cast<const std::uint8_t*>(packet) + 8, 19 * sizeof(DWORD));
-			using time_t = float(__fastcall*)(void*, void*, int);
-			const auto getter = reinterpret_cast<time_t>(dword_at(reinterpret_cast<void*>(dword_at(move, 0)), 0x20));
-			for (int i = 19; i < move_trigger_cap; ++i)
-			{
-				const float value = getter(move, nullptr, i);
-				std::memcpy(&times.source[i], &value, sizeof(value));
-			}
-		}
-
-		void* __cdecl source_times(void* actor, void* packet)
-		{
-			auto& times = actor_times_for(actor);
-			if (times.packet != address_of(packet) || times.move != dword_at(actor, 0x378))
-				std::fill(times.source.begin() + 19, times.source.end(), DWORD{0xbf800000});
-			// A handler may adjust the original packet; keep its first nineteen values exactly.
-			std::memcpy(times.source.data(), static_cast<const std::uint8_t*>(packet) + 8, 19 * sizeof(DWORD));
-			return times.source.data();
-		}
-
-		void __cdecl clear_times(void* actor)
-		{
-			actor_times_for(actor).scheduled.fill(0xbf800000);
-			// Do not clear the pending source packet: cancellation of the old move can happen
-			// between collecting the new move's times and its native initializer.
-		}
-
-		void mirror_times(void* actor)
-		{
-			std::memcpy(static_cast<std::uint8_t*>(actor) + 0x640, actor_times_for(actor).scheduled.data(), 19 * sizeof(DWORD));
-		}
-
-		void __fastcall initialize_times(void* actor, void*, void* packet, float scale)
-		{
-			original_initialize_times(actor, nullptr, packet, scale);
-			mirror_times(actor);
-			if (packet && actor_times_for(actor).packet == address_of(packet)) actor_times_for(actor).packet = 0;
-		}
-
-		void __fastcall tick_times(void* actor, void*, float delta)
-		{
-			original_tick_times(actor, nullptr, delta);
-			mirror_times(actor);
-		}
-
-		void __fastcall start_move(void* actor, void*, DWORD a, DWORD b, DWORD c, DWORD d, DWORD e, DWORD f, DWORD g, DWORD h)
-		{
-			auto& times = actor_times_for(actor);
-			const move_triggers_rules::source_scope prior(times);
-			original_start_move(actor, nullptr, a, b, c, d, e, f, g, h);
-			// Scope the captured stack packet to its native caller. Failed/reentrant action
-			// changes cannot leave a stale pointer that a later animation happens to reuse.
-			prior.finish(times, dword_at(actor, 0x378));
+			original_retire_times(); // includes destruction callbacks; their timers remain available until it returns
+			AcquireSRWLockExclusive(&actor_trigger_lock);
+			move_triggers_rules::retire_times(std::span(actor_trigger_times, move_triggers_rules::timer_slots));
+			++actor_trigger_epoch;
+			ReleaseSRWLockExclusive(&actor_trigger_lock);
+			if (actor_trigger_trace) logger::write("MoveTriggers trace: arena retired epoch=%lu occupancy=0 thread=%lu", actor_trigger_epoch, GetCurrentThreadId());
 		}
 
 		bool raise_move_triggers(const int capacity)
@@ -637,10 +591,11 @@ namespace limits
 				if (code) VirtualFree(code, 0, MEM_RELEASE);
 				return false;
 			}
+			using namespace move_triggers_runtime;
 			const scheduler_hooks hooks{address_of(reinterpret_cast<const void*>(&scheduled_times)), address_of(reinterpret_cast<const void*>(&source_times)),
 			                            address_of(reinterpret_cast<const void*>(&capture_times)), address_of(reinterpret_cast<const void*>(&clear_times)),
 			                            address_of(reinterpret_cast<const void*>(&initialize_times)), address_of(reinterpret_cast<const void*>(&tick_times)),
-			                            address_of(reinterpret_cast<const void*>(&start_move))};
+			                            address_of(reinterpret_cast<const void*>(&start_move)), address_of(reinterpret_cast<const void*>(&retire_actor_times))};
 			const auto plan = make_plan(capacity, address_of(reinterpret_cast<const void*>(&construct_move)), address_of(code), &hooks);
 			std::memcpy(code, plan.code.data(), plan.code.size());
 			DWORD protection = 0;
@@ -659,6 +614,14 @@ namespace limits
 			original_initialize_times = reinterpret_cast<initialize_times_t>(plan.original_initialize);
 			original_tick_times = reinterpret_cast<tick_times_t>(plan.original_tick);
 			original_start_move = reinterpret_cast<start_move_t>(plan.original_start);
+			move_triggers_runtime::original_initialize = original_initialize_times;
+			move_triggers_runtime::original_tick = original_tick_times;
+			move_triggers_runtime::original_start = original_start_move;
+			move_triggers_runtime::cap = capacity;
+			move_triggers_runtime::lookup = &actor_times_for;
+			move_triggers_runtime::notify = &trace_actor_times;
+			actor_trigger_trace = ini::flag(L"Test", L"MoveTriggerTrace", false);
+			original_retire_times = reinterpret_cast<void(__cdecl*)()>(plan.original_retire);
 			if (!patch(plan.writes, stays))
 			{
 				move_trigger_cap = stock_capacity;

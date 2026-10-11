@@ -33,7 +33,7 @@ namespace move_triggers_rules
 		return delta / record_size;
 	}
 
-	constexpr DWORD timer_slots = 1024; // native actors reuse 32 pool addresses; room for future actor pools
+	constexpr DWORD timer_slots = 1024; // cleared after native actor-arena teardown
 	struct actor_times
 	{
 		DWORD actor = 0, packet = 0, move = 0;
@@ -56,20 +56,20 @@ namespace move_triggers_rules
 		}
 		return nullptr;
 	}
+	inline void retire_times(std::span<actor_times> slots) { std::fill(slots.begin(), slots.end(), actor_times{}); }
 	struct source_scope
 	{
 		DWORD packet, move;
 		std::array<DWORD, max_capacity> source;
 		explicit source_scope(const actor_times& times) : packet(times.packet), move(times.move), source(times.source) {}
-		void finish(actor_times& times, DWORD current_move) const
+		void finish(actor_times& times) const
 		{
-			if (packet && current_move == move) { times.packet = packet; times.move = move; times.source = source; }
-			else { times.packet = 0; times.move = 0; }
+			times.packet = packet; times.move = move; times.source = source;
 		}
 	};
 	struct scheduler_hooks
 	{
-		DWORD timers, source, collect, clear, initialize, tick, start = 0;
+		DWORD timers, source, collect, clear, initialize, tick, start = 0, retire = 0;
 	};
 
 	struct access
@@ -92,7 +92,7 @@ namespace move_triggers_rules
 		{0x4f7e35, "899c8ecc000000", "528b96cc000000891c8a5a"},
 		{0x4f8046, "8bbc86c8000000", "528b96cc0000008b7c82fc5a"},
 	}};
-	inline constexpr std::array<guard, 25> guards{{
+	inline constexpr std::array<guard, 29> guards{{
 		{0x4f6aa7, "83be1c01000013"},
 		{constructor_call, "e83efaffff"},
 		{0x500605, "89861c010000"},
@@ -101,6 +101,10 @@ namespace move_triggers_rules
 		{0x4f7a9d, "68fcae0100"},
 		{0x500df8, "69ff48010000"},
 		{0x4f6260, "53568bd98b8360a90100"},
+		{0x430f86, "33ed8b17558bcfff5220d95cac2c4583fd137cee", "nineteen-value packet producer and stack layout"},
+		{0x430d46, "538a9c24d400000084db5556578bf1", "packet frame saved registers"},
+		{0x4613e0, "8b0dbc8f710085c9742b8b01ff50088b0dbc8f71008b116a00ff12a1bc8f71006a0e50e898f20f0083c408c705bc8f710000000000c3", "actor arena teardown"},
+		{0x469a6c, "e86f79ffff", "actor arena teardown caller"},
 		{0x430f9a, "8b8424d0000000", "timing packet capture"},
 		{0x42c3cb, "8d8740060000", "scheduled timer destination"},
 		{0x42c3dc, "8d4608d99f94060000", "timing source and native x87 store"},
@@ -133,7 +137,7 @@ namespace move_triggers_rules
 	{
 		std::vector<operand_write> writes;
 		std::vector<std::uint8_t> code;
-		DWORD original_initialize = 0, original_tick = 0, original_start = 0;
+		DWORD original_initialize = 0, original_tick = 0, original_start = 0, original_retire = 0;
 	};
 	inline plan make_plan(const int cap, const DWORD init, const DWORD code_address, const scheduler_hooks* hooks = nullptr)
 	{
@@ -203,6 +207,7 @@ namespace move_triggers_rules
 			p.original_initialize = wrap(0x42c390, "83ec10568b742418", hooks->initialize);
 			p.original_tick = wrap(0x430a00, "5355568bf1", hooks->tick);
 			if (hooks->start) p.original_start = wrap(0x430d40, "81ecb4000000", hooks->start);
+			if (hooks->retire) p.original_retire = wrap(0x4613e0, "8b0dbc8f7100", hooks->retire);
 		}
 		return p;
 	}

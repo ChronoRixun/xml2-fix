@@ -49,7 +49,7 @@ seven beam shots. Live tracing identified timer lookup at `0x430f90` and firing 
 The native actor stores nineteen scheduled floats at `+0x640..+0x688`. Those fields stay at their original
 addresses and are mirrored after initialization and each update. The DLL reserves 1024 actor-address
 cache entries (the native actor arena reuses 32 addresses), each holding source and scheduled arrays
-through the configured limit. The cache is preallocated; exhaustion is logged and fails fast.
+through the configured limit. The cache is preallocated and retired after the guarded actor-arena destructor (`0x4613e0`) returns. Exhaustion is logged and uses thread-local invocation storage with inactive extra entries, preserving native nineteen-event scheduling without terminating the game.
 
 The original nineteen-float stack packet stays intact. At `0x430f9a`, the DLL captures the packet and
 reads additional authored times through the move's existing virtual getter. The initializer's source
@@ -61,9 +61,9 @@ scheduled fields, keeps its original layout and values.
 
 Captured stack-packet ownership is scoped to the native move-start call at `0x430d40`, with all eight
 stack arguments forwarded unchanged. Failed/reentrant starts cannot leave stale packet identities for
-later animations. Unrelated native packets carry their nineteen values with inactive extra entries.
+later animations. Every start restores its enclosing invocation's packet, even if that pending move has not become current; current-move identity is checked only when consuming a packet. Unrelated native packets carry their nineteen values with inactive extra entries.
 Initializer/tick/start prologues and stack-cleanup instructions are guarded, together with the timer
-address calculations, loop bounds and clear path. Handles and timers install in one transaction.
+address calculations, loop bounds and clear path. The nineteen-value packet producer (`0x430f86..0x430f99`), frame allocation and saved registers are guarded; its native loop is never raised. Handles and timers install in one transaction.
 
 These are transient style/event data; no native save field, LC identity or save-code byte changes.
 Global event-pool capacity is independent; this patch does not claim unlimited loaded events.
@@ -79,7 +79,7 @@ Use `XML2_FIX_TEST_EXE` for the locally owned retail executable. It is never dis
 Native timing fixtures also execute initialization, paused updates, dispatch and cancellation at
 20, 27, 64 and 127. Every native actor field is byte-identical to stock after initializing the first
 nineteen entries. High events fire once; inactive entries stay inactive; mirrored fields and canaries
-are checked. Cache collisions/exhaustion and nested/aborted packet lifetimes use synthetic fixtures.
+are checked. The same production callbacks execute the native packet producer/capture thunk, real initializer and paused/active dispatch. The eight-argument entry/trampoline is checked with a failed nested start between capture and initialization. Cache exhaustion retains the native nineteen and canaries; arena retirement permits thousands of later addresses. `[Test] MoveTriggerTrace=1` logs actor handle generations, arena epochs, occupancy and callback thread IDs for private diagnostics.
 The pipe `status` reports `move_triggers 64` only after a successful installed raise.
 
 See the private restore-wave report for source census, full gates and live acceptance evidence.

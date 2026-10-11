@@ -4,6 +4,8 @@
 
 - Added `[Limits] MoveTriggers` (20..127, port default 64): preserves full gun bursts and authored model events
   through guarded handle side storage; native move layout and save data remain unchanged.
+  Scope timing packets to enclosing invocations, guard the fixed native packet producer, retire timing
+  cache entries with the actor arena and fall back to native nineteen on cache exhaustion.
 
 - Fix legacy imports whose equipped items were written in a different era from the campaign's talents.
   Translate hero and restore-bank equipment with the detected item era, including semantic dumps.
