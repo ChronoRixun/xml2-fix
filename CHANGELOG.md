@@ -6,8 +6,8 @@
   platform actions, companion behavior and core tethers through native services.
   The builder supplies saved-stage metadata; disabled/refused installation retains
   the native encounter fallback; see `docs/xml1-controllers.md`.
-- Register Master Mold (rule 3) and the absent turret controller (rule 4, off) in the
-  shared gameplay-capability record. Online co-op is lockstep, so every peer runs the
+- Register Master Mold (rule 3: installed, saved-stage bit range and a hash of the flag
+  name) and the absent turret controller (rule 4, off) in the shared gameplay-capability record. Online co-op is lockstep, so every peer runs the
   controller; sessions use a peer-invariant hero instead of the local `_ACTIVE_HERO_`.
   Peers with different controller state are refused. Startup refusal names an
   unverified XML1 hook rollback instead of the network exclusion hook.

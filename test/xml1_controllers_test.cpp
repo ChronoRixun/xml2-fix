@@ -159,17 +159,26 @@ int main(){
 
     // Shared gameplay rule 3/4 registration states (effective, never requested).
     using xml1_capability_rules::registration;
-    const auto off=xml1_capability_rules::master_mold(false,false,0,0);
+    const auto off=xml1_capability_rules::master_mold(false,false,"",0,0);
     CHECK(off.verified&&off.values==(std::array<std::uint32_t,4>{0,0,0,0}));
-    const auto ignored=xml1_capability_rules::master_mold(false,true,1,5); // not requested: never installed
+    const auto ignored=xml1_capability_rules::master_mold(false,true,"stage",1,5); // not requested: never installed
     CHECK(ignored.verified&&ignored.values==off.values);
-    const auto failed=xml1_capability_rules::master_mold(true,false,1,5);
+    const auto failed=xml1_capability_rules::master_mold(true,false,"stage",1,5);
     CHECK(!failed.verified);
-    const auto on=xml1_capability_rules::master_mold(true,true,1,5);
-    CHECK(on.verified&&on.values==(std::array<std::uint32_t,4>{1,1,5,0}));
-    CHECK(!xml1_capability_rules::master_mold(true,true,0,5).verified);
-    CHECK(!xml1_capability_rules::master_mold(true,true,1,0).verified);
-    CHECK(!xml1_capability_rules::master_mold(true,true,1,33).verified);
+    // The flag name is part of the effective state: FNV-1a 32 of the exact name.
+    CHECK(xml1_capability_rules::flag_hash("")==2166136261u);
+    CHECK(xml1_capability_rules::flag_hash("a")==0xe40c292cu);
+    CHECK(xml1_capability_rules::flag_hash("stage")!=xml1_capability_rules::flag_hash("Stage"));
+    const auto on=xml1_capability_rules::master_mold(true,true,"stage",1,5);
+    CHECK(on.verified&&on.values==(std::array<std::uint32_t,4>{1,1,5,xml1_capability_rules::flag_hash("stage")}));
+    const auto other_name=xml1_capability_rules::master_mold(true,true,"stageB",1,5);
+    CHECK(other_name.verified&&other_name.values!=on.values&&other_name.values[1]==1&&other_name.values[2]==5);
+    CHECK(xml1_capability_rules::master_mold(true,true,"stage",1,5).values==on.values); // same name: identical
+    CHECK(!xml1_capability_rules::master_mold(true,true,"",1,5).verified); // missing name: not installed
+    CHECK(!xml1_capability_rules::master_mold(true,true,std::string(33,'x'),1,5).verified);
+    CHECK(!xml1_capability_rules::master_mold(true,true,"stage",0,5).verified);
+    CHECK(!xml1_capability_rules::master_mold(true,true,"stage",1,0).verified);
+    CHECK(!xml1_capability_rules::master_mold(true,true,"stage",1,33).verified);
     const auto turret_off=xml1_capability_rules::turrets(); // no turret controller in this build
     CHECK(turret_off.verified&&turret_off.values==off.values);
     using gameplay_capabilities::record;using gameplay_capabilities::result;
@@ -183,7 +192,12 @@ int main(){
     CHECK(host_on.ready()&&host_on.compare(client_on.bytes())==result::match);
     CHECK(host_on.compare(client_off.bytes())==result::value&&client_off.compare(host_on.bytes())==result::value);
     CHECK(client_off.compare(peer(off,turret_off).bytes())==result::match);
-    CHECK(host_on.compare(peer(xml1_capability_rules::master_mold(true,true,1,4),turret_off).bytes())==result::value);
+    CHECK(host_on.compare(peer(xml1_capability_rules::master_mold(true,true,"stage",1,4),turret_off).bytes())==result::value);
+    // Same bit range, different saved-stage variable: refused in both directions.
+    const auto renamed=peer(other_name,turret_off);
+    CHECK(host_on.compare(renamed.bytes())==result::value&&renamed.compare(host_on.bytes())==result::value);
+    CHECK(renamed.compare(peer(other_name,turret_off).bytes())==result::match);
+    CHECK(!peer(xml1_capability_rules::master_mold(true,true,"",1,5),turret_off).ready());
     CHECK(host_on.compare(peer(on,turret_off,2).bytes())==result::revision);
     const auto broken=peer(failed,turret_off);
     CHECK(!broken.ready()&&broken.bytes().empty()&&broken.compare(host_on.bytes())==result::unavailable);

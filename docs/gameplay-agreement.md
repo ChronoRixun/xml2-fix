@@ -22,7 +22,7 @@ IDs:
 |---|---|---|
 | 1 | Entity allocation/token layout | revision 1 defaults to `{32,224,256,8}`; `register_entity_layout` replaces this default once |
 | 2 | Explosive first-contact attack ID | revision 1, `{installed ? 1 : 0,0,0,0}` |
-| 3 | XML1 Master Mold controller | revision 1, `{installed ? 1 : 0, first_bit, width, 0}` of the applied saved-stage binding; verified off `{0,0,0,0}`; requested but not installed is unverified ([details](xml1-controllers.md#online-play)) |
+| 3 | XML1 Master Mold controller | revision 1, `{installed ? 1 : 0, first_bit, width, FNV-1a-32(flag name)}` of the applied saved-stage binding (`Xml1MoldStage=flag:first_bit:width`, exact case); verified off `{0,0,0,0}`; requested but not installed is unverified ([details](xml1-controllers.md#online-play)) |
 | 4 | XML1 turret controller | revision 1, always verified `{0,0,0,0}`: no turret controller exists in this build |
 
 IDs 5..65535 require coordination; 0 and duplicate IDs are refused. Entity layout revision describes token representation/sentinel/allocator semantics as well as capacities. Increment it whenever equal capacities/bit width can still encode or interpret tokens differently. A capacity raise must call the layout API with its successfully installed capacities and token width. Actor+generic must equal world, and world must fit the token width. Keep failed layouts unverified, even if the fallback is retail. The default is retail only when no entity-layout installer participates.

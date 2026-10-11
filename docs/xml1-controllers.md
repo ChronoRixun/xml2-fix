@@ -88,7 +88,10 @@ uses the first player slot holding a living hero instead; outside a session it k
 
 Effective state is registered in the shared gameplay-capability record
 ([agreement](gameplay-agreement.md)) after installation: rule 3, revision 1,
-`{installed, first_bit, width, 0}` from the applied saved-stage binding. Not
+`{installed, first_bit, width, FNV-1a-32(flag)}` from the applied saved-stage binding;
+the fourth word is the 32-bit FNV-1a hash of the exact flag name, so peers bound
+to the same bit range of different saved variables are refused rather than
+reconstructing different phases after a post-shield load. Not
 requested registers verified off `{0,0,0,0}`; requested but not installed (missing
 binding, guard, query/effect support or transaction refusal) registers unverified,
 which closes host/join for that process. Peers whose Master Mold state differs,

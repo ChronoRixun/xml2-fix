@@ -313,7 +313,7 @@ bool beam_target(void* actor,void*& target){
 }
 bool requested(){return was_requested;}
 xml1_capability_rules::registration capability(){
-    return xml1_capability_rules::master_mold(was_requested,installed,saved_stage.first,saved_stage.width);
+    return xml1_capability_rules::master_mold(was_requested,installed,saved_stage.flag,saved_stage.first,saved_stage.width);
 }
 void install(HMODULE game){
     was_requested=ini::flag(L"Game",L"Xml1MasterMold",false);installed=false;
