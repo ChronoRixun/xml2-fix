@@ -668,6 +668,15 @@ namespace limits
 				VirtualFree(timers, 0, MEM_RELEASE);
 				VirtualFree(code, 0, MEM_RELEASE);
 			};
+			// Every guard this contribution brings is checked here, read-only: a MoveTriggers-only mismatch keeps moves at
+			// 19 triggers instead of refusing the whole startup transaction (and with it the LC seam).
+			std::string why;
+			if (!patch_transaction::verify_expectations(c, why))
+			{
+				logger::write("limits: MoveTriggers: unexpected code (%s) - %s", why.c_str(), stays);
+				c.abandon();
+				return false;
+			}
 			return transaction.add(std::move(c));
 		}
 

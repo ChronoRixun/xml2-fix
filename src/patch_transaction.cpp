@@ -106,6 +106,23 @@ namespace patch_transaction
 
 	bool read_memory(address va, void* out, std::size_t size) { return raw_read(at(va), out, size); }
 
+	bool verify_expectations(const contribution& c, std::string& why)
+	{
+		std::vector<std::uint8_t> buffer;
+		for (const auto& g : c.guards)
+		{
+			buffer.resize(g.bytes.size());
+			if (!raw_read(at(g.va), buffer.data(), buffer.size()) || buffer != g.bytes) { why = g.what + " (" + hex(g.va) + ")"; return false; }
+		}
+		for (const auto& r : c.regions)
+		{
+			if (r.hi_exclusive <= r.lo) { why = "empty region " + r.name; return false; }
+			buffer.resize(r.hi_exclusive - r.lo);
+			if (!raw_read(at(r.lo), buffer.data(), buffer.size()) || sha256(buffer.data(), buffer.size()) != r.sha256) { why = "region " + r.name + " (" + hex(r.lo) + ")"; return false; }
+		}
+		return true;
+	}
+
 	std::string hex(address va)
 	{
 		char text[16];

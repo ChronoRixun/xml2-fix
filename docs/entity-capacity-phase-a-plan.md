@@ -810,3 +810,13 @@ and why the change stays within the reviewed design.
     gameplay opcodes without completing admission is dispatched by the retail code as before; same-address reuse
     races inside one receive pump are as in retail. The live co-op gate (matching peers, stock-capacity peer refused
     on both sides) is the evidence for the admission half. GCAP protocol revision stays 2 (0.2.0i peers refuse).
+18. **Capacity-only mismatch falls back to stock; the E10A2 binding is decided at preparation (section 8 step 6,
+    section 7; review P2/P3).** The capacity contribution is now built (symbols bound, guards, regions, writes,
+    composed requirements) and checked read-only against the executable (`patch_transaction::verify_expectations`)
+    inside `entity_capacity::prepare`, BEFORE save_format is told to use the E10A2 native profile. A ledger guard or
+    region mismatch there releases the prepared owners, logs "EntityCapacity falls back to stock capacities", keeps
+    online admission poisoned, and the LC seam and every other contribution install normally in the committed
+    transaction (startup test case -14 runs the real DLL on a synthetic image and checks exactly that). After that
+    point the E10A2 profile is bound: failing to join the transaction is fatal (startup refused), and any later
+    transaction refusal refuses the LC seam too, so a populated world never mixes layouts. MoveTriggers runs the same
+    read-only pre-check of its own guards and keeps 19 triggers on a mismatch instead of refusing the transaction.

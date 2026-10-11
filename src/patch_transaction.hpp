@@ -99,6 +99,9 @@ namespace patch_transaction
 	std::array<std::uint8_t, 32> sha256(const std::uint8_t* data, std::size_t size);
 	// E9/E8 rel32 (or any prefix) + rel32 + `pad` NOPs, and a raw abs32 dword, as writes.
 	write relocation(address va, std::string_view prefix_hex, bool relative, address target, unsigned pad, std::string what);
+	// Read-only pre-check of one contribution's guards and region hashes against memory (what commit() checks first),
+	// so a contributor can fall back before it influences other contributors. `why` names the first mismatch.
+	bool verify_expectations(const contribution& c, std::string& why);
 	// Guarded memory reads for the contributors' own checks (false when the address faults).
 	bool read_memory(address va, void* out, std::size_t size);
 }

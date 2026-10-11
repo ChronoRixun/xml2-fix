@@ -220,6 +220,22 @@ int main()
 		check(u.commit() == outcome::committed && at(0xe2, 1) == std::vector<std::uint8_t>{9}, "the same requirement is met when another contribution writes the site");
 	}
 	check(hex(0x4c6910) == "0x4c6910" && hex(0) == "0x0", "hex() formats addresses as 0x + lower-case hex");
+	{ // the read-only pre-check a contributor runs before it influences others
+		seed();
+		counts a;
+		auto good = contrib("pre", a, {guard(0xf0, 4, "g")}, {new_bytes(0xf0, {1}, "w")}, {hash_region(0x100, 0x140, "r")});
+		std::string why;
+		const bool ok = verify_expectations(good, why);
+		DWORD old = 0;
+		VirtualProtect(block, page, PAGE_READWRITE, &old); block[0x120] ^= 1; VirtualProtect(block, page, old, &old);
+		std::string why2;
+		const bool bad = !verify_expectations(good, why2);
+		VirtualProtect(block, page, PAGE_READWRITE, &old); block[0x120] ^= 1; VirtualProtect(block, page, old, &old);
+		auto wrong = contrib("pre", a, {expectation{va(0xf0), {0xee}, "wrong guard"}}, {});
+		std::string why3;
+		check(ok && bad && why2.find("region r") != std::string::npos && !verify_expectations(wrong, why3) && why3.find("0x") != std::string::npos && at(0xf0, 1) != std::vector<std::uint8_t>{1},
+		      "verify_expectations: passes on matching memory, names a region or guard mismatch in hex, writes nothing");
+	}
 	std::printf("%d failure(s)\n", failures);
 	return failures ? 1 : 0;
 }

@@ -271,6 +271,76 @@ namespace entity_capacity
 		}
 	}
 
+	namespace
+	{
+		// The whole capacity contribution, built and checked at preparation (before save_format chooses its native
+		// profile): bound symbols, guards, region hashes, literal and relocation writes, composed requirements.
+		patch_transaction::contribution built;
+		bool built_ok = false;
+		bool build_contribution(patch_transaction::contribution& out)
+		{
+			bind_own_symbols();
+			patch_transaction::contribution& c = out;
+			c.owner = "entity_capacity";
+			using namespace entity_capacity_sites;
+			for (const auto& r : expected_ranges) c.guards.push_back({r.va, patch_transaction::bytes_of(r.hex), "ledger expectation"});
+			for (const auto& s : owner_slots) c.guards.push_back({s.slot_va, patch_transaction::bytes_of(s.hex), std::string(s.owner) + " native vtable slot"});
+			for (const auto& g : extra_guards) c.guards.push_back({g.va, patch_transaction::bytes_of(g.hex), g.what});
+			for (const auto& r : region_hashes) c.regions.push_back({std::string(r.name), r.lo, r.hi_exclusive, patch_transaction::sha256_of(r.sha256)});
+			for (const auto& r : extra_regions) c.regions.push_back({r.name, r.lo, r.hi_exclusive, patch_transaction::sha256_of(r.sha256)});
+			for (const auto& s : literal_sites) c.writes.push_back({s.va, patch_transaction::bytes_of(s.new_hex), std::string(s.role)});
+			std::string unresolved;
+			std::size_t descoped = 0;
+			for (const auto& s : relocation_sites)
+			{
+				const auto name = symbol_names[static_cast<std::size_t>(s.target)];
+				if (owned_elsewhere(name))
+				{
+					// save_format / gameplay_agreement write these themselves, in this transaction: required, so a composed site
+					// nobody writes refuses the install. The section-5 receive-lifecycle sites are descoped (deviation 17).
+					if (descoped_receive_site(s.va)) { ++descoped; continue; }
+					c.requires_written.push_back({s.va + static_cast<std::uint32_t>(s.prefix_hex.size() / 2), std::string(name)});
+					continue;
+				}
+				const auto found = symbols.find(name);
+				if (found == symbols.end()) { unresolved += std::string(name) + " "; continue; }
+				c.writes.push_back(patch_transaction::relocation(s.va, s.prefix_hex, s.kind == relocation_kind::rel32, found->second, s.pad, std::string(s.role)));
+			}
+			for (const auto& s : extra_relocations)
+			{
+				const auto found = symbols.find(s.symbol);
+				if (found == symbols.end()) { unresolved += std::string(s.symbol) + " "; continue; }
+				c.writes.push_back(patch_transaction::relocation(s.va, s.prefix_hex, true, found->second, s.pad, s.role));
+			}
+			if (!unresolved.empty())
+			{
+				failure = "unresolved DLL symbols: " + unresolved;
+				return false;
+			}
+			const auto required = c.requires_written.size();
+			c.publish = [descoped, required]
+			{
+				logger::write("entity capacity: %zu composed ledger sites written by save_format/gameplay_agreement (verified in this transaction); %zu receive-lifecycle sites of plan section 5 descoped (deviation 17: admission refusal + process-fixed layout)",
+				              required, descoped);
+				published = prepared_descriptor;
+				install_published = true;
+				gameplay_agreement::register_entity_layout(layout_revision_raised, raised_actors, raised_generic, raised_world, raised_index_bits, true);
+				logger::write("entity capacity: installed - actor %u / generic %u / world %u, %zu literal edits, %zu relocations, GCAP layout rule 1 revision %u",
+				              published.actors, published.generic, published.world, literal_sites.size(), relocation_sites.size(), unsigned(layout_revision_raised));
+			};
+			c.abandon = []
+			{
+				if (failure.empty()) failure = "the startup transaction did not commit";
+			};
+			c.retain = []
+			{
+				failure = "the startup transaction could not be rolled back; prepared owners and backing retained";
+				fatal = true;
+			};
+			return true;
+		}
+	}
+
 	void prepare(patch_transaction::transaction&, HMODULE game)
 	{
 		requested = ini::flag(L"Limits", L"EntityCapacity", false);
@@ -303,6 +373,20 @@ namespace entity_capacity
 		entity_world::set_refusal_logger(&log_world_refusal);
 		claim = claim_state::prepared;
 		prepared = true;
+		// Build the whole contribution now and check its guards and region hashes against the executable (read-only):
+		// a capacity-only mismatch falls back to stock HERE, before save_format chooses the E10A2 native profile, so
+		// the LC seam and the rest of the startup transaction still install with retail layouts (plan section 8 step 6;
+		// review P2/P3). Nothing later can leave save_format on E10A2 with stock owners.
+		built = {};
+		if (!build_contribution(built) || !patch_transaction::verify_expectations(built, why))
+		{
+			if (failure.empty()) failure = "the executable's entity code differs from the ledger: " + why;
+			logger::write("entity capacity: %s - EntityCapacity falls back to stock capacities (online admission poisoned); the rest of the fix installs normally", failure.c_str());
+			built = {};
+			release_prepared();
+			return;
+		}
+		built_ok = true;
 		save_format::use_native_profile(save_format_rules::e10a2_profile);
 		logger::write("entity capacity: prepared actor %u / generic %u / world %u (ten-bit indices, generations 1..0x%X); allocator %lu bytes, World %p, Grid %p, query manager %p, save manager %lu bytes",
 		              prepared_descriptor.actors, prepared_descriptor.generic, prepared_descriptor.world, generation_max, static_cast<unsigned long>(allocator_layout::object_size),
@@ -313,68 +397,11 @@ namespace entity_capacity
 
 	void contribute(patch_transaction::transaction& transaction, HMODULE)
 	{
-		if (!prepared) return;
-		bind_own_symbols();
-		patch_transaction::contribution c;
-		c.owner = "entity_capacity";
-		using namespace entity_capacity_sites;
-		for (const auto& r : expected_ranges) c.guards.push_back({r.va, patch_transaction::bytes_of(r.hex), "ledger expectation"});
-		for (const auto& s : owner_slots) c.guards.push_back({s.slot_va, patch_transaction::bytes_of(s.hex), std::string(s.owner) + " native vtable slot"});
-		for (const auto& g : extra_guards) c.guards.push_back({g.va, patch_transaction::bytes_of(g.hex), g.what});
-		for (const auto& r : region_hashes) c.regions.push_back({std::string(r.name), r.lo, r.hi_exclusive, patch_transaction::sha256_of(r.sha256)});
-		for (const auto& r : extra_regions) c.regions.push_back({r.name, r.lo, r.hi_exclusive, patch_transaction::sha256_of(r.sha256)});
-		for (const auto& s : literal_sites) c.writes.push_back({s.va, patch_transaction::bytes_of(s.new_hex), std::string(s.role)});
-		std::string unresolved;
-		std::size_t descoped = 0;
-		for (const auto& s : relocation_sites)
-		{
-			const auto name = symbol_names[static_cast<std::size_t>(s.target)];
-			if (owned_elsewhere(name))
-			{
-				// save_format / gameplay_agreement write these themselves, in this transaction: required, so a composed site
-				// nobody writes refuses the install. The section-5 receive-lifecycle sites are descoped (deviation 17).
-				if (descoped_receive_site(s.va)) { ++descoped; continue; }
-				c.requires_written.push_back({s.va + static_cast<std::uint32_t>(s.prefix_hex.size() / 2), std::string(name)});
-				continue;
-			}
-			const auto found = symbols.find(name);
-			if (found == symbols.end()) { unresolved += std::string(name) + " "; continue; }
-			c.writes.push_back(patch_transaction::relocation(s.va, s.prefix_hex, s.kind == relocation_kind::rel32, found->second, s.pad, std::string(s.role)));
-		}
-		for (const auto& s : extra_relocations)
-		{
-			const auto found = symbols.find(s.symbol);
-			if (found == symbols.end()) { unresolved += std::string(s.symbol) + " "; continue; }
-			c.writes.push_back(patch_transaction::relocation(s.va, s.prefix_hex, true, found->second, s.pad, s.role));
-		}
-		if (!unresolved.empty())
-		{
-			failure = "unresolved DLL symbols: " + unresolved;
-			logger::write("entity capacity: refused: %s", failure.c_str());
-			release_prepared();
-			return;
-		}
-		const auto required = c.requires_written.size();
-		c.publish = [descoped, required]
-		{
-			logger::write("entity capacity: %zu composed ledger sites written by save_format/gameplay_agreement (verified in this transaction); %zu receive-lifecycle sites of plan section 5 descoped (deviation 17: admission refusal + process-fixed layout)",
-			              required, descoped);
-			published = prepared_descriptor;
-			install_published = true;
-			gameplay_agreement::register_entity_layout(layout_revision_raised, raised_actors, raised_generic, raised_world, raised_index_bits, true);
-			logger::write("entity capacity: installed - actor %u / generic %u / world %u, %zu literal edits, %zu relocations, GCAP layout rule 1 revision %u",
-			              published.actors, published.generic, published.world, literal_sites.size(), relocation_sites.size(), unsigned(layout_revision_raised));
-		};
-		c.abandon = []
-		{
-			if (failure.empty()) failure = "the startup transaction did not commit";
-		};
-		c.retain = []
-		{
-			failure = "the startup transaction could not be rolled back; prepared owners and backing retained";
-			fatal = true;
-		};
-		if (!transaction.add(std::move(c))) failure = "the startup transaction is sealed";
+		if (!prepared || !built_ok) return;
+		built_ok = false;
+		// save_format already chose the E10A2 profile at preparation: failing to join the transaction now would leave a
+		// mixed layout, so it is fatal (startup refused), never a silent stock fallback.
+		if (!transaction.add(std::move(built))) { failure = "the startup transaction was sealed before the capacity install joined it"; fatal = true; }
 	}
 
 	void after_commit(const bool committed, const bool rollback_failed)

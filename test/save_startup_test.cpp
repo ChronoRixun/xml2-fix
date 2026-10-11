@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <share.h>
 #include <string>
 #include <vector>
 #include "save_format_rules.hpp"
@@ -65,7 +66,7 @@ int child(int mutation)
  fixture_space[0]=1; // keep the synthetic image padding in the linked executable
  if(reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr))!=0x400000) return 91;
  const auto guards=save_guards();
- const bool fault=mutation<=-4 && mutation!=-13;
+ const bool fault=mutation<=-4 && mutation!=-13 && mutation!=-14; // -14: entity capacity on a non-retail image
  if(mutation==-13) SetEnvironmentVariableA("XML2_SAVE_STARTUP_FAULT","0");
  if(fault) {DeleteFileA("startup-fault-hit.txt");SetEnvironmentVariableA("XML2_SAVE_STARTUP_FAULT",std::to_string(mutation).c_str());}
  for(const auto& g:guards) seed(g);
@@ -83,8 +84,11 @@ int child(int mutation)
  WritePrivateProfileStringA("Save","Format",format,".\\xml2-fix.ini");
  WritePrivateProfileStringA("Online","GameVersion","X1.0",".\\xml2-fix.ini");
  WritePrivateProfileStringA("Discord","Enabled","0",".\\xml2-fix.ini");
+ // -14: [Limits] EntityCapacity=1 where the executable's entity code is not the ledger's (this synthetic image): the
+ // capacity install must fall back to stock at preparation and the LC seam must still install (plan step 6).
+ WritePrivateProfileStringA("Limits","EntityCapacity",mutation==-14?"1":"0",".\\xml2-fix.ini");
  SetLastError(0); const auto module=LoadLibraryW((fault || mutation==-13)?L".\\save-startup-faults.dll":L".\\dinput.dll"); const auto error=GetLastError();
- const bool expected_refusal=mutation>=0 || (mutation<=-3 && mutation!=-13);
+ const bool expected_refusal=mutation>=0 || (mutation<=-3 && mutation!=-13 && mutation!=-14);
  if(fault)
  {
   FILE* marker=nullptr;fopen_s(&marker,"startup-fault-hit.txt","r");
@@ -123,6 +127,17 @@ int child(int mutation)
   {
    std::printf("FAIL valid/off case %d: error=%lu\n",mutation,error);return 1;
   }
+  if(mutation==-14)
+  {
+   FILE* log=_fsopen("xml2-fix.log","rb",_SH_DENYNO); /* the DLL keeps its log open */std::string text;
+   if(log){char buffer[4096];std::size_t n=0;while((n=std::fread(buffer,1,sizeof buffer,log))>0)text.append(buffer,n);std::fclose(log);}
+   const auto from=text.rfind("XML2 Fix ");const auto tail=from==std::string::npos?text:text.substr(from);
+   const bool fell_back=tail.find("EntityCapacity falls back to stock capacities")!=std::string::npos;
+   const bool lc=tail.find("save format: LC")!=std::string::npos && tail.find("startup transaction: committed")!=std::string::npos;
+   if(!fell_back || !lc){std::printf("FAIL case -14: capacity fallback %d, LC seam committed %d\n",fell_back,lc);return 1;}
+   std::printf("PASS case -14: capacity-only mismatch falls back to stock; the LC seam installs in the committed transaction\n");
+   return 0;
+  }
   std::printf("PASS case %d: valid or disabled LC startup allowed\n",mutation);
  }
  // No native engine methods, network calls or save-file operations are run.
@@ -141,7 +156,7 @@ int main(int argc,char** argv)
  if(!SetThreadDesktop(desktop)){CloseDesktop(desktop);std::printf("cannot attach test desktop: %lu\n",GetLastError());return 97;}
  int failed=0,cases=0;
  const bool single=argc==3 && std::strcmp(argv[1],"--single")==0;
- const int first=single?std::atoi(argv[2]):-13;
+ const int first=single?std::atoi(argv[2]):-14;
  const int end=single?first+1:static_cast<int>(save_guards().size());
  for(int i=first;i<end;++i)
  {
@@ -160,7 +175,7 @@ int main(int argc,char** argv)
    EnumDesktopWindows(desktop,close_owned_notice,reinterpret_cast<LPARAM>(&notice));
   if(WaitForSingleObject(process.hProcess,0)==WAIT_OBJECT_0)GetExitCodeProcess(process.hProcess,&exit);
   else {TerminateProcess(process.hProcess,96);WaitForSingleObject(process.hProcess,5000);std::printf("case %d timed out (notice=%d text=%d)\n",i,notice.seen,notice.informative);}
-  const bool must_refuse=i>=0 || (i<=-3 && i!=-13);
+  const bool must_refuse=i>=0 || (i<=-3 && i!=-13 && i!=-14);
   if(must_refuse && (!notice.seen || !notice.informative))
   {exit=1;std::printf("FAIL case %d: missing clear LC refusal notice (seen=%d informative=%d)\n",i,notice.seen,notice.informative);}
   if(!must_refuse && notice.seen){exit=1;std::printf("FAIL case %d: unexpected refusal notice\n",i);}
