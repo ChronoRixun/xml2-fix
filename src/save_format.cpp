@@ -29,6 +29,10 @@
 #include <string>
 #include <vector>
 
+#ifdef XML2_SAVE_STARTUP_FAULT_TEST
+#include "../test/save_startup_faults.hpp"
+#endif
+
 namespace save_format
 {
 	namespace
@@ -219,32 +223,47 @@ namespace save_format
 			std::vector<std::uint8_t> bytes;
 		};
 
-		// Every write or none: each site is made writable first, so a refusal leaves the game as it was.
+		// Preflight every site before writing. Any write/cache/protection failure vetoes startup,
+		// including failures after bytes changed; cleanup still attempts every protection restore.
 		bool patch(const std::vector<write>& writes)
 		{
 			std::vector<DWORD> protection(writes.size());
+			const auto restore = [&](std::size_t count)
+			{
+				bool ok = true;
+				for (std::size_t i = count; i-- > 0;)
+				{
+					DWORD ignored = 0;
+					if (!VirtualProtect(in_game(writes[i].va), writes[i].bytes.size(), protection[i], &ignored))
+					{
+						logger::write("save format: ERROR: can't restore XMen2.exe protection at 0x%08lX (error %lu); startup refused", static_cast<unsigned long>(writes[i].va), GetLastError());
+						ok = false;
+					}
+				}
+				return ok;
+			};
 			for (std::size_t i = 0; i < writes.size(); ++i)
 			{
 				if (!VirtualProtect(in_game(writes[i].va), writes[i].bytes.size(), PAGE_EXECUTE_READWRITE, &protection[i]))
 				{
-					logger::write("save format: ERROR: can't unprotect XMen2.exe at 0x%08lX (error %lu) - %s", static_cast<unsigned long>(writes[i].va), GetLastError(), as_before);
-					for (std::size_t j = i; j-- > 0;)
-					{
-						VirtualProtect(in_game(writes[j].va), writes[j].bytes.size(), protection[j], &protection[j]);
-					}
+					logger::write("save format: ERROR: can't unprotect XMen2.exe at 0x%08lX (error %lu); startup refused", static_cast<unsigned long>(writes[i].va), GetLastError());
+					if (!restore(i)) logger::write("save format: ERROR: preflight protection cleanup failed; startup remains refused");
 					return false;
 				}
 			}
+			bool ok = true;
 			for (const auto& w : writes)
 			{
 				std::memcpy(in_game(w.va), w.bytes.data(), w.bytes.size());
-				FlushInstructionCache(GetCurrentProcess(), in_game(w.va), w.bytes.size());
+				if (!FlushInstructionCache(GetCurrentProcess(), in_game(w.va), w.bytes.size()))
+				{
+					logger::write("save format: ERROR: can't flush XMen2.exe instructions at 0x%08lX (error %lu); startup refused", static_cast<unsigned long>(w.va), GetLastError());
+					ok = false;
+					break;
+				}
 			}
-			for (std::size_t i = writes.size(); i-- > 0;)
-			{
-				VirtualProtect(in_game(writes[i].va), writes[i].bytes.size(), protection[i], &protection[i]);
-			}
-			return true;
+			const bool restored = restore(writes.size());
+			return ok && restored;
 		}
 
 		std::vector<std::uint8_t> dword_bytes(const std::uint32_t v)
@@ -1891,7 +1910,12 @@ namespace save_format
 			VirtualFree(memory, 0, MEM_RELEASE);
 			return;
 		}
-		FlushInstructionCache(GetCurrentProcess(), memory, block.size());
+		if (!FlushInstructionCache(GetCurrentProcess(), memory, block.size()))
+		{
+			reject_install("cannot flush LC stub instructions (Windows error " + std::to_string(GetLastError()) + ")");
+			VirtualFree(memory, 0, MEM_RELEASE);
+			return;
+		}
 		writes.push_back({xmlb_convert_call_insn, call(xmlb_convert_call_insn, xmlb_at, 5)});
 		writes.push_back({zone_open_call, call(zone_open_call, zone_at, 5)});
 

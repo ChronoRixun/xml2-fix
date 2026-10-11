@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Keep the LC startup veto on instruction-cache flush failures and every patch protection
+  restoration failure, including preflight cleanup. Stop further writes on a failed flush
+  and attempt all remaining protection restores before refusing startup.
+
 - Refuse executable startup when required LC save/trivia hooks cannot be installed. Guard,
   allocation and patch-protection failures now reach the DLL startup veto with an explicit
   notice and log; background XInput initialization starts only after the required hooks verify.

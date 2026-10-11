@@ -287,3 +287,20 @@ It mutates all 56 save/trivia/stream/capture/ordinal guard sites, checks loader 
 disabled-LC controls. Notices run on a hidden test desktop and only owned fixture windows
 are observed/dismissed. Run from an isolated folder containing this test executable and
 `dinput.dll`; its children write only that folder's test INI/log, never game save files.
+
+Every save-installation `VirtualProtect` and `FlushInstructionCache` result is checked.
+A failed stub flush refuses startup before any engine patch bytes change. A failed site
+flush stops further writes, and cleanup attempts every previously changed protection.
+Restoration failure also retains the veto, including during preflight cleanup. Bytes may
+already be changed when a later API fails; returning FALSE from DLL initialization is
+required, so the executable never proceeds through partially installed save hooks.
+
+For API faults, configure with `-DXML2_SAVE_STARTUP_FAULT_TEST=ON` and also copy
+`save-startup-faults.dll` next to the isolated startup test. This opt-in DLL compiles the
+same sources with wrappers limited to the save-installation APIs; production `dinput.dll`
+has no fault controls. The 69-case suite covers the 59 production loader cases plus a
+fault-disabled DLL control and nine API failures: allocation, executable stub protection,
+first/third writable preflight calls, rollback restoration, final restoration, stub flush,
+and first/third patch flushes. It checks the injected call was reached, no guard bytes
+changed before writing, and changed bytes exist for failures after writes. Every failure
+must show the LC refusal notice and return ERROR_DLL_INIT_FAILED before simulated startup.
