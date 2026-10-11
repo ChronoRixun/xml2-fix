@@ -5,8 +5,13 @@
 - Restore opt-in XML1 Master Mold shield/core combat, original attack deadlines,
   platform actions, companion behavior and core tethers through native services.
   The builder supplies saved-stage metadata; disabled/refused installation retains
-  the native encounter fallback. Controller requests refuse online play pending
-  shared gameplay agreement. Turrets remain experimental; see `docs/xml1-controllers.md`.
+  the native encounter fallback. Turrets remain experimental; see `docs/xml1-controllers.md`.
+- Register Master Mold (rule 3) and the absent turret controller (rule 4, off) in the
+  shared gameplay-capability record. Online co-op is lockstep, so every peer runs the
+  controller; sessions use a peer-invariant hero instead of the local `_ACTIVE_HERO_`.
+  Peers with different controller state are refused; only the turret experiment and
+  projectile diagnostic still close host/join. Startup refusal names an unverified
+  XML1 hook rollback instead of the network exclusion hook.
 - Keep the LC startup veto on instruction-cache flush failures and every patch protection
   restoration failure, including preflight cleanup. Stop further writes on a failed flush
   and attempt all remaining protection restores before refusing startup.

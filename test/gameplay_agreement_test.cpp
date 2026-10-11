@@ -15,6 +15,7 @@
 namespace ini {
  bool requested=false,lc=true,key=true;
  bool flag(const wchar_t*,const wchar_t*,bool){return requested;}
+ int number(const wchar_t*,const wchar_t*,int fallback){return fallback;} // XML1 diagnostic opt-in stays off
  std::optional<std::string> text(const wchar_t* section,const wchar_t* name){
   if(std::wcscmp(section,L"Save")==0)return lc ? std::optional<std::string>("lc") : std::nullopt;
   if(std::wcscmp(section,L"Online")==0)return lc ? std::optional<std::string>("LC24") : std::nullopt;

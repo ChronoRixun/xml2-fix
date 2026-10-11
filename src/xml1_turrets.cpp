@@ -172,15 +172,18 @@ bool supported() {
     return true;
 }
 }
+bool requested(){
+    return ini::flag(L"Game",L"Xml1Turrets",false)||ini::number(L"Test",L"NativeProjectileProbe",0)==1;
+}
 void install(HMODULE) {
     const bool diagnostic=ini::number(L"Test",L"NativeProjectileProbe",0)==1;
     const bool mold=ini::flag(L"Game",L"Xml1MasterMold",false);
-    if(!diagnostic&&!mold)return;
-    if(!game_version::offline_gameplay_ready()) { logger::write("XML1 combat: online exclusion unavailable; no hooks installed"); return; }
+    if(!diagnostic)return;
     if(mold) {
-        if(diagnostic)logger::write("XML1 combat: diagnostic and controller are mutually exclusive; diagnostic refused");
+        logger::write("XML1 combat: diagnostic and controller are mutually exclusive; diagnostic refused");
         return; // Controller installs its complete dependency set in one transaction.
     }
+    if(!game_version::offline_gameplay_ready()) { logger::write("XML1 combat: online exclusion unavailable; no diagnostic hooks installed"); return; }
     source_name=ini::text(L"Test",L"ProjectileSource").value_or("");
     target_name=ini::text(L"Test",L"ProjectileTarget").value_or("");
     entity_name=ini::text(L"Test",L"ProjectileEntity").value_or("");
@@ -210,7 +213,9 @@ void install(HMODULE) {
     logger::write("turret probe: installed opt-in diagnostic; invoke causeTroubleForAutotest()");
 }
 bool prepare_beam(xml1_hook_transaction::patch& patch){
-    if(!game_version::offline_gameplay_ready()||!supported())return false;
+    // The Master Mold transaction and the offline diagnostic share this patch.
+    // Online admission is decided by their callers (rule 3 / offline gate).
+    if(!supported())return false;
     patch.address=0x45230b;
     patch.before={0x8d,0x8c,0x24,0x14,0x02,0x00,0x00};
     patch.after={0xe9,0,0,0,0,0x90,0x90};

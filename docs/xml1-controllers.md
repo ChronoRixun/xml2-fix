@@ -66,13 +66,39 @@ starting combat. Its retail pool-layout guards are checked again at boss spawn,
 after all startup installers, so an incompatible capacity replacement retains
 the native encounter fallback.
 
-Until integration with the shared effective gameplay agreement, requesting
-either controller or the projectile diagnostic closes host/join sockets for that
-process, even outside LC mode. Failure to install that exclusion refuses startup.
-Later INI edits cannot reopen the process. Shared rule IDs 3 (Master Mold) and 4
-(turrets) are reserved upstream; future integration must register verified off,
-verified installed, or unverified failure after installation, then finalize the
-common record. This branch does not claim multiplayer authority or agreement.
+## Online play
+
+XML2 co-op is lockstep, not host-authoritative. Every peer simulates the whole
+zone: the actor update `0x434540` reads the session flag (`0x610d20`) only to
+choose player-input handling, and its AI branch `0x424b70` calls the AI manager
+(`vt+0x1c4`, `0x525370` -> `0x526380` / `vt+0x1c` `0x522630`) and the brain's
+`vt+0x10` (`0x51d880` / `0x51d610`), which reaches the brain update `0x517370` with
+no host or client test. Session setup (`0x613df0`) seeds the gameplay random stream
+(`0x560190(1)`) to the same constant on every peer, and the per-frame sync message
+`0x2e` (`0x614a40`) checksums hero positions with that stream's call count;
+a divergent peer is dropped. Restricting the controller to the host would
+therefore desynchronize the session. Instead every peer runs the controller from the
+same native update, with only shared inputs: the game clock, the gameplay random
+stream, script requests and saved flags, all of which run in lockstep.
+
+`_ACTIVE_HERO_` is the exception: it resolves through the player manager's index
+(`0x4a1759`, table `0x70b814`), which the native session setup points at each
+machine's local player. Inside an online session (`0xa53058+0x420`) the controller
+uses the first player slot holding a living hero instead; outside a session it keeps
+`_ACTIVE_HERO_` as before.
+
+Effective state is registered in the shared gameplay-capability record
+([agreement](gameplay-agreement.md)) after installation: rule 3, revision 1,
+`{installed, first_bit, width, 0}` from the applied saved-stage binding. Not
+requested registers verified off `{0,0,0,0}`; requested but not installed (missing
+binding, guard, query/effect support or transaction refusal) registers unverified,
+which closes host/join for that process. Peers whose Master Mold state differs,
+including one side off, are refused by the native agreement before admission.
+Rule 4 (turrets), revision 1, is always `{0,0,0,0}`: no turret controller exists.
+`Game.Xml1Turrets` and `Test.NativeProjectileProbe` still close host/join sockets
+for the process, even outside LC mode, and leave rule 4 unverified. Failure to
+install a required socket exclusion refuses startup, and later INI edits cannot
+reopen the process.
 
 `xml2_xml1_controllers_test` exercises selection counterexamples, transaction
 rollback and the production socket gate with isolated providers and no sockets.

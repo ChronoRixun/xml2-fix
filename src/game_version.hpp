@@ -22,7 +22,10 @@ namespace game_version
 	void bind_gameplay_refusal(void (*show)());
 	// Sticky for this installation when a controller cannot restore native code.
 	void refuse_startup();
-	// Temporary exclusion until the shared agreement represents these rules.
+	// Why startup_allowed() is false, for the startup refusal notice.
+	const char* startup_error();
+	// Turret experiment/projectile diagnostic only: they have no shared agreement entry
+	// and keep host/join closed for the process. Master Mold registers rule 3 instead.
 	bool offline_gameplay_ready();
 	void install(HMODULE game);
 }

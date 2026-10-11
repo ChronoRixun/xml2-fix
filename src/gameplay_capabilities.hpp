@@ -7,7 +7,7 @@
 
 namespace gameplay_capabilities
 {
- constexpr std::uint16_t entity_layout_id=1, explosive_first_hit_id=2;
+ constexpr std::uint16_t entity_layout_id=1, explosive_first_hit_id=2, master_mold_id=3, turret_controller_id=4;
  constexpr std::uint16_t protocol_revision=1;
  constexpr std::uint32_t magic=0x50414347; // GCAP, little endian
  constexpr std::size_t max_entries=8, header_size=12, entry_size=20, max_size=header_size+entry_size*max_entries;

@@ -1,5 +1,6 @@
 #include "mold_query.hpp"
 #include "mold_target_rules.hpp"
+#include "mold_combat_rules.hpp"
 #include "xml1_hook_memory.hpp"
 #include "limits_rules.hpp"
 #include "log.hpp"
@@ -38,6 +39,12 @@ float distance2(const void* a,const void* b){
     for(u32 i=0;i<3;++i){const auto d=at<float>(a,0x20+4*i)-at<float>(b,0x20+4*i);result+=d*d;}
     return result;
 }
+bool session_active(){
+    // Session static 0xa53058 (built by 0x612be0); +0x420 is set while an
+    // online/LAN game is hosted or joined (0x610d20).
+    const auto* session=reinterpret_cast<const void*>(0xa53058);
+    return at<u32>(session,0)==0x6a481c&&at<unsigned char>(session,0x420)!=0;
+}
 bool pool_available(){
     auto* pool=fn<getter_t>(0x4ab550)();
     bool query_free=false,results_free=false;
@@ -55,7 +62,11 @@ bool is_a(void* entity,u32 descriptor){
     return (at<u32>(concrete,0x14+4*(bit>>5))&(1u<<(bit&31)))!=0;
 }
 bool supported(){
-    constexpr std::array<limits_rules::guard,11> guards{{
+    constexpr std::array<limits_rules::guard,15> guards{{
+        {0x4a1759,"e872070b008b108bc8ff526083f8ff7e","active hero follows the player manager's index"},
+        {0x4a176d,"8d048514b87000","per-player hero handle table"},
+        {0x612c0a,"b95830a500","online session static"},
+        {0x610d20,"8a8120040000c3","online session active flag"},
         {0x4ab550,"64a1000000008a0d0089","query pool getter"},
         {0x4ab6d0,"568bf1e878feffff33c9","query acquisition"},
         {0x4ab770,"e8dbfdffff33c98d90c00d0000","query results acquisition and retail layout"},
@@ -70,7 +81,7 @@ bool supported(){
     xml1_hook_transaction::memory memory;
     for(const auto& g:guards){
         std::array<unsigned char,16> bytes{};
-        if(!memory.read(g.va,bytes.data(),g.hex.size()/2)||!limits_rules::matches(bytes.data(),g.hex)){
+        if(g.hex.size()>bytes.size()*2||!memory.read(g.va,bytes.data(),g.hex.size()/2)||!limits_rules::matches(bytes.data(),g.hex)){
             logger::write("mold query: guard failed %08X",g.va);return false;
         }
     }
@@ -81,7 +92,7 @@ u32 select(void* actor,bool forced){
     auto* origin=actor;
     float hero_distance=0;
     if(!forced){
-        origin=find("_ACTIVE_HERO_",exclusion);
+        origin=active_hero(exclusion);
         if(!origin||at<float>(origin,0x27c)<=0)return 0;
         hero_distance=distance2(actor,origin);
         if(!(hero_distance<380.f*380.f))return 0;
@@ -120,6 +131,19 @@ u32 select(void* actor,bool forced){
         c.activation_distance=at<radius_t>(at<const void*>(entity,0),0xe0)(entity,nullptr);
     }
     return mold_target_rules::choose(forced,hero_distance,{candidates.data(),static_cast<std::size_t>(count)});
+}
+void* active_hero(u32& handle){
+    handle=0;
+    if(!session_active())return find("_ACTIVE_HERO_",handle);
+    std::array<mold_combat_rules::player_hero,4> slots{};std::array<void*,4> entities{};
+    for(u32 i=0;i<4;++i){
+        slots[i].handle=at<u32>(reinterpret_cast<const void*>(0x70b814),4*i);
+        entities[i]=slots[i].handle?fn<resolve_t>(0x4654b0)(&slots[i].handle,nullptr):nullptr;
+        slots[i].living=is_a(entities[i],0x70b83c)&&at<float>(entities[i],0x27c)>0;
+    }
+    const int chosen=mold_combat_rules::session_hero(slots);
+    if(chosen<0)return nullptr;
+    handle=slots[chosen].handle;return entities[chosen];
 }
 u32 waypoint(void* hero){
     if(!hero||!pool_available())return 0;

@@ -15,7 +15,9 @@
 #include <limits>
 
 // Scoped first-game adapter. Default off; the builder supplies the saved-stage
-// contract. Online stays refused until the common agreement covers this rule.
+// contract. Online play is lockstep: every peer runs this controller from the
+// same native AI update, and shared gameplay rule 3 refuses peers whose
+// effective controller state differs.
 namespace mold_controller {
 namespace {
 using u32=std::uint32_t;
@@ -40,7 +42,7 @@ struct state {
     float wait_until=0,retry_at=0,shot_until=0;
     mold_combat_rules::deadlines attacks{};
 } boss;
-bool enabled=false;
+bool enabled=false,was_requested=false,installed=false;
 bool trace=false;
 float trace_at=-1;
 mold_combat_rules::stage_binding saved_stage;
@@ -95,7 +97,7 @@ void* select_core(void* actor,u32& selected){
     return selected?fn<resolve_t>(0x4654b0)(&selected,nullptr):nullptr;
 }
 void coordinate_party(void* boss_actor,void* boss_brain){
-    u32 hero_token=0;auto* hero=find("_ACTIVE_HERO_",hero_token);
+    u32 hero_token=0;auto* hero=mold_query::active_hero(hero_token);
     if(!mold_query::is_a(hero,0x70b83c)||at<float>(hero,0x27c)<=0)return;
     auto* manager=fn<void*(__cdecl*)()>(0x5252e0)();
     if(!manager||at<u32>(manager,0)!=0x695cbc)return;
@@ -157,7 +159,7 @@ void tick(void* brain,void* actor,u32* output){
         boss.catwalk_latch=true;boss.catwalk_pending=first_count!=0;
         return;
     }
-    u32 hero_id=0;auto* hero=find("_ACTIVE_HERO_",hero_id);
+    u32 hero_id=0;auto* hero=mold_query::active_hero(hero_id);
     const bool living_hero=mold_query::is_a(hero,0x70b83c)&&at<float>(hero,0x27c)>0;
     if(!living_hero)return;
     fn<target_t>(0x538290)(brain,nullptr,hero_id);target(actor,hero_id);
@@ -246,7 +248,11 @@ void request(const char* source,const char* sequence){
     else return;
     logger::write("mold controller: request %s, owner %08X",sequence,h);
 }
-void* __cdecl sequence_hook(void* args){const auto* source=argument(args,0);const auto* sequence=argument(args,1);request(source,sequence);return real_sequence(args);}
+void* __cdecl sequence_hook(void* args){
+    // Every pattern request passes here; read script arguments only in scope.
+    if(enabled&&scope())request(argument(args,0),argument(args,1));
+    return real_sequence(args);
+}
 void* __cdecl spawn_hook(void* args){
     // The authored spawn script selects its owner before reading saved stage
     // flags. Reset transient state even when a same-zone reload reuses an ID.
@@ -305,8 +311,13 @@ bool beam_target(void* actor,void*& target){
     target=nullptr;if(!enabled||!scope()||at<u32>(actor,0x1c)!=boss.owner||boss.step!=3||now()>boss.shot_until)return false;
     target=fn<resolve_t>(0x4654b0)(&boss.target,nullptr);return target&&at<float>(target,0x27c)>0;
 }
+bool requested(){return was_requested;}
+xml1_capability_rules::registration capability(){
+    return xml1_capability_rules::master_mold(was_requested,installed,saved_stage.first,saved_stage.width);
+}
 void install(HMODULE game){
-    if(!ini::flag(L"Game",L"Xml1MasterMold",false))return;
+    was_requested=ini::flag(L"Game",L"Xml1MasterMold",false);installed=false;
+    if(!was_requested)return;
     trace=ini::flag(L"Test",L"MoldTrace",false);
     if(reinterpret_cast<std::uintptr_t>(game)!=limits_rules::image_base)return;
     const auto binding=mold_combat_rules::parse_binding(ini::text(L"Game",L"Xml1MoldStage").value_or(""));
@@ -362,7 +373,7 @@ void install(HMODULE game){
         brain_patch};
     xml1_hook_transaction::memory memory;
     bool safe=true;
-    if(xml1_hook_transaction::apply(memory,writes,&safe)){enabled=true;logger::write("mold controller: scoped opt-in requests and native AI update installed (no external scheduled events)");}
+    if(xml1_hook_transaction::apply(memory,writes,&safe)){enabled=installed=true;logger::write("mold controller: scoped opt-in requests and native AI update installed (no external scheduled events)");}
     else if(safe)logger::write("mold controller: dependency transaction refused; native fallback retained");
     else {game_version::refuse_startup();logger::write("mold controller: rollback/protection verification failed; process startup refused");}
 }

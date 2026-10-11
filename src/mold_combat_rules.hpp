@@ -44,4 +44,12 @@ struct deadlines {
     }
 };
 inline std::uint32_t ranged_choice(float random){return random<.25f?0x90:random<.5f?0xc0:0x180;}
+// Online play is lockstep: every peer runs this boss's AI update. Native
+// _ACTIVE_HERO_ follows each machine's local player index there, so a session
+// uses the first player slot holding a living hero, which every peer shares.
+struct player_hero {std::uint32_t handle=0;bool living=false;};
+inline int session_hero(const std::array<player_hero,4>& slots){
+    for(int i=0;i<4;++i)if(slots[i].handle&&slots[i].living)return i;
+    return -1;
+}
 }

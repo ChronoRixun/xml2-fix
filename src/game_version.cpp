@@ -21,7 +21,8 @@ namespace game_version
 		bool version_verified = false;
 		bool gameplay_required = false, gameplay_verified = false;
 		void (*show_refusal)() = nullptr;
-		// These experimental rules have no shared gameplay-capability entry yet.
+		// The turret experiment and native projectile diagnostic have no shared
+		// gameplay-capability entry. Master Mold registers rule 3 instead.
 		// Capture the request once: later INI edits cannot reopen a patched process.
 		bool experimental_offline = false;
 		bool installation_unsafe = false;
@@ -32,7 +33,7 @@ namespace game_version
 			if (experimental_offline)
 			{
 				WSASetLastError(WSAEACCES);
-				logger::write_once("xml1-controller-online-refused", "online: refused: experimental XML1 controllers are not covered by shared gameplay agreement");
+				logger::write_once("xml1-controller-online-refused", "online: refused: the XML1 turret experiment/projectile diagnostic is not covered by shared gameplay agreement");
 				return INVALID_SOCKET;
 			}
 			if (!save_guard_rules::online_allowed(lc_required,version_verified,gameplay_required,gameplay_verified))
@@ -71,6 +72,13 @@ namespace game_version
 		return !installation_unsafe && save_guard_rules::startup_allowed(lc_required || gameplay_required || experimental_offline,real_socket != nullptr);
 	}
 	void refuse_startup() { installation_unsafe = true; }
+	const char* startup_error()
+	{
+		if (installation_unsafe)
+			return "An XML1 controller patch failed and its original game code could not be verified as restored.";
+		return lc_required ? "The required LC network exclusion hook could not be installed."
+		                   : "The required network exclusion hook for the shared gameplay agreement could not be installed.";
+	}
 
 	bool offline_gameplay_ready() { return experimental_offline && real_socket != nullptr; }
 
@@ -91,8 +99,7 @@ namespace game_version
 		version_verified = false;
 		installation_unsafe = false;
 		real_socket = nullptr;
-		experimental_offline = ini::flag(L"Game",L"Xml1MasterMold",false) ||
-			ini::flag(L"Game",L"Xml1Turrets",false) || ini::number(L"Test",L"NativeProjectileProbe",0) == 1;
+		experimental_offline = ini::flag(L"Game",L"Xml1Turrets",false) || ini::number(L"Test",L"NativeProjectileProbe",0) == 1;
 		lc_required = save_format_rules::parse_mode(ini::text(L"Save",L"Format").value_or("")).value == save_format_rules::mode::lc;
 		gameplay_required = lc_required || ini::text(L"Game", L"ExplosiveFirstHit").has_value();
 		gameplay_verified = false;
