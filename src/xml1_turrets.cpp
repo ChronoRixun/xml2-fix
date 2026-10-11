@@ -3,6 +3,8 @@
 #include "ini.hpp"
 #include "log.hpp"
 #include "limits_rules.hpp"
+#include "game_version.hpp"
+#include "xml1_hook_memory.hpp"
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -175,6 +177,11 @@ void install(HMODULE) {
     const bool diagnostic=ini::number(L"Test",L"NativeProjectileProbe",0)==1;
     const bool mold=ini::flag(L"Game",L"Xml1MasterMold",false);
     if(!diagnostic&&!mold)return;
+    if(!game_version::offline_gameplay_ready()) { logger::write("XML1 combat: online exclusion unavailable; no hooks installed"); return; }
+    if(mold) {
+        if(diagnostic)logger::write("XML1 combat: diagnostic and controller are mutually exclusive; diagnostic refused");
+        return; // Controller installs its complete dependency set in one transaction.
+    }
     source_name=ini::text(L"Test",L"ProjectileSource").value_or("");
     target_name=ini::text(L"Test",L"ProjectileTarget").value_or("");
     entity_name=ini::text(L"Test",L"ProjectileEntity").value_or("");
@@ -207,5 +214,13 @@ void install(HMODULE) {
     VirtualProtect(slot,sizeof(void*),old,&old);
     logger::write("turret probe: installed opt-in diagnostic; invoke causeTroubleForAutotest()");
 }
-bool beam_ready(){return installed_beam;}
+bool prepare_beam(xml1_hook_transaction::patch& patch){
+    if(!game_version::offline_gameplay_ready()||!supported())return false;
+    patch.address=0x45230b;
+    patch.before={0x8d,0x8c,0x24,0x14,0x02,0x00,0x00};
+    patch.after={0xe9,0,0,0,0,0x90,0x90};
+    const u32 delta=static_cast<u32>(reinterpret_cast<std::uintptr_t>(&beam_stub))-0x452310;
+    std::memcpy(patch.after.data()+1,&delta,4);
+    return true;
+}
 }

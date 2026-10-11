@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Preserve default-off XML1 combat experiments with an atomic install guard,
+  native-AI Master Mold updates and spawn/load reconstruction. Experimental
+  controller requests refuse online play pending shared gameplay agreement.
+  Full encounter/turret acceptance remains open; see `docs/xml1-controllers.md`.
 - Keep the LC startup veto on instruction-cache flush failures and every patch protection
   restoration failure, including preflight cleanup. Stop further writes on a failed flush
   and attempt all remaining protection restores before refusing startup.

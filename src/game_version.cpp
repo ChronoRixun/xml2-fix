@@ -21,10 +21,19 @@ namespace game_version
 		bool version_verified = false;
 		bool gameplay_required = false, gameplay_verified = false;
 		void (*show_refusal)() = nullptr;
+		// These experimental rules have no shared gameplay-capability entry yet.
+		// Capture the request once: later INI edits cannot reopen a patched process.
+		bool experimental_offline = false;
 		using socket_t = SOCKET(WSAAPI*)(int,int,int);
 		socket_t real_socket = nullptr;
 		SOCKET WSAAPI guarded_socket(int family, int type, int protocol)
 		{
+			if (experimental_offline)
+			{
+				WSASetLastError(WSAEACCES);
+				logger::write_once("xml1-controller-online-refused", "online: refused: experimental XML1 controllers are not covered by shared gameplay agreement");
+				return INVALID_SOCKET;
+			}
 			if (!save_guard_rules::online_allowed(lc_required,version_verified,gameplay_required,gameplay_verified))
 			{
 				if (show_refusal) show_refusal();
@@ -58,8 +67,10 @@ namespace game_version
 
 	bool startup_allowed()
 	{
-		return save_guard_rules::startup_allowed(lc_required || gameplay_required,real_socket != nullptr);
+		return save_guard_rules::startup_allowed(lc_required || gameplay_required || experimental_offline,real_socket != nullptr);
 	}
+
+	bool offline_gameplay_ready() { return experimental_offline && real_socket != nullptr; }
 
 	bool require_gameplay_agreement(HMODULE game)
 	{
@@ -69,17 +80,20 @@ namespace game_version
 			real_socket = reinterpret_cast<socket_t>(iat_hook::hook(game,"WS2_32.dll","socket",23,reinterpret_cast<void*>(&guarded_socket)));
 		return real_socket != nullptr;
 	}
-	bool gameplay_online_allowed() { return save_guard_rules::online_allowed(lc_required,version_verified,gameplay_required,gameplay_verified); }
+	bool gameplay_online_allowed() { return !experimental_offline && save_guard_rules::online_allowed(lc_required,version_verified,gameplay_required,gameplay_verified); }
 	bool needs_gameplay_agreement() { return gameplay_required; }
 	void bind_gameplay_refusal(void (*show)()) { show_refusal = show; }
 	void bind_gameplay_agreement(bool verified) { gameplay_verified = verified; }
 	void install(const HMODULE game)
 	{
 		version_verified = false;
+		real_socket = nullptr;
+		experimental_offline = ini::flag(L"Game",L"Xml1MasterMold",false) ||
+			ini::flag(L"Game",L"Xml1Turrets",false) || ini::number(L"Test",L"NativeProjectileProbe",0) == 1;
 		lc_required = save_format_rules::parse_mode(ini::text(L"Save",L"Format").value_or("")).value == save_format_rules::mode::lc;
 		gameplay_required = lc_required || ini::text(L"Game", L"ExplosiveFirstHit").has_value();
 		gameplay_verified = false;
-		if (lc_required || gameplay_required)
+		if (lc_required || gameplay_required || experimental_offline)
 		{
 			real_socket = reinterpret_cast<socket_t>(iat_hook::hook(game,"WS2_32.dll","socket",23,reinterpret_cast<void*>(&guarded_socket)));
 			if (!real_socket)
