@@ -1750,6 +1750,13 @@ namespace
 	using tick_timer_t = void(__fastcall*)(void*, void*, float);
 	init_timer_t test_original_init = nullptr;
 	tick_timer_t test_original_tick = nullptr;
+	move_triggers_runtime::start_t test_replacement_start_entry = nullptr;
+	init_timer_t test_replacement_init_entry = nullptr;
+	void* test_replacement_move = nullptr;
+	void* test_replacement_packet = nullptr;
+	bool test_replace_on_trigger_zero = false;
+	bool test_replacement_initialized_future = false;
+	bool test_fallback_packet_restored = false;
 	auto& test_times(void* actor) { return *move_triggers_rules::times_for(test_actor_times, static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(actor))); }
 	move_triggers_rules::actor_times* test_lookup(void* actor) { return move_triggers_rules::times_for(test_actor_times, static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(actor))); }
 	std::array<DWORD, 127> test_fractions{};
@@ -1771,13 +1778,40 @@ namespace
 		std::memcpy(static_cast<std::uint8_t*>(actor) + 0x378, &move, 4);
 		move_triggers_runtime::initialize_times(actor, nullptr, test_start_packet, 2.0f);
 	}
+	void __fastcall test_native_replacement_start(void* actor, void*, DWORD a, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD)
+	{
+		if (a == 999) return;
+		move_triggers_runtime::capture_times(actor, test_replacement_move, test_replacement_packet);
+		test_replacement_start_entry(actor, nullptr, 999,2,3,4,5,6,7,8);
+		const auto& enclosing = move_triggers_runtime::get(actor);
+		test_fallback_packet_restored = enclosing.packet == move_triggers_runtime::address(test_replacement_packet)
+			&& enclosing.move == move_triggers_runtime::address(test_replacement_move) && enclosing.source[0] == 0x3f400000;
+		const DWORD move = move_triggers_runtime::address(test_replacement_move);
+		std::memcpy(static_cast<std::uint8_t*>(actor) + 0x378, &move, 4);
+		test_replacement_init_entry(actor, nullptr, test_replacement_packet, 2.0f);
+		test_replacement_initialized_future = true;
+		for (int i = 0; i < move_triggers_rules::stock_capacity; ++i)
+		{
+			float deadline = 0; std::memcpy(&deadline, static_cast<std::uint8_t*>(actor) + 0x640 + i * 4, 4);
+			test_replacement_initialized_future &= deadline == 21.5f;
+		}
+	}
 	float __cdecl test_timer_clock() { return test_clock_value; }
 	float __fastcall test_motion_time(void*, void*, int) { return 0.9f; }
 	void* __cdecl test_timer_get_manager() { return &test_timer_manager; }
 	bool __fastcall test_based(void*, void*, const DWORD* event) { return event && *event == 1; }
 	bool __fastcall test_unscaled(void*, void*, const DWORD* event) { return event && *event == 2; }
 	void* __fastcall test_get_timer_event(void*, void*, int i) { return i >= 0 && i < test_timer_capacity ? &test_event_modes[i] : nullptr; }
-	bool __fastcall test_fire_timer(void*, void*, int i, void*, void*) { test_timers_fired.push_back(i); return true; }
+	bool __fastcall test_fire_timer(void*, void*, int i, void* actor, void*)
+	{
+		test_timers_fired.push_back(i);
+		if (i == 0 && test_replace_on_trigger_zero)
+		{
+			test_replace_on_trigger_zero = false;
+			test_replacement_start_entry(actor, nullptr, 1,2,3,4,5,6,7,8);
+		}
+		return true;
+	}
 	bool run_timer_init(const void* fn, void* actor, void* packet, float scale) {
 		__try { reinterpret_cast<init_timer_t>(const_cast<void*>(fn))(actor, nullptr, packet, scale); return true; }
 		__except(EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -1931,6 +1965,54 @@ namespace
 			test_clock_value = 20.0f; test_timers_fired.clear();
 			CHECK(run_timer_tick(at(0x430a00), overflow_actor.data(), 0.1f));
 			CHECK(test_timers_fired.size() == 19 && overflow_actor.slack_untouched() && overflow_packet.slack_untouched());
+			// With no cache entry, A's trigger zero starts B through the patched start
+			// and initializer. B's deadlines must replace the enclosing tick's timers;
+			// a separate nested fallback array would fire A's stale triggers 1..18.
+			test_actor_times.assign(timer_slots, {});
+			for (DWORD i = 1; i <= timer_slots; ++i)
+				CHECK(times_for(test_actor_times, i * 0x2000) != nullptr);
+			move_triggers_runtime::lookup = &test_lookup;
+			CHECK(test_lookup(overflow_actor.data()) == nullptr);
+			test_block replacement_packet(0x68);
+			DWORD* replacement_move_vtable = test_move_vtable;
+			test_replacement_move = &replacement_move_vtable;
+			test_replacement_packet = replacement_packet.data();
+			const float future_fraction = 0.75f;
+			for (int i = 0; i < stock_capacity; ++i)
+				std::memcpy(replacement_packet.data() + 8 + i * 4, &future_fraction, 4);
+			// Keep native combo/control deadlines in the future too: this synthetic
+			// move implements event methods only, not the unrelated end-combo methods.
+			const float future_control_fraction = 100.0f;
+			for (DWORD offset : {0x58u, 0x5cu, 0x60u}) std::memcpy(replacement_packet.data() + offset, &future_control_fraction, 4);
+			test_event_modes.fill(0); // world-clock deadlines: 20 + 0.75 * 2 = 21.5
+			const float due = 19.0f;
+			for (int i = 0; i < stock_capacity; ++i)
+				std::memcpy(overflow_actor.data() + 0x640 + i * 4, &due, 4);
+			hook(0x430d4c, reinterpret_cast<const void*>(&test_native_replacement_start));
+			FlushInstructionCache(GetCurrentProcess(), image, size);
+			test_replacement_start_entry = reinterpret_cast<move_triggers_runtime::start_t>(at(0x430d40));
+			test_replacement_init_entry = reinterpret_cast<init_timer_t>(at(0x42c390));
+			test_replace_on_trigger_zero = true; test_replacement_initialized_future = false;
+			test_fallback_packet_restored = false; test_timers_fired.clear();
+			CHECK(run_timer_tick(at(0x430a00), overflow_actor.data(), 0.1f));
+			CHECK(!test_replace_on_trigger_zero && test_replacement_initialized_future);
+			CHECK(test_fallback_packet_restored);
+			CHECK(test_timers_fired == std::vector<int>{0});
+			CHECK(move_triggers_runtime::field(overflow_actor.data(), 0x378) == move_triggers_runtime::address(test_replacement_move));
+			for (int i = 0; i < stock_capacity; ++i)
+			{
+				float deadline = 0; std::memcpy(&deadline, overflow_actor.data() + 0x640 + i * 4, 4);
+				// Native dispatch clears the fired index after its callback returns.
+				CHECK(deadline == (i == 0 ? -1.0f : 21.5f));
+			}
+			CHECK(run_timer_tick(at(0x430a00), overflow_actor.data(), 0.1f));
+			CHECK(test_timers_fired == std::vector<int>{0});
+			for (int i = 1; i < stock_capacity; ++i)
+			{
+				float deadline = 0; std::memcpy(&deadline, overflow_actor.data() + 0x640 + i * 4, 4);
+				CHECK(deadline == 21.5f);
+			}
+			CHECK(overflow_actor.slack_untouched() && replacement_packet.slack_untouched());
 			move_triggers_runtime::lookup = &test_lookup;
 		}
 		VirtualFree(code, 0, MEM_RELEASE); VirtualFree(image, 0, MEM_RELEASE);

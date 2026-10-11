@@ -28,11 +28,21 @@ namespace move_triggers_runtime
 	{
 		fallback_scope* prior;
 		void* actor;
-		actor_times times;
+		actor_times storage;
+		actor_times* times = &storage;
 		explicit fallback_scope(void* a) : prior(fallback), actor(a)
 		{
-			times.actor = address(a); times.source.fill(0xbf800000); times.scheduled.fill(0xbf800000);
-			std::memcpy(times.scheduled.data(), static_cast<std::uint8_t*>(a) + 0x640, stock_capacity * 4);
+			// A native event can replace this actor's move while an outer tick still
+			// holds its timer pointer. Share that timer storage through same-actor
+			// reentry, including across intervening scopes for other actors. Packet
+			// ownership remains independently saved/restored by start_move's source_scope.
+			for (auto* f = prior; f; f = f->prior)
+				if (f->actor == a) { times = f->times; break; }
+			if (times == &storage)
+			{
+				storage.actor = address(a); storage.source.fill(0xbf800000); storage.scheduled.fill(0xbf800000);
+				std::memcpy(storage.scheduled.data(), static_cast<std::uint8_t*>(a) + 0x640, stock_capacity * 4);
+			}
 			fallback = this;
 		}
 		~fallback_scope() { fallback = prior; }
@@ -41,7 +51,7 @@ namespace move_triggers_runtime
 	inline actor_times& get(void* actor)
 	{
 		if (auto* t = cached(actor)) return *t;
-		for (auto* f = fallback; f; f = f->prior) if (f->actor == actor) return f->times;
+		for (auto* f = fallback; f; f = f->prior) if (f->actor == actor) return *f->times;
 		// Cancellation can run directly from construction, outside a wrapped operation.
 		thread_local actor_times scratch;
 		scratch = {}; scratch.actor = address(actor); scratch.source.fill(0xbf800000); scratch.scheduled.fill(0xbf800000);

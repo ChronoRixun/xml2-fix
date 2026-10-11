@@ -50,6 +50,9 @@ The native actor stores nineteen scheduled floats at `+0x640..+0x688`. Those fie
 addresses and are mirrored after initialization and each update. The DLL reserves 1024 actor-address
 cache entries (the native actor arena reuses 32 addresses), each holding source and scheduled arrays
 through the configured limit. The cache is preallocated and retired after the guarded actor-arena destructor (`0x4613e0`) returns. Exhaustion is logged and uses thread-local invocation storage with inactive extra entries, preserving native nineteen-event scheduling without terminating the game.
+Nested fallback operations for the same actor share scheduled timer storage, including across scopes for
+other actors. A move started by an event replaces the enclosing tick's deadlines; packet/source ownership
+is saved and restored independently by each start invocation.
 
 The original nineteen-float stack packet stays intact. At `0x430f9a`, the DLL captures the packet and
 reads additional authored times through the move's existing virtual getter. The initializer's source
@@ -80,6 +83,9 @@ Native timing fixtures also execute initialization, paused updates, dispatch and
 20, 27, 64 and 127. Every native actor field is byte-identical to stock after initializing the first
 nineteen entries. High events fire once; inactive entries stay inactive; mirrored fields and canaries
 are checked. The same production callbacks execute the native packet producer/capture thunk, real initializer and paused/active dispatch. The eight-argument entry/trampoline is checked with a failed nested start between capture and initialization. Cache exhaustion retains the native nineteen and canaries; arena retirement permits thousands of later addresses. `[Test] MoveTriggerTrace=1` logs actor handle generations, arena epochs, occupancy and callback thread IDs for private diagnostics.
+The exhaustion regression fills all cache entries, then has trigger zero start a replacement move through
+the patched entry and initializer. Only trigger zero dispatches; replacement deadlines 1..18 remain in the
+future, including on the next tick, and a failed nested start preserves the enclosing packet/source.
 The pipe `status` reports `move_triggers 64` only after a successful installed raise.
 
 See the private restore-wave report for source census, full gates and live acceptance evidence.
