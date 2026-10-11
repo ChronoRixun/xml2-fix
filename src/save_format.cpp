@@ -6,6 +6,7 @@
 // Guards integration: policy and file operations live outside capture/lifetime.
 #include "save_guard_rules.hpp"
 #include "save_content_guards.hpp"
+#include "mod_loader.hpp"
 #include "save_trace.hpp"
 #include "trivia_rules.hpp"
 #include "ini.hpp"
@@ -654,7 +655,13 @@ namespace save_format
 			// Prepare content identity before the front end can enter an online session.
 			// Captures and overwrite preflight use a nonblocking change check, never a tree scan.
 			const auto digest_start = GetTickCount64();
-			if (!lcsave::prepare_conversation_digest(tables, error))
+			const auto generation = mod_loader::generation();
+			lcsave::ConversationSources sources;
+			sources.lookup_root = mod_loader::game_root();
+			sources.mod_files = mod_loader::effective_files();
+			sources.resolve = &mod_loader::resolve_file;
+			sources.unchanged = [generation, build] { return generation != 0 && mod_loader::generation() == generation && mod_loader::matches_build(build); };
+			if (!lcsave::prepare_conversation_packages(tables, sources, error))
 			{
 				fail_closed("the conversation identity of this build cannot be prepared: " + error);
 				return;
@@ -869,8 +876,11 @@ namespace save_format
 			if (!visit_known || meta.zone!=active_visit.zone)
 				meta.capture_flags|=save_core_rules::capture_unobserved;
 			std::string error;
-			if (ready!=readiness::ok || !lcsave::conversation_digest(tables,meta.zone,meta.conversation_digest,error))
+			if (ready!=readiness::ok || !lcsave::prepared_conversation_digest(tables,meta.zone,meta.conversation_digest,error))
+			{
 				meta.capture_flags|=save_core_rules::capture_unobserved;
+				if (!error.empty()) logger::write("save core: conversation provenance refused: %s",error.c_str());
+			}
 			if (ini::flag(L"Debug", L"SaveTiming", false)) logger::write("save timing: conversation digest %llu ms", static_cast<unsigned long long>(GetTickCount64()-capture_start));
 			capturing=&meta;
 			const bool ok=retail_capture(record,nullptr,name,flag,stamp);

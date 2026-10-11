@@ -315,6 +315,8 @@ namespace lcsave::detail
 	};
 
 	std::vector<Hash> conversation_bits(const Build& build, const std::string& zone);
+	ConversationPackage pinned_conversation_package(const Build& build, const std::string& zone);
+	void pin_conversation_packages(Build& build, const ConversationSources& sources);
 	Hash conversation_package_digest(const Hash& zone, const std::vector<Hash>& bits);
 	void restore_conversation(const Value& record, const std::string& zone, const TablesData& tables,
 		u32 (&words)[5], std::vector<std::string>& notes);

@@ -27,5 +27,11 @@ namespace mod_loader
 	// engine DLLs that read game data). Logs every access when `trace` is set.
 	std::vector<std::pair<std::wstring, std::wstring>> effective_files();
 
+	// Same effective lookup used by the hooked file APIs; no file read.
+	std::wstring resolve_file(const std::wstring& path);
+	std::wstring game_root();
+	bool matches_build(const std::wstring& build);
+	unsigned generation(); // zero until the initial index is ready
+
 	void install(std::initializer_list<const char*> modules, bool trace);
 }

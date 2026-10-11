@@ -168,19 +168,36 @@ Each table has provenance[32], zone-key-hash[32], u32 bit count, then identity h
 four, at most 128. Duplicate keys/identities, bad framing/version/CRC refuse malformed table files. V39 checks
 the generated set. Rebuild savefiles after the era ledger changes; game asset preparation caches remain valid.
 
-## Conversation digest cache
+## Conversation provenance preparation
 
-`conversation_digest` keeps a verified snapshot per loaded build. Standalone callers
-validate the sorted inventory with attribute-only handles and reuse the digest if file
-identity, size, write time and change time match on NTFS/ReFS. Other filesystems retain
-full hashing. A changed inventory is rehashed and checked again before publication;
-failures never fall back to old identity.
+Historical whole-tree `conversation_digest` values remain era-map keys. They are
+not interchangeable with the zone-specific `LCCONV2` package digest. Standalone
+whole-tree callers retain version-aware refresh and stable-inventory validation;
+engine tables refuse use of that API to label live marks.
 
-The engine calls `prepare_conversation_digest` before play. It starts a recursive
-Windows directory notification before hashing, then pins the verified identity. All
-later capture and reverse-reader calls check that notification without waiting or
-scanning files. A change or notification failure refuses the operation until restart
-with fresh build tables. Live modification of a loaded build is unsupported, as with
-its other prepared tables. No worker thread or save-format change is introduced.
-The synthetic `lcsave_conversation_digest_test` covers caching, mutation, failed
-refresh recovery, pinning and refusal after a pinned tree changes.
+LC readiness calls `prepare_conversation_packages` before player-file import/load.
+It precomputes the effective package identities for every base or mod-added zone,
+using `mod_loader::resolve_file`, the same lookup used by the native file hooks.
+Later enabled mods win. Preparation binds to that lookup's executable root, stable
+index generation and working-directory context. Capture uses
+`prepared_conversation_digest`; restore's `conversation_bits` uses the same pinned
+identities. Neither path reads/decodes packages, scans files or resolves mod winners
+on a gameplay frame. Missing/unprepared zones and failed preparation refuse.
+
+Overlapped directory notifications cover Packages, Conversations, mods and root
+creation/replacement. Polling consumes completed buffers in memory; known directory
+metadata-only updates are ignored. File/name changes, mod order/index/context changes,
+notification overflow/failure and unstable preparation refuse until restart with
+fresh tables. Re-arming a directory notification is asynchronous. No worker performs
+game I/O. Initial synchronous preparation can still delay the front end on cold storage.
+
+Conversation-file mod replacements with unknown branch topology, nested package
+references, non-PKGB map-package overrides, reparse/unreadable dependencies, effective
+packages outside watched roots and mismatched lookup contexts explicitly refuse.
+Package ranking overrides using existing conversation identities are supported.
+The format and both digest algorithms remain unchanged.
+
+`lcsave_conversation_packages_test` exercises the called capture API and restore
+consumer with actual mod indexing, exclusively locked package data, invalidation,
+lookup contexts and first-capture/preparation failures. The V-TBD Python gate runs
+that executable; it does not inspect source strings.

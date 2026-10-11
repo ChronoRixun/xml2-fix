@@ -14,6 +14,8 @@
 // runtime proofs (registration traces, live counts) are the engine side's.
 
 #include <array>
+#include <functional>
+#include <utility>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -107,6 +109,17 @@ namespace lcsave
 
 	// Engine-only: pin a verified digest before play, refusing later tree changes without scanning.
 	bool prepare_conversation_digest(const Tables& tables, std::string& error);
+	struct ConversationSources
+	{
+		std::wstring lookup_root; // executable root used by the actual mod lookup
+		std::vector<std::pair<std::wstring, std::wstring>> mod_files;
+		std::function<std::wstring(const std::wstring&)> resolve;
+		std::function<bool()> unchanged; // verifies the loader index generation without I/O
+	};
+	// Native capture/restore preparation: effective zone packages, not the historical tree hash.
+	bool prepare_conversation_packages(const Tables& tables, const ConversationSources& sources, std::string& error);
+	bool prepared_conversation_digest(const Tables& tables, const std::string& zone,
+		std::array<std::uint8_t, 32>& out, std::string& error);
 	struct NativeLoadDemand
 	{
 		std::uint32_t instances = 0, attached_enhancements = 0, world_items = 0;

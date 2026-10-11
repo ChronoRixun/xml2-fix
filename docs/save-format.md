@@ -335,27 +335,33 @@ must show the LC refusal notice and return ERROR_DLL_INIT_FAILED before simulate
 
 ## Online saves and conversation identity
 
-LC readiness calls `prepare_conversation_digest` before entering play. It starts a
-recursive Windows change notification before computing the conversation identity,
-checks that preparation was stable, and pins that digest to the loaded build tables.
-Captures and overwrite preflight then make one nonblocking notification check. They
-never enumerate or hash the conversation tree on a gameplay frame. Changes during
-play, or notification failure, refuse saving/loading until restart; prepared tables
-represent an immutable build for the process lifetime.
+LC readiness precomputes effective per-zone package identities through the mod
+loader's native lookup, including later-mod winners, before player-file import/load.
+Native capture and restore use those pinned package identities with nonblocking
+notification and lookup-context checks. They never read/decode conversation packages,
+enumerate files or refresh provenance on a gameplay frame. Historical global tree
+hashes remain mapping keys; they cannot label live package-ranked heard marks.
 
-Standalone converter callers still validate file versions and refresh changed trees.
-Attribute checks include identity, size, write time and change time on NTFS/ReFS;
-other filesystems retain full hashing. Refresh is published only after a second
-inventory confirms a stable tree. Initial engine preparation can still take time on
-cold storage. Digest ordering, hash algorithm and LC bytes are unchanged.
-`[Debug] SaveTiming=1` logs capture, conversation-digest and write durations.
+Package, conversation and mod dependency trees are watched, including order changes
+and new/replaced roots. Known directory-only metadata notifications do not invalidate
+identity; changed files/names, overflow or watcher failure do. Preparation and table
+root must match the initialized native lookup and working directory. Unsupported
+conversation overrides/topology, nested packages, unwatchable/reparse dependencies
+or sources outside watched roots refuse clearly. Any detected change requires a
+restart; no partially prepared or older cache is used after failure. Cold preparation
+may delay the front end. Save layout, digest ordering and algorithms are unchanged.
+`[Debug] SaveTiming=1` retains capture/digest/write diagnostics.
 
 ## SPEC: V-TBD (number assigned at merge)
 
-`python test/validate_coop_save_cache.py` checks preparation, cache ownership,
-nonblocking pinned lookup before inventory, and stable refresh boundaries.
-`lcsave_conversation_digest_test` verifies unchanged identity without data reopens,
-standalone invalidation after edits with restored write times, additions, renames,
-removals and failed refreshes, plus pinned engine refusal after a tree mutation.
-Initial LC readiness must pin identity before gameplay. These checks accompany the
-native save-core rules and save-format/content gates.
+`python test/validate_coop_save_cache.py --build ../xbuild` runs
+`lcsave_conversation_packages_test`, exercising the same prepared capture API and
+restore consumer used by the engine. Invented fixtures verify later-mod package
+winners; capture and nonzero-mark restore with package data exclusively locked;
+ranking/byte changes, added overrides, load-order/index changes and lookup context
+mismatches; unprepared capture and preparation failure. Windows notification
+completion is asynchronous: fixture mutations await detection without reading
+package data, and successful captures during delivery retain the already-loaded
+pinned identity. Detected changes refuse rather than re-label loaded marks from disk.
+Standalone historical-tree cache mutation tests remain separate. No source-string
+match can substitute for these behavioral checks.

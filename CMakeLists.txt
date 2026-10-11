@@ -158,3 +158,10 @@ endif()
 # Conversation identity caching and invalidation, using only invented filesystem fixtures.
 add_executable(lcsave_conversation_digest_test test/conversation_digest_test.cpp)
 target_link_libraries(lcsave_conversation_digest_test PRIVATE lcsave)
+
+# Effective per-zone conversation provenance: actual lookup, capture/restore, no game.
+add_executable(lcsave_conversation_packages_test test/conversation_packages_test.cpp
+    src/mod_loader.cpp src/iat_hook.cpp src/log.cpp)
+target_include_directories(lcsave_conversation_packages_test PRIVATE src src/lcsave)
+target_link_libraries(lcsave_conversation_packages_test PRIVATE lcsave)
+target_compile_definitions(lcsave_conversation_packages_test PRIVATE FIX_LOG_FILE=L"conversation-pin-test.log")

@@ -26,6 +26,10 @@
 - Prepare and cache verified conversation identity before play so LC saves do not
   scan the conversation tree on the game/network thread. Changes during play
   refuse saving until restart; the save format and digest bytes are unchanged.
+- Compose co-op provenance caching with conversation era maps: pin effective per-zone
+  packages through the native mod lookup, including later-mod ranking winners.
+  Watch package/order dependencies and refuse unsupported topology or lookup contexts.
+  Capture and restore no longer read/decode packages on a gameplay frame.
 
 - Fix legacy imports whose equipped items were written in a different era from the campaign's talents.
   Translate hero and restore-bank equipment with the detected item era, including semantic dumps.

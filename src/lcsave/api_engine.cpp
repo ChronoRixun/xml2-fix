@@ -185,6 +185,7 @@ namespace lcsave
 			const auto root = std::filesystem::path(tables.data->build->data_root) / L"Conversations";
 			auto& cache = *tables.data->build->conversations;
 			std::lock_guard lock(cache.mutex);
+			if (cache.engine_required) detail::fail("historical tree digests cannot label live package provenance");
 			// Engine tables are pinned before play. Never enumerate or refresh on a frame.
 			if (cache.change_notification)
 			{
@@ -252,6 +253,27 @@ namespace lcsave
 		{
 			if (!tables.loaded() || !tables.data->build) detail::fail("conversation digest needs build tables");
 			out = detail::conversation_package_digest(key_hash1(zone, Enc::latin1), detail::conversation_bits(*tables.data->build, zone));
+		});
+	}
+
+	bool prepare_conversation_packages(const Tables& tables, const ConversationSources& sources, std::string& error)
+	{
+		error.clear();
+		return guarded(error, [&]
+		{
+			if (!tables.loaded() || !tables.data->build) detail::fail("conversation preparation needs build tables");
+			detail::pin_conversation_packages(*tables.data->build, sources);
+		});
+	}
+
+	bool prepared_conversation_digest(const Tables& tables, const std::string& zone,
+		std::array<std::uint8_t, 32>& out, std::string& error)
+	{
+		error.clear();
+		return guarded(error, [&]
+		{
+			if (!tables.loaded() || !tables.data->build) detail::fail("conversation capture needs build tables");
+			out = detail::pinned_conversation_package(*tables.data->build, zone).digest;
 		});
 	}
 
