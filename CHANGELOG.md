@@ -8,6 +8,8 @@
   its session and players. Refusals now carry their reason in the native incompatibility message (0x1d);
   the host receives it even from a player who has only queried its address. Corrects 0x18 to the querying
   PC's game-info message (live wire order): an incompatible host is not listed and the host is told.
+  The notice clears only on a confirmed admission (the game's 0x1b follow-up), and the receiver installs
+  independently of the presentation, so a joiner's refusal is logged even where it cannot be drawn.
 
 - Keep the LC startup veto on instruction-cache flush failures and every patch protection
   restoration failure, including preflight cleanup. Stop further writes on a failed flush

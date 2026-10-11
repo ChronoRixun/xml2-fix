@@ -10,7 +10,7 @@ namespace gameplay_agreement
  {
   using namespace gameplay_agreement_rules;
   gameplay_capabilities::record capabilities;
-  bool failure_ready=false,transport_ready=false,notice_ready=false;
+  bool failure_ready=false,transport_ready=false,receiver_ready=false,notice_ready=false;
   void* noticed_menu=nullptr;        // the host lobby that shows our notice in place of its advice,
   const char* notice_line=nullptr;   // what it says, until a join is admitted, the host closes
   unsigned long long notice_since=0; // or notice_ms pass
@@ -81,7 +81,7 @@ namespace gameplay_agreement
   void host_notice(refusal why,bool remote)
   {
    logger::write("online: host notice: %s (reason %u, %s)",host_notice_text(why,remote),unsigned(why),remote ? "from the joining player" : "found here");
-   if(!notice_ready)return;
+   if(!notice_ready){logger::write("online: host notice not drawn (its guards failed at startup); the line above is the record");return;}
    if(void* menu=current_host_menu()){
     noticed_menu=menu;notice_line=host_notice_detail(why,remote);notice_since=GetTickCount64();
     logger::write("online: host notice in the lobby for %llu s",notice_ms/1000);return;
@@ -149,7 +149,9 @@ namespace gameplay_agreement
     event e{};if(event_fields(raw,e)){notify_remote(e,why);return fail_local(e,joining,why);}
     if(joining)dialog(false);else host_notice(why,false);return 0;
    }
-   if(role==endpoint::host)clear_host_notice();
+   // A matching record is not yet an admission: retail 0x609970 can still refuse a full session (0x615910 ->
+   // 0x609a95, sends 0x1c) or fail to take a participant (0x6099b2). The notice clears when the 0x1b follow-up
+   // leaves (send_single), which retail sends only once the participant is taken.
    return reinterpret_cast<callback>(native)(raw);
   }
   struct packet
@@ -170,7 +172,10 @@ namespace gameplay_agreement
   int __fastcall send_direct(void* transport,void*,const void* address,int port,const std::uint8_t* header)
   { packet p;if(!p.build(header)){show_install_failure();return 0;}return reinterpret_cast<direct>(native_direct)(transport,address,port,p.header.data()); }
   void __fastcall send_single(void* session,void*,void* transport,const std::uint8_t* header,int flags)
-  { packet p;if(!p.build(header)){show_install_failure();return;}reinterpret_cast<send>(native_send)(session,transport,p.header.data(),flags); }
+  {
+   packet p;if(!p.build(header)){show_install_failure();return;}reinterpret_cast<send>(native_send)(session,transport,p.header.data(),flags);
+   if(header[0x10]==0x1b)clear_host_notice(); // the host-info follow-up: this participant is in; a stale refusal notice ends
+  }
   int __fastcall send_broadcast(void* session,void*,const std::uint8_t* header,int exclude,int participants,int mode)
   { packet p;if(!p.build(header)){show_install_failure();return 0;}return reinterpret_cast<broadcast>(native_broadcast)(session,p.header.data(),exclude,participants,mode); }
   bool enlist()
@@ -247,17 +252,27 @@ namespace gameplay_agreement
  int receive_ack(void* e){return receive(e,ack_size,native_ack,endpoint::joiner,0x1b);}
  bool prepare(HMODULE game)
  {
-  if(failure_ready)return true;
-  if(!retail(game,failure_guards)){logger::write("online: native refusal path guard failed; agreement unavailable");return false;}
-  const std::array patches{branch(native_join,&begin_join,0xe9),pointer(failure_text+1,incompatibility),pointer(rejection_registration+1,reinterpret_cast<void*>(&receive_rejection))};
-  failure_ready=apply(patches);if(!failure_ready)return false;
-  game_version::bind_gameplay_refusal(&show_install_failure);
-  // The host's notice is optional: without it refusals still work, the host only logs them.
-  if(!retail(game,notice_guards))logger::write("online: host refusal notice guard failed; refusals are logged only");
-  else {
-   const std::array notice{branch(host_info_register_call,&register_host_info,0xe8),branch(host_info_unregister_call,&release_host_info,0xe8),
-                           branch(host_advice_call,&host_advice,0xe8)};
-   notice_ready=apply(notice);if(!notice_ready)logger::write("online: host refusal notice could not be installed; refusals are logged only");
+  if(!failure_ready){
+   if(!retail(game,failure_guards)){logger::write("online: native refusal path guard failed; agreement unavailable");return false;}
+   const std::array patches{branch(native_join,&begin_join,0xe9),pointer(failure_text+1,incompatibility),pointer(rejection_registration+1,reinterpret_cast<void*>(&receive_rejection))};
+   failure_ready=apply(patches);if(!failure_ready)return false;
+   game_version::bind_gameplay_refusal(&show_install_failure);
+  }
+  // Both parts of the host's notice are optional and independent: without the receiver a joiner's own refusal
+  // goes unheard (the host's refusals are still logged); without the presentation every refusal is logged only.
+  if(!receiver_ready){
+   if(!retail(game,receiver_guards))logger::write("online: host refusal receiver guard failed; a joining player's refusal is not received here");
+   else {
+    const std::array receiver{branch(host_info_register_call,&register_host_info,0xe8),branch(host_info_unregister_call,&release_host_info,0xe8)};
+    receiver_ready=apply(receiver);if(!receiver_ready)logger::write("online: host refusal receiver could not be installed; a joining player's refusal is not received here");
+   }
+  }
+  if(!notice_ready){
+   if(!retail(game,presentation_guards))logger::write("online: host refusal notice guard failed; refusals are logged only");
+   else {
+    const std::array notice{branch(host_advice_call,&host_advice,0xe8)};
+    notice_ready=apply(notice);if(!notice_ready)logger::write("online: host refusal notice could not be installed; refusals are logged only");
+   }
   }
   return true;
  }

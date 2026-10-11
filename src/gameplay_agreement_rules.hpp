@@ -89,11 +89,15 @@ namespace gameplay_agreement_rules
  // ret 0x1c - what script hudMessage (0x49eb60) calls with kind 3. It fades by itself and takes no input.
  constexpr std::uint32_t native_hud=0x59ee20,native_hud_message=0x59cdb0,hud_message_slot=0x30;
  constexpr float hud_notice_seconds=8.0f;
- inline constexpr std::array<limits_rules::guard,11> notice_guards{{
+ // Two optional sets, checked and installed separately: the receiver (the host hears a joiner's refusal and
+ // logs it) and the presentation (the lobby paragraph / HUD line). Either can be missing without the other.
+ inline constexpr std::array<limits_rules::guard,4> receiver_guards{{
   {host_info_register_call,"e8e15000008986c8220000","host-info registration call keeps its handle at +0x22c8"},
   {host_info_unregister_call-0x10,"8b86c82200003bc774118b4e04506a1ae8df7c0000","host-info release call releases the +0x22c8 handle"},
   {native_register,"64a1000000006aff68a19367","native message registration"},
   {native_unregister,"568b74240c85f6578bf9","native message release"},
+ }};
+ inline constexpr std::array<limits_rules::guard,7> presentation_guards{{
   {native_hud,"64a1000000008a0d94618a00","native HUD getter"},
   {native_hud_message,"56578bf983bf707908000a","native HUD timed message"},
   {host_menu_vtable-4,"608f6b00","CMenuHost vtable (complete object locator of .?AVCMenuHost@@)"},

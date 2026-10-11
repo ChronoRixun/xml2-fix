@@ -23,7 +23,12 @@ namespace ini {
   return std::nullopt;
  }
 }
-namespace logger { void write(const char*,...){} void write_once(std::string_view,const char*,...){} }
+namespace logger {
+ std::vector<std::string> logged;
+ void write(const char* format,...){va_list a;va_start(a,format);char b[1024];std::vsnprintf(b,sizeof(b),format,a);va_end(a);logged.emplace_back(b);}
+ void write_once(std::string_view,const char*,...){}
+}
+bool has_log(std::string_view text){for(const auto& l:logger::logged)if(l.find(text)!=std::string::npos)return true;return false;}
 namespace iat_hook {
  void* captured=nullptr;bool fail=false;int calls=0;
  SOCKET WSAAPI fake_socket(int,int,int){++calls;return 73;}
@@ -131,6 +136,10 @@ std::uint32_t entry;const std::uint8_t* header_pointer=header.data();
 __declspec(naked) void invoke_direct(){__asm {push dword ptr [header_pointer]} __asm {push 123} __asm {push 0x23456789} __asm {mov ecx,0x12345678} __asm {jmp dword ptr [entry]}}
 __declspec(naked) void invoke_single(){__asm {push 0} __asm {push dword ptr [header_pointer]} __asm {push 0x23456789} __asm {mov ecx,0x12345678} __asm {jmp dword ptr [entry]}}
 __declspec(naked) void invoke_broadcast(){__asm {push 1} __asm {push 1} __asm {push -1} __asm {push dword ptr [header_pointer]} __asm {mov ecx,0x12345678} __asm {jmp dword ptr [entry]}}
+// Native 0x1a admission as retail does it: the participant is taken, then the 0x1b follow-up leaves through the
+// patched ack_send site (0x609a5d) - the only place retail sends 0x1b, and only on that path.
+std::array<std::uint8_t,ack_size> ack_body{};
+int admitting(void*){++forwarded;header.fill(0);const auto* body=ack_body.data();std::memcpy(header.data(),&body,4);const std::uint16_t size=ack_size;std::memcpy(header.data()+8,&size,2);header[0x10]=0x1b;header[0x11]=1;entry=ack_send;invoke_single();return 73;}
 __declspec(naked) void join_continuation(){__asm {pop ebp} __asm {pop ebx} __asm {add esp,0x1c} __asm {mov eax,73} __asm {ret 8}}
 void notice_standins(){
  const std::uint32_t host_vt=host_menu_vtable,other_vt=0x69f000;std::memcpy(host_lobby.data(),&host_vt,4);std::memcpy(join_menu.data(),&other_vt,4);current_menu(host_lobby.data());
@@ -259,8 +268,10 @@ void host_notice_tests(){
   auto info_entry=reinterpret_cast<int(__cdecl*)(void*)>(info_receiver);forwarded=0;
   {auto body=refusal_body(refusal::settings);event refused{0x1d,body.data(),std::uint16_t(body.size()),0,context.data(),sender.data()};host_receiver(&refused);}
   check(lobby()==host_notice_detail(refusal::settings,true),"a refusal notice is up in the lobby before the next join");
-  check(info_entry(&e)==73 && forwarded==1 && lobby()=="native advice","an admitted join ends the notice; the lobby draws its native advice again");
-  check(info_entry(&e)==73 && lobby()=="native advice","a further admitted join leaves the native advice alone");}
+  check(info_entry(&e)==73 && forwarded==1 && lobby()==host_notice_detail(refusal::settings,true),"a capability-matching join the game then refuses (full session, no participant) keeps the notice");
+  jump(native_info,&admitting);forwarded=0;send_count=0;
+  check(info_entry(&e)==73 && forwarded==1 && send_count==1 && output_type==0x1b && lobby()=="native advice","the 0x1b follow-up, sent only once the participant is taken, ends the notice; the lobby draws its native advice again");
+  check(info_entry(&e)==73 && lobby()=="native advice","a further admitted join leaves the native advice alone");jump(native_info,&admitted);}
  // Retail teardown releases the host-info handle; the wrapper releases the host 0x1d with it.
  native_bytes(0x6074b0,5);released.clear();reinterpret_cast<method>(0x6074b0)(context.data());
  bool info_released=false,rejection_released=false;for(const auto&[op,h]:released){info_released|=op==0x1a && h==info_handle;rejection_released|=op==0x1d && h==rejection_handle;}
@@ -274,14 +285,33 @@ void host_notice_tests(){
 }
 void runtime(){
  notice_rules();
- guards(failure_guards);guards(transport_guards);guards(notice_guards);guards(game_version_rules::guards);
+ guards(failure_guards);guards(transport_guards);guards(receiver_guards);guards(presentation_guards);guards(game_version_rules::guards);
  native_bytes(0x609c80,0x100);native_bytes(0x6074b0,0x75);
  native_bytes(native_failure,0xa7);native_bytes(native_cleanup,0x10c);native_bytes(native_peer_disconnect,10);
  const auto original=*static_cast<std::uint8_t*>(at(native_join));
  check(!gameplay_agreement::prepare(reinterpret_cast<HMODULE>(0x400001)) && *static_cast<std::uint8_t*>(at(native_join))==original,"wrong base refuses native refusal hooks");
  writable(failure_text,1);*static_cast<std::uint8_t*>(at(failure_text))^=1;
  check(!gameplay_agreement::prepare(reinterpret_cast<HMODULE>(0x400000)) && *static_cast<std::uint8_t*>(at(native_join))==original,"one native failure guard mismatch prevents all writes");native_bytes(failure_text,5);
+ // First with a presentation guard mismatched: the receiver still installs, a joiner's refusal is heard and logged.
+ writable(0x69fef0,1);*static_cast<std::uint8_t*>(at(0x69fef0))^=1;
  make_rx();check(gameplay_agreement::prepare(reinterpret_cast<HMODULE>(0x400000)) && rx(0x609000),"native refusal preparation restores shared RX page");
+ const auto native_advice_rel=0x0006efc3u,native_register_rel=0x000050e1u;
+ check(*reinterpret_cast<std::uint32_t*>(at(host_advice_call+1))==native_advice_rel && *reinterpret_cast<std::uint32_t*>(at(host_info_register_call+1))!=native_register_rel && has_log("notice guard failed"),
+       "a presentation guard mismatch leaves the lobby draw native and still wraps host-info registration");
+ {jump(native_register,&register_fake);jump(native_unregister,&release_fake);
+  context.fill(0);put(4,0x12345678);registered.clear();released.clear();
+  using method=void(__thiscall*)(void*);reinterpret_cast<method>(0x609c80)(context.data());
+  const registration* r=nullptr;for(const auto&x:registered)if(x.opcode==0x1d)r=&x;
+  check(r && r->flags==host_rejection_flags && r->owner==context.data(),"the host 0x1d receiver is registered although the notice cannot be drawn");
+  if(r){auto body=refusal_body(refusal::settings);event incoming{0x1d,body.data(),std::uint16_t(body.size()),0,context.data(),sender.data()};sender[0x19]=1;logger::logged.clear();const auto huds=hud_messages,shown=popups;
+   check(reinterpret_cast<int(__cdecl*)(void*)>(r->handler)(&incoming)==0 && sender[0x19]==0 && hud_messages==huds && popups==shown
+         && has_log("a joining player refused this game (reason=1)") && has_log("host notice: Join refused: different gameplay settings") && has_log("not drawn"),
+         "with the notice unavailable a remote refusal is still received, logged with its reason, and only that peer disconnected");
+   const auto h=r->handle;reinterpret_cast<method>(0x6074b0)(context.data());bool dropped=false;for(const auto&[op,x]:released)dropped|=op==0x1d && x==h;
+   check(dropped,"retail teardown still releases the receiver-only registration");}}
+ *static_cast<std::uint8_t*>(at(0x69fef0))^=1;make_rx();
+ check(gameplay_agreement::prepare(reinterpret_cast<HMODULE>(0x400000)) && rx(0x609000) && *reinterpret_cast<std::uint32_t*>(at(host_advice_call+1))!=native_advice_rel,
+       "with the presentation guards back a later preparation installs the lobby draw hook without touching the rest");
  check(!game_version::needs_gameplay_agreement(),"no participating installer leaves native protocol unenlisted");
  check(gameplay_agreement::register_entity_layout(1,32,224,256,8,true),"public capacity API registers verified explicit retail layout");
  check(game_version::needs_gameplay_agreement() && !game_version::gameplay_online_allowed() && iat_hook::captured,"capacity registration automatically enlists socket exclusion before finalization");
