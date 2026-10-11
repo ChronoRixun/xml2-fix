@@ -1,4 +1,6 @@
 #include "test_state.hpp"
+#include "entity_capacity.hpp"
+#include "entity_capacity_layout.hpp"
 #include "test_state_rules.hpp"
 #include <Windows.h>
 #include <mutex>
@@ -68,6 +70,10 @@ namespace test_state
 		}
 		memory mem;
 		test_state_rules::reader<memory> reader(mem);
+		{
+			const auto& d = entity_capacity::installed();
+			reader.table = {d.world_object, d.world_core.entities, d.world_core.live_bits, d.world_core.handles, d.world};
+		}
 		auto s = reader.read(now);
 		std::lock_guard guard(lock);
 		error.clear();

@@ -13,6 +13,8 @@
 // file CRCs, the SHA-1 of every data file a bind file describes, every bind's id against the catalogue); the
 // runtime proofs (registration traces, live counts) are the engine side's.
 
+#include "layout.hpp"
+
 #include <array>
 #include <functional>
 #include <utility>
@@ -27,6 +29,58 @@ namespace lcsave
 	{
 		struct TablesData;
 	}
+
+	// ---- the native layout and the Phase A file marker (PHASE-A-PLAN sections 4 and 6) ----------------------------
+	// layout.hpp: `NativeLayout`, `retail_layout` (the retail executable's save manager) and `e10a2_layout` (the
+	// entity-capacity build's). The engine selects its layout once (the installed entity descriptor) and passes it
+	// to every stream call below; the overloads without a layout are the retail ones (byte-identical to before).
+	// A file's header `required_features` bit 0 (feature_entity_layout_contiguous10) marks typed entity ids as
+	// ten-bit tokens: the E10A2 writers emit it, the offline converters and the retail engine keep 0.
+
+	struct FeatureDecision
+	{
+		bool ok = false;                    // false: the file cannot be applied to this layout (reason says why)
+		std::string reason;
+		bool migrate_typed_fields = false;  // a feature-0 (legacy) file applied to a contiguous layout: migrate at the boundary
+		std::uint32_t required_features = 0;
+	};
+	// pure: what `native` does with a header's required_features (unknown bit -> refused; feature 1 on retail ->
+	// refused "needs the entity-capacity build"; feature 0 on E10A2 -> migrate; else apply as is)
+	FeatureDecision decide_features(std::uint32_t required_features, const NativeLayout& native);
+	// the same over an LC file (validated by the container reader first; a damaged file is refused with its reason)
+	FeatureDecision decide_features(const std::vector<std::uint8_t>& new_file, const NativeLayout& native);
+	extern const char* const downgrade_refused;   // the retail reader's reason for a feature-1 file
+
+	// The typed entity-id registry (tools/lcsave/typed_registry.py; the builder's tools/xml1build/typed_entity_ids.py
+	// writes it): the (scope, key) script variables that hold World tokens, bound to the scripts tree they were
+	// derived from by a fingerprint. The engine verifies the registry against its own scripts tree before it enables
+	// legacy migration; a registry that does not verify means legacy (feature-0) loads are refused, not guessed.
+	struct TypedRegistry
+	{
+		std::uint32_t version = 0;
+		std::string fingerprint;            // 64 hex digits
+		std::uint32_t script_files = 0;
+		std::vector<std::pair<std::string, std::string>> keys;   // (scope "Zone"/"Game", key), sorted
+		bool typed(const std::string& scope, const std::string& key) const;
+	};
+	bool load_typed_registry(const std::vector<std::uint8_t>& file, TypedRegistry& out, std::string& error);
+	// the effective fingerprint of a scripts tree: SHA-256 over "relative-posix-path\0sha256\n" of every *.py file,
+	// in the tree's path order (lower-cased path components); refuses non-ASCII paths and unreadable files
+	bool scripts_fingerprint(const std::wstring& scripts_root, std::string& fingerprint, std::uint32_t& files, std::string& error);
+	// ok when the registry reads and its fingerprint is the scripts tree's (same files, same bytes); reason otherwise
+	bool verify_registry(const TypedRegistry& registry, const std::wstring& scripts_root, std::string& reason);
+	bool verify_registry(const std::vector<std::uint8_t>& registry_file, const std::wstring& scripts_root, std::string& reason);
+
+	struct MigrationReport
+	{
+		enum class Mode : std::uint8_t { none, migrate, validate };
+		Mode mode = Mode::none;
+		std::uint32_t typed_fields = 0;        // registered (scope, key) values seen in the file
+		std::uint32_t translated = 0;          // non-null values translated to ten-bit tokens (migrate)
+		std::uint32_t normalized_to_null = 0;  // non-null values that became null (either mode)
+		std::uint32_t validated = 0;           // values checked against the ten-bit domain (validate)
+		std::string line() const;              // "mode=... typed_fields=... translated=... normalized_to_null=... validated=..."
+	};
 
 	struct Tables
 	{
@@ -81,6 +135,11 @@ namespace lcsave
 	// alone is bytes [0x84, end). Dropped fields are written as zero. Zone records whose placement file changed are
 	// not applied (the Result's ledger lists them).
 	Result new_to_old_stream(const std::vector<std::uint8_t>& new_file, const Tables& tables);
+	// the same for an explicit native layout: the stream is `native.slot_size` bytes. `registry` is required for a
+	// feature-0 file on a contiguous layout (refused without it); `report` receives the migration / validation counts
+	// (also one ledger line). The marker is never stripped: a feature-1 file on the retail layout is refused.
+	Result new_to_old_stream(const std::vector<std::uint8_t>& new_file, const Tables& tables, const NativeLayout& native,
+		const TypedRegistry* registry = nullptr, MigrationReport* report = nullptr);
 
 	// What a save written by the game carries besides the stream (SPEC 1.1 header, 2.2 META)
 	// Ordinal is the native map slot used by this capture (or reconstructed by the loader).
@@ -100,9 +159,13 @@ namespace lcsave
 	};
 	bool loaded_zone_metadata(const std::vector<std::uint8_t>& file, const Tables& tables,
 		std::vector<ZoneCaptureMetadata>& out, std::string& error);
+	bool loaded_zone_metadata(const std::vector<std::uint8_t>& file, const Tables& tables,
+		std::vector<ZoneCaptureMetadata>& out, std::string& error, const NativeLayout& native, const TypedRegistry* registry = nullptr);
 	// Same-build native transfers lack an LC sidecar; infer only validated current-table associations.
 	bool native_zone_metadata(const std::vector<std::uint8_t>& stream, const Tables& tables,
 		std::vector<ZoneCaptureMetadata>& out, std::string& error);
+	bool native_zone_metadata(const std::vector<std::uint8_t>& stream, const Tables& tables,
+		std::vector<ZoneCaptureMetadata>& out, std::string& error, const NativeLayout& native);
 	bool conversation_digest(const Tables& tables, std::array<std::uint8_t, 32>& out, std::string& error);
 	// Native heard provenance includes the zone package ranking; the overload above is legacy-only.
 	bool conversation_digest(const Tables& tables, const std::string& zone, std::array<std::uint8_t, 32>& out, std::string& error);
@@ -126,7 +189,9 @@ namespace lcsave
 	};
 	// Conservative demand: all serialized hero and restore equipment, carried and world instances.
 	bool native_load_demand(const std::vector<std::uint8_t>& stream, NativeLoadDemand& out, std::string& error);
+	bool native_load_demand(const std::vector<std::uint8_t>& stream, NativeLoadDemand& out, std::string& error, const NativeLayout& native);
 	bool validate_native_stream(const std::vector<std::uint8_t>& stream, const Tables& tables, std::string& error);
+	bool validate_native_stream(const std::vector<std::uint8_t>& stream, const Tables& tables, std::string& error, const NativeLayout& native);
 
 	struct NewFileContext
 	{
@@ -149,6 +214,10 @@ namespace lcsave
 	// the engine's stream (the whole old slot image, or the 0x2fc00 payload alone) -> LC campaign file, numbered
 	// by the running build (the saver's direction; origin 0, no LGCY section)
 	Result old_stream_to_new(const std::vector<std::uint8_t>& old_stream, const Tables& tables, const NewFileContext& context);
+	// the same for an explicit native layout (the whole slot image or the payload alone, of `native` - never
+	// inferred from the size); the header's required-feature marker is the layout's (E10A2: bit 0)
+	Result old_stream_to_new(const std::vector<std::uint8_t>& old_stream, const Tables& tables, const NewFileContext& context,
+		const NativeLayout& native);
 
 	// canonical JSON (dump.py: indent 1, sorted keys) of either format, detected by the magic. An old file is
 	// read with the eras the converter chooses (0.1.10's when it refuses). "" when the file can not be read.
@@ -171,6 +240,8 @@ namespace lcsave
 	bool missing_talents(const std::vector<std::uint8_t>& old_stream, const Tables& tables, std::vector<TalentAdd>& out);
 	bool missing_talents(const std::vector<std::uint8_t>& old_stream, const Tables& tables, std::vector<TalentAdd>& out,
 		std::string& error);
+	bool missing_talents(const std::vector<std::uint8_t>& old_stream, const Tables& tables, std::vector<TalentAdd>& out,
+		std::string& error, const NativeLayout& native);
 
 	// ---- the engine side's additions (save_format.cpp; implemented in api_engine.cpp on the library's internals) ----
 

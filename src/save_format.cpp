@@ -1,5 +1,6 @@
 #define _CRT_RAND_S
 #include "save_format.hpp"
+#include "patch_transaction.hpp"
 
 #include "save_format_rules.hpp"
 #include "save_core_rules.hpp"
@@ -53,6 +54,13 @@ namespace save_format
 		};
 
 		bool enabled = false;         // [Save] Format=lc and every guard matched
+		native_profile layout_profile = retail_profile; // chosen before the contribution; immutable after publication
+		const lcsave::NativeLayout* native_layout = &lcsave::retail_layout; // the lcsave descriptor matching layout_profile
+		lcsave::TypedRegistry typed_registry;        // the build's typed entity-id registry, when verified against the scripts
+		bool typed_registry_verified = false;
+		std::string typed_registry_reason;             // why legacy (feature-0) loads refuse when it is not
+		std::atomic<unsigned> typed_translated{0}, typed_nulled{0};
+		bool contributed = false;
 		readiness ready = readiness::untried;
 		std::string installation_failure; // nonempty until every requested startup hook is installed
 		std::string failure;          // why ready == failed (shown as the notice, logged once)
@@ -85,7 +93,7 @@ namespace save_format
 		std::uint8_t campaign_origin = 0;
 		lcsave::ZoneCaptureMetadata* capturing = nullptr;
 		void* restore_record = nullptr;
-		std::array<std::uint16_t,256> original_restore_map{};
+		std::array<std::uint16_t,1024> original_restore_map{}; // layout_profile.ordinals entries in use
 		std::atomic<unsigned> numbered_seen{0}, captures_seen{0}, capture_failures{0}, identity_resets{0}, resets_seen{0}, native_loads_completed{0};
 		using capture_t = bool(__fastcall*)(void*, void*, const char*, int, float);
 		using native_load_t = void(__fastcall*)(void*, void*, void*, int);
@@ -223,49 +231,6 @@ namespace save_format
 			address va;
 			std::vector<std::uint8_t> bytes;
 		};
-
-		// Preflight every site before writing. Any write/cache/protection failure vetoes startup,
-		// including failures after bytes changed; cleanup still attempts every protection restore.
-		bool patch(const std::vector<write>& writes)
-		{
-			std::vector<DWORD> protection(writes.size());
-			const auto restore = [&](std::size_t count)
-			{
-				bool ok = true;
-				for (std::size_t i = count; i-- > 0;)
-				{
-					DWORD ignored = 0;
-					if (!VirtualProtect(in_game(writes[i].va), writes[i].bytes.size(), protection[i], &ignored))
-					{
-						logger::write("save format: ERROR: can't restore XMen2.exe protection at 0x%08lX (error %lu); startup refused", static_cast<unsigned long>(writes[i].va), GetLastError());
-						ok = false;
-					}
-				}
-				return ok;
-			};
-			for (std::size_t i = 0; i < writes.size(); ++i)
-			{
-				if (!VirtualProtect(in_game(writes[i].va), writes[i].bytes.size(), PAGE_EXECUTE_READWRITE, &protection[i]))
-				{
-					logger::write("save format: ERROR: can't unprotect XMen2.exe at 0x%08lX (error %lu); startup refused", static_cast<unsigned long>(writes[i].va), GetLastError());
-					if (!restore(i)) logger::write("save format: ERROR: preflight protection cleanup failed; startup remains refused");
-					return false;
-				}
-			}
-			bool ok = true;
-			for (const auto& w : writes)
-			{
-				std::memcpy(in_game(w.va), w.bytes.data(), w.bytes.size());
-				if (!FlushInstructionCache(GetCurrentProcess(), in_game(w.va), w.bytes.size()))
-				{
-					logger::write("save format: ERROR: can't flush XMen2.exe instructions at 0x%08lX (error %lu); startup refused", static_cast<unsigned long>(w.va), GetLastError());
-					ok = false;
-					break;
-				}
-			}
-			const bool restored = restore(writes.size());
-			return ok && restored;
-		}
 
 		std::vector<std::uint8_t> dword_bytes(const std::uint32_t v)
 		{
@@ -668,6 +633,34 @@ namespace save_format
 			}
 			logger::write("save format: conversation identity prepared in %llu ms before play",
 				static_cast<unsigned long long>(GetTickCount64()-digest_start));
+			if (native_layout->contiguous())
+			{
+				// The typed registry the builder generated from its scripts, verified against the installed scripts tree
+				// (base `scripts` folder; a mod that ships scripts changes the effective schema and refuses legacy loads).
+				typed_registry_verified = false;
+				std::vector<std::uint8_t> registry_file;
+				const auto registry_path = (std::filesystem::path(build) / L"Data" / L"lcsave" / L"typed-entity-ids.txt").string();
+				std::string registry_error;
+				if (!save_format_rules::read_file(registry_path, registry_file, registry_error))
+					typed_registry_reason = "no registry file (" + registry_error + ")";
+				else if (!lcsave::load_typed_registry(registry_file, typed_registry, registry_error))
+					typed_registry_reason = "registry unreadable: " + registry_error;
+				else if (!lcsave::verify_registry(typed_registry, (std::filesystem::path(build) / L"scripts").wstring(), registry_error))
+					typed_registry_reason = "scripts differ from the registry's fingerprint: " + registry_error;
+				else
+				{
+					bool mod_scripts = false;
+					for (const auto& [source, target] : mod_loader::effective_files())
+					{
+						auto lower = target; for (auto& ch : lower) ch = static_cast<wchar_t>(towlower(ch));
+						if (lower.rfind(L"scripts\\", 0) == 0 || lower.rfind(L"scripts/", 0) == 0) { mod_scripts = true; break; }
+					}
+					if (mod_scripts) typed_registry_reason = "an enabled mod ships scripts; the registry is unverified for that schema";
+					else typed_registry_verified = true;
+				}
+				logger::write("save format: typed entity-id registry %s (%zu keys)%s%s", typed_registry_verified ? "verified" : "UNVERIFIED",
+				              typed_registry.keys.size(), typed_registry_verified ? "" : ": ", typed_registry_verified ? "" : typed_registry_reason.c_str());
+			}
 			logger::write("save format: tables of %ls verified: content version %lu, catalogue revision %lu; %lu heroes, %lu stats names, %lu items, %lu courses, %lu objectives",
 			              build.c_str(), static_cast<unsigned long>(tables.content_version()), static_cast<unsigned long>(tables.catalogue_revision()),
 			              static_cast<unsigned long>(tables.hero_count()), static_cast<unsigned long>(tables.stats_count()), static_cast<unsigned long>(tables.item_count()),
@@ -703,7 +696,8 @@ namespace save_format
 		bool add_missing_talents(std::vector<std::uint8_t>& image)
 		{
 			std::vector<lcsave::TalentAdd> adds;
-			if (!lcsave::missing_talents(image, tables, adds)) return false;
+			std::string talent_error;
+			if (!lcsave::missing_talents(image, tables, adds, talent_error, *native_layout)) return false;
 			if (adds.empty()) return true;
 			const auto heaps = hero_heaps(image.data(), image.size());
 			if (!heaps)
@@ -837,7 +831,7 @@ namespace save_format
 			if (!visit_known) return;
 			lcsave::PlacedEntityMetadata item;
 			item.ordinal=ordinal; item.placement_index=placement;
-			if (!save_core_rules::ordinal_fits(ordinal) || !entity_names(entity,item.definition_name,item.instance_name))
+			if (!save_core_rules::ordinal_fits(ordinal,layout_profile.ordinals) || !entity_names(entity,item.definition_name,item.instance_name))
 			{
 				active_visit.capture_flags|=save_core_rules::capture_incomplete;
 				core_lifetime.write_blocked=true;
@@ -854,7 +848,7 @@ namespace save_format
 		{
 			const auto zone=record_zone(record);
 			float stamp=0;
-			if (zone.empty() || !try_copy(&stamp,static_cast<const std::uint8_t*>(record)+0x55d8,4)) return nullptr;
+			if (zone.empty() || !try_copy(&stamp,static_cast<const std::uint8_t*>(record)+layout_profile.time_stamp,4)) return nullptr;
 			for (auto& meta:cached_captures) if (meta.zone==zone && meta.time_stamp==stamp) return &meta;
 			return nullptr;
 		}
@@ -907,13 +901,13 @@ namespace save_format
 			// Native clear(1) disposes dependent world items, not just ordinal slots. Keep the named empty
 			// cache record so its manager count remains valid; capture later replaces it with observed state.
 			std::uint32_t handle=0; float stamp=0;
-			try_copy(&handle,record,4); try_copy(&stamp,static_cast<const std::uint8_t*>(record)+0x55d8,4);
+			try_copy(&handle,record,4); try_copy(&stamp,static_cast<const std::uint8_t*>(record)+layout_profile.time_stamp,4);
 			using clear_t=void(__fastcall*)(void*,void*,int);
 			reinterpret_cast<clear_t>(in_game(0x465ec0))(record,nullptr,1);
 			std::memcpy(record,&handle,4);
 			const std::uint32_t count=1;
-			std::memcpy(static_cast<std::uint8_t*>(record)+0x4808,&count,4);
-			std::memcpy(static_cast<std::uint8_t*>(record)+0x55d8,&stamp,4);
+			std::memcpy(static_cast<std::uint8_t*>(record)+layout_profile.state_count,&count,4);
+			std::memcpy(static_cast<std::uint8_t*>(record)+layout_profile.time_stamp,&stamp,4);
 			visit_restore_disabled=true; identity_resets.fetch_add(1);
 			notice="LC save: "+zone+" changed or its numbering differs; zone state reset";
 			logger::write("save core: %s: mode-2 numbering/placement mismatch; remaining restores disabled and dependent items cleared",zone.c_str());
@@ -928,13 +922,13 @@ namespace save_format
 		{
 			if (!record || !entity || visit_restore_disabled) return true;
 			std::uint16_t ordinal=0;
-			if (!try_copy(&ordinal,static_cast<const std::uint8_t*>(entity)+0x6e,2) || !save_core_rules::ordinal_fits(ordinal))
+			if (!try_copy(&ordinal,static_cast<const std::uint8_t*>(entity)+0x6e,2) || !save_core_rules::ordinal_fits(ordinal,layout_profile.ordinals))
 			{core_lifetime.write_blocked=true;return true;}
 			if (restore_record!=record)
 			{
 				// Freeze the reconstructed model map before changing any actual ordinal slot. Otherwise an
 				// earlier remap could overwrite the source needed by a later identical-name placement.
-				if (!try_copy(original_restore_map.data(),static_cast<const std::uint8_t*>(record)+0x480c,512))
+				if (!try_copy(original_restore_map.data(),static_cast<const std::uint8_t*>(record)+layout_profile.ordinal_map,layout_profile.ordinals*2))
 				{core_lifetime.write_blocked=true;return true;}
 				restore_record=record;
 			}
@@ -962,13 +956,13 @@ namespace save_format
 					return false;
 				reset_zone_record(record,record_zone(record));return true;
 			}
-			if (!save_core_rules::ordinal_fits(expected->ordinal))
+			if (!save_core_rules::ordinal_fits(expected->ordinal,layout_profile.ordinals))
 			{reset_zone_record(record,record_zone(record));return true;}
 			state_index=original_restore_map[expected->ordinal-1];
-			if (state_index>=768){core_lifetime.write_blocked=true;return true;}
+			if (state_index>=layout_profile.states){core_lifetime.write_blocked=true;return true;}
 			// Match actual placement BEFORE the zero-map/death decision. A skipped factory changes native
 			// ordinals even when placement bytes and names are identical. Tombstones retain flags_b=0.
-			std::memcpy(static_cast<std::uint8_t*>(record)+0x480c+2*(ordinal-1),&state_index,2);
+			std::memcpy(static_cast<std::uint8_t*>(record)+layout_profile.ordinal_map+2*(ordinal-1),&state_index,2);
 			using restore_t=bool(__fastcall*)(void*,void*,void*);
 			return reinterpret_cast<restore_t>(in_game(0x465c10))(record,nullptr,entity);
 		}
@@ -1003,9 +997,9 @@ namespace save_format
 				active_visit={};visit_known=false;restore_record=nullptr;
 				// Native online transfers contain zone records but no LC sidecar. Missing metadata is
 				// not a placement mismatch: validate/infer it before the native loader sees the stream.
-				std::vector<std::uint8_t> source(stream_capacity);std::string error;
+				std::vector<std::uint8_t> source(layout_profile.payload);std::string error;
 				if(!buffer || !try_copy(source.data(),buffer,source.size()) ||
-				   !lcsave::native_zone_metadata(source,tables,cached_captures,error))
+				   !lcsave::native_zone_metadata(source,tables,cached_captures,error,*native_layout))
 				{
 					core_lifetime.finish_native(mode,false);
 					refuse("native transfer metadata could not be validated: "+(error.empty()?std::string("unreadable stream"):error));return;
@@ -1041,7 +1035,7 @@ namespace save_format
 		bool available_capacity(const std::vector<std::uint8_t>& image,std::string& error)
 		{
 			lcsave::NativeLoadDemand demand;
-			if (!lcsave::native_load_demand(image,demand,error)) return false;
+			if (!lcsave::native_load_demand(image,demand,error,*native_layout)) return false;
 			std::uint32_t attached=0,instances=0,pointer=0;
 			if (!try_copy(&pointer,in_game(0x717b30),4) || !pointer || !try_copy(&attached,in_game(pointer+0x239c),4) ||
 			    !try_copy(&pointer,in_game(0x72a524),4) || !pointer || !try_copy(&instances,in_game(pointer+0x3854),4))
@@ -1075,7 +1069,7 @@ namespace save_format
 				              save_content_guards::verify_keys(previous.bytes,why);
 				if (usable)
 				{
-					const auto check = kind == kind_profile ? lcsave::new_to_old_profile(previous.bytes,tables) : lcsave::new_to_old_stream(previous.bytes,tables);
+					const auto check = kind == kind_profile ? lcsave::new_to_old_profile(previous.bytes,tables) : lcsave::new_to_old_stream(previous.bytes,tables,*native_layout,typed_registry_verified ? &typed_registry : nullptr);
 					usable = check.ok;
 					why = check.error;
 				}
@@ -1126,7 +1120,7 @@ namespace save_format
 			context.zone_captures=cached_captures;
 			context.origin=kind==kind_campaign?campaign_origin:0;
 			context.require_capture_metadata=kind==kind_campaign;
-			const auto result = kind == kind_profile ? lcsave::old_profile_to_new(image, tables, context) : lcsave::old_stream_to_new(image, tables, context);
+			const auto result = kind == kind_profile ? lcsave::old_profile_to_new(image, tables, context) : lcsave::old_stream_to_new(image, tables, context, *native_layout);
 			if (!result.ok)
 			{
 				// CORE-BEGIN: retain the actual refused campaign stream while its image is alive.
@@ -1179,7 +1173,7 @@ namespace save_format
 		// A read of a kind: the LC file validated and translated into the engine's buffer.
 		bool read_lc(const std::uint8_t kind, const int slot, std::uint32_t* size, std::uint8_t* data)
 		{
-			const std::size_t capacity = kind == kind_profile ? profile_size : stream_capacity;
+			const std::size_t capacity = kind == kind_profile ? profile_size : layout_profile.payload;
 			const std::string path = kind == kind_profile ? lc_dir + profile_file : slot_path(slot);
 			const auto file = load_lc(path, kind);
 			if (!file.exists)
@@ -1221,7 +1215,21 @@ namespace save_format
 				refuse(path + ": " + key_error);
 				return false;
 			}
-			auto result = kind == kind_profile ? lcsave::new_to_old_profile(file.bytes, tables) : lcsave::new_to_old_stream(file.bytes, tables);
+			lcsave::MigrationReport migration;
+			if (kind == kind_campaign)
+			{
+				// Feature decision before any conversion: a newer file on a retail layout, an unknown bit, or a legacy file
+				// without a verified typed registry refuse with the reason (plan section 4); nothing is stripped or truncated.
+				const auto decision = lcsave::decide_features(file.bytes, *native_layout);
+				if (!decision.ok) { refuse(decision.reason); return false; }
+				if (decision.migrate_typed_fields && !typed_registry_verified) { refuse("legacy save needs the typed entity-id registry: " + typed_registry_reason); return false; }
+			}
+			auto result = kind == kind_profile ? lcsave::new_to_old_profile(file.bytes, tables) : lcsave::new_to_old_stream(file.bytes, tables, *native_layout, typed_registry_verified ? &typed_registry : nullptr, &migration);
+			if (kind == kind_campaign && result.ok && native_layout->contiguous())
+			{
+				typed_translated.fetch_add(migration.translated); typed_nulled.fetch_add(migration.normalized_to_null);
+				logger::write("save format: typed entity-id migration: %s", migration.line().c_str());
+			}
 			if (!result.ok)
 			{
 				refuse("this save can't be loaded by this build: " + result.error);
@@ -1236,7 +1244,7 @@ namespace save_format
 			{
 				std::string error;
 				std::vector<lcsave::ZoneCaptureMetadata> metadata;
-				if (!available_capacity(result.bytes,error) || !lcsave::loaded_zone_metadata(file.bytes,tables,metadata,error))
+				if (!available_capacity(result.bytes,error) || !lcsave::loaded_zone_metadata(file.bytes,tables,metadata,error,*native_layout,typed_registry_verified ? &typed_registry : nullptr))
 				{refuse("native preflight: "+error);return false;}
 				pending_captures=std::move(metadata);
 				if (!add_missing_talents(result.bytes))
@@ -1377,7 +1385,7 @@ namespace save_format
 				refuse(failure);
 				return 0;
 			}
-			if (slot < 0 || slot >= slot_count || size != stream_capacity || !data)
+			if (slot < 0 || slot >= slot_count || size != layout_profile.payload || !data)
 			{
 				refuse("the game asked to write slot " + std::to_string(slot) + " with " + std::to_string(size) + " bytes");
 				return 0;
@@ -1404,7 +1412,7 @@ namespace save_format
 				refuse(notice.empty() ? failure : notice);
 				return 0;
 			}
-			if (slot < 0 || slot >= slot_count || !size || !data || *size < stream_capacity)
+			if (slot < 0 || slot >= slot_count || !size || !data || *size < layout_profile.payload)
 			{
 				refuse("the game asked to read slot " + std::to_string(slot) + " into " + std::to_string(size ? *size : 0) + " bytes");
 				return 0;
@@ -1609,11 +1617,11 @@ namespace save_format
 		// The live game as an old image, through its own serializer into a buffer laid out as CSaveLoad lays it out.
 		bool serialize_live(std::vector<std::uint8_t>& image, std::string& error)
 		{
-			std::vector<std::uint8_t> buffer(stream_wrapper);
+			std::vector<std::uint8_t> buffer(layout_profile.wrapper);
 			std::uint8_t* base = buffer.data();
-			std::memcpy(base + stream_capacity, &base, 4);
+			std::memcpy(base + layout_profile.payload, &base, 4);
 			base[stream_description] = 0;
-			base[0x2fc44] = 0;
+			base[layout_profile.flag_offset] = 0;
 			overflow_flag = 0;
 			if (!run_serializer(base))
 			{
@@ -1626,7 +1634,7 @@ namespace save_format
 				error = "the serializer ran out of room";
 				return false;
 			}
-			image = old_image(reinterpret_cast<const char*>(base + stream_description), base, stream_capacity);
+			image = old_image(reinterpret_cast<const char*>(base + layout_profile.description), base, layout_profile.payload);
 			return true;
 		}
 
@@ -1652,7 +1660,7 @@ namespace save_format
 			context.save_sequence = current.loaded ? current.sequence : 0;
 			context.origin=campaign_origin;context.zone_captures=cached_captures;context.require_capture_metadata=true;
 			context.retained_file=current.file; // CORE: dump reflects preservation too
-			const auto result = lcsave::old_stream_to_new(image, tables, context);
+			const auto result = lcsave::old_stream_to_new(image, tables, context, *native_layout);
 			if (!result.ok)
 			{
 				return "error the live game couldn't be expressed in the LC format: " + result.error;
@@ -1806,8 +1814,15 @@ namespace save_format
 		std::string state = !enabled ? "off" : ready == readiness::untried ? "lc (tables not loaded yet)" : ready == readiness::ok ? "lc" : "lc DISABLED: " + failure;
 		return "save format " + state + "; reads " + std::to_string(reads.load()) + "; writes " + std::to_string(write_count.load()) + "; refusals " + std::to_string(refusals.load()) +
 		       "; core captures " + std::to_string(captures_seen.load()) + "; numbered " + std::to_string(numbered_seen.load()) + "; capture failures " + std::to_string(capture_failures.load()) + "; identity resets " + std::to_string(identity_resets.load()) + "; campaign resets " + std::to_string(resets_seen.load()) + "; native completions " + std::to_string(native_loads_completed.load()) + "; W11 open; campaign writes " + (core_lifetime.may_save()?"allowed":"blocked") +
-		       "; imported " + std::to_string(converted.load()) + "; talents added " + std::to_string(talents_added.load()) + "; zones hashed " + std::to_string(zones_hashed.load()) +
+		       "; native layout " + std::string(layout_profile.name) + "; typed registry " + (typed_registry_verified ? "verified" : "unverified") + " translated " + std::to_string(typed_translated.load()) + " nulled " + std::to_string(typed_nulled.load()) + "; imported " + std::to_string(converted.load()) + "; talents added " + std::to_string(talents_added.load()) + "; zones hashed " + std::to_string(zones_hashed.load()) +
 		       " (" + std::to_string(zone_hash_mismatches.load()) + " differ from the tables; last " + (zone_opened_name.empty() ? "none" : zone_opened_name + " " + zone_opened_sha1) + ")" + save_trace::status();
+	}
+
+	void latch_reconstruction_failure(const char* why)
+	{
+		core_lifetime.write_blocked = true;
+		capture_failures.fetch_add(1);
+		logger::write_once("save core: reconstruction failure", "save core: reconstruction failure latched: %s; the load is not confirmed and campaign writes stay blocked", why ? why : "?");
 	}
 
 	// Guards integration: Core calls this only after native load/application has succeeded.
@@ -1827,30 +1842,65 @@ namespace save_format
 		return installation_failure;
 	}
 
-	void install(const HMODULE game) try
+	namespace
 	{
+		// The capture-count immediate each bound site compares with under the installed profile (0: retail).
+		std::uint32_t capture_bound_for(const save_core_rules::capture_bound& site)
+		{
+			switch (site.va)
+			{
+			case 0x466659: return layout_profile.states;
+			case 0x46668a: return layout_profile.dynamic;
+			case 0x4666e7: case 0x4666f3: return layout_profile.smart;
+			default: return 0; // 0x41a427: the zone string arena is not part of the expanded layout
+			}
+		}
+	}
+
+	void use_native_profile(const native_profile& chosen)
+	{
+		if (contributed) return;
+		layout_profile = chosen;
+		native_layout = chosen.usable_end == e10a2_profile.usable_end ? &lcsave::e10a2_layout : &lcsave::retail_layout;
+		lc_known_required_features = native_layout->contiguous() ? lc_feature_entity_layout_contiguous10 : 0;
+	}
+
+	const native_profile& installed_profile() { return layout_profile; }
+
+	void install(const HMODULE game)
+	{
+		patch_transaction::transaction own;
+		if (!contribute(own, game)) return;
+		const auto outcome = own.commit();
+		if (outcome != patch_transaction::outcome::committed)
+			logger::write("save format: standalone installation %s: %s", patch_transaction::name(outcome), own.report().c_str());
+	}
+
+	bool contribute(patch_transaction::transaction& transaction, const HMODULE game) try
+	{
+		if (contributed) return false;
 		const auto text = ini::text(L"Save", L"Format").value_or("");
 		const auto chosen = parse_mode(text);
 		if (!chosen.error.empty())
 		{
 			reject_install("invalid [Save] Format=" + text + ": " + chosen.error);
-			return;
+			return false;
 		}
 		if (!chosen.set || chosen.value == mode::off)
 		{
-			return; // no key: the game's own format, nothing patched
+			return false; // no key: the game's own format, nothing patched
 		}
 		// Default denial also covers any future early return before successful installation.
 		installation_failure = "required LC save/trivia hooks were not installed";
 		if (!game || reinterpret_cast<std::uintptr_t>(game) != image_base)
 		{
 			reject_install("XMen2.exe is not loaded at the required image base 0x400000");
-			return;
+			return false;
 		}
 		if (const guard* g = first_mismatch_guarded())
 		{
 			reject_install(install_guard_error(*g, "LC save/trivia guard mismatch"));
-			return;
+			return false;
 		}
 
 		// CORE-BEGIN: capture/reset guard validation before installing any Core patch.
@@ -1858,13 +1908,13 @@ namespace save_format
 		{
 			std::vector<std::uint8_t> bytes(limits_rules::hex_size(g.hex));
 			if(!try_copy(bytes.data(),in_game(g.va),bytes.size()) || !limits_rules::matches(bytes.data(),g.hex))
-			{reject_install(install_guard_error(g, "LC capture guard mismatch"));return;}
+			{reject_install(install_guard_error(g, "LC capture guard mismatch"));return false;}
 		}
 		{
 			const auto& g=save_core_rules::ordinal_write_guard;
 			std::vector<std::uint8_t> bytes(limits_rules::hex_size(g.hex));
 			if(!try_copy(bytes.data(),in_game(g.va),bytes.size()) || !limits_rules::matches(bytes.data(),g.hex))
-			{reject_install(install_guard_error(g, "LC ordinal guard mismatch"));return;}
+			{reject_install(install_guard_error(g, "LC ordinal guard mismatch"));return false;}
 		}
 		// CORE-END
 
@@ -1876,7 +1926,7 @@ namespace save_format
 		if (!memory)
 		{
 			reject_install("cannot allocate LC stubs (Windows error " + std::to_string(GetLastError()) + ")");
-			return;
+			return false;
 		}
 		const address base = address_of(memory);
 		const address flag = address_of(const_cast<std::uint8_t*>(&overflow_flag));
@@ -1889,7 +1939,8 @@ namespace save_format
 		for (std::size_t i = 0; i < flag_sites.size(); ++i)
 		{
 			stub_at[i] = base + static_cast<address>(block.size());
-			const auto stub = flag_stub(flag_sites[i], stub_at[i], flag);
+			const auto stub = flag_stub(flag_sites[i], stub_at[i], flag, layout_profile.usable_end);
+			if (stub.empty()) { reject_install("stream bound site has an unexpected immediate"); VirtualFree(memory, 0, MEM_RELEASE); return false; }
 			block.insert(block.end(), stub.begin(), stub.end());
 			writes.push_back({flag_sites[i].va, jump(flag_sites[i].va, stub_at[i], limits_rules::hex_size(flag_sites[i].hex))});
 		}
@@ -1914,11 +1965,11 @@ namespace save_format
 		for(const auto& site:save_core_rules::capture_bounds)
 		{
 			const address bound_at=base+static_cast<address>(block.size());
-			save_core_rules::append(block,save_core_rules::bound_bridge(site,bound_at,address_of(&capture_overflow)));
+			save_core_rules::append(block,save_core_rules::bound_bridge(site,bound_at,address_of(&capture_overflow),capture_bound_for(site)));
 			writes.push_back({site.va,jump(site.va,bound_at,site.length)});
 		}
 		const address ordinal_at=base+static_cast<address>(block.size());
-		save_core_rules::append(block,save_core_rules::ordinal_write_bridge(ordinal_at,address_of(&capture_overflow)));
+		save_core_rules::append(block,save_core_rules::ordinal_write_bridge(ordinal_at,address_of(&capture_overflow),layout_profile.ordinals));
 		writes.push_back({0x46667a,jump(0x46667a,ordinal_at,8)});
 		writes.push_back({game_vtable+0x20c,dword_bytes(address_of(&native_load_hook))});
 		// CORE-END
@@ -1926,7 +1977,7 @@ namespace save_format
 		{
 			reject_install("LC stubs exceed their allocated block");
 			VirtualFree(memory, 0, MEM_RELEASE);
-			return;
+			return false;
 		}
 		std::memcpy(memory, block.data(), block.size());
 		DWORD old = 0;
@@ -1934,13 +1985,13 @@ namespace save_format
 		{
 			reject_install("cannot make LC stubs executable (Windows error " + std::to_string(GetLastError()) + ")");
 			VirtualFree(memory, 0, MEM_RELEASE);
-			return;
+			return false;
 		}
 		if (!FlushInstructionCache(GetCurrentProcess(), memory, block.size()))
 		{
 			reject_install("cannot flush LC stub instructions (Windows error " + std::to_string(GetLastError()) + ")");
 			VirtualFree(memory, 0, MEM_RELEASE);
-			return;
+			return false;
 		}
 		writes.push_back({xmlb_convert_call_insn, call(xmlb_convert_call_insn, xmlb_at, 5)});
 		writes.push_back({zone_open_call, call(zone_open_call, zone_at, 5)});
@@ -1961,23 +2012,47 @@ namespace save_format
 		{
 			writes.push_back({card_vtable + offset, dword_bytes(address_of(function))});
 		}
-		if (!patch(writes))
+		// The contribution: every guard the seam relies on as expectations, the writes, and the publication that
+		// turns the seam on only after the whole transaction verified (plan section 7).
+		patch_transaction::contribution c;
+		c.owner = "save_format";
+		for (const auto& g : guards) c.guards.push_back({g.va, patch_transaction::bytes_of(g.hex), g.what});
+		for (const auto& site : flag_sites) c.guards.push_back({site.va, patch_transaction::bytes_of(site.hex), site.what});
+		for (const auto& g : save_core_rules::guards) c.guards.push_back({g.va, patch_transaction::bytes_of(g.hex), g.what});
+		c.guards.push_back({save_core_rules::ordinal_write_guard.va, patch_transaction::bytes_of(save_core_rules::ordinal_write_guard.hex), save_core_rules::ordinal_write_guard.what});
+		c.guards.push_back({zone_open_call, patch_transaction::bytes_of(zone_open_call_hex), "zone placement reader call"});
+		c.guards.push_back({xmlb_convert_call, patch_transaction::bytes_of(xmlb_convert_call_hex), "XMLB convert call"});
+		for (const auto& w : writes) c.writes.push_back({w.va, w.bytes, "LC seam"});
+		c.publish = [memory]
+		{
+			(void)memory;
+			enabled = true;
+			installation_failure.clear();
+			logger::write("save format: guarded trivia getter/setter and independent per-act cursors installed; TRIV bind rule 2 uses compact native bits; rule 1 retains legacy positions");
+			logger::write("save core: guarded actual numbering/capture/reset and load lifetime installed; capture masks 1/2; W11 open");
+			logger::write("save format: LC ([Save] Format=lc): the card's nine file methods (vtable 0x%08lX) are the fix's - saves are read and written as .lcsave files in SaveLC "
+			              "through the LC library; the old Save folder is converted once at the first file operation and never written; %zu stream-skip sites flagged; the zone "
+			              "placement file hashed at 0x%08lX / 0x%08lX; native layout %s (payload 0x%lX, %lu states, %lu ordinals)",
+			              static_cast<unsigned long>(card_vtable), flag_sites.size(), static_cast<unsigned long>(zone_open_call), static_cast<unsigned long>(xmlb_convert_call_insn),
+			              layout_profile.name, static_cast<unsigned long>(layout_profile.payload), static_cast<unsigned long>(layout_profile.states), static_cast<unsigned long>(layout_profile.ordinals));
+		};
+		c.abandon = [memory]
 		{
 			reject_install("cannot install the required LC card/trivia patches");
 			VirtualFree(memory, 0, MEM_RELEASE);
-			return;
+		};
+		if (!transaction.add(std::move(c)))
+		{
+			reject_install("the startup transaction is sealed");
+			VirtualFree(memory, 0, MEM_RELEASE);
+			return false;
 		}
-		enabled = true;
-		installation_failure.clear();
-		logger::write("save format: guarded trivia getter/setter and independent per-act cursors installed; TRIV bind rule 2 uses compact native bits; rule 1 retains legacy positions");
-		logger::write("save core: guarded actual numbering/capture/reset and load lifetime installed; capture masks 1/2; W11 open");
-		logger::write("save format: LC ([Save] Format=lc): the card's nine file methods (vtable 0x%08lX) are the fix's - saves are read and written as .lcsave files in SaveLC "
-		              "through the LC library; the old Save folder is converted once at the first file operation and never written; %zu stream-skip sites flagged; the zone "
-		              "placement file hashed at 0x%08lX / 0x%08lX",
-		              static_cast<unsigned long>(card_vtable), flag_sites.size(), static_cast<unsigned long>(zone_open_call), static_cast<unsigned long>(xmlb_convert_call_insn));
+		contributed = true;
+		return true;
 	}
 	catch (const std::exception& error)
 	{
 		reject_install(std::string("LC hook installation failed: ") + error.what());
+		return false;
 	}
 }

@@ -27,7 +27,8 @@ add_library(lcsave STATIC
 	src/lcsave/conversations.cpp
 	src/lcsave/dump.cpp
 	src/lcsave/api.cpp
-	src/lcsave/api_engine.cpp)
+	src/lcsave/api_engine.cpp
+	src/lcsave/typed_registry.cpp)
 target_include_directories(lcsave PUBLIC src/lcsave)
 
 # The fix: a drop-in dinput.dll for the game folder.
@@ -69,12 +70,19 @@ add_library(xml2_fix SHARED
 	src/forced_teams.cpp
 	src/conversations.cpp
 	src/gameplay_agreement.cpp
+	src/patch_transaction.cpp
 	src/explosive_first_hit.cpp
 	src/confirmation_release.cpp
 	src/objective_text.cpp
 	src/xp_curve.cpp
 	src/balance.cpp
 	src/limits.cpp
+	src/entity_capacity.cpp
+	src/entity_owners.cpp
+	src/entity_world.cpp
+	src/entity_grid.cpp
+	src/entity_query.cpp
+	src/entity_frames.cpp
 	src/resolution_list.cpp
 	src/frame_capture.cpp
 	src/test_input.cpp
@@ -183,8 +191,64 @@ target_include_directories(xml2_explosive_first_hit_test PRIVATE src)
 # This test reserves the retail image address for isolated native code.
 target_link_options(xml2_explosive_first_hit_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
-add_executable(xml2_gameplay_agreement_test test/gameplay_agreement_test.cpp src/gameplay_agreement.cpp src/explosive_first_hit.cpp src/game_version.cpp)
+add_executable(xml2_gameplay_agreement_test test/gameplay_agreement_test.cpp src/gameplay_agreement.cpp src/patch_transaction.cpp src/explosive_first_hit.cpp src/game_version.cpp)
 target_include_directories(xml2_gameplay_agreement_test PRIVATE src)
 target_link_libraries(xml2_gameplay_agreement_test PRIVATE ws2_32)
 
 target_link_options(xml2_gameplay_agreement_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# The protected code transaction (Phase A section 7) on blocks of the test's own: guards, conflicts, page ledger,
+# injected failures and verified rollback.
+add_executable(xml2_patch_transaction_test test/patch_transaction_test.cpp src/patch_transaction.cpp)
+target_include_directories(xml2_patch_transaction_test PRIVATE src)
+
+# Entity capacity, query owner: synthetic at 256/1024 and differential against the retail query code at 256
+# (the exe path on the command line is a read-only test input; without it the differential part is SKIPPED).
+# The test body is a DLL; the launcher is a CRT-free image based at 0x400000 whose fixture section starts right
+# after one page of code, so it covers the retail helpers from 0x419c90 that a CRT-bearing image cannot.
+add_library(xml2_entity_query_test_body SHARED test/entity_query_test.cpp src/entity_query.cpp)
+target_include_directories(xml2_entity_query_test_body PRIVATE src)
+target_link_libraries(xml2_entity_query_test_body PRIVATE shell32)
+add_executable(xml2_entity_query_test test/entity_query_launch.cpp)
+target_compile_options(xml2_entity_query_test PRIVATE /GS- /Zl)
+target_link_options(xml2_entity_query_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /NODEFAULTLIB /ENTRY:launch /SUBSYSTEM:CONSOLE)
+target_link_libraries(xml2_entity_query_test PRIVATE kernel32)
+add_dependencies(xml2_entity_query_test xml2_entity_query_test_body)
+
+# CEntityGrid replacement owner: synthetic checks at both capacities and the retail grid code executed in-process
+# against the port at 256 (the executable path is given on the command line; without it the native part is skipped).
+add_executable(xml2_entity_grid_test test/entity_grid_test.cpp src/entity_grid.cpp)
+target_include_directories(xml2_entity_grid_test PRIVATE src)
+target_link_options(xml2_entity_grid_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# Phase A entity capacity: the widened caller frames (physics/CCollide, navigation, named query), synthetic at
+# 256 and 1024 against scripted World/Grid/Query fixtures, and differential against the retail frame code copied
+# from a private executable given on the command line (skipped when absent). Reserves the retail image address.
+# The test's own image must own the retail range 0x401000..0x801000: a 4 MB code-class block in .text$a (generated
+# here, never a source file) sorts before the compiler's .text$mn, so the test's code starts above it.
+enable_language(ASM_MASM)
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/entity_frames_fixture.asm"
+".386
+.MODEL FLAT
+fixture_seg SEGMENT PARA PUBLIC 'CODE' ALIAS('.text$a')
+PUBLIC _fixture_space
+_fixture_space DB 400000h DUP(0)
+fixture_seg ENDS
+END
+")
+add_executable(xml2_entity_frames_test test/entity_frames_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/entity_frames_fixture.asm" src/entity_frames.cpp)
+target_include_directories(xml2_entity_frames_test PRIVATE src)
+target_link_options(xml2_entity_frames_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# The entity-capacity install's game-free decisions: ledger shape and binding, allocator ring, save claim, transfer
+# bounds, startup quiescence, layout contract.
+add_executable(xml2_entity_capacity_test test/entity_capacity_test.cpp src/patch_transaction.cpp)
+target_include_directories(xml2_entity_capacity_test PRIVATE src)
+
+# CWorld replacement owner (Phase A entity capacity): synthetic at 256 and 1024 (lifecycle, names, hierarchy,
+# relationships, properties, retirement, reset, reentrancy, invariants) and differential against the retail World code
+# executed in-process at 256 (the executable path on the command line is a read-only test input; without it the
+# differential part is SKIPPED). Reserves the retail image address.
+add_executable(xml2_entity_world_test test/entity_world_test.cpp src/entity_world.cpp)
+target_include_directories(xml2_entity_world_test PRIVATE src)
+target_link_options(xml2_entity_world_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)

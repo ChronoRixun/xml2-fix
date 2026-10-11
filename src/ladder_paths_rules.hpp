@@ -16,16 +16,20 @@ namespace ladder_paths_rules
 		bool operator==(const identity&) const = default;
 	};
 	enum class phase { unseen, driving, completed };
+	// Buckets by the token's dense slot: 1024 buckets cover the raised ten-bit layout, and under the retail eight-bit
+	// layout `& 1023` is still injective over live slots (two live entities never share their low eight bits), so
+	// one bucket function serves both. The whole identity (actor, full token, path, bits) must still match.
 	struct tracking
 	{
+		static constexpr std::uint32_t buckets = 1024;
 		struct entry { identity key{}; phase state = phase::unseen; };
-		std::array<entry, 256> entries{};
+		std::array<entry, buckets> entries{};
 		phase state(identity key) const
 		{
-			const auto& e = entries[key.entity_id & 255];
+			const auto& e = entries[key.entity_id & (buckets - 1)];
 			return e.key == key ? e.state : phase::unseen;
 		}
-		void set(identity key, phase value) { entries[key.entity_id & 255] = {key, value}; }
+		void set(identity key, phase value) { entries[key.entity_id & (buckets - 1)] = {key, value}; }
 	};
 
 	template <typename Engine>

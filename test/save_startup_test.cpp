@@ -95,9 +95,10 @@ int child(int mutation)
   unsigned changed=0;
   for(const auto& g:guards)
    if(!limits_rules::matches(reinterpret_cast<const unsigned char*>(g.va),g.hex)) ++changed;
-  const bool after_writes=mutation==-9 || mutation==-11 || mutation==-12;
+  // The startup transaction rolls every written byte back to the expected bytes after a flush, readback or
+  // protection-restore failure (plan section 7), so no fault case may leave a changed guard site behind.
   std::printf("fault case %d: changed guard sites=%u\n",mutation,changed);
-  if((after_writes && changed==0) || (!after_writes && changed!=0)) return 1;
+  if(changed!=0) return 1;
  }
  if(expected_refusal)
  {

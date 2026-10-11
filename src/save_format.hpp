@@ -5,6 +5,9 @@
 // (save_format_rules.hpp has the decisions and every retail byte).
 
 #include <Windows.h>
+#include "save_format_rules.hpp"
+
+namespace patch_transaction { class transaction; }
 
 #include <string>
 #include <cstdint>
@@ -15,11 +18,21 @@ namespace save_format
 	// site byte-guarded, nothing patched when one differs. The tables and the import run at the first file
 	// operation (the game's thread).
 	void install(HMODULE game);
+	// The same seam as a contribution to the one startup transaction (patch_transaction): guards, writes and the
+	// publication; false when LC is off or the guards/stubs refused (installation_failure says why). The native
+	// profile (retail, or the expanded E10A2 layout of the entity-capacity install) must be chosen before.
+	bool contribute(patch_transaction::transaction& transaction, HMODULE game);
+	void use_native_profile(const save_format_rules::native_profile& chosen);
+	const save_format_rules::native_profile& installed_profile();
 
 	// A requested LC installation must finish before the executable may start.
 	// Runtime table/file refusals remain protected by the already-installed card hooks.
 	bool startup_allowed();
 	const std::string& startup_error();
+
+	// A required reconstruction step failed (a dynamic entity factory returned null, the World or allocator refused
+	// a registration): the pending load is not confirmed and campaign writes stay blocked (plan section 6).
+	void latch_reconstruction_failure(const char* why);
 
 	// Game thread only, after a proven successful native load (not just translation into the card buffer).
 	// Until that confirmation, a prior refused path stays protected; menu Delete also clears its latch.

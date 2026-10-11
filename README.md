@@ -309,6 +309,7 @@ ItemEnhancements=512 ; 376 to 1024 item enhancement records (the game's own: 375
 FightStyles=32       ; 20 to 32 fighting/power styles and movesets (the game's own: 19)
 EffectCurves=3600    ; 901 to 16384 effect curves (the game's own: 900)
 MoveTriggers=64      ; 20 to 127 triggers per move (the game's own: 19)
+EntityCapacity=1     ; 32 actor / 768 generic / 1024 World entity handles (the game's own: 32 / 224 / 256); needs [Save] Format=lc
 ```
 
 Nothing changes without the keys. Every slot takes a name, so `ResourceNames` is raised to at least 450 plus the extra slots, and the actor table only grows together with the name table. 127 is the most the game's code can count to: sixteen of its checks compare the slot count as a single signed byte. The X-Men Legends I port uses `ActorSlots=127` and `ResourceNames=1024`. It works by moving the actor table into a block of the fix's memory that the game's own constructor builds and its own destructor tears down, and by building a bigger name table with the game's own constructor where the game's getter looks for it, all before the game's start-up asks for either, and after every byte it relies on is checked against the retail build. All or nothing: on any other build the game keeps both tables, a value out of range is ignored, and `xml2-fix.log` says why. The test pipe's `status` shows how full they are (`actors 23/127; names 301/1024; ...`). The game's other fixed limit, the 200 records of its IGB (model file) cache, is not raised yet.
@@ -690,6 +691,8 @@ It contains no game files or game code and doesn't change any file of the game: 
 The software is provided "as is", without warranty of any kind; see [LICENSE](LICENSE).
 
 ### Triggers per move
+
+`[Limits] EntityCapacity=1` raises the engine's entity domain to 32 actor / 768 generic / 1024 World handles ([docs/entity-capacity.md](docs/entity-capacity.md)): the stock generic arena refuses every prop, projectile or trigger past the 224th live one without a word, which is why crowded rooms lose objects and the HAARP freeze gun never fires. All of it is installed as one checked transaction (535 guards, 31 region hashes) before the game's own code runs; it needs LC saves, marks its saves with a required-feature bit a retail-layout build refuses, and refuses online peers of another layout.
 
 `[Limits] MoveTriggers=64` gives each native move a preallocated handle side array. Missing key or 19 keeps
 stock behavior; invalid values are logged and ignored. The port needs 27 for its largest restored burst;

@@ -29,7 +29,7 @@ namespace save_core_rules
  using save_format_rules::address;
  constexpr std::uint32_t capture_incomplete=0x00000001;
  constexpr std::uint32_t capture_unobserved=0x00000002;
- constexpr bool ordinal_fits(std::uint32_t ordinal){ return ordinal>=1 && ordinal<=256; }
+ constexpr bool ordinal_fits(std::uint32_t ordinal,std::uint32_t ordinals=256){ return ordinal>=1 && ordinal<=ordinals; }
  constexpr bool capacity_fits(std::uint32_t demand,std::uint32_t live,std::uint32_t cap)
  { return live<=cap && demand<=cap-live; }
  inline std::string folded(std::string text)
@@ -128,20 +128,24 @@ namespace save_core_rules
   {0x466659,"81f900030000",8,0x4666bc},{0x46668a,"3d2c010000",7,0x4666a6},
   {0x4666e7,"81fe00030000",12,0x4667a3},{0x4666f3,"81bd7452000000030000",16,0x4667a3}
  }};
- inline std::vector<std::uint8_t> bound_bridge(const capture_bound& site,address base,address hook)
+ // `bound` 0 keeps the retail immediate; otherwise the copied compare takes the installed layout's count (the
+ // immediate is the compare's last four bytes at every capture site).
+ inline std::vector<std::uint8_t> bound_bridge(const capture_bound& site,address base,address hook,std::uint32_t bound=0)
  {
   std::vector<std::uint8_t> out;
   const auto size=limits_rules::hex_size(site.compare);
   for(std::size_t i=0;i<size;++i)out.push_back(limits_rules::hex_byte(site.compare,i));
+  if(bound)std::memcpy(out.data()+size-4,&bound,4);
   const auto at=base+static_cast<address>(out.size());out.insert(out.end(),{0x0f,0x82});
   save_format_rules::put32(out,site.va+static_cast<address>(site.length)-(at+6)); // unsigned below -> retail fit
   out.insert(out.end(),{0x9c,0x60,0x55});invoke(out,base,hook);
   out.insert(out.end(),{0x83,0xc4,0x04,0x61,0x9d});resume(out,base,site.skip);return out;
  }
- inline std::vector<std::uint8_t> ordinal_write_bridge(address base,address hook)
+ inline std::vector<std::uint8_t> ordinal_write_bridge(address base,address hook,std::uint32_t ordinals=256)
  {
   // EAX is the positive ordinal. Native world-handle availability is an independent limit.
   std::vector<std::uint8_t> out{0x3d,0x00,0x01,0x00,0x00,0x0f,0x86};
+  std::memcpy(out.data()+1,&ordinals,4);
   save_format_rules::put32(out,0); // patched to the replay below
   out.insert(out.end(),{0x9c,0x60,0x55});invoke(out,base,hook);
   out.insert(out.end(),{0x83,0xc4,0x04,0x61,0x9d});resume(out,base,0x4666a6);

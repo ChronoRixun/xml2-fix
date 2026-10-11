@@ -182,12 +182,21 @@ namespace test_state_rules
 			}
 		}
 	}
+	// Where the live entity table is (retail CWorld static by default; the entity-capacity install publishes its
+	// own object and the 1024 layout through entity_capacity::installed()).
+	struct entity_table
+	{
+		address object = 0x778b70;
+		address entities = 0x4, live_bits = 0x818, handles = 0x83c;
+		unsigned capacity = 256;
+	};
 	template <class Memory>
 	class reader
 	{
 		Memory& m;
 
 	public:
+		entity_table table{};
 		explicit reader(Memory& mem) : m(mem)
 		{
 		}
@@ -419,15 +428,15 @@ namespace test_state_rules
 			// Enumerate existing entities only. No name lookup that interns strings or cached party queries.
 			if (s.loading == false)
 			{
-				for (unsigned i = 0; i < 256; ++i)
+				for (unsigned i = 0; i < table.capacity; ++i)
 				{
-					auto bits = get<address>(0x778b70 + 0x818 + 4 * (i / 32));
+					auto bits = get<address>(table.object + table.live_bits + 4 * (i / 32));
 					if (!bits || !(*bits & (1u << (i % 32))))
 					{
 						continue;
 					}
-					auto e = get<address>(0x778b74 + 4 * i);
-					auto h = get<address>(0x778b70 + 0x83c + 4 * i);
+					auto e = get<address>(table.object + table.entities + 4 * i);
+					auto h = get<address>(table.object + table.handles + 4 * i);
 					if (!e || !*e || !h || get<address>(*e + 0x1c) != h)
 					{
 						continue;

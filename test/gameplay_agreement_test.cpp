@@ -63,7 +63,7 @@ void records(){
  record native;native.finalize();check(native.bytes().size()==32,"default record contains explicit retail entity layout");
  auto bytes=std::vector<std::uint8_t>(off.bytes().begin(),off.bytes().end());
  check(bytes[16]==32 && bytes[20]==224 && bytes[25]==1 && bytes[28]==8,"retail layout is actor32/generic224/world256/token8");
- bytes[4]=2;check(off.compare(bytes)==result::protocol,"unknown record revision refuses");bytes.assign(off.bytes().begin(),off.bytes().end());
+ bytes[4]=3;check(off.compare(bytes)==result::protocol,"unknown record revision refuses");bytes.assign(off.bytes().begin(),off.bytes().end());bytes[4]=1;check(off.compare(bytes)==result::protocol,"protocol revision 1 peers (release 1.4) refuse");bytes.assign(off.bytes().begin(),off.bytes().end());
  bytes[34]=2;check(off.compare(bytes)==result::revision,"unknown rule revision refuses");bytes.assign(off.bytes().begin(),off.bytes().end());
  bytes[32]=42;check(off.compare(bytes)==result::entries,"unknown rule id refuses");bytes.assign(off.bytes().begin(),off.bytes().end());
  bytes[32]=1;check(off.compare(bytes)==result::entries,"duplicate/unsorted peer id refuses");bytes.assign(off.bytes().begin(),off.bytes().end());
@@ -78,7 +78,7 @@ void records(){
  record duplicate;duplicate.add(2,1,{0,0,0,0},true);check(!duplicate.add(2,1,{0,0,0,0},true) && !duplicate.finalize(),"duplicate registration poisons finalization");
  record late;late.finalize();check(!late.add(2,1,{0,0,0,0},true) && !late.ready() && late.bytes().empty(),"late registration cannot change a frozen advertised record");
  record invalid;check(!invalid.layout(1,{32,224,256,7},true) && !invalid.finalize(),"token capacity overflow refuses");
- record sum;check(!sum.layout(1,{32,225,256,8},true),"inconsistent world capacity refuses");
+ record sum;check(!sum.layout(1,{32,225,256,8},true),"actor+generic above world refuses");record headroom;check(headroom.layout(3,{32,768,1024,10},true) && headroom.finalize(),"actor+generic below world (224 registrations of headroom) is accepted");
  record twice;twice.layout(1,{32,224,256,8},true);check(!twice.layout(1,{32,224,256,8},true) && !twice.finalize(),"duplicate layout owner cannot overwrite an earlier effective layout");
  record bad_layout;check(!bad_layout.layout(2,{64,448,512,16},false) && !bad_layout.finalize(),"failed entity installer cannot silently advertise retail");
  record full;for(std::uint16_t id=2;id<=8;++id)full.add(id,1,{id,0,0,0},true);check(full.finalize() && full.bytes().size()==gameplay_capabilities::max_size,"bounded eight-entry record serializes explicit values");
@@ -161,18 +161,22 @@ void separate_host_joiner()
 void runtime(){
  guards(failure_guards);guards(transport_guards);guards(game_version_rules::guards);
  native_bytes(native_failure,0xa7);native_bytes(native_cleanup,0x10c);native_bytes(native_peer_disconnect,10);
- const auto original=*static_cast<std::uint8_t*>(at(native_join));
+ const auto original=*static_cast<std::uint8_t*>(at(native_join));const auto original_send=*static_cast<std::uint8_t*>(at(reply_send));
  check(!gameplay_agreement::prepare(reinterpret_cast<HMODULE>(0x400001)) && *static_cast<std::uint8_t*>(at(native_join))==original,"wrong base refuses native refusal hooks");
  writable(failure_text,1);*static_cast<std::uint8_t*>(at(failure_text))^=1;
- check(!gameplay_agreement::prepare(reinterpret_cast<HMODULE>(0x400000)) && *static_cast<std::uint8_t*>(at(native_join))==original,"one native failure guard mismatch prevents all writes");native_bytes(failure_text,5);
- make_rx();check(gameplay_agreement::prepare(reinterpret_cast<HMODULE>(0x400000)) && rx(0x609000),"native refusal preparation restores shared RX page");
+ check(!gameplay_agreement::prepare(reinterpret_cast<HMODULE>(0x400000)) && *static_cast<std::uint8_t*>(at(native_join))==original && *static_cast<std::uint8_t*>(at(reply_send))==original_send,"one native failure guard mismatch prevents all writes");native_bytes(failure_text,5);
+ // One transaction owns refusal and transport sites: a transport guard mismatch leaves the refusal sites untouched too.
+ writable(reply_send,1);*static_cast<std::uint8_t*>(at(reply_send))^=1;make_rx();
+ check(!gameplay_agreement::prepare(reinterpret_cast<HMODULE>(0x400000)) && *static_cast<std::uint8_t*>(at(native_join))==original && rx(0x607000) && rx(0x608000) && rx(0x609000),"one transport guard mismatch prevents all writes and preserves every RX page");
+ guards(transport_guards);native_bytes(reply_send,5);
+ make_rx();check(gameplay_agreement::prepare(reinterpret_cast<HMODULE>(0x400000)) && rx(0x607000) && rx(0x608000) && rx(0x609000),"native refusal and transport preparation restores every shared RX page");
+ check(*static_cast<std::uint8_t*>(at(native_join))==0xe9 && *static_cast<std::uint8_t*>(at(reply_send))==0xe8,"refusal and transport sites are written together");
  check(!game_version::needs_gameplay_agreement(),"no participating installer leaves native protocol unenlisted");
  check(gameplay_agreement::register_entity_layout(1,32,224,256,8,true),"public capacity API registers verified explicit retail layout");
  check(game_version::needs_gameplay_agreement() && !game_version::gameplay_online_allowed() && iat_hook::captured,"capacity registration automatically enlists socket exclusion before finalization");
  check(gameplay_agreement::register_rule(2,1,{explosive_first_hit::installed() ? 1u : 0u,0,0,0},explosive_first_hit::verified()),"installed explosion registers its actual effective installer snapshot");
  check(gameplay_agreement::register_rule(3,7,{1,3,0,0},true),"synthetic controller registers revision/values through public API without transport changes");
- writable(reply_send,1);*static_cast<std::uint8_t*>(at(reply_send))^=1;make_rx();
- check(!gameplay_agreement::finalize(reinterpret_cast<HMODULE>(0x400000)) && rx(0x607000) && rx(0x608000) && rx(0x609000),"failed transport guard preserves every original RX page");
+
  // Only failure-path boundaries are isolated here. Execute retail failure + cleanup code.
  popup_vt[3]=reinterpret_cast<void*>(&show_popup);menu_vt[0x74/4]=reinterpret_cast<void*>(&close_menu);
  jump(native_dialog,&popup_get);jump(native_menu,&menu_get);jump(0x6097b0,&descriptor_get);jump(0x612be0,&session_get);jump(0x6111f0,&no_peer);jump(0x560700,&free_buffer);
@@ -183,10 +187,9 @@ void runtime(){
  const auto shown=popups;
  check(begin(context.data(),sender.data(),123)==0 && cleaned() && popups==shown+1 && statuses>0 && freed>0 && timers>0 && unregistered>0,"failed local transport executes actual native join failure/cleanup immediately");
  check(visible.find("Incompatible gameplay")!=std::string::npos && visible.find("unverified installation")!=std::string::npos,"native popup vtable receives incompatibility/install-failure explanation");
- // Restore boundary signatures for final transport verification; no gameplay is started.
- guards(transport_guards);native_bytes(reply_send,5);make_rx();
- check(gameplay_agreement::finalize(reinterpret_cast<HMODULE>(0x400000)),"final shared record and production transport install verify");
- check(rx(0x607000) && rx(0x608000) && rx(0x609000),"all successful shared-page acquisitions restore final RX protection");
+ // The record freezes after every registration; no further bytes are written at finalization.
+ make_rx();check(gameplay_agreement::finalize(reinterpret_cast<HMODULE>(0x400000)),"final shared record verifies with the installed transport");
+ check(rx(0x607000) && rx(0x608000) && rx(0x609000),"finalization writes nothing and every shared page stays RX");
  boundary_standins();
  game_version::install(reinterpret_cast<HMODULE>(0x400000));
  auto socket=reinterpret_cast<SOCKET(WSAAPI*)(int,int,int)>(iat_hook::captured);const auto before=popups;
