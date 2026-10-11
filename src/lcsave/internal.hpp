@@ -8,6 +8,7 @@
 #include "layout.hpp"
 #include "lcsave.hpp"
 #include "value.hpp"
+#include "conversation_cache.hpp"
 
 #include <map>
 #include <memory>
@@ -281,6 +282,7 @@ namespace lcsave::detail
 		mutable std::vector<BindFileRead> bind_files;          // as read (load_bind records each file once)
 		std::wstring bind_root;
 		std::wstring data_root;
+		std::shared_ptr<ConversationCache> conversations = std::make_shared<ConversationCache>();
 		EraTables T;                                           // the build's own numbering (the saver's direction)
 		std::vector<std::string> stat;                         // canonical key by stats index ("" = None)
 		std::vector<std::string> item;                         // canonical key by definition index

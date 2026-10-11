@@ -332,3 +332,30 @@ first/third writable preflight calls, rollback restoration, final restoration, s
 and first/third patch flushes. It checks the injected call was reached, no guard bytes
 changed before writing, and changed bytes exist for failures after writes. Every failure
 must show the LC refusal notice and return ERROR_DLL_INIT_FAILED before simulated startup.
+
+## Online saves and conversation identity
+
+LC readiness calls `prepare_conversation_digest` before entering play. It starts a
+recursive Windows change notification before computing the conversation identity,
+checks that preparation was stable, and pins that digest to the loaded build tables.
+Captures and overwrite preflight then make one nonblocking notification check. They
+never enumerate or hash the conversation tree on a gameplay frame. Changes during
+play, or notification failure, refuse saving/loading until restart; prepared tables
+represent an immutable build for the process lifetime.
+
+Standalone converter callers still validate file versions and refresh changed trees.
+Attribute checks include identity, size, write time and change time on NTFS/ReFS;
+other filesystems retain full hashing. Refresh is published only after a second
+inventory confirms a stable tree. Initial engine preparation can still take time on
+cold storage. Digest ordering, hash algorithm and LC bytes are unchanged.
+`[Debug] SaveTiming=1` logs capture, conversation-digest and write durations.
+
+## SPEC: V-TBD (number assigned at merge)
+
+`python test/validate_coop_save_cache.py` checks preparation, cache ownership,
+nonblocking pinned lookup before inventory, and stable refresh boundaries.
+`lcsave_conversation_digest_test` verifies unchanged identity without data reopens,
+standalone invalidation after edits with restored write times, additions, renames,
+removals and failed refreshes, plus pinned engine refusal after a tree mutation.
+Initial LC readiness must pin identity before gameplay. These checks accompany the
+native save-core rules and save-format/content gates.

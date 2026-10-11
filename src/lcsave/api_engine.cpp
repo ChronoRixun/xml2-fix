@@ -3,10 +3,19 @@
 
 #include "internal.hpp"
 
+#include <Windows.h>
 #include <cstring>
 #include <algorithm>
 #include <filesystem>
 #include <cmath>
+
+namespace lcsave::detail
+{
+	ConversationCache::~ConversationCache()
+	{
+		if (change_notification) FindCloseChangeNotification(change_notification);
+	}
+}
 
 namespace lcsave
 {
@@ -118,6 +127,55 @@ namespace lcsave
 		}
 		return r;
 	}
+	namespace
+	{
+		std::vector<detail::ConversationFile> conversation_files(const std::filesystem::path& root)
+		{
+			std::vector<detail::ConversationFile> files;
+			std::map<std::uint32_t, bool> versioned_volumes;
+			if (!std::filesystem::exists(root)) return files;
+			for (const auto& entry : std::filesystem::recursive_directory_iterator(root))
+			{
+				if (!entry.is_regular_file()) continue;
+				detail::ConversationFile file;
+				file.name = py_lower(entry.path().lexically_relative(root).generic_string(), Enc::latin1);
+				file.path = entry.path().wstring();
+				// Attribute-only access avoids reopening every unchanged file for data on
+				// the game/network thread. ChangeTime also detects restored LastWriteTime.
+				const HANDLE h = CreateFileW(file.path.c_str(), FILE_READ_ATTRIBUTES,
+					FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+					FILE_ATTRIBUTE_NORMAL, nullptr);
+				if (h == INVALID_HANDLE_VALUE) detail::fail("conversation file attributes cannot be read");
+				FILE_BASIC_INFO basic{};
+				BY_HANDLE_FILE_INFORMATION info{};
+				const bool has_basic = GetFileInformationByHandleEx(h, FileBasicInfo, &basic, sizeof basic) != FALSE;
+				const bool ok = GetFileInformationByHandle(h, &info) != FALSE;
+				if (ok && !versioned_volumes.contains(info.dwVolumeSerialNumber))
+				{
+					wchar_t filesystem[32]{};
+					const bool known = GetVolumeInformationByHandleW(h, nullptr, 0, nullptr, nullptr, nullptr,
+						filesystem, static_cast<DWORD>(std::size(filesystem))) != FALSE;
+					versioned_volumes[info.dwVolumeSerialNumber] = known &&
+						(_wcsicmp(filesystem, L"NTFS") == 0 || _wcsicmp(filesystem, L"ReFS") == 0);
+				}
+				CloseHandle(h);
+				if (!ok) detail::fail("conversation file version cannot be read");
+				file.size = (static_cast<std::uint64_t>(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
+				file.file_id = (static_cast<std::uint64_t>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
+				file.volume = info.dwVolumeSerialNumber;
+				file.write_time = static_cast<std::uint64_t>(basic.LastWriteTime.QuadPart);
+				file.change_time = static_cast<std::uint64_t>(basic.ChangeTime.QuadPart);
+				file.versioned = has_basic && basic.ChangeTime.QuadPart > 0 && file.file_id != 0 &&
+					versioned_volumes[info.dwVolumeSerialNumber];
+				files.push_back(std::move(file));
+			}
+			std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
+			for (std::size_t i = 1; i < files.size(); ++i)
+				if (files[i-1].name == files[i].name) detail::fail("duplicate conversation path after case normalization");
+			return files;
+		}
+	}
+
 	bool conversation_digest(const Tables& tables, std::array<std::uint8_t, 32>& out, std::string& error)
 	{
 		error.clear();
@@ -125,23 +183,65 @@ namespace lcsave
 		{
 			if (!tables.loaded() || !tables.data->build) detail::fail("conversation digest needs build tables");
 			const auto root = std::filesystem::path(tables.data->build->data_root) / L"Conversations";
-			std::vector<std::pair<std::string, std::filesystem::path>> paths;
-			if (std::filesystem::exists(root)) for (const auto& entry : std::filesystem::recursive_directory_iterator(root))
-				if (entry.is_regular_file()) paths.emplace_back(py_lower(entry.path().lexically_relative(root).generic_string(), Enc::latin1), entry.path());
-			std::sort(paths.begin(), paths.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-			std::vector<std::uint8_t> input;
-			std::string previous;
-			for (const auto& [name, path] : paths)
+			auto& cache = *tables.data->build->conversations;
+			std::lock_guard lock(cache.mutex);
+			// Engine tables are pinned before play. Never enumerate or refresh on a frame.
+			if (cache.change_notification)
 			{
-				if (name == previous) detail::fail("duplicate conversation path after case normalization");
-				previous = name;
+				if (!cache.valid || WaitForSingleObject(cache.change_notification, 0) != WAIT_TIMEOUT)
+				{
+					cache.valid = false;
+					detail::fail("conversation files changed during play; restart to prepare this build");
+				}
+				out = cache.digest; return;
+			}
+			const auto files = conversation_files(root);
+			if (cache.valid && files == cache.files) { out = cache.digest; return; }
+			// Publish only a complete, stable snapshot; a failed refresh must never
+			// fall back to an older digest. The digest bytes and path ordering are unchanged.
+			cache.valid = false;
+			std::vector<std::uint8_t> input;
+			for (const auto& file : files)
+			{
 				std::vector<std::uint8_t> bytes;
-				if (!detail::read_file_bytes(path.wstring(), bytes)) detail::fail("conversation file cannot be read");
+				if (!detail::read_file_bytes(file.path, bytes)) detail::fail("conversation file cannot be read");
 				const auto hash = sha1(bytes.data(), bytes.size());
-				input.insert(input.end(), name.begin(), name.end()); input.push_back(0);
+				input.insert(input.end(), file.name.begin(), file.name.end()); input.push_back(0);
 				input.insert(input.end(), hash.begin(), hash.end());
 			}
-			out = sha256(input.data(), input.size());
+			if (files != conversation_files(root)) detail::fail("conversation files changed while hashing");
+			cache.digest = sha256(input.data(), input.size());
+			cache.files = files;
+			// Other filesystems still get the established full-hash behavior, without
+			// assuming their timestamps can identify a content-preserving-time edit.
+			cache.valid = std::all_of(files.begin(), files.end(), [](const auto& file) { return file.versioned; });
+			out = cache.digest;
+		});
+	}
+
+	bool prepare_conversation_digest(const Tables& tables, std::string& error)
+	{
+		error.clear();
+		return guarded(error, [&]
+		{
+			if (!tables.loaded() || !tables.data->build) detail::fail("conversation digest needs build tables");
+			auto& cache = *tables.data->build->conversations;
+			const auto root = std::filesystem::path(tables.data->build->data_root) / L"Conversations";
+			// Watch before hashing so mutations during preparation cannot escape the pin.
+			const HANDLE notification = FindFirstChangeNotificationW(root.c_str(), TRUE,
+				FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_ATTRIBUTES |
+				FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SECURITY);
+			if (notification == INVALID_HANDLE_VALUE) detail::fail("conversation changes cannot be monitored");
+			std::unique_ptr<void, decltype(&FindCloseChangeNotification)> owned(notification, &FindCloseChangeNotification);
+			std::array<std::uint8_t, 32> digest{};
+			if (!conversation_digest(tables, digest, error)) detail::fail(error);
+			std::lock_guard lock(cache.mutex);
+			if (WaitForSingleObject(notification, 0) != WAIT_TIMEOUT)
+				detail::fail("conversation files changed while preparing identity");
+			if (cache.change_notification) FindCloseChangeNotification(cache.change_notification);
+			cache.change_notification = owned.release();
+			cache.digest = digest;
+			cache.valid = true;
 		});
 	}
 

@@ -651,6 +651,16 @@ namespace save_format
 				fail_closed("the save tables of this build don't verify: " + error);
 				return;
 			}
+			// Prepare content identity before the front end can enter an online session.
+			// Captures and overwrite preflight use a nonblocking change check, never a tree scan.
+			const auto digest_start = GetTickCount64();
+			if (!lcsave::prepare_conversation_digest(tables, error))
+			{
+				fail_closed("the conversation identity of this build cannot be prepared: " + error);
+				return;
+			}
+			logger::write("save format: conversation identity prepared in %llu ms before play",
+				static_cast<unsigned long long>(GetTickCount64()-digest_start));
 			logger::write("save format: tables of %ls verified: content version %lu, catalogue revision %lu; %lu heroes, %lu stats names, %lu items, %lu courses, %lu objectives",
 			              build.c_str(), static_cast<unsigned long>(tables.content_version()), static_cast<unsigned long>(tables.catalogue_revision()),
 			              static_cast<unsigned long>(tables.hero_count()), static_cast<unsigned long>(tables.stats_count()), static_cast<unsigned long>(tables.item_count()),
@@ -852,6 +862,8 @@ namespace save_format
 
 		bool __fastcall capture_hook(void* record,void*,const char* name,const int flag,const float stamp)
 		{
+			const auto capture_start = GetTickCount64();
+			if (ini::flag(L"Debug", L"SaveTiming", false)) logger::write("save timing: capture begin");
 			lcsave::ZoneCaptureMetadata meta=active_visit;
 			meta.zone=save_core_rules::folded(game_text(name)); meta.time_stamp=stamp;
 			if (!visit_known || meta.zone!=active_visit.zone)
@@ -859,6 +871,7 @@ namespace save_format
 			std::string error;
 			if (ready!=readiness::ok || !lcsave::conversation_digest(tables,meta.zone,meta.conversation_digest,error))
 				meta.capture_flags|=save_core_rules::capture_unobserved;
+			if (ini::flag(L"Debug", L"SaveTiming", false)) logger::write("save timing: conversation digest %llu ms", static_cast<unsigned long long>(GetTickCount64()-capture_start));
 			capturing=&meta;
 			const bool ok=retail_capture(record,nullptr,name,flag,stamp);
 			capturing=nullptr;
@@ -875,6 +888,7 @@ namespace save_format
 			logger::write("save core: captured %s at %.9g; %zu observed numbered entities; status 0x%08lx",
 			              cached_captures.back().zone.c_str(),static_cast<double>(stamp),cached_captures.back().entities.size(),
 			              static_cast<unsigned long>(cached_captures.back().capture_flags));
+			if (ini::flag(L"Debug", L"SaveTiming", false)) logger::write("save timing: capture total %llu ms", static_cast<unsigned long long>(GetTickCount64()-capture_start));
 			return ok;
 		}
 
@@ -1033,6 +1047,7 @@ namespace save_format
 		// A write of a kind: the engine's bytes re-expressed and written as SPEC 1.6 says.
 		bool write_lc(const std::uint8_t kind, const int slot, const char* description, const std::uint8_t* data, const std::size_t size)
 		{
+			const auto write_start = GetTickCount64();
 			// Guards: refuse automatic/default writes to an unreadable or unresolved original.
 			const std::string path = kind == kind_profile ? lc_dir + profile_file : slot_path(slot);
 			const auto latched = write_refusals.reason(path);
@@ -1147,6 +1162,7 @@ namespace save_format
 			// CORE-END
 			logger::write("save format: wrote %s (%zu bytes, sequence %lu, serial %016llx%s)", path.c_str(), result.bytes.size(), static_cast<unsigned long>(context.save_sequence),
 			              static_cast<unsigned long long>(context.campaign_serial), result.parked ? (", " + std::to_string(result.parked) + " parked records carried").c_str() : "");
+			if (ini::flag(L"Debug", L"SaveTiming", false)) logger::write("save timing: write kind %u total %llu ms", kind, static_cast<unsigned long long>(GetTickCount64()-write_start));
 			return true;
 		}
 

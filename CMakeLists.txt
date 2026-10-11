@@ -154,3 +154,7 @@ if(XML2_SAVE_STARTUP_FAULT_TEST)
  target_link_libraries(xml2_save_startup_faults PRIVATE lcsave dxguid ws2_32 winmm iphlpapi)
  set_target_properties(xml2_save_startup_faults PROPERTIES OUTPUT_NAME save-startup-faults)
 endif()
+
+# Conversation identity caching and invalidation, using only invented filesystem fixtures.
+add_executable(lcsave_conversation_digest_test test/conversation_digest_test.cpp)
+target_link_libraries(lcsave_conversation_digest_test PRIVATE lcsave)

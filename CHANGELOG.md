@@ -23,6 +23,10 @@
   Share fallback timers during same-actor reentry so a trigger-started replacement move retains its future
   deadlines instead of dispatching stale timers; enclosing packet ownership stays separately scoped.
 
+- Prepare and cache verified conversation identity before play so LC saves do not
+  scan the conversation tree on the game/network thread. Changes during play
+  refuse saving until restart; the save format and digest bytes are unchanged.
+
 - Fix legacy imports whose equipped items were written in a different era from the campaign's talents.
   Translate hero and restore-bank equipment with the detected item era, including semantic dumps.
 - Key talent-era evidence by actual stats index so restore-bank records belong to the correct hero.

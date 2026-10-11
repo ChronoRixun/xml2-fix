@@ -5,8 +5,8 @@
 // (CONVERTER-PORT.md; SPEC-new-save revision 2.2, SPEC-old-save revision 2). Byte for byte: the same old file
 // and tables give the same converted file and the same canonical dump as the Python.
 //
-// Nothing here throws: every call returns a result with an error string. Nothing touches the disk except
-// load_tables (which reads the build's catalogue, era model and bind files; docs/lcsave-formats.md).
+// Nothing here throws: every call returns a result with an error string. Table loading and conversation
+// identity validation read build files; the conversion and reverse APIs never write player files.
 //
 // Tables: catalogue.lcc (ids), legacy.lcm (what every builder release numbered how) and the bind files of the
 // player's build (names and the running build's numbering). load_tables verifies them (SPEC 3.5 static part:
@@ -104,6 +104,9 @@ namespace lcsave
 	bool conversation_digest(const Tables& tables, std::array<std::uint8_t, 32>& out, std::string& error);
 	// Native heard provenance includes the zone package ranking; the overload above is legacy-only.
 	bool conversation_digest(const Tables& tables, const std::string& zone, std::array<std::uint8_t, 32>& out, std::string& error);
+
+	// Engine-only: pin a verified digest before play, refusing later tree changes without scanning.
+	bool prepare_conversation_digest(const Tables& tables, std::string& error);
 	struct NativeLoadDemand
 	{
 		std::uint32_t instances = 0, attached_enhancements = 0, world_items = 0;

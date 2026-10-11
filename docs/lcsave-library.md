@@ -167,3 +167,20 @@ Sidecar framing remains `LCCONV1` plus NUL, u32 version=1, u32 table count, u32 
 Each table has provenance[32], zone-key-hash[32], u32 bit count, then identity hashes[32]. Counts are multiples of
 four, at most 128. Duplicate keys/identities, bad framing/version/CRC refuse malformed table files. V39 checks
 the generated set. Rebuild savefiles after the era ledger changes; game asset preparation caches remain valid.
+
+## Conversation digest cache
+
+`conversation_digest` keeps a verified snapshot per loaded build. Standalone callers
+validate the sorted inventory with attribute-only handles and reuse the digest if file
+identity, size, write time and change time match on NTFS/ReFS. Other filesystems retain
+full hashing. A changed inventory is rehashed and checked again before publication;
+failures never fall back to old identity.
+
+The engine calls `prepare_conversation_digest` before play. It starts a recursive
+Windows directory notification before hashing, then pins the verified identity. All
+later capture and reverse-reader calls check that notification without waiting or
+scanning files. A change or notification failure refuses the operation until restart
+with fresh build tables. Live modification of a loaded build is unsupported, as with
+its other prepared tables. No worker thread or save-format change is introduced.
+The synthetic `lcsave_conversation_digest_test` covers caching, mutation, failed
+refresh recovery, pinning and refusal after a pinned tree changes.
