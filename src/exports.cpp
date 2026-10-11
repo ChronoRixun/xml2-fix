@@ -139,9 +139,6 @@ namespace
 	void install()
 	{
 		logger::write("XML2 Fix " FIX_VERSION);
-		// XInput's first call can take seconds (xinput_pad.hpp): made on a thread of its own, which runs once
-		// the loader is done, so the game's thread never waits for it; pads read as idle until then.
-		xinput_pad::start();
 		gamepad_fix::use_profile(pad_profile::logitech_dual_action);
 		// [Test] VirtualPads: pads with nothing plugged in, in both DirectInput paths below - read before either exists.
 		virtual_pad::install();
@@ -179,6 +176,11 @@ namespace
 		// [Game] SaveFolder re-points the folder the card builds at start-up and this reads at its first file
 		// operation; none of its sites or guards is anyone else's.
 		save_format::install(game);
+		if (!save_format::startup_allowed()) return;
+		// Start background work only after required startup hooks have verified.
+		// XInput's first call can take seconds (xinput_pad.hpp): made on a thread of its own, which runs once
+		// the loader is done, so the game's thread never waits for it; pads read as idle until then.
+		xinput_pad::start();
 		save_content_guards::install(game);
 		save_trace::install(game);
 		// What the end credits run: one push operand in CREDITS_MENU, used only when a campaign ends.
@@ -258,7 +260,17 @@ BOOL WINAPI DllMain(HINSTANCE instance, const DWORD reason, LPVOID)
 	{
 		DisableThreadLibraryCalls(instance);
 		install();
-		if (!game_version::startup_allowed()) return FALSE;
+		if (!game_version::startup_allowed() || !save_format::startup_allowed())
+		{
+			const std::string startup_reason = !game_version::startup_allowed()
+				? "The required LC network exclusion hook could not be installed."
+				: "The required LC save/trivia hooks could not be installed.\n" + save_format::startup_error();
+			logger::write("startup: refused: %s", startup_reason.c_str());
+			const auto message = startup_reason + "\n\nThe game was not started. Check xml2-fix.log and use a supported executable.";
+			MessageBoxA(nullptr, message.c_str(), "XML2 Fix cannot start", MB_OK | MB_ICONERROR);
+			logger::write("startup: refusal notice closed; DLL initialization rejected");
+			return FALSE;
+		}
 	}
 	return TRUE;
 }

@@ -83,9 +83,9 @@ namespace
 		const auto folder = root / fs::path(name);
 		const auto build = root / fs::path(fields[1]);
 		if (!inside(root, folder) || !inside(root, build) || !inside(root, folder / "actual.lcsave")) return report("case/build path escapes fixture root");
-		if (mode != "campaign" && mode != "profile" && mode != "legacy-refuse" && mode != "legacy-import" && mode != "profile-import" && mode != "reverse" && mode != "refuse" && mode != "native-campaign" && mode != "native-transfer" && mode != "native-dead-item") return report("unsupported mode");
+		if (mode != "campaign" && mode != "profile" && mode != "legacy-refuse" && mode != "legacy-import" && mode != "profile-import" && mode != "reverse" && mode != "refuse" && mode != "native-campaign" && mode != "native-transfer" && mode != "native-dead-item" && mode != "native-trivia") return report("unsupported mode");
 		std::vector<std::uint8_t> input, expected;
-		if (!read_bytes(folder / (mode == "legacy-refuse" || mode == "legacy-import" || mode == "profile-import" || mode == "native-campaign" || mode == "native-transfer" || mode == "native-dead-item" ? "input.raw" : "input.lcsave"), input)) return report("cannot read input");
+		if (!read_bytes(folder / (mode == "legacy-refuse" || mode == "legacy-import" || mode == "profile-import" || mode == "native-campaign" || mode == "native-transfer" || mode == "native-dead-item" || mode == "native-trivia" ? "input.raw" : "input.lcsave"), input)) return report("cannot read input");
 		const auto expected_name = mode == "reverse" ? "expected.old" : (mode == "refuse" || mode == "legacy-refuse") ? "expected.error" : "expected.lcsave";
 		if (!read_bytes(folder / expected_name, expected)) return report("cannot read expected output");
 		lcsave::Tables tables;
@@ -144,14 +144,21 @@ namespace
 			options.saved_at = 0;
 			result = lcsave::convert_old_profile_to_new(input, tables, options);
 		}
-		else if (mode == "native-campaign" || mode == "native-transfer" || mode == "native-dead-item")
+		else if (mode == "native-campaign" || mode == "native-transfer" || mode == "native-dead-item" || mode == "native-trivia")
 		{
 			lcsave::NewFileContext context;
 			context.description = description(input);
 			context.saved_at = 0; context.writer_version = 0x01040000; context.writer = "XML2 Fix";
 			context.slot = 0; context.campaign_serial = 17; context.save_sequence = sequence;
 			context.require_capture_metadata = true;
-			if (mode == "native-transfer")
+			if (mode == "native-trivia")
+			{
+				if (lcsave::trivia_bit(tables, 6, 0) != 26 || lcsave::trivia_bit(tables, 9, 7) != 49 ||
+				    lcsave::trivia_bit(tables, 0, 0) != -1 || lcsave::trivia_bit(tables, 6, -1) != -1 ||
+				    lcsave::trivia_bit(tables, 9, 8) != -1) return report("runtime trivia mapping differs");
+				context.require_capture_metadata = false; // these invented fixtures have no cached zones
+			}
+			else if (mode == "native-transfer")
 			{
 				if (!lcsave::native_zone_metadata(input,tables,context.zone_captures,error)) return report("transfer metadata: "+error);
 			}

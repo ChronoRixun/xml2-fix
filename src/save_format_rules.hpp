@@ -176,7 +176,17 @@ namespace save_format_rules
 
 	// Every byte of XMen2.exe the hooks rely on, read from the retail build. All must match before anything is
 	// written; xml2_test compares them with a copy of the exe.
-	inline constexpr std::array<guard, 24> guards{{
+	inline constexpr std::array<guard, 34> guards{{
+		{0x46a690, "8b4424040fb68408e0050000c20400", "trivia cursor getter: unbounded per-act byte table"},
+		{0x46a6a0, "8a4424088b54240488840ae0050000c20800", "trivia cursor setter: unbounded per-act byte table"},
+		{0x469e10, "8b4424046bc032", "trivia getter: two stack arguments, act stride"},
+		{0x469e22, "85d27c2a81fafa0000007d22", "trivia getter: signed 0..249 bound"},
+		{0x469e3d, "8b8c96e8050000", "trivia getter: game bitmap at +0x5e8"},
+		{0x469e4d, "c20800", "trivia getter: callee pops two arguments"},
+		{0x469e60, "8b4424048b542408", "trivia setter: two stack arguments"},
+		{0x469e6f, "85c07c213dfa0000007d1a", "trivia setter: signed 0..249 bound"},
+		{0x469e7f, "8d9491e8050000", "trivia setter: game bitmap at +0x5e8"},
+		{0x469e94, "c20800", "trivia setter: callee pops two arguments"},
 		{0x55f190, "81ec48020000", "native campaign-file count used by device info and Load Game"},
 		{card_vtable + 0x28, "f0f6550050f8550010f9550040e8550050e8550040e8550060e8550070e8550080e8550090e85500f0f35100a0f95500b0fc5500f0f2550000e9550070fe5500207c510000ff550030e95500b0e95500",
 		 "CMemoryCardWin32's vtable slots +0x28..+0x74 (0x69aab4)"},

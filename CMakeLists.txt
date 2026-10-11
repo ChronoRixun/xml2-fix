@@ -132,3 +132,25 @@ add_executable(xml2_save_content_guards_test test/save_content_guards_test.cpp
 target_include_directories(xml2_save_content_guards_test PRIVATE src)
 target_link_libraries(xml2_save_content_guards_test PRIVATE lcsave ws2_32)
 target_compile_definitions(xml2_save_content_guards_test PRIVATE FIX_LOG_FILE=L"save-guard-test.log")
+
+# Trivia cursors must never alias the native answer bitmap.
+add_executable(xml2_trivia_test test/trivia_test.cpp)
+target_include_directories(xml2_trivia_test PRIVATE src)
+
+# Real DLL initialization against an owned synthetic Win32 image; no game/save inputs.
+add_executable(xml2_save_startup_test test/save_startup_test.cpp)
+target_include_directories(xml2_save_startup_test PRIVATE src)
+target_link_libraries(xml2_save_startup_test PRIVATE ws2_32)
+target_link_options(xml2_save_startup_test PRIVATE /DYNAMICBASE:NO /BASE:0x400000 /MERGE:.rdata=.fixture_data /MERGE:.text=.fixture_code)
+
+# Opt-in fault DLL: same implementation, only save-installation Windows calls wrapped.
+option(XML2_SAVE_STARTUP_FAULT_TEST "Build owned save-startup fault injection DLL" OFF)
+if(XML2_SAVE_STARTUP_FAULT_TEST)
+ get_target_property(fault_sources xml2_fix SOURCES)
+ list(REMOVE_ITEM fault_sources src/dinput.def)
+ add_library(xml2_save_startup_faults SHARED ${fault_sources})
+ get_target_property(fault_definitions xml2_fix COMPILE_DEFINITIONS)
+ target_compile_definitions(xml2_save_startup_faults PRIVATE ${fault_definitions} XML2_SAVE_STARTUP_FAULT_TEST)
+ target_link_libraries(xml2_save_startup_faults PRIVATE lcsave dxguid ws2_32 winmm iphlpapi)
+ set_target_properties(xml2_save_startup_faults PROPERTIES OUTPUT_NAME save-startup-faults)
+endif()

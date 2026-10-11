@@ -339,7 +339,7 @@ namespace lcsave::detail
 		};
 	}
 
-	Value dump_old(const OldSlot& old, const TablesData& t, int start_cv, int items_cv)
+	Value dump_old(const OldSlot& old, const TablesData& t, int start_cv, int items_cv, const bool native)
 	{
 		const D dd{t};
 		const auto* era_t = t.by_cv(start_cv);
@@ -367,8 +367,16 @@ namespace lcsave::detail
 		Value trivia = L();
 		for (const int b : bits(g.trivia, 250))
 		{
-			const auto f = ref.TRIV.find({b / 50 + 1, b % 50});
-			trivia.push(f == ref.TRIV.end() ? none() : dd.name(16, f->second));
+			std::pair<int, int> position{b / 50 + 1, b % 50};
+			const auto& trivia_ref = native && t.build ? t.build->T : ref;
+			if (native && t.build)
+			{
+				const auto found = std::find_if(trivia_ref.trivia_bits.begin(), trivia_ref.trivia_bits.end(), [b](const auto& row) { return row.second == b; });
+				if (found == trivia_ref.trivia_bits.end()) { trivia.push(none()); continue; }
+				position = found->first;
+			}
+			const auto f = trivia_ref.TRIV.find(position);
+			trivia.push(f == trivia_ref.TRIV.end() ? none() : dd.name(16, f->second));
 		}
 		d.set("game", Value::dict({{"timer", timer}, {"recall", rec}, {"xtreme", xtreme}, {"loading_name", Tx(cstr(g.loading_name))},
 			{"act", I(g.act)}, {"value_608", I(g.value_608)}, {"difficulty", I(g.difficulty)}, {"play_time", R3(g.play_time)},

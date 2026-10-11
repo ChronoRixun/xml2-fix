@@ -163,6 +163,9 @@ namespace lcsave
 	// The SHA-1 the tables hold for a zone's placement file (its .lcent, or the file itself when the tables read
 	// it); false when the build has no such zone. The fix logs it beside the hash of the bytes the engine opened
 	// (SPEC 3.8, N14 c).
+	// Current native trivia mapping; rule-1 builds retain the retail sparse layout.
+	int trivia_bit(const Tables& tables, int act, int question);
+	int trivia_question_count(const Tables& tables, int act);
 	bool zone_file_sha1(const Tables& tables, const std::string& zone, Sha1Digest& out);
 
 	// The profile file (SPEC 1.5 profile.lcsave, kind 2: META, KEYS, PRFO, PRFP, PRFS): the same three directions
