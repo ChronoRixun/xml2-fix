@@ -37,7 +37,8 @@ namespace save_guard_rules
 	};
 
 	inline bool startup_allowed(bool lc, bool exclusion_installed) { return !lc || exclusion_installed; }
-	inline bool online_allowed(bool lc, bool version_verified) { return !lc || version_verified; }
+	inline bool online_allowed(bool lc, bool version_verified, bool gameplay_required = false, bool gameplay_verified = false)
+	{ return (!lc || version_verified) && (!gameplay_required || gameplay_verified); }
 	inline bool registry_full(unsigned names, unsigned objects, unsigned handles)
 	{ return names >= 100 || objects >= 100 || handles >= 100; }
 

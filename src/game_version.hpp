@@ -15,5 +15,7 @@ namespace game_version
 {
 	// LC may start only with a working exclusion hook, including when the version patch is refused.
 	bool startup_allowed();
+	bool needs_gameplay_agreement();
+	void bind_gameplay_agreement(bool verified);
 	void install(HMODULE game);
 }

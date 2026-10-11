@@ -1,3 +1,3 @@
 #pragma once
 #include <Windows.h>
-namespace explosive_first_hit { void install(HMODULE game); }
+namespace explosive_first_hit { void install(HMODULE game); bool installed(); bool verified(); }

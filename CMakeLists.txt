@@ -65,6 +65,7 @@ add_library(xml2_fix SHARED
 	src/xtract.cpp
 	src/forced_teams.cpp
 	src/conversations.cpp
+	src/gameplay_agreement.cpp
 	src/explosive_first_hit.cpp
 	src/confirmation_release.cpp
 	src/objective_text.cpp
@@ -137,3 +138,9 @@ add_executable(xml2_explosive_first_hit_test test/explosive_first_hit_test.cpp s
 target_include_directories(xml2_explosive_first_hit_test PRIVATE src)
 # This test reserves the retail image address for isolated native code.
 target_link_options(xml2_explosive_first_hit_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_gameplay_agreement_test test/gameplay_agreement_test.cpp src/gameplay_agreement.cpp src/explosive_first_hit.cpp src/game_version.cpp)
+target_include_directories(xml2_gameplay_agreement_test PRIVATE src)
+target_link_libraries(xml2_gameplay_agreement_test PRIVATE ws2_32)
+
+target_link_options(xml2_gameplay_agreement_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)

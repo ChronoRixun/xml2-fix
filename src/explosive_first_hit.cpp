@@ -9,6 +9,7 @@ namespace explosive_first_hit
 {
 	namespace
 	{
+		bool wanted = false, applied = false;
 		constexpr std::uintptr_t image_base = 0x400000;
 		constexpr std::uintptr_t site = 0x49ab58;
 		// GetExplosionAttack copies the authored blast, then chooses its attack ID.
@@ -25,9 +26,13 @@ namespace explosive_first_hit
 			__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 		}
 	}
+	bool installed() { return wanted && applied; }
+	bool verified() { return !wanted || applied; }
 	void install(const HMODULE game)
 	{
-		if (!ini::flag(L"Game", L"ExplosiveFirstHit", false))
+		if (applied) return; // immutable successfully installed rule, never reread a changed INI
+		wanted = ini::flag(L"Game", L"ExplosiveFirstHit", false);
+		if (!wanted)
 		{
 			logger::write("explosive first hit: off - native authored flag");
 			return;
@@ -45,9 +50,12 @@ namespace explosive_first_hit
 			return;
 		}
 		code[0] = code[1] = 0x90;
-		FlushInstructionCache(GetCurrentProcess(), code, 2);
+		const bool flushed = FlushInstructionCache(GetCurrentProcess(), code, 2) != FALSE;
+		applied = flushed && code[0] == 0x90 && code[1] == 0x90;
+		if (!applied) { code[0] = expected[7]; code[1] = expected[8]; FlushInstructionCache(GetCurrentProcess(), code, 2); }
 		DWORD unused;
 		VirtualProtect(code, 2, old, &unused);
+		if (!applied) { logger::write("explosive first hit: install verification failed; online agreement refused"); return; }
 		logger::write("explosive first hit: on - XML1 fresh blast attack ID at 0x49AB58; native AoE unchanged");
 	}
 }

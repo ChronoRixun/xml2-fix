@@ -34,3 +34,44 @@ isolated settings/logger providers, executes the native attack-ID tail in its ow
 and checks the default, explicit flag, refusals, exact two-byte patch, untouched record fields
 and unsigned overflow. The companion builder has synthetic INI ownership/default checks.
 Game-dependent damage and activation checks belong in a private acceptance ledger, not this repo.
+
+
+## Multiplayer agreement
+
+The release identity (for example `LC24`) is unchanged. LC games, and non-LC games that explicitly
+set `ExplosiveFirstHit`, require an independently guarded gameplay agreement. Ordinary XML2 with
+no opt-in retains its native protocol. The installer captures the effective rule only after the
+branch patch succeeds and verifies; a requested but failed installation cannot join, even as an
+apparently matching off peer. Once patched, a later INI change cannot relabel the running code.
+
+The native host-info preflight (opcode 0x1a, 48-byte body), client join request (0x18, 116 bytes),
+and host participant reply (0x1f, 80 bytes) carry a tagged revision-1 installed-rule word in their
+reserved compatibility field. The release string and existing fields stay native.
+The request uses body +0x64; both replies use +0x20. Preflight sender 0x60778e stamps the session
+descriptor word +0x408 before sending it; request/reply writers are 0x607cf1 / 0x6083b9.
+The preflight follow-up (opcode 0x1b) retains its original eight-byte body and appends the rule
+word at +8, making its body 12 bytes. The CALL at 0x609a5d wraps native send 0x610f30 with
+owned header/body storage, which the native queue copies synchronously. The receiver registration
+at 0x609dec validates decoded length 12 before reading the tag. Older eight-byte replies cannot
+bypass agreement through this alternate admission path. The native parser exposes the decoded
+body length at event +8; reliable envelopes normalize that length before dispatch.
+
+Registered receivers at 0x6096a3, 0x609cc3, 0x609dec and 0x609ee2 use wrappers that validate
+before calling the original handler. Missing/unknown tags and different effective rules refuse
+admission and log a clear reason. This includes older DLL peers with the same release identity.
+
+All thirteen retail guards must match and every code page must become writable before any handshake
+write. Branch targets, padding, registered callback pointers and cache flushes are verified.
+The existing socket exclusion gate stays closed until both this agreement and the explosion
+installation status verify. Failure preserves offline use when the exclusion hook itself works;
+if exclusion cannot be installed, startup refuses rather than permitting unsafe online access.
+
+`xml2_gameplay_agreement_test` links the production installers/callbacks to isolated providers.
+It covers both mismatch directions, failure on either peer, both on/off, actual effective-state
+reporting, later INI drift, legacy/unknown peers, invalid bodies, guarded refusal, real writer ABI
+and unchanged release/register values. It executes the patched follow-up CALL and refuses legacy
+eight-byte follow-ups even with a matching word beyond that length. Production version/socket
+gate tests use a fake IAT provider and fake socket, verifying pre-bind closure, failed binding,
+successful binding, explicit non-LC off configuration, vanilla no-key behavior and exclusion
+installation failure. No game or network traffic is needed. Live direct-IP/LAN
+and lobby join checks, including native UI refusal behavior, remain an integrator acceptance item.

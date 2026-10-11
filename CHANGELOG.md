@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Bind the effective installed explosive first-hit rule to native host-info/join agreement.
+  Refuse differing or unverified rules before admission without changing the release identity.
+  Legacy peers without the tagged agreement are refused; ordinary XML2 without the opt-in stays native.
+
 - Add opt-in `[Game] ExplosiveFirstHit=1`: explosions use the original game's fresh attack ID for
   the first-contact victim and native area victims. A guarded two-byte branch patch leaves stock
   settings, activation, damage records and saves unchanged ([details](docs/explosive-first-hit.md)).
