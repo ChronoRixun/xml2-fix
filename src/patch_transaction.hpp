@@ -34,7 +34,15 @@ namespace patch_transaction
 		std::vector<region> regions;
 		std::vector<write> writes;
 		std::function<void()> publish; // runs after the verified commit, in contribution order
-		std::function<void()> abandon; // runs when the transaction refuses or rolls back
+		std::function<void()> abandon; // runs when the transaction refuses or rolls back with every byte certified
+		// Runs instead of `abandon` when the transaction cannot certify memory (rollback_failed): written bytes or page
+		// protections may still reference the contributor's storage, so it must record the failure WITHOUT releasing
+		// anything (stubs, backing, thunks stay allocated until the process exits).
+		std::function<void()> retain;
+		// Addresses this contribution relies on another contribution to write in the same transaction (composed sites):
+		// a required address no contribution writes refuses the whole transaction (refused_unresolved), naming each.
+		struct requirement { address va; std::string what; };
+		std::vector<requirement> requires_written;
 	};
 
 	// Test seams: every Windows call the commit makes, and a point after the writes where a test may corrupt
@@ -56,7 +64,8 @@ namespace patch_transaction
 		refused_region,        // a region hash differs
 		refused_conflict,      // two guards or two writes disagree about a byte
 		refused_unexpected,    // a write touches a byte no guard describes
-		refused_protect,       // a page could not be made writable (nothing written)
+		refused_protect,       // a page could not be made writable (nothing written, every protection restored and certified)
+		refused_unresolved,    // a contribution requires a write at an address no contribution writes
 		rolled_back,           // bytes were written, a later step failed, the expected bytes are back and verified
 		rollback_failed,       // bytes were written, a later step failed, and the rollback could not be certified
 	};
@@ -82,6 +91,8 @@ namespace patch_transaction
 		std::size_t pages_ = 0, written_ = 0, guarded_ = 0;
 	};
 
+	// "0x" + lower-case hexadecimal, for reports.
+	std::string hex(address va);
 	// Byte helpers shared with the contributors.
 	std::vector<std::uint8_t> bytes_of(std::string_view hex);
 	std::array<std::uint8_t, 32> sha256_of(std::string_view hex);

@@ -647,6 +647,12 @@ namespace limits
 				logger::write("limits: MoveTriggers raised from 19 to %d; %lu native move slots, %zu side-array bytes; all 10 handle accesses redirected; actor timing initialization, pause, dispatch and clear expanded with native arithmetic; native count, tags and event ownership preserved%s",
 				              capacity, record_count, bytes, teardown_owned_elsewhere ? "; timer retirement runs from the entity-capacity arena teardown" : "");
 			};
+			// Uncertified rollback: the redirected accesses may still point into the side arrays and thunks, so nothing is
+			// released and the published state stays unset (startup is refused by the transaction's owner).
+			c.retain = [stays]
+			{
+				logger::write("limits: MoveTriggers: the startup transaction could not be rolled back - %s; side arrays and thunks retained", stays);
+			};
 			c.abandon = [arrays, timers, code, stays]
 			{
 				logger::write("limits: MoveTriggers: the startup transaction did not commit - %s", stays);

@@ -106,6 +106,13 @@ namespace patch_transaction
 
 	bool read_memory(address va, void* out, std::size_t size) { return raw_read(at(va), out, size); }
 
+	std::string hex(address va)
+	{
+		char text[16];
+		std::snprintf(text, sizeof text, "0x%lx", static_cast<unsigned long>(va));
+		return text;
+	}
+
 	const char* name(outcome o)
 	{
 		switch (o)
@@ -118,6 +125,7 @@ namespace patch_transaction
 		case outcome::refused_conflict: return "refused: conflicting expectations or writes";
 		case outcome::refused_unexpected: return "refused: write outside every guard";
 		case outcome::refused_protect: return "refused: page protection";
+		case outcome::refused_unresolved: return "refused: a composed site is written by no contribution";
 		case outcome::rolled_back: return "rolled back after a write failure";
 		case outcome::rollback_failed: return "ROLLBACK FAILED";
 		}
@@ -133,15 +141,18 @@ namespace patch_transaction
 
 	outcome transaction::commit(const hooks* test_hooks)
 	{
+		// A second commit is a refusal that changes nothing: the first result, report and every contributor's state stay.
+		if (sealed_) return outcome::refused_sealed;
+		sealed_ = true;
 		auto finish = [&](outcome o, std::string why)
 		{
 			result_ = o;
 			report_ = std::move(why);
-			if (o != outcome::committed) for (auto& c : contributions_) if (c.abandon) c.abandon();
+			// Certified refusals and rollbacks release the contributors' storage; an uncertified state retains it.
+			if (o == outcome::rollback_failed) { for (auto& c : contributions_) if (c.retain) c.retain(); }
+			else if (o != outcome::committed) for (auto& c : contributions_) if (c.abandon) c.abandon();
 			return o;
 		};
-		if (sealed_) return finish(outcome::refused_sealed, "commit() called twice");
-		sealed_ = true;
 		if (contributions_.empty()) return finish(outcome::refused_empty, "no contributions");
 
 		auto protect = [&](void* p, std::size_t n, DWORD np, DWORD* old) -> bool
@@ -167,7 +178,7 @@ namespace patch_transaction
 					const auto it = expected.find(a);
 					if (it == expected.end()) expected.emplace(a, g.bytes[i]);
 					else if (it->second != g.bytes[i])
-						return finish(outcome::refused_conflict, c.owner + ": guard '" + g.what + "' disagrees with an earlier expectation at 0x" + std::to_string(a));
+						return finish(outcome::refused_conflict, c.owner + ": guard '" + g.what + "' disagrees with an earlier expectation at " + hex(static_cast<address>(a)));
 				}
 			}
 		}
@@ -180,7 +191,7 @@ namespace patch_transaction
 			{
 				buffer.resize(g.bytes.size());
 				if (!raw_read(at(g.va), buffer.data(), buffer.size()) || buffer != g.bytes)
-					return finish(outcome::refused_guard, c.owner + ": " + g.what + " (0x" + std::to_string(g.va) + ")");
+					return finish(outcome::refused_guard, c.owner + ": " + g.what + " (" + hex(g.va) + ")");
 			}
 			for (const auto& r : c.regions)
 			{
@@ -200,14 +211,20 @@ namespace patch_transaction
 				for (std::size_t i = 0; i < w.bytes.size(); ++i)
 				{
 					const address a = w.va + static_cast<address>(i);
-					if (!expected.count(a)) return finish(outcome::refused_unexpected, c.owner + ": '" + w.what + "' writes 0x" + std::to_string(a) + " which no guard covers");
+					if (!expected.count(a)) return finish(outcome::refused_unexpected, c.owner + ": '" + w.what + "' writes " + hex(static_cast<address>(a)) + " which no guard covers");
 					const auto it = writes.find(a);
 					if (it == writes.end()) writes.emplace(a, w.bytes[i]);
-					else if (it->second != w.bytes[i]) return finish(outcome::refused_conflict, c.owner + ": '" + w.what + "' conflicts with an earlier write at 0x" + std::to_string(a));
+					else if (it->second != w.bytes[i]) return finish(outcome::refused_conflict, c.owner + ": '" + w.what + "' conflicts with an earlier write at " + hex(static_cast<address>(a)));
 				}
 			}
 		}
 		if (writes.empty()) return finish(outcome::refused_empty, "no bytes to write");
+		// 3b. Composed sites: every address a contribution relies on another to write is written by someone.
+		std::string unresolved;
+		for (const auto& c : contributions_)
+			for (const auto& r : c.requires_written)
+				if (!writes.count(r.va)) unresolved += (unresolved.empty() ? "" : ", ") + c.owner + " needs " + hex(r.va) + " (" + r.what + ")";
+		if (!unresolved.empty()) return finish(outcome::refused_unresolved, "unwritten composed sites: " + unresolved);
 		written_ = writes.size();
 
 		// 4. The page ledger: each distinct touched page once, original protection remembered.
@@ -225,8 +242,19 @@ namespace patch_transaction
 			if (!protect(reinterpret_cast<void*>(pages[i]), page_size, PAGE_EXECUTE_READWRITE, &protection[i]))
 			{
 				const DWORD error = GetLastError();
-				for (std::size_t j = i; j-- > 0;) { DWORD ignored = 0; protect(reinterpret_cast<void*>(pages[j]), page_size, protection[j], &ignored); }
-				return finish(outcome::refused_protect, "page 0x" + std::to_string(pages[i]) + " could not be unprotected (error " + std::to_string(error) + ")");
+				// Undo the pages already acquired and certify it: nothing was written, but a page left writable is not
+				// the state the refusal promises, so an unrestored page is reported as uncertified (rollback_failed).
+				bool restored = true;
+				for (std::size_t j = i; j-- > 0;)
+				{
+					DWORD ignored = 0;
+					restored = protect(reinterpret_cast<void*>(pages[j]), page_size, protection[j], &ignored) && restored;
+					MEMORY_BASIC_INFORMATION info{};
+					restored = VirtualQuery(reinterpret_cast<void*>(pages[j]), &info, sizeof info) == sizeof info && info.Protect == protection[j] && restored;
+				}
+				const std::string why = "page " + hex(static_cast<address>(pages[i])) + " could not be unprotected (error " + std::to_string(error) + ")";
+				if (!restored) return finish(outcome::rollback_failed, why + "; restoring the pages acquired before it failed");
+				return finish(outcome::refused_protect, why);
 			}
 		}
 		auto restore_all = [&]() -> bool
@@ -243,17 +271,17 @@ namespace patch_transaction
 		std::string failure;
 		for (const auto& [a, b] : writes)
 		{
-			if (!raw_write(at(a), &b, 1)) { failure = "write faulted at 0x" + std::to_string(a); break; }
+			if (!raw_write(at(a), &b, 1)) { failure = "write faulted at " + hex(static_cast<address>(a)); break; }
 		}
 		if (test_hooks && test_hooks->after_apply) test_hooks->after_apply();
 		if (failure.empty())
 			for (const auto page : pages)
-				if (!flush(reinterpret_cast<void*>(page), page_size)) { failure = "instruction cache flush failed at page 0x" + std::to_string(page); break; }
+				if (!flush(reinterpret_cast<void*>(page), page_size)) { failure = "instruction cache flush failed at page " + hex(static_cast<address>(page)); break; }
 		if (failure.empty())
 			for (const auto& [a, b] : writes)
 			{
 				std::uint8_t now = 0;
-				if (!raw_read(at(a), &now, 1) || now != b) { failure = "readback differs at 0x" + std::to_string(a); break; }
+				if (!raw_read(at(a), &now, 1) || now != b) { failure = "readback differs at " + hex(static_cast<address>(a)); break; }
 			}
 		if (failure.empty() && !restore_all()) failure = "page protection could not be restored";
 		if (failure.empty())

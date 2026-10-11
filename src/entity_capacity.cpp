@@ -358,6 +358,11 @@ namespace entity_capacity
 		{
 			if (failure.empty()) failure = "the startup transaction did not commit";
 		};
+		c.retain = []
+		{
+			failure = "the startup transaction could not be rolled back; prepared owners and backing retained";
+			fatal = true;
+		};
 		if (!transaction.add(std::move(c))) failure = "the startup transaction is sealed";
 	}
 
@@ -370,7 +375,7 @@ namespace entity_capacity
 			// Requested but not installed: online is poisoned even though the engine is physically stock (plan section 7).
 			gameplay_agreement::register_entity_layout(layout_revision_raised, raised_actors, raised_generic, raised_world, raised_index_bits, false);
 			logger::write("entity capacity: requested but not installed (%s); online admission poisoned, stock capacities", failure.c_str());
-			release_prepared();
+			if (!rollback_failed) release_prepared(); // an uncertified rollback may still reference the prepared owners
 		}
 	}
 

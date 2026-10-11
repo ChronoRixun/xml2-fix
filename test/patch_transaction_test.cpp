@@ -42,12 +42,13 @@ namespace
 	}
 	write new_bytes(std::size_t offset, std::vector<std::uint8_t> bytes, const char* what) { return {va(offset), std::move(bytes), what}; }
 
-	struct counts { int publish = 0, abandon = 0; };
+	struct counts { int publish = 0, abandon = 0, retain = 0; };
 	contribution contrib(const char* owner, counts& c, std::vector<expectation> guards, std::vector<write> writes, std::vector<region> regions = {})
 	{
 		contribution x{owner, std::move(guards), std::move(regions), std::move(writes)};
 		x.publish = [&c] { ++c.publish; };
 		x.abandon = [&c] { ++c.abandon; };
+		x.retain = [&c] { ++c.retain; };
 		return x;
 	}
 }
@@ -92,6 +93,8 @@ int main()
 		check(t.pages() == 3 && t.written_bytes() == 14, "page ledger: three distinct pages (0, 1 via the crossing write, 2), 14 bytes");
 		check(protection_at(0) == PAGE_EXECUTE_READ && protection_at(page) == PAGE_EXECUTE_READ && protection_at(2 * page) == PAGE_EXECUTE_READ, "exact protections restored");
 		check(!t.add(contrib("late", a, {}, {})) && t.commit() == outcome::refused_sealed, "late add and a second commit are refused");
+		check(a.abandon == 0 && b.abandon == 0 && a.retain == 0 && t.result() == outcome::committed && a.publish == 1,
+		      "a second commit after success changes nothing: no abandonment, the committed result stays");
 	}
 	{ // guard mismatch leaves everything untouched
 		seed();
@@ -171,7 +174,10 @@ int main()
 		hooks k;
 		k.after_apply = [] { block[0xc1] = 0x77; };
 		k.after_rollback = [] { block[0xc1] = 0x66; };
+		counts r;
+		u.add(contrib("r", r, {}, {}));
 		check(u.commit(&k) == outcome::rollback_failed, "a rollback that does not verify is reported as failed");
+		check(a.retain == 1 && r.retain == 1 && r.abandon == 0 && a.publish == 0, "an uncertified rollback RETAINS every contribution's storage (retain, never abandon)");
 	}
 	{ // restore failure after a good write rolls back (the plan: exact protections before publication)
 		seed();
@@ -182,6 +188,38 @@ int main()
 		h.protect = [&](void* p, std::size_t n, DWORD np, DWORD* old) { if (np == PAGE_EXECUTE_READ) { static int fails = 0; if (++fails == 1) return false; } return VirtualProtect(p, n, np, old) != FALSE; };
 		check(t.commit(&h) == outcome::rolled_back && a.publish == 0 && protection_at(0) == PAGE_EXECUTE_READ, "a protection-restore failure rolls back and never publishes");
 	}
+	{ // protection acquisition fails on the second page AND the first page cannot be restored: uncertified
+		seed();
+		counts a;
+		transaction t;
+		t.add(contrib("a", a, {guard(0x90, 4, "g1"), guard(0x1090, 4, "g2")}, {new_bytes(0x90, {1}, "w1"), new_bytes(0x1090, {2}, "w2")}));
+		int calls = 0;
+		hooks h;
+		h.protect = [&](void* p, std::size_t n, DWORD np, DWORD* old) { ++calls; if (calls == 2) return false; if (calls == 3) return false; return VirtualProtect(p, n, np, old) != FALSE; };
+		const auto o = t.commit(&h);
+		DWORD ignored = 0; VirtualProtect(block, page, PAGE_EXECUTE_READ, &ignored); // the test restores its own page
+		check(o == outcome::rollback_failed && a.retain == 1 && a.abandon == 0, "acquisition unwind that cannot restore a page is uncertified: rollback_failed, storage retained");
+	}
+	{ // composed sites: a contribution requiring a write nobody makes refuses the whole transaction, naming the site
+		seed();
+		counts a, b;
+		transaction t;
+		auto x = contrib("needs", a, {guard(0xe0, 4, "g")}, {new_bytes(0xe0, {1}, "w")});
+		x.requires_written.push_back({va(0xe2), "composed site"});
+		t.add(std::move(x));
+		const auto before = at(0, block_pages * page);
+		const auto o = t.commit();
+		check(o == outcome::refused_unresolved && at(0, block_pages * page) == before && a.abandon == 1 && t.report().find("0x") != std::string::npos,
+		      "an unwritten required site refuses before any byte changes and is reported in hex");
+		seed();
+		transaction u;
+		auto y = contrib("needs", a, {guard(0xe0, 4, "g")}, {new_bytes(0xe0, {1}, "w")});
+		y.requires_written.push_back({va(0xe2), "composed site"});
+		u.add(std::move(y));
+		u.add(contrib("writer", b, {}, {new_bytes(0xe2, {9}, "the composed write")}));
+		check(u.commit() == outcome::committed && at(0xe2, 1) == std::vector<std::uint8_t>{9}, "the same requirement is met when another contribution writes the site");
+	}
+	check(hex(0x4c6910) == "0x4c6910" && hex(0) == "0x0", "hex() formats addresses as 0x + lower-case hex");
 	std::printf("%d failure(s)\n", failures);
 	return failures ? 1 : 0;
 }

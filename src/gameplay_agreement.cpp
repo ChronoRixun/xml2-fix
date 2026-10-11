@@ -152,6 +152,7 @@ namespace gameplay_agreement
   c.publish=[]{failure_ready=true;transport_ready=true;published=true;game_version::bind_gameplay_refusal(&show_install_failure);
    logger::write("online: shared gameplay agreement sites published (refusal and transport, protocol %u)",unsigned(gameplay_capabilities::protocol_revision));};
   c.abandon=[]{logger::write("online: shared gameplay agreement sites not installed; online remains blocked");};
+  c.retain=[]{logger::write("online: shared gameplay agreement sites uncertified after a failed rollback; online remains blocked");};
   contributed_=transaction.add(std::move(c));return contributed_;
  }
  bool commit_verified()

@@ -764,3 +764,11 @@ and why the change stays within the reviewed design.
     retail 0x608630 (its chunk-counter references relocated to a test variable after checking their operands) next to
     the replacement over the same 'G' + 978-chunk sequence with a poisoned stack, comparing the callback, pool, payload,
     difficulty, context and acknowledgement (header bytes, endpoint, node, flags).
+15. **Transaction failure cleanup (section 7; review P2).** `abandon` (which frees stubs, thunks and backing) now runs
+    only for certified refusals and certified rollbacks. An uncertified state (`rollback_failed`) runs each
+    contribution's new `retain` callback instead: the failure is recorded, nothing is released, and startup is refused.
+    A second `commit()` returns `refused_sealed` without touching the first result or any contributor. When making a
+    page writable fails, the pages acquired before it are restored AND re-queried; an unrestored page turns the
+    refusal into `rollback_failed`. Contributions may declare `requires_written` addresses (composed sites another
+    contribution must write); an unwritten one refuses the whole transaction (`refused_unresolved`) before any byte
+    changes. Reports print addresses as hexadecimal (they printed "0x" + decimal).

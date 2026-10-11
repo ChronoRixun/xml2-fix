@@ -2023,6 +2023,11 @@ namespace save_format
 			reject_install("cannot install the required LC card/trivia patches");
 			VirtualFree(memory, 0, MEM_RELEASE);
 		};
+		// Uncertified rollback: written jumps may still lead into the stubs, so they stay allocated.
+		c.retain = []
+		{
+			reject_install("the LC card/trivia patches could not be rolled back (memory uncertified)");
+		};
 		if (!transaction.add(std::move(c)))
 		{
 			reject_install("the startup transaction is sealed");
