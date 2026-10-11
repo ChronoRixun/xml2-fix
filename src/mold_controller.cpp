@@ -7,14 +7,15 @@
 #include "mold_query.hpp"
 #include "game_version.hpp"
 #include "mold_combat_rules.hpp"
+#include "mold_effects.hpp"
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 
-// Work-in-progress scoped compatibility adapter. Kept opt-in until the live
-// collision, phase, save/load and authority gates have all been demonstrated.
+// Scoped first-game adapter. Default off; the builder supplies the saved-stage
+// contract. Online stays refused until the common agreement covers this rule.
 namespace mold_controller {
 namespace {
 using u32=std::uint32_t;
@@ -29,7 +30,6 @@ using node_t=void*(__fastcall*)(void*,void*,const u32*);
 using play_t=void(__fastcall*)(void*,void*,void*,int);
 using target_t=void(__fastcall*)(void*,void*,u32);
 using aim_t=int(__fastcall*)(void*,void*,void*,void*,unsigned char,float);
-using default_t=int(__fastcall*)(void*,void*,void*,u32*,void*);
 using script_t=void*(__cdecl*)(void*);
 using arg_t=void*(__fastcall*)(void*,void*,int);
 using text_t=const char*(__fastcall*)(void*,void*);
@@ -41,12 +41,18 @@ struct state {
     mold_combat_rules::deadlines attacks{};
 } boss;
 bool enabled=false;
+bool trace=false;
+float trace_at=-1;
 mold_combat_rules::stage_binding saved_stage;
 script_t real_sequence=nullptr,real_node=nullptr,real_default_target=nullptr;
-default_t real_default=fn<default_t>(0x51dfe0);
+u32 brain_resume=0x5173f9,brain_postprocess=0x517a79;
 float now(){return fn<clock_t>(0x45fe60)();}
 void reset(u32 owner){
+    // Other startup installers may replace native query pools after ours.
+    // Recheck the effective layout before this encounter can raise a shield.
+    if(!mold_query::supported()){enabled=false;logger::write("mold controller: effective query layout differs; native fallback retained");return;}
     boss=state{};boss.owner=owner;boss.attacks=mold_combat_rules::deadlines(now());
+    mold_effects::reset();
     u32 stage=0;
     for(int i=0;i<saved_stage.width;++i)
         if(fn<int(__stdcall*)(const char*,int)>(0x4a0190)(saved_stage.flag.c_str(),saved_stage.first+i))stage|=1u<<i;
@@ -88,16 +94,52 @@ void* select_core(void* actor,u32& selected){
     selected=mold_query::select(actor,boss.forced);
     return selected?fn<resolve_t>(0x4654b0)(&selected,nullptr):nullptr;
 }
+void coordinate_party(void* boss_actor,void* boss_brain){
+    u32 hero_token=0;auto* hero=find("_ACTIVE_HERO_",hero_token);
+    if(!mold_query::is_a(hero,0x70b83c)||at<float>(hero,0x27c)<=0)return;
+    auto* manager=fn<void*(__cdecl*)()>(0x5252e0)();
+    if(!manager||at<u32>(manager,0)!=0x695cbc)return;
+    auto* controller=at<void*>(boss_brain,0x4c4);int kind=0;
+    if(controller)kind=at<int(__fastcall*)(void*,void*)>(at<void*>(controller,0),0x24)(controller,nullptr);
+    const auto range=distance2(hero,boss_actor);
+    for(int index=1;index<=4;++index){
+        char name[]="_HERO1_";name[5]=char('0'+index);u32 token=0;auto* member=find(name,token);
+        if(!mold_query::is_a(member,0x70b83c))continue;
+        auto* brain=fn<void*(__fastcall*)(void*,void*,u32)>(0x525160)(manager,nullptr,at<u32>(member,0x7dc));
+        if(!brain)continue;
+        const auto action=mold_combat_rules::companion(member==hero,(at<unsigned char>(member,0x3d8)&1)!=0,
+            at<float>(hero,0x28),at<float>(member,0x28),range,kind);
+        using action_t=mold_combat_rules::companion_action;
+        if(action==action_t::leave)continue;
+        if(action==action_t::follow){
+            put(brain,0x279,static_cast<unsigned char>(at<unsigned char>(brain,0x279)&~1u));
+            put(brain,0x2b4,static_cast<unsigned char>(at<unsigned char>(brain,0x2b4)|0x40u));
+            fn<target_t>(0x5030c0)(brain,nullptr,0);
+            if(at<u32>(brain,8)==4)fn<unsigned char(__fastcall*)(void*,void*,int)>(0x505030)(brain,nullptr,0);
+            fn<target_t>(0x538290)(brain,nullptr,hero_token);target(member,0);
+        }else{
+            put(brain,0x2b4,static_cast<unsigned char>(at<unsigned char>(brain,0x2b4)&~0x40u));
+            put(brain,0x279,static_cast<unsigned char>(at<unsigned char>(brain,0x279)|(action==action_t::engage_floor?3u:1u)));
+            fn<void(__fastcall*)(void*,void*,unsigned char)>(0x509130)(brain,nullptr,1);
+            if(action==action_t::engage_floor)fn<target_t>(0x538290)(brain,nullptr,hero_token);
+        }
+    }
+}
 void tick(void* brain,void* actor,u32* output){
     if(at<unsigned char>(reinterpret_cast<const void*>(0x70b70a),0)||at<float>(actor,0x27c)<=0)return;
     const float t=now();
-    if(t<boss.wait_until||t<at<float>(brain,0x1c)){if(boss.step==3&&resolve(boss.target))target(actor,boss.target);return;}
+    if(t<boss.wait_until){if(boss.step==3&&resolve(boss.target))target(actor,boss.target);return;}
     if(boss.step==3){boss.step=0;boss.target=0;}
+    coordinate_party(actor,brain);
+    mold_effects::update(actor);
     if(boss.pending_shield){
         if(move(actor,"blaster")&&move(actor,"doubleblaster")&&move(actor,"shockshield_off")&&play(actor,"shockshield_on")){
             boss.shield=true;boss.pending_shield=false;wait(brain,2);
             logger::write("mold controller: shield requested at phase 3, owner %08X",boss.owner);
-        }else logger::write("mold controller: required native combat nodes unavailable; shield not enabled");
+        }else{
+            enabled=false;
+            logger::write("mold controller: required native combat nodes unavailable; shield not enabled, native encounter retained");
+        }
         return;
     }
     std::array<void*,12> markers{};int first_count=0;
@@ -220,16 +262,43 @@ void* __cdecl node_hook(void* args){
     if(enabled&&scope()&&std::strcmp(argument(args,0),"mastermold")==0&&std::strcmp(argument(args,1),"shockshield_off")==0){boss.target=0;boss.step=0;boss.shield=false;boss.pending_shield=false;}
     return real_node(args);
 }
-int __fastcall default_hook(void* node,void* edx,void* first,u32* output,void* last){
-    if(!scope())boss=state{};
-    if(!enabled||!boss.owner||!scope())return real_default(node,edx,first,output,last);
-    auto* brain=at<void*>(node,4);auto* actor=brain?at<void*>(brain,0x10):nullptr;
-    if(enabled&&scope()&&actor&&at<u32>(actor,0x1c)==boss.owner){
-        logger::write_once("mold-default", "mold controller: native AI update reached, first %p last %p",first,last);
+bool __cdecl brain_update(void* brain,u32* output){
+    if(!scope()){boss=state{};mold_effects::reset();}
+    if(!enabled||!boss.owner||!scope())return false;
+    auto* actor=brain?at<void*>(brain,0x10):nullptr;
+    if(actor&&at<u32>(actor,0x1c)==boss.owner&&resolve(boss.owner)==actor&&mold_query::is_a(actor,0x70b83c)){
+        if(trace&&now()>trace_at){
+            trace_at=now()+1;
+            logger::write("mold trace: brain update time %.3f state %u queue %u native wait %.3f core %d",now(),at<u32>(brain,8),at<u32>(brain,0x410),at<float>(brain,0x1c),boss.step);
+        }
+        // Native script commands retain their dispatcher and precedence.
+        if(at<u32>(brain,0x410)&&at<signed char>(brain,0x2b4)>=0)return false;
+        logger::write_once("mold-brain", "mold controller: native brain dispatcher reached for %08X",boss.owner);
         tick(brain,actor,output);
-        return 1;
+        return true;
     }
-    return real_default(node,edx,first,output,last);
+    return false;
+}
+__declspec(naked) void brain_stub(){
+    __asm {
+        pushfd
+        pushad
+        push edi
+        push esi
+        call brain_update
+        add esp,8
+        test al,al
+        jz native_state
+        popad
+        popfd
+        jmp dword ptr [brain_postprocess]
+    native_state:
+        popad
+        popfd
+        mov eax,[esi+8]
+        cmp eax,040h
+        jmp dword ptr [brain_resume]
+    }
 }
 }
 bool beam_target(void* actor,void*& target){
@@ -238,14 +307,24 @@ bool beam_target(void* actor,void*& target){
 }
 void install(HMODULE game){
     if(!ini::flag(L"Game",L"Xml1MasterMold",false))return;
+    trace=ini::flag(L"Test",L"MoldTrace",false);
     if(reinterpret_cast<std::uintptr_t>(game)!=limits_rules::image_base)return;
     const auto binding=mold_combat_rules::parse_binding(ini::text(L"Game",L"Xml1MoldStage").value_or(""));
     if(!binding){logger::write("mold controller: saved-stage binding unavailable; native fallback retained");return;}
     saved_stage=*binding;
     xml1_hook_transaction::patch beam;
-    if(!xml1_turrets::prepare_beam(beam)||!mold_query::supported()){logger::write("mold controller: combat/query compatibility unavailable; no shield/controller hooks enabled");return;}
-    constexpr std::array<limits_rules::guard,20> guards{{
-        {0x694994,"e0df5100","default AI update vtable"},
+    if(!xml1_turrets::prepare_beam(beam)||!mold_query::supported()||!mold_effects::supported()){logger::write("mold controller: combat/query/effect compatibility unavailable; no shield/controller hooks enabled");return;}
+    constexpr std::array<limits_rules::guard,29> guards{{
+        {0x5173f3,"8b460883f840","brain state dispatch after native gates"},
+        {0x517370,"83ec188b44241c535556578b","brain update frame"},
+        {0x516930,"51568bf18b46108b88d40300","native lifecycle and wait gate"},
+        {0x517a79,"8a86b7020000a8400f848100","native brain postprocessing"},
+        {0x525160,"568b74240885f6744c8b81a0c400008d","generation-checked AI token lookup"},
+        {0x695f14,"60515200","AI lookup vtable"},
+        {0x509130,"538a5c2408568bf18a96780200008ac3","native engagement switch"},
+        {0x5030c0,"8b442404898154010000c20400","secondary target setter"},
+        {0x5252e0,"8a0d9c887900b80100000084c875","AI system getter"},
+        {0x505030,"83ec0c5356578b7c241c578bf1e8","native brain state selector"},
         {0x509ba0,"83ec18","native facing helper"},
         {0x41a730,"d9442408","native entity scheduler"},
         {0x68adb8,"30484a00","native sequence script entry"},
@@ -272,12 +351,15 @@ void install(HMODULE game){
     real_default_target=at<script_t>(reinterpret_cast<const void*>(spawn),0);
     if(real_sequence!=fn<script_t>(0x4a4830)||real_node!=fn<script_t>(0x4a51a0)||real_default_target!=fn<script_t>(0x4a4e20)){logger::write("mold controller: active script table differs; no shield/controller hooks enabled");return;}
     using xml1_hook_transaction::pointer_bytes;
+    xml1_hook_transaction::patch brain_patch{0x5173f3,{0x8b,0x46,0x08,0x83,0xf8,0x40},{0xe9,0,0,0,0,0x90}};
+    const u32 delta=static_cast<u32>(reinterpret_cast<std::uintptr_t>(&brain_stub))-0x5173f8;
+    std::memcpy(brain_patch.after.data()+1,&delta,4);
     const std::vector<xml1_hook_transaction::patch> writes{
         beam,
         {sequence,pointer_bytes(real_sequence),pointer_bytes(&sequence_hook)},
         {node,pointer_bytes(real_node),pointer_bytes(&node_hook)},
         {spawn,pointer_bytes(real_default_target),pointer_bytes(&spawn_hook)},
-        {0x694994,pointer_bytes(real_default),pointer_bytes(&default_hook)}};
+        brain_patch};
     xml1_hook_transaction::memory memory;
     bool safe=true;
     if(xml1_hook_transaction::apply(memory,writes,&safe)){enabled=true;logger::write("mold controller: scoped opt-in requests and native AI update installed (no external scheduled events)");}

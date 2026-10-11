@@ -19,6 +19,14 @@ inline std::optional<stage_binding> parse_binding(std::string_view text){
     return result;
 }
 enum class core_action { wait, abandon, fire };
+enum class companion_action { leave, engage, engage_floor, follow };
+inline companion_action companion(bool active,bool ai_controlled,float hero_z,float member_z,float boss_range_squared,int controller_kind){
+    if(hero_z<-100&&boss_range_squared<300.f*300.f)return companion_action::engage_floor;
+    if(active)return companion_action::engage;
+    if(!ai_controlled)return companion_action::leave;
+    if(hero_z>-100&&member_z>-100&&boss_range_squared<350.f*350.f&&controller_kind==1)return companion_action::engage;
+    return companion_action::follow;
+}
 inline core_action ready_core(bool living_hero,bool valid_target,bool node_available){
     if(!living_hero)return core_action::wait;
     if(!valid_target)return core_action::abandon;

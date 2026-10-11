@@ -42,3 +42,4 @@ LONG_ID  test/xml2_test.cpp  # Public Discord application identifiers and invent
 GAME_TEXT_ATTR  src/save_format_rules.hpp  # Original save-status UI labels concatenated with a description variable, not decoded game text.
 LONG_ID  src/discord_rules.hpp  # Public project Discord application identifiers documented by the integration; not personal ids.
 DISASM  src/xml1_turrets.cpp  # Authored register-preserving x86 callback bridge; its sole replay is a short byte-guarded stack-address instruction. No game listing or decompiled body.
+DISASM  src/mold_controller.cpp  # Authored register-preserving dispatcher bridge; replays only two short guarded state-selection instructions, with no copied game listing or decompiled body.

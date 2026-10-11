@@ -83,6 +83,15 @@ int main(){
     CHECK(ranged_choice(.25f)==0xc0);
     CHECK(ranged_choice(.499f)==0xc0);
     CHECK(ranged_choice(.5f)==0x180);
+    CHECK(companion(true,false,0,0,200000,0)==companion_action::engage);
+    CHECK(companion(false,false,0,0,200000,0)==companion_action::leave);
+    CHECK(companion(false,true,-101,-101,89999,0)==companion_action::engage_floor);
+    CHECK(companion(false,true,-101,-101,90000,0)==companion_action::follow);
+    CHECK(companion(false,true,-100,0,1,1)==companion_action::follow);
+    CHECK(companion(false,true,0,-100,1,1)==companion_action::follow);
+    CHECK(companion(false,true,0,0,122499,1)==companion_action::engage);
+    CHECK(companion(false,true,0,0,122500,1)==companion_action::follow);
+    CHECK(companion(false,true,0,0,1,0)==companion_action::follow);
     // Catch the old extra 360-unit center-distance restriction and nearest-core
     // policy. These synthetic query results overlap the native search sphere;
     // their centers need not lie within that radius.
