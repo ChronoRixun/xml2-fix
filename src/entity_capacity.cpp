@@ -3,6 +3,7 @@
 #include "entity_capacity_rules.hpp"
 #include "entity_capacity_sites.hpp"
 #include "entity_owners.hpp"
+#include "entity_transfer.hpp"
 #include "entity_world.hpp"
 #include "gameplay_agreement.hpp"
 #include "ini.hpp"
@@ -32,7 +33,6 @@ namespace entity_capacity
 		std::uint8_t* save_backing = nullptr;       // 0x80c24 bytes, the prepared CMap save-manager claim
 		claim_state claim = claim_state::unprepared;
 		std::atomic<unsigned> claim_rejections{0}, factory_failures{0}, transfer_refusals{0};
-		std::uint32_t transfer_chunks = 0; // the native DAT_00a3bc38 counterpart for the expanded receiver
 
 		std::uint32_t address_of(const void* p) { return static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(p)); }
 		bool read_dword(std::uint32_t va, std::uint32_t& out) { return patch_transaction::read_memory(va, &out, 4); }
@@ -191,91 +191,23 @@ namespace entity_capacity
 		}
 
 		// ---- 0x608630: the joiner's native campaign transfer receiver ('G' prepares, 'H' appends chunks) ------
-		const std::uint32_t native_615810 = 0x615810, native_55d7e0 = 0x55d7e0, native_612be0 = 0x612be0, native_610f30 = 0x610f30;
-		__declspec(naked) void send_transfer_ack(void* /*context*/)
+		// The receiver and its 'J' acknowledgement live in entity_transfer.cpp (executed next to the retail function by
+		// test/entity_transfer_test.cpp); this adapter supplies the installed profile and the telemetry.
+		entity_transfer::state transfer_state;
+		void transfer_refused(transfer_verdict verdict, std::uint32_t chunk, std::uint32_t length, std::uint32_t payload)
 		{
-			// Exactly the native sequence at 0x608730..0x60875a on a 0x14-byte header local: ECX = *(context + 0x10).
-			__asm
-			{
-				push ebp
-				mov ebp, esp
-				sub esp, 0x14
-				push esi
-				push edi
-				call dword ptr [native_615810]
-				mov eax, dword ptr [ebp + 8]
-				mov ecx, dword ptr [eax + 0x10]
-				push 0
-				lea edx, [ebp - 0x14]
-				push edx
-				mov byte ptr [ebp - 0x14 + 0x10], 0x4a
-				mov byte ptr [ebp - 0x14 + 0x0e], 1
-				call dword ptr [native_55d7e0]
-				push eax
-				call dword ptr [native_612be0]
-				mov ecx, eax
-				call dword ptr [native_610f30]
-				pop edi
-				pop esi
-				mov esp, ebp
-				pop ebp
-				ret
-			}
+			transfer_refusals.fetch_add(1);
+			logger::write_once("entity-capacity-transfer", "entity capacity: native campaign transfer chunk refused (%s: chunk %lu, %u bytes, payload 0x%lX)",
+			                   transfer_verdict_text(verdict), static_cast<unsigned long>(chunk), unsigned(length), static_cast<unsigned long>(payload));
 		}
-		using free_buffer_t = void(__cdecl*)(void*);
-		using difficulty_getter_t = void*(__cdecl*)();
-
+		void transfer_no_wrapper(std::uint32_t size)
+		{
+			logger::write("entity capacity: native campaign transfer: the game's pool refused a %lu-byte wrapper", static_cast<unsigned long>(size));
+		}
 		std::uint32_t __cdecl ReceiveNativeCampaign(std::uint8_t* event)
 		{
-			auto* context = *reinterpret_cast<std::uint8_t**>(event + 0xc);
-			const auto opcode = event[0];
-			const auto& profile = prepared_descriptor.raised ? e10a2_transfer : retail_transfer;
-			if (opcode == 'G')
-			{
-				transfer_chunks = 0;
-				if (const auto callback = *reinterpret_cast<void(__cdecl**)(int, std::uint32_t, int)>(context + 0x2298))
-					callback(7, *reinterpret_cast<std::uint32_t*>(context + 0x229c), 0);
-				if (auto* old = *reinterpret_cast<void**>(context + 0x2250))
-				{
-					native<free_buffer_t>(0x560700)(old);
-					*reinterpret_cast<void**>(context + 0x2250) = nullptr;
-				}
-				if (context[0x2294]) context[0x2294] = 0;
-				auto* wrapper = static_cast<std::uint8_t*>(natives::transfer_alloc(profile.wrapper, 0x2d));
-				if (wrapper)
-				{
-					wrapper[profile.description] = 0;
-					wrapper[profile.flag] = 0;
-					*reinterpret_cast<std::uint8_t**>(wrapper + profile.payload) = wrapper;
-				}
-				else logger::write("entity capacity: native campaign transfer: the game's pool refused a %lu-byte wrapper", static_cast<unsigned long>(profile.wrapper));
-				*reinterpret_cast<std::uint8_t**>(context + 0x2250) = wrapper;
-				const auto* body = *reinterpret_cast<const std::uint32_t**>(event + 4);
-				using difficulty_t = void(__fastcall*)(void*, void*, std::uint32_t);
-				auto* game = native<difficulty_getter_t>(0x46dce0)();
-				auto** vt = *reinterpret_cast<void***>(game);
-				reinterpret_cast<difficulty_t>(vt[0x26c / 4])(game, nullptr, body[0]);
-				context[0x2294] = static_cast<std::uint8_t>(body[1]);
-				return 0;
-			}
-			if (opcode == 'H')
-			{
-				const auto length = *reinterpret_cast<const std::uint16_t*>(event + 8);
-				auto* wrapper = *reinterpret_cast<std::uint8_t**>(context + 0x2250);
-				const auto verdict = transfer_chunk(transfer_chunks, length, profile.payload, wrapper != nullptr);
-				if (verdict != transfer_verdict::accept && verdict != transfer_verdict::complete)
-				{
-					transfer_refusals.fetch_add(1);
-					logger::write_once("entity-capacity-transfer", "entity capacity: native campaign transfer chunk refused (%s: chunk %lu, %u bytes, payload 0x%lX)",
-					                   transfer_verdict_text(verdict), static_cast<unsigned long>(transfer_chunks), unsigned(length), static_cast<unsigned long>(profile.payload));
-					return 0;
-				}
-				const auto* body = *reinterpret_cast<const std::uint8_t**>(event + 4);
-				std::memcpy(wrapper + transfer_chunks * transfer_chunk_size, body, length);
-				++transfer_chunks;
-				if (verdict == transfer_verdict::complete) send_transfer_ack(context);
-			}
-			return 0;
+			static const entity_transfer::observer observer{&transfer_refused, &transfer_no_wrapper};
+			return entity_transfer::receive(event, prepared_descriptor.raised ? e10a2_transfer : retail_transfer, transfer_state, observer);
 		}
 
 		// ---- refusal telemetry: the World reports every refusal; the line carries the arena occupancies ------------

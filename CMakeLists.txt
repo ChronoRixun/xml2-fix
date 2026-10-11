@@ -79,6 +79,7 @@ add_library(xml2_fix SHARED
 	src/limits.cpp
 	src/entity_capacity.cpp
 	src/entity_owners.cpp
+	src/entity_transfer.cpp
 	src/entity_world.cpp
 	src/entity_grid.cpp
 	src/entity_query.cpp
@@ -251,6 +252,10 @@ _fixture_space DB 400000h DUP(0)
 fixture_seg ENDS
 END
 ")
+# The native campaign transfer receiver (0x608630) and its replacement executed side by side (Phase A, review P1).
+add_executable(xml2_entity_transfer_test test/entity_transfer_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/entity_transfer.cpp)
+target_include_directories(xml2_entity_transfer_test PRIVATE src)
+target_link_options(xml2_entity_transfer_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 # The save-core capture bridges executed as emitted under the retail and E10A2 profiles (Phase A, review P1).
 add_executable(xml2_save_capture_bridge_test test/save_capture_bridge_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
 target_include_directories(xml2_save_capture_bridge_test PRIVATE src)

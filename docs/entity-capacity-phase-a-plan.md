@@ -757,3 +757,10 @@ and why the change stays within the reviewed design.
     (below/at each bound, the hook's record argument, and the ordinal map writes compared against a whole-record
     expectation). Audit of the other save bridges: the stream flag stubs already take `usable_end`; the numbering,
     reset, capture trampoline, XMLB, zone-open and string-arena bridges address no record field of the native layout.
+14. **Transfer acknowledgement frame (section 6; review P1).** The replaced 0x608630 sent its 'J' acknowledgement with
+    ECX unset for 0x615810 (zeroing 18 bytes at a stale pointer and sending an uninitialised header) and took the sender
+    from the context's +0x10 where retail uses the event's +0x10. The receiver now lives in `entity_transfer.cpp`: the
+    header is the local passed in ECX, the sender is the event's, and `test/entity_transfer_test.cpp` executes the
+    retail 0x608630 (its chunk-counter references relocated to a test variable after checking their operands) next to
+    the replacement over the same 'G' + 978-chunk sequence with a poisoned stack, comparing the callback, pool, payload,
+    difficulty, context and acknowledgement (header bytes, endpoint, node, flags).
