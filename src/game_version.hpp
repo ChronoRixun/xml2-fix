@@ -24,8 +24,5 @@ namespace game_version
 	void refuse_startup();
 	// Why startup_allowed() is false, for the startup refusal notice.
 	const char* startup_error();
-	// Turret experiment/projectile diagnostic only: they have no shared agreement entry
-	// and keep host/join closed for the process. Master Mold registers rule 3 instead.
-	bool offline_gameplay_ready();
 	void install(HMODULE game);
 }

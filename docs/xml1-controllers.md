@@ -1,9 +1,8 @@
-# XML1 Master Mold controller and turret experiment
+# XML1 Master Mold controller
 
-`Game.Xml1MasterMold` and `Test.NativeProjectileProbe` default to off. The first-game
-builder enables Master Mold only with its generated, validated saved-stage binding.
-The projectile diagnostic remains a development opt-in. The turret scanner and
-weapon controllers are not implemented.
+`Game.Xml1MasterMold` defaults to off. The first-game builder enables it only with
+its generated, validated saved-stage binding. No turret scanner or weapon
+controller ships in this build.
 
 Master Mold runs at the native brain state dispatcher, `0x5173f3`, after native
 lifecycle, conversation and wait gates. Its handled path rejoins native movement
@@ -94,16 +93,13 @@ requested registers verified off `{0,0,0,0}`; requested but not installed (missi
 binding, guard, query/effect support or transaction refusal) registers unverified,
 which closes host/join for that process. Peers whose Master Mold state differs,
 including one side off, are refused by the native agreement before admission.
-Rule 4 (turrets), revision 1, is always `{0,0,0,0}`: no turret controller exists.
-`Game.Xml1Turrets` and `Test.NativeProjectileProbe` still close host/join sockets
-for the process, even outside LC mode, and leave rule 4 unverified. Failure to
-install a required socket exclusion refuses startup, and later INI edits cannot
-reopen the process.
+Rule 4 (turrets), revision 1, is always verified `{0,0,0,0}`: no turret controller
+exists in this build. Failure to install a required socket exclusion refuses
+startup.
 
 `xml2_xml1_controllers_test` exercises selection counterexamples, transaction
 rollback and the production socket gate with isolated providers and no sockets.
 Live traces show the three independent floor attacks recurring at their native
 ten-second deadlines, automatic core destruction, saved phase reconstruction and
 ending progression. Further acceptance includes original-game visual comparisons,
-broader interruption/revisit cases and the scanner/weapon controllers. The
-projectile diagnostic alone is not a turret restoration.
+and broader interruption/revisit cases.

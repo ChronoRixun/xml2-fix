@@ -29,7 +29,6 @@
 #include "discord_presence.hpp"
 #include "display.hpp"
 #include "forced_teams.hpp"
-#include "xml1_turrets.hpp"
 #include "mold_controller.hpp"
 #include "game_version.hpp"
 #include "gamepad_fix.hpp"
@@ -226,18 +225,17 @@ namespace
 		// patch push operands of script-facing code; nothing here depends on limits or test_input (the
 		// pipe's "script" command compiles its statement when it runs, with the functions in place).
 		forced_teams::install(game);
-		xml1_turrets::install(game);
 		mold_controller::install(game);
 		if (!game_version::startup_allowed()) return;
 		// XML1 controllers in the shared gameplay record (docs/gameplay-agreement.md): online play is lockstep, so
 		// every peer runs Master Mold's native AI update and must have the same effective controller (rule 3).
-		// No turret controller exists (rule 4 is always off; its experiment keeps the process offline).
+		// No turret controller exists in this build: rule 4 is advertised as verified off.
 		// Registering a requested controller enlists the agreement even in a non-LC installation.
 		if (game_version::needs_gameplay_agreement() || mold_controller::requested())
 		{
 			const auto mold = mold_controller::capability();
 			gameplay_agreement::register_rule(gameplay_capabilities::master_mold_id, xml1_capability_rules::master_mold_revision, mold.values, mold.verified);
-			const auto turrets = xml1_capability_rules::turrets(xml1_turrets::requested());
+			const auto turrets = xml1_capability_rules::turrets();
 			gameplay_agreement::register_rule(gameplay_capabilities::turret_controller_id, xml1_capability_rules::turret_revision, turrets.values, turrets.verified);
 		}
 		// Conversations written for XML1's engine ([Game] AutoAdvance, ReplyVoices, ReplyCursor; on by default):

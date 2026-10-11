@@ -170,9 +170,8 @@ int main(){
     CHECK(!xml1_capability_rules::master_mold(true,true,0,5).verified);
     CHECK(!xml1_capability_rules::master_mold(true,true,1,0).verified);
     CHECK(!xml1_capability_rules::master_mold(true,true,1,33).verified);
-    const auto turret_off=xml1_capability_rules::turrets(false),turret_experiment=xml1_capability_rules::turrets(true);
+    const auto turret_off=xml1_capability_rules::turrets(); // no turret controller in this build
     CHECK(turret_off.verified&&turret_off.values==off.values);
-    CHECK(!turret_experiment.verified&&turret_experiment.values==off.values);
     using gameplay_capabilities::record;using gameplay_capabilities::result;
     auto peer=[](registration mold,registration turret,std::uint16_t revision=xml1_capability_rules::master_mold_revision){
         record r;r.add(gameplay_capabilities::explosive_first_hit_id,1,{1,0,0,0},true);
@@ -189,32 +188,19 @@ int main(){
     const auto broken=peer(failed,turret_off);
     CHECK(!broken.ready()&&broken.bytes().empty()&&broken.compare(host_on.bytes())==result::unavailable);
     CHECK(host_on.compare(broken.bytes())==result::malformed);
-    const auto experiment=peer(off,turret_experiment);
-    CHECK(!experiment.ready()&&experiment.compare(client_off.bytes())==result::unavailable);
     record older;older.add(gameplay_capabilities::explosive_first_hit_id,1,{1,0,0,0},true);older.finalize();
     CHECK(host_on.compare(older.bytes())==result::entries&&older.compare(client_off.bytes())==result::entries);
 
     using socket_t=SOCKET(WSAAPI*)(int,int,int);
-    // Master Mold no longer closes sockets on its own: it registers rule 3.
-    ini::values={{L"Game/Xml1MasterMold","1"}};iat_hook::fail=false;
-    {const auto before=iat_hook::calls;game_version::install(nullptr);
-     CHECK(game_version::startup_allowed());CHECK(!game_version::offline_gameplay_ready());
-     CHECK(iat_hook::calls==before);CHECK(!game_version::needs_gameplay_agreement());}
-    for(const auto* key:{L"Game/Xml1Turrets",L"Test/NativeProjectileProbe"}){
-        ini::values={{key,"1"}};iat_hook::fail=false;game_version::install(nullptr);
-        CHECK(game_version::startup_allowed());CHECK(game_version::offline_gameplay_ready());
-        auto socket=reinterpret_cast<socket_t>(iat_hook::installed);
-        const auto forwarded=iat_hook::forwarded;
-        CHECK(socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP)==INVALID_SOCKET);
-        CHECK(WSAGetLastError()==WSAEACCES);CHECK(iat_hook::forwarded==forwarded);
-        ini::values.clear(); // Runtime INI drift must not reopen an installed experiment.
-        CHECK(socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP)==INVALID_SOCKET);
-        ini::values={{key,"1"}};iat_hook::fail=true;game_version::install(nullptr);
-        CHECK(!game_version::startup_allowed());CHECK(!game_version::offline_gameplay_ready());
+    // Master Mold does not close sockets on its own: it registers rule 3. Turret keys
+    // have no effect in this build (no turret code ships).
+    for(const auto* key:{L"Game/Xml1MasterMold",L"Game/Xml1Turrets",L"Test/NativeProjectileProbe"}){
+        ini::values={{key,"1"}};iat_hook::fail=false;const auto before=iat_hook::calls;game_version::install(nullptr);
+        CHECK(game_version::startup_allowed());CHECK(iat_hook::calls==before);CHECK(!game_version::needs_gameplay_agreement());
     }
     ini::values.clear();iat_hook::fail=false;const auto calls=iat_hook::calls;
     game_version::install(nullptr);CHECK(game_version::startup_allowed());
-    CHECK(!game_version::offline_gameplay_ready());CHECK(iat_hook::calls==calls);
+    CHECK(iat_hook::calls==calls);
     CHECK(std::string(game_version::startup_error()).find("network exclusion")!=std::string::npos);
     game_version::refuse_startup();CHECK(!game_version::startup_allowed());
     CHECK(std::string(game_version::startup_error()).find("XML1 controller")!=std::string::npos);
@@ -227,9 +213,6 @@ int main(){
     CHECK(!game_version::gameplay_online_allowed());
     iat_hook::fail=true;game_version::install(nullptr);CHECK(!game_version::startup_allowed());
     CHECK(std::string(game_version::startup_error()).find("LC network exclusion")!=std::string::npos);
-    ini::values={{L"Game/Xml1MasterMold","1"},{L"Test/NativeProjectileProbe","1"}};iat_hook::fail=false;
-    game_version::install(nullptr);CHECK(game_version::offline_gameplay_ready());
-    CHECK(reinterpret_cast<socket_t>(iat_hook::installed)(AF_INET,SOCK_DGRAM,IPPROTO_UDP)==INVALID_SOCKET);
     std::cout<<"XML1 controller guards: "<<checks<<" checks, "<<failures<<" failures\n";
     return failures?1:0;
 }

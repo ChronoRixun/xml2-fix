@@ -1,5 +1,5 @@
 #include "mold_controller.hpp"
-#include "xml1_turrets.hpp"
+#include "mold_beam.hpp"
 #include "ini.hpp"
 #include "log.hpp"
 #include "limits_rules.hpp"
@@ -324,7 +324,7 @@ void install(HMODULE game){
     if(!binding){logger::write("mold controller: saved-stage binding unavailable; native fallback retained");return;}
     saved_stage=*binding;
     xml1_hook_transaction::patch beam;
-    if(!xml1_turrets::prepare_beam(beam)||!mold_query::supported()||!mold_effects::supported()){logger::write("mold controller: combat/query/effect compatibility unavailable; no shield/controller hooks enabled");return;}
+    if(!mold_beam::prepare(beam)||!mold_query::supported()||!mold_effects::supported()){logger::write("mold controller: combat/query/effect compatibility unavailable; no shield/controller hooks enabled");return;}
     constexpr std::array<limits_rules::guard,29> guards{{
         {0x5173f3,"8b460883f840","brain state dispatch after native gates"},
         {0x517370,"83ec188b44241c535556578b","brain update frame"},

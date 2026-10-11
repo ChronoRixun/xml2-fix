@@ -18,9 +18,8 @@ inline registration master_mold(bool requested,bool installed,int first_bit,int 
     return {{1,static_cast<std::uint32_t>(first_bit),static_cast<std::uint32_t>(width),0},true};
 }
 
-// No turret scanner/weapon controller exists. Revision 1 always advertises off.
-// The opt-in turret experiment and projectile diagnostic cannot be described by
-// this entry, so requesting either leaves it unverified (and host/join closed).
+// No turret scanner/weapon controller exists in this build. Revision 1 always
+// advertises verified off; a future controller registers its own revision/values.
 constexpr std::uint16_t turret_revision=1;
-inline registration turrets(bool experiment_requested){ return {{0,0,0,0},!experiment_requested}; }
+inline registration turrets(){ return {{0,0,0,0},true}; }
 }

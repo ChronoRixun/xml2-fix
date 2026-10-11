@@ -32,7 +32,7 @@ target_include_directories(lcsave PUBLIC src/lcsave)
 
 # The fix: a drop-in dinput.dll for the game folder.
 add_library(xml2_fix SHARED
-	src/xml1_turrets.cpp
+	src/mold_beam.cpp
 	src/mold_controller.cpp
 	src/mold_query.cpp
 	src/mold_effects.cpp
