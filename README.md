@@ -119,10 +119,10 @@ The game looks up `xmenlegpc.available` and `xmenlegpc.master` (UDP 27900: the a
 
 ```ini
 [Online]
-LocalIP=auto         ; the default. Or: first (Windows' order, as without the fix), or one of this PC's addresses, e.g. 192.0.2.20
+LocalIP=auto         ; the default. Or: first (Windows' order, as without the fix), or this PC's LAN IPv4 address
 ```
 
-An address that isn't this PC's is ignored and `auto` applies. Without a route to the internet, Windows' order stays. `xml2-fix.log` shows the list once, before and after (`online: this PC's addresses (MYPC): 198.51.100.1, 192.0.2.20` then `online: LocalIP: 192.0.2.20 first (...): 192.0.2.20, 198.51.100.1`).
+An address that isn't this PC's is ignored and `auto` applies. Without a route to the internet, Windows' order stays. `xml2-fix.log` shows the list once, before and after (`online: this PC's addresses (<PC_NAME>): <VIRTUAL_IP>, <LAN_IP>` then `online: LocalIP: <LAN_IP> first (...): <LAN_IP>, <VIRTUAL_IP>`; placeholders stand for the adapter addresses).
 
 **A mod that is another game** (the X-Men Legends I port) uses the same GameSpy name as XML2, `xmenlegpc`, so without a version of its own its hosted games would show up in XML2's lists and the other way round, and a join would load the host's zones on the other game's install. The game tells GameSpy and other players its version, `1.30`, and finds no games of another version (in the server list, on the LAN or by *Connect by IP*); `GameVersion` gives it another:
 
@@ -318,6 +318,25 @@ Nothing changes without the keys. Every slot takes a name, so `ResourceNames` is
 **Fighting and power styles.** A zone, its enemies and the party share a registry of 19 style files, including fighting styles, power styles and secondary movesets. When it fills, a later hero can lose their powers even though the files and talents are present. `FightStyles=32` gives the registry room for 32 distinct styles. The game allocates a larger manager; its tree nodes, free ring, style objects, bitmaps and following fields use the expanded layout. Every affected instruction is checked before any write. Missing or `FightStyles=19` keeps the stock limit; values outside `19..32` are logged and ignored. This limit is independent of the other three keys. The test pipe reports `styles 20/32`. See [the layout and verification notes](docs/fight-styles.md). New in 1.3.1.
 
 **Effect curves.** Every loaded effect keeps its animation curves (a particle's size, transparency, rotation over its life) in one pool of 900. A zone's effects and the effects of a four-hero party can need more, and when the pool is full the game hands out an empty curve without a word: the effects loaded last are drawn without their particles - a fire is only a faint glow that still burns, or a hero's power loses its particles. `EffectCurves=3600` gives the pool room for 3600. It moves into a block of the fix's memory that the game's own code builds and tears down; every instruction that carries the old size or the old address is checked before anything is patched, and on any difference the pool stays at 900. Curves are not written to saves. The test pipe's `status` reports `curves used/capacity`. [docs/effect-curves.md](docs/effect-curves.md) has the layout, the patch list and the measurements.
+
+### Classic main-menu backdrop
+
+`[Game] ClassicMainBackdrop=1` enables the original main-room diffuse textures for a classic
+front end; the default is off. The guarded engine hook applies only to known opaque room
+shaders in `menu/main_back` with the original reflection value. It preserves the reflection
+pass and the lit menu logo. Unsupported engine exports, instruction bytes or pass layouts
+leave retail rendering in place and write a diagnostic to the log. No save data changes.
+
+Shaders must also belong to the retained directory loaded for `maps/menu/main_back.igb`.
+Each check uses the directory's current resolved object references; the zone and a matching
+label alone cannot select another asset's shader. One room-directory reference is retained
+until replacement, when the previous reference is released. Allocation/protection failures
+are logged. The same original room remains bright behind native PC Options.
+
+`[Game] ClassicMainPanelBounds=1` (default off) makes the classic menu's eight hit regions
+cover their visible panel widths. Overlapping borders are divided at row midpoints; Online
+and Quit remain separate. Local offsets follow the rectangle changes to retain text centering.
+The MAIN_MENU update and complete item layout are guarded. Stock menus retain their bounds.
 
 ### Character ladder paths
 

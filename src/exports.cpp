@@ -38,6 +38,8 @@
 #include "ladder_paths.hpp"
 #include "log.hpp"
 #include "main_menu.hpp"
+#include "classic_main_backdrop.hpp"
+#include "classic_main_panels.hpp"
 #include "mod_loader.hpp"
 #include "new_game.hpp"
 #include "net_trace.hpp"
@@ -192,6 +194,8 @@ namespace
 		// The main menu's item names: the push operands of MAIN_MENU's own code (mouse, Quit), used from the
 		// first main menu on.
 		main_menu::install(game);
+		classic_main_backdrop::install(game);
+		classic_main_panels::install(game);
 		// The Review menu's tabs: five imm8s in REVIEW_PATHS_MENU's own code, used from the first Review on.
 		review_menu::install(game);
 		personal_item_text::install(game);
