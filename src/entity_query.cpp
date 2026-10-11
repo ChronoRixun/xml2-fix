@@ -262,7 +262,8 @@ namespace entity_query
 			slot<void (__fastcall*)(void*, void*, const std::uint8_t*, const std::uint32_t*)>(q, 0x4)(q, nullptr, record, &none);
 		}
 		// 0x4ab370 (slot 0xc): copy another query's set and flags.
-		void __fastcall slot_0c(void* q, void*, void* const* source_ref)
+		// Native AL on return = the copied flag byte +0x32 (EAX pass-through audit, plan section 10 deviation 12).
+		std::uint8_t __fastcall slot_0c(void* q, void*, void* const* source_ref)
 		{
 			void* src = *source_ref;
 			set_copy(set_of(q), set_of(src));
@@ -273,9 +274,10 @@ namespace entity_query
 			u8(q, g.l.q_b0) = u8(src, g.l.q_b0);
 			u8(q, g.l.q_b1) = u8(src, g.l.q_b1);
 			u8(q, g.l.q_b2) = u8(src, g.l.q_b2);
+			return u8(q, g.l.q_b2);
 		}
-		// 0x4ab300 (slot 0x10): empty, or all characters.
-		void __fastcall slot_10(void* q, void*, std::uint8_t all)
+		// 0x4ab300 (slot 0x10): empty, or all characters. Native AL on return = 1 (mov al,1).
+		std::uint8_t __fastcall slot_10(void* q, void*, std::uint8_t all)
 		{
 			if (all == 0) set_zero(set_of(q));
 			else
@@ -290,6 +292,7 @@ namespace entity_query
 			u8(q, g.l.q_b1) = 0;
 			u8(q, g.l.q_b2) = 1;
 			u8(q, g.l.q_b0) = 1;
+			return 1;
 		}
 		// 0x4aa330 (slot 0x14): the first entity of the set (World slot 0x10, dense).
 		std::uint8_t* __fastcall slot_14(void* q, void*)
@@ -392,28 +395,33 @@ namespace entity_query
 			const auto* handle = player_handle(&local);
 			return map_of(collisions_of(q))[dense_of(*handle).value] != 0xff;
 		}
-		// 0x4aaa30 (slot 0x2c): the player's trace record or null.
-		void __fastcall slot_2c(void* q, void*, std::uint32_t* out)
+		// 0x4aaa30 (slot 0x2c): the player's trace record or null; returns `out` (native mov eax,[esp+8] after its push;
+		// callers 0x409dda, 0x4504e3, 0x45278c, 0x4de241 read [eax]).
+		std::uint32_t* __fastcall slot_2c(void* q, void*, std::uint32_t* out)
 		{
 			std::uint32_t local = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(q));
 			const auto* handle = player_handle(&local);
 			const auto b = map_of(collisions_of(q))[dense_of(*handle).value];
 			*out = b != 0xff ? static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(pool_record(b))) : 0;
+			return out;
 		}
 		// 0x4aa3e0 (slot 0x30): one handle's bit.
 		void __fastcall slot_30(void* q, void*, std::uint32_t mode, const std::uint32_t* handle)
 		{
 			if (*handle != 0 && handle_valid(handle)) bit_op(q, mode, dense_of(*handle).value, 1); // native: *handle & 0xff
 		}
-		// 0x4aaa80 (slot 0x34): combine with another query; mode 2 also merges its flags.
-		void __fastcall slot_34(void* q, void*, std::uint32_t mode, void* const* source_ref)
+		// 0x4aaa80 (slot 0x34): combine with another query; mode 2 also merges its flags. Native EAX: the source query
+		// in mode 2 (mov eax,[edi]); in modes 0/1 the residue of the set helper 0x4aaac0 (incidental, not reproduced).
+		void* __fastcall slot_34(void* q, void*, std::uint32_t mode, void* const* source_ref)
 		{
 			set_op(q, mode, set_of(*source_ref));
 			if (mode == 2)
 			{
 				u32(q, g.l.q_flags_a) |= u32(*source_ref, g.l.q_flags_a);
 				u32(q, g.l.q_flags_b) |= u32(*source_ref, g.l.q_flags_b);
+				return *source_ref;
 			}
+			return nullptr;
 		}
 		// 0x4aac50 (slot 0x38): combine with a grid cell's set (Grid slot 0x34).
 		void __fastcall slot_38(void* q, void*, std::uint32_t mode, std::uint32_t cell)
@@ -616,9 +624,10 @@ namespace entity_query
 			slot<collide_c_fn>(collide, 0xc)(collide, nullptr, a, b, c, set_of(q), d, collisions_of(q));
 		}
 		// 0x4aa310 / own setter for the shared 0x61fde0 / 0x4aa320 (slots 0x80 / 0x84 / 0x88): the three flag bytes.
-		void __fastcall slot_80(void* q, void*, std::uint8_t value) { u8(q, g.l.q_b2) = value; }
-		void __fastcall slot_84(void* q, void*, std::uint8_t value) { u8(q, g.l.q_b0) = value; } // 0x61fde0 writes +0x30; the field moved
-		void __fastcall slot_88(void* q, void*, std::uint8_t value) { u8(q, g.l.q_b1) = value; }
+		// Native AL on return = the argument (mov al,[esp+4]).
+		std::uint8_t __fastcall slot_80(void* q, void*, std::uint8_t value) { u8(q, g.l.q_b2) = value; return value; }
+		std::uint8_t __fastcall slot_84(void* q, void*, std::uint8_t value) { u8(q, g.l.q_b0) = value; return value; } // 0x61fde0 writes +0x30; the field moved
+		std::uint8_t __fastcall slot_88(void* q, void*, std::uint8_t value) { u8(q, g.l.q_b1) = value; return value; }
 		// 0x4ab1f0 (slot 0x8c): export the set into the caller's set (union / subtract / intersect); widened local.
 		void __fastcall slot_8c(void* q, void*, std::uint32_t mode, std::uint32_t* out)
 		{
@@ -740,8 +749,9 @@ namespace entity_query
 		}
 		std::uint32_t __fastcall order_slot_0(void* order, void*) { return u32(order, g.l.o_count); }
 		void* __fastcall order_slot_4(void* order, void*, std::uint32_t i) { return reinterpret_cast<void*>(static_cast<std::uintptr_t>(u32(pair_at(order, i), 0))); }
-		// 0x4a9d50: the trace record of the i-th entity in the order's query (null when the query has no traces).
-		void __fastcall order_slot_8(void* order, void*, std::uint32_t* out, std::uint32_t i)
+		// 0x4a9d50: the trace record of the i-th entity in the order's query (null when the query has no traces); returns
+		// `out` like native (mov eax,[esp+4] on every path).
+		std::uint32_t* __fastcall order_slot_8(void* order, void*, std::uint32_t* out, std::uint32_t i)
 		{
 			void* query = reinterpret_cast<void*>(static_cast<std::uintptr_t>(u32(order, g.l.o_query)));
 			// Native reads query+trace_count before testing query for null (a null query faults there); the test
@@ -753,10 +763,11 @@ namespace entity_query
 				{
 					const auto b = map_of(collisions_of(query))[dense_of(u32(reinterpret_cast<void*>(static_cast<std::uintptr_t>(entity)), entity_token_offset)).value];
 					*out = b != 0xff ? static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(pool_record(b))) : 0;
-					return;
+					return out;
 				}
 			}
 			*out = 0;
+			return out;
 		}
 		const void* const order_vtable_table[3] = {reinterpret_cast<const void*>(&order_slot_0), reinterpret_cast<const void*>(&order_slot_4), reinterpret_cast<const void*>(&order_slot_8)};
 		// 0x4a9d10

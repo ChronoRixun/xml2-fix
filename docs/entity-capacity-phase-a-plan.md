@@ -772,3 +772,17 @@ and why the change stays within the reviewed design.
     refusal into `rollback_failed`. Contributions may declare `requires_written` addresses (composed sites another
     contribution must write); an unwritten one refuses the whole transaction (`refused_unresolved`) before any byte
     changes. Reports print addresses as hexadecimal (they printed "0x" + decimal).
+16. **EAX/AL contract of every replaced vtable slot and bridged native (section 2; review P2, completes 12).** All 83
+    owner slots and the 54 E9/E8 bridges were classified by the native value in EAX/AL at each RET (capstone over the
+    retail function, against the DLL's declared return): 73 already return the native value through their type;
+    13 returned it only by accident and now declare it: World 0x18/0x24/0x54 return `out` and 0x28 `in`
+    (0x466742, 0x4cd525 and 0x50a659 read [eax]); Query 0x2c returns `out` (0x409dda, 0x4504e3, 0x45278c, 0x4de241),
+    0x0c the copied +0x32 flag byte, 0x10 `1`, 0x80/0x84/0x88 their byte argument, 0x34 the source query in mode 2;
+    Order 0x8 returns `out`; Grid 0x38 returns the cleared cache's set pointer (slot 0x34's value). The remaining 51
+    void ones end with EAX holding the residue of an internal helper (the /GS check 0x672161, bit-set helpers, the
+    native next-bit helper, set-op helpers, internal field addresses of the 256 layout); no native caller of those
+    slots reads it (EAX consumers after every indirect call at those displacements were inspected; the hits are other
+    classes' slots with different argument counts). Tests: the World test checks EAX on every 0x18/0x24/0x28/0x54
+    call for the retail code and the port (1116 / 1268 calls); the query differential records AL/EAX of 0x10,
+    0x80/0x84/0x88, 0x2c and Order 0x8 for both and a raised synthetic check covers all of them; the grid
+    differential compares slot 0x38's EAX on every reset step.

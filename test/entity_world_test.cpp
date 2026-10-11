@@ -41,10 +41,10 @@ using fn_void = void(__fastcall*)(void*, void*);
 using fn_name = void*(__fastcall*)(void*, void*, const char*);
 using fn_tok = void*(__fastcall*)(void*, void*, std::uint32_t);
 using fn_valid = unsigned char(__fastcall*)(void*, void*, std::uint32_t);
-using fn_handle = void(__fastcall*)(void*, void*, std::uint32_t*, std::uint32_t);
+using fn_handle = std::uint32_t(__fastcall*)(void*, void*, std::uint32_t*, std::uint32_t); // EAX = out
 using fn_u32 = std::uint32_t(__fastcall*)(void*, void*, std::uint32_t);
-using fn_outp = void(__fastcall*)(void*, void*, std::uint32_t*);
-using fn_inp = void(__fastcall*)(void*, void*, const std::uint32_t*);
+using fn_outp = std::uint32_t(__fastcall*)(void*, void*, std::uint32_t*);          // EAX = out
+using fn_inp = std::uint32_t(__fastcall*)(void*, void*, const std::uint32_t*);     // EAX = in
 using fn_name_tok = void(__fastcall*)(void*, void*, const char*, std::uint32_t);
 using fn_name_set = unsigned char(__fastcall*)(void*, void*, const char*, std::uint32_t*);
 using fn_two_names = void(__fastcall*)(void*, void*, const char*, const char*);
@@ -52,7 +52,7 @@ using fn_prop = void(__fastcall*)(void*, void*, std::uint32_t, const std::uint32
 using fn_ptr_u32 = std::uint32_t*(__fastcall*)(void*, void*, std::uint32_t);
 using fn_rel_set = void(__fastcall*)(void*, void*, int, std::uint32_t, std::uint32_t);
 using fn_rel_members = unsigned char(__fastcall*)(void*, void*, int, std::uint32_t, std::uint32_t*);
-using fn_rel_get = void(__fastcall*)(void*, void*, std::uint32_t*, int, std::uint32_t);
+using fn_rel_get = std::uint32_t(__fastcall*)(void*, void*, std::uint32_t*, int, std::uint32_t); // EAX = out
 using fn_rel_iter = std::uint32_t*(__fastcall*)(void*, void*, std::uint32_t*, int, std::uint32_t);
 using fn_alloc = void*(__fastcall*)(void*, void*, std::uint32_t*, std::uint32_t);
 
@@ -169,6 +169,12 @@ void init_stub_vtables()
 void init_side(side& S) { S.allocator.vptr = allocator_vtable; S.allocator.owner = &S; S.grid.vptr = grid_vtable; S.grid.owner = &S; }
 
 // ---- a target: one World object (port or native) driven through its vtable ----------------------------------------
+// EAX pass-through (plan section 10, deviation 12): slots 0x18/0x24/0x28/0x54 return their out/in pointer natively and
+// callers read it (0x466742, 0x4cd525, 0x50a659). Every call through these four slots checks it, native and port.
+int eax_calls[2] = {0, 0}, eax_wrong[2] = {0, 0};
+std::uint32_t addr32(const void* p) { return static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(p)); }
+void eax_seen(bool port, std::uint32_t eax, const void* expected) { ++eax_calls[port]; eax_wrong[port] += eax != addr32(expected); }
+
 struct target
 {
 	void* self = nullptr; side* S = nullptr; bool port = false; std::uint32_t n = 0;
@@ -181,11 +187,11 @@ struct target
 	void* by_token(std::uint32_t t) { enter(); return fn<fn_tok>(0x0c)(self, nullptr, t); }
 	void* by_dense(std::uint32_t i) { enter(); return fn<fn_tok>(0x10)(self, nullptr, i); }
 	bool valid(std::uint32_t t) { enter(); return fn<fn_valid>(0x14)(self, nullptr, t) != 0; }
-	std::uint32_t handle_of(std::uint32_t i) { enter(); std::uint32_t out = 0xdeadbeef; fn<fn_handle>(0x18)(self, nullptr, &out, i); return out; }
+	std::uint32_t handle_of(std::uint32_t i) { enter(); std::uint32_t out = 0xdeadbeef; eax_seen(port, fn<fn_handle>(0x18)(self, nullptr, &out, i), &out); return out; }
 	std::uint32_t index_of(std::uint32_t t) { enter(); return fn<fn_u32>(0x1c)(self, nullptr, t); }
 	void* entity_of(std::uint32_t t) { enter(); return fn<fn_tok>(0x20)(self, nullptr, t); }
-	std::uint32_t version() { enter(); std::uint32_t v = 0xdeadbeef; fn<fn_outp>(0x24)(self, nullptr, &v); return v; }
-	void set_version(std::uint32_t v) { enter(); fn<fn_inp>(0x28)(self, nullptr, &v); }
+	std::uint32_t version() { enter(); std::uint32_t v = 0xdeadbeef; eax_seen(port, fn<fn_outp>(0x24)(self, nullptr, &v), &v); return v; }
+	void set_version(std::uint32_t v) { enter(); eax_seen(port, fn<fn_inp>(0x28)(self, nullptr, &v), &v); }
 	void register_name(const char* name, std::uint32_t t) { enter(); fn<fn_name_tok>(0x2c)(self, nullptr, name, t); }
 	void unregister_name(const char* name, std::uint32_t t) { enter(); fn<fn_name_tok>(0x30)(self, nullptr, name, t); }
 	bool named(const char* name, std::uint32_t* set) { enter(); return fn<fn_name_set>(0x34)(self, nullptr, name, set) != 0; }
@@ -196,7 +202,7 @@ struct target
 	void grid_update(std::uint32_t t) { enter(); fn<fn_tok>(0x48)(self, nullptr, t); }
 	void rel_set(int table, std::uint32_t t, std::uint32_t v) { enter(); fn<fn_rel_set>(0x4c)(self, nullptr, table, t, v); }
 	bool rel_members(int table, std::uint32_t t, std::uint32_t* set) { enter(); return fn<fn_rel_members>(0x50)(self, nullptr, table, t, set) != 0; }
-	std::uint32_t rel_get(int table, std::uint32_t t) { enter(); std::uint32_t out = 0xdeadbeef; fn<fn_rel_get>(0x54)(self, nullptr, &out, table, t); return out; }
+	std::uint32_t rel_get(int table, std::uint32_t t) { enter(); std::uint32_t out = 0xdeadbeef; eax_seen(port, fn<fn_rel_get>(0x54)(self, nullptr, &out, table, t), &out); return out; }
 	std::uint32_t rel_begin(int table, std::uint32_t t, std::uint32_t** ret = nullptr) { enter(); std::uint32_t out = 0xdeadbeef; auto* r = fn<fn_rel_iter>(0x58)(self, nullptr, &out, table, t); if (ret) *ret = r; return out; }
 	std::uint32_t rel_next(int table) { enter(); std::uint32_t out = 0xdeadbeef; fn<fn_rel_iter>(0x5c)(self, nullptr, &out, table, 0x77); return out; }
 	void* allocate(std::uint32_t* out, std::uint32_t size) { enter(); return fn<fn_alloc>(0x60)(self, nullptr, out, size); }
@@ -963,6 +969,8 @@ int main(int argc, char** argv)
 		else if (GetModuleHandleW(nullptr) != reinterpret_cast<HMODULE>(0x400000) || fixture_lo < begin || 0x781ee8 > end) { std::printf("SKIPPED differential: fixture does not cover the image (fixture %08x-%08x)\n", unsigned(begin), unsigned(end)); ++failures; }
 		else { skipped = false; differential(); }
 	}
+	checkf(eax_calls[1] > 0 && eax_wrong[1] == 0, "port: slots 0x18/0x24/0x28/0x54 return their out/in pointer in EAX (%d calls, %d wrong)", eax_calls[1], eax_wrong[1]);
+	if (!skipped) checkf(eax_calls[0] > 0 && eax_wrong[0] == 0, "retail: slots 0x18/0x24/0x28/0x54 return their out/in pointer in EAX (%d calls, %d wrong)", eax_calls[0], eax_wrong[0]);
 	std::printf("checks %d (synthetic %d, differential %d%s), failures %d\n", checks, synthetic_checks, checks - synthetic_checks, skipped ? " SKIPPED" : "", failures);
 	return failures ? 1 : 0;
 }

@@ -177,10 +177,10 @@ namespace entity_world
 	void* __fastcall entity_by_token(void* self, void* edx, WorldToken token);                                      // 0x0c 0x4c6c20 ret 4
 	void* __fastcall entity_by_dense(void* self, void* edx, DenseIndex index);                                      // 0x10 0x4c68d0 ret 4
 	bool __fastcall token_valid(void* self, void* edx, WorldToken token);                                           // 0x14 0x4c6bc0 ret 4
-	void __fastcall handle_by_dense(void* self, void* edx, std::uint32_t* out, DenseIndex index);                   // 0x18 0x4c6910 ret 8
+	std::uint32_t* __fastcall handle_by_dense(void* self, void* edx, std::uint32_t* out, DenseIndex index);                 // 0x18 0x4c6910 ret 8
 	std::uint32_t __fastcall index_of(void* self, void* edx, std::uint32_t token);                                  // 0x1c 0x4c6840 ret 4
-	void __fastcall hierarchy_version_get(void* self, void* edx, std::uint32_t* out);                               // 0x24 0x4c6850 ret 4
-	void __fastcall hierarchy_version_set(void* self, void* edx, const std::uint32_t* in);                          // 0x28 0x4c6860 ret 4
+	std::uint32_t* __fastcall hierarchy_version_get(void* self, void* edx, std::uint32_t* out);               // 0x24 0x4c6850 ret 4
+	const std::uint32_t* __fastcall hierarchy_version_set(void* self, void* edx, const std::uint32_t* in);               // 0x28 0x4c6860 ret 4
 	void* __fastcall entity_of(void* self, void* edx, WorldToken token);                                            // 0x20 0x4c6870 ret 4
 	void __fastcall register_name(void* self, void* edx, const char* name, std::uint32_t token);                    // 0x2c 0x4c7890 ret 8
 	void __fastcall unregister_name(void* self, void* edx, const char* name, std::uint32_t token);                  // 0x30 0x4c70a0 ret 8
@@ -192,7 +192,7 @@ namespace entity_world
 	void __fastcall grid_update(void* self, void* edx, std::uint32_t token);                                        // 0x48 0x4c6890 ret 4
 	void __fastcall relation_set(void* self, void* edx, int table, std::uint32_t token, std::uint32_t value);       // 0x4c 0x4c7240 ret 12
 	bool __fastcall relation_members(void* self, void* edx, int table, std::uint32_t token, std::uint32_t* set);    // 0x50 0x4c6c60 ret 12
-	void __fastcall relation_get(void* self, void* edx, std::uint32_t* out, int table, std::uint32_t token);        // 0x54 0x4c6b60 ret 12
+	std::uint32_t* __fastcall relation_get(void* self, void* edx, std::uint32_t* out, int table, std::uint32_t token);// 0x54 0x4c6b60 ret 12
 	std::uint32_t* __fastcall relation_begin(void* self, void* edx, std::uint32_t* out, int table, std::uint32_t token); // 0x58 0x4c6da0 ret 12
 	std::uint32_t* __fastcall relation_next(void* self, void* edx, std::uint32_t* out, int table, std::uint32_t unused); // 0x5c 0x4c6dd0 ret 12
 	void* __fastcall allocate(void* self, void* edx, std::uint32_t* out_token, std::uint32_t size);                  // 0x60 0x4c6fd0 ret 8

@@ -611,6 +611,9 @@ using set_op_fn = void (__fastcall*)(void*, void*, std::uint32_t, const std::uin
 using mode_u32_fn = void (__fastcall*)(void*, void*, std::uint32_t, std::uint32_t);
 using mode_ptr_fn = void (__fastcall*)(void*, void*, std::uint32_t, const void*);
 using byte_fn = void (__fastcall*)(void*, void*, std::uint8_t);
+using al_fn = std::uint8_t (__fastcall*)(void*, void*, std::uint8_t);                 // the same slots, reading AL (deviation 12)
+using out_eax_fn = std::uint32_t (__fastcall*)(void*, void*, std::uint32_t*);         // slot 0x2c: EAX = out
+using order8_eax_fn = std::uint32_t (__fastcall*)(void*, void*, std::uint32_t*, std::uint32_t); // order slot 8: EAX = out
 void run_script(driver& d)
 {
 	using namespace fx;
@@ -635,7 +638,7 @@ void run_script(driver& d)
 	vslot<set_op_fn>(q0, 0x3c)(q0, nullptr, 0, &h[2]); record_step(d, "q0 union named set ent2");
 	vslot<set_op_fn>(q0, 0x3c)(q0, nullptr, 1, &h[1]); record_step(d, "q0 subtract named set ent1 (lookup fails, no change)");
 	vslot<set_op_fn>(q0, 0x3c)(q0, nullptr, 2, &h[1]); record_step(d, "q0 intersect named set ent1 (lookup fails, cleared)");
-	vslot<byte_fn>(q0, 0x10)(q0, nullptr, 1); record_step(d, "q0 reset all (slot 0x10)");
+	value(d, vslot<al_fn>(q0, 0x10)(q0, nullptr, 1)); record_step(d, "q0 reset all (slot 0x10, AL recorded)");
 	const std::uint32_t pair_b = 33;
 	vslot<void (__fastcall*)(void*, void*, std::uint32_t, std::uint32_t, const std::uint32_t*)>(q0, 0x44)(q0, nullptr, 2, 2, &pair_b); record_step(d, "q0 intersect pair set (2, 33)");
 	vslot<void (__fastcall*)(void*, void*, std::uint32_t, std::uint32_t, const std::uint32_t*)>(q0, 0x44)(q0, nullptr, 0, 7, &pair_b); record_step(d, "q0 union pair set (7, 33) fails (no change)");
@@ -678,7 +681,7 @@ void run_script(driver& d)
 		const float angles[3] = {0.0f, 0.25f, 1.0f};
 		vslot<void (__fastcall*)(void*, void*, const float*, const float*, float, float, std::uint32_t)>(q0, 0x64)(q0, nullptr, origin, angles, 0.9f, -0.9f, 5); record_step(d, "q0 cone from angles (slot 0x64)");
 	}
-	vslot<byte_fn>(q0, 0x80)(q0, nullptr, 0); vslot<byte_fn>(q0, 0x84)(q0, nullptr, 7); vslot<byte_fn>(q0, 0x88)(q0, nullptr, 3); record_step(d, "q0 flag bytes (slots 0x80/0x84/0x88)");
+	value(d, vslot<al_fn>(q0, 0x80)(q0, nullptr, 0)); value(d, vslot<al_fn>(q0, 0x84)(q0, nullptr, 7)); value(d, vslot<al_fn>(q0, 0x88)(q0, nullptr, 3)); record_step(d, "q0 flag bytes (slots 0x80/0x84/0x88, AL recorded)");
 	vslot<byte_fn>(q0, 0x10)(q0, nullptr, 1);
 	vslot<void (__fastcall*)(void*, void*, std::uint32_t, std::uint32_t, std::uint32_t, std::uint8_t)>(q0, 0x68)(q0, nullptr, 11, 22, 33, 0); record_step(d, "q0 physics slot 0x68");
 	vslot<void (__fastcall*)(void*, void*, std::uint32_t, std::uint32_t, std::uint8_t, std::uint8_t)>(q0, 0x6c)(q0, nullptr, 44, 55, 1, 1); record_step(d, "q0 physics slot 0x6c simple");
@@ -696,7 +699,7 @@ void run_script(driver& d)
 	vslot<std::uint32_t* (__fastcall*)(void*, void*, std::uint32_t*)>(q0, 0x20)(q0, nullptr, &out); value(d, pool_index(reinterpret_cast<void*>(static_cast<std::uintptr_t>(out))));
 	value(d, vslot<std::uint8_t (__fastcall*)(void*, void*)>(q0, 0x24)(q0, nullptr));
 	value(d, vslot<bool (__fastcall*)(void*, void*)>(q0, 0x28)(q0, nullptr) ? 1u : 0u);
-	vslot<void (__fastcall*)(void*, void*, std::uint32_t*)>(q0, 0x2c)(q0, nullptr, &out); value(d, pool_index(reinterpret_cast<void*>(static_cast<std::uintptr_t>(out))));
+	value(d, vslot<out_eax_fn>(q0, 0x2c)(q0, nullptr, &out) == va_of(&out) ? 1u : 0u); value(d, pool_index(reinterpret_cast<void*>(static_cast<std::uintptr_t>(out))));
 	record_step(d, "q0 result/player trace lookups (slots 0x20/0x24/0x28/0x2c)");
 	// fill the trace records as physics would, then score through the native policy
 	{
@@ -727,7 +730,7 @@ void run_script(driver& d)
 		for (std::uint32_t i = 0; i < 3; ++i)
 		{
 			value(d, dense_of_entity(vslot<void* (__fastcall*)(void*, void*, std::uint32_t)>(order0, 0x4)(order0, nullptr, i)));
-			vslot<void (__fastcall*)(void*, void*, std::uint32_t*, std::uint32_t)>(order0, 0x8)(order0, nullptr, &out, i);
+			value(d, vslot<order8_eax_fn>(order0, 0x8)(order0, nullptr, &out, i) == va_of(&out) ? 1u : 0u);
 			value(d, pool_index(reinterpret_cast<void*>(static_cast<std::uintptr_t>(out))));
 		}
 		record_step(d, "order slots 0/4/8");
@@ -905,7 +908,7 @@ void expect_script(const driver& d, const char* tag)
 	check(s && s->values.size() == 1 && s->values[0] == fx::handles[0] && manager_u32(*s, L.q_collisions + L.c_slot_count) == 3 && u32at(s->pool.data(), 0xd64) == 3, buf);
 	s = step("q0 result/player trace lookups (slots 0x20/0x24/0x28/0x2c)");
 	std::snprintf(buf, sizeof buf, "%s: result trace, not-empty, player trace found", tag);
-	check(s && s->values.size() == 4 && s->values[0] != 0xffffffff && s->values[1] == 0 && s->values[2] == 1 && s->values[3] == 0, buf);
+	check(s && s->values.size() == 5 && s->values[0] != 0xffffffff && s->values[1] == 0 && s->values[2] == 1 && s->values[3] == 1 && s->values[4] == 0, buf); // [3]: slot 0x2c's EAX is `out`
 	s = step("order fill with the trace policy (0x4a9730 / 0x4a9a80)");
 	std::snprintf(buf, sizeof buf, "%s: policy carries the retail vtable and query 0; order 0 filled", tag);
 	check(s && s->values.size() == 4 && s->values[0] == 1 && s->values[1] == eq::native_policy_vtable && s->values[2] == 0 && s->values[3] == 0, buf);
@@ -1012,6 +1015,16 @@ void boundary_tests(const descriptor& desc)
 		check(eq::QueryApi_004ab7d0(nullptr) == nullptr && eq::QueryApi_004ab7d0(order) == order, "0x4ab7d0 returns its argument (EAX = [esp+4])");
 		check(eq::QueryApi_004a9a80(trace_policy, nullptr, reinterpret_cast<const std::uint8_t*>(&entities[257])) == 7.5 && eq::QueryApi_004a9a80(trace_policy, nullptr, reinterpret_cast<const std::uint8_t*>(&entities[1])) == -2.0
 		      && eq::QueryApi_004a9a80(trace_policy, nullptr, reinterpret_cast<const std::uint8_t*>(&entities[1023])) == 0.0, "raised: 0x4a9a80 scores 257 and 1 from their own records, unmapped 1023 as 0");
+		{ // EAX/AL pass-through of the vtable slots (deviation 12): the values native callers read after the call
+			std::uint32_t o8 = 0xdeadbeef, o2c = 0xdeadbeef;
+			const bool order8 = vslot<order8_eax_fn>(order, 0x8)(order, nullptr, &o8, 0) == va_of(&o8);
+			const bool s2c = vslot<out_eax_fn>(q, 0x2c)(q, nullptr, &o2c) == va_of(&o2c);
+			const bool flags = vslot<al_fn>(q, 0x80)(q, nullptr, 1) == 1 && vslot<al_fn>(q, 0x84)(q, nullptr, 0) == 0 && vslot<al_fn>(q, 0x88)(q, nullptr, 1) == 1;
+			void* self_ref = q;
+			const bool copy = vslot<std::uint8_t (__fastcall*)(void*, void*, void* const*)>(q, 0x0c)(q, nullptr, &self_ref) == static_cast<std::uint8_t*>(q)[L.q_b2];
+			const bool merge = vslot<void* (__fastcall*)(void*, void*, std::uint32_t, void* const*)>(q, 0x34)(q, nullptr, 2, &self_ref) == q;
+			check(order8 && s2c && flags && copy && merge, "raised: order slot 8 / query slot 0x2c return out, 0x80/0x84/0x88 their byte, 0x0c the copied +b2 flag, 0x34 mode 2 the source (native EAX)");
+		}
 		drv.order_release(order);
 		// 1024 pairs: a full set sorts
 		vslot<byte_fn>(q, 0x10)(q, nullptr, 0);

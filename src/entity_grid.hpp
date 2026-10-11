@@ -99,7 +99,7 @@ namespace entity_grid
 	int __fastcall present(void* self, void* edx, std::uint32_t token);                                             // 0x2c 0x4642e0 ret 4
 	unsigned char __fastcall query(void* self, void* edx, const vec3* min, const vec3* max, std::uint32_t* set);     // 0x30 0x464400 ret 12
 	std::uint32_t* __fastcall cache_set_ptr(void* self, void* edx, int cache);                                      // 0x34 0x464310 ret 4
-	void __fastcall cache_reset(void* self, void* edx, int cache);                                                  // 0x38 0x464330 ret 4
+	std::uint32_t* __fastcall cache_reset(void* self, void* edx, int cache);                                               // 0x38 0x464330 ret 4
 	unsigned char __fastcall cache_bounds(void* self, void* edx, int cache, bounds* out);                           // 0x3c 0x464370 ret 8
 	void __fastcall cache_update(void* self, void* edx, int cache, const bounds* b);                                // 0x40 0x4646d0 ret 8
 }

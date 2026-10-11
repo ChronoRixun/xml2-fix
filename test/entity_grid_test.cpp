@@ -65,7 +65,7 @@ struct target
 	int present(std::uint32_t token) { return fn<fn_present>(0x2c)(self, nullptr, token); }
 	unsigned char query(const vec3& a, const vec3& b, std::uint32_t* set) { return fn<fn_query>(0x30)(self, nullptr, &a, &b, set); }
 	std::uint32_t* cache_set(int i) { return fn<fn_setp>(0x34)(self, nullptr, i); }
-	void cache_reset(int i) { fn<fn_cache>(0x38)(self, nullptr, i); }
+	std::uint32_t* cache_reset(int i) { return reinterpret_cast<std::uint32_t*(__fastcall*)(void*, void*, int)>(vt()[0x38 / 4])(self, nullptr, i); } // EAX = slot 0x34's set pointer
 	unsigned char cache_bounds(int i, bounds& out) { return fn<fn_cbounds>(0x3c)(self, nullptr, i, &out); }
 	void cache_update(int i, const bounds& b) { fn<fn_cupdate>(0x40)(self, nullptr, i, &b); }
 };
@@ -385,7 +385,7 @@ outcome apply(target& t, const op& o)
 	case 2: t.remove(o.token); break;
 	case 3: out.flag = t.query(o.b.min, o.b.max, out.set); break;
 	case 4: t.cache_update(o.i, o.b); break;
-	case 5: t.cache_reset(o.i); break;
+	case 5: { const auto* r = t.cache_reset(o.i); out.off = std::uint32_t(reinterpret_cast<const std::uint8_t*>(r) - static_cast<const std::uint8_t*>(t.self)); out.flag = r == t.cache_set(o.i); } break; // EAX compared
 	case 6: out.flag = t.cache_bounds(o.i, out.b); { const auto* s = t.cache_set(o.i); out.off = std::uint32_t(reinterpret_cast<const std::uint8_t*>(s) - static_cast<const std::uint8_t*>(t.self)); std::memcpy(out.set, s, 32); } break;
 	case 7:
 	{

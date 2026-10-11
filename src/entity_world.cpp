@@ -799,11 +799,13 @@ namespace entity_world
 	}
 
 	// 0x4c6910: *out = the slot's handle when live, else 0 (DENSE index; bounded here as slot 0x10).
-	void __fastcall handle_by_dense(void* self, void*, std::uint32_t* out, DenseIndex index)
+	// Returns `out` (native mov eax,[esp+4] on both paths; 0x466742 and 0x4cd525 read [eax]).
+	std::uint32_t* __fastcall handle_by_dense(void* self, void*, std::uint32_t* out, DenseIndex index)
 	{
-		if (!prefix_of(self)) { *out = 0; return; }
+		if (!prefix_of(self)) { *out = 0; return out; }
 		world W(self);
 		*out = (index.value < W.L.world && W.live(index.value)) ? W.handles()[index.value] : 0;
+		return out;
 	}
 
 	// 0x4c6840: mask & token.
@@ -814,8 +816,9 @@ namespace entity_world
 		return W.mask() & token;
 	}
 	// 0x4c6850 / 0x4c6860: the hierarchy version word.
-	void __fastcall hierarchy_version_get(void* self, void*, std::uint32_t* out) { if (!prefix_of(self)) { *out = 0; return; } world W(self); *out = W.at<std::uint32_t>(W.L.hierarchy_version); }
-	void __fastcall hierarchy_version_set(void* self, void*, const std::uint32_t* in) { if (!prefix_of(self)) return; world W(self); W.at<std::uint32_t>(W.L.hierarchy_version) = *in; }
+	// Native EAX: `out` / `in` (mov eax,[esp+4]); 0x50a659 compares [eax] after slot 0x24.
+	std::uint32_t* __fastcall hierarchy_version_get(void* self, void*, std::uint32_t* out) { if (!prefix_of(self)) { *out = 0; return out; } world W(self); *out = W.at<std::uint32_t>(W.L.hierarchy_version); return out; }
+	const std::uint32_t* __fastcall hierarchy_version_set(void* self, void*, const std::uint32_t* in) { if (!prefix_of(self)) return in; world W(self); W.at<std::uint32_t>(W.L.hierarchy_version) = *in; return in; }
 	// 0x4c6870: slot 0xc through the vtable.
 	void* __fastcall entity_of(void* self, void*, WorldToken token) { if (!prefix_of(self)) return nullptr; world W(self); return W.slot<fn_by_token>(0xc)(self, nullptr, token); }
 
@@ -1012,12 +1015,14 @@ namespace entity_world
 		return true;
 	}
 	// 0x4c6b60: *out = the token's related value (0 for the null or an invalid token).
-	void __fastcall relation_get(void* self, void*, std::uint32_t* out, int table, std::uint32_t token)
+	// Returns `out` (native mov eax,[esp+8] after its push, both paths).
+	std::uint32_t* __fastcall relation_get(void* self, void*, std::uint32_t* out, int table, std::uint32_t token)
 	{
-		if (!prefix_of(self)) { *out = 0; return; }
+		if (!prefix_of(self)) { *out = 0; return out; }
 		world W(self);
-		if (!relation_table_ok(W, table)) { *out = 0; return; }
+		if (!relation_table_ok(W, table)) { *out = 0; return out; }
 		*out = (token != 0 && valid_token(W, token)) ? rel_value(W, W.index(token)) : 0;
+		return out;
 	}
 	// 0x4c6da0: begin; returns `out`.
 	std::uint32_t* __fastcall relation_begin(void* self, void*, std::uint32_t* out, int table, std::uint32_t token)

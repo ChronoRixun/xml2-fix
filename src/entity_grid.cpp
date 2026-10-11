@@ -588,7 +588,8 @@ namespace entity_grid
 	}
 
 	std::uint32_t* __fastcall cache_set_ptr(void* self, void*, int cache) { return grid(self).cache_set_words(static_cast<std::uint32_t>(cache)); } // 0x464310
-	void __fastcall cache_reset(void* self, void*, int cache) { grid(self).cache_clear(static_cast<std::uint32_t>(cache)); }               // 0x464330
+	// 0x464330: native EAX on return = the cleared cache's set pointer (ECX + cache*0x3c + 0x10858, slot 0x34's value).
+	std::uint32_t* __fastcall cache_reset(void* self, void*, int cache) { grid(self).cache_clear(static_cast<std::uint32_t>(cache)); return grid(self).cache_set_words(static_cast<std::uint32_t>(cache)); }
 
 	// 0x464370: the cache's query bounds, 1; or a zero pair from the native helper, 0, when the cache is invalid.
 	unsigned char __fastcall cache_bounds(void* self, void*, int cache, bounds* out)
