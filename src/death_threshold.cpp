@@ -1,6 +1,7 @@
 #include "death_threshold.hpp"
 
 #include "death_threshold_rules.hpp"
+#include "game_version.hpp"
 #include "ini.hpp"
 #include "log.hpp"
 #include "xml1_hook_memory.hpp"
@@ -46,7 +47,8 @@ namespace death_threshold
 		const auto chosen = parse_rule(narrow);
 		if (!chosen.error.empty())
 		{
-			logger::write("death rule: [Game] DeathRule=%s %s - %s", narrow.c_str(), chosen.error.c_str(), as_before);
+			wanted = true; // asked for something: unverified in the gameplay agreement (as [Game] PlacementCrush)
+			logger::write("death rule: [Game] DeathRule=%s %s - %s; online agreement refused", narrow.c_str(), chosen.error.c_str(), as_before);
 			return;
 		}
 		if (!chosen.set || chosen.value == rule::xml2)
@@ -103,15 +105,21 @@ namespace death_threshold
 		{
 			VirtualFree(block, 0, MEM_RELEASE); // nothing jumps to it
 		}
+		if (!applied && safe)
+		{
+			logger::write("death rule: writing the sites failed and every byte went back - %s; online agreement refused", as_before);
+			return;
+		}
 		if (!applied)
 		{
-			logger::write(safe ? "death rule: writing the sites failed and every byte went back - %s; online agreement refused"
-			                   : "death rule: ERROR: writing the sites failed and they could not all be restored - online agreement refused",
-			              as_before);
+			// Some sites may carry the rule and others not (the death test moved, the jump to the bridge not): never run
+			// half-installed.
+			game_version::refuse_startup();
+			logger::write("death rule: rollback/protection verification failed; process startup refused");
 			return;
 		}
 		logger::write("death rule: X-Men Legends 1's ([Game] DeathRule=xml1): an entity dies on the hit that leaves it below 1 health "
-		              "(7 comparisons at 0x4983ce, 0x4983f0, 0x438b47, 0x438c28, 0x439357, 0x43953c, 0x4395fa now against 1.0; the death branch at 0x498407 "
+		              "(8 comparisons at 0x4983ce, 0x4983f0, 0x438b47, 0x438c28, 0x439357, 0x43953c, 0x4395fa, 0x49a646 now against 1.0; the death branch at 0x498407 "
 		              "sets a killing hit's health above 0 to 0)");
 	}
 }

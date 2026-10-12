@@ -1,7 +1,8 @@
 # The first game's death threshold
 
 `[Game] DeathRule=xml1` makes an entity die on the hit that leaves it below 1 health, as in X-Men Legends I. An absent
-key or `xml2` leaves the game untouched (death at 0); any other value is logged and ignored. The X-Men Legends I port
+key or `xml2` leaves the game untouched (death at 0); any other value is logged, patches nothing and counts as a
+requested rule that did not install (online play closed, as for `[Game] PlacementCrush`). The X-Men Legends I port
 sets the key.
 
 ## The two games' rules
@@ -14,6 +15,7 @@ sets the key.
 | A hit marked as killing (type 8) | health below 1.0 (`0x4648f`) | at most 0.0 (`0x438c2f`) |
 | Harm entity's AI hazard announcement | while health is at least 1.0 (`0x46bae`) | above 0.0 (`0x43935e`) |
 | Affectable harm: early return, killer record | health below 1.0 (`0x46e12`, `0x46ed0`) | at most 0.0 (`0x439542`, `0x439600`) |
+| Power-gated bridge objects react | while health is at least 1.0 (`0x944ea`) | above 0.0 (`0x49a64c`) |
 
 Every class that can be hurt shares the physical damage function on both engines (characters through their own
 damage function, which delegates to it), so the line is the same for enemies, heroes, bosses and breakable objects.
@@ -26,7 +28,7 @@ numbers left no fraction to sit on, and its line at 1 would have ended it anyway
 
 ## What the key does
 
-Seven comparisons and one jump, in `XMen2.exe` only, after every byte they rely on is checked against the retail build (image
+Eight comparisons and one jump, in `XMen2.exe` only, after every byte they rely on is checked against the retail build (image
 base `0x400000`): each one's float operand moves from the game's 0.0 (`0x680030`) to the game's own 1.0 (`0x68012c`),
 and where the first game tests "below" rather than "at most", the status mask of the following `test ah` goes from
 `0x41` to the first game's `0x05`, so a health of exactly 1 lives as it did there.
@@ -39,6 +41,7 @@ and where the first game tests "below" rather than "at most", the status mask of
 | `0x438c28` | the character's killing-hit mark |
 | `0x439357` | the harm entity's AI hazard announcement |
 | `0x43953c`, `0x4395fa` | the affectable harm's early return and killer record |
+| `0x49a646` | the power-gated bridge objects (magma / ice / telekinesis bridges) react only while health is at least 1 |
 
 **The killing hit's health.** The first game's line at 1 lives in a game of whole numbers (the health formula rounds
 up, damage is a 16-bit integer, regeneration whole points), so there a hit that takes health below 1 always takes it
@@ -51,7 +54,7 @@ health is above 0 it calls the entity's own health setter (vtable slot `0x1a4`, 
 `0x4983bf`) with 0.0, then runs the two displaced instructions and returns to `0x49840d`. That is the state an XML1
 hit below 1 always left. A health at or below 0 (and NaN) is left alone.
 
-The seven comparisons and the jump are written in one transaction (all or none, read back, the old bytes restored
+The eight comparisons and the jump are written in one transaction (all or none, read back, the old bytes restored
 on any failure); the bridge is written and made executable before it. No save field, no number a script reads and no
 network message changes.
 
@@ -74,6 +77,6 @@ install is unverified and closes online play; a rule not requested registers as 
 
 `xml2-fix.log` says whether the rule is on and, when a check fails, which site. `xml2_test --death-rule-rules` checks
 the value's rules, the x87 decisions before and after against the first game's (every 1/64 step and its neighbour
-from -6.25 to 6.25, exactly 1, NaN), the seven sites on their own and, with a copy of `XMen2.exe` at hand, every
-guarded byte, both constants and the writes on that copy (26 bytes, all inside the sites); the bridge itself runs
+from -6.25 to 6.25, exactly 1, NaN), the eight sites on their own and, with a copy of `XMen2.exe` at hand, every
+guarded byte, both constants and the writes on that copy (29 bytes, all inside the sites); the bridge itself runs
 against a fake entity (health above 0 to 0 through slot 0x1a4, at most 0 and NaN untouched, the x87 stack intact).

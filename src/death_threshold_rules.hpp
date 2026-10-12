@@ -16,18 +16,20 @@
 //     left the character below 1.0 is marked as a killing hit (type 8, 0x4648f);
 //   - the harm entities' AI hazard announcement runs only while their health is at least 1.0 (0x46ba7);
 //   - the affectable harm entities' damage function returns at once below 1.0 and, after the hit, records the killer
-//     below 1.0 (0x46e0c, 0x46eca).
+//     below 1.0 (0x46e0c, 0x46eca);
+//   - the power-gated bridge objects' damage function (0x94460: the magma / ice / telekinesis bridges a matching
+//     power builds) reacts only while the object's health is at least 1.0 (0x944e4).
 // Every other XML1 health test (about 175 of them: is it alive, may it be hit, is the corpse to be removed) is
 // "above 0", as in XMen2.exe.
 //
-// What XMen2.exe does. The same functions (0x497e70, 0x438a10, 0x439350, 0x439500) draw each of those lines at 0.0
+// What XMen2.exe does. The same functions (0x497e70, 0x438a10, 0x439350, 0x439500, 0x49a570) draw each of those lines at 0.0
 // instead: an entity dies only when its health reaches 0. XMen2.exe's damage is a float (a hit's fraction of a point
 // is rounded up to 1 only when the whole hit is below 1), so an enemy can be left alive at 0.2 of a point, attacked
 // on and on, with its death script and death drops waiting for a further hit. XML1's whole-number damage never left a
 // fraction to sit on, and its line at 1.0 would have ended it anyway.
 //
-// DeathRule=xml1 moves exactly those seven comparisons to XML1's line: each one's float operand is pointed from the
-// game's 0.0 (0x680030) to the game's own 1.0 (0x68012c), and where XML1 tests "below" rather than "at most" the
+// DeathRule=xml1 moves exactly those seven comparisons, and the bossundying hold below, to XML1's line: each one's
+// float operand is pointed from the game's 0.0 (0x680030) to the game's own 1.0 (0x68012c), and where XML1 tests "below" rather than "at most" the
 // status mask of the test that follows goes from 0x41 (C0|C3) to 0x05 (C0|C2), XML1's mask, so a health of exactly
 // 1.0 stays alive as in XML1. And because XML1's whole numbers always left a killing hit at 0 or below, a hit that
 // enters the death branch above 0 has its health set to 0 there (death_bridge below), so the kill handler, the death
@@ -150,7 +152,7 @@ namespace death_threshold_rules
 		address xml1; // default.xbe's comparison
 	};
 
-	inline constexpr std::array<site, 7> sites{{
+	inline constexpr std::array<site, 8> sites{{
 		{0x4983ce, "d9867c020000d81d30006800dfe0f6c4417a0f", 8, 16, "bossundying: back to 1.0 before the death test (no XML1 counterpart)", 0},
 		{0x4983f0, "d9867c020000d81d30006800dfe0f6c4410f8a07030000", 8, 16, "the physical damage function's death test", 0x92675},
 		{0x438b47, "d9867c020000d8642424d81530006800dfe0f6c4417a22", 12, 0, "the character's last-stand window (health after the hit)", 0x463bf},
@@ -158,6 +160,7 @@ namespace death_threshold_rules
 		{0x439357, "d9867c02000057d81d30006800dfe0f6c4410f8bab000000", 9, 17, "the harm entity's AI hazard announcement", 0x46bae},
 		{0x43953c, "d9877c020000d81d30006800dfe0f6c4410f8bd0000000", 8, 16, "the affectable harm's early return", 0x46e12},
 		{0x4395fa, "d9877c020000d81d30006800dfe0f6c4417a16", 8, 16, "the affectable harm's killer record", 0x46ed0},
+		{0x49a646, "d9867c020000d81d30006800dfe0f6c4410f8bd9010000", 8, 16, "the power-gated bridge objects' reaction", 0x944ea},
 	}};
 
 	// The death branch's entry, guarded like the sites (the jump to the bridge goes there; no operand, no mask).

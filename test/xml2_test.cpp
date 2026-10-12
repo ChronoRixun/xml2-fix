@@ -9791,7 +9791,7 @@ namespace
 				in_site |= va >= death_branch_va && va < death_branch_resume_va;
 				inside &= in_site;
 			}
-			CHECK(changed == 6 * 3 + 2 + 6 && inside);
+			CHECK(changed == 7 * 3 + 2 + 6 && inside);
 			CHECK(first_mismatch(image, constant_ok) == &sites[0] && constant_ok);
 		}
 		VirtualFree(image, 0, MEM_RELEASE);

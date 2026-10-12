@@ -4,7 +4,7 @@
 
 - `[Game] DeathRule=xml1`: X-Men Legends I's death threshold - an entity dies on the hit that leaves it below 1
   health, instead of only at 0, so an enemy no longer fights on at a fraction of a point with its death script and
-  drops waiting. Seven comparisons of the damage functions move to the first game's line, and a killing hit leaves
+  drops waiting. Eight comparisons of the damage functions move to the first game's line, and a killing hit leaves
   health at 0 as the first game's whole numbers always did, so XP and death drops follow (`docs/death-threshold.md`);
   online, gameplay rule 9.
 
