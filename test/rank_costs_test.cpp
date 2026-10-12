@@ -155,9 +155,56 @@ namespace
 			ret
 		}
 	}
+	// the pick's last candidate test 0x43cd7e (patched CALL; then FNSTSW): EBP = entry, EDI = CStats, [esp+0x14] = max,
+	// [esp+0x18] = total (floats); returns whether total < max (the game's TEST AH,0x41 / JNZ) and the max it left
+	std::uint32_t r_fpu, gate_max_bits, gate_total_bits;
+	void* gate_entry;
+	__declspec(naked) void drive_gate()
+	{
+		__asm {
+			pushad
+			push gate_total_bits
+			push gate_max_bits
+			push 0
+			push 0
+			push 0
+			push 0
+			mov ebp, gate_entry
+			mov edi, stats_ptr
+			mov eax, 0x43cd7e
+			call eax
+			fnstsw ax
+			movzx eax, ax
+			mov r_fpu, eax
+			mov eax, [esp + 0x10]
+			mov gate_max_bits, eax
+			add esp, 24
+			popad
+			ret
+		}
+	}
+	bool gate(int entry_index, float max)
+	{
+		gate_entry = block() + 0x1c + 8 * entry_index;
+		const auto* e = static_cast<const std::uint8_t*>(gate_entry);
+		const float total = static_cast<float>((e[2] & 0x3f) + (e[3] & 0x3f));
+		std::memcpy(&gate_max_bits, &max, 4);
+		std::memcpy(&gate_total_bits, &total, 4);
+		drive_gate();
+		return (r_fpu & 0x4100) == 0;
+	}
+	// A stand-in for the pick 0x43cc40 that asks the patched candidate test as the game's does: aurora (max 11) is
+	// preferred, then brook (max `brook_max`); the first candidate wins, none = 0xffff.
+	float brook_max = 5.0f;
+	int __fastcall fake_pick(void*, void*, void*, int)
+	{
+		if (gate(0, 11.0f))
+			return 7;
+		if (gate(1, brook_max))
+			return 9;
+		return 0xffff;
+	}
 	// auto pick 0x43c7c4 (PUSH EBX; PUSH ESI; MOV ECX,EDI; CALL): ESI = CStats; returns EAX (id, or the after-loop mark)
-	std::uint16_t pick_answer;
-	int __fastcall fake_pick(void*, void*, void*, int) { return pick_answer; }
 	__declspec(naked) void drive_pick()
 	{
 		__asm {
@@ -167,6 +214,27 @@ namespace
 			mov ebx, 1
 			mov eax, 0x43c7c4
 			call eax
+			mov r_eax, eax
+			popad
+			ret
+		}
+	}
+	// cancel uncommitted ranks 0x43a90a (patched CALL + NOPs, then INC EDI): CL = the entry's uncommitted ranks,
+	// EDX = entry + 3, EBP = the points so far, AL = cancelled-anything flag (0 in); returns EBP and AL
+	void* cancel_edx;
+	std::uint32_t cancel_cl;
+	__declspec(naked) void drive_cancel()
+	{
+		__asm {
+			pushad
+			mov edx, cancel_edx
+			mov ecx, cancel_cl
+			mov ebp, r_ebp
+			xor eax, eax
+			mov ebx, 0x77
+			mov edi, 0x43a90a
+			call edi
+			mov r_ebp, ebp
 			mov r_eax, eax
 			popad
 			ret
@@ -442,6 +510,8 @@ int main(int argc, char** argv)
 	*at(0x5e5ddc) = 0xc3;                         // the screen's common tail
 	*at(0x5de700) = 0xc3;
 	*at(0x43c7cd) = 0xc3;
+	*at(0x43cd86) = 0xc3;                        // after the candidate test's CALL + NOPs (FNSTSW)
+	*at(0x43a914) = 0xc3;                        // after the cancel refund's CALL + NOPs (INC EDI)
 	*at(0x43c815) = 0xc3;
 	*at(0x5d289f) = 0xc3;
 	put_hex(0x4bbd27, "b801000000c3");          // the loop ends: eax = 1
@@ -488,13 +558,46 @@ int main(int argc, char** argv)
 	check(static_cast<std::int16_t>(r_eax) == 2, "automatic spending: - the added Legend rank's 2");
 	set_talents(5, 1, 3); set_points(4); frame_id = 9; drive_refund_site();
 	check(static_cast<std::int16_t>(r_eax) == 3, "automatic spending: - 1 for an ordinary rank");
-	// automatic spending's pick: aurora at total 5 (next costs 2) with 1 point ends the spending at the loop's end
-	set_talents(4, 1, 3); set_points(1); pick_answer = 7; drive_pick();
-	check(r_eax == 0xc0ffee, "automatic spending: 1 point and a 2-point next rank -> the loop's own end (slots pass)");
-	set_points(2); drive_pick();
-	check((r_eax & 0xffff) == 7, "automatic spending: 2 points buy it (the pick returns as usual)");
-	pick_answer = 0xffff; set_points(0); drive_pick();
-	check((r_eax & 0xffff) == 0xffff, "automatic spending: no pick stays the native exit");
+	// automatic spending's pick (XML1 0xaf160: a failed entry is dropped and the next best one bought)
+	set_talents(4, 1, 3); set_points(1); brook_max = 5.0f; drive_pick();
+	check((r_eax & 0xffff) == 9, "automatic spending: 1 point, top pick a 2-point rank -> the next pick, a 1-point rank");
+	{
+		float left;
+		set_points(1);
+		const bool candidate = gate(0, 11.0f);
+		std::memcpy(&left, &gate_max_bits, 4);
+		check(!candidate && left == 0.0f, "the candidate test: an unaffordable talent is no candidate (max 0)");
+		set_points(2);
+		check(gate(0, 11.0f), "the candidate test: with 2 points it is");
+		set_talents(11, 0, 3); set_points(1);
+		check(!gate(0, 11.0f), "the candidate test: a maxed talent stays no candidate");
+	}
+	set_talents(4, 1, 3); set_points(2); drive_pick();
+	check((r_eax & 0xffff) == 7, "automatic spending: 2 points buy the 2-point top pick");
+	set_points(1); brook_max = 3.0f; drive_pick();
+	check(r_eax == 0xc0ffee, "automatic spending: nothing affordable left -> the loop's own end (slots pass)");
+	set_talents(11, 0, 3); set_points(1); drive_pick();
+	check((r_eax & 0xffff) == 0xffff, "automatic spending: nothing raisable at all keeps the native exit");
+
+	// level loss first cancels uncommitted ranks (0x43a890, site 0x43a90a): aurora committed 5 + 1 uncommitted (rank
+	// 6, 2 points) and brook 3 + 2 (ranks 4-5, 1 each): BP += 2, then += 2; the ranks are cleared, AL set
+	{
+		set_talents(5, 1, 3);
+		block()[0x1c + 8 + 3] = 2 | 0x40;
+		auto cancel = [](int entry_index, std::uint32_t bp) {
+			cancel_edx = block() + 0x1c + 8 * entry_index + 3;
+			cancel_cl = *static_cast<std::uint8_t*>(cancel_edx) & 0x3f;
+			r_ebp = bp;
+			drive_cancel();
+		};
+		cancel(0, 10);
+		check(r_ebp == 12 && (r_eax & 0xff) == 1 && (block()[0x1c + 3] & 0x3f) == 0 && (block()[0x1c + 3] & 0xc0) == 0x40,
+		      "level loss: an uncommitted Legend rank refunds 2 and is cleared (the max bits kept)");
+		cancel(1, 10);
+		check(r_ebp == 12 && (block()[0x1c + 8 + 3] & 0x3f) == 0, "level loss: two uncommitted ordinary ranks refund 1 each");
+		cancel(1, 10);
+		check(r_ebp == 10 && (r_eax & 0xff) == 0, "level loss: nothing uncommitted refunds nothing");
+	}
 
 	// respec: aurora committed 11 from base 0 refunds 14 (11 ranks, 3 of them 2-point); brook 3 from 1 refunds 2
 	set_talents(11, 0, 3);

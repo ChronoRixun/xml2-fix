@@ -16,18 +16,26 @@
 //   0x4692f0  a CStats' saved block (__thiscall)                       0x4c05b0  the talent registry (cdecl)
 //   registry vt+0x14 (0x4bdbe0) a talent by a pointer to its id         0x4bdea0  a talent's <level> node for a 0-based
 //   0x5649c0  an XMLB node's attribute by name (__thiscall, ret 4)        rank (__thiscall, ret 4; count-aware)
-// The sites (every skill-point add or subtract for a rank, found from the callers of 0x43a5b0 and 0x544a30):
+// The sites: every skill-point add or subtract for a rank. Found from the callers of the setter 0x43a5b0 and the getter
+// 0x544a30, and from every 16-bit store to +0x14 in a function that touches the talent block (the setter's own and the
+// inlined one at 0x43a926 in 0x43a890; the others at +0x14 are an attack record's, 0x437613 / 0x437dd3):
 //   0x5f05ea  can-add (0x5f0590): "points > 0" -> "points >= cost of the next rank"; the skills screen uses this
 //             answer both to allow + and to draw the talent as buyable or greyed (0x5df239)
 //   0x5e5d86  skills screen +: DEC EDI -> EDI -= cost of the rank just added
 //   0x5e5dcf  skills screen -: INC EDI -> EDI += cost of the rank just removed
 //   0x5de6f8  the screen's dependency sweep (0x5de570, a rank whose requirement went away): +1 -> + its cost
-//   0x43c7c8  automatic spending (0x43c760): a talent whose next rank costs more than the hero has ends the spending
-//             (as if the points had run out: the new-power slot pass still runs)
+//   0x43cd7e  automatic spending's pick (0x43cc40, its last candidate test: total < max): a talent whose next rank
+//             costs more than the hero has is no candidate, so the pick takes the best affordable one (XML1 0xaf160
+//             drops a failed entry and picks again, 0xaf286..0xaf33a)
+//   0x43c7c8  automatic spending (0x43c760): when the pick finds nothing only because every candidate was
+//             unaffordable, the spending ends at the loop's own end (the new-power slot pass still runs), as running
+//             out of points does; a pick that finds nothing raisable keeps the game's own exit
 //   0x43c80d  automatic spending: -1 -> - cost of the rank just added
 //   0x5d2898  the Training respec (0x5d2810): committed - base -> the costs of the ranks above base
 //   0x4bbd19  losing levels (0x4bbae0): each rank taken back covers its cost, not 1 (the loop's JNZ becomes JG at
 //             0x4bbd21, as XML1's `while (missing > 0)`)
+//   0x43a90a  losing levels, first (0x43a890 from 0x4bbc08): ranks added in an open skills menu and not yet
+//             committed are cancelled and refunded - their costs, not 1 each (stored inline at 0x43a926)
 // Not changed, because no rank cost is involved: the "points to spend" test 0x4b7b00 (points > 0), the per-level point
 // (0x4bbb75), the Training's bonus point 0x5d2290, the item point 0x4c923a, the online state copy (0x60bd40 sets the
 // host's numbers as they are) and the save (the unspent points and the ranks are stored; nothing is recomputed).
@@ -89,6 +97,19 @@ namespace rank_costs_rules
 	// missing -= cost)`; an overshoot is not refunded, as there).
 	constexpr int level_down_remaining(int missing, int removed_cost) { return missing - removed_cost; }
 
+	// Cancelling `pending` uncommitted ranks above `committed` (0x43a890) returns what they cost.
+	template <typename Cost>
+	constexpr int pending_refund(int committed, int pending, Cost&& cost_of_index)
+	{
+		int sum = 0;
+		for (int i = committed; i < committed + pending; ++i)
+			sum += cost_of_index(i);
+		return sum;
+	}
+
+	// The block's talent array: 8-byte entries from block+0x1c up to the count at block+0xb8 (19 entries).
+	constexpr int talent_capacity = (0xb8 - 0x1c) / 8;
+
 	// What the patched level-down loop subtracts besides its own DEC EBP: cost - 1.
 	constexpr int level_down_extra(int removed_cost) { return removed_cost - 1; }
 
@@ -130,7 +151,7 @@ namespace rank_costs_rules
 	};
 
 	// Code the stubs call or return into, and the function bodies around each site (retail bytes).
-	inline constexpr std::array<guard, 23> guards{{
+	inline constexpr std::array<guard, 25> guards{{
 		{0x544a30, "668b4114c3", "unspent skill points getter (ax = block+0x14)"},
 		{0x4692f0, "8d4104c3", "a CStats' saved block (stats+4)"},
 		{0x544a40, "668b4116c3", "unspent stat points getter (ax = block+0x16)"},
@@ -151,6 +172,8 @@ namespace rank_costs_rules
 		{0x5d2892, "33c08a068bcf83e03f2bc38be8", "respec: committed - base"},
 		{0x4bbd13, "8d4c241c50518bcfe8d0f5f7ff4d0f856effffff", "losing levels: one rank per missing point"},
 		{0x43c8a8, "8b44247085c0", "automatic spending: after the loop (new-power slots)"},
+		{0x43cd5b, "3bf30f84e10100008b168bceff522084c07408c7442414000000003bf30f84c6010000d9442414d85c2418dfe0f6c4410f85b3010000", "the pick's last candidate test: [esp+0x14] max, [esp+0x18] total, EBP = the entry, EDI = the CStats"},
+		{0x43a8f0, "8b9eb80000003bfb8d4e1c75043bc974198a0a80e13f660fb6c90f95c30ac303e98022c04783c208ebd68b8eb800000085c95f5b7e0466896e145e5dc3", "cancel uncommitted ranks: EDX = entry + 3, refund into BP, stored at 0x43a926"},
 		{0x4bbb54, "8bcee8e58e08008bce83c00450e88ae8f7ff8bcee8c38e08008bce4050e83aeaf7ff0fb6431c473bf87ec5", "a level gained: +4 stat points, +1 skill point (EDI = the level)"},
 		{0x4bbc06, "8bcfe883ecf7ff8bcfe82c8e08000fbfc083f804b9040000007f028bc82bc1be040000002bf1508bcfe8bce7f7ff", "a level lost: min(stat points, 4) taken, the rest from the stats ([esp+0x10] = the level)"},
 		{0x4bbc34, "8bcfe8f58d08000fbfc083f801b9010000007f028bc82bc1bd010000002be9508bcfe855", "a level lost: min(points, 1) taken, the rest from ranks ([esp+0x10] = the level)"},
@@ -167,20 +190,24 @@ namespace rank_costs_rules
 		shape kind;
 		const char* what;
 	};
-	enum site_id : std::size_t { can_add, screen_add, screen_remove, sweep_refund, auto_pick, auto_charge, respec, level_down_call, level_down_test, site_count };
+	enum site_id : std::size_t { can_add, screen_add, screen_remove, sweep_refund, auto_pick, auto_charge, respec, level_down_call, level_down_test, auto_pick_gate, cancel_refund, site_count };
 	inline constexpr std::array<site, site_count> sites{{
 		{0x5f05ea, "e84144f5ff", shape::call, "can-add: points >= the next rank's cost"},
 		{0x5e5d86, "4fe8547fe8ff", shape::call, "skills screen +: - the added rank's cost"},
 		{0x5e5dcf, "84c0740547b301eb048a5c2413", shape::call_then_jump_to_tail, "skills screen -: + the removed rank's cost"},
 		{0x5de6f8, "e83363f6ff8bcf40", shape::call, "dependency sweep: + the removed rank's cost"},
-		{0x43c7c8, "e873040000", shape::call, "automatic spending: stop at a rank the hero can't pay for"},
+		{0x43c7c8, "e873040000", shape::call, "automatic spending: nothing affordable left ends the spending at the loop's end"},
 		{0x43c80d, "e81e8210008bce48", shape::call, "automatic spending: - the added rank's cost"},
 		{0x5d2898, "83e03f2bc38be8", shape::call, "respec: the costs of the ranks above base"},
 		{0x4bbd19, "8bcfe8d0f5f7ff", shape::call, "losing levels: a rank taken back covers its cost"},
 		{0x4bbd21, "0f85", shape::jg, "losing levels: loop while points are missing (JNZ -> JG)"},
+		{0x43cd7e, "d9442414d85c2418", shape::call, "automatic spending's pick: an unaffordable next rank is no candidate"},
+		{0x43a90a, "0f95c30ac303e98022c0", shape::call, "losing levels: uncommitted ranks refund their costs"},
 	}};
 
-	// [Game] LevelSkillPoints sites (installed in the same transaction when that key asks for them).
+	// [Game] LevelSkillPoints sites (installed in the same transaction when that key asks for them). 0x4bbb68 (and
+	// LevelStatPoints' 0x4bbb56) lie inside forced_teams' retail guard 0x4bbb54..0x4bbb75, checked at its own install:
+	// exports.cpp installs forced_teams first.
 	enum level_site_id : std::size_t { level_gained, level_lost, level_site_count };
 	enum stat_site_id : std::size_t { stat_gained, stat_lost, stat_site_count };
 	// [Game] LevelStatPoints sites.

@@ -78,7 +78,7 @@ namespace rank_costs
 			const auto* b = static_cast<const std::uint8_t*>(block);
 			int count = 0;
 			std::memcpy(&count, b + 0xb8, 4);
-			if (count < 0 || count > 32)
+			if (count < 0 || count > talent_capacity)
 				return -1;
 			for (int i = 0; i < count; ++i)
 			{
@@ -123,6 +123,30 @@ namespace rank_costs
 		}
 
 		int __cdecl level_down_extra_of(int id, int index) { return level_down_extra(cost_of_id(id, index)); }
+
+		int __cdecl pending_refund_of(int id, int committed, int pending)
+		{
+			void* talent = talent_by_id(id & 0xffff);
+			return pending_refund(committed, pending, [&](int index) { return cost_of_talent(talent, index); });
+		}
+
+		// Set by the pick's max-rank stub when it turned a raisable talent down for its cost; read by the pick stub.
+		bool pick_refused_for_cost = false;
+
+		// The pick's last candidate test (total < max) for `entry` of `stats`: a talent that still has a rank but whose next
+		// rank the hero can't pay for gets max 0, so it is no candidate.
+		void __cdecl pick_gate(void* stats, const std::uint8_t* entry, float* max)
+		{
+			const int total = (entry[2] & 0x3f) + (entry[3] & 0x3f);
+			if (!(static_cast<float>(total) < *max))
+				return;
+			std::uint16_t id = 0;
+			std::memcpy(&id, entry, 2);
+			if (affordable(points_of(block_of(stats)), cost_of_id(id, rank_index(total, moment::next_rank))))
+				return;
+			pick_refused_for_cost = true;
+			*max = 0.0f;
+		}
 
 		// ---- stubs ----
 
@@ -203,33 +227,73 @@ namespace rank_costs
 			}
 		}
 
-		// 0x43c7c8 in the automatic spending, replacing CALL 0x43cc40 (__thiscall, 2 arguments, ret 8): the pick; a
-		// talent whose next rank the hero can't pay for ends the spending at the loop's own end (0x43c8a8), as running
-		// out of points does. ESI = the CStats.
+		// 0x43c7c8 in the automatic spending, replacing CALL 0x43cc40 (__thiscall, 2 arguments, ret 8): the pick, which
+		// passes over talents the hero can't pay for (pick_gate_stub). When it then finds nothing and it turned a talent
+		// down for its cost, the spending ends at the loop's own end (0x43c8a8: the new-power slot pass runs), as
+		// running out of points does; nothing raisable at all keeps the game's own exit.
 		__declspec(naked) void auto_pick_stub()
 		{
 			__asm {
+				mov byte ptr [pick_refused_for_cost], 0
 				push dword ptr [esp + 8]
 				push dword ptr [esp + 8]
 				mov eax, 0x43cc40
 				call eax
 				cmp ax, 0xffff
-				je picked
-				push eax
-				movzx ecx, ax
-				push ecx
-				push esi
-				call can_pay_next_id
-				add esp, 8
-				test eax, eax
-				pop eax
-				jz cannot_pay
+				jne picked
+				cmp byte ptr [pick_refused_for_cost], 0
+				jne nothing_affordable
 			picked:
 				ret 8
-			cannot_pay:
+			nothing_affordable:
 				add esp, 12
 				mov eax, 0x43c8a8
 				jmp eax
+			}
+		}
+
+		// 0x43cd7e in the pick 0x43cc40, replacing FLD [esp+0x14] (max); FCOMP [esp+0x18] (total): the same compare after
+		// pick_gate. EBP = the entry, EDI = the CStats; the x87 stack is empty here.
+		__declspec(naked) void pick_gate_stub()
+		{
+			__asm {
+				lea eax, [esp + 4 + 0x14]
+				push eax
+				push ebp
+				push edi
+				call pick_gate
+				add esp, 12
+				fld dword ptr [esp + 4 + 0x14]
+				fcomp dword ptr [esp + 4 + 0x18]
+				ret
+			}
+		}
+
+		// 0x43a90a in 0x43a890's loop, replacing SETNZ BL; OR AL,BL; ADD EBP,ECX; AND byte [EDX],0xc0: CL = the entry's
+		// uncommitted ranks, EDX = entry + 3; BP (the unspent points) += what they cost; AL keeps the "anything
+		// cancelled" flag; the ranks are cleared.
+		__declspec(naked) void cancel_refund_stub()
+		{
+			__asm {
+				test cl, cl
+				setnz bl
+				or al, bl
+				push eax
+				push edx
+				movzx ecx, cl
+				push ecx
+				movzx eax, byte ptr [edx - 1]
+				and eax, 0x3f
+				push eax
+				movzx eax, word ptr [edx - 3]
+				push eax
+				call pending_refund_of
+				add esp, 12
+				pop edx
+				add ebp, eax
+				pop eax
+				and byte ptr [edx], 0xc0
+				ret
 			}
 		}
 
@@ -432,9 +496,13 @@ namespace rank_costs
 		stat_wanted = stat_rule.has_value() && _stricmp(stat_rule->c_str(), "xml1") == 0;
 		if (!wanted)
 			logger::write("rank costs: off - every talent rank costs 1 skill point (the game's own)");
-		if (!level_wanted)
+		if (level_rule && !level_wanted)
+			logger::write("level skill points: [Game] LevelSkillPoints=%s isn't xml1 - 1 skill point per level (the game's own)", level_rule->c_str());
+		else if (!level_wanted)
 			logger::write("level skill points: off - 1 skill point per level (the game's own)");
-		if (!stat_wanted)
+		if (stat_rule && !stat_wanted)
+			logger::write("level stat points: [Game] LevelStatPoints=%s isn't xml1 - 4 stat points per level (the game's own)", stat_rule->c_str());
+		else if (!stat_wanted)
 			logger::write("level stat points: off - 4 stat points per level (the game's own)");
 		if (!wanted && !level_wanted && !stat_wanted)
 			return;
@@ -454,7 +522,8 @@ namespace rank_costs
 		{
 			const std::uint32_t stubs[site_count] = {
 				address_of(can_add_stub), address_of(screen_add_stub), address_of(screen_remove_stub), address_of(sweep_stub),
-				address_of(auto_pick_stub), address_of(auto_charge_stub), address_of(respec_stub), address_of(level_down_stub), 0};
+				address_of(auto_pick_stub), address_of(auto_charge_stub), address_of(respec_stub), address_of(level_down_stub), 0,
+				address_of(pick_gate_stub), address_of(cancel_refund_stub)};
 			for (std::size_t i = 0; i < site_count; ++i)
 				writes.push_back({sites[i].va, bytes_of(sites[i].before), patched(sites[i], stubs[i])});
 		}

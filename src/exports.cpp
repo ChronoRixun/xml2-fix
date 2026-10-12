@@ -261,10 +261,13 @@ namespace
 		explosive_first_hit::install(game);
 		if (game_version::needs_gameplay_agreement())
 			gameplay_agreement::register_rule(gameplay_capabilities::explosive_first_hit_id,1,{explosive_first_hit::installed() ? 1u : 0u,0,0,0},explosive_first_hit::verified());
-		// X-Men Legends 1's skill-point rules ([Game] RankCosts, LevelSkillPoints): the rank costs (eight sites of the
-		// skill-point code: the skills screen, its buyable test, the automatic spending, the respec, losing levels) and
-		// the points per level (the level processing's grant and take-back); none is anyone else's. Every peer charges
-		// and grants alike (rule 5), or their heroes' points drift apart.
+		// X-Men Legends 1's skill and stat point rules ([Game] RankCosts, LevelSkillPoints, LevelStatPoints): the rank
+		// costs (the skills screen, its buyable test, the automatic spending, the respec, losing levels) and the points per
+		// level (the level processing's grant and take-back). ORDER: after forced_teams::install - forced_teams guards the
+		// level processing's grant (0x4bbb54..0x4bbb75, the addSkillPoints evidence) as retail at its own install, and
+		// LevelSkillPoints / LevelStatPoints patch 0x4bbb56 and 0x4bbb68 inside it; installed first, ForcedTeams would
+		// refuse. No other installer writes or guards these sites. Every peer charges and grants alike (rule 5), or their
+		// heroes' points drift apart.
 		rank_costs::install(game);
 		if (game_version::needs_gameplay_agreement())
 		{

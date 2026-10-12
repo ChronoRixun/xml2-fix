@@ -14,12 +14,15 @@ is off; the Legends Classic builder writes the key for every build (legends-clas
 | Skills screen, - (0x5e5dcf) | +1 point | + the removed rank's cost |
 | Buyable test (0x5f0590, call at 0x5f05ea): allows +, and the screen draws the talent buyable or greyed | points > 0 | points >= the next rank's cost |
 | The screen's requirement sweep (0x5de570) | +1 per rank taken back | + its cost |
-| Automatic spending (0x43c760) | -1 per rank | - its cost; a pick the hero can't pay for ends the spending at the loop's own end |
+| Automatic spending (0x43c760; its pick 0x43cc40, candidate test at 0x43cd7e) | -1 per rank | - its cost; a talent whose next rank the hero can't pay for is no candidate, so the next best affordable one is bought (XML1 0xaf160 drops the failed entry and picks again); when only unaffordable ones are left the spending ends at the loop's own end (the new-power slot pass still runs) |
 | Training respec (0x5d2810) | committed - base | the costs of the ranks above base |
 | Losing levels (0x4bbae0) | one rank per missing point | ranks taken back until their costs cover the missing points (JNZ -> JG at 0x4bbd21); no refund of an overshoot |
+| Losing levels, first: ranks added in an open skills menu and not yet committed are cancelled (0x43a890, loop site 0x43a90a, stored inline at 0x43a926) | +1 per rank | + their costs |
 
-These are every site that adds or subtracts a skill point for a rank (the callers of the points setter 0x43a5b0 and
-getter 0x544a30). Not changed, because no rank price is involved: the per-level point, the Training's bonus point,
+These are every site that adds or subtracts a skill point for a rank, found from the callers of the points setter
+0x43a5b0 and getter 0x544a30 and from every 16-bit store to +0x14 in a function that touches the talent block (the
+setter's own, 0x43a5bf, and the inlined one at 0x43a926; the other +0x14 word stores in such functions, 0x437613 and
+0x437dd3, are an attack record's). Whole-block copies (load, the online state copy) move no points. Not changed, because no rank price is involved: the per-level point, the Training's bonus point,
 the item point, the "points to spend" marker (points > 0, as in the first game), the online state copy (0x60bd40 sets
 the host's numbers as they are) and saves.
 
@@ -54,7 +57,9 @@ sites; rule 5 carries both (below).
 
 The same rule for the unspent stat points, on the port's stat scale. X-Men Legends I gives 1 a level and 2 on a level
 divisible by 5; the Legends Classic heroes have X-Men Legends I's body / mind / strength x 4 (the builder's STAT_SCALE,
-`[Balance] HeroStatScale=4`), so XMen2.exe's 4 a level is the first game's 1 and the key makes a fifth level give 8:
+`[Balance] HeroStatScale=4`), so XMen2.exe's 4 a level is the first game's 1 and the key makes a fifth level give 8.
+The two heroes that keep their own numbers (`[Balance] NativeStatHeroes`, ProfXAstral and ProfXGladiator) are
+`xpexempt` level-40 forms: the level processing returns before giving anything, so neither key touches them.
 
 | Where | Stock | `xml1` |
 |---|---|---|
@@ -73,7 +78,7 @@ so such a hero would get back more than it paid.
 
 ## Install and online
 
-Twenty-three guards (the callees and every site's surroundings) and the nine (+ two for LevelSkillPoints, + two for LevelStatPoints) writes go through one code transaction
+Twenty-five guards (the callees and every site's surroundings) and the eleven (+ two for LevelSkillPoints, + two for LevelStatPoints) writes go through one code transaction
 (`xml1_hook_transaction`): a mismatch or a failed write leaves the game's own 1-point rule with one log line. Co-op
 peers must charge and grant alike: gameplay agreement rule 5, revision 3, `{installed parts (1 RankCosts, 2
 LevelSkillPoints, 4 LevelStatPoints), 7 or 0, 5 or 0, skill bonus 2 | stat bonus 8 << 8}` (verified `{0,0,0,0}` without
