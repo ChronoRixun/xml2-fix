@@ -163,8 +163,9 @@ namespace display_rules
 	// changing mid-transition and is ignored. The DPI handlers then ask for the recorded size.
 	struct kept_client
 	{
-		size client;  // the client area to keep, in pixels
-		UINT dpi = 0; // the DPI it was recorded at (0: not yet settled)
+		size client;          // the client area to keep, in pixels
+		UINT dpi = 0;         // the DPI it was recorded at (0: not yet settled)
+		bool pending = false; // a DPI change came while maximized or minimized: apply `client` at the next restore
 	};
 
 	// The window was created (or settled after a DPI change) with `client` at `dpi`.
@@ -181,13 +182,43 @@ namespace display_rules
 	// fix's own DPI handling. Returns whether it was recorded.
 	inline bool note_client_resize(kept_client& kept, const size& client, const UINT dpi, const bool in_dpi_change)
 	{
-		if (in_dpi_change || !client.width || !client.height || (kept.dpi && dpi != kept.dpi))
+		if (in_dpi_change || kept.pending || !client.width || !client.height || (kept.dpi && dpi != kept.dpi))
 		{
 			return false;
 		}
 		kept.client = client;
 		kept.dpi = dpi;
 		return true;
+	}
+
+	// A DPI change while the window is maximized or minimized: its size is Windows' (the suggested
+	// rectangle, or none), the kept client waits for the restore. Returns whether the fix sizes the
+	// window now.
+	inline bool sizes_on_dpi_change(kept_client& kept, const bool maximized_or_minimized)
+	{
+		if (maximized_or_minimized)
+		{
+			kept.pending = true;
+			return false;
+		}
+		return true;
+	}
+
+	// A restored WM_SIZE: after a DPI change that came while maximized or minimized, the client area to
+	// apply at the window's DPI now `dpi` (then settled there); nothing otherwise.
+	inline std::optional<size> client_after_restore(kept_client& kept, const UINT dpi)
+	{
+		if (!kept.pending)
+		{
+			return std::nullopt;
+		}
+		kept.pending = false;
+		kept.dpi = dpi;
+		if (!kept.client.width || !kept.client.height)
+		{
+			return std::nullopt;
+		}
+		return kept.client;
 	}
 
 	// The client area to ask for at a DPI change: the kept one, or `fallback` (the back buffer's) when
