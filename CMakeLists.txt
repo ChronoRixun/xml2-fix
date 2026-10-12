@@ -41,6 +41,7 @@ add_library(xml2_fix SHARED
 	src/geometry_sharing.cpp
 	src/ladder_paths.cpp
 	src/break_rule.cpp
+	src/pack_amount.cpp
 	src/exports.cpp
 	src/gamepad_fix.cpp
 	src/pad_profile.cpp

@@ -52,6 +52,7 @@
 #include <Xinput.h>
 
 #include "break_rule_rules.hpp"
+#include "pack_amount_rules.hpp"
 #include "personal_item_text_rules.hpp"
 #include "save_format_rules.hpp"
 #include "discord_ipc.hpp"
@@ -9601,6 +9602,55 @@ namespace
 		}
 	}
 
+	// [Game] PackAmount (pack_amount_rules.hpp): the value's rules, the numbers, the guards on their own (each
+	// fraction inside its guard, no guard reaching the DoubleHeal guards at 0x4a2cac / 0x4a2e64), then, when a copy of
+	// XMen2.exe is at hand, every guard against it and the two fractions.
+	void check_pack_amount_rules()
+	{
+		using namespace pack_amount_rules;
+		std::printf("[Game] PackAmount (X-Men Legends 1's packs restore a quarter)\n");
+		CHECK(parse_rule("xml1").set && parse_rule(" XML1 ; the first game's quarter").value == rule::xml1);
+		CHECK(parse_rule("xml2").set && parse_rule("xml2").value == rule::xml2 && !parse_rule("").set && !parse_rule(" ; x").set);
+		for (const char* bad : {"1", "0.25", "quarter", "xml1 xml2"})
+		{
+			const auto c = parse_rule(bad);
+			CHECK(c.set == false && !c.error.empty() && c.value == rule::xml2);
+		}
+		float f1 = 0, f2 = 0;
+		std::memcpy(&f1, xml1_fraction_bytes.data(), 4);
+		std::memcpy(&f2, retail_fraction.data(), 4);
+		CHECK(f1 == xml1_fraction && f2 == xml2_fraction);
+		// A 400-point hero: 100 (XML1's quarter) against the game's 132.
+		CHECK(restored(xml1_fraction, 400.0f) == 100.0f && restored(xml2_fraction, 400.0f) > 131.9f && restored(xml2_fraction, 400.0f) < 132.1f);
+		bool ok = true, health = false, energy = false, clear = true;
+		for (const auto& g : guards)
+		{
+			ok &= limits_rules::valid_hex(g.hex) && g.what && *g.what;
+			const DWORD end = g.va + static_cast<DWORD>(limits_rules::hex_size(g.hex));
+			health |= g.va <= health_fraction && health_fraction + 4 <= end;
+			energy |= g.va <= energy_fraction && energy_fraction + 4 <= end;
+			if (g.va < 0x600000) clear &= end <= (g.va < 0x4a2d00 ? 0x4a2cacu : 0x4a2e64u);
+		}
+		CHECK(ok && health && energy && clear);
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the pack fractions against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		CHECK(first_mismatch(image) == nullptr);
+		CHECK(std::memcmp(image + health_fraction - limits_rules::image_base, retail_fraction.data(), 4) == 0);
+		CHECK(std::memcmp(image + energy_fraction - limits_rules::image_base, retail_fraction.data(), 4) == 0);
+		// Each fraction is the imm32 of mov dword [esp+0xc], imm32 (c7 44 24 0c).
+		for (const address a : {health_fraction, energy_fraction})
+			CHECK(std::memcmp(image + a - 4 - limits_rules::image_base, "\xc7\x44\x24\x0c", 4) == 0);
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
 	// [Game] BreakRule (break_rule_rules.hpp): the value's rules; XML1's level sum and the structure pairing; the
 	// decision; what the fix remembers; the guards on their own; both bridges run for real; then, when a copy of
 	// XMen2.exe is at hand, every guard against it, the three writes on that copy and the game's own level function
@@ -10414,6 +10464,12 @@ int main(const int argc, char** argv)
 		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
 		return failures ? 1 : 0;
 	}
+	if (argc > 1 && std::strcmp(argv[1], "--pack-amount-rules") == 0)
+	{
+		check_pack_amount_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--break-rule-rules") == 0)
 	{
 		check_break_rule_rules();
@@ -10531,6 +10587,7 @@ int main(const int argc, char** argv)
 	check_ini_rules();
 	check_xp_curve_rules();
 	check_break_rule_rules();
+	check_pack_amount_rules();
 	check_save_format_rules();
 	check_balance_rules();
 	check_melee_weapon_rules();

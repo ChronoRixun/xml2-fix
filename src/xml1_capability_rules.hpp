@@ -32,4 +32,14 @@ inline registration master_mold(bool requested,bool installed,std::string_view f
 // advertises verified off; a future controller registers its own revision/values.
 constexpr std::uint16_t turret_revision=1;
 inline registration turrets(){ return {{0,0,0,0},true}; }
+
+// X-Men Legends 1's pack amount ([Game] PackAmount=xml1, ID 13), revision 1: values {installed,0,0,0}. Not requested
+// (no key, or xml2): verified off. Requested but not installed (guards, protection, readback, a value that is neither
+// xml1 nor xml2): unverified, which closes host and join.
+constexpr std::uint16_t pack_amount_revision=1;
+inline registration pack_amount(bool requested,bool installed){
+    if(!requested)return {{0,0,0,0},true};
+    if(!installed)return {{0,0,0,0},false};
+    return {{1,0,0,0},true};
+}
 }
