@@ -34,6 +34,7 @@
 #include "discord_presence.hpp"
 #include "display.hpp"
 #include "forced_teams.hpp"
+#include "script_functions.hpp"
 #include "mold_controller.hpp"
 #include "multipart.hpp"
 #include "xml1_turrets.hpp"
@@ -258,6 +259,10 @@ namespace
 		// menu on, which is when names are looked up - sees the new functions. After new_game: both
 		// patch push operands of script-facing code; nothing here depends on limits or test_input (the
 		// pipe's "script" command compiles its statement when it runs, with the functions in place).
+		// [Limits] ScriptFunctions: the game's 320 script function names raised (the fix's own already fill
+		// them). Two code sites of the registration and the compile-time lookup, both first run by the same
+		// registration; before forced_teams, whose table carries any [Test] probes.
+		script_functions::install(game);
 		forced_teams::install(game);
 		mold_controller::install(game);
 		// XML1 scan turrets ([Game] Xml1Turrets, builder [Xml1Turrets]): one pointer of the native event
@@ -269,12 +274,19 @@ namespace
 		// The scan turrets run from the same lockstep update on every peer (rule 4): a process that does not request
 		// them advertises revision 1 verified off, as 1.4.0 did.
 		// Registering a requested controller enlists the agreement even in a non-LC installation.
-		if (game_version::needs_gameplay_agreement() || mold_controller::requested() || xml1_turrets::requested())
+		// The script function limit (rule 14): a peer whose raise was refused drops every statement calling a function
+		// past 320 while the other runs it, so peers agree on the installed capacity; a requested raise that didn't
+		// install is unverified and closes host/join. Plain XML2 (no key, no ForcedTeams) advertises {0,0,0,0}. Only an
+		// explicit [Limits] ScriptFunctions enlists the agreement by itself (script_functions.hpp).
+		if (game_version::needs_gameplay_agreement() || mold_controller::requested() || xml1_turrets::requested() ||
+		    script_functions::requested_by_key())
 		{
 			const auto mold = mold_controller::capability();
 			gameplay_agreement::register_rule(gameplay_capabilities::master_mold_id, xml1_capability_rules::master_mold_revision, mold.values, mold.verified);
 			const auto turrets = xml1_turrets::capability();
 			gameplay_agreement::register_rule(gameplay_capabilities::turret_controller_id, xml1_capability_rules::turret_revision_for(xml1_turrets::requested()), turrets.values, turrets.verified);
+			const auto functions = script_functions::capability();
+			gameplay_agreement::register_rule(gameplay_capabilities::script_functions_id, script_functions_rules::agreement_revision, functions.values, functions.verified);
 		}
 		// XML1 breakable parts ([Game] Xml1Multipart): part health, break roll, effects and disabled attacks change
 		// the lockstep simulation, so peers must agree (rule 6, revision 1, {installed, part-logic revision, 0, 0}).

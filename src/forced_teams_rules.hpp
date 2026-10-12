@@ -100,9 +100,12 @@ namespace forced_teams_rules
 	constexpr DWORD retail_count = 0x121;
 	constexpr DWORD builtin_table = 0x6903d8; // the operators and waittimed/iadd/strcatstr..., registered by the script system's constructor
 	constexpr DWORD builtin_count = 0x13;
-	constexpr DWORD tree_capacity = 0x140;    // 0x4d7637: a registration past 320 names is skipped without a word
+	constexpr DWORD tree_capacity = 0x140;    // 0x4d7637: the tree's 320 names; past them the game skips a registration without a word,
+	                                          // unless [Limits] ScriptFunctions put the overflow in (script_functions_rules.hpp)
 	constexpr DWORD table_count = retail_count + static_cast<DWORD>(functions.size());
-	static_assert(builtin_count + table_count <= tree_capacity, "the game's script function tree holds 320 names");
+	constexpr DWORD raised_capacity = 1024;   // script_functions_rules::default_capacity
+	static_assert(builtin_count + table_count <= raised_capacity, "the fix's functions fit the raised script function limit with room for mods");
+	constexpr DWORD probe_max = 64;            // [Test] ScriptFunctionProbes (script_functions.hpp), after the fix's own
 
 	// The registration 0x49fe30: `push 0x68a908` (imm32 at 0x49fe31), `push 0x121` (imm32 at
 	// 0x49fe36), call 0x4d8770, mov ecx,eax, call 0x4d75a0, ret. The two operands share a page.
@@ -110,9 +113,16 @@ namespace forced_teams_rules
 	constexpr DWORD table_operand = 0x49fe31;
 	constexpr DWORD count_operand = 0x49fe36;
 
-	inline std::array<limits_rules::operand_write, 2> registration_writes(const DWORD table)
+	inline std::array<limits_rules::operand_write, 2> registration_writes(const DWORD table, const DWORD count = table_count)
 	{
-		return {{{table_operand, 4, table}, {count_operand, 4, table_count}}};
+		return {{{table_operand, 4, table}, {count_operand, 4, count}}};
+	}
+
+	// How many of the table's entries the game's tree takes, the 19 builtins first; the rest need the
+	// raised limit (script_functions.hpp) or are dropped as the game drops them.
+	constexpr DWORD past_tree(const DWORD count)
+	{
+		return builtin_count + count > tree_capacity ? builtin_count + count - tree_capacity : 0;
 	}
 
 	// The script system ([0x787740], built at the first 0x4d8770) and its tree's name count: past the

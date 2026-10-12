@@ -27,6 +27,12 @@
   exterior missile tanks, the Arbiter / Weapon X tripod guns and the Hive tanks' flame turrets), with the first
   game's timing, aim spread, damage and effects; online peers must agree on every placement (rule 4).
 
+## Unreleased
+
+- `[Limits] ScriptFunctions`: the game's 320 script function names, full with the fix's own functions, raised to
+  1024 by default while `[Game] ForcedTeams` registers them (321 to 4096; 320 keeps the game's limit); every stock
+  name keeps its place. `[Test] ScriptFunctionProbes` for testing it.
+
 ## 1.4.0 - 2026-10-12
 
 The engine half of Legends Classic 0.2.0. For X-Men Legends II as it ships only the mouse fix applies; everything
