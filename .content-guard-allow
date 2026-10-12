@@ -48,3 +48,7 @@ DISASM  src/mold_controller.cpp  # Authored register-preserving dispatcher bridg
 DISASM  test/entity_transfer_test.cpp  # Authored inline assembly that calls a receiver with ESP measured around it; not game disassembly.
 DISASM  src/placement_crush.cpp  # Authored register-preserving touch bridge; replays only the one guarded stack-reserve instruction it displaces. No game listing or decompiled body.
 DISASM  src/script_function_overflow.cpp  # Authored register-preserving bridges for the script function overflow; replays only the lookup's three-register epilogue, described in prose above it. No game listing or decompiled body.
+DISASM  src/rank_costs.cpp  # Authored naked x86 stubs at the skill-point call sites (each described in prose above it: site, register contract, what it returns); no game listing or decompiled body.
+DISASM  src/solo_mode.cpp  # Authored naked x86 bridges for the solo-mode AI sites; each replays only the few guarded instructions it displaces, described in prose; no game listing or decompiled body.
+DISASM  test/rank_costs_test.cpp  # Authored inline assembly that drives the fix's stubs with the register/stack contract of each site on a synthetic frame; not game disassembly.
+DISASM  test/x1_leader_test.cpp  # Authored inline assembly that calls the leader bridges with a frame shaped like the site's; not game disassembly.
