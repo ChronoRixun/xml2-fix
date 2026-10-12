@@ -67,9 +67,10 @@ intact. These opcodes use variable-length framing; reliable-envelope decoding no
 dispatch. The queued sends (host info 0x1a through 0x6077ad, participant reply 0x1f through 0x6085d8, both 0x610f30
 mode 0 -> 0x60f620) stay one native message only up to 300 bytes (0x12c, checked at 0x60f6ef); a longer body takes
 the large-message path (0x60f7bb: opcode 0x12 with a 6-byte header - stream byte, original opcode, length - then 0x13
-fragments). That path does not work between two PCs: the receiver 0x6101b0 (registered for 0x12 and 0x13 at
-0x6105d4/0x6105ec) returns at once for 0x12, and for a 0x13 fragment looks its stream up at +0x30b0, finds none and
-dereferences null at 0x61020c. Protocol revision 2 put the whole entry list on the wire (12 + 20 bytes per rule): with
+fragments). An admission body must never take that path: the fragment receiver 0x6101b0 (registered for 0x12 and
+0x13 at 0x6105d4/0x6105ec) returns at once for 0x12, and for a 0x13 fragment looks its stream up at +0x30b0; for a
+joining peer's body no stream is open there, and it dereferences null at 0x61020c (whether and where the stream is
+opened for an admitted peer was not traced). Protocol revision 2 put the whole entry list on the wire (12 + 20 bytes per rule): with
 the fifteen rules of the 1.5 pre-release the 0x1a body was 360 bytes and a matching peer's join crashed the host
 there (live, 2026-10-12). The largest queued body of revision 3 is the 188-byte 0x1f, 112 bytes under the limit; a
 `static_assert` keeps it at least 64 under. The request 0x18 goes direct (0x60d9c0, a 0x514-byte buffer).
