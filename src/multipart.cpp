@@ -46,7 +46,7 @@ constexpr u32 damage_call=0x438b0f;
 constexpr std::array<u32,6> brain_slots{0x694c60,0x695418,0x6953f0,0x695440,0x695388,0x695468};
 constexpr std::array<u32,6> brain_native{0x517370,0x517370,0x51d610,0x51d880,0x51cad0,0x51cad0};
 
-struct names { std::string death,loop,effect_bone,bone; };
+struct names { std::string death,loop,effect_bone,bone,hide; };
 struct record_data { multipart_rules::parts parts; std::array<names,multipart_rules::max_parts> text; bool any=false; };
 struct instance { u32 tpl=0; void* actor=nullptr; multipart_rules::state state; };
 
@@ -64,6 +64,9 @@ using brain_t=u32(__fastcall*)(void*,void*,void*,u32*);
 parse_t real_parse=nullptr;remove_t real_remove=nullptr;apply_t real_apply=nullptr;clone_t real_clone=nullptr;
 damage_t real_damage=nullptr;
 std::array<brain_t,brain_slots.size()> real_brain{};
+using script_t=void*(__cdecl*)(void*);
+script_t real_segment=nullptr;
+constexpr u32 segment_record=0x68b828;   // setSegmentVisible's {func,name,ret,args} record in the retail table 0x68a908
 
 void* manager(){return fn<void*(__cdecl*)()>(0x48d1f0)();}
 void* record(void* mgr,u32 h){return fn<void*(__fastcall*)(void*,void*,u32)>(0x48ca50)(mgr,nullptr,h);}
@@ -112,7 +115,7 @@ u32 __fastcall parse_hook(void* mgr,void* edx,void* node,u32 key,u32 menu){
     auto& t=templates[h];
     auto& p=t.parts.value[index];
     p.breakable=true;p.health=value;p.power=multipart_rules::link_bits(attribute(node,"linkToPower"));
-    t.text[index]={attribute(node,"effectOnDeath"),attribute(node,"loopEffect"),attribute(node,"effectBone"),attribute(node,"bone")};
+    t.text[index]={attribute(node,"effectOnDeath"),attribute(node,"loopEffect"),attribute(node,"effectBone"),attribute(node,"bone"),attribute(node,"hideSkin")};
     if(t.parts.count<index+1)t.parts.count=index+1;
     t.any=true;
     return h;
@@ -184,6 +187,41 @@ void __fastcall damage_hook(void* event){
         static_cast<int>(after),in.state.current,in.state.health[0],in.state.health[1],last_roll);
     if(k>=0)break_part(in,*d,a->second,k);
 }
+// destroyMultipartPiece (XBE 0x9ce30 -> 0x88fa0) has no XMen2.exe function; the builder writes it as
+// setSegmentVisible(actor, hideSkin, "0") + setSegmentVisible(actor, showSkin, "1") + spawnEffectBone(...). Hiding a
+// whole XML1 part's hideSkin from script is that call: the part is broken here too (health 0, its attacks
+// disabled, the current part moved on - multipart_rules::destroy), so later hits cannot break it a second time.
+// The script plays the look and the effect itself.
+const char* argument(void* args,int i){
+    using arg_t=void*(__fastcall*)(void*,void*,int);
+    using text_t=const char*(__fastcall*)(void*,void*);
+    auto* a=fn<arg_t>(0x4d5830)(args,nullptr,i);
+    return a?at<text_t>(at<void*>(a,0),0x14)(a,nullptr):"";
+}
+void* __cdecl segment_hook(void* args){
+    void* result=real_segment(args);
+    if(actors.empty())return result;
+    const char* visible=argument(args,2);
+    if(std::atoi(visible?visible:"")!=0)return result;
+    const std::string name=argument(args,0),segment=argument(args,1);
+    u32 h=0;
+    using lookup_t=u32*(__cdecl*)(u32*,const char*);
+    using resolve_t=void*(__fastcall*)(const u32*,void*);
+    void* actor=fn<resolve_t>(0x4654b0)(fn<lookup_t>(0x4a1700)(&h,name.c_str()),nullptr);
+    auto a=actors.find(actor);
+    if(a==actors.end())return result;
+    auto i=instances.find(a->second);
+    const auto* d=data_of(a->second);
+    if(i==instances.end()||!d)return result;
+    for(int k=0;k<d->parts.count;++k)
+        if(d->parts.value[k].breakable&&_stricmp(d->text[k].hide.c_str(),segment.c_str())==0){
+            const int broke=multipart_rules::destroy(i->second.state,d->parts,k+1);
+            logger::write("multipart: script hid %s on %s: part %d %s (current part %d, attacks disabled %X)",segment.c_str(),
+                name.c_str(),k+1,broke>=0?"broken":"already broken",i->second.state.current,i->second.state.disabled);
+            break;
+        }
+    return result;
+}
 template<std::size_t I> u32 __fastcall brain_hook(void* brain,void* edx,void* actor,u32* output){
     const u32 result=real_brain[I](brain,edx,actor,output);
     if(!actors.empty()&&output){
@@ -216,7 +254,7 @@ void install(HMODULE game){
     if(!was_requested)return;
     trace=ini::flag(L"Test",L"MultipartTrace",false);
     if(reinterpret_cast<std::uintptr_t>(game)!=limits_rules::image_base){logger::write("multipart: image isn't retail; native parts retained");return;}
-    constexpr std::array<limits_rules::guard,15> guards{{
+    constexpr std::array<limits_rules::guard,18> guards{{
         {0x48d1f0,"8a0de0c47200b8","multipart manager getter"},
         {0x48ca50,"568b74240885f6744c8b81e0","multipart record lookup"},
         {0x48c700,"83ec68a1f8386f0053555657","multipart segment hide/show"},
@@ -231,7 +269,10 @@ void install(HMODULE game){
         {0x48cec0,"83ec24a1f8386f00538b5c24","multipart parser"},
         {0x48cde0,"6aff68813e670064a1000000","multipart clone"},
         {0x48cbc0,"8b44240450e886feffff85c0","multipart apply"},
-        {0x48d190,"568b74240885f674408b81e0","multipart remove"}}};
+        {0x48d190,"568b74240885f674408b81e0","multipart remove"},
+        {0x4a1700,"83ec1c568b74242856e82e0c","entity name lookup"},
+        {0x4654b0,"568bf1e8682a06008b16518b","entity handle resolve"},
+        {0x4d5830,"8b511c33c085d2740d568b74","script argument getter"}}};
     for(const auto& g:guards)
         if(!limits_rules::matches(reinterpret_cast<const unsigned char*>(g.va),g.hex)){
             logger::write("multipart: guard failed at %08X (%s); native parts retained",g.va,g.what);return;}
@@ -252,11 +293,18 @@ void install(HMODULE game){
         real_brain[i]=fn<brain_t>(brain_native[i]);
         writes.push_back({brain_slots[i],pointer_bytes(reinterpret_cast<void*>(real_brain[i])),pointer_bytes(hooks[i])});
     }
+    // The active script function table (forced_teams may have moved it into the DLL), as mold_controller reads it.
+    const u32 table=at<u32>(reinterpret_cast<const void*>(0x49fe31),0);
+    const u32 segment_slot=table+(segment_record-0x68a908);
+    real_segment=at<script_t>(reinterpret_cast<const void*>(segment_slot),0);
+    const bool bridge=real_segment==fn<script_t>(0x4a5bd0);
+    if(bridge)writes.push_back({segment_slot,pointer_bytes(reinterpret_cast<void*>(real_segment)),pointer_bytes(reinterpret_cast<void*>(&segment_hook))});
+    else logger::write("multipart: setSegmentVisible isn't the retail handler; scripted part removal stays cosmetic");
     xml1_hook_transaction::memory memory;
     bool safe=true;
     if(xml1_hook_transaction::apply(memory,writes,&safe)){
         installed=true;
-        logger::write("multipart: XML1 breakable parts installed (parser, start look, damage at 0x438B0F, %u AI update slots)",unsigned(brain_slots.size()));
+        logger::write("multipart: XML1 breakable parts installed (parser, start look, damage at 0x438B0F, %u AI update slots, scripted removal %s)",unsigned(brain_slots.size()),bridge?"on":"off");
     }
     else if(safe)logger::write("multipart: patch transaction refused; native parts retained");
     else {game_version::refuse_startup();logger::write("multipart: rollback/protection verification failed; process startup refused");}
