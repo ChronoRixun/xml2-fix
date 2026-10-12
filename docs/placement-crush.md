@@ -1,8 +1,10 @@
 # Settling objects without crushes
 
-`[Game] PlacementCrush=xml1` stops one object from crushing another while it is being settled on the floor, which is
-how a zone places its objects when it loads. An absent key or `xml2` leaves the game untouched; any other value is
-logged and ignored. The key is for a mod that carries the first game's zones (the X-Men Legends I port sets it).
+`[Game] PlacementCrush=xml1` stops one object from crushing another while it is being settled on the floor. XMen2.exe
+settles every object when a zone loads, and every object spawned in play 0.5 s after it appears (death drops such as a
+keycard, script-spawned props, debris): the spawn-init virtual `0x474c00` posts the settle event at `0x474c63`. X-Men
+Legends I has no settle at all. An absent key or `xml2` leaves the game untouched; any other value is
+logged and patches nothing, and registers as unverified in the gameplay agreement (rule 11), which closes online play. The key is for a mod that carries the first game's zones (the X-Men Legends I port sets it).
 
 ## What happens without it
 
@@ -13,7 +15,7 @@ it), the hit's effects still play: the default hit sound `common/melee/hit_norma
 
 Touches also happen while an object is settled on the floor. That is the settle event (functor vtable `0x6873a4`, its
 call `0x4729f0` = the entity's slot `0x98` with mode 3, the floor routine `0x474080`), which runs for every object when
-a zone loads. The first game's X-Mansion dormitories author a desk chair tucked under a roll-top desk. On every first
+a zone loads and for every object spawned in play, 0.5 s after it appears. The first game's X-Mansion dormitories author a desk chair tucked under a roll-top desk. On every first
 entry the desk crushes the chair while it settles, the chair is knocked into the desk, the desk's impact (`0x499100`) is
 a second hit, and the player hears two hits from an empty room (issue #79 of the port).
 
@@ -29,7 +31,8 @@ Two changes in `XMen2.exe`, after every byte they rely on is checked against the
 | `0x6873a4` | the settle event functor's call, `0x4729f0` | the fix's own call: the same entity slot `0x98` with mode 3 and its answer handed back, with a count of settles in progress |
 | `0x498ef0` | the touch function's first instruction | while a settle is in progress the touch does what the game's own early-out does (nothing); otherwise the game's function runs unchanged |
 
-Touches outside a settle, during play, keep the game's rule. Measured in the port's harness, on fresh first entries to
+Touches outside a settle keep the game's rule (objects bumped or thrown into each other in play); the settle-time
+touches of objects spawned in play are refused too, as the first game, which never settles, never crushes there. Measured in the port's harness, on fresh first entries to
 the dormitories: 2 hit sounds on 3 of 3 entries without the change, 0 on 3 of 3 with it, and 13 touches refused per
 entry. The test pipe's `status` reports `placement crush xml1; touches refused while settling N`.
 

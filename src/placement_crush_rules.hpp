@@ -10,19 +10,23 @@
 // refused (XML2 Fix's BreakRule=xml1 refuses it for most XML1 objects), it still plays the hit's effects - the
 // default hit sound common/melee/hit_normal (0x454080 -> 0x453660 -> audio vt+0x5c). Touches also happen while an
 // object is settled on the floor: the settle event CEvent<CGameEntity, ESettle> (functor vtable 0x6873a4, its call
-// 0x4729f0 = the entity's vt+0x98(3), the floor routine 0x474080 and its move 0x419f20). When a zone loads, two
+// 0x4729f0 = the entity's vt+0x98(3), the floor routine 0x474080 and its move 0x419f20). XMen2.exe posts it from the
+// spawn-init virtual 0x474c00 (0x474c63, 0.5 s after the spawn; physents through 0x496db0), so it runs for every
+// object at a zone's load and for every object spawned in play (death drops, script spawns, debris). When a zone loads, two
 // pieces of furniture authored overlapping (a desk chair tucked under a roll-top desk in the X-Mansion dormitories)
 // "crush" each other there; the crushed piece is knocked into the other, whose impact (0x499100, vt+0x1b0) is a
 // second hit, and the player hears two hits from an empty room (port harness: 2 hit sounds on 3/3 fresh entries; 13
 // touches during the settle).
 //
-// What X-Men Legends 1 does. Its zones place objects without that exchange: the original Xbox game, recorded on the
+// What X-Men Legends 1 does. It has no settle at all (default.xbe has no ESettle event; its own touch-crush 0x92970
+// has no settle that could call it), so nothing it places or spawns is crushed there: the original Xbox game, recorded on the
 // same first entry to the dormitories (xemu), plays no hit sound there (the port's own hit sample matched at noise
 // level, r 0.33/0.37, against r 0.62/0.74 on the original's real punches).
 //
 // PlacementCrush=xml1 refuses the touch while a settle runs (the fix's own call in the functor's slot counts it): the
 // touch then does what the game's own early-out does (0x4990ea: nothing). Emulated in the harness before it was
-// written: 0 hit sounds on 4/4 fresh entries, the impact hit gone too. Touches outside a settle (play) are the game's.
+// written: 0 hit sounds on 4/4 fresh entries, the impact hit gone too. Touches outside a settle keep the game's rule
+// (objects bumping or thrown into each other in play); settle-time touches are refused for spawns in play as well.
 
 #include "limits_rules.hpp" // guard, matches, image_base
 

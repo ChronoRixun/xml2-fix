@@ -1,6 +1,7 @@
 #pragma once
 
-// The stats screen's help text follows [Balance] (the first game's combat numbers, balance_rules.hpp).
+// The stats screen's help text follows [Balance] (the first game's combat numbers, balance_rules.hpp) and
+// [Game] DoubleHeal=0 (no double-heal lines; double_heal_rules.hpp).
 // The four stat helps live in Data/strings (ids 0x442..0x445); the Body one states the engine's health
 // per body point ("25 + 5 per Level + 3 per Body", the float at 0x6d9770) and the Strike one its damage
 // bonus per striking ("+2% per Striking") - two numbers [Balance] replaces for the scaled heroes
@@ -56,6 +57,7 @@ namespace stat_help_rules
 	// fetches of them: one push each in its own code, 0x5e0b32..0x5e0c27).
 	constexpr int strike_help_id = 0x442; // 1090: "~02Damage Bonus~~\n+2%% per Striking\n..."
 	constexpr int body_help_id = 0x444;   // 1092: "...~02Health~~\n25 + 5 per Level + 3 per Body\n..."
+	constexpr int focus_help_id = 0x445;  // 1093: its three numbers - regeneration, the double energy chance, the damage bonus
 
 	// A number the way the ini writes one: 2.5, 10, 0.5 (no trailing zeros; %g already drops them).
 	inline std::string number(float value)
@@ -145,6 +147,49 @@ namespace stat_help_rules
 			out->insert(out->find("%% per Striking") + std::string_view("%% per Striking").size(),
 			            " (" + escaped_label(native_names) + ": +" + number(*native_rate * 100.0f) + "%% per Striking)");
 		}
+		return out;
+	}
+
+	// [Game] DoubleHeal=0 (double_heal_rules.hpp): the first game's packs never heal double, and its stats screen
+	// never mentioned it. The fetched texts carry the UI's "\n" escapes as two characters and are snprintf formats
+	// (0x5604f0 -> msvcr71 _vsnprintf) with the screen's own arguments pushed after them: Body gets one (the double
+	// heal chance), Focus three (regeneration, double energy chance, damage bonus).
+	// Body: the phrase and its line go; the one argument is then left unused, which _vsnprintf ignores.
+	inline std::optional<std::string> body_help_without_double_heal(std::string_view original)
+	{
+		constexpr std::string_view phrase = " and chance for double health from potions";
+		constexpr std::string_view line = "\\n\\n~02Double Heal Chance :~~ ^%d%%";
+		const std::size_t p = original.find(phrase);
+		const std::size_t l = original.find(line);
+		if (p == std::string_view::npos || l == std::string_view::npos || p > l || original.find(line, l + 1) != std::string_view::npos)
+		{
+			return std::nullopt;
+		}
+		std::string out(original.substr(0, p));
+		out += original.substr(p + phrase.size(), l - p - phrase.size());
+		out += original.substr(l + line.size());
+		return out;
+	}
+
+	// Focus: the phrase and its line go, but the line's argument sits between two others, so the line becomes
+	// "%.0s": it takes that argument and prints nothing (a string of precision 0 is never read).
+	inline std::optional<std::string> focus_help_without_double_energy(std::string_view original)
+	{
+		constexpr std::string_view phrase = ", Melee $DMG_MENTAL, and chance for double energy from potions.";
+		constexpr std::string_view phrase_after = " and Melee $DMG_MENTAL.";
+		constexpr std::string_view line = "\\n~02Double Energy Chance :~~ ^%d%%";
+		constexpr std::string_view consume = "%.0s";
+		const std::size_t p = original.find(phrase);
+		const std::size_t l = original.find(line);
+		if (p == std::string_view::npos || l == std::string_view::npos || p > l || original.find(line, l + 1) != std::string_view::npos)
+		{
+			return std::nullopt;
+		}
+		std::string out(original.substr(0, p));
+		out += phrase_after;
+		out += original.substr(p + phrase.size(), l - p - phrase.size());
+		out += consume;
+		out += original.substr(l + line.size());
 		return out;
 	}
 }

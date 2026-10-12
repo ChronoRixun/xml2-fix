@@ -29,13 +29,23 @@ namespace placement_crush
 		// counted. __fastcall: the functor in ecx (unused, as in the game's), the entity and the second argument on the
 		// stack, popped here (ret 8); the entity's answer handed back.
 		using entity_settle = int(__thiscall*)(void*, int);
+		// The count goes back down however the settle ends: __finally also runs when the entity's call unwinds (a
+		// C++ exception of the game's own frames or a structured one), so an unwound settle cannot leave every later
+		// touch refused for the session; the unwind itself continues to the game's own handlers, as before.
 		int __fastcall settle_counted(void*, void*, void* entity, void*)
 		{
 			const auto* vtable = *static_cast<void* const* const*>(entity);
 			const auto call = reinterpret_cast<entity_settle>(vtable[entity_settle_slot / 4]);
+			int answer = 0;
 			++settle_depth;
-			const int answer = call(entity, settle_mode);
-			--settle_depth;
+			__try
+			{
+				answer = call(entity, settle_mode);
+			}
+			__finally
+			{
+				--settle_depth;
+			}
 			return answer;
 		}
 
@@ -125,7 +135,7 @@ namespace placement_crush
 		if (xml1_hook_transaction::apply(memory, {slot, site}, &safe))
 		{
 			state = 1;
-			logger::write("placement crush: X-Men Legends 1's ([Game] PlacementCrush=xml1): while an object is settled on the floor (a zone's placement) "
+			logger::write("placement crush: X-Men Legends 1's ([Game] PlacementCrush=xml1): while an object is settled on the floor (every object at a zone's load, and each one spawned in play 0.5 s after it appears) "
 			              "an object touching another no longer crushes it - the settle event's call (0x%08lX) counted, the touch slot (0x%08lX) hooked; "
 			              "other touches the game's own rule",
 			              static_cast<unsigned long>(settle_slot), static_cast<unsigned long>(touch_site));

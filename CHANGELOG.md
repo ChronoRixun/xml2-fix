@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- `[Game] PlacementCrush=xml1`: an object being settled on the floor no longer crushes another, as in X-Men Legends I,
+  which never settles anything. XMen2.exe settles every object at a zone's load and each object spawned in play 0.5 s
+  after it appears; furniture the first game authored overlapping (the X-Mansion dormitories' desk chair under its
+  desk) no longer plays two hit sounds from an empty room on entry. Other touches in play keep the game's rule.
+  [Details](docs/placement-crush.md).
+- `[Game] DoubleHeal=0`: health and energy packs never heal double, as in X-Men Legends I, so they no longer sometimes
+  play XML2's darker "double" sound; the stats screen's Body and Focus helps drop the double health / energy chance
+  lines while it is in.
+- Online: both keys are rules 11 and 12 of the shared gameplay agreement (a key asked for but not installed closes
+  online play, as for rules 3 and 4); the agreement record holds up to sixteen entries (332 bytes).
+
 ## 1.4.0 - 2026-10-12
 
 The engine half of Legends Classic 0.2.0. For X-Men Legends II as it ships only the mouse fix applies; everything
