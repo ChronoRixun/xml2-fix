@@ -11,6 +11,8 @@
   controller; sessions use a peer-invariant hero instead of the local `_ACTIVE_HERO_`.
   Peers with different controller state are refused. Startup refusal names an
   unverified XML1 hook rollback instead of the network exclusion hook.
+- Master Mold works with `[Limits] EntityCapacity=1`: its action-entity queries accept the installed query
+  owner's entries, test busy queries by the owner's null result and bound results by the installed World.
 - Added `[Limits] EntityCapacity` (port default 1, needs `[Save] Format=lc`): the entity domain grows from
   32 actor / 224 generic / 256 World handles to 32 / 768 / 1024 with contiguous ten-bit indices, so props,
   projectiles and triggers past the 224th are no longer refused without a word (docs/entity-capacity.md,

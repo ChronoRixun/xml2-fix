@@ -65,6 +65,22 @@ starting combat. Its retail pool-layout guards are checked again at boss spawn,
 after all startup installers, so an incompatible capacity replacement retains
 the native encounter fallback.
 
+## Entity capacity
+
+Core selection and waypoint lookup call the native query entries `0x4ab550`
+(manager), `0x4ab6d0` (acquire), `0x4ab770` (ordered results), `0x4ab720` and
+`0x4ab7d0` (release), and the query/order vtable slots, under both entity layouts
+([entity capacity](entity-capacity.md)). The installed layout comes from the
+capacity module, published after the startup transaction and before this
+controller installs. Stock: the entries must hold their retail bytes and the retail
+busy bytes (query +0x33, stride 0x1e4; order +0xdc0, stride 0x814) are tested before
+acquiring, because the retail acquisition assumes a free query. Raised
+(`EntityCapacity=1`): each entry must be the installed E9 jump into this DLL and the
+native getter must return the installed query manager; a busy owner returns null,
+which ends the selection. Result counts are bounded by the installed World (256 or
+1024). The same checks run again at boss spawn. A mismatch keeps the unshielded
+native encounter.
+
 ## Online play
 
 XML2 co-op is lockstep, not host-authoritative. Every peer simulates the whole

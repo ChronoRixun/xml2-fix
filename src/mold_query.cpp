@@ -1,9 +1,14 @@
 #include "mold_query.hpp"
 #include "mold_target_rules.hpp"
 #include "mold_combat_rules.hpp"
+#include "mold_query_rules.hpp"
+#include "entity_capacity.hpp"
+#include "entity_capacity_layout.hpp"
+#include "entity_query.hpp"
 #include "xml1_hook_memory.hpp"
 #include "limits_rules.hpp"
 #include "log.hpp"
+#include <algorithm>
 #include <array>
 
 namespace mold_query {
@@ -45,14 +50,26 @@ bool session_active(){
     const auto* session=reinterpret_cast<const void*>(0xa53058);
     return at<u32>(session,0)==0x6a481c&&at<unsigned char>(session,0x420)!=0;
 }
+// The installed entity layout decides how the native query entries behave
+// (mold_query_rules.hpp); the capacity module publishes it after the startup
+// transaction, before this controller installs.
+bool raised(){return entity_capacity::installed().raised;}
+u32 world(){return entity_capacity::installed().world;}
 bool pool_available(){
+    // Stock: the retail acquisition assumes a free query and order, so test the
+    // retail busy bytes first. Raised: the owner returns null when busy (checked
+    // after acquisition).
+    if(!mold_query_rules::needs_busy_test(raised()))return true;
     auto* pool=fn<getter_t>(0x4ab550)();
-    bool query_free=false,results_free=false;
-    for(u32 i=0;i<3;++i){
-        query_free|=at<unsigned char>(pool,0x33+i*0x1e4)==0;
-        results_free|=at<unsigned char>(pool,0xdc0+i*0x814)==0;
-    }
-    return query_free&&results_free;
+    return pool&&mold_query_rules::stock_pool_free(static_cast<const unsigned char*>(pool));
+}
+bool dll_image(u32& lo,u32& hi){
+    HMODULE self=nullptr;
+    if(!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        reinterpret_cast<LPCWSTR>(&entity_query::installed_manager),&self)||!self)return false;
+    const auto* dos=reinterpret_cast<const IMAGE_DOS_HEADER*>(self);
+    const auto* nt=reinterpret_cast<const IMAGE_NT_HEADERS*>(reinterpret_cast<const unsigned char*>(self)+dos->e_lfanew);
+    lo=static_cast<u32>(reinterpret_cast<std::uintptr_t>(self));hi=lo+nt->OptionalHeader.SizeOfImage;return true;
 }
 }
 bool is_a(void* entity,u32 descriptor){
@@ -62,16 +79,11 @@ bool is_a(void* entity,u32 descriptor){
     return (at<u32>(concrete,0x14+4*(bit>>5))&(1u<<(bit&31)))!=0;
 }
 bool supported(){
-    constexpr std::array<limits_rules::guard,15> guards{{
+    constexpr std::array<limits_rules::guard,10> guards{{
         {0x4a1759,"e872070b008b108bc8ff526083f8ff7e","active hero follows the player manager's index"},
         {0x4a176d,"8d048514b87000","per-player hero handle table"},
         {0x612c0a,"b95830a500","online session static"},
         {0x610d20,"8a8120040000c3","online session active flag"},
-        {0x4ab550,"64a1000000008a0d0089","query pool getter"},
-        {0x4ab6d0,"568bf1e878feffff33c9","query acquisition"},
-        {0x4ab770,"e8dbfdffff33c98d90c00d0000","query results acquisition and retail layout"},
-        {0x4ab720,"568b31e828feffff85f6","query release"},
-        {0x4ab7d0,"e87bfdffff8b44240485","results release"},
         {0x4aa100,"568bf1e8182cfaff8a4c","native spatial query"},
         {0x4aacf0,"8b54240856578b7c240c","query flags"},
         {0x4a93e0,"8b411083ec0c83f80775","query ordering metric"},
@@ -85,6 +97,19 @@ bool supported(){
             logger::write("mold query: guard failed %08X",g.va);return false;
         }
     }
+    // Query entries: retail bytes on the stock layout; under EntityCapacity=1 the
+    // installed jumps into this DLL's query owner, whose manager the native getter
+    // must return.
+    const bool layout_raised=raised();
+    u32 lo=0,hi=0;
+    if(layout_raised&&(!dll_image(lo,hi)||!entity_query::installed_manager())){logger::write("mold query: installed query owner unavailable");return false;}
+    for(const auto& e:mold_query_rules::entries){
+        std::array<unsigned char,16> bytes{};
+        if(!memory.read(e.va,bytes.data(),e.retail.size()/2)||!mold_query_rules::entry_ok(layout_raised,bytes.data(),e,lo,hi)){
+            logger::write("mold query: %s entry %08X does not match the %s layout",e.what,e.va,layout_raised?"raised":"stock");return false;
+        }
+    }
+    if(layout_raised&&fn<getter_t>(0x4ab550)()!=entity_query::installed_manager()){logger::write("mold query: native getter does not return the installed query manager");return false;}
     return true;
 }
 u32 select(void* actor,bool forced){
@@ -102,6 +127,7 @@ u32 select(void* actor,bool forced){
     if(!pool_available())return 0;
     query q;
     fn<query_t>(0x4ab6d0)(&q.value,nullptr,reinterpret_cast<const void*>(0x70b678),&exclusion);
+    if(!q.value)return 0; // raised owner: every query busy
     const auto* vt=at<const void*>(q.value,0);
     const auto filter=at<filter_t>(vt,0x40);
     filter(q.value,nullptr,1,30); // XML1 enemy 28 -> PC enemy 30
@@ -115,10 +141,12 @@ u32 select(void* actor,bool forced){
     if(!q.results)return 0;
     const auto* result_vt=at<const void*>(q.results,0);
     const int count=at<count_t>(result_vt,0)(q.results,nullptr);
-    if(count<0||count>256)return 0;
+    if(!mold_query_rules::result_count_ok(count,world()))return 0;
     std::array<u32,3> cores{};
     for(unsigned i=0;i<3;++i){char name[]="warp1";name[4]=char('1'+i);find(name,cores[i]);}
-    std::array<mold_target_rules::candidate,256> candidates{};
+    // Sized for the largest World; only the native AI thread calls this.
+    static std::array<mold_target_rules::candidate,entity_capacity_layout::max_world> candidates;
+    std::fill_n(candidates.begin(),count,mold_target_rules::candidate{});
     for(int i=0;i<count;++i){
         auto* entity=at<item_t>(result_vt,4)(q.results,nullptr,i);
         if(!entity)continue;
@@ -149,6 +177,7 @@ u32 waypoint(void* hero){
     if(!hero||!pool_available())return 0;
     query q;u32 exclusion=0;
     fn<query_t>(0x4ab6d0)(&q.value,nullptr,reinterpret_cast<const void*>(0x778b3c),&exclusion);
+    if(!q.value)return 0;
     metric order{0x683ed0,{},3};
     std::memcpy(order.position,static_cast<const unsigned char*>(hero)+0x20,12);
     at<sphere_t>(at<const void*>(q.value,0),0x68)(q.value,nullptr,order.position,800.f,0,0);
@@ -156,7 +185,7 @@ u32 waypoint(void* hero){
     if(!q.results)return 0;
     const auto* vt=at<const void*>(q.results,0);
     const auto count=at<count_t>(vt,0)(q.results,nullptr);
-    if(count<0||count>256)return 0;
+    if(!mold_query_rules::result_count_ok(count,world()))return 0;
     for(int i=0;i<count;++i){
         auto* entity=at<item_t>(vt,4)(q.results,nullptr,i);
         if(entity){
