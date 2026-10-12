@@ -14,6 +14,12 @@
 // its first instruction with a jump to 200 * f * f, f = the registry's highest roster level (0x449960: the herostat
 // list +0x120dc, count +0x12330, skipping +0x2ad bit 0x20) - XMen2.exe's own counterpart of 0x54cb0, which its shop
 // prices use too. XMen2.exe keeps no acknowledged-level byte, so f is the current highest level.
+//
+// Which heroes count: the first game's list +0xdbcc is filled at the stats load (0x56526, one entry per playable
+// character as it is parsed), not by joining - its f counts every roster hero, joined or not, except guests.
+// XMen2.exe's +0x120dc is filled the same way at its stats load (0x44c24c) and 0x449960 skips +0x2ad bit 0x20. So
+// both count the whole playable roster. An empty or unreadable roster would make f 0 and the revival free; the hook
+// prices it as f = 1 (200) instead.
 
 #include "limits_rules.hpp"
 
@@ -32,6 +38,7 @@ namespace revival_cost_rules
 		{registry_getter, "64a1000000006aff68b132670050a10c77710064892500000000", "the registry's getter (0x44b8f0)"},
 	}};
 	constexpr std::int64_t original_price(const std::int64_t f) { return 200 * f * f; }
+	constexpr std::int64_t price_factor(const std::int64_t highest) { return highest < 1 ? 1 : highest; }
 	constexpr std::int64_t retail_price(const std::int64_t level) { return level * level * 2 < 200 ? 200 : level * level * 2; }
 	// The jump written over the first instruction: E9 rel32 to `target`.
 	inline std::array<std::uint8_t, 5> jump_to(const std::uint32_t target)

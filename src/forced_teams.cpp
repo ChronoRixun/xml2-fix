@@ -883,8 +883,15 @@ namespace forced_teams
 			int permission = 0;
 			read_int_argument(at<get_argument_t>(argument_getter), args, 1, permission);
 			const int previous = xtract::set_services(permission);
-			void* result = xpoint_menu_handler<0>(args);
-			xtract::set_services(previous);
+			void* result = nullptr;
+			__try
+			{
+				result = xpoint_menu_handler<0>(args);
+			}
+			__finally
+			{
+				xtract::set_services(previous); // also on an unwind: the Xtract skip's byte back to Change Team
+			}
 			return result;
 		}
 

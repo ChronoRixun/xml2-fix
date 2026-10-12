@@ -5779,6 +5779,16 @@ namespace
 			CHECK(!needs_campaign(forge, forge_o) && needs_campaign(forge | forge_campaign, forge_o) && needs_campaign(0, healer_o));
 			CHECK(capability == 0x3f && (capability & no_change_team) && (capability & forge_campaign));
 			CHECK(!load_disabled(false, 4) && !load_disabled(true, 1) && load_disabled(true, 2));
+			// Online with other players, a campaign-gated option is greyed, not left out: every peer lists the same options.
+			CHECK(list_option(true, danger_room, dr_o, false, false) == listing::omitted);
+			CHECK(list_option(true, danger_room, dr_o, false, true) == listing::greyed);
+			CHECK(list_option(true, danger_room, dr_o, true, true) == listing::shown);
+			CHECK(list_option(true, load, load_o, false, true) == listing::greyed && list_option(true, load, load_o, false, false) == listing::shown);
+			CHECK(list_option(true, forge, forge_o, false, true) == listing::shown);           // 1.4.0 Forge: no campaign check
+			CHECK(list_option(true, forge | forge_campaign, forge_o, false, true) == listing::greyed);
+			CHECK(list_option(true, healer, dr_o, true, true) == listing::omitted);             // not offered by the point
+			CHECK(list_option(false, 0xf, load_o, true, false) == listing::omitted);
+			CHECK(revival_cost_rules::price_factor(0) == 1 && revival_cost_rules::price_factor(-3) == 1 && revival_cost_rules::price_factor(24) == 24);
 			CHECK(0x4a6c7a + 2 + to_save == 0x4a6cf0 && 0x4a6c7a + 2 + to_change_team == 0x4a6ca9);
 			CHECK(!offered(false, 0xf, load_o, true) && !offered(false, 0xf, forge_o, true));
 			CHECK(offered(true, load, load_o, false));                    // Load needs no character
@@ -5846,7 +5856,8 @@ namespace
 		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
 		CHECK(mismatch == nullptr);
 		CHECK(std::memcmp(at(choice_block), retail_op.data(), retail_op.size()) == 0);
-		for (const auto& g : xtraction_shop_rules::online_guards) CHECK(limits_rules::matches(at(g.va), g.hex));
+		for (const auto& g : xtraction_shop_rules::net_guards) CHECK(limits_rules::matches(at(g.va), g.hex));
+		for (const auto& g : xtraction_shop_rules::change_team_guards) CHECK(limits_rules::matches(at(g.va), g.hex));
 		for (const auto& g : revival_cost_rules::guards) CHECK(limits_rules::matches(at(g.va), g.hex));
 		for (const auto& g : danger_room_gate_rules::guards)
 		{

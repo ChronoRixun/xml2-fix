@@ -36,7 +36,7 @@ namespace revival_cost
 		// Replaces 0x4b8830 (thiscall, the hero in ecx, no stack arguments): the first game's 200 * f * f.
 		int __fastcall price(void*, void*)
 		{
-			const int f = highest_level();
+			const int f = static_cast<int>(price_factor(highest_level()));
 			const auto p = static_cast<int>(std::min<std::int64_t>(original_price(f), 0x7fffffff));
 			if (p != last_logged)
 			{

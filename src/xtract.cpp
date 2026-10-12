@@ -16,7 +16,8 @@ namespace xtract
 
 		constexpr const char* as_before = "an Xtraction Point's menu offers the game's Xtract choice";
 		bool shop_installed = false;
-		bool online_guarded = false;   // xtraction_shop_rules::online_guards matched at install
+		bool online_guarded = false;   // xtraction_shop_rules::net_guards matched at install
+		bool skip_guarded = false;     // xtraction_shop_rules::change_team_guards matched at install
 		bool xtract_installed = false; // the Xtract skip is in place, so Change Team can be skipped with it
 		int point_services = 0;
 		using getter_t = void*(__cdecl*)();
@@ -36,9 +37,8 @@ namespace xtract
 			return index > 0 && reinterpret_cast<bit_t>(vt[xtraction_shop_rules::registry_campaign_slot / 4])(registry, nullptr, index);
 		}
 
-		// XMen2.exe's own rule for Load online (xtraction_shop_rules::load_disabled); unreadable or unguarded: greyed
-		// whenever a network game can't be ruled out is not knowable, so it follows the guards: no guards, no greying.
-		bool load_greyed()
+		// Online with other players (xtraction_shop_rules::online_shared); unguarded or unreadable: not shared.
+		bool shared_online()
 		{
 			if (!online_guarded) return false;
 			const auto net = reinterpret_cast<const std::uint8_t*>(reinterpret_cast<getter_t>(xtraction_shop_rules::net_getter)());
@@ -46,7 +46,7 @@ namespace xtract
 			if (!net || !players) return false;
 			int count = 0;
 			std::memcpy(&count, players + xtraction_shop_rules::players_count_offset, sizeof(count));
-			return xtraction_shop_rules::load_disabled(net[xtraction_shop_rules::net_online_offset] != 0, count);
+			return xtraction_shop_rules::online_shared(net[xtraction_shop_rules::net_online_offset] != 0, count);
 		}
 
 		// The Xtract skip's rel8: Change Team or past it (a lite point without its first flag).
@@ -70,14 +70,16 @@ namespace xtract
 				if (!dialog || !texts || *static_cast<DWORD*>(texts) != xtraction_shop_rules::text_vtable) return;
 				const auto lookup = reinterpret_cast<text_t>((*static_cast<DWORD**>(texts))[2]);
 				const auto add = reinterpret_cast<option_t>((*static_cast<DWORD**>(dialog))[7]);
+				const bool shared = shared_online();
 				for (const auto& o : xtraction_shop_rules::options)
 				{
 					if ((point_services & o.service) == 0) continue;
 					int index = 0;
 					const bool member = xtraction_shop_rules::needs_campaign(point_services, o) && in_campaign(o.campaign, index);
-					if (!xtraction_shop_rules::offered(shop_installed, point_services, o, member))
+					const auto how = xtraction_shop_rules::list_option(shop_installed, point_services, o, member, shared);
+					if (how == xtraction_shop_rules::listing::omitted)
 					{
-						logger::write("xtraction services: %s not offered - '%s' isn't in the campaign (registry index %d)", o.script, o.campaign, index);
+						logger::write("xtraction services: %s not offered - '%s' isn't in the campaign (registry index %d)", o.script, o.campaign ? o.campaign : "?", index);
 						continue;
 					}
 					const char* label = lookup(texts, nullptr, o.label);
@@ -86,10 +88,10 @@ namespace xtract
 						logger::write("xtraction services: string %d is missing - %s not offered", o.label, o.script);
 						continue;
 					}
-					const bool greyed = o.service == xtraction_shop_rules::load && load_greyed();
+					const bool greyed = how == xtraction_shop_rules::listing::greyed;
 					add(dialog, nullptr, label, o.script, nullptr, o.closes, o.resumes, greyed ? 1 : 0);
 					logger::write("xtraction services: %s added%s (point services 0x%X)", o.script,
-					              greyed ? " greyed (online with other players, as the pause menu's Load)" : "", static_cast<unsigned>(point_services));
+					              greyed ? " greyed (online with other players: every peer keeps the same options)" : "", static_cast<unsigned>(point_services));
 				}
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
@@ -118,12 +120,22 @@ namespace xtract
 				}
 			}
 			online_guarded = true;
-			for (const auto& g : xtraction_shop_rules::online_guards)
+			for (const auto& g : xtraction_shop_rules::net_guards)
 			{
 				if (!limits_rules::matches(reinterpret_cast<const std::uint8_t*>(g.va), g.hex))
 				{
 					online_guarded = false;
-					logger::write("xtraction shop: 0x%08lX isn't the retail code (%s) - Load is never greyed online and Change Team is never skipped", g.va, g.what);
+					logger::write("xtraction shop: 0x%08lX isn't the retail code (%s) - no option is greyed online", g.va, g.what);
+					break;
+				}
+			}
+			skip_guarded = true;
+			for (const auto& g : xtraction_shop_rules::change_team_guards)
+			{
+				if (!limits_rules::matches(reinterpret_cast<const std::uint8_t*>(g.va), g.hex))
+				{
+					skip_guarded = false;
+					logger::write("xtraction shop: 0x%08lX isn't the retail code (%s) - a lite point's Change Team is never skipped", g.va, g.what);
 					break;
 				}
 			}
@@ -192,7 +204,7 @@ namespace xtract
 		// A lite point without its first flag has no Change Team (default.xbe 0x9f695). Only with the Xtract skip in
 		// place (the byte it owns) and the Save add's guard matched; otherwise Change Team stays, with one log line.
 		const bool skip = shop_installed && (services & xtraction_shop_rules::no_change_team) != 0;
-		if (xtract_installed && online_guarded)
+		if (xtract_installed && skip_guarded)
 		{
 			if (!write_skip(skip ? xtraction_shop_rules::to_save : xtraction_shop_rules::to_change_team))
 				logger::write("xtraction services: ERROR: can't write the Xtract skip at 0x%08lX (error %lu) - Change Team as before", choice_block + 1, GetLastError());

@@ -21,19 +21,29 @@ independently of whether the option hook is enabled. A builder that passes the b
 
 ## Online play
 
-The first game had no network play. XMen2.exe's own rules are kept: the point menu belongs to the hero who opened it,
-every peer builds it from its own script run and follows the activator's input; XML2's hub Danger Room terminals and
-shops (`dangerRoomMenu()`, `shopMenu`) open online for host and joiner alike, so Danger Room, Healer and Forge stay as
-offered. XMen2.exe's pause menu skips Load while more than one player is connected (CSaveLoad's own test,
-0x4aebb6-0x4aebde): the point's Load is added greyed then (never removed, so every peer keeps the same option
-indices). Because the option list and the revival price must match on every peer, both are rule 10 of the shared
-gameplay agreement ([gameplay-agreement.md](gameplay-agreement.md)).
+The first game had no network play, so the online rules are the port's. The point menu belongs to the hero who
+opened it; every peer builds it from its own script run and its own registry, and the opener's input picks an
+index (two-instance test: both peers logged the same build in the same second). XML2's hub Danger Room terminals and
+shops (`dangerRoomMenu()`, `shopMenu`) open online for host and joiner alike, so Danger Room, Healer and Forge stay
+selectable when the campaign has them. While more than one player is connected (the net session's online byte,
+0x60c7e0 / +0x64, and the player manager's count, 0x612be0 / +0x278):
+
+- Load is added greyed: loading would replace the shared session on one PC only. This mirrors what XMen2.exe's
+  pause menu was seen doing with two players (its Load Game is skipped; the code behind that is not identified -
+  CSaveLoad reads the same two values only in its save mode, 0x4aebb6-0x4aebde).
+- Danger Room, Healer and Forge are added greyed, not left out, when this peer's campaign lacks their character: a
+  joiner's campaign bits are not proven to equal the host's in every case (zones without the catch-up unlocks,
+  mixed zone scripts), and a list that differs between peers would run different choices on different PCs.
+
+Options are never removed online, so every peer keeps the same option positions. The option set and the revival price
+are rule 10 of the shared gameplay agreement ([gameplay-agreement.md](gameplay-agreement.md)).
 
 ## Revival price
 
 `[Game] RevivalCost=xml1` jumps over 0x4b8830's first instruction to the first game's price, 200 * f * f, f the
 highest level on the registry's roster (0x449960; default.xbe 0xaf6b0 / 0x54cb0). Retail is max(200, 2 * level^2)
-of the revived hero. Guards: the function's 26 bytes, 0x449960's prologue, the registry getter.
+of the revived hero. Guards: the function's 26 bytes, 0x449960's prologue, the registry getter. Both games count the
+whole playable roster (filled at the stats load, joined or not) minus guests; an empty roster is priced as level 1.
 
 Options are appended in the first game's order (Load, Danger Room, Healer, Forge) after the native Save.
 "In the campaign" is the hero registry's per-save character bit (registry `0x44b8f0`, vt+0x3c name lookup,
@@ -66,5 +76,9 @@ vt+0x38 `0x48f770`, a map at +0x1c0). That is the first game's gate (default.xbe
 profile vt+0x34 `0x8c3b0`): the bit is set when a character first enters a campaign on the profile
 (default.xbe `0x552de`; XMen2.exe `0x449c40`), for Phoenix on Jean's opening mansion tour. It is not XML2's
 story-level-6 rule. The first game also sets the profile bits of every character in a save when it is
-loaded (`0x56fe9`); XMen2.exe's load (`0x44ba30`) restores only the save's own bits. Without the key nothing
+loaded (`0x56fe9`); XMen2.exe's load (`0x44ba30`) restores only the save's own bits, so the registry's load (vt+0xa4)
+is wrapped to set Phoenix's bit after a local load - not in a network game, where the loaded campaign is the shared
+session. Both vtable slots (0x69f144, 0x6854f0) go in through one install transaction (read back, both put back on
+failure). When the bit is set the item is enabled explicitly too, so a main menu kept from earlier in the session
+follows it. Without the key nothing
 is installed. A failed read leaves the item available, with one log line.

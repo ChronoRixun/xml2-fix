@@ -20,7 +20,8 @@
 // (registry vt+0xa4 = 0x44b970, its loop at 0x44ba30) restores the registry bits but not the profile's; the
 // first game's load sets both. The hook restores that for the gate character only: after the registry's load,
 // a save with Phoenix in its campaign sets Phoenix's profile bit (the only bit the gate reads; the team
-// menu's other profile bits are left to XMen2.exe's own rules).
+// menu's other profile bits are left to XMen2.exe's own rules) - for local loads only: in a network game the loaded
+// campaign is the shared session (a joiner receives the host's save), not this profile's.
 //
 // The hook: MAIN_MENU's first update step (vt+0x10, the slot 0x69f144 = 0x5c9260, the step that
 // disables e3 items through the same item setter 0x5ade70) runs, then the item is disabled when the
@@ -48,9 +49,13 @@ namespace danger_room_gate_rules
 	constexpr DWORD registry_campaign_slot = 0x84;  // bool (short index): 0x44b800, the save's own bit
 	constexpr DWORD profile_set_slot = 0x28;        // void (int index): 0x48f740
 	constexpr const char* gate_character = "phoenix";
+	constexpr DWORD net_getter = 0x60c7e0;   // __cdecl: the net session; byte +0x64 = in a network game (0x60b420)
+	constexpr DWORD net_online_offset = 0x64;
 	constexpr std::size_t name_max = 31;
 
-	inline constexpr std::array<limits_rules::guard, 9> guards{{
+	inline constexpr std::array<limits_rules::guard, 11> guards{{
+		{net_getter, "8a0d80e4a300b80100000084c875258b", "the net session's getter (0x60c7e0)"},
+		{0x60b420, "8a4164c3", "0x60b420: the net session's online byte (+0x64)"},
 		{registry_load_slot, "70b94400", "registry vt+0xa4 = its load 0x44b970 (0x6854f0)"},
 		{0x6854d0, "00b84400", "registry vt+0x84 = the campaign-bit predicate 0x44b800 (0x6854d0)"},
 		{0x6899bc, "40f74800", "profile vt+0x28 = the character-bit setter 0x48f740 (0x6899bc)"},

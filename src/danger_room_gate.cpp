@@ -4,7 +4,11 @@
 #include "ini.hpp"
 #include "log.hpp"
 
+#include "xml1_hook_memory.hpp"
+#include "xml1_hook_transaction.hpp"
+
 #include <cstring>
+#include <vector>
 
 namespace danger_room_gate
 {
@@ -77,9 +81,25 @@ namespace danger_room_gate
 			}
 		}
 
+		// In a network game the loaded campaign is a shared session (a joiner receives the host's save, 0x46e2b0 mode 2),
+		// not this profile's own: the first game had no network play, so its load rule applies to local loads only.
+		bool in_network_game()
+		{
+			__try
+			{
+				const auto* net = static_cast<const std::uint8_t*>(reinterpret_cast<getter_t>(net_getter)());
+				return net && net[net_online_offset] != 0;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return true; // unknown: leave the profile alone
+			}
+		}
+
 		int __fastcall load_hook(void* registry, void* edx, void* stream)
 		{
 			const int result = original_load(registry, edx, stream);
+			if (in_network_game()) return result;
 			const int mirrored = mirror_after_load();
 			if (mirrored > 0)
 				logger::write("danger room gate: the loaded save has '%s' in its campaign - the profile's bit set, as the first game's load does", gate_character);
@@ -88,12 +108,12 @@ namespace danger_room_gate
 			return result;
 		}
 
-		bool disable_item(void* menu)
+		bool set_item(void* menu, const bool enabled)
 		{
 			__try
 			{
 				if (*static_cast<DWORD*>(menu) != main_menu_vtable) return false;
-				reinterpret_cast<enable_t>(item_enable)(menu, nullptr, item, 0);
+				reinterpret_cast<enable_t>(item_enable)(menu, nullptr, item, enabled ? 1 : 0);
 				return true;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
@@ -114,10 +134,12 @@ namespace danger_room_gate
 			}
 			if (!disable(read, bit))
 			{
+				// Enabled explicitly too: a main menu kept from earlier in the session may still have it disabled.
+				set_item(menu, true);
 				if (changed(1)) logger::write("danger room gate: '%s' is in this profile's campaigns - %s available", gate_character, item);
 				return;
 			}
-			if (disable_item(menu))
+			if (set_item(menu, false))
 			{
 				if (changed(2)) logger::write("danger room gate: '%s' hasn't been in a campaign on this profile - %s disabled", gate_character, item);
 			}
@@ -150,27 +172,22 @@ namespace danger_room_gate
 		}
 		std::memcpy(item, value->data(), value->size());
 		item[value->size()] = 0;
-		auto* slot = reinterpret_cast<step_fn*>(first_step_slot);
-		DWORD protection = 0;
-		if (!VirtualProtect(slot, sizeof(*slot), PAGE_READWRITE, &protection))
+		// Both slots in one transaction: written, read back, and both put back if either fails.
+		original = reinterpret_cast<step_fn>(first_step);
+		original_load = reinterpret_cast<load_fn>(registry_load);
+		const auto before_step = xml1_hook_transaction::pointer_bytes(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(first_step)));
+		const auto before_load = xml1_hook_transaction::pointer_bytes(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(registry_load)));
+		std::vector<xml1_hook_transaction::patch> writes{
+			{first_step_slot, before_step, xml1_hook_transaction::pointer_bytes(reinterpret_cast<const void*>(&first_step_hook))},
+			{registry_load_slot, before_load, xml1_hook_transaction::pointer_bytes(reinterpret_cast<const void*>(&load_hook))},
+		};
+		xml1_hook_transaction::memory memory;
+		bool safe = true;
+		if (!xml1_hook_transaction::apply(memory, writes, &safe))
 		{
-			logger::write("danger room gate: can't unprotect MAIN_MENU's vtable (error %lu) - the main menu's Danger Room stays available", GetLastError());
+			logger::write("danger room gate: the vtable slots 0x%08lX / 0x%08lX didn't take%s - the main menu's Danger Room stays available",
+			              first_step_slot, registry_load_slot, safe ? " (both put back)" : " and couldn't be put back");
 			return;
-		}
-		original = *slot;
-		*slot = &first_step_hook;
-		DWORD ignored = 0;
-		VirtualProtect(slot, sizeof(*slot), protection, &ignored);
-		auto* load_slot = reinterpret_cast<load_fn*>(registry_load_slot);
-		if (VirtualProtect(load_slot, sizeof(*load_slot), PAGE_READWRITE, &protection))
-		{
-			original_load = *load_slot;
-			*load_slot = &load_hook;
-			VirtualProtect(load_slot, sizeof(*load_slot), protection, &ignored);
-		}
-		else
-		{
-			logger::write("danger room gate: can't unprotect the registry's vtable (error %lu) - a loaded save won't set the profile's '%s' bit", GetLastError(), gate_character);
 		}
 		logger::write("danger room gate: [Game] DangerRoomGate=%s - disabled until '%s' has been in a campaign on this profile (the first game's rule)", item, gate_character);
 	}

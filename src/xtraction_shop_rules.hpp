@@ -81,20 +81,39 @@ namespace xtraction_shop_rules
 		return enabled && (services & o.service) != 0 && (!needs_campaign(services, o) || in_campaign);
 	}
 
-	// Online with more than one player, XMen2.exe's own Load is not available (the pause menu skips it; CSaveLoad's
-	// own test 0x4aebb6-0x4aebde: net session 0x60c7e0 -> +0x64 set, players 0x612be0 -> +0x278 > 1). The Load option
-	// is still added, greyed (addOption's 6th argument), so every peer's option list keeps the same indices.
+	// A port rule (the first game had no network play): online with more than one player connected, Load is added
+	// greyed (addOption's 6th argument) - loading would replace the shared session on one PC only. It mirrors what
+	// XMen2.exe's pause menu was seen doing live with two players (research/online/online_saves.md, row 14: UP/DOWN
+	// skip its Load Game); the code behind that skip is not identified. The reads are the net session's online byte
+	// (getter 0x60c7e0, +0x64 as 0x60b420 returns it) and the player manager's count (getter 0x612be0, +0x278 as
+	// 0x6110b0 returns it), the pair CSaveLoad itself reads in its save mode (0x4aebb6-0x4aebde).
+	// The same condition adds the campaign-gated options (Danger Room, Healer, Forge) greyed instead of leaving them
+	// out: each peer builds the menu from its own registry and the opener's input picks an index, so every peer
+	// must list the same options in the same places even if a joiner's campaign bits differ from the host's.
 	constexpr DWORD net_getter = 0x60c7e0;       // __cdecl: the net session (0xa3e168)
 	constexpr DWORD net_online_offset = 0x64;     // byte: in a network game (0x60b420)
 	constexpr DWORD players_getter = 0x612be0;   // __cdecl: the player manager (0xa53058)
 	constexpr DWORD players_count_offset = 0x278; // int: connected players (0x6110b0)
-	constexpr bool load_disabled(const bool online, const int players) { return online && players > 1; }
-	inline constexpr std::array<limits_rules::guard, 5> online_guards{{
-		{0x4aebb6, "e825dc15008bc8e85ec8150084c07451", "CSaveLoad: net session getter, its +0x64 byte test"},
-		{0x4aebcf, "e80c4016008bc8e8d5241600", "CSaveLoad: player manager getter, its count"},
-		{0x4a6cf0, "68b0d468008d4c24", "0x4a6cf0: the Save add begins (push 'saveloadProcess(4)')"},
+	constexpr bool online_shared(const bool online, const int players) { return online && players > 1; }
+	constexpr bool load_disabled(const bool online, const int players) { return online_shared(online, players); }
+	// An option is listed when the point offers it; greyed when its campaign character is missing and the menu is
+	// shared online, left out when it is missing offline (the first game's rule).
+	enum class listing { omitted, shown, greyed };
+	constexpr listing list_option(const bool enabled, const int services, const option& o, const bool in_campaign, const bool shared)
+	{
+		if (!enabled || (services & o.service) == 0) return listing::omitted;
+		if (needs_campaign(services, o) && !in_campaign) return shared ? listing::greyed : listing::omitted;
+		if (o.service == load && shared) return listing::greyed;
+		return listing::shown;
+	}
+	inline constexpr std::array<limits_rules::guard, 4> net_guards{{
+		{net_getter, "8a0d80e4a300b80100000084c875258b", "the net session's getter (0x60c7e0)"},
 		{0x60b420, "8a4164c3", "0x60b420: the net session's online byte (+0x64)"},
+		{players_getter, "64a1000000008a0db834a5006aff681e", "the player manager's getter (0x612be0)"},
 		{0x6110b0, "8b8178020000c3", "0x6110b0: the player manager's count (+0x278)"},
+	}};
+	inline constexpr std::array<limits_rules::guard, 1> change_team_guards{{
+		{0x4a6cf0, "68b0d468008d4c24", "0x4a6cf0: the Save add begins (push 'saveloadProcess(4)')"},
 	}};
 
 	// The XML1 Xtract skip (xtract_rules.hpp, jmp rel8 at 0x4a6c7a) lands on Change Team (0x2d) or, for a lite point
