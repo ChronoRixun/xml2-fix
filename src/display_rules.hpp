@@ -340,10 +340,96 @@ namespace display_rules
 		return list;
 	}
 
+	// ---- Exclusive fullscreen against the adapter's real mode list --------------------------------
+	//
+	// The engine asks for the registry resolution in its own hard-coded 16-bit R5G6B5 with the
+	// refresh rate it recorded and a multisample type from the FSAA setting. A combination the
+	// adapter doesn't list fails IDirect3D8::CreateDevice with D3DERR_INVALIDCALL; the game then
+	// resets its Resolution/FSAA registry settings and quits. These pick what the adapter can
+	// actually show, changing nothing when the request is already sound.
+
+	// Whether the adapter lists any mode at width x height (in any format).
+	inline bool size_listed(const std::vector<d3d8::display_mode>& adapter_modes, const UINT width, const UINT height)
+	{
+		for (const auto& mode : adapter_modes)
+		{
+			if (mode.width == width && mode.height == height)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// Whether the adapter lists width x height in exactly `format`.
+	inline bool listed_in(const std::vector<d3d8::display_mode>& adapter_modes, const UINT width, const UINT height, const DWORD format)
+	{
+		for (const auto& mode : adapter_modes)
+		{
+			if (mode.width == width && mode.height == height && mode.format == format)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// The refresh rate to request for a mode the adapter lists. The wanted rate when it exists; the
+	// listed rate nearest the desktop's when the wanted rate is missing (0 = the caller left the
+	// choice to Direct3D, whose default is often 60 Hz - a mode switch of its own). Nothing when the
+	// mode isn't listed at all - the caller leaves the request alone (Direct3D decides or refuses).
+	inline std::optional<UINT> pick_refresh(const std::vector<d3d8::display_mode>& adapter_modes, const UINT width, const UINT height, const DWORD format,
+	                                        const UINT wanted, const UINT desktop_refresh)
+	{
+		UINT best = 0;
+		unsigned best_distance = ~0u;
+		bool any = false;
+		for (const auto& mode : adapter_modes)
+		{
+			if (mode.width != width || mode.height != height || mode.format != format || !mode.refresh_rate)
+			{
+				continue;
+			}
+			any = true;
+			if (mode.refresh_rate == wanted)
+			{
+				return wanted;
+			}
+			const unsigned distance = mode.refresh_rate > desktop_refresh ? mode.refresh_rate - desktop_refresh : desktop_refresh - mode.refresh_rate;
+			if (distance < best_distance)
+			{
+				best_distance = distance;
+				best = mode.refresh_rate;
+			}
+		}
+		if (!any)
+		{
+			return std::nullopt;
+		}
+		return best;
+	}
+
+	// The highest FSAA level the adapter offers for `format` fullscreen, no higher than `type`
+	// (the game's levels: off, 2x, 4x, 6x, 8x).
+	inline DWORD clamp_multisample(const DWORD type, const DWORD format, const std::function<bool(DWORD, DWORD)>& fullscreen_multisample_ok)
+	{
+		for (const DWORD candidate : {8u, 6u, 4u, 2u})
+		{
+			if (candidate <= type && fullscreen_multisample_ok(format, candidate))
+			{
+				return candidate;
+			}
+		}
+		return d3d8::multisample_none;
+	}
+
 	// The present parameters to use in place of the engine's. `multisample_ok(format, type)` and
 	// `back_buffer_format_ok(format)` answer whether the adapter supports these for a windowed
-	// device, `presentation_interval_ok(interval)` whether it offers that interval fullscreen.
-	// `notes` receives what changed and why.
+	// device, `fullscreen_back_buffer_format_ok` / `fullscreen_multisample_ok` the same for a
+	// fullscreen one, `presentation_interval_ok(interval)` whether it offers that interval
+	// fullscreen. `adapter_modes` is the adapter's own list (EnumAdapterModes), empty in every mode
+	// but fullscreen, where it leaves the request as the engine's but for the legacy desktop-refresh
+	// adjustment. `notes` receives what changed and why.
 	//
 	// VSync: a fullscreen device syncs through its presentation interval (the engine's default is
 	// IMMEDIATE, i.e. off, when the driver allows it; ONE is on). A windowed Direct3D 8 device
@@ -354,22 +440,75 @@ namespace display_rules
 	// frames paced at the desktop's refresh rate (frame_rate_rules::effective_target), which the
 	// compositor shows without tearing; VSync=0 only undoes an engine-side windowedVSync.
 	inline d3d8::present_parameters rewrite_present(const d3d8::present_parameters& requested, const options& opts, const d3d8::display_mode& desktop,
+	                                                const std::vector<d3d8::display_mode>& adapter_modes,
 	                                                const std::function<bool(DWORD, DWORD)>& multisample_ok,
 	                                                const std::function<bool(DWORD)>& back_buffer_format_ok,
+	                                                const std::function<bool(DWORD)>& fullscreen_back_buffer_format_ok,
+	                                                const std::function<bool(DWORD, DWORD)>& fullscreen_multisample_ok,
 	                                                const std::function<bool(UINT)>& presentation_interval_ok, std::string& notes)
 	{
 		auto pp = requested;
 		notes.clear();
 
-		if (opts.window_mode == mode::fullscreen)
+		if (opts.window_mode == mode::fullscreen && !pp.windowed)
 		{
-			// At the desktop's own resolution, keep its refresh rate too: Direct3D's default is
-			// often 60 Hz, which is a mode switch of its own.
-			if (!pp.windowed && pp.fullscreen_refresh_rate == 0 && desktop.refresh_rate &&
-			    pp.back_buffer_width == desktop.width && pp.back_buffer_height == desktop.height)
+			if (adapter_modes.empty())
 			{
-				pp.fullscreen_refresh_rate = desktop.refresh_rate;
-				notes += "refresh rate: the desktop's; ";
+				// At the desktop's own resolution, keep its refresh rate too: Direct3D's default is
+				// often 60 Hz, which is a mode switch of its own. None of the checks below can run
+				// without the adapter's list; the VSync block under them still applies.
+				if (pp.fullscreen_refresh_rate == 0 && desktop.refresh_rate && pp.back_buffer_width == desktop.width && pp.back_buffer_height == desktop.height)
+				{
+					pp.fullscreen_refresh_rate = desktop.refresh_rate;
+					notes += "refresh rate: the desktop's; ";
+				}
+			}
+			else
+			{
+				// A resolution the adapter has no mode for (a registry setting from another monitor):
+				// the desktop's own mode is certainly listed, so the game starts at least.
+				if (!size_listed(adapter_modes, pp.back_buffer_width, pp.back_buffer_height))
+				{
+					notes += "resolution: " + std::to_string(pp.back_buffer_width) + "x" + std::to_string(pp.back_buffer_height) +
+					         " isn't an adapter mode - the desktop's is used; ";
+					pp.back_buffer_width = desktop.width;
+					pp.back_buffer_height = desktop.height;
+					pp.fullscreen_refresh_rate = 0; // picked again for the desktop mode below
+				}
+
+				// The engine's hard-coded 16-bit R5G6B5 isn't listed at high resolutions and refresh
+				// rates on modern adapters (the desktop runs 32-bit): ask for the desktop's format then.
+				// A mode listed only in the requested format keeps it - the list outranks CheckDeviceType.
+				if ((!listed_in(adapter_modes, pp.back_buffer_width, pp.back_buffer_height, pp.back_buffer_format) ||
+				     !fullscreen_back_buffer_format_ok(pp.back_buffer_format)) &&
+				    listed_in(adapter_modes, pp.back_buffer_width, pp.back_buffer_height, desktop.format) && fullscreen_back_buffer_format_ok(desktop.format))
+				{
+					notes += "back buffer format: " + std::to_string(pp.back_buffer_format) + " isn't listed for this mode - the desktop's is used; ";
+					pp.back_buffer_format = desktop.format;
+				}
+
+				// A refresh rate the adapter doesn't list fails the device; 0 lets Direct3D pick (usually
+				// 60 Hz - a mode switch of its own). Request one the adapter actually has.
+				if (const auto refresh = pick_refresh(adapter_modes, pp.back_buffer_width, pp.back_buffer_height, pp.back_buffer_format, pp.fullscreen_refresh_rate,
+				                                      desktop.refresh_rate);
+				    refresh && *refresh != pp.fullscreen_refresh_rate)
+				{
+					notes += "refresh rate: " + std::string(pp.fullscreen_refresh_rate ? std::to_string(pp.fullscreen_refresh_rate) + " isn't listed here - " : "") +
+					         std::to_string(*refresh) + " is; ";
+					pp.fullscreen_refresh_rate = *refresh;
+				}
+
+				// 8x FSAA the adapter can't do fails the device too: the highest level it does offer.
+				if (pp.multi_sample_type != d3d8::multisample_none)
+				{
+					const DWORD clamped = clamp_multisample(pp.multi_sample_type, pp.back_buffer_format, fullscreen_multisample_ok);
+					if (clamped != pp.multi_sample_type)
+					{
+						notes += "multisampling: " + std::to_string(pp.multi_sample_type) +
+						         " samples aren't supported here - " + std::to_string(clamped) + " is the most; ";
+						pp.multi_sample_type = clamped;
+					}
+				}
 			}
 		}
 		else if (manages_window(opts.window_mode))

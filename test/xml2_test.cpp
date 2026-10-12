@@ -57,6 +57,7 @@
 #include "discord_ipc.hpp"
 #include "discord_rules.hpp"
 #include "display_rules.hpp"
+#include "display_settings_rules.hpp"
 #include "conversations_rules.hpp"
 #include "forced_teams_rules.hpp"
 #include "frame_capture.hpp"
@@ -534,69 +535,167 @@ namespace
 
 		// Present parameters: the engine's exclusive fullscreen ones at the registry resolution.
 		const d3d8::present_parameters stock{1920, 1080, d3d8::format_x8r8g8b8, 1, 4, d3d8::swap_discard, nullptr, FALSE, TRUE, d3d8::format_d24s8, 1, 0, 0x80000000};
+		const std::vector<d3d8::display_mode> no_modes; // no adapter list: fullscreen requests validated only where one is supplied
 		const auto msaa_ok = [](DWORD, DWORD) { return true; };
 		const auto msaa_no = [](DWORD, DWORD) { return false; };
 		const auto format_ok = [](DWORD) { return true; };
 		const auto interval_ok = [](UINT) { return true; };
 		std::string notes;
 
-		auto pp = rewrite_present(stock, borderless, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		auto pp = rewrite_present(stock, borderless, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.windowed == TRUE && pp.fullscreen_refresh_rate == 0 && pp.fullscreen_presentation_interval == 0);
 		CHECK(pp.back_buffer_width == 1920 && pp.back_buffer_height == 1080 && pp.multi_sample_type == 4 && pp.swap_effect == d3d8::swap_discard);
-		pp = rewrite_present(stock, windowed, desktop_mode, msaa_no, format_ok, interval_ok, notes);
+		pp = rewrite_present(stock, windowed, desktop_mode, no_modes, msaa_no, format_ok, format_ok, msaa_no, interval_ok, notes);
 		CHECK(pp.windowed == TRUE && pp.multi_sample_type == d3d8::multisample_none && !notes.empty());
 		auto copy_vsync = stock;
 		copy_vsync.swap_effect = d3d8::swap_copy_vsync;
 		copy_vsync.back_buffer_count = 2;
-		pp = rewrite_present(copy_vsync, borderless, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(copy_vsync, borderless, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.multi_sample_type == d3d8::multisample_none && pp.swap_effect == d3d8::swap_copy_vsync && pp.back_buffer_count == 1);
-		pp = rewrite_present(stock, borderless, desktop_mode, msaa_ok, [](DWORD) { return false; }, interval_ok, notes);
+		pp = rewrite_present(stock, borderless, desktop_mode, no_modes, msaa_ok, [](DWORD) { return false; }, [](DWORD) { return false; }, msaa_ok, interval_ok, notes);
 		CHECK(pp.back_buffer_format == d3d8::format_x8r8g8b8); // already the desktop's: not checked, not changed
 		auto sixteen_bit = stock;
 		sixteen_bit.back_buffer_format = 23;
-		pp = rewrite_present(sixteen_bit, borderless, desktop_mode, msaa_ok, [](DWORD) { return false; }, interval_ok, notes);
+		pp = rewrite_present(sixteen_bit, borderless, desktop_mode, no_modes, msaa_ok, [](DWORD) { return false; }, [](DWORD) { return false; }, msaa_ok, interval_ok, notes);
 		CHECK(pp.back_buffer_format == d3d8::format_x8r8g8b8);
-		pp = rewrite_present(stock, fullscreen, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(stock, fullscreen, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.windowed == FALSE && pp.fullscreen_refresh_rate == 0 && pp.multi_sample_type == 4); // not the desktop size: untouched
 		auto native = stock;
 		native.back_buffer_width = 2560;
 		native.back_buffer_height = 1440;
-		pp = rewrite_present(native, fullscreen, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(native, fullscreen, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.windowed == FALSE && pp.fullscreen_refresh_rate == 180);
 		options stock_options;
-		pp = rewrite_present(stock, stock_options, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(stock, stock_options, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(std::memcmp(&pp, &stock, sizeof(pp)) == 0);
+
+		// Exclusive fullscreen against the adapter's mode list (the maintainer's PC: 2560x1440 @ 180 Hz,
+		// the desktop 32-bit; the engine asks for R5G6B5 @ 180, which the adapter doesn't list at that size).
+		{
+			// An invented high-refresh adapter: 32-bit everywhere, 16-bit only at low sizes and 60 Hz.
+			std::vector<d3d8::display_mode> fhd_modes;
+			for (const UINT w : {640u, 800u, 1024u})
+				for (const UINT h : {480u, 600u, 768u})
+					fhd_modes.push_back({w, h, 60, d3d8::format_r5g6b5});
+			for (const UINT w : {640u, 800u, 1024u, 1280u, 1600u, 1920u, 2560u})
+				for (const UINT h : {480u, 600u, 768u, 1024u, 900u, 1080u, 1440u})
+				{
+					fhd_modes.push_back({w, h, 60, d3d8::format_x8r8g8b8});
+					fhd_modes.push_back({w, h, 144, d3d8::format_x8r8g8b8});
+				}
+			fhd_modes.push_back({2560, 1440, 180, d3d8::format_x8r8g8b8}); // the desktop mode
+
+			CHECK(listed_in(fhd_modes, 2560, 1440, d3d8::format_x8r8g8b8) && !listed_in(adapter, 2560, 1440, d3d8::format_r5g6b5));
+			CHECK(size_listed(fhd_modes, 1920, 1080) && !size_listed(adapter, 3840, 2160));
+			CHECK(pick_refresh(fhd_modes, 2560, 1440, d3d8::format_x8r8g8b8, 180, 180) == 180u);
+			CHECK(pick_refresh(fhd_modes, 1920, 1080, d3d8::format_x8r8g8b8, 180, 180) == 144u); // nearest the desktop's
+			CHECK(pick_refresh(fhd_modes, 1920, 1080, d3d8::format_x8r8g8b8, 0, 180) == 144u);   // the nearest the adapter lists, not 60
+			CHECK(!pick_refresh(fhd_modes, 9999, 9999, d3d8::format_x8r8g8b8, 60, 180).has_value());
+
+			// The game's request at the desktop size: 16-bit @ the desktop refresh -> 32-bit, refresh kept.
+			auto ask = native;
+			ask.back_buffer_format = d3d8::format_r5g6b5;
+			pp = rewrite_present(ask, fullscreen, desktop_mode, fhd_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
+			CHECK(pp.back_buffer_format == d3d8::format_x8r8g8b8 && pp.fullscreen_refresh_rate == 180);
+			CHECK(pp.back_buffer_width == 2560 && pp.back_buffer_height == 1440 && pp.multi_sample_type == 4);
+			CHECK(notes.find("back buffer format") != std::string::npos);
+
+			// A mode the adapter has only in 16-bit keeps the requested format (the list outranks CheckDeviceType).
+			auto low = stock;
+			low.back_buffer_width = 640;
+			low.back_buffer_height = 480;
+			low.back_buffer_format = d3d8::format_r5g6b5;
+			low.fullscreen_refresh_rate = 60;
+			pp = rewrite_present(low, fullscreen, desktop_mode, fhd_modes, msaa_ok, format_ok, [](DWORD) { return false; }, msaa_no, interval_ok, notes);
+			CHECK(pp.back_buffer_format == d3d8::format_r5g6b5 && pp.fullscreen_refresh_rate == 60 && pp.multi_sample_type == d3d8::multisample_none);
+
+			// A resolution the adapter lacks entirely -> the desktop mode.
+			auto absent = stock;
+			absent.back_buffer_width = 3840;
+			absent.back_buffer_height = 2160;
+			pp = rewrite_present(absent, fullscreen, desktop_mode, fhd_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
+			CHECK(pp.back_buffer_width == 2560 && pp.back_buffer_height == 1440 && pp.fullscreen_refresh_rate == 180 &&
+			      pp.back_buffer_format == d3d8::format_x8r8g8b8);
+
+			// 8x FSAA unsupported at the format -> the highest level the adapter offers; nothing at 2x -> off.
+			const auto fsaa_up_to_4 = [](DWORD, DWORD type) { return type <= 4; };
+			auto eight = ask;
+			eight.multi_sample_type = 8;
+			pp = rewrite_present(eight, fullscreen, desktop_mode, fhd_modes, msaa_ok, format_ok, format_ok, fsaa_up_to_4, interval_ok, notes);
+			CHECK(pp.back_buffer_format == d3d8::format_x8r8g8b8 && pp.multi_sample_type == 4);
+			CHECK(notes.find("is the most") != std::string::npos);
+			pp = rewrite_present(eight, fullscreen, desktop_mode, fhd_modes, msaa_ok, format_ok, format_ok, msaa_no, interval_ok, notes);
+			CHECK(pp.multi_sample_type == d3d8::multisample_none);
+
+			// A sound request changes nothing but the refresh Direct3D would otherwise under-pick (0 ->
+			// the listed rate nearest the desktop's), and the VSync block below still applies.
+			pp = rewrite_present(native, fullscreen, desktop_mode, fhd_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
+			CHECK(pp.back_buffer_format == d3d8::format_x8r8g8b8 && pp.fullscreen_refresh_rate == 180 && pp.multi_sample_type == 4);
+			CHECK(notes.find("refresh rate") != std::string::npos);
+		}
+
+		// The display-settings patches: the boot FSAA switch and the failure-path wipe. The guards
+		// carry the retail bytes (checked against the executable only in the installed game); here the
+		// built writes are decoded and verified for shape.
+		{
+			using namespace display_settings_rules;
+			CHECK(std::size(guards) == 10);
+			const auto table = 0x69000000u, stub = table + 5 * 4;
+			const auto table_bytes = fsaa_table_bytes(stub);
+			CHECK(table_bytes.size() == 20);
+			CHECK(std::memcmp(table_bytes.data() + 16, &stub, 4) == 0);
+			const auto case_bytes = fsaa_case_8x_bytes(support_byte_8x, engine_param_cell, multi_sample_type_name, fsaa_switch_join, stub);
+			CHECK(case_bytes.size() == 33);
+			CHECK(case_bytes[0] == 0xa0 && case_bytes[1] == 0x87 && case_bytes[2] == 0x9e && case_bytes[3] == 0xa0 && case_bytes[4] == 0x00);
+			CHECK(case_bytes[7] == 0x75 && case_bytes[8] == 0x03 && case_bytes[9] == 0x6a && case_bytes[10] == 0x06); // jnz +3 / push 6
+			CHECK(case_bytes[13] == 0x6a && case_bytes[14] == 0x08);                                                 // push 8
+			const auto rel = *reinterpret_cast<const std::int32_t*>(case_bytes.data() + 29);
+			CHECK(static_cast<std::uint32_t>(stub + 33 + rel) == fsaa_switch_join); // the jmp lands on the join
+			const auto fsaa = fsaa_switch_writes(table);
+			CHECK(fsaa.size() == 2 && fsaa[0].address == fsaa_switch_cmp && fsaa[0].after == std::vector<std::uint8_t>({0x83, 0xf8, 0x04}));
+			CHECK(fsaa[1].address == fsaa_table_operand && std::memcmp(fsaa[1].after.data(), &table, 4) == 0);
+			const auto log_stub = 0x61000000u;
+			const auto wipe = wipe_guard_writes(log_stub);
+			CHECK(wipe.size() == 4);
+			CHECK(wipe[0].address == wipe_resolution_call_a && wipe[0].before == std::vector<std::uint8_t>({0xe8, 0x95, 0x0f, 0x02, 0x00}));
+			CHECK(wipe[0].after[0] == 0xe8);
+			const auto call_rel = *reinterpret_cast<const std::int32_t*>(wipe[0].after.data() + 1);
+			CHECK(static_cast<std::uint32_t>(wipe[0].address + 5 + call_rel) == log_stub); // rerouted to the log stub
+			CHECK(wipe[1].address == wipe_settings_call_a && wipe[1].after == std::vector<std::uint8_t>(5, 0x90)); // the settings save is NOPed
+			CHECK(wipe[2].address == wipe_resolution_call_b && wipe[3].address == wipe_settings_call_b);
+			CHECK(wipe[3].after == std::vector<std::uint8_t>(5, 0x90));
+		}
 
 		// VSync. Fullscreen (the game's own mode and Mode=fullscreen): the presentation interval,
 		// when the adapter offers it. Windowed: the COPY_VSYNC swap effect, one back buffer, no
 		// multisampling; off = the discard swap effect.
 		options vsync_on;
 		vsync_on.vsync = true;
-		pp = rewrite_present(stock, vsync_on, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(stock, vsync_on, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.windowed == FALSE && pp.fullscreen_presentation_interval == d3d8::present_interval_one && pp.multi_sample_type == 4);
 		CHECK(notes.find("vsync: on") != std::string::npos);
 		options vsync_off;
 		vsync_off.vsync = false;
 		auto synced = stock;
 		synced.fullscreen_presentation_interval = d3d8::present_interval_one; // alchemy.ini presentationInterval=1
-		pp = rewrite_present(synced, vsync_off, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(synced, vsync_off, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.fullscreen_presentation_interval == d3d8::present_interval_immediate);
-		pp = rewrite_present(stock, vsync_off, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(stock, vsync_off, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(std::memcmp(&pp, &stock, sizeof(pp)) == 0 && notes.empty()); // already immediate
-		pp = rewrite_present(stock, vsync_on, desktop_mode, msaa_ok, format_ok, [](UINT) { return false; }, notes);
+		pp = rewrite_present(stock, vsync_on, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, [](UINT) { return false; }, notes);
 		CHECK(pp.fullscreen_presentation_interval == 0x80000000 && notes.find("doesn't offer") != std::string::npos);
 		vsync_on.window_mode = mode::fullscreen;
-		pp = rewrite_present(native, vsync_on, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(native, vsync_on, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.fullscreen_refresh_rate == 180 && pp.fullscreen_presentation_interval == d3d8::present_interval_one);
 		// In a window, on = paced at the refresh rate by the limiter (never copy_vsync), the device unchanged.
 		vsync_on.window_mode = mode::borderless;
-		pp = rewrite_present(stock, vsync_on, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(stock, vsync_on, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.windowed == TRUE && pp.swap_effect == d3d8::swap_discard && pp.multi_sample_type == 4 && pp.fullscreen_presentation_interval == d3d8::present_interval_default);
 		CHECK(notes.find("paced at the desktop's refresh rate") != std::string::npos);
 		vsync_off.window_mode = mode::windowed;
-		pp = rewrite_present(copy_vsync, vsync_off, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(copy_vsync, vsync_off, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.swap_effect == d3d8::swap_discard && pp.multi_sample_type == 4); // the engine's own windowedVSync undone
-		pp = rewrite_present(stock, vsync_off, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(stock, vsync_off, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.swap_effect == d3d8::swap_discard && notes.empty());
 
 		// Window placement: the engine asks for a maximised popup at 0,0 (style 0x85000000).
