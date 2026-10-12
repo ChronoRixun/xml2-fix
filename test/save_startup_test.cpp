@@ -20,6 +20,7 @@ struct notice_context
 {
  DWORD pid=0;
  bool seen=false, informative=false;
+ bool capacity_seen=false; // the non-fatal entity-capacity fallback notice (case -14 only)
 };
 BOOL CALLBACK read_notice_text(HWND window, LPARAM parameter)
 {
@@ -34,6 +35,15 @@ BOOL CALLBACK close_owned_notice(HWND window, LPARAM parameter)
  auto& context=*reinterpret_cast<notice_context*>(parameter);
  DWORD pid=0;GetWindowThreadProcessId(window,&pid);
  char title[256]{};GetWindowTextA(window,title,sizeof title);
+ if(pid==context.pid && std::strcmp(title,"XML2 Fix: entity capacity unavailable")==0)
+ {
+  context.capacity_seen=true;
+  const auto button=GetDlgItem(window,IDOK);DWORD_PTR result=0;
+  SendMessageTimeoutW(button,BM_CLICK,0,0,SMTO_ABORTIFHUNG,250,&result);
+  PostMessageW(window,WM_COMMAND,MAKEWPARAM(IDOK,BN_CLICKED),reinterpret_cast<LPARAM>(button));
+  PostMessageW(window,WM_CLOSE,0,0);
+  return TRUE;
+ }
  if(pid==context.pid && std::strcmp(title,"XML2 Fix cannot start")==0)
  {
   context.seen=true;
@@ -134,8 +144,9 @@ int child(int mutation)
    const auto from=text.rfind("XML2 Fix ");const auto tail=from==std::string::npos?text:text.substr(from);
    const bool fell_back=tail.find("EntityCapacity falls back to stock capacities")!=std::string::npos;
    const bool lc=tail.find("save format: LC")!=std::string::npos && tail.find("startup transaction: committed")!=std::string::npos;
-   if(!fell_back || !lc){std::printf("FAIL case -14: capacity fallback %d, LC seam committed %d\n",fell_back,lc);return 1;}
-   std::printf("PASS case -14: capacity-only mismatch falls back to stock; the LC seam installs in the committed transaction\n");
+   const bool told=tail.find("startup: entity capacity notice closed")!=std::string::npos;
+   if(!fell_back || !lc || !told){std::printf("FAIL case -14: capacity fallback %d, LC seam committed %d, notice %d\n",fell_back,lc,told);return 1;}
+   std::printf("PASS case -14: capacity-only mismatch falls back to stock with its notice; the LC seam installs in the committed transaction\n");
    return 0;
   }
   std::printf("PASS case %d: valid or disabled LC startup allowed\n",mutation);
@@ -179,6 +190,8 @@ int main(int argc,char** argv)
   if(must_refuse && (!notice.seen || !notice.informative))
   {exit=1;std::printf("FAIL case %d: missing clear LC refusal notice (seen=%d informative=%d)\n",i,notice.seen,notice.informative);}
   if(!must_refuse && notice.seen){exit=1;std::printf("FAIL case %d: unexpected refusal notice\n",i);}
+  // A capacity-only fallback starts the game and tells the player once; no other case shows that notice.
+  if((i==-14)!=notice.capacity_seen){exit=1;std::printf("FAIL case %d: entity capacity fallback notice %s\n",i,notice.capacity_seen?"shown unexpectedly":"missing");}
   CloseHandle(process.hThread);CloseHandle(process.hProcess);if(exit!=0)++failed;
  }
  SetThreadDesktop(original_desktop);

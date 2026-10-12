@@ -29,6 +29,10 @@ namespace entity_capacity
 	void after_commit(bool committed, bool rollback_failed);
 	bool startup_allowed();
 	const std::string& startup_error();
+	// When the raise was requested but fell back to stock without refusing startup (a capacity-only mismatch, or a
+	// startup transaction that refused cleanly), the player's one notice about it: what failed and what that means.
+	// Empty otherwise (not requested, installed, or startup refused - that has its own notice).
+	std::string fallback_notice();
 
 	// The installed layout for every consumer (test state, observers, caches). Stock until published.
 	const entity_capacity_layout::descriptor& installed();

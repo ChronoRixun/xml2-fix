@@ -315,6 +315,13 @@ BOOL WINAPI DllMain(HINSTANCE instance, const DWORD reason, LPVOID)
 			logger::write("startup: refusal notice closed; DLL initialization rejected");
 			return FALSE;
 		}
+		// A capacity-only fallback starts the game (stock capacities, online closed): the player is told once, here.
+		if (const auto notice = entity_capacity::fallback_notice(); !notice.empty())
+		{
+			logger::write("startup: entity capacity notice: requested raise not installed; continuing with stock capacities");
+			MessageBoxA(nullptr, notice.c_str(), "XML2 Fix: entity capacity unavailable", MB_OK | MB_ICONWARNING);
+			logger::write("startup: entity capacity notice closed");
+		}
 	}
 	return TRUE;
 }

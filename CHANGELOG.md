@@ -20,6 +20,9 @@
   physics frames, native save manager), the reviewed ledger of operand edits and relocations, the native
   save layout E10A2, generation retirement, refusal and reset-time telemetry, and the test pipe's
   `entity status` / `entity retire <slot>`.
+- A requested `[Limits] EntityCapacity=1` that falls back to stock (a capacity-only mismatch) now tells the player
+  once at startup - what failed and what it means (stock limits, raised saves not loadable, online closed) -
+  instead of only logging it; the game then starts as before.
 - One startup transaction (`patch_transaction`) now owns every code write of the shared gameplay
   agreement, the LC save seam, `[Limits] MoveTriggers` and the entity-capacity install: expectations are
   unioned and checked once, pages acquired once, writes verified by readback and rolled back on any

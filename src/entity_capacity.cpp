@@ -424,6 +424,15 @@ namespace entity_capacity
 
 	bool startup_allowed() { return !fatal; }
 	const std::string& startup_error() { return failure; }
+
+	std::string fallback_notice()
+	{
+		if (!requested || install_published || fatal) return {};
+		return "The raised entity capacity ([Limits] EntityCapacity=1) could not be installed:\n" + failure +
+		       "\n\nThe game continues with the stock entity limits (224 props, projectiles and triggers in a zone): crowded "
+		       "rooms can lose objects, saves made with the raised capacity cannot be loaded, and online play is unavailable "
+		       "in this session.\n\nUse the retail XMen2.exe this build was made for; xml2-fix.log has the details.";
+	}
 	const descriptor& installed() { return published; }
 
 	std::string status()

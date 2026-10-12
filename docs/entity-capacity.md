@@ -63,7 +63,9 @@ the requested size and the three occupancies, and allocation attempts during a W
 ## Failure dispositions
 
 - Requested but refused before preparation (no LC, owners already built, not the retail executable):
-  stock capacities, online admission poisoned (the layout entry is registered unverified).
+  stock capacities, online admission poisoned (the layout entry is registered unverified). The same holds for
+  a capacity-only guard mismatch found at preparation; in both cases the game starts and the player is told once
+  ("XML2 Fix: entity capacity unavailable": the reason, stock limits, raised saves not loadable, online closed).
 - A guard, conflict or protection failure in the transaction: nothing written, stock capacities, online
   poisoned; the LC seam (same transaction) is not installed, so the game refuses to start with the usual
   LC notice.
