@@ -52,6 +52,7 @@
 #include <Xinput.h>
 
 #include "break_rule_rules.hpp"
+#include "x1_leader_rules.hpp"
 #include "personal_item_text_rules.hpp"
 #include "save_format_rules.hpp"
 #include "discord_ipc.hpp"
@@ -9601,6 +9602,69 @@ namespace
 		}
 	}
 
+	// [Game] X1Leader (x1_leader_rules.hpp): the sidecar's parse and matching; the decision (native
+	// flag, then the sidecar by stats name); the guards on their own; the bridge and call encodings.
+	void check_x1_leader_rules()
+	{
+		using namespace x1_leader_rules;
+		std::printf("[Game] X1Leader (X-Men Legends 1's stats `leader` bit)\n");
+
+		const auto list = leader_names::parse(
+		    "# a comment\r\n"
+		    "; another comment\r\n"
+		    "  x1_sgt_red  \r\n"
+		    "\tX1_CPL_BLUE\n"
+		    "x1_pvt_green\r\n");
+		CHECK(list.size() == 3);
+		CHECK(list.contains("x1_sgt_red") && list.contains("X1_SGT_RED") && list.contains("x1_cpl_blue") &&
+		      list.contains("X1_PVT_GREEN"));
+		CHECK(!list.contains("") && !list.contains("x1_sgt_re") && !list.contains("x1_sgt_red_x") &&
+		      !list.contains("# a comment") && !list.contains(nullptr));
+		CHECK(leader_names::parse("").size() == 0 && leader_names::parse("# only a comment\n\n").size() == 0);
+		const auto dup = leader_names::parse("x1_sgt_red\nX1_SGT_RED\n");
+		CHECK(dup.size() == 1 && dup.contains("x1_sgt_red"));
+
+		// The decision: the native flag decides alone; otherwise the stats name (+0x35c -> +0x150) must
+		// be in the sidecar; a missing actor or stats pointer is not a leader.
+		alignas(8) std::uint8_t actor[0x400]{};
+		alignas(8) std::uint8_t stats[0x200]{};
+		std::strcpy(reinterpret_cast<char*>(stats + stats_name), "x1_sgt_red");
+		*reinterpret_cast<void**>(actor + actor_stats) = stats;
+		CHECK(decide(actor, list));                        // unflagged, but the sidecar name matches
+		*reinterpret_cast<void**>(actor + actor_stats) = nullptr;
+		CHECK(!decide(actor, list));                       // no stats: never a sidecar leader
+		*reinterpret_cast<void**>(actor + actor_stats) = stats;
+		actor[actor_flags] = native_leader_bit;
+		CHECK(decide(actor, list));                        // the native x3 flag alone
+		actor[actor_flags] = 0;
+		std::strcpy(reinterpret_cast<char*>(stats + stats_name), "x1 nobody");
+		CHECK(!decide(actor, list));                       // unflagged and unlisted
+		std::strcpy(reinterpret_cast<char*>(stats + stats_name), "x1_sgt_red");
+		CHECK(!decide(nullptr, list));                     // no actor at all
+
+		// The guards cover the two retail `test byte ptr [reg+0x3db], 8` sites.
+		CHECK(guards[0].va == 0x43597b && guards[1].va == 0x46e4ed);
+		std::vector<std::uint8_t> image(0x500000, 0x90);
+		CHECK(!limits_rules::matches(image.data() + guards[0].va, guards[0].hex)); // zero-filled: no match
+		auto* pain = image.data() + pain_site_va;
+		const std::array<std::uint8_t, 7> native_pain{0xf6, 0x87, 0xdb, 0x03, 0x00, 0x00, 0x08};
+		std::memcpy(pain, native_pain.data(), native_pain.size());
+		CHECK(limits_rules::matches(pain, guards[0].hex) && !limits_rules::matches(pain, guards[1].hex));
+
+		// The encodings: seven overwritten bytes become call + 2 nops; the bridge ends in the resume jmp.
+		constexpr auto callback = 0x11111111u;
+		const auto call = call_bridge(pain_site_va, 0x22222222u);
+		CHECK(call.size() == 7 && call[0] == 0xe8 && call[5] == 0x90 && call[6] == 0x90);
+		std::uint32_t rel = 0;
+		std::memcpy(&rel, call.data() + 1, 4);
+		CHECK(rel == 0x22222222u - (pain_site_va + 5));
+		const auto b = bridge(0x57, callback);
+		CHECK(b.size() == 5 + 2 + 3 + 2 + 1 + 5 && b[0] == 0x60 && b[1] == 0x57 && b[2] == 0xb8);
+		std::memcpy(&rel, b.data() + 3, 4);
+		CHECK(rel == callback);
+		CHECK(b[b.size() - 5] == 0xe9); // the resume jmp's rel32 is filled by the installer
+	}
+
 	// [Game] BreakRule (break_rule_rules.hpp): the value's rules; XML1's level sum and the structure pairing; the
 	// decision; what the fix remembers; the guards on their own; both bridges run for real; then, when a copy of
 	// XMen2.exe is at hand, every guard against it, the three writes on that copy and the game's own level function
@@ -10420,6 +10484,12 @@ int main(const int argc, char** argv)
 		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
 		return failures ? 1 : 0;
 	}
+	if (argc > 1 && std::strcmp(argv[1], "--x1-leader-rules") == 0)
+	{
+		check_x1_leader_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--move-trigger-rules") == 0)
 	{
 		check_move_trigger_rules();
@@ -10531,6 +10601,7 @@ int main(const int argc, char** argv)
 	check_ini_rules();
 	check_xp_curve_rules();
 	check_break_rule_rules();
+	check_x1_leader_rules();
 	check_save_format_rules();
 	check_balance_rules();
 	check_melee_weapon_rules();
