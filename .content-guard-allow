@@ -45,3 +45,4 @@ DISASM  test/save_capture_bridge_test.cpp  # Authored inline assembly that enter
 DISASM  src/entity_transfer.cpp  # Authored C++ inline assembly bridge (the acknowledgement call sequence, described in prose above it); not a game disassembly listing.
 DISASM  src/mold_beam.cpp  # Authored register-preserving x86 callback bridge; its sole replay is a short byte-guarded stack-address instruction. No game listing or decompiled body.
 DISASM  src/mold_controller.cpp  # Authored register-preserving dispatcher bridge; replays only two short guarded state-selection instructions, with no copied game listing or decompiled body.
+DISASM  test/entity_transfer_test.cpp  # Authored inline assembly that calls a receiver with ESP measured around it; not game disassembly.

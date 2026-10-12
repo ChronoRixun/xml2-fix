@@ -19,9 +19,11 @@ namespace entity_transfer
 
 	// The retail acknowledgement 0x60872c..0x60875a on a 0x14-byte local header: the header is zeroed by 0x615810 with
 	// ECX = the header (a thiscall that clears bytes 0..0x11 except 0x10); ECX then becomes the event's sender (+0x10);
-	// the two arguments of 0x610f30 (the header, flags 0) are pushed first; opcode 0x4a goes to +0x10 and 1 to +0xe;
-	// 0x55d7e0 returns the sender's endpoint (+4, no stack arguments); 0x612be0 maps it to the node (one argument,
-	// callee cleanup); 0x610f30 sends on that node and cleans both pushed arguments.
+	// two of the three arguments of 0x610f30 (flags 0, then the header) are pushed first; opcode 0x4a goes to +0x10 and
+	// 1 to +0xe; 0x55d7e0 returns the sender's endpoint (+4, no stack arguments) and that endpoint is pushed as the
+	// send's FIRST argument; 0x612be0 is the cdecl, argument-free getter of the session static 0xa53058 (it leaves the
+	// pushed endpoint alone); 0x610f30 is the session's thiscall send(endpoint, header, flags) and cleans all three
+	// (ret 0xc). The sequence below is byte-for-byte that order, so the stack balances exactly as in retail.
 	__declspec(naked) void send_ack(std::uint8_t* /*event*/)
 	{
 		__asm
