@@ -15,6 +15,7 @@
 #include <array>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -378,6 +379,7 @@ namespace test_input_rules
 			ping,
 			save, // save_format's commands: `text` is the rest of the line
 			entity, // entity_capacity's commands (status, retire N): `text` is the rest of the line
+			mouse, // `mouse X Y [move|down|up|click]`: `pointer` says which, at client point x,y
 			unknown
 		};
 
@@ -387,6 +389,8 @@ namespace test_input_rules
 		std::string path;  // screenshot
 		std::string text;  // script, console: the line for the game's console queue
 		pad_input_rules::pad_command pad;
+		enum class pointer_action { move, down, up, click } pointer = pointer_action::move; // mouse
+		int x = 0, y = 0;  // mouse: a point in the window's client area, in its pixels
 		std::string error; // unknown: what was wrong
 	};
 
@@ -438,6 +442,34 @@ namespace test_input_rules
 			result.text = std::string(rest);
 			return result;
 		}
+		// The test mouse: a client-area point of the game's window, sent to its window procedure on its
+		// thread (display::test_pointer) - never the real cursor. click = move, left down, left up.
+		if (verb == "MOUSE")
+		{
+			const auto words = split(rest);
+			const auto number = [](const std::string_view w, int& out)
+			{
+				if (w.empty() || w.size() > 6) return false;
+				std::size_t i = w[0] == '-' ? 1 : 0;
+				if (i == w.size()) return false;
+				for (std::size_t j = i; j < w.size(); ++j)
+					if (!std::isdigit(static_cast<unsigned char>(w[j]))) return false;
+				out = std::atoi(std::string(w).c_str());
+				return out >= -32768 && out <= 32767;
+			};
+			if (words.size() < 2 || words.size() > 3 || !number(words[0], result.x) || !number(words[1], result.y))
+			{
+				return fail("mouse needs a client point and an action: mouse X Y [move|down|up|click]");
+			}
+			const auto action = words.size() == 3 ? upper(words[2]) : std::string("MOVE");
+			if (action == "MOVE") result.pointer = command::pointer_action::move;
+			else if (action == "DOWN") result.pointer = command::pointer_action::down;
+			else if (action == "UP") result.pointer = command::pointer_action::up;
+			else if (action == "CLICK") result.pointer = command::pointer_action::click;
+			else return fail("mouse action '" + std::string(words[2]) + "' isn't move, down, up or click");
+			result.what = command::kind::mouse;
+			return result;
+		}
 		if (verb == "PING") result.what = command::kind::ping;
 		else if (verb == "STATUS") result.what = command::kind::status;
 		else if (verb == "RELEASE") result.what = command::kind::release;
@@ -450,7 +482,7 @@ namespace test_input_rules
 		else if (verb == "CONSOLE") result.what = command::kind::console;
 		else if (verb == "WM") return fail("wm is gone: the Advanced Options panel reads the DirectInput keyboard like every other screen - use tap (tap DOWN, tap ENTER, tap LEFT)");
 		else return fail("unknown command '" + std::string(text.substr(0, space)) +
-		                 "' (down, up, tap, hold, release, screenshot, script, console, pad, padhold, paddown, padup, padrelease, stick, trigger, status, ping, save, entity)");
+		                 "' (down, up, tap, hold, release, screenshot, script, console, mouse, pad, padhold, paddown, padup, padrelease, stick, trigger, status, ping, save, entity)");
 
 		if (result.what == command::kind::script || result.what == command::kind::console)
 		{

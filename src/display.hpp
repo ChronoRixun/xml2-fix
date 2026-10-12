@@ -38,6 +38,8 @@
 
 #include "display_rules.hpp"
 
+#include <string>
+
 namespace display
 {
 	// Reads [Display] from xml2-fix.ini and installs the hooks it calls for. Without a Mode,
@@ -77,4 +79,12 @@ namespace display
 	// (Independently of this, in borderless/windowed modes the game never sees, moves or clips the
 	// cursor, nor gets mouse messages, while another window has the focus.)
 	void show_without_focus(const char* why);
+
+	// The test pipe's mouse ([Test] InputPipe=1; test_input.cpp's "mouse" command). Enable before
+	// install. test_pointer sends `message` (WM_MOUSEMOVE, a button message) at client point x,y to
+	// the game's window on its own thread, past the focus filter and through the same conversion to
+	// the engine's screen space as a real one, and replies "ok client WxH screen WxH point x,y -> X,Y"
+	// (X,Y: the point the engine got) or "error ...". The real cursor is never read or moved.
+	void enable_test_pointer();
+	std::string test_pointer(unsigned message, int x, int y);
 }

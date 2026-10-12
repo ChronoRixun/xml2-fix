@@ -93,6 +93,128 @@ namespace display_rules
 		return message >= 0x200 && message <= 0x20e;
 	}
 
+	// ---- The cursor in the engine's screen space ------------------------------------------------
+	//
+	// The engine turns a mouse message's client-area point into menu coordinates against its own
+	// idea of the screen size, never the window's: XMen2.exe 0x5f9eb0 (from the window callback
+	// 0x5faa20) computes x = left + px * width / [0xa09ffc] (0x5fa041..0x5fa057) and
+	// y = height - py * height / [0xa0a000] (0x5fa05e..0x5fa074), where [0xa09ffc] / [0xa0a000] are
+	// the resolution it was set up with (0x5fad54 / 0x5fad5c, from Settings\Display\Resolution) and
+	// width x height its 2D view (512 x 384 at 4:3, 682.7 x 384 at 16:9: the camera 0xa0a138's
+	// vt+0x20 / +0x28, left = -(width - 512) / 2 its vt+0x2c). The Advanced Options panel (0x621d07)
+	// and the 3D cursor (0x5f5cbf, GetCursorPos + ScreenToClient) scale by the same two numbers.
+	// Direct3D stretches the back buffer over whatever client area the window has, so when the client
+	// area isn't that size - a window Windows shrank on a DPI change (1280x720 dragged from a 125%
+	// monitor to a 100% one becomes 1023x575), a borderless window over a monitor bigger than a forced
+	// Width x Height - every hover lands on the wrong item, more so towards the bottom and right, and
+	// the last rows can't be reached at all. The fix converts the point to the engine's screen pixel
+	// it is shown at before the engine sees it.
+
+	// Mouse messages whose lParam is a client-area point. WM_MOUSEWHEEL / WM_MOUSEHWHEEL carry a
+	// screen point (the engine converts that with ScreenToClient, hooked separately).
+	inline bool has_client_point(const UINT message)
+	{
+		return is_pointer_message(message) && message != 0x20a && message != 0x20e;
+	}
+
+	// One coordinate from a client area `client` pixels long to a screen `screen` pixels long:
+	// pixel centre to pixel centre, floor((2v + 1) * screen / (2 * client)), so the client's first
+	// and last pixels are the screen's first and last, and points outside the window (a drag with
+	// the mouse captured) scale on the same line. Equal sizes, or a size unknown (0), leave it.
+	inline LONG scale_coordinate(const LONG value, const UINT client, const UINT screen)
+	{
+		if (!client || !screen || client == screen)
+		{
+			return value;
+		}
+		const long long numerator = (2LL * value + 1) * screen;
+		const long long denominator = 2LL * client;
+		long long result = numerator / denominator;
+		if (numerator % denominator != 0 && numerator < 0)
+		{
+			--result; // floor, not truncation, for points left of / above the window
+		}
+		return static_cast<LONG>(result);
+	}
+
+	inline POINT client_to_screen_space(const POINT point, const size& client, const size& screen)
+	{
+		return {scale_coordinate(point.x, client.width, screen.width), scale_coordinate(point.y, client.height, screen.height)};
+	}
+
+	// A mouse message's lParam (two signed 16-bit coordinates) converted the same way; the result
+	// stays within 16 bits.
+	inline LPARAM scale_point_lparam(const LPARAM lparam, const size& client, const size& screen)
+	{
+		const POINT in{static_cast<short>(LOWORD(lparam)), static_cast<short>(HIWORD(lparam))};
+		const POINT out = client_to_screen_space(in, client, screen);
+		const auto clamp16 = [](const LONG v) { return static_cast<WORD>(static_cast<short>(std::clamp<LONG>(v, -32768, 32767))); };
+		return static_cast<LPARAM>(MAKELONG(clamp16(out.x), clamp16(out.y)));
+	}
+
+	// ---- The windowed window's size across DPI changes --------------------------------------------
+	//
+	// Dragged to a monitor of another scale, a per-monitor-aware window is resized by Windows to keep
+	// its apparent size (1280x720 from 125% to 100% became 1023x575); the game's window keeps its client
+	// area instead, in pixels: the size it had before the change, whatever set it - the forced Width x
+	// Height, the engine's own placement, or a resize from outside (the engine then resets its back
+	// buffer to it). The render resolution is not that size, so it is tracked apart: every WM_SIZE at
+	// the DPI the window was last settled at records the client size; one at another DPI is the frame
+	// changing mid-transition and is ignored. The DPI handlers then ask for the recorded size.
+	struct kept_client
+	{
+		size client;  // the client area to keep, in pixels
+		UINT dpi = 0; // the DPI it was recorded at (0: not yet settled)
+	};
+
+	// The window was created (or settled after a DPI change) with `client` at `dpi`.
+	inline void settle_client(kept_client& kept, const size& client, const UINT dpi)
+	{
+		if (client.width && client.height)
+		{
+			kept.client = client;
+		}
+		kept.dpi = dpi;
+	}
+
+	// A WM_SIZE (restored) of `client` while the window's DPI is `dpi`; `in_dpi_change`: inside the
+	// fix's own DPI handling. Returns whether it was recorded.
+	inline bool note_client_resize(kept_client& kept, const size& client, const UINT dpi, const bool in_dpi_change)
+	{
+		if (in_dpi_change || !client.width || !client.height || (kept.dpi && dpi != kept.dpi))
+		{
+			return false;
+		}
+		kept.client = client;
+		kept.dpi = dpi;
+		return true;
+	}
+
+	// The client area to ask for at a DPI change: the kept one, or `fallback` (the back buffer's) when
+	// nothing was recorded.
+	inline size client_for_dpi_change(const kept_client& kept, const size& fallback)
+	{
+		return kept.client.width && kept.client.height ? kept.client : fallback;
+	}
+
+	// The engine's own mapping (0x5f9eb0) from its screen space to its 2D view, for the tests: the
+	// view is 384 tall and `aspect` * 384 wide, centred on the 512-wide 4:3 view. Integer steps
+	// as the engine does them (imul / idiv, then the float add and ftol).
+	struct menu_point
+	{
+		int x, y;
+	};
+	inline menu_point engine_menu_point(const POINT screen_point, const size& screen, const float aspect)
+	{
+		const float view_width = aspect * 384.0f;
+		const int width = static_cast<int>(view_width);
+		const int height = 384;
+		const float left = -(view_width - 512.0f) * 0.5f;
+		const int x = static_cast<int>(left + static_cast<float>(screen_point.x * width / static_cast<int>(screen.width)));
+		const int y = height - screen_point.y * height / static_cast<int>(screen.height);
+		return {x, y};
+	}
+
 	// "" (absent) -> stock; "all" -> all; "game" -> game; anything else -> nothing (the caller logs it).
 	inline std::optional<resolution_list> parse_resolution_list(std::string_view text)
 	{

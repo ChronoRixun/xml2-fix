@@ -550,6 +550,25 @@ namespace test_input
 				return save_format::pipe(cmd.text);
 			case command::kind::entity:
 				return entity_pipe(cmd.text);
+			case command::kind::mouse:
+			{
+				using action = command::pointer_action;
+				std::string reply;
+				if (cmd.pointer == action::move || cmd.pointer == action::click)
+				{
+					reply = display::test_pointer(WM_MOUSEMOVE, cmd.x, cmd.y);
+				}
+				if (reply.rfind("error", 0) != 0 && (cmd.pointer == action::down || cmd.pointer == action::click))
+				{
+					reply = display::test_pointer(WM_LBUTTONDOWN, cmd.x, cmd.y);
+				}
+				if (reply.rfind("error", 0) != 0 && (cmd.pointer == action::up || cmd.pointer == action::click))
+				{
+					reply = display::test_pointer(WM_LBUTTONUP, cmd.x, cmd.y);
+				}
+				logger::write("test: %s -> %s", line.c_str(), reply.c_str());
+				return reply;
+			}
 			default:
 				logger::write("test: rejected '%s': %s", line.c_str(), cmd.error.c_str());
 				return "error " + cmd.error;
@@ -656,6 +675,7 @@ namespace test_input
 		display::set_frame_hook(&on_frame);
 		display::disable_multisampling("the test pipe copies the back buffer");
 		display::show_without_focus("the test pipe drives the game in the background");
+		display::enable_test_pointer();
 		logger::write("test: input pipe %s ([Test] InputPipe=1, PipeName %s) - keys from it reach the game without the focus; the keyboard only with it", pipe_path.c_str(), pipe.name.c_str());
 	}
 

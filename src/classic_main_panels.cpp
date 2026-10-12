@@ -12,6 +12,12 @@ namespace classic_main_panels
 		using update_fn = void(__thiscall*)(void*);
 		using lookup_fn = void*(__thiscall*)(void*, const char*);
 		update_fn original = nullptr;
+		using mouse_fn = bool(__thiscall*)(void*, int, int, int, int, int);
+		mouse_fn original_mouse = nullptr;
+		// What the last update applied: the rows' regions and label items, for the mouse hook.
+		void* applied_menu = nullptr;
+		rows applied_regions{};
+		std::array<void*, 8> applied_items{};
 		const auto lookup = reinterpret_cast<lookup_fn>(0x5adc10);
 		bool apply(void* menu)
 		{
@@ -46,6 +52,7 @@ namespace classic_main_panels
 					std::memcpy(item+0x70,&planned[i],sizeof(rectangle));
 					std::memcpy(item+0x78,offsets[i].data(),sizeof offsets[i]);
 				}
+				applied_regions=planned; applied_items=text; applied_menu=menu;
 				return true;
 			}
 			__except(EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -53,7 +60,33 @@ namespace classic_main_panels
 		void __fastcall update_hook(void* menu, void*)
 		{
 			original(menu);
-			if (!apply(menu)) logger::write_once("classic-panel-layout", "classic main panels: unsupported item layout - retail bounds retained");
+			if (!apply(menu))
+			{
+				applied_menu = nullptr;
+				logger::write_once("classic-panel-layout", "classic main panels: unsupported item layout - retail bounds retained");
+			}
+		}
+		// MAIN_MENU's mouse (vt+0x80): a move or press inside the focused row is that row's
+		// (classic_main_panels_rules.hpp, focused_row_keeps) - not the generic handler's to refocus.
+		bool focused_row_answers(void* menu, const int x, const int y, const int message)
+		{
+			__try
+			{
+				if (menu != applied_menu || *static_cast<std::uint32_t*>(menu) != 0x69f134) return false;
+				const void* focused = *reinterpret_cast<void* const*>(static_cast<char*>(menu) + 0x324); // 0x5ab0c0
+				int row = -1;
+				for (int i = 0; i < 8; ++i) if (applied_items[i] == focused) row = i;
+				if (row < 0) return false;
+				for (int i = 0; i < 8; ++i) // still the regions the update applied
+					if (std::memcmp(static_cast<const char*>(applied_items[i]) + 0x70, &applied_regions[i], sizeof(rectangle)) != 0) return false;
+				return focused_row_keeps(applied_regions, row, x, y, static_cast<unsigned>(message));
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+		}
+		bool __fastcall mouse_hook(void* menu, void*, const int x, const int y, const int buttons, const int message, const int extra)
+		{
+			if (focused_row_answers(menu, x, y, message)) return false; // as the native handler answers a focus it keeps
+			return original_mouse(menu, x, y, buttons, message, extra);
 		}
 	}
 	void install(HMODULE game)
@@ -74,5 +107,19 @@ namespace classic_main_panels
 		if (!VirtualProtect(slot,sizeof(*slot),protection,&ignored))
 			logger::write("classic main panels: hook protection restore failed (error %lu)",GetLastError());
 		logger::write("classic main panels: panel-width hit regions enabled, row seams split without overlap");
+		// The mouse handler, so the generic handler can't refocus a neighbour inside the focused row.
+		auto* mouse_slot = reinterpret_cast<mouse_fn*>(0x69f1b4);
+		if (*mouse_slot!=reinterpret_cast<mouse_fn>(0x5c9320))
+		{
+			logger::write("classic main panels: MAIN_MENU mouse guard failed - the focus may flip inside a row's lower third"); return;
+		}
+		if (!VirtualProtect(mouse_slot,sizeof(*mouse_slot),PAGE_READWRITE,&protection))
+		{
+			logger::write("classic main panels: mouse hook protection failed (error %lu)",GetLastError()); return;
+		}
+		original_mouse=*mouse_slot; *mouse_slot=reinterpret_cast<mouse_fn>(&mouse_hook);
+		if (!VirtualProtect(mouse_slot,sizeof(*mouse_slot),protection,&ignored))
+			logger::write("classic main panels: mouse hook protection restore failed (error %lu)",GetLastError());
+		logger::write("classic main panels: a move or press inside the focused row stays that row's");
 	}
 }
