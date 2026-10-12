@@ -247,8 +247,8 @@ namespace solo_mode
 			if (trace)
 			{
 				logger::write("solo mode trace: regroup check at %.2f s from %08X: %s, refused %d, %d peers: %08X=%d %08X=%d %08X=%d", t, h,
-				              allowed ? "regroup" : "stay solo", refused, checked, handles[0], checked > 0 ? statuses[0] : -1,
-				              handles[1], checked > 1 ? statuses[1] : -1, handles[2], checked > 2 ? statuses[2] : -1);
+				              allowed ? "regroup" : "stay solo", refused, checked, checked > 0 ? handles[0] : 0u, checked > 0 ? statuses[0] : -1,
+				              checked > 1 ? handles[1] : 0u, checked > 1 ? statuses[1] : -1, checked > 2 ? handles[2] : 0u, checked > 2 ? statuses[2] : -1);
 			}
 			if (allowed)
 			{
