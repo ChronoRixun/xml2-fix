@@ -115,7 +115,13 @@ including one side off, are refused by the native agreement before admission.
 Rule 4 (turrets) is described below. Failure to install a required socket exclusion refuses
 startup.
 
-`xml2_xml1_controllers_test` exercises selection counterexamples, transaction
+`xml2_xml1_controllers_test` also checks the turret rules (parsing, angles, sweep, acquisition,
+burst cadence, fan, damage draw, homing). Live, on an own build with staged entry: the
+haarp_ext02 turret swept, tracked, armed its burst at the tracking transition, fired 1.0 s
+later and every 5.0 s after, killed a non-invulnerable hero with one homing salvo, was
+destroyed by real attacks (deathscript ran) and stayed destroyed across Save, process restart
+and Load; the haarp_ext04 turret stayed idle while its setup script kept it disabled and then
+acquired and hit. `xml2_xml1_controllers_test` exercises selection counterexamples, transaction
 rollback and the production socket gate with isolated providers and no sockets.
 Live traces show the three independent floor attacks recurring at their native
 ten-second deadlines, automatic core destruction, saved phase reconstruction and
@@ -151,9 +157,11 @@ scanner from the authored placement, as the original constructor does.
 | `0x96ba0` | homing: a homing projectile of a scanner source homes on the scanner's target; each update its direction becomes the velocity direction plus f x the unit direction to the target's origin, f = (10 + age) x 0.05 capped at 1.5, at unchanged speed (nozhoming keeps it level). PC `projectileent` has no in-flight homing (only `guidedprojectileent`), so the controller steers the turret's own homing projectiles once per dispatch (velocity +0x120, setter `0x473640`) |
 
 PC services: candidate query `0x4ab6d0` (actor class `0x70b83c`, filter mode 2 on the
-team bit, sphere of visrange, distance order `0x683ed0`); line of sight as the native
-sentry does it (`0x4b42c0..0x4b4361`: obstruction class `0x778a4c`, swept segment
-between the two centres, direction order `0x68202c`, clear when nothing is found);
+team bit, sphere of visrange, distance order `0x683ed0`); line of sight with the native
+sentry's test (`0x4b42c0..0x4b4361`: obstruction class `0x778a4c`, swept segment, direction
+order `0x68202c`, clear when nothing is found), from the scanner's own position (+0x20, as the
+original ray at `0xa9590..`) to the candidate's centre - from the turret's centre the
+haarp_ext04 turret never saw a hero below it;
 projectile service `0x450030` vt+0x28 (`0x4510a0`, one projectile per call: description
 origin +0, direction +0xc, entity key +0x1c, speed +0x24, count +0x2c) with an attack from
 `0x429860` owned by the turret's handle - its contact damage reaches a hero through the

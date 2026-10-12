@@ -141,12 +141,17 @@ turret_rules::sight look(turret& t,void* self){
             picked[n++]=at<u32>(e,0x1c);
         }
     }
-    const vec from=center(self);
+    // 0xa9590..0xa95f0: the ray starts at the scanner's own position (+0x20), aimed at the
+    // candidate's centre (vt+0x24).
+    const vec from=origin;
+    int blocked=0;
     for(int i=0;i<n;++i){
         auto* e=resolve(picked[i]);if(!e)continue;
         const vec to=center(e);
         if(clear_line(t.handle,from,to)){seen.found=true;seen.target=picked[i];seen.aim=to;break;}
+        ++blocked;
     }
+    if(trace&&n)logger::write("xml1 turrets look: %s candidates %d blocked %d found %08X",t.spec.instance.c_str(),n,blocked,seen.target);
     return seen;
 }
 // The placement's physent: names repeat across entity types (haarp_ext02 has a waypoint and the
