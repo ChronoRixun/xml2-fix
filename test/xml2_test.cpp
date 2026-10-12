@@ -7599,6 +7599,19 @@ namespace
 					CHECK(preset_names_vas[i] - preset_table_vas[i] == 0x28);
 				}
 			}
+
+			// The fix also turns the handler's compare-and-zero pass into a no-op (jne -> jmp at the
+			// site below): stock, that pass zeroed player 1's whole secondary column once the pad
+			// layout lived there (issue #9). Guard bytes as in src/pad_bindings.cpp.
+			constexpr DWORD defaults_zero_loop_va = 0x6189d0;
+			const auto zero_loop = file_offset(*exe, defaults_zero_loop_va - image_base);
+			CHECK(zero_loop.has_value() && *zero_loop + 19 <= exe->size());
+			if (zero_loop)
+			{
+				const std::uint8_t expected[] = {
+				    0x8b, 0x6c, 0x0c, 0x60, 0x3b, 0x2a, 0x75, 0x0a, 0xc7, 0x81, 0xc8, 0x8f, 0xa6, 0x00, 0x00, 0x00, 0x00, 0x00};
+				CHECK(std::memcmp(exe->data() + *zero_loop, expected, sizeof(expected)) == 0);
+			}
 		}
 		else
 		{

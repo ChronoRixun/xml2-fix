@@ -224,6 +224,52 @@ namespace xml2_pad_bindings
 			return true;
 		}
 
+		// The Defaults 1/2/3 handler (0x6188c0; the buttons apply one of the preset tables' player-1
+		// scheme to the panel's working copy) ends in a compare-and-zero pass over the panel table:
+		// for every action it zeroes player 1's freshly copied slot-0/1 binding whenever a leftover
+		// stack dword happens to match it. Under stock (keyboard-only) tables that column is almost
+		// entirely unbound, so the damage is invisible; with the pad layout above in player 1's slot 1
+		// a single Defaults click erased the whole pad column in the saved settings (issue #9). The
+		// scheme copy already writes the preset's own 0xffff "cleared" values, so the zero store is
+		// nonsense on its own terms too: the conditional jump around it is made unconditional.
+		constexpr std::uintptr_t defaults_zero_loop_rva = 0x6189D0 - 0x400000;
+		const std::uint8_t defaults_zero_loop_stock[] = {
+		    0x8b, 0x6c, 0x0c, 0x60, // mov ebp, [esp + ecx + 0x60]
+		    0x3b, 0x2a,             // cmp ebp, [edx]
+		    0x75, 0x0a,             // jne past the store
+		    0xc7, 0x81, 0xc8, 0x8f, 0xa6, 0x00, 0x00, 0x00, 0x00, 0x00}; // mov [ecx + 0xa68fc8], 0
+
+		bool patch_defaults_zero_loop(std::byte* image)
+		{
+			auto* site = image + defaults_zero_loop_rva;
+			bool matches = false;
+			__try
+			{
+				matches = std::memcmp(site, defaults_zero_loop_stock, sizeof(defaults_zero_loop_stock)) == 0;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+			}
+			if (!matches)
+			{
+				logger::write("bindings: the Defaults handler's compare-and-zero at 0x%08lX isn't the retail code - it stays as is",
+				              static_cast<unsigned long>(defaults_zero_loop_rva + 0x400000));
+				return false;
+			}
+			DWORD old_protect = 0;
+			if (!VirtualProtect(site, sizeof(defaults_zero_loop_stock), PAGE_EXECUTE_READWRITE, &old_protect))
+			{
+				logger::write("bindings: can't unprotect the Defaults handler at 0x%08lX (error %lu) - it stays as is",
+				              static_cast<unsigned long>(defaults_zero_loop_rva + 0x400000), GetLastError());
+				return false;
+			}
+			site[6] = std::byte{0xEB}; // jne -> jmp: the zero store never runs
+			FlushInstructionCache(GetCurrentProcess(), site, sizeof(defaults_zero_loop_stock));
+			VirtualProtect(site, sizeof(defaults_zero_loop_stock), old_protect, &old_protect);
+			logger::write("bindings: the Defaults buttons no longer zero player 1's secondary column (0x6189d6)");
+			return true;
+		}
+
 		bool is_gamepad_binding(const DWORD value)
 		{
 			const DWORD device = value >> 16;
@@ -341,6 +387,8 @@ namespace xml2_pad_bindings
 	{
 		if (patch_default_table())
 		{
+			auto* image = reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr));
+			patch_defaults_zero_loop(image);
 			migrate_saved_settings();
 		}
 	}
