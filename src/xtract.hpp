@@ -17,6 +17,7 @@ namespace xtract
 	// Reads [Game] Xtract and patches XMen2.exe for it. From DllMain (see exports.cpp): before the
 	// game's first zone and its first Xtraction Point.
 	void install(HMODULE game);
-	// Called only around the native menu handler, on the game's thread. Returns the previous permission.
-	bool allow_shop(bool allowed);
+	// Called only around the native menu handler, on the game's thread: the point's services
+	// (xtraction_shop_rules::service bits). Returns the previous value.
+	int set_services(int services);
 }

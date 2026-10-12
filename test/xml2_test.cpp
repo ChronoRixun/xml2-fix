@@ -91,6 +91,7 @@
 #include "window_title_rules.hpp"
 #include "xtract_rules.hpp"
 #include "xtraction_shop_rules.hpp"
+#include "danger_room_gate_rules.hpp"
 
 #include <algorithm>
 #include <array>
@@ -5762,6 +5763,36 @@ namespace
 		CHECK(!xtraction_shop_rules::should_add(true, false));
 		CHECK(xtraction_shop_rules::should_add(true, true));
 		CHECK(xtraction_shop_rules::finalize_call + 5 == 0x4a6d38);
+		{
+			// #63: the services bitmask. 0/1 keep 1.4.0's meaning (Forge only); campaign characters gate DR and Healer.
+			using namespace xtraction_shop_rules;
+			const auto& load_o = options[0];
+			const auto& dr_o = options[1];
+			const auto& healer_o = options[2];
+			const auto& forge_o = options[3];
+			CHECK(load_o.service == load && dr_o.service == danger_room && healer_o.service == healer && forge_o.service == forge);
+			CHECK(load_o.label == 2006 && dr_o.label == 2003 && healer_o.label == 2004 && forge_o.label == 2005);
+			CHECK(!offered(true, 1, load_o, true) && !offered(true, 1, dr_o, true) && !offered(true, 1, healer_o, true));
+			CHECK(offered(true, 1, forge_o, false));
+			CHECK(!offered(false, 0xf, load_o, true) && !offered(false, 0xf, forge_o, true));
+			CHECK(offered(true, load, load_o, false));                    // Load needs no character
+			CHECK(!offered(true, danger_room, dr_o, false) && offered(true, danger_room, dr_o, true));
+			CHECK(!offered(true, healer, healer_o, false) && offered(true, healer, healer_o, true));
+			CHECK(!offered(true, healer | load | forge, dr_o, true));    // a lite point without its Danger Room flag
+			CHECK(std::string_view(dr_o.campaign) == "storm" && std::string_view(healer_o.campaign) == "healer" && !forge_o.campaign && !load_o.campaign);
+			int bits = 0;
+			for (const auto& o : options) { CHECK((bits & o.service) == 0); bits |= o.service; }
+			CHECK(bits == 0xf);
+		}
+		{
+			using namespace danger_room_gate_rules;
+			CHECK(disable(true, false) && !disable(true, true) && !disable(false, false) && !disable(false, true));
+			CHECK(valid_item("button3") && valid_item("label_option06") && !valid_item("") && !valid_item("button 3") && !valid_item("a;b"));
+			CHECK(!valid_item("abcdefghijklmnopqrstuvwxyz0123456"));
+			CHECK(first_step_slot == main_menu_vtable + 0x10);
+			CHECK(registry_load_slot == registry_vtable + 0xa4);
+			CHECK(mirror(true, false) && !mirror(true, true) && !mirror(false, false) && !mirror(false, true));
+		}
 		using namespace xtract_rules;
 		std::printf("[Game] Xtract (no world map at an Xtraction Point)\n");
 
@@ -5803,6 +5834,14 @@ namespace
 		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
 		CHECK(mismatch == nullptr);
 		CHECK(std::memcmp(at(choice_block), retail_op.data(), retail_op.size()) == 0);
+		for (const auto& g : danger_room_gate_rules::guards)
+		{
+			CHECK(limits_rules::matches(at(g.va), g.hex));
+			const auto first = at(g.va)[0];
+			at(g.va)[0] ^= 1;
+			CHECK(!limits_rules::matches(at(g.va), g.hex));
+			at(g.va)[0] = first;
+		}
 		for (const auto& g : xtraction_shop_rules::guards)
 		{
 			CHECK(limits_rules::matches(at(g.va), g.hex));

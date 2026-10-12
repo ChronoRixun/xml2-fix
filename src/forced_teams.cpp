@@ -882,9 +882,9 @@ namespace forced_teams
 		{
 			int permission = 0;
 			read_int_argument(at<get_argument_t>(argument_getter), args, 1, permission);
-			const bool previous = xtract::allow_shop(permission != 0);
+			const int previous = xtract::set_services(permission);
 			void* result = xpoint_menu_handler<0>(args);
-			xtract::allow_shop(previous);
+			xtract::set_services(previous);
 			return result;
 		}
 

@@ -595,7 +595,8 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `ReviewStats` | `1` | `0`: the Review menu has no Stats tab |
 | `PersonalItemText` | `1` | Personal-item pictures sit behind their descriptions; `0` retains the original image depth. Other menus and explicit menu `depth` values are unchanged ([details](docs/personal-item-text.md)). |
 | `Xtract` | `1` | `0`: an Xtraction Point's menu has no "Xtract" world map choice |
-| `XtractionShop` | `0` | `1`: let a companion builder append its permitted equipment-shop option through `extractionPointServices` ([details](docs/xtraction-shop.md)) |
+| `XtractionShop` | `0` | `1`: let a companion builder append the first game's Xtraction services (Load, Danger Room, Healer, Forge) as each point permits through `extractionPointServices` ([details](docs/xtraction-shop.md)) |
+| `DangerRoomGate` | (none) | a main-menu item name (the port: `button3`): disabled until Phoenix has been in a campaign on this profile, the first game's Danger Room gate ([details](docs/xtraction-shop.md#main-menu-danger-room-gate)) |
 | `XPCurve` | `xml2` | `xml1`: X-Men Legends I's level table (cap 45) and kill XP |
 | `StatHelp` | `1` | the stats screen's Body and Strike help texts state the applied `[Balance]` numbers instead of the engine's retail ones; `0` keeps the game's own texts (details: the `[Balance]` paragraph above and [docs/stat-help.md](docs/stat-help.md)) |
 | `BreakRule` | `xml2` | `xml1`: an object whose definition carries `xml1structure` breaks only to an attack of that level on X-Men Legends I's scale ([details](docs/break-rule.md)) |

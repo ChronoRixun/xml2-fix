@@ -41,6 +41,7 @@
 #include "main_menu.hpp"
 #include "classic_main_backdrop.hpp"
 #include "classic_main_panels.hpp"
+#include "danger_room_gate.hpp"
 #include "mod_loader.hpp"
 #include "new_game.hpp"
 #include "net_trace.hpp"
@@ -211,6 +212,8 @@ namespace
 		main_menu::install(game);
 		classic_main_backdrop::install(game);
 		classic_main_panels::install(game);
+		// The first game's main-menu Danger Room gate ([Game] DangerRoomGate): MAIN_MENU vt+0x10.
+		danger_room_gate::install(game);
 		// The Review menu's tabs: five imm8s in REVIEW_PATHS_MENU's own code, used from the first Review on.
 		review_menu::install(game);
 		personal_item_text::install(game);
