@@ -479,7 +479,7 @@ namespace lcsave::detail
 					{"instance", Tx(zone_string(strings, s.inst_name))}, {"flags", flags}, {"position", pos},
 					{"payload", Tx(hex(s.payload, 8))}}));
 			};
-			for (u32 k = 0; k < old_zone_ordinals; ++k) if (z.tail.ordinal_map[k]) st(z.tail.ordinal_map[k], 1, static_cast<int>(k + 1));
+			for (u32 k = 0; k < z.tail.ordinal_map.size(); ++k) if (z.tail.ordinal_map[k]) st(z.tail.ordinal_map[k], 1, static_cast<int>(k + 1));
 			for (u32 k = 0; k < z.tail.dynamic_count; ++k) st(z.tail.dynamic[k], 2, 0);
 			for (u32 k = 0; k < z.tail.smart_count; ++k) st(z.tail.smart[k], 3, 0);
 			Value conv = L();

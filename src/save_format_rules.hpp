@@ -102,9 +102,50 @@ namespace save_format_rules
 	constexpr address game_vtable = 0x686e1c;     // CGame's vtable
 	constexpr address game_serialize = 0x46baf0;  // vt+0x208: fills the stream buffer
 	constexpr address game_load = 0x46e2b0;       // vt+0x20c (buffer, mode)
-	constexpr std::size_t stream_capacity = 0x2fc00;     // the payload of a slot, and its wrapper's cursor offset
-	constexpr std::size_t stream_wrapper = 0x2fc78;      // the buffer the game allocates
-	constexpr std::size_t stream_description = 0x2fc04;  // the serializer's description text in the wrapper (0x40)
+	constexpr std::size_t stream_capacity = 0x2fc00;     // the payload of a slot, and its wrapper's cursor offset (retail)
+	constexpr std::size_t stream_wrapper = 0x2fc78;      // the buffer the game allocates (retail)
+	constexpr std::size_t stream_description = 0x2fc04;  // the serializer's description text in the wrapper (0x40) (retail)
+
+	// The native save layout the engine runs with: retail, or the Phase A expanded layout E10A2 (docs/
+	// entity-capacity-phase-a-plan.md section 6; round6 layouts.json native_save). Every hook, bridge and buffer
+	// size of the save seam derives from the installed profile; nothing infers a layout from a file or packet size.
+	struct native_profile
+	{
+		const char* name;
+		std::uint32_t states;          // zone state records per zone record, sentinel included (bound at 0x466659 / 0x4666e7)
+		std::uint32_t ordinals;        // ordinal map entries (u16 each) per zone record (bound at 0x46667a)
+		std::uint32_t dynamic;         // dynamic list entries (bound at 0x46668a)
+		std::uint32_t smart;           // smart list entries (bound at 0x4666f3)
+		std::uint32_t state_count;     // record offset of the state count dword
+		std::uint32_t ordinal_map;     // record offset of the ordinal map
+		std::uint32_t time_stamp;      // record offset of the time stamp float
+		std::uint32_t record_size;     // one zone record
+		std::uint32_t manager_size;    // the five records plus the manager's own fields (CMap+0x3b0 allocation)
+		std::uint32_t usable_end;      // what the stream helpers compare their cursor against
+		std::uint32_t payload;         // the slot payload the card reads and writes
+		std::uint32_t wrapper;         // the buffer the game allocates around the payload
+		std::uint32_t description;     // the serializer's description text in the wrapper
+		std::uint32_t flag_offset;     // the wrapper's overflow/flag byte (retail 0x2fc44)
+	};
+	inline constexpr native_profile retail_profile{"retail", 768, 256, 300, 768, 0x4808, 0x480c, 0x55d8, 0x55e0, 0x1afdc, 0x2fc00, 0x2fc00, 0x2fc78, 0x2fc04, 0x2fc44};
+	inline constexpr native_profile e10a2_profile{"E10A2", 4096, 1024, 1024, 1024, 0x18008, 0x1800c, 0x19b80, 0x19b88, 0x80c24, 0x200000, 0x200000, 0x200078, 0x200004, 0x200044};
+	static_assert(retail_profile.payload == stream_capacity && retail_profile.wrapper == stream_wrapper && retail_profile.description == stream_description);
+	static_assert(4 + e10a2_profile.states * 0x18 + 4 + 4 + e10a2_profile.ordinals * 2 + 4 + e10a2_profile.dynamic * 2 + 4 + 4 + e10a2_profile.smart * 2 + 4 + 4 + 0x34c + 20 + 4 + 4 == e10a2_profile.record_size);
+	static_assert(5 * e10a2_profile.record_size + (0x1afdc - 5 * 0x55e0) == e10a2_profile.manager_size);
+	static_assert(e10a2_profile.wrapper - e10a2_profile.payload == stream_wrapper - stream_capacity);
+	// The record fields after the ordinal map, derived from the profile (retail 0x4a10 / 0x4c6c / 0x4c70 / 0x5274; E10A2
+	// 0x18810 / 0x19014 / 0x19018 / 0x1981c, the values of the ledger's literal sites at 0x466698..0x466728). The capture
+	// bridges replay instructions that address these fields, so they take the installed profile's offsets.
+	constexpr std::uint32_t dynamic_list(const native_profile& p) { return p.ordinal_map + p.ordinals * 2 + 4; }
+	constexpr std::uint32_t dynamic_count(const native_profile& p) { return dynamic_list(p) + p.dynamic * 2 + 4; }
+	constexpr std::uint32_t smart_list(const native_profile& p) { return dynamic_count(p) + 4; }
+	constexpr std::uint32_t smart_count(const native_profile& p) { return smart_list(p) + p.smart * 2 + 4; }
+	// The native ordinal writer addresses the map with the 1-based ordinal: [record + ordinal*2 + (map - 2)].
+	constexpr std::uint32_t ordinal_write_displacement(const native_profile& p) { return p.ordinal_map - 2; }
+	static_assert(dynamic_list(retail_profile) == 0x4a10 && dynamic_count(retail_profile) == 0x4c6c && smart_list(retail_profile) == 0x4c70 && smart_count(retail_profile) == 0x5274 &&
+	              ordinal_write_displacement(retail_profile) == 0x480a);
+	static_assert(dynamic_list(e10a2_profile) == 0x18810 && dynamic_count(e10a2_profile) == 0x19014 && smart_list(e10a2_profile) == 0x19018 && smart_count(e10a2_profile) == 0x1981c &&
+	              ordinal_write_displacement(e10a2_profile) == 0x1800a);
 	constexpr std::size_t profile_size = 0x228;
 	constexpr std::size_t old_envelope = 0x84;           // 0x80 description + u32 length
 	constexpr std::size_t old_slot_file_size = old_envelope + stream_capacity;
@@ -273,8 +314,9 @@ namespace save_format_rules
 	}
 
 	// The stub one flag site jumps to, at `stub`: the retail compare (and the pop esi of 0x468a85), `jl resume`
-	// when the copy fits, else `mov byte [flag], 1` and `jmp skip` - the retail jge's own target.
-	inline std::vector<std::uint8_t> flag_stub(const flag_site& site, const address stub, const address flag)
+	// when the copy fits, else `mov byte [flag], 1` and `jmp skip` - the retail jge's own target. With a `bound`
+	// other than the retail 0x2fc00 the copied compare takes that immediate (the expanded stream's usable end).
+	inline std::vector<std::uint8_t> flag_stub(const flag_site& site, const address stub, const address flag, const std::uint32_t bound = stream_capacity)
 	{
 		std::vector<std::uint8_t> out;
 		const std::size_t length = limits_rules::hex_size(site.hex);
@@ -282,6 +324,13 @@ namespace save_format_rules
 		{
 			out.push_back(limits_rules::hex_byte(site.hex, i));
 		}
+		// The compare's imm32 sits after the opcode (3d) or the opcode and modrm (81 f9 / 81 fa); 0x468a85 also carries
+		// the pop esi after it. The retail immediate is 0x2fc00 at every site; replace it with the bound.
+		const std::size_t imm = out[0] == 0x3d ? 1 : 2;
+		std::uint32_t current = 0;
+		std::memcpy(&current, out.data() + imm, 4);
+		if (current != stream_capacity) return {};
+		std::memcpy(out.data() + imm, &bound, 4);
 		const auto rel8 = static_cast<std::int8_t>(limits_rules::hex_byte(site.hex, length - 1));
 		const address resume = site.va + static_cast<address>(length);
 		const address skip = resume + static_cast<address>(rel8);
@@ -415,7 +464,10 @@ namespace save_format_rules
 	constexpr std::uint32_t lc_max_sections = 4096;
 	constexpr std::uint32_t lc_max_file = 64u << 20;
 	constexpr std::uint16_t lc_format_major = 1;
-	constexpr std::uint32_t lc_known_required_features = 0; // none in format 1.0
+	// Required feature bits the running engine understands: bit 0 (ENTITY_LAYOUT_CONTIGUOUS10) only under the expanded
+	// native layout E10A2 (set once by save_format when the entity-capacity install prepares; plan section 4).
+	constexpr std::uint32_t lc_feature_entity_layout_contiguous10 = 1;
+	inline std::uint32_t lc_known_required_features = 0;
 	constexpr std::uint8_t kind_campaign = 1;
 	constexpr std::uint8_t kind_profile = 2;
 	constexpr std::uint16_t section_required = 1;

@@ -460,7 +460,7 @@ namespace lcsave::detail
 			}
 			const auto& ref_hashes = num->names;
 			std::vector<std::pair<u32, std::pair<Hash, Hash>>> names_by_ordinal;
-			for (u32 k = 1; k <= old_zone_ordinals; ++k)
+			for (u32 k = 1; k <= z.tail.ordinal_map.size(); ++k)          // the record's own ordinal map (its native layout's size)
 			{
 				const u32 idx = z.tail.ordinal_map[k - 1];
 				if (idx)
@@ -599,7 +599,7 @@ namespace lcsave::detail
 				std::set<u32> ordinals, placements;
 				for (const auto& e : capture->entities)
 				{
-					if (!e.ordinal || e.ordinal > old_zone_ordinals || !ordinals.insert(e.ordinal).second || !placements.insert(e.placement_index).second)
+					if (!e.ordinal || e.ordinal > z.tail.ordinal_map.size() || !ordinals.insert(e.ordinal).second || !placements.insert(e.placement_index).second)
 						fail(what + ": invalid or duplicate observed entity association");
 					if (!z.tail.ordinal_map[e.ordinal - 1])
 					{
@@ -614,7 +614,7 @@ namespace lcsave::detail
 			}
 			for (u32 k = 0; k < z.tail.dynamic_count; ++k) state_rec(z.states[z.tail.dynamic[k]], 2, 0, 0);
 			for (u32 k = 0; k < z.tail.smart_count; ++k) state_rec(z.states[z.tail.smart[k]], 3, 0, 0);
-			if (states.as_list().size() >= old_zone_states) fail(what + ": capture identities exceed native state capacity");
+			if (states.as_list().size() >= z.states.size()) fail(what + ": capture identities exceed native state capacity");
 			Hash digest{};
 			if (capture) digest = capture->conversation_digest;
 			else if (context) digest = conversation_package_digest(key_hash1(zone, Enc::latin1), conversation_bits(*c.t.build, zone));
@@ -1315,10 +1315,13 @@ namespace lcsave::detail
 			}
 			sections.insert(sections.begin() + 1, SectionOut{"KEYS", 1, 0, section_keep, Value::dict({{"keys", std::move(keys)}})});
 		}
-		void retain_sections(std::vector<SectionOut>& sections, const std::vector<u8>& retained, int kind)
+		void retain_sections(std::vector<SectionOut>& sections, const std::vector<u8>& retained, int kind, const NativeLayout& native = retail_layout)
 		{
 			if (retained.empty()) return;
 			const auto prior = read_file(retained.data(), retained.size(), kind);
+			// the retained file's marker: a writer of this layout may carry over only a file its layout can apply
+			const auto decision = decide_features(prior.header.required_features, native);
+			if (!decision.ok) fail("retained file: " + decision.reason);
 			bool opaque = false;
 			for (const auto& tag : prior.order)
 			{
@@ -1357,7 +1360,7 @@ namespace lcsave::detail
 	std::vector<std::uint8_t> convert_slot(const std::vector<std::uint8_t>& old_bytes, const TablesData& t, const ConvertOptions& options,
 		ConvertState& state)
 	{
-		const auto old = read_slot(old_bytes.data(), old_bytes.size());
+		const auto old = read_slot(old_bytes.data(), old_bytes.size(), retail_layout);   // the importer: retail saves only, explicitly
 		Conv c{t, state, t.reference};
 		Plan plan;
 		const std::uint64_t saved_at = options.fixed_saved_at ? options.saved_at : now_filetime();
@@ -1384,15 +1387,16 @@ namespace lcsave::detail
 	}
 
 	std::vector<std::uint8_t> stream_to_new(const std::vector<std::uint8_t>& stream, const TablesData& t, const NewFileContext& context,
-		ConvertState& state)
+		ConvertState& state, const NativeLayout& native)
 	{
 		validate_native_tables(t);
+		// the whole slot image or the payload alone, of the layout the caller selected (never inferred from the size)
 		std::vector<std::uint8_t> image;
-		if (stream.size() == old_payload)
+		if (stream.size() == native.payload)
 		{
 			image.assign(old_envelope, 0);
 			std::memcpy(image.data(), context.description.data(), std::min<std::size_t>(context.description.size(), 0x7f));
-			const u32 plen = old_payload;
+			const u32 plen = native.payload;
 			std::memcpy(image.data() + 0x80, &plen, 4);
 			image.insert(image.end(), stream.begin(), stream.end());
 		}
@@ -1402,7 +1406,7 @@ namespace lcsave::detail
 		}
 		if (!t.build) fail("the saver needs build tables");
 		if (context.origin > 2) fail("unsupported saver origin");
-		const auto old = read_slot(image.data(), image.size());
+		const auto old = read_slot(image.data(), image.size(), native);
 		const auto& T = t.build->T;
 		Conv c{t, state, T};
 		Plan plan;
@@ -1417,8 +1421,9 @@ namespace lcsave::detail
 		if (state.dropped.zone_records || state.dropped.world_items || state.dropped.zone_vars || state.dropped.other || state.dropped.talents || state.dropped.states)
 			fail("native save translation would drop state; original retained");
 		add_keys_section(sections, t);
-		retain_sections(sections, context.retained_file, kind_campaign);
+		retain_sections(sections, context.retained_file, kind_campaign, native);
 		HeaderIn h;
+		h.required_features = native.feature_bits;          // the Phase A marker: the writer's layout decides (E10A2: bit 0)
 		h.writer_version = context.writer_version;
 		h.content_version = t.catalogue.content_version;
 		h.catalogue_revision = t.catalogue.revision;

@@ -326,12 +326,73 @@ namespace lcsave::detail
 			return p;
 		}
 
+		// one zone record of the layout `native` (oldsave._read_zone_record): bounds checked against the descriptor
+		// before anything is kept
+		OldZone read_zone_record(Reader& r, const NativeLayout& native)
+		{
+			if (r.p + native.record_size > r.size)
+			{
+				fail("zone record needs " + std::to_string(native.record_size) + " bytes at " + fmt_hex(r.p) + ", payload ends at " + fmt_hex(r.size));
+			}
+			const std::size_t start = r.p;
+			OldZone z(native);
+			z.name_handle = r.get<u32>();
+			for (auto& s : z.states) r.get(s);
+			auto& t = z.tail;
+			r.get(t.pad_4804);
+			r.get(t.state_count);
+			for (auto& v : t.ordinal_map) r.get(v);
+			r.get(t.pad_4a0c);
+			for (auto& v : t.dynamic) r.get(v);
+			r.get(t.pad_4c68);
+			r.get(t.dynamic_count);
+			for (auto& v : t.smart) r.get(v);
+			r.get(t.pad_5270);
+			r.get(t.smart_count);
+			r.get(t.fog);
+			r.get(t.conversation);
+			r.get(t.time_stamp);
+			r.get(t.flag);
+			r.get(t.pad_55dd);
+			if (r.p - start != native.record_size) fail("zone record size");
+			if (t.state_count > native.states || t.dynamic_count > native.dynamic || t.smart_count > native.smart)
+			{
+				fail("zone record counts beyond the engine tables");
+			}
+			return z;
+		}
+
+		void write_zone_record(std::vector<std::uint8_t>& out, const OldZone& z, const NativeLayout& native)
+		{
+			if (!z.matches(native)) fail(std::string("zone record does not match the native layout ") + native.id);
+			const std::size_t start = out.size();
+			put(out, z.name_handle);
+			for (const auto& s : z.states) put(out, s);
+			const auto& t = z.tail;
+			put(out, t.pad_4804);
+			put(out, t.state_count);
+			for (const auto v : t.ordinal_map) put(out, v);
+			put(out, t.pad_4a0c);
+			for (const auto v : t.dynamic) put(out, v);
+			put(out, t.pad_4c68);
+			put(out, t.dynamic_count);
+			for (const auto v : t.smart) put(out, v);
+			put(out, t.pad_5270);
+			put(out, t.smart_count);
+			put(out, t.fog);
+			put(out, t.conversation);
+			put(out, t.time_stamp);
+			put(out, t.flag);
+			put(out, t.pad_55dd);
+			if (out.size() - start != native.record_size) fail("zone record size");
+		}
+
 		void check_indices(const OldSlot& m)
 		{
 			for (const auto& z : m.zones)
 			{
 				const u32 n = z.tail.state_count;
-				for (u32 k = 0; k < old_zone_ordinals; ++k)
+				for (u32 k = 0; k < z.tail.ordinal_map.size(); ++k)
 				{
 					const u32 idx = z.tail.ordinal_map[k];
 					if (idx && idx >= n)
@@ -352,8 +413,8 @@ namespace lcsave::detail
 						}
 					}
 				};
-				check_list(z.tail.dynamic, z.tail.dynamic_count, "dynamic");
-				check_list(z.tail.smart, z.tail.smart_count, "smart");
+				check_list(z.tail.dynamic.data(), z.tail.dynamic_count, "dynamic");
+				check_list(z.tail.smart.data(), z.tail.smart_count, "smart");
 				zone_string(*m.zone_strings, z.name_handle);
 				for (u32 idx = 1; idx < n; ++idx)
 				{
@@ -371,17 +432,17 @@ namespace lcsave::detail
 		}
 	}
 
-	OldSlot read_slot(const std::uint8_t* data, std::size_t size)
+	OldSlot read_slot(const std::uint8_t* data, std::size_t size, const NativeLayout& native)
 	{
-		if (size != old_slot_size)
+		if (size != native.slot_size)
 		{
-			fail("file size " + std::to_string(size) + " is not the slot size " + std::to_string(old_slot_size) + " (0x84 + 0x2fc00)");
+			fail("file size " + std::to_string(size) + " is not the slot size " + std::to_string(native.slot_size) + " (0x84 + " + fmt_hex(native.payload) + ")");
 		}
 		u32 plen = 0;
 		std::memcpy(&plen, data + 0x80, 4);
-		if (plen != old_payload)
+		if (plen != native.payload)
 		{
-			fail("payload length field " + fmt_hex(plen) + " is not " + fmt_hex(old_payload));
+			fail("payload length field " + fmt_hex(plen) + " is not " + fmt_hex(native.payload));
 		}
 		OldSlot m;
 		std::memcpy(m.description_raw, data, 0x80);
@@ -497,25 +558,13 @@ namespace lcsave::detail
 		r.get(*m.zone_strings);
 		r.tag("[MAP: ZONES]");
 		const auto nz = r.get<u32>();
-		if (nz > ceil_zone_records)
+		if (nz > ceil_zone_records || nz > native.record_count)
 		{
 			fail("zone record count " + std::to_string(nz) + " > " + std::to_string(ceil_zone_records));
 		}
 		for (u32 k = 0; k < nz; ++k)
 		{
-			OldZone z;
-			z.name_handle = r.get<u32>();
-			z.states.resize(old_zone_states);
-			for (auto& s : z.states)
-			{
-				r.get(s);
-			}
-			r.get(z.tail);
-			if (z.tail.state_count > old_zone_states || z.tail.dynamic_count > old_zone_dynamic || z.tail.smart_count > old_zone_smart)
-			{
-				fail("zone record counts beyond the engine tables");
-			}
-			m.zones.push_back(std::move(z));
+			m.zones.push_back(read_zone_record(r, native));
 		}
 		r.tag("[MAP: MISSION STATE]");
 		r.get(m.mission);
@@ -544,12 +593,20 @@ namespace lcsave::detail
 		return m;
 	}
 
-	std::vector<std::uint8_t> write_slot(const OldSlot& m)
+	std::vector<std::uint8_t> write_slot(const OldSlot& m, const NativeLayout& native)
 	{
+		for (const auto& z : m.zones)
+		{
+			if (!z.matches(native)) fail(std::string("zone record does not match the native layout ") + native.id);
+		}
+		if (m.zones.size() > native.record_count)
+		{
+			fail("zone record count " + std::to_string(m.zones.size()) + " > " + std::to_string(native.record_count));
+		}
 		std::vector<std::uint8_t> out;
-		out.reserve(old_slot_size);
+		out.reserve(native.slot_size);
 		out.insert(out.end(), m.description_raw, m.description_raw + 0x80);
-		put(out, old_payload);
+		put(out, native.payload);
 		tag_bytes(out, m.begin_tag);
 		put(out, m.items);
 		put(out, static_cast<u32>(m.carried.size()));
@@ -606,12 +663,7 @@ namespace lcsave::detail
 		put(out, static_cast<u32>(m.zones.size()));
 		for (const auto& z : m.zones)
 		{
-			put(out, z.name_handle);
-			for (const auto& s : z.states)
-			{
-				put(out, s);
-			}
-			put(out, z.tail);
+			write_zone_record(out, z, native);
 		}
 		tag_bytes(out, "[MAP: MISSION STATE]");
 		check_snapshot(m.mission);
@@ -635,9 +687,9 @@ namespace lcsave::detail
 		}
 		put(out, m.town_centres);
 		tag_bytes(out, m.end_tag);
-		if (out.size() > old_slot_size)
+		if (out.size() > native.slot_size)
 		{
-			fail("model does not fit the payload: " + std::to_string(out.size() - old_envelope) + " > " + std::to_string(old_payload));
+			fail("model does not fit the payload: " + std::to_string(out.size() - old_envelope) + " > " + std::to_string(native.payload));
 		}
 		if (!m.slack.empty())
 		{
@@ -645,9 +697,9 @@ namespace lcsave::detail
 		}
 		else
 		{
-			out.resize(old_slot_size, 0);
+			out.resize(native.slot_size, 0);
 		}
-		if (out.size() != old_slot_size)
+		if (out.size() != native.slot_size)
 		{
 			fail("slack length");
 		}

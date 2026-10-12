@@ -309,6 +309,7 @@ ItemEnhancements=512 ; 376 to 1024 item enhancement records (the game's own: 375
 FightStyles=32       ; 20 to 32 fighting/power styles and movesets (the game's own: 19)
 EffectCurves=3600    ; 901 to 16384 effect curves (the game's own: 900)
 MoveTriggers=64      ; 20 to 127 triggers per move (the game's own: 19)
+EntityCapacity=1     ; 32 actor / 768 generic / 1024 World entity handles (the game's own: 32 / 224 / 256); needs [Save] Format=lc
 ```
 
 Nothing changes without the keys. Every slot takes a name, so `ResourceNames` is raised to at least 450 plus the extra slots, and the actor table only grows together with the name table. 127 is the most the game's code can count to: sixteen of its checks compare the slot count as a single signed byte. The X-Men Legends I port uses `ActorSlots=127` and `ResourceNames=1024`. It works by moving the actor table into a block of the fix's memory that the game's own constructor builds and its own destructor tears down, and by building a bigger name table with the game's own constructor where the game's getter looks for it, all before the game's start-up asks for either, and after every byte it relies on is checked against the retail build. All or nothing: on any other build the game keeps both tables, a value out of range is ignored, and `xml2-fix.log` says why. The test pipe's `status` shows how full they are (`actors 23/127; names 301/1024; ...`). The game's other fixed limit, the 200 records of its IGB (model file) cache, is not raised yet.
@@ -318,6 +319,16 @@ Nothing changes without the keys. Every slot takes a name, so `ResourceNames` is
 **Fighting and power styles.** A zone, its enemies and the party share a registry of 19 style files, including fighting styles, power styles and secondary movesets. When it fills, a later hero can lose their powers even though the files and talents are present. `FightStyles=32` gives the registry room for 32 distinct styles. The game allocates a larger manager; its tree nodes, free ring, style objects, bitmaps and following fields use the expanded layout. Every affected instruction is checked before any write. Missing or `FightStyles=19` keeps the stock limit; values outside `19..32` are logged and ignored. This limit is independent of the other three keys. The test pipe reports `styles 20/32`. See [the layout and verification notes](docs/fight-styles.md). New in 1.3.1.
 
 **Effect curves.** Every loaded effect keeps its animation curves (a particle's size, transparency, rotation over its life) in one pool of 900. A zone's effects and the effects of a four-hero party can need more, and when the pool is full the game hands out an empty curve without a word: the effects loaded last are drawn without their particles - a fire is only a faint glow that still burns, or a hero's power loses its particles. `EffectCurves=3600` gives the pool room for 3600. It moves into a block of the fix's memory that the game's own code builds and tears down; every instruction that carries the old size or the old address is checked before anything is patched, and on any difference the pool stays at 900. Curves are not written to saves. The test pipe's `status` reports `curves used/capacity`. [docs/effect-curves.md](docs/effect-curves.md) has the layout, the patch list and the measurements.
+
+**Entity capacity.** `[Limits] EntityCapacity=1` raises the engine's entity domain to 32 actor / 768 generic / 1024 World handles ([docs/entity-capacity.md](docs/entity-capacity.md)): the stock generic arena refuses every prop, projectile or trigger past the 224th live one without a word, which is why crowded rooms lose objects and the HAARP freeze gun never fires. All of it is installed as one checked transaction (535 guards, 31 region hashes) before the game's own code runs; it needs LC saves, marks its saves with a required-feature bit a retail-layout build refuses, and refuses online peers of another layout at admission (GCAP; the receive-lifecycle hooks of the design are not installed, see [the plan](docs/entity-capacity-phase-a-plan.md) deviation 17). If the executable's entity code is not the expected retail code, the capacity alone falls back to stock (logged) and everything else installs.
+
+**Triggers per move.** `[Limits] MoveTriggers=64` gives each native move a preallocated handle side array. Missing key or 19 keeps
+stock behavior; invalid values are logged and ignored. The port needs 27 for its largest restored burst;
+64 leaves 37 spare slots. The count and all other native move fields stay at their existing offsets.
+The constructor, copy, lookup, reset and destruction paths share the handle side storage. Actor timing
+initialization, pause, dispatch and cancellation also expand; the first nineteen native timer fields are
+mirrored byte for byte. Stack packets retain their native layout; no save format changes.
+The patch refuses unexpected bytes or an already-created move pool. See [move-triggers.md](docs/move-triggers.md).
 
 ### Classic main-menu backdrop
 
@@ -688,13 +699,3 @@ Also by the same author: [MUA Controller Fix](https://github.com/ChronoRixun/mua
 It contains no game files or game code and doesn't change any file of the game: you need your own copy of *X-Men Legends II* for PC. Please don't post or link game files in issues or pull requests. Rights holders with a concern: please [open an issue](https://github.com/ChronoRixun/xml2-fix/issues) and it will be answered promptly and in good faith.
 
 The software is provided "as is", without warranty of any kind; see [LICENSE](LICENSE).
-
-### Triggers per move
-
-`[Limits] MoveTriggers=64` gives each native move a preallocated handle side array. Missing key or 19 keeps
-stock behavior; invalid values are logged and ignored. The port needs 27 for its largest restored burst;
-64 leaves 37 spare slots. The count and all other native move fields stay at their existing offsets.
-The constructor, copy, lookup, reset and destruction paths share the handle side storage. Actor timing
-initialization, pause, dispatch and cancellation also expand; the first nineteen native timer fields are
-mirrored byte for byte. Stack packets retain their native layout; no save format changes.
-The patch refuses unexpected bytes or an already-created move pool. See [move-triggers.md](docs/move-triggers.md).

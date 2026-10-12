@@ -29,6 +29,7 @@
 #include "discord_presence.hpp"
 #include "display.hpp"
 #include "forced_teams.hpp"
+#include "mold_controller.hpp"
 #include "game_version.hpp"
 #include "gamepad_fix.hpp"
 #include "iat_hook.hpp"
@@ -47,6 +48,8 @@
 #include "pad_profile.hpp"
 #include "pad_bindings.hpp"
 #include "pad_prompts.hpp"
+#include "patch_transaction.hpp"
+#include "entity_capacity.hpp"
 #include "postgame.hpp"
 #include "review_menu.hpp"
 #include "personal_item_text.hpp"
@@ -174,15 +177,27 @@ namespace
 		// opens - here, before any of its code runs.
 		game_version::install(game);
 		if (!game_version::startup_allowed()) return;
-		if (game_version::needs_gameplay_agreement()) gameplay_agreement::prepare(game);
+
+		// The one startup transaction (docs/entity-capacity-phase-a-plan.md section 7): the shared gameplay
+		// agreement's refusal and transport sites, the LC save seam, [Limits] MoveTriggers and the entity-capacity
+		// install contribute their guards and writes; every expectation is unioned and checked once, every touched
+		// page acquired once, and nothing is published unless the whole set verified. A refusal leaves stock bytes.
+		patch_transaction::transaction startup;
+		if (game_version::needs_gameplay_agreement()) gameplay_agreement::contribute(startup, game);
 
 		new_game::install(game);
 		// [Save] Format=lc: the LC save format's disk seam (the card's nine file methods, the stream helpers'
 		// skip branches, the zone placement file's bytes), used from the first save menu on. After new_game, whose
 		// [Game] SaveFolder re-points the folder the card builds at start-up and this reads at its first file
-		// operation; none of its sites or guards is anyone else's.
-		save_format::install(game);
-		if (!save_format::startup_allowed()) return;
+		// operation. The entity-capacity install chooses the native save layout before the seam is contributed.
+		entity_capacity::prepare(startup, game);
+		save_format::contribute(startup, game);
+		limits::contribute(startup, game, entity_capacity::owns_arena_teardown());
+		entity_capacity::contribute(startup, game);
+		const auto committed = startup.commit();
+		logger::write("startup transaction: %s (%s)", patch_transaction::name(committed), startup.report().c_str());
+		entity_capacity::after_commit(committed == patch_transaction::outcome::committed, committed == patch_transaction::outcome::rollback_failed);
+		if (!save_format::startup_allowed() || !entity_capacity::startup_allowed()) return;
 		// Start background work only after required startup hooks have verified.
 		// XInput's first call can take seconds (xinput_pad.hpp): made on a thread of its own, which runs once
 		// the loader is done, so the game's thread never waits for it; pads read as idle until then.
@@ -224,6 +239,19 @@ namespace
 		// patch push operands of script-facing code; nothing here depends on limits or test_input (the
 		// pipe's "script" command compiles its statement when it runs, with the functions in place).
 		forced_teams::install(game);
+		mold_controller::install(game);
+		if (!game_version::startup_allowed()) return;
+		// XML1 controllers in the shared gameplay record (docs/gameplay-agreement.md): online play is lockstep, so
+		// every peer runs Master Mold's native AI update and must have the same effective controller (rule 3).
+		// No turret controller exists in this build: rule 4 is advertised as verified off.
+		// Registering a requested controller enlists the agreement even in a non-LC installation.
+		if (game_version::needs_gameplay_agreement() || mold_controller::requested())
+		{
+			const auto mold = mold_controller::capability();
+			gameplay_agreement::register_rule(gameplay_capabilities::master_mold_id, xml1_capability_rules::master_mold_revision, mold.values, mold.verified);
+			const auto turrets = xml1_capability_rules::turrets();
+			gameplay_agreement::register_rule(gameplay_capabilities::turret_controller_id, xml1_capability_rules::turret_revision, turrets.values, turrets.verified);
+		}
 		// Conversations written for XML1's engine ([Game] AutoAdvance, ReplyVoices, ReplyCursor; on by default):
 		// three code sites of the conversation system, used from the first conversation on; independent of the
 		// patches above (none of its sites or guards is anyone else's).
@@ -265,7 +293,7 @@ namespace
 
 		// Freeze only after every participating gameplay installer has registered its effective values.
 		if (game_version::needs_gameplay_agreement())
-			game_version::bind_gameplay_agreement(gameplay_agreement::finalize(game));
+			game_version::bind_gameplay_agreement(gameplay_agreement::commit_verified());
 	}
 }
 
@@ -275,11 +303,12 @@ BOOL WINAPI DllMain(HINSTANCE instance, const DWORD reason, LPVOID)
 	{
 		DisableThreadLibraryCalls(instance);
 		install();
-		if (!game_version::startup_allowed() || !save_format::startup_allowed())
+		if (!game_version::startup_allowed() || !save_format::startup_allowed() || !entity_capacity::startup_allowed())
 		{
 			const std::string startup_reason = !game_version::startup_allowed()
-				? "The required LC network exclusion hook could not be installed."
-				: "The required LC save/trivia hooks could not be installed.\n" + save_format::startup_error();
+				? std::string(game_version::startup_error())
+				: !save_format::startup_allowed() ? "The required LC save/trivia hooks could not be installed.\n" + save_format::startup_error()
+				: "The entity-capacity install could not be certified.\n" + entity_capacity::startup_error();
 			logger::write("startup: refused: %s", startup_reason.c_str());
 			const auto message = startup_reason + "\n\nThe game was not started. Check xml2-fix.log and use a supported executable.";
 			MessageBoxA(nullptr, message.c_str(), "XML2 Fix cannot start", MB_OK | MB_ICONERROR);

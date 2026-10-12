@@ -40,8 +40,17 @@
 // with the game's own constructor, and put where the game's getter looks for it. limits_rules.hpp has
 // the tables and the layouts. The effect curve pool moves into a block of the DLL the same way as
 // the actor table.
+namespace patch_transaction { class transaction; }
+
 namespace limits
 {
+	// [Limits] MoveTriggers as a contribution to the one startup transaction (its sites share the actor-arena
+	// teardown at 0x4613e0 with the entity-capacity install): guards, writes and publication; false when the
+	// key is absent/stock or the guards refused. With `teardown_owned_elsewhere` the teardown is not wrapped
+	// and the owner calls retire_move_trigger_times() after the native teardown instead.
+	bool contribute(patch_transaction::transaction& transaction, HMODULE game, bool teardown_owned_elsewhere);
+	void retire_move_trigger_times();
+
 	// Reads [Limits] from xml2-fix.ini and raises what it asks for. Must run before XMen2.exe's own
 	// code does - from DllMain (see exports.cpp): the game first asks for both structures in its
 	// start-up, from the CPrecacheMgr constructor.

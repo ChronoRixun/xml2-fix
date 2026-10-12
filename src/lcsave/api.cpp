@@ -68,7 +68,14 @@ namespace lcsave
 
 	Result new_to_old_stream(const std::vector<std::uint8_t>& new_file, const Tables& tables)
 	{
+		return new_to_old_stream(new_file, tables, retail_layout, nullptr, nullptr);
+	}
+
+	Result new_to_old_stream(const std::vector<std::uint8_t>& new_file, const Tables& tables, const NativeLayout& native,
+		const TypedRegistry* registry, MigrationReport* report)
+	{
 		Result r;
+		if (report) *report = MigrationReport{};
 		if (!tables.loaded())
 		{
 			r.error = "tables not loaded";
@@ -77,15 +84,21 @@ namespace lcsave
 		std::vector<std::string> notes;
 		r.ok = guarded(r.error, [&]
 		{
-			const auto m = detail::reverse_slot(new_file, *tables.data, nullptr, notes);
-			r.bytes = detail::write_slot(m);
+			const auto m = detail::reverse_slot(new_file, *tables.data, nullptr, notes, native, registry, report);
+			r.bytes = detail::write_slot(m, native);
 		});
 		for (const auto& n : notes) r.ledger += (r.ledger.empty() ? "" : "\n") + n;
-		if (!r.ok) r.refused = 1;
+		if (!r.ok) { r.refused = 1; r.bytes.clear(); }
 		return r;
 	}
 
 	Result old_stream_to_new(const std::vector<std::uint8_t>& old_stream, const Tables& tables, const NewFileContext& context)
+	{
+		return old_stream_to_new(old_stream, tables, context, retail_layout);
+	}
+
+	Result old_stream_to_new(const std::vector<std::uint8_t>& old_stream, const Tables& tables, const NewFileContext& context,
+		const NativeLayout& native)
 	{
 		Result r;
 		if (!tables.loaded())
@@ -94,7 +107,7 @@ namespace lcsave
 			return r;
 		}
 		detail::ConvertState state;
-		r.ok = guarded(r.error, [&] { r.bytes = detail::stream_to_new(old_stream, *tables.data, context, state); });
+		r.ok = guarded(r.error, [&] { r.bytes = detail::stream_to_new(old_stream, *tables.data, context, state, native); });
 		if (!r.ok)
 		{
 			r.refused = 1;
@@ -121,7 +134,7 @@ namespace lcsave
 				out = detail::to_json(detail::dump_new(file, t));
 				return;
 			}
-			const auto old = detail::read_slot(file.data(), file.size());
+			const auto old = detail::read_slot(file.data(), file.size(), retail_layout);   // an old file is a retail save
 			detail::ConvertState state;
 			int start = 13, items = 13;                 // dump.dump_any: 0.1.10's eras when the converter refuses
 			ConvertOptions options;
@@ -148,6 +161,12 @@ namespace lcsave
 
 	bool missing_talents(const std::vector<std::uint8_t>& old_stream, const Tables& tables, std::vector<TalentAdd>& out, std::string& error)
 	{
+		return missing_talents(old_stream, tables, out, error, retail_layout);
+	}
+
+	bool missing_talents(const std::vector<std::uint8_t>& old_stream, const Tables& tables, std::vector<TalentAdd>& out, std::string& error,
+		const NativeLayout& native)
+	{
 		out.clear();
 		if (!tables.loaded())
 		{
@@ -158,15 +177,15 @@ namespace lcsave
 		{
 			std::vector<std::uint8_t> image;
 			const std::vector<std::uint8_t>* src = &old_stream;
-			if (old_stream.size() == old_payload)
+			if (old_stream.size() == native.payload)
 			{
 				image.assign(old_envelope, 0);
-				const u32 plen = old_payload;
+				const u32 plen = native.payload;
 				std::memcpy(image.data() + 0x80, &plen, 4);
 				image.insert(image.end(), old_stream.begin(), old_stream.end());
 				src = &image;
 			}
-			const auto m = detail::read_slot(src->data(), src->size());
+			const auto m = detail::read_slot(src->data(), src->size(), native);
 			const auto& b = *tables.data->build;
 			for (std::size_t n = 0; n < m.heroes.size(); ++n)
 			{

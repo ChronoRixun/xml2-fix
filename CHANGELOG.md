@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- Restore opt-in XML1 Master Mold shield/core combat, original attack deadlines,
+  platform actions, companion behavior and core tethers through native services.
+  The builder supplies saved-stage metadata; disabled/refused installation retains
+  the native encounter fallback; see `docs/xml1-controllers.md`.
+- Register Master Mold (rule 3: installed, saved-stage bit range and a hash of the flag
+  name) and the absent turret controller (rule 4, off) in the shared gameplay-capability record. Online co-op is lockstep, so every peer runs the
+  controller; sessions use a peer-invariant hero instead of the local `_ACTIVE_HERO_`.
+  Peers with different controller state are refused. Startup refusal names an
+  unverified XML1 hook rollback instead of the network exclusion hook.
+- Master Mold works with `[Limits] EntityCapacity=1`: its action-entity queries accept the installed query
+  owner's entries, test busy queries by the owner's null result and bound results by the installed World.
+- Added `[Limits] EntityCapacity` (port default 1, needs `[Save] Format=lc`): the entity domain grows from
+  32 actor / 224 generic / 256 World handles to 32 / 768 / 1024 with contiguous ten-bit indices, so props,
+  projectiles and triggers past the 224th are no longer refused without a word (docs/entity-capacity.md,
+  docs/entity-capacity-phase-a-plan.md). Prepared owners (allocator backing, World, grid, query manager,
+  physics frames, native save manager), the reviewed ledger of operand edits and relocations, the native
+  save layout E10A2, generation retirement, refusal and reset-time telemetry, and the test pipe's
+  `entity status` / `entity retire <slot>`.
+- One startup transaction (`patch_transaction`) now owns every code write of the shared gameplay
+  agreement, the LC save seam, `[Limits] MoveTriggers` and the entity-capacity install: expectations are
+  unioned and checked once, pages acquired once, writes verified by readback and rolled back on any
+  failure; a rollback that cannot be certified refuses startup. The agreement's prepare/finalize became
+  contributions plus a verified commit; the GCAP protocol advances to revision 2 and the entity layout rule
+  to revision 3 for raised peers, so release-1.4 peers are refused at admission.
+- LC saves carry required-feature bit 0 under the expanded layout; a retail-layout build refuses them with
+  the reason, and a legacy save's twelve registered typed entity-id zone variables are migrated at the
+  LC-to-native boundary when the build's typed registry verifies against the installed scripts.
+- Both lcsave implementations take an explicit native layout descriptor (retail or E10A2) for every stream,
+  record and transfer bound; outputs for the retail layout are byte-identical to before.
+
 - Keep the LC startup veto on instruction-cache flush failures and every patch protection
   restoration failure, including preflight cleanup. Stop further writes on a failed flush
   and attempt all remaining protection restores before refusing startup.

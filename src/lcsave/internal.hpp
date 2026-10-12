@@ -64,8 +64,24 @@ namespace lcsave::detail
 	struct OldZone
 	{
 		u32 name_handle = 0;
-		std::vector<OldStateRecord> states;       // 768
-		OldZoneRecordTail tail{};
+		std::vector<OldStateRecord> states;       // native.states (retail 768)
+		OldZoneRecordTail tail{};                 // arrays of native.ordinals / dynamic / smart
+
+		OldZone() : OldZone(retail_layout) {}
+		explicit OldZone(const NativeLayout& native) { resize(native); }
+		void resize(const NativeLayout& native)
+		{
+			states.assign(native.states, OldStateRecord{});
+			tail.ordinal_map.assign(native.ordinals, 0);
+			tail.dynamic.assign(native.dynamic, 0);
+			tail.smart.assign(native.smart, 0);
+		}
+		// the record has the array sizes of `native` (a record read with one layout is never written as another)
+		bool matches(const NativeLayout& native) const
+		{
+			return states.size() == native.states && tail.ordinal_map.size() == native.ordinals &&
+				tail.dynamic.size() == native.dynamic && tail.smart.size() == native.smart;
+		}
 	};
 	struct OldProfile
 	{
@@ -113,8 +129,10 @@ namespace lcsave::detail
 	void set_cstr(char* field, std::size_t size, const std::string& text, Enc enc = Enc::cp1252);   // NUL-padded; fails when it does not fit
 	template <std::size_t N> void set_cstr(char (&field)[N], const std::string& text, Enc enc = Enc::cp1252) { set_cstr(field, N, text, enc); }
 
-	OldSlot read_slot(const std::uint8_t* data, std::size_t size);
-	std::vector<std::uint8_t> write_slot(const OldSlot& m);
+	// the slot image of the native layout `native` (explicit: a file of another layout's size is refused, never
+	// re-interpreted); every zone record of the model must match the layout it is written for
+	OldSlot read_slot(const std::uint8_t* data, std::size_t size, const NativeLayout& native = retail_layout);
+	std::vector<std::uint8_t> write_slot(const OldSlot& m, const NativeLayout& native = retail_layout);
 	// settings.dat (0x84 + 0x228): the description and the profile block (oldsave.read_profile_file / write_profile_file)
 	OldProfile read_profile_file(const std::uint8_t* data, std::size_t size, std::string& description);
 	std::vector<std::uint8_t> write_profile_file(const std::string& description, const OldProfile& p);
@@ -159,6 +177,7 @@ namespace lcsave::detail
 		u64 campaign_serial = 0;
 		u32 save_sequence = 0;
 		u32 optional_features = 0;
+		u32 required_features = 0;    // the writer's native layout decides (feature_bits); a bit this code does not implement is refused
 	};
 	std::string encode_value(std::string_view type, const Value& v);
 	std::string encode_record(std::string_view name, const Value& v);
@@ -345,12 +364,22 @@ namespace lcsave::detail
 		std::vector<std::pair<std::int64_t, std::int64_t>>& unexplained);
 	std::vector<std::uint8_t> convert_slot(const std::vector<std::uint8_t>& old_bytes, const TablesData& t,
 		const ConvertOptions& options, ConvertState& state);
-	void validate_native_sections(const FileIn& file); // semantic preflight, no conversation I/O
+	void validate_native_sections(const FileIn& file, const NativeLayout& native = retail_layout); // semantic preflight, no conversation I/O
 	void validate_native_tables(const TablesData& tables); // installed engine budgets, not reader ceilings
+	// LC campaign -> the old model laid out for `native`. The file's required-feature marker decides
+	// (decide_features): a feature-1 file is refused on a retail layout; a feature-0 file on a contiguous layout has
+	// its registered typed fields migrated (registry required); a feature-1 file on a contiguous layout has them validated.
 	OldSlot reverse_slot(const std::vector<std::uint8_t>& new_bytes, const TablesData& t, const OldSlot* tmpl,
-		std::vector<std::string>& notes);
+		std::vector<std::string>& notes, const NativeLayout& native = retail_layout, const TypedRegistry* registry = nullptr,
+		MigrationReport* report = nullptr);
 	std::vector<std::uint8_t> stream_to_new(const std::vector<std::uint8_t>& old_stream, const TablesData& t,
-		const NewFileContext& context, ConvertState& state);
+		const NewFileContext& context, ConvertState& state, const NativeLayout& native = retail_layout);
+	// the typed entity-id adapter over a file's SVAR lists (typed_registry.cpp; tools/lcsave/typed_registry.py
+	// migrate_script_vars): the only translation of saved integers, at the LC -> native boundary
+	void migrate_script_vars(Value& zone_vars, Value& game_vars, u32 required_features, const NativeLayout& native,
+		const TypedRegistry* registry, MigrationReport& report);
+	std::string migration_note(const MigrationReport& report);   // "" when nothing was migrated or validated
+	extern const char* const no_registry;                        // the refusal of a legacy file without a registry
 	// the profile file (kind 2): the converter's and the saver's direction, and the reverse (engine side, save_format.cpp)
 	std::vector<std::uint8_t> convert_profile(const std::vector<std::uint8_t>& old_bytes, const TablesData& t,
 		const ConvertOptions& options, ConvertState& state);

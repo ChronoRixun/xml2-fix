@@ -29,7 +29,7 @@ namespace save_core_rules
  using save_format_rules::address;
  constexpr std::uint32_t capture_incomplete=0x00000001;
  constexpr std::uint32_t capture_unobserved=0x00000002;
- constexpr bool ordinal_fits(std::uint32_t ordinal){ return ordinal>=1 && ordinal<=256; }
+ constexpr bool ordinal_fits(std::uint32_t ordinal,std::uint32_t ordinals=256){ return ordinal>=1 && ordinal<=ordinals; }
  constexpr bool capacity_fits(std::uint32_t demand,std::uint32_t live,std::uint32_t cap)
  { return live<=cap && demand<=cap-live; }
  inline std::string folded(std::string text)
@@ -128,25 +128,67 @@ namespace save_core_rules
   {0x466659,"81f900030000",8,0x4666bc},{0x46668a,"3d2c010000",7,0x4666a6},
   {0x4666e7,"81fe00030000",12,0x4667a3},{0x4666f3,"81bd7452000000030000",16,0x4667a3}
  }};
- inline std::vector<std::uint8_t> bound_bridge(const capture_bound& site,address base,address hook)
+ // The compare each capture bound bridge replays under the installed native profile. Every immediate and every record
+ // displacement is the profile's (deviation 13, plan section 10): the retail bytes are the guard, never the replay.
+ //   0x41a427 cmp ecx,0x3800              zone string arena (not part of the entity layout: retail)
+ //   0x466659 cmp ecx,states              ECX = the record's state count
+ //   0x46668a cmp eax,dynamic             EAX = the dynamic list count
+ //   0x4666e7 cmp esi,states              ESI = the record's state count again (NOT the smart bound)
+ //   0x4666f3 cmp dword [ebp+smart_count],smart
+ inline std::vector<std::uint8_t> capture_compare(const capture_bound& site,const save_format_rules::native_profile& p)
  {
   std::vector<std::uint8_t> out;
   const auto size=limits_rules::hex_size(site.compare);
   for(std::size_t i=0;i<size;++i)out.push_back(limits_rules::hex_byte(site.compare,i));
+  auto put=[&](std::size_t at,std::uint32_t v){std::memcpy(out.data()+at,&v,4);};
+  switch(site.va)
+  {
+  case 0x466659: put(2,p.states); break;
+  case 0x46668a: put(1,p.dynamic); break;
+  case 0x4666e7: put(2,p.states); break;
+  case 0x4666f3: put(2,save_format_rules::smart_count(p)); put(6,p.smart); break;
+  default: break;
+  }
+  return out;
+ }
+ inline std::vector<std::uint8_t> bound_bridge(const capture_bound& site,address base,address hook,const save_format_rules::native_profile& p=save_format_rules::retail_profile)
+ {
+  std::vector<std::uint8_t> out=capture_compare(site,p);
   const auto at=base+static_cast<address>(out.size());out.insert(out.end(),{0x0f,0x82});
   save_format_rules::put32(out,site.va+static_cast<address>(site.length)-(at+6)); // unsigned below -> retail fit
   out.insert(out.end(),{0x9c,0x60,0x55});invoke(out,base,hook);
   out.insert(out.end(),{0x83,0xc4,0x04,0x61,0x9d});resume(out,base,site.skip);return out;
  }
- inline std::vector<std::uint8_t> ordinal_write_bridge(address base,address hook)
+ inline std::vector<std::uint8_t> ordinal_write_bridge(address base,address hook,const save_format_rules::native_profile& p=save_format_rules::retail_profile)
  {
   // EAX is the positive ordinal. Native world-handle availability is an independent limit.
   std::vector<std::uint8_t> out{0x3d,0x00,0x01,0x00,0x00,0x0f,0x86};
+  std::memcpy(out.data()+1,&p.ordinals,4);
   save_format_rules::put32(out,0); // patched to the replay below
   out.insert(out.end(),{0x9c,0x60,0x55});invoke(out,base,hook);
   out.insert(out.end(),{0x83,0xc4,0x04,0x61,0x9d});resume(out,base,0x4666a6);
   const auto replay=base+static_cast<address>(out.size());
   const auto delta=replay-(base+11);std::memcpy(out.data()+7,&delta,4);
-  out.insert(out.end(),{0x66,0x89,0x8c,0x45,0x0a,0x48,0x00,0x00});resume(out,base,0x466682);return out;
+  // mov word ptr [ebp + eax*2 + map-2], cx with the profile's ordinal map
+  out.insert(out.end(),{0x66,0x89,0x8c,0x45});save_format_rules::put32(out,save_format_rules::ordinal_write_displacement(p));
+  resume(out,base,0x466682);return out;
+ }
+ // Every capture bridge of the installed profile in one block at `base`, and the jumps the seam writes into the
+ // capture function. save_format emits exactly this; the native test executes it (test/save_capture_bridge_test.cpp).
+ struct capture_patch { address va; address target; std::size_t length; };
+ struct capture_block { std::vector<std::uint8_t> bytes; std::vector<capture_patch> jumps; };
+ inline capture_block capture_bridges(address base,address hook,const save_format_rules::native_profile& p)
+ {
+  capture_block b;
+  for(const auto& site:capture_bounds)
+  {
+   const address at=base+static_cast<address>(b.bytes.size());
+   append(b.bytes,bound_bridge(site,at,hook,p));
+   b.jumps.push_back({site.va,at,site.length});
+  }
+  const address ordinal_at=base+static_cast<address>(b.bytes.size());
+  append(b.bytes,ordinal_write_bridge(ordinal_at,hook,p));
+  b.jumps.push_back({0x46667a,ordinal_at,8});
+  return b;
  }
 }

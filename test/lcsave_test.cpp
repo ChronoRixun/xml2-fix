@@ -5,6 +5,7 @@
 //
 //   lcsave_test                                    vectors and fuzz (CI)
 //   lcsave_test --corpus DIR --python DIR --data BUILD --binds BINDTREE [--out DIR] [--fuzz N]
+//   ... --e10a2 DIR --registry FILE               plus the raised layout against the Python's E10A2 outputs
 
 #include "internal.hpp"
 #include "lcsave.hpp"
@@ -566,6 +567,78 @@ namespace
 			saver_same, saver_policy_same, conversation_resets, retained_ok, adds_files, adds_total);
 		return files && lcsave_equal == files && all_equal == files && saver_ok == files && saver_policy_same == files && retained_ok == files ? 0 : 1;
 	}
+
+	// ------------------------------------------------------------------------------------------------ corpus, E10A2
+	// The "Python == C++" gate of the raised layout (PHASE-A-PLAN section 8, step 2): for every corpus save, the
+	// Python's feature-0 import (<python>/<rel>.lcsave) loaded by the E10A2 layout with the typed registry must give
+	// the Python's stream (<e10a2>/<rel>.e10a2.old) and report line (.e10a2.report, first line), its feature-1 rewrite
+	// must give the Python's (.e10a2.resave), and loading that rewrite again must give the Python's second load
+	// (.e10a2.again; report line 2): typed values are never shifted twice (the zone block's state indices follow the
+	// writer's order, so the second stream is compared with the reference's second stream, not with the first).
+	int run_e10a2_corpus(const fs::path& corpus, const fs::path& python, const fs::path& e10a2, const fs::path& registry_path,
+		const std::wstring& data, const std::wstring& binds)
+	{
+		Tables tables;
+		std::string error;
+		if (!load_tables(data, binds, tables, error)) { std::printf("FAIL: load_tables: %s\n", error.c_str()); return 1; }
+		TypedRegistry registry;
+		if (!load_typed_registry(read_all(registry_path), registry, error)) { std::printf("FAIL: registry: %s\n", error.c_str()); return 1; }
+		std::vector<fs::path> paths;
+		for (const auto& e : fs::recursive_directory_iterator(corpus))
+		{
+			const auto name = e.path().filename().string();
+			if (e.is_regular_file() && name.rfind("saveslot", 0) == 0 && e.path().extension() == ".save") paths.push_back(e.path());
+		}
+		std::sort(paths.begin(), paths.end());
+		int files = 0, stream_equal = 0, report_equal = 0, resave_equal = 0, idempotent = 0, retail_refused = 0, typed_seen = 0;
+		for (const auto& p : paths)
+		{
+			++files;
+			const auto rel = fs::relative(p, corpus);
+			const auto py_lcsave = read_all((python / rel).string() + ".lcsave");
+			const auto expected_stream = read_all((e10a2 / rel).string() + ".e10a2.old");
+			const auto expected_resave = read_all((e10a2 / rel).string() + ".e10a2.resave");
+			const auto expected_again = read_all((e10a2 / rel).string() + ".e10a2.again");
+			const auto expected_report = read_text((e10a2 / rel).string() + ".e10a2.report");
+			std::string status;
+			MigrationReport migration;
+			const auto stream = new_to_old_stream(py_lcsave, tables, e10a2_layout, &registry, &migration);
+			bool same_stream = false, same_report = false, same_resave = false, same_again = false;
+			if (!stream.ok) status += " [E10A2 reverse refused: " + stream.error + "]";
+			else
+			{
+				same_stream = stream.bytes == expected_stream;
+				const auto line = migration.line();
+				same_report = !expected_report.empty() && expected_report.compare(0, line.size(), line) == 0 && expected_report[line.size()] == '\n';
+				if (migration.typed_fields) ++typed_seen;
+				NewFileContext ctx;
+				ctx.saved_at = 0; ctx.campaign_serial = 17; ctx.save_sequence = 2;
+				ctx.retained_file = py_lcsave; ctx.require_capture_metadata = true;
+				if (!loaded_zone_metadata(py_lcsave, tables, ctx.zone_captures, error, e10a2_layout, &registry)) status += " [metadata: " + error + "]";
+				else
+				{
+					const auto saved = old_stream_to_new(stream.bytes, tables, ctx, e10a2_layout);
+					if (!saved.ok) status += " [E10A2 save refused: " + saved.error + "]";
+					else
+					{
+						same_resave = saved.bytes == expected_resave;
+						MigrationReport validation;
+						const auto again = new_to_old_stream(saved.bytes, tables, e10a2_layout, &registry, &validation);
+						const auto line2 = line + "\n" + validation.line() + "\n";
+						same_again = again.ok && again.bytes == expected_again && expected_report == line2 && validation.normalized_to_null == 0;
+						retail_refused += !new_to_old_stream(saved.bytes, tables).ok;
+					}
+				}
+			}
+			stream_equal += same_stream; report_equal += same_report; resave_equal += same_resave; idempotent += same_again;
+			std::printf("%s %s: e10a2.old=%s report=%s resave=%s idempotent=%s%s\n", same_stream && same_report && same_resave && same_again ? "equal  " : "DIFFERS",
+				rel.string().c_str(), same_stream ? "equal" : "DIFFERS", same_report ? "equal" : "DIFFERS", same_resave ? "equal" : "DIFFERS",
+				same_again ? "yes" : "NO", status.c_str());
+		}
+		std::printf("e10a2 corpus: %d files; stream equal %d; report equal %d; feature-1 resave equal %d; feature-1 idempotent %d; retail loader refused the rewrite %d; files with registered typed fields %d\n",
+			files, stream_equal, report_equal, resave_equal, idempotent, retail_refused, typed_seen);
+		return files && stream_equal == files && report_equal == files && resave_equal == files && idempotent == files && retail_refused == files ? 0 : 1;
+	}
 }
 
 // everything load_tables parsed, as JSON (keys in hex): compare_tables.py checks it against the builder's own readers
@@ -726,6 +799,12 @@ int main(int argc, char** argv)
 		auto widen = [](const std::string& s) { return fs::path(s).wstring(); };
 		result = run_corpus(args["--corpus"], args["--python"], widen(args["--data"]), widen(args["--binds"]),
 			args.count("--out") ? fs::path(args["--out"]) : fs::path());
+		// the raised layout against the Python's E10A2 outputs (--e10a2 DIR --registry FILE)
+		if (args.count("--e10a2"))
+		{
+			if (!args.count("--registry")) { std::printf("FAIL: --e10a2 needs --registry FILE\n"); return 1; }
+			result |= run_e10a2_corpus(args["--corpus"], args["--python"], args["--e10a2"], args["--registry"], widen(args["--data"]), widen(args["--binds"]));
+		}
 		// (c) on real saves with the real tables: every 8th corpus file
 		Tables tables;
 		std::string error;

@@ -20,5 +20,9 @@ namespace game_version
 	bool require_gameplay_agreement(HMODULE game);
 	void bind_gameplay_agreement(bool verified);
 	void bind_gameplay_refusal(void (*show)());
+	// Sticky for this installation when a controller cannot restore native code.
+	void refuse_startup();
+	// Why startup_allowed() is false, for the startup refusal notice.
+	const char* startup_error();
 	void install(HMODULE game);
 }

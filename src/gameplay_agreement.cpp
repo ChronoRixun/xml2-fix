@@ -2,6 +2,7 @@
 #include "gameplay_agreement_rules.hpp"
 #include "game_version.hpp"
 #include "log.hpp"
+#include "patch_transaction.hpp"
 #include <cstring>
 
 namespace gameplay_agreement
@@ -10,37 +11,15 @@ namespace gameplay_agreement
  {
   using namespace gameplay_agreement_rules;
   gameplay_capabilities::record capabilities;
-  bool failure_ready=false,transport_ready=false;
+  // Published only by the transaction's verified commit: the native refusal sites and the transport sites are
+  // written together (plan section 7); before publication the adapters are not reachable through native code.
+  bool failure_ready=false,transport_ready=false,contributed_=false,published=false,frozen=false;
   constexpr char incompatibility[]="Incompatible gameplay or an unverified installation. Both players must use the same build and effective gameplay settings. Restart after fixing the installation.";
   using callback=int(__cdecl*)(void*);
   using direct=int(__thiscall*)(void*,const void*,int,const std::uint8_t*);
   using send=void(__thiscall*)(void*,void*,const std::uint8_t*,int);
   using broadcast=int(__thiscall*)(void*,const std::uint8_t*,int,int,int);
   struct event { std::uint32_t type;void* body;std::uint16_t length,reserved;void* context;void* sender; };
-  struct patch { std::uint32_t site;std::array<std::uint8_t,5> bytes;std::size_t size; };
-  patch branch(std::uint32_t site,const void* target,std::uint8_t opcode)
-  {
-   patch p{site,{opcode},5};const auto delta=std::int32_t(reinterpret_cast<std::uintptr_t>(target)-site-5);std::memcpy(p.bytes.data()+1,&delta,4);return p;
-  }
-  patch pointer(std::uint32_t site,const void* target)
-  {
-   patch p{site,{},4};const auto address=reinterpret_cast<std::uintptr_t>(target);std::memcpy(p.bytes.data(),&address,4);return p;
-  }
-  template<std::size_t N> bool apply(const std::array<patch,N>& patches)
-  {
-   struct page { std::uintptr_t address;DWORD protection; };
-   std::array<page,N> pages{};std::size_t count=0;SYSTEM_INFO info{};GetSystemInfo(&info);
-   for(const auto&p:patches){const auto address=p.site-p.site%info.dwPageSize;bool found=false;for(std::size_t i=0;i<count;++i)found|=pages[i].address==address;if(found)continue;
-    DWORD old=0;if(!VirtualProtect(reinterpret_cast<void*>(address),info.dwPageSize,PAGE_EXECUTE_READWRITE,&old)){
-     for(std::size_t i=count;i-- >0;){DWORD unused;VirtualProtect(reinterpret_cast<void*>(pages[i].address),info.dwPageSize,pages[i].protection,&unused);}return false;
-    }pages[count++]={address,old};
-   }
-   for(const auto&p:patches)std::memcpy(reinterpret_cast<void*>(p.site),p.bytes.data(),p.size);
-   bool ok=true;
-   for(std::size_t i=count;i-- >0;){ok=FlushInstructionCache(GetCurrentProcess(),reinterpret_cast<void*>(pages[i].address),info.dwPageSize)!=FALSE && ok;DWORD unused;ok=VirtualProtect(reinterpret_cast<void*>(pages[i].address),info.dwPageSize,pages[i].protection,&unused)!=FALSE && ok;}
-   for(const auto&p:patches)ok=std::memcmp(reinterpret_cast<const void*>(p.site),p.bytes.data(),p.size)==0 && ok;
-   return ok;
-  }
   template<std::size_t N> bool retail(HMODULE game,const std::array<limits_rules::guard,N>& guards)
   {
    if(reinterpret_cast<std::uintptr_t>(game)!=limits_rules::image_base)return false;
@@ -136,6 +115,9 @@ namespace gameplay_agreement
    }
    using join=int(__thiscall*)(void*,const void*,int);return reinterpret_cast<join>(&original_join)(context,address,port);
   }
+  template<std::size_t N> void expect(patch_transaction::contribution& c,const std::array<limits_rules::guard,N>& guards)
+  { for(const auto& g:guards)c.guards.push_back({g.va,patch_transaction::bytes_of(g.hex),g.what}); }
+  std::uint32_t address_of(const void* p){return static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(p));}
  }
  bool register_rule(std::uint16_t id,std::uint16_t revision,std::array<std::uint32_t,4> effective,bool verified)
  { const bool enabled=enlist();const bool ok=capabilities.add(id,revision,effective,verified && enabled);if(!ok)game_version::bind_gameplay_agreement(false);return ok; }
@@ -147,20 +129,51 @@ namespace gameplay_agreement
  int receive_reply(void* e){return receive(e,reply_size,native_reply,endpoint::joiner);}
  int receive_info(void* e){return receive(e,info_size,native_info,endpoint::host);}
  int receive_ack(void* e){return receive(e,ack_size,native_ack,endpoint::joiner);}
+ bool contributed(){return contributed_;}
+ bool contribute(patch_transaction::transaction& transaction,HMODULE game)
+ {
+  if(contributed_)return published;
+  if(!retail(game,failure_guards) || !retail(game,transport_guards)){logger::write("online: native refusal/transport guards failed; agreement unavailable");return false;}
+  patch_transaction::contribution c;c.owner="gameplay_agreement";
+  expect(c,failure_guards);expect(c,transport_guards);
+  using patch_transaction::relocation;
+  c.writes.push_back(relocation(native_join,"e9",true,address_of(reinterpret_cast<const void*>(&begin_join)),0,"begin join"));
+  c.writes.push_back(relocation(failure_text+1,"",false,address_of(incompatibility),0,"failure text"));
+  c.writes.push_back(relocation(rejection_registration+1,"",false,address_of(reinterpret_cast<const void*>(&receive_rejection)),0,"rejection callback"));
+  c.writes.push_back(relocation(request_send,"e8",true,address_of(reinterpret_cast<const void*>(&send_direct)),0,"request send"));
+  c.writes.push_back(relocation(reply_broadcast,"e8",true,address_of(reinterpret_cast<const void*>(&send_broadcast)),0,"reply broadcast"));
+  c.writes.push_back(relocation(reply_send,"e8",true,address_of(reinterpret_cast<const void*>(&send_single)),0,"reply send"));
+  c.writes.push_back(relocation(info_send,"e8",true,address_of(reinterpret_cast<const void*>(&send_single)),0,"info send"));
+  c.writes.push_back(relocation(ack_send,"e8",true,address_of(reinterpret_cast<const void*>(&send_single)),0,"ack send"));
+  c.writes.push_back(relocation(request_registration+1,"",false,address_of(reinterpret_cast<const void*>(&receive_request)),0,"request callback"));
+  c.writes.push_back(relocation(reply_registration+1,"",false,address_of(reinterpret_cast<const void*>(&receive_reply)),0,"reply callback"));
+  c.writes.push_back(relocation(info_registration+1,"",false,address_of(reinterpret_cast<const void*>(&receive_info)),0,"info callback"));
+  c.writes.push_back(relocation(ack_registration+1,"",false,address_of(reinterpret_cast<const void*>(&receive_ack)),0,"ack callback"));
+  c.publish=[]{failure_ready=true;transport_ready=true;published=true;game_version::bind_gameplay_refusal(&show_install_failure);
+   logger::write("online: shared gameplay agreement sites published (refusal and transport, protocol %u)",unsigned(gameplay_capabilities::protocol_revision));};
+  c.abandon=[]{logger::write("online: shared gameplay agreement sites not installed; online remains blocked");};
+  c.retain=[]{logger::write("online: shared gameplay agreement sites uncertified after a failed rollback; online remains blocked");};
+  contributed_=transaction.add(std::move(c));return contributed_;
+ }
+ bool commit_verified()
+ {
+  if(frozen)return capabilities.ready();
+  frozen=true;
+  if(!published || !capabilities.finalize()){logger::write("online: capabilities/failure/transport installation unverified; online remains blocked");return false;}
+  logger::write("online: shared gameplay capability record verified (%u bytes); release identity unchanged",unsigned(capabilities.bytes().size()));return true;
+ }
  bool prepare(HMODULE game)
  {
-  if(failure_ready)return true;
-  if(!retail(game,failure_guards)){logger::write("online: native refusal path guard failed; agreement unavailable");return false;}
-  const std::array patches{branch(native_join,&begin_join,0xe9),pointer(failure_text+1,incompatibility),pointer(rejection_registration+1,reinterpret_cast<void*>(&receive_rejection))};
-  failure_ready=apply(patches);if(failure_ready)game_version::bind_gameplay_refusal(&show_install_failure);return failure_ready;
+  if(contributed_)return published;
+  patch_transaction::transaction late;
+  if(!contribute(late,game))return false;
+  const auto outcome=late.commit();
+  if(outcome!=patch_transaction::outcome::committed){logger::write("online: late agreement installation %s: %s",patch_transaction::name(outcome),late.report().c_str());contributed_=false;return false;}
+  return published;
  }
  bool finalize(HMODULE game)
  {
-  if(transport_ready)return capabilities.ready();
-  if(!failure_ready || !capabilities.finalize() || !retail(game,transport_guards)){logger::write("online: capabilities/failure/transport installation unverified; online remains blocked");return false;}
-  const std::array patches{
-   branch(request_send,&send_direct,0xe8),branch(reply_broadcast,&send_broadcast,0xe8),branch(reply_send,&send_single,0xe8),branch(info_send,&send_single,0xe8),branch(ack_send,&send_single,0xe8),
-   pointer(request_registration+1,reinterpret_cast<void*>(&receive_request)),pointer(reply_registration+1,reinterpret_cast<void*>(&receive_reply)),pointer(info_registration+1,reinterpret_cast<void*>(&receive_info)),pointer(ack_registration+1,reinterpret_cast<void*>(&receive_ack))};
-  transport_ready=apply(patches);logger::write("online: shared gameplay capability record %s (%u bytes); release identity unchanged",transport_ready ? "verified" : "failed",unsigned(capabilities.bytes().size()));return transport_ready;
+  if(!contributed_ && !prepare(game))return false;
+  return commit_verified();
  }
 }

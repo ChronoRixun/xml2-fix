@@ -280,12 +280,18 @@ namespace lcsave
 	bool loaded_zone_metadata(const std::vector<std::uint8_t>& file, const Tables& tables,
 		std::vector<ZoneCaptureMetadata>& out, std::string& error)
 	{
+		return loaded_zone_metadata(file, tables, out, error, retail_layout, nullptr);
+	}
+
+	bool loaded_zone_metadata(const std::vector<std::uint8_t>& file, const Tables& tables,
+		std::vector<ZoneCaptureMetadata>& out, std::string& error, const NativeLayout& layout, const TypedRegistry* registry)
+	{
 		out.clear(); error.clear();
 		const bool ok = guarded(error, [&]
 		{
 			if (!tables.loaded() || !tables.data->build) detail::fail("loaded metadata needs build tables");
 			std::vector<std::string> notes;
-			const auto native = detail::reverse_slot(file, *tables.data, nullptr, notes);
+			const auto native = detail::reverse_slot(file, *tables.data, nullptr, notes, layout, registry, nullptr);
 			const auto f = detail::read_file(file.data(), file.size(), kind_campaign);
 			for (const auto& record : f.data("ZONE")["records"].as_list())
 			{
@@ -306,7 +312,7 @@ namespace lcsave
 				const auto restored = std::find_if(native.zones.begin(), native.zones.end(), [&](const auto& z)
 				{ return detail::zone_string(*native.zone_strings, z.name_handle) == metadata.zone; });
 				// Metadata must describe the reconstructed map, including promoted legacy placements.
-				for (std::size_t k = 0; k < old_zone_ordinals; ++k)
+				for (std::size_t k = 0; k < restored->tail.ordinal_map.size(); ++k)
 				{
 					const auto idx = restored->tail.ordinal_map[k];
 					if (!idx) continue;
@@ -327,18 +333,24 @@ namespace lcsave
 	bool native_zone_metadata(const std::vector<std::uint8_t>& stream, const Tables& tables,
 		std::vector<ZoneCaptureMetadata>& out, std::string& error)
 	{
+		return native_zone_metadata(stream, tables, out, error, retail_layout);
+	}
+
+	bool native_zone_metadata(const std::vector<std::uint8_t>& stream, const Tables& tables,
+		std::vector<ZoneCaptureMetadata>& out, std::string& error, const NativeLayout& native)
+	{
 		out.clear(); error.clear();
 		// Reuse the strict same-build native translator to validate numbering/names and scalar ranges.
 		// This temporary container is never written or installed; it supplies inferred associations only.
 		NewFileContext context;
-		const auto translated=old_stream_to_new(stream,tables,context);
+		const auto translated=old_stream_to_new(stream,tables,context,native);
 		if(!translated.ok){error=translated.error;return false;}
 		// Do not reverse this temporary file: reverse computes conversation digests, which can
 		// stall an online join on a cold filesystem. The translator already verified these names.
 		const bool ok=guarded(error,[&]
 		{
 			const auto file=detail::read_file(translated.bytes.data(),translated.bytes.size(),kind_campaign);
-			detail::validate_native_sections(file);
+			detail::validate_native_sections(file,native);
 			for(const auto& record:file.data("ZONE")["records"].as_list())
 			{
 				const auto zone=tables.data->p_zone.find(static_cast<std::uint32_t>(record["zone"].as_int()));
@@ -364,18 +376,23 @@ namespace lcsave
 
 	bool native_load_demand(const std::vector<std::uint8_t>& stream, NativeLoadDemand& out, std::string& error)
 	{
+		return native_load_demand(stream, out, error, retail_layout);
+	}
+
+	bool native_load_demand(const std::vector<std::uint8_t>& stream, NativeLoadDemand& out, std::string& error, const NativeLayout& native)
+	{
 		out = {}; error.clear();
 		return guarded(error, [&]
 		{
 			std::vector<std::uint8_t> image = stream;
-			if (stream.size() == old_payload)
+			if (stream.size() == native.payload)
 			{
 				image.assign(old_envelope, 0);
-				const std::uint32_t size = old_payload;
+				const std::uint32_t size = native.payload;
 				std::memcpy(image.data() + 0x80, &size, 4);
 				image.insert(image.end(), stream.begin(), stream.end());
 			}
-			const auto old = detail::read_slot(image.data(), image.size());
+			const auto old = detail::read_slot(image.data(), image.size(), native);
 			auto count = [&](const detail::OldInstance& instance)
 			{
 				++out.instances;
@@ -392,13 +409,18 @@ namespace lcsave
 
 	bool validate_native_stream(const std::vector<std::uint8_t>& stream, const Tables& tables, std::string& error)
 	{
+		return validate_native_stream(stream, tables, error, retail_layout);
+	}
+
+	bool validate_native_stream(const std::vector<std::uint8_t>& stream, const Tables& tables, std::string& error, const NativeLayout& native)
+	{
 		NativeLoadDemand demand;
 		if (!tables.loaded()) { error = "tables not loaded"; return false; }
-		if (!native_load_demand(stream, demand, error)) return false;
+		if (!native_load_demand(stream, demand, error, native)) return false;
 		if (demand.instances > 256 || demand.attached_enhancements > 375 || demand.world_items > 150)
 		{ error = "native instance/enhancement/world pool exhausted"; return false; }
 		NewFileContext context;
-		const auto result = old_stream_to_new(stream, tables, context);
+		const auto result = old_stream_to_new(stream, tables, context, native);
 		error = result.error;
 		return result.ok;
 	}

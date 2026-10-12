@@ -75,7 +75,7 @@ namespace lcsave::detail
 			std::set<std::int64_t> seen;
 			for (const auto& row : rows.as_list()) if (!seen.insert(row[key].as_int()).second) fail(std::string("duplicate ") + key);
 		}
-		void preflight(const FileIn& f)
+		void preflight(const FileIn& f, const NativeLayout& native)
 		{
 			for (const auto& [tag, sec] : f.sections) if (sec.known) finite_values(sec.data);
 			if (f.header.kind == kind_profile) return;
@@ -95,7 +95,7 @@ namespace lcsave::detail
 				{
 					for (const auto key : {"def_name", "inst_name"}) if (U(state[key]) >= names.size()) fail("state name index outside names");
 					const auto list = state["list"].as_int(); if (list < 1 || list > 3) fail("unknown native state list");
-					if (list == 1 && (!ordinals.insert(U(state["ordinal"])).second || U(state["ordinal"]) < 1 || U(state["ordinal"]) > old_zone_ordinals)) fail("duplicate or invalid ordinal");
+					if (list == 1 && (!ordinals.insert(U(state["ordinal"])).second || U(state["ordinal"]) < 1 || U(state["ordinal"]) > native.ordinals)) fail("duplicate or invalid ordinal");
 					if (list == 1 && !placements.insert(U(state["placement_index"])).second) fail("duplicate destination placement");
 					for (const auto& value : state["position"].as_list()) { const auto x = value.as_real(); if (!std::isfinite(x) || x < -32768 || x > 32767 || x != std::nearbyint(x)) fail("state position not representable"); }
 					B(state["flags_a"]); B(state["flags_b"]);
@@ -271,7 +271,7 @@ namespace lcsave::detail
 			return h;
 		}
 
-		void zone_records(const Pos& pos, const Value& recs, OldSlot& m, std::vector<std::string>& notes, bool legacy_import)
+		void zone_records(const Pos& pos, const Value& recs, OldSlot& m, std::vector<std::string>& notes, bool legacy_import, const NativeLayout& native)
 		{
 			// Drop only dependencies owned exclusively by rejected records. Shared and unowned handles survive.
 			std::set<u32> owned, applied;
@@ -295,17 +295,18 @@ namespace lcsave::detail
 				if (text.empty()) return 0;
 				for (const auto& [k, v] : interned) if (k == text) return v;
 				if (!encodable_cp1252(text, enc)) fail("'charmap' codec can't encode character in " + py_repr(text, enc));
-				u32 slot = (hash_string(text) & 0x7ff);
+				const u32 mask = native.zone_string_slots - 1;
+				u32 slot = (hash_string(text) & mask);
 				if (!slot) slot = 1;
 				u32 tries = 0;
 				while (strings.offsets[slot])
 				{
-					slot = (slot + 1) & 0x7ff;
+					slot = (slot + 1) & mask;
 					if (!slot) slot = 1;
-					if (++tries > old_zone_string_slots) fail("zone string table full");
+					if (++tries > native.zone_string_slots) fail("zone string table full");
 				}
 				const u32 off = strings.used;
-				if (off + text.size() + 1 > old_zone_arena) fail("zone string arena full");
+				if (off + text.size() + 1 > native.zone_arena) fail("zone string arena full");
 				std::memcpy(strings.arena + off, text.data(), text.size());
 				strings.arena[off + text.size()] = 0;
 				strings.offsets[slot] = off;
@@ -368,8 +369,7 @@ namespace lcsave::detail
 					}
 					for (const auto& [i, ordinal] : candidates) if (counts[ordinal] == 1) promoted[i] = ordinal;
 				}
-				OldZone z;
-				z.states.assign(old_zone_states, OldStateRecord{});
+				OldZone z(native);
 				std::size_t n = 1;
 				std::vector<u16> dynamic, smart;
 				const auto& names = r["names"].as_list();
@@ -383,7 +383,7 @@ namespace lcsave::detail
 				for (const auto& s : r["states"].as_list())
 				{
 					const auto promotion = promoted.find(state_index++);
-					if (n >= old_zone_states) fail("more states than the engine record holds");
+					if (n >= native.states) fail("more states than the engine record holds");
 					OldStateRecord st{};
 					const auto& payload = s["payload"].as_bytes();
 					if (s["payload_kind"].as_int() == 2)
@@ -425,17 +425,17 @@ namespace lcsave::detail
 					if (list == 1)
 					{
 						const auto k = static_cast<std::int64_t>(mapped.at(s["ordinal"].as_int()));
-						if (!(1 <= k && k <= old_zone_ordinals)) fail("ordinal " + std::to_string(k) + " outside the engine map");
+						if (!(1 <= k && k <= native.ordinals)) fail("ordinal " + std::to_string(k) + " outside the engine map");
 						if (k > static_cast<std::int64_t>(num->placement.size()))
 						{
 							fail("ordinal " + std::to_string(k) + " beyond the zone numbering (" + std::to_string(num->placement.size()) + ")");
 						}
-						z.tail.ordinal_map[k - 1] = idx;
+						z.tail.ordinal_map[static_cast<std::size_t>(k - 1)] = idx;
 					}
 					else if (promotion != promoted.end())
 					{
 						const auto k = promotion->second;
-						if (k > old_zone_ordinals) fail("promoted ordinal outside the engine map");
+						if (k > native.ordinals) fail("promoted ordinal outside the engine map");
 						z.tail.ordinal_map[k - 1] = idx;
 						z.states[idx].flags_b |= 8;
 						notes.push_back("zone " + py_repr(zone, Enc::latin1) + ": legacy unnumbered state restored as numbered placement " + std::to_string(k));
@@ -445,10 +445,12 @@ namespace lcsave::detail
 				}
 				z.name_handle = intern(zone, Enc::latin1);
 				z.tail.state_count = static_cast<u32>(1 + r["states"].as_list().size());
-				if (dynamic.size() > old_zone_dynamic || smart.size() > old_zone_smart) fail("pack expected 300 items for packing");
-				std::copy(dynamic.begin(), dynamic.end(), z.tail.dynamic);
+				// the list capacities of the layout (the message is the one the reference's struct.pack gives)
+				if (dynamic.size() > native.dynamic) fail("pack expected " + std::to_string(native.dynamic) + " items for packing");
+				if (smart.size() > native.smart) fail("pack expected " + std::to_string(native.smart) + " items for packing");
+				std::copy(dynamic.begin(), dynamic.end(), z.tail.dynamic.begin());
 				z.tail.dynamic_count = static_cast<u32>(dynamic.size());
-				std::copy(smart.begin(), smart.end(), z.tail.smart);
+				std::copy(smart.begin(), smart.end(), z.tail.smart.begin());
 				z.tail.smart_count = static_cast<u32>(smart.size());
 				const auto& fog = r["fog"]["data"].as_bytes();
 				if (fog.size() != old_fog_bytes) fail("fog: " + std::to_string(fog.size()) + " bytes, layout says 844");
@@ -601,19 +603,31 @@ namespace lcsave::detail
 		}
 	}
 
-	void validate_native_sections(const FileIn& file)
+	void validate_native_sections(const FileIn& file, const NativeLayout& native)
 	{
-		preflight(file);
+		preflight(file, native);
 	}
 
-	OldSlot reverse_slot(const std::vector<std::uint8_t>& new_bytes, const TablesData& t, const OldSlot* tmpl, std::vector<std::string>& notes)
+	OldSlot reverse_slot(const std::vector<std::uint8_t>& new_bytes, const TablesData& t, const OldSlot* tmpl, std::vector<std::string>& notes,
+		const NativeLayout& native, const TypedRegistry* registry, MigrationReport* report)
 	{
 		const auto f = read_file(new_bytes.data(), new_bytes.size(), kind_campaign);
+		// the file's required-feature marker against the layout (never stripped: a feature-1 file refuses on retail)
+		const auto decision = decide_features(f.header.required_features, native);
+		if (!decision.ok) fail(decision.reason);
 		if (!t.build) fail("the reverse reader needs the build (--build)");
-		preflight(f);
+		preflight(f, native);
 		const Pos pos{t, *t.build};
 		const auto& b = *t.build;
 		OldSlot m;
+		// the typed entity-id adapter (PHASE-A-PLAN section 4): the only translation of saved integers, at this boundary
+		Value zone_vars = f.data("SVAR")["zone_vars"];
+		Value game_vars = f.data("SVAR")["game_vars"];
+		MigrationReport migration;
+		migrate_script_vars(zone_vars, game_vars, f.header.required_features, native, registry, migration);
+		if (report) *report = migration;
+		const auto note = migration_note(migration);
+		if (!note.empty()) notes.push_back(note);
 		const auto& meta = f.data("META");
 		const auto description = meta["description"].as_text();
 		set_cstr(reinterpret_cast<char*>(m.description_raw), 0x80, description, meta["description"].enc);
@@ -822,11 +836,10 @@ namespace lcsave::detail
 		pos.review_words(RV["unlocked"], m.review.unlocked);
 		pos.review_words(RV["seen"], m.review.seen);
 		// ---- ZONE
-		zone_records(pos, f.data("ZONE")["records"], m, notes, f.data("META")["origin"].as_int() == 1);
+		zone_records(pos, f.data("ZONE")["records"], m, notes, f.data("META")["origin"].as_int() == 1, native);
 		// ---- profile
 		profile_from_sections(pos, f, m.profile);
 		// ---- script variables, town centres
-		const auto& SV = f.data("SVAR");
 		auto vars = [&](const Value& lst, OldScriptVar* out, u32 n)
 		{
 			const auto& l = lst.as_list();
@@ -841,8 +854,8 @@ namespace lcsave::detail
 				out[k].value_be[3] = static_cast<u8>(v);
 			}
 		};
-		vars(SV["zone_vars"], m.zone_vars, old_script_zone_vars);
-		vars(SV["game_vars"], m.game_vars, old_script_game_vars);
+		vars(zone_vars, m.zone_vars, old_script_zone_vars);
+		vars(game_vars, m.game_vars, old_script_game_vars);
 		u32 mask = 0;
 		for (const auto& v : f.data("XTRC")["unlocked"].as_list())
 		{
@@ -853,7 +866,7 @@ namespace lcsave::detail
 		m.town_centres = mask;
 		NativeLoadDemand demand;
 		std::string demand_error;
-		if (!native_load_demand(write_slot(m), demand, demand_error)) fail(demand_error);
+		if (!native_load_demand(write_slot(m, native), demand, demand_error, native)) fail(demand_error);
 		if (demand.instances > 256 || demand.attached_enhancements > 375 || demand.world_items > 150) fail("native instance/enhancement/world pool exhausted");
 		if (tmpl) apply_template(m, *tmpl);
 		return m;
@@ -863,7 +876,7 @@ namespace lcsave::detail
 	{
 		const auto f = read_file(new_bytes.data(), new_bytes.size(), kind_profile);
 		if (!t.build) fail("the reverse reader needs the build (--build)");
-		preflight(f);
+		preflight(f, retail_layout);          // a profile has no native zone layout
 		const Pos pos{t, *t.build};
 		OldProfile profile;
 		profile_from_sections(pos, f, profile);

@@ -7,8 +7,13 @@
 
 namespace gameplay_capabilities
 {
- constexpr std::uint16_t entity_layout_id=1, explosive_first_hit_id=2;
- constexpr std::uint16_t protocol_revision=1;
+ constexpr std::uint16_t entity_layout_id=1, explosive_first_hit_id=2, master_mold_id=3, turret_controller_id=4;
+ // Protocol revision 2: the Phase A agreement - the record appended to the admission messages 18/1A/1B/1F, compared
+ // before the native admission callback, a mismatch refused with 1D and the dialog on both sides, and the entity-layout
+ // rule with the actor+generic <= world headroom condition. Revision-1 peers (0.2.0i and older) refuse. The plan's
+ // receive-lifecycle machinery (certificate epochs, a dispatch floor, quiescent retirement, Node purge; section 5) is
+ // NOT part of it: docs/entity-capacity-phase-a-plan.md section 10, deviation 17.
+ constexpr std::uint16_t protocol_revision=2;
  constexpr std::uint32_t magic=0x50414347; // GCAP, little endian
  constexpr std::size_t max_entries=8, header_size=12, entry_size=20, max_size=header_size+entry_size*max_entries;
  struct entry { std::uint16_t id,revision; std::array<std::uint32_t,4> values; };
@@ -28,11 +33,13 @@ namespace gameplay_capabilities
    for(std::size_t i=0;i<count_;++i)if(entries_[i].id==id){valid_=false;return false;}
    entries_[count_++]={id,revision,values};return true;
   }
+  // actors + generic <= world (the world keeps registrations beyond the two arenas, plan section 5), world within the
+  // token width; a failed or unverified layout poisons the record even when the fallback is physically retail.
   bool layout(std::uint16_t revision,std::array<std::uint32_t,4> values,bool verified)
   {
    const std::uint64_t capacity=values[3]>0 && values[3]<=32 ? (1ull<<values[3]) : 0;
    if(frozen_ || layout_registered_ || !verified || !revision || !values[0] || !values[1] || !values[2] ||
-      std::uint64_t(values[0])+values[1]!=values[2] || values[2]>capacity) { valid_=false;return false; }
+      std::uint64_t(values[0])+values[1]>values[2] || values[2]>capacity) { valid_=false;return false; }
    layout_registered_=true;entries_[0]={entity_layout_id,revision,values};return true;
   }
   bool finalize()

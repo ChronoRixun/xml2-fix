@@ -682,7 +682,7 @@ namespace
 		std::memcpy(field, "hi\0ZZ\0", 6);
 		check(cstr(field) == "hi", "cstr text ends at the first NUL (the bytes after it stay in the field)");
 		check(!error_of([&] { set_cstr(field, "toolong"); }).empty(), "cstr that does not fit is refused");
-		check(sizeof(NewHeader) == 0x88 && 4 + old_zone_states * sizeof(OldStateRecord) + sizeof(OldZoneRecordTail) == 0x55e0, "layout sizes");
+		check(sizeof(NewHeader) == 0x88 && retail_layout.record_size == 0x55e0 && e10a2_layout.record_size == 0x19b88, "layout sizes");
 	}
 
 	void test_numbering(const fs::path& folder)
@@ -1422,6 +1422,386 @@ namespace
 		}
 	}
 
+	// ------------------------------------------------------------------------------------------------ Phase A
+	// tests/unit/test_lcsave_native_layout.py: the native layout descriptors, the required-feature marker and the
+	// typed entity-id migration at the LC -> native boundary (PHASE-A-PLAN sections 4 and 6). Invented data only.
+	struct TypedCase { const char* name; u32 saved; u32 expected; };
+	// generation 0 -> null; 1, 2, 0x3fff translate; 0x4000 and above -> null; negative / non-token -> null; null stays
+	const TypedCase typed_cases[12] = {
+		{"trig_a", 0x45, 0}, {"last_a", 0x101, 0x401}, {"actor_q", 0x2ff, 0x8ff}, {"actor_r", 0x3fff01, 0xfffc01},
+		{"actor_s", 0x400001, 0}, {"actor_t", 0x80000001u, 0}, {"base_q", 0, 0}, {"part_q", 0x7fffffff, 0},
+		{"part_r", 0xffffff, 0}, {"part_s", 0x3fffff, 0xfffcff}, {"chk_q", 0x4000ff, 0}, {"chk_r", 0x205, 0x805}};
+	const std::pair<const char*, u32> untyped_zone[2] = {{"counter_a", 0x101}, {"base_r", 0x3fff01}};
+	const std::pair<const char*, u32> game_vars[3] = {{"gv_one", 7}, {"door_q", 0x1ff}, {"base_q", 0x101}};
+
+	std::string typed_registry_text()
+	{
+		std::string text = "lcsave-typed-entity-ids 1\nfingerprint " + std::string(64, '0') + "\nfiles 3\nkey\tGame\tdoor_q\n";
+		std::vector<std::string> keys;
+		for (const auto& c : typed_cases) keys.push_back(c.name);
+		std::sort(keys.begin(), keys.end());
+		for (const auto& k : keys) text += "key\tZone\t" + k + "\n";
+		return text;
+	}
+
+	void write_text_file(const fs::path& path, const std::string& content)
+	{
+		fs::create_directories(path.parent_path());
+		std::ofstream(path, std::ios::binary).write(content.data(), static_cast<std::streamsize>(content.size()));
+	}
+
+	void set_var(OldScriptVar& v, const char* name, u32 value)
+	{
+		set_cstr(v.name, name);
+		v.value_be[0] = static_cast<u8>(value >> 24); v.value_be[1] = static_cast<u8>(value >> 16);
+		v.value_be[2] = static_cast<u8>(value >> 8); v.value_be[3] = static_cast<u8>(value);
+	}
+
+	// the synthetic retail save with the typed and untyped script variables above
+	OldSlot typed_old_save()
+	{
+		auto m = make_old_save({0, 3, 4}, 10);
+		std::size_t k = 0;
+		for (const auto& c : typed_cases) set_var(m.zone_vars[k++], c.name, c.saved);
+		for (const auto& [name, value] : untyped_zone) set_var(m.zone_vars[k++], name, value);
+		k = 0;
+		for (const auto& [name, value] : game_vars) set_var(m.game_vars[k++], name, value);
+		m.game.value_608 = 0x101;                       // GAME.value_608 is never a token
+		return m;
+	}
+
+	std::map<std::string, u32> vars_of(const OldScriptVar* v, u32 n)
+	{
+		std::map<std::string, u32> out;
+		for (u32 k = 0; k < n; ++k) if (v[k].name[0]) out[cstr(v[k].name)] = script_var_value(v[k]);
+		return out;
+	}
+
+	std::vector<std::uint8_t> with_required_features(std::vector<std::uint8_t> file, u32 bits)
+	{
+		std::memcpy(file.data() + 0x10, &bits, 4);
+		const auto crc = crc32(file.data(), 0x84);
+		std::memcpy(file.data() + 0x84, &crc, 4);
+		return file;
+	}
+
+	OldZone widen(const OldZone& z, const NativeLayout& n)
+	{
+		OldZone w(n);
+		w.name_handle = z.name_handle;
+		w.tail = z.tail;
+		w.states = z.states;
+		w.states.resize(n.states);
+		w.tail.ordinal_map.resize(n.ordinals);
+		w.tail.dynamic.resize(n.dynamic);
+		w.tail.smart.resize(n.smart);
+		return w;
+	}
+
+	void test_native_layouts()
+	{
+		const auto& r = retail_layout;
+		const auto& e = e10a2_layout;
+		check(r.states == 768 && r.ordinals == 256 && r.dynamic == 300 && r.smart == 768 && r.record_count == 5 && r.record_size == 0x55e0 &&
+			r.manager_size == 110556 && r.payload == 0x2fc00 && r.usable_end == 0x2fc00 && r.wrapper == 0x2fc78 && r.slot_size == 0x2fc84 &&
+			r.index_bits == 8 && r.feature_bits == 0 && !r.contiguous(), "retail layout");
+		check(e.states == 4096 && e.ordinals == 1024 && e.dynamic == 1024 && e.smart == 1024 && e.record_count == 5 && e.record_size == 0x19b88 &&
+			e.manager_size == 0x80c24 && e.payload == 0x200000 && e.usable_end == 0x200000 && e.wrapper == 0x200078 && e.origin_trailer_bytes == 0 &&
+			e.slot_size == 0x200084 && e.index_bits == 10 && e.feature_bits == 1 && e.contiguous(), "E10A2 layout");
+		check(native_layout("E10A2") == &e && native_layout("RETAIL") == &r && native_layout("X") == nullptr, "native_layout by id");
+		for (const auto* n : {&r, &e})
+		{
+			check(n->zone_string_slots == 0x800 && n->zone_arena == 0x3800 && n->fog_bytes == 0x34c, "zone strings / fog unchanged");
+			check(n->state_count == 4 + n->states * 0x18 + 4 && n->ordinals_offset == n->state_count + 4, "zone record offsets");
+			u64 total = 0;
+			for (u32 i = 0; i < n->transfer_chunks; ++i) { const auto [off, len] = n->chunk_bounds(i); check(off == i * 200 && len <= 200 && len > 0, "chunk bounds"); total += len; }
+			check(total == n->payload && n->chunk_bounds(0).second == 200 && n->chunk_bounds(n->transfer_chunks).second == 0, "chunks tile the payload");
+			check(n->record_offset(4) == 4 * n->record_size && n->record_offset(5) == 0, "record offsets");
+		}
+		OldZone z(e);
+		check(z.states.size() == 4096 && z.tail.ordinal_map.size() == 1024 && z.tail.dynamic.size() == 1024 && z.tail.smart.size() == 1024 && z.matches(e) && !z.matches(r), "OldZone sized by the layout");
+		check(OldZone{}.matches(r), "OldZone defaults to retail");
+		// the boundary table of the typed helpers (round6 typed_normalize), feature 0 and feature 1
+		for (const u32 value : {0u, 1u, 255u, 0x101u, 0x401u, 0x501u, 0x3fff01u, 0x400001u, 0xffffffu, 0x1000001u, 0x7fffffffu, 0x80000000u, 0xffffffffu})
+		{
+			const u32 g8 = value >> 8, g10 = value >> 10;
+			const u32 exp0 = (value > 0 && value <= 0x7fffffff && g8 >= 1 && g8 <= 0x3fff) ? ((g8 << 10) | (value & 255)) : 0;
+			const u32 exp1 = (value > 0 && value <= 0x7fffffff && g10 >= 1 && g10 <= 0x3fff) ? value : 0;
+			check(migrate_typed_field(value) == exp0 && validate_typed_field(value) == exp1 && validate_typed_field(migrate_typed_field(value)) == migrate_typed_field(value),
+				"typed helper boundary " + std::to_string(value));
+		}
+	}
+
+	void test_oldsave_layouts()
+	{
+		const auto& e = e10a2_layout;
+		auto m = typed_old_save();
+		for (auto& z : m.zones)
+		{
+			z = widen(z, e);
+			z.tail.ordinal_map[1000] = 4;              // an ordinal only the raised layout holds
+			z.states[4000] = z.states[1];
+			z.tail.smart[0] = 4000; z.tail.smart_count = 1;
+			z.tail.state_count = 4001;
+		}
+		const auto raw = write_slot(m, e);
+		u32 plen = 0; std::memcpy(&plen, raw.data() + 0x80, 4);
+		check(raw.size() == e.slot_size && plen == 0x200000, "E10A2 slot size and length field");
+		const auto back = read_slot(raw.data(), raw.size(), e);
+		check(write_slot(back, e) == raw, "E10A2 round trip");
+		check(back.zones[0].tail.ordinal_map[1000] == 4 && back.zones[0].tail.smart[0] == 4000 && back.zones[0].states.size() == 4096, "E10A2 fields");
+		check(contains(error_of([&] { write_slot(m, retail_layout); }), "does not match the native layout RETAIL"), "an E10A2 model is refused by the retail writer");
+		check(contains(error_of([&] { write_slot(make_old_save(), e); }), "does not match the native layout E10A2"), "a retail model is refused by the E10A2 writer");
+		const auto retail_raw = write_slot(make_old_save());
+		check(error_of([&] { read_slot(retail_raw.data(), retail_raw.size(), e); }) ==
+			"file size " + std::to_string(retail_raw.size()) + " is not the slot size " + std::to_string(e.slot_size) + " (0x84 + 0x200000)", "a retail file is refused by the E10A2 reader (size, before any copy)");
+		check(error_of([&] { read_slot(raw.data(), raw.size(), retail_layout); }) ==
+			"file size " + std::to_string(raw.size()) + " is not the slot size " + std::to_string(retail_layout.slot_size) + " (0x84 + 0x2fc00)", "an E10A2 file is refused by the retail reader");
+		auto bad = raw;
+		const u32 wrong = 0x2fc00; std::memcpy(bad.data() + 0x80, &wrong, 4);
+		check(error_of([&] { read_slot(bad.data(), bad.size(), e); }) == "payload length field 0x2fc00 is not 0x200000", "the length field is checked against the layout");
+		auto m2 = m; m2.zones[0].tail.dynamic_count = 1025;
+		const auto raw2 = write_slot(m2, e);
+		check(contains(error_of([&] { read_slot(raw2.data(), raw2.size(), e); }), "beyond the engine tables"), "counts beyond the layout's tables are refused");
+	}
+
+	void test_feature_marker()
+	{
+		HeaderIn h; h.writer_version = 1; h.content_version = 13; h.catalogue_revision = 1; h.campaign_serial = 42; h.save_sequence = 1;
+		const std::vector<SectionOut> sec = {
+			{"META", 1, 0, section_required, Value::dict({{"saved_at", Value::integer(1)}, {"description", Value::text("d")}, {"origin", Value::integer(0)},
+				{"zone", Value::integer(0)}, {"act", Value::integer(1)}, {"difficulty", Value::integer(1)}, {"play_time", Value::real(1.0)},
+				{"writer", Value::text("w")}, {"slot", Value::integer(0)}, {"mods", Value::list()}})},
+			{"PRFO", 1, 0, 0, Value::dict({{"options", Value::integer(5)}, {"player_name", Value::text("p")}})},
+			{"PRFP", 1, 0, 0, Value::dict({{"highest_level", Value::integer(3)}, {"flags", Value::integer(0)}, {"characters", Value::list()}, {"review", Value::list()}})},
+			{"PRFS", 1, 0, 0, Value::dict({{"scores", Value::list()}})}};
+		const auto plain = write_file(kind_profile, sec, h);
+		auto marked_h = h; marked_h.required_features = feature_entity_layout_contiguous10;
+		const auto marked = write_file(kind_profile, sec, marked_h);
+		u32 bits = 0; std::memcpy(&bits, marked.data() + 0x10, 4);
+		check(read_file(plain.data(), plain.size(), kind_profile).header.required_features == 0 && bits == 1 && plain != marked && plain.size() == marked.size(), "the marker is written and read");
+		const auto f = read_file(marked.data(), marked.size(), kind_profile);
+		check(f.header.required_features == 1, "decoded marker");
+		// a rewrite carrying the read header keeps the marker
+		std::vector<SectionOut> secs;
+		for (const auto& tag : f.order) { const auto& s = f.sections.at(tag); secs.push_back({tag, s.entry.major, s.entry.minor, s.entry.flags, s.data, 0}); }
+		HeaderIn again; again.writer_version = f.header.writer_version; again.content_version = f.header.content_version; again.catalogue_revision = f.header.catalogue_revision;
+		again.campaign_serial = f.header.campaign_serial; again.save_sequence = f.header.save_sequence; again.required_features = f.header.required_features;
+		const auto rewritten = write_file(kind_profile, secs, again);
+		check(read_file(rewritten.data(), rewritten.size(), kind_profile).header.required_features == 1, "a rewrite keeps the marker");
+		auto bad_h = h; bad_h.required_features = 2;
+		check(contains(error_of([&] { write_file(kind_profile, sec, bad_h); }), "not implemented by this writer"), "the writer never emits a bit it does not implement");
+		for (const u32 b : {2u, 3u, 0x80000000u})
+		{
+			const auto patched = with_required_features(plain, b);
+			char hexed[32]; std::snprintf(hexed, sizeof hexed, "0x%x", static_cast<unsigned>(b));
+			check(error_of([&] { read_file(patched.data(), patched.size(), -1); }) == std::string("required feature bits ") + hexed + " not implemented (needs a newer version)", "unknown required bits refused");
+			check(!decide_features(patched, retail_layout).ok && !decide_features(patched, e10a2_layout).ok, "decide_features refuses unknown bits");
+		}
+		auto d = decide_features(0u, retail_layout); check(d.ok && !d.migrate_typed_fields, "retail + feature 0");
+		d = decide_features(1u, retail_layout); check(!d.ok && d.reason == downgrade_refused && contains(d.reason, "needs the entity-capacity build"), "retail + feature 1 refused");
+		d = decide_features(0u, e10a2_layout); check(d.ok && d.migrate_typed_fields, "E10A2 + feature 0 migrates");
+		d = decide_features(1u, e10a2_layout); check(d.ok && !d.migrate_typed_fields, "E10A2 + feature 1 applies as is");
+		d = decide_features(marked, e10a2_layout); check(d.ok && d.required_features == 1 && !d.migrate_typed_fields, "decide_features over a file");
+		d = decide_features(marked, retail_layout); check(!d.ok && d.reason == downgrade_refused && d.required_features == 1, "decide_features over a feature-1 file on retail");
+	}
+
+	void test_typed_registry(const fs::path& scratch)
+	{
+		TypedRegistry reg;
+		std::string error;
+		const auto text = typed_registry_text();
+		check(load_typed_registry(std::vector<std::uint8_t>(text.begin(), text.end()), reg, error) && reg.keys.size() == 13 && reg.script_files == 3 &&
+			reg.typed("Zone", "trig_a") && reg.typed("Game", "door_q") && !reg.typed("Game", "base_q") && !reg.typed("Zone", "counter_a"), "registry loads: " + error);
+		const char* bad[] = {"", "lcsave-typed-entity-ids 2\n", "lcsave-typed-entity-ids 1\nfingerprint zz\n",
+			"lcsave-typed-entity-ids 1\nfingerprint 0000000000000000000000000000000000000000000000000000000000000000\nfiles 1\nkey\tWorld\tx\n",
+			"lcsave-typed-entity-ids 1\nfingerprint 0000000000000000000000000000000000000000000000000000000000000000\nfiles 1\nkey\tZone\tx\nkey\tZone\tx\n",
+			"lcsave-typed-entity-ids 1\nfingerprint 0000000000000000000000000000000000000000000000000000000000000000\nkey\tZone\tx\n",
+			"lcsave-typed-entity-ids 1\r\nfingerprint 0000000000000000000000000000000000000000000000000000000000000000\r\nfiles 1\r\n", "\xff\xfe"};
+		for (const char* b : bad)
+		{
+			const std::string s(b);
+			TypedRegistry scratch_reg;                    // load_typed_registry resets its output: never the registry under test
+			check(!load_typed_registry(std::vector<std::uint8_t>(s.begin(), s.end()), scratch_reg, error) && contains(error, "typed registry"), "malformed registry refused: " + s.substr(0, 30));
+		}
+		// the scripts fingerprint: known answers computed by tools/lcsave/typed_registry.py over the same invented files
+		const auto tree = scratch / "scripts";
+		auto put = [&](const fs::path& rel, const std::string& content) { write_text_file(tree / rel, content); };
+		put("zone_q/trap.py", "v0 = getID( me )\nsetZoneVar(\"trig_a\", v0 )\n");
+		put("zone_q/reset.py", "setZoneVar(\"trig_a\", 0 )\n");
+		put("zone_r/door.py", "  who = getIDString( me )\n  setGameVar(\"door_q\", who )\n");
+		std::string fp; u32 files = 0;
+		check(scripts_fingerprint(tree.wstring(), fp, files, error) && fp == "52ea9ba8d8a04149bcf5d53d7284deaf187b4a391e2d47699e3722a8089ef88e" && files == 3, "scripts fingerprint (Python known answer): " + fp + " " + error);
+		const auto tree2 = scratch / "order";
+		auto put2 = [&](const fs::path& rel, const std::string& content) { write_text_file(tree2 / rel, content); };
+		put2("a-b/x.py", "# one\n"); put2("a/x.py", "# two\n"); put2("a/y.py", "# three\n"); put2("B/z.py", "# four\n"); put2("a/n.PY", "# five\n"); put2("a/no.txt", "");
+		check(scripts_fingerprint(tree2.wstring(), fp, files, error) && fp == "5aa719be0eed6f5c953b123e383cab938beb24c304d67ba9c910bd123da54b94" && files == 5, "path order by lower-cased components, *.PY counted, .txt not (Python known answer): " + fp);
+		TypedRegistry bound = reg;
+		bound.fingerprint = "52ea9ba8d8a04149bcf5d53d7284deaf187b4a391e2d47699e3722a8089ef88e";
+		std::string reason;
+		const bool verified = verify_registry(bound, tree.wstring(), reason);
+		check(verified && reason.empty(), "registry verifies: " + reason);
+		check(!verify_registry(reg, tree.wstring(), reason) && contains(reason, "does not match the scripts tree") && contains(reason, "regenerated registry"), "fingerprint mismatch refused");
+		put("zone_q/extra.py", "");
+		check(!verify_registry(bound, tree.wstring(), reason), "an added file changes the tree");
+		check(!verify_registry(bound, (scratch / "missing").wstring(), reason) && contains(reason, "cannot be verified"), "a missing tree cannot verify");
+		check(!verify_registry(std::vector<std::uint8_t>{'x'}, tree.wstring(), reason) && contains(reason, "cannot be verified"), "a malformed registry file cannot verify");
+		// the adapter over SVAR values
+		auto lists = [&]()
+		{
+			Value zone = Value::list(), game = Value::list();
+			for (const auto& c : typed_cases) zone.push(Value::dict({{"name", Value::text(c.name)}, {"value", Value::integer(c.saved)}}));
+			for (const auto& [n, v] : untyped_zone) zone.push(Value::dict({{"name", Value::text(n)}, {"value", Value::integer(v)}}));
+			for (const auto& [n, v] : game_vars) game.push(Value::dict({{"name", Value::text(n)}, {"value", Value::integer(v)}}));
+			return std::make_pair(zone, game);
+		};
+		{
+			auto [zone, game] = lists();
+			MigrationReport rep;
+			migrate_script_vars(zone, game, 0, e10a2_layout, &reg, rep);
+			bool ok = true;
+			for (std::size_t k = 0; k < 12; ++k) ok &= zone.l[k]["value"].as_int() == typed_cases[k].expected;
+			ok &= zone.l[12]["value"].as_int() == 0x101 && zone.l[13]["value"].as_int() == 0x3fff01 && game.l[1]["value"].as_int() == 0x4ff && game.l[2]["value"].as_int() == 0x101;
+			check(ok && rep.mode == MigrationReport::Mode::migrate && rep.typed_fields == 13 && rep.translated == 6 && rep.normalized_to_null == 6 && rep.validated == 0, "migrate: " + rep.line());
+			check(rep.line() == "mode=migrate typed_fields=13 translated=6 normalized_to_null=6 validated=0" && migration_note(rep) == "typed entity-id migration: 13 registered fields, 6 translated, 6 normalized to null", "report line and note");
+			MigrationReport rep2;
+			migrate_script_vars(zone, game, 1, e10a2_layout, &reg, rep2);
+			ok = true;
+			for (std::size_t k = 0; k < 12; ++k) ok &= zone.l[k]["value"].as_int() == typed_cases[k].expected;
+			check(ok && rep2.mode == MigrationReport::Mode::validate && rep2.typed_fields == 13 && rep2.validated == 13 && rep2.normalized_to_null == 0 && rep2.translated == 0, "validate is idempotent: " + rep2.line());
+			zone.l[1].set("value", Value::integer((0x4000 << 10) | 7));
+			migrate_script_vars(zone, game, 1, e10a2_layout, &reg, rep2);
+			check(zone.l[1]["value"].as_int() == 0 && rep2.normalized_to_null == 1, "an out-of-domain ten-bit value is normalized and counted");
+		}
+		{
+			auto [zone, game] = lists();
+			MigrationReport rep;
+			migrate_script_vars(zone, game, 0, retail_layout, &reg, rep);
+			check(zone.l[1]["value"].as_int() == 0x101 && rep.mode == MigrationReport::Mode::none && rep.typed_fields == 0, "retail leaves every value");
+			check(error_of([&] { migrate_script_vars(zone, game, 0, e10a2_layout, nullptr, rep); }) == no_registry, "legacy without a registry refused");
+			migrate_script_vars(zone, game, 1, e10a2_layout, nullptr, rep);
+			check(zone.l[1]["value"].as_int() == 0x101 && rep.mode == MigrationReport::Mode::none, "feature 1 without a registry: untouched");
+		}
+	}
+
+	void test_e10a2_api(const fs::path& folder)
+	{
+		auto t = make_tables(folder, "sh_might", false);
+		Tables tables; tables.data = t;
+		const auto& e = e10a2_layout;
+		TypedRegistry reg;
+		std::string error;
+		const auto text = typed_registry_text();
+		check(load_typed_registry(std::vector<std::uint8_t>(text.begin(), text.end()), reg, error), "registry");
+		const auto raw = write_slot(typed_old_save());
+		const auto legacy = convert_old_to_new(raw, tables);
+		check(legacy.ok, "legacy import: " + legacy.error);
+		if (!legacy.ok) return;
+		check(read_file(legacy.bytes.data(), legacy.bytes.size(), kind_campaign).header.required_features == 0, "the offline converter writes feature 0");
+		// (1) the retail loader keeps every value as saved
+		const auto plain = new_to_old_stream(legacy.bytes, tables);
+		check(plain.ok && plain.bytes.size() == retail_layout.slot_size, "retail loader");
+		std::map<std::string, u32> saved_vars;
+		for (const auto& c : typed_cases) saved_vars[c.name] = c.saved;
+		for (const auto& [n, v] : untyped_zone) saved_vars[n] = v;
+		if (plain.ok) check(vars_of(read_slot(plain.bytes.data(), plain.bytes.size()).zone_vars, old_script_zone_vars) == saved_vars && !contains(plain.ledger, "typed"), "retail loader leaves the values");
+		// (2) the raised loader migrates the registered fields only, counts the normalizations, preserves the rest
+		MigrationReport rep;
+		const auto raised = new_to_old_stream(legacy.bytes, tables, e, &reg, &rep);
+		check(raised.ok && raised.bytes.size() == e.slot_size, "E10A2 loader: " + raised.error);
+		if (!raised.ok) return;
+		std::map<std::string, u32> expected;
+		for (const auto& c : typed_cases) expected[c.name] = c.expected;
+		for (const auto& [n, v] : untyped_zone) expected[n] = v;
+		const auto rm = read_slot(raised.bytes.data(), raised.bytes.size(), e);
+		check(vars_of(rm.zone_vars, old_script_zone_vars) == expected, "E10A2 loader migrates registered zone variables");
+		check(vars_of(rm.game_vars, old_script_game_vars) == std::map<std::string, u32>{{"gv_one", 7}, {"door_q", 0x4ff}, {"base_q", 0x101}}, "Game scope key translated, base_q (Game) untouched");
+		check(rm.game.value_608 == 0x101 && rm.world[0].slot == 5 && rm.zones[0].matches(e) && rm.zones[0].tail.state_count == 5, "everything else preserved; zones laid out for E10A2");
+		check(rep.line() == "mode=migrate typed_fields=13 translated=6 normalized_to_null=6 validated=0" && contains(raised.ledger, "typed entity-id migration: 13 registered fields, 6 translated, 6 normalized to null"), "migration report: " + rep.line());
+		// (3) the raised engine's save: feature 1, the values unchanged, the retained LGCY/KEYS carried
+		NewFileContext ctx;
+		ctx.saved_at = 5; ctx.campaign_serial = 17; ctx.save_sequence = 2; ctx.retained_file = legacy.bytes; ctx.require_capture_metadata = true;
+		check(loaded_zone_metadata(legacy.bytes, tables, ctx.zone_captures, error, e, &reg) && ctx.zone_captures.size() == 1 && ctx.zone_captures[0].entities.size() == 3, "E10A2 loaded metadata: " + error);
+		const auto saved = old_stream_to_new(raised.bytes, tables, ctx, e);
+		check(saved.ok, "E10A2 save: " + saved.error);
+		if (!saved.ok) return;
+		const auto f1 = read_file(saved.bytes.data(), saved.bytes.size(), kind_campaign);
+		check(f1.header.required_features == 1 && f1.sections.count("LGCY") && f1.sections.count("KEYS"), "the E10A2 save carries feature bit 0 and the retained sections");
+		std::map<std::string, u32> zv;
+		for (const auto& v : f1.data("SVAR")["zone_vars"].as_list()) zv[v["name"].as_text()] = static_cast<u32>(v["value"].as_int());
+		check(zv == expected, "saved SVAR values");
+		const auto payload_only = old_stream_to_new(std::vector<std::uint8_t>(raised.bytes.begin() + old_envelope, raised.bytes.end()), tables, ctx, e);
+		check(payload_only.ok && read_file(payload_only.bytes.data(), payload_only.bytes.size(), kind_campaign).header.required_features == 1, "the payload alone is accepted for the layout");
+		const auto wrong = old_stream_to_new(std::vector<std::uint8_t>(plain.bytes.begin() + old_envelope, plain.bytes.end()), tables, NewFileContext{}, e);
+		check(!wrong.ok && wrong.error == "file size " + std::to_string(retail_layout.payload) + " is not the slot size " + std::to_string(e.slot_size) + " (0x84 + 0x200000)", "a retail-size payload is refused by the E10A2 saver, never guessed: " + wrong.error);
+		// (4) feature 1 on the raised loader: validate only, never shift again (idempotent); counts reported
+		MigrationReport rep2;
+		const auto again = new_to_old_stream(saved.bytes, tables, e, &reg, &rep2);
+		check(again.ok && again.bytes == raised.bytes, "feature-1 load is idempotent");
+		check(rep2.line() == "mode=validate typed_fields=13 translated=0 normalized_to_null=0 validated=13" && contains(again.ledger, "typed entity-id validation: 13 registered fields, 0 normalized to null"), "validation report: " + rep2.line());
+		{
+			std::vector<SectionOut> secs;
+			for (const auto& tag : f1.order)
+			{
+				const auto& s = f1.sections.at(tag);
+				if (s.known) secs.push_back({tag, s.entry.major, s.entry.minor, s.entry.flags, s.data, 0});
+				else secs.push_back({tag, s.entry.major, s.entry.minor, s.entry.flags, Value::bytes(s.payload), s.entry.records});
+			}
+			for (auto& s : secs) if (s.tag == "SVAR")
+			{
+				Value zone_vars = s.data["zone_vars"];
+				for (auto& v : zone_vars.as_list()) if (v["name"].as_text() == "last_a") v.set("value", Value::integer((0x4000 << 10) | 7));
+				s.data.set("zone_vars", std::move(zone_vars));
+			}
+			HeaderIn h; h.writer_version = f1.header.writer_version; h.content_version = f1.header.content_version; h.catalogue_revision = f1.header.catalogue_revision;
+			h.campaign_serial = f1.header.campaign_serial; h.save_sequence = f1.header.save_sequence; h.required_features = f1.header.required_features;
+			const auto hot = write_file(kind_campaign, secs, h);
+			MigrationReport rep3;
+			const auto hm = new_to_old_stream(hot, tables, e, &reg, &rep3);
+			check(hm.ok && vars_of(read_slot(hm.bytes.data(), hm.bytes.size(), e).zone_vars, old_script_zone_vars)["last_a"] == 0 && rep3.normalized_to_null == 1 && rep3.mode == MigrationReport::Mode::validate,
+				"an out-of-domain ten-bit value in a feature-1 file is normalized to null and counted");
+		}
+		const auto no_reg_feature1 = new_to_old_stream(saved.bytes, tables, e);
+		check(no_reg_feature1.ok && no_reg_feature1.bytes == raised.bytes, "without a registry a feature-1 file loads untouched");
+		const auto no_reg_feature0 = new_to_old_stream(legacy.bytes, tables, e);
+		check(!no_reg_feature0.ok && no_reg_feature0.bytes.empty() && no_reg_feature0.error == no_registry, "a feature-0 file without a registry is refused: " + no_reg_feature0.error);
+		// (5) downgrade: the retail loader refuses the feature-1 file; the marker is never stripped by a rewrite
+		const auto down = new_to_old_stream(saved.bytes, tables);
+		check(!down.ok && down.bytes.empty() && down.error == downgrade_refused, "the retail loader refuses the feature-1 file: " + down.error);
+		std::vector<ZoneCaptureMetadata> captures;
+		check(!loaded_zone_metadata(saved.bytes, tables, captures, error) && error == downgrade_refused, "retail loaded_zone_metadata refuses too");
+		NewFileContext retail_ctx; retail_ctx.retained_file = saved.bytes;
+		const auto retail_resave = old_stream_to_new(plain.bytes, tables, retail_ctx);
+		check(!retail_resave.ok && retail_resave.error == std::string("retained file: ") + downgrade_refused, "a retail writer never carries a feature-1 file: " + retail_resave.error);
+		// (6) an unknown required bit refuses everywhere with the established message
+		const auto unknown = with_required_features(legacy.bytes, 2);
+		for (const auto* n : {&retail_layout, &e})
+		{
+			const auto u = new_to_old_stream(unknown, tables, *n, &reg);
+			check(!u.ok && u.error == "required feature bits 0x2 not implemented (needs a newer version)", "unknown bit refused on " + std::string(n->id));
+		}
+		// (7) native transfer metadata and the other stream entries at the raised layout
+		std::vector<ZoneCaptureMetadata> native_e, native_r;
+		check(native_zone_metadata(raised.bytes, tables, native_e, error, e) && native_zone_metadata(plain.bytes, tables, native_r, error) &&
+			native_e.size() == 1 && native_e[0].entities.size() == 3 && native_e[0].entities.size() == native_r[0].entities.size() &&
+			native_e[0].entities[2].ordinal == native_r[0].entities[2].ordinal, "E10A2 native transfer metadata agrees with retail: " + error);
+		check(!native_zone_metadata(raised.bytes, tables, native_r, error) && contains(error, "is not the slot size"), "a retail reader given the raised stream refuses");
+		NativeLoadDemand demand;
+		check(native_load_demand(raised.bytes, demand, error, e) && demand.world_items == 1 && validate_native_stream(raised.bytes, tables, error, e), "E10A2 demand / validation: " + error);
+		std::vector<TalentAdd> adds;
+		check(missing_talents(std::vector<std::uint8_t>(raised.bytes.begin() + old_envelope, raised.bytes.end()), tables, adds, error, e), "E10A2 missing_talents: " + error);
+		// validate_native_sections bounds ordinals by the layout: 300 is an ordinal only the raised layout accepts
+		auto fl = read_file(legacy.bytes.data(), legacy.bytes.size(), kind_campaign);
+		{
+			Value records = fl.sections["ZONE"].data["records"];
+			Value states = records.l[0]["states"];
+			states.l[0].set("ordinal", Value::integer(300));
+			records.l[0].set("states", std::move(states));
+			fl.sections["ZONE"].data.set("records", std::move(records));
+		}
+		check(contains(error_of([&] { validate_native_sections(fl); }), "duplicate or invalid ordinal") && error_of([&] { validate_native_sections(fl, e); }).empty(), "ordinal bound follows the layout");
+	}
+
 }
 
 void run_vectors(const fs::path& scratch)
@@ -1442,6 +1822,11 @@ void run_vectors(const fs::path& scratch)
 	test_native_dangling_world_state(scratch / "dangling-world");
 	test_native_transfer_metadata(scratch / "native-transfer");
 	test_native_table_budgets(scratch / "native-budgets");
+	test_native_layouts();
+	test_oldsave_layouts();
+	test_feature_marker();
+	test_typed_registry(scratch / "registry");
+	test_e10a2_api(scratch / "e10a2");
 }
 
 // ------------------------------------------------------------------------------------------------ (c) fuzz

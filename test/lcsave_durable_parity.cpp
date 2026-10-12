@@ -1,5 +1,9 @@
 // Full-byte codec parity over invented durable-save fixtures exported by the Python reference.
 // cases.tsv: name<TAB>build_relative_path<TAB>mode<TAB>sequence; no game inputs are needed.
+// The Phase A modes (tests/unit/export_lcsave_typed_vectors.py): e10a2-reverse (registry verifies; the E10A2
+// loader's stream, report and ledger note; the E10A2 saver's feature-1 rewrite; loading it again is idempotent and
+// the retail loader refuses it), refuse-downgrade, refuse-unknown, refuse-noregistry, refuse-stream and
+// registry-mismatch (each refused with the Python's exact reason, exposing no bytes).
 #include "lcsave.hpp"
 
 #include <charconv>
@@ -67,6 +71,115 @@ namespace
 		return read_bytes(path, saved) && saved == bytes;
 	}
 
+	template <typename Report>
+	bool run_typed_case(const fs::path& root, const fs::path& folder, const fs::path& build, const std::string& mode, const std::string& name,
+		std::uint32_t sequence, const Report& report)
+	{
+		std::string error;
+		auto expected_error = [&](std::vector<std::uint8_t>& out) { return read_bytes(folder / "expected.error", out); };
+		if (mode == "registry-mismatch")
+		{
+			std::vector<std::uint8_t> registry, expected;
+			if (!read_bytes(folder / "registry.txt", registry) || !expected_error(expected)) return report("cannot read registry/expected");
+			std::string reason;
+			if (lcsave::verify_registry(registry, (folder / "scripts").wstring(), reason) || reason != std::string(expected.begin(), expected.end()))
+				return report("expected the registry to be refused with: " + std::string(expected.begin(), expected.end()) + "; got: " + reason);
+			std::cout << name << '\t' << mode << "\tPASS\trefused\n";
+			return true;
+		}
+		lcsave::Tables tables;
+		if (!lcsave::load_tables(build.wstring(), tables, error)) return report("tables: " + error);
+		if (mode == "refuse-stream")
+		{
+			std::vector<std::uint8_t> input, expected;
+			if (!read_bytes(folder / "input.raw", input) || !expected_error(expected)) return report("cannot read input/expected");
+			lcsave::NewFileContext context;
+			const auto saved = lcsave::old_stream_to_new(input, tables, context, lcsave::e10a2_layout);
+			if (saved.ok || !saved.bytes.empty() || saved.error != std::string(expected.begin(), expected.end()))
+				return report("expected the retail-size payload to be refused by the E10A2 saver: " + saved.error);
+			std::cout << name << '\t' << mode << "\tPASS\trefused\n";
+			return true;
+		}
+		std::vector<std::uint8_t> input;
+		if (!read_bytes(folder / "input.lcsave", input)) return report("cannot read input");
+		if (mode == "refuse-downgrade" || mode == "refuse-unknown" || mode == "refuse-noregistry")
+		{
+			std::vector<std::uint8_t> expected;
+			if (!expected_error(expected)) return report("cannot read expected.error");
+			const std::string reason(expected.begin(), expected.end());
+			const auto& layout = mode == "refuse-downgrade" ? lcsave::retail_layout : lcsave::e10a2_layout;
+			lcsave::MigrationReport migration;
+			const auto translated = lcsave::new_to_old_stream(input, tables, layout, nullptr, &migration);
+			if (translated.ok || !translated.bytes.empty() || translated.error != reason)
+				return report("expected refusal '" + reason + "'; got '" + translated.error + "'");
+			if (mode == "refuse-unknown")
+			{
+				const auto other = lcsave::new_to_old_stream(input, tables, lcsave::retail_layout);
+				if (other.ok || other.error != reason) return report("the retail layout must refuse the unknown bit too: " + other.error);
+				if (lcsave::decide_features(input, lcsave::e10a2_layout).ok) return report("decide_features accepted an unknown bit");
+			}
+			if (mode == "refuse-downgrade")
+			{
+				const auto decision = lcsave::decide_features(input, lcsave::retail_layout);
+				if (decision.ok || decision.reason != reason || decision.required_features != 1) return report("decide_features did not refuse the downgrade");
+				std::vector<lcsave::ZoneCaptureMetadata> captures;
+				if (lcsave::loaded_zone_metadata(input, tables, captures, error) || error != reason) return report("loaded_zone_metadata must refuse too: " + error);
+			}
+			std::cout << name << '\t' << mode << "\tPASS\trefused\n";
+			return true;
+		}
+		// e10a2-reverse
+		std::vector<std::uint8_t> registry_bytes, expected_stream, expected_report, expected_feature1;
+		if (!read_bytes(folder / "registry.txt", registry_bytes) || !read_bytes(folder / "expected.e10a2.old", expected_stream) ||
+		    !read_bytes(folder / "expected.report", expected_report) || !read_bytes(folder / "expected.feature1.lcsave", expected_feature1))
+			return report("cannot read the vector files");
+		std::string reason;
+		if (!lcsave::verify_registry(registry_bytes, (folder / "scripts").wstring(), reason)) return report("registry: " + reason);
+		lcsave::TypedRegistry registry;
+		if (!lcsave::load_typed_registry(registry_bytes, registry, error)) return report("registry: " + error);
+		lcsave::MigrationReport migration;
+		const auto translated = lcsave::new_to_old_stream(input, tables, lcsave::e10a2_layout, &registry, &migration);
+		if (!translated.ok) return report("E10A2 reverse: " + translated.error);
+		if (!inside(root, folder / "actual.e10a2.old") || !write_and_verify(folder / "actual.e10a2.old", translated.bytes)) return report("actual.e10a2.old verification failed");
+		if (translated.bytes.size() != lcsave::e10a2_layout.slot_size) return report("E10A2 stream size " + std::to_string(translated.bytes.size()));
+		if (translated.bytes != expected_stream) return report("E10A2 native stream bytes differ from Python");
+		const std::string report_text(expected_report.begin(), expected_report.end());
+		std::vector<std::string> lines;
+		for (std::size_t start = 0; start < report_text.size();)
+		{
+			const auto nl = report_text.find('\n', start);
+			lines.push_back(report_text.substr(start, nl == std::string::npos ? nl : nl - start));
+			if (nl == std::string::npos) break;
+			start = nl + 1;
+		}
+		if (lines.size() < 4) return report("expected.report needs four lines");
+		if (migration.line() != lines[0]) return report("migration report differs: " + migration.line() + " vs " + lines[0]);
+		if (translated.ledger.find(lines[1]) == std::string::npos) return report("migration ledger note missing: " + lines[1]);
+		lcsave::NewFileContext context;
+		context.saved_at = 0; context.writer_version = 0x01040000; context.writer = "XML2 Fix";
+		context.slot = 0; context.campaign_serial = 17; context.save_sequence = sequence;
+		context.retained_file = input; context.require_capture_metadata = true;
+		if (!lcsave::loaded_zone_metadata(input, tables, context.zone_captures, error, lcsave::e10a2_layout, &registry)) return report("metadata: " + error);
+		const auto saved = lcsave::old_stream_to_new(translated.bytes, tables, context, lcsave::e10a2_layout);
+		if (!saved.ok) return report("E10A2 save: " + saved.error);
+		if (!write_and_verify(folder / "actual.feature1.lcsave", saved.bytes)) return report("actual.feature1.lcsave verification failed");
+		if (saved.bytes != expected_feature1)
+		{
+			std::size_t offset = 0;
+			while (offset < saved.bytes.size() && offset < expected_feature1.size() && saved.bytes[offset] == expected_feature1[offset]) ++offset;
+			return report("feature-1 bytes differ at " + std::to_string(offset));
+		}
+		const auto decision = lcsave::decide_features(saved.bytes, lcsave::e10a2_layout);
+		if (!decision.ok || decision.migrate_typed_fields || decision.required_features != 1) return report("the rewrite must carry required feature bit 0");
+		lcsave::MigrationReport validation;
+		const auto again = lcsave::new_to_old_stream(saved.bytes, tables, lcsave::e10a2_layout, &registry, &validation);
+		if (!again.ok || again.bytes != translated.bytes) return report("feature-1 load is not idempotent: " + again.error);
+		if (validation.line() != lines[2] || again.ledger.find(lines[3]) == std::string::npos) return report("validation report differs: " + validation.line());
+		if (lcsave::new_to_old_stream(saved.bytes, tables).ok) return report("the retail loader accepted the feature-1 rewrite");
+		std::cout << name << '\t' << mode << "\tPASS\t" << translated.bytes.size() << " stream bytes, " << saved.bytes.size() << " feature-1 bytes\n";
+		return true;
+	}
+
 	bool run_case(const fs::path& root, const std::vector<std::string>& fields)
 	{
 		const auto& name = fields[0];
@@ -83,6 +196,10 @@ namespace
 		const auto folder = root / fs::path(name);
 		const auto build = root / fs::path(fields[1]);
 		if (!inside(root, folder) || !inside(root, build) || !inside(root, folder / "actual.lcsave")) return report("case/build path escapes fixture root");
+		// the Phase A typed entity-id / native layout vectors (tests/unit/export_lcsave_typed_vectors.py)
+		if (mode == "e10a2-reverse" || mode == "refuse-downgrade" || mode == "refuse-unknown" || mode == "refuse-noregistry" ||
+		    mode == "refuse-stream" || mode == "registry-mismatch")
+			return run_typed_case(root, folder, build, mode, name, sequence, report);
 		if (mode != "campaign" && mode != "profile" && mode != "legacy-refuse" && mode != "legacy-import" && mode != "profile-import" && mode != "reverse" && mode != "refuse" && mode != "native-campaign" && mode != "native-transfer" && mode != "native-dead-item" && mode != "native-trivia") return report("unsupported mode");
 		std::vector<std::uint8_t> input, expected;
 		if (!read_bytes(folder / (mode == "legacy-refuse" || mode == "legacy-import" || mode == "profile-import" || mode == "native-campaign" || mode == "native-transfer" || mode == "native-dead-item" || mode == "native-trivia" ? "input.raw" : "input.lcsave"), input)) return report("cannot read input");

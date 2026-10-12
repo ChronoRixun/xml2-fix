@@ -544,6 +544,13 @@ namespace lcsave::detail
 		h.header_size_8 = new_header_size / 8;
 		h.major = 1;
 		h.minor = 0;
+		// required_features: bit 0 ENTITY_LAYOUT_CONTIGUOUS10 (PHASE-A-PLAN section 4) - the writer's native layout
+		// decides it; a rewrite carries the read header's bits; a bit this code does not implement is never written
+		if (header.required_features & ~known_required_features)
+		{
+			fail("required feature bits " + fmt_hex(header.required_features) + " not implemented by this writer");
+		}
+		h.required_features = header.required_features;
 		h.optional_features = header.optional_features | (keys ? optional_keys_present : 0);
 		h.file_length = new_header_size + static_cast<u32>(after.size());
 		h.section_count = static_cast<u32>(payloads.size());
@@ -592,7 +599,7 @@ namespace lcsave::detail
 		{
 			fail("format major " + std::to_string(h.major) + " / header size not supported (needs a newer version)");
 		}
-		if (h.required_features)
+		if (h.required_features & ~known_required_features)
 		{
 			fail("required feature bits " + fmt_hex(h.required_features) + " not implemented (needs a newer version)");
 		}
