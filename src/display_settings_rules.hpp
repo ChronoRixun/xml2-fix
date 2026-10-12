@@ -62,25 +62,32 @@ namespace display_settings_rules
 		const char* what;
 	};
 
-	// The bytes that must be in place before anything is written: the switch's own instructions,
-	// its jump table, the cases the table names, and both failure exits with their wipe calls.
+	// The bytes that must be in place before anything is written. Each entry's range must exclude
+	// the bytes a patch rewrites: the transaction writes every patch and then reads each range back,
+	// so a range overlapping a real patch reads the patched bytes and fails the whole install
+	// (found live 2026-10-12 - the readback mismatch rolls back an otherwise valid patch set).
+	// The patched bytes sit inside the old wider ranges and are still verified, by their patch's
+	// own `before`.
 	inline constexpr guard guards[]{
-	    {0x5facbc, "a1988ca60083f8038b4938", "the boot FSAA switch (mov eax,[0xa68c98]; cmp eax,3)"},
-	    {0x5facce, "ff248540b25f00", "the switch's indexed jump (jmp [eax*4+0x5fb240])"},
+	    {0x5facbc, "a1988ca600", "the boot FSAA switch head (mov eax,[0xa68c98])"},
+	    {0x5facce, "ff2485", "the indexed jump head (jmp [eax*4+...])"},
 	    {stock_fsaa_table, "d5ac5f00e5ac5f00f6ac5f0007ad5f00", "the jump table's four cases (Off/2x/4x/6x)"},
 	    {fsaa_case_off, "5568083d6a006a04ff1570f56700", "the Off case (0 samples)"},
 	    {fsaa_case_2x, "6a0268083d6a006a04ff", "the 2x case"},
 	    {fsaa_case_4x, "6a0468083d6a006a04ff", "the 4x case"},
 	    {fsaa_case_6x, "6a0668083d6a006a04ff", "the 6x case"},
 	    {fsaa_default_case, "5568083d6a006a04ff1570f56700", "the default case (> 3: 0 samples, persist Off)"},
-	    {0x5faf4f, "c6052d3a6f0001e8950f0200e8000f0200", "the first failure exit (quit flag; call FUN_0061bef0; call FUN_0061be60)"},
-	    {0x5fb194, "c6052d3a6f0001e8500d0200e8bb0c0200", "the second failure exit (the same pair)"},
+	    {0x5faf4f, "c6052d3a6f0001", "the first failure exit's quit flag (mov byte ptr [..],1)"},
+	    {0x5fb194, "c6052d3a6f0001", "the second failure exit's quit flag"},
 	};
 
 	// The 5th jump-table entry's case, built at the address `stub` (the table's 5th dword):
 	// 8 samples when the adapter's 8x support byte is set, else 6 (the highest level the stock
-	// cases know), then the engine-parameter call and the join every case lands on.
-	//     mov al, [support_byte] / test al,al / jnz +3 / push 6 / jmp +5 / push 8 /
+	// cases know), then the engine-parameter call and the join every case lands on. Every stock
+	// case pushes exactly three dwords before the call (the sample count, the parameter name, 4;
+	// the count-less cases push a dummy byte instead), and the code at the join reads locals at
+	// [esp+n] - so this case keeps the same three pushes and no more.
+	//     mov al,[support_byte] / test al,al / jnz +4 / push 6 / jmp +2 / push 8 /
 	//     push "multiSampleType" / push 4 / call [engine_param_cell] / jmp join
 	inline std::vector<std::uint8_t> fsaa_case_8x_bytes(const std::uint32_t support_byte, const std::uint32_t param_cell, const std::uint32_t name,
 	                                                    const std::uint32_t join, const std::uint32_t stub)
@@ -92,9 +99,9 @@ namespace display_settings_rules
 		};
 		code.push_back(0xa0); dword(support_byte);          // mov al, [support_byte]
 		code.push_back(0x84); code.push_back(0xc0);         // test al, al
-		code.push_back(0x75); code.push_back(0x03);         // jnz +3 (to push 8)
+		code.push_back(0x75); code.push_back(0x04);         // jnz +4 (to push 8)
 		code.push_back(0x6a); code.push_back(0x06);         // push 6
-		code.push_back(0xeb); code.push_back(0x05);         // jmp +5 (over the push 8)
+		code.push_back(0xeb); code.push_back(0x02);         // jmp +2 (over the push 8)
 		code.push_back(0x6a); code.push_back(0x08);         // push 8
 		code.push_back(0x68); dword(name);                  // push "multiSampleType"
 		code.push_back(0x6a); code.push_back(0x04);         // push 4
@@ -120,11 +127,13 @@ namespace display_settings_rules
 	}
 
 	// The switch's writes: the widened bound and the repointed table. `table` is where the
-	// private table lives (allocated by the installer).
+	// private table lives (allocated by the installer). The bound's write also carries the three
+	// bytes after the immediate (8b 49 38) so the whole range the wider guard once covered is
+	// still verified; they are written back unchanged.
 	inline std::vector<xml1_hook_transaction::patch> fsaa_switch_writes(const std::uint32_t table)
 	{
 		return {
-		    {fsaa_switch_cmp, {0x83, 0xf8, 0x03}, {0x83, 0xf8, 0x04}},
+		    {fsaa_switch_cmp, {0x83, 0xf8, 0x03, 0x8b, 0x49, 0x38}, {0x83, 0xf8, 0x04, 0x8b, 0x49, 0x38}},
 		    {fsaa_table_operand, {0x40, 0xb2, 0x5f, 0x00}, xml1_hook_transaction::pointer_bytes(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(table)))},
 		};
 	}

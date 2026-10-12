@@ -647,12 +647,15 @@ namespace
 			const auto case_bytes = fsaa_case_8x_bytes(support_byte_8x, engine_param_cell, multi_sample_type_name, fsaa_switch_join, stub);
 			CHECK(case_bytes.size() == 33);
 			CHECK(case_bytes[0] == 0xa0 && case_bytes[1] == 0x87 && case_bytes[2] == 0x9e && case_bytes[3] == 0xa0 && case_bytes[4] == 0x00);
-			CHECK(case_bytes[7] == 0x75 && case_bytes[8] == 0x03 && case_bytes[9] == 0x6a && case_bytes[10] == 0x06); // jnz +3 / push 6
+			CHECK(case_bytes[7] == 0x75 && case_bytes[8] == 0x04 && case_bytes[9] == 0x6a && case_bytes[10] == 0x06); // jnz +4 / push 6
+			CHECK(case_bytes[11] == 0xeb && case_bytes[12] == 0x02);                                                 // jmp +2 (over the push 8)
 			CHECK(case_bytes[13] == 0x6a && case_bytes[14] == 0x08);                                                 // push 8
 			const auto rel = *reinterpret_cast<const std::int32_t*>(case_bytes.data() + 29);
 			CHECK(static_cast<std::uint32_t>(stub + 33 + rel) == fsaa_switch_join); // the jmp lands on the join
 			const auto fsaa = fsaa_switch_writes(table);
-			CHECK(fsaa.size() == 2 && fsaa[0].address == fsaa_switch_cmp && fsaa[0].after == std::vector<std::uint8_t>({0x83, 0xf8, 0x04}));
+			CHECK(fsaa.size() == 2 && fsaa[0].address == fsaa_switch_cmp);
+			CHECK(fsaa[0].before == std::vector<std::uint8_t>({0x83, 0xf8, 0x03, 0x8b, 0x49, 0x38}));
+			CHECK(fsaa[0].after == std::vector<std::uint8_t>({0x83, 0xf8, 0x04, 0x8b, 0x49, 0x38}));
 			CHECK(fsaa[1].address == fsaa_table_operand && std::memcmp(fsaa[1].after.data(), &table, 4) == 0);
 			const auto log_stub = 0x61000000u;
 			const auto wipe = wipe_guard_writes(log_stub);
@@ -664,6 +667,18 @@ namespace
 			CHECK(wipe[1].address == wipe_settings_call_a && wipe[1].after == std::vector<std::uint8_t>(5, 0x90)); // the settings save is NOPed
 			CHECK(wipe[2].address == wipe_resolution_call_b && wipe[3].address == wipe_settings_call_b);
 			CHECK(wipe[3].after == std::vector<std::uint8_t>(5, 0x90));
+			// V-1: no two write ranges may overlap. The transaction writes every patch and then reads
+			// each range back; a guard overlapping a real patch reads the patched bytes there, fails
+			// the readback, and rolls back the whole install (found live 2026-10-12).
+			{
+				std::vector<std::pair<std::uint32_t, std::uint32_t>> ranges; // start, end exclusive
+				for (const auto& g : guards) ranges.push_back({g.va, g.va + std::strlen(g.hex) / 2});
+				for (const auto& p : fsaa) ranges.push_back({p.address, p.address + p.before.size()});
+				for (const auto& p : wipe) ranges.push_back({p.address, p.address + p.before.size()});
+				for (std::size_t i = 0; i < ranges.size(); ++i)
+					for (std::size_t j = i + 1; j < ranges.size(); ++j)
+						CHECK(ranges[i].second <= ranges[j].first || ranges[j].second <= ranges[i].first);
+			}
 		}
 
 		// VSync. Fullscreen (the game's own mode and Mode=fullscreen): the presentation interval,
