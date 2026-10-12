@@ -18,12 +18,18 @@
 // VirtualPads, when nothing is plugged in) and take screenshots without the focus. It also
 // shows what the game is doing in Discord (Rich Presence, [Discord]; on unless switched off).
 
+#include "balance.hpp"
 #include "break_rule.hpp"
 #include "conversations.hpp"
+#include "confirmation_release.hpp"
+#include "explosive_first_hit.hpp"
+#include "gameplay_agreement.hpp"
+#include "gameplay_capabilities.hpp"
 #include "objective_text.hpp"
 #include "discord_presence.hpp"
 #include "display.hpp"
 #include "forced_teams.hpp"
+#include "mold_controller.hpp"
 #include "game_version.hpp"
 #include "gamepad_fix.hpp"
 #include "iat_hook.hpp"
@@ -33,6 +39,8 @@
 #include "ladder_paths.hpp"
 #include "log.hpp"
 #include "main_menu.hpp"
+#include "classic_main_backdrop.hpp"
+#include "classic_main_panels.hpp"
 #include "mod_loader.hpp"
 #include "new_game.hpp"
 #include "net_trace.hpp"
@@ -40,8 +48,15 @@
 #include "pad_profile.hpp"
 #include "pad_bindings.hpp"
 #include "pad_prompts.hpp"
+#include "patch_transaction.hpp"
+#include "entity_capacity.hpp"
 #include "postgame.hpp"
 #include "review_menu.hpp"
+#include "personal_item_text.hpp"
+#include "save_format.hpp"
+#include "save_content_guards.hpp"
+#include "save_trace.hpp"
+#include "stat_help.hpp"
 #include "test_input.hpp"
 #include "virtual_pad.hpp"
 #include "window_title.hpp"
@@ -132,9 +147,6 @@ namespace
 	void install()
 	{
 		logger::write("XML2 Fix " FIX_VERSION);
-		// XInput's first call can take seconds (xinput_pad.hpp): made on a thread of its own, which runs once
-		// the loader is done, so the game's thread never waits for it; pads read as idle until then.
-		xinput_pad::start();
 		gamepad_fix::use_profile(pad_profile::logitech_dual_action);
 		// [Test] VirtualPads: pads with nothing plugged in, in both DirectInput paths below - read before either exists.
 		virtual_pad::install();
@@ -164,15 +176,44 @@ namespace
 		// [Online] GameVersion: the string the game copies into its network code at start-up and when online
 		// opens - here, before any of its code runs.
 		game_version::install(game);
+		if (!game_version::startup_allowed()) return;
+
+		// The one startup transaction (docs/entity-capacity-phase-a-plan.md section 7): the shared gameplay
+		// agreement's refusal and transport sites, the LC save seam, [Limits] MoveTriggers and the entity-capacity
+		// install contribute their guards and writes; every expectation is unioned and checked once, every touched
+		// page acquired once, and nothing is published unless the whole set verified. A refusal leaves stock bytes.
+		patch_transaction::transaction startup;
+		if (game_version::needs_gameplay_agreement()) gameplay_agreement::contribute(startup, game);
 
 		new_game::install(game);
+		// [Save] Format=lc: the LC save format's disk seam (the card's nine file methods, the stream helpers'
+		// skip branches, the zone placement file's bytes), used from the first save menu on. After new_game, whose
+		// [Game] SaveFolder re-points the folder the card builds at start-up and this reads at its first file
+		// operation. The entity-capacity install chooses the native save layout before the seam is contributed.
+		entity_capacity::prepare(startup, game);
+		save_format::contribute(startup, game);
+		limits::contribute(startup, game, entity_capacity::owns_arena_teardown());
+		entity_capacity::contribute(startup, game);
+		const auto committed = startup.commit();
+		logger::write("startup transaction: %s (%s)", patch_transaction::name(committed), startup.report().c_str());
+		entity_capacity::after_commit(committed == patch_transaction::outcome::committed, committed == patch_transaction::outcome::rollback_failed);
+		if (!save_format::startup_allowed() || !entity_capacity::startup_allowed()) return;
+		// Start background work only after required startup hooks have verified.
+		// XInput's first call can take seconds (xinput_pad.hpp): made on a thread of its own, which runs once
+		// the loader is done, so the game's thread never waits for it; pads read as idle until then.
+		xinput_pad::start();
+		save_content_guards::install(game);
+		save_trace::install(game);
 		// What the end credits run: one push operand in CREDITS_MENU, used only when a campaign ends.
 		postgame::install(game);
 		// The main menu's item names: the push operands of MAIN_MENU's own code (mouse, Quit), used from the
 		// first main menu on.
 		main_menu::install(game);
+		classic_main_backdrop::install(game);
+		classic_main_panels::install(game);
 		// The Review menu's tabs: five imm8s in REVIEW_PATHS_MENU's own code, used from the first Review on.
 		review_menu::install(game);
+		personal_item_text::install(game);
 		// An Xtraction Point's Xtract choice ([Game] Xtract=0): two bytes in extractionPoint's own
 		// code, used from the first Xtraction Point on.
 		xtract::install(game);
@@ -182,6 +223,13 @@ namespace
 		// so every read of the table and the cap is the patched one. Independent of the other patches here: none of
 		// its sites or guards is anyone else's.
 		xp_curve::install(game);
+		// [Balance]: X-Men Legends 1's combat numbers. Calls and one jump in the health, damage and roll functions and the
+		// style reader, first run when a character or a style loads; none of its sites or guards is anyone else's.
+		balance::install(game);
+		// The stats screen's help text: the two literals that name [Balance] numbers (health per body, the
+		// strike bonus) follow the same applied values, through the string manager's vt+8; every other
+		// string passes to the game's getter. After balance: it reads what balance applied.
+		stat_help::install(game);
 		// The forced parties' script functions (seatParty and the rest). The game registers its script
 		// functions exactly once, from its own init: 0x40197b -> game vt+0x13c (0x46b750) -> the
 		// script interface's vt+0 (0x49fe30), which pushes its table and count and calls 0x4d75a0. That
@@ -191,10 +239,27 @@ namespace
 		// patch push operands of script-facing code; nothing here depends on limits or test_input (the
 		// pipe's "script" command compiles its statement when it runs, with the functions in place).
 		forced_teams::install(game);
+		mold_controller::install(game);
+		if (!game_version::startup_allowed()) return;
+		// XML1 controllers in the shared gameplay record (docs/gameplay-agreement.md): online play is lockstep, so
+		// every peer runs Master Mold's native AI update and must have the same effective controller (rule 3).
+		// No turret controller exists in this build: rule 4 is advertised as verified off.
+		// Registering a requested controller enlists the agreement even in a non-LC installation.
+		if (game_version::needs_gameplay_agreement() || mold_controller::requested())
+		{
+			const auto mold = mold_controller::capability();
+			gameplay_agreement::register_rule(gameplay_capabilities::master_mold_id, xml1_capability_rules::master_mold_revision, mold.values, mold.verified);
+			const auto turrets = xml1_capability_rules::turrets();
+			gameplay_agreement::register_rule(gameplay_capabilities::turret_controller_id, xml1_capability_rules::turret_revision, turrets.values, turrets.verified);
+		}
 		// Conversations written for XML1's engine ([Game] AutoAdvance, ReplyVoices, ReplyCursor; on by default):
 		// three code sites of the conversation system, used from the first conversation on; independent of the
 		// patches above (none of its sites or guards is anyone else's).
 		conversations::install(game);
+		confirmation_release::install(game);
+		explosive_first_hit::install(game);
+		if (game_version::needs_gameplay_agreement())
+			gameplay_agreement::register_rule(gameplay_capabilities::explosive_first_hit_id,1,{explosive_first_hit::installed() ? 1u : 0u,0,0,0},explosive_first_hit::verified());
 		objective_text::install(game);
 		// Before any of XMen2.exe's own code runs, as the engine limit adjuster must be: this DLL is a
 		// static import of libIGDisplay.dll, which XMen2.exe imports statically, so Windows runs this
@@ -225,6 +290,10 @@ namespace
 		// clear the presence on quitting. Its X-Men Legends I port detection reads mods\load-order.txt as the
 		// mod loader above does (mod_order.hpp).
 		discord_presence::install(game);
+
+		// Freeze only after every participating gameplay installer has registered its effective values.
+		if (game_version::needs_gameplay_agreement())
+			game_version::bind_gameplay_agreement(gameplay_agreement::commit_verified());
 	}
 }
 
@@ -234,6 +303,25 @@ BOOL WINAPI DllMain(HINSTANCE instance, const DWORD reason, LPVOID)
 	{
 		DisableThreadLibraryCalls(instance);
 		install();
+		if (!game_version::startup_allowed() || !save_format::startup_allowed() || !entity_capacity::startup_allowed())
+		{
+			const std::string startup_reason = !game_version::startup_allowed()
+				? std::string(game_version::startup_error())
+				: !save_format::startup_allowed() ? "The required LC save/trivia hooks could not be installed.\n" + save_format::startup_error()
+				: "The entity-capacity install could not be certified.\n" + entity_capacity::startup_error();
+			logger::write("startup: refused: %s", startup_reason.c_str());
+			const auto message = startup_reason + "\n\nThe game was not started. Check xml2-fix.log and use a supported executable.";
+			MessageBoxA(nullptr, message.c_str(), "XML2 Fix cannot start", MB_OK | MB_ICONERROR);
+			logger::write("startup: refusal notice closed; DLL initialization rejected");
+			return FALSE;
+		}
+		// A capacity-only fallback starts the game (stock capacities, online closed): the player is told once, here.
+		if (const auto notice = entity_capacity::fallback_notice(); !notice.empty())
+		{
+			logger::write("startup: entity capacity notice: requested raise not installed; continuing with stock capacities");
+			MessageBoxA(nullptr, notice.c_str(), "XML2 Fix: entity capacity unavailable", MB_OK | MB_ICONWARNING);
+			logger::write("startup: entity capacity notice closed");
+		}
 	}
 	return TRUE;
 }

@@ -1,0 +1,48 @@
+# Scoped exceptions for the builder content guard used on this C++ repository.
+# Each entry describes original code/art or invented test data; no game assets are accepted.
+MEDIA  docs/discord-art/badge-cutscene.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/badge-dangerroom.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/badge-menu.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/badge-online.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/upload/xml1/app-icon.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/upload/xml1/cover.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/upload/xml1/cutscene.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/upload/xml1/dangerroom.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/upload/xml1/logo.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/upload/xml1/menu.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/upload/xml1/online.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/upload/xml2/app-icon.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/upload/xml2/cover.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/upload/xml2/cutscene.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/upload/xml2/dangerroom.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/upload/xml2/logo.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/upload/xml2/menu.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/upload/xml2/online.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/xml1-cover-1024.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/xml1-cover.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/xml1-large-b.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/xml1-large-c.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/xml1-large-d.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/xml1-large.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/xml2-cover-1024.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/xml2-cover.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/xml2-large-b.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/xml2-large-c.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/xml2-large-d.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/discord-art/xml2-large.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
+MEDIA  docs/images/banner.png  # Original project typography, halftone and generic controller-button diagram; no game/publisher imagery.
+MEDIA  docs/images/social-preview.png  # Original project typography, halftone and generic controller-button diagram; no game/publisher imagery.
+DISASM  src/confirmation_release.cpp  # Authored C++ inline assembly bridges and synthetic execution tests, not game disassembly listings.
+DISASM  src/conversations.cpp  # Authored C++ inline assembly bridges and synthetic execution tests, not game disassembly listings.
+DISASM  src/objective_text.cpp  # Authored C++ inline assembly bridges and synthetic execution tests, not game disassembly listings.
+DISASM  src/save_content_guards.cpp  # Authored C++ inline assembly bridges and synthetic execution tests, not game disassembly listings.
+DISASM  test/xml2_test.cpp  # Authored C++ inline assembly bridges and synthetic execution tests, not game disassembly listings.
+PRIVATE_IP  test/xml2_test.cpp  # Invented RFC1918 address-classification and local-network fixtures; never player/device addresses.
+LONG_ID  test/xml2_test.cpp  # Public Discord application identifiers and invented IPC test ids.
+GAME_TEXT_ATTR  src/save_format_rules.hpp  # Original save-status UI labels concatenated with a description variable, not decoded game text.
+LONG_ID  src/discord_rules.hpp  # Public project Discord application identifiers documented by the integration; not personal ids.
+DISASM  test/save_capture_bridge_test.cpp  # Authored inline assembly that enters the emitted capture bridges and records the landing address; not game disassembly.
+DISASM  src/entity_transfer.cpp  # Authored C++ inline assembly bridge (the acknowledgement call sequence, described in prose above it); not a game disassembly listing.
+DISASM  src/mold_beam.cpp  # Authored register-preserving x86 callback bridge; its sole replay is a short byte-guarded stack-address instruction. No game listing or decompiled body.
+DISASM  src/mold_controller.cpp  # Authored register-preserving dispatcher bridge; replays only two short guarded state-selection instructions, with no copied game listing or decompiled body.
+DISASM  test/entity_transfer_test.cpp  # Authored inline assembly that calls a receiver with ESP measured around it; not game disassembly.

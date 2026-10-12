@@ -13,5 +13,16 @@
 // game_version_rules.hpp. Without the key nothing is patched.
 namespace game_version
 {
+	// LC may start only with a working exclusion hook, including when the version patch is refused.
+	bool startup_allowed();
+	bool needs_gameplay_agreement();
+	bool gameplay_online_allowed();
+	bool require_gameplay_agreement(HMODULE game);
+	void bind_gameplay_agreement(bool verified);
+	void bind_gameplay_refusal(void (*show)());
+	// Sticky for this installation when a controller cannot restore native code.
+	void refuse_startup();
+	// Why startup_allowed() is false, for the startup refusal notice.
+	const char* startup_error();
 	void install(HMODULE game);
 }

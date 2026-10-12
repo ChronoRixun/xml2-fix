@@ -59,6 +59,7 @@ namespace forced_teams_rules
 		join_hero,        // i(s): XML1 addHero as a reload - the spot saved, the hero added to the saved party, the zone reloaded there
 		skill_points,     // n(ai): addSkillPoints(actor, n) - n unspent skill points to the character(s) the name means (an item's '_ACTIVATOR_': the hero who took it)
 		stat_points,      // n(ai): addStatPoints(actor, n), unspent attribute points
+		xtraction_shop,   // n(ai): native point menu, with this point's equipment-shop permission
 	};
 
 	struct function_spec
@@ -70,7 +71,7 @@ namespace forced_teams_rules
 
 	// None of these names is in XMen2.exe (xml2_test walks both of its tables). The exe has no "ssss",
 	// so the DLL owns its signature strings.
-	inline constexpr std::array<function_spec, 10> functions{{
+	inline constexpr std::array<function_spec, 11> functions{{
 		{"xml2fixFeature", "i", "s"},
 		{"seatParty", "n", "ssss"},
 		{"setSkinset", "n", "ss"},
@@ -81,6 +82,7 @@ namespace forced_teams_rules
 		{"joinHero", "i", "s"},
 		{"addSkillPoints", "n", "ai"},
 		{"addStatPoints", "n", "ai"},
+		{"extractionPointServices", "n", "ai"},
 	}};
 
 	// ---- The table the registration is pointed at ----------------------------------------------------
@@ -207,6 +209,7 @@ namespace forced_teams_rules
 		join_hero,
 		stat_points,
 		skill_points, // addSkillPoints is registered with the rest: 1 whenever the functions are
+		xtraction_shop,
 	};
 
 	inline std::string lowercase(std::string_view text)
@@ -234,6 +237,7 @@ namespace forced_teams_rules
 		if (clean == "joinhero") return feature::join_hero;
 		if (clean == "skillpoints") return feature::skill_points;
 		if (clean == "statpoints") return feature::stat_points;
+		if (clean == "xtractionshop") return feature::xtraction_shop;
 		return std::nullopt;
 	}
 
@@ -988,7 +992,7 @@ namespace forced_teams_rules
 		{
 			on = e.forced_teams() && e.join_hero_on() ? 1 : 0;
 		}
-		else if (which == feature::skill_points || which == feature::stat_points)
+		else if (which == feature::skill_points || which == feature::stat_points || which == feature::xtraction_shop)
 		{
 			on = 1; // registered with the rest, whatever the switches
 		}

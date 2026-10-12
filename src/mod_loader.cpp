@@ -4,6 +4,7 @@
 #include "mod_order.hpp"
 
 #include <cstdio>
+#include <atomic>
 #include <cwctype>
 #include <filesystem>
 #include <fstream>
@@ -17,6 +18,7 @@ namespace mod_loader
 {
 	namespace
 	{
+		std::atomic<unsigned> index_generation{0};
 		bool tracing = false;
 		std::wstring game_folder;                             // as Windows reports it
 		std::wstring game_dir;                                // lower case, ends with '\'
@@ -341,6 +343,30 @@ namespace mod_loader
 		}
 	}
 
+	std::vector<std::pair<std::wstring, std::wstring>> effective_files()
+	{
+		return {files.begin(), files.end()};
+	}
+
+	std::wstring resolve_file(const std::wstring& path)
+	{
+		return redirect(path).value_or(path);
+	}
+
+	std::wstring game_root() { return game_folder; }
+
+	bool matches_build(const std::wstring& build)
+	{
+		wchar_t current[MAX_PATH * 2]{};
+		const auto size = GetCurrentDirectoryW(static_cast<DWORD>(std::size(current)), current);
+		if (!size || size >= std::size(current)) return false;
+		const auto normalized = [](const std::wstring& path)
+		{ return lower(std::filesystem::path(path).lexically_normal().wstring()); };
+		return normalized(build) == normalized(game_folder) && normalized(current) == normalized(game_folder);
+	}
+
+	unsigned generation() { return index_generation.load(); }
+
 	void install(const std::initializer_list<const char*> modules, const bool trace_files)
 	{
 		tracing = trace_files;
@@ -354,7 +380,9 @@ namespace mod_loader
 			game_dir += L'\\';
 		}
 
+		files.clear();
 		build_index();
+		++index_generation;
 		if (files.empty() && !tracing)
 		{
 			return; // nothing to load: leave file access alone

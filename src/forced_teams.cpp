@@ -2,6 +2,7 @@
 #include "forced_teams_rules.hpp"
 #include "ini.hpp"
 #include "log.hpp"
+#include "xtract.hpp"
 
 #include <Windows.h>
 
@@ -877,6 +878,16 @@ namespace forced_teams
 			return ret == 'i' ? e.make_int(0) : ret == 's' ? e.make_string("") : nullptr;
 		}
 
+		void* __cdecl xpoint_services_handler(void* args)
+		{
+			int permission = 0;
+			read_int_argument(at<get_argument_t>(argument_getter), args, 1, permission);
+			const bool previous = xtract::allow_shop(permission != 0);
+			void* result = xpoint_menu_handler<0>(args);
+			xtract::allow_shop(previous);
+			return result;
+		}
+
 		// In `functions` order.
 		const std::array<const void*, functions.size()> handlers{
 			reinterpret_cast<const void*>(&handler<&xml2fix_feature<game_engine>, 'i'>),
@@ -889,8 +900,9 @@ namespace forced_teams
 			reinterpret_cast<const void*>(&handler<&join_hero<game_engine>, 'i'>),
 			reinterpret_cast<const void*>(&handler<&add_skill_points<game_engine>, 'n'>),
 			reinterpret_cast<const void*>(&handler<&add_stat_points<game_engine>, 'n'>),
+			reinterpret_cast<const void*>(&xpoint_services_handler),
 		};
-		static_assert(static_cast<std::size_t>(function::stat_points) + 1 == functions.size());
+		static_assert(static_cast<std::size_t>(function::xtraction_shop) + 1 == functions.size());
 
 		bool copy_retail_table()
 		{

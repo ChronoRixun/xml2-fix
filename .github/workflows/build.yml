@@ -25,6 +25,9 @@ jobs:
       - name: Test
         run: build/bin/Release/xml2_test.exe
 
+      - name: Test the save library
+        run: build/bin/Release/lcsave_test.exe
+
       - name: Package
         shell: pwsh
         run: |

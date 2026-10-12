@@ -29,7 +29,9 @@
 // on that copy. [Game] BreakRule (break_rule_rules.hpp) is checked on its value rules, XML1's level sum and the
 // structure pairing, the decision, what the fix remembers between the game's calls, its guards, both bridges run
 // for real, then every byte it relies on, the three writes and the game's own level function on that copy.
-// The test input pipe is checked on its rules, on a
+// [Balance] (balance_rules.hpp) is checked on its value rules, its formulas against the port's known
+// cases, the functions the patched game calls and its two stubs run on objects of the test's own, then every byte it
+// relies on and exactly the bytes each key writes against that copy. The test input pipe is checked on its rules, on a
 // Direct3D 8 device of the test's own (the back buffer copy behind "screenshot"), and end to
 // end in a child process started with an xml2-fix.ini that turns the pipe on under a name of its
 // own ([Test] PipeName, so a running game's pipe is never touched): it creates the
@@ -50,6 +52,8 @@
 #include <Xinput.h>
 
 #include "break_rule_rules.hpp"
+#include "personal_item_text_rules.hpp"
+#include "save_format_rules.hpp"
 #include "discord_ipc.hpp"
 #include "discord_rules.hpp"
 #include "display_rules.hpp"
@@ -62,6 +66,8 @@
 #include "image_file.hpp"
 #include "ini_rules.hpp"
 #include "limits_rules.hpp"
+#include "move_triggers_rules.hpp"
+#include "move_triggers_runtime.hpp"
 #include "geometry_sharing_rules.hpp"
 #include "local_ip.hpp"
 #include "local_ip_rules.hpp"
@@ -81,8 +87,10 @@
 #include "test_state_rules.hpp"
 #include "virtual_pad_rules.hpp"
 #include "xp_curve_rules.hpp"
+#include "balance_rules.hpp"
 #include "window_title_rules.hpp"
 #include "xtract_rules.hpp"
+#include "xtraction_shop_rules.hpp"
 
 #include <algorithm>
 #include <array>
@@ -316,6 +324,147 @@ namespace
 	}
 
 	// The display fix's decisions, on fixed inputs (display_rules.hpp).
+	// The mouse's way from the window to a menu row (display_rules.hpp, client_to_screen_space):
+	// for each display mode, every client pixel inside a row's visible panel must hit that row and no
+	// other through the engine's own integer mapping (0x5f9eb0) and its hit test (0x5c9320: PtInRect on
+	// [x, x + w - 1) x [y - h - 1, y)), and every row - Quit, the lowest, included - must be reachable.
+	// The rows are the classic main menu's, as the fix's panel bounds leave them (live dumps of
+	// candidate 0.2.0i, both layouts). The panels are drawn by the 2D view stretched over the back
+	// buffer, and the back buffer over the client area; that drawing is the reference here.
+	void check_menu_mouse_mapping()
+	{
+		using namespace display_rules;
+		std::printf("menu mouse mapping (client point -> engine screen -> 2D view -> main menu row)\n");
+
+		struct row_rect { int left, top, right, bottom; }; // native RECT, view units (y up)
+		const auto rows_at = [](const int left)
+		{
+			const int tops[8] = {219, 191, 163, 135, 107, 79, 51, 21}, bottoms[8] = {250, 219, 191, 163, 135, 107, 79, 51};
+			std::array<row_rect, 8> rows{};
+			for (int i = 0; i < 8; ++i) rows[i] = {left, tops[i], left + 267, bottoms[i]};
+			return rows;
+		};
+		const auto classic = rows_at(119), wide = rows_at(167);
+
+		struct mode_case
+		{
+			const char* what;
+			size screen; // the engine's screen = the back buffer (Resolution)
+			size client; // the window's client area
+			const std::array<row_rect, 8>* rows;
+		};
+		const mode_case cases[] = {
+			{"windowed 1280x720, wide layout", {1280, 720}, {1280, 720}, &wide},
+			{"windowed 1280x720 dragged to a 100% monitor from 125% (client 1023x575), wide layout", {1280, 720}, {1023, 575}, &wide},
+			{"windowed 1280x720 dragged to a 100% monitor from 125% (client 1023x575), classic layout", {1280, 720}, {1023, 575}, &classic},
+			{"windowed 1280x720 dragged to a 150% monitor from 100% (client 1920x1080), wide layout", {1280, 720}, {1920, 1080}, &wide},
+			{"fullscreen 1920x1080, wide layout", {1920, 1080}, {1920, 1080}, &wide},
+			{"fullscreen 1920x1080, classic layout", {1920, 1080}, {1920, 1080}, &classic},
+			{"borderless Width/Height 1280x720 on a 2560x1440 monitor, wide layout", {1280, 720}, {2560, 1440}, &wide},
+			{"4:3 1024x768, classic layout", {1024, 768}, {1024, 768}, &classic},
+			{"4:3 1024x768 window shrunk by a DPI change (819x614), classic layout", {1024, 768}, {819, 614}, &classic},
+		};
+
+		// The engine's hit test for one view point: the rows containing it.
+		const auto hits = [](const std::array<row_rect, 8>& rows, const menu_point p)
+		{
+			std::vector<int> found;
+			for (int i = 0; i < 8; ++i)
+				if (p.x >= rows[i].left && p.x < rows[i].right && p.y >= rows[i].top && p.y < rows[i].bottom) found.push_back(i);
+			return found;
+		};
+
+		for (const auto& c : cases)
+		{
+			const float aspect = static_cast<float>(c.screen.width) / static_cast<float>(c.screen.height); // 0x5fad7c: width / height
+			const float view_width = aspect * 384.0f, left = -(view_width - 512.0f) * 0.5f;
+			// Where a client pixel's centre is drawn, in view units: client -> back buffer -> 2D view.
+			const auto drawn = [&](const int cx, const int cy)
+			{
+				const double sx = (cx + 0.5) * c.screen.width / c.client.width, sy = (cy + 0.5) * c.screen.height / c.client.height;
+				return std::pair<double, double>{left + sx * view_width / c.screen.width, 384.0 - sy * 384.0 / c.screen.height};
+			};
+			bool all_hit = true, none_wrong = true;
+			int reached[8]{};
+			bool unconverted_all_hit = true;
+			for (int cy = 0; cy < static_cast<int>(c.client.height); ++cy)
+				for (int cx = 0; cx < static_cast<int>(c.client.width); cx += 3)
+				{
+					const auto [vx, vy] = drawn(cx, cy);
+					int shown = -1; // the row whose panel is drawn under this pixel, two view units (the engine's integer rounding) in from its edges
+					for (int i = 0; i < 8; ++i)
+					{
+						const auto& r = (*c.rows)[i];
+						if (vx > r.left + 2 && vx < r.right - 2 && vy > r.top + 2 && vy < r.bottom - 2) shown = i;
+					}
+					const auto got = hits(*c.rows, engine_menu_point(client_to_screen_space({cx, cy}, c.client, c.screen), c.screen, aspect));
+					if (!got.empty()) ++reached[got.front()];
+					if (shown >= 0)
+					{
+						if (got.size() != 1 || got.front() != shown) all_hit = false;
+					}
+					if (got.size() > 1 || (shown >= 0 && !got.empty() && got.front() != shown)) none_wrong = false;
+					// What the engine did before the conversion: the client point as a screen point.
+					const auto raw = hits(*c.rows, engine_menu_point({cx, cy}, c.screen, aspect));
+					if (shown >= 0 && (raw.size() != 1 || raw.front() != shown)) unconverted_all_hit = false;
+				}
+			bool every_row = true;
+			for (int i = 0; i < 8; ++i) every_row = every_row && reached[i] > 0;
+			std::printf("  %s: Quit reached by %d sampled pixels\n", c.what, reached[7]);
+			CHECK(all_hit && none_wrong && every_row);
+			// The negative control: without the conversion, a client area unlike the screen misses rows
+			// (the maintainer's report: drift growing downwards, Quit unreachable); equal sizes don't.
+			CHECK(unconverted_all_hit == (c.client == c.screen));
+		}
+
+		// The window's client area across DPI changes: the size it has, not the back buffer's.
+		{
+			kept_client kept{};
+			CHECK(client_for_dpi_change(kept, {1280, 720}) == (size{1280, 720})); // nothing recorded: the back buffer's
+			settle_client(kept, {1280, 720}, 120);                                 // created at 1280x720 on a 125% monitor
+			CHECK(client_for_dpi_change(kept, {1280, 720}) == (size{1280, 720})); // not resized: kept pixel for pixel
+			CHECK(note_client_resize(kept, {1035, 587}, 120, false));             // resized from outside at the same DPI
+			// The move to the 100% monitor: the frame thins before WM_DPICHANGED (client 1035x593 at 96) - not a resize.
+			CHECK(!note_client_resize(kept, {1035, 593}, 96, false));
+			// The back buffer meanwhile followed the resize; the DPI change keeps the resized client, not 1280x720.
+			CHECK(client_for_dpi_change(kept, {1280, 720}) == (size{1035, 587}));
+			CHECK(!note_client_resize(kept, {1035, 587}, 96, true));              // the fix's own SetWindowPos
+			settle_client(kept, {1035, 587}, 96);
+			CHECK(note_client_resize(kept, {800, 450}, 96, false) && client_for_dpi_change(kept, {1035, 587}) == (size{800, 450}));
+			CHECK(!note_client_resize(kept, {0, 450}, 96, false) && kept.client == (size{800, 450}));
+		}
+		// Maximized (or minimized) through a DPI change: Windows sizes the window, the kept client waits
+		// for the restore and is applied there at the new DPI.
+		{
+			kept_client kept{};
+			settle_client(kept, {1035, 587}, 120);
+			CHECK(!client_after_restore(kept, 120).has_value());                  // nothing pending: an ordinary restore
+			CHECK(sizes_on_dpi_change(kept, false));                              // restored: the fix sizes it
+			CHECK(!sizes_on_dpi_change(kept, true) && kept.pending);              // maximized: left to Windows
+			CHECK(kept.client == (size{1035, 587}));                              // the saved size survives
+			CHECK(!note_client_resize(kept, {1035, 593}, 96, false) && kept.client == (size{1035, 587})); // nothing recorded meanwhile
+			const auto restored = client_after_restore(kept, 96);
+			CHECK(restored && *restored == (size{1035, 587}) && !kept.pending && kept.dpi == 96);
+			CHECK(note_client_resize(kept, {1035, 587}, 96, false));              // settled at the new DPI again
+			CHECK(!client_after_restore(kept, 96).has_value());
+		}
+
+		// The conversion itself: first and last pixels map onto the screen's, equal sizes don't move.
+		CHECK(scale_coordinate(0, 1023, 1280) == 0 && scale_coordinate(1022, 1023, 1280) == 1279 && scale_coordinate(574, 575, 720) == 719);
+		CHECK(scale_coordinate(0, 2560, 1280) == 0 && scale_coordinate(2559, 2560, 1280) == 1279 && scale_coordinate(1279, 2560, 1280) == 639);
+		CHECK(scale_coordinate(345, 1280, 1280) == 345 && scale_coordinate(345, 0, 1280) == 345 && scale_coordinate(345, 1280, 0) == 345);
+		CHECK(scale_coordinate(-1, 1023, 1280) == -1 && scale_coordinate(-10, 1023, 1280) == -12 && scale_coordinate(1023, 1023, 1280) == 1280);
+		const LPARAM packed = scale_point_lparam(MAKELPARAM(1022, 574), {1023, 575}, {1280, 720});
+		CHECK(static_cast<short>(LOWORD(packed)) == 1279 && static_cast<short>(HIWORD(packed)) == 719);
+		const LPARAM negative = scale_point_lparam(MAKELPARAM(static_cast<WORD>(-5), static_cast<WORD>(-5)), {1023, 575}, {1280, 720});
+		CHECK(static_cast<short>(LOWORD(negative)) == -6 && static_cast<short>(HIWORD(negative)) == -6);
+		CHECK(has_client_point(WM_MOUSEMOVE) && has_client_point(WM_LBUTTONUP) && has_client_point(WM_XBUTTONDBLCLK) && !has_client_point(WM_MOUSEWHEEL) &&
+		      !has_client_point(0x20e) && !has_client_point(WM_KEYDOWN));
+		// The engine's mapping at 1:1 against the live rows (wide 1280x720): Quit's panel centre, Begin Story's.
+		CHECK(engine_menu_point({725, 650}, {1280, 720}, 1280.0f / 720.0f).y >= 21 && engine_menu_point({725, 650}, {1280, 720}, 1280.0f / 720.0f).y < 51);
+		CHECK(engine_menu_point({725, 278}, {1280, 720}, 1280.0f / 720.0f).y >= 219 && engine_menu_point({725, 278}, {1280, 720}, 1280.0f / 720.0f).x >= 167);
+	}
+
 	void check_display_rules()
 	{
 		using namespace display_rules;
@@ -502,6 +651,7 @@ namespace
 	std::optional<std::string> game_executable()
 	{
 		std::vector<std::filesystem::path> candidates;
+		if (const char* fixture = std::getenv("XML2_FIX_TEST_EXE")) candidates.emplace_back(fixture);
 		for (auto dir = module_dir(); !dir.empty() && dir != dir.root_path(); dir = dir.parent_path())
 		{
 			candidates.push_back(dir / "docs" / "research" / "XMen2.exe");
@@ -1677,6 +1827,493 @@ namespace
 			CHECK(run_thiscall(at(0x4fe9c0), objects.data(), result));
 			CHECK(destroyed_style_slots == expected && objects.dword(n * style_record_size) == 0 && objects.slack_untouched());
 			CHECK(run_thiscall(at(0x4fe9c0), objects.data(), result) && destroyed_style_slots == expected); // empty clear does not destroy twice
+		}
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
+
+	// Isolated native instructions: preserve the test caller, load adversarial registers,
+	// run one patched handle access, then capture all registers and flags before C++ runs.
+	DWORD move_access_self = 0, move_access_index = 0, move_access_value = 0;
+	DWORD move_access_edi = 0;
+	void* move_access_function = nullptr;
+	DWORD move_access_result[9]{};
+	__declspec(naked) void run_move_access()
+	{
+		__asm {
+			pushad
+			pushfd
+			mov esi, move_access_self
+			mov ebp, move_access_self
+			mov edi, move_access_edi
+			mov eax, move_access_index
+			mov ecx, move_access_index
+			mov edx, move_access_value
+			mov ebx, move_access_value
+			stc
+			call dword ptr [move_access_function]
+			pushfd
+			pushad
+			mov esi, esp
+			mov edi, offset move_access_result
+			mov ecx, 9
+			rep movsd
+			popad
+			popfd
+			popfd
+			popad
+			ret
+		}
+	}
+
+
+	DWORD move_manager_vtable[11]{};
+	DWORD* move_manager = move_manager_vtable;
+	std::array<std::array<DWORD, 0x54 / 4>, 127> move_events{};
+	std::vector<DWORD> move_freed;
+	void* __cdecl move_manager_get() { return &move_manager; }
+	void* __fastcall move_event_pool(void*, void*) { return &move_manager; }
+	void* __fastcall move_event_resolve(void*, void*, DWORD handle)
+	{
+		return handle >= 1 && handle <= move_events.size() ? move_events[handle - 1].data() : nullptr;
+	}
+	void __fastcall move_event_free(void*, void*, DWORD handle) { move_freed.push_back(handle); }
+
+
+	std::vector<move_triggers_rules::actor_times> test_actor_times;
+	int test_timer_capacity = 64;
+	float test_clock_value = 10.0f;
+	std::array<DWORD, 127> test_event_modes{};
+	std::vector<int> test_timers_fired;
+	DWORD test_timer_vtable[4]{}, test_move_vtable[9]{};
+	DWORD* test_timer_manager = test_timer_vtable;
+	using init_timer_t = void(__fastcall*)(void*, void*, void*, float);
+	using tick_timer_t = void(__fastcall*)(void*, void*, float);
+	init_timer_t test_original_init = nullptr;
+	tick_timer_t test_original_tick = nullptr;
+	move_triggers_runtime::start_t test_replacement_start_entry = nullptr;
+	init_timer_t test_replacement_init_entry = nullptr;
+	void* test_replacement_move = nullptr;
+	void* test_replacement_packet = nullptr;
+	bool test_replace_on_trigger_zero = false;
+	bool test_replacement_initialized_future = false;
+	bool test_fallback_packet_restored = false;
+	auto& test_times(void* actor) { return *move_triggers_rules::times_for(test_actor_times, static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(actor))); }
+	move_triggers_rules::actor_times* test_lookup(void* actor) { return move_triggers_rules::times_for(test_actor_times, static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(actor))); }
+	std::array<DWORD, 127> test_fractions{};
+	std::vector<int> test_captured_indices;
+	float __fastcall test_get_fraction(void*, void*, int i) { test_captured_indices.push_back(i); float f; std::memcpy(&f, &test_fractions[i], 4); return f; }
+	std::array<DWORD, 8> test_start_args{};
+	void* test_start_move_object = nullptr;
+	void* test_start_packet = nullptr;
+	bool test_nested_restored = false;
+	void __fastcall test_native_start(void* actor, void*, DWORD a, DWORD b, DWORD c, DWORD d, DWORD e, DWORD f, DWORD g, DWORD h)
+	{
+		if (a == 999) return; // failed nested action leaves old move current
+		test_start_args = {a,b,c,d,e,f,g,h};
+		move_triggers_runtime::capture_times(actor, test_start_move_object, test_start_packet);
+		const auto before = test_times(actor).source;
+		move_triggers_runtime::start_move(actor, nullptr, 999,2,3,4,5,6,7,8);
+		test_nested_restored = test_times(actor).packet == move_triggers_runtime::address(test_start_packet) && test_times(actor).source == before;
+		const DWORD move = move_triggers_runtime::address(test_start_move_object);
+		std::memcpy(static_cast<std::uint8_t*>(actor) + 0x378, &move, 4);
+		move_triggers_runtime::initialize_times(actor, nullptr, test_start_packet, 2.0f);
+	}
+	void __fastcall test_native_replacement_start(void* actor, void*, DWORD a, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD)
+	{
+		if (a == 999) return;
+		move_triggers_runtime::capture_times(actor, test_replacement_move, test_replacement_packet);
+		test_replacement_start_entry(actor, nullptr, 999,2,3,4,5,6,7,8);
+		const auto& enclosing = move_triggers_runtime::get(actor);
+		test_fallback_packet_restored = enclosing.packet == move_triggers_runtime::address(test_replacement_packet)
+			&& enclosing.move == move_triggers_runtime::address(test_replacement_move) && enclosing.source[0] == 0x3f400000;
+		const DWORD move = move_triggers_runtime::address(test_replacement_move);
+		std::memcpy(static_cast<std::uint8_t*>(actor) + 0x378, &move, 4);
+		test_replacement_init_entry(actor, nullptr, test_replacement_packet, 2.0f);
+		test_replacement_initialized_future = true;
+		for (int i = 0; i < move_triggers_rules::stock_capacity; ++i)
+		{
+			float deadline = 0; std::memcpy(&deadline, static_cast<std::uint8_t*>(actor) + 0x640 + i * 4, 4);
+			test_replacement_initialized_future &= deadline == 21.5f;
+		}
+	}
+	float __cdecl test_timer_clock() { return test_clock_value; }
+	float __fastcall test_motion_time(void*, void*, int) { return 0.9f; }
+	void* __cdecl test_timer_get_manager() { return &test_timer_manager; }
+	bool __fastcall test_based(void*, void*, const DWORD* event) { return event && *event == 1; }
+	bool __fastcall test_unscaled(void*, void*, const DWORD* event) { return event && *event == 2; }
+	void* __fastcall test_get_timer_event(void*, void*, int i) { return i >= 0 && i < test_timer_capacity ? &test_event_modes[i] : nullptr; }
+	bool __fastcall test_fire_timer(void*, void*, int i, void* actor, void*)
+	{
+		test_timers_fired.push_back(i);
+		if (i == 0 && test_replace_on_trigger_zero)
+		{
+			test_replace_on_trigger_zero = false;
+			test_replacement_start_entry(actor, nullptr, 1,2,3,4,5,6,7,8);
+		}
+		return true;
+	}
+	bool run_timer_init(const void* fn, void* actor, void* packet, float scale) {
+		__try { reinterpret_cast<init_timer_t>(const_cast<void*>(fn))(actor, nullptr, packet, scale); return true; }
+		__except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+	}
+	bool run_timer_tick(const void* fn, void* actor, float delta) {
+		__try { reinterpret_cast<tick_timer_t>(const_cast<void*>(fn))(actor, nullptr, delta); return true; }
+		__except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+	}
+	bool run_capture_fragment(const void* fn, void* actor, void* move)
+	{
+		__try {
+			__asm {
+				push esi
+				push edi
+				push ebp
+				mov esi, actor
+				mov edi, move
+				sub esp, 0xc0
+				call fn
+				add esp, 0xc0
+				pop ebp
+				pop edi
+				pop esi
+			}
+			return true;
+		} __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+	}
+	move_triggers_rules::actor_times* test_cache_full(void*) { return nullptr; }
+	void check_actor_trigger_timing()
+	{
+		using namespace move_triggers_rules;
+		const auto exe = game_executable();
+		if (!exe) return;
+		DWORD size = 0; auto* image = map_image(*exe, size);
+		CHECK(image != nullptr); if (!image) return;
+		const auto at = [&](DWORD va) { return image + (va - image_base); };
+		const auto va = [&](const void* p) { return image_base + static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(p) - reinterpret_cast<std::uintptr_t>(image)); };
+		const auto hook = [&](DWORD where, const void* p) { at(where)[0] = 0xe9; DWORD r = rel32(where, va(p)); std::memcpy(at(where) + 1, &r, 4); };
+		hook(0x45fe60, reinterpret_cast<const void*>(&test_timer_clock));
+		hook(0x4f6190, reinterpret_cast<const void*>(&test_timer_get_manager));
+		hook(0x42a940, reinterpret_cast<const void*>(&test_motion_time));
+		// Rebase the local fixture's absolute floating-point zero. Production code retains
+		// the game's original addresses; only this copied image runs away from 0x400000.
+		for (const auto range : {std::pair{0x42c390u, 0x42c513u}, std::pair{0x430a00u, 0x430c24u}}) {
+			for (DWORD p = range.first; p + 4 <= range.second; ++p) {
+				DWORD raw = 0; std::memcpy(&raw, at(p), 4);
+				if (raw == 0x680030) { DWORD address = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(at(raw))); std::memcpy(at(p), &address, 4); }
+			}
+		}
+		const auto baseline = std::vector<std::uint8_t>(image, image + size);
+		test_timer_vtable[2] = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&test_based));
+		test_timer_vtable[3] = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&test_unscaled));
+		test_move_vtable[4] = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&test_fire_timer));
+		test_move_vtable[8] = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&test_get_fraction));
+		test_move_vtable[6] = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&test_get_timer_event));
+		DWORD* move_vtable = test_move_vtable;
+		const DWORD move_address = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&move_vtable));
+		auto* code = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+		CHECK(code != nullptr); if (!code) { VirtualFree(image, 0, MEM_RELEASE); return; }
+		move_triggers_runtime::lookup = &test_lookup;
+		const scheduler_hooks callbacks{va(reinterpret_cast<const void*>(&move_triggers_runtime::scheduled_times)), va(reinterpret_cast<const void*>(&move_triggers_runtime::source_times)),
+			va(reinterpret_cast<const void*>(&move_triggers_runtime::capture_times)), va(reinterpret_cast<const void*>(&move_triggers_runtime::clear_times)),
+			va(reinterpret_cast<const void*>(&move_triggers_runtime::initialize_times)), va(reinterpret_cast<const void*>(&move_triggers_runtime::tick_times)),
+			va(reinterpret_cast<const void*>(&move_triggers_runtime::start_move))};
+		for (int n : {20, 27, 64, 127}) {
+			std::memcpy(image, baseline.data(), size); test_timer_capacity = n; test_clock_value = 10.0f;
+			test_block stock_actor(0x844), actor(0x844), stock_packet(0x68), packet(0x68);
+			std::memcpy(stock_actor.data() + 0x378, &move_address, 4); std::memcpy(actor.data() + 0x378, &move_address, 4);
+			std::array<DWORD, 127> fractions{};
+			for (int i = 0; i < n; ++i) { const float f = i == n - 1 ? -1.0f : 0.1f + i * 0.001f; std::memcpy(&fractions[i], &f, 4); test_event_modes[i] = i % 3; }
+			std::memcpy(stock_packet.data() + 8, fractions.data(), 19 * 4);
+			std::memcpy(packet.data() + 8, fractions.data(), 19 * 4);
+			const DWORD inactive = 0xbf800000;
+			for (DWORD offset : {0x58u, 0x5cu, 0x60u}) { std::memcpy(stock_packet.data() + offset, &inactive, 4); std::memcpy(packet.data() + offset, &inactive, 4); }
+			CHECK(run_timer_init(at(0x42c390), stock_actor.data(), stock_packet.data(), 2.0f));
+			test_actor_times.assign(timer_slots, {});
+			auto& times = test_times(actor.data()); test_fractions = fractions; test_captured_indices.clear();
+			move_triggers_runtime::cap = n;
+			move_triggers_runtime::capture_times(actor.data(), &move_vtable, packet.data());
+			CHECK(test_captured_indices.size() == static_cast<std::size_t>(n - 19));
+			for (int i = 19; i < n; ++i) CHECK(test_captured_indices[i - 19] == i && times.source[i] == fractions[i]);
+			const auto plan = make_plan(n, 0x10000000, va(code), &callbacks);
+			std::memcpy(code, plan.code.data(), plan.code.size());
+			std::vector<bool> changed(size);
+			for (const auto& w : plan.writes) { for (DWORD i = 0; i < w.size; ++i) { CHECK(!changed[w.va - image_base + i]); changed[w.va - image_base + i] = true; } apply_write(image, w); }
+			CHECK(plan.code.size() < 4096 && plan.original_initialize && plan.original_tick);
+			test_original_init = reinterpret_cast<init_timer_t>(at(plan.original_initialize));
+			test_original_tick = reinterpret_cast<tick_timer_t>(at(plan.original_tick));
+			move_triggers_runtime::original_initialize = test_original_init;
+			move_triggers_runtime::original_tick = test_original_tick;
+			// Trampoline addresses are expressed in the copied image's virtual coordinate system.
+			FlushInstructionCache(GetCurrentProcess(), image, size); FlushInstructionCache(GetCurrentProcess(), code, 4096);
+			// Actual native nineteen-value producer followed by the production capture thunk.
+			at(0x430fa1)[0] = 0xc3;
+			test_captured_indices.clear();
+			CHECK(run_capture_fragment(at(0x430f86), actor.data(), &move_vtable));
+			CHECK(test_captured_indices.size() == static_cast<std::size_t>(n));
+			for (int i = 0; i < n; ++i) CHECK(test_captured_indices[i] == i && times.source[i] == fractions[i]);
+			move_triggers_runtime::capture_times(actor.data(), &move_vtable, packet.data());
+			CHECK(run_timer_init(at(0x42c390), actor.data(), packet.data(), 2.0f));
+			CHECK(std::memcmp(stock_actor.data(), actor.data(), 0x844) == 0); // every native field, first 19 timers included
+			CHECK(times.scheduled[n - 1] == inactive);
+			// Run the patched eight-argument entry and its real prologue trampoline.
+			// Stub only the remaining native start body, preserving the eight arguments.
+			at(0x430d46)[0] = 0x81; at(0x430d46)[1] = 0xc4;
+			const DWORD frame = 0xb4; std::memcpy(at(0x430d48), &frame, 4);
+			hook(0x430d4c, reinterpret_cast<const void*>(&test_native_start));
+			move_triggers_runtime::original_start = reinterpret_cast<move_triggers_runtime::start_t>(at(plan.original_start));
+			test_start_move_object = &move_vtable; test_start_packet = packet.data(); test_nested_restored = false;
+			times.packet = 0; times.move = 0;
+			const DWORD old_move = 123; std::memcpy(actor.data() + 0x378, &old_move, 4);
+			reinterpret_cast<move_triggers_runtime::start_t>(at(0x430d40))(actor.data(), nullptr, 1,2,3,4,5,6,7,0x12345678);
+			CHECK(test_start_args == (std::array<DWORD,8>{1,2,3,4,5,6,7,0x12345678}) && test_nested_restored);
+			CHECK(times.packet == 0 && times.move == 0);
+			for (int i = 19; i < n - 1; ++i) CHECK(times.scheduled[i] != inactive);
+
+			CHECK(actor.slack_untouched() && packet.slack_untouched());
+			for (int i = 19; i < n - 1; ++i) CHECK(times.scheduled[i] != inactive);
+			// Paused dispatch shifts only world-time events, not animation-relative ones.
+			actor.data()[0x579] |= 0x40;
+			const auto old = times.scheduled;
+			CHECK(run_timer_tick(at(0x430a00), actor.data(), 0.5f));
+			for (int i = 0; i < n; ++i) {
+				float a = 0, b = 0; std::memcpy(&a, &old[i], 4); std::memcpy(&b, &times.scheduled[i], 4);
+				CHECK(b == (a > 0 && test_event_modes[i] != 1 ? a + 0.5f : a));
+			}
+			CHECK(std::memcmp(actor.data() + 0x640, times.scheduled.data(), 19 * 4) == 0);
+			actor.data()[0x579] &= ~0x40;
+			for (DWORD offset : {0x690u, 0x694u, 0x698u}) std::memcpy(actor.data() + offset, &inactive, 4);
+			test_clock_value = 20.0f; test_timers_fired.clear();
+			CHECK(run_timer_tick(at(0x430a00), actor.data(), 0.1f));
+			CHECK(test_timers_fired.size() == static_cast<std::size_t>(n - 1));
+			for (int i = 0; i < n - 1 && i < static_cast<int>(test_timers_fired.size()); ++i) CHECK(test_timers_fired[i] == i);
+			CHECK(run_timer_tick(at(0x430a00), actor.data(), 0.1f) && test_timers_fired.size() == static_cast<std::size_t>(n - 1));
+			CHECK(std::memcmp(actor.data() + 0x640, times.scheduled.data(), 19 * 4) == 0 && actor.slack_untouched());
+			std::fill(times.scheduled.begin(), times.scheduled.end(), DWORD{0});
+			// A null active move makes the native cancellation take its direct clear path.
+			const DWORD zero = 0; std::memcpy(actor.data() + 0x378, &zero, 4);
+			void* result = nullptr; CHECK(run_thiscall(at(0x42c270), actor.data(), result));
+			CHECK(std::all_of(times.scheduled.begin(), times.scheduled.end(), [&](DWORD value) { return value == inactive; }));
+			CHECK(actor.slack_untouched());
+			// Exhaustion stays alive, schedules the native nineteen, and never dispatches extras.
+			test_block overflow_actor(0x844), overflow_packet(0x68);
+			std::memcpy(overflow_actor.data() + 0x378, &move_address, 4);
+			std::memcpy(overflow_packet.data(), stock_packet.data(), 0x68);
+			for (DWORD offset : {0x58u, 0x5cu, 0x60u}) std::memcpy(overflow_packet.data() + offset, &inactive, 4);
+			test_clock_value = 10.0f; move_triggers_runtime::lookup = &test_cache_full;
+			CHECK(run_timer_init(at(0x42c390), overflow_actor.data(), overflow_packet.data(), 2.0f));
+			CHECK(std::memcmp(stock_actor.data(), overflow_actor.data(), 0x844) == 0);
+			for (DWORD offset : {0x690u, 0x694u, 0x698u}) std::memcpy(overflow_actor.data() + offset, &inactive, 4);
+			test_clock_value = 20.0f; test_timers_fired.clear();
+			CHECK(run_timer_tick(at(0x430a00), overflow_actor.data(), 0.1f));
+			CHECK(test_timers_fired.size() == 19 && overflow_actor.slack_untouched() && overflow_packet.slack_untouched());
+			// With no cache entry, A's trigger zero starts B through the patched start
+			// and initializer. B's deadlines must replace the enclosing tick's timers;
+			// a separate nested fallback array would fire A's stale triggers 1..18.
+			test_actor_times.assign(timer_slots, {});
+			for (DWORD i = 1; i <= timer_slots; ++i)
+				CHECK(times_for(test_actor_times, i * 0x2000) != nullptr);
+			move_triggers_runtime::lookup = &test_lookup;
+			CHECK(test_lookup(overflow_actor.data()) == nullptr);
+			test_block replacement_packet(0x68);
+			DWORD* replacement_move_vtable = test_move_vtable;
+			test_replacement_move = &replacement_move_vtable;
+			test_replacement_packet = replacement_packet.data();
+			const float future_fraction = 0.75f;
+			for (int i = 0; i < stock_capacity; ++i)
+				std::memcpy(replacement_packet.data() + 8 + i * 4, &future_fraction, 4);
+			// Keep native combo/control deadlines in the future too: this synthetic
+			// move implements event methods only, not the unrelated end-combo methods.
+			const float future_control_fraction = 100.0f;
+			for (DWORD offset : {0x58u, 0x5cu, 0x60u}) std::memcpy(replacement_packet.data() + offset, &future_control_fraction, 4);
+			test_event_modes.fill(0); // world-clock deadlines: 20 + 0.75 * 2 = 21.5
+			const float due = 19.0f;
+			for (int i = 0; i < stock_capacity; ++i)
+				std::memcpy(overflow_actor.data() + 0x640 + i * 4, &due, 4);
+			hook(0x430d4c, reinterpret_cast<const void*>(&test_native_replacement_start));
+			FlushInstructionCache(GetCurrentProcess(), image, size);
+			test_replacement_start_entry = reinterpret_cast<move_triggers_runtime::start_t>(at(0x430d40));
+			test_replacement_init_entry = reinterpret_cast<init_timer_t>(at(0x42c390));
+			test_replace_on_trigger_zero = true; test_replacement_initialized_future = false;
+			test_fallback_packet_restored = false; test_timers_fired.clear();
+			CHECK(run_timer_tick(at(0x430a00), overflow_actor.data(), 0.1f));
+			CHECK(!test_replace_on_trigger_zero && test_replacement_initialized_future);
+			CHECK(test_fallback_packet_restored);
+			CHECK(test_timers_fired == std::vector<int>{0});
+			CHECK(move_triggers_runtime::field(overflow_actor.data(), 0x378) == move_triggers_runtime::address(test_replacement_move));
+			for (int i = 0; i < stock_capacity; ++i)
+			{
+				float deadline = 0; std::memcpy(&deadline, overflow_actor.data() + 0x640 + i * 4, 4);
+				// Native dispatch clears the fired index after its callback returns.
+				CHECK(deadline == (i == 0 ? -1.0f : 21.5f));
+			}
+			CHECK(run_timer_tick(at(0x430a00), overflow_actor.data(), 0.1f));
+			CHECK(test_timers_fired == std::vector<int>{0});
+			for (int i = 1; i < stock_capacity; ++i)
+			{
+				float deadline = 0; std::memcpy(&deadline, overflow_actor.data() + 0x640 + i * 4, 4);
+				CHECK(deadline == 21.5f);
+			}
+			CHECK(overflow_actor.slack_untouched() && replacement_packet.slack_untouched());
+			move_triggers_runtime::lookup = &test_lookup;
+		}
+		VirtualFree(code, 0, MEM_RELEASE); VirtualFree(image, 0, MEM_RELEASE);
+	}
+
+	void check_move_trigger_rules()
+	{
+		using namespace move_triggers_rules;
+		CHECK(capacity(std::nullopt) == 19);
+		for (const auto n : {"19", "20", "64 ; headroom", "127"}) CHECK(capacity(std::string(n)) == *parse_count(n));
+		for (const auto n : {"0", "18", "128", "-1", "0x40", "64x", ""}) CHECK(capacity(std::string(n)) == 19);
+		CHECK(move_triggers_rules::slot(0x10000, 0x10000) == 0 && move_triggers_rules::slot(0x10000, 0x10000 + 331 * record_size) == 331);
+		CHECK(!move_triggers_rules::slot(0, 0) && !move_triggers_rules::slot(0x10000, 0xffff) && !move_triggers_rules::slot(0x10000, 0x10001));
+		CHECK(!move_triggers_rules::slot(0x10000, 0x10000 + record_count * record_size));
+		// Actor-address cache isolation, collisions, exhaustion and packet lifetime.
+		std::vector<actor_times> slots(timer_slots);
+		CHECK(times_for(slots, 0) == nullptr);
+		for (DWORD i = 1; i <= timer_slots; ++i) {
+			auto* t = times_for(slots, i * 0x2000);
+			CHECK(t && t->actor == i * 0x2000 && t->scheduled[126] == 0xbf800000);
+			t->scheduled[126] = i;
+		}
+		CHECK(!times_for(slots, (timer_slots + 1) * 0x2000));
+		for (DWORD i = 1; i <= timer_slots; ++i) CHECK(times_for(slots, i * 0x2000)->scheduled[126] == i);
+		retire_times(slots);
+		CHECK(times_for(slots, (timer_slots + 1) * 0x2000) != nullptr);
+		for (DWORD epoch = 1; epoch <= 8; ++epoch) {
+			retire_times(slots);
+			for (DWORD i = 1; i <= timer_slots; ++i) CHECK(times_for(slots, (epoch * timer_slots + i) * 0x2000) != nullptr);
+		}
+		retire_times(slots);
+
+		auto& context = *times_for(slots, 0x2000);
+		context.packet = 10; context.move = 20; context.source[50] = 42;
+		const source_scope outer(context);
+		context.packet = 30; context.move = 40; context.source[50] = 99;
+		outer.finish(context); // failed nested start leaves old A current, enclosing B is still pending
+		CHECK(context.packet == 10 && context.move == 20 && context.source[50] == 42);
+		outer.finish(context);
+		CHECK(context.packet == 10 && context.move == 20);
+		context.packet = 0; context.move = 0;
+		const source_scope none(context);
+		context.packet = 100; context.move = 200;
+		none.finish(context);
+		CHECK(context.packet == 0 && context.move == 0);
+		// Every thunk, including both indexed stores and count-1 pop, runs above slot 19.
+		for (int cap : {20, 27, 64, 127})
+		{
+			test_block move(record_size), handles((cap + 2) * 4);
+			std::fill_n(handles.data(), (cap + 2) * 4, std::uint8_t{0xcc});
+			const DWORD array = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(handles.data() + 4));
+			std::memcpy(move.data() + array_pointer, &array, 4);
+			for (const auto& access : accesses)
+			{
+				std::vector<std::uint8_t> bytes;
+				const auto hex = access.thunk.empty() ? access.retail : access.thunk;
+				for (std::size_t i = 0; i < hex_size(hex); ++i) bytes.push_back(hex_byte(hex, i));
+				if (access.thunk.empty()) bytes[0] = 0x8b;
+				bytes.push_back(0xc3);
+				auto* fn = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, bytes.size(), MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+				CHECK(fn != nullptr);
+				if (!fn) continue;
+				std::memcpy(fn, bytes.data(), bytes.size());
+				FlushInstructionCache(GetCurrentProcess(), fn, bytes.size());
+				move_access_function = fn;
+				move_access_self = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(move.data()));
+				for (DWORD index : std::array<DWORD, 4>{0, 18, 19, static_cast<DWORD>(cap - 1)})
+				{
+					for (int i = 0; i < cap; ++i) { DWORD v = 0x80000000u + i; std::memcpy(handles.data() + 4 + i * 4, &v, 4); }
+					move_access_index = index;
+					move_access_value = 0x12345678;
+					move_access_edi = access.thunk.empty() ? move_access_self : index;
+					const bool pop = access.va == 0x4f6420 || access.va == 0x4f6987 || access.va == 0x4f8046;
+					if (pop) ++move_access_index;
+					run_move_access();
+					// pushad order: edi, esi, ebp, esp, ebx, edx, ecx, eax, then flags.
+					CHECK((move_access_result[8] & 1) == 1);
+					CHECK(move_access_result[2] == move_access_self && move_access_result[5] == move_access_value);
+					const DWORD value = 0x80000000u + index;
+					if (pop) CHECK(move_access_result[0] == value);
+					else if (access.va == 0x4f64c6 || access.va == 0x4f64d6) CHECK(move_access_result[6] == value);
+					else if (access.va == 0x4f6aff || access.va == 0x4f7e35) CHECK(handles.dword(4 + index * 4) == move_access_value);
+					else if (access.va == 0x4f6518) CHECK(move_access_result[4] == array);
+					else if (access.va == 0x4f6562) CHECK(move_access_result[1] == array);
+					else if (access.va == 0x4f7dab) CHECK(move_access_result[6] == array);
+					CHECK(move.dword(array_pointer) == array && move.slack_untouched() && handles.slack_untouched());
+					CHECK(handles.dword(0) == 0xcccccccc && handles.dword((cap + 1) * 4) == 0xcccccccc);
+				}
+				VirtualFree(fn, 0, MEM_RELEASE);
+			}
+		}
+		const auto exe = game_executable();
+		if (!exe) { std::printf("skip: no local executable for move-trigger guards/native loops\n"); return; }
+		DWORD image_size = 0;
+		auto* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](DWORD va) { return image + (va - image_base); };
+		const auto mismatched = [&] { return mismatch([&](DWORD va, std::string_view hex) { return matches(at(va), hex); }); };
+		CHECK(mismatched() == 0);
+		at(0x430f97)[0] = 64;
+		CHECK(mismatched() != 0); // packet producer must remain at native nineteen
+		at(0x430f97)[0] = 19;
+		bool rejects = true;
+		const auto corrupt = [&](DWORD va, std::string_view hex) {
+			for (std::size_t i = 0; i < hex_size(hex); ++i) {
+				at(va)[i] ^= 1; rejects &= mismatched() != 0; at(va)[i] ^= 1;
+			}
+		};
+		for (const auto& a : accesses) corrupt(a.va, a.retail);
+		for (const auto& g : guards) corrupt(g.va, g.hex);
+		CHECK(rejects && mismatched() == 0);
+		const auto original = std::vector<std::uint8_t>(image, image + image_size);
+		const auto plan = make_plan(64, 0x10000000, 0x20000000);
+		std::vector<bool> changed(image_size);
+		for (const auto& w : plan.writes) {
+			apply_write(image, w);
+			for (DWORD i = 0; i < w.size; ++i) { CHECK(!changed[w.va - image_base + i]); changed[w.va - image_base + i] = true; }
+		}
+		bool bounded = true;
+		for (DWORD i = 0; i < image_size; ++i) bounded &= image[i] == original[i] || changed[i];
+		CHECK(bounded && plan.code.size() < 4096 && at(0x4f6aad)[0] == 64);
+
+		// Native getter and destructor, with only external event-pool dependencies stubbed.
+		// Their actual loops and redirected accesses must visit all high slots in reverse on free.
+		auto* code = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+		CHECK(code != nullptr);
+		if (code) {
+			const auto virtual_address = [&](const void* p) { return image_base + static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(p) - reinterpret_cast<std::uintptr_t>(image)); };
+			const auto hook = [&](DWORD va, const void* p) { at(va)[0] = 0xe9; const DWORD r = rel32(va, virtual_address(p)); std::memcpy(at(va) + 1, &r, 4); };
+			hook(0x4ffe20, reinterpret_cast<const void*>(&move_manager_get));
+			hook(0x4faac0, reinterpret_cast<const void*>(&move_event_resolve));
+			hook(0x4fbd40, reinterpret_cast<const void*>(&move_event_free));
+			move_manager_vtable[10] = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&move_event_pool));
+			const auto executable_plan = make_plan(64, 0x10000000, virtual_address(code));
+			std::memcpy(code, executable_plan.code.data(), executable_plan.code.size());
+			for (const auto& w : executable_plan.writes) apply_write(image, w);
+			FlushInstructionCache(GetCurrentProcess(), image, image_size);
+			FlushInstructionCache(GetCurrentProcess(), code, executable_plan.code.size());
+			for (int n : {20, 27, 64, 127}) {
+				test_block object(record_size), handles(n * 4);
+				const DWORD pointer = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(handles.data()));
+				std::memcpy(object.data() + array_pointer, &pointer, 4);
+				std::memcpy(object.data() + count_offset, &n, 4);
+				for (int i = 0; i < n; ++i) { const DWORD handle = i + 1; std::memcpy(handles.data() + i * 4, &handle, 4); }
+				for (int i = 0; i < n; ++i) {
+					const int result = reinterpret_cast<thiscall_int_t>(at(0x4f64b0))(object.data(), nullptr, i);
+					CHECK(static_cast<DWORD>(result) == static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(move_events[i].data())));
+				}
+				CHECK(reinterpret_cast<thiscall_int_t>(at(0x4f64b0))(object.data(), nullptr, -1) == 0);
+				CHECK(reinterpret_cast<thiscall_int_t>(at(0x4f64b0))(object.data(), nullptr, n) == 0);
+				move_freed.clear();
+				void* result = nullptr;
+				CHECK(run_thiscall(at(0x4f6410), object.data(), result));
+				CHECK(object.dword(count_offset) == 0 && move_freed.size() == static_cast<std::size_t>(n));
+				for (int i = 0; i < n; ++i) CHECK(move_freed[i] == static_cast<DWORD>(n - i));
+				CHECK(run_thiscall(at(0x4f6410), object.data(), result) && move_freed.size() == static_cast<std::size_t>(n));
+				CHECK(object.dword(array_pointer) == pointer && object.slack_untouched() && handles.slack_untouched());
+			}
+			VirtualFree(code, 0, MEM_RELEASE);
 		}
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
@@ -2893,7 +3530,7 @@ namespace
 		std::printf("forced parties ([Game] ForcedTeams, AddHero and JoinHero: seatParty, setSkinset, pushParty, popParty, addHero, joinHero, addSkillPoints)\n");
 
 		// The functions: ten, signatures the game's compiler knows, room in its tree.
-		CHECK(functions.size() == 10 && table_count == 0x12b && builtin_count + table_count == 318 && table_count + builtin_count <= tree_capacity);
+		CHECK(functions.size() == 11 && table_count == 0x12c && builtin_count + table_count == 319 && table_count + builtin_count <= tree_capacity);
 		bool signatures_ok = true;
 		for (const auto& f : functions)
 		{
@@ -2906,7 +3543,7 @@ namespace
 		CHECK(std::string_view(functions[static_cast<std::size_t>(function::join_hero)].name) == "joinHero" && std::string_view(functions[static_cast<std::size_t>(function::join_hero)].ret) == "i" &&
 		      std::string_view(functions[static_cast<std::size_t>(function::join_hero)].args) == "s");
 		const auto writes = registration_writes(0x12345678);
-		CHECK(writes[0].va == 0x49fe31 && writes[0].value == 0x12345678 && writes[1].va == 0x49fe36 && writes[1].value == 0x12b && writes[0].size == 4 && writes[1].size == 4);
+		CHECK(writes[0].va == 0x49fe31 && writes[0].value == 0x12345678 && writes[1].va == 0x49fe36 && writes[1].value == 0x12c && writes[0].size == 4 && writes[1].size == 4);
 		CHECK(std::string_view(functions[static_cast<std::size_t>(function::skill_points)].name) == "addSkillPoints" && std::string_view(functions[static_cast<std::size_t>(function::skill_points)].ret) == "n" &&
 		      std::string_view(functions[static_cast<std::size_t>(function::skill_points)].args) == "ai" && skill_points_max == 20 && grant_max >= 4);
 
@@ -3099,7 +3736,7 @@ namespace
 			}
 		}
 		CHECK(changed == 5 && outside == 0); // 0x0068a908 -> 0x12345678, 0x121 -> 0x12a
-		CHECK(limits_rules::matches(at(registration), "6878563412682b010000e8318903008bc8e85a770300c3"));
+		CHECK(limits_rules::matches(at(registration), "6878563412682c010000e8318903008bc8e85a770300c3"));
 		std::memcpy(image, before.data(), image_size);
 
 		// The strings the handlers send are the game's own.
@@ -3455,6 +4092,17 @@ namespace
 		CHECK(parse_command("frob").what == command::kind::unknown && !parse_command("frob").error.empty());
 		CHECK(parse_command("tap NOSUCH").what == command::kind::unknown && parse_command("tap W x").what == command::kind::unknown);
 		CHECK(parse_command("PING").what == command::kind::ping && parse_command("status").what == command::kind::status);
+
+		// The test mouse: a client point and an action (move by default).
+		cmd = parse_command("mouse 584 531 click");
+		CHECK(cmd.what == command::kind::mouse && cmd.x == 584 && cmd.y == 531 && cmd.pointer == command::pointer_action::click);
+		cmd = parse_command("MOUSE -3 12");
+		CHECK(cmd.what == command::kind::mouse && cmd.x == -3 && cmd.y == 12 && cmd.pointer == command::pointer_action::move);
+		CHECK(parse_command("mouse 1 2 down").pointer == command::pointer_action::down && parse_command("mouse 1 2 up").pointer == command::pointer_action::up);
+		CHECK(parse_command("mouse 1").what == command::kind::unknown && parse_command("mouse 1 2 drag").what == command::kind::unknown);
+		CHECK(parse_command("mouse x 2").what == command::kind::unknown && parse_command("mouse 99999 2").what == command::kind::unknown &&
+		      parse_command("mouse - 2").what == command::kind::unknown && parse_command("mouse 1 2 click 3").what == command::kind::unknown);
+		CHECK(parse_command("frob").error.find("mouse") != std::string::npos);
 
 		// "wm" (posted key messages) is gone: the Advanced Options panel reads the DirectInput
 		// keyboard, so a stale client is told to use tap.
@@ -4298,6 +4946,10 @@ namespace
 		CHECK(start_log.find("break rule: XMen2.exe isn't loaded at 0x400000 (not the game?) - objects break by the game's own rule") != std::string::npos ||
 		      start_log.find("break rule: 0x00685A98 isn't the retail code") != std::string::npos);
 		CHECK(start_log.find("break rule: X-Men Legends 1's") == std::string::npos);
+		// [Balance] likewise: the value that isn't one refused by name, the rest refused as this isn't the game.
+		CHECK(start_log.find("balance: [Balance] HitChance=fast isn't xml1 or xml2 - the game's own roll stays") != std::string::npos);
+		CHECK(start_log.find("balance: XMen2.exe isn't loaded at 0x400000 (not the game?) - the game's own combat numbers stay") != std::string::npos &&
+		      start_log.find("sites patched") == std::string::npos);
 
 		// [Online] Server=127.0.0.1: every GameSpy and OpenSpy name resolves to it, each logged once.
 		WSADATA wsa{};
@@ -4358,6 +5010,7 @@ namespace
 		CHECK(status.find("; fps 0.0; frame rate the game's own 60 fps cap") != std::string::npos); // no frames drawn here, no [Display] FrameRate
 		CHECK(status.find("; actors -; names -; motions -; igb -") != std::string::npos);            // not XMen2.exe: no engine tables to count
 		CHECK(status.find("; styles -; curves -") != std::string::npos);
+		CHECK(status.find("; balance off") != std::string::npos);                                   // [Balance] is set, but nothing was patched here
 		CHECK(refused(ask(pipe, "frob")));
 		CHECK(refused(ask(pipe, "tap NOSUCHKEY")));
 		CHECK(refused(ask(pipe, "screenshot")));
@@ -4482,7 +5135,7 @@ namespace
 		{
 			std::ofstream out(ini, std::ios::binary);
 			out << "[Test]\r\nInputPipe=1\r\nPipeName=" << pipe_name << " ; this test's own\r\nVirtualPads=2 ; two pads with nothing plugged in\r\n[Display]\r\nResolutionList=all\r\n[Limits]\r\nActorSlots=127\r\nEffectCurves=3600\r\n[Game]\r\nForcedTeams=1\r\nAddHero=1\r\nPostgameScript=x1/menus/postgame ; XML1's r505\r\nMainMenuItems=button1,button2,button3,button4,button5,button6,button7 ; XML1's buttons\r\n"
-			       "XPCurve=xml1 ; XML1's levels and kill XP\r\nBreakRule=xml1 ; XML1's rule for breaking objects\r\n[Online]\r\nServer=127.0.0.1 ; a private OpenSpy stack\r\nLocalIP=203.0.113.9 ; not this PC's\r\n";
+			       "XPCurve=xml1 ; XML1's levels and kill XP\r\nBreakRule=xml1 ; XML1's rule for breaking objects\r\n[Balance]\r\nEnemyHealthPerBody=10 ; XML1's\r\nHitChance=fast ; no such rules\r\n[Online]\r\nServer=127.0.0.1 ; a private OpenSpy stack\r\nLocalIP=203.0.113.9 ; not this PC's\r\n";
 		}
 
 		wchar_t exe[MAX_PATH]{};
@@ -5104,6 +5757,11 @@ namespace
 	// change applied to that copy (exactly the two bytes; the jump lands where the block ends).
 	void check_xtract_rules()
 	{
+		CHECK(!xtraction_shop_rules::should_add(false, false));
+		CHECK(!xtraction_shop_rules::should_add(false, true));
+		CHECK(!xtraction_shop_rules::should_add(true, false));
+		CHECK(xtraction_shop_rules::should_add(true, true));
+		CHECK(xtraction_shop_rules::finalize_call + 5 == 0x4a6d38);
 		using namespace xtract_rules;
 		std::printf("[Game] Xtract (no world map at an Xtraction Point)\n");
 
@@ -5145,6 +5803,14 @@ namespace
 		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
 		CHECK(mismatch == nullptr);
 		CHECK(std::memcmp(at(choice_block), retail_op.data(), retail_op.size()) == 0);
+		for (const auto& g : xtraction_shop_rules::guards)
+		{
+			CHECK(limits_rules::matches(at(g.va), g.hex));
+			const auto first = at(g.va)[0];
+			at(g.va)[0] ^= 1;
+			CHECK(!limits_rules::matches(at(g.va), g.hex));
+			at(g.va)[0] = first;
+		}
 		CHECK(text_at(0x68d4e0) == "openmenu('worldmap')" && text_at(0x68d4c4) == "extractionPointChange(%d,0)");
 
 		std::vector<std::uint8_t> before(image, image + image_size);
@@ -5167,6 +5833,66 @@ namespace
 	// its instruction and retail byte there, inside the write span), the tab change as the exe does it with
 	// either set of bytes, then, when a copy of XMen2.exe is at hand, every guard against it, the tab table's
 	// names, and the change applied to that copy (exactly the five bytes).
+
+	void check_personal_item_text_rules()
+	{
+		using namespace personal_item_text_rules;
+		std::printf("[Game] PersonalItemText: scoped depth, byte guards and one call patch\n");
+		std::array<std::uint8_t, depth_offset + 8> menu{};
+		std::memcpy(menu.data(), &personal_vtable, 4);
+		std::memcpy(menu.data() + depth_offset, &retail_depth, 2);
+		const auto before = menu;
+		CHECK(configure_menu(menu.data()));
+		std::int16_t depth = 0;
+		std::memcpy(&depth, menu.data() + depth_offset, 2);
+		CHECK(depth == 10);
+		auto expected = before;
+		const std::int16_t ten = 10;
+		std::memcpy(expected.data() + depth_offset, &ten, 2);
+		CHECK(menu == expected); // exactly the signed depth field; nothing else
+		CHECK(!configure_menu(nullptr));
+		menu = before; menu[0] ^= 1;
+		const auto other_menu = menu;
+		CHECK(!configure_menu(menu.data()) && menu == other_menu);
+		menu = before; const std::int16_t custom = 27;
+		std::memcpy(menu.data() + depth_offset, &custom, 2);
+		const auto custom_menu = menu;
+		CHECK(!configure_menu(menu.data()) && menu == custom_menu);
+
+		std::vector<std::uint8_t> image(0x2b0000, 0xa5);
+		for (const auto& g : guards)
+		{
+			CHECK(limits_rules::valid_hex(g.hex));
+			for (std::size_t i = 0; i < limits_rules::hex_size(g.hex); ++i)
+				image[g.va - image_base + i] = limits_rules::hex_byte(g.hex, i);
+		}
+		const auto pristine = image;
+		std::array<std::uint8_t, 5> patch{};
+		patch.fill(0xcc); const auto untouched = patch;
+		CHECK(!make_patch(image.data(), false, 0x12345678, patch) && patch == untouched);
+		CHECK(make_patch(image.data(), true, 0x12345678, patch));
+		DWORD displacement = 0; std::memcpy(&displacement, patch.data() + 1, 4);
+		CHECK(patch[0] == 0xe8 && constructor_call + 5 + displacement == 0x12345678);
+		CHECK(image == pristine); // planning never mutates executable bytes
+		bool refused = true;
+		for (const auto& g : guards)
+			for (std::size_t i = 0; i < limits_rules::hex_size(g.hex); ++i)
+			{
+				const auto offset = g.va - image_base + i;
+				image[offset] ^= 1; patch = untouched;
+				refused &= !make_patch(image.data(), true, 0x12345678, patch) && patch == untouched;
+				image[offset] ^= 1;
+			}
+		CHECK(refused && image == pristine);
+		if (const auto exe = game_executable())
+		{
+			DWORD size = 0; auto mapped = map_image(*exe, size);
+			CHECK(mapped != nullptr);
+			if (mapped) { CHECK(first_mismatch(mapped) == nullptr); VirtualFree(mapped, 0, MEM_RELEASE); }
+		}
+		else std::printf("  skip  no executable for retail guard comparison\n");
+	}
+
 	void check_review_menu_rules()
 	{
 		using namespace review_menu_rules;
@@ -5637,6 +6363,811 @@ namespace
 		CHECK(applied);
 		std::memcpy(image, before.data(), image_size);
 		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
+	// ---- [Balance] (balance_rules.hpp) ---------------------------------------------------------------------
+
+	// A CStats of the test's own, as the rules read one: the four stats at +8, the level at +0x1c, talents from +0x20
+	// (the count at +0xbc), the extension object at +0xc0 (its first dword the "vtable"), the name at +0x150.
+	struct fake_stats
+	{
+		std::vector<std::uint8_t> bytes = std::vector<std::uint8_t>(0x200, 0);
+		DWORD extension[2]{};
+		fake_stats(const char* name, const DWORD extension_vtable, const int strength, const int speed, const int mind, const int level)
+		{
+			extension[0] = extension_vtable;
+			const DWORD pointer = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&extension[0]));
+			std::memcpy(bytes.data() + 0xc0, &pointer, 4);
+			std::strcpy(reinterpret_cast<char*>(bytes.data()) + 0x150, name);
+			bytes[8] = static_cast<std::uint8_t>(strength);
+			bytes[9] = static_cast<std::uint8_t>(speed);
+			bytes[11] = static_cast<std::uint8_t>(mind);
+			bytes[0x1c] = static_cast<std::uint8_t>(level);
+		}
+		void talent(const int id, const int rank)
+		{
+			int count = 0;
+			std::memcpy(&count, bytes.data() + 0xbc, 4);
+			const std::uint16_t word = static_cast<std::uint16_t>(id);
+			std::memcpy(bytes.data() + 0x20 + 8 * count, &word, 2);
+			bytes[0x20 + 8 * count + 2] = static_cast<std::uint8_t>(0xc0 | rank); // the two bits above the rank belong to something else
+			++count;
+			std::memcpy(bytes.data() + 0xbc, &count, 4);
+		}
+		void* data() { return bytes.data(); }
+	};
+
+	// An actor of the test's own: its CStats at +0x35c.
+	struct fake_actor
+	{
+		std::vector<std::uint8_t> bytes = std::vector<std::uint8_t>(0x400, 0);
+		explicit fake_actor(fake_stats& stats)
+		{
+			const DWORD pointer = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(stats.data()));
+			std::memcpy(bytes.data() + 0x35c, &pointer, 4);
+		}
+		void* data() { return bytes.data(); }
+	};
+
+	// The game's functions, as the test stands in for them.
+	float __fastcall balance_game_strength(void* stats, void*, int, void*, int)
+	{
+		return 1.0f + 0.05f * static_cast<float>(static_cast<std::uint8_t*>(stats)[8]);
+	}
+
+	float __fastcall balance_game_mind(void* stats, void*, int, void*, int)
+	{
+		return 1.0f + 0.01f * static_cast<float>(static_cast<std::uint8_t*>(stats)[11]);
+	}
+
+	float balance_game_affecter_value = 1.0f;
+
+	unsigned char __fastcall balance_game_affecter(void*, void*, const int kind, float* out, void*, const int mode)
+	{
+		*out = kind == 0x39 && mode == 1 ? balance_game_affecter_value : -1.0f;
+		return 1;
+	}
+
+	int __cdecl balance_game_parser(const char* name)
+	{
+		return !std::strcmp(name, "none") ? 0 : !std::strcmp(name, "difficulty") ? 2 : !std::strcmp(name, "") ? 3 : 1;
+	}
+
+	void* balance_stat_context = nullptr;
+
+	int __cdecl balance_game_stat(void* stats, const int index, void* actor)
+	{
+		balance_stat_context = actor;
+		return static_cast<std::uint8_t*>(stats)[8 + index];
+	}
+
+	int __cdecl balance_game_level(void* stats)
+	{
+		return static_cast<std::uint8_t*>(stats)[0x1c];
+	}
+
+	const char* __cdecl balance_game_talent_name(const int id)
+	{
+		return id == 7 ? "Might" : id == 3 ? "invented" : nullptr;
+	}
+
+	// What the two stubs are run with, and what came back.
+	void* balance_probe_stub = nullptr;
+	std::uint32_t balance_probe_in_esi = 0, balance_probe_in_edi = 0, balance_probe_in_ebx = 0;
+	std::uint32_t balance_probe_eax = 0, balance_probe_ebx = 0, balance_probe_ecx = 0, balance_probe_edx = 0, balance_probe_esi = 0, balance_probe_edi = 0, balance_probe_ebp = 0;
+	std::uint32_t balance_probe_flags_before = 0, balance_probe_flags_after = 0, balance_probe_first = 0, balance_probe_second = 0;
+	float balance_probe_st0 = 0.0f, balance_probe_st1 = 0.0f, balance_probe_chance = 0.0f;
+
+	// Calls the health stub as 0x4b89f7 does: esi the CStats, edi the actor or null with `test edi, edi` just done,
+	// one value on the x87 stack, known values everywhere else.
+	__declspec(naked) void __cdecl run_health_stub()
+	{
+		__asm
+		{
+			push ebp
+			push ebx
+			push esi
+			push edi
+			fld1
+			fadd st(0), st(0)
+			mov eax, 0x11111111
+			mov ebx, 0x22222222
+			mov ecx, 0x33333333
+			mov edx, 0x44444444
+			mov ebp, 0x55555555
+			mov esi, dword ptr [balance_probe_in_esi]
+			mov edi, dword ptr [balance_probe_in_edi]
+			test edi, edi
+			pushfd
+			pop dword ptr [balance_probe_flags_before]
+			call dword ptr [balance_probe_stub]
+			pushfd
+			pop dword ptr [balance_probe_flags_after]
+			mov dword ptr [balance_probe_eax], eax
+			mov dword ptr [balance_probe_ebx], ebx
+			mov dword ptr [balance_probe_ecx], ecx
+			mov dword ptr [balance_probe_edx], edx
+			mov dword ptr [balance_probe_esi], esi
+			mov dword ptr [balance_probe_edi], edi
+			mov dword ptr [balance_probe_ebp], ebp
+			fstp dword ptr [balance_probe_st0]
+			fstp dword ptr [balance_probe_st1]
+			pop edi
+			pop esi
+			pop ebx
+			pop ebp
+			ret
+		}
+	}
+
+	// Where the hit stub goes on: the two pushes on top, the chance in the frame, the registers as they came.
+	__declspec(naked) void balance_hit_landing()
+	{
+		__asm
+		{
+			pop dword ptr [balance_probe_first]
+			pop dword ptr [balance_probe_second]
+			mov eax, dword ptr [esp + 0x20]
+			mov dword ptr [balance_probe_chance], eax
+			mov dword ptr [balance_probe_ebx], ebx
+			mov dword ptr [balance_probe_esi], esi
+			mov dword ptr [balance_probe_edi], edi
+			mov dword ptr [balance_probe_ebp], ebp
+			add esp, 0x30
+			pop edi
+			pop esi
+			pop ebx
+			pop ebp
+			ret
+		}
+	}
+
+	// Jumps to the hit stub as 0x44f684 does: ebx the attacker, edi the defender, esi the attack, the game's own
+	// chance (0.5 here) at [esp+0x20].
+	__declspec(naked) void __cdecl run_hit_stub()
+	{
+		__asm
+		{
+			push ebp
+			push ebx
+			push esi
+			push edi
+			sub esp, 0x30
+			mov dword ptr [esp + 0x20], 0x3f000000
+			mov ebx, dword ptr [balance_probe_in_ebx]
+			mov edi, dword ptr [balance_probe_in_edi]
+			mov esi, dword ptr [balance_probe_in_esi]
+			mov ebp, 0x55555555
+			jmp dword ptr [balance_probe_stub]
+		}
+	}
+
+	// Calls a multiplier as 0x453b67 / 0x453b6e do: on a frame like the damage function's (the roll at [esp+0x20]),
+	// ecx the CStats, three pushes, the callee pops them; the answer in balance_probe_st0. Returns how far esp is
+	// from where it was: 0.
+	__declspec(naked) int __cdecl call_balance_multiplier(void* /*function*/, void* /*stats*/, float /*roll*/)
+	{
+		__asm
+		{
+			push ebx
+			mov ebx, esp
+			mov eax, dword ptr [esp + 8]
+			mov ecx, dword ptr [esp + 12]
+			mov edx, dword ptr [esp + 16]
+			sub esp, 0x30
+			mov dword ptr [esp + 0x20], edx
+			push 0
+			push 0
+			push 0
+			call eax
+			fstp dword ptr [balance_probe_st0]
+			lea eax, [esp + 0x30]
+			sub eax, ebx
+			mov esp, ebx
+			pop ebx
+			ret
+		}
+	}
+
+	// Calls the damage multiplier as 0x453bc7 does: on a frame like the damage function's (the multiplier's slot at
+	// [esp+0xc], what the affecters add at [esp+0x10], the roll at [esp+0x20], the hit at [esp+0x24]), ecx the actor;
+	// 0x39, the slot's address, the attack, 1 pushed, the callee pops them. The multiplier left in the slot goes to
+	// *out. Returns how far esp is from where it was: 0.
+	__declspec(naked) int __cdecl call_balance_affecter(void* /*function*/, void* /*actor*/, float* /*out*/, float /*roll*/, float /*hit*/, float /*added*/)
+	{
+		__asm
+		{
+			push ebx
+			mov ebx, esp
+			sub esp, 0x30
+			mov eax, dword ptr [ebx + 20]
+			mov dword ptr [esp + 0x20], eax
+			mov eax, dword ptr [ebx + 24]
+			mov dword ptr [esp + 0x24], eax
+			mov eax, dword ptr [ebx + 28]
+			mov dword ptr [esp + 0x10], eax
+			mov eax, dword ptr [ebx + 8]
+			mov ecx, dword ptr [ebx + 12]
+			lea edx, [esp + 0xc]
+			push 1
+			push 0
+			push edx
+			push 0x39
+			call eax
+			mov edx, dword ptr [esp + 0xc]
+			mov ecx, dword ptr [ebx + 16]
+			mov dword ptr [ecx], edx
+			lea eax, [esp + 0x30]
+			sub eax, ebx
+			mov esp, ebx
+			pop ebx
+			ret
+		}
+	}
+
+	template <typename T>
+	DWORD balance_address(T pointer)
+	{
+		return static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(pointer));
+	}
+
+	// [Balance] (balance_rules.hpp): the values' rules; the formulas against the port's known cases; which
+	// characters count as scaled heroes; the functions the patched game calls, on stats, actors and game functions
+	// of the test's own; the two stubs run the way the game reaches them; the sites and guards on their own; then,
+	// when a copy of XMen2.exe is at hand, every guard against it, what the retail sites call, and the change
+	// applied to that copy feature by feature (exactly the sites' bytes).
+	void check_balance_rules()
+	{
+		using namespace balance_rules;
+		std::printf("[Balance] (X-Men Legends 1's combat numbers)\n");
+
+		// The values.
+		const auto ten = parse_number(" 10 ; the first game's", 1.0f, 50.0f);
+		CHECK(ten.set && ten.value == 10.0f && ten.error.empty());
+		CHECK(parse_number("0.025", 0.0f, 1.0f).value == 0.025f && parse_number("1", 1.0f, 50.0f).set && parse_number("50", 1.0f, 50.0f).set && parse_number(".5", 0.0f, 1.0f).value == 0.5f);
+		CHECK(!parse_number("", 1.0f, 50.0f).set && parse_number("", 1.0f, 50.0f).error.empty() && !parse_number("  ; later", 1.0f, 50.0f).set);
+		for (const char* bad : {"0", "51", "-3", "ten", "1e1", "3,5", "0x10", "3 5", "1.2.3", ".", "+4", "10000000000000000", "nan", "inf"})
+		{
+			const auto refused = parse_number(bad, 1.0f, 50.0f);
+			if (refused.error.empty()) std::printf("  info  \"%s\" was taken\n", bad);
+			CHECK(!refused.set && refused.error == "isn't a number from 1 to 50");
+		}
+		CHECK(parse_rules("xml1").set && parse_rules("xml1").value == rules::xml1 && parse_rules(" XML1 ; the first game's").value == rules::xml1);
+		CHECK(parse_rules("Xml2").set && parse_rules("Xml2").value == rules::xml2 && !parse_rules("").set && parse_rules("").error.empty());
+		CHECK(!parse_rules("fast").set && parse_rules("fast").error == "isn't xml1 or xml2" && !parse_rules("1").set && !parse_rules("xml1 xml2").set);
+		CHECK((parse_names(" Alpha, beta ,,GAMMA ; three") == std::vector<std::string>{"alpha", "beta", "gamma"}) && parse_names("").empty() && parse_names(" , ").empty());
+
+		// The section: nothing set, nothing asked.
+		CHECK(features_of(parse({})) == 0 && !parse({}).any() && parse({}).refused.empty());
+		ini_values first_game;
+		first_game.enemy_health_per_body = "10";
+		first_game.hero_stat_scale = "4";
+		first_game.native_stat_heroes = "InventedAstral,InventedGladiator";
+		first_game.strength_bonus = "0.1";
+		first_game.mind_bonus = "0.1";
+		first_game.might_bonus = "0.05";
+		first_game.power_attacks = "xml1";
+		first_game.hit_chance = "xml1";
+		const settings x1 = parse(first_game);
+		CHECK(x1.refused.empty() && features_of(x1) == (health | strength | mind | might | power_attacks | hit_chance));
+		CHECK(x1.health_per_body(false) == 10.0f && x1.health_per_body(true) == 3.0f);
+		CHECK(x1.strength_per_point(false) == 0.1f && x1.strength_per_point(true) == 0.025f && x1.mind_per_point(false) == 0.1f && x1.mind_per_point(true) == 0.025f);
+		CHECK(x1.hit_chance_base == 30.0f && x1.hit_chance_per_point == 0.025f && *x1.might_bonus == 0.05f);
+		CHECK(status_text(x1, features_of(x1)) == "balance health=10/3 str=0.1/0.025 mind=0.1/0.025 might=0.05 power=xml1 hit=xml1(30,0.025) rounding=xml2 rolls=xml2 weapons=0");
+		CHECK(status_text(x1, health) == "balance health=10/3 str=- mind=- might=- power=xml2 hit=xml2 rounding=xml2 rolls=xml2 weapons=0" && status_text(x1, 0) == "balance off");
+		// Rounding=xml1 by itself: the three damage sites with the game's own numbers.
+		ini_values only_rounding;
+		only_rounding.rounding = "xml1";
+		const settings r = parse(only_rounding);
+		CHECK(r.rounding_xml1 && features_of(r) == (strength | mind | might) && r.strength_per_point(true) == stock_strength_bonus && !r.might_bonus);
+		CHECK(status_text(r, features_of(r)) == "balance health=- str=0.05/0.05 mind=0.01/0.01 might=- power=xml2 hit=xml2 rounding=xml1 rolls=xml2 weapons=0");
+		// Each key on its own; the tuning keys.
+		ini_values tuned = first_game;
+		tuned.hero_strength_bonus = "0.03";
+		tuned.hero_mind_bonus = "0";
+		tuned.hero_health_per_body = "4";
+		tuned.hit_chance_base = "26";
+		tuned.hit_chance_per_point = "0.02";
+		const settings t = parse(tuned);
+		CHECK(t.strength_per_point(true) == 0.03f && t.strength_per_point(false) == 0.1f && t.mind_per_point(true) == 0.0f && t.health_per_body(true) == 4.0f &&
+		      t.hit_chance_base == 26.0f && t.hit_chance_per_point == 0.02f && t.refused.empty());
+		ini_values only_hero;
+		only_hero.hero_strength_bonus = "0.03";
+		const settings h = parse(only_hero);
+		CHECK(features_of(h) == strength && h.strength_per_point(false) == stock_strength_bonus && h.strength_per_point(true) == 0.03f && h.hero_stat_scale == 1.0f);
+		ini_values only_scale;
+		only_scale.hero_stat_scale = "4";
+		only_scale.native_stat_heroes = "a,b";
+		only_scale.hit_chance_base = "26";
+		CHECK(features_of(parse(only_scale)) == 0); // the scale, the list and the tuning numbers do nothing by themselves
+		ini_values back;
+		back.enemy_health_per_body = "3";
+		back.strength_bonus = "0.05";
+		back.mind_bonus = "0.01";
+		const settings b = parse(back); // the game's own numbers, key by key
+		CHECK(b.health_per_body(false) == stock_health_per_body && b.strength_per_point(false) == stock_strength_bonus && b.strength_per_point(true) == stock_strength_bonus &&
+		      b.mind_per_point(true) == stock_mind_bonus);
+		// A refused value: its line, and the key counts as not set.
+		ini_values wrong = first_game;
+		wrong.enemy_health_per_body = "0";
+		wrong.hit_chance = "fast ; no such rules";
+		wrong.might_bonus = "2";
+		wrong.hit_chance_base = "61";
+		const settings some = parse(wrong);
+		CHECK(some.refused.size() == 4 && features_of(some) == (strength | mind | power_attacks) && some.hit_chance_base == xml1_hit_base);
+		CHECK(some.refused.size() == 4 && some.refused[0] == "[Balance] EnemyHealthPerBody=0 isn't a number from 1 to 50 - the game's own health stays" &&
+		      some.refused[1] == "[Balance] MightBonus=2 isn't a number from 0 to 0.5 - no damage from the talent might, as in the game" &&
+		      some.refused[2] == "[Balance] HitChance=fast isn't xml1 or xml2 - the game's own roll stays" &&
+		      some.refused[3] == "[Balance] HitChanceBase=61 isn't a number from 0 to 60 - X-Men Legends 1's 30 is used");
+
+		// Max health (0x4b8850; default.xbe 0xafa90), the port's enemies: level, body, the entry's health scale.
+		CHECK(max_health(1, 2, 3.0f, 0.8f) == 29 && max_health(1, 2, 10.0f, 0.8f) == 40);       // level 1, body 2
+		CHECK(max_health(2, 6, 3.0f, 0.8f) == 43 && max_health(2, 6, 10.0f, 0.8f) == 76);       // level 2, body 6
+		CHECK(max_health(4, 20, 3.0f, 1.6f) == 168 && max_health(4, 20, 10.0f, 1.6f) == 392);   // a boss: scale 1.6
+		CHECK(max_health(3, 5, 3.0f, 7.0f) == 385 && max_health(3, 5, 10.0f, 7.0f) == 630);
+		CHECK(max_health(40, 80, 3.0f, 30.0f) == 13950 && max_health(40, 80, 10.0f, 30.0f) == 30750);
+		CHECK(max_health(1, 20, 3.0f, 1.0f) == 90 && max_health(1, 20, 4.0f, 1.0f) == 110);     // a scaled hero: body 5 x 4
+		// 50 x 0.8f is 40.0000006 before it is stored as a float: 40, not 41.
+		CHECK(50.0 * static_cast<double>(0.8f) > 40.0 && max_health(1, 2, 10.0f, 0.8f) == 40);
+		CHECK(max_health(1, 0, 3.0f, 0.0f) == 1 && max_health(99, 255, 50.0f, 100.0f) == 1000000);
+
+		// The stat bonus: the game's multiplier turned into the first game's.
+		CHECK(std::fabs(rescaled(1.0f + 0.05f * 16.0f, stock_strength_bonus, 0.025f) - 1.4f) < 1e-6f);  // a scaled hero, strength 4 x 4: x1.8 -> x1.4
+		CHECK(std::fabs(rescaled(1.0f + 0.05f * 9.0f, stock_strength_bonus, 0.1f) - 1.9f) < 1e-6f);     // an enemy, strength 9: x1.45 -> x1.9
+		CHECK(std::fabs(rescaled(1.0f + 0.01f * 12.0f, stock_mind_bonus, 0.025f) - 1.3f) < 1e-6f && rescaled(1.0f, stock_strength_bonus, 0.1f) == 1.0f);
+		CHECK(rescaled(1.8f, stock_strength_bonus, stock_strength_bonus) == 1.8f && std::fabs(rescaled(1.0f + 0.05f * 255.0f, stock_strength_bonus, 0.1f) - 26.5f) < 1e-5f);
+		bool points_ok = true;
+		for (int points = 0; points <= 400; ++points) // every stat comes back out of the multiplier as the whole number it was
+		{
+			points_ok &= rescaled(1.0f + static_cast<float>(points) * 0.05f, stock_strength_bonus, 1.0f) == 1.0f + static_cast<float>(points);
+			points_ok &= rescaled(1.0f + static_cast<float>(points) * 0.01f, stock_mind_bonus, 1.0f) == 1.0f + static_cast<float>(points);
+		}
+		CHECK(points_ok);
+		CHECK(might_factor(0.05f, 0) == 1.0f && std::fabs(might_factor(0.05f, 1) - 1.05f) < 1e-6f && std::fabs(might_factor(0.05f, 3) - 1.15f) < 1e-6f &&
+		      might_factor(0.05f, 9) == might_factor(0.05f, 3) && might_factor(0.05f, -1) == 1.0f);
+		// Rounding: the multiplier whose rounded-up bonus is the bonus rounded down, through the game's own float steps;
+		// the affecters' bonus worked out on the roll.
+		CHECK(game_bonus(4.5f, 1.3f) == 6.5f && game_bonus(4.5f, rounded_down(4.5f, 0.3f * 4.5f)) == 5.5f && rounded_down(4.5f, 0.9f) == 1.0f && rounded_down(0.0f, 5.0f) == 1.0f);
+		bool rounding_ok = true;
+		for (float roll = 0.37f; roll < 2500.0f; roll *= 1.013f)
+		{
+			for (const float per_point_bonus : {0.0f, 0.025f * 16.0f, 0.1f * 3.0f, 0.1f * 40.0f, 0.1f * 80.0f})
+			{
+				const float bonus = per_point_bonus * roll;
+				rounding_ok &= game_bonus(roll, rounded_down(roll, bonus)) == roll + std::floor(bonus);
+			}
+			for (const float multiplier : {1.0f, 1.05f, 1.1f, 1.15f, 1.5f * 1.15f, 0.5f})
+			{
+				for (const float added : {0.0f, 2.0f, -3.0f})
+				{
+					const float hit = roll + std::floor(0.3f * roll);
+					rounding_ok &= game_affected(hit, affecters_on_roll(roll, hit, multiplier, added), added) ==
+					               hit + static_cast<float>(std::trunc(std::round(static_cast<double>(roll)) * multiplier - std::round(static_cast<double>(roll)) + added));
+				}
+			}
+		}
+		CHECK(rounding_ok);
+		CHECK(game_affected(39.0f, affecters_on_roll(30.0f, 39.0f, 1.15f, 0.0f), 0.0f) == 43.0f && game_affected(39.0f, 1.15f, 0.0f) == 45.0f);  // XML1: 30 x 0.15 = 4; the game's own: 39 x 0.15 = 5.85 -> 6
+		// XML1's stat bonus on its whole-number roll, in its precision: strength 4 (0.1 a point) on 5 adds 2, on 4 adds 1;
+		// a float roll of 4.5 and up counts as 5. The scaled hero's 16 points at 0.1 / 4 are the same number.
+		CHECK(xml1_bonus_for(5.0f, 4.0f, 0.1f) == 2.0f && xml1_bonus_for(4.0f, 4.0f, 0.1f) == 1.0f && xml1_bonus_for(4.49f, 4.0f, 0.1f) == 1.0f && xml1_bonus_for(4.5f, 4.0f, 0.1f) == 2.0f);
+		CHECK(xml1_bonus_for(5.0f, 16.0f, 0.1f / 4.0f) == 2.0f && xml1_bonus_for(28.0f, 16.0f, 0.1f / 4.0f) == 11.0f && xml1_bonus_for(5.0f, 0.0f, 0.1f) == 0.0f && xml1_bonus_for(5.0f, 3.0f, 0.1f) == 1.0f);
+		CHECK(points_in(1.0f + 0.05f * 16.0f, stock_strength_bonus) == 16.0f && points_in(1.0f + 0.01f * 80.0f, stock_mind_bonus) == 80.0f && points_in(1.0f, stock_mind_bonus) == 0.0f);
+		CHECK(game_affected(12.0f, affecters_on_roll(10.0f, 12.0f, 0.5f, 0.0f), 0.0f) == 7.0f && affecters_on_roll(10.0f, 0.0f, 1.15f, 0.0f) == 1.15f);
+		// The hit chance: equal sides 75 %, 2.5 % a point, the floor, no cap.
+		CHECK(std::fabs(xml1_hit_chance(6.0f, 6.0f, 30.0f, 0.025f) - 0.75f) < 1e-6f && std::fabs(xml1_hit_chance(2.0f, 6.0f, 30.0f, 0.025f) - 0.65f) < 1e-6f);
+		CHECK(xml1_hit_chance(1.0f, 60.0f, 30.0f, 0.025f) == 0.1f && xml1_hit_chance(41.0f, 1.0f, 30.0f, 0.025f) > 1.0f && std::fabs(xml1_hit_chance(6.0f, 6.0f, 26.0f, 0.025f) - 0.65f) < 1e-6f);
+		// The game's own, for the same pair: an enemy of speed 1 against a hero of speed 20 lands 5 %.
+		CHECK(xml2_hit_chance(1, 1, 20, 1) == 0.05f && xml2_hit_chance(20, 1, 1, 1) == 0.95f);
+
+		// Scaled heroes: the herostat's extension object, and a name that isn't in the list.
+		fake_stats hero("Invented", hero_extension_vtable, 16, 20, 12, 1);
+		fake_stats native("inventedastral", hero_extension_vtable, 40, 80, 35, 40);
+		fake_stats native_longer("InventedAstralTwo", hero_extension_vtable, 16, 20, 12, 1);
+		fake_stats npc("Invented", npc_extension_vtable, 3, 1, 4, 1);
+		fake_stats bare("Invented", 0, 3, 1, 4, 1);
+		std::memset(bare.bytes.data() + 0xc0, 0, 4); // no extension object at all
+		CHECK(scaled_hero(hero.data(), x1) && !scaled_hero(native.data(), x1) && scaled_hero(native_longer.data(), x1) && !scaled_hero(npc.data(), x1) &&
+		      !scaled_hero(bare.data(), x1) && !scaled_hero(nullptr, x1));
+
+		// What the patched game calls, with the test's stand-ins for the game's functions.
+		const runtime before_live = balance_rules::live;
+		balance_rules::live = {};
+		balance_rules::live.chosen = x1;
+		balance_rules::live.strength = &balance_game_strength;
+		balance_rules::live.mind = &balance_game_mind;
+		balance_rules::live.affecter = &balance_game_affecter;
+		balance_rules::live.parser = &balance_game_parser;
+		balance_rules::live.stat = &balance_game_stat;
+		balance_rules::live.level = &balance_game_level;
+		balance_rules::live.talent_name = &balance_game_talent_name;
+		balance_rules::live.health[0] = x1.health_per_body(false);
+		balance_rules::live.health[1] = x1.health_per_body(true);
+		CHECK(*health_per_body_for(hero.data()) == 3.0f && *health_per_body_for(npc.data()) == 10.0f && *health_per_body_for(native.data()) == 10.0f);
+		// The multipliers, called as the damage function calls them: the answer, and the 12 bytes popped.
+		CHECK(call_balance_multiplier(reinterpret_cast<void*>(&strength_multiplier), hero.data(), 4.5f) == 0 && std::fabs(balance_probe_st0 - 1.4f) < 1e-6f);
+		CHECK(call_balance_multiplier(reinterpret_cast<void*>(&strength_multiplier), npc.data(), 4.5f) == 0 && std::fabs(balance_probe_st0 - 1.3f) < 1e-6f);
+		CHECK(call_balance_multiplier(reinterpret_cast<void*>(&strength_multiplier), native.data(), 4.5f) == 0 && std::fabs(balance_probe_st0 - 5.0f) < 1e-6f);
+		CHECK(call_balance_multiplier(reinterpret_cast<void*>(&mind_multiplier), hero.data(), 4.5f) == 0 && std::fabs(balance_probe_st0 - 1.3f) < 1e-6f);
+		CHECK(call_balance_multiplier(reinterpret_cast<void*>(&mind_multiplier), npc.data(), 4.5f) == 0 && std::fabs(balance_probe_st0 - 1.4f) < 1e-6f);
+		CHECK(call_balance_multiplier(reinterpret_cast<void*>(&mind_multiplier_shown), hero.data(), 4.5f) == 0 && std::fabs(balance_probe_st0 - 1.3f) < 1e-6f);
+		// Rounding=xml1: the same calls read the roll off the frame - 4.5 counts as XML1's 5: + 1 for the enemy's
+		// strength 3 (1.5), + 2 for the hero's 16 / 4 (2.0).
+		balance_rules::live.chosen.rounding_xml1 = true;
+		CHECK(call_balance_multiplier(reinterpret_cast<void*>(&strength_multiplier), npc.data(), 4.5f) == 0 && game_bonus(4.5f, balance_probe_st0) == 5.5f);
+		CHECK(call_balance_multiplier(reinterpret_cast<void*>(&strength_multiplier), hero.data(), 4.5f) == 0 && game_bonus(4.5f, balance_probe_st0) == 6.5f);
+		CHECK(call_balance_multiplier(reinterpret_cast<void*>(&strength_multiplier), hero.data(), 4.25f) == 0 && game_bonus(4.25f, balance_probe_st0) == 5.25f);
+		CHECK(call_balance_multiplier(reinterpret_cast<void*>(&strength_multiplier), hero.data(), 28.0f) == 0 && game_bonus(28.0f, balance_probe_st0) == 39.0f); // 11.2 -> 11
+		CHECK(call_balance_multiplier(reinterpret_cast<void*>(&mind_multiplier), npc.data(), 2.0f) == 0 && balance_probe_st0 == 1.0f);                      // 0.8 -> 0
+		CHECK(call_balance_multiplier(reinterpret_cast<void*>(&mind_multiplier_shown), npc.data(), 2.0f) == 0 && std::fabs(balance_probe_st0 - 1.4f) < 1e-6f); // the screen: no roll
+		balance_rules::live.chosen.rounding_xml1 = false;
+		// Might: the rank from the talent list, by the registry's name for each id.
+		fake_actor hero_actor(hero), npc_actor(npc);
+		CHECK(might_rank(hero.data()) == 0 && might_rank(nullptr) == 0);
+		npc.talent(3, 5);
+		npc.talent(9, 2); // an id the registry doesn't know
+		CHECK(might_rank(npc.data()) == 0);
+		npc.talent(7, 2);
+		CHECK(might_rank(npc.data()) == 2);
+		float multiplier = 0.0f;
+		balance_game_affecter_value = 1.0f;
+		CHECK(call_balance_affecter(reinterpret_cast<void*>(&damage_multiplier), npc_actor.data(), &multiplier, 30.0f, 39.0f, 0.0f) == 0 && std::fabs(multiplier - 1.1f) < 1e-6f);
+		balance_game_affecter_value = 1.5f; // the game's own multiplier stays in
+		CHECK(call_balance_affecter(reinterpret_cast<void*>(&damage_multiplier), npc_actor.data(), &multiplier, 30.0f, 39.0f, 0.0f) == 0 && std::fabs(multiplier - 1.65f) < 1e-6f);
+		CHECK(call_balance_affecter(reinterpret_cast<void*>(&damage_multiplier), hero_actor.data(), &multiplier, 30.0f, 39.0f, 0.0f) == 0 && multiplier == 1.5f);
+		hero.talent(7, 5); // above 3 counts as 3
+		CHECK(call_balance_affecter(reinterpret_cast<void*>(&damage_multiplier), hero_actor.data(), &multiplier, 30.0f, 39.0f, 0.0f) == 0 && std::fabs(multiplier - 1.725f) < 1e-6f);
+		// Rounding=xml1: the bonus on the roll off the frame, rounded down - might 2 on a roll of 30 (hit 39): + 3; with
+		// the game's own x1.5 and 2 added: 30 x 0.65 + 2 = 21.5 -> + 21; no might and no affecter: nothing.
+		balance_rules::live.chosen.rounding_xml1 = true;
+		balance_game_affecter_value = 1.0f;
+		CHECK(call_balance_affecter(reinterpret_cast<void*>(&damage_multiplier), npc_actor.data(), &multiplier, 30.0f, 39.0f, 0.0f) == 0 && game_affected(39.0f, multiplier, 0.0f) == 42.0f);
+		CHECK(call_balance_affecter(reinterpret_cast<void*>(&damage_multiplier), npc_actor.data(), &multiplier, 4.5f, 5.5f, 0.0f) == 0 && game_affected(5.5f, multiplier, 0.0f) == 5.5f);
+		balance_game_affecter_value = 1.5f;
+		CHECK(call_balance_affecter(reinterpret_cast<void*>(&damage_multiplier), npc_actor.data(), &multiplier, 30.0f, 39.0f, 2.0f) == 0 && game_affected(39.0f, multiplier, 2.0f) == 60.0f);
+		balance_game_affecter_value = 1.0f;
+		{
+			fake_stats plain_stats("Invented", npc_extension_vtable, 3, 1, 4, 1);
+			fake_actor plain(plain_stats);
+			CHECK(call_balance_affecter(reinterpret_cast<void*>(&damage_multiplier), plain.data(), &multiplier, 30.0f, 39.0f, 0.0f) == 0 && game_affected(39.0f, multiplier, 0.0f) == 39.0f);
+		}
+		balance_rules::live.chosen.rounding_xml1 = false;
+		balance_game_affecter_value = 1.5f;
+		{
+			int full = stats_talent_capacity + 5; // a count beyond the list: only the list is read
+			fake_stats crowded("Invented", npc_extension_vtable, 3, 1, 4, 1);
+			std::memcpy(crowded.bytes.data() + 0xbc, &full, 4);
+			CHECK(might_rank(crowded.data()) == 0);
+		}
+		// DamageScale: the marker is none, every other name the game's own answer.
+		CHECK(damage_scale("x1power") == 0 && damage_scale("X1Power") == 0 && damage_scale("none") == 0 && damage_scale("normal") == 1 && damage_scale("difficulty") == 2 &&
+		      damage_scale("") == 3 && damage_scale("x1powers") == 1 && damage_scale("anything") == 1);
+		CHECK(balance_game_parser("x1power") == 1); // without the change: normal, as the game reads any unknown name
+		// The hit chance: a level-1 enemy of speed 1 on a level-1 scaled hero of speed 20 (5 in the first game).
+		std::vector<std::uint8_t> punch(0x40, 0), mental(0x40, 0);
+		mental[0x11] = 0x02; // the attack's type bits 0xf00
+		CHECK(std::fabs(hit_chance_for(npc_actor.data(), hero_actor.data(), punch.data()) - 0.65f) < 1e-6f && balance_stat_context == hero_actor.data());
+		CHECK(std::fabs(hit_chance_for(hero_actor.data(), npc_actor.data(), punch.data()) - 0.85f) < 1e-6f && balance_stat_context == npc_actor.data());
+		// A mental attack: mind against mind (4 against 12 / 4), with the attacker's affecters.
+		CHECK(std::fabs(hit_chance_for(npc_actor.data(), hero_actor.data(), mental.data()) - 0.775f) < 1e-6f && balance_stat_context == npc_actor.data());
+		CHECK(std::fabs(hit_chance_for(nullptr, hero_actor.data(), punch.data()) - 0.6f) < 1e-6f); // no attacker: 0 + 0 against 5 + 1
+
+		// The health stub, run as 0x4b89f7 reaches it: the float for these stats on top of the game's value, every
+		// register and flag as it was - with an actor (edi) and without one.
+		const auto health_code = health_stub(balance_address(&health_per_body_for));
+		const auto hit_code = hit_stub(balance_address(&hit_chance_for), balance_address(&balance_hit_landing));
+		CHECK(health_code.size() == 18 && hit_code.size() == 30 && health_code.front() == 0x9c && health_code.back() == 0xc3 && hit_code.back() == 0xc3);
+		auto* block = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+		CHECK(block != nullptr);
+		if (block)
+		{
+			std::memcpy(block, health_code.data(), health_code.size());
+			std::memcpy(block + 0x100, hit_code.data(), hit_code.size());
+			bool stub_ok = true;
+			for (const std::uint32_t actor : {0u, 0x66666666u})
+			{
+				for (fake_stats* stats : {&hero, &npc})
+				{
+					balance_probe_stub = block;
+					balance_probe_in_esi = balance_address(stats->data());
+					balance_probe_in_edi = actor;
+					balance_probe_st0 = balance_probe_st1 = 0.0f;
+					run_health_stub();
+					stub_ok &= balance_probe_st0 == (stats == &hero ? 3.0f : 10.0f) && balance_probe_st1 == 2.0f;
+					stub_ok &= balance_probe_eax == 0x11111111 && balance_probe_ebx == 0x22222222 && balance_probe_ecx == 0x33333333 && balance_probe_edx == 0x44444444 &&
+					           balance_probe_ebp == 0x55555555 && balance_probe_esi == balance_probe_in_esi && balance_probe_edi == actor;
+					stub_ok &= balance_probe_flags_after == balance_probe_flags_before && ((balance_probe_flags_after & 0x40) != 0) == (actor == 0);
+				}
+			}
+			CHECK(stub_ok);
+			// The hit stub, run as 0x44f684 reaches it: the first game's chance over the game's own in the frame,
+			// then the two pushes it replaced, ebx / esi / edi / ebp as they were.
+			balance_probe_stub = block + 0x100;
+			balance_probe_in_ebx = balance_address(npc_actor.data());
+			balance_probe_in_edi = balance_address(hero_actor.data());
+			balance_probe_in_esi = balance_address(punch.data());
+			run_hit_stub();
+			CHECK(std::fabs(balance_probe_chance - 0.65f) < 1e-6f && balance_probe_first == 0x3f800000 && balance_probe_second == 1);
+			CHECK(balance_probe_ebx == balance_probe_in_ebx && balance_probe_edi == balance_probe_in_edi && balance_probe_esi == balance_probe_in_esi && balance_probe_ebp == 0x55555555);
+			VirtualFree(block, 0, MEM_RELEASE);
+		}
+		balance_rules::live = before_live;
+
+		// The sites and guards on their own: well formed, apart; every site inside exactly one guard, with its
+		// retail bytes, and that guard is one of the site's feature.
+		bool guards_ok = true;
+		std::set<DWORD> addresses_seen;
+		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.bytes.hex) && addresses_seen.insert(g.bytes.va).second && g.bytes.what && *g.bytes.what && g.features != 0;
+		bool apart = true;
+		for (std::size_t i = 0; i < guards.size(); ++i)
+		{
+			const DWORD end = guards[i].bytes.va + static_cast<DWORD>(limits_rules::hex_size(guards[i].bytes.hex));
+			for (std::size_t j = 0; j < guards.size(); ++j)
+			{
+				if (i != j && guards[j].bytes.va >= guards[i].bytes.va && guards[j].bytes.va < end) apart = false;
+			}
+		}
+		CHECK(guards_ok && apart);
+		bool sites_ok = true;
+		unsigned features_with_sites = 0;
+		for (std::size_t i = 0; i < sites.size(); ++i)
+		{
+			const auto& s = sites[i];
+			const std::size_t size = limits_rules::hex_size(s.retail);
+			sites_ok &= limits_rules::valid_hex(s.retail) && s.what && *s.what && size == (s.to == target::health_stub ? 6u : s.to == target::hit_stub ? 7u : s.to == target::melee_stub ? 9u : 5u);
+			features_with_sites |= s.feature;
+			int covering = 0;
+			for (const auto& g : guards)
+			{
+				const DWORD end = g.bytes.va + static_cast<DWORD>(limits_rules::hex_size(g.bytes.hex));
+				if (g.bytes.va <= s.va && s.va + size <= end)
+				{
+					++covering;
+					sites_ok &= (g.features & s.feature) != 0;
+					for (std::size_t byte = 0; byte < size; ++byte) sites_ok &= limits_rules::hex_byte(g.bytes.hex, s.va - g.bytes.va + byte) == limits_rules::hex_byte(s.retail, byte);
+				}
+			}
+			if (covering != 1) std::printf("  info  site 0x%08lX is inside %d guards\n", s.va, covering);
+			sites_ok &= covering == 1;
+			for (std::size_t j = i + 1; j < sites.size(); ++j)
+			{
+				const auto& other = sites[j];
+				sites_ok &= other.va >= s.va + size || s.va >= other.va + limits_rules::hex_size(other.retail);
+			}
+		}
+		CHECK(sites_ok && features_with_sites == (health | strength | mind | might | power_attacks | hit_chance | damage_rolls | melee_weapons));
+		// The writes, feature by feature: a call (the hit stub: a jump) to the fix, nops to the old length.
+		const addresses fake{0x10001000, 0x10002000, 0x10003000, 0x10003800, 0x10004000, 0x10005000, 0x10006000, 0x10007000, 0x10008000};
+		CHECK(writes_for(0, fake).empty() && writes_for(health, fake).size() == 1 && writes_for(strength, fake).size() == 1 && writes_for(mind, fake).size() == 2 &&
+		      writes_for(might, fake).size() == 1 && writes_for(power_attacks, fake).size() == 1 && writes_for(hit_chance, fake).size() == 1 &&
+		      writes_for(health | strength | mind | might | power_attacks | hit_chance | damage_rolls | melee_weapons, fake).size() == sites.size());
+		CHECK((writes_for(health, fake)[0].bytes == std::vector<std::uint8_t>{0xe8, 0x04, 0x86, 0xb4, 0x0f, 0x90}) && writes_for(health, fake)[0].va == 0x4b89f7); // call 0x10001000; nop
+		CHECK((writes_for(hit_chance, fake)[0].bytes == std::vector<std::uint8_t>{0xe9, 0x77, 0x69, 0xbb, 0x0f, 0x66, 0x90}) && writes_for(hit_chance, fake)[0].va == 0x44f684); // jmp 0x10006000; 2-byte nop
+		CHECK((writes_for(strength, fake)[0].bytes == std::vector<std::uint8_t>{0xe8, 0x8d, 0xe4, 0xba, 0x0f}) && writes_for(strength, fake)[0].va == 0x453b6e); // call 0x10002000
+		CHECK(writes_for(mind, fake)[0].va == 0x453b67 && writes_for(mind, fake)[1].va == 0x5e0afa && writes_for(might, fake)[0].va == 0x453bc7 && writes_for(power_attacks, fake)[0].va == 0x4dc10f);
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the balance's bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](const DWORD va) { return image + (va - image_base); };
+		const unsigned every = health | strength | mind | might | power_attacks | hit_chance | damage_rolls | melee_weapons;
+
+		// Every guard: the retail bytes. What the retail sites are: the three floats, the calls' targets, the two
+		// extension vtables, the parser's table (none, normal, difficulty, "" - and no x1power), the draw after
+		// the two pushes.
+		const guard* mismatch = first_mismatch(image, every);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
+		CHECK(mismatch == nullptr);
+		const auto float_at = [&](const DWORD va) { float value = 0.0f; std::memcpy(&value, at(va), 4); return value; };
+		const auto call_target = [&](const DWORD va) { return va + 5 + operand_at(at(va + 1), 4); };
+		CHECK(float_at(0x6d9768) == 25.0f && float_at(0x6d976c) == 5.0f && float_at(0x6d9770) == stock_health_per_body && float_at(0x682f98) == stock_strength_bonus &&
+		      float_at(0x682a2c) == stock_mind_bonus);
+		CHECK(operand_at(at(0x4b89f9), 4) == 0x6d9770 && operand_at(at(0x4b8914), 4) == 0x6d9770); // the Normal read (patched) and Hard's level term (left alone)
+		CHECK(call_target(0x453b6e) == 0x4b7940 && call_target(0x453b67) == 0x4b7970 && call_target(0x5e0afa) == 0x4b7970 && call_target(0x453bc7) == 0x550410 &&
+		      call_target(0x453bb6) == 0x550410 && call_target(0x4dc10f) == 0x44ec00);
+		CHECK(at(0x453bbb)[0] == 0x6a && at(0x453bbc)[0] == 0x01 && at(0x453bc3)[0] == 0x6a && at(0x453bc4)[0] == 0x39); // push 1 ... push 0x39: the multiplier's read
+		CHECK(operand_at(at(0x44a438), 4) == hero_extension_vtable && operand_at(at(0x44983c), 4) == npc_extension_vtable);
+		CHECK(operand_at(at(0x4b797d), 1) == stat_mind && operand_at(at(0x4b794d), 1) == 0); // push 3 / push 0: the stat each multiplier asks 0x4b7780 for
+		bool table_ok = true;
+		const char* names[] = {"none", "normal", "difficulty", ""};
+		for (DWORD i = 0; i < 4; ++i)
+		{
+			const DWORD name = operand_at(at(0x6d6dec + 8 * i), 4);
+			table_ok &= name > image_base && name < image_base + image_size && !_stricmp(reinterpret_cast<const char*>(at(name)), names[i]) && operand_at(at(0x6d6dec + 8 * i + 4), 4) == i;
+		}
+		CHECK(table_ok && operand_at(at(0x6d6dec + 32), 4) == 0); // four names, then the end
+		CHECK(operand_at(at(0x44ec0b), 4) == 0x6d6dec && operand_at(at(0x44ec13), 4) == 1); // the table; 1 unless a name matches
+		CHECK(at(hit_resume)[0] == 0x6a && at(hit_resume)[1] == 0x00 && call_target(hit_resume + 2) == 0x5601b0 && hit_resume == 0x44f684 + 7); // push 0; call the draw
+		CHECK(std::memcmp(at(0x44f69d), "\xd8\x5c\x24\x20", 4) == 0); // fcomp dword [esp+0x20]: the draw against the chance the stub stores
+		CHECK(at(0x4b8a09)[0] == 0x74 && std::memcmp(at(0x4b89e0), "\x85\xff", 2) == 0); // test edi, edi ... je: the flags the health stub keeps
+
+		// The change on a copy, feature by feature and all at once: exactly the sites' bytes, each a call or jump to
+		// where the fix would be; then the feature's guards no longer match, the others' still do.
+		std::vector<std::uint8_t> before(image, image + image_size);
+		const DWORD delta = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(image)) - image_base;
+		addresses mine;
+		mine.health_stub = 0x10001000 - delta;
+		mine.strength_multiplier = balance_address(&strength_multiplier) - delta;
+		mine.mind_multiplier = balance_address(&mind_multiplier) - delta;
+		mine.mind_multiplier_shown = balance_address(&mind_multiplier_shown) - delta;
+		mine.damage_multiplier = balance_address(&damage_multiplier) - delta;
+		mine.damage_scale = balance_address(&damage_scale) - delta;
+		mine.hit_stub = 0x10006000 - delta;
+		mine.damage_roll = balance_address(&damage_roll) - delta;
+		mine.melee_stub = 0x10008000 - delta;
+		bool features_ok = true;
+		for (const unsigned wanted : {static_cast<unsigned>(health), static_cast<unsigned>(strength), static_cast<unsigned>(mind), static_cast<unsigned>(might),
+		                              static_cast<unsigned>(power_attacks), static_cast<unsigned>(hit_chance), static_cast<unsigned>(damage_rolls), static_cast<unsigned>(melee_weapons), every})
+		{
+			const auto writes = writes_for(wanted, mine);
+			apply(image, writes);
+			std::set<DWORD> changed, expected;
+			for (DWORD i = 0; i < image_size; ++i)
+			{
+				if (image[i] != before[i]) changed.insert(image_base + i);
+			}
+			for (const auto& w : writes)
+			{
+				for (std::size_t byte = 0; byte < w.bytes.size(); ++byte)
+				{
+					if (w.bytes[byte] != before[w.va - image_base + byte]) expected.insert(w.va + static_cast<DWORD>(byte));
+				}
+			}
+			features_ok &= changed == expected && !changed.empty();
+			if (wanted == every)
+			{
+				std::printf("  info  %zu bytes changed at %zu sites\n", changed.size(), writes.size());
+				// Where each lands, in this copy: the test's own copies of the functions, and the two stub addresses.
+				const auto lands = [&](const DWORD va) { return reinterpret_cast<std::uintptr_t>(at(va)) + 5 + static_cast<std::int32_t>(operand_at(at(va + 1), 4)); };
+				features_ok &= lands(0x453b6e) == reinterpret_cast<std::uintptr_t>(&strength_multiplier) && lands(0x453b67) == reinterpret_cast<std::uintptr_t>(&mind_multiplier) &&
+				               lands(0x5e0afa) == reinterpret_cast<std::uintptr_t>(&mind_multiplier_shown) && lands(0x453bc7) == reinterpret_cast<std::uintptr_t>(&damage_multiplier) &&
+				               lands(0x4dc10f) == reinterpret_cast<std::uintptr_t>(&damage_scale) && lands(0x4b89f7) == 0x10001000 && lands(0x44f684) == 0x10006000 && lands(0x453add) == reinterpret_cast<std::uintptr_t>(&damage_roll) && lands(0x453a51) == reinterpret_cast<std::uintptr_t>(&damage_roll) && lands(0x4dc37b) == 0x10008000;
+				features_ok &= at(0x4b89f7)[0] == 0xe8 && at(0x4b89fc)[0] == 0x90 && at(0x44f684)[0] == 0xe9 && at(0x44f689)[0] == 0x66 && at(0x44f68a)[0] == 0x90;
+				features_ok &= call_target(0x453bb6) == 0x550410; // the affecters' other read (mode 0, the sum) is the game's own
+			}
+			for (const unsigned feature : {static_cast<unsigned>(health), static_cast<unsigned>(strength), static_cast<unsigned>(mind), static_cast<unsigned>(might),
+			                               static_cast<unsigned>(power_attacks), static_cast<unsigned>(hit_chance), static_cast<unsigned>(damage_rolls), static_cast<unsigned>(melee_weapons)})
+			{
+				// Strength, mind and might share the damage function's guard: patching one changes it for all three.
+				const bool shares = (wanted & (strength | mind | might | damage_rolls)) && (feature & (strength | mind | might | damage_rolls));
+				features_ok &= ((first_mismatch(image, feature) != nullptr) == ((wanted & feature) != 0 || shares));
+			}
+			std::memcpy(image, before.data(), image_size);
+		}
+		CHECK(features_ok);
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
+	int melee_test_stream = -1, melee_test_high = 0, melee_test_low = 0;
+	int __cdecl melee_test_integer(const int high, const int low, const int stream)
+	{
+		melee_test_high = high;
+		melee_test_low = low;
+		melee_test_stream = stream;
+		return low;
+	}
+	float __cdecl melee_test_float(float, float, const int stream)
+	{
+		melee_test_stream = stream;
+		return 17.25f;
+	}
+
+	DWORD melee_test_stats = 0;
+	DWORD melee_test_flags = 0, melee_test_ecx = 0;
+	float melee_test_underlying = 0, melee_test_sentinel = 9.25f;
+	__declspec(naked) float __cdecl run_melee_constructor(void*, void*, void*, float)
+	{
+		__asm
+		{
+			push ebp
+			push esi
+			mov eax, dword ptr [esp + 12]
+			mov ebp, dword ptr [esp + 16]
+			mov esi, dword ptr [esp + 20]
+			mov ecx, esi
+			fld melee_test_sentinel
+			fld dword ptr [esp + 24]
+			stc
+			call eax
+			mov melee_test_stats, eax
+			mov melee_test_ecx, ecx
+			pushfd
+			pop edx
+			mov melee_test_flags, edx
+			fstp melee_test_underlying
+			fld dword ptr [esi + 4]
+			pop esi
+			pop ebp
+			ret
+		}
+	}
+
+	void check_melee_weapon_rules()
+	{
+		using namespace balance_rules;
+		std::printf("[Balance] melee weapon metadata, integer draws and entry stub\n");
+		CHECK(parse_melee_weapons("")->empty());
+		const auto parsed = parse_melee_weapons("invented_guard:1:2:128|invented_glove:1:6:32768");
+		CHECK(parsed && parsed->size() == 2 && (*parsed)[0].bonus == 2 && (*parsed)[1].damage_type == 32768);
+		for (const char* bad : {"a:1:2", "a:1:2:128|", "a:1:2:128|a:1:3:128", "a:4:2:128", "a:1:-2:128", "a:1:32001:128", "a:1:2:8", "a:1:2:128:extra"})
+		{
+			CHECK(!parse_melee_weapons(bad));
+		}
+		ini_values request;
+		request.damage_rolls = "xml1";
+		request.melee_weapons = "invented_guard:1:2:128";
+		const settings chosen = parse(request);
+		CHECK(chosen.refused.empty() && features_of(chosen) == (damage_rolls | melee_weapons));
+		request.damage_rolls = "xml2";
+		request.melee_weapons.clear();
+		CHECK(features_of(parse(request)) == 0);
+		request.damage_rolls = "fast";
+		CHECK(parse(request).refused.size() == 1);
+
+		const runtime before = balance_rules::live;
+		balance_rules::live = {};
+		balance_rules::live.chosen = chosen;
+		balance_rules::live.integer_roll = &melee_test_integer;
+		balance_rules::live.float_roll = &melee_test_float;
+		CHECK(damage_roll(8.9f, 4.9f, 1) == 4.0f && melee_test_high == 8 && melee_test_low == 4 && melee_test_stream == 1);
+		CHECK(damage_roll(4.0f, 4.0f, 0) == 4.0f && melee_test_high == 4 && melee_test_stream == 0);
+		CHECK(damage_roll(40000.0f, 2.0f, 1) == 17.25f && melee_test_stream == 1);
+		fake_stats stats("invented_guard", npc_extension_vtable, 3, 1, 4, 1);
+		fake_actor actor(stats);
+		std::array<std::uint8_t, 64> attack{};
+		int type = 1;
+		std::memcpy(attack.data() + 0xc, &type, 4);
+		const auto set_damage = [&](const float damage) { std::memcpy(attack.data() + 4, &damage, 4); };
+		set_damage(4);
+		melee_weapon_for(actor.data(), attack.data());
+		CHECK(read_at<float>(attack.data(), 4) == 6.0f && read_at<DWORD>(attack.data(), 0x10) == 128);
+		// A fresh attack gets one bonus; a subsequent miss clears it to zero.
+		set_damage(5);
+		melee_weapon_for(actor.data(), attack.data());
+		CHECK(read_at<float>(attack.data(), 4) == 7.0f);
+		set_damage(0);
+		CHECK(read_at<float>(attack.data(), 4) == 0.0f);
+		type = 2;
+		std::memcpy(attack.data() + 0xc, &type, 4);
+		set_damage(4);
+		melee_weapon_for(actor.data(), attack.data());
+		CHECK(read_at<float>(attack.data(), 4) == 4.0f);
+		fake_stats unarmed("invented_other", npc_extension_vtable, 3, 1, 4, 1);
+		fake_actor other(unarmed);
+		type = 1;
+		std::memcpy(attack.data() + 0xc, &type, 4);
+		melee_weapon_for(other.data(), attack.data());
+		CHECK(read_at<float>(attack.data(), 4) == 4.0f);
+
+		const auto code = melee_stub(balance_address(&melee_weapon_for));
+		void* block = VirtualAlloc(nullptr, code.size(), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+		CHECK(block != nullptr);
+		if (block)
+		{
+			std::memcpy(block, code.data(), code.size());
+			DWORD old = 0;
+			CHECK(VirtualProtect(block, code.size(), PAGE_EXECUTE_READ, &old));
+			FlushInstructionCache(GetCurrentProcess(), block, code.size());
+			CHECK(run_melee_constructor(block, actor.data(), attack.data(), 4.0f) == 6.0f);
+			CHECK(melee_test_stats == static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(stats.data())));
+			CHECK(melee_test_ecx == static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(attack.data())));
+			CHECK((melee_test_flags & 1) != 0);
+			CHECK(melee_test_underlying == melee_test_sentinel);
+			CHECK(run_melee_constructor(block, other.data(), attack.data(), 4.0f) == 4.0f);
+			VirtualFree(block, 0, MEM_RELEASE);
+		}
+		// Original stat and Might arithmetic on the weapon-adjusted integer roll.
+		CHECK(game_affected(game_bonus(6, rounded_down(6, xml1_bonus_for(6, 3, .1f))), affecters_on_roll(6, 7, 1.1f, 0), 0) == 7);
+		CHECK(game_affected(game_bonus(7, rounded_down(7, xml1_bonus_for(7, 3, .1f))), affecters_on_roll(7, 9, 1.1f, 0), 0) == 9);
+		CHECK(max_health(1, 20, 3.0f, 1.0f) == 90 && max_health(1, 20, 2.5f, 1.0f) == 80);
+		balance_rules::live = before;
 	}
 
 	// The DLL's kill XP function, as xp_curve.cpp has it: what the patched vt+0xcc jumps to.
@@ -8341,13 +9872,534 @@ namespace
 		CHECK(mismatch || first_mismatch(image) != nullptr); // and the guards no longer match: never patched twice
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
+
+	// [Save] Format (save_format_rules.hpp): the key's rule, the folder and file names, the container header as the
+	// slot list reads it (synthetic files: intact, damaged, newer, the wrong kind), the import ledger, the old
+	// stream's hero blocks and the talent heap, the stream flag stubs and the two bridges on their own; then, when a
+	// copy of XMen2.exe is at hand, every guard against it and every jump the fix writes decoded on that copy.
+	namespace save_format_fixture
+	{
+		using namespace save_format_rules;
+
+		std::vector<std::uint8_t> le16(const std::uint16_t v) { return {static_cast<std::uint8_t>(v), static_cast<std::uint8_t>(v >> 8)}; }
+		std::vector<std::uint8_t> le32(const std::uint32_t v) { std::vector<std::uint8_t> o; put32(o, v); return o; }
+		void append(std::vector<std::uint8_t>& to, const std::vector<std::uint8_t>& what) { to.insert(to.end(), what.begin(), what.end()); }
+		void append(std::vector<std::uint8_t>& to, const std::string& text) { to.insert(to.end(), text.begin(), text.end()); }
+		std::vector<std::uint8_t> str(const std::string& text) { auto o = le16(static_cast<std::uint16_t>(text.size())); append(o, text); return o; }
+
+		struct section
+		{
+			std::string tag;
+			std::uint8_t major = 1, minor = 0;
+			std::uint16_t flags = section_required;
+			std::vector<std::uint8_t> payload;
+		};
+
+		// A META payload: rsize, saved at, description, origin, zone, act, difficulty, play time, writer, slot; mods list.
+		std::vector<std::uint8_t> meta(const std::string& description, const std::uint8_t slot, const float play_time)
+		{
+			std::vector<std::uint8_t> head;
+			append(head, le32(0x12345678)); append(head, le32(0));  // saved at
+			append(head, str(description));
+			head.push_back(1);                                     // origin: converted
+			append(head, le32(0x0f000001));                        // zone
+			append(head, le16(2));                                 // act
+			append(head, le32(1));                                 // difficulty
+			std::uint32_t bits = 0; std::memcpy(&bits, &play_time, 4); append(head, le32(bits));
+			append(head, str("test writer"));
+			head.push_back(slot);
+			std::vector<std::uint8_t> out = le32(static_cast<std::uint32_t>(head.size()));
+			append(out, head);
+			append(out, le32(0)); // mods: none
+			return out;
+		}
+
+		std::vector<std::uint8_t> empty_section()
+		{
+			return le32(0); // a head with no fields
+		}
+
+		// A container of `kind` with the sections given, CRCs computed; `major` the format major.
+		std::vector<std::uint8_t> container(const std::uint8_t kind, const std::vector<section>& sections, const std::uint16_t major = 1, const std::uint32_t required = 0)
+		{
+			std::vector<std::uint8_t> file(lc_header_size, 0);
+			std::memcpy(file.data(), lc_magic.data(), 8);
+			file[8] = kind;
+			file[9] = 0x11;
+			std::memcpy(file.data() + 0x0a, le16(major).data(), 2);
+			std::memcpy(file.data() + 0x10, le32(required).data(), 4);
+			std::memcpy(file.data() + 0x1c, le32(static_cast<std::uint32_t>(sections.size())).data(), 4);
+			std::memcpy(file.data() + 0x20, le32(lc_header_size).data(), 4);
+			std::memcpy(file.data() + 0x24, le32(0x01040000).data(), 4);
+			std::memcpy(file.data() + 0x28, le32(14).data(), 4);
+			std::memcpy(file.data() + 0x30, le32(0xabcdef01).data(), 4);
+			std::memcpy(file.data() + 0x3c, le32(3).data(), 4);
+			std::vector<std::uint8_t> table, payloads;
+			std::uint32_t offset = static_cast<std::uint32_t>(lc_header_size + sections.size() * lc_section_entry);
+			for (const auto& s : sections)
+			{
+				while (payloads.size() % 4) payloads.push_back(0);
+				const std::uint32_t at = offset + static_cast<std::uint32_t>(payloads.size());
+				append(table, std::vector<std::uint8_t>(s.tag.begin(), s.tag.end()));
+				table.push_back(s.major); table.push_back(s.minor);
+				append(table, le16(s.flags));
+				append(table, le32(at));
+				append(table, le32(static_cast<std::uint32_t>(s.payload.size())));
+				append(table, le32(0));
+				append(table, le32(crc32(s.payload.data(), s.payload.size())));
+				append(payloads, s.payload);
+			}
+			append(file, table);
+			append(file, payloads);
+			std::memcpy(file.data() + 0x18, le32(static_cast<std::uint32_t>(file.size())).data(), 4);
+			std::memcpy(file.data() + 0x38, le32(crc32(file.data() + lc_header_size, file.size() - lc_header_size)).data(), 4);
+			std::memcpy(file.data() + 0x84, le32(crc32(file.data(), 0x84)).data(), 4);
+			return file;
+		}
+
+		std::vector<section> campaign_sections(const std::string& description = "12:34 - somewhere (Normal)")
+		{
+			std::vector<section> out;
+			for (const auto tag : campaign_required)
+			{
+				section s;
+				s.tag = std::string(tag);
+				s.payload = tag == "META" ? meta(description, 3, 1234.5f) : empty_section();
+				out.push_back(s);
+			}
+			return out;
+		}
+
+		// An old slot image: the envelope, the begin tag, the item head, `carried` instances (one enhancement
+		// each), no world items, `heroes` hero blocks (the first with one equipped item), the unlocked tag, 600
+		// bytes, the restore tag, the flag, 22 default restore records, then a game block with `play_time`.
+		std::vector<std::uint8_t> tag(const char* text)
+		{
+			std::vector<std::uint8_t> out(tag_size, '*');
+			out[0] = tag_marker; out[tag_size - 1] = tag_marker;
+			std::memcpy(out.data() + 1, text, std::strlen(text));
+			out[1 + std::strlen(text)] = 0;
+			return out;
+		}
+
+		std::vector<std::uint8_t> instance(const int enhancements)
+		{
+			std::vector<std::uint8_t> out{7, 0xff, 0xff, 0xff, 2};
+			append(out, le32(static_cast<std::uint32_t>(enhancements)));
+			for (int i = 0; i < enhancements; ++i) append(out, std::vector<std::uint8_t>{5, 0, 1, 2, 3, 4});
+			append(out, le32(0));
+			append(out, le32(0));
+			return out;
+		}
+
+		std::vector<std::uint8_t> old_image(const int carried, const int heroes, const float play_time, std::vector<std::size_t>* heaps = nullptr)
+		{
+			std::vector<std::uint8_t> out(old_envelope, 0);
+			std::memcpy(out.data(), "12:34 - somewhere", 17);
+			std::memcpy(out.data() + 0x80, le32(static_cast<std::uint32_t>(stream_capacity)).data(), 4);
+			append(out, tag("[SAVEGAMEBEGIN: 12:34 - somewhere]"));
+			out.resize(out.size() + item_head_size, 0);
+			append(out, le32(static_cast<std::uint32_t>(carried)));
+			for (int i = 0; i < carried; ++i) append(out, instance(1));
+			append(out, le32(0));
+			for (int h = 0; h < heroes; ++h)
+			{
+				out.resize(out.size() + attributes_size, 0);
+				if (heaps) heaps->push_back(out.size());
+				std::vector<std::uint8_t> heap(heap_size, 0);
+				// two talents: 3 and 500, count 2, bitmap 3
+				heap[0] = 3; heap[8] = 0xf4; heap[9] = 0x01;
+				heap[heap_entries * heap_entry_size] = 3; heap[heap_entries * heap_entry_size + 4] = 2;
+				append(out, heap);
+				out.push_back(h == 0 ? 1 : 0);
+				if (h == 0) append(out, instance(2));
+				out.resize(out.size() + equipment_tail + powers_size + costume_size, 0);
+			}
+			append(out, tag("[CHARACTERSUNLOCKED]"));
+			out.resize(out.size() + unlocked_size, 0);
+			append(out, tag("[CHARACTERSRESTORE]"));
+			out.push_back(0);
+			for (int r = 0; r < 22; ++r)
+			{
+				out.resize(out.size() + attributes_size + heap_size, 0);
+				out.push_back(0);
+				out.resize(out.size() + equipment_tail, 0);
+			}
+			const std::size_t game = out.size();
+			out.resize(out.size() + 0xdc, 0);
+			std::memcpy(out.data() + game + 0xd4, &play_time, 4);
+			out.resize(old_slot_file_size, 0);
+			return out;
+		}
+
+		// Decodes a jmp / call rel32 at `at` (va `va`) to its target, 0 for anything else.
+		DWORD rel32_target(const std::uint8_t* at, const DWORD va, const std::uint8_t opcode)
+		{
+			if (at[0] != opcode) return 0;
+			std::int32_t rel = 0;
+			std::memcpy(&rel, at + 1, 4);
+			return va + 5 + rel;
+		}
+	}
+
+	void check_save_format_rules()
+	{
+		using namespace save_format_rules;
+		using namespace save_format_fixture;
+		std::printf("[Save] Format (the LC save format's engine side)\n");
+
+		// The key.
+		CHECK(parse_mode("lc").set && parse_mode("lc").value == mode::lc && parse_mode(" LC ; the new format").value == mode::lc);
+		CHECK(parse_mode("off").set && parse_mode("off").value == mode::off && parse_mode("xml2").value == mode::off);
+		CHECK(!parse_mode("").set && parse_mode("").error.empty() && !parse_mode("  ; nothing").set);
+		for (const char* bad : {"lc1", "1", "on", "new", "lc off"})
+		{
+			CHECK(!parse_mode(bad).set && !parse_mode(bad).error.empty());
+		}
+
+		// Folder and file names.
+		CHECK(lc_folder("C:\\Fixture\\Documents\\Activision\\X-Men Legends\\Save\\") == "C:\\Fixture\\Documents\\Activision\\X-Men Legends\\SaveLC\\");
+		CHECK(lc_folder("Save\\") == "SaveLC\\" && lc_folder("a/Save/") == "a/SaveLC/");
+		CHECK(!lc_folder("") && !lc_folder("Save") && !lc_folder("C:\\x\\Saves\\") && !lc_folder("C:\\x\\save\\") && !lc_folder("XSave\\"));
+		CHECK(slot_file(0) == "saveslot0.lcsave" && slot_file(9) == "saveslot9.lcsave" && old_slot_file(4) == "saveslot4.save");
+		CHECK(old_slot_of("saveslot0.save") == 0 && old_slot_of("SAVESLOT9.SAVE") == 9 && !old_slot_of("saveslot10.save") && !old_slot_of("saveslot0.lcsave") && !old_slot_of("settings.dat") && !old_slot_of("saveslota.save"));
+
+		// The container as the slot list reads it.
+		{
+			const auto good = container(kind_campaign, campaign_sections());
+			auto i = inspect(good.data(), good.size(), kind_campaign);
+			CHECK(i.status == file_status::ok && i.description == "12:34 - somewhere (Normal)" && i.slot == 3 && i.origin == 1 && i.kind == kind_campaign);
+			CHECK(i.campaign_serial == 0xabcdef01 && i.save_sequence == 3 && i.content_version == 14 && i.writer == "test writer" && i.play_time == 1234.5f && !i.has_lgcy);
+			CHECK(inspect(good.data(), good.size(), 0).status == file_status::ok);
+			CHECK(inspect(good.data(), good.size(), kind_profile).status == file_status::wrong_kind);
+			CHECK(slot_text(i, false) == "12:34 - somewhere (Normal)" && slot_text(i, true) == "(restored from backup) 12:34 - somewhere (Normal)");
+			// Damage: a byte of a payload, of the header, a short file, another magic.
+			auto bad = good; bad[bad.size() - 1] ^= 1;
+			CHECK(inspect(bad.data(), bad.size(), kind_campaign).status == file_status::damaged);
+			bad = good; bad[0x28] ^= 1;
+			CHECK(inspect(bad.data(), bad.size(), kind_campaign).status == file_status::damaged && inspect(bad.data(), bad.size(), kind_campaign).why == "header CRC");
+			CHECK(inspect(good.data(), lc_header_size - 1, kind_campaign).status == file_status::damaged);
+			CHECK(inspect(good.data(), good.size() - 1, kind_campaign).status == file_status::damaged);
+			bad = good; bad[0] = 'X';
+			CHECK(inspect(bad.data(), bad.size(), kind_campaign).status == file_status::damaged);
+			bad = good; std::memcpy(bad.data() + 0x80, le32(0x2fc00).data(), 4);
+			CHECK(inspect(bad.data(), bad.size(), kind_campaign).status == file_status::damaged); // the legacy length guard
+			CHECK(slot_text(inspect(bad.data(), bad.size(), kind_campaign), false) == "(damaged)");
+			// A missing required section.
+			auto fewer = campaign_sections(); fewer.erase(fewer.begin() + 2);
+			const auto missing = container(kind_campaign, fewer);
+			CHECK(inspect(missing.data(), missing.size(), kind_campaign).status == file_status::damaged);
+			// Newer: the format major, a required feature, an unknown REQUIRED tag, a known tag's higher major or minor.
+			const auto major2 = container(kind_campaign, campaign_sections(), 2);
+			CHECK(inspect(major2.data(), major2.size(), kind_campaign).status == file_status::needs_newer);
+			const auto feature = container(kind_campaign, campaign_sections(), 1, 1);
+			CHECK(inspect(feature.data(), feature.size(), kind_campaign).status == file_status::needs_newer);
+			auto with_new = campaign_sections(); with_new.push_back({"NEWX", 1, 0, section_required, empty_section()});
+			const auto required_tag = container(kind_campaign, with_new);
+			CHECK(inspect(required_tag.data(), required_tag.size(), kind_campaign).status == file_status::needs_newer);
+			with_new.back().flags = section_keep;
+			const auto keep_tag = container(kind_campaign, with_new);
+			CHECK(inspect(keep_tag.data(), keep_tag.size(), kind_campaign).status == file_status::ok);
+			auto bumped = campaign_sections(); bumped[2].major = 2;
+			const auto major_up = container(kind_campaign, bumped);
+			CHECK(inspect(major_up.data(), major_up.size(), kind_campaign).status == file_status::needs_newer);
+			bumped = campaign_sections(); bumped[2].minor = 1;
+			const auto minor_up = container(kind_campaign, bumped);
+			CHECK(inspect(minor_up.data(), minor_up.size(), kind_campaign).status == file_status::needs_newer);
+			bumped[2].flags |= section_ext_droppable;
+			const auto droppable = container(kind_campaign, bumped);
+			CHECK(inspect(droppable.data(), droppable.size(), kind_campaign).status == file_status::ok);
+			// HERO is at minor 1 (SPEC-new-save revision 2.3: the power slot's flag byte); 2 is newer
+			auto hero = campaign_sections();
+			const auto hero_at = std::find_if(hero.begin(), hero.end(), [](const section& s) { return s.tag == "HERO"; });
+			CHECK(hero_at != hero.end());
+			hero_at->minor = 1;
+			const auto hero1 = container(kind_campaign, hero);
+			CHECK(inspect(hero1.data(), hero1.size(), kind_campaign).status == file_status::ok);
+			hero_at->minor = 2;
+			const auto hero2 = container(kind_campaign, hero);
+			CHECK(inspect(hero2.data(), hero2.size(), kind_campaign).status == file_status::needs_newer);
+			CHECK(slot_text(inspect(major2.data(), major2.size(), kind_campaign), false) == "(needs a newer version) ");
+			// A tag twice, a section out of order.
+			auto twice = campaign_sections(); twice.push_back(twice[3]);
+			const auto doubled = container(kind_campaign, twice);
+			CHECK(inspect(doubled.data(), doubled.size(), kind_campaign).status == file_status::damaged);
+			// A profile.
+			std::vector<section> profile;
+			for (const auto tag : profile_required) profile.push_back({std::string(tag), 1, 0, section_required, tag == "META" ? meta("Settings", 0, 0) : empty_section()});
+			const auto prof = container(kind_profile, profile);
+			CHECK(inspect(prof.data(), prof.size(), kind_profile).status == file_status::ok && inspect(prof.data(), prof.size(), kind_campaign).status == file_status::wrong_kind);
+			// A long description is cut to what the card keeps.
+			const auto long_desc = container(kind_campaign, campaign_sections(std::string(127, 'd')));
+			CHECK(slot_text(inspect(long_desc.data(), long_desc.size(), kind_campaign), true).size() == description_max);
+			CHECK(notice_text(std::string(200, 'n')).size() == description_max && notice_text("x") == "XML2 Fix: x");
+			CHECK(message_with_reason("Load failed.", "why", 0x1a0) == "Load failed. - why" && message_with_reason("", "why", 0x1a0) == "why" && message_with_reason("text", "", 0x1a0) == "text");
+			CHECK(message_with_reason("abcdef", "ghij", 8).size() == 7);
+		}
+		CHECK(crc32(reinterpret_cast<const std::uint8_t*>("123456789"), 9) == 0xcbf43926u);
+
+		// The ledger.
+		{
+			ledger_entry e; e.name = "saveslot2.save"; e.size = 195716; e.mtime = 133000000000000000ull; e.sha1 = std::string(40, 'a'); e.result = "converted"; e.slot = 2; e.fix_version = "1.4.0"; e.detail = "start era 7\tnotes";
+			const auto line = ledger_line(e);
+			const auto back = parse_ledger_line(line);
+			CHECK(back && back->name == e.name && back->size == e.size && back->mtime == e.mtime && back->sha1 == e.sha1 && back->result == "converted" && back->slot == 2 && back->fix_version == "1.4.0" && back->detail == "start era 7 notes");
+			CHECK(!parse_ledger_line("# comment") && !parse_ledger_line("") && !parse_ledger_line("a\tb") && !parse_ledger_line("n\t1\t2\tshort\tconverted\t0\t1.4.0\t"));
+			const auto all = parse_ledger("# head\n" + line + "\r\n\nbad line\n" + ledger_line(e) + "\n");
+			CHECK(all.size() == 2);
+			std::vector<ledger_entry> L{*back};
+			CHECK(ledger_check(L, "saveslot2.save", 195716, e.mtime, "", "1.4.0") == ledger_verdict::skip_unread);
+			CHECK(ledger_check(L, "saveslot2.save", 195716, e.mtime + 1, "", "1.4.0") == ledger_verdict::convert);   // the time moved: read it
+			CHECK(ledger_check(L, "other.save", 1, 2, std::string(40, 'a'), "1.4.0") == ledger_verdict::skip_converted); // the same bytes elsewhere
+			CHECK(ledger_check(L, "other.save", 1, 2, std::string(40, 'b'), "1.4.0") == ledger_verdict::convert);
+			L[0].result = "refused";
+			CHECK(ledger_check(L, "saveslot2.save", 195716, e.mtime, "", "1.4.0") == ledger_verdict::skip_unread);
+			CHECK(ledger_check(L, "saveslot2.save", 195716, e.mtime, "", "1.5.0") == ledger_verdict::retry);          // another fix version tries again
+			L[0].result = "waiting";
+			CHECK(ledger_check(L, "saveslot2.save", 195716, e.mtime, "", "1.4.0") == ledger_verdict::retry);
+			std::array<bool, slot_count> taken{};
+			CHECK(import_slot(taken, 4) == 4 && import_slot(taken, -1) == 0);
+			taken[4] = true; taken[0] = true;
+			CHECK(import_slot(taken, 4) == 1 && import_slot(taken, 12) == 1);
+			taken.fill(true);
+			CHECK(!import_slot(taken, 3));
+		}
+
+		// The old stream's hero blocks and the talent heap.
+		{
+			std::vector<std::size_t> expected;
+			const auto image = old_image(2, 3, 77.5f, &expected);
+			const auto heaps = hero_heaps(image.data(), image.size());
+			CHECK(heaps && heaps->size() == 3 && expected.size() == 3);
+			if (heaps && heaps->size() == 3)
+			{
+				CHECK((*heaps)[0].heap == expected[0] && (*heaps)[1].heap == expected[1] && (*heaps)[2].heap == expected[2] && (*heaps)[0].block == expected[0] - attributes_size);
+			}
+			CHECK(old_play_time(image.data(), image.size()) == 77.5f);
+			CHECK(!hero_heaps(image.data(), 0x400) && !hero_heaps(image.data(), old_envelope + 10));
+			auto broken = image; broken[old_envelope + 1] = 'X';
+			CHECK(!hero_heaps(broken.data(), broken.size()));
+			const auto none = old_image(0, 0, 1.0f);
+			CHECK(hero_heaps(none.data(), none.size()) && hero_heaps(none.data(), none.size())->empty());
+			// Insertion keeps the order, the count and the bitmap; a present id is left; the 20th is refused.
+			std::vector<std::uint8_t> heap(image.begin() + expected[0], image.begin() + expected[0] + heap_size);
+			CHECK(insert_talent(heap.data(), 9) == heap_insert::inserted);
+			CHECK(rd16(heap.data()) == 3 && rd16(heap.data() + 8) == 9 && rd16(heap.data() + 16) == 500 && rd32(heap.data() + 152) == 7 && rd32(heap.data() + 156) == 3);
+			CHECK(insert_talent(heap.data(), 9) == heap_insert::present && rd32(heap.data() + 156) == 3);
+			CHECK(insert_talent(heap.data(), 1) == heap_insert::inserted && rd16(heap.data()) == 1 && rd16(heap.data() + 8) == 3);
+			CHECK(insert_talent(heap.data(), 700) == heap_insert::inserted && rd16(heap.data() + 32) == 700 && rd32(heap.data() + 156) == 5);
+			for (std::uint16_t id = 100; rd32(heap.data() + 156) < heap_entries; ++id) CHECK(insert_talent(heap.data(), id) == heap_insert::inserted);
+			CHECK(rd32(heap.data() + 156) == 19 && rd32(heap.data() + 152) == 0x7ffff && insert_talent(heap.data(), 999) == heap_insert::full);
+			bool sorted = true;
+			for (std::size_t i = 1; i < heap_entries; ++i) sorted &= rd16(heap.data() + i * 8) > rd16(heap.data() + (i - 1) * 8);
+			CHECK(sorted);
+			std::vector<std::uint8_t> odd(heap_size, 0); odd[156] = 2; odd[152] = 1;
+			CHECK(insert_talent(odd.data(), 5) == heap_insert::invalid);
+			std::vector<std::uint8_t> fresh(heap_size, 0);
+			CHECK(insert_talent(fresh.data(), 5) == heap_insert::inserted && rd32(fresh.data() + 152) == 1 && rd32(fresh.data() + 156) == 1 && fresh[2] == 0 && fresh[4] == 0);
+		}
+
+		// The flag stubs and the bridges on their own.
+		{
+			bool sites_ok = true;
+			std::set<DWORD> addresses;
+			for (const auto& s : flag_sites)
+			{
+				sites_ok &= limits_rules::valid_hex(s.hex) && addresses.insert(s.va).second && s.what && *s.what;
+				const std::size_t n = limits_rules::hex_size(s.hex);
+				sites_ok &= n >= 7 && n <= 9 && limits_rules::hex_byte(s.hex, n - 2) == 0x7d; // a jge rel8 last
+				const auto stub = flag_stub(s, 0x10000, 0x20000);
+				// cmp (+ pop esi), jl rel32, mov byte [flag], 1, jmp rel32
+				const std::size_t cmp = n - 2;
+				sites_ok &= stub.size() == cmp + 6 + 7 + 5;
+				std::vector<std::uint8_t> retail;
+				for (std::size_t i = 0; i < cmp; ++i) retail.push_back(limits_rules::hex_byte(s.hex, i));
+				sites_ok &= std::equal(retail.begin(), retail.end(), stub.begin());
+				std::int32_t rel = 0;
+				std::memcpy(&rel, stub.data() + cmp + 2, 4);
+				sites_ok &= stub[cmp] == 0x0f && stub[cmp + 1] == 0x8c && 0x10000 + cmp + 6 + rel == s.va + n;
+				sites_ok &= stub[cmp + 6] == 0xc6 && stub[cmp + 7] == 0x05 && rd32(stub.data() + cmp + 8) == 0x20000 && stub[cmp + 12] == 1;
+				const auto rel8 = static_cast<std::int8_t>(limits_rules::hex_byte(s.hex, n - 1));
+				sites_ok &= rel32_target(stub.data() + cmp + 13, static_cast<DWORD>(0x10000 + cmp + 13), 0xe9) == s.va + n + rel8;
+				const auto j = jump(s.va, 0x10000, n);
+				sites_ok &= j.size() == n && rel32_target(j.data(), s.va, 0xe9) == 0x10000 && std::all_of(j.begin() + 5, j.end(), [](std::uint8_t b) { return b == 0x90; });
+			}
+			CHECK(sites_ok);
+			const auto xb = xmlb_bridge(0x30000, 0x40000);
+			CHECK(xb.size() == 8 + 5 + 3 + 1 + 1 + 5 && xb[0] == 0x9c && xb[1] == 0x60 && rd32(xb.data() + 2) == 0x2824448b && xb[6] == 0x50 && xb[7] == 0x51);
+			CHECK(rel32_target(xb.data() + 8, 0x30008, 0xe8) == 0x40000 && xb[13] == 0x83 && xb[14] == 0xc4 && xb[15] == 8 && xb[16] == 0x61 && xb[17] == 0x9d && rel32_target(xb.data() + 18, 0x30012, 0xe9) == xmlb_convert);
+			const auto zb = zone_open_bridge(0x30000, 0x20000, 0x20004);
+			CHECK(zb.size() == 1 + 5 + 7 + 5 + 7 + 6 + 1 && zb[0] == 0x58 && zb[1] == 0xa3 && rd32(zb.data() + 2) == 0x20004 && zb[6] == 0xc6 && zb[12] == 1);
+			CHECK(rel32_target(zb.data() + 13, 0x3000d, 0xe8) == xmlb_reader_open && zb[18] == 0xc6 && zb[24] == 0 && zb[25] == 0xff && zb[26] == 0x35 && rd32(zb.data() + 27) == 0x20004 && zb[31] == 0xc3);
+			CHECK(writer_version(1, 4, 0, writer_kind_import) == 0x01040002u && writer_version(1, 4, 0, writer_kind_fix) == 0x01040000u);
+			bool guards_ok = true;
+			std::set<DWORD> gaddr;
+			for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && gaddr.insert(g.va).second && g.what && *g.what;
+			CHECK(guards_ok);
+			bool slots_ok = true;
+			for (const auto& s : card_slots) slots_ok &= s.offset >= 0x28 && s.offset <= 0x74 && s.retail >= 0x55e000 && s.retail < 0x560000;
+			CHECK(slots_ok && card_slots.size() == 9 && game_load_slot.offset == 0x20c);
+		}
+
+		// Overwriting a slot (SPEC 1.6): the save sequence's delete before its write removes nothing, the write keeps
+		// the old file as X.bak, and at every step of every write a complete file is on disk. In a temp folder.
+		{
+			CHECK(delete_action_for(overwrite_delete_return) == delete_action::keep_for_write && overwrite_delete_return == 0x4b1615);
+			CHECK(delete_action_for(0x4b2188) == delete_action::remove && delete_action_for(0x4b25fa) == delete_action::remove && delete_action_for(0) == delete_action::remove);
+
+			const auto folder = std::filesystem::temp_directory_path() / ("xml2_test_save_" + std::to_string(GetCurrentProcessId()));
+			std::filesystem::remove_all(folder);
+			std::filesystem::create_directories(folder);
+			const std::string x = (folder / "saveslot2.lcsave").string();
+			const auto read = [](const std::string& p) {
+				std::vector<std::uint8_t> bytes;
+				std::string why;
+				return save_format_rules::read_file(p, bytes, why) ? bytes : std::vector<std::uint8_t>{};
+			};
+			const auto first = container(kind_campaign, campaign_sections("first save"));
+			const auto second = container(kind_campaign, campaign_sections("second save"));
+			const auto third = container(kind_campaign, campaign_sections("third save"));
+
+			// What a step leaves: X, or X.bak beside a complete X.tmp, each a file the reader takes.
+			struct watch
+			{
+				std::string x;
+				std::vector<std::uint8_t> old_bytes, new_bytes;
+				int steps = 0;
+				bool always_complete = true;
+			};
+			const auto after = [](const write_step step, void* context) {
+				auto& w = *static_cast<watch*>(context);
+				++w.steps;
+				std::vector<std::uint8_t> bytes, tmp, bak;
+				std::string why;
+				const bool has_x = save_format_rules::read_file(w.x, bytes, why);
+				const bool has_tmp = save_format_rules::read_file(w.x + ".tmp", tmp, why);
+				const bool has_bak = save_format_rules::read_file(w.x + ".bak", bak, why);
+				switch (step)
+				{
+				case write_step::tmp_written: // the old X untouched, the new bytes complete beside it
+					w.always_complete &= has_tmp && tmp == w.new_bytes && (w.old_bytes.empty() ? !has_x : has_x && bytes == w.old_bytes);
+					break;
+				case write_step::old_kept: // no X for a moment: the old file is X.bak, the new one X.tmp
+					w.always_complete &= !has_x && has_bak && bak == w.old_bytes && has_tmp && tmp == w.new_bytes &&
+					                     inspect(bak.data(), bak.size(), kind_campaign).status == file_status::ok;
+					break;
+				case write_step::in_place:
+					w.always_complete &= has_x && bytes == w.new_bytes && !has_tmp && (w.old_bytes.empty() || (has_bak && bak == w.old_bytes));
+					break;
+				}
+			};
+
+			// A new slot: no backup.
+			std::string error;
+			watch w{x, {}, first};
+			CHECK(write_atomically(x, first, error, after, &w) && error.empty());
+			CHECK(w.steps == 2 && w.always_complete && read(x) == first && !std::filesystem::exists(x + ".bak") && !std::filesystem::exists(x + ".tmp"));
+			// Overwritten twice through the save sequence: its delete keeps the file, each write keeps the one before.
+			CHECK(delete_action_for(overwrite_delete_return) == delete_action::keep_for_write && read(x) == first);
+			w = watch{x, first, second};
+			CHECK(write_atomically(x, second, error, after, &w));
+			CHECK(w.steps == 3 && w.always_complete && read(x) == second && read(x + ".bak") == first);
+			w = watch{x, second, third};
+			CHECK(write_atomically(x, third, error, after, &w));
+			CHECK(w.steps == 3 && w.always_complete && read(x) == third && read(x + ".bak") == second);
+			const auto now = read(x), backup = read(x + ".bak");
+			CHECK(inspect(now.data(), now.size(), kind_campaign).description == "third save" && inspect(backup.data(), backup.size(), kind_campaign).description == "second save");
+			// A damaged X is deleted, not kept: a good backup is never replaced by a bad file.
+			auto damaged = third; damaged.back() ^= 1;
+			{
+				std::ofstream out(x, std::ios::binary | std::ios::trunc);
+				out.write(reinterpret_cast<const char*>(damaged.data()), static_cast<std::streamsize>(damaged.size()));
+			}
+			CHECK(write_atomically(x, first, error) && read(x) == first && read(x + ".bak") == second);
+			// A write that can't happen leaves the old file and its backup as they were.
+			std::filesystem::create_directories(x + ".tmp"); // CreateFileA on a folder fails
+			CHECK(!write_atomically(x, third, error) && !error.empty() && read(x) == first && read(x + ".bak") == second);
+			std::filesystem::remove_all(folder);
+		}
+
+		// D11 on Load Game: the profile write's "Save failed!" (message 6) becomes the game's own "Load failed!" (9) in the
+		// main menu's Load Game only, and only while the tables failed; every other message stays the game's.
+		CHECK(message_code_for(message_save_failed, menu_mode_load, true) == message_load_failed && message_load_failed == 9 && message_save_failed == 6);
+		CHECK(message_code_for(message_save_failed, menu_mode_save, true) == message_save_failed && message_code_for(message_save_failed, 0, true) == message_save_failed);
+		CHECK(message_code_for(message_save_failed, menu_mode_load, false) == message_save_failed);
+		CHECK(message_code_for(0x15, menu_mode_load, true) == 0x15 && message_code_for(message_load_failed, menu_mode_load, true) == message_load_failed);
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the save format's sites against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](const DWORD va) { return image + (va - image_base); };
+		const guard* mismatch = first_mismatch(image);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
+		CHECK(mismatch == nullptr);
+		// The vtable slots hold the retail methods the table names.
+		bool vt_ok = true;
+		for (const auto& s : card_slots) vt_ok &= rd32(at(card_vtable + s.offset)) == s.retail;
+		vt_ok &= rd32(at(game_vtable + game_load_slot.offset)) == game_load_slot.retail;
+		CHECK(vt_ok);
+		// Every flag site's retail jge lands inside its own function's next instruction stream (the skip target is
+		// after the site), the zone open call targets the reader and the convert call the converter.
+		bool targets_ok = true;
+		for (const auto& s : flag_sites)
+		{
+			const std::size_t n = limits_rules::hex_size(s.hex);
+			const auto rel8 = static_cast<std::int8_t>(limits_rules::hex_byte(s.hex, n - 1));
+			targets_ok &= rel8 > 0 && rel8 < 0x40;
+		}
+		targets_ok &= rel32_target(at(zone_open_call), zone_open_call, 0xe8) == xmlb_reader_open;
+		targets_ok &= rel32_target(at(xmlb_convert_call_insn), xmlb_convert_call_insn, 0xe8) == xmlb_convert;
+		CHECK(targets_ok);
+		// The menu's mode dword and the profile write's failure message: the start-up builds the one menu at 0x75cbc0, its
+		// constructor zeroes +0xd4, and the failure path pushes message 6.
+		CHECK(rd32(at(0x4b2898)) == save_load_menu && rd32(at(0x4af8fb)) == save_load_mode && at(0x4af7d9)[0] == 0x6a && at(0x4af7d9)[1] == message_save_failed);
+		// The overwrite's delete: `call [edx+0x70]` (ff 52 70) ends exactly at the return address the fix tells apart, and
+		// the menu's own Delete (0x4b2185) returns elsewhere.
+		CHECK(std::memcmp(at(overwrite_delete_return - 3), "\xff\x52\x70", 3) == 0 && std::memcmp(at(0x4b2185), "\xff\x52\x70", 3) == 0 &&
+		      delete_action_for(0x4b2188) == delete_action::remove);
+		// The card's folder buffer, extension and profile name pointers are data the methods read (the strings as named).
+		CHECK(std::string(reinterpret_cast<const char*>(at(rd32(at(0x6e03d0))))) == ".save" && std::string(reinterpret_cast<const char*>(at(rd32(at(0x6e03d4))))) == "settings.dat");
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
 }
 
 int main(const int argc, char** argv)
 {
+	if (argc > 1 && std::strcmp(argv[1], "--xtraction-shop-rules") == 0)
+	{
+		check_xtract_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
+	if (argc > 1 && std::strcmp(argv[1], "--personal-item-text-rules") == 0)
+	{
+		check_personal_item_text_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
+	if (argc > 1 && std::strcmp(argv[1], "--game-version-rules") == 0)
+	{
+		check_game_version_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--script-rules") == 0)
 	{
 		check_forced_teams_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
+	if (argc > 1 && std::strcmp(argv[1], "--balance-rules") == 0)
+	{
+		check_balance_rules();
+		check_melee_weapon_rules();
 		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
 		return failures ? 1 : 0;
 	}
@@ -8356,9 +10408,22 @@ int main(const int argc, char** argv)
 		check_geometry_sharing_rules();
 		return failures ? 1 : 0;
 	}
+	if (argc > 1 && std::strcmp(argv[1], "--save-format-rules") == 0)
+	{
+		check_save_format_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--break-rule-rules") == 0)
 	{
 		check_break_rule_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
+	if (argc > 1 && std::strcmp(argv[1], "--move-trigger-rules") == 0)
+	{
+		check_move_trigger_rules();
+		check_actor_trigger_timing();
 		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
 		return failures ? 1 : 0;
 	}
@@ -8435,6 +10500,7 @@ int main(const int argc, char** argv)
 	check_local_ip_rules();
 	check_local_ip();
 	check_display_rules();
+	check_menu_mouse_mapping();
 	check_frame_rate_rules();
 	check_menu_screens();
 	check_options_menu_rules();
@@ -8442,6 +10508,8 @@ int main(const int argc, char** argv)
 	check_geometry_sharing_rules();
 	check_limits_rules();
 	check_fight_style_rules();
+	check_move_trigger_rules();
+	check_actor_trigger_timing();
 	check_effect_curve_rules();
 	check_forced_teams_rules();
 	check_conversations_rules();
@@ -8455,6 +10523,7 @@ int main(const int argc, char** argv)
 	check_end_unlock_rules();
 	check_new_game_plus_rules();
 	check_xtract_rules();
+	check_personal_item_text_rules();
 	check_review_menu_rules();
 	check_main_menu_rules();
 	check_window_title_rules();
@@ -8462,6 +10531,9 @@ int main(const int argc, char** argv)
 	check_ini_rules();
 	check_xp_curve_rules();
 	check_break_rule_rules();
+	check_save_format_rules();
+	check_balance_rules();
+	check_melee_weapon_rules();
 	check_pad_prompts_rules();
 	check_discord_rules();
 	check_discord_pipe();
@@ -8489,6 +10561,8 @@ int main(const int argc, char** argv)
 	CHECK(log.find("main menu:") == std::string::npos); // no [Game] MainMenuItems: not a word, nothing patched
 	CHECK(log.find("xp curve:") == std::string::npos);  // no [Game] XPCurve: not a word, nothing patched
 	CHECK(log.find("break rule:") == std::string::npos); // no [Game] BreakRule: not a word, nothing patched
+	CHECK(log.find("save format:") == std::string::npos); // no [Save] Format: not a word, nothing patched
+	CHECK(log.find("balance:") == std::string::npos);   // no [Balance]: not a word, nothing patched
 	CHECK(log.find("title:") == std::string::npos);     // no [Game] WindowTitle: not a word, nothing hooked
 	CHECK(log.find("online: GameSpy game version") == std::string::npos && log.find("GameVersion") == std::string::npos); // no [Online] GameVersion
 	// No [Input]: Prompts is auto, but this isn't XMen2.exe - nothing patched.

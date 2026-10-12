@@ -565,8 +565,243 @@ namespace display
 		// 0x5f9eb0, or the Advanced Options panel's hit-test 0x621ea0), with no focus check. While
 		// another window has the focus they are dropped, so the owner's mouse passing over a game
 		// running in the background (the test harness) neither hovers nor clicks anything.
+		// ---- The cursor in the engine's screen space (display_rules.hpp, client_to_screen_space) -------
+
+		// The engine's screen size, which it divides a mouse point by (0x5f9eb0): [0xa09ffc] x [0xa0a000],
+		// when the retail code reads them there; else the back buffer's size (the same number: both
+		// come from the resolution setting).
+		bool engine_screen_readable = false;
+		constexpr std::uintptr_t engine_screen_width = 0xa09ffc;
+		constexpr std::uintptr_t engine_screen_height = 0xa0a000;
+
+		bool check_engine_screen(const HMODULE game)
+		{
+			if (reinterpret_cast<std::uintptr_t>(game) != 0x400000)
+			{
+				return false;
+			}
+			__try
+			{
+				// 0x5fa049: idiv dword [0xa09ffc]; 0x5fa066: idiv dword [0xa0a000]; 0x5fad54: mov [0xa09ffc], eax;
+				// 0x5fad5c: mov [0xa0a000], eax.
+				static constexpr unsigned char divide_x[] = {0xf7, 0x3d, 0xfc, 0x9f, 0xa0, 0x00};
+				static constexpr unsigned char divide_y[] = {0xf7, 0x3d, 0x00, 0xa0, 0xa0, 0x00};
+				static constexpr unsigned char store_x[] = {0xa3, 0xfc, 0x9f, 0xa0, 0x00};
+				static constexpr unsigned char store_y[] = {0xa3, 0x00, 0xa0, 0xa0, 0x00};
+				return std::memcmp(reinterpret_cast<const void*>(0x5fa049), divide_x, sizeof divide_x) == 0 &&
+				       std::memcmp(reinterpret_cast<const void*>(0x5fa066), divide_y, sizeof divide_y) == 0 &&
+				       std::memcmp(reinterpret_cast<const void*>(0x5fad54), store_x, sizeof store_x) == 0 &&
+				       std::memcmp(reinterpret_cast<const void*>(0x5fad5c), store_y, sizeof store_y) == 0;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+
+		size engine_screen()
+		{
+			if (engine_screen_readable)
+			{
+				const auto width = *reinterpret_cast<const volatile int*>(engine_screen_width);
+				const auto height = *reinterpret_cast<const volatile int*>(engine_screen_height);
+				if (width >= 64 && width <= 16384 && height >= 64 && height <= 16384)
+				{
+					return {static_cast<UINT>(width), static_cast<UINT>(height)};
+				}
+			}
+			std::lock_guard lock(mutex);
+			return client_size;
+		}
+
+		size client_area(const HWND handle)
+		{
+			RECT rect{};
+			if (!GetClientRect(handle, &rect) || rect.right <= 0 || rect.bottom <= 0)
+			{
+				return {};
+			}
+			return {static_cast<UINT>(rect.right), static_cast<UINT>(rect.bottom)};
+		}
+
+		void note_scaled(const size& client, const size& screen)
+		{
+			static size logged_client{}, logged_screen{};
+			if (client == logged_client && screen == logged_screen)
+			{
+				return;
+			}
+			logged_client = client;
+			logged_screen = screen;
+			if (client == screen)
+			{
+				logger::write("display: the window's client area is the game's screen again (%ux%u) - mouse points unchanged", client.width, client.height);
+				return;
+			}
+			logger::write("display: the window's client area is %ux%u, the game's screen %ux%u - mouse points converted to the screen pixel they are shown at",
+			              client.width, client.height, screen.width, screen.height);
+		}
+
+		LPARAM to_engine_point(const HWND handle, const LPARAM lparam)
+		{
+			const size client = client_area(handle);
+			const size screen = engine_screen();
+			if (!client.width || !screen.width)
+			{
+				return lparam;
+			}
+			note_scaled(client, screen);
+			return scale_point_lparam(lparam, client, screen);
+		}
+
+		using screen_to_client_t = BOOL(WINAPI*)(HWND, LPPOINT);
+		screen_to_client_t real_screen_to_client = nullptr;
+
+		// The 3D cursor (0x5f5402) and the Advanced Options panel's wheel (0x622119) turn a screen
+		// point into a client one with ScreenToClient, then scale it by the engine's screen size.
+		BOOL WINAPI hooked_screen_to_client(const HWND handle, const LPPOINT point)
+		{
+			const BOOL result = real_screen_to_client(handle, point);
+			if (result && point && ours(handle))
+			{
+				const size client = client_area(handle);
+				const size screen = engine_screen();
+				if (client.width && screen.width)
+				{
+					note_scaled(client, screen);
+					*point = client_to_screen_space(*point, client, screen);
+				}
+			}
+			return result;
+		}
+
+		// A DPI change (the window dragged to a monitor of another scale) makes Windows suggest a
+		// window rectangle scaled to keep the window's apparent size; the back buffer keeps its size,
+		// so the picture would be stretched. Keep the client area the size asked for (windowed) or the
+		// whole of the new monitor (borderless) instead, where Windows suggested.
+		// The client area the window keeps across DPI changes (display_rules.hpp, kept_client).
+		kept_client kept{};
+		bool in_dpi_change = false;
+
+		UINT window_dpi(const HWND handle)
+		{
+			using get_dpi_t = UINT(WINAPI*)(HWND);
+			static const auto get_dpi = reinterpret_cast<get_dpi_t>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow"));
+			return get_dpi ? get_dpi(handle) : 0;
+		}
+
+		// The windowed window's outer size for client area `client` at `dpi` (call with the mutex held).
+		SIZE window_size_at(const HWND handle, const UINT dpi, const size& client)
+		{
+			const DWORD style = static_cast<DWORD>(GetWindowLongA(handle, GWL_STYLE));
+			const DWORD ex_style = static_cast<DWORD>(GetWindowLongA(handle, GWL_EXSTYLE));
+			RECT frame{0, 0, static_cast<LONG>(client.width), static_cast<LONG>(client.height)};
+			using adjust_for_dpi_t = BOOL(WINAPI*)(LPRECT, DWORD, BOOL, DWORD, UINT);
+			static const auto adjust_for_dpi =
+			    reinterpret_cast<adjust_for_dpi_t>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "AdjustWindowRectExForDpi"));
+			if (!adjust_for_dpi || !adjust_for_dpi(&frame, style, FALSE, ex_style, dpi))
+			{
+				AdjustWindowRectEx(&frame, style, FALSE, ex_style);
+			}
+			return {frame.right - frame.left, frame.bottom - frame.top};
+		}
+
+		void keep_size_on_dpi_change(const HWND handle, const UINT dpi, const RECT& suggested)
+		{
+			std::lock_guard lock(mutex);
+			const bool minimized = IsIconic(handle) != FALSE;
+			if (!sizes_on_dpi_change(kept, minimized || IsZoomed(handle)))
+			{
+				// Maximized: the suggested rectangle is the new monitor's; minimized: nothing to place.
+				// The kept client is applied when the window is restored (client_after_restore).
+				logger::write("display: DPI changed to %u while %s - Windows' size %s, client %ux%u kept for the restore", dpi,
+				              minimized ? "minimized" : "maximized", describe(suggested).c_str(), kept.client.width, kept.client.height);
+				if (!minimized)
+				{
+					in_dpi_change = true;
+					real_set_window_pos(handle, nullptr, suggested.left, suggested.top, suggested.right - suggested.left, suggested.bottom - suggested.top,
+					                    SWP_NOZORDER | SWP_NOACTIVATE);
+					in_dpi_change = false;
+				}
+				return;
+			}
+			const DWORD style = static_cast<DWORD>(GetWindowLongA(handle, GWL_STYLE));
+			const DWORD ex_style = static_cast<DWORD>(GetWindowLongA(handle, GWL_EXSTYLE));
+			auto place = placement_for(MonitorFromRect(&suggested, MONITOR_DEFAULTTONEAREST), style, ex_style);
+			const size target = client_for_dpi_change(kept, client_size);
+			if (opts.window_mode == mode::windowed && target.width && target.height)
+			{
+				const SIZE outer = window_size_at(handle, dpi, target);
+				place.rect = {suggested.left, suggested.top, suggested.left + outer.cx, suggested.top + outer.cy};
+			}
+			logger::write("display: DPI changed to %u - Windows suggested %s, window kept at %s (client %ux%u)", dpi, describe(suggested).c_str(),
+			              describe(place.rect).c_str(), target.width, target.height);
+			in_dpi_change = true; // the WM_SIZE this sends is ours
+			real_set_window_pos(handle, nullptr, place.rect.left, place.rect.top, place.rect.right - place.rect.left, place.rect.bottom - place.rect.top,
+			                    SWP_NOZORDER | SWP_NOACTIVATE);
+			in_dpi_change = false;
+			settle_client(kept, opts.window_mode == mode::windowed ? target : client_area(handle), dpi);
+		}
+
+		// The test pipe's mouse (display::test_pointer): a message of its own, so it gets past the
+		// focus filter, turned into the pointer message it names on the window's thread.
+		bool test_pointer_enabled = false;
+		UINT test_pointer_message = 0;
+		POINT last_test_engine_point{};
+
 		LRESULT CALLBACK filtered_window_procedure(const HWND handle, const UINT message, const WPARAM wparam, const LPARAM lparam)
 		{
+			const auto engine = [&](const UINT what, const WPARAM w, const LPARAM l)
+			{
+				return engine_window_procedure ? CallWindowProcA(engine_window_procedure, handle, what, w, l) : DefWindowProcA(handle, what, w, l);
+			};
+			if (test_pointer_enabled && test_pointer_message && message == test_pointer_message)
+			{
+				const UINT what = static_cast<UINT>(wparam);
+				if (!has_client_point(what))
+				{
+					return 0;
+				}
+				const LPARAM converted = to_engine_point(handle, lparam);
+				last_test_engine_point = {static_cast<short>(LOWORD(converted)), static_cast<short>(HIWORD(converted))};
+				engine(what, what == WM_LBUTTONDOWN ? MK_LBUTTON : 0, converted);
+				return 1;
+			}
+			// A window being dragged across monitors asks first what size it should have at the new DPI.
+			if (message == 0x02e4 /* WM_GETDPISCALEDSIZE */ && lparam && manages_geometry() && opts.window_mode == mode::windowed)
+			{
+				std::lock_guard lock(mutex);
+				const size target = client_for_dpi_change(kept, client_size);
+				if (target.width && target.height && !IsZoomed(handle) && !IsIconic(handle))
+				{
+					*reinterpret_cast<SIZE*>(lparam) = window_size_at(handle, static_cast<UINT>(wparam), target);
+					return TRUE;
+				}
+			}
+			if (message == WM_SIZE && wparam == SIZE_RESTORED && manages_geometry())
+			{
+				std::lock_guard lock(mutex);
+				const UINT dpi = window_dpi(handle);
+				if (const auto restored = !in_dpi_change ? client_after_restore(kept, dpi) : std::nullopt;
+				    restored && opts.window_mode == mode::windowed && (restored->width != LOWORD(lparam) || restored->height != HIWORD(lparam)))
+				{
+					// Restored after a DPI change it was maximized or minimized through: the kept client area.
+					const SIZE outer = window_size_at(handle, dpi, *restored);
+					logger::write("display: restored after a DPI change - client %ux%u kept", restored->width, restored->height);
+					in_dpi_change = true;
+					real_set_window_pos(handle, nullptr, 0, 0, outer.cx, outer.cy, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+					in_dpi_change = false;
+				}
+				else
+				{
+					note_client_resize(kept, {LOWORD(lparam), HIWORD(lparam)}, dpi, in_dpi_change);
+				}
+			}
+			if (message == 0x02e0 /* WM_DPICHANGED */ && lparam && manages_geometry())
+			{
+				keep_size_on_dpi_change(handle, HIWORD(wparam), *reinterpret_cast<const RECT*>(lparam));
+				return 0;
+			}
 			if (is_pointer_message(message) && !game_in_foreground())
 			{
 				static bool logged = false;
@@ -577,7 +812,7 @@ namespace display
 				}
 				return 0;
 			}
-			return engine_window_procedure ? CallWindowProcA(engine_window_procedure, handle, message, wparam, lparam) : DefWindowProcA(handle, message, wparam, lparam);
+			return engine(message, wparam, has_client_point(message) ? to_engine_point(handle, lparam) : lparam);
 		}
 
 		// Puts filtered_window_procedure in front of the engine's (an ANSI window: igWin32Window
@@ -627,6 +862,7 @@ namespace display
 			if (result)
 			{
 				window = result;
+				settle_client(kept, client_size, window_dpi(result));
 				logger::write("display: %s window: style %08lX ex %08lX %s, client %ux%u", name(opts.window_mode), place.style, place.ex_style,
 				              describe(place.rect).c_str(), client_size.width, client_size.height);
 				filter_mouse_messages(result);
@@ -912,6 +1148,45 @@ namespace display
 		no_activate = why;
 	}
 
+	void enable_test_pointer()
+	{
+		test_pointer_message = RegisterWindowMessageA("xml2-fix test pointer");
+		test_pointer_enabled = test_pointer_message != 0;
+	}
+
+	std::string test_pointer(const UINT message, const int x, const int y)
+	{
+		if (!test_pointer_enabled)
+		{
+			return "error the test pointer is off";
+		}
+		if (!has_client_point(message) || x < -32768 || x > 32767 || y < -32768 || y > 32767)
+		{
+			return "error not a client-point mouse message";
+		}
+		HWND handle = nullptr;
+		{
+			std::lock_guard lock(mutex);
+			handle = window;
+		}
+		if (!handle || !engine_window_procedure)
+		{
+			return "error no game window of the fix's (the test mouse needs Mode = windowed or borderless)";
+		}
+		DWORD_PTR handled = 0;
+		const LPARAM point = MAKELPARAM(static_cast<WORD>(static_cast<short>(x)), static_cast<WORD>(static_cast<short>(y)));
+		if (!SendMessageTimeoutA(handle, test_pointer_message, message, point, SMTO_BLOCK | SMTO_ABORTIFHUNG, 3000, &handled) || !handled)
+		{
+			return "error the game's window didn't take the message (error " + std::to_string(GetLastError()) + ")";
+		}
+		const size client = client_area(handle);
+		const size screen = engine_screen();
+		char text[200];
+		std::snprintf(text, sizeof text, "ok client %ux%u screen %ux%u point %d,%d -> %ld,%ld", client.width, client.height, screen.width, screen.height, x, y,
+		              last_test_engine_point.x, last_test_engine_point.y);
+		return text;
+	}
+
 	display_rules::options read_ini_options()
 	{
 		return read_options();
@@ -1088,6 +1363,21 @@ namespace display
 					}
 					logger::write("display: %d cursor imports hooked (the game can't use the cursor while another window has the focus)", hooked);
 				}
+				// Mouse points in the engine's screen space whatever the window's client size (the
+				// filter converts the messages' points; ScreenToClient here).
+				engine_screen_readable = check_engine_screen(game);
+				real_screen_to_client = reinterpret_cast<screen_to_client_t>(GetProcAddress(user32, "ScreenToClient"));
+				int converted = 0;
+				if (real_screen_to_client)
+				{
+					for (const HMODULE module : {game, engine_display})
+					{
+						screen_to_client_t original = nullptr;
+						converted += hook_import(module, "USER32.dll", "ScreenToClient", &hooked_screen_to_client, original);
+					}
+				}
+				logger::write("display: mouse points converted to the game's screen (%s) when the client area differs from it; %d ScreenToClient imports hooked",
+				              engine_screen_readable ? "its size read at 0xa09ffc/0xa0a000" : "taken as the back buffer's size: not the retail XMen2.exe", converted);
 			}
 		}
 

@@ -1,5 +1,6 @@
 #include "test_input.hpp"
 #include "test_state.hpp"
+#include "balance.hpp"
 #include "display.hpp"
 #include "frame_capture.hpp"
 #include "frame_rate.hpp"
@@ -10,6 +11,8 @@
 #include "ini.hpp"
 #include "log.hpp"
 #include "pad_input.hpp"
+#include "save_format.hpp"
+#include "entity_capacity.hpp"
 #include "test_input_rules.hpp"
 
 #define DIRECTINPUT_VERSION 0x0800
@@ -29,6 +32,7 @@ namespace test_input
 {
 	namespace
 	{
+		std::string entity_pipe(const std::string& arguments);
 		using namespace test_input_rules;
 
 		std::string pipe_path; // \\.\pipe\ + [Test] PipeName (choose_pipe), set before the pipe thread starts
@@ -222,6 +226,7 @@ namespace test_input
 			}
 			test_state::sample();
 			pump_console(); // the game's own thread, between two runs of its console queue, whatever the read gave
+			save_format::pump(); // the pipe's `save dump` / `save check`: the game's serializer, on its own thread
 			if (FAILED(result))
 			{
 				logger::write_once("test:read-failed", "test: a keyboard read failed (%08lX) - the game re-acquires; pipe keys wait for that", result);
@@ -495,7 +500,7 @@ namespace test_input
 			// checked from a script. Then the engine tables' use, live/cap ([Limits], limits.hpp).
 			return "ok XML2 Fix " FIX_VERSION "; keyboard devices " + std::to_string(devices) + "; reads " + std::to_string(reads.load()) + "; keys held " +
 			       std::to_string(held) + "; " + pad_input::status() + "; game " + (game_in_foreground() ? "has" : "doesn't have") + " the focus; fps " +
-			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + limits::status() + "; " + geometry_sharing::status() + "; " + ladder_paths::status() + "; " + break_rule::status();
+			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + limits::status() + "; " + geometry_sharing::status() + "; " + ladder_paths::status() + "; " + break_rule::status() + "; " + save_format::status() + "; " + balance::status() + "; " + entity_capacity::status();
 		}
 
 		std::string handle(const std::string& line)
@@ -541,10 +546,49 @@ namespace test_input
 			case command::kind::events: return test_state::reply("events");
 			case command::kind::pad:
 				return pad_input::handle(cmd.pad);
+			case command::kind::save:
+				return save_format::pipe(cmd.text);
+			case command::kind::entity:
+				return entity_pipe(cmd.text);
+			case command::kind::mouse:
+			{
+				using action = command::pointer_action;
+				std::string reply;
+				if (cmd.pointer == action::move || cmd.pointer == action::click)
+				{
+					reply = display::test_pointer(WM_MOUSEMOVE, cmd.x, cmd.y);
+				}
+				if (reply.rfind("error", 0) != 0 && (cmd.pointer == action::down || cmd.pointer == action::click))
+				{
+					reply = display::test_pointer(WM_LBUTTONDOWN, cmd.x, cmd.y);
+				}
+				if (reply.rfind("error", 0) != 0 && (cmd.pointer == action::up || cmd.pointer == action::click))
+				{
+					reply = display::test_pointer(WM_LBUTTONUP, cmd.x, cmd.y);
+				}
+				logger::write("test: %s -> %s", line.c_str(), reply.c_str());
+				return reply;
+			}
 			default:
 				logger::write("test: rejected '%s': %s", line.c_str(), cmd.error.c_str());
 				return "error " + cmd.error;
 			}
+		}
+
+		// `entity status` / `entity retire N` (the plan's P3.4 fixture: force-retire a free World slot).
+		std::string entity_pipe(const std::string& arguments)
+		{
+			const auto first = arguments.find_first_not_of(" 	");
+			const auto text = first == std::string::npos ? std::string() : arguments.substr(first);
+			if (text.empty() || text.rfind("status", 0) == 0) return entity_capacity::status();
+			if (text.rfind("retire ", 0) == 0)
+			{
+				char* end = nullptr;
+				const auto index = std::strtoul(text.c_str() + 7, &end, 10);
+				if (end == text.c_str() + 7 || index >= 1024) return "error entity retire takes a slot index 0..1023";
+				return entity_capacity::retire_slot(static_cast<std::uint32_t>(index)) ? "ok retired slot " + std::to_string(index) : "error slot not free, already retired, or capacity not raised";
+			}
+			return "error entity takes status or retire <slot>";
 		}
 
 		// ---- The pipe -----------------------------------------------------------------------------------
@@ -631,6 +675,7 @@ namespace test_input
 		display::set_frame_hook(&on_frame);
 		display::disable_multisampling("the test pipe copies the back buffer");
 		display::show_without_focus("the test pipe drives the game in the background");
+		display::enable_test_pointer();
 		logger::write("test: input pipe %s ([Test] InputPipe=1, PipeName %s) - keys from it reach the game without the focus; the keyboard only with it", pipe_path.c_str(), pipe.name.c_str());
 	}
 

@@ -1,0 +1,35 @@
+#pragma once
+#include <array>
+#include <cstdint>
+#include <string_view>
+
+// Effective XML1 controller state for the shared gameplay-capability record
+// (docs/gameplay-agreement.md, IDs 3 and 4). Values describe what is installed,
+// never what the INI requested.
+namespace xml1_capability_rules {
+struct registration { std::array<std::uint32_t,4> values{}; bool verified=true; };
+
+// Stable 32-bit FNV-1a of the exact saved-stage flag name (case-sensitive: the
+// native flag reader 0x4a0190 matches names exactly). Two peers bound to the same
+// bit range of different variables would otherwise agree and then reconstruct
+// different phases after a post-shield load.
+constexpr std::uint32_t flag_hash(std::string_view name){
+    std::uint32_t h=2166136261u;
+    for(unsigned char c:name){h^=c;h*=16777619u;}
+    return h;
+}
+// Master Mold revision 1: values {installed, saved-stage first bit, width, flag hash}.
+// Increment it whenever peers with equal values could still simulate the
+// encounter differently (decision rules, timing, hero choice, effects).
+constexpr std::uint16_t master_mold_revision=1;
+inline registration master_mold(bool requested,bool installed,std::string_view flag,int first_bit,int width){
+    if(!requested)return {{0,0,0,0},true};          // verified off
+    if(!installed||flag.empty()||flag.size()>32||first_bit<1||width<1||width>32)return {{0,0,0,0},false}; // requested, failed
+    return {{1,static_cast<std::uint32_t>(first_bit),static_cast<std::uint32_t>(width),flag_hash(flag)},true};
+}
+
+// No turret scanner/weapon controller exists in this build. Revision 1 always
+// advertises verified off; a future controller registers its own revision/values.
+constexpr std::uint16_t turret_revision=1;
+inline registration turrets(){ return {{0,0,0,0},true}; }
+}
