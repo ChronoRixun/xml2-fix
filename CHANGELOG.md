@@ -24,8 +24,12 @@ mod's `xml2-fix.ini` asks for it (the port's builder sets it all).
 - `[Game] DeathSwitchClear`: when the controlled hero dies, the hero handed its controller stops the walk its AI had
   started instead of finishing it with no input ([details](docs/death-switch.md)).
 - `[Limits] ScriptFunctions`: 320 script function names raised to 1024 ([details](docs/script-functions.md)).
-- Online: every one of these is a rule of the shared gameplay agreement (IDs 5-15; record up to sixteen entries). A
-  1.4.0 peer and a 1.5.0 peer with any of these keys refuse each other at join, with the reason on both PCs.
+- Online: every one of these is a rule of the shared gameplay agreement (IDs 5-15). The agreement record is now a
+  fixed 108-byte digest (protocol revision 3), so a join no longer crashes the host once enough rules are on: with the
+  full list on the wire the join messages passed the game's 300-byte limit and its large-message path dereferenced
+  null. The refusing PC names the differing settings in its log and the joining PC's dialog. A 1.4.0 peer (or a 1.5
+  pre-release) and a 1.5.0 peer refuse each other at join as another build, with the reason on both PCs; an oversized
+  message from such a peer is dropped instead of crashing the game ([details](docs/gameplay-agreement.md)).
 
 ### Details
 
@@ -38,7 +42,7 @@ mod's `xml2-fix.ini` asks for it (the port's builder sets it all).
   play XML2's darker "double" sound; the stats screen's Body and Focus helps drop the double health / energy chance
   lines while it is in.
 - Online: both keys are rules 11 and 12 of the shared gameplay agreement (a key asked for but not installed closes
-  online play, as for rules 3 and 4); the agreement record holds up to sixteen entries (332 bytes).
+  online play, as for rules 3 and 4).
 - `[Game] DeathRule=xml1`: X-Men Legends I's death threshold - an entity dies on the hit that leaves it below 1
   health, instead of only at 0, so an enemy no longer fights on at a fraction of a point with its death script and
   drops waiting. Eight comparisons of the damage functions move to the first game's line, and a killing hit leaves
