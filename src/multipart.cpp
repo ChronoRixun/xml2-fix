@@ -192,10 +192,17 @@ void break_part(instance& in,const record_data& d,u32 inst,int k){
 void __fastcall damage_hook(void* event){
     const float before=at<float>(event,0x10);
     real_damage(event);
-    if(actors.empty())return;
     void* victim=at<void*>(event,0);
     auto a=actors.find(victim);
-    if(a==actors.end())return;
+    if(a==actors.end()){
+        // [Test] MultipartTrace: every other character hit too, with its resistance bytes (actor+0x550..0x557,
+        // summed by 0x4294d0), for checking the first game's powerup removals.
+        if(trace&&victim)logger::write("multipart: victim %08X hit %d, resist %d %d %d %d %d %d %d %d",at<u32>(victim,0x1c),
+            static_cast<int>(at<float>(event,0x10)),at<signed char>(victim,0x550),at<signed char>(victim,0x551),
+            at<signed char>(victim,0x552),at<signed char>(victim,0x553),at<signed char>(victim,0x554),
+            at<signed char>(victim,0x555),at<signed char>(victim,0x556),at<signed char>(victim,0x557));
+        return;
+    }
     const float after=at<float>(event,0x10);
     if(before!=0.f&&after==0.f)return;   // deflected: the XBE returns before its multipart call
     auto i=instances.find(a->second);
