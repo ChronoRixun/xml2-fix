@@ -108,6 +108,19 @@ namespace rank_costs_rules
 		return {points - taken, n - taken};
 	}
 
+	// [Game] LevelStatPoints=xml1: the same 1 / 2 for the stat points, on the port's stat scale. X-Men Legends 1 gives 1
+	// stat point a level and 2 on a level divisible by 5 (0xb1ca0); the port's heroes have XML1's body / mind / strength
+	// x 4 (builder heroes.STAT_SCALE, XML2 Fix [Balance] HeroStatScale = 4), so XMen2.exe's 4 a level is XML1's 1 and a
+	// fifth level gives 8. A level lost takes the same back (unspent points first, the rest from the stats, 0x4bbc5b).
+	constexpr int stat_points_per_level = 4;
+	constexpr int level_stat_points(int level) { return level > 0 && level % bonus_every == 0 ? 2 * stat_points_per_level : stat_points_per_level; }
+	constexpr loss level_stat_loss(int points, int level)
+	{
+		const int n = level_stat_points(level);
+		const int taken = points > n ? n : points;
+		return {points - taken, n - taken};
+	}
+
 	// ---- the sites ----
 	struct guard
 	{
@@ -117,9 +130,10 @@ namespace rank_costs_rules
 	};
 
 	// Code the stubs call or return into, and the function bodies around each site (retail bytes).
-	inline constexpr std::array<guard, 21> guards{{
+	inline constexpr std::array<guard, 23> guards{{
 		{0x544a30, "668b4114c3", "unspent skill points getter (ax = block+0x14)"},
 		{0x4692f0, "8d4104c3", "a CStats' saved block (stats+4)"},
+		{0x544a40, "668b4116c3", "unspent stat points getter (ax = block+0x16)"},
 		{0x4c05b0, "a19c33770085c0750ae8c2ffffffa19c337700c3", "the talent registry's getter"},
 		{0x68ec38, "e0db4b00", "the talent registry's vt+0x14: 0x4bdbe0"},
 		{0x4bdea0, "518b49085333c032", "a talent's <level> node for a rank (0x4bdea0)"},
@@ -138,6 +152,7 @@ namespace rank_costs_rules
 		{0x4bbd13, "8d4c241c50518bcfe8d0f5f7ff4d0f856effffff", "losing levels: one rank per missing point"},
 		{0x43c8a8, "8b44247085c0", "automatic spending: after the loop (new-power slots)"},
 		{0x4bbb54, "8bcee8e58e08008bce83c00450e88ae8f7ff8bcee8c38e08008bce4050e83aeaf7ff0fb6431c473bf87ec5", "a level gained: +4 stat points, +1 skill point (EDI = the level)"},
+		{0x4bbc06, "8bcfe883ecf7ff8bcfe82c8e08000fbfc083f804b9040000007f028bc82bc1be040000002bf1508bcfe8bce7f7ff", "a level lost: min(stat points, 4) taken, the rest from the stats ([esp+0x10] = the level)"},
 		{0x4bbc34, "8bcfe8f58d08000fbfc083f801b9010000007f028bc82bc1bd010000002be9508bcfe855", "a level lost: min(points, 1) taken, the rest from ranks ([esp+0x10] = the level)"},
 	}};
 
@@ -167,6 +182,12 @@ namespace rank_costs_rules
 
 	// [Game] LevelSkillPoints sites (installed in the same transaction when that key asks for them).
 	enum level_site_id : std::size_t { level_gained, level_lost, level_site_count };
+	enum stat_site_id : std::size_t { stat_gained, stat_lost, stat_site_count };
+	// [Game] LevelStatPoints sites.
+	inline constexpr std::array<site, stat_site_count> stat_sites{{
+		{0x4bbb56, "e8e58e08008bce83c004", shape::call, "a level gained: + 8 stat points on a level divisible by 5, else 4"},
+		{0x4bbc0f, "e82c8e08000fbfc083f804b9040000007f028bc82bc1be040000002bf1", shape::call, "a level lost: the same 4 / 8 taken back"},
+	}};
 	inline constexpr std::array<site, level_site_count> level_sites{{
 		{0x4bbb68, "e8c38e08008bce40", shape::call, "a level gained: + 2 on a level divisible by 5, else 1"},
 		{0x4bbc36, "e8f58d08000fbfc083f801b9010000007f028bc82bc1bd010000002be9", shape::call, "a level lost: the same 1 / 2 taken back"},

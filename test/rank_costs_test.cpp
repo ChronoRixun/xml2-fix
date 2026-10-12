@@ -21,9 +21,12 @@ extern "C" std::uint8_t fixture_space[0x400000];
 namespace ini
 {
 	bool requested = true;
-	std::optional<std::string> level_rule;
+	std::optional<std::string> level_rule, stat_rule;
 	bool flag(const wchar_t*, const wchar_t*, bool) { return requested; }
-	std::optional<std::string> text(const wchar_t*, const wchar_t*) { return level_rule; }
+	std::optional<std::string> text(const wchar_t*, const wchar_t* key)
+	{
+		return std::wstring(key) == L"LevelStatPoints" ? stat_rule : level_rule;
+	}
 }
 namespace logger { void write(const char*, ...) {} }
 namespace game_version { bool refused = false; void refuse_startup() { refused = true; } }
@@ -224,6 +227,41 @@ namespace
 			ret
 		}
 	}
+	// stats: a level gained 0x4bbb54 (MOV ECX,ESI; CALL), a level lost 0x4bbc0d (MOV ECX,EDI; CALL; ESI = missing)
+	__declspec(naked) void drive_stat_gained()
+	{
+		__asm {
+			pushad
+			mov esi, block_ptr
+			mov edi, r_level
+			mov eax, 0x4bbb54
+			call eax
+			mov r_eax, eax
+			popad
+			ret
+		}
+	}
+	std::uint32_t r_esi;
+	__declspec(naked) void drive_stat_lost()
+	{
+		__asm {
+			pushad
+			push 0
+			push r_level
+			push 0
+			push 0
+			push 0
+			mov edi, block_ptr
+			mov esi, 0x5a5a
+			mov eax, 0x4bbc0d
+			call eax
+			mov r_eax, eax
+			mov r_esi, esi
+			add esp, 20
+			popad
+			ret
+		}
+	}
 	// a level lost, 0x4bbc34 (MOV ECX,EDI; CALL): EDI = block, [esp+0x10] = level; returns EAX (points), EBP (missing)
 	__declspec(naked) void drive_level_lost()
 	{
@@ -282,6 +320,15 @@ namespace
 				std::printf("  site 0x%08X differs: %s\n", s.va, s.what);
 			}
 		}
+		for (const auto& s : stat_sites)
+		{
+			const auto o = file_of(s.va);
+			if (!o || std::memcmp(&d[o], bytes_of(s.before).data(), hex_size(s.before)))
+			{
+				ok = false;
+				std::printf("  stat site 0x%08X differs\n", s.va);
+			}
+		}
 		for (const auto& s : level_sites)
 		{
 			const auto o = file_of(s.va);
@@ -314,6 +361,10 @@ int main(int argc, char** argv)
 	check(level_loss(3, 10).points_after == 1 && level_loss(3, 10).missing == 0 && level_loss(1, 10).points_after == 0 &&
 	      level_loss(1, 10).missing == 1 && level_loss(0, 9).missing == 1 && level_loss(-2, 5).points_after == 0 &&
 	      level_loss(-2, 5).missing == 4, "losing a level: its 1 / 2 points from the unspent word first (the game's signed min)");
+	check(level_stat_points(4) == 4 && level_stat_points(5) == 8 && level_stat_points(10) == 8 && level_stat_points(11) == 4 &&
+	      level_stat_loss(10, 5).points_after == 2 && level_stat_loss(10, 5).missing == 0 && level_stat_loss(3, 10).points_after == 0 &&
+	      level_stat_loss(3, 10).missing == 5 && level_stat_loss(0, 9).missing == 4,
+	      "stat points: 8 on levels divisible by 5, else 4 (XML1's 2 / 1 x the port's scale 4), taken back alike");
 	check(level_down_remaining(1, 2) == -1 && level_down_remaining(1, 1) == 0 && level_down_extra(2) == 1 && level_down_extra(1) == 0,
 	      "losing a level: a 2-point rank covers the missing point, the overshoot is not refunded (XML1)");
 	bool layout = true;
@@ -348,6 +399,8 @@ int main(int argc, char** argv)
 			put_hex(s.va, s.before);
 		for (const auto& s : level_sites)
 			put_hex(s.va, s.before);
+		for (const auto& s : stat_sites)
+			put_hex(s.va, s.before);
 	};
 	lay_retail();
 	ini::requested = false;
@@ -363,13 +416,14 @@ int main(int argc, char** argv)
 	rank_costs::install(game);
 	check(!rank_costs::level_installed() && !rank_costs::capability().verified && *at(0x4bbb68) == 0xe8 &&
 	      at(0x4bbb68)[1] == 0xc3 && at(0x4bbb68)[2] == 0x8e, "LevelSkillPoints alone, guard mismatch: nothing patched, unverified");
-	ini::requested = true;
+	ini::requested = true; ini::stat_rule = "xml1";
 	lay_retail();
 	rank_costs::install(game);
 	{
 		const auto c = rank_costs::capability();
-		check(rank_costs::installed() && rank_costs::level_installed() && c.verified && c.values[0] == 1 && c.values[1] == 7 &&
-		      c.values[2] == 5 && c.values[3] == 2 && !game_version::refused, "both installed: rule 5 revision 2 {1, 7, 5, 2}");
+		check(rank_costs::installed() && rank_costs::level_installed() && rank_costs::stat_installed() && c.verified &&
+		      c.values[0] == 7 && c.values[1] == 7 && c.values[2] == 5 && c.values[3] == (2u | 8u << 8) && !game_version::refused,
+		      "all three installed: rule 5 revision 3 {7, 7, 5, 2 | 8 << 8}");
 	}
 
 	// The callees: the registry and attribute lookup become the fakes; the block getter and the points getter stay the
@@ -393,6 +447,8 @@ int main(int argc, char** argv)
 	put_hex(0x4bbd27, "b801000000c3");          // the loop ends: eax = 1
 	put_hex(0x4bbc95, "31c0c3");                // the loop goes round (JG): eax = 0
 	*at(0x4bbb70) = 0xc3;                        // after the level-gained CALL + NOPs (PUSH EAX)
+	*at(0x4bbb60) = 0xc3;                        // after the stat-gained CALL + NOPs (PUSH EAX)
+	*at(0x4bbc2c) = 0xc3;                        // after the stat-lost CALL + NOPs (PUSH EAX)
 	*at(0x4bbc53) = 0xc3;                        // after the level-lost CALL + NOPs (PUSH EAX)
 	FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
 
@@ -470,6 +526,19 @@ int main(int argc, char** argv)
 	check(static_cast<std::int16_t>(r_eax) == 0 && r_ebp == 1, "level 10 lost with 1 point: 0 left, 1 taken back as a rank");
 	set_points(0); r_level = 9; drive_level_lost();
 	check(static_cast<std::int16_t>(r_eax) == 0 && r_ebp == 1, "level 9 lost with 0 points: 1 taken back as a rank");
+
+	// stat points (block+0x16): 4 -> 5 gives 8, 9 -> 10 gives 8, 10 -> 11 gives 4; level 10 lost with 3 points: 5 missing
+	auto set_stat = [](int p) { const auto v = static_cast<std::int16_t>(p); std::memcpy(block() + 0x16, &v, 2); };
+	set_stat(12); r_level = 5; drive_stat_gained();
+	check(static_cast<std::int16_t>(r_eax) == 20, "level 5 gained: 12 -> 20 stat points");
+	set_stat(0); r_level = 10; drive_stat_gained();
+	check(static_cast<std::int16_t>(r_eax) == 8, "level 10 gained: 0 -> 8 stat points");
+	r_level = 11; drive_stat_gained();
+	check(static_cast<std::int16_t>(r_eax) == 4, "level 11 gained: 0 -> 4 stat points");
+	set_stat(3); r_level = 10; drive_stat_lost();
+	check(static_cast<std::int16_t>(r_eax) == 0 && r_esi == 5, "level 10 lost with 3 stat points: 0 left, 5 taken from the stats");
+	set_stat(9); r_level = 7; drive_stat_lost();
+	check(static_cast<std::int16_t>(r_eax) == 5 && r_esi == 0, "level 7 lost with 9 stat points: 5 left");
 
 	VirtualProtect(fixture_space, sizeof fixture_space, old, &old);
 

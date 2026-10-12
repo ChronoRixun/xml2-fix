@@ -19,7 +19,7 @@ namespace rank_costs
 	{
 		using namespace rank_costs_rules;
 
-		bool wanted = false, applied = false, level_wanted = false, level_applied = false;
+		bool wanted = false, applied = false, level_wanted = false, level_applied = false, stat_wanted = false, stat_applied = false;
 		constexpr std::uintptr_t image_base = 0x400000;
 
 		template <typename T>
@@ -337,6 +337,50 @@ namespace rank_costs
 			}
 		}
 
+		int __cdecl stat_points_c(int level) { return level_stat_points(level); }
+		int __cdecl stat_loss_missing_c(int level, int points) { return level_stat_loss(points, level).missing; }
+		int __cdecl stat_loss_points_c(int level, int points) { return level_stat_loss(points, level).points_after; }
+
+		// 0x4bbb56, replacing CALL 0x544a40; MOV ECX,ESI; ADD EAX,4: eax = stat points + the level's (EDI = the level).
+		__declspec(naked) void stat_gained_stub()
+		{
+			__asm {
+				mov eax, 0x544a40
+				call eax
+				push eax
+				push edi
+				call stat_points_c
+				add esp, 4
+				pop ecx
+				add eax, ecx
+				mov ecx, esi
+				ret
+			}
+		}
+
+		// 0x4bbc0f, replacing CALL 0x544a40 .. SUB ESI,ECX: eax = the stat points after the level's are taken, ESI = what
+		// is still missing (taken from the stats). ECX = EDI (the block) on entry; [esp+0x10] = the level.
+		__declspec(naked) void stat_lost_stub()
+		{
+			__asm {
+				mov eax, 0x544a40
+				call eax
+				movsx eax, ax
+				push eax
+				push eax
+				push dword ptr [esp + 12 + 0x10]
+				call stat_loss_missing_c
+				add esp, 8
+				mov esi, eax
+				pop eax
+				push eax
+				push dword ptr [esp + 8 + 0x10]
+				call stat_loss_points_c
+				add esp, 8
+				ret
+			}
+		}
+
 		std::uint32_t address_of(void (*f)()) { return static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(f)); }
 
 		const guard* first_mismatch()
@@ -364,27 +408,35 @@ namespace rank_costs
 
 	bool level_requested() { return level_wanted; }
 	bool level_installed() { return level_applied; }
+	bool stat_installed() { return stat_applied; }
 
 	xml1_capability_rules::registration capability()
 	{
-		if ((wanted && !applied) || (level_wanted && !level_applied))
+		if ((wanted && !applied) || (level_wanted && !level_applied) || (stat_wanted && !stat_applied))
 			return {{0, 0, 0, 0}, false};
-		return {{applied ? 1u : 0u, applied ? static_cast<std::uint32_t>(max_cost) : 0u,
-		         level_applied ? static_cast<std::uint32_t>(bonus_every) : 0u, level_applied ? static_cast<std::uint32_t>(bonus_points) : 0u}, true};
+		const std::uint32_t parts = (applied ? 1u : 0u) | (level_applied ? 2u : 0u) | (stat_applied ? 4u : 0u);
+		const std::uint32_t step = level_applied || stat_applied ? static_cast<std::uint32_t>(bonus_every) : 0u;
+		const std::uint32_t points = (level_applied ? static_cast<std::uint32_t>(bonus_points) : 0u) |
+		                             (stat_applied ? static_cast<std::uint32_t>(level_stat_points(bonus_every)) << 8 : 0u);
+		return {{parts, applied ? static_cast<std::uint32_t>(max_cost) : 0u, step, points}, true};
 	}
 
 	void install(const HMODULE game)
 	{
-		if (applied || level_applied)
+		if (applied || level_applied || stat_applied)
 			return;
 		wanted = ini::flag(L"Game", L"RankCosts", false);
 		const auto level_rule = ini::text(L"Game", L"LevelSkillPoints");
 		level_wanted = level_rule.has_value() && _stricmp(level_rule->c_str(), "xml1") == 0;
+		const auto stat_rule = ini::text(L"Game", L"LevelStatPoints");
+		stat_wanted = stat_rule.has_value() && _stricmp(stat_rule->c_str(), "xml1") == 0;
 		if (!wanted)
 			logger::write("rank costs: off - every talent rank costs 1 skill point (the game's own)");
 		if (!level_wanted)
 			logger::write("level skill points: off - 1 skill point per level (the game's own)");
-		if (!wanted && !level_wanted)
+		if (!stat_wanted)
+			logger::write("level stat points: off - 4 stat points per level (the game's own)");
+		if (!wanted && !level_wanted && !stat_wanted)
 			return;
 		const char* stock = "every rank costs 1 skill point and a level gives 1 (the game's own)";
 		if (reinterpret_cast<std::uintptr_t>(game) != image_base)
@@ -412,18 +464,29 @@ namespace rank_costs
 			for (std::size_t i = 0; i < level_site_count; ++i)
 				writes.push_back({level_sites[i].va, bytes_of(level_sites[i].before), patched(level_sites[i], stubs[i])});
 		}
+		if (stat_wanted)
+		{
+			const std::uint32_t stubs[stat_site_count] = {address_of(stat_gained_stub), address_of(stat_lost_stub)};
+			for (std::size_t i = 0; i < stat_site_count; ++i)
+				writes.push_back({stat_sites[i].va, bytes_of(stat_sites[i].before), patched(stat_sites[i], stubs[i])});
+		}
 		xml1_hook_transaction::memory memory;
 		bool safe = true;
 		if (xml1_hook_transaction::apply(memory, writes, &safe))
 		{
 			applied = wanted;
 			level_applied = level_wanted;
+			stat_applied = stat_wanted;
 			if (applied)
 				logger::write("rank costs: on - a talent rank costs its <level cost> (1 without one) in the skills screen, its "
 				              "buyable/greyed test, the automatic spending, the respec and losing levels (%zu sites)", site_count);
 			if (level_applied)
 				logger::write("level skill points: xml1 - a level divisible by %d gives (and a level lost takes back) %d skill points, "
 				              "any other level 1", bonus_every, bonus_points);
+			if (stat_applied)
+				logger::write("level stat points: xml1 - a level divisible by %d gives (and a level lost takes back) %d stat points, any other "
+				              "level %d (X-Men Legends I's 2 / 1 on the port's x%d stat scale)", bonus_every, level_stat_points(bonus_every),
+				              stat_points_per_level, stat_points_per_level);
 		}
 		else if (safe)
 			logger::write("rank costs: the code transaction was refused - %s", stock);

@@ -10,8 +10,10 @@ bool installed();
 // [Game] LevelSkillPoints=xml1: X-Men Legends 1's 2 skill points on every 5th level (rank_costs_rules::level_skill_points).
 bool level_requested();
 bool level_installed();
-// Effective state for shared gameplay rule 5 (revision 2): {rank costs installed, the highest cost honoured (7) or 0,
-// the bonus level step (5) or 0, its skill points (2) or 0}; all zero and verified when neither key asks; unverified
-// when a requested part is not installed.
+// [Game] LevelStatPoints=xml1: 8 stat points on every 5th level, 4 on the others (rank_costs_rules::level_stat_points).
+bool stat_installed();
+// Effective state for shared gameplay rule 5 (revision 3): {installed parts (1 RankCosts, 2 LevelSkillPoints, 4
+// LevelStatPoints), the highest cost honoured (7) or 0, the bonus level step (5) or 0, the bonus level's skill points
+// (2) | its stat points (8) << 8}; all zero and verified when no key asks; unverified when a requested part failed.
 xml1_capability_rules::registration capability();
 }

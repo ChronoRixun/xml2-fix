@@ -45,10 +45,24 @@ hero's processed level and its level, whatever gave the XP) gives and takes 1. W
 | 0x4bbb68, a level gained (EDI = the level) | +1 | +2 on a level divisible by 5, else +1 |
 | 0x4bbc36, a level lost ([esp+0x10] = the level) | min(points, 1) from the unspent points, the rest as ranks | the same with 2 on a level divisible by 5 |
 
-Stat points stay XMen2.exe's (+4 per level and the autospend class bonus). `[Game] XPCurve=xml1` only changes how much
+Stat points: see the next section. `[Game] XPCurve=xml1` only changes how much
 XP a level needs (and the cap, 45); every level still goes through 0x4bbae0, so a hero gets 9 extra points by level 45.
 The SKILL pickup (`addSkillPoints`) adds its point directly and is unaffected. The same transaction installs both keys'
 sites; rule 5 carries both (below).
+
+## Stat points per level (`[Game] LevelStatPoints=xml1`)
+
+The same rule for the unspent stat points, on the port's stat scale. X-Men Legends I gives 1 a level and 2 on a level
+divisible by 5; the Legends Classic heroes have X-Men Legends I's body / mind / strength x 4 (the builder's STAT_SCALE,
+`[Balance] HeroStatScale=4`), so XMen2.exe's 4 a level is the first game's 1 and the key makes a fifth level give 8:
+
+| Where | Stock | `xml1` |
+|---|---|---|
+| 0x4bbb56, a level gained (EDI = the level) | +4 | +8 on a level divisible by 5, else +4 |
+| 0x4bbc0f, a level lost ([esp+0x10] = the level) | min(points, 4), the rest from the stats | the same with 8 on a level divisible by 5 |
+
+The automatic per-level bonus (Data/autospend.XMLB, 0x43cf90 -> 0x43d000) is not changed; the first game's (its
+stat_rules.xml, 0xaed70) is larger and differently shaped (legends-classic SPEC 88.2 has the comparison and options).
 
 ## Saves
 
@@ -59,11 +73,11 @@ so such a hero would get back more than it paid.
 
 ## Install and online
 
-Twenty-one guards (the callees and every site's surroundings) and the nine (+ two for LevelSkillPoints) writes go through one code transaction
+Twenty-three guards (the callees and every site's surroundings) and the nine (+ two for LevelSkillPoints, + two for LevelStatPoints) writes go through one code transaction
 (`xml1_hook_transaction`): a mismatch or a failed write leaves the game's own 1-point rule with one log line. Co-op
-peers must charge and grant alike: gameplay agreement rule 5, revision 2, `{RankCosts installed, 7 or 0,
-LevelSkillPoints installed ? 5 : 0, ? 2 : 0}` (verified `{0,0,0,0}` without either key; a requested part not installed is
-unverified and closes online play). The costs themselves come from the
+peers must charge and grant alike: gameplay agreement rule 5, revision 3, `{installed parts (1 RankCosts, 2
+LevelSkillPoints, 4 LevelStatPoints), 7 or 0, 5 or 0, skill bonus 2 | stat bonus 8 << 8}` (verified `{0,0,0,0}` without
+any key; a requested part not installed is unverified and closes online play). The costs themselves come from the
 build's talent files, as every other talent number does.
 
 Tests: `xml2_rank_costs_test [XMen2.exe]` runs the cost rules, then the production install and every stub at the
