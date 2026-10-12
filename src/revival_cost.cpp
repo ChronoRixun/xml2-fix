@@ -17,6 +17,7 @@ namespace revival_cost
 		using getter_t = void*(__cdecl*)();
 		using level_t = int(__fastcall*)(void*, void*);
 		bool is_installed = false;
+		int last_logged = -1;
 
 		int highest_level()
 		{
@@ -35,8 +36,14 @@ namespace revival_cost
 		// Replaces 0x4b8830 (thiscall, the hero in ecx, no stack arguments): the first game's 200 * f * f.
 		int __fastcall price(void*, void*)
 		{
-			const auto p = original_price(highest_level());
-			return static_cast<int>(std::min<std::int64_t>(p, 0x7fffffff));
+			const int f = highest_level();
+			const auto p = static_cast<int>(std::min<std::int64_t>(original_price(f), 0x7fffffff));
+			if (p != last_logged)
+			{
+				last_logged = p;
+				logger::write("revival cost: 200 * %d^2 = %d (the roster's highest level %d)", f, p, f);
+			}
+			return p;
 		}
 	}
 
