@@ -60,6 +60,7 @@ namespace forced_teams_rules
 		skill_points,     // n(ai): addSkillPoints(actor, n) - n unspent skill points to the character(s) the name means (an item's '_ACTIVATOR_': the hero who took it)
 		stat_points,      // n(ai): addStatPoints(actor, n), unspent attribute points
 		xtraction_shop,   // n(ai): native point menu, with this point's equipment-shop permission
+		solo_mode,        // n(ai): setSoloMode(actor, on) - XML1 enterSoloMode (on) / exitSoloMode (off), solo_mode.hpp
 	};
 
 	struct function_spec
@@ -71,7 +72,7 @@ namespace forced_teams_rules
 
 	// None of these names is in XMen2.exe (xml2_test walks both of its tables). The exe has no "ssss",
 	// so the DLL owns its signature strings.
-	inline constexpr std::array<function_spec, 11> functions{{
+	inline constexpr std::array<function_spec, 12> functions{{
 		{"xml2fixFeature", "i", "s"},
 		{"seatParty", "n", "ssss"},
 		{"setSkinset", "n", "ss"},
@@ -83,6 +84,7 @@ namespace forced_teams_rules
 		{"addSkillPoints", "n", "ai"},
 		{"addStatPoints", "n", "ai"},
 		{"extractionPointServices", "n", "ai"},
+		{"setSoloMode", "n", "ai"},
 	}};
 
 	// ---- The table the registration is pointed at ----------------------------------------------------
@@ -210,6 +212,7 @@ namespace forced_teams_rules
 		stat_points,
 		skill_points, // addSkillPoints is registered with the rest: 1 whenever the functions are
 		xtraction_shop,
+		solo_mode,    // 1 when [Game] SoloMode=1 and its AI sites installed (solo_mode.hpp)
 	};
 
 	inline std::string lowercase(std::string_view text)
@@ -238,6 +241,7 @@ namespace forced_teams_rules
 		if (clean == "skillpoints") return feature::skill_points;
 		if (clean == "statpoints") return feature::stat_points;
 		if (clean == "xtractionshop") return feature::xtraction_shop;
+		if (clean == "solomode") return feature::solo_mode;
 		return std::nullopt;
 	}
 
@@ -996,7 +1000,11 @@ namespace forced_teams_rules
 		{
 			on = 1; // registered with the rest, whatever the switches
 		}
-		e.log(std::string(prefix) + call_text("xml2fixFeature", *values) + " -> " + std::to_string(on) + (which ? "" : " (not a feature: forcedteams, addhero, joinhero, skillpoints, statpoints)"));
+		else if (which == feature::solo_mode)
+		{
+			on = e.solo_mode_on() ? 1 : 0;
+		}
+		e.log(std::string(prefix) + call_text("xml2fixFeature", *values) + " -> " + std::to_string(on) + (which ? "" : " (not a feature: forcedteams, addhero, joinhero, skillpoints, statpoints, xtractionshop, solomode)"));
 		if (which == feature::forced_teams && !on)
 		{
 			warn_left_records(e);

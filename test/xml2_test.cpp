@@ -2734,6 +2734,8 @@ namespace
 		bool forced_teams() { return forced; }
 		bool add_hero_on() { return add_on; }
 		bool join_hero_on() { return join_on; }
+		bool solo_on = false;
+		bool solo_mode_on() { return solo_on; }
 		std::optional<int> hero_index(const std::string& name) { const auto f = indices.find(name); return f == indices.end() ? 0 : f->second; }
 		std::optional<bool> herostat(const int index) { return herostats.count(index) != 0; }
 		std::optional<std::string> slot(const int i) { return slots[static_cast<std::size_t>(i)]; }
@@ -3058,6 +3060,16 @@ namespace
 			e.forced = true;
 			CHECK(fake_engine::as_int(xml2fix_feature(e, &u.args)) == 0 && e.last().find("not a feature") != std::string::npos);
 			e.add_on = false;
+			// solomode: whether solo_mode's AI sites installed, whatever ForcedTeams says.
+			script_call solo(vtables);
+			solo.text("SoloMode");
+			e.solo_on = false;
+			CHECK(fake_engine::as_int(xml2fix_feature(e, &solo.args)) == 0);
+			e.solo_on = true;
+			e.forced = false;
+			CHECK(fake_engine::as_int(xml2fix_feature(e, &solo.args)) == 1 && e.logged("xml2fixFeature(\"SoloMode\") -> 1"));
+			e.solo_on = false;
+			e.forced = true;
 		}
 
 		// seatParty: exactly these heroes, compacted; all or nothing.
@@ -3529,8 +3541,11 @@ namespace
 		using namespace forced_teams_rules;
 		std::printf("forced parties ([Game] ForcedTeams, AddHero and JoinHero: seatParty, setSkinset, pushParty, popParty, addHero, joinHero, addSkillPoints)\n");
 
-		// The functions: ten, signatures the game's compiler knows, room in its tree.
-		CHECK(functions.size() == 11 && table_count == 0x12c && builtin_count + table_count == 319 && table_count + builtin_count <= tree_capacity);
+		// The functions: twelve (setSoloMode the last), signatures the game's compiler knows, room in its tree - the tree is
+		// full now (320 names).
+		CHECK(functions.size() == 12 && table_count == 0x12d && builtin_count + table_count == 320 && table_count + builtin_count <= tree_capacity);
+		CHECK(std::string_view(functions[static_cast<std::size_t>(function::solo_mode)].name) == "setSoloMode" &&
+		      std::string_view(functions[static_cast<std::size_t>(function::solo_mode)].args) == "ai");
 		bool signatures_ok = true;
 		for (const auto& f : functions)
 		{
@@ -3543,7 +3558,7 @@ namespace
 		CHECK(std::string_view(functions[static_cast<std::size_t>(function::join_hero)].name) == "joinHero" && std::string_view(functions[static_cast<std::size_t>(function::join_hero)].ret) == "i" &&
 		      std::string_view(functions[static_cast<std::size_t>(function::join_hero)].args) == "s");
 		const auto writes = registration_writes(0x12345678);
-		CHECK(writes[0].va == 0x49fe31 && writes[0].value == 0x12345678 && writes[1].va == 0x49fe36 && writes[1].value == 0x12c && writes[0].size == 4 && writes[1].size == 4);
+		CHECK(writes[0].va == 0x49fe31 && writes[0].value == 0x12345678 && writes[1].va == 0x49fe36 && writes[1].value == 0x12d && writes[0].size == 4 && writes[1].size == 4);
 		CHECK(std::string_view(functions[static_cast<std::size_t>(function::skill_points)].name) == "addSkillPoints" && std::string_view(functions[static_cast<std::size_t>(function::skill_points)].ret) == "n" &&
 		      std::string_view(functions[static_cast<std::size_t>(function::skill_points)].args) == "ai" && skill_points_max == 20 && grant_max >= 4);
 
@@ -3577,6 +3592,7 @@ namespace
 		CHECK(!chosen.registered && !chosen.join_hero && chosen.notes.size() == 1 && chosen.notes[0].find("JoinHero is set but ForcedTeams isn't") != std::string::npos);
 		CHECK(feature_named("forcedteams") == feature::forced_teams && feature_named(" AddHero") == feature::add_hero && feature_named("JoinHero") == feature::join_hero &&
 		      feature_named("SkillPoints") == feature::skill_points && !feature_named("forced_teams") && !feature_named(""));
+		CHECK(feature_named(" solomode ") == feature::solo_mode);
 
 		// Names: cleaned, repeats dropped, compacted.
 		CHECK((split_heroes("magma,,x") == std::vector<std::string>{"magma", "x"}));
@@ -3736,7 +3752,7 @@ namespace
 			}
 		}
 		CHECK(changed == 5 && outside == 0); // 0x0068a908 -> 0x12345678, 0x121 -> 0x12a
-		CHECK(limits_rules::matches(at(registration), "6878563412682c010000e8318903008bc8e85a770300c3"));
+		CHECK(limits_rules::matches(at(registration), "6878563412682d010000e8318903008bc8e85a770300c3"));
 		std::memcpy(image, before.data(), image_size);
 
 		// The strings the handlers send are the game's own.

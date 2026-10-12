@@ -8,6 +8,8 @@
 namespace gameplay_capabilities
 {
  constexpr std::uint16_t entity_layout_id=1, explosive_first_hit_id=2, master_mold_id=3, turret_controller_id=4;
+ // 5 skill rank costs and 6 multipart parts are reserved (0.2.2 wave); 8: X-Men Legends 1 solo mode (solo_mode.hpp).
+ constexpr std::uint16_t solo_mode_id=8;
  // Protocol revision 2: the Phase A agreement - the record appended to the admission messages 18/1A/1B/1F, compared
  // before the native admission callback, a mismatch refused with 1D and the dialog on both sides, and the entity-layout
  // rule with the actor+generic <= world headroom condition. Revision-1 peers (0.2.0i and older) refuse. The plan's

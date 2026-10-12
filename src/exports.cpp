@@ -29,6 +29,7 @@
 #include "discord_presence.hpp"
 #include "display.hpp"
 #include "forced_teams.hpp"
+#include "solo_mode.hpp"
 #include "mold_controller.hpp"
 #include "game_version.hpp"
 #include "gamepad_fix.hpp"
@@ -240,6 +241,9 @@ namespace
 		// pipe's "script" command compiles its statement when it runs, with the functions in place).
 		forced_teams::install(game);
 		mold_controller::install(game);
+		// X-Men Legends 1's solo mode ([Game] SoloMode): six AI sites, one transaction; its script function is the
+		// forced parties' setSoloMode (above), which does nothing unless these sites installed.
+		solo_mode::install(game);
 		if (!game_version::startup_allowed()) return;
 		// XML1 controllers in the shared gameplay record (docs/gameplay-agreement.md): online play is lockstep, so
 		// every peer runs Master Mold's native AI update and must have the same effective controller (rule 3).
@@ -251,6 +255,12 @@ namespace
 			gameplay_agreement::register_rule(gameplay_capabilities::master_mold_id, xml1_capability_rules::master_mold_revision, mold.values, mold.verified);
 			const auto turrets = xml1_capability_rules::turrets();
 			gameplay_agreement::register_rule(gameplay_capabilities::turret_controller_id, xml1_capability_rules::turret_revision, turrets.values, turrets.verified);
+		}
+		// Solo mode changes what every peer's AI heroes do (rule 8): peers must agree on it like the controllers.
+		if (game_version::needs_gameplay_agreement() || solo_mode::requested())
+		{
+			const auto solo = solo_mode::capability();
+			gameplay_agreement::register_rule(gameplay_capabilities::solo_mode_id, 1, solo.values, solo.verified);
 		}
 		// Conversations written for XML1's engine ([Game] AutoAdvance, ReplyVoices, ReplyCursor; on by default):
 		// three code sites of the conversation system, used from the first conversation on; independent of the
