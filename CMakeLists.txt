@@ -72,6 +72,8 @@ add_library(xml2_fix SHARED
 	src/personal_item_text.cpp
 	src/xtract.cpp
 	src/forced_teams.cpp
+	src/script_functions.cpp
+	src/script_function_overflow.cpp
 	src/conversations.cpp
 	src/gameplay_agreement.cpp
 	src/patch_transaction.cpp
@@ -268,6 +270,13 @@ target_link_options(xml2_entity_transfer_test PRIVATE /BASE:0x400000 /DYNAMICBAS
 add_executable(xml2_save_capture_bridge_test test/save_capture_bridge_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
 target_include_directories(xml2_save_capture_bridge_test PRIVATE src)
 target_link_options(xml2_save_capture_bridge_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# [Limits] ScriptFunctions: the decisions and the overflow table, then the retail registration (0x4d75a0) and lookup
+# (0x4d6910) copied from an executable given on the command line and run at their own addresses, stock and patched with
+# the DLL's own stubs (without the executable the native part is SKIPPED). Reserves the retail image address.
+add_executable(xml2_script_functions_test test/script_functions_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/script_function_overflow.cpp)
+target_include_directories(xml2_script_functions_test PRIVATE src)
+target_link_options(xml2_script_functions_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
 # The entity-capacity install's game-free decisions: ledger shape and binding, allocator ring, save claim, transfer
 # bounds, startup quiescence, layout contract.

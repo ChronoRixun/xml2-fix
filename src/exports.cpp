@@ -29,6 +29,7 @@
 #include "discord_presence.hpp"
 #include "display.hpp"
 #include "forced_teams.hpp"
+#include "script_functions.hpp"
 #include "mold_controller.hpp"
 #include "game_version.hpp"
 #include "gamepad_fix.hpp"
@@ -238,6 +239,10 @@ namespace
 		// menu on, which is when names are looked up - sees the new functions. After new_game: both
 		// patch push operands of script-facing code; nothing here depends on limits or test_input (the
 		// pipe's "script" command compiles its statement when it runs, with the functions in place).
+		// [Limits] ScriptFunctions: the game's 320 script function names raised (the fix's own already fill
+		// them). Two code sites of the registration and the compile-time lookup, both first run by the same
+		// registration; before forced_teams, whose table carries any [Test] probes.
+		script_functions::install(game);
 		forced_teams::install(game);
 		mold_controller::install(game);
 		if (!game_version::startup_allowed()) return;

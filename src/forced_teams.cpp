@@ -3,6 +3,7 @@
 #include "ini.hpp"
 #include "log.hpp"
 #include "xtract.hpp"
+#include "script_functions.hpp"
 
 #include <Windows.h>
 
@@ -29,7 +30,8 @@ namespace forced_teams
 
 		// The game's tree keeps a pointer to each entry (0x4d7648-0x4d768a), and every script compile
 		// reads the entry through it: the table lives as long as the process.
-		func_entry table[table_count]{};
+		// The fix's functions, then any [Test] ScriptFunctionProbes (script_functions.hpp).
+		func_entry table[table_count + probe_max]{};
 
 		template <typename T>
 		T at(const DWORD va)
@@ -999,8 +1001,13 @@ namespace forced_teams
 		}
 		// The guards matched both entries: the copy's are the game's, so both are replaced.
 		const int wrapped = wrap_xpoint_menus(table, xpoint_handlers);
+		const auto probes = script_functions::probes();
+		static_assert(sizeof(script_functions_rules::func_entry) == sizeof(func_entry));
+		const auto probe_count = static_cast<DWORD>(probes.size() < probe_max ? probes.size() : probe_max);
+		if (probe_count) std::memcpy(&table[table_count], probes.data(), probe_count * sizeof(func_entry));
+		const DWORD count = table_count + probe_count;
 		const auto table_address = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&table[0]));
-		if (!write_operands(registration_writes(table_address)))
+		if (!write_operands(registration_writes(table_address, count)))
 		{
 			logger::write("forced teams: can't unprotect XMen2.exe's code at 0x%08lX (error %lu) - %s", table_operand, GetLastError(), refused);
 			return;
@@ -1015,9 +1022,12 @@ namespace forced_teams
 			names += (names.empty() ? "" : ", ") + std::string(f.name);
 		}
 		logger::write("forced teams: %zu script functions added (%s); ForcedTeams=%d AddHero=%d JoinHero=%d - the game's registration (0x49fe30) takes the DLL's table at 0x%08lX, "
-		              "its %lu entries and these (%lu of the tree's 320 names with the 19 builtins)",
+		              "its %lu entries, these and %lu probe(s) (%lu names with the 19 builtins; the script function limit is %d)",
 		              functions.size(), names.c_str(), chosen.forced_teams ? 1 : 0, chosen.add_hero ? 1 : 0, chosen.join_hero ? 1 : 0, table_address, retail_count,
-		              builtin_count + table_count);
+		              probe_count, builtin_count + count, script_functions::capacity());
+		if (const DWORD past = past_tree(count); past && script_functions::capacity() <= static_cast<int>(tree_capacity))
+			logger::write("forced teams: WARNING: the last %lu of these are past the game's 320 script function names and the raise isn't installed ([Limits] ScriptFunctions) - "
+			              "the game drops them and scripts lose the statements that call them", past);
 		logger::write("forced teams: %d of %zu Xtraction menus (extractionPoint, extractionPointLite) run the fix's handler first: %s", wrapped, xpoint_menus.size(),
 		              chosen.forced_teams ? "Change Team greyed out while game flag teamlock bit 1 is set (a mission's fixed party)" : "ForcedTeams=0 - Change Team as the game has it");
 	}
