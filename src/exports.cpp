@@ -61,6 +61,7 @@
 #include "entity_capacity.hpp"
 #include "postgame.hpp"
 #include "review_menu.hpp"
+#include "cutscene_mouse.hpp"
 #include "personal_item_text.hpp"
 #include "save_format.hpp"
 #include "save_content_guards.hpp"
@@ -225,6 +226,9 @@ namespace
 		danger_room_gate::install(game);
 		// The Review menu's tabs: five imm8s in REVIEW_PATHS_MENU's own code, used from the first Review on.
 		review_menu::install(game);
+		// [Input] CutsceneMouse: the mouse handler's lock test (0x5fa2d4) also stops the mouse in a cinematic, as
+		// the keys and pads are; used from the first zone on.
+		cutscene_mouse::install(game);
 		personal_item_text::install(game);
 		// An Xtraction Point's Xtract choice ([Game] Xtract=0): two bytes in extractionPoint's own
 		// code, used from the first Xtraction Point on.

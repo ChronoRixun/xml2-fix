@@ -109,9 +109,17 @@ namespace xml2_pad_bindings
 
 		// XMen2.exe's built-in action table (the 2005 retail build, fixed base 0x400000): 42 entries of 0x94 bytes,
 		// a 0x30-byte name, then per player 5 DWORD bindings (2 used), ..., per-slot lock flags at 0x80.
+		// The Advanced Options panel's "Defaults 1/2/3" buttons (0x6188c0) copy the selected player tab's two
+		// slots of every action from one of three built-in preset tables (preset base + button * 0x1848) into
+		// the panel's working copy before "Accept" writes it to the registry: keyboard-only presets, so a
+		// Defaults button erased that player's pad bindings (issue #9). The presets are the same 42 x 0x94
+		// layout; they get the pad layout too. (The handler then unbinds any other player's binding in the same
+		// slot that equals one of the new ones, 0x6189b0, so a key never drives two players: left as it is.)
 		constexpr std::uintptr_t default_table_rva = 0x6EE1F0 - 0x400000;
+		constexpr std::array<std::uintptr_t, 3> preset_table_rvas{0x6E9918 - 0x400000, 0x6EB160 - 0x400000, 0x6EC9A8 - 0x400000};
 		constexpr size_t action_count = 42;
 		constexpr size_t action_size = 0x94;
+		constexpr size_t table_bytes = action_count * action_size;
 		constexpr size_t bindings_offset = 0x30;
 		constexpr size_t locks_offset = 0x80;
 
@@ -154,27 +162,33 @@ namespace xml2_pad_bindings
 			return nullptr;
 		}
 
-		bool patch_default_table()
+		// Adds the pad layout to one 42-entry action table (the defaults or a Defaults preset), filling
+		// only the players' pad slots that aren't locked. `stock`/`stock_names` keep the defaults table's
+		// stock content for migrate_saved_settings, so it is filled only when `remember_stock`.
+		bool patch_table(std::byte* table, const char* what, const bool remember_stock)
 		{
-			auto* table = reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr)) + default_table_rva;
 			if (!is_default_table(table))
 			{
-				logger::write("bindings: not a known XMen2.exe build - pad bindings not added");
+				logger::write("bindings: %s at 0x%08lX isn't the known table - pad bindings not added to it",
+				              what, static_cast<unsigned long>(reinterpret_cast<std::uintptr_t>(table)));
 				return false;
 			}
 
 			DWORD old_protect = 0;
-			VirtualProtect(table, action_count * action_size, PAGE_READWRITE, &old_protect);
+			VirtualProtect(table, table_bytes, PAGE_READWRITE, &old_protect);
 			int patched = 0;
 			for (size_t i = 0; i < action_count; ++i)
 			{
 				const action_entry entry{table + i * action_size};
-				stock_names[i] = entry.name();
-				for (int player = 0; player < players; ++player)
+				if (remember_stock)
 				{
-					for (int slot = 0; slot < slots; ++slot)
+					stock_names[i] = entry.name();
+					for (int player = 0; player < players; ++player)
 					{
-						stock[i][player * slots + slot] = entry.binding(player, slot);
+						for (int slot = 0; slot < slots; ++slot)
+						{
+							stock[i][player * slots + slot] = entry.binding(player, slot);
+						}
 					}
 				}
 
@@ -192,8 +206,23 @@ namespace xml2_pad_bindings
 					}
 				}
 			}
-			VirtualProtect(table, action_count * action_size, old_protect, &old_protect);
-			logger::write("bindings: added %d gamepad bindings to the game's defaults", patched);
+			VirtualProtect(table, table_bytes, old_protect, &old_protect);
+			logger::write("bindings: added %d gamepad bindings to %s", patched, what);
+			return true;
+		}
+
+		bool patch_default_table()
+		{
+			auto* image = reinterpret_cast<std::byte*>(GetModuleHandleW(nullptr));
+			if (!patch_table(image + default_table_rva, "the game's defaults", true))
+			{
+				logger::write("bindings: not a known XMen2.exe build - pad bindings not added");
+				return false;
+			}
+			for (const auto rva : preset_table_rvas)
+			{
+				patch_table(image + rva, "a Defaults preset", false);
+			}
 			return true;
 		}
 
