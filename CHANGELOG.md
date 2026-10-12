@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `[Game] Xml1Turrets` / `[Xml1Turrets]`: X-Men Legends I's scan turrets scan, track and fire again (the HAARP
+  exterior missile tanks), with the first game's timing; online peers must agree on every placement (rule 4).
+
 ## 1.4.0 - 2026-10-12
 
 The engine half of Legends Classic 0.2.0. For X-Men Legends II as it ships only the mouse fix applies; everything

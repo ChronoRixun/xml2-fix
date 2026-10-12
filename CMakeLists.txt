@@ -37,6 +37,7 @@ add_library(xml2_fix SHARED
 	src/mold_controller.cpp
 	src/mold_query.cpp
 	src/mold_effects.cpp
+	src/xml1_turrets.cpp
 	src/stat_help.cpp
 	src/geometry_sharing.cpp
 	src/ladder_paths.cpp

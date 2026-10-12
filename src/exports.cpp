@@ -30,6 +30,7 @@
 #include "display.hpp"
 #include "forced_teams.hpp"
 #include "mold_controller.hpp"
+#include "xml1_turrets.hpp"
 #include "game_version.hpp"
 #include "gamepad_fix.hpp"
 #include "iat_hook.hpp"
@@ -240,17 +241,21 @@ namespace
 		// pipe's "script" command compiles its statement when it runs, with the functions in place).
 		forced_teams::install(game);
 		mold_controller::install(game);
+		// XML1 scan turrets ([Game] Xml1Turrets, builder [Xml1Turrets]): one pointer of the native event
+		// scheduler's vtable (its per-frame dispatch); after mold_controller, whose query guards it shares.
+		xml1_turrets::install(game);
 		if (!game_version::startup_allowed()) return;
 		// XML1 controllers in the shared gameplay record (docs/gameplay-agreement.md): online play is lockstep, so
 		// every peer runs Master Mold's native AI update and must have the same effective controller (rule 3).
-		// No turret controller exists in this build: rule 4 is advertised as verified off.
+		// The scan turrets run from the same lockstep update on every peer (rule 4): a process that does not request
+		// them advertises revision 1 verified off, as 1.4.0 did.
 		// Registering a requested controller enlists the agreement even in a non-LC installation.
-		if (game_version::needs_gameplay_agreement() || mold_controller::requested())
+		if (game_version::needs_gameplay_agreement() || mold_controller::requested() || xml1_turrets::requested())
 		{
 			const auto mold = mold_controller::capability();
 			gameplay_agreement::register_rule(gameplay_capabilities::master_mold_id, xml1_capability_rules::master_mold_revision, mold.values, mold.verified);
-			const auto turrets = xml1_capability_rules::turrets();
-			gameplay_agreement::register_rule(gameplay_capabilities::turret_controller_id, xml1_capability_rules::turret_revision, turrets.values, turrets.verified);
+			const auto turrets = xml1_turrets::capability();
+			gameplay_agreement::register_rule(gameplay_capabilities::turret_controller_id, xml1_capability_rules::turret_revision_for(xml1_turrets::requested()), turrets.values, turrets.verified);
 		}
 		// Conversations written for XML1's engine ([Game] AutoAdvance, ReplyVoices, ReplyCursor; on by default):
 		// three code sites of the conversation system, used from the first conversation on; independent of the

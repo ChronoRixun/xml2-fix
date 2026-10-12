@@ -1,8 +1,8 @@
 # XML1 Master Mold controller
 
 `Game.Xml1MasterMold` defaults to off. The first-game builder enables it only with
-its generated, validated saved-stage binding. No turret scanner or weapon
-controller ships in this build.
+its generated, validated saved-stage binding. The scan turret controller
+(`Game.Xml1Turrets`) is described in its own section below.
 
 Master Mold runs at the native brain state dispatcher, `0x5173f3`, after native
 lifecycle, conversation and wait gates. Its handled path rejoins native movement
@@ -112,8 +112,7 @@ requested registers verified off `{0,0,0,0}`; requested but not installed (missi
 binding, guard, query/effect support or transaction refusal) registers unverified,
 which closes host/join for that process. Peers whose Master Mold state differs,
 including one side off, are refused by the native agreement before admission.
-Rule 4 (turrets), revision 1, is always verified `{0,0,0,0}`: no turret controller
-exists in this build. Failure to install a required socket exclusion refuses
+Rule 4 (turrets) is described below. Failure to install a required socket exclusion refuses
 startup.
 
 `xml2_xml1_controllers_test` exercises selection counterexamples, transaction
@@ -122,3 +121,60 @@ Live traces show the three independent floor attacks recurring at their native
 ten-second deadlines, automatic core destruction, saved phase reconstruction and
 ending progression. Further acceptance includes original-game visual comparisons,
 and broader interruption/revisit cases.
+
+## XML1 scan turrets
+
+`Game.Xml1Turrets` defaults to off. The first-game builder enables it with one
+`[Xml1Turrets]` line per placement (`Count`, `T1`..`T32`):
+`zone|instance|px,py,pz,rx,ry,rz|visrange,minspeed,mintime,resetdelay,visextent,yawextent,pitchextent,turnrate,team|kind,recoil,count,spread,speed,accuracy,range,damage_lo,damage_hi|projectile|entfile`,
+all from the original placement, its turret weapon and the first game's value table.
+Any malformed line, guard mismatch or refused hook keeps every turret an inert physent
+(the 1.4.0 behaviour) with one log line.
+
+The first game's `scanturretent` (default.xbe class registration `0x3571c0`, size
+`0x380`, parent `scanent`) runs three self-rescheduling events. The controller keeps
+their state per placement and runs them from the native event scheduler's dispatch:
+the scheduler singleton `0x75d340`'s vtable `0x68de14` slot `+0xc` (`0x4b2d60`), which
+the game update calls once per frame with the game time (`0x46f0e9`). One pointer is
+replaced through the shared install transaction; the native dispatch always runs first.
+No DLL event enters the native scheduler and nothing is saved: a zone load recreates the
+scanner from the authored placement, as the original constructor does.
+
+| Original (XBE) | Behaviour kept |
+|---|---|
+| `0xa8600` / `0xa83e0` | defaults visrange 600, minspeed 0, mintime 0.75, visextent 30, yaw/pitch extent 45, turnrate 20 deg/s, team hero; the one authored `resetdelay` fills both the track-loss timeout (+0x2d4) and the sweep pause (+0x2d0); `turndelay` is never read |
+| `0xa9000` | acquisition: off unless enabled (XBE flag bit 19 = PC bit 20); scanning reschedules after 1.0 s, tracking after 0.1 s; up to four team-filtered candidates in the vision cone, nearest first, living, then the nearest one in line of sight; seen time accumulates the event interval; scanning -> tracking at `mintime`; tracking -> scanning after `resetdelay` unseen |
+| `0xa8a90` / `0x120b00` | rotation every 0.01 s (1.0 s idle): sweep to rest yaw +- yawextent in the sweep direction, pause `resetdelay` at each end; tracking turns the shorter way to the target, pitch clamped to rest +- pitchextent and yaw to the nearer limit when outside the extents; arrival is a squared angle error under 0.001 |
+| `0xa9a40` / `0xa9960` / `0xa99e0` | firing: polls every 1.0 s; while tracking and seen within the last second it arms a burst of 20 weapon fires after 1.0 s; each fire reschedules after the weapon's returned recoil (`0xbcba0` returns prototype +0x1b4) |
+| `0xbb6f0` / `0x5a090` | a projectile weapon's fire spawns `count` projectiles fanned about the muzzle yaw: k from the fan centre, yaw - k x spread degrees, start + k along the right vector, speed x (1 + 0.1 k) |
+| `0xbcc47..0xbcc99` | direct damage: one integer draw in trunc(min x 0.7f)..trunc(min x 1.3f) per weapon fire, from the native gameplay random stream |
+| `0x96ba0` | homing: a homing projectile of a scanner source homes on the scanner's target; each update its direction becomes the velocity direction plus f x the unit direction to the target's origin, f = (10 + age) x 0.05 capped at 1.5, at unchanged speed (nozhoming keeps it level). PC `projectileent` has no in-flight homing (only `guidedprojectileent`), so the controller steers the turret's own homing projectiles once per dispatch (velocity +0x120, setter `0x473640`) |
+
+PC services: candidate query `0x4ab6d0` (actor class `0x70b83c`, filter mode 2 on the
+team bit, sphere of visrange, distance order `0x683ed0`); line of sight as the native
+sentry does it (`0x4b42c0..0x4b4361`: obstruction class `0x778a4c`, swept segment
+between the two centres, direction order `0x68202c`, clear when nothing is found);
+projectile service `0x450030` vt+0x28 (`0x4510a0`, one projectile per call: description
+origin +0, direction +0xc, entity key +0x1c, speed +0x24, count +0x2c) with an attack from
+`0x429860` owned by the turret's handle - its contact damage reaches a hero through the
+native collision and damage path; projectile definitions from the weapon's entity file, registered once
+(`0x564a80`/`0x564eb0`, definition manager `0x4625c0` vt+4). Placement binding uses the
+authored position and name (`haarp_ext02` also has a waypoint named `tank_turret`).
+
+Not mapped: the XBE awake bit (+4 bit 15, scanning only while set unless tracking) is
+treated as set; the weapon's emitter bolts (shots leave from the turret's centre); scan/rotate
+loop sounds, the turret's fire animation, the muzzle effect,
+the AI danger notice after each shot (`0xf9a00` vt+0x22c) and the minspeed/stealth
+candidate filters are not reproduced. Bullet (`0xba420`), flame and beam weapons are not
+emitted: the builder lists only projectile turrets (the two HAARP exterior tanks). A PC bullet
+needs the hit service `0x453160`, whose to-hit roll `0x44f450` reads character fields of the
+attacker (+0x35c, +0x579/+0x57a): a physent attacker is not valid there, and the beam routine
+`0x451cc0` is actor-centric too. The XML1 missile's `explodradius` is not an attribute either
+engine reads (the original reads `exploderadius`), so its area damage is 0 in both; the damage
+is the direct contact draw.
+
+Online play: every peer runs the controller from the same lockstep scheduler dispatch,
+with game time and the gameplay random stream only. Rule 4 revision 2 registers
+`{1, placements, FNV-1a-32 of every applied line in order, 0}`; a requested but
+uninstalled controller registers unverified (host/join closed); a process that does
+not request it keeps revision 1 `{0,0,0,0}`, as 1.4.0.
