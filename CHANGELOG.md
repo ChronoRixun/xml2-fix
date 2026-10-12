@@ -22,7 +22,7 @@ Legends II as it ships only the display, pad and cutscene-mouse fixes apply; eve
   2 skill / 8 stat points on every fifth level ([details](docs/rank-costs.md)). A campaign saved before these keys
   were installed gets the fifth-level points its heroes missed, once, on its first load.
 - `[Game] Xml1Multipart`: breakable parts - Juggernaut's helmet, the Sentinels' arms ([details](docs/multipart.md)).
-- `[Game] X1Leader`: the first game's leaders (heroes don't flinch from their projectiles; their drop rule).
+- `[Game] X1Leader`: the first game's leaders (their drop rule; the pain rule for their non-cold projectiles).
 - `[Game] SoloMode`: the first game's solo mode at its gaps and bridges ([details](docs/solo-mode.md)).
 - `[Game] DeathRule=xml1`: an entity dies on the hit that leaves it below 1 health
   ([details](docs/death-threshold.md)).
