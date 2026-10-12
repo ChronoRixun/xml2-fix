@@ -184,8 +184,11 @@ reached. From 1.4 the game gets the point it is actually shown at, and a windowe
 monitors (a maximized or minimized window is left to Windows).
 
 **Exclusive fullscreen on high-refresh desktops.** On some PCs (seen at 2560x1440 and 180 Hz) the game's own
-fullscreen device request fails, and the game then resets its resolution settings. This is the game's request, not a
-new problem; until a fix (planned), use `Mode=borderless`, which runs at your desktop's resolution and refresh rate.
+fullscreen device request failed, and the game then reset its resolution settings. From 1.5 the fix asks only for a
+mode the adapter lists (a resolution it doesn't list falls back to the desktop's mode and refresh rate), the panel's 8x
+FSAA asks for 8 samples and every mode lowers a request to the highest level the adapter supports at the device's real
+format, and in the fix's own modes a failed device no longer wipes the display settings. If exclusive fullscreen still
+fails on your PC, `Mode=borderless` runs at your desktop's resolution and refresh rate.
 
 **Resolutions.** The game keeps its Video options list in a table with room for 20 entries and no bounds check: a modern adapter offers more sizes than that (24 on the development PC), and the ones past the 20th are written over the default key bindings that follow the table. With a `Mode` set the fix builds the list itself (your adapter's sizes plus your desktop's) and trims it to those 20. `ResolutionList=all` gives the game a table of its own with 64 entries instead (after checking the game's code is the retail build's; on any other build the list is trimmed to 20, so it can't overflow), and fills the list in every mode, the game's own included: every size your adapter offers, your desktop's resolution and, in the borderless and windowed modes, the common sizes of your desktop's aspect ratio plus half and three quarters of it as render-scale presets (1280x720 and 1920x1080 on a 2560x1440 desktop, stretched to the screen in borderless mode). `ResolutionList=game` keeps the game's 20-entry table but trims the list to it in every mode (the overflow fix alone). Without `ResolutionList` and without a `Mode`, the list is the game's own, overflow and all, as it ships. `Width`/`Height` from the ini shows as the selected entry. A resolution still applies at the next start, with the game's own restart notice.
 
@@ -625,10 +628,16 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `RankCosts` | `0` | `1`: a talent rank costs the `cost` of its `<level>` (1 without one) when it is bought, refunded, auto-spent, respecced or lost with a level, and the skills screen offers it only when the hero can pay, as in X-Men Legends I ([details](docs/rank-costs.md)) |
 | `LevelSkillPoints` | (none) | `xml1`: a level divisible by 5 gives (and a level lost takes back) 2 skill points, any other 1, as in X-Men Legends I ([details](docs/rank-costs.md#skill-points-per-level-gamelevelskillpointsxml1)) |
 | `LevelStatPoints` | (none) | `xml1`: a level divisible by 5 gives (and a level lost takes back) 8 stat points, any other 4: X-Men Legends I's 2 / 1 for heroes whose stats are its x 4 ([details](docs/rank-costs.md)) |
+| `PackAmount` | `xml2` | `xml1`: a health or energy pack restores a quarter of the maximum, as in X-Men Legends I, instead of a third ([details](docs/pack-amount.md)) |
+| `DeathRule` | `xml2` | `xml1`: an entity dies on the hit that leaves it below 1 health, as in X-Men Legends I, instead of only at 0 ([details](docs/death-threshold.md)) |
+| `Xml1Multipart` | `0` | `1`: X-Men Legends I's breakable parts (a stats `<Multipart>` row's health, break, effects and the attacks it carries: Juggernaut's helmet, the Sentinels' arms) ([details](docs/multipart.md)) |
+| `X1Leader` | `0` | `1`: the stats entries a mod lists in `Data\x1leader.txt` are X-Men Legends I leaders: heroes don't flinch from their projectiles, and they drop as the first game's leaders do (four drops, a health / energy / Xtreme pick) |
+| `SoloMode` | `0` | `1`: X-Men Legends I's solo mode: `setSoloMode(actor, on)` keeps the rest of the party behind (a mod's solo boxes and bridges), and they regroup as in the first game ([details](docs/solo-mode.md)) |
 | `ClassicMainBackdrop` | `0` | `1`: the classic main menu's Cerebro room is drawn with its original bright textures ([details](#classic-main-menu-backdrop)) |
 | `ClassicMainPanelBounds` | `0` | `1`: the classic main menu's buttons answer the mouse over their whole visible panels ([details](#classic-main-menu-backdrop)) |
 | `Xml1MasterMold` | `0` | `1`: X-Men Legends I's Master Mold fight; needs `Xml1MoldStage` ([details](docs/xml1-controllers.md)) |
 | `Xml1MoldStage` | *(none)* | the saved flag holding that fight's stage, as `flag:first_bit:width`; written by the port's builder |
+| `Xml1Turrets` | `0` | `1`: X-Men Legends I's scan turrets scan, track and fire, from the mod's `[Xml1Turrets]` section (`Count`, `T1`..`T32`, one placement each; written by the port's builder) ([details](docs/xml1-controllers.md)) |
 
 **[Balance]**: X-Men Legends I's combat numbers, for the port, which sets these itself ([details](docs/balance.md)). Every key is on its own; leave them out for XML2 as it ships.
 
@@ -676,6 +685,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `PipeName` | `xml2-fix-input` | the pipe's name: letters, digits, `-` and `_`, up to 64 |
 | `VirtualPads` | `0` | `1` to `4`: pads the game sees with nothing plugged in, in place of real controllers |
 | `ScriptFunctionProbes` | `0` | `1` to `64`: test functions `xml2fixProbe1`..`N` registered behind the fix's own, each call logged ([details](docs/script-functions.md)) |
+| `SoloTrace` | `0` | `1`: the log names each automatic solo-mode regroup check and the peers it reached ([details](docs/solo-mode.md)) |
 
 **[Debug]**
 
