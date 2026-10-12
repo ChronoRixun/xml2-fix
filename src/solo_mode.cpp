@@ -63,6 +63,10 @@ namespace solo_mode
 
 		party state;
 		bool was_requested = false, sites_installed = false;
+		// [Test] SoloTrace: a line per regroup check - what refused it, or each peer's navigator status.
+		bool trace = false;
+		int checked = 0, statuses[4]{}, refused = 0; // refused: 0 no, 1 hero flag, 2 navigator, 3 off screen, 4 status
+		u32 handles[4]{};
 		float last_tick = -1.0f;
 
 		bool is_character(void* e)
@@ -162,9 +166,10 @@ namespace solo_mode
 		// teleport (0, 0), where the first peer that can reach the hero settles it.
 		bool regroup_allowed(void* hero, bool manual, bool all = true)
 		{
+			checked = refused = 0;
 			__try
 			{
-				if (!hero || (at<unsigned char>(hero, ai_flags) & 4)) return false;
+				if (!hero || (at<unsigned char>(hero, ai_flags) & 4)) { refused = 1; return false; }
 				void* nav = at<void*>(hero, navigator);
 				const int group = at<int>(hero, controller);
 				for (void* peer : party_entities())
@@ -173,19 +178,22 @@ namespace solo_mode
 					{
 						continue;
 					}
-					if (!nav || at<u32>(nav, 0) != path_vtable) return false;
+					if (!nav || at<u32>(nav, 0) != path_vtable) { refused = 2; return false; }
 					const float position[3]{at<float>(peer, origin), at<float>(peer, origin + 4), at<float>(peer, origin + 8)};
 					if (manual)
 					{
 						void* camera = fn<getter_t>(camera_getter)();
 						if (!camera || at<u32>(camera, 0) != camera_vtable) return false;
-						if (!at<visible_t>(at<const void*>(camera, 0), camera_visible_slot)(camera, nullptr, position, regroup_view_margin, nullptr)) return false;
+						if (!at<visible_t>(at<const void*>(camera, 0), camera_visible_slot)(camera, nullptr, position, regroup_view_margin, nullptr)) { refused = 3; return false; }
 					}
 					at<reset_t>(at<const void*>(nav, 0), 4)(nav, nullptr);
 					// XMen2.exe's query takes a fourth argument: 1 skips the far-path (buoy) lookup the PC added
 					// (0x496556), leaving default.xbe's near search (0x90c50).
-					if (at<query_t>(at<const void*>(nav, 0), 0)(nav, nullptr, position, regroup_radius, regroup_steps, 1) != regroup_reached)
+					const int status = at<query_t>(at<const void*>(nav, 0), 0)(nav, nullptr, position, regroup_radius, regroup_steps, 1);
+					if (checked < 4) { handles[checked] = at<u32>(peer, 0x1c); statuses[checked] = status; ++checked; }
+					if (status != regroup_reached)
 					{
+						refused = 4;
 						return false;
 					}
 					if (!all)
@@ -225,7 +233,14 @@ namespace solo_mode
 			void* hero = find("_ACTIVE_HERO_");
 			h = handle_of(hero);
 			if (!state.regroup_due(state.contains(h), t)) return;
-			if (regroup_allowed(hero, false))
+			const bool allowed = regroup_allowed(hero, false);
+			if (trace)
+			{
+				logger::write("solo mode trace: regroup check at %.2f s from %08X: %s, refused %d, %d peers: %08X=%d %08X=%d %08X=%d", t, h,
+				              allowed ? "regroup" : "stay solo", refused, checked, handles[0], checked > 0 ? statuses[0] : -1,
+				              handles[1], checked > 1 ? statuses[1] : -1, handles[2], checked > 2 ? statuses[2] : -1);
+			}
+			if (allowed)
 			{
 				const auto r = toggle(false);
 				say(hero, voice_end);
@@ -595,6 +610,7 @@ namespace solo_mode
 	void install(HMODULE game)
 	{
 		was_requested = ini::flag(L"Game", L"SoloMode", false);
+		trace = ini::flag(L"Test", L"SoloTrace", false);
 		sites_installed = false;
 		if (!was_requested) return;
 		if (reinterpret_cast<std::uintptr_t>(game) != limits_rules::image_base)

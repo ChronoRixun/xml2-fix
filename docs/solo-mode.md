@@ -49,6 +49,9 @@ sites installed. The automatic regroup runs the original schedule on the game cl
 clock value) and uses the hero's own CPath (vtable 0x689b78; query 0x496280 with the PC's extra argument 1, which
 skips the far-path lookup XMen2.exe added, leaving the first game's near search).
 
+`[Test] SoloTrace=1` writes one line per automatic regroup check to xml2-fix.log: what refused it, or each peer's
+navigator status (0 failed, 1 still searching, 2 reached, 3 already there, 4 blocked).
+
 Online: shared gameplay rule 8, `{installed, 1, 0, 0}` ([gameplay-agreement.md](gameplay-agreement.md)). Entering is
 refused with more than one human player, as in the original.
 
