@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.4.0 - <date TBD>
+## 1.4.0 - 2026-10-12
 
 The engine half of Legends Classic 0.2.0. For X-Men Legends II as it ships only the mouse fix applies; everything
 else is off until a mod's `xml2-fix.ini` asks for it (the port's builder sets it all).
