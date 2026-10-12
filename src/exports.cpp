@@ -261,9 +261,10 @@ namespace
 		explosive_first_hit::install(game);
 		if (game_version::needs_gameplay_agreement())
 			gameplay_agreement::register_rule(gameplay_capabilities::explosive_first_hit_id,1,{explosive_first_hit::installed() ? 1u : 0u,0,0,0},explosive_first_hit::verified());
-		// X-Men Legends 1's skill rank costs ([Game] RankCosts): eight sites of the skill-point code (the skills screen,
-		// its buyable test, the automatic spending, the respec, losing levels); none is anyone else's. Every peer
-		// charges the same points for the same ranks (rule 5), or their heroes' points drift apart.
+		// X-Men Legends 1's skill-point rules ([Game] RankCosts, LevelSkillPoints): the rank costs (eight sites of the
+		// skill-point code: the skills screen, its buyable test, the automatic spending, the respec, losing levels) and
+		// the points per level (the level processing's grant and take-back); none is anyone else's. Every peer charges
+		// and grants alike (rule 5), or their heroes' points drift apart.
 		rank_costs::install(game);
 		if (game_version::needs_gameplay_agreement())
 		{

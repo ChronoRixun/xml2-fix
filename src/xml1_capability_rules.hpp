@@ -32,8 +32,9 @@ inline registration master_mold(bool requested,bool installed,std::string_view f
 // advertises verified off; a future controller registers its own revision/values.
 constexpr std::uint16_t turret_revision=1;
 
-// Skill rank costs (rank_costs.cpp, ID 5) revision 1: values {installed, highest cost the data may give, 0, 0}. The
-// costs themselves are the build's talent data, which [Online] ContentFingerprint already makes equal on both peers.
-constexpr std::uint16_t rank_costs_revision=1;
+// X-Men Legends 1's skill-point rules (rank_costs.cpp, ID 5) revision 2: values {rank costs installed, highest cost
+// honoured (7) or 0, the bonus level step (5) or 0, its skill points (2) or 0} ([Game] RankCosts, LevelSkillPoints).
+// Revision 1 (never released) had {installed, 7, 0, 0}. The costs themselves are the build's talent data.
+constexpr std::uint16_t rank_costs_revision=2;
 inline registration turrets(){ return {{0,0,0,0},true}; }
 }

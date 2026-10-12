@@ -92,6 +92,22 @@ namespace rank_costs_rules
 	// What the patched level-down loop subtracts besides its own DEC EBP: cost - 1.
 	constexpr int level_down_extra(int removed_cost) { return removed_cost - 1; }
 
+	// [Game] LevelSkillPoints=xml1: X-Men Legends 1's skill points per level (default.xbe 0xb1ca0): each level gained
+	// gives 1, a level divisible by 5 gives 2 (the same 1 / 2 goes to the stat points there, through stat_rules); each
+	// level lost takes the same number back - from the unspent points first, the rest as ranks. XMen2.exe (0x4bbae0)
+	// gives and takes 1 per level (0x4bbb6f INC EAX; 0x4bbc3e..0x4bbc53 min(points, 1)).
+	constexpr int bonus_every = 5, bonus_points = 2;
+	constexpr int level_skill_points(int level) { return level > 0 && level % bonus_every == 0 ? bonus_points : 1; }
+	// Losing `level`: what the unspent points become and how many points are still missing (taken back as ranks).
+	// The game's own min(points, n) on the signed word (JG): a negative word gives everything back.
+	struct loss { int points_after, missing; };
+	constexpr loss level_loss(int points, int level)
+	{
+		const int n = level_skill_points(level);
+		const int taken = points > n ? n : points;
+		return {points - taken, n - taken};
+	}
+
 	// ---- the sites ----
 	struct guard
 	{
@@ -101,7 +117,7 @@ namespace rank_costs_rules
 	};
 
 	// Code the stubs call or return into, and the function bodies around each site (retail bytes).
-	inline constexpr std::array<guard, 19> guards{{
+	inline constexpr std::array<guard, 21> guards{{
 		{0x544a30, "668b4114c3", "unspent skill points getter (ax = block+0x14)"},
 		{0x4692f0, "8d4104c3", "a CStats' saved block (stats+4)"},
 		{0x4c05b0, "a19c33770085c0750ae8c2ffffffa19c337700c3", "the talent registry's getter"},
@@ -121,6 +137,8 @@ namespace rank_costs_rules
 		{0x5d2892, "33c08a068bcf83e03f2bc38be8", "respec: committed - base"},
 		{0x4bbd13, "8d4c241c50518bcfe8d0f5f7ff4d0f856effffff", "losing levels: one rank per missing point"},
 		{0x43c8a8, "8b44247085c0", "automatic spending: after the loop (new-power slots)"},
+		{0x4bbb54, "8bcee8e58e08008bce83c00450e88ae8f7ff8bcee8c38e08008bce4050e83aeaf7ff0fb6431c473bf87ec5", "a level gained: +4 stat points, +1 skill point (EDI = the level)"},
+		{0x4bbc34, "8bcfe8f58d08000fbfc083f801b9010000007f028bc82bc1bd010000002be9508bcfe855", "a level lost: min(points, 1) taken, the rest from ranks ([esp+0x10] = the level)"},
 	}};
 
 	// The writes: a CALL to the site's stub over the retail instructions (padded with NOPs), except the screen's -
@@ -145,6 +163,13 @@ namespace rank_costs_rules
 		{0x5d2898, "83e03f2bc38be8", shape::call, "respec: the costs of the ranks above base"},
 		{0x4bbd19, "8bcfe8d0f5f7ff", shape::call, "losing levels: a rank taken back covers its cost"},
 		{0x4bbd21, "0f85", shape::jg, "losing levels: loop while points are missing (JNZ -> JG)"},
+	}};
+
+	// [Game] LevelSkillPoints sites (installed in the same transaction when that key asks for them).
+	enum level_site_id : std::size_t { level_gained, level_lost, level_site_count };
+	inline constexpr std::array<site, level_site_count> level_sites{{
+		{0x4bbb68, "e8c38e08008bce40", shape::call, "a level gained: + 2 on a level divisible by 5, else 1"},
+		{0x4bbc36, "e8f58d08000fbfc083f801b9010000007f028bc82bc1bd010000002be9", shape::call, "a level lost: the same 1 / 2 taken back"},
 	}};
 
 	constexpr std::size_t hex_size(std::string_view hex) { return hex.size() / 2; }

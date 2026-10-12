@@ -33,6 +33,23 @@ getter is CTalent vt+0x34 (0xb3ad0, 1 by default); the skills menu 0x16c800 char
 when the hero has its cost, and losing levels 0xb1ca0 takes ranks back while points are missing. Its requirement sweep
 (0x167e2d) refunds 1 per rank; the fix refunds the cost there too, so no point is lost.
 
+## Skill points per level (`[Game] LevelSkillPoints=xml1`)
+
+X-Men Legends I gives 1 skill point for each level gained and 2 for a level divisible by 5 (5, 10 .. 45), and takes
+the same number back for each level lost - from the unspent points first, the rest as ranks (default.xbe 0xb1ca0; the
+same 1 / 2 goes to its stat points there). XMen2.exe's level processing (0x4bbae0, run for every level between the
+hero's processed level and its level, whatever gave the XP) gives and takes 1. With the key:
+
+| Where | Stock | `xml1` |
+|---|---|---|
+| 0x4bbb68, a level gained (EDI = the level) | +1 | +2 on a level divisible by 5, else +1 |
+| 0x4bbc36, a level lost ([esp+0x10] = the level) | min(points, 1) from the unspent points, the rest as ranks | the same with 2 on a level divisible by 5 |
+
+Stat points stay XMen2.exe's (+4 per level and the autospend class bonus). `[Game] XPCurve=xml1` only changes how much
+XP a level needs (and the cap, 45); every level still goes through 0x4bbae0, so a hero gets 9 extra points by level 45.
+The SKILL pickup (`addSkillPoints`) adds its point directly and is unaffected. The same transaction installs both keys'
+sites; rule 5 carries both (below).
+
 ## Saves
 
 Nothing about the save changes. A hero's unspent skill points and talent ranks are stored as they are and nothing
@@ -42,10 +59,11 @@ so such a hero would get back more than it paid.
 
 ## Install and online
 
-Nineteen guards (the callees and every site's surroundings) and the nine writes go through one code transaction
+Twenty-one guards (the callees and every site's surroundings) and the nine (+ two for LevelSkillPoints) writes go through one code transaction
 (`xml1_hook_transaction`): a mismatch or a failed write leaves the game's own 1-point rule with one log line. Co-op
-peers must charge alike: gameplay agreement rule 5, revision 1, `{installed, 7, 0, 0}` (verified `{0,0,0,0}` without
-the key; requested but not installed is unverified and closes online play). The costs themselves come from the
+peers must charge and grant alike: gameplay agreement rule 5, revision 2, `{RankCosts installed, 7 or 0,
+LevelSkillPoints installed ? 5 : 0, ? 2 : 0}` (verified `{0,0,0,0}` without either key; a requested part not installed is
+unverified and closes online play). The costs themselves come from the
 build's talent files, as every other talent number does.
 
 Tests: `xml2_rank_costs_test [XMen2.exe]` runs the cost rules, then the production install and every stub at the

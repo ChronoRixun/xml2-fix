@@ -11,13 +11,20 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <vector>
 
 extern "C" std::uint8_t fixture_space[0x400000];
 
 // The production installer against isolated settings/logger/startup providers.
-namespace ini { bool requested = true; bool flag(const wchar_t*, const wchar_t*, bool) { return requested; } }
+namespace ini
+{
+	bool requested = true;
+	std::optional<std::string> level_rule;
+	bool flag(const wchar_t*, const wchar_t*, bool) { return requested; }
+	std::optional<std::string> text(const wchar_t*, const wchar_t*) { return level_rule; }
+}
 namespace logger { void write(const char*, ...) {} }
 namespace game_version { bool refused = false; void refuse_startup() { refused = true; } }
 
@@ -202,6 +209,43 @@ namespace
 		}
 	}
 
+	// a level gained, 0x4bbb66 (MOV ECX,ESI; CALL): ESI = block, EDI = level; returns EAX (points after)
+	std::uint32_t r_level;
+	__declspec(naked) void drive_level_gained()
+	{
+		__asm {
+			pushad
+			mov esi, block_ptr
+			mov edi, r_level
+			mov eax, 0x4bbb66
+			call eax
+			mov r_eax, eax
+			popad
+			ret
+		}
+	}
+	// a level lost, 0x4bbc34 (MOV ECX,EDI; CALL): EDI = block, [esp+0x10] = level; returns EAX (points), EBP (missing)
+	__declspec(naked) void drive_level_lost()
+	{
+		__asm {
+			pushad
+			push 0
+			push r_level
+			push 0
+			push 0
+			push 0
+			mov edi, block_ptr
+			mov ebp, 0x5a5a
+			mov eax, 0x4bbc34
+			call eax
+			mov r_eax, eax
+			mov r_ebp, ebp
+			add esp, 20
+			popad
+			ret
+		}
+	}
+
 	bool retail_check(const char* path)
 	{
 		std::ifstream f(path, std::ios::binary);
@@ -238,6 +282,15 @@ namespace
 				std::printf("  site 0x%08X differs: %s\n", s.va, s.what);
 			}
 		}
+		for (const auto& s : level_sites)
+		{
+			const auto o = file_of(s.va);
+			if (!o || std::memcmp(&d[o], bytes_of(s.before).data(), hex_size(s.before)))
+			{
+				ok = false;
+				std::printf("  level site 0x%08X differs: %s\n", s.va, s.what);
+			}
+		}
 		return ok;
 	}
 }
@@ -256,6 +309,11 @@ int main(int argc, char** argv)
 	auto xml1 = [](int i) { return (i == 0 || i == 5 || i == 10) ? 2 : 1; };
 	check(respec_refund(11, 0, xml1) == 14 && respec_refund(6, 1, xml1) == 6 && respec_refund(1, 1, xml1) == 0 &&
 	      respec_refund(0, 1, xml1) == -1, "respec refunds the costs above base (stock difference below it)");
+	check(level_skill_points(4) == 1 && level_skill_points(5) == 2 && level_skill_points(9) == 1 && level_skill_points(10) == 2 &&
+	      level_skill_points(45) == 2 && level_skill_points(1) == 1, "XML1: 2 skill points on levels 5, 10 .. 45, else 1");
+	check(level_loss(3, 10).points_after == 1 && level_loss(3, 10).missing == 0 && level_loss(1, 10).points_after == 0 &&
+	      level_loss(1, 10).missing == 1 && level_loss(0, 9).missing == 1 && level_loss(-2, 5).points_after == 0 &&
+	      level_loss(-2, 5).missing == 4, "losing a level: its 1 / 2 points from the unspent word first (the game's signed min)");
 	check(level_down_remaining(1, 2) == -1 && level_down_remaining(1, 1) == 0 && level_down_extra(2) == 1 && level_down_extra(1) == 0,
 	      "losing a level: a 2-point rank covers the missing point, the overshoot is not refunded (XML1)");
 	bool layout = true;
@@ -288,6 +346,8 @@ int main(int argc, char** argv)
 			put_hex(g.va, g.hex);
 		for (const auto& s : sites)
 			put_hex(s.va, s.before);
+		for (const auto& s : level_sites)
+			put_hex(s.va, s.before);
 	};
 	lay_retail();
 	ini::requested = false;
@@ -298,10 +358,19 @@ int main(int argc, char** argv)
 	*at(0x544a31) ^= 0xff;
 	rank_costs::install(game);
 	check(!rank_costs::installed() && !rank_costs::capability().verified && at(0x5e5d86)[0] == 0x4f, "a guard mismatch patches nothing; requested but not installed is unverified");
+	ini::requested = false; ini::level_rule = "xml1";
+	*at(0x4bbb55) ^= 0xff;
+	rank_costs::install(game);
+	check(!rank_costs::level_installed() && !rank_costs::capability().verified && *at(0x4bbb68) == 0xe8 &&
+	      at(0x4bbb68)[1] == 0xc3 && at(0x4bbb68)[2] == 0x8e, "LevelSkillPoints alone, guard mismatch: nothing patched, unverified");
+	ini::requested = true;
 	lay_retail();
 	rank_costs::install(game);
-	check(rank_costs::installed() && rank_costs::capability().verified && rank_costs::capability().values[0] == 1 &&
-	      rank_costs::capability().values[1] == 7 && !game_version::refused, "installed: rule 5 {1, 7, 0, 0}");
+	{
+		const auto c = rank_costs::capability();
+		check(rank_costs::installed() && rank_costs::level_installed() && c.verified && c.values[0] == 1 && c.values[1] == 7 &&
+		      c.values[2] == 5 && c.values[3] == 2 && !game_version::refused, "both installed: rule 5 revision 2 {1, 7, 5, 2}");
+	}
 
 	// The callees: the registry and attribute lookup become the fakes; the block getter and the points getter stay the
 	// retail bytes (lea eax,[ecx+4] / mov ax,[ecx+0x14]); each site's next instruction returns to the driver.
@@ -323,6 +392,8 @@ int main(int argc, char** argv)
 	*at(0x5d289f) = 0xc3;
 	put_hex(0x4bbd27, "b801000000c3");          // the loop ends: eax = 1
 	put_hex(0x4bbc95, "31c0c3");                // the loop goes round (JG): eax = 0
+	*at(0x4bbb70) = 0xc3;                        // after the level-gained CALL + NOPs (PUSH EAX)
+	*at(0x4bbc53) = 0xc3;                        // after the level-lost CALL + NOPs (PUSH EAX)
 	FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
 
 	// can-add: aurora at total 5 (next = rank 6, cost 2), brook at 3 (cost 1)
@@ -383,6 +454,22 @@ int main(int argc, char** argv)
 	check(r_eax == 1 && r_ebp == 0, "losing a level: a 1-point rank covers 1");
 	frame_id = 9; r_ebp = 2; r_eax = 2; drive_level_down();
 	check(r_eax == 0 && r_ebp == 1, "losing a level: still missing -> the loop takes another rank");
+
+	// levels gained: 4 -> 5 gives 2, 5 -> 6 gives 1, 9 -> 10 gives 2
+	set_talents(0, 0, 0);
+	set_points(3); r_level = 5; drive_level_gained();
+	check(static_cast<std::int16_t>(r_eax) == 5, "level 5 gained: 3 -> 5 skill points");
+	r_level = 6; drive_level_gained();
+	check(static_cast<std::int16_t>(r_eax) == 4, "level 6 gained: 3 -> 4");
+	set_points(0); r_level = 10; drive_level_gained();
+	check(static_cast<std::int16_t>(r_eax) == 2, "level 10 gained: 0 -> 2");
+	// levels lost: level 10 with 3 points -> 1, nothing missing; with 1 point -> 0, one missing; level 9 with 0 -> 1 missing
+	set_points(3); r_level = 10; drive_level_lost();
+	check(static_cast<std::int16_t>(r_eax) == 1 && r_ebp == 0, "level 10 lost with 3 points: 1 left, none missing");
+	set_points(1); r_level = 10; drive_level_lost();
+	check(static_cast<std::int16_t>(r_eax) == 0 && r_ebp == 1, "level 10 lost with 1 point: 0 left, 1 taken back as a rank");
+	set_points(0); r_level = 9; drive_level_lost();
+	check(static_cast<std::int16_t>(r_eax) == 0 && r_ebp == 1, "level 9 lost with 0 points: 1 taken back as a rank");
 
 	VirtualProtect(fixture_space, sizeof fixture_space, old, &old);
 
