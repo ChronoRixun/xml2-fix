@@ -202,6 +202,17 @@ namespace
 		      "the fix's functions fit the default raise");
 		check(past_tree(tree_capacity - builtin_count) == 0 && past_tree(tree_capacity - builtin_count + 1) == 1 && past_tree(table_count + probe_max) == builtin_count + table_count + probe_max - 320,
 		      "past_tree counts the names past the game's 320");
+		// forced_teams skips its own guard of the cap once the raise is installed: that guard must be bytes the raise checked
+		// (and replaced) itself, so nothing goes unchecked.
+		bool cap_guard = false;
+		for (const auto& g : forced_teams_rules::guards)
+		{
+			if (g.va != register_site) continue;
+			cap_guard = g.hex.size() / 2 <= register_before.size();
+			for (std::size_t i = 0; cap_guard && i < g.hex.size() / 2; ++i)
+				cap_guard = static_cast<std::uint8_t>(std::stoul(std::string(g.hex.substr(i * 2, 2)), nullptr, 16)) == register_before[i];
+		}
+		check(cap_guard, "forced teams' cap guard (0x4d7637) is within the bytes the raise checks and replaces");
 		const auto writes = registration_writes(0x12345678, table_count + 5);
 		check(writes[1].value == table_count + 5 && registration_writes(0x12345678)[1].value == table_count, "registration count operand: the fix's functions plus probes");
 	}

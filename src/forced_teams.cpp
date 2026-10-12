@@ -981,6 +981,12 @@ namespace forced_teams
 		}
 		for (const auto& g : guards)
 		{
+			// The raised script function limit (script_functions.hpp, installed just before) has replaced the
+			// cap at 0x4d7637 after checking those same bytes; the cap now sends names past 320 to its table.
+			if (g.va == script_functions_rules::register_site && script_functions::capacity() > static_cast<int>(tree_capacity))
+			{
+				continue;
+			}
 			if (!bytes_match(g))
 			{
 				logger::write("forced teams: 0x%08lX isn't the retail code (%s) - %s", g.va, g.what, refused);
