@@ -28,7 +28,7 @@ The builder's append-only release_identity history assigns unique four-character
 old X1.* tokens, pins the candidate bind manifest and archives the catalogue/legacy/bind hashes in
 _build/lc-release-identity.json. A new content/catalogue identity or changed immutable bind manifest needs an
 appended identity/token; the final integrator must assign its final release identity rather than reusing the
-candidate. The current candidate (content 16, catalogue 2) is LC20. Fingerprints are bind manifests, not a claim
+candidate. Builder 0.2.0 (content 18, catalogue 6) is LC26. Fingerprints are bind manifests, not a claim
 that every script/asset was hashed into the save.
 
 For LC, missing/retail/invalid tokens and any refused version patch leave game sockets disabled with WSAEACCES.

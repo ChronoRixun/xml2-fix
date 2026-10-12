@@ -1,6 +1,6 @@
 # Shared effective gameplay agreement
 
-The release token (LC24 here) remains separate. LC builds and explicit ExplosiveFirstHit opt-ins require this protocol. Ordinary no-key XML2 without participating installers remains native. Compatibility uses actual installed values, never requested INI values alone.
+The release token (`[Online] GameVersion`, LC26 for builder 0.2.0) remains separate. LC builds and explicit ExplosiveFirstHit opt-ins require this protocol. Ordinary no-key XML2 without participating installers remains native. Compatibility uses actual installed values, never requested INI values alone.
 
 ## Registration API
 
@@ -40,7 +40,7 @@ The export startup contributes the refusal and transport sites to the startup tr
 
 Record maximum: eight entries (including layout), 172 bytes. Canonical little-endian header: DWORD `GCAP` (0x50414347), ushort protocol revision 2 (revision-1 peers, 0.2.0i and older, are refused), ushort entry count, ushort total bytes, ushort reserved zero. Each sorted entry is ushort rule ID, ushort revision, four DWORD effective values (20 bytes). All unused value words must have documented semantics, normally zero. No hashes or implicit enable flags substitute for values.
 
-The entire record is appended to each original native body: request 0x18 (116 original bytes), host-info 0x1a (48), follow-up 0x1b (8), participant reply 0x1f (80). Original fields and LC24 stay intact. These opcodes use variable-length framing; reliable-envelope decoding normalizes body length before receiver dispatch. The largest augmented body is 288 bytes, within the native small-message queue limit. Wrappers keep copied header/body storage alive through synchronous native copies/broadcast iteration.
+The entire record is appended to each original native body: request 0x18 (116 original bytes), host-info 0x1a (48), follow-up 0x1b (8), participant reply 0x1f (80). Original fields and the release token stay intact. These opcodes use variable-length framing; reliable-envelope decoding normalizes body length before receiver dispatch. The largest augmented body is 288 bytes, within the native small-message queue limit. Wrappers keep copied header/body storage alive through synchronous native copies/broadcast iteration.
 
 Receive rejects missing/unknown protocol, malformed bounds/count/order, unknown/missing/duplicate IDs, revision differences or any effective-value difference before native admission. Exact canonical equality is required, including disabled participating entries. An older single-boolean agreement record or an untagged older peer is refused.
 

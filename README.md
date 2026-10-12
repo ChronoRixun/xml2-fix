@@ -133,6 +133,16 @@ GameVersion=X1.0     ; 1 to 4 letters, digits, '.', '-' or '_'; leave out for th
 
 It is written into the game's version string before the game starts (it copies it at start-up), after the bytes are checked against the retail build; `xml2-fix.log` says so (`online: GameSpy game version X1.0 ...`). Players on different versions don't see or join each other's games.
 
+**Co-op between port builds: the gameplay agreement.** A mod that changes how the game plays (the X-Men Legends I
+port: its save format, its entity capacity, its Master Mold, the way its explosions hit) can only play online with a
+partner whose game does exactly the same, or the two games drift apart. From 1.4, when a player joins, both games
+exchange a record of the gameplay rules each one actually installed - not what its ini asked for - and the entity
+layout it runs with; a mismatch, or a rule that failed to install on either side, refuses the join before anything is
+loaded. The joining player gets the game's own dialog (*Incompatible gameplay or an unverified installation...*); the
+host keeps its session and sees the reason in the lobby (in place of the advice text, for a minute) or as a short line
+in play: different gameplay settings, the fix not loaded on one PC, or another build. XML2 as it ships, without any of
+these keys, plays online exactly as before. The record and its rules: [docs/gameplay-agreement.md](docs/gameplay-agreement.md).
+
 **Diagnosing online problems:** add this to `xml2-fix.ini` and `xml2-fix.log` will list every connection and query the game makes:
 
 ```ini
@@ -164,6 +174,17 @@ ResolutionList=all   ; all: up to 64 entries in Options → Video, in every mode
 - **borderless**: a window without borders covering the screen, at your desktop's resolution and refresh rate. Your monitor's mode never changes, alt-tab is instant and the game keeps running behind other windows.
 - **windowed**: a normal, centred window with a caption, the size of the resolution the game is set to (or `Width` x `Height`).
 - **fullscreen**: the game's own exclusive fullscreen, but the desktop resolution is offered in *Options → Video*, and at that resolution the desktop's refresh rate is kept.
+
+**The mouse in a window.** The game maps a mouse point to its menus against its own resolution, while the picture is
+stretched over the window. When the window is not that size - Windows shrank it after it moved to a monitor with
+another scaling (1280x720 dragged from a 125 % monitor to a 100 % one became 1023x575), or it was resized - the hover
+sat ever further below the cursor and the last rows of a menu (the main menu's Quit, in-game menus alike) could not be
+reached. From 1.4 the game gets the point it is actually shown at, and a windowed game keeps its size when it changes
+monitors (a maximized or minimized window is left to Windows).
+
+**Exclusive fullscreen on high-refresh desktops.** On some PCs (seen at 2560x1440 and 180 Hz) the game's own
+fullscreen device request fails, and the game then resets its resolution settings. This is the game's request, not a
+new problem; until a fix (planned), use `Mode=borderless`, which runs at your desktop's resolution and refresh rate.
 
 **Resolutions.** The game keeps its Video options list in a table with room for 20 entries and no bounds check: a modern adapter offers more sizes than that (24 on the development PC), and the ones past the 20th are written over the default key bindings that follow the table. With a `Mode` set the fix builds the list itself (your adapter's sizes plus your desktop's) and trims it to those 20. `ResolutionList=all` gives the game a table of its own with 64 entries instead (after checking the game's code is the retail build's; on any other build the list is trimmed to 20, so it can't overflow), and fills the list in every mode, the game's own included: every size your adapter offers, your desktop's resolution and, in the borderless and windowed modes, the common sizes of your desktop's aspect ratio plus half and three quarters of it as render-scale presets (1280x720 and 1920x1080 on a 2560x1440 desktop, stretched to the screen in borderless mode). `ResolutionList=game` keeps the game's 20-entry table but trims the list to it in every mode (the overflow fix alone). Without `ResolutionList` and without a `Mode`, the list is the game's own, overflow and all, as it ships. `Width`/`Height` from the ini shows as the selected entry. A resolution still applies at the next start, with the game's own restart notice.
 
@@ -321,7 +342,7 @@ Nothing changes without the keys. Every slot takes a name, so `ResourceNames` is
 
 **Effect curves.** Every loaded effect keeps its animation curves (a particle's size, transparency, rotation over its life) in one pool of 900. A zone's effects and the effects of a four-hero party can need more, and when the pool is full the game hands out an empty curve without a word: the effects loaded last are drawn without their particles - a fire is only a faint glow that still burns, or a hero's power loses its particles. `EffectCurves=3600` gives the pool room for 3600. It moves into a block of the fix's memory that the game's own code builds and tears down; every instruction that carries the old size or the old address is checked before anything is patched, and on any difference the pool stays at 900. Curves are not written to saves. The test pipe's `status` reports `curves used/capacity`. [docs/effect-curves.md](docs/effect-curves.md) has the layout, the patch list and the measurements.
 
-**Entity capacity.** `[Limits] EntityCapacity=1` raises the engine's entity domain to 32 actor / 768 generic / 1024 World handles ([docs/entity-capacity.md](docs/entity-capacity.md)): the stock generic arena refuses every prop, projectile or trigger past the 224th live one without a word, which is why crowded rooms lose objects and the HAARP freeze gun never fires. All of it is installed as one checked transaction (535 guards, 31 region hashes) before the game's own code runs; it needs LC saves, marks its saves with a required-feature bit a retail-layout build refuses, and refuses online peers of another layout at admission (GCAP; the receive-lifecycle hooks of the design are not installed, see [the plan](docs/entity-capacity-phase-a-plan.md) deviation 17). If the executable's entity code is not the expected retail code, the capacity alone falls back to stock (logged) and everything else installs.
+**Entity capacity.** `[Limits] EntityCapacity=1` raises the engine's entity domain to 32 actor / 768 generic / 1024 World handles ([docs/entity-capacity.md](docs/entity-capacity.md)): the stock generic arena refuses every prop, projectile or trigger past the 224th live one without a word, which is why crowded rooms lose objects and the HAARP freeze gun never fires. All of it is installed as one checked transaction (535 guards, 31 region hashes) before the game's own code runs; it needs LC saves, marks its saves with a required-feature bit a retail-layout build refuses, and refuses online peers of another layout at admission (GCAP; the receive-lifecycle hooks of the design are not installed, see [the plan](docs/entity-capacity-phase-a-plan.md) deviation 17). If the raise cannot be installed - `[Save] Format=lc` is missing, the executable's entity code is not the expected retail code, or something else loaded first - the capacity alone falls back to stock and everything else installs: the game tells you once at startup what failed and what to do about it (the ini line, the retail `XMen2.exe`, other loaders), and that saves made with the raised capacity can't be loaded and online play is closed for that session.
 
 **Triggers per move.** `[Limits] MoveTriggers=64` gives each native move a preallocated handle side array. Missing key or 19 keeps
 stock behavior; invalid values are logged and ignored. The port needs 27 for its largest restored burst;
@@ -396,12 +417,29 @@ AutoAdvance=1   ; a conversation line the mod marks goes on by itself once its v
 ReplyVoices=1   ; a chosen reply's voice plays out before its answer (on by default; the game cut it one frame in)
 ReplyCursor=1   ; a reply menu come back to keeps a reply highlighted (on by default; the game's clamp lost it)
 ConfirmationRelease=0 ; opt-in: a popup's accept binding must be released before it can answer another popup
+ExplosiveFirstHit=1   ; an explosion is a new attack for the victim its projectile already hit (X-Men Legends I's rule)
+Xml1MasterMold=1      ; X-Men Legends I's Master Mold fight: shield, cores, platform and floor attacks (needs Xml1MoldStage)
+Xml1MoldStage=x1v02:1:5   ; the saved flag that holds the fight's stage, as flag:first_bit:width (the port's builder writes it)
 
 [Save]
 Format=lc       ; the LC save format: saves in SaveLC as .lcsave files with permanent identities; the old saves converted once
 ```
 
 **The LC save format.** XML2's own save file stores every item, talent, objective and zone object by its position in the tables the game loaded, so a campaign that keeps growing (the X-Men Legends I port) turns every older save into another save. With `Format=lc` the game's own serializer and loader are left alone, and the one object that moves their stream to and from the disk - the memory card's nine file methods - becomes the fix's: a slot is read from `SaveLC\saveslot<N>.lcsave` (the library rebuilds the engine's stream from permanent identities), written there atomically with a backup, listed from the file's own description; the profile goes to `SaveLC\profile.lcsave`. At the first file operation the build's tables (`Data\lcsave\catalogue.lcc` and the bind files beside the data files) are loaded and verified - when they don't verify, nothing is read or written in either folder and the slot list says why - and the old `Save` folder is converted once, with a ledger (`SaveLC\legacy-import.txt`); the originals are never written. A save made before a hero got a talent gets it on load at rank 0. See [the disk seam, the start-up and what stays undone](docs/save-format.md).
+
+**X-Men Legends I's Master Mold.** In the first game Master Mold raises a shield that only falls when his warp
+cores are destroyed, attacks from his platform and the floor on his own timers, and calls in sentinels; XML2's engine
+has none of that, so the port's fight was won on damage alone. `Xml1MasterMold=1` runs his original controller on the
+game's own services (its AI states, the shield and blaster nodes, the beam that hits the cores, the catwalk), with the
+first game's timing. The fight's stage is kept in a flag the save already holds, which `Xml1MoldStage` names (the
+builder writes it), so a save made mid-fight loads back into the same stage; without a valid binding nothing is
+installed and the fight stays as before. Online, every player's game runs the controller in step, and a partner
+without the same setting is refused at join ([the agreement](#-online)). Details: [docs/xml1-controllers.md](docs/xml1-controllers.md).
+
+**Explosions' first hit.** In X-Men Legends I a grenade or a thrown object that hits someone and then explodes hurts
+them twice: the explosion is a new attack. XML2 can treat the explosion as the same attack, so its first victim takes
+only the contact hit; `ExplosiveFirstHit=1` gives the explosion the first game's new attack every time. Nothing about
+the objects or saves changes ([docs/explosive-first-hit.md](docs/explosive-first-hit.md)).
 
 **X-Men Legends I's rule for breaking objects.** Both games refuse a hit on an object when the attack's damage level is below the object's `structure`, but XML1 counts structure from 0 to 10 and a melee hit's level up to 9 (the attack's authored level, plus 3 / 6 / 8 for Might rank 1 / 2 / 3, plus the `damageLevel` affecter), while XML2 clamps structure to 0..2 and caps the melee level at 1. A plain punch is level 1 in both, so in XML2 it breaks everything that can be broken at all, and a port that keeps XML1's sturdier walls breakable lets a punch open what XML1 kept for powers. With `BreakRule=xml1`, an object whose entity definition carries `xml1structure="N"` (XML1's own number, next to the `structure` the game reads) is damaged only by a hit of at least level N on XML1's scale; an object without the attribute, and everything about characters, is as before. The fix reads the attribute with the game's own reader where the game reads `structure`, works out XML1's level where the game works out its own (and hands the game's own result back unchanged), and adds the comparison at the object's damage gate: three hooks, after every byte they rely on is checked against the retail build. Neither the hit's level byte nor any structure byte changes, so attacks do to enemies exactly what they did, and nothing is saved. On any other build objects break by the game's own rule and `xml2-fix.log` says why; the test pipe's `status` ends with `break rule xml1; object hits judged ...; refused ...; without xml1structure ...`. See [the rule, the hooks and what stays the game's](docs/break-rule.md).
 
@@ -568,6 +606,11 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `ConfirmationRelease` | `0` | `1`: a physical accept binding answers one popup until released, including a popup that immediately replaces it ([details](docs/confirmation-release.md)) |
 | `ObjectiveDescriptions` | `0` | `1`: mission `updatedescription` appears in the journal while the objective is complete ([details](docs/objective-descriptions.md)) |
 | `GeometrySharingBlendIndices` | `0` | `1`: skinned models share geometry only when their packed blend indices match too ([details](#geometry-sharing)) |
+| `ExplosiveFirstHit` | `0` | `1`: an explosion is a new attack for the victim its projectile already hit, as in X-Men Legends I ([details](docs/explosive-first-hit.md)) |
+| `ClassicMainBackdrop` | `0` | `1`: the classic main menu's Cerebro room is drawn with its original bright textures ([details](#classic-main-menu-backdrop)) |
+| `ClassicMainPanelBounds` | `0` | `1`: the classic main menu's buttons answer the mouse over their whole visible panels ([details](#classic-main-menu-backdrop)) |
+| `Xml1MasterMold` | `0` | `1`: X-Men Legends I's Master Mold fight; needs `Xml1MoldStage` ([details](docs/xml1-controllers.md)) |
+| `Xml1MoldStage` | *(none)* | the saved flag holding that fight's stage, as `flag:first_bit:width`; written by the port's builder |
 
 **[Balance]**: X-Men Legends I's combat numbers, for the port, which sets these itself ([details](docs/balance.md)). Every key is on its own; leave them out for XML2 as it ships.
 
@@ -585,6 +628,8 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `HitChance` | `xml2` | `xml1`: XML1's melee hit chance, (30 + attacker's speed and level - defender's) x 2.5 %, at least 10 % |
 | `HitChanceBase`, `HitChancePerPoint` | `30`, `0.025` | with `HitChance=xml1`: the formula's two numbers (`0` to `60`; `0.001` to `0.1`) (tuning) |
 | `Rounding` | `xml2` | `xml1`: a hit's stat and affecter bonuses worked out on the whole-number roll and rounded down, as XML1's |
+| `DamageRolls` | `xml2` | `xml1`: an attack's damage is rolled as a whole number in its range, as XML1's (powers and punches) |
+| `MeleeWeapons` | *(none)* | `name:type:bonus:damage-bits` records separated by `\|`: the fixed bonus a stats entry's melee weapon adds, written by a mod from its weapon data ([details](docs/balance.md#melee-weapons-and-integer-damage-draws)) |
 
 **[Save]** ([details](docs/save-format.md))
 
@@ -601,6 +646,8 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `ItemEnhancements` | *(the game's own, 375)* | `376` to `1024` item enhancement records (`Data/items` stops loading past the pool) |
 | `FightStyles` | *(the game's own, 19)* | `20` to `32` distinct fighting/power styles and movesets |
 | `EffectCurves` | *(the game's own, 900)* | `901` to `16384` animation curves of loaded effects (past the pool, effects lose their particles) |
+| `MoveTriggers` | *(the game's own, 19)* | `20` to `127` triggers per move (sounds, flashes and other events of a long attack) |
+| `EntityCapacity` | `0` | `1`: 32 actor / 768 generic / 1024 World entity handles instead of 32 / 224 / 256; needs `[Save] Format=lc` ([details](docs/entity-capacity.md)) |
 
 **[Test]**: for automated testing ([details](#-driving-the-game-from-a-script))
 
@@ -617,6 +664,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `LogNetwork` | `0` | `1`: `xml2-fix.log` lists every connection and query the game makes |
 | `LogFiles` | `0` | `1`: `xml2-fix.log` lists every file the game opens |
 | `LogBreakRule` | `0` | `1` (with `BreakRule=xml1`): `xml2-fix.log` lists every melee level worked out and every hit on an object, with the verdict |
+| `SaveDumpRefused` | `0` | `1` (with `[Save] Format=lc`): a refused campaign save also writes the game's own save image to `SaveLC\refused-native-<time>.save`, for a bug report ([details](docs/save-format.md)) |
 
 ## 🔒 Privacy
 

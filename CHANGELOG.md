@@ -1,6 +1,25 @@
 # Changelog
 
-## Unreleased
+## 1.4.0 - <date TBD>
+
+The engine half of Legends Classic 0.2.0. For X-Men Legends II as it ships only the mouse fix applies; everything
+else is off until a mod's `xml2-fix.ini` asks for it (the port's builder sets it all).
+
+- The mouse reaches every menu row in a window Windows resized for display scaling, and a windowed game keeps its
+  size when it changes monitors.
+- `[Save] Format=lc`: the port's own save format; old saves converted once into `SaveLC`, the old folder untouched,
+  `.bak` and `.newer` copies, refused saves keep the file on disk.
+- `[Balance]`: X-Men Legends I's combat numbers, including whole-number damage rolls and melee-weapon bonuses.
+- `[Limits] EntityCapacity=1`: 768 generic / 1024 World entities instead of 224 / 256, so crowded rooms keep every
+  object; one startup warning, with advice that fits the cause, when it falls back to stock.
+- `[Limits] MoveTriggers`: long attacks keep every sound and muzzle flash.
+- `[Game] Xml1MasterMold` / `Xml1MoldStage`: X-Men Legends I's Master Mold fight, its stage kept in saves.
+- `[Game] ExplosiveFirstHit`, `ClassicMainBackdrop`, `ClassicMainPanelBounds`, `ConfirmationRelease`,
+  `XtractionShop`, `PersonalItemText` (on by default); late-act trivia kept; no crash on Quit with the classic backdrop.
+- Online: games with these keys exchange their installed gameplay rules at join and refuse a mismatch, with the reason
+  on both PCs; saving in co-op no longer stalls the game long enough to drop the connection.
+
+### Details
 
 - Restore opt-in XML1 Master Mold shield/core combat, original attack deadlines,
   platform actions, companion behavior and core tethers through native services.
@@ -22,7 +41,12 @@
   `entity status` / `entity retire <slot>`.
 - A requested `[Limits] EntityCapacity=1` that falls back to stock (a capacity-only mismatch) now tells the player
   once at startup - what failed and what it means (stock limits, raised saves not loadable, online closed) -
-  instead of only logging it; the game then starts as before.
+  instead of only logging it; the game then starts as before. The advice follows the cause: a missing
+  `[Save] Format=lc` (the ini line, or `EntityCapacity=0`), an executable not at 0x400000 or with changed entity code
+  (the unmodified retail `XMen2.exe`), owners already built (other loaders), or an internal failure (report it).
+- The optional host refusal receiver and lobby notice join the startup transaction only when their own guards read
+  back as retail and every byte they write lies inside those guards; the agreement test covers a receiver guard
+  mismatch as well as a presentation one.
 - One startup transaction (`patch_transaction`) now owns every code write of the shared gameplay
   agreement, the LC save seam, `[Limits] MoveTriggers` and the entity-capacity install: expectations are
   unioned and checked once, pages acquired once, writes verified by readback and rolled back on any
