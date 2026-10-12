@@ -28,16 +28,23 @@ inline registration master_mold(bool requested,bool installed,std::string_view f
     return {{1,static_cast<std::uint32_t>(first_bit),static_cast<std::uint32_t>(width),flag_hash(flag)},true};
 }
 
-// No turret scanner/weapon controller exists in this build. Revision 1 always
-// advertises verified off; a future controller registers its own revision/values.
-constexpr std::uint16_t turret_revision=1;
+// Turret revision 2: values {installed, placements, FNV-1a-32 of every applied placement line in
+// order, 0}. Peers with different authored placements, weapons or scanner values are refused.
+// Revision 1 (no controller) advertised verified off; a process that does not request the
+// controller keeps advertising revision 1 {0,0,0,0}, so it still meets 1.4.0 peers.
+constexpr std::uint16_t turret_revision=2;
+constexpr std::uint16_t turret_revision_for(bool requested){return requested?turret_revision:1;}
+inline registration turrets(bool requested,bool installed,std::uint32_t placements,std::uint32_t lines_hash){
+    if(!requested)return {{0,0,0,0},true};
+    if(!installed||placements==0)return {{0,0,0,0},false};
+    return {{1,placements,lines_hash,0},true};
+}
 
 // X-Men Legends 1's skill and stat point rules (rank_costs.cpp, ID 5) revision 3: values {installed parts (1 RankCosts,
 // 2 LevelSkillPoints, 4 LevelStatPoints), highest cost honoured (7) or 0, the bonus level step (5) or 0, the bonus
 // level's skill points (2) | its stat points (8) << 8}. Revisions 1 and 2 (never released) had fewer parts. The costs
 // themselves are the build's talent data.
 constexpr std::uint16_t rank_costs_revision=3;
-inline registration turrets(){ return {{0,0,0,0},true}; }
 
 // XML1 settle without crushes ([Game] PlacementCrush=xml1, ID 11) and packs without double heals
 // ([Game] DoubleHeal=0, ID 12), revision 1: values {installed,0,0,0}. Not requested (no key, or the game's own

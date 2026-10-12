@@ -7,6 +7,7 @@
 #include "mold_combat_rules.hpp"
 #include "xml1_capability_rules.hpp"
 #include "mold_query_rules.hpp"
+#include "turret_rules.hpp"
 #include "gameplay_capabilities.hpp"
 #include <iostream>
 #include <map>
@@ -60,7 +61,9 @@ struct fake_memory {
     bool restore(std::uint32_t a,std::uint32_t old){if(fail_restore)return false;protections[a]=old;return true;}
     bool flush(){return !(++flush_calls==1&&fail_flush)&&!persistent_flush_failure;}
 };
+void turret_checks();
 int main(){
+    turret_checks();
     using namespace mold_combat_rules;
     const auto binding=parse_binding("fictional_stage:2:5");
     CHECK(binding&&binding->flag=="fictional_stage"&&binding->first==2&&binding->width==5);
@@ -214,7 +217,7 @@ int main(){
     CHECK(!xml1_capability_rules::master_mold(true,true,"stage",0,5).verified);
     CHECK(!xml1_capability_rules::master_mold(true,true,"stage",1,0).verified);
     CHECK(!xml1_capability_rules::master_mold(true,true,"stage",1,33).verified);
-    const auto turret_off=xml1_capability_rules::turrets(); // no turret controller in this build
+    const auto turret_off=xml1_capability_rules::turrets(false,false,0,0); // turret controller not requested
     CHECK(turret_off.verified&&turret_off.values==off.values);
     using gameplay_capabilities::record;using gameplay_capabilities::result;
     auto peer=[](registration mold,registration turret,std::uint16_t revision=xml1_capability_rules::master_mold_revision){
@@ -264,4 +267,124 @@ int main(){
     CHECK(std::string(game_version::startup_error()).find("LC network exclusion")!=std::string::npos);
     std::cout<<"XML1 controller guards: "<<checks<<" checks, "<<failures<<" failures\n";
     return failures?1:0;
+}
+
+// Scan turret rules (turret_rules.hpp) with an invented placement; every expectation below follows
+// the original scanner's timing (docs/xml1-controllers.md).
+void turret_checks(){
+    using namespace turret_rules;
+    const char* line="fictional/zone_a|gun_x|10,20,30,0,0,1.5,0,0,0|600,0,0,1,85,90,0,30,29|2,5,3,20,400,20,900,10,20,0,0,128,0|dart_fake|fake_ents|,,|,";
+    const auto t=parse(line);
+    CHECK(t&&t->position[1]==20&&t->rest[2]==1.5f);
+    CHECK(t&&t->zone=="fictional/zone_a"&&t->instance=="gun_x"&&t->gun.count==3&&t->gun.recoil==5&&t->gun.projectile=="dart_fake");
+    CHECK(t&&std::fabs(t->scan.yawextent-90*radians_per_degree)<1e-6f&&t->scan.track_loss==1&&t->scan.sweep_pause==1&&t->scan.filterteam==29);
+    for(const char* bad:{"","a|b","zone|gun|1,2,3,0,0|600,0,0,1,85,90,0,30,29|2,5,3,20,400,20,900,10,20,0,0,128,0|p|f|,,|,",
+        "zone|gun|1,2,3,0,0,0,0,0,0|600,0,0,1,85,90,0,30,29|2,5,3,20,400,20,900,20,10,0,0,128,0|p|f|,,|,",          // damage range reversed
+        "zone|gun|1,2,3,0,0,0,0,0,0|600,0,0,1,85,90,0,30,29|2,5,3,20,0,20,900,10,20,0,0,128,0|p|f|,,|,",            // projectile without speed
+        "zone|gun|1,2,3,0,0,0,0,0,0|600,0,0,1,85,90,0,30,29|2,5,3,20,400,20,900,10,20,0,0,128,0||f|,,|,",           // projectile without entity
+        "zone|gun|1,2,3,0,0,0,0,0,0|600,0,0,1,85,90,0,30,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|p|f|,,|,",            // bullet naming a projectile
+        "zone|g;x|1,2,3,0,0,0,0,0,0|600,0,0,1,85,90,0,30,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,|,",
+        "zone|gun|1,2,3,0,0,0,0,0,0|600,0,0,1,85,90,0,30,40|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,|,"})CHECK(!parse(bad));
+    CHECK(parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,|,").has_value());
+    // ray weapons: tracetime, radius, PC damage bits and effects (invented paths)
+    {const auto b=parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,2,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,524288|||fx/a_muzzle,fx/a_tracer,fx/a_hit|,");
+     CHECK(b&&b->gun.kind==weapon_kind::bullet&&b->gun.damage_type==0x80&&b->gun.damage_mods==0x80000&&b->gun.effects[1]=="fx/a_tracer"&&b->gun.range==600);
+     const auto f=parse("zone/a|jet1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,0,30,29|1,.03,1,0,0,0,132,5,9,.45,48,65536,0|||,fx/b_stream,|,");
+     CHECK(f&&f->gun.kind==weapon_kind::flame&&f->gun.tracetime==.45f&&f->gun.radius==48&&f->gun.damage_type==0x10000&&f->gun.effects[0].empty());
+     CHECK(!parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,0,10,20,0,0,128,0|||,,|,"));          // ray without range
+     CHECK(!parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,-1,0|||,,|,"));         // bits not unsigned
+     CHECK(!parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,x;y|,"));     // effect path
+     CHECK(!parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20|||,,|,"));                  // old 9-field weapon
+     // aim: no spread keeps the facing; the draws span +-accuracy about the turret's own frame
+     const vec o{0,.2f,1.f};const vec straight=aim(o,0,.3f,.9f),fwd=forward(o);
+     CHECK(std::fabs(straight[0]-fwd[0])<1e-5f&&std::fabs(straight[1]-fwd[1])<1e-5f&&std::fabs(straight[2]-fwd[2])<1e-5f);
+     const float acc=5*radians_per_degree;
+     const vec left=aim({0,0,1.f},acc,0,.5f),right=aim({0,0,1.f},acc,1,.5f),down=aim({0,0,1.f},acc,.5f,1);
+     CHECK(std::fabs(angles(left)[2]-(1.f-acc))<1e-4f&&std::fabs(angles(right)[2]-(1.f+acc))<1e-4f);
+     CHECK(std::fabs(angles(down)[1]-acc)<1e-4f&&std::fabs(angles(down)[2]-1.f)<1e-4f&&std::fabs(dot(down,down)-1)<1e-5f);
+     const vec tilted=aim({0,.3f,0},acc,.5f,1);CHECK(std::fabs(angles(tilted)[1]-(.3f+acc))<1e-4f);   // pitches add in the frame
+     // segment: 36 behind to range ahead; extents only for the flame
+     const auto sb=trace_segment({0,0,10},{1,0,0},600,48,weapon_kind::bullet);
+     CHECK(sb.from[0]==-36&&sb.to[0]==600&&sb.from[2]==10&&sb.extent[0]==0);
+     const auto sf=trace_segment({0,0,0},{0,1,0},132,48.7f,weapon_kind::flame);
+     CHECK(sf.from[1]==-36&&sf.to[1]==132&&sf.extent[2]==48);
+     // trace-time gate: at most one trace per tracetime; a negative record never gates
+     float last=0;CHECK(!trace_ready(last,.3f,.45f)&&last==0);
+     CHECK(trace_ready(last,.5f,.45f)&&last==.5f&&!trace_ready(last,.9f,.45f)&&trace_ready(last,.95f,.45f));
+     float never=-1;CHECK(trace_ready(never,0,10)&&never==-1);
+     float none=0;CHECK(trace_ready(none,0,0)&&trace_ready(none,0,0));}
+    // binding after a clock that goes back (an online session restarts the game clock): a timer set at
+    // game time 500 must not delay binding at the restarted time 1.5
+    {binding b;CHECK(may_bind(b,0));bind_failed(b,500.f);CHECK(!may_bind(b,500.5f)&&may_bind(b,501.f));
+     b.trace_at=900;b.rest_taken=true;bind_failed(b,500.f);
+     CHECK(clock_went_back(1.5f,501.f)&&!clock_went_back(501.f,501.f)&&!may_bind(b,1.5f));
+     forget(b);CHECK(may_bind(b,1.5f)&&b.trace_at==0&&!b.rest_taken);}
+    // resetdelay -1 = not authored: the constructor's track loss 10 and sweep pause 3
+    {const auto d=parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,-1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,|,");
+     CHECK(d&&d->scan.track_loss==10&&d->scan.sweep_pause==3);
+     CHECK(!parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,-2,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,|,"));}
+    // a script-spawned turret: '*name', bound by name with its orientation at binding as the rest basis
+    {const auto sp=parse("zone/a|*jet9|0,0,0,0,0,0,0,0,0|600,0,0,1,30,45,0,30,29|1,.03,1,0,0,0,132,5,9,.45,48,65536,0|||,,|,");
+     CHECK(sp&&sp->spawned&&sp->instance=="jet9");
+     CHECK(!parse("zone/a|gun1|1,2,3,0,0,0,0,0,5000|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,|,"));  // muzzle out of range
+     const auto m=parse("zone/a|gun1|1,2,3,0,0,0,53.5,8,5.5|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,|,");
+     CHECK(m&&m->muzzle[0]==53.5f&&m->muzzle[2]==5.5f);
+     // the bolt rides the turret's frame: yawed a quarter turn, forward becomes +y; pitched down, forward drops
+     const vec q=frame_point({10,20,30},{0,0,1.57079637f},{50,0,5});CHECK(std::fabs(q[0]-10)<1e-3f&&std::fabs(q[1]-70)<1e-3f&&q[2]==35);
+     const vec d=frame_point({0,0,0},{0,.5f,0},{10,0,0});CHECK(std::fabs(d[0]-10*std::cos(.5f))<1e-4f&&std::fabs(d[2]+10*std::sin(.5f))<1e-4f);
+     const auto ss=parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,|fx/a_bang,fx/a_whirr");
+     CHECK(ss&&ss->sound.fire=="fx/a_bang"&&ss->sound.rotate=="fx/a_whirr"&&t&&t->sound.fire.empty());
+     CHECK(!parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,"));   // no sound field
+     CHECK(t&&!t->spawned&&!parse("zone/a|*|0,0,0,0,0,0,0,0,0|600,0,0,1,30,45,0,30,29|1,.03,1,0,0,0,132,5,9,.45,48,65536,0|||,,|,"));}
+    // angles
+    CHECK(std::fabs(wrap(4.f)-(4.f-two_pi))<1e-5f&&wrap(1.f)==1.f&&std::fabs(wrap(-4.f)-(-4.f+two_pi))<1e-5f);
+    const auto a=angles(forward({0,.3f,1.2f}));CHECK(std::fabs(a[1]-.3f)<1e-5f&&std::fabs(a[2]-1.2f)<1e-5f);
+    // shortest way and sweep direction
+    auto r=step({0,0,3.f},{0,0,-3.f},1.f,.1f,{0,0,0});CHECK(r[2]>3.f-1e-6f||r[2]<-3.f);  // crosses pi, not through zero
+    r=step({0,0,0},{0,0,1.f},1.f,.25f,{0,0,-1});CHECK(std::fabs(r[2]+.25f)<1e-6f);         // hint turns the long way
+    r=step({0,0,.9f},{0,0,1.f},1.f,.25f,{0,0,1});CHECK(r[2]==1.f);                         // stops on the goal
+    // acquisition: scanning polls every second, tracking every 0.1 s; mintime 0 tracks on the first sighting
+    auto s=spawn(10.f);CHECK(s.acquire_due==10.3f&&s.fire_due==10.3f&&std::fabs(s.rotate_due-10.01f)<1e-6f);
+    sight none,seen{true,0x1234,{100,0,0}};
+    CHECK(acquire(s,t->scan,10.3f,false,none)==1.f&&s.mode==idle);
+    CHECK(acquire(s,t->scan,11.3f,true,none)==1.f&&s.mode==scanning);
+    CHECK(acquire(s,t->scan,12.3f,true,seen)==.1f&&s.mode==tracking&&s.target==0x1234&&s.last_seen==12.3f);
+    CHECK(acquire(s,t->scan,12.4f,true,none)==.1f&&s.mode==tracking);                     // within resetdelay
+    CHECK(acquire(s,t->scan,13.4f,true,none)==1.f&&s.mode==scanning);                    // lost after 1 s unseen
+    scanner slow=t->scan;slow.mintime=.75f;auto u=spawn(0);acquire(u,slow,.3f,true,none);
+    CHECK(acquire(u,slow,.8f,true,seen)==1.f&&u.mode==scanning);                          // 0.5 s seen < 0.75
+    CHECK(acquire(u,slow,1.8f,true,seen)==.1f&&u.mode==tracking);
+    // firing: 1 s polls, burst armed 1 s after a sighting, then one weapon fire per recoil, 20 per burst
+    auto f=spawn(0);float next=0;
+    CHECK(fire(f,.3f,1,5,next)==fire_result::none&&next==1.f);
+    f.mode=tracking;f.last_seen=1.f;
+    CHECK(fire(f,1.3f,1,5,next)==fire_result::burst_started&&next==1.f&&f.burst==20);
+    int shots=0;float clock=2.3f;
+    while(fire(f,clock,1,5,next)==fire_result::shot){++shots;CHECK(next==5.f);clock+=next;f.last_seen=clock;}
+    CHECK(shots==20&&f.burst==20);                                                         // the 21st event re-arms (seen)
+    auto lost=spawn(0);lost.mode=tracking;lost.last_seen=0;
+    CHECK(fire(lost,5.f,1,5,next)==fire_result::none&&next==1.f&&lost.burst==-1);         // not seen within 1 s
+    // rotation: sweep to rest + yawextent, pause resetdelay there, then sweep back
+    auto g=spawn(0);g.mode=scanning;vec o{0,0,1.5f};bool moved=false,turning=false;float clock2=.01f;
+    float d=rotate(g,t->scan,t->rest,clock2,true,{0,0,0},o,moved,turning);
+    CHECK(d==.01f&&moved&&turning&&o[2]>1.5f);
+    for(int i=0;i<1000&&!g.sweep_back;++i){clock2+=.01f;rotate(g,t->scan,t->rest,clock2,true,{0,0,0},o,moved,turning);}
+    CHECK(g.sweep_back&&std::fabs(o[2]-wrap(1.5f+90*radians_per_degree))<.032f&&g.pause==1.f); // reached within 0.001 rad^2
+    CHECK(rotate(g,t->scan,t->rest,clock2+.5f,true,{0,0,0},o,moved,turning)==1.f);      // pausing
+    // tracking with pitchextent 0 keeps the rest pitch and turns towards the aim
+    auto h=spawn(0);h.mode=tracking;h.aim={0,100,50};vec q{0,0,1.5f};
+    rotate(h,t->scan,t->rest,.5f,true,{0,0,0},q,moved,turning);CHECK(q[1]==0&&q[2]>1.5f);
+    CHECK(draw(17,32,0)==17&&draw(17,32,.99999f)==32&&draw(17,32,.5f)==25);
+    // homing: speed kept, turns toward the target, f grows with age and caps at 1.5, level keeps z 0
+    {const vec v{400,0,0},to{0,100,-100};const auto h=home(v,to,0,false);
+     CHECK(std::fabs(std::sqrt(dot(h,h))-400)<.01f&&h[1]>0&&h[2]<0&&h[0]>h[1]);
+     const auto late=home(v,to,40,false);CHECK(late[1]>h[1]);
+     CHECK(home(v,to,20,false)==home(v,to,30,false));                                          // capped
+     CHECK(home(v,to,0,true)[2]==0&&home(vec{0,0,0},to,0,false)==(vec{0,0,0}));}
+    // fan: three projectiles at -1, 0, +1; two at -0.5, +0.5
+    CHECK(fan_offset(0,3)==-1&&fan_offset(1,3)==0&&fan_offset(2,3)==1&&fan_offset(0,2)==-.5f&&fan_offset(1,2)==.5f&&fan_offset(0,1)==0);
+    // capability: off = revision 1 verified off; requested but not installed: unverified
+    CHECK(xml1_capability_rules::turret_revision_for(false)==1&&xml1_capability_rules::turret_revision_for(true)==2);
+    CHECK(!xml1_capability_rules::turrets(true,false,3,7).verified);
+    const auto on=xml1_capability_rules::turrets(true,true,3,7);CHECK(on.verified&&on.values==(std::array<std::uint32_t,4>{1,3,7,0}));
 }

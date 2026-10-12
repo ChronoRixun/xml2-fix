@@ -62,6 +62,7 @@ bool pool_available(){
     return mold_query_rules::pool_free(false,static_cast<const unsigned char*>(fn<getter_t>(0x4ab550)()),0,0);
 }
 }
+bool pools_ready(){return pool_available();}
 bool is_a(void* entity,u32 descriptor){
     if(!entity)return false;
     const auto* concrete=at<void*(__fastcall*)(void*,void*)>(at<const void*>(entity,0),0)(entity,nullptr);

@@ -21,6 +21,12 @@
   health at 0 as the first game's whole numbers always did, so XP and death drops follow (`docs/death-threshold.md`);
   online, gameplay rule 9.
 
+## Unreleased
+
+- `[Game] Xml1Turrets` / `[Xml1Turrets]`: X-Men Legends I's scan turrets scan, track and fire again (the HAARP
+  exterior missile tanks, the Arbiter / Weapon X tripod guns and the Hive tanks' flame turrets), with the first
+  game's timing, aim spread, damage and effects; online peers must agree on every placement (rule 4).
+
 ## 1.4.0 - 2026-10-12
 
 The engine half of Legends Classic 0.2.0. For X-Men Legends II as it ships only the mouse fix applies; everything

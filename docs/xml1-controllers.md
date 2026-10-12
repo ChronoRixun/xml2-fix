@@ -1,8 +1,8 @@
 # XML1 Master Mold controller
 
 `Game.Xml1MasterMold` defaults to off. The first-game builder enables it only with
-its generated, validated saved-stage binding. No turret scanner or weapon
-controller ships in this build.
+its generated, validated saved-stage binding. The scan turret controller
+(`Game.Xml1Turrets`) is described in its own section below.
 
 Master Mold runs at the native brain state dispatcher, `0x5173f3`, after native
 lifecycle, conversation and wait gates. Its handled path rejoins native movement
@@ -112,8 +112,7 @@ requested registers verified off `{0,0,0,0}`; requested but not installed (missi
 binding, guard, query/effect support or transaction refusal) registers unverified,
 which closes host/join for that process. Peers whose Master Mold state differs,
 including one side off, are refused by the native agreement before admission.
-Rule 4 (turrets), revision 1, is always verified `{0,0,0,0}`: no turret controller
-exists in this build. Failure to install a required socket exclusion refuses
+Rule 4 (turrets) is described below. Failure to install a required socket exclusion refuses
 startup.
 
 `xml2_xml1_controllers_test` exercises selection counterexamples, transaction
@@ -122,3 +121,119 @@ Live traces show the three independent floor attacks recurring at their native
 ten-second deadlines, automatic core destruction, saved phase reconstruction and
 ending progression. Further acceptance includes original-game visual comparisons,
 and broader interruption/revisit cases.
+
+## XML1 scan turrets
+
+`Game.Xml1Turrets` defaults to off. The first-game builder enables it with one
+`[Xml1Turrets]` line per placement (`Count`, `T1`..`T32`):
+`zone|instance|px,py,pz,rx,ry,rz,mx,my,mz|visrange,minspeed,mintime,resetdelay,visextent,yawextent,pitchextent,turnrate,team|kind,recoil,count,spread,speed,accuracy,range,damage_lo,damage_hi,tracetime,radius,damagetype,damagemods|projectile|entfile|muzzlefx,muzzleaccfx,impactfx|firesound,rotatesound`,
+all from the original placement, its turret weapon and the first game's value table (`m` is the
+turret model's `Gun1` bolt, damagetype/damagemods are the PC bits of the weapon's names, the
+effects are paths under `effects/`). An instance written `*name` is spawned by a zone script (the
+Hive tanks' `spawn("tank1", "tank_turret_sp01", "turret1", ...)`): it is bound by name anywhere in
+the zone and its orientation when bound is the rest basis.
+Any malformed line, guard mismatch or refused hook keeps every turret an inert physent
+(the 1.4.0 behaviour) with one log line.
+
+The first game's `scanturretent` (default.xbe class registration `0x3571c0`, size
+`0x380`, parent `scanent`) runs three self-rescheduling events. The controller keeps
+their state per placement and runs them from the native event scheduler's dispatch:
+the scheduler singleton `0x75d340`'s vtable `0x68de14` slot `+0xc` (`0x4b2d60`), which
+the game update calls once per frame with the game time (`0x46f0e9`). One pointer is
+replaced through the shared install transaction; the native dispatch always runs first.
+No DLL event enters the native scheduler and nothing is saved: a zone load recreates the
+scanner from the authored placement, as the original constructor does.
+
+| Original (XBE) | Behaviour kept |
+|---|---|
+| `0xa8600` / `0xa83e0` | defaults visrange 600, minspeed 0, mintime 0.75, visextent 30, yaw/pitch extent 45, turnrate 20 deg/s, team hero; the one authored `resetdelay` fills both the track-loss timeout (+0x2d4) and the sweep pause (+0x2d0); unauthored (line value -1) they stay 10 and 3; `turndelay` is never read |
+| `0xa9000` | acquisition: off unless enabled (XBE flag bit 19 = PC bit 20); scanning reschedules after 1.0 s, tracking after 0.1 s; up to four team-filtered candidates in the vision cone, nearest first, living, then the nearest one in line of sight; seen time accumulates the event interval; scanning -> tracking at `mintime`; tracking -> scanning after `resetdelay` unseen |
+| `0xa8a90` / `0x120b00` | rotation every 0.01 s (1.0 s idle): sweep to rest yaw +- yawextent in the sweep direction, pause `resetdelay` at each end; tracking turns the shorter way to the target, pitch clamped to rest +- pitchextent and yaw to the nearer limit when outside the extents; arrival is a squared angle error under 0.001 |
+| `0xa9a40` / `0xa9960` / `0xa99e0` | firing: polls every 1.0 s; while tracking and seen within the last second it arms a burst of 20 weapon fires after 1.0 s; each fire reschedules after the weapon's returned recoil (`0xbcba0` returns prototype +0x1b4) |
+| `0xbb6f0` / `0x5a090` | a projectile weapon's fire spawns `count` projectiles fanned about the muzzle yaw: k from the fan centre, yaw - k x spread degrees, start + k along the right vector, speed x (1 + 0.1 k) |
+| `0xbcc47..0xbcc99` | direct damage: one integer draw in trunc(min x 0.7f)..trunc(min x 1.3f) per weapon fire, from the native gameplay random stream |
+| `0xb9e40` | muzzle: the weapon's `Gun<emitter+1>` bolt of the turret model carried by the turret's frame (a turret's one weapon is emitter 0, `Gun1`); aim (no character source, `0xba1d2..`): the bolt frame turned by a random yaw then pitch, each uniform in +-accuracy (the reader `0xbc3e3` stores degrees x 0.0174533) |
+| `0xba420` / `0xba850` | bullet / flame: one instant ray per fire from 36 units behind the muzzle to `range` ahead (flame: swept with the weapon `radius` as extents); the first entity crossed takes the hit when it is an actor, by its own take-hit (`vt+0xa8(attack, 1, 1, 1)`) - no to-hit roll on this path (the roll `0x5c240` belongs to the hit service `0x5c6c2`, which a bullet never calls); a scan turret's fire within `tracetime` of its last trace (+0x364) traces nothing; muzzle, tracer and impact effects |
+| `0xa8a90` (sound) | the turret's rotatesound loops at its position while it turns (volume 1, range 2 x visrange, inner visrange x 0.5) and stops on arrival; each weapon fire plays the weapon's firesound (`0xbcba0`) |
+| `0xa9a80` | after every weapon fire: an AI danger notice at the aim point (team neutral, radius 70, recoil + 0.5 s) |
+| `0xa91c0..0xa91f8` | candidates slower than `minspeed` are skipped; a hero filter skips heroes with character bit +0x334 bit 0 |
+| `0x96ba0` | homing: a homing projectile of a scanner source homes on the scanner's target; each update its direction becomes the velocity direction plus f x the unit direction to the target's origin, f = (10 + age) x 0.05 capped at 1.5, at unchanged speed (nozhoming keeps it level). PC `projectileent` has no in-flight homing (only `guidedprojectileent`), so the controller steers the turret's own homing projectiles once per dispatch (velocity +0x120, setter `0x473640`) |
+
+PC services: candidate query `0x4ab6d0` (actor class `0x70b83c`, filter mode 2 on the
+team bit, sphere of visrange, distance order `0x683ed0`); line of sight with the native
+sentry's test (`0x4b42c0..0x4b4361`: obstruction class `0x778a4c`, swept segment, direction
+order `0x68202c`, clear when nothing is found), from the scanner's own position (+0x20, as the
+original ray at `0xa9590..`) to the candidate's centre - from the turret's centre the
+haarp_ext04 turret never saw a hero below it;
+projectile service `0x450030` vt+0x28 (`0x4510a0`, one projectile per call: description
+origin +0, direction +0xc, entity key +0x1c, speed +0x24, count +0x2c) with an attack from
+`0x429860` owned by the turret's handle - its contact damage reaches a hero through the
+native collision and damage path; projectile definitions from the weapon's entity file, registered once
+(`0x564a80`/`0x564eb0`, definition manager `0x4625c0` vt+4). Placement binding uses the
+authored position and name (`haarp_ext02` also has a waypoint named `tank_turret`).
+Ray weapons: the PC beam's trace (`0x45237d..`: physent query, filters (1, 1) and (2, 0xe) - XML1's
+(1, 1) and (2, 0xd), PC flag bits one higher - swept segment vt+0x74, contact order `0x68d684`,
+contact record +0x30 point, +0x20 normal) without its hostility filter, the sentry line-of-sight
+test from the muzzle to the contact (walls stop the ray), and the hit by the target's own take-hit
+`vt+0xb0(attack, 1, 1, 1)` - the call the projectile contact `0x49c0d0` makes for an owner that is
+not a character - with an attack from `0x429860` (turret handle, the draw, type 5, damage type at
++0x10, damagemods at +0x14) and its point +0x40, direction +0x4c and normal +0x58 written after
+the constructor, which zeroes them (`0x4539a0`). Missiles carry the weapon's damage type and
+damagemods too (the original builds one attack per fire for every kind, 0xbcc51 / 0xbcc8e). Effects: manager
+`0x407750` (singleton `0x6f3c50`, vtable `0x68190c`) vt+0x1c resolves a path in the zone group
+11, vt+0x34 plays it at a point along a direction; a rebound turret resolves again. AI notice: AI
+manager `0x5252e0` vt+0x240 (`0x523c50`), neutral team 0x1c, as the harm notice `0x439391..`.
+Sounds: sound system `0x592480` (vtable `0x69d1ac`) vt+0x38 resolves a name (none = `[0x69d058]`), vt+0x4c starts
+a 3D loop, vt+0x74 stops it; the fire sound plays on the turret through entity vt+0x8c (the event
+sound's plain play `0x4e8a70`). Hero filter bit: PC character +0x3d8 bit 0, the bit the take-hit `0x438a10` tests where the
+original's `0x46270` tests +0x334 bit 0.
+
+Not mapped: the XBE awake bit (+4 bit 15, scanning only while set unless tracking) is
+treated as set - the original's bit 15 is the in-world flag (set and cleared through the
+entity's virtual at `0x66d70`; clearing it takes the model out of the scene, `0x74ee0`), not
+visibility (bit 14), so a turret scans while invisible as long as it is enabled; the turret's scan
+animation (`0x76740`), the candidates' status-effect 10 exclusion (`0x2e280`) and the original line of
+sight (a ray to visrange whose first entity must be the candidate) instead of the sentry test.
+Beam weapons are not emitted (no turret uses one). The XML1 missile's `explodradius` is not an attribute either
+engine reads (the original reads `exploderadius`), so its area damage is 0 in both; the damage
+is the direct contact draw.
+
+`xml2_xml1_controllers_test` also checks the turret rules (parsing, angles, sweep, acquisition,
+burst cadence, fan, damage draw, homing). Live, on an own build with staged entry: the
+haarp_ext02 turret swept, tracked, armed its burst at the tracking transition, fired 1.0 s
+later and every 5.0 s after, killed a non-invulnerable hero with one homing salvo, was
+destroyed by real attacks (deathscript ran) and stayed destroyed across Save, process restart
+and Load; the haarp_ext04 turret stayed idle while its setup script kept it disabled and then
+acquired and hit. Ray weapons, live with a staged zone load (enemy AI frozen, the hero walked in
+with real input unless named): the Arbiter arb2_3 tripod swept +-45 deg at 20 deg/s with 2 s end
+pauses, tracked, fired 1.0 s after tracking at the recoil cadence, took a non-invulnerable hero
+80 -> 58 -> 26 -> 0 (also hitting a frozen soldier standing in the line of fire), left an
+invulnerable hero unharmed, and was destroyed by real attacks; the four weapon_x wx1_3 tripods
+(hero placed on their level, staged) acquired together and killed the hero within a second; the
+Hive turret1 that tank1.py spawns on the stopped tank (the hero walked into the trigger, the real
+script and conversation ran) bound by name, flamed the hero every 0.45 s (tracetime) for 6-11, and
+took real jump-attack damage (500 -> 428, not destroyed within the test); the HAARP missiles leave
+from the Gun1 bolt and still killed the hero with one homing salvo. With a seated party (Cyclops
+player, three AI-controlled teammates, `seatParty`, staged): the AI teammates (+0x3d8 0x41/0x43)
+passed the cone and range test but were skipped, the player (0x60) was taken; with the player
+out of the cone and the frozen teammates in it the turret kept scanning for 40 s. All four Hive
+turrets (tank1-4 triggers walked into, real scripts and conversations) were destroyed by
+Cyclops' optic blasts; turret_death counted the objective to 4/4; turret1, destroyed before a
+save, stayed gone after a cold restart and Load (no rebind, objective 1/4 kept, damaged model
+on the tank). The arb2_2 and arb3_2 tripods bound only once the hero came near (they are out
+of the world while far from the heroes; a turret whose region leaves the world when the active
+hero changes is unbound and rebound later) and killed the hero.
+
+Online play: every peer runs the controller from the same lockstep scheduler dispatch,
+with game time and the gameplay random stream only. Rule 4 revision 2 registers
+`{1, placements, FNV-1a-32 of every applied line in order, 0}`; a requested but
+uninstalled controller registers unverified (host/join closed); a process that does
+not request it keeps revision 1 `{0,0,0,0}`, as 1.4.0. A zone change or a game clock that
+goes back (the online session restarts the clock, 0x61413d / 0x613f16) clears every binding
+timer, so a peer that played earlier in the process binds as soon as a fresh one does.
+Not yet checked with two instances (integrator): the peers must agree on (1) the hero filter,
+i.e. that +0x3d8 bit 0 of every hero reads the same on both peers (a remote player's hero must
+not read as AI-controlled on the other peer), and (2) when a turret's entity is in the world
+(it is bound only then, and its scanner restarts at every binding), i.e. that leaving and
+entering the world follows shared state (hero positions), not per-peer state such as the
+local camera.
