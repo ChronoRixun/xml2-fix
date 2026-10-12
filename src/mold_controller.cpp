@@ -44,7 +44,7 @@ struct state {
 } boss;
 bool enabled=false,was_requested=false,installed=false;
 bool trace=false;
-float trace_at=-1;
+float trace_at=-1,trace_decision_at=-1;
 mold_combat_rules::stage_binding saved_stage;
 script_t real_sequence=nullptr,real_node=nullptr,real_default_target=nullptr;
 u32 brain_resume=0x5173f9,brain_postprocess=0x517a79;
@@ -161,6 +161,11 @@ void tick(void* brain,void* actor,u32* output){
     }
     u32 hero_id=0;auto* hero=mold_query::active_hero(hero_id);
     const bool living_hero=mold_query::is_a(hero,0x70b83c)&&at<float>(hero,0x27c)>0;
+    if(trace&&t>trace_decision_at){
+        trace_decision_at=t+1;
+        logger::write("mold trace: phase %d step %d markers %d hero %08X living %d range %.1f dz %.1f",boss.phase,boss.step,first_count,hero_id,int(living_hero),
+            hero?std::sqrt(distance2(actor,hero)):-1.f,hero?at<float>(hero,0x28)-at<float>(actor,0x28):0.f);
+    }
     if(!living_hero)return;
     fn<target_t>(0x538290)(brain,nullptr,hero_id);target(actor,hero_id);
     if(boss.forced){
