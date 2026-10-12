@@ -43,6 +43,7 @@ namespace solo_mode_rules
 		left,           // the party left solo mode
 		unchanged,      // nothing to do (already in that state)
 		refused_players,// enter with more than one player (0x33a70: the session's player count > 1)
+		refused_danger_room, // enter in the Danger Room's free-play mode 0xfd (0x33a70 -> 0xbf750)
 		too_few,        // enter with a party of one (0x33a70: the list must hold more than one member)
 	};
 
@@ -77,10 +78,12 @@ namespace solo_mode_rules
 			next_check_ = 0;
 		}
 
-		// 0x33a70(on): the party list is every seated character; entering needs one player and more than one
-		// member, leaving clears whoever is solo. `members` is the party as the game has it at the call.
+		// 0x33a70(on): the party list is every seated character; entering is refused in the Danger Room's mode 0xfd
+		// (`danger_room_state`: default.xbe byte 0x4e7ab0, XMen2.exe 0x782728) and needs one player and more than one
+		// member; leaving clears whoever is solo. `members` is the party as the game has it at the call.
 		template <std::size_t N>
-		toggle_result toggle(const bool on, const std::array<member, N>& members, const std::size_t n)
+		toggle_result toggle(const bool on, const std::array<member, N>& members, const std::size_t n,
+		                     const unsigned char danger_room_state = 0xff)
 		{
 			std::size_t listed = 0, humans = 0;
 			for (std::size_t i = 0; i < n && i < N; ++i)
@@ -99,6 +102,10 @@ namespace solo_mode_rules
 				}
 				clear();
 				return toggle_result::left;
+			}
+			if (danger_room_state == 0xfd)
+			{
+				return toggle_result::refused_danger_room;
 			}
 			if (humans > 1)
 			{

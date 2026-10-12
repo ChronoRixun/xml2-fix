@@ -15,7 +15,8 @@ SoloMode = 1   ; the port's builder writes it; absent or 0: nothing patched, set
   (character+0x334 bit 1, getter 0x2e030), runs the party toggle 0x33a70 and plays the character's voice line
   (0x31860 / 0x318b0: voice ids 0x13 / 0x14).
 - The toggle walks the whole party list (game vt+0xe0, 0x72470: every seated character): solo is party-wide. Entering
-  is refused with more than one player (the session's player count) or a party of one. A character built later starts
+  is refused in the Danger Room's free-play mode 0xfd (byte 0x4e7ab0, 0xbf750; XMen2.exe keeps the same state byte at
+  0x782728), with more than one player (the session's player count) or a party of one. A character built later starts
   without the bit (constructor 0x33cd0); nothing is saved.
 - While solo, the AI heroes skip their follow work: the hero idle handler (0xf3410) neither takes up formation behind
   the leader (it stops the follower, vt+0x14c) nor uses a bridge power for the leader (Iceman / Storm); the follow
@@ -61,6 +62,5 @@ refused with more than one human player, as in the original.
   from the floor routine 0x78640; the PC keeps it at actor+0xbc, 0x419f20) - remapped through the entity registry's
   vt+0x24 (default.xbe 0xbef20, kept at game+0xc and 0x48d8e4): standing on an entity whose handle remaps refuses the
   regroup. The PC counterpart of that registry call is unproven.
-- The toggle's Danger Room guard (default.xbe byte 0x4e7ab0 == 0xfd; no solo box sits in a Danger Room course).
 - The HUD's "solo" text (string ids 0x9d / 0x9e in the first game) - the voice lines play.
 - The HUD's per-hero solo marker (0x1588c0) and the automap's solo mark (0x72150).

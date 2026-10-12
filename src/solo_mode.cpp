@@ -58,6 +58,7 @@ namespace solo_mode
 
 		constexpr u32 resolve_handle = 0x4654b0, lookup_name = 0x4a1700, game_clock = 0x45fe60, voice = 0x420db0;
 		constexpr u32 camera_getter = 0x4457e0, camera_vtable = 0x684cc4, camera_visible_slot = 0x178; // XBE 0x51100, vt+0x15c
+		constexpr u32 danger_room_state = 0x782728;   // byte: 0xff outside the Danger Room (0x4c87a0); default.xbe 0x4e7ab0
 		constexpr u32 teleport_flags = 0x730;          // the running teleport event's flags (default.xbe +0x524)
 		constexpr u32 path_vtable = 0x689b78;          // CPath: vt+0 query 0x496280, vt+4 reset 0x492560
 		constexpr u32 character_class_id = 0x70b840;
@@ -139,6 +140,12 @@ namespace solo_mode
 			return out;
 		}
 
+		unsigned char danger_room()
+		{
+			__try { return *reinterpret_cast<const unsigned char*>(static_cast<std::uintptr_t>(danger_room_state)); }
+			__except (EXCEPTION_EXECUTE_HANDLER) { return 0xff; }
+		}
+
 		toggle_result toggle(bool on)
 		{
 			const auto entities = party_entities();
@@ -147,7 +154,7 @@ namespace solo_mode
 			{
 				members[i] = describe(entities[i]);
 			}
-			return state.toggle(on, members, members.size());
+			return state.toggle(on, members, members.size(), danger_room());
 		}
 
 		const char* text(toggle_result r)
@@ -158,6 +165,7 @@ namespace solo_mode
 			case toggle_result::left: return "the party regrouped";
 			case toggle_result::unchanged: return "no change";
 			case toggle_result::refused_players: return "refused: more than one player";
+			case toggle_result::refused_danger_room: return "refused: the Danger Room's free play";
 			case toggle_result::too_few: return "refused: no other party member";
 			}
 			return "?";
@@ -620,7 +628,7 @@ namespace solo_mode
 			logger::write("solo mode: XMen2.exe isn't at 0x400000 - not installed, the native AI follows as before");
 			return;
 		}
-		constexpr std::array<limits_rules::guard, 24> guards{{
+		constexpr std::array<limits_rules::guard, 25> guards{{
 			{0x51ee0e, "0f89160300008a85d8030000b30484c374168b078bcfff905401000032c05f5e5d5b83c428c20c00", "hero idle handler: formation follow"},
 			{0x51ebc6, "f680b4020000400f85f8010000a008b7700084c00f85eb010000", "hero idle handler: bridge power"},
 			{0x50b8c3, "0f8470040000f687d80300000474178b4e108b01ff905401000032c05f5e5d5b83c424c20400", "follow movement"},
@@ -644,7 +652,8 @@ namespace solo_mode
 			{0x50f581, "d986d0010000d89e50050000dfe0f6c4050f8ada0300008bcee8d14effffd98650050000", "call for help: timer and next step"},
 			{0x50f972, "5f5e5d5b59c20400", "call for help: return"},
 			{0x4e4c86, "8bb424b40000008b068a8830070000", "teleport: character and its event flags"},
-			{0x4e5141, "899f78020000e8d44df3ffb0015f5e5b81c498000000c21c00", "teleport: success epilogue"}}};
+			{0x4e5141, "899f78020000e8d44df3ffb0015f5e5b81c498000000c21c00", "teleport: success epilogue"},
+			{0x4c87a0, "8a0d2827780033c080f9ff0f95c0c3", "Danger Room state byte 0x782728"}}};
 		for (const auto& g : guards)
 		{
 			if (!retail(g))

@@ -33,6 +33,9 @@ int main()
 	std::array<member, 4> coop = four;
 	coop[1].human = true;
 	check(p.toggle(true, coop, 4) == toggle_result::refused_players && !p.active(), "two players: refused");
+	check(p.toggle(true, four, 4, 0xfd) == toggle_result::refused_danger_room && !p.active(), "Danger Room free play 0xfd: refused");
+	check(p.toggle(true, four, 4, 0xfe) == toggle_result::entered && p.toggle(false, four, 4, 0xfd) == toggle_result::left,
+	      "other Danger Room states enter; leaving is never refused");
 	std::array<member, 4> alone{hero(0x1001, true), member{}, member{}, member{}};
 	check(p.toggle(true, alone, 4) == toggle_result::too_few && !p.active(), "a party of one: refused");
 	std::array<member, 4> unseated = alone;
