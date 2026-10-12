@@ -1,63 +1,98 @@
 # Changelog
 
-## 1.5.0 - 2026-10-12 (unreleased)
+## 1.5.0 - <date TBD>
 
 The engine half of Legends Classic 0.2.2: more of X-Men Legends I's own rules, each behind its own key. For X-Men
-Legends II as it ships only the display, pad and cinematic-mouse fixes below apply; everything else is off until a
-mod's `xml2-fix.ini` asks for it (the port's builder sets it all).
+Legends II as it ships only the display, pad and cutscene-mouse fixes apply; everything else is off until a mod's
+`xml2-fix.ini` asks for it (the port's builder sets it all).
 
-- Display: exclusive fullscreen asks only for a mode the adapter can show (an unlisted resolution falls back to the
-  desktop mode), 8x FSAA is requested as 8 and every mode clamps a request to the highest level the adapter supports
-  at the real format, and a failed device no longer wipes the game's display settings in the fix's own modes.
-- Pads: *Defaults 1/2/3* in the controls menu keep the pad layout (they used to drop player 1's pad bindings);
-  `[Input] CutsceneMouse` (on by default): in a cinematic the mouse no longer outlines or moves heroes.
+**For everyone**
+
+- **Exclusive fullscreen** asks only for a mode the adapter can show (a resolution it doesn't list falls back to the
+  desktop's mode and refresh rate), *8x* anti-aliasing really asks for 8 samples, every mode lowers a request to the
+  highest level the adapter supports, and a failed start no longer wipes the game's display settings in the fix's own
+  modes.
+- **Pads:** *Defaults 1/2/3* in the controls menu keep the pad layout; they used to erase player 1's pad bindings
+  (#9).
+- **The mouse in cutscenes** (`[Input] CutsceneMouse`, on by default) no longer outlines characters or clicks to move.
+
+**New for mods (the port's builder sets all of these)**
+
 - `[Game] RankCosts`, `LevelSkillPoints=xml1`, `LevelStatPoints=xml1`: X-Men Legends I's 2-point skill ranks and its
-  skill and stat points per level ([details](docs/rank-costs.md)). A campaign saved before the keys were installed gets
-  the fifth-level points its heroes missed once, on its first load (1 skill and 4 stat points per fifth level each
-  hero has processed); the next save records it in two optional header bits, so it never happens twice. When the
-  build ships `Data\lcsave\autogrowth-legacy.txt` (its heroes' autospend classes changed), the saved class bonus is
-  re-based once the same way (old classes' growth out, current classes' in, comic rewards kept; header bit 3).
+  2 skill / 8 stat points on every fifth level ([details](docs/rank-costs.md)). A campaign saved before these keys
+  were installed gets the fifth-level points its heroes missed, once, on its first load.
 - `[Game] Xml1Multipart`: breakable parts - Juggernaut's helmet, the Sentinels' arms ([details](docs/multipart.md)).
-- `[Game] X1Leader`: the first game's leaders (no hero flinch from their projectiles, their drop rule).
+- `[Game] X1Leader`: the first game's leaders (heroes don't flinch from their projectiles; their drop rule).
 - `[Game] SoloMode`: the first game's solo mode at its gaps and bridges ([details](docs/solo-mode.md)).
-- `[Game] DeathRule=xml1`, `PackAmount=xml1`, `PlacementCrush=xml1`, `DoubleHeal=0`: death below 1 health, packs
-  restoring a quarter, no crushes while objects settle, no double heals.
-- `[Game] DangerRoomGate`, `RevivalCost=xml1` and the Xtraction services (Load, Danger Room, Healer, Forge at the first
-  game's points) ([details](docs/xtraction-shop.md)).
-- `[Game] Xml1Turrets`: the first game's scan turrets fire again ([details](docs/xml1-controllers.md)).
-- `[Game] DeathSwitchClear`: when the controlled hero dies, the hero handed its controller stops the walk its AI had
-  started instead of finishing it with no input ([details](docs/death-switch.md)).
-- `[Limits] ScriptFunctions`: 320 script function names raised to 1024 ([details](docs/script-functions.md)).
-- Online: every one of these is a rule of the shared gameplay agreement (IDs 5-15). The agreement record is now a
-  fixed 108-byte digest (protocol revision 3), so a join no longer crashes the host once enough rules are on: with the
-  full list on the wire the join messages passed the game's 300-byte limit and its large-message path dereferenced
-  null. The refusing PC names the differing settings in its log and the joining PC's dialog. A 1.4.0 peer (or a 1.5
-  pre-release) and a 1.5.0 peer refuse each other at join as another build, with the reason on both PCs; an oversized
-  message from such a peer is dropped instead of crashing the game ([details](docs/gameplay-agreement.md)).
+- `[Game] DeathRule=xml1`: an entity dies on the hit that leaves it below 1 health
+  ([details](docs/death-threshold.md)).
+- `[Game] PackAmount=xml1`: health and energy packs restore a quarter, as in X-Men Legends I
+  ([details](docs/pack-amount.md)).
+- `[Game] PlacementCrush=xml1` and `DoubleHeal=0`: no crushes (and their hit sounds) while objects settle at a zone's
+  load, no double heals ([details](docs/placement-crush.md)).
+- `[Game] DangerRoomGate`, `RevivalCost=xml1` and the Xtraction services: Load, Danger Room, Healer and Forge at the
+  first game's points, the main menu's Danger Room locked until Phoenix has joined, the first game's revival price
+  ([details](docs/xtraction-shop.md)).
+- `[Game] Xml1Turrets`: the first game's scan turrets scan, track and fire again
+  ([details](docs/xml1-controllers.md)).
+- `[Game] DeathSwitchClear`: when the controlled hero dies, the hero handed its controller stands still instead of
+  finishing the walk its AI had started ([details](docs/death-switch.md)).
+- `[Limits] ScriptFunctions`: the game's 320 script function names raised to 1024
+  ([details](docs/script-functions.md)).
 
-### Details
+**Online**
 
+- Each of these keys is a rule of the shared gameplay agreement (IDs 5-15). The agreement record is now a fixed
+  108-byte digest (protocol revision 3), so a join no longer crashes the host once enough rules are on, and a refusal
+  names the setting that differs on both PCs.
+- A 1.4.0 player and a 1.5.0 player refuse each other at join, with the reason on both PCs: both need 1.5.0.
+
+**Going back to 1.4.0**
+
+- A save written by 1.5.0 is protected from 1.4.0: before replacing it, the older fix keeps it as `.lcsave.newer`,
+  and when a different `.newer` copy is already there (after going back and forth) it refuses to save over that file,
+  the profile included. To go back, put back the copy of your save folder made before the update.
+
+<details><summary>Technical details</summary>
+
+- `[Game] LevelSkillPoints` / `LevelStatPoints`: the catch-up grants each hero 1 skill and 4 stat points per multiple
+  of 5 in (1, its processed level] and is marked by optional-feature bits 1 / 2 of the LC header, so it never happens
+  twice; no format change. When the build ships `Data\lcsave\autogrowth-legacy.txt` (its heroes' autospend classes
+  changed), the saved class bonus is re-based once the same way (old classes' growth out, current classes' in, comic
+  rewards kept; header bit 3).
 - `[Game] PlacementCrush=xml1`: an object being settled on the floor no longer crushes another, as in X-Men Legends I,
   which never settles anything. XMen2.exe settles every object at a zone's load and each object spawned in play 0.5 s
   after it appears; furniture the first game authored overlapping (the X-Mansion dormitories' desk chair under its
   desk) no longer plays two hit sounds from an empty room on entry. Other touches in play keep the game's rule.
-  [Details](docs/placement-crush.md).
 - `[Game] DoubleHeal=0`: health and energy packs never heal double, as in X-Men Legends I, so they no longer sometimes
   play XML2's darker "double" sound; the stats screen's Body and Focus helps drop the double health / energy chance
   lines while it is in.
-- Online: both keys are rules 11 and 12 of the shared gameplay agreement (a key asked for but not installed closes
-  online play, as for rules 3 and 4).
 - `[Game] DeathRule=xml1`: X-Men Legends I's death threshold - an entity dies on the hit that leaves it below 1
   health, instead of only at 0, so an enemy no longer fights on at a fraction of a point with its death script and
   drops waiting. Eight comparisons of the damage functions move to the first game's line, and a killing hit leaves
-  health at 0 as the first game's whole numbers always did, so XP and death drops follow (`docs/death-threshold.md`);
-  online, gameplay rule 9.
-- `[Game] Xml1Turrets` / `[Xml1Turrets]`: X-Men Legends I's scan turrets scan, track and fire again (the HAARP
-  exterior missile tanks, the Arbiter / Weapon X tripod guns and the Hive tanks' flame turrets), with the first
-  game's timing, aim spread, damage and effects; online peers must agree on every placement (rule 4).
+  health at 0 as the first game's whole numbers always did, so XP and death drops follow.
+- `[Game] Xml1Turrets` / `[Xml1Turrets]`: X-Men Legends I's scan turrets (the HAARP exterior missile tanks, the
+  Arbiter / Weapon X tripod guns and the Hive tanks' flame turrets) with the first game's timing, aim spread, damage
+  and effects; online peers must agree on every placement (rule 4).
 - `[Limits] ScriptFunctions`: the game's 320 script function names, full with the fix's own functions, raised to
   1024 by default while `[Game] ForcedTeams` registers them (321 to 4096; 320 keeps the game's limit); every stock
   name keeps its place. `[Test] ScriptFunctionProbes` for testing it.
+- Display: the exclusive-fullscreen mode, format, refresh and multisample choice is checked against the adapter's
+  list; the 8x boot-switch index reads a private table; the two registry-wipe sites run only outside the fix's own
+  modes; the guards are read-only pre-checks.
+- Pads (#9): the *Defaults 1/2/3* preset tables get the pad layout; the game's cross-player rule (one key never drives
+  two players) is kept.
+- `[Input] CutsceneMouse`: the mouse check also tests the HUD's cinematic flag, so cutscenes that start without
+  locking controls (X-Men Legends I's mission briefings) stop the mouse too.
+- Online: the agreement's protocol revision 3 sends a header, the SHA-256 of the canonical rule list and a 64-byte
+  rule summary (up to 256 rules, the same 108 bytes at any count); the largest queued body is 188 bytes, under the
+  game's 300-byte message limit. With the full rule list on the wire (protocol 2) the join messages passed that
+  limit, the game split them, and the host's large-message path dereferenced null; a fragment for a stream that was
+  never opened is now dropped instead (an eight-byte guard in the startup transaction). Protocol-2 peers (1.4.0 and
+  1.5 pre-releases) are refused as another build, both ways ([details](docs/gameplay-agreement.md)).
+- `[Test] MultipartTrace`, `TurretTrace`, `SoloTrace`: diagnostic log lines for those features.
+
+</details>
 
 ## 1.4.0 - 2026-10-12
 

@@ -142,7 +142,9 @@ layout it runs with; a mismatch, or a rule that failed to install on either side
 loaded. The joining player gets the game's own dialog (*Incompatible gameplay or an unverified installation...*); the
 host keeps its session and sees the reason in the lobby (in place of the advice text, for a minute) or as a short line
 in play: different gameplay settings, the fix not loaded on one PC, or another build. XML2 as it ships, without any of
-these keys, plays online exactly as before. The record and its rules: [docs/gameplay-agreement.md](docs/gameplay-agreement.md).
+these keys, plays online exactly as before. From 1.5 the record is a fixed 108-byte digest whatever the number of
+rules (protocol revision 3), and a refusal names the setting that differs on both PCs; 1.4 and 1.5 refuse each
+other as another build. The record and its rules: [docs/gameplay-agreement.md](docs/gameplay-agreement.md).
 
 **Diagnosing online problems:** add this to `xml2-fix.ini` and `xml2-fix.log` will list every connection and query the game makes:
 
@@ -688,6 +690,10 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `VirtualPads` | `0` | `1` to `4`: pads the game sees with nothing plugged in, in place of real controllers |
 | `ScriptFunctionProbes` | `0` | `1` to `64`: test functions `xml2fixProbe1`..`N` registered behind the fix's own, each call logged ([details](docs/script-functions.md)) |
 | `SoloTrace` | `0` | `1`: the log names each automatic solo-mode regroup check and the peers it reached ([details](docs/solo-mode.md)) |
+| `MultipartTrace` | `0` | `1`: the log names every breakable-part owner spawned, every part hit (damage, current part, its health, the break roll) and every refused attack ([details](docs/multipart.md)) |
+| `TurretTrace` | `0` | `1`: the log follows each scan turret: its target search, aim, shots and hits ([details](docs/xml1-controllers.md)) |
+| `MoldTrace` | `0` | `1`: the log follows the Master Mold controller's phase and step once a second ([details](docs/xml1-controllers.md)) |
+| `MoveTriggerTrace` | `0` | `1`: the log follows the raised move-trigger arena: handles, epochs, occupancy ([details](docs/move-triggers.md)) |
 
 **[Debug]**
 
@@ -697,6 +703,8 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `LogFiles` | `0` | `1`: `xml2-fix.log` lists every file the game opens |
 | `LogBreakRule` | `0` | `1` (with `BreakRule=xml1`): `xml2-fix.log` lists every melee level worked out and every hit on an object, with the verdict |
 | `SaveDumpRefused` | `0` | `1` (with `[Save] Format=lc`): a refused campaign save also writes the game's own save image to `SaveLC\refused-native-<time>.save`, for a bug report ([details](docs/save-format.md)) |
+| `SaveTrace` | `0` | `1` (with `[Save] Format=lc`): the log counts the game's own save capture and every per-object restore, for a bug report ([details](docs/save-guards.md)) |
+| `SaveTiming` | `0` | `1` (with `[Save] Format=lc`): the log times each save's capture, digest and write ([details](docs/save-format.md)) |
 
 ## 🔒 Privacy
 
