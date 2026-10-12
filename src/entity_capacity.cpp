@@ -28,6 +28,7 @@ namespace entity_capacity
 		descriptor prepared_descriptor = stock_descriptor;
 		bool requested = false, prepared = false, install_published = false, fatal = false;
 		std::string failure;
+		fallback_cause failure_cause = fallback_cause::internal; // picks the advice in the fallback warning
 		entity_owners::set owners;
 		std::uint8_t* allocator_backing = nullptr;  // 0x189218 bytes, zero-filled before every construction
 		std::uint8_t* save_backing = nullptr;       // 0x80c24 bytes, the prepared CMap save-manager claim
@@ -355,6 +356,7 @@ namespace entity_capacity
 		if (!startup_quiescent(read_dword, lc, address_of(game), why))
 		{
 			failure = why;
+			failure_cause = quiescence_cause(lc, address_of(game));
 			logger::write("entity capacity: requested but refused before preparation: %s", why.c_str());
 			return;
 		}
@@ -385,7 +387,11 @@ namespace entity_capacity
 		built = {};
 		if (!build_contribution(built) || !patch_transaction::verify_expectations(built, why))
 		{
-			if (failure.empty()) failure = "the executable's entity code differs from the ledger: " + why;
+			if (failure.empty())
+			{
+				failure = "the executable's entity code differs from the ledger: " + why;
+				failure_cause = fallback_cause::changed_code;
+			}
 			logger::write("entity capacity: %s - EntityCapacity falls back to stock capacities (online admission poisoned); the rest of the fix installs normally", failure.c_str());
 			built = {};
 			release_prepared();
@@ -428,10 +434,7 @@ namespace entity_capacity
 	std::string fallback_notice()
 	{
 		if (!requested || install_published || fatal) return {};
-		return "The raised entity capacity ([Limits] EntityCapacity=1) could not be installed:\n" + failure +
-		       "\n\nThe game continues with the stock entity limits (224 props, projectiles and triggers in a zone): crowded "
-		       "rooms can lose objects, saves made with the raised capacity cannot be loaded, and online play is unavailable "
-		       "in this session.\n\nUse the retail XMen2.exe this build was made for; xml2-fix.log has the details.";
+		return fallback_notice_text(failure, failure_cause);
 	}
 	const descriptor& installed() { return published; }
 

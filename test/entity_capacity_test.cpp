@@ -125,6 +125,27 @@ int main()
 		mem[allocator_pointer_cell] = 0; mem[0x781ee4] = 1;
 		check(!startup_quiescent(read, "lc", 0x400000, why) && why.find("World") != std::string::npos, "a built World refuses");
 	}
+	// ---- the fallback warning's advice follows the cause (it used to blame the executable every time)
+	{
+		check(quiescence_cause("off", 0x400000) == fallback_cause::save_format && quiescence_cause("", 0x400000) == fallback_cause::save_format,
+		      "no [Save] Format=lc: a configuration cause");
+		check(quiescence_cause(" LC", 0x10000000) == fallback_cause::executable, "LC set but the module is not at 0x400000: executable cause");
+		check(quiescence_cause("lc", 0x400000) == fallback_cause::load_order, "LC set, retail base, owners already built: load-order cause");
+		const auto format = fallback_notice_text("why", fallback_cause::save_format);
+		check(format.find("Format=lc") != std::string::npos && format.find("EntityCapacity=0") != std::string::npos && format.find("retail XMen2.exe") == std::string::npos,
+		      "a missing Format=lc names the ini line and the opt-out, not the executable");
+		const auto changed = fallback_notice_text("why", fallback_cause::changed_code);
+		check(changed.find("unmodified retail XMen2.exe") != std::string::npos && changed.find("Format=lc") == std::string::npos, "changed entity code names the executable");
+		check(fallback_notice_text("why", fallback_cause::internal).find("report it") != std::string::npos, "an internal failure asks for a report, not a different exe");
+		check(fallback_notice_text("why", fallback_cause::load_order).find("loaders") != std::string::npos, "a late load names other loaders");
+		bool every = true;
+		for (const auto c : {fallback_cause::save_format, fallback_cause::executable, fallback_cause::changed_code, fallback_cause::load_order, fallback_cause::internal})
+		{
+			const auto text = fallback_notice_text("the reason", c);
+			every = every && *fallback_advice(c) && text.find("the reason") != std::string::npos && text.find("xml2-fix.log") != std::string::npos;
+		}
+		check(every, "every cause has advice; the notice keeps the logged reason and points to the log");
+	}
 	// ---- layout contract
 	{
 		check(world_core_for(256).handles == stock_descriptor.world_core.handles && world_core_for(1024).shift + 4 == 0x30a4, "handle core derivation matches retail and the plan");

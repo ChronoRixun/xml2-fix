@@ -126,6 +126,57 @@ namespace entity_capacity_rules
 		return true;
 	}
 
+	// ---- why a requested raise fell back to stock, and what the player can do about it ------------------------
+	// The startup warning used to blame the executable for every fallback; the advice now follows the cause.
+	enum class fallback_cause
+	{
+		save_format,  // [Save] Format=lc missing: a configuration problem, the executable is fine
+		executable,   // XMen2.exe is not loaded at 0x400000 (not the game, or relocated)
+		changed_code, // a ledger guard or region hash differs: a different or patched XMen2.exe, or another patch
+		load_order,   // the game had already built its entity owners when the fix ran
+		internal,     // memory, symbol binding, owner preparation or the transaction itself: the fix's own problem
+	};
+	// The cause of a startup_quiescent refusal, from the same inputs it refused.
+	inline fallback_cause quiescence_cause(std::string_view save_format_text, std::uint32_t game_base)
+	{
+		std::string lower(save_format_text);
+		for (auto& c : lower) c = static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+		const auto value = lower.find_first_not_of(" \t");
+		if (value == std::string::npos || lower.substr(value, 2) != "lc") return fallback_cause::save_format;
+		if (game_base != 0x400000) return fallback_cause::executable;
+		return fallback_cause::load_order;
+	}
+	inline const char* fallback_advice(fallback_cause cause)
+	{
+		switch (cause)
+		{
+		case fallback_cause::save_format:
+			return "xml2-fix.ini (next to XMen2.exe) is missing [Save] Format=lc, which the raised capacity needs. A Legends Classic "
+			       "build writes it: rebuild or reinstall the build (or add the line yourself), or set [Limits] EntityCapacity=0 "
+			       "to play with the stock limits without this warning.";
+		case fallback_cause::executable:
+			return "The running program is not loaded where the retail XMen2.exe loads, so it is not the executable this fix patches. "
+			       "Start the retail XMen2.exe from the build folder.";
+		case fallback_cause::changed_code:
+			return "XMen2.exe's entity code is not the retail code: the executable is a different or modified version, or another "
+			       "patch, trainer or tool changed it. Use the unmodified retail XMen2.exe and turn off other executable patches.";
+		case fallback_cause::load_order:
+			return "The game had already started building its world when XML2 Fix loaded. Start XMen2.exe directly (or from the "
+			       "launcher) without other loaders or injectors.";
+		case fallback_cause::internal:
+			return "This is a problem in XML2 Fix itself, not in your setup: please report it with xml2-fix.log.";
+		}
+		return "";
+	}
+	// The whole startup warning (one message box; the game continues with stock capacities).
+	inline std::string fallback_notice_text(const std::string& failure, fallback_cause cause)
+	{
+		return "The raised entity capacity ([Limits] EntityCapacity=1) could not be installed:\n" + failure +
+		       "\n\nThe game continues with the stock entity limits (224 props, projectiles and triggers in a zone): crowded "
+		       "rooms can lose objects, saves made with the raised capacity cannot be loaded, and online play is unavailable "
+		       "in this session.\n\n" + fallback_advice(cause) + "\nxml2-fix.log has the details.";
+	}
+
 	// Ledger symbols another module writes as part of its own contribution (same transaction, same bytes).
 	constexpr bool owned_elsewhere(std::string_view symbol)
 	{
