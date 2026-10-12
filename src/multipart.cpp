@@ -205,8 +205,10 @@ void __fastcall damage_hook(void* event){
     auto& in=i->second;
     last_roll=-1;
     const int k=multipart_rules::hit(in.state,d->parts,static_cast<int>(after),roll);
-    if(trace)logger::write("multipart: actor %08X hit %d, current part %d, health %d/%d, roll %d",at<u32>(victim,0x1c),
-        static_cast<int>(after),in.state.current,in.state.health[0],in.state.health[1],last_roll);
+    if(trace)logger::write("multipart: actor %08X hit %d (before deflect %d), current part %d, health %d/%d, roll %d, resist %d %d %d %d %d %d %d %d",at<u32>(victim,0x1c),
+        static_cast<int>(after),static_cast<int>(before),in.state.current,in.state.health[0],in.state.health[1],last_roll,
+        at<signed char>(victim,0x550),at<signed char>(victim,0x551),at<signed char>(victim,0x552),at<signed char>(victim,0x553),
+        at<signed char>(victim,0x554),at<signed char>(victim,0x555),at<signed char>(victim,0x556),at<signed char>(victim,0x557));
     if(k>=0)break_part(in,*d,a->second,k);
 }
 // destroyMultipartPiece (XBE 0x9ce30 -> 0x88fa0) has no XMen2.exe function; the builder writes it as
