@@ -709,6 +709,22 @@ namespace display
 		void keep_size_on_dpi_change(const HWND handle, const UINT dpi, const RECT& suggested)
 		{
 			std::lock_guard lock(mutex);
+			const bool minimized = IsIconic(handle) != FALSE;
+			if (!sizes_on_dpi_change(kept, minimized || IsZoomed(handle)))
+			{
+				// Maximized: the suggested rectangle is the new monitor's; minimized: nothing to place.
+				// The kept client is applied when the window is restored (client_after_restore).
+				logger::write("display: DPI changed to %u while %s - Windows' size %s, client %ux%u kept for the restore", dpi,
+				              minimized ? "minimized" : "maximized", describe(suggested).c_str(), kept.client.width, kept.client.height);
+				if (!minimized)
+				{
+					in_dpi_change = true;
+					real_set_window_pos(handle, nullptr, suggested.left, suggested.top, suggested.right - suggested.left, suggested.bottom - suggested.top,
+					                    SWP_NOZORDER | SWP_NOACTIVATE);
+					in_dpi_change = false;
+				}
+				return;
+			}
 			const DWORD style = static_cast<DWORD>(GetWindowLongA(handle, GWL_STYLE));
 			const DWORD ex_style = static_cast<DWORD>(GetWindowLongA(handle, GWL_EXSTYLE));
 			auto place = placement_for(MonitorFromRect(&suggested, MONITOR_DEFAULTTONEAREST), style, ex_style);
@@ -756,7 +772,7 @@ namespace display
 			{
 				std::lock_guard lock(mutex);
 				const size target = client_for_dpi_change(kept, client_size);
-				if (target.width && target.height)
+				if (target.width && target.height && !IsZoomed(handle) && !IsIconic(handle))
 				{
 					*reinterpret_cast<SIZE*>(lparam) = window_size_at(handle, static_cast<UINT>(wparam), target);
 					return TRUE;
@@ -765,7 +781,21 @@ namespace display
 			if (message == WM_SIZE && wparam == SIZE_RESTORED && manages_geometry())
 			{
 				std::lock_guard lock(mutex);
-				note_client_resize(kept, {LOWORD(lparam), HIWORD(lparam)}, window_dpi(handle), in_dpi_change);
+				const UINT dpi = window_dpi(handle);
+				if (const auto restored = !in_dpi_change ? client_after_restore(kept, dpi) : std::nullopt;
+				    restored && opts.window_mode == mode::windowed && (restored->width != LOWORD(lparam) || restored->height != HIWORD(lparam)))
+				{
+					// Restored after a DPI change it was maximized or minimized through: the kept client area.
+					const SIZE outer = window_size_at(handle, dpi, *restored);
+					logger::write("display: restored after a DPI change - client %ux%u kept", restored->width, restored->height);
+					in_dpi_change = true;
+					real_set_window_pos(handle, nullptr, 0, 0, outer.cx, outer.cy, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+					in_dpi_change = false;
+				}
+				else
+				{
+					note_client_resize(kept, {LOWORD(lparam), HIWORD(lparam)}, dpi, in_dpi_change);
+				}
 			}
 			if (message == 0x02e0 /* WM_DPICHANGED */ && lparam && manages_geometry())
 			{

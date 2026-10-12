@@ -433,6 +433,21 @@ namespace
 			CHECK(note_client_resize(kept, {800, 450}, 96, false) && client_for_dpi_change(kept, {1035, 587}) == (size{800, 450}));
 			CHECK(!note_client_resize(kept, {0, 450}, 96, false) && kept.client == (size{800, 450}));
 		}
+		// Maximized (or minimized) through a DPI change: Windows sizes the window, the kept client waits
+		// for the restore and is applied there at the new DPI.
+		{
+			kept_client kept{};
+			settle_client(kept, {1035, 587}, 120);
+			CHECK(!client_after_restore(kept, 120).has_value());                  // nothing pending: an ordinary restore
+			CHECK(sizes_on_dpi_change(kept, false));                              // restored: the fix sizes it
+			CHECK(!sizes_on_dpi_change(kept, true) && kept.pending);              // maximized: left to Windows
+			CHECK(kept.client == (size{1035, 587}));                              // the saved size survives
+			CHECK(!note_client_resize(kept, {1035, 593}, 96, false) && kept.client == (size{1035, 587})); // nothing recorded meanwhile
+			const auto restored = client_after_restore(kept, 96);
+			CHECK(restored && *restored == (size{1035, 587}) && !kept.pending && kept.dpi == 96);
+			CHECK(note_client_resize(kept, {1035, 587}, 96, false));              // settled at the new DPI again
+			CHECK(!client_after_restore(kept, 96).has_value());
+		}
 
 		// The conversion itself: first and last pixels map onto the screen's, equal sizes don't move.
 		CHECK(scale_coordinate(0, 1023, 1280) == 0 && scale_coordinate(1022, 1023, 1280) == 1279 && scale_coordinate(574, 575, 720) == 719);
