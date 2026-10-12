@@ -28,22 +28,32 @@ enum class weapon_kind { bullet=0, flame=1, projectile=2, beam=3 };   // XBE typ
 struct weapon {
     weapon_kind kind=weapon_kind::projectile;
     float recoil=0,spread=10.f,speed=0,accuracy=0,range=0,damage_min=0,damage_max=0;
+    float tracetime=0,radius=0;          // prototype +0x1bc (0 unless authored), +0x1c8 (ray half-extent)
+    std::uint32_t damage_type=0x80;      // PC damage-type bits (dmg_physical = XML1 type 0, the prototype default)
+    std::uint32_t damage_mods=0;         // PC damagemod bits (XML1 and PC share the bit values by name)
     int count=1;
     std::string projectile,entfile;
+    std::array<std::string,3> effects;   // muzzlefx, muzzleaccfx (tracer / flame), impactfx: effects/<path>
 };
 struct spec {
     std::string zone,instance;
+    bool spawned=false;             // '*name': spawned by a zone script (spawn()), bound by name; rest = its orientation then
     std::array<float,3> position{}; // authored placement (binds the instance; names repeat across entity types)
     std::array<float,3> rest{};   // authored orientation (radians), the scanner's rest basis (+0x30c)
+    std::array<float,3> muzzle{}; // the model's Gun1 bolt in model space (0xb9e40 fires from Gun<emitter+1>)
     scanner scan;
     weapon gun;
 };
 
 // ---- parsing the builder's one-line description ------------------------------------------------
-// zone|instance|px,py,pz,rx,ry,rz|visrange,minspeed,mintime,resetdelay,visextent,yawextent,pitchextent,turnrate,filterteam|
-// kind,recoil,count,spread,speed,accuracy,range,damage_min,damage_max|projectile|entfile
+// zone|instance|px,py,pz,rx,ry,rz,mx,my,mz|visrange,minspeed,mintime,resetdelay,visextent,yawextent,pitchextent,turnrate,filterteam|
+// kind,recoil,count,spread,speed,accuracy,range,damage_min,damage_max,tracetime,radius,damagetype,damagemods|
+// projectile|entfile|muzzlefx,muzzleaccfx,impactfx
 // Angles of the scanner block are degrees (as authored); rest is radians (as the map's orient).
 // Damage is the resolved draw (XML1 draws one integer in trunc(min*0.7f)..trunc(min*1.3f)).
+// damagetype / damagemods are the PC bit values of the weapon's authored names; an effect may be empty.
+// An instance written '*name' is spawned by a zone script: it is bound by name anywhere in the zone and
+// its rest basis is its orientation when bound (the original constructor reads the spawned orientation).
 inline std::vector<std::string_view> split(std::string_view s,char c){
     std::vector<std::string_view> out;std::size_t at=0;
     for(;;){const auto n=s.find(c,at);out.push_back(s.substr(at,n==std::string_view::npos?std::string_view::npos:n-at));if(n==std::string_view::npos)break;at=n+1;}
@@ -54,6 +64,11 @@ inline bool number(std::string_view s,float& v){
     std::string t(s);char* end=nullptr;v=std::strtof(t.c_str(),&end);
     return end==t.c_str()+t.size()&&std::isfinite(v);
 }
+inline bool bits(std::string_view s,std::uint32_t& v){
+    if(s.empty())return false;
+    const auto r=std::from_chars(s.data(),s.data()+s.size(),v);
+    return r.ec==std::errc{}&&r.ptr==s.data()+s.size();
+}
 inline bool identifier(std::string_view s,std::size_t max,bool path){
     if(s.empty()||s.size()>max)return false;
     for(char c:s)if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||(path&&c=='/')))return false;
@@ -61,11 +76,24 @@ inline bool identifier(std::string_view s,std::size_t max,bool path){
 }
 inline std::optional<spec> parse(std::string_view line){
     const auto f=split(line,'|');
-    if(f.size()!=7||!identifier(f[0],63,true)||!identifier(f[1],31,false))return std::nullopt;
-    spec r;r.zone=f[0];r.instance=f[1];
-    const auto rest=split(f[2],',');const auto sc=split(f[3],',');const auto w=split(f[4],',');
-    if(rest.size()!=6||sc.size()!=9||w.size()!=9)return std::nullopt;
-    for(int i=0;i<3;++i)if(!number(rest[i],r.position[i])||!number(rest[i+3],r.rest[i]))return std::nullopt;
+    if(f.size()!=8||!identifier(f[0],63,true))return std::nullopt;
+    spec r;r.zone=f[0];
+    std::string_view inst=f[1];
+    if(!inst.empty()&&inst[0]=='*'){r.spawned=true;inst.remove_prefix(1);}
+    if(!identifier(inst,31,false))return std::nullopt;
+    r.instance=inst;
+    const auto rest=split(f[2],',');const auto sc=split(f[3],',');const auto w=split(f[4],',');const auto fx=split(f[7],',');
+    if(rest.size()!=9||sc.size()!=9||w.size()!=13||fx.size()!=3)return std::nullopt;
+    for(int i=0;i<3;++i){
+        if(!fx[i].empty()&&!identifier(fx[i],63,true))return std::nullopt;
+        r.gun.effects[i]=fx[i];
+    }
+    float trace=0,radius=0;
+    if(!number(w[9],trace)||!number(w[10],radius)||!(trace>=0&&trace<=60&&radius>=0&&radius<=1000))return std::nullopt;
+    if(!bits(w[11],r.gun.damage_type)||!bits(w[12],r.gun.damage_mods))return std::nullopt;
+    r.gun.tracetime=trace;r.gun.radius=radius;
+    for(int i=0;i<3;++i)if(!number(rest[i],r.position[i])||!number(rest[i+3],r.rest[i])||!number(rest[i+6],r.muzzle[i]))return std::nullopt;
+    for(float m:r.muzzle)if(!(std::fabs(m)<=1000))return std::nullopt;
     std::array<float,9> s{},g{};
     for(int i=0;i<9;++i)if(!number(sc[i],s[i])||!number(w[i],g[i]))return std::nullopt;
     if(!(s[0]>0&&s[1]>=0&&s[2]>=0&&s[3]>=0&&s[4]>0&&s[4]<=180&&s[5]>=0&&s[5]<=180&&s[6]>=0&&s[6]<=90&&s[7]>=0&&s[7]<=3600))return std::nullopt;
@@ -79,6 +107,7 @@ inline std::optional<spec> parse(std::string_view line){
         if(!identifier(f[5],31,false)||!identifier(f[6],31,false)||r.gun.speed<=0)return std::nullopt;
         r.gun.projectile=f[5];r.gun.entfile=f[6];
     }else if(!f[5].empty()||!f[6].empty())return std::nullopt;
+    else if(r.gun.kind!=weapon_kind::beam&&!(r.gun.range>0))return std::nullopt;   // a ray needs its length
     return r;
 }
 
@@ -139,6 +168,7 @@ struct state {
     std::uint32_t target=0;                          // +0x340
     int burst=0;                                     // +0x358
     int emitter=0;                                   // +0x360
+    float last_trace=0;                              // +0x364 (ray weapons' trace-time gate)
 };
 // Constructor + parser + weapon setup: rotation 0.01 s, acquisition 0.3 s, firing 0.3 s.
 inline state spawn(float now){
@@ -223,6 +253,42 @@ inline vec home(const vec& velocity,const vec& to_target,float age,bool level){
     if(!(m>0))return velocity;
     for(auto& x:w)x*=speed/m;
     return w;
+}
+// ---- ray weapons (bullet 0xba420, flame 0xba850) ---------------------------------------------------
+// Aim (0xb9e40, the non-character branch 0xba1d2..0xba268): the muzzle frame rotated by a random
+// pitch and yaw, each 0x1233a0(-accuracy, accuracy) radians (the reader 0xbc3e3 stores the authored
+// degrees x 0.0174533 at +0x1b0); yaw draws first. The local forward (Euler 0, pitch, yaw) is then
+// carried by the source's own frame (yaw about z, then pitch, forward() conventions).
+inline vec aim(const vec& orientation,float accuracy,float yaw_random,float pitch_random){
+    const float yaw=-accuracy+yaw_random*2*accuracy,pitch=-accuracy+pitch_random*2*accuracy;
+    const vec l=forward({0,pitch,yaw});
+    const float cp=std::cos(orientation[1]),sp=std::sin(orientation[1]),cy=std::cos(orientation[2]),sy=std::sin(orientation[2]);
+    const vec p{cp*l[0]+sp*l[2],l[1],-sp*l[0]+cp*l[2]};   // pitch: forward (1,0,0) -> (cos p, 0, -sin p)
+    return {cy*p[0]-sy*p[1],sy*p[0]+cy*p[1],p[2]};
+}
+// A model-space point carried by the entity frame (yaw about z, then pitch; forward() conventions):
+// the bolt's world position (0xb9e40: bolt matrix x entity matrix).
+inline vec frame_point(const vec& position,const vec& orientation,const vec& local){
+    const float cp=std::cos(orientation[1]),sp=std::sin(orientation[1]),cy=std::cos(orientation[2]),sy=std::sin(orientation[2]);
+    const vec p{cp*local[0]+sp*local[2],local[1],-sp*local[0]+cp*local[2]};
+    return {position[0]+cy*p[0]-sy*p[1],position[1]+sy*p[0]+cy*p[1],position[2]+p[2]};
+}
+// The traced segment (0xba5ad.. / 0xbaa06..): from 36 units behind the muzzle (x -36.0 at 0x3d37bc)
+// to range (prototype +0x1c4) ahead; extents 0 for a bullet, the weapon radius (+0x1c8) for a flame.
+struct segment{vec from,to,extent;};
+inline segment trace_segment(const vec& origin,const vec& direction,float range,float radius,weapon_kind kind){
+    segment g;
+    for(int i=0;i<3;++i){g.from[i]=origin[i]-36.f*direction[i];g.to[i]=origin[i]+range*direction[i];}
+    const float e=kind==weapon_kind::flame?static_cast<float>(static_cast<short>(radius)):0.f;
+    g.extent={e,e,e};
+    return g;
+}
+// Trace-time gate of a scanturretent source (0xba4e2..0xba551 / 0xba92a..): while the last trace
+// time (+0x364) is not negative, a fire within tracetime of it traces nothing; a trace records now.
+inline bool trace_ready(float& last,float now,float tracetime){
+    if(!(last>=0))return true;
+    if(now-last<tracetime)return false;
+    last=now;return true;
 }
 inline float fan_offset(int i,int count){
     if(count==1)return 0;

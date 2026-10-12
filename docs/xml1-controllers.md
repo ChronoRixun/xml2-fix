@@ -121,7 +121,16 @@ haarp_ext02 turret swept, tracked, armed its burst at the tracking transition, f
 later and every 5.0 s after, killed a non-invulnerable hero with one homing salvo, was
 destroyed by real attacks (deathscript ran) and stayed destroyed across Save, process restart
 and Load; the haarp_ext04 turret stayed idle while its setup script kept it disabled and then
-acquired and hit. `xml2_xml1_controllers_test` exercises selection counterexamples, transaction
+acquired and hit. Ray weapons, live with a staged zone load (enemy AI frozen, the hero walked in
+with real input unless named): the Arbiter arb2_3 tripod swept +-45 deg at 20 deg/s with 2 s end
+pauses, tracked, fired 1.0 s after tracking at the recoil cadence, took a non-invulnerable hero
+80 -> 58 -> 26 -> 0 (also hitting a frozen soldier standing in the line of fire), left an
+invulnerable hero unharmed, and was destroyed by real attacks; the four weapon_x wx1_3 tripods
+(hero placed on their level, staged) acquired together and killed the hero within a second; the
+Hive turret1 that tank1.py spawns on the stopped tank (the hero walked into the trigger, the real
+script and conversation ran) bound by name, flamed the hero every 0.45 s (tracetime) for 6-11, and
+took real jump-attack damage (500 -> 428, not destroyed within the test); the HAARP missiles leave
+from the Gun1 bolt and still killed the hero with one homing salvo. `xml2_xml1_controllers_test` exercises selection counterexamples, transaction
 rollback and the production socket gate with isolated providers and no sockets.
 Live traces show the three independent floor attacks recurring at their native
 ten-second deadlines, automatic core destruction, saved phase reconstruction and
@@ -132,8 +141,12 @@ and broader interruption/revisit cases.
 
 `Game.Xml1Turrets` defaults to off. The first-game builder enables it with one
 `[Xml1Turrets]` line per placement (`Count`, `T1`..`T32`):
-`zone|instance|px,py,pz,rx,ry,rz|visrange,minspeed,mintime,resetdelay,visextent,yawextent,pitchextent,turnrate,team|kind,recoil,count,spread,speed,accuracy,range,damage_lo,damage_hi|projectile|entfile`,
-all from the original placement, its turret weapon and the first game's value table.
+`zone|instance|px,py,pz,rx,ry,rz,mx,my,mz|visrange,minspeed,mintime,resetdelay,visextent,yawextent,pitchextent,turnrate,team|kind,recoil,count,spread,speed,accuracy,range,damage_lo,damage_hi,tracetime,radius,damagetype,damagemods|projectile|entfile|muzzlefx,muzzleaccfx,impactfx`,
+all from the original placement, its turret weapon and the first game's value table (`m` is the
+turret model's `Gun1` bolt, damagetype/damagemods are the PC bits of the weapon's names, the
+effects are paths under `effects/`). An instance written `*name` is spawned by a zone script (the
+Hive tanks' `spawn("tank1", "tank_turret_sp01", "turret1", ...)`): it is bound by name anywhere in
+the zone and its orientation when bound is the rest basis.
 Any malformed line, guard mismatch or refused hook keeps every turret an inert physent
 (the 1.4.0 behaviour) with one log line.
 
@@ -154,6 +167,10 @@ scanner from the authored placement, as the original constructor does.
 | `0xa9a40` / `0xa9960` / `0xa99e0` | firing: polls every 1.0 s; while tracking and seen within the last second it arms a burst of 20 weapon fires after 1.0 s; each fire reschedules after the weapon's returned recoil (`0xbcba0` returns prototype +0x1b4) |
 | `0xbb6f0` / `0x5a090` | a projectile weapon's fire spawns `count` projectiles fanned about the muzzle yaw: k from the fan centre, yaw - k x spread degrees, start + k along the right vector, speed x (1 + 0.1 k) |
 | `0xbcc47..0xbcc99` | direct damage: one integer draw in trunc(min x 0.7f)..trunc(min x 1.3f) per weapon fire, from the native gameplay random stream |
+| `0xb9e40` | muzzle: the weapon's `Gun<emitter+1>` bolt of the turret model carried by the turret's frame (a turret's one weapon is emitter 0, `Gun1`); aim (no character source, `0xba1d2..`): the bolt frame turned by a random yaw then pitch, each uniform in +-accuracy (the reader `0xbc3e3` stores degrees x 0.0174533) |
+| `0xba420` / `0xba850` | bullet / flame: one instant ray per fire from 36 units behind the muzzle to `range` ahead (flame: swept with the weapon `radius` as extents); the first entity crossed takes the hit when it is an actor, by its own take-hit (`vt+0xa8(attack, 1, 1, 1)`) - no to-hit roll on this path (the roll `0x5c240` belongs to the hit service `0x5c6c2`, which a bullet never calls); a scan turret's fire within `tracetime` of its last trace (+0x364) traces nothing; muzzle, tracer and impact effects |
+| `0xa9a80` | after every weapon fire: an AI danger notice at the aim point (team neutral, radius 70, recoil + 0.5 s) |
+| `0xa91c0..0xa91f8` | candidates slower than `minspeed` are skipped; a hero filter skips heroes with character bit +0x334 bit 0 |
 | `0x96ba0` | homing: a homing projectile of a scanner source homes on the scanner's target; each update its direction becomes the velocity direction plus f x the unit direction to the target's origin, f = (10 + age) x 0.05 capped at 1.5, at unchanged speed (nozhoming keeps it level). PC `projectileent` has no in-flight homing (only `guidedprojectileent`), so the controller steers the turret's own homing projectiles once per dispatch (velocity +0x120, setter `0x473640`) |
 
 PC services: candidate query `0x4ab6d0` (actor class `0x70b83c`, filter mode 2 on the
@@ -168,16 +185,24 @@ origin +0, direction +0xc, entity key +0x1c, speed +0x24, count +0x2c) with an a
 native collision and damage path; projectile definitions from the weapon's entity file, registered once
 (`0x564a80`/`0x564eb0`, definition manager `0x4625c0` vt+4). Placement binding uses the
 authored position and name (`haarp_ext02` also has a waypoint named `tank_turret`).
+Ray weapons: the PC beam's trace (`0x45237d..`: physent query, filters (1, 1) and (2, 0xe) - XML1's
+(1, 1) and (2, 0xd), PC flag bits one higher - swept segment vt+0x74, contact order `0x68d684`,
+contact record +0x30 point, +0x20 normal) without its hostility filter, the sentry line-of-sight
+test from the muzzle to the contact (walls stop the ray), and the hit by the target's own take-hit
+`vt+0xb0(attack, 1, 1, 1)` - the call the projectile contact `0x49c0d0` makes for an owner that is
+not a character - with an attack from `0x429860` (turret handle, the draw, type 5, damage type at
++0x10, damagemods at +0x14, point +0x40, direction +0x4c, normal +0x58). Effects: manager
+`0x407750` (singleton `0x6f3c50`, vtable `0x68190c`) vt+0x1c resolves a path in the zone group
+11, vt+0x34 plays it at a point along a direction; a rebound turret resolves again. AI notice: AI
+manager `0x5252e0` vt+0x240 (`0x523c50`), neutral team 0x1c, as the harm notice `0x439391..`.
+Hero filter bit: PC character +0x3d8 bit 0, the bit the take-hit `0x438a10` tests where the
+original's `0x46270` tests +0x334 bit 0.
 
 Not mapped: the XBE awake bit (+4 bit 15, scanning only while set unless tracking) is
-treated as set; the weapon's emitter bolts (shots leave from the turret's centre); scan/rotate
-loop sounds, the turret's fire animation, the muzzle effect,
-the AI danger notice after each shot (`0xf9a00` vt+0x22c) and the minspeed/stealth
-candidate filters are not reproduced. Bullet (`0xba420`), flame and beam weapons are not
-emitted: the builder lists only projectile turrets (the two HAARP exterior tanks). A PC bullet
-needs the hit service `0x453160`, whose to-hit roll `0x44f450` reads character fields of the
-attacker (+0x35c, +0x579/+0x57a): a physent attacker is not valid there, and the beam routine
-`0x451cc0` is actor-centric too. The XML1 missile's `explodradius` is not an attribute either
+treated as set; scan/rotate loop sounds, the fire sound and the turret's scan animation
+(`0x76740`), the candidates' status-effect 10 exclusion (`0x2e280`) and the original line of
+sight (a ray to visrange whose first entity must be the candidate) instead of the sentry test.
+Beam weapons are not emitted (no turret uses one). The XML1 missile's `explodradius` is not an attribute either
 engine reads (the original reads `exploderadius`), so its area damage is 0 in both; the damage
 is the direct contact draw.
 

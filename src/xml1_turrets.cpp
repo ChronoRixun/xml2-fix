@@ -52,6 +52,11 @@ using reader_load_t=unsigned char(__fastcall*)(void*,void*,const char*,unsigned 
 using reader_root_t=void*(__fastcall*)(void*,void*);
 using definitions_t=void(__fastcall*)(void*,void*,void*,void*,u32,u32,unsigned char,unsigned char);
 using definition_t=void*(__fastcall*)(void*,void*,const char*);
+using hitinfo_t=void*(__fastcall*)(void*,void*,void**,int);
+using take_hit_t=void(__fastcall*)(void*,void*,void*,u32,u32,u32);
+using effect_resolve_t=u32(__fastcall*)(void*,void*,const char*,u32);
+using effect_play_t=void(__fastcall*)(void*,void*,u32,const float*,const float*,u32,float,u32,float);
+using danger_t=void(__fastcall*)(void*,void*,const float*,u32,float,float,u32,u32,u32);
 
 constexpr u32 scheduler=0x75d340,scheduler_vtable=0x68de14,process_slot=scheduler_vtable+0xc,native_process=0x4b2d60;
 constexpr u32 enabled_bit=1u<<20;           // PC 'startenabled' (XBE bit 19, scanner 0xa9000 test)
@@ -63,6 +68,8 @@ struct turret {
     turret_rules::state s;
     bool live=false;
     float trace_at=0,next_bind=0;
+    std::array<u32,3> effects{};   // resolved muzzle / tracer / impact effect handles (zone group)
+    bool effects_resolved=false;
 };
 std::vector<turret> turrets;
 struct flight{u32 handle=0,target=0;float last[3]{};float born=0;};
@@ -138,6 +145,12 @@ turret_rules::sight look(turret& t,void* self){
             if(len>c.visrange)continue;
             if(len>0){for(auto& v:d)v/=len;if(turret_rules::dot(d,facing)<cone)continue;}
             if(!(health(e)>0))continue;
+            // 0xa91c0..0xa91f8: a candidate slower than minspeed (velocity XBE +0x100, PC +0x120) is skipped,
+            // and a hero filter skips heroes whose XBE +0x334 bit 0 is set (PC +0x3d8 bit 0, the same
+            // character bit the take-hit 0x438a10 / 0x46270 tests before notifying the attacker's AI).
+            if(c.minspeed>0){const vec v{at<float>(e,0x120),at<float>(e,0x124),at<float>(e,0x128)};if(turret_rules::dot(v,v)<c.minspeed*c.minspeed)continue;}
+            if(trace)logger::write("xml1 turrets candidate: %s %08X team-filter %d flag3d8 %02X",t.spec.instance.c_str(),at<u32>(e,0x1c),c.filterteam,at<unsigned char>(e,0x3d8));
+            if(c.filterteam==29&&(at<unsigned char>(e,0x3d8)&1))continue;
             picked[n++]=at<u32>(e,0x1c);
         }
     }
@@ -156,18 +169,20 @@ turret_rules::sight look(turret& t,void* self){
 }
 // The placement's physent: names repeat across entity types (haarp_ext02 has a waypoint and the
 // turret both named tank_turret), so the turret is the physent of that name at its authored spot.
+// A turret a zone script spawns (the Hive tanks' spawn("tank1", "tank_turret_sp01", "turret1", ...))
+// has no authored spot: the physent of that name anywhere in the zone.
 u32 bind(const turret& t){
     if(!mold_query::pools_ready())return 0;
     query_guard q;u32 exclusion=0;
     fn<query_t>(0x4ab6d0)(&q.value,nullptr,reinterpret_cast<const void*>(physent_class),&exclusion);
     if(!q.value)return 0;
     metric order{0x683ed0,{t.spec.position[0],t.spec.position[1],t.spec.position[2]},3};
-    at<sphere_t>(at<const void*>(q.value,0),0x68)(q.value,nullptr,order.position,16.f,0,0);
+    at<sphere_t>(at<const void*>(q.value,0),0x68)(q.value,nullptr,order.position,t.spec.spawned?1.e6f:16.f,0,0);
     q.results=fn<results_t>(0x4ab770)(q.value,&order);
     if(!q.results)return 0;
     const auto* vt=at<const void*>(q.results,0);
     const int count=at<count_t>(vt,0)(q.results,nullptr);
-    for(int i=0;i<count&&i<64;++i){
+    for(int i=0;i<count&&(t.spec.spawned||i<64);++i){
         auto* e=at<item_t>(vt,4)(q.results,nullptr,i);
         if(!e||!mold_query::is_a(e,physent_class))continue;
         const auto* name=fn<const char*(__fastcall*)(void*,void*)>(0x41fbb0)(e,nullptr);
@@ -199,12 +214,18 @@ bool load_definitions(const std::string& file,const std::string& entity){
 // k*spread, start + k along the right vector, speed x (1 + 0.1 k)); direct damage is one draw per
 // shot (0xbcc47..0xbcc99), shared by the fan. A homing projectile of a scanner source homes on the
 // scanner's target (0x5a090: projectile +0x2c8 = scanent +0x340): watch_flights steers it.
-// The muzzle is the turret's centre: the weapon's emitter bolts (weapon vt+0x40) are not mapped.
+// The muzzle is the model's Gun1 bolt in the turret's frame (0xb9e40, Gun<emitter+1>, emitter 0).
+void shoot_ray(turret& t,void* self);
+void resolve_effects(turret& t);
+void play(u32 effect,const vec& point,const vec& direction);
 void shoot(turret& t,void* self){
     const auto& w=t.spec.gun;
+    if(w.kind==turret_rules::weapon_kind::bullet||w.kind==turret_rules::weapon_kind::flame){shoot_ray(t,self);return;}
     if(w.kind!=turret_rules::weapon_kind::projectile){logger::write_once("turret-kind","xml1 turrets: weapon kind %d not emitted in this build",int(w.kind));return;}
     if(!load_definitions(w.entfile,w.projectile))return;
-    const vec facing=orientation(self),muzzle=center(self);
+    const vec facing=orientation(self),muzzle=turret_rules::frame_point(position(self),facing,t.spec.muzzle);
+    if(!t.effects_resolved)resolve_effects(t);
+    play(t.effects[0],muzzle,turret_rules::forward(facing));             // muzzlefx (0xbcba0, before the branch)
     const float damage=turret_rules::draw(w.damage_min,w.damage_max,random01());
     u32 key=0;fn<intern_t>(0x41b120)(&key,nullptr,w.projectile.c_str());
     int homing=0;
@@ -232,7 +253,103 @@ void shoot(turret& t,void* self){
     logger::write("xml1 turrets: %s fired %d x %s at %.3f yaw %.3f pitch %.3f spread %.0f speed %.0f damage %.0f target %08X homing %d",
         t.spec.instance.c_str(),w.count,w.projectile.c_str(),now(),facing[2],facing[1],w.spread,w.speed,damage,t.s.target,homing);
 }
-void forget(){for(auto& t:turrets){t.live=false;t.handle=0;}flights.clear();}
+// Effects: the effect manager (getter 0x407750, singleton 0x6f3c50, vtable 0x68190c) resolves a
+// path under effects/ in the zone's resource group 11 (vt+0x1c, as 0x4e6cb0 does for an event's
+// effect) and plays one at a point along a direction (vt+0x34, as the hit service 0x453160 does).
+// The zone unload releases the group, so a (re)bound turret resolves its effects again.
+void resolve_effects(turret& t){
+    t.effects_resolved=true;t.effects={};
+    auto* manager=fn<system_t>(0x407750)();
+    for(int i=0;i<3;++i){
+        const auto& path=t.spec.gun.effects[i];
+        if(path.empty())continue;
+        t.effects[i]=at<effect_resolve_t>(at<const void*>(manager,0),0x1c)(manager,nullptr,path.c_str(),11);
+        if(!t.effects[i])logger::write("xml1 turrets: %s effect %s unavailable",t.spec.instance.c_str(),path.c_str());
+    }
+}
+void play(u32 effect,const vec& point,const vec& direction){
+    if(!effect)return;
+    auto* manager=fn<system_t>(0x407750)();
+    at<effect_play_t>(at<const void*>(manager,0),0x34)(manager,nullptr,effect,point.data(),direction.data(),0,0.f,0,-1.f);
+}
+// The first entity a ray weapon's segment crosses (the PC beam's trace, 0x45237d..0x452447, without
+// its hostility filter, as the original 0xba571.. has none): physent query 0x4ab6d0 excluding the
+// turret, vt+0x40 (1, 1) and (2, 0xe) (XML1's (1, 1) and (2, 0xd); PC flag bits are one higher),
+// swept segment vt+0x74, ordered by time of impact (metric 0x68d684 over the query), contact record
+// from the results' vt+8 (+0x30 point, +0x20 normal).
+struct ray_hit{u32 handle=0;vec point{},normal{};};
+ray_hit first_hit(u32 self,const turret_rules::segment& g){
+    ray_hit hit;
+    if(!mold_query::pools_ready())return hit;
+    query_guard q;u32 exclusion=self;
+    fn<query_t>(0x4ab6d0)(&q.value,nullptr,reinterpret_cast<const void*>(physent_class),&exclusion);
+    if(!q.value)return hit;
+    const auto* vt=at<const void*>(q.value,0);
+    at<filter_t>(vt,0x40)(q.value,nullptr,1,1);
+    at<filter_t>(vt,0x40)(q.value,nullptr,2,0xe);
+    at<segment_t>(vt,0x74)(q.value,nullptr,g.from.data(),g.to.data(),g.extent.data());
+    struct {u32 vtable;void* query;} order{0x68d684,q.value};
+    q.results=fn<results_t>(0x4ab770)(q.value,&order);
+    if(!q.results)return hit;
+    const auto* rvt=at<const void*>(q.results,0);
+    if(at<count_t>(rvt,0)(q.results,nullptr)<1)return hit;
+    auto* e=at<item_t>(rvt,4)(q.results,nullptr,0);
+    if(!e)return hit;
+    void* record=nullptr;
+    at<hitinfo_t>(rvt,8)(q.results,nullptr,&record,0);
+    hit.handle=at<u32>(e,0x1c);
+    if(record){
+        hit.point={at<float>(record,0x30),at<float>(record,0x34),at<float>(record,0x38)};
+        hit.normal={at<float>(record,0x20),at<float>(record,0x24),at<float>(record,0x28)};
+    }else hit.point=center(e);
+    return hit;
+}
+// One bullet or flame fire (0xbcba0 -> 0xba420 / 0xba850). The muzzle is the model's Gun1 bolt in
+// the turret's frame (0xb9e40; the entity origin when the model has none) and the aim its orientation
+// spread by the weapon's accuracy; the draw is one integer per fire as for missiles. The first entity on the
+// segment takes the hit when it is an actor (0xba70a..: vt+0xa8(attack, 1, 1, 1) on the XBE, no
+// to-hit roll): on the PC the same direct take-hit call, entity vt+0xb0, that the projectile contact
+// 0x49c0d0 uses for an attacker that is not a character, with the attack's point (+0x40), direction
+// (+0x4c) and normal (+0x58). Walls stop the ray (the sentry's line-of-sight test to the contact).
+void shoot_ray(turret& t,void* self){
+    const auto& w=t.spec.gun;
+    if(!t.effects_resolved)resolve_effects(t);
+    const vec origin=turret_rules::frame_point(position(self),orientation(self),t.spec.muzzle);
+    const float ry=random01(),rp=random01();
+    const vec dir=turret_rules::aim(orientation(self),w.accuracy*turret_rules::radians_per_degree,ry,rp);
+    const float damage=turret_rules::draw(w.damage_min,w.damage_max,random01());
+    play(t.effects[0],origin,dir);                                   // muzzlefx (0xbcba0, before the branch)
+    const float time=now();
+    if(!turret_rules::trace_ready(t.s.last_trace,time,w.tracetime))return;
+    play(t.effects[1],origin,dir);                                   // muzzleaccfx: tracer / flame stream
+    const auto g=turret_rules::trace_segment(origin,dir,w.range,w.radius,w.kind);
+    const auto hit=first_hit(t.handle,g);
+    void* e=resolve(hit.handle);
+    bool applied=false;float before=0,after=0;
+    if(e&&clear_line(t.handle,origin,hit.point)){
+        if(mold_query::is_a(e,actor_class)&&mold_query::is_a(e,physent_class)){
+            std::array<unsigned char,0x6c> attack{};
+            fn<attack_t>(0x429860)(attack.data(),nullptr,t.handle,damage,0,5,w.damage_type,w.damage_mods,1,hit.point.data(),dir.data(),hit.normal.data());
+            before=health(e);
+            at<take_hit_t>(at<const void*>(e,0),0xb0)(e,nullptr,attack.data(),1,1,1);
+            after=health(e);applied=true;
+        }
+        play(t.effects[2],hit.point,hit.normal);                     // impactfx
+    }
+    if(trace||applied)logger::write("xml1 turrets: %s %s at %.3f dir %.3f/%.3f/%.3f hit %08X%s damage %.0f health %.1f -> %.1f",
+        t.spec.instance.c_str(),w.kind==turret_rules::weapon_kind::flame?"flame":"bullet",time,dir[0],dir[1],dir[2],hit.handle,
+        applied?" (actor)":"",damage,before,after);
+}
+// After each weapon fire the original warns the AI (0xa9a80 from the fire event 0xa9a78): AI manager
+// 0xf9a00 vt+0x22c(aim point +0x318, team 0x1a = neutral, radius 70, the fire's recoil + 0.5 s, 0), a
+// temporary danger notice every AI steers away from. PC: AI manager 0x5252e0 (vtable 0x695cbc)
+// vt+0x240 = 0x523c50 -> store 0x5044f0, neutral team 0x1c, two more zero arguments (as the harm
+// notice 0x439391.. passes them).
+void warn_ai(const turret& t,float recoil){
+    auto* ai=fn<system_t>(0x5252e0)();
+    at<danger_t>(at<const void*>(ai,0),0x240)(ai,nullptr,t.s.aim.data(),0x1c,70.f,recoil+.5f,0,0,0);
+}
+void forget(){for(auto& t:turrets){t.live=false;t.handle=0;t.effects_resolved=false;}flights.clear();}
 void update(float time){
     const char* current=reinterpret_cast<const char*>(0x72a758);
     if(std::strncmp(current,zone,sizeof zone)!=0||time<last_time){
@@ -250,9 +367,10 @@ void update(float time){
             t.next_bind=time+1;
             const u32 h=bind(t);self=resolve(h);
             if(!self||!(health(self)>0))continue;
-            t.handle=h;t.live=true;t.s=turret_rules::spawn(time);
+            t.handle=h;t.live=true;t.s=turret_rules::spawn(time);t.effects_resolved=false;
             loaded_files.clear();   // a zone (re)load drops group-11 definitions: register again on demand
             const auto o=orientation(self);
+            if(t.spec.spawned)t.spec.rest={o[0],o[1],o[2]};
             logger::write("xml1 turrets: %s bound %08X at %.1f/%.1f/%.1f orientation %.3f/%.3f/%.3f rest %.3f/%.3f/%.3f flags %08X",t.spec.instance.c_str(),h,
                 at<float>(self,0x20),at<float>(self,0x24),at<float>(self,0x28),o[0],o[1],o[2],t.spec.rest[0],t.spec.rest[1],t.spec.rest[2],at<u32>(self,4));
         }
@@ -277,7 +395,7 @@ void update(float time){
                 float delay=1.f;
                 const auto r=turret_rules::fire(t.s,time,1,t.spec.gun.recoil,delay);
                 t.s.fire_due=time+delay;
-                if(r==turret_rules::fire_result::shot)shoot(t,self);
+                if(r==turret_rules::fire_result::shot){shoot(t,self);warn_ai(t,t.spec.gun.recoil);}
                 else if(r==turret_rules::fire_result::burst_started)logger::write("xml1 turrets: %s burst armed at %.3f",t.spec.instance.c_str(),time);
             }
         }
@@ -340,7 +458,7 @@ void install(HMODULE game){
         if(!spec){logger::write("xml1 turrets: placement %d malformed; turrets stay inert",i);turrets.clear();lines.clear();return;}
         turrets.push_back({*spec});lines.push_back(*text);
     }
-    constexpr std::array<limits_rules::guard,20> guards{{
+    constexpr std::array<limits_rules::guard,30> guards{{
         {native_process,"83c104e9","scheduler dispatch thunk"},
         {0x4b2d70,"83ec08578bf98b876c9f0000","scheduler dispatch"},
         {0x46f0d9,"e8e23e04008b8ee8030000","game update calls the scheduler dispatch"},
@@ -360,7 +478,17 @@ void install(HMODULE game){
         {0x41fbb0,"568b711885f67507b8681968005ec3e8","instance name"},
         {0x473640,"83ec18568bf18b4604c1e805a801570f","entity velocity setter"},
         {0x683ed0,"e0934a00","distance ordering metric vtable"},
-        {0x68202c,"30bb4d00","direction ordering metric vtable"}}};
+        {0x68202c,"30bb4d00","direction ordering metric vtable"},
+        {0x68d684,"809a4a00","contact ordering metric vtable"},
+        {0x407750,"64a1000000008a0de08e6f00","effect manager getter"},
+        {0x407692,"c7060c196800","effect manager vtable store"},
+        {0x681928,"a0794000","effect manager resolve slot"},
+        {0x681940,"b0b24000","effect manager play slot"},
+        {0x4079a0,"8b4424088b4c24045051e821","effect resolve"},
+        {0x40b2b0,"83ec6855568be957896c240c","effect play"},
+        {0x5252e0,"8a0d9c887900b80100000084","AI manager getter"},
+        {0x525302,"c70510ba7800bc5c6900","AI manager vtable store"},
+        {0x695efc,"503c5200","AI manager danger notice slot"}}};
     for(const auto& g:guards)if(!limits_rules::matches(reinterpret_cast<const unsigned char*>(g.va),g.hex)){
         logger::write("xml1 turrets: guard failed %08X (%s); turrets stay inert",g.va,g.what);turrets.clear();lines.clear();return;}
     if(at<u32>(reinterpret_cast<const void*>(process_slot),0)!=native_process||at<u32>(reinterpret_cast<const void*>(0x4b2fe8),0)!=scheduler_vtable){

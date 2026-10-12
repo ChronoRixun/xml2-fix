@@ -3,7 +3,8 @@
 ## Unreleased
 
 - `[Game] Xml1Turrets` / `[Xml1Turrets]`: X-Men Legends I's scan turrets scan, track and fire again (the HAARP
-  exterior missile tanks), with the first game's timing; online peers must agree on every placement (rule 4).
+  exterior missile tanks, the Arbiter / Weapon X tripod guns and the Hive tanks' flame turrets), with the first
+  game's timing, aim spread, damage and effects; online peers must agree on every placement (rule 4).
 
 ## 1.4.0 - 2026-10-12
 
