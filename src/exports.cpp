@@ -20,6 +20,7 @@
 
 #include "balance.hpp"
 #include "break_rule.hpp"
+#include "placement_crush.hpp"
 #include "conversations.hpp"
 #include "confirmation_release.hpp"
 #include "explosive_first_hit.hpp"
@@ -274,6 +275,9 @@ namespace
 		// two code sites of the objects' own (their structure read and their damage gate), used from the first zone on;
 		// none of its sites or guards is anyone else's.
 		break_rule::install(game);
+		// X-Men Legends 1's zone placement without crushes ([Game] PlacementCrush=xml1): the objects' touch slot (0x498ef0),
+		// refused only while a zone load is in progress; no other module hooks it.
+		placement_crush::install(game);
 
 		test_input::install(); // first: its screenshots need the display fix's device hook
 		display::install(game);

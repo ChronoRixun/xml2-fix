@@ -52,6 +52,7 @@
 #include <Xinput.h>
 
 #include "break_rule_rules.hpp"
+#include "placement_crush_rules.hpp"
 #include "personal_item_text_rules.hpp"
 #include "save_format_rules.hpp"
 #include "discord_ipc.hpp"
@@ -9601,6 +9602,67 @@ namespace
 		}
 	}
 
+	// [Game] PlacementCrush (placement_crush_rules.hpp): the value's rules; the decision on the settle depth; the
+	// guards on their own; then, when a copy of XMen2.exe is at hand, every guard against it and the site.
+	void check_placement_crush_rules()
+	{
+		using namespace placement_crush_rules;
+		std::printf("[Game] PlacementCrush (no crush while an object is settled on the floor)\n");
+		CHECK(parse_rule("xml1").set && parse_rule(" XML1 ; the first game's zones").value == rule::xml1);
+		CHECK(parse_rule("xml2").set && parse_rule("xml2").value == rule::xml2 && !parse_rule("").set && !parse_rule(" ; x").set);
+		for (const char* bad : {"1", "on", "xml", "xml1 xml2"})
+		{
+			const auto c = parse_rule(bad);
+			CHECK(c.set && !c.error.empty() && c.value == rule::xml2);
+		}
+		// Refused only on xml1, only while a settle runs.
+		CHECK(refuse(rule::xml1, 1) && refuse(rule::xml1, 2) && !refuse(rule::xml1, 0) && !refuse(rule::xml1, -1));
+		CHECK(!refuse(rule::xml2, 1) && !refuse(rule::xml2, 0));
+		bool guards_ok = true, site_covered = false, resume_covered = false;
+		for (const auto& g : guards)
+		{
+			guards_ok &= limits_rules::valid_hex(g.hex) && g.what && *g.what;
+			const DWORD end = g.va + static_cast<DWORD>(limits_rules::hex_size(g.hex));
+			site_covered |= g.va <= touch_site && touch_site + retail_touch.size() <= end;
+			resume_covered |= g.va <= touch_resume && touch_resume < end;
+		}
+		bool settle_covered = false, call_covered = false;
+		for (const auto& g : guards)
+		{
+			const DWORD end = g.va + static_cast<DWORD>(limits_rules::hex_size(g.hex));
+			settle_covered |= g.va <= settle_slot && settle_slot + 4 <= end;
+			call_covered |= g.va == settle_call;
+		}
+		CHECK(guards_ok && site_covered && resume_covered && settle_covered && call_covered && touch_resume == touch_site + retail_touch.size());
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the touch slot's bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		CHECK(first_mismatch(image) == nullptr);
+		CHECK(std::memcmp(image + (touch_site - limits_rules::image_base), retail_touch.data(), retail_touch.size()) == 0);
+		std::uint32_t settle = 0;
+		std::memcpy(&settle, image + (settle_slot - limits_rules::image_base), 4);
+		CHECK(settle == settle_call);
+		// The slot is the objects' vt+0xac: in every vtable that holds it, the damage slot 0x497e70 follows or the
+		// class overrides that one.
+		int slots = 0;
+		for (DWORD va = 0x680000; va + 8 <= 0x6f0000; va += 4)
+		{
+			std::uint32_t v = 0;
+			std::memcpy(&v, image + (va - limits_rules::image_base), 4);
+			slots += v == touch_site;
+		}
+		CHECK(slots == 11);
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
 	// [Game] BreakRule (break_rule_rules.hpp): the value's rules; XML1's level sum and the structure pairing; the
 	// decision; what the fix remembers; the guards on their own; both bridges run for real; then, when a copy of
 	// XMen2.exe is at hand, every guard against it, the three writes on that copy and the game's own level function
@@ -10414,6 +10476,12 @@ int main(const int argc, char** argv)
 		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
 		return failures ? 1 : 0;
 	}
+	if (argc > 1 && std::strcmp(argv[1], "--placement-crush-rules") == 0)
+	{
+		check_placement_crush_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--break-rule-rules") == 0)
 	{
 		check_break_rule_rules();
@@ -10531,6 +10599,7 @@ int main(const int argc, char** argv)
 	check_ini_rules();
 	check_xp_curve_rules();
 	check_break_rule_rules();
+	check_placement_crush_rules();
 	check_save_format_rules();
 	check_balance_rules();
 	check_melee_weapon_rules();
