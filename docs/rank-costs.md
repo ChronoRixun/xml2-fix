@@ -98,6 +98,19 @@ up). Co-op: the grant happens where the file is read, the host's load; joiners r
 no file) and their own saves of the session carry their own keys' bits, which rule 5 makes the host's. Nothing is
 added to the agreement.
 
+**The class-growth re-base (`[Save] Format=lc`, builder SPEC 94).** When a build changes its heroes' autospend classes
+(the port's x1_bruiser / x1_support), saves written before it hold the old classes' automatic bonus. The builder then
+ships `Data\lcsave\autogrowth-legacy.txt` (per hero: its old class and that class's rules, from the player's XML2
+data); with it, each load of a campaign without header optional bit 3 re-bases every hero block and valid restore
+record once: class bonus (CStats+0x10) = saved - the old class's growth + the current class's growth, both simulated
+with the engine's own walk up to the processed level (0x43d000: rate 0 fires once; the setter 0x43a620's 250
+ceiling against base + spent), and the rise bytes CStats+0x14 the same way. The subtraction keeps whatever else the
+setter added - the Review comics' stat rewards (0x5d0920). A hero whose bonus is below its old class's growth in a
+stat is kept as it is; exempt heroes are skipped; one log line per record. The current classes come from the build's
+`Data\autospend` as the engine loads it (four classes, four rules each, `lcsave::read_autospend`) and the herostat's
+`autospend` names. Every campaign write sets bit 3 while the re-base is active, so a re-based (or new) campaign is
+never re-based again. Without the file nothing is re-based and bit 3 is not written. Same co-op reasoning as above.
+
 ## Install and online
 
 Twenty-five guards (the callees and every site's surroundings) and the eleven (+ two for LevelSkillPoints, + two for LevelStatPoints) writes go through one code transaction

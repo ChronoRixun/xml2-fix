@@ -11248,6 +11248,134 @@ namespace
 			CHECK(!hero_points_records(no_restore_tag.data(), no_restore_tag.size()));
 		}
 
+		// The one-time re-base of the class bonus (invented classes; builder SPEC 94).
+		{
+			CHECK(optional_class_growth == 8 && (optional_class_growth & (1u | optional_level_skill_points | optional_level_stat_points)) == 0);
+			CHECK(attr_bonus == offsetof(lcsave::OldAttrScalars, trait_bonus) && attr_gain == offsetof(lcsave::OldAttrScalars, trait_bonus2) &&
+			      attr_spent == offsetof(lcsave::OldAttrScalars, trait_pending) && attr_base == offsetof(lcsave::OldAttrScalars, trait_base));
+			const auto rule = [](int start, int rate, int a, int b, int c, int d) { growth_rule r; r.start = start; r.rate = rate; r.delta = {a, b, c, d}; return r; };
+			// the fire rule: rate 0 = once at start; otherwise start, start + rate, ...
+			CHECK(growth_fires(rule(2, 1, 0, 0, 0, 0), 2) && growth_fires(rule(2, 1, 0, 0, 0, 0), 9) && !growth_fires(rule(3, 4, 0, 0, 0, 0), 5) && growth_fires(rule(3, 4, 0, 0, 0, 0), 7));
+			CHECK(growth_fires(rule(6, 0, 0, 0, 0, 0), 6) && !growth_fires(rule(6, 0, 0, 0, 0, 0), 7) && !growth_fires(rule(6, 0, 0, 0, 0, 0), 12) && !growth_fires(rule(9, 2, 0, 0, 0, 0), 7));
+			const std::vector<growth_rule> old_class = {rule(2, 1, 1, 0, 0, 0), rule(2, 2, 0, 0, 1, 0), rule(2, 4, 1, 1, 0, 0)};
+			const std::vector<growth_rule> new_class = {rule(2, 2, 0, 0, 4, 0), rule(3, 4, 4, 0, 0, 0), rule(5, 5, 0, 2, 0, 0), rule(2, 1, 0, 0, 0, 3), };
+			const std::vector<growth_rule> with_drop = {rule(2, 1, 0, 0, 0, 3), rule(6, 0, 0, 0, 4, -1)};
+			const std::array<int, 4> zero{};
+			// levels 2..ack: ack 1 = nothing processed
+			CHECK(simulate_growth(old_class, 1, zero, zero).bonus == zero);
+			const auto o21 = simulate_growth(old_class, 21, zero, zero);
+			CHECK((o21.bonus == std::array<int, 4>{25, 5, 10, 0}) && o21.gain == o21.bonus);
+			const auto n21 = simulate_growth(new_class, 21, zero, zero);
+			CHECK((n21.bonus == std::array<int, 4>{20, 8, 40, 60}) && n21.gain == n21.bonus);
+			const auto o5 = simulate_growth(old_class, 5, zero, zero), o10 = simulate_growth(old_class, 10, zero, zero);
+			CHECK((o5.bonus == std::array<int, 4>{5, 1, 2, 0}) && (o10.bonus == std::array<int, 4>{12, 3, 5, 0}));
+			// a negative delta lowers the bonus, the rises keep counting what went up (0x43a65c)
+			const auto d6 = simulate_growth(with_drop, 6, zero, zero);
+			CHECK((d6.bonus == std::array<int, 4>{0, 0, 4, 14}) && (d6.gain == std::array<int, 4>{0, 0, 4, 15}));
+			// a negative delta on 0 wraps to 255 as a byte and the ceiling refuses it, as the setter does
+			const auto wrap = simulate_growth({rule(2, 0, 0, 0, 0, -1)}, 3, zero, zero);
+			CHECK(wrap.bonus == zero);
+			// the 250 ceiling refuses a fire that would pass it (base 200 + spent 45 leaves 5 for strength)
+			const auto capped = simulate_growth(old_class, 21, {200, 0, 0, 0}, {45, 0, 0, 0});
+			CHECK(capped.bonus[0] == 5 && capped.bonus[2] == 10);
+
+			// one record's bytes: base, spent, bonus, gain (the attribute scalars' first 16 bytes)
+			const auto attrs = [](std::array<int, 4> base, std::array<int, 4> spent, std::array<int, 4> bonus, std::array<int, 4> gain)
+			{
+				std::vector<std::uint8_t> a(attributes_size, 0);
+				for (int k = 0; k < 4; ++k)
+				{
+					a[attr_base + k] = static_cast<std::uint8_t>(base[k]);
+					a[attr_spent + k] = static_cast<std::uint8_t>(spent[k]);
+					a[attr_bonus + k] = static_cast<std::uint8_t>(bonus[k]);
+					a[attr_gain + k] = static_cast<std::uint8_t>(gain[k]);
+				}
+				a[attr_skill_points] = 7;
+				a[attr_level] = 21;
+				return a;
+			};
+			const auto bytes4 = [](const std::vector<std::uint8_t>& a, std::size_t at) { return std::array<int, 4>{a[at], a[at + 1], a[at + 2], a[at + 3]}; };
+			// exactly the old class's growth: becomes the new class's
+			auto plain = attrs({50, 23, 56, 19}, {0, 0, 0, 0}, {25, 5, 10, 0}, {25, 5, 10, 0});
+			auto g = rebase_growth(plain.data(), 21, old_class, new_class);
+			CHECK(g.result == rebase_result::changed && (bytes4(plain, attr_bonus) == std::array<int, 4>{20, 8, 40, 60}) && (bytes4(plain, attr_gain) == std::array<int, 4>{20, 8, 40, 60}));
+			CHECK(plain[attr_skill_points] == 7 && plain[attr_level] == 21 && (bytes4(plain, attr_base) == std::array<int, 4>{50, 23, 56, 19}));
+			// the same again with the new class on both sides: nothing changes (what a second load would be)
+			const auto once = plain;
+			CHECK(rebase_growth(plain.data(), 21, new_class, new_class).result == rebase_result::unchanged && plain == once);
+			// a comic reward on top (body +8, mind +4) is kept
+			auto rewarded = attrs({50, 23, 56, 19}, {3, 0, 2, 0}, {25, 5, 18, 4}, {25, 5, 18, 4});
+			g = rebase_growth(rewarded.data(), 21, old_class, new_class);
+			CHECK(g.result == rebase_result::changed && (bytes4(rewarded, attr_bonus) == std::array<int, 4>{20, 8, 48, 64}) && (g.old_growth == std::array<int, 4>{25, 5, 10, 0}));
+			// a bonus the old class can't explain (below its growth) is left as it is
+			auto odd = attrs({50, 23, 56, 19}, zero, {10, 5, 10, 0}, {10, 5, 10, 0});
+			const auto odd_before = odd;
+			CHECK(rebase_growth(odd.data(), 21, old_class, new_class).result == rebase_result::unexplained && odd == odd_before);
+			// nothing processed: the same (both 0)
+			auto fresh = attrs({50, 23, 56, 19}, zero, zero, zero);
+			const auto fresh_before = fresh;
+			CHECK(rebase_growth(fresh.data(), 1, old_class, new_class).result == rebase_result::unchanged && fresh == fresh_before);
+			// the ceiling: base 200 + spent 40 leave 10 for mind; the new class's +3 steps stop at 9 as in the engine
+			auto high = attrs({0, 0, 0, 200}, {0, 0, 0, 40}, {25, 5, 10, 0}, {25, 5, 10, 0});
+			CHECK(rebase_growth(high.data(), 21, old_class, new_class).result == rebase_result::changed && high[attr_bonus + 3] == 9);
+			// a comic reward on top would pass it: held at 10
+			auto higher = attrs({0, 0, 0, 200}, {0, 0, 0, 40}, {25, 5, 10, 8}, {25, 5, 10, 8});
+			CHECK(rebase_growth(higher.data(), 21, old_class, new_class).result == rebase_result::held && higher[attr_bonus + 3] == 10);
+
+			// the legacy table
+			const auto legacy = parse_growth_legacy("autogrowth-legacy 1\r\nhero_one\tclass_a\t2,1,1,0,0,0;2,2,0,0,1,0;2,4,1,1,0,0\r\nHero_Two\tclass_b\t6,0,0,0,4,-1\r\nhero_three\tclass_c\t\r\n");
+			CHECK(legacy && legacy->size() == 3 && legacy->at("hero_one").size() == 3 && legacy->count("hero_two") && legacy->at("hero_three").empty());
+			if (legacy && legacy->count("hero_one") && legacy->count("hero_two"))
+			{
+				const auto& r1 = legacy->at("hero_one");
+				CHECK(r1[2].start == 2 && r1[2].rate == 4 && (r1[2].delta == std::array<int, 4>{1, 1, 0, 0}) && (legacy->at("hero_two")[0].delta == std::array<int, 4>{0, 0, 4, -1}));
+			}
+			CHECK(parse_growth_legacy("autogrowth-legacy 1\nh\tc\t2,1,1,0,0,0\n").has_value());
+			for (const char* bad : {"", "autogrowth-legacy 2\r\n", "other\r\nh\tc\t2,1,1,0,0,0\r\n", "autogrowth-legacy 1\r\nh\tc\t2,1,1,0,0\r\n",
+			                        "autogrowth-legacy 1\r\nh\tc\t2,1,1,0,0,0,0\r\n", "autogrowth-legacy 1\r\nh\tc\t256,1,0,0,0,0\r\n",
+			                        "autogrowth-legacy 1\r\nh\tc\t2,1,128,0,0,0\r\n", "autogrowth-legacy 1\r\nh\tc\t2,x,0,0,0,0\r\n",
+			                        "autogrowth-legacy 1\r\nh\tc\t2,1,0,0,0,0;;2,1,0,0,0,0\r\n", "autogrowth-legacy 1\r\nh\tc\r\n",
+			                        "autogrowth-legacy 1\r\nh\tc\t2,1,0,0,0,0\r\nH\tc\t2,1,0,0,0,0\r\n",
+			                        "autogrowth-legacy 1\r\nh\tc\t1,1,0,0,0,0;2,1,0,0,0,0;3,1,0,0,0,0;4,1,0,0,0,0;5,1,0,0,0,0\r\n"})
+			{
+				CHECK(!parse_growth_legacy(bad));
+			}
+
+			// the records of a stream: two heroes and a valid restore bank's record 3 (its own processed level)
+			std::vector<std::size_t> heaps, tails;
+			auto image = old_image(1, 3, 3.0f, &heaps, &tails, 1);
+			const auto set_record = [&](const std::size_t attributes, const std::size_t tail, const std::array<int, 4>& bonus, const int ack)
+			{
+				for (int k = 0; k < 4; ++k)
+				{
+					image[attributes + attr_bonus + k] = static_cast<std::uint8_t>(bonus[k]);
+					image[attributes + attr_gain + k] = static_cast<std::uint8_t>(bonus[k]);
+				}
+				image[tail + tail_ack_level] = static_cast<std::uint8_t>(ack);
+			};
+			set_record(heaps[0] - attributes_size, tails[0], {25, 5, 10, 0}, 21);
+			set_record(heaps[1] - attributes_size, tails[1], {5, 1, 2, 0}, 5);
+			const std::size_t restore3 = tails[3 + 3] - instance(1).size() - 1 - heap_size - attributes_size;
+			set_record(restore3, tails[3 + 3], {12, 3, 5, 0}, 10);
+			const auto layout = hero_points_records(image.data(), image.size());
+			CHECK(layout && layout->records.size() == 3 + 21);
+			if (layout && layout->records.size() == 24)
+			{
+				std::vector<rebase_result> results;
+				for (const auto& r : layout->records)
+				{
+					if ((!r.restore && (r.stats_index == 1 || r.stats_index == 2)) || (r.restore && r.stats_index == 3))
+					{
+						results.push_back(rebase_growth(image.data() + r.attributes, image[r.tail + tail_ack_level], old_class, new_class).result);
+					}
+				}
+				CHECK(results.size() == 3);
+				CHECK((bytes4(image, heaps[0] - attributes_size + attr_bonus) == simulate_growth(new_class, 21, zero, zero).bonus));
+				CHECK((bytes4(image, heaps[1] - attributes_size + attr_bonus) == simulate_growth(new_class, 5, zero, zero).bonus));
+				CHECK((bytes4(image, restore3 + attr_bonus) == simulate_growth(new_class, 10, zero, zero).bonus));
+			}
+		}
+
 		// The flag stubs and the bridges on their own.
 		{
 			bool sites_ok = true;

@@ -33,7 +33,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -1632,6 +1634,266 @@ namespace save_format_rules
 	{
 		return {skill_installed && !(optional_features & optional_level_skill_points) ? skill_extra : 0,
 		        stat_installed && !(optional_features & optional_level_stat_points) ? stat_extra : 0};
+	}
+
+	// ---- The one-time re-base of the automatic stat growth (builder SPEC 94: autospend classes x1_bruiser / x1_support)
+	//
+	// XMen2.exe's level processing (0x4bbae0) runs, for every level from processed + 1 to the hero's level, the hero's
+	// autospend class rule walk (0x43cf90 -> 0x43d000): a rule (start, rate, four signed deltas) fires on level L when
+	// L == start, or L > start, rate > 0 and (L - start) % rate == 0 (rate 0: once, at start); each fire calls the
+	// class-bonus setter 0x43a620 once per stat with (bonus + delta) as a byte. The setter refuses a value that would
+	// take base + spent + bonus above 250; a value above the old one also adds the rise to the "gain" bytes
+	// (CStats+0x14, 0x43a420). The same setter takes the Review comics' stat rewards (0x5d0920), so a saved bonus is
+	// the class's growth plus those rewards.
+	//
+	// A save written before the build's classes changed holds the old class's growth. The re-base, once per save (header
+	// optional bit 3) and per hero / valid restore record: bonus = saved - old class growth (to the processed level) +
+	// current class growth; gain the same with the rises. The old classes come from the build
+	// (Data\lcsave\autogrowth-legacy.txt, written by the builder from the player's XML2 data); the current ones from
+	// the build's Data\autospend as the engine loads it. A hero whose saved bonus is below its old class's growth in
+	// some stat (it was not grown by that class) is left as it is.
+	constexpr std::uint32_t optional_class_growth = 1u << 3;
+	constexpr std::size_t attr_base = 0x0;           // u8[4] (CStats+8)
+	constexpr std::size_t attr_spent = 0x4;          // u8[4] (CStats+0xc)
+	constexpr std::size_t attr_bonus = 0x8;          // u8[4] (CStats+0x10): the class bonus, [strength, speed, body, mind]
+	constexpr std::size_t attr_gain = 0xc;           // u8[4] (CStats+0x14): the rises 0x43a620 recorded
+	constexpr int stat_ceiling = 250;                // 0x43a647: cmp edx, 0xfa
+
+	struct growth_rule
+	{
+		int start = 0;
+		int rate = 0;
+		std::array<int, 4> delta{};       // signed: strength, speed, body, mind
+	};
+
+	// 0x43d041..0x43d05f: does the rule fire on `level`?
+	constexpr bool growth_fires(const growth_rule& r, const int level)
+	{
+		int at = r.start;
+		while (at < level && r.rate != 0)
+		{
+			at += r.rate;
+		}
+		return at == level;
+	}
+
+	struct growth_state
+	{
+		std::array<int, 4> bonus{};
+		std::array<int, 4> gain{};
+	};
+
+	// The engine's walk from nothing over levels first_processed_level + 1 .. ack_level, every fire through the setter's
+	// rule against the hero's base and spent bytes.
+	inline growth_state simulate_growth(const std::vector<growth_rule>& rules, const int ack_level, const std::array<int, 4>& base,
+		const std::array<int, 4>& spent)
+	{
+		growth_state s;
+		for (int level = first_processed_level + 1; level <= ack_level; ++level)
+		{
+			for (const auto& r : rules)
+			{
+				if (!growth_fires(r, level))
+				{
+					continue;
+				}
+				for (int k = 0; k < 4; ++k)
+				{
+					const int value = (s.bonus[k] + r.delta[k]) & 0xff;
+					if (base[k] + value + spent[k] > stat_ceiling)
+					{
+						continue;
+					}
+					if (value > s.bonus[k])
+					{
+						s.gain[k] = (s.gain[k] + value - s.bonus[k]) & 0xff;
+					}
+					s.bonus[k] = value;
+				}
+			}
+		}
+		return s;
+	}
+
+	// Data\lcsave\autogrowth-legacy.txt (builder autospend.legacy_text): "autogrowth-legacy 1", then per hero
+	// "hero<TAB>class<TAB>start,rate,strength,speed,body,mind;..." (CRLF or LF). Nothing when anything else is in it.
+	inline std::optional<std::map<std::string, std::vector<growth_rule>>> parse_growth_legacy(const std::string_view text)
+	{
+		std::map<std::string, std::vector<growth_rule>> out;
+		std::size_t p = 0;
+		bool first = true;
+		while (p < text.size())
+		{
+			std::size_t e = text.find('\n', p);
+			if (e == std::string_view::npos)
+			{
+				e = text.size();
+			}
+			std::string line(text.substr(p, e - p));
+			p = e + 1;
+			if (!line.empty() && line.back() == '\r')
+			{
+				line.pop_back();
+			}
+			if (line.empty())
+			{
+				continue;
+			}
+			if (first)
+			{
+				if (line != "autogrowth-legacy 1")
+				{
+					return std::nullopt;
+				}
+				first = false;
+				continue;
+			}
+			const auto t1 = line.find('\t');
+			const auto t2 = t1 == std::string::npos ? std::string::npos : line.find('\t', t1 + 1);
+			if (t1 == std::string::npos || t2 == std::string::npos || t1 == 0 || line.find('\t', t2 + 1) != std::string::npos)
+			{
+				return std::nullopt;
+			}
+			std::string hero = line.substr(0, t1);
+			for (auto& c : hero) c = (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+			std::vector<growth_rule> rules;
+			std::string rest = line.substr(t2 + 1);
+			std::size_t q = 0;
+			while (q < rest.size())
+			{
+				std::size_t semi = rest.find(';', q);
+				if (semi == std::string::npos)
+				{
+					semi = rest.size();
+				}
+				const std::string rule = rest.substr(q, semi - q);
+				q = semi + 1;
+				int v[6]{};
+				int n = 0;
+				std::size_t r = 0;
+				while (r <= rule.size() && n < 7)
+				{
+					std::size_t comma = rule.find(',', r);
+					if (comma == std::string::npos)
+					{
+						comma = rule.size();
+					}
+					const std::string num = rule.substr(r, comma - r);
+					if (num.empty() || num.find_first_not_of("-0123456789") != std::string::npos || num.size() > 4)
+					{
+						return std::nullopt;
+					}
+					if (n < 6)
+					{
+						v[n] = std::atoi(num.c_str());
+					}
+					++n;
+					r = comma + 1;
+				}
+				if (n != 6 || v[0] < 0 || v[0] > 255 || v[1] < 0 || v[1] > 255)
+				{
+					return std::nullopt;
+				}
+				growth_rule g;
+				g.start = v[0];
+				g.rate = v[1];
+				for (int k = 0; k < 4; ++k)
+				{
+					if (v[2 + k] < -128 || v[2 + k] > 127)
+					{
+						return std::nullopt;
+					}
+					g.delta[k] = v[2 + k];
+				}
+				rules.push_back(g);
+			}
+			if (rules.size() > 4 || out.count(hero))
+			{
+				return std::nullopt;
+			}
+			out.emplace(std::move(hero), std::move(rules));
+		}
+		if (first)
+		{
+			return std::nullopt;
+		}
+		return out;
+	}
+
+	enum class rebase_result
+	{
+		changed,
+		unchanged,      // the new growth equals the old (or nothing processed)
+		unexplained,    // the saved bonus is below the old class's growth in a stat: left as it is
+		held,           // changed, and a stat was held at the 250 ceiling / the byte
+	};
+
+	struct growth_rebase
+	{
+		std::uint32_t stats_index = 0;
+		bool restore = false;
+		int ack_level = 0;
+		rebase_result result = rebase_result::unchanged;
+		std::array<int, 4> bonus_before{}, bonus_after{};
+		std::array<int, 4> old_growth{}, new_growth{};
+	};
+
+	// The re-base of one record's attribute bytes at `attributes` (old and new: the classes' rules; nothing when the
+	// hero has no rule set on either side). The bytes change only for `changed` / `held`.
+	inline growth_rebase rebase_growth(std::uint8_t* attributes, const int ack_level, const std::vector<growth_rule>& old_rules,
+		const std::vector<growth_rule>& new_rules)
+	{
+		growth_rebase g;
+		g.ack_level = ack_level;
+		std::array<int, 4> base{}, spent{}, bonus{}, gain{};
+		for (int k = 0; k < 4; ++k)
+		{
+			base[k] = attributes[attr_base + k];
+			spent[k] = attributes[attr_spent + k];
+			bonus[k] = attributes[attr_bonus + k];
+			gain[k] = attributes[attr_gain + k];
+		}
+		g.bonus_before = bonus;
+		g.bonus_after = bonus;
+		const auto was = simulate_growth(old_rules, ack_level, base, spent);
+		const auto now = simulate_growth(new_rules, ack_level, base, spent);
+		g.old_growth = was.bonus;
+		g.new_growth = now.bonus;
+		if (was.bonus == now.bonus && was.gain == now.gain)
+		{
+			return g;
+		}
+		for (int k = 0; k < 4; ++k)
+		{
+			if (bonus[k] < was.bonus[k])
+			{
+				g.result = rebase_result::unexplained;
+				return g;
+			}
+		}
+		bool held = false;
+		for (int k = 0; k < 4; ++k)
+		{
+			int value = bonus[k] - was.bonus[k] + now.bonus[k];
+			const int room = stat_ceiling - base[k] - spent[k];
+			if (value > room)
+			{
+				value = room < 0 ? 0 : room;
+				held = true;
+			}
+			if (value > 255)
+			{
+				value = 255;
+				held = true;
+			}
+			int rises = gain[k] - was.gain[k] + now.gain[k];
+			rises = rises < 0 ? 0 : (rises > 255 ? 255 : rises);
+			attributes[attr_bonus + k] = static_cast<std::uint8_t>(value);
+			attributes[attr_gain + k] = static_cast<std::uint8_t>(rises);
+			g.bonus_after[k] = value;
+		}
+		g.result = held ? rebase_result::held : rebase_result::changed;
+		return g;
 	}
 
 	// ---- The writer version (SPEC 1.1 offset 0x24) ---------------------------------------------------

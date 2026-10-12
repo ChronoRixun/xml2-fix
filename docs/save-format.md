@@ -166,6 +166,8 @@ reference contract. Native pool preflight uses a conservative serialized demand 
 - **#35 talent costs:** `TAL` records ranks per talent, `HREC` records level and unspent skill points. Rank costs
   grandfather (ranks bought for 1 stay). The fifth-level points of `LevelSkillPoints` / `LevelStatPoints` are caught
   up once on load and marked by optional-feature bits 1 / 2 of the header (docs/rank-costs.md); no new field.
+- **SPEC 94 automatic growth:** a build that changes the autospend classes re-bases the saved class bonus once on load
+  (bit 3, docs/rank-costs.md); no new field.
 - **#5 solo mode:** this changes runtime party behaviour only; nothing new is persisted.
 
 ## Not done, and why

@@ -1147,6 +1147,9 @@ namespace
 			b->herostat_xpexempt[2] = 1;
 			check(!tables.xp_exempt(0) && !tables.xp_exempt(1) && tables.xp_exempt(2) && !tables.xp_exempt(100000), "xp_exempt by stats index");
 			check(tables.stats_key(1) == b->stat[1] && tables.stats_key(100000).empty(), "stats_key by stats index");
+			b->herostat_autospend.assign(b->stat.size(), std::string());
+			b->herostat_autospend[1] = "class_x";
+			check(tables.hero_autospend(1) == "class_x" && tables.hero_autospend(2).empty() && tables.hero_autospend(100000).empty(), "hero_autospend by stats index");
 			Tables none;
 			check(!none.xp_exempt(2) && none.stats_key(1).empty(), "no tables: nothing exempt, no key");
 		}
@@ -1637,6 +1640,35 @@ namespace
 		d = decide_features(marked, retail_layout); check(!d.ok && d.reason == downgrade_refused && d.required_features == 1, "decide_features over a feature-1 file on retail");
 	}
 
+	// Data/autospend as the engine loads it: four classes, four rules each, record order strength/speed/body/mind
+	void test_autospend(const fs::path& folder)
+	{
+		fs::create_directories(folder / "Data");
+		std::vector<AutospendClass> classes;
+		std::string error;
+		check(!read_autospend(folder.wstring(), classes, error) && contains(error, "autospend"), "no Data/autospend: an error");
+		E root{"AutoSpend", {}, {}};
+		const char* names[5] = {"class_a", "Class_B", "class_c", "class_d", "class_e"};
+		for (int i = 0; i < 5; ++i)
+		{
+			auto& c = root.add(E{"CharacterClass", {{"body", "10"}, {"name", names[i]}}, {}});
+			for (int k = 0; k < (i == 1 ? 5 : 1); ++k)
+				c.add(E{"bonus", {{"start", std::to_string(2 + k)}, {"rate", std::to_string(k)}, {"strength", std::to_string(i)}, {"mind", "-2"}, {"Speed", "3"}}, {}});
+		}
+		const auto raw = encode_xmlb(root);
+		std::ofstream(folder / "Data" / "autospend.xmlb", std::ios::binary).write(reinterpret_cast<const char*>(raw.data()), static_cast<std::streamsize>(raw.size()));
+		check(read_autospend(folder.wstring(), classes, error), "read_autospend (" + error + ")");
+		check(classes.size() == autospend_class_limit && classes[1].name == "class_b" && classes[3].name == "class_d", "the first four classes load, names lower case");
+		check(classes.size() == 4 && classes[1].rules.size() == autospend_rule_limit && classes[0].rules.size() == 1, "four rules a class");
+		if (classes.size() == 4 && classes[1].rules.size() == 4)
+		{
+			const auto& r = classes[1].rules[3];
+			check(r.start == 5 && r.rate == 3 && r.delta[0] == 1 && r.delta[1] == 3 && r.delta[2] == 0 && r.delta[3] == -2, "a rule: start, rate, strength, speed, body, mind");
+		}
+		std::ofstream(folder / "Data" / "autospend.xmlb", std::ios::binary).write("junk", 4);
+		check(!read_autospend(folder.wstring(), classes, error) && contains(error, "autospend"), "a damaged Data/autospend: an error, no crash");
+	}
+
 	void test_typed_registry(const fs::path& scratch)
 	{
 		TypedRegistry reg;
@@ -1857,6 +1889,7 @@ void run_vectors(const fs::path& scratch)
 	test_oldsave_layouts();
 	test_feature_marker();
 	test_typed_registry(scratch / "registry");
+	test_autospend(scratch / "autospend");
 	test_e10a2_api(scratch / "e10a2");
 }
 
