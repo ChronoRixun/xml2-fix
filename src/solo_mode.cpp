@@ -12,7 +12,7 @@
 #include <cstring>
 #include <vector>
 
-// The six AI sites (XMen2.exe, unpacked retail; default.xbe counterparts in brackets). Each test is the original's
+// The sites (XMen2.exe, unpacked retail; default.xbe counterparts in brackets). Each AI test is the original's
 // "the follower or the one it follows is solo"; the branch it takes is the one XMen2.exe already has.
 //   0x51ee14 hero idle handler (CAIHeroIdleHandler vt+0, 0x51ea70) [0xf3410 at 0xf373e/0xf374d]: formation follow.
 //            The PC tests only the leader's +0x3d8 bit 2 (the original's bit 3) before stopping the follower
@@ -25,10 +25,11 @@
 //   0x51dc10 hero idle handler vt+8 [0xf2610]: returns 0 at once for a solo character.
 //   0x526960 the follow-me command (AI manager vt+0x1c0 0x525330) [0xfb010, from 0xf9a50]: ignored for a solo
 //            character.
+//   0x425982 the controller update 0x425500 [0x36011 in 0x359f0]: the hero's own selection button held 0.5 s.
 // Regroup predicate (default.xbe 0x34bb0): the hero's own +0x3d8 bit 2 refuses; every living, seated peer of the
 // hero's controller group must be reachable through the hero's navigator (+0x3e8; reset vt+4, query
-// vt+0(position, 80, 200) == 2). Not ported: the attached-entity test on +0xc0 and the manual exit's on-screen
-// test (their PC counterparts are unproven; docs/solo-mode.md).
+// vt+0(position, 80, 200) == 2) and, for the held button, on screen (CCamera vt+0x178, margin 150). Not ported: the
+// test on character+0xc0 (its PC counterpart is unproven; docs/solo-mode.md).
 namespace solo_mode
 {
 	namespace
@@ -74,17 +75,6 @@ namespace solo_mode
 		{
 			__try { return e ? at<u32>(e, 0x1c) : 0; }
 			__except (EXCEPTION_EXECUTE_HANDLER) { return 0; }
-		}
-
-		void* resolve(u32 h)
-		{
-			__try
-			{
-				if (!h) return nullptr;
-				void* e = fn<resolve_t>(resolve_handle)(&h, nullptr);
-				return e && at<u32>(e, 0x1c) == h ? e : nullptr;
-			}
-			__except (EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
 		}
 
 		void* find(const char* name)
