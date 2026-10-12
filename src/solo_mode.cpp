@@ -27,7 +27,9 @@
 //            character.
 //   0x50f598 the hurt hero's call for help (0x50f520, from 0x5125a0) [0x107920 at 0x1079ac]: a solo character skips
 //            it (its timer was due), as the original returns there.
-//   0x425982 the controller update 0x425500 [0x36011 in 0x359f0]: the hero's own selection button held 0.5 s.
+//   0x425982 the controller update 0x425500 [0x36011 in 0x359f0]: the hero's own selection button held longer than
+//            9999 s (both games compare the hold with 0x3c97cc / 0x682ff8 = 9999.0: the shipped first game's manual
+//            toggle is effectively unreachable; kept for fidelity, it changes nothing in practice).
 //   0x4e514c a teleport combat event's success (0x4e4c20, CCEAtkTeleport) [0xd5be5 in 0xd56b0]: a player's teleport
 //            whose event says CheckSolo (character+0x730 bit 0x200, the original's +0x524) starts solo when the
 //            party can't follow (the regroup test with manual 0, all 0).
@@ -262,7 +264,7 @@ namespace solo_mode
 			return state.contains(handle_of(self)) ? 1 : 0;
 		}
 
-		// default.xbe 0x36011 (the controller update 0x359f0): the hero's own selection button held 0.5 s. Solo: the
+		// default.xbe 0x36011 (the controller update 0x359f0): the hero's own selection button held past 9999 s. Solo: the
 		// manual regroup test, then leave with the voice line; not solo: the toggle (its guards) and the voice line.
 		void __cdecl solo_input(void* hero)
 		{
@@ -474,7 +476,7 @@ namespace solo_mode
 		}
 
 		// 0x425982 (the controller update 0x425500): the held selection button is the hero's own. The PC only re-arms its
-		// 0.5 s timer there (0x425937); the original toggled solo at the same point.
+		// 0.5 s timer there (0x425937); the original toggled solo at the same point (reached only after a 9999 s hold).
 		__declspec(naked) void h7_stub()
 		{
 			__asm {
