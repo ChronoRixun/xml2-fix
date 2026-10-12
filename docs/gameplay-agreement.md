@@ -57,7 +57,10 @@ the revision-2 entry encoding: ushort rule ID, ushort revision, four DWORD effec
 must have documented semantics, normally zero; the digest covers every ID, revision and value exactly, so no hash of
 a rule's own (a turret list's FNV, say) substitutes for an effective value - a rule still registers the values. The
 summary's byte b is zero when no rule has (ID - 1) mod 64 = b, else a non-zero FNV-1a fold of those rules' entries; it
-never decides admission (the digest does) and only names the differing rules in refusal messages (exact for IDs 1-64).
+never decides admission (the digest does) and only names the differing rules in refusal messages (exact for IDs 1-64). Past 64 a bucket
+holds several IDs (b, b+64, ...); a refusal message then names every local rule of a differing bucket, including
+ones whose own values are equal (e.g. rule 1 alongside a changed rule 65): read such a name as "possibly this one".
+The 15 rules of 1.5.0 share no bucket.
 Registration holds up to 256 rules (the record is the same 108 bytes at 1, 16, 64 or 256). Each startup logs the
 canonical list (`online: rule N (key) revision R {a,b,c,d}`), since the wire no longer carries the values.
 
