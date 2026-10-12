@@ -42,6 +42,7 @@ add_library(xml2_fix SHARED
 	src/ladder_paths.cpp
 	src/break_rule.cpp
 	src/placement_crush.cpp
+	src/double_heal.cpp
 	src/exports.cpp
 	src/gamepad_fix.cpp
 	src/pad_profile.cpp

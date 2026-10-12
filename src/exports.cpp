@@ -21,6 +21,7 @@
 #include "balance.hpp"
 #include "break_rule.hpp"
 #include "placement_crush.hpp"
+#include "double_heal.hpp"
 #include "conversations.hpp"
 #include "confirmation_release.hpp"
 #include "explosive_first_hit.hpp"
@@ -278,6 +279,8 @@ namespace
 		// X-Men Legends 1's zone placement without crushes ([Game] PlacementCrush=xml1): the objects' touch slot (0x498ef0),
 		// refused only while a zone load is in progress; no other module hooks it.
 		placement_crush::install(game);
+		// X-Men Legends 1's packs ([Game] DoubleHeal=0): two branches of restoreHealth / restoreEnergy; no other module patches them.
+		double_heal::install(game);
 
 		test_input::install(); // first: its screenshots need the display fix's device hook
 		display::install(game);

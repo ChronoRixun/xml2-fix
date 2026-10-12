@@ -414,6 +414,7 @@ Xtract=0        ; 0: an Xtraction Point's menu has no "Xtract" (XML2's world map
 XPCurve=xml1    ; X-Men Legends I's level table (cap 45) and kill XP; xml2 or no key: the game's own
 BreakRule=xml1  ; X-Men Legends I's rule for breaking objects (a punch no longer breaks what it kept for powers); xml2 or no key: the game's own
 PlacementCrush=xml1  ; objects settled on the floor (a zone loading) no longer crush each other; xml2 or no key: the game's own
+DoubleHeal=0  ; X-Men Legends I's packs: a health or energy pack never heals double (nor plays the double sound); 1 or no key: the game's own chance
 AutoAdvance=1   ; a conversation line the mod marks goes on by itself once its voice has played (on by default)
 ReplyVoices=1   ; a chosen reply's voice plays out before its answer (on by default; the game cut it one frame in)
 ReplyCursor=1   ; a reply menu come back to keeps a reply highlighted (on by default; the game's clamp lost it)
@@ -603,6 +604,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `StatHelp` | `1` | the stats screen's Body and Strike help texts state the applied `[Balance]` numbers instead of the engine's retail ones; `0` keeps the game's own texts (details: the `[Balance]` paragraph above and [docs/stat-help.md](docs/stat-help.md)) |
 | `BreakRule` | `xml2` | `xml1`: an object whose definition carries `xml1structure` breaks only to an attack of that level on X-Men Legends I's scale ([details](docs/break-rule.md)) |
 | `PlacementCrush` | `xml2` | `xml1`: while an object is settled on the floor (a zone's placement) it no longer crushes another, so furniture authored overlapping makes no hits on entry ([details](docs/placement-crush.md)) |
+| `DoubleHeal` | `1` | `0`: a health or energy pack always heals its single amount and plays the pack's own sound, as in X-Men Legends I (XMen2.exe sometimes doubles it and plays a darker "double" sound; see `src/double_heal_rules.hpp`) |
 | `CharacterLadderPaths` | `0` | `1`: characters follow the descent paths a mod gives their ladder animations ([details](docs/character-ladder-paths.md)) |
 | `AutoAdvance` | `1` | a conversation line with a negative `timeDelay` goes on by itself once its voice has played; `0`: every line waits for accept |
 | `ReplyVoices` | `1` | a chosen reply's voice plays out before its answer; `0`: cut one frame in, as the game has it |

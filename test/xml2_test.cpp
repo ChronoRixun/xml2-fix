@@ -53,6 +53,7 @@
 
 #include "break_rule_rules.hpp"
 #include "placement_crush_rules.hpp"
+#include "double_heal_rules.hpp"
 #include "personal_item_text_rules.hpp"
 #include "save_format_rules.hpp"
 #include "discord_ipc.hpp"
@@ -9602,6 +9603,38 @@ namespace
 		}
 	}
 
+	// [Game] DoubleHeal=0 (double_heal_rules.hpp): the guards on their own (each branch inside its guard), then, when a
+	// copy of XMen2.exe is at hand, every guard against it and the two branch bytes.
+	void check_double_heal_rules()
+	{
+		using namespace double_heal_rules;
+		std::printf("[Game] DoubleHeal (X-Men Legends 1's packs never heal double)\n");
+		bool ok = true, health = false, energy = false;
+		for (const auto& g : guards)
+		{
+			ok &= limits_rules::valid_hex(g.hex) && g.what && *g.what;
+			const DWORD end = g.va + static_cast<DWORD>(limits_rules::hex_size(g.hex));
+			health |= g.va <= health_branch && health_branch < end;
+			energy |= g.va <= energy_branch && energy_branch < end;
+		}
+		CHECK(ok && health && energy && retail_jne == 0x75 && patched_jmp == 0xeb);
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the pack branches against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		CHECK(first_mismatch(image) == nullptr);
+		CHECK(image[health_branch - limits_rules::image_base] == retail_jne && image[energy_branch - limits_rules::image_base] == retail_jne);
+		// The jump skips exactly the two stores of the double branch: rel8 0x10 lands on the shared continuation.
+		CHECK(image[health_branch + 1 - limits_rules::image_base] == 0x10 && image[energy_branch + 1 - limits_rules::image_base] == 0x10);
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
 	// [Game] PlacementCrush (placement_crush_rules.hpp): the value's rules; the decision on the settle depth; the
 	// guards on their own; then, when a copy of XMen2.exe is at hand, every guard against it and the site.
 	void check_placement_crush_rules()
@@ -10476,6 +10509,12 @@ int main(const int argc, char** argv)
 		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
 		return failures ? 1 : 0;
 	}
+	if (argc > 1 && std::strcmp(argv[1], "--double-heal-rules") == 0)
+	{
+		check_double_heal_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--placement-crush-rules") == 0)
 	{
 		check_placement_crush_rules();
@@ -10600,6 +10639,7 @@ int main(const int argc, char** argv)
 	check_xp_curve_rules();
 	check_break_rule_rules();
 	check_placement_crush_rules();
+	check_double_heal_rules();
 	check_save_format_rules();
 	check_balance_rules();
 	check_melee_weapon_rules();
