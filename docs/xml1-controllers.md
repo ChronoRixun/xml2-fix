@@ -130,7 +130,16 @@ invulnerable hero unharmed, and was destroyed by real attacks; the four weapon_x
 Hive turret1 that tank1.py spawns on the stopped tank (the hero walked into the trigger, the real
 script and conversation ran) bound by name, flamed the hero every 0.45 s (tracetime) for 6-11, and
 took real jump-attack damage (500 -> 428, not destroyed within the test); the HAARP missiles leave
-from the Gun1 bolt and still killed the hero with one homing salvo. `xml2_xml1_controllers_test` exercises selection counterexamples, transaction
+from the Gun1 bolt and still killed the hero with one homing salvo. With a seated party (Cyclops
+player, three AI-controlled teammates, `seatParty`, staged): the AI teammates (+0x3d8 0x41/0x43)
+passed the cone and range test but were skipped, the player (0x60) was taken; with the player
+out of the cone and the frozen teammates in it the turret kept scanning for 40 s. All four Hive
+turrets (tank1-4 triggers walked into, real scripts and conversations) were destroyed by
+Cyclops' optic blasts; turret_death counted the objective to 4/4; turret1, destroyed before a
+save, stayed gone after a cold restart and Load (no rebind, objective 1/4 kept, damaged model
+on the tank). The arb2_2 and arb3_2 tripods bound only once the hero came near (they are out
+of the world while far from the heroes; a turret whose region leaves the world when the active
+hero changes is unbound and rebound later) and killed the hero. `xml2_xml1_controllers_test` exercises selection counterexamples, transaction
 rollback and the production socket gate with isolated providers and no sockets.
 Live traces show the three independent floor attacks recurring at their native
 ten-second deadlines, automatic core destruction, saved phase reconstruction and
