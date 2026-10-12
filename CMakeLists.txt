@@ -61,6 +61,7 @@ add_library(xml2_fix SHARED
 	src/net_trace.cpp
 	src/mod_loader.cpp
 	src/display.cpp
+	src/display_settings.cpp
 	src/frame_rate.cpp
 	src/options_menu.cpp
 	src/new_game.cpp
