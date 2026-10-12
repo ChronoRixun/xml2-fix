@@ -18,8 +18,12 @@ namespace classic_main_backdrop
 		configure_fn original = nullptr;
 		load_fn original_load = nullptr;
 		ref_fn retain = nullptr, release = nullptr;
+		using teardown_fn = void(__cdecl*)();
+		teardown_fn original_teardown = nullptr;
 		std::mutex room_mutex;
-		void* room_directory = nullptr; // engine reference pins its objects; replaced on the next room load
+		// Engine reference pins the room's objects; replaced on the next room load and dropped when the
+		// main loop ends, before the game's teardown and igReleaseAlchemy.
+		room_pin room;
 		append_fn append = nullptr;
 		address sg_base = 0;
 		address entry_vtable = 0;
@@ -60,18 +64,36 @@ namespace classic_main_backdrop
 			void* directory=original_load(resource,path);
 			if (directory && room_path(path))
 			{
-				void* previous=nullptr;
+				room_pin::step step;
 				{
 					std::lock_guard lock(room_mutex);
-					if (room_directory!=directory)
+					step=room.capture(static_cast<address>(reinterpret_cast<std::uintptr_t>(directory)));
+					if (step.retain)
 					{
-						retain(directory); previous=room_directory; room_directory=directory;
+						retain(directory);
 						logger::write("classic main backdrop: room asset directory captured (%p)",directory);
 					}
 				}
-				if (previous) release(previous);
+				if (step.release) release(reinterpret_cast<void*>(static_cast<std::uintptr_t>(step.release)));
 			}
 			return directory;
+		}
+
+		// In place of WinMain's first teardown call: drop the room pin while every engine object is
+		// still alive, so the game's own scene release destroys the room shaders as in retail.
+		void __cdecl teardown_hook()
+		{
+			address last=0;
+			{
+				std::lock_guard lock(room_mutex);
+				last=room.close();
+			}
+			if (last)
+			{
+				release(reinterpret_cast<void*>(static_cast<std::uintptr_t>(last)));
+				logger::write("classic main backdrop: room asset directory released at game shutdown");
+			}
+			original_teardown();
 		}
 
 		bool adjust(void* self)
@@ -79,7 +101,7 @@ namespace classic_main_backdrop
 			memory m;
 			const auto shader = static_cast<address>(reinterpret_cast<std::uintptr_t>(self));
 			std::lock_guard lock(room_mutex);
-			const auto directory=static_cast<address>(reinterpret_cast<std::uintptr_t>(room_directory));
+			const auto directory=room.held;
 			if (!directory || !owned_by_directory(m,directory,shader,entry_vtable)) return false;
 			address table = 0, name_pointer = 0, lighting = 0;
 			float reflection = 0;
@@ -148,15 +170,34 @@ namespace classic_main_backdrop
 		constexpr std::array<std::uint8_t,11> load_prologue{0x53,0x8b,0x5c,0x24,0x08,0x56,0x57,0x8d,0x44,0x24,0x10};
 		std::array<std::uint8_t,11> load_bytes{};
 		std::array<std::uint8_t,4> ref_bytes{},release_bytes{};
+		std::array<std::uint8_t,loop_exit_bytes.size()> exit_bytes{};
 		if (reinterpret_cast<std::uintptr_t>(load_site)!=core_base+0x4ca90 ||
 		    reinterpret_cast<std::uintptr_t>(retain)!=core_base+0x1be0 ||
 		    reinterpret_cast<std::uintptr_t>(release)!=core_base+0x1b30 ||
 		    reinterpret_cast<std::uintptr_t>(GetProcAddress(core,"??_7igObjectDirEntry@Core@Gap@@6B@"))!=entry_vtable ||
 		    !m.read(core_base+0x4ca90,load_bytes.data(),load_bytes.size()) || load_bytes!=load_prologue ||
 		    !m.read(core_base+0x1be0,ref_bytes.data(),4) || ref_bytes!=std::array<std::uint8_t,4>{0xff,0x41,0x04,0xc3} ||
-		    !m.read(core_base+0x1b30,release_bytes.data(),4) || release_bytes!=std::array<std::uint8_t,4>{0x8b,0x51,0x04,0x4a})
+		    !m.read(core_base+0x1b30,release_bytes.data(),4) || release_bytes!=std::array<std::uint8_t,4>{0x8b,0x51,0x04,0x4a} ||
+		    !m.read(loop_exit_site,exit_bytes.data(),exit_bytes.size()) || exit_bytes!=loop_exit_bytes)
 		{
 			logger::write("classic main backdrop: room ownership export/prologue guard failed - retail passes retained"); return;
+		}
+		// The pin's release at shutdown goes in before anything can be pinned: without it the room
+		// would outlive igReleaseAlchemy and crash libIGSg at exit, so a failure here keeps retail passes.
+		{
+			auto* const call_site=reinterpret_cast<std::uint8_t*>(static_cast<std::uintptr_t>(loop_exit_call));
+			DWORD exit_old=0;
+			if (!VirtualProtect(call_site,5,PAGE_EXECUTE_READWRITE,&exit_old))
+			{
+				logger::write("classic main backdrop: shutdown hook protection failed (error %lu) - retail passes retained",GetLastError()); return;
+			}
+			original_teardown=reinterpret_cast<teardown_fn>(static_cast<std::uintptr_t>(loop_exit_target));
+			const auto call=call_to(loop_exit_call,static_cast<address>(reinterpret_cast<std::uintptr_t>(&teardown_hook)));
+			std::memcpy(call_site,call.data(),call.size());
+			DWORD exit_ignored=0;
+			if (!VirtualProtect(call_site,5,exit_old,&exit_ignored))
+				logger::write("classic main backdrop: shutdown hook protection restore failed (error %lu)",GetLastError());
+			FlushInstructionCache(GetCurrentProcess(),call_site,5);
 		}
 		if (!sg || !core || reinterpret_cast<std::uintptr_t>(site) != sg_base + configure_rva ||
 		    reinterpret_cast<std::uintptr_t>(append) != core_base + append_rva ||
@@ -226,6 +267,6 @@ namespace classic_main_backdrop
 			logger::write("classic main backdrop: hook protection restore failed (error %lu)",GetLastError());
 		FlushInstructionCache(GetCurrentProcess(), bridge, displaced + 5);
 		FlushInstructionCache(GetCurrentProcess(), site, displaced);
-		logger::write("classic main backdrop: guarded asset-owned room-only diffuse-pass hook installed");
+		logger::write("classic main backdrop: guarded asset-owned room-only diffuse-pass hook installed (room released at shutdown)");
 	}
 }

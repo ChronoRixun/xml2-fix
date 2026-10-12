@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fix a crash on Quit with `ClassicMainBackdrop=1`: the Cerebro room's asset directory is no longer
+  retained past the end of the main loop. The pin kept the room's environment-map shaders alive through
+  igReleaseAlchemy, so libIGSg's exit-time destructor touched freed memory (libIGSg +0x6955e).
+
 - Keep the LC startup veto on instruction-cache flush failures and every patch protection
   restoration failure, including preflight cleanup. Stop further writes on a failed flush
   and attempt all remaining protection restores before refusing startup.
