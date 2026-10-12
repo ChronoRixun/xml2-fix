@@ -19,6 +19,8 @@ namespace script_functions
 		using namespace script_functions_rules;
 
 		int installed_capacity = stock_capacity;
+		int chosen_capacity = stock_capacity;
+		bool key_present = false, fix_functions_registered = false;
 
 		// [Test] ScriptFunctionProbes: n(i) functions that only log their argument.
 		constexpr std::size_t probe_max = 64;
@@ -111,6 +113,21 @@ namespace script_functions
 		return installed_capacity;
 	}
 
+	bool requested()
+	{
+		return chosen_capacity > stock_capacity;
+	}
+
+	bool requested_by_key()
+	{
+		return key_present && chosen_capacity > stock_capacity;
+	}
+
+	agreement capability()
+	{
+		return agreement_entry(key_present, fix_functions_registered, chosen_capacity, installed_capacity);
+	}
+
 	std::span<const func_entry> probes()
 	{
 		return {probe_table, probe_count};
@@ -121,8 +138,12 @@ namespace script_functions
 		choose_probes();
 		// The fix's own functions are registered with [Game] ForcedTeams (forced_teams.hpp); with them the game's 320 are full.
 		const bool fix_functions = forced_teams_rules::decide(ini::text(L"Game", L"ForcedTeams"), ini::text(L"Game", L"AddHero"), ini::text(L"Game", L"JoinHero")).registered;
-		const auto chosen = decide(ini::text(L"Limits", L"ScriptFunctions"), fix_functions);
+		const auto key = ini::text(L"Limits", L"ScriptFunctions");
+		const auto chosen = decide(key, fix_functions);
 		if (!chosen.note.empty()) logger::write("script functions: %s", chosen.note.c_str());
+		key_present = key.has_value();
+		fix_functions_registered = fix_functions;
+		chosen_capacity = chosen.capacity;
 		if (chosen.capacity == stock_capacity)
 		{
 			logger::write("script functions: the game's own 320 names (%s)", fix_functions ? "[Limits] ScriptFunctions=320" : "no [Limits] ScriptFunctions and no [Game] ForcedTeams");

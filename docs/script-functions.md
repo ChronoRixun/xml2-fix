@@ -56,9 +56,15 @@ says how many will be dropped.
 ## Online and saves
 
 Nothing about the limit is saved or sent: compiled statements hold handler pointers, never tree indices. Both
-peers of a co-op game need the same functions, and that follows from the same fix build and ini; a peer whose
-raise was refused would drop the statements calling the functions past 320. The raise is not in the gameplay
-agreement yet (see the 0.2.2 report: it needs a rule ID of its own; rule 1's four values are the entity layout).
+peers of a co-op game need the same functions; a peer whose raise was refused would drop the statements calling the
+functions past 320 while the other runs them. The installed capacity is therefore rule 14 of the shared gameplay
+agreement ([gameplay-agreement.md](gameplay-agreement.md)), revision 1, `{installed capacity,0,0,0}`: `{0,0,0,0}`
+with no key and no `[Game] ForcedTeams` (plain XML2), `{320,0,0,0}` for the game's own limit, `{N,0,0,0}` for an
+installed raise; a raise that was requested (by the key, or by default with ForcedTeams) but didn't install is
+registered unverified, which closes host and join. Registered in `DllMain` next to rules 3 and 4, wherever the
+agreement participates (every LC build); an explicit `[Limits] ScriptFunctions` above 320 enlists the agreement by
+itself, as a requested controller does, while the default raise of a non-LC ForcedTeams mod leaves its online play as
+it was.
 
 ## Tests
 

@@ -4,6 +4,7 @@
 #include "game_version.hpp"
 #include "game_version_rules.hpp"
 #include "explosive_first_hit.hpp"
+#include "script_functions_rules.hpp"
 #include <cstdio>
 #include <cstdarg>
 #include <utility>
@@ -81,6 +82,20 @@ void records(){
  record token;token.layout(1,{32,224,256,16},true);token.add(2,1,{0,0,0,0},true);token.finalize();check(off.compare(token.bytes())==result::value,"different token width refuses");
  record missing;missing.add(3,1,{1,0,0,0},true);missing.add(2,1,{0,0,0,0},true);missing.finalize();check(off.compare(missing.bytes())==result::entries,"missing controller entry refuses");
  record sorted;sorted.add(2,1,{0,0,0,0},true);sorted.add(3,1,{1,0,0,0},true);sorted.finalize();check(sorted.compare(missing.bytes())==result::match,"registration order canonicalizes by explicit rule id");
+ // Rule 14, the script function limit: peers agree on the installed capacity; plain XML2 advertises {0,0,0,0}.
+ {
+  using namespace script_functions_rules;
+  auto functions=[](agreement a){record r;r.add(2,1,{0,0,0,0},true);r.add(gameplay_capabilities::script_functions_id,agreement_revision,a.values,a.verified);r.finalize();return r;};
+  const auto raised=functions(agreement_entry(false,true,1024,1024)),raised_too=functions(agreement_entry(true,false,1024,1024));
+  const auto stock=functions(agreement_entry(true,true,320,320)),plain=functions(agreement_entry(false,false,320,320)),plain_too=functions(agreement_entry(false,false,320,320));
+  const auto bigger=functions(agreement_entry(true,true,2048,2048)),refused=functions(agreement_entry(false,true,1024,320));
+  check(gameplay_capabilities::script_functions_id==14 && agreement_revision==1,"script function limit is rule 14 revision 1");
+  check(raised.compare(raised_too.bytes())==result::match && plain.compare(plain_too.bytes())==result::match,"rule 14: equal installed capacities match (default 1024 and explicit 1024 alike; plain XML2 peers match)");
+  check(raised.compare(stock.bytes())==result::value && stock.compare(raised.bytes())==result::value,"rule 14: a raised peer and a ScriptFunctions=320 peer refuse each other");
+  check(raised.compare(bigger.bytes())==result::value && raised.compare(plain.bytes())==result::value && plain.compare(stock.bytes())==result::value,"rule 14: another capacity or plain XML2 against a participating peer refuses");
+  check(!refused.ready() && refused.bytes().empty() && refused.compare(raised.bytes())==result::unavailable && raised.compare(refused.bytes())!=result::match,"rule 14: a requested raise that didn't install is unverified - the record is poisoned and host/join close both ways");
+  check(off.compare(raised.bytes())==result::entries && raised.compare(off.bytes())==result::entries,"rule 14: a peer without the rule (older fix) refuses");
+ }
  record duplicate;duplicate.add(2,1,{0,0,0,0},true);check(!duplicate.add(2,1,{0,0,0,0},true) && !duplicate.finalize(),"duplicate registration poisons finalization");
  record late;late.finalize();check(!late.add(2,1,{0,0,0,0},true) && !late.ready() && late.bytes().empty(),"late registration cannot change a frozen advertised record");
  record invalid;check(!invalid.layout(1,{32,224,256,7},true) && !invalid.finalize(),"token capacity overflow refuses");

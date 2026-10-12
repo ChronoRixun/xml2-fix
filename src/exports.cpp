@@ -250,12 +250,18 @@ namespace
 		// every peer runs Master Mold's native AI update and must have the same effective controller (rule 3).
 		// No turret controller exists in this build: rule 4 is advertised as verified off.
 		// Registering a requested controller enlists the agreement even in a non-LC installation.
-		if (game_version::needs_gameplay_agreement() || mold_controller::requested())
+		// The script function limit (rule 14): a peer whose raise was refused drops every statement calling a function
+		// past 320 while the other runs it, so peers agree on the installed capacity; a requested raise that didn't
+		// install is unverified and closes host/join. Plain XML2 (no key, no ForcedTeams) advertises {0,0,0,0}. Only an
+		// explicit [Limits] ScriptFunctions enlists the agreement by itself (script_functions.hpp).
+		if (game_version::needs_gameplay_agreement() || mold_controller::requested() || script_functions::requested_by_key())
 		{
 			const auto mold = mold_controller::capability();
 			gameplay_agreement::register_rule(gameplay_capabilities::master_mold_id, xml1_capability_rules::master_mold_revision, mold.values, mold.verified);
 			const auto turrets = xml1_capability_rules::turrets();
 			gameplay_agreement::register_rule(gameplay_capabilities::turret_controller_id, xml1_capability_rules::turret_revision, turrets.values, turrets.verified);
+			const auto functions = script_functions::capability();
+			gameplay_agreement::register_rule(gameplay_capabilities::script_functions_id, script_functions_rules::agreement_revision, functions.values, functions.verified);
 		}
 		// Conversations written for XML1's engine ([Game] AutoAdvance, ReplyVoices, ReplyCursor; on by default):
 		// three code sites of the conversation system, used from the first conversation on; independent of the

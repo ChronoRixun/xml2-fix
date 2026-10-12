@@ -177,6 +177,13 @@ namespace
 		          decide("0x400", true).capacity == 1024 && decide("", true).capacity == 1024 && decide("9999", false).capacity == 320,
 		      "out of range or not a count: logged, the no-key choice");
 
+		const auto plain = agreement_entry(false, false, 320, 320), stock = agreement_entry(true, true, 320, 320), raised = agreement_entry(false, true, 1024, 1024),
+		           failed = agreement_entry(true, false, 2048, 320), invalid_plain = agreement_entry(true, false, 320, 320);
+		check(plain.verified && plain.values == std::array<std::uint32_t, 4>{0, 0, 0, 0}, "rule 14: no key and no ForcedTeams = {0,0,0,0} (plain XML2)");
+		check(stock.verified && stock.values[0] == 320 && invalid_plain.verified && invalid_plain.values[0] == 320, "rule 14: the game's own limit chosen = {320,0,0,0}");
+		check(raised.verified && raised.values == std::array<std::uint32_t, 4>{1024, 0, 0, 0}, "rule 14: an installed raise = {capacity,0,0,0}");
+		check(!failed.verified && failed.values[0] == 320, "rule 14: a requested raise that didn't install is unverified");
+
 		const auto reg = register_after(0x10002000);
 		const std::uint32_t reg_rel = 0x10002000 - (register_site + 5);
 		check(reg[0] == 0xe9 && std::memcmp(&reg[1], &reg_rel, 4) == 0 && reg[5] == 0x90 && reg[11] == 0x90, "registration site: jmp stub + 7 nops over the cap's cmp/je");

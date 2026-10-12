@@ -78,6 +78,33 @@ namespace script_functions_rules
 		return result;
 	}
 
+	// ---- The shared gameplay agreement (rule 14, docs/gameplay-agreement.md) ----------------------------
+
+	// Online play is lockstep: a peer whose raise was refused drops every script statement calling a function
+	// past 320 while the other runs it. Rule 14, revision 1, values {installed capacity, 0, 0, 0}:
+	// - plain XML2 (no key and no [Game] ForcedTeams): {0,0,0,0}, verified - such peers match each other;
+	// - the game's own limit chosen (ScriptFunctions=320, or an invalid key without ForcedTeams): {320,0,0,0};
+	// - a raise installed: {capacity,0,0,0}, verified;
+	// - a raise requested but not installed: {320,0,0,0}, NOT verified - the record is poisoned, host/join closed.
+	constexpr std::uint16_t agreement_id = 14;
+	constexpr std::uint16_t agreement_revision = 1;
+
+	struct agreement
+	{
+		std::array<std::uint32_t, 4> values{};
+		bool verified = true;
+	};
+
+	inline agreement agreement_entry(const bool key_present, const bool fix_functions, const int chosen, const int installed)
+	{
+		if (chosen == stock_capacity)
+		{
+			if (!key_present && !fix_functions) return {{0, 0, 0, 0}, true};
+			return {{static_cast<std::uint32_t>(stock_capacity), 0, 0, 0}, true};
+		}
+		return {{static_cast<std::uint32_t>(installed), 0, 0, 0}, installed == chosen};
+	}
+
 	// ---- The two sites ------------------------------------------------------------------------------
 
 	constexpr std::uint32_t register_site = 0x4d7637;   // cmp dword [edi+0x1948],0x140 ; je 0x4d768f

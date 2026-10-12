@@ -26,6 +26,19 @@ namespace script_functions
 	// The total the game can register now: 320 when the raise isn't installed.
 	int capacity();
 
+	// A raise past 320 was chosen (by the key or by default with [Game] ForcedTeams), installed or not.
+	bool requested();
+
+	// A raise past 320 was asked for by [Limits] ScriptFunctions itself: like a requested controller, it enlists
+	// the gameplay agreement even outside an LC installation. The default raise of a ForcedTeams mod registers
+	// rule 14 only where the agreement participates already (every LC build), so a non-LC mod's online play
+	// doesn't change with this release.
+	bool requested_by_key();
+
+	// Rule 14 of the shared gameplay agreement, from what install() chose and installed
+	// (script_functions_rules::agreement_entry).
+	script_functions_rules::agreement capability();
+
 	// The probe entries [Test] ScriptFunctionProbes asked for (empty without it); the registration's table
 	// appends them after the fix's own functions.
 	std::span<const script_functions_rules::func_entry> probes();
