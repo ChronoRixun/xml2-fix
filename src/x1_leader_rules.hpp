@@ -24,8 +24,8 @@
 // counts only for a drop kind > 0, skips the probability roll (table 0x686dec), passes rarity
 // 1-3 instead of 6, draws a 2-5 drop count on one of its two count paths, from the second drop forces
 // XTREME_PIP (0x6d839c) with chance 0.33 when the manager's vt+0x19c(-1) exceeds vt+0x194(), else
-// a normal pick; HEALTH_ITEM / ENERGY_ITEM are no longer forced. This fix restores that engine
-// rule for the first game's leaders; it does not re-create the Xbox item mix. Neither flag is
+// a normal pick; HEALTH_ITEM / ENERGY_ITEM are no longer forced. For listed actors this fix runs
+// the first game's rule instead (see "The drop rule"); x3 variants keep XML2's. Neither flag is
 // settable per character in data (the spawn `leader` attribute is a different, danger-room
 // mechanic; the x3 variant would also triple kill XP), so this fix extends the two tests: an actor
 // whose stats name is in the sidecar counts as a leader, exactly like a flagged one. Flagged
@@ -62,9 +62,31 @@ namespace x1_leader_rules
 	constexpr address drop_site_va = 0x46e4ed;   // FUN_0046e490; esi = the corpse
 	constexpr address drop_resume_va = 0x46e4f4; // its je (skip at 0x46e503) is kept
 
-	inline constexpr std::array<guard, 2> guards{{
+	// The first game's leader drops on XML2's roller (see "The drop rule" below): the roller's code
+	// around the three places the fix enters, and the data its forced pick reads.
+	constexpr address drop_kind_test_va = 0x46e4f6; // test ebp,ebp; jle: XML2's own "drop kind > 0" condition
+	constexpr address drop_flag_va = 0x46e4fa;      // mov byte [esp+0x13],1; mov bl,[esp+0x13]: the leader flag
+	constexpr address drop_skip_va = 0x46e503;      // no leader: the probability roll decides
+	constexpr address count_site_va = 0x46e735;     // push 1; push 5; push 2 (+ call 0x5601e0): a leader's 2-5 count
+	constexpr address count_call_va = 0x46e73b;
+	constexpr address count_store_va = 0x46e743;    // mov [esp+0x1c], eax: the drop count
+	constexpr address pick_site_va = 0x46e774;      // leader and drop #2+: XML2's XTREME_PIP-or-normal pick
+	constexpr address pick_resume_va = 0x46e77c;
+	constexpr address pick_join_va = 0x46e7ef;      // eax -> the picked 8-byte drop descriptor
+	constexpr address item_names_va = 0x6d8394;     // char* HEALTH_ITEM, ENERGY_ITEM, XTREME_PIP
+	constexpr address drop_manager_fn = 0x480a00;   // the item/drop manager singleton (vt+0x78 by name, vt+0x12c descriptor)
+	constexpr address random_int_fn = 0x5601e0;     // cdecl (lo, hi, stream): lo + floor(rnd * (hi - lo + 1))
+
+	inline constexpr std::array<guard, 9> guards{{
 	    {pain_site_va, "f687db03000008", "the pain gate's leader-flag test (FUN_00435850, 0x43597b)"},
 	    {drop_site_va, "f686db03000008", "the drop roller's leader-flag test (FUN_0046e490, 0x46e4ed)"},
+	    {0x46e4f4, "740d85ed7e09c6442413018a5c2413", "the drop roller's kind test and leader flag (0x46e4f4)"},
+	    {0x46e72d, "8a44241384c074126a016a056a02e8a01a0f0083c40c8944241c", "the drop roller's leader count (0x46e72d)"},
+	    {0x46e760, "8a44241384c00f849800000085ed0f84900000008b176aff8bcfb301ff929c0100008bf08b078bcfff90940100003bc67c0232db6a01e8f5190f0083c40484db743ad81d442c6800dfe0f6c4057a2fe84c2201008bf0e8452201008b168bf8a19c836d008b1f508bceff52788d4c244050518bcfff932c010000eb13ddd8e81d2201008b108d4c2448518bc8ff52408b10895424148b400489442418c744247001000000", "the drop roller's forced pick (0x46e760)"},
+	    {item_names_va, "cc816800c0816800b4816800", "the forced drop names table (0x6d8394)"},
+	    {0x6881b4, "585452454d455f5049500000454e455247595f4954454d004845414c54485f4954454d00", "XTREME_PIP / ENERGY_ITEM / HEALTH_ITEM (0x6881b4)"},
+	    {drop_manager_fn, "64a1000000006aff68c1396700", "the drop manager getter (0x480a00)"},
+	    {random_int_fn, "8a44240c568b742408578b7c2410", "the random integer (0x5601e0)"},
 	}};
 
 	// ---- The actor fields the decision reads ------------------------------------------------------
@@ -198,6 +220,48 @@ namespace x1_leader_rules
 		return names.contains(actor_name(actor));
 	}
 
+	// ---- The drop rule (the first game's, XBE FUN_00070fb0, for listed actors only) ---------------
+	//
+	// XBE: the corpse's stats bit skips the probability roll whatever the drop kind (0x710c3), sets the
+	// drop count to 4 (0x711a5; the money path later replaces it with min(rand(2,4), amount) for
+	// everyone, 0x71394) and, from the second drop on (0x713d0), forces one of three named slots:
+	// n = (vt+0x134() < vt+0x13c(-1)) ? 3 : 1, r = rand(0, n) inclusive, 0 HEALTH_ITEM, 1 ENERGY_ITEM,
+	// else XTREME_PIP (0x713e4-0x71444). XML2's roller keeps the money path and the same manager pair
+	// (vt+0x194 / vt+0x19c(-1)) but asks for kind > 0, draws a 2-5 count and forces XTREME_PIP only.
+	// Listed actors get the XBE rule; XML2's own x3-variant actors (the native flag) keep XML2's.
+	enum class drop_path
+	{
+		none,   // no leader: the probability roll
+		native, // the x3-variant flag: XML2's own kind test and rule
+		x1,     // a listed actor: the first game's rule
+	};
+	inline drop_path classify(const void* corpse, const leader_names& names)
+	{
+		if (!corpse)
+		{
+			return drop_path::none;
+		}
+		if ((at<std::uint8_t>(corpse, actor_flags) & native_leader_bit) != 0)
+		{
+			return drop_path::native;
+		}
+		return names.contains(actor_name(corpse)) ? drop_path::x1 : drop_path::none;
+	}
+	inline address drop_target(const drop_path path)
+	{
+		return path == drop_path::x1 ? drop_flag_va : path == drop_path::native ? drop_kind_test_va : drop_skip_va;
+	}
+	constexpr int x1_drop_count = 4;
+	// rand(0, forced_range(...)) inclusive, then forced_slot: the index into item_names_va.
+	inline int forced_range(const int current, const int maximum)
+	{
+		return current < maximum ? 3 : 1;
+	}
+	inline int forced_slot(const int roll)
+	{
+		return roll <= 0 ? 0 : roll == 1 ? 1 : 2;
+	}
+
 	// ---- The bridge each site is patched with ------------------------------------------------------
 	//
 	// Entered by the site's jmp with the game's stack untouched: save; push the actor; call the
@@ -236,6 +300,58 @@ namespace x1_leader_rules
 		std::vector<std::uint8_t> b{0xe9};
 		detail::word(b, bridge_va - (site + 5));
 		b.insert(b.end(), {0x90, 0x90});
+		return b;
+	}
+
+	// ---- The three drop bridges (placed at `at`; every rel32 computed from it) ----------------------
+	namespace detail
+	{
+		inline void rel(std::vector<std::uint8_t>& b, const address at, const address target)
+		{
+			word(b, target - (at + static_cast<address>(b.size()) + 4));
+		}
+	}
+	// pushad; push esi; mov eax, cb; call eax; add esp, 4; mov [esp+0x1c], eax; popad; jmp eax.
+	// The callback returns where to go on (drop_target); eax is dead there (0x46e503 reloads it).
+	inline std::vector<std::uint8_t> classify_bridge(const address callback)
+	{
+		std::vector<std::uint8_t> b{0x60, 0x56, 0xb8};
+		detail::word(b, callback);
+		b.insert(b.end(), {0xff, 0xd0, 0x83, 0xc4, 0x04, 0x89, 0x44, 0x24, 0x1c, 0x61, 0xff, 0xe0});
+		return b;
+	}
+	// cmp byte [flag], 0; je native; mov eax, 4; jmp count_store; native: push 1; push 5; push 2; jmp count_call
+	inline std::vector<std::uint8_t> count_bridge(const address at, const address flag)
+	{
+		std::vector<std::uint8_t> b{0x80, 0x3d};
+		detail::word(b, flag);
+		b.insert(b.end(), {0x00, 0x74, 0x0a, 0xb8});
+		detail::word(b, static_cast<address>(x1_drop_count));
+		b.push_back(0xe9);
+		detail::rel(b, at, count_store_va);
+		b.insert(b.end(), {0x6a, 0x01, 0x6a, 0x05, 0x6a, 0x02, 0xe9});
+		detail::rel(b, at, count_call_va);
+		return b;
+	}
+	// pushad; push edi; mov eax, cb; call eax; add esp, 4; mov [esp+0x1c], eax; popad; test eax, eax;
+	// jz native; jmp pick_join; native: mov edx,[edi]; push -1; mov ecx, edi; mov bl, 1; jmp pick_resume.
+	// The callback returns the picked descriptor for a listed corpse's roll, else 0.
+	inline std::vector<std::uint8_t> pick_bridge(const address at, const address callback)
+	{
+		std::vector<std::uint8_t> b{0x60, 0x57, 0xb8};
+		detail::word(b, callback);
+		b.insert(b.end(), {0xff, 0xd0, 0x83, 0xc4, 0x04, 0x89, 0x44, 0x24, 0x1c, 0x61, 0x85, 0xc0, 0x74, 0x05, 0xe9});
+		detail::rel(b, at, pick_join_va);
+		b.insert(b.end(), {0x8b, 0x17, 0x6a, 0xff, 0x8b, 0xcf, 0xb3, 0x01, 0xe9});
+		detail::rel(b, at, pick_resume_va);
+		return b;
+	}
+	// jmp rel32 at `site`, padded with nops to `size` (the whole instructions it replaces).
+	inline std::vector<std::uint8_t> jmp_to(const address site, const address target, const std::size_t size)
+	{
+		std::vector<std::uint8_t> b{0xe9};
+		detail::word(b, target - (site + 5));
+		b.resize(size, 0x90);
 		return b;
 	}
 }

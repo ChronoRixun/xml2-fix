@@ -9670,6 +9670,40 @@ namespace
 		std::memcpy(&rel, b.data() + 3, 4);
 		CHECK(rel == callback);
 		CHECK(b[b.size() - 5] == 0xe9); // the resume jmp's rel32 is filled by the installer
+
+		// The drop rule: listed corpses take the first game's path (the flag set whatever the kind),
+		// x3-flagged ones XML2's kind test, everyone else the probability roll.
+		const auto list2 = leader_names::parse("x1_sgt_red\n");
+		alignas(8) std::uint8_t corpse[0x400]{};
+		alignas(8) std::uint8_t corpse_stats[0x200]{};
+		std::strcpy(reinterpret_cast<char*>(corpse_stats + stats_name), "X1_SGT_RED");
+		*reinterpret_cast<void**>(corpse + actor_stats) = corpse_stats;
+		CHECK(classify(corpse, list2) == drop_path::x1 && drop_target(drop_path::x1) == drop_flag_va);
+		corpse[actor_flags] = native_leader_bit;
+		CHECK(classify(corpse, list2) == drop_path::native && drop_target(drop_path::native) == drop_kind_test_va);
+		corpse[actor_flags] = 0;
+		std::strcpy(reinterpret_cast<char*>(corpse_stats + stats_name), "x1 nobody");
+		CHECK(classify(corpse, list2) == drop_path::none && drop_target(drop_path::none) == drop_skip_va);
+		CHECK(classify(nullptr, list2) == drop_path::none);
+		// XBE 0x713e4-0x71444: pips below the limit -> rand(0,3): HEALTH, ENERGY, XTREME, XTREME; else rand(0,1).
+		CHECK(forced_range(1, 3) == 3 && forced_range(3, 3) == 1 && forced_range(4, 3) == 1);
+		CHECK(forced_slot(0) == 0 && forced_slot(1) == 1 && forced_slot(2) == 2 && forced_slot(3) == 2);
+		CHECK(x1_drop_count == 4);
+		// The encodings: every rel32 lands where the roller continues.
+		const auto rel_at = [](const std::vector<std::uint8_t>& v, std::size_t at, address base) {
+			std::uint32_t r = 0;
+			std::memcpy(&r, v.data() + at, 4);
+			return static_cast<address>(base + at + 4 + r);
+		};
+		const auto cb2 = classify_bridge(0x11111111u);
+		CHECK(cb2.size() == 19 && cb2[1] == 0x56 && cb2[cb2.size() - 2] == 0xff && cb2[cb2.size() - 1] == 0xe0);
+		const auto cnt = count_bridge(0x30000000u, 0x22222222u);
+		CHECK(cnt[0] == 0x80 && cnt[1] == 0x3d && rel_at(cnt, 15, 0x30000000u) == count_store_va &&
+		      rel_at(cnt, 26, 0x30000000u) == count_call_va && cnt[10] == x1_drop_count);
+		const auto pk = pick_bridge(0x30000100u, 0x11111111u);
+		CHECK(pk[1] == 0x57 && rel_at(pk, 22, 0x30000100u) == pick_join_va && rel_at(pk, 35, 0x30000100u) == pick_resume_va);
+		const auto j = jmp_to(count_site_va, 0x30000000u, 6);
+		CHECK(j.size() == 6 && j[0] == 0xe9 && j[5] == 0x90 && rel_at(j, 1, count_site_va) == 0x30000000u);
 	}
 
 	// [Game] BreakRule (break_rule_rules.hpp): the value's rules; XML1's level sum and the structure pairing; the

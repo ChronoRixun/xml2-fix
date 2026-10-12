@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 // Link the production installer against isolated settings/logger providers.
@@ -38,7 +39,7 @@ namespace logger
 // A read/write/execute section named to sort before .text, spanning both hook sites (0x43597b,
 // 0x46e4ed) wherever the linker places it in the image.
 #pragma section(".afixture", read, write, execute)
-__declspec(allocate(".afixture")) std::uint8_t fixture_space[0x70000]{};
+__declspec(allocate(".afixture")) std::uint8_t fixture_space[0x2e0000]{}; // up to the forced-pick name table (0x6d8394)
 
 namespace
 {
@@ -121,6 +122,16 @@ namespace
 		std::memcpy(f + 4, set_bl.data(), set_bl.size());
 		f[10] = 0x5c; f[11] = 0x24; f[12] = 0x13;                                       // mov bl,[esp+0x13]
 		place_rejoin(drop_rejoin);
+		// Every other guarded byte as the retail exe has it (the guards carry them).
+		for (std::size_t g = 2; g < x1_leader_rules::guards.size(); ++g)
+		{
+			const auto& guard = x1_leader_rules::guards[g];
+			const std::string hex(guard.hex);
+			for (std::size_t i = 0; i + 1 < hex.size(); i += 2)
+			{
+				reinterpret_cast<std::uint8_t*>(guard.va)[i / 2] = static_cast<std::uint8_t>(std::stoul(hex.substr(i, 2), nullptr, 16));
+			}
+		}
 	}
 
 	// Runs the pain site with esi = the victim ctx (bit 3 of +0xac set) and edi = the attacker.
@@ -189,7 +200,7 @@ int main()
 	AddVectoredExceptionHandler(1, &report_crash);
 	const auto game = reinterpret_cast<HMODULE>(0x400000);
 	const auto begin = reinterpret_cast<std::uintptr_t>(fixture_space);
-	if (GetModuleHandleW(nullptr) != game || pain_site < begin || drop_rejoin > begin + sizeof(fixture_space))
+	if (GetModuleHandleW(nullptr) != game || pain_site < begin || 0x6d83a0u > begin + sizeof(fixture_space))
 	{
 		std::printf("Test fixture section does not cover the retail code addresses (begin=%p end=%p)\n",
 		            static_cast<void*>(fixture_space),
@@ -286,7 +297,25 @@ int main()
 	check(drop_once(listed_actor, 1) != 0, "a listed corpse always rolls");
 	check(drop_once(native_actor, 1) != 0, "a native x3-flagged corpse still rolls (native path)");
 	check(drop_once(no_stats_actor, 1) == 0, "a corpse without stats falls back to the roll");
-	check(drop_once(listed_actor, 0) == 0, "drop kind 0 is not a leader roll (the kind gate stands)");
+	check(drop_once(listed_actor, 0) != 0, "a listed corpse is a leader roll even at drop kind 0 (XBE 0x7100f has no kind test)");
+	check(drop_once(native_actor, 0) == 0, "an x3-flagged corpse at drop kind 0 keeps XML2's kind test");
+
+	// The count: a listed corpse's roll takes 4 drops (XBE 0x711a5); any other keeps XML2's 2-5 call.
+	{
+		auto* c = reinterpret_cast<std::uint8_t*>(x1_leader_rules::count_call_va);
+		const std::array<std::uint8_t, 9> fake{0x83, 0xc4, 0x0c, 0xb8, 0x4d, 0x00, 0x00, 0x00, 0xc3}; // add esp,12; mov eax,77; ret
+		std::memcpy(c, fake.data(), fake.size()); // 0x46e73b..0x46e743: stands in for the random call and the store
+		const auto count_site = reinterpret_cast<int(__cdecl*)()>(x1_leader_rules::count_site_va);
+		drop_once(listed_actor, 1);
+		check(count_site() == 4, "a listed corpse's roll draws 4 drops");
+		drop_once(plain_actor, 1);
+		check(count_site() == 77, "another corpse's roll keeps the native count call");
+		drop_once(native_actor, 1);
+		check(count_site() == 77, "an x3-flagged corpse's roll keeps the native count call");
+		check(*reinterpret_cast<std::uint8_t*>(x1_leader_rules::pick_site_va) == 0xe9 &&
+		          *reinterpret_cast<std::uint8_t*>(x1_leader_rules::pick_site_va + 7) == 0x90,
+		      "the forced pick site carries the jmp + nops");
+	}
 
 	DWORD unused;
 	VirtualProtect(fixture_space, sizeof(fixture_space), fixture_protection, &unused);

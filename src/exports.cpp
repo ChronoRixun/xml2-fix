@@ -263,11 +263,11 @@ namespace
 			gameplay_agreement::register_rule(gameplay_capabilities::explosive_first_hit_id,1,{explosive_first_hit::installed() ? 1u : 0u,0,0,0},explosive_first_hit::verified());
 		// X-Men Legends 1's stats `leader` bit (issue #15): two tests of actor+0x3db bit 3 - the pain
 		// gate (0x43597b, no hero flinch vs a leader-owned projectile) and the death-drop roller
-		// (0x46e4ed, leaders skip the drop-probability roll: XML2's leader drop rule) - extended to the actors
+		// (0x46e4ed + count 0x46e735 + forced pick 0x46e774: X-Men Legends 1's leader drop rule) - for the actors
 		// the build's Data\x1leader.txt names; XML2's own x3-variant actors keep the native path.
 		x1_leader::install(game);
 		if (game_version::needs_gameplay_agreement())
-			gameplay_agreement::register_rule(gameplay_capabilities::x1_leader_id,1,{x1_leader::installed() ? 1u : 0u,0,0,0},x1_leader::verified());
+			gameplay_agreement::register_rule(gameplay_capabilities::x1_leader_id,2,{x1_leader::installed() ? 1u : 0u,x1_leader::installed() ? 1u : 0u,0,0},x1_leader::verified()); // revision 2: the second value 1 = the first game's drop rule (XBE roller) for listed actors
 		objective_text::install(game);
 		// Before any of XMen2.exe's own code runs, as the engine limit adjuster must be: this DLL is a
 		// static import of libIGDisplay.dll, which XMen2.exe imports statically, so Windows runs this
