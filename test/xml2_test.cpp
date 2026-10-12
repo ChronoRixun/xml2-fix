@@ -324,6 +324,115 @@ namespace
 	}
 
 	// The display fix's decisions, on fixed inputs (display_rules.hpp).
+	// The mouse's way from the window to a menu row (display_rules.hpp, client_to_screen_space):
+	// for each display mode, every client pixel inside a row's visible panel must hit that row and no
+	// other through the engine's own integer mapping (0x5f9eb0) and its hit test (0x5c9320: PtInRect on
+	// [x, x + w - 1) x [y - h - 1, y)), and every row - Quit, the lowest, included - must be reachable.
+	// The rows are the classic main menu's, as the fix's panel bounds leave them (live dumps of
+	// candidate 0.2.0i, both layouts). The panels are drawn by the 2D view stretched over the back
+	// buffer, and the back buffer over the client area; that drawing is the reference here.
+	void check_menu_mouse_mapping()
+	{
+		using namespace display_rules;
+		std::printf("menu mouse mapping (client point -> engine screen -> 2D view -> main menu row)\n");
+
+		struct row_rect { int left, top, right, bottom; }; // native RECT, view units (y up)
+		const auto rows_at = [](const int left)
+		{
+			const int tops[8] = {219, 191, 163, 135, 107, 79, 51, 21}, bottoms[8] = {250, 219, 191, 163, 135, 107, 79, 51};
+			std::array<row_rect, 8> rows{};
+			for (int i = 0; i < 8; ++i) rows[i] = {left, tops[i], left + 267, bottoms[i]};
+			return rows;
+		};
+		const auto classic = rows_at(119), wide = rows_at(167);
+
+		struct mode_case
+		{
+			const char* what;
+			size screen; // the engine's screen = the back buffer (Resolution)
+			size client; // the window's client area
+			const std::array<row_rect, 8>* rows;
+		};
+		const mode_case cases[] = {
+			{"windowed 1280x720, wide layout", {1280, 720}, {1280, 720}, &wide},
+			{"windowed 1280x720 dragged to a 100% monitor from 125% (client 1023x575), wide layout", {1280, 720}, {1023, 575}, &wide},
+			{"windowed 1280x720 dragged to a 100% monitor from 125% (client 1023x575), classic layout", {1280, 720}, {1023, 575}, &classic},
+			{"windowed 1280x720 dragged to a 150% monitor from 100% (client 1920x1080), wide layout", {1280, 720}, {1920, 1080}, &wide},
+			{"fullscreen 1920x1080, wide layout", {1920, 1080}, {1920, 1080}, &wide},
+			{"fullscreen 1920x1080, classic layout", {1920, 1080}, {1920, 1080}, &classic},
+			{"borderless Width/Height 1280x720 on a 2560x1440 monitor, wide layout", {1280, 720}, {2560, 1440}, &wide},
+			{"4:3 1024x768, classic layout", {1024, 768}, {1024, 768}, &classic},
+			{"4:3 1024x768 window shrunk by a DPI change (819x614), classic layout", {1024, 768}, {819, 614}, &classic},
+		};
+
+		// The engine's hit test for one view point: the rows containing it.
+		const auto hits = [](const std::array<row_rect, 8>& rows, const menu_point p)
+		{
+			std::vector<int> found;
+			for (int i = 0; i < 8; ++i)
+				if (p.x >= rows[i].left && p.x < rows[i].right && p.y >= rows[i].top && p.y < rows[i].bottom) found.push_back(i);
+			return found;
+		};
+
+		for (const auto& c : cases)
+		{
+			const float aspect = static_cast<float>(c.screen.width) / static_cast<float>(c.screen.height); // 0x5fad7c: width / height
+			const float view_width = aspect * 384.0f, left = -(view_width - 512.0f) * 0.5f;
+			// Where a client pixel's centre is drawn, in view units: client -> back buffer -> 2D view.
+			const auto drawn = [&](const int cx, const int cy)
+			{
+				const double sx = (cx + 0.5) * c.screen.width / c.client.width, sy = (cy + 0.5) * c.screen.height / c.client.height;
+				return std::pair<double, double>{left + sx * view_width / c.screen.width, 384.0 - sy * 384.0 / c.screen.height};
+			};
+			bool all_hit = true, none_wrong = true;
+			int reached[8]{};
+			bool unconverted_all_hit = true;
+			for (int cy = 0; cy < static_cast<int>(c.client.height); ++cy)
+				for (int cx = 0; cx < static_cast<int>(c.client.width); cx += 3)
+				{
+					const auto [vx, vy] = drawn(cx, cy);
+					int shown = -1; // the row whose panel is drawn under this pixel, two view units (the engine's integer rounding) in from its edges
+					for (int i = 0; i < 8; ++i)
+					{
+						const auto& r = (*c.rows)[i];
+						if (vx > r.left + 2 && vx < r.right - 2 && vy > r.top + 2 && vy < r.bottom - 2) shown = i;
+					}
+					const auto got = hits(*c.rows, engine_menu_point(client_to_screen_space({cx, cy}, c.client, c.screen), c.screen, aspect));
+					if (!got.empty()) ++reached[got.front()];
+					if (shown >= 0)
+					{
+						if (got.size() != 1 || got.front() != shown) all_hit = false;
+					}
+					if (got.size() > 1 || (shown >= 0 && !got.empty() && got.front() != shown)) none_wrong = false;
+					// What the engine did before the conversion: the client point as a screen point.
+					const auto raw = hits(*c.rows, engine_menu_point({cx, cy}, c.screen, aspect));
+					if (shown >= 0 && (raw.size() != 1 || raw.front() != shown)) unconverted_all_hit = false;
+				}
+			bool every_row = true;
+			for (int i = 0; i < 8; ++i) every_row = every_row && reached[i] > 0;
+			std::printf("  %s: Quit reached by %d sampled pixels\n", c.what, reached[7]);
+			CHECK(all_hit && none_wrong && every_row);
+			// The negative control: without the conversion, a client area unlike the screen misses rows
+			// (the maintainer's report: drift growing downwards, Quit unreachable); equal sizes don't.
+			CHECK(unconverted_all_hit == (c.client == c.screen));
+		}
+
+		// The conversion itself: first and last pixels map onto the screen's, equal sizes don't move.
+		CHECK(scale_coordinate(0, 1023, 1280) == 0 && scale_coordinate(1022, 1023, 1280) == 1279 && scale_coordinate(574, 575, 720) == 719);
+		CHECK(scale_coordinate(0, 2560, 1280) == 0 && scale_coordinate(2559, 2560, 1280) == 1279 && scale_coordinate(1279, 2560, 1280) == 639);
+		CHECK(scale_coordinate(345, 1280, 1280) == 345 && scale_coordinate(345, 0, 1280) == 345 && scale_coordinate(345, 1280, 0) == 345);
+		CHECK(scale_coordinate(-1, 1023, 1280) == -1 && scale_coordinate(-10, 1023, 1280) == -12 && scale_coordinate(1023, 1023, 1280) == 1280);
+		const LPARAM packed = scale_point_lparam(MAKELPARAM(1022, 574), {1023, 575}, {1280, 720});
+		CHECK(static_cast<short>(LOWORD(packed)) == 1279 && static_cast<short>(HIWORD(packed)) == 719);
+		const LPARAM negative = scale_point_lparam(MAKELPARAM(static_cast<WORD>(-5), static_cast<WORD>(-5)), {1023, 575}, {1280, 720});
+		CHECK(static_cast<short>(LOWORD(negative)) == -6 && static_cast<short>(HIWORD(negative)) == -6);
+		CHECK(has_client_point(WM_MOUSEMOVE) && has_client_point(WM_LBUTTONUP) && has_client_point(WM_XBUTTONDBLCLK) && !has_client_point(WM_MOUSEWHEEL) &&
+		      !has_client_point(0x20e) && !has_client_point(WM_KEYDOWN));
+		// The engine's mapping at 1:1 against the live rows (wide 1280x720): Quit's panel centre, Begin Story's.
+		CHECK(engine_menu_point({725, 650}, {1280, 720}, 1280.0f / 720.0f).y >= 21 && engine_menu_point({725, 650}, {1280, 720}, 1280.0f / 720.0f).y < 51);
+		CHECK(engine_menu_point({725, 278}, {1280, 720}, 1280.0f / 720.0f).y >= 219 && engine_menu_point({725, 278}, {1280, 720}, 1280.0f / 720.0f).x >= 167);
+	}
+
 	void check_display_rules()
 	{
 		using namespace display_rules;
@@ -3951,6 +4060,17 @@ namespace
 		CHECK(parse_command("frob").what == command::kind::unknown && !parse_command("frob").error.empty());
 		CHECK(parse_command("tap NOSUCH").what == command::kind::unknown && parse_command("tap W x").what == command::kind::unknown);
 		CHECK(parse_command("PING").what == command::kind::ping && parse_command("status").what == command::kind::status);
+
+		// The test mouse: a client point and an action (move by default).
+		cmd = parse_command("mouse 584 531 click");
+		CHECK(cmd.what == command::kind::mouse && cmd.x == 584 && cmd.y == 531 && cmd.pointer == command::pointer_action::click);
+		cmd = parse_command("MOUSE -3 12");
+		CHECK(cmd.what == command::kind::mouse && cmd.x == -3 && cmd.y == 12 && cmd.pointer == command::pointer_action::move);
+		CHECK(parse_command("mouse 1 2 down").pointer == command::pointer_action::down && parse_command("mouse 1 2 up").pointer == command::pointer_action::up);
+		CHECK(parse_command("mouse 1").what == command::kind::unknown && parse_command("mouse 1 2 drag").what == command::kind::unknown);
+		CHECK(parse_command("mouse x 2").what == command::kind::unknown && parse_command("mouse 99999 2").what == command::kind::unknown &&
+		      parse_command("mouse - 2").what == command::kind::unknown && parse_command("mouse 1 2 click 3").what == command::kind::unknown);
+		CHECK(parse_command("frob").error.find("mouse") != std::string::npos);
 
 		// "wm" (posted key messages) is gone: the Advanced Options panel reads the DirectInput
 		// keyboard, so a stale client is told to use tap.
@@ -10348,6 +10468,7 @@ int main(const int argc, char** argv)
 	check_local_ip_rules();
 	check_local_ip();
 	check_display_rules();
+	check_menu_mouse_mapping();
 	check_frame_rate_rules();
 	check_menu_screens();
 	check_options_menu_rules();

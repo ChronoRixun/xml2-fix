@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Fix the mouse in the borderless and windowed modes when the window's client area isn't the
+  game's screen size: the engine maps a mouse point to its menus against its resolution
+  (0x5f9eb0: `[0xa09ffc]` x `[0xa0a000]`) while Direct3D stretches the picture over the client
+  area, so a window Windows shrank on a DPI change (1280x720 dragged from a 125% monitor to a 100%
+  one became 1023x575) hovered rows ever further below the cursor and never reached the last ones
+  (the main menu's Quit, in-game menus alike). Mouse messages and ScreenToClient now carry the
+  screen pixel the point is shown at, and a windowed window keeps its client size across a DPI
+  change (WM_GETDPISCALEDSIZE / WM_DPICHANGED). Test pipe `mouse X Y [move|down|up|click]`.
+- `[Game] ClassicMainPanelBounds`: a move or press inside the focused main-menu row stays that
+  row's. MAIN_MENU falls through to the generic handler there, whose label test (0x5c6490) sits
+  half the label's local y offset higher and refocused the row below: the focus flipped on every
+  move in a row's lower third, and a press there could move it before the release.
+
 - Keep the LC startup veto on instruction-cache flush failures and every patch protection
   restoration failure, including preflight cleanup. Stop further writes on a failed flush
   and attempt all remaining protection restores before refusing startup.
