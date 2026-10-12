@@ -205,7 +205,7 @@ namespace x1_leader
 		}
 		applied = true;
 		logger::write("x1 leader: on - %llu sidecar name(s): actors in Data\\x1leader.txt lead like a native "
-		              "x3-variant actor (deaths always roll drops with the forced item slots; heroes don't flinch "
+		              "x3-variant actor (deaths skip the drop-probability roll, XML2's leader drop rule; heroes don't flinch "
 		              "vs their projectiles); the pain gate (0x%08lX) and the drop roller (0x%08lX) hooked, every "
 		              "native byte the rest of the game reads unchanged",
 		              static_cast<unsigned long long>(names.size()), static_cast<unsigned long>(pain_site_va),

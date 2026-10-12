@@ -20,7 +20,12 @@
 // engine's x3 spawn-variant flag, also its x3 kill-XP multiplier) because its stats parser has no
 // leader field: the pain gate FUN_00435850 tests [attacker+0x3db]&8 at 0x43597b before clearing
 // the flinch flag (ctx+0xac bit 3), and the drop roller FUN_0046e490 tests [corpse+0x3db]&8 at
-// 0x46e4ed before skipping the probability roll and forcing the named drops. Neither flag is
+// 0x46e4ed. The roller is XML2's own version of the rule, not a copy of the first game's: the flag
+// counts only for a drop kind > 0, skips the probability roll (table 0x686dec), passes rarity
+// 1-3 instead of 6, draws a 2-5 drop count on one of its two count paths, from the second drop forces
+// XTREME_PIP (0x6d839c) with chance 0.33 when the manager's vt+0x19c(-1) exceeds vt+0x194(), else
+// a normal pick; HEALTH_ITEM / ENERGY_ITEM are no longer forced. This fix restores that engine
+// rule for the first game's leaders; it does not re-create the Xbox item mix. Neither flag is
 // settable per character in data (the spawn `leader` attribute is a different, danger-room
 // mechanic; the x3 variant would also triple kill XP), so this fix extends the two tests: an actor
 // whose stats name is in the sidecar counts as a leader, exactly like a flagged one. Flagged
