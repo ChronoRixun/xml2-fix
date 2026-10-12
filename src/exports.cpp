@@ -28,6 +28,7 @@
 #include "explosive_first_hit.hpp"
 #include "rank_costs.hpp"
 #include "death_threshold.hpp"
+#include "pack_amount.hpp"
 #include "gameplay_agreement.hpp"
 #include "gameplay_capabilities.hpp"
 #include "objective_text.hpp"
@@ -336,6 +337,15 @@ namespace
 		death_threshold::install(game);
 		if (game_version::needs_gameplay_agreement() || death_threshold::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::death_threshold_id,1,death_threshold::values(),death_threshold::verified());
+		// X-Men Legends 1's pack amount ([Game] PackAmount=xml1): the two single-amount fractions in restoreHealth /
+		// restoreEnergy, used from the first pack on; none of its sites or guards is anyone else's. Every peer computes
+		// its own heals, so the effective value is a gameplay rule (13); asking for it enlists the agreement.
+		pack_amount::install(game);
+		if (game_version::needs_gameplay_agreement() || pack_amount::requested())
+		{
+			const auto packs = xml1_capability_rules::pack_amount(pack_amount::requested(), pack_amount::installed());
+			gameplay_agreement::register_rule(gameplay_capabilities::pack_amount_id, xml1_capability_rules::pack_amount_revision, packs.values, packs.verified);
+		}
 		objective_text::install(game);
 		// Before any of XMen2.exe's own code runs, as the engine limit adjuster must be: this DLL is a
 		// static import of libIGDisplay.dll, which XMen2.exe imports statically, so Windows runs this
