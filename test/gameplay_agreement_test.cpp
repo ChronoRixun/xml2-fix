@@ -4,6 +4,7 @@
 #include "game_version.hpp"
 #include "game_version_rules.hpp"
 #include "explosive_first_hit.hpp"
+#include "xml1_capability_rules.hpp"
 #include <cstdio>
 #include <cstdarg>
 #include <utility>
@@ -87,8 +88,25 @@ void records(){
  record sum;check(!sum.layout(1,{32,225,256,8},true),"actor+generic above world refuses");record headroom;check(headroom.layout(3,{32,768,1024,10},true) && headroom.finalize(),"actor+generic below world (224 registrations of headroom) is accepted");
  record twice;twice.layout(1,{32,224,256,8},true);check(!twice.layout(1,{32,224,256,8},true) && !twice.finalize(),"duplicate layout owner cannot overwrite an earlier effective layout");
  record bad_layout;check(!bad_layout.layout(2,{64,448,512,16},false) && !bad_layout.finalize(),"failed entity installer cannot silently advertise retail");
- record full;for(std::uint16_t id=2;id<=8;++id)full.add(id,1,{id,0,0,0},true);check(full.finalize() && full.bytes().size()==gameplay_capabilities::max_size,"bounded eight-entry record serializes explicit values");
- record overflow;for(std::uint16_t id=2;id<=8;++id)overflow.add(id,1,{id,0,0,0},true);check(!overflow.add(9,1,{0,0,0,0},true) && !overflow.finalize(),"ninth record entry fails closed");
+ record full;for(std::uint16_t id=2;id<=16;++id)full.add(id,1,{id,0,0,0},true);check(full.finalize() && full.bytes().size()==gameplay_capabilities::max_size && full.bytes().size()==332,"bounded sixteen-entry record serializes explicit values");
+ record overflow;for(std::uint16_t id=2;id<=16;++id)overflow.add(id,1,{id,0,0,0},true);check(!overflow.add(17,1,{0,0,0,0},true) && !overflow.finalize(),"seventeenth record entry fails closed");
+ // Every ID assigned so far (1 layout, 2-4, 5-10 of the 0.2.2 wave, 11 PlacementCrush, 12 DoubleHeal) fits.
+ record wave;for(std::uint16_t id=2;id<=12;++id)wave.add(id,1,{0,0,0,0},true);check(wave.finalize() && wave.bytes().size()==12+12*20,"all twelve assigned rules fit one record");
+ // Rules 11 and 12 (xml1_capability_rules::installed_switch): no key = verified off {0,0,0,0}, so a peer whose fix
+ // has neither key still matches one whose keys are absent or set to the game's own value; requested and installed
+ // = {1,0,0,0}; requested but not installed = unverified, which poisons the record and closes host and join.
+ using xml1_capability_rules::installed_switch;
+ const auto off_switch=installed_switch(false,false),ignored_switch=installed_switch(false,true),on_switch=installed_switch(true,true),failed_switch=installed_switch(true,false);
+ check(off_switch.verified && off_switch.values==std::array<std::uint32_t,4>{0,0,0,0} && ignored_switch.verified && ignored_switch.values==off_switch.values,"PlacementCrush/DoubleHeal not requested register verified off");
+ check(on_switch.verified && on_switch.values==std::array<std::uint32_t,4>{1,0,0,0} && !failed_switch.verified,"requested and installed is {1,0,0,0}; requested but not installed is unverified");
+ check(gameplay_capabilities::placement_crush_id==11 && gameplay_capabilities::double_heal_id==12 && xml1_capability_rules::placement_crush_revision==1 && xml1_capability_rules::double_heal_revision==1,"rule IDs 11 and 12, revision 1");
+ auto with=[&](const xml1_capability_rules::registration& crush,const xml1_capability_rules::registration& heal){
+  record r;r.add(2,1,{0,0,0,0},true);r.add(gameplay_capabilities::placement_crush_id,1,crush.values,crush.verified);r.add(gameplay_capabilities::double_heal_id,1,heal.values,heal.verified);r.finalize();return r;};
+ const auto both_off=with(off_switch,off_switch),both_on=with(on_switch,on_switch),crush_only=with(on_switch,off_switch),heal_only=with(off_switch,on_switch);
+ check(both_off.compare(with(off_switch,off_switch).bytes())==result::match && both_on.compare(with(on_switch,on_switch).bytes())==result::match,"equal effective PlacementCrush/DoubleHeal match");
+ check(both_off.compare(crush_only.bytes())==result::value && both_on.compare(crush_only.bytes())==result::value && both_off.compare(heal_only.bytes())==result::value && crush_only.compare(heal_only.bytes())==result::value,"a PlacementCrush or DoubleHeal difference refuses with a value mismatch");
+ record failed_crush;failed_crush.add(gameplay_capabilities::placement_crush_id,1,failed_switch.values,failed_switch.verified);check(!failed_crush.finalize() && !failed_crush.ready() && failed_crush.bytes().empty() && failed_crush.compare(both_off.bytes())==result::unavailable,"a requested PlacementCrush that failed to install closes host and join");
+ record failed_heal;failed_heal.add(gameplay_capabilities::double_heal_id,1,failed_switch.values,failed_switch.verified);check(!failed_heal.finalize() && failed_heal.compare(both_off.bytes())==result::unavailable,"a requested DoubleHeal that failed to install closes host and join");
  check(!native.ready() || native.finalize(),"finalization is idempotent");
 }
 struct event {std::uint32_t type;void* body;std::uint16_t length,reserved;void* context;void* sender;};

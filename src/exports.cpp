@@ -20,6 +20,9 @@
 
 #include "balance.hpp"
 #include "break_rule.hpp"
+#include "placement_crush.hpp"
+#include "double_heal.hpp"
+#include "xml1_capability_rules.hpp"
 #include "conversations.hpp"
 #include "confirmation_release.hpp"
 #include "explosive_first_hit.hpp"
@@ -229,6 +232,8 @@ namespace
 		// The stats screen's help text: the two literals that name [Balance] numbers (health per body, the
 		// strike bonus) follow the same applied values, through the string manager's vt+8; every other
 		// string passes to the game's getter. After balance: it reads what balance applied.
+		// [Game] DoubleHeal=0 before the help texts: stat_help drops the double-heal lines only once it is in.
+		double_heal::install(game);
 		stat_help::install(game);
 		// The forced parties' script functions (seatParty and the rest). The game registers its script
 		// functions exactly once, from its own init: 0x40197b -> game vt+0x13c (0x46b750) -> the
@@ -274,6 +279,24 @@ namespace
 		// two code sites of the objects' own (their structure read and their damage gate), used from the first zone on;
 		// none of its sites or guards is anyone else's.
 		break_rule::install(game);
+		// X-Men Legends 1's zone placement without crushes ([Game] PlacementCrush=xml1): the objects' touch slot (0x498ef0),
+		// refused while an object is settled on the floor (each object at a zone's load and 0.5 s after any spawn in play:
+		// death drops, script-spawned props, debris - the first game has no settle at all); no other module hooks it.
+		placement_crush::install(game);
+		// X-Men Legends 1's packs ([Game] DoubleHeal=0, installed above, before stat_help): two branches of restoreHealth /
+		// restoreEnergy; no other module patches them.
+		// Both change what each peer simulates (objects broken while a zone settles; how much a pack heals): rules 11
+		// and 12 of the shared gameplay record. A requested change enlists the agreement even without LC, as rule 3.
+		if (game_version::needs_gameplay_agreement() || placement_crush::requested())
+		{
+			const auto crush = xml1_capability_rules::installed_switch(placement_crush::requested(), placement_crush::installed());
+			gameplay_agreement::register_rule(gameplay_capabilities::placement_crush_id, xml1_capability_rules::placement_crush_revision, crush.values, crush.verified);
+		}
+		if (game_version::needs_gameplay_agreement() || double_heal::requested())
+		{
+			const auto heal = xml1_capability_rules::installed_switch(double_heal::requested(), double_heal::installed());
+			gameplay_agreement::register_rule(gameplay_capabilities::double_heal_id, xml1_capability_rules::double_heal_revision, heal.values, heal.verified);
+		}
 
 		test_input::install(); // first: its screenshots need the display fix's device hook
 		display::install(game);

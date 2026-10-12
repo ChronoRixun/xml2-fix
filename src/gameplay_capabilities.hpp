@@ -7,7 +7,8 @@
 
 namespace gameplay_capabilities
 {
- constexpr std::uint16_t entity_layout_id=1, explosive_first_hit_id=2, master_mold_id=3, turret_controller_id=4;
+ constexpr std::uint16_t entity_layout_id=1, explosive_first_hit_id=2, master_mold_id=3, turret_controller_id=4,
+  placement_crush_id=11, double_heal_id=12;
  // Protocol revision 2: the Phase A agreement - the record appended to the admission messages 18/1A/1B/1F, compared
  // before the native admission callback, a mismatch refused with 1D and the dialog on both sides, and the entity-layout
  // rule with the actor+generic <= world headroom condition. Revision-1 peers (0.2.0i and older) refuse. The plan's
@@ -15,7 +16,8 @@ namespace gameplay_capabilities
  // NOT part of it: docs/entity-capacity-phase-a-plan.md section 10, deviation 17.
  constexpr std::uint16_t protocol_revision=2;
  constexpr std::uint32_t magic=0x50414347; // GCAP, little endian
- constexpr std::size_t max_entries=8, header_size=12, entry_size=20, max_size=header_size+entry_size*max_entries;
+ // Sixteen entries: IDs 1-12 are assigned (docs/gameplay-agreement.md), with room to spare.
+ constexpr std::size_t max_entries=16, header_size=12, entry_size=20, max_size=header_size+entry_size*max_entries;
  struct entry { std::uint16_t id,revision; std::array<std::uint32_t,4> values; };
  enum class result { match, unavailable, malformed, protocol, entries, revision, value };
  class record
