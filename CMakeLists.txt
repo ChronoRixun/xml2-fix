@@ -81,6 +81,7 @@ add_library(xml2_fix SHARED
 	src/patch_transaction.cpp
 	src/explosive_first_hit.cpp
 	src/rank_costs.cpp
+	src/death_threshold.cpp
 	src/confirmation_release.cpp
 	src/objective_text.cpp
 	src/xp_curve.cpp

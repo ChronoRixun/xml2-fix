@@ -9,6 +9,8 @@ namespace gameplay_capabilities
 {
  constexpr std::uint16_t entity_layout_id=1, explosive_first_hit_id=2, master_mold_id=3, turret_controller_id=4,
   rank_costs_id=5, multipart_id=6, x1_leader_id=7, placement_crush_id=11, double_heal_id=12;
+ // [Game] DeathRule=xml1, X-Men Legends 1's death threshold (docs/death-threshold.md).
+ constexpr std::uint16_t death_threshold_id=9;
  // Protocol revision 2: the Phase A agreement - the record appended to the admission messages 18/1A/1B/1F, compared
  // before the native admission callback, a mismatch refused with 1D and the dialog on both sides, and the entity-layout
  // rule with the actor+generic <= world headroom condition. Revision-1 peers (0.2.0i and older) refuse. The plan's

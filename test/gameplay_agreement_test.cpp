@@ -81,6 +81,11 @@ void records(){
  record capacity;capacity.layout(1,{64,192,256,8},true);capacity.add(2,1,{0,0,0,0},true);capacity.finalize();check(off.compare(capacity.bytes())==result::value,"different effective capacity refuses");
  record token;token.layout(1,{32,224,256,16},true);token.add(2,1,{0,0,0,0},true);token.finalize();check(off.compare(token.bytes())==result::value,"different token width refuses");
  record missing;missing.add(3,1,{1,0,0,0},true);missing.add(2,1,{0,0,0,0},true);missing.finalize();check(off.compare(missing.bytes())==result::entries,"missing controller entry refuses");
+ // Rule 9, the death threshold ([Game] DeathRule): a peer that kills below 1 and one that kills at 0 never play together.
+ auto death=[](bool on,bool verified=true){record r;r.add(2,1,{1,0,0,0},true);r.add(gameplay_capabilities::death_threshold_id,1,{on ? 1u : 0u,0,0,0},verified);r.finalize();return r;};
+ check(gameplay_capabilities::death_threshold_id==9 && death(true).compare(death(false).bytes())==result::value && death(false).compare(death(true).bytes())==result::value,"death threshold on/off refuses both directions");
+ check(death(true).compare(death(true).bytes())==result::match && death(false).compare(death(false).bytes())==result::match,"same death threshold accepts");
+ check(death(true,false).compare(death(true).bytes())==result::unavailable && peer(true).compare(death(false).bytes())==result::entries,"failed death threshold install or a peer without the rule refuses");
  record sorted;sorted.add(2,1,{0,0,0,0},true);sorted.add(3,1,{1,0,0,0},true);sorted.finalize();check(sorted.compare(missing.bytes())==result::match,"registration order canonicalizes by explicit rule id");
  record duplicate;duplicate.add(2,1,{0,0,0,0},true);check(!duplicate.add(2,1,{0,0,0,0},true) && !duplicate.finalize(),"duplicate registration poisons finalization");
  record late;late.finalize();check(!late.add(2,1,{0,0,0,0},true) && !late.ready() && late.bytes().empty(),"late registration cannot change a frozen advertised record");
