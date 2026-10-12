@@ -29,6 +29,7 @@
 #include "rank_costs.hpp"
 #include "death_threshold.hpp"
 #include "pack_amount.hpp"
+#include "death_switch.hpp"
 #include "gameplay_agreement.hpp"
 #include "gameplay_capabilities.hpp"
 #include "objective_text.hpp"
@@ -355,6 +356,15 @@ namespace
 		{
 			const auto packs = xml1_capability_rules::pack_amount(pack_amount::requested(), pack_amount::installed());
 			gameplay_agreement::register_rule(gameplay_capabilities::pack_amount_id, xml1_capability_rules::pack_amount_revision, packs.values, packs.verified);
+		}
+		// [Game] DeathSwitchClear: the hero handed a dead hero's controller stops its AI walk (docs/death-switch.md). One
+		// call in onDeath's own code, used from the first death on. Online play is lockstep, so every peer must hand
+		// over the same way (rule 15); a requested switch enlists the agreement even in a non-LC installation.
+		death_switch::install(game);
+		if (game_version::needs_gameplay_agreement() || death_switch::requested())
+		{
+			const auto handover = death_switch::capability();
+			gameplay_agreement::register_rule(gameplay_capabilities::death_switch_clear_id, death_switch_rules::revision, handover.values, handover.verified);
 		}
 		objective_text::install(game);
 		// Before any of XMen2.exe's own code runs, as the engine limit adjuster must be: this DLL is a

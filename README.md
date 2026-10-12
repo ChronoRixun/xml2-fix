@@ -429,6 +429,7 @@ ExplosiveFirstHit=1   ; an explosion is a new attack for the victim its projecti
 RankCosts=1           ; a talent rank costs its <level cost> skill points (X-Men Legends I's Xtreme / Legend ranks: 2)
 LevelSkillPoints=xml1 ; 2 skill points on every 5th level, 1 on the others (X-Men Legends I's rule)
 LevelStatPoints=xml1  ; 8 stat points on every 5th level, 4 on the others (X-Men Legends I's 2 / 1 on the port's x4 stat scale)
+DeathSwitchClear=1    ; the hero handed a dead hero's controller stops the walk its AI had started (X-Men Legends I's hand-over)
 Xml1MasterMold=1      ; X-Men Legends I's Master Mold fight: shield, cores, platform and floor attacks (needs Xml1MoldStage)
 Xml1MoldStage=x1v02:1:5   ; the saved flag that holds the fight's stage, as flag:first_bit:width (the port's builder writes it)
 
@@ -633,6 +634,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `Xml1Multipart` | `0` | `1`: X-Men Legends I's breakable parts (a stats `<Multipart>` row's health, break, effects and the attacks it carries: Juggernaut's helmet, the Sentinels' arms) ([details](docs/multipart.md)) |
 | `X1Leader` | `0` | `1`: the stats entries a mod lists in `Data\x1leader.txt` are X-Men Legends I leaders: heroes don't flinch from their projectiles, and they drop as the first game's leaders do (four drops, a health / energy / Xtreme pick) |
 | `SoloMode` | `0` | `1`: X-Men Legends I's solo mode: `setSoloMode(actor, on)` keeps the rest of the party behind (a mod's solo boxes and bridges), and they regroup as in the first game ([details](docs/solo-mode.md)) |
+| `DeathSwitchClear` | `0` | `1`: when the controlled hero dies, the hero given its controller stops the walk its AI had started instead of finishing it with no input, as in X-Men Legends I ([details](docs/death-switch.md)) |
 | `ClassicMainBackdrop` | `0` | `1`: the classic main menu's Cerebro room is drawn with its original bright textures ([details](#classic-main-menu-backdrop)) |
 | `ClassicMainPanelBounds` | `0` | `1`: the classic main menu's buttons answer the mouse over their whole visible panels ([details](#classic-main-menu-backdrop)) |
 | `Xml1MasterMold` | `0` | `1`: X-Men Legends I's Master Mold fight; needs `Xml1MoldStage` ([details](docs/xml1-controllers.md)) |

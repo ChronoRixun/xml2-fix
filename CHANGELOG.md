@@ -21,8 +21,10 @@ mod's `xml2-fix.ini` asks for it (the port's builder sets it all).
 - `[Game] DangerRoomGate`, `RevivalCost=xml1` and the Xtraction services (Load, Danger Room, Healer, Forge at the first
   game's points) ([details](docs/xtraction-shop.md)).
 - `[Game] Xml1Turrets`: the first game's scan turrets fire again ([details](docs/xml1-controllers.md)).
+- `[Game] DeathSwitchClear`: when the controlled hero dies, the hero handed its controller stops the walk its AI had
+  started instead of finishing it with no input ([details](docs/death-switch.md)).
 - `[Limits] ScriptFunctions`: 320 script function names raised to 1024 ([details](docs/script-functions.md)).
-- Online: every one of these is a rule of the shared gameplay agreement (IDs 5-14; record up to sixteen entries). A
+- Online: every one of these is a rule of the shared gameplay agreement (IDs 5-15; record up to sixteen entries). A
   1.4.0 peer and a 1.5.0 peer with any of these keys refuse each other at join, with the reason on both PCs.
 
 ### Details
