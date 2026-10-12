@@ -21,6 +21,8 @@ struct notice_context
  DWORD pid=0;
  bool seen=false, informative=false;
  bool capacity_seen=false; // the non-fatal entity-capacity fallback notice (case -14 only)
+ bool capacity_text=false;  // its text was read: the reason plus advice that fits the cause
+ bool capacity_advice=false; // case -14 (changed entity code): the executable advice, not the Format=lc line
 };
 BOOL CALLBACK read_notice_text(HWND window, LPARAM parameter)
 {
@@ -28,6 +30,18 @@ BOOL CALLBACK read_notice_text(HWND window, LPARAM parameter)
  char text[2048]{};DWORD_PTR result=0;
  SendMessageTimeoutA(window,WM_GETTEXT,sizeof text,reinterpret_cast<LPARAM>(text),SMTO_ABORTIFHUNG,100,&result);
  if(std::strstr(text,"not started") && std::strstr(text,"LC")) context.informative=true;
+ return TRUE;
+}
+BOOL CALLBACK read_capacity_text(HWND window, LPARAM parameter)
+{
+ auto& context=*reinterpret_cast<notice_context*>(parameter);
+ char text[2048]{};DWORD_PTR result=0;
+ SendMessageTimeoutA(window,WM_GETTEXT,sizeof text,reinterpret_cast<LPARAM>(text),SMTO_ABORTIFHUNG,100,&result);
+ if(std::strstr(text,"could not be installed"))
+ {
+  context.capacity_text=true;
+  context.capacity_advice=std::strstr(text,"unmodified retail XMen2.exe") && !std::strstr(text,"Format=lc is missing");
+ }
  return TRUE;
 }
 BOOL CALLBACK close_owned_notice(HWND window, LPARAM parameter)
@@ -38,6 +52,8 @@ BOOL CALLBACK close_owned_notice(HWND window, LPARAM parameter)
  if(pid==context.pid && std::strcmp(title,"XML2 Fix: entity capacity unavailable")==0)
  {
   context.capacity_seen=true;
+  EnumChildWindows(window,read_capacity_text,parameter);
+  if(!context.capacity_text) return TRUE; // wait until the dialog has initialized its text
   const auto button=GetDlgItem(window,IDOK);DWORD_PTR result=0;
   SendMessageTimeoutW(button,BM_CLICK,0,0,SMTO_ABORTIFHUNG,250,&result);
   PostMessageW(window,WM_COMMAND,MAKEWPARAM(IDOK,BN_CLICKED),reinterpret_cast<LPARAM>(button));
@@ -192,6 +208,8 @@ int main(int argc,char** argv)
   if(!must_refuse && notice.seen){exit=1;std::printf("FAIL case %d: unexpected refusal notice\n",i);}
   // A capacity-only fallback starts the game and tells the player once; no other case shows that notice.
   if((i==-14)!=notice.capacity_seen){exit=1;std::printf("FAIL case %d: entity capacity fallback notice %s\n",i,notice.capacity_seen?"shown unexpectedly":"missing");}
+  // The synthetic image's entity code is not the ledger's: the notice must advise the executable, not the ini line.
+  if(i==-14 && !notice.capacity_advice){exit=1;std::printf("FAIL case -14: capacity notice advice does not fit its cause (text read %d)\n",notice.capacity_text);}
   CloseHandle(process.hThread);CloseHandle(process.hProcess);if(exit!=0)++failed;
  }
  SetThreadDesktop(original_desktop);
