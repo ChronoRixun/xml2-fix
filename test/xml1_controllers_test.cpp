@@ -236,7 +236,7 @@ int main(){
     CHECK(host_on.compare(renamed.bytes())==result::value&&renamed.compare(host_on.bytes())==result::value);
     CHECK(renamed.compare(peer(other_name,turret_off).bytes())==result::match);
     CHECK(!peer(xml1_capability_rules::master_mold(true,true,"",1,5),turret_off).ready());
-    CHECK(host_on.compare(peer(on,turret_off,2).bytes())==result::revision);
+    CHECK(host_on.compare(peer(on,turret_off,2).bytes())==result::value); // protocol 3: a revision difference is a value (gameplay settings) difference
     const auto broken=peer(failed,turret_off);
     CHECK(!broken.ready()&&broken.bytes().empty()&&broken.compare(host_on.bytes())==result::unavailable);
     CHECK(host_on.compare(broken.bytes())==result::malformed);

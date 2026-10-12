@@ -3,6 +3,7 @@
 #include "game_version.hpp"
 #include "log.hpp"
 #include "patch_transaction.hpp"
+#include <cstdio>
 #include <cstring>
 
 namespace gameplay_agreement
@@ -14,11 +15,28 @@ namespace gameplay_agreement
   // Published only by the transaction's verified commit: the native refusal sites and the transport sites are
   // written together (plan section 7); before publication the adapters are not reachable through native code.
   // The host notice's receiver and presentation are optional contributions of their own in the same transaction.
-  bool failure_ready=false,transport_ready=false,contributed_=false,published=false,frozen=false,receiver_ready=false,notice_ready=false;
+  bool failure_ready=false,transport_ready=false,contributed_=false,published=false,frozen=false,receiver_ready=false,notice_ready=false,fragment_ready=false;
   void* noticed_menu=nullptr;        // the host lobby that shows our notice in place of its advice,
   const char* notice_line=nullptr;   // what it says, until a join is admitted, the host closes
   unsigned long long notice_since=0; // or notice_ms pass
-  constexpr char incompatibility[]="Incompatible gameplay or an unverified installation. Both players must use the same build and effective gameplay settings. Restart after fixing the installation.";
+  // The native failure dialog's text (failure_text points here for good): the general explanation, or - when this PC
+  // refused a peer's different settings, or the host said which settings differ - the same advice naming them.
+  #define XML2_FIX_INCOMPATIBILITY_ADVICE "Both players must use the same build and effective gameplay settings. Restart after fixing the installation."
+  constexpr char incompatibility_general[]="Incompatible gameplay or an unverified installation. " XML2_FIX_INCOMPATIBILITY_ADVICE;
+  char incompatibility[512]="Incompatible gameplay or an unverified installation. " XML2_FIX_INCOMPATIBILITY_ADVICE;
+  void dialog_text(const char* differing)
+  {
+   if(differing && *differing)std::snprintf(incompatibility,sizeof(incompatibility),"Incompatible gameplay settings: %s. " XML2_FIX_INCOMPATIBILITY_ADVICE,differing);
+   else std::memcpy(incompatibility,incompatibility_general,sizeof(incompatibility_general));
+  }
+  // The rules behind a settings refusal, from the rule-summary buckets that differ: "9 DeathRule, 15 DeathSwitchClear"
+  // for logs, "DeathRule, DeathSwitchClear" for the dialog. Empty when none is known.
+  struct differing_rules { char log[384]{},dialog[384]{}; };
+  differing_rules name_rules(std::uint64_t buckets,std::uint64_t local_only)
+  {
+   differing_rules d;if(!buckets || !capabilities.ready())return d;
+   capabilities.describe(buckets,local_only,true,d.log,sizeof(d.log));capabilities.describe(buckets,local_only,false,d.dialog,sizeof(d.dialog));return d;
+  }
   using callback=int(__cdecl*)(void*);
   using direct=int(__thiscall*)(void*,const void*,int,const std::uint8_t*);
   using send=void(__thiscall*)(void*,void*,const std::uint8_t*,int);
@@ -91,16 +109,19 @@ namespace gameplay_agreement
    if(joining){dialog(false);return 0;}
    host_notice(why,false);return 0; // a host has not admitted this peer; preserve its session, menus and players
   }
-  void notify_remote(const event& e,refusal why)
+  void notify_remote(const event& e,refusal why,std::uint64_t differing)
   {
    if(!e.context || !e.sender)return;
    using address=const void*(__thiscall*)(void*);using port=std::uint16_t(__thiscall*)(void*);
-   const auto body=refusal_body(why);const auto* data=body.data();const auto size=std::uint16_t(body.size());
+   const auto body=refusal_body(why,why==refusal::settings ? differing : 0);const auto* data=body.data();const auto size=std::uint16_t(body.size());
    std::array<std::uint8_t,0x14> header{};std::memcpy(header.data(),&data,4);std::memcpy(header.data()+8,&size,2);header[0x10]=rejection_opcode;header[0x11]=1;
    auto* transport=*reinterpret_cast<void**>(static_cast<std::uint8_t*>(e.context)+4);
    if(transport)reinterpret_cast<direct>(native_direct)(transport,reinterpret_cast<address>(native_address)(e.sender),reinterpret_cast<port>(native_port)(e.sender),header.data());
   }
-  bool extract(void* raw,std::size_t base,std::array<std::uint8_t,gameplay_capabilities::max_size>& bytes,std::size_t& size)
+  // Room for an older protocol's longer record (revision 2: up to 332 bytes), so its header is read and it is refused
+  // as another protocol; anything longer is malformed. Neither reaches the native handler.
+  constexpr std::size_t receive_room=512;
+  bool extract(void* raw,std::size_t base,std::array<std::uint8_t,receive_room>& bytes,std::size_t& size)
   {
    __try {
     const auto* e=static_cast<const event*>(raw);if(!e || !e->body || e->length<base+gameplay_capabilities::header_size || e->length>base+bytes.size())return false;
@@ -115,24 +136,28 @@ namespace gameplay_agreement
   enum class endpoint { host,joiner,browser };
   int receive(void* raw,std::size_t base,std::uint32_t native,endpoint role,std::uint8_t opcode)
   {
-   std::array<std::uint8_t,gameplay_capabilities::max_size> bytes{};std::size_t size=0;
-   const auto match=extract(raw,base,bytes,size) ? capabilities.compare({bytes.data(),size}) : gameplay_capabilities::result::malformed;
-   if(role==endpoint::browser && (!transport_ready || match!=gameplay_capabilities::result::match)){
-    logger::write("online: game info 0x%02x from an incompatible host refused (reason=%u); not listed or joined",unsigned(opcode),unsigned(match));
-    const auto why=classify(transport_ready,match);
-    event e{};if(event_fields(raw,e)){notify_remote(e,why);disconnect_peer(e.sender);}
+   std::array<std::uint8_t,receive_room> bytes{};std::size_t size=0;gameplay_capabilities::difference diff{};
+   const auto match=extract(raw,base,bytes,size) ? capabilities.compare({bytes.data(),size},&diff) : gameplay_capabilities::result::malformed;
+   if(transport_ready && match==gameplay_capabilities::result::match){
+    // A matching record is not yet an admission: retail 0x609970 can still refuse a full session (0x615910 ->
+    // 0x609a95, sends 0x1c) or fail to take a participant (0x6099b2). The notice clears when the 0x1b follow-up
+    // leaves (send_single), which retail sends only once the participant is taken.
+    return reinterpret_cast<callback>(native)(raw);
+   }
+   // Nothing of a refused message reaches the native handler: a wrong protocol, a short, long or malformed body and
+   // a different record all end here.
+   const auto why=classify(transport_ready,match);
+   const auto rules=why==refusal::settings ? name_rules(diff.buckets,diff.local_only) : differing_rules{};
+   dialog_text(rules.dialog);
+   if(role==endpoint::browser){
+    logger::write("online: game info 0x%02x from an incompatible host refused (reason=%u%s%s); not listed or joined",unsigned(opcode),unsigned(match),*rules.log ? "; differs: " : "",rules.log);
+    event e{};if(event_fields(raw,e)){notify_remote(e,why,diff.buckets);disconnect_peer(e.sender);}
     dialog(false);return 0;
    }
-   if(!transport_ready || match!=gameplay_capabilities::result::match){
-    logger::write("online: gameplay capabilities 0x%02x refused (reason=%u); no native admission",unsigned(opcode),unsigned(match));
-    const auto why=classify(transport_ready,match);const bool joining=role==endpoint::joiner;
-    event e{};if(event_fields(raw,e)){notify_remote(e,why);return fail_local(e,joining,why);}
-    if(joining)dialog(false);else host_notice(why,false);return 0;
-   }
-   // A matching record is not yet an admission: retail 0x609970 can still refuse a full session (0x615910 ->
-   // 0x609a95, sends 0x1c) or fail to take a participant (0x6099b2). The notice clears when the 0x1b follow-up
-   // leaves (send_single), which retail sends only once the participant is taken.
-   return reinterpret_cast<callback>(native)(raw);
+   logger::write("online: gameplay capabilities 0x%02x refused (reason=%u%s%s); no native admission",unsigned(opcode),unsigned(match),*rules.log ? "; differs: " : "",rules.log);
+   const bool joining=role==endpoint::joiner;
+   event e{};if(event_fields(raw,e)){notify_remote(e,why,diff.buckets);return fail_local(e,joining,why);}
+   if(joining)dialog(false);else host_notice(why,false);return 0;
   }
   struct packet
   {
@@ -169,8 +194,17 @@ namespace gameplay_agreement
   {
    __asm { sub esp,0x1c } __asm { push ebx } __asm { push ebp } __asm { jmp dword ptr [join_next] }
   }
+  refusal remote_refusal(void* raw,std::uint64_t& buckets)
+  {
+   buckets=0;
+   __try { const auto* e=static_cast<const event*>(raw);const auto* body=static_cast<const std::uint8_t*>(e->body);buckets=read_refusal_buckets(body,e->length);return read_refusal(body,e->length); }
+   __except(EXCEPTION_EXECUTE_HANDLER){buckets=0;return refusal::unspecified;}
+  }
   int receive_rejection(void* raw)
   {
+   std::uint64_t buckets=0;const auto why=remote_refusal(raw,buckets);const auto rules=name_rules(buckets,0);
+   logger::write("online: the other PC refused this join (reason=%u%s%s)",unsigned(why),*rules.log ? "; differs: " : "",rules.log);
+   dialog_text(rules.dialog);
    event e{};if(!event_fields(raw,e)){dialog(false);return 0;}
    return fail_local(e,true,refusal::unspecified); // opcode 0x1d is registered by joiner setup; no response loop
   }
@@ -179,18 +213,13 @@ namespace gameplay_agreement
    __try { return *reinterpret_cast<const std::uint32_t*>(static_cast<std::uint8_t*>(context)+joiner_rejection_slot)!=0; }
    __except(EXCEPTION_EXECUTE_HANDLER){return true;}
   }
-  refusal remote_refusal(void* raw)
-  {
-   __try { const auto* e=static_cast<const event*>(raw);return read_refusal(static_cast<const std::uint8_t*>(e->body),e->length); }
-   __except(EXCEPTION_EXECUTE_HANDLER){return refusal::unspecified;}
-  }
   // A joining player refused this host (its own check failed first) and said so with 0x1d. The host keeps its
   // session: only that pending peer's connected flag clears, as native refusals do; no echo, no cleanup.
   int receive_host_rejection(void* raw)
   {
    event e{};if(!event_fields(raw,e) || joiner_owns_rejection(e.context))return 0;
-   const auto why=remote_refusal(raw);
-   logger::write("online: a joining player refused this game (reason=%u); host session kept",unsigned(why));
+   std::uint64_t buckets=0;const auto why=remote_refusal(raw,buckets);const auto rules=name_rules(buckets,0);
+   logger::write("online: a joining player refused this game (reason=%u%s%s); host session kept",unsigned(why),*rules.log ? "; differs: " : "",rules.log);
    disconnect_peer(e.sender);host_notice(why,true);return 0;
   }
   struct host_registration { void* dispatcher;std::uint32_t info,rejection; };
@@ -215,7 +244,7 @@ namespace gameplay_agreement
   int __fastcall begin_join(void* context,void*,const void* address,int port)
   {
    if(!transport_ready || !capabilities.ready() || !game_version::gameplay_online_allowed()){
-    event e{rejection_opcode,nullptr,0,0,context,nullptr};fail_local(e,true,refusal::sender_install);return 0;
+    dialog_text(nullptr);event e{rejection_opcode,nullptr,0,0,context,nullptr};fail_local(e,true,refusal::sender_install);return 0;
    }
    using join=int(__thiscall*)(void*,const void*,int);return reinterpret_cast<join>(&original_join)(context,address,port);
   }
@@ -246,6 +275,32 @@ namespace gameplay_agreement
    if(!writes_inside_own_guards(c))return;
    if(!transaction.add(std::move(c)))logger::write("online: host refusal receiver could not join the startup transaction");
   }
+  // The native fragment receiver 0x6101b0 (opcodes 0x12/0x13) dereferences null at 0x61020c when a 0x13 fragment
+  // names a stream it never opened - what a peer's queued body over 300 bytes does (a 1.5 pre-release, protocol 2,
+  // 360-byte 0x1a). The miss at 0x610200 leaves through the handler's own drop exit instead. Optional and independent.
+  int fragment_drops=0;
+  void __cdecl fragment_dropped()
+  {
+   if(fragment_drops>=8)return;
+   ++fragment_drops;
+   logger::write("online: a large-message fragment for a stream this PC never opened was dropped (the game would have crashed; a peer sent a body over 300 bytes - an older or modified build)%s",fragment_drops==8 ? "; further drops are not logged" : "");
+  }
+  const std::uint32_t fragment_exit=fragment_drop;
+  __declspec(naked) void fragment_miss()
+  {
+   __asm { pushad } __asm { call fragment_dropped } __asm { popad } __asm { jmp dword ptr [fragment_exit] }
+  }
+  void contribute_fragment_guard(patch_transaction::transaction& transaction,HMODULE game)
+  {
+   if(!retail(game,fragment_guards)){logger::write("online: fragment guard check failed; a peer's oversized message is left to the game");return;}
+   patch_transaction::contribution c;c.owner="gameplay_agreement.fragment_guard";expect(c,fragment_guards);
+   c.writes.push_back(patch_transaction::relocation(fragment_stream_miss,"e9",true,address_of(reinterpret_cast<const void*>(&fragment_miss)),3,"fragment stream miss drops"));
+   c.publish=[]{fragment_ready=true;};
+   c.abandon=[]{logger::write("online: fragment guard could not be installed; a peer's oversized message is left to the game");};
+   c.retain=c.abandon;
+   if(!writes_inside_own_guards(c))return;
+   if(!transaction.add(std::move(c)))logger::write("online: fragment guard could not join the startup transaction");
+  }
   void contribute_notice(patch_transaction::transaction& transaction,HMODULE game)
   {
    if(!retail(game,presentation_guards)){logger::write("online: host refusal notice guard failed; refusals are logged only");return;}
@@ -262,7 +317,7 @@ namespace gameplay_agreement
  { const bool enabled=enlist();const bool ok=capabilities.add(id,revision,effective,verified && enabled);if(!ok)game_version::bind_gameplay_agreement(false);return ok; }
  bool register_entity_layout(std::uint16_t revision,std::uint32_t actors,std::uint32_t generic,std::uint32_t world,std::uint32_t token_bits,bool verified)
  { const bool enabled=enlist();const bool ok=capabilities.layout(revision,{actors,generic,world,token_bits},verified && enabled);if(!ok)game_version::bind_gameplay_agreement(false);return ok; }
- void show_install_failure(){dialog(true);}
+ void show_install_failure(){dialog_text(nullptr);dialog(true);}
  // Endpoint roles follow native registration and packet direction (live wire order), never timer presence.
  int receive_request(void* e){return receive(e,request_size,native_request,endpoint::browser,0x18);}
  int receive_reply(void* e){return receive(e,reply_size,native_reply,endpoint::joiner,0x1f);}
@@ -299,7 +354,7 @@ namespace gameplay_agreement
   // inside them, so a mismatch in either part leaves that part out instead of refusing startup. Once joined, a part
   // is an ordinary contributor: a conflict with another contribution's bytes, a page that cannot be made writable or
   // a failed readback refuses or rolls back the WHOLE transaction (and with it the LC startup), as for any other part.
-  if(contributed_){contribute_receiver(transaction,game);contribute_notice(transaction,game);}
+  if(contributed_){contribute_receiver(transaction,game);contribute_notice(transaction,game);contribute_fragment_guard(transaction,game);}
   return contributed_;
  }
  bool commit_verified()
@@ -307,17 +362,22 @@ namespace gameplay_agreement
   if(frozen)return capabilities.ready();
   frozen=true;
   if(!published || !capabilities.finalize()){logger::write("online: capabilities/failure/transport installation unverified; online remains blocked");return false;}
-  logger::write("online: shared gameplay capability record verified (%u bytes); release identity unchanged",unsigned(capabilities.bytes().size()));return true;
+  logger::write("online: shared gameplay capability record verified (%u bytes, protocol %u, %u rules); release identity unchanged",unsigned(capabilities.bytes().size()),unsigned(gameplay_capabilities::protocol_revision),unsigned(capabilities.count()));
+  // The wire carries a digest only: the canonical list is logged here, so two players' logs show what differs.
+  for(std::size_t i=0;i<capabilities.count();++i){const auto& r=capabilities.rule(i);
+   logger::write("online: rule %u (%s) revision %u {%u,%u,%u,%u}",unsigned(r.id),gameplay_capabilities::rule_name(r.id),unsigned(r.revision),r.values[0],r.values[1],r.values[2],r.values[3]);}
+  return true;
  }
  bool prepare(HMODULE game)
  {
   if(contributed_){
    // A host-notice part whose guards did not read back as retail when the agreement committed may join a later
    // transaction of its own (the late path only; production contributes once, to the startup transaction).
-   if(published && (!receiver_ready || !notice_ready)){
+   if(published && (!receiver_ready || !notice_ready || !fragment_ready)){
     patch_transaction::transaction late;
     if(!receiver_ready)contribute_receiver(late,game);
     if(!notice_ready)contribute_notice(late,game);
+    if(!fragment_ready)contribute_fragment_guard(late,game);
     if(late.contributions()){const auto outcome=late.commit();
      if(outcome!=patch_transaction::outcome::committed)logger::write("online: late host notice installation %s: %s",patch_transaction::name(outcome),late.report().c_str());}
    }

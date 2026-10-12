@@ -32,7 +32,7 @@ The reviewed ledger (`entity_capacity_sites.hpp`, generated from the plan's roun
 | Queries | getter 0x4ab550, 25 API bridges | Three CStaticQuery (stride 0x544, 128-byte bitmap, 1024-entry collision map) and three CStaticOrder (1024 pairs); the 50-record trace pool stays native |
 | Caller frames | 12 CCollide methods, CCollide slot 3 (0x44ea40), navigation 0x491210/0x493330, named query 0x4cd350 | Whole-frame replacements whose 32-byte stack sets become 128-byte sets; CPathGrid keeps its layout (owner-keyed scratch) |
 | Native saves | 190 literal operand edits, 6 adapters | Zone records grow to 0x19b88 (4096 states, 1024 ordinals/dynamic/smart), the manager to 0x80c24, the stream to 0x200000 (layout **E10A2**); the CMap allocation at 0x487344 claims a prepared backing, construction at 0x487362 is wrapped (a null or wrong result stops the process: never published), release at 0x4876c0 returns the claim, the unwind at 0x673cb8 poisons it |
-| Online | GCAP protocol 2, layout rule 1 revision 3 `{32,768,1024,10}` | Peers with another layout (or a release-1.4 protocol-1 record) are refused at admission |
+| Online | GCAP protocol 3 (2 in 1.4.x), layout rule 1 revision 3 `{32,768,1024,10}` | Peers with another layout (or a release-1.4 protocol-1 record) are refused at admission |
 
 535 union guards, 341 disjoint ranges (3,695 bytes), 31 region hashes (SHA-256 over the owner method bodies
 and the native receive/lifecycle dependencies) and the 83 native owner vtable slots are checked before any

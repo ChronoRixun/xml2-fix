@@ -49,11 +49,46 @@ The export startup contributes the refusal and transport sites to the startup tr
 
 ## Record and transport
 
-Record maximum: sixteen entries (including layout), 332 bytes (the fifteen assigned IDs of 1.5.0, 312 bytes, fit; one entry is left). Canonical little-endian header: DWORD `GCAP` (0x50414347), ushort protocol revision 2 (revision-1 peers, 0.2.0i and older, are refused), ushort entry count, ushort total bytes, ushort reserved zero. Each sorted entry is ushort rule ID, ushort revision, four DWORD effective values (20 bytes). All unused value words must have documented semantics, normally zero. No hashes or implicit enable flags substitute for values.
+Protocol revision 3 (1.5.0) puts a fixed 108-byte record on the wire, whatever the number of rules: canonical
+little-endian header DWORD `GCAP` (0x50414347), ushort protocol revision 3, ushort rule count (including the layout
+rule), ushort total bytes (108), ushort reserved zero; then the SHA-256 of the canonical rule list (32 bytes); then a
+64-byte rule summary. The canonical list is `GCAP`, ushort protocol 3, ushort count, then every rule sorted by ID in
+the revision-2 entry encoding: ushort rule ID, ushort revision, four DWORD effective values. All unused value words
+must have documented semantics, normally zero; the digest covers every ID, revision and value exactly, so no hash of
+a rule's own (a turret list's FNV, say) substitutes for an effective value - a rule still registers the values. The
+summary's byte b is zero when no rule has (ID - 1) mod 64 = b, else a non-zero FNV-1a fold of those rules' entries; it
+never decides admission (the digest does) and only names the differing rules in refusal messages (exact for IDs 1-64).
+Registration holds up to 256 rules (the record is the same 108 bytes at 1, 16, 64 or 256). Each startup logs the
+canonical list (`online: rule N (key) revision R {a,b,c,d}`), since the wire no longer carries the values.
 
-The entire record is appended to each original native body: request 0x18 (116 original bytes), host-info 0x1a (48), follow-up 0x1b (8), participant reply 0x1f (80). Original fields and the release token stay intact. These opcodes use variable-length framing; reliable-envelope decoding normalizes body length before receiver dispatch. The queued sends (host info 0x1a through 0x6077ad, participant reply 0x1f through 0x6085d8, both 0x610f30 mode 0) pass the native small-message check at 0x60f6ef only up to 300 bytes (0x12c); a longer body takes the native large-message path (opcode 0x12 with a 6-byte header carrying the original opcode and length, 0x60f7bb). The request 0x18 goes direct (0x60d9c0, a 0x514-byte buffer). Up to 8 entries (1.4.0, 172 bytes) every queued body stayed under 300: the 0x1f reply was at most 252 bytes. With the twelve IDs of the first 0.2.2 branch (252-byte record) the 0x1f reply was 332 bytes and the 0x1a info exactly 300; with all fifteen IDs of 1.5.0 (312 bytes) an LC peer's 0x1f reply is 392 bytes, its 0x1a info 360 and its 0x18 request 428; at the 16-entry maximum 0x1f is 412, 0x1a 380 and 0x18 448. Whether the 0x12 path delivers a reassembled 0x1f / 0x1a body to the hooked receivers with its full length is unverified: a two-peer host and join with a record of 12 or more entries must pass before such a record ships. Wrappers keep copied header/body storage alive through synchronous native copies/broadcast iteration.
+The record is appended to each original native body: request 0x18 (116 original bytes, 224 with the record), host-info
+0x1a (48, 156), follow-up 0x1b (8, 116), participant reply 0x1f (80, 188). Original fields and the release token stay
+intact. These opcodes use variable-length framing; reliable-envelope decoding normalizes body length before receiver
+dispatch. The queued sends (host info 0x1a through 0x6077ad, participant reply 0x1f through 0x6085d8, both 0x610f30
+mode 0 -> 0x60f620) stay one native message only up to 300 bytes (0x12c, checked at 0x60f6ef); a longer body takes
+the large-message path (0x60f7bb: opcode 0x12 with a 6-byte header - stream byte, original opcode, length - then 0x13
+fragments). An admission body must never take that path: the fragment receiver 0x6101b0 (registered for 0x12 and
+0x13 at 0x6105d4/0x6105ec) returns at once for 0x12, and for a 0x13 fragment looks its stream up at +0x30b0; for a
+joining peer's body no stream is open there, and it dereferences null at 0x61020c (whether and where the stream is
+opened for an admitted peer was not traced). Protocol revision 2 put the whole entry list on the wire (12 + 20 bytes per rule): with
+the fifteen rules of the 1.5 pre-release the 0x1a body was 360 bytes and a matching peer's join crashed the host
+there (live, 2026-10-12). The largest queued body of revision 3 is the 188-byte 0x1f, 112 bytes under the limit; a
+`static_assert` keeps it at least 64 under. The request 0x18 goes direct (0x60d9c0, a 0x514-byte buffer).
 
-Receive rejects missing/unknown protocol, malformed bounds/count/order, unknown/missing/duplicate IDs, revision differences or any effective-value difference before native admission. Exact canonical equality is required, including disabled participating entries. An older single-boolean agreement record or an untagged older peer is refused.
+**Fragment guard (optional).** The 0x13 stream miss at 0x610200 jumps to a stub that logs the drop (the first eight)
+and leaves through the handler's own drop exit 0x6102b6 instead of dereferencing null, so an older or modified peer's
+oversized message (a 1.5 pre-release joiner's 360-byte 0x1a) no longer kills this PC; that joiner gets no answer and
+times out natively. It joins the startup transaction as its own contribution (`gameplay_agreement.fragment_guard`,
+3 `fragment_guards`) only when its guards read back as retail; otherwise one log line and the stock handler.
+
+Receive rejects a missing or foreign record and any other protocol revision (2: 1.4.0 and the 1.5 pre-release; 1:
+0.2.0i and older - they refuse revision 3 the same way, both ways), a malformed header, a body that is not exactly 108
+bytes, and any digest difference, before native admission: nothing of a refused message reaches the native handler.
+Exact canonical equality is required, including disabled participating entries. A different count or a rule present
+on one side only is reported as an entries difference, anything else as a value difference (a revision difference
+included); both are "different gameplay settings". The refusing PC names the rules whose summary differs in its log
+line (`differs: 9 DeathRule`), in its 0x1d (below) and, on a joining PC, in the native dialog ("Incompatible gameplay
+settings: DeathRule. ...").
 
 ## Receiver endpoint roles
 
@@ -74,7 +109,7 @@ Host admission refusal never invokes shared-session cleanup, even if a timer exi
 
 Patch acquisition records each distinct code page once; readback/cache verification and restoration preserve its original protection. Startup/socket exclusion remains closed until the entire record, transport and participating installer states verify.
 
-Refusal immediately sends native incompatibility opcode 0x1d through the direct transport, now with an 8-byte reason body (`GREF`, reason, three zero bytes; reason relative to the sender: 1 gameplay settings, 2 the sender's own installation is unverified, 3 the peer's record is missing or foreign). Native 0x609ad0 ignores the body; a bodiless or foreign 0x1d reads as unspecified. Joining endpoints execute native failure handler 0x609ad0 and cleanup 0x6097f0, then the native dialog/menu path; a querying PC (0x18) shows the native dialog only. The early join entry rejects unverified local installation through the same native failure path, before setting up another attempt. A closed socket also presents the actionable native installation message. No generic timeout is used as the refusal mechanism. Native UI uses original authored text in this DLL; no localized game strings are shipped.
+Refusal immediately sends native incompatibility opcode 0x1d through the direct transport, with a reason body (`GREF`, reason, three zero bytes; reason relative to the sender: 1 gameplay settings, 2 the sender's own installation is unverified, 3 the peer's record is missing or foreign). Protocol 3 appends eight bytes: the differing rule-summary buckets (bit b = bucket b) of a settings refusal, zero otherwise; older readers check only the first eight bytes, and the receiving PC names those rules from its own list. Native 0x609ad0 ignores the body; a bodiless or foreign 0x1d reads as unspecified. Joining endpoints execute native failure handler 0x609ad0 and cleanup 0x6097f0, then the native dialog/menu path; a querying PC (0x18) shows the native dialog only. The early join entry rejects unverified local installation through the same native failure path, before setting up another attempt. A closed socket also presents the actionable native installation message. No generic timeout is used as the refusal mechanism. Native UI uses original authored text in this DLL; no localized game strings are shipped.
 
 ## Host refusal notice
 
@@ -89,7 +124,7 @@ A searching PC whose settings differ refuses a LAN host's 0x18 at search time as
 
 Game-free checks execute patched CALL/registration entries, retail failure/cleanup code and retail host setup/teardown (0x609c80 / 0x6074b0) loaded privately from a supplied executable, with transport/UI/dispatcher object boundaries isolated. Live direct-IP/LAN/lobby, reliable transport, cancellation/retry/rejoin and actual rendering remain integrator acceptance checks; automated native UI dispatch is not a rendered gameplay session.
 
-## What protocol revision 2 does not include
+## What the agreement protocol does not include
 
 The Phase A plan (docs/entity-capacity-phase-a-plan.md section 5) also designed a receive lifecycle: certificate
 epochs per peer, a dispatch floor before every application callback, reliable/fragment record epochs, deferred
