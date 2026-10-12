@@ -71,7 +71,7 @@ struct turret {
     u32 handle=0;
     turret_rules::state s;
     bool live=false;
-    float trace_at=0,next_bind=0;
+    turret_rules::binding b;
     std::array<u32,3> effects{};   // resolved muzzle / tracer / impact effect handles (zone group)
     bool effects_resolved=false;
     u32 fire_sound=0,rotate_sound=0,loop=0;   // resolved sounds; the rotate loop playing (0 = none)
@@ -246,7 +246,9 @@ void shoot(turret& t,void* self){
         put(description.data(),0x24,static_cast<short>(w.speed*(k*.1f+1.f)));
         put(description.data(),0x2c,static_cast<unsigned char>(1));
         std::array<unsigned char,0x6c> attack{};const float zero[3]{};
-        fn<attack_t>(0x429860)(attack.data(),nullptr,t.handle,damage,0,5,0x80,0,1,zero,zero,zero);
+        // 0xbcba0 builds one attack per fire with the weapon's damage type (+0x1d0) and damagemods
+        // (+0x1cc) for every weapon kind (0xbcc51 / 0xbcc8e): the HAARP salvo keeps its auto knockback.
+        fn<attack_t>(0x429860)(attack.data(),nullptr,t.handle,damage,0,5,w.damage_type,w.damage_mods,1,zero,zero,zero);
         auto* system=fn<system_t>(0x450030)();
         u32 result=0;
         at<spawn_t>(at<const void*>(system,0),0x28)(system,nullptr,&result,self,description.data(),attack.data(),0,30.f,0);
@@ -255,7 +257,7 @@ void shoot(turret& t,void* self){
         if(data&&t.s.target&&(at<unsigned char>(data,0xac)&1)&&flights.size()<64){
             flights.push_back({result,t.s.target,{at<float>(projectile,0x20),at<float>(projectile,0x24),at<float>(projectile,0x28)},now()});++homing;}
     }
-    logger::write("xml1 turrets: %s fired %d x %s at %.3f yaw %.3f pitch %.3f spread %.0f speed %.0f damage %.0f target %08X homing %d",
+    if(trace)logger::write("xml1 turrets: %s fired %d x %s at %.3f yaw %.3f pitch %.3f spread %.0f speed %.0f damage %.0f target %08X homing %d",
         t.spec.instance.c_str(),w.count,w.projectile.c_str(),now(),facing[2],facing[1],w.spread,w.speed,damage,t.s.target,homing);
 }
 // Effects: the effect manager (getter 0x407750, singleton 0x6f3c50, vtable 0x68190c) resolves a
@@ -315,7 +317,7 @@ ray_hit first_hit(u32 self,const turret_rules::segment& g){
 // segment takes the hit when it is an actor (0xba70a..: vt+0xa8(attack, 1, 1, 1) on the XBE, no
 // to-hit roll): on the PC the same direct take-hit call, entity vt+0xb0, that the projectile contact
 // 0x49c0d0 uses for an attacker that is not a character, with the attack's point (+0x40), direction
-// (+0x4c) and normal (+0x58). Walls stop the ray (the sentry's line-of-sight test to the contact).
+// (+0x4c) and normal (+0x58) written after the constructor (which zeroes them). Walls stop the ray (the sentry's line-of-sight test to the contact).
 void shoot_ray(turret& t,void* self){
     const auto& w=t.spec.gun;
     if(!t.effects_resolved)resolve_effects(t);
@@ -335,13 +337,16 @@ void shoot_ray(turret& t,void* self){
         if(mold_query::is_a(e,actor_class)&&mold_query::is_a(e,physent_class)){
             std::array<unsigned char,0x6c> attack{};
             fn<attack_t>(0x429860)(attack.data(),nullptr,t.handle,damage,0,5,w.damage_type,w.damage_mods,1,hit.point.data(),dir.data(),hit.normal.data());
+            // 0x429860 ends in 0x4539a0, which zeroes +0x40/+0x4c/+0x58 again; native callers write
+            // them after construction (0x4b3ebb..), as the XBE bullet branch does (0xba753..0xba78d).
+            put(attack.data(),0x40,hit.point);put(attack.data(),0x4c,dir);put(attack.data(),0x58,hit.normal);
             before=health(e);
             at<take_hit_t>(at<const void*>(e,0),0xb0)(e,nullptr,attack.data(),1,1,1);
             after=health(e);applied=true;
         }
         play(t.effects[2],hit.point,hit.normal);                     // impactfx
     }
-    if(trace||applied)logger::write("xml1 turrets: %s %s at %.3f dir %.3f/%.3f/%.3f hit %08X%s damage %.0f health %.1f -> %.1f",
+    if(trace)logger::write("xml1 turrets: %s %s at %.3f dir %.3f/%.3f/%.3f hit %08X%s damage %.0f health %.1f -> %.1f",
         t.spec.instance.c_str(),w.kind==turret_rules::weapon_kind::flame?"flame":"bullet",time,dir[0],dir[1],dir[2],hit.handle,
         applied?" (actor)":"",damage,before,after);
 }
@@ -384,10 +389,12 @@ void start_loop(turret& t,void* self){
     const u32 h=at<sound_loop_t>(at<const void*>(s,0),0x4c)(s,nullptr,t.rotate_sound,p.data(),1.f,t.spec.scan.visrange*2,t.spec.scan.visrange*.5f);
     t.loop=h==at<u32>(reinterpret_cast<const void*>(0x69d05c),0)?0:h;
 }
-void forget(){for(auto& t:turrets){t.live=false;t.handle=0;t.effects_resolved=false;t.loop=0;}flights.clear();}
+// A zone change or a clock that went back: nothing learnt earlier in the process may delay binding
+// (turret_rules::binding), and a playing rotate loop is stopped (0x590780 ignores unknown handles).
+void forget(){for(auto& t:turrets){stop_loop(t);t.live=false;t.handle=0;t.effects_resolved=false;turret_rules::forget(t.b);}flights.clear();}
 void update(float time){
     const char* current=reinterpret_cast<const char*>(0x72a758);
-    if(std::strncmp(current,zone,sizeof zone)!=0||time<last_time){
+    if(std::strncmp(current,zone,sizeof zone)!=0||turret_rules::clock_went_back(time,last_time)){
         std::strncpy(zone,current,sizeof zone-1);forget();
         logger::write("xml1 turrets: zone %s",zone);
     }
@@ -397,15 +404,15 @@ void update(float time){
         void* self=t.live?resolve(t.handle):nullptr;
         if(self&&(!mold_query::is_a(self,physent_class)||!(health(self)>0)))self=nullptr;
         if(!self){
-            if(t.live){logger::write("xml1 turrets: %s gone at %.3f",t.spec.instance.c_str(),time);stop_loop(t);t.live=false;t.handle=0;t.next_bind=time+1;}
-            if(time<t.next_bind)continue;
-            t.next_bind=time+1;
+            if(t.live){logger::write("xml1 turrets: %s gone at %.3f",t.spec.instance.c_str(),time);stop_loop(t);t.live=false;t.handle=0;turret_rules::bind_failed(t.b,time);}
+            if(!turret_rules::may_bind(t.b,time))continue;
+            turret_rules::bind_failed(t.b,time);
             const u32 h=bind(t);self=resolve(h);
             if(!self||!(health(self)>0))continue;
             t.handle=h;t.live=true;t.s=turret_rules::spawn(time);t.effects_resolved=false;
             loaded_files.clear();   // a zone (re)load drops group-11 definitions: register again on demand
             const auto o=orientation(self);
-            if(t.spec.spawned)t.spec.rest={o[0],o[1],o[2]};
+            if(t.spec.spawned&&!t.b.rest_taken){t.spec.rest={o[0],o[1],o[2]};t.b.rest_taken=true;}   // first binding of this zone visit
             resolve_sounds(t);
             logger::write("xml1 turrets: %s bound %08X at %.1f/%.1f/%.1f orientation %.3f/%.3f/%.3f rest %.3f/%.3f/%.3f flags %08X",t.spec.instance.c_str(),h,
                 at<float>(self,0x20),at<float>(self,0x24),at<float>(self,0x28),o[0],o[1],o[2],t.spec.rest[0],t.spec.rest[1],t.spec.rest[2],at<u32>(self,4));
@@ -436,13 +443,16 @@ void update(float time){
                 t.s.fire_due=time+delay;
                 if(r==turret_rules::fire_result::shot){
                     shoot(t,self);warn_ai(t,t.spec.gun.recoil);
+                    // a take-hit can run a deathscript: use the turret again only through its handle
+                    self=resolve(t.handle);
+                    if(!self||!mold_query::is_a(self,physent_class)||!(health(self)>0)){self=nullptr;break;}
                     if(t.fire_sound)at<entity_sound_t>(at<const void*>(self,0),0x8c)(self,nullptr,t.fire_sound);
                 }
                 else if(r==turret_rules::fire_result::burst_started)logger::write("xml1 turrets: %s burst armed at %.3f",t.spec.instance.c_str(),time);
             }
         }
-        if(trace&&time>t.trace_at){
-            t.trace_at=time+1;const auto o=orientation(self);
+        if(self&&trace&&time>t.b.trace_at){
+            t.b.trace_at=time+1;const auto o=orientation(self);
             logger::write("xml1 turrets trace: %s t %.3f mode %d enabled %d yaw %.3f pitch %.3f target %08X seen %.2f burst %d health %.1f",
                 t.spec.instance.c_str(),time,t.s.mode,int(enabled),o[2],o[1],t.s.target,t.s.seen,t.s.burst,health(self));
         }
@@ -490,7 +500,7 @@ void install(HMODULE game){
     was_requested=ini::flag(L"Game",L"Xml1Turrets",false);installed=false;
     if(!was_requested)return;
     trace=ini::flag(L"Test",L"TurretTrace",false);
-    if(reinterpret_cast<std::uintptr_t>(game)!=limits_rules::image_base)return;
+    if(reinterpret_cast<std::uintptr_t>(game)!=limits_rules::image_base){logger::write("xml1 turrets: XMen2.exe is not at its image base; turrets stay inert");return;}
     const int count=ini::number(L"Xml1Turrets",L"Count",0);
     if(count<1||count>32){logger::write("xml1 turrets: no placements; turrets stay inert");return;}
     for(int i=1;i<=count;++i){

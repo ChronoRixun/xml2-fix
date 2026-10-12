@@ -115,31 +115,7 @@ including one side off, are refused by the native agreement before admission.
 Rule 4 (turrets) is described below. Failure to install a required socket exclusion refuses
 startup.
 
-`xml2_xml1_controllers_test` also checks the turret rules (parsing, angles, sweep, acquisition,
-burst cadence, fan, damage draw, homing). Live, on an own build with staged entry: the
-haarp_ext02 turret swept, tracked, armed its burst at the tracking transition, fired 1.0 s
-later and every 5.0 s after, killed a non-invulnerable hero with one homing salvo, was
-destroyed by real attacks (deathscript ran) and stayed destroyed across Save, process restart
-and Load; the haarp_ext04 turret stayed idle while its setup script kept it disabled and then
-acquired and hit. Ray weapons, live with a staged zone load (enemy AI frozen, the hero walked in
-with real input unless named): the Arbiter arb2_3 tripod swept +-45 deg at 20 deg/s with 2 s end
-pauses, tracked, fired 1.0 s after tracking at the recoil cadence, took a non-invulnerable hero
-80 -> 58 -> 26 -> 0 (also hitting a frozen soldier standing in the line of fire), left an
-invulnerable hero unharmed, and was destroyed by real attacks; the four weapon_x wx1_3 tripods
-(hero placed on their level, staged) acquired together and killed the hero within a second; the
-Hive turret1 that tank1.py spawns on the stopped tank (the hero walked into the trigger, the real
-script and conversation ran) bound by name, flamed the hero every 0.45 s (tracetime) for 6-11, and
-took real jump-attack damage (500 -> 428, not destroyed within the test); the HAARP missiles leave
-from the Gun1 bolt and still killed the hero with one homing salvo. With a seated party (Cyclops
-player, three AI-controlled teammates, `seatParty`, staged): the AI teammates (+0x3d8 0x41/0x43)
-passed the cone and range test but were skipped, the player (0x60) was taken; with the player
-out of the cone and the frozen teammates in it the turret kept scanning for 40 s. All four Hive
-turrets (tank1-4 triggers walked into, real scripts and conversations) were destroyed by
-Cyclops' optic blasts; turret_death counted the objective to 4/4; turret1, destroyed before a
-save, stayed gone after a cold restart and Load (no rebind, objective 1/4 kept, damaged model
-on the tank). The arb2_2 and arb3_2 tripods bound only once the hero came near (they are out
-of the world while far from the heroes; a turret whose region leaves the world when the active
-hero changes is unbound and rebound later) and killed the hero. `xml2_xml1_controllers_test` exercises selection counterexamples, transaction
+`xml2_xml1_controllers_test` exercises selection counterexamples, transaction
 rollback and the production socket gate with isolated providers and no sockets.
 Live traces show the three independent floor attacks recurring at their native
 ten-second deadlines, automatic core destruction, saved phase reconstruction and
@@ -170,7 +146,7 @@ scanner from the authored placement, as the original constructor does.
 
 | Original (XBE) | Behaviour kept |
 |---|---|
-| `0xa8600` / `0xa83e0` | defaults visrange 600, minspeed 0, mintime 0.75, visextent 30, yaw/pitch extent 45, turnrate 20 deg/s, team hero; the one authored `resetdelay` fills both the track-loss timeout (+0x2d4) and the sweep pause (+0x2d0); `turndelay` is never read |
+| `0xa8600` / `0xa83e0` | defaults visrange 600, minspeed 0, mintime 0.75, visextent 30, yaw/pitch extent 45, turnrate 20 deg/s, team hero; the one authored `resetdelay` fills both the track-loss timeout (+0x2d4) and the sweep pause (+0x2d0); unauthored (line value -1) they stay 10 and 3; `turndelay` is never read |
 | `0xa9000` | acquisition: off unless enabled (XBE flag bit 19 = PC bit 20); scanning reschedules after 1.0 s, tracking after 0.1 s; up to four team-filtered candidates in the vision cone, nearest first, living, then the nearest one in line of sight; seen time accumulates the event interval; scanning -> tracking at `mintime`; tracking -> scanning after `resetdelay` unseen |
 | `0xa8a90` / `0x120b00` | rotation every 0.01 s (1.0 s idle): sweep to rest yaw +- yawextent in the sweep direction, pause `resetdelay` at each end; tracking turns the shorter way to the target, pitch clamped to rest +- pitchextent and yaw to the nearer limit when outside the extents; arrival is a squared angle error under 0.001 |
 | `0xa9a40` / `0xa9960` / `0xa99e0` | firing: polls every 1.0 s; while tracking and seen within the last second it arms a burst of 20 weapon fires after 1.0 s; each fire reschedules after the weapon's returned recoil (`0xbcba0` returns prototype +0x1b4) |
@@ -201,7 +177,9 @@ contact record +0x30 point, +0x20 normal) without its hostility filter, the sent
 test from the muzzle to the contact (walls stop the ray), and the hit by the target's own take-hit
 `vt+0xb0(attack, 1, 1, 1)` - the call the projectile contact `0x49c0d0` makes for an owner that is
 not a character - with an attack from `0x429860` (turret handle, the draw, type 5, damage type at
-+0x10, damagemods at +0x14, point +0x40, direction +0x4c, normal +0x58). Effects: manager
++0x10, damagemods at +0x14) and its point +0x40, direction +0x4c and normal +0x58 written after
+the constructor, which zeroes them (`0x4539a0`). Missiles carry the weapon's damage type and
+damagemods too (the original builds one attack per fire for every kind, 0xbcc51 / 0xbcc8e). Effects: manager
 `0x407750` (singleton `0x6f3c50`, vtable `0x68190c`) vt+0x1c resolves a path in the zone group
 11, vt+0x34 plays it at a point along a direction; a rebound turret resolves again. AI notice: AI
 manager `0x5252e0` vt+0x240 (`0x523c50`), neutral team 0x1c, as the harm notice `0x439391..`.
@@ -220,8 +198,42 @@ Beam weapons are not emitted (no turret uses one). The XML1 missile's `explodrad
 engine reads (the original reads `exploderadius`), so its area damage is 0 in both; the damage
 is the direct contact draw.
 
+`xml2_xml1_controllers_test` also checks the turret rules (parsing, angles, sweep, acquisition,
+burst cadence, fan, damage draw, homing). Live, on an own build with staged entry: the
+haarp_ext02 turret swept, tracked, armed its burst at the tracking transition, fired 1.0 s
+later and every 5.0 s after, killed a non-invulnerable hero with one homing salvo, was
+destroyed by real attacks (deathscript ran) and stayed destroyed across Save, process restart
+and Load; the haarp_ext04 turret stayed idle while its setup script kept it disabled and then
+acquired and hit. Ray weapons, live with a staged zone load (enemy AI frozen, the hero walked in
+with real input unless named): the Arbiter arb2_3 tripod swept +-45 deg at 20 deg/s with 2 s end
+pauses, tracked, fired 1.0 s after tracking at the recoil cadence, took a non-invulnerable hero
+80 -> 58 -> 26 -> 0 (also hitting a frozen soldier standing in the line of fire), left an
+invulnerable hero unharmed, and was destroyed by real attacks; the four weapon_x wx1_3 tripods
+(hero placed on their level, staged) acquired together and killed the hero within a second; the
+Hive turret1 that tank1.py spawns on the stopped tank (the hero walked into the trigger, the real
+script and conversation ran) bound by name, flamed the hero every 0.45 s (tracetime) for 6-11, and
+took real jump-attack damage (500 -> 428, not destroyed within the test); the HAARP missiles leave
+from the Gun1 bolt and still killed the hero with one homing salvo. With a seated party (Cyclops
+player, three AI-controlled teammates, `seatParty`, staged): the AI teammates (+0x3d8 0x41/0x43)
+passed the cone and range test but were skipped, the player (0x60) was taken; with the player
+out of the cone and the frozen teammates in it the turret kept scanning for 40 s. All four Hive
+turrets (tank1-4 triggers walked into, real scripts and conversations) were destroyed by
+Cyclops' optic blasts; turret_death counted the objective to 4/4; turret1, destroyed before a
+save, stayed gone after a cold restart and Load (no rebind, objective 1/4 kept, damaged model
+on the tank). The arb2_2 and arb3_2 tripods bound only once the hero came near (they are out
+of the world while far from the heroes; a turret whose region leaves the world when the active
+hero changes is unbound and rebound later) and killed the hero.
+
 Online play: every peer runs the controller from the same lockstep scheduler dispatch,
 with game time and the gameplay random stream only. Rule 4 revision 2 registers
 `{1, placements, FNV-1a-32 of every applied line in order, 0}`; a requested but
 uninstalled controller registers unverified (host/join closed); a process that does
-not request it keeps revision 1 `{0,0,0,0}`, as 1.4.0.
+not request it keeps revision 1 `{0,0,0,0}`, as 1.4.0. A zone change or a game clock that
+goes back (the online session restarts the clock, 0x61413d / 0x613f16) clears every binding
+timer, so a peer that played earlier in the process binds as soon as a fresh one does.
+Not yet checked with two instances (integrator): the peers must agree on (1) the hero filter,
+i.e. that +0x3d8 bit 0 of every hero reads the same on both peers (a remote player's hero must
+not read as AI-controlled on the other peer), and (2) when a turret's entity is in the world
+(it is bound only then, and its scanner restarts at every binding), i.e. that leaving and
+entering the world follows shared state (hero positions), not per-peer state such as the
+local camera.

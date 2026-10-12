@@ -313,6 +313,16 @@ void turret_checks(){
      CHECK(trace_ready(last,.5f,.45f)&&last==.5f&&!trace_ready(last,.9f,.45f)&&trace_ready(last,.95f,.45f));
      float never=-1;CHECK(trace_ready(never,0,10)&&never==-1);
      float none=0;CHECK(trace_ready(none,0,0)&&trace_ready(none,0,0));}
+    // binding after a clock that goes back (an online session restarts the game clock): a timer set at
+    // game time 500 must not delay binding at the restarted time 1.5
+    {binding b;CHECK(may_bind(b,0));bind_failed(b,500.f);CHECK(!may_bind(b,500.5f)&&may_bind(b,501.f));
+     b.trace_at=900;b.rest_taken=true;bind_failed(b,500.f);
+     CHECK(clock_went_back(1.5f,501.f)&&!clock_went_back(501.f,501.f)&&!may_bind(b,1.5f));
+     forget(b);CHECK(may_bind(b,1.5f)&&b.trace_at==0&&!b.rest_taken);}
+    // resetdelay -1 = not authored: the constructor's track loss 10 and sweep pause 3
+    {const auto d=parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,-1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,|,");
+     CHECK(d&&d->scan.track_loss==10&&d->scan.sweep_pause==3);
+     CHECK(!parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,-2,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,|,"));}
     // a script-spawned turret: '*name', bound by name with its orientation at binding as the rest basis
     {const auto sp=parse("zone/a|*jet9|0,0,0,0,0,0,0,0,0|600,0,0,1,30,45,0,30,29|1,.03,1,0,0,0,132,5,9,.45,48,65536,0|||,,|,");
      CHECK(sp&&sp->spawned&&sp->instance=="jet9");

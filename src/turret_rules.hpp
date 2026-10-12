@@ -48,7 +48,7 @@ struct spec {
 };
 
 // ---- parsing the builder's one-line description ------------------------------------------------
-// zone|instance|px,py,pz,rx,ry,rz,mx,my,mz|visrange,minspeed,mintime,resetdelay,visextent,yawextent,pitchextent,turnrate,filterteam|
+// zone|instance|px,py,pz,rx,ry,rz,mx,my,mz|visrange,minspeed,mintime,resetdelay(-1 unauthored),visextent,yawextent,pitchextent,turnrate,filterteam|
 // kind,recoil,count,spread,speed,accuracy,range,damage_min,damage_max,tracetime,radius,damagetype,damagemods|
 // projectile|entfile|muzzlefx,muzzleaccfx,impactfx|firesound,rotatesound
 // Angles of the scanner block are degrees (as authored); rest is radians (as the map's orient).
@@ -101,9 +101,10 @@ inline std::optional<spec> parse(std::string_view line){
     for(float m:r.muzzle)if(!(std::fabs(m)<=1000))return std::nullopt;
     std::array<float,9> s{},g{};
     for(int i=0;i<9;++i)if(!number(sc[i],s[i])||!number(w[i],g[i]))return std::nullopt;
-    if(!(s[0]>0&&s[1]>=0&&s[2]>=0&&s[3]>=0&&s[4]>0&&s[4]<=180&&s[5]>=0&&s[5]<=180&&s[6]>=0&&s[6]<=90&&s[7]>=0&&s[7]<=3600))return std::nullopt;
+    if(!(s[0]>0&&s[1]>=0&&s[2]>=0&&(s[3]>=0||s[3]==-1)&&s[4]>0&&s[4]<=180&&s[5]>=0&&s[5]<=180&&s[6]>=0&&s[6]<=90&&s[7]>=0&&s[7]<=3600))return std::nullopt;
     if(s[8]<0||s[8]>31||s[8]!=std::floor(s[8]))return std::nullopt;
-    r.scan={s[0],s[1],s[2],s[3],s[3],s[4]*radians_per_degree,s[5]*radians_per_degree,s[6]*radians_per_degree,s[7]*radians_per_degree,static_cast<int>(s[8])};
+    // resetdelay -1: not authored, the constructor's track loss 10 and sweep pause 3 (0xa8600) stay
+    r.scan={s[0],s[1],s[2],s[3]<0?10.f:s[3],s[3]<0?3.f:s[3],s[4]*radians_per_degree,s[5]*radians_per_degree,s[6]*radians_per_degree,s[7]*radians_per_degree,static_cast<int>(s[8])};
     if(g[0]<0||g[0]>3||g[0]!=std::floor(g[0])||!(g[1]>=0&&g[1]<=60)||g[2]<1||g[2]>8||g[2]!=std::floor(g[2]))return std::nullopt;
     if(!(g[3]>=0&&g[3]<=90&&g[4]>=0&&g[4]<=5000&&g[5]>=0&&g[6]>=0&&g[7]>=0&&g[8]>=g[7]&&g[8]<=100000))return std::nullopt;
     r.gun.kind=static_cast<weapon_kind>(static_cast<int>(g[0]));r.gun.recoil=g[1];r.gun.count=static_cast<int>(g[2]);r.gun.spread=g[3];
@@ -160,6 +161,17 @@ inline vec step(vec from,vec goal,float rate,float dt,vec hint){
     }
     return from;
 }
+
+// ---- binding (adapter-side, no original counterpart) ---------------------------------------------
+// When to look for a placement's entity again, and the trace timer. The game clock can go back (the
+// online session restarts it, timer vt+0x10 at 0x61413d / 0x613f16): every peer must then bind at
+// once, so a clock that goes backwards, like a zone change, clears everything learnt earlier in the
+// process.
+struct binding { float next_bind=0,trace_at=0; bool rest_taken=false; };
+inline bool clock_went_back(float now,float last){return now<last;}
+inline void forget(binding& b){b=binding{};}
+inline bool may_bind(const binding& b,float now){return !(now<b.next_bind);}
+inline void bind_failed(binding& b,float now){b.next_bind=now+1;}
 
 // ---- the scanner state (scanent +0x324.. / scanturretent +0x358..) ------------------------------
 enum mode { idle=0, scanning=1, tracking=2 };
