@@ -143,6 +143,9 @@ namespace entity_query
 	void** __fastcall QueryApi_004ab6d0(void** ref, void* edx, const void* record, const std::uint32_t* exclude); // slot 0x4
 	void __fastcall QueryApi_004ab720(void** ref, void* edx);                                      // release
 	int __cdecl QueryApi_004ab740();                                                                // free query count
+	// Non-native probe for DLL callers that must not reach the fail-fast acquisition: the number of orders
+	// whose busy byte is clear (the order-side twin of 0x4ab740). Same manager fetch; never fails.
+	int free_order_count();
 	// OrderRef: fill a free order from a query with a scoring policy; release.
 	void* __cdecl QueryApi_004ab770(void* query, void* policy);
 	void* __cdecl QueryApi_004ab7d0(void* order); // returns its argument (native: `mov eax, [esp+4]` before ret)

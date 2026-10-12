@@ -1172,6 +1172,21 @@ extern "C" __declspec(dllexport) int __cdecl run_entity_query_test()
 		check(run.manager != nullptr, buf);
 		run_script(run);
 		expect_script(run, desc.world == 256 ? "synthetic@256" : "synthetic@1024");
+		{
+			// The non-failing availability probes a DLL caller uses before 0x4ab6d0/0x4ab770 (Master Mold): free query
+			// count (0x4ab740) and free order count, exhausted and partially free, at both layouts.
+			driver* saved = current; current = &run;
+			const auto& L = eq::installed_layout();
+			auto query_busy = [&](std::uint32_t i) -> std::uint8_t& { return run.manager[L.m_queries + i * L.q_stride + L.q_busy]; };
+			auto order_busy = [&](std::uint32_t i) -> std::uint8_t& { return run.manager[L.m_orders + i * L.o_stride + L.o_busy]; };
+			std::uint8_t keep_q[3], keep_o[3];
+			for (std::uint32_t i = 0; i < 3; ++i) { keep_q[i] = query_busy(i); keep_o[i] = order_busy(i); query_busy(i) = 1; order_busy(i) = 1; }
+			check(eq::QueryApi_004ab740() == 0 && eq::free_order_count() == 0, desc.world == 256 ? "probe@256: exhausted pools report no free query/order" : "probe@1024: exhausted pools report no free query/order");
+			query_busy(1) = 0; order_busy(2) = 0;
+			check(eq::QueryApi_004ab740() == 1 && eq::free_order_count() == 1, desc.world == 256 ? "probe@256: one free query and one free order" : "probe@1024: one free query and one free order");
+			for (std::uint32_t i = 0; i < 3; ++i) { query_busy(i) = keep_q[i]; order_busy(i) = keep_o[i]; }
+			current = saved;
+		}
 		eq::destroy_manager(run.manager);
 		boundary_tests(desc);
 	}

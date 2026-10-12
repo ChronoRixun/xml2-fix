@@ -37,4 +37,7 @@ namespace entity_capacity
 	std::string status();
 	// Test-pipe fixture (plan P3.4): force-retire a free World slot so a peer compares against a non-identical ring.
 	bool retire_slot(std::uint32_t index);
+	// The DLL address the installed ledger's rel32 relocation at `site` transfers to (its bound replacement), or 0
+	// when the raise is not installed or `site` is not a relocation the install wrote itself.
+	std::uint32_t installed_target(std::uint32_t site);
 }

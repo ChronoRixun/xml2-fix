@@ -447,4 +447,18 @@ namespace entity_capacity
 	}
 
 	bool retire_slot(std::uint32_t index) { return published.raised && entity_owners::retire_slot(owners, index); }
+	std::uint32_t installed_target(std::uint32_t site)
+	{
+		if (!install_published || !published.raised) return 0;
+		using namespace entity_capacity_sites;
+		for (const auto& s : relocation_sites)
+		{
+			if (s.va != site || s.kind != relocation_kind::rel32) continue;
+			const auto name = symbol_names[static_cast<std::size_t>(s.target)];
+			if (owned_elsewhere(name)) return 0;
+			const auto found = symbols.find(name);
+			return found == symbols.end() ? 0 : found->second;
+		}
+		return 0;
+	}
 }

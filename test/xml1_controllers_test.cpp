@@ -155,26 +155,33 @@ int main(){
     // E9 jumps into the DLL image that owns the installed query manager).
     {
         using namespace mold_query_rules;
-        constexpr u32 lo=0x10000000,hi=0x10200000;
+        constexpr u32 installed=0x10001230;
         auto retail=[](const entry& e){std::array<unsigned char,16> b{};for(std::size_t i=0;i<e.retail.size()/2;++i)b[i]=limits_rules::hex_byte(e.retail,i);return b;};
         auto jump=[](const entry& e,u32 target){std::array<unsigned char,16> b{};b[0]=0xe9;const auto d=static_cast<std::int32_t>(target-(e.va+5));std::memcpy(b.data()+1,&d,4);return b;};
         for(const auto& e:entries){
-            const auto stock=retail(e),into=jump(e,lo+0x1234),outside=jump(e,0x00500000),edge=jump(e,hi);
-            CHECK(entry_ok(false,stock.data(),e,lo,hi));       // stock layout: retail entry
-            CHECK(!entry_ok(true,stock.data(),e,lo,hi));       // raised but entry still retail
-            CHECK(entry_ok(true,into.data(),e,lo,hi));         // raised: installed jump into the owner DLL
-            CHECK(!entry_ok(false,into.data(),e,lo,hi));       // stock but entry patched
-            CHECK(!entry_ok(true,outside.data(),e,lo,hi));     // raised: jump elsewhere
-            CHECK(!entry_ok(true,edge.data(),e,lo,hi));
+            const auto stock=retail(e),exact=jump(e,installed),wrong=jump(e,installed+0x10),outside=jump(e,0x00500000);
+            CHECK(entry_ok(false,stock.data(),e,0));               // stock layout: retail entry
+            CHECK(!entry_ok(true,stock.data(),e,installed));       // raised but entry still retail
+            CHECK(entry_ok(true,exact.data(),e,installed));        // raised: the exact installed replacement
+            CHECK(!entry_ok(true,wrong.data(),e,installed));       // raised: another destination in the same DLL
+            CHECK(!entry_ok(true,outside.data(),e,installed));     // raised: outside the DLL
+            CHECK(!entry_ok(true,exact.data(),e,0));               // raised but no installed target known
+            CHECK(!entry_ok(false,exact.data(),e,installed));      // stock but entry patched
             auto altered=stock;altered[e.retail.size()/2-1]^=1;
-            CHECK(!entry_ok(false,altered.data(),e,lo,hi));    // stock: any other byte refuses
+            CHECK(!entry_ok(false,altered.data(),e,0));            // stock: any other byte refuses
+            auto call=exact;call[0]=0xe8;
+            CHECK(!entry_ok(true,call.data(),e,installed));        // raised: a call, not the installed jump
         }
-        CHECK(needs_busy_test(false)&&!needs_busy_test(true));
         std::vector<unsigned char> manager(0x1dec,0xff);
-        CHECK(!stock_pool_free(manager.data()));
-        manager[0x33+2*0x1e4]=0;CHECK(!stock_pool_free(manager.data())); // a query but no order
-        manager[0xdc0+1*0x814]=0;CHECK(stock_pool_free(manager.data()));
-        manager[0x33+2*0x1e4]=1;CHECK(!stock_pool_free(manager.data())); // an order but no query
+        CHECK(!stock_pool_free(manager.data())&&!pool_free(false,manager.data(),3,3)); // stock: every query and order busy
+        manager[0x33+2*0x1e4]=0;CHECK(!pool_free(false,manager.data(),3,3));         // a query but no order
+        manager[0xdc0+1*0x814]=0;CHECK(pool_free(false,manager.data(),0,0));          // stock ignores raised counts
+        manager[0x33+2*0x1e4]=1;CHECK(!pool_free(false,manager.data(),3,3));          // an order but no query
+        CHECK(!pool_free(false,nullptr,3,3));
+        CHECK(!pool_free(true,nullptr,0,3)&&!pool_free(true,nullptr,3,0)&&!pool_free(true,nullptr,0,0)); // raised exhausted
+        CHECK(pool_free(true,nullptr,1,1)&&pool_free(true,manager.data(),1,1));
+        std::fill(manager.begin(),manager.end(),0);
+        CHECK(!pool_free(true,manager.data(),0,0));                                     // raised ignores stock bytes
         CHECK(result_count_ok(0,256)&&result_count_ok(256,256)&&!result_count_ok(257,256)&&!result_count_ok(-1,256));
         CHECK(result_count_ok(257,1024)&&result_count_ok(1024,1024)&&!result_count_ok(1025,1024));
     }

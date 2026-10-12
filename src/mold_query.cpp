@@ -56,20 +56,10 @@ bool session_active(){
 bool raised(){return entity_capacity::installed().raised;}
 u32 world(){return entity_capacity::installed().world;}
 bool pool_available(){
-    // Stock: the retail acquisition assumes a free query and order, so test the
-    // retail busy bytes first. Raised: the owner returns null when busy (checked
-    // after acquisition).
-    if(!mold_query_rules::needs_busy_test(raised()))return true;
-    auto* pool=fn<getter_t>(0x4ab550)();
-    return pool&&mold_query_rules::stock_pool_free(static_cast<const unsigned char*>(pool));
-}
-bool dll_image(u32& lo,u32& hi){
-    HMODULE self=nullptr;
-    if(!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-        reinterpret_cast<LPCWSTR>(&entity_query::installed_manager),&self)||!self)return false;
-    const auto* dos=reinterpret_cast<const IMAGE_DOS_HEADER*>(self);
-    const auto* nt=reinterpret_cast<const IMAGE_NT_HEADERS*>(reinterpret_cast<const unsigned char*>(self)+dos->e_lfanew);
-    lo=static_cast<u32>(reinterpret_cast<std::uintptr_t>(self));hi=lo+nt->OptionalHeader.SizeOfImage;return true;
+    // Never reach an acquisition that would fail: the retail one assumes a free
+    // query and order, and the raised owner fails fast when all queries are busy.
+    if(raised())return mold_query_rules::pool_free(true,nullptr,entity_query::QueryApi_004ab740(),entity_query::free_order_count());
+    return mold_query_rules::pool_free(false,static_cast<const unsigned char*>(fn<getter_t>(0x4ab550)()),0,0);
 }
 }
 bool is_a(void* entity,u32 descriptor){
@@ -98,14 +88,14 @@ bool supported(){
         }
     }
     // Query entries: retail bytes on the stock layout; under EntityCapacity=1 the
-    // installed jumps into this DLL's query owner, whose manager the native getter
-    // must return.
+    // exact replacement jumps the capacity transaction installed, whose manager
+    // the native getter must return.
     const bool layout_raised=raised();
-    u32 lo=0,hi=0;
-    if(layout_raised&&(!dll_image(lo,hi)||!entity_query::installed_manager())){logger::write("mold query: installed query owner unavailable");return false;}
+    if(layout_raised&&!entity_query::installed_manager()){logger::write("mold query: installed query owner unavailable");return false;}
     for(const auto& e:mold_query_rules::entries){
         std::array<unsigned char,16> bytes{};
-        if(!memory.read(e.va,bytes.data(),e.retail.size()/2)||!mold_query_rules::entry_ok(layout_raised,bytes.data(),e,lo,hi)){
+        const u32 installed=layout_raised?entity_capacity::installed_target(e.va):0;
+        if(!memory.read(e.va,bytes.data(),e.retail.size()/2)||!mold_query_rules::entry_ok(layout_raised,bytes.data(),e,installed)){
             logger::write("mold query: %s entry %08X does not match the %s layout",e.what,e.va,layout_raised?"raised":"stock");return false;
         }
     }

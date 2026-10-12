@@ -991,6 +991,13 @@ namespace entity_query
 		for (std::uint32_t i = 0; i < layout::query_count; ++i) if (u8(query_at(m, i), g.l.q_busy) == 0) ++free;
 		return free;
 	}
+	int free_order_count()
+	{
+		void* m = manager();
+		int free = 0;
+		for (std::uint32_t i = 0; i < layout::order_count; ++i) if (u8(order_at(m, i), g.l.o_busy) == 0) ++free;
+		return free;
+	}
 	void* __cdecl QueryApi_004ab770(void* query, void* policy)
 	{
 		void* m = manager();
