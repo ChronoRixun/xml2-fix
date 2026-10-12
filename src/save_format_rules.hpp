@@ -503,6 +503,7 @@ namespace save_format_rules
 		std::uint32_t content_version = 0;
 		std::uint32_t catalogue_revision = 0;
 		std::uint32_t writer_version = 0;
+		std::uint32_t optional_features = 0;   // header 0x14 (bit 0 KEYS; bits 1 / 2 the fifth-level catch-up)
 		std::uint64_t campaign_serial = 0;
 		std::uint32_t save_sequence = 0;
 		std::uint64_t saved_at = 0;
@@ -583,6 +584,7 @@ namespace save_format_rules
 		const std::uint32_t sections = rd32(data + 0x1c);
 		const std::uint32_t table = rd32(data + 0x20);
 		out.writer_version = rd32(data + 0x24);
+		out.optional_features = rd32(data + 0x14);
 		out.content_version = rd32(data + 0x28);
 		out.catalogue_revision = rd32(data + 0x2c);
 		out.campaign_serial = rd64(data + 0x30);
@@ -1368,6 +1370,268 @@ namespace save_format_rules
 		float play_time = 0;
 		std::memcpy(&play_time, data + p + 0xd4, 4);
 		return play_time;
+	}
+
+	// ---- The one-time catch-up of the fifth-level points ([Game] LevelSkillPoints / LevelStatPoints=xml1) -------
+	//
+	// X-Men Legends I gives 2 skill points and 2 stat points (8 on the port's x4 stat scale) for a level divisible by 5,
+	// XMen2.exe 1 / 4 (rank_costs_rules.hpp; the keys restore the first game's rule in the level processing 0x4bbae0).
+	// A hero saved before the key was installed has been processed up to its "ack" level with 1 / 4 on every level, so
+	// it is short (level_skill_points(5) - 1) skill points and (level_stat_points(5) - 4) stat points for every multiple
+	// of 5 in (first processed level, ack level]. Levels above the ack level are still to be processed and get the new
+	// rule from the engine itself (heroes not yet in the party keep ack 1 with a higher level in real saves).
+	//
+	// The marker: two bits of the LC header's optional-feature word (SPEC-new-save 1.1: "bit set, ignored when unknown";
+	// bit 0 = KEYS). A campaign file written while a key is installed carries that key's bit: its heroes' points include
+	// the bonus up to their ack levels. A file without the bit - any older writer, an import of an old save (written with
+	// the reference era's content version, and its resaves keep LGCY), a fix whose key isn't installed - gets the
+	// catch-up once on load while the key is installed; the next write carries the bit, so loading that is a no-op.
+	// Neither the content version nor the writer version can tell this: both are the same for a 0.2.2 save written with
+	// the keys and one written without them.
+	constexpr std::uint32_t optional_level_skill_points = 1u << 1;
+	constexpr std::uint32_t optional_level_stat_points = 1u << 2;
+
+	// The level-up object's constructor (0x44a430, vtable 0x685294) stores its processed level +0x3c = 1, whatever the
+	// hero's starting level; the level processing then runs from processed + 1. (Every xpexempt level-40 form keeps
+	// ack 1 in real saves.) So no hero processed a level at or below 1, and a hero starting above level 1 was processed
+	// from level 2 up with the old rule like any other.
+	constexpr int first_processed_level = 1;
+
+	// multiples of 5 in (start, ack]: the fifth levels processed with the old rule
+	constexpr int fifth_levels_processed(const int ack_level, const int start = first_processed_level)
+	{
+		if (ack_level <= start || ack_level <= 0)
+		{
+			return 0;
+		}
+		const int from = start < 0 ? 0 : start;
+		return ack_level / 5 - from / 5;
+	}
+
+	constexpr std::size_t attr_skill_points = 0x10;  // u16 (CStats+0x18; the engine reads it as a signed short)
+	constexpr std::size_t attr_trait_points = 0x12;  // u16 (CStats+0x1a)
+	constexpr std::size_t attr_level = 0x14;         // u8 (CStats+0x1c)
+	constexpr std::size_t tail_ack_level = 0x14;     // u8 (the level-up object's +0x3c), after health, energy, seat, valid + 3, experience
+	constexpr std::size_t restore_records = 22;
+	constexpr int points_ceiling = 0x7fff;
+
+	struct hero_points_record
+	{
+		std::size_t attributes = 0;    // offset of the CAttributes scalars in the image
+		std::size_t tail = 0;          // offset of the equipment tail
+		std::uint32_t stats_index = 0; // hero block n -> n + 1; restore record n -> n
+		bool restore = false;
+	};
+
+	struct hero_points_layout
+	{
+		std::vector<hero_points_record> records;  // the hero blocks, then (when the bank is valid) restore records 1..21
+		bool restore_valid = false;
+	};
+
+	// Walks an old slot image (envelope + payload): every hero block and, when the restore bank's valid byte is set,
+	// every restore record but the reserved record 0. Nothing when the stream doesn't parse.
+	inline std::optional<hero_points_layout> hero_points_records(const std::uint8_t* data, const std::size_t size)
+	{
+		const auto heaps = hero_heaps(data, size);
+		if (!heaps)
+		{
+			return std::nullopt;
+		}
+		std::size_t p = 0;
+		const auto need = [&](const std::size_t n) { return p + n <= size; };
+		const auto skip_instance = [&]() -> bool
+		{
+			if (!need(instance_fixed))
+			{
+				return false;
+			}
+			p += instance_fixed;
+			for (int list = 0; list < 3; ++list)
+			{
+				if (!need(4))
+				{
+					return false;
+				}
+				const std::uint32_t count = rd32(data + p);
+				p += 4;
+				if (count > max_enhancements || !need(count * enhancement_size))
+				{
+					return false;
+				}
+				p += count * enhancement_size;
+			}
+			return true;
+		};
+		// one record from its attributes: attributes, heap, the equipped count and instances, the tail
+		const auto record = [&](hero_points_record& r) -> bool
+		{
+			if (!need(attributes_size + heap_size + 1))
+			{
+				return false;
+			}
+			r.attributes = p;
+			p += attributes_size + heap_size;
+			const std::uint8_t equipped = data[p++];
+			if (equipped > 32)
+			{
+				return false;
+			}
+			for (std::uint8_t i = 0; i < equipped; ++i)
+			{
+				if (!skip_instance())
+				{
+					return false;
+				}
+			}
+			if (!need(equipment_tail))
+			{
+				return false;
+			}
+			r.tail = p;
+			p += equipment_tail;
+			return true;
+		};
+		const auto at_tag = [&](const char* text)
+		{
+			const std::size_t n = std::strlen(text);
+			return need(tag_size) && data[p] == tag_marker && std::memcmp(data + p + 1, text, n) == 0;
+		};
+		hero_points_layout out;
+		if (heaps->empty())
+		{
+			// no hero block: the tag follows the world items; find it as old_play_time does
+			p = old_envelope + tag_size + item_head_size;
+			while (p + tag_size <= size && !at_tag("[CHARACTERSUNLOCKED]"))
+			{
+				++p;
+			}
+		}
+		else
+		{
+			p = (*heaps)[0].block;
+		}
+		for (std::size_t n = 0; n < heaps->size(); ++n)
+		{
+			hero_points_record r;
+			r.stats_index = static_cast<std::uint32_t>(n + 1);
+			if (p != (*heaps)[n].block || !record(r) || !need(powers_size + costume_size))
+			{
+				return std::nullopt;
+			}
+			p += powers_size + costume_size;
+			out.records.push_back(r);
+		}
+		if (!at_tag("[CHARACTERSUNLOCKED]"))
+		{
+			return std::nullopt;
+		}
+		p += tag_size + unlocked_size;
+		if (!at_tag("[CHARACTERSRESTORE]") || !need(tag_size + 1))
+		{
+			return std::nullopt;
+		}
+		p += tag_size;
+		out.restore_valid = data[p++] != 0;
+		for (std::size_t n = 0; n < restore_records; ++n)
+		{
+			hero_points_record r;
+			r.stats_index = static_cast<std::uint32_t>(n);
+			r.restore = true;
+			if (!record(r))
+			{
+				return std::nullopt;
+			}
+			if (out.restore_valid && n > 0)
+			{
+				out.records.push_back(r);
+			}
+		}
+		return out;
+	}
+
+	struct level_catchup_grant
+	{
+		std::uint32_t stats_index = 0;
+		bool restore = false;
+		int level = 0;
+		int ack_level = 0;
+		int fifths = 0;                 // fifth levels processed with the old rule
+		int skill_before = 0, skill_after = 0;
+		int stat_before = 0, stat_after = 0;
+		bool capped = false;            // a sum above 0x7fff was held at 0x7fff
+	};
+
+	// Adds `skill_per_fifth` unspent skill points and `stat_per_fifth` unspent stat points per fifth level processed to
+	// every record `exempt(stats_index)` doesn't exclude. Returns the records that changed (one log line each).
+	template <class Exempt>
+	inline std::vector<level_catchup_grant> apply_level_catchup(std::uint8_t* data, const std::size_t size, const hero_points_layout& layout,
+		const int skill_per_fifth, const int stat_per_fifth, Exempt&& exempt)
+	{
+		std::vector<level_catchup_grant> out;
+		if (skill_per_fifth <= 0 && stat_per_fifth <= 0)
+		{
+			return out;
+		}
+		for (const auto& r : layout.records)
+		{
+			if (r.attributes + attributes_size > size || r.tail + equipment_tail > size || exempt(r.stats_index))
+			{
+				continue;
+			}
+			level_catchup_grant g;
+			g.stats_index = r.stats_index;
+			g.restore = r.restore;
+			g.level = data[r.attributes + attr_level];
+			g.ack_level = data[r.tail + tail_ack_level];
+			g.fifths = fifth_levels_processed(g.ack_level);
+			if (g.fifths <= 0)
+			{
+				continue;
+			}
+			g.skill_before = static_cast<std::int16_t>(rd16(data + r.attributes + attr_skill_points));
+			g.stat_before = static_cast<std::int16_t>(rd16(data + r.attributes + attr_trait_points));
+			const auto add = [&](const int before, const int per) -> int
+			{
+				const int after = before + (per > 0 ? per * g.fifths : 0);
+				if (after > points_ceiling)
+				{
+					g.capped = true;
+					return points_ceiling;
+				}
+				return after;
+			};
+			g.skill_after = add(g.skill_before, skill_per_fifth);
+			g.stat_after = add(g.stat_before, stat_per_fifth);
+			const auto put = [&](const std::size_t at, const int value)
+			{
+				data[at] = static_cast<std::uint8_t>(value & 0xff);
+				data[at + 1] = static_cast<std::uint8_t>((value >> 8) & 0xff);
+			};
+			put(r.attributes + attr_skill_points, g.skill_after);
+			put(r.attributes + attr_trait_points, g.stat_after);
+			out.push_back(g);
+		}
+		return out;
+	}
+
+	// The bits a campaign write carries, from the keys installed now.
+	constexpr std::uint32_t level_catchup_marker(const bool skill_installed, const bool stat_installed)
+	{
+		return (skill_installed ? optional_level_skill_points : 0u) | (stat_installed ? optional_level_stat_points : 0u);
+	}
+
+	// What a load must still add per fifth level: each installed key's extra points, unless the file's bit vouches for them.
+	struct level_catchup_need
+	{
+		int skill_per_fifth = 0;
+		int stat_per_fifth = 0;
+	};
+	constexpr level_catchup_need level_catchup_needed(const std::uint32_t optional_features, const bool skill_installed, const bool stat_installed,
+		const int skill_extra, const int stat_extra)
+	{
+		return {skill_installed && !(optional_features & optional_level_skill_points) ? skill_extra : 0,
+		        stat_installed && !(optional_features & optional_level_stat_points) ? stat_extra : 0};
 	}
 
 	// ---- The writer version (SPEC 1.1 offset 0x24) ---------------------------------------------------

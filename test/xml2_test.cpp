@@ -59,6 +59,8 @@
 #include "pack_amount_rules.hpp"
 #include "personal_item_text_rules.hpp"
 #include "save_format_rules.hpp"
+#include "rank_costs_rules.hpp"
+#include "lcsave/layout.hpp"
 #include "discord_ipc.hpp"
 #include "discord_rules.hpp"
 #include "display_rules.hpp"
@@ -10905,7 +10907,10 @@ namespace
 			return out;
 		}
 
-		std::vector<std::uint8_t> old_image(const int carried, const int heroes, const float play_time, std::vector<std::size_t>* heaps = nullptr)
+		// tails: the equipment tail of every hero block, then of the 22 restore records; restore_flag: the bank's valid
+		// byte (non-zero also gives restore record 3 one equipped instance)
+		std::vector<std::uint8_t> old_image(const int carried, const int heroes, const float play_time, std::vector<std::size_t>* heaps = nullptr,
+			std::vector<std::size_t>* tails = nullptr, const std::uint8_t restore_flag = 0)
 		{
 			std::vector<std::uint8_t> out(old_envelope, 0);
 			std::memcpy(out.data(), "12:34 - somewhere", 17);
@@ -10926,16 +10931,20 @@ namespace
 				append(out, heap);
 				out.push_back(h == 0 ? 1 : 0);
 				if (h == 0) append(out, instance(2));
+				if (tails) tails->push_back(out.size());
 				out.resize(out.size() + equipment_tail + powers_size + costume_size, 0);
 			}
 			append(out, tag("[CHARACTERSUNLOCKED]"));
 			out.resize(out.size() + unlocked_size, 0);
 			append(out, tag("[CHARACTERSRESTORE]"));
-			out.push_back(0);
+			out.push_back(restore_flag);
 			for (int r = 0; r < 22; ++r)
 			{
 				out.resize(out.size() + attributes_size + heap_size, 0);
-				out.push_back(0);
+				const bool equip = restore_flag && r == 3;
+				out.push_back(equip ? 1 : 0);
+				if (equip) append(out, instance(1));
+				if (tails) tails->push_back(out.size());
 				out.resize(out.size() + equipment_tail, 0);
 			}
 			const std::size_t game = out.size();
@@ -11110,6 +11119,133 @@ namespace
 			CHECK(insert_talent(odd.data(), 5) == heap_insert::invalid);
 			std::vector<std::uint8_t> fresh(heap_size, 0);
 			CHECK(insert_talent(fresh.data(), 5) == heap_insert::inserted && rd32(fresh.data() + 152) == 1 && rd32(fresh.data() + 156) == 1 && fresh[2] == 0 && fresh[4] == 0);
+		}
+
+		// The one-time catch-up of the fifth-level points (invented heroes; [Game] LevelSkillPoints / LevelStatPoints=xml1).
+		{
+			// fifth levels processed with the old rule: multiples of 5 in (start, ack]
+			CHECK(fifth_levels_processed(1) == 0 && fifth_levels_processed(4) == 0 && fifth_levels_processed(5) == 1 && fifth_levels_processed(9) == 1);
+			CHECK(fifth_levels_processed(10) == 2 && fifth_levels_processed(23) == 4 && fifth_levels_processed(45) == 9 && fifth_levels_processed(0) == 0);
+			CHECK(fifth_levels_processed(255) == 51 && fifth_levels_processed(-3) == 0);
+			// a start above 5 (the rule's parameter; the engine's own start is the constructor's processed level 1)
+			CHECK(fifth_levels_processed(9, 7) == 0 && fifth_levels_processed(10, 7) == 1 && fifth_levels_processed(23, 7) == 3 && fifth_levels_processed(45, 7) == 8);
+			CHECK(fifth_levels_processed(5, 5) == 0 && fifth_levels_processed(10, 5) == 1 && fifth_levels_processed(10, 10) == 0 && fifth_levels_processed(6, 7) == 0);
+			CHECK(first_processed_level == 1);
+			// the offsets are the library's old-save layout (the tail: health, energy, seat, valid + 3, experience, ack)
+			CHECK(offsetof(lcsave::OldAttrScalars, skill_points) == attr_skill_points && offsetof(lcsave::OldAttrScalars, trait_points) == attr_trait_points &&
+			      offsetof(lcsave::OldAttrScalars, level) == attr_level && offsetof(lcsave::OldEquipTail, experience) == 0x10 &&
+			      offsetof(lcsave::OldEquipTail, ack_level) == tail_ack_level && sizeof(lcsave::OldEquipTail) == equipment_tail);
+			// the per-fifth extras are the keys' own numbers: 2 - 1 skill points, 8 - 4 stat points
+			CHECK(rank_costs_rules::level_skill_points(5) - 1 == 1 && rank_costs_rules::level_stat_points(5) - rank_costs_rules::stat_points_per_level == 4);
+
+			// the marker: one bit per installed key; a write without the keys vouches for nothing
+			CHECK(level_catchup_marker(true, true) == 6 && level_catchup_marker(true, false) == 2 && level_catchup_marker(false, true) == 4 && level_catchup_marker(false, false) == 0);
+			CHECK((optional_level_skill_points & 1u) == 0 && (optional_level_stat_points & 1u) == 0);   // bit 0 stays KEYS
+			const auto need = [](std::uint32_t bits, bool skill, bool stat) { return level_catchup_needed(bits, skill, stat, 1, 4); };
+			CHECK(need(0, true, true).skill_per_fifth == 1 && need(0, true, true).stat_per_fifth == 4);          // an older file
+			CHECK(need(1, true, true).skill_per_fifth == 1 && need(1, true, true).stat_per_fifth == 4);          // KEYS alone vouches nothing
+			CHECK(need(6, true, true).skill_per_fifth == 0 && need(6, true, true).stat_per_fifth == 0);          // written with both keys
+			CHECK(need(2, true, true).skill_per_fifth == 0 && need(2, true, true).stat_per_fifth == 4);          // written with the skill key only
+			CHECK(need(4, true, false).skill_per_fifth == 1 && need(4, true, false).stat_per_fifth == 0);
+			CHECK(need(0, false, false).skill_per_fifth == 0 && need(0, false, false).stat_per_fifth == 0);      // no key installed: nothing
+			CHECK(need(level_catchup_marker(false, false), true, true).skill_per_fifth == 1);                    // written without the keys: not caught up
+
+			// a stream: hero blocks with processed (ack) levels 4, 5, 9, 10, 23, 45, a hero not yet processed (level 30,
+			// ack 1), an xpexempt level-40 form and an exempt one with a high ack; the restore bank valid
+			std::vector<std::size_t> heaps, tails;
+			auto image = old_image(1, 9, 3.0f, &heaps, &tails, 1);
+			CHECK(heaps.size() == 9 && tails.size() == 9 + 22);
+			const int acks[9] = {4, 5, 9, 10, 23, 45, 1, 1, 30};
+			const int levels[9] = {4, 5, 9, 10, 23, 45, 30, 40, 30};
+			const int skills[9] = {0, 3, 0, 7, 2, 0, 0, 0, 5};
+			const int stats[9] = {12, 0, 40, 4, 0, 160, 0, 0, 9};
+			const auto put16 = [&](const std::size_t at, const int v) { image[at] = static_cast<std::uint8_t>(v); image[at + 1] = static_cast<std::uint8_t>(v >> 8); };
+			for (int h = 0; h < 9; ++h)
+			{
+				const std::size_t attributes = heaps[h] - attributes_size;
+				put16(attributes + attr_skill_points, skills[h]);
+				put16(attributes + attr_trait_points, stats[h]);
+				image[attributes + attr_level] = static_cast<std::uint8_t>(levels[h]);
+				image[tails[h] + tail_ack_level] = static_cast<std::uint8_t>(acks[h]);
+				// the experience word just before the ack byte (400000: low byte 0x80), as in a real level-21 save
+				const std::uint32_t experience = 400000;
+				std::memcpy(image.data() + tails[h] + 0x10, &experience, 4);
+			}
+			// restore record 3 (stats index 3, one equipped instance before its tail) and the reserved record 0
+			const auto restore_attributes = [&](const int r)
+			{
+				// the record's attributes start at its tail minus the equipped instances, the count byte, the heap, the attributes
+				return tails[9 + r] - (r == 3 ? instance(1).size() : 0) - 1 - heap_size - attributes_size;
+			};
+			for (const int r : {0, 3})
+			{
+				put16(restore_attributes(r) + attr_skill_points, 1);
+				put16(restore_attributes(r) + attr_trait_points, 2);
+				image[restore_attributes(r) + attr_level] = 10;
+				image[tails[9 + r] + tail_ack_level] = 10;
+			}
+			const auto layout = hero_points_records(image.data(), image.size());
+			CHECK(layout && layout->restore_valid && layout->records.size() == 9 + 21);
+			if (layout && layout->records.size() == 30)
+			{
+				bool offsets = true;
+				for (int h = 0; h < 9; ++h) offsets &= layout->records[h].attributes == heaps[h] - attributes_size && layout->records[h].tail == tails[h] && layout->records[h].stats_index == static_cast<std::uint32_t>(h + 1) && !layout->records[h].restore;
+				for (int r = 1; r < 22; ++r) offsets &= layout->records[8 + r].tail == tails[9 + r] && layout->records[8 + r].stats_index == static_cast<std::uint32_t>(r) && layout->records[8 + r].restore;
+				offsets &= layout->records[8 + 3].attributes == restore_attributes(3);
+				CHECK(offsets);
+				// stats index 8 (the level-40 form) and 9 (exempt with ack 30) are xpexempt
+				const auto exempt = [](const std::uint32_t stats_index) { return stats_index == 8 || stats_index == 9; };
+				const auto before = image;
+				const auto grants = apply_level_catchup(image.data(), image.size(), *layout, 1, 4, exempt);
+				const auto skill_at = [&](const std::size_t attributes) { return static_cast<int>(static_cast<std::int16_t>(rd16(image.data() + attributes + attr_skill_points))); };
+				const auto stat_at = [&](const std::size_t attributes) { return static_cast<int>(static_cast<std::int16_t>(rd16(image.data() + attributes + attr_trait_points))); };
+				const int fifths[9] = {0, 1, 1, 2, 4, 9, 0, 0, 0};
+				bool points = true;
+				for (int h = 0; h < 9; ++h)
+				{
+					points &= skill_at(heaps[h] - attributes_size) == skills[h] + fifths[h] && stat_at(heaps[h] - attributes_size) == stats[h] + 4 * fifths[h];
+				}
+				CHECK(points);
+				// restore record 3 (ack 10): +2 / +8; the reserved record 0 is untouched
+				CHECK(skill_at(restore_attributes(3)) == 3 && stat_at(restore_attributes(3)) == 10 && skill_at(restore_attributes(0)) == 1 && stat_at(restore_attributes(0)) == 2);
+				// one grant per changed record: heroes 2..6 and restore record 3
+				CHECK(grants.size() == 6);
+				if (grants.size() == 6)
+				{
+					CHECK(grants[0].stats_index == 2 && grants[0].ack_level == 5 && grants[0].fifths == 1 && grants[0].skill_before == 3 && grants[0].skill_after == 4 && grants[0].stat_before == 0 && grants[0].stat_after == 4);
+					CHECK(grants[4].stats_index == 6 && grants[4].level == 45 && grants[4].fifths == 9 && grants[4].skill_after == 9 && grants[4].stat_after == 196 && !grants[4].restore);
+					CHECK(grants[5].restore && grants[5].stats_index == 3 && grants[5].fifths == 2 && !grants[5].capped);
+				}
+				// nothing but the points moved
+				std::size_t changed = 0;
+				for (std::size_t i = 0; i < image.size(); ++i) changed += image[i] != before[i];
+				CHECK(changed > 0 && changed <= 6 * 4);
+				// the next write carries the marker; loading that again adds nothing (no second grant)
+				const auto again = level_catchup_needed(level_catchup_marker(true, true), true, true, 1, 4);
+				const auto after_first = image;
+				CHECK(apply_level_catchup(image.data(), image.size(), *layout, again.skill_per_fifth, again.stat_per_fifth, exempt).empty() && image == after_first);
+				// a sum above 0x7fff is held there
+				put16(heaps[5] - attributes_size + attr_skill_points, 0x7ffe);
+				const auto capped = apply_level_catchup(image.data(), image.size(), *layout, 1, 0, exempt);
+				CHECK(skill_at(heaps[5] - attributes_size) == 0x7fff && capped.size() == 6 && capped[4].capped);
+			}
+			// a bank that isn't valid: its records are not touched
+			auto invalid_bank = old_image(1, 2, 3.0f, nullptr, nullptr, 0);
+			const auto no_bank = hero_points_records(invalid_bank.data(), invalid_bank.size());
+			CHECK(no_bank && !no_bank->restore_valid && no_bank->records.size() == 2);
+			// no hero block: only the bank
+			const auto none = old_image(0, 0, 1.0f, nullptr, nullptr, 1);
+			const auto bank_only = hero_points_records(none.data(), none.size());
+			CHECK(bank_only && bank_only->records.size() == 21 && bank_only->records[0].restore);
+			// a stream that doesn't parse: nothing
+			auto broken = image; broken[old_envelope + 1] = 'X';
+			CHECK(!hero_points_records(broken.data(), broken.size()) && !hero_points_records(image.data(), 0x400));
+			auto no_restore_tag = old_image(1, 2, 3.0f);
+			for (std::size_t i = 0; i + 20 < no_restore_tag.size(); ++i)
+			{
+				if (std::memcmp(no_restore_tag.data() + i, "[CHARACTERSRESTORE]", 19) == 0) { no_restore_tag[i + 1] = 'X'; break; }
+			}
+			CHECK(!hero_points_records(no_restore_tag.data(), no_restore_tag.size()));
 		}
 
 		// The flag stubs and the bridges on their own.

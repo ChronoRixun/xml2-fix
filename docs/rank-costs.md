@@ -71,10 +71,32 @@ stat_rules.xml, 0xaed70) is larger and differently shaped (legends-classic SPEC 
 
 ## Saves
 
-Nothing about the save changes. A hero's unspent skill points and talent ranks are stored as they are and nothing
-recomputes them, so a save made without the key (every rank bought for 1) loads with the same ranks and points; the
-difference simply stays spent. The first game had no respec; a respec with the key on returns the costs of the ranks,
-so such a hero would get back more than it paid.
+Nothing about the save's layout changes. A hero's unspent skill points and talent ranks are stored as they are and
+nothing recomputes them, so a save made without RankCosts (every rank bought for 1) loads with the same ranks and
+points; the difference simply stays spent. The first game had no respec; a respec with the key on returns the costs of
+the ranks, so such a hero would get back more than it paid.
+
+**The fifth-level catch-up (`[Save] Format=lc`).** A hero saved before LevelSkillPoints / LevelStatPoints was
+installed went through its fifth levels with 1 / 4 points. On load, while a key is installed, every hero block (and
+every record of a valid restore bank) gets the key's extra points - 1 skill point / 4 stat points - for every multiple
+of 5 in (1, its processed level]: the processed ("ack") level, not the level, because levels above it are still to be
+processed and get the key's rule from the engine (heroes not yet in the party have level > 1 with ack 1). The count
+starts at 1 because the level-up object's constructor (0x44a430) stores processed = 1 whatever the starting level, so
+a hero starting above level 1 is processed from 2 like any other. xpexempt heroes (ProfXAstral, ProfXGladiator: the
+processing returns before giving anything) get nothing. Unspent points are capped at 32767. One log line per record
+granted (`save format: fifth-level catch-up: ...`); the pipe's `save status` counts them.
+
+The marker is two bits of the LC header's optional-feature word (SPEC-new-save 1.1: "ignored when unknown"; bit 0 is
+KEYS): bit 1 = the heroes have LevelSkillPoints' fifth-level points, bit 2 = LevelStatPoints'. Every campaign write
+(and `save dump`) sets the bit of each key installed at that moment, and a load grants a key's points only when the
+file lacks its bit. So the save written after a catch-up loads again with no grant, a new campaign never gets one, and
+a file written by a fix whose key isn't installed (or by XML2 Fix 1.4, an import of an old save, the Python converter)
+is not taken as caught up. Content and writer versions can't tell this apart (a 0.2.2 build with the keys removed
+writes the same ones). Known limit: a campaign caught up, then saved without the keys and loaded with them again, gets
+the catch-up again for the levels it had before (one bit per file can't say up to which level each hero was caught
+up). Co-op: the grant happens where the file is read, the host's load; joiners receive the host's stream (load mode 2,
+no file) and their own saves of the session carry their own keys' bits, which rule 5 makes the host's. Nothing is
+added to the agreement.
 
 ## Install and online
 

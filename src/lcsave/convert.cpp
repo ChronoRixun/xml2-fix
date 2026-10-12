@@ -1424,6 +1424,7 @@ namespace lcsave::detail
 		retain_sections(sections, context.retained_file, kind_campaign, native);
 		HeaderIn h;
 		h.required_features = native.feature_bits;          // the Phase A marker: the writer's layout decides (E10A2: bit 0)
+		h.optional_features = context.optional_features;
 		h.writer_version = context.writer_version;
 		h.content_version = t.catalogue.content_version;
 		h.catalogue_revision = t.catalogue.revision;

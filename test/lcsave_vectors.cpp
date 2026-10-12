@@ -1118,6 +1118,37 @@ namespace
 			const auto f = read_file(saved.bytes.data(), saved.bytes.size(), kind_campaign);
 			check(f.header.campaign_serial == 77 && f.header.save_sequence == 3 && f.data("META")["origin"].as_int() == 0 && !f.sections.count("LGCY"),
 				"saver header and META");
+			check((f.header.optional_features & ~1u) == 0, "the saver sets no optional bit of its own but KEYS");
+		}
+		{
+			// the caller's optional-feature bits (the fifth-level catch-up's 2 and 4) reach the header beside KEYS, the
+			// reader ignores them, and the loader's stream is the same with or without them
+			NewFileContext marked = ctx;
+			marked.optional_features = 6;
+			const auto with_bits = old_stream_to_new(std::vector<std::uint8_t>(back.bytes.begin() + old_envelope, back.bytes.end()), tables, marked);
+			check(with_bits.ok && saved.ok, "old_stream_to_new with optional bits (" + with_bits.error + ")");
+			if (with_bits.ok && saved.ok)
+			{
+				const auto f = read_file(with_bits.bytes.data(), with_bits.bytes.size(), kind_campaign);
+				const auto plain = read_file(saved.bytes.data(), saved.bytes.size(), kind_campaign);
+				check(f.header.optional_features == (6u | (plain.header.optional_features & 1u)), "optional bits 1 and 2 written beside KEYS");
+				const auto l1 = new_to_old_stream(with_bits.bytes, tables), l2 = new_to_old_stream(saved.bytes, tables);
+				check(l1.ok && l2.ok && l1.bytes == l2.bytes, "optional bits change nothing the loader rebuilds");
+			}
+			if (r.ok)
+			{
+				const auto imported = read_file(r.bytes.data(), r.bytes.size(), kind_campaign);
+				check((imported.header.optional_features & 6u) == 0, "an import of an old save vouches for no fifth-level points");
+			}
+		}
+		{
+			// xpexempt by stats index, from the build's herostat (invented flags)
+			b->herostat_xpexempt.assign(b->stat.size(), 0);
+			b->herostat_xpexempt[2] = 1;
+			check(!tables.xp_exempt(0) && !tables.xp_exempt(1) && tables.xp_exempt(2) && !tables.xp_exempt(100000), "xp_exempt by stats index");
+			check(tables.stats_key(1) == b->stat[1] && tables.stats_key(100000).empty(), "stats_key by stats index");
+			Tables none;
+			check(!none.xp_exempt(2) && none.stats_key(1).empty(), "no tables: nothing exempt, no key");
 		}
 
 		// Durable provenance must survive two runtime resaves, including opaque KEYS references.

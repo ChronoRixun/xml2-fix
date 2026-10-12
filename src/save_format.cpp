@@ -3,6 +3,8 @@
 #include "patch_transaction.hpp"
 
 #include "save_format_rules.hpp"
+#include "rank_costs.hpp"
+#include "rank_costs_rules.hpp"
 #include "save_core_rules.hpp"
 // Guards integration: policy and file operations live outside capture/lifetime.
 #include "save_guard_rules.hpp"
@@ -13,6 +15,7 @@
 #include "ini.hpp"
 #include "log.hpp"
 #include "lcsave/lcsave.hpp"
+#include "lcsave/layout.hpp"
 
 #include <Windows.h>
 #include <wincrypt.h>
@@ -21,6 +24,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -102,7 +106,7 @@ namespace save_format
 
 
 		// Counters for status().
-		std::atomic<unsigned> reads{0}, write_count{0}, refusals{0}, converted{0}, talents_added{0};
+		std::atomic<unsigned> reads{0}, write_count{0}, refusals{0}, converted{0}, talents_added{0}, levels_caught_up{0};
 
 		// The stream helpers' overflow flag (the stubs write 1 when a copy was skipped).
 		volatile std::uint8_t overflow_flag = 0;
@@ -752,6 +756,53 @@ namespace save_format
 			return valid && full==0;
 		}
 
+		// the catch-up's offsets are the library's old-save layout (SPEC-old-save 1.6 a / c)
+		static_assert(offsetof(lcsave::OldAttrScalars, skill_points) == save_format_rules::attr_skill_points &&
+		              offsetof(lcsave::OldAttrScalars, trait_points) == save_format_rules::attr_trait_points &&
+		              offsetof(lcsave::OldAttrScalars, level) == save_format_rules::attr_level &&
+		              sizeof(lcsave::OldAttrScalars) == save_format_rules::attributes_size &&
+		              offsetof(lcsave::OldEquipTail, ack_level) == save_format_rules::tail_ack_level &&
+		              sizeof(lcsave::OldEquipTail) == save_format_rules::equipment_tail);
+
+		// The one-time catch-up of the fifth-level points (save_format_rules.hpp): a campaign whose header doesn't vouch
+		// for an installed LevelSkillPoints / LevelStatPoints key gets, per hero and per valid restore record, the extra
+		// points of every fifth level up to its processed level; one log line per record granted. False when the
+		// stream's hero records don't parse (the load is refused: the next write would otherwise vouch for them).
+		bool catch_up_levels(std::vector<std::uint8_t>& image, const std::uint32_t optional_features)
+		{
+			using namespace rank_costs_rules;
+			const bool skill_on = rank_costs::level_installed(), stat_on = rank_costs::stat_installed();
+			const auto need = level_catchup_needed(optional_features, skill_on, stat_on, level_skill_points(bonus_every) - 1,
+			                                       level_stat_points(bonus_every) - stat_points_per_level);
+			if (!need.skill_per_fifth && !need.stat_per_fifth)
+			{
+				if (skill_on || stat_on)
+				{
+					logger::write("save format: fifth-level points: the file vouches for them (optional features 0x%lx) - no catch-up",
+					              static_cast<unsigned long>(optional_features));
+				}
+				return true;
+			}
+			const auto layout = hero_points_records(image.data(), image.size());
+			if (!layout)
+			{
+				logger::write("save format: fifth-level catch-up: the stream's hero records don't parse");
+				return false;
+			}
+			const auto grants = apply_level_catchup(image.data(), image.size(), *layout, need.skill_per_fifth, need.stat_per_fifth,
+			                                        [&](const std::uint32_t stats_index) { return tables.xp_exempt(stats_index); });
+			for (const auto& g : grants)
+			{
+				logger::write("save format: fifth-level catch-up: %s %lu (%s): level %d, processed %d, %d fifth level(s): skill points %d -> %d, stat points %d -> %d%s",
+				              g.restore ? "restore record" : "hero, stats index", static_cast<unsigned long>(g.stats_index), tables.stats_key(g.stats_index).c_str(),
+				              g.level, g.ack_level, g.fifths, g.skill_before, g.skill_after, g.stat_before, g.stat_after, g.capped ? " (held at 32767)" : "");
+			}
+			levels_caught_up.fetch_add(static_cast<unsigned>(grants.size()));
+			logger::write("save format: fifth-level catch-up (file optional features 0x%lx; +%d skill / +%d stat per fifth level): %zu record(s) granted, restore bank %s",
+			              static_cast<unsigned long>(optional_features), need.skill_per_fifth, need.stat_per_fifth, grants.size(), layout->restore_valid ? "valid" : "not valid");
+			return true;
+		}
+
 		// ---- the card's methods (__thiscall: this in ecx, the arguments on the stack, callee cleans) -------------
 
 		// The card remembers the device number of its last call at +0x31c (every retail method stores it).
@@ -1117,6 +1168,8 @@ namespace save_format
 			}
 			// CORE: live and cached records each carry their own capture provenance; never relabel old bits.
 			context.retained_file=kind==kind_profile?retained_profile:current.file;
+			// the campaign's heroes carry the fifth-level points of every installed key (loaded: caught up; new: the rule)
+			context.optional_features=kind==kind_campaign?level_catchup_marker(rank_costs::level_installed(),rank_costs::stat_installed()):0;
 			context.zone_captures=cached_captures;
 			context.origin=kind==kind_campaign?campaign_origin:0;
 			context.require_capture_metadata=kind==kind_campaign;
@@ -1249,6 +1302,8 @@ namespace save_format
 				pending_captures=std::move(metadata);
 				if (!add_missing_talents(result.bytes))
 				{refuse("required shared talents do not fit the native hero heap; load refused");return false;}
+				if (!catch_up_levels(result.bytes, file.info.optional_features))
+				{refuse("the save's hero records don't parse for the fifth-level catch-up; load refused");return false;}
 			}
 			std::memcpy(data, result.bytes.data() + old_envelope, capacity);
 			*size = static_cast<std::uint32_t>(capacity);
@@ -1660,6 +1715,7 @@ namespace save_format
 			context.save_sequence = current.loaded ? current.sequence : 0;
 			context.origin=campaign_origin;context.zone_captures=cached_captures;context.require_capture_metadata=true;
 			context.retained_file=current.file; // CORE: dump reflects preservation too
+			context.optional_features=level_catchup_marker(rank_costs::level_installed(),rank_costs::stat_installed());
 			const auto result = lcsave::old_stream_to_new(image, tables, context, *native_layout);
 			if (!result.ok)
 			{
@@ -1814,7 +1870,7 @@ namespace save_format
 		std::string state = !enabled ? "off" : ready == readiness::untried ? "lc (tables not loaded yet)" : ready == readiness::ok ? "lc" : "lc DISABLED: " + failure;
 		return "save format " + state + "; reads " + std::to_string(reads.load()) + "; writes " + std::to_string(write_count.load()) + "; refusals " + std::to_string(refusals.load()) +
 		       "; core captures " + std::to_string(captures_seen.load()) + "; numbered " + std::to_string(numbered_seen.load()) + "; capture failures " + std::to_string(capture_failures.load()) + "; identity resets " + std::to_string(identity_resets.load()) + "; campaign resets " + std::to_string(resets_seen.load()) + "; native completions " + std::to_string(native_loads_completed.load()) + "; W11 open; campaign writes " + (core_lifetime.may_save()?"allowed":"blocked") +
-		       "; native layout " + std::string(layout_profile.name) + "; typed registry " + (typed_registry_verified ? "verified" : "unverified") + " translated " + std::to_string(typed_translated.load()) + " nulled " + std::to_string(typed_nulled.load()) + "; imported " + std::to_string(converted.load()) + "; talents added " + std::to_string(talents_added.load()) + "; zones hashed " + std::to_string(zones_hashed.load()) +
+		       "; native layout " + std::string(layout_profile.name) + "; typed registry " + (typed_registry_verified ? "verified" : "unverified") + " translated " + std::to_string(typed_translated.load()) + " nulled " + std::to_string(typed_nulled.load()) + "; imported " + std::to_string(converted.load()) + "; talents added " + std::to_string(talents_added.load()) + "; fifth-level catch-ups " + std::to_string(levels_caught_up.load()) + "; zones hashed " + std::to_string(zones_hashed.load()) +
 		       " (" + std::to_string(zone_hash_mismatches.load()) + " differ from the tables; last " + (zone_opened_name.empty() ? "none" : zone_opened_name + " " + zone_opened_sha1) + ")" + save_trace::status();
 	}
 
