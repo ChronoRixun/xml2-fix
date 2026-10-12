@@ -222,6 +222,17 @@ namespace gameplay_agreement
   template<std::size_t N> void expect(patch_transaction::contribution& c,const std::array<limits_rules::guard,N>& guards)
   { for(const auto& g:guards)c.guards.push_back({g.va,patch_transaction::bytes_of(g.hex),g.what}); }
   std::uint32_t address_of(const void* p){return static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(p));}
+  // An optional part must never be the reason the transaction refuses for something it can know alone: a write
+  // outside its own guards would refuse the whole startup transaction (refused_unexpected), so it stays out instead.
+  bool writes_inside_own_guards(const patch_transaction::contribution& c)
+  {
+   for(const auto& w:c.writes)for(std::size_t i=0;i<w.bytes.size();++i){
+    const auto a=w.va+static_cast<std::uint32_t>(i);bool covered=false;
+    for(const auto& g:c.guards)covered=covered || (a>=g.va && a-g.va<g.bytes.size());
+    if(!covered){logger::write("online: %s writes %s outside its own guards; not installed",c.owner.c_str(),patch_transaction::hex(a).c_str());return false;}
+   }
+   return true;
+  }
   void contribute_receiver(patch_transaction::transaction& transaction,HMODULE game)
   {
    if(!retail(game,receiver_guards)){logger::write("online: host refusal receiver guard failed; a joining player's refusal is not received here");return;}
@@ -232,6 +243,7 @@ namespace gameplay_agreement
    c.publish=[]{receiver_ready=true;};
    c.abandon=[]{logger::write("online: host refusal receiver could not be installed; a joining player's refusal is not received here");};
    c.retain=c.abandon;
+   if(!writes_inside_own_guards(c))return;
    if(!transaction.add(std::move(c)))logger::write("online: host refusal receiver could not join the startup transaction");
   }
   void contribute_notice(patch_transaction::transaction& transaction,HMODULE game)
@@ -242,6 +254,7 @@ namespace gameplay_agreement
    c.publish=[]{notice_ready=true;};
    c.abandon=[]{logger::write("online: host refusal notice could not be installed; refusals are logged only");};
    c.retain=c.abandon;
+   if(!writes_inside_own_guards(c))return;
    if(!transaction.add(std::move(c)))logger::write("online: host refusal notice could not join the startup transaction");
   }
  }
@@ -282,7 +295,10 @@ namespace gameplay_agreement
   contributed_=transaction.add(std::move(c));
   // Both parts of the host's notice are optional and independent: without the receiver a joiner's own refusal
   // goes unheard (the host's refusals are still logged); without the presentation every refusal is logged only.
-  // Each joins the startup transaction only when its own guards read back as retail, so neither can refuse it.
+  // Each joins the startup transaction only when its own guards read back as retail and every byte it writes lies
+  // inside them, so a mismatch in either part leaves that part out instead of refusing startup. Once joined, a part
+  // is an ordinary contributor: a conflict with another contribution's bytes, a page that cannot be made writable or
+  // a failed readback refuses or rolls back the WHOLE transaction (and with it the LC startup), as for any other part.
   if(contributed_){contribute_receiver(transaction,game);contribute_notice(transaction,game);}
   return contributed_;
  }

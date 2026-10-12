@@ -283,6 +283,39 @@ void host_notice_tests(){
  check(cycles,"six host setup/teardown cycles each add and release exactly one host 0x1d receiver");
  jump(0x6074b0,&noop);
 }
+// Its own process (the agreement's install state is process-wide): a receiver guard mismatched at the first
+// preparation leaves only the receiver out; the agreement and the lobby notice install; the receiver joins later.
+int receiver_guard_mismatch(){
+ guards(failure_guards);guards(transport_guards);guards(receiver_guards);guards(presentation_guards);guards(game_version_rules::guards);
+ native_bytes(0x609c80,0x100);native_bytes(0x6074b0,0x75);
+ native_bytes(native_failure,0xa7);native_bytes(native_cleanup,0x10c);native_bytes(native_peer_disconnect,10);
+ const auto native_advice_rel=0x0006efc3u,native_register_rel=0x000050e1u;
+ const auto rel=[](std::uint32_t call){return *reinterpret_cast<std::uint32_t*>(at(call+1));};
+ const auto native_unregister_rel=rel(host_info_unregister_call);
+ writable(host_info_register_call+6,1);*static_cast<std::uint8_t*>(at(host_info_register_call+6))^=1; // inside the guard, outside the write
+ make_rx();check(gameplay_agreement::prepare(reinterpret_cast<HMODULE>(0x400000)) && rx(0x607000) && rx(0x608000) && rx(0x609000),
+       "receiver guard mismatched: native refusal and transport still install and every shared RX page is restored");
+ check(*static_cast<std::uint8_t*>(at(native_join))==0xe9 && *static_cast<std::uint8_t*>(at(reply_send))==0xe8,"receiver guard mismatched: refusal and transport sites are written");
+ check(rel(host_info_register_call)==native_register_rel && rel(host_info_unregister_call)==native_unregister_rel && has_log("receiver guard failed"),
+       "receiver guard mismatched: host-info registration and release stay native, and the log says the joiner's refusal is not received");
+ check(rel(host_advice_call)!=native_advice_rel,"receiver guard mismatched: the lobby notice still installs (the parts are independent)");
+ const auto installed_advice=rel(host_advice_call);
+ writable(host_info_register_call+6,1);*static_cast<std::uint8_t*>(at(host_info_register_call+6))^=1;make_rx();logger::logged.clear();
+ check(gameplay_agreement::prepare(reinterpret_cast<HMODULE>(0x400000)) && rx(0x609000) && rel(host_info_register_call)!=native_register_rel && rel(host_info_unregister_call)!=native_unregister_rel,
+       "with the receiver guard back a later preparation installs host-info registration and release in a transaction of its own");
+ check(rel(host_advice_call)==installed_advice && *static_cast<std::uint8_t*>(at(native_join))==0xe9 && !has_log("late host notice installation"),
+       "the late receiver install leaves the notice and agreement sites as they were");
+ std::printf("Receiver guard mismatch: %d failure(s)\n",failures);return failures ? 1 : 0;
+}
+void receiver_guard_child(const char* path){
+ // Run receiver_guard_mismatch in a fresh process of this test and require it to pass.
+ char self[MAX_PATH]{};GetModuleFileNameA(nullptr,self,MAX_PATH);
+ std::string command=std::string("\"")+self+"\" \""+path+"\" --receiver-guard-mismatch";
+ STARTUPINFOA si{};si.cb=sizeof si;PROCESS_INFORMATION pi{};DWORD code=1;
+ if(CreateProcessA(self,command.data(),nullptr,nullptr,TRUE,0,nullptr,nullptr,&si,&pi)){
+  WaitForSingleObject(pi.hProcess,120000);GetExitCodeProcess(pi.hProcess,&code);CloseHandle(pi.hThread);CloseHandle(pi.hProcess);}
+ check(code==0,"receiver guard mismatch (own process): only the receiver is left out and it installs later");
+}
 void runtime(){
  notice_rules();
  guards(failure_guards);guards(transport_guards);guards(receiver_guards);guards(presentation_guards);guards(game_version_rules::guards);
@@ -391,9 +424,10 @@ int main(int argc,char** argv){
  const char* path=argc>1 ? argv[1] : std::getenv("XML2_FIX_TEST_EXE");if(!path){std::puts("Requires a private retail executable for native refusal-code fixture; no game launch.");return 2;}
  std::ifstream file(path,std::ios::binary);binary.assign(std::istreambuf_iterator<char>(file),{});if(binary.size()<0x1000)return 2;
  const auto begin=reinterpret_cast<std::uintptr_t>(fixture_space);if(GetModuleHandleW(nullptr)!=reinterpret_cast<HMODULE>(0x400000) || native_request<begin || native_broadcast+16>begin+sizeof(fixture_space))return 2;
+ if(argc>2 && std::string(argv[2])=="--receiver-guard-mismatch")return receiver_guard_mismatch();
  explosive_first_hit::install(reinterpret_cast<HMODULE>(0x400000));check(!explosive_first_hit::installed() && explosive_first_hit::verified(),"actual disabled installer reports verified off");
  ini::requested=true;explosive_first_hit::install(reinterpret_cast<HMODULE>(0x400001));check(!explosive_first_hit::installed() && !explosive_first_hit::verified(),"actual failed explosion install remains unverified");
  native_bytes(0x49ab51,28);explosive_first_hit::install(reinterpret_cast<HMODULE>(0x400000));check(explosive_first_hit::installed() && explosive_first_hit::verified(),"actual explosion patch reports installed effective state");
  ini::requested=false;explosive_first_hit::install(reinterpret_cast<HMODULE>(0x400000));check(explosive_first_hit::installed(),"later INI drift cannot relabel installed code");
- runtime();std::printf("Agreement/native refusal: %d failure(s)\n",failures);return failures ? 1 : 0;
+ runtime();receiver_guard_child(path);std::printf("Agreement/native refusal: %d failure(s)\n",failures);return failures ? 1 : 0;
 }
