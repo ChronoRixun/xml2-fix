@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Restore opt-in XML1 Master Mold shield/core combat, original attack deadlines,
+  platform actions, companion behavior and core tethers through native services.
+  The builder supplies saved-stage metadata; disabled/refused installation retains
+  the native encounter fallback; see `docs/xml1-controllers.md`.
+- Register Master Mold (rule 3: installed, saved-stage bit range and a hash of the flag
+  name) and the absent turret controller (rule 4, off) in the shared gameplay-capability record. Online co-op is lockstep, so every peer runs the
+  controller; sessions use a peer-invariant hero instead of the local `_ACTIVE_HERO_`.
+  Peers with different controller state are refused. Startup refusal names an
+  unverified XML1 hook rollback instead of the network exclusion hook.
 - Added `[Limits] EntityCapacity` (port default 1, needs `[Save] Format=lc`): the entity domain grows from
   32 actor / 224 generic / 256 World handles to 32 / 768 / 1024 with contiguous ten-bit indices, so props,
   projectiles and triggers past the 224th are no longer refused without a word (docs/entity-capacity.md,

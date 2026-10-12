@@ -29,6 +29,7 @@
 #include "discord_presence.hpp"
 #include "display.hpp"
 #include "forced_teams.hpp"
+#include "mold_controller.hpp"
 #include "game_version.hpp"
 #include "gamepad_fix.hpp"
 #include "iat_hook.hpp"
@@ -238,6 +239,19 @@ namespace
 		// patch push operands of script-facing code; nothing here depends on limits or test_input (the
 		// pipe's "script" command compiles its statement when it runs, with the functions in place).
 		forced_teams::install(game);
+		mold_controller::install(game);
+		if (!game_version::startup_allowed()) return;
+		// XML1 controllers in the shared gameplay record (docs/gameplay-agreement.md): online play is lockstep, so
+		// every peer runs Master Mold's native AI update and must have the same effective controller (rule 3).
+		// No turret controller exists in this build: rule 4 is advertised as verified off.
+		// Registering a requested controller enlists the agreement even in a non-LC installation.
+		if (game_version::needs_gameplay_agreement() || mold_controller::requested())
+		{
+			const auto mold = mold_controller::capability();
+			gameplay_agreement::register_rule(gameplay_capabilities::master_mold_id, xml1_capability_rules::master_mold_revision, mold.values, mold.verified);
+			const auto turrets = xml1_capability_rules::turrets();
+			gameplay_agreement::register_rule(gameplay_capabilities::turret_controller_id, xml1_capability_rules::turret_revision, turrets.values, turrets.verified);
+		}
 		// Conversations written for XML1's engine ([Game] AutoAdvance, ReplyVoices, ReplyCursor; on by default):
 		// three code sites of the conversation system, used from the first conversation on; independent of the
 		// patches above (none of its sites or guards is anyone else's).
@@ -292,7 +306,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, const DWORD reason, LPVOID)
 		if (!game_version::startup_allowed() || !save_format::startup_allowed() || !entity_capacity::startup_allowed())
 		{
 			const std::string startup_reason = !game_version::startup_allowed()
-				? "The required LC network exclusion hook could not be installed."
+				? std::string(game_version::startup_error())
 				: !save_format::startup_allowed() ? "The required LC save/trivia hooks could not be installed.\n" + save_format::startup_error()
 				: "The entity-capacity install could not be certified.\n" + entity_capacity::startup_error();
 			logger::write("startup: refused: %s", startup_reason.c_str());

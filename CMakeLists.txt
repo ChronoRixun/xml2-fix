@@ -33,6 +33,10 @@ target_include_directories(lcsave PUBLIC src/lcsave)
 
 # The fix: a drop-in dinput.dll for the game folder.
 add_library(xml2_fix SHARED
+	src/mold_beam.cpp
+	src/mold_controller.cpp
+	src/mold_query.cpp
+	src/mold_effects.cpp
 	src/stat_help.cpp
 	src/geometry_sharing.cpp
 	src/ladder_paths.cpp
@@ -109,6 +113,10 @@ target_link_libraries(xml2_test PRIVATE xml2_fix dinput8.lib dxguid xinput ws2_3
 
 add_executable(xml2_ladder_paths_test test/ladder_paths_test.cpp)
 target_include_directories(xml2_ladder_paths_test PRIVATE src)
+
+add_executable(xml2_xml1_controllers_test test/xml1_controllers_test.cpp src/game_version.cpp)
+target_include_directories(xml2_xml1_controllers_test PRIVATE src)
+target_link_libraries(xml2_xml1_controllers_test PRIVATE ws2_32)
 
 # Pure rules; no game process or graphics.
 add_executable(xml2_objective_text_test test/objective_text_test.cpp)

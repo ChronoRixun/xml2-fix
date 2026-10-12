@@ -21,6 +21,7 @@ namespace game_version
 		bool version_verified = false;
 		bool gameplay_required = false, gameplay_verified = false;
 		void (*show_refusal)() = nullptr;
+		bool installation_unsafe = false;
 		using socket_t = SOCKET(WSAAPI*)(int,int,int);
 		socket_t real_socket = nullptr;
 		SOCKET WSAAPI guarded_socket(int family, int type, int protocol)
@@ -58,7 +59,15 @@ namespace game_version
 
 	bool startup_allowed()
 	{
-		return save_guard_rules::startup_allowed(lc_required || gameplay_required,real_socket != nullptr);
+		return !installation_unsafe && save_guard_rules::startup_allowed(lc_required || gameplay_required,real_socket != nullptr);
+	}
+	void refuse_startup() { installation_unsafe = true; }
+	const char* startup_error()
+	{
+		if (installation_unsafe)
+			return "An XML1 controller patch failed and its original game code could not be verified as restored.";
+		return lc_required ? "The required LC network exclusion hook could not be installed."
+		                   : "The required network exclusion hook for the shared gameplay agreement could not be installed.";
 	}
 
 	bool require_gameplay_agreement(HMODULE game)
@@ -76,6 +85,8 @@ namespace game_version
 	void install(const HMODULE game)
 	{
 		version_verified = false;
+		installation_unsafe = false;
+		real_socket = nullptr;
 		lc_required = save_format_rules::parse_mode(ini::text(L"Save",L"Format").value_or("")).value == save_format_rules::mode::lc;
 		gameplay_required = lc_required || ini::text(L"Game", L"ExplosiveFirstHit").has_value();
 		gameplay_verified = false;

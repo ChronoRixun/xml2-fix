@@ -43,3 +43,5 @@ GAME_TEXT_ATTR  src/save_format_rules.hpp  # Original save-status UI labels conc
 LONG_ID  src/discord_rules.hpp  # Public project Discord application identifiers documented by the integration; not personal ids.
 DISASM  test/save_capture_bridge_test.cpp  # Authored inline assembly that enters the emitted capture bridges and records the landing address; not game disassembly.
 DISASM  src/entity_transfer.cpp  # Authored C++ inline assembly bridge (the acknowledgement call sequence, described in prose above it); not a game disassembly listing.
+DISASM  src/mold_beam.cpp  # Authored register-preserving x86 callback bridge; its sole replay is a short byte-guarded stack-address instruction. No game listing or decompiled body.
+DISASM  src/mold_controller.cpp  # Authored register-preserving dispatcher bridge; replays only two short guarded state-selection instructions, with no copied game listing or decompiled body.
