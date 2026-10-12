@@ -7517,6 +7517,95 @@ namespace
 		}
 	}
 
+	// The pad bindings' tables (src/pad_bindings.cpp): the game's default action table and the three
+	// Defaults 1/2/3 preset tables must be the known 42 x 0x94 layout, and the stock presets carry no
+	// gamepad binding and lock no slot the fix writes - otherwise "reset to defaults" erases the pad
+	// layout again (issue #9). Checked against the retail XMen2.exe when a copy is at hand.
+	void check_pad_bindings_rules()
+	{
+		std::printf("pad bindings rules (the Defaults presets keep the pad layout)\n");
+
+		constexpr DWORD image_base = 0x400000;
+		constexpr DWORD default_table_va = 0x6ee1f0;
+		constexpr std::array<DWORD, 3> preset_table_vas{0x6e9918, 0x6eb160, 0x6ec9a8};
+		constexpr std::array<DWORD, 3> preset_names_vas{0x6e9940, 0x6eb188, 0x6ec9d0}; // base + 0x28: the copy loop's lea operand
+		constexpr size_t action_count = 42, action_size = 0x94, bindings_offset = 0x30, locks_offset = 0x80;
+		constexpr int players = 4, slots = 2;
+		constexpr DWORD keyboard_forward = (1 << 16) | 0x11;
+		constexpr DWORD defaults_callback_operand = 0x218941; // lea ebx, [ecx + 0x6e9940]
+
+		CHECK(default_table_va - image_base == 0x2ee1f0);
+		CHECK(preset_table_vas[1] - preset_table_vas[0] == 0x1848 && preset_table_vas[2] - preset_table_vas[1] == 0x1848);
+		CHECK(action_count * action_size == 0x1848);
+
+		if (const auto exe = game_executable())
+		{
+			const auto identity = [&](const DWORD va, const char* what) {
+				const auto at = file_offset(*exe, va - image_base);
+				CHECK(at.has_value() && *at + 2 * action_size <= exe->size());
+				if (at)
+				{
+					CHECK(exe->compare(*at, 8, std::string("Forward\0", 8)) == 0);
+					CHECK(exe->compare(*at + action_size, 9, std::string("Backward\0", 9)) == 0);
+					const DWORD forward = *reinterpret_cast<const DWORD*>(exe->data() + *at + bindings_offset);
+					CHECK(forward == keyboard_forward);
+				}
+				(void)what;
+			};
+			identity(default_table_va, "default table");
+			for (const auto va : preset_table_vas)
+			{
+				identity(va, "preset");
+			}
+
+			// The stock presets: no gamepad binding anywhere, and the same per-slot lock flags as the
+			// default table, so patch_table fills exactly the slots it fills there (player 1's slot 1,
+			// players 2-4's slot 0, both unlocked for the layout's actions).
+			const auto locks_at = file_offset(*exe, default_table_va - image_base);
+			CHECK(locks_at.has_value() && *locks_at + action_count * action_size <= exe->size());
+			for (const auto va : preset_table_vas)
+			{
+				const auto at = file_offset(*exe, va - image_base);
+				CHECK(at.has_value() && *at + action_count * action_size <= exe->size());
+				if (!at || *at + action_count * action_size > exe->size() || !locks_at)
+				{
+					continue;
+				}
+				for (size_t i = 0; i < action_count; ++i)
+				{
+					const auto* entry = exe->data() + *at + i * action_size;
+					const auto* locks = exe->data() + *locks_at + i * action_size;
+					for (int player = 0; player < players; ++player)
+					{
+						for (int slot = 0; slot < slots; ++slot)
+						{
+							const DWORD value = *reinterpret_cast<const DWORD*>(entry + bindings_offset + (player * 5 + slot) * 4);
+							CHECK((value >> 16) < 3); // keyboard, mouse or unbound: never a pad
+							CHECK(entry[locks_offset + player * 5 + slot] == locks[locks_offset + player * 5 + slot]);
+						}
+					}
+				}
+			}
+
+			// The Defaults buttons' copy loop reads the presets at base + 0x28 through this operand.
+			const auto operand = file_offset(*exe, defaults_callback_operand);
+			CHECK(operand.has_value() && *operand + 6 <= exe->size());
+			if (operand)
+			{
+				const std::uint8_t expected[] = {0x8d, 0x99, 0x40, 0x99, 0x6e, 0x00}; // lea ebx, [ecx + preset_names_vas[0]]
+				CHECK(std::memcmp(exe->data() + *operand, expected, sizeof(expected)) == 0);
+				for (size_t i = 0; i < preset_names_vas.size(); ++i)
+				{
+					CHECK(preset_names_vas[i] - preset_table_vas[i] == 0x28);
+				}
+			}
+		}
+		else
+		{
+			std::printf("  skip  no XMen2.exe to check the tables against\n");
+		}
+	}
+
 	void check_pad_prompts_rules()
 	{
 		using namespace pad_prompts_rules;
@@ -10535,6 +10624,7 @@ int main(const int argc, char** argv)
 	check_balance_rules();
 	check_melee_weapon_rules();
 	check_pad_prompts_rules();
+	check_pad_bindings_rules();
 	check_discord_rules();
 	check_discord_pipe();
 	check_mod_order();
