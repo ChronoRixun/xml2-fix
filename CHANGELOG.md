@@ -48,6 +48,14 @@
   row's. MAIN_MENU falls through to the generic handler there, whose label test (0x5c6490) sits
   half the label's local y offset higher and refocused the row below: the focus flipped on every
   move in a row's lower third, and a press there could move it before the release.
+- Tell the host why a co-op join was refused, on server-browser and Connect-by-IP joins alike. The lobby
+  draws the reason (different gameplay settings, the fix not loaded on one PC, another build) in place of its
+  advice text for a minute; in play the HUD shows it briefly. No popup, menu or input change: the host keeps
+  its session and players. Refusals now carry their reason in the native incompatibility message (0x1d);
+  the host receives it even from a player who has only queried its address. Corrects 0x18 to the querying
+  PC's game-info message (live wire order): an incompatible host is not listed and the host is told.
+  The notice clears only on a confirmed admission (the game's 0x1b follow-up), and the receiver installs
+  independently of the presentation, so a joiner's refusal is logged even where it cannot be drawn.
 
 - Keep the LC startup veto on instruction-cache flush failures and every patch protection
   restoration failure, including preflight cleanup. Stop further writes on a failed flush
