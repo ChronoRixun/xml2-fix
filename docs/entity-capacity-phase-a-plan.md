@@ -17,7 +17,7 @@ The ordered implementation gates are in section8; native/live proof remains due.
 
 **Base.** The implementation base is the 0.2.0i release head, not the pre-release
 clone the round6 verifier pinned: legends-classic `release-0.2.0` **2c95436** and
-xml2-fix `release-1.4` **a84474f** (D:/Projects/agent-work/rel-020, candidate 0.2.0i).
+xml2-fix `release-1.4` **a84474f** (candidate 0.2.0i).
 The round6 verifier assertions on builder 9569696 / native cdb4eed are superseded by
 `phaseA-impl/tools/step0_gate.py`, which re-pins to these heads.
 
