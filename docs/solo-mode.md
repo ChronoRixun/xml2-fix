@@ -57,7 +57,10 @@ refused with more than one human player, as in the original.
 
 ## Not ported (unproven PC counterparts)
 
-- The regroup predicate's attached-entity test on character+0xc0.
+- The regroup predicate's test on character+0xc0 - the handle of the entity the character stands on (set by 0x27260
+  from the floor routine 0x78640; the PC keeps it at actor+0xbc, 0x419f20) - remapped through the entity registry's
+  vt+0x24 (default.xbe 0xbef20, kept at game+0xc and 0x48d8e4): standing on an entity whose handle remaps refuses the
+  regroup. The PC counterpart of that registry call is unproven.
 - The toggle's Danger Room guard (default.xbe byte 0x4e7ab0 == 0xfd; no solo box sits in a Danger Room course).
 - The HUD's "solo" text (string ids 0x9d / 0x9e in the first game) - the voice lines play.
-- The HUD's per-hero solo marker (0x1588c0).
+- The HUD's per-hero solo marker (0x1588c0) and the automap's solo mark (0x72150).
