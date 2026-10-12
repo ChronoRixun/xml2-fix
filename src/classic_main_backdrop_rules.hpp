@@ -18,6 +18,52 @@ namespace classic_main_backdrop_rules
 	inline constexpr std::array<std::uint8_t, 9> prologue{0x53, 0x56, 0x57, 0x8b, 0x7c, 0x24, 0x10, 0x8b, 0xf1};
 	constexpr std::size_t displaced = 7;
 
+	// WinMain's main loop (0x403541: app = 0x401b00(); while (app->frame()) ...) falls through to the
+	// first teardown call, 0x5f5720, before the game releases its scenes and calls igReleaseAlchemy
+	// (0x4035c4), which frees Alchemy's memory. The room pin must be dropped at that call: a room
+	// directory still retained past it keeps the Cerebro igDx8EnvironmentMapShaders alive, so their
+	// cleanup (libIGSg +0x69b40) never clears the class's static attribute refs, and libIGSg's DLL-detach
+	// destructor (+0x69540) then decrements a ref in freed memory (access violation at +0x6955e).
+	constexpr address loop_exit_site = 0x40354a;
+	constexpr address loop_exit_call = 0x403551;
+	constexpr address loop_exit_target = 0x5f5720;
+	// call [edx+0xc]; test al,al; jne 0x403541; call 0x5f5720
+	inline constexpr std::array<std::uint8_t, 12> loop_exit_bytes{
+		0xff, 0x52, 0x0c, 0x84, 0xc0, 0x75, 0xf0, 0xe8, 0xca, 0x21, 0x1f, 0x00};
+
+	// The five bytes of `call target` placed at `from`.
+	inline std::array<std::uint8_t, 5> call_to(address from, address target)
+	{
+		const address relative = target - from - 5;
+		return {0xe8, std::uint8_t(relative), std::uint8_t(relative >> 8), std::uint8_t(relative >> 16), std::uint8_t(relative >> 24)};
+	}
+
+	// The room asset directory the hook retains. capture() says which reference to take and which to
+	// drop for a newly loaded room; close() hands back the last held one at game shutdown and refuses
+	// every later capture, so no reference outlives the engine.
+	struct room_pin
+	{
+		address held = 0;
+		bool closed = false;
+		struct step { address retain = 0, release = 0; };
+
+		step capture(address directory)
+		{
+			if (closed || !directory || directory == held) return {};
+			const step result{directory, held};
+			held = directory;
+			return result;
+		}
+
+		address close()
+		{
+			closed = true;
+			const address last = held;
+			held = 0;
+			return last;
+		}
+	};
+
 	inline bool in_scene(std::string_view current, std::string_view wanted, std::string_view model,
 	                     std::span<const std::string_view> allowed, float reflection, bool opaque)
 	{
