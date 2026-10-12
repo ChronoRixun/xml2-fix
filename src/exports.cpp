@@ -22,6 +22,7 @@
 #include "break_rule.hpp"
 #include "placement_crush.hpp"
 #include "double_heal.hpp"
+#include "xml1_capability_rules.hpp"
 #include "conversations.hpp"
 #include "confirmation_release.hpp"
 #include "explosive_first_hit.hpp"
@@ -281,6 +282,18 @@ namespace
 		placement_crush::install(game);
 		// X-Men Legends 1's packs ([Game] DoubleHeal=0): two branches of restoreHealth / restoreEnergy; no other module patches them.
 		double_heal::install(game);
+		// Both change what each peer simulates (objects broken while a zone settles; how much a pack heals): rules 11
+		// and 12 of the shared gameplay record. A requested change enlists the agreement even without LC, as rule 3.
+		if (game_version::needs_gameplay_agreement() || placement_crush::requested())
+		{
+			const auto crush = xml1_capability_rules::installed_switch(placement_crush::requested(), placement_crush::installed());
+			gameplay_agreement::register_rule(gameplay_capabilities::placement_crush_id, xml1_capability_rules::placement_crush_revision, crush.values, crush.verified);
+		}
+		if (game_version::needs_gameplay_agreement() || double_heal::requested())
+		{
+			const auto heal = xml1_capability_rules::installed_switch(double_heal::requested(), double_heal::installed());
+			gameplay_agreement::register_rule(gameplay_capabilities::double_heal_id, xml1_capability_rules::double_heal_revision, heal.values, heal.verified);
+		}
 
 		test_input::install(); // first: its screenshots need the display fix's device hook
 		display::install(game);

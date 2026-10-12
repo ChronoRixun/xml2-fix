@@ -77,4 +77,14 @@ namespace double_heal
 		const int s = state.load();
 		return std::string("double heal ") + (s == 1 ? "off" : s == -1 ? "game's own" : "unavailable");
 	}
+
+	bool requested()
+	{
+		return state.load() != -1;
+	}
+
+	bool installed()
+	{
+		return state.load() == 1;
+	}
 }

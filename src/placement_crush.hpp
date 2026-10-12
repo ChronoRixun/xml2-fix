@@ -20,4 +20,9 @@ namespace placement_crush
 
 	// For the test pipe's status: "placement crush xml1; touches refused while settling 13".
 	std::string status();
+
+	// For the shared gameplay agreement (rule 11): the key asked for xml1 (or held a value that is neither xml1 nor
+	// xml2), and whether the change is in place.
+	bool requested();
+	bool installed();
 }

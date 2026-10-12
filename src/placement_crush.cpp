@@ -19,7 +19,7 @@ namespace placement_crush
 
 		constexpr const char* as_before = "objects crush each other by the game's own rule";
 
-		std::atomic<int> state{-1}; // 1 on; -1 no key or xml2; 0 the key is xml1 but nothing could be hooked
+		std::atomic<int> state{-1}; // 1 on; -1 no key or xml2; 0 the key is xml1 (or invalid) but nothing could be hooked
 		std::atomic<unsigned> refused{0};
 		address resume = touch_resume;
 
@@ -91,6 +91,7 @@ namespace placement_crush
 		const auto chosen = parse_rule(narrow);
 		if (!chosen.error.empty())
 		{
+			state = 0; // asked for something: unverified in the gameplay agreement
 			logger::write("placement crush: [Game] PlacementCrush=%s %s - %s", narrow.c_str(), chosen.error.c_str(), as_before);
 			return;
 		}
@@ -146,5 +147,15 @@ namespace placement_crush
 	{
 		const int s = state.load();
 		return std::string("placement crush ") + (s == 1 ? "xml1" : s == -1 ? "xml2" : "unavailable") + "; touches refused while settling " + std::to_string(refused.load());
+	}
+
+	bool requested()
+	{
+		return state.load() != -1;
+	}
+
+	bool installed()
+	{
+		return state.load() == 1;
 	}
 }
