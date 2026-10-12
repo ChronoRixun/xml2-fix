@@ -94,6 +94,8 @@ namespace lcsave
 		bool xp_exempt(std::uint32_t stats_index) const;
 		// the stats entry's canonical catalogue key (for log lines), "" when the build has none at that index
 		std::string stats_key(std::uint32_t stats_index) const;
+		// the herostat entry's autospend class name, lower case ("" = none / no such index)
+		std::string hero_autospend(std::uint32_t stats_index) const;
 		std::uint32_t hero_count() const;            // herostat entries of the build
 		std::uint32_t stats_count() const;           // stats table size including the reserved index 0
 		std::uint32_t item_count() const;
@@ -106,6 +108,24 @@ namespace lcsave
 	bool load_tables(const std::wstring& build_dir, Tables& tables, std::string& error);
 	// the same with the bind files in another folder tree than the data files they describe (tests, tools)
 	bool load_tables(const std::wstring& data_dir, const std::wstring& bind_dir, Tables& tables, std::string& error);
+
+	// Data\autospend as XMen2.exe loads it (parser 0x43d0c0): the first four CharacterClass entries (0x43d18d), the
+	// first four <bonus> rules of each (0x43d373): start and rate unsigned bytes, the four deltas signed bytes in the
+	// record's order strength, speed, body, mind (= the class-bonus bytes CStats+0x10..0x13); a missing number is 0.
+	constexpr std::size_t autospend_class_limit = 4;
+	constexpr std::size_t autospend_rule_limit = 4;
+	struct AutospendRule
+	{
+		std::uint8_t start = 0;
+		std::uint8_t rate = 0;
+		std::int8_t delta[4]{};
+	};
+	struct AutospendClass
+	{
+		std::string name;              // lower case
+		std::vector<AutospendRule> rules;
+	};
+	bool read_autospend(const std::wstring& build_dir, std::vector<AutospendClass>& out, std::string& error);
 
 	struct Result
 	{
