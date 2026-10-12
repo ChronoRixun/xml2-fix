@@ -12,7 +12,9 @@ mod's `xml2-fix.ini` asks for it (the port's builder sets it all).
 - Pads: *Defaults 1/2/3* in the controls menu keep the pad layout (they used to drop player 1's pad bindings);
   `[Input] CutsceneMouse` (on by default): in a cinematic the mouse no longer outlines or moves heroes.
 - `[Game] RankCosts`, `LevelSkillPoints=xml1`, `LevelStatPoints=xml1`: X-Men Legends I's 2-point skill ranks and its
-  skill and stat points per level ([details](docs/rank-costs.md)).
+  skill and stat points per level ([details](docs/rank-costs.md)). A campaign saved before the keys were installed gets
+  the fifth-level points its heroes missed once, on its first load (1 skill and 4 stat points per fifth level each
+  hero has processed); the next save records it in two optional header bits, so it never happens twice.
 - `[Game] Xml1Multipart`: breakable parts - Juggernaut's helmet, the Sentinels' arms ([details](docs/multipart.md)).
 - `[Game] X1Leader`: the first game's leaders (no hero flinch from their projectiles, their drop rule).
 - `[Game] SoloMode`: the first game's solo mode at its gaps and bridges ([details](docs/solo-mode.md)).

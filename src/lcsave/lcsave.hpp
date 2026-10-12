@@ -89,6 +89,11 @@ namespace lcsave
 		// counts the engine side compares with its live tables (SPEC 3.5); 0 when not loaded
 		std::uint32_t catalogue_revision() const;
 		std::uint32_t content_version() const;       // the era model's reference content version
+		// the build's herostat entry at stats index `stats_index` is xpexempt (XMen2.exe's level processing 0x4bbae0
+		// returns before giving anything: CStats+0x2ad bit 0x20); false for an index the herostat doesn't have
+		bool xp_exempt(std::uint32_t stats_index) const;
+		// the stats entry's canonical catalogue key (for log lines), "" when the build has none at that index
+		std::string stats_key(std::uint32_t stats_index) const;
 		std::uint32_t hero_count() const;            // herostat entries of the build
 		std::uint32_t stats_count() const;           // stats table size including the reserved index 0
 		std::uint32_t item_count() const;
@@ -209,6 +214,10 @@ namespace lcsave
 		std::vector<ZoneCaptureMetadata> zone_captures;
 		bool require_capture_metadata = false;
 		std::vector<std::uint8_t> retained_file;
+		// header optional-feature bits the caller vouches for (SPEC-new-save 1.1, "ignored when unknown"); bit 0 (KEYS)
+		// is the writer's own. XML2 Fix sets bit 1 / bit 2 while [Game] LevelSkillPoints / LevelStatPoints=xml1 is
+		// installed (save_format_rules.hpp, the fifth-level catch-up).
+		std::uint32_t optional_features = 0;
 	};
 
 	// the engine's stream (the whole old slot image, or the 0x2fc00 payload alone) -> LC campaign file, numbered
