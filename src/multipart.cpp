@@ -7,6 +7,7 @@
 #include "xml1_hook_memory.hpp"
 #include "xml1_hook_transaction.hpp"
 #include <array>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -48,7 +49,7 @@ constexpr std::array<u32,6> brain_native{0x517370,0x517370,0x51d610,0x51d880,0x5
 
 struct names { std::string death,loop,effect_bone,bone,hide; };
 struct record_data { multipart_rules::parts parts; std::array<names,multipart_rules::max_parts> text; bool any=false; };
-struct instance { u32 tpl=0; void* actor=nullptr; multipart_rules::state state; };
+struct instance { u32 tpl=0; void* actor=nullptr; multipart_rules::state state; std::array<float,multipart_rules::max_parts> loop_at{}; };
 
 std::unordered_map<u32,record_data> templates;
 std::unordered_map<u32,instance> instances;
@@ -81,20 +82,37 @@ void segments(void* rec,void* skin,int part,int j,bool swapped){
 }
 // spawnEffectBone's path (0x4a5360): load the effect (CFxManager vt+0x1c, flags 0xb), resolve the bolt name
 // (0x575da0), take the bone's transform (0x41d710) and spawn attached to the actor (CFxManager vt+0x34).
-void spawn_effect(void* actor,const std::string& effect,const std::string& bone){
-    if(effect.empty()||bone.empty())return;
+u32 spawn_effect(void* actor,const std::string& effect,const std::string& bone){
+    if(effect.empty()||bone.empty())return 0;
     auto* fx=fn<void*(__cdecl*)()>(0x407750)();
     const void* table=at<const void*>(fx,0);
     const u32 handle=at<u32(__fastcall*)(void*,void*,const char*,int)>(table,0x1c)(fx,nullptr,effect.c_str(),0xb);
-    if(!handle)return;
+    if(!handle)return 0;
     char found=0;
     const int bolt=fn<int(__cdecl*)(const char*,char*)>(0x575da0)(bone.c_str(),&found);
-    if(found!=1)return;
+    if(found!=1)return 0;
     float position[3]{},direction[3]{};
-    if(fn<char(__fastcall*)(void*,void*,int,float*,float*,int,int)>(0x41d710)(actor,nullptr,bolt,position,direction,0,1)!=1)return;
+    if(fn<char(__fastcall*)(void*,void*,int,float*,float*,int,int)>(0x41d710)(actor,nullptr,bolt,position,direction,0,1)!=1)return 0;
     at<void(__fastcall*)(void*,void*,u32,float*,float*,u32,int,const char*,float)>(table,0x34)(
         fx,nullptr,handle,position,direction,at<u32>(actor,0x1c),0,bone.c_str(),-1.f);
+    return handle;
 }
+float now(){return fn<float(__cdecl*)()>(0x45fe60)();}
+// The XBE's effect length (effect manager vt+0x24 = 0x184f0 -> 0x25ee0): LoopTime + random * RandLoopTime of the
+// loaded effect, 0.3 for a handle that is gone. XMen2.exe keeps the same root record (0x44 bytes from the effect
+// store at manager 0x4078d0 + 0x4874; LoopTime +0x34, RandLoopTime +0x38, PersistLoop +0x3c - parser 0x4182c0,
+// reader 0x418d50), handle checked by 0x405100.
+float loop_time(u32 effect){
+    auto* store=reinterpret_cast<unsigned char*>(fn<void*(__cdecl*)()>(0x4078d0)())+0x4874;
+    if(!effect||(fn<u32(__fastcall*)(void*,void*,u32)>(0x405100)(store,nullptr,effect)&0xff)==0)return .3f;
+    const auto* rec=store+(at<u32>(store,0x419c)&effect)*0x44;
+    float t=at<float>(rec,0x34);
+    const float spread=at<float>(rec,0x38);
+    if(spread!=0.f)t+=spread*fn<float(__cdecl*)(unsigned char)>(0x560190)(1);
+    return t;
+}
+// The bolt table's first name (0x6e25f0[0]): where the XBE re-spawns a loop when no part is current (bone 0).
+const char* first_bolt(){return at<const char*>(reinterpret_cast<const void*>(0x6e25f0),0);}
 int last_roll=-1;
 int roll(){last_roll=fn<int(__cdecl*)(int,int,int)>(0x5601e0)(0,2,1);return last_roll;}
 
@@ -127,6 +145,10 @@ const record_data* data_of(u32 h,u32* tpl=nullptr){
     if(t==templates.end()||!t->second.any)return nullptr;
     if(tpl)*tpl=key;
     return &t->second;
+}
+const record_data* data_of_instance(const instance& in){
+    auto t=templates.find(in.tpl);
+    return t==templates.end()||!t->second.any?nullptr:&t->second;
 }
 void __fastcall apply_hook(void* mgr,void* edx,u32 h,void* skin,u32 menu){
     real_apply(mgr,edx,h,skin,menu);
@@ -163,7 +185,7 @@ void break_part(instance& in,const record_data& d,u32 inst,int k){
     if(rec)for(int j=0;j<2;++j)segments(rec,static_cast<unsigned char*>(in.actor)+0x1cc,k,j,false);
     const auto& t=d.text[k];
     spawn_effect(in.actor,t.death,t.effect_bone);
-    spawn_effect(in.actor,t.loop,t.effect_bone);
+    if(const u32 loop=spawn_effect(in.actor,t.loop,t.effect_bone))in.loop_at[k]=now()+loop_time(loop);
     logger::write("multipart: actor %08X part %d broke (effect %s on %s, attacks disabled %X)",at<u32>(in.actor,0x1c),k+1,
         t.death.c_str(),t.effect_bone.c_str(),in.state.disabled);
 }
@@ -222,6 +244,26 @@ void* __cdecl segment_hook(void* args){
         }
     return result;
 }
+// 0x88aa0 (from the actor update 0x3ae60): a broken part's loopEffect is spawned again each time it ends - at the
+// CURRENT part's bone (bone 0 when none), not at the part that broke - for as long as the actor lives.
+void tick_loops(instance& in){
+    const auto* d=data_of_instance(in);
+    if(!d)return;
+    float t=-1;
+    for(int k=0;k<d->parts.count;++k){
+        if(in.loop_at[k]<=0.f||d->text[k].loop.empty())continue;
+        if(t<0)t=now();
+        if(t<=in.loop_at[k])continue;
+        const std::string bone=in.state.current>0?d->text[in.state.current-1].bone:std::string(first_bolt()?first_bolt():"");
+        const u32 loop=spawn_effect(in.actor,d->text[k].loop,bone);
+        in.loop_at[k]=t+loop_time(loop);
+        if(trace){
+            char key[48];std::snprintf(key,sizeof key,"multipart-loop-%08X-%d",at<u32>(in.actor,0x1c),k);
+            logger::write_once(key,"multipart: actor %08X part %d loop %s re-spawned on %s (handle %08X, next in %.2f s)",
+                at<u32>(in.actor,0x1c),k+1,d->text[k].loop.c_str(),bone.c_str(),loop,in.loop_at[k]-t);
+        }
+    }
+}
 template<std::size_t I> u32 __fastcall brain_hook(void* brain,void* edx,void* actor,u32* output){
     const u32 result=real_brain[I](brain,edx,actor,output);
     if(!actors.empty()&&output){
@@ -229,6 +271,7 @@ template<std::size_t I> u32 __fastcall brain_hook(void* brain,void* edx,void* ac
         if(a!=actors.end()){
             auto i=instances.find(a->second);
             if(i!=instances.end()){
+                tick_loops(i->second);
                 const u32 before[2]{output[0],output[1]};
                 multipart_rules::filter_buttons(i->second.state.disabled,output);
                 if(trace&&(before[0]!=output[0]||before[1]!=output[1]))
@@ -254,7 +297,7 @@ void install(HMODULE game){
     if(!was_requested)return;
     trace=ini::flag(L"Test",L"MultipartTrace",false);
     if(reinterpret_cast<std::uintptr_t>(game)!=limits_rules::image_base){logger::write("multipart: image isn't retail; native parts retained");return;}
-    constexpr std::array<limits_rules::guard,18> guards{{
+    constexpr std::array<limits_rules::guard,22> guards{{
         {0x48d1f0,"8a0de0c47200b8","multipart manager getter"},
         {0x48ca50,"568b74240885f6744c8b81e0","multipart record lookup"},
         {0x48c700,"83ec68a1f8386f0053555657","multipart segment hide/show"},
@@ -272,7 +315,11 @@ void install(HMODULE game){
         {0x48d190,"568b74240885f674408b81e0","multipart remove"},
         {0x4a1700,"83ec1c568b74242856e82e0c","entity name lookup"},
         {0x4654b0,"568bf1e8682a06008b16518b","entity handle resolve"},
-        {0x4d5830,"8b511c33c085d2740d568b74","script argument getter"}}};
+        {0x4d5830,"8b511c33c085d2740d568b74","script argument getter"},
+        {0x45fe60,"8b0d348471008b01ffa060010000","game clock"},
+        {0x4078d0,"a13c3c6f0085c07562566a0b","effect store getter"},
+        {0x405100,"8b442404568bf18b969c4100","effect handle check"},
+        {0x560190,"8a44240484c07405e9f3feffffe93eff","native random stream"}}};
     for(const auto& g:guards)
         if(!limits_rules::matches(reinterpret_cast<const unsigned char*>(g.va),g.hex)){
             logger::write("multipart: guard failed at %08X (%s); native parts retained",g.va,g.what);return;}
