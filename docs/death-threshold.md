@@ -67,6 +67,17 @@ moves to "below 1" with the death test, so it still holds a boss at 1 instead of
 difference); a pain cap, invulnerability and the 1,000,000 / direct-damage exceptions are decided before the death test
 and are untouched.
 
+**A maximum health below 1.** XML1 reads an entity's `health` as a float and keeps its maximum as a whole number
+(default.xbe 0x9335a); the death test runs only in the damage function, never in a heal, on both engines. An entity
+authored with a health above 0 and below 1 therefore dies on its first hit in XML1 and with the rule, and a heal
+(clamped to the maximum by the setter, 0x41c4e0) never kills it. The port's data has no such entity (builder validator,
+SPEC 63.6).
+
+**Death drops.** The rule does not touch the drop: the bridge only changes a health above 0 to 0, and the death
+branch then runs as XMen2.exe's. A keycard dropped by an officer killed while he hangs high on a door can be thrown
+sideways by the corpse's collision; that happens with the released 1.4.0 DLL too (fast-sampled in play: card at
+(631.5, 1419.9) after a kill at height 55.6), and with this DLL with the rule off.
+
 ## Multiplayer agreement
 
 Online play is lockstep, so when an entity dies is shared gameplay: the rule is entry ID 9, revision 1, of the
