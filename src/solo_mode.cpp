@@ -25,6 +25,8 @@
 //   0x51dc10 hero idle handler vt+8 [0xf2610]: returns 0 at once for a solo character.
 //   0x526960 the follow-me command (AI manager vt+0x1c0 0x525330) [0xfb010, from 0xf9a50]: ignored for a solo
 //            character.
+//   0x50f598 the hurt hero's call for help (0x50f520, from 0x5125a0) [0x107920 at 0x1079ac]: a solo character skips
+//            it (its timer was due), as the original returns there.
 //   0x425982 the controller update 0x425500 [0x36011 in 0x359f0]: the hero's own selection button held 0.5 s.
 // Regroup predicate (default.xbe 0x34bb0): the hero's own +0x3d8 bit 2 refuses; every living, seated peer of the
 // hero's controller group must be reachable through the hero's navigator (+0x3e8; reset vt+4, query
@@ -269,6 +271,7 @@ namespace solo_mode
 		u32 h5_native = 0x51dc17;
 		u32 h6_native = 0x526967;
 		u32 h7_timer = 0x425937, h7_next = 0x42599e;
+		u32 h8_callee = 0x504470, h8_native = 0x50f59f, h8_return = 0x50f972;
 
 		__declspec(naked) void h1_stub()
 		{
@@ -442,6 +445,28 @@ namespace solo_mode
 			}
 		}
 
+		// 0x50f598: `mov ecx, esi; call 0x504470` after the call-for-help timer was found due.
+		__declspec(naked) void h8_stub()
+		{
+			__asm {
+				pushfd
+				pushad
+				push dword ptr [esi + 0x10]
+				call solo_one
+				add esp, 4
+				mov dword ptr [verdict], eax
+				popad
+				popfd
+				cmp dword ptr [verdict], 0
+				jnz solo
+				mov ecx, esi
+				call dword ptr [h8_callee]
+				jmp dword ptr [h8_native]
+			solo:
+				jmp dword ptr [h8_return]
+			}
+		}
+
 		struct site
 		{
 			u32 va;
@@ -524,7 +549,7 @@ namespace solo_mode
 			logger::write("solo mode: XMen2.exe isn't at 0x400000 - not installed, the native AI follows as before");
 			return;
 		}
-		constexpr std::array<limits_rules::guard, 20> guards{{
+		constexpr std::array<limits_rules::guard, 22> guards{{
 			{0x51ee0e, "0f89160300008a85d8030000b30484c374168b078bcfff905401000032c05f5e5d5b83c428c20c00", "hero idle handler: formation follow"},
 			{0x51ebc6, "f680b4020000400f85f8010000a008b7700084c00f85eb010000", "hero idle handler: bridge power"},
 			{0x50b8c3, "0f8470040000f687d80300000474178b4e108b01ff905401000032c05f5e5d5b83c424c20400", "follow movement"},
@@ -544,7 +569,9 @@ namespace solo_mode
 			{0x425978, "38b9700033c03bc8750a3b5cac387516ebad33c0898638b97000898690b97000", "controller update: held hero button"},
 			{0x4457e0, "64a1000000008a0dac7671006aff", "camera getter"},
 			{0x684e3c, "a0034400", "camera vt+0x178 (on-screen test)"},
-			{0x4403a0, "8b44240483ec0c81c10c020000", "camera on-screen test"}}};
+			{0x4403a0, "8b44240483ec0c81c10c020000", "camera on-screen test"},
+			{0x50f581, "d986d0010000d89e50050000dfe0f6c4050f8ada0300008bcee8d14effffd98650050000", "call for help: timer and next step"},
+			{0x50f972, "5f5e5d5b59c20400", "call for help: return"}}};
 		for (const auto& g : guards)
 		{
 			if (!retail(g))
@@ -553,14 +580,15 @@ namespace solo_mode
 				return;
 			}
 		}
-		const std::array<site, 7> sites{{
+		const std::array<site, 8> sites{{
 			{0x51ee14, "8a85d8030000b30484c37416", reinterpret_cast<const void*>(&h1_stub), "formation follow"},
 			{0x51ebd3, "a008b7700084c00f85eb010000", reinterpret_cast<const void*>(&h2_stub), "bridge power"},
 			{0x50b8c9, "f687d8030000047417", reinterpret_cast<const void*>(&h3_stub), "follow movement"},
 			{0x50c29e, "85ff0f84ad020000", reinterpret_cast<const void*>(&h4_stub), "follow movement (formation slot)"},
 			{0x51dc10, "83ec3053555657", reinterpret_cast<const void*>(&h5_stub), "assist step"},
 			{0x526960, "83ec3853555657", reinterpret_cast<const void*>(&h6_stub), "follow-me command"},
-			{0x425982, "3b5cac387516ebad", reinterpret_cast<const void*>(&h7_stub), "held hero button"}}};
+			{0x425982, "3b5cac387516ebad", reinterpret_cast<const void*>(&h7_stub), "held hero button"},
+			{0x50f598, "8bcee8d14effff", reinterpret_cast<const void*>(&h8_stub), "call for help"}}};
 		std::vector<xml1_hook_transaction::patch> writes;
 		for (const auto& s : sites) writes.push_back(jump(s));
 		xml1_hook_transaction::memory memory;
@@ -568,7 +596,7 @@ namespace solo_mode
 		if (xml1_hook_transaction::apply(memory, writes, &safe))
 		{
 			sites_installed = true;
-			logger::write("solo mode: installed (6 AI sites and the held hero button; setSoloMode, automatic regroup 1.5 s / 1.0 s)");
+			logger::write("solo mode: installed (7 AI sites and the held hero button; setSoloMode, automatic regroup 1.5 s / 1.0 s)");
 		}
 		else if (safe)
 		{
