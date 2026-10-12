@@ -42,6 +42,7 @@
 #include "classic_main_backdrop.hpp"
 #include "classic_main_panels.hpp"
 #include "danger_room_gate.hpp"
+#include "revival_cost.hpp"
 #include "mod_loader.hpp"
 #include "new_game.hpp"
 #include "net_trace.hpp"
@@ -220,6 +221,8 @@ namespace
 		// An Xtraction Point's Xtract choice ([Game] Xtract=0): two bytes in extractionPoint's own
 		// code, used from the first Xtraction Point on.
 		xtract::install(game);
+		// The first game's revival price ([Game] RevivalCost=xml1): a jump over 0x4b8830's first instruction.
+		revival_cost::install(game);
 		// X-Men Legends 1's level table, cap and kill XP. Here, in DllMain, before the exe's entry point: the game
 		// first asks for a level's XP (0x448a90, which builds XML2's table on that call) when it loads the herostat at
 		// start-up (0x4ba1d9, every hero's starting level), and its first kill, level check or XP bar come later still,
@@ -255,6 +258,11 @@ namespace
 			const auto turrets = xml1_capability_rules::turrets();
 			gameplay_agreement::register_rule(gameplay_capabilities::turret_controller_id, xml1_capability_rules::turret_revision, turrets.values, turrets.verified);
 		}
+		// The Xtraction menus are built by every peer from its own script run and driven by the activator's input, and
+		// the revival price is debited by every peer: the option lists and the price must be the same everywhere (rule 10).
+		if (game_version::needs_gameplay_agreement() || xtract::requested() || revival_cost::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::xtraction_services_id, gameplay_capabilities::xtraction_services_revision,
+			                                  xtract::capability(revival_cost::installed()), xtract::verified() && revival_cost::verified());
 		// Conversations written for XML1's engine ([Game] AutoAdvance, ReplyVoices, ReplyCursor; on by default):
 		// three code sites of the conversation system, used from the first conversation on; independent of the
 		// patches above (none of its sites or guards is anyone else's).

@@ -16,6 +16,24 @@ independently of whether the option hook is enabled. A builder that passes the b
 | 2 | Healer (2004) | the bit is set and `healer` is in the campaign | `shopMenu('item')` |
 | 4 | Load (2006) | the bit is set (the builder: every first-game point) | `saveloadProcess(3)` |
 | 8 | Danger Room (2003) | the bit is set and `storm` is in the campaign | `dangerRoomMenu()` |
+| 16 | (Forge's rule) | with bit 1: Forge also needs `forge` in the campaign, the first game's test (without it, 1.4.0's builder permission alone) | |
+| 32 | (no Change Team) | a lite point whose first flag is false: the native Change Team is skipped (the Xtract skip's rel8 at 0x4a6c7b points past it, to the Save add 0x4a6cf0, for this menu only) | |
+
+## Online play
+
+The first game had no network play. XMen2.exe's own rules are kept: the point menu belongs to the hero who opened it,
+every peer builds it from its own script run and follows the activator's input; XML2's hub Danger Room terminals and
+shops (`dangerRoomMenu()`, `shopMenu`) open online for host and joiner alike, so Danger Room, Healer and Forge stay as
+offered. XMen2.exe's pause menu skips Load while more than one player is connected (CSaveLoad's own test,
+0x4aebb6-0x4aebde): the point's Load is added greyed then (never removed, so every peer keeps the same option
+indices). Because the option list and the revival price must match on every peer, both are rule 10 of the shared
+gameplay agreement ([gameplay-agreement.md](gameplay-agreement.md)).
+
+## Revival price
+
+`[Game] RevivalCost=xml1` jumps over 0x4b8830's first instruction to the first game's price, 200 * f * f, f the
+highest level on the registry's roster (0x449960; default.xbe 0xaf6b0 / 0x54cb0). Retail is max(200, 2 * level^2)
+of the revived hero. Guards: the function's 26 bytes, 0x449960's prologue, the registry getter.
 
 Options are appended in the first game's order (Load, Danger Room, Healer, Forge) after the native Save.
 "In the campaign" is the hero registry's per-save character bit (registry `0x44b8f0`, vt+0x3c name lookup,

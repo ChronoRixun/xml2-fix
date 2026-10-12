@@ -92,6 +92,7 @@
 #include "xtract_rules.hpp"
 #include "xtraction_shop_rules.hpp"
 #include "danger_room_gate_rules.hpp"
+#include "revival_cost_rules.hpp"
 
 #include <algorithm>
 #include <array>
@@ -5773,16 +5774,27 @@ namespace
 			CHECK(load_o.service == load && dr_o.service == danger_room && healer_o.service == healer && forge_o.service == forge);
 			CHECK(load_o.label == 2006 && dr_o.label == 2003 && healer_o.label == 2004 && forge_o.label == 2005);
 			CHECK(!offered(true, 1, load_o, true) && !offered(true, 1, dr_o, true) && !offered(true, 1, healer_o, true));
-			CHECK(offered(true, 1, forge_o, false));
+			CHECK(offered(true, 1, forge_o, false));                     // 1.4.0 builds: Forge on the builder's permission
+			CHECK(!offered(true, forge | forge_campaign, forge_o, false) && offered(true, forge | forge_campaign, forge_o, true));
+			CHECK(!needs_campaign(forge, forge_o) && needs_campaign(forge | forge_campaign, forge_o) && needs_campaign(0, healer_o));
+			CHECK(capability == 0x3f && (capability & no_change_team) && (capability & forge_campaign));
+			CHECK(!load_disabled(false, 4) && !load_disabled(true, 1) && load_disabled(true, 2));
+			CHECK(0x4a6c7a + 2 + to_save == 0x4a6cf0 && 0x4a6c7a + 2 + to_change_team == 0x4a6ca9);
 			CHECK(!offered(false, 0xf, load_o, true) && !offered(false, 0xf, forge_o, true));
 			CHECK(offered(true, load, load_o, false));                    // Load needs no character
 			CHECK(!offered(true, danger_room, dr_o, false) && offered(true, danger_room, dr_o, true));
 			CHECK(!offered(true, healer, healer_o, false) && offered(true, healer, healer_o, true));
 			CHECK(!offered(true, healer | load | forge, dr_o, true));    // a lite point without its Danger Room flag
-			CHECK(std::string_view(dr_o.campaign) == "storm" && std::string_view(healer_o.campaign) == "healer" && !forge_o.campaign && !load_o.campaign);
+			CHECK(std::string_view(dr_o.campaign) == "storm" && std::string_view(healer_o.campaign) == "healer" && std::string_view(forge_o.campaign) == "forge" && !load_o.campaign);
 			int bits = 0;
 			for (const auto& o : options) { CHECK((bits & o.service) == 0); bits |= o.service; }
 			CHECK(bits == 0xf);
+			CHECK(revival_cost_rules::original_price(1) == 200 && revival_cost_rules::original_price(10) == 20000);
+			CHECK(revival_cost_rules::retail_price(1) == 200 && revival_cost_rules::retail_price(10) == 200 && revival_cost_rules::retail_price(20) == 800);
+			const auto jmp = revival_cost_rules::jump_to(0x10001000);
+			std::uint32_t rel = 0;
+			std::memcpy(&rel, jmp.data() + 1, 4);
+			CHECK(jmp[0] == 0xe9 && revival_cost_rules::cost + 5 + rel == 0x10001000);
 		}
 		{
 			using namespace danger_room_gate_rules;
@@ -5834,6 +5846,8 @@ namespace
 		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
 		CHECK(mismatch == nullptr);
 		CHECK(std::memcmp(at(choice_block), retail_op.data(), retail_op.size()) == 0);
+		for (const auto& g : xtraction_shop_rules::online_guards) CHECK(limits_rules::matches(at(g.va), g.hex));
+		for (const auto& g : revival_cost_rules::guards) CHECK(limits_rules::matches(at(g.va), g.hex));
 		for (const auto& g : danger_room_gate_rules::guards)
 		{
 			CHECK(limits_rules::matches(at(g.va), g.hex));

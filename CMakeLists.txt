@@ -69,6 +69,7 @@ add_library(xml2_fix SHARED
 	src/classic_main_backdrop.cpp
 	src/classic_main_panels.cpp
 	src/danger_room_gate.cpp
+	src/revival_cost.cpp
 	src/review_menu.cpp
 	src/personal_item_text.cpp
 	src/xtract.cpp
