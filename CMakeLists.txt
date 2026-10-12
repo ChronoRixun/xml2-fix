@@ -76,6 +76,7 @@ add_library(xml2_fix SHARED
 	src/gameplay_agreement.cpp
 	src/patch_transaction.cpp
 	src/explosive_first_hit.cpp
+	src/rank_costs.cpp
 	src/confirmation_release.cpp
 	src/objective_text.cpp
 	src/xp_curve.cpp
@@ -268,6 +269,12 @@ target_link_options(xml2_entity_transfer_test PRIVATE /BASE:0x400000 /DYNAMICBAS
 add_executable(xml2_save_capture_bridge_test test/save_capture_bridge_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
 target_include_directories(xml2_save_capture_bridge_test PRIVATE src)
 target_link_options(xml2_save_capture_bridge_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# [Game] RankCosts: the cost rules, and the production install + stubs executed at the retail addresses against
+# invented talents; an optional executable on the command line checks every guard and site against retail bytes.
+add_executable(xml2_rank_costs_test test/rank_costs_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/rank_costs.cpp)
+target_include_directories(xml2_rank_costs_test PRIVATE src)
+target_link_options(xml2_rank_costs_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
 # The entity-capacity install's game-free decisions: ledger shape and binding, allocator ring, save claim, transfer
 # bounds, startup quiescence, layout contract.

@@ -31,5 +31,9 @@ inline registration master_mold(bool requested,bool installed,std::string_view f
 // No turret scanner/weapon controller exists in this build. Revision 1 always
 // advertises verified off; a future controller registers its own revision/values.
 constexpr std::uint16_t turret_revision=1;
+
+// Skill rank costs (rank_costs.cpp, ID 5) revision 1: values {installed, highest cost the data may give, 0, 0}. The
+// costs themselves are the build's talent data, which [Online] ContentFingerprint already makes equal on both peers.
+constexpr std::uint16_t rank_costs_revision=1;
 inline registration turrets(){ return {{0,0,0,0},true}; }
 }

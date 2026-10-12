@@ -88,7 +88,7 @@ namespace game_version
 		installation_unsafe = false;
 		real_socket = nullptr;
 		lc_required = save_format_rules::parse_mode(ini::text(L"Save",L"Format").value_or("")).value == save_format_rules::mode::lc;
-		gameplay_required = lc_required || ini::text(L"Game", L"ExplosiveFirstHit").has_value();
+		gameplay_required = lc_required || ini::text(L"Game", L"ExplosiveFirstHit").has_value() || ini::text(L"Game", L"RankCosts").has_value();
 		gameplay_verified = false;
 		if (lc_required || gameplay_required)
 		{

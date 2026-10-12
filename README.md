@@ -418,6 +418,7 @@ ReplyVoices=1   ; a chosen reply's voice plays out before its answer (on by defa
 ReplyCursor=1   ; a reply menu come back to keeps a reply highlighted (on by default; the game's clamp lost it)
 ConfirmationRelease=0 ; opt-in: a popup's accept binding must be released before it can answer another popup
 ExplosiveFirstHit=1   ; an explosion is a new attack for the victim its projectile already hit (X-Men Legends I's rule)
+RankCosts=1           ; a talent rank costs its <level cost> skill points (X-Men Legends I's Xtreme / Legend ranks: 2)
 Xml1MasterMold=1      ; X-Men Legends I's Master Mold fight: shield, cores, platform and floor attacks (needs Xml1MoldStage)
 Xml1MoldStage=x1v02:1:5   ; the saved flag that holds the fight's stage, as flag:first_bit:width (the port's builder writes it)
 
@@ -607,6 +608,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `ObjectiveDescriptions` | `0` | `1`: mission `updatedescription` appears in the journal while the objective is complete ([details](docs/objective-descriptions.md)) |
 | `GeometrySharingBlendIndices` | `0` | `1`: skinned models share geometry only when their packed blend indices match too ([details](#geometry-sharing)) |
 | `ExplosiveFirstHit` | `0` | `1`: an explosion is a new attack for the victim its projectile already hit, as in X-Men Legends I ([details](docs/explosive-first-hit.md)) |
+| `RankCosts` | `0` | `1`: a talent rank costs the `cost` of its `<level>` (1 without one) when it is bought, refunded, auto-spent, respecced or lost with a level, and the skills screen offers it only when the hero can pay, as in X-Men Legends I ([details](docs/rank-costs.md)) |
 | `ClassicMainBackdrop` | `0` | `1`: the classic main menu's Cerebro room is drawn with its original bright textures ([details](#classic-main-menu-backdrop)) |
 | `ClassicMainPanelBounds` | `0` | `1`: the classic main menu's buttons answer the mouse over their whole visible panels ([details](#classic-main-menu-backdrop)) |
 | `Xml1MasterMold` | `0` | `1`: X-Men Legends I's Master Mold fight; needs `Xml1MoldStage` ([details](docs/xml1-controllers.md)) |
