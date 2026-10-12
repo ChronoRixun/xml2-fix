@@ -35,6 +35,7 @@ target_include_directories(lcsave PUBLIC src/lcsave)
 add_library(xml2_fix SHARED
 	src/mold_beam.cpp
 	src/mold_controller.cpp
+	src/multipart.cpp
 	src/mold_query.cpp
 	src/mold_effects.cpp
 	src/stat_help.cpp
@@ -113,6 +114,9 @@ add_executable(xml2_test test/xml2_test.cpp src/frame_capture.cpp src/local_ip.c
 target_compile_definitions(xml2_test PRIVATE _WINSOCK_DEPRECATED_NO_WARNINGS)
 target_include_directories(xml2_test PRIVATE src) # ini_rules.hpp, display_rules.hpp, online_rules.hpp, local_ip_rules.hpp, frame_rate_rules.hpp, options_menu_rules.hpp, resolution_rules.hpp, limits_rules.hpp, forced_teams_rules.hpp, conversations_rules.hpp, postgame_rules.hpp, main_menu_rules.hpp, review_menu_rules.hpp, xp_curve_rules.hpp, balance_rules.hpp, break_rule_rules.hpp, window_title_rules.hpp, game_version_rules.hpp, pad_prompts_rules.hpp, test_input_rules.hpp, pad_input_rules.hpp, virtual_pad_rules.hpp, discord_rules.hpp, mod_order.hpp, image_file.hpp: the decisions, checked without the game
 target_link_libraries(xml2_test PRIVATE xml2_fix dinput8.lib dxguid xinput ws2_32 winmm iphlpapi) # dinput8.lib: only for c_dfDIJoystick(2); winmm: timeBeginPeriod in the present timing
+
+add_executable(xml2_multipart_test test/multipart_test.cpp)
+target_include_directories(xml2_multipart_test PRIVATE src)
 
 add_executable(xml2_ladder_paths_test test/ladder_paths_test.cpp)
 target_include_directories(xml2_ladder_paths_test PRIVATE src)
@@ -267,6 +271,11 @@ END
 add_executable(xml2_entity_transfer_test test/entity_transfer_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/entity_transfer.cpp)
 target_include_directories(xml2_entity_transfer_test PRIVATE src)
 target_link_options(xml2_entity_transfer_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# multipart::install against the retail image (review cases: invalid table operand, foreign setSegmentVisible handler,
+# relocated table, changed guard) and the loop length's generator draw. SKIPPED without XML2_FIX_TEST_EXE.
+add_executable(xml2_multipart_install_test test/multipart_install_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_multipart_install_test PRIVATE src)
+target_link_options(xml2_multipart_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 # The save-core capture bridges executed as emitted under the retail and E10A2 profiles (Phase A, review P1).
 add_executable(xml2_save_capture_bridge_test test/save_capture_bridge_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
 target_include_directories(xml2_save_capture_bridge_test PRIVATE src)

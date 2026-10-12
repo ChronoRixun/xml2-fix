@@ -34,6 +34,7 @@
 #include "display.hpp"
 #include "forced_teams.hpp"
 #include "mold_controller.hpp"
+#include "multipart.hpp"
 #include "game_version.hpp"
 #include "gamepad_fix.hpp"
 #include "iat_hook.hpp"
@@ -257,6 +258,14 @@ namespace
 			gameplay_agreement::register_rule(gameplay_capabilities::master_mold_id, xml1_capability_rules::master_mold_revision, mold.values, mold.verified);
 			const auto turrets = xml1_capability_rules::turrets();
 			gameplay_agreement::register_rule(gameplay_capabilities::turret_controller_id, xml1_capability_rules::turret_revision, turrets.values, turrets.verified);
+		}
+		// XML1 breakable parts ([Game] Xml1Multipart): part health, break roll, effects and disabled attacks change
+		// the lockstep simulation, so peers must agree (rule 6, revision 1, {installed, part-logic revision, 0, 0}).
+		multipart::install(game);
+		if (game_version::needs_gameplay_agreement() || multipart::requested())
+		{
+			const auto parts = multipart::capability();
+			gameplay_agreement::register_rule(gameplay_capabilities::multipart_id, 1, parts.values, parts.verified);
 		}
 		// Conversations written for XML1's engine ([Game] AutoAdvance, ReplyVoices, ReplyCursor; on by default):
 		// three code sites of the conversation system, used from the first conversation on; independent of the

@@ -32,7 +32,7 @@ IDs:
 | 3 | XML1 Master Mold controller | revision 1, `{installed ? 1 : 0, first_bit, width, FNV-1a-32(flag name)}` of the applied saved-stage binding (`Xml1MoldStage=flag:first_bit:width`, exact case); verified off `{0,0,0,0}`; requested but not installed is unverified ([details](xml1-controllers.md#online-play)) |
 | 4 | XML1 turret controller | revision 1, always verified `{0,0,0,0}`: no turret controller exists in this build |
 | 5 | XML1 skill and stat points: rank costs and level points (`[Game] RankCosts`, `LevelSkillPoints`, `LevelStatPoints`, [details](rank-costs.md)) | revision 3, `{parts (1 RankCosts, 2 LevelSkillPoints, 4 LevelStatPoints), 7 or 0, 5 or 0, 2 \| 8 << 8 (skill / stat bonus points)}`; verified off `{0,0,0,0}`; a requested part not installed is unverified |
-| 6 | Reserved: multipart parts (the multipart branch registers it) | - |
+| 6 | XML1 breakable parts (`[Game] Xml1Multipart`, [multipart.md](multipart.md)) | revision 1, `{installed ? 1 : 0, part-logic revision (2), 0, 0}`; verified off `{0,0,0,0}`; requested but not installed is unverified |
 | 11 | XML1 settle without crushes (`[Game] PlacementCrush=xml1`, [placement-crush.md](placement-crush.md)) | revision 1, `{installed ? 1 : 0,0,0,0}`; no key or `xml2`: verified `{0,0,0,0}`; `xml1` (or a value that is neither) not installed: unverified |
 | 12 | XML1 packs without double heals (`[Game] DoubleHeal=0`, `src/double_heal_rules.hpp`) | revision 1, `{installed ? 1 : 0,0,0,0}`; no key or `1`: verified `{0,0,0,0}`; `0` not installed: unverified |
 
