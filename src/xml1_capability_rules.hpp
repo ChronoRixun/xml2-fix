@@ -31,6 +31,12 @@ inline registration master_mold(bool requested,bool installed,std::string_view f
 // No turret scanner/weapon controller exists in this build. Revision 1 always
 // advertises verified off; a future controller registers its own revision/values.
 constexpr std::uint16_t turret_revision=1;
+
+// X-Men Legends 1's skill and stat point rules (rank_costs.cpp, ID 5) revision 3: values {installed parts (1 RankCosts,
+// 2 LevelSkillPoints, 4 LevelStatPoints), highest cost honoured (7) or 0, the bonus level step (5) or 0, the bonus
+// level's skill points (2) | its stat points (8) << 8}. Revisions 1 and 2 (never released) had fewer parts. The costs
+// themselves are the build's talent data.
+constexpr std::uint16_t rank_costs_revision=3;
 inline registration turrets(){ return {{0,0,0,0},true}; }
 
 // XML1 settle without crushes ([Game] PlacementCrush=xml1, ID 11) and packs without double heals
