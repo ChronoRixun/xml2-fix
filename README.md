@@ -344,6 +344,8 @@ Nothing changes without the keys. Every slot takes a name, so `ResourceNames` is
 
 **Entity capacity.** `[Limits] EntityCapacity=1` raises the engine's entity domain to 32 actor / 768 generic / 1024 World handles ([docs/entity-capacity.md](docs/entity-capacity.md)): the stock generic arena refuses every prop, projectile or trigger past the 224th live one without a word, which is why crowded rooms lose objects and the HAARP freeze gun never fires. All of it is installed as one checked transaction (535 guards, 31 region hashes) before the game's own code runs; it needs LC saves, marks its saves with a required-feature bit a retail-layout build refuses, and refuses online peers of another layout at admission (GCAP; the receive-lifecycle hooks of the design are not installed, see [the plan](docs/entity-capacity-phase-a-plan.md) deviation 17). If the raise cannot be installed - `[Save] Format=lc` is missing, the executable's entity code is not the expected retail code, or something else loaded first - the capacity alone falls back to stock and everything else installs: the game tells you once at startup what failed and what to do about it (the ini line, the retail `XMen2.exe`, other loaders), and that saves made with the raised capacity can't be loaded and online play is closed for that session.
 
+**Script functions.** The game resolves its scripts' function names through a tree of 320; with the fix's own functions for the X-Men Legends I port the 320 are full, and a function registered past them is dropped without a word, together with every script line that calls it. `[Limits] ScriptFunctions` (1024 by default while `[Game] ForcedTeams` registers the fix's functions, otherwise the game's own 320) keeps the tree and every name's place in it, and resolves the names past it from a table of the fix's: two code sites of the registration and the compile-time lookup, one checked transaction before the game's code runs; on any other build the game keeps its 320 and `xml2-fix.log` says why. Nothing is saved or sent. [docs/script-functions.md](docs/script-functions.md) has the details.
+
 **Triggers per move.** `[Limits] MoveTriggers=64` gives each native move a preallocated handle side array. Missing key or 19 keeps
 stock behavior; invalid values are logged and ignored. The port needs 27 for its largest restored burst;
 64 leaves 37 spare slots. The count and all other native move fields stay at their existing offsets.
@@ -648,6 +650,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `EffectCurves` | *(the game's own, 900)* | `901` to `16384` animation curves of loaded effects (past the pool, effects lose their particles) |
 | `MoveTriggers` | *(the game's own, 19)* | `20` to `127` triggers per move (sounds, flashes and other events of a long attack) |
 | `EntityCapacity` | `0` | `1`: 32 actor / 768 generic / 1024 World entity handles instead of 32 / 224 / 256; needs `[Save] Format=lc` ([details](docs/entity-capacity.md)) |
+| `ScriptFunctions` | *(1024 with `[Game] ForcedTeams`, otherwise the game's own, 320)* | `321` to `4096` script function names; `320` keeps the game's own limit ([details](docs/script-functions.md)) |
 
 **[Test]**: for automated testing ([details](#-driving-the-game-from-a-script))
 
@@ -656,6 +659,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `InputPipe` | `0` | `1`: a named pipe through which a script presses keys and pad buttons, runs script statements and saves screenshots |
 | `PipeName` | `xml2-fix-input` | the pipe's name: letters, digits, `-` and `_`, up to 64 |
 | `VirtualPads` | `0` | `1` to `4`: pads the game sees with nothing plugged in, in place of real controllers |
+| `ScriptFunctionProbes` | `0` | `1` to `64`: test functions `xml2fixProbe1`..`N` registered behind the fix's own, each call logged ([details](docs/script-functions.md)) |
 
 **[Debug]**
 

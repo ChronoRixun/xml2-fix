@@ -46,3 +46,4 @@ DISASM  src/entity_transfer.cpp  # Authored C++ inline assembly bridge (the ackn
 DISASM  src/mold_beam.cpp  # Authored register-preserving x86 callback bridge; its sole replay is a short byte-guarded stack-address instruction. No game listing or decompiled body.
 DISASM  src/mold_controller.cpp  # Authored register-preserving dispatcher bridge; replays only two short guarded state-selection instructions, with no copied game listing or decompiled body.
 DISASM  test/entity_transfer_test.cpp  # Authored inline assembly that calls a receiver with ESP measured around it; not game disassembly.
+DISASM  src/script_function_overflow.cpp  # Authored register-preserving bridges for the script function overflow; replays only the lookup's three-register epilogue, described in prose above it. No game listing or decompiled body.
