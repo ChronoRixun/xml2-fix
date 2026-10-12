@@ -76,6 +76,7 @@ add_library(xml2_fix SHARED
 	src/gameplay_agreement.cpp
 	src/patch_transaction.cpp
 	src/explosive_first_hit.cpp
+	src/death_switch.cpp
 	src/confirmation_release.cpp
 	src/objective_text.cpp
 	src/xp_curve.cpp
@@ -199,6 +200,13 @@ add_executable(xml2_explosive_first_hit_test test/explosive_first_hit_test.cpp s
 target_include_directories(xml2_explosive_first_hit_test PRIVATE src)
 # This test reserves the retail image address for isolated native code.
 target_link_options(xml2_explosive_first_hit_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# [Game] DeathSwitchClear: the production installer and hook on the retail addresses, in a fixture section of the
+# test's own (its image is based at 0x300000 so that section spans them): rules, every guard refusal, the one rel32
+# write, the hook's clear and what it leaves alone. Optional argument: a retail XMen2.exe, read only, for the guards.
+add_executable(xml2_death_switch_test test/death_switch_test.cpp src/death_switch.cpp)
+target_include_directories(xml2_death_switch_test PRIVATE src)
+target_link_options(xml2_death_switch_test PRIVATE /BASE:0x300000 /DYNAMICBASE:NO)
 
 add_executable(xml2_gameplay_agreement_test test/gameplay_agreement_test.cpp src/gameplay_agreement.cpp src/patch_transaction.cpp src/explosive_first_hit.cpp src/game_version.cpp)
 target_include_directories(xml2_gameplay_agreement_test PRIVATE src)
