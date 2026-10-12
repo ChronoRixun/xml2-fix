@@ -2,6 +2,9 @@
 
 #include <Windows.h>
 
+#include <array>
+#include <cstdint>
+
 // X-Men Legends 1's Xtraction Point menu had no world map, for a mod that keeps XML2's town
 // centres in its zone data without offering them (the X-Men Legends 1 port: the menu's Xtract
 // choice opens XML2's world map, whose five acts' town centres are not the mod's):
@@ -17,6 +20,12 @@ namespace xtract
 	// Reads [Game] Xtract and patches XMen2.exe for it. From DllMain (see exports.cpp): before the
 	// game's first zone and its first Xtraction Point.
 	void install(HMODULE game);
-	// Called only around the native menu handler, on the game's thread. Returns the previous permission.
-	bool allow_shop(bool allowed);
+	// Called only around the native menu handler, on the game's thread: the point's services
+	// (xtraction_shop_rules::service bits). Returns the previous value.
+	int set_services(int services);
+	// The shared gameplay agreement's rule 10 (docs/gameplay-agreement.md): {services hook installed, the service bits it
+	// understands, Load greyed online with other players, revival price = the first game's (revival_cost)}.
+	std::array<std::uint32_t, 4> capability(bool revival_xml1);
+	bool requested();
+	bool verified();
 }

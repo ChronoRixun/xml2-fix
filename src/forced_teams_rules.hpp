@@ -210,6 +210,7 @@ namespace forced_teams_rules
 		stat_points,
 		skill_points, // addSkillPoints is registered with the rest: 1 whenever the functions are
 		xtraction_shop,
+		xtraction_services, // extractionPointServices takes the services bitmask (Load, Danger Room, Healer, Forge; #63)
 	};
 
 	inline std::string lowercase(std::string_view text)
@@ -238,6 +239,7 @@ namespace forced_teams_rules
 		if (clean == "skillpoints") return feature::skill_points;
 		if (clean == "statpoints") return feature::stat_points;
 		if (clean == "xtractionshop") return feature::xtraction_shop;
+		if (clean == "xtractionservices") return feature::xtraction_services;
 		return std::nullopt;
 	}
 
@@ -992,11 +994,12 @@ namespace forced_teams_rules
 		{
 			on = e.forced_teams() && e.join_hero_on() ? 1 : 0;
 		}
-		else if (which == feature::skill_points || which == feature::stat_points || which == feature::xtraction_shop)
+		else if (which == feature::skill_points || which == feature::stat_points || which == feature::xtraction_shop ||
+		         which == feature::xtraction_services)
 		{
 			on = 1; // registered with the rest, whatever the switches
 		}
-		e.log(std::string(prefix) + call_text("xml2fixFeature", *values) + " -> " + std::to_string(on) + (which ? "" : " (not a feature: forcedteams, addhero, joinhero, skillpoints, statpoints)"));
+		e.log(std::string(prefix) + call_text("xml2fixFeature", *values) + " -> " + std::to_string(on) + (which ? "" : " (not a feature: forcedteams, addhero, joinhero, skillpoints, statpoints, xtractionshop, xtractionservices)"));
 		if (which == feature::forced_teams && !on)
 		{
 			warn_left_records(e);
