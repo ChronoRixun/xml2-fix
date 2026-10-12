@@ -35,6 +35,7 @@ struct weapon {
     std::string projectile,entfile;
     std::array<std::string,3> effects;   // muzzlefx, muzzleaccfx (tracer / flame), impactfx: effects/<path>
 };
+struct sounds { std::string fire,rotate; };   // the weapon's firesound, the turret's rotatesound (may be empty)
 struct spec {
     std::string zone,instance;
     bool spawned=false;             // '*name': spawned by a zone script (spawn()), bound by name; rest = its orientation then
@@ -43,12 +44,13 @@ struct spec {
     std::array<float,3> muzzle{}; // the model's Gun1 bolt in model space (0xb9e40 fires from Gun<emitter+1>)
     scanner scan;
     weapon gun;
+    sounds sound;
 };
 
 // ---- parsing the builder's one-line description ------------------------------------------------
 // zone|instance|px,py,pz,rx,ry,rz,mx,my,mz|visrange,minspeed,mintime,resetdelay,visextent,yawextent,pitchextent,turnrate,filterteam|
 // kind,recoil,count,spread,speed,accuracy,range,damage_min,damage_max,tracetime,radius,damagetype,damagemods|
-// projectile|entfile|muzzlefx,muzzleaccfx,impactfx
+// projectile|entfile|muzzlefx,muzzleaccfx,impactfx|firesound,rotatesound
 // Angles of the scanner block are degrees (as authored); rest is radians (as the map's orient).
 // Damage is the resolved draw (XML1 draws one integer in trunc(min*0.7f)..trunc(min*1.3f)).
 // damagetype / damagemods are the PC bit values of the weapon's authored names; an effect may be empty.
@@ -76,14 +78,17 @@ inline bool identifier(std::string_view s,std::size_t max,bool path){
 }
 inline std::optional<spec> parse(std::string_view line){
     const auto f=split(line,'|');
-    if(f.size()!=8||!identifier(f[0],63,true))return std::nullopt;
+    if(f.size()!=9||!identifier(f[0],63,true))return std::nullopt;
     spec r;r.zone=f[0];
     std::string_view inst=f[1];
     if(!inst.empty()&&inst[0]=='*'){r.spawned=true;inst.remove_prefix(1);}
     if(!identifier(inst,31,false))return std::nullopt;
     r.instance=inst;
     const auto rest=split(f[2],',');const auto sc=split(f[3],',');const auto w=split(f[4],',');const auto fx=split(f[7],',');
-    if(rest.size()!=9||sc.size()!=9||w.size()!=13||fx.size()!=3)return std::nullopt;
+    const auto snd=split(f[8],',');
+    if(rest.size()!=9||sc.size()!=9||w.size()!=13||fx.size()!=3||snd.size()!=2)return std::nullopt;
+    for(const auto& v:snd)if(!v.empty()&&!identifier(v,63,true))return std::nullopt;
+    r.sound={std::string(snd[0]),std::string(snd[1])};
     for(int i=0;i<3;++i){
         if(!fx[i].empty()&&!identifier(fx[i],63,true))return std::nullopt;
         r.gun.effects[i]=fx[i];

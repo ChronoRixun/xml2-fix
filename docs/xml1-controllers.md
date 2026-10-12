@@ -141,7 +141,7 @@ and broader interruption/revisit cases.
 
 `Game.Xml1Turrets` defaults to off. The first-game builder enables it with one
 `[Xml1Turrets]` line per placement (`Count`, `T1`..`T32`):
-`zone|instance|px,py,pz,rx,ry,rz,mx,my,mz|visrange,minspeed,mintime,resetdelay,visextent,yawextent,pitchextent,turnrate,team|kind,recoil,count,spread,speed,accuracy,range,damage_lo,damage_hi,tracetime,radius,damagetype,damagemods|projectile|entfile|muzzlefx,muzzleaccfx,impactfx`,
+`zone|instance|px,py,pz,rx,ry,rz,mx,my,mz|visrange,minspeed,mintime,resetdelay,visextent,yawextent,pitchextent,turnrate,team|kind,recoil,count,spread,speed,accuracy,range,damage_lo,damage_hi,tracetime,radius,damagetype,damagemods|projectile|entfile|muzzlefx,muzzleaccfx,impactfx|firesound,rotatesound`,
 all from the original placement, its turret weapon and the first game's value table (`m` is the
 turret model's `Gun1` bolt, damagetype/damagemods are the PC bits of the weapon's names, the
 effects are paths under `effects/`). An instance written `*name` is spawned by a zone script (the
@@ -169,6 +169,7 @@ scanner from the authored placement, as the original constructor does.
 | `0xbcc47..0xbcc99` | direct damage: one integer draw in trunc(min x 0.7f)..trunc(min x 1.3f) per weapon fire, from the native gameplay random stream |
 | `0xb9e40` | muzzle: the weapon's `Gun<emitter+1>` bolt of the turret model carried by the turret's frame (a turret's one weapon is emitter 0, `Gun1`); aim (no character source, `0xba1d2..`): the bolt frame turned by a random yaw then pitch, each uniform in +-accuracy (the reader `0xbc3e3` stores degrees x 0.0174533) |
 | `0xba420` / `0xba850` | bullet / flame: one instant ray per fire from 36 units behind the muzzle to `range` ahead (flame: swept with the weapon `radius` as extents); the first entity crossed takes the hit when it is an actor, by its own take-hit (`vt+0xa8(attack, 1, 1, 1)`) - no to-hit roll on this path (the roll `0x5c240` belongs to the hit service `0x5c6c2`, which a bullet never calls); a scan turret's fire within `tracetime` of its last trace (+0x364) traces nothing; muzzle, tracer and impact effects |
+| `0xa8a90` (sound) | the turret's rotatesound loops at its position while it turns (volume 1, range 2 x visrange, inner visrange x 0.5) and stops on arrival; each weapon fire plays the weapon's firesound (`0xbcba0`) |
 | `0xa9a80` | after every weapon fire: an AI danger notice at the aim point (team neutral, radius 70, recoil + 0.5 s) |
 | `0xa91c0..0xa91f8` | candidates slower than `minspeed` are skipped; a hero filter skips heroes with character bit +0x334 bit 0 |
 | `0x96ba0` | homing: a homing projectile of a scanner source homes on the scanner's target; each update its direction becomes the velocity direction plus f x the unit direction to the target's origin, f = (10 + age) x 0.05 capped at 1.5, at unchanged speed (nozhoming keeps it level). PC `projectileent` has no in-flight homing (only `guidedprojectileent`), so the controller steers the turret's own homing projectiles once per dispatch (velocity +0x120, setter `0x473640`) |
@@ -195,12 +196,16 @@ not a character - with an attack from `0x429860` (turret handle, the draw, type 
 `0x407750` (singleton `0x6f3c50`, vtable `0x68190c`) vt+0x1c resolves a path in the zone group
 11, vt+0x34 plays it at a point along a direction; a rebound turret resolves again. AI notice: AI
 manager `0x5252e0` vt+0x240 (`0x523c50`), neutral team 0x1c, as the harm notice `0x439391..`.
-Hero filter bit: PC character +0x3d8 bit 0, the bit the take-hit `0x438a10` tests where the
+Sounds: sound system `0x592480` (vtable `0x69d1ac`) vt+0x38 resolves a name (none = `[0x69d058]`), vt+0x4c starts
+a 3D loop, vt+0x74 stops it; the fire sound plays on the turret through entity vt+0x8c (the event
+sound's plain play `0x4e8a70`). Hero filter bit: PC character +0x3d8 bit 0, the bit the take-hit `0x438a10` tests where the
 original's `0x46270` tests +0x334 bit 0.
 
 Not mapped: the XBE awake bit (+4 bit 15, scanning only while set unless tracking) is
-treated as set; scan/rotate loop sounds, the fire sound and the turret's scan animation
-(`0x76740`), the candidates' status-effect 10 exclusion (`0x2e280`) and the original line of
+treated as set - the original's bit 15 is the in-world flag (set and cleared through the
+entity's virtual at `0x66d70`; clearing it takes the model out of the scene, `0x74ee0`), not
+visibility (bit 14), so a turret scans while invisible as long as it is enabled; the turret's scan
+animation (`0x76740`), the candidates' status-effect 10 exclusion (`0x2e280`) and the original line of
 sight (a ray to visrange whose first entity must be the candidate) instead of the sentry test.
 Beam weapons are not emitted (no turret uses one). The XML1 missile's `explodradius` is not an attribute either
 engine reads (the original reads `exploderadius`), so its area damage is 0 in both; the damage

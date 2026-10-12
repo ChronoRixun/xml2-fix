@@ -57,6 +57,10 @@ using take_hit_t=void(__fastcall*)(void*,void*,void*,u32,u32,u32);
 using effect_resolve_t=u32(__fastcall*)(void*,void*,const char*,u32);
 using effect_play_t=void(__fastcall*)(void*,void*,u32,const float*,const float*,u32,float,u32,float);
 using danger_t=void(__fastcall*)(void*,void*,const float*,u32,float,float,u32,u32,u32);
+using sound_resolve_t=u32(__fastcall*)(void*,void*,const char*,u32,u32);
+using sound_loop_t=u32(__fastcall*)(void*,void*,u32,const float*,float,float,float);
+using sound_stop_t=void(__fastcall*)(void*,void*,u32);
+using entity_sound_t=void(__fastcall*)(void*,void*,u32);
 
 constexpr u32 scheduler=0x75d340,scheduler_vtable=0x68de14,process_slot=scheduler_vtable+0xc,native_process=0x4b2d60;
 constexpr u32 enabled_bit=1u<<20;           // PC 'startenabled' (XBE bit 19, scanner 0xa9000 test)
@@ -70,6 +74,7 @@ struct turret {
     float trace_at=0,next_bind=0;
     std::array<u32,3> effects{};   // resolved muzzle / tracer / impact effect handles (zone group)
     bool effects_resolved=false;
+    u32 fire_sound=0,rotate_sound=0,loop=0;   // resolved sounds; the rotate loop playing (0 = none)
 };
 std::vector<turret> turrets;
 struct flight{u32 handle=0,target=0;float last[3]{};float born=0;};
@@ -349,7 +354,37 @@ void warn_ai(const turret& t,float recoil){
     auto* ai=fn<system_t>(0x5252e0)();
     at<danger_t>(at<const void*>(ai,0),0x240)(ai,nullptr,t.s.aim.data(),0x1c,70.f,recoil+.5f,0,0,0);
 }
-void forget(){for(auto& t:turrets){t.live=false;t.handle=0;t.effects_resolved=false;}flights.clear();}
+// Sounds: the sound system (getter 0x592480, singleton 0x7f07b8, vtable 0x69d1ac) resolves a name
+// (vt+0x38 = 0x590bd0(name, 0, 0), as an event's sound at prepare 0x4e8e00; "none" is [0x69d058]).
+// A fire plays the weapon's firesound on the turret (entity vt+0x8c, the event sound's plain play
+// 0x4e8a70; the original plays it at the muzzle, 0xbcba0). The rotation loops the turret's
+// rotatesound while the turret turns (XBE 0xa8a90: loop at the scanner's position with volume 1,
+// range 2 x visrange / visrange x 0.5; stopped on arrival): vt+0x4c = 0x5917f0 starts a 3D loop
+// (as the constant beam's loop 0x4eec70), vt+0x74 = 0x590780 stops it.
+void* sound_system(){return fn<system_t>(0x592480)();}
+u32 sound_none(){return at<u32>(reinterpret_cast<const void*>(0x69d058),0);}
+void resolve_sounds(turret& t){
+    auto* s=sound_system();const u32 none=sound_none();
+    auto get=[&](const std::string& name)->u32{
+        if(name.empty())return 0;
+        const u32 h=at<sound_resolve_t>(at<const void*>(s,0),0x38)(s,nullptr,name.c_str(),0,0);
+        if(h==none){logger::write("xml1 turrets: %s sound %s unavailable",t.spec.instance.c_str(),name.c_str());return 0;}
+        return h;};
+    t.fire_sound=get(t.spec.sound.fire);t.rotate_sound=get(t.spec.sound.rotate);t.loop=0;
+}
+void stop_loop(turret& t){
+    if(!t.loop)return;
+    auto* s=sound_system();
+    at<sound_stop_t>(at<const void*>(s,0),0x74)(s,nullptr,t.loop);
+    t.loop=0;
+}
+void start_loop(turret& t,void* self){
+    if(t.loop||!t.rotate_sound)return;
+    auto* s=sound_system();const vec p=position(self);
+    const u32 h=at<sound_loop_t>(at<const void*>(s,0),0x4c)(s,nullptr,t.rotate_sound,p.data(),1.f,t.spec.scan.visrange*2,t.spec.scan.visrange*.5f);
+    t.loop=h==at<u32>(reinterpret_cast<const void*>(0x69d05c),0)?0:h;
+}
+void forget(){for(auto& t:turrets){t.live=false;t.handle=0;t.effects_resolved=false;t.loop=0;}flights.clear();}
 void update(float time){
     const char* current=reinterpret_cast<const char*>(0x72a758);
     if(std::strncmp(current,zone,sizeof zone)!=0||time<last_time){
@@ -362,7 +397,7 @@ void update(float time){
         void* self=t.live?resolve(t.handle):nullptr;
         if(self&&(!mold_query::is_a(self,physent_class)||!(health(self)>0)))self=nullptr;
         if(!self){
-            if(t.live){logger::write("xml1 turrets: %s gone at %.3f",t.spec.instance.c_str(),time);t.live=false;t.handle=0;t.next_bind=time+1;}
+            if(t.live){logger::write("xml1 turrets: %s gone at %.3f",t.spec.instance.c_str(),time);stop_loop(t);t.live=false;t.handle=0;t.next_bind=time+1;}
             if(time<t.next_bind)continue;
             t.next_bind=time+1;
             const u32 h=bind(t);self=resolve(h);
@@ -371,6 +406,7 @@ void update(float time){
             loaded_files.clear();   // a zone (re)load drops group-11 definitions: register again on demand
             const auto o=orientation(self);
             if(t.spec.spawned)t.spec.rest={o[0],o[1],o[2]};
+            resolve_sounds(t);
             logger::write("xml1 turrets: %s bound %08X at %.1f/%.1f/%.1f orientation %.3f/%.3f/%.3f rest %.3f/%.3f/%.3f flags %08X",t.spec.instance.c_str(),h,
                 at<float>(self,0x20),at<float>(self,0x24),at<float>(self,0x28),o[0],o[1],o[2],t.spec.rest[0],t.spec.rest[1],t.spec.rest[2],at<u32>(self,4));
         }
@@ -389,13 +425,19 @@ void update(float time){
                 if(before!=t.s.mode)logger::write("xml1 turrets: %s mode %d -> %d at %.3f target %08X",t.spec.instance.c_str(),before,t.s.mode,time,t.s.target);
             }else if(next==1){
                 vec o=orientation(self);bool moved=false,turning=false;
-                t.s.rotate_due=time+turret_rules::rotate(t.s,t.spec.scan,t.spec.rest,time,true,position(self),o,moved,turning);
+                const float wait=turret_rules::rotate(t.s,t.spec.scan,t.spec.rest,time,true,position(self),o,moved,turning);
+                t.s.rotate_due=time+wait;
                 if(moved)at<orient_t>(at<const void*>(self,0),0x2c)(self,nullptr,o.data());
+                if(turning)start_loop(t,self);
+                else if(wait<.5f)stop_loop(t);          // a step that arrived (paused / idle passes keep it)
             }else{
                 float delay=1.f;
                 const auto r=turret_rules::fire(t.s,time,1,t.spec.gun.recoil,delay);
                 t.s.fire_due=time+delay;
-                if(r==turret_rules::fire_result::shot){shoot(t,self);warn_ai(t,t.spec.gun.recoil);}
+                if(r==turret_rules::fire_result::shot){
+                    shoot(t,self);warn_ai(t,t.spec.gun.recoil);
+                    if(t.fire_sound)at<entity_sound_t>(at<const void*>(self,0),0x8c)(self,nullptr,t.fire_sound);
+                }
                 else if(r==turret_rules::fire_result::burst_started)logger::write("xml1 turrets: %s burst armed at %.3f",t.spec.instance.c_str(),time);
             }
         }
@@ -458,7 +500,7 @@ void install(HMODULE game){
         if(!spec){logger::write("xml1 turrets: placement %d malformed; turrets stay inert",i);turrets.clear();lines.clear();return;}
         turrets.push_back({*spec});lines.push_back(*text);
     }
-    constexpr std::array<limits_rules::guard,30> guards{{
+    constexpr std::array<limits_rules::guard,36> guards{{
         {native_process,"83c104e9","scheduler dispatch thunk"},
         {0x4b2d70,"83ec08578bf98b876c9f0000","scheduler dispatch"},
         {0x46f0d9,"e8e23e04008b8ee8030000","game update calls the scheduler dispatch"},
@@ -488,7 +530,13 @@ void install(HMODULE game){
         {0x40b2b0,"83ec6855568be957896c240c","effect play"},
         {0x5252e0,"8a0d9c887900b80100000084","AI manager getter"},
         {0x525302,"c70510ba7800bc5c6900","AI manager vtable store"},
-        {0x695efc,"503c5200","AI manager danger notice slot"}}};
+        {0x695efc,"503c5200","AI manager danger notice slot"},
+        {0x592480,"64a1000000008a0da0d87f00","sound system getter"},
+        {0x58f7da,"c706acd16900","sound system vtable store"},
+        {0x69d1e4,"d00b5900","sound system resolve slot"},
+        {0x69d1f8,"f0175900","sound system loop slot"},
+        {0x69d220,"80075900","sound system stop slot"},
+        {0x5917f0,"5356578bf98a87aed000","sound loop"}}};
     for(const auto& g:guards)if(!limits_rules::matches(reinterpret_cast<const unsigned char*>(g.va),g.hex)){
         logger::write("xml1 turrets: guard failed %08X (%s); turrets stay inert",g.va,g.what);turrets.clear();lines.clear();return;}
     if(at<u32>(reinterpret_cast<const void*>(process_slot),0)!=native_process||at<u32>(reinterpret_cast<const void*>(0x4b2fe8),0)!=scheduler_vtable){

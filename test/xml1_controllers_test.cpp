@@ -273,28 +273,28 @@ int main(){
 // the original scanner's timing (docs/xml1-controllers.md).
 void turret_checks(){
     using namespace turret_rules;
-    const char* line="fictional/zone_a|gun_x|10,20,30,0,0,1.5,0,0,0|600,0,0,1,85,90,0,30,29|2,5,3,20,400,20,900,10,20,0,0,128,0|dart_fake|fake_ents|,,";
+    const char* line="fictional/zone_a|gun_x|10,20,30,0,0,1.5,0,0,0|600,0,0,1,85,90,0,30,29|2,5,3,20,400,20,900,10,20,0,0,128,0|dart_fake|fake_ents|,,|,";
     const auto t=parse(line);
     CHECK(t&&t->position[1]==20&&t->rest[2]==1.5f);
     CHECK(t&&t->zone=="fictional/zone_a"&&t->instance=="gun_x"&&t->gun.count==3&&t->gun.recoil==5&&t->gun.projectile=="dart_fake");
     CHECK(t&&std::fabs(t->scan.yawextent-90*radians_per_degree)<1e-6f&&t->scan.track_loss==1&&t->scan.sweep_pause==1&&t->scan.filterteam==29);
-    for(const char* bad:{"","a|b","zone|gun|1,2,3,0,0|600,0,0,1,85,90,0,30,29|2,5,3,20,400,20,900,10,20,0,0,128,0|p|f|,,",
-        "zone|gun|1,2,3,0,0,0,0,0,0|600,0,0,1,85,90,0,30,29|2,5,3,20,400,20,900,20,10,0,0,128,0|p|f|,,",          // damage range reversed
-        "zone|gun|1,2,3,0,0,0,0,0,0|600,0,0,1,85,90,0,30,29|2,5,3,20,0,20,900,10,20,0,0,128,0|p|f|,,",            // projectile without speed
-        "zone|gun|1,2,3,0,0,0,0,0,0|600,0,0,1,85,90,0,30,29|2,5,3,20,400,20,900,10,20,0,0,128,0||f|,,",           // projectile without entity
-        "zone|gun|1,2,3,0,0,0,0,0,0|600,0,0,1,85,90,0,30,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|p|f|,,",            // bullet naming a projectile
-        "zone|g;x|1,2,3,0,0,0,0,0,0|600,0,0,1,85,90,0,30,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,",
-        "zone|gun|1,2,3,0,0,0,0,0,0|600,0,0,1,85,90,0,30,40|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,"})CHECK(!parse(bad));
-    CHECK(parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,").has_value());
+    for(const char* bad:{"","a|b","zone|gun|1,2,3,0,0|600,0,0,1,85,90,0,30,29|2,5,3,20,400,20,900,10,20,0,0,128,0|p|f|,,|,",
+        "zone|gun|1,2,3,0,0,0,0,0,0|600,0,0,1,85,90,0,30,29|2,5,3,20,400,20,900,20,10,0,0,128,0|p|f|,,|,",          // damage range reversed
+        "zone|gun|1,2,3,0,0,0,0,0,0|600,0,0,1,85,90,0,30,29|2,5,3,20,0,20,900,10,20,0,0,128,0|p|f|,,|,",            // projectile without speed
+        "zone|gun|1,2,3,0,0,0,0,0,0|600,0,0,1,85,90,0,30,29|2,5,3,20,400,20,900,10,20,0,0,128,0||f|,,|,",           // projectile without entity
+        "zone|gun|1,2,3,0,0,0,0,0,0|600,0,0,1,85,90,0,30,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|p|f|,,|,",            // bullet naming a projectile
+        "zone|g;x|1,2,3,0,0,0,0,0,0|600,0,0,1,85,90,0,30,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,|,",
+        "zone|gun|1,2,3,0,0,0,0,0,0|600,0,0,1,85,90,0,30,40|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,|,"})CHECK(!parse(bad));
+    CHECK(parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,|,").has_value());
     // ray weapons: tracetime, radius, PC damage bits and effects (invented paths)
-    {const auto b=parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,2,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,524288|||fx/a_muzzle,fx/a_tracer,fx/a_hit");
+    {const auto b=parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,2,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,524288|||fx/a_muzzle,fx/a_tracer,fx/a_hit|,");
      CHECK(b&&b->gun.kind==weapon_kind::bullet&&b->gun.damage_type==0x80&&b->gun.damage_mods==0x80000&&b->gun.effects[1]=="fx/a_tracer"&&b->gun.range==600);
-     const auto f=parse("zone/a|jet1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,0,30,29|1,.03,1,0,0,0,132,5,9,.45,48,65536,0|||,fx/b_stream,");
+     const auto f=parse("zone/a|jet1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,0,30,29|1,.03,1,0,0,0,132,5,9,.45,48,65536,0|||,fx/b_stream,|,");
      CHECK(f&&f->gun.kind==weapon_kind::flame&&f->gun.tracetime==.45f&&f->gun.radius==48&&f->gun.damage_type==0x10000&&f->gun.effects[0].empty());
-     CHECK(!parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,0,10,20,0,0,128,0|||,,"));          // ray without range
-     CHECK(!parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,-1,0|||,,"));         // bits not unsigned
-     CHECK(!parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,x;y"));     // effect path
-     CHECK(!parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20|||,,"));                  // old 9-field weapon
+     CHECK(!parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,0,10,20,0,0,128,0|||,,|,"));          // ray without range
+     CHECK(!parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,-1,0|||,,|,"));         // bits not unsigned
+     CHECK(!parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,x;y|,"));     // effect path
+     CHECK(!parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20|||,,|,"));                  // old 9-field weapon
      // aim: no spread keeps the facing; the draws span +-accuracy about the turret's own frame
      const vec o{0,.2f,1.f};const vec straight=aim(o,0,.3f,.9f),fwd=forward(o);
      CHECK(std::fabs(straight[0]-fwd[0])<1e-5f&&std::fabs(straight[1]-fwd[1])<1e-5f&&std::fabs(straight[2]-fwd[2])<1e-5f);
@@ -314,15 +314,18 @@ void turret_checks(){
      float never=-1;CHECK(trace_ready(never,0,10)&&never==-1);
      float none=0;CHECK(trace_ready(none,0,0)&&trace_ready(none,0,0));}
     // a script-spawned turret: '*name', bound by name with its orientation at binding as the rest basis
-    {const auto sp=parse("zone/a|*jet9|0,0,0,0,0,0,0,0,0|600,0,0,1,30,45,0,30,29|1,.03,1,0,0,0,132,5,9,.45,48,65536,0|||,,");
+    {const auto sp=parse("zone/a|*jet9|0,0,0,0,0,0,0,0,0|600,0,0,1,30,45,0,30,29|1,.03,1,0,0,0,132,5,9,.45,48,65536,0|||,,|,");
      CHECK(sp&&sp->spawned&&sp->instance=="jet9");
-     CHECK(!parse("zone/a|gun1|1,2,3,0,0,0,0,0,5000|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,"));  // muzzle out of range
-     const auto m=parse("zone/a|gun1|1,2,3,0,0,0,53.5,8,5.5|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,");
+     CHECK(!parse("zone/a|gun1|1,2,3,0,0,0,0,0,5000|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,|,"));  // muzzle out of range
+     const auto m=parse("zone/a|gun1|1,2,3,0,0,0,53.5,8,5.5|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,|,");
      CHECK(m&&m->muzzle[0]==53.5f&&m->muzzle[2]==5.5f);
      // the bolt rides the turret's frame: yawed a quarter turn, forward becomes +y; pitched down, forward drops
      const vec q=frame_point({10,20,30},{0,0,1.57079637f},{50,0,5});CHECK(std::fabs(q[0]-10)<1e-3f&&std::fabs(q[1]-70)<1e-3f&&q[2]==35);
      const vec d=frame_point({0,0,0},{0,.5f,0},{10,0,0});CHECK(std::fabs(d[0]-10*std::cos(.5f))<1e-4f&&std::fabs(d[2]+10*std::sin(.5f))<1e-4f);
-     CHECK(t&&!t->spawned&&!parse("zone/a|*|0,0,0,0,0,0,0,0,0|600,0,0,1,30,45,0,30,29|1,.03,1,0,0,0,132,5,9,.45,48,65536,0|||,,"));}
+     const auto ss=parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,|fx/a_bang,fx/a_whirr");
+     CHECK(ss&&ss->sound.fire=="fx/a_bang"&&ss->sound.rotate=="fx/a_whirr"&&t&&t->sound.fire.empty());
+     CHECK(!parse("zone/a|gun1|1,2,3,0,0,0,0,0,0|600,0,0,1,30,45,45,20,29|0,.25,1,0,0,5,600,10,20,0,0,128,0|||,,"));   // no sound field
+     CHECK(t&&!t->spawned&&!parse("zone/a|*|0,0,0,0,0,0,0,0,0|600,0,0,1,30,45,0,30,29|1,.03,1,0,0,0,132,5,9,.45,48,65536,0|||,,|,"));}
     // angles
     CHECK(std::fabs(wrap(4.f)-(4.f-two_pi))<1e-5f&&wrap(1.f)==1.f&&std::fabs(wrap(-4.f)-(-4.f+two_pi))<1e-5f);
     const auto a=angles(forward({0,.3f,1.2f}));CHECK(std::fabs(a[1]-.3f)<1e-5f&&std::fabs(a[2]-1.2f)<1e-5f);
