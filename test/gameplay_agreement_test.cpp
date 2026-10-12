@@ -199,7 +199,7 @@ int admitted(void*){++forwarded;return 73;}
 int timeout_trap(){++failures;return 0;}
 void pending_context(){context.fill(0);put(4,0x12345678);put(0x2250,0x22222222);context[0x2294]=1;for(auto n:{0x21f4,0x21f8,0x21fc,0x2200,0x2204,0x222c,0x2234,0x2230})put(n,1);put(0x22bc,0x33333333);put(0x2298,std::uint32_t(reinterpret_cast<std::uintptr_t>(&status)));descriptor[0]=1;}
 bool cleaned(){return get(0x2250)==0 && context[0x2294]==0 && get(0x21f4)==0 && get(0x21f8)==0 && get(0x21fc)==0 && get(0x2200)==0 && get(0x2204)==0 && get(0x222c)==0 && get(0x2234)==0 && get(0x2230)==0 && get(0x22bc)==0 && get(0x221c)==0xffffffff;}
-std::array<std::uint8_t,request_size+gameplay_capabilities::max_size> output{},input{};
+std::array<std::uint8_t,request_size+512> output{},input{};
 std::array<std::uint8_t,0x14> header{};
 std::uint16_t output_size=0;std::uint8_t output_type=0;std::uint32_t output_this=0,output_arg=0;int output_extra=0,send_count=0;
 void capture(void* self,const std::uint8_t* h){++send_count;output_this=std::uint32_t(reinterpret_cast<std::uintptr_t>(self));std::memcpy(&output_size,h+8,2);output_type=h[0x10];if(output_size<=output.size() && output_size)std::memcpy(output.data(),*reinterpret_cast<const void*const*>(h),output_size);}
@@ -502,6 +502,15 @@ void runtime(){
   if(!joining){pending_context();if(opcode==0x1a)put(0x22bc,0);const auto remote_body=output;event remote{output_type,const_cast<std::uint8_t*>(remote_body.data()),output_size,0,context.data(),sender.data()};auto remote_receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(rejection_registration+1)));const auto visible_before=popups;logger::logged.clear();check(remote_receiver(&remote)==2 && cleaned() && popups==visible_before+1,"remote native incompatibility reception ends pending join through actual failure cleanup");
    check(has_log("the other PC refused this join (reason=1; differs: 2 ExplosiveFirstHit)") && visible.find("Incompatible gameplay settings: ExplosiveFirstHit.")!=std::string::npos,"the joining PC names the setting the host found different (log and dialog)");}
   e.length=std::uint16_t(base);put(0x22bc,0);const auto legacy_before=forwarded;check(receiver(&e)==(joining ? 2 : 0) && forwarded==legacy_before,"legacy body without full record refuses before native admission");
+  // A protocol-2 peer (1.4.0, the 1.5 pre-release) appends its full 312-byte list: read far enough to see it is another
+  // protocol, refused as another build, never forwarded; a body longer than any record is malformed, never forwarded.
+  {std::vector<std::uint8_t> v2{'G','C','A','P',2,0,15,0,0x38,1,0,0};v2.resize(312);input.fill(0);std::memcpy(input.data()+base,v2.data(),v2.size());
+   if(joining)pending_context();e.length=std::uint16_t(base+v2.size());put(0x22bc,0);send_count=0;logger::logged.clear();const auto v2_before=forwarded;
+   check(receiver(&e)==(joining ? 2 : 0) && forwarded==v2_before && send_count==1 && read_refusal(output.data(),output_size)==refusal::foreign_record && has_log("refused (reason=3)"),
+         "a protocol-2 body (312-byte record) is read as another protocol and refused as another build before native admission");
+   if(joining)pending_context();e.length=std::uint16_t(base+513);put(0x22bc,0);send_count=0;logger::logged.clear();
+   check(receiver(&e)==(joining ? 2 : 0) && forwarded==v2_before && send_count==1 && read_refusal(output.data(),output_size)==refusal::foreign_record && has_log("refused (reason=2)"),
+         "a body longer than any record is malformed and never reaches native admission");}
  }
  ini::lc=false;ini::requested=false;game_version::install(reinterpret_cast<HMODULE>(0x400000));check(game_version::needs_gameplay_agreement() && !game_version::gameplay_online_allowed(),"explicit non-LC off configuration still requires verified shared agreement");
  game_version::bind_gameplay_agreement(true);check(socket(AF_INET,SOCK_DGRAM,0)==73,"verified non-LC off gate retains native socket forwarding");

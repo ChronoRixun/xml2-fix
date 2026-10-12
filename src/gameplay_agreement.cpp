@@ -118,7 +118,10 @@ namespace gameplay_agreement
    auto* transport=*reinterpret_cast<void**>(static_cast<std::uint8_t*>(e.context)+4);
    if(transport)reinterpret_cast<direct>(native_direct)(transport,reinterpret_cast<address>(native_address)(e.sender),reinterpret_cast<port>(native_port)(e.sender),header.data());
   }
-  bool extract(void* raw,std::size_t base,std::array<std::uint8_t,gameplay_capabilities::max_size>& bytes,std::size_t& size)
+  // Room for an older protocol's longer record (revision 2: up to 332 bytes), so its header is read and it is refused
+  // as another protocol; anything longer is malformed. Neither reaches the native handler.
+  constexpr std::size_t receive_room=512;
+  bool extract(void* raw,std::size_t base,std::array<std::uint8_t,receive_room>& bytes,std::size_t& size)
   {
    __try {
     const auto* e=static_cast<const event*>(raw);if(!e || !e->body || e->length<base+gameplay_capabilities::header_size || e->length>base+bytes.size())return false;
@@ -133,7 +136,7 @@ namespace gameplay_agreement
   enum class endpoint { host,joiner,browser };
   int receive(void* raw,std::size_t base,std::uint32_t native,endpoint role,std::uint8_t opcode)
   {
-   std::array<std::uint8_t,gameplay_capabilities::max_size> bytes{};std::size_t size=0;gameplay_capabilities::difference diff{};
+   std::array<std::uint8_t,receive_room> bytes{};std::size_t size=0;gameplay_capabilities::difference diff{};
    const auto match=extract(raw,base,bytes,size) ? capabilities.compare({bytes.data(),size},&diff) : gameplay_capabilities::result::malformed;
    if(transport_ready && match==gameplay_capabilities::result::match){
     // A matching record is not yet an admission: retail 0x609970 can still refuse a full session (0x615910 ->
