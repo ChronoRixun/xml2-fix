@@ -28,6 +28,9 @@
 //   0x50f598 the hurt hero's call for help (0x50f520, from 0x5125a0) [0x107920 at 0x1079ac]: a solo character skips
 //            it (its timer was due), as the original returns there.
 //   0x425982 the controller update 0x425500 [0x36011 in 0x359f0]: the hero's own selection button held 0.5 s.
+//   0x4e514c a teleport combat event's success (0x4e4c20, CCEAtkTeleport) [0xd5be5 in 0xd56b0]: a player's teleport
+//            whose event says CheckSolo (character+0x730 bit 0x200, the original's +0x524) starts solo when the
+//            party can't follow (the regroup test with manual 0, all 0).
 // Regroup predicate (default.xbe 0x34bb0): the hero's own +0x3d8 bit 2 refuses; every living, seated peer of the
 // hero's controller group must be reachable through the hero's navigator (+0x3e8; reset vt+4, query
 // vt+0(position, 80, 200) == 2) and, for the held button, on screen (CCamera vt+0x178, margin 150). Not ported: the
@@ -53,6 +56,7 @@ namespace solo_mode
 
 		constexpr u32 resolve_handle = 0x4654b0, lookup_name = 0x4a1700, game_clock = 0x45fe60, voice = 0x420db0;
 		constexpr u32 camera_getter = 0x4457e0, camera_vtable = 0x684cc4, camera_visible_slot = 0x178; // XBE 0x51100, vt+0x15c
+		constexpr u32 teleport_flags = 0x730;          // the running teleport event's flags (default.xbe +0x524)
 		constexpr u32 path_vtable = 0x689b78;          // CPath: vt+0 query 0x496280, vt+4 reset 0x492560
 		constexpr u32 character_class_id = 0x70b840;
 		constexpr u32 ai_flags = 0x3d8, controller = 0x3d4, navigator = 0x3e8, health = 0x27c, origin = 0x20;
@@ -153,9 +157,10 @@ namespace solo_mode
 			return "?";
 		}
 
-		// default.xbe 0x34bb0(manual, all=1): the automatic regroup asks with manual 0, the held button with 1 (each peer
-		// must also be on screen: the camera's test 0x4ae90 with margin 150 - PC CCamera vt+0x178, 0x4403a0).
-		bool regroup_allowed(void* hero, bool manual)
+		// default.xbe 0x34bb0(manual, all): the automatic regroup asks (0, 1), the held button (1, 1) - each peer must
+		// also be on screen: the camera's test 0x4ae90 with margin 150, PC CCamera vt+0x178 0x4403a0 - and a CheckSolo
+		// teleport (0, 0), where the first peer that can reach the hero settles it.
+		bool regroup_allowed(void* hero, bool manual, bool all = true)
 		{
 			__try
 			{
@@ -182,6 +187,10 @@ namespace solo_mode
 					if (at<query_t>(at<const void*>(nav, 0), 0)(nav, nullptr, position, regroup_radius, regroup_steps, 1) != regroup_reached)
 					{
 						return false;
+					}
+					if (!all)
+					{
+						return true;
 					}
 				}
 				return true;
@@ -262,6 +271,29 @@ namespace solo_mode
 			logger::write("solo mode: held hero button at %.2f s - %s", t, text(r));
 		}
 
+		// default.xbe 0xd5be5: after a teleport moved the character (and its victim). `character` points at the
+		// character pointer (the function's fourth argument); `quiet` is its seventh (set: no solo check).
+		void __cdecl solo_teleport(void** character, int quiet)
+		{
+			if (!sites_installed || (quiet & 0xff)) return;
+			void* c = nullptr;
+			unsigned char flags = 0, ai = 1;
+			__try
+			{
+				c = character ? *character : nullptr;
+				if (!c) return;
+				flags = at<unsigned char>(c, teleport_flags + 1);
+				ai = at<unsigned char>(c, ai_flags) & 1;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { return; }
+			if (!(flags & 2) || ai || !is_character(c)) return;
+			if (regroup_allowed(c, false, false)) return;
+			const auto r = toggle(true);
+			say(c, voice_begin);
+			last_tick = -1.0f;
+			logger::write("solo mode: CheckSolo teleport at %.2f s - %s", now(), text(r));
+		}
+
 		// ---- The sites. Each stub repeats the bytes it replaced, then asks solo_pair / solo_one. -------------------
 		int verdict = 0;
 		u32 h1_hold = 0x51ee20, h1_follow = 0x51ee36;
@@ -272,6 +304,7 @@ namespace solo_mode
 		u32 h6_native = 0x526967;
 		u32 h7_timer = 0x425937, h7_next = 0x42599e;
 		u32 h8_callee = 0x504470, h8_native = 0x50f59f, h8_return = 0x50f972;
+		u32 h9_tail = 0x4e5151;
 
 		__declspec(naked) void h1_stub()
 		{
@@ -467,6 +500,26 @@ namespace solo_mode
 			}
 		}
 
+		// 0x4e514c: `mov al, 1; pop edi; pop esi; pop ebx`, then add esp, 0x98; ret 0x1c (0x4e5151).
+		__declspec(naked) void h9_stub()
+		{
+			__asm {
+				pushfd
+				pushad
+				push dword ptr [esp + 0xe4] // the seventh argument ([esp+0xc0] at the site)
+				push dword ptr [esp + 0xdc] // the fourth ([esp+0xb4] at the site)
+				call solo_teleport
+				add esp, 8
+				popad
+				popfd
+				mov al, 1
+				pop edi
+				pop esi
+				pop ebx
+				jmp dword ptr [h9_tail]
+			}
+		}
+
 		struct site
 		{
 			u32 va;
@@ -549,7 +602,7 @@ namespace solo_mode
 			logger::write("solo mode: XMen2.exe isn't at 0x400000 - not installed, the native AI follows as before");
 			return;
 		}
-		constexpr std::array<limits_rules::guard, 22> guards{{
+		constexpr std::array<limits_rules::guard, 24> guards{{
 			{0x51ee0e, "0f89160300008a85d8030000b30484c374168b078bcfff905401000032c05f5e5d5b83c428c20c00", "hero idle handler: formation follow"},
 			{0x51ebc6, "f680b4020000400f85f8010000a008b7700084c00f85eb010000", "hero idle handler: bridge power"},
 			{0x50b8c3, "0f8470040000f687d80300000474178b4e108b01ff905401000032c05f5e5d5b83c424c20400", "follow movement"},
@@ -571,7 +624,9 @@ namespace solo_mode
 			{0x684e3c, "a0034400", "camera vt+0x178 (on-screen test)"},
 			{0x4403a0, "8b44240483ec0c81c10c020000", "camera on-screen test"},
 			{0x50f581, "d986d0010000d89e50050000dfe0f6c4050f8ada0300008bcee8d14effffd98650050000", "call for help: timer and next step"},
-			{0x50f972, "5f5e5d5b59c20400", "call for help: return"}}};
+			{0x50f972, "5f5e5d5b59c20400", "call for help: return"},
+			{0x4e4c86, "8bb424b40000008b068a8830070000", "teleport: character and its event flags"},
+			{0x4e5141, "899f78020000e8d44df3ffb0015f5e5b81c498000000c21c00", "teleport: success epilogue"}}};
 		for (const auto& g : guards)
 		{
 			if (!retail(g))
@@ -580,7 +635,7 @@ namespace solo_mode
 				return;
 			}
 		}
-		const std::array<site, 8> sites{{
+		const std::array<site, 9> sites{{
 			{0x51ee14, "8a85d8030000b30484c37416", reinterpret_cast<const void*>(&h1_stub), "formation follow"},
 			{0x51ebd3, "a008b7700084c00f85eb010000", reinterpret_cast<const void*>(&h2_stub), "bridge power"},
 			{0x50b8c9, "f687d8030000047417", reinterpret_cast<const void*>(&h3_stub), "follow movement"},
@@ -588,7 +643,8 @@ namespace solo_mode
 			{0x51dc10, "83ec3053555657", reinterpret_cast<const void*>(&h5_stub), "assist step"},
 			{0x526960, "83ec3853555657", reinterpret_cast<const void*>(&h6_stub), "follow-me command"},
 			{0x425982, "3b5cac387516ebad", reinterpret_cast<const void*>(&h7_stub), "held hero button"},
-			{0x50f598, "8bcee8d14effff", reinterpret_cast<const void*>(&h8_stub), "call for help"}}};
+			{0x50f598, "8bcee8d14effff", reinterpret_cast<const void*>(&h8_stub), "call for help"},
+			{0x4e514c, "b0015f5e5b", reinterpret_cast<const void*>(&h9_stub), "CheckSolo teleport"}}};
 		std::vector<xml1_hook_transaction::patch> writes;
 		for (const auto& s : sites) writes.push_back(jump(s));
 		xml1_hook_transaction::memory memory;
@@ -596,7 +652,7 @@ namespace solo_mode
 		if (xml1_hook_transaction::apply(memory, writes, &safe))
 		{
 			sites_installed = true;
-			logger::write("solo mode: installed (7 AI sites and the held hero button; setSoloMode, automatic regroup 1.5 s / 1.0 s)");
+			logger::write("solo mode: installed (7 AI sites, the held hero button and CheckSolo teleports; setSoloMode, automatic regroup 1.5 s / 1.0 s)");
 		}
 		else if (safe)
 		{

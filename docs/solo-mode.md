@@ -39,6 +39,7 @@ any mismatch: one log line, the native AI):
 | 0x51dc10 | hero idle handler vt+8 (assist step): returns 0 | 0xf2610 |
 | 0x526960 | follow-me command (AI manager vt+0x1c0): ignored | 0xfb010 |
 | 0x50f598 | the hurt hero's call for help 0x50f520: skipped for a solo character | 0x1079ac in 0x107920 |
+| 0x4e514c | a teleport combat event's success (0x4e4c20, CCEAtkTeleport): a player's teleport whose event sets CheckSolo (character+0x730 bit 0x200, parsed at 0x4e3b50) starts solo when the first party peer can't reach the hero (regroup test with manual 0, all 0) | 0xd5be5 in 0xd56b0 |
 | 0x425982 | controller update 0x425500: the hero's own selection button (NextHero / PreviousHero / hero aggression rows, i.e. the D-pad) held 0.5 s toggles solo; leaving needs the manual regroup test (every peer reachable and on screen: CCamera vt+0x178, margin 150) | 0x36011 in 0x359f0 |
 
 XMen2.exe has no free solo bit (its +0x3d8 byte reuses bit 1), so the fix keeps the generation handles of the members
@@ -56,4 +57,4 @@ refused with more than one human player, as in the original.
 - The regroup predicate's attached-entity test on character+0xc0.
 - The toggle's Danger Room guard (default.xbe byte 0x4e7ab0 == 0xfd; no solo box sits in a Danger Room course).
 - The HUD's "solo" text (string ids 0x9d / 0x9e in the first game) - the voice lines play.
-- The HUD's per-hero solo marker (0x1588c0), and the CheckSolo teleport rule (0xd56b0: a player teleport that leaves the party unable to follow starts solo).
+- The HUD's per-hero solo marker (0x1588c0).
