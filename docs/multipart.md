@@ -34,5 +34,14 @@ carries `{installed, 1, 0, 0}` (see [gameplay-agreement.md](gameplay-agreement.m
 
 One `xml1_hook_transaction`: four manager vtable slots, one CALL operand, six brain vtable slots, after 15 guards
 (called functions and the manager vtable). A guard mismatch or a refused transaction leaves the native behaviour
-with one log line; a failed rollback refuses startup. `[Test] MultipartTrace=1` logs every spawned XML1 part owner
-and every part hit.
+with one log line; a failed rollback refuses startup. `[Test] MultipartTrace=1` logs every spawned XML1 part owner,
+every part hit (damage, current part, part health, the roll) and every refused attack.
+
+## Checked in game (port build, windowed harness, real melee input; party and XP staged)
+
+- Without the key (1.4.0): Juggernaut (Muir, `JuggernautAct3`) fights bare-headed and the Sentinels (mansion
+  front yard) have no arms from the moment they land - XMen2.exe's spawn look; nothing ever breaks.
+- With the key: Juggernaut wears the helmet; hits drain it (400), a spent helmet without the roll stays on (seen
+  four times), and on a 0 roll it flies off (`explode/JuggernautHelmet`) and his head shows. The Sentinels land
+  with both arms; arms break on real hits (`explode/smexp1` at the shoulder, the arm gone), and the trace shows
+  the brains' power-smash (0xA0) and power-action (0x180) presses refused for a Sentinel without its right arm.

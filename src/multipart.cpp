@@ -92,7 +92,8 @@ void spawn_effect(void* actor,const std::string& effect,const std::string& bone)
     at<void(__fastcall*)(void*,void*,u32,float*,float*,u32,int,const char*,float)>(table,0x34)(
         fx,nullptr,handle,position,direction,at<u32>(actor,0x1c),0,bone.c_str(),-1.f);
 }
-int roll(){return fn<int(__cdecl*)(int,int,int)>(0x5601e0)(0,2,1);}
+int last_roll=-1;
+int roll(){last_roll=fn<int(__cdecl*)(int,int,int)>(0x5601e0)(0,2,1);return last_roll;}
 
 u32 __fastcall parse_hook(void* mgr,void* edx,void* node,u32 key,u32 menu){
     const u32 h=real_parse(mgr,edx,node,key,menu);
@@ -177,9 +178,10 @@ void __fastcall damage_hook(void* event){
     const auto* d=data_of(a->second);
     if(!d)return;
     auto& in=i->second;
+    last_roll=-1;
     const int k=multipart_rules::hit(in.state,d->parts,static_cast<int>(after),roll);
-    if(trace)logger::write("multipart: actor %08X hit %d, current part %d, health %d/%d",at<u32>(victim,0x1c),
-        static_cast<int>(after),in.state.current,in.state.health[0],in.state.health[1]);
+    if(trace)logger::write("multipart: actor %08X hit %d, current part %d, health %d/%d, roll %d",at<u32>(victim,0x1c),
+        static_cast<int>(after),in.state.current,in.state.health[0],in.state.health[1],last_roll);
     if(k>=0)break_part(in,*d,a->second,k);
 }
 template<std::size_t I> u32 __fastcall brain_hook(void* brain,void* edx,void* actor,u32* output){
@@ -188,7 +190,13 @@ template<std::size_t I> u32 __fastcall brain_hook(void* brain,void* edx,void* ac
         auto a=actors.find(actor);
         if(a!=actors.end()){
             auto i=instances.find(a->second);
-            if(i!=instances.end())multipart_rules::filter_buttons(i->second.state.disabled,output);
+            if(i!=instances.end()){
+                const u32 before[2]{output[0],output[1]};
+                multipart_rules::filter_buttons(i->second.state.disabled,output);
+                if(trace&&(before[0]!=output[0]||before[1]!=output[1]))
+                    logger::write("multipart: actor %08X attack buttons %X/%X refused (disabled %X)",at<u32>(actor,0x1c),
+                        before[0]&~output[0],before[1]&~output[1],i->second.state.disabled);
+            }
         }
     }
     return result;
