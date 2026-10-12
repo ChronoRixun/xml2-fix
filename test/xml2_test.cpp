@@ -83,6 +83,7 @@
 #include "postgame_rules.hpp"
 #include "resolution_rules.hpp"
 #include "review_menu_rules.hpp"
+#include "cutscene_mouse_rules.hpp"
 #include "test_input_rules.hpp"
 #include "test_state_rules.hpp"
 #include "virtual_pad_rules.hpp"
@@ -5893,6 +5894,58 @@ namespace
 		else std::printf("  skip  no executable for retail guard comparison\n");
 	}
 
+	// [Input] CutsceneMouse (src/cutscene_mouse_rules.hpp): the guards cover the twelve bytes it replaces, the
+	// replacement is a call to the fix's test plus a nop of the same length with the game's test / je after it,
+	// and the test is "locked or a cinematic".
+	void check_cutscene_mouse_rules()
+	{
+		using namespace cutscene_mouse_rules;
+		std::printf("[Input] CutsceneMouse (the mouse stops in a cinematic as the keys and pads do)\n");
+
+		bool guards_ok = true;
+		std::set<DWORD> addresses;
+		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
+		CHECK(guards_ok);
+		CHECK(guards[0].va == site && limits_rules::hex_size(guards[0].hex) == site_size + 4);
+		// The replaced span is a call rel32, mov edx,[eax], mov ecx,eax, call [edx+0x34]; test al,al / je follow.
+		const auto g0 = [&](const DWORD i) { return limits_rules::hex_byte(guards[0].hex, i); };
+		CHECK(g0(0) == 0xe8 && g0(5) == 0x8b && g0(6) == 0x10 && g0(7) == 0x8b && g0(8) == 0xc8 && g0(9) == 0xff && g0(10) == 0x52 &&
+		      g0(11) == controls_locked_slot && g0(12) == 0x84 && g0(13) == 0xc0 && g0(14) == 0x74);
+		const DWORD retail_call = g0(1) | (g0(2) << 8) | (g0(3) << 16) | (static_cast<DWORD>(g0(4)) << 24);
+		CHECK(site + 5 + retail_call == game_getter);
+
+		// A test at an invented address: the call reaches it and the rest is one 7-byte nop.
+		constexpr DWORD invented = 0x10012340;
+		const auto bytes = patch_bytes(invented);
+		CHECK(bytes.size() == site_size && bytes[0] == 0xe8 && site + 5 + operand_at(bytes.data() + 1, 4) == invented);
+		CHECK(bytes[5] == 0x0f && bytes[6] == 0x1f && bytes[7] == 0x80 && bytes[8] == 0 && bytes[9] == 0 && bytes[10] == 0 && bytes[11] == 0);
+		const auto below = patch_bytes(0x00401000); // a target below the site: the rel32 wraps negative
+		CHECK(site + 5 + operand_at(below.data() + 1, 4) == 0x00401000u);
+
+		CHECK(!mouse_ignored(false, false) && mouse_ignored(true, false) && mouse_ignored(false, true) && mouse_ignored(true, true));
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the mouse handler's bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const guard* mismatch = first_mismatch(image);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
+		CHECK(mismatch == nullptr);
+		const auto at = [&](const DWORD va) { return image + (va - image_base); };
+		// The vtable slots name the functions the guards check.
+		CHECK(operand_at(at(game_vtable + controls_locked_slot), 4) == controls_locked && operand_at(at(hud_vtable + cinematic_slot), 4) == cinematic);
+		// The keyboard's hero update (0x425500) asks the same two: the HUD's vt+0xec at 0x425528, the game's vt+0x34 at 0x425582.
+		CHECK(at(0x425528)[0] == 0xe8 && 0x425528 + 5 + operand_at(at(0x425528) + 1, 4) == hud_getter && at(0x425531)[0] == 0xff && operand_at(at(0x425533), 4) == cinematic_slot);
+		CHECK(at(0x425582)[0] == 0xe8 && 0x425582 + 5 + operand_at(at(0x425582) + 1, 4) == game_getter && at(0x42558b)[2] == controls_locked_slot);
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
 	void check_review_menu_rules()
 	{
 		using namespace review_menu_rules;
@@ -10614,6 +10667,7 @@ int main(const int argc, char** argv)
 	check_xtract_rules();
 	check_personal_item_text_rules();
 	check_review_menu_rules();
+	check_cutscene_mouse_rules();
 	check_main_menu_rules();
 	check_window_title_rules();
 	check_game_version_rules();
