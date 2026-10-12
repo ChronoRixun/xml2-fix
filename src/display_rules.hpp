@@ -152,6 +152,51 @@ namespace display_rules
 		return static_cast<LPARAM>(MAKELONG(clamp16(out.x), clamp16(out.y)));
 	}
 
+	// ---- The windowed window's size across DPI changes --------------------------------------------
+	//
+	// Dragged to a monitor of another scale, a per-monitor-aware window is resized by Windows to keep
+	// its apparent size (1280x720 from 125% to 100% became 1023x575); the game's window keeps its client
+	// area instead, in pixels: the size it had before the change, whatever set it - the forced Width x
+	// Height, the engine's own placement, or a resize from outside (the engine then resets its back
+	// buffer to it). The render resolution is not that size, so it is tracked apart: every WM_SIZE at
+	// the DPI the window was last settled at records the client size; one at another DPI is the frame
+	// changing mid-transition and is ignored. The DPI handlers then ask for the recorded size.
+	struct kept_client
+	{
+		size client;  // the client area to keep, in pixels
+		UINT dpi = 0; // the DPI it was recorded at (0: not yet settled)
+	};
+
+	// The window was created (or settled after a DPI change) with `client` at `dpi`.
+	inline void settle_client(kept_client& kept, const size& client, const UINT dpi)
+	{
+		if (client.width && client.height)
+		{
+			kept.client = client;
+		}
+		kept.dpi = dpi;
+	}
+
+	// A WM_SIZE (restored) of `client` while the window's DPI is `dpi`; `in_dpi_change`: inside the
+	// fix's own DPI handling. Returns whether it was recorded.
+	inline bool note_client_resize(kept_client& kept, const size& client, const UINT dpi, const bool in_dpi_change)
+	{
+		if (in_dpi_change || !client.width || !client.height || (kept.dpi && dpi != kept.dpi))
+		{
+			return false;
+		}
+		kept.client = client;
+		kept.dpi = dpi;
+		return true;
+	}
+
+	// The client area to ask for at a DPI change: the kept one, or `fallback` (the back buffer's) when
+	// nothing was recorded.
+	inline size client_for_dpi_change(const kept_client& kept, const size& fallback)
+	{
+		return kept.client.width && kept.client.height ? kept.client : fallback;
+	}
+
 	// The engine's own mapping (0x5f9eb0) from its screen space to its 2D view, for the tests: the
 	// view is 384 tall and `aspect` * 384 wide, centred on the 512-wide 4:3 view. Integer steps
 	// as the engine does them (imul / idiv, then the float add and ftol).

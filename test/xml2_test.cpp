@@ -417,6 +417,23 @@ namespace
 			CHECK(unconverted_all_hit == (c.client == c.screen));
 		}
 
+		// The window's client area across DPI changes: the size it has, not the back buffer's.
+		{
+			kept_client kept{};
+			CHECK(client_for_dpi_change(kept, {1280, 720}) == (size{1280, 720})); // nothing recorded: the back buffer's
+			settle_client(kept, {1280, 720}, 120);                                 // created at 1280x720 on a 125% monitor
+			CHECK(client_for_dpi_change(kept, {1280, 720}) == (size{1280, 720})); // not resized: kept pixel for pixel
+			CHECK(note_client_resize(kept, {1035, 587}, 120, false));             // resized from outside at the same DPI
+			// The move to the 100% monitor: the frame thins before WM_DPICHANGED (client 1035x593 at 96) - not a resize.
+			CHECK(!note_client_resize(kept, {1035, 593}, 96, false));
+			// The back buffer meanwhile followed the resize; the DPI change keeps the resized client, not 1280x720.
+			CHECK(client_for_dpi_change(kept, {1280, 720}) == (size{1035, 587}));
+			CHECK(!note_client_resize(kept, {1035, 587}, 96, true));              // the fix's own SetWindowPos
+			settle_client(kept, {1035, 587}, 96);
+			CHECK(note_client_resize(kept, {800, 450}, 96, false) && client_for_dpi_change(kept, {1035, 587}) == (size{800, 450}));
+			CHECK(!note_client_resize(kept, {0, 450}, 96, false) && kept.client == (size{800, 450}));
+		}
+
 		// The conversion itself: first and last pixels map onto the screen's, equal sizes don't move.
 		CHECK(scale_coordinate(0, 1023, 1280) == 0 && scale_coordinate(1022, 1023, 1280) == 1279 && scale_coordinate(574, 575, 720) == 719);
 		CHECK(scale_coordinate(0, 2560, 1280) == 0 && scale_coordinate(2559, 2560, 1280) == 1279 && scale_coordinate(1279, 2560, 1280) == 639);

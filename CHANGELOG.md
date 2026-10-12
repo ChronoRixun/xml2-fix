@@ -9,7 +9,9 @@
   one became 1023x575) hovered rows ever further below the cursor and never reached the last ones
   (the main menu's Quit, in-game menus alike). Mouse messages and ScreenToClient now carry the
   screen pixel the point is shown at, and a windowed window keeps its client size across a DPI
-  change (WM_GETDPISCALEDSIZE / WM_DPICHANGED). Test pipe `mouse X Y [move|down|up|click]`.
+  change (WM_GETDPISCALEDSIZE / WM_DPICHANGED): the size it has, kept apart from the render
+  resolution, so a window resized from outside keeps that size too. Test pipe
+  `mouse X Y [move|down|up|click]`.
 - `[Game] ClassicMainPanelBounds`: a move or press inside the focused main-menu row stays that
   row's. MAIN_MENU falls through to the generic handler there, whose label test (0x5c6490) sits
   half the label's local y offset higher and refocused the row below: the focus flipped on every

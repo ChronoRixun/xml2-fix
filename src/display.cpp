@@ -679,12 +679,23 @@ namespace display
 		// window rectangle scaled to keep the window's apparent size; the back buffer keeps its size,
 		// so the picture would be stretched. Keep the client area the size asked for (windowed) or the
 		// whole of the new monitor (borderless) instead, where Windows suggested.
-		// The windowed window's outer size for its client area at `dpi` (call with the mutex held).
-		SIZE window_size_at(const HWND handle, const UINT dpi)
+		// The client area the window keeps across DPI changes (display_rules.hpp, kept_client).
+		kept_client kept{};
+		bool in_dpi_change = false;
+
+		UINT window_dpi(const HWND handle)
+		{
+			using get_dpi_t = UINT(WINAPI*)(HWND);
+			static const auto get_dpi = reinterpret_cast<get_dpi_t>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow"));
+			return get_dpi ? get_dpi(handle) : 0;
+		}
+
+		// The windowed window's outer size for client area `client` at `dpi` (call with the mutex held).
+		SIZE window_size_at(const HWND handle, const UINT dpi, const size& client)
 		{
 			const DWORD style = static_cast<DWORD>(GetWindowLongA(handle, GWL_STYLE));
 			const DWORD ex_style = static_cast<DWORD>(GetWindowLongA(handle, GWL_EXSTYLE));
-			RECT frame{0, 0, static_cast<LONG>(client_size.width), static_cast<LONG>(client_size.height)};
+			RECT frame{0, 0, static_cast<LONG>(client.width), static_cast<LONG>(client.height)};
 			using adjust_for_dpi_t = BOOL(WINAPI*)(LPRECT, DWORD, BOOL, DWORD, UINT);
 			static const auto adjust_for_dpi =
 			    reinterpret_cast<adjust_for_dpi_t>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "AdjustWindowRectExForDpi"));
@@ -701,15 +712,19 @@ namespace display
 			const DWORD style = static_cast<DWORD>(GetWindowLongA(handle, GWL_STYLE));
 			const DWORD ex_style = static_cast<DWORD>(GetWindowLongA(handle, GWL_EXSTYLE));
 			auto place = placement_for(MonitorFromRect(&suggested, MONITOR_DEFAULTTONEAREST), style, ex_style);
-			if (opts.window_mode == mode::windowed && client_size.width && client_size.height)
+			const size target = client_for_dpi_change(kept, client_size);
+			if (opts.window_mode == mode::windowed && target.width && target.height)
 			{
-				const SIZE outer = window_size_at(handle, dpi);
+				const SIZE outer = window_size_at(handle, dpi, target);
 				place.rect = {suggested.left, suggested.top, suggested.left + outer.cx, suggested.top + outer.cy};
 			}
 			logger::write("display: DPI changed to %u - Windows suggested %s, window kept at %s (client %ux%u)", dpi, describe(suggested).c_str(),
-			              describe(place.rect).c_str(), client_size.width, client_size.height);
+			              describe(place.rect).c_str(), target.width, target.height);
+			in_dpi_change = true; // the WM_SIZE this sends is ours
 			real_set_window_pos(handle, nullptr, place.rect.left, place.rect.top, place.rect.right - place.rect.left, place.rect.bottom - place.rect.top,
 			                    SWP_NOZORDER | SWP_NOACTIVATE);
+			in_dpi_change = false;
+			settle_client(kept, opts.window_mode == mode::windowed ? target : client_area(handle), dpi);
 		}
 
 		// The test pipe's mouse (display::test_pointer): a message of its own, so it gets past the
@@ -740,11 +755,17 @@ namespace display
 			if (message == 0x02e4 /* WM_GETDPISCALEDSIZE */ && lparam && manages_geometry() && opts.window_mode == mode::windowed)
 			{
 				std::lock_guard lock(mutex);
-				if (client_size.width && client_size.height)
+				const size target = client_for_dpi_change(kept, client_size);
+				if (target.width && target.height)
 				{
-					*reinterpret_cast<SIZE*>(lparam) = window_size_at(handle, static_cast<UINT>(wparam));
+					*reinterpret_cast<SIZE*>(lparam) = window_size_at(handle, static_cast<UINT>(wparam), target);
 					return TRUE;
 				}
+			}
+			if (message == WM_SIZE && wparam == SIZE_RESTORED && manages_geometry())
+			{
+				std::lock_guard lock(mutex);
+				note_client_resize(kept, {LOWORD(lparam), HIWORD(lparam)}, window_dpi(handle), in_dpi_change);
 			}
 			if (message == 0x02e0 /* WM_DPICHANGED */ && lparam && manages_geometry())
 			{
@@ -811,6 +832,7 @@ namespace display
 			if (result)
 			{
 				window = result;
+				settle_client(kept, client_size, window_dpi(result));
 				logger::write("display: %s window: style %08lX ex %08lX %s, client %ux%u", name(opts.window_mode), place.style, place.ex_style,
 				              describe(place.rect).c_str(), client_size.width, client_size.height);
 				filter_mouse_messages(result);
