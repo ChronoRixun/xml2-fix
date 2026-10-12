@@ -15,6 +15,7 @@
 #include "ini.hpp"
 #include "log.hpp"
 #include "lcsave/lcsave.hpp"
+#include "lcsave/layout.hpp"
 
 #include <Windows.h>
 #include <wincrypt.h>
@@ -23,6 +24,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -753,6 +755,14 @@ namespace save_format
 			}
 			return valid && full==0;
 		}
+
+		// the catch-up's offsets are the library's old-save layout (SPEC-old-save 1.6 a / c)
+		static_assert(offsetof(lcsave::OldAttrScalars, skill_points) == save_format_rules::attr_skill_points &&
+		              offsetof(lcsave::OldAttrScalars, trait_points) == save_format_rules::attr_trait_points &&
+		              offsetof(lcsave::OldAttrScalars, level) == save_format_rules::attr_level &&
+		              sizeof(lcsave::OldAttrScalars) == save_format_rules::attributes_size &&
+		              offsetof(lcsave::OldEquipTail, ack_level) == save_format_rules::tail_ack_level &&
+		              sizeof(lcsave::OldEquipTail) == save_format_rules::equipment_tail);
 
 		// The one-time catch-up of the fifth-level points (save_format_rules.hpp): a campaign whose header doesn't vouch
 		// for an installed LevelSkillPoints / LevelStatPoints key gets, per hero and per valid restore record, the extra

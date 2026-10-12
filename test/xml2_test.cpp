@@ -60,6 +60,7 @@
 #include "personal_item_text_rules.hpp"
 #include "save_format_rules.hpp"
 #include "rank_costs_rules.hpp"
+#include "lcsave/layout.hpp"
 #include "discord_ipc.hpp"
 #include "discord_rules.hpp"
 #include "display_rules.hpp"
@@ -11130,6 +11131,10 @@ namespace
 			CHECK(fifth_levels_processed(9, 7) == 0 && fifth_levels_processed(10, 7) == 1 && fifth_levels_processed(23, 7) == 3 && fifth_levels_processed(45, 7) == 8);
 			CHECK(fifth_levels_processed(5, 5) == 0 && fifth_levels_processed(10, 5) == 1 && fifth_levels_processed(10, 10) == 0 && fifth_levels_processed(6, 7) == 0);
 			CHECK(first_processed_level == 1);
+			// the offsets are the library's old-save layout (the tail: health, energy, seat, valid + 3, experience, ack)
+			CHECK(offsetof(lcsave::OldAttrScalars, skill_points) == attr_skill_points && offsetof(lcsave::OldAttrScalars, trait_points) == attr_trait_points &&
+			      offsetof(lcsave::OldAttrScalars, level) == attr_level && offsetof(lcsave::OldEquipTail, experience) == 0x10 &&
+			      offsetof(lcsave::OldEquipTail, ack_level) == tail_ack_level && sizeof(lcsave::OldEquipTail) == equipment_tail);
 			// the per-fifth extras are the keys' own numbers: 2 - 1 skill points, 8 - 4 stat points
 			CHECK(rank_costs_rules::level_skill_points(5) - 1 == 1 && rank_costs_rules::level_stat_points(5) - rank_costs_rules::stat_points_per_level == 4);
 
@@ -11162,6 +11167,9 @@ namespace
 				put16(attributes + attr_trait_points, stats[h]);
 				image[attributes + attr_level] = static_cast<std::uint8_t>(levels[h]);
 				image[tails[h] + tail_ack_level] = static_cast<std::uint8_t>(acks[h]);
+				// the experience word just before the ack byte (400000: low byte 0x80), as in a real level-21 save
+				const std::uint32_t experience = 400000;
+				std::memcpy(image.data() + tails[h] + 0x10, &experience, 4);
 			}
 			// restore record 3 (stats index 3, one equipped instance before its tail) and the reserved record 0
 			const auto restore_attributes = [&](const int r)

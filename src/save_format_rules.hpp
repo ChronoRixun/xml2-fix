@@ -1411,7 +1411,7 @@ namespace save_format_rules
 	constexpr std::size_t attr_skill_points = 0x10;  // u16 (CStats+0x18; the engine reads it as a signed short)
 	constexpr std::size_t attr_trait_points = 0x12;  // u16 (CStats+0x1a)
 	constexpr std::size_t attr_level = 0x14;         // u8 (CStats+0x1c)
-	constexpr std::size_t tail_ack_level = 0x10;     // u8 (the level-up object's +0x3c)
+	constexpr std::size_t tail_ack_level = 0x14;     // u8 (the level-up object's +0x3c), after health, energy, seat, valid + 3, experience
 	constexpr std::size_t restore_records = 22;
 	constexpr int points_ceiling = 0x7fff;
 
