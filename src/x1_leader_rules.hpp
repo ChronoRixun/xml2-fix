@@ -27,8 +27,11 @@
 // actors keep the native behaviour untouched (decide() tests the bit first).
 //
 // The two sites run the same seven bytes - test byte ptr [reg+0x3db], 8 - and their branch is
-// kept: the patch replaces only those seven bytes with a call to a bridge that reproduces the
-// test (flag bit, then the sidecar lookup) and returns with ZF set for the original branch.
+// kept: the patch replaces only those seven bytes with a jmp to a bridge that reproduces the
+// test (flag bit, then the sidecar lookup) and jumps back to the branch with ZF set as the test
+// would have left it. A jmp, not a call: the bridge leaves through a jmp, so a call's return
+// address would stay on the game's stack (the function's own epilogue would then return into the
+// patched site and run its tail twice).
 
 #include "limits_rules.hpp" // guard, matches, image_base
 
@@ -65,6 +68,7 @@ namespace x1_leader_rules
 	constexpr std::uint32_t actor_stats = 0x35c; // -> CStats
 	constexpr std::uint32_t stats_name = 0x150;  // the stats entry's name (FUN_0041c760's wolverine check)
 	constexpr std::uint8_t native_leader_bit = 8;
+	constexpr std::size_t name_field = 0x20;     // CStats+0x150 holds the name in 0x20 bytes, NUL included
 
 	template <typename T>
 	inline T at(const void* base, const address offset)
@@ -96,18 +100,28 @@ namespace x1_leader_rules
 			}
 			names_.push_back(std::move(name));
 		}
+		// No allocation (the bridges call this on the game's thread for every projectile hit on a hero and
+		// every death): the name is read up to the stats entry's 0x20-byte field, lowered into a local.
 		bool contains(const char* name) const
 		{
 			if (!name)
 			{
 				return false;
 			}
-			std::string lower(name);
-			for (auto& c : lower)
+			char lower[name_field];
+			std::size_t n = 0;
+			for (; n < name_field && name[n] != 0; ++n)
 			{
-				c = ascii_lower(c);
+				lower[n] = ascii_lower(name[n]);
 			}
-			return std::binary_search(names_.begin(), names_.end(), lower);
+			if (n == name_field)
+			{
+				return false; // no terminator inside the field: not a stats name
+			}
+			const std::string_view key(lower, n);
+			const auto it = std::lower_bound(names_.begin(), names_.end(), key,
+			                                 [](const std::string& a, const std::string_view b) { return std::string_view(a) < b; });
+			return it != names_.end() && std::string_view(*it) == key;
 		}
 		std::size_t size() const { return names_.size(); }
 		void finish()
@@ -181,8 +195,9 @@ namespace x1_leader_rules
 
 	// ---- The bridge each site is patched with ------------------------------------------------------
 	//
-	// save; push the actor; call the fix's decide; test eax,eax; restore; jmp resume. popad leaves
-	// the flags from test eax,eax standing, which is what the kept branch reads.
+	// Entered by the site's jmp with the game's stack untouched: save; push the actor; call the
+	// fix's decide; test eax,eax; restore; jmp resume. popad leaves the flags from test eax,eax
+	// standing, which is what the kept branch reads (ZF clear = a leader, as the native test).
 	namespace detail
 	{
 		inline void word(std::vector<std::uint8_t>& b, const std::uint32_t v)
@@ -209,11 +224,11 @@ namespace x1_leader_rules
 		return b;
 	}
 
-	// The seven bytes written over a site: call rel32 into the bridge + two nops. rel32 is from the
-	// end of the call to the bridge.
-	inline std::vector<std::uint8_t> call_bridge(const address site, const address bridge_va)
+	// The seven bytes written over a site: jmp rel32 into the bridge + two nops (never executed: the
+	// bridge resumes at the kept branch, site + 7). rel32 is from the end of the jmp to the bridge.
+	inline std::vector<std::uint8_t> jmp_bridge(const address site, const address bridge_va)
 	{
-		std::vector<std::uint8_t> b{0xe8};
+		std::vector<std::uint8_t> b{0xe9};
 		detail::word(b, bridge_va - (site + 5));
 		b.insert(b.end(), {0x90, 0x90});
 		return b;

@@ -14,6 +14,10 @@ namespace ini
 	bool requested = false;
 	bool flag(const wchar_t*, const wchar_t*, bool) { return requested; }
 }
+namespace game_version
+{
+	void refuse_startup() {}
+}
 namespace logger
 {
 	const std::filesystem::path& module_dir()
@@ -42,7 +46,11 @@ namespace
 	                     pain_continue = 0x435984, pain_rejoin = 0x4359b0;
 	const std::uintptr_t drop_site = 0x46e4ed, drop_resume = 0x46e4f4, drop_rejoin = 0x46e503;
 	int failures;
-	void* handler_token;
+	// Bumped by the marker at each rejoin: a run must reach it exactly once. A site that entered its
+	// bridge with a call left the return address on the stack, and the rejoin's ret then went back
+	// into the patched site and ran the tail a second time (the game would do the same from the
+	// real function's epilogue) - this count is what catches that.
+	volatile std::uint32_t rejoins;
 
 	LONG WINAPI report_crash(EXCEPTION_POINTERS* ex)
 	{
@@ -72,6 +80,17 @@ namespace
 		failures += !ok;
 	}
 
+	// inc dword ptr [rejoins]; ret
+	void place_rejoin(const std::uintptr_t at)
+	{
+		auto* r = reinterpret_cast<std::uint8_t*>(at);
+		r[0] = 0xff;
+		r[1] = 0x05;
+		const auto counter = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&rejoins));
+		std::memcpy(r + 2, &counter, 4);
+		r[6] = 0xc3;
+	}
+
 	// Retail bytes around both sites (from the exe): the test plus its kept branch, with a ret
 	// marker at each rejoin so the runner returns after the branch's first effect.
 	void place_native()
@@ -88,7 +107,7 @@ namespace
 		*reinterpret_cast<std::uint8_t*>(pain_suppress + 1) = 0xa6;
 		*reinterpret_cast<std::uint32_t*>(pain_suppress + 2) = 0xac;
 		*reinterpret_cast<std::uint8_t*>(pain_suppress + 6) = 0xf7;
-		*reinterpret_cast<std::uint8_t*>(pain_rejoin) = 0xc3; // ret
+		place_rejoin(pain_rejoin);
 
 		auto* d = reinterpret_cast<std::uint8_t*>(drop_site);
 		const std::array<std::uint8_t, 7> test_esi{0xf6, 0x86, 0xdb, 0x03, 0x00, 0x00, 0x08};
@@ -101,7 +120,7 @@ namespace
 		                                          0x8a};
 		std::memcpy(f + 4, set_bl.data(), set_bl.size());
 		f[10] = 0x5c; f[11] = 0x24; f[12] = 0x13;                                       // mov bl,[esp+0x13]
-		*reinterpret_cast<std::uint8_t*>(drop_rejoin) = 0xc3;                           // ret
+		place_rejoin(drop_rejoin);
 	}
 
 	// Runs the pain site with esi = the victim ctx (bit 3 of +0xac set) and edi = the attacker.
@@ -140,6 +159,27 @@ namespace
 			pop esi
 			ret 0xc
 		}
+	}
+
+	// Each run must pass its rejoin exactly once (see rejoins).
+	void pain_once(void* ctx, void* attacker)
+	{
+		rejoins = 0;
+		run_pain(ctx, attacker, reinterpret_cast<void*>(pain_site));
+		if (rejoins != 1)
+		{
+			check(false, "the pain site ran its tail once (the game's stack is left as it was)");
+		}
+	}
+	unsigned char drop_once(void* corpse, const int kind)
+	{
+		rejoins = 0;
+		const auto bl = run_drop(corpse, kind, reinterpret_cast<void*>(drop_site));
+		if (rejoins != 1)
+		{
+			check(false, "the drop site ran its tail once (the game's stack is left as it was)");
+		}
+		return bl;
 	}
 }
 
@@ -185,9 +225,9 @@ int main()
 	check(std::memcmp(reinterpret_cast<void*>(pain_site), "\xf6\x87\xdb\x03\x00\x00\x08", 7) == 0 &&
 	          std::memcmp(reinterpret_cast<void*>(drop_site), "\xf6\x86\xdb\x03\x00\x00\x08", 7) == 0,
 	      "absent key preserves every native byte");
-	run_pain(victim, listed_actor, reinterpret_cast<void*>(pain_site));
+	pain_once(victim, listed_actor);
 	check(pain_flag() != 0, "negative control: the unpatched gate keeps the flinch");
-	check(run_drop(listed_actor, 1, reinterpret_cast<void*>(drop_site)) == 0, "negative control: the unpatched roller skips a listed corpse");
+	check(drop_once(listed_actor, 1) == 0, "negative control: the unpatched roller skips a listed corpse");
 
 	// 2. The key is on: a guard mismatch refuses the patch and changes nothing.
 	ini::requested = true;
@@ -217,36 +257,36 @@ int main()
 	                                                   x1_leader_rules::guards[0].hex)));
 	x1_leader::install(game);
 	check(x1_leader::installed() && x1_leader::verified(), "installed and verified");
-	const auto patched = *reinterpret_cast<std::uint8_t*>(pain_site) == 0xe8 &&
-	                     *reinterpret_cast<std::uint8_t*>(drop_site) == 0xe8 &&
+	const auto patched = *reinterpret_cast<std::uint8_t*>(pain_site) == 0xe9 &&
+	                     *reinterpret_cast<std::uint8_t*>(drop_site) == 0xe9 &&
 	                     *reinterpret_cast<std::uint16_t*>(pain_site + 5) == 0x9090 &&
 	                     *reinterpret_cast<std::uint16_t*>(drop_site + 5) == 0x9090;
-	check(patched, "both sites carry the call + nops");
+	check(patched, "both sites carry the jmp + nops");
 	// The pain gate: the flinch flag (ctx+0xac bit 3) is what the gate clears on suppress.
 	*reinterpret_cast<std::uint8_t*>(victim + 0xac) = 0x08;
 	std::printf("about to run_pain listed\n");
-	run_pain(victim, listed_actor, reinterpret_cast<void*>(pain_site));
+	pain_once(victim, listed_actor);
 	std::printf("ran_pain listed\n");
 	check(pain_flag() == 0, "a listed attacker's projectile suppresses the flinch");
 	*reinterpret_cast<std::uint8_t*>(victim + 0xac) = 0x08;
-	run_pain(victim, native_actor, reinterpret_cast<void*>(pain_site));
+	pain_once(victim, native_actor);
 	check(pain_flag() == 0, "a native x3-flagged attacker's projectile still suppresses it (native path)");
 	*reinterpret_cast<std::uint8_t*>(victim + 0xac) = 0x08;
-	run_pain(victim, plain_actor, reinterpret_cast<void*>(pain_site));
+	pain_once(victim, plain_actor);
 	check(pain_flag() != 0, "an unlisted attacker's projectile keeps the flinch");
 	*reinterpret_cast<std::uint8_t*>(victim + 0xac) = 0x08;
-	run_pain(victim, no_stats_actor, reinterpret_cast<void*>(pain_site));
+	pain_once(victim, no_stats_actor);
 	check(pain_flag() != 0, "an attacker without stats keeps the flinch");
 	*reinterpret_cast<std::uint8_t*>(victim + 0xac) = 0x08;
-	run_pain(victim, nullptr, reinterpret_cast<void*>(pain_site));
+	pain_once(victim, nullptr);
 	check(pain_flag() != 0, "no attacker keeps the flinch");
 
 	// The drop roller: bl is the roller's leader flag.
-	check(run_drop(plain_actor, 1, reinterpret_cast<void*>(drop_site)) == 0, "an unlisted corpse falls back to the probability roll");
-	check(run_drop(listed_actor, 1, reinterpret_cast<void*>(drop_site)) != 0, "a listed corpse always rolls");
-	check(run_drop(native_actor, 1, reinterpret_cast<void*>(drop_site)) != 0, "a native x3-flagged corpse still rolls (native path)");
-	check(run_drop(no_stats_actor, 1, reinterpret_cast<void*>(drop_site)) == 0, "a corpse without stats falls back to the roll");
-	check(run_drop(listed_actor, 0, reinterpret_cast<void*>(drop_site)) == 0, "drop kind 0 is not a leader roll (the kind gate stands)");
+	check(drop_once(plain_actor, 1) == 0, "an unlisted corpse falls back to the probability roll");
+	check(drop_once(listed_actor, 1) != 0, "a listed corpse always rolls");
+	check(drop_once(native_actor, 1) != 0, "a native x3-flagged corpse still rolls (native path)");
+	check(drop_once(no_stats_actor, 1) == 0, "a corpse without stats falls back to the roll");
+	check(drop_once(listed_actor, 0) == 0, "drop kind 0 is not a leader roll (the kind gate stands)");
 
 	DWORD unused;
 	VirtualProtect(fixture_space, sizeof(fixture_space), fixture_protection, &unused);

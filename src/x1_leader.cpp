@@ -2,7 +2,10 @@
 
 #include "ini.hpp"
 #include "log.hpp"
+#include "game_version.hpp"
 #include "x1_leader_rules.hpp"
+#include "xml1_hook_memory.hpp"
+#include "xml1_hook_transaction.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -76,42 +79,6 @@ namespace x1_leader
 		address address_of(const void* pointer)
 		{
 			return static_cast<address>(reinterpret_cast<std::uintptr_t>(pointer));
-		}
-
-		struct write
-		{
-			address va;
-			std::vector<std::uint8_t> bytes;
-		};
-
-		// Every write or none: each site is made writable first, so a refusal leaves the game as it
-		// was; then every write; then each site's protection goes back.
-		bool patch(const std::vector<write>& writes)
-		{
-			std::vector<DWORD> protection(writes.size());
-			for (std::size_t i = 0; i < writes.size(); ++i)
-			{
-				if (!VirtualProtect(in_game(writes[i].va), writes[i].bytes.size(), PAGE_EXECUTE_READWRITE, &protection[i]))
-				{
-					logger::write("x1 leader: ERROR: can't unprotect XMen2.exe at 0x%08lX (error %lu) - %s",
-					              static_cast<unsigned long>(writes[i].va), GetLastError(), as_before);
-					for (std::size_t j = i; j-- > 0;)
-					{
-						VirtualProtect(in_game(writes[j].va), writes[j].bytes.size(), protection[j], &protection[j]);
-					}
-					return false;
-				}
-			}
-			for (const auto& w : writes)
-			{
-				std::memcpy(in_game(w.va), w.bytes.data(), w.bytes.size());
-				FlushInstructionCache(GetCurrentProcess(), in_game(w.va), w.bytes.size());
-			}
-			for (std::size_t i = writes.size(); i-- > 0;)
-			{
-				VirtualProtect(in_game(writes[i].va), writes[i].bytes.size(), protection[i], &protection[i]);
-			}
-			return true;
 		}
 
 		bool load_sidecar()
@@ -211,12 +178,28 @@ namespace x1_leader
 		}
 		FlushInstructionCache(GetCurrentProcess(), block, pain.size() + drop.size());
 
-		const std::vector<write> writes{
-		    {pain_site_va, call_bridge(pain_site_va, pain_va)},
-		    {drop_site_va, call_bridge(drop_site_va, drop_va)},
+		// Both sites or neither, through the shared transaction (retail bytes re-read, every page made
+		// writable first, written, read back, rolled back on any failure).
+		const auto retail_bytes = [](const address va) {
+			std::vector<std::uint8_t> bytes(7);
+			std::memcpy(bytes.data(), in_game(va), bytes.size());
+			return bytes;
 		};
-		if (!patch(writes))
+		const std::vector<xml1_hook_transaction::patch> writes{
+		    {pain_site_va, retail_bytes(pain_site_va), jmp_bridge(pain_site_va, pain_va)},
+		    {drop_site_va, retail_bytes(drop_site_va), jmp_bridge(drop_site_va, drop_va)},
+		};
+		xml1_hook_transaction::memory memory;
+		bool safe = true;
+		if (!xml1_hook_transaction::apply(memory, writes, &safe))
 		{
+			if (!safe)
+			{
+				game_version::refuse_startup();
+				logger::write("x1 leader: ERROR: rollback/protection verification failed; process startup refused");
+				return; // the bridges stay allocated: a site may still jump into them
+			}
+			logger::write("x1 leader: ERROR: the two sites could not be written and read back - %s", as_before);
 			VirtualFree(block, 0, MEM_RELEASE);
 			return;
 		}

@@ -9621,6 +9621,12 @@ namespace
 		CHECK(!list.contains("") && !list.contains("x1_sgt_re") && !list.contains("x1_sgt_red_x") &&
 		      !list.contains("# a comment") && !list.contains(nullptr));
 		CHECK(leader_names::parse("").size() == 0 && leader_names::parse("# only a comment\n\n").size() == 0);
+		// The stats name field is 0x20 bytes: a name is read only up to its NUL inside the field.
+		char unterminated[name_field + 8];
+		std::memset(unterminated, 'a', sizeof unterminated);
+		unterminated[sizeof unterminated - 1] = '\0';
+		CHECK(!leader_names::parse(std::string(name_field, 'a')).contains(unterminated));
+		CHECK(leader_names::parse(std::string(name_field - 1, 'a')).contains(std::string(name_field - 1, 'A').c_str()));
 		const auto dup = leader_names::parse("x1_sgt_red\nX1_SGT_RED\n");
 		CHECK(dup.size() == 1 && dup.contains("x1_sgt_red"));
 
@@ -9651,15 +9657,16 @@ namespace
 		std::memcpy(pain, native_pain.data(), native_pain.size());
 		CHECK(limits_rules::matches(pain, guards[0].hex) && !limits_rules::matches(pain, guards[1].hex));
 
-		// The encodings: seven overwritten bytes become call + 2 nops; the bridge ends in the resume jmp.
+		// The encodings: seven overwritten bytes become jmp + 2 nops (a call would leave its return
+		// address on the game's stack: the bridge leaves through a jmp); the bridge ends in the resume jmp.
 		constexpr auto callback = 0x11111111u;
-		const auto call = call_bridge(pain_site_va, 0x22222222u);
-		CHECK(call.size() == 7 && call[0] == 0xe8 && call[5] == 0x90 && call[6] == 0x90);
+		const auto call = jmp_bridge(pain_site_va, 0x22222222u);
+		CHECK(call.size() == 7 && call[0] == 0xe9 && call[5] == 0x90 && call[6] == 0x90);
 		std::uint32_t rel = 0;
 		std::memcpy(&rel, call.data() + 1, 4);
 		CHECK(rel == 0x22222222u - (pain_site_va + 5));
 		const auto b = bridge(0x57, callback);
-		CHECK(b.size() == 5 + 2 + 3 + 2 + 1 + 5 && b[0] == 0x60 && b[1] == 0x57 && b[2] == 0xb8);
+		CHECK(b.size() == 1 + 1 + 5 + 2 + 3 + 2 + 1 + 5 && b[0] == 0x60 && b[1] == 0x57 && b[2] == 0xb8);
 		std::memcpy(&rel, b.data() + 3, 4);
 		CHECK(rel == callback);
 		CHECK(b[b.size() - 5] == 0xe9); // the resume jmp's rel32 is filled by the installer
