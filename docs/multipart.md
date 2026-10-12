@@ -21,7 +21,9 @@ back. Absent or `0`: nothing is patched. The X-Men Legends I port (builder `fix_
 
 Loop effect: the XBE re-spawns a broken part's `loopEffect` each time it ends (`0x88aa0`, from the actor update
 `0x3ae60`) at the *current* part's `bone` (bone 0 when none is left), its length being the effect's
-`LoopTime + random * RandLoopTime` (effect manager vt+0x24 = `0x184f0` -> `0x25ee0`, 0.3 s for a stale handle).
+`LoopTime + random * RandLoopTime` (effect manager vt+0x24 = `0x184f0` -> `0x25ee0`, 0.3 s for a stale handle);
+`0x25f30` draws from the shared generator (`0x123330`, the break roll's too) even when RandLoopTime is 0, so the
+draw is kept (PC `0x560190(1)`, the damage stream).
 Here: after each AI update of the actor, the same rule, the length read from XMen2.exe's loaded effect record
 (store `0x4078d0()+0x4874`, `0x44`-byte records, LoopTime `+0x34`, RandLoopTime `+0x38`; parser `0x4182c0`,
 handle check `0x405100`), bone 0 = the bolt table's first name (`0x6e25f0`).
@@ -30,18 +32,20 @@ handle check `0x405100`), bone 0 = the bolt table's first name (`0x6e25f0`).
 as `setSegmentVisible(actor, hideSkin, "0")` + `setSegmentVisible(actor, showSkin, "1")` + `spawnEffectBone`.
 The active script table's `setSegmentVisible` entry is wrapped: a script hiding a whole XML1 part's `hideSkin` breaks
 that part here too (`0x88fa0`'s state: health 0, attacks disabled, current part moved on), so a later hit cannot
-break it again; the script itself plays the look and the effect. If the entry is not the retail handler
-(`0x4a5bd0`), the bridge stays off with one log line and the rest installs.
+break it again; the script itself plays the look and the effect. The bridge is part of the rule: the table is found
+through checked reads of the registration at `0x49fe30` (`PUSH table` / `PUSH count`, forced_teams' relocation
+allowed, the record recognised by its name), and an unreadable operand or a handler other than the retail
+`0x4a5bd0` refuses the whole install with one log line.
 
 ## Online
 
 Part damage, the break roll and the disabled attacks change the lockstep simulation, so shared gameplay rule 6
-carries `{installed, 1, 0, 0}` (see [gameplay-agreement.md](gameplay-agreement.md)).
+carries `{installed, 2, 0, 0}` (part-logic revision 2: bridge required, loop draw kept) (see [gameplay-agreement.md](gameplay-agreement.md)).
 
 ## Install
 
 One `xml1_hook_transaction`: four manager vtable slots, one CALL operand, six brain vtable slots and the
-`setSegmentVisible` table entry, after 22 guards
+`setSegmentVisible` table entry, after 22 guards and the checked script-table lookup
 (called functions and the manager vtable). A guard mismatch or a refused transaction leaves the native behaviour
 with one log line; a failed rollback refuses startup. `[Test] MultipartTrace=1` logs every spawned XML1 part owner,
 every part hit (damage, current part, part health, the roll), every refused attack, scripted removals and the

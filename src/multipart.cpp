@@ -41,7 +41,9 @@ using u32=std::uint32_t;
 template<class T> T at(const void* p,u32 off){T v{};std::memcpy(&v,static_cast<const unsigned char*>(p)+off,sizeof v);return v;}
 template<class T> T fn(u32 a){return reinterpret_cast<T>(static_cast<std::uintptr_t>(a));}
 
-constexpr std::uint16_t revision=1;
+// Part-logic revision carried in rule 6's second value. 2: the scripted-removal bridge is required (no partial
+// install) and the loop length always draws from the shared generator (revision 1 skipped the draw at zero spread).
+constexpr std::uint16_t revision=2;
 constexpr u32 vt_remove=0x689868,vt_parse=0x68986c,vt_apply=0x689870,vt_clone=0x689878;
 constexpr u32 damage_call=0x438b0f;
 constexpr std::array<u32,6> brain_slots{0x694c60,0x695418,0x6953f0,0x695440,0x695388,0x695468};
@@ -104,12 +106,12 @@ float now(){return fn<float(__cdecl*)()>(0x45fe60)();}
 // reader 0x418d50), handle checked by 0x405100.
 float loop_time(u32 effect){
     auto* store=reinterpret_cast<unsigned char*>(fn<void*(__cdecl*)()>(0x4078d0)())+0x4874;
-    if(!effect||(fn<u32(__fastcall*)(void*,void*,u32)>(0x405100)(store,nullptr,effect)&0xff)==0)return .3f;
+    if(!effect||(fn<u32(__fastcall*)(void*,void*,u32)>(0x405100)(store,nullptr,effect)&0xff)==0)return .3f;   // 0x25ee0: no draw
     const auto* rec=store+(at<u32>(store,0x419c)&effect)*0x44;
-    float t=at<float>(rec,0x34);
-    const float spread=at<float>(rec,0x38);
-    if(spread!=0.f)t+=spread*fn<float(__cdecl*)(unsigned char)>(0x560190)(1);
-    return t;
+    // 0x25f30 draws from the shared generator (0x123330, the break roll's too) whatever the spread: keep the draw so
+    // the stream advances as in the first game (PC: 0x560190(1) and 0x5601e0(..,1) both reach 0x560090).
+    const float random=fn<float(__cdecl*)(unsigned char)>(0x560190)(1);
+    return at<float>(rec,0x34)+random*at<float>(rec,0x38);
 }
 // The bolt table's first name (0x6e25f0[0]): where the XBE re-spawns a loop when no part is current (bone 0).
 const char* first_bolt(){return at<const char*>(reinterpret_cast<const void*>(0x6e25f0),0);}
@@ -294,6 +296,27 @@ template<std::size_t I> u32 __fastcall brain_hook(void* brain,void* edx,void* ac
 template<std::size_t... I> std::array<void*,sizeof...(I)> brain_hooks(std::index_sequence<I...>){
     return {reinterpret_cast<void*>(&brain_hook<I>)...};
 }
+// Checked reads for the script-table registration (0x49fe30: PUSH table / PUSH count / CALL 0x4d75a0; forced_teams
+// re-points both operands at its own longer table). An unreadable or foreign operand refuses the install.
+template<class T> bool peek(u32 address,T& value){
+    __try { std::memcpy(&value,reinterpret_cast<const void*>(static_cast<std::uintptr_t>(address)),sizeof value); return true; }
+    __except(EXCEPTION_EXECUTE_HANDLER){ return false; }
+}
+bool peek_name(u32 address,const char* want){
+    __try { return address&&std::strcmp(reinterpret_cast<const char*>(static_cast<std::uintptr_t>(address)),want)==0; }
+    __except(EXCEPTION_EXECUTE_HANDLER){ return false; }
+}
+// The active table's setSegmentVisible record ({func, name, ret, args}), or 0.
+u32 segment_entry(){
+    unsigned char push_table=0,push_count=0;u32 table=0,count=0;
+    if(!peek(0x49fe30,push_table)||!peek(0x49fe31,table)||!peek(0x49fe35,push_count)||!peek(0x49fe36,count))return 0;
+    constexpr u32 index=(segment_record-0x68a908)/16;
+    if(push_table!=0x68||push_count!=0x68||!table||count<=index||count>0x10000)return 0;
+    const u32 record=table+index*16;
+    u32 name=0;
+    if(!peek(record+4,name)||!peek_name(name,"setSegmentVisible"))return 0;
+    return record;
+}
 }
 bool requested(){return was_requested;}
 registration capability(){
@@ -349,18 +372,22 @@ void install(HMODULE game){
         real_brain[i]=fn<brain_t>(brain_native[i]);
         writes.push_back({brain_slots[i],pointer_bytes(reinterpret_cast<void*>(real_brain[i])),pointer_bytes(hooks[i])});
     }
-    // The active script function table (forced_teams may have moved it into the DLL), as mold_controller reads it.
-    const u32 table=at<u32>(reinterpret_cast<const void*>(0x49fe31),0);
-    const u32 segment_slot=table+(segment_record-0x68a908);
-    real_segment=at<script_t>(reinterpret_cast<const void*>(segment_slot),0);
-    const bool bridge=real_segment==fn<script_t>(0x4a5bd0);
-    if(bridge)writes.push_back({segment_slot,pointer_bytes(reinterpret_cast<void*>(real_segment)),pointer_bytes(reinterpret_cast<void*>(&segment_hook))});
-    else logger::write("multipart: setSegmentVisible isn't the retail handler; scripted part removal stays cosmetic");
+    // The active script function table (forced_teams may have moved it into the DLL). The scripted-removal bridge is
+    // part of the rule: without it a scripted part removal would leave this peer's part state behind, so an
+    // unreadable table or a foreign setSegmentVisible handler refuses the whole install.
+    const u32 segment_slot=segment_entry();
+    u32 handler=0;
+    if(!segment_slot||!peek(segment_slot,handler)){
+        logger::write("multipart: the active script table at 0x49FE31 is unreadable or not the registered one; native parts retained");return;}
+    if(handler!=0x4a5bd0){
+        logger::write("multipart: setSegmentVisible is not the retail handler (%08X); native parts retained",handler);return;}
+    real_segment=fn<script_t>(handler);
+    writes.push_back({segment_slot,pointer_bytes(reinterpret_cast<void*>(real_segment)),pointer_bytes(reinterpret_cast<void*>(&segment_hook))});
     xml1_hook_transaction::memory memory;
     bool safe=true;
     if(xml1_hook_transaction::apply(memory,writes,&safe)){
         installed=true;
-        logger::write("multipart: XML1 breakable parts installed (parser, start look, damage at 0x438B0F, %u AI update slots, scripted removal %s)",unsigned(brain_slots.size()),bridge?"on":"off");
+        logger::write("multipart: XML1 breakable parts installed (parser, start look, damage at 0x438B0F, %u AI update slots, scripted removal)",unsigned(brain_slots.size()));
     }
     else if(safe)logger::write("multipart: patch transaction refused; native parts retained");
     else {game_version::refuse_startup();logger::write("multipart: rollback/protection verification failed; process startup refused");}

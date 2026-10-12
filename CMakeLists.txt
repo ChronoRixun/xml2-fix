@@ -268,6 +268,11 @@ END
 add_executable(xml2_entity_transfer_test test/entity_transfer_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/entity_transfer.cpp)
 target_include_directories(xml2_entity_transfer_test PRIVATE src)
 target_link_options(xml2_entity_transfer_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# multipart::install against the retail image (review cases: invalid table operand, foreign setSegmentVisible handler,
+# relocated table, changed guard) and the loop length's generator draw. SKIPPED without XML2_FIX_TEST_EXE.
+add_executable(xml2_multipart_install_test test/multipart_install_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_multipart_install_test PRIVATE src)
+target_link_options(xml2_multipart_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 # The save-core capture bridges executed as emitted under the retail and E10A2 profiles (Phase A, review P1).
 add_executable(xml2_save_capture_bridge_test test/save_capture_bridge_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
 target_include_directories(xml2_save_capture_bridge_test PRIVATE src)
