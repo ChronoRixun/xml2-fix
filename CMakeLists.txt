@@ -76,6 +76,7 @@ add_library(xml2_fix SHARED
 	src/gameplay_agreement.cpp
 	src/patch_transaction.cpp
 	src/explosive_first_hit.cpp
+	src/death_threshold.cpp
 	src/confirmation_release.cpp
 	src/objective_text.cpp
 	src/xp_curve.cpp

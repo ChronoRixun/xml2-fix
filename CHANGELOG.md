@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `[Game] DeathRule=xml1`: X-Men Legends I's death threshold - an entity dies on the hit that leaves it below 1
+  health, instead of only at 0, so an enemy no longer fights on at a fraction of a point with its death script and
+  drops waiting. Seven comparisons of the damage functions move to the first game's line, and a killing hit leaves
+  health at 0 as the first game's whole numbers always did, so XP and death drops follow (`docs/death-threshold.md`);
+  online, gameplay rule 9.
+
 ## 1.4.0 - 2026-10-12
 
 The engine half of Legends Classic 0.2.0. For X-Men Legends II as it ships only the mouse fix applies; everything

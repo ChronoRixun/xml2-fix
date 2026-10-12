@@ -52,6 +52,7 @@
 #include <Xinput.h>
 
 #include "break_rule_rules.hpp"
+#include "death_threshold_rules.hpp"
 #include "personal_item_text_rules.hpp"
 #include "save_format_rules.hpp"
 #include "discord_ipc.hpp"
@@ -9601,6 +9602,201 @@ namespace
 		}
 	}
 
+	// The death rule's bridge, run: a fake entity whose vtable slot 0x1a4 is death_setter, entered with esi = the entity
+	// as at 0x498407, out through death_landing (which drops the displaced push and returns to invoke_death_bridge).
+	float death_zero = 0.0f;
+	int death_setter_calls = 0;
+	float death_setter_value = -99.0f;
+	void __fastcall death_setter(void* self, void*, const float value)
+	{
+		++death_setter_calls;
+		death_setter_value = value;
+		std::memcpy(static_cast<std::uint8_t*>(self) + 0x27c, &value, 4);
+	}
+	__declspec(naked) void death_landing()
+	{
+		__asm { add esp, 4 }
+		__asm { ret }
+	}
+	__declspec(naked) void __stdcall invoke_death_bridge(void* /*bridge*/, void* /*entity*/)
+	{
+		__asm { push esi }
+		__asm { mov esi, [esp + 0xc] }
+		__asm { mov eax, [esp + 8] }
+		__asm { call eax }
+		__asm { pop esi }
+		__asm { ret 8 }
+	}
+
+	// [Game] DeathRule (death_threshold_rules.hpp): the value's rules; the x87 tests before and after, decided as the
+	// code decides them, against XML1's; the seven sites on their own (operand, mask, nothing else written); then,
+	// when a copy of XMen2.exe is at hand, every site and both constants against it and the writes on that copy.
+	void check_death_threshold_rules()
+	{
+		using namespace death_threshold_rules;
+		std::printf("[Game] DeathRule (X-Men Legends 1's death threshold)\n");
+
+		CHECK(parse_rule("xml1").set && parse_rule("xml1").value == rule::xml1 && parse_rule("xml1").error.empty());
+		CHECK(parse_rule("  XML1 ; the first game's line").value == rule::xml1 && parse_rule("Xml2").set && parse_rule("Xml2").value == rule::xml2);
+		CHECK(!parse_rule("").set && parse_rule("").error.empty() && !parse_rule("  ; nothing").set);
+		for (const char* bad : {"1", "on", "xml3", "xml1 xml2", "below1"})
+		{
+			const auto refused = parse_rule(bad);
+			CHECK(!refused.set && !refused.error.empty() && refused.value == rule::xml2);
+		}
+
+		// The status bits and the parity jp reads: "above" keeps nothing (even: jp taken), "below" C0, "equal" C3,
+		// unordered C0|C2|C3.
+		CHECK(status_ah(2.0f, 1.0f) == 0x00 && status_ah(0.5f, 1.0f) == 0x01 && status_ah(1.0f, 1.0f) == 0x40);
+		CHECK(status_ah(std::numeric_limits<float>::quiet_NaN(), 1.0f) == 0x45);
+		CHECK(parity_even(0) && !parity_even(1) && !parity_even(0x40) && parity_even(0x41) && parity_even(0x05) && !parity_even(0x04));
+
+		// The death test: XMen2.exe at most 0, XML1 (default.xbe 0x92675) below 1, and the rule exactly XML1's -
+		// a health of exactly 1 lives, a fraction dies, and a NaN health lives in both of XML1's and the rule's.
+		const float nan = std::numeric_limits<float>::quiet_NaN();
+		CHECK(!dies_xml2(0.19995f) && !dies_xml2(0.5f) && dies_xml2(0.0f) && dies_xml2(-4.8f) && !dies_xml2(1.0f));
+		CHECK(dies_xml1(0.19995f) && dies_xml1(0.999f) && !dies_xml1(1.0f) && !dies_xml1(1.0001f) && dies_xml1(0.0f) && dies_xml1(-30000.0f) && !dies_xml1(nan));
+		bool same = true;
+		for (int i = -400; i <= 400; ++i)
+		{
+			const float h = static_cast<float>(i) / 64.0f;
+			same &= dies_with_rule(h) == dies_xml1(h) && dies_with_rule(std::nextafter(h, 2.0f)) == dies_xml1(std::nextafter(h, 2.0f));
+		}
+		CHECK(same && dies_with_rule(nan) == dies_xml1(nan) && !dies_xml2(nan));
+		CHECK(!dies_with_rule(1.0f) && dies_with_rule(std::nextafter(1.0f, 0.0f)) && dies_with_rule(0.0f));
+		// "At most 1" where XML1 tests that (the last-stand window, mask kept at 0x41).
+		CHECK(past_line(1.0f, 1.0f, xml2_mask) && past_line(0.5f, 1.0f, xml2_mask) && !past_line(1.5f, 1.0f, xml2_mask));
+
+		// The sites: well formed, apart, an fcom/fcomp of the 0.0 at `operand`, test ah,0x41 at `mask`; the rule's
+		// bytes differ from the retail ones only in the operand's low word and the mask.
+		bool sites_ok = true;
+		for (std::size_t i = 0; i < sites.size(); ++i)
+		{
+			const auto& s = sites[i];
+			sites_ok &= limits_rules::valid_hex(s.hex) && s.what && *s.what;
+			const auto size = limits_rules::hex_size(s.hex);
+			for (std::size_t j = 0; j < sites.size(); ++j)
+			{
+				sites_ok &= i == j || sites[j].va >= s.va + size || sites[j].va + limits_rules::hex_size(sites[j].hex) <= s.va;
+			}
+			const auto before = retail_bytes(s);
+			const auto after = rule_bytes(s);
+			address operand = 0;
+			std::memcpy(&operand, before.data() + s.operand, 4);
+			sites_ok &= operand == zero_constant && before[s.operand - 2] == 0xd8 && (before[s.operand - 1] == 0x1d || before[s.operand - 1] == 0x15);
+			sites_ok &= before[0] == 0xd9 && (before[1] == 0x86 || before[1] == 0x87) && before[2] == 0x7c && before[3] == 0x02; // fld [reg+0x27c]
+			std::memcpy(&operand, after.data() + s.operand, 4);
+			sites_ok &= operand == one_constant && after.size() == before.size();
+			if (s.mask)
+			{
+				sites_ok &= before[s.mask - 2] == 0xf6 && before[s.mask - 1] == 0xc4 && before[s.mask] == xml2_mask && after[s.mask] == xml1_mask;
+			}
+			std::size_t changed = 0;
+			for (std::size_t b = 0; b < before.size(); ++b)
+			{
+				changed += before[b] != after[b];
+				sites_ok &= before[b] == after[b] || b == s.operand || b == s.operand + 1 || b == s.mask;
+			}
+			sites_ok &= changed == (s.mask ? 3u : 2u);
+			sites_ok &= s.xml1 != 0 || s.va == 0x4983ce; // only bossundying has no XML1 counterpart
+		}
+		CHECK(sites_ok);
+		CHECK(std::count_if(sites.begin(), sites.end(), [](const site& s) { return s.mask == 0; }) == 1); // the last-stand window
+
+		// The death branch's bridge: health above 0 goes to 0 through the entity's own setter; at most 0, NaN: untouched.
+		// Repeated, so a leaked x87 register would show (the stack overflows after eight).
+		{
+			auto* block = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, 64, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+			CHECK(block != nullptr);
+			if (block)
+			{
+				const auto as_address = [](const void* p) { return static_cast<address>(reinterpret_cast<std::uintptr_t>(p)); };
+				const auto code = death_bridge(as_address(&death_zero), as_address(reinterpret_cast<const void*>(&death_landing)), as_address(block));
+				std::memcpy(block, code.data(), code.size());
+				FlushInstructionCache(GetCurrentProcess(), block, code.size());
+				std::array<void*, 0x200 / 4> vtable{};
+				vtable[health_setter_slot / 4] = reinterpret_cast<void*>(&death_setter);
+				std::array<std::uint8_t, 0x400> entity{};
+				const void* vt = vtable.data();
+				std::memcpy(entity.data(), &vt, 4);
+				bool bridge_ok = true;
+				for (int round = 0; round < 12; ++round)
+				{
+					for (const float health : {0.19999933f, 0.9999993f, std::nextafter(0.0f, 1.0f), 0.0f, -1.8f, std::numeric_limits<float>::quiet_NaN()})
+					{
+						std::memcpy(entity.data() + 0x27c, &health, 4);
+						death_setter_calls = 0;
+						death_setter_value = -99.0f;
+						invoke_death_bridge(block, entity.data());
+						float after = 0;
+						std::memcpy(&after, entity.data() + 0x27c, 4);
+						if (health > 0.0f)
+						{
+							bridge_ok &= death_setter_calls == 1 && death_setter_value == 0.0f && after == 0.0f;
+						}
+						else
+						{
+							bridge_ok &= death_setter_calls == 0 && (after == health || (after != after && health != health));
+						}
+					}
+				}
+				volatile float x = 3.0f;
+				bridge_ok &= x * 2.0f == 6.0f; // the x87 stack is intact
+				CHECK(bridge_ok);
+				VirtualFree(block, 0, MEM_RELEASE);
+			}
+			const auto jump = death_jump(0x12345678);
+			address relative = 0;
+			std::memcpy(&relative, jump.data() + 1, 4);
+			CHECK(jump.size() == limits_rules::hex_size(death_branch_displaced) && jump[0] == 0xe9 && death_branch_va + 5 + relative == 0x12345678 && jump[5] == 0x90);
+			CHECK(death_branch_resume_va == death_branch_va + limits_rules::hex_size(death_branch_displaced) &&
+			      death_branch_site.hex.substr(0, death_branch_displaced.size()) == death_branch_displaced);
+		}
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the death rule's bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		bool constant_ok = false;
+		const site* mismatch = first_mismatch(image, constant_ok);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", static_cast<unsigned long>(mismatch->va), mismatch->what);
+		CHECK(!mismatch && constant_ok);
+		if (!mismatch && constant_ok)
+		{
+			// The writes, as the installer's transaction makes them, on the copy: the rule's bytes at every site and not
+			// one other byte of the image; afterwards the guards refuse (never patched twice).
+			std::vector<std::uint8_t> before(image, image + image_size);
+			for (const auto& s : sites)
+			{
+				const auto after = rule_bytes(s);
+				std::memcpy(image + (s.va - image_base), after.data(), after.size());
+			}
+			const auto jump = death_jump(0x10000000);
+			std::memcpy(image + (death_branch_va - image_base), jump.data(), jump.size());
+			std::size_t changed = 0;
+			bool inside = true;
+			for (DWORD i = 0; i < image_size; ++i)
+			{
+				if (image[i] == before[i]) continue;
+				++changed;
+				const DWORD va = image_base + i;
+				bool in_site = false;
+				for (const auto& s : sites) in_site |= va >= s.va && va < s.va + limits_rules::hex_size(s.hex);
+				in_site |= va >= death_branch_va && va < death_branch_resume_va;
+				inside &= in_site;
+			}
+			CHECK(changed == 6 * 3 + 2 + 6 && inside);
+			CHECK(first_mismatch(image, constant_ok) == &sites[0] && constant_ok);
+		}
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
 	// [Game] BreakRule (break_rule_rules.hpp): the value's rules; XML1's level sum and the structure pairing; the
 	// decision; what the fix remembers; the guards on their own; both bridges run for real; then, when a copy of
 	// XMen2.exe is at hand, every guard against it, the three writes on that copy and the game's own level function
@@ -10414,6 +10610,12 @@ int main(const int argc, char** argv)
 		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
 		return failures ? 1 : 0;
 	}
+	if (argc > 1 && std::strcmp(argv[1], "--death-rule-rules") == 0)
+	{
+		check_death_threshold_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--break-rule-rules") == 0)
 	{
 		check_break_rule_rules();
@@ -10531,6 +10733,7 @@ int main(const int argc, char** argv)
 	check_ini_rules();
 	check_xp_curve_rules();
 	check_break_rule_rules();
+	check_death_threshold_rules();
 	check_save_format_rules();
 	check_balance_rules();
 	check_melee_weapon_rules();

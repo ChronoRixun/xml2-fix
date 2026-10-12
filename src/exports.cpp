@@ -23,6 +23,7 @@
 #include "conversations.hpp"
 #include "confirmation_release.hpp"
 #include "explosive_first_hit.hpp"
+#include "death_threshold.hpp"
 #include "gameplay_agreement.hpp"
 #include "gameplay_capabilities.hpp"
 #include "objective_text.hpp"
@@ -260,6 +261,13 @@ namespace
 		explosive_first_hit::install(game);
 		if (game_version::needs_gameplay_agreement())
 			gameplay_agreement::register_rule(gameplay_capabilities::explosive_first_hit_id,1,{explosive_first_hit::installed() ? 1u : 0u,0,0,0},explosive_first_hit::verified());
+		// X-Men Legends 1's death threshold ([Game] DeathRule=xml1, docs/death-threshold.md): seven comparisons of the
+		// damage functions and a jump at the death branch's entry, used from the first hit on. Online play is lockstep,
+		// so when an entity dies is part of the shared gameplay record (rule 9); a requested rule enlists the agreement
+		// even in a non-LC installation.
+		death_threshold::install(game);
+		if (game_version::needs_gameplay_agreement() || death_threshold::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::death_threshold_id,1,death_threshold::values(),death_threshold::verified());
 		objective_text::install(game);
 		// Before any of XMen2.exe's own code runs, as the engine limit adjuster must be: this DLL is a
 		// static import of libIGDisplay.dll, which XMen2.exe imports statically, so Windows runs this
