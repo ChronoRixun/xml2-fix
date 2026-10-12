@@ -109,10 +109,12 @@ namespace xml2_pad_bindings
 
 		// XMen2.exe's built-in action table (the 2005 retail build, fixed base 0x400000): 42 entries of 0x94 bytes,
 		// a 0x30-byte name, then per player 5 DWORD bindings (2 used), ..., per-slot lock flags at 0x80.
-		// The Advanced Options panel's "Defaults 1/2/3" buttons copy three built-in preset tables over the
-		// panel's working copy (0x6188c0 <- preset base + button * 0x1848) before "Accept" writes it to the
-		// registry: keyboard-only presets, so choosing a reset-to-defaults erased every pad binding the fix
-		// had installed (issue #9). The presets are the same 42 x 0x94 layout; they get the pad layout too.
+		// The Advanced Options panel's "Defaults 1/2/3" buttons (0x6188c0) copy the selected player tab's two
+		// slots of every action from one of three built-in preset tables (preset base + button * 0x1848) into
+		// the panel's working copy before "Accept" writes it to the registry: keyboard-only presets, so a
+		// Defaults button erased that player's pad bindings (issue #9). The presets are the same 42 x 0x94
+		// layout; they get the pad layout too. (The handler then unbinds any other player's binding in the same
+		// slot that equals one of the new ones, 0x6189b0, so a key never drives two players: left as it is.)
 		constexpr std::uintptr_t default_table_rva = 0x6EE1F0 - 0x400000;
 		constexpr std::array<std::uintptr_t, 3> preset_table_rvas{0x6E9918 - 0x400000, 0x6EB160 - 0x400000, 0x6EC9A8 - 0x400000};
 		constexpr size_t action_count = 42;
