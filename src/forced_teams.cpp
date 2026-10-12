@@ -4,6 +4,7 @@
 #include "log.hpp"
 #include "xtract.hpp"
 #include "script_functions.hpp"
+#include "solo_mode.hpp"
 
 #include <Windows.h>
 
@@ -697,6 +698,11 @@ namespace forced_teams
 				return join_hero_switch.load();
 			}
 
+			bool solo_mode_on()
+			{
+				return solo_mode::installed();
+			}
+
 			std::optional<std::vector<grant>> grant_skill_points(const std::string& name, const int n)
 			{
 				grant found[grant_max]{};
@@ -897,6 +903,33 @@ namespace forced_teams
 			return result;
 		}
 
+		void* first_entity(const char* name)
+		{
+			__try
+			{
+				return at<entities_by_name_t>(entities_by_name)(name) > 0 ? at<void**>(entity_list)[0] : nullptr;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return nullptr;
+			}
+		}
+
+		// setSoloMode(name, on): the first entity the name means ('_ACTIVATOR_': the hero who touched the box).
+		void* __cdecl solo_mode_handler(void* args)
+		{
+			char name[argument_max + 1]{};
+			int on = 0;
+			if (!read_text_argument(at<get_argument_t>(argument_getter), args, 0, name) ||
+			    !read_int_argument(at<get_argument_t>(argument_getter), args, 1, on))
+			{
+				logger::write("solo mode: setSoloMode - couldn't read its arguments, nothing done");
+				return nullptr;
+			}
+			solo_mode::script_request(first_entity(name), on != 0, name);
+			return nullptr;
+		}
+
 		// In `functions` order.
 		const std::array<const void*, functions.size()> handlers{
 			reinterpret_cast<const void*>(&handler<&xml2fix_feature<game_engine>, 'i'>),
@@ -910,8 +943,9 @@ namespace forced_teams
 			reinterpret_cast<const void*>(&handler<&add_skill_points<game_engine>, 'n'>),
 			reinterpret_cast<const void*>(&handler<&add_stat_points<game_engine>, 'n'>),
 			reinterpret_cast<const void*>(&xpoint_services_handler),
+			reinterpret_cast<const void*>(&solo_mode_handler),
 		};
-		static_assert(static_cast<std::size_t>(function::xtraction_shop) + 1 == functions.size());
+		static_assert(static_cast<std::size_t>(function::solo_mode) + 1 == functions.size());
 
 		bool copy_retail_table()
 		{

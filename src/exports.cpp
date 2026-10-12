@@ -36,6 +36,7 @@
 #include "display.hpp"
 #include "forced_teams.hpp"
 #include "script_functions.hpp"
+#include "solo_mode.hpp"
 #include "mold_controller.hpp"
 #include "multipart.hpp"
 #include "xml1_turrets.hpp"
@@ -269,6 +270,9 @@ namespace
 		// XML1 scan turrets ([Game] Xml1Turrets, builder [Xml1Turrets]): one pointer of the native event
 		// scheduler's vtable (its per-frame dispatch); after mold_controller, whose query guards it shares.
 		xml1_turrets::install(game);
+		// X-Men Legends 1's solo mode ([Game] SoloMode): six AI sites, one transaction; its script function is the
+		// forced parties' setSoloMode (above), which does nothing unless these sites installed.
+		solo_mode::install(game);
 		if (!game_version::startup_allowed()) return;
 		// XML1 controllers in the shared gameplay record (docs/gameplay-agreement.md): online play is lockstep, so
 		// every peer runs Master Mold's native AI update and must have the same effective controller (rule 3).
@@ -288,6 +292,12 @@ namespace
 			gameplay_agreement::register_rule(gameplay_capabilities::turret_controller_id, xml1_capability_rules::turret_revision_for(xml1_turrets::requested()), turrets.values, turrets.verified);
 			const auto functions = script_functions::capability();
 			gameplay_agreement::register_rule(gameplay_capabilities::script_functions_id, script_functions_rules::agreement_revision, functions.values, functions.verified);
+		}
+		// Solo mode changes what every peer's AI heroes do (rule 8): peers must agree on it like the controllers.
+		if (game_version::needs_gameplay_agreement() || solo_mode::requested())
+		{
+			const auto solo = solo_mode::capability();
+			gameplay_agreement::register_rule(gameplay_capabilities::solo_mode_id, 1, solo.values, solo.verified);
 		}
 		// XML1 breakable parts ([Game] Xml1Multipart): part health, break roll, effects and disabled attacks change
 		// the lockstep simulation, so peers must agree (rule 6, revision 1, {installed, part-logic revision, 0, 0}).

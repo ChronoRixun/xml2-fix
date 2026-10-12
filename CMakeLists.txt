@@ -84,6 +84,7 @@ add_library(xml2_fix SHARED
 	src/forced_teams.cpp
 	src/script_functions.cpp
 	src/script_function_overflow.cpp
+	src/solo_mode.cpp
 	src/conversations.cpp
 	src/gameplay_agreement.cpp
 	src/patch_transaction.cpp
@@ -149,6 +150,9 @@ target_compile_options(xml2_classic_main_panels_test PRIVATE /UNDEBUG)
 
 add_executable(xml2_stat_points_test test/stat_points_test.cpp)
 target_include_directories(xml2_stat_points_test PRIVATE src)
+
+add_executable(xml2_solo_mode_test test/solo_mode_test.cpp)
+target_include_directories(xml2_solo_mode_test PRIVATE src)
 
 add_executable(xml2_stat_help_test test/stat_help_test.cpp)
 target_include_directories(xml2_stat_help_test PRIVATE src)
