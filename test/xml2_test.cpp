@@ -54,6 +54,7 @@
 #include "break_rule_rules.hpp"
 #include "placement_crush_rules.hpp"
 #include "double_heal_rules.hpp"
+#include "x1_leader_rules.hpp"
 #include "personal_item_text_rules.hpp"
 #include "save_format_rules.hpp"
 #include "discord_ipc.hpp"
@@ -9696,6 +9697,110 @@ namespace
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
 
+	// [Game] X1Leader (x1_leader_rules.hpp): the sidecar's parse and matching; the decision (native
+	// flag, then the sidecar by stats name); the guards on their own; the bridge and call encodings.
+	void check_x1_leader_rules()
+	{
+		using namespace x1_leader_rules;
+		std::printf("[Game] X1Leader (X-Men Legends 1's stats `leader` bit)\n");
+
+		const auto list = leader_names::parse(
+		    "# a comment\r\n"
+		    "; another comment\r\n"
+		    "  x1_sgt_red  \r\n"
+		    "\tX1_CPL_BLUE\n"
+		    "x1_pvt_green\r\n");
+		CHECK(list.size() == 3);
+		CHECK(list.contains("x1_sgt_red") && list.contains("X1_SGT_RED") && list.contains("x1_cpl_blue") &&
+		      list.contains("X1_PVT_GREEN"));
+		CHECK(!list.contains("") && !list.contains("x1_sgt_re") && !list.contains("x1_sgt_red_x") &&
+		      !list.contains("# a comment") && !list.contains(nullptr));
+		CHECK(leader_names::parse("").size() == 0 && leader_names::parse("# only a comment\n\n").size() == 0);
+		// The stats name field is 0x20 bytes: a name is read only up to its NUL inside the field.
+		char unterminated[name_field + 8];
+		std::memset(unterminated, 'a', sizeof unterminated);
+		unterminated[sizeof unterminated - 1] = '\0';
+		CHECK(!leader_names::parse(std::string(name_field, 'a')).contains(unterminated));
+		CHECK(leader_names::parse(std::string(name_field - 1, 'a')).contains(std::string(name_field - 1, 'A').c_str()));
+		const auto dup = leader_names::parse("x1_sgt_red\nX1_SGT_RED\n");
+		CHECK(dup.size() == 1 && dup.contains("x1_sgt_red"));
+
+		// The decision: the native flag decides alone; otherwise the stats name (+0x35c -> +0x150) must
+		// be in the sidecar; a missing actor or stats pointer is not a leader.
+		alignas(8) std::uint8_t actor[0x400]{};
+		alignas(8) std::uint8_t stats[0x200]{};
+		std::strcpy(reinterpret_cast<char*>(stats + stats_name), "x1_sgt_red");
+		*reinterpret_cast<void**>(actor + actor_stats) = stats;
+		CHECK(decide(actor, list));                        // unflagged, but the sidecar name matches
+		*reinterpret_cast<void**>(actor + actor_stats) = nullptr;
+		CHECK(!decide(actor, list));                       // no stats: never a sidecar leader
+		*reinterpret_cast<void**>(actor + actor_stats) = stats;
+		actor[actor_flags] = native_leader_bit;
+		CHECK(decide(actor, list));                        // the native x3 flag alone
+		actor[actor_flags] = 0;
+		std::strcpy(reinterpret_cast<char*>(stats + stats_name), "x1 nobody");
+		CHECK(!decide(actor, list));                       // unflagged and unlisted
+		std::strcpy(reinterpret_cast<char*>(stats + stats_name), "x1_sgt_red");
+		CHECK(!decide(nullptr, list));                     // no actor at all
+
+		// The guards cover the two retail `test byte ptr [reg+0x3db], 8` sites.
+		CHECK(guards[0].va == 0x43597b && guards[1].va == 0x46e4ed);
+		std::vector<std::uint8_t> image(0x500000, 0x90);
+		CHECK(!limits_rules::matches(image.data() + guards[0].va, guards[0].hex)); // zero-filled: no match
+		auto* pain = image.data() + pain_site_va;
+		const std::array<std::uint8_t, 7> native_pain{0xf6, 0x87, 0xdb, 0x03, 0x00, 0x00, 0x08};
+		std::memcpy(pain, native_pain.data(), native_pain.size());
+		CHECK(limits_rules::matches(pain, guards[0].hex) && !limits_rules::matches(pain, guards[1].hex));
+
+		// The encodings: seven overwritten bytes become jmp + 2 nops (a call would leave its return
+		// address on the game's stack: the bridge leaves through a jmp); the bridge ends in the resume jmp.
+		constexpr auto callback = 0x11111111u;
+		const auto call = jmp_bridge(pain_site_va, 0x22222222u);
+		CHECK(call.size() == 7 && call[0] == 0xe9 && call[5] == 0x90 && call[6] == 0x90);
+		std::uint32_t rel = 0;
+		std::memcpy(&rel, call.data() + 1, 4);
+		CHECK(rel == 0x22222222u - (pain_site_va + 5));
+		const auto b = bridge(0x57, callback);
+		CHECK(b.size() == 1 + 1 + 5 + 2 + 3 + 2 + 1 + 5 && b[0] == 0x60 && b[1] == 0x57 && b[2] == 0xb8);
+		std::memcpy(&rel, b.data() + 3, 4);
+		CHECK(rel == callback);
+		CHECK(b[b.size() - 5] == 0xe9); // the resume jmp's rel32 is filled by the installer
+
+		// The drop rule: listed corpses take the first game's path (the flag set whatever the kind),
+		// x3-flagged ones XML2's kind test, everyone else the probability roll.
+		const auto list2 = leader_names::parse("x1_sgt_red\n");
+		alignas(8) std::uint8_t corpse[0x400]{};
+		alignas(8) std::uint8_t corpse_stats[0x200]{};
+		std::strcpy(reinterpret_cast<char*>(corpse_stats + stats_name), "X1_SGT_RED");
+		*reinterpret_cast<void**>(corpse + actor_stats) = corpse_stats;
+		CHECK(classify(corpse, list2) == drop_path::x1 && drop_target(drop_path::x1) == drop_flag_va);
+		corpse[actor_flags] = native_leader_bit;
+		CHECK(classify(corpse, list2) == drop_path::native && drop_target(drop_path::native) == drop_kind_test_va);
+		corpse[actor_flags] = 0;
+		std::strcpy(reinterpret_cast<char*>(corpse_stats + stats_name), "x1 nobody");
+		CHECK(classify(corpse, list2) == drop_path::none && drop_target(drop_path::none) == drop_skip_va);
+		CHECK(classify(nullptr, list2) == drop_path::none);
+		// XBE 0x713e4-0x71444: pips below the limit -> rand(0,3): HEALTH, ENERGY, XTREME, XTREME; else rand(0,1).
+		CHECK(forced_range(1, 3) == 3 && forced_range(3, 3) == 1 && forced_range(4, 3) == 1);
+		CHECK(forced_slot(0) == 0 && forced_slot(1) == 1 && forced_slot(2) == 2 && forced_slot(3) == 2);
+		CHECK(x1_drop_count == 4);
+		// The encodings: every rel32 lands where the roller continues.
+		const auto rel_at = [](const std::vector<std::uint8_t>& v, std::size_t at, address base) {
+			std::uint32_t r = 0;
+			std::memcpy(&r, v.data() + at, 4);
+			return static_cast<address>(base + at + 4 + r);
+		};
+		const auto cb2 = classify_bridge(0x11111111u);
+		CHECK(cb2.size() == 19 && cb2[1] == 0x56 && cb2[cb2.size() - 2] == 0xff && cb2[cb2.size() - 1] == 0xe0);
+		const auto cnt = count_bridge(0x30000000u, 0x22222222u);
+		CHECK(cnt[0] == 0x80 && cnt[1] == 0x3d && rel_at(cnt, 15, 0x30000000u) == count_store_va &&
+		      rel_at(cnt, 26, 0x30000000u) == count_call_va && cnt[10] == x1_drop_count);
+		const auto pk = pick_bridge(0x30000100u, 0x11111111u);
+		CHECK(pk[1] == 0x57 && rel_at(pk, 22, 0x30000100u) == pick_join_va && rel_at(pk, 35, 0x30000100u) == pick_resume_va);
+		const auto j = jmp_to(count_site_va, 0x30000000u, 6);
+		CHECK(j.size() == 6 && j[0] == 0xe9 && j[5] == 0x90 && rel_at(j, 1, count_site_va) == 0x30000000u);
+	}
+
 	// [Game] BreakRule (break_rule_rules.hpp): the value's rules; XML1's level sum and the structure pairing; the
 	// decision; what the fix remembers; the guards on their own; both bridges run for real; then, when a copy of
 	// XMen2.exe is at hand, every guard against it, the three writes on that copy and the game's own level function
@@ -10527,6 +10632,12 @@ int main(const int argc, char** argv)
 		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
 		return failures ? 1 : 0;
 	}
+	if (argc > 1 && std::strcmp(argv[1], "--x1-leader-rules") == 0)
+	{
+		check_x1_leader_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--move-trigger-rules") == 0)
 	{
 		check_move_trigger_rules();
@@ -10640,6 +10751,7 @@ int main(const int argc, char** argv)
 	check_break_rule_rules();
 	check_placement_crush_rules();
 	check_double_heal_rules();
+	check_x1_leader_rules();
 	check_save_format_rules();
 	check_balance_rules();
 	check_melee_weapon_rules();

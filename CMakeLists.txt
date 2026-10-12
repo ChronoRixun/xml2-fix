@@ -52,6 +52,7 @@ add_library(xml2_fix SHARED
 	src/pad_input.cpp
 	src/virtual_pad.cpp
 	src/xinput_pad.cpp
+	src/x1_leader.cpp
 	src/ini.cpp
 	src/iat_hook.cpp
 	src/openspy_redirect.cpp
@@ -112,7 +113,7 @@ set_target_properties(xml2_fix PROPERTIES OUTPUT_NAME dinput ARCHIVE_OUTPUT_NAME
 # Checks the built DLL the way the game loads it (imported from next to the executable).
 add_executable(xml2_test test/xml2_test.cpp src/frame_capture.cpp src/local_ip.cpp src/discord_ipc.cpp src/iat_hook.cpp src/pad_profile.cpp) # frame_capture: the back buffer copy, checked on a device of its own; local_ip: what LocalIP=auto asks Windows, to check the fix's answers against; discord_ipc: the Discord pipe, against a Discord of the test's own and for --discord-live; iat_hook: msvcr71.dll's ExitProcess hooked as the fix hooks it; pad_profile: the Dual Action's objects and state, for the virtual pads' data formats
 target_compile_definitions(xml2_test PRIVATE _WINSOCK_DEPRECATED_NO_WARNINGS)
-target_include_directories(xml2_test PRIVATE src) # ini_rules.hpp, display_rules.hpp, online_rules.hpp, local_ip_rules.hpp, frame_rate_rules.hpp, options_menu_rules.hpp, resolution_rules.hpp, limits_rules.hpp, forced_teams_rules.hpp, conversations_rules.hpp, postgame_rules.hpp, main_menu_rules.hpp, review_menu_rules.hpp, xp_curve_rules.hpp, balance_rules.hpp, break_rule_rules.hpp, window_title_rules.hpp, game_version_rules.hpp, pad_prompts_rules.hpp, test_input_rules.hpp, pad_input_rules.hpp, virtual_pad_rules.hpp, discord_rules.hpp, mod_order.hpp, image_file.hpp: the decisions, checked without the game
+target_include_directories(xml2_test PRIVATE src) # ini_rules.hpp, display_rules.hpp, online_rules.hpp, local_ip_rules.hpp, frame_rate_rules.hpp, options_menu_rules.hpp, resolution_rules.hpp, limits_rules.hpp, forced_teams_rules.hpp, conversations_rules.hpp, postgame_rules.hpp, main_menu_rules.hpp, review_menu_rules.hpp, xp_curve_rules.hpp, balance_rules.hpp, break_rule_rules.hpp, x1_leader_rules.hpp, window_title_rules.hpp, game_version_rules.hpp, pad_prompts_rules.hpp, test_input_rules.hpp, pad_input_rules.hpp, virtual_pad_rules.hpp, discord_rules.hpp, mod_order.hpp, image_file.hpp: the decisions, checked without the game
 target_link_libraries(xml2_test PRIVATE xml2_fix dinput8.lib dxguid xinput ws2_32 winmm iphlpapi) # dinput8.lib: only for c_dfDIJoystick(2); winmm: timeBeginPeriod in the present timing
 
 add_executable(xml2_multipart_test test/multipart_test.cpp)
@@ -206,6 +207,11 @@ add_executable(xml2_explosive_first_hit_test test/explosive_first_hit_test.cpp s
 target_include_directories(xml2_explosive_first_hit_test PRIVATE src)
 # This test reserves the retail image address for isolated native code.
 target_link_options(xml2_explosive_first_hit_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_x1_leader_test test/x1_leader_test.cpp src/x1_leader.cpp)
+target_include_directories(xml2_x1_leader_test PRIVATE src)
+# This test reserves the retail image address for isolated native code.
+target_link_options(xml2_x1_leader_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
 add_executable(xml2_gameplay_agreement_test test/gameplay_agreement_test.cpp src/gameplay_agreement.cpp src/patch_transaction.cpp src/explosive_first_hit.cpp src/game_version.cpp)
 target_include_directories(xml2_gameplay_agreement_test PRIVATE src)
