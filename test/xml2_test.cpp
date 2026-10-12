@@ -466,6 +466,10 @@ namespace
 		CHECK(engine_menu_point({725, 278}, {1280, 720}, 1280.0f / 720.0f).y >= 219 && engine_menu_point({725, 278}, {1280, 720}, 1280.0f / 720.0f).x >= 167);
 	}
 
+	// Defined further down, with the other checks against XMen2.exe.
+	std::optional<std::string> game_executable();
+	std::uint8_t* map_image(const std::string& file, DWORD& size_of_image);
+
 	void check_display_rules()
 	{
 		using namespace display_rules;
@@ -634,29 +638,72 @@ namespace
 			CHECK(notes.find("refresh rate") != std::string::npos);
 		}
 
-		// The display-settings patches: the boot FSAA switch and the failure-path wipe. The guards
-		// carry the retail bytes (checked against the executable only in the installed game); here the
-		// built writes are decoded and verified for shape.
+		// FSAA in every shell: the boot switch asks for 8 samples for the panel's 8x without knowing the
+		// adapter (display_settings_rules.hpp), so each mode clamps to the highest level offered at the
+		// device's format instead of failing the device or dropping multisampling altogether.
+		{
+			const auto up_to_4 = [](DWORD, DWORD type) { return type <= 4; };
+			auto eight = stock;
+			eight.multi_sample_type = 8;
+			pp = rewrite_present(eight, windowed, desktop_mode, no_modes, up_to_4, format_ok, format_ok, msaa_no, interval_ok, notes);
+			CHECK(pp.windowed == TRUE && pp.multi_sample_type == 4 && notes.find("4 is the most") != std::string::npos);
+			pp = rewrite_present(eight, borderless, desktop_mode, no_modes, msaa_no, format_ok, format_ok, msaa_ok, interval_ok, notes);
+			CHECK(pp.windowed == TRUE && pp.multi_sample_type == d3d8::multisample_none && notes.find("off") != std::string::npos);
+			options game_mode; // no [Display] Mode: the engine's own exclusive fullscreen
+			pp = rewrite_present(eight, game_mode, desktop_mode, no_modes, msaa_no, format_ok, format_ok, up_to_4, interval_ok, notes);
+			CHECK(pp.windowed == FALSE && pp.multi_sample_type == 4 && pp.back_buffer_width == 1920 && pp.back_buffer_format == d3d8::format_x8r8g8b8);
+			eight.multi_sample_type = 6;
+			pp = rewrite_present(eight, game_mode, desktop_mode, no_modes, msaa_no, format_ok, format_ok, [](DWORD, DWORD type) { return type != 6; }, interval_ok, notes);
+			CHECK(pp.multi_sample_type == 4);
+			eight.multi_sample_type = 8;
+			pp = rewrite_present(eight, fullscreen, desktop_mode, no_modes, msaa_no, format_ok, format_ok, up_to_4, interval_ok, notes);
+			CHECK(pp.multi_sample_type == 4); // Mode=fullscreen without the adapter's list clamps too
+			pp = rewrite_present(eight, game_mode, desktop_mode, no_modes, msaa_no, format_ok, format_ok, msaa_ok, interval_ok, notes);
+			CHECK(std::memcmp(&pp, &eight, sizeof(pp)) == 0 && notes.empty()); // supported: untouched
+		}
+
+		// The display-settings patches: the boot FSAA switch and the failure-path wipe. The guards are
+		// checked read-only before the transaction and may cover the patch sites; the writes carry
+		// their own original bytes. Decoded and checked for shape here, and against XMen2.exe when a
+		// copy is at hand: the guards, every write's original bytes, and the whole install run through
+		// the same transaction the game uses, on the mapped image.
 		{
 			using namespace display_settings_rules;
 			CHECK(std::size(guards) == 10);
+			{
+				std::set<std::uint32_t> addresses;
+				bool guards_ok = true;
+				for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
+				CHECK(guards_ok);
+			}
 			const auto table = 0x69000000u, stub = table + 5 * 4;
 			const auto table_bytes = fsaa_table_bytes(stub);
 			CHECK(table_bytes.size() == 20);
 			CHECK(std::memcmp(table_bytes.data() + 16, &stub, 4) == 0);
-			const auto case_bytes = fsaa_case_8x_bytes(support_byte_8x, engine_param_cell, multi_sample_type_name, fsaa_switch_join, stub);
-			CHECK(case_bytes.size() == 33);
-			CHECK(case_bytes[0] == 0xa0 && case_bytes[1] == 0x87 && case_bytes[2] == 0x9e && case_bytes[3] == 0xa0 && case_bytes[4] == 0x00);
-			CHECK(case_bytes[7] == 0x75 && case_bytes[8] == 0x04 && case_bytes[9] == 0x6a && case_bytes[10] == 0x06); // jnz +4 / push 6
-			CHECK(case_bytes[11] == 0xeb && case_bytes[12] == 0x02);                                                 // jmp +2 (over the push 8)
-			CHECK(case_bytes[13] == 0x6a && case_bytes[14] == 0x08);                                                 // push 8
-			const auto rel = *reinterpret_cast<const std::int32_t*>(case_bytes.data() + 29);
-			CHECK(static_cast<std::uint32_t>(stub + 33 + rel) == fsaa_switch_join); // the jmp lands on the join
+			for (unsigned i = 0; i < 4; ++i)
+			{
+				const std::uint32_t stock_case = i == 0 ? fsaa_case_off : i == 1 ? fsaa_case_2x : i == 2 ? fsaa_case_4x : fsaa_case_6x;
+				CHECK(std::memcmp(table_bytes.data() + 4 * i, &stock_case, 4) == 0); // the stock cases, in the stock order
+			}
+			const auto case_bytes = fsaa_case_8x_bytes(engine_param_cell, multi_sample_type_name, fsaa_switch_join, stub);
+			CHECK(case_bytes.size() == 20);
+			// The stock 6x case's bytes up to its jump (push 6 / push name / push 4 / call [cell]) with 8
+			// for 6: the same three pushes, the same call.
+			{
+				std::vector<std::uint8_t> six(15);
+				for (std::size_t i = 0; i < six.size(); ++i) six[i] = limits_rules::hex_byte(guards[5].hex, i);
+				CHECK(guards[5].va == fsaa_case_6x && six[0] == 0x6a && six[1] == 0x06);
+				six[1] = 0x08;
+				CHECK(std::equal(six.begin(), six.end(), case_bytes.begin()));
+			}
+			CHECK(case_bytes[15] == 0xe9);
+			const auto rel = *reinterpret_cast<const std::int32_t*>(case_bytes.data() + 16);
+			CHECK(static_cast<std::uint32_t>(stub + 20 + rel) == fsaa_switch_join); // the jmp lands on the join
 			const auto fsaa = fsaa_switch_writes(table);
 			CHECK(fsaa.size() == 2 && fsaa[0].address == fsaa_switch_cmp);
-			CHECK(fsaa[0].before == std::vector<std::uint8_t>({0x83, 0xf8, 0x03, 0x8b, 0x49, 0x38}));
-			CHECK(fsaa[0].after == std::vector<std::uint8_t>({0x83, 0xf8, 0x04, 0x8b, 0x49, 0x38}));
-			CHECK(fsaa[1].address == fsaa_table_operand && std::memcmp(fsaa[1].after.data(), &table, 4) == 0);
+			CHECK(fsaa[0].before == std::vector<std::uint8_t>({0x83, 0xf8, 0x03}) && fsaa[0].after == std::vector<std::uint8_t>({0x83, 0xf8, 0x04}));
+			CHECK(fsaa[1].address == fsaa_table_operand && fsaa[1].before == std::vector<std::uint8_t>({0x40, 0xb2, 0x5f, 0x00}) &&
+			      std::memcmp(fsaa[1].after.data(), &table, 4) == 0);
 			const auto log_stub = 0x61000000u;
 			const auto wipe = wipe_guard_writes(log_stub);
 			CHECK(wipe.size() == 4);
@@ -667,17 +714,101 @@ namespace
 			CHECK(wipe[1].address == wipe_settings_call_a && wipe[1].after == std::vector<std::uint8_t>(5, 0x90)); // the settings save is NOPed
 			CHECK(wipe[2].address == wipe_resolution_call_b && wipe[3].address == wipe_settings_call_b);
 			CHECK(wipe[3].after == std::vector<std::uint8_t>(5, 0x90));
-			// V-1: no two write ranges may overlap. The transaction writes every patch and then reads
-			// each range back; a guard overlapping a real patch reads the patched bytes there, fails
-			// the readback, and rolls back the whole install (found live 2026-10-12).
+
+			// V-1: the writes never overlap one another (the transaction reads each one back after all
+			// are written), every written byte sits inside a guard, and every write's original bytes
+			// agree with the guards over them. A guard fed to the transaction as a before==after write
+			// reads a patched byte back, fails the readback and rolls the whole set back (19b2e76).
+			std::vector<xml1_hook_transaction::patch> writes = fsaa;
+			writes.insert(writes.end(), wipe.begin(), wipe.end());
 			{
-				std::vector<std::pair<std::uint32_t, std::uint32_t>> ranges; // start, end exclusive
-				for (const auto& g : guards) ranges.push_back({g.va, g.va + std::strlen(g.hex) / 2});
-				for (const auto& p : fsaa) ranges.push_back({p.address, p.address + p.before.size()});
-				for (const auto& p : wipe) ranges.push_back({p.address, p.address + p.before.size()});
-				for (std::size_t i = 0; i < ranges.size(); ++i)
-					for (std::size_t j = i + 1; j < ranges.size(); ++j)
-						CHECK(ranges[i].second <= ranges[j].first || ranges[j].second <= ranges[i].first);
+				bool disjoint = true, described = true, agree = true;
+				for (std::size_t i = 0; i < writes.size(); ++i)
+				{
+					for (std::size_t j = i + 1; j < writes.size(); ++j)
+						disjoint &= writes[i].address + writes[i].before.size() <= writes[j].address || writes[j].address + writes[j].before.size() <= writes[i].address;
+					for (std::size_t k = 0; k < writes[i].before.size(); ++k)
+					{
+						const auto va = writes[i].address + static_cast<std::uint32_t>(k);
+						bool inside = false;
+						for (const auto& g : guards)
+						{
+							if (va >= g.va && va < g.va + limits_rules::hex_size(g.hex))
+							{
+								inside = true;
+								agree &= limits_rules::hex_byte(g.hex, va - g.va) == writes[i].before[k];
+							}
+						}
+						described &= inside;
+					}
+				}
+				CHECK(disjoint && described && agree);
+			}
+
+			if (const auto exe = game_executable())
+			{
+				DWORD image_size = 0;
+				auto* const image = map_image(*exe, image_size);
+				CHECK(image != nullptr);
+				if (image)
+				{
+					// The install's transaction on the mapped image (addresses are the retail ones).
+					struct image_memory
+					{
+						std::uint8_t* image;
+						DWORD size;
+						std::uint8_t* at(const std::uint32_t va, const std::size_t n) const
+						{
+							return va >= image_base && va - image_base + n <= size ? image + (va - image_base) : nullptr;
+						}
+						bool read(const std::uint32_t va, void* out, const std::size_t n) { const auto p = at(va, n); if (!p) return false; std::memcpy(out, p, n); return true; }
+						bool write(const std::uint32_t va, const void* in, const std::size_t n) { const auto p = at(va, n); if (!p) return false; std::memcpy(p, in, n); return true; }
+						bool acquire(std::uint32_t, std::uint32_t& old) { old = 0; return true; }
+						bool restore(std::uint32_t, std::uint32_t) { return true; }
+						bool flush() { return true; }
+					} memory{image, image_size};
+					const auto guards_match = [&] {
+						for (const auto& g : guards)
+						{
+							const auto p = memory.at(g.va, limits_rules::hex_size(g.hex));
+							if (!p || !limits_rules::matches(p, g.hex)) return false;
+						}
+						return true;
+					};
+					CHECK(guards_match());
+					bool corrupt_refused = true;
+					for (const auto& g : guards)
+						for (std::size_t i = 0; i < limits_rules::hex_size(g.hex); ++i)
+						{
+							auto* const byte = memory.at(g.va + static_cast<std::uint32_t>(i), 1);
+							*byte ^= 1;
+							corrupt_refused &= !guards_match();
+							*byte ^= 1;
+						}
+					CHECK(corrupt_refused);
+					// The 19b2e76 shape - the guards passed as before==after writes next to the patches -
+					// rolls itself back on the retail bytes; the patches on their own commit.
+					{
+						auto with_guards = writes;
+						for (const auto& g : guards)
+						{
+							std::vector<std::uint8_t> bytes(limits_rules::hex_size(g.hex));
+							for (std::size_t i = 0; i < bytes.size(); ++i) bytes[i] = limits_rules::hex_byte(g.hex, i);
+							with_guards.push_back({g.va, bytes, bytes});
+						}
+						bool safe = false;
+						CHECK(!xml1_hook_transaction::apply(memory, with_guards, &safe) && safe && guards_match());
+					}
+					bool safe = false;
+					CHECK(xml1_hook_transaction::apply(memory, writes, &safe) && safe);
+					for (const auto& w : writes) CHECK(std::memcmp(memory.at(w.address, w.after.size()), w.after.data(), w.after.size()) == 0);
+					CHECK(!guards_match()); // patched now: a second install would refuse
+					VirtualFree(image, 0, MEM_RELEASE);
+				}
+			}
+			else
+			{
+				std::printf("  skip  no XMen2.exe to check the display-settings patch sites against\n");
 			}
 		}
 

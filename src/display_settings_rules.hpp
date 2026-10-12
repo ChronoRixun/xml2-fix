@@ -14,9 +14,14 @@
 //    the settings - so an 8x selection turns itself off on the next boot (issue #84).
 //    The patch accepts index 4: cmp eax,3 becomes cmp eax,4, and the jump table's operand
 //    (the imm32 at 0x5facd1 of jmp [eax*4+0x5fb240]) points at a private 5-entry table whose
-//    5th case asks for 8 samples - or 6, the most the stock switch knows, when the adapter's
-//    8x support byte (set by CheckDeviceMultiSampleType on A8R8G8B8 fullscreen, FUN_005f5dd0)
-//    is clear, so an unsupported 8x still gets a device.
+//    5th case asks for 8 samples. The switch can't know whether the adapter does 8x: the
+//    adapter's FSAA support bytes (0xa09e84..87, CheckDeviceMultiSampleType at A8R8G8B8
+//    fullscreen, FUN_005f5dd0) are only filled AFTER display init - FUN_005f7050, called at
+//    0x40181e once the display object's init (vtable slot 0 = 0x5fb270 -> 0x5fac10, called at
+//    0x401810) has returned - so at the switch they are still zero on every boot. The device
+//    hook (display.cpp, rewrite_present) clamps the request to the highest level the adapter
+//    offers at the device's real format and shell, which is why the patch is only installed
+//    where that hook is.
 //
 // 2. The failure-path settings wipe. When the display device can't be created (the window/
 //    device open call returns false, or the visual context reports an error), the game
@@ -24,7 +29,11 @@
 //    at 0x5faf56/0x5faf5b and again at the second failure exit 0x5fb19b/0x5fb1a0. A failure
 //    the display rewrite can fix on the next boot destroys the player's settings first. The
 //    patch routes the first call of each pair to a logging stub and NOPs the second, so the
-//    game still quits on a fatal device failure but leaves the registry untouched.
+//    game still quits on a fatal device failure - with its own "unable to initialise graphics"
+//    message box ([0xa09f94] set at 0x5fb320, shown at 0x40357e), which the patch leaves alone -
+//    but leaves the registry untouched. Only installed where the fix's device hook has already
+//    tried everything the wipe would have achieved (no multisampling, and in Mode=fullscreen the
+//    desktop mode): in the game's own mode the wipe stays its crash recovery.
 
 #include "xml1_hook_transaction.hpp"
 
@@ -47,7 +56,6 @@ namespace display_settings_rules
 	constexpr std::uint32_t fsaa_switch_join = 0x5fad31;       // where every case lands after the engine call
 	constexpr std::uint32_t engine_param_cell = 0x67f570;      // the engine-parameter call the cases make
 	constexpr std::uint32_t multi_sample_type_name = 0x6a3d08; // "multiSampleType"
-	constexpr std::uint32_t support_byte_8x = 0xa09e87;        // 1 when the adapter offers 8x fullscreen
 
 	// The failure-path settings wipe.
 	constexpr std::uint32_t wipe_resolution_call_a = 0x5faf56; // call FUN_0061bef0 (Resolution := "800x600")
@@ -62,51 +70,44 @@ namespace display_settings_rules
 		const char* what;
 	};
 
-	// The bytes that must be in place before anything is written. Each entry's range must exclude
-	// the bytes a patch rewrites: the transaction writes every patch and then reads each range back,
-	// so a range overlapping a real patch reads the patched bytes and fails the whole install
-	// (found live 2026-10-12 - the readback mismatch rolls back an otherwise valid patch set).
-	// The patched bytes sit inside the old wider ranges and are still verified, by their patch's
-	// own `before`.
+	// The bytes that must be in place before anything is written, checked read-only before the
+	// transaction (the mold controller's pattern). They describe the code as the retail build has
+	// it and may cover the patch sites: the transaction verifies each write's own `before` again
+	// and reads back only the writes. (Passed to the transaction as before==after writes, a guard
+	// over a patch site reads the patched bytes back, fails the readback and rolls the whole set
+	// back - the 19b2e76 bug.) Every write's `before` must agree with the guards it overlaps.
 	inline constexpr guard guards[]{
-	    {0x5facbc, "a1988ca600", "the boot FSAA switch head (mov eax,[0xa68c98])"},
-	    {0x5facce, "ff2485", "the indexed jump head (jmp [eax*4+...])"},
+	    {0x5facbc, "a1988ca60083f8038b4938c644247802774aff248540b25f00",
+	     "the boot FSAA switch (mov eax,[0xa68c98]; cmp eax,3; ...; ja default; jmp [eax*4+0x5fb240])"},
 	    {stock_fsaa_table, "d5ac5f00e5ac5f00f6ac5f0007ad5f00", "the jump table's four cases (Off/2x/4x/6x)"},
-	    {fsaa_case_off, "5568083d6a006a04ff1570f56700", "the Off case (0 samples)"},
-	    {fsaa_case_2x, "6a0268083d6a006a04ff", "the 2x case"},
-	    {fsaa_case_4x, "6a0468083d6a006a04ff", "the 4x case"},
-	    {fsaa_case_6x, "6a0668083d6a006a04ff", "the 6x case"},
-	    {fsaa_default_case, "5568083d6a006a04ff1570f56700", "the default case (> 3: 0 samples, persist Off)"},
-	    {0x5faf4f, "c6052d3a6f0001", "the first failure exit's quit flag (mov byte ptr [..],1)"},
-	    {0x5fb194, "c6052d3a6f0001", "the second failure exit's quit flag"},
+	    {fsaa_case_off, "5568083d6a006a04ff1570f56700eb4c", "the Off case (0 samples; jmp join)"},
+	    {fsaa_case_2x, "6a0268083d6a006a04ff1570f56700eb3b", "the 2x case"},
+	    {fsaa_case_4x, "6a0468083d6a006a04ff1570f56700eb2a", "the 4x case"},
+	    {fsaa_case_6x, "6a0668083d6a006a04ff1570f56700eb19", "the 6x case"},
+	    {fsaa_default_case, "5568083d6a006a04ff1570f56700892d988ca600e82f110200", "the default case (> 3: 0 samples, clear the global, persist Off)"},
+	    {fsaa_switch_join, "8d5424186a0f52", "the join every case lands on (lea edx,[esp+18]; push 0fh; push edx)"},
+	    {0x5faf4f, "c6052d3a6f0001e8950f0200e8000f02008bb42480000000", "the first failure exit (quit flag; call FUN_0061bef0; call FUN_0061be60)"},
+	    {0x5fb194, "c6052d3a6f0001e8500d0200e8bb0c02008bb42480000000", "the second failure exit (the same pair)"},
 	};
 
-	// The 5th jump-table entry's case, built at the address `stub` (the table's 5th dword):
-	// 8 samples when the adapter's 8x support byte is set, else 6 (the highest level the stock
-	// cases know), then the engine-parameter call and the join every case lands on. Every stock
-	// case pushes exactly three dwords before the call (the sample count, the parameter name, 4;
-	// the count-less cases push a dummy byte instead), and the code at the join reads locals at
-	// [esp+n] - so this case keeps the same three pushes and no more.
-	//     mov al,[support_byte] / test al,al / jnz +4 / push 6 / jmp +2 / push 8 /
-	//     push "multiSampleType" / push 4 / call [engine_param_cell] / jmp join
-	inline std::vector<std::uint8_t> fsaa_case_8x_bytes(const std::uint32_t support_byte, const std::uint32_t param_cell, const std::uint32_t name,
-	                                                    const std::uint32_t join, const std::uint32_t stub)
+	// The 5th jump-table entry's case, built at the address `stub` (the table's 5th dword): the
+	// stock cases' exact shape with 8 samples - push 8 / push "multiSampleType" / push 4 /
+	// call [engine_param_cell] / jmp join. Every stock case pushes exactly three dwords before the
+	// call (the Off and default cases push ebp, which is 0 here, as their count) and the code at
+	// the join reads its locals at [esp+n], so this case keeps the same three pushes and no more.
+	// ecx (the engine object, loaded at 0x5facc4) and eax are left as the stock cases leave them.
+	inline std::vector<std::uint8_t> fsaa_case_8x_bytes(const std::uint32_t param_cell, const std::uint32_t name, const std::uint32_t join, const std::uint32_t stub)
 	{
 		std::vector<std::uint8_t> code;
 		const auto dword = [&code](const std::uint32_t value)
 		{
 			for (unsigned i = 0; i < 4; ++i) code.push_back(static_cast<std::uint8_t>(value >> (8 * i)));
 		};
-		code.push_back(0xa0); dword(support_byte);          // mov al, [support_byte]
-		code.push_back(0x84); code.push_back(0xc0);         // test al, al
-		code.push_back(0x75); code.push_back(0x04);         // jnz +4 (to push 8)
-		code.push_back(0x6a); code.push_back(0x06);         // push 6
-		code.push_back(0xeb); code.push_back(0x02);         // jmp +2 (over the push 8)
 		code.push_back(0x6a); code.push_back(0x08);         // push 8
 		code.push_back(0x68); dword(name);                  // push "multiSampleType"
 		code.push_back(0x6a); code.push_back(0x04);         // push 4
 		code.push_back(0xff); code.push_back(0x15); dword(param_cell); // call [engine_param_cell]
-		code.push_back(0xe9); dword(join - (stub + code.size() + 4)); // jmp join (rel32 from the next instruction)
+		code.push_back(0xe9); dword(join - (stub + static_cast<std::uint32_t>(code.size()) + 4)); // jmp join (rel32 from the next instruction)
 		return code;
 	}
 
@@ -127,13 +128,11 @@ namespace display_settings_rules
 	}
 
 	// The switch's writes: the widened bound and the repointed table. `table` is where the
-	// private table lives (allocated by the installer). The bound's write also carries the three
-	// bytes after the immediate (8b 49 38) so the whole range the wider guard once covered is
-	// still verified; they are written back unchanged.
+	// private table lives (allocated by the installer).
 	inline std::vector<xml1_hook_transaction::patch> fsaa_switch_writes(const std::uint32_t table)
 	{
 		return {
-		    {fsaa_switch_cmp, {0x83, 0xf8, 0x03, 0x8b, 0x49, 0x38}, {0x83, 0xf8, 0x04, 0x8b, 0x49, 0x38}},
+		    {fsaa_switch_cmp, {0x83, 0xf8, 0x03}, {0x83, 0xf8, 0x04}},
 		    {fsaa_table_operand, {0x40, 0xb2, 0x5f, 0x00}, xml1_hook_transaction::pointer_bytes(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(table)))},
 		};
 	}

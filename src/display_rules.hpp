@@ -409,13 +409,15 @@ namespace display_rules
 		return best;
 	}
 
-	// The highest FSAA level the adapter offers for `format` fullscreen, no higher than `type`
-	// (the game's levels: off, 2x, 4x, 6x, 8x).
-	inline DWORD clamp_multisample(const DWORD type, const DWORD format, const std::function<bool(DWORD, DWORD)>& fullscreen_multisample_ok)
+	// The highest FSAA level the adapter offers for `format` (in the shell `multisample_ok` checks),
+	// no higher than `type` (the game's levels: off, 2x, 4x, 6x, 8x). The boot FSAA switch asks for
+	// 8 samples for the panel's 8x without knowing the adapter (display_settings_rules.hpp), so
+	// every mode clamps here rather than fail the device or drop multisampling altogether.
+	inline DWORD clamp_multisample(const DWORD type, const DWORD format, const std::function<bool(DWORD, DWORD)>& multisample_ok)
 	{
 		for (const DWORD candidate : {8u, 6u, 4u, 2u})
 		{
-			if (candidate <= type && fullscreen_multisample_ok(format, candidate))
+			if (candidate <= type && multisample_ok(format, candidate))
 			{
 				return candidate;
 			}
@@ -498,17 +500,6 @@ namespace display_rules
 					pp.fullscreen_refresh_rate = *refresh;
 				}
 
-				// 8x FSAA the adapter can't do fails the device too: the highest level it does offer.
-				if (pp.multi_sample_type != d3d8::multisample_none)
-				{
-					const DWORD clamped = clamp_multisample(pp.multi_sample_type, pp.back_buffer_format, fullscreen_multisample_ok);
-					if (clamped != pp.multi_sample_type)
-					{
-						notes += "multisampling: " + std::to_string(pp.multi_sample_type) +
-						         " samples aren't supported here - " + std::to_string(clamped) + " is the most; ";
-						pp.multi_sample_type = clamped;
-					}
-				}
 			}
 		}
 		else if (manages_window(opts.window_mode))
@@ -551,10 +542,23 @@ namespace display_rules
 				}
 				else if (!multisample_ok(pp.back_buffer_format, pp.multi_sample_type))
 				{
-					notes += "multisampling: off (" + std::to_string(pp.multi_sample_type) + " samples aren't supported windowed); ";
-					pp.multi_sample_type = d3d8::multisample_none;
+					const DWORD clamped = clamp_multisample(pp.multi_sample_type, pp.back_buffer_format, multisample_ok);
+					notes += "multisampling: " + std::to_string(pp.multi_sample_type) + " samples aren't supported windowed - " +
+					         (clamped == d3d8::multisample_none ? std::string("off") : std::to_string(clamped) + " is the most") + "; ";
+					pp.multi_sample_type = clamped;
 				}
 			}
+		}
+
+		// FSAA on a fullscreen device (the game's own mode and Mode=fullscreen), at the format the
+		// device will really have: 8 samples the adapter can't do would fail the device (and in the
+		// game's own mode, reset the player's settings). The highest level it does offer.
+		if (!pp.windowed && pp.multi_sample_type != d3d8::multisample_none && !fullscreen_multisample_ok(pp.back_buffer_format, pp.multi_sample_type))
+		{
+			const DWORD clamped = clamp_multisample(pp.multi_sample_type, pp.back_buffer_format, fullscreen_multisample_ok);
+			notes += "multisampling: " + std::to_string(pp.multi_sample_type) + " samples aren't supported here - " +
+			         (clamped == d3d8::multisample_none ? std::string("off") : std::to_string(clamped) + " is the most") + "; ";
+			pp.multi_sample_type = clamped;
 		}
 
 		// VSync on a fullscreen device (the stock mode's and the fullscreen mode's).

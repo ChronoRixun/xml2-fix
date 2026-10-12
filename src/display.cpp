@@ -272,9 +272,22 @@ namespace display
 			return SUCCEEDED(get(self, adapter, device_type, &caps)) && (caps.presentation_intervals & interval) != 0;
 		}
 
+		// The display mode of the adapter the device is on: what exclusive fullscreen validates against
+		// and falls back to. The primary desktop when Direct3D can't say (adapter 0 is the primary).
+		d3d8::display_mode adapter_desktop(void* self)
+		{
+			d3d8::display_mode current{};
+			if (self && SUCCEEDED(d3d8::method<d3d8::get_adapter_display_mode_t>(self, d3d8::d3d_slot::get_adapter_display_mode)(self, adapter, &current)) &&
+			    current.width && current.height && current.format)
+			{
+				return current;
+			}
+			return desktop;
+		}
+
 		d3d8::present_parameters rewrite(void* self, const d3d8::present_parameters& requested, std::string& notes)
 		{
-			auto pp = rewrite_present(requested, opts, desktop, raw_modes,
+			auto pp = rewrite_present(requested, opts, opts.window_mode == mode::fullscreen ? adapter_desktop(self) : desktop, raw_modes,
 			                          [&](const DWORD format, const DWORD type) { return multisample_supported(self, format, type); },
 			                          [&](const DWORD format) { return back_buffer_format_supported(self, format); },
 			                          [&](const DWORD format) { return fullscreen_back_buffer_format_supported(self, format); },
@@ -369,14 +382,15 @@ namespace display
 
 		// The desktop mode in the requested parameters' shell: fullscreen's last resort, the one mode
 		// the adapter certainly offers.
-		d3d8::present_parameters desktop_mode_fallback(const d3d8::present_parameters& requested)
+		d3d8::present_parameters desktop_mode_fallback(void* d3d8_object, const d3d8::present_parameters& requested)
 		{
+			const auto mode = adapter_desktop(d3d8_object);
 			auto pp = requested;
-			pp.back_buffer_width = desktop.width;
-			pp.back_buffer_height = desktop.height;
-			pp.back_buffer_format = desktop.format;
+			pp.back_buffer_width = mode.width;
+			pp.back_buffer_height = mode.height;
+			pp.back_buffer_format = mode.format;
 			pp.multi_sample_type = d3d8::multisample_none;
-			pp.fullscreen_refresh_rate = desktop.refresh_rate;
+			pp.fullscreen_refresh_rate = mode.refresh_rate;
 			return pp;
 		}
 
@@ -445,12 +459,11 @@ namespace display
 			std::lock_guard lock(mutex);
 			const auto requested = *pp;
 			std::string notes;
-			const bool validate = opts.window_mode == mode::fullscreen && d3d && !stock_fallback;
-			if (validate)
+			if (opts.window_mode == mode::fullscreen && d3d)
 			{
 				ensure_raw_modes(d3d, adapter);
 			}
-			auto wanted = validate ? rewrite(d3d, requested, notes) : requested;
+			auto wanted = d3d ? rewrite(d3d, requested, notes) : requested;
 
 			// Restoring a minimised window makes the engine reset with the same parameters; nothing to do then.
 			if (manages_window(opts.window_mode) && have_applied && std::memcmp(&wanted, &applied, sizeof(wanted)) == 0 &&
@@ -466,9 +479,9 @@ namespace display
 				logger::write("display: reset applied   %s%s%s", describe(wanted).c_str(), notes.empty() ? "" : " - ", notes.c_str());
 			}
 			const d3d8::present_parameters guaranteed =
-			    opts.window_mode == mode::fullscreen && !requested.windowed ? desktop_mode_fallback(requested) : requested;
+			    opts.window_mode == mode::fullscreen && !requested.windowed && d3d ? desktop_mode_fallback(d3d, requested) : requested;
 			const HRESULT result = apply_with_fallbacks([&](d3d8::present_parameters& pp_to_use) { return real_reset(self, &pp_to_use); }, wanted, requested,
-			                                            opts.window_mode == mode::fullscreen && !requested.windowed ? &guaranteed : nullptr, "reset", true);
+			                                            opts.window_mode == mode::fullscreen && !requested.windowed && d3d ? &guaranteed : nullptr, "reset", true);
 			if (SUCCEEDED(result))
 			{
 				remember_applied(wanted);
@@ -508,7 +521,7 @@ namespace display
 			}
 
 			const bool fullscreen = opts.window_mode == mode::fullscreen && !requested.windowed;
-			const auto guaranteed = fullscreen ? desktop_mode_fallback(requested) : requested;
+			const auto guaranteed = fullscreen ? desktop_mode_fallback(self, requested) : requested;
 			const HRESULT result = apply_with_fallbacks(
 				[&](d3d8::present_parameters& pp_to_use) { return real_create_device(self, which, type, focus, behaviour, &pp_to_use, out); },
 				wanted, requested, fullscreen ? &guaranteed : nullptr, "device creation", false);
@@ -1330,10 +1343,6 @@ namespace display
 	void install(const HMODULE game)
 	{
 		opts = read_options();
-		// The game's own display-settings persistence: the boot FSAA switch learns the panel's 8x
-		// option, and a failed display device no longer resets the player's Resolution/FSAA. Every
-		// mode; nothing here hooks Direct3D or the window.
-		display_settings::install(game);
 		const bool caps_frames = frame_rate_rules::disables_stock_cap(opts.frame_rate);
 
 		desktop = current_desktop();
@@ -1363,7 +1372,8 @@ namespace display
 			}
 			if (why.empty())
 			{
-				logger::write("display: as the game has it (no [Display] Mode, FrameRate, VSync or ResolutionList in xml2-fix.ini, no in-game rows) - nothing hooked");
+				logger::write("display: as the game has it (no [Display] Mode, FrameRate, VSync or ResolutionList in xml2-fix.ini, no in-game rows) - nothing hooked, "
+				              "and the boot FSAA switch is left as the game has it (8x needs the device hook's clamp)");
 				return;
 			}
 			logger::write("display: as the game has it (no [Display] Mode in xml2-fix.ini); the Direct3D device is hooked for %s", why.c_str());
@@ -1402,6 +1412,13 @@ namespace display
 			opts.window_mode = mode::stock;
 			return;
 		}
+
+		// The game's own display-settings persistence, now that the device is hooked: the boot FSAA
+		// switch learns the panel's 8x option (the hook clamps it to what the adapter offers), and in
+		// the fix's modes - where the hook falls back without multisampling and, fullscreen, to the
+		// desktop mode - a failed device no longer resets Resolution/FSAA. In the game's own mode that
+		// reset stays: it is the game's recovery from a setting the adapter can't show.
+		display_settings::install(game, opts.window_mode != mode::stock);
 
 		// The resolution table is only ever relocated behind the mode-list hooks, which keep the list
 		// within its slots (the game's writer has no bounds check): they are certain from here on.
