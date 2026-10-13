@@ -42,6 +42,31 @@ XMen2.exe's actor+0x768 is XML1's +0x550: the same writers clear it, for example
 actor+0x3d4 is XML1's +0x330: the same test gates the buff-self power in 0x512ed0 and 0x10ad70. Its AI+0x2b6 bit 3
 is XML1's AI+0x28a bit 3: the timer bypass that both decisions read.
 
+## Visibility before the power decision
+
+The visibility result is also an AI scheduling decision. XML1 `0xfe550` calls the shared query scheduler at
+`0xfc990`; XMen2.exe `0x505250` calls `0x502730`. When the scheduler declines a query, the visibility function
+returns false and sets the caller's output byte. That byte means **deferred**, not "a wall blocked the target."
+The power-decision timer is armed only after visibility succeeds. A deferred decision can retry.
+
+| | X-Men Legends 1 | XMen2.exe |
+|---|---|---|
+| Ray endpoints | actor and target positions, each raised by 60 | actor-relative offset transformed into world coordinates; target's virtual position |
+| Sweep extents | 1 in each axis | 15 in each axis |
+| Query cutoff | below 600 units; at or beyond it, pass without querying | same cutoff, measured from its different endpoints |
+| Per-tick query budget | one | two |
+| Priority reservation | a reserved actor retains priority across ticks | the first request of each tick may bypass the reservation |
+
+Neither visibility function has a facing cone. Both exclude hero, enemy and alternate-enemy team members from the
+physical-entity candidate set; another attacker is not a line-of-sight blocker. The PC query also intersects a
+collision-property set, retained here: it removed no candidates in the sampled arena. A served query accepts no hit
+or the intended target, and rejects another hit. The existing query's cached-result behavior is preserved.
+
+The picker's aitype range table agrees in both games: melee requires a distance strictly between 0 and 90, beam
+between 100 and 500, and AOE between 0 and 120. An attack trigger's `maxrange` is not this AI selection range.
+There is no beam-specific facing check in this picker. The separate ranged-state probe (`0xf07c0` / `0x51aac0`)
+has the same 60–250 horizontal range and approximately 0.89 facing threshold in both games.
+
 ## The change
 
 Every write below goes in one transaction (`xml1_hook_transaction`), with three bridges and XML1's six combos in one
@@ -61,12 +86,19 @@ block of the fix's own:
    15). Rows 0, 1 and 4..10 keep their weights and are reached only through `combolevel`, which no XML1 entry has.
 6. **0x51993a and 0x519b04 (6 bytes each, jmp 0x519840).** After a combo start, the decision's tail runs as after a
    single attack: the next attack time and the crowd delay are set as in XML1.
+7. **0x5027bd (18 bytes) and 0x5027e0 (3 bytes).** Restore the original priority-reservation predicate and
+   one-query budget in the shared AI query scheduler. The existing queued ages, timestamp, cache and collision
+   implementation are retained. These queries are shared with other AI decisions.
+8. **0x505250 (6 bytes, jmp).** The visibility adapter resolves the same physical target and calls the existing
+   query with XML1's endpoints and extents, including its original cutoff and deferred/hit decisions. It reads the
+   hit's packed token directly from the stable trace record, so it composes with the entity-capacity query owner.
 
 Left as XMen2.exe has it: XML1 presses a combo's next button after the combo's own delay (0.2-0.6 s, 0x452b94);
 XMen2.exe presses it as soon as the move allows. XML1's second combo table (brain mode 1) has no XMen2.exe brain.
 
-All guards are checked before anything is written: the retail bytes of every site, the controller read at 0x5188c3
-the energy getter's read, the combo exits' tail and the five table runs. A mismatch leaves the game as it is and writes one log line. A failed write is rolled
+All guards are checked before anything is written: the retail bytes of every site, the controller read at 0x5188c3,
+the energy getter's read, the combo exits' tail, the five table runs, and the visibility/query entry helpers.
+A mismatch leaves the game as it is and writes one log line. A failed write is rolled
 back. A failed rollback refuses startup.
 
 Party heroes are affected by the same rules, as in XML1. An AI teammate decides every 0.5 s instead of 0.3 s and
@@ -76,11 +108,12 @@ its AI time is set.
 ## Gameplay agreement
 
 Online play is lockstep and the rule changes AI decisions and energy, so it is shared gameplay rule **16**
-(`gameplay_capabilities::npc_power_rule_id`, [gameplay-agreement.md](gameplay-agreement.md)): revision 2 (the power
-and combo rules; revision 1, never released, had the power rules only),
-`{installed ? 1 : 0, 0, 0, 0}`; registered in an LC installation or when requested; absent or `xml2` is the verified
+(`gameplay_capabilities::npc_power_rule_id`, [gameplay-agreement.md](gameplay-agreement.md)): revision 3,
+`{installed ? 1 : 0, installed ? 1 : 0, 0, 0}`. The added word advertises XML1 visibility geometry and query scheduling;
+revision 2 had only the power/combo word. Registered in an LC installation or when requested; absent or `xml2` is the verified
 `{0,0,0,0}`; requested but not installed (a guard mismatch, protection, readback, an unknown value) is unverified and
-closes host/join. A peer with the rule and one without never play together.
+closes host/join. A peer with the rule and one without never play together, and revision 2 peers cannot silently
+share a game with the new visibility policy.
 
 ## Evidence
 
@@ -115,6 +148,32 @@ The first game's AI decisions were also counted directly in xemu (breakpoints at
 game seconds): the melee-range decision passed its timer 9-23 times per AI and picked a power 3-6 times, against 10-11
 and 4-5 per Revolutionary with the rule (Frida on 0x518770 / 0x5188e7 / 0x518925).
 
-Open: with both rules the Revolutionary still uses about twice the original's powers and the hero is free 22-38 % of
-the time against 51-53 %. XML1 presses a combo's buttons on its own delays (0.2-0.6 s) where XMen2.exe presses them as
-soon as the move allows; the remaining gap was not traced further.
+### Visibility follow-up
+
+One 150-second control with the power/combo rule and two 150-second runs with the compiled visibility fix used
+four engaged Revolutionaries and one engaged Marauder. In addition to the earlier staging, the hero briefly
+visited the Marauder's verified spawn point, then returned to the measurement point, to ensure it was engaged.
+Rates use the same per-actor observed-window analyzer as the earlier port runs; inactive spawns are excluded.
+
+| | Original reference | Power/combo control | Visibility run 1 | Visibility run 2 |
+|---|---|---|---|---|
+| Marauder powers/min | 8.6–10.7 | 20.9 | 12.3 | 15.7 |
+| Revolutionary beams/min | 2.0–3.5 | 3.1 | 2.5 | 4.6 |
+| Hero free | 51–53% | 18.3% | 21.2% | 24.8% |
+
+The original figures are historical measurements, not a new original-game comparison. This is a partial
+improvement in small samples, not proof that the remaining aggression or beam discrepancy is resolved.
+The Marauder's visibility failures observed in the compiled runs were query deferrals, not physical obstructions
+(some Revolutionary queries were physically obstructed). The shared
+query policy changes when the AI can advance its decisions; the ray restoration is supported by the executable
+comparison, not by an observed crowd-blocking effect.
+
+The source's synthetic visibility tests cover invalid targets, geometry, cutoff, coincident points, deferral and
+hit classification. An executable test runs the patched reservation/budget fragment against synthetic actors;
+retail-byte tests reject each changed guard. The full native suite and agreement suite pass. A pipe-driven hero
+movement check after the second measurement also succeeded. Online play, party AI and other encounter types
+were not live-tested in this follow-up.
+
+Open: XML1 presses a combo's buttons on its own delays (0.2–0.6 s) where XMen2.exe presses them as soon as the move
+allows. Successful power selection also has a different aim/return path: XML1 normally turns and returns before
+its fallback NPC pause, so merely changing the PC's post-pick pause to one second is not an established fix.

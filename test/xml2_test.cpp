@@ -57,6 +57,7 @@
 #include "x1_leader_rules.hpp"
 #include "death_threshold_rules.hpp"
 #include "npc_power_rules.hpp"
+#include "npc_visibility_rules.hpp"
 #include "pack_amount_rules.hpp"
 #include "personal_item_text_rules.hpp"
 #include "save_format_rules.hpp"
@@ -10299,6 +10300,17 @@ namespace
 		__asm { ret 8 }
 	}
 
+	__declspec(noinline) bool run_npc_query_fragment(void* code, void* frame, int used)
+	{
+		int answer = 0;
+		__asm mov esi, frame
+		__asm mov ecx, used
+		__asm xor ebx, ebx
+		__asm call code
+		__asm mov answer, eax
+		return answer != 0;
+	}
+
 	// [Game] NpcPowerRule (npc_power_rules.hpp): the value's rules; the three decisions against XML1's; the bridges'
 	// branches decoded back to their targets; then, when a copy of XMen2.exe is at hand, the guards and the writes on it.
 	void check_npc_power_rules()
@@ -10418,6 +10430,49 @@ namespace
 		CHECK(sub_bytes(combo_exit_site, 3, 6) == std::vector<std::uint8_t>({0xb0, 0x01, 0x5f, 0x5e, 0x5d, 0x5b}) && combo_exit_va == combo_exit_site.va + 3 && combo_exit2_va == combo_exit2_site.va + 3);
 		CHECK(rel32(combo_exit_jump(combo_exit_va), 1, combo_exit_va) == combo_tail_va && rel32(combo_exit_jump(combo_exit2_va), 1, combo_exit2_va) == combo_tail_va && combo_exit_jump(combo_exit_va)[5] == 0x90);
 
+		// V-TBD: visibility deferral is distinct from obstruction; geometry comes from positions, even for
+		// coincident points. The native adapter uses this same policy, with no game data in the fixture.
+		struct sight_fixture
+		{
+			using point = npc_visibility_rules::point;
+			bool target = true;
+			point actor{11, 23, 7}, other{41, 63, 9}, from{}, to{}, extents{};
+			npc_visibility_rules::query_result answer{true, false, false};
+			int calls = 0;
+			bool has_target() const { return target; }
+			point actor_position() const { return actor; }
+			point target_position() const { return other; }
+			npc_visibility_rules::query_result query(point a, point b, point size)
+			{
+				++calls; from = a; to = b; extents = size; return answer;
+			}
+		} sight;
+		std::uint8_t deferred = 0;
+		CHECK(npc_visibility_rules::visible(sight, deferred) && sight.calls == 1 && deferred == 0);
+		CHECK(sight.from.x == 11 && sight.from.y == 23 && sight.from.z == 67 && sight.to.x == 41 && sight.to.y == 63 && sight.to.z == 69);
+		CHECK(sight.extents.x == 1 && sight.extents.y == 1 && sight.extents.z == 1);
+		sight.answer = {true, true, false};
+		CHECK(!npc_visibility_rules::visible(sight, deferred) && deferred == 0);
+		sight.answer = {true, true, true};
+		CHECK(npc_visibility_rules::visible(sight, deferred) && deferred == 0);
+		sight.answer = {false, false, false};
+		CHECK(!npc_visibility_rules::visible(sight, deferred) && deferred == 1);
+		sight.target = false; sight.calls = 0; deferred = 0;
+		CHECK(!npc_visibility_rules::visible(sight, deferred) && sight.calls == 0 && deferred == 0);
+		sight.target = true; sight.actor = {0, 0, 0}; sight.other = {600, 0, 0};
+		CHECK(npc_visibility_rules::visible(sight, deferred) && sight.calls == 0 && deferred == 0);
+		sight.other.x = std::nextafter(600.0f, 0.0f);
+		CHECK(!npc_visibility_rules::visible(sight, deferred) && sight.calls == 1 && deferred == 1);
+		sight.calls = 0; deferred = 0; sight.other = sight.actor; sight.answer = {true, false, false};
+		CHECK(npc_visibility_rules::visible(sight, deferred) && sight.calls == 1);
+		sight.calls = 0; sight.other.x = nan;
+		CHECK(npc_visibility_rules::visible(sight, deferred) && sight.calls == 0);
+		const auto priority = query_priority_bytes();
+		CHECK(priority.size() == query_priority_site.patched && priority[8] == 0x74 && query_priority_site.va + 10 + priority[9] == query_budget_site.va);
+		CHECK(priority[16] == 0x74 && query_priority_site.va + 18 + priority[17] == query_budget_site.va);
+		CHECK(query_budget_bytes() == std::vector<std::uint8_t>({0x83, 0xf9, 1}));
+		CHECK(visibility_jump(0x10002000).size() == visibility_site.patched && rel32(visibility_jump(0x10002000), 1, visibility_site.va) == 0x10002000);
+
 		const auto exe = game_executable();
 		if (!exe)
 		{
@@ -10431,6 +10486,14 @@ namespace
 		const site* mismatch = first_mismatch(image);
 		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", static_cast<unsigned long>(mismatch->va), mismatch->what);
 		CHECK(mismatch == nullptr);
+		// Every new entry/predicate/helper guard must refuse a changed executable before any patch is made.
+		for (const auto* s : {&query_priority_site, &query_budget_site, &visibility_site, &physical_target_site, &query_entry_site})
+		{
+			auto& byte = image[s->va - image_base];
+			byte ^= 1;
+			CHECK(first_mismatch(image) == s);
+			byte ^= 1;
+		}
 		// The picker call's target is the picker, the re-check's operand the 0.3.
 		std::int32_t r = 0;
 		std::memcpy(&r, image + (picker_call_va + 1 - image_base), 4);
@@ -10438,6 +10501,41 @@ namespace
 		float recheck_value = 0;
 		std::memcpy(&recheck_value, image + (0x681ebc - image_base), 4);
 		CHECK(recheck_value == xml2_recheck);
+		// Execute the actual patched reservation/budget fragment with synthetic actors. Only the two global
+		// data operands and its outgoing refusal branches are relocated; internal branches stay as installed.
+		std::uint32_t reserved = 0, oldest = 0;
+		std::array<std::uint32_t, 8> actor{};
+		actor[7] = 101;
+		std::array<std::uint8_t, 0x2dc> brain{};
+		void* actor_pointer = actor.data();
+		std::memcpy(brain.data() + 0x10, &actor_pointer, sizeof actor_pointer);
+		std::vector<std::uint8_t> fragment(53);
+		std::memcpy(fragment.data(), image + (query_priority_site.va - image_base), 44);
+		std::memcpy(fragment.data(), priority.data(), priority.size());
+		fragment[37] = 1; // query budget
+		put32(fragment, 2, static_cast<address>(reinterpret_cast<std::uintptr_t>(&reserved)));
+		put32(fragment, 19, static_cast<address>(reinterpret_cast<std::uintptr_t>(&oldest)));
+		put32(fragment, 31, 50 - 35); // queued-age refusal
+		put32(fragment, 40, 50 - 44); // budget refusal
+		const std::uint8_t returns[]{0xb8, 1, 0, 0, 0, 0xc3, 0x31, 0xc0, 0xc3};
+		std::memcpy(fragment.data() + 44, returns, sizeof returns);
+		void* executable = VirtualAlloc(nullptr, fragment.size(), MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+		CHECK(executable != nullptr);
+		if (executable)
+		{
+			std::memcpy(executable, fragment.data(), fragment.size());
+			FlushInstructionCache(GetCurrentProcess(), executable, fragment.size());
+			const auto allows = [&](int used, std::uint32_t owner, int priority_age, int queued_age) {
+				reserved = owner; oldest = static_cast<std::uint32_t>(priority_age);
+				std::memcpy(brain.data() + 0x2d8, &queued_age, sizeof queued_age);
+				return run_npc_query_fragment(executable, brain.data(), used);
+			};
+			CHECK(allows(0, 0, 0, 1));
+			CHECK(!allows(0, 202, 5, 5) && !allows(0, 202, 5, 4));
+			CHECK(allows(0, 101, 5, 1) && allows(0, 202, 5, 6));
+			CHECK(!allows(1, 0, 0, 1) && !allows(1, 101, 5, 6) && !allows(2, 0, 0, 1));
+			VirtualFree(executable, 0, MEM_RELEASE);
+		}
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
 

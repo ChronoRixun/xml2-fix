@@ -4,6 +4,7 @@
 #include "ini.hpp"
 #include "log.hpp"
 #include "npc_power_rules.hpp"
+#include "npc_visibility_rules.hpp"
 #include "xml1_hook_memory.hpp"
 #include "xml1_hook_transaction.hpp"
 
@@ -17,6 +18,41 @@ namespace npc_power
 
 		constexpr const char* as_before = "computer-controlled characters use powers as XMen2.exe has it (no energy cost, a decision every 0.3 s)";
 		bool wanted = false, applied = false;
+
+		template<class T> T& field(void* object, const std::size_t offset)
+		{
+			return *reinterpret_cast<T*>(static_cast<std::uint8_t*>(object) + offset);
+		}
+		struct visibility_engine
+		{
+			using point = npc_visibility_rules::point;
+			void* ai;
+			void* target;
+			explicit visibility_engine(void* brain) : ai(brain)
+			{
+				// The same physent class check as the stock visibility entry, with a by-value handle.
+				target = reinterpret_cast<void* (__cdecl*)(std::uint32_t)>(0x4297b0)(field<std::uint32_t>(ai, 0x18));
+			}
+			bool has_target() const { return target != nullptr; }
+			point actor_position() const { return field<point>(field<void*>(ai, 0x10), 0x20); }
+			point target_position() const { return field<point>(target, 0x20); }
+			npc_visibility_rules::query_result query(const point& from, const point& to, const point& extents)
+			{
+				void* hit = nullptr;
+				std::uint8_t valid = 1;
+				using query_fn = std::uint8_t (__fastcall*)(void*, void*, const point*, const point*, const point*, void**, int, std::uint8_t*, int);
+				const bool served = reinterpret_cast<query_fn>(0x502730)(ai, nullptr, &from, &to, &extents, &hit, 1, &valid, 0) != 0;
+				if (!served || !valid || !hit) return {served, false, false};
+				// Trace record +0xc is the packed entity token in both layouts (entity_query's 64-byte records).
+				// Comparing it directly avoids calling/guarding 0x4a9590, which the capacity owner already hooks.
+				return {true, true, field<std::uint32_t>(hit, 0xc) == field<std::uint32_t>(target, 0x1c)};
+			}
+		};
+		std::uint8_t __fastcall visibility_xml1(void* ai, void*, std::uint8_t* deferred)
+		{
+			visibility_engine engine(ai);
+			return npc_visibility_rules::visible(engine, *deferred) ? 1 : 0;
+		}
 
 		const site* first_mismatch_guarded()
 		{
@@ -34,7 +70,7 @@ namespace npc_power
 	bool requested() { return wanted; }
 	bool installed() { return wanted && applied; }
 	bool verified() { return !wanted || applied; }
-	std::array<std::uint32_t, 4> values() { return {installed() ? 1u : 0u, 0, 0, 0}; }
+	std::array<std::uint32_t, 4> values() { return {installed() ? 1u : 0u, installed() ? 1u : 0u, 0, 0}; }
 
 	void install(const HMODULE game)
 	{
@@ -101,6 +137,10 @@ namespace npc_power
 			{combo_row2_site.va, retail_bytes(combo_row2_site, combo_row_size), combo_row_bytes(2)},
 			{combo_row3_site.va, retail_bytes(combo_row3_site, combo_row_size), combo_row_bytes(3)},
 			{combo_row11_site.va, retail_bytes(combo_row11_site, combo_row_size), combo_row_bytes(6)},
+			{query_priority_site.va, retail_bytes(query_priority_site, query_priority_site.patched), query_priority_bytes()},
+			{query_budget_site.va, retail_bytes(query_budget_site, query_budget_site.patched), query_budget_bytes()},
+			{visibility_site.va, retail_bytes(visibility_site, visibility_site.patched),
+			 visibility_jump(static_cast<address>(reinterpret_cast<std::uintptr_t>(&visibility_xml1)))},
 		};
 		xml1_hook_transaction::memory memory;
 		bool safe = true;
@@ -119,7 +159,8 @@ namespace npc_power
 		}
 		logger::write("npc power rule: X-Men Legends 1's ([Game] NpcPowerRule=xml1): enemies pay for their powers (0x4318e7 tests the AI time as "
 		              "default.xbe 0xcde95), the melee-range power decision re-checks every 2.0 s / 0.5 s (0x5188d8) and needs half of the "
-		              "character's energy (0x518920); NPCs combo with the first game's levels and combos (0x505011, rows 0x6dd508) and pause after a combo start (0x51993a, 0x519b04); bridges at 0x%08lX",
+		              "character's energy (0x518920); NPCs combo with the first game's levels and combos (0x505011, rows 0x6dd508) and pause after a combo start (0x51993a, 0x519b04); "
+		              "AI visibility uses XML1's ray and query reservation/budget (0x505250, 0x5027bd, 0x5027e0); bridges at 0x%08lX",
 		              static_cast<unsigned long>(base));
 	}
 }

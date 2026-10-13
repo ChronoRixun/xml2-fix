@@ -10,7 +10,7 @@
 //
 // The two games share one AI design for powers: four power slots per AI (aitype, a mask from the same 18-entry
 // table, aireusetime), one picker that takes a random power whose reuse time has passed and whose aitype range
-// holds the target's distance (XML1 0x1081f0, XMen2.exe 0x50fe50: the same function), and the same callers. Three
+// holds the target's distance (XML1 0x1081f0, XMen2.exe 0x50fe50: the same selection design), and the same callers. Three
 // things differ, and together they make every XML1 enemy with powers use them far more often in XMen2.exe:
 //
 //   1. Paying for a power. Both games charge a power trigger's powerusage through one function (XML1 0xcde90 ->
@@ -53,6 +53,12 @@
 //   Left as XMen2.exe has it: XML1 presses a combo's next button after the combo's own delay (0.2 / 0.3 / 0.6 s,
 //   0x452b94); XMen2.exe presses it at the next AI update the move allows. XML1's second combo table (brain mode 1,
 //   0x452be8 / 0x452c00 / 0x452c60 / 0x452c48) has no counterpart: no XMen2.exe brain has that mode.
+//
+//   6. Visibility: XML1's 0xfe550 uses positions raised by 60 and unit sweep extents; its query scheduler 0xfc990
+//      serves one query per AI tick and preserves a waiting actor's reservation. XMen2.exe uses different
+//      endpoints, extents 15, two queries and a first-request bypass. The sites below restore the scheduler;
+//      npc_visibility_rules.hpp supplies XML1's geometry and deferred/hit decisions. Both engines exclude
+//      team characters from the collision candidates. A deferred query is not physical obstruction.
 //
 // Nothing a save reads changes; the energy fields already exist and are saved as before.
 
@@ -177,6 +183,14 @@ namespace npc_power_rules
 	constexpr address energy_getter_va = 0x41d5d0; // fld [ecx+0x288] (or the maximum under the energy cheats)
 	inline constexpr site energy_getter_site{0x41d601, "d98688020000", 0, "the energy getter's read of +0x288 (0x41d5d0)"};
 
+	// XML1 0xfc990 reserves the next query for the waiting actor and serves one query per AI timestamp.
+	// XMen2.exe 0x502730 instead grants the first request irrespective of that reservation and serves two.
+	inline constexpr site query_priority_site{0x5027bd, "3bcb741f8b46108b1520ac78003b501c7411", 18, "the AI query's priority reservation"};
+	inline constexpr site query_budget_site{0x5027e0, "83f9020f8d61010000", 3, "the AI query's per-tick budget"};
+	inline constexpr site visibility_site{0x505250, "81ecd400000053568bf1", 6, "the AI visibility query entry"};
+	inline constexpr site physical_target_site{0x4297b0, "568d4c2408e8f6bc0300", 0, "the physical-entity handle resolver"};
+	inline constexpr site query_entry_site{0x502730, "6aff689853670064a100000000", 0, "the AI collision query entry"};
+
 	// 4. The combo level override at the end of the AI init: mov edx,[ecx]; push eax; call [edx+0x44]; mov ecx,[esp+0x7c].
 	inline constexpr site combolevel_site{0x50500e, "8b1150ff52448b4c247c", 0, "the AI init's combolevel override (0x504a20)"};
 	constexpr address combolevel_call_va = 0x505011;
@@ -213,9 +227,10 @@ namespace npc_power_rules
 		return row;
 	}
 
-	inline constexpr std::array<const site*, 14> sites{&charge_site, &recheck_site, &recheck_actor_site, &picker_site, &energy_getter_site,
+	inline constexpr std::array<const site*, 19> sites{&charge_site, &recheck_site, &recheck_actor_site, &picker_site, &energy_getter_site,
 	                                                   &combolevel_site, &combo_exit_site, &combo_exit2_site, &combo_tail_site,
-	                                                   &combo_buttons_site, &combo_lengths_site, &combo_row2_site, &combo_row3_site, &combo_row11_site};
+	                                                   &combo_buttons_site, &combo_lengths_site, &combo_row2_site, &combo_row3_site, &combo_row11_site,
+	                                                   &query_priority_site, &query_budget_site, &visibility_site, &physical_target_site, &query_entry_site};
 
 	inline std::vector<std::uint8_t> retail_bytes(const site& s, const std::size_t count)
 	{
@@ -436,5 +451,22 @@ namespace npc_power_rules
 		const address rel = combo_tail_va - (at + 5);
 		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16),
 		        static_cast<std::uint8_t>(rel >> 24), 0x90};
+	}
+
+	// The original reservation predicate fits the existing 18-byte run. ECX keeps the query count for the
+	// following budget check; EAX/EDX are scratch here. The queued-age comparison at 0x5027cf stays in place.
+	inline std::vector<std::uint8_t> query_priority_bytes()
+	{
+		return {0x8b, 0x15, 0x20, 0xac, 0x78, 0x00, // mov edx,[reserved actor]
+		        0x3b, 0xd3, 0x74, 0x19,             // cmp edx,ebx (zero); je budget
+		        0x8b, 0x46, 0x10,                   // mov eax,[esi+actor]
+		        0x3b, 0x50, 0x1c, 0x74, 0x11};     // cmp edx,[eax+handle]; je budget
+	}
+	inline std::vector<std::uint8_t> query_budget_bytes() { return {0x83, 0xf9, 0x01}; }
+	inline std::vector<std::uint8_t> visibility_jump(const address target)
+	{
+		std::vector<std::uint8_t> bytes{0xe9, 0, 0, 0, 0, 0x90};
+		put32(bytes, 1, target - (visibility_site.va + 5));
+		return bytes;
 	}
 }
