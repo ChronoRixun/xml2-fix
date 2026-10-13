@@ -324,7 +324,8 @@ namespace lcsave::detail
 				if (r["capture_flags"].as_int() & 2) notes.push_back("zone " + zone + ": legacy capture provenance inferred (unknown completeness)");
 				if (r["capture_flags"].as_int() & 1)
 				{ notes.push_back("zone " + zone + ": incomplete capture: record not applied"); continue; }
-				if (r["content_hash"].as_bytes() != std::string(reinterpret_cast<const char*>(num->sha1.data()), 20))
+				const auto* prefix = pos.b.zone_prefix(zone, r["content_hash"].as_bytes(), *num);
+				if (r["content_hash"].as_bytes() != std::string(reinterpret_cast<const char*>(num->sha1.data()), 20) && !prefix)
 				{
 					notes.push_back("zone " + py_repr(zone, Enc::latin1) + ": placement file changed since the record was made: record not applied");
 					continue;
@@ -336,9 +337,20 @@ namespace lcsave::detail
 				for (const auto& state : r["states"].as_list()) if (state["list"].as_int() == 1)
 				{
 					const auto placement = state["placement_index"].as_int();
-					const auto it = std::find(num->placement.begin(), num->placement.end(), placement);
-					if (it == num->placement.end()) { differs = true; break; }
-					const auto current = static_cast<std::size_t>(it - num->placement.begin());
+					std::size_t current = 0;
+					if (prefix)
+					{
+						const auto ordinal = state["ordinal"].as_int();
+						if (ordinal < 1 || ordinal > static_cast<std::int64_t>(prefix->placements.size()) ||
+						    prefix->placements[static_cast<std::size_t>(ordinal-1)] != placement) { differs = true; break; }
+						current = static_cast<std::size_t>(ordinal-1);
+					}
+					else
+					{
+						const auto it = std::find(num->placement.begin(), num->placement.end(), placement);
+						if (it == num->placement.end()) { differs = true; break; }
+						current = static_cast<std::size_t>(it - num->placement.begin());
+					}
 					const auto& dn = saved_names.at(static_cast<std::size_t>(state["def_name"].as_int()));
 					const auto& in = saved_names.at(static_cast<std::size_t>(state["inst_name"].as_int()));
 					if (key_hash1(dn.as_text(), dn.enc) != num->names[current].first || key_hash1(in.as_text(), in.enc) != num->names[current].second)
@@ -346,10 +358,11 @@ namespace lcsave::detail
 					mapped[state["ordinal"].as_int()] = current + 1;
 				}
 				if (differs) { notes.push_back("zone " + zone + ": entity placement/name changed: record not applied"); continue; }
+				if (prefix) notes.push_back("zone " + py_repr(zone, Enc::latin1) + ": verified append-only resident prefix retained; new tail starts fresh");
 				// Legacy lists can contain placements that later builds pin. A list entry proves
 				// existence; the missing numbered slot does not mean removal in this case.
 				std::map<std::size_t, std::size_t> promoted;
-				if (legacy_import || (r["capture_flags"].as_int() & 2))
+				if (!prefix && (legacy_import || (r["capture_flags"].as_int() & 2)))
 				{
 					std::map<std::size_t, std::size_t> candidates;
 					std::map<std::size_t, std::size_t> counts;
@@ -383,6 +396,13 @@ namespace lcsave::detail
 				for (const auto& s : r["states"].as_list())
 				{
 					const auto promotion = promoted.find(state_index++);
+					if (prefix && s["list"].as_int() != 1)
+					{
+						const auto& dn = names.at(static_cast<std::size_t>(s["def_name"].as_int()));
+						const auto& in = names.at(static_cast<std::size_t>(s["inst_name"].as_int()));
+						const auto pair = std::make_pair(key_hash1(dn.as_text(),dn.enc),key_hash1(in.as_text(),in.enc));
+						if (std::find(num->names.begin()+prefix->placements.size(),num->names.end(),pair) != num->names.end()) continue;
+					}
 					if (n >= native.states) fail("more states than the engine record holds");
 					OldStateRecord st{};
 					const auto& payload = s["payload"].as_bytes();
@@ -444,7 +464,7 @@ namespace lcsave::detail
 					else smart.push_back(idx);
 				}
 				z.name_handle = intern(zone, Enc::latin1);
-				z.tail.state_count = static_cast<u32>(1 + r["states"].as_list().size());
+				z.tail.state_count = static_cast<u32>(n);
 				// the list capacities of the layout (the message is the one the reference's struct.pack gives)
 				if (dynamic.size() > native.dynamic) fail("pack expected " + std::to_string(native.dynamic) + " items for packing");
 				if (smart.size() > native.smart) fail("pack expected " + std::to_string(native.smart) + " items for packing");
@@ -458,8 +478,9 @@ namespace lcsave::detail
 				restore_conversation(r, zone, pos.t, z.tail.conversation, notes);
 				z.tail.time_stamp = static_cast<float>(r["time_stamp"].as_real());
 				z.tail.flag = B(r["flag"]);
+				for (std::size_t i = 1; i < n; ++i) if (z.states[i].flags_a & 1)
+					applied.insert(z.states[i].payload[0]);
 				m.zones.push_back(std::move(z));
-				dependencies(r, applied);
 			}
 			m.world.erase(std::remove_if(m.world.begin(), m.world.end(), [&](const OldWorld& item)
 			{ return owned.count(item.slot) && !applied.count(item.slot); }), m.world.end());

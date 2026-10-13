@@ -172,6 +172,7 @@ namespace lcsave
 	{
 		std::uint32_t ordinal = 0, placement_index = 0;
 		std::string definition_name, instance_name;
+		std::uint32_t source_placement_index = 0; // only used with source_placement_sha1
 	};
 	struct ZoneCaptureMetadata
 	{
@@ -181,6 +182,10 @@ namespace lcsave
 		std::array<std::uint8_t, 32> conversation_digest{};
 		std::uint32_t capture_flags = 2; // bit 0 incomplete; bit 1 unobserved legacy provenance
 		std::vector<PlacedEntityMetadata> entities;
+		// Ephemeral compatibility metadata, never new durable fields. Cached unvisited records retain
+		// their original hash/placement indices until an actual current-map capture replaces them.
+		std::array<std::uint8_t, 20> source_placement_sha1{};
+		std::vector<PlacedEntityMetadata> fresh_entities;
 	};
 	bool loaded_zone_metadata(const std::vector<std::uint8_t>& file, const Tables& tables,
 		std::vector<ZoneCaptureMetadata>& out, std::string& error);

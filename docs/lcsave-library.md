@@ -1,5 +1,22 @@
 # lcsave: the LC save library
 
+Append-only resident compatibility mirrors `tools/lcsave/zonecompat.py`. Optional
+`Data/lcsave/zone-prefix.lcm` attestations bind the saved old map SHA1 to an exact
+current map SHA1 after the builder verifies complete definitions and placements
+for an unchanged resident prefix. Numbered saved identities also match old ordinal
+and placement. Any missing/stale attestation retains exact-hash rejection; malformed
+metadata refuses. The durable LC format remains unchanged.
+
+`loaded_zone_metadata` uses current placement provenance for actual runtime guards,
+and supplies `fresh_entities` so appended residents retain factory defaults.
+`source_placement_sha1` and each entity's `source_placement_index` preserve cached
+unvisited records across resaves; a fresh native capture replaces them. The reverse
+reader omits matching former smart/dynamic tail states and their exclusive world
+dependencies. No older save names alone are treated as proof of unchanged definitions.
+Sidecar framing and the release-ledger generation command are documented by the
+Python reference. Compatibility needs attestations generated against every supported
+previous build; it is not automatically transitive or a new save feature bit.
+
 `src/lcsave/` is the C++ translation of the builder's reference implementation `tools/lcsave` (legends-classic,
 branch `feature/save-converter`, 8a7a8ac): the LC save format ("LC save", format 1), the one-time converter from
 XMen2.exe's own save files, the reverse direction the loader needs, the saver's direction, and the canonical dumps

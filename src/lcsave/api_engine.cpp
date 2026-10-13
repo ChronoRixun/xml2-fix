@@ -309,6 +309,9 @@ namespace lcsave
 				if (f.data("META")["origin"].as_int() == 1 || record["conversation_digest"].as_bytes() == std::string(32, '\0'))
 					metadata.capture_flags |= 2; // earlier candidates wrote zero despite unobserved provenance
 				const auto* numbering = tables.data->build->zone_numbering(metadata.zone);
+				const auto* prefix = tables.data->build->zone_prefix(metadata.zone,record["content_hash"].as_bytes(),*numbering);
+				metadata.placement_sha1 = numbering->sha1;
+				if (prefix) metadata.source_placement_sha1 = prefix->old;
 				const auto restored = std::find_if(native.zones.begin(), native.zones.end(), [&](const auto& z)
 				{ return detail::zone_string(*native.zone_strings, z.name_handle) == metadata.zone; });
 				// Metadata must describe the reconstructed map, including promoted legacy placements.
@@ -319,9 +322,17 @@ namespace lcsave
 					PlacedEntityMetadata entity;
 					entity.ordinal = static_cast<std::uint32_t>(k + 1);
 					entity.placement_index = numbering->placement.at(k);
+					if (prefix) entity.source_placement_index = prefix->placements.at(k);
 					entity.definition_name = detail::zone_string(*native.zone_strings, restored->states[idx].def_name);
 					entity.instance_name = detail::zone_string(*native.zone_strings, restored->states[idx].inst_name);
 					metadata.entities.push_back(std::move(entity));
+				}
+				if (prefix) for (std::size_t k = prefix->placements.size(); k < numbering->names.size(); ++k)
+				{
+					PlacedEntityMetadata fresh;
+					fresh.ordinal=static_cast<std::uint32_t>(k+1);fresh.placement_index=numbering->placement.at(k);
+					fresh.definition_name=numbering->name_text.at(k).first;fresh.instance_name=numbering->name_text.at(k).second;
+					metadata.fresh_entities.push_back(std::move(fresh));
 				}
 				out.push_back(std::move(metadata));
 			}
