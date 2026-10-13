@@ -10430,7 +10430,7 @@ namespace
 		CHECK(sub_bytes(combo_exit_site, 3, 6) == std::vector<std::uint8_t>({0xb0, 0x01, 0x5f, 0x5e, 0x5d, 0x5b}) && combo_exit_va == combo_exit_site.va + 3 && combo_exit2_va == combo_exit2_site.va + 3);
 		CHECK(rel32(combo_exit_jump(combo_exit_va), 1, combo_exit_va) == combo_tail_va && rel32(combo_exit_jump(combo_exit2_va), 1, combo_exit2_va) == combo_tail_va && combo_exit_jump(combo_exit_va)[5] == 0x90);
 
-		// V-TBD: visibility deferral is distinct from obstruction; geometry comes from positions, even for
+		// V-NPC1: visibility deferral is distinct from obstruction; geometry comes from positions, even for
 		// coincident points. The native adapter uses this same policy, with no game data in the fixture.
 		struct sight_fixture
 		{
