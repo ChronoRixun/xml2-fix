@@ -130,9 +130,10 @@ with the original executable's continuation. The previous unshipped experiment r
 addition and an extra hold gate; revision 4 corrects both. Synthetic completion pauses with offset 0.6 and zero
 random addition are 0.6, 0.8, 0.8, 0.8, 0.8 and 1.2 seconds, matching the original code.
 
-The historical combat tables below predate revision 4. Required next checks are a release-base negative control,
-matched invulnerable/idle traces in the same arena, and a vulnerable fight using real input. Party AI, online
-play and save/load transitions also remain untested for this candidate. Hero reaction handlers have not changed;
+The historical combat tables below predate revision 4. Two new release-base/candidate pairs and vulnerable
+real-input fights are described in the follow-up below. The new rate measurements had other test games running
+and do not establish timing acceptance. Isolated repeats, party AI, online play and save/load transitions remain
+untested for this candidate. Hero reaction handlers have not changed;
 the missing original stun handler and PC stun-powerup behavior require separate investigation and a separately
 coordinated gameplay rule if an engine restoration is needed.
 
@@ -195,6 +196,40 @@ retail-byte tests reject each changed guard. The full native suite and agreement
 movement check after the second measurement also succeeded. Online play, party AI and other encounter types
 were not live-tested in this follow-up.
 
-Open: revision 4's press timing still needs live measurement. Successful power selection also has a different
+Open: revision 4's press timing still needs an isolated live comparison. Successful power selection also has a different
 aim/return path: XML1 normally turns and returns before
 its fallback NPC pause, so merely changing the PC's post-pick pause to one second is not an established fix.
+
+### Revision 4 follow-up (timing acceptance still pending)
+
+Two fresh 150-second pairs used a locally built release-base DLL and the compiled revision-4 candidate on the
+same released content. Each had four engaged Revolutionaries and one Marauder. The hero was idle and invulnerable;
+the zone load and visits to the two authored spawner points were staged. The unchanged transition tracer and
+per-actor observed-window analyzer were reused. Inactive spawns were excluded.
+
+| Metric | Historical original | Release control, two runs | Revision 4, two runs |
+|---|---:|---:|---:|
+| Marauder powers/min | 8.6–10.7 | 13.6, 18.5 | 12.1, 12.8 |
+| Hero free | 51–53% | 23.4%, 17.3% | 31.7%, 27.6% |
+| Revolutionary beams/min | 2.0–3.5 | 3.8, 4.3 | 3.3, 3.1 |
+
+**Other active test games were observed during every run. These rates are timing-confounded and are not valid
+release-acceptance measurements.** The observed direction is encouraging, but neither a causal effect size nor
+original-game parity is established. The original column is historical; no new original runtime was used.
+
+Separate vulnerable fights used real virtual-pad inputs. The fresh level-1 hero performed attack moves and died.
+A level-10 retry, staged with an XP award and calibrated stick aiming, recorded movement, an attack, enemy health
+loss and another hero death. These were solo tests against the full group, not wins or campaign playthroughs.
+A separate real-stick movement check at the observed entrance covered about 99 units with health unchanged.
+
+Hero-side checks do not support a simple slower-get-up explanation: the audited playback speeds and get-up
+handler entry, exit, cancel and tick operations agree. Historical traces have a different mixture of wall-land
+and back-land reactions, so longer average knockdown bouts cannot be attributed to one slower handler. The
+original stun handler and PC timed powerup still differ; this candidate changes neither.
+
+A separate 90-second observer confirmed ten PC idle-selection redirects into stun while the stun-powerup flag
+remained set, with seventeen observed applications and seventeen clears. One stun applied during a landing
+reaction persisted through get-up; the hero then entered stun for another 1.115 game-clock seconds before the
+powerup cleared. The original handler sets its flag on stun entry and clears it on exit. This establishes the PC
+mechanism in this encounter, not its total contribution to the gap or the correct complete restoration. Any
+hero-side engine change needs a separately coordinated gameplay rule; no new rule ID is allocated here.
