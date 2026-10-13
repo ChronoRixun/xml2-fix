@@ -69,8 +69,8 @@ has the same 60–250 horizontal range and approximately 0.89 facing threshold i
 
 ## The change
 
-Every write below goes in one transaction (`xml1_hook_transaction`), with three bridges and XML1's six combos in one
-block of the fix's own:
+Every write below goes in one transaction (`xml1_hook_transaction`). Bridges, constants and combo tables occupy
+one execute-read page; a separate read-write page holds the 32 per-brain press deadlines.
 
 1. **0x4318e7 (9 bytes, jmp).** The bridge makes XML1's test. Without the AI flag, the character pays. With it, the
    character pays when -0.5 < actor+0x768 < 0.001. Otherwise it asks the controller at 0x4318f0, as before.
@@ -84,8 +84,8 @@ block of the fix's own:
 5. **The combo tables (.data).** Slots 0..5 point at XML1's six combos (in the block) with their lengths; rows 2, 3
    and 11 - the levels the init picks - hold XML1's levels 2, 3 and 6 (the first 2, 3, 6 of 5 / 25 / 20 / 15 / 15 /
    15). Rows 0, 1 and 4..10 keep their weights and are reached only through `combolevel`, which no XML1 entry has.
-6. **0x51993a and 0x519b04 (6 bytes each, jmp 0x519840).** After a combo start, the decision's tail runs as after a
-   single attack: the next attack time and the crowd delay are set as in XML1.
+6. **0x51993a and 0x519b04 (6 bytes each).** The start bridge arms the first press deadline, then jumps to the
+   decision's tail at 0x519840: the next attack time and crowd delay are set as in XML1.
 7. **0x5027bd (18 bytes) and 0x5027e0 (3 bytes).** Restore the original priority-reservation predicate and
    one-query budget in the shared AI query scheduler. The existing queued ages, timestamp, cache and collision
    implementation are retained. These queries are shared with other AI decisions.
@@ -93,11 +93,19 @@ block of the fix's own:
    query with XML1's endpoints and extents, including its original cutoff and deferred/hit decisions. It reads the
    hit's packed token directly from the stable trace record, so it composes with the entity-capacity query owner.
 
-Left as XMen2.exe has it: XML1 presses a combo's next button after the combo's own delay (0.2-0.6 s, 0x452b94);
-XMen2.exe presses it as soon as the move allows. XML1's second combo table (brain mode 1) has no XMen2.exe brain.
+9. **0x51920b (6 bytes).** The continuation waits until the press deadline has passed, advances the index, and
+   reaches the existing press or completion code. XML1's per-button delays come from 0x452b94; its continuation
+   is 0xeebec..0xeecb7. PC's immediate chain-availability test can otherwise abort a newly started combo and set
+   the next attack time to now minus one. The timer advances even while the actor hold bit is set, as in XML1.
+10. **0x5192cb (6 bytes).** Completion adds the final button delay to the existing time/offset/random accumulator.
+   PC adds a fixed 0.2 seconds. The original single-hit combo adds zero; its longest combo adds 0.6 seconds.
+
+XML1's second combo table (brain mode 1) has no XMen2.exe brain. The earlier target-loss cancellation branch and
+the PC's press notification remain unchanged. No claim of complete AI equivalence is made.
 
 All guards are checked before anything is written: the retail bytes of every site, the controller read at 0x5188c3,
-the energy getter's read, the combo exits' tail, the five table runs, and the visibility/query entry helpers.
+the energy getter's read, the combo exits' tail, the five table runs, the visibility/query entry helpers, and the
+AI pool's base, stride, count and embedded-brain offset. Brains outside that guarded pool use the native step.
 A mismatch leaves the game as it is and writes one log line. A failed write is rolled
 back. A failed rollback refuses startup.
 
@@ -108,12 +116,25 @@ its AI time is set.
 ## Gameplay agreement
 
 Online play is lockstep and the rule changes AI decisions and energy, so it is shared gameplay rule **16**
-(`gameplay_capabilities::npc_power_rule_id`, [gameplay-agreement.md](gameplay-agreement.md)): revision 3,
+(`gameplay_capabilities::npc_power_rule_id`, [gameplay-agreement.md](gameplay-agreement.md)): revision 4,
 `{installed ? 1 : 0, installed ? 1 : 0, 0, 0}`. The added word advertises XML1 visibility geometry and query scheduling;
-revision 2 had only the power/combo word. Registered in an LC installation or when requested; absent or `xml2` is the verified
+revision 2 had only the power/combo word, and revision 3 lacked the press/completion timers. Registered in an LC installation or when requested; absent or `xml2` is the verified
 `{0,0,0,0}`; requested but not installed (a guard mismatch, protection, readback, an unknown value) is unverified and
-closes host/join. A peer with the rule and one without never play together, and revision 2 peers cannot silently
-share a game with the new visibility policy.
+closes host/join. Peers on revisions 2 or 3 cannot silently share a game with revision 4.
+
+### Revision 4 acceptance status
+
+This is a **candidate awaiting live acceptance**, not a measured resolution of the remaining stun gap. Native
+tests execute the emitted bridges with synthetic brains, and private characterization compares their timing
+with the original executable's continuation. The previous unshipped experiment retained PC's completion
+addition and an extra hold gate; revision 4 corrects both. Synthetic completion pauses with offset 0.6 and zero
+random addition are 0.6, 0.8, 0.8, 0.8, 0.8 and 1.2 seconds, matching the original code.
+
+The historical combat tables below predate revision 4. Required next checks are a release-base negative control,
+matched invulnerable/idle traces in the same arena, and a vulnerable fight using real input. Party AI, online
+play and save/load transitions also remain untested for this candidate. Hero reaction handlers have not changed;
+the missing original stun handler and PC stun-powerup behavior require separate investigation and a separately
+coordinated gameplay rule if an engine restoration is needed.
 
 ## Evidence
 
@@ -174,6 +195,6 @@ retail-byte tests reject each changed guard. The full native suite and agreement
 movement check after the second measurement also succeeded. Online play, party AI and other encounter types
 were not live-tested in this follow-up.
 
-Open: XML1 presses a combo's buttons on its own delays (0.2–0.6 s) where XMen2.exe presses them as soon as the move
-allows. Successful power selection also has a different aim/return path: XML1 normally turns and returns before
+Open: revision 4's press timing still needs live measurement. Successful power selection also has a different
+aim/return path: XML1 normally turns and returns before
 its fallback NPC pause, so merely changing the PC's post-pick pause to one second is not an established fix.

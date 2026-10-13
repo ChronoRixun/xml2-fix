@@ -102,10 +102,12 @@ void records(){
  // Rule 16, the NPC power rule ([Game] NpcPowerRule): enemies that pay for powers and decide every 2 s never share a
  // lockstep game with enemies that don't; revision 3 adds the visibility word; absent is {0,0,0,0}, a failed install unverified.
  auto npc=[](bool on,bool verified=true){record r;r.add(2,1,{1,0,0,0},true);r.add(gameplay_capabilities::npc_power_rule_id,npc_power::revision,{on ? 1u : 0u,on ? 1u : 0u,0,0},verified);r.finalize();return r;};
- check(gameplay_capabilities::npc_power_rule_id==16 && npc_power::revision==3 && npc(true).compare(npc(false).bytes())==result::value && npc(false).compare(npc(true).bytes())==result::value,"NPC power rule on/off refuses both directions");
+ check(gameplay_capabilities::npc_power_rule_id==16 && npc_power::revision==4 && npc(true).compare(npc(false).bytes())==result::value && npc(false).compare(npc(true).bytes())==result::value,"NPC power rule on/off refuses both directions");
  check(npc(true).compare(npc(true).bytes())==result::match && npc(false).compare(npc(false).bytes())==result::match,"same NPC power rule accepts");
  record npc_previous; npc_previous.add(2,1,{1,0,0,0},true);npc_previous.add(gameplay_capabilities::npc_power_rule_id,2,{1,0,0,0},true);npc_previous.finalize();
  check(npc(true).compare(npc_previous.bytes())!=result::match && npc_previous.compare(npc(true).bytes())!=result::match,"NPC visibility policy rejects the previous power/combo-only revision both ways");
+ record npc_visibility; npc_visibility.add(2,1,{1,0,0,0},true);npc_visibility.add(gameplay_capabilities::npc_power_rule_id,3,{1,1,0,0},true);npc_visibility.finalize();
+ check(npc(true).compare(npc_visibility.bytes())!=result::match && npc_visibility.compare(npc(true).bytes())!=result::match,"NPC combo timing rejects revision 3 peers both ways");
  check(npc(true,false).compare(npc(true).bytes())==result::unavailable && peer(true).compare(npc(false).bytes())==result::entries,"failed NPC power rule install or a peer without the rule refuses");
  check(std::string(gameplay_capabilities::rule_name(16))=="NpcPowerRule" && gameplay_capabilities::bucket_of(16)!=gameplay_capabilities::bucket_of(15),"rule 16 is named and has a bucket of its own");
  record sorted;sorted.add(2,1,{0,0,0,0},true);sorted.add(3,1,{1,0,0,0},true);sorted.finalize();check(sorted.compare(missing.bytes())==result::match,"registration order canonicalizes by explicit rule id");

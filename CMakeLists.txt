@@ -236,6 +236,8 @@ target_include_directories(xml2_death_switch_test PRIVATE src)
 target_link_options(xml2_death_switch_test PRIVATE /BASE:0x300000 /DYNAMICBASE:NO)
 
 add_executable(xml2_gameplay_agreement_test test/gameplay_agreement_test.cpp src/gameplay_agreement.cpp src/patch_transaction.cpp src/explosive_first_hit.cpp src/game_version.cpp)
+add_executable(xml2_npc_combo_timing_test test/npc_combo_timing_test.cpp)
+target_include_directories(xml2_npc_combo_timing_test PRIVATE src)
 target_include_directories(xml2_gameplay_agreement_test PRIVATE src)
 target_link_libraries(xml2_gameplay_agreement_test PRIVATE ws2_32)
 

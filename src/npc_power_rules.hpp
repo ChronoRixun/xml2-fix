@@ -2,7 +2,7 @@
 
 // [Game] NpcPowerRule: X-Men Legends 1's rules for when a computer-controlled character uses a power, kept apart from
 // the installer so xml2_test can check them without the game: the ini value's rules, the decisions both games make
-// (as plain arithmetic), every retail byte the change relies on and the code of its three bridges.
+// (as plain arithmetic), every retail byte the change relies on and the emitted bridge code.
 //
 // Every XMen2.exe address is the retail build's (image base 0x400000, no relocations); every XML1 one is from XML1's
 // default.xbe (Xbox, 2004; its addresses as loaded at 0x10000). docs/npc-power-rule.md has the design and the
@@ -50,9 +50,11 @@
 //      1.2 s by default) and the crowd delay. XMen2.exe returns at once (0x51993a, 0x519b04: mov al,1; ... ret 8),
 //      so with combos its enemies attack again the moment a combo ends. Rule: both exits jump to the tail (0x519840)
 //      as the single-attack path already does.
-//   Left as XMen2.exe has it: XML1 presses a combo's next button after the combo's own delay (0.2 / 0.3 / 0.6 s,
-//   0x452b94); XMen2.exe presses it at the next AI update the move allows. XML1's second combo table (brain mode 1,
-//   0x452be8 / 0x452c00 / 0x452c60 / 0x452c48) has no counterpart: no XMen2.exe brain has that mode.
+//   The continuation additionally follows XML1's timer (0xeebec..0xeecb7), rather than aborting a combo when
+//   the next move cannot chain immediately (PC 0x51920b). Its final pause adds the last per-button delay,
+//   not PC's fixed 0.2 s (0x5192cb). The XML1 timer advances even while actor+0x764 bit 0 is set; the existing
+//   press routine still handles the actor's action suppression. The second XML1 combo table (brain mode 1)
+//   has no PC counterpart and is not introduced here. This candidate needs matched live acceptance.
 //
 //   6. Visibility: XML1's 0xfe550 uses positions raised by 60 and unit sweep extents; its query scheduler 0xfc990
 //      serves one query per AI tick and preserves a waiting actor's reservation. XMen2.exe uses different
@@ -227,10 +229,33 @@ namespace npc_power_rules
 		return row;
 	}
 
-	inline constexpr std::array<const site*, 19> sites{&charge_site, &recheck_site, &recheck_actor_site, &picker_site, &energy_getter_site,
+	// 6. The combo's continue step: mov ecx,[ebp+0x30]; mov edx,[ebp+0x38]; cmp [edx+ecx*4+4],5 (the chain check's
+	//    button), XMen2.exe's press code, its end code and the common continuation.
+	inline constexpr site combo_continue_site{0x51920b, "8b4d308b5538837c8a0405", 6, "the combo's continue step (0x518fd0)"};
+	inline constexpr site combo_press_site{0x51924f, "8bcfe8cad7f7ff84c0", 0, "the combo's press code (0x518fd0)"};
+	inline constexpr site combo_end_site{0x51928a, "c6452c00", 0, "the combo's end code (0x518fd0)"};
+	inline constexpr site combo_after_site{0x5192f8, "837d08ff", 0, "the combo step's continuation (0x518fd0)"};
+	constexpr address combo_continue_va = 0x51920b, combo_continue_resume_va = 0x519211, combo_press_va = 0x51924f,
+	                  combo_end_va = 0x51928a, combo_after_va = 0x5192f8;
+	// The brains live in the AI table: AI i at 0x78ba14 + i x 0x61c (0x5250b0's 32 slots), its brain at AI+0x4c8.
+	constexpr address brain0_va = 0x78ba14 + 0x4c8;
+	constexpr std::uint32_t ai_stride = 0x61c, ai_slots = 32, ai_now = 0x550;
+	// XML1's per-press delays for its six combos (default.xbe 0x452b94).
+	inline constexpr std::array<std::array<float, 5>, 6> xml1_combo_delays{{{0.0f}, {0.2f, 0.2f}, {0.2f, 0.2f, 0.2f}, {0.2f, 0.2f},
+	                                                                          {0.2f, 0.2f, 0.2f, 0.2f}, {0.3f, 0.3f, 0.3f, 0.3f, 0.6f}}};
+
+	inline constexpr site combo_end_delay_site{0x5192cb, "d805fc2f6800eb1a", 6, "the completed combo pause"};
+	inline constexpr site ai_pool_site{0x5252f7, "b914ba7800", 0, "the AI pool base"};
+	inline constexpr site ai_stride_site{0x525091, "69c91c060000", 0, "the AI pool stride"};
+	inline constexpr site ai_count_site{0x5250bf, "83fa20", 0, "the AI pool count"};
+	inline constexpr site ai_brain_site{0x504b1c, "8dbec8040000", 0, "the embedded combo brain"};
+
+	inline constexpr std::array<const site*, 28> sites{&charge_site, &recheck_site, &recheck_actor_site, &picker_site, &energy_getter_site,
 	                                                   &combolevel_site, &combo_exit_site, &combo_exit2_site, &combo_tail_site,
 	                                                   &combo_buttons_site, &combo_lengths_site, &combo_row2_site, &combo_row3_site, &combo_row11_site,
-	                                                   &query_priority_site, &query_budget_site, &visibility_site, &physical_target_site, &query_entry_site};
+	                                                   &query_priority_site, &query_budget_site, &visibility_site, &physical_target_site, &query_entry_site,
+	                                                   &combo_continue_site, &combo_press_site, &combo_end_site, &combo_after_site, &combo_end_delay_site,
+	                                                   &ai_pool_site, &ai_stride_site, &ai_count_site, &ai_brain_site};
 
 	inline std::vector<std::uint8_t> retail_bytes(const site& s, const std::size_t count)
 	{
@@ -282,8 +307,7 @@ namespace npc_power_rules
 		return bits;
 	}
 
-	// The block: the three bridges, the four constants, then XML1's six combos' buttons. One allocation, laid out by
-	// `layout`.
+	// The block holds code, constants and six combo sequences, followed by a separate writable page of deadlines.
 	struct layout
 	{
 		address base;
@@ -294,12 +318,21 @@ namespace npc_power_rules
 		address half() const { return constants + 12; }
 		address combos = 0;
 		address combo(const std::size_t i) const { return combos + static_cast<address>(20 * i); }
+		address cont = 0, start = 0, delays = 0, next = 0, end_delay = 0; // the combo step bridges, XML1's delays, the per-brain times
 	};
-	constexpr std::size_t charge_size = 57, recheck_size = 23, gate_size = 47, block_size = 320;
+	// The block: one page of code and constants (made execute-read), then one page of data (read-write): the next
+	// press time of each of the 32 brains.
+	constexpr std::size_t charge_size = 57, recheck_size = 23, gate_size = 47, cont_size = 126, start_size = 71, end_delay_size = 32;
+	constexpr std::size_t code_size = 4096, block_size = 8192;
 	inline layout layout_at(const address base)
 	{
 		layout l{base, base, base + 64, base + 96, base + 160};
 		l.combos = base + 192; // 6 x 20 bytes (up to five buttons each)
+		l.cont = base + 320;
+		l.start = base + 464;
+		l.delays = base + 544; // 6 x 20 bytes
+		l.next = base + static_cast<address>(code_size);
+		l.end_delay = base + 672;
 		return l;
 	}
 	inline std::vector<std::uint8_t> constants()
@@ -401,11 +434,131 @@ namespace npc_power_rules
 		        static_cast<std::uint8_t>(rel >> 24)};
 	}
 
+	// 6. The continue step (jumped to from 0x51920b; ebp = the brain, edi = the actor, esi = the pad state; eax, ecx,
+	//    edx are free - XMen2.exe's next instructions load them). Brains outside the table take XMen2.exe's own step.
+	inline std::vector<std::uint8_t> cont_bridge(const layout& l)
+	{
+		std::vector<std::uint8_t> code{
+			0x8b, 0xc5,                               // 00 mov eax,ebp
+			0x2d, 0, 0, 0, 0,                         // 02 sub eax,brain0
+			0x72, 0x6a,                               // 07 jb fallback (0x73)
+			0x33, 0xd2,                               // 09 xor edx,edx
+			0xb9, 0x1c, 0x06, 0x00, 0x00,             // 0b mov ecx,0x61c
+			0xf7, 0xf1,                               // 10 div ecx
+			0x85, 0xd2,                               // 12 test edx,edx
+			0x75, 0x5d,                               // 14 jnz fallback
+			0x83, 0xf8, 0x20,                         // 16 cmp eax,32
+			0x73, 0x58,                               // 19 jae fallback
+			0x8d, 0x14, 0x85, 0, 0, 0, 0,             // 1b lea edx,[eax*4+next]
+			0x8b, 0x4d, 0x04,                         // 22 mov ecx,[ebp+4] (the AI)
+			0xd9, 0x81, 0x50, 0x05, 0x00, 0x00,       // 25 fld dword [ecx+0x550] (now)
+			0xd8, 0x1a,                               // 2b fcomp dword [edx]
+			0xdf, 0xe0,                               // 2d fnstsw ax
+			0xf6, 0xc4, 0x41,                         // 2f test ah,0x41: now <= next
+			0x75, 0x35,                               // 32 jnz notyet
+			0x8b, 0x45, 0x30,                         // 34 mov eax,[ebp+0x30]
+			0x40,                                     // 37 inc eax
+			0x89, 0x45, 0x30,                         // 38 mov [ebp+0x30],eax
+			0x3b, 0x45, 0x34,                         // 3b cmp eax,[ebp+0x34]
+			0x7d, 0x2e,                               // 3e jge endcombo (0x6e)
+			0x8b, 0x4d, 0x3c,                         // 40 mov ecx,[ebp+0x3c] (the combo)
+			0x83, 0xf9, 0x06,                         // 43 cmp ecx,6
+			0x73, 0x0f,                               // 46 jae zero (0x57)
+			0x6b, 0xc9, 0x14,                         // 48 imul ecx,ecx,20
+			0x8d, 0x4c, 0x81, 0xfc,                   // 4b lea ecx,[ecx+eax*4-4]: delay[i - 1]
+			0xd9, 0x81, 0, 0, 0, 0,                   // 4f fld dword [ecx+delays]
+			0xeb, 0x02,                               // 55 jmp addnow
+			0xd9, 0xee,                               // 57 zero: fldz
+			0x8b, 0x4d, 0x04,                         // 59 addnow: mov ecx,[ebp+4]
+			0xd8, 0x81, 0x50, 0x05, 0x00, 0x00,       // 5c fadd dword [ecx+0x550]
+			0xd9, 0x1a,                               // 62 fstp dword [edx]
+			0xe9, 0, 0, 0, 0,                         // 64 jmp 0x51924f (press)
+			0xe9, 0, 0, 0, 0,                         // 69 notyet: jmp 0x5192f8
+			0xe9, 0, 0, 0, 0,                         // 6e endcombo: jmp 0x51928a
+			0x8b, 0x4d, 0x30,                         // 73 fallback: mov ecx,[ebp+0x30] (displaced)
+			0x8b, 0x55, 0x38,                         // 76 mov edx,[ebp+0x38] (displaced)
+			0xe9, 0, 0, 0, 0,                         // 79 jmp 0x519211
+		};
+		put32(code, 0x03, brain0_va);
+		put32(code, 0x1e, l.next);
+		put32(code, 0x51, l.delays);
+		put32(code, 0x65, combo_press_va - (l.cont + 0x69));
+		put32(code, 0x6a, combo_after_va - (l.cont + 0x6e));
+		put32(code, 0x6f, combo_end_va - (l.cont + 0x73));
+		put32(code, 0x7a, combo_continue_resume_va - (l.cont + 0x7e));
+		return code;
+	}
+	// The combo start (the exits' jump; ebp = the brain, [ebp+0x3c] = the combo): next = now + delay[0], then the
+	// decision's tail.
+	inline std::vector<std::uint8_t> start_bridge(const layout& l)
+	{
+		std::vector<std::uint8_t> code{
+			0x8b, 0xc5,                         // 00 mov eax,ebp
+			0x2d, 0, 0, 0, 0,                   // 02 sub eax,brain0
+			0x72, 0x39,                         // 07 jb done (0x42)
+			0x33, 0xd2,                         // 09 xor edx,edx
+			0xb9, 0x1c, 0x06, 0x00, 0x00,       // 0b mov ecx,0x61c
+			0xf7, 0xf1,                         // 10 div ecx
+			0x85, 0xd2,                         // 12 test edx,edx
+			0x75, 0x2c,                         // 14 jnz done
+			0x83, 0xf8, 0x20,                   // 16 cmp eax,32
+			0x73, 0x27,                         // 19 jae done
+			0x8d, 0x14, 0x85, 0, 0, 0, 0,       // 1b lea edx,[eax*4+next]
+			0x8b, 0x4d, 0x3c,                   // 22 mov ecx,[ebp+0x3c]
+			0x83, 0xf9, 0x06,                   // 25 cmp ecx,6
+			0x73, 0x0b,                         // 28 jae zero (0x35)
+			0x6b, 0xc9, 0x14,                   // 2a imul ecx,ecx,20
+			0xd9, 0x81, 0, 0, 0, 0,             // 2d fld dword [ecx+delays]
+			0xeb, 0x02,                         // 33 jmp addnow
+			0xd9, 0xee,                         // 35 zero: fldz
+			0x8b, 0x4d, 0x04,                   // 37 addnow: mov ecx,[ebp+4]
+			0xd8, 0x81, 0x50, 0x05, 0x00, 0x00, // 3a fadd dword [ecx+0x550]
+			0xd9, 0x1a,                         // 40 fstp dword [edx]
+			0xe9, 0, 0, 0, 0,                   // 42 done: jmp 0x519840
+		};
+		put32(code, 0x03, brain0_va);
+		put32(code, 0x1e, l.next);
+		put32(code, 0x2f, l.delays);
+		put32(code, 0x43, combo_tail_va - (l.start + 0x47));
+		return code;
+	}
+	inline std::vector<std::uint8_t> continue_jump(const layout& l)
+	{
+		const address rel = l.cont - (combo_continue_va + 5);
+		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16),
+		        static_cast<std::uint8_t>(rel >> 24), 0x90};
+	}
+	// ST0 already holds now + melee offset + random addition. XML1 adds delay[length - 1]. EAX/ECX and
+	// flags are dead here; the next native instructions reload ECX and pass ST0 to the scheduler.
+	inline std::vector<std::uint8_t> end_delay_bridge(const layout& l)
+	{
+		std::vector<std::uint8_t> code{
+			0x8b, 0x4d, 0x3c,                   // 00 mov ecx,[ebp+0x3c]
+			0x83, 0xf9, 0x06,                   // 03 cmp ecx,6
+			0x73, 0x11,                         // 06 jae fallback
+			0x6b, 0xc9, 0x14,                   // 08 imul ecx,ecx,20
+			0x8b, 0x45, 0x30,                   // 0b mov eax,[ebp+0x30] (length)
+			0x8d, 0x4c, 0x81, 0xfc,             // 0e lea ecx,[ecx+eax*4-4]
+			0xd8, 0x81, 0, 0, 0, 0,             // 12 fadd dword [ecx+delays]
+			0xc3,                               // 18 ret
+			0xd8, 0x05, 0xfc, 0x2f, 0x68, 0x00, // 19 fallback: fadd dword [0.2]
+			0xc3,
+		};
+		put32(code, 0x14, l.delays);
+		return code;
+	}
+	inline std::vector<std::uint8_t> end_delay_call(const layout& l)
+	{
+		std::vector<std::uint8_t> code{0xe8, 0, 0, 0, 0, 0x90};
+		put32(code, 1, l.end_delay - (combo_end_delay_site.va + 5));
+		return code;
+	}
+
 	// The whole block's bytes for an allocation at `base`.
 	inline std::vector<std::uint8_t> block(const address base)
 	{
 		const auto l = layout_at(base);
-		std::vector<std::uint8_t> bytes(block_size, 0xcc);
+		std::vector<std::uint8_t> bytes(code_size, 0xcc);
 		const auto put = [&](const address at, const std::vector<std::uint8_t>& code) { std::memcpy(bytes.data() + (at - base), code.data(), code.size()); };
 		put(l.charge, charge_bridge(l));
 		put(l.recheck, recheck_bridge(l));
@@ -416,7 +569,13 @@ namespace npc_power_rules
 			std::vector<std::uint8_t> buttons(4 * xml1_combo_lengths[i]);
 			std::memcpy(buttons.data(), xml1_combos[i].data(), buttons.size());
 			put(l.combo(i), buttons);
+			std::vector<std::uint8_t> delays(20);
+			std::memcpy(delays.data(), xml1_combo_delays[i].data(), 20);
+			put(l.delays + static_cast<address>(20 * i), delays);
 		}
+		put(l.cont, cont_bridge(l));
+		put(l.start, start_bridge(l));
+		put(l.end_delay, end_delay_bridge(l));
 		return bytes;
 	}
 
@@ -445,14 +604,14 @@ namespace npc_power_rules
 	}
 	// 0x505011: call [edx+0x44] -> add esp,4 (the pushed level is dropped; the init's own level stays).
 	inline std::vector<std::uint8_t> combolevel_skip() { return {0x83, 0xc4, 0x04}; }
-	// 0x51993a / 0x519b04: mov al,1; pop edi; pop esi; pop ebp; pop ebx -> jmp 0x519840; nop.
-	inline std::vector<std::uint8_t> combo_exit_jump(const address at)
+	// 0x51993a / 0x519b04: mov al,1; pop edi; pop esi; pop ebp; pop ebx -> jmp (the start bridge, which ends in a jmp
+	// to the tail 0x519840); nop.
+	inline std::vector<std::uint8_t> combo_exit_jump(const address at, const address target)
 	{
-		const address rel = combo_tail_va - (at + 5);
+		const address rel = target - (at + 5);
 		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16),
 		        static_cast<std::uint8_t>(rel >> 24), 0x90};
 	}
-
 	// The original reservation predicate fits the existing 18-byte run. ECX keeps the query count for the
 	// following budget check; EAX/EDX are scratch here. The queued-age comparison at 0x5027cf stays in place.
 	inline std::vector<std::uint8_t> query_priority_bytes()

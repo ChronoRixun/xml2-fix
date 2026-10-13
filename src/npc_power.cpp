@@ -113,9 +113,9 @@ namespace npc_power
 		}
 		const auto base = static_cast<address>(reinterpret_cast<std::uintptr_t>(memory_block));
 		const auto code = block(base);
-		std::memcpy(memory_block, code.data(), code.size());
+		std::memcpy(memory_block, code.data(), code.size()); // the data page (next press times) stays zero, read-write
 		DWORD old = 0;
-		if (!VirtualProtect(memory_block, block_size, PAGE_EXECUTE_READ, &old) || !FlushInstructionCache(GetCurrentProcess(), memory_block, block_size))
+		if (!VirtualProtect(memory_block, code_size, PAGE_EXECUTE_READ, &old) || !FlushInstructionCache(GetCurrentProcess(), memory_block, code_size))
 		{
 			logger::write("npc power rule: can't make the bridges executable (error %lu) - %s", GetLastError(), as_before);
 			VirtualFree(memory_block, 0, MEM_RELEASE);
@@ -130,8 +130,10 @@ namespace npc_power
 			// The combos: no combolevel override, XML1's levels 2 / 3 / 6 in rows 2 / 3 / 11 over XML1's six combos in
 			// slots 0..5, and the tail after a combo start.
 			{combolevel_call_va, sub_bytes(combolevel_site, 3, 3), combolevel_skip()},
-			{combo_exit_va, sub_bytes(combo_exit_site, 3, 6), combo_exit_jump(combo_exit_va)},
-			{combo_exit2_va, sub_bytes(combo_exit2_site, 3, 6), combo_exit_jump(combo_exit2_va)},
+			{combo_exit_va, sub_bytes(combo_exit_site, 3, 6), combo_exit_jump(combo_exit_va, l.start)},
+			{combo_exit2_va, sub_bytes(combo_exit2_site, 3, 6), combo_exit_jump(combo_exit2_va, l.start)},
+			{combo_continue_va, retail_bytes(combo_continue_site, combo_continue_site.patched), continue_jump(l)},
+			{combo_end_delay_site.va, retail_bytes(combo_end_delay_site, combo_end_delay_site.patched), end_delay_call(l)},
 			{combo_buttons_va, retail_bytes(combo_buttons_site, 24), combo_buttons_bytes(l)},
 			{combo_lengths_va, retail_bytes(combo_lengths_site, 24), combo_lengths_bytes()},
 			{combo_row2_site.va, retail_bytes(combo_row2_site, combo_row_size), combo_row_bytes(2)},
@@ -160,7 +162,8 @@ namespace npc_power
 		logger::write("npc power rule: X-Men Legends 1's ([Game] NpcPowerRule=xml1): enemies pay for their powers (0x4318e7 tests the AI time as "
 		              "default.xbe 0xcde95), the melee-range power decision re-checks every 2.0 s / 0.5 s (0x5188d8) and needs half of the "
 		              "character's energy (0x518920); NPCs combo with the first game's levels and combos (0x505011, rows 0x6dd508) and pause after a combo start (0x51993a, 0x519b04); "
-		              "AI visibility uses XML1's ray and query reservation/budget (0x505250, 0x5027bd, 0x5027e0); bridges at 0x%08lX",
+		              "AI visibility uses XML1's ray and query reservation/budget (0x505250, 0x5027bd, 0x5027e0); "
+		              "combo presses and completion use XML1 delays (0x51920b, 0x5192cb); bridges at 0x%08lX",
 		              static_cast<unsigned long>(base));
 	}
 }
