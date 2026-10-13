@@ -28,6 +28,7 @@
 #include "explosive_first_hit.hpp"
 #include "rank_costs.hpp"
 #include "death_threshold.hpp"
+#include "npc_power.hpp"
 #include "pack_amount.hpp"
 #include "death_switch.hpp"
 #include "gameplay_agreement.hpp"
@@ -357,6 +358,13 @@ namespace
 			const auto packs = xml1_capability_rules::pack_amount(pack_amount::requested(), pack_amount::installed());
 			gameplay_agreement::register_rule(gameplay_capabilities::pack_amount_id, xml1_capability_rules::pack_amount_revision, packs.values, packs.verified);
 		}
+		// X-Men Legends 1's power use for computer-controlled characters ([Game] NpcPowerRule=xml1,
+		// docs/npc-power-rule.md): enemies pay for powers, the melee-range power decision every 2.0 s with half of the
+		// energy. Online play is lockstep, so AI decisions and enemy energy are part of the shared gameplay record (rule
+		// 16); a requested rule enlists the agreement even in a non-LC installation.
+		npc_power::install(game);
+		if (game_version::needs_gameplay_agreement() || npc_power::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::npc_power_rule_id, npc_power::revision, npc_power::values(), npc_power::verified());
 		// [Game] DeathSwitchClear: the hero handed a dead hero's controller stops its AI walk (docs/death-switch.md). One
 		// call in onDeath's own code, used from the first death on. Online play is lockstep, so every peer must hand
 		// over the same way (rule 15); a requested switch enlists the agreement even in a non-LC installation.
