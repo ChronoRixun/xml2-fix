@@ -7,6 +7,7 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 int main()
@@ -103,10 +104,17 @@ int main()
 	check(plain_focus.has_value() && *plain_focus == "Raises invented points ($EP), energy regeneration and Melee $DMG_MENTAL.\\n\\n~02Regen :~~ +^%d%%%.0s\\n~02Bonus :~~ +^%d%%");
 	check(!focus_help_without_double_energy("no such phrase").has_value());
 	// The screen's three arguments still land where they belong: regeneration, (the chance, taken and not printed),
-	// damage bonus. The game formats with msvcr71's _vsnprintf: checked there too when the installed game has it.
+	// damage bonus. The game formats with msvcr71's _vsnprintf: checked there too when XML2_FIX_TEST_GAME_DIR names
+	// an installed game's folder (the C runtime is the game's own file, not in the repository).
 	std::snprintf(rendered, sizeof(rendered), plain_focus->c_str(), 12, 34, 56);
 	check(std::string(rendered) == "Raises invented points ($EP), energy regeneration and Melee $DMG_MENTAL.\\n\\n~02Regen :~~ +^12%\\n~02Bonus :~~ +^56%");
-	if (HMODULE crt = LoadLibraryW(L"D:\\Games\\X-Men Legends II\\msvcr71.dll"))
+	const char* game_dir = std::getenv("XML2_FIX_TEST_GAME_DIR");
+	const std::string crt_path = game_dir && *game_dir ? std::string(game_dir) + "\\msvcr71.dll" : std::string();
+	if (crt_path.empty())
+	{
+		std::printf("  skip  the game's _vsnprintf: XML2_FIX_TEST_GAME_DIR is not set\n");
+	}
+	if (HMODULE crt = crt_path.empty() ? nullptr : LoadLibraryA(crt_path.c_str()))
 	{
 		using vsn_t = int(__cdecl*)(char*, size_t, const char*, va_list);
 		if (auto vsn = reinterpret_cast<vsn_t>(GetProcAddress(crt, "_vsnprintf")))
