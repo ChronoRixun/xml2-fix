@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.5.0 - <date TBD>
+## 1.5.0 - 2026-10-13
 
 The engine half of Legends Classic 0.2.2: more of X-Men Legends I's own rules, each behind its own key. For X-Men
 Legends II as it ships only the display, pad and cutscene-mouse fixes apply; everything else is off until a mod's
