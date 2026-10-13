@@ -31,6 +31,29 @@
 //      no such test there. Rule: the same test on XMen2.exe's fields (energy getter 0x41d5d0, maximum +0x314, the
 //      forcing flag AI+0x2b6 bit 3, which 0x518770 already reads for its timer), as max <= 2 x energy.
 //
+// And two in the melee combos (the brain's combo picker: XML1 0xeea60, XMen2.exe 0x518fd0; same shape):
+//
+//   4. The combo level. Both AI inits give a computer-controlled character's brain a combo level the same way: 2 for
+//      a ranged-type NPC (AI type not 0..3) without the leader bit, the top level otherwise, 3 for Toad and Pyro
+//      ("oad", "yro"; XML1 0xfd330 / 0xfd737, XMen2.exe 0x504a20 / 0x504f5b). XML1's top level is 6 of its 6 combos
+//      (default.xbe 0x452bac buttons, 0x452c30 lengths, 0x452c18 weights 5/25/20/15/15/15, summed over the first
+//      `level` combos by 0xedb20); XMen2.exe's is 11 ("finishers") of 12 named rows over 11 combos (0x6dd4ac,
+//      0x6dd4d8, rows 0x6dd508; 0x517c30). Then XMen2.exe adds one call XML1 doesn't make: the level from npcstat
+//      `combolevel` (stats+0x2a8, 0x505011), 0 ("basic") for every entry without the attribute - and level 0 never
+//      starts a combo (0x518fd0: `level > 0 || controller != -1`). So the first game's NPCs, which carry no
+//      `combolevel`, only ever throw one attack (attacklight1) at a time.
+//      Rule: the override goes (0x505011: the call becomes `add esp,4`), and the three rows XMen2.exe's init picks -
+//      2, 3 and 11 - hold XML1's levels 2, 3 and 6 over XML1's six combos, written into combo slots 0..5. Rows 0,
+//      1 and 4..10 keep their weights; nothing reaches them without `combolevel`, which no XML1 entry has.
+//   5. The pause after starting a combo. XML1 runs the attack decision's tail after a combo start (0xef040: jmp
+//      0xef199), which sets the next attack time to now + meleetimeroffset + rand x meleetimerrandomadd (0.6 + up to
+//      1.2 s by default) and the crowd delay. XMen2.exe returns at once (0x51993a, 0x519b04: mov al,1; ... ret 8),
+//      so with combos its enemies attack again the moment a combo ends. Rule: both exits jump to the tail (0x519840)
+//      as the single-attack path already does.
+//   Left as XMen2.exe has it: XML1 presses a combo's next button after the combo's own delay (0.2 / 0.3 / 0.6 s,
+//   0x452b94); XMen2.exe presses it at the next AI update the move allows. XML1's second combo table (brain mode 1,
+//   0x452be8 / 0x452c00 / 0x452c60 / 0x452c48) has no counterpart: no XMen2.exe brain has that mode.
+//
 // Nothing a save reads changes; the energy fields already exist and are saved as before.
 
 #include "ini_rules.hpp"    // value_text
@@ -43,6 +66,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace npc_power_rules
@@ -153,7 +177,45 @@ namespace npc_power_rules
 	constexpr address energy_getter_va = 0x41d5d0; // fld [ecx+0x288] (or the maximum under the energy cheats)
 	inline constexpr site energy_getter_site{0x41d601, "d98688020000", 0, "the energy getter's read of +0x288 (0x41d5d0)"};
 
-	inline constexpr std::array<const site*, 5> sites{&charge_site, &recheck_site, &recheck_actor_site, &picker_site, &energy_getter_site};
+	// 4. The combo level override at the end of the AI init: mov edx,[ecx]; push eax; call [edx+0x44]; mov ecx,[esp+0x7c].
+	inline constexpr site combolevel_site{0x50500e, "8b1150ff52448b4c247c", 0, "the AI init's combolevel override (0x504a20)"};
+	constexpr address combolevel_call_va = 0x505011;
+	// 5. The two combo starts' exits (mov [ebp+0x3c],esi; mov al,1; pop edi; pop esi; pop ebp; pop ebx; add esp,0x58;
+	//    ret 8) and the tail they should reach (mov eax,[esp+0x1c], the single-attack path's jump target).
+	inline constexpr site combo_exit_site{0x519937, "89753cb0015f5e5d5b83c458c20800", 0, "the combo start's exit (0x518fd0)"};
+	inline constexpr site combo_exit2_site{0x519b01, "89753cb0015f5e5d5b83c458c20800", 0, "the leader combo start's exit (0x518fd0)"};
+	inline constexpr site combo_tail_site{0x519840, "8b44241c", 0, "the attack decision's tail (0x518fd0)"};
+	constexpr address combo_tail_va = 0x519840;
+	constexpr address combo_exit_va = 0x51993a, combo_exit2_va = 0x519b04;
+	// The combo tables (.rdata): 11 button-list pointers, 11 lengths, 12 rows of 11 weights.
+	constexpr address combo_buttons_va = 0x6dd4ac, combo_lengths_va = 0x6dd4d8, combo_rows_va = 0x6dd508;
+	constexpr std::size_t combo_row_size = 0x2c;
+	inline constexpr site combo_buttons_site{combo_buttons_va, "40d46d0044d46d0048d46d0050d46d005cd46d0064d46d00", 0, "combo slots 0..5's buttons (0x6dd4ac)"};
+	inline constexpr site combo_lengths_site{combo_lengths_va, "010000000100000002000000030000000200000002000000", 0, "combo slots 0..5's lengths (0x6dd4d8)"};
+	inline constexpr site combo_row2_site{combo_rows_va + 2 * combo_row_size, "0000f0410000f0410000f0410000f04100000000000000000000000000000000000000000000000000000000", 0, "combo row 2 ('easy', 0x6dd560)"};
+	inline constexpr site combo_row3_site{combo_rows_va + 3 * combo_row_size, "0000000000000000000000000000484200004842000048420000000000000000000000000000000000000000", 0, "combo row 3 ('medium', 0x6dd58c)"};
+	inline constexpr site combo_row11_site{combo_rows_va + 11 * combo_row_size, "000000000000000000000000000000000000000000000000000000000000c8410000c8410000c8410000c841", 0, "combo row 11 ('finishers', 0x6dd6ec)"};
+
+	// XML1's default combos (default.xbe 0x452bac / 0x452c30; 4 = attack, 5 = smash, the same action bits in both
+	// games) and weights (0x452c18); level L uses the first L.
+	inline constexpr std::array<std::array<std::uint32_t, 5>, 6> xml1_combos{{{4}, {4, 5}, {4, 4, 4}, {5, 5}, {4, 5, 4, 5}, {4, 5, 4, 4, 4}}};
+	inline constexpr std::array<std::uint32_t, 6> xml1_combo_lengths{1, 2, 3, 2, 4, 5};
+	inline constexpr std::array<float, 6> xml1_combo_weights{5, 25, 20, 15, 15, 15};
+	// XMen2.exe row -> XML1 level: the init's 2 stays 2, Toad/Pyro's 3 stays 3, its top level 11 is XML1's 6.
+	inline constexpr std::array<std::pair<std::size_t, std::size_t>, 3> combo_row_levels{{{2, 2}, {3, 3}, {11, 6}}};
+	inline std::array<float, 11> xml1_row(const std::size_t level)
+	{
+		std::array<float, 11> row{};
+		for (std::size_t i = 0; i < level && i < xml1_combo_weights.size(); ++i)
+		{
+			row[i] = xml1_combo_weights[i];
+		}
+		return row;
+	}
+
+	inline constexpr std::array<const site*, 14> sites{&charge_site, &recheck_site, &recheck_actor_site, &picker_site, &energy_getter_site,
+	                                                   &combolevel_site, &combo_exit_site, &combo_exit2_site, &combo_tail_site,
+	                                                   &combo_buttons_site, &combo_lengths_site, &combo_row2_site, &combo_row3_site, &combo_row11_site};
 
 	inline std::vector<std::uint8_t> retail_bytes(const site& s, const std::size_t count)
 	{
@@ -161,6 +223,17 @@ namespace npc_power_rules
 		for (std::size_t i = 0; i < count; ++i)
 		{
 			bytes[i] = limits_rules::hex_byte(s.hex, i);
+		}
+		return bytes;
+	}
+
+	// `count` retail bytes of a site from byte `from`.
+	inline std::vector<std::uint8_t> sub_bytes(const site& s, const std::size_t from, const std::size_t count)
+	{
+		std::vector<std::uint8_t> bytes(count);
+		for (std::size_t i = 0; i < count; ++i)
+		{
+			bytes[i] = limits_rules::hex_byte(s.hex, from + i);
 		}
 		return bytes;
 	}
@@ -194,7 +267,8 @@ namespace npc_power_rules
 		return bits;
 	}
 
-	// The block: the three bridges, then the four constants. One allocation, laid out by `layout`.
+	// The block: the three bridges, the four constants, then XML1's six combos' buttons. One allocation, laid out by
+	// `layout`.
 	struct layout
 	{
 		address base;
@@ -203,11 +277,15 @@ namespace npc_power_rules
 		address thousandth() const { return constants + 4; }
 		address two() const { return constants + 8; }
 		address half() const { return constants + 12; }
+		address combos = 0;
+		address combo(const std::size_t i) const { return combos + static_cast<address>(20 * i); }
 	};
-	constexpr std::size_t charge_size = 57, recheck_size = 23, gate_size = 47, block_size = 192;
+	constexpr std::size_t charge_size = 57, recheck_size = 23, gate_size = 47, block_size = 320;
 	inline layout layout_at(const address base)
 	{
-		return {base, base, base + 64, base + 96, base + 160};
+		layout l{base, base, base + 64, base + 96, base + 160};
+		l.combos = base + 192; // 6 x 20 bytes (up to five buttons each)
+		return l;
 	}
 	inline std::vector<std::uint8_t> constants()
 	{
@@ -318,6 +396,45 @@ namespace npc_power_rules
 		put(l.recheck, recheck_bridge(l));
 		put(l.gate, gate_bridge(l));
 		put(l.constants, constants());
+		for (std::size_t i = 0; i < xml1_combos.size(); ++i)
+		{
+			std::vector<std::uint8_t> buttons(4 * xml1_combo_lengths[i]);
+			std::memcpy(buttons.data(), xml1_combos[i].data(), buttons.size());
+			put(l.combo(i), buttons);
+		}
 		return bytes;
+	}
+
+	// The combo writes: slots 0..5's buttons (pointers into the block) and lengths, and rows 2, 3, 11.
+	inline std::vector<std::uint8_t> combo_buttons_bytes(const layout& l)
+	{
+		std::vector<std::uint8_t> bytes(24);
+		for (std::size_t i = 0; i < 6; ++i)
+		{
+			put32(bytes, 4 * i, l.combo(i));
+		}
+		return bytes;
+	}
+	inline std::vector<std::uint8_t> combo_lengths_bytes()
+	{
+		std::vector<std::uint8_t> bytes(24);
+		std::memcpy(bytes.data(), xml1_combo_lengths.data(), 24);
+		return bytes;
+	}
+	inline std::vector<std::uint8_t> combo_row_bytes(const std::size_t level)
+	{
+		const auto row = xml1_row(level);
+		std::vector<std::uint8_t> bytes(combo_row_size);
+		std::memcpy(bytes.data(), row.data(), combo_row_size);
+		return bytes;
+	}
+	// 0x505011: call [edx+0x44] -> add esp,4 (the pushed level is dropped; the init's own level stays).
+	inline std::vector<std::uint8_t> combolevel_skip() { return {0x83, 0xc4, 0x04}; }
+	// 0x51993a / 0x519b04: mov al,1; pop edi; pop esi; pop ebp; pop ebx -> jmp 0x519840; nop.
+	inline std::vector<std::uint8_t> combo_exit_jump(const address at)
+	{
+		const address rel = combo_tail_va - (at + 5);
+		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16),
+		        static_cast<std::uint8_t>(rel >> 24), 0x90};
 	}
 }

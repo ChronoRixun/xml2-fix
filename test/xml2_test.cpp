@@ -10386,6 +10386,38 @@ namespace
 		CHECK(jump.size() == charge_site.patched && call.size() == recheck_site.patched && pick.size() == 5);
 		CHECK(rel32(jump, 1, charge_site.va) == l.charge && rel32(call, 1, recheck_site.va) == l.recheck && rel32(pick, 1, picker_call_va) == l.gate);
 
+		// The combos: XML1's rows (level L = the first L weights), the three rows the init picks, the block's buttons,
+		// the slot writes pointing into the block, the override and exits.
+		CHECK((xml1_row(2) == std::array<float, 11>{5, 25}) && (xml1_row(3) == std::array<float, 11>{5, 25, 20}) &&
+		      (xml1_row(6) == std::array<float, 11>{5, 25, 20, 15, 15, 15}));
+		CHECK(combo_row_levels[0] == std::make_pair(std::size_t(2), std::size_t(2)) && combo_row_levels[2] == std::make_pair(std::size_t(11), std::size_t(6)));
+		{
+			const auto rowbytes = combo_row_bytes(6);
+			float w[11];
+			std::memcpy(w, rowbytes.data(), 44);
+			CHECK(rowbytes.size() == combo_row_size && w[0] == 5.0f && w[5] == 15.0f && w[6] == 0.0f && w[10] == 0.0f);
+			const auto slots = combo_buttons_bytes(l);
+			bool slots_ok = true;
+			for (std::size_t i = 0; i < 6; ++i)
+			{
+				address a = 0;
+				std::memcpy(&a, slots.data() + 4 * i, 4);
+				slots_ok &= a == l.combo(i) && a + 4 * xml1_combo_lengths[i] <= l.base + block_size;
+				for (std::size_t k = 0; k < xml1_combo_lengths[i]; ++k)
+				{
+					std::uint32_t button = 0;
+					std::memcpy(&button, whole.data() + (a - l.base) + 4 * k, 4);
+					slots_ok &= button == xml1_combos[i][k] && (button == 4 || button == 5);
+				}
+			}
+			CHECK(slots_ok && l.constants + 16 <= l.combos);
+			const auto lengths = combo_lengths_bytes();
+			CHECK(lengths.size() == 24 && lengths[0] == 1 && lengths[4] == 2 && lengths[20] == 5);
+		}
+		CHECK(combolevel_skip() == std::vector<std::uint8_t>({0x83, 0xc4, 0x04}) && sub_bytes(combolevel_site, 3, 3) == std::vector<std::uint8_t>({0xff, 0x52, 0x44}));
+		CHECK(sub_bytes(combo_exit_site, 3, 6) == std::vector<std::uint8_t>({0xb0, 0x01, 0x5f, 0x5e, 0x5d, 0x5b}) && combo_exit_va == combo_exit_site.va + 3 && combo_exit2_va == combo_exit2_site.va + 3);
+		CHECK(rel32(combo_exit_jump(combo_exit_va), 1, combo_exit_va) == combo_tail_va && rel32(combo_exit_jump(combo_exit2_va), 1, combo_exit2_va) == combo_tail_va && combo_exit_jump(combo_exit_va)[5] == 0x90);
+
 		const auto exe = game_executable();
 		if (!exe)
 		{

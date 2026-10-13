@@ -100,7 +100,7 @@ void records(){
  check(death(true,false).compare(death(true).bytes())==result::unavailable && peer(true).compare(death(false).bytes())==result::entries,"failed death threshold install or a peer without the rule refuses");
  // Rule 16, the NPC power rule ([Game] NpcPowerRule): enemies that pay for powers and decide every 2 s never share a
  // lockstep game with enemies that don't; absent is revision 1 {0,0,0,0}, a failed install unverified.
- auto npc=[](bool on,bool verified=true){record r;r.add(2,1,{1,0,0,0},true);r.add(gameplay_capabilities::npc_power_rule_id,1,{on ? 1u : 0u,0,0,0},verified);r.finalize();return r;};
+ auto npc=[](bool on,bool verified=true){record r;r.add(2,1,{1,0,0,0},true);r.add(gameplay_capabilities::npc_power_rule_id,2,{on ? 1u : 0u,0,0,0},verified);r.finalize();return r;};
  check(gameplay_capabilities::npc_power_rule_id==16 && npc(true).compare(npc(false).bytes())==result::value && npc(false).compare(npc(true).bytes())==result::value,"NPC power rule on/off refuses both directions");
  check(npc(true).compare(npc(true).bytes())==result::match && npc(false).compare(npc(false).bytes())==result::match,"same NPC power rule accepts");
  check(npc(true,false).compare(npc(true).bytes())==result::unavailable && peer(true).compare(npc(false).bytes())==result::entries,"failed NPC power rule install or a peer without the rule refuses");

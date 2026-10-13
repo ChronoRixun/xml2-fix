@@ -91,6 +91,16 @@ namespace npc_power
 			{charge_site.va, retail_bytes(charge_site, charge_site.patched), charge_jump(l)},
 			{recheck_site.va, retail_bytes(recheck_site, recheck_site.patched), recheck_call(l)},
 			{picker_call_va, std::vector<std::uint8_t>(picker_retail.begin() + 2, picker_retail.end()), picker_call(l)},
+			// The combos: no combolevel override, XML1's levels 2 / 3 / 6 in rows 2 / 3 / 11 over XML1's six combos in
+			// slots 0..5, and the tail after a combo start.
+			{combolevel_call_va, sub_bytes(combolevel_site, 3, 3), combolevel_skip()},
+			{combo_exit_va, sub_bytes(combo_exit_site, 3, 6), combo_exit_jump(combo_exit_va)},
+			{combo_exit2_va, sub_bytes(combo_exit2_site, 3, 6), combo_exit_jump(combo_exit2_va)},
+			{combo_buttons_va, retail_bytes(combo_buttons_site, 24), combo_buttons_bytes(l)},
+			{combo_lengths_va, retail_bytes(combo_lengths_site, 24), combo_lengths_bytes()},
+			{combo_row2_site.va, retail_bytes(combo_row2_site, combo_row_size), combo_row_bytes(2)},
+			{combo_row3_site.va, retail_bytes(combo_row3_site, combo_row_size), combo_row_bytes(3)},
+			{combo_row11_site.va, retail_bytes(combo_row11_site, combo_row_size), combo_row_bytes(6)},
 		};
 		xml1_hook_transaction::memory memory;
 		bool safe = true;
@@ -109,7 +119,7 @@ namespace npc_power
 		}
 		logger::write("npc power rule: X-Men Legends 1's ([Game] NpcPowerRule=xml1): enemies pay for their powers (0x4318e7 tests the AI time as "
 		              "default.xbe 0xcde95), the melee-range power decision re-checks every 2.0 s / 0.5 s (0x5188d8) and needs half of the "
-		              "character's energy (0x518920), bridges at 0x%08lX",
+		              "character's energy (0x518920); NPCs combo with the first game's levels and combos (0x505011, rows 0x6dd508) and pause after a combo start (0x51993a, 0x519b04); bridges at 0x%08lX",
 		              static_cast<unsigned long>(base));
 	}
 }

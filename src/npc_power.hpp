@@ -14,7 +14,9 @@
 // Without the key, or with xml2, nothing is patched. With it (npc_power_rules.hpp, docs/npc-power-rule.md): a
 // power's cost comes off an enemy's energy as in XML1 (the power cost's AI test at 0x4318e7), the melee-range power
 // decision (0x518770) runs every 2.0 s (0.5 s for a party hero under the AI) instead of every 0.3 s, and it picks a
-// power only with at least half of the character's energy. Nothing a save reads changes.
+// power only with at least half of the character's energy; NPCs fight in the first game's melee combos (their combo
+// level as XML1's AI init gives it, XML1's six combos and weights) and pause after starting one as in XML1. Nothing a
+// save reads changes.
 namespace npc_power
 {
 	// Reads [Game] NpcPowerRule and patches XMen2.exe for it, all three sites or none. From DllMain (see exports.cpp).
@@ -23,7 +25,8 @@ namespace npc_power
 	bool requested(); // the key says xml1, or is set to a value that is not xml1/xml2 (then unverified)
 	bool installed(); // and every site carries the rule
 	bool verified();  // nothing is half-installed: not requested, or installed
-	// The shared gameplay record's entry (rule 16, gameplay_capabilities::npc_power_rule_id, revision 1):
-	// {installed ? 1 : 0, 0, 0, 0}.
+	// The shared gameplay record's entry (rule 16, gameplay_capabilities::npc_power_rule_id): revision 2 (the power rules
+	// and the combo rules; revision 1, never released, had the power rules only), {installed ? 1 : 0, 0, 0, 0}.
+	constexpr std::uint16_t revision = 2;
 	std::array<std::uint32_t, 4> values();
 }
