@@ -12,7 +12,8 @@ namespace gameplay_capabilities
  constexpr std::uint16_t entity_layout_id=1, explosive_first_hit_id=2, master_mold_id=3, turret_controller_id=4,
   rank_costs_id=5, multipart_id=6, x1_leader_id=7, solo_mode_id=8, death_threshold_id=9, xtraction_services_id=10,
   placement_crush_id=11, double_heal_id=12, pack_amount_id=13, script_functions_id=14,
-  death_switch_clear_id=15, npc_power_rule_id=16;
+  death_switch_clear_id=15, npc_power_rule_id=16, stun_rule_id=18;
+ // 17 is reserved for ObjectWorldImpact. Do not register a placeholder: a later merge owns it.
  // 10: the first game's Xtraction services and revival price (xtract::capability; issue #63). Revision 2: the online
  // rule greys Load and the campaign-gated options (revision 1, never released, greyed Load only).
  constexpr std::uint16_t xtraction_services_revision=2;
@@ -52,6 +53,7 @@ namespace gameplay_capabilities
   case script_functions_id: return "ScriptFunctions";
   case death_switch_clear_id: return "DeathSwitchClear";
   case npc_power_rule_id: return "NpcPowerRule";
+  case stun_rule_id: return "StunRule";
   default: return "a newer rule";
   }
  }

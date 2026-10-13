@@ -5,6 +5,7 @@
 #include "game_version_rules.hpp"
 #include "explosive_first_hit.hpp"
 #include "npc_power.hpp"
+#include "stun_rule.hpp"
 #include "xml1_capability_rules.hpp"
 #include "script_functions_rules.hpp"
 #include <cstdio>
@@ -99,6 +100,18 @@ void records(){
  check(gameplay_capabilities::death_threshold_id==9 && death(true).compare(death(false).bytes())==result::value && death(false).compare(death(true).bytes())==result::value,"death threshold on/off refuses both directions");
  check(death(true).compare(death(true).bytes())==result::match && death(false).compare(death(false).bytes())==result::match,"same death threshold accepts");
  check(death(true,false).compare(death(true).bytes())==result::unavailable && peer(true).compare(death(false).bytes())==result::entries,"failed death threshold install or a peer without the rule refuses");
+ // Rule 18 leaves ID 17 unregistered so its owner can join later in either registration order.
+ auto stun=[](bool on,bool verified=true,int rev=stun_rule::revision,bool with17=false){
+  record r;r.add(gameplay_capabilities::stun_rule_id,static_cast<std::uint16_t>(rev),{on ? 1u : 0u,0,0,0},verified);
+  if(with17)r.add(17,1,{1,0,0,0},true);r.finalize();return r;};
+ check(gameplay_capabilities::stun_rule_id==18 && std::string(gameplay_capabilities::rule_name(18))=="StunRule","stun uses assigned rule 18");
+ check(stun(true).compare(stun(false).bytes())==result::value && stun(false).compare(stun(true).bytes())==result::value,"stun on/off refuses both directions");
+ check(stun(true).compare(stun(true).bytes())==result::match && stun(false).compare(stun(false).bytes())==result::match,"same stun rules agree, including off");
+ check(stun(true).compare(stun(true,true,2).bytes())==result::value,"stun revision mismatch refuses");
+ check(!stun(true,false).ready(),"failed stun install poisons agreement");
+ record future;future.add(17,1,{1,0,0,0},true);future.add(18,stun_rule::revision,{1,0,0,0},true);future.finalize();
+ check(future.compare(stun(true,true,1,true).bytes())==result::match,"later rule 17 registration agrees in either order");
+ check(stun(true).compare(future.bytes())==result::entries,"missing future rule 17 is refused, not silently ignored");
  // Rule 16, the NPC power rule ([Game] NpcPowerRule): enemies that pay for powers and decide every 2 s never share a
  // lockstep game with enemies that don't; revision 3 adds the visibility word; absent is {0,0,0,0}, a failed install unverified.
  auto npc=[](bool on,bool verified=true){record r;r.add(2,1,{1,0,0,0},true);r.add(gameplay_capabilities::npc_power_rule_id,npc_power::revision,{on ? 1u : 0u,on ? 1u : 0u,0,0},verified);r.finalize();return r;};
