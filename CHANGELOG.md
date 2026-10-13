@@ -18,6 +18,8 @@ Legends II as it ships only the display, pad and cutscene-mouse fixes apply; eve
 
 **New for mods (the port's builder sets all of these)**
 
+- `[Game] NpcPowerRule=xml1`: **Enemy AI** (issue #101): enemies pay energy for powers, decide every 2 seconds, need at least half their energy, and use the first game's melee combos. Visibility uses the first game's geometry and query scheduling. Heroes still spend more time stunned than in the original; that part of #101 remains open. ([details](docs/npc-power-rule.md)).
+
 - `[Game] RankCosts`, `LevelSkillPoints=xml1`, `LevelStatPoints=xml1`: X-Men Legends I's 2-point skill ranks and its
   2 skill / 8 stat points on every fifth level ([details](docs/rank-costs.md)). A campaign saved before these keys
   were installed gets the fifth-level points its heroes missed, once, on its first load.
@@ -42,7 +44,7 @@ Legends II as it ships only the display, pad and cutscene-mouse fixes apply; eve
 
 **Online**
 
-- Each of these keys is a rule of the shared gameplay agreement (IDs 5-15). The agreement record is now a fixed
+- Each of these keys is a rule of the shared gameplay agreement (IDs 5-16). The agreement record is now a fixed
   108-byte digest (protocol revision 3), so a join no longer crashes the host once enough rules are on, and a refusal
   names the setting that differs on both PCs.
 - A 1.4.0 player and a 1.5.0 player refuse each other at join, with the reason on both PCs: both need 1.5.0.

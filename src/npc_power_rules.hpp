@@ -201,7 +201,7 @@ namespace npc_power_rules
 	inline constexpr site combo_tail_site{0x519840, "8b44241c", 0, "the attack decision's tail (0x518fd0)"};
 	constexpr address combo_tail_va = 0x519840;
 	constexpr address combo_exit_va = 0x51993a, combo_exit2_va = 0x519b04;
-	// The combo tables (.rdata): 11 button-list pointers, 11 lengths, 12 rows of 11 weights.
+	// The combo tables (.data): 11 button-list pointers, 11 lengths, 12 rows of 11 weights.
 	constexpr address combo_buttons_va = 0x6dd4ac, combo_lengths_va = 0x6dd4d8, combo_rows_va = 0x6dd508;
 	constexpr std::size_t combo_row_size = 0x2c;
 	inline constexpr site combo_buttons_site{combo_buttons_va, "40d46d0044d46d0048d46d0050d46d005cd46d0064d46d00", 0, "combo slots 0..5's buttons (0x6dd4ac)"};

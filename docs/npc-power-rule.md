@@ -81,7 +81,7 @@ block of the fix's own:
    picker with the caller's frame unchanged.
 4. **0x505011 (3 bytes).** The AI init's `call [edx+0x44]` with npcstat `combolevel` becomes `add esp,4`: the level
    stays the one the init chose the first game's way (2, 3 or the top level 11).
-5. **The combo tables (.rdata).** Slots 0..5 point at XML1's six combos (in the block) with their lengths; rows 2, 3
+5. **The combo tables (.data).** Slots 0..5 point at XML1's six combos (in the block) with their lengths; rows 2, 3
    and 11 - the levels the init picks - hold XML1's levels 2, 3 and 6 (the first 2, 3, 6 of 5 / 25 / 20 / 15 / 15 /
    15). Rows 0, 1 and 4..10 keep their weights and are reached only through `combolevel`, which no XML1 entry has.
 6. **0x51993a and 0x519b04 (6 bytes each, jmp 0x519840).** After a combo start, the decision's tail runs as after a
