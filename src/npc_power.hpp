@@ -17,15 +17,13 @@
 // power only with at least half of the character's energy. Nothing a save reads changes.
 namespace npc_power
 {
-	// The shared gameplay record's rule ID. Unassigned (0): the 0.2.2 integrator picks it (impl-022 rule: agents do
-	// not pick IDs). Until then the rule is not registered and a peer with a different value isn't refused.
-	constexpr std::uint16_t rule_id = 0;
-
 	// Reads [Game] NpcPowerRule and patches XMen2.exe for it, all three sites or none. From DllMain (see exports.cpp).
 	void install(HMODULE game);
 
 	bool requested(); // the key says xml1, or is set to a value that is not xml1/xml2 (then unverified)
 	bool installed(); // and every site carries the rule
 	bool verified();  // nothing is half-installed: not requested, or installed
-	std::array<std::uint32_t, 4> values(); // {installed ? 1 : 0, 0, 0, 0}
+	// The shared gameplay record's entry (rule 16, gameplay_capabilities::npc_power_rule_id, revision 1):
+	// {installed ? 1 : 0, 0, 0, 0}.
+	std::array<std::uint32_t, 4> values();
 }

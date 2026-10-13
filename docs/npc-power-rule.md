@@ -52,10 +52,11 @@ its AI time is set.
 
 ## Gameplay agreement
 
-Online play is lockstep, and the rule changes AI decisions and energy, so it belongs in the shared gameplay record.
-**The rule ID is not assigned.** The 0.2.2 wave reserves ID assignment for the integrator, so `npc_power::rule_id` is
-0 and exports.cpp registers the rule only when that is non-zero. Before release: pick the ID, set the revision (1),
-values {installed ? 1 : 0, 0, 0, 0}, and add a gameplay_agreement test that on/off refuses both ways.
+Online play is lockstep and the rule changes AI decisions and energy, so it is shared gameplay rule **16**
+(`gameplay_capabilities::npc_power_rule_id`, [gameplay-agreement.md](gameplay-agreement.md)): revision 1,
+`{installed ? 1 : 0, 0, 0, 0}`; registered in an LC installation or when requested; absent or `xml2` is the verified
+`{0,0,0,0}`; requested but not installed (a guard mismatch, protection, readback, an unknown value) is unverified and
+closes host/join. A peer with the rule and one without never play together.
 
 ## Evidence
 

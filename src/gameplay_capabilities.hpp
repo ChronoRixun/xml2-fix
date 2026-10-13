@@ -8,11 +8,11 @@
 
 namespace gameplay_capabilities
 {
- // Rule IDs (docs/gameplay-agreement.md): 1-4 the 1.4.0 rules; 5..15 the 0.2.2 wave.
+ // Rule IDs (docs/gameplay-agreement.md): 1-4 the 1.4.0 rules; 5..16 the 0.2.2 wave.
  constexpr std::uint16_t entity_layout_id=1, explosive_first_hit_id=2, master_mold_id=3, turret_controller_id=4,
   rank_costs_id=5, multipart_id=6, x1_leader_id=7, solo_mode_id=8, death_threshold_id=9, xtraction_services_id=10,
   placement_crush_id=11, double_heal_id=12, pack_amount_id=13, script_functions_id=14,
-  death_switch_clear_id=15;
+  death_switch_clear_id=15, npc_power_rule_id=16;
  // 10: the first game's Xtraction services and revival price (xtract::capability; issue #63). Revision 2: the online
  // rule greys Load and the campaign-gated options (revision 1, never released, greyed Load only).
  constexpr std::uint16_t xtraction_services_revision=2;
@@ -26,7 +26,7 @@ namespace gameplay_capabilities
  // not part of it (docs/entity-capacity-phase-a-plan.md section 10, deviation 17).
  constexpr std::uint16_t protocol_revision=3;
  constexpr std::uint32_t magic=0x50414347; // GCAP, little endian
- // max_entries bounds registration only (the wire size is fixed): 15 rules are assigned in 1.5.0.
+ // max_entries bounds registration only (the wire size is fixed): 16 rules are assigned in 1.5.x.
  constexpr std::size_t max_entries=256, entry_size=20;
  constexpr std::size_t header_size=12, digest_size=32, buckets=64, digest_at=header_size, summary_at=digest_at+digest_size;
  constexpr std::size_t max_size=summary_at+buckets, record_size=max_size;
@@ -51,6 +51,7 @@ namespace gameplay_capabilities
   case pack_amount_id: return "PackAmount";
   case script_functions_id: return "ScriptFunctions";
   case death_switch_clear_id: return "DeathSwitchClear";
+  case npc_power_rule_id: return "NpcPowerRule";
   default: return "a newer rule";
   }
  }
