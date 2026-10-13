@@ -45,6 +45,7 @@ add_library(xml2_fix SHARED
 	src/break_rule.cpp
 	src/placement_crush.cpp
 	src/double_heal.cpp
+	src/npc_power.cpp
 	src/pack_amount.cpp
 	src/exports.cpp
 	src/gamepad_fix.cpp
