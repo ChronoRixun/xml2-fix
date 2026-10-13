@@ -20,16 +20,28 @@
 
 #include "balance.hpp"
 #include "break_rule.hpp"
+#include "placement_crush.hpp"
+#include "double_heal.hpp"
+#include "xml1_capability_rules.hpp"
 #include "conversations.hpp"
 #include "confirmation_release.hpp"
 #include "explosive_first_hit.hpp"
+#include "rank_costs.hpp"
+#include "death_threshold.hpp"
+#include "npc_power.hpp"
+#include "pack_amount.hpp"
+#include "death_switch.hpp"
 #include "gameplay_agreement.hpp"
 #include "gameplay_capabilities.hpp"
 #include "objective_text.hpp"
 #include "discord_presence.hpp"
 #include "display.hpp"
 #include "forced_teams.hpp"
+#include "script_functions.hpp"
+#include "solo_mode.hpp"
 #include "mold_controller.hpp"
+#include "multipart.hpp"
+#include "xml1_turrets.hpp"
 #include "game_version.hpp"
 #include "gamepad_fix.hpp"
 #include "iat_hook.hpp"
@@ -41,6 +53,8 @@
 #include "main_menu.hpp"
 #include "classic_main_backdrop.hpp"
 #include "classic_main_panels.hpp"
+#include "danger_room_gate.hpp"
+#include "revival_cost.hpp"
 #include "mod_loader.hpp"
 #include "new_game.hpp"
 #include "net_trace.hpp"
@@ -52,6 +66,7 @@
 #include "entity_capacity.hpp"
 #include "postgame.hpp"
 #include "review_menu.hpp"
+#include "cutscene_mouse.hpp"
 #include "personal_item_text.hpp"
 #include "save_format.hpp"
 #include "save_content_guards.hpp"
@@ -61,6 +76,7 @@
 #include "virtual_pad.hpp"
 #include "window_title.hpp"
 #include "xinput_pad.hpp"
+#include "x1_leader.hpp"
 #include "xtract.hpp"
 #include "xp_curve.hpp"
 
@@ -211,12 +227,19 @@ namespace
 		main_menu::install(game);
 		classic_main_backdrop::install(game);
 		classic_main_panels::install(game);
+		// The first game's main-menu Danger Room gate ([Game] DangerRoomGate): MAIN_MENU vt+0x10.
+		danger_room_gate::install(game);
 		// The Review menu's tabs: five imm8s in REVIEW_PATHS_MENU's own code, used from the first Review on.
 		review_menu::install(game);
+		// [Input] CutsceneMouse: the mouse handler's lock test (0x5fa2d4) also stops the mouse in a cinematic, as
+		// the keys and pads are; used from the first zone on.
+		cutscene_mouse::install(game);
 		personal_item_text::install(game);
 		// An Xtraction Point's Xtract choice ([Game] Xtract=0): two bytes in extractionPoint's own
 		// code, used from the first Xtraction Point on.
 		xtract::install(game);
+		// The first game's revival price ([Game] RevivalCost=xml1): a jump over 0x4b8830's first instruction.
+		revival_cost::install(game);
 		// X-Men Legends 1's level table, cap and kill XP. Here, in DllMain, before the exe's entry point: the game
 		// first asks for a level's XP (0x448a90, which builds XML2's table on that call) when it loads the herostat at
 		// start-up (0x4ba1d9, every hero's starting level), and its first kill, level check or XP bar come later still,
@@ -229,6 +252,8 @@ namespace
 		// The stats screen's help text: the two literals that name [Balance] numbers (health per body, the
 		// strike bonus) follow the same applied values, through the string manager's vt+8; every other
 		// string passes to the game's getter. After balance: it reads what balance applied.
+		// [Game] DoubleHeal=0 before the help texts: stat_help drops the double-heal lines only once it is in.
+		double_heal::install(game);
 		stat_help::install(game);
 		// The forced parties' script functions (seatParty and the rest). The game registers its script
 		// functions exactly once, from its own init: 0x40197b -> game vt+0x13c (0x46b750) -> the
@@ -238,20 +263,57 @@ namespace
 		// menu on, which is when names are looked up - sees the new functions. After new_game: both
 		// patch push operands of script-facing code; nothing here depends on limits or test_input (the
 		// pipe's "script" command compiles its statement when it runs, with the functions in place).
+		// [Limits] ScriptFunctions: the game's 320 script function names raised (the fix's own already fill
+		// them). Two code sites of the registration and the compile-time lookup, both first run by the same
+		// registration; before forced_teams, whose table carries any [Test] probes.
+		script_functions::install(game);
 		forced_teams::install(game);
 		mold_controller::install(game);
+		// XML1 scan turrets ([Game] Xml1Turrets, builder [Xml1Turrets]): one pointer of the native event
+		// scheduler's vtable (its per-frame dispatch); after mold_controller, whose query guards it shares.
+		xml1_turrets::install(game);
+		// X-Men Legends 1's solo mode ([Game] SoloMode): six AI sites, one transaction; its script function is the
+		// forced parties' setSoloMode (above), which does nothing unless these sites installed.
+		solo_mode::install(game);
 		if (!game_version::startup_allowed()) return;
 		// XML1 controllers in the shared gameplay record (docs/gameplay-agreement.md): online play is lockstep, so
 		// every peer runs Master Mold's native AI update and must have the same effective controller (rule 3).
-		// No turret controller exists in this build: rule 4 is advertised as verified off.
+		// The scan turrets run from the same lockstep update on every peer (rule 4): a process that does not request
+		// them advertises revision 1 verified off, as 1.4.0 did.
 		// Registering a requested controller enlists the agreement even in a non-LC installation.
-		if (game_version::needs_gameplay_agreement() || mold_controller::requested())
+		// The script function limit (rule 14): a peer whose raise was refused drops every statement calling a function
+		// past 320 while the other runs it, so peers agree on the installed capacity; a requested raise that didn't
+		// install is unverified and closes host/join. Plain XML2 (no key, no ForcedTeams) advertises {0,0,0,0}. Only an
+		// explicit [Limits] ScriptFunctions enlists the agreement by itself (script_functions.hpp).
+		if (game_version::needs_gameplay_agreement() || mold_controller::requested() || xml1_turrets::requested() ||
+		    script_functions::requested_by_key())
 		{
 			const auto mold = mold_controller::capability();
 			gameplay_agreement::register_rule(gameplay_capabilities::master_mold_id, xml1_capability_rules::master_mold_revision, mold.values, mold.verified);
-			const auto turrets = xml1_capability_rules::turrets();
-			gameplay_agreement::register_rule(gameplay_capabilities::turret_controller_id, xml1_capability_rules::turret_revision, turrets.values, turrets.verified);
+			const auto turrets = xml1_turrets::capability();
+			gameplay_agreement::register_rule(gameplay_capabilities::turret_controller_id, xml1_capability_rules::turret_revision_for(xml1_turrets::requested()), turrets.values, turrets.verified);
+			const auto functions = script_functions::capability();
+			gameplay_agreement::register_rule(gameplay_capabilities::script_functions_id, script_functions_rules::agreement_revision, functions.values, functions.verified);
 		}
+		// Solo mode changes what every peer's AI heroes do (rule 8): peers must agree on it like the controllers.
+		if (game_version::needs_gameplay_agreement() || solo_mode::requested())
+		{
+			const auto solo = solo_mode::capability();
+			gameplay_agreement::register_rule(gameplay_capabilities::solo_mode_id, 1, solo.values, solo.verified);
+		}
+		// XML1 breakable parts ([Game] Xml1Multipart): part health, break roll, effects and disabled attacks change
+		// the lockstep simulation, so peers must agree (rule 6, revision 1, {installed, part-logic revision, 0, 0}).
+		multipart::install(game);
+		if (game_version::needs_gameplay_agreement() || multipart::requested())
+		{
+			const auto parts = multipart::capability();
+			gameplay_agreement::register_rule(gameplay_capabilities::multipart_id, 1, parts.values, parts.verified);
+		}
+		// The Xtraction menus are built by every peer from its own script run and driven by the activator's input, and
+		// the revival price is debited by every peer: the option lists and the price must be the same everywhere (rule 10).
+		if (game_version::needs_gameplay_agreement() || xtract::requested() || revival_cost::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::xtraction_services_id, gameplay_capabilities::xtraction_services_revision,
+			                                  xtract::capability(revival_cost::installed()), xtract::verified() && revival_cost::verified());
 		// Conversations written for XML1's engine ([Game] AutoAdvance, ReplyVoices, ReplyCursor; on by default):
 		// three code sites of the conversation system, used from the first conversation on; independent of the
 		// patches above (none of its sites or guards is anyone else's).
@@ -260,6 +322,58 @@ namespace
 		explosive_first_hit::install(game);
 		if (game_version::needs_gameplay_agreement())
 			gameplay_agreement::register_rule(gameplay_capabilities::explosive_first_hit_id,1,{explosive_first_hit::installed() ? 1u : 0u,0,0,0},explosive_first_hit::verified());
+		// X-Men Legends 1's skill and stat point rules ([Game] RankCosts, LevelSkillPoints, LevelStatPoints): the rank
+		// costs (the skills screen, its buyable test, the automatic spending, the respec, losing levels) and the points per
+		// level (the level processing's grant and take-back). ORDER: after forced_teams::install - forced_teams guards the
+		// level processing's grant (0x4bbb54..0x4bbb75, the addSkillPoints evidence) as retail at its own install, and
+		// LevelSkillPoints / LevelStatPoints patch 0x4bbb56 and 0x4bbb68 inside it; installed first, ForcedTeams would
+		// refuse. No other installer writes or guards these sites. Every peer charges and grants alike (rule 5), or their
+		// heroes' points drift apart.
+		rank_costs::install(game);
+		if (game_version::needs_gameplay_agreement())
+		{
+			const auto costs = rank_costs::capability();
+			gameplay_agreement::register_rule(gameplay_capabilities::rank_costs_id, xml1_capability_rules::rank_costs_revision, costs.values, costs.verified);
+		}
+		// X-Men Legends 1's stats `leader` bit (issue #15): two tests of actor+0x3db bit 3 - the pain
+		// gate (0x43597b, no hero flinch vs a leader-owned projectile) and the death-drop roller
+		// (0x46e4ed + count 0x46e735 + forced pick 0x46e774: X-Men Legends 1's leader drop rule) - for the actors
+		// the build's Data\x1leader.txt names; XML2's own x3-variant actors keep the native path.
+		x1_leader::install(game);
+		if (game_version::needs_gameplay_agreement())
+			gameplay_agreement::register_rule(gameplay_capabilities::x1_leader_id,2,{x1_leader::installed() ? 1u : 0u,x1_leader::installed() ? 1u : 0u,0,0},x1_leader::verified()); // revision 2: the second value 1 = the first game's drop rule (XBE roller) for listed actors
+		// X-Men Legends 1's death threshold ([Game] DeathRule=xml1, docs/death-threshold.md): eight comparisons of the
+		// damage functions and a jump at the death branch's entry, used from the first hit on. Online play is lockstep,
+		// so when an entity dies is part of the shared gameplay record (rule 9); a requested rule enlists the agreement
+		// even in a non-LC installation.
+		death_threshold::install(game);
+		if (game_version::needs_gameplay_agreement() || death_threshold::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::death_threshold_id,1,death_threshold::values(),death_threshold::verified());
+		// X-Men Legends 1's pack amount ([Game] PackAmount=xml1): the two single-amount fractions in restoreHealth /
+		// restoreEnergy, used from the first pack on; none of its sites or guards is anyone else's. Every peer computes
+		// its own heals, so the effective value is a gameplay rule (13); asking for it enlists the agreement.
+		pack_amount::install(game);
+		if (game_version::needs_gameplay_agreement() || pack_amount::requested())
+		{
+			const auto packs = xml1_capability_rules::pack_amount(pack_amount::requested(), pack_amount::installed());
+			gameplay_agreement::register_rule(gameplay_capabilities::pack_amount_id, xml1_capability_rules::pack_amount_revision, packs.values, packs.verified);
+		}
+		// X-Men Legends 1's power use for computer-controlled characters ([Game] NpcPowerRule=xml1,
+		// docs/npc-power-rule.md): enemies pay for powers, the melee-range power decision every 2.0 s with half of the
+		// energy. Online play is lockstep, so AI decisions and enemy energy are part of the shared gameplay record (rule
+		// 16); a requested rule enlists the agreement even in a non-LC installation.
+		npc_power::install(game);
+		if (game_version::needs_gameplay_agreement() || npc_power::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::npc_power_rule_id, npc_power::revision, npc_power::values(), npc_power::verified());
+		// [Game] DeathSwitchClear: the hero handed a dead hero's controller stops its AI walk (docs/death-switch.md). One
+		// call in onDeath's own code, used from the first death on. Online play is lockstep, so every peer must hand
+		// over the same way (rule 15); a requested switch enlists the agreement even in a non-LC installation.
+		death_switch::install(game);
+		if (game_version::needs_gameplay_agreement() || death_switch::requested())
+		{
+			const auto handover = death_switch::capability();
+			gameplay_agreement::register_rule(gameplay_capabilities::death_switch_clear_id, death_switch_rules::revision, handover.values, handover.verified);
+		}
 		objective_text::install(game);
 		// Before any of XMen2.exe's own code runs, as the engine limit adjuster must be: this DLL is a
 		// static import of libIGDisplay.dll, which XMen2.exe imports statically, so Windows runs this
@@ -274,6 +388,24 @@ namespace
 		// two code sites of the objects' own (their structure read and their damage gate), used from the first zone on;
 		// none of its sites or guards is anyone else's.
 		break_rule::install(game);
+		// X-Men Legends 1's zone placement without crushes ([Game] PlacementCrush=xml1): the objects' touch slot (0x498ef0),
+		// refused while an object is settled on the floor (each object at a zone's load and 0.5 s after any spawn in play:
+		// death drops, script-spawned props, debris - the first game has no settle at all); no other module hooks it.
+		placement_crush::install(game);
+		// X-Men Legends 1's packs ([Game] DoubleHeal=0, installed above, before stat_help): two branches of restoreHealth /
+		// restoreEnergy; no other module patches them.
+		// Both change what each peer simulates (objects broken while a zone settles; how much a pack heals): rules 11
+		// and 12 of the shared gameplay record. A requested change enlists the agreement even without LC, as rule 3.
+		if (game_version::needs_gameplay_agreement() || placement_crush::requested())
+		{
+			const auto crush = xml1_capability_rules::installed_switch(placement_crush::requested(), placement_crush::installed());
+			gameplay_agreement::register_rule(gameplay_capabilities::placement_crush_id, xml1_capability_rules::placement_crush_revision, crush.values, crush.verified);
+		}
+		if (game_version::needs_gameplay_agreement() || double_heal::requested())
+		{
+			const auto heal = xml1_capability_rules::installed_switch(double_heal::requested(), double_heal::installed());
+			gameplay_agreement::register_rule(gameplay_capabilities::double_heal_id, xml1_capability_rules::double_heal_revision, heal.values, heal.verified);
+		}
 
 		test_input::install(); // first: its screenshots need the display fix's device hook
 		display::install(game);

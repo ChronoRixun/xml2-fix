@@ -18,7 +18,9 @@
 namespace xml2_pad_bindings
 {
 	// Adds the pad layout to the game's built-in defaults (used on first run and by "Revert
-	// to defaults"), and once to saved settings, filling only unbound or stock-default slots.
-	// Must run before the game reads its settings.
+	// to defaults") and to the Advanced Options' Defaults 1/2/3 presets (whose keyboard-only
+	// tables otherwise erased the selected player's pad bindings, issue #9), and once
+	// to saved settings, filling only unbound or stock-default slots. Must run before the
+	// game reads its settings.
 	void install();
 }

@@ -52,11 +52,21 @@
 #include <Xinput.h>
 
 #include "break_rule_rules.hpp"
+#include "placement_crush_rules.hpp"
+#include "double_heal_rules.hpp"
+#include "x1_leader_rules.hpp"
+#include "death_threshold_rules.hpp"
+#include "npc_power_rules.hpp"
+#include "npc_visibility_rules.hpp"
+#include "pack_amount_rules.hpp"
 #include "personal_item_text_rules.hpp"
 #include "save_format_rules.hpp"
+#include "rank_costs_rules.hpp"
+#include "lcsave/layout.hpp"
 #include "discord_ipc.hpp"
 #include "discord_rules.hpp"
 #include "display_rules.hpp"
+#include "display_settings_rules.hpp"
 #include "conversations_rules.hpp"
 #include "forced_teams_rules.hpp"
 #include "frame_capture.hpp"
@@ -83,6 +93,7 @@
 #include "postgame_rules.hpp"
 #include "resolution_rules.hpp"
 #include "review_menu_rules.hpp"
+#include "cutscene_mouse_rules.hpp"
 #include "test_input_rules.hpp"
 #include "test_state_rules.hpp"
 #include "virtual_pad_rules.hpp"
@@ -91,6 +102,8 @@
 #include "window_title_rules.hpp"
 #include "xtract_rules.hpp"
 #include "xtraction_shop_rules.hpp"
+#include "danger_room_gate_rules.hpp"
+#include "revival_cost_rules.hpp"
 
 #include <algorithm>
 #include <array>
@@ -465,6 +478,10 @@ namespace
 		CHECK(engine_menu_point({725, 278}, {1280, 720}, 1280.0f / 720.0f).y >= 219 && engine_menu_point({725, 278}, {1280, 720}, 1280.0f / 720.0f).x >= 167);
 	}
 
+	// Defined further down, with the other checks against XMen2.exe.
+	std::optional<std::string> game_executable();
+	std::uint8_t* map_image(const std::string& file, DWORD& size_of_image);
+
 	void check_display_rules()
 	{
 		using namespace display_rules;
@@ -534,69 +551,309 @@ namespace
 
 		// Present parameters: the engine's exclusive fullscreen ones at the registry resolution.
 		const d3d8::present_parameters stock{1920, 1080, d3d8::format_x8r8g8b8, 1, 4, d3d8::swap_discard, nullptr, FALSE, TRUE, d3d8::format_d24s8, 1, 0, 0x80000000};
+		const std::vector<d3d8::display_mode> no_modes; // no adapter list: fullscreen requests validated only where one is supplied
 		const auto msaa_ok = [](DWORD, DWORD) { return true; };
 		const auto msaa_no = [](DWORD, DWORD) { return false; };
 		const auto format_ok = [](DWORD) { return true; };
 		const auto interval_ok = [](UINT) { return true; };
 		std::string notes;
 
-		auto pp = rewrite_present(stock, borderless, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		auto pp = rewrite_present(stock, borderless, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.windowed == TRUE && pp.fullscreen_refresh_rate == 0 && pp.fullscreen_presentation_interval == 0);
 		CHECK(pp.back_buffer_width == 1920 && pp.back_buffer_height == 1080 && pp.multi_sample_type == 4 && pp.swap_effect == d3d8::swap_discard);
-		pp = rewrite_present(stock, windowed, desktop_mode, msaa_no, format_ok, interval_ok, notes);
+		pp = rewrite_present(stock, windowed, desktop_mode, no_modes, msaa_no, format_ok, format_ok, msaa_no, interval_ok, notes);
 		CHECK(pp.windowed == TRUE && pp.multi_sample_type == d3d8::multisample_none && !notes.empty());
 		auto copy_vsync = stock;
 		copy_vsync.swap_effect = d3d8::swap_copy_vsync;
 		copy_vsync.back_buffer_count = 2;
-		pp = rewrite_present(copy_vsync, borderless, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(copy_vsync, borderless, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.multi_sample_type == d3d8::multisample_none && pp.swap_effect == d3d8::swap_copy_vsync && pp.back_buffer_count == 1);
-		pp = rewrite_present(stock, borderless, desktop_mode, msaa_ok, [](DWORD) { return false; }, interval_ok, notes);
+		pp = rewrite_present(stock, borderless, desktop_mode, no_modes, msaa_ok, [](DWORD) { return false; }, [](DWORD) { return false; }, msaa_ok, interval_ok, notes);
 		CHECK(pp.back_buffer_format == d3d8::format_x8r8g8b8); // already the desktop's: not checked, not changed
 		auto sixteen_bit = stock;
 		sixteen_bit.back_buffer_format = 23;
-		pp = rewrite_present(sixteen_bit, borderless, desktop_mode, msaa_ok, [](DWORD) { return false; }, interval_ok, notes);
+		pp = rewrite_present(sixteen_bit, borderless, desktop_mode, no_modes, msaa_ok, [](DWORD) { return false; }, [](DWORD) { return false; }, msaa_ok, interval_ok, notes);
 		CHECK(pp.back_buffer_format == d3d8::format_x8r8g8b8);
-		pp = rewrite_present(stock, fullscreen, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(stock, fullscreen, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.windowed == FALSE && pp.fullscreen_refresh_rate == 0 && pp.multi_sample_type == 4); // not the desktop size: untouched
 		auto native = stock;
 		native.back_buffer_width = 2560;
 		native.back_buffer_height = 1440;
-		pp = rewrite_present(native, fullscreen, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(native, fullscreen, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.windowed == FALSE && pp.fullscreen_refresh_rate == 180);
 		options stock_options;
-		pp = rewrite_present(stock, stock_options, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(stock, stock_options, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(std::memcmp(&pp, &stock, sizeof(pp)) == 0);
+
+		// Exclusive fullscreen against the adapter's mode list (the maintainer's PC: 2560x1440 @ 180 Hz,
+		// the desktop 32-bit; the engine asks for R5G6B5 @ 180, which the adapter doesn't list at that size).
+		{
+			// An invented high-refresh adapter: 32-bit everywhere, 16-bit only at low sizes and 60 Hz.
+			std::vector<d3d8::display_mode> fhd_modes;
+			for (const UINT w : {640u, 800u, 1024u})
+				for (const UINT h : {480u, 600u, 768u})
+					fhd_modes.push_back({w, h, 60, d3d8::format_r5g6b5});
+			for (const UINT w : {640u, 800u, 1024u, 1280u, 1600u, 1920u, 2560u})
+				for (const UINT h : {480u, 600u, 768u, 1024u, 900u, 1080u, 1440u})
+				{
+					fhd_modes.push_back({w, h, 60, d3d8::format_x8r8g8b8});
+					fhd_modes.push_back({w, h, 144, d3d8::format_x8r8g8b8});
+				}
+			fhd_modes.push_back({2560, 1440, 180, d3d8::format_x8r8g8b8}); // the desktop mode
+
+			CHECK(listed_in(fhd_modes, 2560, 1440, d3d8::format_x8r8g8b8) && !listed_in(adapter, 2560, 1440, d3d8::format_r5g6b5));
+			CHECK(size_listed(fhd_modes, 1920, 1080) && !size_listed(adapter, 3840, 2160));
+			CHECK(pick_refresh(fhd_modes, 2560, 1440, d3d8::format_x8r8g8b8, 180, 180) == 180u);
+			CHECK(pick_refresh(fhd_modes, 1920, 1080, d3d8::format_x8r8g8b8, 180, 180) == 144u); // nearest the desktop's
+			CHECK(pick_refresh(fhd_modes, 1920, 1080, d3d8::format_x8r8g8b8, 0, 180) == 144u);   // the nearest the adapter lists, not 60
+			CHECK(!pick_refresh(fhd_modes, 9999, 9999, d3d8::format_x8r8g8b8, 60, 180).has_value());
+
+			// The game's request at the desktop size: 16-bit @ the desktop refresh -> 32-bit, refresh kept.
+			auto ask = native;
+			ask.back_buffer_format = d3d8::format_r5g6b5;
+			pp = rewrite_present(ask, fullscreen, desktop_mode, fhd_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
+			CHECK(pp.back_buffer_format == d3d8::format_x8r8g8b8 && pp.fullscreen_refresh_rate == 180);
+			CHECK(pp.back_buffer_width == 2560 && pp.back_buffer_height == 1440 && pp.multi_sample_type == 4);
+			CHECK(notes.find("back buffer format") != std::string::npos);
+
+			// A mode the adapter has only in 16-bit keeps the requested format (the list outranks CheckDeviceType).
+			auto low = stock;
+			low.back_buffer_width = 640;
+			low.back_buffer_height = 480;
+			low.back_buffer_format = d3d8::format_r5g6b5;
+			low.fullscreen_refresh_rate = 60;
+			pp = rewrite_present(low, fullscreen, desktop_mode, fhd_modes, msaa_ok, format_ok, [](DWORD) { return false; }, msaa_no, interval_ok, notes);
+			CHECK(pp.back_buffer_format == d3d8::format_r5g6b5 && pp.fullscreen_refresh_rate == 60 && pp.multi_sample_type == d3d8::multisample_none);
+
+			// A resolution the adapter lacks entirely -> the desktop mode.
+			auto absent = stock;
+			absent.back_buffer_width = 3840;
+			absent.back_buffer_height = 2160;
+			pp = rewrite_present(absent, fullscreen, desktop_mode, fhd_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
+			CHECK(pp.back_buffer_width == 2560 && pp.back_buffer_height == 1440 && pp.fullscreen_refresh_rate == 180 &&
+			      pp.back_buffer_format == d3d8::format_x8r8g8b8);
+
+			// 8x FSAA unsupported at the format -> the highest level the adapter offers; nothing at 2x -> off.
+			const auto fsaa_up_to_4 = [](DWORD, DWORD type) { return type <= 4; };
+			auto eight = ask;
+			eight.multi_sample_type = 8;
+			pp = rewrite_present(eight, fullscreen, desktop_mode, fhd_modes, msaa_ok, format_ok, format_ok, fsaa_up_to_4, interval_ok, notes);
+			CHECK(pp.back_buffer_format == d3d8::format_x8r8g8b8 && pp.multi_sample_type == 4);
+			CHECK(notes.find("is the most") != std::string::npos);
+			pp = rewrite_present(eight, fullscreen, desktop_mode, fhd_modes, msaa_ok, format_ok, format_ok, msaa_no, interval_ok, notes);
+			CHECK(pp.multi_sample_type == d3d8::multisample_none);
+
+			// A sound request changes nothing but the refresh Direct3D would otherwise under-pick (0 ->
+			// the listed rate nearest the desktop's), and the VSync block below still applies.
+			pp = rewrite_present(native, fullscreen, desktop_mode, fhd_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
+			CHECK(pp.back_buffer_format == d3d8::format_x8r8g8b8 && pp.fullscreen_refresh_rate == 180 && pp.multi_sample_type == 4);
+			CHECK(notes.find("refresh rate") != std::string::npos);
+		}
+
+		// FSAA in every shell: the boot switch asks for 8 samples for the panel's 8x without knowing the
+		// adapter (display_settings_rules.hpp), so each mode clamps to the highest level offered at the
+		// device's format instead of failing the device or dropping multisampling altogether.
+		{
+			const auto up_to_4 = [](DWORD, DWORD type) { return type <= 4; };
+			auto eight = stock;
+			eight.multi_sample_type = 8;
+			pp = rewrite_present(eight, windowed, desktop_mode, no_modes, up_to_4, format_ok, format_ok, msaa_no, interval_ok, notes);
+			CHECK(pp.windowed == TRUE && pp.multi_sample_type == 4 && notes.find("4 is the most") != std::string::npos);
+			pp = rewrite_present(eight, borderless, desktop_mode, no_modes, msaa_no, format_ok, format_ok, msaa_ok, interval_ok, notes);
+			CHECK(pp.windowed == TRUE && pp.multi_sample_type == d3d8::multisample_none && notes.find("off") != std::string::npos);
+			options game_mode; // no [Display] Mode: the engine's own exclusive fullscreen
+			pp = rewrite_present(eight, game_mode, desktop_mode, no_modes, msaa_no, format_ok, format_ok, up_to_4, interval_ok, notes);
+			CHECK(pp.windowed == FALSE && pp.multi_sample_type == 4 && pp.back_buffer_width == 1920 && pp.back_buffer_format == d3d8::format_x8r8g8b8);
+			eight.multi_sample_type = 6;
+			pp = rewrite_present(eight, game_mode, desktop_mode, no_modes, msaa_no, format_ok, format_ok, [](DWORD, DWORD type) { return type != 6; }, interval_ok, notes);
+			CHECK(pp.multi_sample_type == 4);
+			eight.multi_sample_type = 8;
+			pp = rewrite_present(eight, fullscreen, desktop_mode, no_modes, msaa_no, format_ok, format_ok, up_to_4, interval_ok, notes);
+			CHECK(pp.multi_sample_type == 4); // Mode=fullscreen without the adapter's list clamps too
+			pp = rewrite_present(eight, game_mode, desktop_mode, no_modes, msaa_no, format_ok, format_ok, msaa_ok, interval_ok, notes);
+			CHECK(std::memcmp(&pp, &eight, sizeof(pp)) == 0 && notes.empty()); // supported: untouched
+		}
+
+		// The display-settings patches: the boot FSAA switch and the failure-path wipe. The guards are
+		// checked read-only before the transaction and may cover the patch sites; the writes carry
+		// their own original bytes. Decoded and checked for shape here, and against XMen2.exe when a
+		// copy is at hand: the guards, every write's original bytes, and the whole install run through
+		// the same transaction the game uses, on the mapped image.
+		{
+			using namespace display_settings_rules;
+			CHECK(std::size(guards) == 10);
+			{
+				std::set<std::uint32_t> addresses;
+				bool guards_ok = true;
+				for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
+				CHECK(guards_ok);
+			}
+			const auto table = 0x69000000u, stub = table + 5 * 4;
+			const auto table_bytes = fsaa_table_bytes(stub);
+			CHECK(table_bytes.size() == 20);
+			CHECK(std::memcmp(table_bytes.data() + 16, &stub, 4) == 0);
+			for (unsigned i = 0; i < 4; ++i)
+			{
+				const std::uint32_t stock_case = i == 0 ? fsaa_case_off : i == 1 ? fsaa_case_2x : i == 2 ? fsaa_case_4x : fsaa_case_6x;
+				CHECK(std::memcmp(table_bytes.data() + 4 * i, &stock_case, 4) == 0); // the stock cases, in the stock order
+			}
+			const auto case_bytes = fsaa_case_8x_bytes(engine_param_cell, multi_sample_type_name, fsaa_switch_join, stub);
+			CHECK(case_bytes.size() == 20);
+			// The stock 6x case's bytes up to its jump (push 6 / push name / push 4 / call [cell]) with 8
+			// for 6: the same three pushes, the same call.
+			{
+				std::vector<std::uint8_t> six(15);
+				for (std::size_t i = 0; i < six.size(); ++i) six[i] = limits_rules::hex_byte(guards[5].hex, i);
+				CHECK(guards[5].va == fsaa_case_6x && six[0] == 0x6a && six[1] == 0x06);
+				six[1] = 0x08;
+				CHECK(std::equal(six.begin(), six.end(), case_bytes.begin()));
+			}
+			CHECK(case_bytes[15] == 0xe9);
+			const auto rel = *reinterpret_cast<const std::int32_t*>(case_bytes.data() + 16);
+			CHECK(static_cast<std::uint32_t>(stub + 20 + rel) == fsaa_switch_join); // the jmp lands on the join
+			const auto fsaa = fsaa_switch_writes(table);
+			CHECK(fsaa.size() == 2 && fsaa[0].address == fsaa_switch_cmp);
+			CHECK(fsaa[0].before == std::vector<std::uint8_t>({0x83, 0xf8, 0x03}) && fsaa[0].after == std::vector<std::uint8_t>({0x83, 0xf8, 0x04}));
+			CHECK(fsaa[1].address == fsaa_table_operand && fsaa[1].before == std::vector<std::uint8_t>({0x40, 0xb2, 0x5f, 0x00}) &&
+			      std::memcmp(fsaa[1].after.data(), &table, 4) == 0);
+			const auto log_stub = 0x61000000u;
+			const auto wipe = wipe_guard_writes(log_stub);
+			CHECK(wipe.size() == 4);
+			CHECK(wipe[0].address == wipe_resolution_call_a && wipe[0].before == std::vector<std::uint8_t>({0xe8, 0x95, 0x0f, 0x02, 0x00}));
+			CHECK(wipe[0].after[0] == 0xe8);
+			const auto call_rel = *reinterpret_cast<const std::int32_t*>(wipe[0].after.data() + 1);
+			CHECK(static_cast<std::uint32_t>(wipe[0].address + 5 + call_rel) == log_stub); // rerouted to the log stub
+			CHECK(wipe[1].address == wipe_settings_call_a && wipe[1].after == std::vector<std::uint8_t>(5, 0x90)); // the settings save is NOPed
+			CHECK(wipe[2].address == wipe_resolution_call_b && wipe[3].address == wipe_settings_call_b);
+			CHECK(wipe[3].after == std::vector<std::uint8_t>(5, 0x90));
+
+			// V-1: the writes never overlap one another (the transaction reads each one back after all
+			// are written), every written byte sits inside a guard, and every write's original bytes
+			// agree with the guards over them. A guard fed to the transaction as a before==after write
+			// reads a patched byte back, fails the readback and rolls the whole set back (19b2e76).
+			std::vector<xml1_hook_transaction::patch> writes = fsaa;
+			writes.insert(writes.end(), wipe.begin(), wipe.end());
+			{
+				bool disjoint = true, described = true, agree = true;
+				for (std::size_t i = 0; i < writes.size(); ++i)
+				{
+					for (std::size_t j = i + 1; j < writes.size(); ++j)
+						disjoint &= writes[i].address + writes[i].before.size() <= writes[j].address || writes[j].address + writes[j].before.size() <= writes[i].address;
+					for (std::size_t k = 0; k < writes[i].before.size(); ++k)
+					{
+						const auto va = writes[i].address + static_cast<std::uint32_t>(k);
+						bool inside = false;
+						for (const auto& g : guards)
+						{
+							if (va >= g.va && va < g.va + limits_rules::hex_size(g.hex))
+							{
+								inside = true;
+								agree &= limits_rules::hex_byte(g.hex, va - g.va) == writes[i].before[k];
+							}
+						}
+						described &= inside;
+					}
+				}
+				CHECK(disjoint && described && agree);
+			}
+
+			if (const auto exe = game_executable())
+			{
+				DWORD image_size = 0;
+				auto* const image = map_image(*exe, image_size);
+				CHECK(image != nullptr);
+				if (image)
+				{
+					// The install's transaction on the mapped image (addresses are the retail ones).
+					struct image_memory
+					{
+						std::uint8_t* image;
+						DWORD size;
+						std::uint8_t* at(const std::uint32_t va, const std::size_t n) const
+						{
+							return va >= image_base && va - image_base + n <= size ? image + (va - image_base) : nullptr;
+						}
+						bool read(const std::uint32_t va, void* out, const std::size_t n) { const auto p = at(va, n); if (!p) return false; std::memcpy(out, p, n); return true; }
+						bool write(const std::uint32_t va, const void* in, const std::size_t n) { const auto p = at(va, n); if (!p) return false; std::memcpy(p, in, n); return true; }
+						bool acquire(std::uint32_t, std::uint32_t& old) { old = 0; return true; }
+						bool restore(std::uint32_t, std::uint32_t) { return true; }
+						bool flush() { return true; }
+					} memory{image, image_size};
+					const auto guards_match = [&] {
+						for (const auto& g : guards)
+						{
+							const auto p = memory.at(g.va, limits_rules::hex_size(g.hex));
+							if (!p || !limits_rules::matches(p, g.hex)) return false;
+						}
+						return true;
+					};
+					CHECK(guards_match());
+					bool corrupt_refused = true;
+					for (const auto& g : guards)
+						for (std::size_t i = 0; i < limits_rules::hex_size(g.hex); ++i)
+						{
+							auto* const byte = memory.at(g.va + static_cast<std::uint32_t>(i), 1);
+							*byte ^= 1;
+							corrupt_refused &= !guards_match();
+							*byte ^= 1;
+						}
+					CHECK(corrupt_refused);
+					// The 19b2e76 shape - the guards passed as before==after writes next to the patches -
+					// rolls itself back on the retail bytes; the patches on their own commit.
+					{
+						auto with_guards = writes;
+						for (const auto& g : guards)
+						{
+							std::vector<std::uint8_t> bytes(limits_rules::hex_size(g.hex));
+							for (std::size_t i = 0; i < bytes.size(); ++i) bytes[i] = limits_rules::hex_byte(g.hex, i);
+							with_guards.push_back({g.va, bytes, bytes});
+						}
+						bool safe = false;
+						CHECK(!xml1_hook_transaction::apply(memory, with_guards, &safe) && safe && guards_match());
+					}
+					bool safe = false;
+					CHECK(xml1_hook_transaction::apply(memory, writes, &safe) && safe);
+					for (const auto& w : writes) CHECK(std::memcmp(memory.at(w.address, w.after.size()), w.after.data(), w.after.size()) == 0);
+					CHECK(!guards_match()); // patched now: a second install would refuse
+					VirtualFree(image, 0, MEM_RELEASE);
+				}
+			}
+			else
+			{
+				std::printf("  skip  no XMen2.exe to check the display-settings patch sites against\n");
+			}
+		}
 
 		// VSync. Fullscreen (the game's own mode and Mode=fullscreen): the presentation interval,
 		// when the adapter offers it. Windowed: the COPY_VSYNC swap effect, one back buffer, no
 		// multisampling; off = the discard swap effect.
 		options vsync_on;
 		vsync_on.vsync = true;
-		pp = rewrite_present(stock, vsync_on, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(stock, vsync_on, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.windowed == FALSE && pp.fullscreen_presentation_interval == d3d8::present_interval_one && pp.multi_sample_type == 4);
 		CHECK(notes.find("vsync: on") != std::string::npos);
 		options vsync_off;
 		vsync_off.vsync = false;
 		auto synced = stock;
 		synced.fullscreen_presentation_interval = d3d8::present_interval_one; // alchemy.ini presentationInterval=1
-		pp = rewrite_present(synced, vsync_off, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(synced, vsync_off, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.fullscreen_presentation_interval == d3d8::present_interval_immediate);
-		pp = rewrite_present(stock, vsync_off, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(stock, vsync_off, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(std::memcmp(&pp, &stock, sizeof(pp)) == 0 && notes.empty()); // already immediate
-		pp = rewrite_present(stock, vsync_on, desktop_mode, msaa_ok, format_ok, [](UINT) { return false; }, notes);
+		pp = rewrite_present(stock, vsync_on, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, [](UINT) { return false; }, notes);
 		CHECK(pp.fullscreen_presentation_interval == 0x80000000 && notes.find("doesn't offer") != std::string::npos);
 		vsync_on.window_mode = mode::fullscreen;
-		pp = rewrite_present(native, vsync_on, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(native, vsync_on, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.fullscreen_refresh_rate == 180 && pp.fullscreen_presentation_interval == d3d8::present_interval_one);
 		// In a window, on = paced at the refresh rate by the limiter (never copy_vsync), the device unchanged.
 		vsync_on.window_mode = mode::borderless;
-		pp = rewrite_present(stock, vsync_on, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(stock, vsync_on, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.windowed == TRUE && pp.swap_effect == d3d8::swap_discard && pp.multi_sample_type == 4 && pp.fullscreen_presentation_interval == d3d8::present_interval_default);
 		CHECK(notes.find("paced at the desktop's refresh rate") != std::string::npos);
 		vsync_off.window_mode = mode::windowed;
-		pp = rewrite_present(copy_vsync, vsync_off, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(copy_vsync, vsync_off, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.swap_effect == d3d8::swap_discard && pp.multi_sample_type == 4); // the engine's own windowedVSync undone
-		pp = rewrite_present(stock, vsync_off, desktop_mode, msaa_ok, format_ok, interval_ok, notes);
+		pp = rewrite_present(stock, vsync_off, desktop_mode, no_modes, msaa_ok, format_ok, format_ok, msaa_ok, interval_ok, notes);
 		CHECK(pp.swap_effect == d3d8::swap_discard && notes.empty());
 
 		// Window placement: the engine asks for a maximised popup at 0,0 (style 0x85000000).
@@ -2734,6 +2991,8 @@ namespace
 		bool forced_teams() { return forced; }
 		bool add_hero_on() { return add_on; }
 		bool join_hero_on() { return join_on; }
+		bool solo_on = false;
+		bool solo_mode_on() { return solo_on; }
 		std::optional<int> hero_index(const std::string& name) { const auto f = indices.find(name); return f == indices.end() ? 0 : f->second; }
 		std::optional<bool> herostat(const int index) { return herostats.count(index) != 0; }
 		std::optional<std::string> slot(const int i) { return slots[static_cast<std::size_t>(i)]; }
@@ -3058,6 +3317,16 @@ namespace
 			e.forced = true;
 			CHECK(fake_engine::as_int(xml2fix_feature(e, &u.args)) == 0 && e.last().find("not a feature") != std::string::npos);
 			e.add_on = false;
+			// solomode: whether solo_mode's AI sites installed, whatever ForcedTeams says.
+			script_call solo(vtables);
+			solo.text("SoloMode");
+			e.solo_on = false;
+			CHECK(fake_engine::as_int(xml2fix_feature(e, &solo.args)) == 0);
+			e.solo_on = true;
+			e.forced = false;
+			CHECK(fake_engine::as_int(xml2fix_feature(e, &solo.args)) == 1 && e.logged("xml2fixFeature(\"SoloMode\") -> 1"));
+			e.solo_on = false;
+			e.forced = true;
 		}
 
 		// seatParty: exactly these heroes, compacted; all or nothing.
@@ -3529,8 +3798,11 @@ namespace
 		using namespace forced_teams_rules;
 		std::printf("forced parties ([Game] ForcedTeams, AddHero and JoinHero: seatParty, setSkinset, pushParty, popParty, addHero, joinHero, addSkillPoints)\n");
 
-		// The functions: ten, signatures the game's compiler knows, room in its tree.
-		CHECK(functions.size() == 11 && table_count == 0x12c && builtin_count + table_count == 319 && table_count + builtin_count <= tree_capacity);
+		// The functions: twelve (setSoloMode the last), signatures the game's compiler knows, room in its tree - the tree is
+		// full now (320 names).
+		CHECK(functions.size() == 12 && table_count == 0x12d && builtin_count + table_count == 320 && table_count + builtin_count <= tree_capacity);
+		CHECK(std::string_view(functions[static_cast<std::size_t>(function::solo_mode)].name) == "setSoloMode" &&
+		      std::string_view(functions[static_cast<std::size_t>(function::solo_mode)].args) == "ai");
 		bool signatures_ok = true;
 		for (const auto& f : functions)
 		{
@@ -3543,7 +3815,7 @@ namespace
 		CHECK(std::string_view(functions[static_cast<std::size_t>(function::join_hero)].name) == "joinHero" && std::string_view(functions[static_cast<std::size_t>(function::join_hero)].ret) == "i" &&
 		      std::string_view(functions[static_cast<std::size_t>(function::join_hero)].args) == "s");
 		const auto writes = registration_writes(0x12345678);
-		CHECK(writes[0].va == 0x49fe31 && writes[0].value == 0x12345678 && writes[1].va == 0x49fe36 && writes[1].value == 0x12c && writes[0].size == 4 && writes[1].size == 4);
+		CHECK(writes[0].va == 0x49fe31 && writes[0].value == 0x12345678 && writes[1].va == 0x49fe36 && writes[1].value == 0x12d && writes[0].size == 4 && writes[1].size == 4);
 		CHECK(std::string_view(functions[static_cast<std::size_t>(function::skill_points)].name) == "addSkillPoints" && std::string_view(functions[static_cast<std::size_t>(function::skill_points)].ret) == "n" &&
 		      std::string_view(functions[static_cast<std::size_t>(function::skill_points)].args) == "ai" && skill_points_max == 20 && grant_max >= 4);
 
@@ -3577,6 +3849,7 @@ namespace
 		CHECK(!chosen.registered && !chosen.join_hero && chosen.notes.size() == 1 && chosen.notes[0].find("JoinHero is set but ForcedTeams isn't") != std::string::npos);
 		CHECK(feature_named("forcedteams") == feature::forced_teams && feature_named(" AddHero") == feature::add_hero && feature_named("JoinHero") == feature::join_hero &&
 		      feature_named("SkillPoints") == feature::skill_points && !feature_named("forced_teams") && !feature_named(""));
+		CHECK(feature_named(" solomode ") == feature::solo_mode);
 
 		// Names: cleaned, repeats dropped, compacted.
 		CHECK((split_heroes("magma,,x") == std::vector<std::string>{"magma", "x"}));
@@ -3736,7 +4009,7 @@ namespace
 			}
 		}
 		CHECK(changed == 5 && outside == 0); // 0x0068a908 -> 0x12345678, 0x121 -> 0x12a
-		CHECK(limits_rules::matches(at(registration), "6878563412682c010000e8318903008bc8e85a770300c3"));
+		CHECK(limits_rules::matches(at(registration), "6878563412682d010000e8318903008bc8e85a770300c3"));
 		std::memcpy(image, before.data(), image_size);
 
 		// The strings the handlers send are the game's own.
@@ -5762,6 +6035,57 @@ namespace
 		CHECK(!xtraction_shop_rules::should_add(true, false));
 		CHECK(xtraction_shop_rules::should_add(true, true));
 		CHECK(xtraction_shop_rules::finalize_call + 5 == 0x4a6d38);
+		{
+			// #63: the services bitmask. 0/1 keep 1.4.0's meaning (Forge only); campaign characters gate DR and Healer.
+			using namespace xtraction_shop_rules;
+			const auto& load_o = options[0];
+			const auto& dr_o = options[1];
+			const auto& healer_o = options[2];
+			const auto& forge_o = options[3];
+			CHECK(load_o.service == load && dr_o.service == danger_room && healer_o.service == healer && forge_o.service == forge);
+			CHECK(load_o.label == 2006 && dr_o.label == 2003 && healer_o.label == 2004 && forge_o.label == 2005);
+			CHECK(!offered(true, 1, load_o, true) && !offered(true, 1, dr_o, true) && !offered(true, 1, healer_o, true));
+			CHECK(offered(true, 1, forge_o, false));                     // 1.4.0 builds: Forge on the builder's permission
+			CHECK(!offered(true, forge | forge_campaign, forge_o, false) && offered(true, forge | forge_campaign, forge_o, true));
+			CHECK(!needs_campaign(forge, forge_o) && needs_campaign(forge | forge_campaign, forge_o) && needs_campaign(0, healer_o));
+			CHECK(capability == 0x3f && (capability & no_change_team) && (capability & forge_campaign));
+			CHECK(!load_disabled(false, 4) && !load_disabled(true, 1) && load_disabled(true, 2));
+			// Online with other players, a campaign-gated option is greyed, not left out: every peer lists the same options.
+			CHECK(list_option(true, danger_room, dr_o, false, false) == listing::omitted);
+			CHECK(list_option(true, danger_room, dr_o, false, true) == listing::greyed);
+			CHECK(list_option(true, danger_room, dr_o, true, true) == listing::shown);
+			CHECK(list_option(true, load, load_o, false, true) == listing::greyed && list_option(true, load, load_o, false, false) == listing::shown);
+			CHECK(list_option(true, forge, forge_o, false, true) == listing::shown);           // 1.4.0 Forge: no campaign check
+			CHECK(list_option(true, forge | forge_campaign, forge_o, false, true) == listing::greyed);
+			CHECK(list_option(true, healer, dr_o, true, true) == listing::omitted);             // not offered by the point
+			CHECK(list_option(false, 0xf, load_o, true, false) == listing::omitted);
+			CHECK(revival_cost_rules::price_factor(0) == 1 && revival_cost_rules::price_factor(-3) == 1 && revival_cost_rules::price_factor(24) == 24);
+			CHECK(0x4a6c7a + 2 + to_save == 0x4a6cf0 && 0x4a6c7a + 2 + to_change_team == 0x4a6ca9);
+			CHECK(!offered(false, 0xf, load_o, true) && !offered(false, 0xf, forge_o, true));
+			CHECK(offered(true, load, load_o, false));                    // Load needs no character
+			CHECK(!offered(true, danger_room, dr_o, false) && offered(true, danger_room, dr_o, true));
+			CHECK(!offered(true, healer, healer_o, false) && offered(true, healer, healer_o, true));
+			CHECK(!offered(true, healer | load | forge, dr_o, true));    // a lite point without its Danger Room flag
+			CHECK(std::string_view(dr_o.campaign) == "storm" && std::string_view(healer_o.campaign) == "healer" && std::string_view(forge_o.campaign) == "forge" && !load_o.campaign);
+			int bits = 0;
+			for (const auto& o : options) { CHECK((bits & o.service) == 0); bits |= o.service; }
+			CHECK(bits == 0xf);
+			CHECK(revival_cost_rules::original_price(1) == 200 && revival_cost_rules::original_price(10) == 20000);
+			CHECK(revival_cost_rules::retail_price(1) == 200 && revival_cost_rules::retail_price(10) == 200 && revival_cost_rules::retail_price(20) == 800);
+			const auto jmp = revival_cost_rules::jump_to(0x10001000);
+			std::uint32_t rel = 0;
+			std::memcpy(&rel, jmp.data() + 1, 4);
+			CHECK(jmp[0] == 0xe9 && revival_cost_rules::cost + 5 + rel == 0x10001000);
+		}
+		{
+			using namespace danger_room_gate_rules;
+			CHECK(disable(true, false) && !disable(true, true) && !disable(false, false) && !disable(false, true));
+			CHECK(valid_item("button3") && valid_item("label_option06") && !valid_item("") && !valid_item("button 3") && !valid_item("a;b"));
+			CHECK(!valid_item("abcdefghijklmnopqrstuvwxyz0123456"));
+			CHECK(first_step_slot == main_menu_vtable + 0x10);
+			CHECK(registry_load_slot == registry_vtable + 0xa4);
+			CHECK(mirror(true, false) && !mirror(true, true) && !mirror(false, false) && !mirror(false, true));
+		}
 		using namespace xtract_rules;
 		std::printf("[Game] Xtract (no world map at an Xtraction Point)\n");
 
@@ -5803,6 +6127,17 @@ namespace
 		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
 		CHECK(mismatch == nullptr);
 		CHECK(std::memcmp(at(choice_block), retail_op.data(), retail_op.size()) == 0);
+		for (const auto& g : xtraction_shop_rules::net_guards) CHECK(limits_rules::matches(at(g.va), g.hex));
+		for (const auto& g : xtraction_shop_rules::change_team_guards) CHECK(limits_rules::matches(at(g.va), g.hex));
+		for (const auto& g : revival_cost_rules::guards) CHECK(limits_rules::matches(at(g.va), g.hex));
+		for (const auto& g : danger_room_gate_rules::guards)
+		{
+			CHECK(limits_rules::matches(at(g.va), g.hex));
+			const auto first = at(g.va)[0];
+			at(g.va)[0] ^= 1;
+			CHECK(!limits_rules::matches(at(g.va), g.hex));
+			at(g.va)[0] = first;
+		}
 		for (const auto& g : xtraction_shop_rules::guards)
 		{
 			CHECK(limits_rules::matches(at(g.va), g.hex));
@@ -5891,6 +6226,58 @@ namespace
 			if (mapped) { CHECK(first_mismatch(mapped) == nullptr); VirtualFree(mapped, 0, MEM_RELEASE); }
 		}
 		else std::printf("  skip  no executable for retail guard comparison\n");
+	}
+
+	// [Input] CutsceneMouse (src/cutscene_mouse_rules.hpp): the guards cover the twelve bytes it replaces, the
+	// replacement is a call to the fix's test plus a nop of the same length with the game's test / je after it,
+	// and the test is "locked or a cinematic".
+	void check_cutscene_mouse_rules()
+	{
+		using namespace cutscene_mouse_rules;
+		std::printf("[Input] CutsceneMouse (the mouse stops in a cinematic as the keys and pads do)\n");
+
+		bool guards_ok = true;
+		std::set<DWORD> addresses;
+		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
+		CHECK(guards_ok);
+		CHECK(guards[0].va == site && limits_rules::hex_size(guards[0].hex) == site_size + 4);
+		// The replaced span is a call rel32, mov edx,[eax], mov ecx,eax, call [edx+0x34]; test al,al / je follow.
+		const auto g0 = [&](const DWORD i) { return limits_rules::hex_byte(guards[0].hex, i); };
+		CHECK(g0(0) == 0xe8 && g0(5) == 0x8b && g0(6) == 0x10 && g0(7) == 0x8b && g0(8) == 0xc8 && g0(9) == 0xff && g0(10) == 0x52 &&
+		      g0(11) == controls_locked_slot && g0(12) == 0x84 && g0(13) == 0xc0 && g0(14) == 0x74);
+		const DWORD retail_call = g0(1) | (g0(2) << 8) | (g0(3) << 16) | (static_cast<DWORD>(g0(4)) << 24);
+		CHECK(site + 5 + retail_call == game_getter);
+
+		// A test at an invented address: the call reaches it and the rest is one 7-byte nop.
+		constexpr DWORD invented = 0x10012340;
+		const auto bytes = patch_bytes(invented);
+		CHECK(bytes.size() == site_size && bytes[0] == 0xe8 && site + 5 + operand_at(bytes.data() + 1, 4) == invented);
+		CHECK(bytes[5] == 0x0f && bytes[6] == 0x1f && bytes[7] == 0x80 && bytes[8] == 0 && bytes[9] == 0 && bytes[10] == 0 && bytes[11] == 0);
+		const auto below = patch_bytes(0x00401000); // a target below the site: the rel32 wraps negative
+		CHECK(site + 5 + operand_at(below.data() + 1, 4) == 0x00401000u);
+
+		CHECK(!mouse_ignored(false, false) && mouse_ignored(true, false) && mouse_ignored(false, true) && mouse_ignored(true, true));
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the mouse handler's bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const guard* mismatch = first_mismatch(image);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", mismatch->va, mismatch->what);
+		CHECK(mismatch == nullptr);
+		const auto at = [&](const DWORD va) { return image + (va - image_base); };
+		// The vtable slots name the functions the guards check.
+		CHECK(operand_at(at(game_vtable + controls_locked_slot), 4) == controls_locked && operand_at(at(hud_vtable + cinematic_slot), 4) == cinematic);
+		// The keyboard's hero update (0x425500) asks the same two: the HUD's vt+0xec at 0x425528, the game's vt+0x34 at 0x425582.
+		CHECK(at(0x425528)[0] == 0xe8 && 0x425528 + 5 + operand_at(at(0x425528) + 1, 4) == hud_getter && at(0x425531)[0] == 0xff && operand_at(at(0x425533), 4) == cinematic_slot);
+		CHECK(at(0x425582)[0] == 0xe8 && 0x425582 + 5 + operand_at(at(0x425582) + 1, 4) == game_getter && at(0x42558b)[2] == controls_locked_slot);
+		VirtualFree(image, 0, MEM_RELEASE);
 	}
 
 	void check_review_menu_rules()
@@ -7514,6 +7901,95 @@ namespace
 		__except (EXCEPTION_EXECUTE_HANDLER)
 		{
 			return -2;
+		}
+	}
+
+	// The pad bindings' tables (src/pad_bindings.cpp): the game's default action table and the three
+	// Defaults 1/2/3 preset tables must be the known 42 x 0x94 layout, and the stock presets carry no
+	// gamepad binding and lock no slot the fix writes - otherwise "reset to defaults" erases the pad
+	// layout again (issue #9). Checked against the retail XMen2.exe when a copy is at hand.
+	void check_pad_bindings_rules()
+	{
+		std::printf("pad bindings rules (the Defaults presets keep the pad layout)\n");
+
+		constexpr DWORD image_base = 0x400000;
+		constexpr DWORD default_table_va = 0x6ee1f0;
+		constexpr std::array<DWORD, 3> preset_table_vas{0x6e9918, 0x6eb160, 0x6ec9a8};
+		constexpr std::array<DWORD, 3> preset_names_vas{0x6e9940, 0x6eb188, 0x6ec9d0}; // base + 0x28: the copy loop's lea operand
+		constexpr size_t action_count = 42, action_size = 0x94, bindings_offset = 0x30, locks_offset = 0x80;
+		constexpr int players = 4, slots = 2;
+		constexpr DWORD keyboard_forward = (1 << 16) | 0x11;
+		constexpr DWORD defaults_callback_operand = 0x218941; // lea ebx, [ecx + 0x6e9940]
+
+		CHECK(default_table_va - image_base == 0x2ee1f0);
+		CHECK(preset_table_vas[1] - preset_table_vas[0] == 0x1848 && preset_table_vas[2] - preset_table_vas[1] == 0x1848);
+		CHECK(action_count * action_size == 0x1848);
+
+		if (const auto exe = game_executable())
+		{
+			const auto identity = [&](const DWORD va, const char* what) {
+				const auto at = file_offset(*exe, va - image_base);
+				CHECK(at.has_value() && *at + 2 * action_size <= exe->size());
+				if (at)
+				{
+					CHECK(exe->compare(*at, 8, std::string("Forward\0", 8)) == 0);
+					CHECK(exe->compare(*at + action_size, 9, std::string("Backward\0", 9)) == 0);
+					const DWORD forward = *reinterpret_cast<const DWORD*>(exe->data() + *at + bindings_offset);
+					CHECK(forward == keyboard_forward);
+				}
+				(void)what;
+			};
+			identity(default_table_va, "default table");
+			for (const auto va : preset_table_vas)
+			{
+				identity(va, "preset");
+			}
+
+			// The stock presets: no gamepad binding anywhere, and the same per-slot lock flags as the
+			// default table, so patch_table fills exactly the slots it fills there (player 1's slot 1,
+			// players 2-4's slot 0, both unlocked for the layout's actions).
+			const auto locks_at = file_offset(*exe, default_table_va - image_base);
+			CHECK(locks_at.has_value() && *locks_at + action_count * action_size <= exe->size());
+			for (const auto va : preset_table_vas)
+			{
+				const auto at = file_offset(*exe, va - image_base);
+				CHECK(at.has_value() && *at + action_count * action_size <= exe->size());
+				if (!at || *at + action_count * action_size > exe->size() || !locks_at)
+				{
+					continue;
+				}
+				for (size_t i = 0; i < action_count; ++i)
+				{
+					const auto* entry = exe->data() + *at + i * action_size;
+					const auto* locks = exe->data() + *locks_at + i * action_size;
+					for (int player = 0; player < players; ++player)
+					{
+						for (int slot = 0; slot < slots; ++slot)
+						{
+							const DWORD value = *reinterpret_cast<const DWORD*>(entry + bindings_offset + (player * 5 + slot) * 4);
+							CHECK((value >> 16) < 3); // keyboard, mouse or unbound: never a pad
+							CHECK(entry[locks_offset + player * 5 + slot] == locks[locks_offset + player * 5 + slot]);
+						}
+					}
+				}
+			}
+
+			// The Defaults buttons' copy loop reads the presets at base + 0x28 through this operand.
+			const auto operand = file_offset(*exe, defaults_callback_operand);
+			CHECK(operand.has_value() && *operand + 6 <= exe->size());
+			if (operand)
+			{
+				const std::uint8_t expected[] = {0x8d, 0x99, 0x40, 0x99, 0x6e, 0x00}; // lea ebx, [ecx + preset_names_vas[0]]
+				CHECK(std::memcmp(exe->data() + *operand, expected, sizeof(expected)) == 0);
+				for (size_t i = 0; i < preset_names_vas.size(); ++i)
+				{
+					CHECK(preset_names_vas[i] - preset_table_vas[i] == 0x28);
+				}
+			}
+		}
+		else
+		{
+			std::printf("  skip  no XMen2.exe to check the tables against\n");
 		}
 	}
 
@@ -9601,6 +10077,686 @@ namespace
 		}
 	}
 
+	// [Game] DoubleHeal=0 (double_heal_rules.hpp): the guards on their own (each branch inside its guard), then, when a
+	// copy of XMen2.exe is at hand, every guard against it and the two branch bytes.
+	void check_double_heal_rules()
+	{
+		using namespace double_heal_rules;
+		std::printf("[Game] DoubleHeal (X-Men Legends 1's packs never heal double)\n");
+		bool ok = true, health = false, energy = false;
+		for (const auto& g : guards)
+		{
+			ok &= limits_rules::valid_hex(g.hex) && g.what && *g.what;
+			const DWORD end = g.va + static_cast<DWORD>(limits_rules::hex_size(g.hex));
+			health |= g.va <= health_branch && health_branch < end;
+			energy |= g.va <= energy_branch && energy_branch < end;
+		}
+		CHECK(ok && health && energy && retail_jne == 0x75 && patched_jmp == 0xeb);
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the pack branches against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		CHECK(first_mismatch(image) == nullptr);
+		CHECK(image[health_branch - limits_rules::image_base] == retail_jne && image[energy_branch - limits_rules::image_base] == retail_jne);
+		// The jump skips exactly the two stores of the double branch: rel8 0x10 lands on the shared continuation.
+		CHECK(image[health_branch + 1 - limits_rules::image_base] == 0x10 && image[energy_branch + 1 - limits_rules::image_base] == 0x10);
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
+	// [Game] PlacementCrush (placement_crush_rules.hpp): the value's rules; the decision on the settle depth; the
+	// guards on their own; then, when a copy of XMen2.exe is at hand, every guard against it and the site.
+	void check_placement_crush_rules()
+	{
+		using namespace placement_crush_rules;
+		std::printf("[Game] PlacementCrush (no crush while an object is settled on the floor)\n");
+		CHECK(parse_rule("xml1").set && parse_rule(" XML1 ; the first game's zones").value == rule::xml1);
+		CHECK(parse_rule("xml2").set && parse_rule("xml2").value == rule::xml2 && !parse_rule("").set && !parse_rule(" ; x").set);
+		for (const char* bad : {"1", "on", "xml", "xml1 xml2"})
+		{
+			const auto c = parse_rule(bad);
+			CHECK(c.set && !c.error.empty() && c.value == rule::xml2);
+		}
+		// Refused only on xml1, only while a settle runs.
+		CHECK(refuse(rule::xml1, 1) && refuse(rule::xml1, 2) && !refuse(rule::xml1, 0) && !refuse(rule::xml1, -1));
+		CHECK(!refuse(rule::xml2, 1) && !refuse(rule::xml2, 0));
+		bool guards_ok = true, site_covered = false, resume_covered = false;
+		for (const auto& g : guards)
+		{
+			guards_ok &= limits_rules::valid_hex(g.hex) && g.what && *g.what;
+			const DWORD end = g.va + static_cast<DWORD>(limits_rules::hex_size(g.hex));
+			site_covered |= g.va <= touch_site && touch_site + retail_touch.size() <= end;
+			resume_covered |= g.va <= touch_resume && touch_resume < end;
+		}
+		bool settle_covered = false, call_covered = false;
+		for (const auto& g : guards)
+		{
+			const DWORD end = g.va + static_cast<DWORD>(limits_rules::hex_size(g.hex));
+			settle_covered |= g.va <= settle_slot && settle_slot + 4 <= end;
+			call_covered |= g.va == settle_call;
+		}
+		CHECK(guards_ok && site_covered && resume_covered && settle_covered && call_covered && touch_resume == touch_site + retail_touch.size());
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the touch slot's bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		CHECK(first_mismatch(image) == nullptr);
+		CHECK(std::memcmp(image + (touch_site - limits_rules::image_base), retail_touch.data(), retail_touch.size()) == 0);
+		std::uint32_t settle = 0;
+		std::memcpy(&settle, image + (settle_slot - limits_rules::image_base), 4);
+		CHECK(settle == settle_call);
+		// The slot is the objects' vt+0xac: in every vtable that holds it, the damage slot 0x497e70 follows or the
+		// class overrides that one.
+		int slots = 0;
+		for (DWORD va = 0x680000; va + 8 <= 0x6f0000; va += 4)
+		{
+			std::uint32_t v = 0;
+			std::memcpy(&v, image + (va - limits_rules::image_base), 4);
+			slots += v == touch_site;
+		}
+		CHECK(slots == 11);
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
+	// [Game] X1Leader (x1_leader_rules.hpp): the sidecar's parse and matching; the decision (native
+	// flag, then the sidecar by stats name); the guards on their own; the bridge and call encodings.
+	void check_x1_leader_rules()
+	{
+		using namespace x1_leader_rules;
+		std::printf("[Game] X1Leader (X-Men Legends 1's stats `leader` bit)\n");
+
+		const auto list = leader_names::parse(
+		    "# a comment\r\n"
+		    "; another comment\r\n"
+		    "  x1_sgt_red  \r\n"
+		    "\tX1_CPL_BLUE\n"
+		    "x1_pvt_green\r\n");
+		CHECK(list.size() == 3);
+		CHECK(list.contains("x1_sgt_red") && list.contains("X1_SGT_RED") && list.contains("x1_cpl_blue") &&
+		      list.contains("X1_PVT_GREEN"));
+		CHECK(!list.contains("") && !list.contains("x1_sgt_re") && !list.contains("x1_sgt_red_x") &&
+		      !list.contains("# a comment") && !list.contains(nullptr));
+		CHECK(leader_names::parse("").size() == 0 && leader_names::parse("# only a comment\n\n").size() == 0);
+		// The stats name field is 0x20 bytes: a name is read only up to its NUL inside the field.
+		char unterminated[name_field + 8];
+		std::memset(unterminated, 'a', sizeof unterminated);
+		unterminated[sizeof unterminated - 1] = '\0';
+		CHECK(!leader_names::parse(std::string(name_field, 'a')).contains(unterminated));
+		CHECK(leader_names::parse(std::string(name_field - 1, 'a')).contains(std::string(name_field - 1, 'A').c_str()));
+		const auto dup = leader_names::parse("x1_sgt_red\nX1_SGT_RED\n");
+		CHECK(dup.size() == 1 && dup.contains("x1_sgt_red"));
+
+		// The decision: the native flag decides alone; otherwise the stats name (+0x35c -> +0x150) must
+		// be in the sidecar; a missing actor or stats pointer is not a leader.
+		alignas(8) std::uint8_t actor[0x400]{};
+		alignas(8) std::uint8_t stats[0x200]{};
+		std::strcpy(reinterpret_cast<char*>(stats + stats_name), "x1_sgt_red");
+		*reinterpret_cast<void**>(actor + actor_stats) = stats;
+		CHECK(decide(actor, list));                        // unflagged, but the sidecar name matches
+		*reinterpret_cast<void**>(actor + actor_stats) = nullptr;
+		CHECK(!decide(actor, list));                       // no stats: never a sidecar leader
+		*reinterpret_cast<void**>(actor + actor_stats) = stats;
+		actor[actor_flags] = native_leader_bit;
+		CHECK(decide(actor, list));                        // the native x3 flag alone
+		actor[actor_flags] = 0;
+		std::strcpy(reinterpret_cast<char*>(stats + stats_name), "x1 nobody");
+		CHECK(!decide(actor, list));                       // unflagged and unlisted
+		std::strcpy(reinterpret_cast<char*>(stats + stats_name), "x1_sgt_red");
+		CHECK(!decide(nullptr, list));                     // no actor at all
+
+		// The guards cover the two retail `test byte ptr [reg+0x3db], 8` sites.
+		CHECK(guards[0].va == 0x43597b && guards[1].va == 0x46e4ed);
+		std::vector<std::uint8_t> image(0x500000, 0x90);
+		CHECK(!limits_rules::matches(image.data() + guards[0].va, guards[0].hex)); // zero-filled: no match
+		auto* pain = image.data() + pain_site_va;
+		const std::array<std::uint8_t, 7> native_pain{0xf6, 0x87, 0xdb, 0x03, 0x00, 0x00, 0x08};
+		std::memcpy(pain, native_pain.data(), native_pain.size());
+		CHECK(limits_rules::matches(pain, guards[0].hex) && !limits_rules::matches(pain, guards[1].hex));
+
+		// The encodings: seven overwritten bytes become jmp + 2 nops (a call would leave its return
+		// address on the game's stack: the bridge leaves through a jmp); the bridge ends in the resume jmp.
+		constexpr auto callback = 0x11111111u;
+		const auto call = jmp_bridge(pain_site_va, 0x22222222u);
+		CHECK(call.size() == 7 && call[0] == 0xe9 && call[5] == 0x90 && call[6] == 0x90);
+		std::uint32_t rel = 0;
+		std::memcpy(&rel, call.data() + 1, 4);
+		CHECK(rel == 0x22222222u - (pain_site_va + 5));
+		const auto b = bridge(0x57, callback);
+		CHECK(b.size() == 1 + 1 + 5 + 2 + 3 + 2 + 1 + 5 && b[0] == 0x60 && b[1] == 0x57 && b[2] == 0xb8);
+		std::memcpy(&rel, b.data() + 3, 4);
+		CHECK(rel == callback);
+		CHECK(b[b.size() - 5] == 0xe9); // the resume jmp's rel32 is filled by the installer
+
+		// The drop rule: listed corpses take the first game's path (the flag set whatever the kind),
+		// x3-flagged ones XML2's kind test, everyone else the probability roll.
+		const auto list2 = leader_names::parse("x1_sgt_red\n");
+		alignas(8) std::uint8_t corpse[0x400]{};
+		alignas(8) std::uint8_t corpse_stats[0x200]{};
+		std::strcpy(reinterpret_cast<char*>(corpse_stats + stats_name), "X1_SGT_RED");
+		*reinterpret_cast<void**>(corpse + actor_stats) = corpse_stats;
+		CHECK(classify(corpse, list2) == drop_path::x1 && drop_target(drop_path::x1) == drop_flag_va);
+		corpse[actor_flags] = native_leader_bit;
+		CHECK(classify(corpse, list2) == drop_path::native && drop_target(drop_path::native) == drop_kind_test_va);
+		corpse[actor_flags] = 0;
+		std::strcpy(reinterpret_cast<char*>(corpse_stats + stats_name), "x1 nobody");
+		CHECK(classify(corpse, list2) == drop_path::none && drop_target(drop_path::none) == drop_skip_va);
+		CHECK(classify(nullptr, list2) == drop_path::none);
+		// XBE 0x713e4-0x71444: pips below the limit -> rand(0,3): HEALTH, ENERGY, XTREME, XTREME; else rand(0,1).
+		CHECK(forced_range(1, 3) == 3 && forced_range(3, 3) == 1 && forced_range(4, 3) == 1);
+		CHECK(forced_slot(0) == 0 && forced_slot(1) == 1 && forced_slot(2) == 2 && forced_slot(3) == 2);
+		CHECK(x1_drop_count == 4);
+		// The encodings: every rel32 lands where the roller continues.
+		const auto rel_at = [](const std::vector<std::uint8_t>& v, std::size_t at, address base) {
+			std::uint32_t r = 0;
+			std::memcpy(&r, v.data() + at, 4);
+			return static_cast<address>(base + at + 4 + r);
+		};
+		const auto cb2 = classify_bridge(0x11111111u);
+		CHECK(cb2.size() == 19 && cb2[1] == 0x56 && cb2[cb2.size() - 2] == 0xff && cb2[cb2.size() - 1] == 0xe0);
+		const auto cnt = count_bridge(0x30000000u, 0x22222222u);
+		CHECK(cnt[0] == 0x80 && cnt[1] == 0x3d && rel_at(cnt, 15, 0x30000000u) == count_store_va &&
+		      rel_at(cnt, 26, 0x30000000u) == count_call_va && cnt[10] == x1_drop_count);
+		const auto pk = pick_bridge(0x30000100u, 0x11111111u);
+		CHECK(pk[1] == 0x57 && rel_at(pk, 22, 0x30000100u) == pick_join_va && rel_at(pk, 35, 0x30000100u) == pick_resume_va);
+		const auto j = jmp_to(count_site_va, 0x30000000u, 6);
+		CHECK(j.size() == 6 && j[0] == 0xe9 && j[5] == 0x90 && rel_at(j, 1, count_site_va) == 0x30000000u);
+	}
+
+	// The death rule's bridge, run: a fake entity whose vtable slot 0x1a4 is death_setter, entered with esi = the entity
+	// as at 0x498407, out through death_landing (which drops the displaced push and returns to invoke_death_bridge).
+	float death_zero = 0.0f;
+	int death_setter_calls = 0;
+	float death_setter_value = -99.0f;
+	void __fastcall death_setter(void* self, void*, const float value)
+	{
+		++death_setter_calls;
+		death_setter_value = value;
+		std::memcpy(static_cast<std::uint8_t*>(self) + 0x27c, &value, 4);
+	}
+	__declspec(naked) void death_landing()
+	{
+		__asm { add esp, 4 }
+		__asm { ret }
+	}
+	__declspec(naked) void __stdcall invoke_death_bridge(void* /*bridge*/, void* /*entity*/)
+	{
+		__asm { push esi }
+		__asm { mov esi, [esp + 0xc] }
+		__asm { mov eax, [esp + 8] }
+		__asm { call eax }
+		__asm { pop esi }
+		__asm { ret 8 }
+	}
+
+	__declspec(noinline) bool run_npc_query_fragment(void* code, void* frame, int used)
+	{
+		int answer = 0;
+		__asm mov esi, frame
+		__asm mov ecx, used
+		__asm xor ebx, ebx
+		__asm call code
+		__asm mov answer, eax
+		return answer != 0;
+	}
+
+	// [Game] NpcPowerRule (npc_power_rules.hpp): the value's rules; the three decisions against XML1's; the bridges'
+	// branches decoded back to their targets; then, when a copy of XMen2.exe is at hand, the guards and the writes on it.
+	void check_npc_power_rules()
+	{
+		using namespace npc_power_rules;
+		std::printf("[Game] NpcPowerRule (X-Men Legends 1's power use for computer-controlled characters)\n");
+
+		CHECK(parse_rule("xml1").set && parse_rule("xml1").value == rule::xml1 && parse_rule("xml1").error.empty());
+		CHECK(parse_rule(" XML2 ; the game's own").set && parse_rule(" XML2 ; the game's own").value == rule::xml2);
+		CHECK(!parse_rule("").set && parse_rule("").error.empty());
+		for (const char* bad : {"1", "on", "xml3", "xml1 xml2"})
+		{
+			const auto refused = parse_rule(bad);
+			CHECK(!refused.set && !refused.error.empty() && refused.value == rule::xml2);
+		}
+
+		// 1. The charge: a player's character pays in both; an enemy (AI flag, AI time 0) pays only in XML1; a party hero
+		//    handed to the AI (time set, or -1 for "always") asks its controller in both.
+		const float nan = std::numeric_limits<float>::quiet_NaN();
+		CHECK(pays_xml2(false, 0.0f, false) && pays_xml1(false, 0.0f, false));
+		CHECK(!pays_xml2(true, 0.0f, false) && pays_xml1(true, 0.0f, false) && pays_xml1(true, -0.4f, false) && pays_xml1(true, 0.0009f, false));
+		CHECK(!pays_xml1(true, -0.5f, false) && !pays_xml1(true, -1.0f, false) && !pays_xml1(true, 0.001f, false) && !pays_xml1(true, 125.0f, false) && !pays_xml1(true, nan, false));
+		CHECK(pays_xml1(true, 125.0f, true) && pays_xml2(true, 125.0f, true));
+
+		// 2. The re-check: XML1 2.0 s for a character without a controller, 0.5 s with one; XMen2.exe 0.3 s.
+		CHECK(recheck_xml1(-1) == 2.0f && recheck_xml1(0) == 0.5f && recheck_xml1(3) == 0.5f && xml2_recheck == 0.3f);
+
+		// 3. Half the energy: XML1's max / energy <= 2.0, as max <= 2 x energy.
+		bool gate_ok = true;
+		for (const float max : {0.0f, 1.0f, 79.0f, 147.0f, 500.0f})
+		{
+			for (int e = 0; e <= 600; ++e)
+			{
+				const float energy = static_cast<float>(e) / 2.0f;
+				if (energy > max) break;
+				const bool xml1 = max == 0.0f ? true : energy == 0.0f ? false : max / energy <= 2.0f;
+				gate_ok &= energy_allows_xml1(energy, max, false) == xml1 && energy_allows_xml1(energy, max, true);
+			}
+		}
+		CHECK(gate_ok && !energy_allows_xml1(0.0f, 147.0f, false) && energy_allows_xml1(73.5f, 147.0f, false) && !energy_allows_xml1(73.0f, 147.0f, false));
+
+		// The sites: well formed and apart; the patched runs inside their guards.
+		bool sites_ok = true;
+		for (std::size_t i = 0; i < sites.size(); ++i)
+		{
+			const auto* s = sites[i];
+			sites_ok &= limits_rules::valid_hex(s->hex) && s->what && *s->what && s->patched <= limits_rules::hex_size(s->hex);
+			for (std::size_t j = 0; j < sites.size(); ++j)
+			{
+				sites_ok &= i == j || sites[j]->va >= s->va + limits_rules::hex_size(s->hex) || sites[j]->va + limits_rules::hex_size(sites[j]->hex) <= s->va;
+			}
+		}
+		CHECK(sites_ok && picker_call_va == picker_site.va + 2);
+
+		// The bridges: each rel8/rel32 decoded back to the target it was written for.
+		const auto l = layout_at(0x10000000);
+		const auto rel32 = [](const std::vector<std::uint8_t>& c, std::size_t at, address base) {
+			std::int32_t r = 0;
+			std::memcpy(&r, c.data() + at, 4);
+			return static_cast<address>(base + at + 4 + r);
+		};
+		const auto charge = charge_bridge(l), recheck = recheck_bridge(l), gate = gate_bridge(l);
+		CHECK(charge.size() == charge_size && recheck.size() == recheck_size && gate.size() == gate_size);
+		CHECK(charge[7] == 0x74 && 9 + charge[8] == 52 && charge[26] == 0x75 && 28 + charge[27] == 47 && charge[45] == 0x7b && 47 + charge[46] == 52);
+		CHECK(charge[47] == 0xe9 && rel32(charge, 48, l.charge) == charge_ask_va && charge[52] == 0xe9 && rel32(charge, 53, l.charge) == charge_pay_va);
+		address operand = 0;
+		std::memcpy(&operand, charge.data() + 17, 4);
+		CHECK(operand == l.minus_half());
+		std::memcpy(&operand, charge.data() + 36, 4);
+		CHECK(operand == l.thousandth());
+		CHECK(recheck[7] == 0x74 && 9 + recheck[8] == 16 && recheck[15] == 0xc3 && recheck[22] == 0xc3);
+		std::memcpy(&operand, recheck.data() + 11, 4);
+		CHECK(operand == l.half());
+		std::memcpy(&operand, recheck.data() + 18, 4);
+		CHECK(operand == l.two());
+		CHECK(gate[7] == 0x75 && 9 + gate[8] == 37 && gate[13] == 0xe8 && rel32(gate, 14, l.gate) == energy_getter_va && gate[35] == 0x75 && 37 + gate[36] == 42);
+		CHECK(gate[37] == 0xe9 && rel32(gate, 38, l.gate) == picker_va && gate[44] == 0xc2 && gate[45] == 0x14);
+		const auto data = constants();
+		float values[4];
+		std::memcpy(values, data.data(), 16);
+		CHECK(values[0] == -0.5f && values[1] > 0.00099f && values[1] < 0.00101f && values[2] == 2.0f && values[3] == 0.5f);
+		const auto whole = block(l.base);
+		CHECK(whole.size() == block_size && l.charge + charge_size <= l.recheck && l.recheck + recheck_size <= l.gate && l.gate + gate_size <= l.constants);
+		const auto jump = charge_jump(l), call = recheck_call(l), pick = picker_call(l);
+		CHECK(jump.size() == charge_site.patched && call.size() == recheck_site.patched && pick.size() == 5);
+		CHECK(rel32(jump, 1, charge_site.va) == l.charge && rel32(call, 1, recheck_site.va) == l.recheck && rel32(pick, 1, picker_call_va) == l.gate);
+
+		// The combos: XML1's rows (level L = the first L weights), the three rows the init picks, the block's buttons,
+		// the slot writes pointing into the block, the override and exits.
+		CHECK((xml1_row(2) == std::array<float, 11>{5, 25}) && (xml1_row(3) == std::array<float, 11>{5, 25, 20}) &&
+		      (xml1_row(6) == std::array<float, 11>{5, 25, 20, 15, 15, 15}));
+		CHECK(combo_row_levels[0] == std::make_pair(std::size_t(2), std::size_t(2)) && combo_row_levels[2] == std::make_pair(std::size_t(11), std::size_t(6)));
+		{
+			const auto rowbytes = combo_row_bytes(6);
+			float w[11];
+			std::memcpy(w, rowbytes.data(), 44);
+			CHECK(rowbytes.size() == combo_row_size && w[0] == 5.0f && w[5] == 15.0f && w[6] == 0.0f && w[10] == 0.0f);
+			const auto slots = combo_buttons_bytes(l);
+			bool slots_ok = true;
+			for (std::size_t i = 0; i < 6; ++i)
+			{
+				address a = 0;
+				std::memcpy(&a, slots.data() + 4 * i, 4);
+				slots_ok &= a == l.combo(i) && a + 4 * xml1_combo_lengths[i] <= l.base + block_size;
+				for (std::size_t k = 0; k < xml1_combo_lengths[i]; ++k)
+				{
+					std::uint32_t button = 0;
+					std::memcpy(&button, whole.data() + (a - l.base) + 4 * k, 4);
+					slots_ok &= button == xml1_combos[i][k] && (button == 4 || button == 5);
+				}
+			}
+			CHECK(slots_ok && l.constants + 16 <= l.combos);
+			const auto lengths = combo_lengths_bytes();
+			CHECK(lengths.size() == 24 && lengths[0] == 1 && lengths[4] == 2 && lengths[20] == 5);
+		}
+		CHECK(combolevel_skip() == std::vector<std::uint8_t>({0x83, 0xc4, 0x04}) && sub_bytes(combolevel_site, 3, 3) == std::vector<std::uint8_t>({0xff, 0x52, 0x44}));
+		CHECK(sub_bytes(combo_exit_site, 3, 6) == std::vector<std::uint8_t>({0xb0, 0x01, 0x5f, 0x5e, 0x5d, 0x5b}) && combo_exit_va == combo_exit_site.va + 3 && combo_exit2_va == combo_exit2_site.va + 3);
+		CHECK(rel32(combo_exit_jump(combo_exit_va), 1, combo_exit_va) == combo_tail_va && rel32(combo_exit_jump(combo_exit2_va), 1, combo_exit2_va) == combo_tail_va && combo_exit_jump(combo_exit_va)[5] == 0x90);
+
+		// V-NPC1: visibility deferral is distinct from obstruction; geometry comes from positions, even for
+		// coincident points. The native adapter uses this same policy, with no game data in the fixture.
+		struct sight_fixture
+		{
+			using point = npc_visibility_rules::point;
+			bool target = true;
+			point actor{11, 23, 7}, other{41, 63, 9}, from{}, to{}, extents{};
+			npc_visibility_rules::query_result answer{true, false, false};
+			int calls = 0;
+			bool has_target() const { return target; }
+			point actor_position() const { return actor; }
+			point target_position() const { return other; }
+			npc_visibility_rules::query_result query(point a, point b, point size)
+			{
+				++calls; from = a; to = b; extents = size; return answer;
+			}
+		} sight;
+		std::uint8_t deferred = 0;
+		CHECK(npc_visibility_rules::visible(sight, deferred) && sight.calls == 1 && deferred == 0);
+		CHECK(sight.from.x == 11 && sight.from.y == 23 && sight.from.z == 67 && sight.to.x == 41 && sight.to.y == 63 && sight.to.z == 69);
+		CHECK(sight.extents.x == 1 && sight.extents.y == 1 && sight.extents.z == 1);
+		sight.answer = {true, true, false};
+		CHECK(!npc_visibility_rules::visible(sight, deferred) && deferred == 0);
+		sight.answer = {true, true, true};
+		CHECK(npc_visibility_rules::visible(sight, deferred) && deferred == 0);
+		sight.answer = {false, false, false};
+		CHECK(!npc_visibility_rules::visible(sight, deferred) && deferred == 1);
+		sight.target = false; sight.calls = 0; deferred = 0;
+		CHECK(!npc_visibility_rules::visible(sight, deferred) && sight.calls == 0 && deferred == 0);
+		sight.target = true; sight.actor = {0, 0, 0}; sight.other = {600, 0, 0};
+		CHECK(npc_visibility_rules::visible(sight, deferred) && sight.calls == 0 && deferred == 0);
+		sight.other.x = std::nextafter(600.0f, 0.0f);
+		CHECK(!npc_visibility_rules::visible(sight, deferred) && sight.calls == 1 && deferred == 1);
+		sight.calls = 0; deferred = 0; sight.other = sight.actor; sight.answer = {true, false, false};
+		CHECK(npc_visibility_rules::visible(sight, deferred) && sight.calls == 1);
+		sight.calls = 0; sight.other.x = nan;
+		CHECK(npc_visibility_rules::visible(sight, deferred) && sight.calls == 0);
+		const auto priority = query_priority_bytes();
+		CHECK(priority.size() == query_priority_site.patched && priority[8] == 0x74 && query_priority_site.va + 10 + priority[9] == query_budget_site.va);
+		CHECK(priority[16] == 0x74 && query_priority_site.va + 18 + priority[17] == query_budget_site.va);
+		CHECK(query_budget_bytes() == std::vector<std::uint8_t>({0x83, 0xf9, 1}));
+		CHECK(visibility_jump(0x10002000).size() == visibility_site.patched && rel32(visibility_jump(0x10002000), 1, visibility_site.va) == 0x10002000);
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the NPC power rule's bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const site* mismatch = first_mismatch(image);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", static_cast<unsigned long>(mismatch->va), mismatch->what);
+		CHECK(mismatch == nullptr);
+		// Every new entry/predicate/helper guard must refuse a changed executable before any patch is made.
+		for (const auto* s : {&query_priority_site, &query_budget_site, &visibility_site, &physical_target_site, &query_entry_site})
+		{
+			auto& byte = image[s->va - image_base];
+			byte ^= 1;
+			CHECK(first_mismatch(image) == s);
+			byte ^= 1;
+		}
+		// The picker call's target is the picker, the re-check's operand the 0.3.
+		std::int32_t r = 0;
+		std::memcpy(&r, image + (picker_call_va + 1 - image_base), 4);
+		CHECK(picker_call_va + 5 + r == picker_va);
+		float recheck_value = 0;
+		std::memcpy(&recheck_value, image + (0x681ebc - image_base), 4);
+		CHECK(recheck_value == xml2_recheck);
+		// Execute the actual patched reservation/budget fragment with synthetic actors. Only the two global
+		// data operands and its outgoing refusal branches are relocated; internal branches stay as installed.
+		std::uint32_t reserved = 0, oldest = 0;
+		std::array<std::uint32_t, 8> actor{};
+		actor[7] = 101;
+		std::array<std::uint8_t, 0x2dc> brain{};
+		void* actor_pointer = actor.data();
+		std::memcpy(brain.data() + 0x10, &actor_pointer, sizeof actor_pointer);
+		std::vector<std::uint8_t> fragment(53);
+		std::memcpy(fragment.data(), image + (query_priority_site.va - image_base), 44);
+		std::memcpy(fragment.data(), priority.data(), priority.size());
+		fragment[37] = 1; // query budget
+		put32(fragment, 2, static_cast<address>(reinterpret_cast<std::uintptr_t>(&reserved)));
+		put32(fragment, 19, static_cast<address>(reinterpret_cast<std::uintptr_t>(&oldest)));
+		put32(fragment, 31, 50 - 35); // queued-age refusal
+		put32(fragment, 40, 50 - 44); // budget refusal
+		const std::uint8_t returns[]{0xb8, 1, 0, 0, 0, 0xc3, 0x31, 0xc0, 0xc3};
+		std::memcpy(fragment.data() + 44, returns, sizeof returns);
+		void* executable = VirtualAlloc(nullptr, fragment.size(), MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+		CHECK(executable != nullptr);
+		if (executable)
+		{
+			std::memcpy(executable, fragment.data(), fragment.size());
+			FlushInstructionCache(GetCurrentProcess(), executable, fragment.size());
+			const auto allows = [&](int used, std::uint32_t owner, int priority_age, int queued_age) {
+				reserved = owner; oldest = static_cast<std::uint32_t>(priority_age);
+				std::memcpy(brain.data() + 0x2d8, &queued_age, sizeof queued_age);
+				return run_npc_query_fragment(executable, brain.data(), used);
+			};
+			CHECK(allows(0, 0, 0, 1));
+			CHECK(!allows(0, 202, 5, 5) && !allows(0, 202, 5, 4));
+			CHECK(allows(0, 101, 5, 1) && allows(0, 202, 5, 6));
+			CHECK(!allows(1, 0, 0, 1) && !allows(1, 101, 5, 6) && !allows(2, 0, 0, 1));
+			VirtualFree(executable, 0, MEM_RELEASE);
+		}
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
+	// [Game] DeathRule (death_threshold_rules.hpp): the value's rules; the x87 tests before and after, decided as the
+	// code decides them, against XML1's; the seven sites on their own (operand, mask, nothing else written); then,
+	// when a copy of XMen2.exe is at hand, every site and both constants against it and the writes on that copy.
+	void check_death_threshold_rules()
+	{
+		using namespace death_threshold_rules;
+		std::printf("[Game] DeathRule (X-Men Legends 1's death threshold)\n");
+
+		CHECK(parse_rule("xml1").set && parse_rule("xml1").value == rule::xml1 && parse_rule("xml1").error.empty());
+		CHECK(parse_rule("  XML1 ; the first game's line").value == rule::xml1 && parse_rule("Xml2").set && parse_rule("Xml2").value == rule::xml2);
+		CHECK(!parse_rule("").set && parse_rule("").error.empty() && !parse_rule("  ; nothing").set);
+		for (const char* bad : {"1", "on", "xml3", "xml1 xml2", "below1"})
+		{
+			const auto refused = parse_rule(bad);
+			CHECK(!refused.set && !refused.error.empty() && refused.value == rule::xml2);
+		}
+
+		// The status bits and the parity jp reads: "above" keeps nothing (even: jp taken), "below" C0, "equal" C3,
+		// unordered C0|C2|C3.
+		CHECK(status_ah(2.0f, 1.0f) == 0x00 && status_ah(0.5f, 1.0f) == 0x01 && status_ah(1.0f, 1.0f) == 0x40);
+		CHECK(status_ah(std::numeric_limits<float>::quiet_NaN(), 1.0f) == 0x45);
+		CHECK(parity_even(0) && !parity_even(1) && !parity_even(0x40) && parity_even(0x41) && parity_even(0x05) && !parity_even(0x04));
+
+		// The death test: XMen2.exe at most 0, XML1 (default.xbe 0x92675) below 1, and the rule exactly XML1's -
+		// a health of exactly 1 lives, a fraction dies, and a NaN health lives in both of XML1's and the rule's.
+		const float nan = std::numeric_limits<float>::quiet_NaN();
+		CHECK(!dies_xml2(0.19995f) && !dies_xml2(0.5f) && dies_xml2(0.0f) && dies_xml2(-4.8f) && !dies_xml2(1.0f));
+		CHECK(dies_xml1(0.19995f) && dies_xml1(0.999f) && !dies_xml1(1.0f) && !dies_xml1(1.0001f) && dies_xml1(0.0f) && dies_xml1(-30000.0f) && !dies_xml1(nan));
+		bool same = true;
+		for (int i = -400; i <= 400; ++i)
+		{
+			const float h = static_cast<float>(i) / 64.0f;
+			same &= dies_with_rule(h) == dies_xml1(h) && dies_with_rule(std::nextafter(h, 2.0f)) == dies_xml1(std::nextafter(h, 2.0f));
+		}
+		CHECK(same && dies_with_rule(nan) == dies_xml1(nan) && !dies_xml2(nan));
+		CHECK(!dies_with_rule(1.0f) && dies_with_rule(std::nextafter(1.0f, 0.0f)) && dies_with_rule(0.0f));
+		// "At most 1" where XML1 tests that (the last-stand window, mask kept at 0x41).
+		CHECK(past_line(1.0f, 1.0f, xml2_mask) && past_line(0.5f, 1.0f, xml2_mask) && !past_line(1.5f, 1.0f, xml2_mask));
+
+		// The sites: well formed, apart, an fcom/fcomp of the 0.0 at `operand`, test ah,0x41 at `mask`; the rule's
+		// bytes differ from the retail ones only in the operand's low word and the mask.
+		bool sites_ok = true;
+		for (std::size_t i = 0; i < sites.size(); ++i)
+		{
+			const auto& s = sites[i];
+			sites_ok &= limits_rules::valid_hex(s.hex) && s.what && *s.what;
+			const auto size = limits_rules::hex_size(s.hex);
+			for (std::size_t j = 0; j < sites.size(); ++j)
+			{
+				sites_ok &= i == j || sites[j].va >= s.va + size || sites[j].va + limits_rules::hex_size(sites[j].hex) <= s.va;
+			}
+			const auto before = retail_bytes(s);
+			const auto after = rule_bytes(s);
+			address operand = 0;
+			std::memcpy(&operand, before.data() + s.operand, 4);
+			sites_ok &= operand == zero_constant && before[s.operand - 2] == 0xd8 && (before[s.operand - 1] == 0x1d || before[s.operand - 1] == 0x15);
+			sites_ok &= before[0] == 0xd9 && (before[1] == 0x86 || before[1] == 0x87) && before[2] == 0x7c && before[3] == 0x02; // fld [reg+0x27c]
+			std::memcpy(&operand, after.data() + s.operand, 4);
+			sites_ok &= operand == one_constant && after.size() == before.size();
+			if (s.mask)
+			{
+				sites_ok &= before[s.mask - 2] == 0xf6 && before[s.mask - 1] == 0xc4 && before[s.mask] == xml2_mask && after[s.mask] == xml1_mask;
+			}
+			std::size_t changed = 0;
+			for (std::size_t b = 0; b < before.size(); ++b)
+			{
+				changed += before[b] != after[b];
+				sites_ok &= before[b] == after[b] || b == s.operand || b == s.operand + 1 || b == s.mask;
+			}
+			sites_ok &= changed == (s.mask ? 3u : 2u);
+			sites_ok &= s.xml1 != 0 || s.va == 0x4983ce; // only bossundying has no XML1 counterpart
+		}
+		CHECK(sites_ok);
+		CHECK(std::count_if(sites.begin(), sites.end(), [](const site& s) { return s.mask == 0; }) == 1); // the last-stand window
+
+		// The death branch's bridge: health above 0 goes to 0 through the entity's own setter; at most 0, NaN: untouched.
+		// Repeated, so a leaked x87 register would show (the stack overflows after eight).
+		{
+			auto* block = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, 64, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+			CHECK(block != nullptr);
+			if (block)
+			{
+				const auto as_address = [](const void* p) { return static_cast<address>(reinterpret_cast<std::uintptr_t>(p)); };
+				const auto code = death_bridge(as_address(&death_zero), as_address(reinterpret_cast<const void*>(&death_landing)), as_address(block));
+				std::memcpy(block, code.data(), code.size());
+				FlushInstructionCache(GetCurrentProcess(), block, code.size());
+				std::array<void*, 0x200 / 4> vtable{};
+				vtable[health_setter_slot / 4] = reinterpret_cast<void*>(&death_setter);
+				std::array<std::uint8_t, 0x400> entity{};
+				const void* vt = vtable.data();
+				std::memcpy(entity.data(), &vt, 4);
+				bool bridge_ok = true;
+				for (int round = 0; round < 12; ++round)
+				{
+					for (const float health : {0.19999933f, 0.9999993f, std::nextafter(0.0f, 1.0f), 0.0f, -1.8f, std::numeric_limits<float>::quiet_NaN()})
+					{
+						std::memcpy(entity.data() + 0x27c, &health, 4);
+						death_setter_calls = 0;
+						death_setter_value = -99.0f;
+						invoke_death_bridge(block, entity.data());
+						float after = 0;
+						std::memcpy(&after, entity.data() + 0x27c, 4);
+						if (health > 0.0f)
+						{
+							bridge_ok &= death_setter_calls == 1 && death_setter_value == 0.0f && after == 0.0f;
+						}
+						else
+						{
+							bridge_ok &= death_setter_calls == 0 && (after == health || (after != after && health != health));
+						}
+					}
+				}
+				volatile float x = 3.0f;
+				bridge_ok &= x * 2.0f == 6.0f; // the x87 stack is intact
+				CHECK(bridge_ok);
+				VirtualFree(block, 0, MEM_RELEASE);
+			}
+			const auto jump = death_jump(0x12345678);
+			address relative = 0;
+			std::memcpy(&relative, jump.data() + 1, 4);
+			CHECK(jump.size() == limits_rules::hex_size(death_branch_displaced) && jump[0] == 0xe9 && death_branch_va + 5 + relative == 0x12345678 && jump[5] == 0x90);
+			CHECK(death_branch_resume_va == death_branch_va + limits_rules::hex_size(death_branch_displaced) &&
+			      death_branch_site.hex.substr(0, death_branch_displaced.size()) == death_branch_displaced);
+		}
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the death rule's bytes against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		bool constant_ok = false;
+		const site* mismatch = first_mismatch(image, constant_ok);
+		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", static_cast<unsigned long>(mismatch->va), mismatch->what);
+		CHECK(!mismatch && constant_ok);
+		if (!mismatch && constant_ok)
+		{
+			// The writes, as the installer's transaction makes them, on the copy: the rule's bytes at every site and not
+			// one other byte of the image; afterwards the guards refuse (never patched twice).
+			std::vector<std::uint8_t> before(image, image + image_size);
+			for (const auto& s : sites)
+			{
+				const auto after = rule_bytes(s);
+				std::memcpy(image + (s.va - image_base), after.data(), after.size());
+			}
+			const auto jump = death_jump(0x10000000);
+			std::memcpy(image + (death_branch_va - image_base), jump.data(), jump.size());
+			std::size_t changed = 0;
+			bool inside = true;
+			for (DWORD i = 0; i < image_size; ++i)
+			{
+				if (image[i] == before[i]) continue;
+				++changed;
+				const DWORD va = image_base + i;
+				bool in_site = false;
+				for (const auto& s : sites) in_site |= va >= s.va && va < s.va + limits_rules::hex_size(s.hex);
+				in_site |= va >= death_branch_va && va < death_branch_resume_va;
+				inside &= in_site;
+			}
+			CHECK(changed == 7 * 3 + 2 + 6 && inside);
+			CHECK(first_mismatch(image, constant_ok) == &sites[0] && constant_ok);
+		}
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
+	// [Game] PackAmount (pack_amount_rules.hpp): the value's rules, the numbers, the guards on their own (each
+	// fraction inside its guard, no guard reaching the DoubleHeal guards at 0x4a2cac / 0x4a2e64), then, when a copy of
+	// XMen2.exe is at hand, every guard against it and the two fractions.
+	void check_pack_amount_rules()
+	{
+		using namespace pack_amount_rules;
+		std::printf("[Game] PackAmount (X-Men Legends 1's packs restore a quarter)\n");
+		CHECK(parse_rule("xml1").set && parse_rule(" XML1 ; the first game's quarter").value == rule::xml1);
+		CHECK(parse_rule("xml2").set && parse_rule("xml2").value == rule::xml2 && !parse_rule("").set && !parse_rule(" ; x").set);
+		for (const char* bad : {"1", "0.25", "quarter", "xml1 xml2"})
+		{
+			const auto c = parse_rule(bad);
+			CHECK(c.set == false && !c.error.empty() && c.value == rule::xml2);
+		}
+		float f1 = 0, f2 = 0;
+		std::memcpy(&f1, xml1_fraction_bytes.data(), 4);
+		std::memcpy(&f2, retail_fraction.data(), 4);
+		CHECK(f1 == xml1_fraction && f2 == xml2_fraction);
+		// A 400-point hero: 100 (XML1's quarter) against the game's 132.
+		CHECK(restored(xml1_fraction, 400.0f) == 100.0f && restored(xml2_fraction, 400.0f) > 131.9f && restored(xml2_fraction, 400.0f) < 132.1f);
+		bool ok = true, health = false, energy = false, clear = true;
+		for (const auto& g : guards)
+		{
+			ok &= limits_rules::valid_hex(g.hex) && g.what && *g.what;
+			const DWORD end = g.va + static_cast<DWORD>(limits_rules::hex_size(g.hex));
+			health |= g.va <= health_fraction && health_fraction + 4 <= end;
+			energy |= g.va <= energy_fraction && energy_fraction + 4 <= end;
+			if (g.va < 0x600000) clear &= end <= (g.va < 0x4a2d00 ? 0x4a2cacu : 0x4a2e64u);
+		}
+		CHECK(ok && health && energy && clear);
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the pack fractions against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		CHECK(first_mismatch(image) == nullptr);
+		CHECK(std::memcmp(image + health_fraction - limits_rules::image_base, retail_fraction.data(), 4) == 0);
+		CHECK(std::memcmp(image + energy_fraction - limits_rules::image_base, retail_fraction.data(), 4) == 0);
+		// Each fraction is the imm32 of mov dword [esp+0xc], imm32 (c7 44 24 0c).
+		for (const address a : {health_fraction, energy_fraction})
+			CHECK(std::memcmp(image + a - 4 - limits_rules::image_base, "\xc7\x44\x24\x0c", 4) == 0);
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
 	// [Game] BreakRule (break_rule_rules.hpp): the value's rules; XML1's level sum and the structure pairing; the
 	// decision; what the fix remembers; the guards on their own; both bridges run for real; then, when a copy of
 	// XMen2.exe is at hand, every guard against it, the three writes on that copy and the game's own level function
@@ -9992,7 +11148,10 @@ namespace
 			return out;
 		}
 
-		std::vector<std::uint8_t> old_image(const int carried, const int heroes, const float play_time, std::vector<std::size_t>* heaps = nullptr)
+		// tails: the equipment tail of every hero block, then of the 22 restore records; restore_flag: the bank's valid
+		// byte (non-zero also gives restore record 3 one equipped instance)
+		std::vector<std::uint8_t> old_image(const int carried, const int heroes, const float play_time, std::vector<std::size_t>* heaps = nullptr,
+			std::vector<std::size_t>* tails = nullptr, const std::uint8_t restore_flag = 0)
 		{
 			std::vector<std::uint8_t> out(old_envelope, 0);
 			std::memcpy(out.data(), "12:34 - somewhere", 17);
@@ -10013,16 +11172,20 @@ namespace
 				append(out, heap);
 				out.push_back(h == 0 ? 1 : 0);
 				if (h == 0) append(out, instance(2));
+				if (tails) tails->push_back(out.size());
 				out.resize(out.size() + equipment_tail + powers_size + costume_size, 0);
 			}
 			append(out, tag("[CHARACTERSUNLOCKED]"));
 			out.resize(out.size() + unlocked_size, 0);
 			append(out, tag("[CHARACTERSRESTORE]"));
-			out.push_back(0);
+			out.push_back(restore_flag);
 			for (int r = 0; r < 22; ++r)
 			{
 				out.resize(out.size() + attributes_size + heap_size, 0);
-				out.push_back(0);
+				const bool equip = restore_flag && r == 3;
+				out.push_back(equip ? 1 : 0);
+				if (equip) append(out, instance(1));
+				if (tails) tails->push_back(out.size());
 				out.resize(out.size() + equipment_tail, 0);
 			}
 			const std::size_t game = out.size();
@@ -10197,6 +11360,261 @@ namespace
 			CHECK(insert_talent(odd.data(), 5) == heap_insert::invalid);
 			std::vector<std::uint8_t> fresh(heap_size, 0);
 			CHECK(insert_talent(fresh.data(), 5) == heap_insert::inserted && rd32(fresh.data() + 152) == 1 && rd32(fresh.data() + 156) == 1 && fresh[2] == 0 && fresh[4] == 0);
+		}
+
+		// The one-time catch-up of the fifth-level points (invented heroes; [Game] LevelSkillPoints / LevelStatPoints=xml1).
+		{
+			// fifth levels processed with the old rule: multiples of 5 in (start, ack]
+			CHECK(fifth_levels_processed(1) == 0 && fifth_levels_processed(4) == 0 && fifth_levels_processed(5) == 1 && fifth_levels_processed(9) == 1);
+			CHECK(fifth_levels_processed(10) == 2 && fifth_levels_processed(23) == 4 && fifth_levels_processed(45) == 9 && fifth_levels_processed(0) == 0);
+			CHECK(fifth_levels_processed(255) == 51 && fifth_levels_processed(-3) == 0);
+			// a start above 5 (the rule's parameter; the engine's own start is the constructor's processed level 1)
+			CHECK(fifth_levels_processed(9, 7) == 0 && fifth_levels_processed(10, 7) == 1 && fifth_levels_processed(23, 7) == 3 && fifth_levels_processed(45, 7) == 8);
+			CHECK(fifth_levels_processed(5, 5) == 0 && fifth_levels_processed(10, 5) == 1 && fifth_levels_processed(10, 10) == 0 && fifth_levels_processed(6, 7) == 0);
+			CHECK(first_processed_level == 1);
+			// the offsets are the library's old-save layout (the tail: health, energy, seat, valid + 3, experience, ack)
+			CHECK(offsetof(lcsave::OldAttrScalars, skill_points) == attr_skill_points && offsetof(lcsave::OldAttrScalars, trait_points) == attr_trait_points &&
+			      offsetof(lcsave::OldAttrScalars, level) == attr_level && offsetof(lcsave::OldEquipTail, experience) == 0x10 &&
+			      offsetof(lcsave::OldEquipTail, ack_level) == tail_ack_level && sizeof(lcsave::OldEquipTail) == equipment_tail);
+			// the per-fifth extras are the keys' own numbers: 2 - 1 skill points, 8 - 4 stat points
+			CHECK(rank_costs_rules::level_skill_points(5) - 1 == 1 && rank_costs_rules::level_stat_points(5) - rank_costs_rules::stat_points_per_level == 4);
+
+			// the marker: one bit per installed key; a write without the keys vouches for nothing
+			CHECK(level_catchup_marker(true, true) == 6 && level_catchup_marker(true, false) == 2 && level_catchup_marker(false, true) == 4 && level_catchup_marker(false, false) == 0);
+			CHECK((optional_level_skill_points & 1u) == 0 && (optional_level_stat_points & 1u) == 0);   // bit 0 stays KEYS
+			const auto need = [](std::uint32_t bits, bool skill, bool stat) { return level_catchup_needed(bits, skill, stat, 1, 4); };
+			CHECK(need(0, true, true).skill_per_fifth == 1 && need(0, true, true).stat_per_fifth == 4);          // an older file
+			CHECK(need(1, true, true).skill_per_fifth == 1 && need(1, true, true).stat_per_fifth == 4);          // KEYS alone vouches nothing
+			CHECK(need(6, true, true).skill_per_fifth == 0 && need(6, true, true).stat_per_fifth == 0);          // written with both keys
+			CHECK(need(2, true, true).skill_per_fifth == 0 && need(2, true, true).stat_per_fifth == 4);          // written with the skill key only
+			CHECK(need(4, true, false).skill_per_fifth == 1 && need(4, true, false).stat_per_fifth == 0);
+			CHECK(need(0, false, false).skill_per_fifth == 0 && need(0, false, false).stat_per_fifth == 0);      // no key installed: nothing
+			CHECK(need(level_catchup_marker(false, false), true, true).skill_per_fifth == 1);                    // written without the keys: not caught up
+
+			// a stream: hero blocks with processed (ack) levels 4, 5, 9, 10, 23, 45, a hero not yet processed (level 30,
+			// ack 1), an xpexempt level-40 form and an exempt one with a high ack; the restore bank valid
+			std::vector<std::size_t> heaps, tails;
+			auto image = old_image(1, 9, 3.0f, &heaps, &tails, 1);
+			CHECK(heaps.size() == 9 && tails.size() == 9 + 22);
+			const int acks[9] = {4, 5, 9, 10, 23, 45, 1, 1, 30};
+			const int levels[9] = {4, 5, 9, 10, 23, 45, 30, 40, 30};
+			const int skills[9] = {0, 3, 0, 7, 2, 0, 0, 0, 5};
+			const int stats[9] = {12, 0, 40, 4, 0, 160, 0, 0, 9};
+			const auto put16 = [&](const std::size_t at, const int v) { image[at] = static_cast<std::uint8_t>(v); image[at + 1] = static_cast<std::uint8_t>(v >> 8); };
+			for (int h = 0; h < 9; ++h)
+			{
+				const std::size_t attributes = heaps[h] - attributes_size;
+				put16(attributes + attr_skill_points, skills[h]);
+				put16(attributes + attr_trait_points, stats[h]);
+				image[attributes + attr_level] = static_cast<std::uint8_t>(levels[h]);
+				image[tails[h] + tail_ack_level] = static_cast<std::uint8_t>(acks[h]);
+				// the experience word just before the ack byte (400000: low byte 0x80), as in a real level-21 save
+				const std::uint32_t experience = 400000;
+				std::memcpy(image.data() + tails[h] + 0x10, &experience, 4);
+			}
+			// restore record 3 (stats index 3, one equipped instance before its tail) and the reserved record 0
+			const auto restore_attributes = [&](const int r)
+			{
+				// the record's attributes start at its tail minus the equipped instances, the count byte, the heap, the attributes
+				return tails[9 + r] - (r == 3 ? instance(1).size() : 0) - 1 - heap_size - attributes_size;
+			};
+			for (const int r : {0, 3})
+			{
+				put16(restore_attributes(r) + attr_skill_points, 1);
+				put16(restore_attributes(r) + attr_trait_points, 2);
+				image[restore_attributes(r) + attr_level] = 10;
+				image[tails[9 + r] + tail_ack_level] = 10;
+			}
+			const auto layout = hero_points_records(image.data(), image.size());
+			CHECK(layout && layout->restore_valid && layout->records.size() == 9 + 21);
+			if (layout && layout->records.size() == 30)
+			{
+				bool offsets = true;
+				for (int h = 0; h < 9; ++h) offsets &= layout->records[h].attributes == heaps[h] - attributes_size && layout->records[h].tail == tails[h] && layout->records[h].stats_index == static_cast<std::uint32_t>(h + 1) && !layout->records[h].restore;
+				for (int r = 1; r < 22; ++r) offsets &= layout->records[8 + r].tail == tails[9 + r] && layout->records[8 + r].stats_index == static_cast<std::uint32_t>(r) && layout->records[8 + r].restore;
+				offsets &= layout->records[8 + 3].attributes == restore_attributes(3);
+				CHECK(offsets);
+				// stats index 8 (the level-40 form) and 9 (exempt with ack 30) are xpexempt
+				const auto exempt = [](const std::uint32_t stats_index) { return stats_index == 8 || stats_index == 9; };
+				const auto before = image;
+				const auto grants = apply_level_catchup(image.data(), image.size(), *layout, 1, 4, exempt);
+				const auto skill_at = [&](const std::size_t attributes) { return static_cast<int>(static_cast<std::int16_t>(rd16(image.data() + attributes + attr_skill_points))); };
+				const auto stat_at = [&](const std::size_t attributes) { return static_cast<int>(static_cast<std::int16_t>(rd16(image.data() + attributes + attr_trait_points))); };
+				const int fifths[9] = {0, 1, 1, 2, 4, 9, 0, 0, 0};
+				bool points = true;
+				for (int h = 0; h < 9; ++h)
+				{
+					points &= skill_at(heaps[h] - attributes_size) == skills[h] + fifths[h] && stat_at(heaps[h] - attributes_size) == stats[h] + 4 * fifths[h];
+				}
+				CHECK(points);
+				// restore record 3 (ack 10): +2 / +8; the reserved record 0 is untouched
+				CHECK(skill_at(restore_attributes(3)) == 3 && stat_at(restore_attributes(3)) == 10 && skill_at(restore_attributes(0)) == 1 && stat_at(restore_attributes(0)) == 2);
+				// one grant per changed record: heroes 2..6 and restore record 3
+				CHECK(grants.size() == 6);
+				if (grants.size() == 6)
+				{
+					CHECK(grants[0].stats_index == 2 && grants[0].ack_level == 5 && grants[0].fifths == 1 && grants[0].skill_before == 3 && grants[0].skill_after == 4 && grants[0].stat_before == 0 && grants[0].stat_after == 4);
+					CHECK(grants[4].stats_index == 6 && grants[4].level == 45 && grants[4].fifths == 9 && grants[4].skill_after == 9 && grants[4].stat_after == 196 && !grants[4].restore);
+					CHECK(grants[5].restore && grants[5].stats_index == 3 && grants[5].fifths == 2 && !grants[5].capped);
+				}
+				// nothing but the points moved
+				std::size_t changed = 0;
+				for (std::size_t i = 0; i < image.size(); ++i) changed += image[i] != before[i];
+				CHECK(changed > 0 && changed <= 6 * 4);
+				// the next write carries the marker; loading that again adds nothing (no second grant)
+				const auto again = level_catchup_needed(level_catchup_marker(true, true), true, true, 1, 4);
+				const auto after_first = image;
+				CHECK(apply_level_catchup(image.data(), image.size(), *layout, again.skill_per_fifth, again.stat_per_fifth, exempt).empty() && image == after_first);
+				// a sum above 0x7fff is held there
+				put16(heaps[5] - attributes_size + attr_skill_points, 0x7ffe);
+				const auto capped = apply_level_catchup(image.data(), image.size(), *layout, 1, 0, exempt);
+				CHECK(skill_at(heaps[5] - attributes_size) == 0x7fff && capped.size() == 6 && capped[4].capped);
+			}
+			// a bank that isn't valid: its records are not touched
+			auto invalid_bank = old_image(1, 2, 3.0f, nullptr, nullptr, 0);
+			const auto no_bank = hero_points_records(invalid_bank.data(), invalid_bank.size());
+			CHECK(no_bank && !no_bank->restore_valid && no_bank->records.size() == 2);
+			// no hero block: only the bank
+			const auto none = old_image(0, 0, 1.0f, nullptr, nullptr, 1);
+			const auto bank_only = hero_points_records(none.data(), none.size());
+			CHECK(bank_only && bank_only->records.size() == 21 && bank_only->records[0].restore);
+			// a stream that doesn't parse: nothing
+			auto broken = image; broken[old_envelope + 1] = 'X';
+			CHECK(!hero_points_records(broken.data(), broken.size()) && !hero_points_records(image.data(), 0x400));
+			auto no_restore_tag = old_image(1, 2, 3.0f);
+			for (std::size_t i = 0; i + 20 < no_restore_tag.size(); ++i)
+			{
+				if (std::memcmp(no_restore_tag.data() + i, "[CHARACTERSRESTORE]", 19) == 0) { no_restore_tag[i + 1] = 'X'; break; }
+			}
+			CHECK(!hero_points_records(no_restore_tag.data(), no_restore_tag.size()));
+		}
+
+		// The one-time re-base of the class bonus (invented classes; builder SPEC 94).
+		{
+			CHECK(optional_class_growth == 8 && (optional_class_growth & (1u | optional_level_skill_points | optional_level_stat_points)) == 0);
+			CHECK(attr_bonus == offsetof(lcsave::OldAttrScalars, trait_bonus) && attr_gain == offsetof(lcsave::OldAttrScalars, trait_bonus2) &&
+			      attr_spent == offsetof(lcsave::OldAttrScalars, trait_pending) && attr_base == offsetof(lcsave::OldAttrScalars, trait_base));
+			const auto rule = [](int start, int rate, int a, int b, int c, int d) { growth_rule r; r.start = start; r.rate = rate; r.delta = {a, b, c, d}; return r; };
+			// the fire rule: rate 0 = once at start; otherwise start, start + rate, ...
+			CHECK(growth_fires(rule(2, 1, 0, 0, 0, 0), 2) && growth_fires(rule(2, 1, 0, 0, 0, 0), 9) && !growth_fires(rule(3, 4, 0, 0, 0, 0), 5) && growth_fires(rule(3, 4, 0, 0, 0, 0), 7));
+			CHECK(growth_fires(rule(6, 0, 0, 0, 0, 0), 6) && !growth_fires(rule(6, 0, 0, 0, 0, 0), 7) && !growth_fires(rule(6, 0, 0, 0, 0, 0), 12) && !growth_fires(rule(9, 2, 0, 0, 0, 0), 7));
+			const std::vector<growth_rule> old_class = {rule(2, 1, 1, 0, 0, 0), rule(2, 2, 0, 0, 1, 0), rule(2, 4, 1, 1, 0, 0)};
+			const std::vector<growth_rule> new_class = {rule(2, 2, 0, 0, 4, 0), rule(3, 4, 4, 0, 0, 0), rule(5, 5, 0, 2, 0, 0), rule(2, 1, 0, 0, 0, 3), };
+			const std::vector<growth_rule> with_drop = {rule(2, 1, 0, 0, 0, 3), rule(6, 0, 0, 0, 4, -1)};
+			const std::array<int, 4> zero{};
+			// levels 2..ack: ack 1 = nothing processed
+			CHECK(simulate_growth(old_class, 1, zero, zero).bonus == zero);
+			const auto o21 = simulate_growth(old_class, 21, zero, zero);
+			CHECK((o21.bonus == std::array<int, 4>{25, 5, 10, 0}) && o21.gain == o21.bonus);
+			const auto n21 = simulate_growth(new_class, 21, zero, zero);
+			CHECK((n21.bonus == std::array<int, 4>{20, 8, 40, 60}) && n21.gain == n21.bonus);
+			const auto o5 = simulate_growth(old_class, 5, zero, zero), o10 = simulate_growth(old_class, 10, zero, zero);
+			CHECK((o5.bonus == std::array<int, 4>{5, 1, 2, 0}) && (o10.bonus == std::array<int, 4>{12, 3, 5, 0}));
+			// a negative delta lowers the bonus, the rises keep counting what went up (0x43a65c)
+			const auto d6 = simulate_growth(with_drop, 6, zero, zero);
+			CHECK((d6.bonus == std::array<int, 4>{0, 0, 4, 14}) && (d6.gain == std::array<int, 4>{0, 0, 4, 15}));
+			// a negative delta on 0 wraps to 255 as a byte and the ceiling refuses it, as the setter does
+			const auto wrap = simulate_growth({rule(2, 0, 0, 0, 0, -1)}, 3, zero, zero);
+			CHECK(wrap.bonus == zero);
+			// the 250 ceiling refuses a fire that would pass it (base 200 + spent 45 leaves 5 for strength)
+			const auto capped = simulate_growth(old_class, 21, {200, 0, 0, 0}, {45, 0, 0, 0});
+			CHECK(capped.bonus[0] == 5 && capped.bonus[2] == 10);
+
+			// one record's bytes: base, spent, bonus, gain (the attribute scalars' first 16 bytes)
+			const auto attrs = [](std::array<int, 4> base, std::array<int, 4> spent, std::array<int, 4> bonus, std::array<int, 4> gain)
+			{
+				std::vector<std::uint8_t> a(attributes_size, 0);
+				for (int k = 0; k < 4; ++k)
+				{
+					a[attr_base + k] = static_cast<std::uint8_t>(base[k]);
+					a[attr_spent + k] = static_cast<std::uint8_t>(spent[k]);
+					a[attr_bonus + k] = static_cast<std::uint8_t>(bonus[k]);
+					a[attr_gain + k] = static_cast<std::uint8_t>(gain[k]);
+				}
+				a[attr_skill_points] = 7;
+				a[attr_level] = 21;
+				return a;
+			};
+			const auto bytes4 = [](const std::vector<std::uint8_t>& a, std::size_t at) { return std::array<int, 4>{a[at], a[at + 1], a[at + 2], a[at + 3]}; };
+			// exactly the old class's growth: becomes the new class's
+			auto plain = attrs({50, 23, 56, 19}, {0, 0, 0, 0}, {25, 5, 10, 0}, {25, 5, 10, 0});
+			auto g = rebase_growth(plain.data(), 21, old_class, new_class);
+			CHECK(g.result == rebase_result::changed && (bytes4(plain, attr_bonus) == std::array<int, 4>{20, 8, 40, 60}) && (bytes4(plain, attr_gain) == std::array<int, 4>{20, 8, 40, 60}));
+			CHECK(plain[attr_skill_points] == 7 && plain[attr_level] == 21 && (bytes4(plain, attr_base) == std::array<int, 4>{50, 23, 56, 19}));
+			// the same again with the new class on both sides: nothing changes (what a second load would be)
+			const auto once = plain;
+			CHECK(rebase_growth(plain.data(), 21, new_class, new_class).result == rebase_result::unchanged && plain == once);
+			// a comic reward on top (body +8, mind +4) is kept
+			auto rewarded = attrs({50, 23, 56, 19}, {3, 0, 2, 0}, {25, 5, 18, 4}, {25, 5, 18, 4});
+			g = rebase_growth(rewarded.data(), 21, old_class, new_class);
+			CHECK(g.result == rebase_result::changed && (bytes4(rewarded, attr_bonus) == std::array<int, 4>{20, 8, 48, 64}) && (g.old_growth == std::array<int, 4>{25, 5, 10, 0}));
+			// a bonus the old class can't explain (below its growth) is left as it is
+			auto odd = attrs({50, 23, 56, 19}, zero, {10, 5, 10, 0}, {10, 5, 10, 0});
+			const auto odd_before = odd;
+			CHECK(rebase_growth(odd.data(), 21, old_class, new_class).result == rebase_result::unexplained && odd == odd_before);
+			// nothing processed: the same (both 0)
+			auto fresh = attrs({50, 23, 56, 19}, zero, zero, zero);
+			const auto fresh_before = fresh;
+			CHECK(rebase_growth(fresh.data(), 1, old_class, new_class).result == rebase_result::unchanged && fresh == fresh_before);
+			// the ceiling: base 200 + spent 40 leave 10 for mind; the new class's +3 steps stop at 9 as in the engine
+			auto high = attrs({0, 0, 0, 200}, {0, 0, 0, 40}, {25, 5, 10, 0}, {25, 5, 10, 0});
+			CHECK(rebase_growth(high.data(), 21, old_class, new_class).result == rebase_result::changed && high[attr_bonus + 3] == 9);
+			// a comic reward on top would pass it: held at 10
+			auto higher = attrs({0, 0, 0, 200}, {0, 0, 0, 40}, {25, 5, 10, 8}, {25, 5, 10, 8});
+			CHECK(rebase_growth(higher.data(), 21, old_class, new_class).result == rebase_result::held && higher[attr_bonus + 3] == 10);
+
+			// the legacy table
+			const auto legacy = parse_growth_legacy("autogrowth-legacy 1\r\nhero_one\tclass_a\t2,1,1,0,0,0;2,2,0,0,1,0;2,4,1,1,0,0\r\nHero_Two\tclass_b\t6,0,0,0,4,-1\r\nhero_three\tclass_c\t\r\n");
+			CHECK(legacy && legacy->size() == 3 && legacy->at("hero_one").size() == 3 && legacy->count("hero_two") && legacy->at("hero_three").empty());
+			if (legacy && legacy->count("hero_one") && legacy->count("hero_two"))
+			{
+				const auto& r1 = legacy->at("hero_one");
+				CHECK(r1[2].start == 2 && r1[2].rate == 4 && (r1[2].delta == std::array<int, 4>{1, 1, 0, 0}) && (legacy->at("hero_two")[0].delta == std::array<int, 4>{0, 0, 4, -1}));
+			}
+			CHECK(parse_growth_legacy("autogrowth-legacy 1\nh\tc\t2,1,1,0,0,0\n").has_value());
+			for (const char* bad : {"", "autogrowth-legacy 2\r\n", "other\r\nh\tc\t2,1,1,0,0,0\r\n", "autogrowth-legacy 1\r\nh\tc\t2,1,1,0,0\r\n",
+			                        "autogrowth-legacy 1\r\nh\tc\t2,1,1,0,0,0,0\r\n", "autogrowth-legacy 1\r\nh\tc\t256,1,0,0,0,0\r\n",
+			                        "autogrowth-legacy 1\r\nh\tc\t2,1,128,0,0,0\r\n", "autogrowth-legacy 1\r\nh\tc\t2,x,0,0,0,0\r\n",
+			                        "autogrowth-legacy 1\r\nh\tc\t2,1,0,0,0,0;;2,1,0,0,0,0\r\n", "autogrowth-legacy 1\r\nh\tc\r\n",
+			                        "autogrowth-legacy 1\r\nh\tc\t2,1,0,0,0,0\r\nH\tc\t2,1,0,0,0,0\r\n",
+			                        "autogrowth-legacy 1\r\nh\tc\t1,1,0,0,0,0;2,1,0,0,0,0;3,1,0,0,0,0;4,1,0,0,0,0;5,1,0,0,0,0\r\n"})
+			{
+				CHECK(!parse_growth_legacy(bad));
+			}
+
+			// the records of a stream: two heroes and a valid restore bank's record 3 (its own processed level)
+			std::vector<std::size_t> heaps, tails;
+			auto image = old_image(1, 3, 3.0f, &heaps, &tails, 1);
+			const auto set_record = [&](const std::size_t attributes, const std::size_t tail, const std::array<int, 4>& bonus, const int ack)
+			{
+				for (int k = 0; k < 4; ++k)
+				{
+					image[attributes + attr_bonus + k] = static_cast<std::uint8_t>(bonus[k]);
+					image[attributes + attr_gain + k] = static_cast<std::uint8_t>(bonus[k]);
+				}
+				image[tail + tail_ack_level] = static_cast<std::uint8_t>(ack);
+			};
+			set_record(heaps[0] - attributes_size, tails[0], {25, 5, 10, 0}, 21);
+			set_record(heaps[1] - attributes_size, tails[1], {5, 1, 2, 0}, 5);
+			const std::size_t restore3 = tails[3 + 3] - instance(1).size() - 1 - heap_size - attributes_size;
+			set_record(restore3, tails[3 + 3], {12, 3, 5, 0}, 10);
+			const auto layout = hero_points_records(image.data(), image.size());
+			CHECK(layout && layout->records.size() == 3 + 21);
+			if (layout && layout->records.size() == 24)
+			{
+				std::vector<rebase_result> results;
+				for (const auto& r : layout->records)
+				{
+					if ((!r.restore && (r.stats_index == 1 || r.stats_index == 2)) || (r.restore && r.stats_index == 3))
+					{
+						results.push_back(rebase_growth(image.data() + r.attributes, image[r.tail + tail_ack_level], old_class, new_class).result);
+					}
+				}
+				CHECK(results.size() == 3);
+				CHECK((bytes4(image, heaps[0] - attributes_size + attr_bonus) == simulate_growth(new_class, 21, zero, zero).bonus));
+				CHECK((bytes4(image, heaps[1] - attributes_size + attr_bonus) == simulate_growth(new_class, 5, zero, zero).bonus));
+				CHECK((bytes4(image, restore3 + attr_bonus) == simulate_growth(new_class, 10, zero, zero).bonus));
+			}
 		}
 
 		// The flag stubs and the bridges on their own.
@@ -10414,9 +11832,45 @@ int main(const int argc, char** argv)
 		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
 		return failures ? 1 : 0;
 	}
+	if (argc > 1 && std::strcmp(argv[1], "--double-heal-rules") == 0)
+	{
+		check_double_heal_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
+	if (argc > 1 && std::strcmp(argv[1], "--placement-crush-rules") == 0)
+	{
+		check_placement_crush_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
+	if (argc > 1 && std::strcmp(argv[1], "--npc-power-rules") == 0)
+	{
+		check_npc_power_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
+	if (argc > 1 && std::strcmp(argv[1], "--death-rule-rules") == 0)
+	{
+		check_death_threshold_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
+	if (argc > 1 && std::strcmp(argv[1], "--pack-amount-rules") == 0)
+	{
+		check_pack_amount_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--break-rule-rules") == 0)
 	{
 		check_break_rule_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
+	if (argc > 1 && std::strcmp(argv[1], "--x1-leader-rules") == 0)
+	{
+		check_x1_leader_rules();
 		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
 		return failures ? 1 : 0;
 	}
@@ -10525,16 +11979,24 @@ int main(const int argc, char** argv)
 	check_xtract_rules();
 	check_personal_item_text_rules();
 	check_review_menu_rules();
+	check_cutscene_mouse_rules();
 	check_main_menu_rules();
 	check_window_title_rules();
 	check_game_version_rules();
 	check_ini_rules();
 	check_xp_curve_rules();
 	check_break_rule_rules();
+	check_placement_crush_rules();
+	check_double_heal_rules();
+	check_x1_leader_rules();
+	check_death_threshold_rules();
+	check_npc_power_rules();
+	check_pack_amount_rules();
 	check_save_format_rules();
 	check_balance_rules();
 	check_melee_weapon_rules();
 	check_pad_prompts_rules();
+	check_pad_bindings_rules();
 	check_discord_rules();
 	check_discord_pipe();
 	check_mod_order();

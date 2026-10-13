@@ -1,6 +1,7 @@
 #include "stat_help.hpp"
 
 #include "balance.hpp"
+#include "double_heal.hpp"
 #include "ini.hpp"
 #include "log.hpp"
 #include "stat_help_rules.hpp"
@@ -21,10 +22,13 @@ namespace stat_help
 		retail_t retail_getter = nullptr;
 		bool want_body = false;
 		bool want_strike = false;
+		bool want_double = false; // [Game] DoubleHeal=0 is in: the Body and Focus helps lose the double-heal lines
+		bool body_done = false, focus_done = false;
 		float body_value = 0.0f;
 		float strike_value = 0.0f;
 		std::string body_text;
 		std::string strike_text;
+		std::string focus_text;
 		balance::native_stat_help native_rates;
 		std::string native_names;
 
@@ -35,18 +39,45 @@ namespace stat_help
 			{
 				return original;
 			}
-			if (id == body_help_id && want_body && body_text.empty())
+			if (id == body_help_id && !body_done)
 			{
-				if (const auto replaced = body_help_text(original, body_value, native_rates.health_per_body, native_names))
+				body_done = true;
+				std::string text = original;
+				bool changed = false;
+				if (want_body)
 				{
-					body_text = *replaced;
+					if (const auto replaced = body_help_text(text, body_value, native_rates.health_per_body, native_names))
+					{
+						text = *replaced;
+						changed = true;
+					}
+					else
+					{
+						want_body = false; // the fetched text is not the retail literal: never touch it
+					}
 				}
-				else
+				if (want_double)
 				{
-					want_body = false; // the fetched text is not the retail literal: never touch it
+					if (const auto replaced = body_help_without_double_heal(text))
+					{
+						text = *replaced;
+						changed = true;
+					}
+				}
+				if (changed)
+				{
+					body_text = text;
 				}
 			}
-			else if (id == strike_help_id && want_strike && strike_text.empty())
+			else if (id == focus_help_id && want_double && !focus_done)
+			{
+				focus_done = true;
+				if (const auto replaced = focus_help_without_double_energy(original))
+				{
+					focus_text = *replaced;
+				}
+			}
+			if (id == strike_help_id && want_strike && strike_text.empty())
 			{
 				if (const auto replaced = strike_help_text(original, strike_value, native_rates.strength_per_point, native_names))
 				{
@@ -60,6 +91,10 @@ namespace stat_help
 			if (id == body_help_id && !body_text.empty())
 			{
 				return body_text.c_str();
+			}
+			if (id == focus_help_id && !focus_text.empty())
+			{
+				return focus_text.c_str();
 			}
 			if (id == strike_help_id && !strike_text.empty())
 			{
@@ -107,9 +142,10 @@ namespace stat_help
 		want_strike = balance::hero_strength_per_point(&strike_value);
 		native_rates = balance::native_stat_help_values();
 		native_names = native_hero_labels(native_rates.heroes);
-		if (!want_body && !want_strike)
+		want_double = double_heal::installed();
+		if (!want_body && !want_strike && !want_double)
 		{
-			logger::write("stat help: no applied [Balance] override for the scaled heroes - the stats screen keeps the game's own texts");
+			logger::write("stat help: no applied [Balance] override for the scaled heroes and packs heal double - the stats screen keeps the game's own texts");
 			return;
 		}
 		if (!game || reinterpret_cast<std::uintptr_t>(game) != image_base)
@@ -141,6 +177,10 @@ namespace stat_help
 		if (want_body)
 		{
 			logger::write("stat help: on; the stats screen's Body help states %.9g health per body point", static_cast<double>(body_value));
+		}
+		if (want_double)
+		{
+			logger::write("stat help: on; the Body and Focus helps drop the double health / energy chance (packs never heal double)");
 		}
 		if (want_strike)
 		{

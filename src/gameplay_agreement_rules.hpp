@@ -1,10 +1,20 @@
 #pragma once
 #include "limits_rules.hpp"
 #include "gameplay_capabilities.hpp"
+#include <algorithm>
 #include <array>
+#include <cstring>
 namespace gameplay_agreement_rules
 {
  constexpr std::size_t request_size=0x74,reply_size=0x50,info_size=0x30,ack_size=8;
+ // The queued sends (0x1a info, 0x1b follow-up, 0x1f reply: 0x610f30 mode 0 -> 0x60f620) stay one message only up
+ // to 300 bytes (0x60f6ef: cmp word [edi+8],0x12c; ja 0x60f7bb). A longer body goes out as 0x12 + 0x13 fragments,
+ // and the receiver's fragment handler 0x6101b0 dereferences null at 0x61020c for a stream it has not opened (the
+ // 1.5 pre-release host crash). Protocol 3's record has one fixed size, so every body is bounded here, with headroom.
+ constexpr std::size_t queued_limit=0x12c;
+ constexpr std::size_t largest_queued_body=std::max({info_size,ack_size,reply_size})+gameplay_capabilities::record_size;
+ static_assert(largest_queued_body<=queued_limit-64,"every queued agreement body must stay a single native message, with headroom");
+ static_assert(request_size+gameplay_capabilities::record_size<=0x514,"the direct 0x18 body fits the native direct buffer");
  constexpr std::uint32_t request_send=0x607d9d;
  constexpr std::uint32_t reply_broadcast=0x608477;
  constexpr std::uint32_t reply_send=0x6085f5;
@@ -61,6 +71,17 @@ namespace gameplay_agreement_rules
   {native_menu,"a118ff8a0085c0750a","native menu"},
   {native_address,"8d410cc3","native address"},
   {native_port,"668b4108c3","native port"},
+ }};
+ // ---- Fragment guard (optional) ----
+ // Native fragment receiver 0x6101b0 (registered for 0x12 and 0x13 at 0x6105d4/0x6105ec): for 0x13 it reads the
+ // stream byte (0x6101d8), walks the open streams at +0x30b0 and, when none matches, stores 0 at [esp+0x34]
+ // (0x610200) and dereferences it at 0x61020c. The miss jumps to the handler's own drop exit 0x6102b6 (pop ebx,
+ // esi, ebp; eax 0; ret) - the path it takes for a fragment that does not complete a message.
+ constexpr std::uint32_t fragment_stream_lookup=0x6101d8,fragment_stream_miss=0x610200,fragment_drop=0x6102b6;
+ inline constexpr std::array<limits_rules::guard,3> fragment_guards{{
+  {fragment_stream_lookup,"8a168d81b0300000","fragment receiver reads the stream byte and its open-stream list"},
+  {fragment_stream_miss,"c7442434000000008b4424348b5810","fragment stream miss stores and dereferences null"},
+  {fragment_drop,"5b5e33c05d83c424c3","fragment receiver drop exit"},
  }};
  // ---- Host refusal notice (non-modal) ----
  // Host setup 0x609c80 registers host-info 0x1a at 0x609cca (CALL 0x60edb0, result kept at +0x22c8); host
@@ -125,6 +146,20 @@ namespace gameplay_agreement_rules
  {
   if(!body || size<refusal_size || std::memcmp(body,refusal_magic.data(),refusal_magic.size())!=0 || body[5] || body[6] || body[7])return refusal::unspecified;
   return body[4]<=static_cast<std::uint8_t>(refusal::foreign_record) ? static_cast<refusal>(body[4]) : refusal::unspecified;
+ }
+ // Protocol 3 appends the differing rule-summary buckets (u64, bit b = bucket b of gameplay_capabilities) after the
+ // 8-byte reason: older readers check only the first 8 bytes. Zero when unknown or not a settings refusal.
+ constexpr std::size_t refusal_detail_size=refusal_size+8;
+ constexpr std::array<std::uint8_t,refusal_detail_size> refusal_body(refusal why,std::uint64_t differing)
+ {
+  std::array<std::uint8_t,refusal_detail_size> b{refusal_magic[0],refusal_magic[1],refusal_magic[2],refusal_magic[3],static_cast<std::uint8_t>(why),0,0,0};
+  for(std::size_t i=0;i<8;++i)b[refusal_size+i]=static_cast<std::uint8_t>(differing>>(i*8));
+  return b;
+ }
+ inline std::uint64_t read_refusal_buckets(const std::uint8_t* body,std::size_t size)
+ {
+  if(read_refusal(body,size)!=refusal::settings || size<refusal_detail_size)return 0;
+  std::uint64_t v=0;for(std::size_t i=0;i<8;++i)v|=std::uint64_t(body[refusal_size+i])<<(i*8);return v;
  }
  // The host's words. remote: the joining player decided (its 0x1d), so "sender" means the joining PC.
  constexpr const char* host_notice_text(refusal why,bool remote)

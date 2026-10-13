@@ -60,6 +60,7 @@ namespace forced_teams_rules
 		skill_points,     // n(ai): addSkillPoints(actor, n) - n unspent skill points to the character(s) the name means (an item's '_ACTIVATOR_': the hero who took it)
 		stat_points,      // n(ai): addStatPoints(actor, n), unspent attribute points
 		xtraction_shop,   // n(ai): native point menu, with this point's equipment-shop permission
+		solo_mode,        // n(ai): setSoloMode(actor, on) - XML1 enterSoloMode (on) / exitSoloMode (off), solo_mode.hpp
 	};
 
 	struct function_spec
@@ -71,7 +72,7 @@ namespace forced_teams_rules
 
 	// None of these names is in XMen2.exe (xml2_test walks both of its tables). The exe has no "ssss",
 	// so the DLL owns its signature strings.
-	inline constexpr std::array<function_spec, 11> functions{{
+	inline constexpr std::array<function_spec, 12> functions{{
 		{"xml2fixFeature", "i", "s"},
 		{"seatParty", "n", "ssss"},
 		{"setSkinset", "n", "ss"},
@@ -83,6 +84,7 @@ namespace forced_teams_rules
 		{"addSkillPoints", "n", "ai"},
 		{"addStatPoints", "n", "ai"},
 		{"extractionPointServices", "n", "ai"},
+		{"setSoloMode", "n", "ai"},
 	}};
 
 	// ---- The table the registration is pointed at ----------------------------------------------------
@@ -100,9 +102,12 @@ namespace forced_teams_rules
 	constexpr DWORD retail_count = 0x121;
 	constexpr DWORD builtin_table = 0x6903d8; // the operators and waittimed/iadd/strcatstr..., registered by the script system's constructor
 	constexpr DWORD builtin_count = 0x13;
-	constexpr DWORD tree_capacity = 0x140;    // 0x4d7637: a registration past 320 names is skipped without a word
+	constexpr DWORD tree_capacity = 0x140;    // 0x4d7637: the tree's 320 names; past them the game skips a registration without a word,
+	                                          // unless [Limits] ScriptFunctions put the overflow in (script_functions_rules.hpp)
 	constexpr DWORD table_count = retail_count + static_cast<DWORD>(functions.size());
-	static_assert(builtin_count + table_count <= tree_capacity, "the game's script function tree holds 320 names");
+	constexpr DWORD raised_capacity = 1024;   // script_functions_rules::default_capacity
+	static_assert(builtin_count + table_count <= raised_capacity, "the fix's functions fit the raised script function limit with room for mods");
+	constexpr DWORD probe_max = 64;            // [Test] ScriptFunctionProbes (script_functions.hpp), after the fix's own
 
 	// The registration 0x49fe30: `push 0x68a908` (imm32 at 0x49fe31), `push 0x121` (imm32 at
 	// 0x49fe36), call 0x4d8770, mov ecx,eax, call 0x4d75a0, ret. The two operands share a page.
@@ -110,9 +115,16 @@ namespace forced_teams_rules
 	constexpr DWORD table_operand = 0x49fe31;
 	constexpr DWORD count_operand = 0x49fe36;
 
-	inline std::array<limits_rules::operand_write, 2> registration_writes(const DWORD table)
+	inline std::array<limits_rules::operand_write, 2> registration_writes(const DWORD table, const DWORD count = table_count)
 	{
-		return {{{table_operand, 4, table}, {count_operand, 4, table_count}}};
+		return {{{table_operand, 4, table}, {count_operand, 4, count}}};
+	}
+
+	// How many of the table's entries the game's tree takes, the 19 builtins first; the rest need the
+	// raised limit (script_functions.hpp) or are dropped as the game drops them.
+	constexpr DWORD past_tree(const DWORD count)
+	{
+		return builtin_count + count > tree_capacity ? builtin_count + count - tree_capacity : 0;
 	}
 
 	// The script system ([0x787740], built at the first 0x4d8770) and its tree's name count: past the
@@ -210,6 +222,8 @@ namespace forced_teams_rules
 		stat_points,
 		skill_points, // addSkillPoints is registered with the rest: 1 whenever the functions are
 		xtraction_shop,
+		xtraction_services, // extractionPointServices takes the services bitmask (Load, Danger Room, Healer, Forge; #63)
+		solo_mode,    // 1 when [Game] SoloMode=1 and its AI sites installed (solo_mode.hpp)
 	};
 
 	inline std::string lowercase(std::string_view text)
@@ -238,6 +252,8 @@ namespace forced_teams_rules
 		if (clean == "skillpoints") return feature::skill_points;
 		if (clean == "statpoints") return feature::stat_points;
 		if (clean == "xtractionshop") return feature::xtraction_shop;
+		if (clean == "xtractionservices") return feature::xtraction_services;
+		if (clean == "solomode") return feature::solo_mode;
 		return std::nullopt;
 	}
 
@@ -992,11 +1008,16 @@ namespace forced_teams_rules
 		{
 			on = e.forced_teams() && e.join_hero_on() ? 1 : 0;
 		}
-		else if (which == feature::skill_points || which == feature::stat_points || which == feature::xtraction_shop)
+		else if (which == feature::skill_points || which == feature::stat_points || which == feature::xtraction_shop ||
+		         which == feature::xtraction_services)
 		{
 			on = 1; // registered with the rest, whatever the switches
 		}
-		e.log(std::string(prefix) + call_text("xml2fixFeature", *values) + " -> " + std::to_string(on) + (which ? "" : " (not a feature: forcedteams, addhero, joinhero, skillpoints, statpoints)"));
+		else if (which == feature::solo_mode)
+		{
+			on = e.solo_mode_on() ? 1 : 0;
+		}
+		e.log(std::string(prefix) + call_text("xml2fixFeature", *values) + " -> " + std::to_string(on) + (which ? "" : " (not a feature: forcedteams, addhero, joinhero, skillpoints, statpoints, xtractionshop, xtractionservices, solomode)"));
 		if (which == feature::forced_teams && !on)
 		{
 			warn_left_records(e);

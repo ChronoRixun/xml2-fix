@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(xml2_fix VERSION 1.4.0 LANGUAGES CXX RC)
+project(xml2_fix VERSION 1.5.0 LANGUAGES CXX RC)
 
 if(NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
 	message(FATAL_ERROR "Build with MSVC for Win32 (cmake -A Win32) - X-Men Legends II is a 32-bit game.")
@@ -35,12 +35,18 @@ target_include_directories(lcsave PUBLIC src/lcsave)
 add_library(xml2_fix SHARED
 	src/mold_beam.cpp
 	src/mold_controller.cpp
+	src/multipart.cpp
 	src/mold_query.cpp
 	src/mold_effects.cpp
+	src/xml1_turrets.cpp
 	src/stat_help.cpp
 	src/geometry_sharing.cpp
 	src/ladder_paths.cpp
 	src/break_rule.cpp
+	src/placement_crush.cpp
+	src/double_heal.cpp
+	src/npc_power.cpp
+	src/pack_amount.cpp
 	src/exports.cpp
 	src/gamepad_fix.cpp
 	src/pad_profile.cpp
@@ -49,6 +55,7 @@ add_library(xml2_fix SHARED
 	src/pad_input.cpp
 	src/virtual_pad.cpp
 	src/xinput_pad.cpp
+	src/x1_leader.cpp
 	src/ini.cpp
 	src/iat_hook.cpp
 	src/openspy_redirect.cpp
@@ -56,6 +63,7 @@ add_library(xml2_fix SHARED
 	src/net_trace.cpp
 	src/mod_loader.cpp
 	src/display.cpp
+	src/display_settings.cpp
 	src/frame_rate.cpp
 	src/options_menu.cpp
 	src/new_game.cpp
@@ -68,14 +76,23 @@ add_library(xml2_fix SHARED
 	src/main_menu.cpp
 	src/classic_main_backdrop.cpp
 	src/classic_main_panels.cpp
+	src/danger_room_gate.cpp
+	src/revival_cost.cpp
 	src/review_menu.cpp
+	src/cutscene_mouse.cpp
 	src/personal_item_text.cpp
 	src/xtract.cpp
 	src/forced_teams.cpp
+	src/script_functions.cpp
+	src/script_function_overflow.cpp
+	src/solo_mode.cpp
 	src/conversations.cpp
 	src/gameplay_agreement.cpp
 	src/patch_transaction.cpp
 	src/explosive_first_hit.cpp
+	src/rank_costs.cpp
+	src/death_threshold.cpp
+	src/death_switch.cpp
 	src/confirmation_release.cpp
 	src/objective_text.cpp
 	src/xp_curve.cpp
@@ -108,8 +125,11 @@ set_target_properties(xml2_fix PROPERTIES OUTPUT_NAME dinput ARCHIVE_OUTPUT_NAME
 # Checks the built DLL the way the game loads it (imported from next to the executable).
 add_executable(xml2_test test/xml2_test.cpp src/frame_capture.cpp src/local_ip.cpp src/discord_ipc.cpp src/iat_hook.cpp src/pad_profile.cpp) # frame_capture: the back buffer copy, checked on a device of its own; local_ip: what LocalIP=auto asks Windows, to check the fix's answers against; discord_ipc: the Discord pipe, against a Discord of the test's own and for --discord-live; iat_hook: msvcr71.dll's ExitProcess hooked as the fix hooks it; pad_profile: the Dual Action's objects and state, for the virtual pads' data formats
 target_compile_definitions(xml2_test PRIVATE _WINSOCK_DEPRECATED_NO_WARNINGS)
-target_include_directories(xml2_test PRIVATE src) # ini_rules.hpp, display_rules.hpp, online_rules.hpp, local_ip_rules.hpp, frame_rate_rules.hpp, options_menu_rules.hpp, resolution_rules.hpp, limits_rules.hpp, forced_teams_rules.hpp, conversations_rules.hpp, postgame_rules.hpp, main_menu_rules.hpp, review_menu_rules.hpp, xp_curve_rules.hpp, balance_rules.hpp, break_rule_rules.hpp, window_title_rules.hpp, game_version_rules.hpp, pad_prompts_rules.hpp, test_input_rules.hpp, pad_input_rules.hpp, virtual_pad_rules.hpp, discord_rules.hpp, mod_order.hpp, image_file.hpp: the decisions, checked without the game
+target_include_directories(xml2_test PRIVATE src) # ini_rules.hpp, display_rules.hpp, online_rules.hpp, local_ip_rules.hpp, frame_rate_rules.hpp, options_menu_rules.hpp, resolution_rules.hpp, limits_rules.hpp, forced_teams_rules.hpp, conversations_rules.hpp, postgame_rules.hpp, main_menu_rules.hpp, review_menu_rules.hpp, cutscene_mouse_rules.hpp, xp_curve_rules.hpp, balance_rules.hpp, break_rule_rules.hpp, x1_leader_rules.hpp, window_title_rules.hpp, game_version_rules.hpp, pad_prompts_rules.hpp, test_input_rules.hpp, pad_input_rules.hpp, virtual_pad_rules.hpp, discord_rules.hpp, mod_order.hpp, image_file.hpp: the decisions, checked without the game
 target_link_libraries(xml2_test PRIVATE xml2_fix dinput8.lib dxguid xinput ws2_32 winmm iphlpapi) # dinput8.lib: only for c_dfDIJoystick(2); winmm: timeBeginPeriod in the present timing
+
+add_executable(xml2_multipart_test test/multipart_test.cpp)
+target_include_directories(xml2_multipart_test PRIVATE src)
 
 add_executable(xml2_ladder_paths_test test/ladder_paths_test.cpp)
 target_include_directories(xml2_ladder_paths_test PRIVATE src)
@@ -132,6 +152,9 @@ target_compile_options(xml2_classic_main_panels_test PRIVATE /UNDEBUG)
 
 add_executable(xml2_stat_points_test test/stat_points_test.cpp)
 target_include_directories(xml2_stat_points_test PRIVATE src)
+
+add_executable(xml2_solo_mode_test test/solo_mode_test.cpp)
+target_include_directories(xml2_solo_mode_test PRIVATE src)
 
 add_executable(xml2_stat_help_test test/stat_help_test.cpp)
 target_include_directories(xml2_stat_help_test PRIVATE src)
@@ -200,6 +223,18 @@ target_include_directories(xml2_explosive_first_hit_test PRIVATE src)
 # This test reserves the retail image address for isolated native code.
 target_link_options(xml2_explosive_first_hit_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
+add_executable(xml2_x1_leader_test test/x1_leader_test.cpp src/x1_leader.cpp)
+target_include_directories(xml2_x1_leader_test PRIVATE src)
+# This test reserves the retail image address for isolated native code.
+target_link_options(xml2_x1_leader_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# [Game] DeathSwitchClear: the production installer and hook on the retail addresses, in a fixture section of the
+# test's own (its image is based at 0x300000 so that section spans them): rules, every guard refusal, the one rel32
+# write, the hook's clear and what it leaves alone. Optional argument: a retail XMen2.exe, read only, for the guards.
+add_executable(xml2_death_switch_test test/death_switch_test.cpp src/death_switch.cpp)
+target_include_directories(xml2_death_switch_test PRIVATE src)
+target_link_options(xml2_death_switch_test PRIVATE /BASE:0x300000 /DYNAMICBASE:NO)
+
 add_executable(xml2_gameplay_agreement_test test/gameplay_agreement_test.cpp src/gameplay_agreement.cpp src/patch_transaction.cpp src/explosive_first_hit.cpp src/game_version.cpp)
 target_include_directories(xml2_gameplay_agreement_test PRIVATE src)
 target_link_libraries(xml2_gameplay_agreement_test PRIVATE ws2_32)
@@ -264,10 +299,28 @@ END
 add_executable(xml2_entity_transfer_test test/entity_transfer_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/entity_transfer.cpp)
 target_include_directories(xml2_entity_transfer_test PRIVATE src)
 target_link_options(xml2_entity_transfer_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# multipart::install against the retail image (review cases: invalid table operand, foreign setSegmentVisible handler,
+# relocated table, changed guard) and the loop length's generator draw. SKIPPED without XML2_FIX_TEST_EXE.
+add_executable(xml2_multipart_install_test test/multipart_install_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_multipart_install_test PRIVATE src)
+target_link_options(xml2_multipart_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 # The save-core capture bridges executed as emitted under the retail and E10A2 profiles (Phase A, review P1).
 add_executable(xml2_save_capture_bridge_test test/save_capture_bridge_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
 target_include_directories(xml2_save_capture_bridge_test PRIVATE src)
 target_link_options(xml2_save_capture_bridge_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# [Game] RankCosts: the cost rules, and the production install + stubs executed at the retail addresses against
+# invented talents; an optional executable on the command line checks every guard and site against retail bytes.
+add_executable(xml2_rank_costs_test test/rank_costs_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/rank_costs.cpp)
+target_include_directories(xml2_rank_costs_test PRIVATE src)
+target_link_options(xml2_rank_costs_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# [Limits] ScriptFunctions: the decisions and the overflow table, then the retail registration (0x4d75a0) and lookup
+# (0x4d6910) copied from an executable given on the command line and run at their own addresses, stock and patched with
+# the DLL's own stubs (without the executable the native part is SKIPPED). Reserves the retail image address.
+add_executable(xml2_script_functions_test test/script_functions_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/script_function_overflow.cpp)
+target_include_directories(xml2_script_functions_test PRIVATE src)
+target_link_options(xml2_script_functions_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
 # The entity-capacity install's game-free decisions: ledger shape and binding, allocator ring, save claim, transfer
 # bounds, startup quiescence, layout contract.

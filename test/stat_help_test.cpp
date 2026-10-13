@@ -3,7 +3,11 @@
 
 #include "stat_help_rules.hpp"
 
+#include <Windows.h>
+
+#include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 int main()
@@ -84,6 +88,43 @@ int main()
 	std::snprintf(rendered, sizeof(rendered), qualified_strike->c_str());
 	check(std::string(rendered).find("+2.5% per Striking") != std::string::npos);
 	check(std::string(rendered).find("+10% per Striking") != std::string::npos);
+
+	// [Game] DoubleHeal=0: the Body and Focus helps lose their double-heal lines (made-up text around the matched
+	// fragments; "\\n" is the UI's two-character escape).
+	const std::string invented_body = "Raises invented points ($HP) and chance for double health from potions.\\n\\n~02Invented~~\\n7 per Body\\n\\n~02Double Heal Chance :~~ ^%d%%\\n\\n~02After~~";
+	const auto plain_body = body_help_without_double_heal(invented_body);
+	check(plain_body.has_value() && *plain_body == "Raises invented points ($HP).\\n\\n~02Invented~~\\n7 per Body\\n\\n~02After~~");
+	check(!body_help_without_double_heal("no such phrase\\n\\n~02Double Heal Chance :~~ ^%d%%").has_value());
+	check(!body_help_without_double_heal(*plain_body).has_value()); // already plain: untouched
+	// Both edits compose in either order (the fix applies [Balance]'s first).
+	check(body_help_text(*plain_body, 2.5f)->find("2.5 per Body") != std::string::npos);
+	check(body_help_without_double_heal(*body_help_text(invented_body, 2.5f))->find("Double Heal") == std::string::npos);
+	const std::string invented_focus = "Raises invented points ($EP), energy regeneration, Melee $DMG_MENTAL, and chance for double energy from potions.\\n\\n~02Regen :~~ +^%d%%\\n~02Double Energy Chance :~~ ^%d%%\\n~02Bonus :~~ +^%d%%";
+	const auto plain_focus = focus_help_without_double_energy(invented_focus);
+	check(plain_focus.has_value() && *plain_focus == "Raises invented points ($EP), energy regeneration and Melee $DMG_MENTAL.\\n\\n~02Regen :~~ +^%d%%%.0s\\n~02Bonus :~~ +^%d%%");
+	check(!focus_help_without_double_energy("no such phrase").has_value());
+	// The screen's three arguments still land where they belong: regeneration, (the chance, taken and not printed),
+	// damage bonus. The game formats with msvcr71's _vsnprintf: checked there too when XML2_FIX_TEST_GAME_DIR names
+	// an installed game's folder (the C runtime is the game's own file, not in the repository).
+	std::snprintf(rendered, sizeof(rendered), plain_focus->c_str(), 12, 34, 56);
+	check(std::string(rendered) == "Raises invented points ($EP), energy regeneration and Melee $DMG_MENTAL.\\n\\n~02Regen :~~ +^12%\\n~02Bonus :~~ +^56%");
+	const char* game_dir = std::getenv("XML2_FIX_TEST_GAME_DIR");
+	const std::string crt_path = game_dir && *game_dir ? std::string(game_dir) + "\\msvcr71.dll" : std::string();
+	if (crt_path.empty())
+	{
+		std::printf("  skip  the game's _vsnprintf: XML2_FIX_TEST_GAME_DIR is not set\n");
+	}
+	if (HMODULE crt = crt_path.empty() ? nullptr : LoadLibraryA(crt_path.c_str()))
+	{
+		using vsn_t = int(__cdecl*)(char*, size_t, const char*, va_list);
+		if (auto vsn = reinterpret_cast<vsn_t>(GetProcAddress(crt, "_vsnprintf")))
+		{
+			auto game_format = [&](const char* format, ...) { va_list a; va_start(a, format); const int n = vsn(rendered, sizeof(rendered), format, a); va_end(a); return n; };
+			check(game_format(plain_focus->c_str(), 12, 34, 56) > 0 && std::string(rendered).find("+^12%\\n~02Bonus :~~ +^56%") != std::string::npos);
+			std::printf("stat help rules: msvcr71 _vsnprintf checked\n");
+		}
+		FreeLibrary(crt);
+	}
 
 	std::printf("stat help rules: %d failures\n", failed);
 	return failed ? 1 : 0;

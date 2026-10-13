@@ -308,6 +308,8 @@ namespace lcsave::detail
 		std::vector<std::string> course;
 		u32 hero_count = 0;
 		std::vector<std::vector<u16>> herostat_talents;        // by stats index: talent ids the herostat lists
+		std::vector<u8> herostat_xpexempt;                     // by stats index: 1 = the entry is xpexempt (no level processing)
+		std::vector<std::string> herostat_autospend;           // by stats index: the autospend class name, lower case ("" = none)
 		// zone numbering, read lazily from the placement files
 		mutable std::map<std::string, std::optional<ZoneNumbering>> zones;
 		const ZoneNumbering* zone_numbering(const std::string& zone) const;

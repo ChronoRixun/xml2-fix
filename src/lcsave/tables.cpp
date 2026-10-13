@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <set>
 
@@ -31,6 +32,30 @@ namespace lcsave::detail
 			std::wstring out;
 			for (const unsigned char c : s) out.push_back(static_cast<wchar_t>(c));      // latin-1 file names
 			return out;
+		}
+
+		std::string ascii_lower(std::string s)
+		{
+			for (auto& c : s) c = (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+			return s;
+		}
+
+		// an attribute's value, lower case, the name matched in any case (the last one set wins); "" when absent
+		std::string attribute_lower(const XNode& e, const char* name)
+		{
+			std::string out;
+			for (const auto& [key, value] : e.attrs)
+			{
+				if (ascii_lower(key) == name) out = ascii_lower(value);
+			}
+			return out;
+		}
+
+		// a herostat entry's xpexempt attribute (any case of the name; "true" or "1", any case, as the builder writes it)
+		bool xpexempt_value(const XNode& e)
+		{
+			const auto v = attribute_lower(e, "xpexempt");
+			return v == "true" || v == "1";
 		}
 
 		struct In
@@ -686,11 +711,15 @@ namespace lcsave::detail
 				if (!read_file_bytes(path, raw)) fail("cannot read Data\\herostat");
 				const auto root = decode_xmlb(raw.data(), raw.size());
 				B.herostat_talents.assign(B.stat.size(), {});
+				B.herostat_xpexempt.assign(B.stat.size(), 0);
+				B.herostat_autospend.assign(B.stat.size(), std::string());
 				u32 si = 0;
 				for (const auto& e : root.children)
 				{
 					if (e.tag != "stats") continue;
 					++si;
+					if (si < B.herostat_xpexempt.size()) B.herostat_xpexempt[si] = xpexempt_value(e) ? 1 : 0;
+					if (si < B.herostat_autospend.size()) B.herostat_autospend[si] = attribute_lower(e, "autospend");
 					const auto* name = e.get("name");
 					if (si >= B.herostat_talents.size() || !name) continue;
 					for (const auto& c : e.children)
@@ -867,6 +896,61 @@ namespace lcsave
 
 	std::uint32_t Tables::catalogue_revision() const { return data ? data->catalogue.revision : 0; }
 	std::uint32_t Tables::content_version() const { return data ? static_cast<std::uint32_t>(data->reference.cv) : 0; }
+	bool Tables::xp_exempt(const std::uint32_t stats_index) const
+	{
+		return data && data->build && stats_index < data->build->herostat_xpexempt.size() && data->build->herostat_xpexempt[stats_index] != 0;
+	}
+	std::string Tables::hero_autospend(const std::uint32_t stats_index) const
+	{
+		return data && data->build && stats_index < data->build->herostat_autospend.size() ? data->build->herostat_autospend[stats_index] : std::string();
+	}
+
+	bool read_autospend(const std::wstring& build_dir, std::vector<AutospendClass>& out, std::string& error)
+	{
+		out.clear();
+		try
+		{
+			std::vector<std::uint8_t> raw;
+			const auto path = detail::data_file(build_dir + L"\\Data", L"autospend");
+			if (path.empty() || !detail::read_file_bytes(path, raw))
+			{
+				error = "cannot read Data\\autospend";
+				return false;
+			}
+			const auto root = detail::decode_xmlb(raw.data(), raw.size());
+			for (const auto& c : root.children)
+			{
+				if (c.tag != "CharacterClass") continue;
+				if (out.size() >= autospend_class_limit) break;                    // 0x43d18d: the parser keeps four classes
+				AutospendClass cls;
+				cls.name = detail::attribute_lower(c, "name");
+				for (const auto& b : c.children)
+				{
+					if (detail::ascii_lower(b.tag) != "bonus") continue;
+					if (cls.rules.size() >= autospend_rule_limit) break;           // 0x43d373: four rules a class
+					AutospendRule r;
+					const auto num = [&](const char* name) { return std::atoi(detail::attribute_lower(b, name).c_str()); };
+					r.start = static_cast<std::uint8_t>(num("start"));
+					r.rate = static_cast<std::uint8_t>(num("rate"));
+					const char* order[4] = {"strength", "speed", "body", "mind"};
+					for (int k = 0; k < 4; ++k) r.delta[k] = static_cast<std::int8_t>(num(order[k]));
+					cls.rules.push_back(r);
+				}
+				out.push_back(std::move(cls));
+			}
+			return true;
+		}
+		catch (const detail::Error& e)
+		{
+			error = "Data\\autospend: " + e.message;
+			return false;
+		}
+	}
+
+	std::string Tables::stats_key(const std::uint32_t stats_index) const
+	{
+		return data && data->build && stats_index < data->build->stat.size() ? data->build->stat[stats_index] : std::string();
+	}
 	std::uint32_t Tables::hero_count() const { return data ? data->build->hero_count : 0; }
 	std::uint32_t Tables::stats_count() const { return data ? static_cast<std::uint32_t>(data->build->stat.size()) : 0; }
 	std::uint32_t Tables::item_count() const { return data ? static_cast<std::uint32_t>(data->build->item.size()) : 0; }

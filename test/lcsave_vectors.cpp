@@ -1118,6 +1118,40 @@ namespace
 			const auto f = read_file(saved.bytes.data(), saved.bytes.size(), kind_campaign);
 			check(f.header.campaign_serial == 77 && f.header.save_sequence == 3 && f.data("META")["origin"].as_int() == 0 && !f.sections.count("LGCY"),
 				"saver header and META");
+			check((f.header.optional_features & ~1u) == 0, "the saver sets no optional bit of its own but KEYS");
+		}
+		{
+			// the caller's optional-feature bits (the fifth-level catch-up's 2 and 4) reach the header beside KEYS, the
+			// reader ignores them, and the loader's stream is the same with or without them
+			NewFileContext marked = ctx;
+			marked.optional_features = 6;
+			const auto with_bits = old_stream_to_new(std::vector<std::uint8_t>(back.bytes.begin() + old_envelope, back.bytes.end()), tables, marked);
+			check(with_bits.ok && saved.ok, "old_stream_to_new with optional bits (" + with_bits.error + ")");
+			if (with_bits.ok && saved.ok)
+			{
+				const auto f = read_file(with_bits.bytes.data(), with_bits.bytes.size(), kind_campaign);
+				const auto plain = read_file(saved.bytes.data(), saved.bytes.size(), kind_campaign);
+				check(f.header.optional_features == (6u | (plain.header.optional_features & 1u)), "optional bits 1 and 2 written beside KEYS");
+				const auto l1 = new_to_old_stream(with_bits.bytes, tables), l2 = new_to_old_stream(saved.bytes, tables);
+				check(l1.ok && l2.ok && l1.bytes == l2.bytes, "optional bits change nothing the loader rebuilds");
+			}
+			if (r.ok)
+			{
+				const auto imported = read_file(r.bytes.data(), r.bytes.size(), kind_campaign);
+				check((imported.header.optional_features & 6u) == 0, "an import of an old save vouches for no fifth-level points");
+			}
+		}
+		{
+			// xpexempt by stats index, from the build's herostat (invented flags)
+			b->herostat_xpexempt.assign(b->stat.size(), 0);
+			b->herostat_xpexempt[2] = 1;
+			check(!tables.xp_exempt(0) && !tables.xp_exempt(1) && tables.xp_exempt(2) && !tables.xp_exempt(100000), "xp_exempt by stats index");
+			check(tables.stats_key(1) == b->stat[1] && tables.stats_key(100000).empty(), "stats_key by stats index");
+			b->herostat_autospend.assign(b->stat.size(), std::string());
+			b->herostat_autospend[1] = "class_x";
+			check(tables.hero_autospend(1) == "class_x" && tables.hero_autospend(2).empty() && tables.hero_autospend(100000).empty(), "hero_autospend by stats index");
+			Tables none;
+			check(!none.xp_exempt(2) && none.stats_key(1).empty(), "no tables: nothing exempt, no key");
 		}
 
 		// Durable provenance must survive two runtime resaves, including opaque KEYS references.
@@ -1606,6 +1640,35 @@ namespace
 		d = decide_features(marked, retail_layout); check(!d.ok && d.reason == downgrade_refused && d.required_features == 1, "decide_features over a feature-1 file on retail");
 	}
 
+	// Data/autospend as the engine loads it: four classes, four rules each, record order strength/speed/body/mind
+	void test_autospend(const fs::path& folder)
+	{
+		fs::create_directories(folder / "Data");
+		std::vector<AutospendClass> classes;
+		std::string error;
+		check(!read_autospend(folder.wstring(), classes, error) && contains(error, "autospend"), "no Data/autospend: an error");
+		E root{"AutoSpend", {}, {}};
+		const char* names[5] = {"class_a", "Class_B", "class_c", "class_d", "class_e"};
+		for (int i = 0; i < 5; ++i)
+		{
+			auto& c = root.add(E{"CharacterClass", {{"body", "10"}, {"name", names[i]}}, {}});
+			for (int k = 0; k < (i == 1 ? 5 : 1); ++k)
+				c.add(E{"bonus", {{"start", std::to_string(2 + k)}, {"rate", std::to_string(k)}, {"strength", std::to_string(i)}, {"mind", "-2"}, {"Speed", "3"}}, {}});
+		}
+		const auto raw = encode_xmlb(root);
+		std::ofstream(folder / "Data" / "autospend.xmlb", std::ios::binary).write(reinterpret_cast<const char*>(raw.data()), static_cast<std::streamsize>(raw.size()));
+		check(read_autospend(folder.wstring(), classes, error), "read_autospend (" + error + ")");
+		check(classes.size() == autospend_class_limit && classes[1].name == "class_b" && classes[3].name == "class_d", "the first four classes load, names lower case");
+		check(classes.size() == 4 && classes[1].rules.size() == autospend_rule_limit && classes[0].rules.size() == 1, "four rules a class");
+		if (classes.size() == 4 && classes[1].rules.size() == 4)
+		{
+			const auto& r = classes[1].rules[3];
+			check(r.start == 5 && r.rate == 3 && r.delta[0] == 1 && r.delta[1] == 3 && r.delta[2] == 0 && r.delta[3] == -2, "a rule: start, rate, strength, speed, body, mind");
+		}
+		std::ofstream(folder / "Data" / "autospend.xmlb", std::ios::binary).write("junk", 4);
+		check(!read_autospend(folder.wstring(), classes, error) && contains(error, "autospend"), "a damaged Data/autospend: an error, no crash");
+	}
+
 	void test_typed_registry(const fs::path& scratch)
 	{
 		TypedRegistry reg;
@@ -1826,6 +1889,7 @@ void run_vectors(const fs::path& scratch)
 	test_oldsave_layouts();
 	test_feature_marker();
 	test_typed_registry(scratch / "registry");
+	test_autospend(scratch / "autospend");
 	test_e10a2_api(scratch / "e10a2");
 }
 

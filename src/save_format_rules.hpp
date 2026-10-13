@@ -33,7 +33,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -503,6 +505,7 @@ namespace save_format_rules
 		std::uint32_t content_version = 0;
 		std::uint32_t catalogue_revision = 0;
 		std::uint32_t writer_version = 0;
+		std::uint32_t optional_features = 0;   // header 0x14 (bit 0 KEYS; bits 1 / 2 the fifth-level catch-up)
 		std::uint64_t campaign_serial = 0;
 		std::uint32_t save_sequence = 0;
 		std::uint64_t saved_at = 0;
@@ -583,6 +586,7 @@ namespace save_format_rules
 		const std::uint32_t sections = rd32(data + 0x1c);
 		const std::uint32_t table = rd32(data + 0x20);
 		out.writer_version = rd32(data + 0x24);
+		out.optional_features = rd32(data + 0x14);
 		out.content_version = rd32(data + 0x28);
 		out.catalogue_revision = rd32(data + 0x2c);
 		out.campaign_serial = rd64(data + 0x30);
@@ -1368,6 +1372,528 @@ namespace save_format_rules
 		float play_time = 0;
 		std::memcpy(&play_time, data + p + 0xd4, 4);
 		return play_time;
+	}
+
+	// ---- The one-time catch-up of the fifth-level points ([Game] LevelSkillPoints / LevelStatPoints=xml1) -------
+	//
+	// X-Men Legends I gives 2 skill points and 2 stat points (8 on the port's x4 stat scale) for a level divisible by 5,
+	// XMen2.exe 1 / 4 (rank_costs_rules.hpp; the keys restore the first game's rule in the level processing 0x4bbae0).
+	// A hero saved before the key was installed has been processed up to its "ack" level with 1 / 4 on every level, so
+	// it is short (level_skill_points(5) - 1) skill points and (level_stat_points(5) - 4) stat points for every multiple
+	// of 5 in (first processed level, ack level]. Levels above the ack level are still to be processed and get the new
+	// rule from the engine itself (heroes not yet in the party keep ack 1 with a higher level in real saves).
+	//
+	// The marker: two bits of the LC header's optional-feature word (SPEC-new-save 1.1: "bit set, ignored when unknown";
+	// bit 0 = KEYS). A campaign file written while a key is installed carries that key's bit: its heroes' points include
+	// the bonus up to their ack levels. A file without the bit - any older writer, an import of an old save (written with
+	// the reference era's content version, and its resaves keep LGCY), a fix whose key isn't installed - gets the
+	// catch-up once on load while the key is installed; the next write carries the bit, so loading that is a no-op.
+	// Neither the content version nor the writer version can tell this: both are the same for a 0.2.2 save written with
+	// the keys and one written without them.
+	constexpr std::uint32_t optional_level_skill_points = 1u << 1;
+	constexpr std::uint32_t optional_level_stat_points = 1u << 2;
+
+	// The level-up object's constructor (0x44a430, vtable 0x685294) stores its processed level +0x3c = 1, whatever the
+	// hero's starting level; the level processing then runs from processed + 1. (Every xpexempt level-40 form keeps
+	// ack 1 in real saves.) So no hero processed a level at or below 1, and a hero starting above level 1 was processed
+	// from level 2 up with the old rule like any other.
+	constexpr int first_processed_level = 1;
+
+	// multiples of 5 in (start, ack]: the fifth levels processed with the old rule
+	constexpr int fifth_levels_processed(const int ack_level, const int start = first_processed_level)
+	{
+		if (ack_level <= start || ack_level <= 0)
+		{
+			return 0;
+		}
+		const int from = start < 0 ? 0 : start;
+		return ack_level / 5 - from / 5;
+	}
+
+	constexpr std::size_t attr_skill_points = 0x10;  // u16 (CStats+0x18; the engine reads it as a signed short)
+	constexpr std::size_t attr_trait_points = 0x12;  // u16 (CStats+0x1a)
+	constexpr std::size_t attr_level = 0x14;         // u8 (CStats+0x1c)
+	constexpr std::size_t tail_ack_level = 0x14;     // u8 (the level-up object's +0x3c), after health, energy, seat, valid + 3, experience
+	constexpr std::size_t restore_records = 22;
+	constexpr int points_ceiling = 0x7fff;
+
+	struct hero_points_record
+	{
+		std::size_t attributes = 0;    // offset of the CAttributes scalars in the image
+		std::size_t tail = 0;          // offset of the equipment tail
+		std::uint32_t stats_index = 0; // hero block n -> n + 1; restore record n -> n
+		bool restore = false;
+	};
+
+	struct hero_points_layout
+	{
+		std::vector<hero_points_record> records;  // the hero blocks, then (when the bank is valid) restore records 1..21
+		bool restore_valid = false;
+	};
+
+	// Walks an old slot image (envelope + payload): every hero block and, when the restore bank's valid byte is set,
+	// every restore record but the reserved record 0. Nothing when the stream doesn't parse.
+	inline std::optional<hero_points_layout> hero_points_records(const std::uint8_t* data, const std::size_t size)
+	{
+		const auto heaps = hero_heaps(data, size);
+		if (!heaps)
+		{
+			return std::nullopt;
+		}
+		std::size_t p = 0;
+		const auto need = [&](const std::size_t n) { return p + n <= size; };
+		const auto skip_instance = [&]() -> bool
+		{
+			if (!need(instance_fixed))
+			{
+				return false;
+			}
+			p += instance_fixed;
+			for (int list = 0; list < 3; ++list)
+			{
+				if (!need(4))
+				{
+					return false;
+				}
+				const std::uint32_t count = rd32(data + p);
+				p += 4;
+				if (count > max_enhancements || !need(count * enhancement_size))
+				{
+					return false;
+				}
+				p += count * enhancement_size;
+			}
+			return true;
+		};
+		// one record from its attributes: attributes, heap, the equipped count and instances, the tail
+		const auto record = [&](hero_points_record& r) -> bool
+		{
+			if (!need(attributes_size + heap_size + 1))
+			{
+				return false;
+			}
+			r.attributes = p;
+			p += attributes_size + heap_size;
+			const std::uint8_t equipped = data[p++];
+			if (equipped > 32)
+			{
+				return false;
+			}
+			for (std::uint8_t i = 0; i < equipped; ++i)
+			{
+				if (!skip_instance())
+				{
+					return false;
+				}
+			}
+			if (!need(equipment_tail))
+			{
+				return false;
+			}
+			r.tail = p;
+			p += equipment_tail;
+			return true;
+		};
+		const auto at_tag = [&](const char* text)
+		{
+			const std::size_t n = std::strlen(text);
+			return need(tag_size) && data[p] == tag_marker && std::memcmp(data + p + 1, text, n) == 0;
+		};
+		hero_points_layout out;
+		if (heaps->empty())
+		{
+			// no hero block: the tag follows the world items; find it as old_play_time does
+			p = old_envelope + tag_size + item_head_size;
+			while (p + tag_size <= size && !at_tag("[CHARACTERSUNLOCKED]"))
+			{
+				++p;
+			}
+		}
+		else
+		{
+			p = (*heaps)[0].block;
+		}
+		for (std::size_t n = 0; n < heaps->size(); ++n)
+		{
+			hero_points_record r;
+			r.stats_index = static_cast<std::uint32_t>(n + 1);
+			if (p != (*heaps)[n].block || !record(r) || !need(powers_size + costume_size))
+			{
+				return std::nullopt;
+			}
+			p += powers_size + costume_size;
+			out.records.push_back(r);
+		}
+		if (!at_tag("[CHARACTERSUNLOCKED]"))
+		{
+			return std::nullopt;
+		}
+		p += tag_size + unlocked_size;
+		if (!at_tag("[CHARACTERSRESTORE]") || !need(tag_size + 1))
+		{
+			return std::nullopt;
+		}
+		p += tag_size;
+		out.restore_valid = data[p++] != 0;
+		for (std::size_t n = 0; n < restore_records; ++n)
+		{
+			hero_points_record r;
+			r.stats_index = static_cast<std::uint32_t>(n);
+			r.restore = true;
+			if (!record(r))
+			{
+				return std::nullopt;
+			}
+			if (out.restore_valid && n > 0)
+			{
+				out.records.push_back(r);
+			}
+		}
+		return out;
+	}
+
+	struct level_catchup_grant
+	{
+		std::uint32_t stats_index = 0;
+		bool restore = false;
+		int level = 0;
+		int ack_level = 0;
+		int fifths = 0;                 // fifth levels processed with the old rule
+		int skill_before = 0, skill_after = 0;
+		int stat_before = 0, stat_after = 0;
+		bool capped = false;            // a sum above 0x7fff was held at 0x7fff
+	};
+
+	// Adds `skill_per_fifth` unspent skill points and `stat_per_fifth` unspent stat points per fifth level processed to
+	// every record `exempt(stats_index)` doesn't exclude. Returns the records that changed (one log line each).
+	template <class Exempt>
+	inline std::vector<level_catchup_grant> apply_level_catchup(std::uint8_t* data, const std::size_t size, const hero_points_layout& layout,
+		const int skill_per_fifth, const int stat_per_fifth, Exempt&& exempt)
+	{
+		std::vector<level_catchup_grant> out;
+		if (skill_per_fifth <= 0 && stat_per_fifth <= 0)
+		{
+			return out;
+		}
+		for (const auto& r : layout.records)
+		{
+			if (r.attributes + attributes_size > size || r.tail + equipment_tail > size || exempt(r.stats_index))
+			{
+				continue;
+			}
+			level_catchup_grant g;
+			g.stats_index = r.stats_index;
+			g.restore = r.restore;
+			g.level = data[r.attributes + attr_level];
+			g.ack_level = data[r.tail + tail_ack_level];
+			g.fifths = fifth_levels_processed(g.ack_level);
+			if (g.fifths <= 0)
+			{
+				continue;
+			}
+			g.skill_before = static_cast<std::int16_t>(rd16(data + r.attributes + attr_skill_points));
+			g.stat_before = static_cast<std::int16_t>(rd16(data + r.attributes + attr_trait_points));
+			const auto add = [&](const int before, const int per) -> int
+			{
+				const int after = before + (per > 0 ? per * g.fifths : 0);
+				if (after > points_ceiling)
+				{
+					g.capped = true;
+					return points_ceiling;
+				}
+				return after;
+			};
+			g.skill_after = add(g.skill_before, skill_per_fifth);
+			g.stat_after = add(g.stat_before, stat_per_fifth);
+			const auto put = [&](const std::size_t at, const int value)
+			{
+				data[at] = static_cast<std::uint8_t>(value & 0xff);
+				data[at + 1] = static_cast<std::uint8_t>((value >> 8) & 0xff);
+			};
+			put(r.attributes + attr_skill_points, g.skill_after);
+			put(r.attributes + attr_trait_points, g.stat_after);
+			out.push_back(g);
+		}
+		return out;
+	}
+
+	// The bits a campaign write carries, from the keys installed now.
+	constexpr std::uint32_t level_catchup_marker(const bool skill_installed, const bool stat_installed)
+	{
+		return (skill_installed ? optional_level_skill_points : 0u) | (stat_installed ? optional_level_stat_points : 0u);
+	}
+
+	// What a load must still add per fifth level: each installed key's extra points, unless the file's bit vouches for them.
+	struct level_catchup_need
+	{
+		int skill_per_fifth = 0;
+		int stat_per_fifth = 0;
+	};
+	constexpr level_catchup_need level_catchup_needed(const std::uint32_t optional_features, const bool skill_installed, const bool stat_installed,
+		const int skill_extra, const int stat_extra)
+	{
+		return {skill_installed && !(optional_features & optional_level_skill_points) ? skill_extra : 0,
+		        stat_installed && !(optional_features & optional_level_stat_points) ? stat_extra : 0};
+	}
+
+	// ---- The one-time re-base of the automatic stat growth (builder SPEC 94: autospend classes x1_bruiser / x1_support)
+	//
+	// XMen2.exe's level processing (0x4bbae0) runs, for every level from processed + 1 to the hero's level, the hero's
+	// autospend class rule walk (0x43cf90 -> 0x43d000): a rule (start, rate, four signed deltas) fires on level L when
+	// L == start, or L > start, rate > 0 and (L - start) % rate == 0 (rate 0: once, at start); each fire calls the
+	// class-bonus setter 0x43a620 once per stat with (bonus + delta) as a byte. The setter refuses a value that would
+	// take base + spent + bonus above 250; a value above the old one also adds the rise to the "gain" bytes
+	// (CStats+0x14, 0x43a420). The same setter takes the Review comics' stat rewards (0x5d0920), so a saved bonus is
+	// the class's growth plus those rewards.
+	//
+	// A save written before the build's classes changed holds the old class's growth. The re-base, once per save (header
+	// optional bit 3) and per hero / valid restore record: bonus = saved - old class growth (to the processed level) +
+	// current class growth; gain the same with the rises. The old classes come from the build
+	// (Data\lcsave\autogrowth-legacy.txt, written by the builder from the player's XML2 data); the current ones from
+	// the build's Data\autospend as the engine loads it. A hero whose saved bonus is below its old class's growth in
+	// some stat (it was not grown by that class) is left as it is.
+	constexpr std::uint32_t optional_class_growth = 1u << 3;
+	constexpr std::size_t attr_base = 0x0;           // u8[4] (CStats+8)
+	constexpr std::size_t attr_spent = 0x4;          // u8[4] (CStats+0xc)
+	constexpr std::size_t attr_bonus = 0x8;          // u8[4] (CStats+0x10): the class bonus, [strength, speed, body, mind]
+	constexpr std::size_t attr_gain = 0xc;           // u8[4] (CStats+0x14): the rises 0x43a620 recorded
+	constexpr int stat_ceiling = 250;                // 0x43a647: cmp edx, 0xfa
+
+	struct growth_rule
+	{
+		int start = 0;
+		int rate = 0;
+		std::array<int, 4> delta{};       // signed: strength, speed, body, mind
+	};
+
+	// 0x43d041..0x43d05f: does the rule fire on `level`?
+	constexpr bool growth_fires(const growth_rule& r, const int level)
+	{
+		int at = r.start;
+		while (at < level && r.rate != 0)
+		{
+			at += r.rate;
+		}
+		return at == level;
+	}
+
+	struct growth_state
+	{
+		std::array<int, 4> bonus{};
+		std::array<int, 4> gain{};
+	};
+
+	// The engine's walk from nothing over levels first_processed_level + 1 .. ack_level, every fire through the setter's
+	// rule against the hero's base and spent bytes.
+	inline growth_state simulate_growth(const std::vector<growth_rule>& rules, const int ack_level, const std::array<int, 4>& base,
+		const std::array<int, 4>& spent)
+	{
+		growth_state s;
+		for (int level = first_processed_level + 1; level <= ack_level; ++level)
+		{
+			for (const auto& r : rules)
+			{
+				if (!growth_fires(r, level))
+				{
+					continue;
+				}
+				for (int k = 0; k < 4; ++k)
+				{
+					const int value = (s.bonus[k] + r.delta[k]) & 0xff;
+					if (base[k] + value + spent[k] > stat_ceiling)
+					{
+						continue;
+					}
+					if (value > s.bonus[k])
+					{
+						s.gain[k] = (s.gain[k] + value - s.bonus[k]) & 0xff;
+					}
+					s.bonus[k] = value;
+				}
+			}
+		}
+		return s;
+	}
+
+	// Data\lcsave\autogrowth-legacy.txt (builder autospend.legacy_text): "autogrowth-legacy 1", then per hero
+	// "hero<TAB>class<TAB>start,rate,strength,speed,body,mind;..." (CRLF or LF). Nothing when anything else is in it.
+	inline std::optional<std::map<std::string, std::vector<growth_rule>>> parse_growth_legacy(const std::string_view text)
+	{
+		std::map<std::string, std::vector<growth_rule>> out;
+		std::size_t p = 0;
+		bool first = true;
+		while (p < text.size())
+		{
+			std::size_t e = text.find('\n', p);
+			if (e == std::string_view::npos)
+			{
+				e = text.size();
+			}
+			std::string line(text.substr(p, e - p));
+			p = e + 1;
+			if (!line.empty() && line.back() == '\r')
+			{
+				line.pop_back();
+			}
+			if (line.empty())
+			{
+				continue;
+			}
+			if (first)
+			{
+				if (line != "autogrowth-legacy 1")
+				{
+					return std::nullopt;
+				}
+				first = false;
+				continue;
+			}
+			const auto t1 = line.find('\t');
+			const auto t2 = t1 == std::string::npos ? std::string::npos : line.find('\t', t1 + 1);
+			if (t1 == std::string::npos || t2 == std::string::npos || t1 == 0 || line.find('\t', t2 + 1) != std::string::npos)
+			{
+				return std::nullopt;
+			}
+			std::string hero = line.substr(0, t1);
+			for (auto& c : hero) c = (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+			std::vector<growth_rule> rules;
+			std::string rest = line.substr(t2 + 1);
+			std::size_t q = 0;
+			while (q < rest.size())
+			{
+				std::size_t semi = rest.find(';', q);
+				if (semi == std::string::npos)
+				{
+					semi = rest.size();
+				}
+				const std::string rule = rest.substr(q, semi - q);
+				q = semi + 1;
+				int v[6]{};
+				int n = 0;
+				std::size_t r = 0;
+				while (r <= rule.size() && n < 7)
+				{
+					std::size_t comma = rule.find(',', r);
+					if (comma == std::string::npos)
+					{
+						comma = rule.size();
+					}
+					const std::string num = rule.substr(r, comma - r);
+					if (num.empty() || num.find_first_not_of("-0123456789") != std::string::npos || num.size() > 4)
+					{
+						return std::nullopt;
+					}
+					if (n < 6)
+					{
+						v[n] = std::atoi(num.c_str());
+					}
+					++n;
+					r = comma + 1;
+				}
+				if (n != 6 || v[0] < 0 || v[0] > 255 || v[1] < 0 || v[1] > 255)
+				{
+					return std::nullopt;
+				}
+				growth_rule g;
+				g.start = v[0];
+				g.rate = v[1];
+				for (int k = 0; k < 4; ++k)
+				{
+					if (v[2 + k] < -128 || v[2 + k] > 127)
+					{
+						return std::nullopt;
+					}
+					g.delta[k] = v[2 + k];
+				}
+				rules.push_back(g);
+			}
+			if (rules.size() > 4 || out.count(hero))
+			{
+				return std::nullopt;
+			}
+			out.emplace(std::move(hero), std::move(rules));
+		}
+		if (first)
+		{
+			return std::nullopt;
+		}
+		return out;
+	}
+
+	enum class rebase_result
+	{
+		changed,
+		unchanged,      // the new growth equals the old (or nothing processed)
+		unexplained,    // the saved bonus is below the old class's growth in a stat: left as it is
+		held,           // changed, and a stat was held at the 250 ceiling / the byte
+	};
+
+	struct growth_rebase
+	{
+		std::uint32_t stats_index = 0;
+		bool restore = false;
+		int ack_level = 0;
+		rebase_result result = rebase_result::unchanged;
+		std::array<int, 4> bonus_before{}, bonus_after{};
+		std::array<int, 4> old_growth{}, new_growth{};
+	};
+
+	// The re-base of one record's attribute bytes at `attributes` (old and new: the classes' rules; nothing when the
+	// hero has no rule set on either side). The bytes change only for `changed` / `held`.
+	inline growth_rebase rebase_growth(std::uint8_t* attributes, const int ack_level, const std::vector<growth_rule>& old_rules,
+		const std::vector<growth_rule>& new_rules)
+	{
+		growth_rebase g;
+		g.ack_level = ack_level;
+		std::array<int, 4> base{}, spent{}, bonus{}, gain{};
+		for (int k = 0; k < 4; ++k)
+		{
+			base[k] = attributes[attr_base + k];
+			spent[k] = attributes[attr_spent + k];
+			bonus[k] = attributes[attr_bonus + k];
+			gain[k] = attributes[attr_gain + k];
+		}
+		g.bonus_before = bonus;
+		g.bonus_after = bonus;
+		const auto was = simulate_growth(old_rules, ack_level, base, spent);
+		const auto now = simulate_growth(new_rules, ack_level, base, spent);
+		g.old_growth = was.bonus;
+		g.new_growth = now.bonus;
+		if (was.bonus == now.bonus && was.gain == now.gain)
+		{
+			return g;
+		}
+		for (int k = 0; k < 4; ++k)
+		{
+			if (bonus[k] < was.bonus[k])
+			{
+				g.result = rebase_result::unexplained;
+				return g;
+			}
+		}
+		bool held = false;
+		for (int k = 0; k < 4; ++k)
+		{
+			int value = bonus[k] - was.bonus[k] + now.bonus[k];
+			const int room = stat_ceiling - base[k] - spent[k];
+			if (value > room)
+			{
+				value = room < 0 ? 0 : room;
+				held = true;
+			}
+			if (value > 255)
+			{
+				value = 255;
+				held = true;
+			}
+			int rises = gain[k] - was.gain[k] + now.gain[k];
+			rises = rises < 0 ? 0 : (rises > 255 ? 255 : rises);
+			attributes[attr_bonus + k] = static_cast<std::uint8_t>(value);
+			attributes[attr_gain + k] = static_cast<std::uint8_t>(rises);
+			g.bonus_after[k] = value;
+		}
+		g.result = held ? rebase_result::held : rebase_result::changed;
+		return g;
 	}
 
 	// ---- The writer version (SPEC 1.1 offset 0x24) ---------------------------------------------------

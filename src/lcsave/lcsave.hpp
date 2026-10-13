@@ -89,6 +89,13 @@ namespace lcsave
 		// counts the engine side compares with its live tables (SPEC 3.5); 0 when not loaded
 		std::uint32_t catalogue_revision() const;
 		std::uint32_t content_version() const;       // the era model's reference content version
+		// the build's herostat entry at stats index `stats_index` is xpexempt (XMen2.exe's level processing 0x4bbae0
+		// returns before giving anything: CStats+0x2ad bit 0x20); false for an index the herostat doesn't have
+		bool xp_exempt(std::uint32_t stats_index) const;
+		// the stats entry's canonical catalogue key (for log lines), "" when the build has none at that index
+		std::string stats_key(std::uint32_t stats_index) const;
+		// the herostat entry's autospend class name, lower case ("" = none / no such index)
+		std::string hero_autospend(std::uint32_t stats_index) const;
 		std::uint32_t hero_count() const;            // herostat entries of the build
 		std::uint32_t stats_count() const;           // stats table size including the reserved index 0
 		std::uint32_t item_count() const;
@@ -101,6 +108,24 @@ namespace lcsave
 	bool load_tables(const std::wstring& build_dir, Tables& tables, std::string& error);
 	// the same with the bind files in another folder tree than the data files they describe (tests, tools)
 	bool load_tables(const std::wstring& data_dir, const std::wstring& bind_dir, Tables& tables, std::string& error);
+
+	// Data\autospend as XMen2.exe loads it (parser 0x43d0c0): the first four CharacterClass entries (0x43d18d), the
+	// first four <bonus> rules of each (0x43d373): start and rate unsigned bytes, the four deltas signed bytes in the
+	// record's order strength, speed, body, mind (= the class-bonus bytes CStats+0x10..0x13); a missing number is 0.
+	constexpr std::size_t autospend_class_limit = 4;
+	constexpr std::size_t autospend_rule_limit = 4;
+	struct AutospendRule
+	{
+		std::uint8_t start = 0;
+		std::uint8_t rate = 0;
+		std::int8_t delta[4]{};
+	};
+	struct AutospendClass
+	{
+		std::string name;              // lower case
+		std::vector<AutospendRule> rules;
+	};
+	bool read_autospend(const std::wstring& build_dir, std::vector<AutospendClass>& out, std::string& error);
 
 	struct Result
 	{
@@ -209,6 +234,10 @@ namespace lcsave
 		std::vector<ZoneCaptureMetadata> zone_captures;
 		bool require_capture_metadata = false;
 		std::vector<std::uint8_t> retained_file;
+		// header optional-feature bits the caller vouches for (SPEC-new-save 1.1, "ignored when unknown"); bit 0 (KEYS)
+		// is the writer's own. XML2 Fix sets bit 1 / bit 2 while [Game] LevelSkillPoints / LevelStatPoints=xml1 is
+		// installed (save_format_rules.hpp, the fifth-level catch-up).
+		std::uint32_t optional_features = 0;
 	};
 
 	// the engine's stream (the whole old slot image, or the 0x2fc00 payload alone) -> LC campaign file, numbered

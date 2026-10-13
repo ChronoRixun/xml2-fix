@@ -4,7 +4,11 @@
 #include "game_version.hpp"
 #include "game_version_rules.hpp"
 #include "explosive_first_hit.hpp"
+#include "npc_power.hpp"
+#include "xml1_capability_rules.hpp"
+#include "script_functions_rules.hpp"
 #include <cstdio>
+#include <string>
 #include <cstdarg>
 #include <utility>
 #include <fstream>
@@ -66,29 +70,110 @@ void records(){
  check(client_failure.compare(on.bytes())==result::unavailable && on.compare(client_failure.bytes())!=result::match,"failed client install refuses both directions");
  check(on.compare(peer(true).bytes())==result::match,"both installed on accept");
  check(off.compare(peer(false).bytes())==result::match,"both verified off accept");
- record native;native.finalize();check(native.bytes().size()==32,"default record contains explicit retail entity layout");
+ record native;native.finalize();check(native.bytes().size()==108 && native.count()==1 && native.rule(0).values==std::array<std::uint32_t,4>{32,224,256,8},"default record contains explicit retail entity layout");
  auto bytes=std::vector<std::uint8_t>(off.bytes().begin(),off.bytes().end());
- check(bytes[16]==32 && bytes[20]==224 && bytes[25]==1 && bytes[28]==8,"retail layout is actor32/generic224/world256/token8");
- bytes[4]=3;check(off.compare(bytes)==result::protocol,"unknown record revision refuses");bytes.assign(off.bytes().begin(),off.bytes().end());bytes[4]=1;check(off.compare(bytes)==result::protocol,"protocol revision 1 peers (release 1.4) refuse");bytes.assign(off.bytes().begin(),off.bytes().end());
- bytes[34]=2;check(off.compare(bytes)==result::revision,"unknown rule revision refuses");bytes.assign(off.bytes().begin(),off.bytes().end());
- bytes[32]=42;check(off.compare(bytes)==result::entries,"unknown rule id refuses");bytes.assign(off.bytes().begin(),off.bytes().end());
- bytes[32]=1;check(off.compare(bytes)==result::entries,"duplicate/unsorted peer id refuses");bytes.assign(off.bytes().begin(),off.bytes().end());
- bytes[8]--;check(off.compare(bytes)==result::malformed,"invalid declared record length refuses");bytes.assign(off.bytes().begin(),off.bytes().end());
- bytes[10]=1;check(off.compare(bytes)==result::malformed,"unknown reserved header flags refuse");
- check(off.compare({})==result::malformed,"missing old-peer record refuses");
- record layout;layout.layout(2,{64,448,512,16},true);layout.add(2,1,{0,0,0,0},true);layout.finalize();check(off.compare(layout.bytes())==result::revision,"different entity/token layout revision refuses");
+ auto reset=[&]{bytes.assign(off.bytes().begin(),off.bytes().end());};
+ check(bytes[0]=='G' && bytes[1]=='C' && bytes[2]=='A' && bytes[3]=='P' && bytes[4]==3 && bytes[5]==0 && bytes[6]==2 && bytes[8]==108 && bytes[9]==0 && bytes[10]==0 && bytes[11]==0,"protocol 3 header: GCAP, revision 3, two rules, 108 bytes, reserved zero");
+ bytes[4]=4;check(off.compare(bytes)==result::protocol,"unknown record revision refuses");reset();bytes[4]=1;check(off.compare(bytes)==result::protocol,"protocol revision 1 peers (0.2.0i and older) refuse");reset();
+ bytes[4]=2;check(off.compare(bytes)==result::protocol,"protocol revision 2 peers (1.4.0, the 1.5 pre-release) refuse");reset();
+ bytes[0]='X';check(off.compare(bytes)==result::protocol,"a foreign tag refuses");reset();
+ bytes[12]^=1;check(off.compare(bytes)==result::value,"one changed digest bit refuses");reset();
+ bytes[6]=3;bytes[12]^=1;check(off.compare(bytes)==result::entries,"another rule count refuses");reset();
+ bytes[6]=3;check(off.compare(bytes)==result::malformed,"an equal digest with another rule count is not a record this protocol writes");reset();
+ bytes[6]=0;check(off.compare(bytes)==result::malformed,"a zero rule count is malformed");reset();
+ bytes[8]--;check(off.compare(bytes)==result::malformed,"invalid declared record length refuses");reset();
+ bytes[10]=1;check(off.compare(bytes)==result::malformed,"unknown reserved header flags refuse");reset();
+ bytes[44+2]^=0x10;check(off.compare(bytes)==result::malformed,"an equal digest with another rule summary is not a record this protocol writes");reset();
+ bytes.push_back(0);check(off.compare(bytes)==result::malformed,"an oversized record refuses");reset();
+ bytes.pop_back();check(off.compare(bytes)==result::malformed,"a truncated record refuses");reset();
+ check(off.compare({})==result::malformed && off.compare({bytes.data(),11})==result::malformed,"missing or short old-peer record refuses");
+ // A protocol-2 record (what 1.4.0 and the 1.5 pre-release send): GCAP, revision 2, the full entry list.
+ {std::vector<std::uint8_t> v2{'G','C','A','P',2,0,2,0,52,0,0,0};v2.resize(52);check(off.compare(v2)==result::protocol,"a full protocol-2 record is another protocol, never compared entry by entry");}
+ record layout;layout.layout(2,{64,448,512,16},true);layout.add(2,1,{0,0,0,0},true);layout.finalize();check(off.compare(layout.bytes())==result::value,"different entity/token layout revision refuses");
  record capacity;capacity.layout(1,{64,192,256,8},true);capacity.add(2,1,{0,0,0,0},true);capacity.finalize();check(off.compare(capacity.bytes())==result::value,"different effective capacity refuses");
  record token;token.layout(1,{32,224,256,16},true);token.add(2,1,{0,0,0,0},true);token.finalize();check(off.compare(token.bytes())==result::value,"different token width refuses");
+ record revised;revised.add(2,2,{0,0,0,0},true);revised.finalize();check(off.compare(revised.bytes())==result::value,"another rule revision refuses (protocol 3 folds revision into value: both are different gameplay settings)");
  record missing;missing.add(3,1,{1,0,0,0},true);missing.add(2,1,{0,0,0,0},true);missing.finalize();check(off.compare(missing.bytes())==result::entries,"missing controller entry refuses");
+ // Rule 9, the death threshold ([Game] DeathRule): a peer that kills below 1 and one that kills at 0 never play together.
+ auto death=[](bool on,bool verified=true){record r;r.add(2,1,{1,0,0,0},true);r.add(gameplay_capabilities::death_threshold_id,1,{on ? 1u : 0u,0,0,0},verified);r.finalize();return r;};
+ check(gameplay_capabilities::death_threshold_id==9 && death(true).compare(death(false).bytes())==result::value && death(false).compare(death(true).bytes())==result::value,"death threshold on/off refuses both directions");
+ check(death(true).compare(death(true).bytes())==result::match && death(false).compare(death(false).bytes())==result::match,"same death threshold accepts");
+ check(death(true,false).compare(death(true).bytes())==result::unavailable && peer(true).compare(death(false).bytes())==result::entries,"failed death threshold install or a peer without the rule refuses");
+ // Rule 16, the NPC power rule ([Game] NpcPowerRule): enemies that pay for powers and decide every 2 s never share a
+ // lockstep game with enemies that don't; revision 3 adds the visibility word; absent is {0,0,0,0}, a failed install unverified.
+ auto npc=[](bool on,bool verified=true){record r;r.add(2,1,{1,0,0,0},true);r.add(gameplay_capabilities::npc_power_rule_id,npc_power::revision,{on ? 1u : 0u,on ? 1u : 0u,0,0},verified);r.finalize();return r;};
+ check(gameplay_capabilities::npc_power_rule_id==16 && npc_power::revision==3 && npc(true).compare(npc(false).bytes())==result::value && npc(false).compare(npc(true).bytes())==result::value,"NPC power rule on/off refuses both directions");
+ check(npc(true).compare(npc(true).bytes())==result::match && npc(false).compare(npc(false).bytes())==result::match,"same NPC power rule accepts");
+ record npc_previous; npc_previous.add(2,1,{1,0,0,0},true);npc_previous.add(gameplay_capabilities::npc_power_rule_id,2,{1,0,0,0},true);npc_previous.finalize();
+ check(npc(true).compare(npc_previous.bytes())!=result::match && npc_previous.compare(npc(true).bytes())!=result::match,"NPC visibility policy rejects the previous power/combo-only revision both ways");
+ check(npc(true,false).compare(npc(true).bytes())==result::unavailable && peer(true).compare(npc(false).bytes())==result::entries,"failed NPC power rule install or a peer without the rule refuses");
+ check(std::string(gameplay_capabilities::rule_name(16))=="NpcPowerRule" && gameplay_capabilities::bucket_of(16)!=gameplay_capabilities::bucket_of(15),"rule 16 is named and has a bucket of its own");
  record sorted;sorted.add(2,1,{0,0,0,0},true);sorted.add(3,1,{1,0,0,0},true);sorted.finalize();check(sorted.compare(missing.bytes())==result::match,"registration order canonicalizes by explicit rule id");
+ // Rule 14, the script function limit: peers agree on the installed capacity; plain XML2 advertises {0,0,0,0}.
+ {
+  using namespace script_functions_rules;
+  auto functions=[](agreement a){record r;r.add(2,1,{0,0,0,0},true);r.add(gameplay_capabilities::script_functions_id,agreement_revision,a.values,a.verified);r.finalize();return r;};
+  const auto raised=functions(agreement_entry(false,true,1024,1024)),raised_too=functions(agreement_entry(true,false,1024,1024));
+  const auto stock=functions(agreement_entry(true,true,320,320)),plain=functions(agreement_entry(false,false,320,320)),plain_too=functions(agreement_entry(false,false,320,320));
+  const auto bigger=functions(agreement_entry(true,true,2048,2048)),refused=functions(agreement_entry(false,true,1024,320));
+  check(gameplay_capabilities::script_functions_id==14 && agreement_revision==1,"script function limit is rule 14 revision 1");
+  check(raised.compare(raised_too.bytes())==result::match && plain.compare(plain_too.bytes())==result::match,"rule 14: equal installed capacities match (default 1024 and explicit 1024 alike; plain XML2 peers match)");
+  check(raised.compare(stock.bytes())==result::value && stock.compare(raised.bytes())==result::value,"rule 14: a raised peer and a ScriptFunctions=320 peer refuse each other");
+  check(raised.compare(bigger.bytes())==result::value && raised.compare(plain.bytes())==result::value && plain.compare(stock.bytes())==result::value,"rule 14: another capacity or plain XML2 against a participating peer refuses");
+  check(!refused.ready() && refused.bytes().empty() && refused.compare(raised.bytes())==result::unavailable && raised.compare(refused.bytes())!=result::match,"rule 14: a requested raise that didn't install is unverified - the record is poisoned and host/join close both ways");
+  check(off.compare(raised.bytes())==result::entries && raised.compare(off.bytes())==result::entries,"rule 14: a peer without the rule (older fix) refuses");
+ }
  record duplicate;duplicate.add(2,1,{0,0,0,0},true);check(!duplicate.add(2,1,{0,0,0,0},true) && !duplicate.finalize(),"duplicate registration poisons finalization");
  record late;late.finalize();check(!late.add(2,1,{0,0,0,0},true) && !late.ready() && late.bytes().empty(),"late registration cannot change a frozen advertised record");
  record invalid;check(!invalid.layout(1,{32,224,256,7},true) && !invalid.finalize(),"token capacity overflow refuses");
  record sum;check(!sum.layout(1,{32,225,256,8},true),"actor+generic above world refuses");record headroom;check(headroom.layout(3,{32,768,1024,10},true) && headroom.finalize(),"actor+generic below world (224 registrations of headroom) is accepted");
  record twice;twice.layout(1,{32,224,256,8},true);check(!twice.layout(1,{32,224,256,8},true) && !twice.finalize(),"duplicate layout owner cannot overwrite an earlier effective layout");
  record bad_layout;check(!bad_layout.layout(2,{64,448,512,16},false) && !bad_layout.finalize(),"failed entity installer cannot silently advertise retail");
- record full;for(std::uint16_t id=2;id<=8;++id)full.add(id,1,{id,0,0,0},true);check(full.finalize() && full.bytes().size()==gameplay_capabilities::max_size,"bounded eight-entry record serializes explicit values");
- record overflow;for(std::uint16_t id=2;id<=8;++id)overflow.add(id,1,{id,0,0,0},true);check(!overflow.add(9,1,{0,0,0,0},true) && !overflow.finalize(),"ninth record entry fails closed");
+ // The wire record has one size whatever the number of rules: 16, 64 and 256 (the registration bound) all fit with
+ // every queued admission body at or under the native 300-byte single-message limit, with headroom.
+ for(std::uint16_t rules:{std::uint16_t(1),std::uint16_t(15),std::uint16_t(16),std::uint16_t(64),std::uint16_t(256)}){
+  record a,b;for(std::uint16_t id=2;id<=rules;++id){a.add(id,1,{id,0,0,0},true);b.add(id,1,{id,0,0,0},true);}
+  const bool fits=a.finalize() && b.finalize() && a.bytes().size()==gameplay_capabilities::record_size && a.count()==rules
+   && reply_size+a.bytes().size()<=300-64 && info_size+a.bytes().size()<=300-64 && ack_size+a.bytes().size()<=300-64 && a.compare(b.bytes())==result::match;
+  char what[160];std::snprintf(what,sizeof(what),"%u rules: 108-byte record, 0x1f %zu / 0x1a %zu / 0x1b %zu / 0x18 %zu bytes (queued <= 236), equal records match",unsigned(rules),reply_size+a.bytes().size(),info_size+a.bytes().size(),ack_size+a.bytes().size(),request_size+a.bytes().size());
+  check(fits,what);
+  if(rules>=2){record c;for(std::uint16_t id=2;id<=rules;++id)c.add(id,1,{id==rules ? 0u : id,0,0,0},true);c.finalize();gameplay_capabilities::difference d;
+   check(a.compare(c.bytes(),&d)==result::value && d.buckets==(std::uint64_t(1)<<gameplay_capabilities::bucket_of(rules)) && !d.local_only && !d.peer_only,"the last rule's value differs: refused, and only its summary bucket differs");}
+ }
+ record overflow;for(std::uint16_t id=2;id<=256;++id)overflow.add(id,1,{id,0,0,0},true);check(!overflow.add(257,1,{0,0,0,0},true) && !overflow.finalize(),"the 257th rule entry fails closed");
+ static_assert(gameplay_agreement_rules::largest_queued_body==188 && gameplay_capabilities::record_size==108,"protocol 3 sizes");
+ // Naming: which rule differs, for the log and the dialog.
+ {
+  auto wave=[](std::uint32_t death,bool solo){record r;for(std::uint16_t id=2;id<=15;++id)if(id!=8 || solo)r.add(id,1,{id==9 ? death : 0u,0,0,0},true);r.finalize();return r;};
+  const auto base=wave(1,true),death=wave(0,true),no_solo=wave(1,false);gameplay_capabilities::difference d;char text[256];
+  check(base.compare(death.bytes(),&d)==result::value && d.buckets==(std::uint64_t(1)<<8),"DeathRule (rule 9) off on the peer: a value difference in bucket 8 only");
+  base.describe(d.buckets,d.local_only,true,text,sizeof(text));check(std::string(text)=="9 DeathRule","the log names rule 9 DeathRule");
+  base.describe(d.buckets,d.local_only,false,text,sizeof(text));check(std::string(text)=="DeathRule","the dialog names DeathRule");
+  check(base.compare(no_solo.bytes(),&d)==result::entries && d.local_only==(std::uint64_t(1)<<7),"a peer without rule 8 is an entries difference, rule 8 only here");
+  base.describe(d.buckets,d.local_only,true,text,sizeof(text));check(std::string(text)=="8 SoloMode (not on the other PC)","the log says SoloMode is not on the other PC");
+  check(no_solo.compare(base.bytes(),&d)==result::entries && d.peer_only==(std::uint64_t(1)<<7),"seen from the other side, rule 8 is only on the peer");
+  no_solo.describe(d.buckets,d.local_only,true,text,sizeof(text));check(std::string(text)=="8 a rule this PC does not have","a rule only the peer has is named by its ID");
+  base.describe(0,0,true,text,sizeof(text));check(text[0]==0,"no differing bucket names nothing");
+  base.describe(~std::uint64_t(0),0,true,text,24);check(std::strlen(text)==23,"naming is bounded by its buffer");
+ }
+ // SHA-256 is FIPS 180-4's (the digest is the admission decision).
+ {const std::uint8_t abc[]{'a','b','c'};const auto h=sha256_fips::digest(abc,3);check(h[0]==0xba && h[1]==0x78 && h[30]==0x15 && h[31]==0xad,"SHA-256(\"abc\") test vector");
+  const auto e=sha256_fips::digest(nullptr,0);check(e[0]==0xe3 && e[1]==0xb0 && e[31]==0x55,"SHA-256 of nothing test vector");}
+ // Rules 11 and 12 (xml1_capability_rules::installed_switch): no key = verified off {0,0,0,0}, so a peer whose fix
+ // has neither key still matches one whose keys are absent or set to the game's own value; requested and installed
+ // = {1,0,0,0}; requested but not installed = unverified, which poisons the record and closes host and join.
+ using xml1_capability_rules::installed_switch;
+ const auto off_switch=installed_switch(false,false),ignored_switch=installed_switch(false,true),on_switch=installed_switch(true,true),failed_switch=installed_switch(true,false);
+ check(off_switch.verified && off_switch.values==std::array<std::uint32_t,4>{0,0,0,0} && ignored_switch.verified && ignored_switch.values==off_switch.values,"PlacementCrush/DoubleHeal not requested register verified off");
+ check(on_switch.verified && on_switch.values==std::array<std::uint32_t,4>{1,0,0,0} && !failed_switch.verified,"requested and installed is {1,0,0,0}; requested but not installed is unverified");
+ check(gameplay_capabilities::placement_crush_id==11 && gameplay_capabilities::double_heal_id==12 && xml1_capability_rules::placement_crush_revision==1 && xml1_capability_rules::double_heal_revision==1,"rule IDs 11 and 12, revision 1");
+ auto with=[&](const xml1_capability_rules::registration& crush,const xml1_capability_rules::registration& heal){
+  record r;r.add(2,1,{0,0,0,0},true);r.add(gameplay_capabilities::placement_crush_id,1,crush.values,crush.verified);r.add(gameplay_capabilities::double_heal_id,1,heal.values,heal.verified);r.finalize();return r;};
+ const auto both_off=with(off_switch,off_switch),both_on=with(on_switch,on_switch),crush_only=with(on_switch,off_switch),heal_only=with(off_switch,on_switch);
+ check(both_off.compare(with(off_switch,off_switch).bytes())==result::match && both_on.compare(with(on_switch,on_switch).bytes())==result::match,"equal effective PlacementCrush/DoubleHeal match");
+ check(both_off.compare(crush_only.bytes())==result::value && both_on.compare(crush_only.bytes())==result::value && both_off.compare(heal_only.bytes())==result::value && crush_only.compare(heal_only.bytes())==result::value,"a PlacementCrush or DoubleHeal difference refuses with a value mismatch");
+ record failed_crush;failed_crush.add(gameplay_capabilities::placement_crush_id,1,failed_switch.values,failed_switch.verified);check(!failed_crush.finalize() && !failed_crush.ready() && failed_crush.bytes().empty() && failed_crush.compare(both_off.bytes())==result::unavailable,"a requested PlacementCrush that failed to install closes host and join");
+ record failed_heal;failed_heal.add(gameplay_capabilities::double_heal_id,1,failed_switch.values,failed_switch.verified);check(!failed_heal.finalize() && failed_heal.compare(both_off.bytes())==result::unavailable,"a requested DoubleHeal that failed to install closes host and join");
  check(!native.ready() || native.finalize(),"finalization is idempotent");
 }
 struct event {std::uint32_t type;void* body;std::uint16_t length,reserved;void* context;void* sender;};
@@ -125,7 +210,7 @@ int admitted(void*){++forwarded;return 73;}
 int timeout_trap(){++failures;return 0;}
 void pending_context(){context.fill(0);put(4,0x12345678);put(0x2250,0x22222222);context[0x2294]=1;for(auto n:{0x21f4,0x21f8,0x21fc,0x2200,0x2204,0x222c,0x2234,0x2230})put(n,1);put(0x22bc,0x33333333);put(0x2298,std::uint32_t(reinterpret_cast<std::uintptr_t>(&status)));descriptor[0]=1;}
 bool cleaned(){return get(0x2250)==0 && context[0x2294]==0 && get(0x21f4)==0 && get(0x21f8)==0 && get(0x21fc)==0 && get(0x2200)==0 && get(0x2204)==0 && get(0x222c)==0 && get(0x2234)==0 && get(0x2230)==0 && get(0x22bc)==0 && get(0x221c)==0xffffffff;}
-std::array<std::uint8_t,request_size+gameplay_capabilities::max_size> output{},input{};
+std::array<std::uint8_t,request_size+512> output{},input{};
 std::array<std::uint8_t,0x14> header{};
 std::uint16_t output_size=0;std::uint8_t output_type=0;std::uint32_t output_this=0,output_arg=0;int output_extra=0,send_count=0;
 void capture(void* self,const std::uint8_t* h){++send_count;output_this=std::uint32_t(reinterpret_cast<std::uintptr_t>(self));std::memcpy(&output_size,h+8,2);output_type=h[0x10];if(output_size<=output.size() && output_size)std::memcpy(output.data(),*reinterpret_cast<const void*const*>(h),output_size);}
@@ -175,7 +260,7 @@ void separate_host_joiner()
         "host refusal opens no popup and causes no status9, buffer release, callback teardown or menu close");
   check(lobby()==host_notice_detail(legacy ? refusal::foreign_record : refusal::settings,false) && hud_messages==0,
         legacy ? "host lobby draws the other-build refusal in place of its advice" : "host lobby draws the different-gameplay-settings refusal in place of its advice");
-  check(send_count==1 && output_type==0x1d && output_size==refusal_size && read_refusal(output.data(),output_size)==(legacy ? refusal::foreign_record : refusal::settings) && output_arg==reinterpret_cast<std::uintptr_t>(sender.data()+12),
+  check(send_count==1 && output_type==0x1d && output_size==refusal_detail_size && read_refusal(output.data(),output_size)==(legacy ? refusal::foreign_record : refusal::settings) && output_arg==reinterpret_cast<std::uintptr_t>(sender.data()+12),
         "host sends native rejection with its reason to refused joining endpoint");
   selected_descriptor=joiner_descriptor.data();selected_session=joiner.data();
   event remote{output_type,nullptr,0,0,joiner.data(),joiner_sender.data()};
@@ -195,6 +280,9 @@ void notice_rules(){
  check(classify(true,result::malformed)==refusal::foreign_record && classify(true,result::protocol)==refusal::foreign_record,"a missing or foreign record names another build");
  for(auto why:{refusal::unspecified,refusal::settings,refusal::sender_install,refusal::foreign_record}){const auto b=refusal_body(why);check(read_refusal(b.data(),b.size())==why,"refusal reason body round-trips");}
  auto b=refusal_body(refusal::settings);
+ {const auto d=refusal_body(refusal::settings,0x8000000000000101ull);check(d.size()==16 && read_refusal(d.data(),d.size())==refusal::settings && read_refusal_buckets(d.data(),d.size())==0x8000000000000101ull && std::memcmp(d.data(),b.data(),8)==0,
+   "protocol 3's 0x1d appends the differing summary buckets after the unchanged 8-byte reason (older readers read the reason)");
+  check(read_refusal_buckets(b.data(),b.size())==0 && read_refusal_buckets(refusal_body(refusal::foreign_record,5).data(),16)==0,"no buckets from an 8-byte body or a non-settings reason");}
  check(read_refusal(b.data(),b.size()-1)==refusal::unspecified && read_refusal(nullptr,8)==refusal::unspecified,"short or absent rejection body is an unspecified (legacy) refusal");
  b[0]='X';check(read_refusal(b.data(),b.size())==refusal::unspecified,"foreign rejection body is never read as a reason");
  b=refusal_body(refusal::settings);b[4]=9;check(read_refusal(b.data(),b.size())==refusal::unspecified,"unknown reason code is unspecified");
@@ -316,10 +404,21 @@ void receiver_guard_child(const char* path){
   WaitForSingleObject(pi.hProcess,120000);GetExitCodeProcess(pi.hProcess,&code);CloseHandle(pi.hThread);CloseHandle(pi.hProcess);}
  check(code==0,"receiver guard mismatch (own process): only the receiver is left out and it installs later");
 }
+// The native fragment receiver (0x6101b0, opcodes 0x12/0x13) run on a 0x13 fragment for a stream it never opened:
+// retail dereferences null at 0x61020c; with the fragment guard it drops the fragment. 1 = returned, 2 = faulted.
+std::array<std::uint8_t,0x3100> fragment_context{};std::array<std::uint8_t,8> fragment_body{0x05,0x11,0x22};
+struct fragment_event{std::uint8_t opcode,pad[3];void* body;std::uint16_t length,reserved;std::uint32_t unused;void* context;};
+int run_fragment(int& value){
+ fragment_event e{0x13,{},fragment_body.data(),std::uint16_t(fragment_body.size()),0,0,fragment_context.data()};
+ __try { value=reinterpret_cast<int(__cdecl*)(void*)>(0x6101b0)(&e);return 1; }
+ __except(EXCEPTION_EXECUTE_HANDLER){return 2;}
+}
 void runtime(){
  notice_rules();
  guards(failure_guards);guards(transport_guards);guards(receiver_guards);guards(presentation_guards);guards(game_version_rules::guards);
  native_bytes(0x609c80,0x100);native_bytes(0x6074b0,0x75);
+ native_bytes(0x6101b0,0x110);guards(fragment_guards);
+ {int value=-1;check(run_fragment(value)==2,"negative control: retail's fragment receiver faults on a 0x13 fragment of a stream it never opened");}
  native_bytes(native_failure,0xa7);native_bytes(native_cleanup,0x10c);native_bytes(native_peer_disconnect,10);
  const auto original=*static_cast<std::uint8_t*>(at(native_join));const auto original_send=*static_cast<std::uint8_t*>(at(reply_send));
  check(!gameplay_agreement::prepare(reinterpret_cast<HMODULE>(0x400001)) && *static_cast<std::uint8_t*>(at(native_join))==original,"wrong base refuses native refusal hooks");
@@ -332,6 +431,8 @@ void runtime(){
  // First with a presentation guard mismatched: the receiver still installs, a joiner's refusal is heard and logged.
  writable(0x69fef0,1);*static_cast<std::uint8_t*>(at(0x69fef0))^=1;
  make_rx();check(gameplay_agreement::prepare(reinterpret_cast<HMODULE>(0x400000)) && rx(0x607000) && rx(0x608000) && rx(0x609000),"native refusal and transport preparation (presentation guard mismatched) restores every shared RX page");
+ {int value=-1;check(*static_cast<std::uint8_t*>(at(fragment_stream_miss))==0xe9 && run_fragment(value)==1 && value==0 && has_log("large-message fragment for a stream this PC never opened was dropped"),
+        "fragment guard: the same fragment is dropped (returns 0) and logged instead of faulting");}
  check(*static_cast<std::uint8_t*>(at(native_join))==0xe9 && *static_cast<std::uint8_t*>(at(reply_send))==0xe8,"refusal and transport sites are written together");
  const auto native_advice_rel=0x0006efc3u,native_register_rel=0x000050e1u;
  check(*reinterpret_cast<std::uint32_t*>(at(host_advice_call+1))==native_advice_rel && *reinterpret_cast<std::uint32_t*>(at(host_info_register_call+1))!=native_register_rel && has_log("notice guard failed"),
@@ -397,18 +498,30 @@ void runtime(){
    context.fill(0);put(4,0x12345678);put(0x2250,0x22222222);put(0x22bc,0x33333333);sender[0x19]=1;const auto snapshot=context;
    const auto shown=popups,closed=menus,huds=hud_messages,status_before=statuses,free_before=freed,timer_before=timers;const auto lobby_before=lobby();send_count=0;forwarded=0;
    check(receiver(&e)==0 && forwarded==0 && popups==shown+1 && menus==closed && hud_messages==huds && lobby()==lobby_before,"incompatible 0x18 game info is not filed; the querying PC sees the native dialog");
-   check(send_count==1 && output_type==0x1d && output_size==refusal_size && read_refusal(output.data(),output_size)==refusal::settings && sender[0x19]==0,"querying PC tells the host why with a reasoned 0x1d");
+   check(send_count==1 && output_type==0x1d && output_size==refusal_detail_size && read_refusal(output.data(),output_size)==refusal::settings && sender[0x19]==0,"querying PC tells the host why with a reasoned 0x1d");
    check(statuses==status_before && freed==free_before && timers==timer_before && context==snapshot,"0x18 refusal runs no join failure cleanup on the querying PC");
    e.length=std::uint16_t(base);forwarded=0;send_count=0;check(receiver(&e)==0 && forwarded==0 && send_count==1 && read_refusal(output.data(),output_size)==refusal::foreign_record,"0x18 game info without a record (older host) is refused as another build");
    continue;
   }
   if(joining){pending_context();if(opcode==0x1b)put(0x22bc,0);}else {context.fill(0);put(4,0x12345678);put(0x2250,0x22222222);put(0x22bc,0x33333333);}
-  sender[0x19]=1;const auto shown_before=popups;const auto lobby_before=lobby();send_count=0;const auto response=receiver(&e);
-  check(response==(joining ? 2 : 0) && forwarded==1 && (joining ? popups==shown_before+1 && lobby()==lobby_before : popups==shown_before && lobby()==host_notice_detail(refusal::settings,false)) && send_count==1 && output_type==0x1d && output_size==refusal_size && read_refusal(output.data(),output_size)==refusal::settings,
+  sender[0x19]=1;const auto shown_before=popups;const auto lobby_before=lobby();send_count=0;logger::logged.clear();const auto response=receiver(&e);
+  check(response==(joining ? 2 : 0) && forwarded==1 && (joining ? popups==shown_before+1 && lobby()==lobby_before : popups==shown_before && lobby()==host_notice_detail(refusal::settings,false)) && send_count==1 && output_type==0x1d && output_size==refusal_detail_size && read_refusal(output.data(),output_size)==refusal::settings,
         joining ? "joiner mismatch sends reasoned rejection and shows its native failure without admission" : "host mismatch sends reasoned rejection and shows the non-modal lobby notice without admission");
+  check(read_refusal_buckets(output.data(),output_size)==(std::uint64_t(1)<<gameplay_capabilities::bucket_of(2)) && has_log("differs: 2 ExplosiveFirstHit") && (!joining || visible.find("Incompatible gameplay settings: ExplosiveFirstHit.")!=std::string::npos),
+        "the refusal names the differing rule: its 0x1d summary buckets, the log line and the joining PC's dialog");
   check(sender[0x19]==0 && (joining ? cleaned() : get(0x2250)==0x22222222 && get(0x22bc)==0x33333333),"retail peer flag clears; joining state cleans while active host preserves existing participants");
-  if(!joining){pending_context();if(opcode==0x1a)put(0x22bc,0);event remote{output_type,nullptr,0,0,context.data(),sender.data()};auto remote_receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(rejection_registration+1)));const auto visible_before=popups;check(remote_receiver(&remote)==2 && cleaned() && popups==visible_before+1,"remote native incompatibility reception ends pending join through actual failure cleanup");}
+  if(!joining){pending_context();if(opcode==0x1a)put(0x22bc,0);const auto remote_body=output;event remote{output_type,const_cast<std::uint8_t*>(remote_body.data()),output_size,0,context.data(),sender.data()};auto remote_receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(rejection_registration+1)));const auto visible_before=popups;logger::logged.clear();check(remote_receiver(&remote)==2 && cleaned() && popups==visible_before+1,"remote native incompatibility reception ends pending join through actual failure cleanup");
+   check(has_log("the other PC refused this join (reason=1; differs: 2 ExplosiveFirstHit)") && visible.find("Incompatible gameplay settings: ExplosiveFirstHit.")!=std::string::npos,"the joining PC names the setting the host found different (log and dialog)");}
   e.length=std::uint16_t(base);put(0x22bc,0);const auto legacy_before=forwarded;check(receiver(&e)==(joining ? 2 : 0) && forwarded==legacy_before,"legacy body without full record refuses before native admission");
+  // A protocol-2 peer (1.4.0, the 1.5 pre-release) appends its full 312-byte list: read far enough to see it is another
+  // protocol, refused as another build, never forwarded; a body longer than any record is malformed, never forwarded.
+  {std::vector<std::uint8_t> v2{'G','C','A','P',2,0,15,0,0x38,1,0,0};v2.resize(312);input.fill(0);std::memcpy(input.data()+base,v2.data(),v2.size());
+   if(joining)pending_context();e.length=std::uint16_t(base+v2.size());put(0x22bc,0);send_count=0;logger::logged.clear();const auto v2_before=forwarded;
+   check(receiver(&e)==(joining ? 2 : 0) && forwarded==v2_before && send_count==1 && read_refusal(output.data(),output_size)==refusal::foreign_record && has_log("refused (reason=3)"),
+         "a protocol-2 body (312-byte record) is read as another protocol and refused as another build before native admission");
+   if(joining)pending_context();e.length=std::uint16_t(base+513);put(0x22bc,0);send_count=0;logger::logged.clear();
+   check(receiver(&e)==(joining ? 2 : 0) && forwarded==v2_before && send_count==1 && read_refusal(output.data(),output_size)==refusal::foreign_record && has_log("refused (reason=2)"),
+         "a body longer than any record is malformed and never reaches native admission");}
  }
  ini::lc=false;ini::requested=false;game_version::install(reinterpret_cast<HMODULE>(0x400000));check(game_version::needs_gameplay_agreement() && !game_version::gameplay_online_allowed(),"explicit non-LC off configuration still requires verified shared agreement");
  game_version::bind_gameplay_agreement(true);check(socket(AF_INET,SOCK_DGRAM,0)==73,"verified non-LC off gate retains native socket forwarding");

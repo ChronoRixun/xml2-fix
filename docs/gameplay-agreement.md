@@ -1,6 +1,6 @@
 # Shared effective gameplay agreement
 
-The release token (`[Online] GameVersion`, LC26 for builder 0.2.0) remains separate. LC builds and explicit ExplosiveFirstHit opt-ins require this protocol. Ordinary no-key XML2 without participating installers remains native. Compatibility uses actual installed values, never requested INI values alone.
+The release token (`[Online] GameVersion`, LC26 for builder 0.2.0, LC27 for 0.2.2) remains separate. LC builds and explicit ExplosiveFirstHit or DeathSwitchClear opt-ins require this protocol. Ordinary no-key XML2 without participating installers remains native. Compatibility uses actual installed values, never requested INI values alone.
 
 ## Registration API
 
@@ -30,19 +30,69 @@ IDs:
 | 1 | Entity allocation/token layout | revision 1 defaults to `{32,224,256,8}`; `register_entity_layout` replaces this default once |
 | 2 | Explosive first-contact attack ID | revision 1, `{installed ? 1 : 0,0,0,0}` |
 | 3 | XML1 Master Mold controller | revision 1, `{installed ? 1 : 0, first_bit, width, FNV-1a-32(flag name)}` of the applied saved-stage binding (`Xml1MoldStage=flag:first_bit:width`, exact case); verified off `{0,0,0,0}`; requested but not installed is unverified ([details](xml1-controllers.md#online-play)) |
-| 4 | XML1 turret controller | revision 1, always verified `{0,0,0,0}`: no turret controller exists in this build |
+| 4 | XML1 turret controller | not requested: revision 1 verified `{0,0,0,0}` (as 1.4.0); requested and installed: revision 2 `{1, placements, FNV-1a-32 of the applied [Xml1Turrets] lines, 0}`; requested but not installed: unverified ([XML1 controllers](xml1-controllers.md)) |
+| 5 | XML1 skill and stat points: rank costs and level points (`[Game] RankCosts`, `LevelSkillPoints`, `LevelStatPoints`, [details](rank-costs.md)) | revision 3, `{parts (1 RankCosts, 2 LevelSkillPoints, 4 LevelStatPoints), 7 or 0, 5 or 0, 2 \| 8 << 8 (skill / stat bonus points)}`; verified off `{0,0,0,0}`; a requested part not installed is unverified |
+| 6 | XML1 breakable parts (`[Game] Xml1Multipart`, [multipart.md](multipart.md)) | revision 1, `{installed ? 1 : 0, part-logic revision (2), 0, 0}`; verified off `{0,0,0,0}`; requested but not installed is unverified |
+| 7 | XML1 stats leader bit (`[Game] X1Leader`, the build's `Data\x1leader.txt`) | revision 2, `{installed ? 1 : 0, installed ? 1 : 0 (the first game's drop rule for listed actors), 0, 0}`; registered in an LC installation; verified off `{0,0,0,0}` without the key; requested but not installed (guards, sidecar, bridges) is unverified |
+| 8 | XML1 solo mode | revision 1, `{installed ? 1 : 0, decision-rules revision (1), 0, 0}` with `[Game] SoloMode=1`; verified off `{0,0,0,0}` without the key; requested but not installed is unverified ([details](solo-mode.md)) |
+| 9 | XML1 death threshold (`[Game] DeathRule=xml1`) | revision 1, `{installed ? 1 : 0,0,0,0}`; registered in an LC installation or when requested; requested but not installed is unverified ([details](death-threshold.md#multiplayer-agreement)) |
+| 10 | The first game's Xtraction services and revival price | revision 2, `{services hook installed ? 1 : 0, service bits understood (0x3f: Forge, Healer, Load, Danger Room, Forge-by-campaign, no-Change-Team), online rule active (Load and campaign-gated options greyed, never removed, with other players) ? 1 : 0, RevivalCost=xml1 installed ? 1 : 0}`; `{0,0,0,0}` when neither is requested; a requested but failed install is unverified. Every peer builds the point menu from its own script run and the activator's input picks an index, and every peer debits the revival price, so both must be the same everywhere ([details](xtraction-shop.md#online-play)) |
+| 11 | XML1 settle without crushes (`[Game] PlacementCrush=xml1`, [placement-crush.md](placement-crush.md)) | revision 1, `{installed ? 1 : 0,0,0,0}`; no key or `xml2`: verified `{0,0,0,0}`; `xml1` (or a value that is neither) not installed: unverified |
+| 12 | XML1 packs without double heals (`[Game] DoubleHeal=0`, `src/double_heal_rules.hpp`) | revision 1, `{installed ? 1 : 0,0,0,0}`; no key or `1`: verified `{0,0,0,0}`; `0` not installed: unverified |
+| 13 | XML1 pack amount (`[Game] PackAmount=xml1`) | revision 1, `{installed ? 1 : 0,0,0,0}`; not requested (no key, or `xml2`): verified off; requested but not installed (guards, protection, readback, an unknown value): unverified ([details](pack-amount.md)) |
+| 14 | Script function limit (`[Limits] ScriptFunctions`) | revision 1, `{installed capacity,0,0,0}`: `{0,0,0,0}` with no key and no `[Game] ForcedTeams` (plain XML2 peers match), `{320,0,0,0}` for the game's own limit, `{N,0,0,0}` for an installed raise; a requested raise that didn't install is unverified and closes host/join ([details](script-functions.md#online-and-saves)) |
+| 15 | Death hand-over clears the successor's AI move intent (`[Game] DeathSwitchClear`) | revision 1, `{installed ? 1 : 0,0,0,0}`; absent/off is verified `{0,0,0,0}`; requested but not installed is unverified and closes host/join ([details](death-switch.md)) |
+| 16 | XML1 power use, melee combos and AI visibility (`[Game] NpcPowerRule=xml1`) | revision 3, `{installed ? 1 : 0,installed ? 1 : 0,0,0}`; word 1 advertises XML1's visibility geometry and query scheduling; registered in an LC installation or when requested; absent/`xml2` is verified `{0,0,0,0}`; requested but not installed (guards, protection, readback, an unknown value) is unverified and closes host/join ([details](npc-power-rule.md)) |
 
-IDs 5..65535 require coordination; 0 and duplicate IDs are refused. Entity layout revision describes token representation/sentinel/allocator semantics as well as capacities. Increment it whenever equal capacities/bit width can still encode or interpret tokens differently. A capacity raise must call the layout API with its successfully installed capacities and token width. Actor+generic must not exceed world (`<=`: the World keeps registrations beyond the two arenas; uint64 checked), and world must fit the token width. Entity-capacity layouts: revision 1 `{32,224,256,8}` (stock, also the verified capacity-off value), revision 3 `{32,768,1024,10}` (Phase A, contiguous tokens). Keep failed layouts unverified, even if the fallback is retail. The default is retail only when no entity-layout installer participates.
+IDs 1-4 date from 1.4.0 and 5-16 from 1.5.x (the 0.2.2 wave); IDs 17..65535 require coordination; 0 and duplicate IDs are refused. Entity layout revision describes token representation/sentinel/allocator semantics as well as capacities. Increment it whenever equal capacities/bit width can still encode or interpret tokens differently. A capacity raise must call the layout API with its successfully installed capacities and token width. Actor+generic must not exceed world (`<=`: the World keeps registrations beyond the two arenas; uint64 checked), and world must fit the token width. Entity-capacity layouts: revision 1 `{32,224,256,8}` (stock, also the verified capacity-off value), revision 3 `{32,768,1024,10}` (Phase A, contiguous tokens). Keep failed layouts unverified, even if the fallback is retail. The default is retail only when no entity-layout installer participates.
 
 The export startup contributes the refusal and transport sites to the startup transaction, lets installers register effective state, then freezes the record at the very end. Add future installers before that finalization point. Registration after finalization is rejected and closes the gate; it never changes an advertised frozen record. No controller or capacity module edits transport code.
 
 ## Record and transport
 
-Record maximum: eight entries (including layout), 172 bytes. Canonical little-endian header: DWORD `GCAP` (0x50414347), ushort protocol revision 2 (revision-1 peers, 0.2.0i and older, are refused), ushort entry count, ushort total bytes, ushort reserved zero. Each sorted entry is ushort rule ID, ushort revision, four DWORD effective values (20 bytes). All unused value words must have documented semantics, normally zero. No hashes or implicit enable flags substitute for values.
+Protocol revision 3 (1.5.0) puts a fixed 108-byte record on the wire, whatever the number of rules: canonical
+little-endian header DWORD `GCAP` (0x50414347), ushort protocol revision 3, ushort rule count (including the layout
+rule), ushort total bytes (108), ushort reserved zero; then the SHA-256 of the canonical rule list (32 bytes); then a
+64-byte rule summary. The canonical list is `GCAP`, ushort protocol 3, ushort count, then every rule sorted by ID in
+the revision-2 entry encoding: ushort rule ID, ushort revision, four DWORD effective values. All unused value words
+must have documented semantics, normally zero; the digest covers every ID, revision and value exactly, so no hash of
+a rule's own (a turret list's FNV, say) substitutes for an effective value - a rule still registers the values. The
+summary's byte b is zero when no rule has (ID - 1) mod 64 = b, else a non-zero FNV-1a fold of those rules' entries; it
+never decides admission (the digest does) and only names the differing rules in refusal messages (exact for IDs 1-64). Past 64 a bucket
+holds several IDs (b, b+64, ...); a refusal message then names every local rule of a differing bucket, including
+ones whose own values are equal (e.g. rule 1 alongside a changed rule 65): read such a name as "possibly this one".
+The 16 rules of 1.5.x share no bucket.
+Registration holds up to 256 rules (the record is the same 108 bytes at 1, 16, 64 or 256). Each startup logs the
+canonical list (`online: rule N (key) revision R {a,b,c,d}`), since the wire no longer carries the values.
 
-The entire record is appended to each original native body: request 0x18 (116 original bytes), host-info 0x1a (48), follow-up 0x1b (8), participant reply 0x1f (80). Original fields and the release token stay intact. These opcodes use variable-length framing; reliable-envelope decoding normalizes body length before receiver dispatch. The largest augmented body is 288 bytes, within the native small-message queue limit. Wrappers keep copied header/body storage alive through synchronous native copies/broadcast iteration.
+The record is appended to each original native body: request 0x18 (116 original bytes, 224 with the record), host-info
+0x1a (48, 156), follow-up 0x1b (8, 116), participant reply 0x1f (80, 188). Original fields and the release token stay
+intact. These opcodes use variable-length framing; reliable-envelope decoding normalizes body length before receiver
+dispatch. The queued sends (host info 0x1a through 0x6077ad, participant reply 0x1f through 0x6085d8, both 0x610f30
+mode 0 -> 0x60f620) stay one native message only up to 300 bytes (0x12c, checked at 0x60f6ef); a longer body takes
+the large-message path (0x60f7bb: opcode 0x12 with a 6-byte header - stream byte, original opcode, length - then 0x13
+fragments). An admission body must never take that path: the fragment receiver 0x6101b0 (registered for 0x12 and
+0x13 at 0x6105d4/0x6105ec) returns at once for 0x12, and for a 0x13 fragment looks its stream up at +0x30b0; for a
+joining peer's body no stream is open there, and it dereferences null at 0x61020c (whether and where the stream is
+opened for an admitted peer was not traced). Protocol revision 2 put the whole entry list on the wire (12 + 20 bytes per rule): with
+the fifteen rules of the 1.5 pre-release the 0x1a body was 360 bytes and a matching peer's join crashed the host
+there (live, 2026-10-12). The largest queued body of revision 3 is the 188-byte 0x1f, 112 bytes under the limit; a
+`static_assert` keeps it at least 64 under. The request 0x18 goes direct (0x60d9c0, a 0x514-byte buffer).
 
-Receive rejects missing/unknown protocol, malformed bounds/count/order, unknown/missing/duplicate IDs, revision differences or any effective-value difference before native admission. Exact canonical equality is required, including disabled participating entries. An older single-boolean agreement record or an untagged older peer is refused.
+**Fragment guard (optional).** The 0x13 stream miss at 0x610200 jumps to a stub that logs the drop (the first eight)
+and leaves through the handler's own drop exit 0x6102b6 instead of dereferencing null, so an older or modified peer's
+oversized message (a 1.5 pre-release joiner's 360-byte 0x1a) no longer kills this PC; that joiner gets no answer and
+times out natively. It joins the startup transaction as its own contribution (`gameplay_agreement.fragment_guard`,
+3 `fragment_guards`) only when its guards read back as retail; otherwise one log line and the stock handler.
+
+Receive rejects a missing or foreign record and any other protocol revision (2: 1.4.0 and the 1.5 pre-release; 1:
+0.2.0i and older - they refuse revision 3 the same way, both ways), a malformed header, a body that is not exactly 108
+bytes, and any digest difference, before native admission: nothing of a refused message reaches the native handler.
+Exact canonical equality is required, including disabled participating entries. A different count or a rule present
+on one side only is reported as an entries difference, anything else as a value difference (a revision difference
+included); both are "different gameplay settings". The refusing PC names the rules whose summary differs in its log
+line (`differs: 9 DeathRule`), in its 0x1d (below) and, on a joining PC, in the native dialog ("Incompatible gameplay
+settings: DeathRule. ...").
 
 ## Receiver endpoint roles
 
@@ -63,7 +113,7 @@ Host admission refusal never invokes shared-session cleanup, even if a timer exi
 
 Patch acquisition records each distinct code page once; readback/cache verification and restoration preserve its original protection. Startup/socket exclusion remains closed until the entire record, transport and participating installer states verify.
 
-Refusal immediately sends native incompatibility opcode 0x1d through the direct transport, now with an 8-byte reason body (`GREF`, reason, three zero bytes; reason relative to the sender: 1 gameplay settings, 2 the sender's own installation is unverified, 3 the peer's record is missing or foreign). Native 0x609ad0 ignores the body; a bodiless or foreign 0x1d reads as unspecified. Joining endpoints execute native failure handler 0x609ad0 and cleanup 0x6097f0, then the native dialog/menu path; a querying PC (0x18) shows the native dialog only. The early join entry rejects unverified local installation through the same native failure path, before setting up another attempt. A closed socket also presents the actionable native installation message. No generic timeout is used as the refusal mechanism. Native UI uses original authored text in this DLL; no localized game strings are shipped.
+Refusal immediately sends native incompatibility opcode 0x1d through the direct transport, with a reason body (`GREF`, reason, three zero bytes; reason relative to the sender: 1 gameplay settings, 2 the sender's own installation is unverified, 3 the peer's record is missing or foreign). Protocol 3 appends eight bytes: the differing rule-summary buckets (bit b = bucket b) of a settings refusal, zero otherwise; older readers check only the first eight bytes, and the receiving PC names those rules from its own list. Native 0x609ad0 ignores the body; a bodiless or foreign 0x1d reads as unspecified. Joining endpoints execute native failure handler 0x609ad0 and cleanup 0x6097f0, then the native dialog/menu path; a querying PC (0x18) shows the native dialog only. The early join entry rejects unverified local installation through the same native failure path, before setting up another attempt. A closed socket also presents the actionable native installation message. No generic timeout is used as the refusal mechanism. Native UI uses original authored text in this DLL; no localized game strings are shipped.
 
 ## Host refusal notice
 
@@ -78,7 +128,7 @@ A searching PC whose settings differ refuses a LAN host's 0x18 at search time as
 
 Game-free checks execute patched CALL/registration entries, retail failure/cleanup code and retail host setup/teardown (0x609c80 / 0x6074b0) loaded privately from a supplied executable, with transport/UI/dispatcher object boundaries isolated. Live direct-IP/LAN/lobby, reliable transport, cancellation/retry/rejoin and actual rendering remain integrator acceptance checks; automated native UI dispatch is not a rendered gameplay session.
 
-## What protocol revision 2 does not include
+## What the agreement protocol does not include
 
 The Phase A plan (docs/entity-capacity-phase-a-plan.md section 5) also designed a receive lifecycle: certificate
 epochs per peer, a dispatch floor before every application callback, reliable/fragment record epochs, deferred
