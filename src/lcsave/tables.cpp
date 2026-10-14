@@ -790,7 +790,7 @@ namespace lcsave::detail
 		if (raw.size() < 24 || std::memcmp(raw.data(), "LCZPFX1\0", 8)) bad();
 		In in{raw, 8, "zone-prefix.lcm"};
 		const auto version = in.get<u32>(), count = in.get<u32>(), length = in.get<u32>(), crc = in.get<u32>();
-		if (version != 1 || count > 4096 || length != raw.size() || crc32(raw.data()+24, raw.size()-24) != crc) bad();
+		if (version != 2 || count > 4096 || length != raw.size() || crc32(raw.data()+24, raw.size()-24) != crc) bad();
 		std::set<std::tuple<Hash, Sha1, Sha1>> seen;
 		for (u32 k = 0; k < count; ++k)
 		{
@@ -806,6 +806,19 @@ namespace lcsave::detail
 				const auto p = in.get<u32>();
 				if (!placements.insert(p).second) bad();
 				prefix.placements.push_back(p);
+			}
+			std::set<std::pair<Hash,Hash>> aliases;
+			for (auto* list : {&prefix.fresh_aliases,&prefix.ambiguous_aliases})
+			{
+				if (raw.size()-in.p < 4) bad();
+				const auto size = in.get<u32>();
+				if (size > 4096 || raw.size()-in.p < 64*size) bad();
+				for (u32 j=0;j<size;++j)
+				{
+					std::pair<Hash,Hash> pair; take(pair.first); take(pair.second);
+					if (!aliases.insert(pair).second) bad();
+					list->push_back(pair);
+				}
 			}
 			build.zone_prefixes.push_back(std::move(prefix));
 		}

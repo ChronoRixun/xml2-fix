@@ -271,6 +271,7 @@ namespace lcsave::detail
 		Hash zone{}, digest{};
 		Sha1 old{}, current{};
 		std::vector<u32> placements;
+		std::vector<std::pair<Hash,Hash>> fresh_aliases, ambiguous_aliases;
 	};
 	struct ZoneNumbering
 	{

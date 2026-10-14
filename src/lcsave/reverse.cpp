@@ -358,7 +358,19 @@ namespace lcsave::detail
 					mapped[state["ordinal"].as_int()] = current + 1;
 				}
 				if (differs) { notes.push_back("zone " + zone + ": entity placement/name changed: record not applied"); continue; }
-				if (prefix) notes.push_back("zone " + py_repr(zone, Enc::latin1) + ": verified append-only resident prefix retained; new tail starts fresh");
+				if (prefix)
+				{
+					bool ambiguous = false;
+					for (const auto& s : r["states"].as_list()) if (s["list"].as_int() != 1)
+					{
+						const auto& dn = saved_names.at(static_cast<std::size_t>(s["def_name"].as_int()));
+						const auto& in = saved_names.at(static_cast<std::size_t>(s["inst_name"].as_int()));
+						const auto pair = std::make_pair(key_hash1(dn.as_text(),dn.enc),key_hash1(in.as_text(),in.enc));
+						if (std::find(prefix->ambiguous_aliases.begin(),prefix->ambiguous_aliases.end(),pair) != prefix->ambiguous_aliases.end()) ambiguous=true;
+					}
+					if (ambiguous) { notes.push_back("zone " + py_repr(zone, Enc::latin1) + ": unnumbered state aliases both new tail and retained placement: record not applied"); continue; }
+					notes.push_back("zone " + py_repr(zone, Enc::latin1) + ": verified append-only resident prefix retained; new tail starts fresh");
+				}
 				// Legacy lists can contain placements that later builds pin. A list entry proves
 				// existence; the missing numbered slot does not mean removal in this case.
 				std::map<std::size_t, std::size_t> promoted;
@@ -401,7 +413,8 @@ namespace lcsave::detail
 						const auto& dn = names.at(static_cast<std::size_t>(s["def_name"].as_int()));
 						const auto& in = names.at(static_cast<std::size_t>(s["inst_name"].as_int()));
 						const auto pair = std::make_pair(key_hash1(dn.as_text(),dn.enc),key_hash1(in.as_text(),in.enc));
-						if (std::find(num->names.begin()+prefix->placements.size(),num->names.end(),pair) != num->names.end()) continue;
+						if (std::find(prefix->fresh_aliases.begin(),prefix->fresh_aliases.end(),pair) != prefix->fresh_aliases.end() ||
+						    std::find(num->names.begin()+prefix->placements.size(),num->names.end(),pair) != num->names.end()) continue;
 					}
 					if (n >= native.states) fail("more states than the engine record holds");
 					OldStateRecord st{};

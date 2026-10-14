@@ -17,6 +17,14 @@ Sidecar framing and the release-ledger generation command are documented by the
 Python reference. Compatibility needs attestations generated against every supported
 previous build; it is not automatically transitive or a new save feature bit.
 
+The sidecar's version 2 also describes original unnumbered name aliases for renamed
+tail definitions. A name pair shared by a new resident and an untouched placement
+is ambiguous. If an old smart/dynamic state uses it, the record rejects with a
+specific ledger explanation; its position is mutable and cannot identify the
+original placement reliably. This protects against duplicate old smart objects and
+against losing an untouched twin. Full retention for partial promotion of identical
+smart twins remains unresolved under the unchanged durable save format.
+
 `src/lcsave/` is the C++ translation of the builder's reference implementation `tools/lcsave` (legends-classic,
 branch `feature/save-converter`, 8a7a8ac): the LC save format ("LC save", format 1), the one-time converter from
 XMen2.exe's own save files, the reverse direction the loader needs, the saver's direction, and the canonical dumps
