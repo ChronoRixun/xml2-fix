@@ -1294,6 +1294,49 @@ namespace
 			"same-name twin cache ordinal matches translated native map");
 	}
 
+	void test_zone_prefix_review(const fs::path& folder)
+	{
+		auto t = make_tables(folder, "sh_might", false);
+		Tables tables; tables.data = t;
+		const auto imported = convert_old_to_new(write_slot(make_old_save()), tables);
+		check(imported.ok, "prefix review fixture imports");
+		if (!imported.ok) return;
+		auto current = *t->build->zone_numbering("zone/x/y");
+		ZonePrefix prefix;
+		prefix.zone = key_hash1("zone/x/y", Enc::cp1252);
+		prefix.old = current.sha1;
+		prefix.current.fill(7);
+		prefix.digest.fill(9);
+		prefix.placements = current.placement;
+		current.sha1 = prefix.current;
+		current.prefix_digests[prefix.placements.size()] = prefix.digest;
+		current.names.emplace_back(key_hash1("tail", Enc::latin1), key_hash1("tail01", Enc::latin1));
+		current.name_text.emplace_back("tail", "tail01");
+		current.placement.push_back(99);
+		t->build->zone_prefixes = {prefix};
+		t->build->zones["zone/x/y"] = current;
+		const std::string old(reinterpret_cast<const char*>(prefix.old.data()), prefix.old.size());
+		check(t->build->zone_numbering("ZoNe/X/Y") == t->build->zone_numbering("zone/x/y") &&
+			t->build->zone_prefix("ZoNe/X/Y", old, current) != nullptr, "mixed-case numbering and prefix lookup agree");
+		prefix.zone = key_hash1("zone/\xe9tage", Enc::cp1252);
+		t->build->zone_prefixes = {prefix};
+		check(t->build->zone_prefix("ZONE/\xc9tage", old, current) != nullptr, "extended mixed-case prefix key uses numbering normalization");
+		prefix.zone = key_hash1("zone/x/y", Enc::cp1252);
+		t->build->zone_prefixes = {prefix};
+		std::vector<ZoneCaptureMetadata> metadata;
+		std::string error;
+		check(loaded_zone_metadata(imported.bytes, tables, metadata, error) && metadata.size() == 1 && metadata[0].fresh_entities.size() == 1,
+			"valid prefix metadata control: " + error);
+		// Synthetic inconsistent cache: reverse still reconstructs the old prefix,
+		// but fresh metadata lacks text. Discard instead of throwing out_of_range.
+		t->build->zones["zone/x/y"]->name_text.resize(prefix.placements.size());
+		check(loaded_zone_metadata(imported.bytes, tables, metadata, error) && metadata.empty() && error.empty(),
+			"short fresh metadata discards cleanly");
+		t->build->zones["zone/x/y"] = std::nullopt;
+		check(!loaded_zone_metadata(imported.bytes, tables, metadata, error) && metadata.empty() && contains(error, "has no placement file"),
+			"missing numbering returns a clean error before metadata dereference");
+	}
+
 	void test_native_transfer_metadata(const fs::path& folder)
 	{
 		auto t=make_tables(folder,"sh_might",false);Tables tables;tables.data=t;
@@ -1881,6 +1924,7 @@ void run_vectors(const fs::path& scratch)
 	test_talent_era(scratch / "era");
 	test_api(scratch / "api");
 	test_capture_twins(scratch / "twins");
+	test_zone_prefix_review(scratch / "zone-prefix-review");
 	test_review_resets(scratch / "review");
 	test_native_dangling_world_state(scratch / "dangling-world");
 	test_native_transfer_metadata(scratch / "native-transfer");

@@ -3,6 +3,7 @@
 #include "value.hpp"
 
 #include <cstring>
+#include <algorithm>
 #include <functional>
 #include <map>
 
@@ -170,5 +171,64 @@ namespace lcsave::detail
 				++k;
 			}
 		});
+	}
+
+	Hash resident_prefix_digest(const XNode& root, const std::vector<Numbered>& numbered, const std::size_t count)
+	{
+		if (!count || count > numbered.size()) fail("zone-prefix.lcm: invalid prefix count");
+		std::map<std::pair<bool, std::string>, const XNode*> definitions;
+		iter(root, "entity", [&](const XNode& e)
+		{
+			const auto* name = e.get("name");
+			if (!definitions.emplace(std::make_pair(name != nullptr, name ? *name : std::string()), &e).second)
+				fail("zone-prefix.lcm: duplicate entity definition");
+		});
+		std::vector<std::pair<const XNode*, const XNode*>> placements;
+		iter(root, "entinst", [&](const XNode& group)
+		{
+			iter(group, "inst", [&](const XNode& inst) { placements.emplace_back(&group, &inst); });
+		});
+		auto text = [](const std::string& value) { return to_json(Value::text(value, Enc::latin1)); };
+		auto attributes = [&](const XNode& e)
+		{
+			// ElementTree keeps the last repeated attribute; order is by Unicode
+			// code point, equivalent to unsigned byte order for XMLB's latin-1.
+			std::map<std::string, std::string> attrs;
+			for (const auto& [k, v] : e.attrs) attrs[k] = v;
+			std::vector<std::pair<std::string, std::string>> sorted(attrs.begin(), attrs.end());
+			std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b)
+			{ return less_text(Value::text(a.first, Enc::latin1), Value::text(b.first, Enc::latin1)); });
+			std::string out = "[";
+			for (const auto& [k, v] : sorted)
+			{
+				if (out.size() > 1) out += ',';
+				out += '[' + text(k) + ',' + text(v) + ']';
+			}
+			return out + ']';
+		};
+		std::function<std::string(const XNode&)> canonical = [&](const XNode& e)
+		{
+			std::string out = '[' + text(e.tag) + ',' + attributes(e) + ",[";
+			bool first = true;
+			for (const auto& child : e.children)
+			{
+				if (!first) out += ',';
+				first = false;
+				out += canonical(child);
+			}
+			return out + "]]";
+		};
+		std::string input = "[";
+		for (std::size_t k = 0; k < count; ++k)
+		{
+			const auto& n = numbered[k];
+			const auto found = definitions.find({n.has_type, n.type});
+			if (found == definitions.end() || n.placement >= placements.size()) fail("zone-prefix.lcm: unmodelled numbering");
+			const auto& [group, inst] = placements[n.placement];
+			if (k) input += ',';
+			input += '[' + canonical(*found->second) + ',' + attributes(*group) + ',' + canonical(*inst) + ']';
+		}
+		input += ']';
+		return sha256(reinterpret_cast<const std::uint8_t*>(input.data()), input.size());
 	}
 }

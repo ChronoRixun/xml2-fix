@@ -1127,6 +1127,9 @@ namespace save_format
 			std::uint16_t state_index=0;
 			if (!expected)
 			{
+				// A builder-authenticated append has no old state. Match actual placement and names
+				// before keeping factory defaults; later capture records it normally.
+				if (save_core_rules::placement_source(meta->fresh_entities,observed->placement_index,def,name)) return true;
 				// An old inferred capture lacks explicit tombstones. Its original zero slot is legacy
 				// removal semantics, never permission to apply another saved twin's record.
 				if ((meta->capture_flags&save_core_rules::capture_unobserved) && original_restore_map[ordinal-1]==0)

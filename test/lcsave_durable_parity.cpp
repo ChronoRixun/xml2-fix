@@ -200,6 +200,16 @@ namespace
 		if (mode == "e10a2-reverse" || mode == "refuse-downgrade" || mode == "refuse-unknown" || mode == "refuse-noregistry" ||
 		    mode == "refuse-stream" || mode == "registry-mismatch")
 			return run_typed_case(root, folder, build, mode, name, sequence, report);
+		if (mode == "refuse-tables")
+		{
+			std::vector<std::uint8_t> expected;
+			if (!read_bytes(folder / "expected.error",expected)) return report("cannot read expected table error");
+			lcsave::Tables tables; std::string error;
+			if (lcsave::load_tables(build.wstring(),tables,error) || tables.loaded() || error != std::string(expected.begin(),expected.end()))
+				return report("table refusal differs: " + error);
+			std::cout << name << '\t' << mode << "\tPASS\trefused\n";
+			return true;
+		}
 		if (mode != "campaign" && mode != "profile" && mode != "legacy-refuse" && mode != "legacy-import" && mode != "profile-import" && mode != "reverse" && mode != "refuse" && mode != "native-campaign" && mode != "native-transfer" && mode != "native-dead-item" && mode != "native-trivia") return report("unsupported mode");
 		std::vector<std::uint8_t> input, expected;
 		if (!read_bytes(folder / (mode == "legacy-refuse" || mode == "legacy-import" || mode == "profile-import" || mode == "native-campaign" || mode == "native-transfer" || mode == "native-dead-item" || mode == "native-trivia" ? "input.raw" : "input.lcsave"), input)) return report("cannot read input");

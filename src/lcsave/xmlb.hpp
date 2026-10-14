@@ -35,4 +35,6 @@ namespace lcsave::detail
 	// binds.numbered_entities: the numbered placed entities in ordinal order, and the problems that make the zone's
 	// numbering unmodellable
 	void numbered_entities(const XNode& root, std::vector<Numbered>& out, std::vector<std::string>& problems);
+	// SHA-256 of the Python attestation's compact ensure_ascii JSON resident prefix.
+	Hash resident_prefix_digest(const XNode& root, const std::vector<Numbered>& numbered, std::size_t count);
 }
