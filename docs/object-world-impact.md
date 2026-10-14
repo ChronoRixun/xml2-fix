@@ -2,10 +2,9 @@
 
 `[Game] ObjectWorldImpact=xml1` restores the first game's zero ordinary impact
 damage when the collision target does not resolve to a physical entity. An absent
-key or `xml2` preserves native behavior. This feature is **pending a shared
-gameplay-agreement rule ID**. Enabling it currently invalidates online agreement;
-the integrator must assign and register the ID before releasing it. No ID is
-reserved by this change.
+key or `xml2` preserves native behavior. Gameplay rule 17 revision 1 registers only when requested, with effective values `{installed ? 1 : 0, 0, 0, 0}` and the installer verification result. OFF leaves the released digest unchanged; a failed request poisons agreement.
+
+This covers every no-physical-target landing impact. XML1 uses coefficient-table entry zero for all of them, including ordinary world/floor collisions.
 
 The first game's impact formula at `0x912b0` starts the weight-difference index at
 zero and leaves it there for a non-physical target. Its coefficient table starts
@@ -24,7 +23,7 @@ Installation uses signature checks and the existing write/readback/rollback
 transaction. A safe refusal leaves stock code; an unverifiable rollback refuses
 startup. The test pipe reports the effective state. `xml2_world_impact_test`
 executes both bridge branches repeatedly, checks FPU/stack behavior, guard
-corruption, partial-write rollback, and unassigned-rule refusal. Pass a private
+corruption, partial-write rollback, and failed-install agreement refusal. Pass a private
 retail executable path to also check every native guard without launching it.
 
 This does not correct an object already authored beneath its floor. The companion

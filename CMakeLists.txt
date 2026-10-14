@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(xml2_fix VERSION 1.5.0 LANGUAGES CXX RC)
+project(xml2_fix VERSION 1.6.0 LANGUAGES CXX RC)
 
 if(NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
 	message(FATAL_ERROR "Build with MSVC for Win32 (cmake -A Win32) - X-Men Legends II is a 32-bit game.")
@@ -241,7 +241,7 @@ add_executable(xml2_death_switch_test test/death_switch_test.cpp src/death_switc
 target_include_directories(xml2_death_switch_test PRIVATE src)
 target_link_options(xml2_death_switch_test PRIVATE /BASE:0x300000 /DYNAMICBASE:NO)
 
-add_executable(xml2_gameplay_agreement_test test/gameplay_agreement_test.cpp src/gameplay_agreement.cpp src/patch_transaction.cpp src/explosive_first_hit.cpp src/game_version.cpp)
+add_executable(xml2_gameplay_agreement_test test/gameplay_agreement_test.cpp src/gameplay_agreement.cpp src/patch_transaction.cpp src/explosive_first_hit.cpp src/world_impact.cpp src/game_version.cpp)
 add_executable(xml2_npc_combo_timing_test test/npc_combo_timing_test.cpp)
 target_include_directories(xml2_npc_combo_timing_test PRIVATE src)
 target_include_directories(xml2_gameplay_agreement_test PRIVATE src)

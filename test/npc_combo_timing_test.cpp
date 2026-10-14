@@ -1,4 +1,4 @@
-// V-TBD: execute the generated combo bridges with synthetic brains. Only the brain-table base and external
+// V-NPC2: execute the generated combo bridges with synthetic brains. Only the brain-table base and external
 // continuations are relocated; the timer arithmetic, internal branches and register/stack contracts are real.
 #include <Windows.h>
 #include "npc_power_rules.hpp"
@@ -94,7 +94,7 @@ int main() {
         check(finish(brain, 17.0f) == 17.0f + xml1_combo_delays[combo][xml1_combo_lengths[combo] - 1], "completion adds final button delay to existing x87 accumulator");
     }
     entry = reinterpret_cast<void*>(l.cont);
-    // V-TBD: clock rewind/slot reuse must not wait for an old absolute deadline.
+    // V-NPC2: clock rewind/slot reuse must not wait for an old absolute deadline.
     auto* brain = brains.data();
     field<void*>(brain, 4) = ai.data();
     field<unsigned>(brain, 0x3c) = 2;

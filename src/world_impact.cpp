@@ -27,9 +27,6 @@ namespace world_impact
 		const auto chosen = parse_rule(text);
 		if (!chosen.set || (chosen.error.empty() && chosen.value == rule::xml2)) return;
 		state = 0;
-		// Integration must assign this feature a shared gameplay rule ID. Until
-		// then an opt-in cannot accidentally admit a peer with different physics.
-		gameplay_agreement::reject_unregistered_rule("ObjectWorldImpact");
 		if (!chosen.error.empty())
 		{
 			logger::write("object world impact: invalid [Game] ObjectWorldImpact - stock impact damage retained");
@@ -59,9 +56,12 @@ namespace world_impact
 			logger::write("object world impact: rollback/protection verification failed; startup refused");
 		}
 	}
+	bool requested() { return state.load() != -1; }
+	bool installed() { return state.load() == 1; }
+	bool verified() { return state.load() != 0; }
 	std::string status()
 	{
 		const auto value = state.load();
-		return std::string("object world impact ") + (value == 1 ? "xml1 (online pending rule ID)" : value == -1 ? "xml2" : "unavailable");
+		return std::string("object world impact ") + (value == 1 ? "xml1" : value == -1 ? "xml2" : "unavailable");
 	}
 }

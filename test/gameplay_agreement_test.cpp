@@ -6,6 +6,8 @@
 #include "explosive_first_hit.hpp"
 #include "npc_power.hpp"
 #include "stun_rule.hpp"
+#include "world_impact.hpp"
+#include "world_impact_rules.hpp"
 #include "xml1_capability_rules.hpp"
 #include "script_functions_rules.hpp"
 #include <cstdio>
@@ -19,6 +21,7 @@
 #include <cwchar>
 
 namespace ini {
+ std::optional<std::string> impact;
  bool requested=false,lc=true,key=true,testing_forge=false,testing_hotkeys=false;
  bool flag(const wchar_t* section,const wchar_t* name,bool){
   if(std::wcscmp(section,L"TestMode")==0)return std::wcscmp(name,L"ForgeEverywhere")==0 ? testing_forge : std::wcscmp(name,L"Hotkeys")==0 && testing_hotkeys;
@@ -27,6 +30,7 @@ namespace ini {
  std::optional<std::string> text(const wchar_t* section,const wchar_t* name){
   if(std::wcscmp(section,L"Save")==0)return lc ? std::optional<std::string>("lc") : std::nullopt;
   if(std::wcscmp(section,L"Online")==0)return lc ? std::optional<std::string>("LC24") : std::nullopt;
+  if(std::wcscmp(name,L"ObjectWorldImpact")==0)return impact;
   if(std::wcscmp(name,L"ExplosiveFirstHit")==0 && key)return requested ? "1" : "0";
   return std::nullopt;
  }
@@ -103,7 +107,16 @@ void records(){
  check(gameplay_capabilities::death_threshold_id==9 && death(true).compare(death(false).bytes())==result::value && death(false).compare(death(true).bytes())==result::value,"death threshold on/off refuses both directions");
  check(death(true).compare(death(true).bytes())==result::match && death(false).compare(death(false).bytes())==result::match,"same death threshold accepts");
  check(death(true,false).compare(death(true).bytes())==result::unavailable && peer(true).compare(death(false).bytes())==result::entries,"failed death threshold install or a peer without the rule refuses");
- // Rule 18 leaves ID 17 unregistered so its owner can join later in either registration order.
+ // Rule 17 is optional, named, and canonical with rule 18 in either order.
+ auto impact=[](bool requested,bool installed,bool verified){record r;if(requested)r.add(gameplay_capabilities::object_world_impact_id,1,{installed ? 1u : 0u,0,0,0},verified);r.finalize();return r;};
+ const auto impact_on=impact(true,true,true),impact_off=impact(false,false,true);
+ check(impact_on.compare(impact(true,true,true).bytes())==result::match,"matching ObjectWorldImpact accepts");
+ check(std::equal(impact_off.bytes().begin(),impact_off.bytes().end(),native.bytes().begin(),native.bytes().end()),"ObjectWorldImpact OFF digest remains byte-identical");
+ gameplay_capabilities::difference impact_diff;char impact_name[128];
+ check(impact_on.compare(impact_off.bytes(),&impact_diff)==result::entries && impact_off.compare(impact_on.bytes())==result::entries,"ObjectWorldImpact on/off refuses both directions");
+ impact_on.describe(impact_diff.buckets,impact_diff.local_only,false,impact_name,sizeof(impact_name));
+ check(std::string(impact_name)=="ObjectWorldImpact (not on the other PC)","refusal names ObjectWorldImpact and explains the absent peer rule");
+ check(!impact(true,false,false).ready(),"failed ObjectWorldImpact cannot advertise a valid record");
  auto stun=[](bool on,bool verified=true,int rev=stun_rule::revision,bool with17=false){
   record r;if(on || !verified)r.add(gameplay_capabilities::stun_rule_id,static_cast<std::uint16_t>(rev),{on ? 1u : 0u,0,0,0},verified);
   if(with17)r.add(17,1,{1,0,0,0},true);r.finalize();return r;};
@@ -124,7 +137,7 @@ void records(){
  check(npc(true).compare(npc_previous.bytes())!=result::match && npc_previous.compare(npc(true).bytes())!=result::match,"NPC visibility policy rejects the previous power/combo-only revision both ways");
  record npc_visibility; npc_visibility.add(2,1,{1,0,0,0},true);npc_visibility.add(gameplay_capabilities::npc_power_rule_id,3,{1,1,0,0},true);npc_visibility.finalize();
  check(npc(true).compare(npc_visibility.bytes())!=result::match && npc_visibility.compare(npc(true).bytes())!=result::match,"NPC combo timing rejects revision 3 peers both ways");
- // V-TBD: released OFF peers retain the exact record, including rule 16's old revision and no rule 18.
+ // Released OFF peers retain the exact record, including rule 16's old revision and no rule 18.
  record released_off;released_off.add(2,1,{1,0,0,0},true);released_off.add(16,3,{0,0,0,0},true);released_off.finalize();
  const auto current_off=npc(false),stun_off=stun(false);
  check(std::equal(current_off.bytes().begin(),current_off.bytes().end(),released_off.bytes().begin(),released_off.bytes().end()) && released_off.compare(current_off.bytes())==result::match,"released revision 3 OFF digest is unchanged");
@@ -264,7 +277,7 @@ void boundary_standins(){
  for(auto va:{native_request,native_reply,native_info,native_ack})jump(va,&admitted);
  jump(join_resume,&join_continuation);
 }
-record runtime_peer(bool on){record r;r.add(2,1,{on ? 1u : 0u,0,0,0},true);r.add(3,7,{1,3,0,0},true);r.finalize();return r;}
+record runtime_peer(bool on){record r;r.add(2,1,{on ? 1u : 0u,0,0,0},true);r.add(3,7,{1,3,0,0},true);r.add(17,1,{1,0,0,0},true);r.add(18,1,{1,0,0,0},true);r.finalize();return r;}
 void separate_host_joiner()
 {
  auto info_receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(info_registration+1)));
@@ -480,6 +493,8 @@ void runtime(){
  check(game_version::needs_gameplay_agreement() && !game_version::gameplay_online_allowed() && iat_hook::captured,"capacity registration automatically enlists socket exclusion before finalization");
  check(gameplay_agreement::register_rule(2,1,{explosive_first_hit::installed() ? 1u : 0u,0,0,0},explosive_first_hit::verified()),"installed explosion registers its actual effective installer snapshot");
  check(gameplay_agreement::register_rule(3,7,{1,3,0,0},true),"synthetic controller registers revision/values through public API without transport changes");
+ check(gameplay_agreement::register_rule(gameplay_capabilities::object_world_impact_id,1,{world_impact::installed() ? 1u : 0u,0,0,0},world_impact::verified()),"actual installed ObjectWorldImpact registers rule 17 without poisoning online");
+ check(gameplay_agreement::register_rule(gameplay_capabilities::stun_rule_id,1,{1,0,0,0},true),"synthetic verified StunRule participates alongside rule 17");
 
  // Only failure-path boundaries are isolated here. Execute retail failure + cleanup code.
  popup_vt[3]=reinterpret_cast<void*>(&show_popup);menu_vt[0x74/4]=reinterpret_cast<void*>(&close_menu);
@@ -547,6 +562,16 @@ void runtime(){
    check(receiver(&e)==(joining ? 2 : 0) && forwarded==v2_before && send_count==1 && read_refusal(output.data(),output_size)==refusal::foreign_record && has_log("refused (reason=2)"),
          "a body longer than any record is malformed and never reaches native admission");}
  }
+ for(const auto omitted:{17,18}){
+  record other;other.add(2,1,{1,0,0,0},true);other.add(3,7,{1,3,0,0},true);
+  for(const auto id:{17,18})if(id!=omitted)other.add(static_cast<std::uint16_t>(id),1,{1,0,0,0},true);
+  other.finalize();input.fill(0);std::memcpy(input.data()+request_size,other.bytes().data(),other.bytes().size());
+  context.fill(0);put(4,0x12345678);sender[0x19]=1;
+  event e{0x18,input.data(),std::uint16_t(request_size+other.bytes().size()),0,context.data(),sender.data()};
+  auto receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(request_registration+1)));
+  const auto shown=popups;logger::logged.clear();forwarded=0;
+  check(receiver(&e)==0 && forwarded==0 && popups==shown+1 && visible.find(gameplay_capabilities::rule_name(static_cast<std::uint16_t>(omitted)))!=std::string::npos,"actual native admission refuses and names missing ObjectWorldImpact/StunRule");
+ }
  ini::lc=false;ini::requested=false;game_version::install(reinterpret_cast<HMODULE>(0x400000));check(game_version::needs_gameplay_agreement() && !game_version::gameplay_online_allowed(),"explicit non-LC off configuration still requires verified shared agreement");
  game_version::bind_gameplay_agreement(true);check(socket(AF_INET,SOCK_DGRAM,0)==73,"verified non-LC off gate retains native socket forwarding");
  ini::key=false;iat_hook::captured=nullptr;game_version::install(reinterpret_cast<HMODULE>(0x400000));check(!game_version::needs_gameplay_agreement() && !iat_hook::captured,"unopted vanilla leaves native socket untouched");
@@ -581,5 +606,12 @@ int main(int argc,char** argv){
  ini::requested=true;explosive_first_hit::install(reinterpret_cast<HMODULE>(0x400001));check(!explosive_first_hit::installed() && !explosive_first_hit::verified(),"actual failed explosion install remains unverified");
  native_bytes(0x49ab51,28);explosive_first_hit::install(reinterpret_cast<HMODULE>(0x400000));check(explosive_first_hit::installed() && explosive_first_hit::verified(),"actual explosion patch reports installed effective state");
  ini::requested=false;explosive_first_hit::install(reinterpret_cast<HMODULE>(0x400000));check(explosive_first_hit::installed(),"later INI drift cannot relabel installed code");
+ world_impact::install(reinterpret_cast<HMODULE>(0x400000));
+ check(!world_impact::requested() && world_impact::verified(),"actual absent ObjectWorldImpact is verified OFF");
+ ini::impact="xml1";world_impact::install(reinterpret_cast<HMODULE>(0x400001));
+ check(world_impact::requested() && !world_impact::installed() && !world_impact::verified(),"actual failed ObjectWorldImpact is unverified");
+ for(const auto& g:world_impact_rules::guards)native_bytes(g.va,g.hex.size()/2);
+ world_impact::install(reinterpret_cast<HMODULE>(0x400000));
+ check(world_impact::requested() && world_impact::installed() && world_impact::verified(),"actual guarded ObjectWorldImpact install is verified");
  runtime();receiver_guard_child(path);std::printf("Agreement/native refusal: %d failure(s)\n",failures);return failures ? 1 : 0;
 }

@@ -241,7 +241,7 @@ int main(int argc,char** argv) {
  }
  reset(true);actor[0x765]=0xa4;drive_move=tumble.data();drive_set();check(actor[0x765]==0xa4,"unstunned hero is unchanged");
  check(arguments_ok && calls==18,"every request forwarded exactly once with all native arguments");
- // V-TBD: a resolved alternate need not have the requested name; an unselected move may share it.
+ // V-STUN1: a resolved alternate need not have the requested name; an unselected move may share it.
  reset(true);field<u32>(dazed.data(),8)=0x70000021;drive_move=dazed.data();drive_set();
  check(actor[0x765]==0xa5,"resolved alternate stun retains flag despite a different interned name");
  field<u32>(tumble.data(),8)=*reinterpret_cast<u32*>(stun_rules::stun_name);drive_move=tumble.data();drive_set();
