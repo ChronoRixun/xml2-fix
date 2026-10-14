@@ -367,12 +367,26 @@ namespace lcsave
 		// stall an online join on a cold filesystem. The translator already verified these names.
 		const bool ok=guarded(error,[&]
 		{
+			std::vector<std::uint8_t> image = stream;
+			if (image.size() == native.payload)
+			{
+				image.assign(old_envelope, 0);
+				const std::uint32_t size = native.payload;
+				std::memcpy(image.data()+0x80, &size, 4);
+				image.insert(image.end(), stream.begin(), stream.end());
+			}
+			auto fresh = detail::native_fresh_tail(detail::read_slot(image.data(), image.size(), native), *tables.data->build);
 			const auto file=detail::read_file(translated.bytes.data(),translated.bytes.size(),kind_campaign);
 			detail::validate_native_sections(file,native);
 			for(const auto& record:file.data("ZONE")["records"].as_list())
 			{
 				const auto zone=tables.data->p_zone.find(static_cast<std::uint32_t>(record["zone"].as_int()));
 				if(zone==tables.data->p_zone.end())detail::fail("unknown native zone metadata");
+				const auto provenance = fresh.find(zone->second);
+				if (provenance != fresh.end())
+				{
+					out.push_back(std::move(provenance->second)); fresh.erase(provenance); continue;
+				}
 				ZoneCaptureMetadata metadata;metadata.zone=zone->second;
 				metadata.time_stamp=static_cast<float>(record["time_stamp"].as_real());metadata.capture_flags=2;
 				std::memcpy(metadata.placement_sha1.data(),record["content_hash"].as_bytes().data(),20);
@@ -388,6 +402,7 @@ namespace lcsave
 				}
 				out.push_back(std::move(metadata));
 			}
+			if (!fresh.empty()) detail::fail("native fresh-tail record was not translated");
 		});
 		if(!ok)out.clear();return ok;
 	}

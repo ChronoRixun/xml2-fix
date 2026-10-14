@@ -2,6 +2,11 @@
 
 The release token (`[Online] GameVersion`, LC26 for builder 0.2.0, LC27 for 0.2.2) remains separate. LC builds and explicit ExplosiveFirstHit or DeathSwitchClear opt-ins require this protocol. Ordinary no-key XML2 without participating installers remains native. Compatibility uses actual installed values, never requested INI values alone.
 
+Protocol **4** adds the [native fresh-tail transfer contract](native-fresh-tail.md).
+The agreement retains protocol 3's 108-byte framing, but rejects protocol 3 and
+older before admission because those readers lose fresh appended residents.
+No new gameplay rule ID is assigned for this transport change.
+
 ## Registration API
 
 Include `gameplay_agreement.hpp`. Call each registration once, after its installer has checked guards, written/read back its changes and established its effective state. Disabled hooks register their native/off value with `verified=true`; a requested but failed hook registers `verified=false`. Registration automatically enlists socket exclusion and native refusal handling, including for a non-LC capacity/controller mod with no ExplosiveFirstHit key. A failed registration poisons the record and closes online admission. Do not silently omit failed or disabled participating rules.
@@ -51,10 +56,10 @@ The export startup contributes the refusal and transport sites to the startup tr
 
 ## Record and transport
 
-Protocol revision 3 (1.5.0) puts a fixed 108-byte record on the wire, whatever the number of rules: canonical
-little-endian header DWORD `GCAP` (0x50414347), ushort protocol revision 3, ushort rule count (including the layout
+Protocol revision 4 retains the fixed 108-byte record introduced in revision 3 (1.5.0), whatever the number of rules: canonical
+little-endian header DWORD `GCAP` (0x50414347), ushort protocol revision 4, ushort rule count (including the layout
 rule), ushort total bytes (108), ushort reserved zero; then the SHA-256 of the canonical rule list (32 bytes); then a
-64-byte rule summary. The canonical list is `GCAP`, ushort protocol 3, ushort count, then every rule sorted by ID in
+64-byte rule summary. The canonical list is `GCAP`, ushort protocol 4, ushort count, then every rule sorted by ID in
 the revision-2 entry encoding: ushort rule ID, ushort revision, four DWORD effective values. All unused value words
 must have documented semantics, normally zero; the digest covers every ID, revision and value exactly, so no hash of
 a rule's own (a turret list's FNV, say) substitutes for an effective value - a rule still registers the values. The
@@ -77,7 +82,7 @@ fragments). An admission body must never take that path: the fragment receiver 0
 joining peer's body no stream is open there, and it dereferences null at 0x61020c (whether and where the stream is
 opened for an admitted peer was not traced). Protocol revision 2 put the whole entry list on the wire (12 + 20 bytes per rule): with
 the fifteen rules of the 1.5 pre-release the 0x1a body was 360 bytes and a matching peer's join crashed the host
-there (live, 2026-10-12). The largest queued body of revision 3 is the 188-byte 0x1f, 112 bytes under the limit; a
+there (live, 2026-10-12). The largest queued body of revisions 3 and 4 is the 188-byte 0x1f, 112 bytes under the limit; a
 `static_assert` keeps it at least 64 under. The request 0x18 goes direct (0x60d9c0, a 0x514-byte buffer).
 
 **Fragment guard (optional).** The 0x13 stream miss at 0x610200 jumps to a stub that logs the drop (the first eight)
@@ -86,8 +91,8 @@ oversized message (a 1.5 pre-release joiner's 360-byte 0x1a) no longer kills thi
 times out natively. It joins the startup transaction as its own contribution (`gameplay_agreement.fragment_guard`,
 3 `fragment_guards`) only when its guards read back as retail; otherwise one log line and the stock handler.
 
-Receive rejects a missing or foreign record and any other protocol revision (2: 1.4.0 and the 1.5 pre-release; 1:
-0.2.0i and older - they refuse revision 3 the same way, both ways), a malformed header, a body that is not exactly 108
+Receive rejects a missing or foreign record and any other protocol revision (3: 1.5.0 and early 1.6 candidates; 2: 1.4.0 and the 1.5 pre-release; 1:
+0.2.0i and older - they refuse revision 4 the same way, both ways), a malformed header, a body that is not exactly 108
 bytes, and any digest difference, before native admission: nothing of a refused message reaches the native handler.
 Exact canonical equality is required, including disabled participating entries. A different count or a rule present
 on one side only is reported as an entries difference, anything else as a value difference (a revision difference
@@ -139,4 +144,4 @@ with the reasoning and the residual risk); the agreement is enforced at admissio
 
 ### 1.6 integration
 
-Rule 17 is ObjectWorldImpact, revision 1, effective `{installed ? 1 : 0, 0, 0, 0}`; rule 18 is StunRule, revision 1. Both register only when requested. Rule 16 uses revision 4 when requested and released revision 3 when OFF. A failed request remains unverified. `[TestMode]` registers no gameplay rule and refuses online independently. Protocol 3 and the 108-byte record are unchanged.
+Rule 17 is ObjectWorldImpact, revision 1, effective `{installed ? 1 : 0, 0, 0, 0}`; rule 18 is StunRule, revision 1. Both register only when requested. Rule 16 uses revision 4 when requested and released revision 3 when OFF. A failed request remains unverified. `[TestMode]` registers no gameplay rule and refuses online independently. The 108-byte record remains unchanged; protocol 4 adds the native fresh-tail contract above.

@@ -27,6 +27,7 @@ add_library(lcsave STATIC
 	src/lcsave/conversations.cpp
 	src/lcsave/dump.cpp
 	src/lcsave/api.cpp
+	src/lcsave/fresh_tail.cpp
 	src/lcsave/api_engine.cpp
 	src/lcsave/typed_registry.cpp)
 target_include_directories(lcsave PUBLIC src/lcsave)

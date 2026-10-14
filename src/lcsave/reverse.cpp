@@ -477,6 +477,11 @@ namespace lcsave::detail
 					else smart.push_back(idx);
 				}
 				z.name_handle = intern(zone, Enc::latin1);
+				if (prefix)
+				{
+					z.states[0].def_name = intern(fresh_tail_text(zone, *prefix, *num), Enc::latin1);
+					std::memcpy(z.states[0].payload, "LCFRESH1", 8);
+				}
 				z.tail.state_count = static_cast<u32>(n);
 				// the list capacities of the layout (the message is the one the reference's struct.pack gives)
 				if (dynamic.size() > native.dynamic) fail("pack expected " + std::to_string(native.dynamic) + " items for packing");

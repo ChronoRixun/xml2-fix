@@ -143,8 +143,9 @@ loaded. The joining player gets the game's own dialog (*Incompatible gameplay or
 host keeps its session and sees the reason in the lobby (in place of the advice text, for a minute) or as a short line
 in play: different gameplay settings, the fix not loaded on one PC, or another build. XML2 as it ships, without any of
 these keys, plays online exactly as before. From 1.5 the record is a fixed 108-byte digest whatever the number of
-rules (protocol revision 3), and a refusal names the setting that differs on both PCs; 1.4 and 1.5 refuse each
-other as another build. The record and its rules: [docs/gameplay-agreement.md](docs/gameplay-agreement.md).
+rules, and a refusal names the setting that differs on both PCs. Protocol revision 4 keeps that framing and
+requires [fresh-tail campaign transfer](docs/native-fresh-tail.md); protocol 3 and older peers are refused as another
+build before native admission. The record and its rules: [docs/gameplay-agreement.md](docs/gameplay-agreement.md).
 
 **Diagnosing online problems:** add this to `xml2-fix.ini` and `xml2-fix.log` will list every connection and query the game makes:
 

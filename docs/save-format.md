@@ -367,3 +367,10 @@ package data, and successful captures during delivery retain the already-loaded
 pinned identity. Detected changes refuse rather than re-label loaded marks from disk.
 Standalone historical-tree cache mutation tests remain separate. No source-string
 match can substitute for these behavioral checks.
+
+## Native online fresh-tail provenance
+
+Applied append-only prefixes carry a transient marker through native lobby reset
+and campaign transfer. The durable LC format is unchanged. See
+[native-fresh-tail.md](native-fresh-tail.md) for the carrier, validation, cached
+resave behavior, native lifetime evidence and GCAP protocol 4 compatibility gate.

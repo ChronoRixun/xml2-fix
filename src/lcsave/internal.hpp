@@ -326,6 +326,9 @@ namespace lcsave::detail
 		const ZonePrefix* zone_prefix(const std::string& zone, const std::string& old, const ZoneNumbering& current) const;
 	};
 
+	std::string fresh_tail_text(const std::string& zone, const ZonePrefix& prefix, const ZoneNumbering& numbering);
+	std::map<std::string, ZoneCaptureMetadata> native_fresh_tail(const OldSlot& native, const Build& build);
+
 	struct TablesData
 	{
 		std::map<std::pair<Hash, Hash>, std::vector<Hash>> conversation_tables;
