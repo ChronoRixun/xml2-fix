@@ -116,6 +116,10 @@ void records(){
  check(impact_on.compare(impact_off.bytes(),&impact_diff)==result::entries && impact_off.compare(impact_on.bytes())==result::entries,"ObjectWorldImpact on/off refuses both directions");
  impact_on.describe(impact_diff.buckets,impact_diff.local_only,false,impact_name,sizeof(impact_name));
  check(std::string(impact_name)=="ObjectWorldImpact (not on the other PC)","refusal names ObjectWorldImpact and explains the absent peer rule");
+ impact_off.describe(impact_diff.buckets,0,false,impact_name,sizeof(impact_name));
+ check(std::string(impact_name)=="ObjectWorldImpact (disabled on this PC)","an OFF peer still names the known optional rule without registering it");
+ native.describe(std::uint64_t(1)<<gameplay_capabilities::bucket_of(18),0,false,impact_name,sizeof(impact_name));
+ check(std::string(impact_name)=="StunRule (disabled on this PC)","an OFF peer names StunRule without changing its released digest");
  check(!impact(true,false,false).ready(),"failed ObjectWorldImpact cannot advertise a valid record");
  auto stun=[](bool on,bool verified=true,int rev=stun_rule::revision,bool with17=false){
   record r;if(on || !verified)r.add(gameplay_capabilities::stun_rule_id,static_cast<std::uint16_t>(rev),{on ? 1u : 0u,0,0,0},verified);

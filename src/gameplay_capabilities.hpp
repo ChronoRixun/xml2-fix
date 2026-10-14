@@ -152,7 +152,13 @@ namespace gameplay_capabilities
      if(ids){number(entries_[i].id);add(" ");}
      add(rule_name(entries_[i].id));if(local_only & bit)add(" (not on the other PC)");any=true;
     }
-    if(!any){if(used)add(", ");if(ids){number(unsigned(b+1));add(" ");}add("a rule this PC does not have");}
+    if(!any){
+     if(used)add(", ");if(ids){number(unsigned(b+1));add(" ");}
+     // These requested-only rules are absent when OFF, but this DLL still knows
+     // their names. The bucket summary remains advisory; the digest admits peers.
+     if(b+1==object_world_impact_id || b+1==stun_rule_id){add(rule_name(static_cast<std::uint16_t>(b+1)));add(" (disabled on this PC)");}
+     else add("a rule this PC does not have");
+    }
    }
   }
  };
