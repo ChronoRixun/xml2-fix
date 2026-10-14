@@ -94,6 +94,47 @@ int main() {
         check(finish(brain, 17.0f) == 17.0f + xml1_combo_delays[combo][xml1_combo_lengths[combo] - 1], "completion adds final button delay to existing x87 accumulator");
     }
     entry = reinterpret_cast<void*>(l.cont);
+    // V-TBD: clock rewind/slot reuse must not wait for an old absolute deadline.
+    auto* brain = brains.data();
+    field<void*>(brain, 4) = ai.data();
+    field<unsigned>(brain, 0x3c) = 2;
+    field<unsigned>(brain, 0x34) = 3;
+    auto& next = field<float>(reinterpret_cast<void*>(l.next), 0);
+    auto rewind = [&] {
+        field<unsigned>(brain, 0x30) = 0;
+        field<float>(ai.data(), ai_now) = 0;
+        next = 40;
+    };
+    // Restore the previous wait branch in this owned allocation as the negative control.
+    auto wait_branch = [&](std::uint8_t displacement) {
+        DWORD protection = 0;
+        if (!VirtualProtect(memory, code_size, PAGE_EXECUTE_READWRITE, &protection)) ExitProcess(2);
+        memory[l.cont - l.base + 0x33] = displacement;
+        if (!VirtualProtect(memory, code_size, protection, &protection) || !FlushInstructionCache(GetCurrentProcess(), memory, code_size)) ExitProcess(2);
+    };
+    wait_branch(0x35);rewind();
+    check(step(brain, actor.data()) == 1 && field<unsigned>(brain, 0x30) == 0, "negative control stalls on pre-load deadline");
+    wait_branch(0x4a);rewind();
+    check(step(brain, actor.data()) == 2 && field<unsigned>(brain, 0x30) == 1 && next == .2f, "rewound clock expires and rearms from current time");
+    for (float remaining : {0.f, .2f, .3f, max_combo_delay, max_combo_delay + .0001f, 40.f, std::numeric_limits<float>::infinity()}) {
+        field<unsigned>(brain, 0x30) = 0;field<float>(ai.data(), ai_now) = 0;next = remaining;
+        const bool expired = remaining > max_combo_delay;
+        check(step(brain, actor.data()) == (expired ? 2 : 1) && field<unsigned>(brain, 0x30) == (expired ? 1u : 0u), "only remaining times above maximum expire");
+    }
+    field<unsigned>(brain, 0x30) = 2;field<float>(ai.data(), ai_now) = 1;next = 100;
+    check(step(brain, actor.data()) == 3 && field<unsigned>(brain, 0x30) == 3, "stale final deadline reaches native completion");
+    field<unsigned>(brain, 0x30) = 0;field<float>(ai.data(), ai_now) = 50;next = 0;
+    check(step(brain, actor.data()) == 2 && next == 50.2f, "unarmed slot and forward clock jump advance normally");
+    // Repeated clamped, due and waiting paths must keep the x87 stack balanced.
+    unsigned short before = 0, after = 0;
+    __asm { fnclex }
+    __asm { fnstsw before }
+    for (unsigned n = 0; n < 1000; ++n) {
+        field<unsigned>(brain, 0x30) = 0;field<float>(ai.data(), ai_now) = 1;next = n % 3 == 0 ? 100.f : (n % 3 == 1 ? 1.f : 0.f);
+        step(brain, actor.data());
+    }
+    __asm { fnstsw after }
+    check((before & 0x3800) == (after & 0x3800) && !(after & 0x41), "deadline clamp leaves x87 depth balanced without invalid operations");
     field<unsigned>(brains.data() + 1, 0x30) = 0;
     field<unsigned>(brains.data() + 1, 0x38) = 0;
     check(step(brains.data() + 1, actor.data()) == 4, "unaligned brain uses native fallback");

@@ -13,6 +13,7 @@ namespace stun_rule
  {
   using u32 = std::uint32_t;
   bool wanted = false, applied = false;
+  const u32 set_move_resume = stun_rules::set_move_resume;
   template<class T> T& field(void* p, std::size_t offset)
   { return *reinterpret_cast<T*>(static_cast<unsigned char*>(p) + offset); }
 
@@ -22,7 +23,11 @@ namespace stun_rule
    if (!(flags & 1)) return;
    const bool hero = stun_rules::party_hero(field<u32>(actor, 4), field<int>(actor, 0x3d4));
    if (!hero) return;
-   const bool stunned = move && field<u32>(move, 8) == *reinterpret_cast<const u32*>(stun_rules::stun_name);
+   // Resolve for this actor, just as native expiry does. A move's +8 is its name, but the
+   // resolver can select an alternate move with another name through its applicability test.
+   using resolve_t = void* (__thiscall*)(void*, const u32*);
+   const bool stunned = move && move == reinterpret_cast<resolve_t>(stun_rules::resolve_move)(
+       actor, reinterpret_cast<const u32*>(stun_rules::stun_name));
    flags = stun_rules::reaction_flags(flags, hero, stunned);
   }
 
@@ -49,8 +54,7 @@ namespace stun_rule
     popad
     popfd
     mov [edi + 0x378], esi
-    push 0x41d8b2
-    ret
+    jmp dword ptr [set_move_resume]
    }
   }
  }

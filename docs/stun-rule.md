@@ -47,7 +47,11 @@ Two guarded sites restore that ownership for party heroes:
 
 Party membership uses entity `+4` bit 20 and controller `+0x3d4` in 0..3, consistent with the native party
 collector `0x46d460`; it includes AI followers and remote players, and excludes unseated enemy doubles.
-The move's interned name at `+8` is compared with the native stun-name cell `0x78a934`.
+The new/current move is compared with `0x427ca0(actor, &0x78a934)`, the same actor-specific resolver used by
+native expiry. The move parser `0x4f6b80` does store the interned name at `+8`, but name equality is not a
+substitute for resolution: `0x501a50` checks applicability and can recursively select an alternate name.
+The setter's full `0x41d890..0x41d8b2` context is guarded, including null-to-idle resolution and null refusal.
+Its bridge resumes with an indirect jump after restoring registers and flags.
 
 The hook adds no stun/get-up timer or invulnerability. Native powerup life, susceptibility, refresh, damage
 affecters and accepted request arguments remain intact. Existing uninterrupted stun loops are still allowed;
@@ -57,16 +61,19 @@ PC's entire powerup system or XML1's input handler.
 
 ## Installation and validation
 
-All eight guards pass before either write. `xml1_hook_transaction` acquires pages, writes, reads back, flushes
+All ten guards pass before either write. `xml1_hook_transaction` acquires pages, writes, reads back, flushes
 and rolls back on failure. One failure line identifies refusal. A failed requested install is unverified for
-online agreement; unsafe rollback/protection failure refuses startup. No key registers verified-off in an LC
-installation, while an explicit opt-in also enlists agreement outside LC. No protocol or save-format change.
+online agreement; unsafe rollback/protection failure refuses startup. Absent/`xml2` omits rule 18, preserving
+the released LC OFF digest. An explicit opt-in also enlists agreement outside LC. No protocol or save-format change.
 
 `xml2_stun_rule_test [retail-executable]` exercises the production installer, every guard refusal and both
 installed bridges with synthetic actors: acceptance, refusal, repeated stun, interruption, all four controller
-slots, native clocks, unrelated flag bits, enemy bypass, and preserved registers/flags. The optional executable
+slots, alternate resolution versus name equality, native clocks, unrelated flag bits, enemy bypass, and preserved
+registers/flags. Every byte of each guard is corrupted in turn to verify refusal. The optional executable
 is read only to verify signatures and execute its stun-powerup entry/expiry in the owned fixture: 56 combinations
 of susceptibility, fresh/refresh, party/enemy and competitive/noncompetitive mode compare native and installed
-actor bytes, assigned duration and request counts. `xml2_gameplay_agreement_test` checks on/off, failed install, revision
+actor bytes, assigned duration and request counts. The retail actor resolver and alternate traversal also run
+against synthetic style tables, proving that the installed bridge follows actor-specific pointer identity.
+`xml2_gameplay_agreement_test` checks on/off, failed install, revision
 mismatch and future rule-17 registration in either order. Builder tests check key ownership, removal, and
 release-DLL capability refusal. Live acceptance evidence is recorded separately from these synthetic checks.

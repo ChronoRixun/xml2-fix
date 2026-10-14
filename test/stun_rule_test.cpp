@@ -158,6 +158,46 @@ void native_powerup_checks() {
  std::printf("%zu native powerup scenarios compared\n",index);
 }
 
+namespace {
+ std::array<std::uint8_t,0x4100> interned{};
+ u32 alternate_name=0x70000012;
+ bool primary_applies=false, moves_available=true;
+ int alternate_requests=0;
+ void* __cdecl intern_table(){return interned.data();}
+ void* __fastcall find_move(void*,void*,const u32* name){
+  if(!moves_available)return nullptr;
+  return *name==alternate_name ? tumble.data() : dazed.data();
+ }
+ bool __fastcall applicable(void* move,void*,void*,u32){return move==tumble.data() || primary_applies;}
+ const u32* __fastcall alternate(void*,void*){++alternate_requests;return &alternate_name;}
+}
+void native_resolution_checks() {
+ // Execute the retail resolver and applicability/alternate traversal with synthetic style tables.
+ // This establishes why name-field equality is weaker than the native pointer comparison.
+ auto load=[&](u32 a,unsigned n){const auto o=file_offset(a);if(o+n>binary.size())ExitProcess(2);std::memcpy(at(a),binary.data()+o,n);};
+ load(stun_rules::resolve_move,0x15);load(0x41d0d0,0x10);load(0x501a50,0x99);
+ redirect(0x602280,&intern_table);
+ interned[0x4008]='x';
+ table_vt.fill(nullptr);table_vt[0x14/4]=reinterpret_cast<void*>(&find_move);
+ move_vt[8/4]=reinterpret_cast<void*>(&applicable);move_vt[0xd4/4]=reinterpret_cast<void*>(&alternate);
+ field<void*>(dazed.data(),0)=move_vt.data();field<void*>(tumble.data(),0)=move_vt.data();
+ field<u32>(dazed.data(),8)=0x70000011;field<u32>(tumble.data(),8)=alternate_name;
+ *reinterpret_cast<u32*>(stun_rules::stun_name)=0x70000011;
+ reset(true);field<void*>(actor.data(),0x360+3*4)=&table_object;
+ using resolve_t=void*(__thiscall*)(void*,const u32*);
+ const auto resolve_native=reinterpret_cast<resolve_t>(stun_rules::resolve_move);
+ const auto* name=reinterpret_cast<const u32*>(stun_rules::stun_name);
+ check(resolve_native(actor.data(),name)==tumble.data() && alternate_requests==1,"retail resolver chooses applicable alternate with a different name");
+ drive_move=tumble.data();drive_set();
+ check(actor[0x765]==0xa5,"production bridge keeps native-resolved alternate stun");
+ drive_move=dazed.data();drive_set();
+ check(actor[0x765]==0xa4,"production bridge clears same-name primary rejected by retail applicability");
+ primary_applies=true;actor[0x765]=0xa5;drive_move=dazed.data();drive_set();
+ check(actor[0x765]==0xa5 && resolve_native(actor.data(),name)==dazed.data(),"applicable primary stun still retains flag");
+ moves_available=false;drive_set();
+ check(actor[0x765]==0xa4,"missing resolved stun clears the party flag");
+}
+
 int main(int argc,char** argv) {
  if (reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr))!=0x400000 || reinterpret_cast<std::uintptr_t>(fixture_space)>0x41d890) return 2;
  DWORD old=0;if(!VirtualProtect(at(0x401000),0x400000,PAGE_EXECUTE_READWRITE,&old))return 2;
@@ -171,14 +211,15 @@ int main(int argc,char** argv) {
  ini::setting=" XML2 ; explicit native";stun_rule::install(GetModuleHandleW(nullptr));check(!stun_rule::requested() && untouched(),"explicit xml2 makes no writes");
  ini::setting="invented";stun_rule::install(GetModuleHandleW(nullptr));check(stun_rule::requested() && !stun_rule::verified() && untouched(),"invalid key refuses without writes");
  ini::setting=" XML1 ; original reaction ownership";
- for(const auto& g:stun_rules::guards) {
-  guards();at(g.va)[0]^=1;const auto before=logger::lines;stun_rule::install(GetModuleHandleW(nullptr));
+ for(const auto& g:stun_rules::guards) for(std::size_t byte=0;byte<g.hex.size()/2;++byte) {
+  guards();at(g.va)[byte]^=1;const auto before=logger::lines;stun_rule::install(GetModuleHandleW(nullptr));
   check(!stun_rule::installed() && !stun_rule::verified() && logger::lines==before+1,"each bad guard refuses once");
-  at(g.va)[0]^=1;check(untouched(),"guard refusal leaves every other site native");
+  at(g.va)[byte]^=1;check(untouched(),"guard refusal leaves every other site native");
  }
  guards();stun_rule::install(GetModuleHandleW(nullptr));check(stun_rule::installed() && stun_rule::verified() && !game_version::refused,"production transaction installs");
  check(stun_rule::values()==std::array<u32,4>{1,0,0,0},"effective capability is on");
  const auto redirect=stun_rules::branch(stun_rules::native_dispatch,&dispatch,false,5);std::memcpy(at(stun_rules::native_dispatch),redirect.data(),redirect.size());
+ const auto lookup_redirect=stun_rules::branch(stun_rules::resolve_move,&lookup,false,5);std::memcpy(at(stun_rules::resolve_move),lookup_redirect.data(),lookup_redirect.size());
  *at(stun_rules::set_move_resume)=0xc3;*at(stun_rules::dispatch_call+5)=0xc3;
  field<u32>(dazed.data(),8)=0x70000011;field<u32>(tumble.data(),8)=0x70000012;field<u32>(ready.data(),8)=0x70000013;
  *reinterpret_cast<u32*>(stun_rules::stun_name)=field<u32>(dazed.data(),8);
@@ -200,6 +241,11 @@ int main(int argc,char** argv) {
  }
  reset(true);actor[0x765]=0xa4;drive_move=tumble.data();drive_set();check(actor[0x765]==0xa4,"unstunned hero is unchanged");
  check(arguments_ok && calls==18,"every request forwarded exactly once with all native arguments");
- if(argc>1)native_powerup_checks();
+ // V-TBD: a resolved alternate need not have the requested name; an unselected move may share it.
+ reset(true);field<u32>(dazed.data(),8)=0x70000021;drive_move=dazed.data();drive_set();
+ check(actor[0x765]==0xa5,"resolved alternate stun retains flag despite a different interned name");
+ field<u32>(tumble.data(),8)=*reinterpret_cast<u32*>(stun_rules::stun_name);drive_move=tumble.data();drive_set();
+ check(actor[0x765]==0xa4,"same-name move not selected by actor resolver does not retain stun flag");
+ if(argc>1){native_powerup_checks();native_resolution_checks();}
  std::printf("%d checks, %d failures\n",checks,failures);return failures ? 1 : 0;
 }

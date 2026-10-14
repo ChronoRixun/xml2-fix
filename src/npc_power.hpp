@@ -29,5 +29,7 @@ namespace npc_power
 	// Rule 16: word 0 enables the power/combo rules; word 1 enables XML1 visibility geometry and query scheduling.
 	// Revision 4 adds per-press and final combo delays. Revision 3 added visibility; values stay unchanged.
 	constexpr std::uint16_t revision = 4;
+	// Released LC peers already advertise rule 16 revision 3 when disabled.
+	constexpr std::uint16_t revision_for(bool requested) { return requested ? revision : 3; }
 	std::array<std::uint32_t, 4> values();
 }

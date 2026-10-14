@@ -97,6 +97,9 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    reaches the existing press or completion code. XML1's per-button delays come from 0x452b94; its continuation
    is 0xeebec..0xeecb7. PC's immediate chain-availability test can otherwise abort a newly started combo and set
    the next attack time to now minus one. The timer advances even while the actor hold bit is set, as in XML1.
+   A remaining deadline above the table's maximum delay (0.6 seconds) is treated as expired. This bounds a stale
+   slot's wait after a clock rewind or reuse without changing ordinary equal/decreasing deadlines. An unarmed
+   zero deadline advances once the clock is positive. Unordered clocks retain the previous wait behavior.
 10. **0x5192cb (6 bytes).** Completion adds the final button delay to the existing time/offset/random accumulator.
    PC adds a fixed 0.2 seconds. The original single-hit combo adds zero; its longest combo adds 0.6 seconds.
 
@@ -118,9 +121,34 @@ its AI time is set.
 Online play is lockstep and the rule changes AI decisions and energy, so it is shared gameplay rule **16**
 (`gameplay_capabilities::npc_power_rule_id`, [gameplay-agreement.md](gameplay-agreement.md)): revision 4,
 `{installed ? 1 : 0, installed ? 1 : 0, 0, 0}`. The added word advertises XML1 visibility geometry and query scheduling;
-revision 2 had only the power/combo word, and revision 3 lacked the press/completion timers. Registered in an LC installation or when requested; absent or `xml2` is the verified
-`{0,0,0,0}`; requested but not installed (a guard mismatch, protection, readback, an unknown value) is unverified and
-closes host/join. Peers on revisions 2 or 3 cannot silently share a game with revision 4.
+revision 2 had only the power/combo word, and revision 3 lacked the press/completion timers. Registered in an LC
+installation or when requested; absent or `xml2` retains **revision 3** with verified `{0,0,0,0}`, matching the
+released OFF record. Only requested configurations use revision 4. Requested but not installed (a guard mismatch,
+protection, readback, an unknown value) is unverified and closes host/join. Enabled revision 3 and 4 peers refuse.
+
+### Bridge register contracts
+
+At `0x5192d1`, the completion jump reaches `0x5192ed`, which reloads ECX with the AI before passing the x87
+accumulator to `0x5382a0`. That callee overwrites EAX from its stack argument and writes the next attack time;
+it never reads EDX. The later paths reload EDX or return a boolean in AL. Incoming EAX/ECX/EDX are dead.
+
+At `0x519840`, EAX is loaded from the existing stack frame before the branch. The fallthrough initializes a
+stack-local query with a fresh ECX, then `0x5252e0` supplies its own registers; the alternate `0x519c6a` path
+reloads EDX/EAX from the brain. Later ECX stack pushes reserve storage overwritten by `fstp`, rather than pass
+the old ECX value. Incoming EAX/ECX/EDX are dead on both paths; EBP and the original stack frame remain live.
+
+### Clock and transition review
+
+AI clock writes at `0x511d4f`, `0x5125ff` and `0x51672b` copy the game clock (vtable +0x160, accessor
+`0x469740`, game+0x3e8). A bounded live check saved and loaded during combat, then changed zones with a combo
+in progress and returned. The clock kept advancing through these paths; departing AI slots were retired and
+new slots initialized. Combos advanced after load and after the round trip, including reused pool indices.
+The observer checked the active-slot bitmap and generation tokens, excluding stale bytes in retired slots.
+
+This did **not** reproduce a natural clock-reset stall. The maximum-wait clamp is a defensive correction,
+verified against the old emitted wait branch with a synthetic rewound clock. The live trial staged zone
+loads, authored spawn-point visits and invulnerability (reapplied after load). It establishes these transition
+paths, not a guarantee that the clock is monotonic for every game lifecycle or an isolated combat-rate result.
 
 ### Revision 4 acceptance status
 

@@ -102,10 +102,10 @@ void records(){
  check(death(true,false).compare(death(true).bytes())==result::unavailable && peer(true).compare(death(false).bytes())==result::entries,"failed death threshold install or a peer without the rule refuses");
  // Rule 18 leaves ID 17 unregistered so its owner can join later in either registration order.
  auto stun=[](bool on,bool verified=true,int rev=stun_rule::revision,bool with17=false){
-  record r;r.add(gameplay_capabilities::stun_rule_id,static_cast<std::uint16_t>(rev),{on ? 1u : 0u,0,0,0},verified);
+  record r;if(on || !verified)r.add(gameplay_capabilities::stun_rule_id,static_cast<std::uint16_t>(rev),{on ? 1u : 0u,0,0,0},verified);
   if(with17)r.add(17,1,{1,0,0,0},true);r.finalize();return r;};
  check(gameplay_capabilities::stun_rule_id==18 && std::string(gameplay_capabilities::rule_name(18))=="StunRule","stun uses assigned rule 18");
- check(stun(true).compare(stun(false).bytes())==result::value && stun(false).compare(stun(true).bytes())==result::value,"stun on/off refuses both directions");
+ check(stun(true).compare(stun(false).bytes())==result::entries && stun(false).compare(stun(true).bytes())==result::entries,"stun on/off refuses both directions");
  check(stun(true).compare(stun(true).bytes())==result::match && stun(false).compare(stun(false).bytes())==result::match,"same stun rules agree, including off");
  check(stun(true).compare(stun(true,true,2).bytes())==result::value,"stun revision mismatch refuses");
  check(!stun(true,false).ready(),"failed stun install poisons agreement");
@@ -114,13 +114,19 @@ void records(){
  check(stun(true).compare(future.bytes())==result::entries,"missing future rule 17 is refused, not silently ignored");
  // Rule 16, the NPC power rule ([Game] NpcPowerRule): enemies that pay for powers and decide every 2 s never share a
  // lockstep game with enemies that don't; revision 3 adds the visibility word; absent is {0,0,0,0}, a failed install unverified.
- auto npc=[](bool on,bool verified=true){record r;r.add(2,1,{1,0,0,0},true);r.add(gameplay_capabilities::npc_power_rule_id,npc_power::revision,{on ? 1u : 0u,on ? 1u : 0u,0,0},verified);r.finalize();return r;};
+ auto npc=[](bool on,bool verified=true){record r;r.add(2,1,{1,0,0,0},true);r.add(gameplay_capabilities::npc_power_rule_id,npc_power::revision_for(on || !verified),{on ? 1u : 0u,on ? 1u : 0u,0,0},verified);r.finalize();return r;};
  check(gameplay_capabilities::npc_power_rule_id==16 && npc_power::revision==4 && npc(true).compare(npc(false).bytes())==result::value && npc(false).compare(npc(true).bytes())==result::value,"NPC power rule on/off refuses both directions");
  check(npc(true).compare(npc(true).bytes())==result::match && npc(false).compare(npc(false).bytes())==result::match,"same NPC power rule accepts");
  record npc_previous; npc_previous.add(2,1,{1,0,0,0},true);npc_previous.add(gameplay_capabilities::npc_power_rule_id,2,{1,0,0,0},true);npc_previous.finalize();
  check(npc(true).compare(npc_previous.bytes())!=result::match && npc_previous.compare(npc(true).bytes())!=result::match,"NPC visibility policy rejects the previous power/combo-only revision both ways");
  record npc_visibility; npc_visibility.add(2,1,{1,0,0,0},true);npc_visibility.add(gameplay_capabilities::npc_power_rule_id,3,{1,1,0,0},true);npc_visibility.finalize();
  check(npc(true).compare(npc_visibility.bytes())!=result::match && npc_visibility.compare(npc(true).bytes())!=result::match,"NPC combo timing rejects revision 3 peers both ways");
+ // V-TBD: released OFF peers retain the exact record, including rule 16's old revision and no rule 18.
+ record released_off;released_off.add(2,1,{1,0,0,0},true);released_off.add(16,3,{0,0,0,0},true);released_off.finalize();
+ const auto current_off=npc(false),stun_off=stun(false);
+ check(std::equal(current_off.bytes().begin(),current_off.bytes().end(),released_off.bytes().begin(),released_off.bytes().end()) && released_off.compare(current_off.bytes())==result::match,"released revision 3 OFF digest is unchanged");
+ check(std::equal(stun_off.bytes().begin(),stun_off.bytes().end(),native.bytes().begin(),native.bytes().end()),"disabled new stun rule adds no record entry");
+ check(!stun(false,false).ready() && !npc(false,false).ready(),"failed requests with zero effective values still poison agreement");
  check(npc(true,false).compare(npc(true).bytes())==result::unavailable && peer(true).compare(npc(false).bytes())==result::entries,"failed NPC power rule install or a peer without the rule refuses");
  check(std::string(gameplay_capabilities::rule_name(16))=="NpcPowerRule" && gameplay_capabilities::bucket_of(16)!=gameplay_capabilities::bucket_of(15),"rule 16 is named and has a bucket of its own");
  record sorted;sorted.add(2,1,{0,0,0,0},true);sorted.add(3,1,{1,0,0,0},true);sorted.finalize();check(sorted.compare(missing.bytes())==result::match,"registration order canonicalizes by explicit rule id");

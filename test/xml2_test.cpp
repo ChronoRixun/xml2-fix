@@ -10422,7 +10422,7 @@ namespace
 					slots_ok &= button == xml1_combos[i][k] && (button == 4 || button == 5);
 				}
 			}
-			CHECK(slots_ok && l.constants + 16 <= l.combos);
+			CHECK(slots_ok && l.constants + data.size() <= l.combos);
 			const auto lengths = combo_lengths_bytes();
 			CHECK(lengths.size() == 24 && lengths[0] == 1 && lengths[4] == 2 && lengths[20] == 5);
 		}

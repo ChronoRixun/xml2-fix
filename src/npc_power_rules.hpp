@@ -243,6 +243,11 @@ namespace npc_power_rules
 	// XML1's per-press delays for its six combos (default.xbe 0x452b94).
 	inline constexpr std::array<std::array<float, 5>, 6> xml1_combo_delays{{{0.0f}, {0.2f, 0.2f}, {0.2f, 0.2f, 0.2f}, {0.2f, 0.2f},
 	                                                                          {0.2f, 0.2f, 0.2f, 0.2f}, {0.3f, 0.3f, 0.3f, 0.3f, 0.6f}}};
+	inline constexpr float max_combo_delay = [] {
+		float maximum = 0;
+		for (const auto& row : xml1_combo_delays) for (const auto delay : row) if (delay > maximum) maximum = delay;
+		return maximum;
+	}();
 
 	inline constexpr site combo_end_delay_site{0x5192cb, "d805fc2f6800eb1a", 6, "the completed combo pause"};
 	inline constexpr site ai_pool_site{0x5252f7, "b914ba7800", 0, "the AI pool base"};
@@ -316,30 +321,31 @@ namespace npc_power_rules
 		address thousandth() const { return constants + 4; }
 		address two() const { return constants + 8; }
 		address half() const { return constants + 12; }
+		address max_delay() const { return constants + 16; }
 		address combos = 0;
 		address combo(const std::size_t i) const { return combos + static_cast<address>(20 * i); }
 		address cont = 0, start = 0, delays = 0, next = 0, end_delay = 0; // the combo step bridges, XML1's delays, the per-brain times
 	};
 	// The block: one page of code and constants (made execute-read), then one page of data (read-write): the next
 	// press time of each of the 32 brains.
-	constexpr std::size_t charge_size = 57, recheck_size = 23, gate_size = 47, cont_size = 126, start_size = 71, end_delay_size = 32;
+	constexpr std::size_t charge_size = 57, recheck_size = 23, gate_size = 47, cont_size = 149, start_size = 71, end_delay_size = 32;
 	constexpr std::size_t code_size = 4096, block_size = 8192;
 	inline layout layout_at(const address base)
 	{
 		layout l{base, base, base + 64, base + 96, base + 160};
 		l.combos = base + 192; // 6 x 20 bytes (up to five buttons each)
 		l.cont = base + 320;
-		l.start = base + 464;
-		l.delays = base + 544; // 6 x 20 bytes
+		l.start = base + 480;
+		l.delays = base + 560; // 6 x 20 bytes
 		l.next = base + static_cast<address>(code_size);
-		l.end_delay = base + 672;
+		l.end_delay = base + 688;
 		return l;
 	}
 	inline std::vector<std::uint8_t> constants()
 	{
-		std::vector<std::uint8_t> data(16);
-		std::uint32_t values[4] = {float_bits(-0.5f), 0x3a83126fu /* default.xbe 0x3c832c, 0.001 */, float_bits(xml1_recheck), float_bits(xml1_recheck_party)};
-		std::memcpy(data.data(), values, 16);
+		std::vector<std::uint8_t> data(20);
+		std::uint32_t values[5] = {float_bits(-0.5f), 0x3a83126fu /* default.xbe 0x3c832c, 0.001 */, float_bits(xml1_recheck), float_bits(xml1_recheck_party), float_bits(max_combo_delay)};
+		std::memcpy(data.data(), values, sizeof(values));
 		return data;
 	}
 
@@ -455,7 +461,7 @@ namespace npc_power_rules
 			0xd8, 0x1a,                               // 2b fcomp dword [edx]
 			0xdf, 0xe0,                               // 2d fnstsw ax
 			0xf6, 0xc4, 0x41,                         // 2f test ah,0x41: now <= next
-			0x75, 0x35,                               // 32 jnz notyet
+			0x75, 0x4a,                               // 32 jnz check remaining time (0x7e)
 			0x8b, 0x45, 0x30,                         // 34 mov eax,[ebp+0x30]
 			0x40,                                     // 37 inc eax
 			0x89, 0x45, 0x30,                         // 38 mov [ebp+0x30],eax
@@ -478,6 +484,14 @@ namespace npc_power_rules
 			0x8b, 0x4d, 0x30,                         // 73 fallback: mov ecx,[ebp+0x30] (displaced)
 			0x8b, 0x55, 0x38,                         // 76 mov edx,[ebp+0x38] (displaced)
 			0xe9, 0, 0, 0, 0,                         // 79 jmp 0x519211
+			// A slot can survive a clock rewind/reuse. Never wait beyond the longest table delay.
+			0xd9, 0x02,                               // 7e fld dword [edx] (next)
+			0xd8, 0xa1, 0x50, 0x05, 0x00, 0x00,       // 80 fsub dword [ecx+0x550] (now)
+			0xd8, 0x1d, 0, 0, 0, 0,                   // 86 fcomp dword [max_delay]
+			0xdf, 0xe0,                               // 8c fnstsw ax
+			0xf6, 0xc4, 0x45,                         // 8e test ah,0x45: greater only (NaN still waits)
+			0x74, 0xa1,                               // 91 jz due (0x34)
+			0xeb, 0xd4,                               // 93 jmp notyet (0x69)
 		};
 		put32(code, 0x03, brain0_va);
 		put32(code, 0x1e, l.next);
@@ -486,6 +500,7 @@ namespace npc_power_rules
 		put32(code, 0x6a, combo_after_va - (l.cont + 0x6e));
 		put32(code, 0x6f, combo_end_va - (l.cont + 0x73));
 		put32(code, 0x7a, combo_continue_resume_va - (l.cont + 0x7e));
+		put32(code, 0x88, l.max_delay());
 		return code;
 	}
 	// The combo start (the exits' jump; ebp = the brain, [ebp+0x3c] = the combo): next = now + delay[0], then the
