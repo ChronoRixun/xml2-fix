@@ -42,4 +42,7 @@ namespace test_input
 
 	// Watches a fresh IDirectInput8 of the game's for its keyboard device. Nothing unless the pipe is on.
 	void hook_direct_input8(void* direct_input);
+	// Nonblocking, game thread only. Used by the opt-in player testing hotkeys;
+	// this does not enable or create the automation pipe.
+	bool queue_script_on_game_thread(const char* statement);
 }

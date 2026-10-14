@@ -26,6 +26,9 @@ namespace gameplay_agreement
   char incompatibility[512]="Incompatible gameplay or an unverified installation. " XML2_FIX_INCOMPATIBILITY_ADVICE;
   void dialog_text(const char* differing)
   {
+   if(game_version::test_mode_active()){
+    std::snprintf(incompatibility,sizeof(incompatibility),"%s",game_version::test_mode_reason());return;
+   }
    if(differing && *differing)std::snprintf(incompatibility,sizeof(incompatibility),"Incompatible gameplay settings: %s. " XML2_FIX_INCOMPATIBILITY_ADVICE,differing);
    else std::memcpy(incompatibility,incompatibility_general,sizeof(incompatibility_general));
   }

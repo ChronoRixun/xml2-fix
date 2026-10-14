@@ -10,6 +10,7 @@
 #include <Windows.h>
 
 #include <cstdint>
+#include <atomic>
 
 namespace game_version
 {
@@ -20,17 +21,24 @@ namespace game_version
 		bool lc_required = false;
 		bool version_verified = false;
 		bool gameplay_required = false, gameplay_verified = false;
+		bool testing = false;
+		std::atomic<bool> testing_notice{false};
 		void (*show_refusal)() = nullptr;
 		bool installation_unsafe = false;
 		using socket_t = SOCKET(WSAAPI*)(int,int,int);
 		socket_t real_socket = nullptr;
 		SOCKET WSAAPI guarded_socket(int family, int type, int protocol)
 		{
-			if (!save_guard_rules::online_allowed(lc_required,version_verified,gameplay_required,gameplay_verified))
+			if (!gameplay_online_allowed())
 			{
-				if (show_refusal) show_refusal();
+				// The caller builds its own network-error popup after socket returns.
+				// The testing popup adapter replaces that explanation, preserving the
+				// native dialog lifecycle (which recursively reads input while building).
+				if (testing) testing_notice = true;
+				else if (show_refusal) show_refusal();
 				WSASetLastError(WSAEACCES);
 				logger::write_once("lc-online-refused", "online: host/join refused: %s",
+				                  testing ? "[TestMode] is enabled; turn every test option off and restart to play online" :
 				                  gameplay_required && !gameplay_verified ? "effective gameplay capability record was not installed/verified" : "the four-character release version patch did not verify");
 				return INVALID_SOCKET;
 			}
@@ -78,17 +86,22 @@ namespace game_version
 			real_socket = reinterpret_cast<socket_t>(iat_hook::hook(game,"WS2_32.dll","socket",23,reinterpret_cast<void*>(&guarded_socket)));
 		return real_socket != nullptr;
 	}
-	bool gameplay_online_allowed() { return save_guard_rules::online_allowed(lc_required,version_verified,gameplay_required,gameplay_verified); }
+	bool test_mode_active() { return testing; }
+	bool take_test_mode_refusal() { return testing && testing_notice.exchange(false); }
+	const char* test_mode_reason() { return "Online play is disabled while [TestMode] is enabled. Set ForgeEverywhere=0 and Hotkeys=0, then restart the game."; }
+	bool gameplay_online_allowed() { return !testing && save_guard_rules::online_allowed(lc_required,version_verified,gameplay_required,gameplay_verified); }
 	bool needs_gameplay_agreement() { return gameplay_required; }
 	void bind_gameplay_refusal(void (*show)()) { show_refusal = show; }
 	void bind_gameplay_agreement(bool verified) { gameplay_verified = verified; }
 	void install(const HMODULE game)
 	{
 		version_verified = false;
+		testing_notice = false;
 		installation_unsafe = false;
 		real_socket = nullptr;
 		lc_required = save_format_rules::parse_mode(ini::text(L"Save",L"Format").value_or("")).value == save_format_rules::mode::lc;
-		gameplay_required = lc_required || ini::text(L"Game", L"ExplosiveFirstHit").has_value() || ini::text(L"Game", L"RankCosts").has_value() || ini::text(L"Game", L"LevelSkillPoints").has_value() || ini::text(L"Game", L"LevelStatPoints").has_value();
+		testing = ini::flag(L"TestMode", L"ForgeEverywhere", false) || ini::flag(L"TestMode", L"Hotkeys", false);
+		gameplay_required = testing || lc_required || ini::text(L"Game", L"ExplosiveFirstHit").has_value() || ini::text(L"Game", L"RankCosts").has_value() || ini::text(L"Game", L"LevelSkillPoints").has_value() || ini::text(L"Game", L"LevelStatPoints").has_value();
 		gameplay_verified = false;
 		if (lc_required || gameplay_required)
 		{

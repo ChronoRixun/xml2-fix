@@ -245,6 +245,29 @@ Both Discord applications carry the same art: `logo`, and the badges `menu`, `cu
 
 Discord not running? The fix looks for it every 20 seconds, quietly, and connects once it starts. `xml2-fix.log` says when (`discord: connected as X-Men Legends II (discord-ipc-0)`) and lists each new presence (`discord: presence -> Act 1 · Sanctuary | Wolverine, Storm +2 · Lv 10-12`). Quitting the game clears the presence (`discord: presence cleared (the game is quitting)`; the game waits at most 1.5 seconds for it); if the game is closed any other way, Discord clears it when the fix's connection goes. It reads the game's own state once a second: the zone manager's zone and save name, the act, the party, the stats registry's names and levels, the Danger Room's course, the online session and whether a menu is open, after checking every byte it relies on is the retail build's. On any other build the presence shows the game's name only, and `xml2-fix.log` says why. Nothing the presence does can take the game down: whatever is on the other end of the pipe is held to what Discord sends (frames of at most 64 KiB, a few at a time; anything else is dropped and looked for again later), and a failure in its thread only closes the connection.
 
+## Player testing mode
+
+Testing tools are off by default. Add this section to `xml2-fix.ini` beside the DLL, change either switch to `1`, and restart:
+
+```ini
+[TestMode]
+ForgeEverywhere=0
+Hotkeys=0
+KillEnemiesKey=F8
+InvulnerabilityKey=F9
+ReturnToStartKey=F10
+```
+
+`ForgeEverywhere=1` offers Forge at every Xtraction Point, including before his campaign unlock. `Hotkeys=1` enables:
+
+- **F8:** defeat ordinary hostile actors in the current zone through the engine's kill routine, including their drops and death targets. Invulnerable and undying actors, and actors with pain or death scripts, are left alone to protect scripted encounters.
+- **F9:** toggle party invulnerability for this game session. It starts off and does not change saved hero protection or remove protection granted by scripts. Script-forced deaths still follow the engine's rules.
+- **F10:** return the living party to an authored player start. The move is refused if collision checks cannot find floor for all four arrival positions. It does not reload the zone or reset its progress.
+
+Hotkeys work during normal play, outside menus, conversations, loading and scripted control locks. Each key acts once per press. Choose distinct `F1`–`F12` names to rebind them; the defaults avoid the game's default bindings. Check your own Advanced Controls if you have rebound keys. Steam Deck players can map these keyboard keys to buttons in their controller layout. No noclip toggle is provided: the engine's collision-off script function does not establish a safe free-flight mode.
+
+**Either switch disables online hosting and joining**, with a dialog naming `[TestMode]`. Set both switches to `0` and restart to play online again. Key assignments alone do not enable testing mode. Player testing hotkeys do not require the automation pipe below.
+
 ## 🧪 Driving the game from a script
 
 For automated tests (the X-Men Legends I port's test runner, for one) that need to press keys and grab frames without taking the PC away from whoever is using it. With
@@ -682,6 +705,16 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `MoveTriggers` | *(the game's own, 19)* | `20` to `127` triggers per move (sounds, flashes and other events of a long attack) |
 | `EntityCapacity` | `0` | `1`: 32 actor / 768 generic / 1024 World entity handles instead of 32 / 224 / 256; needs `[Save] Format=lc` ([details](docs/entity-capacity.md)) |
 | `ScriptFunctions` | *(1024 with `[Game] ForcedTeams`, otherwise the game's own, 320)* | `321` to `4096` script function names; `320` keeps the game's own limit ([details](docs/script-functions.md)) |
+
+**[TestMode]**: optional player testing tools ([details](#player-testing-mode)); either switch disables online play until both are off and the game is restarted.
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `ForgeEverywhere` | `0` | Offer Forge at every Xtraction Point, without changing campaign unlocks |
+| `Hotkeys` | `0` | Enable the three testing hotkeys during normal play |
+| `KillEnemiesKey` | `F8` | Defeat ordinary enemies; preserve protected/scripted actors |
+| `InvulnerabilityKey` | `F9` | Toggle party invulnerability for the current game session |
+| `ReturnToStartKey` | `F10` | Return the living party to a player start with verified floor |
 
 **[Test]**: for automated testing ([details](#-driving-the-game-from-a-script))
 

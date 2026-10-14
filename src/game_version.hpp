@@ -17,6 +17,10 @@ namespace game_version
 	bool startup_allowed();
 	bool needs_gameplay_agreement();
 	bool gameplay_online_allowed();
+	bool test_mode_active();
+	// The next native network-error popup consumes the socket refusal explanation.
+	bool take_test_mode_refusal();
+	const char* test_mode_reason();
 	bool require_gameplay_agreement(HMODULE game);
 	void bind_gameplay_agreement(bool verified);
 	void bind_gameplay_refusal(void (*show)());

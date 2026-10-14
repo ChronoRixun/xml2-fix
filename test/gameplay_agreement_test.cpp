@@ -18,8 +18,11 @@
 #include <cwchar>
 
 namespace ini {
- bool requested=false,lc=true,key=true;
- bool flag(const wchar_t*,const wchar_t*,bool){return requested;}
+ bool requested=false,lc=true,key=true,testing_forge=false,testing_hotkeys=false;
+ bool flag(const wchar_t* section,const wchar_t* name,bool){
+  if(std::wcscmp(section,L"TestMode")==0)return std::wcscmp(name,L"ForgeEverywhere")==0 ? testing_forge : std::wcscmp(name,L"Hotkeys")==0 && testing_hotkeys;
+  return requested;
+ }
  std::optional<std::string> text(const wchar_t* section,const wchar_t* name){
   if(std::wcscmp(section,L"Save")==0)return lc ? std::optional<std::string>("lc") : std::nullopt;
   if(std::wcscmp(section,L"Online")==0)return lc ? std::optional<std::string>("LC24") : std::nullopt;
@@ -526,6 +529,19 @@ void runtime(){
  ini::lc=false;ini::requested=false;game_version::install(reinterpret_cast<HMODULE>(0x400000));check(game_version::needs_gameplay_agreement() && !game_version::gameplay_online_allowed(),"explicit non-LC off configuration still requires verified shared agreement");
  game_version::bind_gameplay_agreement(true);check(socket(AF_INET,SOCK_DGRAM,0)==73,"verified non-LC off gate retains native socket forwarding");
  ini::key=false;iat_hook::captured=nullptr;game_version::install(reinterpret_cast<HMODULE>(0x400000));check(!game_version::needs_gameplay_agreement() && !iat_hook::captured,"unopted vanilla leaves native socket untouched");
+ for(int option=0;option<2;++option){
+  ini::testing_forge=option==0;ini::testing_hotkeys=option==1;
+  game_version::install(reinterpret_cast<HMODULE>(0x400000));game_version::bind_gameplay_agreement(true);
+  check(game_version::test_mode_active() && game_version::needs_gameplay_agreement() && !game_version::gameplay_online_allowed(),"either testing option blocks even a verified agreement in non-LC installs");
+  const auto calls=iat_hook::calls;
+  socket=reinterpret_cast<SOCKET(WSAAPI*)(int,int,int)>(iat_hook::captured);
+  check(socket(AF_INET,SOCK_DGRAM,0)==INVALID_SOCKET && iat_hook::calls==calls,"testing socket exclusion opens no socket");
+  check(game_version::take_test_mode_refusal() && std::strstr(game_version::test_mode_reason(),"[TestMode]"),"testing socket refusal supplies the named explanation to the popup adapter");
+  check(!game_version::take_test_mode_refusal(),"testing refusal is consumed once per failed attempt");
+  pending_context();const auto testing_join_shown=popups;
+  check(begin(context.data(),sender.data(),123)==0 && cleaned() && popups==testing_join_shown+1 && visible.find("[TestMode]")!=std::string::npos,"testing join exclusion cleans pending join and names [TestMode]");
+ }
+ ini::testing_forge=ini::testing_hotkeys=false;
  ini::key=true;iat_hook::fail=true;game_version::install(reinterpret_cast<HMODULE>(0x400000));check(!game_version::startup_allowed(),"failed socket exclusion blocks startup safely");
  game_version::bind_gameplay_agreement(true);check(game_version::gameplay_online_allowed(),"gate is verified immediately before late registration");
  check(!gameplay_agreement::register_rule(4,1,{1,0,0,0},true) && !game_version::gameplay_online_allowed(),"public API rejects late controller registration and closes actual gate");
