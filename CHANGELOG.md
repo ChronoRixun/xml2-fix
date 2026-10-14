@@ -2,6 +2,8 @@
 
 ## 1.6.0 - 2026-10-13
 
+**Integration candidate: release gate blocked.** Online loading of an older saved campaign can omit newly appended hazards/residents after native transfer. Offline prefix retention and save/reload pass. Do not treat this candidate as release-ready until fresh-tail transfer is fixed.
+
 Companion engine for Legends Classic 0.2.3. Optional gameplay changes remain off in an ordinary XML2 install.
 
 - `ObjectWorldImpact=xml1`: zero ordinary landing-impact damage for every no-physical-target collision, as in XML1's coefficient-table entry zero. Physical-target coefficients and authored throw hits retain their native paths. Gameplay rule **17**, revision 1.

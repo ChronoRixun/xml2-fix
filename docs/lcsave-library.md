@@ -235,3 +235,8 @@ The format and both digest algorithms remain unchanged.
 consumer with actual mod indexing, exclusively locked package data, invalidation,
 lookup contexts and first-capture/preparation failures. The C1 Python gate runs
 that executable; it does not inspect source strings.
+
+
+### 1.6 integration blocker: native transfer of appended residents
+
+An actual two-peer saved-campaign test retains explicit old tombstones on both peers, but loses the appended hazard tail on both. The host's lobby preparation has authenticated `fresh_entities`; reset/native transfer replaces it with inferred metadata that has none. A zero native ordinal slot retains legacy removal semantics. Treating every zero as fresh would resurrect historical removals. Offline load/save/reload works; online propagation needs a format-preserving solution and native/live regression coverage before release. No LC container field, version or feature bit has been changed for this investigation.
