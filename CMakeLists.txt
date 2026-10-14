@@ -110,6 +110,7 @@ add_library(xml2_fix SHARED
 	src/resolution_list.cpp
 	src/frame_capture.cpp
 	src/test_input.cpp
+	src/test_mode.cpp
 	src/test_state.cpp
 	src/discord_ipc.cpp
 	src/discord_presence.cpp
@@ -302,6 +303,19 @@ _fixture_space DB 400000h DUP(0)
 fixture_seg ENDS
 END
 ")
+# TestMode also executes the normal-play reader: reserve its higher menu/name/player globals.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm"
+".386
+.MODEL FLAT
+fixture_seg SEGMENT PARA PUBLIC 'CODE' ALIAS('.text$a')
+PUBLIC _fixture_space
+_fixture_space DB 700000h DUP(0)
+fixture_seg ENDS
+END
+")
+add_executable(xml2_test_mode_test test/test_mode_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_test_mode_test PRIVATE src)
+target_link_options(xml2_test_mode_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 # The native campaign transfer receiver (0x608630) and its replacement executed side by side (Phase A, review P1).
 add_executable(xml2_entity_transfer_test test/entity_transfer_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/entity_transfer.cpp)
 target_include_directories(xml2_entity_transfer_test PRIVATE src)

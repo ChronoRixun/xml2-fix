@@ -75,6 +75,7 @@
 #include "save_trace.hpp"
 #include "stat_help.hpp"
 #include "test_input.hpp"
+#include "test_mode.hpp"
 #include "virtual_pad.hpp"
 #include "window_title.hpp"
 #include "xinput_pad.hpp"
@@ -414,6 +415,7 @@ namespace
 			gameplay_agreement::register_rule(gameplay_capabilities::double_heal_id, xml1_capability_rules::double_heal_revision, heal.values, heal.verified);
 		}
 
+		test_mode::install(game);
 		test_input::install(); // first: its screenshots need the display fix's device hook
 		display::install(game);
 		// [Game] WindowTitle: after the display fix, whose CreateWindowExA hook (borderless / windowed) it then

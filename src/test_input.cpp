@@ -1,5 +1,8 @@
 #include "test_input.hpp"
 #include "test_state.hpp"
+#include "test_mode.hpp"
+#include "xml1_hook_memory.hpp"
+#include "xml1_hook_transaction.hpp"
 #include "balance.hpp"
 #include "display.hpp"
 #include "frame_capture.hpp"
@@ -100,11 +103,18 @@ namespace test_input
 			{
 				return false;
 			}
-			DWORD old_protect = 0;
-			VirtualProtect(&vtable[slot], sizeof(void*), PAGE_READWRITE, &old_protect);
-			original = reinterpret_cast<T>(vtable[slot]);
-			vtable[slot] = reinterpret_cast<void*>(replacement);
-			VirtualProtect(&vtable[slot], sizeof(void*), old_protect, &old_protect);
+			const auto previous = reinterpret_cast<T>(vtable[slot]);
+			xml1_hook_transaction::memory memory;
+			const xml1_hook_transaction::patch patch{reinterpret_cast<std::uint32_t>(&vtable[slot]),
+				xml1_hook_transaction::pointer_bytes(reinterpret_cast<void*>(previous)),
+				xml1_hook_transaction::pointer_bytes(reinterpret_cast<void*>(replacement))};
+			original = previous;
+			bool safe = true;
+			if (!xml1_hook_transaction::apply(memory, {patch}, &safe)) {
+				if (safe) original = nullptr;
+				logger::write("test: input hook transaction failed; original slot %s", safe ? "retained" : "not verified as restored");
+				return false;
+			}
 			return true;
 		}
 
@@ -141,6 +151,8 @@ namespace test_input
 		{
 			__try
 			{
+				if (va == 0x402205 && test_mode::console_frame_hook_matches())
+					return limits_rules::matches(reinterpret_cast<const std::uint8_t*>(va + 5), hex.substr(10));
 				return limits_rules::matches(reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(va)), hex);
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
@@ -228,11 +240,14 @@ namespace test_input
 			{
 				return result;
 			}
-			test_state::sample();
-			pump_console(); // the game's own thread, between two runs of its console queue, whatever the read gave
-			save_format::pump(); // the pipe's `save dump` / `save check`: the game's serializer, on its own thread
+			if (enabled) {
+				test_state::sample();
+				pump_console(); // the game's own thread, between two runs of its console queue
+				save_format::pump();
+			}
 			if (FAILED(result))
 			{
+				test_mode::input_lost();
 				logger::write_once("test:read-failed", "test: a keyboard read failed (%08lX) - the game re-acquires; pipe keys wait for that", result);
 				return result;
 			}
@@ -241,6 +256,9 @@ namespace test_input
 			if (!game_in_foreground())
 			{
 				std::memset(state, 0, 256); // typing in another window stays there, as with the game's own foreground-only device
+			}
+			if (!enabled) {
+				return result;
 			}
 
 			std::vector<unsigned char> expired;
@@ -257,14 +275,17 @@ namespace test_input
 				logger::write("test: the game reads its DirectInput keyboard - pipe keys reach it");
 			}
 			SetEvent(read_event);
+			test_mode::keyboard(state);
 			return result;
 		}
 
 		HRESULT STDMETHODCALLTYPE hooked_set_cooperative_level(void* self, const HWND window, const DWORD flags)
 		{
-			if (!is_keyboard(self))
+			if (!enabled || !is_keyboard(self))
 			{
-				return real_set_cooperative_level(self, window, flags);
+				const HRESULT result = real_set_cooperative_level(self, window, flags);
+				if (SUCCEEDED(result) && is_keyboard(self)) test_mode::watch_window(window);
+				return result;
 			}
 
 			constexpr DWORD ours = DISCL_BACKGROUND | DISCL_NONEXCLUSIVE;
@@ -294,7 +315,7 @@ namespace test_input
 			const bool level_hooked = hook_slot(*device, slot_set_cooperative_level, &hooked_set_cooperative_level, real_set_cooperative_level);
 			if (state_hooked && level_hooked)
 			{
-				logger::write("test: the game created its DirectInput keyboard - the pipe's keys go into it");
+				logger::write("test: the game created its DirectInput keyboard - %s", enabled ? "the pipe's keys go into it" : "player testing input and notices are watched");
 			}
 			else
 			{
@@ -504,7 +525,7 @@ namespace test_input
 			// checked from a script. Then the engine tables' use, live/cap ([Limits], limits.hpp).
 			return "ok XML2 Fix " FIX_VERSION "; keyboard devices " + std::to_string(devices) + "; reads " + std::to_string(reads.load()) + "; keys held " +
 			       std::to_string(held) + "; " + pad_input::status() + "; game " + (game_in_foreground() ? "has" : "doesn't have") + " the focus; fps " +
-			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + limits::status() + "; " + geometry_sharing::status() + "; " + ladder_paths::status() + "; " + break_rule::status() + "; " + placement_crush::status() + "; " + world_impact::status() + "; " + double_heal::status() + "; " + pack_amount::status() + "; " + save_format::status() + "; " + balance::status() + "; " + entity_capacity::status();
+			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + limits::status() + "; " + geometry_sharing::status() + "; " + ladder_paths::status() + "; " + break_rule::status() + "; " + placement_crush::status() + "; " + world_impact::status() + "; " + double_heal::status() + "; " + pack_amount::status() + "; " + save_format::status() + "; " + balance::status() + "; " + entity_capacity::status() + "; " + test_mode::status();
 		}
 
 		std::string handle(const std::string& line)
@@ -685,7 +706,7 @@ namespace test_input
 
 	void hook_direct_input8(void* direct_input)
 	{
-		if (!enabled || !direct_input)
+		if ((!enabled && !test_mode::hotkeys_enabled()) || !direct_input)
 		{
 			return;
 		}
@@ -693,5 +714,11 @@ namespace test_input
 		{
 			logger::write_once("test:di8", "test: watching the game's DirectInput 8 for its keyboard");
 		}
+	}
+	bool queue_script_on_game_thread(const char* statement)
+	{
+		if (!console_refusal(true).empty()) return false;
+		const auto line = script_line(statement);
+		return line.error.empty() && hand_to_console(line.text.c_str()) == handed::queued;
 	}
 }

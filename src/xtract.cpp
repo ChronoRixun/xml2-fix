@@ -4,6 +4,9 @@
 #include "log.hpp"
 #include "xtract_rules.hpp"
 #include "xtraction_shop_rules.hpp"
+#include "xml1_hook_memory.hpp"
+#include "xml1_hook_transaction.hpp"
+#include "game_version.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -16,6 +19,8 @@ namespace xtract
 
 		constexpr const char* as_before = "an Xtraction Point's menu offers the game's Xtract choice";
 		bool shop_installed = false;
+		bool services_installed = false;
+		bool forge_everywhere = false;
 		bool online_guarded = false;   // xtraction_shop_rules::net_guards matched at install
 		bool skip_guarded = false;     // xtraction_shop_rules::change_team_guards matched at install
 		bool xtract_installed = false; // the Xtract skip is in place, so Change Team can be skipped with it
@@ -64,6 +69,7 @@ namespace xtract
 
 		void add_services(void* dialog)
 		{
+			const int services = xtraction_shop_rules::effective_services(point_services, shop_installed, forge_everywhere);
 			__try
 			{
 				void* texts = reinterpret_cast<getter_t>(xtraction_shop_rules::text_getter)();
@@ -73,10 +79,10 @@ namespace xtract
 				const bool shared = shared_online();
 				for (const auto& o : xtraction_shop_rules::options)
 				{
-					if ((point_services & o.service) == 0) continue;
+					if ((services & o.service) == 0) continue;
 					int index = 0;
-					const bool member = xtraction_shop_rules::needs_campaign(point_services, o) && in_campaign(o.campaign, index);
-					const auto how = xtraction_shop_rules::list_option(shop_installed, point_services, o, member, shared);
+					const bool member = xtraction_shop_rules::needs_campaign(services, o) && in_campaign(o.campaign, index);
+					const auto how = xtraction_shop_rules::list_option(services_installed, services, o, member, shared);
 					if (how == xtraction_shop_rules::listing::omitted)
 					{
 						logger::write("xtraction services: %s not offered - '%s' isn't in the campaign (registry index %d)", o.script, o.campaign ? o.campaign : "?", index);
@@ -103,13 +109,14 @@ namespace xtract
 		void* __cdecl shop_dialog()
 		{
 			void* dialog = reinterpret_cast<getter_t>(xtraction_shop_rules::dialog_getter)();
-			if (shop_installed && point_services != 0) add_services(dialog);
+			if (services_installed && (point_services != 0 || forge_everywhere)) add_services(dialog);
 			return dialog; // preserve the native getter's result for vt+0x68 (finalize)
 		}
 
 		void install_shop(const HMODULE game)
 		{
-			if (!ini::flag(L"Game", L"XtractionShop", false)) return;
+			forge_everywhere = game_version::test_mode_active() && ini::flag(L"TestMode", L"ForgeEverywhere", false);
+			if (!ini::flag(L"Game", L"XtractionShop", false) && !forge_everywhere) return;
 			if (reinterpret_cast<std::uintptr_t>(game) != image_base) return;
 			for (const auto& g : xtraction_shop_rules::guards)
 			{
@@ -139,16 +146,26 @@ namespace xtract
 					break;
 				}
 			}
-			auto* target = reinterpret_cast<std::uint8_t*>(xtraction_shop_rules::finalize_call);
-			DWORD old_protect = 0;
-			if (!VirtualProtect(target, 5, PAGE_EXECUTE_READWRITE, &old_protect)) return;
+			xml1_hook_transaction::memory memory;
+			xml1_hook_transaction::patch patch{xtraction_shop_rules::finalize_call, std::vector<unsigned char>(5), {}};
+			if (!memory.read(patch.address, patch.before.data(), patch.before.size())) return;
+			patch.after = patch.before;
 			const auto delta = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&shop_dialog) -
 			                                            (xtraction_shop_rules::finalize_call + 5));
-			std::memcpy(target + 1, &delta, sizeof(delta)); // guarded E8, change only its rel32 destination
-			VirtualProtect(target, 5, old_protect, &old_protect);
-			FlushInstructionCache(GetCurrentProcess(), target, 5);
-			shop_installed = true;
-			logger::write("xtraction shop: guarded finalize getter wrapped ([Game] XtractionShop=1): Load, Danger Room, Healer and Forge as each point allows");
+			std::memcpy(patch.after.data() + 1, &delta, sizeof(delta));
+			bool safe = true;
+			if (!xml1_hook_transaction::apply(memory, {patch}, &safe))
+			{
+				if (!safe) game_version::refuse_startup();
+				logger::write("xtraction shop: option hook transaction failed; original code %s", safe ? "retained" : "not verified as restored");
+				return;
+			}
+			services_installed = true;
+			shop_installed = ini::flag(L"Game", L"XtractionShop", false);
+			if (shop_installed)
+				logger::write("xtraction shop: guarded finalize getter wrapped ([Game] XtractionShop=1): Load, Danger Room, Healer and Forge as each point allows");
+			else
+				logger::write("test mode: Forge-only option hook installed; [Game] XtractionShop remains off");
 		}
 
 		const limits_rules::guard* first_xtract_mismatch()
