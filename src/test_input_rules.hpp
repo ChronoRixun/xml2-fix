@@ -104,7 +104,7 @@ namespace test_input_rules
 		{0x55c410, "8b44240481ec8000000085c0568bf17445803800744083be300600000274376880000000", "the console's queue (0x55c410)"},
 		{0x69a81c, "30c2550020c3550070b65500e0b65500e0c5550020be5500b0be550010c45500", "the console's vtable (0x69a81c)"},
 		{0x55c230, "81ec84000000a1f8386f00578bf9898424840000008b873006000085c0", "the console's queue runner (0x55c230)"},
-		{0x402205, "e886a615008b10568bc8ff12", "the frame's call of the queue runner (0x402205)"},
+		{0x402205, "e886a615008b10568bc8ff12", "the frame's call of the queue runner (0x402205; also accepts the verified TestMode getter hook)"},
 	}};
 
 	// And what "script" relies on besides: the runscript command and the word it reads.

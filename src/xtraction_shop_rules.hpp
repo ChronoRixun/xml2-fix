@@ -58,6 +58,10 @@ namespace xtraction_shop_rules
 	{
 		return everywhere ? (services | forge) & ~forge_campaign : services;
 	}
+	constexpr int effective_services(int services, bool shop, bool everywhere)
+	{
+		return testing_services(shop ? services : 0, everywhere);
+	}
 
 	struct option
 	{

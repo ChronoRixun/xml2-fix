@@ -19,6 +19,7 @@ namespace xtract
 
 		constexpr const char* as_before = "an Xtraction Point's menu offers the game's Xtract choice";
 		bool shop_installed = false;
+		bool services_installed = false;
 		bool forge_everywhere = false;
 		bool online_guarded = false;   // xtraction_shop_rules::net_guards matched at install
 		bool skip_guarded = false;     // xtraction_shop_rules::change_team_guards matched at install
@@ -68,7 +69,7 @@ namespace xtract
 
 		void add_services(void* dialog)
 		{
-			const int services = xtraction_shop_rules::testing_services(point_services, forge_everywhere);
+			const int services = xtraction_shop_rules::effective_services(point_services, shop_installed, forge_everywhere);
 			__try
 			{
 				void* texts = reinterpret_cast<getter_t>(xtraction_shop_rules::text_getter)();
@@ -81,7 +82,7 @@ namespace xtract
 					if ((services & o.service) == 0) continue;
 					int index = 0;
 					const bool member = xtraction_shop_rules::needs_campaign(services, o) && in_campaign(o.campaign, index);
-					const auto how = xtraction_shop_rules::list_option(shop_installed, services, o, member, shared);
+					const auto how = xtraction_shop_rules::list_option(services_installed, services, o, member, shared);
 					if (how == xtraction_shop_rules::listing::omitted)
 					{
 						logger::write("xtraction services: %s not offered - '%s' isn't in the campaign (registry index %d)", o.script, o.campaign ? o.campaign : "?", index);
@@ -108,7 +109,7 @@ namespace xtract
 		void* __cdecl shop_dialog()
 		{
 			void* dialog = reinterpret_cast<getter_t>(xtraction_shop_rules::dialog_getter)();
-			if (shop_installed && (point_services != 0 || forge_everywhere)) add_services(dialog);
+			if (services_installed && (point_services != 0 || forge_everywhere)) add_services(dialog);
 			return dialog; // preserve the native getter's result for vt+0x68 (finalize)
 		}
 
@@ -159,8 +160,12 @@ namespace xtract
 				logger::write("xtraction shop: option hook transaction failed; original code %s", safe ? "retained" : "not verified as restored");
 				return;
 			}
-			shop_installed = true;
-			logger::write("xtraction shop: guarded finalize getter wrapped ([Game] XtractionShop=1): Load, Danger Room, Healer and Forge as each point allows");
+			services_installed = true;
+			shop_installed = ini::flag(L"Game", L"XtractionShop", false);
+			if (shop_installed)
+				logger::write("xtraction shop: guarded finalize getter wrapped ([Game] XtractionShop=1): Load, Danger Room, Healer and Forge as each point allows");
+			else
+				logger::write("test mode: Forge-only option hook installed; [Game] XtractionShop remains off");
 		}
 
 		const limits_rules::guard* first_xtract_mismatch()

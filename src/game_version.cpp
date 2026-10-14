@@ -88,6 +88,7 @@ namespace game_version
 	}
 	bool test_mode_active() { return testing; }
 	bool take_test_mode_refusal() { return testing && testing_notice.exchange(false); }
+	void clear_test_mode_refusal() { testing_notice = false; }
 	const char* test_mode_reason() { return "Online play is disabled while [TestMode] is enabled. Set ForgeEverywhere=0 and Hotkeys=0, then restart the game."; }
 	bool gameplay_online_allowed() { return !testing && save_guard_rules::online_allowed(lc_required,version_verified,gameplay_required,gameplay_verified); }
 	bool needs_gameplay_agreement() { return gameplay_required; }

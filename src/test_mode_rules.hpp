@@ -2,6 +2,9 @@
 #include <array>
 #include <cstdint>
 #include <string_view>
+#include <string>
+#include <cmath>
+#include <cstdio>
 
 namespace test_mode_rules
 {
@@ -40,11 +43,31 @@ namespace test_mode_rules
 		return (flags & (1u << 20)) && (flags & (1u << 29)) && controller >= 0 && controller < 4;
 	}
 	constexpr bool killable(std::uint32_t flags, float health, bool invulnerable,
-	                        unsigned char life_flags, unsigned char boss_flags, bool scripted_actor)
+	                        unsigned char life_flags, unsigned char boss_flags, bool scripted_actor,
+	                        unsigned char team_flags = 0)
 	{
 		return (flags & ((1u << 30) | (1u << 31))) && !(flags & (1u << 29)) &&
+		       !(team_flags & 8) && // 0x41a220: mind-controlled enemies belong to the hero team
 		       (flags & (1u << 20)) && health > 0 && !invulnerable &&
 		       !(life_flags & 0x10) && !(boss_flags & 0x40) && !scripted_actor;
+	}
+	// 0x4a25e0..0x4a2632 builds these vectors; 0x4a26b8 adds them directly
+	// to target+0x20. Target angles are copied afterward, never applied to offsets.
+	inline constexpr std::array<std::array<float, 3>, 4> return_offsets{{
+		{40, 0, 10}, {0, 40, 10}, {-40, 0, 10}, {0, -40, 10}}};
+	inline std::string return_script(std::uint32_t handle)
+	{
+		// 0x4a1709 calls atoi, then validates the resulting 32-bit handle.
+		// Signed decimal preserves all token bits without atoi overflow.
+		char line[64];
+		std::snprintf(line, sizeof(line), "moveHeroesToEnt('%d')", static_cast<std::int32_t>(handle));
+		return line;
+	}
+	inline float distance_squared(const std::array<float, 3>& a, const std::array<float, 3>& b)
+	{
+		float result = 0;
+		for (unsigned i = 0; i < 3; ++i) result += (a[i] - b[i]) * (a[i] - b[i]);
+		return result;
 	}
 	// A pain event can contain only a sound/effect. Only its script token protects
 	// the actor. A stale/unreadable event must fail closed.

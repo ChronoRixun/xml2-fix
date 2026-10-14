@@ -258,11 +258,11 @@ InvulnerabilityKey=F9
 ReturnToStartKey=F10
 ```
 
-`ForgeEverywhere=1` offers Forge at every Xtraction Point, including before his campaign unlock. `Hotkeys=1` enables:
+`ForgeEverywhere=1` offers Forge at every Xtraction Point, including before his campaign unlock. When `XtractionShop=0`, it adds only Forge. `Hotkeys=1` enables:
 
-- **F8:** defeat ordinary hostile actors in the current zone through the engine's kill routine, including their drops and death targets. Invulnerable and undying actors, and actors with pain or death scripts, are left alone to protect scripted encounters.
+- **F8:** defeat ordinary hostile actors in the current zone through the engine's kill routine, including their drops and death targets. Neutral/ally actors, invulnerable and undying actors, actors with event scripts, and actors already referenced by scripts are left alone to protect scripted encounters.
 - **F9:** toggle party invulnerability for this game session. It starts off and does not change saved hero protection or remove protection granted by scripts. Script-forced deaths still follow the engine's rules.
-- **F10:** return the living party to an authored player start. The move is refused if collision checks cannot find floor for all four arrival positions. It does not reload the zone or reset its progress.
+- **F10:** return the living party to the nearest authored player start. The move is refused if collision checks cannot verify floor and headroom for all four arrival positions. It does not reload the zone or reset its progress.
 
 Hotkeys work during normal play, outside menus, conversations, loading and scripted control locks. Each key acts once per press. Choose distinct `F1`–`F12` names to rebind them; the defaults avoid the game's default bindings. Check your own Advanced Controls if you have rebound keys. Steam Deck players can map these keyboard keys to buttons in their controller layout. No noclip toggle is provided: the engine's collision-off script function does not establish a safe free-flight mode.
 
@@ -714,7 +714,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `Hotkeys` | `0` | Enable the three testing hotkeys during normal play |
 | `KillEnemiesKey` | `F8` | Defeat ordinary enemies; preserve protected/scripted actors |
 | `InvulnerabilityKey` | `F9` | Toggle party invulnerability for the current game session |
-| `ReturnToStartKey` | `F10` | Return the living party to a player start with verified floor |
+| `ReturnToStartKey` | `F10` | Return the living party to the nearest player start with verified floor and headroom |
 
 **[Test]**: for automated testing ([details](#-driving-the-game-from-a-script))
 

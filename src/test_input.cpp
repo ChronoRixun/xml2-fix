@@ -150,6 +150,8 @@ namespace test_input
 		{
 			__try
 			{
+				if (va == 0x402205 && test_mode::console_frame_hook_matches())
+					return limits_rules::matches(reinterpret_cast<const std::uint8_t*>(va + 5), hex.substr(10));
 				return limits_rules::matches(reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(va)), hex);
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
@@ -255,7 +257,6 @@ namespace test_input
 				std::memset(state, 0, 256); // typing in another window stays there, as with the game's own foreground-only device
 			}
 			if (!enabled) {
-				test_mode::keyboard(state);
 				return result;
 			}
 
@@ -281,7 +282,9 @@ namespace test_input
 		{
 			if (!enabled || !is_keyboard(self))
 			{
-				return real_set_cooperative_level(self, window, flags);
+				const HRESULT result = real_set_cooperative_level(self, window, flags);
+				if (SUCCEEDED(result) && is_keyboard(self)) test_mode::watch_window(window);
+				return result;
 			}
 
 			constexpr DWORD ours = DISCL_BACKGROUND | DISCL_NONEXCLUSIVE;
@@ -308,7 +311,7 @@ namespace test_input
 			}
 			// After the pad fix's own hooks on this vtable (it hooked them inside the call above), so both chains stand.
 			const bool state_hooked = hook_slot(*device, slot_get_device_state, &hooked_get_device_state, real_get_device_state);
-			const bool level_hooked = !enabled || hook_slot(*device, slot_set_cooperative_level, &hooked_set_cooperative_level, real_set_cooperative_level);
+			const bool level_hooked = hook_slot(*device, slot_set_cooperative_level, &hooked_set_cooperative_level, real_set_cooperative_level);
 			if (state_hooked && level_hooked)
 			{
 				logger::write("test: the game created its DirectInput keyboard - %s", enabled ? "the pipe's keys go into it" : "player testing input and notices are watched");

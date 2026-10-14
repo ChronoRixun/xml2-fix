@@ -538,6 +538,8 @@ void runtime(){
   check(socket(AF_INET,SOCK_DGRAM,0)==INVALID_SOCKET && iat_hook::calls==calls,"testing socket exclusion opens no socket");
   check(game_version::take_test_mode_refusal() && std::strstr(game_version::test_mode_reason(),"[TestMode]"),"testing socket refusal supplies the named explanation to the popup adapter");
   check(!game_version::take_test_mode_refusal(),"testing refusal is consumed once per failed attempt");
+  socket(AF_INET,SOCK_DGRAM,0);game_version::clear_test_mode_refusal();
+  check(!game_version::take_test_mode_refusal(),"a refused attempt with no popup expires before an unrelated dialog");
   pending_context();const auto testing_join_shown=popups;
   check(begin(context.data(),sender.data(),123)==0 && cleaned() && popups==testing_join_shown+1 && visible.find("[TestMode]")!=std::string::npos,"testing join exclusion cleans pending join and names [TestMode]");
  }
