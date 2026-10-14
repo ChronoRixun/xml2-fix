@@ -44,6 +44,7 @@ add_library(xml2_fix SHARED
 	src/ladder_paths.cpp
 	src/break_rule.cpp
 	src/placement_crush.cpp
+	src/world_impact.cpp
 	src/double_heal.cpp
 	src/npc_power.cpp
 	src/pack_amount.cpp
@@ -133,6 +134,9 @@ target_include_directories(xml2_multipart_test PRIVATE src)
 
 add_executable(xml2_ladder_paths_test test/ladder_paths_test.cpp)
 target_include_directories(xml2_ladder_paths_test PRIVATE src)
+
+add_executable(xml2_world_impact_test test/world_impact_test.cpp)
+target_include_directories(xml2_world_impact_test PRIVATE src)
 
 add_executable(xml2_xml1_controllers_test test/xml1_controllers_test.cpp src/game_version.cpp)
 target_include_directories(xml2_xml1_controllers_test PRIVATE src)

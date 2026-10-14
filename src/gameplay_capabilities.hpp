@@ -71,6 +71,7 @@ namespace gameplay_capabilities
  public:
   record() { entries_[0]={entity_layout_id,1,{32,224,256,8}}; }
   bool ready() const { return valid_ && frozen_; }
+  void invalidate() { valid_=false; }
   std::size_t count() const { return count_; }
   const entry& rule(std::size_t i) const { return entries_[i]; }
   bool add(std::uint16_t id,std::uint16_t revision,std::array<std::uint32_t,4> values,bool verified)

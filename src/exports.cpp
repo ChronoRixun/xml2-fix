@@ -21,6 +21,7 @@
 #include "balance.hpp"
 #include "break_rule.hpp"
 #include "placement_crush.hpp"
+#include "world_impact.hpp"
 #include "double_heal.hpp"
 #include "xml1_capability_rules.hpp"
 #include "conversations.hpp"
@@ -392,6 +393,7 @@ namespace
 		// refused while an object is settled on the floor (each object at a zone's load and 0.5 s after any spawn in play:
 		// death drops, script-spawned props, debris - the first game has no settle at all); no other module hooks it.
 		placement_crush::install(game);
+		world_impact::install(game);
 		// X-Men Legends 1's packs ([Game] DoubleHeal=0, installed above, before stat_help): two branches of restoreHealth /
 		// restoreEnergy; no other module patches them.
 		// Both change what each peer simulates (objects broken while a zone settles; how much a pack heals): rules 11
