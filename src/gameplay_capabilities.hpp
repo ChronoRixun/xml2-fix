@@ -25,7 +25,9 @@ namespace gameplay_capabilities
  // at 0x61020c for a stream it never opened). Revision 2 (1.4.0 and the 1.5 pre-release, the full list on the wire)
  // and revision 1 (0.2.0i and older) peers refuse as another protocol, both ways. Phase A's receive lifecycle is still
  // not part of it (docs/entity-capacity-phase-a-plan.md section 10, deviation 17).
- constexpr std::uint16_t protocol_revision=3;
+ // Revision 4 retains that framing and requires the native fresh-tail provenance contract.
+ // Older peers cannot restore marked append tails and must refuse before native transfer.
+ constexpr std::uint16_t protocol_revision=4;
  constexpr std::uint32_t magic=0x50414347; // GCAP, little endian
  // max_entries bounds registration only (the wire size is fixed): 16 rules are assigned in 1.5.x.
  constexpr std::size_t max_entries=256, entry_size=20;

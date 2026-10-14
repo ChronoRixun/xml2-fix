@@ -5,6 +5,7 @@
 // the retail loader refuses it), refuse-downgrade, refuse-unknown, refuse-noregistry, refuse-stream and
 // registry-mismatch (each refused with the Python's exact reason, exposing no bytes).
 #include "lcsave.hpp"
+#include "keys.hpp"
 
 #include <charconv>
 #include <cstdint>
@@ -210,10 +211,10 @@ namespace
 			std::cout << name << '\t' << mode << "\tPASS\trefused\n";
 			return true;
 		}
-		if (mode != "campaign" && mode != "profile" && mode != "legacy-refuse" && mode != "legacy-import" && mode != "profile-import" && mode != "reverse" && mode != "refuse" && mode != "native-campaign" && mode != "native-transfer" && mode != "native-dead-item" && mode != "native-trivia") return report("unsupported mode");
+		if (mode != "campaign" && mode != "profile" && mode != "legacy-refuse" && mode != "legacy-import" && mode != "profile-import" && mode != "reverse" && mode != "refuse" && mode != "native-campaign" && mode != "native-transfer" && mode != "native-transfer-e10a2" && mode != "native-transfer-refuse" && mode != "native-dead-item" && mode != "native-trivia") return report("unsupported mode");
 		std::vector<std::uint8_t> input, expected;
-		if (!read_bytes(folder / (mode == "legacy-refuse" || mode == "legacy-import" || mode == "profile-import" || mode == "native-campaign" || mode == "native-transfer" || mode == "native-dead-item" || mode == "native-trivia" ? "input.raw" : "input.lcsave"), input)) return report("cannot read input");
-		const auto expected_name = mode == "reverse" ? "expected.old" : (mode == "refuse" || mode == "legacy-refuse") ? "expected.error" : "expected.lcsave";
+		if (!read_bytes(folder / (mode == "legacy-refuse" || mode == "legacy-import" || mode == "profile-import" || mode == "native-campaign" || (mode == "native-transfer" || mode == "native-transfer-e10a2" || mode == "native-transfer-refuse") || mode == "native-dead-item" || mode == "native-trivia" ? "input.raw" : "input.lcsave"), input)) return report("cannot read input");
+		const auto expected_name = mode == "reverse" ? "expected.old" : (mode == "refuse" || mode == "legacy-refuse" || mode == "native-transfer-refuse") ? "expected.error" : "expected.lcsave";
 		if (!read_bytes(folder / expected_name, expected)) return report("cannot read expected output");
 		lcsave::Tables tables;
 		std::string error;
@@ -271,7 +272,7 @@ namespace
 			options.saved_at = 0;
 			result = lcsave::convert_old_profile_to_new(input, tables, options);
 		}
-		else if (mode == "native-campaign" || mode == "native-transfer" || mode == "native-dead-item" || mode == "native-trivia")
+		else if (mode == "native-campaign" || (mode == "native-transfer" || mode == "native-transfer-e10a2" || mode == "native-transfer-refuse") || mode == "native-dead-item" || mode == "native-trivia")
 		{
 			lcsave::NewFileContext context;
 			context.description = description(input);
@@ -285,13 +286,39 @@ namespace
 				    lcsave::trivia_bit(tables, 9, 8) != -1) return report("runtime trivia mapping differs");
 				context.require_capture_metadata = false; // these invented fixtures have no cached zones
 			}
-			else if (mode == "native-transfer")
+			else if ((mode == "native-transfer" || mode == "native-transfer-e10a2" || mode == "native-transfer-refuse"))
 			{
-				if (!lcsave::native_zone_metadata(input,tables,context.zone_captures,error)) return report("transfer metadata: "+error);
+				const auto& layout = mode == "native-transfer-e10a2" ? lcsave::e10a2_layout : lcsave::retail_layout;
+				const bool ok = lcsave::native_zone_metadata(input, tables, context.zone_captures, error, layout);
+				if (mode == "native-transfer-refuse")
+				{
+					if (ok || !context.zone_captures.empty() || error != std::string(expected.begin(), expected.end()))
+						return report("transfer refusal differs: " + error);
+					std::cout << name << '\t' << mode << "\tPASS\trefused\n";
+					return true;
+				}
+				if (!ok) return report("transfer metadata: " + error);
+				if (fs::exists(folder / "expected.transfer"))
+				{
+					std::string actual;
+					for (const auto& capture : context.zone_captures)
+					{
+						actual += capture.zone + "\t" + lcsave::hex(capture.placement_sha1) + "\t" + lcsave::hex(capture.source_placement_sha1) + "\n";
+						for (const auto& entity : capture.entities)
+							actual += "saved\t" + std::to_string(entity.ordinal) + "\t" + std::to_string(entity.placement_index) + "\t" +
+								std::to_string(entity.source_placement_index) + "\t" + entity.definition_name + "\t" + entity.instance_name + "\n";
+						for (const auto& entity : capture.fresh_entities)
+							actual += "fresh\t" + std::to_string(entity.ordinal) + "\t" + std::to_string(entity.placement_index) + "\t" +
+								entity.definition_name + "\t" + entity.instance_name + "\n";
+					}
+					std::vector<std::uint8_t> expected_metadata;
+					if (!read_bytes(folder / "expected.transfer", expected_metadata) || actual != std::string(expected_metadata.begin(), expected_metadata.end()))
+						return report("transfer metadata differs from Python");
+				}
 			}
 			else if (!read_bytes(folder / "metadata.lcsave",context.retained_file) ||
 			         !lcsave::loaded_zone_metadata(context.retained_file,tables,context.zone_captures,error)) return report("metadata: "+error);
-			result = lcsave::old_stream_to_new(input,tables,context);
+			result = lcsave::old_stream_to_new(input,tables,context, mode == "native-transfer-e10a2" ? lcsave::e10a2_layout : lcsave::retail_layout);
 			if (mode == "native-campaign" && result.ledger.find("dangling world item slot 13") == std::string::npos) return report("normalization ledger missing");
 			if (mode == "native-dead-item" && result.ledger.find("dead numbered item slot 13") == std::string::npos) return report("dead item normalization ledger missing");
 		}

@@ -191,7 +191,8 @@ namespace lcsave
 		std::vector<ZoneCaptureMetadata>& out, std::string& error);
 	bool loaded_zone_metadata(const std::vector<std::uint8_t>& file, const Tables& tables,
 		std::vector<ZoneCaptureMetadata>& out, std::string& error, const NativeLayout& native, const TypedRegistry* registry = nullptr);
-	// Same-build native transfers lack an LC sidecar; infer only validated current-table associations.
+	// Same-build native transfers lack an LC sidecar; infer validated current-table associations
+	// and recover host-authenticated append provenance from the transient native sentinel.
 	bool native_zone_metadata(const std::vector<std::uint8_t>& stream, const Tables& tables,
 		std::vector<ZoneCaptureMetadata>& out, std::string& error);
 	bool native_zone_metadata(const std::vector<std::uint8_t>& stream, const Tables& tables,

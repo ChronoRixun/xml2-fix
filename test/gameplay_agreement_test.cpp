@@ -81,9 +81,10 @@ void records(){
  record native;native.finalize();check(native.bytes().size()==108 && native.count()==1 && native.rule(0).values==std::array<std::uint32_t,4>{32,224,256,8},"default record contains explicit retail entity layout");
  auto bytes=std::vector<std::uint8_t>(off.bytes().begin(),off.bytes().end());
  auto reset=[&]{bytes.assign(off.bytes().begin(),off.bytes().end());};
- check(bytes[0]=='G' && bytes[1]=='C' && bytes[2]=='A' && bytes[3]=='P' && bytes[4]==3 && bytes[5]==0 && bytes[6]==2 && bytes[8]==108 && bytes[9]==0 && bytes[10]==0 && bytes[11]==0,"protocol 3 header: GCAP, revision 3, two rules, 108 bytes, reserved zero");
- bytes[4]=4;check(off.compare(bytes)==result::protocol,"unknown record revision refuses");reset();bytes[4]=1;check(off.compare(bytes)==result::protocol,"protocol revision 1 peers (0.2.0i and older) refuse");reset();
+ check(bytes[0]=='G' && bytes[1]=='C' && bytes[2]=='A' && bytes[3]=='P' && bytes[4]==4 && bytes[5]==0 && bytes[6]==2 && bytes[8]==108 && bytes[9]==0 && bytes[10]==0 && bytes[11]==0,"protocol 4 header: GCAP, revision 4, two rules, 108 bytes, reserved zero");
+ bytes[4]=5;check(off.compare(bytes)==result::protocol,"unknown record revision refuses");reset();bytes[4]=1;check(off.compare(bytes)==result::protocol,"protocol revision 1 peers (0.2.0i and older) refuse");reset();
  bytes[4]=2;check(off.compare(bytes)==result::protocol,"protocol revision 2 peers (1.4.0, the 1.5 pre-release) refuse");reset();
+ bytes[4]=3;check(off.compare(bytes)==result::protocol,"protocol revision 3 cannot restore fresh-tail provenance and refuses");reset();
  bytes[0]='X';check(off.compare(bytes)==result::protocol,"a foreign tag refuses");reset();
  bytes[12]^=1;check(off.compare(bytes)==result::value,"one changed digest bit refuses");reset();
  bytes[6]=3;bytes[12]^=1;check(off.compare(bytes)==result::entries,"another rule count refuses");reset();

@@ -1184,7 +1184,9 @@ namespace save_format
 					core_lifetime.finish_native(mode,false);
 					refuse("native transfer metadata could not be validated: "+(error.empty()?std::string("unreadable stream"):error));return;
 				}
-				logger::write("save core: native transfer mode %d: %zu zone metadata record(s) inferred from validated stream",mode,cached_captures.size());
+				std::size_t fresh_count=0;
+				for (const auto& capture:cached_captures) fresh_count+=capture.fresh_entities.size();
+				logger::write("save core: native transfer mode %d: %zu zone metadata record(s) inferred from validated stream; %zu authenticated fresh-tail entities",mode,cached_captures.size(),fresh_count);
 			}
 			native_loading=true; overflow_flag=0;
 			const bool returned=run_native_load(game,buffer,mode);
