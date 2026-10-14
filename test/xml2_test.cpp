@@ -10393,7 +10393,7 @@ namespace
 		std::memcpy(values, data.data(), 16);
 		CHECK(values[0] == -0.5f && values[1] > 0.00099f && values[1] < 0.00101f && values[2] == 2.0f && values[3] == 0.5f);
 		const auto whole = block(l.base);
-		CHECK(whole.size() == block_size && l.charge + charge_size <= l.recheck && l.recheck + recheck_size <= l.gate && l.gate + gate_size <= l.constants);
+		CHECK(whole.size() == code_size && l.charge + charge_size <= l.recheck && l.recheck + recheck_size <= l.gate && l.gate + gate_size <= l.constants);
 		const auto jump = charge_jump(l), call = recheck_call(l), pick = picker_call(l);
 		CHECK(jump.size() == charge_site.patched && call.size() == recheck_site.patched && pick.size() == 5);
 		CHECK(rel32(jump, 1, charge_site.va) == l.charge && rel32(call, 1, recheck_site.va) == l.recheck && rel32(pick, 1, picker_call_va) == l.gate);
@@ -10422,13 +10422,13 @@ namespace
 					slots_ok &= button == xml1_combos[i][k] && (button == 4 || button == 5);
 				}
 			}
-			CHECK(slots_ok && l.constants + 16 <= l.combos);
+			CHECK(slots_ok && l.constants + data.size() <= l.combos);
 			const auto lengths = combo_lengths_bytes();
 			CHECK(lengths.size() == 24 && lengths[0] == 1 && lengths[4] == 2 && lengths[20] == 5);
 		}
 		CHECK(combolevel_skip() == std::vector<std::uint8_t>({0x83, 0xc4, 0x04}) && sub_bytes(combolevel_site, 3, 3) == std::vector<std::uint8_t>({0xff, 0x52, 0x44}));
 		CHECK(sub_bytes(combo_exit_site, 3, 6) == std::vector<std::uint8_t>({0xb0, 0x01, 0x5f, 0x5e, 0x5d, 0x5b}) && combo_exit_va == combo_exit_site.va + 3 && combo_exit2_va == combo_exit2_site.va + 3);
-		CHECK(rel32(combo_exit_jump(combo_exit_va), 1, combo_exit_va) == combo_tail_va && rel32(combo_exit_jump(combo_exit2_va), 1, combo_exit2_va) == combo_tail_va && combo_exit_jump(combo_exit_va)[5] == 0x90);
+		CHECK(rel32(combo_exit_jump(combo_exit_va, l.start), 1, combo_exit_va) == l.start && rel32(combo_exit_jump(combo_exit2_va, l.start), 1, combo_exit2_va) == l.start && combo_exit_jump(combo_exit_va, l.start)[5] == 0x90);
 
 		// V-NPC1: visibility deferral is distinct from obstruction; geometry comes from positions, even for
 		// coincident points. The native adapter uses this same policy, with no game data in the fixture.
@@ -10487,7 +10487,7 @@ namespace
 		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", static_cast<unsigned long>(mismatch->va), mismatch->what);
 		CHECK(mismatch == nullptr);
 		// Every new entry/predicate/helper guard must refuse a changed executable before any patch is made.
-		for (const auto* s : {&query_priority_site, &query_budget_site, &visibility_site, &physical_target_site, &query_entry_site})
+		for (const auto* s : sites)
 		{
 			auto& byte = image[s->va - image_base];
 			byte ^= 1;

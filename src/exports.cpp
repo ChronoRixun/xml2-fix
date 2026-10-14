@@ -30,6 +30,7 @@
 #include "rank_costs.hpp"
 #include "death_threshold.hpp"
 #include "npc_power.hpp"
+#include "stun_rule.hpp"
 #include "pack_amount.hpp"
 #include "death_switch.hpp"
 #include "gameplay_agreement.hpp"
@@ -365,7 +366,11 @@ namespace
 		// 16); a requested rule enlists the agreement even in a non-LC installation.
 		npc_power::install(game);
 		if (game_version::needs_gameplay_agreement() || npc_power::requested())
-			gameplay_agreement::register_rule(gameplay_capabilities::npc_power_rule_id, npc_power::revision, npc_power::values(), npc_power::verified());
+			gameplay_agreement::register_rule(gameplay_capabilities::npc_power_rule_id, npc_power::revision_for(npc_power::requested()), npc_power::values(), npc_power::verified());
+		stun_rule::install(game);
+		// New opt-in rule: absence preserves the released LC OFF digest.
+		if (stun_rule::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::stun_rule_id, stun_rule::revision, stun_rule::values(), stun_rule::verified());
 		// [Game] DeathSwitchClear: the hero handed a dead hero's controller stops its AI walk (docs/death-switch.md). One
 		// call in onDeath's own code, used from the first death on. Online play is lockstep, so every peer must hand
 		// over the same way (rule 15); a requested switch enlists the agreement even in a non-LC installation.

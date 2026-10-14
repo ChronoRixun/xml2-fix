@@ -16,7 +16,8 @@
 // decision (0x518770) runs every 2.0 s (0.5 s for a party hero under the AI) instead of every 0.3 s, and it picks a
 // power only with at least half of the character's energy; NPCs fight in the first game's melee combos (their combo
 // level as XML1's AI init gives it, XML1's six combos and weights) and pause after starting one as in XML1. AI
-// visibility uses XML1's geometry and shared query reservation/budget. Nothing a save reads changes.
+// visibility uses XML1's geometry and shared query reservation/budget. Revision 4 additionally schedules combo
+// presses and completion using XML1's delays. Nothing a save reads changes.
 namespace npc_power
 {
 	// Reads [Game] NpcPowerRule and patches XMen2.exe for it, every site in one transaction. From DllMain.
@@ -26,7 +27,9 @@ namespace npc_power
 	bool installed(); // and every site carries the rule
 	bool verified();  // nothing is half-installed: not requested, or installed
 	// Rule 16: word 0 enables the power/combo rules; word 1 enables XML1 visibility geometry and query scheduling.
-	// Revision 3 advertises the added value; revision 2 had only the power/combo word.
-	constexpr std::uint16_t revision = 3;
+	// Revision 4 adds per-press and final combo delays. Revision 3 added visibility; values stay unchanged.
+	constexpr std::uint16_t revision = 4;
+	// Released LC peers already advertise rule 16 revision 3 when disabled.
+	constexpr std::uint16_t revision_for(bool requested) { return requested ? revision : 3; }
 	std::array<std::uint32_t, 4> values();
 }

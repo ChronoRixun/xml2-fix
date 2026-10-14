@@ -69,8 +69,8 @@ has the same 60–250 horizontal range and approximately 0.89 facing threshold i
 
 ## The change
 
-Every write below goes in one transaction (`xml1_hook_transaction`), with three bridges and XML1's six combos in one
-block of the fix's own:
+Every write below goes in one transaction (`xml1_hook_transaction`). Bridges, constants and combo tables occupy
+one execute-read page; a separate read-write page holds the 32 per-brain press deadlines.
 
 1. **0x4318e7 (9 bytes, jmp).** The bridge makes XML1's test. Without the AI flag, the character pays. With it, the
    character pays when -0.5 < actor+0x768 < 0.001. Otherwise it asks the controller at 0x4318f0, as before.
@@ -84,8 +84,8 @@ block of the fix's own:
 5. **The combo tables (.data).** Slots 0..5 point at XML1's six combos (in the block) with their lengths; rows 2, 3
    and 11 - the levels the init picks - hold XML1's levels 2, 3 and 6 (the first 2, 3, 6 of 5 / 25 / 20 / 15 / 15 /
    15). Rows 0, 1 and 4..10 keep their weights and are reached only through `combolevel`, which no XML1 entry has.
-6. **0x51993a and 0x519b04 (6 bytes each, jmp 0x519840).** After a combo start, the decision's tail runs as after a
-   single attack: the next attack time and the crowd delay are set as in XML1.
+6. **0x51993a and 0x519b04 (6 bytes each).** The start bridge arms the first press deadline, then jumps to the
+   decision's tail at 0x519840: the next attack time and crowd delay are set as in XML1.
 7. **0x5027bd (18 bytes) and 0x5027e0 (3 bytes).** Restore the original priority-reservation predicate and
    one-query budget in the shared AI query scheduler. The existing queued ages, timestamp, cache and collision
    implementation are retained. These queries are shared with other AI decisions.
@@ -93,11 +93,22 @@ block of the fix's own:
    query with XML1's endpoints and extents, including its original cutoff and deferred/hit decisions. It reads the
    hit's packed token directly from the stable trace record, so it composes with the entity-capacity query owner.
 
-Left as XMen2.exe has it: XML1 presses a combo's next button after the combo's own delay (0.2-0.6 s, 0x452b94);
-XMen2.exe presses it as soon as the move allows. XML1's second combo table (brain mode 1) has no XMen2.exe brain.
+9. **0x51920b (6 bytes).** The continuation waits until the press deadline has passed, advances the index, and
+   reaches the existing press or completion code. XML1's per-button delays come from 0x452b94; its continuation
+   is 0xeebec..0xeecb7. PC's immediate chain-availability test can otherwise abort a newly started combo and set
+   the next attack time to now minus one. The timer advances even while the actor hold bit is set, as in XML1.
+   A remaining deadline above the table's maximum delay (0.6 seconds) is treated as expired. This bounds a stale
+   slot's wait after a clock rewind or reuse without changing ordinary equal/decreasing deadlines. An unarmed
+   zero deadline advances once the clock is positive. Unordered clocks retain the previous wait behavior.
+10. **0x5192cb (6 bytes).** Completion adds the final button delay to the existing time/offset/random accumulator.
+   PC adds a fixed 0.2 seconds. The original single-hit combo adds zero; its longest combo adds 0.6 seconds.
+
+XML1's second combo table (brain mode 1) has no XMen2.exe brain. The earlier target-loss cancellation branch and
+the PC's press notification remain unchanged. No claim of complete AI equivalence is made.
 
 All guards are checked before anything is written: the retail bytes of every site, the controller read at 0x5188c3,
-the energy getter's read, the combo exits' tail, the five table runs, and the visibility/query entry helpers.
+the energy getter's read, the combo exits' tail, the five table runs, the visibility/query entry helpers, and the
+AI pool's base, stride, count and embedded-brain offset. Brains outside that guarded pool use the native step.
 A mismatch leaves the game as it is and writes one log line. A failed write is rolled
 back. A failed rollback refuses startup.
 
@@ -108,12 +119,51 @@ its AI time is set.
 ## Gameplay agreement
 
 Online play is lockstep and the rule changes AI decisions and energy, so it is shared gameplay rule **16**
-(`gameplay_capabilities::npc_power_rule_id`, [gameplay-agreement.md](gameplay-agreement.md)): revision 3,
+(`gameplay_capabilities::npc_power_rule_id`, [gameplay-agreement.md](gameplay-agreement.md)): revision 4,
 `{installed ? 1 : 0, installed ? 1 : 0, 0, 0}`. The added word advertises XML1 visibility geometry and query scheduling;
-revision 2 had only the power/combo word. Registered in an LC installation or when requested; absent or `xml2` is the verified
-`{0,0,0,0}`; requested but not installed (a guard mismatch, protection, readback, an unknown value) is unverified and
-closes host/join. A peer with the rule and one without never play together, and revision 2 peers cannot silently
-share a game with the new visibility policy.
+revision 2 had only the power/combo word, and revision 3 lacked the press/completion timers. Registered in an LC
+installation or when requested; absent or `xml2` retains **revision 3** with verified `{0,0,0,0}`, matching the
+released OFF record. Only requested configurations use revision 4. Requested but not installed (a guard mismatch,
+protection, readback, an unknown value) is unverified and closes host/join. Enabled revision 3 and 4 peers refuse.
+
+### Bridge register contracts
+
+At `0x5192d1`, the completion jump reaches `0x5192ed`, which reloads ECX with the AI before passing the x87
+accumulator to `0x5382a0`. That callee overwrites EAX from its stack argument and writes the next attack time;
+it never reads EDX. The later paths reload EDX or return a boolean in AL. Incoming EAX/ECX/EDX are dead.
+
+At `0x519840`, EAX is loaded from the existing stack frame before the branch. The fallthrough initializes a
+stack-local query with a fresh ECX, then `0x5252e0` supplies its own registers; the alternate `0x519c6a` path
+reloads EDX/EAX from the brain. Later ECX stack pushes reserve storage overwritten by `fstp`, rather than pass
+the old ECX value. Incoming EAX/ECX/EDX are dead on both paths; EBP and the original stack frame remain live.
+
+### Clock and transition review
+
+AI clock writes at `0x511d4f`, `0x5125ff` and `0x51672b` copy the game clock (vtable +0x160, accessor
+`0x469740`, game+0x3e8). A bounded live check saved and loaded during combat, then changed zones with a combo
+in progress and returned. The clock kept advancing through these paths; departing AI slots were retired and
+new slots initialized. Combos advanced after load and after the round trip, including reused pool indices.
+The observer checked the active-slot bitmap and generation tokens, excluding stale bytes in retired slots.
+
+This did **not** reproduce a natural clock-reset stall. The maximum-wait clamp is a defensive correction,
+verified against the old emitted wait branch with a synthetic rewound clock. The live trial staged zone
+loads, authored spawn-point visits and invulnerability (reapplied after load). It establishes these transition
+paths, not a guarantee that the clock is monotonic for every game lifecycle or an isolated combat-rate result.
+
+### Revision 4 acceptance status
+
+This is a **candidate awaiting live acceptance**, not a measured resolution of the remaining stun gap. Native
+tests execute the emitted bridges with synthetic brains, and private characterization compares their timing
+with the original executable's continuation. The previous unshipped experiment retained PC's completion
+addition and an extra hold gate; revision 4 corrects both. Synthetic completion pauses with offset 0.6 and zero
+random addition are 0.6, 0.8, 0.8, 0.8, 0.8 and 1.2 seconds, matching the original code.
+
+The historical combat tables below predate revision 4. Two new release-base/candidate pairs and vulnerable
+real-input fights are described in the follow-up below. The new rate measurements had other test games running
+and do not establish timing acceptance. Isolated repeats, party AI, online play and save/load transitions remain
+untested for this candidate. Hero reaction handlers have not changed;
+the missing original stun handler and PC stun-powerup behavior require separate investigation and a separately
+coordinated gameplay rule if an engine restoration is needed.
 
 ## Evidence
 
@@ -174,6 +224,40 @@ retail-byte tests reject each changed guard. The full native suite and agreement
 movement check after the second measurement also succeeded. Online play, party AI and other encounter types
 were not live-tested in this follow-up.
 
-Open: XML1 presses a combo's buttons on its own delays (0.2–0.6 s) where XMen2.exe presses them as soon as the move
-allows. Successful power selection also has a different aim/return path: XML1 normally turns and returns before
+Open: revision 4's press timing still needs an isolated live comparison. Successful power selection also has a different
+aim/return path: XML1 normally turns and returns before
 its fallback NPC pause, so merely changing the PC's post-pick pause to one second is not an established fix.
+
+### Revision 4 follow-up (timing acceptance still pending)
+
+Two fresh 150-second pairs used a locally built release-base DLL and the compiled revision-4 candidate on the
+same released content. Each had four engaged Revolutionaries and one Marauder. The hero was idle and invulnerable;
+the zone load and visits to the two authored spawner points were staged. The unchanged transition tracer and
+per-actor observed-window analyzer were reused. Inactive spawns were excluded.
+
+| Metric | Historical original | Release control, two runs | Revision 4, two runs |
+|---|---:|---:|---:|
+| Marauder powers/min | 8.6–10.7 | 13.6, 18.5 | 12.1, 12.8 |
+| Hero free | 51–53% | 23.4%, 17.3% | 31.7%, 27.6% |
+| Revolutionary beams/min | 2.0–3.5 | 3.8, 4.3 | 3.3, 3.1 |
+
+**Other active test games were observed during every run. These rates are timing-confounded and are not valid
+release-acceptance measurements.** The observed direction is encouraging, but neither a causal effect size nor
+original-game parity is established. The original column is historical; no new original runtime was used.
+
+Separate vulnerable fights used real virtual-pad inputs. The fresh level-1 hero performed attack moves and died.
+A level-10 retry, staged with an XP award and calibrated stick aiming, recorded movement, an attack, enemy health
+loss and another hero death. These were solo tests against the full group, not wins or campaign playthroughs.
+A separate real-stick movement check at the observed entrance covered about 99 units with health unchanged.
+
+Hero-side checks do not support a simple slower-get-up explanation: the audited playback speeds and get-up
+handler entry, exit, cancel and tick operations agree. Historical traces have a different mixture of wall-land
+and back-land reactions, so longer average knockdown bouts cannot be attributed to one slower handler. The
+original stun handler and PC timed powerup still differ; this candidate changes neither.
+
+A separate 90-second observer confirmed ten PC idle-selection redirects into stun while the stun-powerup flag
+remained set, with seventeen observed applications and seventeen clears. One stun applied during a landing
+reaction persisted through get-up; the hero then entered stun for another 1.115 game-clock seconds before the
+powerup cleared. The original handler sets its flag on stun entry and clears it on exit. This establishes the PC
+mechanism in this encounter, not its total contribution to the gap or the correct complete restoration. Any
+hero-side engine change needs a separately coordinated gameplay rule; no new rule ID is allocated here.
