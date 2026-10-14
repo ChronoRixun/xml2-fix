@@ -7,6 +7,15 @@ for an unchanged resident prefix. Numbered saved identities also match old ordin
 and placement. Any missing/stale attestation retains exact-hash rejection; malformed
 metadata refuses. The durable LC format remains unchanged.
 
+Zone keys use the same case normalization as placement numbering before their
+canonical key hash. The runtime recomputes the resident-prefix SHA-256 from the
+opened current XMLB bytes and compares it with the sidecar digest. A valid CRC
+does not excuse an edited digest or a current-map hash rebound to a changed prefix;
+that zone keeps the exact-hash discard behavior. The digest is an integrity check,
+not a signature: old maps and historical alias/placement claims still come from
+the builder's trusted release ledger. A deliberately rewritten, self-consistent
+ledger cannot be authenticated without the original old-map input or signed data.
+
 `loaded_zone_metadata` uses current placement provenance for actual runtime guards,
 and supplies `fresh_entities` so appended residents retain factory defaults.
 `source_placement_sha1` and each entity's `source_placement_index` preserve cached

@@ -827,9 +827,14 @@ namespace lcsave::detail
 
 	const ZonePrefix* Build::zone_prefix(const std::string& zone, const std::string& old, const ZoneNumbering& current) const
 	{
+		const auto hash = key_hash1(py_lower(zone, Enc::cp1252), Enc::cp1252);
 		for (const auto& p : zone_prefixes)
-			if (p.zone == key_hash1(zone, Enc::latin1) && old == std::string(reinterpret_cast<const char*>(p.old.data()),20) &&
-			    p.current == current.sha1 && p.placements.size() < current.names.size()) return &p;
+		{
+			const auto digest = current.prefix_digests.find(p.placements.size());
+			if (p.zone == hash && old == std::string(reinterpret_cast<const char*>(p.old.data()),20) &&
+			    p.current == current.sha1 && p.placements.size() < current.names.size() &&
+			    digest != current.prefix_digests.end() && digest->second == p.digest) return &p;
+		}
 		return nullptr;
 	}
 
@@ -850,12 +855,21 @@ namespace lcsave::detail
 		ZoneNumbering z;
 		z.sha1 = sha1(raw.data(), raw.size());
 		std::vector<Numbered> num;
-		numbered_entities(decode_xmlb(raw.data(), raw.size()), num, z.problems);
+		const auto root = decode_xmlb(raw.data(), raw.size());
+		numbered_entities(root, num, z.problems);
 		for (const auto& n : num)
 		{
 			z.names.emplace_back(key_hash1(n.type, Enc::latin1), key_hash1(n.name, Enc::latin1));
 			z.name_text.emplace_back(n.type,n.name);
 			z.placement.push_back(n.placement);
+		}
+		if (z.problems.empty()) for (const auto& prefix : zone_prefixes)
+		{
+			const auto count = prefix.placements.size();
+			if (prefix.zone != key_hash1(zone, Enc::cp1252) || prefix.current != z.sha1 ||
+			    count >= num.size() || z.prefix_digests.contains(count)) continue;
+			try { z.prefix_digests.emplace(count, resident_prefix_digest(root, num, count)); }
+			catch (const Error&) { /* invalid prefix: retain the stock exact-hash path */ }
 		}
 		slot = std::move(z);
 		return &*slot;

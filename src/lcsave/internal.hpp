@@ -280,6 +280,7 @@ namespace lcsave::detail
 		std::vector<std::pair<std::string, std::string>> name_text;
 		std::vector<u32> placement;                            // placement index in ordinal order
 		std::vector<std::string> problems;
+		std::map<std::size_t, Hash> prefix_digests;             // verified from the opened placement bytes
 	};
 
 	// one parsed .lcbind, kept as read (tests compare it with the builder's Python reader)
