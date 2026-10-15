@@ -58,3 +58,4 @@ DISASM  src/world_impact_bridge.hpp  # Authored x87-balanced impact bridge; repl
 DISASM  test/world_impact_test.cpp  # Authored synthetic caller/continuation exercising the impact bridge's stack and x87 contract; no game disassembly.
 DISASM  src/lockon_effects_hooks.hpp  # Authored register-preserving x86 observation bridges; replay only the short guarded instructions they displace. No game listing or decompiled body.
 DISASM  test/lockon_effects_test.cpp  # Authored synthetic stack-frame caller and continuation exercising our bridges; no game disassembly.
+DISASM  test/box_harm_test.cpp  # Authored synthetic caller/continuation checks our bridge's stack, registers and FPU; no game instruction listing or decompiled body.
