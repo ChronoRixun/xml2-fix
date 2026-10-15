@@ -56,3 +56,5 @@ DISASM  src/stun_rule.cpp  # Authored register-preserving callback bridge; repla
 DISASM  test/stun_rule_test.cpp  # Authored inline assembly driving the fix's bridge on synthetic actors and recording preserved registers/flags; retail routines are read from a user-supplied executable, never embedded.
 DISASM  src/world_impact_bridge.hpp  # Authored x87-balanced impact bridge; replays only the short guarded target classification and heaviness read. No game listing or decompiled body.
 DISASM  test/world_impact_test.cpp  # Authored synthetic caller/continuation exercising the impact bridge's stack and x87 contract; no game disassembly.
+DISASM  src/lockon_effects_hooks.hpp  # Authored register-preserving x86 observation bridges; replay only the short guarded instructions they displace. No game listing or decompiled body.
+DISASM  test/lockon_effects_test.cpp  # Authored synthetic stack-frame caller and continuation exercising our bridges; no game disassembly.
