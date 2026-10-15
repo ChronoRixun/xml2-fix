@@ -78,9 +78,10 @@ namespace {
   using request_t=void(__fastcall*)(void*,void*,void*,u32,float,u32,u32,u32);
   reinterpret_cast<request_t>(stun_rules::dispatch_call+5+rel)(drive_actor,nullptr,drive_move,91,.75f,0,0,1);
  }
- int calls=0; bool accepts=true, arguments_ok=true;
+ int calls=0; bool accepts=true, arguments_ok=true; float received_speed=0;
  void __fastcall dispatch(void* who, void*, void* move, u32 animation, float speed, u32 a, u32 b, u32 c) {
   ++calls;
+  received_speed=speed;
   arguments_ok &= who==actor.data() && move==dazed.data() && animation==91 && speed==.75f && a==0 && b==0 && c==1;
   if (accepts) { drive_move=move;drive_set(); }
  }
@@ -118,7 +119,7 @@ namespace {
  void __fastcall expire_move(void*,void*,void* move,u32){drive_move=move;drive_set();}
  void redirect(u32 a,const void* f){auto bytes=stun_rules::branch(a,f,false,5);std::memcpy(at(a),bytes.data(),bytes.size());}
  struct result { std::array<std::uint8_t,0x900> bytes; float life; int requests,writes; };
- result trial(float factor,bool already_stunned,bool hero,bool in_arena){
+ result trial(float factor,bool already_stunned,bool hero,bool in_arena,bool hooked){
   reset(hero);actor[0x765]=already_stunned?0xa5:0xa4;field<void*>(actor.data(),0)=actor_vt.data();
   field<float>(actor.data(),0x27c)=80;field<float>(actor.data(),0x520)=factor;field<void*>(actor.data(),0x378)=already_stunned?dazed.data():ready.data();
   accepts=true;competitive=in_arena;calls=0;duration_writes=0;assigned_life=-1;drive_move=dazed.data();
@@ -128,13 +129,22 @@ namespace {
   const auto after=actor;const float life=assigned_life;const int requested=calls;
   // Exercise native expiration, not a synthetic flag clear.
   reinterpret_cast<callback>(0x54a1e0)(7,&table_object);
-  check(!(actor[0x765]&1),"native expiry clears the flag");
-  if(factor>0)check(field<void*>(actor.data(),0x378)==ready.data(),"native expiry changes accepted stun to idle");
+  if(hooked && hero) check(actor==after,"party expiry cannot clear or end the current reaction, including a later refresh");
+  else {
+   check(!(actor[0x765]&1),"native expiry clears the flag");
+   if(factor>0)check(field<void*>(actor.data(),0x378)==ready.data(),"native expiry changes accepted stun to idle");
+  }
+  if(factor>0) {
+   float expected=.75f;
+   if(hooked && hero) {expected=.75f/factor;if(expected>10)expected=10;}
+   check(received_speed==expected,"retail entry forwards the expected party speed or native NPC speed");
+  }
   return {after,life,requested,duration_writes};
  }
 }
 void native_powerup_checks() {
  const std::vector<std::uint8_t> hook_call(at(stun_rules::dispatch_call),at(stun_rules::dispatch_call)+5),hook_set(at(stun_rules::set_move),at(stun_rules::set_move)+6);
+ const std::vector<std::uint8_t> hook_expiry(at(stun_rules::expire_flag),at(stun_rules::expire_flag)+7);
  auto load=[&](u32 a,unsigned n){const auto o=file_offset(a);if(o+n>binary.size())ExitProcess(2);std::memcpy(at(a),binary.data()+o,n);};
  load(0x549fc0,0x2c6);load(0x680030,4);load(0x682a2c,4);load(0x699db4,4);
  table_vt[0]=reinterpret_cast<void*>(&select_index);table_vt[2]=reinterpret_cast<void*>(&get_power);
@@ -146,16 +156,126 @@ void native_powerup_checks() {
  const std::array factors{0.f,.01f,.25f,.5f,1.f,2.f,5.f};
  // Restore only the two native sites for the negative control; the test owns all mapped memory.
  load(stun_rules::set_move,6);load(stun_rules::dispatch_call,5);
- for(float factor:factors)for(bool refresh:{false,true})for(bool hero:{false,true})for(bool online_arena:{false,true})control.push_back(trial(factor,refresh,hero,online_arena));
+ for(float factor:factors)for(bool refresh:{false,true})for(bool hero:{false,true})for(bool online_arena:{false,true})control.push_back(trial(factor,refresh,hero,online_arena,false));
  std::memcpy(at(stun_rules::dispatch_call),hook_call.data(),5);std::memcpy(at(stun_rules::set_move),hook_set.data(),6);
+ std::memcpy(at(stun_rules::expire_flag),hook_expiry.data(),7);
  std::size_t index=0;
  for(float factor:factors)for(bool refresh:{false,true})for(bool hero:{false,true})for(bool online_arena:{false,true}){
-  auto actual=trial(factor,refresh,hero,online_arena);const auto& expected=control[index++];
+  auto actual=trial(factor,refresh,hero,online_arena,true);const auto& expected=control[index++];
   check(actual.bytes==expected.bytes,"uninterrupted native powerup leaves identical actor state before and after hook");
   check(actual.life==expected.life && actual.writes==expected.writes,"native assigned duration and expiry writes are unchanged");
   check(actual.requests==expected.requests,"native accepted request frequency is unchanged, including refresh and immunity");
  }
  std::printf("%zu native powerup scenarios compared\n",index);
+}
+
+namespace {
+ std::array<u32,10> input_state{};
+ int input_calls=0, action_calls=0, chains=0;
+ int idle_redirects=0; bool idle_fixture=false;
+ u32 idle_entry=0x4edff7;
+ void __cdecl redirected_idle(){++idle_redirects;}
+ void __cdecl ordinary_idle(){}
+ __declspec(naked) void drive_idle_entry() {
+  __asm {
+   pushad
+   mov esi, drive_actor
+   call dword ptr [idle_entry]
+   popad
+   ret
+  }
+ }
+ bool input_arguments=true;
+ bool __fastcall fallback_input(void* move,void*,void* who,void* input) {
+  ++input_calls;input_arguments &= move==drive_move && who==actor.data() && input==input_state.data();return false;
+ }
+ void* __fastcall action_move(void* who,void*,u32 action) {
+  ++action_calls;input_arguments &= who==actor.data() && action==0;return ready.data();
+ }
+ void __fastcall chain_move(void* who,void*,void* input) {
+  ++chains;input_arguments &= who==actor.data() && input==input_state.data();
+  void* next=field<void*>(actor.data(),(actor[0x764]&0x20)?0x378:0x3bc);
+  const auto before=idle_redirects;if(idle_fixture && next==ready.data())drive_idle_entry();
+  drive_move=idle_redirects>before?dazed.data():next;drive_set();
+ }
+ u32 input_entry=0x4341bb;
+ void* input_address=input_state.data();
+ __declspec(naked) void drive_input_gates() {
+  __asm {
+   pushad
+   mov esi, drive_actor
+   mov edi, input_address
+   call dword ptr [input_entry]
+   popad
+   ret
+  }
+ }
+}
+void input_and_speed_checks() {
+ // V-STUN2: execute the installed callback, and the retail caller's lock/chain gates when available.
+ redirect(stun_rules::clock,&clock_value);redirect(stun_rules::resolve_action,&action_move);
+ move_vt[0x48/4]=reinterpret_cast<void*>(&fallback_input);
+ field<void*>(dazed.data(),0)=move_vt.data();field<void*>(tumble.data(),0)=move_vt.data();
+ u32 delta;std::memcpy(&delta,at(stun_rules::input_call+2),4);
+ using input_t=bool(__fastcall*)(void*,void*,void*,void*);
+ const auto input=reinterpret_cast<input_t>(stun_rules::input_call+6+delta);
+ for(int controller=0;controller<4;++controller) {
+  reset(true,controller);field<void*>(actor.data(),0x378)=dazed.data();field<float>(actor.data(),0x27c)=50;
+  field<float>(actor.data(),0x5e8)=current_time;input_state.fill(0);input_state[0]=0x30;
+  check(!input(dazed.data(),nullptr,actor.data(),input_state.data()),"held buttons alone do not release a same-clock stun");
+  input_state[1]=0x10;
+  check(input(dazed.data(),nullptr,actor.data(),input_state.data()) && field<void*>(actor.data(),0x3bc)==ready.data(),"attack press selects the native idle action for every party slot");
+  check(actor[0x765]==0xa4,"stun exit clears ownership before the new idle handler can redirect");
+  input_state[1]=0x20;
+  check(input(dazed.data(),nullptr,actor.data(),input_state.data()),"smash press releases an unlocked stun");
+  input_state.fill(0);field<float>(actor.data(),0x5e8)=current_time-1;
+  check(input(dazed.data(),nullptr,actor.data(),input_state.data()),"elapsed handler clock releases without input");
+  field<float>(actor.data(),0x5e8)=current_time+1;
+  check(!input(dazed.data(),nullptr,actor.data(),input_state.data()),"future handler clock is not elapsed");
+  field<float>(actor.data(),0x27c)=0;input_state[1]=0x30;
+  check(!input(dazed.data(),nullptr,actor.data(),input_state.data()),"dead actor cannot use stun input escape");
+ }
+ const int before=input_calls;
+ for(bool hero:{false,true}) {
+  reset(hero);field<void*>(actor.data(),0x378)=hero?tumble.data():dazed.data();drive_move=field<void*>(actor.data(),0x378);
+  check(!input(drive_move,nullptr,actor.data(),input_state.data()),"NPC stun and unrelated party move use their original handler");
+ }
+ check(input_calls==before+2 && input_arguments,"fallback receives the original move, actor and input once");
+ struct rate_case {float speed,factor,want;};
+ for(const auto c:std::array{rate_case{1,1,2},rate_case{1,.5f,4},rate_case{1,2,1},rate_case{1,.01f,10},rate_case{.75f,.25f,3},rate_case{3,2,1.5f},rate_case{0,1,0}}) {
+  reset(true);field<float>(actor.data(),0x520)=c.factor;
+  using request_t=void(__fastcall*)(void*,void*,void*,u32,float,u32,u32,u32);
+  std::memcpy(&delta,at(stun_rules::dispatch_call+1),4);
+  reinterpret_cast<request_t>(stun_rules::dispatch_call+5+delta)(actor.data(),nullptr,dazed.data(),91,c.speed,0,0,1);
+  check(received_speed==c.want,"installed request restores default, explicit and clamped animation rates");
+  reset(false);field<float>(actor.data(),0x520)=c.factor;
+  reinterpret_cast<request_t>(stun_rules::dispatch_call+5+delta)(actor.data(),nullptr,dazed.data(),91,c.speed,0,0,1);
+  check(received_speed==c.speed,"NPC animation rate is unchanged");
+ }
+ if(binary.empty())return;
+ // Run the retail idle selector through its stun test; stop at each branch's destination.
+ std::memcpy(at(idle_entry),binary.data()+file_offset(idle_entry),0x4ee010-idle_entry);
+ redirect(0x4ee010,&redirected_idle);redirect(0x4ee03c,&ordinary_idle);
+ game_vt[0x5c/4]=reinterpret_cast<void*>(&arena);competitive=false;redirect(0x48de40,&get_game);idle_fixture=true;
+ reset(true);field<void*>(actor.data(),0x378)=dazed.data();field<void*>(actor.data(),0x3bc)=ready.data();
+ const auto redirects_before=idle_redirects;chain_move(actor.data(),nullptr,input_state.data());
+ check(idle_redirects==redirects_before+1 && field<void*>(actor.data(),0x378)==dazed.data(),"negative control: late flag clearing redirects the requested idle back into stun");
+ const std::vector<std::uint8_t> installed(at(stun_rules::input_call),at(stun_rules::input_call)+6);
+ std::memcpy(at(input_entry),binary.data()+file_offset(input_entry),0x4341f0-input_entry);
+ *at(0x4341f0)=0xc3;redirect(0x4315d0,&chain_move);
+ auto setup=[](){reset(true);field<void*>(actor.data(),0x378)=dazed.data();field<float>(actor.data(),0x27c)=50;input_state.fill(0);input_state[1]=0x30;chains=0;};
+ setup();drive_move=dazed.data();const auto old_calls=input_calls;drive_input_gates();
+ check(chains==0 && input_calls==old_calls+1,"negative control: native caller delegates to the handler without XML1 recovery");
+ std::memcpy(at(stun_rules::input_call),installed.data(),6);
+ for(unsigned flags:{0u,1u,0x20u,0x21u}) {
+  setup();actor[0x764]=static_cast<std::uint8_t>(flags);field<void*>(actor.data(),0x3bc)=ready.data();
+  const auto selected=action_calls;drive_input_gates();
+  check(chains==((flags&1)?0:1),"retail input lock still gates even a pressed escape");
+  check(action_calls==selected+(flags==0?1:0),"pending chain skips the replacement handler as before");
+  if(flags==0)check(field<void*>(actor.data(),0x378)==ready.data() && !(actor[0x765]&1),"normal native chain exits stun and clears its flag");
+  if(flags==0x20)check(field<void*>(actor.data(),0x378)==dazed.data() && (actor[0x765]&1),"pending same-move chain keeps native stun ownership");
+ }
+ check(input_arguments,"installed callback and native continuation preserve the argument ABI");
 }
 
 namespace {
@@ -246,6 +366,7 @@ int main(int argc,char** argv) {
  check(actor[0x765]==0xa5,"resolved alternate stun retains flag despite a different interned name");
  field<u32>(tumble.data(),8)=*reinterpret_cast<u32*>(stun_rules::stun_name);drive_move=tumble.data();drive_set();
  check(actor[0x765]==0xa4,"same-name move not selected by actor resolver does not retain stun flag");
+ input_and_speed_checks();
  if(argc>1){native_powerup_checks();native_resolution_checks();}
  std::printf("%d checks, %d failures\n",checks,failures);return failures ? 1 : 0;
 }

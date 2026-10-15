@@ -457,7 +457,7 @@ LevelSkillPoints=xml1 ; 2 skill points on every 5th level, 1 on the others (X-Me
 LevelStatPoints=xml1  ; 8 stat points on every 5th level, 4 on the others (X-Men Legends I's 2 / 1 on the port's x4 stat scale)
 NpcPowerRule=xml1     ; enemies pay energy, decide every 2 s at half energy, and use X-Men Legends I combos
 ObjectWorldImpact=xml1 ; zero ordinary landing damage against non-physical targets
-StunRule=xml1         ; rejected/interrupted party-hero stuns do not resume after get-up
+StunRule=xml1         ; original party-hero stun timing and reaction ownership
 DeathSwitchClear=1    ; the hero handed a dead hero's controller stops the walk its AI had started (X-Men Legends I's hand-over)
 Xml1MasterMold=1      ; X-Men Legends I's Master Mold fight: shield, cores, platform and floor attacks (needs Xml1MoldStage)
 Xml1MoldStage=x1v02:1:5   ; the saved flag that holds the fight's stage, as flag:first_bit:width (the port's builder writes it)
@@ -660,7 +660,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `LevelStatPoints` | (none) | `xml1`: a level divisible by 5 gives (and a level lost takes back) 8 stat points, any other 4: X-Men Legends I's 2 / 1 for heroes whose stats are its x 4 ([details](docs/rank-costs.md)) |
 | `NpcPowerRule` | `xml2` | `xml1`: enemies pay energy for powers, decide every 2 s with at least half energy, use the first game's combos and visibility rules (gameplay rule 16 revision 4; [details](docs/npc-power-rule.md)). Heroes still get stunned more than in the original (Legends Classic issue #101, open). |
 | `ObjectWorldImpact` | `xml2` | `xml1`: zero ordinary landing damage against non-physical targets, as in XML1 (gameplay rule 17 revision 1; [details](docs/object-world-impact.md)). |
-| `StunRule` | `xml2` | `xml1`: party heroes discard rejected stun flags and clear them when another reaction takes over; accepted stun timing and enemies stay native (gameplay rule 18 revision 1; [details](docs/stun-rule.md)). |
+| `StunRule` | `xml2` | `xml1`: original party stun playback and input recovery; rejected/interrupted stuns do not resume after get-up. Enemy stuns stay native (gameplay rule 18 revision 2; [details](docs/stun-rule.md)). |
 | `PackAmount` | `xml2` | `xml1`: a health or energy pack restores a quarter of the maximum, as in X-Men Legends I, instead of a third ([details](docs/pack-amount.md)) |
 | `DeathRule` | `xml2` | `xml1`: an entity dies on the hit that leaves it below 1 health, as in X-Men Legends I, instead of only at 0 ([details](docs/death-threshold.md)) |
 | `Xml1Multipart` | `0` | `1`: X-Men Legends I's breakable parts (a stats `<Multipart>` row's health, break, effects and the attacks it carries: Juggernaut's helmet, the Sentinels' arms) ([details](docs/multipart.md)) |
