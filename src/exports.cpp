@@ -23,6 +23,8 @@
 #include "placement_crush.hpp"
 #include "world_impact.hpp"
 #include "box_harm.hpp"
+#include "harm_loop_startup.hpp"
+#include "harm_single_chain.hpp"
 #include "double_heal.hpp"
 #include "xml1_capability_rules.hpp"
 #include "conversations.hpp"
@@ -409,6 +411,8 @@ namespace
 		placement_crush::install(game);
 		world_impact::install(game);
 		box_harm::install(game);
+		harm_loop_startup::install(game);
+		harm_single_chain::install(game);
 		if (box_harm::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::box_harm_origin_id, 1,
 				{box_harm::installed() ? 1u : 0u,0,0,0}, box_harm::verified());
