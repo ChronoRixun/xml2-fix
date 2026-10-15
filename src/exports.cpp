@@ -58,6 +58,7 @@
 #include "classic_main_panels.hpp"
 #include "danger_room_gate.hpp"
 #include "danger_room_party.hpp"
+#include "danger_room_healthbars.hpp"
 #include "revival_cost.hpp"
 #include "mod_loader.hpp"
 #include "new_game.hpp"
@@ -407,6 +408,7 @@ namespace
 		placement_crush::install(game);
 		world_impact::install(game);
 		danger_room_party::install(game);
+		danger_room_healthbars::install(game);
 		if (danger_room_party::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::danger_room_party_id, 1,
 				{danger_room_party::installed() ? 1u : 0u,0,0,0}, danger_room_party::verified());
