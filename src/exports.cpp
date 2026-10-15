@@ -409,8 +409,14 @@ namespace
 		placement_crush::install(game);
 		world_impact::install(game);
 		box_harm::install(game);
+		if (box_harm::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::box_harm_origin_id, 1,
+				{box_harm::installed() ? 1u : 0u,0,0,0}, box_harm::verified());
 		danger_room_party::install(game);
 		danger_room_healthbars::install(game);
+		if (danger_room_healthbars::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::danger_room_healthbars_id, 1,
+				{danger_room_healthbars::installed() ? 1u : 0u,0,0,0}, danger_room_healthbars::verified());
 		if (danger_room_party::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::danger_room_party_id, 1,
 				{danger_room_party::installed() ? 1u : 0u,0,0,0}, danger_room_party::verified());

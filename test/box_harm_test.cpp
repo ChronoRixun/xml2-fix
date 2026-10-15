@@ -135,7 +135,7 @@ int main(int argc,char** argv)
 	setting="xml2";box_harm::install(GetModuleHandleW(nullptr));
 	check(!box_harm::requested() && untouched() && rejected==0,"explicit native mode preserves code and agreement");
 	setting="invalid";box_harm::install(GetModuleHandleW(nullptr));
-	check(box_harm::requested() && !box_harm::installed() && untouched() && rejected==1,"invalid request changes no code and blocks unregistered agreement");
+	check(box_harm::requested() && !box_harm::installed() && untouched() && rejected==0 && !box_harm::verified(),"invalid request changes no code and remains unverified");
 	setting="xml1";box_harm::install(reinterpret_cast<HMODULE>(0x500000));
 	check(!box_harm::installed() && untouched(),"relocated executable refused");
 	for(const auto& g:guards){
@@ -146,7 +146,7 @@ int main(int argc,char** argv)
 	}
 	seed();const std::vector<unsigned char> image_before(at(0x401000),at(0x801000));
 	box_harm::install(GetModuleHandleW(nullptr));
-	check(box_harm::installed() && *at(site)==0xe9 && rejected==7,"production installer opts in and rejects unassigned multiplayer rule");
+	check(box_harm::installed() && *at(site)==0xe9 && rejected==0 && box_harm::verified(),"production installer supplies verified rule 21 state");
 	bool footprint=true;
 	for(std::size_t i=0;i<image_before.size();++i)
 		if(at(0x401000)[i]!=image_before[i] && !(0x401000+i>=site && 0x401000+i<resume))footprint=false;

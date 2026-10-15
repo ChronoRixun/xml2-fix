@@ -134,7 +134,7 @@ void records(){
  check(future.compare(stun(true,true,stun_rule::revision,true).bytes())==result::match,"later rule 17 registration agrees in either order");
  check(stun(true).compare(future.bytes())==result::entries,"missing future rule 17 is refused, not silently ignored");
  // New requested-only rules preserve the pre-integration OFF bytes and name both mismatch directions.
- for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id}) {
+ for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id,gameplay_capabilities::box_harm_origin_id,gameplay_capabilities::danger_room_healthbars_id}) {
   auto optional=[&](bool wanted,bool verified=true){record r;if(wanted)r.add(id,1,{1,0,0,0},verified);r.finalize();return r;};
   const auto yes=optional(true),no=optional(false),failed=optional(true,false);
   check(yes.compare(optional(true).bytes())==result::match,"matching new requested-only rule accepts");

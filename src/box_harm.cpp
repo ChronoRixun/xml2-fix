@@ -1,6 +1,5 @@
 #include "box_harm.hpp"
 #include "box_harm_bridge.hpp"
-#include "gameplay_agreement.hpp"
 #include "game_version.hpp"
 #include "ini.hpp"
 #include "log.hpp"
@@ -26,9 +25,6 @@ namespace box_harm
 		const auto chosen = parse_rule(ini::text(L"Game",L"BoxHarmOrigin").value_or(""));
 		if (!chosen.set || (chosen.error.empty() && chosen.value == rule::xml2)) return;
 		state = 0;
-		// Local experimental behavior must never advertise the stock online digest.
-		// The integrator must assign/register a rule before enabling multiplayer.
-		gameplay_agreement::reject_unregistered_rule("BoxHarmOrigin");
 		if (!chosen.error.empty())
 		{
 			logger::write("box harm origin: invalid [Game] BoxHarmOrigin - stock dispatch retained");
@@ -48,7 +44,7 @@ namespace box_harm
 		if (xml1_hook_transaction::apply(memory,{patch},&safe))
 		{
 			state = 1;
-			logger::write("box harm origin: XML1 zero dispatch origin installed; spatial bounds, damage and timers retained; online blocked pending rule assignment");
+			logger::write("box harm origin: XML1 zero dispatch origin installed; spatial bounds, damage and timers retained");
 		}
 		else if (safe)
 			logger::write("box harm origin: transaction refused - stock dispatch retained");
@@ -60,4 +56,5 @@ namespace box_harm
 	}
 	bool requested() { return state.load() != -1; }
 	bool installed() { return state.load() == 1; }
+	bool verified() { return !requested() || installed(); }
 }

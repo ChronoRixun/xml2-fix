@@ -9,7 +9,7 @@ No new gameplay rule ID is assigned for this transport change.
 
 ## Registration API
 
-Include `gameplay_agreement.hpp`. Call each registration once, after its installer has checked guards, written/read back its changes and established its effective state. Disabled hooks register their native/off value with `verified=true`; a requested but failed hook registers `verified=false`. Registration automatically enlists socket exclusion and native refusal handling, including for a non-LC capacity/controller mod with no ExplosiveFirstHit key. A failed registration poisons the record and closes online admission. Do not silently omit failed or disabled participating rules.
+Include `gameplay_agreement.hpp`. Call each registration once, after its installer has checked guards, written/read back its changes and established its effective state. Disabled hooks register their native/off value with `verified=true`; a requested but failed hook registers `verified=false`. Registration automatically enlists socket exclusion and native refusal handling, including for a non-LC capacity/controller mod with no ExplosiveFirstHit key. A failed registration poisons the record and closes online admission. Do not silently omit failed participating rules. Requested-only rules 17..22 omit their entry when absent, empty or explicitly native, preserving the released OFF digest.
 
 ```cpp
 bool register_rule(uint16_t id, uint16_t revision,
@@ -50,7 +50,7 @@ IDs:
 | 16 | XML1 power use, melee combos and AI visibility (`[Game] NpcPowerRule=xml1`) | revision 4 when requested, `{installed ? 1 : 0,installed ? 1 : 0,0,0}`; revision 4 adds combo press/completion timing; word 1 advertises XML1's visibility geometry and query scheduling; registered in an LC installation or when requested; absent/`xml2` retains released revision 3 with verified `{0,0,0,0}`; requested but not installed (guards, protection, readback, an unknown value) is unverified and closes host/join ([details](npc-power-rule.md)) |
 | 18 | Original party-hero stun timing and reaction ownership (`[Game] StunRule=xml1`) | revision 2, `{installed ? 1 : 0,0,0,0}`; registered only when requested; absent/`xml2` omits the entry to preserve the released OFF digest; requested but not installed is unverified ([details](stun-rule.md)) |
 
-IDs 1-4 date from 1.4.0 and 5-16 from 1.5.x (the 0.2.2 wave); 17 is ObjectWorldImpact; 18 is StunRule (both register only when requested). IDs 19 (DangerRoomParty) and 20 (Xml1LockOnAim) register only when requested, revision 1, values `{installed ? 1 : 0,0,0,0}`. Failed requests are unverified. IDs 21..65535 require coordination; 0 and duplicate IDs are refused. Entity layout revision describes token representation/sentinel/allocator semantics as well as capacities. Increment it whenever equal capacities/bit width can still encode or interpret tokens differently. A capacity raise must call the layout API with its successfully installed capacities and token width. Actor+generic must not exceed world (`<=`: the World keeps registrations beyond the two arenas; uint64 checked), and world must fit the token width. Entity-capacity layouts: revision 1 `{32,224,256,8}` (stock, also the verified capacity-off value), revision 3 `{32,768,1024,10}` (Phase A, contiguous tokens). Keep failed layouts unverified, even if the fallback is retail. The default is retail only when no entity-layout installer participates.
+IDs 1-4 date from 1.4.0 and 5-16 from 1.5.x (the 0.2.2 wave); 17 is ObjectWorldImpact; 18 is StunRule (both register only when requested). IDs 19 (DangerRoomParty) and 20 (Xml1LockOnAim) register only when requested, revision 1, values `{installed ? 1 : 0,0,0,0}`. Failed requests are unverified. IDs 21 (BoxHarmOrigin) and 22 (DangerRoomHealthBars) also register only when requested, revision 1, with verified installed values. The HUD rule covers unproved dirty-stat refresh/clamp timing parity. IDs 23..65535 require coordination; 0 and duplicate IDs are refused. Entity layout revision describes token representation/sentinel/allocator semantics as well as capacities. Increment it whenever equal capacities/bit width can still encode or interpret tokens differently. A capacity raise must call the layout API with its successfully installed capacities and token width. Actor+generic must not exceed world (`<=`: the World keeps registrations beyond the two arenas; uint64 checked), and world must fit the token width. Entity-capacity layouts: revision 1 `{32,224,256,8}` (stock, also the verified capacity-off value), revision 3 `{32,768,1024,10}` (Phase A, contiguous tokens). Keep failed layouts unverified, even if the fallback is retail. The default is retail only when no entity-layout installer participates.
 
 The export startup contributes the refusal and transport sites to the startup transaction, lets installers register effective state, then freezes the record at the very end. Add future installers before that finalization point. Registration after finalization is rejected and closes the gate; it never changes an advertised frozen record. No controller or capacity module edits transport code.
 
@@ -159,3 +159,12 @@ effect paths, supported dependencies and all five transactional writes succeed.
 Effects alone with aiming OFF omit rule 20; invalid aiming values are failed
 requests. OFF bytes remain unchanged. Both peers name disabled known rules in
 refusal messages. Protocol 4, 108-byte framing and durable saves are unchanged.
+
+### Candidate 0.2.3d settings
+
+| [Game] key | XML1 builder | Agreement |
+|---|---|---|
+| BoxHarmOrigin | xml1 | 21 revision 1, requested only |
+| DangerRoomHealthBars | xml1 | 22 revision 1, requested only |
+
+Absent, empty or xml2 omits either rule. Invalid or failed requested installs remain unverified. Both peers must match. HUD dirty-stat refresh/clamp timing parity remains unproved. Versions and content identity remain unchanged from 0.2.3c.

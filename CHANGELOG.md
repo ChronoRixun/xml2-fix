@@ -2,6 +2,11 @@
 
 ## 1.6.0 - unreleased
 
+- **Opening fire (#104 follow-up):** `BoxHarmOrigin=xml1` restores the XBE zero-origin argument for boxed harm. The native victim/attacker fallback replaces the PC box-centre direction and uses the native 0.01 dispatch delay. Damage amounts, bounds and authored repeat intervals remain unchanged. This addresses the opening fire's upward repeated-contact impulse; other boxed hazards need campaign testing. Requested-only gameplay rule **21**, revision 1.
+- **Danger Room robot health bars (tester report):** `DangerRoomHealthBars=xml1` bypasses the protected training-target HUD suppression gate so ordinary attacks can show a decreasing gauge. Protection and course limits remain intact. The newly reachable native HUD path may refresh dirty stats and schedule health clamping; timing parity is unproved, so requested-only gameplay rule **22**, revision 1, covers this behavior.
+- The builder enables both keys for XML1 builds and refuses an existing companion missing either key. Matching verified installs can host/join; absent keys omit their rules, invalid/failed requests block admission, and mismatches name the setting. Ordinary XML2 defaults stay off. Builder 0.2.3 / XML2 Fix 1.6.0, content 20 / catalogue 7 / LC29 and the immutable bind fingerprint are unchanged: this candidate adds runtime switches and documentation, no game-data changes.
+
+
 **Online saved-campaign transfer fixed.** Transient native metadata carries fresh resident tails through co-op saved-campaign transfer; the durable LC save format is unchanged. Gameplay agreement protocol is now 4 (108-byte framing kept): 1.5 and older peers are refused at admission, as before.
 
 Companion engine for Legends Classic 0.2.3. Optional gameplay changes remain off in an ordinary XML2 install.
@@ -12,8 +17,8 @@ Companion engine for Legends Classic 0.2.3. Optional gameplay changes remain off
 - `ObjectWorldImpact=xml1`: zero ordinary landing-impact damage for every no-physical-target collision, as in XML1's coefficient-table entry zero. Physical-target coefficients and authored throw hits retain their native paths. Gameplay rule **17**, revision 1.
 - `NpcPowerRule=xml1`: revision **4** restores per-button combo delays and clamps stale deadlines after clock rewind or AI-slot reuse. OFF keeps released revision 3 in the digest.
 - `StunRule=xml1`: party heroes use original stun playback speed and input recovery, discard refused flags and clear interrupted reactions. Enemy reactions remain native. Gameplay rule **18**, revision 2. This is progress on #101, not complete combat parity.
-- Disabled optional rules 17 through 20 are named in local refusal messages even though they are absent from the OFF record.
-- Rules 17 through 20 register only when requested. Matching verified installs can play online; absent/failed/mismatching rules refuse with their names. The agreement protocol is 4 / 108 bytes (3 and older refused).
+- Disabled optional rules 17 through 22 are named in local refusal messages even though they are absent from the OFF record.
+- Rules 17 through 22 register only when requested. Matching verified installs can play online; absent/failed/mismatching rules refuse with their names. The agreement protocol is 4 / 108 bytes (3 and older refused).
 - LC zone records can retain a verified identical resident prefix across append-only map changes, with the new tail fresh. Runtime readers check opened-map hashes and prefix digests. Missing/stale or ambiguous attestations discard safely. The durable LC format is unchanged; a transient native marker carries the fresh tail through online transfer, see `docs/native-fresh-tail.md`.
 - Optional `[TestMode]`: Forge access and deferred F8 enemy clear, F9 party protection and F10 nearest safe authored-start return. Both switches default off. Either switch refuses online hosting/joining. Tools work without the automation pipe. F8 conservatively protects actors already referenced by scripts; future references and every scripted boss are not certified.
 

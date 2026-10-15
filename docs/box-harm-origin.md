@@ -1,10 +1,9 @@
 # Original box-hazard impact origin
 
 `[Game] BoxHarmOrigin=xml1` restores the original game's origin argument for box
-hazard damage. Absent or `xml2` retains PC behavior. This is an opt-in candidate:
-**it has no assigned gameplay-agreement rule ID and requesting it blocks online
-admission**, including when installation fails. The builder does not enable it
-by default yet. Protocol and save format are unchanged.
+hazard damage. Absent or `xml2` retains PC behavior. Builder XML1 builds enable it by default. Requested-only gameplay rule 21,
+revision 1, admits matching verified installs; invalid or failed requests remain
+unverified, and a mismatch names BoxHarmOrigin. Protocol and save format are unchanged.
 
 ## Problem and original behavior
 

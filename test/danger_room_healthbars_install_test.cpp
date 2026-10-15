@@ -25,6 +25,8 @@ int main(int argc, char** argv)
  assert(VirtualProtect(reinterpret_cast<void*>(site & ~4095u), 4096, old, &old));
  danger_room_healthbars::install(reinterpret_cast<HMODULE>(mode == "base" ? 0x500000 : 0x400000));
  assert(!fatal && danger_room_healthbars::installed() == (mode == "on"));
+ assert(danger_room_healthbars::requested() == (mode != "off" && mode != "xml2"));
+ assert(danger_room_healthbars::verified() == (mode == "off" || mode == "xml2" || mode == "on"));
  const auto& expected = mode == "on" ? p.after : before;
  assert(std::memcmp(reinterpret_cast<void*>(site), expected.data(), expected.size()) == 0);
  assert(logs == ((mode == "off" || mode == "xml2") ? 0 : 1));

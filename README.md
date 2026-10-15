@@ -660,7 +660,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `LevelStatPoints` | (none) | `xml1`: a level divisible by 5 gives (and a level lost takes back) 8 stat points, any other 4: X-Men Legends I's 2 / 1 for heroes whose stats are its x 4 ([details](docs/rank-costs.md)) |
 | `NpcPowerRule` | `xml2` | `xml1`: enemies pay energy for powers, decide every 2 s with at least half energy, use the first game's combos and visibility rules (gameplay rule 16 revision 4; [details](docs/npc-power-rule.md)). Heroes still get stunned more than in the original (Legends Classic issue #101, open). |
 | `ObjectWorldImpact` | `xml2` | `xml1`: zero ordinary landing damage against non-physical targets, as in XML1 (gameplay rule 17 revision 1; [details](docs/object-world-impact.md)). |
-| `BoxHarmOrigin` | `xml2` | Experimental `xml1`: original box-hazard impact origin, preventing the PC centre-based upward-fire impulse. Online is blocked pending gameplay-rule assignment; not enabled by the builder ([evidence and limits](docs/box-harm-origin.md)). |
+| `BoxHarmOrigin` | `xml2` | `xml1`: original boxed-harm zero dispatch origin, correcting the PC centre-based upward-fire impulse. Builder default on; requested-only gameplay rule 21, revision 1 ([evidence and limits](docs/box-harm-origin.md)). |
 | `StunRule` | `xml2` | `xml1`: original party stun playback and input recovery; rejected/interrupted stuns do not resume after get-up. Enemy stuns stay native (gameplay rule 18 revision 2; [details](docs/stun-rule.md)). |
 | `PackAmount` | `xml2` | `xml1`: a health or energy pack restores a quarter of the maximum, as in X-Men Legends I, instead of a third ([details](docs/pack-amount.md)) |
 | `DeathRule` | `xml2` | `xml1`: an entity dies on the hit that leaves it below 1 health, as in X-Men Legends I, instead of only at 0 ([details](docs/death-threshold.md)) |
@@ -671,7 +671,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `ClassicMainBackdrop` | `0` | `1`: the classic main menu's Cerebro room is drawn with its original bright textures ([details](#classic-main-menu-backdrop)) |
 | `ClassicMainPanelBounds` | `0` | `1`: the classic main menu's buttons answer the mouse over their whole visible panels ([details](#classic-main-menu-backdrop)) |
 | `DangerRoomParty` | `xml2` | `xml1`: original Cyclops/Phoenix/Storm/Wolverine fallback for an incomplete non-solo course party (requested-only rule 19 revision 1). |
-| `DangerRoomHealthBars` | `xml2` | `xml1`: show the target health gauge for protected Danger Room training opponents. Changes the HUD only; health, undying protection and course rules are preserved. |
+| `DangerRoomHealthBars` | `xml2` | `xml1`: show the target health gauge for protected Danger Room training opponents. Builder default on; requested-only gameplay rule 22, revision 1. Protection and course limits remain; native dirty-stat refresh/clamp timing parity is unproved. |
 | `Xml1LockOnEffects` | unset | Builder-provided `beam,surface,target` effect paths restore first-game lock-on visuals; targeting stays native ([details](docs/lockon-effects.md)) |
 | `Xml1LockOnAim` | `0` | `1`: use the animated head for lock-on, as in XML1. Requires valid `Xml1LockOnEffects`. Requested-only gameplay rule 20 revision 1; failed requests refuse online admission ([details](docs/lockon-effects.md)) |
 | `Xml1MasterMold` | `0` | `1`: X-Men Legends I's Master Mold fight; needs `Xml1MoldStage` ([details](docs/xml1-controllers.md)) |
