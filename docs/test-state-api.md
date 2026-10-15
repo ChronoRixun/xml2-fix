@@ -59,6 +59,15 @@ The `gameover`/`game_over` menu aliases are **unverified in live play**. Their
 transition event must not be treated as a verified game-over-screen detector.
 Clients can separately report observed party deaths, with that evidence labeled.
 
+For cold saved-campaign tests, use the normal main-menu Load Game action. The
+`loadgame` console command from a fresh main menu bypasses controller setup;
+successful file/native loading can then leave spawned bodies without controller
+assignments. Such bodies are excluded from party binding and saved-position
+placement. This reproduces with otherwise healthy saves in multiple zones.
+An in-campaign console reload is a different entry path. When diagnosing an
+unresolved party, inspect case-insensitive name matches in `actors`: null party
+health is not proof of death, and `on_floor=null` is not proof of a fall.
+
 `script_controls_locked` reads lockControls' game-time deadline (negative means
 indefinite). Navigation and assists must wait while it is true, and may not treat
 an unreadable value as permission to assist. Menu/popup locks remain separate.
