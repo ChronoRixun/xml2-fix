@@ -39,6 +39,7 @@ add_library(xml2_fix SHARED
 	src/multipart.cpp
 	src/mold_query.cpp
 	src/mold_effects.cpp
+	src/lockon_effects.cpp
 	src/xml1_turrets.cpp
 	src/stat_help.cpp
 	src/geometry_sharing.cpp
@@ -370,3 +371,6 @@ target_include_directories(xml2_entity_capacity_test PRIVATE src)
 add_executable(xml2_entity_world_test test/entity_world_test.cpp src/entity_world.cpp)
 target_include_directories(xml2_entity_world_test PRIVATE src)
 target_link_options(xml2_entity_world_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_lockon_effects_test test/lockon_effects_test.cpp)
+target_include_directories(xml2_lockon_effects_test PRIVATE src)

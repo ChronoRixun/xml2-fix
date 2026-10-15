@@ -42,6 +42,7 @@
 #include "script_functions.hpp"
 #include "solo_mode.hpp"
 #include "mold_controller.hpp"
+#include "lockon_effects.hpp"
 #include "multipart.hpp"
 #include "xml1_turrets.hpp"
 #include "game_version.hpp"
@@ -273,6 +274,7 @@ namespace
 		script_functions::install(game);
 		forced_teams::install(game);
 		mold_controller::install(game);
+		lockon_effects::install(game);
 		// XML1 scan turrets ([Game] Xml1Turrets, builder [Xml1Turrets]): one pointer of the native event
 		// scheduler's vtable (its per-frame dispatch); after mold_controller, whose query guards it shares.
 		xml1_turrets::install(game);
