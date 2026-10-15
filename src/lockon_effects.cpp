@@ -5,7 +5,7 @@
 #include "entity_capacity.hpp"
 #include "mold_query_rules.hpp"
 #include "game_version.hpp"
-#include "gameplay_agreement.hpp"
+#include "ini_rules.hpp"
 #include "ini.hpp"
 #include "log.hpp"
 
@@ -17,7 +17,7 @@ namespace {
 using u32=std::uint32_t;
 lockon_effects_rules::paths effects;
 lockon_effects_rules::handle_cache handles;
-bool trace=false;
+bool trace=false, wanted=false, applied=false, hooks_applied=false;
 template<class T>T at(const void* p,u32 off){T v{};std::memcpy(&v,static_cast<const unsigned char*>(p)+off,sizeof v);return v;}
 template<class T>T fn(u32 address){return reinterpret_cast<T>(address);}
 const float* vector(const void* p,u32 off){return reinterpret_cast<const float*>(static_cast<const unsigned char*>(p)+off);}
@@ -79,11 +79,18 @@ bool dependencies(xml1_hook_transaction::memory& memory) {
     return true;
 }
 }
+bool requested() { return wanted; }
+bool installed() { return applied; }
+bool verified() { return !wanted || applied; }
 void install(HMODULE game) {
-    const bool animated_head=ini::flag(L"Game",L"Xml1LockOnAim",false);
-    // The integration owner must assign this gameplay rule. Until then the
-    // existing fail-closed agreement path keeps this opt-in offline.
-    if(animated_head)gameplay_agreement::reject_unregistered_rule("Xml1LockOnAim");
+    if(hooks_applied)return;
+    const auto aim_text=ini::text(L"Game",L"Xml1LockOnAim");
+    const auto aim=ini_rules::flag(aim_text ? std::optional<std::string_view>(*aim_text) : std::nullopt);
+    wanted=aim_text.has_value() && (!aim.has_value() || *aim);
+    if(wanted && !aim.has_value()) {
+        logger::write("lockon effects: invalid aiming option; native behavior retained");return;
+    }
+    const bool animated_head=aim.value_or(false);
     const auto text=ini::text(L"Game",L"Xml1LockOnEffects");
     if(!text||*text=="0") {
         if(animated_head)logger::write("lockon effects: aiming requires valid effect paths; native behavior retained");
@@ -100,8 +107,11 @@ void install(HMODULE game) {
     const auto writes=lockon_effects_rules::plan({address(&lockon_effects_hooks::miss_bridge),address(&lockon_effects_hooks::hit_bridge),
         address(&lockon_effects_hooks::acquired_bridge),address(&lockon_effects_hooks::locked_bridge)},animated_head);
     bool safe=true;
-    if(xml1_hook_transaction::apply(memory,writes,&safe))logger::write("lockon effects: scan, surface and acquired-target emissions restored; head query %s",
-        animated_head?"animated (pending gameplay rule; offline only)":"stock approximate");
+    if(xml1_hook_transaction::apply(memory,writes,&safe)) {
+        hooks_applied=true;applied=animated_head;
+        logger::write("lockon effects: scan, surface and acquired-target emissions restored; head query %s",
+            animated_head?"animated":"stock approximate");
+    }
     else if(safe)logger::write("lockon effects: transaction refused; native behavior retained");
     else {game_version::refuse_startup();logger::write("lockon effects: rollback/protection restoration failed; startup refused");}
 }

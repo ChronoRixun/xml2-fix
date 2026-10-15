@@ -1,6 +1,5 @@
 #include "danger_room_party.hpp"
 #include "danger_room_party_rules.hpp"
-#include "gameplay_agreement.hpp"
 #include "game_version.hpp"
 #include "ini.hpp"
 #include "log.hpp"
@@ -15,14 +14,13 @@ namespace danger_room_party
  }
  bool requested() { return wanted; }
  bool installed() { return applied; }
+ bool verified() { return !wanted || applied; }
  void install(HMODULE game)
  {
   if (applied) return;
   const auto selected = danger_room_party_rules::parse(ini::text(L"Game", L"DangerRoomParty").value_or(""));
   if (selected == danger_room_party_rules::choice::off) return;
   wanted = true;
-  // The integration owner assigns gameplay IDs. Do not negotiate this change as stock.
-  gameplay_agreement::reject_unregistered_rule("DangerRoomParty");
   if (selected != danger_room_party_rules::choice::xml1 || reinterpret_cast<std::uintptr_t>(game) != 0x400000)
   {
    logger::write("danger room party: invalid option or image base; native fallback retained");
@@ -41,6 +39,6 @@ namespace danger_room_party
                       : "danger room party: rollback/protection verification failed; startup refused");
    return;
   }
-  logger::write("danger room party: XML1 four-hero fallback installed; online blocked pending gameplay rule ID assignment");
+  logger::write("danger room party: XML1 four-hero fallback installed");
  }
 }

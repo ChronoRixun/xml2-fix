@@ -12,8 +12,9 @@ namespace gameplay_capabilities
  constexpr std::uint16_t entity_layout_id=1, explosive_first_hit_id=2, master_mold_id=3, turret_controller_id=4,
   rank_costs_id=5, multipart_id=6, x1_leader_id=7, solo_mode_id=8, death_threshold_id=9, xtraction_services_id=10,
   placement_crush_id=11, double_heal_id=12, pack_amount_id=13, script_functions_id=14,
-  death_switch_clear_id=15, npc_power_rule_id=16, object_world_impact_id=17, stun_rule_id=18;
- // Rules 17/18 participate only when requested; OFF preserves the released digest.
+  death_switch_clear_id=15, npc_power_rule_id=16, object_world_impact_id=17, stun_rule_id=18,
+  danger_room_party_id=19, lockon_aim_id=20;
+ // Rules 17..20 participate only when requested; OFF preserves the released digest.
  // 10: the first game's Xtraction services and revival price (xtract::capability; issue #63). Revision 2: the online
  // rule greys Load and the campaign-gated options (revision 1, never released, greyed Load only).
  constexpr std::uint16_t xtraction_services_revision=2;
@@ -57,6 +58,8 @@ namespace gameplay_capabilities
   case npc_power_rule_id: return "NpcPowerRule";
   case object_world_impact_id: return "ObjectWorldImpact";
   case stun_rule_id: return "StunRule";
+  case danger_room_party_id: return "DangerRoomParty";
+  case lockon_aim_id: return "Xml1LockOnAim";
   default: return "a newer rule";
   }
  }
@@ -158,7 +161,7 @@ namespace gameplay_capabilities
      if(used)add(", ");if(ids){number(unsigned(b+1));add(" ");}
      // These requested-only rules are absent when OFF, but this DLL still knows
      // their names. The bucket summary remains advisory; the digest admits peers.
-     if(b+1==object_world_impact_id || b+1==stun_rule_id){add(rule_name(static_cast<std::uint16_t>(b+1)));add(" (disabled on this PC)");}
+     if(b+1==object_world_impact_id || b+1==stun_rule_id || b+1==danger_room_party_id || b+1==lockon_aim_id){add(rule_name(static_cast<std::uint16_t>(b+1)));add(" (disabled on this PC)");}
      else add("a rule this PC does not have");
     }
    }

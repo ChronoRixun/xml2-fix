@@ -374,3 +374,9 @@ target_link_options(xml2_entity_world_test PRIVATE /BASE:0x400000 /DYNAMICBASE:N
 
 add_executable(xml2_lockon_effects_test test/lockon_effects_test.cpp)
 target_include_directories(xml2_lockon_effects_test PRIVATE src)
+
+add_executable(xml2_lockon_effects_install_test test/lockon_effects_install_test.cpp
+    src/lockon_effects.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_lockon_effects_install_test PRIVATE src)
+target_compile_options(xml2_lockon_effects_install_test PRIVATE /UNDEBUG)
+target_link_options(xml2_lockon_effects_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)

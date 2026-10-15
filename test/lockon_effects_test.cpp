@@ -95,8 +95,8 @@ int main(int argc,char** argv) {
     const auto writes=plan({0x600000,0x600100,0x600200,0x600300},true);
     check(writes.size()==5&&writes.back().address==0x4eefb1&&writes.back().before==std::vector<unsigned char>{1}&&writes.back().after==std::vector<unsigned char>{0},"animated head query is part of the same transaction");
     gameplay_capabilities::record pending;
-    pending.invalidate();
-    check(!pending.finalize()&&pending.bytes().empty(),"unassigned aiming rule cannot advertise stock online agreement");
+    pending.add(gameplay_capabilities::lockon_aim_id,1,{0,0,0,0},false);
+    check(!pending.finalize()&&pending.bytes().empty(),"failed aiming rule cannot advertise stock online agreement");
     memory seed;
     for(const auto& p:writes)std::memcpy(seed.data.data()+p.address-0x400000,p.before.data(),p.before.size());
     const auto initial=seed.data;bool safe=false;

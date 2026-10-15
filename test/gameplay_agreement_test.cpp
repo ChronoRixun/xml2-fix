@@ -133,6 +133,20 @@ void records(){
  record future;future.add(17,1,{1,0,0,0},true);future.add(18,stun_rule::revision,{1,0,0,0},true);future.finalize();
  check(future.compare(stun(true,true,stun_rule::revision,true).bytes())==result::match,"later rule 17 registration agrees in either order");
  check(stun(true).compare(future.bytes())==result::entries,"missing future rule 17 is refused, not silently ignored");
+ // New requested-only rules preserve the pre-integration OFF bytes and name both mismatch directions.
+ for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id}) {
+  auto optional=[&](bool wanted,bool verified=true){record r;if(wanted)r.add(id,1,{1,0,0,0},verified);r.finalize();return r;};
+  const auto yes=optional(true),no=optional(false),failed=optional(true,false);
+  check(yes.compare(optional(true).bytes())==result::match,"matching new requested-only rule accepts");
+  check(std::equal(no.bytes().begin(),no.bytes().end(),native.bytes().begin(),native.bytes().end()),"new rule OFF record is byte-identical to base");
+  gameplay_capabilities::difference d;char name[160];
+  check(yes.compare(no.bytes(),&d)==result::entries && no.compare(yes.bytes())==result::entries,"new rule on/off refuses in both directions");
+  yes.describe(d.buckets,d.local_only,false,name,sizeof(name));
+  check(std::string(name)==std::string(gameplay_capabilities::rule_name(id))+" (not on the other PC)","enabled peer names missing new rule");
+  no.describe(d.buckets,0,false,name,sizeof(name));
+  check(std::string(name)==std::string(gameplay_capabilities::rule_name(id))+" (disabled on this PC)","disabled peer names known new rule");
+  check(!failed.ready() && failed.compare(yes.bytes())==result::unavailable && yes.compare(failed.bytes())!=result::match,"failed new request closes host/join");
+ }
  // Rule 16, the NPC power rule ([Game] NpcPowerRule): enemies that pay for powers and decide every 2 s never share a
  // lockstep game with enemies that don't; revision 3 adds the visibility word; absent is {0,0,0,0}, a failed install unverified.
  auto npc=[](bool on,bool verified=true){record r;r.add(2,1,{1,0,0,0},true);r.add(gameplay_capabilities::npc_power_rule_id,npc_power::revision_for(on || !verified),{on ? 1u : 0u,on ? 1u : 0u,0,0},verified);r.finalize();return r;};

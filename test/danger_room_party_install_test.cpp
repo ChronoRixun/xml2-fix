@@ -1,5 +1,6 @@
 #include "danger_room_party.hpp"
 #include "danger_room_party_rules.hpp"
+#include "gameplay_capabilities.hpp"
 #include "ini.hpp"
 #include <cassert>
 #include <iostream>
@@ -39,7 +40,18 @@ int main(int argc, char** argv)
  danger_room_party::install(reinterpret_cast<HMODULE>(mode == "base" ? 0x500000 : 0x400000));
  assert(!fatal);
  assert(danger_room_party::requested() == (mode != "off"));
- assert(refused_online == (mode == "off" ? 0 : 1));
+ assert(refused_online == 0);
+ assert(danger_room_party::verified() == (mode == "off" || mode == "on"));
+ gameplay_capabilities::record agreement;
+ if (danger_room_party::requested())
+  agreement.add(gameplay_capabilities::danger_room_party_id,1,
+   {danger_room_party::installed() ? 1u : 0u,0,0,0},danger_room_party::verified());
+ assert(agreement.finalize() == (mode == "off" || mode == "on"));
+ if (mode == "off")
+ {
+  gameplay_capabilities::record base; base.finalize();
+  assert(std::equal(agreement.bytes().begin(),agreement.bytes().end(),base.bytes().begin(),base.bytes().end()));
+ }
  if (mode == "on")
  {
   assert(danger_room_party::installed());

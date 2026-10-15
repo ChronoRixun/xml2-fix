@@ -1,16 +1,19 @@
 # Changelog
 
-## 1.6.0 - 2026-10-13
+## 1.6.0 - unreleased
 
 **Online saved-campaign transfer fixed.** Transient native metadata carries fresh resident tails through co-op saved-campaign transfer; the durable LC save format is unchanged. Gameplay agreement protocol is now 4 (108-byte framing kept): 1.5 and older peers are refused at admission, as before.
 
 Companion engine for Legends Classic 0.2.3. Optional gameplay changes remain off in an ordinary XML2 install.
 
+- `DangerRoomParty=xml1`: original four-hero fallback for an incomplete non-solo course party, avoiding the absent PC hero/default actor. Gameplay rule **19**, revision 1.
+- `Xml1LockOnEffects=beam,surface,target`: restores the three omitted lock-on visual paths; `Xml1LockOnAim=1` uses the animated head for natural acquisition. Aiming is gameplay rule **20**, revision 1; valid effects and the complete verified transaction are required.
+
 - `ObjectWorldImpact=xml1`: zero ordinary landing-impact damage for every no-physical-target collision, as in XML1's coefficient-table entry zero. Physical-target coefficients and authored throw hits retain their native paths. Gameplay rule **17**, revision 1.
 - `NpcPowerRule=xml1`: revision **4** restores per-button combo delays and clamps stale deadlines after clock rewind or AI-slot reuse. OFF keeps released revision 3 in the digest.
-- `StunRule=xml1`: party heroes discard refused stun flags and clear interrupted reactions; accepted stun duration and enemy reactions remain native. Gameplay rule **18**, revision 1. This is progress on #101, not complete combat parity.
-- Disabled optional rules 17 and 18 are named in local refusal messages even though they are absent from the OFF record.
-- Rules 17 and 18 register only when requested. Matching verified installs can play online; absent/failed/mismatching rules refuse with their names. The agreement protocol is 4 / 108 bytes (3 and older refused).
+- `StunRule=xml1`: party heroes use original stun playback speed and input recovery, discard refused flags and clear interrupted reactions. Enemy reactions remain native. Gameplay rule **18**, revision 2. This is progress on #101, not complete combat parity.
+- Disabled optional rules 17 through 20 are named in local refusal messages even though they are absent from the OFF record.
+- Rules 17 through 20 register only when requested. Matching verified installs can play online; absent/failed/mismatching rules refuse with their names. The agreement protocol is 4 / 108 bytes (3 and older refused).
 - LC zone records can retain a verified identical resident prefix across append-only map changes, with the new tail fresh. Runtime readers check opened-map hashes and prefix digests. Missing/stale or ambiguous attestations discard safely. The durable LC format is unchanged; a transient native marker carries the fresh tail through online transfer, see `docs/native-fresh-tail.md`.
 - Optional `[TestMode]`: Forge access and deferred F8 enemy clear, F9 party protection and F10 nearest safe authored-start return. Both switches default off. Either switch refuses online hosting/joining. Tools work without the automation pipe. F8 conservatively protects actors already referenced by scripts; future references and every scripted boss are not certified.
 

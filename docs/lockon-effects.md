@@ -3,8 +3,7 @@
 The builder supplies `[Game] Xml1LockOnEffects=beam,surface,target`, with three
 extensionless paths relative to `effects/`. Missing, empty or `0` leaves the PC
 handlers untouched. An invalid triple refuses the entire install. The feature
-requires a companion containing this key; its release version is assigned at
-integration.
+requires XML2 Fix 1.6.0 or later.
 
 The Xbox `ch_lockon` update at `0xddf80` emits common effect 19 along the scan,
 20 at a collision, and 21 on an accepted target. `ch_lockedon` at `0xddeb0`
@@ -36,12 +35,12 @@ queries the skeleton. The approximation leaves pitch and roll zero, so the
 retained scan points down rather than following the animated head. This is
 why restoring only the emissions did not restore natural acquisition.
 
-The builder enables both keys. Animated aiming affects target selection and
-requires a **new gameplay rule ID assigned by the integration owner**. None
-is assigned here: `reject_unregistered_rule("Xml1LockOnAim")` makes online
-admission fail closed whenever aiming is requested, including a refused
-install. Offline play remains available. Rule IDs, protocol and save format
-are unchanged. This is an integration blocker, not a release-ready online fix.
+The builder enables both keys. Animated aiming affects target selection under
+requested-only gameplay rule 20, revision 1, installed values `{1,0,0,0}`.
+Missing/invalid paths, unsupported dependencies or a failed transaction leave
+the requested rule unverified and close online admission. Aiming OFF omits the
+entry even with visual bridges enabled, preserving the OFF digest. Protocol 4
+and the durable save format are unchanged.
 Resource handles are loaded once and their native generation is checked before
 each emission. Definitions invalidated by native teardown are reloaded; the
 engine may retain others across a zone change. This also avoids incrementing
@@ -66,4 +65,5 @@ xml2_lockon_effects_test.exe <local-XMen2.exe>
 
 Live coverage distinguishes ordinary AI scan, acquisition, missile, beam and
 gas emissions from staged locked-target and swipe diagnostics. A complete
-ordinary fight and online agreement remain separate acceptance checks.
+ordinary fight remains a separate acceptance check. Production installer and
+agreement tests cover matching, disabled and failed aiming requests.

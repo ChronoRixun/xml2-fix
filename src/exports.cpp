@@ -275,6 +275,9 @@ namespace
 		forced_teams::install(game);
 		mold_controller::install(game);
 		lockon_effects::install(game);
+		if (lockon_effects::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::lockon_aim_id, 1,
+				{lockon_effects::installed() ? 1u : 0u,0,0,0}, lockon_effects::verified());
 		// XML1 scan turrets ([Game] Xml1Turrets, builder [Xml1Turrets]): one pointer of the native event
 		// scheduler's vtable (its per-frame dispatch); after mold_controller, whose query guards it shares.
 		xml1_turrets::install(game);
@@ -404,6 +407,9 @@ namespace
 		placement_crush::install(game);
 		world_impact::install(game);
 		danger_room_party::install(game);
+		if (danger_room_party::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::danger_room_party_id, 1,
+				{danger_room_party::installed() ? 1u : 0u,0,0,0}, danger_room_party::verified());
 		if (world_impact::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::object_world_impact_id, 1,
 				{world_impact::installed() ? 1u : 0u,0,0,0}, world_impact::verified());

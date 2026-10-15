@@ -669,8 +669,9 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `DeathSwitchClear` | `0` | `1`: when the controlled hero dies, the hero given its controller stops the walk its AI had started instead of finishing it with no input, as in X-Men Legends I ([details](docs/death-switch.md)) |
 | `ClassicMainBackdrop` | `0` | `1`: the classic main menu's Cerebro room is drawn with its original bright textures ([details](#classic-main-menu-backdrop)) |
 | `ClassicMainPanelBounds` | `0` | `1`: the classic main menu's buttons answer the mouse over their whole visible panels ([details](#classic-main-menu-backdrop)) |
+| `DangerRoomParty` | `xml2` | `xml1`: original Cyclops/Phoenix/Storm/Wolverine fallback for an incomplete non-solo course party (requested-only rule 19 revision 1). |
 | `Xml1LockOnEffects` | unset | Builder-provided `beam,surface,target` effect paths restore first-game lock-on visuals; targeting stays native ([details](docs/lockon-effects.md)) |
-| `Xml1LockOnAim` | `0` | `1`: use the animated head for lock-on, as in XML1. Requires valid `Xml1LockOnEffects`. Pending an assigned gameplay rule ID, this opt-in blocks online admission ([details](docs/lockon-effects.md)) |
+| `Xml1LockOnAim` | `0` | `1`: use the animated head for lock-on, as in XML1. Requires valid `Xml1LockOnEffects`. Requested-only gameplay rule 20 revision 1; failed requests refuse online admission ([details](docs/lockon-effects.md)) |
 | `Xml1MasterMold` | `0` | `1`: X-Men Legends I's Master Mold fight; needs `Xml1MoldStage` ([details](docs/xml1-controllers.md)) |
 | `Xml1MoldStage` | *(none)* | the saved flag holding that fight's stage, as `flag:first_bit:width`; written by the port's builder |
 | `Xml1Turrets` | `0` | `1`: X-Men Legends I's scan turrets scan, track and fire, from the mod's `[Xml1Turrets]` section (`Count`, `T1`..`T32`, one placement each; written by the port's builder) ([details](docs/xml1-controllers.md)) |

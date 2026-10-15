@@ -48,9 +48,9 @@ IDs:
 | 14 | Script function limit (`[Limits] ScriptFunctions`) | revision 1, `{installed capacity,0,0,0}`: `{0,0,0,0}` with no key and no `[Game] ForcedTeams` (plain XML2 peers match), `{320,0,0,0}` for the game's own limit, `{N,0,0,0}` for an installed raise; a requested raise that didn't install is unverified and closes host/join ([details](script-functions.md#online-and-saves)) |
 | 15 | Death hand-over clears the successor's AI move intent (`[Game] DeathSwitchClear`) | revision 1, `{installed ? 1 : 0,0,0,0}`; absent/off is verified `{0,0,0,0}`; requested but not installed is unverified and closes host/join ([details](death-switch.md)) |
 | 16 | XML1 power use, melee combos and AI visibility (`[Game] NpcPowerRule=xml1`) | revision 4 when requested, `{installed ? 1 : 0,installed ? 1 : 0,0,0}`; revision 4 adds combo press/completion timing; word 1 advertises XML1's visibility geometry and query scheduling; registered in an LC installation or when requested; absent/`xml2` retains released revision 3 with verified `{0,0,0,0}`; requested but not installed (guards, protection, readback, an unknown value) is unverified and closes host/join ([details](npc-power-rule.md)) |
-| 18 | Party-hero stun reaction ownership (`[Game] StunRule=xml1`) | revision 1, `{installed ? 1 : 0,0,0,0}`; registered only when requested; absent/`xml2` omits the entry to preserve the released OFF digest; requested but not installed is unverified ([details](stun-rule.md)) |
+| 18 | Original party-hero stun timing and reaction ownership (`[Game] StunRule=xml1`) | revision 2, `{installed ? 1 : 0,0,0,0}`; registered only when requested; absent/`xml2` omits the entry to preserve the released OFF digest; requested but not installed is unverified ([details](stun-rule.md)) |
 
-IDs 1-4 date from 1.4.0 and 5-16 from 1.5.x (the 0.2.2 wave); 17 is ObjectWorldImpact; 18 is StunRule (both register only when requested). IDs 19..65535 require coordination; 0 and duplicate IDs are refused. Entity layout revision describes token representation/sentinel/allocator semantics as well as capacities. Increment it whenever equal capacities/bit width can still encode or interpret tokens differently. A capacity raise must call the layout API with its successfully installed capacities and token width. Actor+generic must not exceed world (`<=`: the World keeps registrations beyond the two arenas; uint64 checked), and world must fit the token width. Entity-capacity layouts: revision 1 `{32,224,256,8}` (stock, also the verified capacity-off value), revision 3 `{32,768,1024,10}` (Phase A, contiguous tokens). Keep failed layouts unverified, even if the fallback is retail. The default is retail only when no entity-layout installer participates.
+IDs 1-4 date from 1.4.0 and 5-16 from 1.5.x (the 0.2.2 wave); 17 is ObjectWorldImpact; 18 is StunRule (both register only when requested). IDs 19 (DangerRoomParty) and 20 (Xml1LockOnAim) register only when requested, revision 1, values `{installed ? 1 : 0,0,0,0}`. Failed requests are unverified. IDs 21..65535 require coordination; 0 and duplicate IDs are refused. Entity layout revision describes token representation/sentinel/allocator semantics as well as capacities. Increment it whenever equal capacities/bit width can still encode or interpret tokens differently. A capacity raise must call the layout API with its successfully installed capacities and token width. Actor+generic must not exceed world (`<=`: the World keeps registrations beyond the two arenas; uint64 checked), and world must fit the token width. Entity-capacity layouts: revision 1 `{32,224,256,8}` (stock, also the verified capacity-off value), revision 3 `{32,768,1024,10}` (Phase A, contiguous tokens). Keep failed layouts unverified, even if the fallback is retail. The default is retail only when no entity-layout installer participates.
 
 The export startup contributes the refusal and transport sites to the startup transaction, lets installers register effective state, then freezes the record at the very end. Add future installers before that finalization point. Registration after finalization is rejected and closes the gate; it never changes an advertised frozen record. No controller or capacity module edits transport code.
 
@@ -146,22 +146,16 @@ with the reasoning and the residual risk); the agreement is enforced at admissio
 
 Rule 17 is ObjectWorldImpact, revision 1, effective `{installed ? 1 : 0, 0, 0, 0}`; rule 18 is StunRule, revision 2. Both register only when requested. Rule 16 uses revision 4 when requested and released revision 3 when OFF. A failed request remains unverified. `[TestMode]` registers no gameplay rule and refuses online independently. The 108-byte record remains unchanged; protocol 4 adds the native fresh-tail contract above.
 
-Rule 17 is ObjectWorldImpact, revision 1, effective `{installed ? 1 : 0, 0, 0, 0}`; rule 18 is StunRule, revision 1. Both register only when requested. Rule 16 uses revision 4 when requested and released revision 3 when OFF. A failed request remains unverified. `[TestMode]` registers no gameplay rule and refuses online independently. The 108-byte record remains unchanged; protocol 4 adds the native fresh-tail contract above.
 
-### Pending Danger Room party rule
+### Danger Room party and Sentinel aiming
 
-`[Game] DangerRoomParty=xml1` restores the original game's four-character fallback
-for incomplete non-solo course parties. Four guarded default-string pushes in
-the course loader select Cyclops, Phoenix, Storm and Wolverine instead of the PC
-defaults, which can resolve an absent hero to the default actor in the port.
-Sites are `0x4d21d6`, `0x4d223d`, `0x4d22a5`, and `0x4d230d` (five bytes each).
-The shared hook transaction verifies every signature before writing, reads back
-all four writes, restores failures, and refuses startup if rollback or page
-protection cannot be certified.
+`[Game] DangerRoomParty=xml1` restores XML1's four-hero fallback for incomplete
+non-solo course parties. Rule 19 revision 1 uses `{installed ? 1 : 0,0,0,0}`.
+Absent, empty or `xml2` omits the entry; any failed request remains unverified.
 
-This rule has no assigned gameplay ID. A request calls
-`reject_unregistered_rule("DangerRoomParty")`, including invalid/failed requests;
-online admission remains blocked. Missing, empty or `xml2` leaves the existing
-agreement unchanged. Integration must assign an ID, register verified effective
-state and name mismatch refusals before enabling online use. IDs 1-18 and protocol
-4 are unchanged. No durable save-format field is added.
+`[Game] Xml1LockOnAim=1` uses the animated head for lock-on targeting. Rule 20
+revision 1 uses the same installed-state values. It verifies only after valid
+effect paths, supported dependencies and all five transactional writes succeed.
+Effects alone with aiming OFF omit rule 20; invalid aiming values are failed
+requests. OFF bytes remain unchanged. Both peers name disabled known rules in
+refusal messages. Protocol 4, 108-byte framing and durable saves are unchanged.
