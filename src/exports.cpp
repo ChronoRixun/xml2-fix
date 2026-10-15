@@ -22,6 +22,7 @@
 #include "break_rule.hpp"
 #include "placement_crush.hpp"
 #include "world_impact.hpp"
+#include "box_harm.hpp"
 #include "double_heal.hpp"
 #include "xml1_capability_rules.hpp"
 #include "conversations.hpp"
@@ -407,6 +408,7 @@ namespace
 		// death drops, script-spawned props, debris - the first game has no settle at all); no other module hooks it.
 		placement_crush::install(game);
 		world_impact::install(game);
+		box_harm::install(game);
 		danger_room_party::install(game);
 		danger_room_healthbars::install(game);
 		if (danger_room_party::requested())
