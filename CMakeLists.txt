@@ -49,6 +49,7 @@ add_library(xml2_fix SHARED
 	src/double_heal.cpp
 	src/npc_power.cpp
 	src/stun_rule.cpp
+	src/danger_room_party.cpp
 	src/pack_amount.cpp
 	src/exports.cpp
 	src/gamepad_fix.cpp
@@ -140,6 +141,10 @@ target_include_directories(xml2_ladder_paths_test PRIVATE src)
 
 add_executable(xml2_world_impact_test test/world_impact_test.cpp)
 target_include_directories(xml2_world_impact_test PRIVATE src)
+
+add_executable(xml2_danger_room_party_test test/danger_room_party_test.cpp)
+target_include_directories(xml2_danger_room_party_test PRIVATE src)
+target_compile_options(xml2_danger_room_party_test PRIVATE /UNDEBUG)
 
 add_executable(xml2_xml1_controllers_test test/xml1_controllers_test.cpp src/game_version.cpp)
 target_include_directories(xml2_xml1_controllers_test PRIVATE src)
@@ -304,6 +309,11 @@ _fixture_space DB 400000h DUP(0)
 fixture_seg ENDS
 END
 ")
+add_executable(xml2_danger_room_party_install_test test/danger_room_party_install_test.cpp
+    src/danger_room_party.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_danger_room_party_install_test PRIVATE src)
+target_compile_options(xml2_danger_room_party_install_test PRIVATE /UNDEBUG)
+target_link_options(xml2_danger_room_party_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 # TestMode also executes the normal-play reader: reserve its higher menu/name/player globals.
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm"
 ".386

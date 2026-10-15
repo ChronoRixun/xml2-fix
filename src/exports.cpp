@@ -56,6 +56,7 @@
 #include "classic_main_backdrop.hpp"
 #include "classic_main_panels.hpp"
 #include "danger_room_gate.hpp"
+#include "danger_room_party.hpp"
 #include "revival_cost.hpp"
 #include "mod_loader.hpp"
 #include "new_game.hpp"
@@ -400,6 +401,7 @@ namespace
 		// death drops, script-spawned props, debris - the first game has no settle at all); no other module hooks it.
 		placement_crush::install(game);
 		world_impact::install(game);
+		danger_room_party::install(game);
 		if (world_impact::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::object_world_impact_id, 1,
 				{world_impact::installed() ? 1u : 0u,0,0,0}, world_impact::verified());
