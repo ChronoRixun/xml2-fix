@@ -49,6 +49,10 @@ int main(int argc,char** argv) {
  if(mode=="off") {aim.reset();paths.reset();}
  if(mode=="visual")aim="0";
  if(mode=="no-effects")paths.reset();
+ if(mode=="bad-paths")paths="../escape,invented/surface,invented/target";
+ if(mode=="empty-effects")paths="";
+ if(mode=="effects-off")paths="0";
+ if(mode=="both-off") {aim="0";paths="0";}
  if(mode=="invalid")aim="typo";
  if(mode.starts_with("guard")) {
   const auto n=unsigned(mode.back()-'0');assert(n<5);
@@ -61,7 +65,7 @@ int main(int argc,char** argv) {
   before.emplace_back(reinterpret_cast<unsigned char*>(s.address),reinterpret_cast<unsigned char*>(s.address+s.before.size()/2));
  const auto head=*reinterpret_cast<unsigned char*>(0x4eefb1);
  lockon_effects::install(reinterpret_cast<HMODULE>(mode=="base" ? 0x500000 : 0x400000));
- const bool wanted=mode!="off" && mode!="visual",success=mode=="on" || mode=="visual";
+ const bool wanted=mode!="off" && mode!="visual" && mode!="both-off",success=mode=="on" || mode=="visual";
  assert(!fatal && lockon_effects::requested()==wanted);
  assert(lockon_effects::installed()==(mode=="on"));
  assert(lockon_effects::verified()==(!wanted || mode=="on"));
