@@ -145,3 +145,21 @@ with the reasoning and the residual risk); the agreement is enforced at admissio
 ### 1.6 integration
 
 Rule 17 is ObjectWorldImpact, revision 1, effective `{installed ? 1 : 0, 0, 0, 0}`; rule 18 is StunRule, revision 1. Both register only when requested. Rule 16 uses revision 4 when requested and released revision 3 when OFF. A failed request remains unverified. `[TestMode]` registers no gameplay rule and refuses online independently. The 108-byte record remains unchanged; protocol 4 adds the native fresh-tail contract above.
+
+### Pending Danger Room party rule
+
+`[Game] DangerRoomParty=xml1` restores the original game's four-character fallback
+for incomplete non-solo course parties. Four guarded default-string pushes in
+the course loader select Cyclops, Phoenix, Storm and Wolverine instead of the PC
+defaults, which can resolve an absent hero to the default actor in the port.
+Sites are `0x4d21d6`, `0x4d223d`, `0x4d22a5`, and `0x4d230d` (five bytes each).
+The shared hook transaction verifies every signature before writing, reads back
+all four writes, restores failures, and refuses startup if rollback or page
+protection cannot be certified.
+
+This rule has no assigned gameplay ID. A request calls
+`reject_unregistered_rule("DangerRoomParty")`, including invalid/failed requests;
+online admission remains blocked. Missing, empty or `xml2` leaves the existing
+agreement unchanged. Integration must assign an ID, register verified effective
+state and name mismatch refusals before enabling online use. IDs 1-18 and protocol
+4 are unchanged. No durable save-format field is added.
