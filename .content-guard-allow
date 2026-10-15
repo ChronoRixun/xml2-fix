@@ -52,7 +52,7 @@ DISASM  src/rank_costs.cpp  # Authored naked x86 stubs at the skill-point call s
 DISASM  src/solo_mode.cpp  # Authored naked x86 bridges for the solo-mode AI sites; each replays only the few guarded instructions it displaces, described in prose; no game listing or decompiled body.
 DISASM  test/rank_costs_test.cpp  # Authored inline assembly that drives the fix's stubs with the register/stack contract of each site on a synthetic frame; not game disassembly.
 DISASM  test/x1_leader_test.cpp  # Authored inline assembly that calls the leader bridges with a frame shaped like the site's; not game disassembly.
-DISASM  src/stun_rule.cpp  # Authored register-preserving callback bridge; replays only its one guarded current-move assignment. No game listing or decompiled body.
+DISASM  src/stun_rule.cpp  # Authored register-preserving move/expiry bridges; replay only guarded assignment/flag operations. No game listing or decompiled body.
 DISASM  test/stun_rule_test.cpp  # Authored inline assembly driving the fix's bridge on synthetic actors and recording preserved registers/flags; retail routines are read from a user-supplied executable, never embedded.
 DISASM  src/world_impact_bridge.hpp  # Authored x87-balanced impact bridge; replays only the short guarded target classification and heaviness read. No game listing or decompiled body.
 DISASM  test/world_impact_test.cpp  # Authored synthetic caller/continuation exercising the impact bridge's stack and x87 contract; no game disassembly.

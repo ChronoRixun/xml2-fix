@@ -14,8 +14,16 @@ namespace stun_rule
   using u32 = std::uint32_t;
   bool wanted = false, applied = false;
   const u32 set_move_resume = stun_rules::set_move_resume;
+  const u32 expire_resume = stun_rules::expire_resume, expire_done = stun_rules::expire_done;
   template<class T> T& field(void* p, std::size_t offset)
   { return *reinterpret_cast<T*>(static_cast<unsigned char*>(p) + offset); }
+  bool __cdecl party(void* actor)
+  { return stun_rules::party_hero(field<u32>(actor, 4), field<int>(actor, 0x3d4)); }
+  void* resolved_stun(void* actor)
+  {
+   using resolve_t = void* (__thiscall*)(void*, const u32*);
+   return reinterpret_cast<resolve_t>(stun_rules::resolve_move)(actor, reinterpret_cast<const u32*>(stun_rules::stun_name));
+  }
 
   void __cdecl settle_flag(void* actor, void* move)
   {
@@ -31,13 +39,57 @@ namespace stun_rule
    flags = stun_rules::reaction_flags(flags, hero, stunned);
   }
 
-  // Wrap only this powerup's request. Native dispatch keeps every priority, duration and refresh decision.
-  // If it refuses the move, XML1 never enters ch_stun and therefore never owns a stun flag.
+  // Keep native priority/refresh dispatch, with XML1's animation-speed argument for party heroes.
   void __fastcall request_stun(void* actor, void*, void* move, u32 animation, float speed, u32 a, u32 b, u32 c)
   {
    using dispatch_t = void(__fastcall*)(void*, void*, void*, u32, float, u32, u32, u32);
+   if (party(actor)) speed = stun_rules::reaction_speed(speed, field<float>(actor, 0x520));
    reinterpret_cast<dispatch_t>(stun_rules::native_dispatch)(actor, nullptr, move, animation, speed, a, b, c);
    settle_flag(actor, field<void*>(actor, 0x378));
+  }
+
+  // Called only after the native input lock and pending-chain gates. XML1's ch_stun chooses the
+  // current move's idle action once its animation unlocks; attack/smash press also satisfies its clock test.
+  bool __fastcall move_input(void* move, void*, void* actor, void* input)
+  {
+   if (party(actor) && move == resolved_stun(actor)) {
+    using clock_t = float(__cdecl*)();
+    if (!stun_rules::release_input(field<float>(actor, 0x27c), field<u32>(input, 4),
+        reinterpret_cast<clock_t>(stun_rules::clock)(), field<float>(actor, 0x5e8))) return false;
+    using action_t = void*(__thiscall*)(void*, u32);
+    void* next = reinterpret_cast<action_t>(stun_rules::resolve_action)(actor, 0);
+    field<void*>(actor, 0x3bc) = next;
+    // Native playmove enters the new handler before its final current-move assignment. XML1's
+    // old ch_stun exits first; without this clear PC's idle entry redirects straight back to stun.
+    if (next && next != move) field<std::uint8_t>(actor, 0x765) &= 0xfe;
+    return true;
+   }
+   using input_t = bool(__thiscall*)(void*, void*, void*);
+   const auto vtable = field<input_t*>(move, 0);
+   return vtable[0x48 / sizeof(void*)](move, actor, input);
+  }
+
+  // A PC powerup's expiry cannot end a move-owned stun (or clear a later stun's flag).
+  // The surrounding native callback still resolves the victim and retains its missing-victim path.
+  __declspec(naked) void expire_hook()
+  {
+   __asm {
+    pushfd
+    pushad
+    push edi
+    call party
+    add esp, 4
+    test al, al
+    jz native_expiry
+    popad
+    popfd
+    jmp dword ptr [expire_done]
+   native_expiry:
+    popad
+    popfd
+    and byte ptr [edi + 0x765], 0xfe
+    jmp dword ptr [expire_resume]
+   }
   }
 
   // At the final assignment, EDI is the actor and ESI the resolved non-null move (including idle fallback).
@@ -90,9 +142,13 @@ namespace stun_rule
   }
   const auto& call = stun_rules::guards[0];
   const auto& setter = stun_rules::guards[1];
+  auto input = stun_rules::branch(stun_rules::input_call + 1, &move_input, true, 5);
+  input.insert(input.begin(), 0x56); // push esi: actor, after the existing push edi: input
   const std::vector<xml1_hook_transaction::patch> writes{
    {call.va, {0xe8, 0x0c, 0x7f, 0xee, 0xff}, stun_rules::branch(call.va, &request_stun, true, 5)},
    {setter.va, {0x89, 0xb7, 0x78, 0x03, 0x00, 0x00}, stun_rules::branch(setter.va, &set_move_hook, false, 6)},
+   {stun_rules::input_call, {0x8b, 0x01, 0x56, 0xff, 0x50, 0x48}, input},
+   {stun_rules::expire_flag, {0x80, 0xa7, 0x65, 0x07, 0x00, 0x00, 0xfe}, stun_rules::branch(stun_rules::expire_flag, &expire_hook, false, 7)},
   };
   bool safe = true;
   applied = xml1_hook_transaction::apply(memory, writes, &safe);
@@ -102,6 +158,6 @@ namespace stun_rule
                       : "stun rule: rollback/protection verification failed; process startup refused");
    return;
   }
-  logger::write("stun rule: [Game] StunRule=xml1; party heroes discard rejected stun flags and clear them on reaction exit (rule 18 revision 1)");
+  logger::write("stun rule: [Game] StunRule=xml1; party stun uses original animation speed, input recovery and reaction ownership (rule 18 revision 2)");
  }
 }
