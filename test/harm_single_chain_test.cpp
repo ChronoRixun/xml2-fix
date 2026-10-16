@@ -116,6 +116,8 @@ int main(int argc,char** argv)
 	check(!harm_single_chain::requested() && !harm_single_chain::installed() && untouched() && harm_single_chain::verified(),"absent key preserves code and online agreement");
 	setting="off";harm_single_chain::install(GetModuleHandleW(nullptr));
 	check(!harm_single_chain::requested() && untouched() && harm_single_chain::verified(),"explicit native mode preserves code and agreement");
+	setting="xml2";harm_single_chain::install(GetModuleHandleW(nullptr));
+	check(!harm_single_chain::requested() && untouched() && harm_single_chain::verified(),"xml2 profile word preserves code and agreement");
 	setting="invalid";harm_single_chain::install(GetModuleHandleW(nullptr));
 	check(harm_single_chain::requested() && !harm_single_chain::installed() && untouched() && !harm_single_chain::verified(),"invalid request changes no code and remains unverified");
 	setting="single";harm_single_chain::install(reinterpret_cast<HMODULE>(0x500000));

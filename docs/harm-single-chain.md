@@ -4,7 +4,7 @@
 a qualifying fire schedules its next repeat. Absent or `off` keeps stock
 behavior. This is an explicit alternative policy, **not proven XBE parity**.
 It is gameplay-agreement **rule 23, revision 1**, registered only when requested
-(values `{installed ? 1 : 0,0,0,0}`). Absent, empty or `off` omits the rule and
+(values `{installed ? 1 : 0,0,0,0}`). Absent, empty, `off` or `xml2` omits the rule and
 keeps the released OFF digest. A failed or invalid request stays unverified and
 blocks admission; a mismatched peer is refused naming `HarmSingleChain`. The
 builder writes `single` by default for XML1 builds. Rule 21 (BoxHarmOrigin) is a

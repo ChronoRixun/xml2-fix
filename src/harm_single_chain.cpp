@@ -23,7 +23,7 @@ namespace harm_single_chain
 	{
 		using namespace harm_single_chain_rules;
 		const auto setting = ini::text(L"Game",L"HarmSingleChain").value_or("");
-		if (setting.empty() || setting == "off") return;
+		if (setting.empty() || setting == "off" || setting == "xml2") return;
 		state = 0;
 		// A requested policy (rule 23, separate from BoxHarmOrigin rule 21) is registered
 		// by exports.cpp with its verified installed state: a refused or invalid request
