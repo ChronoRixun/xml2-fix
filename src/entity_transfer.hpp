@@ -14,8 +14,12 @@ namespace entity_transfer
 {
 	// JMP adapter for 0x6100e8, after the native reliable sequence-window check.
 	void reliable_receive_room();
-	using backpressure_observer = void(*)(std::uint16_t expected, std::uint16_t sequence, std::uint32_t large_used, std::uint32_t headers_used);
+	void outgoing_room();
+	void __cdecl transport_maintenance(void* managers);
+	using backpressure_observer = void(*)(std::uint16_t expected, std::uint16_t sequence, entity_capacity_rules::message_pools used);
+	using failure_observer = void(*)(const char* reason, entity_capacity_rules::message_pools used);
 	void observe_backpressure(backpressure_observer);
+	void observe_failure(failure_observer);
 	std::uint32_t backpressure_count();
 	struct observer
 	{

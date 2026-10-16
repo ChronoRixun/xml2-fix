@@ -81,15 +81,50 @@ namespace entity_capacity_rules
 	struct transfer_profile { std::uint32_t payload, wrapper, description, flag; };
 	constexpr transfer_profile retail_transfer{0x2fc00, 0x2fc78, 0x2fc04, 0x2fc44};
 	constexpr transfer_profile e10a2_transfer{0x200000, 0x200078, 0x200004, 0x200044};
-	// The reliable queue shares 768 message headers and only 50 bodies above 60 bytes. Leave one of each for
-	// the missing in-order message: otherwise an out-of-order backlog can prevent its own gap from ever closing.
+	// All four pools are shared with sends and other native lists. Future receives leave gap capacity;
+	// sends reserve it too. This is admission control, not a promise that unrelated native users cannot
+	// consume the reserve: the runtime also bounds a pressure stall and fails the session at a safe boundary.
+	struct message_pools { std::uint32_t large, headers, small, nodes; };
 	constexpr bool reliable_queue_room(std::uint16_t expected, std::uint16_t sequence, std::uint32_t body_bytes,
-	                                   std::uint32_t large_used, std::uint32_t headers_used)
+	                                   message_pools used)
 	{
-		const bool next = expected == sequence;
-		return headers_used < (next ? 768u : 767u) &&
-		       (body_bytes <= 60 || large_used < (next ? 50u : 49u));
+		const unsigned reserve = expected == sequence ? 0 : 1;
+		return used.headers < 768 - reserve && used.nodes < 650 - reserve &&
+		       (body_bytes <= 60 ? used.small < 768 - reserve : used.large < 50 - reserve);
 	}
+	constexpr bool outgoing_queue_room(std::uint32_t bytes, bool has_body, message_pools used)
+	{
+		// Native fragmentation first queues a six-byte descriptor, then ceil(bytes/300) chunks.
+		// A chunk has a one-byte fragment tag; even a 60-byte tail therefore uses a large body.
+		unsigned headers = 1, small = has_body && bytes <= 60 ? 1 : 0, large = has_body && bytes > 60 ? 1 : 0;
+		if (bytes > 300)
+		{
+			const auto full = bytes / 300, tail = bytes % 300;
+			headers = 1 + full + (tail != 0);
+			small = 1 + (tail != 0 && tail < 60);
+			large = full + (tail >= 60);
+		}
+		return used.headers < 768 && headers < 768 - used.headers &&
+		       used.nodes < 650 && headers < 650 - used.nodes &&
+		       (small == 0 || (used.small < 768 && small < 768 - used.small)) &&
+		       (large == 0 || (used.large < 50 && large < 50 - used.large));
+	}
+	struct pressure_deadline
+	{
+		static constexpr std::uint64_t limit_ms = 30000;
+		bool active = false;
+		std::uint16_t expected = 0;
+		std::uint64_t since = 0;
+		void block(std::uint16_t next, std::uint64_t now)
+		{
+			if (!active || expected != next) { active = true; expected = next; since = now; }
+		}
+		bool expired(std::uint16_t next, std::uint64_t now)
+		{
+			if (active && expected != next) active = false;
+			return active && now - since >= limit_ms;
+		}
+	};
 	enum class transfer_verdict { accept, complete, no_buffer, too_long, overflow, short_before_end };
 	constexpr const char* transfer_verdict_text(transfer_verdict v)
 	{
@@ -210,18 +245,22 @@ namespace entity_capacity_rules
 
 	// Guards the ledger's region hashes do not cover but the ports depend on.
 	struct extra_guard { std::uint32_t va; std::string_view hex; const char* what; };
-	inline constexpr std::array<extra_guard, 3> extra_guards{{
+	inline constexpr std::array<extra_guard, 5> extra_guards{{
 		{0x614280, "8d411cc3", "CEntityGrid slot 8 body (lea eax,[ecx+0x1c]; ret) outside the grid region"},
 		{0x44ea40, "8b44240c8b542404", "CCollide vtable slot 3 (0x44ea40) entry: replaced whole (plan section 10, deviation 1)"},
 		{0x6100e8, "53668b5e08", "reliable receive: before header/body allocation"},
+		{0x60f642, "8a4f0e84c9", "outgoing enqueue: before any allocation"},
+		{0x60a880, "8b4c240485c9", "transport maintenance: safe deferred failure boundary"},
 	}};
 	// Sites the implementation adds to the reviewed ledger (plan section 10): CCollide vtable slot 3 (0x44ea40) forwards
 	// a caller's entity set into 0x44d940, whose two failure paths clear only eight dwords of it; the frame is replaced
 	// whole like the twelve enumerated physics frames. Its body (0x44ea40..0x44eaf6) is hashed like the other regions.
 	struct extra_relocation { std::uint32_t va; std::string_view old_hex, prefix_hex; std::string_view symbol; std::uint8_t pad; const char* role; };
-	inline constexpr std::array<extra_relocation, 2> extra_relocations{{
+	inline constexpr std::array<extra_relocation, 4> extra_relocations{{
 		{0x44ea40, "8b44240c8b542404", "e9", "entity_capacity::Physics_0044ea40", 3, "CCollide slot 3: complete frame replacement with a 128-byte set clear"},
 		{0x6100e8, "53668b5e08", "e9", "entity_capacity::ReliableReceiveRoom", 0, "reliable receive: reserve gap capacity and defer full datagrams before ACK"},
+		{0x60f642, "8a4f0e84c9", "e9", "entity_capacity::OutgoingRoom", 0, "outgoing enqueue: preflight all fragments and shared pools"},
+		{0x60a880, "8b4c240485c9", "e9", "entity_capacity::TransportMaintenance", 1, "transport maintenance: bounded pressure failure outside dispatch"},
 	}};
 	// Literal sites the reviewed ledger missed (plan section 10, deviation 19). 0x484c76 is the zone manager loader's
 	// read of the last side frame's four party names, `lea eax,[edi+edx+0x1ae0c]` = manager + 0x1ad68 (the side frame)
@@ -241,13 +280,23 @@ namespace entity_capacity_rules
 		{0x4f7570, 0x500450, "the 0x1aefc-byte object (fields 0x1aec0..0x1aefc), not the save manager"},
 	}};
 	struct extra_region { const char* name; std::uint32_t lo, hi_exclusive; std::string_view sha256; };
-	inline constexpr std::array<extra_region, 7> extra_regions{{
+	inline constexpr std::array<extra_region, 17> extra_regions{{
 		{"physics slot 3 (0x44ea40)", 0x44ea40, 0x44eaf6, "629c487136d717b8751b749df1f7fcc9724146f6864e51b77eaf45d142a17e7e"},
 		{"reliable receive wrapper", 0x6100b0, 0x6101af, "b9c5891b893d9e40d09d01f21aead69e87fb38a155e0a787b1182d3a9e45244f"},
 		{"reliable datagram parser", 0x60dca0, 0x60de27, "9ff3b92457b79f589aa9043d9e72139864f80d351ca34793e4459c977688f9be"},
-		{"queued datagram ACK ordering", 0x60f940, 0x60fdf2, "70ad7edac2247083a7961d4bb14c16e6eaa7ff16a828abc1f914395bbbd6436d"},
+		{"queued datagram ACK ordering", 0x60f940, 0x60fdf4, "4a670d5ae79d600bd0d4b09ea8fc6904cae97a9c02e3d31ce588f4c74b60601b"},
 		{"message cache accessor", 0x60f240, 0x60f27a, "78ed02d98e1a87fb945b06ac23333f861a7194314486499152f16b0e2f7ab2da"},
-		{"large-message allocator", 0x60e910, 0x60e971, "3ff8e18fb4e97f90f5bce6bfed2e31ec28d7211bdd28f920c4bdc831864eaccc"},
+		{"large-message allocator", 0x60e910, 0x60e973, "fd37209d13e6fb0596154f5c076964600840caf6fbb1f82bb5b8b03179fb0884"},
 		{"message-header allocator", 0x60e740, 0x60e7c9, "6d3aef70f7c79414198d9ae1eb8f55ed5560ba55b4208ebb17dec17da2231f82"},
+		{"shared queue-node accessor", 0x6067d0, 0x606840, "83b0bbcf1149c75d970ae09ab17339cc4f38af470bce933bef5d9ebe8fe734fc"},
+		{"shared queue-node allocator", 0x60e7d0, 0x60e82b, "8160ab528998f74b6b15686159ed42bbc978c6461a2c2259e13d8dbf97770d27"},
+		{"shared queue-node ring allocation", 0x605740, 0x6057a2, "a4e8d6de9e72c94c04d812e564260afba942375fafb874601c16a4b7fc8fe6f6"},
+		{"outgoing message enqueue", 0x60f620, 0x60f933, "e774b655b938b459802f5d39891c1866a9ebaad4ef5689ba32a60ca9fcc3f608"},
+		{"outgoing message copy", 0x615840, 0x6158d2, "f98018c8f54621f94a47241654c7f16516d820dcdf86543ed9e51fab34f69f6e"},
+		{"transport maintenance callback", 0x60a880, 0x60a8a9, "fc1e1a03a7b39dcfc48819250e2cfd615f291ece67ce79b08eec4e607075d825"},
+		{"campaign context accessor", 0x6097b0, 0x6097ea, "f728e0c5720a0c4e8a49786db01824aa62a89a7a83b12fc6301154090c9a85ae"},
+		{"connection failure callback", 0x609ad0, 0x609b00, "08e532aea2606cb2e42f67f10114292c174e67a4ccfa31a6c36e6de71d39ea2d"},
+		{"connection failure presentation", 0x609b30, 0x609b77, "21e3f9a0fb11d911ef88f23bade980c9a0cb344831fb06d0d353cd068082d110"},
+		{"small-body and header ring allocation", 0x60e090, 0x60e167, "61c5991594ddc123e4d11ab11fb8946f7ac8d6fcce3de8a95bd20b87ea0f07c8"},
 	}};
 }

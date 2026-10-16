@@ -205,10 +205,15 @@ namespace entity_capacity
 		{
 			logger::write("entity capacity: native campaign transfer: the game's pool refused a %lu-byte wrapper", static_cast<unsigned long>(size));
 		}
-		void transfer_backpressure(std::uint16_t expected, std::uint16_t sequence, std::uint32_t large_used, std::uint32_t headers_used)
+		void transfer_backpressure(std::uint16_t expected, std::uint16_t sequence, message_pools used)
 		{
-			logger::write_once("native-reliable-backpressure", "entity capacity: reliable receive deferred before ACK (expected %u, sequence %u, large bodies %u/50, headers %u/768); sender will retry",
-			                  unsigned(expected), unsigned(sequence), large_used, headers_used);
+			logger::write_once("native-reliable-backpressure", "entity capacity: reliable receive deferred before ACK (expected %u, sequence %u, large bodies %u/50, headers %u/768, small bodies %u/768, nodes %u/650); sender will retry",
+			                  unsigned(expected), unsigned(sequence), used.large, used.headers, used.small, used.nodes);
+		}
+		void transport_failed(const char* reason, message_pools used)
+		{
+			logger::write("online: shared message pool pressure: %s (large %u/50, headers %u/768, small %u/768, nodes %u/650); ending this session safely",
+			              reason, used.large, used.headers, used.small, used.nodes);
 		}
 		std::uint32_t __cdecl ReceiveNativeCampaign(std::uint8_t* event)
 		{
@@ -262,6 +267,8 @@ namespace entity_capacity
 			bind("entity_capacity::RestoreFactoryResult", address_of(reinterpret_cast<const void*>(&RestoreFactoryResult)));
 			bind("entity_capacity::ReceiveNativeCampaign", address_of(reinterpret_cast<const void*>(&ReceiveNativeCampaign)));
 			bind("entity_capacity::ReliableReceiveRoom", address_of(reinterpret_cast<const void*>(&entity_transfer::reliable_receive_room)));
+			bind("entity_capacity::OutgoingRoom", address_of(reinterpret_cast<const void*>(&entity_transfer::outgoing_room)));
+			bind("entity_capacity::TransportMaintenance", address_of(reinterpret_cast<const void*>(&entity_transfer::transport_maintenance)));
 			bind("entity_capacity::WorldGet", address_of(reinterpret_cast<const void*>(&WorldGet)));
 			bind("entity_capacity::GridGet", address_of(reinterpret_cast<const void*>(&GridGet)));
 			bind("entity_capacity::QueryManagerGet", address_of(reinterpret_cast<const void*>(&QueryManagerGet)));
@@ -337,7 +344,8 @@ namespace entity_capacity
 				published = prepared_descriptor;
 				install_published = true;
 				entity_transfer::observe_backpressure(&transfer_backpressure);
-				logger::write("entity capacity: reliable receive reserves gap capacity and defers full datagrams before ACK");
+				entity_transfer::observe_failure(&transport_failed);
+				logger::write("entity capacity: shared message pools reserve receive capacity; sends preflight fragments; pressure stalls end safely after 30 seconds");
 				gameplay_agreement::register_entity_layout(layout_revision_raised, raised_actors, raised_generic, raised_world, raised_index_bits, true);
 				logger::write("entity capacity: installed - actor %u / generic %u / world %u, %zu literal edits, %zu relocations, GCAP layout rule 1 revision %u",
 				              published.actors, published.generic, published.world, literal_sites.size(), relocation_sites.size(), unsigned(layout_revision_raised));
