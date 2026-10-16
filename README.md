@@ -147,6 +147,10 @@ rules, and a refusal names the setting that differs on both PCs. Protocol revisi
 requires [fresh-tail campaign transfer](docs/native-fresh-tail.md); protocol 3 and older peers are refused as another
 build before native admission. The record and its rules: [docs/gameplay-agreement.md](docs/gameplay-agreement.md).
 
+With raised entity capacity, [saved-campaign receive backpressure](docs/online-campaign-transfer.md) prevents a full
+native message pool from acknowledging campaign data it could not store. The stock send rate remains unchanged:
+a transfer that is still advancing can take several minutes. Save formats and agreement records are unchanged.
+
 **Diagnosing online problems:** add this to `xml2-fix.ini` and `xml2-fix.log` will list every connection and query the game makes:
 
 ```ini

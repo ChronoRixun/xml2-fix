@@ -81,6 +81,15 @@ namespace entity_capacity_rules
 	struct transfer_profile { std::uint32_t payload, wrapper, description, flag; };
 	constexpr transfer_profile retail_transfer{0x2fc00, 0x2fc78, 0x2fc04, 0x2fc44};
 	constexpr transfer_profile e10a2_transfer{0x200000, 0x200078, 0x200004, 0x200044};
+	// The reliable queue shares 768 message headers and only 50 bodies above 60 bytes. Leave one of each for
+	// the missing in-order message: otherwise an out-of-order backlog can prevent its own gap from ever closing.
+	constexpr bool reliable_queue_room(std::uint16_t expected, std::uint16_t sequence, std::uint32_t body_bytes,
+	                                   std::uint32_t large_used, std::uint32_t headers_used)
+	{
+		const bool next = expected == sequence;
+		return headers_used < (next ? 768u : 767u) &&
+		       (body_bytes <= 60 || large_used < (next ? 50u : 49u));
+	}
 	enum class transfer_verdict { accept, complete, no_buffer, too_long, overflow, short_before_end };
 	constexpr const char* transfer_verdict_text(transfer_verdict v)
 	{
@@ -201,16 +210,18 @@ namespace entity_capacity_rules
 
 	// Guards the ledger's region hashes do not cover but the ports depend on.
 	struct extra_guard { std::uint32_t va; std::string_view hex; const char* what; };
-	inline constexpr std::array<extra_guard, 2> extra_guards{{
+	inline constexpr std::array<extra_guard, 3> extra_guards{{
 		{0x614280, "8d411cc3", "CEntityGrid slot 8 body (lea eax,[ecx+0x1c]; ret) outside the grid region"},
 		{0x44ea40, "8b44240c8b542404", "CCollide vtable slot 3 (0x44ea40) entry: replaced whole (plan section 10, deviation 1)"},
+		{0x6100e8, "53668b5e08", "reliable receive: before header/body allocation"},
 	}};
 	// Sites the implementation adds to the reviewed ledger (plan section 10): CCollide vtable slot 3 (0x44ea40) forwards
 	// a caller's entity set into 0x44d940, whose two failure paths clear only eight dwords of it; the frame is replaced
 	// whole like the twelve enumerated physics frames. Its body (0x44ea40..0x44eaf6) is hashed like the other regions.
 	struct extra_relocation { std::uint32_t va; std::string_view old_hex, prefix_hex; std::string_view symbol; std::uint8_t pad; const char* role; };
-	inline constexpr std::array<extra_relocation, 1> extra_relocations{{
+	inline constexpr std::array<extra_relocation, 2> extra_relocations{{
 		{0x44ea40, "8b44240c8b542404", "e9", "entity_capacity::Physics_0044ea40", 3, "CCollide slot 3: complete frame replacement with a 128-byte set clear"},
+		{0x6100e8, "53668b5e08", "e9", "entity_capacity::ReliableReceiveRoom", 0, "reliable receive: reserve gap capacity and defer full datagrams before ACK"},
 	}};
 	// Literal sites the reviewed ledger missed (plan section 10, deviation 19). 0x484c76 is the zone manager loader's
 	// read of the last side frame's four party names, `lea eax,[edi+edx+0x1ae0c]` = manager + 0x1ad68 (the side frame)
@@ -230,7 +241,13 @@ namespace entity_capacity_rules
 		{0x4f7570, 0x500450, "the 0x1aefc-byte object (fields 0x1aec0..0x1aefc), not the save manager"},
 	}};
 	struct extra_region { const char* name; std::uint32_t lo, hi_exclusive; std::string_view sha256; };
-	inline constexpr std::array<extra_region, 1> extra_regions{{
+	inline constexpr std::array<extra_region, 7> extra_regions{{
 		{"physics slot 3 (0x44ea40)", 0x44ea40, 0x44eaf6, "629c487136d717b8751b749df1f7fcc9724146f6864e51b77eaf45d142a17e7e"},
+		{"reliable receive wrapper", 0x6100b0, 0x6101af, "b9c5891b893d9e40d09d01f21aead69e87fb38a155e0a787b1182d3a9e45244f"},
+		{"reliable datagram parser", 0x60dca0, 0x60de27, "9ff3b92457b79f589aa9043d9e72139864f80d351ca34793e4459c977688f9be"},
+		{"queued datagram ACK ordering", 0x60f940, 0x60fdf2, "70ad7edac2247083a7961d4bb14c16e6eaa7ff16a828abc1f914395bbbd6436d"},
+		{"message cache accessor", 0x60f240, 0x60f27a, "78ed02d98e1a87fb945b06ac23333f861a7194314486499152f16b0e2f7ab2da"},
+		{"large-message allocator", 0x60e910, 0x60e971, "3ff8e18fb4e97f90f5bce6bfed2e31ec28d7211bdd28f920c4bdc831864eaccc"},
+		{"message-header allocator", 0x60e740, 0x60e7c9, "6d3aef70f7c79414198d9ae1eb8f55ed5560ba55b4208ebb17dec17da2231f82"},
 	}};
 }

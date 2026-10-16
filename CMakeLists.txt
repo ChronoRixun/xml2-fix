@@ -345,6 +345,19 @@ add_executable(xml2_entity_transfer_test test/entity_transfer_test.cpp "${CMAKE_
 target_include_directories(xml2_entity_transfer_test PRIVATE src)
 target_link_options(xml2_entity_transfer_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/reliable_receive_fixture.asm"
+".386
+.MODEL FLAT
+fixture_seg SEGMENT PARA PUBLIC 'CODE' ALIAS('.text$a')
+PUBLIC _fixture_space
+_fixture_space DB 700000h DUP(0)
+fixture_seg ENDS
+END
+")
+add_executable(xml2_reliable_receive_test test/reliable_receive_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/reliable_receive_fixture.asm" src/entity_transfer.cpp src/patch_transaction.cpp)
+target_include_directories(xml2_reliable_receive_test PRIVATE src)
+target_link_options(xml2_reliable_receive_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
 add_executable(xml2_stun_rule_test test/stun_rule_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/stun_rule.cpp)
 target_include_directories(xml2_stun_rule_test PRIVATE src)
 target_link_options(xml2_stun_rule_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)

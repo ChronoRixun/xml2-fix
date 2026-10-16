@@ -2,6 +2,7 @@
 #include "entity_capacity_layout.hpp"
 
 #include <cstring>
+#include <atomic>
 
 namespace entity_transfer
 {
@@ -10,11 +11,64 @@ namespace entity_transfer
 
 	namespace
 	{
+		const std::uint32_t native_reliable_continue = 0x6100ed;
+		std::atomic<std::uint32_t> deferred{0};
+		backpressure_observer pressure_observer = nullptr;
+		bool __cdecl reliable_prepare(std::uint8_t* event)
+		{
+			const auto length = *reinterpret_cast<const std::uint16_t*>(event + 8);
+			// Keep the native malformed-length handling. This guard concerns valid messages that cannot fit now.
+			if (length < 2 || length > 327) return true;
+			const auto* body = *reinterpret_cast<const std::uint8_t**>(event + 4);
+			auto* peer = *reinterpret_cast<std::uint8_t**>(event + 0x10);
+			const auto sequence = *reinterpret_cast<const std::uint16_t*>(body + 1);
+			const auto expected = *reinterpret_cast<const std::uint16_t*>(peer + 0x308c);
+			const auto* cache = static_cast<const std::uint8_t*>(native<void*(__cdecl*)()>(0x60f240)());
+			const auto large_used = *reinterpret_cast<const std::uint32_t*>(cache + 0x149a8);
+			const auto headers_used = *reinterpret_cast<const std::uint32_t*>(cache + 0x48d0);
+			if (reliable_queue_room(expected, sequence, length - 2u, large_used, headers_used)) return true;
+			// Return 2 stops 0x60dca0 before the trailing 0x0a ACK request. Discard this pending datagram batch;
+			// already queued messages remain intact and duplicates on retransmission use the native sequence checks.
+			*reinterpret_cast<std::uint8_t**>(peer + 0x1e98) = peer + 0x52e;
+			deferred.fetch_add(1);
+			if (pressure_observer) pressure_observer(expected, sequence, large_used, headers_used);
+			return false;
+		}
 		const std::uint32_t native_615810 = 0x615810, native_55d7e0 = 0x55d7e0, native_612be0 = 0x612be0, native_610f30 = 0x610f30;
 		using free_buffer_t = void(__cdecl*)(void*);
 		using pool_alloc_t = void*(__cdecl*)(std::uint32_t, std::uint32_t);
 		using difficulty_getter_t = void*(__cdecl*)();
 		using difficulty_t = void(__fastcall*)(void*, void*, std::uint32_t);
+	}
+
+	void observe_backpressure(backpressure_observer o) { pressure_observer = o; }
+	std::uint32_t backpressure_count() { return deferred.load(); }
+
+	__declspec(naked) void reliable_receive_room()
+	{
+		__asm
+		{
+			pushfd
+			pushad
+			push esi
+			call reliable_prepare
+			add esp, 4
+			test al, al
+			jz defer_packet
+			popad
+			popfd
+			push ebx
+			mov bx, word ptr [esi + 8]
+			jmp dword ptr [native_reliable_continue]
+		defer_packet:
+			popad
+			popfd
+			pop edi
+			pop esi
+			add esp, 8
+			mov eax, 2
+			ret
+		}
 	}
 
 	// The retail acknowledgement 0x60872c..0x60875a on a 0x14-byte local header: the header is zeroed by 0x615810 with

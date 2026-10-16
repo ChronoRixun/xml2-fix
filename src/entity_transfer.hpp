@@ -12,6 +12,11 @@
 
 namespace entity_transfer
 {
+	// JMP adapter for 0x6100e8, after the native reliable sequence-window check.
+	void reliable_receive_room();
+	using backpressure_observer = void(*)(std::uint16_t expected, std::uint16_t sequence, std::uint32_t large_used, std::uint32_t headers_used);
+	void observe_backpressure(backpressure_observer);
+	std::uint32_t backpressure_count();
 	struct observer
 	{
 		// A chunk the bounds refused (nothing copied) and a wrapper the game's pool could not allocate.
