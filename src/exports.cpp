@@ -417,6 +417,9 @@ namespace
 			gameplay_agreement::register_rule(gameplay_capabilities::box_harm_origin_id, 1,
 				{box_harm::installed() ? 1u : 0u,0,0,0}, box_harm::verified());
 		danger_room_party::install(game);
+		if (harm_single_chain::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::harm_single_chain_id, 1,
+				{harm_single_chain::installed() ? 1u : 0u,0,0,0}, harm_single_chain::verified());
 		danger_room_healthbars::install(game);
 		if (danger_room_healthbars::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::danger_room_healthbars_id, 1,

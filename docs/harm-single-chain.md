@@ -3,8 +3,12 @@
 `[Game] HarmSingleChain=single` retains the native pending-activation bit after
 a qualifying fire schedules its next repeat. Absent or `off` keeps stock
 behavior. This is an explicit alternative policy, **not proven XBE parity**.
-It requires a new gameplay-agreement rule; no ID is assigned here. Requested
-state, including failed/invalid installation, blocks online negotiation.
+It is gameplay-agreement **rule 23, revision 1**, registered only when requested
+(values `{installed ? 1 : 0,0,0,0}`). Absent, empty or `off` omits the rule and
+keeps the released OFF digest. A failed or invalid request stays unverified and
+blocks admission; a mismatched peer is refused naming `HarmSingleChain`. The
+builder writes `single` by default for XML1 builds. Rule 21 (BoxHarmOrigin) is a
+different mechanism with its own key and is unchanged.
 
 This policy is independent of `[Game] HarmLoopStartup=xml1`, which preserves the
 authored creation-relative startup delay. Both keys can be enabled together.
@@ -62,5 +66,5 @@ still left one pending repeat. Native hits remained three HP, approximately
 damage. The original and PC queue insertion paths allocate a new event record
 per accepted request; the XBE path at 0xaa020 does not supply a single-chain
 guarantee. Original-console damage rates remain unmeasured.
-Default builds are unchanged. Rule assignment and approval of this deliberate
+Rule 23 is assigned and the builder default is on (candidate 0.2.3e). This deliberate
 departure from the reviewed XBE scheduling behavior are integration decisions.

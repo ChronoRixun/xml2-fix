@@ -1,7 +1,6 @@
 #include "harm_single_chain.hpp"
 #include "harm_single_chain_bridge.hpp"
 #include "game_version.hpp"
-#include "gameplay_agreement.hpp"
 #include "ini.hpp"
 #include "log.hpp"
 #include "xml1_hook_memory.hpp"
@@ -26,9 +25,9 @@ namespace harm_single_chain
 		const auto setting = ini::text(L"Game",L"HarmSingleChain").value_or("");
 		if (setting.empty() || setting == "off") return;
 		state = 0;
-		// Single-chain policy is separate from BoxHarmOrigin (rule 21). Until a
-		// rule is assigned, even a refused request must not negotiate as stock.
-		gameplay_agreement::reject_unregistered_rule("HarmSingleChain");
+		// A requested policy (rule 23, separate from BoxHarmOrigin rule 21) is registered
+		// by exports.cpp with its verified installed state: a refused or invalid request
+		// stays unverified and blocks admission.
 		if (setting != "single")
 		{
 			logger::write("harm single chain: invalid [Game] HarmSingleChain - native chain behavior retained");
@@ -66,4 +65,5 @@ namespace harm_single_chain
 	}
 	bool requested() { return state.load() != -1; }
 	bool installed() { return state.load() == 1; }
+	bool verified() { return !requested() || installed(); }
 }

@@ -4,7 +4,7 @@
 creation-relative `firstact` delay and start-on visual loop. Absent or `xml2`
 keeps PC behavior. It is separate from BoxHarmOrigin, rule 21.
 
-**A new gameplay rule is required. No ID is assigned here.** A request invokes
+**Not registered: no gameplay rule (rule 23 covers only `HarmSingleChain`).** A request invokes
 the existing unregistered-rule refusal even if installation fails, so this
 candidate cannot negotiate online as an unchanged build. Do not enable it in
 release defaults until rule assignment and acceptance are complete.

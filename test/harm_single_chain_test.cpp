@@ -102,7 +102,6 @@ namespace
 namespace ini { std::optional<std::string> text(const wchar_t*,const wchar_t*) { return setting; } }
 namespace logger { void write(const char*,...) {} }
 namespace game_version { void refuse_startup() { ++refused; } }
-namespace gameplay_agreement { void reject_unregistered_rule(const char*) { ++rejected; } }
 
 int main(int argc,char** argv)
 {
@@ -114,11 +113,11 @@ int main(int argc,char** argv)
 	if(argc>1)raw_guards(argv[1]);else{std::puts("FAIL retail executable argument required");return 2;}
 	if(failures)return 1;
 	seed();harm_single_chain::install(GetModuleHandleW(nullptr));
-	check(!harm_single_chain::requested() && !harm_single_chain::installed() && untouched() && rejected==0,"absent key preserves code and online agreement");
+	check(!harm_single_chain::requested() && !harm_single_chain::installed() && untouched() && harm_single_chain::verified(),"absent key preserves code and online agreement");
 	setting="off";harm_single_chain::install(GetModuleHandleW(nullptr));
-	check(!harm_single_chain::requested() && untouched() && rejected==0,"explicit native mode preserves code and agreement");
+	check(!harm_single_chain::requested() && untouched() && harm_single_chain::verified(),"explicit native mode preserves code and agreement");
 	setting="invalid";harm_single_chain::install(GetModuleHandleW(nullptr));
-	check(harm_single_chain::requested() && !harm_single_chain::installed() && untouched() && rejected==1,"invalid request changes no code and remains unverified");
+	check(harm_single_chain::requested() && !harm_single_chain::installed() && untouched() && !harm_single_chain::verified(),"invalid request changes no code and remains unverified");
 	setting="single";harm_single_chain::install(reinterpret_cast<HMODULE>(0x500000));
 	check(!harm_single_chain::installed() && untouched(),"relocated executable refused");
 	for(const auto& g:guards){
@@ -129,7 +128,7 @@ int main(int argc,char** argv)
 	}
 	seed();const std::vector<unsigned char> image_before(at(0x401000),at(0x801000));
 	harm_single_chain::install(GetModuleHandleW(nullptr));
-	check(harm_single_chain::installed() && *at(site)==0xe9 && rejected>0,"production installer succeeds with agreement blocked pending rule assignment");
+	check(harm_single_chain::installed() && *at(site)==0xe9 && harm_single_chain::verified(),"production installer supplies verified rule 23 state");
 	bool footprint=true;
 	for(std::size_t i=0;i<image_before.size();++i)
 		if(at(0x401000)[i]!=image_before[i] && !(0x401000+i>=site && 0x401000+i<resume) && !(0x401000+i>=request_site && 0x401000+i<request_resume))footprint=false;
