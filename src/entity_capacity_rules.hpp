@@ -152,6 +152,86 @@ namespace entity_capacity_rules
 		return transfer_verdict::accept;
 	}
 
+	// ---- [Online] FastTransfer: the agreed campaign record stream (docs/online-campaign-transfer.md) ---------
+	// The raised image is 2 MiB but mostly zero (a real slot: 27,068 non-zero bytes). Every 'H' body is one record
+	// covering the next image bytes in order: 'D' + 1..299 bytes copied, or 'Z' + a u32 run of zero bytes. A record
+	// is at most 300 bytes (one large body, never fragmented); a zero record and short data use small bodies.
+	constexpr std::uint8_t fast_data_tag = 'D', fast_zero_tag = 'Z';
+	constexpr std::uint32_t fast_data_max = 299, fast_zero_min = 64;
+	// Records in flight per peer, and the room each send leaves in the shared pools for receiving and other traffic.
+	constexpr std::uint32_t fast_window = 32, fast_large_margin = 8, fast_queue_margin = 64;
+	// Per-peer datagram budget (peer +0x212c, bytes per second; retail 100,000 at 0x61097b).
+	constexpr std::uint32_t fast_peer_budget = 400000;
+	struct fast_record { std::uint8_t tag; std::uint32_t covered; };
+	// The next record at `at` (< end). Zero runs shorter than fast_zero_min travel inside data records.
+	inline fast_record fast_next(const std::uint8_t* image, std::uint32_t at, std::uint32_t end)
+	{
+		std::uint32_t zeros = 0;
+		while (at + zeros < end && !image[at + zeros]) ++zeros;
+		if (zeros && (zeros >= fast_zero_min || at + zeros == end)) return {fast_zero_tag, zeros};
+		const auto limit = end - at < fast_data_max ? end - at : fast_data_max;
+		std::uint32_t n = 0, run = 0;
+		for (; n < limit; ++n)
+		{
+			run = image[at + n] ? 0 : run + 1;
+			if (run == fast_zero_min) return {fast_data_tag, n + 1 - run};
+		}
+		// A run reaching the record limit may continue: end the data before it if it can become a zero record.
+		if (run && n == limit && limit < end - at && run < n)
+		{
+			std::uint32_t more = 0;
+			while (at + n + more < end && run + more < fast_zero_min && !image[at + n + more]) ++more;
+			if (run + more >= fast_zero_min || at + n + more == end) return {fast_data_tag, n - run};
+		}
+		return {fast_data_tag, n};
+	}
+	// How many records this peer may queue now: its window, then every shared pool keeps its margin. One record
+	// takes one header, one queue node and one body (large or small).
+	constexpr std::uint32_t fast_sends(std::uint32_t outstanding, message_pools used)
+	{
+		auto room = [](std::uint32_t used, std::uint32_t capacity, std::uint32_t margin) { return used + margin < capacity ? capacity - margin - used : 0u; };
+		std::uint32_t n = outstanding < fast_window ? fast_window - outstanding : 0;
+		for (const auto r : {room(used.large, 50, fast_large_margin), room(used.small, 768, fast_queue_margin),
+		                     room(used.headers, 768, fast_queue_margin), room(used.nodes, 650, fast_queue_margin)})
+			n = r < n ? r : n;
+		return n;
+	}
+	enum class fast_verdict { accept, complete, no_buffer, malformed, overflow };
+	constexpr const char* fast_verdict_text(fast_verdict v)
+	{
+		switch (v)
+		{
+		case fast_verdict::accept: return "accept";
+		case fast_verdict::complete: return "complete";
+		case fast_verdict::no_buffer: return "no transfer buffer";
+		case fast_verdict::malformed: return "malformed record";
+		case fast_verdict::overflow: return "record past the payload end";
+		}
+		return "?";
+	}
+	// A received record at image offset `received`: its tag and size, the covered bytes, the payload bound.
+	constexpr fast_verdict fast_chunk(std::uint32_t received, const std::uint8_t* body, std::uint32_t length, std::uint32_t payload,
+	                                  bool have_buffer, std::uint32_t& covered)
+	{
+		covered = 0;
+		if (!have_buffer) return fast_verdict::no_buffer;
+		if (length < 2 || !body) return fast_verdict::malformed;
+		if (body[0] == fast_data_tag)
+		{
+			if (length - 1 > fast_data_max) return fast_verdict::malformed;
+			covered = length - 1;
+		}
+		else if (body[0] == fast_zero_tag)
+		{
+			if (length != 5) return fast_verdict::malformed;
+			covered = std::uint32_t(body[1]) | std::uint32_t(body[2]) << 8 | std::uint32_t(body[3]) << 16 | std::uint32_t(body[4]) << 24;
+			if (!covered) return fast_verdict::malformed;
+		}
+		else return fast_verdict::malformed;
+		if (received > payload || covered > payload - received) { covered = 0; return fast_verdict::overflow; }
+		return received + covered == payload ? fast_verdict::complete : fast_verdict::accept;
+	}
+
 	// ---- startup quiescence: the raise needs LC saves and stock owners not yet built -------------------------
 	template <typename Read>
 	bool startup_quiescent(Read&& read, std::string_view save_format_text, std::uint32_t game_base, std::string& why)
@@ -298,5 +378,21 @@ namespace entity_capacity_rules
 		{"connection failure callback", 0x609ad0, 0x609b00, "08e532aea2606cb2e42f67f10114292c174e67a4ccfa31a6c36e6de71d39ea2d"},
 		{"connection failure presentation", 0x609b30, 0x609b77, "21e3f9a0fb11d911ef88f23bade980c9a0cb344831fb06d0d353cd068082d110"},
 		{"small-body and header ring allocation", 0x60e090, 0x60e167, "61c5991594ddc123e4d11ab11fb8946f7ac8d6fcce3de8a95bd20b87ea0f07c8"},
+	}};
+
+	// [Online] FastTransfer (requested-only; absent, the contribution above is byte-identical): the native sender's
+	// per-peer chunk loop is replaced from 0x608004 (after the queued-'H' count) to 0x6080ba (next peer), and a new
+	// peer's datagram budget is raised. Same transaction: guards, region hashes, readback, rollback.
+	inline constexpr std::array<extra_relocation, 1> fast_relocations{{
+		{0x608004, "8b7c24388bb750220000", "e9", "entity_capacity::FastSender", 5, "campaign sender: agreed fast records within window and pool headroom"},
+	}};
+	inline constexpr std::array<extra_literal, 1> fast_literals{{
+		{0x61097b, "c7862c210000a0860100", "c7862c210000801a0600", "peer datagram budget 100,000 -> 400,000 bytes per second"},
+	}};
+	inline constexpr std::array<extra_region, 4> fast_regions{{
+		{"campaign sender up to its chunk loop", 0x607fb0, 0x608035, "4395b861de6c073a971ae06d11f5509f33b330da9451cd7baf630a53f304960d"},
+		{"campaign sender next-peer resume", 0x6080ba, 0x6080cb, "4758c8be59373c6e5cf3989c72f5c991e7c86731150d78059634424adb9e4fe6"},
+		{"peer initialisation (datagram budget)", 0x610950, 0x6109b3, "b72ec5dedd9f943a70450f7b9167d07c06b407f3d339789f3a04784ea3e6e2d5"},
+		{"peer index accessor", 0x614210, 0x614214, "38058506e8e859d5be73a33baa621352c08ea01f2224ee170173253757193941"},
 	}};
 }

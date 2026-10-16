@@ -359,6 +359,10 @@ END
 add_executable(xml2_reliable_receive_test test/reliable_receive_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/reliable_receive_fixture.asm" src/entity_transfer.cpp src/patch_transaction.cpp)
 target_include_directories(xml2_reliable_receive_test PRIVATE src)
 target_link_options(xml2_reliable_receive_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# [Online] FastTransfer: the retail campaign sender with the record bridge, through the production receiver.
+add_executable(xml2_campaign_sender_test test/campaign_sender_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/reliable_receive_fixture.asm" src/entity_transfer.cpp src/patch_transaction.cpp)
+target_include_directories(xml2_campaign_sender_test PRIVATE src)
+target_link_options(xml2_campaign_sender_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
 add_executable(xml2_stun_rule_test test/stun_rule_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/stun_rule.cpp)
 target_include_directories(xml2_stun_rule_test PRIVATE src)

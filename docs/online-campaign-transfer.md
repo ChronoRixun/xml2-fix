@@ -104,3 +104,53 @@ matching party positions and real movement. These are local two-instance checks;
 two-PC latency/loss, natural reproduction of the original report, and broader
 session histories still need testing. A long but advancing stock-rate transfer
 is not proof of the fixed allocation failure.
+
+## Fast transfer (`[Online] FastTransfer=1`)
+
+The stock sender queues five 200-byte reliable messages per peer and tops the
+window up when acknowledgements return. On a LAN that is one ~1 KB datagram per
+~80 ms round trip: 10,486 messages, about 165 seconds for the 2 MiB image. The
+peer's datagram budget (`+0x212c`, 100,000 bytes/s, set at `0x61097b`) would cap
+even a wider window at about 21 seconds. The shared pools allow only 50 large
+bodies per process, so a wider window alone cannot reach seconds.
+
+The image is mostly zero: real saved slots have 27,068 and 11,230 non-zero bytes.
+With both peers agreed, each `'H'` body is one record covering the next image
+bytes in order:
+
+- `'D'` followed by 1 to 299 bytes, which are copied;
+- `'Z'` followed by a u32 run of zero bytes (64 or more), which are written as zeros.
+
+A record is at most 300 bytes: one body, never fragmented. Zero records and short
+data use small bodies. The two real slots need 367 and 242 records. A fully dense
+image needs 7,014.
+
+### Sender
+
+A bridge at `0x608004` runs after the native queued-`'H'` count `0x610790`. It
+replaces only that peer's chunk loop and resumes at `0x6080ba`, the next peer.
+It queues up to 32 records in flight per peer. It never takes the last 8 large
+bodies, nor the last 64 headers, small bodies or queue nodes, which keeps receive
+capacity across all peers. The outgoing preflight still guards every send. The
+peer datagram budget becomes 400,000 bytes/s.
+
+### Receiver
+
+The receiver bounds every record before writing: unknown tag, empty run,
+oversized data, or past the payload end. A refused record is logged once. It
+acknowledges with `'J'` exactly when the covered bytes reach the payload.
+
+### Safety and compatibility
+
+The receive admission control and the 30-second watchdog above still apply. Live,
+one deferral at 49/50 large bodies was absorbed without failure.
+
+The writes and their region hashes join the entity-capacity startup transaction,
+with readback and rollback, and installation writes one log line.
+
+Absent or 0, nothing is written and behaviour is that of the stock sender. It is
+gameplay-agreement rule 24 (revision 1, values `{1,32,300,64}`) because both
+peers must use the same wire format; the builder default is on. Tests: `xml2_campaign_sender_test <retail-exe> [captured images...]`
+runs the retail sender with the bridge into the production receiver, and
+`xml2_reliable_receive_test` runs a 32-record window with loss, lost ACKs,
+reordering and a nearly full shared pool.

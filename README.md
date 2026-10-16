@@ -679,7 +679,12 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `ClassicMainBackdrop` | `0` | `1`: the classic main menu's Cerebro room is drawn with its original bright textures ([details](#classic-main-menu-backdrop)) |
 | `ClassicMainPanelBounds` | `0` | `1`: the classic main menu's buttons answer the mouse over their whole visible panels ([details](#classic-main-menu-backdrop)) |
 | `DangerRoomParty` | `xml2` | `xml1`: original Cyclops/Phoenix/Storm/Wolverine fallback for an incomplete non-solo course party (requested-only rule 19 revision 1). |
+<<<<<<< HEAD
 | `DangerRoomHealthBars` | `xml2` | `xml1`: show the target health gauge for protected Danger Room training opponents. Builder default on; requested-only gameplay rule 22, revision 1. Protection and course limits remain; native dirty-stat refresh/clamp timing parity is unproved. Required combo hits kill training targets through the native [course death/progress path](docs/danger-room-courses.md). |
+=======
+| `FastTransfer` ([Online]) | `0` | `1` (with `[Limits] EntityCapacity=1`): send a saved campaign to co-op peers as data/zero-run records with a pool-bounded 32-message window - seconds instead of minutes. Builder default on. Every PC must use it (gameplay rule 24, revision 1, requested-only). |
+| `DangerRoomHealthBars` | `xml2` | `xml1`: show the target health gauge for protected Danger Room training opponents. Builder default on; requested-only gameplay rule 22, revision 1. Protection and course limits remain; native dirty-stat refresh/clamp timing parity is unproved. |
+>>>>>>> d356e00
 | `Xml1LockOnEffects` | unset | Builder-provided `beam,surface,target` effect paths restore first-game lock-on visuals; targeting stays native ([details](docs/lockon-effects.md)) |
 | `Xml1LockOnAim` | `0` | `1`: use the animated head for lock-on, as in XML1. Requires valid `Xml1LockOnEffects`. Requested-only gameplay rule 20 revision 1; failed requests refuse online admission ([details](docs/lockon-effects.md)) |
 | `Xml1MasterMold` | `0` | `1`: X-Men Legends I's Master Mold fight; needs `Xml1MoldStage` ([details](docs/xml1-controllers.md)) |

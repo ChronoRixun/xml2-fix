@@ -53,6 +53,7 @@ using gameplay_capabilities::record;
 using gameplay_capabilities::result;
 int failures=0;
 void check(bool value,const char* message){std::printf("%s %s\n",value ? "PASS" : "FAIL",message);failures+=!value;}
+void check(bool value,const std::string& message){check(value,message.c_str());}
 void* at(std::uint32_t address){return reinterpret_cast<void*>(address);}
 void writable(std::uint32_t address,std::size_t size){DWORD old;VirtualProtect(at(address),size,PAGE_EXECUTE_READWRITE,&old);}
 void jump(std::uint32_t site,const void* target){writable(site,5);auto* code=static_cast<std::uint8_t*>(at(site));code[0]=0xe9;const auto delta=std::int32_t(reinterpret_cast<std::uintptr_t>(target)-site-5);std::memcpy(code+1,&delta,4);}
@@ -146,6 +147,25 @@ void records(){
   no.describe(d.buckets,0,false,name,sizeof(name));
   check(std::string(name)==std::string(gameplay_capabilities::rule_name(id))+" (disabled on this PC)","disabled peer names known new rule");
   check(!failed.ready() && failed.compare(yes.bytes())==result::unavailable && yes.compare(failed.bytes())!=result::match,"failed new request closes host/join");
+ }
+ // [Online] FastTransfer is rule 24: an unassigned (0) ID is refused by add(); the assigned rule is checked in both mismatch
+ // directions and for its record values.
+ {
+  record unassigned;check(!unassigned.add(0,1,{1,32,300,64},true),"a rule without an assigned ID cannot join a record");
+  if constexpr(gameplay_capabilities::fast_transfer_id!=0) {
+   const auto id=gameplay_capabilities::fast_transfer_id;
+   auto fast=[&](bool wanted,std::uint32_t window=32){record r;if(wanted)r.add(id,gameplay_capabilities::fast_transfer_revision,{1,window,300,64},true);r.finalize();return r;};
+   const auto on=fast(true),off=fast(false);
+   check(on.compare(fast(true).bytes())==result::match,"FastTransfer ON peers agree");
+   check(std::equal(off.bytes().begin(),off.bytes().end(),native.bytes().begin(),native.bytes().end()),"FastTransfer OFF record is byte-identical to base");
+   gameplay_capabilities::difference d;char name[160];
+   check(on.compare(off.bytes(),&d)==result::entries && off.compare(on.bytes())==result::entries,"FastTransfer ON/OFF refuses in both directions");
+   on.describe(d.buckets,d.local_only,true,name,sizeof(name));
+   check(std::string(name)==std::to_string(id)+" FastTransfer (not on the other PC)","the ON peer names FastTransfer: "+std::string(name));
+   off.describe(d.buckets,0,true,name,sizeof(name));
+   check(std::string(name)==std::to_string(id)+" FastTransfer (disabled on this PC)","the OFF peer names FastTransfer: "+std::string(name));
+   check(on.compare(fast(true,5).bytes())==result::value,"a different FastTransfer window refuses");
+  }
  }
  // Rule 16, the NPC power rule ([Game] NpcPowerRule): enemies that pay for powers and decide every 2 s never share a
  // lockstep game with enemies that don't; revision 3 adds the visibility word; absent is {0,0,0,0}, a failed install unverified.

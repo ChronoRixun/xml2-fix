@@ -14,6 +14,9 @@ namespace entity_transfer
 	{
 		const std::uint32_t native_reliable_continue = 0x6100ed;
 		const std::uint32_t native_outgoing_continue = 0x60f647;
+		const std::uint32_t native_sender_resume = 0x6080ba;
+		std::uint32_t fast_payload = e10a2_transfer.payload;
+		std::atomic<std::uint32_t> fast_sent{0};
 		std::atomic<std::uint32_t> deferred{0};
 		backpressure_observer pressure_observer = nullptr;
 		failure_observer failed_observer = nullptr;
@@ -86,6 +89,86 @@ namespace entity_transfer
 		using pool_alloc_t = void*(__cdecl*)(std::uint32_t, std::uint32_t);
 		using difficulty_getter_t = void*(__cdecl*)();
 		using difficulty_t = void(__fastcall*)(void*, void*, std::uint32_t);
+	}
+
+	// The retail chunk send 0x608068..0x60808e: session->send(endpoint of the peer's connection (0x55d7e0), header,
+	// flags 0), the session from the argument-free getter 0x612be0. Same ABIs as send_ack below.
+	__declspec(naked) void send_record(void* /*connection*/, std::uint8_t* /*header*/)
+	{
+		__asm
+		{
+			push ebp
+			mov ebp, esp
+			push esi
+			push edi
+			push ebx
+			push 0
+			push dword ptr [ebp + 0xc]
+			mov ecx, dword ptr [ebp + 8]
+			call dword ptr [native_55d7e0]
+			push eax
+			call dword ptr [native_612be0]
+			mov ecx, eax
+			call dword ptr [native_610f30]
+			pop ebx
+			pop edi
+			pop esi
+			pop ebp
+			ret
+		}
+	}
+
+	void set_fast_payload(std::uint32_t payload) { fast_payload = payload; }
+	std::uint32_t fast_records_sent() { return fast_sent.load(); }
+
+	// One peer's turn in the native sender: its cursor (context +0x2240 + index*4) walks the image as fast records.
+	// The outgoing preflight still guards every send; a refusal there fails the session and stops this loop.
+	std::uint32_t __cdecl fast_send_peer(std::uint8_t* context, std::uint8_t* peer, void* connection, std::uint32_t outstanding)
+	{
+		auto* image = *reinterpret_cast<std::uint8_t**>(context + 0x2250);
+		const auto index = native<std::uint32_t(__thiscall*)(void*)>(0x614210)(peer);
+		if (!image || index >= 4) return 0;
+		auto** cursor = reinterpret_cast<std::uint8_t**>(context + 0x2240 + index * 4);
+		std::uint32_t queued = 0;
+		for (auto n = fast_sends(outstanding, pool_usage()); n && !failure_pending; --n)
+		{
+			const auto at = static_cast<std::uint32_t>(*cursor - image);
+			if (at >= fast_payload) break;
+			const auto record = fast_next(image, at, fast_payload);
+			std::array<std::uint8_t, 1 + fast_data_max> body{};
+			body[0] = record.tag;
+			std::uint16_t length = 5;
+			if (record.tag == fast_zero_tag) std::memcpy(body.data() + 1, &record.covered, 4);
+			else { std::memcpy(body.data() + 1, image + at, record.covered); length = static_cast<std::uint16_t>(1 + record.covered); }
+			std::array<std::uint8_t, 0x14> header{};
+			native<void(__thiscall*)(void*)>(0x615810)(header.data());
+			*reinterpret_cast<std::uint8_t**>(header.data()) = body.data();
+			*reinterpret_cast<std::uint16_t*>(header.data() + 8) = length;
+			header[0xe] = 1;
+			header[0x10] = 'H';
+			send_record(connection, header.data());
+			if (failure_pending) break;
+			*cursor += record.covered;
+			++queued;
+		}
+		fast_sent.fetch_add(queued);
+		return queued;
+	}
+
+	// At 0x608004 EAX holds the peer's queued 'H' count, EBP the peer, [esp+0x18] its connection, [esp+0x38] the
+	// campaign context. 0x6080ba reloads everything it uses from the stack (next peer or the completion checks).
+	__declspec(naked) void fast_sender()
+	{
+		__asm
+		{
+			push eax
+			push dword ptr [esp + 0x1c]
+			push ebp
+			push dword ptr [esp + 0x44]
+			call fast_send_peer
+			add esp, 16
+			jmp dword ptr [native_sender_resume]
+		}
 	}
 
 	void observe_backpressure(backpressure_observer o) { pressure_observer = o; }
@@ -239,6 +322,7 @@ namespace entity_transfer
 		if (opcode == 'G')
 		{
 			s.chunks = 0;
+			s.received = 0;
 			if (const auto callback = *reinterpret_cast<void(__cdecl**)(int, std::uint32_t, int)>(context + 0x2298))
 				callback(7, *reinterpret_cast<std::uint32_t*>(context + 0x229c), 0);
 			if (auto* old = *reinterpret_cast<void**>(context + 0x2250))
@@ -267,6 +351,24 @@ namespace entity_transfer
 		{
 			const auto length = *reinterpret_cast<const std::uint16_t*>(event + 8);
 			auto* wrapper = *reinterpret_cast<std::uint8_t**>(context + 0x2250);
+			if (s.fast)
+			{
+				const auto* record = *reinterpret_cast<const std::uint8_t**>(event + 4);
+				std::uint32_t covered = 0;
+				const auto verdict = fast_chunk(s.received, record, length, profile.payload, wrapper != nullptr, covered);
+				if (verdict != fast_verdict::accept && verdict != fast_verdict::complete)
+				{
+					if (o.fast_refused) o.fast_refused(verdict, s.received, length, profile.payload);
+					return 0;
+				}
+				// The wrapper comes from the game's pool, not zeroed: a zero record writes its zeros.
+				if (record[0] == fast_data_tag) std::memcpy(wrapper + s.received, record + 1, covered);
+				else std::memset(wrapper + s.received, 0, covered);
+				s.received += covered;
+				++s.chunks;
+				if (verdict == fast_verdict::complete) send_ack(event);
+				return 0;
+			}
 			const auto verdict = transfer_chunk(s.chunks, length, profile.payload, wrapper != nullptr);
 			if (verdict != transfer_verdict::accept && verdict != transfer_verdict::complete)
 			{
