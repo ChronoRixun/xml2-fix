@@ -14,7 +14,13 @@ namespace gameplay_capabilities
   placement_crush_id=11, double_heal_id=12, pack_amount_id=13, script_functions_id=14,
   death_switch_clear_id=15, npc_power_rule_id=16, object_world_impact_id=17, stun_rule_id=18,
   danger_room_party_id=19, lockon_aim_id=20, box_harm_origin_id=21, danger_room_healthbars_id=22;
- // Rules 17..22 participate only when requested; OFF preserves the released digest.
+ // [Online] FastTransfer (docs/online-campaign-transfer.md) needs a rule ID: the integrator assigns it. Until then
+ // (0) a requested FastTransfer blocks online by name; a build may define XML2_FAST_TRANSFER_RULE_ID for staging.
+#ifndef XML2_FAST_TRANSFER_RULE_ID
+#define XML2_FAST_TRANSFER_RULE_ID 0
+#endif
+ constexpr std::uint16_t fast_transfer_id=XML2_FAST_TRANSFER_RULE_ID, fast_transfer_revision=1;
+ // Rules 17..22 (and FastTransfer) participate only when requested; OFF preserves the released digest.
  // 10: the first game's Xtraction services and revival price (xtract::capability; issue #63). Revision 2: the online
  // rule greys Load and the campaign-gated options (revision 1, never released, greyed Load only).
  constexpr std::uint16_t xtraction_services_revision=2;
@@ -62,7 +68,7 @@ namespace gameplay_capabilities
   case lockon_aim_id: return "Xml1LockOnAim";
   case box_harm_origin_id: return "BoxHarmOrigin";
   case danger_room_healthbars_id: return "DangerRoomHealthBars";
-  default: return "a newer rule";
+  default: if(fast_transfer_id && id==fast_transfer_id)return "FastTransfer"; return "a newer rule";
   }
  }
  struct entry { std::uint16_t id,revision; std::array<std::uint32_t,4> values; };
@@ -163,7 +169,7 @@ namespace gameplay_capabilities
      if(used)add(", ");if(ids){number(unsigned(b+1));add(" ");}
      // These requested-only rules are absent when OFF, but this DLL still knows
      // their names. The bucket summary remains advisory; the digest admits peers.
-     if(b+1==object_world_impact_id || b+1==stun_rule_id || b+1==danger_room_party_id || b+1==lockon_aim_id || b+1==box_harm_origin_id || b+1==danger_room_healthbars_id){add(rule_name(static_cast<std::uint16_t>(b+1)));add(" (disabled on this PC)");}
+     if(b+1==object_world_impact_id || b+1==stun_rule_id || b+1==danger_room_party_id || b+1==lockon_aim_id || b+1==box_harm_origin_id || b+1==danger_room_healthbars_id || (fast_transfer_id && b+1==fast_transfer_id)){add(rule_name(static_cast<std::uint16_t>(b+1)));add(" (disabled on this PC)");}
      else add("a rule this PC does not have");
     }
    }

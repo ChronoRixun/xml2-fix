@@ -127,6 +127,12 @@ target_compile_definitions(xml2_fix PRIVATE FIX_LOG_FILE=L"xml2-fix.log"
 	FIX_VERSION_MAJOR=${PROJECT_VERSION_MAJOR} FIX_VERSION_MINOR=${PROJECT_VERSION_MINOR} FIX_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 	FIX_VERSION_NUMBERS=${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},0)
 target_link_libraries(xml2_fix PRIVATE lcsave dxguid ws2_32 winmm iphlpapi) # winmm: timeBeginPeriod for the frame limiter's fallback timer; iphlpapi: GetBestRoute2 for [Online] LocalIP
+# [Online] FastTransfer needs a gameplay rule ID (src/gameplay_capabilities.hpp). Until the integrator assigns one, a
+# requested FastTransfer blocks online by name; staging builds for two-PC tests may set this (never in a release).
+set(XML2_FAST_TRANSFER_RULE_ID "" CACHE STRING "Staging only: FastTransfer gameplay rule ID")
+if(XML2_FAST_TRANSFER_RULE_ID)
+	target_compile_definitions(xml2_fix PRIVATE XML2_FAST_TRANSFER_RULE_ID=${XML2_FAST_TRANSFER_RULE_ID})
+endif()
 # Output is dinput.dll; its import library gets a different name so it can't shadow the Windows SDK's.
 set_target_properties(xml2_fix PROPERTIES OUTPUT_NAME dinput ARCHIVE_OUTPUT_NAME xml2_fix)
 
@@ -259,6 +265,7 @@ add_executable(xml2_npc_combo_timing_test test/npc_combo_timing_test.cpp)
 target_include_directories(xml2_npc_combo_timing_test PRIVATE src)
 target_include_directories(xml2_gameplay_agreement_test PRIVATE src)
 target_link_libraries(xml2_gameplay_agreement_test PRIVATE ws2_32)
+target_compile_definitions(xml2_gameplay_agreement_test PRIVATE XML2_FAST_TRANSFER_RULE_ID=24) # staging only: FastTransfer needs a rule ID
 
 target_link_options(xml2_gameplay_agreement_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
@@ -357,6 +364,10 @@ END
 add_executable(xml2_reliable_receive_test test/reliable_receive_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/reliable_receive_fixture.asm" src/entity_transfer.cpp src/patch_transaction.cpp)
 target_include_directories(xml2_reliable_receive_test PRIVATE src)
 target_link_options(xml2_reliable_receive_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# [Online] FastTransfer: the retail campaign sender with the record bridge, through the production receiver.
+add_executable(xml2_campaign_sender_test test/campaign_sender_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/reliable_receive_fixture.asm" src/entity_transfer.cpp src/patch_transaction.cpp)
+target_include_directories(xml2_campaign_sender_test PRIVATE src)
+target_link_options(xml2_campaign_sender_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
 add_executable(xml2_stun_rule_test test/stun_rule_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/stun_rule.cpp)
 target_include_directories(xml2_stun_rule_test PRIVATE src)

@@ -26,12 +26,23 @@ namespace entity_transfer
 		// A chunk the bounds refused (nothing copied) and a wrapper the game's pool could not allocate.
 		void (*refused)(entity_capacity_rules::transfer_verdict verdict, std::uint32_t chunk, std::uint32_t length, std::uint32_t payload) = nullptr;
 		void (*no_wrapper)(std::uint32_t size) = nullptr;
+		void (*fast_refused)(entity_capacity_rules::fast_verdict verdict, std::uint32_t received, std::uint32_t length, std::uint32_t payload) = nullptr;
 	};
+
+	// [Online] FastTransfer sender: JMP adapter for 0x608004 in the native sender 0x607fb0, after the peer's queued
+	// 'H' count (0x610790). It queues that peer's next records within fast_sends() and resumes at 0x6080ba.
+	void fast_sender();
+	void set_fast_payload(std::uint32_t payload);
+	std::uint32_t __cdecl fast_send_peer(std::uint8_t* context, std::uint8_t* peer, void* connection, std::uint32_t outstanding);
+	std::uint32_t fast_records_sent();
 
 	// The receiver's own chunk counter (the counterpart of the retail DAT_00a3bc38).
 	struct state
 	{
 		std::uint32_t chunks = 0;
+		// [Online] FastTransfer (agreed by both peers): 'H' bodies are fast records and `received` counts image bytes.
+		bool fast = false;
+		std::uint32_t received = 0;
 	};
 
 	// event: the native callback event (+0 opcode byte, +4 body, +8 u16 length, +0xc context, +0x10 sender).

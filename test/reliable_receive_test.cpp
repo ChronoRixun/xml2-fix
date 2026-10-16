@@ -11,6 +11,9 @@
 #include <fstream>
 #include <iterator>
 #include <vector>
+#include <algorithm>
+#include <random>
+#include <string>
 
 extern "C" std::uint8_t fixture_space[0x700000];
 namespace
@@ -25,6 +28,7 @@ void check(bool ok, const char* text)
 	std::printf("%s %s\n", ok ? "PASS" : "FAIL", text);
 	failures += !ok;
 }
+void check(bool ok, const std::string& text) { check(ok, text.c_str()); }
 void* at(std::uint32_t va)
 {
 	return reinterpret_cast<void*>(va);
@@ -274,6 +278,48 @@ bool null_copy_negative()
  { inside_handler=false;return true; }
  return false;
 }
+// [Online] FastTransfer: a 32-record window of mixed record sizes (300-byte data, 5-byte zero runs, short data)
+// through the retail parser, allocator, sorted insertion and ordered drain, with datagram loss, lost ACKs,
+// reordering and a shared large pool another peer has nearly filled behind its own gap.
+unsigned fast_record_bytes(unsigned seq) { return seq % 3 == 0 ? 5 : seq % 7 == 0 ? 40 : 300; }
+void fast_window_tests()
+{
+ persistent_reset();
+ std::mt19937 random(32);
+ for(unsigned i=1;i<=40;++i)persistent_packet(second_peer,i,200); // another peer's backlog behind its missing sequence 0
+ check(field<unsigned>(cache,0x149a8)==40 && !delivered[1],"another peer holds 40 of 50 large bodies behind its gap");
+ const unsigned total=600,window=entity_capacity_rules::fast_window;
+ std::vector<bool> acked(total,false);
+ unsigned base=0,rounds=0,sent=0,lost=0,lost_acks=0,deferred_before=entity_transfer::backpressure_count();
+ while(base<total && rounds<5000)
+ {
+  std::vector<unsigned> burst;
+  for(unsigned s=base;s<total && s<base+window;++s)if(!acked[s])burst.push_back(s);
+  std::shuffle(burst.begin(),burst.end(),random);
+  for(const auto s:burst)
+  {
+   ++sent;
+   if(random()%5==0){++lost;continue;} // datagram lost: nothing reaches the parser
+   const auto before=acknowledgements;
+   persistent_packet(peer,s,fast_record_bytes(s));
+   if(acknowledgements==before)continue; // deferred before ACK: the sender retries
+   if(random()%6==0){++lost_acks;continue;} // ACK lost: a duplicate follows
+   acked[s]=true;
+  }
+  if(random()%2)drain(peer); // the game drains on its own ticks
+  while(base<total && acked[base])++base;
+  ++rounds;
+ }
+ drain(peer);
+ check(base==total && delivered[0]==total && !bad_payload && !refusal_lines && !session_failures,
+       "fast window: 600 mixed records with "+std::to_string(lost)+" lost datagrams and "+std::to_string(lost_acks)+" lost ACKs arrive once, in order, exact ("+
+       std::to_string(rounds)+" rounds, "+std::to_string(sent)+" sends, "+std::to_string(entity_transfer::backpressure_count()-deferred_before)+" pressure deferrals)");
+ check(field<unsigned>(cache,0x149a8)==40 && field<unsigned>(cache,0x48d0)==40 && field<unsigned>(node_cache,0x3da8)==40 && !field<unsigned>(cache,0x10948),
+       "fast window: only the other peer's backlog remains in the shared pools");
+ persistent_packet(second_peer,0,200);drain(second_peer);
+ check(delivered[1]==41 && !field<unsigned>(cache,0x149a8) && !field<unsigned>(cache,0x48d0) && !field<unsigned>(node_cache,0x3da8),
+       "fast window: the other peer's gap closes and every pool returns to zero");
+}
 void persistent_tests()
 {
  for(const auto r:std::array<std::pair<unsigned,unsigned>,13>{{
@@ -402,6 +448,7 @@ void persistent_tests()
  deadline.block(65535,100);deadline.block(65535,20000);
  check(!deadline.expired(65535,30099) && deadline.expired(65535,30100),"repeated pressure cannot renew an unchanged gap's deadline");
  check(!deadline.expired(0,30101) && !deadline.active,"sequence progress across wrap clears the pressure deadline");
+ fast_window_tests();
 }
 
 } // namespace
