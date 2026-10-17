@@ -61,3 +61,5 @@ DISASM  test/lockon_effects_test.cpp  # Authored synthetic stack-frame caller an
 DISASM  test/box_harm_test.cpp  # Authored synthetic caller/continuation checks our bridge's stack, registers and FPU; no game instruction listing or decompiled body.
 DISASM  src/harm_loop_startup_bridge.hpp  # Authored guarded branch bridge for ordinary loop startup; no copied game instruction listing or decompiled body.
 DISASM  src/harm_single_chain_bridge.hpp  # Authored eligibility and pending-bit bridges for the opt-in single-chain policy; no game instruction listing or decompiled body.
+DISASM  src/receive_validation.cpp  # Authored naked x86 dispatch guard; replays only the short guarded prologue, validates and resumes or returns. No game listing or decompiled body.
+DISASM  test/receive_validation_test.cpp  # Authored synthetic register/stack driver for our dispatch guard; retail routines are read from a user-supplied executable, never embedded.
