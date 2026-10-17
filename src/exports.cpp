@@ -32,6 +32,7 @@
 #include "explosive_first_hit.hpp"
 #include "rank_costs.hpp"
 #include "death_threshold.hpp"
+#include "receive_validation.hpp"
 #include "npc_power.hpp"
 #include "stun_rule.hpp"
 #include "pack_amount.hpp"
@@ -219,6 +220,9 @@ namespace
 		save_format::contribute(startup, game);
 		limits::contribute(startup, game, entity_capacity::owns_arena_teardown());
 		entity_capacity::contribute(startup, game);
+		// [Online] ReceiveValidation: the stock dispatch guard. Optional and independent: a guard mismatch skips it
+		// (one log line), it shares no bytes with any other contribution, and OFF contributes nothing.
+		receive_validation::contribute(startup, game);
 		const auto committed = startup.commit();
 		logger::write("startup transaction: %s (%s)", patch_transaction::name(committed), startup.report().c_str());
 		entity_capacity::after_commit(committed == patch_transaction::outcome::committed, committed == patch_transaction::outcome::rollback_failed);
