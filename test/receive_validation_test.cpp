@@ -209,11 +209,11 @@ namespace
 				expect(check(0x00, w.data(), 5) == drop_reason::body_too_short, "wrapper with a short inner body is dropped");
 				std::array<std::uint8_t, 11> admission{0x1e, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 				expect(valid(0x00, admission.data(), 10), "wrapper around the stock eight-byte 0x1e admission body passes");
-				static constexpr std::uint8_t eight_byte_lobby_opcodes[] = {0x2c, 0x26};
-				for (const auto op : eight_byte_lobby_opcodes)
+				static constexpr std::uint8_t eight_byte_session_opcodes[] = {0x2c, 0x26, 0x47};
+				for (const auto op : eight_byte_session_opcodes)
 				{
 					admission[0] = op;
-					expect(valid(0x00, admission.data(), 10), "wrapper around a stock eight-byte lobby body passes");
+					expect(valid(0x00, admission.data(), 10), "wrapper around a stock eight-byte session body passes");
 				}
 				std::array<std::uint8_t, 3> empty{0x28, 0, 0};
 				expect(valid(0x00, empty.data(), 2), "wrapper around an empty body passes");
