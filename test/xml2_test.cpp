@@ -9503,8 +9503,35 @@ namespace
 		{
 			if (image[i] != before[i]) changed.push_back(image_base + i);
 		}
-		CHECK((changed == std::vector<DWORD>{version_va, version_va + 1, version_va + 2}) && // "1.30" -> "X1.0": the 0 stays
-		      std::string_view(reinterpret_cast<const char*>(at(version_va))) == "X1.0");
+		std::vector<DWORD> expected_changes{version_va, version_va + 1, version_va + 2}; // "1.30" -> "X1.0": the 0 stays
+		for (std::size_t i = 0; i < ctor_bytes; ++i)
+		{
+			if (before[ctor_va - image_base + i] != ctor_patch[i]) expected_changes.push_back(ctor_va + static_cast<DWORD>(i));
+		}
+		std::sort(changed.begin(), changed.end());
+		std::sort(expected_changes.begin(), expected_changes.end());
+		CHECK(changed == expected_changes && std::string_view(reinterpret_cast<const char*>(at(version_va))) == "X1.0");
+		// The constructor's literal store (0x61571c): the retail bytes are the table's, the patch is the same length, reads
+		// the version's own five bytes and writes game-info +0x3e..+0x42 - with the retail string the same "1.30 " the
+		// literal stored (stock bytes on the wire), with the patched string the token.
+		CHECK(limits_rules::hex_size(guards[6].hex) == ctor_bytes && guards[6].va == ctor_va && ctor_patch.size() == ctor_bytes);
+		CHECK(operand_at(ctor_patch.data() + 2, 4) == version_va && operand_at(ctor_patch.data() + 11, 4) == version_va + 4 && ctor_patch[6] == 0x89 && ctor_patch[8] == 0x3e && ctor_patch[17] == 0x42);
+		{
+			const auto run = [&](const std::uint8_t* version5)
+			{
+				std::array<std::uint8_t, 0x74> game_info{};
+				std::uint32_t edx = 0;
+				std::memcpy(&edx, version5, 4);              // mov edx,[0x6a49b0]
+				std::memcpy(game_info.data() + 0x3e, &edx, 4); // mov [eax+0x3e],edx
+				game_info[0x42] = version5[4];                 // mov dl,[0x6a49b4]; mov [eax+0x42],dl
+				return game_info;
+			};
+			const std::uint8_t retail_five[5] = {'1', '.', '3', '0', 0};
+			const auto stock = run(retail_five), token = run(bytes_for("LC29").data());
+			CHECK(std::memcmp(stock.data() + 0x3e, "1.30", 5) == 0 && std::memcmp(token.data() + 0x3e, "LC29", 5) == 0 && token[0x43] == 0);
+			std::vector<std::uint8_t> stock_literal(before.begin() + (ctor_va - image_base), before.begin() + (ctor_va - image_base) + ctor_bytes);
+			CHECK(stock_literal[3] == '1' && stock_literal[7] == '.' && stock_literal[11] == '3' && stock_literal[15] == '0'); // the immediates being replaced
+		}
 		mismatch = first_mismatch(image);
 		CHECK(mismatch && mismatch->va == version_va);
 		std::memcpy(image, before.data(), image_size);

@@ -151,17 +151,28 @@ namespace game_version
 			logger::write("online: ERROR: can't unprotect XMen2.exe's data at 0x%08lX (error %lu) - %s", version_va, GetLastError(), (lc_required ? "LC host/join sockets refused" : as_before));
 			return;
 		}
+		void* ctor = game_image() + (ctor_va - image_base);
+		DWORD ctor_protection = 0;
+		if (!VirtualProtect(ctor, ctor_bytes, PAGE_EXECUTE_READWRITE, &ctor_protection))
+		{
+			DWORD restored = 0;
+			VirtualProtect(target, patched_bytes, protection, &restored);
+			logger::write("online: ERROR: can't unprotect the game-info constructor at 0x%08lX (error %lu) - %s", ctor_va, GetLastError(), (lc_required ? "LC host/join sockets refused" : as_before));
+			return;
+		}
 		game_version_rules::apply(game_image(), chosen.version);
 		DWORD ignored = 0;
 		VirtualProtect(target, patched_bytes, protection, &ignored);
+		VirtualProtect(ctor, ctor_bytes, ctor_protection, &ignored);
+		FlushInstructionCache(GetCurrentProcess(), ctor, ctor_bytes);
 		const auto expected = bytes_for(chosen.version);
-		version_verified = std::memcmp(target,expected.data(),expected.size()) == 0;
+		version_verified = std::memcmp(target,expected.data(),expected.size()) == 0 && std::memcmp(ctor,ctor_patch.data(),ctor_patch.size()) == 0;
 		if (!version_verified)
 		{
 			logger::write("online: version patch readback failed; LC host/join sockets refused");
 			return;
 		}
-		logger::write("online: GameSpy game version %s ([Online] GameVersion; the game's own is 1.30, at 0x%08lX) - games of another version don't list or join",
-		              chosen.version.c_str(), version_va);
+		logger::write("online: GameSpy game version %s ([Online] GameVersion; the game's own is 1.30, at 0x%08lX; the game-info constructor 0x%08lX copies it) - games of another version don't list or join",
+		              chosen.version.c_str(), version_va, ctor_va);
 	}
 }
