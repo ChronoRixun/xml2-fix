@@ -169,3 +169,5 @@ refusal messages. Protocol 4, 108-byte framing and durable saves are unchanged.
 | HarmSingleChain | single | 23 revision 1, requested only |
 
 Absent, empty, off or xml2 omits a rule. Invalid or failed requested installs remain unverified. Both peers must match. HUD dirty-stat refresh/clamp timing parity remains unproved. Versions and content identity remain unchanged from 0.2.3c.
+
+`[Online] GameVersion` (the LC release token, `LC29`) is lobby metadata, not gameplay state: since candidate 0.2.3g it is also written into the game-info answer's first version field (0x61571c), which changes no gameplay-agreement rule, protocol or record byte.

@@ -74,7 +74,7 @@ Hold **RT** with a face button for powers, as on console. In menus, **A** accept
 
 - **Player 1** gets pad 1 *alongside* the keyboard (the pad is the secondary binding), so keyboard play keeps working.
 - **Players 2–4** get pads 2–4.
-- The fix only fills in bindings that are empty or still on the game's defaults (or on a layout an earlier version of the fix wrote). Anything you've customised is left alone, and you can rebind freely afterwards.
+- The fix only fills in bindings that are empty or still on the game's defaults (or on a layout an earlier version of the fix wrote). Anything you've customised is left alone, and you can rebind freely afterwards (one known catch: the on-screen prompts follow the fix's layout, not your custom bindings, [#8](https://github.com/ChronoRixun/xml2-fix/issues/8)).
 
 ### Button prompts
 
@@ -125,7 +125,7 @@ LocalIP=auto         ; the default. Or: first (Windows' order, as without the fi
 
 An address that isn't this PC's is ignored and `auto` applies. Without a route to the internet, Windows' order stays. `xml2-fix.log` shows the list once, before and after (`online: this PC's addresses (<PC_NAME>): <VIRTUAL_IP>, <LAN_IP>` then `online: LocalIP: <LAN_IP> first (...): <LAN_IP>, <VIRTUAL_IP>`; placeholders stand for the adapter addresses).
 
-**A mod that is another game** (the X-Men Legends I port) uses the same GameSpy name as XML2, `xmenlegpc`, so without a version of its own its hosted games would show up in XML2's lists and the other way round, and a join would load the host's zones on the other game's install. The game tells GameSpy and other players its version, `1.30`, and finds no games of another version (in the server list, on the LAN or by *Connect by IP*); `GameVersion` gives it another:
+**A mod that is another game** (the X-Men Legends I port) uses the same GameSpy name as XML2, `xmenlegpc`, so without a version of its own its hosted games would show up in XML2's lists and the other way round, and a join would load the host's zones on the other game's install. The game tells GameSpy and other players its version, `1.30`, and finds no games of another version (in the server list, on the LAN or by *Connect by IP*); `GameVersion` gives it another (since 1.6.0 the version also reaches the answer a host gives to LAN searches and *Connect by IP*, so two builds with the same `GameVersion` list and admit each other that way too):
 
 ```ini
 [Online]
@@ -472,7 +472,7 @@ Xml1MoldStage=x1v02:1:5   ; the saved flag that holds the fight's stage, as flag
 Format=lc       ; the LC save format: saves in SaveLC as .lcsave files with permanent identities; the old saves converted once
 ```
 
-**The LC save format.** XML2's own save file stores every item, talent, objective and zone object by its position in the tables the game loaded, so a campaign that keeps growing (the X-Men Legends I port) turns every older save into another save. With `Format=lc` the game's own serializer and loader are left alone, and the one object that moves their stream to and from the disk - the memory card's nine file methods - becomes the fix's: a slot is read from `SaveLC\saveslot<N>.lcsave` (the library rebuilds the engine's stream from permanent identities), written there atomically with a backup, listed from the file's own description; the profile goes to `SaveLC\profile.lcsave`. At the first file operation the build's tables (`Data\lcsave\catalogue.lcc` and the bind files beside the data files) are loaded and verified - when they don't verify, nothing is read or written in either folder and the slot list says why - and the old `Save` folder is converted once, with a ledger (`SaveLC\legacy-import.txt`); the originals are never written. A save made before a hero got a talent gets it on load at rank 0. See [the disk seam, the start-up and what stays undone](docs/save-format.md).
+**The LC save format.** XML2's own save file stores every item, talent, objective and zone object by its position in the tables the game loaded, so a campaign that keeps growing (the X-Men Legends I port) turns every older save into another save. With `Format=lc` the game's own serializer and loader are left alone, and the one object that moves their stream to and from the disk - the memory card's nine file methods - becomes the fix's: a slot is read from `SaveLC\saveslot<N>.lcsave` (the library rebuilds the engine's stream from permanent identities), written there atomically with a backup, listed from the file's own description; the profile goes to `SaveLC\profile.lcsave`. At the first file operation the build's tables (`Data\lcsave\catalogue.lcc` and the bind files beside the data files) are loaded and verified - when they don't verify, nothing is read or written in either folder and the slot list says why - and the old `Save` folder is converted once, with a ledger (`SaveLC\legacy-import.txt`); the originals are never written. A save made before a hero got a talent gets it on load at rank 0. See [the disk seam, the start-up and what stays undone](docs/save-format.md). A save written by a newer fix is never overwritten by an older one: it is kept as `.lcsave.newer`.
 
 **X-Men Legends I's Master Mold.** In the first game Master Mold raises a shield that only falls when his warp
 cores are destroyed, attacks from his platform and the floor on his own timers, and calls in sentinels; XML2's engine
@@ -810,6 +810,7 @@ It doesn't touch the game's files or saves, and it doesn't need an installer.
 
 ## 🧰 Troubleshooting
 
+- **Rebound your pad and the prompts no longer match?** A known open issue ([#8](https://github.com/ChronoRixun/xml2-fix/issues/8)): the prompts follow the fix's layout, not custom bindings. It has not been reproduced yet, so reports are welcome.
 - **Nothing changed?** Make sure `dinput.dll` is in the same folder as `XMen2.exe`, not a subfolder.
 - **Bindings still empty?** The fix only adds its layout to players with no gamepad bindings at all. If you had already bound a pad for a player, that player keeps your setup. Use *Revert to defaults* in *Advanced options* to get the fix's layout.
 - **Every launch writes `xml2-fix.log`** next to the DLL. It lists what the game saw and what the fix did. Attach it to any bug report (it can hold this PC's name, local addresses and folder paths: see [Privacy](#-privacy)).
