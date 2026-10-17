@@ -33,11 +33,12 @@ namespace receive_validation_rules
 	};
 
 	// Every accepted registration; 0x12/0x13 (fragmentation, dead code in stock and a receive-side crash/overflow)
-	// and every unknown opcode reject. Except for 0x18 these are the net030-harden values.
+	// and every unknown opcode reject. The wrapper and 0x1e's stock eight-byte admission body are stock-path
+	// corrections to the net030-harden values; the other entries use its lengths.
 	inline constexpr rule rules[] = {
-		{0x00,3,1285},{0x01,39,39},{0x02,4,4},{0x03,6,6},{0x04,4,4},{0x05,6,6},{0x06,39,39},{0x07,136,136},{0x08,138,138},
+		{0x00,2,1285},{0x01,39,39},{0x02,4,4},{0x03,6,6},{0x04,4,4},{0x05,6,6},{0x06,39,39},{0x07,136,136},{0x08,138,138},
 		{0x09,4,4},{0x0a,2,2},{0x0f,2,2},{0x10,0,1285},{0x11,4,4},{0x14,5,5},{0x16,0,0},{0x17,0,0},{0x18,68,game_info_max},
-		{0x19,0,1285},{0x1a,48,224},{0x1b,6,224},{0x1c,0,224},{0x1d,0,224},{0x1e,6,6},{0x1f,77,224},{0x26,6,6},{0x28,0,0},
+		{0x19,0,1285},{0x1a,48,224},{0x1b,6,224},{0x1c,0,224},{0x1d,0,224},{0x1e,6,8},{0x1f,77,224},{0x26,6,6},{0x28,0,0},
 		{0x29,4,4},{0x2b,9,9},{0x2c,5,5},{0x2e,10,10},{0x38,0,0},{0x39,0,0},{0x3a,0,0},{0x3e,4,4},{0x3f,0,0},
 		{0x40,1,1},{0x41,36,36},{0x42,0,0},{0x43,1,1},{0x44,238,1285},{0x45,40,1285},{0x46,4,4},{0x47,5,5},{0x48,200,200},
 		{0x49,0,0},{0x4a,0,2},{0x4b,0,0},{0x4c,0,0},{0x4d,0,0},{0x4e,0,0},{0x4f,0,0},{0x50,0,0},{0x51,0,0},{0x5a,1,1},
@@ -116,9 +117,10 @@ namespace receive_validation_rules
 		if (length > accepted->max_len) return drop_reason::body_too_long;
 		if (opcode == 0x00)
 		{
-			// Reliable wrapper [opcode u8][seq u16][payload]: the inner message must pass the same checks.
+			// Reliable wrapper [opcode u8][seq u16][payload]: event+8 is payload+2 (0x6100b0), so the inner
+			// message starts at body+3 and its declared length is length-2. Empty inner bodies have outer length 2.
 			if (!body[0]) return drop_reason::unknown_opcode;
-			return check(body[0], body + 3, length - 3, ctx);
+			return check(body[0], body + 3, length - 2, ctx);
 		}
 		switch (opcode)
 		{

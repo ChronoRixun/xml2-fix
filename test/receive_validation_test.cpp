@@ -205,14 +205,18 @@ namespace
 			if (r.opcode == 0x00)
 			{
 				std::array<std::uint8_t, 7> w{0x02, 0, 0, 0, 0, 0, 0};
-				expect(valid(0x00, w.data(), w.size()), "wrapper around a fixed 0x02 passes");
-				expect(check(0x00, w.data(), 6) == drop_reason::body_too_short, "wrapper with a short inner body is dropped");
+				expect(valid(0x00, w.data(), 6), "wrapper around a fixed 0x02 uses the native inner length");
+				expect(check(0x00, w.data(), 5) == drop_reason::body_too_short, "wrapper with a short inner body is dropped");
+				std::array<std::uint8_t, 11> admission{0x1e, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+				expect(valid(0x00, admission.data(), 10), "wrapper around the stock eight-byte 0x1e admission body passes");
+				std::array<std::uint8_t, 3> empty{0x28, 0, 0};
+				expect(valid(0x00, empty.data(), 2), "wrapper around an empty body passes");
 				w[0] = 0x13;
-				expect(check(0x00, w.data(), w.size()) == drop_reason::fragment_unsupported, "wrapper around a fragment is dropped");
+				expect(check(0x00, w.data(), 6) == drop_reason::fragment_unsupported, "wrapper around a fragment is dropped");
 				w[0] = 0x00;
-				expect(check(0x00, w.data(), w.size()) == drop_reason::unknown_opcode, "a nested wrapper is dropped");
+				expect(check(0x00, w.data(), 6) == drop_reason::unknown_opcode, "a nested wrapper is dropped");
 				w[0] = 0x99;
-				expect(check(0x00, w.data(), w.size()) == drop_reason::unknown_opcode, "wrapper around an unknown opcode is dropped");
+				expect(check(0x00, w.data(), 6) == drop_reason::unknown_opcode, "wrapper around an unknown opcode is dropped");
 				continue;
 			}
 			expect(valid(r.opcode, b.data(), r.min_len), "opcode accepts its minimum body");
