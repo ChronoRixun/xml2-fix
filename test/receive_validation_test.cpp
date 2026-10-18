@@ -242,6 +242,13 @@ namespace
 		expect(check(0x00, lockstep.data(), 36) == drop_reason::body_too_long, "oversized wrapped lockstep is rejected");
 		const std::array<std::uint8_t, 5> idle{0x02,0x0b,0,1,0};
 		expect(valid(0x00, idle.data(), 4), "captured four-byte wrapper admits its two-byte idle body");
+		// Movie state registers 0x59 only while active; its completion notification has no body.
+		const std::array<std::uint8_t, 3> movie_done{0x59,0x06,0};
+		expect(valid(0x59, nullptr, 0), "native movie completion admits an empty body");
+		expect(valid(0x00, movie_done.data(), 2), "captured movie completion reliable wrapper passes");
+		const std::array<std::uint8_t, 4> long_movie_done{0x59,0x06,0,1};
+		expect(check(0x59, long_movie_done.data(), 1) == drop_reason::body_too_long, "movie completion rejects a payload");
+		expect(check(0x00, long_movie_done.data(), 3) == drop_reason::body_too_long, "wrapped movie completion rejects a payload");
 		// Sender/decoder audit: compact and five-record movement shapes, independent of the rule table.
 		const struct { std::uint8_t first; std::size_t second; } movement[] = {{0x01,33},{0x02,2},{0x05,8},
 			{0x06,167},{0x68,6},{0x6a,142}};

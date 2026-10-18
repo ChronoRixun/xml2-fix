@@ -1,5 +1,7 @@
 # Changelog
 
+- Candidate 0.2.3h stock receive validation also accepts the dynamically registered, empty 0x59 movie-completion notification. Blocking it left online New Game motionless after the opening movie. Its payload length remains exactly zero, with wrapped and unwrapped regression coverage.
+
 ## 1.6.0 - unreleased
 - **Candidate 0.2.3h:** stock co-op receive validation checks native messages before dispatch, including reliable wrappers and padded native records; the builder defaults `[Online] ReceiveValidation=1`. Drop log lines name reliable wrapper type `0x00`, rather than the inner type (cosmetic). Malformed-message survival checks are not a claim that every tested message crashed the earlier candidate.
 - **Gun priority (#101 progress):** preserve XML1 gun-move priority 0 instead of adding XML2 priority 5, allowing real nonlethal hits to trigger pain and interrupt firing. This is a scoped fidelity correction; broader HAARP/Brotherhood combat parity remains open.

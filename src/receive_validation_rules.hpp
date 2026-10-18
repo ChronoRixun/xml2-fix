@@ -39,6 +39,8 @@ namespace receive_validation_rules
 	// angle pair + tick 6, five-record combined delta 142. These are bodies, without transport framing.
 	// Synchronization 0x2e reads ten bytes, but its sender at 0x614c39 sends a padded twelve-byte struct.
 	// Menu reply 0x2b similarly reads nine bytes and sends twelve (0x61158b).
+	// Movie completion 0x59 is registered dynamically at 0x5c9e31, not in the static session table.
+	// Its handler (0x5c9d30) reads only event context, never a payload; a captured reliable wrapper is 59 06 00.
 	inline constexpr rule rules[] = {
 		{0x00,2,1285},{0x01,33,33},{0x02,2,2},{0x03,6,6},{0x04,4,4},{0x05,8,8},{0x06,167,167},{0x07,136,136},{0x08,138,138},
 		{0x09,4,4},{0x0a,2,2},{0x0f,2,2},{0x10,0,1285},{0x11,4,4},{0x14,5,8},{0x16,0,8},{0x17,0,0},{0x18,68,game_info_max},
@@ -49,6 +51,7 @@ namespace receive_validation_rules
 		{0x5b,0,0},{0x5c,4,4},{0x5d,40,40},{0x5e,0,0},{0x5f,0,0},{0x60,0,1285},{0x61,0,0},{0x62,1,1},{0x63,0,0},
 		{0x64,0,0},{0x65,0,0},{0x66,4,4},{0x67,8,8},{0x68,6,6},{0x69,140,140},{0x6a,142,142},{0x6b,138,138},{0x6c,142,142},
 		{0x6d,140,140},{0x6e,0,224},{0x6f,25,25},{0x70,159,159},{0x71,0,0},{0x72,1,64},
+		{0x59,0,0},
 	};
 
 	inline const rule* find_rule(std::uint8_t opcode)
