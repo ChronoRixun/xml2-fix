@@ -236,7 +236,7 @@ namespace
 		}
 		// r11 captured the first 16 bytes of each 35-byte reliable lockstep event. Fill the uncaptured
 		// tail with synthetic bytes; the header, inner type and declared length reproduce the live failure.
-		std::array<std::uint8_t, 36> lockstep{0x01,0x08,0,0,0,0,0,0,0,0,0x10,0x27,0,0,0,0};
+		std::array<std::uint8_t, 36> lockstep{0x01,0x08,0,0,0,0,0,0,0,0,0,0x10,0x27,0,0,0};
 		expect(valid(0x00, lockstep.data(), 35), "captured 35-byte wrapper admits its 33-byte lockstep body");
 		expect(check(0x00, lockstep.data(), 34) == drop_reason::body_too_short, "truncated wrapped lockstep is rejected");
 		expect(check(0x00, lockstep.data(), 36) == drop_reason::body_too_long, "oversized wrapped lockstep is rejected");
