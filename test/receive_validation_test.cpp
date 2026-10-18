@@ -205,8 +205,8 @@ namespace
 			if (r.opcode == 0x00)
 			{
 				std::array<std::uint8_t, 7> w{0x02, 0, 0, 0, 0, 0, 0};
-				expect(valid(0x00, w.data(), 6), "wrapper around a fixed 0x02 uses the native inner length");
-				expect(check(0x00, w.data(), 5) == drop_reason::body_too_short, "wrapper with a short inner body is dropped");
+				expect(valid(0x00, w.data(), 4), "wrapper around a fixed 0x02 uses the native inner length");
+				expect(check(0x00, w.data(), 3) == drop_reason::body_too_short, "wrapper with a short inner body is dropped");
 				std::array<std::uint8_t, 11> admission{0x1e, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 				expect(valid(0x00, admission.data(), 10), "wrapper around the stock eight-byte 0x1e admission body passes");
 				static constexpr std::uint8_t eight_byte_session_opcodes[] = {0x14, 0x16, 0x2c, 0x26, 0x47};
@@ -233,6 +233,25 @@ namespace
 				b.resize(r.max_len + 1, 0);
 				expect(check(r.opcode, b.data(), r.max_len + 1) == drop_reason::body_too_long, "opcode drops a long body");
 			}
+		}
+		// r11 captured the first 16 bytes of each 35-byte reliable lockstep event. Fill the uncaptured
+		// tail with synthetic bytes; the header, inner type and declared length reproduce the live failure.
+		std::array<std::uint8_t, 36> lockstep{0x01,0x08,0,0,0,0,0,0,0,0,0x10,0x27,0,0,0,0};
+		expect(valid(0x00, lockstep.data(), 35), "captured 35-byte wrapper admits its 33-byte lockstep body");
+		expect(check(0x00, lockstep.data(), 34) == drop_reason::body_too_short, "truncated wrapped lockstep is rejected");
+		expect(check(0x00, lockstep.data(), 36) == drop_reason::body_too_long, "oversized wrapped lockstep is rejected");
+		const std::array<std::uint8_t, 5> idle{0x02,0x0b,0,1,0};
+		expect(valid(0x00, idle.data(), 4), "captured four-byte wrapper admits its two-byte idle body");
+		// Sender/decoder audit: compact and five-record movement shapes, independent of the rule table.
+		const struct { std::uint8_t first; std::size_t second; } movement[] = {{0x01,33},{0x02,2},{0x05,8},
+			{0x06,167},{0x68,6},{0x6a,142}};
+		std::array<std::uint8_t, 170> movement_body{};
+		for (const auto& shape : movement)
+		{
+			expect(valid(shape.first, movement_body.data(), shape.second), "native sender movement body passes");
+			movement_body[0] = shape.first;
+			expect(valid(0x00, movement_body.data(), shape.second + 2), "wrapped sender movement body passes");
+			movement_body[0] = 0;
 		}
 		std::vector<std::uint8_t> b(1400, 0);
 		expect(check(0x01, b.data(), 1286) == drop_reason::body_too_long, "any body past the stock cap is dropped");
@@ -339,7 +358,7 @@ namespace
 
 		// Valid traffic still reaches its handler, with the registration context and result intact.
 		enroll(0x01, &handler<0>, 0xabc, 0);
-		make_event(0x01, 39);
+		make_event(0x01, 33);
 		expect(dispatch(event.data()) == 0 && calls[0] == 1 && last_context[0] == (int)0xabc, "a valid lockstep record reaches its handler");
 		return_value[0] = 5;
 		expect(dispatch(event.data()) == 5 && calls[0] == 2, "the handler's result passes through the guard");
@@ -349,7 +368,7 @@ namespace
 		enroll(0x02, &handler<1>, 0x100, 0);
 		enroll(0x02, &handler<2>, 0x200, 0);
 		return_value[2] = 3;
-		make_event(0x02, 4);
+		make_event(0x02, 2);
 		expect(dispatch(event.data()) == 3 && calls[1] == 1 && calls[2] == 1 && last_context[2] == 0x200,
 		       "both registrations are tried in order until one consumes the message");
 		return_value[2] = 0;
@@ -361,9 +380,9 @@ namespace
 		expect(dispatch(event.data()) == 0 && calls[3] == 1, "the flags-0 registration runs for a connected peer's event");
 
 		// Invalid traffic is dropped before any handler, with the dispatch's no-handler return.
-		make_event(0x01, 38);
+		make_event(0x01, 32);
 		expect(dispatch(event.data()) == 0 && calls[0] == 2 && receive_validation::dropped() == 1, "a short body is dropped before the handler");
-		expect(logger::has("dropped opcode 0x01 (38 bytes): body too short"), "the drop is logged with opcode, size and reason");
+		expect(logger::has("dropped opcode 0x01 (32 bytes): body too short"), "the drop is logged with opcode, size and reason");
 		enroll(0x13, &handler<4>, 0, 0);
 		make_event(0x13, 20);
 		expect(dispatch(event.data()) == 0 && calls[4] == 0 && receive_validation::dropped() == 2, "an orphan fragment chunk is dropped before the fragment handler");
@@ -395,12 +414,12 @@ namespace
 
 		// Register preservation through both paths.
 		drive_dispatcher = dispatcher.data();
-		make_event(0x01, 38);
+		make_event(0x01, 32);
 		drive_event = event.data();
 		drive();
 		expect(drive_result == 0 && std::memcmp(regs_before, regs_after, sizeof(regs_before)) == 0,
 		       "the drop path preserves ebx/esi/edi/ebp and returns 0");
-		make_event(0x01, 39);
+		make_event(0x01, 33);
 		drive();
 		expect(drive_result == 0 && std::memcmp(regs_before, regs_after, sizeof(regs_before)) == 0,
 		       "the accept path preserves ebx/esi/edi/ebp through the resume");
