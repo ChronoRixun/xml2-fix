@@ -15,6 +15,7 @@ namespace receive_validation
 	{
 		using namespace receive_validation_rules;
 		bool published = false;
+		bool log_only = false;
 		std::uint32_t dropped_count = 0, logged_drops = 0;
 
 		// The dispatch (thiscall: ecx = dispatcher, one stack argument = the event) and its 7-byte entry, replayed
@@ -34,15 +35,19 @@ namespace receive_validation
 				const auto reason = check(event[0], *reinterpret_cast<const std::uint8_t* const*>(event + 4),
 				                          *reinterpret_cast<const std::uint16_t*>(event + 8), ctx);
 				if (reason == drop_reason::none) return true;
-				++dropped_count;
-				if (logged_drops < 8)
+				if (!log_only) ++dropped_count;
+				if (log_only || logged_drops < 8)
 				{
-					++logged_drops;
-					logger::write("online: receive validation dropped opcode 0x%02x (%u bytes): %s%s",
+					if (!log_only) ++logged_drops;
+					logger::write("online: receive validation %s opcode 0x%02x (%u bytes): %s%s",
+					              log_only ? "would drop" : "dropped",
 					              unsigned(event[0]), unsigned(*reinterpret_cast<const std::uint16_t*>(event + 8)),
-					              drop_reason_text(reason), logged_drops == 8 ? "; further drops are not logged" : "");
+					              drop_reason_text(reason), !log_only && logged_drops == 8 ? "; further drops are not logged" : "");
+					if (log_only && event[0] == 0x00)
+						logger::write("online: receive validation audit inner opcode 0x%02x",
+						              unsigned((*reinterpret_cast<const std::uint8_t* const*>(event + 4))[0]));
 				}
-				return false;
+				return log_only;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
 			{
@@ -111,15 +116,20 @@ namespace receive_validation
 			logger::write("online: receive validation: the dispatch entry is not the retail one; not installed (handlers unguarded)");
 			return;
 		}
+		// Development-only process opt-in; never emitted by the builder or exposed as a player setting.
+		wchar_t audit_value[2]{};
+		const bool audit_requested = GetEnvironmentVariableW(L"XML2FIX_RECEIVE_VALIDATION_LOG_ONLY", audit_value, 2) == 1 && audit_value[0] == L'1';
 		patch_transaction::contribution c;
 		c.owner = "receive_validation";
 		c.guards.push_back({dispatch, patch_transaction::bytes_of(dispatch_entry_hex), "common event dispatch entry"});
 		c.guards.push_back({dispatch_resume, patch_transaction::bytes_of(dispatch_resume_hex), "dispatch resume reads the event opcode"});
 		c.writes.push_back(patch_transaction::relocation(dispatch, "e9", true, address_of(reinterpret_cast<const void*>(&dispatch_guard)), 2, "receive validation dispatch guard"));
-		c.publish = []
+		c.publish = [audit_requested]
 		{
 			published = true;
+			log_only = audit_requested;
 			logger::write("online: receive validation installed - every message is checked against the handler table before a stock handler runs");
+			if (log_only) logger::write("online: receive validation DEVELOPMENT LOG ONLY - invalid messages are logged and delivered");
 		};
 		c.abandon = [] { logger::write("online: receive validation not installed; the stock receive handlers run unguarded"); };
 		c.retain = c.abandon;

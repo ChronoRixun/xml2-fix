@@ -424,6 +424,25 @@ namespace
 		expect(drive_result == 0 && std::memcmp(regs_before, regs_after, sizeof(regs_before)) == 0,
 		       "the accept path preserves ebx/esi/edi/ebp through the resume");
 		expect(calls[0] == 3, "the resumed dispatch still reached the handler");
+
+		// The development audit must preserve handler delivery and distinguish would-drops from drops.
+		copy(0x60dbe0, 0x70);
+		SetEnvironmentVariableW(L"XML2FIX_RECEIVE_VALIDATION_LOG_ONLY", L"1");
+		patch_transaction::transaction audit;
+		receive_validation::contribute(audit, GetModuleHandleW(nullptr));
+		expect(audit.commit() == patch_transaction::outcome::committed, "development audit installs the same guarded hook");
+		SetEnvironmentVariableW(L"XML2FIX_RECEIVE_VALIDATION_LOG_ONLY", nullptr);
+		const auto drops_before_audit = receive_validation::dropped();
+		for (int i = 0; i < 10; ++i)
+		{
+			make_event(0x01, 32);
+			dispatch(event.data());
+		}
+		expect(calls[0] == 13 && receive_validation::dropped() == drops_before_audit,
+		       "log-only audit delivers every would-drop without incrementing actual drops");
+		unsigned audit_lines = 0;
+		for (const auto& line : logger::logged) if (line.find("would drop opcode") != std::string::npos) ++audit_lines;
+		expect(audit_lines == 10, "log-only audit records every would-drop beyond the enforcement log limit");
 	}
 }
 
