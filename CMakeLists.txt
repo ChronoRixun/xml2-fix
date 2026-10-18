@@ -98,6 +98,7 @@ add_library(xml2_fix SHARED
 	src/conversations.cpp
 	src/gameplay_agreement.cpp
 	src/patch_transaction.cpp
+	src/receive_validation.cpp
 	src/explosive_first_hit.cpp
 	src/rank_costs.cpp
 	src/death_threshold.cpp
@@ -363,6 +364,10 @@ target_link_options(xml2_reliable_receive_test PRIVATE /BASE:0x400000 /DYNAMICBA
 add_executable(xml2_campaign_sender_test test/campaign_sender_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/reliable_receive_fixture.asm" src/entity_transfer.cpp src/patch_transaction.cpp)
 target_include_directories(xml2_campaign_sender_test PRIVATE src)
 target_link_options(xml2_campaign_sender_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# [Online] ReceiveValidation: the retail event dispatch under the production guard, plus the whole rule table.
+add_executable(xml2_receive_validation_test test/receive_validation_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/reliable_receive_fixture.asm" src/receive_validation.cpp src/patch_transaction.cpp)
+target_include_directories(xml2_receive_validation_test PRIVATE src)
+target_link_options(xml2_receive_validation_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
 add_executable(xml2_stun_rule_test test/stun_rule_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/stun_rule.cpp)
 target_include_directories(xml2_stun_rule_test PRIVATE src)

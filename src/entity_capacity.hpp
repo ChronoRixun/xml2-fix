@@ -44,4 +44,7 @@ namespace entity_capacity
 	// The DLL address the installed ledger's rel32 relocation at `site` transfers to (its bound replacement), or 0
 	// when the raise is not installed or `site` is not a relocation the install wrote itself.
 	std::uint32_t installed_target(std::uint32_t site);
+	// [Online] FastTransfer published with the capacity install: received 'H' bodies are then the agreed
+	// data/zero-run records, not the stock fixed 200-byte chunks (receive_validation reads this).
+	bool fast_transfer_installed();
 }

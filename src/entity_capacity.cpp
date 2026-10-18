@@ -522,6 +522,7 @@ namespace entity_capacity
 	}
 
 	bool retire_slot(std::uint32_t index) { return published.raised && entity_owners::retire_slot(owners, index); }
+	bool fast_transfer_installed() { return fast_installed; }
 	std::uint32_t installed_target(std::uint32_t site)
 	{
 		if (!install_published || !published.raised) return 0;
