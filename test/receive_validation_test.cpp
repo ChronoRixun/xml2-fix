@@ -254,6 +254,10 @@ namespace
 			movement_body[0] = 0;
 		}
 		std::vector<std::uint8_t> b(1400, 0);
+		expect(valid(0x2e, b.data(), 12), "stock twelve-byte synchronization record passes with native struct padding");
+		b[0] = 0x2e;
+		expect(valid(0x00, b.data(), 14), "reliable wrapper preserves the twelve-byte synchronization body");
+		b[0] = 0;
 		expect(check(0x01, b.data(), 1286) == drop_reason::body_too_long, "any body past the stock cap is dropped");
 		static constexpr std::uint8_t unknown_opcodes[] = {0x0b, 0x0c, 0x0d, 0x0e, 0x15, 0x20, 0x55, 0x73, 0x80, 0xff};
 		for (const auto op : unknown_opcodes)
