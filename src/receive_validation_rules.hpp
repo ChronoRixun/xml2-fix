@@ -20,6 +20,7 @@
 namespace receive_validation_rules
 {
 	constexpr std::size_t max_body = 0x505;
+	constexpr std::uint16_t max_body_u16 = 0x505;
 	// Admission and in-game index fields are bounded by the session's four player slots and the transport's six
 	// peer entries (net030-d3 section 3.3).
 	constexpr std::uint32_t admission_slots = 4, peer_slots = 6;
@@ -41,6 +42,16 @@ namespace receive_validation_rules
 	// Menu reply 0x2b similarly reads nine bytes and sends twelve (0x61158b).
 	// Movie completion 0x59 is registered dynamically at 0x5c9e31, not in the static session table.
 	// Its handler (0x5c9d30) reads only event context, never a payload; a captured reliable wrapper is 59 06 00.
+	// Two more groups are registered dynamically (registration call 0x610ef0, dispatch list lookup 0x612be0), found by
+	// scanning every registration site of the retail executable after the 0x59 miss:
+	//  * 0x20..0x25, the NAT mesh phase (sites 0x60569a, 0x605999..0x605a20): the host's 0x23 topology update (a
+	//    4-byte player-bitmask pair read at body+0) and its empty 0x25/0x24 completion messages, 0x21/0x22 (dword,
+	//    dword, byte at body+0/4/8) and 0x20 (a handler that returns at once). Every drop-in or third-player join
+	//    runs them; dropping 0x23/0x25 would stall the mesh.
+	//  * 0x53..0x58, the shared in-game state messages of handler 0x5b5720 (registered at 0x5b6b0a..0x5b6bb1):
+	//    0x53/0x54 read word@0 + dword@4, 0x55 dword@0 + bytes@4/@8 + dword@0xc, 0x57 byte@0, 0x58 dword@0, 0x56 nothing.
+	// Their minimums are the bytes each handler reads; their maximums are the 0x505 body cap, since no handler walks
+	// a length-driven loop. Handlers that read nothing take an empty body.
 	inline constexpr rule rules[] = {
 		{0x00,2,1285},{0x01,33,33},{0x02,2,2},{0x03,6,6},{0x04,4,4},{0x05,8,8},{0x06,167,167},{0x07,136,136},{0x08,138,138},
 		{0x09,4,4},{0x0a,2,2},{0x0f,2,2},{0x10,0,1285},{0x11,4,4},{0x14,5,8},{0x16,0,8},{0x17,0,0},{0x18,68,game_info_max},
@@ -52,6 +63,8 @@ namespace receive_validation_rules
 		{0x64,0,0},{0x65,0,0},{0x66,4,4},{0x67,8,8},{0x68,6,6},{0x69,140,140},{0x6a,142,142},{0x6b,138,138},{0x6c,142,142},
 		{0x6d,140,140},{0x6e,0,224},{0x6f,25,25},{0x70,159,159},{0x71,0,0},{0x72,1,64},
 		{0x59,0,0},
+		{0x20,0,max_body_u16},{0x21,9,max_body_u16},{0x22,9,max_body_u16},{0x23,4,max_body_u16},{0x24,0,max_body_u16},{0x25,0,max_body_u16},
+		{0x53,8,max_body_u16},{0x54,8,max_body_u16},{0x55,16,max_body_u16},{0x56,0,max_body_u16},{0x57,1,max_body_u16},{0x58,4,max_body_u16},
 	};
 
 	inline const rule* find_rule(std::uint8_t opcode)

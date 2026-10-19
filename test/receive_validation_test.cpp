@@ -270,9 +270,22 @@ namespace
 		expect(valid(0x00, b.data(), 14), "reliable wrapper preserves the twelve-byte menu reply");
 		b[0] = 0;
 		expect(check(0x01, b.data(), 1286) == drop_reason::body_too_long, "any body past the stock cap is dropped");
-		static constexpr std::uint8_t unknown_opcodes[] = {0x0b, 0x0c, 0x0d, 0x0e, 0x15, 0x20, 0x55, 0x73, 0x80, 0xff};
+		static constexpr std::uint8_t unknown_opcodes[] = {0x0b, 0x0c, 0x0d, 0x0e, 0x15, 0x27, 0x52, 0x30, 0x73, 0x80, 0xff};
 		for (const auto op : unknown_opcodes)
 			expect(check(op, b.data(), 8) == drop_reason::unknown_opcode, "unregistered opcode is dropped");
+		// Dynamically registered groups (NAT mesh 0x20..0x25, shared state 0x53..0x58) stay accepted, bare and wrapped.
+		{
+			struct dyn { std::uint8_t op; std::size_t read; };
+			static constexpr dyn dynamic[] = {{0x20,0},{0x21,9},{0x22,9},{0x23,4},{0x24,0},{0x25,0},{0x53,8},{0x54,8},{0x55,16},{0x56,0},{0x57,1},{0x58,4},{0x59,0}};
+			for (const auto& d : dynamic)
+			{
+				std::vector<std::uint8_t> bare(d.read ? d.read : 1, 0), wrapped(d.read + 3, 0);
+				expect(valid(d.op, bare.data(), d.read), "dynamically registered opcode accepts the bytes its handler reads");
+				wrapped[0] = d.op;
+				expect(valid(0x00, wrapped.data(), d.read + 2), "reliable wrapper around a dynamically registered opcode passes");
+				if (d.read) expect(check(d.op, bare.data(), d.read - 1) == drop_reason::body_too_short, "dynamically registered opcode drops a body shorter than its handler reads");
+			}
+		}
 		static constexpr std::uint8_t fragment_opcodes[] = {0x12, 0x13};
 		for (const auto op : fragment_opcodes)
 			expect(check(op, b.data(), 1) == drop_reason::fragment_unsupported, "fragment opcode is dropped");
@@ -401,8 +414,8 @@ namespace
 		enroll(0x13, &handler<4>, 0, 0);
 		make_event(0x13, 20);
 		expect(dispatch(event.data()) == 0 && calls[4] == 0 && receive_validation::dropped() == 2, "an orphan fragment chunk is dropped before the fragment handler");
-		enroll(0x55, &handler<5>, 0, 0); // nobody registers 0x55 natively; a registration proves the drop precedes dispatch
-		make_event(0x55, 8);
+		enroll(0x52, &handler<5>, 0, 0); // nobody registers 0x52 natively; a registration proves the drop precedes dispatch
+		make_event(0x52, 8);
 		expect(dispatch(event.data()) == 0 && calls[5] == 0 && receive_validation::dropped() == 3, "an unknown opcode is dropped even when registered");
 		enroll(0x1b, &handler<6>, 0, 0);
 		make_event(0x1b, 8);
