@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.6.0 - <date TBD>
+## 1.6.0 - 2026-10-18
 
 The engine half of Legends Classic 0.2.3: the first game's hazards, enemy combat timing and Danger Room, the Sentinel
 flashback's effects, and a co-op that loads a saved campaign in seconds. For X-Men Legends II as it ships only the
