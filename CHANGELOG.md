@@ -2,9 +2,14 @@
 
 ## Unreleased
 
-- `ResistanceDisplay=xml1` restores original scoped resistance subtitles under the
-  target health gauge. It retains native queries and adds no combat change or
-  random draws; the port's builder enables it.
+XML2 Fix 1.7.0 is the engine half of Legends Classic 0.2.4.
+
+- **Enemy resistance text is back:** with `[Game] ResistanceDisplay=xml1`, the
+  target health bar shows the first game's physical, energy and mental labels
+  and colors. Legends Classic enables this after a rebuild.
+- This changes the display only. Combat resistances, saves and co-op rules stay
+  the same. With the setting off or absent, the 1.6.0 display behavior remains.
+  Ordinary X-Men Legends II installs keep the setting off.
 
 ## 1.6.0 - 2026-10-18
 
