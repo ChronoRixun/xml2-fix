@@ -23,8 +23,11 @@ There is no actor cache, powerup application, damage hook or save change.
 
 The adapter asks the native bounds aggregator `0x54ff80`, rather than `0x550410`:
 the latter can draw a random value for a ranged affecter. Bounds are classified
-only when the entire interval has the same display meaning; no random value is
-drawn by this HUD query. A temporary affecter that disappears is absent on the next
+only when the entire interval has the same display meaning; the additional queries
+draw no random value. Every existing native formatter query still runs in its
+original order with the same arguments, preserving its cache/RNG behavior. Native
+extra damage types remain visible; with no original modifier, the entire native
+subtitle is retained. A temporary affecter that disappears is absent on the next
 HUD sample. The PC's energy and mental color/string indices are swapped relative
 to the original; their matching colors are used without editing the global table.
 

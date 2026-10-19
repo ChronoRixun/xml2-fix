@@ -10,14 +10,16 @@ namespace
  std::optional<std::string> setting="xml1";
  bool fatal=false;
  unsigned calls=0;
+ unsigned native_calls=0;
+ bool original=true;
  unsigned char actor[0x580]{};
  unsigned char __fastcall query(void* who,void*,int attribute,float* low,float* high,const void* context,int mode)
  {
-  assert(who==actor);++calls;
+  assert(who==actor && native_calls==7);++calls;
   const auto* words=static_cast<const std::uint32_t*>(context);
   for(unsigned i=0;i<0x64/4;++i)if(i!=4)assert(words[i]==0);
   *low=*high=mode==1 ? 1.f : 0.f;
-  if(attribute==56 && words[4]==0x80){*low=*high=.2f;return 1;}
+  if(original && attribute==56 && words[4]==0x80){*low=*high=.2f;return 1;}
   return 0;
  }
  const char* __fastcall get_text(void*,void*,int id)
@@ -29,6 +31,12 @@ namespace
  std::uintptr_t table[]{0,0,reinterpret_cast<std::uintptr_t>(&get_text)};
  std::uintptr_t* manager=table;
  void* __cdecl get_manager(){return &manager;}
+ const char* __fastcall native_formatter(void*,void*,void* who,int attribute,const void* context)
+ {
+  assert(who==actor && !context && attribute==13+int(native_calls));++native_calls;
+  if(attribute==16)return "extra ";
+  return !original && attribute==13 ? "native " : "";
+ }
  void jump(std::uint32_t at,const void* to)
  {
   auto* p=reinterpret_cast<unsigned char*>(at);p[0]=0xe9;
@@ -65,19 +73,25 @@ int main(int argc,char** argv)
   }
   assert(false);
  };
- seed(0x54ff80,16);seed(0x4bdb30,16);
+ seed(0x54ff80,16);seed(0x4bdb30,16);seed(0x543f80,16);seed(0x53d9c0,16);seed(0x69786c,4);
+ original=mode!="on-native";
  const auto plan=resistance_display_rules::patches(nullptr);
  seed(resistance_display_rules::site,plan[0].before.size()+1);
  if(mode=="off")setting.reset();if(mode=="xml2")setting="xml2";if(mode=="invalid")setting="bad";
  if(mode=="guard0")*reinterpret_cast<unsigned char*>(resistance_display_rules::site)^=1;
  if(mode=="guard1")*reinterpret_cast<unsigned char*>(0x54ff80)^=1;
  if(mode=="guard2")*reinterpret_cast<unsigned char*>(0x4bdb30)^=1;
+ if(mode=="guard3")*reinterpret_cast<unsigned char*>(0x543f80)^=1;
+ if(mode=="guard4")*reinterpret_cast<unsigned char*>(0x53d9c0)^=1;
+ if(mode=="guard5")*reinterpret_cast<unsigned char*>(0x69786c)^=1;
  const std::vector<unsigned char> before(reinterpret_cast<unsigned char*>(resistance_display_rules::site),reinterpret_cast<unsigned char*>(resistance_display_rules::resume));
  resistance_display::install(reinterpret_cast<HMODULE>(mode=="base" ? 0x500000 : 0x400000));
- assert(!fatal && resistance_display::installed()==(mode=="on"));
- if(mode=="on")
+ const bool success=mode=="on" || mode=="on-native";
+ assert(!fatal && resistance_display::installed()==success);
+ if(success)
  {
   jump(0x54ff80,reinterpret_cast<const void*>(&query));jump(0x4bdb30,reinterpret_cast<const void*>(&get_manager));
+  jump(0x543f80,reinterpret_cast<const void*>(&get_manager));jump(0x53d9c0,reinterpret_cast<const void*>(&native_formatter));
   *reinterpret_cast<unsigned char*>(resistance_display_rules::resume)=0xc3;
   // Run the emitted fragment at its real address. The caller recreates its
   // native stack-relative subtitle slot, with EDI holding the selected actor.
@@ -90,7 +104,8 @@ int main(int argc,char** argv)
    sub esp,200h
    lea eax,[esp+128h]
    mov buffer,eax
-   mov byte ptr[eax],0
+   mov dword ptr[eax],20676174h
+   mov byte ptr[eax+4],0
    lea edi,actor
    mov eax,5a8dech
    call eax
@@ -100,8 +115,8 @@ int main(int argc,char** argv)
    pop edi
    pop ebx
   }
-  assert(before_stack==after_stack && calls==9);
-  assert(std::strcmp(buffer,"~22reduced amber\n")==0);
+  assert(before_stack==after_stack && calls==9 && native_calls==7);
+  assert(std::strcmp(buffer,original ? "tag ~22reduced amber\nextra " : "tag native extra ")==0);
  }
  else assert(std::memcmp(reinterpret_cast<void*>(resistance_display_rules::site),before.data(),before.size())==0);
  std::cout<<"production resistance display "<<mode<<": PASS\n";

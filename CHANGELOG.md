@@ -3,8 +3,8 @@
 ## Unreleased
 
 - `ResistanceDisplay=xml1` restores original scoped resistance subtitles under the
-  target health gauge. It reads active modifiers without changing combat or drawing
-  random numbers; the port's builder enables it.
+  target health gauge. It retains native queries and adds no combat change or
+  random draws; the port's builder enables it.
 
 ## 1.6.0 - 2026-10-18
 
