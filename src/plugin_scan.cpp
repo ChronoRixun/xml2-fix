@@ -72,6 +72,14 @@ namespace plugin_scan
 
 	void install()
 	{
+		// Development-only process opt-out (never written by the builder or exposed as a setting): the before/after proof of the
+		// drive-root dialog runs the same DLL with and without the guard.
+		wchar_t off[2]{};
+		if (GetEnvironmentVariableW(L"XML2FIX_PLUGIN_SCAN_GUARD", off, 2) == 1 && off[0] == L'0')
+		{
+			logger::write("alchemy plugins: DEVELOPMENT opt-out - the drive-root plugin scan is not guarded");
+			return;
+		}
 		const HMODULE core = GetModuleHandleA("libIGCore.dll");
 		if (!core)
 		{
