@@ -286,6 +286,27 @@ namespace
 				if (d.read) expect(check(d.op, bare.data(), d.read - 1) == drop_reason::body_too_short, "dynamically registered opcode drops a body shorter than its handler reads");
 			}
 		}
+		// Drop lines name the INNER opcode of a wrapped message, its inner and wrapper sizes, the violated bound and the
+		// first sixteen inner bytes (0.2.3i: the 0.2.3h joiner logged only "opcode 0x00" for four false drops).
+		{
+			std::vector<std::uint8_t> wrapped_chunk(203, 0);
+			wrapped_chunk[0] = 0x48;
+			for (std::size_t i = 3; i < wrapped_chunk.size(); ++i) wrapped_chunk[i] = static_cast<std::uint8_t>(i - 2);
+			char line[256];
+			expect(check(0x00, wrapped_chunk.data(), 203) == drop_reason::body_too_long, "an oversized wrapped campaign chunk is refused");
+			receive_validation_rules::format_drop(line, sizeof(line), "dropped", 0x00, wrapped_chunk.data(), 203, drop_reason::body_too_long);
+			expect(std::strcmp(line, "online: receive validation dropped opcode 0x48 (wrapped, inner 201 bytes, wrapper 203): body too long (max 200); "
+			                         "first 16 bytes: 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10") == 0, std::string("wrapped drop line names the inner opcode: ") + line);
+			std::array<std::uint8_t, 4> short_plain{0x11, 0x22, 0x33, 0x44};
+			receive_validation_rules::format_drop(line, sizeof(line), "would drop", 0x01, short_plain.data(), 4, drop_reason::body_too_short);
+			expect(std::strcmp(line, "online: receive validation would drop opcode 0x01 (4 bytes): body too short (min 33); first 16 bytes: 11 22 33 44") == 0,
+			       std::string("plain drop line is unchanged apart from the bound and bytes: ") + line);
+			receive_validation_rules::format_drop(line, sizeof(line), "dropped", 0x10, nullptr, 0, drop_reason::body_too_short);
+			expect(std::strstr(line, "opcode 0x10 (0 bytes)") && !std::strstr(line, "first 16"), "a null body logs no bytes");
+			// A wrapper refused for its own size (past the stock cap) is reported as the wrapper.
+			receive_validation_rules::format_drop(line, sizeof(line), "dropped", 0x00, wrapped_chunk.data(), 1286, drop_reason::body_too_long);
+			expect(std::strstr(line, "opcode 0x00 (1286 bytes): body too long (max 1285)"), std::string("a wrapper past the cap names itself: ") + line);
+		}
 		static constexpr std::uint8_t fragment_opcodes[] = {0x12, 0x13};
 		for (const auto op : fragment_opcodes)
 			expect(check(op, b.data(), 1) == drop_reason::fragment_unsupported, "fragment opcode is dropped");
@@ -439,6 +460,17 @@ namespace
 		entity_capacity::fast_transfer = false;
 		make_event(0x10, 1286);
 		expect(dispatch(event.data()) == 0 && receive_validation::dropped() == 6, "a body past the stock cap is dropped");
+
+		{
+			// A wrapped 201-byte campaign chunk through the real guard is logged by its inner opcode.
+			make_event(0x00, 203);
+			std::memset(body.data(), 0, 203);
+			body[0] = 0x48;
+			const auto before = receive_validation::dropped();
+			dispatch(event.data());
+			expect(receive_validation::dropped() == before + 1 && logger::has("dropped opcode 0x48 (wrapped, inner 201 bytes, wrapper 203): body too long (max 200)"),
+			       "a wrapped drop is logged by its inner opcode through the dispatch guard");
+		}
 
 		// Register preservation through both paths.
 		drive_dispatcher = dispatcher.data();

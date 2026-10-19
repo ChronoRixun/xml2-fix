@@ -15,6 +15,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 namespace receive_validation_rules
@@ -164,6 +165,53 @@ namespace receive_validation_rules
 		case 0x72: return std::memchr(body, 0, length) ? drop_reason::none : drop_reason::unterminated_string;
 		default: return drop_reason::none;
 		}
+	}
+
+	// One log line for a refused (or, in the development audit, would-be refused) message. A reliable wrapper (0x00)
+	// is reported by the INNER opcode it carries, with the inner body length (wrapper length - 2) and the first sixteen
+	// inner bytes, so a false drop can be traced to the handler's table row: e.g.
+	//   "dropped opcode 0x6f (wrapped, inner 27 bytes, wrapper 29): body too long (max 25); first 16 bytes: ..."
+	// A plain message reads "dropped opcode 0x01 (32 bytes): body too short (min 33); first 16 bytes: ...".
+	// The bound shown is the table row the verdict came from (the 0x505 stock cap when only the cap was exceeded).
+	// `body` must be readable for `length` bytes (the caller already guards the read); returns the characters written.
+	inline int format_drop(char* out, std::size_t capacity, const char* verb, std::uint8_t opcode, const std::uint8_t* body,
+	                       std::size_t length, drop_reason reason, const context& ctx = {})
+	{
+		std::uint8_t shown_opcode = opcode;
+		const std::uint8_t* shown = body;
+		std::size_t shown_length = length;
+		bool wrapped = false;
+		// Report the inner message when the wrapper itself was well formed and the verdict is the inner one.
+		if (opcode == 0x00 && body && length >= 2 && length <= max_body && find_rule(0x00) && length >= find_rule(0x00)->min_len)
+		{
+			const auto inner_reason = check(body[0], body + 3, length - 2, ctx);
+			if (inner_reason == reason)
+			{
+				wrapped = true;
+				shown_opcode = body[0];
+				shown = body + 3;
+				shown_length = length - 2;
+			}
+		}
+		char bound[40]{};
+		if (reason == drop_reason::body_too_long || reason == drop_reason::body_too_short)
+		{
+			const auto* row = find_rule(shown_opcode);
+			if (reason == drop_reason::body_too_long)
+				std::snprintf(bound, sizeof(bound), " (max %u)", unsigned(row && shown_length <= max_body ? row->max_len : max_body));
+			else if (row)
+				std::snprintf(bound, sizeof(bound), " (min %u)", unsigned(row->min_len));
+		}
+		char hex[16 * 3 + 1]{};
+		std::size_t used = 0;
+		if (shown && length)
+			for (std::size_t i = 0; i < shown_length && i < 16 && used + 3 < sizeof(hex); ++i)
+				used += std::snprintf(hex + used, sizeof(hex) - used, i ? " %02x" : "%02x", unsigned(shown[i]));
+		char size_text[64];
+		if (wrapped) std::snprintf(size_text, sizeof(size_text), "wrapped, inner %u bytes, wrapper %u", unsigned(shown_length), unsigned(length));
+		else std::snprintf(size_text, sizeof(size_text), "%u bytes", unsigned(length));
+		return std::snprintf(out, capacity, "online: receive validation %s opcode 0x%02x (%s): %s%s%s%s", verb, unsigned(shown_opcode),
+		                     size_text, drop_reason_text(reason), bound, used ? "; first 16 bytes: " : "", hex);
 	}
 
 	inline bool valid(std::uint8_t opcode, const std::uint8_t* body, std::size_t length, const context& ctx = {})
