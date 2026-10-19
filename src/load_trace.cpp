@@ -29,6 +29,7 @@ namespace load_trace
 		using find_w_t = HANDLE(WINAPI*)(LPCWSTR, LPWIN32_FIND_DATAW);
 		using find_ex_a_t = HANDLE(WINAPI*)(LPCSTR, FINDEX_INFO_LEVELS, LPVOID, FINDEX_SEARCH_OPS, LPVOID, DWORD);
 		using find_ex_w_t = HANDLE(WINAPI*)(LPCWSTR, FINDEX_INFO_LEVELS, LPVOID, FINDEX_SEARCH_OPS, LPVOID, DWORD);
+		bool imported_load_a, imported_load_w, imported_load_ex_a, imported_load_ex_w, imported_find_a, imported_find_w, imported_find_ex_a, imported_find_ex_w;
 		load_a_t real_load_a;
 		load_w_t real_load_w;
 		load_ex_a_t real_load_ex_a;
@@ -180,14 +181,15 @@ namespace load_trace
 			return result;
 		}
 
-		// The hooks forward to the function the module imported (so a previously installed hook, e.g. the mod loader's
-		// file redirection, stays in the chain); the first one found is the forwarding target for every module.
+		// The hooks forward to the function the first hooked module imported (so a previously installed hook, e.g. the mod
+		// loader's file redirection or the plugin-scan guard, stays in the chain); the kernel32 function resolved in install()
+		// is only the fallback for a function no hooked module imports.
 		template <typename T>
-		void hook_one(HMODULE module, const char* function, T& real, void* replacement)
+		void hook_one(HMODULE module, const char* function, T& real, bool& from_import, void* replacement)
 		{
 			if (auto* previous = iat_hook::hook(module, "KERNEL32.dll", function, 0, replacement))
 			{
-				if (!real) real = reinterpret_cast<T>(previous);
+				if (!from_import) { real = reinterpret_cast<T>(previous); from_import = true; }
 			}
 		}
 
@@ -200,14 +202,14 @@ namespace load_trace
 			std::wstring folder(exe);
 			folder.resize(folder.find_last_of(L'\\') + 1);
 			if (_wcsnicmp(path, folder.c_str(), folder.size()) != 0) return;
-			hook_one(module, "LoadLibraryA", real_load_a, reinterpret_cast<void*>(&hook_load_a));
-			hook_one(module, "LoadLibraryW", real_load_w, reinterpret_cast<void*>(&hook_load_w));
-			hook_one(module, "LoadLibraryExA", real_load_ex_a, reinterpret_cast<void*>(&hook_load_ex_a));
-			hook_one(module, "LoadLibraryExW", real_load_ex_w, reinterpret_cast<void*>(&hook_load_ex_w));
-			hook_one(module, "FindFirstFileA", real_find_a, reinterpret_cast<void*>(&hook_find_a));
-			hook_one(module, "FindFirstFileW", real_find_w, reinterpret_cast<void*>(&hook_find_w));
-			hook_one(module, "FindFirstFileExA", real_find_ex_a, reinterpret_cast<void*>(&hook_find_ex_a));
-			hook_one(module, "FindFirstFileExW", real_find_ex_w, reinterpret_cast<void*>(&hook_find_ex_w));
+			hook_one(module, "LoadLibraryA", real_load_a, imported_load_a, reinterpret_cast<void*>(&hook_load_a));
+			hook_one(module, "LoadLibraryW", real_load_w, imported_load_w, reinterpret_cast<void*>(&hook_load_w));
+			hook_one(module, "LoadLibraryExA", real_load_ex_a, imported_load_ex_a, reinterpret_cast<void*>(&hook_load_ex_a));
+			hook_one(module, "LoadLibraryExW", real_load_ex_w, imported_load_ex_w, reinterpret_cast<void*>(&hook_load_ex_w));
+			hook_one(module, "FindFirstFileA", real_find_a, imported_find_a, reinterpret_cast<void*>(&hook_find_a));
+			hook_one(module, "FindFirstFileW", real_find_w, imported_find_w, reinterpret_cast<void*>(&hook_find_w));
+			hook_one(module, "FindFirstFileExA", real_find_ex_a, imported_find_ex_a, reinterpret_cast<void*>(&hook_find_ex_a));
+			hook_one(module, "FindFirstFileExW", real_find_ex_w, imported_find_ex_w, reinterpret_cast<void*>(&hook_find_ex_w));
 		}
 	}
 
@@ -226,6 +228,9 @@ namespace load_trace
 		real_find_ex_a = reinterpret_cast<find_ex_a_t>(GetProcAddress(kernel, "FindFirstFileExA"));
 		real_find_ex_w = reinterpret_cast<find_ex_w_t>(GetProcAddress(kernel, "FindFirstFileExW"));
 		unsigned examined = 1;
+		// libIGCore.dll first: its imports carry the whole chain (the plugin-scan guard, the mod loader), and that chain is the
+		// forwarding target of every traced call.
+		if (const HMODULE core = GetModuleHandleA("libIGCore.dll")) hook_module(core);
 		hook_module(game);
 		// By name, as the mod loader does (no module enumeration under the loader lock): the engine libraries the game links.
 		static constexpr const char* engine[] = {"libIGCore.dll", "libIGAttrs.dll", "libIGAudio.dll", "libIGCollision.dll", "libIGDisplay.dll",
