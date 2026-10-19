@@ -755,6 +755,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | --- | ------- | ------- |
 | `LogNetwork` | `0` | `1`: `xml2-fix.log` lists every connection and query the game makes |
 | `LogFiles` | `0` | `1`: `xml2-fix.log` lists every file the game opens |
+| `LoadLibraryTrace` | `0` | `1`: `xml2-fix.log` lists every DLL the game and its engine libraries load (requested name, result or error, calling module) and the engine's plugin-folder searches, for a start-up "Library ... could not be loaded" report |
 | `LogBreakRule` | `0` | `1` (with `BreakRule=xml1`): `xml2-fix.log` lists every melee level worked out and every hit on an object, with the verdict |
 | `SaveDumpRefused` | `0` | `1` (with `[Save] Format=lc`): a refused campaign save also writes the game's own save image to `SaveLC\refused-native-<time>.save`, for a bug report ([details](docs/save-format.md)) |
 | `SaveTrace` | `0` | `1` (with `[Save] Format=lc`): the log counts the game's own save capture and every per-object restore, for a bug report ([details](docs/save-guards.md)) |

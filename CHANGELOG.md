@@ -1,5 +1,7 @@
 # Changelog
 
+- Candidate 0.2.3i: stock receive validation no longer drops reliable messages whose handler reads a fixed layout and ignores extra bytes (a Blob-fight kill produced four false "body too long" drops on the joiner): those rows now take any length from their minimum up to the 0x505 stock cap; strict maxima stay only where a handler copies or indexes by length (0x10, 0x18, 0x1a/0x1b/0x1f, 0x44, 0x45, 0x48, 0x60, 0x72) and 0x12/0x13 stay refused. Drop log lines name the inner opcode of a wrapped message, its sizes, the violated bound and the first 16 bytes. New `[Debug] LoadLibraryTrace=1` logs the DLL loads and plugin-folder searches of the game and its engine libraries (default off, not part of the gameplay agreement).
+
 - Candidate 0.2.3h stock receive validation also accepts the dynamically registered, empty 0x59 movie-completion notification. Blocking it left online New Game motionless after the opening movie. Its payload length remains exactly zero, with wrapped and unwrapped regression coverage.
 
 ## 1.6.0 - unreleased

@@ -66,6 +66,8 @@
 #include "revival_cost.hpp"
 #include "mod_loader.hpp"
 #include "new_game.hpp"
+#include "load_trace.hpp"
+#include "plugin_scan.hpp"
 #include "net_trace.hpp"
 #include "openspy_redirect.hpp"
 #include "pad_profile.hpp"
@@ -459,6 +461,13 @@ namespace
 		// The game and the engine DLLs that read game data.
 		mod_loader::install({nullptr, "libIGCore.dll", "libIGGfx.dll", "libIGLua.dll", "libIGOpt.dll", "libCriMovie.dll"},
 		                    ini::flag(L"Debug", L"LogFiles", false));
+		// Alchemy's plugin helper scans an empty repository location = the drive root and loads every DLL there (the Windows
+		// leftovers appverifUI.dll / vfcompat.dll on C:\ raised two "Library ... could not be loaded" dialogs): answered
+		// "nothing there". After the mod loader, which hooks the same import and would otherwise bypass this.
+		plugin_scan::install();
+		// [Debug] LoadLibraryTrace: logs the DLL loads and plugin-directory searches of the game and its engine libraries
+		// (last, so it also sees the answer the guard above gives).
+		load_trace::install(game);
 
 		// Discord Rich Presence ([Discord], on by default): a thread of its own that reads the game's state and
 		// talks to Discord's local pipe; it hooks only ExitProcess (the game's import and msvcr71.dll's), to

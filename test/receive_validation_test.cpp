@@ -6,6 +6,7 @@
 #include "entity_capacity.hpp"
 #include "patch_transaction.hpp"
 #include <Windows.h>
+#include <algorithm>
 #include <array>
 #include <cstdarg>
 #include <cstdint>
@@ -239,7 +240,7 @@ namespace
 		std::array<std::uint8_t, 36> lockstep{0x01,0x08,0,0,0,0,0,0,0,0,0,0x10,0x27,0,0,0};
 		expect(valid(0x00, lockstep.data(), 35), "captured 35-byte wrapper admits its 33-byte lockstep body");
 		expect(check(0x00, lockstep.data(), 34) == drop_reason::body_too_short, "truncated wrapped lockstep is rejected");
-		expect(check(0x00, lockstep.data(), 36) == drop_reason::body_too_long, "oversized wrapped lockstep is rejected");
+		expect(valid(0x00, lockstep.data(), 36), "a wrapped lockstep body longer than the record is accepted (the handler ignores extra bytes)");
 		const std::array<std::uint8_t, 5> idle{0x02,0x0b,0,1,0};
 		expect(valid(0x00, idle.data(), 4), "captured four-byte wrapper admits its two-byte idle body");
 		// Movie state registers 0x59 only while active; its completion notification has no body.
@@ -247,8 +248,8 @@ namespace
 		expect(valid(0x59, nullptr, 0), "native movie completion admits an empty body");
 		expect(valid(0x00, movie_done.data(), 2), "captured movie completion reliable wrapper passes");
 		const std::array<std::uint8_t, 4> long_movie_done{0x59,0x06,0,1};
-		expect(check(0x59, long_movie_done.data(), 1) == drop_reason::body_too_long, "movie completion rejects a payload");
-		expect(check(0x00, long_movie_done.data(), 3) == drop_reason::body_too_long, "wrapped movie completion rejects a payload");
+		expect(valid(0x59, long_movie_done.data(), 1), "movie completion ignores a payload");
+		expect(valid(0x00, long_movie_done.data(), 3), "wrapped movie completion ignores a payload");
 		// Sender/decoder audit: compact and five-record movement shapes, independent of the rule table.
 		const struct { std::uint8_t first; std::size_t second; } movement[] = {{0x01,33},{0x02,2},{0x05,8},
 			{0x06,167},{0x68,6},{0x6a,142}};
@@ -270,9 +271,88 @@ namespace
 		expect(valid(0x00, b.data(), 14), "reliable wrapper preserves the twelve-byte menu reply");
 		b[0] = 0;
 		expect(check(0x01, b.data(), 1286) == drop_reason::body_too_long, "any body past the stock cap is dropped");
-		static constexpr std::uint8_t unknown_opcodes[] = {0x0b, 0x0c, 0x0d, 0x0e, 0x15, 0x20, 0x55, 0x73, 0x80, 0xff};
+		static constexpr std::uint8_t unknown_opcodes[] = {0x0b, 0x0c, 0x0d, 0x0e, 0x15, 0x27, 0x52, 0x30, 0x73, 0x80, 0xff};
 		for (const auto op : unknown_opcodes)
 			expect(check(op, b.data(), 8) == drop_reason::unknown_opcode, "unregistered opcode is dropped");
+		// Dynamically registered groups (NAT mesh 0x20..0x25, shared state 0x53..0x58) stay accepted, bare and wrapped.
+		{
+			struct dyn { std::uint8_t op; std::size_t read; };
+			static constexpr dyn dynamic[] = {{0x20,0},{0x21,9},{0x22,9},{0x23,4},{0x24,0},{0x25,0},{0x53,8},{0x54,8},{0x55,16},{0x56,0},{0x57,1},{0x58,4},{0x59,0}};
+			for (const auto& d : dynamic)
+			{
+				std::vector<std::uint8_t> bare(d.read ? d.read : 1, 0), wrapped(d.read + 3, 0);
+				expect(valid(d.op, bare.data(), d.read), "dynamically registered opcode accepts the bytes its handler reads");
+				wrapped[0] = d.op;
+				expect(valid(0x00, wrapped.data(), d.read + 2), "reliable wrapper around a dynamically registered opcode passes");
+				if (d.read) expect(check(d.op, bare.data(), d.read - 1) == drop_reason::body_too_short, "dynamically registered opcode drops a body shorter than its handler reads");
+			}
+		}
+		// Drop lines name the INNER opcode of a wrapped message, its inner and wrapper sizes, the violated bound and the
+		// first sixteen inner bytes (0.2.3i: the 0.2.3h joiner logged only "opcode 0x00" for four false drops).
+		{
+			std::vector<std::uint8_t> wrapped_chunk(203, 0);
+			wrapped_chunk[0] = 0x48;
+			for (std::size_t i = 3; i < wrapped_chunk.size(); ++i) wrapped_chunk[i] = static_cast<std::uint8_t>(i - 2);
+			char line[256];
+			expect(check(0x00, wrapped_chunk.data(), 203) == drop_reason::body_too_long, "an oversized wrapped campaign chunk is refused");
+			receive_validation_rules::format_drop(line, sizeof(line), "dropped", 0x00, wrapped_chunk.data(), 203, drop_reason::body_too_long);
+			expect(std::strcmp(line, "online: receive validation dropped opcode 0x48 (wrapped, inner 201 bytes, wrapper 203): body too long (max 200); "
+			                         "first 16 bytes: 01 02 03 04 05 06 07 08 09 0a 0b 0c 0d 0e 0f 10") == 0, std::string("wrapped drop line names the inner opcode: ") + line);
+			std::array<std::uint8_t, 4> short_plain{0x11, 0x22, 0x33, 0x44};
+			receive_validation_rules::format_drop(line, sizeof(line), "would drop", 0x01, short_plain.data(), 4, drop_reason::body_too_short);
+			expect(std::strcmp(line, "online: receive validation would drop opcode 0x01 (4 bytes): body too short (min 33); first 16 bytes: 11 22 33 44") == 0,
+			       std::string("plain drop line is unchanged apart from the bound and bytes: ") + line);
+			receive_validation_rules::format_drop(line, sizeof(line), "dropped", 0x10, nullptr, 0, drop_reason::body_too_short);
+			expect(std::strstr(line, "opcode 0x10 (0 bytes)") && !std::strstr(line, "first 16"), "a null body logs no bytes");
+			// A wrapper refused for its own size (past the stock cap) is reported as the wrapper.
+			receive_validation_rules::format_drop(line, sizeof(line), "dropped", 0x00, wrapped_chunk.data(), 1286, drop_reason::body_too_long);
+			expect(std::strstr(line, "opcode 0x00 (1286 bytes): body too long (max 1285)"), std::string("a wrapper past the cap names itself: ") + line);
+		}
+		// 0.2.3i: a handler that reads a fixed layout and ignores extra bytes accepts any body from its minimum to the stock
+		// cap, bare and wrapped, including the 27-byte inner body the 0.2.3h joiner dropped mid-fight.
+		{
+			// Rows that deliberately keep a strict maximum (see the table comment).
+			auto strict = [](std::uint8_t op) { return op == 0x10 || op == 0x18 || op == 0x19 || op == 0x1a || op == 0x1b || op == 0x1f ||
+				op == 0x44 || op == 0x45 || op == 0x48 || op == 0x60 || op == 0x72 || op == 0x00; };
+			std::vector<std::uint8_t> bare(0x600, 0), wrapped(0x600, 0);
+			for (const auto& r : receive_validation_rules::rules)
+			{
+				if (strict(r.opcode)) continue;
+				for (const std::size_t want : {std::size_t(27), std::size_t(r.min_len), std::size_t(0x505)})
+				{
+					const std::size_t n = want < r.min_len ? r.min_len : want;
+					std::fill(bare.begin(), bare.end(), std::uint8_t(0));
+					std::fill(wrapped.begin(), wrapped.end(), std::uint8_t(0));
+					// indexed fields stay in range (zero) so only the length is under test
+					expect(check(r.opcode, bare.data(), n) == drop_reason::none, "fixed-layout opcode accepts extra bytes (bare)");
+					wrapped[0] = r.opcode;
+					if (n + 2 <= receive_validation_rules::max_body)
+						expect(check(0x00, wrapped.data(), n + 2) == drop_reason::none, "fixed-layout opcode accepts extra bytes (wrapped)");
+				}
+				expect(check(r.opcode, bare.data(), 0x506) == drop_reason::body_too_long, "fixed-layout opcode still refuses a body past the stock cap");
+			}
+			// Hostile cases that must still drop, bare and wrapped (rel-023h hostile_inject.js classes).
+			std::fill(wrapped.begin(), wrapped.end(), std::uint8_t(0));
+			wrapped[0] = 0x13;
+			expect(check(0x00, wrapped.data(), 12) == drop_reason::fragment_unsupported, "an orphan fragment chunk (0x13) is refused wrapped");
+			expect(check(0x13, wrapped.data(), 12) == drop_reason::fragment_unsupported, "an orphan fragment chunk (0x13) is refused bare");
+			wrapped[0] = 0x48;
+			expect(check(0x00, wrapped.data(), 203) == drop_reason::body_too_long, "a wrapped 201-byte transfer chunk is refused");
+			expect(check(0x48, wrapped.data(), 0x505) == drop_reason::body_too_long, "a maximum-size transfer chunk is refused");
+			expect(check(0x48, wrapped.data(), 199) == drop_reason::body_too_short, "a 199-byte transfer chunk is refused");
+			wrapped[0] = 0x1b;
+			wrapped[3] = 99;
+			expect(check(0x00, wrapped.data(), 8) == drop_reason::bad_index, "a wrapped admission follow-up with slot 99 is refused");
+			wrapped[3] = 0;
+			expect(check(0x00, wrapped.data(), 226 + 1) == drop_reason::body_too_long, "an oversized admission follow-up is refused");
+			wrapped[0] = 0x29;
+			wrapped[3] = 0xff; wrapped[4] = 0xff;
+			expect(check(0x00, wrapped.data(), 100) == drop_reason::bad_index, "a lengthened 0x29 keeps its index check");
+			wrapped[0] = 0x72;
+			std::fill(wrapped.begin() + 3, wrapped.begin() + 3 + 70, std::uint8_t('A'));
+			expect(check(0x00, wrapped.data(), 72) == drop_reason::body_too_long, "an overlong wrapped 0x72 string is refused");
+			expect(check(0x72, wrapped.data() + 3, 64) == drop_reason::unterminated_string, "an unterminated 0x72 string is refused");
+		}
 		static constexpr std::uint8_t fragment_opcodes[] = {0x12, 0x13};
 		for (const auto op : fragment_opcodes)
 			expect(check(op, b.data(), 1) == drop_reason::fragment_unsupported, "fragment opcode is dropped");
@@ -401,8 +481,8 @@ namespace
 		enroll(0x13, &handler<4>, 0, 0);
 		make_event(0x13, 20);
 		expect(dispatch(event.data()) == 0 && calls[4] == 0 && receive_validation::dropped() == 2, "an orphan fragment chunk is dropped before the fragment handler");
-		enroll(0x55, &handler<5>, 0, 0); // nobody registers 0x55 natively; a registration proves the drop precedes dispatch
-		make_event(0x55, 8);
+		enroll(0x52, &handler<5>, 0, 0); // nobody registers 0x52 natively; a registration proves the drop precedes dispatch
+		make_event(0x52, 8);
 		expect(dispatch(event.data()) == 0 && calls[5] == 0 && receive_validation::dropped() == 3, "an unknown opcode is dropped even when registered");
 		enroll(0x1b, &handler<6>, 0, 0);
 		make_event(0x1b, 8);
@@ -426,6 +506,17 @@ namespace
 		entity_capacity::fast_transfer = false;
 		make_event(0x10, 1286);
 		expect(dispatch(event.data()) == 0 && receive_validation::dropped() == 6, "a body past the stock cap is dropped");
+
+		{
+			// A wrapped 201-byte campaign chunk through the real guard is logged by its inner opcode.
+			make_event(0x00, 203);
+			std::memset(body.data(), 0, 203);
+			body[0] = 0x48;
+			const auto before = receive_validation::dropped();
+			dispatch(event.data());
+			expect(receive_validation::dropped() == before + 1 && logger::has("dropped opcode 0x48 (wrapped, inner 201 bytes, wrapper 203): body too long (max 200)"),
+			       "a wrapped drop is logged by its inner opcode through the dispatch guard");
+		}
 
 		// Register preservation through both paths.
 		drive_dispatcher = dispatcher.data();

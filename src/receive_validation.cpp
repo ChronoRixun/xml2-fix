@@ -39,13 +39,11 @@ namespace receive_validation
 				if (log_only || logged_drops < 8)
 				{
 					if (!log_only) ++logged_drops;
-					logger::write("online: receive validation %s opcode 0x%02x (%u bytes): %s%s",
-					              log_only ? "would drop" : "dropped",
-					              unsigned(event[0]), unsigned(*reinterpret_cast<const std::uint16_t*>(event + 8)),
-					              drop_reason_text(reason), !log_only && logged_drops == 8 ? "; further drops are not logged" : "");
-					if (log_only && event[0] == 0x00)
-						logger::write("online: receive validation audit inner opcode 0x%02x",
-						              unsigned((*reinterpret_cast<const std::uint8_t* const*>(event + 4))[0]));
+					char line[256];
+					const auto* body = *reinterpret_cast<const std::uint8_t* const*>(event + 4);
+					const auto length = *reinterpret_cast<const std::uint16_t*>(event + 8);
+					format_drop(line, sizeof(line), log_only ? "would drop" : "dropped", event[0], body, length, reason, ctx);
+					logger::write("%s%s", line, !log_only && logged_drops == 8 ? "; further drops are not logged" : "");
 				}
 				return log_only;
 			}

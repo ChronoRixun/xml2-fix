@@ -70,6 +70,8 @@ add_library(xml2_fix SHARED
 	src/openspy_redirect.cpp
 	src/local_ip.cpp
 	src/net_trace.cpp
+	src/load_trace.cpp
+	src/plugin_scan.cpp
 	src/mod_loader.cpp
 	src/display.cpp
 	src/display_settings.cpp
@@ -368,6 +370,10 @@ target_link_options(xml2_campaign_sender_test PRIVATE /BASE:0x400000 /DYNAMICBAS
 add_executable(xml2_receive_validation_test test/receive_validation_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/reliable_receive_fixture.asm" src/receive_validation.cpp src/patch_transaction.cpp)
 target_include_directories(xml2_receive_validation_test PRIVATE src)
 target_link_options(xml2_receive_validation_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# Alchemy plugin enumeration of the drive root: the rule, and the guard hooked into this test's own FindFirstFileA import.
+add_executable(xml2_plugin_scan_test test/plugin_scan_test.cpp src/plugin_scan.cpp src/iat_hook.cpp)
+target_include_directories(xml2_plugin_scan_test PRIVATE src)
 
 add_executable(xml2_stun_rule_test test/stun_rule_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/stun_rule.cpp)
 target_include_directories(xml2_stun_rule_test PRIVATE src)

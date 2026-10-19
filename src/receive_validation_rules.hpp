@@ -15,11 +15,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 
 namespace receive_validation_rules
 {
 	constexpr std::size_t max_body = 0x505;
+	constexpr std::uint16_t max_body_u16 = 0x505;
 	// Admission and in-game index fields are bounded by the session's four player slots and the transport's six
 	// peer entries (net030-d3 section 3.3).
 	constexpr std::uint32_t admission_slots = 4, peer_slots = 6;
@@ -41,17 +43,46 @@ namespace receive_validation_rules
 	// Menu reply 0x2b similarly reads nine bytes and sends twelve (0x61158b).
 	// Movie completion 0x59 is registered dynamically at 0x5c9e31, not in the static session table.
 	// Its handler (0x5c9d30) reads only event context, never a payload; a captured reliable wrapper is 59 06 00.
+	// Two more groups are registered dynamically (registration call 0x610ef0, dispatch list lookup 0x612be0), found by
+	// scanning every registration site of the retail executable after the 0x59 miss:
+	//  * 0x20..0x25, the NAT mesh phase (sites 0x60569a, 0x605999..0x605a20): the host's 0x23 topology update (a
+	//    4-byte player-bitmask pair read at body+0) and its empty 0x25/0x24 completion messages, 0x21/0x22 (dword,
+	//    dword, byte at body+0/4/8) and 0x20 (a handler that returns at once). Every drop-in or third-player join
+	//    runs them; dropping 0x23/0x25 would stall the mesh.
+	//  * 0x53..0x58, the shared in-game state messages of handler 0x5b5720 (registered at 0x5b6b0a..0x5b6bb1):
+	//    0x53/0x54 read word@0 + dword@4, 0x55 dword@0 + bytes@4/@8 + dword@0xc, 0x57 byte@0, 0x58 dword@0, 0x56 nothing.
+	// Their minimums are the bytes each handler reads; their maximums are the 0x505 body cap, since no handler walks
+	// a length-driven loop. Handlers that read nothing take an empty body.
+	//
+	// Maximums (0.2.3i). A handler that reads a fixed layout from the body and never looks at the event length ignores
+	// extra bytes, so a longer body is harmless to it. The stock sender can also hand a longer body than the handler
+	// reads (the 0.2.3h joiner logged four false "body too long" drops of a 27-byte wrapped body mid-fight, caught
+	// by exact-length maxima derived from the handler's reads). Those rows therefore take `any` (the 0x505 body cap)
+	// and keep their minimum. The rows below keep a strict maximum on purpose:
+	//  * 0x10 ping: echoes the body as 0x11 with an allocation and copy sized by the event length (cap only).
+	//  * 0x18 join request: fixed 0x74-byte game-info copy, then strcmp from +0x3e to NUL; the maximum is the 0x74
+	//    struct plus the 108-byte agreement record.
+	//  * 0x1a, 0x1b, 0x1f admission records: copied by length / indexed by body fields, bounded by the struct plus
+	//    the agreement record (0xe0).
+	//  * 0x44 roster / 0x45: count- or pointer-driven reads inside the body (0x44 also needs 0x2a + 4*count + 3).
+	//  * 0x48 transfer chunk: rep movsd of event-length bytes into the 0x2fc00 pool at counter*200, so exactly 200
+	//    (FastTransfer data/zero-run records are validated separately).
+	//  * 0x72: byte-by-byte string copy into a 0x40-byte-bounded global; the NUL must be inside the body.
+	//  * 0x12/0x13 fragments: reject (not in this table).
+	inline constexpr std::uint16_t any = max_body_u16;
 	inline constexpr rule rules[] = {
-		{0x00,2,1285},{0x01,33,33},{0x02,2,2},{0x03,6,6},{0x04,4,4},{0x05,8,8},{0x06,167,167},{0x07,136,136},{0x08,138,138},
-		{0x09,4,4},{0x0a,2,2},{0x0f,2,2},{0x10,0,1285},{0x11,4,4},{0x14,5,8},{0x16,0,8},{0x17,0,0},{0x18,68,game_info_max},
-		{0x19,0,1285},{0x1a,48,224},{0x1b,6,224},{0x1c,0,224},{0x1d,0,224},{0x1e,6,8},{0x1f,77,224},{0x26,6,8},{0x28,0,0},
-		{0x29,4,4},{0x2b,9,12},{0x2c,5,8},{0x2e,10,12},{0x38,0,0},{0x39,0,0},{0x3a,0,0},{0x3e,4,4},{0x3f,0,0},
-		{0x40,1,1},{0x41,36,36},{0x42,0,0},{0x43,1,1},{0x44,238,1285},{0x45,40,1285},{0x46,4,4},{0x47,5,8},{0x48,200,200},
-		{0x49,0,0},{0x4a,0,2},{0x4b,0,0},{0x4c,0,0},{0x4d,0,0},{0x4e,0,0},{0x4f,0,0},{0x50,0,0},{0x51,0,0},{0x5a,1,1},
-		{0x5b,0,0},{0x5c,4,4},{0x5d,40,40},{0x5e,0,0},{0x5f,0,0},{0x60,0,1285},{0x61,0,0},{0x62,1,1},{0x63,0,0},
-		{0x64,0,0},{0x65,0,0},{0x66,4,4},{0x67,8,8},{0x68,6,6},{0x69,140,140},{0x6a,142,142},{0x6b,138,138},{0x6c,142,142},
-		{0x6d,140,140},{0x6e,0,224},{0x6f,25,25},{0x70,159,159},{0x71,0,0},{0x72,1,64},
-		{0x59,0,0},
+		{0x00,2,1285},{0x01,33,any},{0x02,2,any},{0x03,6,any},{0x04,4,any},{0x05,8,any},{0x06,167,any},{0x07,136,any},{0x08,138,any},
+		{0x09,4,any},{0x0a,2,any},{0x0f,2,any},{0x10,0,1285},{0x11,4,any},{0x14,5,any},{0x16,0,any},{0x17,0,any},{0x18,68,game_info_max},
+		{0x19,0,1285},{0x1a,48,224},{0x1b,6,224},{0x1c,0,any},{0x1d,0,any},{0x1e,6,any},{0x1f,77,224},{0x26,6,any},{0x28,0,any},
+		{0x29,4,any},{0x2b,9,any},{0x2c,5,any},{0x2e,10,any},{0x38,0,any},{0x39,0,any},{0x3a,0,any},{0x3e,4,any},{0x3f,0,any},
+		{0x40,1,any},{0x41,36,any},{0x42,0,any},{0x43,1,any},{0x44,238,1285},{0x45,40,1285},{0x46,4,any},{0x47,5,any},{0x48,200,200},
+		{0x49,0,any},{0x4a,0,any},{0x4b,0,any},{0x4c,0,any},{0x4d,0,any},{0x4e,0,any},{0x4f,0,any},{0x50,0,any},{0x51,0,any},{0x5a,1,any},
+		{0x5b,0,any},{0x5c,4,any},{0x5d,40,any},{0x5e,0,any},{0x5f,0,any},{0x60,0,1285},{0x61,0,any},{0x62,1,any},{0x63,0,any},
+		{0x64,0,any},{0x65,0,any},{0x66,4,any},{0x67,8,any},{0x68,6,any},{0x69,140,any},{0x6a,142,any},{0x6b,138,any},{0x6c,142,any},
+		{0x6d,140,any},{0x6e,0,any},{0x6f,25,any},{0x70,159,any},{0x71,0,any},{0x72,1,64},
+		{0x59,0,any},
+		{0x20,0,any},{0x21,9,any},{0x22,9,any},{0x23,4,any},{0x24,0,any},{0x25,0,any},
+		{0x53,8,any},{0x54,8,any},{0x55,16,any},{0x56,0,any},{0x57,1,any},{0x58,4,any},
 	};
 
 	inline const rule* find_rule(std::uint8_t opcode)
@@ -151,6 +182,53 @@ namespace receive_validation_rules
 		case 0x72: return std::memchr(body, 0, length) ? drop_reason::none : drop_reason::unterminated_string;
 		default: return drop_reason::none;
 		}
+	}
+
+	// One log line for a refused (or, in the development audit, would-be refused) message. A reliable wrapper (0x00)
+	// is reported by the INNER opcode it carries, with the inner body length (wrapper length - 2) and the first sixteen
+	// inner bytes, so a false drop can be traced to the handler's table row: e.g.
+	//   "dropped opcode 0x6f (wrapped, inner 27 bytes, wrapper 29): body too long (max 25); first 16 bytes: ..."
+	// A plain message reads "dropped opcode 0x01 (32 bytes): body too short (min 33); first 16 bytes: ...".
+	// The bound shown is the table row the verdict came from (the 0x505 stock cap when only the cap was exceeded).
+	// `body` must be readable for `length` bytes (the caller already guards the read); returns the characters written.
+	inline int format_drop(char* out, std::size_t capacity, const char* verb, std::uint8_t opcode, const std::uint8_t* body,
+	                       std::size_t length, drop_reason reason, const context& ctx = {})
+	{
+		std::uint8_t shown_opcode = opcode;
+		const std::uint8_t* shown = body;
+		std::size_t shown_length = length;
+		bool wrapped = false;
+		// Report the inner message when the wrapper itself was well formed and the verdict is the inner one.
+		if (opcode == 0x00 && body && length >= 2 && length <= max_body && find_rule(0x00) && length >= find_rule(0x00)->min_len)
+		{
+			const auto inner_reason = check(body[0], body + 3, length - 2, ctx);
+			if (inner_reason == reason)
+			{
+				wrapped = true;
+				shown_opcode = body[0];
+				shown = body + 3;
+				shown_length = length - 2;
+			}
+		}
+		char bound[40]{};
+		if (reason == drop_reason::body_too_long || reason == drop_reason::body_too_short)
+		{
+			const auto* row = find_rule(shown_opcode);
+			if (reason == drop_reason::body_too_long)
+				std::snprintf(bound, sizeof(bound), " (max %u)", unsigned(row && shown_length <= max_body ? row->max_len : max_body));
+			else if (row)
+				std::snprintf(bound, sizeof(bound), " (min %u)", unsigned(row->min_len));
+		}
+		char hex[16 * 3 + 1]{};
+		std::size_t used = 0;
+		if (shown && length)
+			for (std::size_t i = 0; i < shown_length && i < 16 && used + 3 < sizeof(hex); ++i)
+				used += std::snprintf(hex + used, sizeof(hex) - used, i ? " %02x" : "%02x", unsigned(shown[i]));
+		char size_text[64];
+		if (wrapped) std::snprintf(size_text, sizeof(size_text), "wrapped, inner %u bytes, wrapper %u", unsigned(shown_length), unsigned(length));
+		else std::snprintf(size_text, sizeof(size_text), "%u bytes", unsigned(length));
+		return std::snprintf(out, capacity, "online: receive validation %s opcode 0x%02x (%s): %s%s%s%s", verb, unsigned(shown_opcode),
+		                     size_text, drop_reason_text(reason), bound, used ? "; first 16 bytes: " : "", hex);
 	}
 
 	inline bool valid(std::uint8_t opcode, const std::uint8_t* body, std::size_t length, const context& ctx = {})
