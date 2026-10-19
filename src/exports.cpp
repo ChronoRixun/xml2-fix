@@ -66,6 +66,7 @@
 #include "revival_cost.hpp"
 #include "mod_loader.hpp"
 #include "new_game.hpp"
+#include "load_trace.hpp"
 #include "net_trace.hpp"
 #include "openspy_redirect.hpp"
 #include "pad_profile.hpp"
@@ -199,6 +200,8 @@ namespace
 		{
 			net_trace::install(game);
 		}
+		// [Debug] LoadLibraryTrace: logs the DLL loads and plugin-directory searches of the game and its engine libraries.
+		load_trace::install(game);
 		// [Online] GameVersion: the string the game copies into its network code at start-up and when online
 		// opens - here, before any of its code runs.
 		game_version::install(game);

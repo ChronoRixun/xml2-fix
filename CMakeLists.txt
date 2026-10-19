@@ -70,6 +70,7 @@ add_library(xml2_fix SHARED
 	src/openspy_redirect.cpp
 	src/local_ip.cpp
 	src/net_trace.cpp
+	src/load_trace.cpp
 	src/mod_loader.cpp
 	src/display.cpp
 	src/display_settings.cpp
