@@ -1,5 +1,6 @@
 # Scoped exceptions for the builder content guard used on this C++ repository.
 # Each entry describes original code/art or invented test data; no game assets are accepted.
+DISASM  test/resistance_display_install_test.cpp  # Authored inline assembler recreates a synthetic HUD caller frame and executes our emitted bridge; no game instruction listing.
 MEDIA  docs/discord-art/badge-cutscene.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
 MEDIA  docs/discord-art/badge-dangerroom.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
 MEDIA  docs/discord-art/badge-menu.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
