@@ -1,44 +1,89 @@
 # Changelog
 
-- Candidate 0.2.3i: stock receive validation no longer drops reliable messages whose handler reads a fixed layout and ignores extra bytes (a Blob-fight kill produced four false "body too long" drops on the joiner): those rows now take any length from their minimum up to the 0x505 stock cap; strict maxima stay only where a handler copies or indexes by length (0x10, 0x18, 0x1a/0x1b/0x1f, 0x44, 0x45, 0x48, 0x60, 0x72) and 0x12/0x13 stay refused. Drop log lines name the inner opcode of a wrapped message, its sizes, the violated bound and the first 16 bytes. New `[Debug] LoadLibraryTrace=1` logs the DLL loads and plugin-folder searches of the game and its engine libraries (default off, not part of the gameplay agreement).
+## 1.6.0 - <date TBD>
 
-- Candidate 0.2.3h stock receive validation also accepts the dynamically registered, empty 0x59 movie-completion notification. Blocking it left online New Game motionless after the opening movie. Its payload length remains exactly zero, with wrapped and unwrapped regression coverage.
+The engine half of Legends Classic 0.2.3: the first game's hazards, enemy combat timing and Danger Room, the Sentinel
+flashback's effects, and a co-op that loads a saved campaign in seconds. For X-Men Legends II as it ships only the
+network-message check and the plugin-dialog fix apply; everything else is off until a mod's `xml2-fix.ini` asks for it
+(the port's builder sets it all).
 
-## 1.6.0 - unreleased
-- **Candidate 0.2.3h:** stock co-op receive validation checks native messages before dispatch, including reliable wrappers and padded native records; the builder defaults `[Online] ReceiveValidation=1`. Drop log lines name reliable wrapper type `0x00`, rather than the inner type (cosmetic). Malformed-message survival checks are not a claim that every tested message crashed the earlier candidate.
-- **Gun priority (#101 progress):** preserve XML1 gun-move priority 0 instead of adding XML2 priority 5, allowing real nonlethal hits to trigger pain and interrupt firing. This is a scoped fidelity correction; broader HAARP/Brotherhood combat parity remains open.
-- Candidate identity: content 20 -> 21, catalogue 7 retained, LC29 -> LC30. Builder 0.2.3 / XML2 Fix 1.6.0, save format and gameplay agreement rules are unchanged. Both peers need this candidate.
+**For everyone**
 
-- **Connect by IP and the LAN search work for LC builds:** the host's game-info answer carried the game's own version `1.30` in its first version field (written by the game-info constructor, not copied from the string `[Online] GameVersion` patches), so a joiner on `LC29` filed every LC29 host as another game and listed or admitted nothing by *Connect by IP* or LAN search (only the OpenSpy list worked). `[Online] GameVersion` now also rewrites that constructor store (19 guarded bytes at 0x61571c, same transaction, readback); with the key unset the stock bytes stay. Lobby metadata only: no gameplay rule, protocol 4 and the record are unchanged; LC28 and no-key builds are still not listed or admitted by LC29.
+- **Malformed network messages are checked and dropped** (`[Online] ReceiveValidation`, on by default): the game
+  checks the size and shape of every message it receives, per message type, before its handler runs, and drops one that
+  doesn't fit instead of acting on it (a line in `xml2-fix.log`, rate-limited). Nothing changes on the wire, so it
+  works with players who don't have it. Ordinary messages that carry extra bytes, and the game's own empty movie
+  completion message, are not dropped.
+- **No "Library appverifUI.dll could not be loaded" dialogs** when the game runs from `C:\`: the engine's plugin
+  helper scanned the root of the current drive for plugins when no plugin folder is set, and loaded Windows' own
+  leftover DLLs there. That one empty search now finds nothing; the game's real plugin folders are untouched.
+- `[Debug] LoadLibraryTrace=1` lists the DLLs the game and its engine libraries load and the plugin-folder searches,
+  for a bug report (off by default).
 
+**New for mods (the port's builder sets all of these)**
 
-- **Opening fire rhythm (#104 follow-up):** `HarmSingleChain=single` keeps ONE repeat chain per boxed touch fire. Before, every new contact could add another persistent 0.4 s repeat chain, so standing in or re-entering a fire stacked hits (one hero produced 130 outstanding repeat events in a test). Now an ordinary fire hits about once per 0.4 s (3 HP per hit at the opening fire), and stops hurting when you step out. Damage amounts, repeat values, bounds and knockback are native and unchanged; this is a deliberate scheduling policy, not a measured original-console damage rate, and not a one-second grace period after entering a fire. Requested-only gameplay rule **23**, revision 1; the builder defaults it on. The authored-startup adapter `HarmLoopStartup` stays a developer option and still blocks online play.
-- **Co-op Load Saved Campaign fixed:** the host's saved-campaign transfer could stall or end the session when the joiner's shared network message pools filled up. The receiving side now reserves room in all four shared pools (headers, large bodies, small bodies, queue nodes), defers a datagram it cannot store instead of acknowledging it, refuses an outgoing reply it cannot fit before copying, and ends a session that stays pressure-blocked for 30 s with one clear log line. This repair has no gameplay rule of its own; the speed-up below (rule 24) makes the saved-campaign transfer take seconds instead of minutes.
-- **Danger Room lesson goals documented:** the original protects combo-training robots until the required move connects. The builder validator V16 now checks the original lesson goals (FR101-105 count specific combat-node connections, FR112 counts seven grabs, CHMAG needs 20 kills); the engine docs describe the course death/progress path. No gameplay change: punching a protected robot with other moves lowers its bar but does not kill it - use the move the lesson names.
-- Builder 0.2.3 / XML2 Fix 1.6.0, content 20 / catalogue 7 / LC29, protocol 4 and the bind fingerprint are unchanged: this candidate adds one runtime switch (rule 23), the transfer repair and documentation, no game-data changes.
+- **Co-op *Load Saved Campaign* works and takes seconds.** The host's saved-campaign transfer could stall or end the
+  session when the joiner's shared network message pools filled up. The receiving side now keeps room in all four
+  pools, defers a datagram it can't store instead of acknowledging it, and ends a session that stays blocked for 30
+  seconds with one clear log line. With `[Online] FastTransfer=1` (and `[Limits] EntityCapacity=1`) the 2 MiB campaign
+  image is sent as data and zero-run records with up to 32 messages in flight and a larger rate budget: two real saves
+  took about 3 and 1 seconds of transfer (15 and 5 seconds from click to playing) on a LAN, against about 160 seconds
+  before. Both PCs must use it (rule **24**). ([details](docs/online-campaign-transfer.md)).
+- **Connect by IP and the LAN search work for a mod's builds:** `[Online] GameVersion` now also reaches the answer a
+  host gives to LAN searches and *Connect by IP*, so two builds with the same version list and admit each other that
+  way (only the OpenSpy list worked before).
+- **Hazards that hurt again:** `[Game] BoxHarmOrigin=xml1` (rule **21**) gives a boxed hazard the first game's
+  knockback direction, and `[Game] HarmSingleChain=single` (rule **23**) keeps one repeat chain per touch fire, so a fire
+  hits about once per 0.4 seconds and stops when you step out (before, re-entering one stacked up repeat events).
+  ([box origin](docs/box-harm-origin.md), [single chain](docs/harm-single-chain.md)).
+- **Crates that land on the floor:** `[Game] ObjectWorldImpact=xml1` (rule **17**): a landing with no physical target
+  does no damage, as in the first game. ([details](docs/object-world-impact.md)).
+- **Enemy AI revision 4 and party stun** (issue #101, progress): `[Game] NpcPowerRule=xml1` restores each enemy
+  button's combo delay and clamps stale deadlines after a clock rewind or AI-slot reuse; `[Game] StunRule=xml1` (rule
+  **18**, revision 2) gives party heroes the original stun playback speed and input recovery and discards a refused
+  or interrupted stun. ([enemy AI](docs/npc-power-rule.md), [stun](docs/stun-rule.md)).
+- **Danger Room:** `[Game] DangerRoomParty=xml1` (rule **19**) is the first game's four-hero fallback for a course
+  that starts without a full party, and `[Game] DangerRoomHealthBars=xml1` (rule **22**) shows the health bar of a
+  protected training robot; the protection and the course limits stay. ([details](docs/danger-room-courses.md)).
+- **Sentinel flashback:** `[Game] Xml1LockOnEffects` restores the eye-scan, surface-hit and acquired-target effects and
+  `[Game] Xml1LockOnAim=1` (rule **20**) aims by the animated head, as in the first game.
+  ([details](docs/lockon-effects.md)).
+- **Saved zones keep what they had:** an LC zone record can keep a verified identical prefix of its residents across a
+  map change that only adds to the end, and the new ones start fresh; a missing, stale or ambiguous record is
+  discarded as before. The save format is unchanged. ([details](docs/native-fresh-tail.md)).
+- **Optional `[TestMode]`:** Forge access, F8 enemy clear, F9 party protection and F10 return to the nearest safe start
+  for testers; both switches are off by default and refuse online hosting and joining.
+  ([details](docs/test-mode.md)).
 
+**Online**
 
-- **Online saved campaigns:** under raised entity capacity, reserve receive space across all four shared transport pools and defer a full datagram before acknowledging it. Preflight outgoing replies/fragments before allocation; persistent pool pressure ends the connection safely instead of deadlocking or copying through null. This fixes the reproduced receive-pool stall without changing saves, protocol 4, or the stock send rate. Controlled burst reproduction and validation limits: [campaign transfer](docs/online-campaign-transfer.md).
-- **Fast co-op Load Saved Campaign (rule 24):** `[Online] FastTransfer=1` (with `[Limits] EntityCapacity=1`) sends the 2 MiB campaign image as data and zero-run records, up to 32 in flight per peer within shared-pool margins, and raises a peer's datagram budget from 100,000 to 400,000 bytes/s. Two real saved slots took about 3 s and 1 s of transfer (15 s and 5 s whole load) on a LAN, against about 160 s before. Both PCs must use it: requested-only gameplay rule **24**, revision 1, builder default on; absent or 0 keeps the stock sender and the released digest, a mismatched peer is refused naming FastTransfer in both directions. Details: [campaign transfer](docs/online-campaign-transfer.md).
-- **Opening fire (#104 follow-up):** `BoxHarmOrigin=xml1` restores the XBE zero-origin argument for boxed harm. The native victim/attacker fallback replaces the PC box-centre direction and uses the native 0.01 dispatch delay. Damage amounts, bounds and authored repeat intervals remain unchanged. This addresses the opening fire's upward repeated-contact impulse; other boxed hazards need campaign testing. Requested-only gameplay rule **21**, revision 1.
-- **Danger Room robot health bars (tester report):** `DangerRoomHealthBars=xml1` bypasses the protected training-target HUD suppression gate so ordinary attacks can show a decreasing gauge. Protection and course limits remain intact. The newly reachable native HUD path may refresh dirty stats and schedule health clamping; timing parity is unproved, so requested-only gameplay rule **22**, revision 1, covers this behavior.
-- The builder enables both keys for XML1 builds and refuses an existing companion missing either key. Matching verified installs can host/join; absent keys omit their rules, invalid/failed requests block admission, and mismatches name the setting. Ordinary XML2 defaults stay off. Builder 0.2.3 / XML2 Fix 1.6.0, content 20 / catalogue 7 / LC29 and the immutable bind fingerprint are unchanged: this candidate adds runtime switches and documentation, no game-data changes.
+- Rules **17** to **24** register only when a mod requests them; matching installs play together, and a missing,
+  failed or different rule refuses the join with its name on both PCs.
+- Gameplay agreement protocol 4 (the same 108-byte record): **1.5 and older peers are refused at join as another
+  build, so both players need 1.6.0.**
 
+<details><summary>Technical details</summary>
 
-**Online saved-campaign transfer fixed.** Transient native metadata carries fresh resident tails through co-op saved-campaign transfer; the durable LC save format is unchanged. Gameplay agreement protocol is now 4 (108-byte framing kept): 1.5 and older peers are refused at admission, as before.
+- `[Online] ReceiveValidation`: a guarded hook on the game's common message dispatch checks each message (from the
+  datagram parser, the ordered drain and fragment reassembly, including reliable wrappers and padded records) against a
+  per-type table of minimum and maximum sizes. Fixed-layout types whose handler ignores extra bytes accept any body
+  from their minimum up to the game's 1285-byte cap; strict maxima stay only where a handler copies or indexes by
+  length, and two types stay refused. The empty dynamically registered movie-completion notification is accepted. A
+  drop line names the inner type of a wrapped message, its size, the violated bound and the first 16 bytes. A hook
+  that can't verify its bytes leaves the game's own dispatch and says so in the log.
+- The plugin-scan guard answers the plugin helper's one empty-repository search (`\*.*`, the root of the current
+  drive) with "file not found" and logs one line; a pattern with a directory part is left alone. It is installed after
+  the mod loader. `XML2FIX_PLUGIN_SCAN_GUARD=0` (environment) turns it off for development only.
+- `[Online] GameVersion` also rewrites the game-info constructor's own version store (19 guarded bytes, in the same
+  transaction, with readback); with the key unset the stock bytes stay. Lobby metadata only: no gameplay rule.
+- Saved-campaign transfer: the receiver reserves room in the headers, large bodies, small bodies and queue nodes before
+  it stores a datagram; an outgoing reply or fragment it can't fit is refused before anything is copied. A transient
+  native marker carries the fresh tail of a retained zone record through the transfer; the durable LC format is
+  unchanged.
+- The authored-startup adapter `HarmLoopStartup` stays a developer option and still blocks online play.
+  Disabled optional rules 17 to 22 are named in local refusal messages although they are absent from the OFF record.
 
-Companion engine for Legends Classic 0.2.3. Optional gameplay changes remain off in an ordinary XML2 install.
-
-- `DangerRoomParty=xml1`: original four-hero fallback for an incomplete non-solo course party, avoiding the absent PC hero/default actor. Gameplay rule **19**, revision 1.
-- `Xml1LockOnEffects=beam,surface,target`: restores the three omitted lock-on visual paths; `Xml1LockOnAim=1` uses the animated head for natural acquisition. Aiming is gameplay rule **20**, revision 1; valid effects and the complete verified transaction are required.
-
-- `ObjectWorldImpact=xml1`: zero ordinary landing-impact damage for every no-physical-target collision, as in XML1's coefficient-table entry zero. Physical-target coefficients and authored throw hits retain their native paths. Gameplay rule **17**, revision 1.
-- `NpcPowerRule=xml1`: revision **4** restores per-button combo delays and clamps stale deadlines after clock rewind or AI-slot reuse. OFF keeps released revision 3 in the digest.
-- `StunRule=xml1`: party heroes use original stun playback speed and input recovery, discard refused flags and clear interrupted reactions. Enemy reactions remain native. Gameplay rule **18**, revision 2. This is progress on #101, not complete combat parity.
-- Disabled optional rules 17 through 22 are named in local refusal messages even though they are absent from the OFF record.
-- Rules 17 through 22 register only when requested. Matching verified installs can play online; absent/failed/mismatching rules refuse with their names. The agreement protocol is 4 / 108 bytes (3 and older refused).
-- LC zone records can retain a verified identical resident prefix across append-only map changes, with the new tail fresh. Runtime readers check opened-map hashes and prefix digests. Missing/stale or ambiguous attestations discard safely. The durable LC format is unchanged; a transient native marker carries the fresh tail through online transfer, see `docs/native-fresh-tail.md`.
-- Optional `[TestMode]`: Forge access and deferred F8 enemy clear, F9 party protection and F10 nearest safe authored-start return. Both switches default off. Either switch refuses online hosting/joining. Tools work without the automation pipe. F8 conservatively protects actors already referenced by scripts; future references and every scripted boss are not certified.
+</details>
 
 ## 1.5.0 - 2026-10-13
 
