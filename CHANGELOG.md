@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `ResistanceDisplay=xml1` restores original scoped resistance subtitles under the
+  target health gauge. It retains native queries and adds no combat change or
+  random draws; the port's builder enables it.
+
 ## 1.6.0 - 2026-10-18
 
 The engine half of Legends Classic 0.2.3: the first game's hazards, enemy combat timing and Danger Room, the Sentinel

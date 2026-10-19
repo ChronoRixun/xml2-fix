@@ -55,6 +55,7 @@ add_library(xml2_fix SHARED
 	src/stun_rule.cpp
 	src/danger_room_party.cpp
 	src/danger_room_healthbars.cpp
+	src/resistance_display.cpp
 	src/pack_amount.cpp
 	src/exports.cpp
 	src/gamepad_fix.cpp
@@ -433,3 +434,12 @@ add_executable(xml2_lockon_effects_install_test test/lockon_effects_install_test
 target_include_directories(xml2_lockon_effects_install_test PRIVATE src)
 target_compile_options(xml2_lockon_effects_install_test PRIVATE /UNDEBUG)
 target_link_options(xml2_lockon_effects_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_resistance_display_test test/resistance_display_test.cpp)
+target_include_directories(xml2_resistance_display_test PRIVATE src)
+target_compile_options(xml2_resistance_display_test PRIVATE /UNDEBUG)
+add_executable(xml2_resistance_display_install_test test/resistance_display_install_test.cpp
+    src/resistance_display.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_resistance_display_install_test PRIVATE src)
+target_compile_options(xml2_resistance_display_install_test PRIVATE /UNDEBUG)
+target_link_options(xml2_resistance_display_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)

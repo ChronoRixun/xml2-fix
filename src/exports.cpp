@@ -63,6 +63,7 @@
 #include "danger_room_gate.hpp"
 #include "danger_room_party.hpp"
 #include "danger_room_healthbars.hpp"
+#include "resistance_display.hpp"
 #include "revival_cost.hpp"
 #include "mod_loader.hpp"
 #include "new_game.hpp"
@@ -427,6 +428,9 @@ namespace
 			gameplay_agreement::register_rule(gameplay_capabilities::harm_single_chain_id, 1,
 				{harm_single_chain::installed() ? 1u : 0u,0,0,0}, harm_single_chain::verified());
 		danger_room_healthbars::install(game);
+		// Target subtitle only: reads current affecters without changing combat
+		// state or consuming RNG. It needs no gameplay-agreement record.
+		resistance_display::install(game);
 		if (danger_room_healthbars::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::danger_room_healthbars_id, 1,
 				{danger_room_healthbars::installed() ? 1u : 0u,0,0,0}, danger_room_healthbars::verified());
