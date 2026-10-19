@@ -21,6 +21,10 @@
 #include "balance.hpp"
 #include "break_rule.hpp"
 #include "placement_crush.hpp"
+#include "world_impact.hpp"
+#include "box_harm.hpp"
+#include "harm_loop_startup.hpp"
+#include "harm_single_chain.hpp"
 #include "double_heal.hpp"
 #include "xml1_capability_rules.hpp"
 #include "conversations.hpp"
@@ -28,7 +32,9 @@
 #include "explosive_first_hit.hpp"
 #include "rank_costs.hpp"
 #include "death_threshold.hpp"
+#include "receive_validation.hpp"
 #include "npc_power.hpp"
+#include "stun_rule.hpp"
 #include "pack_amount.hpp"
 #include "death_switch.hpp"
 #include "gameplay_agreement.hpp"
@@ -40,6 +46,7 @@
 #include "script_functions.hpp"
 #include "solo_mode.hpp"
 #include "mold_controller.hpp"
+#include "lockon_effects.hpp"
 #include "multipart.hpp"
 #include "xml1_turrets.hpp"
 #include "game_version.hpp"
@@ -54,9 +61,13 @@
 #include "classic_main_backdrop.hpp"
 #include "classic_main_panels.hpp"
 #include "danger_room_gate.hpp"
+#include "danger_room_party.hpp"
+#include "danger_room_healthbars.hpp"
 #include "revival_cost.hpp"
 #include "mod_loader.hpp"
 #include "new_game.hpp"
+#include "load_trace.hpp"
+#include "plugin_scan.hpp"
 #include "net_trace.hpp"
 #include "openspy_redirect.hpp"
 #include "pad_profile.hpp"
@@ -73,6 +84,7 @@
 #include "save_trace.hpp"
 #include "stat_help.hpp"
 #include "test_input.hpp"
+#include "test_mode.hpp"
 #include "virtual_pad.hpp"
 #include "window_title.hpp"
 #include "xinput_pad.hpp"
@@ -210,6 +222,9 @@ namespace
 		save_format::contribute(startup, game);
 		limits::contribute(startup, game, entity_capacity::owns_arena_teardown());
 		entity_capacity::contribute(startup, game);
+		// [Online] ReceiveValidation: the stock dispatch guard. Optional and independent: a guard mismatch skips it
+		// (one log line), it shares no bytes with any other contribution, and OFF contributes nothing.
+		receive_validation::contribute(startup, game);
 		const auto committed = startup.commit();
 		logger::write("startup transaction: %s (%s)", patch_transaction::name(committed), startup.report().c_str());
 		entity_capacity::after_commit(committed == patch_transaction::outcome::committed, committed == patch_transaction::outcome::rollback_failed);
@@ -269,6 +284,10 @@ namespace
 		script_functions::install(game);
 		forced_teams::install(game);
 		mold_controller::install(game);
+		lockon_effects::install(game);
+		if (lockon_effects::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::lockon_aim_id, 1,
+				{lockon_effects::installed() ? 1u : 0u,0,0,0}, lockon_effects::verified());
 		// XML1 scan turrets ([Game] Xml1Turrets, builder [Xml1Turrets]): one pointer of the native event
 		// scheduler's vtable (its per-frame dispatch); after mold_controller, whose query guards it shares.
 		xml1_turrets::install(game);
@@ -364,7 +383,11 @@ namespace
 		// 16); a requested rule enlists the agreement even in a non-LC installation.
 		npc_power::install(game);
 		if (game_version::needs_gameplay_agreement() || npc_power::requested())
-			gameplay_agreement::register_rule(gameplay_capabilities::npc_power_rule_id, npc_power::revision, npc_power::values(), npc_power::verified());
+			gameplay_agreement::register_rule(gameplay_capabilities::npc_power_rule_id, npc_power::revision_for(npc_power::requested()), npc_power::values(), npc_power::verified());
+		stun_rule::install(game);
+		// New opt-in rule: absence preserves the released LC OFF digest.
+		if (stun_rule::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::stun_rule_id, stun_rule::revision, stun_rule::values(), stun_rule::verified());
 		// [Game] DeathSwitchClear: the hero handed a dead hero's controller stops its AI walk (docs/death-switch.md). One
 		// call in onDeath's own code, used from the first death on. Online play is lockstep, so every peer must hand
 		// over the same way (rule 15); a requested switch enlists the agreement even in a non-LC installation.
@@ -392,6 +415,27 @@ namespace
 		// refused while an object is settled on the floor (each object at a zone's load and 0.5 s after any spawn in play:
 		// death drops, script-spawned props, debris - the first game has no settle at all); no other module hooks it.
 		placement_crush::install(game);
+		world_impact::install(game);
+		box_harm::install(game);
+		harm_loop_startup::install(game);
+		harm_single_chain::install(game);
+		if (box_harm::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::box_harm_origin_id, 1,
+				{box_harm::installed() ? 1u : 0u,0,0,0}, box_harm::verified());
+		danger_room_party::install(game);
+		if (harm_single_chain::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::harm_single_chain_id, 1,
+				{harm_single_chain::installed() ? 1u : 0u,0,0,0}, harm_single_chain::verified());
+		danger_room_healthbars::install(game);
+		if (danger_room_healthbars::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::danger_room_healthbars_id, 1,
+				{danger_room_healthbars::installed() ? 1u : 0u,0,0,0}, danger_room_healthbars::verified());
+		if (danger_room_party::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::danger_room_party_id, 1,
+				{danger_room_party::installed() ? 1u : 0u,0,0,0}, danger_room_party::verified());
+		if (world_impact::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::object_world_impact_id, 1,
+				{world_impact::installed() ? 1u : 0u,0,0,0}, world_impact::verified());
 		// X-Men Legends 1's packs ([Game] DoubleHeal=0, installed above, before stat_help): two branches of restoreHealth /
 		// restoreEnergy; no other module patches them.
 		// Both change what each peer simulates (objects broken while a zone settles; how much a pack heals): rules 11
@@ -407,6 +451,7 @@ namespace
 			gameplay_agreement::register_rule(gameplay_capabilities::double_heal_id, xml1_capability_rules::double_heal_revision, heal.values, heal.verified);
 		}
 
+		test_mode::install(game);
 		test_input::install(); // first: its screenshots need the display fix's device hook
 		display::install(game);
 		// [Game] WindowTitle: after the display fix, whose CreateWindowExA hook (borderless / windowed) it then
@@ -416,6 +461,13 @@ namespace
 		// The game and the engine DLLs that read game data.
 		mod_loader::install({nullptr, "libIGCore.dll", "libIGGfx.dll", "libIGLua.dll", "libIGOpt.dll", "libCriMovie.dll"},
 		                    ini::flag(L"Debug", L"LogFiles", false));
+		// Alchemy's plugin helper scans an empty repository location = the drive root and loads every DLL there (the Windows
+		// leftovers appverifUI.dll / vfcompat.dll on C:\ raised two "Library ... could not be loaded" dialogs): answered
+		// "nothing there". After the mod loader, which hooks the same import and would otherwise bypass this.
+		plugin_scan::install();
+		// [Debug] LoadLibraryTrace: logs the DLL loads and plugin-directory searches of the game and its engine libraries
+		// (last, so it also sees the answer the guard above gives).
+		load_trace::install(game);
 
 		// Discord Rich Presence ([Discord], on by default): a thread of its own that reads the game's state and
 		// talks to Discord's local pipe; it hooks only ExitProcess (the game's import and msvcr71.dll's), to

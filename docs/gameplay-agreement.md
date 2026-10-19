@@ -2,9 +2,14 @@
 
 The release token (`[Online] GameVersion`, LC26 for builder 0.2.0, LC27 for 0.2.2) remains separate. LC builds and explicit ExplosiveFirstHit or DeathSwitchClear opt-ins require this protocol. Ordinary no-key XML2 without participating installers remains native. Compatibility uses actual installed values, never requested INI values alone.
 
+Protocol **4** adds the [native fresh-tail transfer contract](native-fresh-tail.md).
+The agreement retains protocol 3's 108-byte framing, but rejects protocol 3 and
+older before admission because those readers lose fresh appended residents.
+No new gameplay rule ID is assigned for this transport change.
+
 ## Registration API
 
-Include `gameplay_agreement.hpp`. Call each registration once, after its installer has checked guards, written/read back its changes and established its effective state. Disabled hooks register their native/off value with `verified=true`; a requested but failed hook registers `verified=false`. Registration automatically enlists socket exclusion and native refusal handling, including for a non-LC capacity/controller mod with no ExplosiveFirstHit key. A failed registration poisons the record and closes online admission. Do not silently omit failed or disabled participating rules.
+Include `gameplay_agreement.hpp`. Call each registration once, after its installer has checked guards, written/read back its changes and established its effective state. Disabled hooks register their native/off value with `verified=true`; a requested but failed hook registers `verified=false`. Registration automatically enlists socket exclusion and native refusal handling, including for a non-LC capacity/controller mod with no ExplosiveFirstHit key. A failed registration poisons the record and closes online admission. Do not silently omit failed participating rules. Requested-only rules 17..22 omit their entry when absent, empty or explicitly native, preserving the released OFF digest.
 
 ```cpp
 bool register_rule(uint16_t id, uint16_t revision,
@@ -42,18 +47,19 @@ IDs:
 | 13 | XML1 pack amount (`[Game] PackAmount=xml1`) | revision 1, `{installed ? 1 : 0,0,0,0}`; not requested (no key, or `xml2`): verified off; requested but not installed (guards, protection, readback, an unknown value): unverified ([details](pack-amount.md)) |
 | 14 | Script function limit (`[Limits] ScriptFunctions`) | revision 1, `{installed capacity,0,0,0}`: `{0,0,0,0}` with no key and no `[Game] ForcedTeams` (plain XML2 peers match), `{320,0,0,0}` for the game's own limit, `{N,0,0,0}` for an installed raise; a requested raise that didn't install is unverified and closes host/join ([details](script-functions.md#online-and-saves)) |
 | 15 | Death hand-over clears the successor's AI move intent (`[Game] DeathSwitchClear`) | revision 1, `{installed ? 1 : 0,0,0,0}`; absent/off is verified `{0,0,0,0}`; requested but not installed is unverified and closes host/join ([details](death-switch.md)) |
-| 16 | XML1 power use, melee combos and AI visibility (`[Game] NpcPowerRule=xml1`) | revision 3, `{installed ? 1 : 0,installed ? 1 : 0,0,0}`; word 1 advertises XML1's visibility geometry and query scheduling; registered in an LC installation or when requested; absent/`xml2` is verified `{0,0,0,0}`; requested but not installed (guards, protection, readback, an unknown value) is unverified and closes host/join ([details](npc-power-rule.md)) |
+| 16 | XML1 power use, melee combos and AI visibility (`[Game] NpcPowerRule=xml1`) | revision 4 when requested, `{installed ? 1 : 0,installed ? 1 : 0,0,0}`; revision 4 adds combo press/completion timing; word 1 advertises XML1's visibility geometry and query scheduling; registered in an LC installation or when requested; absent/`xml2` retains released revision 3 with verified `{0,0,0,0}`; requested but not installed (guards, protection, readback, an unknown value) is unverified and closes host/join ([details](npc-power-rule.md)) |
+| 18 | Original party-hero stun timing and reaction ownership (`[Game] StunRule=xml1`) | revision 2, `{installed ? 1 : 0,0,0,0}`; registered only when requested; absent/`xml2` omits the entry to preserve the released OFF digest; requested but not installed is unverified ([details](stun-rule.md)) |
 
-IDs 1-4 date from 1.4.0 and 5-16 from 1.5.x (the 0.2.2 wave); IDs 17..65535 require coordination; 0 and duplicate IDs are refused. Entity layout revision describes token representation/sentinel/allocator semantics as well as capacities. Increment it whenever equal capacities/bit width can still encode or interpret tokens differently. A capacity raise must call the layout API with its successfully installed capacities and token width. Actor+generic must not exceed world (`<=`: the World keeps registrations beyond the two arenas; uint64 checked), and world must fit the token width. Entity-capacity layouts: revision 1 `{32,224,256,8}` (stock, also the verified capacity-off value), revision 3 `{32,768,1024,10}` (Phase A, contiguous tokens). Keep failed layouts unverified, even if the fallback is retail. The default is retail only when no entity-layout installer participates.
+IDs 1-4 date from 1.4.0 and 5-16 from 1.5.x (the 0.2.2 wave); 17 is ObjectWorldImpact; 18 is StunRule (both register only when requested). IDs 19 (DangerRoomParty) and 20 (Xml1LockOnAim) register only when requested, revision 1, values `{installed ? 1 : 0,0,0,0}`. Failed requests are unverified. IDs 21 (BoxHarmOrigin) and 22 (DangerRoomHealthBars) also register only when requested, revision 1, with verified installed values. The HUD rule covers unproved dirty-stat refresh/clamp timing parity. ID 23 (HarmSingleChain) registers only when requested, revision 1, verified installed values. Rule 24 (FastTransfer, `[Online] FastTransfer=1`, revision 1, values `{1,32,300,64}`: installed, window, record size, zero-run minimum) registers only when requested with verified installed values; the builder default is on. A mismatch is refused naming FastTransfer in both directions. IDs 25..65535 require coordination; 0 and duplicate IDs are refused. Entity layout revision describes token representation/sentinel/allocator semantics as well as capacities. Increment it whenever equal capacities/bit width can still encode or interpret tokens differently. A capacity raise must call the layout API with its successfully installed capacities and token width. Actor+generic must not exceed world (`<=`: the World keeps registrations beyond the two arenas; uint64 checked), and world must fit the token width. Entity-capacity layouts: revision 1 `{32,224,256,8}` (stock, also the verified capacity-off value), revision 3 `{32,768,1024,10}` (Phase A, contiguous tokens). Keep failed layouts unverified, even if the fallback is retail. The default is retail only when no entity-layout installer participates.
 
 The export startup contributes the refusal and transport sites to the startup transaction, lets installers register effective state, then freezes the record at the very end. Add future installers before that finalization point. Registration after finalization is rejected and closes the gate; it never changes an advertised frozen record. No controller or capacity module edits transport code.
 
 ## Record and transport
 
-Protocol revision 3 (1.5.0) puts a fixed 108-byte record on the wire, whatever the number of rules: canonical
-little-endian header DWORD `GCAP` (0x50414347), ushort protocol revision 3, ushort rule count (including the layout
+Protocol revision 4 retains the fixed 108-byte record introduced in revision 3 (1.5.0), whatever the number of rules: canonical
+little-endian header DWORD `GCAP` (0x50414347), ushort protocol revision 4, ushort rule count (including the layout
 rule), ushort total bytes (108), ushort reserved zero; then the SHA-256 of the canonical rule list (32 bytes); then a
-64-byte rule summary. The canonical list is `GCAP`, ushort protocol 3, ushort count, then every rule sorted by ID in
+64-byte rule summary. The canonical list is `GCAP`, ushort protocol 4, ushort count, then every rule sorted by ID in
 the revision-2 entry encoding: ushort rule ID, ushort revision, four DWORD effective values. All unused value words
 must have documented semantics, normally zero; the digest covers every ID, revision and value exactly, so no hash of
 a rule's own (a turret list's FNV, say) substitutes for an effective value - a rule still registers the values. The
@@ -76,7 +82,7 @@ fragments). An admission body must never take that path: the fragment receiver 0
 joining peer's body no stream is open there, and it dereferences null at 0x61020c (whether and where the stream is
 opened for an admitted peer was not traced). Protocol revision 2 put the whole entry list on the wire (12 + 20 bytes per rule): with
 the fifteen rules of the 1.5 pre-release the 0x1a body was 360 bytes and a matching peer's join crashed the host
-there (live, 2026-10-12). The largest queued body of revision 3 is the 188-byte 0x1f, 112 bytes under the limit; a
+there (live, 2026-10-12). The largest queued body of revisions 3 and 4 is the 188-byte 0x1f, 112 bytes under the limit; a
 `static_assert` keeps it at least 64 under. The request 0x18 goes direct (0x60d9c0, a 0x514-byte buffer).
 
 **Fragment guard (optional).** The 0x13 stream miss at 0x610200 jumps to a stub that logs the drop (the first eight)
@@ -85,8 +91,8 @@ oversized message (a 1.5 pre-release joiner's 360-byte 0x1a) no longer kills thi
 times out natively. It joins the startup transaction as its own contribution (`gameplay_agreement.fragment_guard`,
 3 `fragment_guards`) only when its guards read back as retail; otherwise one log line and the stock handler.
 
-Receive rejects a missing or foreign record and any other protocol revision (2: 1.4.0 and the 1.5 pre-release; 1:
-0.2.0i and older - they refuse revision 3 the same way, both ways), a malformed header, a body that is not exactly 108
+Receive rejects a missing or foreign record and any other protocol revision (3: 1.5.0 and early 1.6 candidates; 2: 1.4.0 and the 1.5 pre-release; 1:
+0.2.0i and older - they refuse revision 4 the same way, both ways), a malformed header, a body that is not exactly 108
 bytes, and any digest difference, before native admission: nothing of a refused message reaches the native handler.
 Exact canonical equality is required, including disabled participating entries. A different count or a rule present
 on one side only is reported as an entries difference, anything else as a value difference (a revision difference
@@ -134,3 +140,34 @@ The Phase A plan (docs/entity-capacity-phase-a-plan.md section 5) also designed 
 epochs per peer, a dispatch floor before every application callback, reliable/fragment record epochs, deferred
 topology operations and a quiescent Node purge. Those 21 sites are not installed (plan section 10, deviation 17,
 with the reasoning and the residual risk); the agreement is enforced at admission only.
+
+
+### 1.6 integration
+
+Rule 17 is ObjectWorldImpact, revision 1, effective `{installed ? 1 : 0, 0, 0, 0}`; rule 18 is StunRule, revision 2. Both register only when requested. Rule 16 uses revision 4 when requested and released revision 3 when OFF. A failed request remains unverified. `[TestMode]` registers no gameplay rule and refuses online independently. The 108-byte record remains unchanged; protocol 4 adds the native fresh-tail contract above.
+
+
+### Danger Room party and Sentinel aiming
+
+`[Game] DangerRoomParty=xml1` restores XML1's four-hero fallback for incomplete
+non-solo course parties. Rule 19 revision 1 uses `{installed ? 1 : 0,0,0,0}`.
+Absent, empty or `xml2` omits the entry; any failed request remains unverified.
+
+`[Game] Xml1LockOnAim=1` uses the animated head for lock-on targeting. Rule 20
+revision 1 uses the same installed-state values. It verifies only after valid
+effect paths, supported dependencies and all five transactional writes succeed.
+Effects alone with aiming OFF omit rule 20; invalid aiming values are failed
+requests. OFF bytes remain unchanged. Both peers name disabled known rules in
+refusal messages. Protocol 4, 108-byte framing and durable saves are unchanged.
+
+### Candidate 0.2.3e settings (rules 21-23)
+
+| [Game] key | XML1 builder | Agreement |
+|---|---|---|
+| BoxHarmOrigin | xml1 | 21 revision 1, requested only |
+| DangerRoomHealthBars | xml1 | 22 revision 1, requested only |
+| HarmSingleChain | single | 23 revision 1, requested only |
+
+Absent, empty, off or xml2 omits a rule. Invalid or failed requested installs remain unverified. Both peers must match. HUD dirty-stat refresh/clamp timing parity remains unproved. Versions and content identity remain unchanged from 0.2.3c.
+
+`[Online] GameVersion` (the LC release token, `LC29`) is lobby metadata, not gameplay state: since candidate 0.2.3g it is also written into the game-info answer's first version field (0x61571c), which changes no gameplay-agreement rule, protocol or record byte.

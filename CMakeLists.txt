@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(xml2_fix VERSION 1.5.0 LANGUAGES CXX RC)
+project(xml2_fix VERSION 1.6.0 LANGUAGES CXX RC)
 
 if(NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
 	message(FATAL_ERROR "Build with MSVC for Win32 (cmake -A Win32) - X-Men Legends II is a 32-bit game.")
@@ -27,6 +27,7 @@ add_library(lcsave STATIC
 	src/lcsave/conversations.cpp
 	src/lcsave/dump.cpp
 	src/lcsave/api.cpp
+	src/lcsave/fresh_tail.cpp
 	src/lcsave/api_engine.cpp
 	src/lcsave/typed_registry.cpp)
 target_include_directories(lcsave PUBLIC src/lcsave)
@@ -38,14 +39,22 @@ add_library(xml2_fix SHARED
 	src/multipart.cpp
 	src/mold_query.cpp
 	src/mold_effects.cpp
+	src/lockon_effects.cpp
 	src/xml1_turrets.cpp
 	src/stat_help.cpp
 	src/geometry_sharing.cpp
 	src/ladder_paths.cpp
 	src/break_rule.cpp
 	src/placement_crush.cpp
+	src/world_impact.cpp
+	src/box_harm.cpp
+	src/harm_loop_startup.cpp
+	src/harm_single_chain.cpp
 	src/double_heal.cpp
 	src/npc_power.cpp
+	src/stun_rule.cpp
+	src/danger_room_party.cpp
+	src/danger_room_healthbars.cpp
 	src/pack_amount.cpp
 	src/exports.cpp
 	src/gamepad_fix.cpp
@@ -61,6 +70,8 @@ add_library(xml2_fix SHARED
 	src/openspy_redirect.cpp
 	src/local_ip.cpp
 	src/net_trace.cpp
+	src/load_trace.cpp
+	src/plugin_scan.cpp
 	src/mod_loader.cpp
 	src/display.cpp
 	src/display_settings.cpp
@@ -89,6 +100,7 @@ add_library(xml2_fix SHARED
 	src/conversations.cpp
 	src/gameplay_agreement.cpp
 	src/patch_transaction.cpp
+	src/receive_validation.cpp
 	src/explosive_first_hit.cpp
 	src/rank_costs.cpp
 	src/death_threshold.cpp
@@ -108,6 +120,7 @@ add_library(xml2_fix SHARED
 	src/resolution_list.cpp
 	src/frame_capture.cpp
 	src/test_input.cpp
+	src/test_mode.cpp
 	src/test_state.cpp
 	src/discord_ipc.cpp
 	src/discord_presence.cpp
@@ -133,6 +146,17 @@ target_include_directories(xml2_multipart_test PRIVATE src)
 
 add_executable(xml2_ladder_paths_test test/ladder_paths_test.cpp)
 target_include_directories(xml2_ladder_paths_test PRIVATE src)
+
+add_executable(xml2_world_impact_test test/world_impact_test.cpp)
+target_include_directories(xml2_world_impact_test PRIVATE src)
+
+add_executable(xml2_danger_room_party_test test/danger_room_party_test.cpp)
+target_include_directories(xml2_danger_room_party_test PRIVATE src)
+target_compile_options(xml2_danger_room_party_test PRIVATE /UNDEBUG)
+
+add_executable(xml2_danger_room_healthbars_test test/danger_room_healthbars_test.cpp)
+target_include_directories(xml2_danger_room_healthbars_test PRIVATE src)
+target_compile_options(xml2_danger_room_healthbars_test PRIVATE /UNDEBUG)
 
 add_executable(xml2_xml1_controllers_test test/xml1_controllers_test.cpp src/game_version.cpp)
 target_include_directories(xml2_xml1_controllers_test PRIVATE src)
@@ -235,7 +259,9 @@ add_executable(xml2_death_switch_test test/death_switch_test.cpp src/death_switc
 target_include_directories(xml2_death_switch_test PRIVATE src)
 target_link_options(xml2_death_switch_test PRIVATE /BASE:0x300000 /DYNAMICBASE:NO)
 
-add_executable(xml2_gameplay_agreement_test test/gameplay_agreement_test.cpp src/gameplay_agreement.cpp src/patch_transaction.cpp src/explosive_first_hit.cpp src/game_version.cpp)
+add_executable(xml2_gameplay_agreement_test test/gameplay_agreement_test.cpp src/gameplay_agreement.cpp src/patch_transaction.cpp src/explosive_first_hit.cpp src/world_impact.cpp src/game_version.cpp)
+add_executable(xml2_npc_combo_timing_test test/npc_combo_timing_test.cpp)
+target_include_directories(xml2_npc_combo_timing_test PRIVATE src)
 target_include_directories(xml2_gameplay_agreement_test PRIVATE src)
 target_link_libraries(xml2_gameplay_agreement_test PRIVATE ws2_32)
 
@@ -295,10 +321,74 @@ _fixture_space DB 400000h DUP(0)
 fixture_seg ENDS
 END
 ")
+add_executable(xml2_danger_room_party_install_test test/danger_room_party_install_test.cpp
+    src/danger_room_party.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_danger_room_party_install_test PRIVATE src)
+target_compile_options(xml2_danger_room_party_install_test PRIVATE /UNDEBUG)
+target_link_options(xml2_danger_room_party_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_danger_room_healthbars_install_test test/danger_room_healthbars_install_test.cpp
+    src/danger_room_healthbars.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_danger_room_healthbars_install_test PRIVATE src)
+target_compile_options(xml2_danger_room_healthbars_install_test PRIVATE /UNDEBUG)
+target_link_options(xml2_danger_room_healthbars_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# TestMode also executes the normal-play reader: reserve its higher menu/name/player globals.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm"
+".386
+.MODEL FLAT
+fixture_seg SEGMENT PARA PUBLIC 'CODE' ALIAS('.text$a')
+PUBLIC _fixture_space
+_fixture_space DB 700000h DUP(0)
+fixture_seg ENDS
+END
+")
+add_executable(xml2_test_mode_test test/test_mode_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_test_mode_test PRIVATE src)
+target_link_options(xml2_test_mode_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 # The native campaign transfer receiver (0x608630) and its replacement executed side by side (Phase A, review P1).
 add_executable(xml2_entity_transfer_test test/entity_transfer_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/entity_transfer.cpp)
 target_include_directories(xml2_entity_transfer_test PRIVATE src)
 target_link_options(xml2_entity_transfer_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/reliable_receive_fixture.asm"
+".386
+.MODEL FLAT
+fixture_seg SEGMENT PARA PUBLIC 'CODE' ALIAS('.text$a')
+PUBLIC _fixture_space
+_fixture_space DB 700000h DUP(0)
+fixture_seg ENDS
+END
+")
+add_executable(xml2_reliable_receive_test test/reliable_receive_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/reliable_receive_fixture.asm" src/entity_transfer.cpp src/patch_transaction.cpp)
+target_include_directories(xml2_reliable_receive_test PRIVATE src)
+target_link_options(xml2_reliable_receive_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# [Online] FastTransfer: the retail campaign sender with the record bridge, through the production receiver.
+add_executable(xml2_campaign_sender_test test/campaign_sender_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/reliable_receive_fixture.asm" src/entity_transfer.cpp src/patch_transaction.cpp)
+target_include_directories(xml2_campaign_sender_test PRIVATE src)
+target_link_options(xml2_campaign_sender_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# [Online] ReceiveValidation: the retail event dispatch under the production guard, plus the whole rule table.
+add_executable(xml2_receive_validation_test test/receive_validation_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/reliable_receive_fixture.asm" src/receive_validation.cpp src/patch_transaction.cpp)
+target_include_directories(xml2_receive_validation_test PRIVATE src)
+target_link_options(xml2_receive_validation_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# Alchemy plugin enumeration of the drive root: the rule, and the guard hooked into this test's own FindFirstFileA import.
+add_executable(xml2_plugin_scan_test test/plugin_scan_test.cpp src/plugin_scan.cpp src/iat_hook.cpp)
+target_include_directories(xml2_plugin_scan_test PRIVATE src)
+
+add_executable(xml2_stun_rule_test test/stun_rule_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/stun_rule.cpp)
+target_include_directories(xml2_stun_rule_test PRIVATE src)
+target_link_options(xml2_stun_rule_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+add_executable(xml2_box_harm_test test/box_harm_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/box_harm.cpp)
+target_include_directories(xml2_box_harm_test PRIVATE src)
+target_link_options(xml2_box_harm_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_harm_loop_startup_test test/harm_loop_startup_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/harm_loop_startup.cpp)
+target_include_directories(xml2_harm_loop_startup_test PRIVATE src)
+target_link_options(xml2_harm_loop_startup_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_harm_single_chain_test test/harm_single_chain_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/harm_single_chain.cpp)
+target_include_directories(xml2_harm_single_chain_test PRIVATE src)
+target_link_options(xml2_harm_single_chain_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 # multipart::install against the retail image (review cases: invalid table operand, foreign setSegmentVisible handler,
 # relocated table, changed guard) and the loop length's generator draw. SKIPPED without XML2_FIX_TEST_EXE.
 add_executable(xml2_multipart_install_test test/multipart_install_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
@@ -334,3 +424,12 @@ target_include_directories(xml2_entity_capacity_test PRIVATE src)
 add_executable(xml2_entity_world_test test/entity_world_test.cpp src/entity_world.cpp)
 target_include_directories(xml2_entity_world_test PRIVATE src)
 target_link_options(xml2_entity_world_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_lockon_effects_test test/lockon_effects_test.cpp)
+target_include_directories(xml2_lockon_effects_test PRIVATE src)
+
+add_executable(xml2_lockon_effects_install_test test/lockon_effects_install_test.cpp
+    src/lockon_effects.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_lockon_effects_install_test PRIVATE src)
+target_compile_options(xml2_lockon_effects_install_test PRIVATE /UNDEBUG)
+target_link_options(xml2_lockon_effects_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)

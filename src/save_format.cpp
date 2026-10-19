@@ -1127,6 +1127,9 @@ namespace save_format
 			std::uint16_t state_index=0;
 			if (!expected)
 			{
+				// A builder-authenticated append has no old state. Match actual placement and names
+				// before keeping factory defaults; later capture records it normally.
+				if (save_core_rules::placement_source(meta->fresh_entities,observed->placement_index,def,name)) return true;
 				// An old inferred capture lacks explicit tombstones. Its original zero slot is legacy
 				// removal semantics, never permission to apply another saved twin's record.
 				if ((meta->capture_flags&save_core_rules::capture_unobserved) && original_restore_map[ordinal-1]==0)
@@ -1181,7 +1184,9 @@ namespace save_format
 					core_lifetime.finish_native(mode,false);
 					refuse("native transfer metadata could not be validated: "+(error.empty()?std::string("unreadable stream"):error));return;
 				}
-				logger::write("save core: native transfer mode %d: %zu zone metadata record(s) inferred from validated stream",mode,cached_captures.size());
+				std::size_t fresh_count=0;
+				for (const auto& capture:cached_captures) fresh_count+=capture.fresh_entities.size();
+				logger::write("save core: native transfer mode %d: %zu zone metadata record(s) inferred from validated stream; %zu authenticated fresh-tail entities",mode,cached_captures.size(),fresh_count);
 			}
 			native_loading=true; overflow_flag=0;
 			const bool returned=run_native_load(game,buffer,mode);

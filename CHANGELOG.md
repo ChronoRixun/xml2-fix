@@ -1,5 +1,90 @@
 # Changelog
 
+## 1.6.0 - 2026-10-18
+
+The engine half of Legends Classic 0.2.3: the first game's hazards, enemy combat timing and Danger Room, the Sentinel
+flashback's effects, and a co-op that loads a saved campaign in seconds. For X-Men Legends II as it ships only the
+network-message check and the plugin-dialog fix apply; everything else is off until a mod's `xml2-fix.ini` asks for it
+(the port's builder sets it all).
+
+**For everyone**
+
+- **Malformed network messages are checked and dropped** (`[Online] ReceiveValidation`, on by default): the game
+  checks the size and shape of every message it receives, per message type, before its handler runs, and drops one that
+  doesn't fit instead of acting on it (a line in `xml2-fix.log`, rate-limited). Nothing changes on the wire, so it
+  works with players who don't have it. Ordinary messages that carry extra bytes, and the game's own empty movie
+  completion message, are not dropped.
+- **No "Library appverifUI.dll could not be loaded" dialogs** when the game runs from `C:\`: the engine's plugin
+  helper scanned the root of the current drive for plugins when no plugin folder is set, and loaded Windows' own
+  leftover DLLs there. That one empty search now finds nothing; the game's real plugin folders are untouched.
+- `[Debug] LoadLibraryTrace=1` lists the DLLs the game and its engine libraries load and the plugin-folder searches,
+  for a bug report (off by default).
+
+**New for mods (the port's builder sets all of these)**
+
+- **Co-op *Load Saved Campaign* works and takes seconds.** The host's saved-campaign transfer could stall or end the
+  session when the joiner's shared network message pools filled up. The receiving side now keeps room in all four
+  pools, defers a datagram it can't store instead of acknowledging it, and ends a session that stays blocked for 30
+  seconds with one clear log line. With `[Online] FastTransfer=1` (and `[Limits] EntityCapacity=1`) the 2 MiB campaign
+  image is sent as data and zero-run records with up to 32 messages in flight and a larger rate budget: two real saves
+  took about 3 and 1 seconds of transfer (15 and 5 seconds from click to playing) on a LAN, against about 160 seconds
+  before. Both PCs must use it (rule **24**). ([details](docs/online-campaign-transfer.md)).
+- **Connect by IP and the LAN search work for a mod's builds:** `[Online] GameVersion` now also reaches the answer a
+  host gives to LAN searches and *Connect by IP*, so two builds with the same version list and admit each other that
+  way (only the OpenSpy list worked before).
+- **Hazards that hurt again:** `[Game] BoxHarmOrigin=xml1` (rule **21**) gives a boxed hazard the first game's
+  knockback direction, and `[Game] HarmSingleChain=single` (rule **23**) keeps one repeat chain per touch fire, so a fire
+  hits about once per 0.4 seconds and stops when you step out (before, re-entering one stacked up repeat events).
+  ([box origin](docs/box-harm-origin.md), [single chain](docs/harm-single-chain.md)).
+- **Crates that land on the floor:** `[Game] ObjectWorldImpact=xml1` (rule **17**): a landing with no physical target
+  does no damage, as in the first game. ([details](docs/object-world-impact.md)).
+- **Enemy AI revision 4 and party stun** (issue #101, progress): `[Game] NpcPowerRule=xml1` restores each enemy
+  button's combo delay and clamps stale deadlines after a clock rewind or AI-slot reuse; `[Game] StunRule=xml1` (rule
+  **18**, revision 2) gives party heroes the original stun playback speed and input recovery and discards a refused
+  or interrupted stun. ([enemy AI](docs/npc-power-rule.md), [stun](docs/stun-rule.md)).
+- **Danger Room:** `[Game] DangerRoomParty=xml1` (rule **19**) is the first game's four-hero fallback for a course
+  that starts without a full party, and `[Game] DangerRoomHealthBars=xml1` (rule **22**) shows the health bar of a
+  protected training robot; the protection and the course limits stay. ([details](docs/danger-room-courses.md)).
+- **Sentinel flashback:** `[Game] Xml1LockOnEffects` restores the eye-scan, surface-hit and acquired-target effects and
+  `[Game] Xml1LockOnAim=1` (rule **20**) aims by the animated head, as in the first game.
+  ([details](docs/lockon-effects.md)).
+- **Saved zones keep what they had:** an LC zone record can keep a verified identical prefix of its residents across a
+  map change that only adds to the end, and the new ones start fresh; a missing, stale or ambiguous record is
+  discarded as before. The save format is unchanged. ([details](docs/native-fresh-tail.md)).
+- **Optional `[TestMode]`:** Forge access, F8 enemy clear, F9 party protection and F10 return to the nearest safe start
+  for testers; both switches are off by default and refuse online hosting and joining.
+  ([details](docs/test-mode.md)).
+
+**Online**
+
+- Rules **17** to **24** register only when a mod requests them; matching installs play together, and a missing,
+  failed or different rule refuses the join with its name on both PCs.
+- Gameplay agreement protocol 4 (the same 108-byte record): **1.5 and older peers are refused at join as another
+  build, so both players need 1.6.0.**
+
+<details><summary>Technical details</summary>
+
+- `[Online] ReceiveValidation`: a guarded hook on the game's common message dispatch checks each message (from the
+  datagram parser, the ordered drain and fragment reassembly, including reliable wrappers and padded records) against a
+  per-type table of minimum and maximum sizes. Fixed-layout types whose handler ignores extra bytes accept any body
+  from their minimum up to the game's 1285-byte cap; strict maxima stay only where a handler copies or indexes by
+  length, and two types stay refused. The empty dynamically registered movie-completion notification is accepted. A
+  drop line names the inner type of a wrapped message, its size, the violated bound and the first 16 bytes. A hook
+  that can't verify its bytes leaves the game's own dispatch and says so in the log.
+- The plugin-scan guard answers the plugin helper's one empty-repository search (`\*.*`, the root of the current
+  drive) with "file not found" and logs one line; a pattern with a directory part is left alone. It is installed after
+  the mod loader. `XML2FIX_PLUGIN_SCAN_GUARD=0` (environment) turns it off for development only.
+- `[Online] GameVersion` also rewrites the game-info constructor's own version store (19 guarded bytes, in the same
+  transaction, with readback); with the key unset the stock bytes stay. Lobby metadata only: no gameplay rule.
+- Saved-campaign transfer: the receiver reserves room in the headers, large bodies, small bodies and queue nodes before
+  it stores a datagram; an outgoing reply or fragment it can't fit is refused before anything is copied. A transient
+  native marker carries the fresh tail of a retained zone record through the transfer; the durable LC format is
+  unchanged.
+- The authored-startup adapter `HarmLoopStartup` stays a developer option and still blocks online play.
+  Disabled optional rules 17 to 22 are named in local refusal messages although they are absent from the OFF record.
+
+</details>
+
 ## 1.5.0 - 2026-10-13
 
 The engine half of Legends Classic 0.2.2: more of X-Men Legends I's own rules, each behind its own key. For X-Men

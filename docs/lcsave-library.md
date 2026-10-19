@@ -1,5 +1,39 @@
 # lcsave: the LC save library
 
+Append-only resident compatibility mirrors `tools/lcsave/zonecompat.py`. Optional
+`Data/lcsave/zone-prefix.lcm` attestations bind the saved old map SHA1 to an exact
+current map SHA1 after the builder verifies complete definitions and placements
+for an unchanged resident prefix. Numbered saved identities also match old ordinal
+and placement. Any missing/stale attestation retains exact-hash rejection; malformed
+metadata refuses. The durable LC format remains unchanged.
+
+Zone keys use the same case normalization as placement numbering before their
+canonical key hash. The runtime recomputes the resident-prefix SHA-256 from the
+opened current XMLB bytes and compares it with the sidecar digest. A valid CRC
+does not excuse an edited digest or a current-map hash rebound to a changed prefix;
+that zone keeps the exact-hash discard behavior. The digest is an integrity check,
+not a signature: old maps and historical alias/placement claims still come from
+the builder's trusted release ledger. A deliberately rewritten, self-consistent
+ledger cannot be authenticated without the original old-map input or signed data.
+
+`loaded_zone_metadata` uses current placement provenance for actual runtime guards,
+and supplies `fresh_entities` so appended residents retain factory defaults.
+`source_placement_sha1` and each entity's `source_placement_index` preserve cached
+unvisited records across resaves; a fresh native capture replaces them. The reverse
+reader omits matching former smart/dynamic tail states and their exclusive world
+dependencies. No older save names alone are treated as proof of unchanged definitions.
+Sidecar framing and the release-ledger generation command are documented by the
+Python reference. Compatibility needs attestations generated against every supported
+previous build; it is not automatically transitive or a new save feature bit.
+
+The sidecar's version 2 also describes original unnumbered name aliases for renamed
+tail definitions. A name pair shared by a new resident and an untouched placement
+is ambiguous. If an old smart/dynamic state uses it, the record rejects with a
+specific ledger explanation; its position is mutable and cannot identify the
+original placement reliably. This protects against duplicate old smart objects and
+against losing an untouched twin. Full retention for partial promotion of identical
+smart twins remains unresolved under the unchanged durable save format.
+
 `src/lcsave/` is the C++ translation of the builder's reference implementation `tools/lcsave` (legends-classic,
 branch `feature/save-converter`, 8a7a8ac): the LC save format ("LC save", format 1), the one-time converter from
 XMen2.exe's own save files, the reverse direction the loader needs, the saver's direction, and the canonical dumps
@@ -201,3 +235,8 @@ The format and both digest algorithms remain unchanged.
 consumer with actual mod indexing, exclusively locked package data, invalidation,
 lookup contexts and first-capture/preparation failures. The C1 Python gate runs
 that executable; it does not inspect source strings.
+
+
+### 1.6 native transfer of appended residents
+
+Online saved-campaign transfer carries the appended resident tail through a transient native marker (see [native-fresh-tail.md](native-fresh-tail.md)); historical removals stay removed, and the durable LC container, version and feature bits are unchanged. GCAP protocol 4 refuses older peers.

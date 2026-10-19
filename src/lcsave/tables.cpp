@@ -780,6 +780,64 @@ namespace lcsave::detail
 	}
 
 	// ------------------------------------------------------------------------------------------------ zones
+	void read_zone_prefixes(const std::wstring& root, Build& build)
+	{
+		const auto path = root + L"\\Data\\lcsave\\zone-prefix.lcm";
+		if (!exists(path)) return;
+		std::vector<u8> raw;
+		if (!read_file_bytes(path, raw)) fail("zone-prefix.lcm: cannot read");
+		auto bad = [] { fail("zone-prefix.lcm: invalid framing or entry"); };
+		if (raw.size() < 24 || std::memcmp(raw.data(), "LCZPFX1\0", 8)) bad();
+		In in{raw, 8, "zone-prefix.lcm"};
+		const auto version = in.get<u32>(), count = in.get<u32>(), length = in.get<u32>(), crc = in.get<u32>();
+		if (version != 2 || count > 4096 || length != raw.size() || crc32(raw.data()+24, raw.size()-24) != crc) bad();
+		std::set<std::tuple<Hash, Sha1, Sha1>> seen;
+		for (u32 k = 0; k < count; ++k)
+		{
+			if (raw.size()-in.p < 108) bad();
+			ZonePrefix prefix;
+			auto take = [&](auto& value) { const auto bytes = in.take(value.size()); std::memcpy(value.data(), bytes.data(), value.size()); };
+			take(prefix.zone); take(prefix.old); take(prefix.current); take(prefix.digest);
+			const auto n = in.get<u32>();
+			if (!n || n > 4096 || raw.size()-in.p < 4*n || prefix.old == prefix.current || !seen.emplace(prefix.zone,prefix.old,prefix.current).second) bad();
+			std::set<u32> placements;
+			for (u32 j = 0; j < n; ++j)
+			{
+				const auto p = in.get<u32>();
+				if (!placements.insert(p).second) bad();
+				prefix.placements.push_back(p);
+			}
+			std::set<std::pair<Hash,Hash>> aliases;
+			for (auto* list : {&prefix.fresh_aliases,&prefix.ambiguous_aliases})
+			{
+				if (raw.size()-in.p < 4) bad();
+				const auto size = in.get<u32>();
+				if (size > 4096 || raw.size()-in.p < 64*size) bad();
+				for (u32 j=0;j<size;++j)
+				{
+					std::pair<Hash,Hash> pair; take(pair.first); take(pair.second);
+					if (!aliases.insert(pair).second) bad();
+					list->push_back(pair);
+				}
+			}
+			build.zone_prefixes.push_back(std::move(prefix));
+		}
+		if (!in.end()) bad();
+	}
+
+	const ZonePrefix* Build::zone_prefix(const std::string& zone, const std::string& old, const ZoneNumbering& current) const
+	{
+		const auto hash = key_hash1(py_lower(zone, Enc::cp1252), Enc::cp1252);
+		for (const auto& p : zone_prefixes)
+		{
+			const auto digest = current.prefix_digests.find(p.placements.size());
+			if (p.zone == hash && old == std::string(reinterpret_cast<const char*>(p.old.data()),20) &&
+			    p.current == current.sha1 && p.placements.size() < current.names.size() &&
+			    digest != current.prefix_digests.end() && digest->second == p.digest) return &p;
+		}
+		return nullptr;
+	}
+
 	const ZoneNumbering* Build::zone_numbering(const std::string& zone_in) const
 	{
 		const auto zone = py_lower(zone_in, Enc::cp1252);
@@ -797,11 +855,21 @@ namespace lcsave::detail
 		ZoneNumbering z;
 		z.sha1 = sha1(raw.data(), raw.size());
 		std::vector<Numbered> num;
-		numbered_entities(decode_xmlb(raw.data(), raw.size()), num, z.problems);
+		const auto root = decode_xmlb(raw.data(), raw.size());
+		numbered_entities(root, num, z.problems);
 		for (const auto& n : num)
 		{
 			z.names.emplace_back(key_hash1(n.type, Enc::latin1), key_hash1(n.name, Enc::latin1));
+			z.name_text.emplace_back(n.type,n.name);
 			z.placement.push_back(n.placement);
+		}
+		if (z.problems.empty()) for (const auto& prefix : zone_prefixes)
+		{
+			const auto count = prefix.placements.size();
+			if (prefix.zone != key_hash1(zone, Enc::cp1252) || prefix.current != z.sha1 ||
+			    count >= num.size() || z.prefix_digests.contains(count)) continue;
+			try { z.prefix_digests.emplace(count, resident_prefix_digest(root, num, count)); }
+			catch (const Error&) { /* invalid prefix: retain the stock exact-hash path */ }
 		}
 		slot = std::move(z);
 		return &*slot;
@@ -875,6 +943,7 @@ namespace lcsave
 				return false;
 			}
 			if (!read_binds(bind_dir, data_dir, *t, error)) return false;
+			read_zone_prefixes(bind_dir, *t->build);
 			tables.data = std::move(t);
 			return true;
 		}

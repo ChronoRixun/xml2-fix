@@ -7,6 +7,8 @@ namespace gameplay_agreement
 {
  // Call each registration once after its installer settles. False poisons online agreement.
  bool register_rule(std::uint16_t id,std::uint16_t revision,std::array<std::uint32_t,4> effective,bool verified);
+ // Experimental gameplay awaiting an assigned ID must never negotiate as stock.
+ void reject_unregistered_rule(const char* name);
  bool register_entity_layout(std::uint16_t revision,std::uint32_t actors,std::uint32_t generic,std::uint32_t world,std::uint32_t token_bits,bool verified);
  // The shared agreement's native sites (refusal and transport) as a contribution to the one startup transaction:
  // guards, writes and a publication callback; nothing is written here. False: not the retail executable or the

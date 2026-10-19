@@ -309,20 +309,38 @@ namespace lcsave
 				if (f.data("META")["origin"].as_int() == 1 || record["conversation_digest"].as_bytes() == std::string(32, '\0'))
 					metadata.capture_flags |= 2; // earlier candidates wrote zero despite unobserved provenance
 				const auto* numbering = tables.data->build->zone_numbering(metadata.zone);
+				if (!numbering) continue; // no placement metadata: discard this record cleanly
+				const auto* prefix = tables.data->build->zone_prefix(metadata.zone,record["content_hash"].as_bytes(),*numbering);
+				metadata.placement_sha1 = numbering->sha1;
+				if (prefix) metadata.source_placement_sha1 = prefix->old;
 				const auto restored = std::find_if(native.zones.begin(), native.zones.end(), [&](const auto& z)
 				{ return detail::zone_string(*native.zone_strings, z.name_handle) == metadata.zone; });
 				// Metadata must describe the reconstructed map, including promoted legacy placements.
+				bool invalid = false;
 				for (std::size_t k = 0; k < restored->tail.ordinal_map.size(); ++k)
 				{
 					const auto idx = restored->tail.ordinal_map[k];
 					if (!idx) continue;
+					if (k >= numbering->placement.size() || (prefix && k >= prefix->placements.size()) || idx >= restored->states.size())
+					{ invalid = true; break; }
 					PlacedEntityMetadata entity;
 					entity.ordinal = static_cast<std::uint32_t>(k + 1);
-					entity.placement_index = numbering->placement.at(k);
+					entity.placement_index = numbering->placement[k];
+					if (prefix) entity.source_placement_index = prefix->placements[k];
 					entity.definition_name = detail::zone_string(*native.zone_strings, restored->states[idx].def_name);
 					entity.instance_name = detail::zone_string(*native.zone_strings, restored->states[idx].inst_name);
 					metadata.entities.push_back(std::move(entity));
 				}
+				if (invalid) continue;
+				if (prefix) for (std::size_t k = prefix->placements.size(); k < numbering->names.size(); ++k)
+				{
+					if (k >= numbering->placement.size() || k >= numbering->name_text.size()) { invalid = true; break; }
+					PlacedEntityMetadata fresh;
+					fresh.ordinal=static_cast<std::uint32_t>(k+1);fresh.placement_index=numbering->placement[k];
+					fresh.definition_name=numbering->name_text[k].first;fresh.instance_name=numbering->name_text[k].second;
+					metadata.fresh_entities.push_back(std::move(fresh));
+				}
+				if (invalid) continue;
 				out.push_back(std::move(metadata));
 			}
 		});
@@ -349,12 +367,26 @@ namespace lcsave
 		// stall an online join on a cold filesystem. The translator already verified these names.
 		const bool ok=guarded(error,[&]
 		{
+			std::vector<std::uint8_t> image = stream;
+			if (image.size() == native.payload)
+			{
+				image.assign(old_envelope, 0);
+				const std::uint32_t size = native.payload;
+				std::memcpy(image.data()+0x80, &size, 4);
+				image.insert(image.end(), stream.begin(), stream.end());
+			}
+			auto fresh = detail::native_fresh_tail(detail::read_slot(image.data(), image.size(), native), *tables.data->build);
 			const auto file=detail::read_file(translated.bytes.data(),translated.bytes.size(),kind_campaign);
 			detail::validate_native_sections(file,native);
 			for(const auto& record:file.data("ZONE")["records"].as_list())
 			{
 				const auto zone=tables.data->p_zone.find(static_cast<std::uint32_t>(record["zone"].as_int()));
 				if(zone==tables.data->p_zone.end())detail::fail("unknown native zone metadata");
+				const auto provenance = fresh.find(zone->second);
+				if (provenance != fresh.end())
+				{
+					out.push_back(std::move(provenance->second)); fresh.erase(provenance); continue;
+				}
 				ZoneCaptureMetadata metadata;metadata.zone=zone->second;
 				metadata.time_stamp=static_cast<float>(record["time_stamp"].as_real());metadata.capture_flags=2;
 				std::memcpy(metadata.placement_sha1.data(),record["content_hash"].as_bytes().data(),20);
@@ -370,6 +402,7 @@ namespace lcsave
 				}
 				out.push_back(std::move(metadata));
 			}
+			if (!fresh.empty()) detail::fail("native fresh-tail record was not translated");
 		});
 		if(!ok)out.clear();return ok;
 	}

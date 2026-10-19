@@ -584,7 +584,7 @@ namespace lcsave::detail
 					}
 					if (!entity || key_hash1(entity->definition_name, Enc::cp1252) != nh.first ||
 						key_hash1(entity->instance_name, Enc::cp1252) != nh.second) fail(what + ": captured entity association missing or differs");
-					placement = entity->placement_index;
+					placement = capture->source_placement_sha1 == Sha1{} ? entity->placement_index : entity->source_placement_index;
 				}
 				else
 				{
@@ -604,7 +604,7 @@ namespace lcsave::detail
 					if (!z.tail.ordinal_map[e.ordinal - 1])
 					{
 						// An observed entity absent from the native state map is dead/removed. Preserve that identity explicitly.
-						states.push(Value::dict({{"list", I(1)}, {"entity_tag", I(0)}, {"ordinal", I(e.ordinal)}, {"placement_index", I(e.placement_index)},
+						states.push(Value::dict({{"list", I(1)}, {"entity_tag", I(0)}, {"ordinal", I(e.ordinal)}, {"placement_index", I(capture->source_placement_sha1 == Sha1{} ? e.placement_index : e.source_placement_index)},
 							{"def_name", I(name_text(e.definition_name))}, {"inst_name", I(name_text(e.instance_name))}, {"flags_a", I(0)}, {"flags_b", I(0)},
 							{"position", Value::list()}, {"payload_kind", I(1)}, {"payload", Value::bytes(std::string(8, '\0'))}}));
 						Value position = L(); for (int k = 0; k < 3; ++k) position.push(R(0));
@@ -625,7 +625,7 @@ namespace lcsave::detail
 			out = Value::dict();
 			out.set("zone", I(zid));
 			out.set("identity_mode", I(2));
-			out.set("content_hash", Value::bytes(capture ? capture->placement_sha1.data() : num->sha1.data(), 20));
+			out.set("content_hash", Value::bytes(capture ? (capture->source_placement_sha1 == Sha1{} ? capture->placement_sha1.data() : capture->source_placement_sha1.data()) : num->sha1.data(), 20));
 			out.set("time_stamp", R(z.tail.time_stamp));
 			out.set("flag", I(z.tail.flag));
 			out.set("capture_flags", I(capture ? capture->capture_flags : 2));

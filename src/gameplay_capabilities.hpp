@@ -12,7 +12,10 @@ namespace gameplay_capabilities
  constexpr std::uint16_t entity_layout_id=1, explosive_first_hit_id=2, master_mold_id=3, turret_controller_id=4,
   rank_costs_id=5, multipart_id=6, x1_leader_id=7, solo_mode_id=8, death_threshold_id=9, xtraction_services_id=10,
   placement_crush_id=11, double_heal_id=12, pack_amount_id=13, script_functions_id=14,
-  death_switch_clear_id=15, npc_power_rule_id=16;
+  death_switch_clear_id=15, npc_power_rule_id=16, object_world_impact_id=17, stun_rule_id=18,
+  danger_room_party_id=19, lockon_aim_id=20, box_harm_origin_id=21, danger_room_healthbars_id=22, harm_single_chain_id=23, fast_transfer_id=24;
+ // Rules 17..24 (24 = [Online] FastTransfer, docs/online-campaign-transfer.md) participate only when requested; OFF preserves the released digest.
+ constexpr std::uint16_t fast_transfer_revision=1;
  // 10: the first game's Xtraction services and revival price (xtract::capability; issue #63). Revision 2: the online
  // rule greys Load and the campaign-gated options (revision 1, never released, greyed Load only).
  constexpr std::uint16_t xtraction_services_revision=2;
@@ -24,7 +27,9 @@ namespace gameplay_capabilities
  // at 0x61020c for a stream it never opened). Revision 2 (1.4.0 and the 1.5 pre-release, the full list on the wire)
  // and revision 1 (0.2.0i and older) peers refuse as another protocol, both ways. Phase A's receive lifecycle is still
  // not part of it (docs/entity-capacity-phase-a-plan.md section 10, deviation 17).
- constexpr std::uint16_t protocol_revision=3;
+ // Revision 4 retains that framing and requires the native fresh-tail provenance contract.
+ // Older peers cannot restore marked append tails and must refuse before native transfer.
+ constexpr std::uint16_t protocol_revision=4;
  constexpr std::uint32_t magic=0x50414347; // GCAP, little endian
  // max_entries bounds registration only (the wire size is fixed): 16 rules are assigned in 1.5.x.
  constexpr std::size_t max_entries=256, entry_size=20;
@@ -52,6 +57,14 @@ namespace gameplay_capabilities
   case script_functions_id: return "ScriptFunctions";
   case death_switch_clear_id: return "DeathSwitchClear";
   case npc_power_rule_id: return "NpcPowerRule";
+  case object_world_impact_id: return "ObjectWorldImpact";
+  case stun_rule_id: return "StunRule";
+  case danger_room_party_id: return "DangerRoomParty";
+  case lockon_aim_id: return "Xml1LockOnAim";
+  case box_harm_origin_id: return "BoxHarmOrigin";
+  case danger_room_healthbars_id: return "DangerRoomHealthBars";
+  case harm_single_chain_id: return "HarmSingleChain";
+  case fast_transfer_id: return "FastTransfer";
   default: return "a newer rule";
   }
  }
@@ -71,6 +84,7 @@ namespace gameplay_capabilities
  public:
   record() { entries_[0]={entity_layout_id,1,{32,224,256,8}}; }
   bool ready() const { return valid_ && frozen_; }
+  void invalidate() { valid_=false; }
   std::size_t count() const { return count_; }
   const entry& rule(std::size_t i) const { return entries_[i]; }
   bool add(std::uint16_t id,std::uint16_t revision,std::array<std::uint32_t,4> values,bool verified)
@@ -148,7 +162,13 @@ namespace gameplay_capabilities
      if(ids){number(entries_[i].id);add(" ");}
      add(rule_name(entries_[i].id));if(local_only & bit)add(" (not on the other PC)");any=true;
     }
-    if(!any){if(used)add(", ");if(ids){number(unsigned(b+1));add(" ");}add("a rule this PC does not have");}
+    if(!any){
+     if(used)add(", ");if(ids){number(unsigned(b+1));add(" ");}
+     // These requested-only rules are absent when OFF, but this DLL still knows
+     // their names. The bucket summary remains advisory; the digest admits peers.
+     if(b+1==object_world_impact_id || b+1==stun_rule_id || b+1==danger_room_party_id || b+1==lockon_aim_id || b+1==box_harm_origin_id || b+1==danger_room_healthbars_id || b+1==harm_single_chain_id || b+1==fast_transfer_id){add(rule_name(static_cast<std::uint16_t>(b+1)));add(" (disabled on this PC)");}
+     else add("a rule this PC does not have");
+    }
    }
   }
  };

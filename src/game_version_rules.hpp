@@ -13,12 +13,18 @@
 // What the game does: its version is the string "1.30" at 0x6a49b0 (.rdata; four NULs follow, then
 // "NoName" at 0x6a49b8). A hosted game's QR2 key callback hands it to the heartbeat as "gamever"
 // (push 0x6a49b0 at 0x604fba -> qr2_buffer_add 0x63c0a0), and four places copy exactly its first five
-// bytes - four characters and the NUL - into the network code's own structures: the join request
-// (0x607cff), 0x6083a4, 0x612270 (a loop of five) and the session defaults (0x6144a0). Those copies are
+// bytes - four characters and the NUL - into the network code's own structures: the game-info
+// answer's second version field (+0x6c, 0x607cff), 0x6083a4, 0x612270 (a loop of five) and the session defaults (0x6144a0). Those copies are
 // made once, at start-up and when online opens, so a later change doesn't reach them: the string is
 // rewritten from DllMain, before any of the game's code runs. In game (the online report) a client
 // whose version differs from the host's finds no games - in the server list, on the LAN or by
 // "Connect by IP" - so the engine itself keeps the two games apart once their versions differ.
+//
+// The fifth place is not a copy: the game-info struct constructor (0x6156d0) stores the literal "1.30" itself, as
+// five immediate bytes at 0x61571c, into game-info +0x3e - the version the 0x18 answer carries at datagram +67,
+// the one a joiner compares against its own, for LAN search and "Connect by IP". Rewriting the string never reached
+// it, so two LC builds saw each other's answer as another game's. `ctor_patch` makes the constructor copy the (already
+// patched) string at run time instead; with the key unset nothing is written and the literal is the stock one.
 //
 // A version is one to four characters (the copies hold four and the NUL), letters, digits, '.', '-'
 // and '_' - GameSpy's key/value strings are separated by '\', so none of that, and no spaces.
@@ -43,6 +49,8 @@ namespace game_version_rules
 	constexpr std::string_view retail_version = "1.30";
 	constexpr std::size_t version_max = 4;   // what the copies take before the NUL
 	constexpr std::size_t patched_bytes = 5; // the version and its NUL: all the copies read
+	constexpr DWORD ctor_va = 0x61571c;      // the game-info struct constructor's literal "1.30\0" store
+	constexpr std::size_t ctor_bytes = 19;
 
 	// ---- The ini value --------------------------------------------------------------------------------
 
@@ -92,16 +100,22 @@ namespace game_version_rules
 	// Every byte of XMen2.exe the change relies on, read from the retail build: the string and the room
 	// after it, and every place that reads it (each takes at most five bytes). All must match before
 	// anything is written; xml2_test compares them with a copy of the exe.
-	inline constexpr std::array<guard, 6> guards{{
+	inline constexpr std::array<guard, 7> guards{{
 		{0x6a49b0, "312e333000000000", "the version \"1.30\" and the NULs up to \"NoName\" (0x6a49b0)"},
 		{0x604fb6, "8b4c241068b0496a0051e8db700300", "the QR2 key callback hands it to the heartbeat as gamever (qr2_buffer_add 0x63c0a0, 0x604fb6)"},
 		{0x607cff, "a0b0496a0088842488000000a1b1496a008884248900000088a4248a00000066a1b3496a008884248b00000088a4248c000000",
-		 "the join request copies its five bytes (0x607cff)"},
+		 "the game-info answer copies its five bytes into the +0x6c field (0x607cff)"},
 		{0x6083a4, "8a0db4496a00a1b0496a0033ed884c2460", "a copy of its five bytes (0x6083a4)"},
 		{0x612270, "8a88b0496a00888c06100400004083f8057ced", "a copy of its five bytes, a loop of five (0x612270)"},
 		{0x6144a0, "8a0db0496a008848288a15b1496a008850298a0db2496a0088482a8a15b3496a0088502b8a0db4496a006860486a005088482c",
 		 "the session defaults copy its five bytes (0x6144a0)"},
+		{ctor_va, "c6403e31c6403f2ec6404033c6404130884842", "the game-info struct constructor stores \"1.30\" as immediates at +0x3e (0x61571c)"},
 	}};
+
+	// What replaces those 19 bytes (eax = the struct, ecx = 0 and edx are free there; `pop esi; ret` follows):
+	//   mov edx,[0x6a49b0] / mov [eax+0x3e],edx / mov dl,[0x6a49b4] / mov [eax+0x42],dl / nop
+	inline constexpr std::array<std::uint8_t, ctor_bytes> ctor_patch{
+		0x8b, 0x15, 0xb0, 0x49, 0x6a, 0x00, 0x89, 0x50, 0x3e, 0x8a, 0x15, 0xb4, 0x49, 0x6a, 0x00, 0x88, 0x50, 0x42, 0x90};
 
 	// The first guard `image` (XMen2.exe's image base: 0x400000 in the game) doesn't match, or null.
 	inline const guard* first_mismatch(const std::uint8_t* image)
@@ -128,5 +142,6 @@ namespace game_version_rules
 	{
 		const auto bytes = bytes_for(version);
 		std::memcpy(image + (version_va - image_base), bytes.data(), bytes.size());
+		std::memcpy(image + (ctor_va - image_base), ctor_patch.data(), ctor_patch.size());
 	}
 }

@@ -26,6 +26,9 @@ namespace gameplay_agreement
   char incompatibility[512]="Incompatible gameplay or an unverified installation. " XML2_FIX_INCOMPATIBILITY_ADVICE;
   void dialog_text(const char* differing)
   {
+   if(game_version::test_mode_active()){
+    std::snprintf(incompatibility,sizeof(incompatibility),"%s",game_version::test_mode_reason());return;
+   }
    if(differing && *differing)std::snprintf(incompatibility,sizeof(incompatibility),"Incompatible gameplay settings: %s. " XML2_FIX_INCOMPATIBILITY_ADVICE,differing);
    else std::memcpy(incompatibility,incompatibility_general,sizeof(incompatibility_general));
   }
@@ -315,6 +318,8 @@ namespace gameplay_agreement
  }
  bool register_rule(std::uint16_t id,std::uint16_t revision,std::array<std::uint32_t,4> effective,bool verified)
  { const bool enabled=enlist();const bool ok=capabilities.add(id,revision,effective,verified && enabled);if(!ok)game_version::bind_gameplay_agreement(false);return ok; }
+ void reject_unregistered_rule(const char* name)
+ { enlist();capabilities.invalidate();game_version::bind_gameplay_agreement(false);logger::write("online: %s has no assigned gameplay rule ID; online remains blocked",name); }
  bool register_entity_layout(std::uint16_t revision,std::uint32_t actors,std::uint32_t generic,std::uint32_t world,std::uint32_t token_bits,bool verified)
  { const bool enabled=enlist();const bool ok=capabilities.layout(revision,{actors,generic,world,token_bits},verified && enabled);if(!ok)game_version::bind_gameplay_agreement(false);return ok; }
  void show_install_failure(){dialog_text(nullptr);dialog(true);}

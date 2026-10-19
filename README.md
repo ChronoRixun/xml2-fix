@@ -74,7 +74,7 @@ Hold **RT** with a face button for powers, as on console. In menus, **A** accept
 
 - **Player 1** gets pad 1 *alongside* the keyboard (the pad is the secondary binding), so keyboard play keeps working.
 - **Players 2–4** get pads 2–4.
-- The fix only fills in bindings that are empty or still on the game's defaults (or on a layout an earlier version of the fix wrote). Anything you've customised is left alone, and you can rebind freely afterwards.
+- The fix only fills in bindings that are empty or still on the game's defaults (or on a layout an earlier version of the fix wrote). Anything you've customised is left alone, and you can rebind freely afterwards (one known catch: the on-screen prompts follow the fix's layout, not your custom bindings, [#8](https://github.com/ChronoRixun/xml2-fix/issues/8)).
 
 ### Button prompts
 
@@ -125,7 +125,7 @@ LocalIP=auto         ; the default. Or: first (Windows' order, as without the fi
 
 An address that isn't this PC's is ignored and `auto` applies. Without a route to the internet, Windows' order stays. `xml2-fix.log` shows the list once, before and after (`online: this PC's addresses (<PC_NAME>): <VIRTUAL_IP>, <LAN_IP>` then `online: LocalIP: <LAN_IP> first (...): <LAN_IP>, <VIRTUAL_IP>`; placeholders stand for the adapter addresses).
 
-**A mod that is another game** (the X-Men Legends I port) uses the same GameSpy name as XML2, `xmenlegpc`, so without a version of its own its hosted games would show up in XML2's lists and the other way round, and a join would load the host's zones on the other game's install. The game tells GameSpy and other players its version, `1.30`, and finds no games of another version (in the server list, on the LAN or by *Connect by IP*); `GameVersion` gives it another:
+**A mod that is another game** (the X-Men Legends I port) uses the same GameSpy name as XML2, `xmenlegpc`, so without a version of its own its hosted games would show up in XML2's lists and the other way round, and a join would load the host's zones on the other game's install. The game tells GameSpy and other players its version, `1.30`, and finds no games of another version (in the server list, on the LAN or by *Connect by IP*); `GameVersion` gives it another (since 1.6.0 the version also reaches the answer a host gives to LAN searches and *Connect by IP*, so two builds with the same `GameVersion` list and admit each other that way too):
 
 ```ini
 [Online]
@@ -143,8 +143,15 @@ loaded. The joining player gets the game's own dialog (*Incompatible gameplay or
 host keeps its session and sees the reason in the lobby (in place of the advice text, for a minute) or as a short line
 in play: different gameplay settings, the fix not loaded on one PC, or another build. XML2 as it ships, without any of
 these keys, plays online exactly as before. From 1.5 the record is a fixed 108-byte digest whatever the number of
-rules (protocol revision 3), and a refusal names the setting that differs on both PCs; 1.4 and 1.5 refuse each
-other as another build. The record and its rules: [docs/gameplay-agreement.md](docs/gameplay-agreement.md).
+rules, and a refusal names the setting that differs on both PCs. Protocol revision 4 keeps that framing and
+requires [fresh-tail campaign transfer](docs/native-fresh-tail.md); protocol 3 and older peers are refused as another
+build before native admission. The record and its rules: [docs/gameplay-agreement.md](docs/gameplay-agreement.md).
+
+With raised entity capacity, [saved-campaign receive backpressure](docs/online-campaign-transfer.md) prevents a full
+native message pool from acknowledging campaign data it could not store. All four shared pools are checked;
+outgoing replies/fragments are preflighted, and a pressure stall ends safely after 30 seconds without sequence
+progress. The stock send rate remains unchanged:
+a transfer that is still advancing can take several minutes. Save formats and agreement records are unchanged.
 
 **Diagnosing online problems:** add this to `xml2-fix.ini` and `xml2-fix.log` will list every connection and query the game makes:
 
@@ -244,6 +251,29 @@ ClientId=        ; another Discord application's id (empty: the game's own)
 Both Discord applications carry the same art: `logo`, and the badges `menu`, `cutscene`, `dangerroom` and `online`. An application of your own (`ClientId=`) needs art under those keys, or `LargeImage=none`. The pictures are the project's own art ([docs/discord-art](docs/discord-art), with their SVG sources): no game or publisher artwork.
 
 Discord not running? The fix looks for it every 20 seconds, quietly, and connects once it starts. `xml2-fix.log` says when (`discord: connected as X-Men Legends II (discord-ipc-0)`) and lists each new presence (`discord: presence -> Act 1 · Sanctuary | Wolverine, Storm +2 · Lv 10-12`). Quitting the game clears the presence (`discord: presence cleared (the game is quitting)`; the game waits at most 1.5 seconds for it); if the game is closed any other way, Discord clears it when the fix's connection goes. It reads the game's own state once a second: the zone manager's zone and save name, the act, the party, the stats registry's names and levels, the Danger Room's course, the online session and whether a menu is open, after checking every byte it relies on is the retail build's. On any other build the presence shows the game's name only, and `xml2-fix.log` says why. Nothing the presence does can take the game down: whatever is on the other end of the pipe is held to what Discord sends (frames of at most 64 KiB, a few at a time; anything else is dropped and looked for again later), and a failure in its thread only closes the connection.
+
+## Player testing mode
+
+Testing tools are off by default. Add this section to `xml2-fix.ini` beside the DLL, change either switch to `1`, and restart:
+
+```ini
+[TestMode]
+ForgeEverywhere=0
+Hotkeys=0
+KillEnemiesKey=F8
+InvulnerabilityKey=F9
+ReturnToStartKey=F10
+```
+
+`ForgeEverywhere=1` offers Forge at every Xtraction Point, including before his campaign unlock. When `XtractionShop=0`, it adds only Forge. `Hotkeys=1` enables:
+
+- **F8:** defeat ordinary hostile actors in the current zone through the engine's kill routine, including their drops and death targets. Neutral/ally actors, invulnerable and undying actors, actors with event scripts, and actors already referenced by scripts are left alone to protect scripted encounters.
+- **F9:** toggle party invulnerability for this game session. It starts off and does not change saved hero protection or remove protection granted by scripts. Script-forced deaths still follow the engine's rules.
+- **F10:** return the living party to the nearest authored player start. The move is refused if collision checks cannot verify floor and headroom for all four arrival positions. It does not reload the zone or reset its progress.
+
+Hotkeys work during normal play, outside menus, conversations, loading and scripted control locks. Each key acts once per press. Choose distinct `F1`–`F12` names to rebind them; the defaults avoid the game's default bindings. Check your own Advanced Controls if you have rebound keys. Steam Deck players can map these keyboard keys to buttons in their controller layout. No noclip toggle is provided: the engine's collision-off script function does not establish a safe free-flight mode.
+
+**Either switch disables online hosting and joining**, with a dialog naming `[TestMode]`. Set both switches to `0` and restart to play online again. Key assignments alone do not enable testing mode. Player testing hotkeys do not require the automation pipe below.
 
 ## 🧪 Driving the game from a script
 
@@ -432,6 +462,8 @@ RankCosts=1           ; a talent rank costs its <level cost> skill points (X-Men
 LevelSkillPoints=xml1 ; 2 skill points on every 5th level, 1 on the others (X-Men Legends I's rule)
 LevelStatPoints=xml1  ; 8 stat points on every 5th level, 4 on the others (X-Men Legends I's 2 / 1 on the port's x4 stat scale)
 NpcPowerRule=xml1     ; enemies pay energy, decide every 2 s at half energy, and use X-Men Legends I combos
+ObjectWorldImpact=xml1 ; zero ordinary landing damage against non-physical targets
+StunRule=xml1         ; original party-hero stun timing and reaction ownership
 DeathSwitchClear=1    ; the hero handed a dead hero's controller stops the walk its AI had started (X-Men Legends I's hand-over)
 Xml1MasterMold=1      ; X-Men Legends I's Master Mold fight: shield, cores, platform and floor attacks (needs Xml1MoldStage)
 Xml1MoldStage=x1v02:1:5   ; the saved flag that holds the fight's stage, as flag:first_bit:width (the port's builder writes it)
@@ -440,7 +472,7 @@ Xml1MoldStage=x1v02:1:5   ; the saved flag that holds the fight's stage, as flag
 Format=lc       ; the LC save format: saves in SaveLC as .lcsave files with permanent identities; the old saves converted once
 ```
 
-**The LC save format.** XML2's own save file stores every item, talent, objective and zone object by its position in the tables the game loaded, so a campaign that keeps growing (the X-Men Legends I port) turns every older save into another save. With `Format=lc` the game's own serializer and loader are left alone, and the one object that moves their stream to and from the disk - the memory card's nine file methods - becomes the fix's: a slot is read from `SaveLC\saveslot<N>.lcsave` (the library rebuilds the engine's stream from permanent identities), written there atomically with a backup, listed from the file's own description; the profile goes to `SaveLC\profile.lcsave`. At the first file operation the build's tables (`Data\lcsave\catalogue.lcc` and the bind files beside the data files) are loaded and verified - when they don't verify, nothing is read or written in either folder and the slot list says why - and the old `Save` folder is converted once, with a ledger (`SaveLC\legacy-import.txt`); the originals are never written. A save made before a hero got a talent gets it on load at rank 0. See [the disk seam, the start-up and what stays undone](docs/save-format.md).
+**The LC save format.** XML2's own save file stores every item, talent, objective and zone object by its position in the tables the game loaded, so a campaign that keeps growing (the X-Men Legends I port) turns every older save into another save. With `Format=lc` the game's own serializer and loader are left alone, and the one object that moves their stream to and from the disk - the memory card's nine file methods - becomes the fix's: a slot is read from `SaveLC\saveslot<N>.lcsave` (the library rebuilds the engine's stream from permanent identities), written there atomically with a backup, listed from the file's own description; the profile goes to `SaveLC\profile.lcsave`. At the first file operation the build's tables (`Data\lcsave\catalogue.lcc` and the bind files beside the data files) are loaded and verified - when they don't verify, nothing is read or written in either folder and the slot list says why - and the old `Save` folder is converted once, with a ledger (`SaveLC\legacy-import.txt`); the originals are never written. A save made before a hero got a talent gets it on load at rank 0. See [the disk seam, the start-up and what stays undone](docs/save-format.md). A save written by a newer fix is never overwritten by an older one: it is kept as `.lcsave.newer`.
 
 **X-Men Legends I's Master Mold.** In the first game Master Mold raises a shield that only falls when his warp
 cores are destroyed, attacks from his platform and the floor on his own timers, and calls in sentinels; XML2's engine
@@ -632,7 +664,12 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `RankCosts` | `0` | `1`: a talent rank costs the `cost` of its `<level>` (1 without one) when it is bought, refunded, auto-spent, respecced or lost with a level, and the skills screen offers it only when the hero can pay, as in X-Men Legends I ([details](docs/rank-costs.md)) |
 | `LevelSkillPoints` | (none) | `xml1`: a level divisible by 5 gives (and a level lost takes back) 2 skill points, any other 1, as in X-Men Legends I ([details](docs/rank-costs.md#skill-points-per-level-gamelevelskillpointsxml1)) |
 | `LevelStatPoints` | (none) | `xml1`: a level divisible by 5 gives (and a level lost takes back) 8 stat points, any other 4: X-Men Legends I's 2 / 1 for heroes whose stats are its x 4 ([details](docs/rank-costs.md)) |
-| `NpcPowerRule` | `xml2` | `xml1`: enemies pay energy for powers, decide every 2 s with at least half energy, use the first game's combos and visibility rules (gameplay rule 16 revision 3; [details](docs/npc-power-rule.md)). Heroes still get stunned more than in the original (Legends Classic issue #101, open). |
+| `NpcPowerRule` | `xml2` | `xml1`: enemies pay energy for powers, decide every 2 s with at least half energy, use the first game's combos and visibility rules (gameplay rule 16 revision 4; [details](docs/npc-power-rule.md)). Heroes still get stunned more than in the original (Legends Classic issue #101, open). |
+| `ObjectWorldImpact` | `xml2` | `xml1`: zero ordinary landing damage against non-physical targets, as in XML1 (gameplay rule 17 revision 1; [details](docs/object-world-impact.md)). |
+| `BoxHarmOrigin` | `xml2` | `xml1`: original boxed-harm zero dispatch origin, correcting the PC centre-based upward-fire impulse. Builder default on; requested-only gameplay rule 21, revision 1 ([evidence and limits](docs/box-harm-origin.md)). |
+| `HarmLoopStartup` | `xml2` | Opt-in `xml1`: keep the authored creation-relative first activation and ordinary start-on loop. Requires matching builder output; developer option, online blocked when requested; no gameplay rule ([details](docs/harm-loop-startup.md)). |
+| `HarmSingleChain` | `off` | `single`: retain one pending repeat chain for ordinary boxed touch fires (about one hit per 0.4 s). Explicit scheduling policy, not proven XBE parity. Builder default on; requested-only gameplay rule 23, revision 1 ([details](docs/harm-single-chain.md)). |
+| `StunRule` | `xml2` | `xml1`: original party stun playback and input recovery; rejected/interrupted stuns do not resume after get-up. Enemy stuns stay native (gameplay rule 18 revision 2; [details](docs/stun-rule.md)). |
 | `PackAmount` | `xml2` | `xml1`: a health or energy pack restores a quarter of the maximum, as in X-Men Legends I, instead of a third ([details](docs/pack-amount.md)) |
 | `DeathRule` | `xml2` | `xml1`: an entity dies on the hit that leaves it below 1 health, as in X-Men Legends I, instead of only at 0 ([details](docs/death-threshold.md)) |
 | `Xml1Multipart` | `0` | `1`: X-Men Legends I's breakable parts (a stats `<Multipart>` row's health, break, effects and the attacks it carries: Juggernaut's helmet, the Sentinels' arms) ([details](docs/multipart.md)) |
@@ -641,6 +678,12 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `DeathSwitchClear` | `0` | `1`: when the controlled hero dies, the hero given its controller stops the walk its AI had started instead of finishing it with no input, as in X-Men Legends I ([details](docs/death-switch.md)) |
 | `ClassicMainBackdrop` | `0` | `1`: the classic main menu's Cerebro room is drawn with its original bright textures ([details](#classic-main-menu-backdrop)) |
 | `ClassicMainPanelBounds` | `0` | `1`: the classic main menu's buttons answer the mouse over their whole visible panels ([details](#classic-main-menu-backdrop)) |
+| `DangerRoomParty` | `xml2` | `xml1`: original Cyclops/Phoenix/Storm/Wolverine fallback for an incomplete non-solo course party (requested-only rule 19 revision 1). |
+| `DangerRoomHealthBars` | `xml2` | `xml1`: show the target health gauge for protected Danger Room training opponents. Builder default on; requested-only gameplay rule 22, revision 1. Protection and course limits remain; native dirty-stat refresh/clamp timing parity is unproved. Required combo hits kill training targets through the native [course death/progress path](docs/danger-room-courses.md). |
+| `FastTransfer` ([Online]) | `0` | `1` (with `[Limits] EntityCapacity=1`): send a saved campaign to co-op peers as data/zero-run records with a pool-bounded 32-message window - seconds instead of minutes. Builder default on. Every PC must use it (gameplay rule 24, revision 1, requested-only). |
+| `ReceiveValidation` ([Online]) | `1` | `1`: the game checks every network message it receives (size and shape, per message type) before its handler runs and drops one that doesn't fit, with a rate-limited line in `xml2-fix.log`; nothing changes on the wire, so it works with peers that don't have it. `0` runs the game's own unguarded handlers. |
+| `Xml1LockOnEffects` | unset | Builder-provided `beam,surface,target` effect paths restore first-game lock-on visuals; targeting stays native ([details](docs/lockon-effects.md)) |
+| `Xml1LockOnAim` | `0` | `1`: use the animated head for lock-on, as in XML1. Requires valid `Xml1LockOnEffects`. Requested-only gameplay rule 20 revision 1; failed requests refuse online admission ([details](docs/lockon-effects.md)) |
 | `Xml1MasterMold` | `0` | `1`: X-Men Legends I's Master Mold fight; needs `Xml1MoldStage` ([details](docs/xml1-controllers.md)) |
 | `Xml1MoldStage` | *(none)* | the saved flag holding that fight's stage, as `flag:first_bit:width`; written by the port's builder |
 | `Xml1Turrets` | `0` | `1`: X-Men Legends I's scan turrets scan, track and fire, from the mod's `[Xml1Turrets]` section (`Count`, `T1`..`T32`, one placement each; written by the port's builder) ([details](docs/xml1-controllers.md)) |
@@ -683,6 +726,16 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `EntityCapacity` | `0` | `1`: 32 actor / 768 generic / 1024 World entity handles instead of 32 / 224 / 256; needs `[Save] Format=lc` ([details](docs/entity-capacity.md)) |
 | `ScriptFunctions` | *(1024 with `[Game] ForcedTeams`, otherwise the game's own, 320)* | `321` to `4096` script function names; `320` keeps the game's own limit ([details](docs/script-functions.md)) |
 
+**[TestMode]**: optional player testing tools ([details](#player-testing-mode)); either switch disables online play until both are off and the game is restarted.
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `ForgeEverywhere` | `0` | Offer Forge at every Xtraction Point, without changing campaign unlocks |
+| `Hotkeys` | `0` | Enable the three testing hotkeys during normal play |
+| `KillEnemiesKey` | `F8` | Defeat ordinary enemies; preserve protected/scripted actors |
+| `InvulnerabilityKey` | `F9` | Toggle party invulnerability for the current game session |
+| `ReturnToStartKey` | `F10` | Return the living party to the nearest player start with verified floor and headroom |
+
 **[Test]**: for automated testing ([details](#-driving-the-game-from-a-script))
 
 | Key | Default | Meaning |
@@ -703,6 +756,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | --- | ------- | ------- |
 | `LogNetwork` | `0` | `1`: `xml2-fix.log` lists every connection and query the game makes |
 | `LogFiles` | `0` | `1`: `xml2-fix.log` lists every file the game opens |
+| `LoadLibraryTrace` | `0` | `1`: `xml2-fix.log` lists every DLL the game and its engine libraries load (requested name, result or error, calling module) and the engine's plugin-folder searches, for a start-up "Library ... could not be loaded" report |
 | `LogBreakRule` | `0` | `1` (with `BreakRule=xml1`): `xml2-fix.log` lists every melee level worked out and every hit on an object, with the verdict |
 | `SaveDumpRefused` | `0` | `1` (with `[Save] Format=lc`): a refused campaign save also writes the game's own save image to `SaveLC\refused-native-<time>.save`, for a bug report ([details](docs/save-format.md)) |
 | `SaveTrace` | `0` | `1` (with `[Save] Format=lc`): the log counts the game's own save capture and every per-object restore, for a bug report ([details](docs/save-guards.md)) |
@@ -758,6 +812,7 @@ It doesn't touch the game's files or saves, and it doesn't need an installer.
 
 ## 🧰 Troubleshooting
 
+- **Rebound your pad and the prompts no longer match?** A known open issue ([#8](https://github.com/ChronoRixun/xml2-fix/issues/8)): the prompts follow the fix's layout, not custom bindings. It has not been reproduced yet, so reports are welcome.
 - **Nothing changed?** Make sure `dinput.dll` is in the same folder as `XMen2.exe`, not a subfolder.
 - **Bindings still empty?** The fix only adds its layout to players with no gamepad bindings at all. If you had already bound a pad for a player, that player keeps your setup. Use *Revert to defaults* in *Advanced options* to get the fix's layout.
 - **Every launch writes `xml2-fix.log`** next to the DLL. It lists what the game saw and what the fix did. Attach it to any bug report (it can hold this PC's name, local addresses and folder paths: see [Privacy](#-privacy)).

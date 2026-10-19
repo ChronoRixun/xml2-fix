@@ -53,6 +53,15 @@ namespace xtraction_shop_rules
 	};
 	// Everything this DLL understands (the shared gameplay agreement advertises it, rule 10).
 	constexpr int capability = forge | healer | load | danger_room | forge_campaign | no_change_team;
+	// The offline testing override adds Forge without changing campaign unlocks or other services.
+	constexpr int testing_services(int services, bool everywhere)
+	{
+		return everywhere ? (services | forge) & ~forge_campaign : services;
+	}
+	constexpr int effective_services(int services, bool shop, bool everywhere)
+	{
+		return testing_services(shop ? services : 0, everywhere);
+	}
 
 	struct option
 	{

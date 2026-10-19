@@ -9503,8 +9503,35 @@ namespace
 		{
 			if (image[i] != before[i]) changed.push_back(image_base + i);
 		}
-		CHECK((changed == std::vector<DWORD>{version_va, version_va + 1, version_va + 2}) && // "1.30" -> "X1.0": the 0 stays
-		      std::string_view(reinterpret_cast<const char*>(at(version_va))) == "X1.0");
+		std::vector<DWORD> expected_changes{version_va, version_va + 1, version_va + 2}; // "1.30" -> "X1.0": the 0 stays
+		for (std::size_t i = 0; i < ctor_bytes; ++i)
+		{
+			if (before[ctor_va - image_base + i] != ctor_patch[i]) expected_changes.push_back(ctor_va + static_cast<DWORD>(i));
+		}
+		std::sort(changed.begin(), changed.end());
+		std::sort(expected_changes.begin(), expected_changes.end());
+		CHECK(changed == expected_changes && std::string_view(reinterpret_cast<const char*>(at(version_va))) == "X1.0");
+		// The constructor's literal store (0x61571c): the retail bytes are the table's, the patch is the same length, reads
+		// the version's own five bytes and writes game-info +0x3e..+0x42 - with the retail string the same "1.30 " the
+		// literal stored (stock bytes on the wire), with the patched string the token.
+		CHECK(limits_rules::hex_size(guards[6].hex) == ctor_bytes && guards[6].va == ctor_va && ctor_patch.size() == ctor_bytes);
+		CHECK(operand_at(ctor_patch.data() + 2, 4) == version_va && operand_at(ctor_patch.data() + 11, 4) == version_va + 4 && ctor_patch[6] == 0x89 && ctor_patch[8] == 0x3e && ctor_patch[17] == 0x42);
+		{
+			const auto run = [&](const std::uint8_t* version5)
+			{
+				std::array<std::uint8_t, 0x74> game_info{};
+				std::uint32_t edx = 0;
+				std::memcpy(&edx, version5, 4);              // mov edx,[0x6a49b0]
+				std::memcpy(game_info.data() + 0x3e, &edx, 4); // mov [eax+0x3e],edx
+				game_info[0x42] = version5[4];                 // mov dl,[0x6a49b4]; mov [eax+0x42],dl
+				return game_info;
+			};
+			const std::uint8_t retail_five[5] = {'1', '.', '3', '0', 0};
+			const auto stock = run(retail_five), token = run(bytes_for("LC29").data());
+			CHECK(std::memcmp(stock.data() + 0x3e, "1.30", 5) == 0 && std::memcmp(token.data() + 0x3e, "LC29", 5) == 0 && token[0x43] == 0);
+			std::vector<std::uint8_t> stock_literal(before.begin() + (ctor_va - image_base), before.begin() + (ctor_va - image_base) + ctor_bytes);
+			CHECK(stock_literal[3] == '1' && stock_literal[7] == '.' && stock_literal[11] == '3' && stock_literal[15] == '0'); // the immediates being replaced
+		}
 		mismatch = first_mismatch(image);
 		CHECK(mismatch && mismatch->va == version_va);
 		std::memcpy(image, before.data(), image_size);
@@ -10393,7 +10420,7 @@ namespace
 		std::memcpy(values, data.data(), 16);
 		CHECK(values[0] == -0.5f && values[1] > 0.00099f && values[1] < 0.00101f && values[2] == 2.0f && values[3] == 0.5f);
 		const auto whole = block(l.base);
-		CHECK(whole.size() == block_size && l.charge + charge_size <= l.recheck && l.recheck + recheck_size <= l.gate && l.gate + gate_size <= l.constants);
+		CHECK(whole.size() == code_size && l.charge + charge_size <= l.recheck && l.recheck + recheck_size <= l.gate && l.gate + gate_size <= l.constants);
 		const auto jump = charge_jump(l), call = recheck_call(l), pick = picker_call(l);
 		CHECK(jump.size() == charge_site.patched && call.size() == recheck_site.patched && pick.size() == 5);
 		CHECK(rel32(jump, 1, charge_site.va) == l.charge && rel32(call, 1, recheck_site.va) == l.recheck && rel32(pick, 1, picker_call_va) == l.gate);
@@ -10422,13 +10449,13 @@ namespace
 					slots_ok &= button == xml1_combos[i][k] && (button == 4 || button == 5);
 				}
 			}
-			CHECK(slots_ok && l.constants + 16 <= l.combos);
+			CHECK(slots_ok && l.constants + data.size() <= l.combos);
 			const auto lengths = combo_lengths_bytes();
 			CHECK(lengths.size() == 24 && lengths[0] == 1 && lengths[4] == 2 && lengths[20] == 5);
 		}
 		CHECK(combolevel_skip() == std::vector<std::uint8_t>({0x83, 0xc4, 0x04}) && sub_bytes(combolevel_site, 3, 3) == std::vector<std::uint8_t>({0xff, 0x52, 0x44}));
 		CHECK(sub_bytes(combo_exit_site, 3, 6) == std::vector<std::uint8_t>({0xb0, 0x01, 0x5f, 0x5e, 0x5d, 0x5b}) && combo_exit_va == combo_exit_site.va + 3 && combo_exit2_va == combo_exit2_site.va + 3);
-		CHECK(rel32(combo_exit_jump(combo_exit_va), 1, combo_exit_va) == combo_tail_va && rel32(combo_exit_jump(combo_exit2_va), 1, combo_exit2_va) == combo_tail_va && combo_exit_jump(combo_exit_va)[5] == 0x90);
+		CHECK(rel32(combo_exit_jump(combo_exit_va, l.start), 1, combo_exit_va) == l.start && rel32(combo_exit_jump(combo_exit2_va, l.start), 1, combo_exit2_va) == l.start && combo_exit_jump(combo_exit_va, l.start)[5] == 0x90);
 
 		// V-NPC1: visibility deferral is distinct from obstruction; geometry comes from positions, even for
 		// coincident points. The native adapter uses this same policy, with no game data in the fixture.
@@ -10487,7 +10514,7 @@ namespace
 		if (mismatch) std::printf("  info  XMen2.exe at 0x%08lX isn't what the table says (%s)\n", static_cast<unsigned long>(mismatch->va), mismatch->what);
 		CHECK(mismatch == nullptr);
 		// Every new entry/predicate/helper guard must refuse a changed executable before any patch is made.
-		for (const auto* s : {&query_priority_site, &query_budget_site, &visibility_site, &physical_target_site, &query_entry_site})
+		for (const auto* s : sites)
 		{
 			auto& byte = image[s->va - image_base];
 			byte ^= 1;

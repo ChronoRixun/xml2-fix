@@ -266,12 +266,21 @@ namespace lcsave::detail
 		const CatEntry* entry_of(u32 id) const;
 	};
 
+	struct ZonePrefix
+	{
+		Hash zone{}, digest{};
+		Sha1 old{}, current{};
+		std::vector<u32> placements;
+		std::vector<std::pair<Hash,Hash>> fresh_aliases, ambiguous_aliases;
+	};
 	struct ZoneNumbering
 	{
 		Sha1 sha1{};
 		std::vector<std::pair<Hash, Hash>> names;              // (definition, instance) key hashes in ordinal order
+		std::vector<std::pair<std::string, std::string>> name_text;
 		std::vector<u32> placement;                            // placement index in ordinal order
 		std::vector<std::string> problems;
+		std::map<std::size_t, Hash> prefix_digests;             // verified from the opened placement bytes
 	};
 
 	// one parsed .lcbind, kept as read (tests compare it with the builder's Python reader)
@@ -312,8 +321,13 @@ namespace lcsave::detail
 		std::vector<std::string> herostat_autospend;           // by stats index: the autospend class name, lower case ("" = none)
 		// zone numbering, read lazily from the placement files
 		mutable std::map<std::string, std::optional<ZoneNumbering>> zones;
+		std::vector<ZonePrefix> zone_prefixes;
 		const ZoneNumbering* zone_numbering(const std::string& zone) const;
+		const ZonePrefix* zone_prefix(const std::string& zone, const std::string& old, const ZoneNumbering& current) const;
 	};
+
+	std::string fresh_tail_text(const std::string& zone, const ZonePrefix& prefix, const ZoneNumbering& numbering);
+	std::map<std::string, ZoneCaptureMetadata> native_fresh_tail(const OldSlot& native, const Build& build);
 
 	struct TablesData
 	{

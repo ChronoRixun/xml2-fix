@@ -6,6 +6,7 @@
 #include "entity_transfer.hpp"
 #include "entity_world.hpp"
 #include "gameplay_agreement.hpp"
+#include "gameplay_capabilities.hpp"
 #include "ini.hpp"
 #include "limits.hpp"
 #include "log.hpp"
@@ -27,6 +28,8 @@ namespace entity_capacity
 		descriptor published = stock_descriptor;
 		descriptor prepared_descriptor = stock_descriptor;
 		bool requested = false, prepared = false, install_published = false, fatal = false;
+		// [Online] FastTransfer: requested-only; both peers must agree (gameplay agreement, docs/online-campaign-transfer.md).
+		bool fast_requested = false, fast_installed = false;
 		std::string failure;
 		fallback_cause failure_cause = fallback_cause::internal; // picks the advice in the fallback warning
 		entity_owners::set owners;
@@ -205,9 +208,25 @@ namespace entity_capacity
 		{
 			logger::write("entity capacity: native campaign transfer: the game's pool refused a %lu-byte wrapper", static_cast<unsigned long>(size));
 		}
+		void transfer_backpressure(std::uint16_t expected, std::uint16_t sequence, message_pools used)
+		{
+			logger::write_once("native-reliable-backpressure", "entity capacity: reliable receive deferred before ACK (expected %u, sequence %u, large bodies %u/50, headers %u/768, small bodies %u/768, nodes %u/650); sender will retry",
+			                  unsigned(expected), unsigned(sequence), used.large, used.headers, used.small, used.nodes);
+		}
+		void transport_failed(const char* reason, message_pools used)
+		{
+			logger::write("online: shared message pool pressure: %s (large %u/50, headers %u/768, small %u/768, nodes %u/650); ending this session safely",
+			              reason, used.large, used.headers, used.small, used.nodes);
+		}
+		void fast_record_refused(fast_verdict verdict, std::uint32_t received, std::uint32_t length, std::uint32_t payload)
+		{
+			transfer_refusals.fetch_add(1);
+			logger::write_once("entity-capacity-fast-transfer", "online: FastTransfer campaign record refused (%s at image byte %lu, %u bytes, payload 0x%lX)",
+			                   fast_verdict_text(verdict), static_cast<unsigned long>(received), unsigned(length), static_cast<unsigned long>(payload));
+		}
 		std::uint32_t __cdecl ReceiveNativeCampaign(std::uint8_t* event)
 		{
-			static const entity_transfer::observer observer{&transfer_refused, &transfer_no_wrapper};
+			static const entity_transfer::observer observer{&transfer_refused, &transfer_no_wrapper, &fast_record_refused};
 			return entity_transfer::receive(event, prepared_descriptor.raised ? e10a2_transfer : retail_transfer, transfer_state, observer);
 		}
 
@@ -256,6 +275,10 @@ namespace entity_capacity
 			bind("entity_capacity::PoisonPreparedSaveClaim", address_of(reinterpret_cast<const void*>(&PoisonPreparedSaveClaim)));
 			bind("entity_capacity::RestoreFactoryResult", address_of(reinterpret_cast<const void*>(&RestoreFactoryResult)));
 			bind("entity_capacity::ReceiveNativeCampaign", address_of(reinterpret_cast<const void*>(&ReceiveNativeCampaign)));
+			bind("entity_capacity::ReliableReceiveRoom", address_of(reinterpret_cast<const void*>(&entity_transfer::reliable_receive_room)));
+			bind("entity_capacity::OutgoingRoom", address_of(reinterpret_cast<const void*>(&entity_transfer::outgoing_room)));
+			bind("entity_capacity::TransportMaintenance", address_of(reinterpret_cast<const void*>(&entity_transfer::transport_maintenance)));
+			bind("entity_capacity::FastSender", address_of(reinterpret_cast<const void*>(&entity_transfer::fast_sender)));
 			bind("entity_capacity::WorldGet", address_of(reinterpret_cast<const void*>(&WorldGet)));
 			bind("entity_capacity::GridGet", address_of(reinterpret_cast<const void*>(&GridGet)));
 			bind("entity_capacity::QueryManagerGet", address_of(reinterpret_cast<const void*>(&QueryManagerGet)));
@@ -318,6 +341,22 @@ namespace entity_capacity
 				if (found == symbols.end()) { unresolved += std::string(s.symbol) + " "; continue; }
 				c.writes.push_back(patch_transaction::relocation(s.va, s.prefix_hex, true, found->second, s.pad, s.role));
 			}
+			if (fast_requested)
+			{
+				for (const auto& r : fast_regions) c.regions.push_back({r.name, r.lo, r.hi_exclusive, patch_transaction::sha256_of(r.sha256)});
+				for (const auto& l : fast_literals)
+				{
+					c.guards.push_back({l.va, patch_transaction::bytes_of(l.old_hex), std::string("FastTransfer: ") + l.role});
+					c.writes.push_back({l.va, patch_transaction::bytes_of(l.new_hex), l.role});
+				}
+				for (const auto& r : fast_relocations)
+				{
+					c.guards.push_back({r.va, patch_transaction::bytes_of(r.old_hex), std::string("FastTransfer: ") + r.role});
+					const auto found = symbols.find(r.symbol);
+					if (found == symbols.end()) { unresolved += std::string(r.symbol) + " "; continue; }
+					c.writes.push_back(patch_transaction::relocation(r.va, r.prefix_hex, true, found->second, r.pad, r.role));
+				}
+			}
 			if (!unresolved.empty())
 			{
 				failure = "unresolved DLL symbols: " + unresolved;
@@ -330,7 +369,23 @@ namespace entity_capacity
 				              required, descoped);
 				published = prepared_descriptor;
 				install_published = true;
+				entity_transfer::observe_backpressure(&transfer_backpressure);
+				entity_transfer::observe_failure(&transport_failed);
+				logger::write("entity capacity: shared message pools reserve receive capacity; sends preflight fragments; pressure stalls end safely after 30 seconds");
 				gameplay_agreement::register_entity_layout(layout_revision_raised, raised_actors, raised_generic, raised_world, raised_index_bits, true);
+				if (fast_requested)
+				{
+					fast_installed = true;
+					transfer_state.fast = true;
+					entity_transfer::set_fast_payload(prepared_descriptor.raised ? e10a2_transfer.payload : retail_transfer.payload);
+					if constexpr (gameplay_capabilities::fast_transfer_id == 0)
+						gameplay_agreement::reject_unregistered_rule("FastTransfer");
+					else
+						gameplay_agreement::register_rule(gameplay_capabilities::fast_transfer_id, gameplay_capabilities::fast_transfer_revision,
+						                                  {1u, fast_window, fast_data_max + 1, fast_zero_min}, true);
+					logger::write("online: FastTransfer installed - campaign image as data/zero-run records, %u in flight per peer within shared-pool margins, peer budget %u bytes/s; every PC must use it",
+					              unsigned(fast_window), unsigned(fast_peer_budget));
+				}
 				logger::write("entity capacity: installed - actor %u / generic %u / world %u, %zu literal edits, %zu relocations, GCAP layout rule 1 revision %u",
 				              published.actors, published.generic, published.world, literal_sites.size(), relocation_sites.size(), unsigned(layout_revision_raised));
 			};
@@ -350,7 +405,13 @@ namespace entity_capacity
 	void prepare(patch_transaction::transaction&, HMODULE game)
 	{
 		requested = ini::flag(L"Limits", L"EntityCapacity", false);
-		if (!requested) return;
+		fast_requested = requested && ini::flag(L"Online", L"FastTransfer", false);
+		if (!requested)
+		{
+			if (ini::flag(L"Online", L"FastTransfer", false))
+				logger::write("online: [Online] FastTransfer needs [Limits] EntityCapacity=1 - the stock campaign transfer is used");
+			return;
+		}
 		std::string why;
 		const auto lc = ini::text(L"Save", L"Format").value_or("");
 		if (!startup_quiescent(read_dword, lc, address_of(game), why))
@@ -454,11 +515,14 @@ namespace entity_capacity
 			out += "; world live " + std::to_string(w.live) + " free " + std::to_string(w.free_slots) + " retired " + std::to_string(w.retired) + " maxgen " + std::to_string(w.max_generation) +
 			       " refusals " + std::to_string(w.refusals) + " reset-time attempts " + std::to_string(w.reset_time_attempts);
 		out += "; save claim " + std::string(claim_state_text(claim)) + " rejections " + std::to_string(claim_rejections.load()) + "; factory failures " + std::to_string(factory_failures.load()) +
-		       "; transfer refusals " + std::to_string(transfer_refusals.load());
+		       "; transfer refusals " + std::to_string(transfer_refusals.load()) +
+		       "; reliable receive deferrals " + std::to_string(entity_transfer::backpressure_count()) +
+		       (fast_installed ? "; fast transfer records sent " + std::to_string(entity_transfer::fast_records_sent()) + " received " + std::to_string(transfer_state.chunks) : std::string());
 		return out;
 	}
 
 	bool retire_slot(std::uint32_t index) { return published.raised && entity_owners::retire_slot(owners, index); }
+	bool fast_transfer_installed() { return fast_installed; }
 	std::uint32_t installed_target(std::uint32_t site)
 	{
 		if (!install_published || !published.raised) return 0;

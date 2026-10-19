@@ -52,3 +52,14 @@ DISASM  src/rank_costs.cpp  # Authored naked x86 stubs at the skill-point call s
 DISASM  src/solo_mode.cpp  # Authored naked x86 bridges for the solo-mode AI sites; each replays only the few guarded instructions it displaces, described in prose; no game listing or decompiled body.
 DISASM  test/rank_costs_test.cpp  # Authored inline assembly that drives the fix's stubs with the register/stack contract of each site on a synthetic frame; not game disassembly.
 DISASM  test/x1_leader_test.cpp  # Authored inline assembly that calls the leader bridges with a frame shaped like the site's; not game disassembly.
+DISASM  src/stun_rule.cpp  # Authored register-preserving move/expiry bridges; replay only guarded assignment/flag operations. No game listing or decompiled body.
+DISASM  test/stun_rule_test.cpp  # Authored inline assembly driving the fix's bridge on synthetic actors and recording preserved registers/flags; retail routines are read from a user-supplied executable, never embedded.
+DISASM  src/world_impact_bridge.hpp  # Authored x87-balanced impact bridge; replays only the short guarded target classification and heaviness read. No game listing or decompiled body.
+DISASM  test/world_impact_test.cpp  # Authored synthetic caller/continuation exercising the impact bridge's stack and x87 contract; no game disassembly.
+DISASM  src/lockon_effects_hooks.hpp  # Authored register-preserving x86 observation bridges; replay only the short guarded instructions they displace. No game listing or decompiled body.
+DISASM  test/lockon_effects_test.cpp  # Authored synthetic stack-frame caller and continuation exercising our bridges; no game disassembly.
+DISASM  test/box_harm_test.cpp  # Authored synthetic caller/continuation checks our bridge's stack, registers and FPU; no game instruction listing or decompiled body.
+DISASM  src/harm_loop_startup_bridge.hpp  # Authored guarded branch bridge for ordinary loop startup; no copied game instruction listing or decompiled body.
+DISASM  src/harm_single_chain_bridge.hpp  # Authored eligibility and pending-bit bridges for the opt-in single-chain policy; no game instruction listing or decompiled body.
+DISASM  src/receive_validation.cpp  # Authored naked x86 dispatch guard; replays only the short guarded prologue, validates and resumes or returns. No game listing or decompiled body.
+DISASM  test/receive_validation_test.cpp  # Authored synthetic register/stack driver for our dispatch guard; retail routines are read from a user-supplied executable, never embedded.

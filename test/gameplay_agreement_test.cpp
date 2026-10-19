@@ -5,6 +5,9 @@
 #include "game_version_rules.hpp"
 #include "explosive_first_hit.hpp"
 #include "npc_power.hpp"
+#include "stun_rule.hpp"
+#include "world_impact.hpp"
+#include "world_impact_rules.hpp"
 #include "xml1_capability_rules.hpp"
 #include "script_functions_rules.hpp"
 #include <cstdio>
@@ -18,11 +21,16 @@
 #include <cwchar>
 
 namespace ini {
- bool requested=false,lc=true,key=true;
- bool flag(const wchar_t*,const wchar_t*,bool){return requested;}
+ std::optional<std::string> impact;
+ bool requested=false,lc=true,key=true,testing_forge=false,testing_hotkeys=false;
+ bool flag(const wchar_t* section,const wchar_t* name,bool){
+  if(std::wcscmp(section,L"TestMode")==0)return std::wcscmp(name,L"ForgeEverywhere")==0 ? testing_forge : std::wcscmp(name,L"Hotkeys")==0 && testing_hotkeys;
+  return requested;
+ }
  std::optional<std::string> text(const wchar_t* section,const wchar_t* name){
   if(std::wcscmp(section,L"Save")==0)return lc ? std::optional<std::string>("lc") : std::nullopt;
   if(std::wcscmp(section,L"Online")==0)return lc ? std::optional<std::string>("LC24") : std::nullopt;
+  if(std::wcscmp(name,L"ObjectWorldImpact")==0)return impact;
   if(std::wcscmp(name,L"ExplosiveFirstHit")==0 && key)return requested ? "1" : "0";
   return std::nullopt;
  }
@@ -45,6 +53,7 @@ using gameplay_capabilities::record;
 using gameplay_capabilities::result;
 int failures=0;
 void check(bool value,const char* message){std::printf("%s %s\n",value ? "PASS" : "FAIL",message);failures+=!value;}
+void check(bool value,const std::string& message){check(value,message.c_str());}
 void* at(std::uint32_t address){return reinterpret_cast<void*>(address);}
 void writable(std::uint32_t address,std::size_t size){DWORD old;VirtualProtect(at(address),size,PAGE_EXECUTE_READWRITE,&old);}
 void jump(std::uint32_t site,const void* target){writable(site,5);auto* code=static_cast<std::uint8_t*>(at(site));code[0]=0xe9;const auto delta=std::int32_t(reinterpret_cast<std::uintptr_t>(target)-site-5);std::memcpy(code+1,&delta,4);}
@@ -73,9 +82,10 @@ void records(){
  record native;native.finalize();check(native.bytes().size()==108 && native.count()==1 && native.rule(0).values==std::array<std::uint32_t,4>{32,224,256,8},"default record contains explicit retail entity layout");
  auto bytes=std::vector<std::uint8_t>(off.bytes().begin(),off.bytes().end());
  auto reset=[&]{bytes.assign(off.bytes().begin(),off.bytes().end());};
- check(bytes[0]=='G' && bytes[1]=='C' && bytes[2]=='A' && bytes[3]=='P' && bytes[4]==3 && bytes[5]==0 && bytes[6]==2 && bytes[8]==108 && bytes[9]==0 && bytes[10]==0 && bytes[11]==0,"protocol 3 header: GCAP, revision 3, two rules, 108 bytes, reserved zero");
- bytes[4]=4;check(off.compare(bytes)==result::protocol,"unknown record revision refuses");reset();bytes[4]=1;check(off.compare(bytes)==result::protocol,"protocol revision 1 peers (0.2.0i and older) refuse");reset();
+ check(bytes[0]=='G' && bytes[1]=='C' && bytes[2]=='A' && bytes[3]=='P' && bytes[4]==4 && bytes[5]==0 && bytes[6]==2 && bytes[8]==108 && bytes[9]==0 && bytes[10]==0 && bytes[11]==0,"protocol 4 header: GCAP, revision 4, two rules, 108 bytes, reserved zero");
+ bytes[4]=5;check(off.compare(bytes)==result::protocol,"unknown record revision refuses");reset();bytes[4]=1;check(off.compare(bytes)==result::protocol,"protocol revision 1 peers (0.2.0i and older) refuse");reset();
  bytes[4]=2;check(off.compare(bytes)==result::protocol,"protocol revision 2 peers (1.4.0, the 1.5 pre-release) refuse");reset();
+ bytes[4]=3;check(off.compare(bytes)==result::protocol,"protocol revision 3 cannot restore fresh-tail provenance and refuses");reset();
  bytes[0]='X';check(off.compare(bytes)==result::protocol,"a foreign tag refuses");reset();
  bytes[12]^=1;check(off.compare(bytes)==result::value,"one changed digest bit refuses");reset();
  bytes[6]=3;bytes[12]^=1;check(off.compare(bytes)==result::entries,"another rule count refuses");reset();
@@ -99,13 +109,79 @@ void records(){
  check(gameplay_capabilities::death_threshold_id==9 && death(true).compare(death(false).bytes())==result::value && death(false).compare(death(true).bytes())==result::value,"death threshold on/off refuses both directions");
  check(death(true).compare(death(true).bytes())==result::match && death(false).compare(death(false).bytes())==result::match,"same death threshold accepts");
  check(death(true,false).compare(death(true).bytes())==result::unavailable && peer(true).compare(death(false).bytes())==result::entries,"failed death threshold install or a peer without the rule refuses");
+ // Rule 17 is optional, named, and canonical with rule 18 in either order.
+ auto impact=[](bool requested,bool installed,bool verified){record r;if(requested)r.add(gameplay_capabilities::object_world_impact_id,1,{installed ? 1u : 0u,0,0,0},verified);r.finalize();return r;};
+ const auto impact_on=impact(true,true,true),impact_off=impact(false,false,true);
+ check(impact_on.compare(impact(true,true,true).bytes())==result::match,"matching ObjectWorldImpact accepts");
+ check(std::equal(impact_off.bytes().begin(),impact_off.bytes().end(),native.bytes().begin(),native.bytes().end()),"ObjectWorldImpact OFF digest remains byte-identical");
+ gameplay_capabilities::difference impact_diff;char impact_name[128];
+ check(impact_on.compare(impact_off.bytes(),&impact_diff)==result::entries && impact_off.compare(impact_on.bytes())==result::entries,"ObjectWorldImpact on/off refuses both directions");
+ impact_on.describe(impact_diff.buckets,impact_diff.local_only,false,impact_name,sizeof(impact_name));
+ check(std::string(impact_name)=="ObjectWorldImpact (not on the other PC)","refusal names ObjectWorldImpact and explains the absent peer rule");
+ impact_off.describe(impact_diff.buckets,0,false,impact_name,sizeof(impact_name));
+ check(std::string(impact_name)=="ObjectWorldImpact (disabled on this PC)","an OFF peer still names the known optional rule without registering it");
+ native.describe(std::uint64_t(1)<<gameplay_capabilities::bucket_of(18),0,false,impact_name,sizeof(impact_name));
+ check(std::string(impact_name)=="StunRule (disabled on this PC)","an OFF peer names StunRule without changing its released digest");
+ check(!impact(true,false,false).ready(),"failed ObjectWorldImpact cannot advertise a valid record");
+ auto stun=[](bool on,bool verified=true,int rev=stun_rule::revision,bool with17=false){
+  record r;if(on || !verified)r.add(gameplay_capabilities::stun_rule_id,static_cast<std::uint16_t>(rev),{on ? 1u : 0u,0,0,0},verified);
+  if(with17)r.add(17,1,{1,0,0,0},true);r.finalize();return r;};
+ check(gameplay_capabilities::stun_rule_id==18 && std::string(gameplay_capabilities::rule_name(18))=="StunRule","stun uses assigned rule 18");
+ check(stun(true).compare(stun(false).bytes())==result::entries && stun(false).compare(stun(true).bytes())==result::entries,"stun on/off refuses both directions");
+ check(stun(true).compare(stun(true).bytes())==result::match && stun(false).compare(stun(false).bytes())==result::match,"same stun rules agree, including off");
+ check(stun(true).compare(stun(true,true,1).bytes())==result::value && stun(true,true,1).compare(stun(true).bytes())==result::value,"stun revision 1 mismatch refuses both directions");
+ check(!stun(true,false).ready(),"failed stun install poisons agreement");
+ record future;future.add(17,1,{1,0,0,0},true);future.add(18,stun_rule::revision,{1,0,0,0},true);future.finalize();
+ check(future.compare(stun(true,true,stun_rule::revision,true).bytes())==result::match,"later rule 17 registration agrees in either order");
+ check(stun(true).compare(future.bytes())==result::entries,"missing future rule 17 is refused, not silently ignored");
+ // New requested-only rules preserve the pre-integration OFF bytes and name both mismatch directions.
+ for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id,gameplay_capabilities::box_harm_origin_id,gameplay_capabilities::danger_room_healthbars_id,gameplay_capabilities::harm_single_chain_id}) {
+  auto optional=[&](bool wanted,bool verified=true){record r;if(wanted)r.add(id,1,{1,0,0,0},verified);r.finalize();return r;};
+  const auto yes=optional(true),no=optional(false),failed=optional(true,false);
+  check(yes.compare(optional(true).bytes())==result::match,"matching new requested-only rule accepts");
+  check(std::equal(no.bytes().begin(),no.bytes().end(),native.bytes().begin(),native.bytes().end()),"new rule OFF record is byte-identical to base");
+  gameplay_capabilities::difference d;char name[160];
+  check(yes.compare(no.bytes(),&d)==result::entries && no.compare(yes.bytes())==result::entries,"new rule on/off refuses in both directions");
+  yes.describe(d.buckets,d.local_only,false,name,sizeof(name));
+  check(std::string(name)==std::string(gameplay_capabilities::rule_name(id))+" (not on the other PC)","enabled peer names missing new rule");
+  no.describe(d.buckets,0,false,name,sizeof(name));
+  check(std::string(name)==std::string(gameplay_capabilities::rule_name(id))+" (disabled on this PC)","disabled peer names known new rule");
+  check(!failed.ready() && failed.compare(yes.bytes())==result::unavailable && yes.compare(failed.bytes())!=result::match,"failed new request closes host/join");
+ }
+ // [Online] FastTransfer is rule 24: an unassigned (0) ID is refused by add(); the assigned rule is checked in both mismatch
+ // directions and for its record values.
+ {
+  record unassigned;check(!unassigned.add(0,1,{1,32,300,64},true),"a rule without an assigned ID cannot join a record");
+  if constexpr(gameplay_capabilities::fast_transfer_id!=0) {
+   const auto id=gameplay_capabilities::fast_transfer_id;
+   auto fast=[&](bool wanted,std::uint32_t window=32){record r;if(wanted)r.add(id,gameplay_capabilities::fast_transfer_revision,{1,window,300,64},true);r.finalize();return r;};
+   const auto on=fast(true),off=fast(false);
+   check(on.compare(fast(true).bytes())==result::match,"FastTransfer ON peers agree");
+   check(std::equal(off.bytes().begin(),off.bytes().end(),native.bytes().begin(),native.bytes().end()),"FastTransfer OFF record is byte-identical to base");
+   gameplay_capabilities::difference d;char name[160];
+   check(on.compare(off.bytes(),&d)==result::entries && off.compare(on.bytes())==result::entries,"FastTransfer ON/OFF refuses in both directions");
+   on.describe(d.buckets,d.local_only,true,name,sizeof(name));
+   check(std::string(name)==std::to_string(id)+" FastTransfer (not on the other PC)","the ON peer names FastTransfer: "+std::string(name));
+   off.describe(d.buckets,0,true,name,sizeof(name));
+   check(std::string(name)==std::to_string(id)+" FastTransfer (disabled on this PC)","the OFF peer names FastTransfer: "+std::string(name));
+   check(on.compare(fast(true,5).bytes())==result::value,"a different FastTransfer window refuses");
+  }
+ }
  // Rule 16, the NPC power rule ([Game] NpcPowerRule): enemies that pay for powers and decide every 2 s never share a
  // lockstep game with enemies that don't; revision 3 adds the visibility word; absent is {0,0,0,0}, a failed install unverified.
- auto npc=[](bool on,bool verified=true){record r;r.add(2,1,{1,0,0,0},true);r.add(gameplay_capabilities::npc_power_rule_id,npc_power::revision,{on ? 1u : 0u,on ? 1u : 0u,0,0},verified);r.finalize();return r;};
- check(gameplay_capabilities::npc_power_rule_id==16 && npc_power::revision==3 && npc(true).compare(npc(false).bytes())==result::value && npc(false).compare(npc(true).bytes())==result::value,"NPC power rule on/off refuses both directions");
+ auto npc=[](bool on,bool verified=true){record r;r.add(2,1,{1,0,0,0},true);r.add(gameplay_capabilities::npc_power_rule_id,npc_power::revision_for(on || !verified),{on ? 1u : 0u,on ? 1u : 0u,0,0},verified);r.finalize();return r;};
+ check(gameplay_capabilities::npc_power_rule_id==16 && npc_power::revision==4 && npc(true).compare(npc(false).bytes())==result::value && npc(false).compare(npc(true).bytes())==result::value,"NPC power rule on/off refuses both directions");
  check(npc(true).compare(npc(true).bytes())==result::match && npc(false).compare(npc(false).bytes())==result::match,"same NPC power rule accepts");
  record npc_previous; npc_previous.add(2,1,{1,0,0,0},true);npc_previous.add(gameplay_capabilities::npc_power_rule_id,2,{1,0,0,0},true);npc_previous.finalize();
  check(npc(true).compare(npc_previous.bytes())!=result::match && npc_previous.compare(npc(true).bytes())!=result::match,"NPC visibility policy rejects the previous power/combo-only revision both ways");
+ record npc_visibility; npc_visibility.add(2,1,{1,0,0,0},true);npc_visibility.add(gameplay_capabilities::npc_power_rule_id,3,{1,1,0,0},true);npc_visibility.finalize();
+ check(npc(true).compare(npc_visibility.bytes())!=result::match && npc_visibility.compare(npc(true).bytes())!=result::match,"NPC combo timing rejects revision 3 peers both ways");
+ // Released OFF peers retain the exact record, including rule 16's old revision and no rule 18.
+ record released_off;released_off.add(2,1,{1,0,0,0},true);released_off.add(16,3,{0,0,0,0},true);released_off.finalize();
+ const auto current_off=npc(false),stun_off=stun(false);
+ check(std::equal(current_off.bytes().begin(),current_off.bytes().end(),released_off.bytes().begin(),released_off.bytes().end()) && released_off.compare(current_off.bytes())==result::match,"released revision 3 OFF digest is unchanged");
+ check(std::equal(stun_off.bytes().begin(),stun_off.bytes().end(),native.bytes().begin(),native.bytes().end()),"disabled new stun rule adds no record entry");
+ check(!stun(false,false).ready() && !npc(false,false).ready(),"failed requests with zero effective values still poison agreement");
  check(npc(true,false).compare(npc(true).bytes())==result::unavailable && peer(true).compare(npc(false).bytes())==result::entries,"failed NPC power rule install or a peer without the rule refuses");
  check(std::string(gameplay_capabilities::rule_name(16))=="NpcPowerRule" && gameplay_capabilities::bucket_of(16)!=gameplay_capabilities::bucket_of(15),"rule 16 is named and has a bucket of its own");
  record sorted;sorted.add(2,1,{0,0,0,0},true);sorted.add(3,1,{1,0,0,0},true);sorted.finalize();check(sorted.compare(missing.bytes())==result::match,"registration order canonicalizes by explicit rule id");
@@ -240,7 +316,7 @@ void boundary_standins(){
  for(auto va:{native_request,native_reply,native_info,native_ack})jump(va,&admitted);
  jump(join_resume,&join_continuation);
 }
-record runtime_peer(bool on){record r;r.add(2,1,{on ? 1u : 0u,0,0,0},true);r.add(3,7,{1,3,0,0},true);r.finalize();return r;}
+record runtime_peer(bool on){record r;r.add(2,1,{on ? 1u : 0u,0,0,0},true);r.add(3,7,{1,3,0,0},true);r.add(17,1,{1,0,0,0},true);r.add(18,1,{1,0,0,0},true);r.finalize();return r;}
 void separate_host_joiner()
 {
  auto info_receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(info_registration+1)));
@@ -456,6 +532,8 @@ void runtime(){
  check(game_version::needs_gameplay_agreement() && !game_version::gameplay_online_allowed() && iat_hook::captured,"capacity registration automatically enlists socket exclusion before finalization");
  check(gameplay_agreement::register_rule(2,1,{explosive_first_hit::installed() ? 1u : 0u,0,0,0},explosive_first_hit::verified()),"installed explosion registers its actual effective installer snapshot");
  check(gameplay_agreement::register_rule(3,7,{1,3,0,0},true),"synthetic controller registers revision/values through public API without transport changes");
+ check(gameplay_agreement::register_rule(gameplay_capabilities::object_world_impact_id,1,{world_impact::installed() ? 1u : 0u,0,0,0},world_impact::verified()),"actual installed ObjectWorldImpact registers rule 17 without poisoning online");
+ check(gameplay_agreement::register_rule(gameplay_capabilities::stun_rule_id,1,{1,0,0,0},true),"synthetic verified StunRule participates alongside rule 17");
 
  // Only failure-path boundaries are isolated here. Execute retail failure + cleanup code.
  popup_vt[3]=reinterpret_cast<void*>(&show_popup);menu_vt[0x74/4]=reinterpret_cast<void*>(&close_menu);
@@ -523,9 +601,34 @@ void runtime(){
    check(receiver(&e)==(joining ? 2 : 0) && forwarded==v2_before && send_count==1 && read_refusal(output.data(),output_size)==refusal::foreign_record && has_log("refused (reason=2)"),
          "a body longer than any record is malformed and never reaches native admission");}
  }
+ for(const auto omitted:{17,18}){
+  record other;other.add(2,1,{1,0,0,0},true);other.add(3,7,{1,3,0,0},true);
+  for(const auto id:{17,18})if(id!=omitted)other.add(static_cast<std::uint16_t>(id),1,{1,0,0,0},true);
+  other.finalize();input.fill(0);std::memcpy(input.data()+request_size,other.bytes().data(),other.bytes().size());
+  context.fill(0);put(4,0x12345678);sender[0x19]=1;
+  event e{0x18,input.data(),std::uint16_t(request_size+other.bytes().size()),0,context.data(),sender.data()};
+  auto receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(request_registration+1)));
+  const auto shown=popups;logger::logged.clear();forwarded=0;
+  check(receiver(&e)==0 && forwarded==0 && popups==shown+1 && visible.find(gameplay_capabilities::rule_name(static_cast<std::uint16_t>(omitted)))!=std::string::npos,"actual native admission refuses and names missing ObjectWorldImpact/StunRule");
+ }
  ini::lc=false;ini::requested=false;game_version::install(reinterpret_cast<HMODULE>(0x400000));check(game_version::needs_gameplay_agreement() && !game_version::gameplay_online_allowed(),"explicit non-LC off configuration still requires verified shared agreement");
  game_version::bind_gameplay_agreement(true);check(socket(AF_INET,SOCK_DGRAM,0)==73,"verified non-LC off gate retains native socket forwarding");
  ini::key=false;iat_hook::captured=nullptr;game_version::install(reinterpret_cast<HMODULE>(0x400000));check(!game_version::needs_gameplay_agreement() && !iat_hook::captured,"unopted vanilla leaves native socket untouched");
+ for(int option=0;option<2;++option){
+  ini::testing_forge=option==0;ini::testing_hotkeys=option==1;
+  game_version::install(reinterpret_cast<HMODULE>(0x400000));game_version::bind_gameplay_agreement(true);
+  check(game_version::test_mode_active() && game_version::needs_gameplay_agreement() && !game_version::gameplay_online_allowed(),"either testing option blocks even a verified agreement in non-LC installs");
+  const auto calls=iat_hook::calls;
+  socket=reinterpret_cast<SOCKET(WSAAPI*)(int,int,int)>(iat_hook::captured);
+  check(socket(AF_INET,SOCK_DGRAM,0)==INVALID_SOCKET && iat_hook::calls==calls,"testing socket exclusion opens no socket");
+  check(game_version::take_test_mode_refusal() && std::strstr(game_version::test_mode_reason(),"[TestMode]"),"testing socket refusal supplies the named explanation to the popup adapter");
+  check(!game_version::take_test_mode_refusal(),"testing refusal is consumed once per failed attempt");
+  socket(AF_INET,SOCK_DGRAM,0);game_version::clear_test_mode_refusal();
+  check(!game_version::take_test_mode_refusal(),"a refused attempt with no popup expires before an unrelated dialog");
+  pending_context();const auto testing_join_shown=popups;
+  check(begin(context.data(),sender.data(),123)==0 && cleaned() && popups==testing_join_shown+1 && visible.find("[TestMode]")!=std::string::npos,"testing join exclusion cleans pending join and names [TestMode]");
+ }
+ ini::testing_forge=ini::testing_hotkeys=false;
  ini::key=true;iat_hook::fail=true;game_version::install(reinterpret_cast<HMODULE>(0x400000));check(!game_version::startup_allowed(),"failed socket exclusion blocks startup safely");
  game_version::bind_gameplay_agreement(true);check(game_version::gameplay_online_allowed(),"gate is verified immediately before late registration");
  check(!gameplay_agreement::register_rule(4,1,{1,0,0,0},true) && !game_version::gameplay_online_allowed(),"public API rejects late controller registration and closes actual gate");
@@ -542,5 +645,12 @@ int main(int argc,char** argv){
  ini::requested=true;explosive_first_hit::install(reinterpret_cast<HMODULE>(0x400001));check(!explosive_first_hit::installed() && !explosive_first_hit::verified(),"actual failed explosion install remains unverified");
  native_bytes(0x49ab51,28);explosive_first_hit::install(reinterpret_cast<HMODULE>(0x400000));check(explosive_first_hit::installed() && explosive_first_hit::verified(),"actual explosion patch reports installed effective state");
  ini::requested=false;explosive_first_hit::install(reinterpret_cast<HMODULE>(0x400000));check(explosive_first_hit::installed(),"later INI drift cannot relabel installed code");
+ world_impact::install(reinterpret_cast<HMODULE>(0x400000));
+ check(!world_impact::requested() && world_impact::verified(),"actual absent ObjectWorldImpact is verified OFF");
+ ini::impact="xml1";world_impact::install(reinterpret_cast<HMODULE>(0x400001));
+ check(world_impact::requested() && !world_impact::installed() && !world_impact::verified(),"actual failed ObjectWorldImpact is unverified");
+ for(const auto& g:world_impact_rules::guards)native_bytes(g.va,g.hex.size()/2);
+ world_impact::install(reinterpret_cast<HMODULE>(0x400000));
+ check(world_impact::requested() && world_impact::installed() && world_impact::verified(),"actual guarded ObjectWorldImpact install is verified");
  runtime();receiver_guard_child(path);std::printf("Agreement/native refusal: %d failure(s)\n",failures);return failures ? 1 : 0;
 }
