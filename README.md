@@ -32,11 +32,11 @@
 | Big mods              | 40 actors per zone, then a crash | up to 127 when a mod asks for it ([details](#bigger-zones)) |
 | Setup                 | — | copy one file |
 
-**Current release: XML2 Fix 1.7.0**, paired with Legends Classic builder 0.2.4 (content 22).
+**Current release: XML2 Fix 1.7.1**, paired with Legends Classic builder 0.2.5 (content 23).
 For the port, Rebuild in Ultimate Legends, then Play; both co-op PCs need this pair. Launcher 0.3.2 supports it.
-This release restores colored enemy resistance text and fixes conversation-driven co-op disconnects.
+This release draws the bedroom items' pictures in the first game's picture window and re-stuns party heroes on every stun hit.
 The new settings are opt-in; ordinary XML2 installs keep their previous behavior.
-See [CHANGELOG.md](CHANGELOG.md) and the [1.7.0 release notes](packaging/release-notes/v1.7.0.md).
+See [CHANGELOG.md](CHANGELOG.md) and the [1.7.1 release notes](packaging/release-notes/v1.7.1.md).
 
 ## ⚡ Install
 

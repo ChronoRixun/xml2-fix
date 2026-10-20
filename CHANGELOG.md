@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.7.1 - unreleased
+
+XML2 Fix 1.7.1 is the engine half of Legends Classic 0.2.5. Both co-op PCs need
+the same version (gameplay rule 18 is now revision 3).
+
+- **Bedroom item pictures draw in the first game's window:** with
+  `[Game] PersonalItemPicture=window`, the personal-item menu draws its picture as
+  a 256x128 window over the menu's panels (picture frame, text panel, Back bar),
+  as the first game does, instead of stretching it over the whole screen. The
+  fullscreen picture could only show an enlarged copy of itself behind the real
+  one. Only PERSONAL_MENU's two position/size getters change (guarded, one log
+  line on refusal); absent or `stock` keeps the fullscreen picture. Legends
+  Classic enables it after a rebuild.
+- **Heroes are re-stunned per hit, as in the first game** (issue #101): with
+  `[Game] StunRule=xml1` (gameplay rule 18, now revision 3), every stun hit on
+  a party hero requests the stun reaction. The original does this; X-Men
+  Legends II only stunned on the hit that started its two-second stun effect,
+  so hits during a stun, or right after getting up, were ignored. Both co-op
+  PCs need the same revision. ([details](docs/stun-rule.md))
+
 ## 1.7.0 - 2026-10-20
 
 XML2 Fix 1.7.0 is the engine half of Legends Classic 0.2.4.
@@ -10,14 +30,6 @@ XML2 Fix 1.7.0 is the engine half of Legends Classic 0.2.4.
 - This changes the display only. Combat resistances, saves and co-op rules stay
   the same. With the setting off or absent, the 1.6.0 display behavior remains.
   Ordinary X-Men Legends II installs keep the setting off.
-- **Bedroom item pictures draw in the first game's window:** with
-  `[Game] PersonalItemPicture=window`, the personal-item menu draws its picture as
-  a 256x128 window over the menu's panels (picture frame, text panel, Back bar),
-  as the first game does, instead of stretching it over the whole screen. The
-  fullscreen picture could only show an enlarged copy of itself behind the real
-  one. Only PERSONAL_MENU's two position/size getters change (guarded, one log
-  line on refusal); absent or `stock` keeps the fullscreen picture. Legends
-  Classic enables it after a rebuild.
 - **Co-op no longer drops during conversations:** with
   `[Game] OnlineConversations=lockstep`, a conversation line that goes on by
   itself does so after the same game time on every PC, instead of when this
@@ -27,12 +39,6 @@ XML2 Fix 1.7.0 is the engine half of Legends Classic 0.2.4.
   unchanged. Both PCs need XML2 Fix 1.7.0 and matching settings
   (gameplay agreement rule 27, revision 1);
   Legends Classic enables it after a rebuild.
-- **Heroes are re-stunned per hit, as in the first game** (issue #101): with
-  `[Game] StunRule=xml1` (gameplay rule 18, now revision 3), every stun hit on
-  a party hero requests the stun reaction. The original does this; X-Men
-  Legends II only stunned on the hit that started its two-second stun effect,
-  so hits during a stun, or right after getting up, were ignored. Both co-op
-  PCs need the same revision. ([details](docs/stun-rule.md))
 
 ## 1.6.0 - 2026-10-18
 
