@@ -649,6 +649,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `EndHeroUnlock` | `1` | `0`: the ending unlocks no hero and shows no popup |
 | `MainMenuItems` | *(XML2's names)* | the main menu's item names for the mouse slots and Quit, comma separated |
 | `ReviewStats` | `1` | `0`: the Review menu has no Stats tab |
+| `PersonalItemPicture` | `stock` | `window` draws a personal item's picture as the first game's 256x128 window over the menu panels instead of fullscreen; the picture must be the first game's 512x256 art ([details](docs/personal-item-text.md)). |
 | `PersonalItemText` | `1` | Personal-item pictures sit behind their descriptions; `0` retains the original image depth. Other menus and explicit menu `depth` values are unchanged ([details](docs/personal-item-text.md)). |
 | `Xtract` | `1` | `0`: an Xtraction Point's menu has no "Xtract" world map choice |
 | `XtractionShop` | `0` | `1`: let a companion builder append the first game's Xtraction services (Load, Danger Room, Healer, Forge) as each point permits through `extractionPointServices` ([details](docs/xtraction-shop.md)) |

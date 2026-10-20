@@ -6252,11 +6252,38 @@ namespace
 				image[offset] ^= 1;
 			}
 		CHECK(refused && image == pristine);
+		// [Game] PersonalItemPicture=window: the picture window's guards and the two vtable pointers
+		std::vector<std::uint8_t> pimage(0x2b0000, 0xa5);
+		for (const auto& g : picture_guards)
+		{
+			CHECK(limits_rules::valid_hex(g.hex));
+			for (std::size_t i = 0; i < limits_rules::hex_size(g.hex); ++i)
+				pimage[g.va - image_base + i] = limits_rules::hex_byte(g.hex, i);
+		}
+		CHECK(first_picture_mismatch(pimage.data()) == nullptr);
+		CHECK(size_slot + 4 == position_slot);
+		DWORD slot_size = 0, slot_position = 0;
+		std::memcpy(&slot_size, pimage.data() + size_slot - image_base, 4);
+		std::memcpy(&slot_position, pimage.data() + position_slot - image_base, 4);
+		CHECK(slot_size == retail_size_getter && slot_position == retail_position_getter);
+		const auto slots = make_slots(0x11223344, 0x55667788);
+		CHECK(slots[0] == 0x44 && slots[3] == 0x11 && slots[4] == 0x88 && slots[7] == 0x55);
+		CHECK(window_x + window_width == 384.0f && window_top - window_height == 202.0f);
+		bool picture_refused = true;
+		for (const auto& g : picture_guards)
+			for (std::size_t i = 0; i < limits_rules::hex_size(g.hex); ++i)
+			{
+				const auto offset = g.va - image_base + i;
+				pimage[offset] ^= 1;
+				picture_refused &= first_picture_mismatch(pimage.data()) == &g;
+				pimage[offset] ^= 1;
+			}
+		CHECK(picture_refused);
 		if (const auto exe = game_executable())
 		{
 			DWORD size = 0; auto mapped = map_image(*exe, size);
 			CHECK(mapped != nullptr);
-			if (mapped) { CHECK(first_mismatch(mapped) == nullptr); VirtualFree(mapped, 0, MEM_RELEASE); }
+			if (mapped) { CHECK(first_mismatch(mapped) == nullptr); CHECK(first_picture_mismatch(mapped) == nullptr); VirtualFree(mapped, 0, MEM_RELEASE); }
 		}
 		else std::printf("  skip  no executable for retail guard comparison\n");
 	}
