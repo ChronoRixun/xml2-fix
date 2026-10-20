@@ -5797,6 +5797,39 @@ namespace
 		CHECK(auto_advance_step(s, v) == verdict::wait);
 		v.now = 105;
 		CHECK(auto_advance_step(s, v) == verdict::advance);
+		// Online: only lockstep state decides - a voice still playing on this PC (or a menu) changes nothing; the
+		// line goes on |timeDelay| s of game time after it was drawn, on every PC on the same frame.
+		{
+			line_state o;
+			frame_view w;
+			w.line_id = 30;
+			w.time_delay = -4;
+			w.visible = 1;
+			w.accept_from = 1;
+			w.now = 100;
+			w.voice = true;
+			w.playing = true;
+			w.menu_up = true;
+			CHECK(auto_advance_step(o, lockstep_view(w)) == verdict::wait && o.shown_at == 100 && !o.seen_playing);
+			w.now = 103.9f;
+			CHECK(auto_advance_step(o, lockstep_view(w)) == verdict::wait);
+			w.now = 104;
+			CHECK(auto_advance_step(o, lockstep_view(w)) == verdict::advance); // its voice still plays here: same verdict on every PC
+			line_state p2;
+			w.playing = false; // the other PC: the voice already ended
+			w.now = 100;
+			w.line_id = 31;
+			CHECK(auto_advance_step(p2, lockstep_view(w)) == verdict::wait);
+			w.now = 104;
+			CHECK(auto_advance_step(p2, lockstep_view(w)) == verdict::advance);
+			CHECK(!pending_wait_online(true, true, true, false) && pending_wait_online(false, true, true, false));
+			// [Game] OnlineConversations: lockstep on; not set / empty / stock off (1.6.0); anything else invalid.
+			CHECK(parse_online(std::nullopt) == online_choice::not_set && parse_online(std::string_view("")) == online_choice::not_set);
+			CHECK(parse_online(std::string_view("lockstep")) == online_choice::lockstep && parse_online(std::string_view(" LockStep ; rule 27")) == online_choice::lockstep);
+			CHECK(parse_online(std::string_view("stock")) == online_choice::stock && parse_online(std::string_view("1")) == online_choice::invalid && parse_online(std::string_view("xml1")) == online_choice::invalid);
+			CHECK((online_record(true, true, true) == std::array<std::uint32_t, 4>{1, 1, 1, 0}) && (online_record(true, true, false) == std::array<std::uint32_t, 4>{1, 1, 0, 0}));
+			CHECK((online_record(false, true, true) == std::array<std::uint32_t, 4>{0, 0, 0, 0}));
+		}
 
 		// The pending reply: wait while its voice plays and accept isn't pressed.
 		CHECK(pending_wait(true, true, false) && !pending_wait(true, true, true) && !pending_wait(true, false, false) && !pending_wait(false, false, false) && !pending_wait(false, true, false));

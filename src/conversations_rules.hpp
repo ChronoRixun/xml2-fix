@@ -93,6 +93,9 @@ namespace conversations_rules
 	constexpr DWORD cs_accept_from = 0x21b5c;      // float: the game's time from which accept counts
 	constexpr DWORD cs_voice = 0x21b80;            // the line's (or the pending reply's) voice handle
 	constexpr DWORD cs_pending = 0x239a0;          // the pending reply's id, 0 for none
+	constexpr DWORD session_static = 0xa53058;     // the online session (0x612be0 builds it), vtable 0x6a481c
+	constexpr DWORD session_vtable = 0x6a481c;
+	constexpr DWORD session_set_up = 0x420;        // byte: a game is set up (host or join), read by 0x610d20
 	constexpr DWORD cs_voice_flags = 0x239a4;      // byte: bit 0 the line's voice is on
 	constexpr DWORD node_lookup = 0x4573f0;        // __thiscall node* (int id): the line, or 0
 	constexpr DWORD node_time_delay = 0x80;        // float: the line's timeDelay
@@ -292,6 +295,53 @@ namespace conversations_rules
 		return voice && playing && !accept_pressed;
 	}
 
+	// ONLINE (a game is set up: the session's +0x420, 0x610d20): the conversation update runs inside the lockstep
+	// simulation on every PC, and a line change draws from the shared random generator (the speaker's talk animation,
+	// 0x45bde3 -> 0x5601e0). So every PC must advance on the same frame: the decision may read only lockstep state -
+	// the game's time, the line, the accept input - never this PC's audio (a voice ends at a slightly different moment
+	// on each PC) or its menus. Live (net030-solo E4/E5, the mansion tour in co-op, with and without a heroless
+	// player): auto-advance by local voice end put one PC a random draw ahead and the native checksum compare dropped
+	// the session within ~10 s. Online a marked line goes on |timeDelay| s of game time after it was first drawn
+	// (the voice, if longer, is stopped as accept stops it), and a chosen reply's voice is cut one frame in as the
+	// game has it (ReplyVoices waits only offline).
+	inline frame_view lockstep_view(frame_view v)
+	{
+		v.voice = false;
+		v.playing = false;
+		v.menu_up = false;
+		return v;
+	}
+	inline bool pending_wait_online(const bool online, const bool voice, const bool playing, const bool accept_pressed)
+	{
+		return !online && pending_wait(voice, playing, accept_pressed);
+	}
+
+	// [Game] OnlineConversations: "lockstep" turns the online decision above on (gameplay agreement rule 27, revision 1,
+	// requested only; the builder writes it for port builds). Not set, empty or "stock": off - online, a marked line goes on
+	// when this PC's voice ends, as 1.6.0 had it, and no rule 27 record. Anything else is invalid (unverified: online play
+	// refused rather than a silent desync).
+	enum class online_choice { not_set, stock, lockstep, invalid };
+	inline online_choice parse_online(const std::optional<std::string_view> raw)
+	{
+		const auto text = ini_rules::value(raw);
+		if (!text || text->empty())
+		{
+			return online_choice::not_set;
+		}
+		std::string lower(*text);
+		for (auto& c : lower)
+		{
+			c = static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+		}
+		return lower == "lockstep" ? online_choice::lockstep : lower == "stock" ? online_choice::stock : online_choice::invalid;
+	}
+	// Rule 27's effective values: {lockstep on, AutoAdvance installed, ReplyVoices installed, 0}. Every peer must run the
+	// same conversation decision: the auto-advance and the reply wait change on which frame a line draws its random number.
+	inline std::array<std::uint32_t, 4> online_record(const bool lockstep, const bool auto_advance, const bool reply_voices)
+	{
+		return {lockstep ? 1u : 0u, lockstep && auto_advance ? 1u : 0u, lockstep && reply_voices ? 1u : 0u, 0u};
+	}
+
 	// The cursor the menu builder stores when it is at or past the visible count.
 	inline int clamped_cursor(const int visible)
 	{
@@ -300,7 +350,7 @@ namespace conversations_rules
 
 	// ---- Every byte of XMen2.exe the changes rely on, read from the retail build ------------------------
 
-	inline constexpr std::array<guard, 25> guards{{
+	inline constexpr std::array<guard, 26> guards{{
 		// The conversation system: its singleton and getter, its vtable's update and pick.
 		{0x4583f0, "a1ac7a710085c0750ae882ffffffa1ac7a7100c3", "the conversation system's getter (0x4583f0) and singleton [0x717aac]"},
 		{0x685e10, "a0d14500", "conversation system vt+0xc = the update 0x45d1a0 (0x685e10)"},
@@ -342,6 +392,8 @@ namespace conversations_rules
 		{0x686f7c, "40974600", "game vt+0x160 = the game's time 0x469740 (0x686f7c)"},
 		{0x469740, "d981e8030000c3", "the game's time: the float at game+0x3e8 (0x469740)"},
 		{0x5d8920, "a118ff8a0085c0750ae882ffffffa118ff8a00c3", "the menu manager's getter (0x5d8920)"},
+		// Online: the session static 0xa53058 (vtable 0x6a481c) and its "a game is set up" byte +0x420.
+		{0x610d20, "8a8120040000c3", "a game is set up: the session's +0x420 (0x610d20)"},
 	}};
 
 	inline constexpr std::array<guard, 4> menu_guards{{

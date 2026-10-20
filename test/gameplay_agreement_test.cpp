@@ -1,6 +1,7 @@
 #include <WinSock2.h>
 #include "gameplay_agreement.hpp"
 #include "gameplay_agreement_rules.hpp"
+#include "conversations_rules.hpp"
 #include "game_version.hpp"
 #include "game_version_rules.hpp"
 #include "explosive_first_hit.hpp"
@@ -135,7 +136,7 @@ void records(){
  check(future.compare(stun(true,true,stun_rule::revision,true).bytes())==result::match,"later rule 17 registration agrees in either order");
  check(stun(true).compare(future.bytes())==result::entries,"missing future rule 17 is refused, not silently ignored");
  // New requested-only rules preserve the pre-integration OFF bytes and name both mismatch directions.
- for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id,gameplay_capabilities::box_harm_origin_id,gameplay_capabilities::danger_room_healthbars_id,gameplay_capabilities::harm_single_chain_id}) {
+ for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id,gameplay_capabilities::box_harm_origin_id,gameplay_capabilities::danger_room_healthbars_id,gameplay_capabilities::harm_single_chain_id,gameplay_capabilities::online_conversations_id}) {
   auto optional=[&](bool wanted,bool verified=true){record r;if(wanted)r.add(id,1,{1,0,0,0},verified);r.finalize();return r;};
   const auto yes=optional(true),no=optional(false),failed=optional(true,false);
   check(yes.compare(optional(true).bytes())==result::match,"matching new requested-only rule accepts");
@@ -166,6 +167,20 @@ void records(){
    check(std::string(name)==std::to_string(id)+" FastTransfer (disabled on this PC)","the OFF peer names FastTransfer: "+std::string(name));
    check(on.compare(fast(true,5).bytes())==result::value,"a different FastTransfer window refuses");
   }
+ }
+ // Rule 27, [Game] OnlineConversations=lockstep: requested only, revision 1, {lockstep, AutoAdvance, ReplyVoices, 0}. A peer
+ // without it (1.6.0, or the key off) or with another conversation decision refuses; OFF keeps the released bytes.
+ {
+  const auto id=gameplay_capabilities::online_conversations_id;
+  check(id==27 && std::string(gameplay_capabilities::rule_name(id))=="OnlineConversations","online conversations use assigned rule 27");
+  auto talk=[&](bool wanted,bool auto_advance=true,bool reply_voices=true){record r;if(wanted)r.add(id,1,conversations_rules::online_record(true,auto_advance,reply_voices),true);r.finalize();return r;};
+  const auto on=talk(true),off=talk(false);
+  check(on.compare(talk(true).bytes())==result::match,"OnlineConversations ON peers agree");
+  check(std::equal(off.bytes().begin(),off.bytes().end(),native.bytes().begin(),native.bytes().end()),"OnlineConversations OFF record is byte-identical to base");
+  check(on.compare(off.bytes())==result::entries && off.compare(on.bytes())==result::entries,"OnlineConversations ON/OFF refuses in both directions");
+  check(on.compare(talk(true,false).bytes())==result::value && on.compare(talk(true,true,false).bytes())==result::value,"another AutoAdvance/ReplyVoices state refuses");
+  gameplay_capabilities::difference d;char name[160];on.compare(off.bytes(),&d);on.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name)=="27 OnlineConversations (not on the other PC)","the ON peer names rule 27: "+std::string(name));
  }
  // Rule 16, the NPC power rule ([Game] NpcPowerRule): enemies that pay for powers and decide every 2 s never share a
  // lockstep game with enemies that don't; revision 3 adds the visibility word; absent is {0,0,0,0}, a failed install unverified.

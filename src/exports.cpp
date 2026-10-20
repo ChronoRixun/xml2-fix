@@ -63,6 +63,7 @@
 #include "danger_room_gate.hpp"
 #include "danger_room_party.hpp"
 #include "danger_room_healthbars.hpp"
+#include "resistance_display.hpp"
 #include "revival_cost.hpp"
 #include "mod_loader.hpp"
 #include "new_game.hpp"
@@ -337,6 +338,10 @@ namespace
 		// three code sites of the conversation system, used from the first conversation on; independent of the
 		// patches above (none of its sites or guards is anyone else's).
 		conversations::install(game);
+		// Online conversations decided from lockstep state only ([Game] OnlineConversations=lockstep): which frame a line changes
+		// on draws from the shared random generator, so every peer must run the same decision (rule 27, requested only).
+		if (conversations::online_requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::online_conversations_id, 1, conversations::online_values(), conversations::online_verified());
 		confirmation_release::install(game);
 		explosive_first_hit::install(game);
 		if (game_version::needs_gameplay_agreement())
@@ -427,6 +432,9 @@ namespace
 			gameplay_agreement::register_rule(gameplay_capabilities::harm_single_chain_id, 1,
 				{harm_single_chain::installed() ? 1u : 0u,0,0,0}, harm_single_chain::verified());
 		danger_room_healthbars::install(game);
+		// Target subtitle only: reads current affecters without changing combat
+		// state or consuming RNG. It needs no gameplay-agreement record.
+		resistance_display::install(game);
 		if (danger_room_healthbars::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::danger_room_healthbars_id, 1,
 				{danger_room_healthbars::installed() ? 1u : 0u,0,0,0}, danger_room_healthbars::verified());
