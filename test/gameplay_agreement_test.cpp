@@ -132,6 +132,14 @@ void records(){
  check(stun(true).compare(stun(true).bytes())==result::match && stun(false).compare(stun(false).bytes())==result::match,"same stun rules agree, including off");
  check(stun(true).compare(stun(true,true,1).bytes())==result::value && stun(true,true,1).compare(stun(true).bytes())==result::value,"stun revision 1 mismatch refuses both directions");
  check(!stun(true,false).ready(),"failed stun install poisons agreement");
+ {
+  // XML2 Fix 1.7.0 shipped StunRule revision 2: with 1.7.1 (revision 3) the two PCs must refuse each other, naming rule 18.
+  gameplay_capabilities::difference rev2;char rev2_name[160];
+  check(stun_rule::revision==3,"StunRule is revision 3");
+  check(stun(true).compare(stun(true,true,2).bytes(),&rev2)==result::value && stun(true,true,2).compare(stun(true).bytes())==result::value,"released StunRule revision 2 peer refuses both directions");
+  stun(true).describe(rev2.buckets,rev2.local_only,true,rev2_name,sizeof(rev2_name));
+  check(std::string(rev2_name).find("18 StunRule")!=std::string::npos,std::string("the revision 2 refusal names the rule: ")+rev2_name);
+ }
  record future;future.add(17,1,{1,0,0,0},true);future.add(18,stun_rule::revision,{1,0,0,0},true);future.finalize();
  check(future.compare(stun(true,true,stun_rule::revision,true).bytes())==result::match,"later rule 17 registration agrees in either order");
  check(stun(true).compare(future.bytes())==result::entries,"missing future rule 17 is refused, not silently ignored");
