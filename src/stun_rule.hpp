@@ -5,7 +5,7 @@
 
 namespace stun_rule
 {
- constexpr std::uint16_t revision = 2;
+ constexpr std::uint16_t revision = 3;
  void install(HMODULE game);
  bool requested();
  bool installed();

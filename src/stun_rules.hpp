@@ -11,6 +11,9 @@ namespace stun_rules
  constexpr std::uint32_t resolve_move = 0x427ca0;
  constexpr std::uint32_t input_call = 0x4341de, resolve_action = 0x427c80, clock = 0x45fe60;
  constexpr std::uint32_t expire_flag = 0x54a215, expire_resume = 0x54a21c, expire_done = 0x54a280;
+ // Revision 3: the impact's shared_stunned application and the native helpers its entry uses.
+ constexpr std::uint32_t impact_apply = 0x436171, apply_powerup = 0x54f060;
+ constexpr std::uint32_t stunnable = 0x427e60, refresh_susceptibility = 0x53bf20, game_object = 0x48de40;
  // XML1 0x44b6f..0x44bb5: the argument is animation speed, not a lifetime.
  constexpr float reaction_speed(float speed, float susceptibility)
  {
@@ -28,7 +31,13 @@ namespace stun_rules
  {
   return hero && !in_stun ? flags & 0xfe : flags;
  }
- inline constexpr std::array<limits_rules::guard, 18> guards{{
+ // XML1 0x44af4..0x44cb0 dispatches every ordinary stun hit. PC's 0x54f060 enters the powerup (and so
+ // requests the reaction) only for a new instance; an existing one is merely refreshed.
+ constexpr bool fresh_dispatch(bool applied, bool requested, bool hero, bool arena)
+ {
+  return applied && !requested && hero && !arena;
+ }
+ inline constexpr std::array<limits_rules::guard, 25> guards{{
   {dispatch_call, "e80c7feeff", "stun powerup's reaction request"},
   {set_move, "89b778030000", "resolved move becomes actor's current move"},
   {0x41d890, "568b74240885f6578bf9", "move setter actor and move registers"},
@@ -47,6 +56,13 @@ namespace stun_rules
   {expire_done, "5f5e5bc20800", "expiry epilogue"},
   {0x54a021, "8a867a050000a8018d8e700400007405e8ea1effff8b8620050000", "native stun susceptibility cache refresh and field"},
   {0x4fbdd0, "e88b40f6ff8b442404d998e8050000c20c00", "default handler records the entry clock"},
+  {impact_apply, "e8ea8e1100", "impact applies the shared stun powerup"},
+  {0x436104, "f64620400f84ac0000008b0ed9817c020000d81d30006800dfe0f6c4410f8593000000e8341dffff84c07448", "stun-flagged hit on a living, stunnable victim"},
+  {0x436130, "e84bde10008b1068504168008d4c2420518bc8ff5258", "impact names the shared_stunned powerup"},
+  {0x684150, "7368617265645f7374756e6e656400", "shared_stunned powerup name"},
+  {0x54f660, "c22000", "powerup application pops eight arguments"},
+  {0x54a009, "8be88b865c0300008b5500508bcdff92f0000000d95c241c", "entry derives the authored stun speed"},
+  {0x54a109, "8b4424248b55006a00508bcdff92e8000000", "entry requests the stun move's animation"},
  }};
  inline std::vector<std::uint8_t> branch(std::uint32_t site, const void* target, bool call, std::size_t size)
  {
