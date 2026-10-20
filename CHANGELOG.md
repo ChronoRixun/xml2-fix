@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.7.0 - <date TBD>
+## 1.7.0 - 2026-10-20
 
 XML2 Fix 1.7.0 is the engine half of Legends Classic 0.2.4.
 
