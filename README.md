@@ -32,6 +32,12 @@
 | Big mods              | 40 actors per zone, then a crash | up to 127 when a mod asks for it ([details](#bigger-zones)) |
 | Setup                 | — | copy one file |
 
+**Current release: XML2 Fix 1.7.0**, paired with Legends Classic builder 0.2.4 (content 22).
+For the port, Rebuild in Ultimate Legends, then Play; both co-op PCs need this pair. Launcher 0.3.2 supports it.
+This release restores colored enemy resistance text and fixes conversation-driven co-op disconnects.
+The new settings are opt-in; ordinary XML2 installs keep their previous behavior.
+See [CHANGELOG.md](CHANGELOG.md) and the [1.7.0 release notes](packaging/release-notes/v1.7.0.md).
+
 ## ⚡ Install
 
 1. **[Download the latest release](https://github.com/ChronoRixun/xml2-fix/releases/latest)** and unzip it.
@@ -681,6 +687,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `DangerRoomParty` | `xml2` | `xml1`: original Cyclops/Phoenix/Storm/Wolverine fallback for an incomplete non-solo course party (requested-only rule 19 revision 1). |
 | `DangerRoomHealthBars` | `xml2` | `xml1`: show the target health gauge for protected Danger Room training opponents. Builder default on; requested-only gameplay rule 22, revision 1. Protection and course limits remain; native dirty-stat refresh/clamp timing parity is unproved. Required combo hits kill training targets through the native [course death/progress path](docs/danger-room-courses.md). |
 | `ResistanceDisplay` | `xml2` | `xml1`: original colored resistance subtitles under a targeted enemy's health gauge, using active scoped modifiers. Display only; no gameplay rule ([details](docs/resistance-display.md)). |
+| `OnlineConversations` | `stock` | `lockstep`: automatic conversation lines advance at the same game time on every PC, preventing voice-end timing from dropping co-op. Online selected replies no longer play their full voice; single-player is unchanged. Both peers need XML2 Fix 1.7.0 and matching settings (rule 27 revision 1); Legends Classic 0.2.4 enables it after a rebuild ([agreement](docs/gameplay-agreement.md)). |
 | `FastTransfer` ([Online]) | `0` | `1` (with `[Limits] EntityCapacity=1`): send a saved campaign to co-op peers as data/zero-run records with a pool-bounded 32-message window - seconds instead of minutes. Builder default on. Every PC must use it (gameplay rule 24, revision 1, requested-only). |
 | `ReceiveValidation` ([Online]) | `1` | `1`: the game checks every network message it receives (size and shape, per message type) before its handler runs and drops one that doesn't fit, with a rate-limited line in `xml2-fix.log`; nothing changes on the wire, so it works with peers that don't have it. `0` runs the game's own unguarded handlers. |
 | `Xml1LockOnEffects` | unset | Builder-provided `beam,surface,target` effect paths restore first-game lock-on visuals; targeting stays native ([details](docs/lockon-effects.md)) |

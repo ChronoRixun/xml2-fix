@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.7.0 - <date TBD>
 
 XML2 Fix 1.7.0 is the engine half of Legends Classic 0.2.4.
 
@@ -16,7 +16,8 @@ XML2 Fix 1.7.0 is the engine half of Legends Classic 0.2.4.
   PC's voice ends. The voice ending a moment apart on two PCs had put the games
   out of step and ended the session (for example during the mansion tour).
   Online, a chosen reply's voice is cut as the game has it; single-player is
-  unchanged. Both PCs need the setting (gameplay agreement rule 27, revision 1);
+  unchanged. Both PCs need XML2 Fix 1.7.0 and matching settings
+  (gameplay agreement rule 27, revision 1);
   Legends Classic enables it after a rebuild.
 
 ## 1.6.0 - 2026-10-18
