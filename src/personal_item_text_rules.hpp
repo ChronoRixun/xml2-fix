@@ -30,6 +30,40 @@ namespace personal_item_text_rules
 			if (!limits_rules::matches(image + g.va - image_base, g.hex)) return &g;
 		return nullptr;
 	}
+	// [Game] PersonalItemPicture=window: the first game's picture window. XMen2.exe stretches a menu image over
+	// the whole 512x384 virtual screen (size getter vtable +0x90 = 0x5b7c60, position getter +0x94 = 0x5b7c80,
+	// z = 384 is the sprite's top edge); default.xbe's personal menu adds it at 256x128, x 128..384, z 202..330
+	// (top 330) in front of the menu IGB's panels. Only PERSONAL_MENU's two vtable slots change.
+	constexpr DWORD size_slot = 0x69fa0c;
+	constexpr DWORD position_slot = 0x69fa10;
+	constexpr DWORD retail_size_getter = 0x5b7c60;
+	constexpr DWORD retail_position_getter = 0x5b7c80;
+	constexpr DWORD vec2_constructor_import = 0x67f95c;
+	constexpr DWORD vec3_constructor_import = 0x67f9c8;
+	constexpr float window_width = 256.0f;
+	constexpr float window_height = 128.0f;
+	constexpr float window_x = 128.0f;
+	constexpr float window_top = 330.0f;
+	inline constexpr std::array<guard, 4> picture_guards{{
+		{0x69fa0c, "607c5b00807c5b00", "personal image size and position getter vtable slots"},
+		{0x5b7c60, "568b742408680000c04368000000448bceff155cf967008bc65ec20400", "image size getter (512x384)"},
+		{0x5b7c80, "510fbf8128190000568b74240c89442404680000c04351db44240c8bced91c246a00ff15c8f967008bc65e59c20400", "image position getter reads the signed depth field"},
+		{0x5b8180, "568bf1e848faffffc7067cf969008bc65ec3", "personal constructor and vtable"},
+	}};
+	inline const guard* first_picture_mismatch(const std::uint8_t* image)
+	{
+		for (const auto& g : picture_guards)
+			if (!limits_rules::matches(image + g.va - image_base, g.hex)) return &g;
+		return nullptr;
+	}
+	// The two vtable pointers the patch writes (size, position), as little-endian bytes.
+	inline std::array<std::uint8_t, 8> make_slots(DWORD size_thunk, DWORD position_thunk)
+	{
+		std::array<std::uint8_t, 8> out{};
+		std::memcpy(out.data(), &size_thunk, 4);
+		std::memcpy(out.data() + 4, &position_thunk, 4);
+		return out;
+	}
 	// Called immediately after the personal constructor, before menu attributes are parsed.
 	// Never touch other image menus or override an explicitly authored depth.
 	inline bool configure_menu(void* object)

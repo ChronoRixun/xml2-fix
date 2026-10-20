@@ -46,3 +46,19 @@ every guarded byte is independently corrupted, and the guard bytes against a loc
 Game acceptance uses actual interaction input after disclosed room-access staging: two different bedroom
 items with the fix, the same DLL with the key disabled, and a separate image-viewer textbox menu. Screenshots,
 state samples, and game-derived analysis are local evidence only and are not distributed with the source.
+
+## Picture window (`[Game] PersonalItemPicture=window`)
+
+XMen2.exe adds a menu's image as a sprite sized by the menu's size getter (vtable `+0x90`, `0x5b7c60`, a
+fixed 512x384) and placed by its position getter (`+0x94`, `0x5b7c80`: x 0, y = the signed depth, z 384, the sprite's top
+edge). The first game's default.xbe adds the personal menu's picture at 256x128, x 128..384, z 202..330, in front of the
+menu IGB's panels (picture frame, text panel, Back bar). The fullscreen sprite hides all of those panels and is opaque
+(it ignores texture alpha), so a texture re-composed around the picture could only show an enlarged copy of the art.
+
+With the key set to `window`, the two vtable slots of the PERSONAL_MENU class (`0x69fa0c`, `0x69fa10`) point to
+thunks that build the same igVec2f / igVec3f through the same constructors with 256x128 and (128, depth, 330). The
+art is the first game's 512x256 texture, as it is. The text-depth patch above is unchanged and installs first (its
+guard reads the position getter's slot). Four guards (the two slots, both getters' bytes, the constructor) must match
+before the slots are written; a mismatch, a protect failure or an unknown value logs one line and leaves the
+fullscreen picture. Absent or `stock` leaves the picture as 1.6: textures re-composed to 512x384 by an older builder
+keep working with the key off.
