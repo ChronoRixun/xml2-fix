@@ -10,6 +10,14 @@ XML2 Fix 1.7.0 is the engine half of Legends Classic 0.2.4.
 - This changes the display only. Combat resistances, saves and co-op rules stay
   the same. With the setting off or absent, the 1.6.0 display behavior remains.
   Ordinary X-Men Legends II installs keep the setting off.
+- **Co-op no longer drops during conversations:** with
+  `[Game] OnlineConversations=lockstep`, a conversation line that goes on by
+  itself does so after the same game time on every PC, instead of when this
+  PC's voice ends. The voice ending a moment apart on two PCs had put the games
+  out of step and ended the session (for example during the mansion tour).
+  Online, a chosen reply's voice is cut as the game has it; single-player is
+  unchanged. Both PCs need the setting (gameplay agreement rule 27, revision 1);
+  Legends Classic enables it after a rebuild.
 
 ## 1.6.0 - 2026-10-18
 

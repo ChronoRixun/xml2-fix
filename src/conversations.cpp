@@ -89,6 +89,31 @@ namespace conversations
 			}
 		}
 
+		// A game is set up online (host or join): the session static's +0x420, as 0x610d20 reads it.
+		bool online_session()
+		{
+			__try
+			{
+				const auto* s = at<const std::uint8_t*>(session_static);
+				return *reinterpret_cast<const DWORD*>(s) == session_vtable && s[session_set_up] != 0;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
+		}
+		bool logged_online = false;
+		// [Game] OnlineConversations=lockstep (gameplay agreement rule 27): -1 not requested (the 1.6.0 decision, by
+		// this PC's voice end, online too), 0 requested but refused or invalid (unverified: online refused), 1 on.
+		int lockstep_state = -1;
+		bool auto_advance_on = false;
+		bool reply_voices_on = false;
+		// Online and requested: the decision reads lockstep state only (conversations_rules.hpp, lockstep_view).
+		bool online_lockstep()
+		{
+			return lockstep_state == 1 && online_session();
+		}
+
 		bool menu_up()
 		{
 			__try
@@ -227,6 +252,16 @@ namespace conversations
 			}
 			v.playing = v.voice && voice_playing(handle);
 			v.menu_up = menu_up();
+			const bool online = online_lockstep();
+			if (online)
+			{
+				v = lockstep_view(v);
+				if (!logged_online && v.time_delay < 0)
+				{
+					logged_online = true;
+					logger::write("conversations: online session - a marked line goes on |timeDelay| s of game time after it was drawn, on every PC on the same frame (no voice or menu test; logged once)");
+				}
+			}
 			if (v.menu_up && v.time_delay < 0 && !logged_menu_up)
 			{
 				logged_menu_up = true;
@@ -261,7 +296,7 @@ namespace conversations
 			{
 				accept = call_accept(menus, accept_action);
 			}
-			const bool wait = pending_wait(handle != none_handle, playing, accept);
+			const bool wait = pending_wait_online(online_lockstep(), handle != none_handle, playing, accept);
 			float now = 0;
 			game_time(now);
 			if (wait && !pending_waiting)
@@ -374,6 +409,13 @@ namespace conversations
 	void install(const HMODULE game)
 	{
 		std::string error;
+		const auto lockstep = parse_online(ini::text(L"Game", L"OnlineConversations"));
+		if (lockstep == online_choice::invalid)
+		{
+			lockstep_state = 0;
+			logger::write("conversations: [Game] OnlineConversations must be lockstep or stock - online play refused (rule 27 unverified)");
+		}
+		const bool lockstep_requested = lockstep == online_choice::lockstep;
 		const auto chosen = decide(ini::text(L"Game", L"AutoAdvance"), ini::text(L"Game", L"ReplyVoices"), ini::text(L"Game", L"ReplyCursor"), error);
 		if (!error.empty())
 		{
@@ -382,17 +424,23 @@ namespace conversations
 		if (!chosen.auto_advance && !chosen.reply_voices && !chosen.reply_cursor)
 		{
 			logger::write("conversations: off ([Game] AutoAdvance=0, ReplyVoices=0, ReplyCursor=0) - the game's own");
+			if (lockstep_requested)
+			{
+				lockstep_state = 1; // nothing of the fix runs: the game's own decision is lockstep already
+			}
 			return;
 		}
 		constexpr const char* as_before = "conversations as the game has them (lines wait for accept, a reply's voice is cut, a menu's lost highlight)";
 		if (!game || reinterpret_cast<std::uintptr_t>(game) != image_base)
 		{
 			logger::write("conversations: XMen2.exe isn't loaded at 0x400000 (not the game?) - %s", as_before);
+			lockstep_state = lockstep_requested ? 0 : lockstep_state;
 			return;
 		}
 		if (const guard* g = first_mismatch_guarded())
 		{
 			logger::write("conversations: 0x%08lX isn't the retail code (%s) - %s", g->va, g->what, as_before);
+			lockstep_state = lockstep_requested ? 0 : lockstep_state;
 			return;
 		}
 
@@ -401,6 +449,7 @@ namespace conversations
 			const auto target = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&accept_hook));
 			if (accept_site_is_retail(game_image()) && patch("AutoAdvance", accept_call, accept_call_bytes(target)))
 			{
+				auto_advance_on = true;
 				logger::write("conversations: AutoAdvance on - a line whose timeDelay is negative goes on by itself once its voice has played (or after |timeDelay| s without one) "
 				              "when exactly one reply is visible; the accept call at 0x%08lX now asks the fix (0x%08lX) first",
 				              accept_call, target);
@@ -416,6 +465,7 @@ namespace conversations
 			const auto target = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(&pending_stub));
 			if (pending_site_is_retail(game_image()) && patch("ReplyVoices", pending_call, pending_jump_bytes(target)))
 			{
+				reply_voices_on = true;
 				logger::write("conversations: ReplyVoices on - a chosen reply's voice plays out (accept skips it) before the conversation goes on; the pending-reply step at 0x%08lX "
 				              "jumps to the fix (0x%08lX), which goes on at 0x%08lX while it plays",
 				              pending_call, target, pending_wait_at);
@@ -440,5 +490,31 @@ namespace conversations
 		{
 			logger::write("conversations: ReplyCursor off ([Game] ReplyCursor=0) - the menu's clamp as the game has it");
 		}
+
+		if (lockstep_requested)
+		{
+			lockstep_state = 1;
+			logger::write("conversations: OnlineConversations=lockstep (rule 27) - online, a marked line goes on |timeDelay| s of game time after it was drawn "
+			              "on every PC on the same frame and a chosen reply's voice is cut as the game has it; single-player unchanged");
+		}
+		else if (lockstep == online_choice::stock)
+		{
+			logger::write("conversations: OnlineConversations off - online, a marked line goes on when this PC's voice ends (1.6.0)");
+		}
+	}
+
+	bool online_requested()
+	{
+		return lockstep_state != -1;
+	}
+
+	bool online_verified()
+	{
+		return lockstep_state == 1;
+	}
+
+	std::array<std::uint32_t, 4> online_values()
+	{
+		return online_record(lockstep_state == 1, auto_advance_on, reply_voices_on);
 	}
 }

@@ -338,6 +338,10 @@ namespace
 		// three code sites of the conversation system, used from the first conversation on; independent of the
 		// patches above (none of its sites or guards is anyone else's).
 		conversations::install(game);
+		// Online conversations decided from lockstep state only ([Game] OnlineConversations=lockstep): which frame a line changes
+		// on draws from the shared random generator, so every peer must run the same decision (rule 27, requested only).
+		if (conversations::online_requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::online_conversations_id, 1, conversations::online_values(), conversations::online_verified());
 		confirmation_release::install(game);
 		explosive_first_hit::install(game);
 		if (game_version::needs_gameplay_agreement())
