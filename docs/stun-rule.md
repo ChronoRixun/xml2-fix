@@ -1,9 +1,11 @@
 # Party-hero stun timing and reaction ownership
 
 `[Game] StunRule=xml1` restores party-hero stun playback and recovery, and prevents a rejected or interrupted stun
-from trapping a hero again after getting up.
+from trapping a hero again after getting up. Revision 3 also restores XML1's per-hit stun dispatch: every
+stun-flagged hit on a party hero requests the stun reaction, as in the original, instead of only the hit that
+creates PC's timed `shared_stunned` powerup.
 Missing, empty or `xml2` keeps native behavior. The builder writes `xml1` and rejects an existing companion DLL
-that does not recognize the key. This is gameplay rule **18**, revision **2**, enabled values `{1,0,0,0}`.
+that does not recognize the key. This is gameplay rule **18**, revision **3**, enabled values `{1,0,0,0}`.
 Rule 17 belongs to ObjectWorldImpact; this installer neither uses it nor registers a placeholder.
 
 ## Original behavior
@@ -78,15 +80,45 @@ The hook adds no timer or get-up invulnerability. Native powerup creation, lifet
 remain, but the powerup no longer owns party reaction expiry. Accepted fresh hits can still restart the stun,
 as in XML1. Knockback, get-up animation speeds, NPC power decisions and enemy stuns are unchanged.
 
+## Revision 3: per-hit dispatch
+
+XML1's impact routine handles a stun-flagged hit (`+0x24` bit 6) on a living victim at `0x44af4..0x44cb0`: if
+`0x38230` (stun susceptibility, stat `0x14`, above zero) passes it resolves the stun move, derives the speed above and
+calls `0x40df0`. There is no "already stunned" or powerup test: a hit during the stun, or one shortly after getting
+up, requests the reaction again, and the dispatcher's priority comparison decides (stun override 0 against the
+stun move's priority 0 accepts and restarts it; thrown/landing priorities 4/5 refuse it).
+
+PC's impact `0x435bf0` applies the `shared_stunned` powerup at `0x436171` through `0x54f060`. That routine looks up
+an existing instance (`0x54eca0`); only a **new** instance reaches activation (`0x54f2c6` skips it otherwise), and
+only activation runs the entry `0x549fc0` that requests the reaction. While the powerup lives (two seconds, renewed
+by every refresh), further stun hits renew its lifetime and request nothing: no re-stun during the stun, and none
+after getting up until the powerup has expired. The arena-only refusal at `0x54f15c` and the arena-only five-second
+gate in `0x427e60` are not on the campaign path.
+
+Revision 3 wraps the call at `0x436171`. The native application runs unchanged (effects, lifetime, refusals). If it
+returned success for a party hero outside the competitive arena (`0x48de40` vt `+0x5c`) and its entry made no
+request during the call, the wrapper performs the entry's own request: the actor-resolved stun move, its authored
+speed (vt `+0xf0` with actor `+0x35c`), the native susceptibility refresh (`0x53bf20` when `+0x57a` bit 0) and the
+`0x427e60`, living-health and positive-susceptibility tests, flag bit 0, the move's animation (vt `+0xe8`) and the
+revision-2 request bridge (XML1 speed, native priority dispatch, flag settlement). A refused request keeps no flag.
+Enemies, refused applications and new instances are byte-for-byte native. The first-stun visual effect and the
+`+0x600` clock stay with the native entry, which still runs for a new instance.
+
+Live, before/after (0.2.4b DLL against revision 3, the same game and protocol): see Legends Classic issue #101's
+measurement notes; with revision 3 every stun-flagged hit on a living party hero produced a stun request,
+including those landing during a stun, while the released DLL requested none during a stun.
+
 ## Installation and validation
 
-All eighteen guards pass before any of the four writes. `xml1_hook_transaction` acquires pages, writes, reads back, flushes
+All twenty-five guards pass before any of the five writes. `xml1_hook_transaction` acquires pages, writes, reads back, flushes
 and rolls back on failure. One failure line identifies refusal. A failed requested install is unverified for
 online agreement; unsafe rollback/protection failure refuses startup. Absent/`xml2` omits rule 18, preserving
 the released LC OFF digest. An explicit opt-in also enlists agreement outside LC. No protocol or save-format change.
 
 `xml2_stun_rule_test [retail-executable]` exercises the production installer, every guard refusal and the
-installed bridges with synthetic actors: acceptance, refusal, repeated stun, interruption, all four controller
+installed bridges with synthetic actors (revision 3 adds the impact wrapper: refreshed, new and refused
+applications, enemies, arena, dead, unstunnable and immune victims, priority refusal, the stale susceptibility
+cache and argument forwarding): acceptance, refusal, repeated stun, interruption, all four controller
 slots, default/explicit/clamped rates, native lock and pending-chain gates, pressed versus held buttons,
 alternate resolution versus name equality, native clocks, unrelated flag bits, enemy bypass, and preserved
 registers/flags. Every byte of each guard is corrupted in turn to verify refusal. The optional executable

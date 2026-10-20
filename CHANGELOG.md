@@ -18,6 +18,12 @@ XML2 Fix 1.7.0 is the engine half of Legends Classic 0.2.4.
   Online, a chosen reply's voice is cut as the game has it; single-player is
   unchanged. Both PCs need the setting (gameplay agreement rule 27, revision 1);
   Legends Classic enables it after a rebuild.
+- **Heroes are re-stunned per hit, as in the first game** (issue #101): with
+  `[Game] StunRule=xml1` (gameplay rule 18, now revision 3), every stun hit on
+  a party hero requests the stun reaction. The original does this; X-Men
+  Legends II only stunned on the hit that started its two-second stun effect,
+  so hits during a stun, or right after getting up, were ignored. Both co-op
+  PCs need the same revision. ([details](docs/stun-rule.md))
 
 ## 1.6.0 - 2026-10-18
 
