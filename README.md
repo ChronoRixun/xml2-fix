@@ -32,11 +32,11 @@
 | Big mods              | 40 actors per zone, then a crash | up to 127 when a mod asks for it ([details](#bigger-zones)) |
 | Setup                 | — | copy one file |
 
-**Current release: XML2 Fix 1.7.0**, paired with Legends Classic builder 0.2.4 (content 22).
+**Current release: XML2 Fix 1.7.1**, paired with Legends Classic builder 0.2.5 (content 23).
 For the port, Rebuild in Ultimate Legends, then Play; both co-op PCs need this pair. Launcher 0.3.2 supports it.
-This release restores colored enemy resistance text and fixes conversation-driven co-op disconnects.
+This release draws the bedroom items' pictures in the first game's picture window and re-stuns party heroes on every stun hit.
 The new settings are opt-in; ordinary XML2 installs keep their previous behavior.
-See [CHANGELOG.md](CHANGELOG.md) and the [1.7.0 release notes](packaging/release-notes/v1.7.0.md).
+See [CHANGELOG.md](CHANGELOG.md) and the [1.7.1 release notes](packaging/release-notes/v1.7.1.md).
 
 ## ⚡ Install
 
@@ -649,6 +649,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `EndHeroUnlock` | `1` | `0`: the ending unlocks no hero and shows no popup |
 | `MainMenuItems` | *(XML2's names)* | the main menu's item names for the mouse slots and Quit, comma separated |
 | `ReviewStats` | `1` | `0`: the Review menu has no Stats tab |
+| `PersonalItemPicture` | `stock` | `window` draws a personal item's picture as the first game's 256x128 window over the menu panels instead of fullscreen; the picture must be the first game's 512x256 art ([details](docs/personal-item-text.md)). |
 | `PersonalItemText` | `1` | Personal-item pictures sit behind their descriptions; `0` retains the original image depth. Other menus and explicit menu `depth` values are unchanged ([details](docs/personal-item-text.md)). |
 | `Xtract` | `1` | `0`: an Xtraction Point's menu has no "Xtract" world map choice |
 | `XtractionShop` | `0` | `1`: let a companion builder append the first game's Xtraction services (Load, Danger Room, Healer, Forge) as each point permits through `extractionPointServices` ([details](docs/xtraction-shop.md)) |
@@ -675,7 +676,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `BoxHarmOrigin` | `xml2` | `xml1`: original boxed-harm zero dispatch origin, correcting the PC centre-based upward-fire impulse. Builder default on; requested-only gameplay rule 21, revision 1 ([evidence and limits](docs/box-harm-origin.md)). |
 | `HarmLoopStartup` | `xml2` | Opt-in `xml1`: keep the authored creation-relative first activation and ordinary start-on loop. Requires matching builder output; developer option, online blocked when requested; no gameplay rule ([details](docs/harm-loop-startup.md)). |
 | `HarmSingleChain` | `off` | `single`: retain one pending repeat chain for ordinary boxed touch fires (about one hit per 0.4 s). Explicit scheduling policy, not proven XBE parity. Builder default on; requested-only gameplay rule 23, revision 1 ([details](docs/harm-single-chain.md)). |
-| `StunRule` | `xml2` | `xml1`: original party stun playback and input recovery; rejected/interrupted stuns do not resume after get-up. Enemy stuns stay native (gameplay rule 18 revision 2; [details](docs/stun-rule.md)). |
+| `StunRule` | `xml2` | `xml1`: original party stun playback and input recovery; rejected/interrupted stuns do not resume after get-up; every stun hit on a party hero requests the stun, as in the original. Enemy stuns stay native (gameplay rule 18 revision 3; [details](docs/stun-rule.md)). |
 | `PackAmount` | `xml2` | `xml1`: a health or energy pack restores a quarter of the maximum, as in X-Men Legends I, instead of a third ([details](docs/pack-amount.md)) |
 | `DeathRule` | `xml2` | `xml1`: an entity dies on the hit that leaves it below 1 health, as in X-Men Legends I, instead of only at 0 ([details](docs/death-threshold.md)) |
 | `Xml1Multipart` | `0` | `1`: X-Men Legends I's breakable parts (a stats `<Multipart>` row's health, break, effects and the attacks it carries: Juggernaut's helmet, the Sentinels' arms) ([details](docs/multipart.md)) |

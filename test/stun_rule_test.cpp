@@ -318,6 +318,66 @@ void native_resolution_checks() {
  check(actor[0x765]==0xa4,"missing resolved stun clears the party flag");
 }
 
+namespace {
+ // Revision 3: the impact's shared_stunned application. The fake powerup application either enters
+ // (forwarding through the installed entry request, as a new instance does), refreshes, or refuses.
+ enum class powerup { refuse, enter, refresh } apply_mode=powerup::refresh;
+ bool apply_arguments=true, stunnable_actor=true; int cache_refreshes=0;
+ bool __fastcall fake_apply(void* who,void*,u32 a,u32 b,u32 c,u32 d,u32 e,u32 f,u32 g,u32 h) {
+  apply_arguments &= who==actor.data() && a==11 && b==12 && c==0 && d==14 && e==0 && f==0 && g==0 && h==0;
+  if(apply_mode==powerup::enter) {actor[0x765]|=1;drive_request();} // native entry sets the flag, then requests
+  return apply_mode!=powerup::refuse;
+ }
+ bool __fastcall fake_stunnable(void*,void*){return stunnable_actor;}
+ void __fastcall fake_cache(void* cache,void*){cache_refreshes+=cache==actor.data()+0x470;}
+ float __fastcall fixed_speed(void*,void*,void*){return .75f;}
+ u32 __fastcall fixed_animation(void*,void*){return 91;}
+ bool __fastcall fixed_arena(void*,void*){return competitive;}
+ void* __cdecl fixed_game(){static std::array<void*,80> vt{};static void** object=vt.data();vt[0x5c/4]=reinterpret_cast<void*>(&fixed_arena);return &object;}
+ bool drive_impact() {
+  u32 rel;std::memcpy(&rel,at(stun_rules::impact_apply+1),4);
+  using apply_t=bool(__fastcall*)(void*,void*,u32,u32,u32,u32,u32,u32,u32,u32);
+  return reinterpret_cast<apply_t>(stun_rules::impact_apply+5+rel)(actor.data(),nullptr,11,12,0,14,0,0,0,0);
+ }
+}
+void fresh_dispatch_checks() {
+ auto redirect=[](u32 a,const void* f){auto bytes=stun_rules::branch(a,f,false,5);std::memcpy(at(a),bytes.data(),bytes.size());};
+ redirect(stun_rules::apply_powerup,&fake_apply);redirect(stun_rules::stunnable,&fake_stunnable);
+ redirect(stun_rules::refresh_susceptibility,&fake_cache);redirect(stun_rules::game_object,&fixed_game);
+ redirect(stun_rules::resolve_move,&lookup);
+ static std::array<void*,80> vt{};vt[0xf0/4]=reinterpret_cast<void*>(&fixed_speed);vt[0xe8/4]=reinterpret_cast<void*>(&fixed_animation);
+ field<void*>(dazed.data(),0)=vt.data();
+ *reinterpret_cast<u32*>(stun_rules::stun_name)=field<u32>(dazed.data(),8);
+ struct row { bool hero; powerup mode; bool arena, alive, stunnable, accept, in_stun; float factor; int want; };
+ const row rows[]{
+  {true,powerup::refresh,false,true,true,true,false,1,1},   // refreshed powerup after get-up: XML1 re-stuns
+  {true,powerup::refresh,false,true,true,true,true,1,1},    // hit during stun restarts it, as XML1
+  {true,powerup::enter,false,true,true,true,false,1,1},     // new instance: the entry's request only, not twice
+  {true,powerup::refuse,false,true,true,true,false,1,0},    // native application refused: nothing
+  {false,powerup::refresh,false,true,true,true,false,1,0},  // enemies keep native refresh
+  {true,powerup::refresh,true,true,true,true,false,1,0},    // competitive arena keeps native refresh
+  {true,powerup::refresh,false,false,true,true,false,1,0},  // dead victim
+  {true,powerup::refresh,false,true,false,true,false,1,0},  // native stunnable test refuses
+  {true,powerup::refresh,false,true,true,true,false,0,0},   // immune: zero susceptibility
+  {true,powerup::refresh,false,true,true,false,false,1,1},  // priority refusal leaves no flag behind
+ };
+ for(const auto& r:rows) {
+  reset(r.hero);actor[0x765]=r.in_stun?0xa5:0xa4;field<void*>(actor.data(),0x378)=r.in_stun?dazed.data():ready.data();
+  field<float>(actor.data(),0x27c)=r.alive?50.f:0.f;field<float>(actor.data(),0x520)=r.factor;
+  apply_mode=r.mode;competitive=r.arena;stunnable_actor=r.stunnable;accepts=r.accept;calls=0;received_speed=0;
+  const auto before=actor;const bool result=drive_impact();
+  check(result==(r.mode!=powerup::refuse),"installed impact wrapper returns the native application result");
+  check(calls==r.want,"one reaction request per ordinary stun hit on a party hero, none otherwise");
+  if(r.want && r.accept) check(field<void*>(actor.data(),0x378)==dazed.data() && (actor[0x765]&1) && received_speed==.75f,"refreshed hit enters stun with the entry's speed and flag");
+  if(r.want && !r.accept) check(actor[0x765]==0xa4 && field<void*>(actor.data(),0x378)==ready.data(),"refused per-hit request discards the flag");
+  if(!r.want && r.mode!=powerup::enter) check(actor==before,"no request leaves the victim byte-for-byte unchanged");
+ }
+ reset(true);field<float>(actor.data(),0x27c)=50;field<float>(actor.data(),0x520)=1;actor[0x57a]=1;apply_mode=powerup::refresh;competitive=false;stunnable_actor=true;accepts=true;calls=0;
+ drive_impact();check(cache_refreshes==1 && calls==1,"stale susceptibility cache is refreshed as the native entry does");
+ check(apply_arguments,"impact wrapper forwards the victim and all eight native arguments");
+ accepts=true;competitive=false;
+}
+
 int main(int argc,char** argv) {
  if (reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr))!=0x400000 || reinterpret_cast<std::uintptr_t>(fixture_space)>0x41d890) return 2;
  DWORD old=0;if(!VirtualProtect(at(0x401000),0x400000,PAGE_EXECUTE_READWRITE,&old))return 2;
@@ -367,6 +427,7 @@ int main(int argc,char** argv) {
  field<u32>(tumble.data(),8)=*reinterpret_cast<u32*>(stun_rules::stun_name);drive_move=tumble.data();drive_set();
  check(actor[0x765]==0xa4,"same-name move not selected by actor resolver does not retain stun flag");
  input_and_speed_checks();
+ fresh_dispatch_checks();
  if(argc>1){native_powerup_checks();native_resolution_checks();}
  std::printf("%d checks, %d failures\n",checks,failures);return failures ? 1 : 0;
 }

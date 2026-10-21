@@ -13,6 +13,7 @@ namespace stun_rule
  {
   using u32 = std::uint32_t;
   bool wanted = false, applied = false;
+  unsigned requests = 0; // reaction requests forwarded by the powerup entry (game thread only)
   const u32 set_move_resume = stun_rules::set_move_resume;
   const u32 expire_resume = stun_rules::expire_resume, expire_done = stun_rules::expire_done;
   template<class T> T& field(void* p, std::size_t offset)
@@ -43,9 +44,50 @@ namespace stun_rule
   void __fastcall request_stun(void* actor, void*, void* move, u32 animation, float speed, u32 a, u32 b, u32 c)
   {
    using dispatch_t = void(__fastcall*)(void*, void*, void*, u32, float, u32, u32, u32);
+   ++requests;
    if (party(actor)) speed = stun_rules::reaction_speed(speed, field<float>(actor, 0x520));
    reinterpret_cast<dispatch_t>(stun_rules::native_dispatch)(actor, nullptr, move, animation, speed, a, b, c);
    settle_flag(actor, field<void*>(actor, 0x378));
+  }
+
+  bool arena()
+  {
+   using game_t = void* (__cdecl*)();
+   void* game = reinterpret_cast<game_t>(stun_rules::game_object)();
+   using flag_t = bool(__thiscall*)(void*);
+   return reinterpret_cast<flag_t>(field<void**>(game, 0)[0x5c / sizeof(void*)])(game);
+  }
+
+  // The powerup entry's own request (0x54a009..0x54a11f) for an already-existing shared_stunned
+  // instance: same resolved move, authored speed, animation, susceptibility and living-actor tests.
+  void fresh_request(void* actor)
+  {
+   void* move = resolved_stun(actor);
+   if (!move) return;
+   void** vtable = field<void**>(move, 0);
+   using speed_t = float(__thiscall*)(void*, void*);
+   const float speed = reinterpret_cast<speed_t>(vtable[0xf0 / sizeof(void*)])(move, field<void*>(actor, 0x35c));
+   if (field<std::uint8_t>(actor, 0x57a) & 1)
+    reinterpret_cast<void(__thiscall*)(void*)>(stun_rules::refresh_susceptibility)(static_cast<unsigned char*>(actor) + 0x470);
+   using test_t = bool(__thiscall*)(void*);
+   if (!reinterpret_cast<test_t>(stun_rules::stunnable)(actor) || !(field<float>(actor, 0x27c) > 0)) return;
+   if (!(field<float>(actor, 0x520) > 0)) return;
+   field<std::uint8_t>(actor, 0x765) |= 1;
+   using animation_t = u32(__thiscall*)(void*);
+   const u32 animation = reinterpret_cast<animation_t>(vtable[0xe8 / sizeof(void*)])(move);
+   request_stun(actor, nullptr, move, animation, speed, 0, 0, 1);
+  }
+
+  // XML1 dispatches every ordinary stun hit (0x44af4..0x44cb0); PC only requests the reaction when the
+  // shared_stunned powerup is new. For a party hero whose powerup was refreshed, request it here.
+  bool __fastcall apply_stun(void* actor, void*, u32 a, u32 b, u32 c, u32 d, u32 e, u32 f, u32 g, u32 h)
+  {
+   using apply_t = bool(__thiscall*)(void*, u32, u32, u32, u32, u32, u32, u32, u32);
+   const unsigned before = requests;
+   const bool result = reinterpret_cast<apply_t>(stun_rules::apply_powerup)(actor, a, b, c, d, e, f, g, h);
+   const bool hero = party(actor);
+   if (stun_rules::fresh_dispatch(result, requests != before, hero, hero && arena())) fresh_request(actor);
+   return result;
   }
 
   // Called only after the native input lock and pending-chain gates. XML1's ch_stun chooses the
@@ -149,6 +191,7 @@ namespace stun_rule
    {setter.va, {0x89, 0xb7, 0x78, 0x03, 0x00, 0x00}, stun_rules::branch(setter.va, &set_move_hook, false, 6)},
    {stun_rules::input_call, {0x8b, 0x01, 0x56, 0xff, 0x50, 0x48}, input},
    {stun_rules::expire_flag, {0x80, 0xa7, 0x65, 0x07, 0x00, 0x00, 0xfe}, stun_rules::branch(stun_rules::expire_flag, &expire_hook, false, 7)},
+   {stun_rules::impact_apply, {0xe8, 0xea, 0x8e, 0x11, 0x00}, stun_rules::branch(stun_rules::impact_apply, &apply_stun, true, 5)},
   };
   bool safe = true;
   applied = xml1_hook_transaction::apply(memory, writes, &safe);
@@ -158,6 +201,6 @@ namespace stun_rule
                       : "stun rule: rollback/protection verification failed; process startup refused");
    return;
   }
-  logger::write("stun rule: [Game] StunRule=xml1; party stun uses original animation speed, input recovery and reaction ownership (rule 18 revision 2)");
+  logger::write("stun rule: [Game] StunRule=xml1; party stun uses original animation speed, input recovery, reaction ownership and per-hit stun dispatch (rule 18 revision 3)");
  }
 }
