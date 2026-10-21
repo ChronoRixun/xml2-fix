@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.7.1 - unreleased
+## 1.7.1 - 2026-10-20
 
 XML2 Fix 1.7.1 is the engine half of Legends Classic 0.2.5. Both co-op PCs need
 the same version (gameplay rule 18 is now revision 3).
