@@ -1,5 +1,6 @@
 #include "forced_teams.hpp"
 #include "forced_teams_rules.hpp"
+#include "join_in_progress.hpp"
 #include "ini.hpp"
 #include "log.hpp"
 #include "xtract.hpp"
@@ -742,6 +743,7 @@ namespace forced_teams
 
 			bool seat(const int i, const std::string& name)
 			{
+				if (i == 0) join_in_progress::note_party_change(); // seatParty seats slot 0 first
 				return call_seat(i, name.c_str());
 			}
 

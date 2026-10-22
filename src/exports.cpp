@@ -70,6 +70,10 @@
 #include "load_trace.hpp"
 #include "plugin_scan.hpp"
 #include "net_trace.hpp"
+#include "gns_transport.hpp"
+#include "online_room.hpp"
+#include "join_in_progress.hpp"
+#include "net_impair.hpp"
 #include "openspy_redirect.hpp"
 #include "pad_profile.hpp"
 #include "pad_bindings.hpp"
@@ -202,6 +206,8 @@ namespace
 		{
 			net_trace::install(game);
 		}
+		// [Dev] NetFakeLoss/NetFakeLag/NetFakeJitter: test-only impairment of the game's UDP sends (and GNS's, same values).
+		net_impair::install(game);
 		// [Online] GameVersion: the string the game copies into its network code at start-up and when online
 		// opens - here, before any of its code runs.
 		game_version::install(game);
@@ -459,6 +465,17 @@ namespace
 			gameplay_agreement::register_rule(gameplay_capabilities::double_heal_id, xml1_capability_rules::double_heal_revision, heal.values, heal.verified);
 		}
 
+		// [Online] Transport=gns (requested-only, rule 25 GnsTransport, docs/gns-transport.md): the participants' game
+		// messages over GameNetworkingSockets. Four guarded sites in one transaction; GNS itself starts on the game's
+		// thread at the first receive pump, never here. It registers rule 25 itself when it installed.
+		// [Online] Host=broker / JoinCode (docs/online-rooms.md): rooms through the project broker - the game socket's
+		// datagrams to room members' virtual addresses through GNS P2P connections. Before the transport, which they imply.
+		online_room::install(game);
+		gns_transport::install(game);
+		// [Online] JoinInProgress=1 (requested-only, rule 26 JoinInProgress, docs/join-in-progress.md): after the
+		// transport, which it requires.
+		join_in_progress::install(game);
+
 		test_mode::install(game);
 		test_input::install(); // first: its screenshots need the display fix's device hook
 		display::install(game);
@@ -514,6 +531,11 @@ BOOL WINAPI DllMain(HINSTANCE instance, const DWORD reason, LPVOID)
 			MessageBoxA(nullptr, notice.c_str(), "XML2 Fix: entity capacity unavailable", MB_OK | MB_ICONWARNING);
 			logger::write("startup: entity capacity notice closed");
 		}
+	}
+	else if (reason == DLL_PROCESS_DETACH)
+	{
+		// The game is closing: online-status.json says `ended` for the launcher (Win32 file calls only).
+		online_room::shutdown();
 	}
 	return TRUE;
 }

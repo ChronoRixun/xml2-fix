@@ -1,6 +1,10 @@
 # Online play: status and next steps
 
-_Last updated 2026-09-29._
+_Historical OpenSpy status, last updated 2026-09-29._
+
+For Legends Classic 0.3.0 / XML2 Fix 1.8.0, use [online rooms](online-rooms.md),
+[launcher status contract v1.5](online-status-file.md) and [drop-in](join-in-progress.md).
+The tests and limitations below describe the older stock/OpenSpy path, not current room acceptance.
 
 ## What works (tested)
 

@@ -273,7 +273,7 @@ namespace conversations
 			}
 			const bool ok = advance(cs);
 			logger::write("conversations: line %d advanced by itself (timeDelay %.2f, %s, shown %.2f s, %d reply visible, voice handle 0x%08lX)%s", v.line_id, v.time_delay,
-			              v.voice ? (line.seen_playing ? "its voice played and ended" : "its voice never played - the time") : "no voice - the time", v.now - line.shown_at, v.visible,
+			              online ? "online: game time" : v.voice ? (line.seen_playing ? "its voice played and ended" : "its voice never played - the time") : "no voice - the time", v.now - line.shown_at, v.visible,
 			              static_cast<unsigned long>(handle), ok ? "" : " - ERROR: the pick faulted");
 			return false;
 		}

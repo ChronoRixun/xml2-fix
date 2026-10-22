@@ -466,6 +466,7 @@ namespace entity_capacity
 	}
 
 	bool owns_arena_teardown() { return prepared; }
+	bool fast_transfer_active() { return fast_installed; }
 
 	void contribute(patch_transaction::transaction& transaction, HMODULE)
 	{

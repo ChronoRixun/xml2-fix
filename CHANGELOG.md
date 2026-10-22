@@ -1,5 +1,60 @@
 # Changelog
 
+## 1.8.0 - <date TBD>
+
+- **A frozen or silent player no longer splits the session** (0.3.0e, rule 25 revision 4): with three or more
+  players, a player whose game froze (or whose network went silent) was removed by the host's own 10 s timeout
+  without the survivors' agreed cut frame; the other joiner then waited for the host's part of the agreement, its
+  own timeout ran out and it left ("You have lost connection to the host"). Now every way a player is lost - its
+  connection closing, the host's timeout or lag-report removal, another player reporting it lost - takes the same
+  path: every remaining PC exchanges the lost player's last inputs and removes it at one agreed frame, and the
+  session carries on. The frozen player, when its game resumes, gets the normal "lost connection" message.
+  0.3.0d peers are refused by name (`differs: 25`).
+- **Hero switches survive level changes online** (0.3.0d, rule 26 revision 6): the solo-segment hand-back ran at
+  every level change and gave each player the hero they had at the previous zone's start, undoing d-pad switches
+  (and handing a dead hero back, which the game then passed on again). It now runs only inside a solo story segment
+  and in the zone where it ends, with the heroes the players held when the segment started. 0.3.0c peers are refused
+  by name (`differs: 26`) instead of desynchronizing.
+- **A slow player is no longer dropped online** (rule 26 revision 6): the game's slow-player guard dropped whoever
+  reported frames over 50 ms for 1,700 frames in a session - a joiner in the owner's three-PC test, the host itself
+  on a busy PC (which ended the session for everybody). The warnings stay; the drop is gone. Switching onto a hero
+  another player controls stays refused, as in the original game; switching to an AI hero works online.
+- **Four-player Start Game no longer crashes:** each participant keeps its own mesh peer; the start race no longer rebinds two players to the same peer.
+
+- **The release is built with online play:** the release workflow now builds GameNetworkingSockets 1.6.1 (pinned commit, the
+  project CA and the cert-enforcement patch in `packaging/gns/`; protobuf and abseil from a pinned vcpkg) with
+  `scripts/build-gns.ps1`, links it statically into `dinput.dll` and fails unless the DLL it publishes has GNS, protobuf and
+  the CA pin in it and imports Windows system DLLs only (`scripts/check_release_dll.py`, run on the built DLL and on the one in
+  the finished zip). Before, CI built without GNS: the same version number, no online rooms or drop-in. Nothing ships next to
+  `dinput.dll`; the release zip now also carries `THIRD-PARTY-NOTICES.txt` (the licences of what is linked in).
+
+- **Public game browser and join codes match builds by game version:** a room now carries the build's
+  `[Online] GameVersion` (for example `LC33`) as its version token, exactly what the launcher's Browse games list
+  compares with its own build; before, the token also held part of the content fingerprint and every listed game
+  of the same build showed "Different game version" with Join off. A joiner of another build is still refused
+  before it connects (`version_mismatch`).
+- Rule 27 OnlineConversations (1.7.0) is the only conversation fix online; Legends Classic 0.3.0 writes it.
+- **Online hardening** for room startup, message handling and logging.
+- `online-status.json` (contract v1.5): a room that exists but takes no players right now (the broker's
+  `room_not_joinable`) is the new error id `room_closed`; `room_full` now means only that all four places are taken.
+
+- Online rooms for the launcher (contract v1.5): `[Online] Host` / `JoinCode` are read once at start and removed from `xml2-fix.ini`; `online-status.json` next to the game reports connecting / room / joined / in_game / ended / error (ids broker_unreachable, broker_rejected, code_not_found, code_expired, room_full, room_closed, version_mismatch, test_mode_on, tls_pin_mismatch, internal), written atomically; a room carries a version token so another build's joiner is refused before connecting; with a join code Join Game lists the room's game only - master server entries are left out until the session runs (no Connect by IP needed). [details](docs/online-status-file.md)
+- Online rooms keep the broker's credentials between starts: the 24 h certificate (reused with more than an hour left) and the 6 h TURN relay credentials (reused with more than 30 minutes left, for the same broker and TURN secret; sealed with DPAPI for the Windows user because they hold the relay password, never logged). A connection that fails while cached TURN credentials are in use gets new ones from the broker once. `xml2-fix.log` says whether each came from the broker or this install's cache. A member's keepalive that overtakes its hello at the start is ignored instead of counted as a refused tunnel message, and refused tunnel messages are logged with the reason.
+
+- **Solo story segments online** (`[Online] JoinInProgress=1`, rule 26 revision 6): a player without a hero in a
+  segment stays connected and watches, with the message "Solo story segment - you rejoin when it ends"; when the
+  party widens each player gets back the hero they had before (docs/join-in-progress.md).
+- **Guest loss and freezes:** with three or more players, survivors exchange the lost player's last inputs
+  and remove it at one agreed frame (rule 25 revision 4, framing 3). This includes a closed connection,
+  the native host timeout and lag-report removal. A guest can join again by code at the next level boundary.
+  A host drop or freeze still ends the session for joiners with "lost connection to the host"; no host migration.
+
+- **Host alone and drop-in** (`[Online] JoinInProgress=1`): the host can Start Game with nobody else in the room and
+  play; players are admitted mid-level and brought in at the next level change (rule-26 flow). When the last player
+  leaves or vanishes the host keeps hosting (the native rule ended a session of two), so a replacement can drop in.
+  The native slow-player counters start again with every restored session (a host that had played alone dropped
+  itself right after the first bring-in).
+
 ## 1.7.1 - 2026-10-20
 
 XML2 Fix 1.7.1 is the engine half of Legends Classic 0.2.5. Both co-op PCs need

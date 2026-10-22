@@ -1925,6 +1925,19 @@ namespace save_format
 		}
 	}
 
+	bool serialize_wrapper(std::uint8_t* base)
+	{
+		if (!base) return false;
+		std::memcpy(base + layout_profile.payload, &base, 4);
+		base[layout_profile.description] = 0;
+		base[layout_profile.flag_offset] = 0;
+		overflow_flag = 0;
+		if (!run_serializer(base)) return false;
+		const bool overflowed = overflow_flag != 0;
+		overflow_flag = 0;
+		return !overflowed;
+	}
+
 	void pump()
 	{
 		if (!enabled)
@@ -2019,6 +2032,11 @@ namespace save_format
 	{
 		if (ready == readiness::ok && (kind == kind_profile || (kind == kind_campaign && slot >= 0 && slot < slot_count)))
 			write_refusals.successful_load(kind == kind_profile ? lc_dir + profile_file : slot_path(slot));
+	}
+
+	bool campaign_load_checked()
+	{
+		return enabled;
 	}
 
 	bool startup_allowed()

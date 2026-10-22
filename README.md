@@ -32,11 +32,19 @@
 | Big mods              | 40 actors per zone, then a crash | up to 127 when a mod asks for it ([details](#bigger-zones)) |
 | Setup                 | — | copy one file |
 
-**Current release: XML2 Fix 1.7.1**, paired with Legends Classic builder 0.2.5 (content 23).
-For the port, Rebuild in Ultimate Legends, then Play; both co-op PCs need this pair. Launcher 0.3.2 supports it.
-This release draws the bedroom items' pictures in the first game's picture window and re-stuns party heroes on every stun hit.
-The new settings are opt-in; ordinary XML2 installs keep their previous behavior.
-See [CHANGELOG.md](CHANGELOG.md) and the [1.7.1 release notes](packaging/release-notes/v1.7.1.md).
+**Current release: XML2 Fix 1.8.0**, paired with Legends Classic builder 0.3.0 (content 24 / LC33)
+and Ultimate Legends launcher 0.4.0. Update the launcher first, then Rebuild, then Play.
+
+Maintainers: [stable and beta release instructions](RELEASING.md).
+
+Online codes, public games, default-on drop-in in the port and solo-story watchers. Four-player start is fixed;
+hero swaps survive level changes, with solo hand-back only through the segment and its end (rule 26 revision 6).
+Slow-player drops are disabled; LAG warnings may remain. Frozen or disconnected guests are removed by agreement
+while survivors continue (rule 25 revision 4). Host drop/freeze ends the joiners' session with "lost connection to
+the host"; no host migration. Includes 1.7.1. Owner 030e acceptance on three real PCs including a hotspot PC is
+still pending; four-player WAN coverage is not certified here.
+See [CHANGELOG.md](CHANGELOG.md), [1.8.0 release notes](packaging/release-notes/v1.8.0.md),
+and the [player guide](https://github.com/ChronoRixun/legends-classic/blob/main/docs/ONLINE.md).
 
 ## ⚡ Install
 
@@ -838,6 +846,10 @@ cmake -S . -B build -A Win32
 cmake --build build --config Release
 build\bin\Release\xml2_test.exe          # add --live to watch your pad as the game sees it
 ```
+
+That builds the fix without online rooms and drop-in (they need GameNetworkingSockets). The release build links it in:
+`pwsh scripts/build-gns.ps1 -OutDir C:\gns -WorkDir C:\gns-work` builds the pinned libraries (about 20 minutes, once), then add
+`-DXML2_FIX_GNS_ROOT=C:/gns` to the first command. [Details](docs/gns-transport.md#build).
 
 The output is `build\bin\Release\dinput.dll`. `xml2_test.exe` loads it the way the game does, then reads a connected controller through both of the game's DirectInput paths and checks the OpenSpy redirect; with no controller connected it still checks both paths on two virtual pads, driven through the test pipe. Release builds are produced by [GitHub Actions](.github/workflows/build.yml) from tagged source.
 
