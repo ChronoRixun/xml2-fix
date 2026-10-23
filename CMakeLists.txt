@@ -51,6 +51,8 @@ add_library(xml2_fix SHARED
 	src/harm_loop_startup.cpp
 	src/harm_single_chain.cpp
 	src/double_heal.cpp
+	src/combo_heads.cpp
+	src/model_pools.cpp
 	src/npc_power.cpp
 	src/stun_rule.cpp
 	src/danger_room_party.cpp
@@ -499,6 +501,13 @@ target_include_directories(xml2_lockon_effects_install_test PRIVATE src)
 target_compile_options(xml2_lockon_effects_install_test PRIVATE /UNDEBUG)
 target_link_options(xml2_lockon_effects_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
+add_executable(xml2_model_pools_test test/model_pools_test.cpp)
+target_include_directories(xml2_model_pools_test PRIVATE src)
+target_compile_options(xml2_model_pools_test PRIVATE /UNDEBUG)
+
+add_executable(xml2_combo_heads_test test/combo_heads_test.cpp src/combo_heads.cpp)
+target_include_directories(xml2_combo_heads_test PRIVATE src)
+target_compile_options(xml2_combo_heads_test PRIVATE /UNDEBUG)
 add_executable(xml2_resistance_display_test test/resistance_display_test.cpp)
 target_include_directories(xml2_resistance_display_test PRIVATE src)
 target_compile_options(xml2_resistance_display_test PRIVATE /UNDEBUG)

@@ -144,7 +144,7 @@ void records(){
  check(future.compare(stun(true,true,stun_rule::revision,true).bytes())==result::match,"later rule 17 registration agrees in either order");
  check(stun(true).compare(future.bytes())==result::entries,"missing future rule 17 is refused, not silently ignored");
  // New requested-only rules preserve the pre-integration OFF bytes and name both mismatch directions.
- for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id,gameplay_capabilities::box_harm_origin_id,gameplay_capabilities::danger_room_healthbars_id,gameplay_capabilities::harm_single_chain_id,gameplay_capabilities::online_conversations_id}) {
+ for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id,gameplay_capabilities::box_harm_origin_id,gameplay_capabilities::danger_room_healthbars_id,gameplay_capabilities::harm_single_chain_id,gameplay_capabilities::online_conversations_id,gameplay_capabilities::model_pools_id}) {
   auto optional=[&](bool wanted,bool verified=true){record r;if(wanted)r.add(id,1,{1,0,0,0},verified);r.finalize();return r;};
   const auto yes=optional(true),no=optional(false),failed=optional(true,false);
   check(yes.compare(optional(true).bytes())==result::match,"matching new requested-only rule accepts");
@@ -189,6 +189,24 @@ void records(){
   check(on.compare(talk(true,false).bytes())==result::value && on.compare(talk(true,true,false).bytes())==result::value,"another AutoAdvance/ReplyVoices state refuses");
   gameplay_capabilities::difference d;char name[160];on.compare(off.bytes(),&d);on.describe(d.buckets,d.local_only,true,name,sizeof(name));
   check(std::string(name)=="27 OnlineConversations (not on the other PC)","the ON peer names rule 27: "+std::string(name));
+ }
+ // Rule 28, [Engine] ModelPools: requested only, revision 1, {installed, model handles, IGB models, actors}. XML2 Fix
+ // 1.8.0-beta.1 (no rule 28) and a beta.2 peer with a raise refuse each other; x2 and x4 refuse; OFF keeps the released bytes.
+ {
+  const auto id=gameplay_capabilities::model_pools_id;
+  check(id==28 && std::string(gameplay_capabilities::rule_name(id))=="ModelPools","model pools use assigned rule 28");
+  check(gameplay_capabilities::bucket_of(id)!=gameplay_capabilities::bucket_of(gameplay_capabilities::online_conversations_id),"rule 28 has a bucket of its own");
+  auto pools=[&](bool wanted,std::uint32_t handles=4096,std::uint32_t igb=2048,std::uint32_t actors=128){record r;if(wanted)r.add(id,1,{1,handles,igb,actors},true);r.finalize();return r;};
+  const auto x4=pools(true),beta1=pools(false),x2=pools(true,2048,1024,64);
+  check(x4.compare(pools(true).bytes())==result::match,"ModelPools x4 peers agree");
+  check(x4.compare(beta1.bytes())==result::entries && beta1.compare(x4.bytes())==result::entries,"ModelPools x4 and a peer without rule 28 refuse both ways");
+  check(x4.compare(x2.bytes())==result::value && x2.compare(x4.bytes())==result::value,"ModelPools x4 and x2 refuse both ways");
+  gameplay_capabilities::difference d;char name[160];x4.compare(beta1.bytes(),&d);x4.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name)=="28 ModelPools (not on the other PC)","the x4 peer names rule 28: "+std::string(name));
+  beta1.compare(x4.bytes(),&d);beta1.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name)=="28 ModelPools (disabled on this PC)","a beta.2 peer with the pools off names rule 28: "+std::string(name));
+  x4.compare(x2.bytes(),&d);x4.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name)=="28 ModelPools","x4 against x2 names rule 28: "+std::string(name));
  }
  // Rule 16, the NPC power rule ([Game] NpcPowerRule): enemies that pay for powers and decide every 2 s never share a
  // lockstep game with enemies that don't; revision 3 adds the visibility word; absent is {0,0,0,0}, a failed install unverified.

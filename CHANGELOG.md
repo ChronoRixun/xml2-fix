@@ -2,6 +2,26 @@
 
 ## 1.8.0 - <date TBD>
 
+- **Bigger model pools, opt-in** (`[Engine] ModelPools = x4`; SPEC-runtime-limits 2.4): every model the game shows
+  takes a handle and components from fixed pools (handles 692, IGB geometry 400, shader effects 432, animated actors
+  32, particle clouds 40, ...). When one is full the model is silently not made - an effect, a prop or a HUD head goes
+  missing (the beta 1 crash was the full IGB pool). `x4` moves the whole model aggregate (0x7bf6d0) into a block of
+  the fix's own and raises handles and transforms to 4096, attributes 1024, shader effects 2048, IGB 2048, actors
+  128, procedural geometry 1024 and particle clouds 128 (`x2`: half, clouds 80). Each particle cloud takes one of
+  the particle systems of a second static manager (0x7dad78, 40 retail; with more clouds than systems the game reads
+  through a NULL system at 0x578df3), so that manager moves and grows with the clouds; 753 fields of the model code are patched and
+  36 imm8 sites and three bitmap clears move into caves, all or nothing (on any byte that isn't the retail build's the game keeps its own
+  pools and the log says so). A full pool refuses spawns as well as models, so online a raise is **gameplay-agreement
+  rule 28 (ModelPools)**, `{installed, handles, IGB, actors}`, registered only when requested: peers must share the
+  pools, and a 1.8.0-beta.1 peer and a beta.2 peer with `x4` refuse each other at admission (the beta.2 PC names
+  `28 ModelPools`). Off by default in the DLL; Legends Classic 0.3.0-beta.2 builds write `x4`. The test pipe's status
+  shows the nine live counts.
+- **The team-combo popup no longer crashes the game** (owner report on 1.8.0-beta.1, Maintenance Garage hosting alone;
+  `XMen2.exe+0x1a6848`): when two heroes land a combo the game shows both heroes' heads, and makes each head model
+  from fixed model pools. With a pool full (the dump: 400 of 400 `CModelIGB`), the second head is never made, but
+  the game still showed the popup and its draw called through the missing head. The popup is now hidden in that
+  case, the way its own timeout hides it; the combo's XP and count are unchanged. Display only (no gameplay-agreement
+  rule of its own). `[Game] ComboPopupGuard=0` keeps the game's own behaviour.
 - **A frozen or silent player no longer splits the session** (0.3.0e, rule 25 revision 4): with three or more
   players, a player whose game froze (or whose network went silent) was removed by the host's own 10 s timeout
   without the survivors' agreed cut frame; the other joiner then waited for the host's part of the agreement, its

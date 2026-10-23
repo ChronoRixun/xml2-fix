@@ -40,6 +40,7 @@ with_exe = {
     "xml2_test_mode_test", "xml2_lockon_effects_test", "xml2_box_harm_test",
     "xml2_harm_single_chain_test", "xml2_harm_loop_startup_test", "xml2_reliable_receive_test",
     "xml2_campaign_sender_test", "xml2_receive_validation_test", "xml2_join_in_progress_test",
+    "xml2_combo_heads_test",
 }
 skip = {
     "xml2_test", "lcsave_durable_parity", "lcsave_test", "xml2_save_startup_test",

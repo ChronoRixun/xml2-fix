@@ -67,6 +67,7 @@ No settings file is needed. Without one, the fix does the following; everything 
 | [OpenSpy redirect](#-online) | the game's GameSpy lookups go to OpenSpy | `[Online]` `Domain=off` |
 | [LocalIP](#-online) | the game takes the address this PC reaches the internet from as its own, not a virtual adapter's | `[Online]` `LocalIP=first` |
 | [Four rows in *Advanced options*](#%EF%B8%8F-display) | display mode, frame rate, VSync and run in background; they change nothing until you change them | `[Display]` `InGameOptions=0` |
+| Combo popup guard | a team-combo popup that could not get both heroes' heads (the game's model pools full) is hidden instead of crashing the game (XMen2.exe+0x1a6848); the combo still counts | `[Game]` `ComboPopupGuard=0` |
 | [Mods folder](#-mods) | files in `mods\` next to the game are used in place of the game's; with no files there, nothing is hooked | remove or empty `mods\`, or switch a mod off in `mods\load-order.txt` |
 | `xml2-fix.log` | what the game saw and what the fix did, written next to the DLL at every start | — |
 
@@ -668,6 +669,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `BreakRule` | `xml2` | `xml1`: an object whose definition carries `xml1structure` breaks only to an attack of that level on X-Men Legends I's scale ([details](docs/break-rule.md)) |
 | `PlacementCrush` | `xml2` | `xml1`: while an object is settled on the floor (at a zone's load, or 0.5 s after a spawn in play) it no longer crushes another, so furniture authored overlapping makes no hits on entry ([details](docs/placement-crush.md)) |
 | `DoubleHeal` | `1` | `0`: a health or energy pack always heals its single amount and plays the pack's own sound, as in X-Men Legends I (XMen2.exe sometimes doubles it and plays a darker "double" sound; see `src/double_heal_rules.hpp`); the stats screen's Body and Focus helps drop their double-chance lines |
+| `ComboPopupGuard` | `1` | `0`: the game's own team-combo popup, which crashes (XMen2.exe+0x1a6848) when one of the two heroes' heads could not be made because the game's model pools were full; with `1` such a popup is hidden as its own timeout hides it, the combo's XP and count unchanged (see `src/combo_heads_rules.hpp`) |
 | `CharacterLadderPaths` | `0` | `1`: characters follow the descent paths a mod gives their ladder animations ([details](docs/character-ladder-paths.md)) |
 | `AutoAdvance` | `1` | a conversation line with a negative `timeDelay` goes on by itself once its voice has played; `0`: every line waits for accept |
 | `ReplyVoices` | `1` | a chosen reply's voice plays out before its answer; `0`: cut one frame in, as the game has it |
@@ -742,6 +744,12 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `MoveTriggers` | *(the game's own, 19)* | `20` to `127` triggers per move (sounds, flashes and other events of a long attack) |
 | `EntityCapacity` | `0` | `1`: 32 actor / 768 generic / 1024 World entity handles instead of 32 / 224 / 256; needs `[Save] Format=lc` ([details](docs/entity-capacity.md)) |
 | `ScriptFunctions` | *(1024 with `[Game] ForcedTeams`, otherwise the game's own, 320)* | `321` to `4096` script function names; `320` keeps the game's own limit ([details](docs/script-functions.md)) |
+
+**[Engine]** ([details](docs/model-pools.md))
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `ModelPools` | `off` | `x4`: the model component pools four times the game's (handles and transforms 4096, IGB 2048, shader effects 2048, actors 128, particle clouds 128 ...), `x2`: half that; online it is gameplay-agreement rule 28, so every player needs the same value ([details](docs/model-pools.md#co-op)) |
 
 **[TestMode]**: optional player testing tools ([details](#player-testing-mode)); either switch disables online play until both are off and the game is restarted.
 

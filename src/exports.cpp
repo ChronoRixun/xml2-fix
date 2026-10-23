@@ -26,6 +26,7 @@
 #include "harm_loop_startup.hpp"
 #include "harm_single_chain.hpp"
 #include "double_heal.hpp"
+#include "combo_heads.hpp"
 #include "xml1_capability_rules.hpp"
 #include "conversations.hpp"
 #include "confirmation_release.hpp"
@@ -54,6 +55,8 @@
 #include "iat_hook.hpp"
 #include "ini.hpp"
 #include "limits.hpp"
+#include "model_pools.hpp"
+#include "model_pools_rules.hpp"
 #include "geometry_sharing.hpp"
 #include "ladder_paths.hpp"
 #include "log.hpp"
@@ -416,6 +419,13 @@ namespace
 		// first asks for the actor table (getter 0x56b8e0) and the resource name table (0x55af80) from
 		// the CPrecacheMgr constructor, during its start-up.
 		limits::install(game);
+		// [Engine] ModelPools: the model aggregate (0x7bf6d0) is built at the first getter call, after this.
+		model_pools::install(game);
+		// A raise is rule 28 (ModelPools): a full pool refuses spawns, so co-op peers must share the capacities.
+		// Requested only: absent/off adds no entry (the released record); a requested raise that failed is unverified.
+		if (model_pools::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::model_pools_id, model_pools_rules::agreement_revision,
+				model_pools::agreement_values(), model_pools::verified());
 		geometry_sharing::install(game);
 		ladder_paths::install(game);
 		// X-Men Legends 1's rule for breaking objects ([Game] BreakRule=xml1): one vtable slot of the combat object and
@@ -441,6 +451,9 @@ namespace
 		// Target subtitle only: reads current affecters without changing combat
 		// state or consuming RNG. It needs no gameplay-agreement record.
 		resistance_display::install(game);
+		// The team-combo popup never draws without both heads (owner crash 2026-10-23: a null head at 0x5a6845 when a
+		// model pool was full): one HUD vtable slot (0x69dd58) no other module touches; display only, no agreement record.
+		combo_heads::install(game);
 		if (danger_room_healthbars::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::danger_room_healthbars_id, 1,
 				{danger_room_healthbars::installed() ? 1u : 0u,0,0,0}, danger_room_healthbars::verified());
