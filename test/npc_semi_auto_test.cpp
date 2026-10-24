@@ -403,6 +403,37 @@ int main(int argc, char** argv)
   }
   check(shots >= 30 && shots <= 33, "frame rate does not double recoil admission");
  }
+ // Round 7: discrete bullet rows (0.16 s and 0.17 s recoil, burst 1.5) share the gate with the
+ // projectile row; the deadline lands on whole frames like the original's 0.9 s gate.
+ for (const auto [bits, fps, frames] : {std::tuple<u32, int, long>{0x3e23d70a, 60, 10}, {0x3e23d70a, 49, 8},
+                                       {0x3e23d70a, 30, 5}, {0x3e2e147b, 60, 11}, {0x3e2e147b, 49, 9}}) {
+  state timer{}; float previous = -1; bool exact = true; int shots = 0;
+  for (int tick = 0; tick <= fps * 30; ++tick) {
+   const float time = float(tick) / fps;
+   if (!ready(timer, 100, 2, time)) continue;
+   if (previous >= 0) exact &= std::lround((time - previous) * fps) == frames;
+   timer = entered(100, 2, time, bits); previous = time; ++shots;
+  }
+  check(exact && shots == 1 + fps * 30 / frames, "bullet recoil admits one shot per frame-quantised gap");
+ }
+ {
+  std::vector<weapon> table, single;
+  for (const char* row : {"guard_p|3f666666|44098000|3f800000|00000001", "guard_m|3e23d70a|44098000|3fc00000|00000000",
+                          "guard_l|3e2e147b|44098000|3fc00000|00000000", "guard_mb|3e23d70a|44098000|3fc00000|00000000"}) {
+   const auto r = parse(row);
+   check(r.has_value(), "discrete bullet and projectile rows parse");
+   if (r) table.push_back(*r);
+  }
+  single = {table[0]};
+  check(canonicalize(table) && canonicalize(single) && table.size() == 4, "mixed weapon table canonicalizes");
+  check(fingerprint(table) != fingerprint(single), "added bullet rows change the agreement value");
+  gameplay_capabilities::record one, all;
+  one.add(16, npc_power::revision, {1, 1, 1, fingerprint(single)}, true);
+  all.add(16, npc_power::revision, {1, 1, 1, fingerprint(table)}, true);
+  one.finalize(); all.finalize();
+  check(one.compare(all.bytes()) != gameplay_capabilities::result::match && all.compare(one.bytes()) != gameplay_capabilities::result::match,
+        "peers with different weapon tables refuse each other");
+ }
  // Exercise the real callback and resolver-based candidate filter.
  std::array<std::byte, 0x800> actor{}, ai{};
  std::array<std::byte, 0x500> stats{};

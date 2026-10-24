@@ -11,8 +11,14 @@
 #include "limits_rules.hpp"
 #include "entity_capacity_layout.hpp"
 
-// Opt-in discrete non-bullet weapon compatibility. Source metadata supplies
-// recoil, weapon range and burst duration; input admission is actor-wide.
+// Opt-in discrete weapon compatibility (bullet, beam or projectile type; no
+// warm-up, no continuous beam). Source metadata supplies recoil, weapon range
+// and burst duration; input admission is actor-wide. The original's held-fire
+// branch (0xef8df) and input gate (0x42f60) are the same for all three types;
+// it reads the type only in the bullet line-of-sight drop at the top of each
+// update (0xef3ff..0xef434 via 0xfe550) and in the branches for an empty
+// near-target query 0x103850 (bullet 0xef9bc, which alone reads rapidfire; other 0xefc4a).
+// Those are not restored for any type (see docs/npc-weapon-round7.md).
 namespace npc_semi_auto_rules
 {
  using u32 = std::uint32_t;

@@ -298,6 +298,6 @@ namespace npc_semi_auto
   bool safe = true;
   applied = xml1_hook_transaction::apply(memory, patches, &safe);
   if (!applied) { if (!safe) game_version::refuse_startup(); fail("guarded transaction failed"); return; }
-  logger::write("NPC semi-auto: guarded non-bullet weapon brain and input gate, %zu source actors, fingerprint %08X; rule 16 revision 10 words 2-3", weapons.size(), fingerprint(weapons));
+  logger::write("NPC semi-auto: guarded discrete weapon brain and input gate, %zu source actors, fingerprint %08X; rule 16 revision 10 words 2-3", weapons.size(), fingerprint(weapons));
  }
 }

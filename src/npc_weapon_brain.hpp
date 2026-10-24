@@ -1,7 +1,7 @@
 #pragma once
 
 // Included inside npc_semi_auto's private namespace. The supported contract is
-// a discrete non-bullet weapon without warm-up. The native ranged brain retains
+// a discrete bullet, beam or projectile weapon without warm-up or continuous beam. The native ranged brain retains
 // its target validation, navigation, near-target selection and close-combat paths; this restores
 // the missing weapon branch and the separate actor-input gate.
 struct point { float x, y, z; };
