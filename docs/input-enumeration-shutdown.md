@@ -42,3 +42,42 @@ without the guard the held reader faults (first-chance access violation at `0x62
 manager already zero; with the guard the peer exits with the manager still set and completion still withheld, the
 reader finishes, then clears the manager and publishes completion. Ordinary load, return-to-menu and Quit sequences
 without staging: 2 of 5 unguarded quits raised the same fault; 0 of 20 guarded quits did.
+
+## Historical investigation before the repair
+
+# Native input-worker race on Quit
+
+The classic-build investigation found a first-chance access violation at
+`XMen2.exe+0x227375` (`0x627375`, reading address `0xC`) during native Quit.
+The process then exited with code zero. Exit zero alone does not establish an
+exception-free shutdown.
+
+The retail controller-enumeration worker starts at `0x618C90`. Multiple workers
+can coexist after returning to the main menu; this also occurs with the released
+1.7.1 companion and release-0.2.5 content. The loop checks shared manager
+`0xA6A7E4`, enumerates devices, then reloads that manager for the device count at
+`0x618D29`. A worker leaving at `0x618E53` clears the shared manager at
+`0x618E5A`. Another worker returning from enumeration can then pass null to
+the native count routine, producing the observed fault.
+
+Private debugger observations captured two overlapping workers in the combined
+build: one cleared the manager, and the other immediately faulted at the count
+routine. Ordinary released-build controls exited without this exception, with
+two and three overlapping workers observed. A diagnostic deliberately suspended
+one released-build worker immediately before its manager reload, let the other
+clear the manager, and resumed the first. This reproduced the same access
+violation with release-0.2.5 content and release-1.7.1 code. The freshly compiled
+release DLL's entire executable section matched the released DLL byte for byte.
+
+That last run is **staged thread scheduling**, not ordinary-play shutdown
+acceptance. It establishes the existing retail lifetime race. It does not measure
+the probability of encountering it in either build. The combined build also
+completed an ordinary approximately 29-minute session and native Quit without
+an exception. Normal-run frequency differences remain unquantified.
+
+No classic HUD destination modifies this worker, its registration or these
+shared globals. No teardown patch was added in the classic polish change.
+A separate repair should establish one owner for enumeration and shutdown,
+rather than merely suppressing the count routine's null dereference. Such a
+repair needs controller connection/reconnection and repeated main-menu
+round-trip coverage of its own.

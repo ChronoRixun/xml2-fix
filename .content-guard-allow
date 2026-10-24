@@ -1,5 +1,7 @@
 # Scoped exceptions for the builder content guard used on this C++ repository.
 # Each entry describes original code/art or invented test data; no game assets are accepted.
+DISASM src/input_worker.cpp # Authored register-preserving lifetime-accounting bridges; only the short guarded entry prologue is replayed, with no game listing or decompiled body.
+DISASM test/input_worker_test.cpp # Authored synthetic ABI probe seeds invented register values and measures our bridges; no game instruction listing or decompiled body.
 GAME_EXT tools/union_host/union_space.asm # Authored MASM zero-filled address-space reservation (DB DUP(0)) for the synthetic DLL host; no game bytes, instructions or disassembly. Retail image supplied locally at runtime.
 DISASM  test/resistance_display_install_test.cpp  # Authored inline assembler recreates a synthetic HUD caller frame and executes our emitted bridge; no game instruction listing.
 MEDIA  docs/discord-art/badge-cutscene.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.

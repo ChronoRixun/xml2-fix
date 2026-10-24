@@ -20,6 +20,18 @@
   spin 20.9 fps, timer at normal priority 18.1, timer above normal 55.4 (p90 17.1 ms), the game using ~0.2 of a CPU
   instead of a whole one. `TickWait = spin` keeps the beta 3 behaviour; rule 29 is unchanged
   ([docs](docs/online-tick-rate.md#the-15-fps-cliff-tickwait)).
+- **The classic look, opt-in** (`[Game] ClassicHud = xml1`, `[Game] ClassicCodex = 1`; 1.8.0-beta.5): two
+  presentation-only adapters for Legends Classic 0.4.0-beta.5's builder-generated assets. `ClassicHud = xml1` draws
+  the HUD from the build's composite atlas and panel/emblem models (one guarded transaction: eight four-byte pointer
+  writes and one five-byte call redirect, each checked against the retail bytes; scoped hero fills and target frame,
+  only the three HUD sprite batches remapped) and gives the small map a larger frame with a matching safe-area inset,
+  so fog and edge markers stay inside it; it refuses (stock HUD, logged reason) without the build's `lc-hud.txt`
+  marker `LC-HUD-4`, on an unexpected image base or on any retail-byte mismatch. `ClassicCodex = 1` binds the Codex's
+  Details action to the list entry under the cursor and makes Back from a biography return to that list (List Back
+  keeps the native Close); both hooks commit in one transaction with verified rollback. Absent, `0` or `off` make no
+  writes (the retired `ClassicHudPilot` key is ignored). Display only: no gameplay-agreement rule, no save change
+  ([docs](docs/classic-hud-pilot.md)). Refused-save dialogs now show the save's file name instead of its full path
+  (a long absolute path ran past the dialog box); the log and the refusal record keep the full path.
 - **Bigger model pools, opt-in** (`[Engine] ModelPools = x4`; SPEC-runtime-limits 2.4): every model the game shows
   takes a handle and components from fixed pools (handles 692, IGB geometry 400, shader effects 432, animated actors
   32, particle clouds 40, ...). When one is full the model is silently not made - an effect, a prop or a HUD head goes

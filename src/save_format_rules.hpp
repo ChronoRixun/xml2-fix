@@ -950,13 +950,35 @@ namespace save_format_rules
 	}
 
 	// The message shown when a read, write or delete was refused: the game's own text, then the reason.
+	inline std::string dialog_reason(const std::string_view reason)
+	{
+		// The native dialog wraps at spaces, so one absolute path can extend past
+		// its fixed content rectangle. Show the save's leaf name here only; the
+		// pending refusal, protection ledger and diagnostic log keep the full reason.
+		std::string text(reason);
+		for (std::size_t at = 0; at + 2 < text.size(); ++at)
+		{
+			const bool boundary = at == 0 || text[at - 1] == ' ' || text[at - 1] == '"' || text[at - 1] == '\'' || text[at - 1] == '(';
+			const auto slash = [](char c) { return c == '/' || c == '\\'; };
+			const bool letter = (text[at] >= 'A' && text[at] <= 'Z') || (text[at] >= 'a' && text[at] <= 'z');
+			const bool absolute = (letter && text[at + 1] == ':' && slash(text[at + 2])) ||
+			                      (slash(text[at]) && text[at + 1] == text[at]);
+			if (!boundary || !absolute) continue;
+			const auto end = text.find(".lcsave", at);
+			if (end == std::string::npos) continue;
+			const auto leaf = text.find_last_of("/\\", end);
+			if (leaf != std::string::npos && leaf >= at) text.erase(at, leaf - at + 1);
+		}
+		return text;
+	}
+
 	inline std::string message_with_reason(const std::string_view game_text, const std::string_view reason, const std::size_t capacity)
 	{
 		std::string text(game_text);
 		if (!reason.empty())
 		{
 			text += text.empty() ? "" : " - ";
-			text += reason;
+			text += dialog_reason(reason);
 		}
 		if (text.size() + 1 > capacity)
 		{

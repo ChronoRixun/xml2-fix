@@ -11425,6 +11425,15 @@ namespace
 			CHECK(notice_text(std::string(200, 'n')).size() == description_max && notice_text("x") == "XML2 Fix: x");
 			CHECK(message_with_reason("Load failed.", "why", 0x1a0) == "Load failed. - why" && message_with_reason("", "why", 0x1a0) == "why" && message_with_reason("text", "", 0x1a0) == "text");
 			CHECK(message_with_reason("abcdef", "ghij", 8).size() == 7);
+			// Dialogs wrap at spaces; an absolute save path can exceed their fixed
+			// content width. Keep the file/reason visible and retain the full path
+			// in the unchanged refusal/logging path, outside this UI formatter.
+			const std::string windows_path = "Q:\\Synthetic long folder\\Another folder\\SaveLC\\invented_slot.lcsave is damaged (fixture CRC)";
+			CHECK(message_with_reason("Synthetic failure", windows_path, 0x1a0) == "Synthetic failure - invented_slot.lcsave is damaged (fixture CRC)");
+			CHECK(message_with_reason("", "writing Q:/Synthetic long folder/SaveLC/invented_profile.lcsave failed: fixture", 0x1a0) == "writing invented_profile.lcsave failed: fixture");
+			CHECK(message_with_reason("", "\\\\fixture-host\\Synthetic folder\\SaveLC\\invented_slot.lcsave.bak refused", 0x1a0) == "invented_slot.lcsave.bak refused");
+			CHECK(message_with_reason("", "relative/invented_slot.lcsave refused", 0x1a0) == "relative/invented_slot.lcsave refused");
+			CHECK(windows_path.find("Synthetic long folder") != std::string::npos);
 		}
 		CHECK(crc32(reinterpret_cast<const std::uint8_t*>("123456789"), 9) == 0xcbf43926u);
 

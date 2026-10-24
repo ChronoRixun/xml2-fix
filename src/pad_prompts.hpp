@@ -21,4 +21,7 @@ namespace pad_prompts
 {
 	// Reads [Input]; patches XMen2.exe when its code is the retail build's. Before the game's code runs.
 	void install(HMODULE game);
+	// Current play binding for one HUD power slot (attack, smash, boost, Xtreme).
+	// Uses the existing device tracker; null when prompts were not installed.
+	const char* gameplay_power_label(int player, int slot);
 }

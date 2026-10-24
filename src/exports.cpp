@@ -70,6 +70,8 @@
 #include "danger_room_party.hpp"
 #include "danger_room_healthbars.hpp"
 #include "resistance_display.hpp"
+#include "classic_hud.hpp"
+#include "codex_menu.hpp"
 #include "revival_cost.hpp"
 #include "mod_loader.hpp"
 #include "new_game.hpp"
@@ -462,6 +464,8 @@ namespace
 		// Target subtitle only: reads current affecters without changing combat
 		// state or consuming RNG. It needs no gameplay-agreement record.
 		resistance_display::install(game);
+		classic_hud::install(game);
+		codex_menu::install(game);
 		// The team-combo popup never draws without both heads (owner crash 2026-10-23: a null head at 0x5a6845 when a
 		// model pool was full): one HUD vtable slot (0x69dd58) no other module touches; display only, no agreement record.
 		combo_heads::install(game);

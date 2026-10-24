@@ -32,8 +32,8 @@
 | Big mods              | 40 actors per zone, then a crash | up to 127 when a mod asks for it ([details](#bigger-zones)) |
 | Setup                 | — | copy one file |
 
-**Current release: XML2 Fix 1.8.0**, paired with Legends Classic builder 0.3.0 (content 24 / LC33)
-and Ultimate Legends launcher 0.4.0. Update the launcher first, then Rebuild, then Play.
+**Current release: XML2 Fix 1.8.0**, paired with Legends Classic builder 0.4.0 (content 25 / LC34 from
+0.4.0-beta.5, the classic look; betas 1-4: content 24 / LC33) and Ultimate Legends launcher 0.4.0. Update the launcher first, then Rebuild, then Play.
 
 Maintainers: [stable and beta release instructions](RELEASING.md).
 
@@ -697,6 +697,8 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `DeathSwitchClear` | `0` | `1`: when the controlled hero dies, the hero given its controller stops the walk its AI had started instead of finishing it with no input, as in X-Men Legends I ([details](docs/death-switch.md)) |
 | `ClassicMainBackdrop` | `0` | `1`: the classic main menu's Cerebro room is drawn with its original bright textures ([details](#classic-main-menu-backdrop)) |
 | `ClassicMainPanelBounds` | `0` | `1`: the classic main menu's buttons answer the mouse over their whole visible panels ([details](#classic-main-menu-backdrop)) |
+| `ClassicHud` | off | `xml1`: the HUD drawn from a Legends Classic build's classic atlas and models, with a larger small-map frame (1.8.0-beta.5; display only; refuses without the build's assets) ([details](docs/classic-hud-pilot.md)) |
+| `ClassicCodex` | `0` | `1`: the Codex's Details opens the list entry under the cursor and Back from a biography returns to the list (1.8.0-beta.5; display only) |
 | `DangerRoomParty` | `xml2` | `xml1`: original Cyclops/Phoenix/Storm/Wolverine fallback for an incomplete non-solo course party (requested-only rule 19 revision 1). |
 | `DangerRoomHealthBars` | `xml2` | `xml1`: show the target health gauge for protected Danger Room training opponents. Builder default on; requested-only gameplay rule 22, revision 1. Protection and course limits remain; native dirty-stat refresh/clamp timing parity is unproved. Required combo hits kill training targets through the native [course death/progress path](docs/danger-room-courses.md). |
 | `ResistanceDisplay` | `xml2` | `xml1`: original colored resistance subtitles under a targeted enemy's health gauge, using active scoped modifiers. Display only; no gameplay rule ([details](docs/resistance-display.md)). |
