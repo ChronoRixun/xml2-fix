@@ -422,7 +422,19 @@ add_executable(xml2_harm_loop_startup_test test/harm_loop_startup_test.cpp "${CM
 target_include_directories(xml2_harm_loop_startup_test PRIVATE src)
 target_link_options(xml2_harm_loop_startup_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
-add_executable(xml2_input_worker_test test/input_worker_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/input_worker.cpp)
+# The worker bridges read and write the retail globals at 0xa6a7e1/0xa6a7e4, so the fixture image spans them: the loader maps the
+# whole image at its fixed base before any other allocation, instead of the test reserving 0xa60000 itself (which fails whenever
+# Windows has already placed something there). Same 7 MB zero block as the reliable-receive test.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/input_worker_fixture.asm"
+".386
+.MODEL FLAT
+fixture_seg SEGMENT PARA PUBLIC 'CODE' ALIAS('.text$a')
+PUBLIC _fixture_space
+_fixture_space DB 700000h DUP(0)
+fixture_seg ENDS
+END
+")
+add_executable(xml2_input_worker_test test/input_worker_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/input_worker_fixture.asm" src/input_worker.cpp)
 target_include_directories(xml2_input_worker_test PRIVATE src)
 target_link_options(xml2_input_worker_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 

@@ -64,6 +64,7 @@ namespace
 	void end() { reinterpret_cast<call_t>(finish)(); }
 	unsigned& shared_manager() { return *reinterpret_cast<unsigned*>(manager); }
 	unsigned char& shared_stopped() { return *at(stopped); }
+	constexpr unsigned fixture_bytes = 0x700000;  // matches input_worker_fixture.asm; reaches past 0xa6a7e4
 	constexpr unsigned synthetic_manager = 0x12345678;
 	void reset_globals() { shared_manager() = synthetic_manager; shared_stopped() = 0; }
 
@@ -128,9 +129,15 @@ int main(int argc, char** argv)
 {
 	if (argc != 2 || reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr)) != image_base ||
 		reinterpret_cast<std::uintptr_t>(fixture_space) > entry) return 2;
+	// The retail globals (manager 0xa6a7e4, stopped 0xa6a7e1) live inside the fixture image itself, so the loader
+	// reserved them with the image; nothing is allocated at a fixed address here.
 	DWORD protection = 0;
-	if (!VirtualProtect(at(0x401000), 0x400000, PAGE_EXECUTE_READWRITE, &protection) ||
-		!VirtualAlloc(at(0xa60000), 0x10000, MEM_RESERVE|MEM_COMMIT, PAGE_READWRITE)) return 2;
+	MEMORY_BASIC_INFORMATION globals {};
+	if (!VirtualProtect(at(0x401000), fixture_bytes, PAGE_EXECUTE_READWRITE, &protection) ||
+		!VirtualQuery(at(manager), &globals, sizeof(globals)) || globals.State != MEM_COMMIT ||
+		reinterpret_cast<std::uintptr_t>(globals.AllocationBase) != image_base ||
+		!VirtualQuery(at(stopped), &globals, sizeof(globals)) || globals.State != MEM_COMMIT ||
+		reinterpret_cast<std::uintptr_t>(globals.AllocationBase) != image_base) return 2;
 	raw_guards(argv[1]); if (failures) return 1;
 	seed(); input_worker::install(reinterpret_cast<HMODULE>(0x500000));
 	check(!first_mismatch(at(image_base)), "foreign image untouched");
