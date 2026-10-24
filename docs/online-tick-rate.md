@@ -1,6 +1,6 @@
 # Online tick rate (`[Online] TickRate`)
 
-XML2 Fix 1.8.0-beta.3. Online sessions of the stock game run at 30 frames per second; single-player runs at 60.
+XML2 Fix 1.8.0-beta.3 (TickWait: beta.4). Online sessions of the stock game run at 30 frames per second; single-player runs at 60.
 
 ```ini
 [Online]
@@ -21,6 +21,44 @@ at either rate; a higher rate means more, shorter steps, more input records and 
 checking the 16 bytes, with a read-back (put back on a mismatch). `[Display] FrameRate` patches the offline `1/60`
 in the same bytes; each patch accepts the other's value there. With `FrameRate` set the fix paces offline frames
 and, online, the game's spin still caps the session at the tick rate (a `FrameRate` below it slows the session).
+
+## The 15 fps cliff (`TickWait`)
+
+```ini
+[Online]
+TickWait = timer   ; timer (default with TickRate) or spin (the game's own busy-spin, as in 1.8.0-beta.3)
+```
+
+Beta 3 at 60 on a PC running two other games (agent test games) hosted alone at ~15 fps; at 30 the same PC played
+normally. The minimum-frame wait (0x401fe9..0x40200c) spins on the game clock (igTimer, QueryPerformanceCounter), so
+the Windows timer period plays no part (no Sleep anywhere in it), and a windowed/borderless D3D8 device never waits
+for the vertical blank (no vsync quantisation). What the spin does is make every game a 100 % CPU thread. On a
+saturated PC (every logical CPU busy - measured 95-99 %, run queue 5-24 during the reports) the scheduler takes such
+a thread off the CPU for whole quanta: the slow frames' game thread ran 150-430 kcycles per ms against ~2900 when it
+runs (QueryThreadCycleTime), i.e. it was descheduled 85-95 % of those frames. A 60 Hz frame has ~11 ms of spin slack
+and absorbs none of that; a 30 Hz frame's ~28 ms absorbed one quantum, which is why beta 2 hid it. The lockstep's
+own step (0x559190: the slowest participant's recorded frame time) has no rounding.
+
+`TickWait = timer` writes 0.0 into the online branch's minimum (`frame_rate_rules::online_wait_patch`, the same 16
+checked bytes; the TickRate, TickWait and FrameRate patches accept each other's values) and the fix paces online frames
+(session 0xa53058 +0x420 set, what 0x610d20 reads) at the tick rate from its Present hook - or at `FrameRate` when that
+is lower - with the high-resolution waitable timer, a final 0.6 ms spin, and the wait at above-normal priority so the
+woken thread preempts busy normal-priority threads (without it the timer wake queued a quantum: 28-32 ms frames followed
+by 2-4 ms catch-ups). Rule 29 is unchanged: the wait is local, the rate is the session's.
+
+| host on 4 CPUs + 12 busy processes, 60 Hz, solo room | fps (native counter) | period p50 / p90 ms | game CPU |
+|---|---|---|---|
+| spin (beta 3) | 22.3 | 16.8 / 101.7 | 0.32 cores |
+| timer, normal priority | 17.8 | 80.1 / 102.6 | 0.05 |
+| timer, the wait above normal (1.8.0-beta.4 default) | 57.9 | 16.7 / 17.1 (p99 89.9) | 0.19 |
+| timer, the whole thread above normal online (`TickPriority = thread`) | 59.8 | 16.7 / 17.1 (p99 17.5) | 0.21 |
+
+`[Online] TickPriority = thread` keeps the game's thread above normal for as long as frames are online (the default,
+`wait`, raises it only for the pacer's wait). It measured best, but a whole-thread raise can starve the game's own
+normal-priority workers (streaming, audio) during an online zone load; it stays opt-in until beta testers have run it.
+
+The lockstep's not-ready iterations (waiting for a remote player's input) still loop without waiting, as stock; they
+never reach Present.
 
 ## Co-op
 

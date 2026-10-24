@@ -11,6 +11,15 @@
   and a 30 PC refuse each other naming `29 TickRate`; a 60 request that cannot patch the game advertises 30. The
   lost-player records a survivor re-sends keep their length in seconds (64 at 30, 128 at 60). Absent = the game's
   30 and the released record; Legends Classic 0.3.0-beta.3 builds write `60` ([docs](docs/online-tick-rate.md)).
+- **Online frames wait instead of spinning** (`[Online] TickWait`, 1.8.0-beta.4): beta 3 at `TickRate = 60` fell to
+  ~15-20 fps on a busy PC (other games running). The game's online minimum-frame wait is a busy-spin, so every online
+  game is a 100 % CPU thread; on a saturated PC the scheduler takes it off the CPU for whole quanta, and a 1/60 s
+  frame has no slack to absorb that (a 1/30 s frame's spin did). With `TickRate` set the online minimum is now 0.0
+  and the fix paces online frames at the tick rate from its Present hook: a high-resolution timer, a 0.6 ms spin,
+  the wait at above-normal thread priority. Measured with the host on 4 CPUs shared with 12 busy processes:
+  spin 20.9 fps, timer at normal priority 18.1, timer above normal 55.4 (p90 17.1 ms), the game using ~0.2 of a CPU
+  instead of a whole one. `TickWait = spin` keeps the beta 3 behaviour; rule 29 is unchanged
+  ([docs](docs/online-tick-rate.md#the-15-fps-cliff-tickwait)).
 - **Bigger model pools, opt-in** (`[Engine] ModelPools = x4`; SPEC-runtime-limits 2.4): every model the game shows
   takes a handle and components from fixed pools (handles 692, IGB geometry 400, shader effects 432, animated actors
   32, particle clouds 40, ...). When one is full the model is silently not made - an effect, a prop or a HUD head goes

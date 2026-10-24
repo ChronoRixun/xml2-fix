@@ -180,23 +180,70 @@ namespace frame_rate_rules
 		"the game's online 30 fps spin (CClient::frame, 0x401dab)", 0x1dab,
 		{0xC7, 0x46, 0x18, 0x89, 0x88, 0x08, 0x3D, 0xEB, 0x07, 0xC7, 0x46, 0x18, 0x89, 0x88, 0x88, 0x3C}, 3, {0x89, 0x88, 0x88, 0x3C}};
 
-	// The two patches share the checked bytes: each one's check takes the other's field as retail when it holds
-	// exactly that other patch's replacement (FrameRate's 0.0 for the offline 1/60, TickRate's 1/60 for the online
-	// 1/30), and as anyone else's change otherwise.
+	// [Online] TickWait = timer (the default with TickRate): the online branch's minimum becomes 0.0, so CClient::frame
+	// no longer busy-spins online either, and the fix paces online frames at the tick rate from its Present hook with a
+	// sleeping wait (frame_rate.cpp, pace_online). The spin made every online game a 100 % CPU thread; on a loaded PC
+	// the scheduler then takes it off the CPU for whole quanta, and a 60 Hz frame has no slack to absorb that
+	// (docs/online-tick-rate.md, "the 15 fps cliff"). Same 16 checked bytes, same field as online_tick_patch.
+	inline constexpr code_patch online_wait_patch{
+		"the game's online spin (CClient::frame, 0x401dab)", 0x1dab,
+		{0xC7, 0x46, 0x18, 0x89, 0x88, 0x08, 0x3D, 0xEB, 0x07, 0xC7, 0x46, 0x18, 0x89, 0x88, 0x88, 0x3C}, 3, {0x00, 0x00, 0x00, 0x00}};
+
+	// The patches share the checked bytes: each one's check takes the other field as retail when it holds exactly
+	// one of the other side's replacements (FrameRate's 0.0 for the offline 1/60; TickRate's 1/60 or TickWait's 0.0
+	// for the online 1/30), and as anyone else's change otherwise.
 	inline std::array<std::uint8_t, 16> as_seen_by(const code_patch& patch, const std::uint8_t* bytes)
 	{
 		std::array<std::uint8_t, 16> seen{};
 		std::memcpy(seen.data(), bytes, seen.size());
-		if (patch.rva != stock_cap_patch.rva || patch.rva != online_tick_patch.rva)
+		if (patch.rva != stock_cap_patch.rva || patch.rva != online_tick_patch.rva || patch.rva != online_wait_patch.rva)
 		{
 			return seen;
 		}
-		const code_patch& other = patch.offset == stock_cap_patch.offset ? online_tick_patch : stock_cap_patch;
-		if (std::memcmp(seen.data() + other.offset, other.replacement.data(), other.replacement.size()) == 0)
+		const bool offline_field = patch.offset == stock_cap_patch.offset;
+		for (const code_patch* other : {&online_tick_patch, &online_wait_patch, &stock_cap_patch})
 		{
-			std::memcpy(seen.data() + other.offset, other.expected.data() + other.offset, other.replacement.size());
+			if ((other->offset == stock_cap_patch.offset) == offline_field)
+			{
+				continue; // the same field as `patch`: never taken as retail
+			}
+			if (std::memcmp(seen.data() + other->offset, other->replacement.data(), other->replacement.size()) == 0)
+			{
+				std::memcpy(seen.data() + other->offset, other->expected.data() + other->offset, other->replacement.size());
+				break;
+			}
 		}
 		return seen;
+	}
+
+	// [Online] TickPriority: "wait" (default: only the pacer's wait above normal) or "thread" (the game's thread above
+	// normal while frames are online).
+	inline bool parse_tick_priority_thread(const std::string& text)
+	{
+		std::string value;
+		for (const char c : text)
+		{
+			if (!std::isspace(static_cast<unsigned char>(c))) value += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		}
+		return value == "thread";
+	}
+
+	// What the fix paces an online frame at: the session's tick rate, or FrameRate's when that is lower (0 = none).
+	inline unsigned online_pace_fps(const unsigned offline_fps, const unsigned tick_fps)
+	{
+		return offline_fps && offline_fps < tick_fps ? offline_fps : tick_fps;
+	}
+
+	// [Online] TickWait: "timer" (default) or "spin" (the game's own busy-spin, as in 1.8.0 beta 3).
+	inline bool parse_tick_wait_spin(const std::optional<std::string>& text)
+	{
+		if (!text) return false;
+		std::string value;
+		for (const char c : *text)
+		{
+			if (!std::isspace(static_cast<unsigned char>(c))) value += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		}
+		return value == "spin";
 	}
 
 	inline bool matches(const code_patch& patch, const std::uint8_t* bytes)

@@ -996,6 +996,18 @@ namespace
 			foreign = patch.expected;
 			foreign[13] ^= 1;
 			CHECK(!matches(tick, foreign.data()) && !matches(patch, foreign.data()));
+			// [Online] TickWait=timer: the online field becomes 0.0; FrameRate's patch accepts it like TickRate's 1/60.
+			const auto& wait = online_wait_patch;
+			CHECK(wait.rva == patch.rva && wait.expected == patch.expected && wait.offset == 3 && std::bit_cast<float>(wait.replacement) == 0.0f);
+			auto waited = patch.expected;
+			std::copy(wait.replacement.begin(), wait.replacement.end(), waited.begin() + 3);
+			CHECK(matches(patch, waited.data()) && matches_patched(wait, waited.data()) && !matches(wait, waited.data()) && !matches(tick, waited.data()));
+			std::copy(patch.replacement.begin(), patch.replacement.end(), waited.begin() + 12);
+			CHECK(matches_patched(patch, waited.data()) && matches_patched(wait, waited.data()));
+			CHECK(matches(wait, offline_zero.data()) && !matches_patched(wait, offline_zero.data()));
+			CHECK(online_pace_fps(0, 60) == 60 && online_pace_fps(180, 60) == 60 && online_pace_fps(30, 60) == 30 && online_pace_fps(0, 30) == 30);
+			CHECK(parse_tick_priority_thread(" Thread ") && !parse_tick_priority_thread("wait") && !parse_tick_priority_thread(""));
+			CHECK(!parse_tick_wait_spin(std::nullopt) && parse_tick_wait_spin(std::string(" Spin ")) && !parse_tick_wait_spin(std::string("timer")));
 			CHECK(!parse_tick_rate(std::nullopt).requested && parse_tick_rate(std::nullopt).fps == 30);
 			CHECK(parse_tick_rate(std::string(" 60 ")).requested && parse_tick_rate(std::string("60")).fps == 60 && parse_tick_rate(std::string("60")).valid);
 			CHECK(parse_tick_rate(std::string("30")).fps == 30 && parse_tick_rate(std::string("30")).requested);
