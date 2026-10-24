@@ -196,6 +196,8 @@ namespace
 	struct image
 	{
 		std::vector<std::uint8_t> mem; // mapped at image_base
+		struct section { char name[9]{}; DWORD va = 0, size = 0; };
+		std::vector<section> secs;
 		bool load(const char* path)
 		{
 			std::ifstream f(path, std::ios::binary);
@@ -214,6 +216,11 @@ namespace
 				const auto va = u32(h + 12), raw = u32(h + 20), size = std::min(u32(h + 16), u32(h + 8) ? u32(h + 8) : u32(h + 16));
 				if (raw + size > file.size() || va + size > mem.size()) return false;
 				std::memcpy(&mem[va], &file[raw], size);
+				section sec;
+				std::memcpy(sec.name, &file[h], 8);
+				sec.va = image_base + va;
+				sec.size = size;
+				secs.push_back(sec);
 			}
 			return true;
 		}
@@ -237,7 +244,7 @@ namespace
 		CHECK(p.has_value());
 		if (!p) return;
 		std::printf("  x4: %zu writes, %zu fields, %zu caves, %zu cave bytes\n", p->writes.size(), p->fields, p->caves, p->cave_code.size());
-		CHECK(p->caves == 39 && p->cave_code.size() < 0x1000);
+		CHECK(p->caves == 42 && p->cave_code.size() < 0x1000); // 36 imm8, 5 bitmap clears, 1 findNext copy
 		// no two writes touch the same byte; each write's own size equals its retail bytes
 		std::vector<std::pair<DWORD, DWORD>> ranges;
 		for (const auto& w : p->writes)
@@ -314,12 +321,233 @@ namespace
 	}
 }
 
+namespace
+{
+	std::int32_t rel32(const std::uint8_t* p)
+	{
+		std::int32_t v;
+		std::memcpy(&v, p, 4);
+		return v;
+	}
+
+	// The x2 and x4 plans against the retail exe: every write's and every read-only expectation's bytes, every branch
+	// of every cave (the moved one decoded from the exe, the generated one from the cave code, the entry jump and the
+	// jump back), the five bitmap clears' sizes, the findNext copy, and once applied: no reference to the old aggregate
+	// or particle-system manager left in any initialised byte of .text, .rdata or .data.
+	void check_exe_plan(const image& retail_image, const capacities& caps, const char* name)
+	{
+		std::printf("plan %s against the exe\n", name);
+		const DWORD block = 0x12340000, cave_base = 0x23450000, systems = 0x34560000;
+		const auto a = aggregate_layout_for(caps);
+		const auto p = plan_for(a, blocks{block, systems}, cave_base);
+		CHECK(p.has_value());
+		if (!p) return;
+		image img = retail_image;
+		std::printf("  %zu writes, %zu fields, %zu caves, %zu cave bytes, %zu read-only expectations\n", p->writes.size(), p->fields, p->caves, p->cave_code.size(), p->expects.size());
+		CHECK(p->caves == 42 && p->cave_code.size() < 0x1000);
+		std::vector<std::pair<DWORD, DWORD>> ranges;
+		for (const auto& w : p->writes)
+		{
+			CHECK(w.bytes.size() == w.before.size() && std::memcmp(img.at(w.va), w.before.data(), w.before.size()) == 0);
+			ranges.push_back({w.va, w.va + static_cast<DWORD>(w.bytes.size())});
+		}
+		std::sort(ranges.begin(), ranges.end());
+		for (std::size_t i = 1; i < ranges.size(); ++i) CHECK(ranges[i - 1].second <= ranges[i].first);
+		CHECK(p->expects.size() == helper_clones.size());
+		for (const auto& e : p->expects) CHECK(e.bytes == e.before && std::memcmp(img.at(e.va), e.before.data(), e.before.size()) == 0);
+		const auto& code = p->cave_code;
+		const auto cave_at = [&](const DWORD va) -> const std::uint8_t* { return va >= cave_base && va < cave_base + code.size() ? &code[va - cave_base] : nullptr; };
+		const auto write_at = [&](const DWORD va) -> const write* {
+			for (const auto& w : p->writes)
+				if (w.va == va) return &w;
+			return nullptr;
+		};
+		// The imm8 caves.
+		int branches = 0;
+		for (const auto& c : model_pools_sites::caves)
+		{
+			const auto* w = write_at(c.va);
+			CHECK(w && w->bytes.size() == c.resume - c.va && w->bytes[0] == 0xe9);
+			if (!w) continue;
+			for (std::size_t i = 5; i < w->bytes.size(); ++i) CHECK(w->bytes[i] == 0x90);
+			DWORD at = c.va + 5 + rel32(&w->bytes[1]);
+			for (std::size_t i = c.first; i < static_cast<std::size_t>(c.first) + c.count; ++i)
+			{
+				const auto& in = model_pools_sites::span_instructions[i];
+				const auto original = bytes_of(in.hex);
+				const auto* x = cave_at(at);
+				CHECK(x != nullptr);
+				if (!x) break;
+				using model_pools_sites::op;
+				switch (in.how)
+				{
+				case op::branch:
+				{
+					// the exe's own branch (rel8 7x or rel32 0f 8x): its target and condition are the table's
+					DWORD target = 0;
+					std::uint8_t cc = 0xff;
+					if (original.size() == 2 && (original[0] & 0xf0) == 0x70)
+					{
+						target = in.va + 2 + static_cast<std::int8_t>(original[1]);
+						cc = original[0] & 0x0f;
+					}
+					else if (original.size() == 6 && original[0] == 0x0f && (original[1] & 0xf0) == 0x80)
+					{
+						target = in.va + 6 + rel32(&original[2]);
+						cc = original[1] & 0x0f;
+					}
+					CHECK(std::memcmp(img.at(in.va), original.data(), original.size()) == 0);
+					CHECK(target == in.target && cc == in.condition);
+					CHECK(!(target > c.va && target < c.resume)); // never back into the moved span
+					CHECK(x[0] == 0x0f && x[1] == (0x80 | in.condition) && at + 6 + rel32(x + 2) == in.target);
+					at += 6;
+					++branches;
+					break;
+				}
+				case op::copy:
+					CHECK(x[0] == original[0]);
+					at += static_cast<DWORD>(original.size());
+					break;
+				case op::widen_cmp:
+					CHECK(x[0] == 0x81 && original[0] == 0x83 && x[1] == original[1]);
+					at += static_cast<DWORD>(original.size()) + 3;
+					break;
+				case op::widen_push:
+					CHECK(x[0] == 0x68 && original[0] == 0x6a);
+					at += 5;
+					break;
+				}
+			}
+			const auto* back = cave_at(at);
+			CHECK(back && back[0] == 0xe9 && at + 5 + rel32(back + 1) == c.resume);
+		}
+		std::printf("  %d cave branches aimed at their exe targets\n", branches);
+		CHECK(branches > 0);
+		// The bitmap clears: the whole bitmap, then back.
+		for (const auto& c : bitmap_clears)
+		{
+			const auto* w = write_at(c.va);
+			CHECK(w && w->bytes[0] == 0xe9 && w->bytes.size() == c.resume - c.va && w->before == bytes_of(c.hex));
+			if (!w) continue;
+			const DWORD entry = c.va + 5 + rel32(&w->bytes[1]);
+			const auto* x = cave_at(entry);
+			CHECK(x != nullptr);
+			if (!x) continue;
+			if (c.zero_edx)
+			{
+				CHECK(x[0] == 0x33 && x[1] == 0xd2);
+				x += 2;
+			}
+			const std::uint8_t head[] = {0x50, 0x51, 0x57, 0x33, 0xc0, 0xb9};
+			const std::uint8_t tail[] = {0xf3, 0xab, 0x5f, 0x59, 0x58, 0xe9};
+			CHECK(std::memcmp(x, head, sizeof head) == 0 && std::memcmp(x + 10, tail, sizeof tail) == 0);
+			std::uint32_t words;
+			std::memcpy(&words, x + 6, 4);
+			const DWORD want = c.particle_systems ? a.psys.words : a.pool[index(c.pool)].words;
+			const int bits = c.particle_systems ? a.psys.capacity : a.pool[index(c.pool)].capacity;
+			CHECK(words == want && 32 * words >= static_cast<DWORD>(bits));
+			const DWORD jmp_at = entry + (c.zero_edx ? 2 : 0) + 15;
+			CHECK(jmp_at + 5 + rel32(x + 16) == c.resume);
+		}
+		// The findNext copy: the helper's own bytes with the pool's capacity in its five numbers, the one call moved.
+		for (const auto& h : helper_clones)
+		{
+			const auto* w = write_at(h.call);
+			CHECK(w && w->bytes[0] == 0xe8 && w->before == bytes_of(h.call_hex));
+			CHECK(static_cast<DWORD>(h.call + 5 + rel32(img.at(h.call) + 1)) == h.helper); // the exe calls the shared helper there
+			CHECK(static_cast<DWORD>(0x4053c4 + 5 + rel32(img.at(0x4053c4) + 1)) == h.helper); // and the FX-template destructor keeps it
+			if (!w) continue;
+			const DWORD entry = h.call + 5 + rel32(&w->bytes[1]);
+			const auto* x = cave_at(entry);
+			const auto helper = bytes_of(h.hex);
+			CHECK(x && entry % 16 == 0 && entry + helper.size() <= cave_base + code.size());
+			if (!x) continue;
+			CHECK(std::memcmp(img.at(h.helper), helper.data(), helper.size()) == 0);
+			CHECK(helper.back() == 0x00 && helper[helper.size() - 3] == 0xc2); // through its last ret 8
+			std::vector<std::uint8_t> want = helper;
+			for (const auto o : h.capacity_at) put32(want, o, static_cast<std::uint32_t>(a.pool[index(h.pool)].capacity));
+			CHECK(std::memcmp(x, want.data(), want.size()) == 0);
+			int retail_numbers = 0; // the five are every 220 in the helper
+			for (std::size_t i = 0; i + 4 <= helper.size(); ++i)
+				if (operand(h.hex, i, 4) == static_cast<std::uint32_t>(retail_capacities[index(h.pool)])) ++retail_numbers;
+			CHECK(retail_numbers == static_cast<int>(h.capacity_at.size()));
+		}
+		// Applied, over every initialised byte (unaligned) of .text, .rdata and .data: the plan leaves no old aggregate or
+		// particle-system manager address in any byte it writes, adds none anywhere, and removes exactly the 11 references
+		// (8 aggregate, 3 manager). Every raw match left is a retail byte run that is not an operand
+		// (scripts/check_model_pools_text.py decodes the whole .text: 11 operand references, all rows). The stationary
+		// init guards 0x7dad68 and 0x7dc868 sit just past each range and stay. Aligned dwords of .rdata/.data (pointers)
+		// match only inside the import-name strings at 0x6d28d0.
+		const auto scan = [](image& m)
+		{
+			std::set<DWORD> found;
+			std::size_t positions = 0, pointers = 0;
+			for (const auto& sec : m.secs)
+			{
+				const std::string n(sec.name);
+				if (n != ".text" && n != ".rdata" && n != ".data") continue;
+				for (DWORD va = sec.va; va + 4 <= sec.va + sec.size; ++va)
+				{
+					std::uint32_t v;
+					std::memcpy(&v, m.at(va), 4);
+					++positions;
+					if ((v >= retail_aggregate && v < init_guard) || (v >= retail_particle_manager && v < particle_manager_guard))
+					{
+						found.insert(va);
+						if (n != ".text" && va % 4 == 0 && va != 0x6d28d0) ++pointers;
+					}
+				}
+			}
+			return std::make_tuple(found, positions, pointers);
+		};
+		image retail_copy = retail_image;
+		const auto [before, positions, retail_pointers] = scan(retail_copy);
+		for (const auto& w : p->writes) std::memcpy(img.at(w.va), w.bytes.data(), w.bytes.size());
+		const auto [after, positions_after, pointers] = scan(img);
+		const auto in_write = [&](const DWORD va)
+		{
+			for (const auto& w : p->writes)
+				if (va + 4 > w.va && va < w.va + w.bytes.size()) return true;
+			return false;
+		};
+		int added = 0, left_in_writes = 0, removed = 0, removed_outside = 0;
+		for (const auto va : after)
+		{
+			if (!before.count(va)) ++added;
+			if (in_write(va))
+			{
+				++left_in_writes;
+				std::printf("  old address left in a write at 0x%08lx\n", static_cast<unsigned long>(va));
+			}
+		}
+		for (const auto va : before)
+			if (!after.count(va))
+			{
+				++removed;
+				if (!in_write(va)) ++removed_outside;
+			}
+		std::printf("  raw scan over %zu positions: retail %zu matches, patched %zu (%d removed, %d added, %d left in writes)\n", positions, before.size(), after.size(), removed, added, left_in_writes);
+		CHECK(positions > 2500000 && positions == positions_after);
+		CHECK(added == 0 && left_in_writes == 0 && removed == 11 && removed_outside == 0 && retail_pointers == 0 && pointers == 0);
+	}
+}
+
 int main(int argc, char** argv)
 {
 	check_setting();
 	check_layouts();
 	check_sites();
 	check_plan(argc > 1 ? argv[1] : nullptr);
+	if (argc > 1)
+	{
+		image img;
+		CHECK(img.load(argv[1]));
+		if (!img.mem.empty())
+		{
+			check_exe_plan(img, x2_capacities, "x2");
+			check_exe_plan(img, x4_capacities, "x4");
+		}
+	}
 	std::printf("model pools: %d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;
 }

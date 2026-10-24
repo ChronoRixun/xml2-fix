@@ -52,11 +52,14 @@
 #include "xml1_turrets.hpp"
 #include "game_version.hpp"
 #include "gamepad_fix.hpp"
+#include "input_worker.hpp"
 #include "iat_hook.hpp"
 #include "ini.hpp"
 #include "limits.hpp"
 #include "model_pools.hpp"
 #include "model_pools_rules.hpp"
+#include "online_tick.hpp"
+#include "frame_rate_rules.hpp"
 #include "geometry_sharing.hpp"
 #include "ladder_paths.hpp"
 #include "log.hpp"
@@ -189,6 +192,7 @@ namespace
 		xml2_pad_bindings::install();
 
 		const HMODULE game = GetModuleHandleW(nullptr);
+		input_worker::install(game);
 		// The button prompts: the pad's names for a player on a pad, the power wheel's buttons of play. Code and
 		// data the game runs from its first menu on; none of the sites is another module's.
 		pad_prompts::install(game);
@@ -426,6 +430,13 @@ namespace
 		if (model_pools::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::model_pools_id, model_pools_rules::agreement_revision,
 				model_pools::agreement_values(), model_pools::verified());
+		// [Online] TickRate: the online frame's 1/30 s as 1/60 s (docs/online-tick-rate.md). Before the exe's code runs.
+		// Rule 29 (TickRate) carries the rate in effect whenever the key is there: lockstep runs every PC's frames
+		// together, so a 60 and a 30 PC refuse each other by name; absent = the game's 30 and the released record.
+		online_tick::install(game);
+		if (online_tick::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::tick_rate_id, frame_rate_rules::tick_rate_revision,
+				online_tick::agreement_values(), true);
 		geometry_sharing::install(game);
 		ladder_paths::install(game);
 		// X-Men Legends 1's rule for breaking objects ([Game] BreakRule=xml1): one vtable slot of the combat object and

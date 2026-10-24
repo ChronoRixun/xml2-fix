@@ -977,6 +977,34 @@ namespace
 		CHECK(matches_patched(patch, patched.data()) && !matches_patched(patch, patch.expected.data()) && !matches(patch, patched.data()));
 		patched[3] ^= 1; // the 1/30 constant changed by someone else: not ours to touch
 		CHECK(!matches_patched(patch, patched.data()));
+		// [Online] TickRate=60: the online 1/30 becomes 1/60 in the same bytes; each patch accepts the other's.
+		{
+			const auto& tick = online_tick_patch;
+			CHECK(tick.rva == patch.rva && tick.expected == patch.expected && tick.offset == 3);
+			CHECK(std::bit_cast<float>(tick.replacement) == 1.0f / 60.0f);
+			auto both = patch.expected;
+			std::copy(tick.replacement.begin(), tick.replacement.end(), both.begin() + 3);
+			CHECK(matches(patch, both.data()) && matches_patched(tick, both.data()) && !matches(tick, both.data()));
+			std::copy(patch.replacement.begin(), patch.replacement.end(), both.begin() + 12);
+			CHECK(matches_patched(patch, both.data()) && matches_patched(tick, both.data()) && !matches(patch, both.data()));
+			auto offline_zero = patch.expected;
+			std::copy(patch.replacement.begin(), patch.replacement.end(), offline_zero.begin() + 12);
+			CHECK(matches(tick, offline_zero.data()) && !matches_patched(tick, offline_zero.data()));
+			auto foreign = patch.expected;
+			foreign[4] ^= 1; // someone else's online constant: neither patch touches it
+			CHECK(!matches(patch, foreign.data()) && !matches(tick, foreign.data()));
+			foreign = patch.expected;
+			foreign[13] ^= 1;
+			CHECK(!matches(tick, foreign.data()) && !matches(patch, foreign.data()));
+			CHECK(!parse_tick_rate(std::nullopt).requested && parse_tick_rate(std::nullopt).fps == 30);
+			CHECK(parse_tick_rate(std::string(" 60 ")).requested && parse_tick_rate(std::string("60")).fps == 60 && parse_tick_rate(std::string("60")).valid);
+			CHECK(parse_tick_rate(std::string("30")).fps == 30 && parse_tick_rate(std::string("30")).requested);
+			CHECK(!parse_tick_rate(std::string("45")).valid && parse_tick_rate(std::string("45")).fps == 30 && !parse_tick_rate(std::string("")).requested);
+			CHECK(effective_tick_rate(parse_tick_rate(std::string("60")), true) == 60 && effective_tick_rate(parse_tick_rate(std::string("60")), false) == 30);
+			CHECK(effective_tick_rate(parse_tick_rate(std::string("45")), true) == 30 && effective_tick_rate(parse_tick_rate(std::string("30")), true) == 30);
+			CHECK(tick_rate_values(60) == (std::array<std::uint32_t, 4>{60, 0, 0, 0}));
+			CHECK(frames_for(64, 30) == 64 && frames_for(64, 60) == 128 && frames_for(300, 60) == 600);
+		}
 		// Live changes: back to the game's cap = no pacing once its spin is back, 60 by the fix if it couldn't be.
 		CHECK(live_target(stock_cap, 180, false, false) == 0 && live_target(stock_cap, 180, true, false) == 0);
 		CHECK(live_target(stock_cap, 180, false, true) == 60 && live_target(stock_cap, 180, true, true) == 60);

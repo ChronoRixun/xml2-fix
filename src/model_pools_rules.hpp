@@ -23,8 +23,10 @@
 // model_pools_sites.hpp, regenerated from the exe with capstone). Thirty-one of those numbers are imm8
 // (`cmp r, 0x20` / `cmp [m], 0x28` / `push 0x58`) and can't hold the new value: each of those
 // instructions, with the ones after it up to five bytes, moves into a cave that does the same with an
-// imm32 and jumps back. Two destructor tails clear the actor and particle-cloud A bitmaps one and two
-// dwords at a time; they move into caves that clear the whole bitmap.
+// imm32 and jumps back. Four destructor tails (actors, particle clouds, attributes, procedural geometry) and the
+// particle-system records clear clear their bitmap at its retail size; they move into caves that clear the whole
+// bitmap. The procedural-geometry destructor's findNext (0x403d40) is shared with FX templates: the pool gets a copy
+// of it with its own capacity.
 
 #include "limits_rules.hpp"
 #include "model_pools_sites.hpp"
@@ -332,8 +334,12 @@ namespace model_pools_rules
 		for (int i = 0; i < 4; ++i) b.push_back(static_cast<std::uint8_t>(v >> (8 * i)));
 	}
 
-	// The two destructor tails that clear an A bitmap a dword at a time (edi = the bitmap): replaced by a
-	// whole-bitmap clear in a cave, then back to `resume`.
+	// The destructor tails that clear an A bitmap a dword at a time (edi = the bitmap): replaced by a whole-bitmap
+	// clear in a cave, then back to `resume`. The zone reset (0x5852a0 -> 0x585450 / 0x585510 ...) and the aggregate
+	// destructor (0x575560) run these destructors; nothing else clears bitmap A, so a tail that stops at the retail
+	// size leaves the bits of every slot above it set across the reset, and the next destructor walk calls those dead
+	// slots again. The attributes (0x571433: xor eax,eax then 9 stores) and procedural-geometry (0x571733: 7 stores)
+	// tails keep their xor (EAX stays 0 and EDX is untouched, as in the retail tails) and move the stores.
 	struct bitmap_clear
 	{
 		DWORD va;
@@ -343,10 +349,36 @@ namespace model_pools_rules
 		bool zero_edx;         // the tail leaves edx = 0
 		bool particle_systems; // the particle-system manager's records bitmap (else the pool's bitmap A)
 	};
-	inline constexpr std::array<bitmap_clear, 3> bitmap_clears{{
+	inline constexpr std::array<bitmap_clear, 5> bitmap_clears{{
 		{0x571691, "c70700000000", kind::actor, 0x571697, false, false},          // actor pool destructor: mov dword [edi], 0
 		{0x571845, "33d28917895704", kind::particle_cloud, 0x57184c, true, false}, // particle cloud destructor: xor edx,edx; mov [edi],edx; mov [edi+4],edx
 		{0x578657, "33d28917895704", kind::particle_cloud, 0x57865e, true, true},  // particle-system records clear (0x578570): the same tail
+		{0x571435, "890789470489470889470c89471089471489471889471c894720", kind::attributes, 0x57144f, false, false}, // attributes destructor: mov [edi+0..0x20], eax
+		{0x571735, "890789470489470889470c894710894714894718", kind::procedural_geometry, 0x571749, false, false},     // procedural geometry destructor: mov [edi+0..0x18], eax
+	}};
+
+	// A findNext the raised pool shares with code outside the aggregate. The procedural-geometry destructor (0x5716a0)
+	// walks its A bitmap with bitset<220>::findNext (0x403d40, called at 0x571724), which the FX-template destructor
+	// (0x405340, call at 0x4053c4) shares for a bitset<220> of its own: raising it in place would break that one. Its
+	// five 220s are both bound and end sentinel; under the raised compare after the call (0x57172b) the sentinel 220 reads
+	// as a live slot (the destructor then calls slot 220, and again for every later search from 221). The helper is
+	// position independent (short jumps inside it only): it is copied into the caves with the pool's capacity in those
+	// five numbers and only the procedural-geometry call moves to the copy. Its bytes stay guarded (read only).
+	struct helper_clone
+	{
+		DWORD helper;              // the shared helper
+		std::string_view hex;      // its retail bytes, through its last ret
+		std::array<std::uint8_t, 5> capacity_at; // offsets of the imm32 capacity/sentinel numbers in it
+		kind pool;
+		DWORD call;                // the one call that moves to the copy
+		std::string_view call_hex; // its retail bytes (call helper)
+	};
+	inline constexpr std::array<helper_clone, 1> helper_clones{{
+		{0x403d40,
+		 "8b4424043ddc000000568bf17c09b8dc0000005ec20800538a5c24108bc8c1f90584db8b148e7502f7d28bc883e11fd3ea85d2751f83e0e083c0203ddc0000007d4d"
+		 "8bd0c1fa0584db8b14967502f7d285d274e1f7c2ffff0000750683c010c1ea1084d2750683c008c1ea08f6c20f750683c004c1ea04f6c201750c8d642400d1ea40"
+		 "f6c20174f83ddc0000007c05b8dc0000005b5ec20800",
+		 {0x05, 0x0f, 0x3c, 0x89, 0x90}, kind::procedural_geometry, 0x571724, "e81726e9ff"},
 	}};
 
 	// The particle-system manager's constructor runs its emitter-object init loop with the system count (mov ebx, ebp at
@@ -374,6 +406,7 @@ namespace model_pools_rules
 	struct plan
 	{
 		std::vector<write> writes;     // in place, in the exe
+		std::vector<write> expects;    // read only: bytes the caves copy (bytes == before)
 		std::vector<std::uint8_t> cave_code; // to be put at the cave block's address
 		std::size_t fields = 0, caves = 0;
 	};
@@ -495,7 +528,7 @@ namespace model_pools_rules
 			out.writes.push_back({c.va, std::move(jmp), std::move(before), "model pools imm8 cave"});
 			++out.caves;
 		}
-		// The two bitmap clears: push eax; push ecx; push edi; xor eax,eax; mov ecx,words; rep stosd; pop edi; pop ecx; pop eax
+		// The bitmap clears: push eax; push ecx; push edi; xor eax,eax; mov ecx,words; rep stosd; pop edi; pop ecx; pop eax
 		for (const auto& c : bitmap_clears)
 		{
 			const DWORD entry = here();
@@ -509,6 +542,27 @@ namespace model_pools_rules
 			jmp[0] = 0xe9;
 			put32(jmp, 1, entry - (c.va + 5));
 			out.writes.push_back({c.va, std::move(jmp), bytes_of(c.hex), "model pools bitmap clear cave"});
+			++out.caves;
+		}
+		// The shared findNext helpers: a copy with the pool's capacity, and the one call moved to it.
+		for (const auto& h : helper_clones)
+		{
+			while (code.size() % 16) code.push_back(0xcc);
+			const DWORD entry = here();
+			auto b = bytes_of(h.hex);
+			const auto retail = static_cast<std::uint32_t>(retail_capacities[index(h.pool)]);
+			for (const auto at : h.capacity_at)
+			{
+				if (at + 4u > b.size() || operand(h.hex, at, 4) != retail) return std::nullopt;
+				put32(b, at, static_cast<std::uint32_t>(a.pool[index(h.pool)].capacity));
+			}
+			code.insert(code.end(), b.begin(), b.end());
+			const auto call = bytes_of(h.call_hex);
+			if (call.size() != 5 || call[0] != 0xe8 || operand(h.call_hex, 1, 4) != h.helper - (h.call + 5)) return std::nullopt;
+			std::vector<std::uint8_t> moved(5, 0xe8);
+			put32(moved, 1, entry - (h.call + 5));
+			out.writes.push_back({h.call, std::move(moved), call, "model pools findNext copy call"});
+			out.expects.push_back({h.helper, bytes_of(h.hex), bytes_of(h.hex), "model pools findNext copied (read only)"});
 			++out.caves;
 		}
 		return out;

@@ -89,7 +89,9 @@ namespace gns_transport_core
 	// as the native input ring holds them - 0x24 bytes each, the first two the record's frame), then, once its
 	// lockstep has run every frame it has that player's input for and waits, the lost one's next frame (lost_ready).
 	// Every survivor removes the lost player only when all survivors name the same next frame.
-	constexpr std::size_t input_record_size = 0x24, lost_inputs_max = 64, lost_inputs_header = 1 + 1 + 2 + 1, lost_ready_size = 1 + 1 + 2;
+	// lost_inputs_max: what a message may carry (and the parser accepts); a sender sends at most lost_inputs_at_30
+	// records at 30 fps and the same ~2.1 s at the session's [Online] TickRate (128 at 60, online_tick::frames_for).
+	constexpr std::size_t input_record_size = 0x24, lost_inputs_max = 128, lost_inputs_at_30 = 64, lost_inputs_header = 1 + 1 + 2 + 1, lost_ready_size = 1 + 1 + 2;
 	constexpr std::uint8_t lost_index_max = 3; // the engine's four participant slots
 	inline std::vector<std::uint8_t> lost_inputs(std::uint8_t index, std::uint16_t first, const std::uint8_t* records, std::size_t count)
 	{

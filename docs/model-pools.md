@@ -50,15 +50,29 @@ test (`xml2_model_pools_test [XMen2.exe]`) rebuilds the retail one field for fie
 
 The aggregate moves into a zero-filled block of the DLL; the game's own constructor builds it at the first getter
 call and its own destructor tears it down. `model_pools_sites.hpp` (generated with capstone from the retail exe) lists
-every number of the model code that depends on the layout or a capacity - 707 rows in 108 functions (751 with the particle-system manager) (and the seven unwind funclets of the aggregate constructor among them): pool-relative,
+every number of the model code that depends on the layout or a capacity - 707 rows in 108 functions (751 with the particle-system manager) (and the seven unwind funclets of the SEH-framed aggregate destructor 0x575560 among them): pool-relative,
 manager-relative and aggregate-relative displacements, the eight absolute references (getter, inlined getter in the
 model creator, atexit thunk, the IModel pool and its bitmap), capacities, last indexes, bitmap dword counts and the
 bitmap byte counts of the per-zone pool reset (`0x5853c0`-`0x585510`, which the spec's sweep had missed, with its
 `0x5852a0` walk). 31 of those numbers are imm8 (`cmp r, 0x20`, `cmp [m], 0x28`, `push 0x58`): the instruction and the
-ones after it up to five bytes move into a cave that does the same with an imm32 and jumps back. The actor and
-particle-cloud destructors clear bitmap A one and two dwords at a time; their tails move into caves that clear the
-whole bitmap. The constructors' one- and two-dword bitmap clears are left alone: they run once, on the zero-filled
-block.
+ones after it up to five bytes move into a cave that does the same with an imm32 and jumps back. The actor,
+particle-cloud, attributes and procedural-geometry destructors clear bitmap A a dword at a time up to its retail size
+(1, 2, 9 and 7 dwords); their tails move into caves that clear the whole bitmap. The zone walk and the aggregate
+destructor run these destructors and nothing else clears bitmap A, so a retail-size tail would leave the bits of every
+slot above it set across a zone change and the next walk would destroy those dead slots again. The constructors' one-
+and two-dword bitmap clears are left alone: they run once, on the zero-filled block.
+
+The procedural-geometry destructor walks its bitmap with `bitset<220>::findNext` (`0x403d40`), which it shares with
+the FX-template destructor (`0x4053c4`): its 220 is both the bound and the end sentinel, and raising it in place would
+break the FX templates. The pool gets a copy of the helper in the caves with its own capacity in those five numbers,
+and only its call (`0x571724`) moves to the copy; the helper's bytes are guarded read only. (Without it, the raised
+compare after the call read the sentinel 220 as a live slot: every zone change or exit with a live procedural-geometry
+item destroyed slot 220 over and over.)
+
+`xml2_model_pools_lifecycle_test` runs the game's own constructor, allocators, frees, pool destructors, zone walk and
+aggregate destructor at x2 and x4 on fake items (no slot destroyed twice or while dead, bitmaps and rings after each
+reset), with the plan without these two fixes as its negative control; `scripts/check_model_pools_text.py` decodes the
+whole `.text` for references, branches into the overwritten spans and shared findNext helpers.
 
 All of it is one patch transaction: the retail bytes of every written instruction are its guards; any mismatch, a
 build already made by the game, or a failed write leaves the game's own pools with one log line.

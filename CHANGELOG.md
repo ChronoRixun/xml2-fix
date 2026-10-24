@@ -2,6 +2,15 @@
 
 ## 1.8.0 - <date TBD>
 
+- **Online at 60 fps** (`[Online] TickRate = 60`; 1.8.0-beta.3): the stock game runs an online session at 30
+  frames a second (`CClient::frame` writes a 1/30 s minimum frame while the online flag is set, 1/60 s otherwise).
+  `60` replaces the online 1/30 with 1/60 (guarded, read back; `[Display] FrameRate`'s patch of the offline 1/60 in
+  the same bytes accepts it). Lockstep runs one simulation step per frame with the slowest player's measured frame
+  time as the step, so the game keeps its speed; upload per player roughly doubles (~11 KB/s). The rate is
+  **gameplay-agreement rule 29 (TickRate)**, `{rate in effect, 0, 0, 0}`, registered whenever the key is there: a 60
+  and a 30 PC refuse each other naming `29 TickRate`; a 60 request that cannot patch the game advertises 30. The
+  lost-player records a survivor re-sends keep their length in seconds (64 at 30, 128 at 60). Absent = the game's
+  30 and the released record; Legends Classic 0.3.0-beta.3 builds write `60` ([docs](docs/online-tick-rate.md)).
 - **Bigger model pools, opt-in** (`[Engine] ModelPools = x4`; SPEC-runtime-limits 2.4): every model the game shows
   takes a handle and components from fixed pools (handles 692, IGB geometry 400, shader effects 432, animated actors
   32, particle clouds 40, ...). When one is full the model is silently not made - an effect, a prop or a HUD head goes
@@ -10,12 +19,21 @@
   128, procedural geometry 1024 and particle clouds 128 (`x2`: half, clouds 80). Each particle cloud takes one of
   the particle systems of a second static manager (0x7dad78, 40 retail; with more clouds than systems the game reads
   through a NULL system at 0x578df3), so that manager moves and grows with the clouds; 753 fields of the model code are patched and
-  36 imm8 sites and three bitmap clears move into caves, all or nothing (on any byte that isn't the retail build's the game keeps its own
+  36 imm8 sites and five bitmap clears move into caves, and the procedural-geometry destructor gets its own copy of
+  the `bitset<220>::findNext` it shares with the FX templates (beta 3: under beta 2 that destructor read the helper's
+  end value 220 as a live slot, and the attributes and procedural-geometry destructors cleared only the retail part of
+  their bitmaps, so a zone change or exit with those pools in use could destroy items twice), all or nothing (on any byte that isn't the retail build's the game keeps its own
   pools and the log says so). A full pool refuses spawns as well as models, so online a raise is **gameplay-agreement
   rule 28 (ModelPools)**, `{installed, handles, IGB, actors}`, registered only when requested: peers must share the
   pools, and a 1.8.0-beta.1 peer and a beta.2 peer with `x4` refuse each other at admission (the beta.2 PC names
   `28 ModelPools`). Off by default in the DLL; Legends Classic 0.3.0-beta.2 builds write `x4`. The test pipe's status
   shows the nine live counts.
+- **Quit no longer races the controller-enumeration workers** (retail `0x618c90`, manager `0xA6A7E4`): several
+  enumeration workers can be alive after returning to the main menu, and each one cleared the shared manager and
+  published "stopped" (`0xA6A7E1`) on exit while a peer was still enumerating - the peer then reloaded a null manager
+  for its count call and faulted at `0x627375` (read of `0xC`), intermittently on Quit. Entry/exit accounting now lets
+  only the last active worker clear the manager and acknowledge shutdown. Eleven short retail signatures guard the two
+  sites; any mismatch logs its address and keeps the stock behaviour. See `docs/input-enumeration-shutdown.md`.
 - **The team-combo popup no longer crashes the game** (owner report on 1.8.0-beta.1, Maintenance Garage hosting alone;
   `XMen2.exe+0x1a6848`): when two heroes land a combo the game shows both heroes' heads, and makes each head model
   from fixed model pools. With a pool full (the dump: 400 of 400 `CModelIGB`), the second head is never made, but

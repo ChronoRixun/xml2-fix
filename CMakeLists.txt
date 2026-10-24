@@ -53,6 +53,7 @@ add_library(xml2_fix SHARED
 	src/double_heal.cpp
 	src/combo_heads.cpp
 	src/model_pools.cpp
+	src/online_tick.cpp
 	src/npc_power.cpp
 	src/stun_rule.cpp
 	src/danger_room_party.cpp
@@ -61,6 +62,7 @@ add_library(xml2_fix SHARED
 	src/pack_amount.cpp
 	src/exports.cpp
 	src/gamepad_fix.cpp
+	src/input_worker.cpp
 	src/pad_profile.cpp
 	src/pad_bindings.cpp
 	src/pad_prompts.cpp
@@ -420,6 +422,10 @@ add_executable(xml2_harm_loop_startup_test test/harm_loop_startup_test.cpp "${CM
 target_include_directories(xml2_harm_loop_startup_test PRIVATE src)
 target_link_options(xml2_harm_loop_startup_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
+add_executable(xml2_input_worker_test test/input_worker_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/input_worker.cpp)
+target_include_directories(xml2_input_worker_test PRIVATE src)
+target_link_options(xml2_input_worker_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
 # The GNS adapter's buffers and framing (src/gns_transport_core.hpp): ordering, coalesce, deferral, backlog, teardown.
 add_executable(xml2_gns_transport_test test/gns_transport_test.cpp)
 target_include_directories(xml2_gns_transport_test PRIVATE src)
@@ -504,6 +510,11 @@ target_link_options(xml2_lockon_effects_install_test PRIVATE /BASE:0x400000 /DYN
 add_executable(xml2_model_pools_test test/model_pools_test.cpp)
 target_include_directories(xml2_model_pools_test PRIVATE src)
 target_compile_options(xml2_model_pools_test PRIVATE /UNDEBUG)
+# The pools' lifecycle executed: the retail code at its own addresses with the x2/x4 plans applied, on fake items.
+add_executable(xml2_model_pools_lifecycle_test test/model_pools_lifecycle_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_model_pools_lifecycle_test PRIVATE src)
+target_compile_options(xml2_model_pools_lifecycle_test PRIVATE /UNDEBUG /EHa)
+target_link_options(xml2_model_pools_lifecycle_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
 add_executable(xml2_combo_heads_test test/combo_heads_test.cpp src/combo_heads.cpp)
 target_include_directories(xml2_combo_heads_test PRIVATE src)

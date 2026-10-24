@@ -13,6 +13,7 @@
 #include "net_impair.hpp"
 #include "online_room.hpp"
 #include "online_room_core.hpp"
+#include "online_tick.hpp"
 #include "join_in_progress.hpp"
 #include "xml1_hook_memory.hpp"
 #include "xml1_hook_transaction.hpp"
@@ -874,7 +875,7 @@ namespace gns_transport
 			return r;
 		}
 		// The resolved records this PC holds for that index: the run that ends just before its next frame (at most
-		// lost_inputs_max). Consumed records keep their bytes; the consumer clears only the valid byte.
+		// lost_inputs_at_30, the same time at [Online] TickRate). Consumed records keep their bytes; the consumer clears only the valid byte.
 		std::size_t ring_records(int index, const ring_state& r, std::uint16_t& first, std::uint8_t* out)
 		{
 			std::size_t count = 0;
@@ -882,7 +883,8 @@ namespace gns_transport
 			{
 				auto* b = input_block(index);
 				if (!b || !r.ok) return 0;
-				while (count < gns_transport_core::lost_inputs_max)
+				const std::size_t most = (std::min)(online_tick::frames_for(gns_transport_core::lost_inputs_at_30), gns_transport_core::lost_inputs_max);
+				while (count < most)
 				{
 					const std::uint16_t f = std::uint16_t(r.next - 1 - count);
 					const int slot = gns_transport_core::ring_slot(r.write, r.next, f);

@@ -20,3 +20,7 @@ the base ini is the 0.2.3f reference configuration. The helper module docstring 
 retail image for DLL installation proofs and does not start a game session. The proofs
 load the production DLL and temporarily export/restore the user's game registry key;
 run them only in the owner's gate environment. Release preparation does not execute them.
+
+`check_model_pools_text.py <XMen2.exe>` (needs capstone and pefile) decodes the whole retail `.text` for `[Engine] ModelPools`:
+every reference to the moved model aggregate / particle-system manager must be a site row, nothing may branch or point
+into a span the plan overwrites, and a findNext helper shared outside the pool destructors must be copied, not raised.

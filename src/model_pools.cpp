@@ -162,6 +162,7 @@ namespace model_pools
 			c.guards.push_back({w.va, w.before, w.what});
 			c.writes.push_back({w.va, w.bytes, w.what});
 		}
+		for (const auto& e : p->expects) c.guards.push_back({e.va, e.before, e.what});
 		bool committed = false;
 		c.publish = [&] { committed = true; };
 		bool keep_memory = false;

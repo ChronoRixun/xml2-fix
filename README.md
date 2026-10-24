@@ -628,6 +628,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `Domain` | `openspy.net` | GameSpy lookups go to the same host under this domain; `off`: no redirect |
 | `Server` | *(none)* | an IPv4 address every GameSpy and OpenSpy host name resolves to (a self-hosted OpenSpy); wins over `Domain` |
 | `LocalIP` | `auto` | `auto`: the address Windows reaches the internet from goes first; `first`: Windows' order, as without the fix; or one of this PC's addresses |
+| `TickRate` | *(the game's own, 30)* | `60`: online sessions run at 60 frames a second like single-player (the game's speed is unchanged); `30`: the game's own rate, the fallback for a slow PC. Online it is gameplay-agreement rule 29, so every player needs the same value ([details](docs/online-tick-rate.md)) |
 | `GameVersion` | *(the game's own, `1.30`)* | 1 to 4 letters, digits, `.`, `-` or `_`; only players on the same version see each other's games (for mods that are another game, such as the X-Men Legends I port) |
 
 **[Discord]** ([details](#-discord))

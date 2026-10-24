@@ -885,19 +885,19 @@ namespace model_pools_sites
 		// aggregate (0x585540)
 		{0x585548, "8b8638290100", 2, 4, 0x12938, kind::model, field::base, frame::aggregate, 0, false},
 		{0x58554e, "8d8e38290100", 2, 4, 0x12938, kind::model, field::base, frame::aggregate, 0, false},
-		// aggregate constructor unwind (0x676bc8)
+		// aggregate destructor unwind (0x676bc8)
 		{0x676bcb, "81c1dc360000", 2, 4, 0x36dc, kind::attributes, field::base, frame::aggregate, 0, false},
-		// aggregate constructor unwind (0x676bd6)
+		// aggregate destructor unwind (0x676bd6)
 		{0x676bd9, "81c1106c0000", 2, 4, 0x6c10, kind::shader_fx, field::base, frame::aggregate, 0, false},
-		// aggregate constructor unwind (0x676be4)
+		// aggregate destructor unwind (0x676be4)
 		{0x676be7, "81c19c870000", 2, 4, 0x879c, kind::igb, field::base, frame::aggregate, 0, false},
-		// aggregate constructor unwind (0x676bf2)
+		// aggregate destructor unwind (0x676bf2)
 		{0x676bf5, "81c120ec0000", 2, 4, 0xec20, kind::actor, field::base, frame::aggregate, 0, false},
-		// aggregate constructor unwind (0x676c00)
+		// aggregate destructor unwind (0x676c00)
 		{0x676c03, "81c144040100", 2, 4, 0x10444, kind::procedural_geometry, field::base, frame::aggregate, 0, false},
-		// aggregate constructor unwind (0x676c0e)
+		// aggregate destructor unwind (0x676c0e)
 		{0x676c11, "81c138190100", 2, 4, 0x11938, kind::particle_cloud, field::base, frame::aggregate, 0, false},
-		// aggregate constructor unwind (0x676c1c)
+		// aggregate destructor unwind (0x676c1c)
 		{0x676c1f, "81c104290100", 2, 4, 0x12904, kind::movie, field::base, frame::aggregate, 0, false},
 		// particle-system manager (0x7dad78) (0x676ed6)
 		{0x676ed6, "81c1a8000000", 2, 4, 0xa8, kind::particle_cloud, field::psys_records, frame::psys, 0, false},
