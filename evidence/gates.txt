@@ -1,0 +1,20 @@
+2026-10-17 final network-hardening gates (code through 8db01b0)
+
+Build: Win32 Release, XML2_FIX_GNS_ROOT=<GNS package>, XML2_SAVE_STARTUP_FAULT_TEST=ON. All targets built successfully; no game was launched.
+
+`python scripts/run_native.py`
+=> total 104 failed 0 with SKIPPED 0
+
+`python scripts/run_startup.py`
+=> isolated native unit exit 0; save startup 70 cases, 0 failures; startup registry identical
+
+`python scripts/prove_off_wire.py`
+=> absent, empty, stock, and 0 Transport all match 0.2.3f record 11b31a23258f9a6261797305db9c917f1a21ffc46b4bff0a3934d82c9031957d
+=> FastTransfer on / Transport absent matches 0.2.3f record 4f6c38927e40f6e095c8af7979cb37861a11b84db80e4a4e9884d46b3e1cdd87
+=> Transport=gns differs (24 rules) 5f5ed15b0f54862067460ae74cf2cdee57e298cc1c9fa8ac473235dd518b7da7
+=> Transport OFF wire compatibility PASS
+
+`python scripts/check_release_switches.py`
+=> PASS no network development option strings in native/bin/Release/dinput.dll
+
+Focused checks included in the native run: GNS 82/82, online room 37/37, online security 9/9, logger 6/6, broker TLS 7/7. Live broker smoke: pinned challenge + wrong pin 2/2; one-byte fragmented handshake regression RED 1/1 then GREEN 2/2. See broker-smoke.txt and off-wire-compatibility.json.

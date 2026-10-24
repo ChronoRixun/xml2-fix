@@ -34,6 +34,9 @@ namespace frame_rate
 		std::atomic<unsigned> fps_x10{0};
 		HANDLE timer = nullptr;
 		bool high_resolution = false;
+		unsigned online_fps = 0;    // [Online] TickWait=timer: online frames paced at this (0: the game's spin)
+		bool online_now = false;    // the last frame was an online one
+		bool online_thread_priority = false; // [Online] TickPriority=thread: the whole game thread above normal online
 		unsigned seconds = 0; // since the start or the last change: the fps is logged after the 2nd and the 30th
 
 		// Menus, popups and conversations at 60 (frame_rate_rules.hpp).
@@ -126,6 +129,21 @@ namespace frame_rate
 				timeBeginPeriod(1); // the ordinary timer is only as fine as the scheduler's tick
 			}
 			margin = ticks_for_ms(high_resolution ? 0.6 : 2.0, frequency);
+		}
+
+		// A game is set up (host or join): the session's +0x420, what CClient::frame's 0x610d20 reads to pick the
+		// online minimum. Guarded: the session object is the static at 0xa53058 with its vtable.
+		bool session_online()
+		{
+			__try
+			{
+				const auto* s = reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(0xa53058));
+				return *reinterpret_cast<const std::uint32_t*>(s) == 0x6a481cu && s[0x420] != 0;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				return false;
+			}
 		}
 
 		// ---- Which screen is up -----------------------------------------------------------------
@@ -247,8 +265,24 @@ namespace frame_rate
 			return text;
 		}
 
-		// Sleeps on the timer for the bulk of the wait, then spins for the rest.
+		void wait_until_at_priority(LONGLONG deadline);
+
+		// Sleeps on the timer for the bulk of the wait, then spins for the rest. The game's thread waits above normal
+		// priority: on a loaded PC (other games busy-spin, a build runs) a normal-priority thread woken by the timer
+		// queues behind them for a scheduler quantum (measured: 28-32 ms frames then 2-4 ms catch-ups at 60).
 		void wait_until(const LONGLONG deadline)
+		{
+			const HANDLE self = GetCurrentThread();
+			const int before = GetThreadPriority(self);
+			const bool raise = before != THREAD_PRIORITY_ERROR_RETURN && before < THREAD_PRIORITY_ABOVE_NORMAL && SetThreadPriority(self, THREAD_PRIORITY_ABOVE_NORMAL);
+			wait_until_at_priority(deadline);
+			if (raise)
+			{
+				SetThreadPriority(self, before);
+			}
+		}
+
+		void wait_until_at_priority(const LONGLONG deadline)
 		{
 			for (;;)
 			{
@@ -370,9 +404,28 @@ namespace frame_rate
 		logger::write("frame rate: now %s%s%s", describe_setting().c_str(), how, screens_note().c_str());
 	}
 
+	void pace_online(const unsigned tick_fps, const bool whole_thread)
+	{
+		online_thread_priority = whole_thread;
+		if (!game_module)
+		{
+			game_module = GetModuleHandleW(nullptr);
+		}
+		if (!frequency)
+		{
+			LARGE_INTEGER freq;
+			QueryPerformanceFrequency(&freq);
+			frequency = freq.QuadPart;
+		}
+		online_fps = tick_fps;
+		prepare_timer();
+		logger::write("frame rate: online frames paced at %u fps by the fix (%s timer + spin), not by the game's busy-spin; %s above normal priority", tick_fps,
+		              high_resolution ? "high-resolution" : "1 ms", whole_thread ? "the game's thread runs" : "the wait runs");
+	}
+
 	bool paces()
 	{
-		return target != 0 || watches_screens();
+		return target != 0 || watches_screens() || online_fps != 0;
 	}
 
 	void on_present()
@@ -416,6 +469,25 @@ namespace frame_rate
 				menu_rate = false;
 				logger::write("frame rate: ERROR: the game's menu state couldn't be read - menus run at %s like play from now on", fps_words(target).c_str());
 			}
+		}
+		if (online_fps && reinterpret_cast<std::uintptr_t>(game_module) == image_base)
+		{
+			const bool online = session_online();
+			if (online)
+			{
+				wanted = online_pace_fps(wanted, online_fps);
+			}
+			if (online != online_now && online_thread_priority)
+			{
+				SetThreadPriority(GetCurrentThread(), online ? THREAD_PRIORITY_ABOVE_NORMAL : THREAD_PRIORITY_NORMAL);
+			}
+			if (online != online_now && switches_logged <= switches_to_log)
+			{
+				online_now = online;
+				logger::write("frame rate: %s", online ? (fps_words(wanted) + " (online, the session's tick)").c_str() : "offline again");
+				++switches_logged;
+			}
+			online_now = online;
 		}
 		if (wanted != paced)
 		{

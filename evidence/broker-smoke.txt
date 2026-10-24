@@ -1,0 +1,15 @@
+2026-10-17 protocol-2 broker TLS smoke
+
+Server: the exported broker-smoke copy, launched as `python -m broker` on loopback 127.0.0.1:19020 with generated throwaway TLS/CA/TURN files. The existing broker venv supplied PyNaCl; no packages were installed. Its log reported `protocol:2`, `tls:true`, then two unauthenticated connections and disconnects.
+
+Client command (pin read from the throwaway broker-spki-sha256.txt):
+`./native/bin/Release/xml2_broker_tls_test.exe --live 127.0.0.1 19020 <64-hex-spki-pin>`
+
+Output:
+PASS live broker TLS: the pinned protocol-2 challenge arrives
+PASS live broker TLS: a wrong pin fails before the challenge
+2 PASS / 0 FAIL
+
+This exercises the production Schannel handshake, SPKI pin verification, encrypted receive, and real broker `{"op":"challenge","v":2,...}` framing. It does not authenticate or open a room; no join code, private key, nonce, or credential is recorded here.
+
+Follow-up regression: rebuilding the same test with one-byte handshake reads first produced `1 PASS / 1 FAIL` (the pinned challenge failed while wrong-pin rejection passed). After preserving partial input on `SEC_E_INCOMPLETE_MESSAGE`, the identical command passed `2 PASS / 0 FAIL`. This specifically covers fragmented TLS handshakes as well as the original coalesced smoke.

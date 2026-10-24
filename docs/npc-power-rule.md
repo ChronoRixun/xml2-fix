@@ -186,17 +186,32 @@ HAARP ice tunnel (`haarp/int/icetunnel1`), per enemy per minute:
 | Marauder chained / heavy hits | 3.3-6.9 | (not engaged) | 0 | 0 | 2.4-5.2 |
 | Hero free | 51-53 % | 6.5 % | 0-1.5 % | 18-20 % | 22-38 % |
 
-HAARP interior (`haarp/int/haarp2_1`), GRSO soldiers (the first game's guns are melee-style attacks; the port's are
-powers made by the builder, aitype beamanyrange):
+HAARP interior (`haarp/int/haarp2_1`), GRSO soldiers (the port's guns are powers made by the builder, aitype
+beamanyrange; see the correction below the table):
 
 | | Original | 0.2.2 (1 run) | Power + combo rules |
 |---|---|---|---|
 | HAARP Soldier shots + punches / min | 35.5-35.8 (all attacks) | 45.7 (34.8 powers + 10.9 melee) | 31.5-37.5 (20-24.5 powers + 11.5-13 melee) |
 | HAARP Leader attacks / min | 44-46 (incl. 3.9-5.1 smash) | 39.5 (31.5 powers) | 31-35 (11-15 powers) |
 
+*Correction, 2026-10-23: the pooled "shots + punches" total hid a difference, and the first game's guns are not
+melee-style attacks. In matched 45 s windows (attack-101b round 5; officer on the same spot, initial energy 0) the
+first game's HAARP officer fired 49 shots with 0 melee entries (median gap 0.91 s, the freeze gun's 0.9 s recoil),
+while the released port fired 0 shots and made 24 melee entries, because the converted gun has the generic melee
+brain and range 90 where the first game's weapon brain uses range 550. So these totals match while the behaviour
+does not. A restoration exists only as the opt-in gameplay rule 16 revision 8 for that one officer (not in this
+release); the other 19 gun families are not covered. Online play, party AI and other encounter types were not
+live-tested.*
+
 The first game's AI decisions were also counted directly in xemu (breakpoints at default.xbe 0xee2f4 / 0xee3f1, 30
 game seconds): the melee-range decision passed its timer 9-23 times per AI and picked a power 3-6 times, against 10-11
 and 4-5 per Revolutionary with the rule (Frida on 0x518770 / 0x5188e7 / 0x518925).
+
+*Note on the attack-rate figures for #101 (2026-10-23): two measurement protocols exist and are not pooled. With a
+moving, pursued hero (block-025; 17 original and 8 port trials) unarmed enemies make 18.7 against 27.8 attacks per
+enemy-minute, 1.49 times as many in the port (descriptive interval 1.21-1.82). With a still, controlled hero
+(attack-101; 3 trials per arm, ice tunnel) the figures are 20.4 against 32.3, 1.58 times. Both put the port at about
+1.5 times the original; a plain 60/49 frame-rate ratio (1.22) does not explain it, and the cause is not established.*
 
 ### Visibility follow-up
 

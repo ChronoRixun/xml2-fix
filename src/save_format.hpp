@@ -28,6 +28,9 @@ namespace save_format
 	// A requested LC installation must finish before the executable may start.
 	// Runtime table/file refusals remain protected by the already-installed card hooks.
 	bool startup_allowed();
+	// [Save] Format=lc published: among it the native campaign-load hook that checks an incoming (online) campaign
+	// image before the game's loader reads it (online rooms refuse a joiner without it).
+	bool campaign_load_checked();
 	const std::string& startup_error();
 
 	// A required reconstruction step failed (a dynamic entity factory returned null, the World or allocator refused
@@ -47,4 +50,7 @@ namespace save_format
 
 	// From the game's thread (the keyboard read): runs a pending pipe job.
 	void pump();
+	// The live campaign through the game's own serializer into a wrapper of installed_profile().wrapper bytes laid out
+	// as CSaveLoad's (the online campaign image, [Online] JoinInProgress). Game thread; false: faulted or overflowed.
+	bool serialize_wrapper(std::uint8_t* base);
 }

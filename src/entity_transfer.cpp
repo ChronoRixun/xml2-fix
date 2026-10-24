@@ -20,6 +20,7 @@ namespace entity_transfer
 		std::atomic<std::uint32_t> deferred{0};
 		backpressure_observer pressure_observer = nullptr;
 		failure_observer failed_observer = nullptr;
+		prepare_observer prepared_observer = nullptr;
 		bool failure_pending = false;
 		struct waiting_peer { std::uint8_t* peer = nullptr; pressure_deadline deadline; };
 		std::array<waiting_peer, 6> waiting{}; // native transport has at most six peer objects
@@ -173,6 +174,7 @@ namespace entity_transfer
 
 	void observe_backpressure(backpressure_observer o) { pressure_observer = o; }
 	void observe_failure(failure_observer o) { failed_observer = o; }
+	void observe_prepare(prepare_observer o) { prepared_observer = o; }
 	std::uint32_t backpressure_count() { return deferred.load(); }
 
 	// Replaces the scheduler's maintenance callback, 0x60a880. No parser, ordered-drain or sender
@@ -321,6 +323,7 @@ namespace entity_transfer
 		const auto opcode = event[0];
 		if (opcode == 'G')
 		{
+			if (prepared_observer) prepared_observer(event);
 			s.chunks = 0;
 			s.received = 0;
 			if (const auto callback = *reinterpret_cast<void(__cdecl**)(int, std::uint32_t, int)>(context + 0x2298))

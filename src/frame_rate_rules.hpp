@@ -174,9 +174,82 @@ namespace frame_rate_rules
 		"the game's 60 fps spin (CClient::frame, 0x401db4)", 0x1dab,
 		{0xC7, 0x46, 0x18, 0x89, 0x88, 0x08, 0x3D, 0xEB, 0x07, 0xC7, 0x46, 0x18, 0x89, 0x88, 0x88, 0x3C}, 12, {0x00, 0x00, 0x00, 0x00}};
 
+	// [Online] TickRate = 60 (online_tick.cpp): the online branch's 1/30 becomes 1/60, so an online session runs at
+	// 60 frames (simulation steps, input records, checksums) a second like single-player. Same 16 checked bytes.
+	inline constexpr code_patch online_tick_patch{
+		"the game's online 30 fps spin (CClient::frame, 0x401dab)", 0x1dab,
+		{0xC7, 0x46, 0x18, 0x89, 0x88, 0x08, 0x3D, 0xEB, 0x07, 0xC7, 0x46, 0x18, 0x89, 0x88, 0x88, 0x3C}, 3, {0x89, 0x88, 0x88, 0x3C}};
+
+	// [Online] TickWait = timer (the default with TickRate): the online branch's minimum becomes 0.0, so CClient::frame
+	// no longer busy-spins online either, and the fix paces online frames at the tick rate from its Present hook with a
+	// sleeping wait (frame_rate.cpp, pace_online). The spin made every online game a 100 % CPU thread; on a loaded PC
+	// the scheduler then takes it off the CPU for whole quanta, and a 60 Hz frame has no slack to absorb that
+	// (docs/online-tick-rate.md, "the 15 fps cliff"). Same 16 checked bytes, same field as online_tick_patch.
+	inline constexpr code_patch online_wait_patch{
+		"the game's online spin (CClient::frame, 0x401dab)", 0x1dab,
+		{0xC7, 0x46, 0x18, 0x89, 0x88, 0x08, 0x3D, 0xEB, 0x07, 0xC7, 0x46, 0x18, 0x89, 0x88, 0x88, 0x3C}, 3, {0x00, 0x00, 0x00, 0x00}};
+
+	// The patches share the checked bytes: each one's check takes the other field as retail when it holds exactly
+	// one of the other side's replacements (FrameRate's 0.0 for the offline 1/60; TickRate's 1/60 or TickWait's 0.0
+	// for the online 1/30), and as anyone else's change otherwise.
+	inline std::array<std::uint8_t, 16> as_seen_by(const code_patch& patch, const std::uint8_t* bytes)
+	{
+		std::array<std::uint8_t, 16> seen{};
+		std::memcpy(seen.data(), bytes, seen.size());
+		if (patch.rva != stock_cap_patch.rva || patch.rva != online_tick_patch.rva || patch.rva != online_wait_patch.rva)
+		{
+			return seen;
+		}
+		const bool offline_field = patch.offset == stock_cap_patch.offset;
+		for (const code_patch* other : {&online_tick_patch, &online_wait_patch, &stock_cap_patch})
+		{
+			if ((other->offset == stock_cap_patch.offset) == offline_field)
+			{
+				continue; // the same field as `patch`: never taken as retail
+			}
+			if (std::memcmp(seen.data() + other->offset, other->replacement.data(), other->replacement.size()) == 0)
+			{
+				std::memcpy(seen.data() + other->offset, other->expected.data() + other->offset, other->replacement.size());
+				break;
+			}
+		}
+		return seen;
+	}
+
+	// [Online] TickPriority: "wait" (default: only the pacer's wait above normal) or "thread" (the game's thread above
+	// normal while frames are online).
+	inline bool parse_tick_priority_thread(const std::string& text)
+	{
+		std::string value;
+		for (const char c : text)
+		{
+			if (!std::isspace(static_cast<unsigned char>(c))) value += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		}
+		return value == "thread";
+	}
+
+	// What the fix paces an online frame at: the session's tick rate, or FrameRate's when that is lower (0 = none).
+	inline unsigned online_pace_fps(const unsigned offline_fps, const unsigned tick_fps)
+	{
+		return offline_fps && offline_fps < tick_fps ? offline_fps : tick_fps;
+	}
+
+	// [Online] TickWait: "timer" (default) or "spin" (the game's own busy-spin, as in 1.8.0 beta 3).
+	inline bool parse_tick_wait_spin(const std::optional<std::string>& text)
+	{
+		if (!text) return false;
+		std::string value;
+		for (const char c : *text)
+		{
+			if (!std::isspace(static_cast<unsigned char>(c))) value += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		}
+		return value == "spin";
+	}
+
 	inline bool matches(const code_patch& patch, const std::uint8_t* bytes)
 	{
-		return std::memcmp(bytes, patch.expected.data(), patch.expected.size()) == 0;
+		const auto seen = as_seen_by(patch, bytes);
+		return std::memcmp(seen.data(), patch.expected.data(), patch.expected.size()) == 0;
 	}
 
 	// The bytes as the patch left them: the expected ones with the replacement in place (what may be
@@ -185,7 +258,53 @@ namespace frame_rate_rules
 	{
 		auto patched = patch.expected;
 		std::memcpy(patched.data() + patch.offset, patch.replacement.data(), patch.replacement.size());
-		return std::memcmp(bytes, patched.data(), patched.size()) == 0;
+		const auto seen = as_seen_by(patch, bytes);
+		return std::memcmp(seen.data(), patched.data(), patched.size()) == 0;
+	}
+
+	// [Online] TickRate in xml2-fix.ini: the frames per second an online session runs at. Absent: the game's own 30
+	// (no agreement entry, the released record). 60 or 30: gameplay-agreement rule 29 (TickRate) carries the rate
+	// that is in effect, so a 60 and a 30 PC refuse each other by name (lockstep runs every PC's frames together:
+	// a mixed session would run near the slower rate, and the frame cadence is part of the shared simulation).
+	struct tick_setting
+	{
+		bool requested = false; // the key is there (valid or not)
+		bool valid = true;
+		unsigned fps = 30;      // what was asked for (30 when invalid)
+	};
+	constexpr unsigned stock_online_fps = 30, tick_rate_revision = 1;
+	inline tick_setting parse_tick_rate(const std::optional<std::string>& text)
+	{
+		tick_setting out;
+		if (!text)
+		{
+			return out;
+		}
+		std::string value;
+		for (const char c : *text)
+		{
+			if (!std::isspace(static_cast<unsigned char>(c)))
+			{
+				value += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+			}
+		}
+		out.requested = !value.empty();
+		if (value == "60") out.fps = 60;
+		else if (value == "30" || value.empty()) out.fps = 30;
+		else out.valid = false;
+		return out;
+	}
+	// The rate in effect: 60 only when it was asked for and the patch is in.
+	inline unsigned effective_tick_rate(const tick_setting& setting, const bool patched)
+	{
+		return setting.valid && setting.fps == 60 && patched ? 60 : stock_online_fps;
+	}
+	// Rule 29's values: {rate in effect, 0, 0, 0}; no entry when the key is absent.
+	inline std::array<std::uint32_t, 4> tick_rate_values(const unsigned rate) { return {rate, 0, 0, 0}; }
+	// Frame-count limits that must keep their length in seconds at the session's rate: `count_at_30` frames at 30 fps.
+	inline std::size_t frames_for(const std::size_t count_at_30, const unsigned rate)
+	{
+		return rate > stock_online_fps ? count_at_30 * rate / stock_online_fps : count_at_30;
 	}
 
 	// What the fix paces at when the setting changes while the game runs. Back to the game's own

@@ -1,0 +1,65 @@
+{
+ "method": "Prove OFF is byte-identical to 0.2.3f in the synthetic retail-image host; no game is launched.",
+ "records": {
+  "023f-off": {
+   "sha256": "11b31a23258f9a6261797305db9c917f1a21ffc46b4bff0a3934d82c9031957d",
+   "rules": 23,
+   "dll_sha256": "3c50c68450cfe4ef4a90d5990166413e2f264c45a63f9cfaba79adbcb06fecf5",
+   "gns_log": []
+  },
+  "gns-off-None": {
+   "sha256": "11b31a23258f9a6261797305db9c917f1a21ffc46b4bff0a3934d82c9031957d",
+   "rules": 23,
+   "dll_sha256": "a8a2a38f8239fdb249107a835a3bb30e8d8ce2d0b638beb8a8d59848dcc8e8d9",
+   "gns_log": []
+  },
+  "gns-off-": {
+   "sha256": "11b31a23258f9a6261797305db9c917f1a21ffc46b4bff0a3934d82c9031957d",
+   "rules": 23,
+   "dll_sha256": "a8a2a38f8239fdb249107a835a3bb30e8d8ce2d0b638beb8a8d59848dcc8e8d9",
+   "gns_log": []
+  },
+  "gns-off-stock": {
+   "sha256": "11b31a23258f9a6261797305db9c917f1a21ffc46b4bff0a3934d82c9031957d",
+   "rules": 23,
+   "dll_sha256": "a8a2a38f8239fdb249107a835a3bb30e8d8ce2d0b638beb8a8d59848dcc8e8d9",
+   "gns_log": []
+  },
+  "gns-off-0": {
+   "sha256": "11b31a23258f9a6261797305db9c917f1a21ffc46b4bff0a3934d82c9031957d",
+   "rules": 23,
+   "dll_sha256": "a8a2a38f8239fdb249107a835a3bb30e8d8ce2d0b638beb8a8d59848dcc8e8d9",
+   "gns_log": []
+  },
+  "023f-fast": {
+   "sha256": "4f6c38927e40f6e095c8af7979cb37861a11b84db80e4a4e9884d46b3e1cdd87",
+   "rules": 24,
+   "dll_sha256": "3c50c68450cfe4ef4a90d5990166413e2f264c45a63f9cfaba79adbcb06fecf5",
+   "gns_log": []
+  },
+  "gns-off-fast": {
+   "sha256": "4f6c38927e40f6e095c8af7979cb37861a11b84db80e4a4e9884d46b3e1cdd87",
+   "rules": 24,
+   "dll_sha256": "a8a2a38f8239fdb249107a835a3bb30e8d8ce2d0b638beb8a8d59848dcc8e8d9",
+   "gns_log": []
+  },
+  "gns-on": {
+   "sha256": "5f5ed15b0f54862067460ae74cf2cdee57e298cc1c9fa8ac473235dd518b7da7",
+   "rules": 24,
+   "dll_sha256": "a8a2a38f8239fdb249107a835a3bb30e8d8ce2d0b638beb8a8d59848dcc8e8d9",
+   "gns_log": [
+    "online: Transport=gns installed - participants' game messages go whole over GameNetworkingSockets on the stock port + 1000 (rule 25); admission and lobby stay stock; every PC must use it",
+    "online: rule 25 (GnsTransport) revision 2 {1,1000,2,0}"
+   ]
+  },
+  "gns-on-fast": {
+   "sha256": "6bf5e2b6ba66652d23cae45037fc0ec58dabba07e8e0d5ef8c49166d6944b3e8",
+   "rules": 25,
+   "dll_sha256": "a8a2a38f8239fdb249107a835a3bb30e8d8ce2d0b638beb8a8d59848dcc8e8d9",
+   "gns_log": [
+    "online: Transport=gns installed - participants' game messages go whole over GameNetworkingSockets on the stock port + 1000 (rule 25); admission and lobby stay stock; every PC must use it",
+    "online: rule 25 (GnsTransport) revision 2 {1,1000,2,0}"
+   ]
+  }
+ }
+}

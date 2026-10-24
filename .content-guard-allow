@@ -1,5 +1,6 @@
 # Scoped exceptions for the builder content guard used on this C++ repository.
 # Each entry describes original code/art or invented test data; no game assets are accepted.
+GAME_EXT tools/union_host/union_space.asm # Authored MASM zero-filled address-space reservation (DB DUP(0)) for the synthetic DLL host; no game bytes, instructions or disassembly. Retail image supplied locally at runtime.
 DISASM  test/resistance_display_install_test.cpp  # Authored inline assembler recreates a synthetic HUD caller frame and executes our emitted bridge; no game instruction listing.
 MEDIA  docs/discord-art/badge-cutscene.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
 MEDIA  docs/discord-art/badge-dangerroom.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
@@ -62,5 +63,11 @@ DISASM  test/lockon_effects_test.cpp  # Authored synthetic stack-frame caller an
 DISASM  test/box_harm_test.cpp  # Authored synthetic caller/continuation checks our bridge's stack, registers and FPU; no game instruction listing or decompiled body.
 DISASM  src/harm_loop_startup_bridge.hpp  # Authored guarded branch bridge for ordinary loop startup; no copied game instruction listing or decompiled body.
 DISASM  src/harm_single_chain_bridge.hpp  # Authored eligibility and pending-bit bridges for the opt-in single-chain policy; no game instruction listing or decompiled body.
+
+DISASM src/gns_transport.cpp # Authored transport ABI bridges preserve registers and call the adapter.
+DISASM src/join_in_progress.cpp # Authored JIP ABI bridges implement the guarded hooks documented by this project.
 DISASM  src/receive_validation.cpp  # Authored naked x86 dispatch guard; replays only the short guarded prologue, validates and resumes or returns. No game listing or decompiled body.
 DISASM  test/receive_validation_test.cpp  # Authored synthetic register/stack driver for our dispatch guard; retail routines are read from a user-supplied executable, never embedded.
+PRIVATE_IP  docs/online-rooms.md  # the rooms protocol's own virtual address range (by design, see docs/online-rooms.md), not a personal network
+PRIVATE_IP  docs/superpowers/plans/2026-10-17-net-hardening.md  # the rooms protocol's virtual address range (by design, see docs/online-rooms.md)
+PRIVATE_IP  test/online_room_test.cpp  # invented test vectors in the rooms protocol's virtual address range (see docs/online-rooms.md)

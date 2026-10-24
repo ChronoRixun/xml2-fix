@@ -136,5 +136,14 @@ namespace receive_validation
 	}
 
 	bool installed() { return published; }
+	bool owns_dispatch_entry()
+	{
+		if (!published) return false;
+		std::array<std::uint8_t, 5> entry{};
+		if (!patch_transaction::read_memory(dispatch, entry.data(), entry.size()) || entry[0] != 0xe9) return false;
+		std::int32_t relative;
+		std::memcpy(&relative, entry.data() + 1, sizeof(relative));
+		return address_of(reinterpret_cast<const void*>(&dispatch_guard)) == dispatch + 5 + static_cast<std::uint32_t>(relative);
+	}
 	std::uint32_t dropped() { return dropped_count; }
 }

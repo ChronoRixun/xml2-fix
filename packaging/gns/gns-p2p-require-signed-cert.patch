@@ -1,0 +1,18 @@
+diff --git a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_connections.cpp b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_connections.cpp
+index 2719caf..c63fd1a 100644
+--- a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_connections.cpp
++++ b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_connections.cpp
+@@ -1806,8 +1806,11 @@ EUnsignedCert CSteamNetworkConnectionBase::AllowLocalUnsignedCert()
+ EUnsignedCert CSteamNetworkConnectionBase::AllowRemoteUnsignedCert()
+ {
+ 	#ifdef STEAMNETWORKINGSOCKETS_OPENSOURCE
+-		// We don't have a cert authority.  We probably ought to make this customizable
+-		return k_EUnsignedCert_Allow;
++		// Legends Classic project patch (see net030-broker/patches/): this build
++		// pins a project root CA and must reject unsigned certs and certs that
++		// fail CA verification.  Stock opensource GNS returns Allow here, which
++		// silently tolerates rogue-CA certs on P2P connections.
++		return k_EUnsignedCert_Disallow;
+ 	#else
+ 		return k_EUnsignedCert_Disallow;
+ 	#endif

@@ -80,6 +80,11 @@ The hook adds no timer or get-up invulnerability. Native powerup creation, lifet
 remain, but the powerup no longer owns party reaction expiry. Accepted fresh hits can still restart the stun,
 as in XML1. Knockback, get-up animation speeds, NPC power decisions and enemy stuns are unchanged.
 
+*Status note (2026-10-23): revision 3 is proven to request the stun on every stun-flagged hit, as the original does,
+and the stun chains reported in #101 for 0.2.5 fall in the original's range (up to about 5 s in crowds). The hero free-time share from the
+Legends Classic #101 table (about 25 % in the port at 0.2.2 against about 52 % in the original) has not been measured
+again since revision 3 and revision 3 re-stuns more often by design, so whether free time now matches is open.*
+
 ## Revision 3: per-hit dispatch
 
 XML1's impact routine handles a stun-flagged hit (`+0x24` bit 6) on a living victim at `0x44af4..0x44cb0`: if

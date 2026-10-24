@@ -417,7 +417,7 @@ namespace
 			patch_transaction::transaction off;
 			receive_validation::contribute(off, GetModuleHandleW(nullptr));
 			expect(off.contributions() == 0 && logger::has("ReceiveValidation=0"), "OFF contributes no writes and says so");
-			expect(!receive_validation::installed(), "OFF is not installed");
+			expect(!receive_validation::installed() && !receive_validation::owns_dispatch_entry(), "OFF is not installed");
 		}
 		ini::enabled = true;
 
@@ -448,6 +448,7 @@ namespace
 			receive_validation::contribute(t, GetModuleHandleW(nullptr));
 			expect(t.commit() == patch_transaction::outcome::committed, "the production guard installs with verified readback");
 			expect(receive_validation::installed() && at(0x60dbe0)[0] == 0xe9, "the dispatch entry is the guard's jump");
+			expect(receive_validation::owns_dispatch_entry(), "the installed jump is recognised as this module's own (the GNS signature check accepts exactly it)");
 			expect(logger::has("receive validation installed"), "the install logs its one line");
 		}
 

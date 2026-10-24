@@ -12,6 +12,8 @@
 
 namespace entity_transfer
 {
+	using prepare_observer = void(*)(const void* event);
+	void observe_prepare(prepare_observer);
 	// JMP adapter for 0x6100e8, after the native reliable sequence-window check.
 	void reliable_receive_room();
 	void outgoing_room();

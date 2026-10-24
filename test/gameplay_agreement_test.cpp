@@ -144,7 +144,7 @@ void records(){
  check(future.compare(stun(true,true,stun_rule::revision,true).bytes())==result::match,"later rule 17 registration agrees in either order");
  check(stun(true).compare(future.bytes())==result::entries,"missing future rule 17 is refused, not silently ignored");
  // New requested-only rules preserve the pre-integration OFF bytes and name both mismatch directions.
- for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id,gameplay_capabilities::box_harm_origin_id,gameplay_capabilities::danger_room_healthbars_id,gameplay_capabilities::harm_single_chain_id,gameplay_capabilities::online_conversations_id}) {
+ for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id,gameplay_capabilities::box_harm_origin_id,gameplay_capabilities::danger_room_healthbars_id,gameplay_capabilities::harm_single_chain_id,gameplay_capabilities::online_conversations_id,gameplay_capabilities::model_pools_id,gameplay_capabilities::tick_rate_id}) {
   auto optional=[&](bool wanted,bool verified=true){record r;if(wanted)r.add(id,1,{1,0,0,0},verified);r.finalize();return r;};
   const auto yes=optional(true),no=optional(false),failed=optional(true,false);
   check(yes.compare(optional(true).bytes())==result::match,"matching new requested-only rule accepts");
@@ -189,6 +189,46 @@ void records(){
   check(on.compare(talk(true,false).bytes())==result::value && on.compare(talk(true,true,false).bytes())==result::value,"another AutoAdvance/ReplyVoices state refuses");
   gameplay_capabilities::difference d;char name[160];on.compare(off.bytes(),&d);on.describe(d.buckets,d.local_only,true,name,sizeof(name));
   check(std::string(name)=="27 OnlineConversations (not on the other PC)","the ON peer names rule 27: "+std::string(name));
+ }
+ // Rule 28, [Engine] ModelPools: requested only, revision 1, {installed, model handles, IGB models, actors}. XML2 Fix
+ // 1.8.0-beta.1 (no rule 28) and a beta.2 peer with a raise refuse each other; x2 and x4 refuse; OFF keeps the released bytes.
+ {
+  const auto id=gameplay_capabilities::model_pools_id;
+  check(id==28 && std::string(gameplay_capabilities::rule_name(id))=="ModelPools","model pools use assigned rule 28");
+  check(gameplay_capabilities::bucket_of(id)!=gameplay_capabilities::bucket_of(gameplay_capabilities::online_conversations_id),"rule 28 has a bucket of its own");
+  auto pools=[&](bool wanted,std::uint32_t handles=4096,std::uint32_t igb=2048,std::uint32_t actors=128){record r;if(wanted)r.add(id,1,{1,handles,igb,actors},true);r.finalize();return r;};
+  const auto x4=pools(true),beta1=pools(false),x2=pools(true,2048,1024,64);
+  check(x4.compare(pools(true).bytes())==result::match,"ModelPools x4 peers agree");
+  check(x4.compare(beta1.bytes())==result::entries && beta1.compare(x4.bytes())==result::entries,"ModelPools x4 and a peer without rule 28 refuse both ways");
+  check(x4.compare(x2.bytes())==result::value && x2.compare(x4.bytes())==result::value,"ModelPools x4 and x2 refuse both ways");
+  gameplay_capabilities::difference d;char name[160];x4.compare(beta1.bytes(),&d);x4.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name)=="28 ModelPools (not on the other PC)","the x4 peer names rule 28: "+std::string(name));
+  beta1.compare(x4.bytes(),&d);beta1.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name)=="28 ModelPools (disabled on this PC)","a beta.2 peer with the pools off names rule 28: "+std::string(name));
+  x4.compare(x2.bytes(),&d);x4.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name)=="28 ModelPools","x4 against x2 names rule 28: "+std::string(name));
+ }
+ // Rule 29, [Online] TickRate: {rate in effect, 0, 0, 0} whenever the key is there, revision 1. A 60 and a 30 PC refuse
+ // by name both ways; a PC without the key (the game's 30, no entry) and a 60 PC too; absent keeps the released bytes.
+ {
+  const auto id=gameplay_capabilities::tick_rate_id;
+  check(id==29 && std::string(gameplay_capabilities::rule_name(id))=="TickRate","the tick rate uses assigned rule 29");
+  check(gameplay_capabilities::bucket_of(id)!=gameplay_capabilities::bucket_of(gameplay_capabilities::model_pools_id),"rule 29 has a bucket of its own");
+  auto tick=[&](unsigned rate){record r;r.add(gameplay_capabilities::model_pools_id,1,{1,4096,2048,128},true);if(rate)r.add(id,1,{rate,0,0,0},true);r.finalize();return r;};
+  const auto sixty=tick(60),thirty=tick(30),beta2=tick(0);
+  check(sixty.compare(tick(60).bytes())==result::match && thirty.compare(tick(30).bytes())==result::match,"same tick rates agree");
+  check(sixty.compare(thirty.bytes())==result::value && thirty.compare(sixty.bytes())==result::value,"60 and 30 refuse both ways");
+  check(sixty.compare(beta2.bytes())==result::entries && beta2.compare(sixty.bytes())==result::entries,"60 and a PC without rule 29 refuse both ways");
+  check(thirty.compare(beta2.bytes())==result::entries,"an explicit 30 and a PC without the key refuse (other builds)");
+  gameplay_capabilities::difference d;char name[160];
+  sixty.compare(thirty.bytes(),&d);sixty.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name)=="29 TickRate","60 against 30 names rule 29: "+std::string(name));
+  thirty.compare(sixty.bytes(),&d);thirty.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name)=="29 TickRate","30 against 60 names rule 29: "+std::string(name));
+  sixty.compare(beta2.bytes(),&d);sixty.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name)=="29 TickRate (not on the other PC)","60 against a beta.2 peer: "+std::string(name));
+  beta2.compare(sixty.bytes(),&d);beta2.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name)=="29 TickRate (disabled on this PC)","a beta.3 peer without the key against 60: "+std::string(name));
  }
  // Rule 16, the NPC power rule ([Game] NpcPowerRule): enemies that pay for powers and decide every 2 s never share a
  // lockstep game with enemies that don't; revision 3 adds the visibility word; absent is {0,0,0,0}, a failed install unverified.

@@ -26,6 +26,7 @@
 #include "harm_loop_startup.hpp"
 #include "harm_single_chain.hpp"
 #include "double_heal.hpp"
+#include "combo_heads.hpp"
 #include "xml1_capability_rules.hpp"
 #include "conversations.hpp"
 #include "confirmation_release.hpp"
@@ -51,9 +52,14 @@
 #include "xml1_turrets.hpp"
 #include "game_version.hpp"
 #include "gamepad_fix.hpp"
+#include "input_worker.hpp"
 #include "iat_hook.hpp"
 #include "ini.hpp"
 #include "limits.hpp"
+#include "model_pools.hpp"
+#include "model_pools_rules.hpp"
+#include "online_tick.hpp"
+#include "frame_rate_rules.hpp"
 #include "geometry_sharing.hpp"
 #include "ladder_paths.hpp"
 #include "log.hpp"
@@ -70,6 +76,10 @@
 #include "load_trace.hpp"
 #include "plugin_scan.hpp"
 #include "net_trace.hpp"
+#include "gns_transport.hpp"
+#include "online_room.hpp"
+#include "join_in_progress.hpp"
+#include "net_impair.hpp"
 #include "openspy_redirect.hpp"
 #include "pad_profile.hpp"
 #include "pad_bindings.hpp"
@@ -182,6 +192,7 @@ namespace
 		xml2_pad_bindings::install();
 
 		const HMODULE game = GetModuleHandleW(nullptr);
+		input_worker::install(game);
 		// The button prompts: the pad's names for a player on a pad, the power wheel's buttons of play. Code and
 		// data the game runs from its first menu on; none of the sites is another module's.
 		pad_prompts::install(game);
@@ -202,6 +213,8 @@ namespace
 		{
 			net_trace::install(game);
 		}
+		// [Dev] NetFakeLoss/NetFakeLag/NetFakeJitter: test-only impairment of the game's UDP sends (and GNS's, same values).
+		net_impair::install(game);
 		// [Online] GameVersion: the string the game copies into its network code at start-up and when online
 		// opens - here, before any of its code runs.
 		game_version::install(game);
@@ -410,6 +423,20 @@ namespace
 		// first asks for the actor table (getter 0x56b8e0) and the resource name table (0x55af80) from
 		// the CPrecacheMgr constructor, during its start-up.
 		limits::install(game);
+		// [Engine] ModelPools: the model aggregate (0x7bf6d0) is built at the first getter call, after this.
+		model_pools::install(game);
+		// A raise is rule 28 (ModelPools): a full pool refuses spawns, so co-op peers must share the capacities.
+		// Requested only: absent/off adds no entry (the released record); a requested raise that failed is unverified.
+		if (model_pools::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::model_pools_id, model_pools_rules::agreement_revision,
+				model_pools::agreement_values(), model_pools::verified());
+		// [Online] TickRate: the online frame's 1/30 s as 1/60 s (docs/online-tick-rate.md). Before the exe's code runs.
+		// Rule 29 (TickRate) carries the rate in effect whenever the key is there: lockstep runs every PC's frames
+		// together, so a 60 and a 30 PC refuse each other by name; absent = the game's 30 and the released record.
+		online_tick::install(game);
+		if (online_tick::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::tick_rate_id, frame_rate_rules::tick_rate_revision,
+				online_tick::agreement_values(), true);
 		geometry_sharing::install(game);
 		ladder_paths::install(game);
 		// X-Men Legends 1's rule for breaking objects ([Game] BreakRule=xml1): one vtable slot of the combat object and
@@ -435,6 +462,9 @@ namespace
 		// Target subtitle only: reads current affecters without changing combat
 		// state or consuming RNG. It needs no gameplay-agreement record.
 		resistance_display::install(game);
+		// The team-combo popup never draws without both heads (owner crash 2026-10-23: a null head at 0x5a6845 when a
+		// model pool was full): one HUD vtable slot (0x69dd58) no other module touches; display only, no agreement record.
+		combo_heads::install(game);
 		if (danger_room_healthbars::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::danger_room_healthbars_id, 1,
 				{danger_room_healthbars::installed() ? 1u : 0u,0,0,0}, danger_room_healthbars::verified());
@@ -458,6 +488,17 @@ namespace
 			const auto heal = xml1_capability_rules::installed_switch(double_heal::requested(), double_heal::installed());
 			gameplay_agreement::register_rule(gameplay_capabilities::double_heal_id, xml1_capability_rules::double_heal_revision, heal.values, heal.verified);
 		}
+
+		// [Online] Transport=gns (requested-only, rule 25 GnsTransport, docs/gns-transport.md): the participants' game
+		// messages over GameNetworkingSockets. Four guarded sites in one transaction; GNS itself starts on the game's
+		// thread at the first receive pump, never here. It registers rule 25 itself when it installed.
+		// [Online] Host=broker / JoinCode (docs/online-rooms.md): rooms through the project broker - the game socket's
+		// datagrams to room members' virtual addresses through GNS P2P connections. Before the transport, which they imply.
+		online_room::install(game);
+		gns_transport::install(game);
+		// [Online] JoinInProgress=1 (requested-only, rule 26 JoinInProgress, docs/join-in-progress.md): after the
+		// transport, which it requires.
+		join_in_progress::install(game);
 
 		test_mode::install(game);
 		test_input::install(); // first: its screenshots need the display fix's device hook
@@ -514,6 +555,11 @@ BOOL WINAPI DllMain(HINSTANCE instance, const DWORD reason, LPVOID)
 			MessageBoxA(nullptr, notice.c_str(), "XML2 Fix: entity capacity unavailable", MB_OK | MB_ICONWARNING);
 			logger::write("startup: entity capacity notice closed");
 		}
+	}
+	else if (reason == DLL_PROCESS_DETACH)
+	{
+		// The game is closing: online-status.json says `ended` for the launcher (Win32 file calls only).
+		online_room::shutdown();
 	}
 	return TRUE;
 }
