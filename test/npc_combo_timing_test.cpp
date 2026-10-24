@@ -92,8 +92,8 @@ int main() {
     // The power front: the clock owner is a stub object whose vt+0x160 returns `clock_now`; the resume undoes the
     // displaced prologue (pop ebp; pop ebx; add esp,0x14; ret).
     edit(l.power_front + 4, base);
-    leave(l.power_front + 0x3f, static_cast<address>(reinterpret_cast<std::uintptr_t>(&clock_owner)));
-    leave(l.power_front + 0xa2, l.base + 772);
+    leave(l.power_front + 0x2a, static_cast<address>(reinterpret_cast<std::uintptr_t>(&clock_owner)));
+    leave(l.power_front + 0xd9, l.base + 772);
     const std::uint8_t undo[] = {0x5d, 0x5b, 0x83, 0xc4, 0x14, 0xc3};
     std::memcpy(bytes.data() + 772, undo, sizeof(undo));
     // The attack front: the same clock stub, a random stub, and a resume that undoes sub esp,0x58; push ebx; push ebp.
@@ -115,10 +115,11 @@ int main() {
     check(react_cont_bridge(l).size() == react_cont_size && pre_start_bridge(l).size() == pre_start_size && mark_bridge(l).size() == mark_size && mark_jump(l).size() == reaction_site.patched
           && power_front_bridge(l).size() == power_front_size && power_entry_jump(l).size() == power_entry_site.patched
           && attack_front_bridge(l).size() == attack_front_size && attack_entry_jump(l).size() == attack_entry_site.patched, "revision 5 bridge lengths");
-    check(l.base + 786 <= l.react_cont && l.react_cont + react_cont_size <= l.pre_start && l.pre_start + pre_start_size <= l.mark && l.mark + mark_size <= l.power_front
-          && l.power_front + power_front_size <= l.attack_front && l.attack_front + attack_front_size <= l.base + code_size
+    check(l.base + 786 <= l.react_cont && l.react_cont + react_cont_size <= l.pre_start && l.pre_start + pre_start_size <= l.mark && l.mark + mark_size <= l.attack_front
+          && l.attack_front + attack_front_size <= l.power_front && l.power_front + power_front_size <= l.base + code_size
           && l.react == l.next + 4 * ai_slots && l.react_power == l.react + 4 * ai_slots && l.react_attack == l.react_power + 4 * ai_slots
-          && l.react_attack + 4 * ai_slots <= l.next + (block_size - code_size), "revision 5 spans do not overlap");
+          && l.power_last == l.react_attack + 4 * ai_slots && l.power_last + 4 * ai_slots <= l.next + (block_size - code_size)
+          && l.gap() + 4 <= l.combos, "revision 10 spans do not overlap");
     check(l.cont + cont_size <= l.start && l.start + start_size <= l.delays && l.delays + 120 <= l.end_delay && l.end_delay + end_delay_size <= l.base + code_size, "bridge and data spans do not overlap");
     std::memcpy(memory, bytes.data(), bytes.size());
     DWORD old = 0;
@@ -280,6 +281,28 @@ int main() {
         react_power[s] = 1; timer = -1000.0f; clock_now = 20.3f;
         power_call(b);
         check(timer == -984.0f, "at most eight re-checks are spent per call");
+        // The call gap (revision 10): a re-check that fell due after the previous call, with that call more than
+        // power_call_gap ago (the engine skipped the brain while the body was busy), is spent like a reaction's.
+        auto* power_last = reinterpret_cast<float*>(l.power_last);
+        react_power[s] = 0;
+        power_last[s] = 20.3f; timer = 20.35f; clock_now = 20.5f;
+        power_call(b);
+        check(timer == 22.35f && power_last[s] == 20.5f, "a re-check due inside a call gap is spent; the call is recorded");
+        power_last[s] = 20.5f; timer = 20.4f; clock_now = 21.0f;
+        power_call(b);
+        check(timer == 20.4f, "a re-check already due at the previous call is not spent (the original retried it too)");
+        power_last[s] = 21.0f; timer = 21.02f; clock_now = 21.1f;
+        power_call(b);
+        check(timer == 21.02f, "consecutive frames: the decision as before");
+        power_last[s] = 30.0f; timer = 21.08f; clock_now = 21.2f;
+        power_call(b);
+        check(timer == 21.08f && power_last[s] == 21.2f, "a rewound clock spends nothing");
+        power_last[s] = std::numeric_limits<float>::quiet_NaN(); timer = 21.1f; clock_now = 21.5f;
+        power_call(b);
+        check(timer == 21.1f, "an unordered last call spends nothing");
+        power_last[s] = 10.0f; timer = 12.0f; clock_now = 17.0f;
+        power_call(b);
+        check(timer == 18.0f, "a long gap spends every re-check due in it");
         power_call(brains.data() + 1);
         // The attack front: with no combo running, a decision that fell due during the reaction is spent and the
         // next attack time re-armed the tail's way (offset + random x random-add) from it; a running combo leaves

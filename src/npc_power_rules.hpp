@@ -147,6 +147,10 @@ namespace npc_power_rules
 	constexpr float xml2_recheck = 0.3f;   // 0x681ebc
 	constexpr float xml1_recheck = 2.0f;   // default.xbe 0x3c9404
 	constexpr float xml1_recheck_party = 0.5f; // default.xbe 0x3c7084
+	// Revision 10: a power decision not called for longer than this was skipped by the engine while the body was busy
+	// (XMen2.exe's brain runs ~2-3 times a second in attack moves and under once a second in power moves, against
+	// 25-35 times a second for XML1's 0xee260 in every move); a re-check that fell due inside such a gap is spent.
+	constexpr float power_call_gap = 0.15f;
 	inline float recheck_xml1(const std::int32_t controller)
 	{
 		return controller == -1 ? xml1_recheck : xml1_recheck_party;
@@ -353,17 +357,19 @@ namespace npc_power_rules
 		address two() const { return constants + 8; }
 		address half() const { return constants + 12; }
 		address max_delay() const { return constants + 16; }
+		address gap() const { return constants + 20; }        // revision 10: the power front's call-gap time
 		address combos = 0;
 		address combo(const std::size_t i) const { return combos + static_cast<address>(20 * i); }
 		address cont = 0, start = 0, delays = 0, next = 0, end_delay = 0; // the combo step bridges, XML1's delays, the per-brain times
 		address react = 0, react_cont = 0, pre_start = 0, mark = 0;   // revision 10: per-brain reaction marks and their bridges
 		address react_power = 0, power_front = 0;                     // revision 10: the power decision's marks and front
 		address react_attack = 0, attack_front = 0;                   // revision 10: the attack decision's marks and front
+		address power_last = 0;                                       // revision 10: the power decision's last call time per slot
 	};
 	// The block: one page of code and constants (made execute-read), then one page of data (read-write): the next
 	// press time of each of the 32 brains.
 	constexpr std::size_t charge_size = 57, recheck_size = 23, gate_size = 47, cont_size = 149, start_size = 71, end_delay_size = 32;
-	constexpr std::size_t react_cont_size = 125, pre_start_size = 43, mark_size = 85, power_front_size = 166, attack_front_size = 182;
+	constexpr std::size_t react_cont_size = 125, pre_start_size = 43, mark_size = 85, power_front_size = 221, attack_front_size = 182;
 	constexpr std::size_t code_size = 4096, block_size = 8192;
 	inline layout layout_at(const address base)
 	{
@@ -379,15 +385,16 @@ namespace npc_power_rules
 		l.pre_start = base + 928;
 		l.mark = base + 976;
 		l.react_power = l.react + 4 * ai_slots;
-		l.power_front = base + 1072;
+		l.power_front = base + 1440; // after the attack front (it outgrew 1072..1247)
 		l.react_attack = l.react_power + 4 * ai_slots;
 		l.attack_front = base + 1248;
+		l.power_last = l.react_attack + 4 * ai_slots;
 		return l;
 	}
 	inline std::vector<std::uint8_t> constants()
 	{
-		std::vector<std::uint8_t> data(20);
-		std::uint32_t values[5] = {float_bits(-0.5f), 0x3a83126fu /* default.xbe 0x3c832c, 0.001 */, float_bits(xml1_recheck), float_bits(xml1_recheck_party), float_bits(max_combo_delay)};
+		std::vector<std::uint8_t> data(24);
+		std::uint32_t values[6] = {float_bits(-0.5f), 0x3a83126fu /* default.xbe 0x3c832c, 0.001 */, float_bits(xml1_recheck), float_bits(xml1_recheck_party), float_bits(max_combo_delay), float_bits(power_call_gap)};
 		std::memcpy(data.data(), values, sizeof(values));
 		return data;
 	}
@@ -689,68 +696,96 @@ namespace npc_power_rules
 		put32(code, 0x51, reaction_resume_va - (l.mark + 0x55));
 		return code;
 	}
-	// Jumped to from 0x518770 (ecx = the brain; eax/edx are scratch at a thiscall entry): a reaction-marked slot
-	// re-arms its power re-check (AI+0x1cc) once per re-check that fell due before now (at most 8), then the decision
-	// as before (it finds the timer in the future and does nothing this time). Unmarked slots go straight on.
+	// Jumped to from 0x518770 (ecx = the brain; eax/edx are scratch at a thiscall entry). XML1's decision (0xee260) runs
+	// every frame whatever the body does, so a re-check (AI+0x1cc) that falls due while the body is in a move with no
+	// `powers` chain (pain, block, a power, an attack before its chain window) is made, finds no power and is re-armed.
+	// XMen2.exe's brain is not called while the body is busy (measured: ~3/s in attacks, <1/s in powers, ~7/s in
+	// pain against 18-55/s in idle/moves), so the overdue re-check went off on the first free frame. A slot spends
+	// (re-arms by 2.0 s, or 0.5 s with a controller, once per re-check that fell due before now, at most 8) when it
+	// carries a reaction mark, or when its timer fell due after this decision's previous call and that call is more
+	// than power_call_gap ago; then the decision as before. Every call records its time (power_last).
 	inline std::vector<std::uint8_t> power_front_bridge(const layout& l)
 	{
 		std::vector<std::uint8_t> code{
-			0x51,                                     // 00 push ecx (the brain)
-			0x8b, 0xc1,                               // 01 mov eax,ecx
-			0x2d, 0, 0, 0, 0,                         // 03 sub eax,brain0
-			0x0f, 0x82, 0, 0, 0, 0,                   // 08 jb out (0x9b)
-			0x33, 0xd2,                               // 0e xor edx,edx
-			0xb9, 0x1c, 0x06, 0x00, 0x00,             // 10 mov ecx,0x61c
-			0xf7, 0xf1,                               // 15 div ecx
-			0x85, 0xd2,                               // 17 test edx,edx
-			0x0f, 0x85, 0, 0, 0, 0,                   // 19 jnz out
-			0x83, 0xf8, 0x20,                         // 1f cmp eax,32
-			0x0f, 0x83, 0, 0, 0, 0,                   // 22 jae out
-			0x8d, 0x14, 0x85, 0, 0, 0, 0,             // 28 lea edx,[eax*4+react_power]
-			0x83, 0x3a, 0x00,                         // 2f cmp dword [edx],0
-			0x0f, 0x84, 0, 0, 0, 0,                   // 32 je out
-			0xc7, 0x02, 0x00, 0x00, 0x00, 0x00,       // 38 mov dword [edx],0
-			0xe8, 0, 0, 0, 0,                         // 3e call 0x46dce0
-			0x8b, 0x10,                               // 43 mov edx,[eax]
-			0x8b, 0xc8,                               // 45 mov ecx,eax
-			0xff, 0x92, 0x60, 0x01, 0x00, 0x00,       // 47 call [edx+0x160]: ST0 = now (the clock 0x518849 reads)
-			0x8b, 0x0c, 0x24,                         // 4d mov ecx,[esp] (the brain)
-			0x8b, 0x49, 0x04,                         // 50 mov ecx,[ecx+4] (the AI)
-			0x8b, 0x51, 0x10,                         // 53 mov edx,[ecx+0x10] (the actor)
-			0x83, 0xba, 0xd4, 0x03, 0x00, 0x00, 0xff, // 56 cmp dword [edx+0x3d4],-1
-			0x74, 0x08,                               // 5d je two (0x67)
-			0xd9, 0x05, 0, 0, 0, 0,                   // 5f fld dword [0.5] (a character with a controller)
-			0xeb, 0x06,                               // 65 jmp have (0x6d)
-			0xd9, 0x05, 0, 0, 0, 0,                   // 67 two: fld dword [2.0]
-			0xba, 0x08, 0x00, 0x00, 0x00,             // 6d have: mov edx,8 (ST0 = re-check, ST1 = now)
-			0xd9, 0x81, 0xcc, 0x01, 0x00, 0x00,       // 72 again: fld dword [ecx+0x1cc]
-			0xd8, 0xda,                               // 78 fcomp st(2): the timer against now
-			0xdf, 0xe0,                               // 7a fnstsw ax
-			0xf6, 0xc4, 0x45,                         // 7c test ah,0x45
-			0x74, 0x16,                               // 7f jz done (0x97): timer > now
-			0xf6, 0xc4, 0x04,                         // 81 test ah,4
-			0x75, 0x11,                               // 84 jnz done: unordered
-			0xd9, 0x81, 0xcc, 0x01, 0x00, 0x00,       // 86 fld dword [ecx+0x1cc]
-			0xd8, 0xc1,                               // 8c fadd st(0),st(1)
-			0xd9, 0x99, 0xcc, 0x01, 0x00, 0x00,       // 8e fstp dword [ecx+0x1cc]: re-armed, as XML1's spent decision
-			0x4a,                                     // 94 dec edx
-			0x75, 0xdb,                               // 95 jnz again (0x72)
-			0xdd, 0xd8,                               // 97 done: fstp st(0)
-			0xdd, 0xd8,                               // 99 fstp st(0)
-			0x59,                                     // 9b out: pop ecx
-			0x83, 0xec, 0x14, 0x53, 0x55,             // 9c sub esp,0x14; push ebx; push ebp (displaced)
-			0xe9, 0, 0, 0, 0,                         // a1 jmp 0x518775
+			0x51,                                        // 00 push ecx (the brain)
+			0x8b, 0xc1,                                  // 01 mov eax,ecx
+			0x2d, 0, 0, 0, 0,                            // 03 sub eax,brain0
+			0x0f, 0x82, 0, 0, 0, 0,                      // 08 jb out
+			0x33, 0xd2,                                  // 0e xor edx,edx
+			0xb9, 0x1c, 0x06, 0x00, 0x00,                // 10 mov ecx,0x61c
+			0xf7, 0xf1,                                  // 15 div ecx
+			0x85, 0xd2,                                  // 17 test edx,edx
+			0x0f, 0x85, 0, 0, 0, 0,                      // 19 jnz out
+			0x83, 0xf8, 0x20,                            // 1f cmp eax,32
+			0x0f, 0x83, 0, 0, 0, 0,                      // 22 jae out
+			0x50,                                        // 28 push eax (the slot)
+			0xe8, 0, 0, 0, 0,                            // 29 call 0x46dce0
+			0x8b, 0x10,                                  // 2e mov edx,[eax]
+			0x8b, 0xc8,                                  // 30 mov ecx,eax
+			0xff, 0x92, 0x60, 0x01, 0x00, 0x00,          // 32 call [edx+0x160]: ST0 = now (the clock 0x518849 reads)
+			0x58,                                        // 38 pop eax (the slot)
+			0x8d, 0x14, 0x85, 0, 0, 0, 0,                // 39 lea edx,[eax*4+power_last]
+			0xd9, 0x02,                                  // 40 fld dword [edx]: ST0 = the last call, ST1 = now
+			0xd9, 0xc9,                                  // 42 fxch: ST0 = now, ST1 = last
+			0xd9, 0x12,                                  // 44 fst dword [edx]: this call is the last call
+			0x8d, 0x14, 0x85, 0, 0, 0, 0,                // 46 lea edx,[eax*4+react_power]
+			0x83, 0x3a, 0x00,                            // 4d cmp dword [edx],0
+			0x74, 0x08,                                  // 50 je gap
+			0xc7, 0x02, 0x00, 0x00, 0x00, 0x00,          // 52 mov dword [edx],0: a reaction mark spends whatever fell due
+			0xeb, 0x26,                                  // 58 jmp spend
+			0xd9, 0xc0,                                  // 5a fld st(0)
+			0xd8, 0xe2,                                  // 5c fsub st(0),st(2): now - last
+			0xd8, 0x1d, 0, 0, 0, 0,                      // 5e fcomp dword [gap]
+			0xdf, 0xe0,                                  // 64 fnstsw ax
+			0xf6, 0xc4, 0x45,                            // 66 test ah,0x45
+			0x75, 0x63,                                  // 69 jnz drop: called within the gap time (or unordered): the decision as before
+			0x8b, 0x0c, 0x24,                            // 6b mov ecx,[esp] (the brain)
+			0x8b, 0x49, 0x04,                            // 6e mov ecx,[ecx+4] (the AI)
+			0xd9, 0x81, 0xcc, 0x01, 0x00, 0x00,          // 71 fld dword [ecx+0x1cc]
+			0xd8, 0xda,                                  // 77 fcomp st(2): the timer against the last call
+			0xdf, 0xe0,                                  // 79 fnstsw ax
+			0xf6, 0xc4, 0x45,                            // 7b test ah,0x45
+			0x75, 0x4e,                                  // 7e jnz drop: it was already due at the last call
+			0xd9, 0xc9,                                  // 80 fxch
+			0xdd, 0xd8,                                  // 82 fstp st(0): ST0 = now
+			0x8b, 0x0c, 0x24,                            // 84 mov ecx,[esp] (the brain)
+			0x8b, 0x49, 0x04,                            // 87 mov ecx,[ecx+4] (the AI)
+			0x8b, 0x51, 0x10,                            // 8a mov edx,[ecx+0x10] (the actor)
+			0x83, 0xba, 0xd4, 0x03, 0x00, 0x00, 0xff,    // 8d cmp dword [edx+0x3d4],-1
+			0x74, 0x08,                                  // 94 je two
+			0xd9, 0x05, 0, 0, 0, 0,                      // 96 fld dword [0.5] (a character with a controller)
+			0xeb, 0x06,                                  // 9c jmp have
+			0xd9, 0x05, 0, 0, 0, 0,                      // 9e two: fld dword [2.0]
+			0xba, 0x08, 0x00, 0x00, 0x00,                // a4 have: mov edx,8 (ST0 = re-check, ST1 = now)
+			0xd9, 0x81, 0xcc, 0x01, 0x00, 0x00,          // a9 again: fld dword [ecx+0x1cc]
+			0xd8, 0xda,                                  // af fcomp st(2): the timer against now
+			0xdf, 0xe0,                                  // b1 fnstsw ax
+			0xf6, 0xc4, 0x45,                            // b3 test ah,0x45
+			0x74, 0x16,                                  // b6 jz done: timer > now
+			0xf6, 0xc4, 0x04,                            // b8 test ah,4
+			0x75, 0x11,                                  // bb jnz done: unordered
+			0xd9, 0x81, 0xcc, 0x01, 0x00, 0x00,          // bd fld dword [ecx+0x1cc]
+			0xd8, 0xc1,                                  // c3 fadd st(0),st(1)
+			0xd9, 0x99, 0xcc, 0x01, 0x00, 0x00,          // c5 fstp dword [ecx+0x1cc]: re-armed, as XML1's spent decision
+			0x4a,                                        // cb dec edx
+			0x75, 0xdb,                                  // cc jnz again
+			0xdd, 0xd8,                                  // ce done: fstp st(0)
+			0xdd, 0xd8,                                  // d0 fstp st(0)
+			0x59,                                        // d2 out: pop ecx
+			0x83, 0xec, 0x14, 0x53, 0x55,                // d3 sub esp,0x14; push ebx; push ebp (displaced)
+			0xe9, 0, 0, 0, 0,                            // d8 jmp 0x518775
 		};
 		put32(code, 0x04, brain0_va);
-		for (const std::size_t at : {std::size_t{0x0a}, std::size_t{0x1b}, std::size_t{0x24}, std::size_t{0x34}})
-		{
-			put32(code, at, 0x9b - static_cast<std::uint32_t>(at + 4));
-		}
-		put32(code, 0x2b, l.react_power);
-		put32(code, 0x3f, game_clock_owner_va - (l.power_front + 0x43));
-		put32(code, 0x61, l.half());
-		put32(code, 0x69, l.two());
-		put32(code, 0xa2, power_entry_resume_va - (l.power_front + 0xa6));
+		put32(code, 0x0a, 0xd2 - static_cast<std::uint32_t>(0x0a + 4));
+		put32(code, 0x1b, 0xd2 - static_cast<std::uint32_t>(0x1b + 4));
+		put32(code, 0x24, 0xd2 - static_cast<std::uint32_t>(0x24 + 4));
+		put32(code, 0x2a, game_clock_owner_va - (l.power_front + 0x2e));
+		put32(code, 0x3c, l.power_last);
+		put32(code, 0x49, l.react_power);
+		put32(code, 0x60, l.gap());
+		put32(code, 0x98, l.half());
+		put32(code, 0xa0, l.two());
+		put32(code, 0xd9, power_entry_resume_va - (l.power_front + 0xdd));
 		return code;
 	}
 	// Jumped to from 0x518fd0 (ecx = the brain; eax/edx scratch at the thiscall entry): with no combo running, a

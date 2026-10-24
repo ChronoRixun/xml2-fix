@@ -125,6 +125,16 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    controller) once for each re-check that fell due before now (the clock 0x518849 reads: 0x46dce0 vt+0x160), at
    most eight, then runs the decision, which finds the timer in the future. The visibility/energy conditions XML1
    checks before re-arming are not replayed for the spent re-checks.
+   The same front also spends a re-check that the engine skipped while the body was busy in any other way: XML1's
+   0xee260 runs 25-35 times a second in every move (idle, movement, attacks, powers, pain), XMen2.exe's 0x518770
+   18-55 times a second in idle and movement but about 3 in attack moves, 7 in `pain` and under 1 in power moves
+   (one matched session each, callrate.py). A re-check that falls due inside such a gap is made on the Xbox, finds
+   no `powers` chain (an attack chains powers only in its last tenth, a power or a reaction only `idle`) and is
+   re-armed; the port took it on the first free frame, which is why powers stayed ~1.4x after the reaction fronts
+   (measured: on the still bench 19 of 22 port powers came 0.5-7 s after their due time, after an attack; on the
+   Xbox the re-check is re-armed inside the attack). Every call records its time per slot; a timer that fell due
+   after the previous call, with that call more than 0.15 s ago, is spent the same way (2.0 s / 0.5 s steps, at
+   most eight). A timer already due at the previous call is left alone (the Xbox retries that one each frame too).
 13. **0x518fd0 (5 bytes, revision 10).** The attack decision itself: with no combo running, XML1's deadline
    (AI+0x1c) can fall due while the body reacts; the decision is then made and spent (no chain out of pain/block)
    and its tail re-arms the next attack time (now + meleetimeroffset + random x meleetimerrandomadd). XMen2.exe made
