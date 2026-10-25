@@ -93,3 +93,5 @@ DISASM  test/boss_mystique_bridge_test.cpp  # Authored synthetic entry, virtual-
 DISASM  src/boss_magneto.cpp  # Authored hurt observation bridge preserves registers and replays its six-byte guarded prologue; no game body or listing.
 DISASM  src/boss_blob.cpp  # Authored metadata observation bridge preserves registers and replays a guarded reader load and literal argument; no game body or listing.
 DISASM  test/boss_wave3_bridge_test.cpp  # Invented callers and continuations test our production observation bridges, stack, registers and FPU; no game instructions copied into the fixture.
+DISASM  test/lift_rule_test.cpp  # Authored naked callers build the synthetic register/stack frames that drive our LiftRule bridges (revision 2: throw impact, carry, telekinesis); the retail bytes come from the owner's executable at run time. No game listing or decompiled body.
+DISASM  test/npc_bullet_ray_test.hpp  # Authored synthetic callers (stack/register setup and a jump into a fragment loaded from the owner's files at run time) verify the character bullet-ray adapter; no game instruction listing or decompiled body.
