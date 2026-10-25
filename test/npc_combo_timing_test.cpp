@@ -312,9 +312,9 @@ int main() {
         power_last[s] = std::numeric_limits<float>::quiet_NaN(); timer = 21.1f; clock_now = 21.5f;
         melee_call(b);
         check(timer == 21.1f, "an unordered last call spends nothing");
-        power_last[s] = 10.0f; timer = 12.0f; clock_now = 21.0f;
+        power_last[s] = 10.0f; timer = 12.0f; clock_now = 700.0f;
         melee_call(b);
-        check(timer == 12.0f, "a gap of 10 s or more (an inactive AI, a load) spends nothing");
+        check(timer == 12.0f, "a gap of 600 s or more (a load, a clock jump) spends nothing");
         power_last[s] = 10.0f; timer = 12.0f; clock_now = 17.0f;
         melee_call(b);
         check(timer == 18.0f, "a 7 s gap (back-to-back attacks) spends every re-check due in it");
@@ -365,9 +365,9 @@ int main() {
         b[0x2c] = 0; attack_last[s] = 30.0f; next_attack = 21.3f; clock_now = 21.4f;
         power_call(b);
         check(next_attack == 21.3f, "a rewound clock spends nothing");
-        attack_last[s] = 10.0f; next_attack = 10.5f; clock_now = 21.0f;
+        attack_last[s] = 10.0f; next_attack = 10.5f; clock_now = 700.0f;
         power_call(b);
-        check(next_attack == 10.5f, "a gap of 10 s or more spends no decision");
+        check(next_attack == 10.5f, "a gap of 600 s or more spends no decision");
         power_call(brains.data() + 1);
         __asm { fnstsw fa }
         check((fb & 0x3800) == (fa & 0x3800) && !(fa & 0x40), "the power front leaves the x87 stack balanced (no stack fault; the NaN case may set IE as the native fcomp does)");

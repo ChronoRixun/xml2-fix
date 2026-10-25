@@ -151,9 +151,10 @@ namespace npc_power_rules
 	// (XMen2.exe's brain runs ~2-3 times a second in attack moves and under once a second in power moves, against
 	// 25-35 times a second for XML1's 0xee260 in every move); a re-check that fell due inside such a gap is spent.
 	constexpr float power_call_gap = 0.15f;
-	// ...and shorter than this: a longer gap is an inactive AI, a state the brain does not run in, or a load (XML1 does
-	// not decide then either; found with the officer, whose grenade at full energy was spent at activation).
-	constexpr float power_call_gap_max = 10.0f;
+	// ...and shorter than this (a load or a clock jump). Back-to-back attacks skip the melee brain's power call for
+	// more than 10 s on the still bench, so the bound is wide; the officer's activation gap is excluded by caller
+	// instead (the gap rule is for the melee brain's call only).
+	constexpr float power_call_gap_max = 600.0f;
 	inline float recheck_xml1(const std::int32_t controller)
 	{
 		return controller == -1 ? xml1_recheck : xml1_recheck_party;
