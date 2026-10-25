@@ -13,6 +13,7 @@
 #include "xml1_capability_rules.hpp"
 #include "script_functions_rules.hpp"
 #include "limits_agreement_rules.hpp"
+#include "lift_rule_rules.hpp"
 #include <cstdio>
 #include <string>
 #include <cstdarg>
@@ -146,8 +147,8 @@ void records(){
  check(future.compare(stun(true,true,stun_rule::revision,true).bytes())==result::match,"later rule 17 registration agrees in either order");
  check(stun(true).compare(future.bytes())==result::entries,"missing future rule 17 is refused, not silently ignored");
  // New requested-only rules preserve the pre-integration OFF bytes and name both mismatch directions.
- for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id,gameplay_capabilities::box_harm_origin_id,gameplay_capabilities::danger_room_healthbars_id,gameplay_capabilities::harm_single_chain_id,gameplay_capabilities::online_conversations_id,gameplay_capabilities::model_pools_id,gameplay_capabilities::tick_rate_id,gameplay_capabilities::world_backfaces_id,gameplay_capabilities::igb_cache_id,gameplay_capabilities::balance_parity_id}) {
-  auto optional=[&](bool wanted,bool verified=true){record r;if(wanted)r.add(id,1,{1,0,0,0},verified);r.finalize();return r;};
+ for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id,gameplay_capabilities::box_harm_origin_id,gameplay_capabilities::danger_room_healthbars_id,gameplay_capabilities::harm_single_chain_id,gameplay_capabilities::online_conversations_id,gameplay_capabilities::model_pools_id,gameplay_capabilities::tick_rate_id,gameplay_capabilities::world_backfaces_id,gameplay_capabilities::igb_cache_id,gameplay_capabilities::balance_parity_id,gameplay_capabilities::lift_rule_id,gameplay_capabilities::wall_cling_id}) {
+  auto optional=[&](bool wanted,bool verified=true){record r;if(wanted)r.add(id,id==gameplay_capabilities::lift_rule_id ? lift_rule_rules::agreement_revision : 1,{1,0,0,0},verified);r.finalize();return r;};
   const auto yes=optional(true),no=optional(false),failed=optional(true,false);
   check(yes.compare(optional(true).bytes())==result::match,"matching new requested-only rule accepts");
   check(std::equal(no.bytes().begin(),no.bytes().end(),native.bytes().begin(),native.bytes().end()),"new rule OFF record is byte-identical to base");
@@ -158,6 +159,15 @@ void records(){
   no.describe(d.buckets,0,false,name,sizeof(name));
   check(std::string(name)==std::string(gameplay_capabilities::rule_name(id))+" (disabled on this PC)","disabled peer names known new rule");
   check(!failed.ready() && failed.compare(yes.bytes())==result::unavailable && yes.compare(failed.bytes())!=result::match,"failed new request closes host/join");
+ }
+ {
+  record old_lift,new_lift;
+  old_lift.add(gameplay_capabilities::lift_rule_id,1,{1,0,0,0},true);old_lift.finalize();
+  new_lift.add(gameplay_capabilities::lift_rule_id,lift_rule_rules::agreement_revision,{1,0,0,0},true);new_lift.finalize();
+  gameplay_capabilities::difference d;char name[160];
+  check(new_lift.compare(old_lift.bytes(),&d)==result::value && old_lift.compare(new_lift.bytes())==result::value,"LiftRule revision 2 refuses revision 1 both ways");
+  new_lift.describe(d.buckets,d.local_only,false,name,sizeof(name));
+  check(std::string(name).find("LiftRule")!=std::string::npos,"LiftRule revision mismatch names the rule");
  }
  // [Online] FastTransfer is rule 24: an unassigned (0) ID is refused by add(); the assigned rule is checked in both mismatch
  // directions and for its record values.

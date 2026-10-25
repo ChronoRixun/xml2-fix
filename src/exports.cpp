@@ -43,6 +43,10 @@
 #include "stun_rule.hpp"
 #include "shared_handlers.hpp"
 #include "pack_amount.hpp"
+#include "lift_rule.hpp"
+#include "lift_rule_rules.hpp"
+#include "xml1_cling.hpp"
+#include "xml1_cling_rules.hpp"
 #include "death_switch.hpp"
 #include "gameplay_agreement.hpp"
 #include "gameplay_capabilities.hpp"
@@ -514,6 +518,19 @@ namespace
 		if (world_backfaces::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::world_backfaces_id, world_backfaces_rules::agreement_revision,
 				world_backfaces::values(), world_backfaces::verified(), world_backfaces::detail());
+		// [Game] LiftRule=xml1 (requested-only, rule 38, docs/lift-rule.md): the heaviness clamp 0x498991 (after
+		// break_rule's 0x498970 bridge, which it does not touch) and the lift test's heaviness compare 0x427fa3.
+		lift_rule::install(game);
+		if (lift_rule::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::lift_rule_id, lift_rule_rules::agreement_revision,
+				{lift_rule::installed() ? 1u : 0u,0,0,0}, lift_rule::verified());
+		// [Game] Xml1WallCling=xml1 (requested-only, rule 39, docs/xml1-cling.md): the entry of the FightMove handler
+		// lookup 0x4fd860 (npc_semi_auto owns its parser call 0x4f6bf6, whose lookup falls through to this entry).
+		// After entity_capacity, whose bridges of the contact accessors it accepts.
+		xml1_cling::install(game);
+		if (xml1_cling::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::wall_cling_id, xml1_cling_rules::agreement_revision,
+				{xml1_cling::installed() ? 1u : 0u,0,0,0}, xml1_cling::verified());
 		// X-Men Legends 1's packs ([Game] DoubleHeal=0, installed above, before stat_help): two branches of restoreHealth /
 		// restoreEnergy; no other module patches them.
 		// Both change what each peer simulates (objects broken while a zone settles; how much a pack heals): rules 11

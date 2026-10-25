@@ -53,6 +53,8 @@ add_library(xml2_fix SHARED
 	src/double_heal.cpp
 	src/world_backfaces.cpp
 	src/balance_parity.cpp
+	src/xml1_cling.cpp
+	src/lift_rule.cpp
 	src/combo_heads.cpp
 	src/model_pools.cpp
 	src/online_tick.cpp
@@ -499,6 +501,14 @@ target_link_options(xml2_harm_single_chain_test PRIVATE /BASE:0x400000 /DYNAMICB
 add_executable(xml2_world_backfaces_test test/world_backfaces_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/world_backfaces.cpp)
 target_include_directories(xml2_world_backfaces_test PRIVATE src)
 target_link_options(xml2_world_backfaces_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# [Game] Xml1WallCling=xml1 (rule 31): the wall-cling rules and every guard against the retail executable
+# (XML2_FIX_TEST_EXE or the first argument); nothing of the game runs.
+add_executable(xml2_xml1_cling_test test/xml1_cling_test.cpp)
+target_include_directories(xml2_xml1_cling_test PRIVATE src)
+# [Game] LiftRule=xml1 (rule 38): XML1 tables, retail guards, OFF bytes and emitted revision 2 bridges.
+add_executable(xml2_lift_rule_test test/lift_rule_test.cpp src/lift_rule.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_lift_rule_test PRIVATE src)
+target_link_options(xml2_lift_rule_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 # multipart::install against the retail image (review cases: invalid table operand, foreign setSegmentVisible handler,
 # relocated table, changed guard) and the loop length's generator draw. SKIPPED without XML2_FIX_TEST_EXE.
 add_executable(xml2_multipart_install_test test/multipart_install_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
