@@ -51,6 +51,7 @@ add_library(xml2_fix SHARED
 	src/harm_loop_startup.cpp
 	src/harm_single_chain.cpp
 	src/double_heal.cpp
+	src/world_backfaces.cpp
 	src/combo_heads.cpp
 	src/model_pools.cpp
 	src/online_tick.cpp
@@ -484,6 +485,11 @@ target_link_libraries(xml2_broker_tls_test PRIVATE secur32 crypt32 bcrypt ws2_32
 add_executable(xml2_harm_single_chain_test test/harm_single_chain_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/harm_single_chain.cpp)
 target_include_directories(xml2_harm_single_chain_test PRIVATE src)
 target_link_options(xml2_harm_single_chain_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# [Game] WorldBackfaces=xml1 (rule 30): the installer against guards seeded from the retail executable given on the
+# command line, the retail trace helper 0x4a9650 run before and after the patch, the face filter and the agreement entry.
+add_executable(xml2_world_backfaces_test test/world_backfaces_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/world_backfaces.cpp)
+target_include_directories(xml2_world_backfaces_test PRIVATE src)
+target_link_options(xml2_world_backfaces_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 # multipart::install against the retail image (review cases: invalid table operand, foreign setSegmentVisible handler,
 # relocated table, changed guard) and the loop length's generator draw. SKIPPED without XML2_FIX_TEST_EXE.
 add_executable(xml2_multipart_install_test test/multipart_install_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")

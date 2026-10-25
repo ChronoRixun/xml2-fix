@@ -2,6 +2,15 @@
 
 ## 1.8.0 - <date TBD>
 
+- **One-sided level collision for movement: gameplay rule 30** (`[Game] WorldBackfaces = xml1`; 1.8.0-beta.7
+  candidate, [docs](docs/world-backfaces.md)). XMen2.exe's common movement trace helper (0x4a9650) asks the collider
+  for the level hull's back faces before every sweep (0x4a96c0 `push 1` -> collider vt+0x88); X-Men Legends I's helper
+  (0xa0af0) never does and its hull test is always front-faces-only. In the first game's levels actors therefore
+  stopped or wedged against walls seen from behind: HAARP's officer in haarp2_1's 520 staging pocket is boxed in by
+  them and, below 60 fps, wedges at the free end of a wall strip (the G14 positioning stall at ~500). `xml1` changes
+  that one operand to `push 0`; entity collision and every other trace are unchanged. Absent/`xml2` is byte-identical
+  and adds no agreement entry; an `xml1` PC and one without the key refuse each other naming `30 WorldBackfaces`.
+
 - **Enemy AI fidelity, part 2: gameplay rule 16 revision 11** (`[Game] NpcPowerRule = xml1`, `[Game] NpcSemiAuto =
   xml1`; 1.8.0-beta.7; [docs](docs/npc-power-rule.md), [weapon brain](docs/npc-semi-auto.md),
   [round 8](docs/npc-weapon-round8.md)). (1) Power re-checks and attack decisions that fell due while XMen2.exe

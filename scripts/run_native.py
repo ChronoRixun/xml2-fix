@@ -38,7 +38,7 @@ with_exe = {
     "xml2_rank_costs_test", "xml2_multipart_install_test", "xml2_script_functions_test",
     "xml2_death_switch_test", "xml2_world_impact_test", "xml2_stun_rule_test",
     "xml2_test_mode_test", "xml2_lockon_effects_test", "xml2_box_harm_test",
-    "xml2_harm_single_chain_test", "xml2_harm_loop_startup_test", "xml2_reliable_receive_test",
+    "xml2_harm_single_chain_test", "xml2_world_backfaces_test", "xml2_harm_loop_startup_test", "xml2_reliable_receive_test",
     "xml2_campaign_sender_test", "xml2_receive_validation_test", "xml2_join_in_progress_test",
     "xml2_combo_heads_test", "xml2_input_worker_test", "xml2_model_pools_test", "xml2_model_pools_lifecycle_test",
 }
