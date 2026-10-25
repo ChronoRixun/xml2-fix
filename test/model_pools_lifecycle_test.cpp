@@ -430,6 +430,7 @@ int main(int argc, char** argv)
 
 	run_config(x2_capacities, "x2", false);
 	run_config(x4_capacities, "x4", false);
+	run_config(*with_handles(parse_setting(std::string("x4")), std::string("8192")).raise, "x4 + ModelHandles 8192", false); // wave 1 (E1)
 	// The negative control: f4ce771's plan must fail these checks (the procedural-geometry walk runs away or destroys
 	// slot 220; the attribute and procedural-geometry bits above the retail tails survive).
 	const int real = failures;

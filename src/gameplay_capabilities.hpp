@@ -15,11 +15,11 @@ namespace gameplay_capabilities
   death_switch_clear_id=15, npc_power_rule_id=16, object_world_impact_id=17, stun_rule_id=18,
   danger_room_party_id=19, lockon_aim_id=20, box_harm_origin_id=21, danger_room_healthbars_id=22, harm_single_chain_id=23, fast_transfer_id=24,
   gns_transport_id=25, join_in_progress_id=26, online_conversations_id=27, model_pools_id=28, tick_rate_id=29,
-  world_backfaces_id=30;
+  world_backfaces_id=30, igb_cache_id=31;
  // Rules 17..29 (24 = [Online] FastTransfer, docs/online-campaign-transfer.md; 25 = [Online] Transport=gns, docs/gns-transport.md;
  // 26 = [Online] JoinInProgress, docs/join-in-progress.md; 27 = [Game] OnlineConversations=lockstep, docs/gameplay-agreement.md;
  // 28 = [Engine] ModelPools, docs/model-pools.md; 29 = [Online] TickRate, docs/online-tick-rate.md;
- // 30 = [Game] WorldBackfaces=xml1, docs/world-backfaces.md)
+ // 30 = [Game] WorldBackfaces=xml1, docs/world-backfaces.md; 31 = [Limits] IGBCache, docs/igb-cache.md)
  // participate only when requested; OFF preserves the released digest.
  constexpr std::uint16_t fast_transfer_revision=1;
  // 10: the first game's Xtraction services and revival price (xtract::capability; issue #63). Revision 2: the online
@@ -77,6 +77,7 @@ namespace gameplay_capabilities
   case model_pools_id: return "ModelPools";
   case tick_rate_id: return "TickRate";
   case world_backfaces_id: return "WorldBackfaces";
+  case igb_cache_id: return "IGBCache";
   default: return "a newer rule";
   }
  }
@@ -200,7 +201,7 @@ namespace gameplay_capabilities
      if(used)add(", ");if(ids){number(unsigned(b+1));add(" ");}
      // These requested-only rules are absent when OFF, but this DLL still knows
      // their names. The bucket summary remains advisory; the digest admits peers.
-     if(b+1==object_world_impact_id || b+1==stun_rule_id || b+1==danger_room_party_id || b+1==lockon_aim_id || b+1==box_harm_origin_id || b+1==danger_room_healthbars_id || b+1==harm_single_chain_id || b+1==fast_transfer_id || b+1==gns_transport_id || b+1==join_in_progress_id || b+1==online_conversations_id || b+1==model_pools_id || b+1==tick_rate_id || b+1==world_backfaces_id){add(rule_name(static_cast<std::uint16_t>(b+1)));add(" (disabled on this PC)");}
+     if(b+1==object_world_impact_id || b+1==stun_rule_id || b+1==danger_room_party_id || b+1==lockon_aim_id || b+1==box_harm_origin_id || b+1==danger_room_healthbars_id || b+1==harm_single_chain_id || b+1==fast_transfer_id || b+1==gns_transport_id || b+1==join_in_progress_id || b+1==online_conversations_id || b+1==model_pools_id || b+1==tick_rate_id || b+1==world_backfaces_id || b+1==igb_cache_id){add(rule_name(static_cast<std::uint16_t>(b+1)));add(" (disabled on this PC)");}
      else add("a rule this PC does not have");
     }
    }

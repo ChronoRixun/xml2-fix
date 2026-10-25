@@ -17,6 +17,8 @@
 //                     ; procedural geometry 1024, particle clouds 128 with as many particle systems (the second
 //                     ; manager each cloud takes a system from, 0x7dad78, moves with them); x2: half (clouds 80);
 //                     ; off: the game's own
+//   ModelHandles = 8192 ; with x2 / x4: handles and transforms (they move together) from the profile's count up to
+//                     ; 16384 - for a raised [Limits] IGBCache (about 3.5 model handles per IGB record)
 //
 // The whole object moves into a block of the DLL that the game's own constructor builds and its own destructor tears
 // down; every field, capacity and bitmap size of the model code is patched (model_pools_rules.hpp,

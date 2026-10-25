@@ -94,7 +94,9 @@ namespace model_pools
 	{
 		readable = reinterpret_cast<std::uintptr_t>(game) == image_base && retail_build();
 		combo_heads::set_pool_live_addresses(live_address(kind::igb), live_address(kind::shader_fx), layout.capacity[index(kind::igb)], layout.capacity[index(kind::shader_fx)]);
-		const auto set = parse_setting(ini::text(L"Engine", L"ModelPools"));
+		std::string handles_note;
+		const auto set = with_handles(parse_setting(ini::text(L"Engine", L"ModelPools")), ini::text(L"Engine", L"ModelHandles"), &handles_note);
+		if (!handles_note.empty()) logger::write("model pools: %s", handles_note.c_str());
 		rule = agreement_for(set, std::nullopt); // unverified until the raise is committed
 		if (!set.valid)
 			logger::write("model pools: [Engine] ModelPools is not x2, x4 or off - the game's own model pools stay (handles 692, IGB 400, actors 32)");

@@ -78,6 +78,27 @@ namespace
 			CHECK(!s.raise && !s.valid);
 		}
 		CHECK(capacities_valid(x4_capacities) && capacities_valid(x2_capacities) && capacities_valid(retail_capacities));
+		// [Engine] ModelHandles (wave 1, E1): handles and transforms together, from the profile's count to 16384, only with a raise.
+		{
+			std::string note;
+			const auto h8 = with_handles(parse_setting(std::string("x4")), std::string("8192 ; wave 1"), &note);
+			CHECK(note.empty() && h8.raise && (*h8.raise)[index(kind::model)] == 8192 && (*h8.raise)[index(kind::transform)] == 8192 && capacities_valid(*h8.raise));
+			auto rest = *h8.raise;
+			rest[index(kind::model)] = rest[index(kind::transform)] = 4096;
+			CHECK(rest == x4_capacities); // nothing else moves
+			const auto rule = agreement_for(h8, *h8.raise);
+			CHECK(rule.requested && rule.verified && rule.values == (std::array<std::uint32_t, 4>{1, 8192, 2048, 128})); // an x4 peer differs in rule 28's values
+			CHECK(with_handles(parse_setting(std::string("x4")), std::nullopt).raise == x4_capacities);
+			CHECK(with_handles(parse_setting(std::string("x4")), std::string("")).raise == x4_capacities);
+			for (const char* bad : {"4095", "16385", "lots", "0x2000", "-1"})
+			{
+				note.clear();
+				CHECK(with_handles(parse_setting(std::string("x4")), std::string(bad), &note).raise == x4_capacities && note.find("stay at 4096") != std::string::npos);
+			}
+			note.clear();
+			CHECK(!with_handles(parse_setting(std::string("off")), std::string("8192"), &note).raise && note.find("needs ModelPools") != std::string::npos);
+			CHECK((*with_handles(parse_setting(std::string("x2")), std::string("16384")).raise)[index(kind::model)] == 16384);
+		}
 		// Rule 28 (ModelPools): absent/off registers nothing; an installed raise its capacities; a failed or invalid
 		// request is unverified.
 		for (const char* off : {"off", "0", "stock", ""})
@@ -546,6 +567,8 @@ int main(int argc, char** argv)
 		{
 			check_exe_plan(img, x2_capacities, "x2");
 			check_exe_plan(img, x4_capacities, "x4");
+			check_exe_plan(img, *with_handles(parse_setting(std::string("x4")), std::string("8192")).raise, "x4 + ModelHandles 8192");
+			check_exe_plan(img, *with_handles(parse_setting(std::string("x4")), std::string("16384")).raise, "x4 + ModelHandles 16384");
 		}
 	}
 	std::printf("model pools: %d checks, %d failures\n", checks, failures);
