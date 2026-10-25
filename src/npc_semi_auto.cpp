@@ -53,7 +53,7 @@ namespace npc_semi_auto
    if (!w) return;
    const float time = now();
    const auto token = field<u32>(actor, 0x1c);
-   states[timer_slot(token)] = entered(reinterpret_cast<std::uintptr_t>(actor), token, time, w->recoil_bits);
+   rearm(states[timer_slot(token)], reinterpret_cast<std::uintptr_t>(actor), token, time, std::bit_cast<float>(w->recoil_bits));
   }
   void* __cdecl handler_lookup(const char* name)
   {

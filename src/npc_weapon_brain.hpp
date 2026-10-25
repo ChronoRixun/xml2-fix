@@ -1,7 +1,8 @@
 #pragma once
 
-// Included inside npc_semi_auto's private namespace. The supported contract is
-// a discrete bullet, beam or projectile weapon without warm-up or continuous beam. The native ranged brain retains
+// Included inside npc_semi_auto's private namespace. The supported contract covers
+// every source gun primary: semi-auto (discrete, warm-up before every shot, or a
+// continuous beam warmed up once) and the default-handler pistol. The native ranged brain retains
 // its target validation, navigation, near-target selection and close-combat paths; this restores
 // the missing weapon branch and the separate actor-input gate.
 struct point { float x, y, z; };
@@ -54,6 +55,15 @@ void* native_ai(void* actor)
 { return actor ? ai_function(reinterpret_cast<void*>(0x78ba10), field<u32>(actor, 0x7dc)) : nullptr; }
 const weapon* npc_spec(void* actor)
 { return actor && field<int>(actor, 0x3d4) == -1 ? spec(actor) : nullptr; }
+// The converted primary: a ch_weapon_semi_auto move resolves to this handler; the pistol's
+// source primary has no handler, so its converted power_attack keeps XML2's default one.
+bool gun_move(void* actor, void* move, const weapon& w)
+{
+ if (!move) return false;
+ void* h = field<void*>(move, 0xc8);
+ if (!default_handler(w)) return h == &handler;
+ return h && *static_cast<const u32*>(h) == default_vtable && move == named_move(actor, "power_attack");
+}
 
 void __cdecl prepare_brain(void* ai)
 {
@@ -80,7 +90,7 @@ bool __cdecl preserve_weapon_range(void* ai, void* const* chains = nullptr)
   u32 capabilities = 0;
   for (unsigned slot = 0; slot != 4; ++slot) {
    void* move = chains[5 + slot]; // native refresh's already resolved action table
-   if (move && field<void*>(move, 0xc8) == &handler) {
+   if (gun_move(field<void*>(ai, 0x10), move, *w)) {
     // These attributes were invented by the weapon conversion. Original gun
     // moves do not advertise generic AI powers; restore the empty cached slot.
     field<u32>(ai, 0x41c + 4*slot) = 0;
@@ -118,26 +128,33 @@ bool __fastcall semi_chain(void* self, void*, void* actor, void* input)
 
 bool __cdecl weapon_input(void* actor, void* input)
 {
- if (!npc_spec(actor) || (field<u32>(input, 0) & 0x90) != 0x90) return false;
+ const auto* w = npc_spec(actor);
+ if (!w) return false;
+ const u32 token = field<u32>(actor, 0x1c);
+ const auto self = reinterpret_cast<std::uintptr_t>(actor);
+ auto& s = states[timer_slot(token)];
+ if ((field<u32>(input, 0) & 0x90) != 0x90) { released(s, self, token); return false; }
  if (field<unsigned char>(actor, 0x764) & 1) return true;
  void* current = field<void*>(actor, 0x378);
  if (!current) return true;
  const int animation = field<int>(current, 0xbc); // native getter 0x500840
- const u32 token = field<u32>(actor, 0x1c);
  const float time = now();
  // Original enums 0, 0x15, 0x86, 0x8c map to PC idle, crouch,
  // power1 and power7. Resolve the move by name, not a contextual power chain.
  if (animation != 0 && animation != 21 && animation != 115 && animation != 127) {
   request_function(actor, named_move(actor, "idle"), -1, -1.f, 0, nullptr, nullptr);
-  states[timer_slot(token)] = {reinterpret_cast<std::uintptr_t>(actor), token, time, time + .05f};
+  rearm(s, self, token, time, transition_delay);
   return true;
  }
- const auto* s = find(actor, token);
- if (!ready(s ? *s : state{}, reinterpret_cast<std::uintptr_t>(actor), token, time)) return true;
+ if (!ready(s, self, token, time)) return true;
  void* move = named_move(actor, "power_attack");
- if (!move || field<void*>(move, 0xc8) != &handler) return true;
+ if (!gun_move(actor, move, *w)) return true;
+ // Warm-up start (0x4309a): the original also plays the weapon's charge effect through
+ // actor vfunc +0x84; the PC conversion authors that effect inside the primary at the
+ // shot, so only the deadline is restored here.
+ if (gate(s, self, token, time, *w) != admit::fire) return true;
  request_function(actor, move, (field<unsigned char>(actor, 0x3d9) & 0x40) ? 127 : 115,
-                  -1.f, 9, nullptr, nullptr);
+                  -1.f, play_flags(*w), nullptr, nullptr);
  return true;
 }
 

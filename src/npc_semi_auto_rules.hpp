@@ -11,14 +11,18 @@
 #include "limits_rules.hpp"
 #include "entity_capacity_layout.hpp"
 
-// Opt-in discrete weapon compatibility (bullet, beam or projectile type; no
-// warm-up, no continuous beam). Source metadata supplies recoil, weapon range
-// and burst duration; input admission is actor-wide. The original's held-fire
-// branch (0xef8df) and input gate (0x42f60) are the same for all three types;
-// it reads the type only in the bullet line-of-sight drop at the top of each
-// update (0xef3ff..0xef434 via 0xfe550) and in the branches for an empty
-// near-target query 0x103850 (bullet 0xef9bc, which alone reads rapidfire; other 0xefc4a).
-// Those are not restored for any type (see docs/npc-weapon-round7.md).
+// Opt-in weapon compatibility for the original weapon brain (0xef390) and input gate
+// (0x42f60). Source metadata supplies recoil, weapon range, burst duration, leader,
+// warm-up and the weapon flags; input admission is actor-wide. The held-fire branch
+// (0xef8df) and the gate are shared by every weapon type: the gate waits for the recoil
+// deadline (armed by the semi-auto entry 0xe14d0), then for a warm-up weapon starts the
+// warm-up once (deadline actor+0x49c) and waits for it, then requests power_attack with
+// play flags 1 (continuous beam: warm-up kept until fire is released) or 9 (discrete:
+// warm-up cleared after every shot). A default-handler primary has no semi-auto entry,
+// so only the gate's own idle transition arms its recoil deadline.
+// The type is read only in the bullet line-of-sight drop (0xef3ff..0xef434 via 0xfe550)
+// and in the branches for an empty near-target query 0x103850 (bullet 0xef9bc, other
+// 0xefc4a); see docs/npc-weapon-round8.md for which of those are restored.
 namespace npc_semi_auto_rules
 {
  using u32 = std::uint32_t;
@@ -27,31 +31,47 @@ namespace npc_semi_auto_rules
  // Low ten bits are unique among live World tokens in both supported layouts:
  // stock has eight index bits (plus two generation bits here), raised has ten.
  constexpr unsigned timer_slot(u32 token) { return token & (timer_slots - 1); }
- struct weapon { std::string actor; u32 recoil_bits = 0, range_bits = 0, burst_bits = 0, leader = 0; };
+ // Flags word (schema 3): the original prototype's type enum (parser table 0x44fc44) in
+ // bits 0-1, its continuousbeam and rapidfire bits (+0x1d4 bits 1/2) and whether the
+ // source primary uses the default handler instead of ch_weapon_semi_auto.
+ enum : u32 { type_bullet = 0, type_flame = 1, type_projectile = 2, type_beam = 3, type_mask = 3,
+              flag_continuous = 0x10, flag_rapidfire = 0x20, flag_default_handler = 0x40,
+              known_flags = type_mask | flag_continuous | flag_rapidfire | flag_default_handler };
+ struct weapon { std::string actor; u32 recoil_bits = 0, range_bits = 0, burst_bits = 0, leader = 0, warmup_bits = 0, flags = 0; };
+ constexpr unsigned words = 6;
+ inline bool continuous(const weapon& w) { return (w.flags & flag_continuous) != 0; }
+ inline bool default_handler(const weapon& w) { return (w.flags & flag_default_handler) != 0; }
+ inline bool bullet(const weapon& w) { return (w.flags & type_mask) == type_bullet; }
  inline std::optional<weapon> parse(std::string_view text)
  {
   const auto bar = text.find('|');
-  if (bar == 0 || bar > 31 || bar == std::string_view::npos || text.size() != bar + 36 ||
-      text[bar + 9] != '|' || text[bar + 18] != '|' || text[bar + 27] != '|') return {};
+  if (bar == 0 || bar > 31 || bar == std::string_view::npos || text.size() != bar + 9 * words) return {};
+  for (unsigned word = 0; word != words; ++word) if (text[bar + 9 * word] != '|') return {};
   weapon w;
   for (const char c : text.substr(0, bar)) {
    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
          (c >= '0' && c <= '9') || c == '_')) return {};
    w.actor += c >= 'A' && c <= 'Z' ? char(c + ('a' - 'A')) : c;
   }
-  u32* words[] = {&w.recoil_bits, &w.range_bits, &w.burst_bits, &w.leader};
-  for (unsigned word = 0; word != 4; ++word)
+  u32* fields[] = {&w.recoil_bits, &w.range_bits, &w.burst_bits, &w.leader, &w.warmup_bits, &w.flags};
+  for (unsigned word = 0; word != words; ++word)
   for (const char c : text.substr(bar + 1 + word * 9, 8)) {
    const int n = c >= '0' && c <= '9' ? c - '0' :
                  c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
    if (n < 0) return {};
-   *words[word] = (*words[word] << 4) | unsigned(n);
+   *fields[word] = (*fields[word] << 4) | unsigned(n);
   }
+  if (w.flags & ~known_flags) return {};
+  // Zero recoil is the lightning gun's: a continuous beam restarted on every gate update.
   const float recoil = std::bit_cast<float>(w.recoil_bits);
-  if (!std::isfinite(recoil) || !(recoil > 0) || recoil > 60) return {};
+  if (!std::isfinite(recoil) || recoil < 0 || (recoil == 0 && (w.recoil_bits || !continuous(w))) || recoil > 60) return {};
   const float range = std::bit_cast<float>(w.range_bits), burst = std::bit_cast<float>(w.burst_bits);
   if (!std::isfinite(range) || range <= 75 || range > 65535 || std::floor(range) != range ||
       !std::isfinite(burst) || burst <= 0 || burst > 60 || w.leader > 1) return {};
+  const float warmup = std::bit_cast<float>(w.warmup_bits);
+  if (!std::isfinite(warmup) || warmup < 0 || (warmup == 0 && w.warmup_bits) || warmup > 60) return {};
+  // A default-handler primary (the pistol) is discrete and has no warm-up in the source.
+  if (default_handler(w) && (continuous(w) || w.warmup_bits)) return {};
   return w;
  }
  inline bool canonicalize(std::vector<weapon>& weapons)
@@ -69,19 +89,50 @@ namespace npc_semi_auto_rules
   for (const auto& w : weapons) {
    for (const unsigned char c : w.actor) add(c);
    add(0);
-   for (const u32 value : {w.recoil_bits, w.range_bits, w.burst_bits, w.leader})
+   // Every word of the schema 3 row; a table of discrete rows therefore no longer hashes
+   // like its schema 2 form, so older revision 10 candidates are refused by value.
+   for (const u32 value : {w.recoil_bits, w.range_bits, w.burst_bits, w.leader, w.warmup_bits, w.flags})
     for (unsigned i = 0; i != 4; ++i) add(static_cast<unsigned char>(value >> (8 * i)));
   }
   return h;
  }
- struct state { std::uintptr_t actor = 0; u32 token = 0; float entered = 0, next = 0; };
+ // next = the recoil deadline (original actor+0x498), warm = the warm-up deadline
+ // (actor+0x49c; zero = not started, as the original tests it against 0.0).
+ struct state { std::uintptr_t actor = 0; u32 token = 0; float entered = 0, next = 0, warm = 0; };
+ inline bool same(const state& s, std::uintptr_t actor, u32 token) { return s.actor == actor && s.token == token; }
  inline bool ready(const state& s, std::uintptr_t actor, u32 token, float now)
  {
   // A new incarnation or a reset game clock cannot inherit an old deadline.
-  return std::isfinite(now) && (s.actor != actor || s.token != token || now < s.entered || now >= s.next);
+  return std::isfinite(now) && (!same(s, actor, token) || now < s.entered || now >= s.next);
  }
  inline state entered(std::uintptr_t actor, u32 token, float now, u32 recoil)
  { return {actor, token, now, now + std::bit_cast<float>(recoil)}; }
+ // Re-arming the recoil deadline (semi-auto entry, idle transition) never touches the
+ // warm-up deadline of the same incarnation, as the original writes only actor+0x498.
+ inline void rearm(state& s, std::uintptr_t actor, u32 token, float now, float delay)
+ {
+  const float warm = same(s, actor, token) && !(now < s.entered) ? s.warm : 0.f;
+  s = {actor, token, now, now + delay, warm};
+ }
+ constexpr float transition_delay = .25f; // 0x42f60: fadd [0x3ca9e0] after requesting idle
+ // Releasing fire clears a started warm-up (0x4313f..0x43154).
+ inline void released(state& s, std::uintptr_t actor, u32 token) { if (same(s, actor, token)) s.warm = 0; }
+ enum class admit : unsigned char { wait, warm_up, fire };
+ // One update of the gate with power+fire held, after its input-lock and animation tests
+ // (0x43030..0x43131): recoil deadline, then warm-up, then the shot.
+ inline admit gate(state& s, std::uintptr_t actor, u32 token, float now, const weapon& w)
+ {
+  if (!ready(s, actor, token, now)) return admit::wait;
+  if (!same(s, actor, token) || now < s.entered) s = {actor, token, now, now, 0.f};
+  const float warmup = std::bit_cast<float>(w.warmup_bits);
+  if (warmup != 0) {
+   if (s.warm == 0) { s.warm = now + warmup; return admit::warm_up; }
+   if (now < s.warm) return admit::wait; // fire when now >= deadline (or unordered)
+  }
+  if (!continuous(w)) s.warm = 0;
+  return admit::fire;
+ }
+ inline u32 play_flags(const weapon& w) { return continuous(w) ? 1u : 9u; }
  constexpr u32 lookup_call = 0x4f6bf6, lookup = 0x4fd860;
  constexpr u32 candidate_site = 0x50fe80, candidate_native = 0x50fe89;
  constexpr u32 candidate_allow = 0x50fe94, candidate_deny = 0x50ff65;

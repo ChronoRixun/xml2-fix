@@ -176,7 +176,7 @@ namespace {
   fixture_time = 102;
   check(weapon_input(actor, input.data()) && requested_name == "idle" && requested_flags == 0,
         "non-firing animation first requests idle without forcing a shot");
-  check(find(actor, token)->next == 102.05f, "transition uses original 0.05 second deadline");
+  check(find(actor, token)->next == 102.25f, "transition uses the original 0.25 second deadline");
   field<int>(move.data(), 0xbc) = 115;
   field<unsigned char>(actor, 0x764) = 1;
   const unsigned prior = requests;
@@ -196,6 +196,73 @@ namespace {
    else if (!(mask & 0x100)) check(field<void*>(actor, 0x3bc) == nullptr && field<u32>(input.data(), 0x24) == 4,
                                  "released weapon requests normal chain completion");
   }
+ }
+ // Pistol (default-handler primary): the converted power_attack keeps XML2's default handler,
+ // whose entry does not arm the recoil deadline, so the gate requests it on every update in
+ // which the actor is neither input locked nor outside the firing animations; only its idle
+ // transition delays it. Semi-auto rows never accept that move and the pistol row never
+ // accepts the semi-auto handler.
+ std::array<std::byte, 0x148> pistol_move{};
+ std::array<u32, 1> default_object{npc_semi_auto_rules::default_vtable};
+ void* __fastcall fixture_named_pistol(void*, void*, const u32*)
+ { return requested_name == "idle" ? idle_move.data() : pistol_move.data(); }
+ void pistol_cases(void* actor, void* ai)
+ {
+  using namespace npc_semi_auto;
+  const auto saved = weapons;
+  const auto row = parse("test_guard|3e4ccccd|44098000|3fc00000|00000000|00000000|00000040");
+  check(row.has_value(), "pistol row parses");
+  if (!row) return;
+  weapons = {*row};
+  name_function = reinterpret_cast<resolve_name_t>(&fixture_named_pistol);
+  field<void*>(pistol_move.data(), 0xc8) = default_object.data();
+  field<int>(pistol_move.data(), 0xbc) = 115;
+  field<void*>(actor, 0x378) = pistol_move.data();
+  field<unsigned char>(actor, 0x764) = 0; field<unsigned char>(actor, 0x3d9) = 0;
+  const u32 token = field<u32>(actor, 0x1c);
+  states[timer_slot(token)] = {};
+  std::array<std::byte, 0x28> input{}; field<u32>(input.data(), 0) = 0x90;
+  requests = 0; const int prior_entries = entries;
+  for (int tick = 0; tick != 30; ++tick) {
+   fixture_time = 300.f + tick / 60.f;
+   check(weapon_input(actor, input.data()), "pistol gate consumes held fire");
+  }
+  check(requests == 30 && requested_flags == 9 && entries == prior_entries,
+        "default-handler primary is requested on every update without a recoil deadline");
+  field<unsigned char>(actor, 0x764) = 1; requests = 0;
+  check(weapon_input(actor, input.data()) && requests == 0, "input lock (the authored lockangles move) holds the pistol");
+  field<unsigned char>(actor, 0x764) = 0;
+  field<void*>(actor, 0x378) = move.data(); field<int>(move.data(), 0xbc) = 9; requests = 0; fixture_time = 301;
+  check(weapon_input(actor, input.data()) && requests == 1 && requested_name == "idle", "pistol outside firing animations requests idle");
+  field<int>(move.data(), 0xbc) = 115; field<void*>(actor, 0x378) = pistol_move.data(); requests = 0;
+  fixture_time = 301.2f;
+  check(weapon_input(actor, input.data()) && requests == 0, "pistol waits for the 0.25 s transition deadline");
+  fixture_time = 301.25f;
+  check(weapon_input(actor, input.data()) && requests == 1, "pistol fires at the transition deadline");
+  // The semi-auto handler is not the pistol's primary, and a default-handler move is not a semi-auto row's.
+  field<void*>(pistol_move.data(), 0xc8) = &handler; requests = 0; fixture_time = 302;
+  check(weapon_input(actor, input.data()) && requests == 0, "pistol row refuses a semi-auto handler primary");
+  field<void*>(pistol_move.data(), 0xc8) = default_object.data();
+  default_object[0] = 0x692f50; requests = 0;
+  check(weapon_input(actor, input.data()) && requests == 0, "pistol row needs XML2's default handler");
+  default_object[0] = npc_semi_auto_rules::default_vtable;
+  weapons = saved;
+  requests = 0;
+  check(weapon_input(actor, input.data()) && requests == 0, "semi-auto row refuses a default-handler primary");
+  // Refresh strips the converter's AI capability from the pistol primary only.
+  weapons = {*row};
+  std::array<void*, 32> chains{}; std::array<std::byte, 0x148> other{};
+  field<void*>(other.data(), 0xc8) = default_object.data(); field<float>(other.data(), 0x140) = 7.f;
+  chains[5] = pistol_move.data(); chains[6] = other.data();
+  std::array<std::byte, 0x60> brain{}; field<u32>(brain.data(), 0) = 0x6950f4;
+  field<void*>(ai, 0x4c4) = brain.data(); field<void*>(ai, 0x10) = actor;
+  field<u32>(ai, 0x430) = 0x40; field<u32>(ai, 0x434) = 0x40;
+  check(preserve_weapon_range(ai, chains.data()) && field<u32>(ai, 0x430) == 0 && field<u32>(ai, 0x434) == 0x40,
+        "only the pistol's converted primary loses its synthesized capability");
+  field<void*>(ai, 0x4c4) = nullptr;
+  weapons = saved;
+  name_function = reinterpret_cast<resolve_name_t>(&fixture_named);
+  field<void*>(actor, 0x378) = idle_move.data();
  }
  // Revision 9 decision: held fire every update, no burst timer, native helpers in order.
  void* decision_self = nullptr; void* decision_target = nullptr; bool decision_nav = true;
@@ -366,12 +433,37 @@ int main(int argc, char** argv)
  for (const char* bad : {"", "a|00000000", "a|80000000", "a|7fc00000", "a|7f800000", "a|bf000000",
                          "a|42800000", "a|3f00000", "bad name|3f000000", "a|3f000000junk"})
   check(!parse(bad), "invalid contract rejected");
- const auto w = parse("Test_Guard|3f200000|43c80000|3f800000|00000000");
+ // Schema 2 rows (no warm-up and flags words) are refused: the brain now needs the type.
+ check(!parse("Test_Guard|3f200000|43c80000|3f800000|00000000"), "schema 2 row refused");
+ const auto w = parse("Test_Guard|3f200000|43c80000|3f800000|00000000|00000000|00000002");
  check(w && w->actor == "test_guard" && std::bit_cast<float>(w->recoil_bits) == .625f, "case and exact source bits");
  for (const char* bad : {"a|3f000000|7f800000|3f800000|00000000", "a|3f000000|42960000|3f800000|00000000",
                          "a|3f000000|43c84000|3f800000|00000000", "a|3f000000|43c80000|00000000|00000000",
                          "a|3f000000|43c80000|7fc00000|00000000", "a|3f000000|43c80000|3f800000|00000002"})
-  check(!parse(bad), "invalid range or burst rejected");
+  check(!parse((std::string(bad) + "|00000000|00000002").c_str()), "invalid range or burst rejected");
+ // Warm-up and flags words (schema 3).
+ for (const char* bad : {"a|3f000000|43c80000|3f800000|00000000|7fc00000|00000002",   // NaN warm-up
+                         "a|3f000000|43c80000|3f800000|00000000|bf000000|00000002",   // negative warm-up
+                         "a|3f000000|43c80000|3f800000|00000000|80000000|00000002",   // negative zero
+                         "a|3f000000|43c80000|3f800000|00000000|42800000|00000002",   // 64 s
+                         "a|3f000000|43c80000|3f800000|00000000|00000000|00000080",   // unknown flag
+                         "a|3f000000|43c80000|3f800000|00000000|00000000|00000004",   // unknown type bit
+                         "a|00000000|43c80000|3f800000|00000000|3f19999a|00000003",   // zero recoil, discrete
+                         "a|80000000|43c80000|3f800000|00000000|3f19999a|00000013",   // negative zero recoil
+                         "a|3e4ccccd|43c80000|3fc00000|00000000|3f000000|00000040",   // pistol with warm-up
+                         "a|3e4ccccd|43c80000|3fc00000|00000000|00000000|00000050",   // continuous pistol
+                         "a|3f000000|43c80000|3f800000|00000000|00000000|00000002|00000000"})
+  check(!parse(bad), "invalid warm-up or flags rejected");
+ {
+  const auto zero = parse("Lightning|00000000|44098000|40200000|00000001|3f19999a|00000013");
+  check(zero && zero->recoil_bits == 0 && continuous(*zero) && !bullet(*zero) && play_flags(*zero) == 1,
+        "zero recoil admitted only with the continuous beam");
+  const auto flame = parse("flame|3cf5c28f|43898000|40600000|00000000|3f800000|00000011");
+  check(flame && std::bit_cast<float>(flame->range_bits) == 275 && (flame->flags & type_mask) == type_flame,
+        "flame row keeps its 275 range and type");
+  const auto pistol = parse("cop|3e4ccccd|44098000|3fc00000|00000000|00000000|00000040");
+  check(pistol && default_handler(*pistol) && bullet(*pistol) && play_flags(*pistol) == 9, "default-handler pistol row");
+ }
  std::vector<weapon> a{{"b", 0x3f200000}, {"a", 0x3f000000}}, b(a.rbegin(), a.rend());
  check(canonicalize(a) && canonicalize(b) && fingerprint(a) == fingerprint(b), "canonical order");
  b[0].recoil_bits ^= 1;
@@ -379,6 +471,8 @@ int main(int argc, char** argv)
  b=a;b[0].range_bits^=1;check(fingerprint(a)!=fingerprint(b), "range participates in agreement");
  b=a;b[0].burst_bits^=1;check(fingerprint(a)!=fingerprint(b), "burst participates in agreement");
  b=a;b[0].leader^=1;check(fingerprint(a)!=fingerprint(b), "leader flag participates in agreement");
+ b=a;b[0].warmup_bits^=1;check(fingerprint(a)!=fingerprint(b), "warm-up participates in agreement");
+ b=a;b[0].flags^=flag_continuous;check(fingerprint(a)!=fingerprint(b), "weapon flags participate in agreement");
  b = {a[0], a[0]}; check(!canonicalize(b), "duplicate actor rejected");
  const auto s = entered(100, 2, 10.f, 0x3f200000);
  check(!ready(s, 100, 2, 10.624f) && ready(s, 100, 2, 10.625f), "absolute boundary");
@@ -418,8 +512,10 @@ int main(int argc, char** argv)
  }
  {
   std::vector<weapon> table, single;
-  for (const char* row : {"guard_p|3f666666|44098000|3f800000|00000001", "guard_m|3e23d70a|44098000|3fc00000|00000000",
-                          "guard_l|3e2e147b|44098000|3fc00000|00000000", "guard_mb|3e23d70a|44098000|3fc00000|00000000"}) {
+  for (const char* row : {"guard_p|3f666666|44098000|3f800000|00000001|00000000|00000002",
+                          "guard_m|3e23d70a|44098000|3fc00000|00000000|00000000|00000020",
+                          "guard_l|3e2e147b|44098000|3fc00000|00000000|00000000|00000000",
+                          "guard_mb|3e23d70a|44098000|3fc00000|00000000|00000000|00000020"}) {
    const auto r = parse(row);
    check(r.has_value(), "discrete bullet and projectile rows parse");
    if (r) table.push_back(*r);
@@ -454,6 +550,7 @@ int main(int argc, char** argv)
  fixture_time = 20.625f;
  check(ready(*npc_semi_auto::find(actor.data(),123),reinterpret_cast<std::uintptr_t>(actor.data()),123,fixture_time), "shared deadline expires at its boundary");
  input_gate_cases(actor.data());
+ pistol_cases(actor.data(), ai.data());
  decision_cases(actor.data(), ai.data());
  if (argc >= 3) original_input_comparison(argv[2], actor.data());
  // Check GCAP rejection: different mode, metadata, revision or failed install.
