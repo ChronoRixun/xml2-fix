@@ -15,8 +15,8 @@
 // both co-op peers must share: rule 39 of the gameplay agreement.
 namespace xml1_cling
 {
-	// Shared owner of the 0x4fd860 hook. The Rogue handler may install it even
-	// while cling is off; a resolver is published only after the patch succeeds.
+	// Shared owner of the 0x4fd860 hook. Independent feature resolvers may install
+	// it while cling is off; each is published only after the patch succeeds.
 	using handler_resolver = void*(__cdecl*)(const char*);
 	bool register_lookup(HMODULE game, handler_resolver resolver);
 	void install(HMODULE game);

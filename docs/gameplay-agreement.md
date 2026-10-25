@@ -192,6 +192,12 @@ non-stock `[Limits] ResourceNames`, `ActorSlots`, `ItemEnhancements`, `FightStyl
 A requested capacity that failed to install invalidates admission. Stock/absent limits contribute no
 rule, preserving the released bytes. In particular ResourceNames=450 versus 2048 refuses by name even
 when IGBCache is absent or 200 on both PCs. Rules 31 and 28 retain their existing encodings.
+Rule 45 (`Xml1GrabCarry`, `[Game] Xml1GrabCarry=xml1`, candidate) is requested-only, revision 2, values
+`{installed ? 1 : 0,7,0,0}`. Feature mask 7 includes ground grab (1), the pickup/recovery lifecycle (2), and
+flying-charge collision (4). Carry/upkeep and flight admission remain deferred. The earlier ground-only
+candidate (revision 1, mask 1) refuses this contract in both directions. OFF adds no entry; invalid settings and refused installs
+are unverified. Both peers name rule 45 when the request differs. See [xml1-grab-carry.md](xml1-grab-carry.md).
+
 Rule 43 (`Xml1RogueDecide`, `[Game] Xml1RogueDecide=xml1`, candidate) is requested-only, revision 1, values
 `{installed ? 1 : 0,0,0,0}`. OFF adds no entry and preserves the released record; invalid or failed requests
 are unverified and close host/join. Both enabled and disabled peers name the key in refusals. It restores

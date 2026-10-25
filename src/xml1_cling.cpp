@@ -52,7 +52,7 @@ namespace xml1_cling
 		void* decide_handler = nullptr;
 		void* backflip_handler = nullptr;
 		bool lookup_installed = false;
-		handler_resolver additional_lookup = nullptr;
+		std::array<handler_resolver, 8> additional_lookups{};
 		u32 lookup_resume = lookup_resume_va;
 
 		vec read_vec(const void* p, u32 off) { return {at<float>(p, off), at<float>(p, off + 4), at<float>(p, off + 8)}; }
@@ -189,7 +189,9 @@ namespace xml1_cling
 			if (!name) return nullptr;
 			if (decide_handler && _stricmp(name, "ch_clingwalldecide") == 0) return &decide_handler;
 			if (backflip_handler && _stricmp(name, "ch_clingwallbackflip") == 0) return &backflip_handler;
-			return additional_lookup ? additional_lookup(name) : nullptr;
+			for (const auto resolver : additional_lookups)
+				if (resolver) if (void* handler = resolver(name)) return handler;
+			return nullptr;
 		}
 		auto lookup_function = &lookup;
 		// At 0x4fd860 (cdecl, the name at [esp+4]): ours, or the five displaced bytes and the game's own lookup.
@@ -244,7 +246,16 @@ namespace xml1_cling
 	bool register_lookup(const HMODULE game, handler_resolver resolver)
 	{
 		if (!game || reinterpret_cast<std::uintptr_t>(game) != limits_rules::image_base) return false;
-		if (additional_lookup && resolver && additional_lookup != resolver) return false;
+		// Each feature publishes one resolver at startup. Duplicate registration
+		// is harmless; never replace another feature's resolver.
+		auto destination = additional_lookups.end();
+		if (resolver)
+		{
+			destination = std::find(additional_lookups.begin(), additional_lookups.end(), resolver);
+			if (destination == additional_lookups.end())
+				destination = std::find(additional_lookups.begin(), additional_lookups.end(), nullptr);
+			if (destination == additional_lookups.end()) return false;
+		}
 		std::vector<unsigned char> jump(5);
 		jump[0] = 0xe9;
 		const auto rel = static_cast<std::int32_t>(reinterpret_cast<std::uintptr_t>(&lookup_hook) - (lookup_va + 5));
@@ -267,7 +278,7 @@ namespace xml1_cling
 			}
 			lookup_installed = true;
 		}
-		if (resolver) additional_lookup = resolver;
+		if (resolver) *destination = resolver;
 		return true;
 	}
 

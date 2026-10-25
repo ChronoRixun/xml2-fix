@@ -43,6 +43,7 @@ with_exe = {
     "xml2_npc_combo_timing_test", "xml2_x1_leader_test", "xml2_solo_mode_test", "xml2_resistance_display_install_test",
     "xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test", "xml2_shared_handlers_test",
     "xml2_xml1_cling_test", "xml2_lift_rule_test", "xml2_xml1_controllers_test", "xml2_dopple_xbe_test",
+    "xml2_xml1_grab_carry_test", "xml2_xml1_grab_carry_install_test",
 }
 # Second argument: the XBE (beta 7: the scheduler suite requires it, the weapon brain compares the original callbacks).
 with_xbe = {"xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test", "xml2_shared_handlers_test", "xml2_dopple_xbe_test"}
@@ -70,6 +71,7 @@ cmds += [[str(b / "xml2_resistance_display_install_test.exe"), EXE, mode] for mo
 _hud = (R / "test/classic_hud_install_test.cpp").read_text(encoding="utf-8")
 _hud_sites = len(re.findall(r"0x[0-9a-fA-F]+", re.search(r"sites\[\]\s*\{(.*?)\};", _hud, re.S)[1]))
 cmds += [[str(b / "xml2_classic_hud_install_test.exe"), EXE, mode] for mode in ["on", "off", "zero", "named-off", "legacy", "invalid", "base", "assets", "alias", "stale"] + [f"guard{i}" for i in range(_hud_sites)]]
+cmds.append([str(b / "xml2_xml1_grab_carry_install_test.exe"), EXE, "both"])
 
 if LIST_ONLY:
     # The command matrix only: for checking the runner against another gate's matrix. Everything above only reads.

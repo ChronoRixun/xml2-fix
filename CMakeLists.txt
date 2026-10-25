@@ -63,6 +63,7 @@ add_library(xml2_fix SHARED
 	src/balance_parity.cpp
 	src/xml1_cling.cpp
 	src/xml1_rogue_decide.cpp
+	src/xml1_grab_carry.cpp
 	src/lift_rule.cpp
 	src/combo_heads.cpp
 	src/model_pools.cpp
@@ -631,3 +632,9 @@ target_compile_options(xml2_boss_wave3_test PRIVATE /UNDEBUG)
 add_executable(xml2_boss_wave3_bridge_test test/boss_wave3_bridge_test.cpp)
 target_include_directories(xml2_boss_wave3_bridge_test PRIVATE src)
 target_compile_options(xml2_boss_wave3_bridge_test PRIVATE /UNDEBUG)
+add_executable(xml2_xml1_grab_carry_test test/xml1_grab_carry_test.cpp)
+target_include_directories(xml2_xml1_grab_carry_test PRIVATE src)
+add_executable(xml2_xml1_grab_carry_install_test test/xml1_grab_carry_install_test.cpp
+    src/xml1_grab_carry.cpp src/xml1_cling.cpp src/xml1_rogue_decide.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_xml1_grab_carry_install_test PRIVATE src)
+target_link_options(xml2_xml1_grab_carry_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
