@@ -9,6 +9,7 @@
 // CStaticQuery slots 0x18/0x1c keep their LegacyEmptyDenseDisposition (see slot_18/slot_1c).
 
 #include "entity_query.hpp"
+#include "world_backfaces_state.hpp"
 #include <windows.h>
 #include <cstring>
 
@@ -940,7 +941,9 @@ namespace entity_query
 			if (b != 0 && handle_valid(&b)) slot<void (__fastcall*)(void*, void*, std::uint32_t, const std::uint32_t*)>(q, 0x30)(q, nullptr, 1, &b);
 			slot<void (__fastcall*)(void*, void*, std::uint32_t, std::uint32_t)>(q, 0x40)(q, nullptr, 1, 1);
 			float sum[3] = {pos[0] + delta[0], pos[1] + delta[1], pos[2] + delta[2]};
-			slot<void (__fastcall*)(void*, void*, std::uint8_t)>(q, 0x88)(q, nullptr, 1);
+			// 0x4a96c0 push 1, or the current zone's flag with [Game] WorldBackfaces=xml1 (world_backfaces_state.hpp: this
+			// owner replaces the retail helper, so the bridged retail code would not run).
+			slot<void (__fastcall*)(void*, void*, std::uint8_t)>(q, 0x88)(q, nullptr, world_backfaces_state::current());
 			slot<void (__fastcall*)(void*, void*, std::uint32_t, std::uint32_t, const std::uint32_t*)>(q, 0x78)(q, nullptr,
 				static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(pos)), static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(sum)), &a);
 			std::uint32_t local = 0;

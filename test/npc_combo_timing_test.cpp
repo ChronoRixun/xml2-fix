@@ -55,6 +55,108 @@ __declspec(naked) void power_call(void*) {
     __asm { call dword ptr [entry] }
     __asm { ret }
 }
+// The to-hit roll's power-attack test (revision 10): esi = the attack, eax/edi as the roll has them; each relocated
+// exit is a stub `mov ecx,route; ret`, so ecx names the continuation and eax/edi come back as it left them.
+int roll_eax = 0, roll_edi = 0;
+__declspec(naked) int roll_call(void*, int) {
+    __asm { push esi }
+    __asm { push edi }
+    __asm { mov esi,[esp+12] }
+    __asm { mov eax,[esp+16] }
+    __asm { mov edi,0x55 }
+    __asm { call dword ptr [entry] }
+    __asm { mov [roll_eax],eax }
+    __asm { mov [roll_edi],edi }
+    __asm { mov eax,ecx }
+    __asm { pop edi }
+    __asm { pop esi }
+    __asm { ret }
+}
+// Revision 10 item 17: enter the power decision's lock bridge with the flags of `test byte [locked],1` and the
+// caller's return address at [esp+0x24] (sub esp,0x14 and four pushes since 0x518770's entry).
+__declspec(naked) int lock_call(unsigned, unsigned) {
+    __asm { push ebx }
+    __asm { mov ebx,esp }
+    __asm { mov eax,[ebx+12] }
+    __asm { sub esp,0x24 }
+    __asm { mov [esp+0x20],eax }
+    __asm { test byte ptr [ebx+8],1 }
+    __asm { call dword ptr [entry] }
+    __asm { mov esp,ebx }
+    __asm { pop ebx }
+    __asm { ret }
+}
+// The retail run 0x5187b9..0x5187ce (mov ebp,[esp+0x14]; test byte [ebp+0x764],1; jne; mov ebx,[esp+0x1c]) entered
+// with the deciding character at [esp+0x14] and the caller's return address at [esp+0x24].
+__declspec(naked) int lock_run(void*, unsigned) {
+    __asm {
+        push ebx
+        push ebp
+        push esi
+        mov esi, esp
+        sub esp, 0x28
+        mov eax, [esi+16]
+        mov [esp+0x10], eax
+        mov eax, [esi+20]
+        mov [esp+0x20], eax
+        mov dword ptr [esp+0x18], 0x13572468
+        call dword ptr [entry]
+        cmp ebx, 0x13572468
+        jne lock_run_out
+        or eax, 2
+    lock_run_out:
+        mov esp, esi
+        pop esi
+        pop ebp
+        pop ebx
+        ret
+    }
+}
+// The retail run 0x512f01..0x512f1a of the attack-state update (esi = the AI): 1 = on at 0x512f1a, 0 = the exit.
+__declspec(naked) int exit_run(void*) {
+    __asm { push esi }
+    __asm { mov esi,[esp+8] }
+    __asm { call dword ptr [entry] }
+    __asm { pop esi }
+    __asm { ret }
+}
+// Item 18: the gate (thiscall, ecx = the AI, five arguments, ret 0x14). Its energy read and picker continuation are
+// stubs; the continuation records the registers and stack the picker's code after 0x50fe69 starts with.
+float energy_now = 0;
+__declspec(naked) float __fastcall energy_read(void*) {
+    __asm { fld dword ptr [energy_now] }
+    __asm { ret }
+}
+std::uint32_t seen_esi = 0, seen_eax = 0, seen_ecx = 0, seen_esp = 0, seen_pushed = 0, call_esp = 0;
+__declspec(naked) void picker_rest() {
+    __asm { mov seen_esi,esi }
+    __asm { mov seen_eax,eax }
+    __asm { mov seen_ecx,ecx }
+    __asm { mov seen_esp,esp }
+    __asm { mov eax,[esp] }
+    __asm { mov seen_pushed,eax }
+    __asm { pop esi }
+    __asm { add esp,0xac }
+    __asm { mov al,1 }
+    __asm { ret 0x14 }
+}
+__declspec(naked) int gate_call(void*) {
+    __asm { push esi }
+    __asm { mov ecx,[esp+8] }
+    __asm { mov esi,0x5a5a5a5a }
+    __asm { push 5 }
+    __asm { push 4 }
+    __asm { push 3 }
+    __asm { push 2 }
+    __asm { push 1 }
+    __asm { mov call_esp,esp }
+    __asm { call dword ptr [entry] }
+    __asm { cmp esi,0x5a5a5a5a }
+    __asm { setne ah }
+    __asm { movzx eax,ax }
+    __asm { pop esi }
+    __asm { ret }
+}
 __declspec(naked) float finish(void*, float) {
     __asm { push ebp }
     __asm { mov ebp,[esp+8] }
@@ -111,6 +213,15 @@ int main() {
         const std::size_t at = 720 + 8 * value;
         bytes[at] = 0xb8; put32(bytes, at + 1, value); bytes[at + 5] = 0xc3;
     }
+    // Revision 10 items 17-18: the lock bridge's exits are the value stubs (0 = the native exit 0x518ac9, 1 = on at
+    // 0x5187ca); the gate's energy read and picker continuation are the stubs above.
+    leave(l.power_lock + 0x0d, l.base + 720);
+    leave(l.power_lock + 0x12, l.base + 728);
+    leave(l.gate + 14, static_cast<address>(reinterpret_cast<std::uintptr_t>(&energy_read)));
+    leave(l.gate + 50, static_cast<address>(reinterpret_cast<std::uintptr_t>(&picker_rest)));
+    check(power_lock_bridge(l).size() == power_lock_size && power_lock_jump(l).size() == 6 && gate_bridge(l).size() == gate_size
+          && l.attack_front + attack_front_size <= l.base + 2048 && l.base + 2048 + 35 <= l.power_lock && l.power_lock + power_lock_size <= l.base + code_size
+          && l.gate + gate_size <= l.constants, "revision 10 lock bridges: lengths and spans");
     check(cont_bridge(l).size() == cont_size && start_bridge(l).size() == start_size && end_delay_bridge(l).size() == end_delay_size, "emitted bridge lengths");
     check(react_cont_bridge(l).size() == react_cont_size && pre_start_bridge(l).size() == pre_start_size && mark_bridge(l).size() == mark_size && mark_jump(l).size() == reaction_site.patched
           && power_front_bridge(l).size() == power_front_size && power_entry_jump(l).size() == power_entry_site.patched
@@ -120,6 +231,37 @@ int main() {
           && l.react == l.next + 4 * ai_slots && l.react_power == l.react + 4 * ai_slots && l.react_attack == l.react_power + 4 * ai_slots
           && l.react_attack + 4 * ai_slots <= l.next + (block_size - code_size), "revision 5 spans do not overlap");
     check(l.cont + cont_size <= l.start && l.start + start_size <= l.delays && l.delays + 120 <= l.end_delay && l.end_delay + end_delay_size <= l.base + code_size, "bridge and data spans do not overlap");
+    // Revision 10, XML1's block rule: the roll bridge's three exits go to stubs after it (mov ecx,route; ret).
+    check(hit_roll_bridge(l).size() == hit_roll_size && hit_roll_jump(l).size() == hit_roll_site.patched && block_chance_skip().size() == block_chance_site.patched
+          && l.attack_front + attack_front_size <= l.hit_roll && l.hit_roll + hit_roll_size + 24 <= l.base + code_size, "block rule bridge length and span");
+    {
+        const auto rel = [](const std::vector<std::uint8_t>& c, std::size_t at, address from) {
+            return from + static_cast<address>(at + 4) + (c[at] | c[at + 1] << 8 | c[at + 2] << 16 | static_cast<address>(c[at + 3]) << 24);
+        };
+        const auto bridge = hit_roll_bridge(l);
+        check(rel(bridge, 0x06, l.hit_roll) == hit_roll_combo_va && rel(bridge, 0x15, l.hit_roll) == hit_roll_rolled_va && rel(bridge, 0x1f, l.hit_roll) == hit_roll_result_va,
+              "the roll bridge's exits: combo text 0x44f594, the draw 0x44f5b4, the result 0x44f6bd");
+        check(rel(hit_roll_jump(l), 1, hit_roll_site.va) == l.hit_roll && hit_roll_jump(l)[5] == 0x90, "0x44f58e jumps to the roll bridge");
+        const auto skip = block_chance_skip();
+        check(skip[0] == 0xe9 && rel(skip, 1, block_chance_site.va) == block_chance_skip_va && skip[5] == 0x90
+              && retail_bytes(block_chance_site, 6) == std::vector<std::uint8_t>({0x0f, 0x8a, 0x86, 0x00, 0x00, 0x00})
+              && block_chance_site.va + 6 + 0x86 == block_chance_skip_va, "0x437b08: the chance test's jp to 0x437b94 becomes a jmp there");
+        check(sub_bytes(hit_roll_site, 0, 6) == std::vector<std::uint8_t>({0xf6, 0x46, 0x35, 0x04, 0x74, 0x20}) && hit_roll_site.va + 6 + 0x20 == hit_roll_rolled_va
+              && hit_roll_site.va + 6 == hit_roll_combo_va && sub_bytes(hit_roll_site, 0x1c, 10) == std::vector<std::uint8_t>({0xbf, 0x01, 0x00, 0x00, 0x00, 0xe9, 0x09, 0x01, 0x00, 0x00})
+              && hit_roll_site.va + 0x26 + 0x109 == hit_roll_result_va, "the displaced test and the game's own always-hit exit");
+        check(sub_bytes(miss_counts_site, 0, 7) == std::vector<std::uint8_t>({0x8a, 0x46, 0x35, 0x24, 0x78, 0x3c, 0x08})
+              && sub_bytes(blocked_flag_site, 0, 5) == std::vector<std::uint8_t>({0x83, 0x7c, 0x24, 0x20, 0x02}), "the contact's damagescale and blocked-flag encodings the rule relies on");
+    }
+    // The stubs sit past the item-17 lock bridge (block+2112, 22 bytes), which l.hit_roll + 64 would overwrite.
+    const address roll_stub = l.hit_roll + 128;
+    check(l.power_lock + power_lock_size <= roll_stub && roll_stub + 24 <= l.base + code_size, "block rule test stubs clear of the lock bridge");
+    for (int route = 0; route < 3; ++route) {
+        const std::size_t at = roll_stub - l.base + 8 * route;
+        bytes[at] = 0xb9; put32(bytes, at + 1, route + 1); bytes[at + 5] = 0xc3;
+    }
+    leave(l.hit_roll + 0x06, roll_stub);      // 1 = the combo-text path
+    leave(l.hit_roll + 0x15, roll_stub + 8);  // 2 = the draw
+    leave(l.hit_roll + 0x1f, roll_stub + 16); // 3 = the result (a hit without a draw)
     std::memcpy(memory, bytes.data(), bytes.size());
     DWORD old = 0;
     if (!VirtualProtect(memory, code_size, PAGE_EXECUTE_READ, &old) || !FlushInstructionCache(GetCurrentProcess(), memory, code_size)) return 2;
@@ -308,6 +450,136 @@ int main() {
         power_call(brains.data() + 1);
         __asm { fnstsw fa }
         check((fb & 0x3800) == (fa & 0x3800) && !(fa & 0x40), "the power front leaves the x87 stack balanced (no stack fault; the NaN case may set IE as the native fcomp does)");
+    }
+    {
+        // Revision 10, XML1's block rule. The plain rules: XMen2.exe rolls everything but combo text; XML1 never rolls a
+        // PowerAttack (damagescale other than normal here); both flag the hit blocked exactly on result 2.
+        for (int b = 0; b < 256; ++b) {
+            const auto v = static_cast<std::uint8_t>(b);
+            const bool text = (v & 4) != 0, normal = (v & 0x78) == 8;
+            check(roll_route_xml2(v) == (text ? roll_route::combo_text : roll_route::rolled), "XMen2.exe: combo text or the draw");
+            check(roll_route_xml1(v) == (text ? roll_route::combo_text : normal ? roll_route::rolled : roll_route::hit), "XML1: a power attack is a hit without a draw");
+            entry = reinterpret_cast<void*>(l.hit_roll);
+            std::uint8_t attack[0x40] = {};
+            attack[0x35] = v;
+            const int route = roll_call(attack, 0x12345678);
+            const int want = text ? 1 : normal ? 2 : 3;
+            check(route == want && roll_eax == 0x12345678 && roll_edi == (want == 3 ? 1 : 0x55) && attack[0x35] == v,
+                  "the bridge takes XML1's route, keeps eax, sets edi = 1 only for the hit, writes nothing");
+        }
+        check(flagged_blocked(2) && !flagged_blocked(1) && !flagged_blocked(3), "blocked only on a miss");
+        // The receive's block_chance roll: XMen2.exe zeroes a positive hit when the draw is at most the chance (so with
+        // no affecter, chance 0, only a draw of exactly 0); an unordered compare skips. XML1: never.
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        check(block_chance_zeroes_xml2(5.0f, 0.0f, 0.0f) && !block_chance_zeroes_xml2(5.0f, 0.001f, 0.0f) && block_chance_zeroes_xml2(5.0f, 0.2f, 0.25f)
+              && !block_chance_zeroes_xml2(0.0f, 0.0f, 0.5f) && !block_chance_zeroes_xml2(-1.0f, 0.0f, 0.5f) && !block_chance_zeroes_xml2(nan, 0.0f, 0.5f)
+              && !block_chance_zeroes_xml2(5.0f, nan, 0.5f) && !block_chance_zeroes_xml2(5.0f, 0.1f, nan), "XMen2.exe's block_chance test");
+        check(!block_chance_zeroes_xml1(5.0f, 0.0f, 0.0f) && !block_chance_zeroes_xml1(5.0f, 0.2f, 1.0f), "XML1 has no block_chance roll");
+    }
+    // Revision 10 item 17: the power decision's lock bridge. Unlocked: on for every caller. Locked: on for the melee
+    // brain's call (0x5193e7) only; the officer weapon brain's (0x519fe7) and any other caller take the native exit.
+    {
+        entry = reinterpret_cast<void*>(l.power_lock);
+        check(lock_call(0, melee_power_call_return_va) == 1 && lock_call(0, 0x519fe7) == 1 && lock_call(0, 0) == 1,
+              "item 17: an unlocked body goes on for every caller");
+        check(lock_call(1, melee_power_call_return_va) == 1, "item 17: a locked body goes on for the melee brain's call (XML1 0xee260 has no lock test)");
+        check(lock_call(1, 0x519fe7) == 0 && lock_call(1, 0) == 0 && lock_call(1, melee_power_call_return_va + 1) == 0,
+              "item 17: a locked body keeps the native exit for every other caller (the officer weapon brain as measured)");
+        check(lock_call(2, melee_power_call_return_va) == 1 && lock_call(0x101, 0x519fe7) == 0, "item 17: only bit 0 of +0x764 is the lock");
+    }
+    // Item 18: the gate enters the picker after its lock test with the picker's own first instructions done.
+    {
+        std::array<std::uint8_t, 0x600> gai{};
+        std::array<std::uint8_t, 0x800> gactor{};
+        field<void*>(gai.data(), 0x10) = gactor.data();
+        field<float>(gactor.data(), 0x314) = 147.0f;
+        field<std::uint8_t>(gactor.data(), 0x764) = 1; // locked: the native picker would return 0 here
+        entry = reinterpret_cast<void*>(l.gate);
+        const auto gai_va = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(gai.data()));
+        const auto gactor_va = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(gactor.data()));
+        std::uint16_t fb = 0, fa = 0;
+        __asm { fnstsw fb }
+        energy_now = 100.0f; seen_esi = seen_eax = seen_ecx = seen_esp = 0;
+        int r = gate_call(gai.data());
+        check(r == 1 && seen_esi == gai_va && seen_ecx == gai_va && seen_eax == gactor_va && call_esp - seen_esp == 4 + 0xac + 4 && seen_pushed == 0x5a5a5a5a,
+              "item 18: enough energy enters the picker past its lock test (esp - 0xb4, esi = ecx = the AI, eax = the actor, the caller's esi pushed)");
+        energy_now = 70.0f; seen_esi = 0;
+        r = gate_call(gai.data());
+        check(r == 0 && seen_esi == 0, "item 18: under half the energy still refuses without the picker");
+        field<std::uint8_t>(gai.data(), 0x2b6) = 8; seen_esi = 0;
+        r = gate_call(gai.data());
+        check(r == 1 && seen_esi == gai_va, "item 18: the forcing flag still enters the picker");
+        __asm { fnstsw fa }
+        check((fb & 0x3800) == (fa & 0x3800), "item 18: the gate leaves the x87 stack balanced");
+        const auto gate = gate_bridge(l);
+        check(std::vector<std::uint8_t>(gate.begin() + 37, gate.begin() + 49) == sub_bytes(picker_entry_site, 0, 12) && picker_unlocked_va == picker_entry_site.va + 25,
+              "item 18: the gate's copy is the picker's first 12 bytes, and it resumes after the lock test's jne");
+    }
+    // XMen2.exe's own code (the guarded retail bytes, which xml2_test checks against the executable), run natively:
+    // item 16's run 0x512f01..0x512f1a and item 17's run 0x5187b9..0x5187ce, retail and with the rule's writes.
+    {
+        auto* run = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+        if (!run) return 2;
+        check(sub_bytes(lock_exit_site, 10, 2) == std::vector<std::uint8_t>({0x74, 0x0d}) && lock_exit_va == lock_exit_site.va + 10
+              && lock_exit_bytes() == std::vector<std::uint8_t>({0xeb, 0x0d}) && lock_exit_va + 2 + 0x0d == 0x512f1a,
+              "item 16: the exit's jz becomes a jmp to the same continuation (0x512f1a)");
+        std::array<std::uint8_t, 0x800> who{};
+        std::array<std::uint8_t, 0x40> owner{};
+        field<void*>(owner.data(), 0x10) = who.data();
+        for (const bool rule : {false, true}) {
+            const auto native = retail_bytes(lock_exit_site, limits_rules::hex_size(lock_exit_site.hex)); // 25 bytes
+            std::memcpy(run, native.data(), native.size());
+            const std::uint8_t tail[] = {0xb8, 1, 0, 0, 0, 0xc3, 0x31, 0xc0, 0xc3}; // +25 (0x512f1a): eax = 1; +31 (the exit): eax = 0
+            std::memcpy(run + 25, tail, sizeof(tail));
+            const std::int32_t to_exit = 31 - 25; // the jnz rel32 at +21 (0x512f16) relocated to +31
+            std::memcpy(run + 21, &to_exit, 4);
+            if (rule) { const auto w = lock_exit_bytes(); std::memcpy(run + 10, w.data(), w.size()); }
+            FlushInstructionCache(GetCurrentProcess(), run, 64);
+            entry = run;
+            bool ok = true;
+            for (const int lock : {0, 1}) for (const int flag : {0, 0x10, 0xef, 0xff}) {
+                field<std::uint8_t>(who.data(), 0x764) = static_cast<std::uint8_t>(lock);
+                field<std::uint8_t>(who.data(), 0x3d9) = static_cast<std::uint8_t>(flag);
+                const int expected = (!rule && lock && (flag & 0x10)) ? 0 : 1;
+                ok &= exit_run(owner.data()) == expected;
+            }
+            check(ok, rule ? "item 16: with the rule the attack-state update never takes the input-lock exit"
+                           : "item 16: retail exits exactly for a locked move with +0x3d9 bit 0x10 (the enemy after a power)");
+        }
+        // Item 17: the retail run with the jne at +11 (0x5187c4) relocated to a stub, or replaced by the rule's jump to a
+        // copy of the bridge whose exits are relocated into this buffer.
+        const auto lb = layout_at(static_cast<address>(reinterpret_cast<std::uintptr_t>(run)));
+        const auto at = [&](std::uint32_t offset) { return static_cast<address>(reinterpret_cast<std::uintptr_t>(run)) + offset; };
+        for (const bool rule : {false, true}) {
+            std::memset(run, 0xcc, 4096);
+            const auto native = retail_bytes(power_lock_site, limits_rules::hex_size(power_lock_site.hex)); // 21 bytes
+            std::memcpy(run, native.data(), native.size());
+            const std::uint8_t tail[] = {0xb8, 1, 0, 0, 0, 0xc3, 0x31, 0xc0, 0xc3}; // +21 after mov ebx: eax = 1; +27 (0x518ac9): eax = 0
+            std::memcpy(run + 21, tail, sizeof(tail));
+            if (!rule) {
+                const std::int32_t to_exit = 27 - 17; // the jne rel32 at +13, next instruction +17
+                std::memcpy(run + 13, &to_exit, 4);
+            } else {
+                auto bridge = power_lock_bridge(lb);
+                put32(bridge, 0x0d, at(27) - (lb.power_lock + 0x11));
+                put32(bridge, 0x12, at(17) - (lb.power_lock + 0x16)); // 0x5187ca = +17
+                std::memcpy(run + (lb.power_lock - lb.base), bridge.data(), bridge.size());
+                std::vector<std::uint8_t> jump{0xe9, 0, 0, 0, 0, 0x90};
+                put32(jump, 1, lb.power_lock - (at(11) + 5));
+                std::memcpy(run + 11, jump.data(), jump.size());
+            }
+            FlushInstructionCache(GetCurrentProcess(), run, 4096);
+            entry = run;
+            bool ok = true;
+            for (const int lock : {0, 1}) for (const unsigned caller : {melee_power_call_return_va, 0x519fe7u}) {
+                field<std::uint8_t>(who.data(), 0x764) = static_cast<std::uint8_t>(lock);
+                const int expected = (lock && (!rule || caller != melee_power_call_return_va)) ? 0 : 3; // 3: on, ebx = [esp+0x1c]
+                ok &= lock_run(who.data(), caller) == expected;
+            }
+            check(ok, rule ? "item 17: with the rule a locked body reaches the re-check for the melee brain's call only"
+                           : "item 17: retail refuses every locked call before the re-check");
+        }
+        VirtualFree(run, 0, MEM_RELEASE);
     }
     VirtualFree(memory, 0, MEM_RELEASE);
     std::printf("NPC combo timing: %d checks, %d failures\n", checks, failures);

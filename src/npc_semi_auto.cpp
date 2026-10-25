@@ -1,5 +1,6 @@
 #include "npc_semi_auto.hpp"
 #include "npc_semi_auto_rules.hpp"
+#include "det_math.hpp"
 #include "npc_power.hpp"
 #include "npc_power_rules.hpp"
 #include "game_version.hpp"
@@ -17,6 +18,7 @@ namespace npc_semi_auto
   using namespace npc_semi_auto_rules;
   bool wanted = false, applied = false;
   std::vector<weapon> weapons;
+  std::array<std::uint8_t, 32> digest{};
   std::array<state, timer_slots> states{};
   std::array<void*, 8> callbacks{};
   void** handler = callbacks.data();
@@ -46,31 +48,38 @@ namespace npc_semi_auto
    return s.actor == reinterpret_cast<std::uintptr_t>(actor) && s.token == token ? &s : nullptr;
   }
   #include "npc_weapon_brain.hpp"
-  void __fastcall enter(void* self, void*, void* actor, void* move, void* previous)
+  #include "npc_bullet_trace.hpp"
+  // The semi-auto entry callback (default handler vt+4 replacement): its recoil deadline arithmetic runs inside the
+  // same fixed floating-point environment as the hooks (det_math::fp_env); the native entry runs first, unchanged.
+  void __fastcall enter(void* self, void*, void* actor, void* move, void* previous) noexcept
   {
    entry_function(self, actor, move, previous);
+   det_math::fp_env fp;
    const auto* w = spec(actor);
    if (!w) return;
    const float time = now();
    const auto token = field<u32>(actor, 0x1c);
-   states[timer_slot(token)] = entered(reinterpret_cast<std::uintptr_t>(actor), token, time, w->recoil_bits);
+   rearm(states[timer_slot(token)], reinterpret_cast<std::uintptr_t>(actor), token, time, std::bit_cast<float>(w->recoil_bits));
   }
-  void* __cdecl handler_lookup(const char* name)
+  void* __cdecl handler_lookup(const char* name) noexcept
   {
    if (name && _stricmp(name, "ch_weapon_semi_auto") == 0) return &handler;
    return reinterpret_cast<void*(__cdecl*)(const char*)>(lookup)(name);
   }
-  auto prepare_function = &prepare_brain;
-  auto preserve_function = &preserve_weapon_range;
-  auto input_function = &weapon_input;
-  auto decision_function = &weapon_decision;
-  auto press_function = &power_pressed;
-  auto lock_function = &attack_state_continues;
+  void(__cdecl* prepare_function)(void*) = &prepare_brain; // (non-noexcept pointer types: the tests swap fixtures in)
+  bool(__cdecl* preserve_function)(void*, void* const*) = &preserve_weapon_range;
+  bool(__cdecl* input_function)(void*, void*) = &weapon_input;
+  bool(__cdecl* decision_function)(void*, void*) = &weapon_decision;
+  bool(__cdecl* press_function)(int, void*, void*) = &power_pressed;
+  void(__cdecl* sight_function)(void*) = &line_of_sight;
   u32 init_resume = 0x504f61, refresh_resume = 0x50fcee, refresh_done = 0x50fe38;
   u32 native_movement = 0x42aa90, input_done = 0x4341f0;
   u32 decision_resume = 0x51a35f, decision_done = 0x51a51e;
   u32 power_true = 0x519ff1, power_false = 0x51a004;
-  u32 lock_resume = 0x512f1a, lock_return = 0x51304a;
+  u32 sight_resume = 0x519e41;
+  // Every hook saves the caller's FPU/SSE state (fxsave), runs the weapon brain under Windows' default MXCSR (round to
+  // nearest, no FTZ/DAZ: an overlay or driver may have changed it on one PC only) and restores the state (fxrstor).
+  u32 mxcsr_value = det_math::default_mxcsr;
   __declspec(naked) void init_hook()
   {
    __asm {
@@ -81,6 +90,7 @@ namespace npc_semi_auto
     and esp, -16
     mov [esp + 512], ebx
     fxsave [esp]
+    ldmxcsr mxcsr_value
     push esi
     call dword ptr [prepare_function]
     add esp, 4
@@ -102,6 +112,7 @@ namespace npc_semi_auto
     and esp, -16
     mov [esp + 512], ebx
     fxsave [esp]
+    ldmxcsr mxcsr_value
     lea eax, [ebx + 0x38]
     push eax
     push edi
@@ -136,6 +147,7 @@ namespace npc_semi_auto
     and esp, -16
     mov [esp + 512], ebx
     fxsave [esp]
+    ldmxcsr mxcsr_value
     push edi
     push esi
     call dword ptr [input_function]
@@ -158,34 +170,29 @@ namespace npc_semi_auto
     ret 4
    }
   }
-  __declspec(naked) void lock_hook()
+  // Top of the ranged brain update after its target resolve (0x519e3a): the bullet
+  // line-of-sight drop, then the two native loads this site displaced.
+  __declspec(naked) void sight_hook()
   {
    __asm {
     pushfd
     pushad
-    mov esi, esp
+    mov ebx, esp
     sub esp, 528
     and esp, -16
-    mov [esp + 512], esi
+    mov [esp + 512], ebx
     fxsave [esp]
-    push eax
-    call dword ptr [lock_function]
+    ldmxcsr mxcsr_value
+    push ebp
+    call dword ptr [sight_function]
     add esp, 4
     fxrstor [esp]
     mov esp, [esp + 512]
-    test al, al
-    jnz lock_continue
     popad
     popfd
-    test byte ptr [eax + 0x3d9], 0x10
-    jne lock_skip
-    jmp dword ptr [lock_resume]
-   lock_skip:
-    jmp dword ptr [lock_return]
-   lock_continue:
-    popad
-    popfd
-    jmp dword ptr [lock_resume]
+    mov ebx, [esp + 0x70]
+    mov edx, [ebp]
+    jmp dword ptr [sight_resume]
    }
   }
   __declspec(naked) void power_hook()
@@ -199,6 +206,7 @@ namespace npc_semi_auto
     and esp, -16
     mov [esp + 512], esi
     fxsave [esp]
+    ldmxcsr mxcsr_value
     push ebx
     push ebp
     push eax
@@ -231,6 +239,7 @@ namespace npc_semi_auto
     and esp, -16
     mov [esp + 512], ebx
     fxsave [esp]
+    ldmxcsr mxcsr_value
     push dword ptr [ebx + 16]
     push dword ptr [ebx + 8]
     call dword ptr [decision_function]
@@ -256,13 +265,23 @@ namespace npc_semi_auto
  bool verified() { return !wanted || applied; }
  std::array<u32, 4> values(std::array<u32, 4> v)
  { if (wanted) { v[2] = installed() ? 1u : 0u; v[3] = fingerprint(weapons); } return v; }
+ const std::array<std::uint8_t, 32>* detail()
+ { if (!wanted) return nullptr; digest = table_digest(weapons); return &digest; }
  void install(HMODULE game)
  {
   if (applied) return;
   const auto choice = npc_power_rules::parse_rule(ini::text(L"Game", L"NpcSemiAuto").value_or(""));
   wanted = !choice.error.empty() || choice.value == npc_power_rules::rule::xml1;
   if (!wanted) return;
-  const auto fail = [](const char* reason) { logger::write("NPC semi-auto: %s; stock weapon conversion retained, requested agreement unverified", reason); };
+  // All or nothing: the requested rule-16 configuration is the power rule AND the weapon brain, so a weapon brain
+  // that cannot install takes the power rule's patches back out too (npc_power::withdraw). Online stays closed
+  // (requested, unverified) either way; offline the game then runs XMen2.exe's own enemy AI, not half of rule 16.
+  const auto fail = [](const char* reason) {
+   const bool had = npc_power::installed();
+   const bool withdrawn = npc_power::withdraw();
+   logger::write("NPC semi-auto: %s; stock weapon conversion retained, %s, requested agreement unverified", reason,
+                 !had ? "NpcPowerRule not installed" : withdrawn ? "NpcPowerRule withdrawn with it (all or nothing)" : "NpcPowerRule could NOT be withdrawn");
+  };
   if (!choice.error.empty() || !npc_power::installed()) { fail("requires NpcPowerRule=xml1 and NpcSemiAuto=xml1"); return; }
   const int count = ini::number(L"NpcSemiAuto", L"Count", 0);
   if (count < 1 || count > int(capacity)) { fail("invalid source weapon table count"); return; }
@@ -291,13 +310,16 @@ namespace npc_semi_auto
        {0x4341b6, &input_hook, true, 5},
        {0x51a359, &decision_hook, false, 6},
        {0x519fe7, &power_hook, false, 8},
-       {0x512f0d, &lock_hook, false, 13}}) {
+       {0x519e3a, &sight_hook, false, 7},
+       {0x4dcfe0, &bullet_event, false, 6},
+       {0x452225, &bullet_muzzle_hook, false, 7},
+       {0x452350, &bullet_collision_hook, false, 5}}) {
    const auto* p = reinterpret_cast<const std::uint8_t*>(site);
    patches.push_back({site, {p, p + length}, stun_rules::branch(site, target, call, length)});
   }
   bool safe = true;
   applied = xml1_hook_transaction::apply(memory, patches, &safe);
   if (!applied) { if (!safe) game_version::refuse_startup(); fail("guarded transaction failed"); return; }
-  logger::write("NPC semi-auto: guarded non-bullet weapon brain and input gate, %zu source actors, fingerprint %08X; rule 16 revision 10 words 2-3", weapons.size(), fingerprint(weapons));
+  logger::write("NPC semi-auto: guarded weapon brain (held fire, empty-query branches, bullet line of sight) and input gate (recoil, warm-up, continuous), %zu source actors, fingerprint %08X; rule 16 revision %u words 2-3", weapons.size(), fingerprint(weapons), unsigned(npc_power::revision));
  }
 }

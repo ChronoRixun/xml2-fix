@@ -2,6 +2,72 @@
 
 ## 1.8.0 - <date TBD>
 
+- **XML1 bullet trace timing** (`[Game] NpcSemiAuto = xml1`, schema 4 rows; 1.8.0-beta.7,
+  [weapon brain](docs/npc-semi-auto.md)). Converted XML1 bullets keep their shot presentation (sound, muzzle,
+  tracer) while a separate per-actor trace timer gates collision and damage, as XML1's weapon trace time does: the
+  MP5's 0.5 s gate admits equality and survives input, burst and target changes. Rows append the source trace time
+  and accuracy (schema 4); rule 16 binds all eight words with SHA-256. Admitted traces keep the PC beam geometry;
+  the character bullet-ray adapter is deferred. Legends Classic 0.4.0-beta.7 (content 27 / LC36) writes the
+  schema 4 rows and the bullet markers and refuses a fix that cannot read them.
+
+- **One-sided level collision for movement: gameplay rule 30** (`[Game] WorldBackfaces = xml1`; 1.8.0-beta.7,
+  [docs](docs/world-backfaces.md)). XMen2.exe's common movement trace helper (0x4a9650) asks the collider
+  for the level hull's back faces before every sweep (0x4a96c0 `push 1` -> collider vt+0x88); X-Men Legends I's helper
+  (0xa0af0) never does and its hull test is always front-faces-only. In the first game's levels actors therefore
+  stopped or wedged against walls seen from behind: HAARP's officer in haarp2_1's 520 staging pocket is boxed in by
+  them and, below 60 fps, wedges at the free end of a wall strip (the G14 positioning stall at ~500). `xml1` changes
+  that argument to 0 in the zones `[WorldBackfaces] ZoneCount / Z1..Zn` lists (a port's XML1 levels; the list is
+  required, without a valid one nothing is patched): the six bytes at 0x4a96c0 jump to a bridge that pushes the current zone's flag (the zone manager's path), so
+  XML2-origin maps a port install still carries keep XMen2.exe's two-sided collision (owner decision); the
+  entity-capacity owner of the helper asks the same flag. Entity collision and every other trace are unchanged.
+  Absent/`xml2` is byte-identical and adds no agreement entry; revision 2 `{1, scoped, zones, 0}` plus the zone list's
+  SHA-256 as the rule's detail: an `xml1` PC and one without the key or with another list refuse each other naming
+  `30 WorldBackfaces`.
+
+- **Enemy AI fidelity, part 2: gameplay rule 16 revision 11** (`[Game] NpcPowerRule = xml1`, `[Game] NpcSemiAuto =
+  xml1`; 1.8.0-beta.7; [docs](docs/npc-power-rule.md), [weapon brain](docs/npc-semi-auto.md),
+  [round 8](docs/npc-weapon-round8.md)). (1) The brain runs through locked moves, as XML1's (items 16-18):
+  XMen2.exe's attack-state update returned at once in every input-locked frame of an enemy that had used a power
+  (0x512f01..0x512f14; XML1's 0x10ad70 has no such exit), so its visibility query, brain and power decision did not
+  run during attacks, powers and reactions (2.6 power-decision calls/s in attacks, 0 in powers, against the
+  original's 23-39) and a power re-check due then went off on the first free frame, 0.5-7 s late (median 2.5 s on
+  the still-hero bench). The exit is never taken (0x512f0b jz -> jmp), the melee brain's power decision skips its own
+  lock test (0x5187c4; the officer weapon brain's call keeps it) and its picker is entered past the picker's lock
+  test (0x50fe5c; the per-slot chain test still refuses). NpcSemiAuto's own lock bridge at 0x512f0d is withdrawn (rule
+  16 now covers every actor), and the interim call-gap fronts (beta7 development) are withdrawn with it. (2) A block
+  is a counted melee to-hit miss, as in XML1 (items 14-15): an attack whose damagescale isn't `normal` (XML1's
+  PowerAttack) is never rolled (0x44f58e), and the damage receive's `block_chance` roll never zeroes a hit
+  (0x437b08); on the PC about a quarter of such rolled power attacks were blocked with no damage. (3) The weapon brain
+  takes schema 3 rows (`actor|recoil|range|burst|leader|warmup|flags`) and covers every XML1 gun family: the input
+  gate's warm-up deadline (nullifier, knockback: before every shot; lightning, flame: once per hold), the continuous
+  play flag, the pistol's default-handler primary, the original 0.25 s idle transition (was 0.05 s), the bullet
+  line-of-sight drop (0x519e3a, XMen2.exe's visibility test through rule 16's XML1 ray) and both empty-query branches
+  (0x51a359: bullet bursts and pauses, the other types' burst/strafe with the continuous-beam sweep). Schema 2
+  tables are refused. (4) No scheduler change: the original's measured "query starvation" was a stale reservation
+  planted by the measurement staging; `xml2_npc_query_scheduler_test` now executes XML1's and XMen2.exe's admission
+  code side by side. The record: absent/`xml2` = revision 3 `{0,0,0,0}` (released OFF, nothing patched);
+  `NpcPowerRule = xml1` = revision 11 `{1,1,0,0}`; with the weapon brain `{1,1,1,first four bytes of the table's
+  SHA-256}` and the whole SHA-256 of the canonical rows as rule 16's detail (the agreement digest covers it; a 32-bit
+  fold of the rows let two different tables agree). Revision 11 refuses 1.8.0-beta.6's revision 10 (and 3, 4, 5-9)
+  both ways naming `16 NpcPowerRule`. A weapon brain that cannot install takes the power rule's sites back out too
+  (all or nothing; online stays closed). The aiming's exponentials and trigonometry are deterministic
+  (`det_math.hpp`, correctly rounded double operations only), not the CRT's, and every weapon-brain entry runs under a
+  fixed x87 control word and MXCSR, restored on return. A failed withdrawal refuses startup.
+- **Gameplay agreement: rule details.** A rule whose effective state does not fit four words registers the SHA-256 of
+  its complete canonical data; details extend the canonical list only when present, so every OFF and released digest
+  is unchanged (protocol 4, 108 bytes, no wire change).
+- **XML1's speaker labels, opt-in** (`[Game] ClassicSpeakers = 1`; 1.8.0-beta.7): XMen2.exe takes a conversation
+  line's name label, portrait and talk-animation entity from one `%TOKEN%` (the line parser 0x458820 -> 0x456d00
+  writes the stats entry's display name and a newline in front of the text). X-Men Legends I keyed its 213 `%ALISON%`
+  lines to Magma but labelled them "Alison" (default.xbe string 503), so the Legends Classic builder keeps `%MAGMA%`
+  on the party Magma's ex-`%ALISON%` lines and writes `speakerLabel="Alison"` beside it. With the key the fix
+  redirects the line parser's two calls of its common part (0x458da8, 0x458e7b; seven guarded sites, one
+  transaction): after the game's own parse, a line with `speakerLabel` whose text starts with a token the game
+  resolved gets the label in place of the display name (text and textb, re-interned through 0x4566b0); the speaker
+  key stays, so the portrait and the talk animation are still Magma's. Anything else (no attribute, an unresolved
+  token, a token not at the start, a second token) is left as parsed. Absent, `0` or `off` make no writes; without
+  the fix the attribute is never read and the line reads "Magma" as before. Display only: no gameplay-agreement rule,
+  no save change.
 - **Enemy AI fidelity: gameplay rule 16 revision 10** (`[Game] NpcPowerRule = xml1`, `[Game] NpcSemiAuto = xml1`;
   1.8.0-beta.6). One new rule-16 revision covers two restorations ([docs](docs/npc-power-rule.md),
   [weapon brain](docs/npc-semi-auto.md)). (1) With `NpcPowerRule = xml1`, a hit reaction now spends an enemy's combo

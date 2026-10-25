@@ -10513,8 +10513,27 @@ namespace
 		CHECK(operand == l.half());
 		std::memcpy(&operand, recheck.data() + 18, 4);
 		CHECK(operand == l.two());
-		CHECK(gate[7] == 0x75 && 9 + gate[8] == 37 && gate[13] == 0xe8 && rel32(gate, 14, l.gate) == energy_getter_va && gate[35] == 0x75 && 37 + gate[36] == 42);
-		CHECK(gate[37] == 0xe9 && rel32(gate, 38, l.gate) == picker_va && gate[44] == 0xc2 && gate[45] == 0x14);
+		CHECK(gate[7] == 0x75 && 9 + gate[8] == 37 && gate[13] == 0xe8 && rel32(gate, 14, l.gate) == energy_getter_va && gate[35] == 0x75 && 37 + gate[36] == 54);
+		// Revision 10: the go path is the picker's own first 12 bytes, then 0x50fe69, past its input-lock test.
+		CHECK(std::vector<std::uint8_t>(gate.begin() + 37, gate.begin() + 49) == sub_bytes(picker_entry_site, 0, 12) && gate[49] == 0xe9 &&
+		      rel32(gate, 50, l.gate) == picker_unlocked_va && picker_unlocked_va == picker_va + 25 && gate[54] == 0x32 && gate[56] == 0xc2 && gate[57] == 0x14);
+		// Revision 10: the attack-state update's input-lock exit (jz -> jmp, same target) and the power decision's lock
+		// test (jne 0x518ac9 -> the bridge; its exits back to 0x518ac9 / 0x5187ca, its caller test 0x5193e7).
+		CHECK(sub_bytes(lock_exit_site, 10, 2) == std::vector<std::uint8_t>({0x74, 0x0d}) && lock_exit_bytes() == std::vector<std::uint8_t>({0xeb, 0x0d}) &&
+		      lock_exit_va == lock_exit_site.va + 10 && lock_exit_va + 2 + 0x0d == 0x512f1a);
+		{
+			const auto lock = power_lock_bridge(l), lock_jump = power_lock_jump(l);
+			const auto native = sub_bytes(power_lock_site, 11, 6);
+			std::int32_t jne = 0;
+			std::memcpy(&jne, native.data() + 2, 4);
+			address caller = 0;
+			std::memcpy(&caller, lock.data() + 6, 4);
+			CHECK(native[0] == 0x0f && native[1] == 0x85 && power_lock_va + 6 + jne == power_lock_exit_va && power_lock_va == power_lock_site.va + 11 &&
+			      power_lock_resume_va == power_lock_va + 6);
+			CHECK(lock.size() == power_lock_size && lock[0] == 0x74 && 2 + lock[1] == 0x11 && lock[10] == 0x74 && 12 + lock[11] == 0x11 &&
+			      caller == melee_power_call_return_va && rel32(lock, 0x0d, l.power_lock) == power_lock_exit_va && rel32(lock, 0x12, l.power_lock) == power_lock_resume_va);
+			CHECK(lock_jump.size() == 6 && lock_jump[0] == 0xe9 && rel32(lock_jump, 1, power_lock_va) == l.power_lock && lock_jump[5] == 0x90);
+		}
 		const auto data = constants();
 		float values[4];
 		std::memcpy(values, data.data(), 16);

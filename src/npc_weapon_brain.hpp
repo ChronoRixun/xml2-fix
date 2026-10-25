@@ -1,7 +1,8 @@
 #pragma once
 
-// Included inside npc_semi_auto's private namespace. The supported contract is
-// a discrete non-bullet weapon without warm-up. The native ranged brain retains
+// Included inside npc_semi_auto's private namespace. The supported contract covers
+// every source gun primary: semi-auto (discrete, warm-up before every shot, or a
+// continuous beam warmed up once) and the default-handler pistol. The native ranged brain retains
 // its target validation, navigation, near-target selection and close-combat paths; this restores
 // the missing weapon branch and the separate actor-input gate.
 struct point { float x, y, z; };
@@ -42,6 +43,16 @@ auto angles_function = reinterpret_cast<angles_t>(0x5607b0);
 auto face_function = reinterpret_cast<face_t>(0x503810);
 auto aim_function = reinterpret_cast<aim_t>(0x517cf0);
 auto position_function = reinterpret_cast<const point*(__fastcall*)(void*, void*, point*)>(&entity_position);
+using see_t = bool(__thiscall*)(void*, bool*);
+using state_t = void(__thiscall*)(void*, int);
+using turn_t = void(__thiscall*)(void*, const point*, const point*);
+auto see_function = reinterpret_cast<see_t>(0x505250);     // XML2's AI target visibility (original 0xfe550)
+auto state_function = reinterpret_cast<state_t>(0x505030); // AI state setter (original 0xfe330)
+auto turn_function = reinterpret_cast<turn_t>(0x503180);   // AI turn toward angles (original 0xfc5d0)
+// Current move flag (original move vfunc +0x54 = flags +0x12c bit 2; PC +0x5c = +0x144 bit 2).
+bool __cdecl move_busy(void* move)
+{ return reinterpret_cast<bool(__thiscall*)(void*)>((*static_cast<void***>(move))[0x5c / 4])(move); }
+auto busy_function = &move_busy;
 float native_delta() { return field<float>(*reinterpret_cast<void**>(0x718434), 0x3ec); }
 auto delta_function = &native_delta;
 void* named_move(void* actor, const char* name)
@@ -54,9 +65,22 @@ void* native_ai(void* actor)
 { return actor ? ai_function(reinterpret_cast<void*>(0x78ba10), field<u32>(actor, 0x7dc)) : nullptr; }
 const weapon* npc_spec(void* actor)
 { return actor && field<int>(actor, 0x3d4) == -1 ? spec(actor) : nullptr; }
-
-void __cdecl prepare_brain(void* ai)
+// The converted primary: a ch_weapon_semi_auto move resolves to this handler; the pistol's
+// source primary has no handler, so its converted power_attack keeps XML2's default one.
+bool gun_move(void* actor, void* move, const weapon& w)
 {
+ if (!move) return false;
+ void* h = field<void*>(move, 0xc8);
+ if (!default_handler(w)) return h == &handler;
+ return h && *static_cast<const u32*>(h) == default_vtable && move == named_move(actor, "power_attack");
+}
+
+// Every entry the hooks call runs inside det_math::fp_env (x87 control word and MXCSR fixed, restored on return).
+// None of them can throw (no allocation, no throwing call; noexcept would terminate instead of unwinding through a
+// naked hook frame); a fault inside game code is an SEH crash of the game whatever the state.
+void __cdecl prepare_brain(void* ai) noexcept
+{
+ det_math::fp_env fp;
  void* actor = field<void*>(ai, 0x10);
  const auto* w = npc_spec(actor);
  if (!w) return;
@@ -71,8 +95,9 @@ void __cdecl prepare_brain(void* ai)
  field<u32>(ai, 0x280) = w->range_bits;
  if (!w->leader) field<u32>(ai, 0x2ac) = 1;
 }
-bool __cdecl preserve_weapon_range(void* ai, void* const* chains = nullptr)
+bool __cdecl preserve_weapon_range(void* ai, void* const* chains = nullptr) noexcept
 {
+ det_math::fp_env fp;
  const auto* w = npc_spec(field<void*>(ai, 0x10));
  if (!w) return false;
  if (chains) {
@@ -80,7 +105,7 @@ bool __cdecl preserve_weapon_range(void* ai, void* const* chains = nullptr)
   u32 capabilities = 0;
   for (unsigned slot = 0; slot != 4; ++slot) {
    void* move = chains[5 + slot]; // native refresh's already resolved action table
-   if (move && field<void*>(move, 0xc8) == &handler) {
+   if (gun_move(field<void*>(ai, 0x10), move, *w)) {
     // These attributes were invented by the weapon conversion. Original gun
     // moves do not advertise generic AI powers; restore the empty cached slot.
     field<u32>(ai, 0x41c + 4*slot) = 0;
@@ -100,7 +125,7 @@ bool __cdecl preserve_weapon_range(void* ai, void* const* chains = nullptr)
  return true; // skip XML2's power-derived role/range replacement
 }
 
-bool __fastcall semi_chain(void* self, void*, void* actor, void* input)
+bool __fastcall semi_chain(void* self, void*, void* actor, void* input) noexcept
 {
  if (!npc_spec(actor)) return chain_function(self, actor, input);
  const u32 held = field<u32>(input, 0);
@@ -116,37 +141,38 @@ bool __fastcall semi_chain(void* self, void*, void* actor, void* input)
  return true;
 }
 
-bool __cdecl weapon_input(void* actor, void* input)
+bool __cdecl weapon_input(void* actor, void* input) noexcept
 {
- if (!npc_spec(actor) || (field<u32>(input, 0) & 0x90) != 0x90) return false;
+ det_math::fp_env fp;
+ const auto* w = npc_spec(actor);
+ if (!w) return false;
+ const u32 token = field<u32>(actor, 0x1c);
+ const auto self = reinterpret_cast<std::uintptr_t>(actor);
+ auto& s = states[timer_slot(token)];
+ if ((field<u32>(input, 0) & 0x90) != 0x90) { released(s, self, token); return false; }
  if (field<unsigned char>(actor, 0x764) & 1) return true;
  void* current = field<void*>(actor, 0x378);
  if (!current) return true;
  const int animation = field<int>(current, 0xbc); // native getter 0x500840
- const u32 token = field<u32>(actor, 0x1c);
  const float time = now();
  // Original enums 0, 0x15, 0x86, 0x8c map to PC idle, crouch,
  // power1 and power7. Resolve the move by name, not a contextual power chain.
  if (animation != 0 && animation != 21 && animation != 115 && animation != 127) {
   request_function(actor, named_move(actor, "idle"), -1, -1.f, 0, nullptr, nullptr);
-  states[timer_slot(token)] = {reinterpret_cast<std::uintptr_t>(actor), token, time, time + .05f};
+  rearm(s, self, token, time, transition_delay);
   return true;
  }
- const auto* s = find(actor, token);
- if (!ready(s ? *s : state{}, reinterpret_cast<std::uintptr_t>(actor), token, time)) return true;
+ if (!ready(s, self, token, time)) return true;
  void* move = named_move(actor, "power_attack");
- if (!move || field<void*>(move, 0xc8) != &handler) return true;
+ if (!gun_move(actor, move, *w)) return true;
+ // Warm-up start (0x4309a): the original also plays the weapon's charge effect through
+ // actor vfunc +0x84; the PC conversion authors that effect inside the primary at the
+ // shot, so only the deadline is restored here.
+ if (gate(s, self, token, time, *w) != admit::fire) return true;
  request_function(actor, move, (field<unsigned char>(actor, 0x3d9) & 0x40) ? 127 : 115,
-                  -1.f, 9, nullptr, nullptr);
+                  -1.f, play_flags(*w), nullptr, nullptr);
  return true;
 }
-
-// XML2's attack-state update returns before the weapon brain while the actor is input
-// locked in a flagged move (0x512f01..0x512f14: actor+0x764 bit 0 and actor+0x3d9 bit
-// 0x10). The original attack-state update (0x10ad70) has no such exit: its weapon brain
-// runs on every update, including during the grenade move, where it keeps power+fire
-// held (S2 ring: tag 20 on ~every frame of the full-energy windows, input 0x90).
-bool __cdecl attack_state_continues(void* actor) { return npc_spec(actor) != nullptr; }
 
 // Called after the ranged brain's power decision (0x519fe4). The original decision
 // (0xee260) returns true after pressing a power, so the weapon brain stops for that update
@@ -154,7 +180,7 @@ bool __cdecl attack_state_continues(void* actor) { return npc_spec(actor) != nul
 // 0xa0 once at full energy, then 0x90). XML2's decision (0x518770) presses the same power
 // bits but returns false, and the held-fire branch then turns the press into a gun shot
 // or a heavy melee attack. Treat such a press as the original's true result.
-bool __cdecl power_pressed(int native, void* brain, void* input)
+bool __cdecl power_pressed(int native, void* brain, void* input) noexcept
 {
  if (native & 0xff) return true;
  void* ai = field<void*>(brain, 4);
@@ -163,34 +189,189 @@ bool __cdecl power_pressed(int native, void* brain, void* input)
  return (held & 0x80) && (held & 0x170);
 }
 
-// Called at the native ranged brain's unresolved near-target continuation, after its
-// distance (>75), range, capability, camera and actor-state checks have succeeded.
-// Revision 9: the original officer reaches its held-fire branch here (0xef8df..0xef981):
-// face the destination, hold power+fire on every update and aim at it. Its burst
-// timers stay at the constructor values (0, 0.6, 100) for the whole engagement and fire
-// is held on every weapon-brain update (owner's S2 ring: tag 24 0x90/0x90 = tag 20 count),
-// so cadence comes only from the recoil gate. Revision 8's burst/pause branch (0xefc4a)
-// is never executed by the officer and is no longer used.
-bool __cdecl weapon_decision(void* brain, void* input)
+// Bullet weapons only, at the top of every weapon-brain update (0xef3cd..0xef434, between
+// the target resolve 0xee150 and the attack-state call; PC 0x519e3a, after 0x518660):
+// when the AI's visibility test (0xfe550; XML2's own version is 0x505250, same contract:
+// false plus an untouched flag = blocked within 600 units) fails, the burst timers reset
+// (+0x20 = 0, +0x1c = -1) and the AI drops to state 0 (0xfe330 = PC 0x505030).
+void __cdecl line_of_sight(void* brain) noexcept
 {
+ det_math::fp_env fp;
+ void* ai = field<void*>(brain, 4);
+ if (!ai) return;
+ const auto* w = npc_spec(field<void*>(ai, 0x10));
+ if (!w || !bullet(*w)) return;
+ bool unknown = false;
+ if (see_function(ai, &unknown) || unknown) return;
+ field<float>(brain, 0x20) = 0.f;
+ field<float>(brain, 0x1c) = -1.f;
+ state_function(ai, 0);
+}
+
+// Empty near-target query, bullet weapons (0xef9bc..0xefc3e): fire is held while the
+// burst timer (+0x1c) is non-negative, minus the frame delta; when it goes negative the
+// brain pauses until now + 1.0 (+0x20) and the next burst lasts rand + 2.0 s. The aim
+// point (actor+0x318 = PC +0x3ac) moves toward the destination by 1 - 0.15^dt while firing
+// (0.25^dt otherwise); a rapid-fire weapon's pause frame pulls it 75 % back toward the
+// actor (0x23fc50 lerp 0.25). Then the AI turns toward the aim point when it is more than
+// 10 units away on the ground plane (0xfc5d0 = PC 0x503180). A current move whose
+// flag +0x54 (PC +0x5c, flags +0x144 bit 2) is set ends the update before aiming.
+bool bullet_branch(void* brain, void* input, void* ai, void* actor, const weapon& w, void* destination)
+{
+ const float time = now(), dt = delta_function();
+ float& burst = field<float>(brain, 0x1c);
+ float& resume = field<float>(brain, 0x20);
+ bool fired = false, paused = false;
+ if (time > resume) {
+  if (burst >= 0) {
+   field<u32>(input, 0) |= 0x90;
+   field<u32>(input, 4) |= 0x90;
+   burst -= dt;
+   fired = true;
+   field<point>(input, 0x14) = {};
+   field<u32>(input, 0) &= ~0x2000u;
+   field<u32>(input, 8) = 0;
+  }
+  if (!(burst >= 0)) {
+   resume = time + 1.f;
+   burst = random_function(true) + 2.f;
+   paused = true;
+  }
+ }
+ if (void* current = field<void*>(actor, 0x378); current && busy_function(current)) return true;
+ point target{};
+ target = *position_function(destination, nullptr, &target);
+ const point last = field<point>(actor, 0x3ac);
+ // det_math, not std::pow: lockstep peers must round identically on every CPU (docs/npc-semi-auto.md).
+ const double keep = fired ? det_math::pow_0_15(double(dt)) : det_math::pow_0_25(double(dt));
+ const float k = float(1.0 - keep);
+ point aim{float(float(target.x - last.x) * k) + last.x, float(float(target.y - last.y) * k) + last.y,
+           float(float(target.z - last.z) * k) + last.z};
+ if (paused && (w.flags & flag_rapidfire)) {
+  point self{};
+  self = *position_function(actor, nullptr, &self);
+  aim = {(aim.x - self.x) * .25f + self.x, (aim.y - self.y) * .25f + self.y, (aim.z - self.z) * .25f + self.z};
+ }
+ aim_function(brain, &aim);
+ point self{};
+ self = *position_function(actor, nullptr, &self);
+ point ground = field<point>(actor, 0x3ac);
+ ground = {ground.x - self.x, ground.y - self.y, 0.f};
+ const float length = std::sqrt(ground.x * ground.x + ground.y * ground.y);
+ if (!(length > 10.f)) return true;
+ ground = {ground.x / length, ground.y / length, 0.f};
+ point angles{};
+ angles = *angles_function(&angles, &ground);
+ turn_function(ai, &field<point>(actor, 0x20), &angles);
+ return true;
+}
+
+// Empty near-target query, other weapon types (0xefc4a..0xf02a6; revision 8 ported it for the
+// officer without its warm-up and continuous parts). Strafe flag 0x2000; unless a started
+// warm-up is still running, turn toward the destination (behind: end the burst; off-axis:
+// 0.02 rad toward it; on-axis: a continuous beam sweeps 0.015 rad per update in the last
+// turn direction). A spent burst pauses (first 0.3 s defer, then the pause timer) once the
+// warm-up deadline is 0.4 s old, then a new burst of bursttime * (1 + rand/2). Otherwise fire
+// is held (a warm-up ending within 0.4 s stops the strafe and movement), the victim is
+// noticed and the burst runs down; when it is spent the pause is 1.2 + 0.8 * other attackers
+// + 1.5 * rand, halved against a non-player target.
+bool other_branch(void* brain, void* input, void* ai, void* actor, const weapon& w, void* target, void* destination,
+                  const state* s)
+{
+ field<u32>(input, 0) |= 0x2000;
+ const float time = now();
+ const float warm = s ? s->warm : 0.f;
+ if (warm == 0 || time > warm) {
+  point direction = field<point>(destination, 0x20), origin = field<point>(actor, 0x20);
+  direction.x -= origin.x; direction.y -= origin.y; direction.z -= origin.z;
+  const float distance = std::sqrt(direction.x*direction.x + direction.y*direction.y + direction.z*direction.z);
+  if (distance > 0) {
+   direction.x /= distance; direction.y /= distance; direction.z /= distance;
+   point angles = field<point>(actor, 0x2c);
+   const auto yaw = det_math::sincos(angles.y), roll = det_math::sincos(angles.z); // deterministic, not the CRT's
+   const float cy = yaw.c, sy = yaw.s, cz = roll.c, sz = roll.s;
+   const float dot = direction.x*cy*cz + direction.y*cy*sz - direction.z*sy;
+   if (!(dot > -.707f)) field<float>(brain, 0x1c) = -1.f;
+   else if (!(dot > .999f)) {
+    const float side = -direction.x*sz + direction.y*cz;
+    const int sign = side <= 0 ? -1 : 1;
+    // 0x120a30's right vector is opposite the conventional left vector.
+    angles.z += sign * .02f;
+    rotate_function(ai, &angles);
+    field<int>(brain, 0x28) = sign;
+   } else if (continuous(w)) {
+    angles.z += float(field<int>(brain, 0x28)) * .015f;
+    rotate_function(ai, &angles);
+   }
+  }
+ }
+ const float dt = delta_function();
+ float& burst_left = field<float>(brain, 0x1c);
+ float& pause_left = field<float>(brain, 0x20);
+ float& pause_initial = field<float>(brain, 0x24);
+ // The original compares the unrounded now - 0.4 and warm - now (x87) with float operands.
+ if (!(burst_left >= 0) && !(double(time) - double(.4f) < double(warm))) {
+  if (pause_left == pause_initial) {
+   delay_function(ai, .3f);
+   pause_left -= .3f;
+   field<u32>(input, 0) &= ~0x2000u;
+   return true;
+  }
+  pause_left -= dt;
+  if (!(pause_left <= 0)) return true;
+  const float burst = std::bit_cast<float>(w.burst_bits);
+  burst_left = burst + random_function(true) * burst * .5f;
+  return true;
+ }
+ if (warm != 0 && double(warm) - double(time) < double(.4f)) {
+  field<u32>(input, 0) &= ~0x2000u;
+  field<u32>(input, 8) = 0;
+  field<u32>(ai, 0x270) = 0xffffffffu; // original ai+0x244
+ }
+ burst_left -= dt;
+ field<u32>(input, 0) |= 0x90;
+ field<u32>(input, 4) |= 0x90;
+ point offset = field<point>(destination, 0x20), origin = field<point>(actor, 0x20);
+ offset.x -= origin.x; offset.y -= origin.y; offset.z -= origin.z;
+ const float distance = std::sqrt(offset.x*offset.x + offset.y*offset.y + offset.z*offset.z);
+ if (void* victim_ai = native_ai(target)) {
+  attack_notice notice{}; notice.words[0] = 1; notice.words[1] = 30;
+  notice.words[8] = std::bit_cast<u32>(distance);
+  notice_function(victim_ai, 0.f, 3, field<u32>(actor, 0x1c), notice, 0, 0);
+  alert_function(ai, 1.f, 300.f, field<u32>(ai, 0x18));
+ }
+ if (!(burst_left <= 0)) return true;
+ if (void* victim_ai = native_ai(target)) {
+  unsigned others = 0;
+  for (unsigned i = 0; i != 5; ++i) {
+   const u32 other = field<u32>(victim_ai, 0x18c + 8*i);
+   if (other && other != field<u32>(actor, 0x1c)) ++others;
+  }
+  pause_left = 1.2f + .8f * others + 1.5f * random_function(true);
+  if (!(field<u32>(target, 0x3d8) & 1)) pause_left *= .5f;
+ } else pause_left = 1.f;
+ pause_initial = pause_left;
+ return true;
+}
+
+// Called at the native ranged brain's continuation for an empty near-target query
+// (0x51a359; the query 0x50a250 at 0x51a26e corresponds to the original 0x103850, and a
+// found entity runs the native held-fire branch 0x51a284..0x51a356 = original
+// 0xef8df..0xef981). The original runs its empty-query branches here (0xef98d): clear
+// the actor's bit 2, then the bullet branch 0xef9bc or the other-type branch 0xefc4a.
+// Revision 9/10 had placed the held-fire branch here; no measured window reached it.
+bool __cdecl weapon_decision(void* brain, void* input) noexcept
+{
+ det_math::fp_env fp;
  void* ai = field<void*>(brain, 4);
  void* actor = field<void*>(ai, 0x10);
  const auto* w = npc_spec(actor);
  if (!w) return false;
+ field<unsigned char>(actor, 0x764) &= ~4;
  void *self = nullptr, *target = nullptr, *entity = nullptr;
  if (!target_function(brain, field<u32>(actor, 0x1c), &self, &target, &entity)) return true;
  void* destination = target ? target : entity;
  if (!destination || self != actor) return true;
- point origin = field<point>(actor, 0x20), position = field<point>(destination, 0x20);
- point direction{position.x - origin.x, position.y - origin.y, 0.f};
- field<u32>(input, 8) = 0;
- if (!nav_function(ai, &direction)) return true;
- point angles{};
- angles = *angles_function(&angles, &direction);
- face_function(ai, &field<point>(actor, 0x20), &angles);
- field<u32>(input, 0) |= 0x90;
- field<u32>(input, 4) |= 0x90;
- point aim{};
- aim_function(brain, position_function(destination, nullptr, &aim));
- return true;
+ if (bullet(*w)) return bullet_branch(brain, input, ai, actor, *w, destination);
+ return other_branch(brain, input, ai, actor, *w, target, destination, find(actor, field<u32>(actor, 0x1c)));
 }

@@ -14,10 +14,12 @@ namespace gameplay_capabilities
   placement_crush_id=11, double_heal_id=12, pack_amount_id=13, script_functions_id=14,
   death_switch_clear_id=15, npc_power_rule_id=16, object_world_impact_id=17, stun_rule_id=18,
   danger_room_party_id=19, lockon_aim_id=20, box_harm_origin_id=21, danger_room_healthbars_id=22, harm_single_chain_id=23, fast_transfer_id=24,
-  gns_transport_id=25, join_in_progress_id=26, online_conversations_id=27, model_pools_id=28, tick_rate_id=29;
+  gns_transport_id=25, join_in_progress_id=26, online_conversations_id=27, model_pools_id=28, tick_rate_id=29,
+  world_backfaces_id=30;
  // Rules 17..29 (24 = [Online] FastTransfer, docs/online-campaign-transfer.md; 25 = [Online] Transport=gns, docs/gns-transport.md;
  // 26 = [Online] JoinInProgress, docs/join-in-progress.md; 27 = [Game] OnlineConversations=lockstep, docs/gameplay-agreement.md;
- // 28 = [Engine] ModelPools, docs/model-pools.md; 29 = [Online] TickRate, docs/online-tick-rate.md)
+ // 28 = [Engine] ModelPools, docs/model-pools.md; 29 = [Online] TickRate, docs/online-tick-rate.md;
+ // 30 = [Game] WorldBackfaces=xml1, docs/world-backfaces.md)
  // participate only when requested; OFF preserves the released digest.
  constexpr std::uint16_t fast_transfer_revision=1;
  // 10: the first game's Xtraction services and revival price (xtract::capability; issue #63). Revision 2: the online
@@ -74,10 +76,17 @@ namespace gameplay_capabilities
   case online_conversations_id: return "OnlineConversations";
   case model_pools_id: return "ModelPools";
   case tick_rate_id: return "TickRate";
+  case world_backfaces_id: return "WorldBackfaces";
   default: return "a newer rule";
   }
  }
  struct entry { std::uint16_t id,revision; std::array<std::uint32_t,4> values; };
+ // A rule whose effective state does not fit its four words (rule 16's weapon rows) also registers a detail: the
+ // SHA-256 of its complete canonical data. Details extend the canonical list only when present (docs/gameplay-
+ // agreement.md, "Rule details"), so a record without one hashes exactly as before.
+ using detail_digest=std::array<std::uint8_t,32>;
+ constexpr std::size_t max_details=16, detail_size=2+32;
+ constexpr std::uint32_t detail_magic=0x4c544447; // GDTL, little endian
  enum class result { match, unavailable, malformed, protocol, entries, revision, value };
  // Which rule-summary buckets differ (bit b = bucket b). Never an admission decision: the digest decides.
  struct difference { std::uint64_t buckets=0,local_only=0,peer_only=0; };
@@ -85,7 +94,9 @@ namespace gameplay_capabilities
  {
   std::array<entry,max_entries> entries_{};
   std::array<std::uint8_t,max_size> bytes_{};
-  std::size_t count_=1;
+  struct detail_entry { std::uint16_t id; detail_digest digest; };
+  std::array<detail_entry,max_details> details_{};
+  std::size_t count_=1,detail_count_=0;
   bool valid_=true,frozen_=false,layout_registered_=false;
   static void put(std::uint8_t* at,std::uint32_t value,std::size_t n){for(std::size_t i=0;i<n;++i)at[i]=std::uint8_t(value>>(i*8));}
   static std::uint32_t get(std::span<const std::uint8_t> b,std::size_t at,std::size_t n){std::uint32_t v=0;for(std::size_t i=0;i<n;++i)v|=std::uint32_t(b[at+i])<<(i*8);return v;}
@@ -96,12 +107,17 @@ namespace gameplay_capabilities
   void invalidate() { valid_=false; }
   std::size_t count() const { return count_; }
   const entry& rule(std::size_t i) const { return entries_[i]; }
-  bool add(std::uint16_t id,std::uint16_t revision,std::array<std::uint32_t,4> values,bool verified)
+  bool add(std::uint16_t id,std::uint16_t revision,std::array<std::uint32_t,4> values,bool verified,const detail_digest* extra=nullptr)
   {
-   if(frozen_ || !verified || !id || id==entity_layout_id || !revision || count_==max_entries) { valid_=false;return false; }
+   if(frozen_ || !verified || !id || id==entity_layout_id || !revision || count_==max_entries || (extra && detail_count_==max_details)) { valid_=false;return false; }
    for(std::size_t i=0;i<count_;++i)if(entries_[i].id==id){valid_=false;return false;}
-   entries_[count_++]={id,revision,values};return true;
+   entries_[count_++]={id,revision,values};
+   if(extra)details_[detail_count_++]={id,*extra};
+   return true;
   }
+  // The detail registered with rule `id`, or null.
+  const detail_digest* detail(std::uint16_t id) const
+  { for(std::size_t i=0;i<detail_count_;++i)if(details_[i].id==id)return &details_[i].digest; return nullptr; }
   // actors + generic <= world (the world keeps registrations beyond the two arenas, plan section 5), world within the
   // token width; a failed or unverified layout poisons the record even when the fallback is physically retail.
   bool layout(std::uint16_t revision,std::array<std::uint32_t,4> values,bool verified)
@@ -116,11 +132,18 @@ namespace gameplay_capabilities
    if(frozen_)return ready();
    frozen_=true;if(!valid_)return false;
    std::sort(entries_.begin(),entries_.begin()+count_,[](const entry&a,const entry&b){return a.id<b.id;});
-   // Canonical list: "GCAP", protocol, count, then every sorted entry in the revision-2 encoding.
-   std::array<std::uint8_t,8+max_entries*entry_size> canonical{};
+   std::sort(details_.begin(),details_.begin()+detail_count_,[](const detail_entry&a,const detail_entry&b){return a.id<b.id;});
+   // Canonical list: "GCAP", protocol, count, then every sorted entry in the revision-2 encoding; then, only when a
+   // rule registered a detail, "GDTL", the detail count and every detail sorted by ID (ushort ID, 32 digest bytes).
+   std::array<std::uint8_t,8+max_entries*entry_size+6+max_details*detail_size> canonical{};
    put(canonical.data(),magic,4);put(canonical.data()+4,protocol_revision,2);put(canonical.data()+6,std::uint32_t(count_),2);
    for(std::size_t i=0;i<count_;++i)encode(canonical.data()+8+i*entry_size,entries_[i]);
-   const auto digest=sha256_fips::digest(canonical.data(),8+count_*entry_size);
+   std::size_t length=8+count_*entry_size;
+   if(detail_count_){
+    put(canonical.data()+length,detail_magic,4);put(canonical.data()+length+4,std::uint32_t(detail_count_),2);length+=6;
+    for(std::size_t i=0;i<detail_count_;++i){put(canonical.data()+length,details_[i].id,2);std::memcpy(canonical.data()+length+2,details_[i].digest.data(),32);length+=detail_size;}
+   }
+   const auto digest=sha256_fips::digest(canonical.data(),length);
    put(bytes_.data(),magic,4);put(bytes_.data()+4,protocol_revision,2);put(bytes_.data()+6,std::uint32_t(count_),2);put(bytes_.data()+8,std::uint32_t(max_size),2);put(bytes_.data()+10,0,2);
    std::memcpy(bytes_.data()+digest_at,digest.data(),digest_size);
    // Rule summary: per bucket a non-zero FNV-1a-32 fold of its entries (sorted), zero for an empty bucket.
@@ -128,6 +151,8 @@ namespace gameplay_capabilities
    for(std::size_t i=0;i<count_;++i){
     const auto b=bucket_of(entries_[i].id);if(!used[b]){fnv[b]=2166136261u;used[b]=true;}
     std::array<std::uint8_t,entry_size> one{};encode(one.data(),entries_[i]);for(const auto c:one)fnv[b]=(fnv[b]^c)*16777619u;
+    // A detail joins its rule's bucket, so a detail-only difference still names the rule (advisory, as every bucket).
+    if(const auto* d=detail(entries_[i].id))for(const auto c:*d)fnv[b]=(fnv[b]^c)*16777619u;
    }
    for(std::size_t b=0;b<buckets;++b){const auto h=fnv[b];const auto folded=std::uint8_t(h^(h>>8)^(h>>16)^(h>>24));bytes_[summary_at+b]=used[b] ? (folded ? folded : 1) : 0;}
    return true;
@@ -175,7 +200,7 @@ namespace gameplay_capabilities
      if(used)add(", ");if(ids){number(unsigned(b+1));add(" ");}
      // These requested-only rules are absent when OFF, but this DLL still knows
      // their names. The bucket summary remains advisory; the digest admits peers.
-     if(b+1==object_world_impact_id || b+1==stun_rule_id || b+1==danger_room_party_id || b+1==lockon_aim_id || b+1==box_harm_origin_id || b+1==danger_room_healthbars_id || b+1==harm_single_chain_id || b+1==fast_transfer_id || b+1==gns_transport_id || b+1==join_in_progress_id || b+1==online_conversations_id || b+1==model_pools_id || b+1==tick_rate_id){add(rule_name(static_cast<std::uint16_t>(b+1)));add(" (disabled on this PC)");}
+     if(b+1==object_world_impact_id || b+1==stun_rule_id || b+1==danger_room_party_id || b+1==lockon_aim_id || b+1==box_harm_origin_id || b+1==danger_room_healthbars_id || b+1==harm_single_chain_id || b+1==fast_transfer_id || b+1==gns_transport_id || b+1==join_in_progress_id || b+1==online_conversations_id || b+1==model_pools_id || b+1==tick_rate_id || b+1==world_backfaces_id){add(rule_name(static_cast<std::uint16_t>(b+1)));add(" (disabled on this PC)");}
      else add("a rule this PC does not have");
     }
    }

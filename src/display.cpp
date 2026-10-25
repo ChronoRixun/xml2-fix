@@ -495,9 +495,19 @@ namespace display
 			return result;
 		}
 
-		HRESULT STDMETHODCALLTYPE hooked_create_device(void* self, const UINT which, const DWORD type, const HWND focus, const DWORD behaviour,
+		HRESULT STDMETHODCALLTYPE hooked_create_device(void* self, const UINT which, const DWORD type, const HWND focus, const DWORD engine_behaviour,
 		                                               d3d8::present_parameters* pp, void** out)
 		{
+			// The simulation's x87 word is XMen2.exe's 53-bit one only while Direct3D preserves it: the engine asks for
+			// D3DCREATE_FPU_PRESERVE (alchemy.ini preserveFPU, true unless edited), and the fix keeps it set, because the
+			// lockstep weapon brain runs the game's routines under exactly that word (det_math::game_x87_cw).
+			constexpr DWORD fpu_preserve = 0x2; // D3DCREATE_FPU_PRESERVE
+			const DWORD behaviour = engine_behaviour | fpu_preserve;
+			if (!(engine_behaviour & fpu_preserve))
+			{
+				logger::write("display: the engine asked for a device without FPU_PRESERVE (alchemy.ini preserveFPU=false?) - kept set, so the "
+				              "game's 53-bit x87 precision stays as XMen2.exe sets it");
+			}
 			if (!pp || !out)
 			{
 				return real_create_device(self, which, type, focus, behaviour, pp, out);
@@ -514,7 +524,7 @@ namespace display
 			}
 			auto wanted = stock_fallback ? requested : rewrite(self, requested, notes);
 
-			logger::write("display: device requested %s (adapter %u type %lu behaviour %lX)", describe(requested).c_str(), which, type, behaviour);
+			logger::write("display: device requested %s (adapter %u type %lu behaviour %lX)", describe(requested).c_str(), which, type, engine_behaviour);
 			if (std::memcmp(&wanted, &requested, sizeof(wanted)) != 0)
 			{
 				logger::write("display: device applied   %s%s%s", describe(wanted).c_str(), notes.empty() ? "" : " - ", notes.c_str());

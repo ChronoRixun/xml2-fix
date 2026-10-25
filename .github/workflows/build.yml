@@ -26,6 +26,9 @@ jobs:
       - name: Test release policy
         run: python scripts/test_release_metadata.py
 
+      - name: Test the native runner's matrix mode
+        run: python scripts/test_run_native.py
+
       - name: Validate release tag
         if: github.ref_type == 'tag'
         shell: pwsh

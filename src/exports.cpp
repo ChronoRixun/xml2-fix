@@ -25,6 +25,8 @@
 #include "box_harm.hpp"
 #include "harm_loop_startup.hpp"
 #include "harm_single_chain.hpp"
+#include "world_backfaces.hpp"
+#include "world_backfaces_rules.hpp"
 #include "double_heal.hpp"
 #include "combo_heads.hpp"
 #include "xml1_capability_rules.hpp"
@@ -73,6 +75,7 @@
 #include "resistance_display.hpp"
 #include "classic_hud.hpp"
 #include "codex_menu.hpp"
+#include "speaker_label.hpp"
 #include "revival_cost.hpp"
 #include "mod_loader.hpp"
 #include "new_game.hpp"
@@ -407,7 +410,8 @@ namespace
 		if (game_version::needs_gameplay_agreement() || npc_power::requested() || npc_semi_auto::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::npc_power_rule_id,
 				npc_power::revision_for(npc_power::requested() || npc_semi_auto::requested()),
-				npc_semi_auto::values(npc_power::values()), npc_power::verified() && npc_semi_auto::verified());
+				npc_semi_auto::values(npc_power::values()), npc_power::verified() && npc_semi_auto::verified(),
+				npc_semi_auto::detail());
 		stun_rule::install(game);
 		// New opt-in rule: absence preserves the released LC OFF digest.
 		if (stun_rule::requested())
@@ -470,6 +474,9 @@ namespace
 		resistance_display::install(game);
 		classic_hud::install(game);
 		codex_menu::install(game);
+		// XML1's speaker labels ([Game] ClassicSpeakers=1): the line parser's two calls of its common part; display only,
+		// no agreement record (the label is drawn text; the speaker key, portrait and talk animation are the game's own).
+		speaker_label::install(game);
 		// The team-combo popup never draws without both heads (owner crash 2026-10-23: a null head at 0x5a6845 when a
 		// model pool was full): one HUD vtable slot (0x69dd58) no other module touches; display only, no agreement record.
 		combo_heads::install(game);
@@ -482,6 +489,12 @@ namespace
 		if (world_impact::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::object_world_impact_id, 1,
 				{world_impact::installed() ? 1u : 0u,0,0,0}, world_impact::verified());
+		// [Game] WorldBackfaces=xml1 (requested-only, rule 30, docs/world-backfaces.md): one operand of the movement
+		// trace helper 0x4a9650 (0x4a96c1), first run by the first movement update; no other module patches it.
+		world_backfaces::install(game);
+		if (world_backfaces::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::world_backfaces_id, world_backfaces_rules::agreement_revision,
+				world_backfaces::values(), world_backfaces::verified(), world_backfaces::detail());
 		// X-Men Legends 1's packs ([Game] DoubleHeal=0, installed above, before stat_help): two branches of restoreHealth /
 		// restoreEnergy; no other module patches them.
 		// Both change what each peer simulates (objects broken while a zone settles; how much a pack heals): rules 11

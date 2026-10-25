@@ -1,12 +1,13 @@
 # Local gate scripts
 
-These scripts run the native, startup and OFF-proof gates on a developer PC. They never launch the game. Machine-specific
+These scripts run the native, startup and OFF-proof gates on a developer PC (`run_native.py --list` prints its command matrix without running anything). They never launch the game. Machine-specific
 inputs come from environment variables; the scripts stop with a message when a required value is missing (the proof scripts use Python environment lookup):
 
 | Variable | Used by | What it points at |
 |---|---|---|
 | `XML2_FIX_TEST_EXE` | run_native, prove_off_wire, prove_combined_install | a retail XML2 PC `XMen2.exe`, read only |
 | `XML2_FIX_TEST_GAME_DIR` | run_native | an XML2 PC install folder, read only |
+| `XML2_FIX_TEST_XBE` | run_native | the owner's original-Xbox X-Men Legends `default.xbe`, read only (the weapon brain and AI query scheduler suites execute XML1's routines from it) |
 | `XML2_FIX_LEGACY_VECTORS_DIR` | run_native | the legacy save test vectors folder |
 | `XML2_FIX_UNION` | prove_off_wire, prove_combined_install | the folder prepared by `tools/union_host/prepare_union.py` |
 | `XML2_FIX_UNION_HOST` | prove_off_wire, prove_combined_install | optional path to `union_host.exe`; defaults to `native-map/union/Release/union_host.exe` in this repo |

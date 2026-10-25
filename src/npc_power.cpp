@@ -4,6 +4,7 @@
 #include "ini.hpp"
 #include "log.hpp"
 #include "npc_power_rules.hpp"
+#include "npc_power_withdraw.hpp"
 #include "npc_visibility_rules.hpp"
 #include "xml1_hook_memory.hpp"
 #include "xml1_hook_transaction.hpp"
@@ -18,6 +19,8 @@ namespace npc_power
 
 		constexpr const char* as_before = "computer-controlled characters use powers as XMen2.exe has it (no energy cost, a decision every 0.3 s)";
 		bool wanted = false, applied = false;
+		std::vector<xml1_hook_transaction::patch> written; // the installed sites (retail -> rule bytes)
+		void* bridges = nullptr;
 
 		template<class T> T& field(void* object, const std::size_t offset)
 		{
@@ -71,6 +74,32 @@ namespace npc_power
 	bool installed() { return wanted && applied; }
 	bool verified() { return !wanted || applied; }
 	std::array<std::uint32_t, 4> values() { return {installed() ? 1u : 0u, installed() ? 1u : 0u, 0, 0}; }
+	bool withdraw()
+	{
+		if (!applied)
+		{
+			return true;
+		}
+		xml1_hook_transaction::memory memory;
+		if (npc_power_withdraw::run(memory, written) != npc_power_withdraw::result::withdrawn)
+		{
+			// The rule's sites may still be installed without the weapon brain the configuration requires: that half
+			// configuration must not run offline either (online is closed anyway), so startup is refused.
+			game_version::refuse_startup();
+			logger::write("npc power rule: withdrawing the sites failed (protection, write or readback) - NpcPowerRule=xml1 "
+			              "would run without the requested NpcSemiAuto weapon brain; process startup refused");
+			return false;
+		}
+		applied = false;
+		written.clear();
+		if (bridges)
+		{
+			VirtualFree(bridges, 0, MEM_RELEASE);
+			bridges = nullptr;
+		}
+		logger::write("npc power rule: withdrawn - every site is retail again (%s)", as_before);
+		return true;
+	}
 
 	void install(const HMODULE game)
 	{
@@ -145,8 +174,16 @@ namespace npc_power
 			{reaction_site.va, retail_bytes(reaction_site, reaction_site.patched), mark_jump(l)},
 			{power_entry_site.va, retail_bytes(power_entry_site, power_entry_site.patched), power_entry_jump(l)},
 			{attack_entry_site.va, retail_bytes(attack_entry_site, attack_entry_site.patched), attack_entry_jump(l)},
+			// Revision 10: a block is a counted to-hit miss, as in XML1 - a power attack is never rolled, and the
+			// receive's block_chance roll never zeroes a hit.
+			{hit_roll_site.va, retail_bytes(hit_roll_site, hit_roll_site.patched), hit_roll_jump(l)},
+			{block_chance_site.va, retail_bytes(block_chance_site, block_chance_site.patched), block_chance_skip()},
 			{visibility_site.va, retail_bytes(visibility_site, visibility_site.patched),
 			 visibility_jump(static_cast<address>(reinterpret_cast<std::uintptr_t>(&visibility_xml1)))},
+			// Revision 10: the brain runs through locked moves, as XML1's: no attack-state input-lock exit, and the melee
+			// brain's power decision and its picker don't refuse a locked body (the move's chain test still does).
+			{lock_exit_va, sub_bytes(lock_exit_site, 10, 2), lock_exit_bytes()},
+			{power_lock_va, sub_bytes(power_lock_site, 11, 6), power_lock_jump(l)},
 		};
 		xml1_hook_transaction::memory memory;
 		bool safe = true;
@@ -163,13 +200,18 @@ namespace npc_power
 			logger::write("npc power rule: rollback/protection verification failed; process startup refused");
 			return;
 		}
+		written = all;
+		bridges = memory_block;
 		logger::write("npc power rule: X-Men Legends 1's ([Game] NpcPowerRule=xml1): enemies pay for their powers (0x4318e7 tests the AI time as "
 		              "default.xbe 0xcde95), the melee-range power decision re-checks every 2.0 s / 0.5 s (0x5188d8) and needs half of the "
 		              "character's energy (0x518920); NPCs combo with the first game's levels and combos (0x505011, rows 0x6dd508) and pause after a combo start (0x51993a, 0x519b04); "
 		              "AI visibility uses XML1's ray and query reservation/budget (0x505250, 0x5027bd, 0x5027e0); "
 		              "combo presses and completion use XML1 delays (0x51920b, 0x5192cb); a hit reaction spends the steps that come due "
 		              "during it, and a power re-check or attack decision that fell due then is spent, as XML1's brain does "
-		              "(0x435b6e, 0x51920b, 0x518770, 0x518fd0); "
+		              "(0x435b6e, 0x51920b, 0x518770, 0x518fd0); the attack-state update, the melee brain's power decision and its "
+		              "picker run through locked moves as XML1's (0x512f0b, 0x5187c4, 0x50fe5c); "
+		              "a power attack (damagescale not normal) is never rolled to hit and the hit's block_chance roll never "
+		              "zeroes it, so only a counted melee miss is blocked, as default.xbe 0x5c240 / 0x5c965 (0x44f58e, 0x437b08); "
 		              "bridges at 0x%08lX",
 		              static_cast<unsigned long>(base));
 	}
