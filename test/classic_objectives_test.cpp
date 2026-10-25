@@ -31,8 +31,8 @@ int main(int argc, char** argv)
 	many[9] = open;
 	many[10] = open;
 	const auto late = plan_for(many);
-	check(late.offset == 5 && late.focus == 4, "a late current objective: window ends at the last objective");
-	check(!fills_slot(many, 4, late.offset) && fills_slot(many, 5, late.offset) && fills_slot(many, 11, late.offset),
+	check(late.offset == 6 && late.focus == 3, "a late current objective: the six-slot window ends at the last objective");
+	check(!fills_slot(many, 5, late.offset) && fills_slot(many, 6, late.offset) && fills_slot(many, 11, late.offset),
 	      "the window skips exactly the first offset visible majors");
 	list early(12, open);
 	early[0] = done;
@@ -42,7 +42,12 @@ int main(int argc, char** argv)
 	// Children and secondaries never take a major slot; a visible secondary keeps slot 7 for its own page.
 	const list mixed{child, open, side, open, open, open, open, open, open, open};
 	check(!fills_slot(mixed, 0, 0) && !fills_slot(mixed, 2, 0), "children and secondaries fill no major slot");
-	check(major_slots(mixed) == native_slots - 1 && major_slots(holes) == native_slots, "slot 7 is the secondary page while one is visible");
+	check(major_slots(mixed) == native_slots - 1 && major_slots(holes) == native_slots - 1, "slot 7 is always the optional page");
+	// Owen's case (in game, 1280x720): eight visible majors, five complete, current the sixth -> slots 3..8 of the
+	// visible list, the current one in slot 4.
+	list owen{done, done, hidden, done, done, done, open, open, open};
+	const auto o = plan_for(owen);
+	check(o.offset == 2 && o.focus == 3, "eight visible majors: the current one opens in slot 4");
 	const auto with_side = plan_for(mixed);
 	check(with_side.offset == 0 && with_side.focus == 0, "the first open major opens");
 

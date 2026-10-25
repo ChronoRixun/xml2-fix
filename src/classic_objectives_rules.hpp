@@ -38,13 +38,13 @@ namespace classic_objectives_rules
 		int focus = -1;  // 0-based slot to open on, -1: leave the native choice
 	};
 
-	// The slot count for majors: slot 7 belongs to the secondary page while any visible secondary objective exists.
+	// The slot count for majors: six. The page-text walk (0x5ce0f8) always shows the optional-objectives page for
+	// slot 7 (cmp 7 before its major walk), so a seventh major's page can never be shown; the window keeps the
+	// current objective among slots 1-6 (in game: a seventh major in slot 7 opened "Optional Objectives").
 	template <class Range>
-	int major_slots(const Range& objectives)
+	int major_slots(const Range&)
 	{
-		for (const auto& o : objectives)
-			if (o.secondary_top) return native_slots - 1;
-		return native_slots;
+		return native_slots - 1;
 	}
 
 	// Current = the first visible major the player has not completed (XML1's first unticked line); when every one is

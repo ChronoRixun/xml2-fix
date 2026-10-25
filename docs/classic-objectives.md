@@ -16,7 +16,8 @@ With the rule:
   page-text walk 0x5ce148 ask one predicate), counted from a window offset;
 - when the page opens (the mode switch's call of the objectives refresh, 0x5ce484) the window
   and the page are chosen: the current objective is the first visible one not complete (the last
-  one when all are); the window starts at it, or late enough to fill every slot; its selector
+  one when all are); the window of six slots starts at it, or late enough to fill all six (slot 7
+  always opens the optional-objectives page, 0x5ce0f8, so a seventh major is never shown); its selector
   name goes into the PDA's remembered-focus cell for mode 1 (0x8afe40), which the native refresh
   then focuses;
 - the Danger Room results page (0x4c87a0) keeps the native single-slot page.
