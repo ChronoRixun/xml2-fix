@@ -195,7 +195,7 @@ its AI time is set.
 
 Online play is lockstep and the rule changes AI decisions and energy, so it is shared gameplay rule **16**
 (`gameplay_capabilities::npc_power_rule_id`, [gameplay-agreement.md](gameplay-agreement.md)): revision 10,
-`{installed ? 1 : 0, installed ? 1 : 0, officer weapon brain installed ? 1 : 0, its source fingerprint}`. Word 1
+`{installed ? 1 : 0, installed ? 1 : 0, weapon brain installed ? 1 : 0, its source fingerprint}`. Word 1
 advertises XML1 visibility geometry and query scheduling; words 2 and 3 are zero unless the separate opt-in
 `[Game] NpcSemiAuto=xml1` with its `[NpcSemiAuto]` rows is present ([npc-semi-auto.md](npc-semi-auto.md)).
 Revision 2 had only the power/combo word, revision 3 lacked the press/completion timers, revision 4 lacked the
