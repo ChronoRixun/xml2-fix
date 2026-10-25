@@ -564,6 +564,26 @@ namespace {
   }
   VirtualFree(code, 0, MEM_RELEASE);
  }
+ // NpcSemiAuto installs only after rule 16, so none of its guards may read bytes rule 16 has already rewritten:
+ // such a guard fails in the game (the weapon brain stays off and host/join close) although it matches the retail exe.
+ void guards_clear_of_rule16()
+ {
+  using namespace npc_power_rules;
+  std::vector<std::pair<u32, std::size_t>> written;
+  for (const auto* s : sites) if (s->patched) written.emplace_back(s->va, s->patched);
+  for (const auto [va, size] : std::initializer_list<std::pair<u32, std::size_t>>{
+       {picker_call_va, 5}, {combolevel_call_va, 3}, {combo_exit_va, 6}, {combo_exit2_va, 6},
+       {combo_buttons_va, 24}, {combo_lengths_va, 24}, {combo_row2_site.va, combo_row_size},
+       {combo_row3_site.va, combo_row_size}, {combo_row11_site.va, combo_row_size}})
+   written.emplace_back(va, size);
+  check(written.size() >= 20, "rule 16 written ranges collected");
+  for (const auto& g : npc_semi_auto_rules::guards) {
+   const auto size = limits_rules::hex_size(g.hex);
+   bool clear = true;
+   for (const auto [va, n] : written) if (g.va < va + n && va < g.va + size) clear = false;
+   check(clear, g.what);
+  }
+ }
  void retail_guards(const char* path)
  {
   std::ifstream file(path, std::ios::binary);
@@ -740,6 +760,7 @@ int main(int argc, char** argv)
   check(local.compare(peer->bytes()) != gameplay_capabilities::result::match, "incompatible peer refused");
  check(!failed.ready(), "requested failure poisons agreement");
  weapon_bridge_cases();
+ guards_clear_of_rule16();
  if (argc >= 2) retail_guards(argv[1]); else check(false, "retail executable path required");
  if (argc >= 3) original_entry_comparison(argv[2]);
  else std::printf("Original callback comparison not requested (supply owned XBE as second path)\n");

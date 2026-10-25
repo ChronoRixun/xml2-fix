@@ -182,7 +182,9 @@ namespace npc_semi_auto_rules
   {0x503810, "568bf18b46108b8878030000", "AI facing setter"},
   {0x517cf0, "8b41048b40108b4c24048b1105ac030000", "ranged brain aim point setter (actor +0x3ac)"},
   {0x519e2d, "e82ee8ffff84c00f84e70300008b5c24708b5500", "ranged brain target resolve and line-of-sight site"},
-  {0x505250, "81ecd400000053568bf18b4618578d4c", "AI target visibility test"},
+  // After the entry's 6 bytes: rule 16 (required) has already guarded them and redirected them to its XML1
+  // visibility adapter (item 8), so the line-of-sight drop calls XML1's ray as the original 0xfe550 does.
+  {0x505256, "53568bf18b4618578d4c", "AI target visibility test (after rule 16's entry redirect)"},
   {0x505030, "83ec0c5356578b7c241c578bf1", "AI state setter"},
   {0x503180, "568bf18b46108b887803000085c97409", "AI turn toward angles"},
   {0x6943f8, "90065000", "move flag getter slot +0x5c"},
