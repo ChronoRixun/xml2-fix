@@ -52,6 +52,7 @@ add_library(xml2_fix SHARED
 	src/harm_single_chain.cpp
 	src/double_heal.cpp
 	src/world_backfaces.cpp
+	src/balance_parity.cpp
 	src/combo_heads.cpp
 	src/model_pools.cpp
 	src/online_tick.cpp
@@ -309,6 +310,10 @@ target_include_directories(xml2_npc_semi_auto_test PRIVATE src)
 # XMen2.exe 0x502730 retail and with rule 16): budget, reservation, the stale-reservation throttle, random schedules.
 add_executable(xml2_npc_query_scheduler_test test/npc_query_scheduler_test.cpp)
 target_include_directories(xml2_npc_query_scheduler_test PRIVATE src)
+# [Balance] ReceiveRounding / DamageCap executed side by side (XML1 0x45517 / 0x5ce0d from the owner's default.xbe,
+# XMen2.exe 0x437a54 / 0x453bfb retail and with rule 31's stubs), in 24- and 53-bit x87 precision.
+add_executable(xml2_balance_parity_test test/balance_parity_test.cpp)
+target_include_directories(xml2_balance_parity_test PRIVATE src)
 target_include_directories(xml2_gameplay_agreement_test PRIVATE src)
 target_link_libraries(xml2_gameplay_agreement_test PRIVATE ws2_32)
 

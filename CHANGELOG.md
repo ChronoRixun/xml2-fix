@@ -2,6 +2,28 @@
 
 ## 1.8.0 - <date TBD>
 
+- **Receive-side damage stages and the damage cap: gameplay rule 41** (`[Balance] ReceiveRounding = xml1`,
+  `[Balance] DamageCap = xml1`; beta8/parity-a, [docs](docs/balance.md#the-receive-side-and-the-cap-receiverounding-damagecap-gameplay-rule-41)).
+  X-Men Legends I's damage receive converts the hit to a whole number after the defense and after the scale
+  (default.xbe 0x45517..0x45558); XMen2.exe kept a float (0x437a54..0x437a7c), so 10 against a defense of 0.5 and a
+  scale of 0.5 was 4.75 instead of 4. `ReceiveRounding=xml1` calls two stubs at 0x437a54 / 0x437a75 that truncate the
+  damage, the clamped difference and the product toward zero as XML1's `_ftol` does. `DamageCap=xml1` caps a hit at
+  XML1's 32,000 (0x5ce0d) instead of 1,000,000 (0x453bfd / 0x453c0c point at a 32000.0f). Both are executed side by side
+  with the first game's code in `xml2_balance_parity_test` (72,180 / 72,180 equal cases in 24- and 53-bit x87
+  precision). Absent/`xml2` is byte-identical and adds no agreement entry. `scripts/prove_balance_install.py` now
+  proves every `[Balance]` key (StrengthBonus / MindBonus / MightBonus / Rounding included) installs at run time.
+
+- **Enemy AI fidelity, part 3: gameplay rule 16 revision 12** (`[Game] NpcPowerRule = xml1`; beta8/parity-a,
+  [docs](docs/npc-power-rule.md)). (19) The power picker's lock test goes for all seven other callers too (self buff,
+  ranged/party-target helper, Sentinel probe and attack, FlyNoNav, HitAndRun/ShadesNoWing, flying creatures):
+  0x50fe63 jne -> jmp. (20) The power decision's lock test goes for every caller, the officer weapon brain included
+  (0x5187c4 jne -> jmp; revision 11's caller bridge is retired). (21) Class selection: Advanced Sentinel matches XML1's
+  "dvanced" fragment again (category 0; XMen2.exe's "xxxdvanced" let it fall to Sentinel) and Juggernaut's default
+  category is XML1's 4 (0x694f1e, 0x511fb8). (22) No Danger Room reaction gate (0x435b09 -> jmp 0x435b52): XMen2.exe
+  suppressed a pain reaction within 2 s of the last in Danger Room mode (0xfd), XML1 never does. A revision 11
+  (1.8.0-beta.7) peer is refused by revision. Officer cells, Shades/Sentinels, Advanced Sentinel, Juggernaut and a
+  Danger Room course need live remeasurement.
+
 - **One-pass engine limits, wave 1: the runtime-only raises** (`[Limits] IGBCache`, `[Engine] ModelHandles`; branch
   limits/wave1, [docs](docs/igb-cache.md)). The IGB info cache (`CIGBInfoCache2`, 200 records at 0x7b7fb0: every
   precached model file; full, a zone's map IGB fails and the game reloads the previous zone) moves into a block of the

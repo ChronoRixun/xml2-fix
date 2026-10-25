@@ -1006,7 +1006,7 @@ int main(int argc, char** argv)
  auto changed = vals; changed[3] ^= 1; altered.add(16, npc_power::revision, changed, true);
  old.add(16, 8, vals, true); candidate9.add(16, 9, vals, true); failed.add(16, npc_power::revision, vals, false);
  for (auto* r : {&local, &equal, &off, &altered, &old, &failed, &power_only, &candidate9, &released4, &released10}) r->finalize();
- check(npc_power::revision == 11, "schema 4 weapon brain ships under rule 16 revision 11 (10 = 1.8.0-beta.6)");
+ check(npc_power::revision == 12, "schema 4 weapon brain ships under rule 16 revision 12 (10 = 1.8.0-beta.6, 11 = 1.8.0-beta.7)");
  check(local.compare(equal.bytes()) == gameplay_capabilities::result::match, "equal peers agree");
  for (const auto* peer : {&off, &altered, &old, &power_only, &candidate9, &released4, &released10})
   check(local.compare(peer->bytes()) != gameplay_capabilities::result::match, "incompatible peer refused");

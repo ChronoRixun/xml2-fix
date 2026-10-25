@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 
 namespace {
@@ -114,6 +115,55 @@ __declspec(naked) int lock_run(void*, unsigned) {
 }
 // The retail run 0x512f01..0x512f1a of the attack-state update (esi = the AI): 1 = on at 0x512f1a, 0 = the exit.
 __declspec(naked) int exit_run(void*) {
+    __asm { push esi }
+    __asm { mov esi,[esp+8] }
+    __asm { call dword ptr [entry] }
+    __asm { pop esi }
+    __asm { ret }
+}
+// Revision 12 item 19: the picker's entry run (thiscall, ecx = the AI).
+__declspec(naked) int picker_run(void*) {
+    __asm { mov ecx,[esp+4] }
+    __asm { call dword ptr [entry] }
+    __asm { ret }
+}
+// Item 21: the category stores 0x511fb4..0x511fc4 with ebx 1, ebp 0, edi 4, ecx 6; out = [esp+0x64..0x70] of the run.
+__declspec(naked) void category_run(std::uint32_t*) {
+    __asm {
+        push ebx
+        push ebp
+        push edi
+        push esi
+        mov esi, [esp+20]
+        sub esp, 0x80
+        mov ebx, 1
+        xor ebp, ebp
+        mov edi, 4
+        mov ecx, 6
+        call dword ptr [entry]
+        mov eax, [esp+0x60]
+        mov [esi], eax
+        mov eax, [esp+0x64]
+        mov [esi+4], eax
+        mov eax, [esp+0x68]
+        mov [esi+8], eax
+        mov eax, [esp+0x6c]
+        mov [esi+12], eax
+        add esp, 0x80
+        pop esi
+        pop edi
+        pop ebp
+        pop ebx
+        ret
+    }
+}
+// Item 22: the mode getter 0x4c87c0 (al = the mode byte is 0xfd) and the gate run (esi = the hit record).
+int mode_now = 0;
+__declspec(naked) int mode_read() {
+    __asm { mov eax, dword ptr [mode_now] }
+    __asm { ret }
+}
+__declspec(naked) void gate_run(void*) {
     __asm { push esi }
     __asm { mov esi,[esp+8] }
     __asm { call dword ptr [entry] }
@@ -476,16 +526,16 @@ int main() {
               && !block_chance_zeroes_xml2(5.0f, nan, 0.5f) && !block_chance_zeroes_xml2(5.0f, 0.1f, nan), "XMen2.exe's block_chance test");
         check(!block_chance_zeroes_xml1(5.0f, 0.0f, 0.0f) && !block_chance_zeroes_xml1(5.0f, 0.2f, 1.0f), "XML1 has no block_chance roll");
     }
-    // Revision 10 item 17: the power decision's lock bridge. Unlocked: on for every caller. Locked: on for the melee
-    // brain's call (0x5193e7) only; the officer weapon brain's (0x519fe7) and any other caller take the native exit.
+    // Revision 12 items 19-20: the lock tests' jne (0x50fe63 in the picker, 0x5187c4 in the power decision) become a
+    // short jmp to the instruction after them (eb 04 + four nops); revision 11's caller-scoped bridge is no longer used.
     {
-        entry = reinterpret_cast<void*>(l.power_lock);
-        check(lock_call(0, melee_power_call_return_va) == 1 && lock_call(0, 0x519fe7) == 1 && lock_call(0, 0) == 1,
-              "item 17: an unlocked body goes on for every caller");
-        check(lock_call(1, melee_power_call_return_va) == 1, "item 17: a locked body goes on for the melee brain's call (XML1 0xee260 has no lock test)");
-        check(lock_call(1, 0x519fe7) == 0 && lock_call(1, 0) == 0 && lock_call(1, melee_power_call_return_va + 1) == 0,
-              "item 17: a locked body keeps the native exit for every other caller (the officer weapon brain as measured)");
-        check(lock_call(2, melee_power_call_return_va) == 1 && lock_call(0x101, 0x519fe7) == 0, "item 17: only bit 0 of +0x764 is the lock");
+        const auto picker = picker_lock_bytes(), power = power_lock_bytes();
+        check(picker == std::vector<std::uint8_t>({0xeb, 0x04, 0x90, 0x90, 0x90, 0x90}) && power == picker
+              && sub_bytes(picker_entry_site, 19, 6) == std::vector<std::uint8_t>({0x0f, 0x85, 0x82, 0x01, 0x00, 0x00})
+              && picker_lock_jne_va == picker_entry_site.va + 19 && picker_lock_jne_va + 2 + 4 == picker_unlocked_va
+              && sub_bytes(power_lock_site, 11, 6) == std::vector<std::uint8_t>({0x0f, 0x85, 0xff, 0x02, 0x00, 0x00})
+              && power_lock_va + 2 + 4 == power_lock_resume_va,
+              "items 19-20: both lock tests' jne become jmp to the next instruction (0x50fe69, 0x5187ca)");
     }
     // Item 18: the gate enters the picker after its lock test with the picker's own first instructions done.
     {
@@ -560,24 +610,136 @@ int main() {
                 const std::int32_t to_exit = 27 - 17; // the jne rel32 at +13, next instruction +17
                 std::memcpy(run + 13, &to_exit, 4);
             } else {
-                auto bridge = power_lock_bridge(lb);
-                put32(bridge, 0x0d, at(27) - (lb.power_lock + 0x11));
-                put32(bridge, 0x12, at(17) - (lb.power_lock + 0x16)); // 0x5187ca = +17
-                std::memcpy(run + (lb.power_lock - lb.base), bridge.data(), bridge.size());
-                std::vector<std::uint8_t> jump{0xe9, 0, 0, 0, 0, 0x90};
-                put32(jump, 1, lb.power_lock - (at(11) + 5));
-                std::memcpy(run + 11, jump.data(), jump.size());
+                const auto w = power_lock_bytes();
+                std::memcpy(run + 11, w.data(), w.size());
             }
             FlushInstructionCache(GetCurrentProcess(), run, 4096);
             entry = run;
             bool ok = true;
-            for (const int lock : {0, 1}) for (const unsigned caller : {melee_power_call_return_va, 0x519fe7u}) {
+            for (const int lock : {0, 1}) for (const unsigned caller : {melee_power_call_return_va, 0x519fe7u, 0u}) {
                 field<std::uint8_t>(who.data(), 0x764) = static_cast<std::uint8_t>(lock);
-                const int expected = (lock && (!rule || caller != melee_power_call_return_va)) ? 0 : 3; // 3: on, ebx = [esp+0x1c]
+                const int expected = (lock && !rule) ? 0 : 3; // 3: on, ebx = [esp+0x1c]
                 ok &= lock_run(who.data(), caller) == expected;
             }
-            check(ok, rule ? "item 17: with the rule a locked body reaches the re-check for the melee brain's call only"
+            check(ok, rule ? "item 20: with the rule a locked body reaches the re-check for every caller (melee brain, officer weapon brain, any)"
                            : "item 17: retail refuses every locked call before the re-check");
+        }
+        (void)lb; (void)at;
+        // Item 19: the picker's entry run 0x50fe50..0x50fe69 (sub esp,0xac; push esi; mov esi,ecx; mov eax,[esi+0x10];
+        // test byte [eax+0x764],1; jne 0x50ffeb), retail and with the rule's bytes: +25 (0x50fe69) and the relocated
+        // exit undo the frame and return 1 (on into the slot walk) or 0 (the native refusal 0x50ffeb).
+        for (const bool rule : {false, true}) {
+            std::memset(run, 0xcc, 4096);
+            const auto native = retail_bytes(picker_entry_site, 25);
+            std::memcpy(run, native.data(), native.size());
+            const std::uint8_t on[] = {0xb8, 1, 0, 0, 0, 0x5e, 0x81, 0xc4, 0xac, 0, 0, 0, 0xc3}; // +25: eax 1; pop esi; add esp,0xac; ret
+            const std::uint8_t off[] = {0x31, 0xc0, 0x5e, 0x81, 0xc4, 0xac, 0, 0, 0, 0xc3};    // +40: eax 0; pop esi; add esp,0xac; ret
+            std::memcpy(run + 25, on, sizeof(on));
+            std::memcpy(run + 40, off, sizeof(off));
+            const std::int32_t to_exit = 40 - 25; // the jne rel32 at +21, next instruction +25
+            std::memcpy(run + 21, &to_exit, 4);
+            if (rule) { const auto w = picker_lock_bytes(); std::memcpy(run + 19, w.data(), w.size()); }
+            FlushInstructionCache(GetCurrentProcess(), run, 4096);
+            entry = run;
+            std::array<std::uint8_t, 0x40> pai{};
+            field<void*>(pai.data(), 0x10) = who.data();
+            bool ok = true;
+            for (const int lock : {0, 1, 2, 3}) {
+                field<std::uint8_t>(who.data(), 0x764) = static_cast<std::uint8_t>(lock);
+                const int expected = (!rule && (lock & 1)) ? 0 : 1;
+                ok &= picker_run(pai.data()) == expected;
+            }
+            check(ok, rule ? "item 19: with the rule the picker never refuses a locked body at its entry (every caller; the slot chain test stays)"
+                           : "item 19: the retail picker refuses a locked body (bit 0 of +0x764) at its entry");
+        }
+        // Item 21: the class name walk (0x511fce..0x512011: strstr of 26 thirty-byte fragments on the stats name, the
+        // first match wins), on a table whose fragment 17 is the guarded retail one or the rule's, the other 25 the
+        // retail fragments; and the category stores 0x511fb4..0x511fc4 (ebx 1, ebp 0, edi 4, ecx 6) run natively,
+        // retail and with the rule's store.
+        {
+            std::array<char, 30 * 26> table{};
+            const char* fragments[26] = {"rchangel", "east", "ishop", "olossus", "yclops", "rost", "ambit", "avok", "ceman", "rrow", "agma", "ightcrawler",
+                                         "hoenix", "sylocke", "ogue", "torm", "olverine", nullptr, "entinel", "ingless", "hades", "alanche", "uggernau",
+                                         "lob", "yro", "adowking"};
+            for (int rule = 0; rule < 2; ++rule) {
+                table.fill(0);
+                for (int i = 0; i < 26; ++i) if (fragments[i]) std::memcpy(table.data() + 30 * i, fragments[i], std::strlen(fragments[i]));
+                const auto seventeen = rule ? class_name_bytes() : retail_bytes(class_name_site, 11);
+                std::memcpy(table.data() + 30 * 17, seventeen.data(), seventeen.size());
+                const auto match = [&](const char* name) {
+                    for (int i = 0; i < 26; ++i) if (std::strstr(name, table.data() + 30 * i)) return i;
+                    return 26;
+                };
+                const bool walk = rule ? match("SentinelAdvanced") == 17 && match("SentinelAdvanced_b") == 17 && match("Sentinel") == 18
+                                       : match("SentinelAdvanced") == 18 && match("SentinelAdvanced_b") == 18 && match("Sentinel") == 18;
+                check(walk && match("JuggernautAct3") == 22 && match("JuggernautFlashback") == 22 && match("JuggernautScripted") == 22,
+                      rule ? "item 21: with the fragment Advanced Sentinel matches 17 (category 0), as XML1's \"dvanced\""
+                           : "item 21: retail \"xxxdvanced\" never matches: Advanced Sentinel falls to Sentinel (18, category 4)");
+                std::memset(run, 0xcc, 4096);
+                const auto stores = retail_bytes(class_category_site, 16);
+                std::memcpy(run, stores.data(), stores.size());
+                if (rule) { const auto w = class_juggernaut_bytes(); std::memcpy(run + 4, w.data(), w.size()); }
+                run[16] = 0xc3;
+                FlushInstructionCache(GetCurrentProcess(), run, 64);
+                entry = run;
+                std::uint32_t out[4] = {};
+                category_run(out);
+                check(out[0] == 1 && out[1] == (rule ? 4u : 0u) && out[2] == 4 && out[3] == 6,
+                      rule ? "item 21: with the rule Juggernaut (22) is category 4, as XML1 0x109e08; 21, 23, 24 unchanged"
+                           : "item 21: retail Juggernaut (22) is category 0 (ebp)");
+            }
+            check(retail_bytes(class_loop_site, 7) == std::vector<std::uint8_t>({0x33, 0xdb, 0xbd, 0x20, 0x4d, 0x69, 0x00})
+                  && retail_bytes(class_edi_site, 5) == std::vector<std::uint8_t>({0xbf, 4, 0, 0, 0}) && class_name_va == 0x694d20 + 30 * 17
+                  && class_juggernaut_va == class_category_site.va + 4 && class_name_bytes().size() == limits_rules::hex_size(class_name_site.hex),
+                  "item 21: the walk starts at 0x694d20 (fragment 17 at +510), edi is the Sentinel category 4, the writes fit their guards");
+        }
+        // Item 22: the Danger Room gate 0x435b09..0x435b52, natively: the mode getter (0x4c87c0) and the clock owner
+        // (0x46dce0, vt+0x160) are stubs, the constants 0.0 / 2.0 the test's; esi = the hit record, [esi] = the victim.
+        {
+            static float zero = 0.0f, two = 2.0f;
+            clock_vtable[0x160 / 4] = reinterpret_cast<void*>(&clock_read);
+            for (const bool rule : {false, true}) {
+                std::memset(run, 0xcc, 4096);
+                const auto native = retail_bytes(danger_room_gate_site, 0x49);
+                std::memcpy(run, native.data(), native.size());
+                run[0x49] = 0xc3; // 0x435b52: the check after the gate
+                const auto rel_at = [&](std::size_t operand, const void* to) {
+                    const auto v = static_cast<std::int32_t>(reinterpret_cast<std::uintptr_t>(to) - (reinterpret_cast<std::uintptr_t>(run) + operand + 4));
+                    std::memcpy(run + operand, &v, 4);
+                };
+                const auto abs_at = [&](std::size_t operand, const void* to) {
+                    const auto v = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(to));
+                    std::memcpy(run + operand, &v, 4);
+                };
+                rel_at(1, reinterpret_cast<const void*>(&mode_read));      // call 0x4c87c0
+                rel_at(0x1f, reinterpret_cast<const void*>(&clock_owner)); // call 0x46dce0
+                abs_at(0x13, &zero);                                       // fcomp [0x680030]
+                abs_at(0x37, &two);                                        // fcomp [0x684118]
+                if (rule) { const auto w = danger_room_gate_bytes(); std::memcpy(run, w.data(), w.size()); } // jmp +0x44: position independent
+                FlushInstructionCache(GetCurrentProcess(), run, 4096);
+                entry = run;
+                std::array<std::uint8_t, 0x800> victim{};
+                std::array<std::uint8_t, 0x100> hit{};
+                field<void*>(hit.data(), 0) = victim.data();
+                bool ok = true;
+                for (const int mode : {0, 1}) for (const float previous : {0.0f, -1.0f, 7.0f, 8.0f, 9.0f, 9.5f}) {
+                    clock_now = 10.0f;
+                    mode_now = mode;
+                    field<float>(victim.data(), 0x5f4) = previous;
+                    field<std::uint8_t>(hit.data(), 0xac) = 0x0f;
+                    gate_run(hit.data());
+                    const bool suppressed = !rule && mode && previous > 0.0f && 10.0f - previous < 2.0f;
+                    ok &= field<std::uint8_t>(hit.data(), 0xac) == (suppressed ? 0x07 : 0x0f);
+                }
+                check(ok, rule ? "item 22: with the rule a Danger Room hit within 2 s of the last pain still makes the victim react (XML1 has no such gate)"
+                               : "item 22: retail clears the reaction bit only in Danger Room mode (0xfd) within 2 s of a positive last pain");
+            }
+            const auto jump = danger_room_gate_bytes();
+            std::int32_t rel = 0;
+            std::memcpy(&rel, jump.data() + 1, 4);
+            check(jump.size() == 5 && jump[0] == 0xe9 && danger_room_gate_va + 5 + rel == danger_room_gate_resume_va && danger_room_gate_resume_va == danger_room_gate_site.va + 0x49
+                  && retail_bytes(danger_room_gate_site, 9) == std::vector<std::uint8_t>({0xe8, 0xb2, 0x2c, 0x09, 0x00, 0x84, 0xc0, 0x74, 0x40}),
+                  "item 22: 0x435b09 (call the mode getter; test al,al; je 0x435b52) jumps straight to 0x435b52");
         }
         VirtualFree(run, 0, MEM_RELEASE);
     }

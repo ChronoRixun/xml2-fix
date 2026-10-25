@@ -183,7 +183,13 @@ namespace npc_power
 			// Revision 10: the brain runs through locked moves, as XML1's: no attack-state input-lock exit, and the melee
 			// brain's power decision and its picker don't refuse a locked body (the move's chain test still does).
 			{lock_exit_va, sub_bytes(lock_exit_site, 10, 2), lock_exit_bytes()},
-			{power_lock_va, sub_bytes(power_lock_site, 11, 6), power_lock_jump(l)},
+			// Revision 12: the picker's and the power decision's lock tests for every caller (items 19-20), XML1's
+			// class selection for Advanced Sentinel and Juggernaut (item 21), no Danger Room reaction gate (item 22).
+			{power_lock_va, sub_bytes(power_lock_site, 11, 6), power_lock_bytes()},
+			{picker_lock_jne_va, sub_bytes(picker_entry_site, 19, 6), picker_lock_bytes()},
+			{class_name_va, retail_bytes(class_name_site, 11), class_name_bytes()},
+			{class_juggernaut_va, sub_bytes(class_category_site, 4, 4), class_juggernaut_bytes()},
+			{danger_room_gate_va, retail_bytes(danger_room_gate_site, 5), danger_room_gate_bytes()},
 		};
 		xml1_hook_transaction::memory memory;
 		bool safe = true;
@@ -208,8 +214,9 @@ namespace npc_power
 		              "AI visibility uses XML1's ray and query reservation/budget (0x505250, 0x5027bd, 0x5027e0); "
 		              "combo presses and completion use XML1 delays (0x51920b, 0x5192cb); a hit reaction spends the steps that come due "
 		              "during it, and a power re-check or attack decision that fell due then is spent, as XML1's brain does "
-		              "(0x435b6e, 0x51920b, 0x518770, 0x518fd0); the attack-state update, the melee brain's power decision and its "
-		              "picker run through locked moves as XML1's (0x512f0b, 0x5187c4, 0x50fe5c); "
+		              "(0x435b6e, 0x51920b, 0x518770, 0x518fd0); the attack-state update, the power decision and the "
+		              "picker run through locked moves for every caller as XML1's (0x512f0b, 0x5187c4, 0x50fe63); Advanced Sentinel and "
+		              "Juggernaut take XML1's classes (0x694f1e, 0x511fb8); no Danger Room reaction gate (0x435b09); "
 		              "a power attack (damagescale not normal) is never rolled to hit and the hit's block_chance roll never "
 		              "zeroes it, so only a counted melee miss is blocked, as default.xbe 0x5c240 / 0x5c965 (0x44f58e, 0x437b08); "
 		              "bridges at 0x%08lX",

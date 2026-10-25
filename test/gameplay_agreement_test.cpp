@@ -146,7 +146,7 @@ void records(){
  check(future.compare(stun(true,true,stun_rule::revision,true).bytes())==result::match,"later rule 17 registration agrees in either order");
  check(stun(true).compare(future.bytes())==result::entries,"missing future rule 17 is refused, not silently ignored");
  // New requested-only rules preserve the pre-integration OFF bytes and name both mismatch directions.
- for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id,gameplay_capabilities::box_harm_origin_id,gameplay_capabilities::danger_room_healthbars_id,gameplay_capabilities::harm_single_chain_id,gameplay_capabilities::online_conversations_id,gameplay_capabilities::model_pools_id,gameplay_capabilities::tick_rate_id,gameplay_capabilities::world_backfaces_id,gameplay_capabilities::igb_cache_id}) {
+ for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id,gameplay_capabilities::box_harm_origin_id,gameplay_capabilities::danger_room_healthbars_id,gameplay_capabilities::harm_single_chain_id,gameplay_capabilities::online_conversations_id,gameplay_capabilities::model_pools_id,gameplay_capabilities::tick_rate_id,gameplay_capabilities::world_backfaces_id,gameplay_capabilities::igb_cache_id,gameplay_capabilities::balance_parity_id}) {
   auto optional=[&](bool wanted,bool verified=true){record r;if(wanted)r.add(id,1,{1,0,0,0},verified);r.finalize();return r;};
   const auto yes=optional(true),no=optional(false),failed=optional(true,false);
   check(yes.compare(optional(true).bytes())==result::match,"matching new requested-only rule accepts");
@@ -267,7 +267,7 @@ void records(){
  // Rule 16, the NPC power rule ([Game] NpcPowerRule): enemies that pay for powers and decide every 2 s never share a
  // lockstep game with enemies that don't; revision 3 adds the visibility word; absent is {0,0,0,0}, a failed install unverified.
  auto npc=[](bool on,bool verified=true){record r;r.add(2,1,{1,0,0,0},true);r.add(gameplay_capabilities::npc_power_rule_id,npc_power::revision_for(on || !verified),{on ? 1u : 0u,on ? 1u : 0u,0,0},verified);r.finalize();return r;};
- check(gameplay_capabilities::npc_power_rule_id==16 && npc_power::revision==11 && npc(true).compare(npc(false).bytes())==result::value && npc(false).compare(npc(true).bytes())==result::value,"NPC power rule on/off refuses both directions");
+ check(gameplay_capabilities::npc_power_rule_id==16 && npc_power::revision==12 && npc(true).compare(npc(false).bytes())==result::value && npc(false).compare(npc(true).bytes())==result::value,"NPC power rule on/off refuses both directions");
  check(npc(true).compare(npc(true).bytes())==result::match && npc(false).compare(npc(false).bytes())==result::match,"same NPC power rule accepts");
  record npc_previous; npc_previous.add(2,1,{1,0,0,0},true);npc_previous.add(gameplay_capabilities::npc_power_rule_id,2,{1,0,0,0},true);npc_previous.finalize();
  check(npc(true).compare(npc_previous.bytes())!=result::match && npc_previous.compare(npc(true).bytes())!=result::match,"NPC visibility policy rejects the previous power/combo-only revision both ways");
@@ -279,13 +279,20 @@ void records(){
  // officer weapon candidates, 9 with words 2-3 set). Revisions 10 and 11 carry both and refuse every one of them.
  for(const std::uint16_t candidate:{5,6,7,8,9})for(const auto words:{std::array<std::uint32_t,4>{1,1,0,0},std::array<std::uint32_t,4>{1,1,1,0x6BED0A4Cu}}){
   record peer;peer.add(2,1,{1,0,0,0},true);peer.add(gameplay_capabilities::npc_power_rule_id,candidate,words,true);peer.finalize();
-  check(npc(true).compare(peer.bytes())!=result::match && peer.compare(npc(true).bytes())!=result::match,"revision 11 refuses candidate revisions 5-9 both ways");
+  check(npc(true).compare(peer.bytes())!=result::match && peer.compare(npc(true).bytes())!=result::match,"revision 12 refuses candidate revisions 5-9 both ways");
  }
  // Revision 10 is XML2 Fix 1.8.0-beta.6 (released): its enemies do not spend the call-gap re-checks/decisions and
  // still roll power attacks, so a beta 7 peer refuses it both ways, with and without the weapon brain words.
  for(const auto words:{std::array<std::uint32_t,4>{1,1,0,0},std::array<std::uint32_t,4>{1,1,1,0x6BED0A4Cu}}){
   record beta6;beta6.add(2,1,{1,0,0,0},true);beta6.add(gameplay_capabilities::npc_power_rule_id,10,words,true);beta6.finalize();
-  check(npc(true).compare(beta6.bytes())!=result::match && beta6.compare(npc(true).bytes())!=result::match,"revision 11 refuses the released revision 10 (1.8.0-beta.6) both ways");
+  check(npc(true).compare(beta6.bytes())!=result::match && beta6.compare(npc(true).bytes())!=result::match,"revision 12 refuses the released revision 10 (1.8.0-beta.6) both ways");
+ }
+ // Revision 11 is XML2 Fix 1.8.0-beta.7: its picker callers other than the melee gate and its officer weapon brain still
+ // refuse a locked body, its Advanced Sentinel / Juggernaut classes are XMen2.exe's and its Danger Room gate stays, so a
+ // revision 12 peer refuses it both ways, with and without the weapon brain words.
+ for(const auto words:{std::array<std::uint32_t,4>{1,1,0,0},std::array<std::uint32_t,4>{1,1,1,0x6BED0A4Cu},std::array<std::uint32_t,4>{1,1,1,0x559D0BA1u}}){
+  record beta7;beta7.add(2,1,{1,0,0,0},true);beta7.add(gameplay_capabilities::npc_power_rule_id,11,words,true);beta7.finalize();
+  check(npc(true).compare(beta7.bytes())!=result::match && beta7.compare(npc(true).bytes())!=result::match,"revision 12 refuses revision 11 (1.8.0-beta.7) both ways");
  }
  // The officer weapon brain (words 2-3) under the same revision: with and without it refuse each other by value.
  record officer;officer.add(2,1,{1,0,0,0},true);officer.add(gameplay_capabilities::npc_power_rule_id,npc_power::revision,{1,1,1,0x6BED0A4Cu},true);officer.finalize();

@@ -82,3 +82,4 @@ DISASM  test/npc_combo_timing_test.cpp  # Authored naked call thunks (lock_run, 
 DISASM  src/world_backfaces.cpp  # Authored naked x86 bridge for the trace helper site 0x4a96c0 (described in prose above it); replays only the one guarded float store it displaces. No game listing or decompiled body.
 DISASM  src/npc_bullet_trace.hpp  # Authored register/FP-preserving trace-gate bridges; only the short guarded event prologue and displaced CMP/LEA/PUSH are replayed. No game listing or decompiled body.
 DISASM  test/npc_bullet_trace_test.hpp  # Authored synthetic stack/register callers verify our trace bridges; retail beam bytes are supplied by the owner's executable at runtime, never embedded.
+DISASM  test/balance_parity_test.cpp  # Authored naked call thunks build a synthetic caller frame (esi record, stack defense/scale) and execute runs read from the owner's files at run time; no game instruction listing or decompiled body.

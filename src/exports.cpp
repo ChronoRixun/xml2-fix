@@ -19,6 +19,8 @@
 // shows what the game is doing in Discord (Rich Presence, [Discord]; on unless switched off).
 
 #include "balance.hpp"
+#include "balance_parity.hpp"
+#include "balance_parity_rules.hpp"
 #include "break_rule.hpp"
 #include "placement_crush.hpp"
 #include "world_impact.hpp"
@@ -284,6 +286,12 @@ namespace
 		// [Balance]: X-Men Legends 1's combat numbers. Calls and one jump in the health, damage and roll functions and the
 		// style reader, first run when a character or a style loads; none of its sites or guards is anyone else's.
 		balance::install(game);
+		// [Balance] ReceiveRounding / DamageCap (rule 41, requested only): XML1's integer receive stages (0x437a54,
+		// 0x437a75) and its 32000 cap (0x453bfd, 0x453c0c); none of these bytes is another module's.
+		balance_parity::install(game);
+		if (balance_parity::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::balance_parity_id, balance_parity_rules::agreement_revision,
+				balance_parity::values(), balance_parity::verified());
 		// The stats screen's help text: the two literals that name [Balance] numbers (health per body, the
 		// strike bonus) follow the same applied values, through the string manager's vt+8; every other
 		// string passes to the game's getter. After balance: it reads what balance applied.
