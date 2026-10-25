@@ -48,6 +48,10 @@ def run(tag, dlldir, extra, drop=()):
     for key in drop:  # run023's non-stock [Limits] keys (rules 32-37 since b6a1c8c)
         if cfg.has_option('Limits', key):
             cfg.remove_option('Limits', key)
+    if drop and cfg.has_option('Game', 'NpcPowerRule'):
+        # rule 16's requested revision differs by release (11 in 1.8.0-beta.7, 14 in 1.9.0-beta.1) on purpose; without
+        # the key it stays the released revision 3 OFF record in both (as prove_off_wire compares it)
+        cfg.remove_option('Game', 'NpcPowerRule')
     for section, key, value in extra:
         if not cfg.has_section(section):
             cfg.add_section(section)
