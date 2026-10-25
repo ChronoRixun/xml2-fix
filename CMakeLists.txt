@@ -76,6 +76,7 @@ add_library(xml2_fix SHARED
 	src/resistance_display.cpp
 	src/classic_hud.cpp
 	src/codex_menu.cpp
+	src/classic_objectives.cpp
 	src/speaker_label.cpp
 	src/pack_amount.cpp
 	src/exports.cpp
@@ -215,6 +216,10 @@ target_include_directories(xml2_xml1_controllers_test PRIVATE src)
 target_link_libraries(xml2_xml1_controllers_test PRIVATE ws2_32)
 
 # Pure rules; no game process or graphics.
+add_executable(xml2_classic_objectives_test test/classic_objectives_test.cpp)
+target_include_directories(xml2_classic_objectives_test PRIVATE src)
+target_compile_options(xml2_classic_objectives_test PRIVATE /UNDEBUG)
+
 add_executable(xml2_objective_text_test test/objective_text_test.cpp)
 target_include_directories(xml2_objective_text_test PRIVATE src)
 

@@ -85,6 +85,7 @@
 #include "resistance_display.hpp"
 #include "classic_hud.hpp"
 #include "codex_menu.hpp"
+#include "classic_objectives.hpp"
 #include "speaker_label.hpp"
 #include "revival_cost.hpp"
 #include "mod_loader.hpp"
@@ -511,6 +512,9 @@ namespace
 		resistance_display::install(game);
 		classic_hud::install(game);
 		codex_menu::install(game);
+		// [Game] ClassicObjectives=1: the PDA objective page lists visible objectives only and opens on the current one
+		// (docs/classic-objectives.md). Local menu presentation: no gameplay-agreement record.
+		classic_objectives::install(game);
 		// XML1's speaker labels ([Game] ClassicSpeakers=1): the line parser's two calls of its common part; display only,
 		// no agreement record (the label is drawn text; the speaker key, portrait and talk animation are the game's own).
 		speaker_label::install(game);
