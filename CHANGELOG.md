@@ -2,6 +2,26 @@
 
 ## 1.8.0 - <date TBD>
 
+- **Enemy AI fidelity, part 2: gameplay rule 16 revision 11** (`[Game] NpcPowerRule = xml1`, `[Game] NpcSemiAuto =
+  xml1`; 1.8.0-beta.7; [docs](docs/npc-power-rule.md), [weapon brain](docs/npc-semi-auto.md),
+  [round 8](docs/npc-weapon-round8.md)). (1) Power re-checks and attack decisions that fell due while XMen2.exe
+  skipped the brain (the body busy in an attack or a power) are spent as XML1's always-running brain spends them
+  (the entry fronts at 0x518770 - the melee brain's call only, return 0x5193e7 - and 0x518fd0; gaps of 600 s or more
+  are a load, not a busy body): on the still-hero bench powers came 0.5-7 s late after an attack (median 2.5 s), now
+  within 0.08 s, and moving-bench melee entries rose from 18.7 to 24.2 per enemy-minute (original 25.0). (2) A block
+  is a counted melee to-hit miss, as in XML1 (items 14-15): an attack whose damagescale isn't `normal` (XML1's
+  PowerAttack) is never rolled (0x44f58e), and the damage receive's `block_chance` roll never zeroes a hit
+  (0x437b08); on the PC about a quarter of such rolled power attacks were blocked with no damage. (3) The weapon brain
+  takes schema 3 rows (`actor|recoil|range|burst|leader|warmup|flags`) and covers every XML1 gun family: the input
+  gate's warm-up deadline (nullifier, knockback: before every shot; lightning, flame: once per hold), the continuous
+  play flag, the pistol's default-handler primary, the original 0.25 s idle transition (was 0.05 s), the bullet
+  line-of-sight drop (0x519e3a, XMen2.exe's visibility test through rule 16's XML1 ray) and both empty-query branches
+  (0x51a359: bullet bursts and pauses, the other types' burst/strafe with the continuous-beam sweep). Schema 2
+  tables are refused. (4) No scheduler change: the original's measured "query starvation" was a stale reservation
+  planted by the measurement staging; `xml2_npc_query_scheduler_test` now executes XML1's and XMen2.exe's admission
+  code side by side. The record: absent/`xml2` = revision 3 `{0,0,0,0}` (released OFF, nothing patched);
+  `NpcPowerRule = xml1` = revision 11 `{1,1,0,0}`; with the weapon brain `{1,1,1,fingerprint of all six words of every
+  row}`. Revision 11 refuses 1.8.0-beta.6's revision 10 (and 3, 4, 5-9) both ways naming `16 NpcPowerRule`.
 - **XML1's speaker labels, opt-in** (`[Game] ClassicSpeakers = 1`; 1.8.0-beta.7): XMen2.exe takes a conversation
   line's name label, portrait and talk-animation entity from one `%TOKEN%` (the line parser 0x458820 -> 0x456d00
   writes the stats entry's display name and a newline in front of the text). X-Men Legends I keyed its 213 `%ALISON%`
