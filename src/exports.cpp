@@ -41,6 +41,7 @@
 #include "npc_power.hpp"
 #include "npc_semi_auto.hpp"
 #include "stun_rule.hpp"
+#include "shared_handlers.hpp"
 #include "pack_amount.hpp"
 #include "death_switch.hpp"
 #include "gameplay_agreement.hpp"
@@ -421,6 +422,10 @@ namespace
 				npc_semi_auto::values(npc_power::values()), npc_power::verified() && npc_semi_auto::verified(),
 				npc_semi_auto::detail());
 		stun_rule::install(game);
+		shared_handlers::install(game);
+		if (shared_handlers::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::shared_handlers_id, shared_handlers::revision,
+				shared_handlers::values(), shared_handlers::verified());
 		// New opt-in rule: absence preserves the released LC OFF digest.
 		if (stun_rule::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::stun_rule_id, stun_rule::revision, stun_rule::values(), stun_rule::verified());

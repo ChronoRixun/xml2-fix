@@ -12,7 +12,7 @@ def _need(name):
     return value
 
 R = Path(__file__).resolve().parent.parent
-b = R / "native/bin/Release"
+b = Path(os.environ.get("XML2_FIX_TEST_BIN_DIR", R / "native/bin/Release"))
 out = R / "logs/native"
 LIST_ONLY = "--list" in sys.argv  # print the command matrix; nothing runs, nothing is created or deleted
 EXE = _need("XML2_FIX_TEST_EXE")
@@ -41,10 +41,10 @@ with_exe = {
     "xml2_campaign_sender_test", "xml2_receive_validation_test", "xml2_join_in_progress_test",
     "xml2_combo_heads_test", "xml2_input_worker_test", "xml2_model_pools_test", "xml2_model_pools_lifecycle_test",
     "xml2_npc_combo_timing_test", "xml2_x1_leader_test", "xml2_solo_mode_test", "xml2_resistance_display_install_test",
-    "xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test",
+    "xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test", "xml2_shared_handlers_test",
 }
 # Second argument: the XBE (beta 7: the scheduler suite requires it, the weapon brain compares the original callbacks).
-with_xbe = {"xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test"}
+with_xbe = {"xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test", "xml2_shared_handlers_test"}
 skip = {
     "xml2_test", "lcsave_durable_parity", "lcsave_test", "xml2_save_startup_test",
     "xml2_danger_room_party_install_test", "xml2_lockon_effects_install_test",
@@ -92,6 +92,8 @@ for cmd in cmds:
     if XBE in cmd:
         tag += "+xbe"
     if tag.removesuffix("+exe").endswith("_install_test") and cmd[-1] not in (EXE, XBE):
+        tag += "-" + cmd[-1]
+    if Path(cmd[0]).stem in installer_modes:
         tag += "-" + cmd[-1]
     if len(cmd) == 1 and tag == "xml2_test":
         tag += "-plain"
