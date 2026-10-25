@@ -369,7 +369,36 @@ namespace npc_power_rules
 	inline constexpr site block_chance_site{0x437b08, "0f8a86000000c7869c00000000000000", 6, "the hit's block_chance test (0x437490)"};
 	constexpr address block_chance_skip_va = 0x437b94;
 
-	inline constexpr std::array<const site*, 39> sites{&charge_site, &recheck_site, &recheck_actor_site, &picker_site, &energy_getter_site,
+	// 12. (revision 10, item 16 in docs/npc-power-rule.md) The attack-state update's input-lock exit (0x512ed0): mov eax,[esi+0x10]; test byte
+	//     [eax+0x764],1; jz 0x512f1a; test byte [eax+0x3d9],0x10; jnz 0x51304a (return before the visibility query and
+	//     the brain). actor+0x764 bit 0 is the move's input lock (set at a move's entry when the move locks input,
+	//     0x431257..0x431273, and by its lock timers, 0x430bd0 / 0x430bfc: XML1 0x407d8..0x407f4, 0x40257 / 0x40283 on
+	//     its +0x54c); actor+0x3d9 bit 0x10 is set by the power-aim helper 0x50a6c0 (0x50aa28, called from the power
+	//     decision 0x5189b3 / 0x518a4d) and stays set on the enemies (every logged hit on a BrotherHoodEnergy shows it,
+	//     idle included). So an enemy that has used a power skips its whole attack-state update - visibility, brain,
+	//     power decision - in every locked move: attacks before their chain window, powers and reactions. XML1's
+	//     attack-state update 0x10ad70 has no such exit (0x10ad9b fstp [edx+0x408]; 0x10ada1 the +0x278 test, as
+	//     0x512f1a); its brain runs every frame whatever the body does. The jz becomes jmp: the exit is never taken.
+	inline constexpr site lock_exit_site{0x512f01, "8b4610f6806407000001740df680d9030000100f8530010000", 0, "the attack-state update's input-lock exit (0x512ed0)"};
+	constexpr address lock_exit_va = 0x512f0b;
+	// 13. (revision 10, item 17) The melee-range power decision's own input-lock test (0x518770): mov ebp,[esp+0x14] (the
+	//     deciding character); test byte [ebp+0x764],1; jne 0x518ac9 (return 0 before the re-check time is even read);
+	//     mov ebx,[esp+0x1c]. XML1's decision 0xee260 has none (0xee289 target, 0xee296 / 0xee2a2 the 0xbf730 / +0x3e4
+	//     tests, then the timer at 0xee2c2): a re-check that falls due in a locked move is made, its visibility asked,
+	//     re-armed (0xee374) and its picker finds no chain - spent. The jne becomes a jump to a bridge that keeps
+	//     the native exit for every caller but the melee brain's (return 0x5193e7; the officer weapon brain's call
+	//     0x519fe4 stays as measured).
+	inline constexpr site power_lock_site{0x5187b9, "8b6c2414f68564070000010f85ff0200008b5c241c", 0, "the power decision's input-lock test (0x518770)"};
+	constexpr address power_lock_va = 0x5187c4, power_lock_exit_va = 0x518ac9, power_lock_resume_va = 0x5187ca;
+	// 14. (revision 10, item 18) The picker's input-lock test (0x50fe50: sub esp,0xac; push esi; mov esi,ecx; mov eax,[esi+0x10];
+	//     test byte [eax+0x764],1; jne 0x50ffeb = return 0). XML1's picker 0x1081f0 has none: a locked move refuses
+	//     only through the per-slot chain test (move vt+0x3c at 0x1083a8..0x1083f4; XMen2.exe's move vt+0x44, same
+	//     place), so a power whose action the current move chains (an attack's chain window) can be picked. The
+	//     melee-range decision's gate (0x518920) enters the picker after the test; other callers keep it.
+	inline constexpr site picker_entry_site{0x50fe50, "81ecac000000568bf18b4610f68064070000010f8582010000", 0, "the picker's input-lock test (0x50fe50)"};
+	constexpr address picker_unlocked_va = 0x50fe69;
+
+	inline constexpr std::array<const site*, 42> sites{&charge_site, &recheck_site, &recheck_actor_site, &picker_site, &energy_getter_site,
 	                                                   &combolevel_site, &combo_exit_site, &combo_exit2_site, &combo_tail_site,
 	                                                   &combo_buttons_site, &combo_lengths_site, &combo_row2_site, &combo_row3_site, &combo_row11_site,
 	                                                   &query_priority_site, &query_budget_site, &visibility_site, &physical_target_site, &query_entry_site,
@@ -377,7 +406,8 @@ namespace npc_power_rules
 	                                                   &ai_pool_site, &ai_stride_site, &ai_count_site, &ai_brain_site, &reaction_site,
 	                                                   &power_entry_site, &game_clock_site, &attack_entry_site, &attack_random_site,
 	                                                   &hit_roll_site, &hit_roll_result_site, &miss_counts_site, &blocked_flag_site,
-	                                                   &block_chance_draw_site, &block_chance_site};
+	                                                   &block_chance_draw_site, &block_chance_site,
+	                                                   &lock_exit_site, &power_lock_site, &picker_entry_site};
 
 	inline std::vector<std::uint8_t> retail_bytes(const site& s, const std::size_t count)
 	{
@@ -450,11 +480,12 @@ namespace npc_power_rules
 		address power_last = 0;                                       // revision 10: the power decision's last call time per slot
 		address attack_last = 0;                                      // revision 10: the melee decision's last call time per slot
 		address hit_roll = 0;                                         // revision 10: the to-hit roll's power-attack test
+		address power_lock = 0;                                       // revision 10: the power decision's input-lock test
 	};
 	// The block: one page of code and constants (made execute-read), then one page of data (read-write): the next
 	// press time of each of the 32 brains.
-	constexpr std::size_t charge_size = 57, recheck_size = 23, gate_size = 47, cont_size = 149, start_size = 71, end_delay_size = 32;
-	constexpr std::size_t react_cont_size = 125, pre_start_size = 43, mark_size = 85, power_front_size = 272, attack_front_size = 259;
+	constexpr std::size_t charge_size = 57, recheck_size = 23, gate_size = 59, cont_size = 149, start_size = 71, end_delay_size = 32;
+	constexpr std::size_t react_cont_size = 125, power_lock_size = 22, pre_start_size = 43, mark_size = 85, power_front_size = 272, attack_front_size = 259;
 	constexpr std::size_t hit_roll_size = 35;
 	constexpr std::size_t code_size = 4096, block_size = 8192;
 	inline layout layout_at(const address base)
@@ -477,6 +508,7 @@ namespace npc_power_rules
 		l.power_last = l.react_attack + 4 * ai_slots;
 		l.attack_last = l.power_last + 4 * ai_slots;
 		l.hit_roll = base + 2048; // after the attack front (1728..1986)
+		l.power_lock = base + 2112; // past the attack front and beta6/block-bit's bridge (block+2048, 35 bytes)
 		return l;
 	}
 	inline std::vector<std::uint8_t> constants()
@@ -532,8 +564,10 @@ namespace npc_power_rules
 	}
 
 	// 3. Called from 0x518920 in place of the picker (thiscall, ecx = the AI, five stack arguments, ret 0x14). Unless
-	//    the forcing flag is set, refuses (al = 0, as the picker refusing) when max > 2 x energy; else jumps to the
-	//    picker with the caller's frame untouched. eax and edx are free (the picker sets them); ecx is kept.
+	//    the forcing flag is set, refuses (al = 0, as the picker refusing) when max > 2 x energy; else enters the
+	//    picker with the caller's frame untouched: its first instructions (sub esp,0xac; push esi; mov esi,ecx; mov
+	//    eax,[esi+0x10]), then 0x50fe69, past its input-lock test (revision 10, item 18: XML1's picker 0x1081f0
+	//    has none). eax and edx are free (the picker sets them); ecx is kept.
 	inline std::vector<std::uint8_t> gate_bridge(const layout& l)
 	{
 		std::vector<std::uint8_t> code{
@@ -548,15 +582,47 @@ namespace npc_power_rules
 			0xd8, 0x98, 0x14, 0x03, 0x00, 0x00,       // fcomp dword [eax+0x314]
 			0xdf, 0xe0,                               // fnstsw ax
 			0xf6, 0xc4, 0x01,                         // test ah,1: 2 x energy below max (or NaN)
-			0x75, 0x05,                               // jnz refuse (+5)
-			0xe9, 0, 0, 0, 0,                         // go: jmp 0x50fe50
+			0x75, 0x11,                               // jnz refuse (+17)
+			0x81, 0xec, 0xac, 0x00, 0x00, 0x00,       // go: sub esp,0xac (the picker's own first instructions)
+			0x56,                                     // push esi
+			0x8b, 0xf1,                               // mov esi,ecx
+			0x8b, 0x46, 0x10,                         // mov eax,[esi+0x10]
+			0xe9, 0, 0, 0, 0,                         // jmp 0x50fe69 (after its input-lock test)
 			0x32, 0xc0,                               // refuse: xor al,al
 			0xc2, 0x14, 0x00,                         // ret 0x14
 		};
 		put32(code, 14, energy_getter_va - (l.gate + 18));
-		put32(code, 38, picker_va - (l.gate + 42));
+		put32(code, 50, picker_unlocked_va - (l.gate + 54));
 		return code;
 	}
+
+	// Item 17: jumped to from 0x5187c4 in place of `jne 0x518ac9`, with the flags of `test byte [ebp+0x764],1` (the
+	//     deciding character's input lock). Unlocked: on at 0x5187ca as before. Locked: the melee brain's call (return
+	//     address 0x5193e7 at [esp+0x24]: sub esp,0x14 and four pushes since the entry; 0x518660 cleaned its four
+	//     arguments) goes on as XML1's 0xee260 does; every other caller takes the native exit 0x518ac9. The next
+	//     native instructions (mov ebx,[esp+0x1c]; cmp ebx,esi) set the flags again.
+	inline std::vector<std::uint8_t> power_lock_bridge(const layout& l)
+	{
+		std::vector<std::uint8_t> code{
+			0x74, 0x0f,                                     // 00 jz resume (0x11): not locked
+			0x81, 0x7c, 0x24, 0x24, 0, 0, 0, 0,             // 02 cmp dword [esp+0x24],0x5193e7
+			0x74, 0x05,                                     // 0a je resume: the melee brain's call
+			0xe9, 0, 0, 0, 0,                               // 0c jmp 0x518ac9 (the native exit)
+			0xe9, 0, 0, 0, 0,                               // 11 resume: jmp 0x5187ca
+		};
+		put32(code, 0x06, melee_power_call_return_va);
+		put32(code, 0x0d, power_lock_exit_va - (l.power_lock + 0x11));
+		put32(code, 0x12, power_lock_resume_va - (l.power_lock + 0x16));
+		return code;
+	}
+	inline std::vector<std::uint8_t> power_lock_jump(const layout& l)
+	{
+		const address rel = l.power_lock - (power_lock_va + 5);
+		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16),
+		        static_cast<std::uint8_t>(rel >> 24), 0x90};
+	}
+	// Item 16: 0x512f0b: jz 0x512f1a -> jmp 0x512f1a (the exit at 0x512f0d..0x512f14 is never reached).
+	inline std::vector<std::uint8_t> lock_exit_bytes() { return {0xeb, 0x0d}; }
 
 	// The writes at the sites.
 	inline std::vector<std::uint8_t> charge_jump(const layout& l)
@@ -1117,6 +1183,7 @@ namespace npc_power_rules
 		put(l.power_front, power_front_bridge(l));
 		put(l.attack_front, attack_front_bridge(l));
 		put(l.hit_roll, hit_roll_bridge(l));
+		put(l.power_lock, power_lock_bridge(l));
 		return bytes;
 	}
 

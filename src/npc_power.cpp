@@ -151,6 +151,10 @@ namespace npc_power
 			{block_chance_site.va, retail_bytes(block_chance_site, block_chance_site.patched), block_chance_skip()},
 			{visibility_site.va, retail_bytes(visibility_site, visibility_site.patched),
 			 visibility_jump(static_cast<address>(reinterpret_cast<std::uintptr_t>(&visibility_xml1)))},
+			// Revision 10: the brain runs through locked moves, as XML1's: no attack-state input-lock exit, and the melee
+			// brain's power decision and its picker don't refuse a locked body (the move's chain test still does).
+			{lock_exit_va, sub_bytes(lock_exit_site, 10, 2), lock_exit_bytes()},
+			{power_lock_va, sub_bytes(power_lock_site, 11, 6), power_lock_jump(l)},
 		};
 		xml1_hook_transaction::memory memory;
 		bool safe = true;
@@ -173,7 +177,8 @@ namespace npc_power
 		              "AI visibility uses XML1's ray and query reservation/budget (0x505250, 0x5027bd, 0x5027e0); "
 		              "combo presses and completion use XML1 delays (0x51920b, 0x5192cb); a hit reaction spends the steps that come due "
 		              "during it, and a power re-check or attack decision that fell due then is spent, as XML1's brain does "
-		              "(0x435b6e, 0x51920b, 0x518770, 0x518fd0); "
+		              "(0x435b6e, 0x51920b, 0x518770, 0x518fd0); the attack-state update, the melee brain's power decision and its "
+		              "picker run through locked moves as XML1's (0x512f0b, 0x5187c4, 0x50fe5c); "
 		              "a power attack (damagescale not normal) is never rolled to hit and the hit's block_chance roll never "
 		              "zeroes it, so only a counted melee miss is blocked, as default.xbe 0x5c240 / 0x5c965 (0x44f58e, 0x437b08); "
 		              "bridges at 0x%08lX",

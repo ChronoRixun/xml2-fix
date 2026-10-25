@@ -65,13 +65,11 @@ namespace npc_semi_auto
   auto input_function = &weapon_input;
   auto decision_function = &weapon_decision;
   auto press_function = &power_pressed;
-  auto lock_function = &attack_state_continues;
   auto sight_function = &line_of_sight;
   u32 init_resume = 0x504f61, refresh_resume = 0x50fcee, refresh_done = 0x50fe38;
   u32 native_movement = 0x42aa90, input_done = 0x4341f0;
   u32 decision_resume = 0x51a35f, decision_done = 0x51a51e;
   u32 power_true = 0x519ff1, power_false = 0x51a004;
-  u32 lock_resume = 0x512f1a, lock_return = 0x51304a;
   u32 sight_resume = 0x519e41;
   __declspec(naked) void init_hook()
   {
@@ -158,36 +156,6 @@ namespace npc_semi_auto
     mov [esp + 4], eax
     pop eax
     ret 4
-   }
-  }
-  __declspec(naked) void lock_hook()
-  {
-   __asm {
-    pushfd
-    pushad
-    mov esi, esp
-    sub esp, 528
-    and esp, -16
-    mov [esp + 512], esi
-    fxsave [esp]
-    push eax
-    call dword ptr [lock_function]
-    add esp, 4
-    fxrstor [esp]
-    mov esp, [esp + 512]
-    test al, al
-    jnz lock_continue
-    popad
-    popfd
-    test byte ptr [eax + 0x3d9], 0x10
-    jne lock_skip
-    jmp dword ptr [lock_resume]
-   lock_skip:
-    jmp dword ptr [lock_return]
-   lock_continue:
-    popad
-    popfd
-    jmp dword ptr [lock_resume]
    }
   }
   // Top of the ranged brain update after its target resolve (0x519e3a): the bullet
@@ -317,7 +285,6 @@ namespace npc_semi_auto
        {0x4341b6, &input_hook, true, 5},
        {0x51a359, &decision_hook, false, 6},
        {0x519fe7, &power_hook, false, 8},
-       {0x512f0d, &lock_hook, false, 13},
        {0x519e3a, &sight_hook, false, 7}}) {
    const auto* p = reinterpret_cast<const std::uint8_t*>(site);
    patches.push_back({site, {p, p + length}, stun_rules::branch(site, target, call, length)});

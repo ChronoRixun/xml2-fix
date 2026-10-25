@@ -179,6 +179,51 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    starts mode 0 at 0.0), so it fired only on a draw of exactly 0.0. The chance test's `jp 0x437b94` becomes a `jmp`
    there; the draw stays, so the random sequence is the game's.
 
+(Items 14 and 15 are on the parallel branch beta6/block-bit: the counted melee to-hit miss.)
+
+16. **0x512f0b (2 bytes, revision 10).** XMen2.exe's attack-state update 0x512ed0 starts with an exit XML1's
+   0x10ad70 does not have: `mov eax,[esi+0x10]; test byte [eax+0x764],1; jz 0x512f1a; test byte [eax+0x3d9],0x10;
+   jnz 0x51304a` (0x512f01..0x512f14), a return before the visibility query, the brain 0x518fd0 and with it the power
+   decision 0x518770. actor+0x764 bit 0 is the move's input lock (cleared and set again at every move entry,
+   0x431257..0x431273, when the move locks input, and by its lock timers 0x430bd0 / 0x430bfc; XML1 keeps the same
+   bit at +0x54c, 0x407d8..0x407f4 / 0x40257 / 0x40283, and its only bit-0 test is 0x42fb7, outside the AI code).
+   actor+0x3d9 bit 0x10 is set by the power-aim helper 0x50a6c0 (0x50aa28; called from the power decision at
+   0x5189b3 / 0x518a4d) and stays set: all 542 hits logged on a BrotherHoodEnergy in the quiet-measure PC sessions
+   show it, in `idle` too, and +0x764 bit 0 is set in 277 of the 279 taken in `attack*`, `pain` or `power_smash`
+   and in none of the 263 taken in `idle` or movement. So an enemy that has used a
+   power skips its whole attack-state update for every locked frame: per enemy-second on a-pc-still-02 (60 fps),
+   visibility requests / brain calls / power-decision calls were 3.6 / 4.6 / 2.6 in attack moves and 0 / 0 / 0 in
+   power and reaction moves, against 57.8 / 56.2 / 57.3 in movement (a-pc-moving-02: 0.2 / 0.2 / 0.1 in attacks).
+   XML1's 0x10ad70 goes from the +0x408 store (0x10ad9b) straight to the +0x278 test (0x10ada1, XMen2.exe's
+   0x512f1a), so its brain and power decision run every frame whatever the body does (25-46 calls/s in attacks and
+   powers). A re-check that comes due in a locked move is made there, finds no `powers` chain and is re-armed; on the
+   PC it waited for the first unlocked frame, which is the 2.5 s median power lateness of the still bench. The jz
+   becomes `jmp 0x512f1a`: the exit is never taken. The guard covers 0x512f01..0x512f19. NpcSemiAuto's own bridge
+   at 0x512f0d (the same exit, for listed weapon NPCs only) is withdrawn: it requires this rule, which now covers
+   every actor.
+17. **0x5187c4 (6 bytes, revision 10).** The melee-range power decision has a lock test of its own before it reads
+   its timer: `mov ebp,[esp+0x14]; test byte [ebp+0x764],1; jne 0x518ac9` (return 0). XML1's 0xee260 has none
+   (0xee289 the target, 0xee296 / 0xee2a2 the 0xbf730 / +0x3e4 tests, the timer at 0xee2c2). With item 16 alone the
+   decision would still refuse every locked frame and the re-check would still wait. The jne becomes a jump to a
+   22-byte bridge: unlocked goes on at 0x5187ca as before; locked goes on for the melee brain's call (return address
+   0x5193e7 at [esp+0x24]) and takes the native exit for every other caller - the officer weapon brain (0x519fe4)
+   keeps the path measured with the six officer cells. The decision then runs XML1's way in a locked move: due
+   timer, its visibility query (a deferral leaves it due, as 0xee30e does), the re-arm (+2.0 s / +0.5 s, item 2), the
+   energy gate (item 3) and the picker.
+18. **The gate of item 3 (revision 10).** The picker 0x50fe50 also refuses a locked body at its entry
+   (`test byte [eax+0x764],1; jne 0x50ffeb` = return 0, 0x50fe5c). XML1's picker 0x1081f0 has no such test: a locked
+   move refuses only through the per-slot chain test (move vt+0x3c, 0x1083a8..0x1083f4; XMen2.exe's vt+0x44 at the
+   same place, 0x50ff2c..), so a power whose action the current move chains (an attack's chain window) can be picked.
+   The gate now enters the picker with its first 12 bytes (`sub esp,0xac; push esi; mov esi,ecx; mov eax,[esi+0x10]`,
+   guarded) and jumps to 0x50fe69, after the test; the picker's seven other callers keep it.
+
+Measured shape this restores (beta6-ai-rest REPORT 2a, quiet-measure gate table): XML1's power-decision calls per
+second in attack / power moves 23-29 / 35-39, XMen2.exe's 0.3-2.8; port power lateness on the still bench 2.5 s
+median against 0.02-0.19 s. Items 16-18 change only simulation inside the opted-in revision 10 configuration;
+revision 10 has never been released, so neither the revision nor the agreement words change (any private revision
+10 test DLL from before desyncs against this one; none was distributed). OFF (`NpcPowerRule` absent / `xml2`)
+patches nothing, as before.
+
 XML1's second combo table (brain mode 1) has no XMen2.exe brain. The earlier target-loss cancellation branch and
 the PC's press notification remain unchanged. No claim of complete AI equivalence is made.
 
@@ -201,8 +246,8 @@ advertises XML1 visibility geometry and query scheduling; words 2 and 3 are zero
 `[Game] NpcSemiAuto=xml1` with its `[NpcSemiAuto]` rows is present ([npc-semi-auto.md](npc-semi-auto.md)).
 Revision 2 had only the power/combo word, revision 3 lacked the press/completion timers, revision 4 lacked the
 reaction-spent combo steps, power re-checks and attack decisions (items 11-13), revision 10 (released in
-1.8.0-beta.6) lacked the call-gap fronts of items 12-13, the block rule (items 14-15) and the schema 3 weapon brain
-(every gun family, [npc-semi-auto.md](npc-semi-auto.md)). Revisions 5-9 were unreleased
+1.8.0-beta.6) lacked the brain running through locked moves (items 16-18), the block rule (items 14-15) and the
+schema 3 weapon brain (every gun family, [npc-semi-auto.md](npc-semi-auto.md)). Revisions 5-9 were unreleased
 candidates and are not reused: 5 a withdrawn role experiment and the first reaction-spent test build, 6-9 the officer
 weapon candidates (9 = the held-fire brain, words 2-3 of revisions 10 and 11). Registered in an LC installation or when
 requested; absent or `xml2` retains **revision 3** with verified `{0,0,0,0}`, matching the released OFF record. Only

@@ -61,50 +61,6 @@ bool __cdecl noisy_press(int native,void* brain,void* input)
  volatile double sink=1.25;for(int i=0;i!=3;++i)sink=sink*1.5;
  return forced_result!=0;
 }
-void* lock_actor=nullptr;
-bool __cdecl noisy_lock(void* actor)
-{
- check(actor==lock_actor,"lock bridge passes the actor in EAX");
- volatile double sink=1.25;for(int i=0;i!=3;++i)sink=sink*1.5;
- return forced_result!=0;
-}
-std::array<std::uint32_t,9> lock_before{},lock_after{};
-__declspec(naked) void invoke_lock(void*)
-{
- __asm {
-  push ebp
-  push ebx
-  push esi
-  push edi
-  mov eax, [esp + 20]
-  mov ebx, 22334455h
-  mov ecx, 34567890h
-  mov edx, 45678901h
-  mov esi, 56789012h
-  mov edi, 67890123h
-  mov ebp, 78901234h
-  pushad
-  mov esi, esp
-  lea edi, lock_before
-  mov ecx, 8
-  rep movsd
-  popad
-  fxsave fp_before
-  call dword ptr [bridge]
-  fxsave fp_after
-  pushad
-  mov esi, esp
-  lea edi, lock_after
-  mov ecx, 8
-  rep movsd
-  popad
-  pop edi
-  pop esi
-  pop ebx
-  pop ebp
-  ret
- }
-}
 // Line-of-sight bridge (0x519e3a): EBP (brain) reaches the policy, every register, the flags
 // and the FPU state survive, and the two displaced loads (EBX = [esp+0x70], EDX = [ebp])
 // run before the native continuation.
@@ -235,21 +191,6 @@ void weapon_bridge_cases()
   check(fp_before==fp_after,"power bridge preserves x87/SSE state");
   check(press_seen==3,"power bridge passes AL, brain and input");
   check(chosen_path==(result && brain_state==-1?1:-1),"power bridge continuation follows the native brain test");
-  __asm { fninit }
- }
- // Input-lock exit bridge: listed actors always resume the update, others keep the
- // native 0x3d9 bit test; registers and FPU state survive.
- lock_resume=u32(reinterpret_cast<std::uintptr_t>(&path_allow));lock_return=u32(reinterpret_cast<std::uintptr_t>(&path_deny));
- lock_function=&noisy_lock;bridge=reinterpret_cast<void*>(&lock_hook);
- for(int flagged:{0,1})for(int result:{0,1}) {
-  forced_result=result;field<unsigned char>(actor.data(),0x3d9)=flagged?0x10:0;lock_actor=actor.data();
-  __asm { fninit }
-  __asm { fld1 }
-  __asm { pcmpeqd xmm0, xmm0 }
-  invoke_lock(actor.data());
-  check(lock_after==lock_before,"lock bridge preserves registers");
-  check(fp_before==fp_after,"lock bridge preserves x87/SSE state");
-  check(chosen_path==(result || !flagged?1:0),"lock bridge continuation");
   __asm { fninit }
  }
  native_movement=u32(reinterpret_cast<std::uintptr_t>(&fake_movement));

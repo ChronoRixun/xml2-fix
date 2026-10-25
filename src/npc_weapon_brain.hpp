@@ -168,13 +168,6 @@ bool __cdecl weapon_input(void* actor, void* input)
  return true;
 }
 
-// XML2's attack-state update returns before the weapon brain while the actor is input
-// locked in a flagged move (0x512f01..0x512f14: actor+0x764 bit 0 and actor+0x3d9 bit
-// 0x10). The original attack-state update (0x10ad70) has no such exit: its weapon brain
-// runs on every update, including during the grenade move, where it keeps power+fire
-// held (S2 ring: tag 20 on ~every frame of the full-energy windows, input 0x90).
-bool __cdecl attack_state_continues(void* actor) { return npc_spec(actor) != nullptr; }
-
 // Called after the ranged brain's power decision (0x519fe4). The original decision
 // (0xee260) returns true after pressing a power, so the weapon brain stops for that update
 // (0xef5d2..0xef5ef: input+8 = 0, no fire bits; the owner's S2 ring shows the input word

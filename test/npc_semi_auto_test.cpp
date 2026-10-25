@@ -124,7 +124,7 @@ namespace {
   std::array<std::byte,0x28> input{};field<u32>(input.data(),0)=0x90;const auto input_before=input;
   prepare_brain(ai);
   check(!preserve_weapon_range(ai) && !weapon_input(actor,input.data()) && !weapon_decision(brain.data(),input.data()) &&
-        !power_pressed(0,brain.data(),input.data()) && !attack_state_continues(actor),
+        !power_pressed(0,brain.data(),input.data()),
         "unlisted control retains every native path");
   check(!std::memcmp(ai,ai_before.data(),ai_before.size()) && !std::memcmp(actor,actor_before.data(),actor_before.size()) && input==input_before,
         "unlisted control actor, AI and input bytes are unchanged");
@@ -486,7 +486,6 @@ namespace {
    check(!power_pressed(0, brain.data(), plain.data()) && power_pressed(1, brain.data(), plain.data()),
          "no press keeps the native result");
   }
-  check(attack_state_continues(actor), "listed weapon actor keeps the original attack-state update during locked moves");
   decision_self = hero.data();
   std::array<std::byte, 0x28> input{};
   check(weapon_decision(brain.data(), input.data()) && field<u32>(input.data(), 0) == 0, "foreign self resolution holds nothing");

@@ -43,7 +43,12 @@ remain native.
   original's true result.
 - No input-lock exit. XML2's attack-state update (`0x512ed0`) returns before the
   brain while the actor is input locked in a flagged move (`0x512f01..0x512f14`);
-  the original (`0x10ad70`) has no such exit.
+  the original (`0x10ad70`) has no such exit. With it skipped, the brain keeps fire
+  held during the grenade move, the input gate keeps requesting `idle` against it
+  and the grenade move is held, as on the original (zero shots at full energy).
+  `NpcPowerRule=xml1` (which this opt-in requires) now removes that exit for every
+  actor (rule 16 revision 11 item 16, [npc-power-rule.md](npc-power-rule.md)), so
+  the separate bridge for listed weapon NPCs at `0x512f0d` is no longer installed.
 
 ## Input gate (`0x42f60`)
 
@@ -109,12 +114,12 @@ experiment. OFF retains the released rule revision/values and returns before any
 image access or weapon patch. No new rule ID, protocol, version or save format is
 assigned.
 
-Eight sites install in one guarded transaction with readback and rollback:
+Seven sites install in one guarded transaction with readback and rollback:
 handler lookup `0x4f6bf6`, constructor completion `0x504f5b`, capability/range
 refresh `0x50fce8`, the movement/input call `0x4341b6`, the empty near-target
-query continuation `0x51a359`, the power-decision result `0x519fe7`, the
-attack-state input-lock exit `0x512f0d` and the brain's target-resolve
-continuation `0x519e3a`. The input wrapper calls native movement once and
+query continuation `0x51a359`, the power-decision result `0x519fe7` and the
+brain's target-resolve continuation `0x519e3a` (the attack-state input-lock exit
+is rule 16's, see above). The input wrapper calls native movement once and
 preserves the released stun guard and input hook. Bridges preserve registers,
 flags (except where the native code they replace sets them) and floating-point
 state. Transient recoil and warm-up state is indexed by World-token bits and

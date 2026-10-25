@@ -138,7 +138,7 @@ namespace npc_semi_auto_rules
  constexpr u32 candidate_allow = 0x50fe94, candidate_deny = 0x50ff65;
  constexpr u32 default_vtable = 0x692f4c, default_entry = 0x4fbdd0;
  constexpr u32 resolve_action = 0x427c80, clock = 0x45fe60;
- inline constexpr std::array<limits_rules::guard, 49> guards{{
+ inline constexpr std::array<limits_rules::guard, 48> guards{{
   {lookup_call, "e8656c0000", "FightMove handler lookup call"},
   {0x4f6bfb, "83c4045f8986c8000000", "handler is stored at move +0xc8"},
   {candidate_site, "d94728d89e50050000dfe0f6c4050f8ad1000000", "picker's per-slot reuse test"},
@@ -176,7 +176,6 @@ namespace npc_semi_auto_rules
   {0x50fc35, "8db71c04000033db8d4900896e14c746280000a040896e3c8b8bec4b69008b4c8c143bcd746f8b11", "native cached slot initializers and resolved action table"},
   {0x5008c0, "d98140010000c3", "AI reuse getter field"},
   {0x502c50, "568b7424088bceff1558fa67", "AI navigation direction check"},
-  {0x512f01, "8b4610f6806407000001740df680d9030000100f8530010000f686a402000001", "attack-state input-lock exit"},
   {0x519fe4, "ff520c84c07419837d08ff7513c7430800000000b0015f5e5d5b83c458c20800", "ranged power decision result and early return"},
   {0x5607b0, "d905300068008b4c2408d901", "direction-to-angles conversion"},
   {0x503810, "568bf18b46108b8878030000", "AI facing setter"},
