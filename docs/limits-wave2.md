@@ -120,3 +120,15 @@ The LC file also keeps `.lcsave.newer` handling (limits-check "Save format") for
 S4 recomp facts -> census (items, enhancements, attached, objectives, talents, zone records) -> this design reviewed by
 a second model (Astra or Sol, before code; the one-pass rule) -> E2 + E14 RE sweeps (Astra) -> implement W2 descriptor
 + converter (Sol) -> engine sites per row with whole-.text gates (Sol / Astra) -> real-saves gate -> one build.
+
+## 7. Runtime rows not in wave 1 (and why)
+
+They change no save byte, so they are not part of the W2 layout, but they belong to the same pass:
+
+| Row | State | Next step |
+| --- | --- | --- |
+| E4 live actors 32 -> 96 | Not implemented. Entity-capacity Phase B (`agent-work/entity-capacity-impl/PHASE-B-BACKLOG.md`): the 0x848-stride actor arena and its actor-only imm8 bounds, the primary CAI controllers (stride 0x61c, six constructors, allocation 0x522a10 has no full check), the CAITeam 4 x 8 = 32 membership table and the pattern-manager aliases. PLAN E4 requires the AI-team membership policy as a reviewed design **before code** (and an owner decision on Fable). | Opus design of the CAITeam policy + Phase B ledger, second-model review, then implement on top of Phase A's transaction with online layout rule 1 revision 4 `{96,768,1024,10}` (actor + generic <= world still holds). |
+| E5 generic entities / world handles | Already 768 / 1024 (Phase A). | Census only; raise with E4 if a zone has < 2x headroom. |
+| E10 emitter objects (40) | ModelPools x4 keeps 40 emitter objects (indexed by emitter). | Census the 5 heaviest fights; raise only past 50 %. |
+| E11 curves, script functions, move triggers, styles | Already keys (3600 / 1024 / 64 / 32 in the builder). | Census only. |
+| E12 LAA | xml2-fix logs `LAA on/off` and the highest reservable address (wave 1). The flag itself is set by the builder on its own exe copy (one word at file offset 0x146, 0x010f -> 0x012f). | Builder change + `test_builder_cli.py:193` / whole-file hash updates; controlled high-address test incl. Proton. |

@@ -24,3 +24,14 @@ run them only in the owner's gate environment. Release preparation does not exec
 `check_model_pools_text.py <XMen2.exe>` (needs capstone and pefile) decodes the whole retail `.text` for `[Engine] ModelPools`:
 every reference to the moved model aggregate / particle-system manager must be a site row, nothing may branch or point
 into a span the plan overwrites, and a findNext helper shared outside the pool destructors must be copied, not raised.
+
+`check_igb_cache_text.py <XMen2.exe>` (capstone, pefile) is the same kind of gate for `[Limits] IGBCache`: every
+reference to the moved `CIGBInfoCache2` is a reference row, every pool field operand of the cache code is a site row,
+no data pointer into the object or at a pool method, the class vtable stored only by the cache, and the shared
+`bitset<200>::findNext` keeps exactly its two outside callers.
+
+`prove_limits_wave1.py` runs the reference DLL (`XML2_FIX_LIMITS_REF`: the previous line's folder with dinput.dll and
+dinput.map) and this tree's /MAP DLL (`XML2_FIX_LIMITS_DLL`, default `native-map/bin/Release`) in the union host with
+the run023 ini: OFF and `ModelPools=x4` alone must give the reference's agreement record and limits log lines; with
+`IGBCache=1024`, `ResourceNames=2048` and `ModelHandles=8192` the three raises must install and rule 31 must register.
+It exports and restores the game's registry key around each run.
