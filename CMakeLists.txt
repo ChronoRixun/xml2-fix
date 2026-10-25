@@ -137,6 +137,7 @@ add_library(xml2_fix SHARED
 	src/balance.cpp
 	src/limits.cpp
 	src/entity_capacity.cpp
+	src/actor_pools.cpp
 	src/entity_owners.cpp
 	src/entity_transfer.cpp
 	src/entity_world.cpp
@@ -642,3 +643,26 @@ target_link_options(xml2_xml1_grab_carry_install_test PRIVATE /BASE:0x400000 /DY
 add_executable(xml2_shared_handlers_c_test test/shared_handlers_c_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/shared_handlers_c.cpp)
 target_include_directories(xml2_shared_handlers_c_test PRIVATE src)
 target_link_options(xml2_shared_handlers_c_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# E4 stage 1: the production transaction plus retail pool/guard instructions inside
+# (the descriptor test compares against 9677892 = release-1.9.0-beta1 before E4: NpcPowerRule revision 14)
+# a union image. These are ordinary native tests; neither game nor engine starts.
+add_executable(xml2_actor_pools_host test/actor_pools_host.cpp src/actor_pools.cpp src/patch_transaction.cpp tools/union_host/union_space.asm)
+target_include_directories(xml2_actor_pools_host PRIVATE src)
+target_compile_definitions(xml2_actor_pools_host PRIVATE XML2_ACTOR_POOLS_TEST)
+target_compile_options(xml2_actor_pools_host PRIVATE /UNDEBUG)
+target_link_options(xml2_actor_pools_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
+set_target_properties(xml2_actor_pools_host PROPERTIES OUTPUT_NAME actor_pools_host)
+
+execute_process(COMMAND git show 9677892:src/npc_power_rules.hpp WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_VARIABLE ACTOR_POOLS_BETA7_POWER RESULT_VARIABLE ACTOR_POOLS_BASE_RESULT)
+if(ACTOR_POOLS_BASE_RESULT EQUAL 0)
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/npc_power_rules_beta7.hpp" "${ACTOR_POOLS_BETA7_POWER}")
+    execute_process(COMMAND git show 9677892:src/gameplay_capabilities.hpp WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE ACTOR_POOLS_BETA7_AGREEMENT COMMAND_ERROR_IS_FATAL ANY)
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/gameplay_capabilities_beta7.hpp" "${ACTOR_POOLS_BETA7_AGREEMENT}")
+    add_executable(xml2_actor_ai_descriptor_test test/actor_ai_descriptor_test.cpp)
+    target_include_directories(xml2_actor_ai_descriptor_test PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}")
+    target_compile_options(xml2_actor_ai_descriptor_test PRIVATE /UNDEBUG)
+else()
+    message(STATUS "Actor descriptor byte differential unavailable: fetch 9677892 (release-1.9.0-beta1 before E4) to run this required E4 test")
+endif()

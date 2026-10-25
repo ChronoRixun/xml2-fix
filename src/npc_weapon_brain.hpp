@@ -62,7 +62,7 @@ void* named_move(void* actor, const char* name)
  return name_function(actor, &key);
 }
 void* native_ai(void* actor)
-{ return actor ? ai_function(reinterpret_cast<void*>(0x78ba10), field<u32>(actor, 0x7dc)) : nullptr; }
+{ return actor ? ai_function(reinterpret_cast<void*>(actor_ai::installed().cai_object), field<u32>(actor, 0x7dc)) : nullptr; }
 const weapon* npc_spec(void* actor)
 { return actor && field<int>(actor, 0x3d4) == -1 ? spec(actor) : nullptr; }
 // The converted primary: a ch_weapon_semi_auto move resolves to this handler; the pistol's

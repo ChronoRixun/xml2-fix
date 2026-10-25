@@ -73,6 +73,7 @@
 #include "ini.hpp"
 #include "limits.hpp"
 #include "model_pools.hpp"
+#include "actor_pools.hpp"
 #include "model_pools_rules.hpp"
 #include "online_tick.hpp"
 #include "frame_rate_rules.hpp"
@@ -263,6 +264,8 @@ namespace
 		logger::write("startup transaction: %s (%s)", patch_transaction::name(committed), startup.report().c_str());
 		entity_capacity::after_commit(committed == patch_transaction::outcome::committed, committed == patch_transaction::outcome::rollback_failed);
 		if (!save_format::startup_allowed() || !entity_capacity::startup_allowed()) return;
+		actor_pools::install(game); // publishes CAI descriptor before every A12/A13 consumer
+		if (!game_version::startup_allowed()) return;
 		// Start background work only after required startup hooks have verified.
 		// XInput's first call can take seconds (xinput_pad.hpp): made on a thread of its own, which runs once
 		// the loader is done, so the game's thread never waits for it; pads read as idle until then.

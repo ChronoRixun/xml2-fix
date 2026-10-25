@@ -1,3 +1,4 @@
+#include "actor_ai_layout.hpp"
 #include "npc_semi_auto.hpp"
 #include "npc_semi_auto_rules.hpp"
 #include "det_math.hpp"
@@ -270,6 +271,8 @@ namespace npc_semi_auto
  { if (!wanted) return nullptr; digest = table_digest(weapons); return &digest; }
  void install(HMODULE game)
  {
+    actor_ai::register_consumer(actor_ai::consumer::semi_auto);
+    actor_ai::register_consumer(actor_ai::consumer::weapon);
   if (applied) return;
   const auto choice = npc_power_rules::parse_rule(ini::text(L"Game", L"NpcSemiAuto").value_or(""));
   wanted = !choice.error.empty() || choice.value == npc_power_rules::rule::xml1;
@@ -298,7 +301,7 @@ namespace npc_semi_auto
   xml1_hook_transaction::memory memory;
   for (const auto& g : guards) {
    std::vector<std::uint8_t> bytes(limits_rules::hex_size(g.hex));
-   if (!memory.read(g.va, bytes.data(), bytes.size()) || !limits_rules::matches(bytes.data(), g.hex)) { fail(g.what); return; }
+   if (!memory.read(g.va, bytes.data(), bytes.size()) || !limits_rules::matches(bytes.data(), actor_ai::guard(g.va,g.hex,actor_ai::installed()))) { fail(g.what); return; }
   }
   std::memcpy(callbacks.data(), reinterpret_cast<const void*>(default_vtable), sizeof(callbacks));
   callbacks[1] = reinterpret_cast<void*>(&enter);

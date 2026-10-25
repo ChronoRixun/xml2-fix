@@ -21,6 +21,14 @@ namespace npc_power
 		bool wanted = false, applied = false;
 		std::vector<xml1_hook_transaction::patch> written; // the installed sites (retail -> rule bytes)
 		void* bridges = nullptr;
+        std::uint8_t* side_block = nullptr;
+        npc_power_rules::layout side_layout;
+        void reset_slot(std::uint32_t slot)
+        {
+            if (!side_block || slot >= side_layout.ai.controllers) return;
+            for (const auto table : {side_layout.next,side_layout.react,side_layout.react_power,side_layout.react_attack})
+                *reinterpret_cast<std::uint32_t*>(table+4*slot)=0;
+        }
 
 		template<class T> T& field(void* object, const std::size_t offset)
 		{
@@ -61,7 +69,7 @@ namespace npc_power
 		{
 			__try
 			{
-				return first_mismatch(reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(image_base)));
+				return first_mismatch(reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(image_base)),actor_ai::installed());
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
 			{
@@ -92,6 +100,8 @@ namespace npc_power
 		}
 		applied = false;
 		written.clear();
+		side_block = nullptr; // E4: the controller-slot reset must not touch the freed side tables
+		if (actor_ai::reset_controller_slot == &reset_slot) actor_ai::reset_controller_slot = nullptr;
 		if (bridges)
 		{
 			VirtualFree(bridges, 0, MEM_RELEASE);
@@ -103,6 +113,7 @@ namespace npc_power
 
 	void install(const HMODULE game)
 	{
+		actor_ai::register_consumer(actor_ai::consumer::power);
 		if (applied)
 		{
 			return;
@@ -141,7 +152,7 @@ namespace npc_power
 			return;
 		}
 		const auto base = static_cast<address>(reinterpret_cast<std::uintptr_t>(memory_block));
-		const auto code = block(base);
+		const auto code = block(base,actor_ai::installed());
 		std::memcpy(memory_block, code.data(), code.size()); // the data page (next press times) stays zero, read-write
 		DWORD old = 0;
 		if (!VirtualProtect(memory_block, code_size, PAGE_EXECUTE_READ, &old) || !FlushInstructionCache(GetCurrentProcess(), memory_block, code_size))
@@ -150,7 +161,7 @@ namespace npc_power
 			VirtualFree(memory_block, 0, MEM_RELEASE);
 			return;
 		}
-		const auto l = layout_at(base);
+		const auto l = layout_at(base,actor_ai::installed());
 		const auto picker_retail = retail_bytes(picker_site, 7); // push 4; call 0x50fe50: the call is the last 5
 		const std::vector<xml1_hook_transaction::patch> all{
 			{charge_site.va, retail_bytes(charge_site, charge_site.patched), charge_jump(l)},
@@ -208,6 +219,7 @@ namespace npc_power
 		}
 		written = all;
 		bridges = memory_block;
+		side_block=memory_block; side_layout=l; actor_ai::reset_controller_slot=&reset_slot;
 		logger::write("npc power rule: X-Men Legends 1's ([Game] NpcPowerRule=xml1): enemies pay for their powers (0x4318e7 tests the AI time as "
 		              "default.xbe 0xcde95), the melee-range power decision re-checks every 2.0 s / 0.5 s (0x5188d8) and needs half of the "
 		              "character's energy (0x518920); NPCs combo with the first game's levels and combos (0x505011, rows 0x6dd508) and pause after a combo start (0x51993a, 0x519b04); "

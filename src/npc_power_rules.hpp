@@ -1,5 +1,5 @@
 #pragma once
-
+#include "actor_ai_layout.hpp"
 // [Game] NpcPowerRule: X-Men Legends 1's rules for when a computer-controlled character uses a power, kept apart from
 // the installer so xml2_test can check them without the game: the ini value's rules, the decisions both games make
 // (as plain arithmetic), every retail byte the change relies on and the emitted bridge code.
@@ -470,11 +470,11 @@ namespace npc_power_rules
 		return bytes;
 	}
 
-	inline const site* first_mismatch(const std::uint8_t* image)
+	inline const site* first_mismatch(const std::uint8_t* image, const actor_ai::descriptor& d = actor_ai::stock)
 	{
 		for (const auto* s : sites)
 		{
-			if (!limits_rules::matches(image + (s->va - image_base), s->hex))
+			if (!limits_rules::matches(image + (s->va - image_base), actor_ai::guard(s->va,s->hex,d)))
 			{
 				return s;
 			}
@@ -515,6 +515,7 @@ namespace npc_power_rules
 		address react = 0, react_cont = 0, pre_start = 0, mark = 0;   // revision 10: per-brain reaction marks and their bridges
 		address react_power = 0, power_front = 0;                     // revision 10: the power decision's marks and front
 		address react_attack = 0, attack_front = 0;                   // revision 10: the attack decision's marks and front
+		actor_ai::descriptor ai = actor_ai::stock;
 		address hit_roll = 0;                                         // revision 10: the to-hit roll's power-attack test
 		address power_lock = 0;                                       // revision 10: the power decision's input-lock test
 	};
@@ -524,22 +525,24 @@ namespace npc_power_rules
 	constexpr std::size_t react_cont_size = 125, power_lock_size = 22, pre_start_size = 43, mark_size = 85, power_front_size = 166, attack_front_size = 182;
 	constexpr std::size_t hit_roll_size = 35;
 	constexpr std::size_t code_size = 4096, block_size = 8192;
-	inline layout layout_at(const address base)
+	inline layout layout_at(const address base, const actor_ai::descriptor& d = actor_ai::stock)
 	{
 		layout l{base, base, base + 64, base + 96, base + 160};
+		l.ai = d;
 		l.combos = base + 192; // 6 x 20 bytes (up to five buttons each)
 		l.cont = base + 320;
 		l.start = base + 480;
 		l.delays = base + 560; // 6 x 20 bytes
 		l.next = base + static_cast<address>(code_size);
 		l.end_delay = base + 688;
-		l.react = l.next + 4 * ai_slots; // after the 32 deadlines, in the read-write page
+		const auto table_slots = d.controllers <= 32 ? 32u : 96u;
+		l.react = l.next + 4 * table_slots; // after the 32 deadlines, in the read-write page
 		l.react_cont = base + 800;
 		l.pre_start = base + 928;
 		l.mark = base + 976;
-		l.react_power = l.react + 4 * ai_slots;
+		l.react_power = l.react + 4 * table_slots;
 		l.power_front = base + 1072;
-		l.react_attack = l.react_power + 4 * ai_slots;
+		l.react_attack = l.react_power + 4 * table_slots;
 		l.attack_front = base + 1248;
 		l.hit_roll = base + 2048; // block-bit's bridge (after the old attack front's 1728..1986, now free)
 		l.power_lock = base + 2112; // clear of beta6/block-bit's bridge (block+2048, 35 bytes)
@@ -731,7 +734,7 @@ namespace npc_power_rules
 			0x74, 0xa1,                               // 91 jz due (0x34)
 			0xeb, 0xd4,                               // 93 jmp notyet (0x69)
 		};
-		put32(code, 0x03, brain0_va);
+		put32(code, 0x03, l.ai.primary_base + 0x4c8);
 		put32(code, 0x1e, l.next);
 		put32(code, 0x51, l.delays);
 		put32(code, 0x65, combo_press_va - (l.cont + 0x69));
@@ -739,6 +742,8 @@ namespace npc_power_rules
 		put32(code, 0x6f, combo_end_va - (l.cont + 0x73));
 		put32(code, 0x7a, combo_continue_resume_va - (l.cont + 0x7e));
 		put32(code, 0x88, l.max_delay());
+		put32(code, 0x0c, l.ai.controller_stride);
+		code[0x18] = static_cast<std::uint8_t>(l.ai.controllers);
 		return code;
 	}
 	// The combo start (the exits' jump; ebp = the brain, [ebp+0x3c] = the combo): next = now + delay[0], then the
@@ -769,10 +774,12 @@ namespace npc_power_rules
 			0xd9, 0x1a,                         // 40 fstp dword [edx]
 			0xe9, 0, 0, 0, 0,                   // 42 done: jmp 0x519840
 		};
-		put32(code, 0x03, brain0_va);
+		put32(code, 0x03, l.ai.primary_base + 0x4c8);
 		put32(code, 0x1e, l.next);
 		put32(code, 0x2f, l.delays);
 		put32(code, 0x43, combo_tail_va - (l.start + 0x47));
+		put32(code, 0x0c, l.ai.controller_stride);
+		code[0x18] = static_cast<std::uint8_t>(l.ai.controllers);
 		return code;
 	}
 	// 7. (revision 10) The continue step's front (jumped to from 0x51920b; same registers as the continue step): when the
@@ -823,12 +830,14 @@ namespace npc_power_rules
 			0xeb, 0xbf,                               // 76 jmp spend (0x37)
 			0xe9, 0, 0, 0, 0,                         // 78 cont: jmp the continue step
 		};
-		put32(code, 0x03, brain0_va);
+		put32(code, 0x03, l.ai.primary_base + 0x4c8);
 		put32(code, 0x1e, l.react);
 		put32(code, 0x30, l.next);
 		put32(code, 0x52, combo_end_va - (l.react_cont + 0x56));
 		put32(code, 0x67, l.delays);
 		put32(code, 0x79, l.cont - (l.react_cont + 0x7d));
+		put32(code, 0x0c, l.ai.controller_stride);
+		code[0x18] = static_cast<std::uint8_t>(l.ai.controllers);
 		return code;
 	}
 	// The combo start's front (the exits' jump): a new combo starts unmarked, then the start bridge.
@@ -848,9 +857,11 @@ namespace npc_power_rules
 			0xc7, 0x04, 0x85, 0, 0, 0, 0, 0, 0, 0, 0,       // 1b mov dword [eax*4+react],0
 			0xe9, 0, 0, 0, 0,                               // 26 go: jmp the start bridge
 		};
-		put32(code, 0x03, brain0_va);
+		put32(code, 0x03, l.ai.primary_base + 0x4c8);
 		put32(code, 0x1e, l.react);
 		put32(code, 0x27, l.start - (l.pre_start + 0x2b));
+		put32(code, 0x0c, l.ai.controller_stride);
+		code[0x18] = static_cast<std::uint8_t>(l.ai.controllers);
 		return code;
 	}
 	// Jumped to from 0x435b6e (esi = the hit record, [esi] = the victim): when the hit makes the victim react, mark
@@ -877,7 +888,9 @@ namespace npc_power_rules
 			0xf6, 0x86, 0xac, 0x00, 0x00, 0x00, 0x08,       // 49 out: test byte [esi+0xac],8 (displaced)
 			0xe9, 0, 0, 0, 0,                               // 50 jmp 0x435b75 (jz 0x435be2)
 		};
-		put32(code, 0x0f, ai0_va);
+		put32(code, 0x0f, l.ai.primary_base);
+		put32(code, 0x3c, l.ai.controller_stride);
+		code[0x43] = static_cast<std::uint8_t>(l.ai.controllers);
 		put32(code, 0x1d, l.react);
 		put32(code, 0x28, l.react_power);
 		put32(code, 0x33, l.react_attack);
@@ -936,7 +949,7 @@ namespace npc_power_rules
 			0x83, 0xec, 0x14, 0x53, 0x55,             // 9c sub esp,0x14; push ebx; push ebp (displaced)
 			0xe9, 0, 0, 0, 0,                         // a1 jmp 0x518775
 		};
-		put32(code, 0x04, brain0_va);
+		put32(code, 0x04, l.ai.primary_base + 0x4c8);
 		for (const std::size_t at : {std::size_t{0x0a}, std::size_t{0x1b}, std::size_t{0x24}, std::size_t{0x34}})
 		{
 			put32(code, at, 0x9b - static_cast<std::uint32_t>(at + 4));
@@ -946,6 +959,8 @@ namespace npc_power_rules
 		put32(code, 0x61, l.half());
 		put32(code, 0x69, l.two());
 		put32(code, 0xa2, power_entry_resume_va - (l.power_front + 0xa6));
+		put32(code, 0x11, l.ai.controller_stride);
+		code[0x21] = static_cast<std::uint8_t>(l.ai.controllers);
 		return code;
 	}
 	// Jumped to from 0x518fd0 (ecx = the brain; eax/edx scratch at the thiscall entry): with no combo running, a
@@ -1008,7 +1023,7 @@ namespace npc_power_rules
 			0x83, 0xec, 0x58, 0x53, 0x55,             // ac sub esp,0x58; push ebx; push ebp (displaced)
 			0xe9, 0, 0, 0, 0,                         // b1 jmp 0x518fd5
 		};
-		put32(code, 0x04, brain0_va);
+		put32(code, 0x04, l.ai.primary_base + 0x4c8);
 		for (const std::size_t at : {std::size_t{0x0a}, std::size_t{0x1b}, std::size_t{0x24}, std::size_t{0x34}, std::size_t{0x41}})
 		{
 			put32(code, at, 0xab - static_cast<std::uint32_t>(at + 4));
@@ -1017,6 +1032,8 @@ namespace npc_power_rules
 		put32(code, 0x4c, game_clock_owner_va - (l.attack_front + 0x50));
 		put32(code, 0x7e, game_random_va - (l.attack_front + 0x82));
 		put32(code, 0xb2, attack_entry_resume_va - (l.attack_front + 0xb6));
+		put32(code, 0x11, l.ai.controller_stride);
+		code[0x21] = static_cast<std::uint8_t>(l.ai.controllers);
 		return code;
 	}
 	inline std::vector<std::uint8_t> attack_entry_jump(const layout& l)
@@ -1107,9 +1124,9 @@ namespace npc_power_rules
 	}
 
 	// The whole block's bytes for an allocation at `base`.
-	inline std::vector<std::uint8_t> block(const address base)
+	inline std::vector<std::uint8_t> block(const address base, const actor_ai::descriptor& d = actor_ai::stock)
 	{
-		const auto l = layout_at(base);
+		const auto l = layout_at(base,d);
 		std::vector<std::uint8_t> bytes(code_size, 0xcc);
 		const auto put = [&](const address at, const std::vector<std::uint8_t>& code) { std::memcpy(bytes.data() + (at - base), code.data(), code.size()); };
 		put(l.charge, charge_bridge(l));

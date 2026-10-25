@@ -1,3 +1,4 @@
+#include "actor_ai_layout.hpp"
 #include "mold_controller.hpp"
 #include "mold_beam.hpp"
 #include "ini.hpp"
@@ -299,6 +300,7 @@ xml1_capability_rules::registration capability(){
 // Game.Xml1MasterMold requested the transaction writes exactly what this controller wrote on its own (beam, sequence,
 // node, default target, brain dispatch, in that order).
 bool prepare(HMODULE game,xml1_hook_transaction::patch& beam){
+    actor_ai::register_consumer(actor_ai::consumer::mold);
     was_requested=ini::flag(L"Game",L"Xml1MasterMold",false);installed=false;
     if(!was_requested)return false;
     trace=ini::flag(L"Test",L"MoldTrace",false);
@@ -337,7 +339,7 @@ bool prepare(HMODULE game,xml1_hook_transaction::patch& beam){
         {0x402b60,"568b74240885f6742a8b06578bceff10","native ancestry layout"},
         {0x45fe60,"8b0d348471008b01ffa060010000","game clock"},
         {0x4a0190,"8b4424045650e8d58503008bc8e8fe660300","saved game flag read"}}};
-    for(const auto& g:guards)if(!limits_rules::matches(reinterpret_cast<const unsigned char*>(g.va),g.hex)){logger::write("mold controller: guard failed %08X",g.va);return false;}
+    for(const auto& g:guards)if(!limits_rules::matches(reinterpret_cast<const unsigned char*>(g.va),actor_ai::guard(g.va,g.hex,actor_ai::installed()))){logger::write("mold controller: guard failed %08X",g.va);return false;}
     return true;
 }
 void script_table_refused(){logger::write("mold controller: active script table differs; no shield/controller hooks enabled");}

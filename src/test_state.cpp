@@ -1,6 +1,7 @@
 #include "test_state.hpp"
 #include "entity_capacity.hpp"
 #include "entity_capacity_layout.hpp"
+#include "actor_pools.hpp"
 #include "test_state_rules.hpp"
 #include <Windows.h>
 #include <mutex>
@@ -60,6 +61,7 @@ namespace test_state
 			return;
 		}
 		last = now;
+		actor_pools::sample();
 		static const bool valid = supported();
 		if (!valid)
 		{
@@ -88,6 +90,7 @@ namespace test_state
 		{
 			return state;
 		}
+		if (command == "actor_pools") return actor_pools::telemetry_json();
 		if (command == "objectives")
 		{
 			return objectives;
