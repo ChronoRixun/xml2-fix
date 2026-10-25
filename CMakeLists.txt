@@ -36,6 +36,14 @@ target_include_directories(lcsave PUBLIC src/lcsave)
 add_library(xml2_fix SHARED
 	src/mold_beam.cpp
 	src/mold_controller.cpp
+	src/xml1_bosses.cpp
+	src/boss_dopples.cpp
+	src/boss_avalanche.cpp
+	src/boss_pyro.cpp
+	src/boss_mystique.cpp
+	src/boss_shadowking.cpp
+	src/boss_magneto.cpp
+	src/boss_blob.cpp
 	src/multipart.cpp
 	src/mold_query.cpp
 	src/mold_effects.cpp
@@ -201,6 +209,8 @@ target_include_directories(xml2_danger_room_healthbars_test PRIVATE src)
 target_compile_options(xml2_danger_room_healthbars_test PRIVATE /UNDEBUG)
 
 add_executable(xml2_xml1_controllers_test test/xml1_controllers_test.cpp src/game_version.cpp)
+add_executable(xml2_boss_mystique_bridge_test test/boss_mystique_bridge_test.cpp)
+target_include_directories(xml2_boss_mystique_bridge_test PRIVATE src)
 target_include_directories(xml2_xml1_controllers_test PRIVATE src)
 target_link_libraries(xml2_xml1_controllers_test PRIVATE ws2_32)
 
@@ -313,6 +323,8 @@ target_include_directories(xml2_npc_semi_auto_test PRIVATE src)
 # The shared AI query scheduler of both games executed side by side (XML1 0xfc990 from the owner's default.xbe,
 # XMen2.exe 0x502730 retail and with rule 16): budget, reservation, the stale-reservation throttle, random schedules.
 add_executable(xml2_npc_query_scheduler_test test/npc_query_scheduler_test.cpp)
+add_executable(xml2_dopple_xbe_test test/dopple_xbe_test.cpp)
+target_include_directories(xml2_dopple_xbe_test PRIVATE src)
 target_include_directories(xml2_npc_query_scheduler_test PRIVATE src)
 # [Balance] ReceiveRounding / DamageCap executed side by side (XML1 0x45517 / 0x5ce0d from the owner's default.xbe,
 # XMen2.exe 0x437a54 / 0x453bfb retail and with rule 31's stubs), in 24- and 53-bit x87 precision.
@@ -607,3 +619,10 @@ add_executable(xml2_xml1_rogue_decide_install_test test/xml1_rogue_decide_instal
     src/xml1_rogue_decide.cpp src/xml1_cling.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
 target_include_directories(xml2_xml1_rogue_decide_install_test PRIVATE src)
 target_link_options(xml2_xml1_rogue_decide_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+add_executable(xml2_boss_wave3_test test/boss_wave3_test.cpp)
+target_include_directories(xml2_boss_wave3_test PRIVATE src)
+target_compile_options(xml2_boss_wave3_test PRIVATE /UNDEBUG)
+
+add_executable(xml2_boss_wave3_bridge_test test/boss_wave3_bridge_test.cpp)
+target_include_directories(xml2_boss_wave3_bridge_test PRIVATE src)
+target_compile_options(xml2_boss_wave3_bridge_test PRIVATE /UNDEBUG)

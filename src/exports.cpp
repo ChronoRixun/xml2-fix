@@ -59,6 +59,7 @@
 #include "script_functions.hpp"
 #include "solo_mode.hpp"
 #include "mold_controller.hpp"
+#include "xml1_bosses.hpp"
 #include "lockon_effects.hpp"
 #include "multipart.hpp"
 #include "xml1_turrets.hpp"
@@ -318,7 +319,9 @@ namespace
 		// registration; before forced_teams, whose table carries any [Test] probes.
 		script_functions::install(game);
 		forced_teams::install(game);
-		mold_controller::install(game);
+		// The shared XML1 boss dispatcher installs Master Mold ([Game] Xml1MasterMold) and the bosses [Game] Xml1Bosses
+		// lists in one transaction (one brain-dispatch detour); nothing requested writes nothing.
+		xml1_bosses::install(game);
 		lockon_effects::install(game);
 		if (lockon_effects::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::lockon_aim_id, 1,
@@ -348,6 +351,12 @@ namespace
 			gameplay_agreement::register_rule(gameplay_capabilities::turret_controller_id, xml1_capability_rules::turret_revision_for(xml1_turrets::requested()), turrets.values, turrets.verified);
 			const auto functions = script_functions::capability();
 			gameplay_agreement::register_rule(gameplay_capabilities::script_functions_id, script_functions_rules::agreement_revision, functions.values, functions.verified);
+		}
+		// XML1 boss brains (rule 40, requested only): every peer runs the same overlay from the lockstep AI update.
+		if (xml1_bosses::requested())
+		{
+			const auto bosses = xml1_bosses::capability();
+			gameplay_agreement::register_rule(gameplay_capabilities::xml1_bosses_id, xml1_capability_rules::bosses_revision, bosses.values, bosses.verified);
 		}
 		// Solo mode changes what every peer's AI heroes do (rule 8): peers must agree on it like the controllers.
 		if (game_version::needs_gameplay_agreement() || solo_mode::requested())

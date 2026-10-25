@@ -2,6 +2,16 @@
 
 ## 1.8.0 - <date TBD>
 
+- **XML1 boss brains, shared dispatcher and the colosseum dopples: gameplay rule 40** (`[Game] Xml1Bosses = dopples,avalanche`;
+  beta 8 candidate, [docs](docs/xml1-controllers.md#shared-boss-dispatcher)). One module owns the brain-dispatch
+  detour (0x5173f3) and the script-table entries Master Mold used; Master Mold is its first client and writes exactly
+  what it wrote before (rule 3 unchanged). The dopples restore X-Men Legends I's overlay (default.xbe 0x116f70):
+  Wolverine and Colossus throw the fastball special every 5 s or more when within 400 of each other, Jean sets off
+  the arena's hazards near the hero every 7 s, all four taunt; Cyclops' reply stays as dormant as in the original.
+  `avalanche` restores his brain (0x111ab0) in both fights: power smash at close range and quake/ranged power at
+  mid range on 4 s deadlines, smash/attack rolls between them, and the health-band flag at 83/66/50/33/16 %.
+  Absent key: nothing written, no agreement entry.
+
 - **Receive-side damage stages and the damage cap: gameplay rule 41** (`[Balance] ReceiveRounding = xml1`,
   `[Balance] DamageCap = xml1`; beta8/parity-a, [docs](docs/balance.md#the-receive-side-and-the-cap-receiverounding-damagecap-gameplay-rule-41)).
   X-Men Legends I's damage receive converts the hit to a whole number after the defense and after the scale

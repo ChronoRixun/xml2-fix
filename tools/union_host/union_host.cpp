@@ -207,6 +207,14 @@ int wmain(int argc, wchar_t** argv)
 	std::size_t changed = 0;
 	for (const auto& m : before) std::fprintf(tsv, "I\t%s\t%08x\n", m.name.c_str(), unsigned(m.base));
 	std::fprintf(tsv, "I\tdinput.dll\t%08x\n", unsigned(reinterpret_cast<std::uintptr_t>(fix)));
+	// ScriptFunctions may relocate the active script table to the heap, outside the image write union. Observe
+	// the three boss entries explicitly so a no-Mold install proves its request hooks are present too.
+	const auto script_table = *reinterpret_cast<const std::uint32_t*>(0x49fe31);
+	const std::pair<const char*,std::uint32_t> script_entries[] = {
+		{"sequence",0x68adb8-0x68a908},{"node",0x68ae58-0x68a908},{"default_target",0x68ae88-0x68a908}};
+	for (const auto& entry : script_entries)
+		std::fprintf(tsv, "S\t%s\t%08x\t%08x\n", entry.first, script_table + entry.second,
+			*reinterpret_cast<const std::uint32_t*>(script_table + entry.second));
 	for (const auto& m : before)
 	{
 		module_copy now{m.name, m.base};

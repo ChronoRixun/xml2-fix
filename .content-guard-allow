@@ -50,7 +50,7 @@ LONG_ID  src/discord_rules.hpp  # Public project Discord application identifiers
 DISASM  test/save_capture_bridge_test.cpp  # Authored inline assembly that enters the emitted capture bridges and records the landing address; not game disassembly.
 DISASM  src/entity_transfer.cpp  # Authored C++ inline assembly bridge (the acknowledgement call sequence, described in prose above it); not a game disassembly listing.
 DISASM  src/mold_beam.cpp  # Authored register-preserving x86 callback bridge; its sole replay is a short byte-guarded stack-address instruction. No game listing or decompiled body.
-DISASM  src/mold_controller.cpp  # Authored register-preserving dispatcher bridge; replays only two short guarded state-selection instructions, with no copied game listing or decompiled body.
+DISASM  src/xml1_bosses.cpp  # Authored register-preserving dispatcher bridge; replays only two short guarded state-selection instructions, with no copied game listing or decompiled body.
 DISASM  test/entity_transfer_test.cpp  # Authored inline assembly that calls a receiver with ESP measured around it; not game disassembly.
 DISASM  src/placement_crush.cpp  # Authored register-preserving touch bridge; replays only the one guarded stack-reserve instruction it displaces. No game listing or decompiled body.
 DISASM  src/script_function_overflow.cpp  # Authored register-preserving bridges for the script function overflow; replays only the lookup's three-register epilogue, described in prose above it. No game listing or decompiled body.
@@ -87,3 +87,9 @@ DISASM  test/npc_bullet_trace_test.hpp  # Authored synthetic stack/register call
 DISASM  test/balance_parity_test.cpp  # Authored naked call thunks build a synthetic caller frame (esi record, stack defense/scale) and execute runs read from the owner's files at run time; no game instruction listing or decompiled body.
 DISASM  src/shared_handler_bridges.hpp  # Authored register/FX-state-preserving bridges and x87 probe arithmetic for XML1 shared-handler choices; no game instruction listing or embedded callback bodies.
 DISASM  test/shared_handlers_test.cpp  # Authored synthetic ABI drivers execute owner-supplied callback slices loaded at runtime; no embedded game code or instruction listing.
+DISASM  src/boss_mystique.cpp  # Authored native-copy observation bridges preserve registers, replay only the seven-byte guarded entry and six-byte virtual call, and resume the engine. No game body or disassembly listing.
+DISASM  test/boss_mystique_bridge_test.cpp  # Authored synthetic entry, virtual-call and continuation fixtures exercise our production bridges' stack and register contract. Contains no game code.
+
+DISASM  src/boss_magneto.cpp  # Authored hurt observation bridge preserves registers and replays its six-byte guarded prologue; no game body or listing.
+DISASM  src/boss_blob.cpp  # Authored metadata observation bridge preserves registers and replays a guarded reader load and literal argument; no game body or listing.
+DISASM  test/boss_wave3_bridge_test.cpp  # Invented callers and continuations test our production observation bridges, stack, registers and FPU; no game instructions copied into the fixture.
