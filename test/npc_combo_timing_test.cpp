@@ -93,14 +93,14 @@ int main() {
     // displaced prologue (pop ebp; pop ebx; add esp,0x14; ret).
     edit(l.power_front + 4, base);
     leave(l.power_front + 0x2a, static_cast<address>(reinterpret_cast<std::uintptr_t>(&clock_owner)));
-    leave(l.power_front + 0xd9, l.base + 772);
+    leave(l.power_front + 0xea, l.base + 772);
     const std::uint8_t undo[] = {0x5d, 0x5b, 0x83, 0xc4, 0x14, 0xc3};
     std::memcpy(bytes.data() + 772, undo, sizeof(undo));
     // The attack front: the same clock stub, a random stub, and a resume that undoes sub esp,0x58; push ebx; push ebp.
     edit(l.attack_front + 4, base);
     leave(l.attack_front + 0x2a, static_cast<address>(reinterpret_cast<std::uintptr_t>(&clock_owner)));
-    leave(l.attack_front + 0xb3, static_cast<address>(reinterpret_cast<std::uintptr_t>(&random_read)));
-    leave(l.attack_front + 0xea, l.base + 780);
+    leave(l.attack_front + 0xc8, static_cast<address>(reinterpret_cast<std::uintptr_t>(&random_read)));
+    leave(l.attack_front + 0xff, l.base + 780);
     const std::uint8_t undo58[] = {0x5d, 0x5b, 0x83, 0xc4, 0x58, 0xc3};
     std::memcpy(bytes.data() + 780, undo58, sizeof(undo58));
     // The unknown-combo fallback's constant lives in our allocation too.
@@ -119,7 +119,7 @@ int main() {
           && l.mark + mark_size <= l.power_front && l.power_front + power_front_size <= l.attack_front && l.attack_front + attack_front_size <= l.base + code_size
           && l.react == l.next + 4 * ai_slots && l.react_power == l.react + 4 * ai_slots && l.react_attack == l.react_power + 4 * ai_slots
           && l.power_last == l.react_attack + 4 * ai_slots && l.attack_last == l.power_last + 4 * ai_slots && l.attack_last + 4 * ai_slots <= l.next + (block_size - code_size)
-          && l.gap() + 4 <= l.combos, "revision 10 spans do not overlap");
+          && l.gap_max() + 4 <= l.combos, "revision 10 spans do not overlap");
     check(l.cont + cont_size <= l.start && l.start + start_size <= l.delays && l.delays + 120 <= l.end_delay && l.end_delay + end_delay_size <= l.base + code_size, "bridge and data spans do not overlap");
     std::memcpy(memory, bytes.data(), bytes.size());
     DWORD old = 0;
@@ -302,7 +302,10 @@ int main() {
         check(timer == 21.1f, "an unordered last call spends nothing");
         power_last[s] = 10.0f; timer = 12.0f; clock_now = 17.0f;
         power_call(b);
-        check(timer == 18.0f, "a long gap spends every re-check due in it");
+        check(timer == 12.0f, "a gap of 2 s or more (an inactive AI, a load) spends nothing");
+        power_last[s] = 10.0f; timer = 10.1f; clock_now = 11.9f;
+        power_call(b);
+        check(timer == 12.1f, "a 1.9 s gap (a power move) spends the re-check due in it");
         power_call(brains.data() + 1);
         // The attack front: with no combo running, a decision that fell due during the reaction is spent and the
         // next attack time re-armed the tail's way (offset + random x random-add) from it; a running combo leaves
@@ -347,6 +350,9 @@ int main() {
         b[0x2c] = 0; attack_last[s] = 30.0f; next_attack = 21.3f; clock_now = 21.4f;
         power_call(b);
         check(next_attack == 21.3f, "a rewound clock spends nothing");
+        attack_last[s] = 10.0f; next_attack = 10.5f; clock_now = 13.0f;
+        power_call(b);
+        check(next_attack == 10.5f, "a gap of 2 s or more spends no decision");
         power_call(brains.data() + 1);
         __asm { fnstsw fa }
         check((fb & 0x3800) == (fa & 0x3800) && !(fa & 0x40), "the power front leaves the x87 stack balanced (no stack fault; the NaN case may set IE as the native fcomp does)");

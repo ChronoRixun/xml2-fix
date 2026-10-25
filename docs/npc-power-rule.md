@@ -135,6 +135,9 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    Xbox the re-check is re-armed inside the attack). Every call records its time per slot; a timer that fell due
    after the previous call, with that call more than 0.15 s ago, is spent the same way (2.0 s / 0.5 s steps, at
    most eight). A timer already due at the previous call is left alone (the Xbox retries that one each frame too).
+   Gaps of 2.0 s or more are not treated as a busy body (an inactive AI, a state the brain does not run in, a
+   load): the first live test spent the HAARP officer's grenade re-check at activation and it shot instead of
+   holding the grenade at full energy.
 13. **0x518fd0 (5 bytes, revision 10).** The attack decision itself: with no combo running, XML1's deadline
    (AI+0x1c) can fall due while the body reacts; the decision is then made and spent (no chain out of pain/block)
    and its tail re-arms the next attack time (now + meleetimeroffset + random x meleetimerrandomadd). XMen2.exe made
