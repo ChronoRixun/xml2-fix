@@ -63,6 +63,7 @@ namespace limits
 
 	// [Limits] IGBCache: requested = a raise was asked for (gameplay-agreement rule 31, IGBCache, registers);
 	// installed = it is in. Values {installed, IGB records, resource names, 0} as installed.
+	void register_resource_agreement(); // named rules for every non-stock resource-loading capacity
 	bool igb_cache_requested();
 	bool igb_cache_installed();
 	std::array<std::uint32_t, 4> igb_cache_values();

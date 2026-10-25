@@ -11,6 +11,7 @@
 #include "world_impact_rules.hpp"
 #include "xml1_capability_rules.hpp"
 #include "script_functions_rules.hpp"
+#include "limits_agreement_rules.hpp"
 #include <cstdio>
 #include <string>
 #include <cstdarg>
@@ -207,6 +208,38 @@ void records(){
   check(std::string(name)=="28 ModelPools (disabled on this PC)","a beta.2 peer with the pools off names rule 28: "+std::string(name));
   x4.compare(x2.bytes(),&d);x4.describe(d.buckets,d.local_only,true,name,sizeof(name));
   check(std::string(name)=="28 ModelPools","x4 against x2 names rule 28: "+std::string(name));
+ }
+ // ResourceNames must participate even when IGBCache is absent or explicitly stock.
+ {
+  using namespace limits_agreement_rules;
+  auto limits_record = [](capacities wanted, capacities effective, bool explicit_stock_igb) {
+   record r;
+   // IGBCache absent and 200 both leave rule 31 absent, just as exports.cpp does.
+   const auto chosen = limits_rules::decide(std::nullopt, std::to_string(wanted[0]),
+    std::nullopt, std::nullopt, std::nullopt,
+    explicit_stock_igb ? std::optional<std::string_view>("200") : std::nullopt);
+   check(chosen.igb_records == 200, "standalone names keep stock IGB cache");
+   register_rules(wanted, effective, [&](auto id, auto rev, auto values, bool verified) { r.add(id, rev, values, verified); });
+   r.finalize(); return r;
+  };
+  record released; released.finalize();
+  for (bool explicit_igb : {false, true}) {
+   const auto off = limits_record(stock, stock, explicit_igb);
+   check(std::ranges::equal(off.bytes(), released.bytes()), "absent/stock limits preserve released bytes");
+   for (std::size_t i = 0; i < stock.size(); ++i) {
+    auto raised = stock; raised[i] = i == 0 ? 2048 : stock[i] + 1;
+    const auto on = limits_record(raised, raised, explicit_igb);
+    check(on.compare(off.bytes()) == result::entries && off.compare(on.bytes()) == result::entries,
+     "non-stock resource capacity refuses stock both ways");
+    check(on.compare(limits_record(raised, raised, explicit_igb).bytes()) == result::match, "equal capacities agree");
+    check(!limits_record(raised, stock, explicit_igb).ready(), "failed requested capacity closes admission");
+    gameplay_capabilities::difference d; char name[160];
+    on.compare(off.bytes(), &d); on.describe(d.buckets, d.local_only, true, name, sizeof(name));
+    check(std::string(name).find(gameplay_capabilities::rule_name(ids[i])) != std::string::npos, "raised peer names capacity");
+    off.compare(on.bytes(), &d); off.describe(d.buckets, d.local_only, true, name, sizeof(name));
+    check(std::string(name).find(gameplay_capabilities::rule_name(ids[i])) != std::string::npos, "stock peer names capacity");
+   }
+  }
  }
  // Rule 29, [Online] TickRate: {rate in effect, 0, 0, 0} whenever the key is there, revision 1. A 60 and a 30 PC refuse
  // by name both ways; a PC without the key (the game's 30, no entry) and a 60 PC too; absent keeps the released bytes.
