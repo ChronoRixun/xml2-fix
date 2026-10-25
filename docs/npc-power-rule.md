@@ -137,7 +137,8 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    most eight). A timer already due at the previous call is left alone (the Xbox retries that one each frame too).
    Gaps of 2.0 s or more are not treated as a busy body (an inactive AI, a state the brain does not run in, a
    load): the first live test spent the HAARP officer's grenade re-check at activation and it shot instead of
-   holding the grenade at full energy.
+   holding the grenade at full energy. The power front's gap rule applies only to the melee brain's call (return
+   0x5193e7); the officer weapon brain's call (0x519fe4) keeps the revision 10 reaction rule alone.
 13. **0x518fd0 (5 bytes, revision 10).** The attack decision itself: with no combo running, XML1's deadline
    (AI+0x1c) can fall due while the body reacts; the decision is then made and spent (no chain out of pain/block)
    and its tail re-arms the next attack time (now + meleetimeroffset + random x meleetimerrandomadd). XMen2.exe made

@@ -93,7 +93,15 @@ int main() {
     // displaced prologue (pop ebp; pop ebx; add esp,0x14; ret).
     edit(l.power_front + 4, base);
     leave(l.power_front + 0x2a, static_cast<address>(reinterpret_cast<std::uintptr_t>(&clock_owner)));
-    leave(l.power_front + 0xea, l.base + 772);
+    leave(l.power_front + 0x10c, l.base + 772);
+    // The gap rule is for the melee brain's call only: a stub in the block (mov ecx,[esp+4]; call [entry]; ret)
+    // stands in for 0x5193e4, its return address for 0x5193e7.
+    {
+        const std::uint8_t stub[] = {0x8b, 0x4c, 0x24, 0x04, 0xff, 0x15, 0, 0, 0, 0, 0xc3};
+        std::memcpy(bytes.data() + 788, stub, sizeof(stub));
+        edit(l.base + 788 + 6, static_cast<address>(reinterpret_cast<std::uintptr_t>(&entry)));
+        edit(l.power_front + 0x5e, l.base + 798);
+    }
     const std::uint8_t undo[] = {0x5d, 0x5b, 0x83, 0xc4, 0x14, 0xc3};
     std::memcpy(bytes.data() + 772, undo, sizeof(undo));
     // The attack front: the same clock stub, a random stub, and a resume that undoes sub esp,0x58; push ebx; push ebp.
@@ -284,27 +292,31 @@ int main() {
         // The call gap (revision 10): a re-check that fell due after the previous call, with that call more than
         // power_call_gap ago (the engine skipped the brain while the body was busy), is spent like a reaction's.
         auto* power_last = reinterpret_cast<float*>(l.power_last);
+        const auto melee_call = reinterpret_cast<void (*)(void*)>(l.base + 788);
+        react_power[s] = 0; power_last[s] = 20.0f; timer = 20.1f; clock_now = 20.4f;
+        power_call(b);
+        check(timer == 20.1f && power_last[s] == 20.4f, "another brain's call (the officer weapon brain) is not gap-spent");
         react_power[s] = 0;
         power_last[s] = 20.3f; timer = 20.35f; clock_now = 20.5f;
-        power_call(b);
+        melee_call(b);
         check(timer == 22.35f && power_last[s] == 20.5f, "a re-check due inside a call gap is spent; the call is recorded");
         power_last[s] = 20.5f; timer = 20.4f; clock_now = 21.0f;
-        power_call(b);
+        melee_call(b);
         check(timer == 20.4f, "a re-check already due at the previous call is not spent (the original retried it too)");
         power_last[s] = 21.0f; timer = 21.02f; clock_now = 21.1f;
-        power_call(b);
+        melee_call(b);
         check(timer == 21.02f, "consecutive frames: the decision as before");
         power_last[s] = 30.0f; timer = 21.08f; clock_now = 21.2f;
-        power_call(b);
+        melee_call(b);
         check(timer == 21.08f && power_last[s] == 21.2f, "a rewound clock spends nothing");
         power_last[s] = std::numeric_limits<float>::quiet_NaN(); timer = 21.1f; clock_now = 21.5f;
-        power_call(b);
+        melee_call(b);
         check(timer == 21.1f, "an unordered last call spends nothing");
         power_last[s] = 10.0f; timer = 12.0f; clock_now = 17.0f;
-        power_call(b);
+        melee_call(b);
         check(timer == 12.0f, "a gap of 2 s or more (an inactive AI, a load) spends nothing");
         power_last[s] = 10.0f; timer = 10.1f; clock_now = 11.9f;
-        power_call(b);
+        melee_call(b);
         check(timer == 12.1f, "a 1.9 s gap (a power move) spends the re-check due in it");
         power_call(brains.data() + 1);
         // The attack front: with no combo running, a decision that fell due during the reaction is spent and the
