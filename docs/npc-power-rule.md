@@ -129,22 +129,6 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    controller) once for each re-check that fell due before now (the clock 0x518849 reads: 0x46dce0 vt+0x160), at
    most eight, then runs the decision, which finds the timer in the future. The visibility/energy conditions XML1
    checks before re-arming are not replayed for the spent re-checks.
-   The same front also spends a re-check that the engine skipped while the body was busy in any other way: XML1's
-   0xee260 runs 25-35 times a second in every move (idle, movement, attacks, powers, pain), XMen2.exe's 0x518770
-   18-55 times a second in idle and movement but about 3 in attack moves, 7 in `pain` and under 1 in power moves
-   (one matched session each, callrate.py). A re-check that falls due inside such a gap is made on the Xbox, finds
-   no `powers` chain (an attack chains powers only in its last tenth, a power or a reaction only `idle`) and is
-   re-armed; the port took it on the first free frame, which is why powers stayed ~1.4x after the reaction fronts
-   (measured: on the still bench 19 of 22 port powers came 0.5-7 s after their due time, after an attack; on the
-   Xbox the re-check is re-armed inside the attack). Every call records its time per slot; a timer that fell due
-   after the previous call, with that call more than 0.15 s ago, is spent the same way (2.0 s / 0.5 s steps, at
-   most eight). A timer already due at the previous call is left alone (the Xbox retries that one each frame too).
-   Gaps of 600 s or more are not treated as a busy body (back-to-back attacks on the still bench skip the decision
-   for more than 10 s, so 2 s and 10 s bounds left those powers late) (an inactive AI, a state the brain does not run in, a
-   load): the first live test spent the HAARP officer's grenade re-check at activation and it shot instead of
-   holding the grenade at full energy. The power front's gap rule applies only to the melee brain's call (return
-   0x5193e7); the officer weapon brain's call (0x519fe4) keeps the reaction rule alone. The call-gap part of this item
-   and of item 13 is revision 11 (1.8.0-beta.7); revision 10 (1.8.0-beta.6) had the reaction part only.
 13. **0x518fd0 (5 bytes, revision 10).** The attack decision itself: with no combo running, XML1's deadline
    (AI+0x1c) can fall due while the body reacts; the decision is then made and spent (no chain out of pain/block)
    and its tail re-arms the next attack time (now + meleetimeroffset + random x meleetimerrandomadd). XMen2.exe made
@@ -153,11 +137,13 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    combo is running (a running combo keeps the mark for after its end), clears it and re-arms AI+0x1c from the due
    time by AI+0x288 + random x AI+0x28c (the draw 0x560190(1) the completion code uses) for every decision that fell
    due before now, at most four, then the decision as before. The crowd delay of the tail is not added for these.
-   The same front also spends an attack decision that fell due while the brain was skipped for a busy body with no
-   combo running (a power, a single attack): on the Xbox such a decision is made on time and followed by `idle`
-   (b6-original-moving-01: 9 of 10 decisions taken inside a power; s1-original-melee-03: 22 of 32 inside an attack),
-   on the port it was made when the power ended (median 1.1 s late; c-pc-still-02: 22 of 38 decisions). Rule as
-   for the power front: the brain's previous call more than 0.15 s ago and the time fell due after it.
+   Items 11-13 date from before items 16-18: with the brain now running through reactions they rarely find anything
+   overdue (the decision is made in the frame it comes due), and are kept as they are. The call-gap rules once added
+   to the fronts of items 12-13 (spend a re-check or decision that fell due while the brain was skipped for more than
+   0.15 s) are withdrawn: the busy-body gaps they stood in for are gone, and the gaps that remain are ones XML1 has
+   too - a combo running (both brains return at the continue step before the power decision), a declined
+   attack-state visibility query, another AI state - where XML1 keeps the due timer for its next call instead of
+   spending it.
 14. **0x44f58e (6 bytes, revision 11).** A block is a melee to-hit miss in both games: the melee contact (XML1
    0x5c590, XMen2.exe 0x453160) rolls (0x5c240 / 0x44f450); on a miss (2) the roll zeroes the hit's damage (XML1
    0x5c48b, XMen2.exe 0x44f725) and the contact flags the hit blocked before the victim's hit entry (XML1 0x5c965:
@@ -179,9 +165,7 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    starts mode 0 at 0.0), so it fired only on a draw of exactly 0.0. The chance test's `jp 0x437b94` becomes a `jmp`
    there; the draw stays, so the random sequence is the game's.
 
-(Items 14 and 15 are on the parallel branch beta6/block-bit: the counted melee to-hit miss.)
-
-16. **0x512f0b (2 bytes, revision 10).** XMen2.exe's attack-state update 0x512ed0 starts with an exit XML1's
+16. **0x512f0b (2 bytes, revision 11).** XMen2.exe's attack-state update 0x512ed0 starts with an exit XML1's
    0x10ad70 does not have: `mov eax,[esi+0x10]; test byte [eax+0x764],1; jz 0x512f1a; test byte [eax+0x3d9],0x10;
    jnz 0x51304a` (0x512f01..0x512f14), a return before the visibility query, the brain 0x518fd0 and with it the power
    decision 0x518770. actor+0x764 bit 0 is the move's input lock (cleared and set again at every move entry,
@@ -201,7 +185,7 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    becomes `jmp 0x512f1a`: the exit is never taken. The guard covers 0x512f01..0x512f19. NpcSemiAuto's own bridge
    at 0x512f0d (the same exit, for listed weapon NPCs only) is withdrawn: it requires this rule, which now covers
    every actor.
-17. **0x5187c4 (6 bytes, revision 10).** The melee-range power decision has a lock test of its own before it reads
+17. **0x5187c4 (6 bytes, revision 11).** The melee-range power decision has a lock test of its own before it reads
    its timer: `mov ebp,[esp+0x14]; test byte [ebp+0x764],1; jne 0x518ac9` (return 0). XML1's 0xee260 has none
    (0xee289 the target, 0xee296 / 0xee2a2 the 0xbf730 / +0x3e4 tests, the timer at 0xee2c2). With item 16 alone the
    decision would still refuse every locked frame and the re-check would still wait. The jne becomes a jump to a
@@ -210,7 +194,7 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    keeps the path measured with the six officer cells. The decision then runs XML1's way in a locked move: due
    timer, its visibility query (a deferral leaves it due, as 0xee30e does), the re-arm (+2.0 s / +0.5 s, item 2), the
    energy gate (item 3) and the picker.
-18. **The gate of item 3 (revision 10).** The picker 0x50fe50 also refuses a locked body at its entry
+18. **The gate of item 3 (revision 11).** The picker 0x50fe50 also refuses a locked body at its entry
    (`test byte [eax+0x764],1; jne 0x50ffeb` = return 0, 0x50fe5c). XML1's picker 0x1081f0 has no such test: a locked
    move refuses only through the per-slot chain test (move vt+0x3c, 0x1083a8..0x1083f4; XMen2.exe's vt+0x44 at the
    same place, 0x50ff2c..), so a power whose action the current move chains (an attack's chain window) can be picked.

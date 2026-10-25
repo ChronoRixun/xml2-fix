@@ -194,23 +194,15 @@ int main() {
     // The power front: the clock owner is a stub object whose vt+0x160 returns `clock_now`; the resume undoes the
     // displaced prologue (pop ebp; pop ebx; add esp,0x14; ret).
     edit(l.power_front + 4, base);
-    leave(l.power_front + 0x2a, static_cast<address>(reinterpret_cast<std::uintptr_t>(&clock_owner)));
-    leave(l.power_front + 0x10c, l.base + 772);
-    // The gap rule is for the melee brain's call only: a stub in the block (mov ecx,[esp+4]; call [entry]; ret)
-    // stands in for 0x5193e4, its return address for 0x5193e7.
-    {
-        const std::uint8_t stub[] = {0x8b, 0x4c, 0x24, 0x04, 0xff, 0x15, 0, 0, 0, 0, 0xc3};
-        std::memcpy(bytes.data() + 788, stub, sizeof(stub));
-        edit(l.base + 788 + 6, static_cast<address>(reinterpret_cast<std::uintptr_t>(&entry)));
-        edit(l.power_front + 0x5e, l.base + 798);
-    }
+    leave(l.power_front + 0x3f, static_cast<address>(reinterpret_cast<std::uintptr_t>(&clock_owner)));
+    leave(l.power_front + 0xa2, l.base + 772);
     const std::uint8_t undo[] = {0x5d, 0x5b, 0x83, 0xc4, 0x14, 0xc3};
     std::memcpy(bytes.data() + 772, undo, sizeof(undo));
     // The attack front: the same clock stub, a random stub, and a resume that undoes sub esp,0x58; push ebx; push ebp.
     edit(l.attack_front + 4, base);
-    leave(l.attack_front + 0x2a, static_cast<address>(reinterpret_cast<std::uintptr_t>(&clock_owner)));
-    leave(l.attack_front + 0xc8, static_cast<address>(reinterpret_cast<std::uintptr_t>(&random_read)));
-    leave(l.attack_front + 0xff, l.base + 780);
+    leave(l.attack_front + 0x4c, static_cast<address>(reinterpret_cast<std::uintptr_t>(&clock_owner)));
+    leave(l.attack_front + 0x7e, static_cast<address>(reinterpret_cast<std::uintptr_t>(&random_read)));
+    leave(l.attack_front + 0xb2, l.base + 780);
     const std::uint8_t undo58[] = {0x5d, 0x5b, 0x83, 0xc4, 0x58, 0xc3};
     std::memcpy(bytes.data() + 780, undo58, sizeof(undo58));
     // The unknown-combo fallback's constant lives in our allocation too.
@@ -235,10 +227,9 @@ int main() {
           && power_front_bridge(l).size() == power_front_size && power_entry_jump(l).size() == power_entry_site.patched
           && attack_front_bridge(l).size() == attack_front_size && attack_entry_jump(l).size() == attack_entry_site.patched, "revision 5 bridge lengths");
     check(l.base + 786 <= l.react_cont && l.react_cont + react_cont_size <= l.pre_start && l.pre_start + pre_start_size <= l.mark && l.mark + mark_size <= l.power_front
-          && l.mark + mark_size <= l.power_front && l.power_front + power_front_size <= l.attack_front && l.attack_front + attack_front_size <= l.base + code_size
+          && l.power_front + power_front_size <= l.attack_front && l.attack_front + attack_front_size <= l.base + code_size
           && l.react == l.next + 4 * ai_slots && l.react_power == l.react + 4 * ai_slots && l.react_attack == l.react_power + 4 * ai_slots
-          && l.power_last == l.react_attack + 4 * ai_slots && l.attack_last == l.power_last + 4 * ai_slots && l.attack_last + 4 * ai_slots <= l.next + (block_size - code_size)
-          && l.gap_max() + 4 <= l.combos, "revision 10 spans do not overlap");
+          && l.react_attack + 4 * ai_slots <= l.next + (block_size - code_size), "revision 5 spans do not overlap");
     check(l.cont + cont_size <= l.start && l.start + start_size <= l.delays && l.delays + 120 <= l.end_delay && l.end_delay + end_delay_size <= l.base + code_size, "bridge and data spans do not overlap");
     // Revision 10, XML1's block rule: the roll bridge's three exits go to stubs after it (mov ecx,route; ret).
     check(hit_roll_bridge(l).size() == hit_roll_size && hit_roll_jump(l).size() == hit_roll_site.patched && block_chance_skip().size() == block_chance_site.patched
@@ -429,38 +420,6 @@ int main() {
         react_power[s] = 1; timer = -1000.0f; clock_now = 20.3f;
         power_call(b);
         check(timer == -984.0f, "at most eight re-checks are spent per call");
-        // The call gap (revision 10): a re-check that fell due after the previous call, with that call more than
-        // power_call_gap ago (the engine skipped the brain while the body was busy), is spent like a reaction's.
-        auto* power_last = reinterpret_cast<float*>(l.power_last);
-        const auto melee_call = reinterpret_cast<void (*)(void*)>(l.base + 788);
-        react_power[s] = 0; power_last[s] = 20.0f; timer = 20.1f; clock_now = 20.4f;
-        power_call(b);
-        check(timer == 20.1f && power_last[s] == 20.4f, "another brain's call (the officer weapon brain) is not gap-spent");
-        react_power[s] = 0;
-        power_last[s] = 20.3f; timer = 20.35f; clock_now = 20.5f;
-        melee_call(b);
-        check(timer == 22.35f && power_last[s] == 20.5f, "a re-check due inside a call gap is spent; the call is recorded");
-        power_last[s] = 20.5f; timer = 20.4f; clock_now = 21.0f;
-        melee_call(b);
-        check(timer == 20.4f, "a re-check already due at the previous call is not spent (the original retried it too)");
-        power_last[s] = 21.0f; timer = 21.02f; clock_now = 21.1f;
-        melee_call(b);
-        check(timer == 21.02f, "consecutive frames: the decision as before");
-        power_last[s] = 30.0f; timer = 21.08f; clock_now = 21.2f;
-        melee_call(b);
-        check(timer == 21.08f && power_last[s] == 21.2f, "a rewound clock spends nothing");
-        power_last[s] = std::numeric_limits<float>::quiet_NaN(); timer = 21.1f; clock_now = 21.5f;
-        melee_call(b);
-        check(timer == 21.1f, "an unordered last call spends nothing");
-        power_last[s] = 10.0f; timer = 12.0f; clock_now = 700.0f;
-        melee_call(b);
-        check(timer == 12.0f, "a gap of 600 s or more (a load, a clock jump) spends nothing");
-        power_last[s] = 10.0f; timer = 12.0f; clock_now = 17.0f;
-        melee_call(b);
-        check(timer == 18.0f, "a 7 s gap (back-to-back attacks) spends every re-check due in it");
-        power_last[s] = 10.0f; timer = 10.1f; clock_now = 11.9f;
-        melee_call(b);
-        check(timer == 12.1f, "a 1.9 s gap (a power move) spends the re-check due in it");
         power_call(brains.data() + 1);
         // The attack front: with no combo running, a decision that fell due during the reaction is spent and the
         // next attack time re-armed the tail's way (offset + random x random-add) from it; a running combo leaves
@@ -486,28 +445,6 @@ int main() {
         react_attack[s] = 1; next_attack = std::numeric_limits<float>::quiet_NaN();
         power_call(b);
         check(std::isnan(next_attack), "an unordered attack time is left alone");
-        // The call gap (revision 10): a decision that fell due after the brain's previous call, with that call more than
-        // power_call_gap ago (skipped while the body was busy), is spent like a reaction's; a running combo waits.
-        auto* attack_last = reinterpret_cast<float*>(l.attack_last);
-        react_attack[s] = 0; b[0x2c] = 0;
-        attack_last[s] = 20.3f; next_attack = 20.4f; clock_now = 20.6f;
-        power_call(b);
-        check(std::fabs(next_attack - 21.6f) < 1e-5f && attack_last[s] == 20.6f, "a decision due inside a call gap is spent and re-armed; the call is recorded");
-        attack_last[s] = 20.6f; next_attack = 20.5f; clock_now = 21.0f;
-        power_call(b);
-        check(next_attack == 20.5f, "a decision already due at the previous call is not spent");
-        attack_last[s] = 21.0f; next_attack = 21.02f; clock_now = 21.1f;
-        power_call(b);
-        check(next_attack == 21.02f, "consecutive frames: the decision as before");
-        b[0x2c] = 1; attack_last[s] = 20.0f; next_attack = 20.4f; clock_now = 21.2f;
-        power_call(b);
-        check(next_attack == 20.4f && attack_last[s] == 21.2f, "a running combo: no gap spending (its continue step owns the timing)");
-        b[0x2c] = 0; attack_last[s] = 30.0f; next_attack = 21.3f; clock_now = 21.4f;
-        power_call(b);
-        check(next_attack == 21.3f, "a rewound clock spends nothing");
-        attack_last[s] = 10.0f; next_attack = 10.5f; clock_now = 700.0f;
-        power_call(b);
-        check(next_attack == 10.5f, "a gap of 600 s or more spends no decision");
         power_call(brains.data() + 1);
         __asm { fnstsw fa }
         check((fb & 0x3800) == (fa & 0x3800) && !(fa & 0x40), "the power front leaves the x87 stack balanced (no stack fault; the NaN case may set IE as the native fcomp does)");
