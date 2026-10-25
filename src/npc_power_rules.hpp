@@ -389,7 +389,7 @@ namespace npc_power_rules
 	//     melee-range decision's gate (0x518920) enters the picker after the test; other callers keep it.
 	inline constexpr site picker_entry_site{0x50fe50, "81ecac000000568bf18b4610f68064070000010f8582010000", 0, "the picker's input-lock test (0x50fe50)"};
 	constexpr address picker_unlocked_va = 0x50fe69;
-	// 15. (revision 12, item 19 in docs/npc-power-rule.md) Item 18 for every caller: the picker's own jne at 0x50fe63
+	// 15. (revision 14, item 19 in docs/npc-power-rule.md) Item 18 for every caller: the picker's own jne at 0x50fe63
 	//     becomes `jmp 0x50fe69` (eb 04 + four nops). The picker's other seven callers - fight-state self buff
 	//     0x5133f3 (XML1 0x10b062), shared ranged/party-target helper 0x518e23 (0xee94a), Sentinel ranged probe
 	//     0x51abc3 (0xf08cd), FlyNoNav 0x51b18a (0xf0e93), HitAndRun / ShadesNoWing 0x51b4f3 (0xf11fc), Sentinel
@@ -397,11 +397,11 @@ namespace npc_power_rules
 	//     game, which has no lock test; none of their own bodies tests bit 0 instead. The per-slot chain test stays.
 	constexpr address picker_lock_jne_va = 0x50fe63;
 	inline std::vector<std::uint8_t> picker_lock_bytes() { return {0xeb, 0x04, 0x90, 0x90, 0x90, 0x90}; }
-	// 16. (revision 12, item 20) Item 17 for every caller: the power decision's jne at 0x5187c4 becomes `jmp 0x5187ca`
+	// 16. (revision 14, item 20) Item 17 for every caller: the power decision's jne at 0x5187c4 becomes `jmp 0x5187ca`
 	//     (eb 04 + four nops) in place of revision 11's bridge, so the officer weapon brain's call (0x519fe4 -> vt+0xc,
 	//     XML1 0xef5d2 -> 0xee260) and any other caller decide in a locked move as XML1's 0xee260 does.
 	inline std::vector<std::uint8_t> power_lock_bytes() { return {0xeb, 0x04, 0x90, 0x90, 0x90, 0x90}; }
-	// 17. (revision 12, item 21) Class selection by name (the AI init 0x511d.., `cmp [esi+0x14],0xc` at 0x511f99:
+	// 17. (revision 14, item 21) Class selection by name (the AI init 0x511d.., `cmp [esi+0x14],0xc` at 0x511f99:
 	//     category "auto"; XML1 0xfd330 / 0x109f02, 0xb). Both games walk 26 thirty-byte name fragments with strstr
 	//     on the stats name (XMen2.exe 0x694d20 / 0x511fe0..0x512011; XML1 a stack copy, 0x109f11..0x109f3c) and take
 	//     the category of the first that matches from a stack array. Two differ: fragment 17, XML1 "dvanced" (category
@@ -420,7 +420,7 @@ namespace npc_power_rules
 	constexpr address class_name_va = 0x694f1e, class_juggernaut_va = 0x511fb8;
 	inline std::vector<std::uint8_t> class_name_bytes() { return {'d', 'v', 'a', 'n', 'c', 'e', 'd', 0, 0, 0, 0}; }
 	inline std::vector<std::uint8_t> class_juggernaut_bytes() { return {0x89, 0x7c, 0x24, 0x68}; } // mov [esp+0x68],edi
-	// 18. (revision 12, item 22) The pain decision's Danger Room gate (0x435850: 0x435b09..0x435b4b, between the
+	// 18. (revision 14, item 22) The pain decision's Danger Room gate (0x435850: 0x435b09..0x435b4b, between the
 	//     checks of XML1's 0x44579 and 0x44595): when the game mode byte 0x782728 is 0xfd (0x4c87c0; set at 0x4d1aac on
 	//     the Danger Room menu paths) and the victim's previous pain (+0x5f4) is positive and under 2.0 s old, the hit's
 	//     reaction bit (+0xac bit 3) is cleared - repeated reactions are suppressed in the Danger Room only. XML1 has no

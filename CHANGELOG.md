@@ -23,7 +23,7 @@
   precision). Absent/`xml2` is byte-identical and adds no agreement entry. `scripts/prove_balance_install.py` now
   proves every `[Balance]` key (StrengthBonus / MindBonus / MightBonus / Rounding included) installs at run time.
 
-- **Enemy AI fidelity, part 3: gameplay rule 16 revision 12** (`[Game] NpcPowerRule = xml1`; beta8/parity-a,
+- **Enemy AI fidelity, part 3: gameplay rule 16 revision 14** (`[Game] NpcPowerRule = xml1`; beta8/parity-a,
   [docs](docs/npc-power-rule.md)). (19) The power picker's lock test goes for all seven other callers too (self buff,
   ranged/party-target helper, Sentinel probe and attack, FlyNoNav, HitAndRun/ShadesNoWing, flying creatures):
   0x50fe63 jne -> jmp. (20) The power decision's lock test goes for every caller, the officer weapon brain included

@@ -134,7 +134,7 @@ read back. The ten `[Balance]` sites are written, the strength (`0x453b6e`), min
 might/rounding (`0x453bc7`) calls land inside `dinput.dll`, and the log names 0.1 / 0.1 / 0.05 / xml1; `Rounding=xml1`
 alone writes the same four calls and nothing else of `[Balance]`; `[Balance]` absent writes none; the two parity keys
 add exactly their four sites and one agreement rule; and against an older build's DLL the same ini writes the same
-addresses (rule 16's revision 12 sites apart).
+addresses (rule 16's revision 14 (items 19-22) sites apart).
 
 ## Saves
 

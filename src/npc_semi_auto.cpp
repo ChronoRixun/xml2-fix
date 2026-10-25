@@ -3,6 +3,7 @@
 #include "det_math.hpp"
 #include "npc_power.hpp"
 #include "npc_power_rules.hpp"
+#include "mold_query.hpp"
 #include "game_version.hpp"
 #include "ini.hpp"
 #include "log.hpp"

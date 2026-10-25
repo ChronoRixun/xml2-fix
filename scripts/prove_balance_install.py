@@ -1,6 +1,6 @@
 """[Balance] at run time: the stat multiplier, might and rounding keys (and every other [Balance] key) actually install
 when DllMain runs, in the synthetic retail-image host (tools/union_host; no game is launched), and the parity keys of
-rule 41 (ReceiveRounding / DamageCap) and rule 16 revision 12 write exactly their own sites.
+rule 41 (ReceiveRounding / DamageCap) and rule 16 revision 14 (items 19-22) write exactly their own sites.
 
 Each case writes an xml2-fix.ini next to the DLL, runs union_host.exe (DllMain against the retail image laid out at
 0x400000) and reads back every byte the DLL changed in XMen2.exe. Checked:
@@ -12,7 +12,7 @@ Each case writes an xml2-fix.ini next to the DLL, runs union_host.exe (DllMain a
   - ReceiveRounding=xml1 / DamageCap=xml1: their four sites (0x437a54, 0x437a75, 0x453bfd, 0x453c0c), one more
     agreement rule, nothing else changes;
   - with XML2_FIX_OFFWIRE_REF set to an older build's folder (dinput.dll), the same inis without the new keys write
-    the same XMen2.exe addresses in both builds except rule 16's revision-12 sites (when NpcPowerRule=xml1 is set).
+    the same XMen2.exe addresses in both builds except rule 16's revision-14 (items 19-22) sites (when NpcPowerRule=xml1 is set).
 
 Environment: XML2_FIX_UNION (tools/union_host/prepare_union.py output), XML2_FIX_TEST_EXE (retail XMen2.exe, read
 only), XML2_FIX_UNION_HOST (default native-map/union/Release/union_host.exe), XML2_FIX_INI (the candidate's
