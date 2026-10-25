@@ -98,9 +98,9 @@ int main() {
     std::memcpy(bytes.data() + 772, undo, sizeof(undo));
     // The attack front: the same clock stub, a random stub, and a resume that undoes sub esp,0x58; push ebx; push ebp.
     edit(l.attack_front + 4, base);
-    leave(l.attack_front + 0x4c, static_cast<address>(reinterpret_cast<std::uintptr_t>(&clock_owner)));
-    leave(l.attack_front + 0x7e, static_cast<address>(reinterpret_cast<std::uintptr_t>(&random_read)));
-    leave(l.attack_front + 0xb2, l.base + 780);
+    leave(l.attack_front + 0x2a, static_cast<address>(reinterpret_cast<std::uintptr_t>(&clock_owner)));
+    leave(l.attack_front + 0xb3, static_cast<address>(reinterpret_cast<std::uintptr_t>(&random_read)));
+    leave(l.attack_front + 0xea, l.base + 780);
     const std::uint8_t undo58[] = {0x5d, 0x5b, 0x83, 0xc4, 0x58, 0xc3};
     std::memcpy(bytes.data() + 780, undo58, sizeof(undo58));
     // The unknown-combo fallback's constant lives in our allocation too.
@@ -115,10 +115,10 @@ int main() {
     check(react_cont_bridge(l).size() == react_cont_size && pre_start_bridge(l).size() == pre_start_size && mark_bridge(l).size() == mark_size && mark_jump(l).size() == reaction_site.patched
           && power_front_bridge(l).size() == power_front_size && power_entry_jump(l).size() == power_entry_site.patched
           && attack_front_bridge(l).size() == attack_front_size && attack_entry_jump(l).size() == attack_entry_site.patched, "revision 5 bridge lengths");
-    check(l.base + 786 <= l.react_cont && l.react_cont + react_cont_size <= l.pre_start && l.pre_start + pre_start_size <= l.mark && l.mark + mark_size <= l.attack_front
-          && l.attack_front + attack_front_size <= l.power_front && l.power_front + power_front_size <= l.base + code_size
+    check(l.base + 786 <= l.react_cont && l.react_cont + react_cont_size <= l.pre_start && l.pre_start + pre_start_size <= l.mark && l.mark + mark_size <= l.power_front
+          && l.mark + mark_size <= l.power_front && l.power_front + power_front_size <= l.attack_front && l.attack_front + attack_front_size <= l.base + code_size
           && l.react == l.next + 4 * ai_slots && l.react_power == l.react + 4 * ai_slots && l.react_attack == l.react_power + 4 * ai_slots
-          && l.power_last == l.react_attack + 4 * ai_slots && l.power_last + 4 * ai_slots <= l.next + (block_size - code_size)
+          && l.power_last == l.react_attack + 4 * ai_slots && l.attack_last == l.power_last + 4 * ai_slots && l.attack_last + 4 * ai_slots <= l.next + (block_size - code_size)
           && l.gap() + 4 <= l.combos, "revision 10 spans do not overlap");
     check(l.cont + cont_size <= l.start && l.start + start_size <= l.delays && l.delays + 120 <= l.end_delay && l.end_delay + end_delay_size <= l.base + code_size, "bridge and data spans do not overlap");
     std::memcpy(memory, bytes.data(), bytes.size());
@@ -328,6 +328,25 @@ int main() {
         react_attack[s] = 1; next_attack = std::numeric_limits<float>::quiet_NaN();
         power_call(b);
         check(std::isnan(next_attack), "an unordered attack time is left alone");
+        // The call gap (revision 10): a decision that fell due after the brain's previous call, with that call more than
+        // power_call_gap ago (skipped while the body was busy), is spent like a reaction's; a running combo waits.
+        auto* attack_last = reinterpret_cast<float*>(l.attack_last);
+        react_attack[s] = 0; b[0x2c] = 0;
+        attack_last[s] = 20.3f; next_attack = 20.4f; clock_now = 20.6f;
+        power_call(b);
+        check(std::fabs(next_attack - 21.6f) < 1e-5f && attack_last[s] == 20.6f, "a decision due inside a call gap is spent and re-armed; the call is recorded");
+        attack_last[s] = 20.6f; next_attack = 20.5f; clock_now = 21.0f;
+        power_call(b);
+        check(next_attack == 20.5f, "a decision already due at the previous call is not spent");
+        attack_last[s] = 21.0f; next_attack = 21.02f; clock_now = 21.1f;
+        power_call(b);
+        check(next_attack == 21.02f, "consecutive frames: the decision as before");
+        b[0x2c] = 1; attack_last[s] = 20.0f; next_attack = 20.4f; clock_now = 21.2f;
+        power_call(b);
+        check(next_attack == 20.4f && attack_last[s] == 21.2f, "a running combo: no gap spending (its continue step owns the timing)");
+        b[0x2c] = 0; attack_last[s] = 30.0f; next_attack = 21.3f; clock_now = 21.4f;
+        power_call(b);
+        check(next_attack == 21.3f, "a rewound clock spends nothing");
         power_call(brains.data() + 1);
         __asm { fnstsw fa }
         check((fb & 0x3800) == (fa & 0x3800) && !(fa & 0x40), "the power front leaves the x87 stack balanced (no stack fault; the NaN case may set IE as the native fcomp does)");

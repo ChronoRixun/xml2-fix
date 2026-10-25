@@ -365,11 +365,12 @@ namespace npc_power_rules
 		address react_power = 0, power_front = 0;                     // revision 10: the power decision's marks and front
 		address react_attack = 0, attack_front = 0;                   // revision 10: the attack decision's marks and front
 		address power_last = 0;                                       // revision 10: the power decision's last call time per slot
+		address attack_last = 0;                                      // revision 10: the melee decision's last call time per slot
 	};
 	// The block: one page of code and constants (made execute-read), then one page of data (read-write): the next
 	// press time of each of the 32 brains.
 	constexpr std::size_t charge_size = 57, recheck_size = 23, gate_size = 47, cont_size = 149, start_size = 71, end_delay_size = 32;
-	constexpr std::size_t react_cont_size = 125, pre_start_size = 43, mark_size = 85, power_front_size = 221, attack_front_size = 182;
+	constexpr std::size_t react_cont_size = 125, pre_start_size = 43, mark_size = 85, power_front_size = 221, attack_front_size = 238;
 	constexpr std::size_t code_size = 4096, block_size = 8192;
 	inline layout layout_at(const address base)
 	{
@@ -387,8 +388,9 @@ namespace npc_power_rules
 		l.react_power = l.react + 4 * ai_slots;
 		l.power_front = base + 1440; // after the attack front (it outgrew 1072..1247)
 		l.react_attack = l.react_power + 4 * ai_slots;
-		l.attack_front = base + 1248;
+		l.attack_front = base + 1680; // after the power front (it outgrew 1248..1429)
 		l.power_last = l.react_attack + 4 * ai_slots;
+		l.attack_last = l.power_last + 4 * ai_slots;
 		return l;
 	}
 	inline std::vector<std::uint8_t> constants()
@@ -788,75 +790,104 @@ namespace npc_power_rules
 		put32(code, 0xd9, power_entry_resume_va - (l.power_front + 0xdd));
 		return code;
 	}
-	// Jumped to from 0x518fd0 (ecx = the brain; eax/edx scratch at the thiscall entry): with no combo running, a
-	// reaction-marked slot spends every attack decision that fell due before now (at most four): next attack time +
-	// meleetimeroffset + random x meleetimerrandomadd, as the decision's tail re-arms it; then the decision as before.
+	// Jumped to from 0x518fd0 (ecx = the brain; eax/edx scratch at the thiscall entry), with no combo running. XML1's
+	// melee brain runs every frame, so an attack decision (AI+0x1c) that falls due during a reaction, a power or an
+	// attack is made and spent (the press finds no chain; measured on the Xbox: a decision taken in a power or a
+	// reaction is followed by idle) and the tail re-arms it. XMen2.exe made it on the first free frame (median 1.1 s
+	// late after a power). A slot spends every decision that fell due before now (at most four; next attack time +
+	// meleetimeroffset + random x meleetimerrandomadd, as the tail re-arms it) when it carries a reaction mark, or
+	// when its next attack time fell due after this brain's previous call and that call is more than power_call_gap
+	// ago; then the decision as before. Every call records its time (attack_last); a running combo keeps the mark.
 	inline std::vector<std::uint8_t> attack_front_bridge(const layout& l)
 	{
 		std::vector<std::uint8_t> code{
-			0x51,                                     // 00 push ecx (the brain)
-			0x8b, 0xc1,                               // 01 mov eax,ecx
-			0x2d, 0, 0, 0, 0,                         // 03 sub eax,brain0
-			0x0f, 0x82, 0, 0, 0, 0,                   // 08 jb out (0xab)
-			0x33, 0xd2,                               // 0e xor edx,edx
-			0xb9, 0x1c, 0x06, 0x00, 0x00,             // 10 mov ecx,0x61c
-			0xf7, 0xf1,                               // 15 div ecx
-			0x85, 0xd2,                               // 17 test edx,edx
-			0x0f, 0x85, 0, 0, 0, 0,                   // 19 jnz out
-			0x83, 0xf8, 0x20,                         // 1f cmp eax,32
-			0x0f, 0x83, 0, 0, 0, 0,                   // 22 jae out
-			0x8d, 0x14, 0x85, 0, 0, 0, 0,             // 28 lea edx,[eax*4+react_attack]
-			0x83, 0x3a, 0x00,                         // 2f cmp dword [edx],0
-			0x0f, 0x84, 0, 0, 0, 0,                   // 32 je out
-			0x8b, 0x0c, 0x24,                         // 38 mov ecx,[esp] (the brain)
-			0x80, 0x79, 0x2c, 0x00,                   // 3b cmp byte [ecx+0x2c],0 (a combo running: its own front;
-			0x0f, 0x85, 0, 0, 0, 0,                   // 3f jnz out                 the mark waits for its end)
-			0xc7, 0x02, 0x00, 0x00, 0x00, 0x00,       // 45 mov dword [edx],0
-			0xe8, 0, 0, 0, 0,                         // 4b call 0x46dce0
-			0x8b, 0x10,                               // 50 mov edx,[eax]
-			0x8b, 0xc8,                               // 52 mov ecx,eax
-			0xff, 0x92, 0x60, 0x01, 0x00, 0x00,       // 54 call [edx+0x160]: ST0 = now
-			0x8b, 0x0c, 0x24,                         // 5a mov ecx,[esp]
-			0x8b, 0x49, 0x04,                         // 5d mov ecx,[ecx+4] (the AI)
-			0x6a, 0x04,                               // 60 push 4 (at most four spent decisions)
-			0x8b, 0x4c, 0x24, 0x04,                   // 62 again: mov ecx,[esp+4] (the brain)
-			0x8b, 0x49, 0x04,                         // 66 mov ecx,[ecx+4]
-			0x90,                                     // 69
-			0xd9, 0x41, 0x1c,                         // 6a fld dword [ecx+0x1c] (next attack time)
-			0xd8, 0xd9,                               // 6d fcomp st(1): against now
-			0xdf, 0xe0,                               // 6f fnstsw ax
-			0xf6, 0xc4, 0x45,                         // 71 test ah,0x45
-			0x74, 0x30,                               // 74 jz done (0xa6): still to come
-			0xf6, 0xc4, 0x04,                         // 76 test ah,4
-			0x75, 0x2b,                               // 79 jnz done: unordered
-			0x6a, 0x01,                               // 7b push 1
-			0xe8, 0, 0, 0, 0,                         // 7d call 0x560190: ST0 = random
-			0x83, 0xc4, 0x04,                         // 82 add esp,4
-			0x8b, 0x4c, 0x24, 0x04,                   // 85 mov ecx,[esp+4]
-			0x8b, 0x49, 0x04,                         // 89 mov ecx,[ecx+4]
-			0x90,                                     // 8c
-			0xd8, 0x89, 0x8c, 0x02, 0x00, 0x00,       // 8d fmul dword [ecx+0x28c] (meleetimerrandomadd)
-			0xd8, 0x81, 0x88, 0x02, 0x00, 0x00,       // 93 fadd dword [ecx+0x288] (meleetimeroffset)
-			0xd8, 0x41, 0x1c,                         // 99 fadd dword [ecx+0x1c]
-			0xd9, 0x59, 0x1c,                         // 9c fstp dword [ecx+0x1c]: the spent decision's re-arm
-			0xff, 0x0c, 0x24,                         // 9f dec dword [esp]
-			0x75, 0xbe,                               // a2 jnz again (0x62)
-			0x90, 0x90,                               // a4
-			0xdd, 0xd8,                               // a6 done: fstp st(0) (now)
-			0x83, 0xc4, 0x04,                         // a8 add esp,4 (the count)
-			0x59,                                     // ab out: pop ecx
-			0x83, 0xec, 0x58, 0x53, 0x55,             // ac sub esp,0x58; push ebx; push ebp (displaced)
-			0xe9, 0, 0, 0, 0,                         // b1 jmp 0x518fd5
+			0x51,                                        // 00 push ecx (the brain)
+			0x8b, 0xc1,                                  // 01 mov eax,ecx
+			0x2d, 0, 0, 0, 0,                            // 03 sub eax,brain0
+			0x0f, 0x82, 0, 0, 0, 0,                      // 08 jb out
+			0x33, 0xd2,                                  // 0e xor edx,edx
+			0xb9, 0x1c, 0x06, 0x00, 0x00,                // 10 mov ecx,0x61c
+			0xf7, 0xf1,                                  // 15 div ecx
+			0x85, 0xd2,                                  // 17 test edx,edx
+			0x0f, 0x85, 0, 0, 0, 0,                      // 19 jnz out
+			0x83, 0xf8, 0x20,                            // 1f cmp eax,32
+			0x0f, 0x83, 0, 0, 0, 0,                      // 22 jae out
+			0x50,                                        // 28 push eax (the slot)
+			0xe8, 0, 0, 0, 0,                            // 29 call 0x46dce0
+			0x8b, 0x10,                                  // 2e mov edx,[eax]
+			0x8b, 0xc8,                                  // 30 mov ecx,eax
+			0xff, 0x92, 0x60, 0x01, 0x00, 0x00,          // 32 call [edx+0x160]: ST0 = now
+			0x58,                                        // 38 pop eax (the slot)
+			0x8d, 0x14, 0x85, 0, 0, 0, 0,                // 39 lea edx,[eax*4+attack_last]
+			0xd9, 0x02,                                  // 40 fld dword [edx]: ST0 = the last call, ST1 = now
+			0xd9, 0xc9,                                  // 42 fxch: ST0 = now, ST1 = last
+			0xd9, 0x12,                                  // 44 fst dword [edx]: this call is the last call
+			0x8b, 0x0c, 0x24,                            // 46 mov ecx,[esp] (the brain)
+			0x80, 0x79, 0x2c, 0x00,                      // 49 cmp byte [ecx+0x2c],0 (a combo running: its own front; a mark waits for its end)
+			0x0f, 0x85, 0, 0, 0, 0,                      // 4d jnz drop
+			0x8d, 0x14, 0x85, 0, 0, 0, 0,                // 53 lea edx,[eax*4+react_attack]
+			0x83, 0x3a, 0x00,                            // 5a cmp dword [edx],0
+			0x74, 0x08,                                  // 5d je gap
+			0xc7, 0x02, 0x00, 0x00, 0x00, 0x00,          // 5f mov dword [edx],0: a reaction mark spends whatever fell due
+			0xeb, 0x2b,                                  // 65 jmp spend
+			0xd9, 0xc0,                                  // 67 fld st(0)
+			0xd8, 0xe2,                                  // 69 fsub st(0),st(2): now - last
+			0xd8, 0x1d, 0, 0, 0, 0,                      // 6b fcomp dword [gap]
+			0xdf, 0xe0,                                  // 71 fnstsw ax
+			0xf6, 0xc4, 0x45,                            // 73 test ah,0x45
+			0x0f, 0x85, 0, 0, 0, 0,                      // 76 jnz drop: called within the gap time (or unordered)
+			0x8b, 0x0c, 0x24,                            // 7c mov ecx,[esp] (the brain)
+			0x8b, 0x49, 0x04,                            // 7f mov ecx,[ecx+4] (the AI)
+			0xd9, 0x41, 0x1c,                            // 82 fld dword [ecx+0x1c] (next attack time)
+			0xd8, 0xda,                                  // 85 fcomp st(2): against the last call
+			0xdf, 0xe0,                                  // 87 fnstsw ax
+			0xf6, 0xc4, 0x45,                            // 89 test ah,0x45
+			0x0f, 0x85, 0, 0, 0, 0,                      // 8c jnz drop: already due at the last call
+			0xd9, 0xc9,                                  // 92 fxch
+			0xdd, 0xd8,                                  // 94 fstp st(0): ST0 = now
+			0x6a, 0x04,                                  // 96 push 4 (at most four spent decisions)
+			0x8b, 0x4c, 0x24, 0x04,                      // 98 again: mov ecx,[esp+4] (the brain)
+			0x8b, 0x49, 0x04,                            // 9c mov ecx,[ecx+4] (the AI)
+			0xd9, 0x41, 0x1c,                            // 9f fld dword [ecx+0x1c] (next attack time)
+			0xd8, 0xd9,                                  // a2 fcomp st(1): against now
+			0xdf, 0xe0,                                  // a4 fnstsw ax
+			0xf6, 0xc4, 0x45,                            // a6 test ah,0x45
+			0x74, 0x2d,                                  // a9 jz done: still to come
+			0xf6, 0xc4, 0x04,                            // ab test ah,4
+			0x75, 0x28,                                  // ae jnz done: unordered
+			0x6a, 0x01,                                  // b0 push 1
+			0xe8, 0, 0, 0, 0,                            // b2 call 0x560190: ST0 = random
+			0x83, 0xc4, 0x04,                            // b7 add esp,4
+			0x8b, 0x4c, 0x24, 0x04,                      // ba mov ecx,[esp+4]
+			0x8b, 0x49, 0x04,                            // be mov ecx,[ecx+4]
+			0xd8, 0x89, 0x8c, 0x02, 0x00, 0x00,          // c1 fmul dword [ecx+0x28c] (meleetimerrandomadd)
+			0xd8, 0x81, 0x88, 0x02, 0x00, 0x00,          // c7 fadd dword [ecx+0x288] (meleetimeroffset)
+			0xd8, 0x41, 0x1c,                            // cd fadd dword [ecx+0x1c]
+			0xd9, 0x59, 0x1c,                            // d0 fstp dword [ecx+0x1c]: the spent decision re-arm
+			0xff, 0x0c, 0x24,                            // d3 dec dword [esp]
+			0x75, 0xc0,                                  // d6 jnz again
+			0xdd, 0xd8,                                  // d8 done: fstp st(0) (now)
+			0x83, 0xc4, 0x04,                            // da add esp,4 (the count)
+			0xeb, 0x04,                                  // dd jmp out
+			0xdd, 0xd8,                                  // df drop: fstp st(0)
+			0xdd, 0xd8,                                  // e1 fstp st(0)
+			0x59,                                        // e3 out: pop ecx
+			0x83, 0xec, 0x58, 0x53, 0x55,                // e4 sub esp,0x58; push ebx; push ebp (displaced)
+			0xe9, 0, 0, 0, 0,                            // e9 jmp 0x518fd5
 		};
 		put32(code, 0x04, brain0_va);
-		for (const std::size_t at : {std::size_t{0x0a}, std::size_t{0x1b}, std::size_t{0x24}, std::size_t{0x34}, std::size_t{0x41}})
-		{
-			put32(code, at, 0xab - static_cast<std::uint32_t>(at + 4));
-		}
-		put32(code, 0x2b, l.react_attack);
-		put32(code, 0x4c, game_clock_owner_va - (l.attack_front + 0x50));
-		put32(code, 0x7e, game_random_va - (l.attack_front + 0x82));
-		put32(code, 0xb2, attack_entry_resume_va - (l.attack_front + 0xb6));
+		put32(code, 0x0a, 0xe3 - static_cast<std::uint32_t>(0x0a + 4));
+		put32(code, 0x1b, 0xe3 - static_cast<std::uint32_t>(0x1b + 4));
+		put32(code, 0x24, 0xe3 - static_cast<std::uint32_t>(0x24 + 4));
+		put32(code, 0x2a, game_clock_owner_va - (l.attack_front + 0x2e));
+		put32(code, 0x3c, l.attack_last);
+		put32(code, 0x4f, 0xdf - static_cast<std::uint32_t>(0x4f + 4));
+		put32(code, 0x56, l.react_attack);
+		put32(code, 0x6d, l.gap());
+		put32(code, 0x78, 0xdf - static_cast<std::uint32_t>(0x78 + 4));
+		put32(code, 0x8e, 0xdf - static_cast<std::uint32_t>(0x8e + 4));
+		put32(code, 0xb3, game_random_va - (l.attack_front + 0xb7));
+		put32(code, 0xea, attack_entry_resume_va - (l.attack_front + 0xee));
 		return code;
 	}
 	inline std::vector<std::uint8_t> attack_entry_jump(const layout& l)

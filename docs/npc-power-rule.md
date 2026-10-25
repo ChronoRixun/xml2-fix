@@ -143,6 +143,11 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    combo is running (a running combo keeps the mark for after its end), clears it and re-arms AI+0x1c from the due
    time by AI+0x288 + random x AI+0x28c (the draw 0x560190(1) the completion code uses) for every decision that fell
    due before now, at most four, then the decision as before. The crowd delay of the tail is not added for these.
+   The same front also spends an attack decision that fell due while the brain was skipped for a busy body with no
+   combo running (a power, a single attack): on the Xbox such a decision is made on time and followed by `idle`
+   (b6-original-moving-01: 9 of 10 decisions taken inside a power; s1-original-melee-03: 22 of 32 inside an attack),
+   on the port it was made when the power ended (median 1.1 s late; c-pc-still-02: 22 of 38 decisions). Rule as
+   for the power front: the brain's previous call more than 0.15 s ago and the time fell due after it.
 
 XML1's second combo table (brain mode 1) has no XMen2.exe brain. The earlier target-loss cancellation branch and
 the PC's press notification remain unchanged. No claim of complete AI equivalence is made.
