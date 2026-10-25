@@ -33,15 +33,17 @@ namespace revival_cost
 			}
 		}
 
-		// Replaces 0x4b8830 (thiscall, the hero in ecx, no stack arguments): the first game's 200 * f * f.
+		// Replaces 0x4b8830 (thiscall, the hero in ecx, no stack arguments): the first game's 200 * G * G,
+		// G = min(5, the roster's highest level / 10 + 1).
 		int __fastcall price(void*, void*)
 		{
-			const int f = static_cast<int>(price_factor(highest_level()));
-			const auto p = static_cast<int>(std::min<std::int64_t>(original_price(f), 0x7fffffff));
+			const int highest = highest_level();
+			const int g = static_cast<int>(price_factor(highest));
+			const auto p = static_cast<int>(std::min<std::int64_t>(original_price(g), 0x7fffffff));
 			if (p != last_logged)
 			{
 				last_logged = p;
-				logger::write("revival cost: 200 * %d^2 = %d (the roster's highest level %d)", f, p, f);
+				logger::write("revival cost: 200 * %d^2 = %d (group %d of the roster's highest level %d)", g, p, g, highest);
 			}
 			return p;
 		}
@@ -83,7 +85,7 @@ namespace revival_cost
 		if (xml1_hook_transaction::apply(memory, writes, &safe))
 		{
 			is_installed = true;
-			logger::write("revival cost: [Game] RevivalCost=xml1 - a fallen hero costs 200 * (the roster's highest level)^2, the first game's price");
+			logger::write("revival cost: [Game] RevivalCost=xml1 - a fallen hero costs 200 * G^2, G = min(5, the roster's highest level / 10 + 1), the first game's price");
 		}
 		else
 		{

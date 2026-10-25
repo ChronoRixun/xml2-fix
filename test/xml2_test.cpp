@@ -6132,7 +6132,36 @@ namespace
 			CHECK(list_option(true, forge | forge_campaign, forge_o, false, true) == listing::greyed);
 			CHECK(list_option(true, healer, dr_o, true, true) == listing::omitted);             // not offered by the point
 			CHECK(list_option(false, 0xf, load_o, true, false) == listing::omitted);
-			CHECK(revival_cost_rules::price_factor(0) == 1 && revival_cost_rules::price_factor(-3) == 1 && revival_cost_rules::price_factor(24) == 24);
+			{
+				// The first game's revival price (default.xbe 0xaf6b0 / 0x54150): 200 * G^2, G = min(5, L / 10 + 1).
+				using namespace revival_cost_rules;
+				CHECK(price_factor(0) == 1 && price_factor(-3) == 1 && price_factor(1) == 1 && price_factor(24) == 3);
+				CHECK(price_factor(9) == 1 && price_factor(10) == 2 && price_factor(19) == 2 && price_factor(20) == 3);
+				CHECK(price_factor(29) == 3 && price_factor(30) == 4 && price_factor(39) == 4 && price_factor(40) == 5);
+				CHECK(price_factor(45) == 5 && price_factor(99) == 5 && price_factor(0x7fffffff) == 5);
+				CHECK(price_for_level(9) == 200 && price_for_level(10) == 800 && price_for_level(19) == 800);
+				CHECK(price_for_level(20) == 1800 && price_for_level(29) == 1800 && price_for_level(30) == 3200);
+				CHECK(price_for_level(39) == 3200 && price_for_level(40) == 5000 && price_for_level(45) == 5000);
+				CHECK(price_for_level(0) == 200 && price_for_level(1) == 200);
+				// Never more than the band price, never XMen2.exe's or 1.8.0-beta.7's 200 * L^2 (80,000 at 20).
+				for (int l = 0; l <= 45; ++l) CHECK(price_for_level(l) <= 5000 && price_for_level(l) >= 200);
+				CHECK(price_for_level(20) != original_price(20));
+				// Mixed rosters: the highest hero who isn't a guest decides, whoever fell; an all-guest or empty roster is 200.
+				constexpr roster_hero mixed[] = {{9, false}, {19, true}, {4, false}};
+				constexpr roster_hero boundary[] = {{9, false}, {10, false}};
+				constexpr roster_hero high_guest[] = {{45, true}, {29, false}, {3, false}, {30, true}};
+				constexpr roster_hero guests_only[] = {{40, true}, {12, true}};
+				constexpr roster_hero top[] = {{45, false}, {1, false}};
+				const std::array<roster_hero, 0> none{};
+				CHECK(highest_counted(mixed) == 9 && price_for_level(highest_counted(mixed)) == 200);
+				CHECK(highest_counted(boundary) == 10 && price_for_level(highest_counted(boundary)) == 800);
+				CHECK(highest_counted(high_guest) == 29 && price_for_level(highest_counted(high_guest)) == 1800);
+				CHECK(highest_counted(guests_only) == 0 && price_for_level(highest_counted(guests_only)) == 200);
+				CHECK(highest_counted(none) == 0 && price_for_level(highest_counted(none)) == 200);
+				CHECK(highest_counted(top) == 45 && price_for_level(highest_counted(top)) == 5000);
+				// The guards: the hook's site, 0x449960's prologue and its loop (guest skip, running maximum), the getter.
+				CHECK(revival_cost_rules::guards.size() == 4 && revival_cost_rules::guards[2].va == roster_loop && roster_level < roster_loop && roster_loop < roster_level + 0x74);
+			}
 			CHECK(0x4a6c7a + 2 + to_save == 0x4a6cf0 && 0x4a6c7a + 2 + to_change_team == 0x4a6ca9);
 			CHECK(!offered(false, 0xf, load_o, true) && !offered(false, 0xf, forge_o, true));
 			CHECK(offered(true, load, load_o, false));                    // Load needs no character
@@ -6143,7 +6172,7 @@ namespace
 			int bits = 0;
 			for (const auto& o : options) { CHECK((bits & o.service) == 0); bits |= o.service; }
 			CHECK(bits == 0xf);
-			CHECK(revival_cost_rules::original_price(1) == 200 && revival_cost_rules::original_price(10) == 20000);
+			CHECK(revival_cost_rules::original_price(1) == 200 && revival_cost_rules::original_price(5) == 5000);
 			CHECK(revival_cost_rules::retail_price(1) == 200 && revival_cost_rules::retail_price(10) == 200 && revival_cost_rules::retail_price(20) == 800);
 			const auto jmp = revival_cost_rules::jump_to(0x10001000);
 			std::uint32_t rel = 0;

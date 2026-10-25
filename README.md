@@ -32,9 +32,10 @@
 | Big mods              | 40 actors per zone, then a crash | up to 127 when a mod asks for it ([details](#bigger-zones)) |
 | Setup                 | — | copy one file |
 
-**Current release: XML2 Fix 1.8.0**, paired with Legends Classic builder 0.4.0 (content 27 / LC36 from
-0.4.0-beta.7, every gunman's weapon brain and one-sided walls; beta 6: content 26 / LC35; beta 5: content 25 / LC34;
-betas 1-4: content 24 / LC33) and Ultimate Legends launcher 0.4.0. Update the launcher first, then Rebuild, then Play.
+**Current release: XML2 Fix 1.8.0** (stable), paired with Legends Classic builder 0.4.0 (content 27 / LC36, the same
+game as 0.4.0-beta.7; 1.8.0 adds the first game's revival price, so it refuses 1.8.0-beta.7 in co-op) and Ultimate
+Legends launcher 0.4.0. Update the launcher first, then update both parts,
+Rebuild, then Play.
 
 Maintainers: [stable and beta release instructions](RELEASING.md).
 
@@ -42,8 +43,8 @@ Online codes, public games, default-on drop-in in the port and solo-story watche
 hero swaps survive level changes, with solo hand-back only through the segment and its end (rule 26 revision 6).
 Slow-player drops are disabled; LAG warnings may remain. Frozen or disconnected guests are removed by agreement
 while survivors continue (rule 25 revision 4). Host drop/freeze ends the joiners' session with "lost connection to
-the host"; no host migration. Includes 1.7.1. Owner 030e acceptance on three real PCs including a hotspot PC is
-still pending; four-player WAN coverage is not certified here.
+the host"; no host migration. Includes 1.7.1. Online was tested on one PC with two instances of the game; play
+between separate PCs and four-player WAN coverage are not certified here.
 See [CHANGELOG.md](CHANGELOG.md), [1.8.0 release notes](packaging/release-notes/v1.8.0.md),
 and the [player guide](https://github.com/ChronoRixun/legends-classic/blob/main/docs/ONLINE.md).
 
@@ -666,7 +667,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `PersonalItemText` | `1` | Personal-item pictures sit behind their descriptions; `0` retains the original image depth. Other menus and explicit menu `depth` values are unchanged ([details](docs/personal-item-text.md)). |
 | `Xtract` | `1` | `0`: an Xtraction Point's menu has no "Xtract" world map choice |
 | `XtractionShop` | `0` | `1`: let a companion builder append the first game's Xtraction services (Load, Danger Room, Healer, Forge) as each point permits through `extractionPointServices` ([details](docs/xtraction-shop.md)) |
-| `RevivalCost` | (none) | `xml1`: a fallen hero costs the first game's 200 x (the roster's highest level)^2 instead of max(200, 2 x level^2) ([details](docs/xtraction-shop.md#revival-price)) |
+| `RevivalCost` | (none) | `xml1`: a fallen hero costs the first game's 200 x G^2, G = min(5, the roster's highest level / 10 + 1) - 200 / 800 / 1,800 / 3,200 / 5,000 Tech Bits - instead of max(200, 2 x level^2); rule 10 revision 3 since 1.8.0 (the 200 x level^2 of 1.5.0 to 1.8.0-beta.7 is refused) ([details](docs/xtraction-shop.md#revival-price)) |
 | `DangerRoomGate` | (none) | a main-menu item name (the port: `button3`): disabled until Phoenix has been in a campaign on this profile, the first game's Danger Room gate ([details](docs/xtraction-shop.md#main-menu-danger-room-gate)) |
 | `XPCurve` | `xml2` | `xml1`: X-Men Legends I's level table (cap 45) and kill XP |
 | `StatHelp` | `1` | the stats screen's Body and Strike help texts state the applied `[Balance]` numbers instead of the engine's retail ones; `0` keeps the game's own texts (details: the `[Balance]` paragraph above and [docs/stat-help.md](docs/stat-help.md)) |

@@ -43,6 +43,11 @@ def capture(tag, dlldir, edit, rules):
     # OFF claim is compared with the key removed (rule count unchanged).
     if cfg.has_option("Game", "NpcPowerRule"):
         cfg.remove_option("Game", "NpcPowerRule")
+    # XML2 Fix 1.8.0 made [Game] RevivalCost=xml1 rule 10 revision 3 on purpose (the first game's group price; the
+    # reference charged 200 * level^2 as revision 2); without the key rule 10 stays registered with the released
+    # revision 2, so the transport's OFF claim is compared with the key removed (rule count unchanged).
+    if cfg.has_option("Game", "RevivalCost"):
+        cfg.remove_option("Game", "RevivalCost")
     edit(cfg)
     with (folder / "xml2-fix.ini").open("w") as handle:
         cfg.write(handle)

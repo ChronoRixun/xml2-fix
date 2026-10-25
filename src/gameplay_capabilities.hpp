@@ -23,8 +23,11 @@ namespace gameplay_capabilities
  // participate only when requested; OFF preserves the released digest.
  constexpr std::uint16_t fast_transfer_revision=1;
  // 10: the first game's Xtraction services and revival price (xtract::capability; issue #63). Revision 2: the online
- // rule greys Load and the campaign-gated options (revision 1, never released, greyed Load only).
- constexpr std::uint16_t xtraction_services_revision=2;
+ // rule greys Load and the campaign-gated options (revision 1, never released, greyed Load only). Revision 3 whenever
+ // [Game] RevivalCost is requested (1.8.0): the first game's group price 200 * G^2, G = min(5, L / 10 + 1); revision 2
+ // with RevivalCost=xml1 (1.5.0 to 1.8.0-beta.7) charged 200 * L^2, so the two refuse each other naming rule 10. Without
+ // the key the entry stays revision 2 (the released record: the Xtraction services alone are unchanged).
+ constexpr std::uint16_t xtraction_services_revision=2, xtraction_services_revival_revision=3;
  // Protocol revision 3: the agreement record is a fixed 108-byte digest (docs/gameplay-agreement.md, "Record and
  // transport"): header, SHA-256 over the canonical sorted rule list (ID, revision, four effective values - the
  // revision-2 entry encoding) and a 64-byte rule summary that only names differing rules in refusal messages. Its size

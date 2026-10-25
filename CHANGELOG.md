@@ -1,6 +1,26 @@
 # Changelog
 
-## 1.8.0 - <date TBD>
+## 1.8.0 - 2026-10-25
+
+The first stable release since 1.7.1, the engine half of Legends Classic 0.4.0 (content 27 / `LC36`, the same
+game as 0.4.0-beta.7; `dinput.dll` is the 1.8.0-beta.7 sources plus the revival price fix below, so it refuses a
+beta 7 PC that charges the old price). In short: online co-op by code and
+public games with drop-in and solo-segment watchers, online at 60 fps, the team-combo and quit crashes fixed with
+four times bigger model pools, the classic HUD and Codex, enemies that fight like the first game (combos, every
+gunman's weapon brain and bullet timer, powers on time, power attacks never blocked), one-sided walls in the first
+game's levels, the "Alison" speaker label and the first game's revival price. The entries below are 1.8.0's own
+fix and then the betas' changes, newest first.
+
+- **The first game's revival price: gameplay rule 10 revision 3** (`[Game] RevivalCost = xml1`; 1.8.0,
+  [docs](docs/xtraction-shop.md#revival-price)). A fallen hero costs 200 x G^2 Tech Bits, G = min(5, L / 10 + 1),
+  L the roster's highest current level without guests: 200 / 800 / 1,800 / 3,200 / 5,000 for 0-9 / 10-19 / 20-29 /
+  30-39 / 40-45, whoever fell. That is X-Men Legends I's price: default.xbe 0xaf6b0 charges 200 x G^2 with the group
+  registry vt+0x58 = 0x54150 makes from vt+0x50 = 0x54c30's highest level. 1.5.0 to 1.8.0-beta.7 charged 200 x L^2
+  (80,000 at level 20 instead of 1,800): their notes took the neighbouring slot vt+0x54 = 0x54cb0 (the acknowledged
+  level) for the group. The 0x4b8830 hook stays; a fourth guard covers 0x449960's roster loop (guest skip, running
+  maximum). With the key set, rule 10 is revision 3 (values unchanged), so a 1.8.0 PC and a beta 7 PC refuse each
+  other naming `10 Xtraction services/RevivalCost` instead of debiting different amounts; without the key the entry
+  stays revision 2 and the OFF record is unchanged.
 
 - **XML1 bullet trace timing** (`[Game] NpcSemiAuto = xml1`, schema 4 rows; 1.8.0-beta.7,
   [weapon brain](docs/npc-semi-auto.md)). Converted XML1 bullets keep their shot presentation (sound, muzzle,

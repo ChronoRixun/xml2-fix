@@ -349,9 +349,12 @@ namespace
 			gameplay_agreement::register_rule(gameplay_capabilities::multipart_id, 1, parts.values, parts.verified);
 		}
 		// The Xtraction menus are built by every peer from its own script run and driven by the activator's input, and
-		// the revival price is debited by every peer: the option lists and the price must be the same everywhere (rule 10).
+		// the revival price is debited by every peer: the option lists and the price must be the same everywhere (rule 10;
+		// revision 3 with RevivalCost requested: the first game's group price, refused by the 200 * level^2 revision 2).
 		if (game_version::needs_gameplay_agreement() || xtract::requested() || revival_cost::requested())
-			gameplay_agreement::register_rule(gameplay_capabilities::xtraction_services_id, gameplay_capabilities::xtraction_services_revision,
+			gameplay_agreement::register_rule(gameplay_capabilities::xtraction_services_id,
+			                                  revival_cost::requested() ? gameplay_capabilities::xtraction_services_revival_revision
+			                                                            : gameplay_capabilities::xtraction_services_revision,
 			                                  xtract::capability(revival_cost::installed()), xtract::verified() && revival_cost::verified());
 		// Conversations written for XML1's engine ([Game] AutoAdvance, ReplyVoices, ReplyCursor; on by default):
 		// three code sites of the conversation system, used from the first conversation on; independent of the

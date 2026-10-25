@@ -141,6 +141,20 @@ void records(){
   stun(true).describe(rev2.buckets,rev2.local_only,true,rev2_name,sizeof(rev2_name));
   check(std::string(rev2_name).find("18 StunRule")!=std::string::npos,std::string("the revision 2 refusal names the rule: ")+rev2_name);
  }
+ {
+  // Rule 10: XML2 Fix 1.5.0 to 1.8.0-beta.7 registered RevivalCost=xml1 as revision 2 and charged 200 * level^2; 1.8.0
+  // charges the first game's 200 * G^2 as revision 3 (same values), so the two refuse each other naming rule 10.
+  // Without the key the entry keeps the released revision 2.
+  auto services=[](std::uint16_t rev,std::array<std::uint32_t,4> v){record r;r.add(gameplay_capabilities::xtraction_services_id,rev,v,true);r.finalize();return r;};
+  const std::array<std::uint32_t,4> lc{1,0x3f,1,1},shop{1,0x3f,1,0};
+  const auto fixed=services(gameplay_capabilities::xtraction_services_revival_revision,lc),old=services(2,lc);
+  gameplay_capabilities::difference d;char name[160];
+  check(gameplay_capabilities::xtraction_services_revision==2 && gameplay_capabilities::xtraction_services_revival_revision==3,"rule 10: released revision 2, revival revision 3");
+  check(fixed.compare(old.bytes(),&d)==result::value && old.compare(fixed.bytes())==result::value,"rule 10 revival revision 3 and the 200 * level^2 revision 2 refuse both directions");
+  fixed.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name).find("10 Xtraction services/RevivalCost")!=std::string::npos,std::string("the revival refusal names rule 10: ")+name);
+  check(services(2,shop).compare(services(gameplay_capabilities::xtraction_services_revision,shop).bytes())==result::match,"rule 10 without RevivalCost keeps the released revision 2");
+ }
  record future;future.add(17,1,{1,0,0,0},true);future.add(18,stun_rule::revision,{1,0,0,0},true);future.finalize();
  check(future.compare(stun(true,true,stun_rule::revision,true).bytes())==result::match,"later rule 17 registration agrees in either order");
  check(stun(true).compare(future.bytes())==result::entries,"missing future rule 17 is refused, not silently ignored");
