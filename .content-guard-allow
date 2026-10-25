@@ -77,3 +77,4 @@ PRIVATE_IP  docs/superpowers/plans/2026-10-17-net-hardening.md  # the rooms prot
 PRIVATE_IP  test/online_room_test.cpp  # invented test vectors in the rooms protocol's virtual address range (see docs/online-rooms.md)
 
 DISASM  test/npc_weapon_bridges_test.hpp  # Authored synthetic callers verify register, FPU and stack preservation of our weapon bridges; no game listing.
+DISASM  test/npc_query_scheduler_test.cpp  # Authored naked call thunk that sets up the caller frame for the executed admission run; the game bytes are read from the owner's files at runtime, no game instruction listing.
