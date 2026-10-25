@@ -920,6 +920,12 @@ namespace limits
 
 	void register_resource_agreement()
 	{
+		// Not the game (XMen2.exe isn't at 0x400000): nothing was raised and nothing can be patched, like every other
+		// module that returns before registering there - a "requested but not installed" entry would make the
+		// agreement demand its network exclusion hook in a process that has none and refuse that process's startup
+		// (found by xml2_test's pipe child at the beta 8 integration).
+		if (!base)
+			return;
 		limits_agreement_rules::register_rules(wanted_caps,
 			{name_cap, actor_cap, item_cap, style_cap, curve_cap, move_trigger_cap},
 			[](auto id, auto revision, auto values, bool verified) {
