@@ -252,7 +252,9 @@ int main() {
         check(sub_bytes(miss_counts_site, 0, 7) == std::vector<std::uint8_t>({0x8a, 0x46, 0x35, 0x24, 0x78, 0x3c, 0x08})
               && sub_bytes(blocked_flag_site, 0, 5) == std::vector<std::uint8_t>({0x83, 0x7c, 0x24, 0x20, 0x02}), "the contact's damagescale and blocked-flag encodings the rule relies on");
     }
-    const address roll_stub = l.hit_roll + 64;
+    // The stubs sit past the item-17 lock bridge (block+2112, 22 bytes), which l.hit_roll + 64 would overwrite.
+    const address roll_stub = l.hit_roll + 128;
+    check(l.power_lock + power_lock_size <= roll_stub && roll_stub + 24 <= l.base + code_size, "block rule test stubs clear of the lock bridge");
     for (int route = 0; route < 3; ++route) {
         const std::size_t at = roll_stub - l.base + 8 * route;
         bytes[at] = 0xb9; put32(bytes, at + 1, route + 1); bytes[at + 5] = 0xc3;
