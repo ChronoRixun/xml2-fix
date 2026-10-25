@@ -7,6 +7,7 @@
 #include "ini.hpp"
 #include "world_backfaces.hpp"
 #include "world_backfaces_rules.hpp"
+#include "world_backfaces_state.hpp"
 #include "xml1_hook_transaction.hpp"
 #include <cmath>
 #include <cstdio>
@@ -40,6 +41,9 @@ namespace
 	{
 		for (std::size_t i = 0; i < world_backfaces_rules::guards.size(); ++i)
 			std::memcpy(at(world_backfaces_rules::guards[i].va), retail[i].data(), retail[i].size());
+		// The helper's entry (0x4a9650, mov eax,[esp+4]; sub esp,0x10), which no guard reads (EntityCapacity may own it).
+		const unsigned char entry[] = {0x8b, 0x44, 0x24, 0x04, 0x83, 0xec, 0x10};
+		std::memcpy(at(0x4a9650), entry, sizeof entry);
 		// The helper's only direct callee, 0x4654d0 (is this handle live?): always yes here.
 		const unsigned char live[] = {0xb0, 0x01, 0xc3};
 		std::memcpy(at(0x4654d0), live, sizeof live);
@@ -202,6 +206,17 @@ int main(int argc, char** argv)
 		world_backfaces::install(GetModuleHandleW(nullptr));
 		check(!world_backfaces::installed() && !world_backfaces::verified() && *at(back_flag_operand) == retail_back_flag, "each guard mismatch prevents the write");
 	}
+
+	// [Limits] EntityCapacity bridges the helper's first 7 bytes (0x4a9650 -> its DLL owner) before this rule installs:
+	// no guard may read them, and the owner takes the flag from world_backfaces_state.
+	for (const auto& g : guards)
+		check(g.va >= 0x4a9657 || g.va + limits_rules::hex_size(g.hex) <= 0x4a9650, "no guard reads the entity-capacity bridge at 0x4a9650");
+	check(world_backfaces_state::trace_back_faces == 1, "refused installs leave the entity-capacity owner's flag at 1");
+	seed(); *at(0x4a9650) = 0xe9;
+	world_backfaces::install(GetModuleHandleW(nullptr));
+	check(world_backfaces::installed() && *at(back_flag_operand) == xml1_back_flag && world_backfaces_state::trace_back_faces == 0,
+	      "with the helper's entry bridged (EntityCapacity) xml1 installs and the DLL owner passes 0");
+	world_backfaces_state::trace_back_faces = 1;
 
 	seed();
 	const std::vector<unsigned char> before(at(0x401000), at(0x801000));

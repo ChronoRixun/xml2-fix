@@ -63,8 +63,10 @@ namespace world_backfaces_rules
 	constexpr std::uint8_t xml1_back_flag = 0x00;
 
 	inline constexpr std::array<guard, 6> guards{{
-		{0x4a9650, "8b44240483ec1085c00f84b40000008d4c2414e868befbff84c00f84a3000000568b74242c8b0e8b01578d54241c526a01ff50308b44242085c0741b8d4c2420e83bbefbff84c0740e8b0e8b018d542420526a01ff50308b0e8b016a016a01ff50408b7c24248b442428d907d8008b0e6a01d95c2410d94704d84004d95c2414d94708d84008d95c24188b11ff92880000008b0e8b018d54241c528d5424105257ff50788b0e8b018d54240852ff50208b088b44242c5f85c989085e0f95c083c410c3",
-		 "the trace helper: exclusions, group filter, end point, back-face flag (0x4a96c0 push 1, 0x4a96dc vt+0x88), sweep vt+0x78, result vt+0x20 (0x4a9650-0x4a9712)"},
+		// From 0x4a9657: [Limits] EntityCapacity (installed earlier, at startup) bridges the helper's first 7 bytes to its
+		// DLL owner, which passes world_backfaces_state::trace_back_faces; the operand below stays the retail helper's.
+		{0x4a9657, "85c00f84b40000008d4c2414e868befbff84c00f84a3000000568b74242c8b0e8b01578d54241c526a01ff50308b44242085c0741b8d4c2420e83bbefbff84c0740e8b0e8b018d542420526a01ff50308b0e8b016a016a01ff50408b7c24248b442428d907d8008b0e6a01d95c2410d94704d84004d95c2414d94708d84008d95c24188b11ff92880000008b0e8b018d54241c528d5424105257ff50788b0e8b018d54240852ff50208b088b44242c5f85c989085e0f95c083c410c3",
+		 "the trace helper after its entry: exclusions, group filter, end point, back-face flag (0x4a96c0 push 1, 0x4a96dc vt+0x88), sweep vt+0x78, result vt+0x20 (0x4a9657-0x4a9712)"},
 		{0x4aa320, "8a442404884131c20400", "collider vt+0x88: the back-face flag byte +0x31 (0x4aa320)"},
 		{0x68d72c, "20a34a00", "the collider vtable's +0x88 slot (0x68d72c -> 0x4aa320)"},
 		{0x68d71c, "50a24a00", "the collider vtable's +0x78 slot, the sweep (0x68d71c -> 0x4aa250)"},

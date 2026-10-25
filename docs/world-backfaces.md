@@ -56,3 +56,12 @@ PC without the key refuse each other naming `30 WorldBackfaces`.
 the retail helper `0x4a9650` against a recording collider before and after the patch (back-face flag 1 -> 0, the
 same calls in the same order, the same sweep), checks the installer's refusals (unknown value, relocated image,
 every guard), its one-byte footprint, the leaf filter's truth table and the rule-30 agreement entries.
+
+## With [Limits] EntityCapacity (Legends Classic builds)
+
+The entity-capacity transaction (installed at startup, before this rule) bridges the helper's first 7 bytes
+(0x4a9650) to its DLL owner `entity_query::QueryApi_004a9650`, so the retail operand at 0x4a96c1 never runs there.
+The owner passes `world_backfaces_state::trace_back_faces` to collider vt+0x88: 1, or 0 once `WorldBackfaces=xml1`
+installed. The first guard therefore starts after the entry (0x4a9657). (Integration fix for 1.8.0-beta.7: as first
+written, the rule would have failed its guard in every Legends Classic build - unverified, host/join closed - and
+changed nothing even if it had installed.)

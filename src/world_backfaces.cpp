@@ -4,6 +4,7 @@
 #include "ini.hpp"
 #include "log.hpp"
 #include "world_backfaces_rules.hpp"
+#include "world_backfaces_state.hpp"
 #include "xml1_hook_memory.hpp"
 #include "xml1_hook_transaction.hpp"
 
@@ -64,6 +65,7 @@ namespace world_backfaces
 		if (xml1_hook_transaction::apply(memory, writes, &safe))
 		{
 			state = 1;
+			world_backfaces_state::trace_back_faces = xml1_back_flag; // the entity-capacity owner of 0x4a9650, when installed
 			logger::write("world back faces: xml1 ([Game] WorldBackfaces=xml1): the movement trace helper (0x4a9650) clears the collider's back-face flag "
 			              "(0x%08lX push 0): actor and entity movement meets only the level's front faces, as in X-Men Legends",
 			              static_cast<unsigned long>(back_flag_operand - 1));
