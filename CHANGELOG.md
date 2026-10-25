@@ -2,6 +2,17 @@
 
 ## 1.9.0 - <date TBD>
 
+- **The first game's revival price: gameplay rule 10 revision 3** (`[Game] RevivalCost = xml1`; 1.9.0-beta.1 and
+  1.8.0, [docs](docs/xtraction-shop.md#revival-price)). A fallen hero costs 200 x G^2 Tech Bits, G = min(5, L / 10 +
+  1), L the roster's highest current level without guests: 200 / 800 / 1,800 / 3,200 / 5,000 for 0-9 / 10-19 /
+  20-29 / 30-39 / 40-45, whoever fell. That is X-Men Legends I's price: default.xbe 0xaf6b0 charges 200 x G^2 with
+  the group registry vt+0x58 = 0x54150 makes from vt+0x50 = 0x54c30's highest level. 1.5.0 to 1.8.0-beta.7 charged
+  200 x L^2 (80,000 at level 20 instead of 1,800): their notes took the neighbouring slot vt+0x54 = 0x54cb0 (the
+  acknowledged level) for the group. The 0x4b8830 hook stays; a fourth guard covers 0x449960's roster loop (guest
+  skip, running maximum). With the key set, rule 10 is revision 3 (values unchanged), so a fixed PC and a beta 7 PC
+  refuse each other naming `10 Xtraction services/RevivalCost`; without the key the entry stays revision 2 and the
+  OFF record is unchanged.
+
 - **XML1 boss brains: gameplay rule 40** (`[Game] Xml1Bosses = dopples,avalanche,pyro,mystique,shadowking,marrow,magneto,blob`;
   1.9.0-beta.1, [docs](docs/xml1-controllers.md#shared-boss-dispatcher)). One module owns the brain-dispatch
   detour (0x5173f3) and the script-table entries Master Mold used; Master Mold is its first client and writes exactly
