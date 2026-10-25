@@ -157,6 +157,26 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    (b6-original-moving-01: 9 of 10 decisions taken inside a power; s1-original-melee-03: 22 of 32 inside an attack),
    on the port it was made when the power ended (median 1.1 s late; c-pc-still-02: 22 of 38 decisions). Rule as
    for the power front: the brain's previous call more than 0.15 s ago and the time fell due after it.
+14. **0x44f58e (6 bytes, revision 10).** A block is a melee to-hit miss in both games: the melee contact (XML1
+   0x5c590, XMen2.exe 0x453160) rolls (0x5c240 / 0x44f450); on a miss (2) the roll zeroes the hit's damage (XML1
+   0x5c48b, XMen2.exe 0x44f725) and the contact flags the hit blocked before the victim's hit entry (XML1 0x5c965:
+   damage info +0x60 bit 1, the hit record's +0x6c, the bit the Xbox measurement saw on all 102 blocks; XMen2.exe
+   0x45355c: +0x68 bit 0, the record's +0x74); the victim's gate zeroes the rest (0x44448 / 0x435850) and the popup
+   takes the block branch (0x44696 / 0x435c30). The always-hit cases (attack types 0 and 4-8, damage info bit 27,
+   defender +0x54c / +0x764 bit 6, a defender with no valid current target), result 3 and the zeroing are the same;
+   `[Balance] HitChance=xml1` gives XML1's chance. The one difference in which hits are rolled: XML1 never rolls an
+   attack flagged `PowerAttack` (0x5c3c0, result 1 without a draw), while XMen2.exe, whose name for that flag is
+   damagescale (`PowerAttacks=xml1` reads the builder's `x1power` as `none`; its contact counts a miss only for
+   `normal`, 0x45333f), only exempts a move with combo text (+0x35 bit 2, set at 0x4dc302 from the move's
+   ComboTextStarter / ComboTextFinisher) - so a power attack was rolled, and a miss lost its damage and was blocked.
+   The bridge keeps the combo-text test and sends an attack whose damagescale isn't `normal` to the roll's own
+   always-hit return (`mov edi,1; jmp 0x44f6bd`, as 0x44f5aa), with no draw, as XML1 returns before its draw.
+15. **0x437b08 (6 bytes, revision 10).** XMen2.exe's damage receive 0x437490 has a second, receive-side block roll
+   XML1's 0x45260 lacks: effect 0x37 (`block_chance`, not a default.xbe string) mode 0 x mode 1, a draw (0x437ae0),
+   and when the draw is at most that the damage is zeroed and text 0xa9 shown (0x437b0e); it sets no flag, so such a
+   hit neither blocks nor pains. With no effect-0x37 affecter (none in the port's data) the chance is 0 (0x550410
+   starts mode 0 at 0.0), so it fired only on a draw of exactly 0.0. The chance test's `jp 0x437b94` becomes a `jmp`
+   there; the draw stays, so the random sequence is the game's.
 
 XML1's second combo table (brain mode 1) has no XMen2.exe brain. The earlier target-loss cancellation branch and
 the PC's press notification remain unchanged. No claim of complete AI equivalence is made.
@@ -179,7 +199,7 @@ Online play is lockstep and the rule changes AI decisions and energy, so it is s
 advertises XML1 visibility geometry and query scheduling; words 2 and 3 are zero unless the separate opt-in
 `[Game] NpcSemiAuto=xml1` with its `[NpcSemiAuto]` rows is present ([npc-semi-auto.md](npc-semi-auto.md)).
 Revision 2 had only the power/combo word, revision 3 lacked the press/completion timers, revision 4 lacked the
-reaction-spent combo steps, power re-checks and attack decisions (items 11-13). Revisions 5-9 were unreleased
+reaction-spent combo steps, power re-checks and attack decisions (items 11-13) and the block rule (items 14-15). Revisions 5-9 were unreleased
 candidates and are not reused: 5 a withdrawn role experiment and the first reaction-spent test build, 6-9 the officer
 weapon candidates (9 = the held-fire brain, now words 2-3 of revision 10). Registered in an LC installation or when
 requested; absent or `xml2` retains **revision 3** with verified `{0,0,0,0}`, matching the released OFF record. Only

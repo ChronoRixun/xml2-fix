@@ -55,6 +55,23 @@ __declspec(naked) void power_call(void*) {
     __asm { call dword ptr [entry] }
     __asm { ret }
 }
+// The to-hit roll's power-attack test (revision 10): esi = the attack, eax/edi as the roll has them; each relocated
+// exit is a stub `mov ecx,route; ret`, so ecx names the continuation and eax/edi come back as it left them.
+int roll_eax = 0, roll_edi = 0;
+__declspec(naked) int roll_call(void*, int) {
+    __asm { push esi }
+    __asm { push edi }
+    __asm { mov esi,[esp+12] }
+    __asm { mov eax,[esp+16] }
+    __asm { mov edi,0x55 }
+    __asm { call dword ptr [entry] }
+    __asm { mov [roll_eax],eax }
+    __asm { mov [roll_edi],edi }
+    __asm { mov eax,ecx }
+    __asm { pop edi }
+    __asm { pop esi }
+    __asm { ret }
+}
 __declspec(naked) float finish(void*, float) {
     __asm { push ebp }
     __asm { mov ebp,[esp+8] }
@@ -129,6 +146,35 @@ int main() {
           && l.power_last == l.react_attack + 4 * ai_slots && l.attack_last == l.power_last + 4 * ai_slots && l.attack_last + 4 * ai_slots <= l.next + (block_size - code_size)
           && l.gap_max() + 4 <= l.combos, "revision 10 spans do not overlap");
     check(l.cont + cont_size <= l.start && l.start + start_size <= l.delays && l.delays + 120 <= l.end_delay && l.end_delay + end_delay_size <= l.base + code_size, "bridge and data spans do not overlap");
+    // Revision 10, XML1's block rule: the roll bridge's three exits go to stubs after it (mov ecx,route; ret).
+    check(hit_roll_bridge(l).size() == hit_roll_size && hit_roll_jump(l).size() == hit_roll_site.patched && block_chance_skip().size() == block_chance_site.patched
+          && l.attack_front + attack_front_size <= l.hit_roll && l.hit_roll + hit_roll_size + 24 <= l.base + code_size, "block rule bridge length and span");
+    {
+        const auto rel = [](const std::vector<std::uint8_t>& c, std::size_t at, address from) {
+            return from + static_cast<address>(at + 4) + (c[at] | c[at + 1] << 8 | c[at + 2] << 16 | static_cast<address>(c[at + 3]) << 24);
+        };
+        const auto bridge = hit_roll_bridge(l);
+        check(rel(bridge, 0x06, l.hit_roll) == hit_roll_combo_va && rel(bridge, 0x15, l.hit_roll) == hit_roll_rolled_va && rel(bridge, 0x1f, l.hit_roll) == hit_roll_result_va,
+              "the roll bridge's exits: combo text 0x44f594, the draw 0x44f5b4, the result 0x44f6bd");
+        check(rel(hit_roll_jump(l), 1, hit_roll_site.va) == l.hit_roll && hit_roll_jump(l)[5] == 0x90, "0x44f58e jumps to the roll bridge");
+        const auto skip = block_chance_skip();
+        check(skip[0] == 0xe9 && rel(skip, 1, block_chance_site.va) == block_chance_skip_va && skip[5] == 0x90
+              && retail_bytes(block_chance_site, 6) == std::vector<std::uint8_t>({0x0f, 0x8a, 0x86, 0x00, 0x00, 0x00})
+              && block_chance_site.va + 6 + 0x86 == block_chance_skip_va, "0x437b08: the chance test's jp to 0x437b94 becomes a jmp there");
+        check(sub_bytes(hit_roll_site, 0, 6) == std::vector<std::uint8_t>({0xf6, 0x46, 0x35, 0x04, 0x74, 0x20}) && hit_roll_site.va + 6 + 0x20 == hit_roll_rolled_va
+              && hit_roll_site.va + 6 == hit_roll_combo_va && sub_bytes(hit_roll_site, 0x1c, 10) == std::vector<std::uint8_t>({0xbf, 0x01, 0x00, 0x00, 0x00, 0xe9, 0x09, 0x01, 0x00, 0x00})
+              && hit_roll_site.va + 0x26 + 0x109 == hit_roll_result_va, "the displaced test and the game's own always-hit exit");
+        check(sub_bytes(miss_counts_site, 0, 7) == std::vector<std::uint8_t>({0x8a, 0x46, 0x35, 0x24, 0x78, 0x3c, 0x08})
+              && sub_bytes(blocked_flag_site, 0, 5) == std::vector<std::uint8_t>({0x83, 0x7c, 0x24, 0x20, 0x02}), "the contact's damagescale and blocked-flag encodings the rule relies on");
+    }
+    const address roll_stub = l.hit_roll + 64;
+    for (int route = 0; route < 3; ++route) {
+        const std::size_t at = roll_stub - l.base + 8 * route;
+        bytes[at] = 0xb9; put32(bytes, at + 1, route + 1); bytes[at + 5] = 0xc3;
+    }
+    leave(l.hit_roll + 0x06, roll_stub);      // 1 = the combo-text path
+    leave(l.hit_roll + 0x15, roll_stub + 8);  // 2 = the draw
+    leave(l.hit_roll + 0x1f, roll_stub + 16); // 3 = the result (a hit without a draw)
     std::memcpy(memory, bytes.data(), bytes.size());
     DWORD old = 0;
     if (!VirtualProtect(memory, code_size, PAGE_EXECUTE_READ, &old) || !FlushInstructionCache(GetCurrentProcess(), memory, code_size)) return 2;
@@ -371,6 +417,31 @@ int main() {
         power_call(brains.data() + 1);
         __asm { fnstsw fa }
         check((fb & 0x3800) == (fa & 0x3800) && !(fa & 0x40), "the power front leaves the x87 stack balanced (no stack fault; the NaN case may set IE as the native fcomp does)");
+    }
+    {
+        // Revision 10, XML1's block rule. The plain rules: XMen2.exe rolls everything but combo text; XML1 never rolls a
+        // PowerAttack (damagescale other than normal here); both flag the hit blocked exactly on result 2.
+        for (int b = 0; b < 256; ++b) {
+            const auto v = static_cast<std::uint8_t>(b);
+            const bool text = (v & 4) != 0, normal = (v & 0x78) == 8;
+            check(roll_route_xml2(v) == (text ? roll_route::combo_text : roll_route::rolled), "XMen2.exe: combo text or the draw");
+            check(roll_route_xml1(v) == (text ? roll_route::combo_text : normal ? roll_route::rolled : roll_route::hit), "XML1: a power attack is a hit without a draw");
+            entry = reinterpret_cast<void*>(l.hit_roll);
+            std::uint8_t attack[0x40] = {};
+            attack[0x35] = v;
+            const int route = roll_call(attack, 0x12345678);
+            const int want = text ? 1 : normal ? 2 : 3;
+            check(route == want && roll_eax == 0x12345678 && roll_edi == (want == 3 ? 1 : 0x55) && attack[0x35] == v,
+                  "the bridge takes XML1's route, keeps eax, sets edi = 1 only for the hit, writes nothing");
+        }
+        check(flagged_blocked(2) && !flagged_blocked(1) && !flagged_blocked(3), "blocked only on a miss");
+        // The receive's block_chance roll: XMen2.exe zeroes a positive hit when the draw is at most the chance (so with
+        // no affecter, chance 0, only a draw of exactly 0); an unordered compare skips. XML1: never.
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        check(block_chance_zeroes_xml2(5.0f, 0.0f, 0.0f) && !block_chance_zeroes_xml2(5.0f, 0.001f, 0.0f) && block_chance_zeroes_xml2(5.0f, 0.2f, 0.25f)
+              && !block_chance_zeroes_xml2(0.0f, 0.0f, 0.5f) && !block_chance_zeroes_xml2(-1.0f, 0.0f, 0.5f) && !block_chance_zeroes_xml2(nan, 0.0f, 0.5f)
+              && !block_chance_zeroes_xml2(5.0f, nan, 0.5f) && !block_chance_zeroes_xml2(5.0f, 0.1f, nan), "XMen2.exe's block_chance test");
+        check(!block_chance_zeroes_xml1(5.0f, 0.0f, 0.0f) && !block_chance_zeroes_xml1(5.0f, 0.2f, 1.0f), "XML1 has no block_chance roll");
     }
     VirtualFree(memory, 0, MEM_RELEASE);
     std::printf("NPC combo timing: %d checks, %d failures\n", checks, failures);

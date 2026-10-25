@@ -55,7 +55,9 @@
 //       is empty for every talent of the port's.
 //   Power attacks (XML1: an attack flagged PowerAttack gets no stat bonus and is never rolled to hit). This game has
 //     the same switch under another name: DamageScale `none` (0) - the stat bonus is for `normal` (1) only
-//     (0x453b54), and a miss counts only for `normal` (0x45333f). Its parser (0x44ec00, table 0x6d6dec: none 0,
+//     (0x453b54), and a miss counts only for `normal` (0x45333f) - though such an attack is still rolled and a miss
+//     still loses its damage (0x44f725) and is blocked (0x45355c) unless NpcPowerRule=xml1 (npc_power_rules.hpp 7)
+//     makes it never rolled. Its parser (0x44ec00, table 0x6d6dec: none 0,
 //     normal 1, difficulty 2, "" 3) reads any other name as `normal`.
 //       PowerAttacks = xml1: the parser's one call (0x4dc10f) goes to a function that reads the name `x1power` as
 //       `none` and hands every other name to the game's. A mod writes DamageScale="x1power" where XML1 had

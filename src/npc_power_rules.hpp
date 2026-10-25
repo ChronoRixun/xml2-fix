@@ -62,6 +62,28 @@
 //      npc_visibility_rules.hpp supplies XML1's geometry and deferred/hit decisions. Both engines exclude
 //      team characters from the collision candidates. A deferred query is not physical obstruction.
 //
+// And two in how a hit becomes a block (revision 10). In both games a block is a melee to-hit miss: the melee
+// contact (XML1 0x5c590, XMen2.exe 0x453160) rolls (0x5c240 / 0x44f450), a miss (2) zeroes the hit's damage and sets
+// its "blocked" flag (XML1 0x5c965: damage info +0x60 bit 1, the hit record's +0x6c; XMen2.exe 0x45355c: +0x68 bit
+// 0, the record's +0x74) before the victim's hit entry, and the victim's popup takes the block branch for a flagged
+// hit (XML1 0x44696, XMen2.exe 0x435c30). The always-hit cases, the chance's inputs ([Balance] HitChance=xml1 gives
+// XML1's formula) and the zeroing are the same. Two things differ:
+//
+//   7. Power attacks. XML1 never rolls an attack flagged PowerAttack (0x5c3c0: damage info +0x60 bit 0, result 1, no
+//      draw). XMen2.exe's name for that flag is damagescale (PowerAttacks=xml1 reads the builder's `x1power` as
+//      `none`; a miss counts only for `normal`, 0x45333f), but its roll has no damagescale test - only the move's
+//      combo text (+0x35 bit 2, 0x44f58e) - so such an attack is rolled, a miss zeroes its damage (0x44f725) and
+//      0x45355c flags it: the victim blocks a power attack that XML1 always lands.
+//      Rule: at 0x44f58e an attack whose damagescale isn't `normal` takes the roll's always-hit return (result 1,
+//      0x44f5aa's `mov edi,1; jmp 0x44f6bd`, no draw), as XML1 returns before its draw.
+//   8. The receive's block_chance roll. XMen2.exe's damage receive 0x437490 multiplies effect 0x37 (`block_chance`)
+//      mode 0 and mode 1 and zeroes the damage when its draw (0x437ae0) is at most that (0x437b08); it sets no flag,
+//      so the hit then neither blocks nor pains. XML1's receive 0x45260 has no such roll (default.xbe has no
+//      `block_chance` string). With no effect-0x37 affecter the chance is 0 (mode 0 starts at 0.0, 0x550410), so it
+//      fires only on a draw of exactly 0.0.
+//      Rule: 0x437b08's `jp` (draw above the chance: skip) becomes a `jmp`; the draw stays, so the random sequence
+//      is the game's.
+//
 // Nothing a save reads changes; the energy fields already exist and are saved as before.
 
 #include "ini_rules.hpp"    // value_text
@@ -167,6 +189,39 @@ namespace npc_power_rules
 	{
 		return forced || max <= 2.0f * energy;
 	}
+
+	// 7. How the melee to-hit roll (0x44f450) goes on from 0x44f58e, by the attack's +0x35 (bit 2: the move has combo
+	//    text; bits 3-6: damagescale, `normal` = 1 = 0x08). `combo_text`: the game's always-hit path (0x44f594),
+	//    `rolled`: the draw as before (0x44f5b4), `hit`: result 1 without a draw (XML1's PowerAttack, 0x5c3c0).
+	enum class roll_route
+	{
+		combo_text,
+		rolled,
+		hit,
+	};
+	constexpr std::uint8_t combo_text_bit = 0x04, damage_scale_bits = 0x78, damage_scale_normal = 0x08;
+	inline roll_route roll_route_xml2(const std::uint8_t attack_35)
+	{
+		return (attack_35 & combo_text_bit) ? roll_route::combo_text : roll_route::rolled;
+	}
+	inline roll_route roll_route_xml1(const std::uint8_t attack_35)
+	{
+		if (attack_35 & combo_text_bit)
+		{
+			return roll_route::combo_text;
+		}
+		return (attack_35 & damage_scale_bits) == damage_scale_normal ? roll_route::rolled : roll_route::hit;
+	}
+	// Both games flag the hit blocked exactly when the roll returned 2 (XML1 0x5c95e, XMen2.exe 0x453555).
+	inline bool flagged_blocked(const int roll_result) { return roll_result == 2; }
+
+	// 8. Does the receive's block_chance roll zero the damage (0x437aee..0x437b08: damage above 0, then the draw at
+	//    most the chance; an unordered compare skips)? XML1: never.
+	inline bool block_chance_zeroes_xml2(const float damage, const float draw, const float chance)
+	{
+		return damage > 0.0f && draw <= chance;
+	}
+	inline bool block_chance_zeroes_xml1(float, float, float) { return false; }
 
 	// ---- The sites -----------------------------------------------------------------------------------------
 
@@ -293,14 +348,36 @@ namespace npc_power_rules
 	constexpr address attack_entry_resume_va = 0x518fd5;
 	constexpr address game_random_va = 0x560190;
 	inline constexpr site attack_random_site{0x5192b8, "6a01e8d16e0400d84c2424", 0, "the combo completion's random draw (0x518fd0)"};
+	// 10. (revision 10) The melee to-hit roll's combo-text test (test byte [esi+0x35],4; jz 0x44f5b4; esi = the
+	//    attack, edi = the defender), the combo-text path after it and its always-hit return (mov edi,1; jmp
+	//    0x44f6bd), all guarded; the result code at 0x44f6bd; the contact's damagescale test of a miss (0x45333f) and
+	//    its blocked flag (0x453555: cmp [esp+0x20],2; jne; or byte [esp+0xa0],1), guarded only: the rule relies on
+	//    their field encoding.
+	inline constexpr site hit_roll_site{0x44f58e, "f646350474208a44241384c0c6442428017409f6876507000002750abf01000000e909010000", 6,
+	                                    "the melee to-hit roll's always-hit test (0x44f450)"};
+	inline constexpr site hit_roll_result_site{0x44f6bd, "8b55008bcdff128b10578bc8ff5224", 0, "the melee to-hit roll's result (0x44f450)"};
+	inline constexpr site miss_counts_site{0x45333f, "8a463524783c087505c644241200", 0, "the melee contact's damagescale test of a miss (0x453160)"};
+	inline constexpr site blocked_flag_site{0x453555, "837c2420027508808c24a000000001", 0, "the melee contact's blocked flag (0x453160)"};
+	constexpr address hit_roll_combo_va = 0x44f594, hit_roll_rolled_va = 0x44f5b4, hit_roll_result_va = 0x44f6bd;
+	// 11. (revision 10) The damage receive's block_chance roll: both effect-0x37 fetches, the draw (0x437ae0), the
+	//    damage test (0x437af9) and the chance test's jp (0x437b08) with the zeroing after it.
+	inline constexpr site block_chance_draw_site{0x437a9d,
+	                                             "6a37d99e9c000000c744243000000000c744243800000000e8568911008b0e6a01578d542430526a37e845891100d944"
+	                                             "2428d84c24206a01680000803f6a00d95c242ce8cb861200d9869c00000083c40cd81d30006800dfe0f6c4410f8593"
+	                                             "000000d85c2420dfe0f6c441",
+	                                             0, "the hit's block_chance draw (0x437490)"};
+	inline constexpr site block_chance_site{0x437b08, "0f8a86000000c7869c00000000000000", 6, "the hit's block_chance test (0x437490)"};
+	constexpr address block_chance_skip_va = 0x437b94;
 
-	inline constexpr std::array<const site*, 33> sites{&charge_site, &recheck_site, &recheck_actor_site, &picker_site, &energy_getter_site,
+	inline constexpr std::array<const site*, 39> sites{&charge_site, &recheck_site, &recheck_actor_site, &picker_site, &energy_getter_site,
 	                                                   &combolevel_site, &combo_exit_site, &combo_exit2_site, &combo_tail_site,
 	                                                   &combo_buttons_site, &combo_lengths_site, &combo_row2_site, &combo_row3_site, &combo_row11_site,
 	                                                   &query_priority_site, &query_budget_site, &visibility_site, &physical_target_site, &query_entry_site,
 	                                                   &combo_continue_site, &combo_press_site, &combo_end_site, &combo_after_site, &combo_end_delay_site,
 	                                                   &ai_pool_site, &ai_stride_site, &ai_count_site, &ai_brain_site, &reaction_site,
-	                                                   &power_entry_site, &game_clock_site, &attack_entry_site, &attack_random_site};
+	                                                   &power_entry_site, &game_clock_site, &attack_entry_site, &attack_random_site,
+	                                                   &hit_roll_site, &hit_roll_result_site, &miss_counts_site, &blocked_flag_site,
+	                                                   &block_chance_draw_site, &block_chance_site};
 
 	inline std::vector<std::uint8_t> retail_bytes(const site& s, const std::size_t count)
 	{
@@ -372,11 +449,13 @@ namespace npc_power_rules
 		address react_attack = 0, attack_front = 0;                   // revision 10: the attack decision's marks and front
 		address power_last = 0;                                       // revision 10: the power decision's last call time per slot
 		address attack_last = 0;                                      // revision 10: the melee decision's last call time per slot
+		address hit_roll = 0;                                         // revision 10: the to-hit roll's power-attack test
 	};
 	// The block: one page of code and constants (made execute-read), then one page of data (read-write): the next
 	// press time of each of the 32 brains.
 	constexpr std::size_t charge_size = 57, recheck_size = 23, gate_size = 47, cont_size = 149, start_size = 71, end_delay_size = 32;
 	constexpr std::size_t react_cont_size = 125, pre_start_size = 43, mark_size = 85, power_front_size = 272, attack_front_size = 259;
+	constexpr std::size_t hit_roll_size = 35;
 	constexpr std::size_t code_size = 4096, block_size = 8192;
 	inline layout layout_at(const address base)
 	{
@@ -397,6 +476,7 @@ namespace npc_power_rules
 		l.attack_front = base + 1728; // after the power front (it outgrew 1248..1429)
 		l.power_last = l.react_attack + 4 * ai_slots;
 		l.attack_last = l.power_last + 4 * ai_slots;
+		l.hit_roll = base + 2048; // after the attack front (1728..1986)
 		return l;
 	}
 	inline std::vector<std::uint8_t> constants()
@@ -940,6 +1020,43 @@ namespace npc_power_rules
 		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16),
 		        static_cast<std::uint8_t>(rel >> 24), 0x90, 0x90};
 	}
+	// 7. Jumped to from 0x44f58e (esi = the attack, edi = the defender). The combo-text test as before; then an attack
+	//    whose damagescale isn't `normal` (XML1's PowerAttack) returns 1 without a draw, as the combo-text path's own
+	//    always-hit exit 0x44f5aa does; a `normal` one goes on to the draw. eax is kept around the damagescale read;
+	//    flags are dead at all three continuations (each starts with its own test or a call).
+	inline std::vector<std::uint8_t> hit_roll_bridge(const layout& l)
+	{
+		std::vector<std::uint8_t> code{
+			0xf6, 0x46, 0x35, 0x04,             // 00 test byte [esi+0x35],4 (displaced: the move's combo text)
+			0x0f, 0x85, 0, 0, 0, 0,             // 04 jnz 0x44f594 (the game's combo-text path)
+			0x50,                               // 0a push eax
+			0x8a, 0x46, 0x35,                   // 0b mov al,[esi+0x35]
+			0x24, 0x78,                         // 0e and al,0x78 (damagescale)
+			0x3c, 0x08,                         // 10 cmp al,8 (normal)
+			0x58,                               // 12 pop eax
+			0x0f, 0x84, 0, 0, 0, 0,             // 13 je 0x44f5b4 (rolled as before)
+			0xbf, 0x01, 0x00, 0x00, 0x00,       // 19 mov edi,1 (a hit)
+			0xe9, 0, 0, 0, 0,                   // 1e jmp 0x44f6bd (the result)
+		};
+		put32(code, 0x06, hit_roll_combo_va - (l.hit_roll + 0x0a));
+		put32(code, 0x15, hit_roll_rolled_va - (l.hit_roll + 0x19));
+		put32(code, 0x1f, hit_roll_result_va - (l.hit_roll + 0x23));
+		return code;
+	}
+	inline std::vector<std::uint8_t> hit_roll_jump(const layout& l)
+	{
+		const address rel = l.hit_roll - (hit_roll_site.va + 5);
+		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16),
+		        static_cast<std::uint8_t>(rel >> 24), 0x90};
+	}
+	// 8. 0x437b08: jp 0x437b94 -> jmp 0x437b94; nop. The draw was already compared and popped (fcomp at 0x437aff), as on
+	//    the game's own skip.
+	inline std::vector<std::uint8_t> block_chance_skip()
+	{
+		const address rel = block_chance_skip_va - (block_chance_site.va + 5);
+		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16),
+		        static_cast<std::uint8_t>(rel >> 24), 0x90};
+	}
 	inline std::vector<std::uint8_t> continue_jump(const layout& l)
 	{
 		const address rel = l.react_cont - (combo_continue_va + 5);
@@ -999,6 +1116,7 @@ namespace npc_power_rules
 		put(l.mark, mark_bridge(l));
 		put(l.power_front, power_front_bridge(l));
 		put(l.attack_front, attack_front_bridge(l));
+		put(l.hit_roll, hit_roll_bridge(l));
 		return bytes;
 	}
 

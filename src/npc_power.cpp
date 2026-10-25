@@ -145,6 +145,10 @@ namespace npc_power
 			{reaction_site.va, retail_bytes(reaction_site, reaction_site.patched), mark_jump(l)},
 			{power_entry_site.va, retail_bytes(power_entry_site, power_entry_site.patched), power_entry_jump(l)},
 			{attack_entry_site.va, retail_bytes(attack_entry_site, attack_entry_site.patched), attack_entry_jump(l)},
+			// Revision 10: a block is a counted to-hit miss, as in XML1 - a power attack is never rolled, and the
+			// receive's block_chance roll never zeroes a hit.
+			{hit_roll_site.va, retail_bytes(hit_roll_site, hit_roll_site.patched), hit_roll_jump(l)},
+			{block_chance_site.va, retail_bytes(block_chance_site, block_chance_site.patched), block_chance_skip()},
 			{visibility_site.va, retail_bytes(visibility_site, visibility_site.patched),
 			 visibility_jump(static_cast<address>(reinterpret_cast<std::uintptr_t>(&visibility_xml1)))},
 		};
@@ -170,6 +174,8 @@ namespace npc_power
 		              "combo presses and completion use XML1 delays (0x51920b, 0x5192cb); a hit reaction spends the steps that come due "
 		              "during it, and a power re-check or attack decision that fell due then is spent, as XML1's brain does "
 		              "(0x435b6e, 0x51920b, 0x518770, 0x518fd0); "
+		              "a power attack (damagescale not normal) is never rolled to hit and the hit's block_chance roll never "
+		              "zeroes it, so only a counted melee miss is blocked, as default.xbe 0x5c240 / 0x5c965 (0x44f58e, 0x437b08); "
 		              "bridges at 0x%08lX",
 		              static_cast<unsigned long>(base));
 	}
