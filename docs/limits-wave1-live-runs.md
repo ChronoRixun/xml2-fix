@@ -46,10 +46,13 @@ on exit (the patched pool destructor runs on the relocated block; a crash points
 
 1. W1 host + W1 joiner: admitted.
 2. W1 host + OFF joiner: refused at admission; the host's notice names `31 IGBCache (not on the other PC)` and
-   `28 ModelPools`; the joiner's names `31 IGBCache (disabled on this PC)`.
+   `28 ModelPools`; the joiner's names `31 IGBCache (disabled on this PC)`. Resource-name changes also name
+   `32 ResourceNames`; other non-stock resource limits have their own rules (33..37).
 3. W1 with `ModelHandles` removed on one PC only: refused naming `28 ModelPools`.
+4. With `IGBCache` absent or `200` on both PCs, `ResourceNames=450` versus `2048`: refused naming
+   `32 ResourceNames` in both directions. Equal capacities: admitted.
 
 ## R5 - OFF proof
 
 The release gates with the OFF ini: `prove_off_wire.py`, `prove_combined_install.py`, `check_release_switches.py`
-must report the released bytes and agreement record (no rule 31 entry, rule 28 values `{1,4096,2048,128}`).
+must report the released bytes and agreement record (no rule 31..37 entries when those limits are absent/stock, rule 28 values `{1,4096,2048,128}`).

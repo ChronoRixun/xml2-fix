@@ -1,4 +1,6 @@
 #include "limits.hpp"
+#include "limits_agreement_rules.hpp"
+#include "gameplay_agreement.hpp"
 #include "limits_rules.hpp"
 #include "move_triggers_rules.hpp"
 #include "move_triggers_runtime.hpp"
@@ -34,6 +36,7 @@ namespace limits
 		int igb_cap = stock_igb_records;
 		bool igb_requested = false; // [Limits] IGBCache asked for a raise (rule 31 registers)
 		bool igb_installed = false;
+		limits_agreement_rules::capacities wanted_caps = limits_agreement_rules::stock;
 		int item_cap = stock_item_enhancements;
 		bool items_readable = false;
 		int style_cap = stock_fight_styles;
@@ -862,6 +865,8 @@ namespace limits
 		                           effect_curves ? std::optional<std::string_view>(*effect_curves) : std::nullopt,
 		                           igb_records ? std::optional<std::string_view>(*igb_records) : std::nullopt);
 		igb_requested = chosen.igb_records > stock_igb_records;
+		wanted_caps = {chosen.resource_names, chosen.actor_slots, chosen.item_enhancements,
+		               chosen.fight_styles, chosen.effect_curves, move_triggers_rules::capacity(move_triggers)};
 		for (const auto& note : chosen.notes)
 		{
 			logger::write("limits: %s", note.c_str());
@@ -911,6 +916,15 @@ namespace limits
 				              names_needed(chosen.actor_slots));
 			}
 		}
+	}
+
+	void register_resource_agreement()
+	{
+		limits_agreement_rules::register_rules(wanted_caps,
+			{name_cap, actor_cap, item_cap, style_cap, curve_cap, move_trigger_cap},
+			[](auto id, auto revision, auto values, bool verified) {
+				gameplay_agreement::register_rule(id, revision, values, verified);
+			});
 	}
 
 	bool igb_cache_requested()

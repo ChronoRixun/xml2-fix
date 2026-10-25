@@ -1964,6 +1964,19 @@ namespace
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
 
+	std::vector<void*> igb_destroyed_records;
+	void __fastcall test_destroy_igb_record(void* self, void*) { igb_destroyed_records.push_back(self); }
+	int igb_name_full_calls = 0;
+	int __fastcall test_igb_names_full(void*, void*) { ++igb_name_full_calls; return 1; }
+	bool run_thiscall_two(const std::uint8_t* function, void* self, int first, int second, int& result)
+	{
+		__try {
+			using fn = int(__fastcall*)(void*, void*, int, int);
+			result = reinterpret_cast<fn>(const_cast<std::uint8_t*>(function))(self, nullptr, first, second);
+			return true;
+		} __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+	}
+
 	// [Limits] IGBCache (one-pass limits wave 1, E1): the IGB info cache's rules, its patch table on its own and,
 	// with a copy of XMen2.exe, against it - the bytes, the writes, and the patched pool code at work on blocks of
 	// the test's own at 1024 records.
@@ -2184,6 +2197,62 @@ namespace
 			CHECK(run_find_next(clone_exec, bits.data(), 3, false) == 4);
 			// The retail findNext stops at 200: the reason it is cloned, not raised in place (its other users keep 200).
 			CHECK(run_find_next(at(clone.va), bits.data(), 4, true) == 200 && run_find_next(at(clone.va), bits.data(), 201, true) == 200);
+			// Execute release/reuse, the real precache entry's capacity failure, and the cache destructor.
+			// Only external services are replaced: no game filesystem, Alchemy or process globals run.
+			test_block cache(big.object_size);
+			auto* cache_pool = cache.data() + 4;
+			const auto target_va = [&](const void* p) {
+				return image_base + static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(p) - reinterpret_cast<std::uintptr_t>(image));
+			};
+			for (const auto& w : igb_writes(big, static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(cache.data())), target_va(clone_exec))) apply_write(image, w);
+			const auto jump_to = [&](DWORD va, const void* target) {
+				at(va)[0] = 0xe9;
+				const DWORD relative = target_va(target) - (va + 5);
+				std::memcpy(at(va) + 1, &relative, 4);
+			};
+			jump_to(0x56dad0, reinterpret_cast<const void*>(&test_destroy_igb_record));
+			jump_to(0x55a6a0, reinterpret_cast<const void*>(&test_igb_names_full));
+			// Name construction is cdecl; lookup is thiscall ret 4 and always misses.
+			at(0x58e970)[0] = 0xc3; at(0x5647f0)[0] = 0xc3;
+			const std::uint8_t miss[]{0x33, 0xc0, 0xc2, 4, 0};
+			std::memcpy(at(0x55ab00), miss, sizeof(miss));
+			const std::uint8_t getter[]{0x33, 0xc0, 0xc3};
+			std::memcpy(at(0x55af80), getter, sizeof(getter));
+			// Redirect the security-cookie load into the mapped image; the compiler check is external.
+			const DWORD cookie = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(at(0x6f38f8)));
+			std::memcpy(at(0x56ed1b) + 1, &cookie, 4);
+			at(0x672161)[0] = 0xc3;
+			FlushInstructionCache(GetCurrentProcess(), image, image_size);
+			CHECK(run_thiscall(at(0x56e9c0), cache_pool, result));
+			bool filled = true;
+			for (DWORD i = 0; i < 1024; ++i)
+				filled &= run_thiscall(at(0x56f7e0), cache_pool, result) && result == cache_pool + i * igb_record_size;
+			CHECK(filled && cache.dword(4 + big.live) == 1024 && cache.slack_untouched());
+			igb_destroyed_records.clear();
+			// Cache release masks the generation-bearing id, destroys the record, pushes its index,
+			// clears both live bits and advances the generation. Use the last slot, beyond retail 200.
+			CHECK(run_thiscall_two(at(0x56f850), cache.data(), 0x7ff, 0, ignored));
+			CHECK(igb_destroyed_records == std::vector<void*>{cache_pool + 1023 * igb_record_size});
+			CHECK(cache.dword(4 + big.live) == 1023 && cache.dword(4 + big.ring_count) == 1 &&
+			      cache.dword(4 + big.ids + 1023 * 4) == 0xbff &&
+			      cache.dword(4 + big.bitmap_a + 31 * 4) == 0x7fffffff &&
+			      cache.dword(4 + big.bitmap_b + 31 * 4) == 0x7fffffff && cache.slack_untouched());
+			igb_name_full_calls = 0;
+			CHECK(run_thiscall_two(at(0x56ed00), cache.data(), 0, 1, ignored) && ignored == 0 && igb_name_full_calls == 1);
+			CHECK(run_thiscall(at(0x56f7e0), cache_pool, result) && result == cache_pool + 1023 * igb_record_size);
+			CHECK(cache.dword(4 + big.live) == 1024 && cache.dword(4 + big.ring_count) == 0 &&
+			      cache.dword(4 + big.ids + 1023 * 4) == 0xbff);
+			const auto full_cache = cache.bytes;
+			igb_name_full_calls = 0;
+			CHECK(run_thiscall_two(at(0x56ed00), cache.data(), 0, 1, ignored) && ignored == 0 && igb_name_full_calls == 0);
+			CHECK(cache.bytes == full_cache); // capacity failure has no cache side effects
+			igb_destroyed_records.clear();
+			CHECK(run_thiscall(at(0x56f980), cache.data(), result));
+			bool destroyed_all = igb_destroyed_records.size() == 1024;
+			for (DWORD i = 0; i < igb_destroyed_records.size(); ++i)
+				destroyed_all &= igb_destroyed_records[i] == cache_pool + i * igb_record_size;
+			CHECK(destroyed_all && cache.dword(0) == 0x69befc && cache.slack_untouched());
+			// Native destruction is exit-only: its seven-word clear is not a reusable reset.
 			VirtualFree(clone_exec, 0, MEM_RELEASE);
 		}
 		VirtualFree(image, 0, MEM_RELEASE);
@@ -4595,7 +4664,7 @@ namespace
 		CHECK(pipe.name == "xml2-join" && pipe.error.empty());
 		CHECK(choose_pipe("; commented out").name == "xml2-fix-input" && choose_pipe("; commented out").error.empty());
 		CHECK(choose_pipe(std::string(64, 'a')).name == std::string(64, 'a'));
-		for (const char* bad : {"has space", "back\\slash", "sl/ash", "dot.name", "colon:", "star*", "quote\"", "tést"})
+		for (const char* bad : {"has space", "back\\slash", "sl/ash", "dot.name", "colon:", "star*", "quote\"", "tÃ©st"})
 		{
 			pipe = choose_pipe(bad);
 			if (pipe.name != "xml2-fix-input" || pipe.error.empty())

@@ -52,8 +52,11 @@ own cache and logs one line. At 1024 records an id keeps 21 positive generation 
 A full cache refuses a zone's map IGB and every model past it, so peers with different caches can simulate
 different games: a raise is **gameplay-agreement rule 31 (IGBCache)**, revision 1, values
 `{installed ? 1 : 0, IGB records, resource names, 0}` as installed (`{1,1024,2048,0}` for the Legends Classic
-wave-1 ini). It registers only when a raise is requested: absent, `200` or an invalid value adds no entry, so the
-record is the released one. A requested raise that did not install registers unverified, which closes host/join. A
+wave-1 ini). Rule 31 registers only when an IGB raise is requested. Independent named rules 32..37 also cover
+`ResourceNames`, `ActorSlots`, `ItemEnhancements`, `FightStyles`, `EffectCurves` and `MoveTriggers` respectively.
+Each has revision 1 and values `{effective capacity,0,0,0}` and registers only for a requested or effective
+non-stock capacity. Thus `ResourceNames=450` versus `2048` refuses by name even with `IGBCache` absent or `200`.
+Absent/stock limits add no entries, preserving the released record byte for byte. A requested raise that did not install registers unverified, which closes host/join. A
 raised PC and a PC without the key refuse each other at admission naming `31 IGBCache` (`(not on the other PC)` /
 `(disabled on this PC)`); older DLLs say "a rule this PC does not have".
 
@@ -70,8 +73,37 @@ address-space line of E12: `LAA on/off (XMen2.exe header); highest user address 
   writes reproduce the retail image byte for byte, the 1024-record writes change only the listed operands, and the
   patched code runs on blocks of the test's own: the constructor builds 1024 free records, `takeFreeIndex` (through
   the patched ring pop) and `allocAt` hand out all 1024, `alloc` hands out 1024 on a second pool, `bumpGeneration`
-  steps by `1 << 10`, the clone scans the 1024-bit bitmap past record 200 while the retail findNext stops at 200.
-- `python scripts/check_igb_cache_text.py XMen2.exe`: the whole `.text` - every reference to the object is a row,
-  every pool field operand in the cache code is a row, no data pointer into the object or at a pool method, the class
+  steps by `1 << 10`, cache release (`0x56f850`) frees slot 1023 and advances its generation, reuse returns
+  that slot, and the real precache entry (`0x56ed00`) returns NULL at 1024 without changing the block. At 1023 it
+  reaches the independent name-full check, proving the capacity branch boundary. The cache destructor
+  (`0x56f980`, through `0x56e840`) visits all 1024 records exactly once. External string/name services and
+  record cleanup are test stand-ins; allocation, release, capacity branching and destruction iteration remain
+  native. Guard bytes past the relocated object remain intact. The clone scans the 1024-bit bitmap past record 200 while the retail findNext stops at 200.
+- `python scripts/check_igb_cache_text.py XMen2.exe --self-test`: the whole `.text` - every reference to the object is a row,
+  every 32-bit cache/name-table field operand anywhere in `.text` is a row or an exact-byte allowlist entry, no data pointer into the object or at a pool method, the class
   vtable stored only by the cache, the pool methods called only from the cache, `findNext`'s outside callers exactly
   the two that keep it.
+
+
+### Whole-text allowlist and negative control
+
+`scripts/igb_cache_text_allowlist.tsv` pins each accepted collision by instruction address, operand offset,
+complete retail instruction bytes and reason. There are no range exemptions and no automatic baseline
+acceptance. The field-value inventory in the checker is independent of the patch tables, so deleting a row
+cannot erase the search value. Both cache and name-table rows are checked; stack displacements are included.
+All moved field offsets require disp32. Fixed record-internal disp8 fields do not move; the existing explicit
+unrolled-bitmap-store checks remain in place. Bitmap word-count patch immediates are imm32.
+
+The large constants overlap other independently sized pools: `0x7080` is the effect-curve bitmap,
+`0x73c0/0x73c4` belong to the actor-cache layout, and `0x1c20` also occurs in a separate 100-node pool
+(`100 * 0x48`). Small constants (`200`, `199`, `15`, ring-relative offsets) also occur in unrelated
+arithmetic, call arguments, stack frames and object fields. Each such instruction is pinned separately;
+changing it or introducing another use fails. The original shared 200-bit scanner stays stock because the
+IGB cache calls its clone. Five exact references to `0x7ac244` remain valid: the name table's singleton
+pointer storage is stable while its allocation relocates. Missing or changed allowlist entries also fail.
+
+`--self-test` changes only an in-memory image at `0x560e90` to
+`call 0x56f9f0; mov eax,[eax+0x73ec]; ret` and requires the whole-text field scan specifically to reject
+`0x560e95`. The retail EXE is never written. This is a decoded-instruction completeness gate, not a proof
+against dynamically computed offsets or alternate instruction entry points; live save/co-op acceptance
+still requires the documented game runs.

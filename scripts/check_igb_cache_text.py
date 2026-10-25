@@ -5,7 +5,9 @@ Decodes the whole .text of a retail XMen2.exe with capstone and checks, independ
   1. every instruction anywhere in .text with an immediate or displacement inside the moved object
      (CIGBInfoCache2, 0x7b7fb0..0x7bf6c8) is a reference row (the getter's three, the atexit thunk's);
   2. no aligned dword of .rdata or the initialised .data points into the object;
-  3. inside the cache's own code (0x56e840..0x56fa34 and ring<200>::pop 0x491180..0x4911ac) every 32-bit
+  3. across the WHOLE .text, every cache/name field or singleton-base operand must be a patch row
+     or an exact-byte entry in igb_cache_text_allowlist.tsv (no address-range exemptions). Additionally,
+     inside the cache's own code (0x56e840..0x56fa34 and ring<200>::pop 0x491180..0x4911ac) every 32-bit
      immediate or displacement holding one of the pool's retail field values (200, 199, the ten field offsets,
      the ring-relative 0x328 / 0x32c) is a site row, and every 8-bit one that touches a bitmap is a known,
      accepted one (the constructor's unrolled clears run on the DLL's zero-filled block; the pool destructor's
@@ -18,7 +20,7 @@ Decodes the whole .text of a retail XMen2.exe with capstone and checks, independ
 The native test (xml2_test --igb-cache-rules) then proves the writes change exactly the listed operands and runs the
 patched pool code at 1024 records.
 
-usage: python scripts/check_igb_cache_text.py XMen2.exe     (needs capstone and pefile)
+usage: python scripts/check_igb_cache_text.py XMen2.exe --self-test     (needs capstone and pefile)
 """
 import re
 import struct
@@ -49,19 +51,46 @@ ACCEPTED_IMM8 = {0x56e8d6, 0x56e8d9, 0x56e8dc, 0x56e8df, 0x56e8e2, 0x56e8e5,   #
                  0x56e99b, 0x56e99e, 0x56e9a1, 0x56e9a4, 0x56e9a7, 0x56e9aa}   # constructor: bitmap B (zero-filled block)
 
 
+# Independent retail layout inventory, NOT derived from the patch rows: removing a
+# row must not remove the value being searched for. The common 0xf is the name
+# bitmap's imm32 word count; fixed record-internal disp8 fields do not relocate.
+NAME_POINTER = 0x7ac244  # stable singleton pointer, not the dynamically allocated table
+ALL_FIELDS = FIELDS | RING_FIELDS | {
+    0x1c2, 0x1c1, 0xf, 0xb064, 0x8ca4, 0x93b0, 0x93b4, 0x93b8,
+    0x93bc, 0x93f8, 0x70c, 0x710, 0x714, 0x9404, 0x9408, 0x940c,
+    0x9414, 0x941, 0xb028, 0x1c20,
+}
+
+
+def load_allowlist():
+    # Address + operand offset + WHOLE instruction bytes. No range or value-only
+    # exemptions: even a changed instruction at an accepted address must fail.
+    result = {}
+    path = ROOT / 'scripts' / 'igb_cache_text_allowlist.tsv'
+    for line in path.read_text().splitlines():
+        if not line or line.startswith('#'):
+            continue
+        va, offset, code, reason = line.split('\t', 3)
+        key = (int(va, 16), int(offset))
+        if key in result or not reason.strip():
+            raise ValueError(f'invalid allowlist entry: {line}')
+        result[key] = bytes.fromhex(code)
+    return result
+
+
 def in_code(va):
     return any(a <= va < b for a, b in CODE)
 
 
 def table(name):
-    m = re.search(r'inline constexpr std::array<actor_site, \d+> ' + name + r'\{\{(.*?)\}\};', RULES, re.S)
+    m = re.search(r'inline constexpr std::array<(?:actor_site|name_site), \d+> ' + name + r'\{\{(.*?)\}\};', RULES, re.S)
     return [(int(v, 16), h, int(o), int(s)) for v, h, o, s in re.findall(r'\{(0x[0-9a-f]+), "([0-9a-f]+)", (\d+), (\d+),', m.group(1))]
 
 
-def main(exe):
-    pe = pefile.PE(exe, fast_load=True)
+def scan(pe, img=None, verbose=True):
     base = pe.OPTIONAL_HEADER.ImageBase
-    img = pe.get_memory_mapped_image()
+    if img is None:
+        img = pe.get_memory_mapped_image()
     text = next(s for s in pe.sections if s.Name.startswith(b'.text'))
     lo, hi = base + text.VirtualAddress, base + text.VirtualAddress + text.Misc_VirtualSize
     md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
@@ -69,6 +98,10 @@ def main(exe):
     md.skipdata = True
     sites = table('igb_sites')
     refs = table('igb_references')
+    names = table('name_sites')
+    all_ops = {(va, o): bytes.fromhex(h) for va, h, o, _ in sites + names}
+    allowed = load_allowlist()
+    allowed_seen = set()
     site_ops = {(va, o) for va, _, o, _ in sites}
     ref_ops = {(va, o) for va, _, o, _ in refs}
     failures = []
@@ -85,10 +118,19 @@ def main(exe):
                 v, off, size = op.imm & 0xffffffff, ins.imm_offset, ins.imm_size
             elif op.type == x86.X86_OP_MEM:
                 v, off, size = op.mem.disp & 0xffffffff, ins.disp_offset, ins.disp_size
-                if op.mem.base == x86.X86_REG_ESP:
-                    continue
             else:
                 continue
+            # All moved offsets are disp32; capacities and bitmap word counts in the
+            # patch tables are imm32. Do not exempt stack operands or code regions.
+            if size == 4 and (v in ALL_FIELDS or v == NAME_POINTER):
+                key = (ins.address, off)
+                expected = all_ops.get(key)
+                if expected is not None and bytes(ins.bytes) == expected:
+                    pass
+                elif key in allowed and bytes(ins.bytes) == allowed[key]:
+                    allowed_seen.add(key)
+                else:
+                    failures.append(f'uncovered whole-text field/base {ins.address:08x} {ins.mnemonic} {ins.op_str} (value {v:#x})')
             if OBJ[0] <= v < OBJ[1]:
                 obj_refs += 1
                 if (ins.address, off) not in ref_ops:
@@ -140,17 +182,41 @@ def main(exe):
         failures.append(f'the cache calls findNext at {[hex(c) for c in inside]}, the table re-aims {[hex(c) for c in clone_rows]}')
     if calls.get(0x491180, []) != [0x56f6b9]:
         failures.append(f'ring<200>::pop callers {[hex(c) for c in calls.get(0x491180, [])]} (expected only 0x56f6b9)')
-    print(f'{n} instructions over {hi - lo} bytes; {obj_refs} references to the object, {field_ops} field operands in the cache code '
-          f'({len(sites)} site rows), {len(imm8_seen)} unrolled bitmap stores, {vt_refs} vtable stores, {words} aligned data dwords; '
-          f'findNext callers inside {len(inside)} outside {len(outside)}; {len(failures)} failures')
+    if allowed_seen != set(allowed):
+        failures.append(f'allowlist entries absent or changed: {sorted(set(allowed) - allowed_seen)}')
     if imm8_seen != ACCEPTED_IMM8:
         failures.append(f'unrolled bitmap stores {sorted(hex(a) for a in imm8_seen ^ ACCEPTED_IMM8)} differ from the accepted set')
     if len(site_ops) != len(sites) or field_ops != len(sites):
         failures.append(f'{field_ops} field operands found, {len(sites)} rows')
-    for f in failures:
-        print('FAIL', f)
-    return 1 if failures else 0
+    if verbose:
+        print(f'{n} instructions over {hi - lo} bytes; {obj_refs} references to the object, {field_ops} field operands in the cache code '
+          f'({len(sites)} site rows), {len(imm8_seen)} unrolled bitmap stores, {vt_refs} vtable stores, {words} aligned data dwords; '
+          f'{len(names)} name rows, {len(allowed_seen)} exact allowlist operands; '
+          f'findNext callers inside {len(inside)} outside {len(outside)}; {len(failures)} failures')
+    if verbose:
+        for f in failures:
+            print('FAIL', f)
+    return failures
+
+
+def main(exe, self_test=False):
+    pe = pefile.PE(exe, fast_load=True)
+    failures = scan(pe)
+    if self_test:
+        # Independent review's missed reader: caller is outside every cache code range.
+        # Never write the executable, even a temporary copy, and require THIS diagnostic.
+        img = bytearray(pe.get_memory_mapped_image())
+        va = 0x560e90
+        reader = b'\xe8' + struct.pack('<i', 0x56f9f0 - (va + 5)) + bytes.fromhex('8b80ec730000c3')
+        offset = va - pe.OPTIONAL_HEADER.ImageBase
+        img[offset:offset + len(reader)] = reader
+        negative = scan(pe, img, verbose=False)
+        caught = any('uncovered whole-text field/base 00560e95' in f for f in negative)
+        print('synthetic external live-count reader:', 'rejected (PASS)' if caught else 'MISSED (FAIL)')
+        if not caught:
+            failures.append('negative control was not caught by the whole-text field scan')
+    return bool(failures)
 
 
 if __name__ == '__main__':
-    sys.exit(main(sys.argv[1]))
+    sys.exit(main(sys.argv[1], '--self-test' in sys.argv[2:]))
