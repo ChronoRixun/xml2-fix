@@ -76,9 +76,11 @@ def setter(fast=False, transport=None):
 def jip(cfg):
     cfg["Online"]["FastTransfer"]="1"; cfg["Online"]["Transport"]="gns"; cfg["Online"]["JoinInProgress"]="1"
 mine = R / "native-map/bin/Release"
-capture("gns-jip", mine, jip, 26)
+# 32 rules since XML2 Fix 1.9.0-beta.1: run023's six non-stock [Limits] (ActorSlots, ResourceNames, ItemEnhancements,
+# FightStyles, EffectCurves, MoveTriggers) are agreement rules 32-37 now (limits wave 1); 26 before.
+capture("gns-jip", mine, jip, 32)
 log = (R / "union/wire-gns-jip/xml2-fix.log").read_text()
-for needle in ("receive validation installed", "Transport=gns installed", "JoinInProgress installed", "26 rules"):
+for needle in ("receive validation installed", "Transport=gns installed", "JoinInProgress installed", "32 rules"):
     assert needle in log, needle
 assert "refused" not in log.split("startup transaction")[-1].lower().replace("save refused", ""), "a subsystem refused"
-print("combined install PASS (receive validation, GNS, FastTransfer, join in progress, 26 rules)")
+print("combined install PASS (receive validation, GNS, FastTransfer, join in progress, 32 rules)")

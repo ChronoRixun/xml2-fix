@@ -23,7 +23,10 @@ out.mkdir(parents=True, exist_ok=True)
 (W / 'reg').mkdir(exist_ok=True)
 
 
-def run(tag, dlldir, extra):
+LIMIT6 = ('ActorSlots', 'ResourceNames', 'ItemEnhancements', 'FightStyles', 'EffectCurves', 'MoveTriggers')
+
+
+def run(tag, dlldir, extra, drop=()):
     folder = W / 'union' / tag
     if folder.exists():
         shutil.rmtree(folder)
@@ -42,6 +45,9 @@ def run(tag, dlldir, extra):
     for o in ('FastTransfer', 'Host', 'JoinCode', 'Broker', 'BrokerPin'):
         if cfg.has_option('Online', o):
             cfg.remove_option('Online', o)
+    for key in drop:  # run023's non-stock [Limits] keys (rules 32-37 since b6a1c8c)
+        if cfg.has_option('Limits', key):
+            cfg.remove_option('Limits', key)
     for section, key, value in extra:
         if not cfg.has_section(section):
             cfg.add_section(section)
@@ -70,16 +76,23 @@ results = {}
 rc_ref, log_ref, rec_ref, _ = run('off-beta7', REF, [])
 rc_off, log_off, rec_off, _ = run('off-wave1', MINE, [])
 rc_w1, log_w1, rec_w1, f_w1 = run('w1-wave1', MINE, [('Limits', 'IGBCache', '1024'), ('Limits', 'ResourceNames', '2048'), ('Engine', 'ModelPools', 'x4'), ('Engine', 'ModelHandles', '8192')])
-rc_ref4, log_ref4, rec_ref4, _ = run('x4-beta7', REF, [('Engine', 'ModelPools', 'x4')])
-rc_x4, log_x4, rec_x4, _ = run('x4-wave1', MINE, [('Engine', 'ModelPools', 'x4')])
+rc_ref4, log_ref4, rec_ref4, _ = run('x4-beta7', REF, [('Engine', 'ModelPools', 'x4')], LIMIT6)
+rc_x4, log_x4, rec_x4, _ = run('x4-wave1', MINE, [('Engine', 'ModelPools', 'x4')], LIMIT6)
+# b6a1c8c registers every non-stock resource limit as its own rule (32-37), so run023's LC [Limits] (six non-stock
+# limits) give a different record than beta 7 ON PURPOSE; the plain OFF claim is made without those six keys.
+rc_refp, log_refp, rec_refp, _ = run('offplain-beta7', REF, [], LIMIT6)
+rc_offp, log_offp, rec_offp, _ = run('offplain-wave1', MINE, [], LIMIT6)
 ok = True
 def check(cond, what):
     global ok
     ok &= bool(cond)
     print(('PASS ' if cond else 'FAIL ') + what)
-check(rc_ref == rc_off == rc_w1 == rc_ref4 == rc_x4 == 0, f'host exit codes {rc_ref} {rc_off} {rc_w1} {rc_ref4} {rc_x4}')
-check(len(rec_off) == 108 and rec_off == rec_ref, 'OFF: agreement record identical to beta 7 ' + hashlib.sha256(rec_off).hexdigest()[:16])
-check(rec_x4 == rec_ref4 and len(rec_x4) == 108, 'x4 without ModelHandles: record identical to beta 7')
+check(rc_ref == rc_off == rc_w1 == rc_ref4 == rc_x4 == rc_refp == rc_offp == 0, f'host exit codes {rc_ref} {rc_off} {rc_w1} {rc_ref4} {rc_x4} {rc_refp} {rc_offp}')
+check(len(rec_offp) == 108 and rec_offp == rec_refp, 'OFF (no non-stock limit keys): agreement record identical to beta 7 ' + hashlib.sha256(rec_offp).hexdigest()[:16])
+count = lambda log: int((re.findall(r'protocol 4, (\d+) rules', log) or ['-1'])[-1])
+check(len(rec_off) == 108 and rec_off != rec_ref and count(log_off) == count(log_ref) + 6,
+      f'OFF with run023 [Limits]: record differs from beta 7 by the six resource-limit rules 32-37 ({count(log_ref)} -> {count(log_off)} rules)')
+check(rec_x4 == rec_ref4 and len(rec_x4) == 108, 'x4 without ModelHandles (no non-stock limit keys): record identical to beta 7')
 check(rec_w1 != rec_off and len(rec_w1) == 108, 'W1: record differs (rule 31 + rule 28 values)')
 w = lambda log, *k: [l for l in log.splitlines() if all(x in l for x in k)]
 check(w(log_w1, 'IGB cache raised from 200 to 1024 records'), 'W1: IGB cache raised')
