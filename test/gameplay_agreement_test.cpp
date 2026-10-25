@@ -233,12 +233,23 @@ void records(){
  // Rule 16, the NPC power rule ([Game] NpcPowerRule): enemies that pay for powers and decide every 2 s never share a
  // lockstep game with enemies that don't; revision 3 adds the visibility word; absent is {0,0,0,0}, a failed install unverified.
  auto npc=[](bool on,bool verified=true){record r;r.add(2,1,{1,0,0,0},true);r.add(gameplay_capabilities::npc_power_rule_id,npc_power::revision_for(on || !verified),{on ? 1u : 0u,on ? 1u : 0u,0,0},verified);r.finalize();return r;};
- check(gameplay_capabilities::npc_power_rule_id==16 && npc_power::revision==4 && npc(true).compare(npc(false).bytes())==result::value && npc(false).compare(npc(true).bytes())==result::value,"NPC power rule on/off refuses both directions");
+ check(gameplay_capabilities::npc_power_rule_id==16 && npc_power::revision==10 && npc(true).compare(npc(false).bytes())==result::value && npc(false).compare(npc(true).bytes())==result::value,"NPC power rule on/off refuses both directions");
  check(npc(true).compare(npc(true).bytes())==result::match && npc(false).compare(npc(false).bytes())==result::match,"same NPC power rule accepts");
  record npc_previous; npc_previous.add(2,1,{1,0,0,0},true);npc_previous.add(gameplay_capabilities::npc_power_rule_id,2,{1,0,0,0},true);npc_previous.finalize();
  check(npc(true).compare(npc_previous.bytes())!=result::match && npc_previous.compare(npc(true).bytes())!=result::match,"NPC visibility policy rejects the previous power/combo-only revision both ways");
  record npc_visibility; npc_visibility.add(2,1,{1,0,0,0},true);npc_visibility.add(gameplay_capabilities::npc_power_rule_id,3,{1,1,0,0},true);npc_visibility.finalize();
  check(npc(true).compare(npc_visibility.bytes())!=result::match && npc_visibility.compare(npc(true).bytes())!=result::match,"NPC combo timing rejects revision 3 peers both ways");
+ record npc_timers; npc_timers.add(2,1,{1,0,0,0},true);npc_timers.add(gameplay_capabilities::npc_power_rule_id,4,{1,1,0,0},true);npc_timers.finalize();
+ check(npc(true).compare(npc_timers.bytes())!=result::match && npc_timers.compare(npc(true).bytes())!=result::match,"NPC reaction-spent combo steps reject revision 4 peers both ways");
+ // Revisions 5-9 were unreleased candidates (5: the first reaction-spent build and a withdrawn role experiment; 6-9:
+ // officer weapon candidates, 9 with words 2-3 set). Revision 10 carries both and refuses every one of them.
+ for(const std::uint16_t candidate:{5,6,7,8,9})for(const auto words:{std::array<std::uint32_t,4>{1,1,0,0},std::array<std::uint32_t,4>{1,1,1,0x6BED0A4Cu}}){
+  record peer;peer.add(2,1,{1,0,0,0},true);peer.add(gameplay_capabilities::npc_power_rule_id,candidate,words,true);peer.finalize();
+  check(npc(true).compare(peer.bytes())!=result::match && peer.compare(npc(true).bytes())!=result::match,"revision 10 refuses candidate revisions 5-9 both ways");
+ }
+ // The officer weapon brain (words 2-3) under the same revision: with and without it refuse each other by value.
+ record officer;officer.add(2,1,{1,0,0,0},true);officer.add(gameplay_capabilities::npc_power_rule_id,npc_power::revision,{1,1,1,0x6BED0A4Cu},true);officer.finalize();
+ check(npc(true).compare(officer.bytes())==result::value && officer.compare(npc(true).bytes())==result::value,"officer weapon brain on/off refuses both ways by value");
  // Released OFF peers retain the exact record, including rule 16's old revision and no rule 18.
  record released_off;released_off.add(2,1,{1,0,0,0},true);released_off.add(16,3,{0,0,0,0},true);released_off.finalize();
  const auto current_off=npc(false),stun_off=stun(false);

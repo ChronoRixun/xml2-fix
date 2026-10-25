@@ -32,8 +32,8 @@
 | Big mods              | 40 actors per zone, then a crash | up to 127 when a mod asks for it ([details](#bigger-zones)) |
 | Setup                 | — | copy one file |
 
-**Current release: XML2 Fix 1.8.0**, paired with Legends Classic builder 0.4.0 (content 25 / LC34 from
-0.4.0-beta.5, the classic look; betas 1-4: content 24 / LC33) and Ultimate Legends launcher 0.4.0. Update the launcher first, then Rebuild, then Play.
+**Current release: XML2 Fix 1.8.0**, paired with Legends Classic builder 0.4.0 (content 26 / LC35 from
+0.4.0-beta.6, enemy AI fidelity; beta 5: content 25 / LC34; betas 1-4: content 24 / LC33) and Ultimate Legends launcher 0.4.0. Update the launcher first, then Rebuild, then Play.
 
 Maintainers: [stable and beta release instructions](RELEASING.md).
 
@@ -476,7 +476,8 @@ ExplosiveFirstHit=1   ; an explosion is a new attack for the victim its projecti
 RankCosts=1           ; a talent rank costs its <level cost> skill points (X-Men Legends I's Xtreme / Legend ranks: 2)
 LevelSkillPoints=xml1 ; 2 skill points on every 5th level, 1 on the others (X-Men Legends I's rule)
 LevelStatPoints=xml1  ; 8 stat points on every 5th level, 4 on the others (X-Men Legends I's 2 / 1 on the port's x4 stat scale)
-NpcPowerRule=xml1     ; enemies pay energy, decide every 2 s at half energy, and use X-Men Legends I combos
+NpcPowerRule=xml1     ; enemies pay energy, decide every 2 s at half energy, use X-Men Legends I combos, and a hit reaction spends the combo
+NpcSemiAuto=xml1      ; X-Men Legends I's weapon brain for the [NpcSemiAuto] rows (needs NpcPowerRule=xml1; the port's builder writes both)
 ObjectWorldImpact=xml1 ; zero ordinary landing damage against non-physical targets
 StunRule=xml1         ; original party-hero stun timing and reaction ownership
 DeathSwitchClear=1    ; the hero handed a dead hero's controller stops the walk its AI had started (X-Men Legends I's hand-over)
@@ -683,7 +684,8 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `RankCosts` | `0` | `1`: a talent rank costs the `cost` of its `<level>` (1 without one) when it is bought, refunded, auto-spent, respecced or lost with a level, and the skills screen offers it only when the hero can pay, as in X-Men Legends I ([details](docs/rank-costs.md)) |
 | `LevelSkillPoints` | (none) | `xml1`: a level divisible by 5 gives (and a level lost takes back) 2 skill points, any other 1, as in X-Men Legends I ([details](docs/rank-costs.md#skill-points-per-level-gamelevelskillpointsxml1)) |
 | `LevelStatPoints` | (none) | `xml1`: a level divisible by 5 gives (and a level lost takes back) 8 stat points, any other 4: X-Men Legends I's 2 / 1 for heroes whose stats are its x 4 ([details](docs/rank-costs.md)) |
-| `NpcPowerRule` | `xml2` | `xml1`: enemies pay energy for powers, decide every 2 s with at least half energy, use the first game's combos and visibility rules (gameplay rule 16 revision 4; [details](docs/npc-power-rule.md)). Whether hero stun time now matches the original has not been measured since `StunRule` revision 3 (Legends Classic issue #101, open). |
+| `NpcPowerRule` | `xml2` | `xml1`: enemies pay energy for powers, decide every 2 s with at least half energy, use the first game's combos and visibility rules and a hit reaction spends the enemy's combo step and attack decision as in the original (gameplay rule 16 revision 10 from 1.8.0-beta.6, revision 4 before; [details](docs/npc-power-rule.md)). Whether hero stun time now matches the original has not been measured since `StunRule` revision 3 (Legends Classic issue #101, open). |
+| `NpcSemiAuto` | off | `xml1` with `[NpcSemiAuto] Count` and `W1..Wn` rows (actor, recoil, range, burst, leader; pipe-separated, binary32 hex): X-Men Legends I's weapon brain for those NPCs - one shot per recoil period, no bursts or melee at range, the grenade held at full energy (1.8.0-beta.6; needs `NpcPowerRule = xml1`; adds the weapon brain to gameplay rule 16 revision 10's record; [details](docs/npc-semi-auto.md)) |
 | `ObjectWorldImpact` | `xml2` | `xml1`: zero ordinary landing damage against non-physical targets, as in XML1 (gameplay rule 17 revision 1; [details](docs/object-world-impact.md)). |
 | `BoxHarmOrigin` | `xml2` | `xml1`: original boxed-harm zero dispatch origin, correcting the PC centre-based upward-fire impulse. Builder default on; requested-only gameplay rule 21, revision 1 ([evidence and limits](docs/box-harm-origin.md)). |
 | `HarmLoopStartup` | `xml2` | Opt-in `xml1`: keep the authored creation-relative first activation and ordinary start-on loop. Requires matching builder output; developer option, online blocked when requested; no gameplay rule ([details](docs/harm-loop-startup.md)). |
@@ -697,7 +699,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `DeathSwitchClear` | `0` | `1`: when the controlled hero dies, the hero given its controller stops the walk its AI had started instead of finishing it with no input, as in X-Men Legends I ([details](docs/death-switch.md)) |
 | `ClassicMainBackdrop` | `0` | `1`: the classic main menu's Cerebro room is drawn with its original bright textures ([details](#classic-main-menu-backdrop)) |
 | `ClassicMainPanelBounds` | `0` | `1`: the classic main menu's buttons answer the mouse over their whole visible panels ([details](#classic-main-menu-backdrop)) |
-| `ClassicHud` | off | `xml1`: the HUD drawn from a Legends Classic build's classic atlas and models, with a larger small-map frame (1.8.0-beta.5; display only; refuses without the build's assets) ([details](docs/classic-hud-pilot.md)) |
+| `ClassicHud` | off | `xml1`: the HUD drawn from a Legends Classic build's classic atlas and models (1.8.0-beta.5; the small map stays XML2's own, unframed; display only; refuses without the build's assets) ([details](docs/classic-hud-pilot.md)) |
 | `ClassicCodex` | `0` | `1`: the Codex's Details opens the list entry under the cursor and Back from a biography returns to the list (1.8.0-beta.5; display only) |
 | `DangerRoomParty` | `xml2` | `xml1`: original Cyclops/Phoenix/Storm/Wolverine fallback for an incomplete non-solo course party (requested-only rule 19 revision 1). |
 | `DangerRoomHealthBars` | `xml2` | `xml1`: show the target health gauge for protected Danger Room training opponents. Builder default on; requested-only gameplay rule 22, revision 1. Protection and course limits remain; native dirty-stat refresh/clamp timing parity is unproved. Required combo hits kill training targets through the native [course death/progress path](docs/danger-room-courses.md). |

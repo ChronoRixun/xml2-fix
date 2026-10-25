@@ -254,13 +254,44 @@ namespace npc_power_rules
 	inline constexpr site ai_stride_site{0x525091, "69c91c060000", 0, "the AI pool stride"};
 	inline constexpr site ai_count_site{0x5250bf, "83fa20", 0, "the AI pool count"};
 	inline constexpr site ai_brain_site{0x504b1c, "8dbec8040000", 0, "the embedded combo brain"};
+	// 7. (revision 10) The hit's reaction test at the end of the pain decision 0x435850: test byte [esi+0xac],8; jz
+	//    0x435be2. Bit 8 still set here = the hit makes the victim react (pain or block, chosen after this). XML1's
+	//    brain (0xeea60) keeps running and pressing on its step clock while the body reacts, so the steps that come due
+	//    during the reaction are spent; XMen2.exe's brain is not called while the body is busy, and its first call after
+	//    the reaction presses the overdue step at once (the combo resumes from idle). The bridge marks the victim's AI
+	//    slot; the continue step then spends every step that came due before the brain ran again.
+	inline constexpr site reaction_site{0x435b6e, "f686ac00000008746b", 7, "the hit's reaction test (0x435850)"};
+	constexpr address reaction_resume_va = 0x435b75;
+	constexpr address ai0_va = 0x78ba14;
+	// 8. (revision 10) The melee-range power decision's entry (sub esp,0x14; push ebx; push ebp; ecx = the brain).
+	//    XML1's decision (0xee260) also runs while the body reacts: a re-check that falls due then is spent (the
+	//    power press finds no `powers` chain in pain/block) and re-armed. XMen2.exe's first call after the reaction
+	//    found it overdue and the power went off from idle. A reaction-marked slot re-arms every re-check that fell
+	//    due before this call (timer + 2.0 s, or 0.5 s for a character with a controller), then the decision as before.
+	inline constexpr site power_entry_site{0x518770, "83ec1453555657", 5, "the melee-range power decision's entry (0x518770)"};
+	constexpr address power_entry_resume_va = 0x518775;
+	constexpr address game_clock_owner_va = 0x46dce0; // its vt+0x160 is the clock 0x518770 compares AI+0x1cc with
+	inline constexpr site game_clock_site{0x518833, "e8a854f5ff8b4f048b91cc010000", 0, "the power decision's clock read (0x518770)"};
+	// 9. (revision 10) The melee decision's entry 0x518fd0 (sub esp,0x58; push ebx; push ebp; ecx = the brain). XML1's
+	//    attack decision also falls due while the body reacts; it is then spent (the attack press finds no chain in
+	//    pain/block) and the next attack time is set again by the decision's tail (now + meleetimeroffset + random x
+	//    meleetimerrandomadd). XMen2.exe made the overdue decision on the first idle frame after the reaction (a fresh
+	//    attack within 0.3 s of 12-14 pains per four windows, against 1 on the Xbox). With no combo running, a
+	//    reaction-marked slot whose next attack time (AI+0x1c) fell due re-arms it the tail's way from that time
+	//    (AI+0x288 + random x AI+0x28c, the random draw of 0x560190(1) as the completion code uses), at most four
+	//    times, then the decision as before.
+	inline constexpr site attack_entry_site{0x518fd0, "83ec5853555657", 5, "the melee decision's entry (0x518fd0)"};
+	constexpr address attack_entry_resume_va = 0x518fd5;
+	constexpr address game_random_va = 0x560190;
+	inline constexpr site attack_random_site{0x5192b8, "6a01e8d16e0400d84c2424", 0, "the combo completion's random draw (0x518fd0)"};
 
-	inline constexpr std::array<const site*, 28> sites{&charge_site, &recheck_site, &recheck_actor_site, &picker_site, &energy_getter_site,
+	inline constexpr std::array<const site*, 33> sites{&charge_site, &recheck_site, &recheck_actor_site, &picker_site, &energy_getter_site,
 	                                                   &combolevel_site, &combo_exit_site, &combo_exit2_site, &combo_tail_site,
 	                                                   &combo_buttons_site, &combo_lengths_site, &combo_row2_site, &combo_row3_site, &combo_row11_site,
 	                                                   &query_priority_site, &query_budget_site, &visibility_site, &physical_target_site, &query_entry_site,
 	                                                   &combo_continue_site, &combo_press_site, &combo_end_site, &combo_after_site, &combo_end_delay_site,
-	                                                   &ai_pool_site, &ai_stride_site, &ai_count_site, &ai_brain_site};
+	                                                   &ai_pool_site, &ai_stride_site, &ai_count_site, &ai_brain_site, &reaction_site,
+	                                                   &power_entry_site, &game_clock_site, &attack_entry_site, &attack_random_site};
 
 	inline std::vector<std::uint8_t> retail_bytes(const site& s, const std::size_t count)
 	{
@@ -325,10 +356,14 @@ namespace npc_power_rules
 		address combos = 0;
 		address combo(const std::size_t i) const { return combos + static_cast<address>(20 * i); }
 		address cont = 0, start = 0, delays = 0, next = 0, end_delay = 0; // the combo step bridges, XML1's delays, the per-brain times
+		address react = 0, react_cont = 0, pre_start = 0, mark = 0;   // revision 10: per-brain reaction marks and their bridges
+		address react_power = 0, power_front = 0;                     // revision 10: the power decision's marks and front
+		address react_attack = 0, attack_front = 0;                   // revision 10: the attack decision's marks and front
 	};
 	// The block: one page of code and constants (made execute-read), then one page of data (read-write): the next
 	// press time of each of the 32 brains.
 	constexpr std::size_t charge_size = 57, recheck_size = 23, gate_size = 47, cont_size = 149, start_size = 71, end_delay_size = 32;
+	constexpr std::size_t react_cont_size = 125, pre_start_size = 43, mark_size = 85, power_front_size = 166, attack_front_size = 182;
 	constexpr std::size_t code_size = 4096, block_size = 8192;
 	inline layout layout_at(const address base)
 	{
@@ -339,6 +374,14 @@ namespace npc_power_rules
 		l.delays = base + 560; // 6 x 20 bytes
 		l.next = base + static_cast<address>(code_size);
 		l.end_delay = base + 688;
+		l.react = l.next + 4 * ai_slots; // after the 32 deadlines, in the read-write page
+		l.react_cont = base + 800;
+		l.pre_start = base + 928;
+		l.mark = base + 976;
+		l.react_power = l.react + 4 * ai_slots;
+		l.power_front = base + 1072;
+		l.react_attack = l.react_power + 4 * ai_slots;
+		l.attack_front = base + 1248;
 		return l;
 	}
 	inline std::vector<std::uint8_t> constants()
@@ -537,9 +580,271 @@ namespace npc_power_rules
 		put32(code, 0x43, combo_tail_va - (l.start + 0x47));
 		return code;
 	}
+	// 7. (revision 10) The continue step's front (jumped to from 0x51920b; same registers as the continue step): when the
+	//    brain's slot carries a reaction mark, clear it and spend every step whose press time has passed - index + 1 and
+	//    next + that step's delay, XML1's clock - completing the combo natively when none is left; then the continue
+	//    step as before (it waits for the first step still to come). Brains outside the table, or without a mark, go
+	//    straight to the continue step.
+	inline std::vector<std::uint8_t> react_cont_bridge(const layout& l)
+	{
+		std::vector<std::uint8_t> code{
+			0x8b, 0xc5,                               // 00 mov eax,ebp
+			0x2d, 0, 0, 0, 0,                         // 02 sub eax,brain0
+			0x72, 0x6f,                               // 07 jb cont (0x78)
+			0x33, 0xd2,                               // 09 xor edx,edx
+			0xb9, 0x1c, 0x06, 0x00, 0x00,             // 0b mov ecx,0x61c
+			0xf7, 0xf1,                               // 10 div ecx
+			0x85, 0xd2,                               // 12 test edx,edx
+			0x75, 0x62,                               // 14 jnz cont
+			0x83, 0xf8, 0x20,                         // 16 cmp eax,32
+			0x73, 0x5d,                               // 19 jae cont
+			0x8d, 0x14, 0x85, 0, 0, 0, 0,             // 1b lea edx,[eax*4+react]
+			0x83, 0x3a, 0x00,                         // 22 cmp dword [edx],0
+			0x74, 0x51,                               // 25 je cont (no reaction since the last step)
+			0xc7, 0x02, 0x00, 0x00, 0x00, 0x00,       // 27 mov dword [edx],0
+			0x8d, 0x14, 0x85, 0, 0, 0, 0,             // 2d lea edx,[eax*4+next]
+			0x8b, 0x4d, 0x04,                         // 34 mov ecx,[ebp+4] (the AI)
+			0xd9, 0x81, 0x50, 0x05, 0x00, 0x00,       // 37 spend: fld dword [ecx+0x550] (now)
+			0xd8, 0x1a,                               // 3d fcomp dword [edx]
+			0xdf, 0xe0,                               // 3f fnstsw ax
+			0xf6, 0xc4, 0x41,                         // 41 test ah,0x41: now <= next (or unordered)
+			0x75, 0x32,                               // 44 jnz cont: the continue step waits for it
+			0x8b, 0x45, 0x30,                         // 46 mov eax,[ebp+0x30]
+			0x40,                                     // 49 inc eax: this step was spent during the reaction
+			0x89, 0x45, 0x30,                         // 4a mov [ebp+0x30],eax
+			0x3b, 0x45, 0x34,                         // 4d cmp eax,[ebp+0x34]
+			0x0f, 0x8d, 0, 0, 0, 0,                   // 50 jge 0x51928a (the combo's end)
+			0x8b, 0x4d, 0x3c,                         // 56 mov ecx,[ebp+0x3c] (the combo)
+			0x83, 0xf9, 0x06,                         // 59 cmp ecx,6
+			0x73, 0x0f,                               // 5c jae zero (0x6d)
+			0x6b, 0xc9, 0x14,                         // 5e imul ecx,ecx,20
+			0x8d, 0x4c, 0x81, 0xfc,                   // 61 lea ecx,[ecx+eax*4-4]: delay[i - 1]
+			0xd9, 0x81, 0, 0, 0, 0,                   // 65 fld dword [ecx+delays]
+			0xeb, 0x02,                               // 6b jmp add (0x6f)
+			0xd9, 0xee,                               // 6d zero: fldz
+			0xd8, 0x02,                               // 6f add: fadd dword [edx]
+			0xd9, 0x1a,                               // 71 fstp dword [edx]: the next step's press time
+			0x8b, 0x4d, 0x04,                         // 73 mov ecx,[ebp+4]
+			0xeb, 0xbf,                               // 76 jmp spend (0x37)
+			0xe9, 0, 0, 0, 0,                         // 78 cont: jmp the continue step
+		};
+		put32(code, 0x03, brain0_va);
+		put32(code, 0x1e, l.react);
+		put32(code, 0x30, l.next);
+		put32(code, 0x52, combo_end_va - (l.react_cont + 0x56));
+		put32(code, 0x67, l.delays);
+		put32(code, 0x79, l.cont - (l.react_cont + 0x7d));
+		return code;
+	}
+	// The combo start's front (the exits' jump): a new combo starts unmarked, then the start bridge.
+	inline std::vector<std::uint8_t> pre_start_bridge(const layout& l)
+	{
+		std::vector<std::uint8_t> code{
+			0x8b, 0xc5,                                     // 00 mov eax,ebp
+			0x2d, 0, 0, 0, 0,                               // 02 sub eax,brain0
+			0x72, 0x1d,                                     // 07 jb go (0x26)
+			0x33, 0xd2,                                     // 09 xor edx,edx
+			0xb9, 0x1c, 0x06, 0x00, 0x00,                   // 0b mov ecx,0x61c
+			0xf7, 0xf1,                                     // 10 div ecx
+			0x85, 0xd2,                                     // 12 test edx,edx
+			0x75, 0x10,                                     // 14 jnz go
+			0x83, 0xf8, 0x20,                               // 16 cmp eax,32
+			0x73, 0x0b,                                     // 19 jae go
+			0xc7, 0x04, 0x85, 0, 0, 0, 0, 0, 0, 0, 0,       // 1b mov dword [eax*4+react],0
+			0xe9, 0, 0, 0, 0,                               // 26 go: jmp the start bridge
+		};
+		put32(code, 0x03, brain0_va);
+		put32(code, 0x1e, l.react);
+		put32(code, 0x27, l.start - (l.pre_start + 0x2b));
+		return code;
+	}
+	// Jumped to from 0x435b6e (esi = the hit record, [esi] = the victim): when the hit makes the victim react, mark
+	// every AI slot whose actor (AI+0x10) is the victim. Registers are kept; the flags come from the displaced test.
+	inline std::vector<std::uint8_t> mark_bridge(const layout& l)
+	{
+		std::vector<std::uint8_t> code{
+			0xf6, 0x86, 0xac, 0x00, 0x00, 0x00, 0x08,       // 00 test byte [esi+0xac],8
+			0x74, 0x40,                                     // 07 jz out (0x49)
+			0x50, 0x51, 0x52,                               // 09 push eax; push ecx; push edx
+			0x8b, 0x16,                                     // 0c mov edx,[esi] (the victim)
+			0xb8, 0, 0, 0, 0,                               // 0e mov eax,AI 0
+			0x33, 0xc9,                                     // 13 xor ecx,ecx
+			0x39, 0x50, 0x10,                               // 15 slot: cmp [eax+0x10],edx
+			0x75, 0x21,                                     // 18 jne other (0x3b)
+			0xc7, 0x04, 0x8d, 0, 0, 0, 0, 1, 0, 0, 0,       // 1a mov dword [ecx*4+react],1 (the combo)
+			0xc7, 0x04, 0x8d, 0, 0, 0, 0, 1, 0, 0, 0,       // 25 mov dword [ecx*4+react_power],1 (the power decision)
+			0xc7, 0x04, 0x8d, 0, 0, 0, 0, 1, 0, 0, 0,       // 30 mov dword [ecx*4+react_attack],1 (the attack decision)
+			0x05, 0x1c, 0x06, 0x00, 0x00,                   // 3b other: add eax,0x61c
+			0x41,                                           // 40 inc ecx
+			0x83, 0xf9, 0x20,                               // 41 cmp ecx,32
+			0x72, 0xcf,                                     // 44 jb slot (0x15)
+			0x5a, 0x59, 0x58,                               // 46 pop edx; pop ecx; pop eax
+			0xf6, 0x86, 0xac, 0x00, 0x00, 0x00, 0x08,       // 49 out: test byte [esi+0xac],8 (displaced)
+			0xe9, 0, 0, 0, 0,                               // 50 jmp 0x435b75 (jz 0x435be2)
+		};
+		put32(code, 0x0f, ai0_va);
+		put32(code, 0x1d, l.react);
+		put32(code, 0x28, l.react_power);
+		put32(code, 0x33, l.react_attack);
+		put32(code, 0x51, reaction_resume_va - (l.mark + 0x55));
+		return code;
+	}
+	// Jumped to from 0x518770 (ecx = the brain; eax/edx are scratch at a thiscall entry): a reaction-marked slot
+	// re-arms its power re-check (AI+0x1cc) once per re-check that fell due before now (at most 8), then the decision
+	// as before (it finds the timer in the future and does nothing this time). Unmarked slots go straight on.
+	inline std::vector<std::uint8_t> power_front_bridge(const layout& l)
+	{
+		std::vector<std::uint8_t> code{
+			0x51,                                     // 00 push ecx (the brain)
+			0x8b, 0xc1,                               // 01 mov eax,ecx
+			0x2d, 0, 0, 0, 0,                         // 03 sub eax,brain0
+			0x0f, 0x82, 0, 0, 0, 0,                   // 08 jb out (0x9b)
+			0x33, 0xd2,                               // 0e xor edx,edx
+			0xb9, 0x1c, 0x06, 0x00, 0x00,             // 10 mov ecx,0x61c
+			0xf7, 0xf1,                               // 15 div ecx
+			0x85, 0xd2,                               // 17 test edx,edx
+			0x0f, 0x85, 0, 0, 0, 0,                   // 19 jnz out
+			0x83, 0xf8, 0x20,                         // 1f cmp eax,32
+			0x0f, 0x83, 0, 0, 0, 0,                   // 22 jae out
+			0x8d, 0x14, 0x85, 0, 0, 0, 0,             // 28 lea edx,[eax*4+react_power]
+			0x83, 0x3a, 0x00,                         // 2f cmp dword [edx],0
+			0x0f, 0x84, 0, 0, 0, 0,                   // 32 je out
+			0xc7, 0x02, 0x00, 0x00, 0x00, 0x00,       // 38 mov dword [edx],0
+			0xe8, 0, 0, 0, 0,                         // 3e call 0x46dce0
+			0x8b, 0x10,                               // 43 mov edx,[eax]
+			0x8b, 0xc8,                               // 45 mov ecx,eax
+			0xff, 0x92, 0x60, 0x01, 0x00, 0x00,       // 47 call [edx+0x160]: ST0 = now (the clock 0x518849 reads)
+			0x8b, 0x0c, 0x24,                         // 4d mov ecx,[esp] (the brain)
+			0x8b, 0x49, 0x04,                         // 50 mov ecx,[ecx+4] (the AI)
+			0x8b, 0x51, 0x10,                         // 53 mov edx,[ecx+0x10] (the actor)
+			0x83, 0xba, 0xd4, 0x03, 0x00, 0x00, 0xff, // 56 cmp dword [edx+0x3d4],-1
+			0x74, 0x08,                               // 5d je two (0x67)
+			0xd9, 0x05, 0, 0, 0, 0,                   // 5f fld dword [0.5] (a character with a controller)
+			0xeb, 0x06,                               // 65 jmp have (0x6d)
+			0xd9, 0x05, 0, 0, 0, 0,                   // 67 two: fld dword [2.0]
+			0xba, 0x08, 0x00, 0x00, 0x00,             // 6d have: mov edx,8 (ST0 = re-check, ST1 = now)
+			0xd9, 0x81, 0xcc, 0x01, 0x00, 0x00,       // 72 again: fld dword [ecx+0x1cc]
+			0xd8, 0xda,                               // 78 fcomp st(2): the timer against now
+			0xdf, 0xe0,                               // 7a fnstsw ax
+			0xf6, 0xc4, 0x45,                         // 7c test ah,0x45
+			0x74, 0x16,                               // 7f jz done (0x97): timer > now
+			0xf6, 0xc4, 0x04,                         // 81 test ah,4
+			0x75, 0x11,                               // 84 jnz done: unordered
+			0xd9, 0x81, 0xcc, 0x01, 0x00, 0x00,       // 86 fld dword [ecx+0x1cc]
+			0xd8, 0xc1,                               // 8c fadd st(0),st(1)
+			0xd9, 0x99, 0xcc, 0x01, 0x00, 0x00,       // 8e fstp dword [ecx+0x1cc]: re-armed, as XML1's spent decision
+			0x4a,                                     // 94 dec edx
+			0x75, 0xdb,                               // 95 jnz again (0x72)
+			0xdd, 0xd8,                               // 97 done: fstp st(0)
+			0xdd, 0xd8,                               // 99 fstp st(0)
+			0x59,                                     // 9b out: pop ecx
+			0x83, 0xec, 0x14, 0x53, 0x55,             // 9c sub esp,0x14; push ebx; push ebp (displaced)
+			0xe9, 0, 0, 0, 0,                         // a1 jmp 0x518775
+		};
+		put32(code, 0x04, brain0_va);
+		for (const std::size_t at : {std::size_t{0x0a}, std::size_t{0x1b}, std::size_t{0x24}, std::size_t{0x34}})
+		{
+			put32(code, at, 0x9b - static_cast<std::uint32_t>(at + 4));
+		}
+		put32(code, 0x2b, l.react_power);
+		put32(code, 0x3f, game_clock_owner_va - (l.power_front + 0x43));
+		put32(code, 0x61, l.half());
+		put32(code, 0x69, l.two());
+		put32(code, 0xa2, power_entry_resume_va - (l.power_front + 0xa6));
+		return code;
+	}
+	// Jumped to from 0x518fd0 (ecx = the brain; eax/edx scratch at the thiscall entry): with no combo running, a
+	// reaction-marked slot spends every attack decision that fell due before now (at most four): next attack time +
+	// meleetimeroffset + random x meleetimerrandomadd, as the decision's tail re-arms it; then the decision as before.
+	inline std::vector<std::uint8_t> attack_front_bridge(const layout& l)
+	{
+		std::vector<std::uint8_t> code{
+			0x51,                                     // 00 push ecx (the brain)
+			0x8b, 0xc1,                               // 01 mov eax,ecx
+			0x2d, 0, 0, 0, 0,                         // 03 sub eax,brain0
+			0x0f, 0x82, 0, 0, 0, 0,                   // 08 jb out (0xab)
+			0x33, 0xd2,                               // 0e xor edx,edx
+			0xb9, 0x1c, 0x06, 0x00, 0x00,             // 10 mov ecx,0x61c
+			0xf7, 0xf1,                               // 15 div ecx
+			0x85, 0xd2,                               // 17 test edx,edx
+			0x0f, 0x85, 0, 0, 0, 0,                   // 19 jnz out
+			0x83, 0xf8, 0x20,                         // 1f cmp eax,32
+			0x0f, 0x83, 0, 0, 0, 0,                   // 22 jae out
+			0x8d, 0x14, 0x85, 0, 0, 0, 0,             // 28 lea edx,[eax*4+react_attack]
+			0x83, 0x3a, 0x00,                         // 2f cmp dword [edx],0
+			0x0f, 0x84, 0, 0, 0, 0,                   // 32 je out
+			0x8b, 0x0c, 0x24,                         // 38 mov ecx,[esp] (the brain)
+			0x80, 0x79, 0x2c, 0x00,                   // 3b cmp byte [ecx+0x2c],0 (a combo running: its own front;
+			0x0f, 0x85, 0, 0, 0, 0,                   // 3f jnz out                 the mark waits for its end)
+			0xc7, 0x02, 0x00, 0x00, 0x00, 0x00,       // 45 mov dword [edx],0
+			0xe8, 0, 0, 0, 0,                         // 4b call 0x46dce0
+			0x8b, 0x10,                               // 50 mov edx,[eax]
+			0x8b, 0xc8,                               // 52 mov ecx,eax
+			0xff, 0x92, 0x60, 0x01, 0x00, 0x00,       // 54 call [edx+0x160]: ST0 = now
+			0x8b, 0x0c, 0x24,                         // 5a mov ecx,[esp]
+			0x8b, 0x49, 0x04,                         // 5d mov ecx,[ecx+4] (the AI)
+			0x6a, 0x04,                               // 60 push 4 (at most four spent decisions)
+			0x8b, 0x4c, 0x24, 0x04,                   // 62 again: mov ecx,[esp+4] (the brain)
+			0x8b, 0x49, 0x04,                         // 66 mov ecx,[ecx+4]
+			0x90,                                     // 69
+			0xd9, 0x41, 0x1c,                         // 6a fld dword [ecx+0x1c] (next attack time)
+			0xd8, 0xd9,                               // 6d fcomp st(1): against now
+			0xdf, 0xe0,                               // 6f fnstsw ax
+			0xf6, 0xc4, 0x45,                         // 71 test ah,0x45
+			0x74, 0x30,                               // 74 jz done (0xa6): still to come
+			0xf6, 0xc4, 0x04,                         // 76 test ah,4
+			0x75, 0x2b,                               // 79 jnz done: unordered
+			0x6a, 0x01,                               // 7b push 1
+			0xe8, 0, 0, 0, 0,                         // 7d call 0x560190: ST0 = random
+			0x83, 0xc4, 0x04,                         // 82 add esp,4
+			0x8b, 0x4c, 0x24, 0x04,                   // 85 mov ecx,[esp+4]
+			0x8b, 0x49, 0x04,                         // 89 mov ecx,[ecx+4]
+			0x90,                                     // 8c
+			0xd8, 0x89, 0x8c, 0x02, 0x00, 0x00,       // 8d fmul dword [ecx+0x28c] (meleetimerrandomadd)
+			0xd8, 0x81, 0x88, 0x02, 0x00, 0x00,       // 93 fadd dword [ecx+0x288] (meleetimeroffset)
+			0xd8, 0x41, 0x1c,                         // 99 fadd dword [ecx+0x1c]
+			0xd9, 0x59, 0x1c,                         // 9c fstp dword [ecx+0x1c]: the spent decision's re-arm
+			0xff, 0x0c, 0x24,                         // 9f dec dword [esp]
+			0x75, 0xbe,                               // a2 jnz again (0x62)
+			0x90, 0x90,                               // a4
+			0xdd, 0xd8,                               // a6 done: fstp st(0) (now)
+			0x83, 0xc4, 0x04,                         // a8 add esp,4 (the count)
+			0x59,                                     // ab out: pop ecx
+			0x83, 0xec, 0x58, 0x53, 0x55,             // ac sub esp,0x58; push ebx; push ebp (displaced)
+			0xe9, 0, 0, 0, 0,                         // b1 jmp 0x518fd5
+		};
+		put32(code, 0x04, brain0_va);
+		for (const std::size_t at : {std::size_t{0x0a}, std::size_t{0x1b}, std::size_t{0x24}, std::size_t{0x34}, std::size_t{0x41}})
+		{
+			put32(code, at, 0xab - static_cast<std::uint32_t>(at + 4));
+		}
+		put32(code, 0x2b, l.react_attack);
+		put32(code, 0x4c, game_clock_owner_va - (l.attack_front + 0x50));
+		put32(code, 0x7e, game_random_va - (l.attack_front + 0x82));
+		put32(code, 0xb2, attack_entry_resume_va - (l.attack_front + 0xb6));
+		return code;
+	}
+	inline std::vector<std::uint8_t> attack_entry_jump(const layout& l)
+	{
+		const address rel = l.attack_front - (attack_entry_site.va + 5);
+		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16),
+		        static_cast<std::uint8_t>(rel >> 24)};
+	}
+	inline std::vector<std::uint8_t> power_entry_jump(const layout& l)
+	{
+		const address rel = l.power_front - (power_entry_site.va + 5);
+		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16),
+		        static_cast<std::uint8_t>(rel >> 24)};
+	}
+	inline std::vector<std::uint8_t> mark_jump(const layout& l)
+	{
+		const address rel = l.mark - (reaction_site.va + 5);
+		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16),
+		        static_cast<std::uint8_t>(rel >> 24), 0x90, 0x90};
+	}
 	inline std::vector<std::uint8_t> continue_jump(const layout& l)
 	{
-		const address rel = l.cont - (combo_continue_va + 5);
+		const address rel = l.react_cont - (combo_continue_va + 5);
 		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16),
 		        static_cast<std::uint8_t>(rel >> 24), 0x90};
 	}
@@ -591,6 +896,11 @@ namespace npc_power_rules
 		put(l.cont, cont_bridge(l));
 		put(l.start, start_bridge(l));
 		put(l.end_delay, end_delay_bridge(l));
+		put(l.react_cont, react_cont_bridge(l));
+		put(l.pre_start, pre_start_bridge(l));
+		put(l.mark, mark_bridge(l));
+		put(l.power_front, power_front_bridge(l));
+		put(l.attack_front, attack_front_bridge(l));
 		return bytes;
 	}
 

@@ -7,7 +7,7 @@ image base, a missing asset contract or a retail-byte mismatch retain the stock
 HUD and log a refusal. This is an experimental companion to the builder's
 `xml1build.classic_hud` module, not a released complete HUD skin.
 
-The installation uses one guarded transaction with eight four-byte pointer writes
+The installation uses one guarded transaction with seven four-byte pointer writes
 and one five-byte call redirect:
 
 | Retail site | Expected pointer | Replacement role |
@@ -18,7 +18,6 @@ and one five-byte call redirect:
 | `0x5a4376` | `0x69dec8` | Primary panel model resource name |
 | `0x5a438f` | `0x69deac` | Secondary panel model resource name |
 | `0x5a5bcf` | `0x69df2c` | Classic party-selector/power-wheel emblem model resource name |
-| `0x69db98` | `0x5a0bb0` | Append the small-map chrome after native icon drawing |
 | `0x69dc78` | `0x5a70a0` | Scoped power-wheel art and per-player input labels |
 | `0x5a904f` | Call to `0x5f1130` | Fit the primary target title with native font measurements |
 
@@ -45,7 +44,7 @@ each HUD batch/icon. It is not needed in normal play.
 
 `xml2_classic_hud_install_test <owned-retail-executable> <mode>` checks the real
 installer against a private image fixture. Modes are `on`, `off`, `invalid`,
-`zero`, `named-off`, `legacy`, `base`, `assets`, `alias`, `stale`, and `guard0` through `guard43`. Fixtures contain synthetic asset
+`zero`, `named-off`, `legacy`, `base`, `assets`, `alias`, `stale`, and `guard0` through `guard45` (56 modes). Fixtures contain synthetic asset
 markers and never execute the game. Follow the local isolated-desktop test-runner
 requirements and bracket any registry-sensitive suite as usual.
 
@@ -103,26 +102,19 @@ switching and stacked prompts were verified at4:3 and16:9. The installer suite
 also corrupts this dependency independently (54 total modes).
 
 
-The small-map callback calls the original0x5a0bb0 unchanged, then appends one
-224x224 frame at the native centre(0x8a61dc/0x8a61e4). It requires mode1 at0x8a61c4,
-the native visible flag(+0x18), loaded geometry(+0x30) and the expected HUD manager.
-Off, overlay, pause-map and no-map states receive no frame. Its atlas sprite38
-has a fully transparent interior. Native terrain, fog, world transforms, marker
-art, save data and map toggles are unchanged. The small-mode horizontal inset
-uses the same112-unit half-extent, keeping the frame inside the native safe edge.
-This encloses the eight-cell terrain window at scale.05, including cell
-quantization and rotated edge markers; the prior48-unit half-frame did not.
-Only small-mode inset operands0x5a023f and0x5a0717 are redirected. Large/no-map
-placement is retained. No additional resource object is
-allocated; the normal bounded sprite queue owns the one extra quad.
-
-The frame is an owner-requested adaptation of the original HUD's bevel style.
-Original small-map reference captures were unframed; this is not an imported
-terrain map or a claim of a pixel-identical original map-frame composition.
-Read-only guards cover the map entry, visibility/geometry fields, mode, centre
-stores, both small-mode inset instructions, radius, scale, icon size and cell
-span, in addition to the map vtable destination guard. Every new dependency is
-independently corrupted by the isolated installation fixture to verify refusal.
+The small map is XMen2.exe's own, unframed and in its native place. Beta 5 hooked the
+map draw (`0x69db98`, entry `0x5a0bb0`) to append a 224x224 bevel and redirected the
+small-mode safe-area inset operands at `0x5a023f` and `0x5a0717` to a 112-unit half-extent
+so the frame fitted the screen edge. The frame was too big for the map, so all of that
+is gone: the map callback is not hooked, the two operands keep their stock pointer to
+`0x684170`, and the eight-cell window, `.05` scale, sixteen-unit icons, centre stores
+and their read-only guards went with it. Large-map, overlay, no-map and small-map
+terrain, fog, markers and toggles are all native, and the original game's small map
+was unframed. Atlas sprite 38 (the frame) is unused and the ids stay where they were;
+a builder whose atlas still carries the frame is harmless. The installer suite checks
+that `0x69db98`, `0x5a023f` and `0x5a0717` are byte-for-byte unchanged in every mode.
+Counter sprites 10-12 and the map arrow's native sprite 13 (above) are unrelated and
+unchanged.
 
 
 XP continuation0x5a3f5e receives sprite39 only for the native channel0/icon27,
@@ -144,9 +136,10 @@ refused installation. No input binding, console glyph bitmap, font or palette
 slot is introduced. Locked labels sit inside their rings; unlocked labels leave
 the power artwork visible. The text queue getter4bdfa0 and enqueue5f11b0 are
 guarded, as are the player field, entry loop, validity branches and ring call.
-The wheel brought the contract to eight four-byte writes and 36 read-only dependencies.
-The target-title fit adds one call redirect and eight read-only dependencies:
-nine destinations, 44 read-only dependencies and 63 installer modes in total.
+The wheel and the target-title fit complete the transaction: seven four-byte pointer
+writes and one call redirect (eight destinations) behind a 39-entry guard table. Beta 5
+had ten pointer writes and 51 guards; dropping the small-map frame removed the map
+callback and both inset operand writes and twelve guards. The installer suite has 56 modes.
 
 Target validation uses ordinary power aiming: the human path at0x42fca0 updates
 actor+0x3e0;0x46f7ef forwards that handle through0x59ac20. Ordinary damage alone
@@ -164,7 +157,7 @@ The title call at `0x5a904f` alone is redirected; subtitle/resistance drawing at
 `0x5a90df`, target selection and all health/combat values remain native. New guards
 cover the title alignment/scale, queue, font preparation, manager, measurement,
 measurement vtable, channel stride and selected-font field. A mismatch refuses
-the entire HUD transaction, including the previous eight destinations.
+the entire HUD transaction, including every earlier destination.
 
 The classic panels and wheel labels were exercised in a real local session
 with four virtual pads at960x720 and1280x720. All four living player-owned actors

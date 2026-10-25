@@ -18,7 +18,7 @@ namespace classic_hud
         using namespace classic_hud_rules;
         using primitive_t=void*(__thiscall*)(void*,const float*,const float*,const float*,float,float,int,int,int);
         using uv_t=const float*(__thiscall*)(void*,const unsigned char*);
-        using map_t=void(__thiscall*)(void*);
+        using wheel_t=void(__thiscall*)(void*);
         constexpr char atlas_name[]="textures/ui/lch.png";
         constexpr char panel_name[]="ui/hud/lc_healthpanel";
         constexpr char portrait_name[]="ui/hud/lc_partycross";
@@ -69,11 +69,11 @@ namespace classic_hud
             const int player=*reinterpret_cast<const int*>(object+0x1c);
             if(*reinterpret_cast<void* const*>(object+4)!=reinterpret_cast<void*>(0x81d7e0) ||
                player<0 || player>=4) {
-                reinterpret_cast<map_t>(wheel_draw)(self);return;
+                reinterpret_cast<wheel_t>(wheel_draw)(self);return;
             }
             wheel_context context;context.object=object;context.player=player;
             auto* previous=active_wheel;active_wheel=&context;
-            reinterpret_cast<map_t>(wheel_draw)(self);
+            reinterpret_cast<wheel_t>(wheel_draw)(self);
             active_wheel=previous;
             // Use the existing prompt service, including each player's current
             // binding and device. No console glyphs are copied into the artwork.
@@ -89,25 +89,6 @@ namespace classic_hud
                 reinterpret_cast<queue_text_t>(0x5f11b0)(queue,
                     0,static_cast<int>(label.x-30),static_cast<int>(label.z),60,14,.65f,9,color,text);
             }
-        }
-
-        void __fastcall map_hook(void* self,void*)
-        {
-            reinterpret_cast<map_t>(map_draw)(self);
-            const auto* map=static_cast<const unsigned char*>(self);
-            const auto* centre=reinterpret_cast<const float*>(0x8a61dc);
-            const auto mode=*reinterpret_cast<const int*>(0x8a61c4);
-            const auto manager=*reinterpret_cast<void* const*>(map+4);
-            if(manager!=reinterpret_cast<void*>(0x81d7e0) ||
-               !small_map_visible(mode,map[0x18]!=0,
-                   *reinterpret_cast<const std::uint32_t*>(map+0x30)!=0,centre)) return;
-            // Enclose the native terrain window and full edge markers. The
-            // small-mode inset uses the same extent, retaining the safe edge.
-            const float position[]{centre[0]-small_map_half_extent,-1,centre[2]+small_map_half_extent};
-            const float size[]{2*small_map_half_extent,2*small_map_half_extent}, color[]{1,1,1,1};
-            reinterpret_cast<primitive_t>(primitive)(manager,position,size,color,0,1,map_frame,1,0);
-            if(trace) logger::write_once("classic-hud-map-frame",
-                "classic HUD: small-map frame at native centre %.4g %.4g; vector map unchanged",centre[0],centre[2]);
         }
 
         const float* __fastcall coordinates_hook(void* self,void*,const unsigned char* sprite)
@@ -261,18 +242,6 @@ namespace classic_hud
             {0x599531,"ff524c","target trail call"},
             {0x5996a4,"ff524c","target health call"},
             {0x59e144,"ff524c","measured HUD prompt background call"},
-            {map_draw,"6aff6886846700","native map icon draw entry"},
-            {0x5a0be7,"8a451884c0","native map visibility field"},
-            {0x5a0574,"8b463085c0","native map geometry field"},
-            {0x5a0bcb,"a1c4618a00","native map mode global"},
-            {0x5a0243,"890de4618a00","native small-map vertical centre"},
-            {0x5a0271,"d91ddc618a00","native map horizontal centre"},
-            {0x5a023d,"d82570416800","small-map mode safe-area inset"},
-            {0x5a0715,"d82570416800","initial small-map safe-area inset"},
-            {0x5a0249,"c705cc618a0008000000","small-map eight-cell window"},
-            {0x5a0209,"c705c8618a00cdcc4c3d","small-map .05 scale"},
-            {0x5a0253,"c705f8618a0000008041","small-map sixteen-unit icons"},
-            {0x69ddf4,"00007043","native map cell span"},
             {0x5a3f5b,"ff554c","native XP draw call"},
             {0x69de8c,"00009242","native XP full width"},
             {0x5a3f1e,"c744242800000040","native XP height"},
@@ -316,10 +285,6 @@ namespace classic_hud
         pointer(0x5a4376,0x69dec8,panel_name);
         pointer(0x5a438f,0x69deac,panel_name);
         pointer(0x5a5bcf,0x69df2c,portrait_name);
-        pointer(map_slot,map_draw,reinterpret_cast<const void*>(&map_hook));
-        // These operands are used only by small mode; large/no-map are intact.
-        pointer(0x5a023f,0x684170,&small_map_half_extent);
-        pointer(0x5a0717,0x684170,&small_map_half_extent);
         pointer(wheel_slot,wheel_draw,reinterpret_cast<const void*>(&wheel_hook));
         std::vector<unsigned char> name_call{0xe8,0,0,0,0};
         const auto displacement=static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&target_name_hook))-0x5a9054;

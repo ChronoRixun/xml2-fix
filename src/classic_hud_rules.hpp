@@ -11,14 +11,12 @@ namespace classic_hud_rules
     using uv = std::array<float, 8>;
     constexpr std::uint32_t primitive_slot=0x69dcf0, uv_slot=0x69dc60;
     constexpr std::uint32_t primitive=0x59a140, coordinates=0x5ec560;
-    constexpr std::uint32_t map_slot=0x69db98, map_draw=0x5a0bb0;
     constexpr std::uint32_t wheel_slot=0x69dc78, wheel_draw=0x5a70a0;
     constexpr std::uint32_t hud_batch=0x81d7e0+0x85918;
     constexpr int health=32, energy=33, frame=34, small_frame=35, inner=36, small_inner=37;
-    constexpr int map_frame=38, experience=39;
-    // Eight native 240-unit cells at .05 HUD scale, plus a quantized cell and
-    // the bevel. Edge icon centres clamp at seven cells, with rotated 16px art.
-    inline constexpr float small_map_half_extent=112.f;
+    // Atlas sprite 38 was the small-map frame of beta 5 and is unused; the ids
+    // stay where they are so the builder's atlas contract does not renumber.
+    constexpr int experience=39;
     inline bool hud_batch_address(std::uintptr_t address)
     { return address>=hud_batch && address<=hud_batch+2*0x104 && (address-hud_batch)%0x104==0; }
     inline float energy_offset(int skew) { return skew<0 ? -3.75f : 3.75f; }
@@ -47,7 +45,6 @@ namespace classic_hud_rules
         if(id==small_frame) return rect(.5f,300.5f,47.5f,311.5f);
         if(id==inner) return rect(.5f,320.5f,221.5f,341.5f);
         if(id==small_inner) return rect(.5f,348.5f,45.5f,357.5f);
-        if(id==map_frame) return rect(.5f,384.5f,127.5f,511.5f);
         if(id==experience) return rect(.5f,360.5f,63.5f,362.5f);
         uv out{};
         for(unsigned i=0;i<8;++i) out[i]=stock[i]*.5f;
@@ -117,13 +114,6 @@ namespace classic_hud_rules
         return caller==0x59e147 && channel==1 && icon==27 &&
             std::isfinite(size[0]) && std::isfinite(size[1]) &&
             size[0]>=8 && size[0]<=1024 && size[1]>=8 && size[1]<=128;
-    }
-
-    inline bool small_map_visible(int mode,bool visible,bool geometry,const float* centre)
-    {
-        return mode==1 && visible && geometry && std::isfinite(centre[0]) &&
-            std::isfinite(centre[2]) && centre[0]>=small_map_half_extent && centre[0]<=4096 &&
-            centre[2]>=small_map_half_extent && centre[2]<=4096;
     }
 
     inline int target_art(float width, std::uintptr_t caller)

@@ -35,6 +35,7 @@
 #include "death_threshold.hpp"
 #include "receive_validation.hpp"
 #include "npc_power.hpp"
+#include "npc_semi_auto.hpp"
 #include "stun_rule.hpp"
 #include "pack_amount.hpp"
 #include "death_switch.hpp"
@@ -402,8 +403,11 @@ namespace
 		// energy. Online play is lockstep, so AI decisions and enemy energy are part of the shared gameplay record (rule
 		// 16); a requested rule enlists the agreement even in a non-LC installation.
 		npc_power::install(game);
-		if (game_version::needs_gameplay_agreement() || npc_power::requested())
-			gameplay_agreement::register_rule(gameplay_capabilities::npc_power_rule_id, npc_power::revision_for(npc_power::requested()), npc_power::values(), npc_power::verified());
+		npc_semi_auto::install(game);
+		if (game_version::needs_gameplay_agreement() || npc_power::requested() || npc_semi_auto::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::npc_power_rule_id,
+				npc_power::revision_for(npc_power::requested() || npc_semi_auto::requested()),
+				npc_semi_auto::values(npc_power::values()), npc_power::verified() && npc_semi_auto::verified());
 		stun_rule::install(game);
 		// New opt-in rule: absence preserves the released LC OFF digest.
 		if (stun_rule::requested())

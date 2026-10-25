@@ -31,16 +31,19 @@ int main(int argc,char** argv)
     auto u16=[&](std::size_t p) {std::uint16_t n;std::memcpy(&n,file.data()+p,2);return n;};
     auto u32=[&](std::size_t p) {std::uint32_t n;std::memcpy(&n,file.data()+p,4);return n;};
     auto pe=u32(0x3c), sections=pe+24+u16(pe+20);
-    const std::uint32_t sites[]{0x69dcf0,0x69dc60,0x59a53a,0x5a4376,0x5a438f,0x5a5bcf,0x69db98,0x69dc78,0x5a904f,0x5a023f,0x5a0717,
+    const std::uint32_t sites[]{0x69dcf0,0x69dc60,0x59a53a,0x5a4376,0x5a438f,0x5a5bcf,0x69dc78,0x5a904f,
         0x59a140,0x5ec560,0x5ee180,0x5a3933,0x5a3a40,0x5a3acc,0x5a3c3c,0x5a3d4b,0x5a3dd7,0x59935e,0x69de88,
         0x599432,0x599531,0x5996a4,0x59e144,
-        0x5a0bb0,0x5a0be7,0x5a0574,0x5a0bcb,0x5a0243,0x5a0271,
         0x5a3f5b,0x69de8c,0x5a3f1e,
         0x5a70a0,0x5a71e5,0x5a772b,0x5a7223,0x5a722c,0x5a7237,0x5a7596,0x5a716b,0x69dd38,
         0x5a748e,0x4bdfa0,0x5f11b0,
-        0x5a9030,0x5f1130,0x5f0fd0,0x597c20,0x596df0,0x69d6d0,0x5f1173,0x5ef275,
-        0x5a023d,0x5a0715,0x5a0249,0x5a0209,0x5a0253,0x69ddf4};
-    for(auto va:sites) {
+        0x5a9030,0x5f1130,0x5f0fd0,0x597c20,0x596df0,0x69d6d0,0x5f1173,0x5ef275};
+    // XMen2.exe's own small-map placement: the map draw slot and the two safe-area inset operands
+    // (beta 5 redirected them to fit a frame). The adapter must leave all three byte-for-byte alone.
+    const std::uint32_t native_map[]{0x69db98,0x5a023f,0x5a0717};
+    std::vector<std::uint32_t> loaded(std::begin(sites),std::end(sites));
+    loaded.insert(loaded.end(),std::begin(native_map),std::end(native_map));
+    for(auto va:loaded) {
         bool found=false;
         for(unsigned i=0;i<u16(pe+6);++i) {
             auto row=sections+40*i,rva=u32(row+12);
@@ -73,13 +76,19 @@ int main(int argc,char** argv)
         const auto index=std::stoul(mode.substr(5));assert(index<std::size(sites));
         *reinterpret_cast<unsigned char*>(sites[index])^=1;
     }
-    std::array<std::uint32_t,11> before{};
+    std::array<std::uint32_t,8> before{};
     for(unsigned i=0;i<before.size();++i)std::memcpy(&before[i],reinterpret_cast<void*>(sites[i]),4);
+    std::array<std::uint32_t,3> map_before{};
+    for(unsigned i=0;i<map_before.size();++i)std::memcpy(&map_before[i],reinterpret_cast<void*>(native_map[i]),4);
     classic_hud::install(reinterpret_cast<HMODULE>(mode=="base"?0x500000:0x400000));
     assert(!fatal);
     for(unsigned i=0;i<before.size();++i) {
         std::uint32_t after;std::memcpy(&after,reinterpret_cast<void*>(sites[i]),4);
         assert((after!=before[i])==(mode=="on"));
+    }
+    for(unsigned i=0;i<map_before.size();++i) {
+        std::uint32_t after;std::memcpy(&after,reinterpret_cast<void*>(native_map[i]),4);
+        assert(after==map_before[i]); // native small-map placement is never touched, installed or not
     }
     using namespace classic_hud_rules;
     // A fixed character count clips wide letters and unnecessarily shortens
@@ -149,20 +158,9 @@ int main(int argc,char** argv)
     assert(!prompt_background(0x59e147,1,26,prompt_size));
     assert(!prompt_background(0x59e148,1,27,prompt_size));
     assert(!prompt_background(0x59e147,1,27,bad_prompt));
-    // Cell quantization and rotated edge icons must both fit the frame bevel.
-    assert(small_map_half_extent >= 9*240*.05f+2);
-    assert(small_map_half_extent >= 7*240*.05f+std::sqrt(2.f)*8+2);
-    const float safe_right=573.44f;
-    const float centre_x=safe_right-small_map_half_extent;
-    assert(centre_x+small_map_half_extent==safe_right);
-    const float map_centre[]{448,0,192}, invalid_centre[]{10,0,192};
-    assert(small_map_visible(1,true,true,map_centre));
-    for(int map_mode:{0,2,3}) assert(!small_map_visible(map_mode,true,true,map_centre));
-    assert(!small_map_visible(1,false,true,map_centre));
-    assert(!small_map_visible(1,true,false,map_centre));
-    assert(!small_map_visible(1,true,true,invalid_centre));
-    const auto map_uvs=map_uv(map_frame,old);
-    assert(map_uvs[0]<.5f && map_uvs[1]>.75f);
+    // No small-map frame: sprite 38 is unused and falls back to the PC quadrant like any foreign id.
+    const auto unused=map_uv(38,old);
+    for(unsigned i=0;i<8;++i)assert(unused[i]==old[i]/2);
     for(const auto shape:std::array<std::array<float,2>,2>{{{224,24},{48,12}}}) {
         const float pos[]{100,10,300};const int skew=int(shape[1]*.75f);
         const auto box=target_origin(pos,shape.data(),skew);assert(box.valid);

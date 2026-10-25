@@ -130,8 +130,8 @@ namespace npc_power
 			// The combos: no combolevel override, XML1's levels 2 / 3 / 6 in rows 2 / 3 / 11 over XML1's six combos in
 			// slots 0..5, and the tail after a combo start.
 			{combolevel_call_va, sub_bytes(combolevel_site, 3, 3), combolevel_skip()},
-			{combo_exit_va, sub_bytes(combo_exit_site, 3, 6), combo_exit_jump(combo_exit_va, l.start)},
-			{combo_exit2_va, sub_bytes(combo_exit2_site, 3, 6), combo_exit_jump(combo_exit2_va, l.start)},
+			{combo_exit_va, sub_bytes(combo_exit_site, 3, 6), combo_exit_jump(combo_exit_va, l.pre_start)},
+			{combo_exit2_va, sub_bytes(combo_exit2_site, 3, 6), combo_exit_jump(combo_exit2_va, l.pre_start)},
 			{combo_continue_va, retail_bytes(combo_continue_site, combo_continue_site.patched), continue_jump(l)},
 			{combo_end_delay_site.va, retail_bytes(combo_end_delay_site, combo_end_delay_site.patched), end_delay_call(l)},
 			{combo_buttons_va, retail_bytes(combo_buttons_site, 24), combo_buttons_bytes(l)},
@@ -141,6 +141,10 @@ namespace npc_power
 			{combo_row11_site.va, retail_bytes(combo_row11_site, combo_row_size), combo_row_bytes(6)},
 			{query_priority_site.va, retail_bytes(query_priority_site, query_priority_site.patched), query_priority_bytes()},
 			{query_budget_site.va, retail_bytes(query_budget_site, query_budget_site.patched), query_budget_bytes()},
+			// Revision 10: a hit that makes an NPC react spends the combo steps that come due before its brain runs again.
+			{reaction_site.va, retail_bytes(reaction_site, reaction_site.patched), mark_jump(l)},
+			{power_entry_site.va, retail_bytes(power_entry_site, power_entry_site.patched), power_entry_jump(l)},
+			{attack_entry_site.va, retail_bytes(attack_entry_site, attack_entry_site.patched), attack_entry_jump(l)},
 			{visibility_site.va, retail_bytes(visibility_site, visibility_site.patched),
 			 visibility_jump(static_cast<address>(reinterpret_cast<std::uintptr_t>(&visibility_xml1)))},
 		};
@@ -163,7 +167,10 @@ namespace npc_power
 		              "default.xbe 0xcde95), the melee-range power decision re-checks every 2.0 s / 0.5 s (0x5188d8) and needs half of the "
 		              "character's energy (0x518920); NPCs combo with the first game's levels and combos (0x505011, rows 0x6dd508) and pause after a combo start (0x51993a, 0x519b04); "
 		              "AI visibility uses XML1's ray and query reservation/budget (0x505250, 0x5027bd, 0x5027e0); "
-		              "combo presses and completion use XML1 delays (0x51920b, 0x5192cb); bridges at 0x%08lX",
+		              "combo presses and completion use XML1 delays (0x51920b, 0x5192cb); a hit reaction spends the steps that come due "
+		              "during it, and a power re-check or attack decision that fell due then is spent, as XML1's brain does "
+		              "(0x435b6e, 0x51920b, 0x518770, 0x518fd0); "
+		              "bridges at 0x%08lX",
 		              static_cast<unsigned long>(base));
 	}
 }

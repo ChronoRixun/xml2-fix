@@ -38,6 +38,11 @@ def capture(tag, dlldir, edit, rules):
     if cfg.has_option("Game", "StunRule"):
         cfg.remove_option("Game", "StunRule")
         rules -= 1
+    # XML2 Fix 1.8.0-beta.6 made [Game] NpcPowerRule=xml1 rule 16 revision 10 on purpose (the reference has the older
+    # revision); without the key rule 16 stays registered with the released revision 3 OFF record, so the transport's
+    # OFF claim is compared with the key removed (rule count unchanged).
+    if cfg.has_option("Game", "NpcPowerRule"):
+        cfg.remove_option("Game", "NpcPowerRule")
     edit(cfg)
     with (folder / "xml2-fix.ini").open("w") as handle:
         cfg.write(handle)

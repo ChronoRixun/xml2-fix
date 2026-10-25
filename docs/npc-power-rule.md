@@ -102,6 +102,37 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    zero deadline advances once the clock is positive. Unordered clocks retain the previous wait behavior.
 10. **0x5192cb (6 bytes).** Completion adds the final button delay to the existing time/offset/random accumulator.
    PC adds a fixed 0.2 seconds. The original single-hit combo adds zero; its longest combo adds 0.6 seconds.
+11. **0x435b6e (7 bytes, revision 10).** A hit's reaction no longer lets the combo resume. XML1's brain 0xeea60 runs
+   every frame whatever the body does and presses each step on its clock (0xeebec..0xeecb7), so the steps that come
+   due while the NPC is in `pain` or `block` (shared_nodes: only `idle` chains out of them) are spent, and a hit
+   usually ends the combo. XMen2.exe does not call the melee brain while the body is busy (measured: about 3 calls/s
+   in `pain` against 29-54/s in idle/strafe), so the first call after the reaction finds the step overdue and
+   presses it at once - from idle, which chains `attack`, `smash` and `powers` - and the combo resumes. At the end
+   of the pain decision 0x435850, where bit 0x08 of the hit's reaction byte (+0xac) still set means the victim
+   reacts (pain or block, chosen after it), the bridge marks the AI slots whose actor (AI+0x10) is the victim
+   (a word per slot after the 32 press times). The continue step's front (the 0x51920b jump now enters it first)
+   clears a mark and spends every step whose press time has passed: index + 1, press time + that step's delay, and
+   the native completion when none is left; then the continue step as before waits for the first step still to
+   come. A combo start clears its slot's mark (the exits' jump enters a front that unmarks, then the start
+   bridge). The completion pause of a combo spent this way counts from the brain's first call after the
+   reaction, not from the spent step's time (XML1's), so it can start up to one reaction later.
+12. **0x518770 (5 bytes, revision 10).** The melee-range power decision has the same gap: XML1's 0xee260 also runs
+   while the body reacts (1187 of its calls with the BrotherhoodEnergy in `pain` in one matched session), so a
+   re-check that falls due then is spent - the power press finds no `powers` chain in pain or block - and re-armed;
+   XMen2.exe's first call after the reaction found the re-check overdue and the power went off from idle (enemy
+   `pain` -> `idle` -> `power_smash` with no decision between). The mark bridge also marks a second word per slot;
+   the decision's entry front clears it and re-arms AI+0x1cc by the rule's re-check (2.0 s, or 0.5 s with a
+   controller) once for each re-check that fell due before now (the clock 0x518849 reads: 0x46dce0 vt+0x160), at
+   most eight, then runs the decision, which finds the timer in the future. The visibility/energy conditions XML1
+   checks before re-arming are not replayed for the spent re-checks.
+13. **0x518fd0 (5 bytes, revision 10).** The attack decision itself: with no combo running, XML1's deadline
+   (AI+0x1c) can fall due while the body reacts; the decision is then made and spent (no chain out of pain/block)
+   and its tail re-arms the next attack time (now + meleetimeroffset + random x meleetimerrandomadd). XMen2.exe made
+   the overdue decision on the first idle frame after the reaction (a fresh attack within 0.3 s of 12-14 pains per
+   four matched windows, 1 on the Xbox). A third mark word per slot; the melee decision's entry front, when no
+   combo is running (a running combo keeps the mark for after its end), clears it and re-arms AI+0x1c from the due
+   time by AI+0x288 + random x AI+0x28c (the draw 0x560190(1) the completion code uses) for every decision that fell
+   due before now, at most four, then the decision as before. The crowd delay of the tail is not added for these.
 
 XML1's second combo table (brain mode 1) has no XMen2.exe brain. The earlier target-loss cancellation branch and
 the PC's press notification remain unchanged. No claim of complete AI equivalence is made.
@@ -119,12 +150,19 @@ its AI time is set.
 ## Gameplay agreement
 
 Online play is lockstep and the rule changes AI decisions and energy, so it is shared gameplay rule **16**
-(`gameplay_capabilities::npc_power_rule_id`, [gameplay-agreement.md](gameplay-agreement.md)): revision 4,
-`{installed ? 1 : 0, installed ? 1 : 0, 0, 0}`. The added word advertises XML1 visibility geometry and query scheduling;
-revision 2 had only the power/combo word, and revision 3 lacked the press/completion timers. Registered in an LC
-installation or when requested; absent or `xml2` retains **revision 3** with verified `{0,0,0,0}`, matching the
-released OFF record. Only requested configurations use revision 4. Requested but not installed (a guard mismatch,
-protection, readback, an unknown value) is unverified and closes host/join. Enabled revision 3 and 4 peers refuse.
+(`gameplay_capabilities::npc_power_rule_id`, [gameplay-agreement.md](gameplay-agreement.md)): revision 10,
+`{installed ? 1 : 0, installed ? 1 : 0, officer weapon brain installed ? 1 : 0, its source fingerprint}`. Word 1
+advertises XML1 visibility geometry and query scheduling; words 2 and 3 are zero unless the separate opt-in
+`[Game] NpcSemiAuto=xml1` with its `[NpcSemiAuto]` rows is present ([npc-semi-auto.md](npc-semi-auto.md)).
+Revision 2 had only the power/combo word, revision 3 lacked the press/completion timers, revision 4 lacked the
+reaction-spent combo steps, power re-checks and attack decisions (items 11-13). Revisions 5-9 were unreleased
+candidates and are not reused: 5 a withdrawn role experiment and the first reaction-spent test build, 6-9 the officer
+weapon candidates (9 = the held-fire brain, now words 2-3 of revision 10). Registered in an LC installation or when
+requested; absent or `xml2` retains **revision 3** with verified `{0,0,0,0}`, matching the released OFF record. Only
+requested configurations use revision 10; every other enabled revision (3, 4, 5-9) is refused both ways, and a
+revision 10 PC with the officer brain and one without refuse each other by value, all naming rule 16 (NpcPowerRule).
+Requested but not installed (a guard mismatch, protection, readback, an unknown value, `NpcSemiAuto=xml1` without
+`NpcPowerRule=xml1` or without valid rows) is unverified and closes host/join.
 
 ### Bridge register contracts
 
@@ -199,8 +237,8 @@ melee-style attacks. In matched 45 s windows (attack-101b round 5; officer on th
 first game's HAARP officer fired 49 shots with 0 melee entries (median gap 0.91 s, the freeze gun's 0.9 s recoil),
 while the released port fired 0 shots and made 24 melee entries, because the converted gun has the generic melee
 brain and range 90 where the first game's weapon brain uses range 550. So these totals match while the behaviour
-does not. A restoration exists only as the opt-in gameplay rule 16 revision 8 for that one officer (not in this
-release); the other 19 gun families are not covered. Online play, party AI and other encounter types were not
+does not. A restoration exists only as the opt-in `NpcSemiAuto=xml1` part of gameplay rule 16 revision 10 for that one officer (not
+in this release; candidate revision 9 introduced it, revision 8 used a burst/pause branch the original officer never runs); the other 19 gun families are not covered. Online play, party AI and other encounter types were not
 live-tested.*
 
 The first game's AI decisions were also counted directly in xemu (breakpoints at default.xbe 0xee2f4 / 0xee3f1, 30

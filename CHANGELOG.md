@@ -2,6 +2,29 @@
 
 ## 1.8.0 - <date TBD>
 
+- **Enemy AI fidelity: gameplay rule 16 revision 10** (`[Game] NpcPowerRule = xml1`, `[Game] NpcSemiAuto = xml1`;
+  1.8.0-beta.6). One new rule-16 revision covers two restorations ([docs](docs/npc-power-rule.md),
+  [weapon brain](docs/npc-semi-auto.md)). (1) With `NpcPowerRule = xml1`, a hit reaction now spends an enemy's combo
+  step, power re-check and attack decision as in X-Men Legends (the reaction sites 0x435b6e, 0x518770, 0x518fd0);
+  measured on the single-Brotherhood moving-hero bench, enemy offensive entries fall from 48.7 to 25.2 per minute
+  (original 27.7, gate 23.6-31.9) with the still-hero control unchanged. (2) `NpcSemiAuto = xml1` with
+  `[NpcSemiAuto] Count / W1..Wn` rows (`actor|recoil|range|burst|leader`, binary32 bits, written by Legends Classic from
+  the owner's XML1 data) gives those NPCs the original weapon brain: the recoil deadline, the held fire, the
+  grenade-press and input-lock bridges (0x51a359, 0x519fe7, 0x512f0d) - the HAARP officer fires one aimed shot per
+  ~0.9 s, never bursts or melees at range, closes from 520 to ~340 and holds his grenade at full energy, within +/-15 %
+  of the original's shot count in all six range/energy cells at 60 fps. It needs `NpcPowerRule = xml1` (otherwise it
+  is refused and host/join close). The record: absent/`xml2` = revision 3 `{0,0,0,0}` (released OFF, nothing
+  patched); `NpcPowerRule = xml1` = revision 10 `{1,1,0,0}`; with the weapon brain `{1,1,1,metadata fingerprint}`.
+  A revision-10 PC refuses the released revisions 3 and 4 and the unreleased candidates 5-9 both ways, and a PC with
+  the weapon brain refuses one without it, each naming `16 NpcPowerRule`.
+- **The classic HUD no longer frames the small map** (`[Game] ClassicHud = xml1`; 1.8.0-beta.6): beta 5 drew a bevel
+  around XMen2.exe's small map and moved the map's safe-area inset (two operands at 0x5a023f and 0x5a0717) to fit
+  it; hand-testing found the frame oversized and the original game's small map had none. The adapter now leaves the
+  map alone: the map draw callback (0x69db98) is not hooked, the two inset operands keep their stock bytes, and the
+  twelve read-only guards that existed only for the frame are gone (the transaction is seven pointer writes and one
+  call redirect). The map, its fog and markers sit where XML2 puts them, and every other classic HUD piece is
+  unchanged. Off (`ClassicHud` absent) is byte-identical as before. A builder whose atlas still has the frame is
+  harmless (sprite 38 is never drawn); Legends Classic 0.4.0-beta.6 (content 26 / LC35) stops writing it.
 - **Online at 60 fps** (`[Online] TickRate = 60`; 1.8.0-beta.3): the stock game runs an online session at 30
   frames a second (`CClient::frame` writes a 1/30 s minimum frame while the online flag is set, 1/60 s otherwise).
   `60` replaces the online 1/30 with 1/60 (guarded, read back; `[Display] FrameRate`'s patch of the offline 1/60 in
