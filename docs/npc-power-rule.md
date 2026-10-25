@@ -135,7 +135,8 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    Xbox the re-check is re-armed inside the attack). Every call records its time per slot; a timer that fell due
    after the previous call, with that call more than 0.15 s ago, is spent the same way (2.0 s / 0.5 s steps, at
    most eight). A timer already due at the previous call is left alone (the Xbox retries that one each frame too).
-   Gaps of 2.0 s or more are not treated as a busy body (an inactive AI, a state the brain does not run in, a
+   Gaps of 10 s or more are not treated as a busy body (back-to-back attacks on the still bench skip the decision
+   for up to ~7 s, so a 2 s bound left those late) (an inactive AI, a state the brain does not run in, a
    load): the first live test spent the HAARP officer's grenade re-check at activation and it shot instead of
    holding the grenade at full energy. The power front's gap rule applies only to the melee brain's call (return
    0x5193e7); the officer weapon brain's call (0x519fe4) keeps the revision 10 reaction rule alone.

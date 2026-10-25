@@ -153,7 +153,7 @@ namespace npc_power_rules
 	constexpr float power_call_gap = 0.15f;
 	// ...and shorter than this: a longer gap is an inactive AI, a state the brain does not run in, or a load (XML1 does
 	// not decide then either; found with the officer, whose grenade at full energy was spent at activation).
-	constexpr float power_call_gap_max = 2.0f;
+	constexpr float power_call_gap_max = 10.0f;
 	inline float recheck_xml1(const std::int32_t controller)
 	{
 		return controller == -1 ? xml1_recheck : xml1_recheck_party;
