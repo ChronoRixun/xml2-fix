@@ -20,8 +20,9 @@
 // presses and completion using XML1's delays. Revision 10 (5-9 were unreleased candidates, see below): a hit that makes an NPC react (pain or block) spends the
 // combo steps that come due before its brain runs again, and the power re-checks and attack decisions that came due then, as
 // XML1's brain - which keeps running while the body reacts - does; XMen2.exe resumed the combo (or fired the power)
-// from idle. Revision 11 (1.8.0-beta.7; revision 10 was released in 1.8.0-beta.6): the power re-checks and attack
-// decisions that came due while the brain was skipped (the body busy in an attack or a power) are spent too, and a
+// from idle. Revision 11 (1.8.0-beta.7; revision 10 was released in 1.8.0-beta.6): the brain runs through locked
+// moves as XML1's (the attack-state update's input-lock exit 0x512f0b, the melee brain's power-decision lock test
+// 0x5187c4 and the picker's 0x50fe5c), so a re-check due in an attack or a power is made and spent then, and a
 // hit is blocked only when it is a counted melee to-hit miss, as in XML1 - an attack whose damagescale isn't `normal`
 // (XML1's PowerAttack) is never rolled, and the damage receive's block_chance roll never zeroes a hit; the weapon
 // brain takes schema 3 rows (every gun family). Nothing a save reads changes.
@@ -35,8 +36,8 @@ namespace npc_power
 	bool verified();  // nothing is half-installed: not requested, or installed
 	// Rule 16: word 0 enables the power/combo rules; word 1 enables XML1 visibility geometry and query scheduling;
 	// words 2 and 3 are the opt-in officer weapon brain ([Game] NpcSemiAuto=xml1, npc_semi_auto.hpp: installed, source
-	// fingerprint), zero without it. Revision 11 (1.8.0-beta.7) adds the call-gap spending of power re-checks and
-	// attack decisions, XML1's block rule (power attacks never rolled, no block_chance roll) and the schema 3 weapon
+	// fingerprint), zero without it. Revision 11 (1.8.0-beta.7) adds the brain through locked moves (items
+	// 16-18), XML1's block rule (power attacks never rolled, no block_chance roll) and the schema 3 weapon
 	// brain (every gun family); revision 10 (1.8.0-beta.6, released) the reaction-spent combo steps, power re-checks
 	// and attack decisions and the officer weapon brain; revision 4 per-press and final combo delays; revision 3
 	// visibility. Revisions 5-9 were unreleased candidates and are never reused: 5 a withdrawn role experiment (and

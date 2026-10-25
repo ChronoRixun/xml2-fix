@@ -573,9 +573,10 @@ namespace {
   for (const auto [va, size] : std::initializer_list<std::pair<u32, std::size_t>>{
        {picker_call_va, 5}, {combolevel_call_va, 3}, {combo_exit_va, 6}, {combo_exit2_va, 6},
        {combo_buttons_va, 24}, {combo_lengths_va, 24}, {combo_row2_site.va, combo_row_size},
-       {combo_row3_site.va, combo_row_size}, {combo_row11_site.va, combo_row_size}})
+       {combo_row3_site.va, combo_row_size}, {combo_row11_site.va, combo_row_size},
+       {lock_exit_va, 2}, {power_lock_va, 6}})
    written.emplace_back(va, size);
-  check(written.size() >= 20, "rule 16 written ranges collected");
+  check(written.size() >= 22, "rule 16 written ranges collected");
   for (const auto& g : npc_semi_auto_rules::guards) {
    const auto size = limits_rules::hex_size(g.hex);
    bool clear = true;

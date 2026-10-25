@@ -13,11 +13,15 @@
 
 - **Enemy AI fidelity, part 2: gameplay rule 16 revision 11** (`[Game] NpcPowerRule = xml1`, `[Game] NpcSemiAuto =
   xml1`; 1.8.0-beta.7; [docs](docs/npc-power-rule.md), [weapon brain](docs/npc-semi-auto.md),
-  [round 8](docs/npc-weapon-round8.md)). (1) Power re-checks and attack decisions that fell due while XMen2.exe
-  skipped the brain (the body busy in an attack or a power) are spent as XML1's always-running brain spends them
-  (the entry fronts at 0x518770 - the melee brain's call only, return 0x5193e7 - and 0x518fd0; gaps of 600 s or more
-  are a load, not a busy body): on the still-hero bench powers came 0.5-7 s late after an attack (median 2.5 s), now
-  within 0.08 s, and moving-bench melee entries rose from 18.7 to 24.2 per enemy-minute (original 25.0). (2) A block
+  [round 8](docs/npc-weapon-round8.md)). (1) The brain runs through locked moves, as XML1's (items 16-18):
+  XMen2.exe's attack-state update returned at once in every input-locked frame of an enemy that had used a power
+  (0x512f01..0x512f14; XML1's 0x10ad70 has no such exit), so its visibility query, brain and power decision did not
+  run during attacks, powers and reactions (2.6 power-decision calls/s in attacks, 0 in powers, against the
+  original's 23-39) and a power re-check due then went off on the first free frame, 0.5-7 s late (median 2.5 s on
+  the still-hero bench). The exit is never taken (0x512f0b jz -> jmp), the melee brain's power decision skips its own
+  lock test (0x5187c4; the officer weapon brain's call keeps it) and its picker is entered past the picker's lock
+  test (0x50fe5c; the per-slot chain test still refuses). NpcSemiAuto's own lock bridge at 0x512f0d is withdrawn (rule
+  16 now covers every actor), and the interim call-gap fronts (beta7 development) are withdrawn with it. (2) A block
   is a counted melee to-hit miss, as in XML1 (items 14-15): an attack whose damagescale isn't `normal` (XML1's
   PowerAttack) is never rolled (0x44f58e), and the damage receive's `block_chance` roll never zeroes a hit
   (0x437b08); on the PC about a quarter of such rolled power attacks were blocked with no damage. (3) The weapon brain
