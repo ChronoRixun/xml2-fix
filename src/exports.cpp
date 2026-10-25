@@ -46,6 +46,8 @@
 #include "lift_rule.hpp"
 #include "lift_rule_rules.hpp"
 #include "xml1_cling.hpp"
+#include "xml1_rogue_decide.hpp"
+#include "xml1_rogue_decide_rules.hpp"
 #include "xml1_cling_rules.hpp"
 #include "death_switch.hpp"
 #include "gameplay_agreement.hpp"
@@ -531,6 +533,10 @@ namespace
 		if (xml1_cling::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::wall_cling_id, xml1_cling_rules::agreement_revision,
 				{xml1_cling::installed() ? 1u : 0u,0,0,0}, xml1_cling::verified());
+		xml1_rogue_decide::install(game);
+		if (xml1_rogue_decide::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::rogue_decide_id, xml1_rogue_decide_rules::agreement_revision,
+				{xml1_rogue_decide::installed() ? 1u : 0u,0,0,0}, xml1_rogue_decide::verified());
 		// X-Men Legends 1's packs ([Game] DoubleHeal=0, installed above, before stat_help): two branches of restoreHealth /
 		// restoreEnergy; no other module patches them.
 		// Both change what each peer simulates (objects broken while a zone settles; how much a pack heals): rules 11

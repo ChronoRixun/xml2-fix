@@ -54,6 +54,7 @@ add_library(xml2_fix SHARED
 	src/world_backfaces.cpp
 	src/balance_parity.cpp
 	src/xml1_cling.cpp
+	src/xml1_rogue_decide.cpp
 	src/lift_rule.cpp
 	src/combo_heads.cpp
 	src/model_pools.cpp
@@ -598,3 +599,11 @@ add_executable(xml2_union_host tools/union_host/union_host.cpp tools/union_host/
 # Its own folder: no dinput.dll may sit next to it, or the engine DLLs' dinput import would load that one first.
 set_target_properties(xml2_union_host PROPERTIES OUTPUT_NAME union_host RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/union")
 target_link_options(xml2_union_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
+
+add_executable(xml2_xml1_rogue_decide_test test/xml1_rogue_decide_test.cpp)
+target_include_directories(xml2_xml1_rogue_decide_test PRIVATE src)
+
+add_executable(xml2_xml1_rogue_decide_install_test test/xml1_rogue_decide_install_test.cpp
+    src/xml1_rogue_decide.cpp src/xml1_cling.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_xml1_rogue_decide_install_test PRIVATE src)
+target_link_options(xml2_xml1_rogue_decide_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)

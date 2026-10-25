@@ -9,6 +9,7 @@
 #include "xml1_hook_memory.hpp"
 #include "xml1_hook_transaction.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -50,6 +51,8 @@ namespace xml1_cling
 		std::array<void*, 8> decide_slots{}, backflip_slots{};
 		void* decide_handler = nullptr;
 		void* backflip_handler = nullptr;
+		bool lookup_installed = false;
+		handler_resolver additional_lookup = nullptr;
 		u32 lookup_resume = lookup_resume_va;
 
 		vec read_vec(const void* p, u32 off) { return {at<float>(p, off), at<float>(p, off + 4), at<float>(p, off + 8)}; }
@@ -184,9 +187,9 @@ namespace xml1_cling
 		void* __cdecl lookup(const char* name)
 		{
 			if (!name) return nullptr;
-			if (_stricmp(name, "ch_clingwalldecide") == 0) return &decide_handler;
-			if (_stricmp(name, "ch_clingwallbackflip") == 0) return &backflip_handler;
-			return nullptr;
+			if (decide_handler && _stricmp(name, "ch_clingwalldecide") == 0) return &decide_handler;
+			if (backflip_handler && _stricmp(name, "ch_clingwallbackflip") == 0) return &backflip_handler;
+			return additional_lookup ? additional_lookup(name) : nullptr;
 		}
 		auto lookup_function = &lookup;
 		// At 0x4fd860 (cdecl, the name at [esp+4]): ours, or the five displaced bytes and the game's own lookup.
@@ -238,6 +241,36 @@ namespace xml1_cling
 		}
 	}
 
+	bool register_lookup(const HMODULE game, handler_resolver resolver)
+	{
+		if (!game || reinterpret_cast<std::uintptr_t>(game) != limits_rules::image_base) return false;
+		if (additional_lookup && resolver && additional_lookup != resolver) return false;
+		std::vector<unsigned char> jump(5);
+		jump[0] = 0xe9;
+		const auto rel = static_cast<std::int32_t>(reinterpret_cast<std::uintptr_t>(&lookup_hook) - (lookup_va + 5));
+		std::memcpy(jump.data() + 1, &rel, 4);
+		xml1_hook_transaction::memory memory;
+		if (lookup_installed)
+		{
+			std::array<unsigned char, 5> actual{};
+			if (!memory.read(lookup_va, actual.data(), actual.size()) || !std::equal(actual.begin(), actual.end(), jump.begin())) return false;
+		}
+		if (!lookup_installed)
+		{
+			if (!live_matches(guards[0])) return false;
+			const std::vector<xml1_hook_transaction::patch> writes{{lookup_va, {retail_entry.begin(), retail_entry.end()}, jump}};
+			bool safe = true;
+			if (!xml1_hook_transaction::apply(memory, writes, &safe))
+			{
+				if (!safe) game_version::refuse_startup();
+				return false;
+			}
+			lookup_installed = true;
+		}
+		if (resolver) additional_lookup = resolver;
+		return true;
+	}
+
 	void install(const HMODULE game)
 	{
 		state = -1;
@@ -277,25 +310,17 @@ namespace xml1_cling
 		backflip_slots[6] = reinterpret_cast<void*>(&backflip_update);
 		decide_handler = decide_slots.data();
 		backflip_handler = backflip_slots.data();
-		std::vector<unsigned char> jump(5);
-		jump[0] = 0xe9;
-		const auto rel = static_cast<std::int32_t>(reinterpret_cast<std::uintptr_t>(&lookup_hook) - (lookup_va + 5));
-		std::memcpy(jump.data() + 1, &rel, 4);
-		const std::vector<xml1_hook_transaction::patch> writes{{lookup_va, {retail_entry.begin(), retail_entry.end()}, jump}};
-		bool safe = true;
-		if (xml1_hook_transaction::apply(memory, writes, &safe))
+		if (register_lookup(game, nullptr))
 		{
 			state = 1;
 			logger::write("wall cling: xml1 ([Game] Xml1WallCling=xml1): ch_clingwalldecide and ch_clingwallbackflip answer the FightMove handler "
 			              "lookup (0x4fd860); wall test %.0f units, |n.z| < %.1f, facing < %.1f; back-flip %.0f back, %.0f up",
 			              probe_length, flat_limit, facing_limit, -launch_back, launch_up);
 		}
-		else if (safe)
-			logger::write("wall cling: the patch was refused (protection or readback)%s", keep);
 		else
 		{
-			game_version::refuse_startup();
-			logger::write("wall cling: rollback/protection verification failed; process startup refused");
+			decide_handler = backflip_handler = nullptr;
+			logger::write("wall cling: shared lookup patch refused%s", keep);
 		}
 	}
 
