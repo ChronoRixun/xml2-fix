@@ -76,6 +76,11 @@ from the shared held-fire branch and the 0.16 s gate (8 frames at 49 Hz).
 | 520 / EP 0 | ~175 | 0, 14 melee | 74: approach stalled at ~501 until +15.8 s (repositioning issue, not the weapon) |
 | any / full | 0, grenade held | 1-9 shots, 13-16 melee | 0, grenade held (at ~496 after the 520 stall) |
 
+Second windows (120/300 with full energy first; 520 in its own session, the
+only PC-free one): 120 / EP 0 172 shots (gaps 0.165-0.168), 300 / EP 0 178,
+520 / EP 0 171 (closes to 343), full energy 0 shots with the grenade held at
+308 / 300 / 369.
+
 The native near-target query found its entity on every update, so the native
 held-fire branch ran and the gate requested `power_attack` (flags 9) once per
 recoil; no gap was shorter than the 0.16 s deadline.
