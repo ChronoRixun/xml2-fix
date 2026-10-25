@@ -73,6 +73,7 @@
 #include "resistance_display.hpp"
 #include "classic_hud.hpp"
 #include "codex_menu.hpp"
+#include "speaker_label.hpp"
 #include "revival_cost.hpp"
 #include "mod_loader.hpp"
 #include "new_game.hpp"
@@ -470,6 +471,9 @@ namespace
 		resistance_display::install(game);
 		classic_hud::install(game);
 		codex_menu::install(game);
+		// XML1's speaker labels ([Game] ClassicSpeakers=1): the line parser's two calls of its common part; display only,
+		// no agreement record (the label is drawn text; the speaker key, portrait and talk animation are the game's own).
+		speaker_label::install(game);
 		// The team-combo popup never draws without both heads (owner crash 2026-10-23: a null head at 0x5a6845 when a
 		// model pool was full): one HUD vtable slot (0x69dd58) no other module touches; display only, no agreement record.
 		combo_heads::install(game);

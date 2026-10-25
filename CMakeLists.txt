@@ -62,6 +62,7 @@ add_library(xml2_fix SHARED
 	src/resistance_display.cpp
 	src/classic_hud.cpp
 	src/codex_menu.cpp
+	src/speaker_label.cpp
 	src/pack_amount.cpp
 	src/exports.cpp
 	src/gamepad_fix.cpp
@@ -560,6 +561,12 @@ add_executable(xml2_codex_back_install_test test/codex_back_install_test.cpp
 target_include_directories(xml2_codex_back_install_test PRIVATE src)
 target_compile_options(xml2_codex_back_install_test PRIVATE /UNDEBUG)
 target_link_options(xml2_codex_back_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_speaker_label_install_test test/speaker_label_install_test.cpp
+    src/speaker_label.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_speaker_label_install_test PRIVATE src)
+target_compile_options(xml2_speaker_label_install_test PRIVATE /UNDEBUG)
+target_link_options(xml2_speaker_label_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 # Release-gate tool (scripts/prove_off_wire.py, prove_combined_install.py): the retail image laid out at its own
 # addresses inside this executable, the production DLL's whole DllMain run against it (tools/union_host).
 add_executable(xml2_union_host tools/union_host/union_host.cpp tools/union_host/union_space.asm)

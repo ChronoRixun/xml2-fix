@@ -2,6 +2,18 @@
 
 ## 1.8.0 - <date TBD>
 
+- **XML1's speaker labels, opt-in** (`[Game] ClassicSpeakers = 1`; 1.8.0-beta.7): XMen2.exe takes a conversation
+  line's name label, portrait and talk-animation entity from one `%TOKEN%` (the line parser 0x458820 -> 0x456d00
+  writes the stats entry's display name and a newline in front of the text). X-Men Legends I keyed its 213 `%ALISON%`
+  lines to Magma but labelled them "Alison" (default.xbe string 503), so the Legends Classic builder keeps `%MAGMA%`
+  on the party Magma's ex-`%ALISON%` lines and writes `speakerLabel="Alison"` beside it. With the key the fix
+  redirects the line parser's two calls of its common part (0x458da8, 0x458e7b; seven guarded sites, one
+  transaction): after the game's own parse, a line with `speakerLabel` whose text starts with a token the game
+  resolved gets the label in place of the display name (text and textb, re-interned through 0x4566b0); the speaker
+  key stays, so the portrait and the talk animation are still Magma's. Anything else (no attribute, an unresolved
+  token, a token not at the start, a second token) is left as parsed. Absent, `0` or `off` make no writes; without
+  the fix the attribute is never read and the line reads "Magma" as before. Display only: no gameplay-agreement rule,
+  no save change.
 - **Enemy AI fidelity: gameplay rule 16 revision 10** (`[Game] NpcPowerRule = xml1`, `[Game] NpcSemiAuto = xml1`;
   1.8.0-beta.6). One new rule-16 revision covers two restorations ([docs](docs/npc-power-rule.md),
   [weapon brain](docs/npc-semi-auto.md)). (1) With `NpcPowerRule = xml1`, a hit reaction now spends an enemy's combo
