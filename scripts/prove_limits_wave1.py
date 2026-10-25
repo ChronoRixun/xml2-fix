@@ -52,6 +52,10 @@ def run(tag, dlldir, extra, drop=()):
         # rule 16's requested revision differs by release (11 in 1.8.0-beta.7, 14 in 1.9.0-beta.1) on purpose; without
         # the key it stays the released revision 3 OFF record in both (as prove_off_wire compares it)
         cfg.remove_option('Game', 'NpcPowerRule')
+    if drop and cfg.has_option('Game', 'RevivalCost'):
+        # rule 10 is revision 3 with the key from 1.8.0 (the first game's group price; beta 7 charged 200 * level^2 as
+        # revision 2) on purpose; without it rule 10 stays the released revision 2 in both
+        cfg.remove_option('Game', 'RevivalCost')
     for section, key, value in extra:
         if not cfg.has_section(section):
             cfg.add_section(section)
