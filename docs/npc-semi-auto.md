@@ -1,8 +1,9 @@
 # NPC weapon compatibility candidate
 
-This opt-in candidate restores the officer's original weapon behaviour on the
-discrete non-bullet path without warm-up. It is not a general restoration of
-every original weapon. Normal builder output does not enable it. See
+This opt-in candidate restores the original weapon behaviour for discrete
+bullet, beam and projectile weapons without warm-up or continuous fire (the
+officer and, since round 7, the MP5 and laser holders). It is not a general
+restoration of every original weapon. Normal builder output does not enable it. See
 [the investigation](weapon-brain-investigation.md) for the holder audit and the
 failed earlier candidates.
 
@@ -61,8 +62,10 @@ above 75 and at most 65535. Omitted source burst duration is 1 second. The sourc
 leader flag selects the original top combo row; the existing NPC rule represents
 that with PC row 11. Non-leaders use row 2.
 
-Current source eligibility selects the officer. Bullet aiming, warm-up,
-continuous firing and the pistol's different handler remain explicit exclusions.
+Current source eligibility selects ten source NPCs: the officer, four MP5 and
+five laser or super laser holders ([round 7](npc-weapon-round7.md)). Warm-up,
+continuous firing, flame weapons and the pistol's default-handler primary
+remain explicit exclusions.
 The DLL contains no source actor list or per-weapon balance table.
 
 ## Agreement and installation
