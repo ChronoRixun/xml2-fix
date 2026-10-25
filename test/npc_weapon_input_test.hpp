@@ -21,13 +21,15 @@ void __fastcall source_request(void*, void*, void*, int animation, float duratio
 // with the semi-auto entry arming the recoil deadline on each power_attack (0xe14d0 on the
 // original side, the production entry callback on the port side) and a fire release mid-way.
 // Decisions, play flags, warm-up starts and both deadlines must agree bit for bit.
-struct family { const char* name; const char* row; float recoil, warmup; bool continuous; };
+struct family { const char* name; const char* row; float recoil, warmup; bool continuous, pistol = false; };
 constexpr family families[] = {
  {"discrete laser", "test_guard|3e2e147b|44098000|3fc00000|00000000|00000000|00000000", .17f, 0, false},
  {"nullifier warm-up per shot", "test_guard|3f333333|44098000|3f800000|00000001|3f000000|00000003", .7f, .5f, false},
  {"knockback warm-up per shot", "test_guard|3f4ccccd|44098000|3f800000|00000001|3f000000|00000002", .8f, .5f, false},
  {"lightning continuous", "test_guard|00000000|44098000|40200000|00000001|3f19999a|00000013", 0, .6f, true},
  {"flame continuous", "test_guard|3cf5c28f|43898000|40600000|00000000|3f800000|00000011", .03f, 1.f, true},
+ // Default-handler primary: no semi-auto entry arms the recoil deadline on either side.
+ {"pistol default handler", "test_guard|3e4ccccd|44098000|3fc00000|00000000|00000000|00000040", .2f, 0, false, true},
 };
 void timeline_comparison(void* code, std::byte* source_actor, std::byte* input, void* pc_actor)
 {
@@ -42,6 +44,11 @@ void timeline_comparison(void* code, std::byte* source_actor, std::byte* input, 
   field<float>(source_actor, 0x498) = 0; field<float>(source_actor, 0x49c) = 0;
   field<unsigned char>(source_actor, 0x54c) = 0; field<unsigned char>(source_actor, 0x336) = 0;
   field<void*>(pc_actor, 0x378) = move.data(); field<int>(move.data(), 0xbc) = 115;
+  name_function = reinterpret_cast<resolve_name_t>(f.pistol ? &fixture_named_pistol : &fixture_named);
+  if (f.pistol) {
+   field<void*>(pistol_move.data(), 0xc8) = default_object.data(); field<int>(pistol_move.data(), 0xbc) = 115;
+   field<void*>(pc_actor, 0x378) = pistol_move.data();
+  }
   field<unsigned char>(pc_actor, 0x764) = 0; field<unsigned char>(pc_actor, 0x3d9) = 0;
   const u32 token = field<u32>(pc_actor, 0x1c);
   states[timer_slot(token)] = {};
@@ -56,7 +63,7 @@ void timeline_comparison(void* code, std::byte* source_actor, std::byte* input, 
    requests = 0; requested_flags = 0; requested_name.clear(); source_warm_starts = 0;
    const bool original = reinterpret_cast<bool(__thiscall*)(void*, void*)>(code)(source_actor, input);
    const unsigned source_requests = requests; const u32 source_flags = requested_flags; const auto source_name = requested_name;
-   if (source_requests && source_name == "power_attack") // 0xe14d0: entry + recoil
+   if (source_requests && source_name == "power_attack" && !f.pistol) // 0xe14d0: entry + recoil
     field<float>(source_actor, 0x498) = fixture_time + source_recoil_value(f.recoil);
    starts += source_warm_starts;
    requests = 0; requested_flags = 0; requested_name.clear();
@@ -71,7 +78,7 @@ void timeline_comparison(void* code, std::byte* source_actor, std::byte* input, 
             (!source_requests || source_name == requested_name);
    agree &= std::bit_cast<u32>(field<float>(source_actor, 0x49c)) == std::bit_cast<u32>(port_warm);
    if (source_requests && source_name == "power_attack") {
-    agree &= std::bit_cast<u32>(field<float>(source_actor, 0x498)) == std::bit_cast<u32>(port_next);
+    if (!f.pistol) agree &= std::bit_cast<u32>(field<float>(source_actor, 0x498)) == std::bit_cast<u32>(port_next);
     agree &= requested_flags == (f.continuous ? 1u : 9u);
     if (last_shot >= 0 && tick - last_shot > 0) { min_gap = std::min(min_gap, tick - last_shot); max_gap = std::max(max_gap, tick - last_shot); }
     last_shot = tick; ++shots;
@@ -80,7 +87,7 @@ void timeline_comparison(void* code, std::byte* source_actor, std::byte* input, 
   }
   check(agree, "executed original gate and restored gate agree frame by frame for every family");
   check(starts == port_starts, "warm-up starts agree");
-  const float period = f.continuous ? f.recoil : f.recoil + f.warmup;
+  const float period = f.pistol ? 0.f : f.continuous ? f.recoil : f.recoil + f.warmup;
   const int frames = std::max(1, int(std::ceil(period * fps - 1e-3f)));
   check(shots > 0 && min_gap >= frames && max_gap <= frames + (f.warmup != 0 && !f.continuous ? 2 : 1), "shot gap is the recoil (+ per-shot warm-up) in whole frames");
   if (f.warmup != 0) check(f.continuous ? starts == 2 : starts >= shots, "continuous beams warm up once per hold, discrete ones before every shot");
@@ -88,6 +95,8 @@ void timeline_comparison(void* code, std::byte* source_actor, std::byte* input, 
   std::printf("  %s @%d fps: %u shots, gaps %d..%d frames, %u warm-ups\n", f.name, fps, shots, min_gap, max_gap, starts);
  }
  weapons = saved; source_warmup = 0; source_continuous = false;
+ name_function = reinterpret_cast<resolve_name_t>(&fixture_named);
+ field<void*>(pc_actor, 0x378) = move.data();
 }
 
 void original_input_comparison(const char* path, void* pc_actor)
