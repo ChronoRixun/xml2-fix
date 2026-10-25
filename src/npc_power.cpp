@@ -219,7 +219,9 @@ namespace npc_power
 		              "Juggernaut take XML1's classes (0x694f1e, 0x511fb8); no Danger Room reaction gate (0x435b09); "
 		              "a power attack (damagescale not normal) is never rolled to hit and the hit's block_chance roll never "
 		              "zeroes it, so only a counted melee miss is blocked, as default.xbe 0x5c240 / 0x5c965 (0x44f58e, 0x437b08); "
-		              "bridges at 0x%08lX",
+		              "bridges at 0x%08lX; rule 16 revision 14 (NPR14)",
 		              static_cast<unsigned long>(base));
+		// "NPR14" is a byte marker as well: the Legends Classic builder requires it in the DLL before it writes
+		// NpcPowerRule=xml1 for a beta 8 build (a 1.8.0-beta.7 DLL runs revision 11; the unreleased 12 / 13 lack it).
 	}
 }

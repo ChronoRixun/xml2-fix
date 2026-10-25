@@ -1,19 +1,25 @@
 # Changelog
 
-## 1.8.0 - <date TBD>
+## 1.9.0 - <date TBD>
 
-- **XML1 boss brains, shared dispatcher and the colosseum dopples: gameplay rule 40** (`[Game] Xml1Bosses = dopples,avalanche`;
-  beta 8 candidate, [docs](docs/xml1-controllers.md#shared-boss-dispatcher)). One module owns the brain-dispatch
+- **XML1 boss brains: gameplay rule 40** (`[Game] Xml1Bosses = dopples,avalanche,pyro,mystique,shadowking,marrow,magneto,blob`;
+  1.9.0-beta.1, [docs](docs/xml1-controllers.md#shared-boss-dispatcher)). One module owns the brain-dispatch
   detour (0x5173f3) and the script-table entries Master Mold used; Master Mold is its first client and writes exactly
   what it wrote before (rule 3 unchanged). The dopples restore X-Men Legends I's overlay (default.xbe 0x116f70):
   Wolverine and Colossus throw the fastball special every 5 s or more when within 400 of each other, Jean sets off
   the arena's hazards near the hero every 7 s, all four taunt; Cyclops' reply stays as dormant as in the original.
   `avalanche` restores his brain (0x111ab0) in both fights: power smash at close range and quake/ranged power at
   mid range on 4 s deadlines, smash/attack rolls between them, and the health-band flag at 83/66/50/33/16 %.
-  Absent key: nothing written, no agreement entry.
+  `pyro` (astral3_3: Z filter, attacker reservations, fire up/down), `mystique` (copies a hero and changes back after
+  the authored time or when the copied hero is gone, grenades, paths), `shadowking` (both forms' attacks, the timed
+  shield powers, the floor relocation kept), `magneto` (asteroid2_1: the mag2-5 phase requests, the shield's return
+  at mag4, five tile slots) and `blob` (XML1's two opcode programs, pickup and throw, slam/flop ranges, companion
+  jumps) follow the first game's brains; `marrow`'s backboss brain is already native on the PC (recorded, never
+  replaced). Each boss is a bit of rule 40's mask with its own revision; Master Mold keeps rule 3. Absent key:
+  nothing written, no agreement entry. None of the fights has been played yet.
 
 - **Receive-side damage stages and the damage cap: gameplay rule 41** (`[Balance] ReceiveRounding = xml1`,
-  `[Balance] DamageCap = xml1`; beta8/parity-a, [docs](docs/balance.md#the-receive-side-and-the-cap-receiverounding-damagecap-gameplay-rule-41)).
+  `[Balance] DamageCap = xml1`; 1.9.0-beta.1, [docs](docs/balance.md#the-receive-side-and-the-cap-receiverounding-damagecap-gameplay-rule-41)).
   X-Men Legends I's damage receive converts the hit to a whole number after the defense and after the scale
   (default.xbe 0x45517..0x45558); XMen2.exe kept a float (0x437a54..0x437a7c), so 10 against a defense of 0.5 and a
   scale of 0.5 was 4.75 instead of 4. `ReceiveRounding=xml1` calls two stubs at 0x437a54 / 0x437a75 that truncate the
@@ -23,19 +29,20 @@
   precision). Absent/`xml2` is byte-identical and adds no agreement entry. `scripts/prove_balance_install.py` now
   proves every `[Balance]` key (StrengthBonus / MindBonus / MightBonus / Rounding included) installs at run time.
 
-- **Enemy AI fidelity, part 3: gameplay rule 16 revision 14** (`[Game] NpcPowerRule = xml1`; beta8/parity-a,
+- **Enemy AI fidelity, part 3: gameplay rule 16 revision 14** (`[Game] NpcPowerRule = xml1`; 1.9.0-beta.1,
   [docs](docs/npc-power-rule.md)). (19) The power picker's lock test goes for all seven other callers too (self buff,
   ranged/party-target helper, Sentinel probe and attack, FlyNoNav, HitAndRun/ShadesNoWing, flying creatures):
   0x50fe63 jne -> jmp. (20) The power decision's lock test goes for every caller, the officer weapon brain included
   (0x5187c4 jne -> jmp; revision 11's caller bridge is retired). (21) Class selection: Advanced Sentinel matches XML1's
   "dvanced" fragment again (category 0; XMen2.exe's "xxxdvanced" let it fall to Sentinel) and Juggernaut's default
   category is XML1's 4 (0x694f1e, 0x511fb8). (22) No Danger Room reaction gate (0x435b09 -> jmp 0x435b52): XMen2.exe
-  suppressed a pain reaction within 2 s of the last in Danger Room mode (0xfd), XML1 never does. A revision 11
-  (1.8.0-beta.7) peer is refused by revision. Officer cells, Shades/Sentinels, Advanced Sentinel, Juggernaut and a
+  suppressed a pain reaction within 2 s of the last in Danger Room mode (0xfd), XML1 never does. Revision 14 also
+  carries the character bullet ray below; a revision 11 (1.8.0-beta.7) peer is refused by revision, as are the
+  unreleased candidates 12 (these items alone) and 13 (the ray alone). Officer cells, Shades/Sentinels, Advanced Sentinel, Juggernaut and a
   Danger Room course need live remeasurement.
 
-- **One-pass engine limits, wave 1: the runtime-only raises** (`[Limits] IGBCache`, `[Engine] ModelHandles`; branch
-  limits/wave1, [docs](docs/igb-cache.md)). The IGB info cache (`CIGBInfoCache2`, 200 records at 0x7b7fb0: every
+- **One-pass engine limits, wave 1: the runtime-only raises** (`[Limits] IGBCache`, `[Engine] ModelHandles`; 1.9.0-beta.1,
+  [docs](docs/igb-cache.md)). The IGB info cache (`CIGBInfoCache2`, 200 records at 0x7b7fb0: every
   precached model file; full, a zone's map IGB fails and the game reloads the previous zone) moves into a block of the
   DLL at 201..2048 records, built and torn down by the game's own code: 82 operands, 4 references, the cache's three
   calls of the shared `bitset<200>::findNext` cloned; the name table comes along (2048 by default). `ModelHandles`
@@ -44,6 +51,42 @@
   reports LAA on/off and the highest reservable address (E12). Absent keys write no byte and add no agreement entry.
   Proof: `xml2_test --igb-cache-rules` (runs the patched pool at 1024), `scripts/check_igb_cache_text.py` (whole
   `.text`), the model-pool plan and lifecycle tests at 8192 handles.
+
+- **XML1 character bullet rays** (`[Game] NpcSemiAuto = xml1`, rule 16 revision 14; 1.9.0-beta.1,
+  [weapon brain](docs/npc-semi-auto.md)). An admitted bullet trace (beta 7's half-second trace gate) no longer uses
+  the PC beam's two collision queries: it casts X-Men Legends I's zero-width ray from the gun's muzzle (weapon slot,
+  `Gun1` bolt) 36 units back to 550 forward along the cached aim, blended toward the muzzle direction below a 0.9
+  dot as default.xbe 0xBA0CD..0xBA1C8 does, and hits the first contact only (a character or a destructible prop takes
+  the hit; the world stops it). Three spread draws stay before the gate, all float work under the game's own
+  precision; 21 new guards. Not yet played: the 120/300/520 unit cells against the original are still to measure
+  (the 300-unit target is 0.71-0.76 hits per admitted trace).
+
+- **Seven shared combat handlers as in X-Men Legends I: gameplay rule 42** (`[Game] SkatingRule`,
+  `TeleportLandingRule`, `PopupRule`, `PopupLandRule`, `ChargeRule`, `NightcrawlerRule`, `GambitRule` = `xml1`;
+  1.9.0-beta.1, [docs](docs/shared-handler-rules.md)). Ice/lava skating's speed and height bands, Nightcrawler's four
+  teleport landings, the popup / air-spin decision and landing reset, the charge's timed end with its sound and
+  per-update event, Nightcrawler's buddy-teleport targets and Gambit's 60-unit object charge follow the first game's
+  callbacks (executed side by side with default.xbe's in `xml2_shared_handlers_test`, 5,793 checks; every selection
+  mask installs). One requested-only rule records the mask; absent keys write nothing. Not yet played.
+
+- **XML1's wall cling: gameplay rule 39** (`[Game] Xml1WallCling = xml1`; 1.9.0-beta.1, [docs](docs/xml1-cling.md)).
+  The acrobat moveset's `clingwalldecide` / `clingwallbackflip` (acrobatics 2) ran as XMen2.exe's default handler;
+  they now turn the hero to a wall within 24 units and back-flip off it (60 back, 500 up), as default.xbe 0xD9740 /
+  0xD9590 do. One jump at the FightMove handler lookup (0x4fd860), shared with Rogue's decide below. Not yet played.
+
+- **XML1's lift rule: gameplay rule 38 revision 2** (`[Game] LiftRule = xml1`; 1.9.0-beta.1,
+  [docs](docs/lift-rule.md)). Objects the Legends Classic builder marks with `xml1heaviness` (the first game's
+  heaviness 4 and 5, which the PC folds into its unliftable class 3) are lifted by XML1's rule: Might rank 3 lifts
+  heaviness 4, nobody lifts 5; their throw impact levels and carried damage, and Phoenix's telekinesis limits, follow
+  XML1 too. Every other object keeps the game's rule and its heaviness byte. Not yet played.
+
+- **Rogue's power decision: gameplay rule 43** (`[Game] Xml1RogueDecide = xml1`; 1.9.0-beta.1,
+  [docs](docs/xml1-rogue-decide.md)). XMen2.exe has no `ch_roguedecide`; the handler (through the same lookup as
+  the wall cling) sweeps 60 units ahead of Rogue, drains the first character it finds (`ability_drain`, with the
+  target lock) or plays `drain_notarget`, and charges the energy once on the decide move, as default.xbe 0xDBD30.
+  Needs the matching Legends Classic heroes output. Not yet played.
+
+## 1.8.0 - <date TBD>
 
 - **XML1 bullet trace timing** (`[Game] NpcSemiAuto = xml1`, schema 4 rows; 1.8.0-beta.7,
   [weapon brain](docs/npc-semi-auto.md)). Converted XML1 bullets keep their shot presentation (sound, muzzle,
