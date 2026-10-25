@@ -72,6 +72,7 @@ BIGGER ZONES (for mods that need it)
     [Limits]
     ActorSlots=127          (41-127; the game's own is 40)
     ResourceNames=1024      (451-4096; the game's own is 450)
+    IGBCache=1024           (201-2048; the game's own is 200; ResourceNames 2048 comes along)
 
 TROUBLESHOOTING
   The fix writes xml2-fix.log next to itself each time the game starts. If something is wrong,

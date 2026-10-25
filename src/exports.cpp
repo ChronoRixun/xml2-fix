@@ -432,6 +432,11 @@ namespace
 		// first asks for the actor table (getter 0x56b8e0) and the resource name table (0x55af80) from
 		// the CPrecacheMgr constructor, during its start-up.
 		limits::install(game);
+		// [Limits] IGBCache is rule 31 (IGBCache): a full cache refuses a zone's map IGB (the game reloads the previous
+		// zone) and every model past it, so co-op peers must share the capacity. Requested only: absent or stock adds no
+		// entry (the released record); a requested raise that did not install is unverified (host/join closed).
+		if (limits::igb_cache_requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::igb_cache_id, 1, limits::igb_cache_values(), limits::igb_cache_installed());
 		// [Engine] ModelPools: the model aggregate (0x7bf6d0) is built at the first getter call, after this.
 		model_pools::install(game);
 		// A raise is rule 28 (ModelPools): a full pool refuses spawns, so co-op peers must share the capacities.

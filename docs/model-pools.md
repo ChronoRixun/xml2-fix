@@ -91,5 +91,15 @@ admission: the raised PC names `28 ModelPools (not on the other PC)`, a 1.8.0-be
 `28 ModelPools (disabled on this PC)`, and 1.8.0-beta.1, which predates the rule, `a rule this PC does not have`.
 `x4` and `x2` refuse naming `ModelPools`.
 
+`[Engine] ModelHandles = N` (one-pass limits wave 1) raises the IModel handles and their transforms beyond the
+profile, from its count up to 16384; the two pools share `bitset<692>::findNext` (0x56fcc0) and always move together,
+and every other pool keeps the profile's size. It exists for a raised IGB cache ([igb-cache.md](igb-cache.md)): each
+IGB record's model nodes take about 3.5 handles, so 1024 records fill about 88 % of x4's 4096; Legends Classic asks
+for 8192. The handles are part of rule 28's values (`{1,8192,2048,128}`), so an x4 peer without the key and one with
+it refuse each other naming `28 ModelPools`. Without a raise (`off`) the key is logged and ignored; a value out of
+range keeps the profile's count. `xml2_model_pools_test` checks the plan against the exe at 8192 and 16384 handles
+and `xml2_model_pools_lifecycle_test` runs the game's constructor, allocators, frees, zone walk and destructor at x4
+with 8192 handles.
+
 The DLL's own default stays off (plain XML2 keeps the game's pools); Legends Classic 0.3.0-beta.2 and later builds write
 `[Engine] ModelPools = x4`.

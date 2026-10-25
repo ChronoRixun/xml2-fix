@@ -2,6 +2,17 @@
 
 ## 1.8.0 - <date TBD>
 
+- **One-pass engine limits, wave 1: the runtime-only raises** (`[Limits] IGBCache`, `[Engine] ModelHandles`; branch
+  limits/wave1, [docs](docs/igb-cache.md)). The IGB info cache (`CIGBInfoCache2`, 200 records at 0x7b7fb0: every
+  precached model file; full, a zone's map IGB fails and the game reloads the previous zone) moves into a block of the
+  DLL at 201..2048 records, built and torn down by the game's own code: 82 operands, 4 references, the cache's three
+  calls of the shared `bitset<200>::findNext` cloned; the name table comes along (2048 by default). `ModelHandles`
+  raises the IModel handles and transforms past `ModelPools`' profile (8192 for 1024 IGB records). The cache is
+  gameplay-agreement rule 31 (IGBCache, requested only); the handles are part of rule 28's values. The startup log
+  reports LAA on/off and the highest reservable address (E12). Absent keys write no byte and add no agreement entry.
+  Proof: `xml2_test --igb-cache-rules` (runs the patched pool at 1024), `scripts/check_igb_cache_text.py` (whole
+  `.text`), the model-pool plan and lifecycle tests at 8192 handles.
+
 - **One-sided level collision for movement: gameplay rule 30** (`[Game] WorldBackfaces = xml1`; 1.8.0-beta.7
   candidate, [docs](docs/world-backfaces.md)). XMen2.exe's common movement trace helper (0x4a9650) asks the collider
   for the level hull's back faces before every sweep (0x4a96c0 `push 1` -> collider vt+0x88); X-Men Legends I's helper
