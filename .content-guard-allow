@@ -78,3 +78,4 @@ PRIVATE_IP  test/online_room_test.cpp  # invented test vectors in the rooms prot
 
 DISASM  test/npc_weapon_bridges_test.hpp  # Authored synthetic callers verify register, FPU and stack preservation of our weapon bridges; no game listing.
 DISASM  test/npc_query_scheduler_test.cpp  # Authored naked call thunk that sets up the caller frame for the executed admission run; the game bytes are read from the owner's files at runtime, no game instruction listing.
+DISASM  test/npc_combo_timing_test.cpp  # Authored naked call thunks (lock_run, the lock-bridge harness) that set up a caller frame for executed code; game bytes are read from the owner's exe at runtime, no game instruction listing.
