@@ -747,16 +747,16 @@ int main(int argc, char** argv)
  // Check GCAP rejection: different mode, metadata, revision or failed install.
  const auto vals = npc_semi_auto::values({1, 1, 0, 0});
  gameplay_capabilities::record local, equal, off, altered, old, failed;
- gameplay_capabilities::record power_only, candidate9, released4;
+ gameplay_capabilities::record power_only, candidate9, released4, released10;
  local.add(16, npc_power::revision, vals, true); equal.add(16, npc_power::revision, vals, true);
- off.add(16, 3, {0, 0, 0, 0}, true); released4.add(16, 4, {1, 1, 0, 0}, true);
+ off.add(16, 3, {0, 0, 0, 0}, true); released4.add(16, 4, {1, 1, 0, 0}, true); released10.add(16, 10, vals, true);
  power_only.add(16, npc_power::revision, {1, 1, 0, 0}, true);
  auto changed = vals; changed[3] ^= 1; altered.add(16, npc_power::revision, changed, true);
  old.add(16, 8, vals, true); candidate9.add(16, 9, vals, true); failed.add(16, npc_power::revision, vals, false);
- for (auto* r : {&local, &equal, &off, &altered, &old, &failed, &power_only, &candidate9, &released4}) r->finalize();
- check(npc_power::revision == 10, "officer weapon brain ships under rule 16 revision 10");
+ for (auto* r : {&local, &equal, &off, &altered, &old, &failed, &power_only, &candidate9, &released4, &released10}) r->finalize();
+ check(npc_power::revision == 11, "schema 3 weapon brain ships under rule 16 revision 11 (10 = 1.8.0-beta.6)");
  check(local.compare(equal.bytes()) == gameplay_capabilities::result::match, "equal peers agree");
- for (const auto* peer : {&off, &altered, &old, &power_only, &candidate9, &released4})
+ for (const auto* peer : {&off, &altered, &old, &power_only, &candidate9, &released4, &released10})
   check(local.compare(peer->bytes()) != gameplay_capabilities::result::match, "incompatible peer refused");
  check(!failed.ready(), "requested failure poisons agreement");
  weapon_bridge_cases();

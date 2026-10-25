@@ -20,9 +20,11 @@
 // presses and completion using XML1's delays. Revision 10 (5-9 were unreleased candidates, see below): a hit that makes an NPC react (pain or block) spends the
 // combo steps that come due before its brain runs again, and the power re-checks and attack decisions that came due then, as
 // XML1's brain - which keeps running while the body reacts - does; XMen2.exe resumed the combo (or fired the power)
-// from idle. Also in revision 10: a hit is blocked only when it is a counted melee to-hit miss, as in XML1 - an
-// attack whose damagescale isn't `normal` (XML1's PowerAttack) is never rolled, and the damage receive's
-// block_chance roll never zeroes a hit. Nothing a save reads changes.
+// from idle. Revision 11 (1.8.0-beta.7; revision 10 was released in 1.8.0-beta.6): the power re-checks and attack
+// decisions that came due while the brain was skipped (the body busy in an attack or a power) are spent too, and a
+// hit is blocked only when it is a counted melee to-hit miss, as in XML1 - an attack whose damagescale isn't `normal`
+// (XML1's PowerAttack) is never rolled, and the damage receive's block_chance roll never zeroes a hit; the weapon
+// brain takes schema 3 rows (every gun family). Nothing a save reads changes.
 namespace npc_power
 {
 	// Reads [Game] NpcPowerRule and patches XMen2.exe for it, every site in one transaction. From DllMain.
@@ -33,13 +35,14 @@ namespace npc_power
 	bool verified();  // nothing is half-installed: not requested, or installed
 	// Rule 16: word 0 enables the power/combo rules; word 1 enables XML1 visibility geometry and query scheduling;
 	// words 2 and 3 are the opt-in officer weapon brain ([Game] NpcSemiAuto=xml1, npc_semi_auto.hpp: installed, source
-	// fingerprint), zero without it. Revision 10 adds the reaction-spent combo steps, power re-checks and attack
-	// decisions and XML1's block rule (power attacks never rolled, no block_chance roll) and carries the officer
-	// weapon brain; revision 4 per-press and final combo delays; revision 3
+	// fingerprint), zero without it. Revision 11 (1.8.0-beta.7) adds the call-gap spending of power re-checks and
+	// attack decisions, XML1's block rule (power attacks never rolled, no block_chance roll) and the schema 3 weapon
+	// brain (every gun family); revision 10 (1.8.0-beta.6, released) the reaction-spent combo steps, power re-checks
+	// and attack decisions and the officer weapon brain; revision 4 per-press and final combo delays; revision 3
 	// visibility. Revisions 5-9 were unreleased candidates and are never reused: 5 a withdrawn role experiment (and
 	// the first reaction-spent build, beta6-interrupt), 6-9 the officer weapon candidates (9 = the held-fire brain
-	// now carried by revision 10). A peer on any of them is refused by revision.
-	constexpr std::uint16_t revision = 10;
+	// carried by revisions 10 and 11). A peer on any of them, or on the released 3, 4 and 10, is refused by revision.
+	constexpr std::uint16_t revision = 11;
 	// Released LC peers already advertise rule 16 revision 3 when disabled.
 	constexpr std::uint16_t revision_for(bool requested) { return requested ? revision : 3; }
 	std::array<std::uint32_t, 4> values();

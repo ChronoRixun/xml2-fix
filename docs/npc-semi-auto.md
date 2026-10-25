@@ -95,8 +95,9 @@ per-weapon balance table.
 
 ## Agreement and installation
 
-This changes existing NPC-combat rule **16**: it ships inside revision **10** (the same revision as the
-reaction-spent combo steps of `NpcPowerRule=xml1`), as words 2 (installed) and 3 (source fingerprint); without
+This changes existing NPC-combat rule **16**: it ships inside revision **11** (1.8.0-beta.7, the same revision as
+the reaction-spent combo steps of `NpcPowerRule=xml1`; 1.8.0-beta.6's officer-only brain was revision 10, refused
+by revision), as words 2 (installed) and 3 (source fingerprint); without
 `NpcSemiAuto=xml1` those words are zero. The fingerprint covers names and all six
 words of every row, so a peer with another table, or an older revision 10
 candidate (schema 2 rows, held fire at the empty-query continuation, 0.05 s

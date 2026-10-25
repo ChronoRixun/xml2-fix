@@ -143,7 +143,8 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    for more than 10 s, so 2 s and 10 s bounds left those powers late) (an inactive AI, a state the brain does not run in, a
    load): the first live test spent the HAARP officer's grenade re-check at activation and it shot instead of
    holding the grenade at full energy. The power front's gap rule applies only to the melee brain's call (return
-   0x5193e7); the officer weapon brain's call (0x519fe4) keeps the revision 10 reaction rule alone.
+   0x5193e7); the officer weapon brain's call (0x519fe4) keeps the reaction rule alone. The call-gap part of this item
+   and of item 13 is revision 11 (1.8.0-beta.7); revision 10 (1.8.0-beta.6) had the reaction part only.
 13. **0x518fd0 (5 bytes, revision 10).** The attack decision itself: with no combo running, XML1's deadline
    (AI+0x1c) can fall due while the body reacts; the decision is then made and spent (no chain out of pain/block)
    and its tail re-arms the next attack time (now + meleetimeroffset + random x meleetimerrandomadd). XMen2.exe made
@@ -157,7 +158,7 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    (b6-original-moving-01: 9 of 10 decisions taken inside a power; s1-original-melee-03: 22 of 32 inside an attack),
    on the port it was made when the power ended (median 1.1 s late; c-pc-still-02: 22 of 38 decisions). Rule as
    for the power front: the brain's previous call more than 0.15 s ago and the time fell due after it.
-14. **0x44f58e (6 bytes, revision 10).** A block is a melee to-hit miss in both games: the melee contact (XML1
+14. **0x44f58e (6 bytes, revision 11).** A block is a melee to-hit miss in both games: the melee contact (XML1
    0x5c590, XMen2.exe 0x453160) rolls (0x5c240 / 0x44f450); on a miss (2) the roll zeroes the hit's damage (XML1
    0x5c48b, XMen2.exe 0x44f725) and the contact flags the hit blocked before the victim's hit entry (XML1 0x5c965:
    damage info +0x60 bit 1, the hit record's +0x6c, the bit the Xbox measurement saw on all 102 blocks; XMen2.exe
@@ -171,7 +172,7 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    ComboTextStarter / ComboTextFinisher) - so a power attack was rolled, and a miss lost its damage and was blocked.
    The bridge keeps the combo-text test and sends an attack whose damagescale isn't `normal` to the roll's own
    always-hit return (`mov edi,1; jmp 0x44f6bd`, as 0x44f5aa), with no draw, as XML1 returns before its draw.
-15. **0x437b08 (6 bytes, revision 10).** XMen2.exe's damage receive 0x437490 has a second, receive-side block roll
+15. **0x437b08 (6 bytes, revision 11).** XMen2.exe's damage receive 0x437490 has a second, receive-side block roll
    XML1's 0x45260 lacks: effect 0x37 (`block_chance`, not a default.xbe string) mode 0 x mode 1, a draw (0x437ae0),
    and when the draw is at most that the damage is zeroed and text 0xa9 shown (0x437b0e); it sets no flag, so such a
    hit neither blocks nor pains. With no effect-0x37 affecter (none in the port's data) the chance is 0 (0x550410
@@ -194,17 +195,19 @@ its AI time is set.
 ## Gameplay agreement
 
 Online play is lockstep and the rule changes AI decisions and energy, so it is shared gameplay rule **16**
-(`gameplay_capabilities::npc_power_rule_id`, [gameplay-agreement.md](gameplay-agreement.md)): revision 10,
+(`gameplay_capabilities::npc_power_rule_id`, [gameplay-agreement.md](gameplay-agreement.md)): revision 11,
 `{installed ? 1 : 0, installed ? 1 : 0, weapon brain installed ? 1 : 0, its source fingerprint}`. Word 1
 advertises XML1 visibility geometry and query scheduling; words 2 and 3 are zero unless the separate opt-in
 `[Game] NpcSemiAuto=xml1` with its `[NpcSemiAuto]` rows is present ([npc-semi-auto.md](npc-semi-auto.md)).
 Revision 2 had only the power/combo word, revision 3 lacked the press/completion timers, revision 4 lacked the
-reaction-spent combo steps, power re-checks and attack decisions (items 11-13) and the block rule (items 14-15). Revisions 5-9 were unreleased
+reaction-spent combo steps, power re-checks and attack decisions (items 11-13), revision 10 (released in
+1.8.0-beta.6) lacked the call-gap fronts of items 12-13, the block rule (items 14-15) and the schema 3 weapon brain
+(every gun family, [npc-semi-auto.md](npc-semi-auto.md)). Revisions 5-9 were unreleased
 candidates and are not reused: 5 a withdrawn role experiment and the first reaction-spent test build, 6-9 the officer
-weapon candidates (9 = the held-fire brain, now words 2-3 of revision 10). Registered in an LC installation or when
+weapon candidates (9 = the held-fire brain, words 2-3 of revisions 10 and 11). Registered in an LC installation or when
 requested; absent or `xml2` retains **revision 3** with verified `{0,0,0,0}`, matching the released OFF record. Only
-requested configurations use revision 10; every other enabled revision (3, 4, 5-9) is refused both ways, and a
-revision 10 PC with the officer brain and one without refuse each other by value, all naming rule 16 (NpcPowerRule).
+requested configurations use revision 11; every other enabled revision (3, 4, 5-9, 10) is refused both ways, and a
+revision 11 PC with the weapon brain and one without refuse each other by value, all naming rule 16 (NpcPowerRule).
 Requested but not installed (a guard mismatch, protection, readback, an unknown value, `NpcSemiAuto=xml1` without
 `NpcPowerRule=xml1` or without valid rows) is unverified and closes host/join.
 
@@ -281,8 +284,8 @@ melee-style attacks. In matched 45 s windows (attack-101b round 5; officer on th
 first game's HAARP officer fired 49 shots with 0 melee entries (median gap 0.91 s, the freeze gun's 0.9 s recoil),
 while the released port fired 0 shots and made 24 melee entries, because the converted gun has the generic melee
 brain and range 90 where the first game's weapon brain uses range 550. So these totals match while the behaviour
-does not. A restoration exists only as the opt-in `NpcSemiAuto=xml1` part of gameplay rule 16 revision 10 for that one officer (not
-in this release; candidate revision 9 introduced it, revision 8 used a burst/pause branch the original officer never runs); the other 19 gun families are not covered. Online play, party AI and other encounter types were not
+does not. A restoration exists as the opt-in `NpcSemiAuto=xml1` part of gameplay rule 16 (revision 10 in 1.8.0-beta.6 for that one
+officer; revision 11 in 1.8.0-beta.7 for all 20 gun families, [npc-semi-auto.md](npc-semi-auto.md); candidate revision 9 introduced it, revision 8 used a burst/pause branch the original officer never runs). Online play, party AI and other encounter types were not
 live-tested.*
 
 The first game's AI decisions were also counted directly in xemu (breakpoints at default.xbe 0xee2f4 / 0xee3f1, 30
