@@ -303,6 +303,10 @@ add_executable(xml2_npc_combo_timing_test test/npc_combo_timing_test.cpp)
 target_include_directories(xml2_npc_combo_timing_test PRIVATE src)
 add_executable(xml2_npc_semi_auto_test test/npc_semi_auto_test.cpp)
 target_include_directories(xml2_npc_semi_auto_test PRIVATE src)
+# The shared AI query scheduler of both games executed side by side (XML1 0xfc990 from the owner's default.xbe,
+# XMen2.exe 0x502730 retail and with rule 16): budget, reservation, the stale-reservation throttle, random schedules.
+add_executable(xml2_npc_query_scheduler_test test/npc_query_scheduler_test.cpp)
+target_include_directories(xml2_npc_query_scheduler_test PRIVATE src)
 target_include_directories(xml2_gameplay_agreement_test PRIVATE src)
 target_link_libraries(xml2_gameplay_agreement_test PRIVATE ws2_32)
 

@@ -88,7 +88,11 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    decision's tail at 0x519840: the next attack time and crowd delay are set as in XML1.
 7. **0x5027bd (18 bytes) and 0x5027e0 (3 bytes).** Restore the original priority-reservation predicate and
    one-query budget in the shared AI query scheduler. The existing queued ages, timestamp, cache and collision
-   implementation are retained. These queries are shared with other AI decisions.
+   implementation are retained. These queries are shared with other AI decisions. They also gate the melee
+   brain itself: the fight state calls the brain only after a served visibility query, unless the attack time is
+   due (XML1 `0x10b298`, XMen2.exe `0x513584`). With this item the admission code matches XML1's instruction for
+   instruction, including a stale reservation that throttles everyone else until its owner asks again
+   (`xml2_npc_query_scheduler_test`; [npc-attack-cadence-investigation.md](npc-attack-cadence-investigation.md)).
 8. **0x505250 (6 bytes, jmp).** The visibility adapter resolves the same physical target and calls the existing
    query with XML1's endpoints and extents, including its original cutoff and deferred/hit decisions. It reads the
    hit's packed token directly from the stable trace record, so it composes with the entity-capacity query owner.
