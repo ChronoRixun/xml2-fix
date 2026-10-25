@@ -105,8 +105,94 @@ __declspec(naked) void invoke_lock(void*)
   ret
  }
 }
+// Line-of-sight bridge (0x519e3a): EBP (brain) reaches the policy, every register, the flags
+// and the FPU state survive, and the two displaced loads (EBX = [esp+0x70], EDX = [ebp])
+// run before the native continuation.
+u32 sight_ebx = 0, sight_edx = 0, sight_expected_ebx = 0;
+std::array<std::uint32_t,9> sight_before{}, sight_after{};
+void* sight_brain = nullptr;
+void __cdecl noisy_sight(void* brain)
+{
+ check(brain == sight_brain, "sight bridge passes the brain in EBP");
+ __asm { fninit }
+ __asm { xorps xmm0, xmm0 }
+}
+__declspec(naked) void path_sight()
+{
+ __asm {
+  mov sight_ebx, ebx
+  mov sight_edx, edx
+  push eax
+  mov eax, [esp + 0x74]
+  mov sight_expected_ebx, eax
+  pop eax
+  mov chosen_path, 1
+  ret
+ }
+}
+__declspec(naked) void invoke_sight(void*)
+{
+ __asm {
+  push ebp
+  push ebx
+  push esi
+  push edi
+  mov ebp, [esp + 20]
+  mov eax, 12345678h
+  mov ebx, 22334455h
+  mov ecx, 34567890h
+  mov edx, 45678901h
+  mov esi, 56789012h
+  mov edi, 67890123h
+  cld
+  stc
+  pushfd
+  pushad
+  mov esi, esp
+  lea edi, sight_before
+  mov ecx, 9
+  rep movsd
+  popad
+  popfd
+  fxsave fp_before
+  call dword ptr [bridge]
+  fxsave fp_after
+  pushfd
+  pushad
+  mov esi, esp
+  lea edi, sight_after
+  mov ecx, 9
+  rep movsd
+  popad
+  popfd
+  pop edi
+  pop esi
+  pop ebx
+  pop ebp
+  ret
+ }
+}
+void sight_bridge_cases()
+{
+ using namespace npc_semi_auto;
+ std::array<std::byte,0x60> brain{};
+ field<u32>(brain.data(),0)=0x6950f4;sight_brain=brain.data();
+ sight_function=&noisy_sight;sight_resume=u32(reinterpret_cast<std::uintptr_t>(&path_sight));
+ bridge=reinterpret_cast<void*>(&sight_hook);chosen_path=-1;
+ __asm { fninit }
+ __asm { fld1 }
+ __asm { pcmpeqd xmm0, xmm0 }
+ invoke_sight(brain.data());
+ auto expected=sight_before;expected[4]=sight_expected_ebx;expected[5]=0x6950f4;
+ check(chosen_path==1,"sight bridge resumes the native update");
+ check(sight_ebx==sight_expected_ebx && sight_edx==0x6950f4,"sight bridge performs the displaced loads");
+ check(sight_after==expected,"sight bridge preserves registers and flags except the displaced loads");
+ check(fp_before==fp_after,"sight bridge preserves x87/SSE state");
+ __asm { fninit }
+}
 void weapon_bridge_cases()
 {
+ sight_bridge_cases();
  using namespace npc_semi_auto;
  std::array<std::byte,0x800> ai{}, actor{}, brain{}, cursor{};
  field<void*>(ai.data(),0x10)=actor.data();field<void*>(brain.data(),4)=ai.data();

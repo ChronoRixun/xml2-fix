@@ -66,11 +66,13 @@ namespace npc_semi_auto
   auto decision_function = &weapon_decision;
   auto press_function = &power_pressed;
   auto lock_function = &attack_state_continues;
+  auto sight_function = &line_of_sight;
   u32 init_resume = 0x504f61, refresh_resume = 0x50fcee, refresh_done = 0x50fe38;
   u32 native_movement = 0x42aa90, input_done = 0x4341f0;
   u32 decision_resume = 0x51a35f, decision_done = 0x51a51e;
   u32 power_true = 0x519ff1, power_false = 0x51a004;
   u32 lock_resume = 0x512f1a, lock_return = 0x51304a;
+  u32 sight_resume = 0x519e41;
   __declspec(naked) void init_hook()
   {
    __asm {
@@ -188,6 +190,30 @@ namespace npc_semi_auto
     jmp dword ptr [lock_resume]
    }
   }
+  // Top of the ranged brain update after its target resolve (0x519e3a): the bullet
+  // line-of-sight drop, then the two native loads this site displaced.
+  __declspec(naked) void sight_hook()
+  {
+   __asm {
+    pushfd
+    pushad
+    mov ebx, esp
+    sub esp, 528
+    and esp, -16
+    mov [esp + 512], ebx
+    fxsave [esp]
+    push ebp
+    call dword ptr [sight_function]
+    add esp, 4
+    fxrstor [esp]
+    mov esp, [esp + 512]
+    popad
+    popfd
+    mov ebx, [esp + 0x70]
+    mov edx, [ebp]
+    jmp dword ptr [sight_resume]
+   }
+  }
   __declspec(naked) void power_hook()
   {
    __asm {
@@ -291,13 +317,14 @@ namespace npc_semi_auto
        {0x4341b6, &input_hook, true, 5},
        {0x51a359, &decision_hook, false, 6},
        {0x519fe7, &power_hook, false, 8},
-       {0x512f0d, &lock_hook, false, 13}}) {
+       {0x512f0d, &lock_hook, false, 13},
+       {0x519e3a, &sight_hook, false, 7}}) {
    const auto* p = reinterpret_cast<const std::uint8_t*>(site);
    patches.push_back({site, {p, p + length}, stun_rules::branch(site, target, call, length)});
   }
   bool safe = true;
   applied = xml1_hook_transaction::apply(memory, patches, &safe);
   if (!applied) { if (!safe) game_version::refuse_startup(); fail("guarded transaction failed"); return; }
-  logger::write("NPC semi-auto: guarded discrete weapon brain and input gate, %zu source actors, fingerprint %08X; rule 16 revision 10 words 2-3", weapons.size(), fingerprint(weapons));
+  logger::write("NPC semi-auto: guarded weapon brain (held fire, empty-query branches, bullet line of sight) and input gate (recoil, warm-up, continuous), %zu source actors, fingerprint %08X; rule 16 revision 10 words 2-3", weapons.size(), fingerprint(weapons));
  }
 }

@@ -138,7 +138,7 @@ namespace npc_semi_auto_rules
  constexpr u32 candidate_allow = 0x50fe94, candidate_deny = 0x50ff65;
  constexpr u32 default_vtable = 0x692f4c, default_entry = 0x4fbdd0;
  constexpr u32 resolve_action = 0x427c80, clock = 0x45fe60;
- inline constexpr std::array<limits_rules::guard, 43> guards{{
+ inline constexpr std::array<limits_rules::guard, 49> guards{{
   {lookup_call, "e8656c0000", "FightMove handler lookup call"},
   {0x4f6bfb, "83c4045f8986c8000000", "handler is stored at move +0xc8"},
   {candidate_site, "d94728d89e50050000dfe0f6c4050f8ad1000000", "picker's per-slot reuse test"},
@@ -180,7 +180,13 @@ namespace npc_semi_auto_rules
   {0x519fe4, "ff520c84c07419837d08ff7513c7430800000000b0015f5e5d5b83c458c20800", "ranged power decision result and early return"},
   {0x5607b0, "d905300068008b4c2408d901", "direction-to-angles conversion"},
   {0x503810, "568bf18b46108b8878030000", "AI facing setter"},
-  {0x517cf0, "8b41048b40108b4c24048b11", "ranged brain aim point setter"},
+  {0x517cf0, "8b41048b40108b4c24048b1105ac030000", "ranged brain aim point setter (actor +0x3ac)"},
+  {0x519e2d, "e82ee8ffff84c00f84e70300008b5c24708b5500", "ranged brain target resolve and line-of-sight site"},
+  {0x505250, "81ecd400000053568bf18b4618578d4c", "AI target visibility test"},
+  {0x505030, "83ec0c5356578b7c241c578bf1", "AI state setter"},
+  {0x503180, "568bf18b46108b887803000085c97409", "AI turn toward angles"},
+  {0x6943f8, "90065000", "move flag getter slot +0x5c"},
+  {0x500690, "8a8144010000c0e8022401c3", "move flag getter (+0x144 bit 2)"},
   {0x51a2e4, "e86789feff84c00f842d0200008d442420508d4c243c51e8b06404008b10895424288b4804894c242c8b50088b4d0483c4088d442420505789542430e8eb94feff810b80000000814b0480000000830b10834b04108b168d442438508bceff5224508bcde8a3d9ffff", "native held-fire branch calling convention"},
  }};
 }

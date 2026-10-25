@@ -264,44 +264,218 @@ namespace {
   name_function = reinterpret_cast<resolve_name_t>(&fixture_named);
   field<void*>(actor, 0x378) = idle_move.data();
  }
- // Revision 9 decision: held fire every update, no burst timer, native helpers in order.
- void* decision_self = nullptr; void* decision_target = nullptr; bool decision_nav = true;
+ // Empty near-target query branches (0xef9bc bullet, 0xefc4a other) and the bullet
+ // line-of-sight drop, with native helpers replaced by recording fixtures.
+ void* decision_self = nullptr; void* decision_target = nullptr; void* decision_entity = nullptr;
  std::string decision_calls;
+ float fixture_dt = 1.f / 60, fixture_random = .5f;
+ bool fixture_busy = false, fixture_seen = true, fixture_unknown = false;
+ int fixture_state = -1; unsigned delays = 0, rotations = 0, turns = 0, notices = 0, alerts = 0, aims = 0;
+ npc_semi_auto::point last_rotation{}, last_turn{};
  bool __fastcall fixture_target(void*, void*, u32, void** self, void** target, void** entity)
- { *self = decision_self; *target = decision_target; *entity = nullptr; return true; }
- bool __fastcall fixture_nav(void*, void*, npc_semi_auto::point* d)
- { decision_calls += "n"; check(d->z == 0 && d->x == 30 && d->y == -40, "navigation check receives the flat target direction"); return decision_nav; }
- npc_semi_auto::point* __cdecl fixture_angles(npc_semi_auto::point* out, const npc_semi_auto::point*)
- { decision_calls += "a"; *out = {1, 2, 3}; return out; }
- void __fastcall fixture_face(void*, void*, npc_semi_auto::point*, npc_semi_auto::point* a)
- { decision_calls += "f"; check(a->x == 1 && a->y == 2 && a->z == 3, "facing receives converted angles"); }
- void __fastcall fixture_aim(void*, void*, const npc_semi_auto::point* p)
- { decision_calls += "m"; check(p->x == 40 && p->y == -30 && p->z == 7, "aim point is the destination position"); }
+ { *self = decision_self; *target = decision_target; *entity = decision_entity; return true; }
+ npc_semi_auto::point* __cdecl fixture_angles(npc_semi_auto::point* out, const npc_semi_auto::point* d)
+ { decision_calls += "a"; *out = {d->x, d->y, 99}; return out; }
+ void __fastcall fixture_aim(void* brain, void*, const npc_semi_auto::point* p)
+ {
+  using namespace npc_semi_auto;
+  ++aims; decision_calls += "m";
+  field<point>(field<void*>(field<void*>(brain, 4), 0x10), 0x3ac) = *p; // PC 0x517cf0
+ }
  const npc_semi_auto::point* __fastcall fixture_position(void* e, void*, npc_semi_auto::point* out)
- { decision_calls += "p"; *out = npc_semi_auto::field<npc_semi_auto::point>(e, 0x20); return out; }
+ { *out = npc_semi_auto::field<npc_semi_auto::point>(e, 0x20); return out; }
+ float __cdecl fixture_delta() { return fixture_dt; }
+ float __cdecl fixture_rand(bool) { return fixture_random; }
+ bool __cdecl fixture_move_busy(void*) { return fixture_busy; }
+ void __fastcall fixture_turn(void*, void*, const npc_semi_auto::point*, const npc_semi_auto::point* a)
+ { ++turns; decision_calls += "t"; last_turn = *a; }
+ void __fastcall fixture_rotate(void*, void*, const npc_semi_auto::point* a) { ++rotations; last_rotation = *a; }
+ void __fastcall fixture_delay(void*, void*, float d) { ++delays; check(d == .3f, "pause starts with the original 0.3 s defer"); }
+ void __fastcall fixture_alert(void*, void*, float a, float b, u32) { ++alerts; check(a == 1 && b == 300, "alert radius"); }
+ void __fastcall fixture_notice(void*, void*, float, u32 kind, u32, npc_semi_auto::attack_notice, u32, u32)
+ { ++notices; check(kind == 3, "victim notice kind"); }
+ void* __fastcall fixture_ai_of(void*, void*, u32 token) { return token == 0x777 ? decision_entity : nullptr; }
+ bool __fastcall fixture_see(void*, void*, bool* unknown) { decision_calls += "s"; *unknown = fixture_unknown; return fixture_seen; }
+ void __fastcall fixture_set_state(void*, void*, int state) { fixture_state = state; }
  void decision_cases(void* actor, void* ai)
  {
   using namespace npc_semi_auto;
+  const auto saved = weapons;
   target_function = reinterpret_cast<resolve_target_t>(&fixture_target);
-  nav_function = reinterpret_cast<nav_t>(&fixture_nav);
   angles_function = &fixture_angles;
-  face_function = reinterpret_cast<face_t>(&fixture_face);
   aim_function = reinterpret_cast<aim_t>(&fixture_aim);
   position_function = &fixture_position;
-  std::array<std::byte, 0x60> brain{}; std::array<std::byte, 0x800> hero{};
+  delta_function = &fixture_delta;
+  random_function = &fixture_rand;
+  busy_function = &fixture_move_busy;
+  turn_function = reinterpret_cast<turn_t>(&fixture_turn);
+  rotate_function = reinterpret_cast<rotate_t>(&fixture_rotate);
+  delay_function = reinterpret_cast<delay_t>(&fixture_delay);
+  alert_function = reinterpret_cast<alert_t>(&fixture_alert);
+  notice_function = reinterpret_cast<notice_t>(&fixture_notice);
+  ai_function = reinterpret_cast<ai_get_t>(&fixture_ai_of);
+  see_function = reinterpret_cast<see_t>(&fixture_see);
+  state_function = reinterpret_cast<state_t>(&fixture_set_state);
+  std::array<std::byte, 0x60> brain{}; std::array<std::byte, 0x800> hero{}, hero_ai{}, current{};
   field<void*>(brain.data(), 4) = ai;
-  field<float>(brain.data(), 0x1c) = 0; field<float>(brain.data(), 0x20) = .6f; field<float>(brain.data(), 0x24) = 100;
-  field<point>(actor, 0x20) = {10, 10, 7}; field<point>(hero.data(), 0x20) = {40, -30, 7};
-  decision_self = actor; decision_target = hero.data();
-  for (int update = 0; update != 120; ++update) {
-   std::array<std::byte, 0x28> input{}; field<u32>(input.data(), 8) = 5; decision_calls.clear();
-   check(weapon_decision(brain.data(), input.data()), "listed weapon actor consumes the continuation");
-   check(field<u32>(input.data(), 0) == 0x90 && field<u32>(input.data(), 4) == 0x90 && field<u32>(input.data(), 8) == 0,
-         "power and fire are held on every update with movement cleared");
-   check(decision_calls == "nafpm", "native navigation, facing and aim order");
+  const auto reset_timers = [&brain] {
+   field<float>(brain.data(), 0x1c) = 0; field<float>(brain.data(), 0x20) = .6f; field<float>(brain.data(), 0x24) = 100;
+   field<int>(brain.data(), 0x28) = 1;
+  };
+  field<point>(actor, 0x20) = {10, 10, 7}; field<point>(actor, 0x2c) = {0, 0, 0};
+  field<point>(hero.data(), 0x20) = {40, -30, 7};
+  field<u32>(hero.data(), 0x7dc) = 0x777; field<u32>(hero.data(), 0x3d8) = 1;
+  field<void*>(actor, 0x378) = current.data();
+  decision_self = actor; decision_target = hero.data(); decision_entity = hero_ai.data();
+  const auto row = [](const char* text) { const auto r = parse(text); check(r.has_value(), "decision row parses"); return *r; };
+  const weapon mp5 = row("test_guard|3e23d70a|44098000|3fc00000|00000000|00000000|00000020");
+  const weapon laser = row("test_guard|3e2e147b|44098000|3fc00000|00000000|00000000|00000000");
+  const weapon officer = row("test_guard|3f666666|44098000|3f800000|00000001|00000000|00000002");
+  const weapon lightning = row("test_guard|00000000|44098000|40200000|00000001|3f19999a|00000013");
+  const weapon nullifier = row("test_guard|3f333333|44098000|3f800000|00000001|3f000000|00000003");
+
+  // Bullet branch at 60 fps: a one-update burst from the constructor timers, then 1.0 s
+  // pauses and rand + 2.0 = 2.5 s bursts; fire held only while the burst timer is >= 0.
+  for (const auto& w : {mp5, laser}) {
+   weapons = {w}; reset_timers(); field<point>(actor, 0x3ac) = {10, 10, 7};
+   field<unsigned char>(actor, 0x764) = 4;
+   std::vector<int> fired;
+   for (int tick = 0; tick <= 60 * 20; ++tick) {
+    fixture_time = 100.f + tick / 60.f;
+    std::array<std::byte, 0x28> input{}; field<u32>(input.data(), 0) = 0x2000; field<u32>(input.data(), 8) = 5;
+    field<point>(input.data(), 0x14) = {1, 2, 3};
+    check(weapon_decision(brain.data(), input.data()), "listed bullet actor consumes the empty-query continuation");
+    const bool held = field<u32>(input.data(), 0) == 0x90 && field<u32>(input.data(), 4) == 0x90;
+    if (held) {
+     fired.push_back(tick);
+     check(field<u32>(input.data(), 8) == 0 && field<point>(input.data(), 0x14).x == 0 && field<point>(input.data(), 0x14).z == 0,
+           "firing clears movement and the strafe flag");
+    } else check(field<u32>(input.data(), 0) == 0x2000 && field<u32>(input.data(), 8) == 5, "pause leaves the input alone");
+   }
+   check((field<unsigned char>(actor, 0x764) & 4) == 0, "empty query clears the actor's bit 2 like 0xef98d");
+   // Burst lengths and pauses in frames.
+   std::vector<int> runs, gaps; int start = fired.empty() ? 0 : fired[0], prev = start;
+   for (std::size_t i = 1; i <= fired.size(); ++i) {
+    if (i == fired.size() || fired[i] != prev + 1) { runs.push_back(prev - start + 1); if (i != fired.size()) { gaps.push_back(fired[i] - prev - 1); start = fired[i]; } }
+    if (i != fired.size()) prev = fired[i];
+   }
+   check(runs.size() >= 5 && runs[0] == 1, "first update fires once and starts the pause");
+   bool cadence = true;
+   for (std::size_t i = 1; i + 1 < runs.size(); ++i) cadence &= runs[i] >= 150 && runs[i] <= 152;
+   for (const int g : gaps) cadence &= g >= 59 && g <= 61;
+   check(cadence, "bursts last rand + 2 s and pauses 1 s at 60 fps");
+   std::printf("  bullet branch %s: %zu bursts, burst %d frames, pause %d frames\n",
+               w.flags & flag_rapidfire ? "rapid" : "semi", runs.size(), runs.size() > 1 ? runs[1] : 0, gaps.empty() ? 0 : gaps[0]);
   }
-  check(field<float>(brain.data(), 0x1c) == 0 && field<float>(brain.data(), 0x20) == .6f && field<float>(brain.data(), 0x24) == 100,
-        "constructor burst timers are never written (original officer ring)");
+  // Aim smoothing: 1 - 0.15^dt while firing, 1 - 0.25^dt otherwise; rapid fire pulls the
+  // pause frame's aim 75 % back toward the actor.
+  for (const auto& w : {mp5, laser}) {
+   weapons = {w};
+   reset_timers(); field<float>(brain.data(), 0x1c) = 1.f; field<float>(brain.data(), 0x20) = 0;
+   field<point>(actor, 0x3ac) = {10, 10, 7}; fixture_time = 200;
+   std::array<std::byte, 0x28> input{};
+   weapon_decision(brain.data(), input.data());
+   const float k = float(1.0 - std::pow(.15, double(fixture_dt)));
+   const point fire_aim{float(30.f * k) + 10.f, float(-40.f * k) + 10.f, float(0.f * k) + 7.f};
+   check(field<point>(actor, 0x3ac).x == fire_aim.x && field<point>(actor, 0x3ac).y == fire_aim.y, "firing aim smoothing 1 - 0.15^dt");
+   field<float>(brain.data(), 0x1c) = .001f; field<point>(actor, 0x3ac) = {10, 10, 7}; fixture_time = 201;
+   weapon_decision(brain.data(), input.data()); // fires, burst ends, pause frame
+   point expected = fire_aim;
+   if (w.flags & flag_rapidfire) expected = {(fire_aim.x - 10.f) * .25f + 10.f, (fire_aim.y - 10.f) * .25f + 10.f, (fire_aim.z - 7.f) * .25f + 7.f};
+   check(field<point>(actor, 0x3ac).x == expected.x && field<point>(actor, 0x3ac).y == expected.y,
+         "rapid fire pulls the pause frame's aim toward the actor, semi-auto does not");
+   field<point>(actor, 0x3ac) = {10, 10, 7}; fixture_time = 201.5f; // paused: no fire
+   weapon_decision(brain.data(), input.data());
+   const float kp = float(1.0 - std::pow(.25, double(fixture_dt)));
+   check(field<point>(actor, 0x3ac).x == float(30.f * kp) + 10.f, "paused aim smoothing 1 - 0.25^dt");
+  }
+  // A flagged current move ends the update before aiming; the turn needs more than 10 units.
+  weapons = {mp5}; reset_timers(); field<float>(brain.data(), 0x20) = 0; fixture_time = 300;
+  {
+   std::array<std::byte, 0x28> input{};
+   fixture_busy = true; aims = turns = 0;
+   weapon_decision(brain.data(), input.data());
+   check(aims == 0 && turns == 0 && field<u32>(input.data(), 0) == 0x90, "flagged move: fire held, no aim or turn");
+   fixture_busy = false; field<point>(actor, 0x3ac) = {40, -30, 7}; decision_calls.clear();
+   weapon_decision(brain.data(), input.data());
+   check(aims == 1 && turns == 1 && decision_calls == "mat" && last_turn.z == 99 && last_turn.x > 0,
+         "aim, then angles of the normalised ground direction, then turn");
+   field<point>(hero.data(), 0x20) = {10, 10.5f, 500}; field<point>(actor, 0x3ac) = {10, 10, 7}; turns = 0;
+   weapon_decision(brain.data(), input.data());
+   check(turns == 0, "no turn when the aim point is within 10 units on the ground plane");
+   field<point>(hero.data(), 0x20) = {40, -30, 7};
+  }
+
+  // Other types (0xefc4a): burst/pause with bursttime, strafe flag, notices, turning.
+  for (const auto& w : {officer, nullifier}) {
+   weapons = {w}; reset_timers(); field<point>(actor, 0x2c) = {0, 0, 0};
+   field<point>(hero.data(), 0x20) = {1000, 10, 7}; // straight ahead (+x)
+   states[timer_slot(field<u32>(actor, 0x1c))] = {};
+   rotations = delays = notices = 0;
+   int held = 0, last = -1; std::vector<int> gaps;
+   for (int tick = 0; tick <= 60 * 20; ++tick) {
+    fixture_time = 400.f + tick / 60.f;
+    std::array<std::byte, 0x28> input{};
+    check(weapon_decision(brain.data(), input.data()), "listed actor consumes the continuation");
+    if (field<u32>(input.data(), 0) & 0x90) { if (last >= 0 && tick - last > 1) gaps.push_back(tick - last - 1); last = tick; ++held; }
+   }
+   check(rotations == 0, "on-axis discrete weapon does not sweep");
+   check(delays >= 3 && delays >= gaps.size() && delays <= gaps.size() + 1, "every pause starts with the 0.3 s defer");
+   check(notices == unsigned(held), "every fire update notices the victim");
+   // bursttime 1.0 + rand 0.5 * 0.5 = 1.25 s = 75 updates (fires while >= 0 before the decrement);
+   // pause (1.2 + 1.5 * 0.5) = 1.95 s against a player target (bit set), 0.3 s of it deferred.
+   bool cadence = !gaps.empty();
+   for (std::size_t i = 1; i < gaps.size(); ++i) cadence &= gaps[i] >= 98 && gaps[i] <= 101;
+   check(cadence, "pause length 1.95 s including the 0.3 s defer");
+   std::printf("  other branch %s: %d fire updates, %zu pauses of %d frames\n", w.warmup_bits ? "warm-up" : "discrete", held, gaps.size(), gaps.size() > 1 ? gaps[1] : 0);
+  }
+  {
+   // Turning: behind ends the burst; off-axis turns 0.02 toward; continuous sweeps 0.015.
+   weapons = {officer}; reset_timers(); std::array<std::byte, 0x28> input{}; fixture_time = 500;
+   field<point>(hero.data(), 0x20) = {-1000, 10, 7}; field<float>(brain.data(), 0x1c) = 5; rotations = 0;
+   weapon_decision(brain.data(), input.data());
+   check(rotations == 0 && field<float>(brain.data(), 0x1c) < 0, "target behind ends the burst");
+   reset_timers(); field<float>(brain.data(), 0x1c) = 5;
+   field<point>(hero.data(), 0x20) = {1000, 400, 7}; rotations = 0;
+   weapon_decision(brain.data(), input.data());
+   check(rotations == 1 && std::fabs(std::fabs(last_rotation.z) - .02f) < 1e-6f && std::abs(field<int>(brain.data(), 0x28)) == 1,
+         "off-axis target turns 0.02 rad and records the direction");
+   weapons = {lightning}; reset_timers(); field<float>(brain.data(), 0x1c) = 5; field<int>(brain.data(), 0x28) = -1;
+   field<point>(hero.data(), 0x20) = {1000, 10, 7}; rotations = 0;
+   states[timer_slot(field<u32>(actor, 0x1c))] = {};
+   weapon_decision(brain.data(), input.data());
+   check(rotations == 1 && last_rotation.z == -.015f, "continuous beam sweeps 0.015 rad in the last turn direction");
+   // Warm-up running: no turning, no pause before the deadline is 0.4 s old, and within
+   // 0.4 s of the deadline the strafe and movement stop.
+   weapons = {nullifier}; reset_timers(); field<float>(brain.data(), 0x1c) = -1; rotations = 0; delays = 0;
+   field<point>(hero.data(), 0x20) = {1000, 400, 7};
+   auto& s = states[timer_slot(field<u32>(actor, 0x1c))];
+   s = {reinterpret_cast<std::uintptr_t>(actor), field<u32>(actor, 0x1c), 600.f, 600.f, 600.3f};
+   fixture_time = 600; std::array<std::byte, 0x28> warm_input{}; field<u32>(warm_input.data(), 8) = 5;
+   field<u32>(ai, 0x270) = 7;
+   weapon_decision(brain.data(), warm_input.data());
+   check(rotations == 0 && delays == 0, "a running warm-up suppresses turning and the pause");
+   check(field<u32>(warm_input.data(), 0) == 0x90 && field<u32>(warm_input.data(), 8) == 0 && field<u32>(ai, 0x270) == 0xffffffffu,
+         "warm-up ending within 0.4 s stops strafe and movement and holds fire");
+   s.warm = 0; field<point>(hero.data(), 0x20) = {40, -30, 7};
+  }
+  // Line-of-sight drop (bullet only): blocked within range resets the burst timers and
+  // drops the AI to state 0; visible, unknown or non-bullet weapons change nothing.
+  for (const auto& [w, seen, unknown, drop] : {std::tuple<weapon, bool, bool, bool>{mp5, false, false, true},
+       {mp5, true, false, false}, {mp5, false, true, false}, {officer, false, false, false}, {nullifier, false, false, false}}) {
+   weapons = {w}; reset_timers(); fixture_seen = seen; fixture_unknown = unknown; fixture_state = -1; decision_calls.clear();
+   field<float>(brain.data(), 0x1c) = 2; field<float>(brain.data(), 0x20) = 3;
+   line_of_sight(brain.data());
+   check(drop == (fixture_state == 0 && field<float>(brain.data(), 0x20) == 0 && field<float>(brain.data(), 0x1c) == -1.f),
+         "bullet line-of-sight drop resets timers and AI state only when blocked");
+   check(!drop || decision_calls == "s", "visibility tested once");
+   if (!bullet(w)) check(decision_calls.empty(), "non-bullet weapons never test visibility");
+  }
+  fixture_seen = true; fixture_unknown = false;
+  weapons.clear(); fixture_state = -1; decision_calls.clear();
+  line_of_sight(brain.data());
+  check(fixture_state == -1 && decision_calls.empty(), "unlisted actor keeps the native brain update");
+  weapons = saved;
   for (const u32 press : {0x90u, 0xa0u, 0xc0u, 0x180u}) {
    std::array<std::byte, 0x28> pressed{}; field<u32>(pressed.data(), 0) = press | 0x2000;
    check(power_pressed(0, brain.data(), pressed.data()) && power_pressed(0x101, brain.data(), pressed.data()),
@@ -313,12 +487,9 @@ namespace {
          "no press keeps the native result");
   }
   check(attack_state_continues(actor), "listed weapon actor keeps the original attack-state update during locked moves");
-  decision_nav = false; std::array<std::byte, 0x28> input{}; decision_calls.clear();
-  check(weapon_decision(brain.data(), input.data()) && field<u32>(input.data(), 0) == 0 && decision_calls == "n",
-        "blocked navigation holds nothing");
-  decision_nav = true; decision_self = hero.data(); decision_calls.clear();
-  check(weapon_decision(brain.data(), input.data()) && field<u32>(input.data(), 0) == 0 && decision_calls.empty(),
-        "foreign self resolution holds nothing");
+  decision_self = hero.data();
+  std::array<std::byte, 0x28> input{};
+  check(weapon_decision(brain.data(), input.data()) && field<u32>(input.data(), 0) == 0, "foreign self resolution holds nothing");
  }
  float source_recoil = 0;
  struct source_object { void** vtable; };
