@@ -67,7 +67,7 @@ oldest + 1 requests. The measurement harness causes this on the original: at eve
 reservation. In r-original-moving-02 the engaged enemy was served once per 97, 127, 183 and then 280 requests from
 the first activation (44.48 s) onward; the parked enemies' ages grew with each window. Across sessions the original
 declined 20-98 % of the engaged enemy's queries, with long runs. The PC declined 2-6 %, only as a second request
-in a tick, so its parked enemies never scanned. Rule 16 itself can throttle: the PC officer bench f-pc-officer-01
+in a tick, so its parked enemies never left a reservation. Rule 16 itself can throttle: the PC officer bench f-pc-officer-01
 shows constant runs of 4.
 
 While the original was throttled, its powers almost stopped. Melee did not, because the brain still runs without a
@@ -84,7 +84,7 @@ value is the free-time one, or a run in which no parked enemy can scan. Brackets
 
 No engine change follows from this. Throttling the port to match would copy a harness effect into normal play,
 where both engines already share the code. Rule 16 stays at revision 10 and the agreement record is unchanged.
-What remains open is why the PC's parked enemies did not scan: actor+4 bit 15 is set (alerted), or actor+0x3d9 bit 5
+What remains open is why the PC's parked enemies left no reservation: actor+4 bit 15 is set (alerted), or actor+0x3d9 bit 5
 differs from XML1's actor+0x335 bit 7. This needs a logged staging run.
 
 ## Observing the decision
