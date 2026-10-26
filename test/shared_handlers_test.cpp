@@ -3,6 +3,7 @@
 #include "shared_handler_rules.hpp"
 #include "shared_handler_bridges.hpp"
 #include "gameplay_capabilities.hpp"
+#include "anim_enum_sites.hpp"
 #include <optional>
 #include <cwchar>
 #include <cmath>
@@ -329,6 +330,9 @@ int main(int argc,char** argv) {
  image pc(argv[1],pc_hash),x1(argv[2],x1_hash);if(failures)return 1;
  const u32 mask=argc>3?static_cast<u32>(std::stoul(argv[3],nullptr,0)):127;
  if(!mask||mask>127)return 2;
+ // No guard may cover a byte [Limits] AnimEnums rewrites (rule 48 installs first in the startup transaction): an
+ // overlapping guard refuses rule 42 whenever both are on (080c: the 0x430cd0 entry guard reached site C13).
+ for(const auto& g:shared_handler_rules::guards)for(const auto& s:anim_enum_sites::sites){const u32 n=static_cast<u32>(g.bytes.hex.size()/2),m=static_cast<u32>(s.old_hex.size()/2);check(g.bytes.va+n<=s.va||s.va+m<=g.bytes.va,g.bytes.what);}
  // Seed all guards from owner input and compare literal guard bytes independently.
  for(const auto& g:shared_handler_rules::guards){const auto* b=pc.read(g.bytes.va,g.bytes.hex.size()/2);check(b&&limits_rules::matches(b,g.bytes.hex),g.bytes.what);}
  if(failures)return 1;

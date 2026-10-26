@@ -40,7 +40,9 @@ inline constexpr dependency guards[]{
  {2,{0x4f0010,"8b44240c8b54240883ec1056578b7c241c505257e8a7bd00008b771885f67507b868196800eb16e84422110081e6ffffff008b4cb0048d84010840000068f424680050e80a25180083c40885c075406a016a0250c74424147c000000c74424187e000000c744241c7f00000089442420e85b0107008b54841483c40c6a006a00680000803f6a0c528bcfe8310cf4ff5f5e83c410c20c00","teleport landing entry and animation dispatch"},false},
  {2,{0x4fbdd0,"e88b40f6ff8b442404d998e8050000c20c00","base handler entry"},false},
  {2,{0x5601e0,"8a44240c568b742408578b7c","integer random callback"},false},
- {2,{0x430cd0,"518b813c04000085c07c5783","actor animation callback"},false},
+ // 11 bytes, not 12: the call target's entry only. Its next instruction (0x430cdb, cmp eax,0x10, the animation-set
+ // cache bound) is [Limits] AnimEnums' site C13 (rule 48); with both on, the 12-byte guard refused rule 42.
+ {2,{0x430cd0,"518b813c04000085c07c57","actor animation callback"},false},
  {4,{0x4f0f00,"83ec10568b742418578dbe200100006a028bcfff15d8f96700d9542408d81d30006800dfe0f6c441756a6a028d8e58010000ff15d8f96700d95c241c6a028d4e20ff15d8f96700d844241cd8a600020000d81dac736800dfe0f6c4417536578d4c2410ff15e0f967006a028d4c2410ff15c4f967008b4c2420d941208d54240cd80d74186900528bced86c240cd918e8ac26f8ff5f5e83c410c20800","popup and air-spin decision"},false},
  {8,{0x4f0fb5,"8b865c0300008a88ae02000084c9780a","popup landing conditional reset"},false},
  {8,{0x4f0fc5,"c786780200000000803f8a8e6407000080e13f80c940888e64070000","popup landing coefficient and flags"},false},
