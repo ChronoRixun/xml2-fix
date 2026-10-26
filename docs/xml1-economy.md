@@ -1,4 +1,4 @@
-# XML1 economy construction, drops and prices
+# XML1 economy construction, drops, prices and Grab Bag
 
 `[Game] Xml1Economy=1` requests **52 Xml1Economy**, revision **1**. An absent
 or false key reads no sidecar, contributes no patches and registers no rule.
@@ -21,17 +21,19 @@ sidecar or name resolution leaves rule 52 unverified and online closed.
 | Generator census | Per-return-address tripwires retain native generation and the widened W2 picker |
 | Sales and prices | 25% ordinary / exact float 33% unique, definition-cost cache, XML1 packs and raw-level courses |
 | Obtained transactions | Purchase sets unique obtained; inventory sale clears it; equipped sales and stash transfers preserve it |
+| Grab Bag | XML1 pools/reservoir/courses and one ordinary retry; native buy caller charges once, no refund |
 | Shared sell list | Carried/equipped equipment including zero-cost rewards, positive-quantity packs and held sidecar-sellable plain items |
 
-Later Forge/Healer stock, Grab Bag, Training and saved-instance migration parts remain clear.
+Later Forge/Healer stock, Training and saved-instance migration parts remain clear.
 Plan A is `xml1_economy_rules::default_plan`. The selected plan controls both
 dispatch and the agreement value; there is no independent runtime override.
 
-Rule values: `{parts, 1, digest_prefix_le, entry_count}`. Parts = **35** for
-plan A, **3** for fallback: mask 1 covers the complete roller/category/treasure/
+Rule values: `{parts, 1, digest_prefix_le, entry_count}`. Parts = **43** for
+plan A, **11** for fallback: mask 1 covers the complete roller/category/treasure/
 generator-disposition install, mask 2 covers all sales/prices/obtained/sell-list
-sites, and mask 32 selects zero-draw construction. Masks 4, 8, 16 and 64 remain
-clear. Mask 2 is published only after the whole guarded contribution commits;
+sites, mask 8 covers Grab Bag, and mask 32 selects zero-draw construction.
+Masks 4, 16 and 64 remain clear. Each part is published only after its complete
+guarded contribution commits;
 table resolution and all existing prerequisites still gate verified rule 52.
 The first four
 SHA-256 bytes are packed little endian (bytes `01 23 45 67` become
@@ -202,8 +204,8 @@ before/after the patch and asserts placement draws separately.
 Engine objects and dependency methods in these tests are synthetic; full game
 lifecycle reachability and per-zone tripwire acceptance remain live gates.
 `scripts/check_xml1_roll_text.py <retail-exe>` checks all guards and the static
-generator census. Vendor refill and Grab Bag generator callers remain for their
-later implementation parts and are intentionally visible to the tripwire.
+generator census. Vendor refill remains for its later implementation part and is intentionally
+visible to the tripwire. The replaced Grab Bag entry bypasses its generator call.
 
 `xml2_economy_test <retail-exe> prices` executes the native getters, sale x87
 paths, full course helper, deserializer, buy/sale blocks and sell builder.
@@ -216,3 +218,46 @@ are synthetic environment edges; this is not a live shop/co-op acceptance run.
 Row comparisons ignore the native row's three unwritten padding bytes.
 `scripts/check_xml1_economy_prices_text.py <retail-exe>` checks all eight guards,
 three cache callers, unchanged pack epilogue, stash bypass and interior branches.
+
+
+Grab Bag part 8 replaces the complete reward entry at `0x5d3720` (six guarded
+bytes), so its old `vt+0x138` call at `0x5d384d` is unreachable. The native buy
+block `0x5d3ff0` through `0x5d40a3` remains intact and debits exactly one listed
+`2000 * G * G` price, including retry and empty outcomes (owner D6).
+`xml1_grab_bag_rules::x1_grab_bag` consumes the lockstep stream in definition
+order: strict `< .33f` pool choice, exact group, equipment flag 0x40, matching
+Grab Bag flag 0x02, obtained uniques excluded; one draw per eligible row.
+As on XBE `0x17c5d9`/`0x17c5e2`, the reservoir accepts equality against a
+binary32 reciprocal, matching step 3b. The `.33f` and `.1f` tests are strict;
+random results retain 31-bit precision rather than being forced to float.
+
+Every pass draws the course test, including the forced ordinary retry (which
+skips the pool draw). It searches on a passing test or an empty flagged pool.
+The first ascending native course with `+0x4f & 1` clear, nonzero **word**
+`+0x4c`, and **raw byte** `+0x00 < highest roster level - 5` wins.
+Its `+0x44` interned identifier is formatted as `loadDangerRoomCourse('%s')`
+and submitted to native script-manager `vt+0x0c` then `vt+0x3c`, mode 1,
+as the original bag does; the existing handler `0x4a72e0` owns unlock and
+notification. Otherwise the selected equipment uses `x1_make_instance`,
+native inventory `vt+0xec` with quantity 1/state 2, unique obtained setter
+`0x47ac50(1)`, and the native inventory notification/UI refresh route.
+After two empty passes it returns false; the native caller ignores the result
+and performs no refund. Allocation refusal likewise creates no reward/refund.
+
+Native obtained/course state is snapshotted before scoped 53-bit/RN selection;
+x87 and MXCSR are restored before construction, script calls and inventory/UI.
+`xml2_grab_bag_rules_test` uses an independently transcribed XBE oracle minus
+its debits, with scripted outcomes/boundaries and 100,000 differential bags.
+`xml2_economy_test <retail-exe> bag` runs the installed entry from the actual
+native buy block for six outcomes at all five groups under both incoming
+precision modes. It executes real plan-A construction, inventory insertion,
+obtained setter, price/debit dispatch, and course handler `0x4a72e0` (unlock
+and native notification call); roster/content/script argument parsing and HUD/UI
+are synthetic edges. It verifies exact draws, one charge, script formatting/dispatch and
+control restoration, plus agreement with matching/mismatched parts values.
+The full fixture also covers a pre-prepare bag guard mutation, a post-prepare
+mutation, and rollback of the complete mapped image. The production startup
+gate includes this site; `scripts/check_xml1_grab_bag_text.py <retail-exe>`
+checks the guard, sole caller, preserved debit and no external entry into the
+old reward body. Rendered course notification and peer shop execution remain
+live acceptance gates; these tests never launch the game.
