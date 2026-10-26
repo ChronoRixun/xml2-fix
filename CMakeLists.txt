@@ -142,6 +142,7 @@ add_library(xml2_fix SHARED
 	src/xp_curve.cpp
 	src/balance.cpp
 	src/limits.cpp
+	src/address_space.cpp
 	src/entity_capacity.cpp
 	src/actor_pools.cpp
 	src/entity_owners.cpp
@@ -245,6 +246,16 @@ target_include_directories(xml2_stat_points_test PRIVATE src)
 
 add_executable(xml2_solo_mode_test test/solo_mode_test.cpp)
 target_include_directories(xml2_solo_mode_test PRIVATE src)
+
+# E12: the address space words, the 2 GB guard's straddle test, the high-address test's reservations, the pipe verb
+add_executable(xml2_address_space_test test/address_space_test.cpp)
+target_include_directories(xml2_address_space_test PRIVATE src)
+target_compile_options(xml2_address_space_test PRIVATE /UNDEBUG)
+# the module itself in a large-address-aware host: the guard, the status, the high-address test, the crash line
+add_executable(xml2_address_space_host test/address_space_host.cpp src/address_space.cpp src/log.cpp)
+target_include_directories(xml2_address_space_host PRIVATE src)
+target_compile_definitions(xml2_address_space_host PRIVATE FIX_LOG_FILE=L"address-space-test.log")
+target_link_options(xml2_address_space_host PRIVATE /LARGEADDRESSAWARE)
 
 add_executable(xml2_stat_help_test test/stat_help_test.cpp)
 target_include_directories(xml2_stat_help_test PRIVATE src)

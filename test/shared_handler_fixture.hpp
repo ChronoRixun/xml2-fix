@@ -25,8 +25,11 @@ struct image {
  image(const char* path,const char* expected) {
   std::ifstream f(path,std::ios::binary);bytes={std::istreambuf_iterator<char>(f),{}};
   if(bytes.size()<0x200){check(false,"owner binary is required");return;}
-  const auto hash=sha256_fips::digest(bytes.data(),bytes.size());
-  std::string actual;for(auto b:hash){char v[3];std::snprintf(v,sizeof v,"%02x",b);actual+=v;}
+  auto hex=[](const std::vector<unsigned char>& b){const auto hash=sha256_fips::digest(b.data(),b.size());std::string s;for(auto x:hash){char v[3];std::snprintf(v,sizeof v,"%02x",x);s+=v;}return s;};
+  std::string actual=hex(bytes);
+  // A Legends Classic build's own XMen2.exe is the retail exe with the large-address-aware flag (E12): compared
+  // with the flag cleared, so the audited bytes are still the retail ones.
+  if(actual!=expected && word(0)!=0x48454258 && word(0x3c)+0x18<bytes.size()){auto copy=bytes;copy[word(0x3c)+0x16]&=~0x20;actual=hex(copy);}
   check(actual==expected,"owner executable SHA-256");
   if(actual!=expected)return;
   if(word(0)==0x48454258){

@@ -36,7 +36,9 @@ def layout(n, stride, shadow=False):
 
 def derive(exe, db):
     raw = Path(exe).read_bytes()
-    assert hashlib.sha1(raw).hexdigest() == '7d95cdb4a9a599b982147a3389ea7aff211cb82b'
+    audited = bytearray(raw)                  # a Legends Classic build's exe: the retail one with the LAA flag (E12)
+    audited[int.from_bytes(raw[0x3C:0x40], 'little') + 0x16] &= ~0x20
+    assert hashlib.sha1(audited).hexdigest() == '7d95cdb4a9a599b982147a3389ea7aff211cb82b'
     pe = pefile.PE(data=raw)
     image = pe.get_memory_mapped_image()
     base = pe.OPTIONAL_HEADER.ImageBase

@@ -22,6 +22,16 @@
   bytes and no agreement entry; other values refuse online. `CHAR_SOUNDS` on the test pipe reports peak occupancy,
   refusals and empty-sounddir actors. Native fixtures verified; live RV1 acceptance pending.
 
+- **Address space (E12).** The Legends Classic build's `XMen2.exe` is large-address-aware (4 GB on 64-bit Windows and
+  Wine/Proton). The fix logs `address space: laa on|off; 2 GB guard ...` at start and, with the flag on, keeps the
+  64 KB block below 2 GB reserved, so no allocation can straddle 0x80000000 (a D3DX8 mip-filter loop linked into the
+  exe, cgD3D8.dll and libIGGfx.dll compares pointers signed and only misbehaves for a buffer across that line). The
+  test pipe's `status` adds `memory laa on; top ...; above 2 GB n MB; private n MB; highest ...; 2 GB guard on`;
+  `memory high <MB>` (test pipe only) reserves the free space below 2 GB except <MB> for a controlled high-address
+  test. An unhandled crash writes one `crash: exception ... at ... (module+offset), writing/reading 0x...; laa on;
+  ...` line to `xml2-fix.log`, then the crash goes on as before. Nothing is refused: with the flag off it only logs.
+  The `limits: address space - LAA ...` line stays.
+
 - **The first game's revival price: gameplay rule 10 revision 3** (`[Game] RevivalCost = xml1`; 1.9.0-beta.1 and
   1.8.0, [docs](docs/xtraction-shop.md#revival-price)). A fallen hero costs 200 x G^2 Tech Bits, G = min(5, L / 10 +
   1), L the roster's highest current level without guests: 200 / 800 / 1,800 / 3,200 / 5,000 for 0-9 / 10-19 /

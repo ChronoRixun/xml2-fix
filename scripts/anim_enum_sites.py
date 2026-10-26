@@ -10,8 +10,10 @@ import capstone, pefile
 R = Path(__file__).resolve().parents[1]
 pe = pefile.PE(sys.argv[1], fast_load=True)
 data = Path(sys.argv[1]).read_bytes()
+_audited = bytearray(data)                    # a Legends Classic build's exe: the retail one with the LAA flag (E12)
+_audited[struct.unpack_from('<I', data, 0x3C)[0] + 0x16] &= ~0x20
 assert pe.OPTIONAL_HEADER.ImageBase == 0x400000
-assert hashlib.sha256(data).hexdigest() == '146cd9c316edb57a267cd73753a7ce9af647e52aab750d449c6b278fb4a1669b', 'not the audited retail executable'
+assert hashlib.sha256(_audited).hexdigest() == '146cd9c316edb57a267cd73753a7ce9af647e52aab750d449c6b278fb4a1669b', 'not the audited retail executable'
 md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
 md.detail = True
 rows = []

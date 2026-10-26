@@ -382,6 +382,7 @@ namespace test_input_rules
 			ping,
 			save, // save_format's commands: `text` is the rest of the line
 			entity, // entity_capacity's commands (status, retire N): `text` is the rest of the line
+			memory, // address_space's commands (status, high <MB>): `text` is the rest of the line
 			mouse, // `mouse X Y [move|down|up|click]`: `pointer` says which, at client point x,y
 			unknown
 		};
@@ -445,6 +446,12 @@ namespace test_input_rules
 			result.text = std::string(rest);
 			return result;
 		}
+		if (verb == "MEMORY")
+		{
+			result.what = command::kind::memory;
+			result.text = std::string(rest);
+			return result;
+		}
 		// The test mouse: a client-area point of the game's window, sent to its window procedure on its
 		// thread (display::test_pointer) - never the real cursor. click = move, left down, left up.
 		if (verb == "MOUSE")
@@ -485,7 +492,7 @@ namespace test_input_rules
 		else if (verb == "CONSOLE") result.what = command::kind::console;
 		else if (verb == "WM") return fail("wm is gone: the Advanced Options panel reads the DirectInput keyboard like every other screen - use tap (tap DOWN, tap ENTER, tap LEFT)");
 		else return fail("unknown command '" + std::string(text.substr(0, space)) +
-		                 "' (down, up, tap, hold, release, screenshot, script, console, mouse, pad, padhold, paddown, padup, padrelease, stick, trigger, status, ping, save, entity)");
+		                 "' (down, up, tap, hold, release, screenshot, script, console, mouse, pad, padhold, paddown, padup, padrelease, stick, trigger, status, ping, save, entity, memory)");
 
 		if (result.what == command::kind::script || result.what == command::kind::console)
 		{
