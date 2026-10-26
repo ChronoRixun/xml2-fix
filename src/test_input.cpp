@@ -24,6 +24,7 @@
 #include "save_format.hpp"
 #include "entity_capacity.hpp"
 #include "native_save_layout.hpp"
+#include "xml1_economy.hpp"
 #include "test_input_rules.hpp"
 
 #define DIRECTINPUT_VERSION 0x0800
@@ -528,9 +529,10 @@ namespace test_input
 			// fps: Presents counted over the last full second (0 until then), so a frame cap can be
 			// checked from a script. Then the engine tables' use, live/cap ([Limits], limits.hpp).
 			const auto layout = native_save_layout::status();
+			const auto economy = xml1_economy::status();
 			return "ok XML2 Fix " FIX_VERSION "; keyboard devices " + std::to_string(devices) + "; reads " + std::to_string(reads.load()) + "; keys held " +
 			       std::to_string(held) + "; " + pad_input::status() + "; game " + (game_in_foreground() ? "has" : "doesn't have") + " the focus; fps " +
-			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + limits::status() + "; " + model_pools::status() + "; " + geometry_sharing::status() + "; " + ladder_paths::status() + "; " + break_rule::status() + "; " + placement_crush::status() + "; " + world_impact::status() + "; " + double_heal::status() + "; " + world_backfaces::status() + "; " + combo_heads::status() + "; " + pack_amount::status() + "; " + save_format::status() + "; " + balance::status() + "; " + entity_capacity::status() + (layout.empty() ? "" : "; " + layout) + "; " + test_mode::status();
+			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + limits::status() + "; " + model_pools::status() + "; " + geometry_sharing::status() + "; " + ladder_paths::status() + "; " + break_rule::status() + "; " + placement_crush::status() + "; " + world_impact::status() + "; " + double_heal::status() + "; " + world_backfaces::status() + "; " + combo_heads::status() + "; " + pack_amount::status() + "; " + save_format::status() + "; " + balance::status() + "; " + entity_capacity::status() + (layout.empty() ? "" : "; " + layout) + (economy.empty() ? "" : "; " + economy) + "; " + test_mode::status();
 		}
 
 		std::string handle(const std::string& line)

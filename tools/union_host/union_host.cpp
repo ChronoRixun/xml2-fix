@@ -294,11 +294,25 @@ int wmain(int argc, wchar_t** argv)
 			if (!VirtualQuery(reinterpret_cast<void*>(cursor), &info, sizeof info) || !info.RegionSize) break;
 			const auto next = reinterpret_cast<std::uintptr_t>(info.BaseAddress) + info.RegionSize;
 			const auto protection = info.Protect & 0xff;
+			// W2's data arrays live in private RW regions beside PAGE_NOACCESS
+			// guards. Keep their initial bytes as well, so OFF proofs can name
+			// data operands by reference and compare the backing instead of
+			// accepting an opaque heap-address difference.
+			bool guarded_data=false;
+			if(info.State==MEM_COMMIT && info.Type==MEM_PRIVATE && protection==PAGE_READWRITE){
+				MEMORY_BASIC_INFORMATION before_guard{},after_guard{};
+				const bool has_before_guard=VirtualQuery(info.AllocationBase,&before_guard,sizeof before_guard)!=0;
+				const bool has_after_guard=VirtualQuery(reinterpret_cast<void*>(next),&after_guard,sizeof after_guard)!=0 && after_guard.AllocationBase==info.AllocationBase;
+				if(has_before_guard && (before_guard.Protect&0xff)==PAGE_NOACCESS)guarded_data=true;
+				if(has_after_guard && (after_guard.Protect&0xff)==PAGE_NOACCESS)guarded_data=true;
+				// save_limits leaves both guard pages reserved, not committed.
+				if(has_before_guard && has_after_guard && info.AllocationBase!=info.BaseAddress && before_guard.State==MEM_RESERVE && after_guard.State==MEM_RESERVE && before_guard.RegionSize==4096 && after_guard.RegionSize==4096)guarded_data=true;
+			}
 			if (info.State == MEM_COMMIT && info.Type == MEM_PRIVATE && !(info.Protect & PAGE_GUARD) &&
-			    (protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_READ))
+			    (protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_READ || guarded_data))
 			{
 				wchar_t path[MAX_PATH]{};
-				swprintf_s(path, L"%s/%08x.bin", code_out, unsigned(reinterpret_cast<std::uintptr_t>(info.BaseAddress)));
+				swprintf_s(path, guarded_data?L"%s/data-%08x.bin":L"%s/%08x.bin", code_out, unsigned(reinterpret_cast<std::uintptr_t>(info.BaseAddress)));
 				if (FILE* f = _wfopen(path, L"wb"))
 				{
 					std::fwrite(info.BaseAddress, 1, info.RegionSize, f); std::fclose(f);

@@ -44,6 +44,7 @@ with_exe = {
     "xml2_combo_heads_test", "xml2_input_worker_test", "xml2_model_pools_test", "xml2_model_pools_lifecycle_test",
 }
 install_modes = {
+    "xml2_economy_test": ("A", "1roll", "off", "zero", "prerequisite", "sidecar", "missingfile", "guard0", "guard1", "rollback", "rollback-failed", "unresolved"),
     "xml2_classic_hud_install_test": ("on", "off", "invalid", "base", "assets", "stale", "alias", *(f"guard{i}" for i in range(8))),
     "xml2_codex_back_install_test": ("on", "off", *(f"guard{i}" for i in range(8))),
     "xml2_resistance_display_install_test": ("on", "on-native", "off", "xml2", "invalid", "base", *(f"guard{i}" for i in range(6))),

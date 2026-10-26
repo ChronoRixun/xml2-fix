@@ -7,9 +7,13 @@ endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>") # no VC++ redistributable needed
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin") # the test runs next to the DLL
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+add_executable(xml2_economy_rules_test test/xml1_economy_rules_test.cpp)
+target_include_directories(xml2_economy_rules_test PRIVATE src)
 
 add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
 add_compile_options(/W4 /permissive- /utf-8)
@@ -31,6 +35,7 @@ add_library(lcsave STATIC
 	src/lcsave/api_engine.cpp
 	src/lcsave/typed_registry.cpp)
 target_include_directories(lcsave PUBLIC src/lcsave)
+target_link_libraries(xml2_economy_rules_test PRIVATE lcsave)
 
 # The fix: a drop-in dinput.dll for the game folder.
 add_library(xml2_fix SHARED
@@ -127,6 +132,7 @@ add_library(xml2_fix SHARED
 	src/item_capacity.cpp
 	src/save_limits.cpp
 	src/native_save_layout.cpp
+	src/xml1_economy.cpp
 	src/smart_entities.cpp
 	src/entity_owners.cpp
 	src/entity_transfer.cpp
@@ -615,6 +621,10 @@ target_link_options(xml2_save_manager_test PRIVATE /BASE:0x400000 /DYNAMICBASE:N
 add_executable(xml2_item_capacity_test test/item_capacity_test.cpp src/item_capacity.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
 target_include_directories(xml2_item_capacity_test PRIVATE src)
 target_link_options(xml2_item_capacity_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_economy_test test/xml1_economy_test.cpp src/xml1_economy.cpp src/item_capacity.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_economy_test PRIVATE src)
+target_link_options(xml2_economy_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
 add_executable(xml2_save_limits_test test/save_limits_test.cpp src/save_limits.cpp src/objective_text.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
 target_include_directories(xml2_save_limits_test PRIVATE src)

@@ -94,6 +94,7 @@
 #include "entity_capacity.hpp"
 #include "save_limits.hpp"
 #include "native_save_layout.hpp"
+#include "xml1_economy.hpp"
 #include "postgame.hpp"
 #include "review_menu.hpp"
 #include "cutscene_mouse.hpp"
@@ -243,6 +244,7 @@ namespace
 		native_save_layout::prepare(startup, game);
 		save_format::contribute(startup, game);
 		limits::contribute(startup, game, entity_capacity::owns_arena_teardown());
+		xml1_economy::prepare(startup, game);
 		entity_capacity::contribute(startup, game);
 		// [Online] ReceiveValidation: the stock dispatch guard. Optional and independent: a guard mismatch skips it
 		// (one log line), it shares no bytes with any other contribution, and OFF contributes nothing.
@@ -251,6 +253,7 @@ namespace
 		logger::write("startup transaction: %s (%s)", patch_transaction::name(committed), startup.report().c_str());
 		entity_capacity::after_commit(committed == patch_transaction::outcome::committed, committed == patch_transaction::outcome::rollback_failed);
 		native_save_layout::after_commit(committed);
+		xml1_economy::after_commit(committed);
 		if (!native_save_layout::startup_allowed() || !save_format::startup_allowed() || !entity_capacity::startup_allowed()) return;
 		// Start background work only after required startup hooks have verified.
 		// XInput's first call can take seconds (xinput_pad.hpp): made on a thread of its own, which runs once

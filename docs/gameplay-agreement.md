@@ -181,6 +181,18 @@ rule, preserving the released bytes. In particular ResourceNames=450 versus 2048
 when IGBCache is absent or 200 on both PCs. Rules 31 and 28 retain their existing encodings.
 
 
+Rule52 Xml1Economy is requested only by `[Game] Xml1Economy=1`, revision1.
+Its four values are `{parts, sidecar format revision, digest prefix, entry count}`.
+This foundation installs parts **32** for zero-draw plan A (**0** for the accepted
+native one-roll fallback), format **1**, the first four body SHA-256 bytes packed
+little endian, and the resolved sidecar count. Bits 1 through 16 remain clear.
+It requires verified rule47. The shared record remains unfrozen and online closed
+until the item table loads and every sidecar name resolves in PC definition-index
+order. Any refusal registers the requested rule unverified and closes host/join;
+an absent/false key adds no entry and preserves the released OFF digest. A peer
+differing in any value is refused naming **52 Xml1Economy**. See
+[XML1 economy](xml1-economy.md) for sites, sidecar contract and tests.
+
 Rule47 NativeSaveLayout is assigned to W2, revision1. It registers only for
 verified `[Save] Format=lc`, `[Limits] EntityCapacity=1`, `SaveLayout=w2`; failed
 requests poison admission. Effective values are

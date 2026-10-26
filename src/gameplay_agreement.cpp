@@ -12,6 +12,8 @@ namespace gameplay_agreement
  {
   using namespace gameplay_agreement_rules;
   gameplay_capabilities::record capabilities;
+  unsigned deferred=0;
+  bool finalization_requested=false;
   // Published only by the transaction's verified commit: the native refusal sites and the transport sites are
   // written together (plan section 7); before publication the adapters are not reachable through native code.
   // The host notice's receiver and presentation are optional contributions of their own in the same transaction.
@@ -364,6 +366,8 @@ namespace gameplay_agreement
  }
  bool commit_verified()
  {
+  finalization_requested=true;
+  if(deferred)return false;
   if(frozen)return capabilities.ready();
   frozen=true;
   if(!published || !capabilities.finalize()){logger::write("online: capabilities/failure/transport installation unverified; online remains blocked");return false;}
@@ -372,6 +376,12 @@ namespace gameplay_agreement
   for(std::size_t i=0;i<capabilities.count();++i){const auto& r=capabilities.rule(i);
    logger::write("online: rule %u (%s) revision %u {%u,%u,%u,%u}",unsigned(r.id),gameplay_capabilities::rule_name(r.id),unsigned(r.revision),r.values[0],r.values[1],r.values[2],r.values[3]);}
   return true;
+ }
+ void defer_finalization(){++deferred;game_version::bind_gameplay_agreement(false);}
+ void resume_finalization(){
+  if(!deferred)return;
+  --deferred;
+  if(!deferred&&finalization_requested)game_version::bind_gameplay_agreement(commit_verified());
  }
  bool prepare(HMODULE game)
  {

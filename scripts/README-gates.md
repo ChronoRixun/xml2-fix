@@ -1,5 +1,36 @@
 # Local gate scripts
 
+XML1 economy foundation adds `xml2_economy_rules_test` and the mapped-retail
+`xml2_economy_test` modes run by `run_native.py`. The read-only constructor
+census is `python scripts/check_xml1_economy_text.py <retail exe>`. The existing
+`prove_w2_step3_off.py` comparison accepts `XML2_FIX_OFF_CASE=w2` or `w2zero`
+to compare an exact baseline DLL with this DLL while W2 remains enabled and
+Xml1Economy is absent or explicitly zero; include pages `47b000` and `480000`
+in its page list. Both configurations must retain the baseline agreement and
+every watched byte after named relocation normalization. See
+`docs/xml1-economy.md` for the rule and constructor contract.
+
+`python scripts/check_xml1_economy_startup.py <union_host.exe> <DLL directory>
+<retail.exe> <engine directory> <output directory>` checks the actual DLL's
+missing-W2, missing-sidecar and valid-sidecar-before-table cases. It requires
+the DLL's `/MAP` file, checks both hook sites and unavailable admission, keeps
+Discord off, and verifies that the registry stayed unchanged. In particular,
+economy preparation must run before `entity_capacity::contribute()` consumes
+the W2 prepared-state marker.
+
+With `UNION_CODE_OUT`, the host also dumps W2's guarded RW backings. The OFF
+comparison pairs them by referring instruction and compares every initial
+byte before accepting a relocated data operand; indexed absolute operands
+and conditional refusal branches are included. This allows the W2-enabled
+comparison to cover the full supplied page manifest as well as the economy
+pages.
+
+`xml2_economy_rules_test --builder <build-folder>` additionally checks a final
+loot builder output through the C++ sidecar and catalogue/bind readers: 131
+rows (including inert flags-zero rows), absent pack costs, equipment vendors,
+the noaward helmet, PC definition order, and the catalogue's 19 ITEM attribute
+mask-0x1 markers against sidecar rebuilt mask 0x4. This mode only reads the build.
+
 These scripts run the native, startup and OFF-proof gates on a developer PC. They never launch the game. Machine-specific
 inputs come from environment variables; the scripts stop with a message when a required value is missing (the proof scripts use Python environment lookup):
 

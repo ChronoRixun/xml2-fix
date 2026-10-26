@@ -665,6 +665,8 @@ void runtime(){
  check(!game_version::needs_gameplay_agreement(),"no participating installer leaves native protocol unenlisted");
  check(gameplay_agreement::register_entity_layout(1,32,224,256,8,true),"public capacity API registers verified explicit retail layout");
  check(game_version::needs_gameplay_agreement() && !game_version::gameplay_online_allowed() && iat_hook::captured,"capacity registration automatically enlists socket exclusion before finalization");
+ gameplay_agreement::defer_finalization();gameplay_agreement::defer_finalization();
+ check(!gameplay_agreement::commit_verified()&&!game_version::gameplay_online_allowed(),"table-dependent holds keep agreement unfrozen and the online gate closed");
  check(gameplay_agreement::register_rule(2,1,{explosive_first_hit::installed() ? 1u : 0u,0,0,0},explosive_first_hit::verified()),"installed explosion registers its actual effective installer snapshot");
  check(gameplay_agreement::register_rule(3,7,{1,3,0,0},true),"synthetic controller registers revision/values through public API without transport changes");
  check(gameplay_agreement::register_rule(gameplay_capabilities::object_world_impact_id,1,{world_impact::installed() ? 1u : 0u,0,0,0},world_impact::verified()),"actual installed ObjectWorldImpact registers rule 17 without poisoning online");
@@ -681,6 +683,10 @@ void runtime(){
  check(begin(context.data(),sender.data(),123)==0 && cleaned() && popups==shown+1 && statuses>0 && freed>0 && timers>0 && unregistered>0,"failed local transport executes actual native join failure/cleanup immediately");
  check(visible.find("Incompatible gameplay")!=std::string::npos && visible.find("unverified installation")!=std::string::npos,"native popup vtable receives incompatibility/install-failure explanation");
  // The record freezes after every registration; no further bytes are written at finalization.
+ gameplay_agreement::resume_finalization();
+ check(!gameplay_agreement::commit_verified()&&!game_version::gameplay_online_allowed(),"one remaining table hold prevents early finalization after late registration");
+ gameplay_agreement::resume_finalization();
+ check(game_version::gameplay_online_allowed(),"last table hold resumes requested finalization and binds the verified gate");
  make_rx();check(gameplay_agreement::finalize(reinterpret_cast<HMODULE>(0x400000)),"final shared record verifies with the installed transport");
  check(rx(0x607000) && rx(0x608000) && rx(0x609000),"finalization writes nothing and every shared page stays RX");
  boundary_standins();
