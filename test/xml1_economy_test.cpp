@@ -2,6 +2,7 @@
 // executes native W2 pools/reset/constructor/attach/link/cache/bonus consumers.
 // No game process, data package, desktop input or registry access.
 #include "xml1_economy.hpp"
+#include "lcsave/lcsave.hpp"
 #include "item_capacity.hpp"
 #include "item_capacity_rules.hpp"
 #include "gameplay_capabilities.hpp"
@@ -148,7 +149,7 @@ int main(int argc,char** argv){
  }
  if(scenario=="prerequisite"){
   native_save_layout::verified=false;ini::wanted=true;patch_transaction::transaction tx;xml1_economy::prepare(tx,static_cast<HMODULE>(at(0x400000)));xml1_economy::after_commit(tx.commit());
-  check(!tx.contributions()&&!gameplay_agreement::good&&gameplay_agreement::registrations==1&&!xml1_economy::installed(),"missing rule 47: no hook contribution, rule 52 unverified, online closed");return failures?1:0;
+  check(!tx.contributions()&&!gameplay_agreement::good&&gameplay_agreement::registrations==1&&(!xml1_economy::installed()&&!lcsave::item_own_rebuilt_enabled()),"missing rule 47: no hook contribution, rule 52 unverified, online closed");return failures?1:0;
  }
  std::string body;for(unsigned i=0;i<economy_count;++i){char row[100];std::snprintf(row,sizeof row,"item%04u 1 2 %x 137 %s - %u\n",i+first_economy,i<equipment_count?(i%3==0?0x51:0x50):(i%2?0x10:0),i<equipment_count?"forge":"none",i);body+=row;}
  const auto text=sidecar_file(body,economy_count);const auto chosen=scenario=="1roll"?plan::one_roll:plan::zero_draw;
@@ -161,27 +162,27 @@ int main(int argc,char** argv){
   const auto before=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
   check(tx.commit()==patch_transaction::outcome::refused_unresolved&&std::equal(before.begin(),before.end(),fixture_space),"legacy count/pick owner vetoes entire W2/economy union without writes");
   xml1_economy::after_commit(tx.result());
-  check(!gameplay_agreement::good&&!xml1_economy::installed()&&gameplay_agreement::registrations==1,"legacy roller combination leaves rule52 unverified and online closed");return failures?1:0;
+  check(!gameplay_agreement::good&&(!xml1_economy::installed()&&!lcsave::item_own_rebuilt_enabled())&&gameplay_agreement::registrations==1,"legacy roller combination leaves rule52 unverified and online closed");return failures?1:0;
  }
  if(scenario=="sidecar"||scenario=="missingfile"){
   check(tx.commit()==patch_transaction::outcome::committed,"W2 alone commits with missing economy sidecar");xml1_economy::after_commit(tx.result());
-  check(!xml1_economy::installed()&&!gameplay_agreement::good&&gameplay_agreement::registrations==1,"missing sidecar unverified");return failures?1:0;
+  check((!xml1_economy::installed()&&!lcsave::item_own_rebuilt_enabled())&&!gameplay_agreement::good&&gameplay_agreement::registrations==1,"missing sidecar unverified");return failures?1:0;
  }
  const auto stock=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
  if(scenario.starts_with("guard")){
   const auto site=scenario=="guard0"?0x47bb50u:scenario=="guard1"?0x4806adu:0x421f3fu;*static_cast<std::uint8_t*>(at(site))^=1;
-  const auto before=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);check(tx.commit()!=patch_transaction::outcome::committed&&std::equal(before.begin(),before.end(),fixture_space),"guard mutation: entire W2/economy union refuses, zero writes");xml1_economy::after_commit(tx.result());check(!gameplay_agreement::good&&!xml1_economy::installed(),"guard failure leaves rule 52 unverified");return failures?1:0;
+  const auto before=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);check(tx.commit()!=patch_transaction::outcome::committed&&std::equal(before.begin(),before.end(),fixture_space),"guard mutation: entire W2/economy union refuses, zero writes");xml1_economy::after_commit(tx.result());check(!gameplay_agreement::good&&(!xml1_economy::installed()&&!lcsave::item_own_rebuilt_enabled()),"guard failure leaves rule 52 unverified");return failures?1:0;
  }
  if(scenario=="rollback"){
   patch_transaction::hooks h;h.after_apply=[]{*static_cast<std::uint8_t*>(at(0x47bb50))^=1;};
-  check(tx.commit(&h)==patch_transaction::outcome::rolled_back&&std::equal(stock.begin(),stock.end(),fixture_space),"forced readback failure: union rollback restores every retail byte");xml1_economy::after_commit(tx.result());check(!gameplay_agreement::good&&!xml1_economy::installed(),"rolled back rule unverified");return failures?1:0;
+  check(tx.commit(&h)==patch_transaction::outcome::rolled_back&&std::equal(stock.begin(),stock.end(),fixture_space),"forced readback failure: union rollback restores every retail byte");xml1_economy::after_commit(tx.result());check(!gameplay_agreement::good&&(!xml1_economy::installed()&&!lcsave::item_own_rebuilt_enabled()),"rolled back rule unverified");return failures?1:0;
  }
  if(scenario=="rollback-failed"){
   std::array<std::uint8_t,8> installed_jump{};patch_transaction::hooks h;
   h.after_apply=[&]{std::memcpy(installed_jump.data(),at(0x47bb50),8);*static_cast<std::uint8_t*>(at(0x47bb50))^=1;};
   h.after_rollback=[&]{std::memcpy(at(0x47bb50),installed_jump.data(),8);};
   check(tx.commit(&h)==patch_transaction::outcome::rollback_failed,"uncertified rollback retains entry JMP and executable storage");
-  xml1_economy::after_commit(tx.result());check(!gameplay_agreement::good&&!xml1_economy::installed(),"uncertified rollback never publishes rule52");
+  xml1_economy::after_commit(tx.result());check(!gameplay_agreement::good&&(!xml1_economy::installed()&&!lcsave::item_own_rebuilt_enabled()),"uncertified rollback never publishes rule52");
   // Production refuses DLL startup here. Even if a retained entry is probed,
   // its trampoline must remain valid. Null definition never touches any pool.
   descriptor out{1,at(1)};native<make_t>(0x47bb50)(nullptr,nullptr,&out,nullptr,1,0,0,0,0);
@@ -191,7 +192,7 @@ int main(int argc,char** argv){
  const auto committed=tx.commit();
  check(committed==patch_transaction::outcome::committed,"W2 plus constructor/table hooks commit in one union: "+tx.report());
  if(committed!=patch_transaction::outcome::committed)return 1;
- xml1_economy::after_commit(tx.result());check(gameplay_agreement::holds==1&&!xml1_economy::installed()&&gameplay_agreement::registrations==0,"agreement held before table resolution");
+ xml1_economy::after_commit(tx.result());check(gameplay_agreement::holds==1&&(!xml1_economy::installed()&&!lcsave::item_own_rebuilt_enabled())&&gameplay_agreement::registrations==0,"agreement held before table resolution");
  auto* picker_copy=item_capacity::prepared_definition_picker();
  check(picker_copy&&read<unsigned char>(picker_copy)==0xe9&&0x47b595+read<unsigned>(at(0x47b591))==addr(picker_copy),"picker tripwire composes at W2 copied entry; original width redirect retained");
  setup_table(legacy_definition+1); // high indices exercise widened AX lookup; one extra legacy definition
@@ -207,12 +208,17 @@ int main(int argc,char** argv){
  jump(0x47ce80,&empty_walk);
  const auto target=0x4806b2+read<unsigned>(at(0x4806ae));native<void(__fastcall*)(void*,void*)>(target)(manager.data(),nullptr);
  if(scenario=="unresolved"){
-  check(!xml1_economy::installed()&&!gameplay_agreement::good&&gameplay_agreement::holds==0,"unresolved native name refuses rule and releases hold closed");return failures?1:0;
+  check((!xml1_economy::installed()&&!lcsave::item_own_rebuilt_enabled())&&!gameplay_agreement::good&&gameplay_agreement::holds==0,"unresolved native name refuses rule and releases hold closed");return failures?1:0;
  }
- check(xml1_economy::installed()&&gameplay_agreement::holds==0&&gameplay_agreement::registrations==1,"all 132 names resolved with real W2 by-name lookup, incl indices255/256; rule verified once");
+ check(xml1_economy::installed()&&lcsave::item_own_rebuilt_enabled()&&gameplay_agreement::holds==0&&gameplay_agreement::registrations==1,"all 132 names resolved with real W2 by-name lookup, incl indices255/256; rule verified once");
  if(!xml1_economy::installed()){std::printf("resolution failure: %s\n",logger::last.c_str());return 1;}
- auto expected_values=agreement_values(chosen,parse(text));expected_values[0]|=1;
- check(gameplay_agreement::rules.rule(1).values==expected_values,"rule 52 exact parts/revision/digest/count values, including installed roller bit1");
+ auto expected_values=agreement_values(chosen,parse(text));expected_values[0]|=65;
+ check(gameplay_agreement::rules.rule(1).values==expected_values,"rule 52 exact parts/revision/digest/count values, including installed roller bit1 and migration bit64");
+ gameplay_capabilities::record local,old_peer;local.add(52,1,expected_values,true);local.finalize();
+ auto previous_values=expected_values;previous_values[0]&=~64u;old_peer.add(52,1,previous_values,true);old_peer.finalize();
+ gameplay_capabilities::difference difference;char description[128]{};
+ const auto mismatch=local.compare(old_peer.bytes(),&difference);local.describe(difference.buckets,0,true,description,sizeof description);
+ check(mismatch!=gameplay_capabilities::result::match&&std::strstr(description,"52 Xml1Economy"),"peer without migration part64 is refused naming rule52");
  bool parity=true,draws=true,other_stream_unchanged=true;
  for(unsigned i=0;i<economy_count;++i){restore();descriptor out{};auto* def=manager.data()+item_capacity_rules::definitions+(i+first_economy)*0x3c;native<make_t>(0x47bb50)(manager.data(),nullptr,&out,def,1,0,0,0,0);const auto s=capture(out);const bool equal=same(s,native_results[i]);parity&=equal;draws&=s.draws==(chosen==plan::zero_draw?0u:own_count(i))&&s.rng_state==(chosen==plan::zero_draw?12345u:native_results[i].rng_state);
   if(!equal){std::printf("parity definition %u: bonus %d/%d, records %zu/%zu\n",i,s.bonus,native_results[i].bonus,s.attached.size(),native_results[i].attached.size());for(unsigned n=0;n<0x34;++n)if(s.instance[n]!=native_results[i].instance[n])std::printf(" instance +%02x %02x/%02x\n",n,s.instance[n],native_results[i].instance[n]);}

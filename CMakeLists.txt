@@ -236,7 +236,7 @@ target_include_directories(xml2_stat_help_test PRIVATE src)
 
 # lcsave: the reference's test vectors, the real-save corpus against the Python outputs (folders given on the
 # command line), and a fuzz of the readers.
-add_executable(lcsave_test test/lcsave_test.cpp test/lcsave_vectors.cpp)
+add_executable(lcsave_test test/lcsave_test.cpp test/lcsave_vectors.cpp test/lcsave_rebuilt_corpus.cpp)
 target_link_libraries(lcsave_test PRIVATE lcsave)
 add_executable(xml2_confirmation_release_test test/confirmation_release_test.cpp)
 target_include_directories(xml2_confirmation_release_test PRIVATE src)
@@ -625,6 +625,7 @@ target_link_options(xml2_item_capacity_test PRIVATE /BASE:0x400000 /DYNAMICBASE:
 
 add_executable(xml2_economy_test test/xml1_economy_test.cpp src/xml1_economy.cpp src/xml1_roll.cpp src/item_capacity.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
 target_include_directories(xml2_economy_test PRIVATE src)
+target_link_libraries(xml2_economy_test PRIVATE lcsave)
 target_link_options(xml2_economy_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
 add_executable(xml2_roll_rules_test test/xml1_roll_rules_test.cpp)

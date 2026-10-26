@@ -1,4 +1,4 @@
-# XML1 economy construction and drops
+# XML1 economy construction, drops and saved rewards
 
 `[Game] Xml1Economy=1` requests **52 Xml1Economy**, revision **1**. An absent
 or false key reads no sidecar, contributes no patches and registers no rule.
@@ -19,14 +19,16 @@ sidecar or name resolution leaves rule 52 unverified and online closed.
 | Treasure and DR | Full category-five treasure rolls; generated DR gear suppressed, other rewards preserved |
 | Level adjustment | Regeneration returns before removing any equipped item; the level adjustment remains native |
 | Generator census | Per-return-address tripwires retain native generation and the widened W2 picker |
+| Saved DR rewards | Catalogue `ITEM_OWN_REBUILT` instances take current own records in native slot order, interpolation bits 0, only with verified rule 52 |
 
 Later sales, Forge, Healer, Grab Bag and Training parts remain clear.
 Plan A is `xml1_economy_rules::default_plan`. The selected plan controls both
 dispatch and the agreement value; there is no independent runtime override.
 
-Rule values: `{parts, 1, digest_prefix_le, entry_count}`. Parts = **33** for
-plan A, **1** for fallback: bit 1 covers the complete roller/category/treasure/
-generator-disposition install and bit 32 selects zero-draw construction.
+Rule values: `{parts, 1, digest_prefix_le, entry_count}`. Parts = **97** for
+plan A, **65** for fallback: bit 1 covers the complete roller/category/treasure/
+generator-disposition install, bit 32 selects zero-draw construction, and
+bit 64 covers the rebuilt saved-instance migration.
 Bits 2, 4, 8 and 16 remain clear. The first four
 SHA-256 bytes are packed little endian (bytes `01 23 45 67` become
 `0x67452301`). Status shows the bytes in their original hex order:
@@ -165,3 +167,56 @@ lifecycle reachability and per-zone tripwire acceptance remain live gates.
 `scripts/check_xml1_roll_text.py <retail-exe>` checks all guards and the static
 generator census. Vendor refill and Grab Bag generator callers remain for their
 later implementation parts and are intentionally visible to the tripwire.
+
+## Rebuilt rewards in existing saves (part 64)
+
+The catalogue attribute `ITEM_OWN_REBUILT` is bit **0x1** of an ITEM entry's
+attributes word. It is distinct from sidecar flag 0x4. The builder marks exactly
+19 Danger Room reward definitions. During LC campaign reverse translation,
+`Pos::instance` replaces each marked instance's own list with the current
+build's `ITEM_own` records in native slot order, with interpolation bits 0.
+This also removes obsolete own records from special-name instances and handles
+zero-record definitions. The saved own list is discarded before resolving any
+of its IDs: shortened definitions can remove old records entirely. Prefixes and
+suffixes still resolve normally. More than eight current own records or an
+unmapped current/affix record refuses without exposing a partial stream.
+
+Prefixes, suffixes, special name, DEFSTATE quantity and state (including
+the definition's obtained bit), and all other data follow the existing loader.
+Location is preserved except when worn gear is recovered to carried inventory.
+Carried, equipped, world and restore equipment share this translation. No LC
+format or catalogue identity changes. The legacy importer's {375, 512} item-pool
+inference is unchanged.
+
+Twelve rewards change from belt/armor to gloves. An LC equipped list records
+membership, not a slot index. For a pre-economy catalogue (revision below the
+existing revision **8** that introduced the rebuilt classes), the loader uses
+the historical ITEM class to identify the worn slot. A marked reward whose new
+class differs is removed from HERO/REST equipment and appended to carried
+inventory with location **2**, even if twenty items are already carried. It keeps
+its affixes, special name and definition quantity/obtained/state. Each recovered
+instance adds one load-ledger note naming the owner and old slot; the engine
+forwards the ledger to its log. Fitting gloves and unmarked gear stay equipped.
+A retail import still describes historical equipment even when imported against
+catalogue8, so META origin 1 also enables this recovery. No importer change.
+The ordinary native resave stamps current catalogue/native origin; newly equipped
+rebuilt gloves remain equipped on reload and later catalogue growth. Recovered
+instances are already carried, so no relocation or note repeats after resave.
+
+The installer binds the loader to its live verified rule-52 state after agreement
+registration. The library defaults to disabled; attributes alone, a requested
+but unresolved install, guard refusal and rollback never enable migration. A
+runtime loss of verification disables it for subsequent loads. No additional
+retail patch site is needed. Rule values now include part 64, so a peer with
+the previous parts value is refused naming `52 Xml1Economy`.
+
+`lcsave_test` includes preservation, removed-record, class-recovery, OFF,
+eight-slot/refusal and fixed-point cases (including an already-full inventory
+and current-catalogue re-equipping). `--rebuilt CASES --data BUILD --out OUT --enabled 0|1` runs the
+read-only corpus driver; `test/lcsave_rebuilt_reference.py` prepares real and
+seeded cases using the corrected Python reference and compares native instances,
+saved bytes and fixed points with both the current loader and committed baseline.
+`--seeds DIR` includes the coordinator's manifest-pinned SaveLC seeds. The
+Python reference supplies own-list behavior; a separate literal twelve-identity
+expectation checks the owner's equipment recovery policy and its one-time notes.
+Generated save data belongs in an ignored workspace output folder.

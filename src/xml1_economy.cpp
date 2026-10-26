@@ -5,6 +5,7 @@
 #include "item_capacity.hpp"
 #include "item_capacity_rules.hpp"
 #include "lcsave/layout.hpp"
+#include "lcsave/lcsave.hpp"
 #include "gameplay_agreement.hpp"
 #include "ini.hpp"
 #include "log.hpp"
@@ -33,9 +34,10 @@ void* table=nullptr;
 make_t original=nullptr;
 void register_result(bool verified){
  if(registered)return;registered=true;
- auto values=agreement_values(mode,data);if(roller::installed())values[0]|=1;
+ auto values=agreement_values(mode,data);if(roller::installed())values[0]|=1;values[0]|=64;
  const bool agreed=gameplay_agreement::register_rule(rule_id,rule_revision,values,verified);
  active.store(verified&&agreed,std::memory_order_release);
+ lcsave::set_xml1_economy_verifier(&installed);
  logger::write("economy: rule 52 Xml1Economy %s%s%s",active.load()?"verified":"unverified; online closed",failure.empty()?"":"; ",failure.c_str());
  if(held){held=false;gameplay_agreement::resume_finalization();}
 }
