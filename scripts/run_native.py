@@ -45,7 +45,7 @@ with_exe = {
     "xml2_xml1_cling_test", "xml2_lift_rule_test", "xml2_xml1_controllers_test", "xml2_dopple_xbe_test",
     "xml2_xml1_grab_carry_test", "xml2_xml1_grab_carry_install_test", "xml2_xml1_air_carry_test", "xml2_shared_handlers_c_test", "xml2_tk_guard_test",
     "xml2_anim_enums_test", "xml2_char_sounds_test", "xml2_motion_pool_test", "xml2_resident_stats_test", "xml2_resident_payload_test",
-    "xml2_pool_counter_observers_test",
+    "xml2_pool_counter_observers_test", "xml2_particle_scratch_test",
 }
 # Second argument: the XBE (beta 7: the scheduler suite requires it, the weapon brain compares the original callbacks).
 with_xbe = {"xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test", "xml2_shared_handlers_test", "xml2_shared_handlers_c_test", "xml2_dopple_xbe_test", "xml2_tk_guard_test"}

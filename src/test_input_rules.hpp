@@ -379,6 +379,7 @@ namespace test_input_rules
 			char_sounds,
 			resident_stats, resident_census, motion_pool,
 			pools,
+			particle_scratch,
 			events,
 			ping,
 			save, // save_format's commands: `text` is the rest of the line
@@ -429,6 +430,12 @@ namespace test_input_rules
 			return result;
 		}
 
+		if (verb == "PARTICLE_SCRATCH")
+		{
+			if (!rest.empty()) return fail("observation commands take no arguments");
+			result.what = command::kind::particle_scratch;
+			return result;
+		}
 		if (verb == "STATE" || verb == "OBJECTIVES" || verb == "EVENTS" || verb == "ACTOR_POOLS" || verb == "CHAR_SOUNDS" || verb == "RESIDENT_STATS" || verb == "RESIDENT_CENSUS" || verb == "MOTION_POOL" || verb == "POOLS")
 		{
 			if (!rest.empty()) return fail("observation commands take no arguments");

@@ -585,6 +585,7 @@ namespace test_input
 			case command::kind::char_sounds: return test_state::reply("char_sounds");
 			case command::kind::actor_pools: return test_state::reply("actor_pools");
 			case command::kind::pools: return pool_counters::json();
+			case command::kind::particle_scratch: return test_state::reply("particle_scratch");
 			case command::kind::pad:
 				return pad_input::handle(cmd.pad);
 			case command::kind::save:

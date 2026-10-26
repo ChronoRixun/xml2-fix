@@ -39,6 +39,11 @@
   equivalence rows (`Data/lcsave/zone-prefix.lcm`, format unchanged) and reads such a record exactly as an
   unchanged map's. New offline gate `scripts/zone_records_gate.py` (target `lcsave_zone_records`): per zone, real
   saves apply at least as many records on the candidate as on stable.
+- `[Limits] ParticleScratch=40` clamps all eleven particle operations to the
+  manager's 40 shared scratch records, preventing overruns with larger arrays.
+  Logs once per array address and exposes per-operation peaks and clamp counts
+  through `PARTICLE_SCRATCH`. Rule 60; absent/0/off keeps the released bytes and
+  agreement. [Details](docs/particle-scratch.md).
 
 - **The first game's revival price: gameplay rule 10 revision 3** (`[Game] RevivalCost = xml1`; 1.9.0-beta.1 and
   1.8.0, [docs](docs/xtraction-shop.md#revival-price)). A fallen hero costs 200 x G^2 Tech Bits, G = min(5, L / 10 +

@@ -69,6 +69,7 @@ add_library(xml2_fix SHARED
 	src/combo_heads.cpp
 	src/model_pools.cpp
 	src/pool_counters.cpp
+	src/particle_scratch.cpp
 	src/online_tick.cpp
 	src/npc_power.cpp
 	src/npc_semi_auto.cpp
@@ -748,3 +749,8 @@ target_link_options(xml2_pool_counters_runtime_test PRIVATE /BASE:0x400000 /DYNA
 add_executable(xml2_pool_counter_observers_test test/pool_counter_observers_test.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
 target_include_directories(xml2_pool_counter_observers_test PRIVATE src)
 target_link_options(xml2_pool_counter_observers_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+add_executable(xml2_particle_scratch_test test/particle_scratch_test.cpp src/particle_scratch.cpp
+    src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_particle_scratch_test PRIVATE src)
+target_compile_options(xml2_particle_scratch_test PRIVATE /UNDEBUG)
+target_link_options(xml2_particle_scratch_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
