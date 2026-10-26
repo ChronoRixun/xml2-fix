@@ -231,6 +231,9 @@ target_include_directories(xml2_stat_help_test PRIVATE src)
 # command line), and a fuzz of the readers.
 add_executable(lcsave_test test/lcsave_test.cpp test/lcsave_vectors.cpp)
 target_link_libraries(lcsave_test PRIVATE lcsave)
+# W2 gate G3 offline: real saves through the W2 / E10A2 loaders and savers on a real build's tables (no engine).
+add_executable(lcsave_real_saves test/lcsave_real_saves.cpp)
+target_link_libraries(lcsave_real_saves PRIVATE lcsave)
 add_executable(xml2_confirmation_release_test test/confirmation_release_test.cpp)
 target_include_directories(xml2_confirmation_release_test PRIVATE src)
 
