@@ -2,6 +2,12 @@
 
 ## 1.9.0 - <date TBD>
 
+- `[Limits] ScriptPools=x1` expands statements/values/compiled scripts/running
+  contexts to 4096/8192/512/128, preserving the native globals and function tree.
+  A compiler guard refuses null values safely; bounded filename-cache metadata
+  prevents its old 120-name ring from aliasing larger compiled pools. Rule 59 covers the installed
+  profile; counters and verification are documented in [script-pools.md](docs/script-pools.md).
+
 - **The first game's revival price: gameplay rule 10 revision 3** (`[Game] RevivalCost = xml1`; 1.9.0-beta.1 and
   1.8.0, [docs](docs/xtraction-shop.md#revival-price)). A fallen hero costs 200 x G^2 Tech Bits, G = min(5, L / 10 +
   1), L the roster's highest current level without guests: 200 / 800 / 1,800 / 3,200 / 5,000 for 0-9 / 10-19 /

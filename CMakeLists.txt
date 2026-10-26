@@ -121,6 +121,7 @@ add_library(xml2_fix SHARED
 	src/personal_item_text.cpp
 	src/xtract.cpp
 	src/forced_teams.cpp
+	src/script_pools.cpp
 	src/script_functions.cpp
 	src/script_function_overflow.cpp
 	src/solo_mode.cpp
@@ -683,3 +684,9 @@ add_executable(xml2_xml1_air_carry_test test/xml1_air_carry_test.cpp
     src/xml1_grab_carry.cpp src/xml1_air_carry.cpp src/xml1_cling.cpp src/xml1_rogue_decide.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
 target_include_directories(xml2_xml1_air_carry_test PRIVATE src)
 target_link_options(xml2_xml1_air_carry_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# W3-8: production transaction and isolated retail pool lifecycle fixture.
+add_executable(xml2_script_pools_test test/script_pools_test.cpp src/script_pools.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_script_pools_test PRIVATE src)
+target_compile_options(xml2_script_pools_test PRIVATE /UNDEBUG)
+target_link_options(xml2_script_pools_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)

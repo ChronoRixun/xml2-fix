@@ -32,6 +32,7 @@
 //   ItemEnhancements = 512  ; 376..1024 (375 is the game's own): the item manager's enhancement
 //                           ; record pool, past which Data/items stops loading
 //   FightStyles = 32        ; 20..32 (19 is the game's own)
+//   ScriptPools = x1        ; 4096 statements, 8192 values, 512 scripts, 128 contexts
 //   EffectCurves = 3600     ; 901..16384 (900 is the game's own): the effect curve pool
 //   IGBCache = 1024         ; 201..2048 (200 is the game's own): the IGB info cache, past which a
 //                           ; zone's map IGB fails to load and the game bounces back to the previous

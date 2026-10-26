@@ -60,6 +60,7 @@
 #include "display.hpp"
 #include "forced_teams.hpp"
 #include "script_functions.hpp"
+#include "script_pools.hpp"
 #include "solo_mode.hpp"
 #include "mold_controller.hpp"
 #include "xml1_bosses.hpp"
@@ -240,6 +241,7 @@ namespace
 		// [Online] GameVersion: the string the game copies into its network code at start-up and when online
 		// opens - here, before any of its code runs.
 		game_version::install(game);
+		script_pools::require_agreement(game); // a ScriptPools-only opt-in must join the shared startup transaction
 		if (!game_version::startup_allowed()) return;
 
 		// The one startup transaction (docs/entity-capacity-phase-a-plan.md section 7): the shared gameplay
@@ -327,6 +329,7 @@ namespace
 		// them). Two code sites of the registration and the compile-time lookup, both first run by the same
 		// registration; before forced_teams, whose table carries any [Test] probes.
 		script_functions::install(game);
+		script_pools::install(game);
 		forced_teams::install(game);
 		// The shared XML1 boss dispatcher installs Master Mold ([Game] Xml1MasterMold) and the bosses [Game] Xml1Bosses
 		// lists in one transaction (one brain-dispatch detour); nothing requested writes nothing.

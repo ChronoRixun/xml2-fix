@@ -376,6 +376,7 @@ namespace test_input_rules
 			state,
 			objectives,
 			actor_pools,
+			script_pools,
 			events,
 			ping,
 			save, // save_format's commands: `text` is the rest of the line
@@ -425,10 +426,10 @@ namespace test_input_rules
 			return result;
 		}
 
-		if (verb == "STATE" || verb == "OBJECTIVES" || verb == "EVENTS" || verb == "ACTOR_POOLS")
+		if (verb == "STATE" || verb == "OBJECTIVES" || verb == "EVENTS" || verb == "ACTOR_POOLS" || verb == "SCRIPT_POOLS")
 		{
 			if (!rest.empty()) return fail("observation commands take no arguments");
-			result.what = verb == "STATE" ? command::kind::state : verb == "OBJECTIVES" ? command::kind::objectives : verb == "ACTOR_POOLS" ? command::kind::actor_pools : command::kind::events;
+			result.what = verb == "STATE" ? command::kind::state : verb == "OBJECTIVES" ? command::kind::objectives : verb == "ACTOR_POOLS" ? command::kind::actor_pools : verb == "SCRIPT_POOLS" ? command::kind::script_pools : command::kind::events;
 			return result;
 		}
 		if (verb == "SAVE")

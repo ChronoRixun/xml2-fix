@@ -9,6 +9,12 @@ No new gameplay rule ID is assigned for this transport change.
 
 ## Registration API
 
+Rule **59 ScriptPools**, revision 1, participates only with an installed
+`[Limits] ScriptPools=x1` profile: `{4096,0,0,0}`. The profile also sets 8,192
+values, 512 compiled scripts and 128 running contexts. A failed request
+registers unverified `{0,0,0,0}` and closes admission; absent/stock adds no rule.
+See [script-pools.md](script-pools.md).
+
 Include `gameplay_agreement.hpp`. Call each registration once, after its installer has checked guards, written/read back its changes and established its effective state. Disabled hooks register their native/off value with `verified=true`; a requested but failed hook registers `verified=false`. Registration automatically enlists socket exclusion and native refusal handling, including for a non-LC capacity/controller mod with no ExplosiveFirstHit key. A failed registration poisons the record and closes online admission. Do not silently omit failed participating rules. Requested-only rules 17..22 omit their entry when absent, empty or explicitly native, preserving the released OFF digest.
 
 ```cpp

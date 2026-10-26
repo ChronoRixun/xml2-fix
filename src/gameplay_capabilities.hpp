@@ -17,7 +17,7 @@ namespace gameplay_capabilities
   gns_transport_id=25, join_in_progress_id=26, online_conversations_id=27, model_pools_id=28, tick_rate_id=29,
   world_backfaces_id=30, igb_cache_id=31, resource_names_id=32, actor_slots_id=33, item_enhancements_id=34,
   fight_styles_id=35, effect_curves_id=36, move_triggers_id=37, lift_rule_id=38, wall_cling_id=39,
-  xml1_bosses_id=40, balance_parity_id=41, shared_handlers_id=42, rogue_decide_id=43, actor_ai_id=44, grab_carry_id=45, shared_handlers_c_id=46, anim_enums_id=48;
+  xml1_bosses_id=40, balance_parity_id=41, shared_handlers_id=42, rogue_decide_id=43, actor_ai_id=44, grab_carry_id=45, shared_handlers_c_id=46, anim_enums_id=48, script_pools_id=59;
  // Rules 17..29 (24 = [Online] FastTransfer, docs/online-campaign-transfer.md; 25 = [Online] Transport=gns, docs/gns-transport.md;
  // 26 = [Online] JoinInProgress, docs/join-in-progress.md; 27 = [Game] OnlineConversations=lockstep, docs/gameplay-agreement.md;
  // 28 = [Engine] ModelPools, docs/model-pools.md; 29 = [Online] TickRate, docs/online-tick-rate.md;
@@ -105,6 +105,7 @@ namespace gameplay_capabilities
   case shared_handlers_c_id: return "SharedHandlersC";
   case actor_ai_id: return "ActorAI";
   case anim_enums_id: return "AnimEnums";
+  case script_pools_id: return "ScriptPools";
   default: return "a newer rule";
   }
  }
