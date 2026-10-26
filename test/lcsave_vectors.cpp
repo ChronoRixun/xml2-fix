@@ -2274,6 +2274,200 @@ namespace
 		bool m200 = true;
 		for (const auto& a : adds) m200 &= a.shared ? a.talent_id < 199 : a.talent_id >= 200 * (a.stats_index + 1) && a.talent_id < 200 * (a.stats_index + 2);
 		check(m200, "missing talents use M = 200 and tell shared talents by their table");
+		// (7) F1: the probe-oracle fixtures section 7 lists that (3)-(6) do not reach (W2 review, Fable): each case is
+		// a boundary pair, the first value marks and the one below it does not
+		{
+			int f1_checks = 0;
+			const auto f1 = [&](bool ok, const std::string& what) { ++f1_checks; check(ok, what); };
+			// add a catalogue entry to a test build (the forward names it, the reverse finds its position)
+			auto entry = [](TablesData& td, unsigned domain, const std::vector<std::string_view>& fields)
+			{
+				Cat cat; cat.c = td.catalogue;
+				for (const auto& x : cat.c.entries) cat.next[x.domain] = std::max(cat.next[x.domain], x.id & 0xffffffu);
+				const u32 id = cat.add(domain, fields);
+				td.catalogue = cat.c;
+				for (const auto& x : td.catalogue.entries) if (x.id == id) td.names[id] = unescape_key(x.key);
+				return id;
+			};
+			// (7a) an enhancement record >= 512: a build whose enhancement table has 601 records, record N in an item's own list
+			{
+				auto t4 = make_tables(folder / "f1-enhancements", "sh_might", false);
+				Tables tables4; tables4.data = t4;
+				auto& T = t4->build->T;
+				const u32 def = wm.carried[0].head.definition;
+				while (T.ENHC.size() < 601)
+				{
+					const u32 id = entry(*t4, 3, {"i", "f1_item", std::to_string(T.ENHC.size())});
+					t4->p_enh[id] = static_cast<u32>(T.ENHC.size());
+					T.ENHC.push_back(id);
+					T.ITEM_own[def].push_back(id);
+				}
+				for (const u32 record : {511u, 512u, 600u})
+				{
+					auto m = wm;
+					m.carried[0].lists[1].push_back(OldEnhElement{static_cast<u16>(record), 7});
+					const auto r = old_stream_to_new(write_slot(m, w), tables4, ctx, w);
+					const auto why4 = r.ok ? representable(r.bytes, tables4, e) : r.error;
+					if (record == 511) f1(r.ok && !marks(r), "F1 enhancement record 511 does not set bit 1: " + why4);
+					else f1(marks(r) && contains(why4, ("enhancement record " + std::to_string(record) + " >= 512").c_str()), "F1 enhancement record " + std::to_string(record) + " sets bit 1: " + why4);
+					if (record == 600 && r.ok)
+					{
+						const auto back = new_to_old_stream(r.bytes, tables4, w, &reg);
+						bool kept = false;
+						if (back.ok) for (const auto& c : read_slot(back.bytes.data(), back.bytes.size(), w).carried) for (const auto& x : c.lists[1]) kept |= x.record == 600 && x.value == 7;
+						f1(kept, "F1 enhancement record 600 survives the W2 round trip: " + back.error);
+					}
+				}
+			}
+			// (7b) more than 5 zone records: N live (captured) records of N zones, saved by the W2 writer
+			{
+				auto t5 = make_tables(folder / "f1-zones", "sh_might", false);
+				Tables tables5; tables5.data = t5;
+				std::vector<u32> zones;
+				std::vector<Value> digests;
+				for (int k = 0; k < 7; ++k)
+				{
+					const std::string name = "zone/x/r" + std::to_string(k);
+					const u32 id = entry(*t5, 15, {name});
+					t5->reference.ZONE.push_back(id); t5->build->T.ZONE.push_back(id); t5->p_zone[id] = name;
+					fs::copy_file(folder / "f1-zones" / "Maps" / "zone" / "x" / "y.engb", folder / "f1-zones" / "Maps" / "zone" / "x" / ("r" + std::to_string(k) + ".engb"),
+						fs::copy_options::overwrite_existing);
+					fs::copy_file(folder / "f1-zones" / "Packages/generated/maps/zone/x/y.pkgb", folder / "f1-zones" / "Packages/generated/maps/zone/x" / ("r" + std::to_string(k) + ".pkgb"),
+						fs::copy_options::overwrite_existing);
+					const auto bits = conversation_bits(*t5->build, name);
+					const auto digest = conversation_package_digest(key_hash1(name, Enc::latin1), bits);
+					t5->conversation_tables[{digest, key_hash1(name, Enc::latin1)}] = bits;
+					digests.push_back(Value::bytes(digest.data(), digest.size()));
+					zones.push_back(id);
+				}
+				const auto base = read_file(saved.bytes.data(), saved.bytes.size(), kind_campaign);
+				auto with_records = [&](u32 n)
+				{
+					std::vector<SectionOut> sections;
+					for (const auto& tag : base.order)
+					{
+						const auto& sec = base.sections.at(tag);
+						Value data = sec.data;
+						if (tag == "ZONE")
+						{
+							auto records = data["records"];
+							const auto first = records.l[0];
+							for (u32 k = 1; k < n; ++k)
+							{
+								auto r = first;
+								r.set("zone", Value::integer(zones[k - 1]));
+								r.set("conversation_digest", digests[k - 1]);
+								r.set("states", Value::list());          // a visited zone whose entities kept their placed state
+								r.set("time_stamp", Value::real(static_cast<double>(k)));
+								records.push(r);
+							}
+							data.set("records", records);
+						}
+						sections.push_back({tag, sec.entry.major, sec.entry.minor, sec.entry.flags, data});
+					}
+					HeaderIn h;
+					h.required_features = feature_entity_layout_contiguous10;
+					h.campaign_serial = 17; h.save_sequence = 3;
+					return write_file(kind_campaign, sections, h);
+				};
+				for (const u32 n : {5u, 6u, 8u})
+				{
+					const auto file = with_records(n);
+					const auto loaded = new_to_old_stream(file, tables5, w, &reg);
+					const auto lm = loaded.ok ? read_slot(loaded.bytes.data(), loaded.bytes.size(), w) : OldSlot{};
+					f1(loaded.ok && lm.zones.size() == n, "F1 the W2 loader applies " + std::to_string(n) + " zone records: " + loaded.error + " " + loaded.ledger);
+					if (!loaded.ok) continue;
+					NewFileContext c5 = ctx;
+					c5.retained_file = file;
+					c5.zone_captures.clear();
+					f1(loaded_zone_metadata(file, tables5, c5.zone_captures, error, w, &reg) && c5.zone_captures.size() == n, "F1 metadata of " + std::to_string(n) + " records: " + error);
+					const auto r = old_stream_to_new(loaded.bytes, tables5, c5, w);
+					const auto why5 = r.ok ? representable(r.bytes, tables5, e) : r.error;
+					if (n == 5) f1(r.ok && !marks(r), "F1 5 zone records do not set bit 1: " + why5);
+					else
+					{
+						f1(marks(r) && contains(why5, "zone record"), "F1 " + std::to_string(n) + " zone records set bit 1: " + why5);
+						if (r.ok)
+						{
+							const auto refused = new_to_old_stream(r.bytes, tables5, e, &reg);
+							f1(!refused.ok && refused.error == w2_refused, "F1 the E10A2 build refuses the " + std::to_string(n) + "-record save by name: " + refused.error);
+							const auto back = new_to_old_stream(r.bytes, tables5, w, &reg);
+							f1(back.ok && read_slot(back.bytes.data(), back.bytes.size(), w).zones.size() == n, "F1 the W2 build loads " + std::to_string(n) + " records back: " + back.error);
+						}
+					}
+				}
+			}
+			// (7c) a talent position >= 100 / a shared talent id >= 99 on the target's mapping (M = 100); W2 holds them (M = 200)
+			{
+				auto t6 = make_tables(folder / "f1-talents", "sh_might", false);
+				Tables tables6; tables6.data = t6;
+				auto& T = t6->build->T;
+				const u32 si = 1;                                  // wm.heroes[0]: stats index 1, own ids 2 x 200 + position
+				while (T.TALN_hero[si].size() < 101)
+				{
+					const u32 id = entry(*t6, 7, {"hero_f1", std::to_string(T.TALN_hero[si].size())});
+					t6->p_tal[id] = talent_code(si + 1, static_cast<u32>(T.TALN_hero[si].size()));
+					T.TALN_hero[si].push_back(id);
+				}
+				while (T.TALN_shared.size() < 100)
+				{
+					const u32 id = entry(*t6, 7, {"shared", "f1_" + std::to_string(T.TALN_shared.size())});
+					t6->p_tal[id] = talent_code(0, static_cast<u32>(T.TALN_shared.size()));
+					T.TALN_shared.push_back(id);
+				}
+				auto with_talent = [&](u16 id)
+				{
+					auto m = wm;
+					auto& a = m.heroes[0].attributes;
+					std::vector<OldTalentEntry> heap(a.talents, a.talents + a.tail.count);
+					auto x = heap.empty() ? OldTalentEntry{} : heap[0];
+					x.id = id;
+					heap.push_back(x);
+					std::sort(heap.begin(), heap.end(), [](const OldTalentEntry& p, const OldTalentEntry& q) { return p.id < q.id; });
+					for (std::size_t k = 0; k < heap.size(); ++k) a.talents[k] = heap[k];
+					a.tail.count = static_cast<u32>(heap.size());
+					return old_stream_to_new(write_slot(m, w), tables6, ctx, w);
+				};
+				const auto p99 = with_talent(static_cast<u16>(2 * 200 + 99));
+				f1(p99.ok && !marks(p99), "F1 talent position 99 does not set bit 1: " + (p99.ok ? representable(p99.bytes, tables6, e) : p99.error));
+				const auto p100 = with_talent(static_cast<u16>(2 * 200 + 100));
+				const auto why100 = p100.ok ? representable(p100.bytes, tables6, e) : p100.error;
+				f1(marks(p100) && contains(why100, "talent position 100"), "F1 talent position 100 sets bit 1: " + why100);
+				if (p100.ok)
+				{
+					const auto back = new_to_old_stream(p100.bytes, tables6, w, &reg);
+					bool kept = false;
+					if (back.ok) for (u32 k = 0; k < read_slot(back.bytes.data(), back.bytes.size(), w).heroes[0].attributes.tail.count; ++k)
+						kept |= read_slot(back.bytes.data(), back.bytes.size(), w).heroes[0].attributes.talents[k].id == 500;
+					f1(kept, "F1 talent position 100 survives the W2 round trip as id 500: " + back.error);
+				}
+				const auto s98 = with_talent(98);
+				f1(s98.ok && !marks(s98), "F1 shared talent id 98 does not set bit 1: " + (s98.ok ? representable(s98.bytes, tables6, e) : s98.error));
+				const auto s99 = with_talent(99);
+				const auto why99 = s99.ok ? representable(s99.bytes, tables6, e) : s99.error;
+				f1(marks(s99) && contains(why99, "shared talent position 99"), "F1 shared talent id 99 sets bit 1: " + why99);
+			}
+			// (7d) "a build registering more than 256 objectives marks every save": no objective above 255 holds any state
+			{
+				auto t7 = make_tables(folder / "f1-objectives", "sh_might", false);
+				Tables tables7; tables7.data = t7;
+				auto& T = t7->build->T;
+				const auto base = T.OBJV.size();
+				for (const u32 registered : {256u, 257u})
+				{
+					T.OBJV.resize(base);
+					for (u32 k = static_cast<u32>(base); k < registered; ++k) { T.OBJV.push_back(0x7e000000u + k); t7->p_obj[0x7e000000u + k] = k; }
+					auto m = wm;
+					for (u32 k = static_cast<u32>(base); k < max_snapshot_objectives; ++k) m.mission.objectives[k] = 0;
+					for (auto& s : m.side_frames) for (u32 k = static_cast<u32>(base); k < max_snapshot_objectives; ++k) s.objectives[k] = 0;
+					const auto r = old_stream_to_new(write_slot(m, w), tables7, ctx, w);
+					const auto why7 = r.ok ? representable(r.bytes, tables7, e) : r.error;
+					if (registered == 256) f1(r.ok && !marks(r), "F1 a build registering 256 objectives does not mark a save: " + why7);
+					else f1(marks(r) && contains(why7, "objective index 256 > 255"), "F1 a build registering 257 objectives marks a save with no state above 255: " + why7);
+				}
+			}
+			std::printf("F1 probe-oracle fixtures: %d checks\n", f1_checks);
+		}
 	}
 }
 
