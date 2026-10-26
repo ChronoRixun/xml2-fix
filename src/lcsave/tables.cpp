@@ -533,14 +533,16 @@ namespace lcsave::detail
 			load_bind(B, cat, L"shared_talents", st, true);
 			const auto& stl = st.list("TALN");
 			dense(stl, 0, "TALN", "Data\\shared_talents.lcbind");
-			std::map<std::string, u16> shared_by_key;
+			// talents are kept as codes (owner + 1, position): the engine id is the layout's (owner + 1) x M + position
+			// (talent_engine_id; M = 100 RETAIL / E10A2, 200 W2), so one table serves every layout
+			std::map<std::string, u32> shared_by_key;
 			for (const auto& r : stl)
 			{
 				T.TALN_shared.push_back(r.id);
-				if (r.id) t.p_tal[r.id] = r.position;
-				shared_by_key.emplace(r.key, static_cast<u16>(r.position));
+				if (r.id) t.p_tal[r.id] = talent_code(0, r.position);
+				shared_by_key.emplace(r.key, talent_code(0, r.position));
 			}
-			std::map<std::pair<u32, std::string>, u16> hero_by_key;
+			std::map<std::pair<u32, std::string>, u32> hero_by_key;
 			{
 				std::set<std::string> seen;
 				for (u32 i = 1; i <= B.hero_count; ++i)
@@ -554,9 +556,9 @@ namespace lcsave::detail
 					for (const auto& r : l)
 					{
 						put_at(T.TALN_hero[r.group], r.position, r.id, "TALN");
-						const u32 engine_id = (r.group + 1) * 100 + r.position;
-						if (r.id) t.p_tal[r.id] = engine_id;
-						hero_by_key.emplace(std::make_pair(r.group, r.key), static_cast<u16>(engine_id));
+						const u32 code = talent_code(r.group + 1, r.position);
+						if (r.id) t.p_tal[r.id] = code;
+						hero_by_key.emplace(std::make_pair(r.group, r.key), code);
 					}
 				}
 			}

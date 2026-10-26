@@ -764,6 +764,7 @@ void fuzz_core(const Tables& tables, const std::vector<std::vector<std::uint8_t>
 
 int main(int argc, char** argv)
 {
+	std::setvbuf(stdout, nullptr, _IONBF, 0);   // progress survives a crash
 	std::map<std::string, std::string> args;
 	for (int k = 1; k + 1 < argc; k += 2) args[argv[k]] = argv[k + 1];
 	if (args.count("--oracle-negative"))

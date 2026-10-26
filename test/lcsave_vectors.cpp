@@ -6,6 +6,7 @@
 #include "internal.hpp"
 #include "lcsave.hpp"
 #include "xmlb.hpp"
+#include "../src/save_format_rules.hpp"   // the engine-side stream walkers (W2-L-06)
 
 #include <Windows.h>
 
@@ -298,8 +299,9 @@ namespace
 		for (u32 i = 0; i < ref.NAMA.size(); ++i) t->p_nama[ref.NAMA[i]] = i;
 		for (const auto& [c, l] : ref.NAMB) for (u32 i = 0; i < l.size(); ++i) t->p_namb[l[i]] = i;
 		for (u32 i = 0; i < ref.TRIT.size(); ++i) t->p_trit[ref.TRIT[i]] = i;
-		for (u32 i = 0; i < ref.TALN_shared.size(); ++i) t->p_tal[ref.TALN_shared[i]] = i;
-		for (const auto& [si, l] : ref.TALN_hero) for (u32 p = 0; p < l.size(); ++p) t->p_tal[l[p]] = (si + 1) * 100 + p;
+		// talent codes (owner + 1, position): the layout makes the engine id (lcsave::detail::talent_engine_id)
+		for (u32 i = 0; i < ref.TALN_shared.size(); ++i) t->p_tal[ref.TALN_shared[i]] = talent_code(0, i);
+		for (const auto& [si, l] : ref.TALN_hero) for (u32 p = 0; p < l.size(); ++p) t->p_tal[l[p]] = talent_code(si + 1, p);
 		for (const auto& [si, slots] : ref.COST) for (const auto& [s, id] : slots) t->p_cost[id] = s;
 		for (u32 i = 0; i < ref.OBJV.size(); ++i) t->p_obj[ref.OBJV[i]] = i;
 		for (u32 i = 0; i < ref.DRCS.size(); ++i) t->p_course[ref.DRCS[i]] = i;
@@ -492,14 +494,14 @@ namespace
 		g.flags_d9 = 0x20 | 0x40;
 		g.flags_da = 2 | 4;
 		auto& st = *m.zone_strings;
-		std::memset(&st, 0, sizeof st);
+		st.clear();
 		st.generation = 1;
 		st.used = 2;
 		st.offsets[0] = 1;
 		auto intern = [&](u32 slot, const std::string& text)
 		{
 			const u32 off = st.used;
-			std::memcpy(st.arena + off, text.c_str(), text.size() + 1);
+			std::memcpy(st.arena.data() + off, text.c_str(), text.size() + 1);
 			st.offsets[slot] = off;
 			st.used = off + static_cast<u32>(text.size()) + 1;
 			return (1u << 24) | slot;
@@ -511,10 +513,10 @@ namespace
 			OldZone z;
 			z.name_handle = h_zone;
 			z.states.assign(old_zone_states, OldStateRecord{});
-			z.states[1] = OldStateRecord{h_gate, h_g1, {1, 2, 3, 4, 5, 6, 7, 8}, 0, 8, {10, -20, 30}};
-			z.states[2] = OldStateRecord{h_gate, h_g2, {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11}, 0, 8, {1, 2, 3}};
-			z.states[3] = OldStateRecord{h_crate, h_c2, {0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22}, 0, 8 | 16, {4, 5, 6}};
-			z.states[4] = OldStateRecord{h_dyn, h_dn, {5, 3, 0, 0x33, 0x33, 0x33, 0x33, 0x33}, 1, 0, {7, 8, 9}};
+			z.states[1] = OldStateRecord{h_gate, h_g1, {1, 2, 3, 4, 5, 6, 7, 8}, 0, 8, world_slot_none, {10, -20, 30}};
+			z.states[2] = OldStateRecord{h_gate, h_g2, {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11}, 0, 8, world_slot_none, {1, 2, 3}};
+			z.states[3] = OldStateRecord{h_crate, h_c2, {0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22}, 0, 8 | 16, world_slot_none, {4, 5, 6}};
+			z.states[4] = OldStateRecord{h_dyn, h_dn, {5, 3, 0, 0x33, 0x33, 0x33, 0x33, 0x33}, 1, 0, world_slot_none, {7, 8, 9}};
 			z.tail.state_count = 5;
 			z.tail.ordinal_map[0] = 1;
 			z.tail.ordinal_map[1] = 2;
@@ -855,7 +857,7 @@ namespace
 				auto& strings = *old.zone_strings;
 				const std::string historical = "haarp/ext/later";
 				strings.offsets[40] = strings.used;
-				std::memcpy(strings.arena + strings.used, historical.c_str(), historical.size() + 1);
+				std::memcpy(strings.arena.data() + strings.used, historical.c_str(), historical.size() + 1);
 				strings.used += static_cast<u32>(historical.size() + 1);
 				old.zones[0].name_handle = (1u << 24) | 40;
 			}
@@ -1056,8 +1058,9 @@ namespace
 	{
 		auto t = make_tables(folder, "sh_might", false);
 		auto* b = const_cast<Build*>(t->build.get());
-		b->herostat_talents[1] = {200, 201, 202, 0, 3, 4, 1};
-		b->herostat_talents[2] = {300, 301, 0, 3, 4, 1};
+		b->herostat_talents[1] = {talent_code(2, 0), talent_code(2, 1), talent_code(2, 2), 0, 3, 4, 1};   // engine ids 200..202 at M = 100
+		b->herostat_talents[2] = {talent_code(3, 0), talent_code(3, 1), 0, 3, 4, 1};
+
 		Tables tables;
 		tables.data = t;
 		const auto raw = write_slot(make_old_save({0, 3, 4}, 10));
@@ -1668,12 +1671,27 @@ namespace
 		check(read_file(rewritten.data(), rewritten.size(), kind_profile).header.required_features == 1, "a rewrite keeps the marker");
 		auto bad_h = h; bad_h.required_features = 2;
 		check(contains(error_of([&] { write_file(kind_profile, sec, bad_h); }), "not implemented by this writer"), "the writer never emits a bit it does not implement");
-		for (const u32 b : {2u, 3u, 0x80000000u})
+		for (const u32 b : {4u, 7u, 0x80000000u})
 		{
 			const auto patched = with_required_features(plain, b);
 			char hexed[32]; std::snprintf(hexed, sizeof hexed, "0x%x", static_cast<unsigned>(b));
 			check(error_of([&] { read_file(patched.data(), patched.size(), -1); }) == std::string("required feature bits ") + hexed + " not implemented (needs a newer version)", "unknown required bits refused");
-			check(!decide_features(patched, retail_layout).ok && !decide_features(patched, e10a2_layout).ok, "decide_features refuses unknown bits");
+			check(!decide_features(patched, retail_layout).ok && !decide_features(patched, e10a2_layout).ok && !decide_features(patched, w2_layout).ok, "decide_features refuses unknown bits");
+		}
+		// W2 (limits-wave2.md section 7): bit 1 is known by name; it needs bit 0 and the W2 layout
+		{
+			auto w2_h = h; w2_h.required_features = 3;
+			check(error_of([&] { write_file(kind_profile, sec, w2_h); }).empty(), "the writer emits bits 0 | 1 (NATIVE_W2)");
+			const auto two = with_required_features(plain, 2);
+			check(contains(error_of([&] { read_file(two.data(), two.size(), -1); }), "NATIVE_W2 without ENTITY_LAYOUT_CONTIGUOUS10"), "bit 1 without bit 0 is a damaged marker");
+			const auto three = with_required_features(plain, 3);
+			check(error_of([&] { read_file(three.data(), three.size(), -1); }).empty(), "bits 0 | 1 read");
+			auto d3 = decide_features(3u, retail_layout); check(!d3.ok && d3.reason == downgrade_refused, "RETAIL refuses a bit-1 file as a feature-1 file");
+			d3 = decide_features(3u, e10a2_layout); check(!d3.ok && d3.reason == w2_refused && contains(d3.reason, "SaveLayout=w2"), "E10A2 refuses a bit-1 file by name");
+			d3 = decide_features(3u, w2_layout); check(d3.ok && !d3.migrate_typed_fields, "W2 applies a bit-1 file as is");
+			d3 = decide_features(1u, w2_layout); check(d3.ok && !d3.migrate_typed_fields, "W2 applies a feature-1 (E10A2) file as is");
+			d3 = decide_features(0u, w2_layout); check(d3.ok && d3.migrate_typed_fields, "W2 migrates a feature-0 file");
+			check(std::string(required_feature_name(2)) == "NATIVE_W2" && contains(required_feature_needs(2), "0.4.2") && !required_feature_name(4), "feature name table");
 		}
 		auto d = decide_features(0u, retail_layout); check(d.ok && !d.migrate_typed_fields, "retail + feature 0");
 		d = decide_features(1u, retail_layout); check(!d.ok && d.reason == downgrade_refused && contains(d.reason, "needs the entity-capacity build"), "retail + feature 1 refused");
@@ -1880,12 +1898,15 @@ namespace
 		const auto retail_resave = old_stream_to_new(plain.bytes, tables, retail_ctx);
 		check(!retail_resave.ok && retail_resave.error == std::string("retained file: ") + downgrade_refused, "a retail writer never carries a feature-1 file: " + retail_resave.error);
 		// (6) an unknown required bit refuses everywhere with the established message
-		const auto unknown = with_required_features(legacy.bytes, 2);
-		for (const auto* n : {&retail_layout, &e})
+		const auto unknown = with_required_features(legacy.bytes, 4);
+		for (const auto* n : {&retail_layout, &e, &w2_layout})
 		{
 			const auto u = new_to_old_stream(unknown, tables, *n, &reg);
-			check(!u.ok && u.error == "required feature bits 0x2 not implemented (needs a newer version)", "unknown bit refused on " + std::string(n->id));
+			check(!u.ok && u.error == "required feature bits 0x4 not implemented (needs a newer version)", "unknown bit refused on " + std::string(n->id));
 		}
+		const auto w2_marked = with_required_features(legacy.bytes, 3);
+		const auto on_e10a2 = new_to_old_stream(w2_marked, tables, e, &reg);
+		check(!on_e10a2.ok && on_e10a2.error == w2_refused, "a bit-1 file is refused by name on E10A2: " + on_e10a2.error);
 		// (7) native transfer metadata and the other stream entries at the raised layout
 		std::vector<ZoneCaptureMetadata> native_e, native_r;
 		check(native_zone_metadata(raised.bytes, tables, native_e, error, e) && native_zone_metadata(plain.bytes, tables, native_r, error) &&
@@ -1908,6 +1929,337 @@ namespace
 		check(contains(error_of([&] { validate_native_sections(fl); }), "duplicate or invalid ordinal") && error_of([&] { validate_native_sections(fl, e); }).empty(), "ordinal bound follows the layout");
 	}
 
+
+	// ---- limits wave 2 (docs/limits-wave2.md): the W2 descriptor, the stream at W2, the converter, the probe --------
+	// a retail model laid out for W2 the way the W2 engine writes it: zone records sized by the layout, a state that owns
+	// a world item carries its slot in the record's own u16 (payload byte 0 then 0), the zone strings in the W2 table
+	OldSlot to_w2(const OldSlot& retail)
+	{
+		const auto& w = w2_layout;
+		OldSlot m = retail;
+		for (auto& z : m.zones)
+		{
+			z = widen(z, w);
+			for (auto& s : z.states) if (s.flags_a & 1) { s.world_slot = s.payload[0]; s.payload[0] = 0; }
+		}
+		OldZoneStrings t(w.zone_string_slots, w.zone_arena);
+		t.generation = retail.zone_strings->generation;
+		t.used = retail.zone_strings->used;
+		std::copy(retail.zone_strings->offsets.begin(), retail.zone_strings->offsets.end(), t.offsets.begin());
+		std::copy(retail.zone_strings->arena.begin(), retail.zone_strings->arena.end(), t.arena.begin());
+		*m.zone_strings = std::move(t);
+		return m;
+	}
+
+	void test_w2_layout()
+	{
+		const auto& w = w2_layout;
+		check(native_layout("W2") == &w && std::string(w.id) == "W2" && w.feature_bits == 3 && w.contiguous() && w.w2() && !e10a2_layout.w2() && !retail_layout.w2(),
+			"W2 descriptor by id, feature bits 0 | 1");
+		check(w.states == 4096 && w.ordinals == 4096 && w.dynamic == 2048 && w.smart == 2048 && w.record_count == 8 && w.state_record_size == 0x20 &&
+			w.float_positions && w.world_slot_bytes == 2, "W2 zone record shape (3.5 / 3.6)");
+		check(w.record_size == 0x24388 && w.manager_size == 0x122190 && w.mission == 0x121c48 && w.payload == 0x200000 && w.wrapper == 0x200078 &&
+			w.slot_size == 0x200084 && w.transfer_chunks == 10486, "W2 record, manager and stream (3.6 - 3.8)");
+		check(w.definitions == 1024 && w.definition_index_bytes == 2 && w.def_count_bytes == 2 && w.item_head_size == 0x826 && w.instance_fixed == 6,
+			"W2 item heads (3.2 / 3.3)");
+		check(w.enhancement_records == 4096 && w.attached_enhancements == 4096 && w.instances == 1024 && w.world_slots == 1024, "W2 pools (section 2)");
+		check(w.objectives == 1024 && w.objectives_per_act == 127 && w.objective_files == 64 && w.snapshot_objectives == 1024 && w.snapshot_size == 0x540 &&
+			w.side_block == 0xa88, "W2 objectives and snapshot (3.4)");
+		check(w.talent_multiplier == 200 && w.talent_pool == 256 && w.talent_id(22, 10) == 4410 && w.zone_string_slots == 0x2000 && w.zone_arena == 0x20000 &&
+			w.zone_strings_size == 0x28008 && w.loader_placements == 1024, "W2 talents (M = 200: stats index 21 position 10 = 4410) and zone strings");
+		for (const auto* n : {&retail_layout, &e10a2_layout})
+		{
+			check(n->definitions == 160 && n->instances == 256 && n->world_slots == 150 && n->attached_enhancements == 375 && n->snapshot_size == 0x26c &&
+				n->talent_multiplier == 100 && n->state_record_size == 0x18 && !n->float_positions && n->world_slot_bytes == 1 && n->snapshot_objectives == 300,
+				std::string("pre-W2 descriptor values unchanged: ") + n->id);
+		}
+		// the talent id space (4.7): position < M, shared position < M - 1, and the target's M = 100
+		check(talent_engine_id(talent_code(22, 199), w) == 22 * 200 + 199 && contains(error_of([&] { talent_engine_id(talent_code(22, 200), w); }), "talent multiplier 200"),
+			"talent position M - 1 accepted, M refused");
+		check(talent_engine_id(talent_code(0, 198), w) == 198 && !error_of([&] { talent_engine_id(talent_code(0, 199), w); }).empty(), "shared position M - 2 accepted (cap M - 1), M - 1 refused");
+		check(talent_engine_id(talent_code(2, 99), e10a2_layout) == 299 && !error_of([&] { talent_engine_id(talent_code(2, 100), e10a2_layout); }).empty() &&
+			!error_of([&] { talent_engine_id(talent_code(0, 99), retail_layout); }).empty(), "pre-W2 multiplier 100: position 99 / shared 98 are the last");
+	}
+
+	void test_w2_oldsave()
+	{
+		const auto& w = w2_layout;
+		auto m = to_w2(typed_old_save());
+		// boundary values: the largest valid index of every widened table, each beside its count
+		m.items.def_count = 1024;
+		m.items.def_state[2 * 1023] = 7; m.items.def_state[2 * 1023 + 1] = 1;     // the pair of definition 1023
+		m.carried[0].head.definition = 1023;
+		m.mission.objectives[1023] = 0x45; m.mission.objectives[300] = 2;          // objective 1023; 300 (the retail 301st byte)
+		m.side_frames[1].objectives[256] = 1;
+		std::memset(m.mission.pad_525, 0xa5, 3);
+		auto& z = m.zones[0];
+		z.states[1].position[0] = 0.5f; z.states[1].position[1] = -32768.5f; z.states[1].position[2] = 40000.0f;
+		z.states[4000] = z.states[2];
+		z.states[4095] = z.states[3];
+		z.tail.ordinal_map[4095] = 4095;                                            // ordinal 4096 (slot 4095)
+		z.tail.smart[2047] = 4000; z.tail.smart[0] = 4000; z.tail.smart_count = 1;
+		z.tail.state_count = 4096;                                                  // 4096 records including record 0
+		m.world[0].slot = 1023;
+		for (auto& s : z.states) if ((s.flags_a & 1) && s.world_slot == 5) s.world_slot = 1023;
+		auto& zs = *m.zone_strings;
+		const std::string distant = "far/zone/name";
+		zs.offsets[0x1fff] = zs.used;
+		std::memcpy(zs.arena.data() + zs.used, distant.c_str(), distant.size() + 1);
+		zs.used += static_cast<u32>(distant.size() + 1);
+		z.states[4095].def_name = (1u << 24) | 0x1fff;                              // a name in slot 8191
+		// eight zone records
+		while (m.zones.size() < 8) m.zones.push_back(m.zones[0]);
+		const auto raw = write_slot(m, w);
+		u32 plen = 0; std::memcpy(&plen, raw.data() + 0x80, 4);
+		check(raw.size() == w.slot_size && plen == 0x200000, "W2 slot size and length field");
+		const auto back = read_slot(raw.data(), raw.size(), w);
+		check(write_slot(back, w) == raw, "W2 round trip (deterministic bytes)");
+		check(back.items.def_count == 1024 && back.items.def_state[2046] == 7 && back.carried[0].head.definition == 1023 && back.mission.objectives[1023] == 0x45 &&
+			back.mission.objectives[300] == 2 && back.side_frames[1].objectives[256] == 1 && back.mission.pad_525[2] == 0xa5, "W2 item head, instance head, snapshot fields");
+		const auto& bz = back.zones[0];
+		const float want[3] = {0.5f, -32768.5f, 40000.0f};
+		check(std::memcmp(bz.states[1].position, want, 12) == 0, "W2 positions bit-exact (0.5, -32768.5, 40000.0)");
+		check(bz.tail.state_count == 4096 && bz.tail.ordinal_map[4095] == 4095 && bz.states[4095].def_name == ((1u << 24) | 0x1fff) &&
+			zone_string(*back.zone_strings, bz.states[4095].def_name) == distant && back.zones.size() == 8 && back.world[0].slot == 1023,
+			"W2 state record 4095 / count 4096, ordinal 4096, zone string slot 8191, 8 records, world slot 1023");
+		bool slot_field = false;
+		for (const auto& s : bz.states) slot_field |= (s.flags_a & 1) && s.world_slot == 1023 && s.payload[0] == 0;
+		check(slot_field, "W2 world-item slot in the record's own u16 (payload byte 0 stays 0)");
+		// the stream offsets of section 3: the item head is 0x826 bytes (u16 count at +0)
+		const std::size_t head = old_envelope + old_tag;
+		u16 count = 0; std::memcpy(&count, raw.data() + head, 2);
+		u32 carried = 0; std::memcpy(&carried, raw.data() + head + 0x826, 4);
+		check(count == 1024 && carried == m.carried.size() && raw[head + 2 + 2 * 1023] == 7, "W2 item head layout: u16 count, pairs, carried count at 0x826");
+		u16 def = 0; std::memcpy(&def, raw.data() + head + 0x826 + 4, 2);
+		check(def == 1023, "W2 instance head: u16 definition first");
+		// the count + 1 / index + 1 cases refuse by name
+		auto bad = m; bad.zones.push_back(m.zones[0]);
+		check(contains(error_of([&] { write_slot(bad, w); }), "zone record count 9 > 8"), "a ninth zone record is refused");
+		auto raw9 = raw;                                                               // a stream that claims 9 records
+		{
+			const auto at = std::search(raw9.begin(), raw9.end(), std::begin("[MAP: ZONES]"), std::end("[MAP: ZONES]") - 1);
+			const u32 nine = 9; std::memcpy(&*(at + 51), &nine, 4);
+			check(contains(error_of([&] { read_slot(raw9.data(), raw9.size(), w); }), "zone record count 9 > 8"), "the reader refuses 9 records by name");
+		}
+		bad = m; bad.world.resize(1025, m.world[0]);
+		check(contains(error_of([&] { write_slot(bad, w); }), "world item count 1025 > 1024"), "1025 world items refused");
+		bad = m; bad.world[0].slot = 1024;
+		const auto raw_slot = write_slot(bad, w);
+		check(contains(error_of([&] { read_slot(raw_slot.data(), raw_slot.size(), w); }), "world item slot 1024 >= 1024"), "world slot 1024 refused, 1023 read");
+		bad = m; bad.zones[0].tail.smart_count = 2049;
+		const auto raw_smart = write_slot(bad, w);
+		check(contains(error_of([&] { read_slot(raw_smart.data(), raw_smart.size(), w); }), "beyond the engine tables"), "2049 smart entries refused");
+		// a W2 model is never written as an older layout, and the widened fields refuse narrowing by name
+		check(contains(error_of([&] { write_slot(m, e10a2_layout); }), "does not match the native layout E10A2"), "a W2 model is refused by the E10A2 writer");
+		auto narrow_m = typed_old_save();
+		narrow_m.carried[0].head.definition = 256;
+		check(contains(error_of([&] { write_slot(narrow_m, retail_layout); }), "item definition index 256 does not fit the native layout RETAIL"), "definition 256 refused on a byte layout");
+		narrow_m = typed_old_save(); narrow_m.items.def_state[2 * 160] = 1;
+		check(contains(error_of([&] { write_slot(narrow_m, retail_layout); }), "definition state pair 160 does not fit"), "pair 160 refused on RETAIL");
+		narrow_m = typed_old_save(); narrow_m.mission.objectives[300] = 1;
+		check(contains(error_of([&] { write_slot(narrow_m, retail_layout); }), "objective index 300 does not fit the native layout RETAIL"), "objective 300 refused on RETAIL");
+		narrow_m = typed_old_save(); narrow_m.zones[0].states[1].position[0] = 0.5f;
+		check(contains(error_of([&] { write_slot(narrow_m, retail_layout); }), "state position does not fit the native layout RETAIL (i16)"), "position 0.5 refused on RETAIL");
+		// a retail stream reads with the world slot field absent (0xffff) and integral float positions: unchanged bytes
+		const auto retail_raw = write_slot(typed_old_save());
+		const auto rm = read_slot(retail_raw.data(), retail_raw.size());
+		bool none = true;
+		for (const auto& s : rm.zones[0].states) none &= s.world_slot == world_slot_none;
+		check(none && write_slot(rm) == retail_raw && rm.zone_strings->offsets.size() == 0x800 && rm.zone_strings->arena.size() == 0x3800, "RETAIL read / write unchanged");
+		const auto e10_raw = write_slot([&] { auto x = typed_old_save(); for (auto& zz : x.zones) zz = widen(zz, e10a2_layout); return x; }(), e10a2_layout);
+		const auto em = read_slot(e10_raw.data(), e10_raw.size(), e10a2_layout);
+		check(write_slot(em, e10a2_layout) == e10_raw, "E10A2 read / write unchanged");
+	}
+
+	void test_w2_api(const fs::path& folder)
+	{
+		auto t = make_tables(folder, "sh_might", false);
+		Tables tables; tables.data = t;
+		const auto& w = w2_layout;
+		const auto& e = e10a2_layout;
+		TypedRegistry reg;
+		std::string error;
+		const auto text = typed_registry_text();
+		check(load_typed_registry(std::vector<std::uint8_t>(text.begin(), text.end()), reg, error), "registry");
+		const auto legacy = convert_old_to_new(write_slot(typed_old_save()), tables);
+		check(legacy.ok, "legacy import: " + legacy.error);
+		if (!legacy.ok) return;
+		// (1) the W2 loader: a feature-0 file migrates exactly as on E10A2; the stream is W2's
+		MigrationReport rep;
+		const auto w2s = new_to_old_stream(legacy.bytes, tables, w, &reg, &rep);
+		check(w2s.ok && w2s.bytes.size() == w.slot_size, "W2 loader: " + w2s.error);
+		if (!w2s.ok) return;
+		const auto e10 = new_to_old_stream(legacy.bytes, tables, e, &reg);
+		const auto wm = read_slot(w2s.bytes.data(), w2s.bytes.size(), w);
+		const auto em = read_slot(e10.bytes.data(), e10.bytes.size(), e);
+		check(rep.line() == "mode=migrate typed_fields=13 translated=6 normalized_to_null=6 validated=0", "W2 migration report: " + rep.line());
+		check(vars_of(wm.zone_vars, old_script_zone_vars) == vars_of(em.zone_vars, old_script_zone_vars) && wm.zones[0].matches(w) && wm.zone_strings->offsets.size() == 0x2000,
+			"W2 loader: the same values as E10A2, W2 zone records and strings");
+		// the talent ids are re-based to M = 200 (hero 1's own talents: 2 x 200 + position)
+		bool rebased = false;
+		for (u32 k = 0; k < wm.heroes[0].attributes.tail.count; ++k) rebased |= wm.heroes[0].attributes.talents[k].id == 400 || wm.heroes[0].attributes.talents[k].id == 402;
+		bool old_ids = false;
+		for (u32 k = 0; k < em.heroes[0].attributes.tail.count; ++k) old_ids |= em.heroes[0].attributes.talents[k].id == 200;
+		check(rebased && old_ids, "talent ids: 200 x (stats + 1) + position on W2, 100 x on E10A2");
+		bool slot_field = false;
+		for (const auto& s : wm.zones[0].states) slot_field |= (s.flags_a & 1) && s.world_slot == 5 && s.payload[0] == 0;
+		check(slot_field, "the W2 loader writes the world-item slot into the record's own u16");
+		// the engine side's stream walkers take the profile (W2-L-06): a W2 stream walks with the W2 heads only
+		{
+			namespace R = save_format_rules;
+			const auto hw = R::hero_heaps(w2s.bytes.data(), w2s.bytes.size(), R::w2_profile);
+			const auto he = R::hero_heaps(e10.bytes.data(), e10.bytes.size(), R::e10a2_profile);
+			const auto wrong = R::hero_heaps(w2s.bytes.data(), w2s.bytes.size(), R::e10a2_profile);
+			check(hw && he && hw->size() == wm.heroes.size() && he->size() == hw->size() && (!wrong || wrong->size() != hw->size()), "hero_heaps walks a W2 stream with the W2 profile");
+			const auto tw = R::old_play_time(w2s.bytes.data(), w2s.bytes.size(), R::w2_profile);
+			const auto te = R::old_play_time(e10.bytes.data(), e10.bytes.size(), R::e10a2_profile);
+			check(tw && te && *tw == *te && *tw == wm.game.play_time, "old_play_time finds the game block of a W2 stream");
+			const auto pw = R::hero_points_records(w2s.bytes.data(), w2s.bytes.size(), R::w2_profile);
+			const auto pe = R::hero_points_records(e10.bytes.data(), e10.bytes.size(), R::e10a2_profile);
+			check(pw && pe && pw->records.size() == pe->records.size() && pw->restore_valid == pe->restore_valid, "hero_points_records walks a W2 stream");
+			if (hw && hw->size()) check(std::memcmp(w2s.bytes.data() + (*hw)[0].block, e10.bytes.data() + (*he)[0].block, 0x18) == 0, "the first hero block's scalars agree");
+		}
+		// (2) the W2 saver: representable -> bit 0 only, the E10A2 build loads it; the stream reverses byte for byte
+		NewFileContext ctx; ctx.saved_at = 5; ctx.campaign_serial = 17; ctx.save_sequence = 2; ctx.retained_file = legacy.bytes; ctx.require_capture_metadata = true;
+		check(loaded_zone_metadata(legacy.bytes, tables, ctx.zone_captures, error, w, &reg) && ctx.zone_captures.size() == 1, "W2 loaded metadata: " + error);
+		const auto saved = old_stream_to_new(w2s.bytes, tables, ctx, w);
+		check(saved.ok, "W2 save: " + saved.error);
+		if (!saved.ok) return;
+		const auto f = read_file(saved.bytes.data(), saved.bytes.size(), kind_campaign);
+		check(f.header.required_features == 1 && representable(saved.bytes, tables, e).empty(), "a representable W2 save carries bit 0 only");
+		const auto again = new_to_old_stream(saved.bytes, tables, w, &reg);
+		check(again.ok && again.bytes == w2s.bytes, "W2 LC -> native -> LC -> native is byte-exact");
+		const auto on_e10 = new_to_old_stream(saved.bytes, tables, e, &reg);
+		check(on_e10.ok && on_e10.bytes == e10.bytes, "the E10A2 build loads the representable W2 save to its own stream");
+		std::string why;
+		check(semantic_equal(dump_new(saved.bytes, *t), dump_new(old_stream_to_new(e10.bytes, tables, ctx, e).bytes, *t), "", why),
+			"the W2 and E10A2 saves of one campaign dump the same (" + why + ")");
+		// (3) the probe's oracle (section 7): each case is a W2 native stream the saver translates
+		auto save_with = [&](const std::function<void(OldSlot&)>& edit) -> Result
+		{
+			auto m = wm;
+			edit(m);
+			return old_stream_to_new(write_slot(m, w), tables, ctx, w);
+		};
+		auto marks = [&](const Result& r) { return r.ok && (read_file(r.bytes.data(), r.bytes.size(), kind_campaign).header.required_features & 2) != 0; };
+		auto position = save_with([](OldSlot& m) { for (auto& s : m.zones[0].states) if (s.def_name) { s.position[0] = 0.5f; break; } });
+		check(marks(position), "a state position 0.5 sets bit 1: " + position.error);
+		if (position.ok)
+		{
+			const auto refused = new_to_old_stream(position.bytes, tables, e, &reg);
+			check(!refused.ok && refused.error == w2_refused, "the E10A2 build refuses the bit-1 save by name: " + refused.error);
+			const auto loads = new_to_old_stream(position.bytes, tables, w, &reg);
+			bool half = false;
+			if (loads.ok)
+			{
+				const auto lm = read_slot(loads.bytes.data(), loads.bytes.size(), w);
+				for (const auto& s : lm.zones[0].states) half |= s.position[0] == 0.5f;
+			}
+			check(loads.ok && half, "the W2 build loads it with the float kept");
+			check(contains(representable(position.bytes, tables, e), "state position not representable"), "the probe names the rule");
+			// the slot list (W2-L-09): a build that knows bit 1 by name but runs E10A2 shows "(needs the W2 save layout)"
+			namespace R = save_format_rules;
+			const auto known = R::lc_known_required_features;
+			R::lc_known_required_features = e.feature_bits;
+			const auto on_e = R::inspect(position.bytes.data(), position.bytes.size(), R::kind_campaign);
+			R::lc_known_required_features = w.feature_bits;
+			const auto on_w = R::inspect(position.bytes.data(), position.bytes.size(), R::kind_campaign);
+			R::lc_known_required_features = 0;
+			const auto on_r = R::inspect(position.bytes.data(), position.bytes.size(), R::kind_campaign);
+			R::lc_known_required_features = known;
+			check(on_e.status == R::file_status::needs_newer && on_e.needs_layout && R::slot_text(on_e, false).rfind("(needs the W2 save layout) ", 0) == 0 &&
+				contains(on_e.why, "SaveLayout=w2"), "the E10A2 slot list names the W2 layout: " + on_e.why);
+			check(on_w.status == R::file_status::ok, "the W2 slot list lists the bit-1 save: " + on_w.why);
+			check(on_r.status == R::file_status::needs_newer && !on_r.needs_layout && R::slot_text(on_r, false).rfind("(needs a newer version) ", 0) == 0,
+				"a retail-layout build keeps the generic text");
+		}
+		auto big = save_with([](OldSlot& m) { for (auto& s : m.zones[0].states) if (s.def_name) { s.position[1] = 40000.0f; break; } });
+		check(marks(big), "a position 40000 sets bit 1");
+		auto handle = save_with([](OldSlot& m)
+		{
+			for (auto& z : m.zones) for (auto& s : z.states) if ((s.flags_a & 1) && s.world_slot == m.world[0].slot) s.world_slot = 150;
+			m.world[0].slot = 150;
+		});
+		check(marks(handle) && contains(representable(handle.bytes, tables, e), "world handle outside native pool"), "a world-item handle 150 sets bit 1: " + handle.error + representable(handle.bytes, tables, e) + handle.ledger);
+		auto handle149 = save_with([](OldSlot& m)
+		{
+			for (auto& z : m.zones) for (auto& s : z.states) if ((s.flags_a & 1) && s.world_slot == m.world[0].slot) s.world_slot = 149;
+			m.world[0].slot = 149;
+		});
+		check(handle149.ok && !marks(handle149), "a world-item handle 149 does not");
+		auto many = save_with([](OldSlot& m) { while (m.world.size() < 151) { auto x = m.world[0]; x.slot = static_cast<u32>(200 + m.world.size()); m.world.push_back(x); } });
+		check(marks(many) && contains(representable(many.bytes, tables, e), "world handle outside native pool"), "more than 150 world items set bit 1: " + many.error + representable(many.bytes, tables, e));
+		auto bare = [](OldSlot& m) { auto i = m.carried[0]; for (auto& l : i.lists) l.clear(); return i; };
+		auto instances = save_with([&](OldSlot& m) { const auto i = bare(m); while (model_demand(m).instances < 257) m.carried.push_back(i); });
+		check(marks(instances) && contains(representable(instances.bytes, tables, e), "native instance/enhancement/world pool exhausted"), "257 instances set bit 1: " + instances.error + representable(instances.bytes, tables, e));
+		auto instances256 = save_with([&](OldSlot& m) { const auto i = bare(m); while (model_demand(m).instances < 256) m.carried.push_back(i); });
+		check(instances256.ok && !marks(instances256), "256 instances do not: " + instances256.error);
+		auto with_lists = [](const OldSlot& m) { for (const auto& c : m.carried) if (!c.lists[0].empty() || !c.lists[1].empty() || !c.lists[2].empty()) return c; return m.world[0].instance; };
+		auto attached = save_with([&](OldSlot& m) { const auto i = with_lists(m); while (model_demand(m).attached_enhancements <= 375) m.carried.push_back(i); });
+		check(marks(attached) && contains(representable(attached.bytes, tables, e), "native instance/enhancement/world pool exhausted"), "376 attached enhancements set bit 1: " + attached.error);
+		auto attached375 = save_with([&](OldSlot& m)
+		{
+			const auto i = with_lists(m);
+			std::uint32_t per = 0;
+			for (const auto& l : i.lists) per += static_cast<std::uint32_t>(l.size());
+			while (model_demand(m).attached_enhancements + per <= 375) m.carried.push_back(i);
+		});
+		check(attached375.ok && !marks(attached375), "at most 375 attached enhancements do not: " + attached375.error);
+		// the shared definition of "does not set": a re-based talent id (catalogue ids in the file), retained sections
+		check(!marks(saved), "re-based talent ids and retained LGCY / KEYS do not set bit 1");
+		// (4) objectives: an objective this build numbers 256 is beyond the pre-W2 engine's byte index
+		{
+			auto t2 = make_tables(folder / "objectives", "sh_might", false);
+			Tables tables2; tables2.data = t2;
+			auto& T = t2->build->T;
+			if (!T.OBJV.empty())
+			{
+				const auto base = T.OBJV.size();
+				for (const u32 target : {255u, 256u, 300u, 1023u})
+				{
+					// synthetic objective ids up to the target index (the forward names each position by its id)
+					T.OBJV.resize(base);
+					for (u32 k = static_cast<u32>(base); k <= target; ++k) { T.OBJV.push_back(0x7f000000u + k); t2->p_obj[0x7f000000u + k] = k; }
+					auto m = wm;
+					m.mission.objectives[target] = 0x41;
+					const auto r = old_stream_to_new(write_slot(m, w), tables2, ctx, w);
+					const auto why2 = r.ok ? representable(r.bytes, tables2, e) : r.error;
+					if (target == 255) check(r.ok && !marks(r), "objective index 255 does not set bit 1: " + why2);
+					else check(marks(r), "objective index " + std::to_string(target) + " sets bit 1: " + why2);
+					if (target == 1023 && r.ok)
+					{
+						const auto back = new_to_old_stream(r.bytes, tables2, w, &reg);
+						check(back.ok && read_slot(back.bytes.data(), back.bytes.size(), w).mission.objectives[1023] == 0x41, "objective 1023 survives the W2 round trip");
+					}
+				}
+			}
+		}
+		// (5) a build with more than 160 definitions: W2 carries it, E10A2 refuses its tables, the probe is per build
+		{
+			auto t3 = make_tables(folder / "items", "sh_might", false);
+			Tables tables3; tables3.data = t3;
+			t3->build->item.resize(300, "future");
+			const auto loaded = new_to_old_stream(legacy.bytes, tables3, w, &reg);
+			check(loaded.ok && read_slot(loaded.bytes.data(), loaded.bytes.size(), w).items.def_count == 300, "W2 loader with 300 definitions: " + loaded.error);
+			const auto e10_refused = new_to_old_stream(legacy.bytes, tables3, e, &reg);
+			check(!e10_refused.ok && contains(e10_refused.error, "native item definition budget exceeded (160)"), "E10A2 refuses a 300-definition build: " + e10_refused.error);
+			if (loaded.ok)
+			{
+				const auto s3 = old_stream_to_new(loaded.bytes, tables3, ctx, w);
+				check(s3.ok && !marks(s3), "the definition count is per build: a 300-definition W2 save is still representable: " + s3.error);
+			}
+			t3->build->item.resize(1025, "future");
+			const auto over = new_to_old_stream(legacy.bytes, tables3, w, &reg);
+			check(!over.ok && contains(over.error, "native item definition budget exceeded (1024)"), "W2 refuses 1025 definitions: " + over.error);
+		}
+		// (6) the record count: E10A2 refuses a W2 stream, W2 refuses an E10A2 stream (explicit layout, never by size)
+		check(!old_stream_to_new(e10.bytes, tables, NewFileContext{}, w).ok && !old_stream_to_new(w2s.bytes, tables, NewFileContext{}, e).ok, "W2 and E10A2 streams are never confused");
+		std::vector<TalentAdd> adds;
+		check(missing_talents(w2s.bytes, tables, adds, error, w), "missing talents on a W2 stream: " + error);
+		bool m200 = true;
+		for (const auto& a : adds) m200 &= a.shared ? a.talent_id < 199 : a.talent_id >= 200 * (a.stats_index + 1) && a.talent_id < 200 * (a.stats_index + 2);
+		check(m200, "missing talents use M = 200 and tell shared talents by their table");
+	}
 }
 
 void run_vectors(const fs::path& scratch)
@@ -1935,6 +2287,9 @@ void run_vectors(const fs::path& scratch)
 	test_typed_registry(scratch / "registry");
 	test_autospend(scratch / "autospend");
 	test_e10a2_api(scratch / "e10a2");
+	test_w2_layout();
+	test_w2_oldsave();
+	test_w2_api(scratch / "w2");
 }
 
 // ------------------------------------------------------------------------------------------------ (c) fuzz
