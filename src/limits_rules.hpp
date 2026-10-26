@@ -1383,7 +1383,7 @@ namespace limits_rules
 	{
 		return manager_layout(capacity, stock_style_events);
 	}
-	enum class event_field { capacity, last_index, words, built, ring, write, read, free, used, live, ids, mask, shift };
+	enum class event_field { capacity, last_index, words, built, ring, write, read, free, used, live, ids, mask, shift, parser_size };
 	constexpr DWORD value_of(const event_field field, const event_layout& l)
 	{
 		switch (field)
@@ -1401,6 +1401,8 @@ namespace limits_rules
 		case event_field::ids: return l.ids;
 		case event_field::mask: return l.mask;
 		case event_field::shift: return l.shift;
+		// Both temporary parser owners end with this same shared event template.
+		case event_field::parser_size: return 0x2904 + l.size;
 		}
 		return 0;
 	}
