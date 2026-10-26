@@ -1153,3 +1153,87 @@ ret at 0x4806e0 (owner end 0x4806e1). T9b executes every comparison/branch with
 the largest valid index and count+1, and the native record accessor at 4095/4096.
 
 Verification commands are in `scripts/README-gates.md`.
+
+
+### Implementation notes: steps 6/7 (E14 / E7)
+
+The W2-only `save_limits` contribution composes with the save/item contributions
+inside `entity_capacity`; ordinary startup still requests E10A2. There is no
+SaveLayout selector. ObjectiveDescriptions joins the same startup transaction
+only for the explicit W2 profile seam, with exactly one allocation-site writer.
+The standalone OFF installation retains its original four writes.
+
+`generate_w2_save_limits.py` checks the retail executable SHA-1 and all 105
+SPEC-old objective instructions, plus the 27 classified talent-capacity operands
+and special E7 sites. It emits instruction guards, authored edits, SHA-256 owner
+hashes and branch-relocation metadata. Copied executable bodies are read at
+runtime under those hashes, never embedded in source. The native fixture and
+`check_w2_save_limits_text.py` independently check the patched text and caves.
+
+Additional ledger corrections from retail execution and the whole-text sweep:
+
+- E14-03/04: retain stride 0x1ac and live byte +0x1aa. The whole DLL-owned
+  mission manager is 0xd750 bytes; records remain manager+8. Pool-relative
+  bitmap/count are +0xd45c/+0xd46c (four bitmap words); manager-relative live
+  count is +0xd474. The byte at +0x1a9 remains the low byte. The u16 side entry
+  is FFFF between allocation/release and registration. All nine sort moves are
+  owned by the replacement, with invocation-local wide temporary values.
+- E14-04b: the retail 0x488430 helper is field-wise, not memcpy: it copies five
+  strings with terminators and preserves destination +0x1aa bit7. The sort
+  uses its complete hash-guarded private clone for pool-to-temporary moves and
+  raw 0x1ac copies for moves back. A wrapper also handles direct pool-to-pool
+  calls. Its complete region is [0x488430,0x488514).
+- E14-05: file names at 0x72b248 and file acts at 0x72b570 grow along with the
+  u16 bases at 0x72b590. Their three count fields move too. The shared +0x1c
+  count initializer reached through 0x67a875/0x67a895 cannot initialize the
+  enlarged acts/base arrays; those two objective-owned edges get private
+  descriptor-sized initializers. The name-table count was +0x324, including
+  its four-byte pad; it becomes +0x804.
+- E14-07/08: the abbreviated ledger omits the objective-byte copy/clear helper
+  [0x5f3fb0,0x5f3fd3), the snapshot copy [0x5f4400,0x5f4497), and the cancel /
+  pop / restore consumers at 0x5f2ce0 and 0x5f44a0..0x5f48f5. Regenerate their
+  count, positive/negative frame strides, all six vector components, and the
+  three local snapshot stack frames (including arguments and cookie slots).
+  The push frame at 0x5f3630 also grows. State copies are exactly 1024 bytes;
+  the retail extra 301st byte copy is removed, leaving the three pad bytes.
+- E14-03: four external journal/menu readers of the pool-relative count were
+  absent from the abbreviated ledger: 0x5cce8c, 0x5ccf4c, 0x5cd512 and
+  0x5ce138. Regenerate all four +0x7d70 operands; the text gate now rejects
+  the old objective-pool displacements across the complete executable.
+- L-12: test_state's live count still used manager+0x7d78 after its initial
+  view conversion. `objectives_view.count_offset` now supplies that offset,
+  as well as the already-view-based index/state readers.
+- E7-01: allocation 0x4c083c is a second 0x3228 allocation, in addition to
+  0x4c0584. Both now request the complete 0x7a8c DLL registry. The native
+  constructor runs on it; its singleton free edge 0x4c0907 retains DLL-owned
+  backing. Pools A/B/C are at +0x370/+0x35c8/+0x6234. A's u16 index table is
+  +0x33c4; C's u32 index table is +0x7688. B mask/shift are FF/8.
+- E7-01/02: the talent-owned calls 0x4befbf, 0x4bfba2 and 0x4bfc32 reach
+  shared 100-entry ring helpers 0x460310/0x460250. Redirect these edges to
+  private 256-entry helpers; preserve the shared functions for other owners.
+- RE-11 census: there are 30 immediate 99/100 instructions in
+  [0x4bd000,0x4c1000): 27 capacity/last-index operands, M at 0x4bdc12, the
+  shared push at 0x4c05d9, and unrelated stack allocation 0x4c07c5. The latter
+  stays unchanged; the cap push stays 99 because the thunk substitutes 199
+  at [esp+0xc]. The LEA endpoint at 0x4c0644 is a displacement, not an immediate.
+- E7-03: the complete generation-loop replacement includes its backedge,
+  [0x4bfa20,0x4bfafe), rather than ending at the start of the Jcc 0x4bfaf8.
+- E7 position rule: position < M means a hero file may contain exactly M
+  dense entries (last position M-1). Shared positions stop at M-2. A public
+  build-table validator checks every position before play under W2, including
+  talents absent from a save; the converter retains its per-value checks.
+  The builder key/V44 integration belongs to the external builder and step 8;
+  no key is made selectable here.
+
+
+Step 6/7 verification on the retail executable: 52 objective/talent checks,
+2500 retail/DLL sort differentials, 36 combined-union checks, 170 native
+invocations with zero failures/skips, and 77 full-byte parity vectors. The new
+text gate verifies 138 reviewed ledger guards, 48 owner hashes, 39 caves and
+899323 decoded instructions; the existing save text gate also passes. OFF
+matches the b1e26ac baseline on all 50 write pages (204800 bytes), with 133
+matched relocated targets, one identical generated allocation, and zero other
+byte differences; agreement and registry exports are identical. Content guard:
+627 indexed files plus all 25 changed/new files clean. Synthetic guard self-test
+30/30 (temporary Git plumbing excluded under the task's no-Git-write rule).
+No game or emulator was launched. Live G3/G4 and step8 remain separate gates.

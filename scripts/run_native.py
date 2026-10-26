@@ -34,7 +34,7 @@ if "--plain" in sys.argv:
 with_exe = {
     "xml2_gns_transport_test", "xml2_confirmation_release_test", "xml2_objective_text_test",
     "xml2_npc_query_scheduler_test", "xml2_npc_semi_auto_test",
-    "xml2_item_capacity_test", "xml2_entity_grid_test", "xml2_entity_world_test", "xml2_entity_frames_test",
+    "xml2_save_limits_test", "xml2_item_capacity_test", "xml2_entity_grid_test", "xml2_entity_world_test", "xml2_entity_frames_test",
     "xml2_entity_query_test", "xml2_entity_transfer_test", "xml2_gameplay_agreement_test",
     "xml2_rank_costs_test", "xml2_multipart_install_test", "xml2_script_functions_test",
     "xml2_death_switch_test", "xml2_world_impact_test", "xml2_stun_rule_test",

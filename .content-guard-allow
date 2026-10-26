@@ -88,3 +88,6 @@ DISASM  src/save_manager.cpp  # Authored XML-loader preflight bridge with native
 DISASM  test/save_manager_test.cpp  # Synthetic loader caller and continuations execute our preflight without launching the game.
 
 DISASM  test/item_capacity_test.cpp  # Authored ABI callers and synthetic header/reward continuations execute retail code from the owner-supplied PE; no extracted instruction listing.
+
+DISASM  src/save_limits.cpp  # Authored M/cap/generation ABI bridges; implementation source, not an extracted instruction listing.
+DISASM  test/save_limits_test.cpp  # Synthetic register/stack callers and recording fakes execute the guarded owner-supplied PE; no extracted bodies.

@@ -132,7 +132,7 @@ namespace objective_text
 
 	namespace
 	{
-		bool build(patch_transaction::contribution& c, HMODULE game)
+		bool build(patch_transaction::contribution& c, HMODULE game, bool w2)
 		{
 			if (!ini::flag(L"Game", L"ObjectiveDescriptions", false)) return false;
 			if (reinterpret_cast<std::uintptr_t>(game) != 0x400000 || !retail_bytes())
@@ -149,7 +149,7 @@ namespace objective_text
 			// contributor that also expects the allocation site 0x489a01 (the W2 pool relocation) unions with this one
 			for (const auto& g : guards) c.guards.push_back({g.va, patch_transaction::bytes_of(g.hex), "objective descriptions"});
 			c.writes.push_back({attribute_call, {parser.begin(), parser.end()}, "objective descriptions: attribute parser"});
-			c.writes.push_back({allocate_site, {allocation.begin(), allocation.end()}, "objective descriptions: allocation"});
+			if (!w2) c.writes.push_back({allocate_site, {allocation.begin(), allocation.end()}, "objective descriptions: allocation"});
 			c.writes.push_back({journal_site, {journal.begin(), journal.end()}, "objective descriptions: journal"});
 			c.writes.push_back({primary_site, {primary.begin(), primary.end()}, "objective descriptions: primary"});
 			c.publish = [] { logger::write("objective descriptions: enabled; journal completion text follows the saved completion bit"); };
@@ -159,9 +159,12 @@ namespace objective_text
 	}
 
 	bool contribute(patch_transaction::transaction& t, HMODULE game)
+	{ return contribute(t, game, false); }
+	void reset(unsigned index) noexcept { reset_slot(index); }
+	bool contribute(patch_transaction::transaction& t, HMODULE game, bool w2)
 	{
 		patch_transaction::contribution c;
-		return build(c, game) && t.add(std::move(c));
+		return build(c, game, w2) && t.add(std::move(c));
 	}
 
 	void install(HMODULE game)

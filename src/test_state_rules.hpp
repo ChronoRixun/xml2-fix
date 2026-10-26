@@ -499,8 +499,8 @@ namespace test_state_rules
 			auto mission = get<address>(0x72b108);
 			if (mission && *mission && get<address>(*mission) == 0x6892d4u)
 			{
-				auto n = get<unsigned>(*mission + 0x7d78);
 				const auto& layout = save_layout_view::objectives();   // the installed layout's pool, index and state array (W2-L-12)
+				auto n = get<unsigned>(*mission + layout.count_offset);
 				if (n && *n <= layout.objectives_per_act)
 				{
 					std::vector<objective> out;

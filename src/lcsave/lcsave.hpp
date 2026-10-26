@@ -113,6 +113,9 @@ namespace lcsave
 	bool load_tables(const std::wstring& build_dir, Tables& tables, std::string& error);
 	// the same with the bind files in another folder tree than the data files they describe (tests, tools)
 	bool load_tables(const std::wstring& data_dir, const std::wstring& bind_dir, Tables& tables, std::string& error);
+	// Validate every build talent position before play, including talents absent
+	// from this save. Positions and saved u16 ids follow the selected descriptor.
+	bool validate_talent_positions(const Tables&, const NativeLayout&, std::string& error);
 
 	// Data\autospend as XMen2.exe loads it (parser 0x43d0c0): the first four CharacterClass entries (0x43d18d), the
 	// first four <bonus> rules of each (0x43d373): start and rate unsigned bytes, the four deltas signed bytes in the

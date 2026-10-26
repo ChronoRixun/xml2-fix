@@ -28,11 +28,12 @@ namespace save_layout_view
 		const std::uint16_t* wide_index;     // W2: wide_index[pool slot], 0xffff = free; nullptr: the byte at index_offset
 		std::uint32_t pool_offset;           // the records' offset in CMissionMgr (+8)
 		std::uint32_t pool_address = 0;      // W2: the relocated pool's absolute address (0: CMissionMgr + pool_offset)
+		std::uint32_t count_offset = 0x7d78; // live count, relative to CMissionMgr (not the pool)
 	};
 
 	inline constexpr objectives_view retail_objectives{"RETAIL", 0x26c, 0x4dc, 0xa4, 300, 75, 0x1ac, 0x1a9, 0x72b118, nullptr, 8};
 	// the W2 shape (the addresses are the install's: state_bytes, wide_index and pool_offset are filled at its commit)
-	inline constexpr objectives_view w2_objectives_shape{"W2", 0x540, 0xa84, 0xa4, 1024, 127, 0x1ac, 0x1a9, 0, nullptr, 8};
+	inline constexpr objectives_view w2_objectives_shape{"W2", 0x540, 0xa84, 0xa4, 1024, 127, 0x1ac, 0x1a9, 0, nullptr, 8, 0, 8 + 8 + 127 * 0x1ac + 16};
 	static_assert(2 * retail_objectives.snapshot_size + 4 == retail_objectives.side_count_offset &&
 	              2 * w2_objectives_shape.snapshot_size + 4 == w2_objectives_shape.side_count_offset);
 

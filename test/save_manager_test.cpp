@@ -3,6 +3,7 @@
 // No game process or game DLL is loaded.
 #include "save_manager.hpp"
 #include "item_capacity.hpp"
+#include "save_limits.hpp"
 #include "save_manager_rules.hpp"
 #include "loader_placements_rules.hpp"
 #include "save_core_rules.hpp"
@@ -18,6 +19,7 @@
 #include <string>
 #include <vector>
 extern "C" std::uint8_t fixture_space[0x700000];
+namespace ini { bool flag(const wchar_t*,const wchar_t*,bool){return false;} }
 namespace save_format {
  std::uint32_t strings=0, refusals=0;
  void publish_zone_strings(std::uint32_t a){strings=a;}
@@ -324,7 +326,7 @@ int main(int argc,char** argv) {
  check(true,"read-only retail PE mapped; game never launched");
  const auto stock=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
  patch_transaction::contribution c;std::string why;
- check((save_manager::contribute_w2(c,why)&&item_capacity::contribute_w2(c,why)),"build all step-3 contributions: "+why);
+ check((save_manager::contribute_w2(c,why)&&item_capacity::contribute_w2(c,why)&&save_limits::contribute_w2(c,why)),"build all step-3 contributions: "+why);
  if(c.writes.empty())return 1;
  check(std::equal(stock.begin(),stock.end(),fixture_space)&&save_format::strings==0,"T2 preparing W2 changes zero retail bytes and publishes nothing");
  check(patch_transaction::verify_expectations(c,why),"all W2 row guard bytes and region hashes match retail: "+why);
@@ -334,7 +336,7 @@ int main(int argc,char** argv) {
  patch_transaction::transaction bad;bad.add(c);const auto refused=bad.commit();
  check(refused==patch_transaction::outcome::refused_region&&std::equal(mutated.begin(),mutated.end(),fixture_space)&&save_format::strings==0,"T3 one region-tail byte mutated: entire union refused, zero writes/publication");
  c={};check(load_image(path),"restore retail image for loader frame mutation");
- check((save_manager::contribute_w2(c,why)&&item_capacity::contribute_w2(c,why)),"build union for independent loader dependency mutation");
+ check((save_manager::contribute_w2(c,why)&&item_capacity::contribute_w2(c,why)&&save_limits::contribute_w2(c,why)),"build union for independent loader dependency mutation");
  *static_cast<std::uint8_t*>(at(0x484cf0))^=1;
  const auto changed_frame=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
  patch_transaction::transaction bad_frame;bad_frame.add(c);
@@ -342,7 +344,7 @@ int main(int argc,char** argv) {
        "T3 loader frame byte outside hook mutated: entire union refused, zero writes/publication");
  // The failed transaction abandoned its executable storage; rebuild it.
  c={};check(load_image(path),"restore pristine retail image after mutation");
- check((save_manager::contribute_w2(c,why)&&item_capacity::contribute_w2(c,why)),"rebuild step-3 union after refusal: "+why);
+ check((save_manager::contribute_w2(c,why)&&item_capacity::contribute_w2(c,why)&&save_limits::contribute_w2(c,why)),"rebuild step-3 union after refusal: "+why);
  add_capture_bridges(c);
  if(argc>2) {
   std::set<unsigned> pages;for(const auto& w:c.writes)for(unsigned i=0;i<w.bytes.size();++i)pages.insert((w.va+i)&~0xfffu);

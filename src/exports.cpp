@@ -92,6 +92,7 @@
 #include "pad_prompts.hpp"
 #include "patch_transaction.hpp"
 #include "entity_capacity.hpp"
+#include "save_limits.hpp"
 #include "postgame.hpp"
 #include "review_menu.hpp"
 #include "cutscene_mouse.hpp"
@@ -424,7 +425,7 @@ namespace
 			const auto handover = death_switch::capability();
 			gameplay_agreement::register_rule(gameplay_capabilities::death_switch_clear_id, death_switch_rules::revision, handover.values, handover.verified);
 		}
-		objective_text::install(game);
+		if (!save_limits::installed()) objective_text::install(game);
 		// Before any of XMen2.exe's own code runs, as the engine limit adjuster must be: this DLL is a
 		// static import of libIGDisplay.dll, which XMen2.exe imports statically, so Windows runs this
 		// DllMain while it loads the process - before the exe's entry point (0x6725f4, the CRT start-up

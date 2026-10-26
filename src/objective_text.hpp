@@ -10,4 +10,7 @@ namespace objective_text
 	// the one startup transaction and the shared site is a union-guard expectation, never two patches on one site.
 	// false (nothing added) when the key is off or the executable is not the supported one.
 	bool contribute(patch_transaction::transaction& t, HMODULE game);
+	// W2 owns the shared allocation hook and calls reset with the full index.
+	bool contribute(patch_transaction::transaction& t, HMODULE game, bool w2);
+	void reset(unsigned index) noexcept;
 }

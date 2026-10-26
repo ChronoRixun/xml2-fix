@@ -14,6 +14,8 @@
 #include "save_format.hpp"
 #include "save_manager.hpp"
 #include "item_capacity.hpp"
+#include "save_limits.hpp"
+#include "objective_text.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -401,7 +403,7 @@ namespace entity_capacity
 				failure = "the startup transaction could not be rolled back; prepared owners and backing retained";
 				fatal = true;
 			};
-			if (std::string_view(prepared_profile.layout_id) == "W2" && (!save_manager::contribute_w2(c, failure) || !item_capacity::contribute_w2(c, failure))) return false;
+			if (std::string_view(prepared_profile.layout_id) == "W2" && (!save_manager::contribute_w2(c, failure) || !item_capacity::contribute_w2(c, failure) || !save_limits::contribute_w2(c, failure))) return false;
 			return true;
 		}
 	}
@@ -478,13 +480,15 @@ namespace entity_capacity
 	bool owns_arena_teardown() { return prepared; }
 	bool fast_transfer_active() { return fast_installed; }
 
-	void contribute(patch_transaction::transaction& transaction, HMODULE)
+	void contribute(patch_transaction::transaction& transaction, HMODULE game)
 	{
 		if (!prepared || !built_ok) return;
 		built_ok = false;
 		// save_format already chose the E10A2 profile at preparation: failing to join the transaction now would leave a
 		// mixed layout, so it is fatal (startup refused), never a silent stock fallback.
 		if (!transaction.add(std::move(built))) { failure = "the startup transaction was sealed before the capacity install joined it"; fatal = true; }
+		if (std::string_view(prepared_profile.layout_id) == "W2" && ini::flag(L"Game", L"ObjectiveDescriptions", false) && !objective_text::contribute(transaction, game, true))
+		{ failure = "W2 objective descriptions could not join startup"; fatal = true; patch_transaction::contribution refuse; refuse.owner = failure; refuse.requires_written.push_back({0xffffffff, failure}); transaction.add(std::move(refuse)); }
 	}
 
 	void after_commit(const bool committed, const bool rollback_failed)

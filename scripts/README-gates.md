@@ -74,3 +74,28 @@ Use `build/w2-items-pages.txt` as the page list for the same OFF proof described
 above. W2 remains unselectable; ordinary startup still selects E10A2. Full
 capacity affix coverage uses exhaustive draws separately from the 1000-drop,
 375-offered-ID fixture (see the implementation notes in limits-wave2.md).
+
+
+W2 steps 6/7 add the objective/talent execution fixture and text gate:
+
+```powershell
+native/bin/Release/xml2_save_limits_test.exe $env:XML2_FIX_TEST_EXE build/save-limits
+python scripts/check_w2_save_limits_text.py $env:XML2_FIX_TEST_EXE build/save-limits
+native/bin/Release/xml2_save_manager_test.exe $env:XML2_FIX_TEST_EXE build/w2-complete
+```
+
+The save-manager test now commits steps 3 through 7 together. The new fixture
+compares 2500 retail sort permutations, executes high objective indices and
+snapshot/side-stack copies, all 256 talent slots, generation rollover and the
+M/cap/endpoint stubs. Its dump precedes dependency fakes. Recreate the instruction
+plan with `generate_w2_save_limits.py <retail exe> <SPEC-old sites.json>` (the
+reviewed funcs.txt must sit beside the ledger). No game is launched.
+
+Use the union of `build/save-limits-pages.txt` and `build/w2-complete-pages.txt`
+for the OFF proof, with `build/step67-baseline` as the pre-change DLL/map folder.
+W2 remains unselectable; the builder key and rule47 are step8.
+
+
+The durable-parity test writes `actual.*` next to each vector. Point
+XML2_FIX_LEGACY_VECTORS_DIR at a writable copy inside the workspace when the
+source vector folder is read-only; this task used build/native-vectors67.

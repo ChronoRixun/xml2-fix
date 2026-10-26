@@ -39,6 +39,20 @@ namespace lcsave
 		}
 	}
 
+	bool validate_talent_positions(const Tables& tables, const NativeLayout& native, std::string& error)
+	{
+		error.clear();
+		return guarded(error, [&] {
+			if (!tables.loaded() || !tables.data->build) detail::fail("talent positions need build tables");
+			const auto& b = *tables.data->build;
+			for (std::uint32_t p = 0; p < b.T.TALN_shared.size(); ++p)
+				(void)detail::talent_engine_id(detail::talent_code(0,p), native);
+			for (const auto& [stats, talents] : b.T.TALN_hero)
+				for (std::uint32_t p = 0; p < talents.size(); ++p)
+					(void)detail::talent_engine_id(detail::talent_code(stats+1,p), native);
+		});
+	}
+
 	Result convert_old_to_new(const std::vector<std::uint8_t>& old_file, const Tables& tables)
 	{
 		return convert_old_to_new(old_file, tables, ConvertOptions{});

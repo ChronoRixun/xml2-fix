@@ -630,6 +630,11 @@ namespace save_format
 				fail_closed("the save tables of this build don't verify: " + error);
 				return;
 			}
+			if (native_layout->w2() && !lcsave::validate_talent_positions(tables, *native_layout, error))
+			{
+				fail_closed("the build's talent positions do not fit W2: " + error);
+				return;
+			}
 			// Prepare content identity before the front end can enter an online session.
 			// Captures and overwrite preflight use a nonblocking change check, never a tree scan.
 			const auto digest_start = GetTickCount64();

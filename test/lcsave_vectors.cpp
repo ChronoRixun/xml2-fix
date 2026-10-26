@@ -1815,6 +1815,7 @@ namespace
 		const auto& e = e10a2_layout;
 		TypedRegistry reg;
 		std::string error;
+
 		const auto text = typed_registry_text();
 		check(load_typed_registry(std::vector<std::uint8_t>(text.begin(), text.end()), reg, error), "registry");
 		const auto raw = write_slot(typed_old_save());
@@ -2079,6 +2080,20 @@ namespace
 		const auto& e = e10a2_layout;
 		TypedRegistry reg;
 		std::string error;
+		{
+			const auto old_shared=t->build->T.TALN_shared;
+			const auto old_hero=t->build->T.TALN_hero;
+			t->build->T.TALN_shared.resize(199);
+			t->build->T.TALN_hero[21].resize(200);
+			check(validate_talent_positions(tables,w,error), "W2 build validator accepts shared198 and hero199 positions");
+			t->build->T.TALN_hero[21].resize(201);
+			check(!validate_talent_positions(tables,w,error) && contains(error,"talent position 200"), "W2 build validator refuses position200 even if absent from save");
+			t->build->T.TALN_hero[21].resize(200);t->build->T.TALN_shared.resize(200);
+			check(!validate_talent_positions(tables,w,error) && contains(error,"shared talent position 199"), "W2 build validator refuses shared199");
+			t->build->T.TALN_shared.clear();t->build->T.TALN_hero.clear();t->build->T.TALN_hero[327].resize(200);
+			check(!validate_talent_positions(tables,w,error) && contains(error,"saved u16"), "W2 build validator refuses overflowing saved u16 talent id");
+			t->build->T.TALN_shared=old_shared;t->build->T.TALN_hero=old_hero;
+		}
 		const auto text = typed_registry_text();
 		check(load_typed_registry(std::vector<std::uint8_t>(text.begin(), text.end()), reg, error), "registry");
 		const auto legacy = convert_old_to_new(write_slot(typed_old_save()), tables);
