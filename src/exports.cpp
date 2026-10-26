@@ -108,6 +108,7 @@
 #include "anim_enums.hpp"
 #include "char_sounds.hpp"
 #include "motion_pool.hpp"
+#include "resident_stats.hpp"
 #include "patch_transaction.hpp"
 #include "entity_capacity.hpp"
 #include "postgame.hpp"
@@ -249,6 +250,7 @@ namespace
 		// install contribute their guards and writes; every expectation is unioned and checked once, every touched
 		// page acquired once, and nothing is published unless the whole set verified. A refusal leaves stock bytes.
 		patch_transaction::transaction startup;
+		resident_stats::require_agreement(game);
 		motion_pool::require_agreement(game);
 		char_sounds::require_agreement(game);
 		anim_enums::contribute(startup, game);
@@ -266,6 +268,9 @@ namespace
 		// [Online] ReceiveValidation: the stock dispatch guard. Optional and independent: a guard mismatch skips it
 		// (one log line), it shares no bytes with any other contribution, and OFF contributes nothing.
 		receive_validation::contribute(startup, game);
+        discord_presence::register_stats_layout(); forced_teams::register_stats_layout();
+        revival_cost::register_stats_layout(); xp_curve::register_stats_layout();
+        resident_stats::contribute(startup,game);
 		const auto committed = startup.commit();
 		logger::write("startup transaction: %s (%s)", patch_transaction::name(committed), startup.report().c_str());
 		entity_capacity::after_commit(committed == patch_transaction::outcome::committed, committed == patch_transaction::outcome::rollback_failed);

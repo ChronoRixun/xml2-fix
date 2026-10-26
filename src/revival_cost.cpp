@@ -1,3 +1,4 @@
+#include "stats_layout.hpp"
 #include "revival_cost.hpp"
 
 #include "ini.hpp"
@@ -71,7 +72,8 @@ namespace revival_cost
 		}
 		for (const auto& g : guards)
 		{
-			if (!limits_rules::matches(reinterpret_cast<const std::uint8_t*>(g.va), g.hex))
+			const auto expected=stats_layout::expected(g.va,g.hex);
+			if (!expected || !limits_rules::matches(reinterpret_cast<const std::uint8_t*>(g.va), expected->c_str()))
 			{
 				logger::write("revival cost: 0x%08lX isn't the retail code (%s) - %s", g.va, g.what, kept);
 				return;

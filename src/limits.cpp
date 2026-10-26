@@ -1,3 +1,4 @@
+#include "resident_stats.hpp"
 #include "limits.hpp"
 #include "motion_pool.hpp"
 #include "limits_agreement_rules.hpp"
@@ -982,7 +983,8 @@ namespace limits
 		{
 			if (const auto manager = read(style_manager_pointer); manager && *manager) styles = read(*manager + style_count_offset);
 		}
-		return "actors " + counter(read(actor_live_va), actor_cap) + "; names " + counter(names, name_cap) + "; motions " + counter(motions, static_cast<int>(motion_pool::layout().capacity)) + "; igb " +
+		const auto residency=resident_stats::status();
+        return (residency.empty()?std::string{}:residency+"; ")+"actors " + counter(read(actor_live_va), actor_cap) + "; names " + counter(names, name_cap) + "; motions " + counter(motions, static_cast<int>(motion_pool::layout().capacity)) + "; igb " +
 		       counter(read(igb_live_va), igb_cap) + "; items " + counter(items, item_cap) + "; styles " + counter(styles, style_cap) + "; curves " +
 		       counter(read(curve_live_va), curve_cap) + "; move_triggers " + std::to_string(move_trigger_cap);
 	}

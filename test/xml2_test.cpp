@@ -3537,34 +3537,35 @@ namespace
 	struct retail_registry_engine : fake_engine
 	{
 		const std::uint8_t* image = nullptr;
-		std::vector<std::uint8_t> block = std::vector<std::uint8_t>(0x12334 + 0x100, 0);
+		stats_layout::descriptor descriptor;
+        std::vector<std::uint8_t> block;
 		std::array<std::uint8_t, 0x230> zones{};
 		const std::uint8_t* code(const DWORD va) const { return image + (va - limits_rules::image_base); }
 		void put32(const std::size_t offset, const std::uint32_t value) { std::memcpy(block.data() + offset, &value, 4); }
 		void put16(const std::size_t offset, const std::uint16_t value) { std::memcpy(block.data() + offset, &value, 2); }
 
-		explicit retail_registry_engine(const std::uint8_t* mapped) : image(mapped)
+		explicit retail_registry_engine(const std::uint8_t* mapped,stats_layout::descriptor d=stats_layout::stock) : image(mapped),descriptor(d),block(d.manager_size+0x100,0)
 		{
 			cast(*this);
-			put32(0x9b20, 0x1f); // the handle mask
+			put32(descriptor.pool_mask, descriptor.installed?0x1ff:0x1f); // the handle mask
 			std::uint32_t slot_number = 3;
 			for (std::size_t i = 0; i < heroes.size(); ++i)
 			{
 				const auto& h = heroes[i];
 				const std::size_t entry = static_cast<std::size_t>(h.index) * 0x1c;
-				put16(0x120dc + 2 * i, static_cast<std::uint16_t>(h.index));
-				block[entry + 0x9b40] = herostats.count(h.index) ? 1 : 0;
+				put16(descriptor.heroes + 2 * i, static_cast<std::uint16_t>(h.index));
+				block[entry + descriptor.entries+0x18] = herostats.count(h.index) ? 1 : 0;
 				if (h.stats)
 				{
-					put32(entry + 0x9b38, 0x2000 | slot_number); // a handle: generation bits above the mask
+					put32(entry + descriptor.entries+0x10, 0x2000 | slot_number); // a handle: generation bits above the mask
 					std::uint8_t* stats = block.data() + 4 + slot_number * 0x4f8;
 					stats[forced_teams_rules::stats_costume] = static_cast<std::uint8_t>(h.costume);
 					std::memcpy(stats + forced_teams_rules::stats_variants, h.variants.data(), h.variants.size());
 					slot_number += 4;
 				}
 			}
-			put32(0x12330, static_cast<std::uint32_t>(heroes.size()));
-			block[40 * 0x1c + 0x9b40] = 0; // profxgladiator: a character, not a herostat hero
+			put32(descriptor.hero_count, static_cast<std::uint32_t>(heroes.size()));
+			block[40 * 0x1c + descriptor.entries+0x18] = 0; // profxgladiator: a character, not a herostat hero
 		}
 		std::uint8_t* stats(const int index)
 		{
@@ -4379,6 +4380,15 @@ namespace
 		CHECK(registry.hero_count() == 6 && registry.hero_at(3) == 20 && registry.has_stats(21) == false && registry.has_stats(9) == true && registry.herostat(9) == true &&
 		      registry.herostat(40) == false && registry.costume(9) == 8 && registry.has_variant(20, 8) == false && registry.has_variant(20, 3) == true);
 		check_forced_team_functions(registry, game_values);
+
+        // Same native accessors with R2's generated operand edits and manager layout.
+        for(const auto& site:resident_stats_sites::sites)if(site.type==resident_stats_sites::kind::operand)
+            for(unsigned j=0;j<site.size;++j)image[site.va-limits_rules::image_base+site.offset+j]=static_cast<std::uint8_t>(site.new_value>>(8*j));
+        retail_registry_engine raised_registry(image,stats_layout::raised);
+        raised_registry.get=game_reader.get;
+        CHECK(raised_registry.hero_count()==6 && raised_registry.hero_at(3)==20 && raised_registry.costume(9)==8 && raised_registry.herostat(40)==false);
+        check_forced_team_functions(raised_registry,game_values);
+
 
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
@@ -9121,6 +9131,26 @@ namespace
 		CHECK(state && state->zone == "nyc/alison/nyc1_1_3" && state->zone_title == "East Manhattan" && state->act == 1 && !state->loading && !state->movie);
 		CHECK((state && state->party == std::vector<hero>{{"Wolverine", 3}, {"Cyclops", 1}} && !state->danger_room && !state->session && !state->online_menus));
 		CHECK(state && build(*state, all) == port_activity);
+
+        {
+            const auto stock_party=fake.read()->party;
+            fake_game moved;
+            moved.memory.block(fake_game::registry,stats_layout::raised.manager_size);
+            moved.memory.u32(fake_game::registry,registry_vtable);
+            moved.memory.u32(fake_game::registry+stats_layout::raised.pool_mask,0x1ff);
+            moved.memory.u32(fake_game::registry+stats_layout::raised.hero_count,4);
+            const std::uint16_t indices[]={3,5,7,9};
+            for(unsigned j=0;j<4;++j){moved.memory.u16(fake_game::registry+stats_layout::raised.heroes+j*2,indices[j]);
+                std::array<std::uint8_t,entry_size> entry{};
+                CHECK(fake.memory.read(fake_game::registry+registry_entries+indices[j]*entry_size,entry.data(),entry.size()));
+                for(unsigned k=0;k<entry.size();++k)moved.memory.u8(fake_game::registry+stats_layout::raised.entries+indices[j]*entry_size+k,entry[k]);
+            }
+            moved.memory.u8(fake_game::registry+4+2*stats_size+stats_level,3);
+            moved.memory.u8(fake_game::registry+4+4*stats_size+stats_level,9);
+            stats_layout::publish(stats_layout::raised);
+            const auto state=moved.read();CHECK(state&&state->party==stock_party);
+            stats_layout::publish(stats_layout::stock);
+        }
 		fake.party({"phoenix", "", "magneto", "wolverine"}); // the charactername; the placeholder isn't a hero
 		state = fake.read();
 		CHECK((state && state->party == std::vector<hero>{{"Jean Grey", 9}, {"Wolverine", 3}}));

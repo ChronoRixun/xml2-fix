@@ -1,3 +1,4 @@
+#include "stats_layout.hpp"
 #include "discord_presence.hpp"
 #include "discord_ipc.hpp"
 #include "discord_rules.hpp"
@@ -97,17 +98,19 @@ namespace discord_presence
 			}
 		}
 
-		bool bytes_match(const guard& g)
+		bool bytes_match_raw(const guard& g, const char* expected)
 		{
 			__try
 			{
-				return limits_rules::matches(reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(g.va)), g.hex);
+				return limits_rules::matches(reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(g.va)), expected);
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
 			{
 				return false;
 			}
 		}
+		bool bytes_match(const guard& g) { const auto expected=stats_layout::expected(g.va,g.hex);return expected&&bytes_match_raw(g,expected->c_str()); }
+
 
 		const guard* first_mismatch_guarded()
 		{

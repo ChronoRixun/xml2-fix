@@ -377,7 +377,7 @@ namespace test_input_rules
 			objectives,
 			actor_pools,
 			char_sounds,
-			motion_pool,
+			resident_stats, resident_census, motion_pool,
 			events,
 			ping,
 			save, // save_format's commands: `text` is the rest of the line
@@ -427,10 +427,10 @@ namespace test_input_rules
 			return result;
 		}
 
-		if (verb == "STATE" || verb == "OBJECTIVES" || verb == "EVENTS" || verb == "ACTOR_POOLS" || verb == "CHAR_SOUNDS" || verb == "MOTION_POOL")
+		if (verb == "STATE" || verb == "OBJECTIVES" || verb == "EVENTS" || verb == "ACTOR_POOLS" || verb == "CHAR_SOUNDS" || verb == "RESIDENT_STATS" || verb == "RESIDENT_CENSUS" || verb == "MOTION_POOL")
 		{
 			if (!rest.empty()) return fail("observation commands take no arguments");
-			result.what = verb == "STATE" ? command::kind::state : verb == "OBJECTIVES" ? command::kind::objectives : verb == "MOTION_POOL" ? command::kind::motion_pool : verb == "CHAR_SOUNDS" ? command::kind::char_sounds : verb == "ACTOR_POOLS" ? command::kind::actor_pools : command::kind::events;
+			result.what = verb == "STATE" ? command::kind::state : verb == "OBJECTIVES" ? command::kind::objectives : verb == "RESIDENT_STATS" ? command::kind::resident_stats : verb == "RESIDENT_CENSUS" ? command::kind::resident_census : verb == "MOTION_POOL" ? command::kind::motion_pool : verb == "CHAR_SOUNDS" ? command::kind::char_sounds : verb == "ACTOR_POOLS" ? command::kind::actor_pools : command::kind::events;
 			return result;
 		}
 		if (verb == "SAVE")

@@ -1,4 +1,5 @@
 #pragma once
+#include "stats_layout.hpp"
 
 #include <Windows.h>
 
@@ -16,3 +17,5 @@ namespace xp_curve
 	// DllMain (see exports.cpp): the herostat load at start-up does, for every hero's starting level.
 	void install(HMODULE game);
 }
+
+namespace xp_curve { inline void register_stats_layout(){stats_layout::register_consumer(stats_layout::consumer::xp);} }

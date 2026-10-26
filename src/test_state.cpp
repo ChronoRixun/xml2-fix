@@ -4,6 +4,7 @@
 #include "actor_pools.hpp"
 #include "char_sounds.hpp"
 #include "motion_pool.hpp"
+#include "resident_stats.hpp"
 #include "test_state_rules.hpp"
 #include <Windows.h>
 #include <mutex>
@@ -64,6 +65,7 @@ namespace test_state
 		}
 		last = now;
 		actor_pools::sample();
+		resident_stats::sample();
 		static const bool valid = supported();
 		if (!valid)
 		{
@@ -92,6 +94,8 @@ namespace test_state
 		{
 			return state;
 		}
+		if (command == "resident_stats") return resident_stats::telemetry_json();
+		if (command == "resident_census") return resident_stats::census_json();
 		if (command == "motion_pool") return motion_pool::telemetry_json();
 		if (command == "char_sounds") return char_sounds::telemetry_json();
 		if (command == "actor_pools") return actor_pools::telemetry_json();

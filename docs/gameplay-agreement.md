@@ -228,3 +228,5 @@ unverified request. A mismatched peer is refused by name in both directions. See
 Rule 51 (`MotionPool`, `[Limits] MotionPool=22528`) is revision 1, `{22528,0,0,0}` after verified installation.
 Absent/500 contributes no entry; invalid or refused requests close admission. It includes bounded owner clip
 append/read behavior and retains native handle masking. See [motion-pool.md](motion-pool.md).
+
+Rule 50 (`ResidentStats`, `[Limits] ResidentStats=320`) revision 1 advertises `{320,22,320,1}` after verified installation. Outer and NPC residency rise together; hero payloads stay22. Absent/31 leaves the agreement unchanged; a failed requested install closes online admission.

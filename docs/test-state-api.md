@@ -86,3 +86,5 @@ game thread; the pipe reads atomics. Absent/16 leaves retail bytes uninstrumente
 
 `MOTION_POOL` reports the installed motion descriptor and exact allocation/clip/reader refusal counters,
 including peak occupancy and per-owner counts. See [motion-pool.md](motion-pool.md).
+
+`RESIDENT_STATS` reports resident/hero/NPC counts and peaks, refusal counters (outer/hero/NPC), and zone invariant failures. `RESIDENT_CENSUS` queues a game-thread census; polling after the next sample returns cached definition indices, handles, flags and payload classes.

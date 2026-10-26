@@ -1,3 +1,4 @@
+#include "stats_layout.hpp"
 #include "forced_teams.hpp"
 #include "forced_teams_rules.hpp"
 #include "join_in_progress.hpp"
@@ -87,17 +88,19 @@ namespace forced_teams
 		// ---- Calls into XMen2.exe. No C++ objects in these: every one is SEH-guarded, so a fault in the
 		// game's code is logged by the caller instead of taking the game down. --------------------------
 
-		bool bytes_match(const guard& g)
+		bool bytes_match_raw(const guard& g, const char* expected)
 		{
 			__try
 			{
-				return limits_rules::matches(at<const std::uint8_t*>(g.va), g.hex);
+				return limits_rules::matches(at<const std::uint8_t*>(g.va), expected);
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
 			{
 				return false;
 			}
 		}
+		bool bytes_match(const guard& g) { const auto expected=stats_layout::expected(g.va,g.hex);return expected&&bytes_match_raw(g,expected->c_str()); }
+
 
 		// A game object from its getter, when it is the class the guards were read for.
 		void* object(const DWORD getter, const DWORD vtable)

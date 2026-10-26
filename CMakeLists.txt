@@ -126,6 +126,7 @@ add_library(xml2_fix SHARED
 	src/solo_mode.cpp
 	src/conversations.cpp
 	src/gameplay_agreement.cpp
+	src/resident_stats.cpp
 	src/motion_pool.cpp
 	src/char_sounds.cpp
 	src/anim_enums.cpp
@@ -702,3 +703,17 @@ add_executable(xml2_motion_pool_test test/motion_pool_test.cpp src/motion_pool.c
 target_include_directories(xml2_motion_pool_test PRIVATE src)
 target_compile_options(xml2_motion_pool_test PRIVATE /UNDEBUG)
 target_link_options(xml2_motion_pool_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_resident_payload_test test/resident_payload_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_resident_payload_test PRIVATE src)
+target_compile_options(xml2_resident_payload_test PRIVATE /UNDEBUG)
+target_link_options(xml2_resident_payload_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_stats_layout_test test/stats_layout_test.cpp)
+target_include_directories(xml2_stats_layout_test PRIVATE src)
+target_compile_options(xml2_stats_layout_test PRIVATE /UNDEBUG)
+
+add_executable(xml2_resident_stats_test test/resident_stats_test.cpp src/resident_stats.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_resident_stats_test PRIVATE src)
+target_compile_options(xml2_resident_stats_test PRIVATE /UNDEBUG)
+target_link_options(xml2_resident_stats_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)

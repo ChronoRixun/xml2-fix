@@ -1,3 +1,4 @@
+#include "stats_layout.hpp"
 #include "motion_pool.hpp"
 #include "motion_pool_sites.hpp"
 #include "patch_transaction.hpp"
@@ -35,8 +36,8 @@ u32 address(const void* p){return static_cast<u32>(reinterpret_cast<std::uintptr
 u32 read32(const void* p){u32 v;std::memcpy(&v,p,4);return v;}
 bool enabled(const std::optional<std::string>& key){return key&&*key!="500";}
 void settle(bool verified){gameplay_agreement::register_rule(gameplay_capabilities::motion_pool_id,1,{capacity,0,0,0},verified);}
-void abandon(){applied=false;settle(false);logger::write("MotionPool: refused; native row retained, rule 51 unverified");}
-void retain(){applied=false;settle(false);game_version::refuse_startup();logger::write("MotionPool: uncertified rollback; DLL caves retained, startup refused");}
+void abandon(){applied=false;stats_layout::publish_motion(false);settle(false);logger::write("MotionPool: refused; native row retained, rule 51 unverified");}
+void retain(){applied=false;stats_layout::publish_motion(false);settle(false);game_version::refuse_startup();logger::write("MotionPool: uncertified rollback; DLL caves retained, startup refused");}
 void __cdecl reset_owner(void* owner){for(auto& s:owners)if(s.address.load()==address(owner)){s.refusals=0;break;}}
 void __cdecl clip_refused(void* owner,u32 clip,u32 count){
     ++clip_refusals;owner_state* state=nullptr;
@@ -166,14 +167,17 @@ void contribute(patch_transaction::transaction& tx,HMODULE game){
     c.publish=[owner_cap]{
         allocations=0;allocation_refusals=0;peak=0;clip_refusals=0;reader_refusals=0;
         for(auto& s:owners){s.address=0;s.refusals=0;}
-        applied=true;settle(true);
+        applied=true;stats_layout::publish_motion(true);settle(true);
         logger::write("MotionPool: rule 51 revision 1 installed {22528,0,0,0}; owners %u x176 <=22528; 82 ledger rows, 5 bounds caves; pool not yet created",owner_cap);
     };
     c.abandon=&abandon;c.retain=&retain;if(!tx.add(std::move(c)))abandon();
 }
 const descriptor& layout(){return applied?raised:stock;}
 std::string_view counter_guard_hex(){
-    if(applied)return {counter_hex.data(),20};
+    if(applied){for(const auto& row:motion_pool_sites::sites)if(row.va==0x56a3e3){
+        const auto expected=stats_layout::expected(row.va,row.hex);
+        if(expected&&expected->size()==20){std::copy(expected->begin(),expected->end(),counter_hex.begin());return {counter_hex.data(),20};}
+    }return {}; }
     for(const auto& s:motion_pool_sites::sites)if(s.va==0x56a3e3)return s.hex;
     return {};
 }

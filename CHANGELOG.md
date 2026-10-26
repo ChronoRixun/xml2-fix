@@ -2,6 +2,12 @@
 
 ## 1.9.0 - <date TBD>
 
+- **Resident stats: gameplay rule 50** (`[Limits] ResidentStats=320`; candidate). Raises outer CStats and NPC
+  payload pools together to 320; hero payloads stay 22. Admission checks payload availability before allocation,
+  with native fallback and once-per-definition refusal logs. All 275 ledger rows, moved consumers and agreement
+  `{320,22,320,1}` install atomically. Absent or 31 preserves stock writes/agreement. Native saves are compatible
+  for the same 21 resident heroes; live RV3/RV3b acceptance remains pending. See `docs/resident-stats.md`.
+
 - **Motion pool: gameplay rule 51** (`[Limits] MotionPool=22528`; candidate). Raises the 500-record
   native motion pool to 22,528 with all three lazy allocations, all bitmap clears and the generated 82-row
   ledger applied together. Owners admit clips 0..175; longer lists are refused and logged once per owner
