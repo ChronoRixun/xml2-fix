@@ -192,6 +192,7 @@ non-stock `[Limits] ResourceNames`, `ActorSlots`, `ItemEnhancements`, `FightStyl
 A requested capacity that failed to install invalidates admission. Stock/absent limits contribute no
 rule, preserving the released bytes. In particular ResourceNames=450 versus 2048 refuses by name even
 when IGBCache is absent or 200 on both PCs. Rules 31 and 28 retain their existing encodings.
+
 Rule 45 (`Xml1GrabCarry`, `[Game] Xml1GrabCarry=xml1`, candidate) is requested-only, revision 2, values
 `{installed ? 1 : 0,7,0,0}`. Feature mask 7 includes ground grab (1), the pickup/recovery lifecycle (2), and
 flying-charge collision (4). Carry/upkeep and flight admission remain deferred. The earlier ground-only
@@ -203,3 +204,5 @@ Rule 43 (`Xml1RogueDecide`, `[Game] Xml1RogueDecide=xml1`, candidate) is request
 are unverified and close host/join. Both enabled and disabled peers name the key in refusals. It restores
 Rogue's victim/no-target power decision and source tag-1 energy dispatch; the companion builder must emit
 the decide and drain nodes together ([xml1-rogue-decide.md](xml1-rogue-decide.md)).
+
+Rule 46 (SharedHandlersC), revision 1, is the independently selected wave-C mask `{installed_mask,0,0,0}`. It registers only when requested; missing/native keys preserve the OFF record, and invalid or failed requests are unverified. See [handler C keys and verification](shared-handler-c-rules.md). ID 46 is coordinator-assigned and does not replace rule 42 or rule 18.

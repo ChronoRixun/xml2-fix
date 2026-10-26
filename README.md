@@ -893,3 +893,5 @@ Also by the same author: [MUA Controller Fix](https://github.com/ChronoRixun/mua
 It contains no game files or game code and doesn't change any file of the game: you need your own copy of *X-Men Legends II* for PC. Please don't post or link game files in issues or pull requests. Rights holders with a concern: please [open an issue](https://github.com/ChronoRixun/xml2-fix/issues) and it will be answered promptly and in good faith.
 
 The software is provided "as is", without warranty of any kind; see [LICENSE](LICENSE).
+
+Opt-in [shared handler C rules](docs/shared-handler-c-rules.md) provide local damage, Colossus charge, contact dispatch, idle and animation/visibility compatibility under agreement rule 46. Phoenix telekinesis and guard interaction policy remain deferred.

@@ -98,3 +98,6 @@ DISASM  test/boss_wave3_bridge_test.cpp  # Invented callers and continuations te
 DISASM  test/lift_rule_test.cpp  # Authored naked callers build the synthetic register/stack frames that drive our LiftRule bridges (revision 2: throw impact, carry, telekinesis); the retail bytes come from the owner's executable at run time. No game listing or decompiled body.
 DISASM  test/npc_bullet_ray_test.hpp  # Authored synthetic callers (stack/register setup and a jump into a fragment loaded from the owner's files at run time) verify the character bullet-ray adapter; no game instruction listing or decompiled body.
 DISASM  src/classic_objectives.cpp  # Authored register-preserving bridges into our C++ predicate and page chooser; no game instruction listing or decompiled body.
+
+DISASM  src/shared_handler_c_bridges.hpp  # Authored x87 and register-preserving rule-46 bridges; no copied game body or instruction listing.
+DISASM  test/shared_handlers_c_test.cpp  # Synthetic ABI drivers execute owner-loaded original callbacks, never embedded game code.

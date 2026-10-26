@@ -43,10 +43,10 @@ with_exe = {
     "xml2_npc_combo_timing_test", "xml2_x1_leader_test", "xml2_solo_mode_test", "xml2_resistance_display_install_test",
     "xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test", "xml2_shared_handlers_test",
     "xml2_xml1_cling_test", "xml2_lift_rule_test", "xml2_xml1_controllers_test", "xml2_dopple_xbe_test",
-    "xml2_xml1_grab_carry_test", "xml2_xml1_grab_carry_install_test",
+    "xml2_xml1_grab_carry_test", "xml2_xml1_grab_carry_install_test", "xml2_shared_handlers_c_test",
 }
 # Second argument: the XBE (beta 7: the scheduler suite requires it, the weapon brain compares the original callbacks).
-with_xbe = {"xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test", "xml2_shared_handlers_test", "xml2_dopple_xbe_test"}
+with_xbe = {"xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test", "xml2_shared_handlers_test", "xml2_shared_handlers_c_test", "xml2_dopple_xbe_test"}
 skip = {
     "xml2_test", "lcsave_durable_parity", "lcsave_test", "xml2_save_startup_test",
     "xml2_danger_room_party_install_test", "xml2_lockon_effects_install_test",

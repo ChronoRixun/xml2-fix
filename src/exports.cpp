@@ -42,6 +42,7 @@
 #include "npc_semi_auto.hpp"
 #include "stun_rule.hpp"
 #include "shared_handlers.hpp"
+#include "shared_handlers_c.hpp"
 #include "pack_amount.hpp"
 #include "lift_rule.hpp"
 #include "lift_rule_rules.hpp"
@@ -443,6 +444,10 @@ namespace
 				npc_semi_auto::values(npc_power::values()), npc_power::verified() && npc_semi_auto::verified(),
 				npc_semi_auto::detail());
 		stun_rule::install(game);
+		shared_handlers_c::install(game);
+		if (shared_handlers_c::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::shared_handlers_c_id, shared_handlers_c::revision,
+				shared_handlers_c::values(), shared_handlers_c::verified());
 		shared_handlers::install(game);
 		if (shared_handlers::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::shared_handlers_id, shared_handlers::revision,

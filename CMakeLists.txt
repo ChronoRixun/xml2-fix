@@ -72,6 +72,7 @@ add_library(xml2_fix SHARED
 	src/npc_semi_auto.cpp
 	src/stun_rule.cpp
 	src/shared_handlers.cpp
+	src/shared_handlers_c.cpp
 	src/danger_room_party.cpp
 	src/danger_room_healthbars.cpp
 	src/resistance_display.cpp
@@ -638,3 +639,6 @@ add_executable(xml2_xml1_grab_carry_install_test test/xml1_grab_carry_install_te
     src/xml1_grab_carry.cpp src/xml1_cling.cpp src/xml1_rogue_decide.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
 target_include_directories(xml2_xml1_grab_carry_install_test PRIVATE src)
 target_link_options(xml2_xml1_grab_carry_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+add_executable(xml2_shared_handlers_c_test test/shared_handlers_c_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/shared_handlers_c.cpp)
+target_include_directories(xml2_shared_handlers_c_test PRIVATE src)
+target_link_options(xml2_shared_handlers_c_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
