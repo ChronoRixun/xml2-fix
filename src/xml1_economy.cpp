@@ -1,4 +1,5 @@
 #include "xml1_economy.hpp"
+#include "xml1_economy_digest.hpp"
 #include "xml1_roll.hpp"
 #include "xml1_economy_prices.hpp"
 #include "xml1_economy_shop.hpp"
@@ -94,7 +95,7 @@ void prepare_impl(patch_transaction::transaction& transaction,HMODULE game,bool 
  c.abandon=[]{hooks=false;};
  c.retain=[storage]{retained.push_back(storage);original=reinterpret_cast<make_t>(storage->p);hooks=false;};
  if(!transaction.add(std::move(c)))failure="startup transaction is sealed";
- else if(!roller::contribute(transaction,failure)||!prices::contribute(transaction,failure)||!shop::contribute(transaction,failure)||!grab_bag::contribute(transaction,failure)){
+ else if(!roller::contribute(transaction,failure)||!prices::contribute(transaction,failure)||!shop::contribute(transaction,failure)||!grab_bag::contribute(transaction,failure)||!digest::contribute(transaction,failure)){
   // Any failed required contribution must refuse the entire union, including
   // stale legacy leader ownership and every prices/sales retail guard.
   patch_transaction::contribution veto;veto.owner="Xml1Economy required contribution: "+failure;
@@ -121,7 +122,7 @@ void after_commit(patch_transaction::outcome outcome){
  if(!native_save_layout::installed()||item_capacity::installed_capacity()!=lcsave::w2_layout.attached_enhancements){
   failure="Xml1Economy requires verified rule 47 NativeSaveLayout (SaveLayout=w2)";register_result(false);return;
  }
- if(!hooks||!roller::installed()||!prices::installed()||!shop::installed()||!grab_bag::installed()||outcome!=patch_transaction::outcome::committed||!data.ok()){
+ if(!hooks||!roller::installed()||!prices::installed()||!shop::installed()||!grab_bag::installed()||!digest::installed()||outcome!=patch_transaction::outcome::committed||!data.ok()){
   if(failure.empty())failure="constructor/table hooks not committed: "+std::string(patch_transaction::name(outcome));
   register_result(false);return;
  }
@@ -175,6 +176,6 @@ descriptor* __fastcall make_instance(void* manager,void*,descriptor* out,void* d
 }
 std::string status(){
  if(!wanted)return {};
- return "econ on; plan "+std::string(mode==plan::zero_draw?"A":"1roll")+"; defs "+std::to_string(installed()?data.rows.size():0)+"; digest "+digest_hex(data.digest).substr(0,8)+"; refused "+std::to_string(refusals.load())+roller::status();
+ return "econ on; plan "+std::string(mode==plan::zero_draw?"A":"1roll")+"; defs "+std::to_string(installed()?data.rows.size():0)+"; digest "+digest_hex(data.digest).substr(0,8)+shop::status()+roller::status()+"; refused "+std::to_string(refusals.load());
 }
 }

@@ -1,8 +1,10 @@
 #include "xml1_economy_shop.hpp"
 #include "xml1_economy.hpp"
+#include "xml1_economy_digest.hpp"
 #include "item_capacity_rules.hpp"
 #include <algorithm>
 #include <memory>
+#include <atomic>
 
 namespace xml1_economy::shop {
 namespace {
@@ -19,6 +21,7 @@ switch_t original_switch=nullptr;
 unary_t original_training=nullptr;
 style_t original_style=nullptr;
 bool applied=false,forge=false,no_training=false;
+std::atomic<unsigned> forge_count{0},forge_group{0};
 void* opened_shop=nullptr;
 const unsigned manager_getter=0x480a00,price_getter=0x5a9b00;
 bool blocked(void* self){return xml1_economy::installed()&&no_training&&opened_shop==self&&!(read<unsigned char>(self,0x18e8)&1);}
@@ -62,6 +65,8 @@ stock reconcile(void* manager){
   method<bool(__fastcall*)(void*,void*,descriptor,int,int)>(manager,0xec)(manager,nullptr,item,1,3);
   result.items[r.definition]=item;
  }
+ unsigned count=0;for(const auto& item:result.items)if(item.pool)++count;
+ forge_count=count;forge_group=group;
  return result;
 }
 void __fastcall refill(void* self,void*,int reset){
@@ -146,7 +151,7 @@ void __fastcall training(void* self,void*){
  if(blocked(self))native<void(__cdecl*)()>(0x5a9f80)();else original_training(self,nullptr);
 }
 template<unsigned Target>void __fastcall dispatch(void* self,void*,int detail){if(!blocked(self))native<void(__fastcall*)(void*,void*,int)>(Target)(self,nullptr,detail);}
-bool __fastcall refuse_purchase(void* self,unsigned type){return blocked(self)&&type>=3&&type<=5;}
+bool __fastcall refuse_purchase(void* self,unsigned type){const bool refuse=blocked(self)&&type>=3&&type<=5;if(refuse)digest::bag_result("refused-training");return refuse;}
 __declspec(naked) void purchase_bridge(){__asm {
  push ecx
  push edx
@@ -196,6 +201,8 @@ struct storage {void* p=VirtualAlloc(nullptr,4096,MEM_COMMIT|MEM_RESERVE,PAGE_RE
 std::vector<std::shared_ptr<storage>> retained;
 }
 bool installed(){return applied;}
+const char* vendor(){return forge?"forge":"healer";}
+std::string status(){return "; forge "+std::to_string(forge_count.load())+"/G"+std::to_string(forge_group.load());}
 bool contribute(patch_transaction::transaction& tx,std::string& failure){
  patch_transaction::contribution c;c.owner="Xml1Economy Forge/Healer, two tabs and rare style";
  for(const auto& s:sites)c.guards.push_back({s.va,patch_transaction::bytes_of(s.bytes),s.what});

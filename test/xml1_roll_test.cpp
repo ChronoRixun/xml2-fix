@@ -18,7 +18,8 @@ extern "C" std::uint8_t fixture_space[0x700000];
 namespace item_capacity {void* prepared_definition_picker(){return nullptr;}}
 namespace logger {
 unsigned tripwire_logs=0,overflow_logs=0;
-void write(const char* format,...){char line[1024];va_list args;va_start(args,format);std::vsnprintf(line,sizeof line,format,args);va_end(args);if(std::strstr(line,"generator tripwire"))++tripwire_logs;if(std::strstr(line,"nesting exceeds four"))++overflow_logs;}
+std::vector<std::string> roll_lines;
+void write(const char* format,...){char line[1024];va_list args;va_start(args,format);std::vsnprintf(line,sizeof line,format,args);va_end(args);if(std::strstr(line,"generator tripwire"))++tripwire_logs;if(std::strstr(line,"nesting exceeds four"))++overflow_logs;if(std::strncmp(line,"roll ",5)==0)roll_lines.emplace_back(line);}
 }
 namespace xml1_economy {
 bool enabled=true;
@@ -122,6 +123,40 @@ void select(stack& s,unsigned i){put(s.data(),0x20,i);invoke(0x46e760,s);}
 void services(){put(manager.data(),0,manager_vt);manager_vt[0x78/4]=reinterpret_cast<void*>(&lookup);manager_vt[0x12c/4]=reinterpret_cast<void*>(&cached);game_vt[0x194/4]=reinterpret_cast<void*>(&xtreme);game_vt[0x19c/4]=reinterpret_cast<void*>(&maximum);game_vt[0x25c/4]=reinterpret_cast<void*>(&special);
  jump(0x44b8f0,&registry);jump(0x449960,&highest);jump(0x4654b0,&resolve);jump(0x402b60,&actor);jump(0x41cfc0,&level);jump(0x480a00,&get_manager);jump(0x560190,&unit);jump(0x5601e0,&integer);
  jump(0x46e747,&continuation);jump(0x46e804,&continuation);jump(0x46ea4e,&continuation);
+}
+unsigned long long serial(const std::string& line){unsigned long long n=0;return std::sscanf(line.c_str(),"roll n=%llu",&n)==1?n:0;}
+void serial_tests(){
+ stack parent,child;const auto first=logger::roll_lines.size();
+ for(unsigned roll=0;roll<2;++roll){
+  seed(parent);stream({0,.8f,.9f,1},{2,4});invoke(0x46e5e2,parent);
+  check(logger::roll_lines.size()==first+4*(roll+1),"serial fixture has four pickup log lines per money roller entry");
+  const auto n=serial(logger::roll_lines[first+4*roll]);bool shared=n>0;
+  for(unsigned i=0;i<4;++i)shared&=serial(logger::roll_lines[first+4*roll+i])==n;
+  check(shared,"every split money pickup repeats its roller entry serial");
+  const auto history=xml1_economy::roller::recent_rolls();const auto logged=logger::roll_lines.size();const auto draws=unit_calls+integer_calls;
+  for(unsigned i=0;i<4;++i)select(parent,i);
+  check(history==xml1_economy::roller::recent_rolls()&&logger::roll_lines.size()==logged&&unit_calls+integer_calls==draws,"per-pickup select bridge and pipe reads neither allocate serials nor consume RNG");finish(parent);
+ }
+ check(serial(logger::roll_lines[first+4])==serial(logger::roll_lines[first])+1,"adjacent identical money rolls have consecutive distinct serials");
+ bool identical=true;for(unsigned i=0;i<4;++i){const auto& a=logger::roll_lines[first+i];const auto& b=logger::roll_lines[first+4+i];const auto pa=a.find(" cat="),pb=b.find(" cat=");identical&=pa!=std::string::npos&&pb!=std::string::npos&&a.substr(pa)==b.substr(pb);}
+ check(identical,"serial disambiguates identical category leader group bucket definition amount and draws");
+ const auto previous=serial(logger::roll_lines.back());const auto count=logger::roll_lines.size();
+ xml1_economy::enabled=false;seed(parent);stream({});invoke(0x46e5e2,parent);finish(parent);xml1_economy::enabled=true;
+ seed(parent,false,0);stream({.5f});invoke(0x46e5e2,parent);finish(parent);
+ check(logger::roll_lines.size()==count+1&&serial(logger::roll_lines.back())==previous+1&&logger::roll_lines.back().find(" def=- amt=0 ")!=std::string::npos,"no-drop entry advances serial once; economy OFF entry does not advance it");
+ seed(parent);stream({0,.8f,.9f,1},{2,2});invoke(0x46e5e2,parent);const auto outer=serial(logger::roll_lines.back());
+ seed(child,false,0);stream({.5f});invoke(0x46e5e2,child);const auto inner=serial(logger::roll_lines.back());finish(child);
+ select(parent,0);select(parent,1);finish(parent);
+ seed(parent,false,0);stream({.5f});invoke(0x46e5e2,parent);finish(parent);
+ check(inner==outer+1&&serial(logger::roll_lines.back())==inner+1,"nested roller entries get distinct serials; parent pickup selection never increments them");
+ const auto before_seed=serial(logger::roll_lines.back());reinterpret_cast<void(__cdecl*)(unsigned,char)>(at(0x560150))(12345,1);
+ seed(parent,false,0);stream({.5f});invoke(0x46e5e2,parent);finish(parent);
+ check(serial(logger::roll_lines.back())==before_seed+1,"native lockstep RNG reseeding does not reset the process-lifetime roll serial");
+ // The pipe returns exactly the log lines, preserving the serial on each pickup.
+ const auto history=xml1_economy::roller::recent_rolls();std::string expected;
+ for(std::size_t i=logger::roll_lines.size()>16?logger::roll_lines.size()-16:0;i<logger::roll_lines.size();++i){if(!expected.empty())expected+='\n';expected+=logger::roll_lines[i];}
+ check(history==expected,"economy rolls history repeats exactly the emitted serial-bearing log lines");
+ for(unsigned i=0;i<8;++i)std::printf("SERIAL-FIXTURE %s\n",logger::roll_lines[first+i].c_str());
 }
 unsigned native_continuations=0,observed_argument=0;
 __declspec(naked) void gen_continue(){__asm {
@@ -403,13 +438,14 @@ int main(int argc,char** argv){
  check(unchanged(0x46e735,6)&&unchanged(0x46e774,8),"legacy leader sites are guarded but never patched twice");
  services();check(xml1_economy::roller::recent_rolls().empty(),"recent roll history starts empty");
  stack s;seed(s);xml1_economy::enabled=false;stream({});invoke(0x46e5e2,s);check(read<unsigned>(s.data(),0x1c)==0&&!unit_calls&&!lookups&&xml1_economy::roller::recent_rolls().empty(),"economy OFF produces zero drops draws or history");finish(s);xml1_economy::enabled=true;
- seed(s,false,0);stream({.5f});invoke(0x46e5e2,s);check(read<unsigned>(s.data(),0x1c)==0&&unit_calls==1&&!lookups&&xml1_economy::roller::recent_rolls()=="roll cat=0 lead=0 G=3 bucket=0 def=- amt=0 draws=1","failed chance publishes zero count and exact formatted history");finish(s);
+ seed(s,false,0);stream({.5f});invoke(0x46e5e2,s);check(read<unsigned>(s.data(),0x1c)==0&&unit_calls==1&&!lookups&&xml1_economy::roller::recent_rolls()=="roll n=1 cat=0 lead=0 G=3 bucket=0 def=- amt=0 draws=1","failed chance publishes zero count and exact serial-bearing history starting at one");finish(s);
  seed(s);stream({0,.5f,0});invoke(0x46e5e2,s);check(read<unsigned>(s.data(),0x1c)==1&&names==std::vector<std::string>{"XTREME_PIP"},"single fallback descriptor uses cache");select(s,0);check(read<descriptor>(s.data(),0x14).handle==1&&read<int>(s.data(),0x70)==1&&source_seen==0xabcdef01,"first selection copies descriptor amount and source");finish(s);
  for(int count=2;count<=4;++count){seed(s);stream({0,.8f,.9f,1},{2,count});invoke(0x46e5e2,s);check(read<unsigned>(s.data(),0x1c)==unsigned(count)&&cache_calls==unsigned(count),"money split publishes requested count 2 through 4");for(int i=0;i<count;++i){select(s,i);check(read<descriptor>(s.data(),0x14).handle==unsigned(i+1)&&read<int>(s.data(),0x70)==234/count,"each split selects matching descriptor and truncated amount");}finish(s);}
  xml1_economy_rules::record r;r.name="fixture_equipment";r.group=1;r.frequency=1;r.flags=0x40;r.definition=3;xml1_economy::rows={r};
  seed(s,true);stream({0,0},{0,1,3});invoke(0x46e5e2,s);check(read<unsigned>(s.data(),0x1c)==4&&xml1_economy::constructors==1&&xml1_economy::constructor_arguments&&names==std::vector<std::string>{"HEALTH_ITEM","ENERGY_ITEM","XTREME_PIP"},"leader retains equipment first and exactly three extras");select(s,0);check(read<descriptor>(s.data(),0x14).handle==777,"leader first selection is constructed equipment");finish(s);xml1_economy::rows.clear();
  std::array<stack,5> nested;stream({});for(auto& n:nested){seed(n);invoke(0x46e5e2,n);}check(read<unsigned>(nested[4].data(),0x1c)==0,"fifth nested roll refuses drops");invoke(0x46e5e2,nested[4]);check(logger::overflow_logs==1,"repeated depth overflow logs only once");finish(nested[4]);for(int i=3;i>=0;--i){select(nested[i],0);check(read<descriptor>(nested[i].data(),0x14).pool!=nullptr,"nested parent frame survives overflow release");finish(nested[i]);}
  seed(s);stream({0,.5f,0});invoke(0x46e5e2,s);check(read<unsigned>(s.data(),0x1c)==1,"all frames reusable after nested unwind");finish(s);
+ serial_tests();
  unsigned esp_before=0,esp_after=0;const auto draws=unit_calls+integer_calls,allocations=xml1_economy::constructors;__asm {
  mov esp_before,esp
  push 123
@@ -422,7 +458,7 @@ int main(int argc,char** argv){
  // clear execute natively; only receiver services are fixture edges.
  jump(0x46dce0,&get_game);game_vt[0x250/4]=reinterpret_cast<void*>(&nearby_items);void* entity_vt[0x28/4]{};entity_vt[0x24/4]=reinterpret_cast<void*>(&position);std::array<unsigned char,0x304> entity{};put(entity.data(),0,entity_vt);put(entity.data(),0x1c,0x19191919u);put(entity.data(),0x300,4);
  reinterpret_cast<void(__fastcall*)(void*,void*,int)>(at(0x496c70))(entity.data(),nullptr,0);check(special_calls==2&&special_category==4&&special_source==0x19191919&&special_zero==0&&read<unsigned>(entity.data(),0x300)==0,"native breakable calls roller once with authored category then clears +300");nearby=20;put(entity.data(),0x300,5);reinterpret_cast<void(__fastcall*)(void*,void*,int)>(at(0x496c70))(entity.data(),nullptr,0);check(special_calls==2&&read<unsigned>(entity.data(),0x300)==0,"native breakable nearby gate still clears category without roll");
- metadata_tests();loop_tests(before);treasure_tests();raw_rng_tests(before);check(xml1_economy::roller::status().empty(),"roller ordinary special and breakable paths produce no native-generator tripwire calls");
+ metadata_tests();loop_tests(before);treasure_tests();raw_rng_tests(before);check(xml1_economy::roller::status()=="; gen 0","roller ordinary special and breakable paths explicitly report zero native-generator tripwire calls");
  // Replay each displaced prologue before a matching native-ABI continuation.
  jump(0x47d4b8,&gen_continue);jump(0x47ecb5,&special_continue);jump(0x47b595,&picker_continue);jump(0x481b85,&alternate_continue);
  for(unsigned i=0;i<2;++i){check(call_gen()==0x11111111&&observed_argument==0x51515151,"generator tripwire preserves arguments and native ret 1c");check(call_special_gen()==0x22222222,"special generator displaced prologue and ret 8 execute");check(call_picker()==0x33333333,"picker displaced prologue and ret c execute");}

@@ -119,7 +119,7 @@ void shop_checks(){
  // Buying a non-unique leaves state 2; the next reconcile restores its row.
  const auto bought=build_buy()[4].item;put(instance(bought),0x2e,static_cast<unsigned char>(2));refill();
  check(stock_items().size()==85&&read<unsigned char>(instance(bought),0x2e)==2,"nonunique stock reappears after purchase, owned unit retained");
- check(read<unsigned>(at(0x7ad8b4))==0&&read<unsigned>(at(0x7ad8b0))==67890&&xml1_economy::status().find("; gen ")==std::string::npos,"reconcile and rows use zero draws on either stream; native generator tripwire stays zero");
+ check(read<unsigned>(at(0x7ad8b4))==0&&read<unsigned>(at(0x7ad8b0))==67890&&xml1_economy::status().find("; gen 0;")!=std::string::npos,"reconcile and rows use zero draws on either stream; native generator tripwire stays zero");
  // Empty native course source: Healer still has exactly packs plus Grab Bag.
  jump(0x5d2710,&no_ui);
  for(const char* name:{"ITEM","unknown","","item"}){

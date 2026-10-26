@@ -1,6 +1,7 @@
 #include "xml1_grab_bag.hpp"
 #include "xml1_grab_bag_rules.hpp"
 #include "xml1_economy.hpp"
+#include "xml1_economy_digest.hpp"
 #include "item_capacity_rules.hpp"
 #include <cstdio>
 #include <cstring>
@@ -69,12 +70,12 @@ bool __fastcall x1_grab_bag(void* shop,void*){
   method<void(__fastcall*)(void*,void*,const char*)>(scripts,0xc)(scripts,nullptr,command);
   scripts=native<void*(__cdecl*)()>(0x4a1670)();
   method<void(__fastcall*)(void*,void*,const char*,int)>(scripts,0x3c)(scripts,nullptr,command,1);
-  return true;
+  digest::bag_result("bag-course");return true;
  }
- if(!result.item)return false; // native caller ignores failure; no refund
+ if(!result.item){digest::bag_result("bag-empty");return false;} // native caller ignores failure; no refund
  auto* def=static_cast<unsigned char*>(manager)+item_capacity_rules::definitions+result.item->definition*0x3c;
  descriptor item{};make_instance(manager,nullptr,&item,def,1,0,0,0,0);
- if(!item.pool||!method<bool(__fastcall*)(void*,void*,unsigned)>(item.pool,0)(item.pool,nullptr,item.handle))return false;
+ if(!item.pool||!method<bool(__fastcall*)(void*,void*,unsigned)>(item.pool,0)(item.pool,nullptr,item.handle)){digest::bag_result("bag-capacity-refused");return false;}
  // Exactly the native bag's vt+0xec inventory insertion and vt+0x140
  // notification arguments. Construction is the agreed plan A/accepted fallback.
  method<bool(__fastcall*)(void*,void*,descriptor,int,int)>(manager,0xec)(manager,nullptr,item,1,2);
@@ -84,7 +85,7 @@ bool __fastcall x1_grab_bag(void* shop,void*){
  native<void(__fastcall*)(void*,void*,unsigned,descriptor*)>(0x5d2460)(shop,nullptr,read<unsigned>(native<void*>(0x6e6fa0)),&item);
  const unsigned refresh=0;
  method<void(__fastcall*)(void*,void*,const unsigned*)>(shop,0x40)(shop,nullptr,&refresh);
- return true;
+ digest::bag_result("bag-equipment");return true;
 }
 bool contribute(patch_transaction::transaction& tx,std::string& failure){
  patch_transaction::contribution c;c.owner="Xml1Economy Grab Bag reward (single caller debit)";

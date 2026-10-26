@@ -21,7 +21,7 @@ template<class T>T read(const void* p,unsigned off=0){T v{};std::memcpy(&v,stati
 template<class T>void put(void* p,unsigned off,T v){std::memcpy(static_cast<unsigned char*>(p)+off,&v,sizeof v);}
 template<class T>T method(void* p,unsigned slot){return reinterpret_cast<T>((*static_cast<void***>(p))[slot/4]);}
 struct drop {descriptor item{};int amount=0;};
-struct frame {void* stack=nullptr;std::array<drop,4> drops{};unsigned count=0;};
+struct frame {void* stack=nullptr;std::array<drop,4> drops{};unsigned count=0;std::uint64_t serial=0;};
 std::array<frame,4> frames{};
 unsigned depth=0;
 bool applied=false,overflow_logged=false;
@@ -29,8 +29,12 @@ std::map<unsigned,unsigned> calls;
 std::mutex calls_mutex;
 std::array<std::string,16> roll_history;
 unsigned roll_count=0,roll_next=0;
-void roll_log(const xml1_roll_rules::input& input,const xml1_roll_rules::result& result,const char* name,int amount){
- char line[512];std::snprintf(line,sizeof line,"roll cat=%d lead=%d G=%d bucket=%d def=%s amt=%d draws=%u",input.category,input.leader,result.G,result.bucket,name,amount,result.draws);
+// Game thread only. Allocate once at the entry bridge, never per pickup or
+// history query, and never from RNG/time/addresses. Keep each frame's identity
+// across nested rolls and native loop iterations. No resets at zone/seed loads.
+std::uint64_t roll_serial=0;
+void roll_log(std::uint64_t serial,const xml1_roll_rules::input& input,const xml1_roll_rules::result& result,const char* name,int amount){
+ char line[512];std::snprintf(line,sizeof line,"roll n=%llu cat=%d lead=%d G=%d bucket=%d def=%s amt=%d draws=%u",static_cast<unsigned long long>(serial),input.category,input.leader,result.G,result.bucket,name,amount,result.draws);
  logger::write("%s",line);
  std::lock_guard lock(calls_mutex);
  roll_history[roll_next]=line;roll_next=(roll_next+1)%static_cast<unsigned>(roll_history.size());
@@ -148,8 +152,9 @@ constexpr std::array<site,12> sites{{
 void __cdecl begin(void* stack){
  put(stack,0x1c,0u);
  if(!xml1_economy::installed())return;
- if(depth==frames.size()){if(!overflow_logged){overflow_logged=true;logger::write("economy: roller nesting exceeds four; drop refused");}return;}
- auto& frame=frames[depth++];frame={};frame.stack=stack;
+ const auto serial=++roll_serial;
+ if(depth==frames.size()){if(!overflow_logged){overflow_logged=true;logger::write("economy: roller n=%llu nesting exceeds four; drop refused",static_cast<unsigned long long>(serial));}return;}
+ auto& frame=frames[depth++];frame={};frame.stack=stack;frame.serial=serial;
  auto* game=read<void*>(stack,0x28);
  auto* registry=native<void*(__cdecl*)()>(0x44b8f0)();
  const int highest=native<int(__fastcall*)(void*,void*)>(0x449960)(registry,nullptr);
@@ -161,9 +166,9 @@ void __cdecl begin(void* stack){
  services env{game};xml1_roll_rules::result result;
  {selection_precision precision;result=xml1_roll_rules::x1_roll(records(),input,env);}
  for(unsigned i=0;i<result.count;++i){const auto item=construct(result.drops[i]);if(item.pool)frame.drops[frame.count++]={item,result.drops[i].amount};
-  roll_log(input,result,result.drops[i].name.c_str(),result.drops[i].amount);
+  roll_log(frame.serial,input,result,result.drops[i].name.c_str(),result.drops[i].amount);
  }
- if(!result.count)roll_log(input,result,"-",0);
+ if(!result.count)roll_log(frame.serial,input,result,"-",0);
  put(stack,0x1c,frame.count);
 }
 void __cdecl select(void* stack){
@@ -173,7 +178,7 @@ void __cdecl select(void* stack){
 }
 void __cdecl finish(void* stack){if(depth&&frames[depth-1].stack==stack)frames[--depth]={};}
 bool installed(){return applied;}
-std::string status(){std::lock_guard lock(calls_mutex);std::string s;for(const auto& [caller,n]:calls){char text[48];std::snprintf(text,sizeof text,"; gen %08x:%u",caller,n);s+=text;}return s;}
+std::string status(){std::lock_guard lock(calls_mutex);unsigned total=0;for(const auto& [caller,n]:calls)total+=n;std::string s="; gen "+std::to_string(total);for(const auto& [caller,n]:calls){char text[48];std::snprintf(text,sizeof text,"; gen %08x:%u",caller,n);s+=text;}return s;}
 std::string recent_rolls(){std::lock_guard lock(calls_mutex);std::string s;for(unsigned i=0;i<roll_count;++i){if(!s.empty())s+='\n';s+=roll_history[(roll_next+roll_history.size()-roll_count+i)%roll_history.size()];}return s;}
 bool contribute(patch_transaction::transaction& tx,std::string& failure){
  patch_transaction::contribution c;c.owner="Xml1Economy roller, treasure, DR and regeneration";

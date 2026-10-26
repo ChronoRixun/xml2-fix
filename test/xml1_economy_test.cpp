@@ -2,6 +2,7 @@
 // executes native W2 pools/reset/constructor/attach/link/cache/bonus consumers.
 // No game process, data package, desktop input or registry access.
 #include "xml1_economy.hpp"
+#include "xml1_economy_digest.hpp"
 #include "lcsave/lcsave.hpp"
 #include "item_capacity.hpp"
 #include "item_capacity_rules.hpp"
@@ -145,6 +146,7 @@ descriptor* __fastcall allocation_spy(void* self,void*,descriptor* out){++alloca
 #include "xml1_economy_prices_checks.hpp"
 #include "xml1_economy_shop_checks.hpp"
 #include "xml1_grab_bag_checks.hpp"
+#include "xml1_economy_digest_checks.hpp"
 }
 LONG WINAPI fault(EXCEPTION_POINTERS* e){std::printf("FAULT %08lx EIP=%08lx ESP=%08lx EAX=%08lx ECX=%08lx EDX=%08lx\n",e->ExceptionRecord->ExceptionCode,e->ContextRecord->Eip,e->ContextRecord->Esp,e->ContextRecord->Eax,e->ContextRecord->Ecx,e->ContextRecord->Edx);return EXCEPTION_CONTINUE_SEARCH;}
 int main(int argc,char** argv){
@@ -182,9 +184,10 @@ int main(int argc,char** argv){
  if(scenario=="bag-pre-guard")put(at(0x5d3720),0,std::uint8_t(0xcc));
  if(scenario=="prices-pre-guard")put(at(0x5d2639),0,std::uint8_t(0xcc));
  if(scenario=="shop-pre-guard")put(at(0x5d3ff0),0,std::uint8_t(0xcc));
+ if(scenario=="digest-pre-guard")put(at(0x5d3ba0),0,std::uint8_t(0xcc));
  if(scenario=="missingfile"){ini::wanted=true;xml1_economy::prepare(tx,static_cast<HMODULE>(at(0x400000)));}
  else xml1_economy::prepare_for_testing(tx,static_cast<HMODULE>(at(0x400000)),true,scenario=="sidecar"?"":text,chosen);
- if(scenario=="legacy-count"||scenario=="legacy-pick"||scenario=="prices-pre-guard"||scenario=="shop-pre-guard"||scenario=="bag-pre-guard"){
+ if(scenario=="legacy-count"||scenario=="legacy-pick"||scenario=="prices-pre-guard"||scenario=="shop-pre-guard"||scenario=="bag-pre-guard"||scenario=="digest-pre-guard"){
   const auto before=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
   check(tx.commit()==patch_transaction::outcome::refused_unresolved&&std::equal(before.begin(),before.end(),fixture_space),"failed required contribution vetoes entire W2/economy union without writes");
   xml1_economy::after_commit(tx.result());
@@ -196,8 +199,9 @@ int main(int argc,char** argv){
  }
  const auto stock=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
  if(scenario.starts_with("guard")){
-  const std::array<unsigned,26> guards{0x47bb50,0x4806ad,0x421f3f,0x5a9cd8,0x5a9d2c,0x481170,0x480dd8,0x5a9b8d,0x5d3ee9,0x5d404b,0x5d2639,
-   0x49e64b,0x46a1a0,0x5d2a55,0x5d2b18,0x5d35d0,0x5d36c8,0x5d3a34,0x5d3b2a,0x5d2b70,0x5d3ff0,0x5d4104,0x5d4119,0x5d412e,0x480e20,0x5d3720};
+  const std::array<unsigned,34> guards{0x47bb50,0x4806ad,0x421f3f,0x5a9cd8,0x5a9d2c,0x481170,0x480dd8,0x5a9b8d,0x5d3ee9,0x5d404b,0x5d2639,
+   0x49e64b,0x46a1a0,0x5d2a55,0x5d2b18,0x5d35d0,0x5d36c8,0x5d3a34,0x5d3b2a,0x5d2b70,0x5d3ff0,0x5d4104,0x5d4119,0x5d412e,0x480e20,0x5d3720,
+   0x5d39c0,0x5d3ba0,0x5d3c31,0x5d3c81,0x5d3c97,0x5d3dd7,0x5d4135,0x5d3fda};
   const auto site=guards.at(static_cast<unsigned>(std::stoi(scenario.substr(5))));*static_cast<std::uint8_t*>(at(site))^=1;
   const auto before=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);check(tx.commit()!=patch_transaction::outcome::committed&&std::equal(before.begin(),before.end(),fixture_space),"guard mutation: entire W2/economy union refuses, zero writes");xml1_economy::after_commit(tx.result());check(!gameplay_agreement::good&&(!xml1_economy::installed()&&!lcsave::item_own_rebuilt_enabled()),"guard failure leaves rule 52 unverified");return failures?1:0;
  }
@@ -255,6 +259,7 @@ int main(int argc,char** argv){
  check(mismatch!=gameplay_capabilities::result::match&&std::strstr(description,"52 Xml1Economy"),"peer without migration part64 is refused naming rule52");
  if(scenario=="shop"){restore();shop_checks();std::printf("Shop execution: %d checks, %d failure(s)\n",checks,failures);return failures?1:0;}
  if(scenario=="bag"){restore();bag_checks();std::printf("T-BAG native: %d checks, %d failure(s)\n",checks,failures);return failures?1:0;}
+ if(scenario=="digest"){restore();digest_checks();std::printf("Digest execution: %d checks, %d failure(s)\n",checks,failures);return failures?1:0;}
  if(scenario=="prices"){
   restore();price_checks();
   std::printf("Prices/transactions/lists: %d checks, %d failure(s)\n",checks,failures);return failures?1:0;
@@ -285,7 +290,7 @@ int main(int argc,char** argv){
   descriptor out{123,at(123)};native<make_t>(0x47bb50)(manager.data(),nullptr,&out,manager.data()+item_capacity_rules::definitions+(first_economy+4)*0x3c,1,0,0,0,0);
   check(!out.handle&&!out.pool&&allocation_calls==0&&std::memcmp(ip,before_i.data(),before_i.size())==0&&std::memcmp(ap,before_a.data(),before_a.size())==0&&read<unsigned>(at(0x7ad8b4))==0,"capacity preflight null descriptor, complete pools unchanged, 0x47c990 never entered, no RNG");
  }
- const auto expected_status="econ on; plan "+std::string(chosen==plan::zero_draw?"A":"1roll")+"; defs 132; digest "+digest_hex(parse(text).digest).substr(0,8)+"; refused 3";
+ const auto expected_status="econ on; plan "+std::string(chosen==plan::zero_draw?"A":"1roll")+"; defs 132; digest "+digest_hex(parse(text).digest).substr(0,8)+"; forge 0/G0; gen 0; refused 3";
  check(logger::refusal_logs==1&&xml1_economy::status()==expected_status,"refusal counted per attempt, logged once per definition; exact status");
  restore();
  for(unsigned i=0;i<1023;++i){descriptor used{};native<descriptor*(__fastcall*)(void*,void*,descriptor*)>(0x47c990)(manager.data(),nullptr,&used);}

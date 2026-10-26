@@ -79,12 +79,16 @@ def main():
             assert (site in writes) == (case == "pending-table"), (case, hex(site), "prices hook state")
         for operand in (0x5a9cd8, 0x5a9d2c):
             assert any(a in writes for a in range(operand, operand + 4)) == (case == "pending-table"), (case, "sale fraction hook state")
+        for site, length in ((0x5d39c0, 7), (0x5d3ba0, 6), (0x5d3c31, 6), (0x5d3c81, 6),
+                             (0x5d3c97, 6), (0x5d3dd7, 5), (0x5d4135, 5), (0x5d3fda, 5)):
+            assert any(a in writes for a in range(site, site + length)) == (case == "pending-table"), (case, hex(site), "digest hook state")
         for site, length in ((0x49e64b, 7), (0x46a1a0, 6), (0x5d2a55, 7), (0x5d2b18, 8),
                              (0x5d35d0, 9), (0x5d36c8, 15), (0x5d3a34, 5), (0x5d3b2a, 8),
                              (0x5d2b70, 5), (0x5d3ff0, 9), (0x5d4104, 5), (0x5d4119, 5),
                              (0x5d412e, 5), (0x480e20, 5)):
             assert any(a in writes for a in range(site, site + length)) == (case == "pending-table"), (case, hex(site), "shop hook state")
         assert "econ on; plan A; defs 0; digest " in result.stdout
+        assert "; forge 0/G0; gen 0; refused 0" in result.stdout
         if case == "pending-table":
             assert "digest e3b0c442" in result.stdout
         print(f"PASS {case}: production DLL, hook state, closed agreement, status, unchanged registry", flush=True)

@@ -25,6 +25,7 @@
 #include "entity_capacity.hpp"
 #include "native_save_layout.hpp"
 #include "xml1_economy.hpp"
+#include "xml1_economy_digest.hpp"
 #include "xml1_roll.hpp"
 #include "test_input_rules.hpp"
 
@@ -586,7 +587,7 @@ namespace test_input
 			case command::kind::economy:
 				if(cmd.text.empty()||cmd.text=="status")return xml1_economy::status();
 				if(cmd.text=="rolls")return xml1_economy::roller::recent_rolls();
-				return "error economy takes status or rolls";
+				return xml1_economy::digest::pipe(cmd.text);
 			case command::kind::mouse:
 			{
 				using action = command::pointer_action;
@@ -695,6 +696,7 @@ namespace test_input
 			logger::write("test: [Test] %s - using %s", pipe.error.c_str(), pipe.name.c_str());
 		}
 		pipe_path = pipe.path;
+		xml1_economy::digest::enable();
 
 		read_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 		capture_done = CreateEventW(nullptr, FALSE, FALSE, nullptr);
