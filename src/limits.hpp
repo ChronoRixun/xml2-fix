@@ -31,7 +31,8 @@
 //                           ; ResourceNames, 1024
 //   ItemEnhancements = 512  ; 376..1024 (375 is the game's own): the item manager's enhancement
 //                           ; record pool, past which Data/items stops loading
-//   FightStyles = 32        ; 20..32 (19 is the game's own)
+//   FightStyles = 64        ; 20..127 (19 is the game's own)
+//   StyleEvents = 4096      ; 1065..8192 (1064 is the game's own); one manager with FightStyles
 //   EffectCurves = 3600     ; 901..16384 (900 is the game's own): the effect curve pool
 //   IGBCache = 1024         ; 201..2048 (200 is the game's own): the IGB info cache, past which a
 //                           ; zone's map IGB fails to load and the game bounces back to the previous
@@ -69,7 +70,7 @@ namespace limits
 	std::array<std::uint32_t, 4> igb_cache_values();
 
 	// For the test pipe's status: "actors 23/127; names 301/1024; motions 312/500; igb 150/200; items
-	// 374/512; styles 22/32; curves 943/3600" (live count/cap; "-" where this isn't the retail XMen2.exe
+	// 374/512; styles 24/64; events 831/4096; curves 943/3600" (live count/cap; "-" where this isn't the retail XMen2.exe
 	// or the structure doesn't exist yet).
 	std::string status();
 }
