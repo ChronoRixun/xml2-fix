@@ -325,7 +325,12 @@ namespace lcsave::detail
 				if (r["capture_flags"].as_int() & 1)
 				{ notes.push_back("zone " + zone + ": incomplete capture: record not applied"); continue; }
 				const auto* prefix = pos.b.zone_prefix(zone, r["content_hash"].as_bytes(), *num);
-				if (r["content_hash"].as_bytes() != std::string(reinterpret_cast<const char*>(num->sha1.data()), 20) && !prefix)
+				// An equivalence row (every numbered entity at its own current placement) reads the record exactly as
+				// the exact-hash path does: no fresh tail, legacy promotion as for an exact record.
+				const bool same = r["content_hash"].as_bytes() == std::string(reinterpret_cast<const char*>(num->sha1.data()), 20) ||
+				                  (prefix && prefix->placements == num->placement);
+				if (same) prefix = nullptr;
+				if (!same && !prefix)
 				{
 					notes.push_back("zone " + py_repr(zone, Enc::latin1) + ": placement file changed since the record was made: record not applied");
 					continue;

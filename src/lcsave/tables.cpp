@@ -832,7 +832,8 @@ namespace lcsave::detail
 		{
 			const auto digest = current.prefix_digests.find(p.placements.size());
 			if (p.zone == hash && old == std::string(reinterpret_cast<const char*>(p.old.data()),20) &&
-			    p.current == current.sha1 && p.placements.size() < current.names.size() &&
+			    // A full-length row (no tail) is an equivalence attestation (zonecompat.attest_equivalent).
+			    p.current == current.sha1 && p.placements.size() <= current.names.size() &&
 			    digest != current.prefix_digests.end() && digest->second == p.digest) return &p;
 		}
 		return nullptr;
@@ -867,7 +868,7 @@ namespace lcsave::detail
 		{
 			const auto count = prefix.placements.size();
 			if (prefix.zone != key_hash1(zone, Enc::cp1252) || prefix.current != z.sha1 ||
-			    count >= num.size() || z.prefix_digests.contains(count)) continue;
+			    count > num.size() || z.prefix_digests.contains(count)) continue;
 			try { z.prefix_digests.emplace(count, resident_prefix_digest(root, num, count)); }
 			catch (const Error&) { /* invalid prefix: retain the stock exact-hash path */ }
 		}

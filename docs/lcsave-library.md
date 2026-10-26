@@ -7,6 +7,14 @@ for an unchanged resident prefix. Numbered saved identities also match old ordin
 and placement. Any missing/stale attestation retains exact-hash rejection; malformed
 metadata refuses. The durable LC format remains unchanged.
 
+A full-length row (its placement list as long as the current numbered list: no tail) is an equivalence attestation
+(`zonecompat.attest_equivalent`, 1.9.0): the builder proved the two maps differ only in definition attributes a
+saved record does not depend on (`xml1heaviness`) or in an owner-reviewed, zone- and value-bound edit. When its
+placements equal the current numbered list the reader takes the exact-hash path (no fresh tail, legacy promotion as
+for an exact record, no source map hash in `loaded_zone_metadata`, so a resave stamps the current map hash). A
+full-length row whose placements differ is read as an ordinary prefix row. Readers before 1.9.0 never match a
+full-length row: such records are discarded there, as without the row.
+
 Zone keys use the same case normalization as placement numbering before their
 canonical key hash. The runtime recomputes the resident-prefix SHA-256 from the
 opened current XMLB bytes and compares it with the sidecar digest. A valid CRC

@@ -244,6 +244,18 @@ namespace
 					std::vector<std::uint8_t> metadata;
 					if (!read_bytes(folder / "expected.metadata", metadata) || actual != std::string(metadata.begin(), metadata.end()))
 						return report("reconstructed placement metadata differs from Python");
+					// zonecompat: which records apply, through which path (an equivalence row has no source hash and
+					// no fresh tail, a prefix row both)
+					if (fs::exists(folder / "expected.zones"))
+					{
+						std::string zones;
+						for (const auto& capture : captures)
+							zones += capture.zone + "\t" + lcsave::hex(capture.placement_sha1) + "\t" + lcsave::hex(capture.source_placement_sha1) +
+							         "\t" + std::to_string(capture.fresh_entities.size()) + "\n";
+						std::vector<std::uint8_t> expected_zones;
+						if (!read_bytes(folder / "expected.zones", expected_zones) || zones != std::string(expected_zones.begin(), expected_zones.end()))
+							return report("applied zone records differ from Python: " + zones);
+					}
 				}
 
 			}

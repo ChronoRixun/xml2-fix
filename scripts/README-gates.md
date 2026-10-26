@@ -24,6 +24,14 @@ retail image for DLL installation proofs and does not start a game session. The 
 load the production DLL and temporarily export/restore the user's game registry key;
 run them only in the owner's gate environment. Release preparation does not execute them.
 
+`zone_records_gate.py --tool <bin>/lcsave_zone_records.exe --list SAVES.tsv --baseline STABLE --candidate CANDIDATE
+--out DIR [--require-zone ZONE]` is the per-zone save-compatibility release gate (no game): it loads copies of real
+saves (LC campaigns; retail slots are imported first) on the stable build's and the candidate's tables, both native
+layouts, and fails when any zone applies fewer saved records on the candidate (per zone and per save), when a
+record the candidate applies is gone after its resave, or when a save that loads on stable does not load on the
+candidate. Run it after the candidate's zone-prefix ledger is generated (legends-classic `tools/lcsave/README.md`);
+it writes `zone-gate.md` / `.tsv` / `.json`. `lcsave_zone_records` is the CMake target; `run_native.py` skips it.
+
 `check_model_pools_text.py <XMen2.exe>` (needs capstone and pefile) decodes the whole retail `.text` for `[Engine] ModelPools`:
 every reference to the moved model aggregate / particle-system manager must be a site row, nothing may branch or point
 into a span the plan overwrites, and a findNext helper shared outside the pool destructors must be copied, not raised.

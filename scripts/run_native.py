@@ -50,7 +50,7 @@ with_exe = {
 # Second argument: the XBE (beta 7: the scheduler suite requires it, the weapon brain compares the original callbacks).
 with_xbe = {"xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test", "xml2_shared_handlers_test", "xml2_shared_handlers_c_test", "xml2_dopple_xbe_test", "xml2_tk_guard_test"}
 skip = {
-    "xml2_test", "lcsave_durable_parity", "lcsave_test", "xml2_save_startup_test",
+    "xml2_test", "lcsave_durable_parity", "lcsave_test", "xml2_save_startup_test", "lcsave_zone_records",
     "xml2_danger_room_party_install_test", "xml2_lockon_effects_install_test",
     "xml2_danger_room_healthbars_install_test", "xml2_speaker_label_install_test", "xml2_classic_hud_install_test",
     "xml2_codex_back_install_test", "xml2_resistance_display_install_test",
@@ -73,6 +73,8 @@ cmds += [[str(b / "xml2_resistance_display_install_test.exe"), EXE, mode] for mo
 _hud = (R / "test/classic_hud_install_test.cpp").read_text(encoding="utf-8")
 _hud_sites = len(re.findall(r"0x[0-9a-fA-F]+", re.search(r"sites\[\]\s*\{(.*?)\};", _hud, re.S)[1]))
 cmds += [[str(b / "xml2_classic_hud_install_test.exe"), EXE, mode] for mode in ["on", "off", "zero", "named-off", "legacy", "invalid", "base", "assets", "alias", "stale"] + [f"guard{i}" for i in range(_hud_sites)]]
+# Suites run once per mode beside the exe: their logs need the mode in the tag (else the second run overwrites the first).
+installer_modes = {"xml2_xml1_air_carry_test"}
 cmds.append([str(b / "xml2_xml1_grab_carry_install_test.exe"), EXE, "both"])
 cmds += [[str(b / "xml2_xml1_air_carry_test.exe"), EXE, mode] for mode in ("both", "raised")]
 cmds.append([str(b / "xml2_shared_handlers_c_test.exe"), EXE, XBE, "--off-proof"])

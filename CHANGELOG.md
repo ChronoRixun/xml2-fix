@@ -32,6 +32,14 @@
   ...` line to `xml2-fix.log`, then the crash goes on as before. Nothing is refused: with the flag off it only logs.
   The `limits: address space - LAA ...` line stays.
 
+- **Saves keep the zones you already cleared across definition-only map edits** (1.9.0-beta.1, the save reader,
+  [docs](docs/lcsave-library.md)). The reader dropped every saved zone record whose map file hash changed unless an
+  append-only prefix row covered it, so beta 8's heaviness tags (65 maps, nothing moved or renumbered) would reset
+  visited zones: enemies, pickups, doors and one-time scenes back. It now also accepts the builder's full-length
+  equivalence rows (`Data/lcsave/zone-prefix.lcm`, format unchanged) and reads such a record exactly as an
+  unchanged map's. New offline gate `scripts/zone_records_gate.py` (target `lcsave_zone_records`): per zone, real
+  saves apply at least as many records on the candidate as on stable.
+
 - **The first game's revival price: gameplay rule 10 revision 3** (`[Game] RevivalCost = xml1`; 1.9.0-beta.1 and
   1.8.0, [docs](docs/xtraction-shop.md#revival-price)). A fallen hero costs 200 x G^2 Tech Bits, G = min(5, L / 10 +
   1), L the roster's highest current level without guests: 200 / 800 / 1,800 / 3,200 / 5,000 for 0-9 / 10-19 /

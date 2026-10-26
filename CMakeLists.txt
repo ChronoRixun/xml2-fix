@@ -265,6 +265,10 @@ target_include_directories(xml2_stat_help_test PRIVATE src)
 # command line), and a fuzz of the readers.
 add_executable(lcsave_test test/lcsave_test.cpp test/lcsave_vectors.cpp)
 target_link_libraries(lcsave_test PRIVATE lcsave)
+# The per-zone save-compatibility release gate (scripts/zone_records_gate.py): applied zone records of real saves on
+# a real build's tables (no engine, no game). Takes arguments; run_native.py does not run it.
+add_executable(lcsave_zone_records test/lcsave_zone_records.cpp)
+target_link_libraries(lcsave_zone_records PRIVATE lcsave)
 add_executable(xml2_confirmation_release_test test/confirmation_release_test.cpp)
 target_include_directories(xml2_confirmation_release_test PRIVATE src)
 
