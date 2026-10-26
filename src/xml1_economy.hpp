@@ -8,6 +8,7 @@ bool installed(); // table resolved, hooks and prerequisite verified
 const xml1_economy_rules::record* record_for(unsigned definition);
 const std::vector<xml1_economy_rules::record>& records();
 bool is_economy(const void* definition);
+const xml1_economy_rules::record* record_for_definition(const void* definition);
 std::string status(); // empty OFF
 
 struct descriptor {std::uint32_t handle;void* pool;};

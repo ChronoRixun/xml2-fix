@@ -63,10 +63,17 @@ int __cdecl as_number(const char* text){return std::atoi(text);}
 // Native x87 consumers call the CRT ftol veneer. Values here are integral and
 // exactly representable; both constructors use the same authored fixture edge.
 __declspec(naked) void ftol(){__asm {
- sub esp,8
+ sub esp,16
+ fnstcw word ptr[esp+8]
+ mov ax,word ptr[esp+8]
+ or ax,0c00h
+ mov word ptr[esp+10],ax
+ fldcw word ptr[esp+10]
  fistp qword ptr[esp]
- pop eax
- pop edx
+ fldcw word ptr[esp+8]
+ mov eax,[esp]
+ mov edx,[esp+4]
+ add esp,16
  ret
 }}
 const char* __fastcall property_text(void*,void*,int){return "137";}
@@ -132,6 +139,7 @@ snapshot capture(const descriptor& result){
 bool same(const snapshot& a,const snapshot& b){return a.instance==b.instance&&a.attached==b.attached&&a.bonus==b.bonus;}
 unsigned allocation_calls=0;
 descriptor* __fastcall allocation_spy(void* self,void*,descriptor* out){++allocation_calls;return native<descriptor*(__fastcall*)(void*,void*,descriptor*)>(0x47c990)(self,nullptr,out);}
+#include "xml1_economy_prices_checks.hpp"
 }
 LONG WINAPI fault(EXCEPTION_POINTERS* e){std::printf("FAULT %08lx EIP=%08lx ESP=%08lx EAX=%08lx ECX=%08lx EDX=%08lx\n",e->ExceptionRecord->ExceptionCode,e->ContextRecord->Eip,e->ContextRecord->Esp,e->ContextRecord->Eax,e->ContextRecord->Ecx,e->ContextRecord->Edx);return EXCEPTION_CONTINUE_SEARCH;}
 int main(int argc,char** argv){
@@ -150,18 +158,19 @@ int main(int argc,char** argv){
   native_save_layout::verified=false;ini::wanted=true;patch_transaction::transaction tx;xml1_economy::prepare(tx,static_cast<HMODULE>(at(0x400000)));xml1_economy::after_commit(tx.commit());
   check(!tx.contributions()&&!gameplay_agreement::good&&gameplay_agreement::registrations==1&&!xml1_economy::installed(),"missing rule 47: no hook contribution, rule 52 unverified, online closed");return failures?1:0;
  }
- std::string body;for(unsigned i=0;i<economy_count;++i){char row[100];std::snprintf(row,sizeof row,"item%04u 1 2 %x 137 %s - %u\n",i+first_economy,i<equipment_count?(i%3==0?0x51:0x50):(i%2?0x10:0),i<equipment_count?"forge":"none",i);body+=row;}
+ std::string body;for(unsigned i=0;i<economy_count;++i){char row[100];std::snprintf(row,sizeof row,"item%04u 1 2 %x %s %s - %u\n",i+first_economy,i<equipment_count?(i%3==0?0x51:0x50):(i%2?0x10:0),i==1?"0":i==2?"-":"137",i<equipment_count?"forge":"none",i);body+=row;}
  const auto text=sidecar_file(body,economy_count);const auto chosen=scenario=="1roll"?plan::one_roll:plan::zero_draw;
  patch_transaction::contribution w2;std::string why;check(item_capacity::contribute_w2(w2,why),"W2 complete pool and definition guards: "+why);
  patch_transaction::transaction tx;tx.add(std::move(w2));
  if(scenario=="legacy-count"||scenario=="legacy-pick")put(at(scenario=="legacy-count"?0x46e735:0x46e774),0,std::uint8_t(0xe9));
+ if(scenario=="prices-pre-guard")put(at(0x5d2639),0,std::uint8_t(0xcc));
  if(scenario=="missingfile"){ini::wanted=true;xml1_economy::prepare(tx,static_cast<HMODULE>(at(0x400000)));}
  else xml1_economy::prepare_for_testing(tx,static_cast<HMODULE>(at(0x400000)),true,scenario=="sidecar"?"":text,chosen);
- if(scenario=="legacy-count"||scenario=="legacy-pick"){
+ if(scenario=="legacy-count"||scenario=="legacy-pick"||scenario=="prices-pre-guard"){
   const auto before=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
-  check(tx.commit()==patch_transaction::outcome::refused_unresolved&&std::equal(before.begin(),before.end(),fixture_space),"legacy count/pick owner vetoes entire W2/economy union without writes");
+  check(tx.commit()==patch_transaction::outcome::refused_unresolved&&std::equal(before.begin(),before.end(),fixture_space),"failed required contribution vetoes entire W2/economy union without writes");
   xml1_economy::after_commit(tx.result());
-  check(!gameplay_agreement::good&&!xml1_economy::installed()&&gameplay_agreement::registrations==1,"legacy roller combination leaves rule52 unverified and online closed");return failures?1:0;
+  check(!gameplay_agreement::good&&!xml1_economy::installed()&&gameplay_agreement::registrations==1,"refused roller/prices contribution leaves rule52 unverified and online closed");return failures?1:0;
  }
  if(scenario=="sidecar"||scenario=="missingfile"){
   check(tx.commit()==patch_transaction::outcome::committed,"W2 alone commits with missing economy sidecar");xml1_economy::after_commit(tx.result());
@@ -169,7 +178,8 @@ int main(int argc,char** argv){
  }
  const auto stock=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
  if(scenario.starts_with("guard")){
-  const auto site=scenario=="guard0"?0x47bb50u:scenario=="guard1"?0x4806adu:0x421f3fu;*static_cast<std::uint8_t*>(at(site))^=1;
+  const std::array<unsigned,11> guards{0x47bb50,0x4806ad,0x421f3f,0x5a9cd8,0x5a9d2c,0x481170,0x480dd8,0x5a9b8d,0x5d3ee9,0x5d404b,0x5d2639};
+  const auto site=guards.at(static_cast<unsigned>(std::stoi(scenario.substr(5))));*static_cast<std::uint8_t*>(at(site))^=1;
   const auto before=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);check(tx.commit()!=patch_transaction::outcome::committed&&std::equal(before.begin(),before.end(),fixture_space),"guard mutation: entire W2/economy union refuses, zero writes");xml1_economy::after_commit(tx.result());check(!gameplay_agreement::good&&!xml1_economy::installed(),"guard failure leaves rule 52 unverified");return failures?1:0;
  }
  if(scenario=="rollback"){
@@ -177,15 +187,20 @@ int main(int argc,char** argv){
   check(tx.commit(&h)==patch_transaction::outcome::rolled_back&&std::equal(stock.begin(),stock.end(),fixture_space),"forced readback failure: union rollback restores every retail byte");xml1_economy::after_commit(tx.result());check(!gameplay_agreement::good&&!xml1_economy::installed(),"rolled back rule unverified");return failures?1:0;
  }
  if(scenario=="rollback-failed"){
-  std::array<std::uint8_t,8> installed_jump{};patch_transaction::hooks h;
-  h.after_apply=[&]{std::memcpy(installed_jump.data(),at(0x47bb50),8);*static_cast<std::uint8_t*>(at(0x47bb50))^=1;};
-  h.after_rollback=[&]{std::memcpy(at(0x47bb50),installed_jump.data(),8);};
+  std::array<std::uint8_t,8> installed_jump{};std::array<std::uint8_t,6> cache_jump{};patch_transaction::hooks h;
+  h.after_apply=[&]{std::memcpy(installed_jump.data(),at(0x47bb50),8);std::memcpy(cache_jump.data(),at(0x481170),6);*static_cast<std::uint8_t*>(at(0x47bb50))^=1;};
+  h.after_rollback=[&]{std::memcpy(at(0x47bb50),installed_jump.data(),8);std::memcpy(at(0x481170),cache_jump.data(),6);};
   check(tx.commit(&h)==patch_transaction::outcome::rollback_failed,"uncertified rollback retains entry JMP and executable storage");
   xml1_economy::after_commit(tx.result());check(!gameplay_agreement::good&&!xml1_economy::installed(),"uncertified rollback never publishes rule52");
   // Production refuses DLL startup here. Even if a retained entry is probed,
   // its trampoline must remain valid. Null definition never touches any pool.
   descriptor out{1,at(1)};native<make_t>(0x47bb50)(nullptr,nullptr,&out,nullptr,1,0,0,0,0);
   check(!out.handle&&!out.pool,"retained trampoline safely preserves native null-definition ABI");
+  std::array<void*,16> definition_vt{};definition_vt[0x24/4]=reinterpret_cast<void*>(&type);
+  std::array<unsigned char,0x3c> definition{};put(definition.data(),0,definition_vt.data());
+  std::array<unsigned char,0x34> legacy{};put(legacy.data(),4,definition.data());put(legacy.data(),0x28,1234);
+  native<void(__fastcall*)(void*,void*)>(0x481170)(legacy.data(),nullptr);
+  check(read<int>(legacy.data(),0x28)==1234,"retained price trampoline safely forwards native non-equipment cache early-out while economy inactive");
   return failures?1:0;
  }
  const auto committed=tx.commit();
@@ -201,6 +216,7 @@ int main(int argc,char** argv){
  std::vector<snapshot> native_results;bool native_good=true;
  for(unsigned i=0;i<economy_count;++i){restore();descriptor out{};native<make_t>(0x47bb50)(manager.data(),nullptr,&out,manager.data()+item_capacity_rules::definitions+(i+first_economy)*0x3c,1,0,0,0,0);auto s=capture(out);native_good&=s.draws==own_count(i)&&s.attached.size()==own_count(i)&&s.bonus==11*int(own_count(i));if(i<equipment_count)native_good&=read<unsigned>(s.instance.data(),0x28)>0&&(s.instance[0x30]&2);else native_good&=read<unsigned>(s.instance.data(),0x28)==0&&!(s.instance[0x30]&2);native_results.push_back(s);}
  check(native_good,"132 native constructors (116 equipment + 16 plain): 1..5/0 own records, all eight slots/negative slots, native n draws, bonuses/cache valid");
+ check(read<int>(native_results[4].instance.data(),0x28)!=137,"native affecter-cost sum differs from the economy definition base");
  if(scenario=="unresolved")put(manager.data(),0x2588,static_cast<std::uint16_t>(legacy_definition-1));
  // Exercise the actual installed completion call (its native record walk is an
  // environment edge here; the production bridge invokes it before resolution).
@@ -211,14 +227,21 @@ int main(int argc,char** argv){
  }
  check(xml1_economy::installed()&&gameplay_agreement::holds==0&&gameplay_agreement::registrations==1,"all 132 names resolved with real W2 by-name lookup, incl indices255/256; rule verified once");
  if(!xml1_economy::installed()){std::printf("resolution failure: %s\n",logger::last.c_str());return 1;}
- auto expected_values=agreement_values(chosen,parse(text));expected_values[0]|=1;
- check(gameplay_agreement::rules.rule(1).values==expected_values,"rule 52 exact parts/revision/digest/count values, including installed roller bit1");
+ auto expected_values=agreement_values(chosen,parse(text));expected_values[0]|=3;
+ check(gameplay_agreement::rules.rule(1).values==expected_values,"rule 52 exact parts/revision/digest/count values, including roller and sales bits");
+ if(scenario=="prices"){
+  restore();price_checks();
+  std::printf("Prices/transactions/lists: %d checks, %d failure(s)\n",checks,failures);return failures?1:0;
+ }
+ // Step 4 intentionally replaces the native affecter-derived cache. All other
+ // constructor fields retain step 3a's normalized structural/behavioral parity.
+ for(unsigned i=0;i<economy_count;++i){put(native_results[i].instance.data(),0x28,i==1||i==2?0:137);native_results[i].instance[0x30]|=2;}
  bool parity=true,draws=true,other_stream_unchanged=true;
  for(unsigned i=0;i<economy_count;++i){restore();descriptor out{};auto* def=manager.data()+item_capacity_rules::definitions+(i+first_economy)*0x3c;native<make_t>(0x47bb50)(manager.data(),nullptr,&out,def,1,0,0,0,0);const auto s=capture(out);const bool equal=same(s,native_results[i]);parity&=equal;draws&=s.draws==(chosen==plan::zero_draw?0u:own_count(i))&&s.rng_state==(chosen==plan::zero_draw?12345u:native_results[i].rng_state);
   if(!equal){std::printf("parity definition %u: bonus %d/%d, records %zu/%zu\n",i,s.bonus,native_results[i].bonus,s.attached.size(),native_results[i].attached.size());for(unsigned n=0;n<0x34;++n)if(s.instance[n]!=native_results[i].instance[n])std::printf(" instance +%02x %02x/%02x\n",n,s.instance[n],native_results[i].instance[n]);}
   other_stream_unchanged&=read<unsigned>(at(0x7ad8b0))==67890;
  }
- check(parity,"T-LOOT-CTOR 132 definitions: every instance field, attached indices/link order/count except +8, evaluated bonuses, +28 cache/+30 bit1 equal");
+ check(parity,"T-LOOT-CTOR 132 definitions: structural/bonus parity except +8; cache/validity equal the step-4 definition-cost contract");
  check(draws,chosen==plan::zero_draw?"plan A consumes zero RNG draws":"fallback consumes exactly n native RNG draws");
  check(other_stream_unchanged,"unsynchronized RNG stream unchanged for every construction");
  restore();descriptor legacy{};native<make_t>(0x47bb50)(manager.data(),nullptr,&legacy,manager.data()+item_capacity_rules::definitions+legacy_definition*0x3c,1,0,0,0,0);check(capture(legacy).draws==own_count(economy_count),"legacy definition uses native body");

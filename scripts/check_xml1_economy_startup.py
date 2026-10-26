@@ -75,6 +75,10 @@ def main():
                 writes[int(fields[2], 16)] = int(fields[4], 16)
         assert (0x47bb50 in writes) == (case == "pending-table"), (case, "constructor hook state")
         assert any(a in writes for a in range(0x4806ae, 0x4806b2)) == (case == "pending-table"), (case, "loader hook state")
+        for site in (0x481170, 0x480dd8, 0x5a9b8d, 0x5d3ee9, 0x5d404b, 0x5d2639):
+            assert (site in writes) == (case == "pending-table"), (case, hex(site), "prices hook state")
+        for operand in (0x5a9cd8, 0x5a9d2c):
+            assert any(a in writes for a in range(operand, operand + 4)) == (case == "pending-table"), (case, "sale fraction hook state")
         assert "econ on; plan A; defs 0; digest " in result.stdout
         if case == "pending-table":
             assert "digest e3b0c442" in result.stdout

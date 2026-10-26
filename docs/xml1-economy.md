@@ -1,4 +1,4 @@
-# XML1 economy construction and drops
+# XML1 economy construction, drops and prices
 
 `[Game] Xml1Economy=1` requests **52 Xml1Economy**, revision **1**. An absent
 or false key reads no sidecar, contributes no patches and registers no rule.
@@ -19,15 +19,21 @@ sidecar or name resolution leaves rule 52 unverified and online closed.
 | Treasure and DR | Full category-five treasure rolls; generated DR gear suppressed, other rewards preserved |
 | Level adjustment | Regeneration returns before removing any equipped item; the level adjustment remains native |
 | Generator census | Per-return-address tripwires retain native generation and the widened W2 picker |
+| Sales and prices | 25% ordinary / exact float 33% unique, definition-cost cache, XML1 packs and raw-level courses |
+| Obtained transactions | Purchase sets unique obtained; inventory sale clears it; equipped sales and stash transfers preserve it |
+| Shared sell list | Carried/equipped equipment including zero-cost rewards, positive-quantity packs and held sidecar-sellable plain items |
 
-Later sales, Forge, Healer, Grab Bag and Training parts remain clear.
+Later Forge/Healer stock, Grab Bag, Training and saved-instance migration parts remain clear.
 Plan A is `xml1_economy_rules::default_plan`. The selected plan controls both
 dispatch and the agreement value; there is no independent runtime override.
 
-Rule values: `{parts, 1, digest_prefix_le, entry_count}`. Parts = **33** for
-plan A, **1** for fallback: bit 1 covers the complete roller/category/treasure/
-generator-disposition install and bit 32 selects zero-draw construction.
-Bits 2, 4, 8 and 16 remain clear. The first four
+Rule values: `{parts, 1, digest_prefix_le, entry_count}`. Parts = **35** for
+plan A, **3** for fallback: mask 1 covers the complete roller/category/treasure/
+generator-disposition install, mask 2 covers all sales/prices/obtained/sell-list
+sites, and mask 32 selects zero-draw construction. Masks 4, 8, 16 and 64 remain
+clear. Mask 2 is published only after the whole guarded contribution commits;
+table resolution and all existing prerequisites still gate verified rule 52.
+The first four
 SHA-256 bytes are packed little endian (bytes `01 23 45 67` become
 `0x67452301`). Status shows the bytes in their original hex order:
 
@@ -86,6 +92,13 @@ catalogue/sidecar agreement.
 | `0x47d4b0`, 8 bytes; `0x47ecb0`, 5 bytes | Generator and special-generator observers; displaced instructions preserved |
 | W2 copy of `0x47b590`, 5 bytes | Picker observer at its prepared copied entry, retaining W2's retail redirect |
 | `0x481b80`, 5 bytes | Alternate initializer observer, only for economy definition argument |
+| `0x5a9cd8`, `0x5a9d2c`, 4 bytes each | Repoint only the sale multipliers to fix-owned `0.25f` / `0.33f`; native ftol stays |
+| `0x481170`, 6 bytes | Economy definition cost (absent = 0) into cache `+0x28`, set `+0x30 & 2`; legacy native trampoline |
+| `0x480dd8`, 6 bytes | Compute `225G-125`, replay the displaced EBX/ESI pops; epilogue at `0x480dde` unchanged |
+| `0x5a9b8d`, 5 bytes | Read raw course level byte; global `0x46eae0` unchanged |
+| `0x5d3ee9`, 6 bytes | Capture owner by native transaction frame before equipped removal |
+| `0x5d404b`, 6 bytes | Forward shared native state call, then update economy-unique obtained by state/stash/owner |
+| `0x5d2639`, 7 bytes | Replace non-stash plain-item appends; both native equipment walks, stash branch and final presentation remain |
 
 All sites join W2's startup transaction with retail guards, verified
 readback/protections and rollback. Census: zero direct calls/jumps to
@@ -130,7 +143,32 @@ slots via definition vt+0x10, skips negative indices, attaches using
 callee pops 12 bytes), then calls `0x481170`. Native reset leaves affix lists
 empty and special-name fields untouched; the initializer does not set
 obtained. The builder must supply single-valued records for interpolation
-parity. No part of this step changes native price semantics.
+parity. The final `0x481170` call now applies the definition-cost cache contract
+for every economy definition, including definitions constructed through the
+fallback. Legacy definitions retain their native affecter-derived value.
+
+All three cache-calculator callers (`0x481b6e`, `0x481d13`, `0x482bd3`) enter
+the same guarded entry. The native getter's sole cache read at `0x480df7`
+therefore agrees after normal initialization, alternate initialization and
+deserialization. Zero-cost equipment remains in the sell list and sells for 0.
+Packs cost 100 / 325 / 550 / 775 / 1000 for G=1..5 and sell for
+25 / 81 / 137 / 193 / 250. Held pips sell for 375 from their authored 1500
+cost. The native 2000G-squared Grab Bag price is unchanged. Course rows use
+10 times the raw level squared, including when game mode is greater than 1.
+
+The owner capture is keyed by the native transaction frame and consumed before
+forwarding vt+0x104. After that call, state 2 outside stash sets obtained;
+state 4 outside stash clears it only for a captured null owner. State 5 and
+stash mode preserve obtained. Every action also requires an economy definition
+and the native unique predicate. Ordinary inventory sales can thus make a
+unique eligible again; selling equipped gear preserves obtained.
+
+The shared non-stash sell builder retains carried and equipped equipment with
+no cost filter. It appends HEALTH_ITEM then ENERGY_ITEM only with positive
+quantity, then other sidecar flag-0x10 non-equipment in definition order with
+positive quantity. The native append plus an explicit bound preserve the
+shared 100-row capacity. Both vendors use this same builder; vendor selection
+and stock reconciliation remain later work. Stash skips the new block.
 
 `xml2_economy_rules_test` checks parsing/refusals/agreement.
 `xml2_economy_test` maps the owned retail executable inside a synthetic host,
@@ -142,12 +180,13 @@ Native allocation/reset/attach/link/cache/RNG and bonus consumer `0x45ef50`
 execute; synthetic content/name/property edges and CRT veneers supply the
 environment. Comparison covers every instance byte, attached bytes except
 interpolation `+8`, indices/link order/count, evaluated bonuses and cached
-value/validity. Both plans must pass; draws are zero for plan A and n for
+value/validity (normalized to step 4's definition-cost contract). Both plans must pass; draws are zero for plan A and n for
 fallback. Separate modes cover OFF, prerequisites, sidecar, unresolved names,
 each guard and rollback. `scripts/run_native.py` runs them;
 `scripts/check_xml1_economy_text.py <retail-exe>` checks guards and census.
 `scripts/check_xml1_economy_startup.py` checks actual DLL loading, prerequisite
-and missing-file refusal, and closed admission while table resolution waits.
+and missing-file refusal, all sales/prices hook states, and closed admission
+while table resolution waits.
 `xml2_economy_rules_test --builder <build-folder>` also validates the actual
 sidecar against the C++ catalogue/bind loader and PC definition-index order.
 
@@ -165,3 +204,15 @@ lifecycle reachability and per-zone tripwire acceptance remain live gates.
 `scripts/check_xml1_roll_text.py <retail-exe>` checks all guards and the static
 generator census. Vendor refill and Grab Bag generator callers remain for their
 later implementation parts and are intentionally visible to the tripwire.
+
+`xml2_economy_test <retail-exe> prices` executes the native getters, sale x87
+paths, full course helper, deserializer, buy/sale blocks and sell builder.
+It checks price/truncation vectors, definition cost versus affecter cost,
+absent/zero costs, legacy ordinary/unique sales, transaction state/owner/stash
+cases, post-call obtained order, stale-owner reuse, equipped row ownership,
+positive-quantity plain items, shared vendor rows and the final row at capacity.
+UI, roster, cached descriptors, stream payload and manager state-list service
+are synthetic environment edges; this is not a live shop/co-op acceptance run.
+Row comparisons ignore the native row's three unwritten padding bytes.
+`scripts/check_xml1_economy_prices_text.py <retail-exe>` checks all eight guards,
+three cache callers, unchanged pack epilogue, stash bypass and interior branches.

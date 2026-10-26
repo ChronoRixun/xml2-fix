@@ -93,3 +93,7 @@ DISASM  test/item_capacity_test.cpp  # Authored ABI callers and synthetic header
 
 DISASM  src/save_limits.cpp  # Authored M/cap/generation ABI bridges; implementation source, not an extracted instruction listing.
 DISASM  test/save_limits_test.cpp  # Synthetic register/stack callers and recording fakes execute the guarded owner-supplied PE; no extracted bodies.
+
+DISASM  src/xml1_economy_prices.cpp  # Authored register/stack adapters for price arithmetic, owner capture and sell-list replacement; no extracted listing.
+DISASM  test/xml1_economy_prices_checks.hpp  # Authored synthetic transaction caller/end thunk; native buy/sale/deserialization/list bodies are read from the owner's executable at runtime.
+DISASM  test/xml1_economy_test.cpp  # Authored x87 truncation veneer for the mapped-retail fixture; control word is saved/restored and native code is loaded from the owned PE at runtime.
