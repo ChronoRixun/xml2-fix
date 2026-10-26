@@ -11,6 +11,7 @@
 #include "primitives_per_effect.hpp"
 #include "script_pools.hpp"
 #include "script_pools_layout.hpp"
+#include "particle_scratch.hpp"
 #include "ini.hpp"
 #include "log.hpp"
 #include "game_version.hpp"
@@ -194,9 +195,20 @@ void wave3_sources() {
     const auto& vd=effect_pools::layout(pool::vectors);
     set("vectors",{effect_pools::object_address(pool::vectors),vd.live,vd.capacity,effect_pools_rules::init_guard(pool::vectors),false,false});
 }
-// An observer whose bytes are no longer retail stands down: a W3 row that raised that pool owns the site and counts
-// its own refusals (script pools, style events, effect templates, effect pools, particle scratch). Everything else
-// is unchanged: the remaining observers still commit in one transaction or not at all.
+// An observer whose bytes are no longer retail stands down ONLY when the W3 row that owns the site installed its raise
+// (that row counts its own refusals: script pools, style manager, effect templates, primitives per effect, effect
+// pools, particle scratch). Any other non-retail byte stays in the transaction, which then refuses every observer
+// as before (one transaction, all or nothing).
+bool owner_raised(std::string_view name) {
+    if(name=="statements" || name=="values" || name=="objects" || name=="contexts")return script_pools::descriptor()[0].capacity!=script_pools::stock[0].capacity;
+    if(name=="events") {const auto l=limits::diagnostic_sources();return l.styles.cap>32 || l.events.cap!=1064;}
+    if(name=="fx_files" || name=="fx_defs")return effect_templates::layout().capacity!=220;
+    if(name=="prims_per_effect")return effect_templates::layout().capacity!=220 || primitives_per_effect::capacity()!=10;
+    if(name=="prim_defs")return effect_pools::installed(effect_pools_rules::pool::primitive_defs);
+    if(name=="vectors")return effect_pools::installed(effect_pools_rules::pool::vectors);
+    if(name.starts_with("particle_array_"))return particle_scratch::clamp_installed();
+    return false;
+}
 bool observer_bytes_retail(const pool_counter_sites::observer& s) {
     const auto before=patch_transaction::bytes_of(s.hex);
     std::vector<unsigned char> now(before.size());
@@ -211,7 +223,7 @@ void install_observers(const patch_transaction::hooks* hooks=nullptr) {
     unsigned standing_down=0;std::string stood_down;
     for(unsigned i=0;i<pool_counter_sites::observers.size();++i) {
         const auto& s=pool_counter_sites::observers[i];const auto before=patch_transaction::bytes_of(s.hex);
-        if(!observer_bytes_retail(s)) {
+        if(owner_raised(s.name) && !observer_bytes_retail(s)) {
             ++standing_down;
             if(stood_down.find(s.name)==std::string::npos){if(!stood_down.empty())stood_down+=", ";stood_down+=s.name;}
             continue;

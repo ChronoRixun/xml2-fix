@@ -8,4 +8,5 @@ void require_agreement(HMODULE); // before the shared startup transaction
 void contribute(patch_transaction::transaction&, HMODULE);
 void install(HMODULE);
 std::string telemetry_json();
+bool clamp_installed(); // the clamp committed (published after its transaction)
 }

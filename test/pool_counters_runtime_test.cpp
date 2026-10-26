@@ -49,6 +49,8 @@ const descriptor& layout(pool p){return p==pool::vectors?stock_vectors:stock_def
 std::uint32_t object_address(pool p){return p==pool::vectors?0x706680:0;}
 }
 namespace primitives_per_effect {unsigned capacity(){return 10;}}
+namespace effect_pools {bool installed(pool){return false;}}
+namespace particle_scratch {bool clamp_installed(){return false;}}
 static void put(unsigned a,unsigned v){std::memcpy(reinterpret_cast<void*>(a),&v,4);}
 int main(){
     unsigned checks=0,failures=0;

@@ -97,6 +97,7 @@ void install(HMODULE game) {
     patch_transaction::transaction tx; contribute(tx,game);
     if(tx.contributions()) { const auto result=tx.commit(); logger::write("ParticleScratch transaction: %s (%s)",patch_transaction::name(result),tx.report().c_str()); }
 }
+bool clamp_installed() { return installed; }
 std::string telemetry_json() {
     std::string s="{\"ok\":true,\"installed\":"+std::string(installed?"true":"false")+",\"requested\":"+(requested?"true":"false")+",\"capacity\":40,\"logged_arrays\":"+std::to_string(logged_arrays.load())+",\"operations\":[";
     for(unsigned i=0;i<sites.size();++i) {
