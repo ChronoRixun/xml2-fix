@@ -193,6 +193,13 @@ A requested capacity that failed to install invalidates admission. Stock/absent 
 rule, preserving the released bytes. In particular ResourceNames=450 versus 2048 refuses by name even
 when IGBCache is absent or 200 on both PCs. Rules 31 and 28 retain their existing encodings.
 
+`[Limits] FightMoves` uses rule **54 FightMoves**, revision **1**, `{N,0,0,0}`.
+Absent/332 contributes no rule. Supported raises are 333..2048; failed or invalid
+requests mark the rule unverified. Its pool and per-style exhaustion guards affect
+which moves exist, so differing capacities or an absent rule refuse in both
+directions. MoveTriggers consumes its descriptor but retains rule 37 revision 1
+and its existing values. See [fight moves](fight-moves.md).
+
 Rule 45 (`Xml1GrabCarry`, `[Game] Xml1GrabCarry=xml1`, candidate) is requested-only, revision 2, values
 `{installed ? 1 : 0,7,0,0}`. Feature mask 7 includes ground grab (1), the pickup/recovery lifecycle (2), and
 flying-charge collision (4). Carry/upkeep and flight admission remain deferred. The earlier ground-only

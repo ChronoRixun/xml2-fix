@@ -4,6 +4,7 @@
 #include "limits_rules.hpp"
 #include "move_triggers_rules.hpp"
 #include "move_triggers_runtime.hpp"
+#include "fight_moves.hpp"
 #include "ini.hpp"
 #include "log.hpp"
 #include "patch_transaction.hpp"
@@ -609,7 +610,7 @@ namespace limits
 		{
 			using namespace move_triggers_rules;
 			// The only native constructor caller operates on this pool; checked before patching.
-			const auto index = slot(*reinterpret_cast<const DWORD*>(pool_pointer), address_of(self));
+			const auto index = move_triggers_rules::slot(fight_moves::descriptor(), address_of(self));
 			if (!index)
 			{
 				logger::write("limits: MoveTriggers: unexpected move address 0x%08lX - refusing unsafe storage", address_of(self));
@@ -666,7 +667,7 @@ namespace limits
 			using namespace move_triggers_rules;
 			constexpr const char* stays = "moves stay at 19 triggers";
 			if (!base) return false;
-			const DWORD mismatch = move_triggers_rules::mismatch(bytes_match);
+			const DWORD mismatch = move_triggers_rules::mismatch(bytes_match, fight_moves::installed());
 			if (mismatch)
 			{
 				logger::write("limits: MoveTriggers: unexpected code at 0x%08lX - %s", mismatch, stays);
@@ -678,7 +679,8 @@ namespace limits
 				logger::write("limits: MoveTriggers: move pool already exists - %s", stays);
 				return false;
 			}
-			const std::size_t bytes = record_count * static_cast<std::size_t>(capacity) * sizeof(DWORD);
+			const DWORD slots = fight_moves::descriptor().count;
+			const std::size_t bytes = slots * static_cast<std::size_t>(capacity) * sizeof(DWORD);
 			auto* arrays = static_cast<DWORD*>(VirtualAlloc(nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
 			auto* timers = static_cast<actor_times*>(VirtualAlloc(nullptr, timer_slots * sizeof(actor_times), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
 			auto* code = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
@@ -724,17 +726,18 @@ namespace limits
 			patch_transaction::contribution c;
 			c.owner = "limits.MoveTriggers";
 			for (const auto& a : accesses) c.guards.push_back({a.va, patch_transaction::bytes_of(a.retail), "MoveTriggers handle access"});
-			for (const auto& g : guards) c.guards.push_back({g.va, patch_transaction::bytes_of(g.hex), g.what ? g.what : "MoveTriggers guard"});
+			for (const auto& original : guards) { const auto g = descriptor_guard(original, fight_moves::installed()); c.guards.push_back({g.va, patch_transaction::bytes_of(g.hex), g.what ? g.what : "MoveTriggers guard"}); }
+			c.guards.push_back({pool_pointer, {0, 0, 0, 0}, "MoveTriggers pool must still be null"});
 			for (const auto& w : plan.writes)
 			{
 				patch_transaction::write out{w.va, {}, "MoveTriggers"};
 				for (unsigned i = 0; i < w.size; ++i) out.bytes.push_back(static_cast<std::uint8_t>(w.value >> (8 * i)));
 				c.writes.push_back(std::move(out));
 			}
-			c.publish = [capacity, bytes, teardown_owned_elsewhere]
+			c.publish = [capacity, bytes, slots, teardown_owned_elsewhere]
 			{
 				logger::write("limits: MoveTriggers raised from 19 to %d; %lu native move slots, %zu side-array bytes; all 10 handle accesses redirected; actor timing initialization, pause, dispatch and clear expanded with native arithmetic; native count, tags and event ownership preserved%s",
-				              capacity, record_count, bytes, teardown_owned_elsewhere ? "; timer retirement runs from the entity-capacity arena teardown" : "");
+				              capacity, slots, bytes, teardown_owned_elsewhere ? "; timer retirement runs from the entity-capacity arena teardown" : "");
 			};
 			// Uncertified rollback: the redirected accesses may still point into the side arrays and thunks, so nothing is
 			// released and the published state stays unset (startup is refused by the transaction's owner).
@@ -809,6 +812,8 @@ namespace limits
 
 	bool contribute(patch_transaction::transaction& transaction, const HMODULE game, const bool teardown_owned_elsewhere)
 	{
+		// FightMoves publishes its verified layout before side arrays are sized.
+		fight_moves::install(game);
 		base = reinterpret_cast<std::uintptr_t>(game) == image_base ? reinterpret_cast<std::uint8_t*>(game) : nullptr;
 		const auto move_triggers = ini_value(L"MoveTriggers");
 		const int triggers = move_triggers_rules::capacity(move_triggers);
@@ -853,7 +858,8 @@ namespace limits
 		const auto effect_curves = ini_value(L"EffectCurves");
 		const auto igb_records = ini_value(L"IGBCache");
 		const auto move_triggers = ini_value(L"MoveTriggers"); // contributed to the startup transaction earlier (contribute())
-		if (!actor_slots && !resource_names && !item_enhancements && !fight_styles && !effect_curves && !move_triggers && !igb_records)
+		const auto fight_moves = ini_value(L"FightMoves"); // already installed before MoveTriggers prepared
+		if (!actor_slots && !resource_names && !item_enhancements && !fight_styles && !effect_curves && !move_triggers && !igb_records && !fight_moves)
 		{
 			logger::write("limits: the game's own caps - 40 actor slots, 450 resource names, 375 item enhancements (no [Limits] in xml2-fix.ini)");
 			return;
@@ -981,6 +987,6 @@ namespace limits
 		}
 		return "actors " + counter(read(actor_live_va), actor_cap) + "; names " + counter(names, name_cap) + "; motions " + counter(motions, motion_pool_capacity) + "; igb " +
 		       counter(read(igb_live_va), igb_cap) + "; items " + counter(items, item_cap) + "; styles " + counter(styles, style_cap) + "; curves " +
-		       counter(read(curve_live_va), curve_cap) + "; move_triggers " + std::to_string(move_trigger_cap);
+		       counter(read(curve_live_va), curve_cap) + "; " + fight_moves::status() + "; move_triggers " + std::to_string(move_trigger_cap);
 	}
 }
