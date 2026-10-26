@@ -205,17 +205,40 @@ def guard_scan(observers, external):
             elif token in constants and len(constants[token])==1: va=next(iter(constants[token]))
             else: continue
             spans.append((va, va+n, str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path)))
+        # Ledger rows with fields between the address and its retail bytes ({0x4194e4, 2, "owner_file_live", "81bf.."}).
+        for m in re.finditer(r'\{\s*(0x[\da-fA-F]{6,8})\s*,([^{}\n]{0,160}?)"([\da-fA-F]{2,})"',text):
+            if len(m[3])%2: continue
+            va=int(m[1],16)
+            if not (0x401000<=va<0x700000): continue
+            spans.append((va,va+len(m[3])//2,str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path)))
         for m in re.finditer(r'\b(0x[\da-fA-F]+)[uUlL]*\s*,\s*\{([^{}]+)\}',text):
             parts=[v.strip() for v in m[2].split(',') if v.strip()]
             if parts and all(re.fullmatch(r'(?:0x[\da-fA-F]+|[0-9]+)[uUlL]*',v) and int(v.rstrip('uUlL'),0)<256 for v in parts):
                 va=int(m[1],16)
                 spans.append((va,va+len(parts),str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path)))
-    hits = []
+    hits = []; stand_down = []
     for o in observers:
-        for lo, hi, source in spans:
+        for lo, hi, source in sorted(set(spans)):
             if o['va'] < hi and lo < o['va']+len(bytes.fromhex(o['hex'])):
-                hits.append((o['name'], hex(o['va']), source, hex(lo), hex(hi)))
-    return dict(source_files=len(set(sources)),files_with_spans=len(set(s[2] for s in spans)),guard_spans=len(spans),overlaps=hits)
+                row = (o['name'], hex(o['va']), source, hex(lo), hex(hi))
+                (stand_down if stands_down(o['name'], source) else hits).append(row)
+    return dict(source_files=len(set(sources)),files_with_spans=len(set(s[2] for s in spans)),guard_spans=len(spans),overlaps=hits,stand_down=stand_down)
+
+
+# Limits wave 3 (w3/integrated): these row ledgers raise the pool the observer watches. With the row installed its
+# bytes are no longer retail and pool_counters.cpp's install_observers leaves that observer out (the row counts its
+# own refusals); with the row absent the bytes are retail and the observer hooks them as before. Only these pairs.
+STAND_DOWN = {
+    'script_pool_sites.hpp': ('statements', 'values', 'objects', 'contexts'),
+    'w3_style_manager_sites.hpp': ('events',),
+    'effect_template_sites.hpp': ('fx_files', 'fx_defs', 'prims_per_effect'),
+    'primitives_per_effect_rules.hpp': ('prims_per_effect',),
+    'primitive_def_sites.hpp': ('prim_defs',),
+    'effect_vector_sites.hpp': ('vectors',),
+    'particle_scratch_sites.hpp': ('particle_array_',),
+}
+def stands_down(name, source):
+    return any(name.startswith(n) for n in STAND_DOWN.get(Path(source).name, ()))
 
 
 def main():

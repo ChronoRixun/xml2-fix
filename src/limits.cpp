@@ -996,13 +996,14 @@ namespace limits
 
     pool_diagnostics diagnostic_sources()
     {
-        const auto l=style_layout_for(style_cap);
-        const bool styles=style_count_offset!=0;
+        // The published style manager (W3-1/W3-2): retail when stock, the raised layout after its transaction.
+        const bool styles=published_manager.has_value();
+        const auto l=styles?*published_manager:manager_layout(stock_fight_styles,stock_style_events);
         return {
-            {styles?style_manager_pointer:0,style_count_offset,static_cast<DWORD>(style_cap),0,true,false},
-            {styles?style_manager_pointer:0,l.auxiliary+0x16ee0,1064,0,true,false},
+            {styles?style_manager_pointer:0,l.count,static_cast<DWORD>(l.capacity),0,true,false},
+            {styles?style_manager_pointer:0,l.auxiliary+l.events.live,static_cast<DWORD>(l.events.capacity),0,true,false},
             {curve_live_va,0,static_cast<DWORD>(curve_cap),curve_init_guard,false,false},
-            {styles?style_manager_pointer:0,l.styles,l.bitmap,style_record_size,0xc60,static_cast<DWORD>(style_cap)}
+            {styles?style_manager_pointer:0,l.styles,l.bitmap,style_record_size,0xc60,static_cast<DWORD>(l.capacity)}
         };
     }
 	std::string status()

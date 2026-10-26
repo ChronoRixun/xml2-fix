@@ -52,6 +52,7 @@ void install(HMODULE game){
         logger::write("PrimitivesPerEffect: %s; capacity %u",installed?"installed":"unverified request; stock retained",effective);
     }
 }
+unsigned capacity(){return effective;}
 std::string status(){
     using namespace effect_templates_rules;
     std::uint32_t owner=0;

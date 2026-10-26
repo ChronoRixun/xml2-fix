@@ -78,6 +78,17 @@ void refuse_startup(){unsafe=true;}
 namespace gameplay_agreement {
 bool register_rule(std::uint16_t id,std::uint16_t revision,std::array<u32,4> values,bool verified){return agreement.add(id,revision,values,verified);}
 }
+// Integration (w3/integrated): limits.cpp now also names the 080d rows (ResidentStats, MotionPool) and the W3 rows
+// that limits::install / limits::status call. This host drives only MoveTriggers' contribution, never those two
+// functions, so link-only stand-ins keep it building; calling one aborts.
+namespace motion_pool {const descriptor& layout(){std::abort();} std::string_view counter_guard_hex(){std::abort();}}
+namespace resident_stats {std::string status(){std::abort();}}
+namespace model_pools {void install(HMODULE){std::abort();}}
+namespace particle_scratch {void install(HMODULE){std::abort();}}
+namespace effect_templates {void install(HMODULE){std::abort();} std::string status(){std::abort();}}
+namespace primitives_per_effect {void install(HMODULE){std::abort();} std::string status(){std::abort();}}
+namespace effect_pools {void install(HMODULE){std::abort();} std::string status(){std::abort();}}
+namespace script_pools {std::string status(){std::abort();}}
 
 int main(int argc,char** argv){
     std::setvbuf(stdout,nullptr,_IONBF,0);

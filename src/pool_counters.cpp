@@ -4,6 +4,13 @@
 #include "pool_counters_format.hpp"
 #include "limits.hpp"
 #include "model_pools.hpp"
+#include "effect_pools.hpp"
+#include "effect_templates_rules.hpp"
+#include "fight_moves.hpp"
+#include "fight_moves_layout.hpp"
+#include "primitives_per_effect.hpp"
+#include "script_pools.hpp"
+#include "script_pools_layout.hpp"
 #include "ini.hpp"
 #include "log.hpp"
 #include "game_version.hpp"
@@ -11,6 +18,8 @@
 #include <atomic>
 #include <cstring>
 #include <cstdio>
+#include <string>
+#include <vector>
 
 namespace pool_counters {
 namespace {
@@ -157,14 +166,56 @@ void sample_particle_events(bool entering_zone) {
         }
     }
 }
+// Limits wave 3 (w3/integrated): the raised tables are read through their owners' published layouts, so D0
+// reports the installed capacities (the stock layouts, identical to the generated readers, when a row is absent
+// or refused). Runs after every W3 install (exports.cpp: pool_counters::install is the last one).
+void wave3_sources() {
+    const auto set=[](const char* name,const source& s) {
+        const auto i=find(name);
+        if(i>=counters.state.size)return;
+        sources[i]=s;counters.state.pools[i].cap=s.cap;
+    };
+    const auto& scripts=script_pools::descriptor();
+    constexpr const char* script_names[]{"statements","values","objects","contexts"};
+    for(unsigned k=0;k<4;++k)
+        set(script_names[k],{script_pools::system_pointer,scripts[k].base+scripts[k].live,scripts[k].capacity,0,true,false});
+    const auto moves_n=fight_moves::descriptor().count;
+    const auto m=fight_moves_layout::layout_for(moves_n);
+    set("moves",{fight_moves_layout::pool_pointer,m.live,moves_n,0,true,false});
+    move_free={fight_moves_layout::pool_pointer,m.free,moves_n,0,true,false};
+    const auto& fx=effect_templates::layout();
+    const auto a=effect_templates_rules::layout_for(fx.capacity);
+    set("fx_files",{effect_templates_rules::owner_pointer,12+a.files.live,fx.capacity,0,true,false});
+    set("fx_defs",{effect_templates_rules::owner_pointer,a.base+a.defs.live,fx.capacity,0,true,false});
+    effect_primitives={effect_templates_rules::owner_pointer,fx.definition_base_offset,fx.definition_base_offset+a.defs.bitmap_b,fx.stride,0x30,fx.capacity};
+    using effect_pools_rules::pool;
+    const auto& pd=effect_pools::layout(pool::primitive_defs);
+    set("prim_defs",{effect_pools_rules::owner(pool::primitive_defs),pd.live,pd.capacity,0,true,false});
+    const auto& vd=effect_pools::layout(pool::vectors);
+    set("vectors",{effect_pools::object_address(pool::vectors),vd.live,vd.capacity,effect_pools_rules::init_guard(pool::vectors),false,false});
+}
+// An observer whose bytes are no longer retail stands down: a W3 row that raised that pool owns the site and counts
+// its own refusals (script pools, style events, effect templates, effect pools, particle scratch). Everything else
+// is unchanged: the remaining observers still commit in one transaction or not at all.
+bool observer_bytes_retail(const pool_counter_sites::observer& s) {
+    const auto before=patch_transaction::bytes_of(s.hex);
+    std::vector<unsigned char> now(before.size());
+    return patch_transaction::read_memory(s.va,now.data(),now.size()) && std::memcmp(now.data(),before.data(),now.size())==0;
+}
 void install_observers(const patch_transaction::hooks* hooks=nullptr) {
     if(!ini::flag(L"Test",L"PoolCounters",false))return;
     constexpr auto size=pool_counter_sites::observers.size()*pool_counter_observers::stride;
     auto* block=static_cast<unsigned char*>(VirtualAlloc(nullptr,size,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE));
     if(!block){logger::write("pools: refusal observer allocation failed; sampling continues");return;}
     patch_transaction::contribution c;c.owner="PoolCounters";
+    unsigned standing_down=0;std::string stood_down;
     for(unsigned i=0;i<pool_counter_sites::observers.size();++i) {
         const auto& s=pool_counter_sites::observers[i];const auto before=patch_transaction::bytes_of(s.hex);
+        if(!observer_bytes_retail(s)) {
+            ++standing_down;
+            if(stood_down.find(s.name)==std::string::npos){if(!stood_down.empty())stood_down+=", ";stood_down+=s.name;}
+            continue;
+        }
         const u32 at=address(block+i*pool_counter_observers::stride);
         const auto code=pool_counter_observers::stub(s,at,address(reinterpret_cast<void*>(&refused)),i);
         if(code.size()>pool_counter_observers::stride){VirtualFree(block,0,MEM_RELEASE);return;}
@@ -181,7 +232,8 @@ void install_observers(const patch_transaction::hooks* hooks=nullptr) {
     c.abandon=[block] {VirtualFree(block,0,MEM_RELEASE);};
     c.retain=[] {game_version::refuse_startup();};
     patch_transaction::transaction tx;tx.add(std::move(c));const auto result=tx.commit(hooks);
-    logger::write("pools: refusal observers %s (%zu sites); %s",patch_transaction::name(result),pool_counter_sites::observers.size(),tx.report().c_str());
+    if(standing_down)logger::write("pools: %u refusal observer site(s) stand down - their pool's owner installed a raise and counts its own refusals: %s",standing_down,stood_down.c_str());
+    logger::write("pools: refusal observers %s (%zu sites); %s",patch_transaction::name(result),pool_counter_sites::observers.size()-standing_down,tx.report().c_str());
 }
 }
 
@@ -221,10 +273,11 @@ void install(HMODULE game) {
         const auto i=counters.add(p.first,p.second.cap);sources[i]=p.second;
     }
     style_moves=limits.style_moves;style_max=counters.add("moves_per_style",150);
-    primitive_max=counters.add("prims_per_effect",10);
+    primitive_max=counters.add("prims_per_effect",primitives_per_effect::capacity());
     // Definition pool bitmap B, not its constructed bitmap A (freed slots retain old record contents).
     effect_primitives={0x6f3c3c,0x4874,0x4874+0x3e0c,0x44,0x30,220};
     moves=find("moves");move_free={0x789e1c,0x1aec8,332,0,true,false};
+    wave3_sources();
     style_slots_begin=counters.state.size;
     style_slots_count=(std::min)(static_cast<std::size_t>(style_moves.cap),max_style_slots);
     for(std::size_t i=0;i<style_slots_count;++i) {
