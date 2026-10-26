@@ -1,0 +1,6 @@
+[20:20:51.322] online: shared gameplay agreement sites published (refusal and transport, protocol 4)
+[20:20:51.322] online: FastTransfer installed - campaign image as data/zero-run records, 32 in flight per peer within shared-pool margins, peer budget 400000 bytes/s; every PC must use it
+[20:20:51.755] online: Transport=gns installed - participants' game messages go whole over GameNetworkingSockets on the stock port + 1000 (rule 25); admission and lobby stay stock; every PC must use it
+[20:20:51.999] online: shared gameplay capability record verified (108 bytes, protocol 4, 26 rules); release identity unchanged
+[20:20:51.999] online: rule 24 (FastTransfer) revision 1 {1,32,300,64}
+[20:20:51.999] online: rule 25 (GnsTransport) revision 2 {1,1000,2,0}

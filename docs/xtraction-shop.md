@@ -40,10 +40,23 @@ are rule 10 of the shared gameplay agreement ([gameplay-agreement.md](gameplay-a
 
 ## Revival price
 
-`[Game] RevivalCost=xml1` jumps over 0x4b8830's first instruction to the first game's price, 200 * f * f, f the
-highest level on the registry's roster (0x449960; default.xbe 0xaf6b0 / 0x54cb0). Retail is max(200, 2 * level^2)
-of the revived hero. Guards: the function's 26 bytes, 0x449960's prologue, the registry getter. Both games count the
-whole playable roster (filled at the stats load, joined or not) minus guests; an empty roster is priced as level 1.
+`[Game] RevivalCost=xml1` jumps over 0x4b8830's first instruction to the first game's price, 200 * G * G, where
+G = min(5, L / 10 + 1) is the progression group of L, the highest current level on the registry's roster (0x449960;
+default.xbe 0xaf6b0 reads the group that registry vt+0x58 = 0x54150 makes from vt+0x50 = 0x54c30's highest level).
+So a revival costs, whoever fell:
+
+| Highest roster level | 0-9 | 10-19 | 20-29 | 30-39 | 40-45 |
+|---|---|---|---|---|---|
+| Revival (Tech Bits) | 200 | 800 | 1,800 | 3,200 | 5,000 |
+
+Retail is max(200, 2 * level^2) of the revived hero. XML2 Fix 1.5.0 to 1.8.0-beta.7 charged 200 * L * L (80,000 at
+level 20): its notes took vt+0x54 = 0x54cb0, the highest acknowledged level, for the group slot. 1.8.0 charges the
+group price and registers rule 10 as revision 3 whenever the key is set, so a fixed and an older PC refuse each other
+naming `10 Xtraction services/RevivalCost` instead of debiting different amounts. Guards: the function's 26 bytes,
+0x449960's prologue and its loop (guest skip, running maximum), the registry getter. Both games count the whole
+playable roster (filled at the stats load, joined or not) minus guests; an empty roster is level 0 (200). The first
+game stores G at zone placement, roster acceptance and the shop; the hook works it out at each price, so a level-up
+mid-zone changes the price at once (on every peer alike).
 
 Options are appended in the first game's order (Load, Danger Room, Healer, Forge) after the native Save.
 "In the campaign" is the hero registry's per-save character bit (registry `0x44b8f0`, vt+0x3c name lookup,

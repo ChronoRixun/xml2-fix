@@ -53,6 +53,12 @@ namespace frame_rate
 	// Called on the game's thread, from the panel's Accept.
 	void retarget(const frame_rate_rules::cap& setting, bool window_vsync);
 
+	// [Online] TickWait=timer: online frames (a game is set up, the session's +0x420) are paced here at `tick_fps` (or
+	// FrameRate when lower) instead of the game's busy-spin, which online_tick has switched off. Before the device.
+	// The wait runs above normal priority; `whole_thread` ([Online] TickPriority=thread) keeps the game's thread above
+	// normal for as long as frames are online.
+	void pace_online(unsigned tick_fps, bool whole_thread);
+
 	// Whether frames need pacing, so Present must be hooked: FrameRate paces, or it is above 60 or
 	// unlimited and menus are held at 60.
 	bool paces();

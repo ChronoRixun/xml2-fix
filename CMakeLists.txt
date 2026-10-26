@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(xml2_fix VERSION 1.7.1 LANGUAGES CXX RC)
+project(xml2_fix VERSION 1.8.0 LANGUAGES CXX RC)
 
 if(NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
 	message(FATAL_ERROR "Build with MSVC for Win32 (cmake -A Win32) - X-Men Legends II is a 32-bit game.")
@@ -51,14 +51,23 @@ add_library(xml2_fix SHARED
 	src/harm_loop_startup.cpp
 	src/harm_single_chain.cpp
 	src/double_heal.cpp
+	src/world_backfaces.cpp
+	src/combo_heads.cpp
+	src/model_pools.cpp
+	src/online_tick.cpp
 	src/npc_power.cpp
+	src/npc_semi_auto.cpp
 	src/stun_rule.cpp
 	src/danger_room_party.cpp
 	src/danger_room_healthbars.cpp
 	src/resistance_display.cpp
+	src/classic_hud.cpp
+	src/codex_menu.cpp
+	src/speaker_label.cpp
 	src/pack_amount.cpp
 	src/exports.cpp
 	src/gamepad_fix.cpp
+	src/input_worker.cpp
 	src/pad_profile.cpp
 	src/pad_bindings.cpp
 	src/pad_prompts.cpp
@@ -126,6 +135,11 @@ add_library(xml2_fix SHARED
 	src/discord_ipc.cpp
 	src/discord_presence.cpp
 	src/log.cpp
+	src/gns_transport.cpp
+	src/online_room.cpp
+	src/online_status.cpp
+	src/join_in_progress.cpp
+	src/net_impair.cpp
 	src/dinput.def
 	src/version.rc)
 target_compile_definitions(xml2_fix PRIVATE FIX_LOG_FILE=L"xml2-fix.log"
@@ -133,6 +147,28 @@ target_compile_definitions(xml2_fix PRIVATE FIX_LOG_FILE=L"xml2-fix.log"
 	FIX_VERSION_MAJOR=${PROJECT_VERSION_MAJOR} FIX_VERSION_MINOR=${PROJECT_VERSION_MINOR} FIX_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 	FIX_VERSION_NUMBERS=${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},0)
 target_link_libraries(xml2_fix PRIVATE lcsave dxguid ws2_32 winmm iphlpapi) # winmm: timeBeginPeriod for the frame limiter's fallback timer; iphlpapi: GetBestRoute2 for [Online] LocalIP
+# [Online] Transport=gns (docs/gns-transport.md): GameNetworkingSockets v1.6.1 linked statically (BSD-3-Clause; with
+# protobuf and abseil, /MT, built with this same toolset). XML2_FIX_GNS_ROOT is a folder with include/steam and lib/
+# (GameNetworkingSockets_s.lib, libprotobuf.lib, absl_*.lib, utf8_*.lib). Without it the DLL is built without GNS and
+# Transport=gns logs that the stock transport stays in use.
+set(XML2_FIX_GNS_ROOT "" CACHE PATH "GameNetworkingSockets static build (include/, lib/)")
+if(XML2_FIX_GNS_ROOT)
+	target_sources(xml2_fix PRIVATE src/broker_tls.cpp)
+	file(GLOB XML2_FIX_GNS_ABSL "${XML2_FIX_GNS_ROOT}/lib/absl_*.lib")
+	file(GLOB XML2_FIX_GNS_UTF8 "${XML2_FIX_GNS_ROOT}/lib/utf8_*.lib") # utf8_range (+ utf8_validity in older packages)
+	target_include_directories(xml2_fix PRIVATE "${XML2_FIX_GNS_ROOT}/include")
+	target_compile_definitions(xml2_fix PRIVATE XML2_FIX_GNS=1 STEAMNETWORKINGSOCKETS_OPENSOURCE STEAMNETWORKINGSOCKETS_STATIC_LINK)
+	set(XML2_FIX_GNS_LIBS "${XML2_FIX_GNS_ROOT}/lib/GameNetworkingSockets_s.lib" "${XML2_FIX_GNS_ROOT}/lib/libprotobuf.lib"
+		${XML2_FIX_GNS_ABSL} ${XML2_FIX_GNS_UTF8} bcrypt crypt32 secur32 psapi shell32 ole32)
+	target_link_libraries(xml2_fix PRIVATE ${XML2_FIX_GNS_LIBS})
+	# The project CA pin the GNS build carries (net030-gnslib ca-pin.txt): the broker's auth_ok names its CA, checked against it.
+	if(EXISTS "${XML2_FIX_GNS_ROOT}/ca-pin.txt")
+		file(STRINGS "${XML2_FIX_GNS_ROOT}/ca-pin.txt" XML2_FIX_GNS_CA_PIN LIMIT_COUNT 1)
+		target_compile_definitions(xml2_fix PRIVATE "XML2_FIX_GNS_CA_PIN=\"${XML2_FIX_GNS_CA_PIN}\"")
+	endif()
+else()
+	target_compile_definitions(xml2_fix PRIVATE XML2_FIX_GNS=0)
+endif()
 # Output is dinput.dll; its import library gets a different name so it can't shadow the Windows SDK's.
 set_target_properties(xml2_fix PROPERTIES OUTPUT_NAME dinput ARCHIVE_OUTPUT_NAME xml2_fix)
 
@@ -230,6 +266,10 @@ if(XML2_SAVE_STARTUP_FAULT_TEST)
  target_compile_definitions(xml2_save_startup_faults PRIVATE ${fault_definitions} XML2_SAVE_STARTUP_FAULT_TEST)
  target_link_libraries(xml2_save_startup_faults PRIVATE lcsave dxguid ws2_32 winmm iphlpapi)
  set_target_properties(xml2_save_startup_faults PROPERTIES OUTPUT_NAME save-startup-faults)
+ if(XML2_FIX_GNS_ROOT) # the same GameNetworkingSockets build as dinput.dll (its sources and definitions are xml2_fix's)
+  target_include_directories(xml2_save_startup_faults PRIVATE "${XML2_FIX_GNS_ROOT}/include")
+  target_link_libraries(xml2_save_startup_faults PRIVATE ${XML2_FIX_GNS_LIBS})
+ endif()
 endif()
 
 # Conversation identity caching and invalidation, using only invented filesystem fixtures.
@@ -263,6 +303,12 @@ target_link_options(xml2_death_switch_test PRIVATE /BASE:0x300000 /DYNAMICBASE:N
 add_executable(xml2_gameplay_agreement_test test/gameplay_agreement_test.cpp src/gameplay_agreement.cpp src/patch_transaction.cpp src/explosive_first_hit.cpp src/world_impact.cpp src/game_version.cpp)
 add_executable(xml2_npc_combo_timing_test test/npc_combo_timing_test.cpp)
 target_include_directories(xml2_npc_combo_timing_test PRIVATE src)
+add_executable(xml2_npc_semi_auto_test test/npc_semi_auto_test.cpp)
+target_include_directories(xml2_npc_semi_auto_test PRIVATE src)
+# The shared AI query scheduler of both games executed side by side (XML1 0xfc990 from the owner's default.xbe,
+# XMen2.exe 0x502730 retail and with rule 16): budget, reservation, the stale-reservation throttle, random schedules.
+add_executable(xml2_npc_query_scheduler_test test/npc_query_scheduler_test.cpp)
+target_include_directories(xml2_npc_query_scheduler_test PRIVATE src)
 target_include_directories(xml2_gameplay_agreement_test PRIVATE src)
 target_link_libraries(xml2_gameplay_agreement_test PRIVATE ws2_32)
 
@@ -387,9 +433,63 @@ add_executable(xml2_harm_loop_startup_test test/harm_loop_startup_test.cpp "${CM
 target_include_directories(xml2_harm_loop_startup_test PRIVATE src)
 target_link_options(xml2_harm_loop_startup_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
+# The worker bridges read and write the retail globals at 0xa6a7e1/0xa6a7e4, so the fixture image spans them: the loader maps the
+# whole image at its fixed base before any other allocation, instead of the test reserving 0xa60000 itself (which fails whenever
+# Windows has already placed something there). Same 7 MB zero block as the reliable-receive test.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/input_worker_fixture.asm"
+".386
+.MODEL FLAT
+fixture_seg SEGMENT PARA PUBLIC 'CODE' ALIAS('.text$a')
+PUBLIC _fixture_space
+_fixture_space DB 700000h DUP(0)
+fixture_seg ENDS
+END
+")
+add_executable(xml2_input_worker_test test/input_worker_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/input_worker_fixture.asm" src/input_worker.cpp)
+target_include_directories(xml2_input_worker_test PRIVATE src)
+target_link_options(xml2_input_worker_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# The GNS adapter's buffers and framing (src/gns_transport_core.hpp): ordering, coalesce, deferral, backlog, teardown.
+add_executable(xml2_gns_transport_test test/gns_transport_test.cpp)
+target_include_directories(xml2_gns_transport_test PRIVATE src)
+# Rooms (src/online_room_core.hpp): broker lines, identities, join codes, virtual addresses, certificate blob, tunnel
+# framing; with GNS, the library's Ed25519 against RFC 8032.
+# [Online] JoinInProgress (src/join_in_progress_core.hpp): the host's bring-in state machine, rule 26, retail guards.
+add_executable(xml2_join_in_progress_test test/join_in_progress_test.cpp)
+target_include_directories(xml2_join_in_progress_test PRIVATE src)
+add_executable(xml2_online_room_test test/online_room_test.cpp)
+target_include_directories(xml2_online_room_test PRIVATE src)
+target_compile_options(xml2_online_room_test PRIVATE /utf-8)
+# The public game browser (contract v1.3/v1.4): room name, metadata from the game's state, presence and its pacing.
+add_executable(xml2_online_browser_test test/online_browser_test.cpp)
+target_include_directories(xml2_online_browser_test PRIVATE src)
+target_compile_options(xml2_online_browser_test PRIVATE /utf-8)
+# online-status.json (the launcher contract): JSON text, every state and error id, the atomic writer.
+add_executable(xml2_online_status_test test/online_status_test.cpp src/online_status.cpp src/log.cpp)
+target_include_directories(xml2_online_status_test PRIVATE src)
+target_compile_definitions(xml2_online_status_test PRIVATE FIX_LOG_FILE=L"online-status-test.log")
+target_compile_options(xml2_online_status_test PRIVATE /utf-8)
+add_executable(xml2_online_security_test test/online_security_test.cpp)
+target_include_directories(xml2_online_security_test PRIVATE src)
+add_executable(xml2_log_test test/log_test.cpp src/log.cpp)
+target_include_directories(xml2_log_test PRIVATE src)
+target_compile_definitions(xml2_log_test PRIVATE FIX_LOG_FILE=L"log-test.log")
+if(XML2_FIX_GNS_ROOT)
+	target_compile_definitions(xml2_online_room_test PRIVATE XML2_FIX_GNS=1)
+	target_link_libraries(xml2_online_room_test PRIVATE ${XML2_FIX_GNS_LIBS})
+endif()
+add_executable(xml2_broker_tls_test test/broker_tls_test.cpp src/broker_tls.cpp)
+target_include_directories(xml2_broker_tls_test PRIVATE src)
+target_compile_definitions(xml2_broker_tls_test PRIVATE BROKER_TLS_TEST_READ_GRAIN=1)
+target_link_libraries(xml2_broker_tls_test PRIVATE secur32 crypt32 bcrypt ws2_32)
 add_executable(xml2_harm_single_chain_test test/harm_single_chain_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/harm_single_chain.cpp)
 target_include_directories(xml2_harm_single_chain_test PRIVATE src)
 target_link_options(xml2_harm_single_chain_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# [Game] WorldBackfaces=xml1 (rule 30): the installer against guards seeded from the retail executable given on the
+# command line, the retail trace helper 0x4a9650 run before and after the patch, the face filter and the agreement entry.
+add_executable(xml2_world_backfaces_test test/world_backfaces_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/world_backfaces.cpp)
+target_include_directories(xml2_world_backfaces_test PRIVATE src)
+target_link_options(xml2_world_backfaces_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 # multipart::install against the retail image (review cases: invalid table operand, foreign setSegmentVisible handler,
 # relocated table, changed guard) and the loop length's generator draw. SKIPPED without XML2_FIX_TEST_EXE.
 add_executable(xml2_multipart_install_test test/multipart_install_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
@@ -435,6 +535,18 @@ target_include_directories(xml2_lockon_effects_install_test PRIVATE src)
 target_compile_options(xml2_lockon_effects_install_test PRIVATE /UNDEBUG)
 target_link_options(xml2_lockon_effects_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
+add_executable(xml2_model_pools_test test/model_pools_test.cpp)
+target_include_directories(xml2_model_pools_test PRIVATE src)
+target_compile_options(xml2_model_pools_test PRIVATE /UNDEBUG)
+# The pools' lifecycle executed: the retail code at its own addresses with the x2/x4 plans applied, on fake items.
+add_executable(xml2_model_pools_lifecycle_test test/model_pools_lifecycle_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_model_pools_lifecycle_test PRIVATE src)
+target_compile_options(xml2_model_pools_lifecycle_test PRIVATE /UNDEBUG /EHa)
+target_link_options(xml2_model_pools_lifecycle_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_combo_heads_test test/combo_heads_test.cpp src/combo_heads.cpp)
+target_include_directories(xml2_combo_heads_test PRIVATE src)
+target_compile_options(xml2_combo_heads_test PRIVATE /UNDEBUG)
 add_executable(xml2_resistance_display_test test/resistance_display_test.cpp)
 target_include_directories(xml2_resistance_display_test PRIVATE src)
 target_compile_options(xml2_resistance_display_test PRIVATE /UNDEBUG)
@@ -443,3 +555,27 @@ add_executable(xml2_resistance_display_install_test test/resistance_display_inst
 target_include_directories(xml2_resistance_display_install_test PRIVATE src)
 target_compile_options(xml2_resistance_display_install_test PRIVATE /UNDEBUG)
 target_link_options(xml2_resistance_display_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_classic_hud_install_test test/classic_hud_install_test.cpp
+    src/classic_hud.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_classic_hud_install_test PRIVATE src)
+target_compile_options(xml2_classic_hud_install_test PRIVATE /UNDEBUG)
+target_link_options(xml2_classic_hud_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_codex_back_install_test test/codex_back_install_test.cpp
+    src/codex_menu.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_codex_back_install_test PRIVATE src)
+target_compile_options(xml2_codex_back_install_test PRIVATE /UNDEBUG)
+target_link_options(xml2_codex_back_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_speaker_label_install_test test/speaker_label_install_test.cpp
+    src/speaker_label.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_speaker_label_install_test PRIVATE src)
+target_compile_options(xml2_speaker_label_install_test PRIVATE /UNDEBUG)
+target_link_options(xml2_speaker_label_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# Release-gate tool (scripts/prove_off_wire.py, prove_combined_install.py): the retail image laid out at its own
+# addresses inside this executable, the production DLL's whole DllMain run against it (tools/union_host).
+add_executable(xml2_union_host tools/union_host/union_host.cpp tools/union_host/union_space.asm)
+# Its own folder: no dinput.dll may sit next to it, or the engine DLLs' dinput import would load that one first.
+set_target_properties(xml2_union_host PROPERTIES OUTPUT_NAME union_host RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/union")
+target_link_options(xml2_union_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)

@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include "entity_query.hpp"
+#include "world_backfaces_state.hpp"
 #include <array>
 #include <cfloat>
 #include <cmath>
@@ -1112,10 +1113,20 @@ extern "C" __declspec(dllexport) int __cdecl run_entity_query_test()
 	{
 		// Twice: at the process default x87 precision (53-bit) and at the 24-bit precision a Direct3D 8 device sets
 		// unless FPU_PRESERVE is requested. The port's x87 sequences are the native ones, so both must agree.
+		// And with both [Game] WorldBackfaces values (beta 7 review finding 3): the native run with rule 30's one byte
+		// (0x4a96c1 01 -> 00, the movement trace helper's `push 1` to collider vt+0x88) against the port run with
+		// world_backfaces_state::trace_back_faces 0 (what an installed rule 30 sets for this owner), so the
+		// replacement 0x4a9650 is executed with each value; the native runs of the two values must differ.
+		std::vector<snapshot> native_trace_steps[2];
+		for (const std::uint8_t backfaces : {std::uint8_t(1), std::uint8_t(0)})
 		for (const auto precision : {_PC_53, _PC_24})
 		{
 			_controlfp_s(nullptr, precision, _MCW_PC);
-			const char* tag = precision == _PC_53 ? "53-bit" : "24-bit";
+			const char* tag = precision == _PC_53 ? (backfaces ? "53-bit" : "53-bit, WorldBackfaces=xml1") : (backfaces ? "24-bit" : "24-bit, WorldBackfaces=xml1");
+			writable(0x4a96c0, 2);
+			check(*at(0x4a96c0) == 0x6a && (*at(0x4a96c1) == 0x01 || *at(0x4a96c1) == 0x00), "movement trace helper's push imm8 at 0x4a96c0");
+			*at(0x4a96c1) = backfaces;
+			world_backfaces_state::trace_back_faces = backfaces;
 			std::printf("native image installed; constructing the retail manager (x87 precision %s)\n", tag);
 			native_bytes(0x4a9a80, 0x10); // the retail trace-score callback for the native run
 			fx::populate(stock_descriptor);
@@ -1127,6 +1138,9 @@ extern "C" __declspec(dllexport) int __cdecl run_entity_query_test()
 			std::puts("retail manager constructed; running the native script");
 			run_script(native_run);
 			expect_script(native_run, "native");
+			if (precision == _PC_53)
+				for (const auto& st : native_run.steps)
+					if (st.label.rfind("movement trace helper 0x4a9650", 0) == 0 || st.label.rfind("0x4ab7f0", 0) == 0) native_trace_steps[backfaces].push_back(st);
 			jump(0x4a9a80, reinterpret_cast<const void*>(&eq::QueryApi_004a9a80)); // the integrator's entry jump, after the native run
 			fx::populate(stock_descriptor);
 			reset_trace_pool();
@@ -1140,6 +1154,13 @@ extern "C" __declspec(dllexport) int __cdecl run_entity_query_test()
 			check(compare_runs(native_run, port_run), message);
 			std::printf("differential steps compared: %zu\n", native_run.steps.size());
 			eq::destroy_manager(port_run.manager);
+		}
+		*at(0x4a96c1) = 1;
+		world_backfaces_state::trace_back_faces = 1;
+		{
+			bool differs = native_trace_steps[0].size() == 2 && native_trace_steps[1].size() == 2;
+			for (std::size_t i = 0; differs && i < 2; ++i) differs = native_trace_steps[0][i].manager != native_trace_steps[1][i].manager;
+			check(differs, "the back-face flag reaches the query state: the native movement traces with 0x4a96c1 = 1 and = 0 differ (so a port that ignored WorldBackfaces would fail the differential)");
 		}
 		_controlfp_s(nullptr, _PC_53, _MCW_PC);
 		// the stock-layout fallback of 0x4a9a80 for a query that is not the DLL's: the retail static at 0x756b10

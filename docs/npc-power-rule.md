@@ -88,7 +88,11 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    decision's tail at 0x519840: the next attack time and crowd delay are set as in XML1.
 7. **0x5027bd (18 bytes) and 0x5027e0 (3 bytes).** Restore the original priority-reservation predicate and
    one-query budget in the shared AI query scheduler. The existing queued ages, timestamp, cache and collision
-   implementation are retained. These queries are shared with other AI decisions.
+   implementation are retained. These queries are shared with other AI decisions. They also gate the melee
+   brain itself: the fight state calls the brain only after a served visibility query, unless the attack time is
+   due (XML1 `0x10b298`, XMen2.exe `0x513584`). With this item the admission code matches XML1's instruction for
+   instruction, including a stale reservation that throttles everyone else until its owner asks again
+   (`xml2_npc_query_scheduler_test`; [npc-attack-cadence-investigation.md](npc-attack-cadence-investigation.md)).
 8. **0x505250 (6 bytes, jmp).** The visibility adapter resolves the same physical target and calls the existing
    query with XML1's endpoints and extents, including its original cutoff and deferred/hit decisions. It reads the
    hit's packed token directly from the stable trace record, so it composes with the entity-capacity query owner.
@@ -102,9 +106,139 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    zero deadline advances once the clock is positive. Unordered clocks retain the previous wait behavior.
 10. **0x5192cb (6 bytes).** Completion adds the final button delay to the existing time/offset/random accumulator.
    PC adds a fixed 0.2 seconds. The original single-hit combo adds zero; its longest combo adds 0.6 seconds.
+11. **0x435b6e (7 bytes, revision 10).** A hit's reaction no longer lets the combo resume. XML1's brain 0xeea60 runs
+   every frame whatever the body does and presses each step on its clock (0xeebec..0xeecb7), so the steps that come
+   due while the NPC is in `pain` or `block` (shared_nodes: only `idle` chains out of them) are spent, and a hit
+   usually ends the combo. XMen2.exe does not call the melee brain while the body is busy (measured: about 3 calls/s
+   in `pain` against 29-54/s in idle/strafe), so the first call after the reaction finds the step overdue and
+   presses it at once - from idle, which chains `attack`, `smash` and `powers` - and the combo resumes. At the end
+   of the pain decision 0x435850, where bit 0x08 of the hit's reaction byte (+0xac) still set means the victim
+   reacts (pain or block, chosen after it), the bridge marks the AI slots whose actor (AI+0x10) is the victim
+   (a word per slot after the 32 press times). The continue step's front (the 0x51920b jump now enters it first)
+   clears a mark and spends every step whose press time has passed: index + 1, press time + that step's delay, and
+   the native completion when none is left; then the continue step as before waits for the first step still to
+   come. A combo start clears its slot's mark (the exits' jump enters a front that unmarks, then the start
+   bridge). The completion pause of a combo spent this way counts from the brain's first call after the
+   reaction, not from the spent step's time (XML1's), so it can start up to one reaction later.
+12. **0x518770 (5 bytes, revision 10).** The melee-range power decision has the same gap: XML1's 0xee260 also runs
+   while the body reacts (1187 of its calls with the BrotherhoodEnergy in `pain` in one matched session), so a
+   re-check that falls due then is spent - the power press finds no `powers` chain in pain or block - and re-armed;
+   XMen2.exe's first call after the reaction found the re-check overdue and the power went off from idle (enemy
+   `pain` -> `idle` -> `power_smash` with no decision between). The mark bridge also marks a second word per slot;
+   the decision's entry front clears it and re-arms AI+0x1cc by the rule's re-check (2.0 s, or 0.5 s with a
+   controller) once for each re-check that fell due before now (the clock 0x518849 reads: 0x46dce0 vt+0x160), at
+   most eight, then runs the decision, which finds the timer in the future. The visibility/energy conditions XML1
+   checks before re-arming are not replayed for the spent re-checks.
+13. **0x518fd0 (5 bytes, revision 10).** The attack decision itself: with no combo running, XML1's deadline
+   (AI+0x1c) can fall due while the body reacts; the decision is then made and spent (no chain out of pain/block)
+   and its tail re-arms the next attack time (now + meleetimeroffset + random x meleetimerrandomadd). XMen2.exe made
+   the overdue decision on the first idle frame after the reaction (a fresh attack within 0.3 s of 12-14 pains per
+   four matched windows, 1 on the Xbox). A third mark word per slot; the melee decision's entry front, when no
+   combo is running (a running combo keeps the mark for after its end), clears it and re-arms AI+0x1c from the due
+   time by AI+0x288 + random x AI+0x28c (the draw 0x560190(1) the completion code uses) for every decision that fell
+   due before now, at most four, then the decision as before. The crowd delay of the tail is not added for these.
+   Items 11-13 date from before items 16-18: with the brain now running through reactions they rarely find anything
+   overdue (the decision is made in the frame it comes due), and are kept as they are. The call-gap rules once added
+   to the fronts of items 12-13 (spend a re-check or decision that fell due while the brain was skipped for more than
+   0.15 s) are withdrawn: the busy-body gaps they stood in for are gone, and the gaps that remain are ones XML1 has
+   too - a combo running (both brains return at the continue step before the power decision), a declined
+   attack-state visibility query, another AI state - where XML1 keeps the due timer for its next call instead of
+   spending it.
+14. **0x44f58e (6 bytes, revision 11).** A block is a melee to-hit miss in both games: the melee contact (XML1
+   0x5c590, XMen2.exe 0x453160) rolls (0x5c240 / 0x44f450); on a miss (2) the roll zeroes the hit's damage (XML1
+   0x5c48b, XMen2.exe 0x44f725) and the contact flags the hit blocked before the victim's hit entry (XML1 0x5c965:
+   damage info +0x60 bit 1, the hit record's +0x6c, the bit the Xbox measurement saw on all 102 blocks; XMen2.exe
+   0x45355c: +0x68 bit 0, the record's +0x74); the victim's gate zeroes the rest (0x44448 / 0x435850) and the popup
+   takes the block branch (0x44696 / 0x435c30). The always-hit cases (attack types 0 and 4-8, damage info bit 27,
+   defender +0x54c / +0x764 bit 6, a defender with no valid current target), result 3 and the zeroing are the same;
+   `[Balance] HitChance=xml1` gives XML1's chance. The one difference in which hits are rolled: XML1 never rolls an
+   attack flagged `PowerAttack` (0x5c3c0, result 1 without a draw), while XMen2.exe, whose name for that flag is
+   damagescale (`PowerAttacks=xml1` reads the builder's `x1power` as `none`; its contact counts a miss only for
+   `normal`, 0x45333f), only exempts a move with combo text (+0x35 bit 2, set at 0x4dc302 from the move's
+   ComboTextStarter / ComboTextFinisher) - so a power attack was rolled, and a miss lost its damage and was blocked.
+   The bridge keeps the combo-text test and sends an attack whose damagescale isn't `normal` to the roll's own
+   always-hit return (`mov edi,1; jmp 0x44f6bd`, as 0x44f5aa), with no draw, as XML1 returns before its draw.
+15. **0x437b08 (6 bytes, revision 11).** XMen2.exe's damage receive 0x437490 has a second, receive-side block roll
+   XML1's 0x45260 lacks: effect 0x37 (`block_chance`, not a default.xbe string) mode 0 x mode 1, a draw (0x437ae0),
+   and when the draw is at most that the damage is zeroed and text 0xa9 shown (0x437b0e); it sets no flag, so such a
+   hit neither blocks nor pains. With no effect-0x37 affecter (none in the port's data) the chance is 0 (0x550410
+   starts mode 0 at 0.0), so it fired only on a draw of exactly 0.0. The chance test's `jp 0x437b94` becomes a `jmp`
+   there; the draw stays, so the random sequence is the game's.
+
+16. **0x512f0b (2 bytes, revision 11).** XMen2.exe's attack-state update 0x512ed0 starts with an exit XML1's
+   0x10ad70 does not have: `mov eax,[esi+0x10]; test byte [eax+0x764],1; jz 0x512f1a; test byte [eax+0x3d9],0x10;
+   jnz 0x51304a` (0x512f01..0x512f14), a return before the visibility query, the brain 0x518fd0 and with it the power
+   decision 0x518770. actor+0x764 bit 0 is the move's input lock (cleared and set again at every move entry,
+   0x431257..0x431273, when the move locks input, and by its lock timers 0x430bd0 / 0x430bfc; XML1 keeps the same
+   bit at +0x54c, 0x407d8..0x407f4 / 0x40257 / 0x40283, and its only bit-0 test is 0x42fb7, outside the AI code).
+   actor+0x3d9 bit 0x10 is set by the power-aim helper 0x50a6c0 (0x50aa28; called from the power decision at
+   0x5189b3 / 0x518a4d) with the aim it caches (position, velocity, time); it is a cached aim pending consumption,
+   not a permanent "has used a power" mark: 0x423b20 tests it, clears it (0x423b39..0x423b3b) and consumes the cache
+   (its caller 0x45211b), and 0x41ef61, 0x42fe56 and the reset 0x41fd1a..0x41fd1d clear it too (GPT Astra review,
+   2026-10-25; an earlier version of this item said it stays set). In the quiet-measure PC sessions it was set in
+   all 542 hits logged on a BrotherHoodEnergy, in `idle` too (an aim no launch consumed), and +0x764 bit 0 is set in
+   277 of the 279 taken in `attack*`, `pain` or `power_smash` and in none of the 263 taken in `idle` or movement. So
+   the retail exit is "input-locked while a power aim is pending", which in those sessions was almost every locked
+   frame of an enemy that had used a power: it skipped its whole attack-state update for those frames: per enemy-second on a-pc-still-02 (60 fps),
+   visibility requests / brain calls / power-decision calls were 3.6 / 4.6 / 2.6 in attack moves and 0 / 0 / 0 in
+   power and reaction moves, against 57.8 / 56.2 / 57.3 in movement (a-pc-moving-02: 0.2 / 0.2 / 0.1 in attacks).
+   XML1's 0x10ad70 goes from the +0x408 store (0x10ad9b) straight to the +0x278 test (0x10ada1, XMen2.exe's
+   0x512f1a), so its brain and power decision run every frame whatever the body does (25-46 calls/s in attacks and
+   powers). A re-check that comes due in a locked move is made there, finds no `powers` chain and is re-armed; on the
+   PC it waited for the first unlocked frame, which is the 2.5 s median power lateness of the still bench. The jz
+   becomes `jmp 0x512f1a`: the exit is never taken. The change does not rest on the bit's meaning: XML1 has no such
+   exit whatever the body or the aim cache holds, so removing it matches XML1 in every state. What the bit's meaning
+   adds is the regression risk: with the exit gone, a power decision can run while an aim waits for its consumer
+   (the power move's launch), so a second decision in the same locked move may re-aim (0x50a6c0 rewrites the cache)
+   or press another action; XML1's counterpart of that cache was not identified, so parity of this interaction is a
+   live check (see "Live checks"). The guard covers 0x512f01..0x512f19. NpcSemiAuto's own bridge
+   at 0x512f0d (the same exit, for listed weapon NPCs only) is withdrawn: it requires this rule, which now covers
+   every actor.
+17. **0x5187c4 (6 bytes, revision 11).** The melee-range power decision has a lock test of its own before it reads
+   its timer: `mov ebp,[esp+0x14]; test byte [ebp+0x764],1; jne 0x518ac9` (return 0). XML1's 0xee260 has none
+   (0xee289 the target, 0xee296 / 0xee2a2 the 0xbf730 / +0x3e4 tests, the timer at 0xee2c2). With item 16 alone the
+   decision would still refuse every locked frame and the re-check would still wait. The jne becomes a jump to a
+   22-byte bridge: unlocked goes on at 0x5187ca as before; locked goes on for the melee brain's call (return address
+   0x5193e7 at [esp+0x24]) and takes the native exit for every other caller - the officer weapon brain (0x519fe4)
+   keeps the path measured with the six officer cells. The decision then runs XML1's way in a locked move: due
+   timer, its visibility query (a deferral leaves it due, as 0xee30e does), the re-arm (+2.0 s / +0.5 s, item 2), the
+   energy gate (item 3) and the picker.
+18. **The gate of item 3 (revision 11).** The picker 0x50fe50 also refuses a locked body at its entry
+   (`test byte [eax+0x764],1; jne 0x50ffeb` = return 0, 0x50fe5c). XML1's picker 0x1081f0 has no such test: a locked
+   move refuses only through the per-slot chain test (move vt+0x3c, 0x1083a8..0x1083f4; XMen2.exe's vt+0x44 at the
+   same place, 0x50ff2c..), so a power whose action the current move chains (an attack's chain window) can be picked.
+   The gate now enters the picker with its first 12 bytes (`sub esp,0xac; push esi; mov esi,ecx; mov eax,[esi+0x10]`,
+   guarded) and jumps to 0x50fe69, after the test; the picker's seven other callers keep it.
+
+Measured shape this restores (beta6-ai-rest REPORT 2a, quiet-measure gate table): XML1's power-decision calls per
+second in attack / power moves 23-29 / 35-39, XMen2.exe's 0.3-2.8; port power lateness on the still bench 2.5 s
+median against 0.02-0.19 s. Items 16-18 change only simulation inside the opted-in configuration, but revision 10
+was released in 1.8.0-beta.6, so they ship as **revision 11** (1.8.0-beta.7, with the block rule and the schema 3
+weapon brain): a beta 6 peer advertises revision 10 and is refused by revision, never admitted to desync. OFF
+(`NpcPowerRule` absent / `xml2`) patches nothing, as before.
 
 XML1's second combo table (brain mode 1) has no XMen2.exe brain. The earlier target-loss cancellation branch and
 the PC's press notification remain unchanged. No claim of complete AI equivalence is made.
+
+`npc_power::withdraw` (NpcSemiAuto requested but not installable: all or nothing) reverts every site in one verified
+transaction; if that fails in any way (a page that cannot be made writable, a write, a readback, a rollback) the
+rule's sites may still be in the game without the requested weapon brain, so startup is refused with one log line
+(`npc power rule: withdrawing the sites failed ... process startup refused`), offline as well as online.
+
+## Live checks (items 16-18)
+
+For the game agent (no native test executes a power move's launch with the cache pending):
+
+1. Aim overwrite: an energy-projectile enemy (BrotherHoodEnergy, HAARP officers' grenades) attacking one of two heroes
+   standing apart; the projectile must leave toward the hero it was aimed at when the power started, not swing to the
+   other hero or to a later position mid wind-up. Compare with the original on xemu (same setup).
+2. Double actions: per enemy, power starts per 30 s and any second power or attack started inside one power move
+   (the move must play out; XML1 counts on the still bench: 23-29 / 35-39 decision calls/s in attack / power moves, but
+   one action per move).
+3. Unintended chaining: melee enemies' attack -> power transitions only inside an attack's chain window (the per-slot
+   chain test), no power cutting an attack before it; compare the counts with xemu on the same bench.
+4. Lateness: power lateness on the still-hero bench (median 2.5 s before; XML1 0.02-0.19 s).
+5. Blocks: power attacks never blocked; melee blocks only on counted misses.
 
 All guards are checked before anything is written: the retail bytes of every site, the controller read at 0x5188c3,
 the energy getter's read, the combo exits' tail, the five table runs, the visibility/query entry helpers, and the
@@ -119,12 +253,21 @@ its AI time is set.
 ## Gameplay agreement
 
 Online play is lockstep and the rule changes AI decisions and energy, so it is shared gameplay rule **16**
-(`gameplay_capabilities::npc_power_rule_id`, [gameplay-agreement.md](gameplay-agreement.md)): revision 4,
-`{installed ? 1 : 0, installed ? 1 : 0, 0, 0}`. The added word advertises XML1 visibility geometry and query scheduling;
-revision 2 had only the power/combo word, and revision 3 lacked the press/completion timers. Registered in an LC
-installation or when requested; absent or `xml2` retains **revision 3** with verified `{0,0,0,0}`, matching the
-released OFF record. Only requested configurations use revision 4. Requested but not installed (a guard mismatch,
-protection, readback, an unknown value) is unverified and closes host/join. Enabled revision 3 and 4 peers refuse.
+(`gameplay_capabilities::npc_power_rule_id`, [gameplay-agreement.md](gameplay-agreement.md)): revision 11,
+`{installed ? 1 : 0, installed ? 1 : 0, weapon brain installed ? 1 : 0, its source fingerprint}`. Word 1
+advertises XML1 visibility geometry and query scheduling; words 2 and 3 are zero unless the separate opt-in
+`[Game] NpcSemiAuto=xml1` with its `[NpcSemiAuto]` rows is present ([npc-semi-auto.md](npc-semi-auto.md)).
+Revision 2 had only the power/combo word, revision 3 lacked the press/completion timers, revision 4 lacked the
+reaction-spent combo steps, power re-checks and attack decisions (items 11-13), revision 10 (released in
+1.8.0-beta.6) lacked the brain running through locked moves (items 16-18), the block rule (items 14-15) and the
+schema 3 weapon brain (every gun family, [npc-semi-auto.md](npc-semi-auto.md)). Revisions 5-9 were unreleased
+candidates and are not reused: 5 a withdrawn role experiment and the first reaction-spent test build, 6-9 the officer
+weapon candidates (9 = the held-fire brain, words 2-3 of revisions 10 and 11). Registered in an LC installation or when
+requested; absent or `xml2` retains **revision 3** with verified `{0,0,0,0}`, matching the released OFF record. Only
+requested configurations use revision 11; every other enabled revision (3, 4, 5-9, 10) is refused both ways, and a
+revision 11 PC with the weapon brain and one without refuse each other by value, all naming rule 16 (NpcPowerRule).
+Requested but not installed (a guard mismatch, protection, readback, an unknown value, `NpcSemiAuto=xml1` without
+`NpcPowerRule=xml1` or without valid rows) is unverified and closes host/join.
 
 ### Bridge register contracts
 
@@ -186,17 +329,32 @@ HAARP ice tunnel (`haarp/int/icetunnel1`), per enemy per minute:
 | Marauder chained / heavy hits | 3.3-6.9 | (not engaged) | 0 | 0 | 2.4-5.2 |
 | Hero free | 51-53 % | 6.5 % | 0-1.5 % | 18-20 % | 22-38 % |
 
-HAARP interior (`haarp/int/haarp2_1`), GRSO soldiers (the first game's guns are melee-style attacks; the port's are
-powers made by the builder, aitype beamanyrange):
+HAARP interior (`haarp/int/haarp2_1`), GRSO soldiers (the port's guns are powers made by the builder, aitype
+beamanyrange; see the correction below the table):
 
 | | Original | 0.2.2 (1 run) | Power + combo rules |
 |---|---|---|---|
 | HAARP Soldier shots + punches / min | 35.5-35.8 (all attacks) | 45.7 (34.8 powers + 10.9 melee) | 31.5-37.5 (20-24.5 powers + 11.5-13 melee) |
 | HAARP Leader attacks / min | 44-46 (incl. 3.9-5.1 smash) | 39.5 (31.5 powers) | 31-35 (11-15 powers) |
 
+*Correction, 2026-10-23: the pooled "shots + punches" total hid a difference, and the first game's guns are not
+melee-style attacks. In matched 45 s windows (attack-101b round 5; officer on the same spot, initial energy 0) the
+first game's HAARP officer fired 49 shots with 0 melee entries (median gap 0.91 s, the freeze gun's 0.9 s recoil),
+while the released port fired 0 shots and made 24 melee entries, because the converted gun has the generic melee
+brain and range 90 where the first game's weapon brain uses range 550. So these totals match while the behaviour
+does not. A restoration exists as the opt-in `NpcSemiAuto=xml1` part of gameplay rule 16 (revision 10 in 1.8.0-beta.6 for that one
+officer; revision 11 in 1.8.0-beta.7 for all 20 gun families, [npc-semi-auto.md](npc-semi-auto.md); candidate revision 9 introduced it, revision 8 used a burst/pause branch the original officer never runs). Online play, party AI and other encounter types were not
+live-tested.*
+
 The first game's AI decisions were also counted directly in xemu (breakpoints at default.xbe 0xee2f4 / 0xee3f1, 30
 game seconds): the melee-range decision passed its timer 9-23 times per AI and picked a power 3-6 times, against 10-11
 and 4-5 per Revolutionary with the rule (Frida on 0x518770 / 0x5188e7 / 0x518925).
+
+*Note on the attack-rate figures for #101 (2026-10-23): two measurement protocols exist and are not pooled. With a
+moving, pursued hero (block-025; 17 original and 8 port trials) unarmed enemies make 18.7 against 27.8 attacks per
+enemy-minute, 1.49 times as many in the port (descriptive interval 1.21-1.82). With a still, controlled hero
+(attack-101; 3 trials per arm, ice tunnel) the figures are 20.4 against 32.3, 1.58 times. Both put the port at about
+1.5 times the original; a plain 60/49 frame-rate ratio (1.22) does not explain it, and the cause is not established.*
 
 ### Visibility follow-up
 

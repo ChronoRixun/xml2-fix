@@ -23,6 +23,7 @@ namespace pad_prompts
 
 		mode chosen_mode = mode::automatic;
 		bool colours = true;
+		bool installed = false;
 		activity seen;                             // the game thread's, from the poll
 		std::array<int, players> last_shown{{-1, -1, -1, -1}}; // for the log
 
@@ -74,14 +75,13 @@ namespace pad_prompts
 		}
 
 		// In place of 0x619e30, called from CStrings::get (cdecl, the code pushed, the label returned).
-		const char* __cdecl prompt_label(const int code)
+		const char* label_for_target(const target t, const int code)
 		{
 			const auto* input = *at<std::uint8_t* const*>(input_pointer);
 			if (!input)
 			{
 				return at<const char*>(blank_label);
 			}
-			const auto t = prompt_target(code);
 			const int action = action_of(t.code);
 			if (action < 0)
 			{
@@ -116,6 +116,11 @@ namespace pad_prompts
 			}
 			_snprintf_s(label, sizeof(labels[0]), _TRUNCATE, "[%s]", name);
 			return label;
+		}
+
+		const char* __cdecl prompt_label(const int code)
+		{
+			return label_for_target(prompt_target(code), code);
 		}
 
 		// In place of the call to the per-frame poll (0x6285c0, __thiscall, no arguments): the poll, then what it read.
@@ -218,6 +223,14 @@ namespace pad_prompts
 		}
 	}
 
+	const char* gameplay_power_label(const int player, const int slot)
+	{
+		if (!installed || player < 0 || player >= 4 || slot < 0 || slot >= 4) return nullptr;
+		if (!binding_map(0, player)) return nullptr;
+		constexpr int codes[]{4, 5, 8, 6};
+		return label_for_target({codes[slot], player, true}, codes[slot]);
+	}
+
 	void install(const HMODULE game)
 	{
 		const auto mode_value = read_ini(L"Prompts");
@@ -273,6 +286,7 @@ namespace pad_prompts
 		{
 			return;
 		}
+		installed = true;
 		logger::write("prompts: button prompts show %s ([Input] Prompts=%s) - the label call (0x4bd739) and the input poll's (0x61c479) patched, "
 		              "the power wheel reads $ATTAC9 $SMAS9 $GUAR9 and $SMASH / $MOVE the bindings of play; %s",
 		              chosen_mode == mode::automatic ? "the device each player last used" : chosen_mode == mode::pad ? "the pad" : "the keyboard",

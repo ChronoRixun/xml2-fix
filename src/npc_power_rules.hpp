@@ -62,6 +62,28 @@
 //      npc_visibility_rules.hpp supplies XML1's geometry and deferred/hit decisions. Both engines exclude
 //      team characters from the collision candidates. A deferred query is not physical obstruction.
 //
+// And two in how a hit becomes a block (revision 10). In both games a block is a melee to-hit miss: the melee
+// contact (XML1 0x5c590, XMen2.exe 0x453160) rolls (0x5c240 / 0x44f450), a miss (2) zeroes the hit's damage and sets
+// its "blocked" flag (XML1 0x5c965: damage info +0x60 bit 1, the hit record's +0x6c; XMen2.exe 0x45355c: +0x68 bit
+// 0, the record's +0x74) before the victim's hit entry, and the victim's popup takes the block branch for a flagged
+// hit (XML1 0x44696, XMen2.exe 0x435c30). The always-hit cases, the chance's inputs ([Balance] HitChance=xml1 gives
+// XML1's formula) and the zeroing are the same. Two things differ:
+//
+//   7. Power attacks. XML1 never rolls an attack flagged PowerAttack (0x5c3c0: damage info +0x60 bit 0, result 1, no
+//      draw). XMen2.exe's name for that flag is damagescale (PowerAttacks=xml1 reads the builder's `x1power` as
+//      `none`; a miss counts only for `normal`, 0x45333f), but its roll has no damagescale test - only the move's
+//      combo text (+0x35 bit 2, 0x44f58e) - so such an attack is rolled, a miss zeroes its damage (0x44f725) and
+//      0x45355c flags it: the victim blocks a power attack that XML1 always lands.
+//      Rule: at 0x44f58e an attack whose damagescale isn't `normal` takes the roll's always-hit return (result 1,
+//      0x44f5aa's `mov edi,1; jmp 0x44f6bd`, no draw), as XML1 returns before its draw.
+//   8. The receive's block_chance roll. XMen2.exe's damage receive 0x437490 multiplies effect 0x37 (`block_chance`)
+//      mode 0 and mode 1 and zeroes the damage when its draw (0x437ae0) is at most that (0x437b08); it sets no flag,
+//      so the hit then neither blocks nor pains. XML1's receive 0x45260 has no such roll (default.xbe has no
+//      `block_chance` string). With no effect-0x37 affecter the chance is 0 (mode 0 starts at 0.0, 0x550410), so it
+//      fires only on a draw of exactly 0.0.
+//      Rule: 0x437b08's `jp` (draw above the chance: skip) becomes a `jmp`; the draw stays, so the random sequence
+//      is the game's.
+//
 // Nothing a save reads changes; the energy fields already exist and are saved as before.
 
 #include "ini_rules.hpp"    // value_text
@@ -160,6 +182,39 @@ namespace npc_power_rules
 		return forced || max <= 2.0f * energy;
 	}
 
+	// 7. How the melee to-hit roll (0x44f450) goes on from 0x44f58e, by the attack's +0x35 (bit 2: the move has combo
+	//    text; bits 3-6: damagescale, `normal` = 1 = 0x08). `combo_text`: the game's always-hit path (0x44f594),
+	//    `rolled`: the draw as before (0x44f5b4), `hit`: result 1 without a draw (XML1's PowerAttack, 0x5c3c0).
+	enum class roll_route
+	{
+		combo_text,
+		rolled,
+		hit,
+	};
+	constexpr std::uint8_t combo_text_bit = 0x04, damage_scale_bits = 0x78, damage_scale_normal = 0x08;
+	inline roll_route roll_route_xml2(const std::uint8_t attack_35)
+	{
+		return (attack_35 & combo_text_bit) ? roll_route::combo_text : roll_route::rolled;
+	}
+	inline roll_route roll_route_xml1(const std::uint8_t attack_35)
+	{
+		if (attack_35 & combo_text_bit)
+		{
+			return roll_route::combo_text;
+		}
+		return (attack_35 & damage_scale_bits) == damage_scale_normal ? roll_route::rolled : roll_route::hit;
+	}
+	// Both games flag the hit blocked exactly when the roll returned 2 (XML1 0x5c95e, XMen2.exe 0x453555).
+	inline bool flagged_blocked(const int roll_result) { return roll_result == 2; }
+
+	// 8. Does the receive's block_chance roll zero the damage (0x437aee..0x437b08: damage above 0, then the draw at
+	//    most the chance; an unordered compare skips)? XML1: never.
+	inline bool block_chance_zeroes_xml2(const float damage, const float draw, const float chance)
+	{
+		return damage > 0.0f && draw <= chance;
+	}
+	inline bool block_chance_zeroes_xml1(float, float, float) { return false; }
+
 	// ---- The sites -----------------------------------------------------------------------------------------
 
 	struct site
@@ -254,13 +309,97 @@ namespace npc_power_rules
 	inline constexpr site ai_stride_site{0x525091, "69c91c060000", 0, "the AI pool stride"};
 	inline constexpr site ai_count_site{0x5250bf, "83fa20", 0, "the AI pool count"};
 	inline constexpr site ai_brain_site{0x504b1c, "8dbec8040000", 0, "the embedded combo brain"};
+	// 7. (revision 10) The hit's reaction test at the end of the pain decision 0x435850: test byte [esi+0xac],8; jz
+	//    0x435be2. Bit 8 still set here = the hit makes the victim react (pain or block, chosen after this). XML1's
+	//    brain (0xeea60) keeps running and pressing on its step clock while the body reacts, so the steps that come due
+	//    during the reaction are spent; XMen2.exe's brain is not called while the body is busy, and its first call after
+	//    the reaction presses the overdue step at once (the combo resumes from idle). The bridge marks the victim's AI
+	//    slot; the continue step then spends every step that came due before the brain ran again.
+	inline constexpr site reaction_site{0x435b6e, "f686ac00000008746b", 7, "the hit's reaction test (0x435850)"};
+	constexpr address reaction_resume_va = 0x435b75;
+	constexpr address ai0_va = 0x78ba14;
+	// 8. (revision 10) The melee-range power decision's entry (sub esp,0x14; push ebx; push ebp; ecx = the brain).
+	//    XML1's decision (0xee260) also runs while the body reacts: a re-check that falls due then is spent (the
+	//    power press finds no `powers` chain in pain/block) and re-armed. XMen2.exe's first call after the reaction
+	//    found it overdue and the power went off from idle. A reaction-marked slot re-arms every re-check that fell
+	//    due before this call (timer + 2.0 s, or 0.5 s for a character with a controller), then the decision as before.
+	inline constexpr site power_entry_site{0x518770, "83ec1453555657", 5, "the melee-range power decision's entry (0x518770)"};
+	constexpr address power_entry_resume_va = 0x518775;
+	constexpr address melee_power_call_return_va = 0x5193e7; // after 0x518fd0's call [edx+0xc] (0x5193e4)
+	constexpr address game_clock_owner_va = 0x46dce0; // its vt+0x160 is the clock 0x518770 compares AI+0x1cc with
+	inline constexpr site game_clock_site{0x518833, "e8a854f5ff8b4f048b91cc010000", 0, "the power decision's clock read (0x518770)"};
+	// 9. (revision 10) The melee decision's entry 0x518fd0 (sub esp,0x58; push ebx; push ebp; ecx = the brain). XML1's
+	//    attack decision also falls due while the body reacts; it is then spent (the attack press finds no chain in
+	//    pain/block) and the next attack time is set again by the decision's tail (now + meleetimeroffset + random x
+	//    meleetimerrandomadd). XMen2.exe made the overdue decision on the first idle frame after the reaction (a fresh
+	//    attack within 0.3 s of 12-14 pains per four windows, against 1 on the Xbox). With no combo running, a
+	//    reaction-marked slot whose next attack time (AI+0x1c) fell due re-arms it the tail's way from that time
+	//    (AI+0x288 + random x AI+0x28c, the random draw of 0x560190(1) as the completion code uses), at most four
+	//    times, then the decision as before.
+	inline constexpr site attack_entry_site{0x518fd0, "83ec5853555657", 5, "the melee decision's entry (0x518fd0)"};
+	constexpr address attack_entry_resume_va = 0x518fd5;
+	constexpr address game_random_va = 0x560190;
+	inline constexpr site attack_random_site{0x5192b8, "6a01e8d16e0400d84c2424", 0, "the combo completion's random draw (0x518fd0)"};
+	// 10. (revision 10) The melee to-hit roll's combo-text test (test byte [esi+0x35],4; jz 0x44f5b4; esi = the
+	//    attack, edi = the defender), the combo-text path after it and its always-hit return (mov edi,1; jmp
+	//    0x44f6bd), all guarded; the result code at 0x44f6bd; the contact's damagescale test of a miss (0x45333f) and
+	//    its blocked flag (0x453555: cmp [esp+0x20],2; jne; or byte [esp+0xa0],1), guarded only: the rule relies on
+	//    their field encoding.
+	inline constexpr site hit_roll_site{0x44f58e, "f646350474208a44241384c0c6442428017409f6876507000002750abf01000000e909010000", 6,
+	                                    "the melee to-hit roll's always-hit test (0x44f450)"};
+	inline constexpr site hit_roll_result_site{0x44f6bd, "8b55008bcdff128b10578bc8ff5224", 0, "the melee to-hit roll's result (0x44f450)"};
+	inline constexpr site miss_counts_site{0x45333f, "8a463524783c087505c644241200", 0, "the melee contact's damagescale test of a miss (0x453160)"};
+	inline constexpr site blocked_flag_site{0x453555, "837c2420027508808c24a000000001", 0, "the melee contact's blocked flag (0x453160)"};
+	constexpr address hit_roll_combo_va = 0x44f594, hit_roll_rolled_va = 0x44f5b4, hit_roll_result_va = 0x44f6bd;
+	// 11. (revision 10) The damage receive's block_chance roll: both effect-0x37 fetches, the draw (0x437ae0), the
+	//    damage test (0x437af9) and the chance test's jp (0x437b08) with the zeroing after it.
+	inline constexpr site block_chance_draw_site{0x437a9d,
+	                                             "6a37d99e9c000000c744243000000000c744243800000000e8568911008b0e6a01578d542430526a37e845891100d944"
+	                                             "2428d84c24206a01680000803f6a00d95c242ce8cb861200d9869c00000083c40cd81d30006800dfe0f6c4410f8593"
+	                                             "000000d85c2420dfe0f6c441",
+	                                             0, "the hit's block_chance draw (0x437490)"};
+	inline constexpr site block_chance_site{0x437b08, "0f8a86000000c7869c00000000000000", 6, "the hit's block_chance test (0x437490)"};
+	constexpr address block_chance_skip_va = 0x437b94;
 
-	inline constexpr std::array<const site*, 28> sites{&charge_site, &recheck_site, &recheck_actor_site, &picker_site, &energy_getter_site,
+	// 12. (revision 10, item 16 in docs/npc-power-rule.md) The attack-state update's input-lock exit (0x512ed0): mov eax,[esi+0x10]; test byte
+	//     [eax+0x764],1; jz 0x512f1a; test byte [eax+0x3d9],0x10; jnz 0x51304a (return before the visibility query and
+	//     the brain). actor+0x764 bit 0 is the move's input lock (set at a move's entry when the move locks input,
+	//     0x431257..0x431273, and by its lock timers, 0x430bd0 / 0x430bfc: XML1 0x407d8..0x407f4, 0x40257 / 0x40283 on
+	//     its +0x54c); actor+0x3d9 bit 0x10 is set by the power-aim helper 0x50a6c0 (0x50aa28, called from the power
+	//     decision 0x5189b3 / 0x518a4d) and stays set on the enemies (every logged hit on a BrotherHoodEnergy shows it,
+	//     idle included). So an enemy that has used a power skips its whole attack-state update - visibility, brain,
+	//     power decision - in every locked move: attacks before their chain window, powers and reactions. XML1's
+	//     attack-state update 0x10ad70 has no such exit (0x10ad9b fstp [edx+0x408]; 0x10ada1 the +0x278 test, as
+	//     0x512f1a); its brain runs every frame whatever the body does. The jz becomes jmp: the exit is never taken.
+	inline constexpr site lock_exit_site{0x512f01, "8b4610f6806407000001740df680d9030000100f8530010000", 0, "the attack-state update's input-lock exit (0x512ed0)"};
+	constexpr address lock_exit_va = 0x512f0b;
+	// 13. (revision 10, item 17) The melee-range power decision's own input-lock test (0x518770): mov ebp,[esp+0x14] (the
+	//     deciding character); test byte [ebp+0x764],1; jne 0x518ac9 (return 0 before the re-check time is even read);
+	//     mov ebx,[esp+0x1c]. XML1's decision 0xee260 has none (0xee289 target, 0xee296 / 0xee2a2 the 0xbf730 / +0x3e4
+	//     tests, then the timer at 0xee2c2): a re-check that falls due in a locked move is made, its visibility asked,
+	//     re-armed (0xee374) and its picker finds no chain - spent. The jne becomes a jump to a bridge that keeps
+	//     the native exit for every caller but the melee brain's (return 0x5193e7; the officer weapon brain's call
+	//     0x519fe4 stays as measured).
+	inline constexpr site power_lock_site{0x5187b9, "8b6c2414f68564070000010f85ff0200008b5c241c", 0, "the power decision's input-lock test (0x518770)"};
+	constexpr address power_lock_va = 0x5187c4, power_lock_exit_va = 0x518ac9, power_lock_resume_va = 0x5187ca;
+	// 14. (revision 10, item 18) The picker's input-lock test (0x50fe50: sub esp,0xac; push esi; mov esi,ecx; mov eax,[esi+0x10];
+	//     test byte [eax+0x764],1; jne 0x50ffeb = return 0). XML1's picker 0x1081f0 has none: a locked move refuses
+	//     only through the per-slot chain test (move vt+0x3c at 0x1083a8..0x1083f4; XMen2.exe's move vt+0x44, same
+	//     place), so a power whose action the current move chains (an attack's chain window) can be picked. The
+	//     melee-range decision's gate (0x518920) enters the picker after the test; other callers keep it.
+	inline constexpr site picker_entry_site{0x50fe50, "81ecac000000568bf18b4610f68064070000010f8582010000", 0, "the picker's input-lock test (0x50fe50)"};
+	constexpr address picker_unlocked_va = 0x50fe69;
+
+	inline constexpr std::array<const site*, 42> sites{&charge_site, &recheck_site, &recheck_actor_site, &picker_site, &energy_getter_site,
 	                                                   &combolevel_site, &combo_exit_site, &combo_exit2_site, &combo_tail_site,
 	                                                   &combo_buttons_site, &combo_lengths_site, &combo_row2_site, &combo_row3_site, &combo_row11_site,
 	                                                   &query_priority_site, &query_budget_site, &visibility_site, &physical_target_site, &query_entry_site,
 	                                                   &combo_continue_site, &combo_press_site, &combo_end_site, &combo_after_site, &combo_end_delay_site,
-	                                                   &ai_pool_site, &ai_stride_site, &ai_count_site, &ai_brain_site};
+	                                                   &ai_pool_site, &ai_stride_site, &ai_count_site, &ai_brain_site, &reaction_site,
+	                                                   &power_entry_site, &game_clock_site, &attack_entry_site, &attack_random_site,
+	                                                   &hit_roll_site, &hit_roll_result_site, &miss_counts_site, &blocked_flag_site,
+	                                                   &block_chance_draw_site, &block_chance_site,
+	                                                   &lock_exit_site, &power_lock_site, &picker_entry_site};
 
 	inline std::vector<std::uint8_t> retail_bytes(const site& s, const std::size_t count)
 	{
@@ -325,10 +464,17 @@ namespace npc_power_rules
 		address combos = 0;
 		address combo(const std::size_t i) const { return combos + static_cast<address>(20 * i); }
 		address cont = 0, start = 0, delays = 0, next = 0, end_delay = 0; // the combo step bridges, XML1's delays, the per-brain times
+		address react = 0, react_cont = 0, pre_start = 0, mark = 0;   // revision 10: per-brain reaction marks and their bridges
+		address react_power = 0, power_front = 0;                     // revision 10: the power decision's marks and front
+		address react_attack = 0, attack_front = 0;                   // revision 10: the attack decision's marks and front
+		address hit_roll = 0;                                         // revision 10: the to-hit roll's power-attack test
+		address power_lock = 0;                                       // revision 10: the power decision's input-lock test
 	};
 	// The block: one page of code and constants (made execute-read), then one page of data (read-write): the next
 	// press time of each of the 32 brains.
-	constexpr std::size_t charge_size = 57, recheck_size = 23, gate_size = 47, cont_size = 149, start_size = 71, end_delay_size = 32;
+	constexpr std::size_t charge_size = 57, recheck_size = 23, gate_size = 59, cont_size = 149, start_size = 71, end_delay_size = 32;
+	constexpr std::size_t react_cont_size = 125, power_lock_size = 22, pre_start_size = 43, mark_size = 85, power_front_size = 166, attack_front_size = 182;
+	constexpr std::size_t hit_roll_size = 35;
 	constexpr std::size_t code_size = 4096, block_size = 8192;
 	inline layout layout_at(const address base)
 	{
@@ -339,6 +485,16 @@ namespace npc_power_rules
 		l.delays = base + 560; // 6 x 20 bytes
 		l.next = base + static_cast<address>(code_size);
 		l.end_delay = base + 688;
+		l.react = l.next + 4 * ai_slots; // after the 32 deadlines, in the read-write page
+		l.react_cont = base + 800;
+		l.pre_start = base + 928;
+		l.mark = base + 976;
+		l.react_power = l.react + 4 * ai_slots;
+		l.power_front = base + 1072;
+		l.react_attack = l.react_power + 4 * ai_slots;
+		l.attack_front = base + 1248;
+		l.hit_roll = base + 2048; // block-bit's bridge (after the old attack front's 1728..1986, now free)
+		l.power_lock = base + 2112; // clear of beta6/block-bit's bridge (block+2048, 35 bytes)
 		return l;
 	}
 	inline std::vector<std::uint8_t> constants()
@@ -394,8 +550,10 @@ namespace npc_power_rules
 	}
 
 	// 3. Called from 0x518920 in place of the picker (thiscall, ecx = the AI, five stack arguments, ret 0x14). Unless
-	//    the forcing flag is set, refuses (al = 0, as the picker refusing) when max > 2 x energy; else jumps to the
-	//    picker with the caller's frame untouched. eax and edx are free (the picker sets them); ecx is kept.
+	//    the forcing flag is set, refuses (al = 0, as the picker refusing) when max > 2 x energy; else enters the
+	//    picker with the caller's frame untouched: its first instructions (sub esp,0xac; push esi; mov esi,ecx; mov
+	//    eax,[esi+0x10]), then 0x50fe69, past its input-lock test (revision 10, item 18: XML1's picker 0x1081f0
+	//    has none). eax and edx are free (the picker sets them); ecx is kept.
 	inline std::vector<std::uint8_t> gate_bridge(const layout& l)
 	{
 		std::vector<std::uint8_t> code{
@@ -410,15 +568,47 @@ namespace npc_power_rules
 			0xd8, 0x98, 0x14, 0x03, 0x00, 0x00,       // fcomp dword [eax+0x314]
 			0xdf, 0xe0,                               // fnstsw ax
 			0xf6, 0xc4, 0x01,                         // test ah,1: 2 x energy below max (or NaN)
-			0x75, 0x05,                               // jnz refuse (+5)
-			0xe9, 0, 0, 0, 0,                         // go: jmp 0x50fe50
+			0x75, 0x11,                               // jnz refuse (+17)
+			0x81, 0xec, 0xac, 0x00, 0x00, 0x00,       // go: sub esp,0xac (the picker's own first instructions)
+			0x56,                                     // push esi
+			0x8b, 0xf1,                               // mov esi,ecx
+			0x8b, 0x46, 0x10,                         // mov eax,[esi+0x10]
+			0xe9, 0, 0, 0, 0,                         // jmp 0x50fe69 (after its input-lock test)
 			0x32, 0xc0,                               // refuse: xor al,al
 			0xc2, 0x14, 0x00,                         // ret 0x14
 		};
 		put32(code, 14, energy_getter_va - (l.gate + 18));
-		put32(code, 38, picker_va - (l.gate + 42));
+		put32(code, 50, picker_unlocked_va - (l.gate + 54));
 		return code;
 	}
+
+	// Item 17: jumped to from 0x5187c4 in place of `jne 0x518ac9`, with the flags of `test byte [ebp+0x764],1` (the
+	//     deciding character's input lock). Unlocked: on at 0x5187ca as before. Locked: the melee brain's call (return
+	//     address 0x5193e7 at [esp+0x24]: sub esp,0x14 and four pushes since the entry; 0x518660 cleaned its four
+	//     arguments) goes on as XML1's 0xee260 does; every other caller takes the native exit 0x518ac9. The next
+	//     native instructions (mov ebx,[esp+0x1c]; cmp ebx,esi) set the flags again.
+	inline std::vector<std::uint8_t> power_lock_bridge(const layout& l)
+	{
+		std::vector<std::uint8_t> code{
+			0x74, 0x0f,                                     // 00 jz resume (0x11): not locked
+			0x81, 0x7c, 0x24, 0x24, 0, 0, 0, 0,             // 02 cmp dword [esp+0x24],0x5193e7
+			0x74, 0x05,                                     // 0a je resume: the melee brain's call
+			0xe9, 0, 0, 0, 0,                               // 0c jmp 0x518ac9 (the native exit)
+			0xe9, 0, 0, 0, 0,                               // 11 resume: jmp 0x5187ca
+		};
+		put32(code, 0x06, melee_power_call_return_va);
+		put32(code, 0x0d, power_lock_exit_va - (l.power_lock + 0x11));
+		put32(code, 0x12, power_lock_resume_va - (l.power_lock + 0x16));
+		return code;
+	}
+	inline std::vector<std::uint8_t> power_lock_jump(const layout& l)
+	{
+		const address rel = l.power_lock - (power_lock_va + 5);
+		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16),
+		        static_cast<std::uint8_t>(rel >> 24), 0x90};
+	}
+	// Item 16: 0x512f0b: jz 0x512f1a -> jmp 0x512f1a (the exit at 0x512f0d..0x512f14 is never reached).
+	inline std::vector<std::uint8_t> lock_exit_bytes() { return {0xeb, 0x0d}; }
 
 	// The writes at the sites.
 	inline std::vector<std::uint8_t> charge_jump(const layout& l)
@@ -537,9 +727,308 @@ namespace npc_power_rules
 		put32(code, 0x43, combo_tail_va - (l.start + 0x47));
 		return code;
 	}
+	// 7. (revision 10) The continue step's front (jumped to from 0x51920b; same registers as the continue step): when the
+	//    brain's slot carries a reaction mark, clear it and spend every step whose press time has passed - index + 1 and
+	//    next + that step's delay, XML1's clock - completing the combo natively when none is left; then the continue
+	//    step as before (it waits for the first step still to come). Brains outside the table, or without a mark, go
+	//    straight to the continue step.
+	inline std::vector<std::uint8_t> react_cont_bridge(const layout& l)
+	{
+		std::vector<std::uint8_t> code{
+			0x8b, 0xc5,                               // 00 mov eax,ebp
+			0x2d, 0, 0, 0, 0,                         // 02 sub eax,brain0
+			0x72, 0x6f,                               // 07 jb cont (0x78)
+			0x33, 0xd2,                               // 09 xor edx,edx
+			0xb9, 0x1c, 0x06, 0x00, 0x00,             // 0b mov ecx,0x61c
+			0xf7, 0xf1,                               // 10 div ecx
+			0x85, 0xd2,                               // 12 test edx,edx
+			0x75, 0x62,                               // 14 jnz cont
+			0x83, 0xf8, 0x20,                         // 16 cmp eax,32
+			0x73, 0x5d,                               // 19 jae cont
+			0x8d, 0x14, 0x85, 0, 0, 0, 0,             // 1b lea edx,[eax*4+react]
+			0x83, 0x3a, 0x00,                         // 22 cmp dword [edx],0
+			0x74, 0x51,                               // 25 je cont (no reaction since the last step)
+			0xc7, 0x02, 0x00, 0x00, 0x00, 0x00,       // 27 mov dword [edx],0
+			0x8d, 0x14, 0x85, 0, 0, 0, 0,             // 2d lea edx,[eax*4+next]
+			0x8b, 0x4d, 0x04,                         // 34 mov ecx,[ebp+4] (the AI)
+			0xd9, 0x81, 0x50, 0x05, 0x00, 0x00,       // 37 spend: fld dword [ecx+0x550] (now)
+			0xd8, 0x1a,                               // 3d fcomp dword [edx]
+			0xdf, 0xe0,                               // 3f fnstsw ax
+			0xf6, 0xc4, 0x41,                         // 41 test ah,0x41: now <= next (or unordered)
+			0x75, 0x32,                               // 44 jnz cont: the continue step waits for it
+			0x8b, 0x45, 0x30,                         // 46 mov eax,[ebp+0x30]
+			0x40,                                     // 49 inc eax: this step was spent during the reaction
+			0x89, 0x45, 0x30,                         // 4a mov [ebp+0x30],eax
+			0x3b, 0x45, 0x34,                         // 4d cmp eax,[ebp+0x34]
+			0x0f, 0x8d, 0, 0, 0, 0,                   // 50 jge 0x51928a (the combo's end)
+			0x8b, 0x4d, 0x3c,                         // 56 mov ecx,[ebp+0x3c] (the combo)
+			0x83, 0xf9, 0x06,                         // 59 cmp ecx,6
+			0x73, 0x0f,                               // 5c jae zero (0x6d)
+			0x6b, 0xc9, 0x14,                         // 5e imul ecx,ecx,20
+			0x8d, 0x4c, 0x81, 0xfc,                   // 61 lea ecx,[ecx+eax*4-4]: delay[i - 1]
+			0xd9, 0x81, 0, 0, 0, 0,                   // 65 fld dword [ecx+delays]
+			0xeb, 0x02,                               // 6b jmp add (0x6f)
+			0xd9, 0xee,                               // 6d zero: fldz
+			0xd8, 0x02,                               // 6f add: fadd dword [edx]
+			0xd9, 0x1a,                               // 71 fstp dword [edx]: the next step's press time
+			0x8b, 0x4d, 0x04,                         // 73 mov ecx,[ebp+4]
+			0xeb, 0xbf,                               // 76 jmp spend (0x37)
+			0xe9, 0, 0, 0, 0,                         // 78 cont: jmp the continue step
+		};
+		put32(code, 0x03, brain0_va);
+		put32(code, 0x1e, l.react);
+		put32(code, 0x30, l.next);
+		put32(code, 0x52, combo_end_va - (l.react_cont + 0x56));
+		put32(code, 0x67, l.delays);
+		put32(code, 0x79, l.cont - (l.react_cont + 0x7d));
+		return code;
+	}
+	// The combo start's front (the exits' jump): a new combo starts unmarked, then the start bridge.
+	inline std::vector<std::uint8_t> pre_start_bridge(const layout& l)
+	{
+		std::vector<std::uint8_t> code{
+			0x8b, 0xc5,                                     // 00 mov eax,ebp
+			0x2d, 0, 0, 0, 0,                               // 02 sub eax,brain0
+			0x72, 0x1d,                                     // 07 jb go (0x26)
+			0x33, 0xd2,                                     // 09 xor edx,edx
+			0xb9, 0x1c, 0x06, 0x00, 0x00,                   // 0b mov ecx,0x61c
+			0xf7, 0xf1,                                     // 10 div ecx
+			0x85, 0xd2,                                     // 12 test edx,edx
+			0x75, 0x10,                                     // 14 jnz go
+			0x83, 0xf8, 0x20,                               // 16 cmp eax,32
+			0x73, 0x0b,                                     // 19 jae go
+			0xc7, 0x04, 0x85, 0, 0, 0, 0, 0, 0, 0, 0,       // 1b mov dword [eax*4+react],0
+			0xe9, 0, 0, 0, 0,                               // 26 go: jmp the start bridge
+		};
+		put32(code, 0x03, brain0_va);
+		put32(code, 0x1e, l.react);
+		put32(code, 0x27, l.start - (l.pre_start + 0x2b));
+		return code;
+	}
+	// Jumped to from 0x435b6e (esi = the hit record, [esi] = the victim): when the hit makes the victim react, mark
+	// every AI slot whose actor (AI+0x10) is the victim. Registers are kept; the flags come from the displaced test.
+	inline std::vector<std::uint8_t> mark_bridge(const layout& l)
+	{
+		std::vector<std::uint8_t> code{
+			0xf6, 0x86, 0xac, 0x00, 0x00, 0x00, 0x08,       // 00 test byte [esi+0xac],8
+			0x74, 0x40,                                     // 07 jz out (0x49)
+			0x50, 0x51, 0x52,                               // 09 push eax; push ecx; push edx
+			0x8b, 0x16,                                     // 0c mov edx,[esi] (the victim)
+			0xb8, 0, 0, 0, 0,                               // 0e mov eax,AI 0
+			0x33, 0xc9,                                     // 13 xor ecx,ecx
+			0x39, 0x50, 0x10,                               // 15 slot: cmp [eax+0x10],edx
+			0x75, 0x21,                                     // 18 jne other (0x3b)
+			0xc7, 0x04, 0x8d, 0, 0, 0, 0, 1, 0, 0, 0,       // 1a mov dword [ecx*4+react],1 (the combo)
+			0xc7, 0x04, 0x8d, 0, 0, 0, 0, 1, 0, 0, 0,       // 25 mov dword [ecx*4+react_power],1 (the power decision)
+			0xc7, 0x04, 0x8d, 0, 0, 0, 0, 1, 0, 0, 0,       // 30 mov dword [ecx*4+react_attack],1 (the attack decision)
+			0x05, 0x1c, 0x06, 0x00, 0x00,                   // 3b other: add eax,0x61c
+			0x41,                                           // 40 inc ecx
+			0x83, 0xf9, 0x20,                               // 41 cmp ecx,32
+			0x72, 0xcf,                                     // 44 jb slot (0x15)
+			0x5a, 0x59, 0x58,                               // 46 pop edx; pop ecx; pop eax
+			0xf6, 0x86, 0xac, 0x00, 0x00, 0x00, 0x08,       // 49 out: test byte [esi+0xac],8 (displaced)
+			0xe9, 0, 0, 0, 0,                               // 50 jmp 0x435b75 (jz 0x435be2)
+		};
+		put32(code, 0x0f, ai0_va);
+		put32(code, 0x1d, l.react);
+		put32(code, 0x28, l.react_power);
+		put32(code, 0x33, l.react_attack);
+		put32(code, 0x51, reaction_resume_va - (l.mark + 0x55));
+		return code;
+	}
+	// Jumped to from 0x518770 (ecx = the brain; eax/edx are scratch at a thiscall entry): a reaction-marked slot
+	// re-arms its power re-check (AI+0x1cc) once per re-check that fell due before now (at most 8), then the decision
+	// as before (it finds the timer in the future and does nothing this time). Unmarked slots go straight on.
+	inline std::vector<std::uint8_t> power_front_bridge(const layout& l)
+	{
+		std::vector<std::uint8_t> code{
+			0x51,                                     // 00 push ecx (the brain)
+			0x8b, 0xc1,                               // 01 mov eax,ecx
+			0x2d, 0, 0, 0, 0,                         // 03 sub eax,brain0
+			0x0f, 0x82, 0, 0, 0, 0,                   // 08 jb out (0x9b)
+			0x33, 0xd2,                               // 0e xor edx,edx
+			0xb9, 0x1c, 0x06, 0x00, 0x00,             // 10 mov ecx,0x61c
+			0xf7, 0xf1,                               // 15 div ecx
+			0x85, 0xd2,                               // 17 test edx,edx
+			0x0f, 0x85, 0, 0, 0, 0,                   // 19 jnz out
+			0x83, 0xf8, 0x20,                         // 1f cmp eax,32
+			0x0f, 0x83, 0, 0, 0, 0,                   // 22 jae out
+			0x8d, 0x14, 0x85, 0, 0, 0, 0,             // 28 lea edx,[eax*4+react_power]
+			0x83, 0x3a, 0x00,                         // 2f cmp dword [edx],0
+			0x0f, 0x84, 0, 0, 0, 0,                   // 32 je out
+			0xc7, 0x02, 0x00, 0x00, 0x00, 0x00,       // 38 mov dword [edx],0
+			0xe8, 0, 0, 0, 0,                         // 3e call 0x46dce0
+			0x8b, 0x10,                               // 43 mov edx,[eax]
+			0x8b, 0xc8,                               // 45 mov ecx,eax
+			0xff, 0x92, 0x60, 0x01, 0x00, 0x00,       // 47 call [edx+0x160]: ST0 = now (the clock 0x518849 reads)
+			0x8b, 0x0c, 0x24,                         // 4d mov ecx,[esp] (the brain)
+			0x8b, 0x49, 0x04,                         // 50 mov ecx,[ecx+4] (the AI)
+			0x8b, 0x51, 0x10,                         // 53 mov edx,[ecx+0x10] (the actor)
+			0x83, 0xba, 0xd4, 0x03, 0x00, 0x00, 0xff, // 56 cmp dword [edx+0x3d4],-1
+			0x74, 0x08,                               // 5d je two (0x67)
+			0xd9, 0x05, 0, 0, 0, 0,                   // 5f fld dword [0.5] (a character with a controller)
+			0xeb, 0x06,                               // 65 jmp have (0x6d)
+			0xd9, 0x05, 0, 0, 0, 0,                   // 67 two: fld dword [2.0]
+			0xba, 0x08, 0x00, 0x00, 0x00,             // 6d have: mov edx,8 (ST0 = re-check, ST1 = now)
+			0xd9, 0x81, 0xcc, 0x01, 0x00, 0x00,       // 72 again: fld dword [ecx+0x1cc]
+			0xd8, 0xda,                               // 78 fcomp st(2): the timer against now
+			0xdf, 0xe0,                               // 7a fnstsw ax
+			0xf6, 0xc4, 0x45,                         // 7c test ah,0x45
+			0x74, 0x16,                               // 7f jz done (0x97): timer > now
+			0xf6, 0xc4, 0x04,                         // 81 test ah,4
+			0x75, 0x11,                               // 84 jnz done: unordered
+			0xd9, 0x81, 0xcc, 0x01, 0x00, 0x00,       // 86 fld dword [ecx+0x1cc]
+			0xd8, 0xc1,                               // 8c fadd st(0),st(1)
+			0xd9, 0x99, 0xcc, 0x01, 0x00, 0x00,       // 8e fstp dword [ecx+0x1cc]: re-armed, as XML1's spent decision
+			0x4a,                                     // 94 dec edx
+			0x75, 0xdb,                               // 95 jnz again (0x72)
+			0xdd, 0xd8,                               // 97 done: fstp st(0)
+			0xdd, 0xd8,                               // 99 fstp st(0)
+			0x59,                                     // 9b out: pop ecx
+			0x83, 0xec, 0x14, 0x53, 0x55,             // 9c sub esp,0x14; push ebx; push ebp (displaced)
+			0xe9, 0, 0, 0, 0,                         // a1 jmp 0x518775
+		};
+		put32(code, 0x04, brain0_va);
+		for (const std::size_t at : {std::size_t{0x0a}, std::size_t{0x1b}, std::size_t{0x24}, std::size_t{0x34}})
+		{
+			put32(code, at, 0x9b - static_cast<std::uint32_t>(at + 4));
+		}
+		put32(code, 0x2b, l.react_power);
+		put32(code, 0x3f, game_clock_owner_va - (l.power_front + 0x43));
+		put32(code, 0x61, l.half());
+		put32(code, 0x69, l.two());
+		put32(code, 0xa2, power_entry_resume_va - (l.power_front + 0xa6));
+		return code;
+	}
+	// Jumped to from 0x518fd0 (ecx = the brain; eax/edx scratch at the thiscall entry): with no combo running, a
+	// reaction-marked slot spends every attack decision that fell due before now (at most four): next attack time +
+	// meleetimeroffset + random x meleetimerrandomadd, as the decision's tail re-arms it; then the decision as before.
+	inline std::vector<std::uint8_t> attack_front_bridge(const layout& l)
+	{
+		std::vector<std::uint8_t> code{
+			0x51,                                     // 00 push ecx (the brain)
+			0x8b, 0xc1,                               // 01 mov eax,ecx
+			0x2d, 0, 0, 0, 0,                         // 03 sub eax,brain0
+			0x0f, 0x82, 0, 0, 0, 0,                   // 08 jb out (0xab)
+			0x33, 0xd2,                               // 0e xor edx,edx
+			0xb9, 0x1c, 0x06, 0x00, 0x00,             // 10 mov ecx,0x61c
+			0xf7, 0xf1,                               // 15 div ecx
+			0x85, 0xd2,                               // 17 test edx,edx
+			0x0f, 0x85, 0, 0, 0, 0,                   // 19 jnz out
+			0x83, 0xf8, 0x20,                         // 1f cmp eax,32
+			0x0f, 0x83, 0, 0, 0, 0,                   // 22 jae out
+			0x8d, 0x14, 0x85, 0, 0, 0, 0,             // 28 lea edx,[eax*4+react_attack]
+			0x83, 0x3a, 0x00,                         // 2f cmp dword [edx],0
+			0x0f, 0x84, 0, 0, 0, 0,                   // 32 je out
+			0x8b, 0x0c, 0x24,                         // 38 mov ecx,[esp] (the brain)
+			0x80, 0x79, 0x2c, 0x00,                   // 3b cmp byte [ecx+0x2c],0 (a combo running: its own front;
+			0x0f, 0x85, 0, 0, 0, 0,                   // 3f jnz out                 the mark waits for its end)
+			0xc7, 0x02, 0x00, 0x00, 0x00, 0x00,       // 45 mov dword [edx],0
+			0xe8, 0, 0, 0, 0,                         // 4b call 0x46dce0
+			0x8b, 0x10,                               // 50 mov edx,[eax]
+			0x8b, 0xc8,                               // 52 mov ecx,eax
+			0xff, 0x92, 0x60, 0x01, 0x00, 0x00,       // 54 call [edx+0x160]: ST0 = now
+			0x8b, 0x0c, 0x24,                         // 5a mov ecx,[esp]
+			0x8b, 0x49, 0x04,                         // 5d mov ecx,[ecx+4] (the AI)
+			0x6a, 0x04,                               // 60 push 4 (at most four spent decisions)
+			0x8b, 0x4c, 0x24, 0x04,                   // 62 again: mov ecx,[esp+4] (the brain)
+			0x8b, 0x49, 0x04,                         // 66 mov ecx,[ecx+4]
+			0x90,                                     // 69
+			0xd9, 0x41, 0x1c,                         // 6a fld dword [ecx+0x1c] (next attack time)
+			0xd8, 0xd9,                               // 6d fcomp st(1): against now
+			0xdf, 0xe0,                               // 6f fnstsw ax
+			0xf6, 0xc4, 0x45,                         // 71 test ah,0x45
+			0x74, 0x30,                               // 74 jz done (0xa6): still to come
+			0xf6, 0xc4, 0x04,                         // 76 test ah,4
+			0x75, 0x2b,                               // 79 jnz done: unordered
+			0x6a, 0x01,                               // 7b push 1
+			0xe8, 0, 0, 0, 0,                         // 7d call 0x560190: ST0 = random
+			0x83, 0xc4, 0x04,                         // 82 add esp,4
+			0x8b, 0x4c, 0x24, 0x04,                   // 85 mov ecx,[esp+4]
+			0x8b, 0x49, 0x04,                         // 89 mov ecx,[ecx+4]
+			0x90,                                     // 8c
+			0xd8, 0x89, 0x8c, 0x02, 0x00, 0x00,       // 8d fmul dword [ecx+0x28c] (meleetimerrandomadd)
+			0xd8, 0x81, 0x88, 0x02, 0x00, 0x00,       // 93 fadd dword [ecx+0x288] (meleetimeroffset)
+			0xd8, 0x41, 0x1c,                         // 99 fadd dword [ecx+0x1c]
+			0xd9, 0x59, 0x1c,                         // 9c fstp dword [ecx+0x1c]: the spent decision's re-arm
+			0xff, 0x0c, 0x24,                         // 9f dec dword [esp]
+			0x75, 0xbe,                               // a2 jnz again (0x62)
+			0x90, 0x90,                               // a4
+			0xdd, 0xd8,                               // a6 done: fstp st(0) (now)
+			0x83, 0xc4, 0x04,                         // a8 add esp,4 (the count)
+			0x59,                                     // ab out: pop ecx
+			0x83, 0xec, 0x58, 0x53, 0x55,             // ac sub esp,0x58; push ebx; push ebp (displaced)
+			0xe9, 0, 0, 0, 0,                         // b1 jmp 0x518fd5
+		};
+		put32(code, 0x04, brain0_va);
+		for (const std::size_t at : {std::size_t{0x0a}, std::size_t{0x1b}, std::size_t{0x24}, std::size_t{0x34}, std::size_t{0x41}})
+		{
+			put32(code, at, 0xab - static_cast<std::uint32_t>(at + 4));
+		}
+		put32(code, 0x2b, l.react_attack);
+		put32(code, 0x4c, game_clock_owner_va - (l.attack_front + 0x50));
+		put32(code, 0x7e, game_random_va - (l.attack_front + 0x82));
+		put32(code, 0xb2, attack_entry_resume_va - (l.attack_front + 0xb6));
+		return code;
+	}
+	inline std::vector<std::uint8_t> attack_entry_jump(const layout& l)
+	{
+		const address rel = l.attack_front - (attack_entry_site.va + 5);
+		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16),
+		        static_cast<std::uint8_t>(rel >> 24)};
+	}
+	inline std::vector<std::uint8_t> power_entry_jump(const layout& l)
+	{
+		const address rel = l.power_front - (power_entry_site.va + 5);
+		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16),
+		        static_cast<std::uint8_t>(rel >> 24)};
+	}
+	inline std::vector<std::uint8_t> mark_jump(const layout& l)
+	{
+		const address rel = l.mark - (reaction_site.va + 5);
+		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16),
+		        static_cast<std::uint8_t>(rel >> 24), 0x90, 0x90};
+	}
+	// 7. Jumped to from 0x44f58e (esi = the attack, edi = the defender). The combo-text test as before; then an attack
+	//    whose damagescale isn't `normal` (XML1's PowerAttack) returns 1 without a draw, as the combo-text path's own
+	//    always-hit exit 0x44f5aa does; a `normal` one goes on to the draw. eax is kept around the damagescale read;
+	//    flags are dead at all three continuations (each starts with its own test or a call).
+	inline std::vector<std::uint8_t> hit_roll_bridge(const layout& l)
+	{
+		std::vector<std::uint8_t> code{
+			0xf6, 0x46, 0x35, 0x04,             // 00 test byte [esi+0x35],4 (displaced: the move's combo text)
+			0x0f, 0x85, 0, 0, 0, 0,             // 04 jnz 0x44f594 (the game's combo-text path)
+			0x50,                               // 0a push eax
+			0x8a, 0x46, 0x35,                   // 0b mov al,[esi+0x35]
+			0x24, 0x78,                         // 0e and al,0x78 (damagescale)
+			0x3c, 0x08,                         // 10 cmp al,8 (normal)
+			0x58,                               // 12 pop eax
+			0x0f, 0x84, 0, 0, 0, 0,             // 13 je 0x44f5b4 (rolled as before)
+			0xbf, 0x01, 0x00, 0x00, 0x00,       // 19 mov edi,1 (a hit)
+			0xe9, 0, 0, 0, 0,                   // 1e jmp 0x44f6bd (the result)
+		};
+		put32(code, 0x06, hit_roll_combo_va - (l.hit_roll + 0x0a));
+		put32(code, 0x15, hit_roll_rolled_va - (l.hit_roll + 0x19));
+		put32(code, 0x1f, hit_roll_result_va - (l.hit_roll + 0x23));
+		return code;
+	}
+	inline std::vector<std::uint8_t> hit_roll_jump(const layout& l)
+	{
+		const address rel = l.hit_roll - (hit_roll_site.va + 5);
+		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16),
+		        static_cast<std::uint8_t>(rel >> 24), 0x90};
+	}
+	// 8. 0x437b08: jp 0x437b94 -> jmp 0x437b94; nop. The draw was already compared and popped (fcomp at 0x437aff), as on
+	//    the game's own skip.
+	inline std::vector<std::uint8_t> block_chance_skip()
+	{
+		const address rel = block_chance_skip_va - (block_chance_site.va + 5);
+		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16),
+		        static_cast<std::uint8_t>(rel >> 24), 0x90};
+	}
 	inline std::vector<std::uint8_t> continue_jump(const layout& l)
 	{
-		const address rel = l.cont - (combo_continue_va + 5);
+		const address rel = l.react_cont - (combo_continue_va + 5);
 		return {0xe9, static_cast<std::uint8_t>(rel), static_cast<std::uint8_t>(rel >> 8), static_cast<std::uint8_t>(rel >> 16),
 		        static_cast<std::uint8_t>(rel >> 24), 0x90};
 	}
@@ -591,6 +1080,13 @@ namespace npc_power_rules
 		put(l.cont, cont_bridge(l));
 		put(l.start, start_bridge(l));
 		put(l.end_delay, end_delay_bridge(l));
+		put(l.react_cont, react_cont_bridge(l));
+		put(l.pre_start, pre_start_bridge(l));
+		put(l.mark, mark_bridge(l));
+		put(l.power_front, power_front_bridge(l));
+		put(l.attack_front, attack_front_bridge(l));
+		put(l.hit_roll, hit_roll_bridge(l));
+		put(l.power_lock, power_lock_bridge(l));
 		return bytes;
 	}
 

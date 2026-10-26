@@ -1,5 +1,8 @@
 # Scoped exceptions for the builder content guard used on this C++ repository.
 # Each entry describes original code/art or invented test data; no game assets are accepted.
+DISASM src/input_worker.cpp # Authored register-preserving lifetime-accounting bridges; only the short guarded entry prologue is replayed, with no game listing or decompiled body.
+DISASM test/input_worker_test.cpp # Authored synthetic ABI probe seeds invented register values and measures our bridges; no game instruction listing or decompiled body.
+GAME_EXT tools/union_host/union_space.asm # Authored MASM zero-filled address-space reservation (DB DUP(0)) for the synthetic DLL host; no game bytes, instructions or disassembly. Retail image supplied locally at runtime.
 DISASM  test/resistance_display_install_test.cpp  # Authored inline assembler recreates a synthetic HUD caller frame and executes our emitted bridge; no game instruction listing.
 MEDIA  docs/discord-art/badge-cutscene.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
 MEDIA  docs/discord-art/badge-dangerroom.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
@@ -62,5 +65,20 @@ DISASM  test/lockon_effects_test.cpp  # Authored synthetic stack-frame caller an
 DISASM  test/box_harm_test.cpp  # Authored synthetic caller/continuation checks our bridge's stack, registers and FPU; no game instruction listing or decompiled body.
 DISASM  src/harm_loop_startup_bridge.hpp  # Authored guarded branch bridge for ordinary loop startup; no copied game instruction listing or decompiled body.
 DISASM  src/harm_single_chain_bridge.hpp  # Authored eligibility and pending-bit bridges for the opt-in single-chain policy; no game instruction listing or decompiled body.
+
+DISASM src/gns_transport.cpp # Authored transport ABI bridges preserve registers and call the adapter.
+DISASM src/join_in_progress.cpp # Authored JIP ABI bridges implement the guarded hooks documented by this project.
 DISASM  src/receive_validation.cpp  # Authored naked x86 dispatch guard; replays only the short guarded prologue, validates and resumes or returns. No game listing or decompiled body.
 DISASM  test/receive_validation_test.cpp  # Authored synthetic register/stack driver for our dispatch guard; retail routines are read from a user-supplied executable, never embedded.
+DISASM  src/npc_semi_auto.cpp  # Authored NPC weapon bridges preserve registers and x87/SSE state and replay only their short guarded call/load instructions. No game listing or decompiled body.
+DISASM  test/npc_semi_auto_test.cpp  # Authored synthetic register/FPU caller and continuations test the production admission bridge; not game disassembly.
+PRIVATE_IP  docs/online-rooms.md  # the rooms protocol's own virtual address range (by design, see docs/online-rooms.md), not a personal network
+PRIVATE_IP  docs/superpowers/plans/2026-10-17-net-hardening.md  # the rooms protocol's virtual address range (by design, see docs/online-rooms.md)
+PRIVATE_IP  test/online_room_test.cpp  # invented test vectors in the rooms protocol's virtual address range (see docs/online-rooms.md)
+
+DISASM  test/npc_weapon_bridges_test.hpp  # Authored synthetic callers verify register, FPU and stack preservation of our weapon bridges; no game listing.
+DISASM  test/npc_query_scheduler_test.cpp  # Authored naked call thunk that sets up the caller frame for the executed admission run; the game bytes are read from the owner's files at runtime, no game instruction listing.
+DISASM  test/npc_combo_timing_test.cpp  # Authored naked call thunks (lock_run, the lock-bridge harness) that set up a caller frame for executed code; game bytes are read from the owner's exe at runtime, no game instruction listing.
+DISASM  src/world_backfaces.cpp  # Authored naked x86 bridge for the trace helper site 0x4a96c0 (described in prose above it); replays only the one guarded float store it displaces. No game listing or decompiled body.
+DISASM  src/npc_bullet_trace.hpp  # Authored register/FP-preserving trace-gate bridges; only the short guarded event prologue and displaced CMP/LEA/PUSH are replayed. No game listing or decompiled body.
+DISASM  test/npc_bullet_trace_test.hpp  # Authored synthetic stack/register callers verify our trace bridges; retail beam bytes are supplied by the owner's executable at runtime, never embedded.

@@ -977,6 +977,46 @@ namespace
 		CHECK(matches_patched(patch, patched.data()) && !matches_patched(patch, patch.expected.data()) && !matches(patch, patched.data()));
 		patched[3] ^= 1; // the 1/30 constant changed by someone else: not ours to touch
 		CHECK(!matches_patched(patch, patched.data()));
+		// [Online] TickRate=60: the online 1/30 becomes 1/60 in the same bytes; each patch accepts the other's.
+		{
+			const auto& tick = online_tick_patch;
+			CHECK(tick.rva == patch.rva && tick.expected == patch.expected && tick.offset == 3);
+			CHECK(std::bit_cast<float>(tick.replacement) == 1.0f / 60.0f);
+			auto both = patch.expected;
+			std::copy(tick.replacement.begin(), tick.replacement.end(), both.begin() + 3);
+			CHECK(matches(patch, both.data()) && matches_patched(tick, both.data()) && !matches(tick, both.data()));
+			std::copy(patch.replacement.begin(), patch.replacement.end(), both.begin() + 12);
+			CHECK(matches_patched(patch, both.data()) && matches_patched(tick, both.data()) && !matches(patch, both.data()));
+			auto offline_zero = patch.expected;
+			std::copy(patch.replacement.begin(), patch.replacement.end(), offline_zero.begin() + 12);
+			CHECK(matches(tick, offline_zero.data()) && !matches_patched(tick, offline_zero.data()));
+			auto foreign = patch.expected;
+			foreign[4] ^= 1; // someone else's online constant: neither patch touches it
+			CHECK(!matches(patch, foreign.data()) && !matches(tick, foreign.data()));
+			foreign = patch.expected;
+			foreign[13] ^= 1;
+			CHECK(!matches(tick, foreign.data()) && !matches(patch, foreign.data()));
+			// [Online] TickWait=timer: the online field becomes 0.0; FrameRate's patch accepts it like TickRate's 1/60.
+			const auto& wait = online_wait_patch;
+			CHECK(wait.rva == patch.rva && wait.expected == patch.expected && wait.offset == 3 && std::bit_cast<float>(wait.replacement) == 0.0f);
+			auto waited = patch.expected;
+			std::copy(wait.replacement.begin(), wait.replacement.end(), waited.begin() + 3);
+			CHECK(matches(patch, waited.data()) && matches_patched(wait, waited.data()) && !matches(wait, waited.data()) && !matches(tick, waited.data()));
+			std::copy(patch.replacement.begin(), patch.replacement.end(), waited.begin() + 12);
+			CHECK(matches_patched(patch, waited.data()) && matches_patched(wait, waited.data()));
+			CHECK(matches(wait, offline_zero.data()) && !matches_patched(wait, offline_zero.data()));
+			CHECK(online_pace_fps(0, 60) == 60 && online_pace_fps(180, 60) == 60 && online_pace_fps(30, 60) == 30 && online_pace_fps(0, 30) == 30);
+			CHECK(parse_tick_priority_thread(" Thread ") && !parse_tick_priority_thread("wait") && !parse_tick_priority_thread(""));
+			CHECK(!parse_tick_wait_spin(std::nullopt) && parse_tick_wait_spin(std::string(" Spin ")) && !parse_tick_wait_spin(std::string("timer")));
+			CHECK(!parse_tick_rate(std::nullopt).requested && parse_tick_rate(std::nullopt).fps == 30);
+			CHECK(parse_tick_rate(std::string(" 60 ")).requested && parse_tick_rate(std::string("60")).fps == 60 && parse_tick_rate(std::string("60")).valid);
+			CHECK(parse_tick_rate(std::string("30")).fps == 30 && parse_tick_rate(std::string("30")).requested);
+			CHECK(!parse_tick_rate(std::string("45")).valid && parse_tick_rate(std::string("45")).fps == 30 && !parse_tick_rate(std::string("")).requested);
+			CHECK(effective_tick_rate(parse_tick_rate(std::string("60")), true) == 60 && effective_tick_rate(parse_tick_rate(std::string("60")), false) == 30);
+			CHECK(effective_tick_rate(parse_tick_rate(std::string("45")), true) == 30 && effective_tick_rate(parse_tick_rate(std::string("30")), true) == 30);
+			CHECK(tick_rate_values(60) == (std::array<std::uint32_t, 4>{60, 0, 0, 0}));
+			CHECK(frames_for(64, 30) == 64 && frames_for(64, 60) == 128 && frames_for(300, 60) == 600);
+		}
 		// Live changes: back to the game's cap = no pacing once its spin is back, 60 by the fix if it couldn't be.
 		CHECK(live_target(stock_cap, 180, false, false) == 0 && live_target(stock_cap, 180, true, false) == 0);
 		CHECK(live_target(stock_cap, 180, false, true) == 60 && live_target(stock_cap, 180, true, true) == 60);
@@ -6092,7 +6132,36 @@ namespace
 			CHECK(list_option(true, forge | forge_campaign, forge_o, false, true) == listing::greyed);
 			CHECK(list_option(true, healer, dr_o, true, true) == listing::omitted);             // not offered by the point
 			CHECK(list_option(false, 0xf, load_o, true, false) == listing::omitted);
-			CHECK(revival_cost_rules::price_factor(0) == 1 && revival_cost_rules::price_factor(-3) == 1 && revival_cost_rules::price_factor(24) == 24);
+			{
+				// The first game's revival price (default.xbe 0xaf6b0 / 0x54150): 200 * G^2, G = min(5, L / 10 + 1).
+				using namespace revival_cost_rules;
+				CHECK(price_factor(0) == 1 && price_factor(-3) == 1 && price_factor(1) == 1 && price_factor(24) == 3);
+				CHECK(price_factor(9) == 1 && price_factor(10) == 2 && price_factor(19) == 2 && price_factor(20) == 3);
+				CHECK(price_factor(29) == 3 && price_factor(30) == 4 && price_factor(39) == 4 && price_factor(40) == 5);
+				CHECK(price_factor(45) == 5 && price_factor(99) == 5 && price_factor(0x7fffffff) == 5);
+				CHECK(price_for_level(9) == 200 && price_for_level(10) == 800 && price_for_level(19) == 800);
+				CHECK(price_for_level(20) == 1800 && price_for_level(29) == 1800 && price_for_level(30) == 3200);
+				CHECK(price_for_level(39) == 3200 && price_for_level(40) == 5000 && price_for_level(45) == 5000);
+				CHECK(price_for_level(0) == 200 && price_for_level(1) == 200);
+				// Never more than the band price, never XMen2.exe's or 1.8.0-beta.7's 200 * L^2 (80,000 at 20).
+				for (int l = 0; l <= 45; ++l) CHECK(price_for_level(l) <= 5000 && price_for_level(l) >= 200);
+				CHECK(price_for_level(20) != original_price(20));
+				// Mixed rosters: the highest hero who isn't a guest decides, whoever fell; an all-guest or empty roster is 200.
+				constexpr roster_hero mixed[] = {{9, false}, {19, true}, {4, false}};
+				constexpr roster_hero boundary[] = {{9, false}, {10, false}};
+				constexpr roster_hero high_guest[] = {{45, true}, {29, false}, {3, false}, {30, true}};
+				constexpr roster_hero guests_only[] = {{40, true}, {12, true}};
+				constexpr roster_hero top[] = {{45, false}, {1, false}};
+				const std::array<roster_hero, 0> none{};
+				CHECK(highest_counted(mixed) == 9 && price_for_level(highest_counted(mixed)) == 200);
+				CHECK(highest_counted(boundary) == 10 && price_for_level(highest_counted(boundary)) == 800);
+				CHECK(highest_counted(high_guest) == 29 && price_for_level(highest_counted(high_guest)) == 1800);
+				CHECK(highest_counted(guests_only) == 0 && price_for_level(highest_counted(guests_only)) == 200);
+				CHECK(highest_counted(none) == 0 && price_for_level(highest_counted(none)) == 200);
+				CHECK(highest_counted(top) == 45 && price_for_level(highest_counted(top)) == 5000);
+				// The guards: the hook's site, 0x449960's prologue and its loop (guest skip, running maximum), the getter.
+				CHECK(revival_cost_rules::guards.size() == 4 && revival_cost_rules::guards[2].va == roster_loop && roster_level < roster_loop && roster_loop < roster_level + 0x74);
+			}
 			CHECK(0x4a6c7a + 2 + to_save == 0x4a6cf0 && 0x4a6c7a + 2 + to_change_team == 0x4a6ca9);
 			CHECK(!offered(false, 0xf, load_o, true) && !offered(false, 0xf, forge_o, true));
 			CHECK(offered(true, load, load_o, false));                    // Load needs no character
@@ -6103,7 +6172,7 @@ namespace
 			int bits = 0;
 			for (const auto& o : options) { CHECK((bits & o.service) == 0); bits |= o.service; }
 			CHECK(bits == 0xf);
-			CHECK(revival_cost_rules::original_price(1) == 200 && revival_cost_rules::original_price(10) == 20000);
+			CHECK(revival_cost_rules::original_price(1) == 200 && revival_cost_rules::original_price(5) == 5000);
 			CHECK(revival_cost_rules::retail_price(1) == 200 && revival_cost_rules::retail_price(10) == 200 && revival_cost_rules::retail_price(20) == 800);
 			const auto jmp = revival_cost_rules::jump_to(0x10001000);
 			std::uint32_t rel = 0;
@@ -10473,8 +10542,27 @@ namespace
 		CHECK(operand == l.half());
 		std::memcpy(&operand, recheck.data() + 18, 4);
 		CHECK(operand == l.two());
-		CHECK(gate[7] == 0x75 && 9 + gate[8] == 37 && gate[13] == 0xe8 && rel32(gate, 14, l.gate) == energy_getter_va && gate[35] == 0x75 && 37 + gate[36] == 42);
-		CHECK(gate[37] == 0xe9 && rel32(gate, 38, l.gate) == picker_va && gate[44] == 0xc2 && gate[45] == 0x14);
+		CHECK(gate[7] == 0x75 && 9 + gate[8] == 37 && gate[13] == 0xe8 && rel32(gate, 14, l.gate) == energy_getter_va && gate[35] == 0x75 && 37 + gate[36] == 54);
+		// Revision 10: the go path is the picker's own first 12 bytes, then 0x50fe69, past its input-lock test.
+		CHECK(std::vector<std::uint8_t>(gate.begin() + 37, gate.begin() + 49) == sub_bytes(picker_entry_site, 0, 12) && gate[49] == 0xe9 &&
+		      rel32(gate, 50, l.gate) == picker_unlocked_va && picker_unlocked_va == picker_va + 25 && gate[54] == 0x32 && gate[56] == 0xc2 && gate[57] == 0x14);
+		// Revision 10: the attack-state update's input-lock exit (jz -> jmp, same target) and the power decision's lock
+		// test (jne 0x518ac9 -> the bridge; its exits back to 0x518ac9 / 0x5187ca, its caller test 0x5193e7).
+		CHECK(sub_bytes(lock_exit_site, 10, 2) == std::vector<std::uint8_t>({0x74, 0x0d}) && lock_exit_bytes() == std::vector<std::uint8_t>({0xeb, 0x0d}) &&
+		      lock_exit_va == lock_exit_site.va + 10 && lock_exit_va + 2 + 0x0d == 0x512f1a);
+		{
+			const auto lock = power_lock_bridge(l), lock_jump = power_lock_jump(l);
+			const auto native = sub_bytes(power_lock_site, 11, 6);
+			std::int32_t jne = 0;
+			std::memcpy(&jne, native.data() + 2, 4);
+			address caller = 0;
+			std::memcpy(&caller, lock.data() + 6, 4);
+			CHECK(native[0] == 0x0f && native[1] == 0x85 && power_lock_va + 6 + jne == power_lock_exit_va && power_lock_va == power_lock_site.va + 11 &&
+			      power_lock_resume_va == power_lock_va + 6);
+			CHECK(lock.size() == power_lock_size && lock[0] == 0x74 && 2 + lock[1] == 0x11 && lock[10] == 0x74 && 12 + lock[11] == 0x11 &&
+			      caller == melee_power_call_return_va && rel32(lock, 0x0d, l.power_lock) == power_lock_exit_va && rel32(lock, 0x12, l.power_lock) == power_lock_resume_va);
+			CHECK(lock_jump.size() == 6 && lock_jump[0] == 0xe9 && rel32(lock_jump, 1, power_lock_va) == l.power_lock && lock_jump[5] == 0x90);
+		}
 		const auto data = constants();
 		float values[4];
 		std::memcpy(values, data.data(), 16);
@@ -11385,6 +11473,15 @@ namespace
 			CHECK(notice_text(std::string(200, 'n')).size() == description_max && notice_text("x") == "XML2 Fix: x");
 			CHECK(message_with_reason("Load failed.", "why", 0x1a0) == "Load failed. - why" && message_with_reason("", "why", 0x1a0) == "why" && message_with_reason("text", "", 0x1a0) == "text");
 			CHECK(message_with_reason("abcdef", "ghij", 8).size() == 7);
+			// Dialogs wrap at spaces; an absolute save path can exceed their fixed
+			// content width. Keep the file/reason visible and retain the full path
+			// in the unchanged refusal/logging path, outside this UI formatter.
+			const std::string windows_path = "Q:\\Synthetic long folder\\Another folder\\SaveLC\\invented_slot.lcsave is damaged (fixture CRC)";
+			CHECK(message_with_reason("Synthetic failure", windows_path, 0x1a0) == "Synthetic failure - invented_slot.lcsave is damaged (fixture CRC)");
+			CHECK(message_with_reason("", "writing Q:/Synthetic long folder/SaveLC/invented_profile.lcsave failed: fixture", 0x1a0) == "writing invented_profile.lcsave failed: fixture");
+			CHECK(message_with_reason("", "\\\\fixture-host\\Synthetic folder\\SaveLC\\invented_slot.lcsave.bak refused", 0x1a0) == "invented_slot.lcsave.bak refused");
+			CHECK(message_with_reason("", "relative/invented_slot.lcsave refused", 0x1a0) == "relative/invented_slot.lcsave refused");
+			CHECK(windows_path.find("Synthetic long folder") != std::string::npos);
 		}
 		CHECK(crc32(reinterpret_cast<const std::uint8_t*>("123456789"), 9) == 0xcbf43926u);
 

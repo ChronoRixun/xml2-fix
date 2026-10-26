@@ -25,7 +25,10 @@
 #include "box_harm.hpp"
 #include "harm_loop_startup.hpp"
 #include "harm_single_chain.hpp"
+#include "world_backfaces.hpp"
+#include "world_backfaces_rules.hpp"
 #include "double_heal.hpp"
+#include "combo_heads.hpp"
 #include "xml1_capability_rules.hpp"
 #include "conversations.hpp"
 #include "confirmation_release.hpp"
@@ -34,6 +37,7 @@
 #include "death_threshold.hpp"
 #include "receive_validation.hpp"
 #include "npc_power.hpp"
+#include "npc_semi_auto.hpp"
 #include "stun_rule.hpp"
 #include "pack_amount.hpp"
 #include "death_switch.hpp"
@@ -51,9 +55,14 @@
 #include "xml1_turrets.hpp"
 #include "game_version.hpp"
 #include "gamepad_fix.hpp"
+#include "input_worker.hpp"
 #include "iat_hook.hpp"
 #include "ini.hpp"
 #include "limits.hpp"
+#include "model_pools.hpp"
+#include "model_pools_rules.hpp"
+#include "online_tick.hpp"
+#include "frame_rate_rules.hpp"
 #include "geometry_sharing.hpp"
 #include "ladder_paths.hpp"
 #include "log.hpp"
@@ -64,12 +73,19 @@
 #include "danger_room_party.hpp"
 #include "danger_room_healthbars.hpp"
 #include "resistance_display.hpp"
+#include "classic_hud.hpp"
+#include "codex_menu.hpp"
+#include "speaker_label.hpp"
 #include "revival_cost.hpp"
 #include "mod_loader.hpp"
 #include "new_game.hpp"
 #include "load_trace.hpp"
 #include "plugin_scan.hpp"
 #include "net_trace.hpp"
+#include "gns_transport.hpp"
+#include "online_room.hpp"
+#include "join_in_progress.hpp"
+#include "net_impair.hpp"
 #include "openspy_redirect.hpp"
 #include "pad_profile.hpp"
 #include "pad_bindings.hpp"
@@ -182,6 +198,7 @@ namespace
 		xml2_pad_bindings::install();
 
 		const HMODULE game = GetModuleHandleW(nullptr);
+		input_worker::install(game);
 		// The button prompts: the pad's names for a player on a pad, the power wheel's buttons of play. Code and
 		// data the game runs from its first menu on; none of the sites is another module's.
 		pad_prompts::install(game);
@@ -202,6 +219,8 @@ namespace
 		{
 			net_trace::install(game);
 		}
+		// [Dev] NetFakeLoss/NetFakeLag/NetFakeJitter: test-only impairment of the game's UDP sends (and GNS's, same values).
+		net_impair::install(game);
 		// [Online] GameVersion: the string the game copies into its network code at start-up and when online
 		// opens - here, before any of its code runs.
 		game_version::install(game);
@@ -330,9 +349,12 @@ namespace
 			gameplay_agreement::register_rule(gameplay_capabilities::multipart_id, 1, parts.values, parts.verified);
 		}
 		// The Xtraction menus are built by every peer from its own script run and driven by the activator's input, and
-		// the revival price is debited by every peer: the option lists and the price must be the same everywhere (rule 10).
+		// the revival price is debited by every peer: the option lists and the price must be the same everywhere (rule 10;
+		// revision 3 with RevivalCost requested: the first game's group price, refused by the 200 * level^2 revision 2).
 		if (game_version::needs_gameplay_agreement() || xtract::requested() || revival_cost::requested())
-			gameplay_agreement::register_rule(gameplay_capabilities::xtraction_services_id, gameplay_capabilities::xtraction_services_revision,
+			gameplay_agreement::register_rule(gameplay_capabilities::xtraction_services_id,
+			                                  revival_cost::requested() ? gameplay_capabilities::xtraction_services_revival_revision
+			                                                            : gameplay_capabilities::xtraction_services_revision,
 			                                  xtract::capability(revival_cost::installed()), xtract::verified() && revival_cost::verified());
 		// Conversations written for XML1's engine ([Game] AutoAdvance, ReplyVoices, ReplyCursor; on by default):
 		// three code sites of the conversation system, used from the first conversation on; independent of the
@@ -387,8 +409,12 @@ namespace
 		// energy. Online play is lockstep, so AI decisions and enemy energy are part of the shared gameplay record (rule
 		// 16); a requested rule enlists the agreement even in a non-LC installation.
 		npc_power::install(game);
-		if (game_version::needs_gameplay_agreement() || npc_power::requested())
-			gameplay_agreement::register_rule(gameplay_capabilities::npc_power_rule_id, npc_power::revision_for(npc_power::requested()), npc_power::values(), npc_power::verified());
+		npc_semi_auto::install(game);
+		if (game_version::needs_gameplay_agreement() || npc_power::requested() || npc_semi_auto::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::npc_power_rule_id,
+				npc_power::revision_for(npc_power::requested() || npc_semi_auto::requested()),
+				npc_semi_auto::values(npc_power::values()), npc_power::verified() && npc_semi_auto::verified(),
+				npc_semi_auto::detail());
 		stun_rule::install(game);
 		// New opt-in rule: absence preserves the released LC OFF digest.
 		if (stun_rule::requested())
@@ -410,6 +436,20 @@ namespace
 		// first asks for the actor table (getter 0x56b8e0) and the resource name table (0x55af80) from
 		// the CPrecacheMgr constructor, during its start-up.
 		limits::install(game);
+		// [Engine] ModelPools: the model aggregate (0x7bf6d0) is built at the first getter call, after this.
+		model_pools::install(game);
+		// A raise is rule 28 (ModelPools): a full pool refuses spawns, so co-op peers must share the capacities.
+		// Requested only: absent/off adds no entry (the released record); a requested raise that failed is unverified.
+		if (model_pools::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::model_pools_id, model_pools_rules::agreement_revision,
+				model_pools::agreement_values(), model_pools::verified());
+		// [Online] TickRate: the online frame's 1/30 s as 1/60 s (docs/online-tick-rate.md). Before the exe's code runs.
+		// Rule 29 (TickRate) carries the rate in effect whenever the key is there: lockstep runs every PC's frames
+		// together, so a 60 and a 30 PC refuse each other by name; absent = the game's 30 and the released record.
+		online_tick::install(game);
+		if (online_tick::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::tick_rate_id, frame_rate_rules::tick_rate_revision,
+				online_tick::agreement_values(), true);
 		geometry_sharing::install(game);
 		ladder_paths::install(game);
 		// X-Men Legends 1's rule for breaking objects ([Game] BreakRule=xml1): one vtable slot of the combat object and
@@ -435,6 +475,14 @@ namespace
 		// Target subtitle only: reads current affecters without changing combat
 		// state or consuming RNG. It needs no gameplay-agreement record.
 		resistance_display::install(game);
+		classic_hud::install(game);
+		codex_menu::install(game);
+		// XML1's speaker labels ([Game] ClassicSpeakers=1): the line parser's two calls of its common part; display only,
+		// no agreement record (the label is drawn text; the speaker key, portrait and talk animation are the game's own).
+		speaker_label::install(game);
+		// The team-combo popup never draws without both heads (owner crash 2026-10-23: a null head at 0x5a6845 when a
+		// model pool was full): one HUD vtable slot (0x69dd58) no other module touches; display only, no agreement record.
+		combo_heads::install(game);
 		if (danger_room_healthbars::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::danger_room_healthbars_id, 1,
 				{danger_room_healthbars::installed() ? 1u : 0u,0,0,0}, danger_room_healthbars::verified());
@@ -444,6 +492,12 @@ namespace
 		if (world_impact::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::object_world_impact_id, 1,
 				{world_impact::installed() ? 1u : 0u,0,0,0}, world_impact::verified());
+		// [Game] WorldBackfaces=xml1 (requested-only, rule 30, docs/world-backfaces.md): one operand of the movement
+		// trace helper 0x4a9650 (0x4a96c1), first run by the first movement update; no other module patches it.
+		world_backfaces::install(game);
+		if (world_backfaces::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::world_backfaces_id, world_backfaces_rules::agreement_revision,
+				world_backfaces::values(), world_backfaces::verified(), world_backfaces::detail());
 		// X-Men Legends 1's packs ([Game] DoubleHeal=0, installed above, before stat_help): two branches of restoreHealth /
 		// restoreEnergy; no other module patches them.
 		// Both change what each peer simulates (objects broken while a zone settles; how much a pack heals): rules 11
@@ -458,6 +512,17 @@ namespace
 			const auto heal = xml1_capability_rules::installed_switch(double_heal::requested(), double_heal::installed());
 			gameplay_agreement::register_rule(gameplay_capabilities::double_heal_id, xml1_capability_rules::double_heal_revision, heal.values, heal.verified);
 		}
+
+		// [Online] Transport=gns (requested-only, rule 25 GnsTransport, docs/gns-transport.md): the participants' game
+		// messages over GameNetworkingSockets. Four guarded sites in one transaction; GNS itself starts on the game's
+		// thread at the first receive pump, never here. It registers rule 25 itself when it installed.
+		// [Online] Host=broker / JoinCode (docs/online-rooms.md): rooms through the project broker - the game socket's
+		// datagrams to room members' virtual addresses through GNS P2P connections. Before the transport, which they imply.
+		online_room::install(game);
+		gns_transport::install(game);
+		// [Online] JoinInProgress=1 (requested-only, rule 26 JoinInProgress, docs/join-in-progress.md): after the
+		// transport, which it requires.
+		join_in_progress::install(game);
 
 		test_mode::install(game);
 		test_input::install(); // first: its screenshots need the display fix's device hook
@@ -514,6 +579,11 @@ BOOL WINAPI DllMain(HINSTANCE instance, const DWORD reason, LPVOID)
 			MessageBoxA(nullptr, notice.c_str(), "XML2 Fix: entity capacity unavailable", MB_OK | MB_ICONWARNING);
 			logger::write("startup: entity capacity notice closed");
 		}
+	}
+	else if (reason == DLL_PROCESS_DETACH)
+	{
+		// The game is closing: online-status.json says `ended` for the launcher (Win32 file calls only).
+		online_room::shutdown();
 	}
 	return TRUE;
 }

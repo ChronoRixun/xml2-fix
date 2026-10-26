@@ -3,6 +3,7 @@
 #include <Windows.h>
 #include "npc_power_rules.hpp"
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <limits>
 
@@ -24,6 +25,136 @@ __declspec(naked) int step(void*, void*) {
     __asm { pop esi }
     __asm { pop ebx }
     __asm { pop ebp }
+    __asm { ret }
+}
+__declspec(naked) void mark_call(void*) {
+    __asm { push esi }
+    __asm { mov esi,[esp+8] }
+    __asm { call dword ptr [entry] }
+    __asm { pop esi }
+    __asm { ret }
+}
+float clock_now = 0;
+__declspec(naked) float __fastcall clock_read(void*) {
+    __asm { fld dword ptr [clock_now] }
+    __asm { ret }
+}
+void* clock_vtable[0x164 / 4] = {};
+void* clock_object[1] = {clock_vtable};
+__declspec(naked) void* clock_owner() {
+    __asm { mov eax, offset clock_object }
+    __asm { ret }
+}
+float random_now = 0;
+__declspec(naked) float random_read(int) {
+    __asm { fld dword ptr [random_now] }
+    __asm { ret }
+}
+__declspec(naked) void power_call(void*) {
+    __asm { mov ecx,[esp+4] }
+    __asm { call dword ptr [entry] }
+    __asm { ret }
+}
+// The to-hit roll's power-attack test (revision 10): esi = the attack, eax/edi as the roll has them; each relocated
+// exit is a stub `mov ecx,route; ret`, so ecx names the continuation and eax/edi come back as it left them.
+int roll_eax = 0, roll_edi = 0;
+__declspec(naked) int roll_call(void*, int) {
+    __asm { push esi }
+    __asm { push edi }
+    __asm { mov esi,[esp+12] }
+    __asm { mov eax,[esp+16] }
+    __asm { mov edi,0x55 }
+    __asm { call dword ptr [entry] }
+    __asm { mov [roll_eax],eax }
+    __asm { mov [roll_edi],edi }
+    __asm { mov eax,ecx }
+    __asm { pop edi }
+    __asm { pop esi }
+    __asm { ret }
+}
+// Revision 10 item 17: enter the power decision's lock bridge with the flags of `test byte [locked],1` and the
+// caller's return address at [esp+0x24] (sub esp,0x14 and four pushes since 0x518770's entry).
+__declspec(naked) int lock_call(unsigned, unsigned) {
+    __asm { push ebx }
+    __asm { mov ebx,esp }
+    __asm { mov eax,[ebx+12] }
+    __asm { sub esp,0x24 }
+    __asm { mov [esp+0x20],eax }
+    __asm { test byte ptr [ebx+8],1 }
+    __asm { call dword ptr [entry] }
+    __asm { mov esp,ebx }
+    __asm { pop ebx }
+    __asm { ret }
+}
+// The retail run 0x5187b9..0x5187ce (mov ebp,[esp+0x14]; test byte [ebp+0x764],1; jne; mov ebx,[esp+0x1c]) entered
+// with the deciding character at [esp+0x14] and the caller's return address at [esp+0x24].
+__declspec(naked) int lock_run(void*, unsigned) {
+    __asm {
+        push ebx
+        push ebp
+        push esi
+        mov esi, esp
+        sub esp, 0x28
+        mov eax, [esi+16]
+        mov [esp+0x10], eax
+        mov eax, [esi+20]
+        mov [esp+0x20], eax
+        mov dword ptr [esp+0x18], 0x13572468
+        call dword ptr [entry]
+        cmp ebx, 0x13572468
+        jne lock_run_out
+        or eax, 2
+    lock_run_out:
+        mov esp, esi
+        pop esi
+        pop ebp
+        pop ebx
+        ret
+    }
+}
+// The retail run 0x512f01..0x512f1a of the attack-state update (esi = the AI): 1 = on at 0x512f1a, 0 = the exit.
+__declspec(naked) int exit_run(void*) {
+    __asm { push esi }
+    __asm { mov esi,[esp+8] }
+    __asm { call dword ptr [entry] }
+    __asm { pop esi }
+    __asm { ret }
+}
+// Item 18: the gate (thiscall, ecx = the AI, five arguments, ret 0x14). Its energy read and picker continuation are
+// stubs; the continuation records the registers and stack the picker's code after 0x50fe69 starts with.
+float energy_now = 0;
+__declspec(naked) float __fastcall energy_read(void*) {
+    __asm { fld dword ptr [energy_now] }
+    __asm { ret }
+}
+std::uint32_t seen_esi = 0, seen_eax = 0, seen_ecx = 0, seen_esp = 0, seen_pushed = 0, call_esp = 0;
+__declspec(naked) void picker_rest() {
+    __asm { mov seen_esi,esi }
+    __asm { mov seen_eax,eax }
+    __asm { mov seen_ecx,ecx }
+    __asm { mov seen_esp,esp }
+    __asm { mov eax,[esp] }
+    __asm { mov seen_pushed,eax }
+    __asm { pop esi }
+    __asm { add esp,0xac }
+    __asm { mov al,1 }
+    __asm { ret 0x14 }
+}
+__declspec(naked) int gate_call(void*) {
+    __asm { push esi }
+    __asm { mov ecx,[esp+8] }
+    __asm { mov esi,0x5a5a5a5a }
+    __asm { push 5 }
+    __asm { push 4 }
+    __asm { push 3 }
+    __asm { push 2 }
+    __asm { push 1 }
+    __asm { mov call_esp,esp }
+    __asm { call dword ptr [entry] }
+    __asm { cmp esi,0x5a5a5a5a }
+    __asm { setne ah }
+    __asm { movzx eax,ax }
+    __asm { pop esi }
     __asm { ret }
 }
 __declspec(naked) float finish(void*, float) {
@@ -53,6 +184,27 @@ int main() {
     leave(l.cont + 0x6a, l.base + 728); // wait
     leave(l.cont + 0x6f, l.base + 744); // complete
     leave(l.cont + 0x7a, l.base + 752); // original fallback
+    // Revision 5: the reaction front of the continue step, the unmarking front of the start, the hit's mark.
+    std::array<std::uint8_t, ai_stride * ai_slots> ais{};
+    edit(l.react_cont + 3, base); edit(l.pre_start + 3, base);
+    leave(l.react_cont + 0x52, l.base + 744); // complete
+    edit(l.mark + 0x0f, static_cast<address>(reinterpret_cast<std::uintptr_t>(ais.data())));
+    leave(l.mark + 0x51, l.base + 768); // the pain decision's jz: a plain return here
+    bytes[768] = 0xc3;
+    // The power front: the clock owner is a stub object whose vt+0x160 returns `clock_now`; the resume undoes the
+    // displaced prologue (pop ebp; pop ebx; add esp,0x14; ret).
+    edit(l.power_front + 4, base);
+    leave(l.power_front + 0x3f, static_cast<address>(reinterpret_cast<std::uintptr_t>(&clock_owner)));
+    leave(l.power_front + 0xa2, l.base + 772);
+    const std::uint8_t undo[] = {0x5d, 0x5b, 0x83, 0xc4, 0x14, 0xc3};
+    std::memcpy(bytes.data() + 772, undo, sizeof(undo));
+    // The attack front: the same clock stub, a random stub, and a resume that undoes sub esp,0x58; push ebx; push ebp.
+    edit(l.attack_front + 4, base);
+    leave(l.attack_front + 0x4c, static_cast<address>(reinterpret_cast<std::uintptr_t>(&clock_owner)));
+    leave(l.attack_front + 0x7e, static_cast<address>(reinterpret_cast<std::uintptr_t>(&random_read)));
+    leave(l.attack_front + 0xb2, l.base + 780);
+    const std::uint8_t undo58[] = {0x5d, 0x5b, 0x83, 0xc4, 0x58, 0xc3};
+    std::memcpy(bytes.data() + 780, undo58, sizeof(undo58));
     // The unknown-combo fallback's constant lives in our allocation too.
     edit(l.end_delay + 0x1b, l.base + 760);
     const float stock_delay = 0.2f;
@@ -61,8 +213,55 @@ int main() {
         const std::size_t at = 720 + 8 * value;
         bytes[at] = 0xb8; put32(bytes, at + 1, value); bytes[at + 5] = 0xc3;
     }
+    // Revision 10 items 17-18: the lock bridge's exits are the value stubs (0 = the native exit 0x518ac9, 1 = on at
+    // 0x5187ca); the gate's energy read and picker continuation are the stubs above.
+    leave(l.power_lock + 0x0d, l.base + 720);
+    leave(l.power_lock + 0x12, l.base + 728);
+    leave(l.gate + 14, static_cast<address>(reinterpret_cast<std::uintptr_t>(&energy_read)));
+    leave(l.gate + 50, static_cast<address>(reinterpret_cast<std::uintptr_t>(&picker_rest)));
+    check(power_lock_bridge(l).size() == power_lock_size && power_lock_jump(l).size() == 6 && gate_bridge(l).size() == gate_size
+          && l.attack_front + attack_front_size <= l.base + 2048 && l.base + 2048 + 35 <= l.power_lock && l.power_lock + power_lock_size <= l.base + code_size
+          && l.gate + gate_size <= l.constants, "revision 10 lock bridges: lengths and spans");
     check(cont_bridge(l).size() == cont_size && start_bridge(l).size() == start_size && end_delay_bridge(l).size() == end_delay_size, "emitted bridge lengths");
+    check(react_cont_bridge(l).size() == react_cont_size && pre_start_bridge(l).size() == pre_start_size && mark_bridge(l).size() == mark_size && mark_jump(l).size() == reaction_site.patched
+          && power_front_bridge(l).size() == power_front_size && power_entry_jump(l).size() == power_entry_site.patched
+          && attack_front_bridge(l).size() == attack_front_size && attack_entry_jump(l).size() == attack_entry_site.patched, "revision 5 bridge lengths");
+    check(l.base + 786 <= l.react_cont && l.react_cont + react_cont_size <= l.pre_start && l.pre_start + pre_start_size <= l.mark && l.mark + mark_size <= l.power_front
+          && l.power_front + power_front_size <= l.attack_front && l.attack_front + attack_front_size <= l.base + code_size
+          && l.react == l.next + 4 * ai_slots && l.react_power == l.react + 4 * ai_slots && l.react_attack == l.react_power + 4 * ai_slots
+          && l.react_attack + 4 * ai_slots <= l.next + (block_size - code_size), "revision 5 spans do not overlap");
     check(l.cont + cont_size <= l.start && l.start + start_size <= l.delays && l.delays + 120 <= l.end_delay && l.end_delay + end_delay_size <= l.base + code_size, "bridge and data spans do not overlap");
+    // Revision 10, XML1's block rule: the roll bridge's three exits go to stubs after it (mov ecx,route; ret).
+    check(hit_roll_bridge(l).size() == hit_roll_size && hit_roll_jump(l).size() == hit_roll_site.patched && block_chance_skip().size() == block_chance_site.patched
+          && l.attack_front + attack_front_size <= l.hit_roll && l.hit_roll + hit_roll_size + 24 <= l.base + code_size, "block rule bridge length and span");
+    {
+        const auto rel = [](const std::vector<std::uint8_t>& c, std::size_t at, address from) {
+            return from + static_cast<address>(at + 4) + (c[at] | c[at + 1] << 8 | c[at + 2] << 16 | static_cast<address>(c[at + 3]) << 24);
+        };
+        const auto bridge = hit_roll_bridge(l);
+        check(rel(bridge, 0x06, l.hit_roll) == hit_roll_combo_va && rel(bridge, 0x15, l.hit_roll) == hit_roll_rolled_va && rel(bridge, 0x1f, l.hit_roll) == hit_roll_result_va,
+              "the roll bridge's exits: combo text 0x44f594, the draw 0x44f5b4, the result 0x44f6bd");
+        check(rel(hit_roll_jump(l), 1, hit_roll_site.va) == l.hit_roll && hit_roll_jump(l)[5] == 0x90, "0x44f58e jumps to the roll bridge");
+        const auto skip = block_chance_skip();
+        check(skip[0] == 0xe9 && rel(skip, 1, block_chance_site.va) == block_chance_skip_va && skip[5] == 0x90
+              && retail_bytes(block_chance_site, 6) == std::vector<std::uint8_t>({0x0f, 0x8a, 0x86, 0x00, 0x00, 0x00})
+              && block_chance_site.va + 6 + 0x86 == block_chance_skip_va, "0x437b08: the chance test's jp to 0x437b94 becomes a jmp there");
+        check(sub_bytes(hit_roll_site, 0, 6) == std::vector<std::uint8_t>({0xf6, 0x46, 0x35, 0x04, 0x74, 0x20}) && hit_roll_site.va + 6 + 0x20 == hit_roll_rolled_va
+              && hit_roll_site.va + 6 == hit_roll_combo_va && sub_bytes(hit_roll_site, 0x1c, 10) == std::vector<std::uint8_t>({0xbf, 0x01, 0x00, 0x00, 0x00, 0xe9, 0x09, 0x01, 0x00, 0x00})
+              && hit_roll_site.va + 0x26 + 0x109 == hit_roll_result_va, "the displaced test and the game's own always-hit exit");
+        check(sub_bytes(miss_counts_site, 0, 7) == std::vector<std::uint8_t>({0x8a, 0x46, 0x35, 0x24, 0x78, 0x3c, 0x08})
+              && sub_bytes(blocked_flag_site, 0, 5) == std::vector<std::uint8_t>({0x83, 0x7c, 0x24, 0x20, 0x02}), "the contact's damagescale and blocked-flag encodings the rule relies on");
+    }
+    // The stubs sit past the item-17 lock bridge (block+2112, 22 bytes), which l.hit_roll + 64 would overwrite.
+    const address roll_stub = l.hit_roll + 128;
+    check(l.power_lock + power_lock_size <= roll_stub && roll_stub + 24 <= l.base + code_size, "block rule test stubs clear of the lock bridge");
+    for (int route = 0; route < 3; ++route) {
+        const std::size_t at = roll_stub - l.base + 8 * route;
+        bytes[at] = 0xb9; put32(bytes, at + 1, route + 1); bytes[at + 5] = 0xc3;
+    }
+    leave(l.hit_roll + 0x06, roll_stub);      // 1 = the combo-text path
+    leave(l.hit_roll + 0x15, roll_stub + 8);  // 2 = the draw
+    leave(l.hit_roll + 0x1f, roll_stub + 16); // 3 = the result (a hit without a draw)
     std::memcpy(memory, bytes.data(), bytes.size());
     DWORD old = 0;
     if (!VirtualProtect(memory, code_size, PAGE_EXECUTE_READ, &old) || !FlushInstructionCache(GetCurrentProcess(), memory, code_size)) return 2;
@@ -142,6 +341,246 @@ int main() {
     field<unsigned>(brains.data(), 0x3c) = 6;
     entry = reinterpret_cast<void*>(l.end_delay);
     check(finish(brains.data(), 17.0f) == 17.2f, "unmapped combo keeps native completion addition");
+    // V-NPC3 (revision 5): a hit reaction spends the combo steps that come due before the brain runs again.
+    {
+        auto* react = reinterpret_cast<std::uint32_t*>(l.react);
+        auto* nexts = reinterpret_cast<float*>(l.next);
+        const unsigned s = 5;
+        auto* b = brains.data() + s * ai_stride;
+        field<void*>(b, 4) = ai.data();
+        // The hit's mark: only a reacting hit marks, and only the victim's slots.
+        std::array<std::uint8_t, 0xc0> hit{};
+        field<void*>(hit.data(), 0) = actor.data();
+        field<void*>(ais.data() + s * ai_stride, 0x10) = actor.data();
+        for (unsigned i = 0; i < ai_slots; ++i) react[i] = 0;
+        entry = reinterpret_cast<void*>(l.mark);
+        hit[0xac] = 0x03;
+        mark_call(hit.data());
+        check(react[s] == 0, "a hit without a reaction leaves the slot unmarked");
+        hit[0xac] = 0x0b;
+        mark_call(hit.data());
+        bool others = false;
+        for (unsigned i = 0; i < ai_slots; ++i) if (i != s && react[i]) others = true;
+        auto* react_power = reinterpret_cast<std::uint32_t*>(l.react_power);
+        auto* react_attack = reinterpret_cast<std::uint32_t*>(l.react_attack);
+        check(react[s] == 1 && react_power[s] == 1 && react_attack[s] == 1 && !others, "a reacting hit marks the victim's slot only (combo, power, attack)");
+        // A combo start clears a stale mark.
+        entry = reinterpret_cast<void*>(l.pre_start);
+        field<unsigned>(b, 0x3c) = 5; field<unsigned>(b, 0x34) = 5; field<unsigned>(b, 0x30) = 0;
+        field<float>(ai.data(), ai_now) = 9.7f;
+        check(step(b, actor.data()) == 0 && react[s] == 0 && nexts[s] == 9.7f + 0.3f, "combo start unmarks and arms");
+        // Marked: the steps due during the reaction are spent, the continue step then waits for the next one.
+        entry = reinterpret_cast<void*>(l.react_cont);
+        react[s] = 1; nexts[s] = 10.0f; field<unsigned>(b, 0x30) = 0; field<float>(ai.data(), ai_now) = 10.65f;
+        const int r1 = step(b, actor.data());
+        check(r1 == 1 && field<unsigned>(b, 0x30) == 3 && react[s] == 0 && std::fabs(nexts[s] - 10.9f) < 1e-5f, "spent steps advance the index and the clock, then wait");
+        check(step(b, actor.data()) == 1 && field<unsigned>(b, 0x30) == 3, "unmarked call afterwards still waits");
+        field<float>(ai.data(), ai_now) = 10.95f;
+        check(step(b, actor.data()) == 2 && field<unsigned>(b, 0x30) == 4, "the first step after the reaction presses on time");
+        // Marked with every step overdue: the combo completes natively.
+        field<unsigned>(b, 0x3c) = 1; field<unsigned>(b, 0x34) = 2; field<unsigned>(b, 0x30) = 0;
+        react[s] = 1; nexts[s] = 10.0f; field<float>(ai.data(), ai_now) = 11.0f;
+        check(step(b, actor.data()) == 3 && field<unsigned>(b, 0x30) == 2 && react[s] == 0, "a reaction past the last step completes the combo");
+        // Unmarked: identical to the revision 4 continue step.
+        field<unsigned>(b, 0x30) = 0; nexts[s] = 10.0f; field<float>(ai.data(), ai_now) = 10.05f;
+        check(step(b, actor.data()) == 2 && field<unsigned>(b, 0x30) == 1, "no mark: the revision 4 step");
+        // Marked with an unordered clock: no spending loop, the continue step's own wait.
+        field<unsigned>(b, 0x30) = 0; react[s] = 1; nexts[s] = 10.0f; field<float>(ai.data(), ai_now) = std::numeric_limits<float>::quiet_NaN();
+        check(step(b, actor.data()) == 1 && field<unsigned>(b, 0x30) == 0, "unordered clock spends nothing");
+        // Brains outside the table take the continue step's fallback.
+        check(step(brains.data() + 1, actor.data()) == 4, "unaligned brain: native fallback through the front");
+        // The power front: a re-check that fell due during the reaction is spent and re-armed (2.0 s for an NPC,
+        // 0.5 s with a controller); unmarked or future timers are untouched; the x87 stack stays balanced.
+        clock_vtable[0x160 / 4] = reinterpret_cast<void*>(&clock_read);
+        field<void*>(ai.data(), 0x10) = actor.data();
+        auto& timer = field<float>(ai.data(), 0x1cc);
+        unsigned short fb = 0, fa = 0;
+        __asm { fnclex }
+        __asm { fnstsw fb }
+        entry = reinterpret_cast<void*>(l.power_front);
+        field<std::int32_t>(actor.data(), 0x3d4) = -1;
+        react_power[s] = 1; timer = 20.0f; clock_now = 20.3f;
+        power_call(b);
+        check(react_power[s] == 0 && timer == 22.0f, "an overdue NPC re-check is spent and re-armed by 2.0 s");
+        react_power[s] = 1; timer = 20.0f; clock_now = 24.5f;
+        power_call(b);
+        check(timer == 26.0f, "every re-check that fell due is spent");
+        field<std::int32_t>(actor.data(), 0x3d4) = 0;
+        react_power[s] = 1; timer = 20.0f; clock_now = 20.3f;
+        power_call(b);
+        check(timer == 20.5f, "a character with a controller re-arms by 0.5 s");
+        react_power[s] = 1; timer = 30.0f; clock_now = 20.3f;
+        power_call(b);
+        check(react_power[s] == 0 && timer == 30.0f, "a future re-check is left alone");
+        react_power[s] = 0; timer = 20.0f; clock_now = 20.3f;
+        power_call(b);
+        check(timer == 20.0f, "no mark: the decision as before");
+        react_power[s] = 1; timer = std::numeric_limits<float>::quiet_NaN(); clock_now = 20.3f;
+        power_call(b);
+        check(std::isnan(timer), "an unordered timer is left alone");
+        field<std::int32_t>(actor.data(), 0x3d4) = -1;
+        react_power[s] = 1; timer = -1000.0f; clock_now = 20.3f;
+        power_call(b);
+        check(timer == -984.0f, "at most eight re-checks are spent per call");
+        power_call(brains.data() + 1);
+        // The attack front: with no combo running, a decision that fell due during the reaction is spent and the
+        // next attack time re-armed the tail's way (offset + random x random-add) from it; a running combo leaves
+        // the mark for later; unmarked, future and unordered times are untouched; at most four are spent.
+        entry = reinterpret_cast<void*>(l.attack_front);
+        auto& next_attack = field<float>(ai.data(), 0x1c);
+        field<float>(ai.data(), 0x288) = 0.6f; field<float>(ai.data(), 0x28c) = 1.2f; random_now = 0.5f;
+        b[0x2c] = 0; react_attack[s] = 1; next_attack = 20.0f; clock_now = 20.3f;
+        power_call(b);
+        check(react_attack[s] == 0 && std::fabs(next_attack - 21.2f) < 1e-5f, "a decision due during the reaction is spent and re-armed");
+        b[0x2c] = 1; react_attack[s] = 1; next_attack = 20.0f;
+        power_call(b);
+        check(react_attack[s] == 1 && next_attack == 20.0f, "a running combo keeps the mark for later");
+        b[0x2c] = 0; react_attack[s] = 1; next_attack = 30.0f;
+        power_call(b);
+        check(react_attack[s] == 0 && next_attack == 30.0f, "a future attack time is left alone");
+        react_attack[s] = 0; next_attack = 20.0f;
+        power_call(b);
+        check(next_attack == 20.0f, "no mark: the decision as before");
+        react_attack[s] = 1; next_attack = -100.0f;
+        power_call(b);
+        check(std::fabs(next_attack - (-95.2f)) < 1e-4f, "at most four decisions are spent per call");
+        react_attack[s] = 1; next_attack = std::numeric_limits<float>::quiet_NaN();
+        power_call(b);
+        check(std::isnan(next_attack), "an unordered attack time is left alone");
+        power_call(brains.data() + 1);
+        __asm { fnstsw fa }
+        check((fb & 0x3800) == (fa & 0x3800) && !(fa & 0x40), "the power front leaves the x87 stack balanced (no stack fault; the NaN case may set IE as the native fcomp does)");
+    }
+    {
+        // Revision 10, XML1's block rule. The plain rules: XMen2.exe rolls everything but combo text; XML1 never rolls a
+        // PowerAttack (damagescale other than normal here); both flag the hit blocked exactly on result 2.
+        for (int b = 0; b < 256; ++b) {
+            const auto v = static_cast<std::uint8_t>(b);
+            const bool text = (v & 4) != 0, normal = (v & 0x78) == 8;
+            check(roll_route_xml2(v) == (text ? roll_route::combo_text : roll_route::rolled), "XMen2.exe: combo text or the draw");
+            check(roll_route_xml1(v) == (text ? roll_route::combo_text : normal ? roll_route::rolled : roll_route::hit), "XML1: a power attack is a hit without a draw");
+            entry = reinterpret_cast<void*>(l.hit_roll);
+            std::uint8_t attack[0x40] = {};
+            attack[0x35] = v;
+            const int route = roll_call(attack, 0x12345678);
+            const int want = text ? 1 : normal ? 2 : 3;
+            check(route == want && roll_eax == 0x12345678 && roll_edi == (want == 3 ? 1 : 0x55) && attack[0x35] == v,
+                  "the bridge takes XML1's route, keeps eax, sets edi = 1 only for the hit, writes nothing");
+        }
+        check(flagged_blocked(2) && !flagged_blocked(1) && !flagged_blocked(3), "blocked only on a miss");
+        // The receive's block_chance roll: XMen2.exe zeroes a positive hit when the draw is at most the chance (so with
+        // no affecter, chance 0, only a draw of exactly 0); an unordered compare skips. XML1: never.
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        check(block_chance_zeroes_xml2(5.0f, 0.0f, 0.0f) && !block_chance_zeroes_xml2(5.0f, 0.001f, 0.0f) && block_chance_zeroes_xml2(5.0f, 0.2f, 0.25f)
+              && !block_chance_zeroes_xml2(0.0f, 0.0f, 0.5f) && !block_chance_zeroes_xml2(-1.0f, 0.0f, 0.5f) && !block_chance_zeroes_xml2(nan, 0.0f, 0.5f)
+              && !block_chance_zeroes_xml2(5.0f, nan, 0.5f) && !block_chance_zeroes_xml2(5.0f, 0.1f, nan), "XMen2.exe's block_chance test");
+        check(!block_chance_zeroes_xml1(5.0f, 0.0f, 0.0f) && !block_chance_zeroes_xml1(5.0f, 0.2f, 1.0f), "XML1 has no block_chance roll");
+    }
+    // Revision 10 item 17: the power decision's lock bridge. Unlocked: on for every caller. Locked: on for the melee
+    // brain's call (0x5193e7) only; the officer weapon brain's (0x519fe7) and any other caller take the native exit.
+    {
+        entry = reinterpret_cast<void*>(l.power_lock);
+        check(lock_call(0, melee_power_call_return_va) == 1 && lock_call(0, 0x519fe7) == 1 && lock_call(0, 0) == 1,
+              "item 17: an unlocked body goes on for every caller");
+        check(lock_call(1, melee_power_call_return_va) == 1, "item 17: a locked body goes on for the melee brain's call (XML1 0xee260 has no lock test)");
+        check(lock_call(1, 0x519fe7) == 0 && lock_call(1, 0) == 0 && lock_call(1, melee_power_call_return_va + 1) == 0,
+              "item 17: a locked body keeps the native exit for every other caller (the officer weapon brain as measured)");
+        check(lock_call(2, melee_power_call_return_va) == 1 && lock_call(0x101, 0x519fe7) == 0, "item 17: only bit 0 of +0x764 is the lock");
+    }
+    // Item 18: the gate enters the picker after its lock test with the picker's own first instructions done.
+    {
+        std::array<std::uint8_t, 0x600> gai{};
+        std::array<std::uint8_t, 0x800> gactor{};
+        field<void*>(gai.data(), 0x10) = gactor.data();
+        field<float>(gactor.data(), 0x314) = 147.0f;
+        field<std::uint8_t>(gactor.data(), 0x764) = 1; // locked: the native picker would return 0 here
+        entry = reinterpret_cast<void*>(l.gate);
+        const auto gai_va = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(gai.data()));
+        const auto gactor_va = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(gactor.data()));
+        std::uint16_t fb = 0, fa = 0;
+        __asm { fnstsw fb }
+        energy_now = 100.0f; seen_esi = seen_eax = seen_ecx = seen_esp = 0;
+        int r = gate_call(gai.data());
+        check(r == 1 && seen_esi == gai_va && seen_ecx == gai_va && seen_eax == gactor_va && call_esp - seen_esp == 4 + 0xac + 4 && seen_pushed == 0x5a5a5a5a,
+              "item 18: enough energy enters the picker past its lock test (esp - 0xb4, esi = ecx = the AI, eax = the actor, the caller's esi pushed)");
+        energy_now = 70.0f; seen_esi = 0;
+        r = gate_call(gai.data());
+        check(r == 0 && seen_esi == 0, "item 18: under half the energy still refuses without the picker");
+        field<std::uint8_t>(gai.data(), 0x2b6) = 8; seen_esi = 0;
+        r = gate_call(gai.data());
+        check(r == 1 && seen_esi == gai_va, "item 18: the forcing flag still enters the picker");
+        __asm { fnstsw fa }
+        check((fb & 0x3800) == (fa & 0x3800), "item 18: the gate leaves the x87 stack balanced");
+        const auto gate = gate_bridge(l);
+        check(std::vector<std::uint8_t>(gate.begin() + 37, gate.begin() + 49) == sub_bytes(picker_entry_site, 0, 12) && picker_unlocked_va == picker_entry_site.va + 25,
+              "item 18: the gate's copy is the picker's first 12 bytes, and it resumes after the lock test's jne");
+    }
+    // XMen2.exe's own code (the guarded retail bytes, which xml2_test checks against the executable), run natively:
+    // item 16's run 0x512f01..0x512f1a and item 17's run 0x5187b9..0x5187ce, retail and with the rule's writes.
+    {
+        auto* run = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+        if (!run) return 2;
+        check(sub_bytes(lock_exit_site, 10, 2) == std::vector<std::uint8_t>({0x74, 0x0d}) && lock_exit_va == lock_exit_site.va + 10
+              && lock_exit_bytes() == std::vector<std::uint8_t>({0xeb, 0x0d}) && lock_exit_va + 2 + 0x0d == 0x512f1a,
+              "item 16: the exit's jz becomes a jmp to the same continuation (0x512f1a)");
+        std::array<std::uint8_t, 0x800> who{};
+        std::array<std::uint8_t, 0x40> owner{};
+        field<void*>(owner.data(), 0x10) = who.data();
+        for (const bool rule : {false, true}) {
+            const auto native = retail_bytes(lock_exit_site, limits_rules::hex_size(lock_exit_site.hex)); // 25 bytes
+            std::memcpy(run, native.data(), native.size());
+            const std::uint8_t tail[] = {0xb8, 1, 0, 0, 0, 0xc3, 0x31, 0xc0, 0xc3}; // +25 (0x512f1a): eax = 1; +31 (the exit): eax = 0
+            std::memcpy(run + 25, tail, sizeof(tail));
+            const std::int32_t to_exit = 31 - 25; // the jnz rel32 at +21 (0x512f16) relocated to +31
+            std::memcpy(run + 21, &to_exit, 4);
+            if (rule) { const auto w = lock_exit_bytes(); std::memcpy(run + 10, w.data(), w.size()); }
+            FlushInstructionCache(GetCurrentProcess(), run, 64);
+            entry = run;
+            bool ok = true;
+            for (const int lock : {0, 1}) for (const int flag : {0, 0x10, 0xef, 0xff}) {
+                field<std::uint8_t>(who.data(), 0x764) = static_cast<std::uint8_t>(lock);
+                field<std::uint8_t>(who.data(), 0x3d9) = static_cast<std::uint8_t>(flag);
+                const int expected = (!rule && lock && (flag & 0x10)) ? 0 : 1;
+                ok &= exit_run(owner.data()) == expected;
+            }
+            check(ok, rule ? "item 16: with the rule the attack-state update never takes the input-lock exit"
+                           : "item 16: retail exits exactly for a locked move with +0x3d9 bit 0x10 (the enemy after a power)");
+        }
+        // Item 17: the retail run with the jne at +11 (0x5187c4) relocated to a stub, or replaced by the rule's jump to a
+        // copy of the bridge whose exits are relocated into this buffer.
+        const auto lb = layout_at(static_cast<address>(reinterpret_cast<std::uintptr_t>(run)));
+        const auto at = [&](std::uint32_t offset) { return static_cast<address>(reinterpret_cast<std::uintptr_t>(run)) + offset; };
+        for (const bool rule : {false, true}) {
+            std::memset(run, 0xcc, 4096);
+            const auto native = retail_bytes(power_lock_site, limits_rules::hex_size(power_lock_site.hex)); // 21 bytes
+            std::memcpy(run, native.data(), native.size());
+            const std::uint8_t tail[] = {0xb8, 1, 0, 0, 0, 0xc3, 0x31, 0xc0, 0xc3}; // +21 after mov ebx: eax = 1; +27 (0x518ac9): eax = 0
+            std::memcpy(run + 21, tail, sizeof(tail));
+            if (!rule) {
+                const std::int32_t to_exit = 27 - 17; // the jne rel32 at +13, next instruction +17
+                std::memcpy(run + 13, &to_exit, 4);
+            } else {
+                auto bridge = power_lock_bridge(lb);
+                put32(bridge, 0x0d, at(27) - (lb.power_lock + 0x11));
+                put32(bridge, 0x12, at(17) - (lb.power_lock + 0x16)); // 0x5187ca = +17
+                std::memcpy(run + (lb.power_lock - lb.base), bridge.data(), bridge.size());
+                std::vector<std::uint8_t> jump{0xe9, 0, 0, 0, 0, 0x90};
+                put32(jump, 1, lb.power_lock - (at(11) + 5));
+                std::memcpy(run + 11, jump.data(), jump.size());
+            }
+            FlushInstructionCache(GetCurrentProcess(), run, 4096);
+            entry = run;
+            bool ok = true;
+            for (const int lock : {0, 1}) for (const unsigned caller : {melee_power_call_return_va, 0x519fe7u}) {
+                field<std::uint8_t>(who.data(), 0x764) = static_cast<std::uint8_t>(lock);
+                const int expected = (lock && (!rule || caller != melee_power_call_return_va)) ? 0 : 3; // 3: on, ebx = [esp+0x1c]
+                ok &= lock_run(who.data(), caller) == expected;
+            }
+            check(ok, rule ? "item 17: with the rule a locked body reaches the re-check for the melee brain's call only"
+                           : "item 17: retail refuses every locked call before the re-check");
+        }
+        VirtualFree(run, 0, MEM_RELEASE);
+    }
     VirtualFree(memory, 0, MEM_RELEASE);
     std::printf("NPC combo timing: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

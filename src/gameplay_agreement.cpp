@@ -316,8 +316,10 @@ namespace gameplay_agreement
    if(!transaction.add(std::move(c)))logger::write("online: host refusal notice could not join the startup transaction");
   }
  }
+ bool register_rule(std::uint16_t id,std::uint16_t revision,std::array<std::uint32_t,4> effective,bool verified,const std::array<std::uint8_t,32>* detail)
+ { const bool enabled=enlist();const bool ok=capabilities.add(id,revision,effective,verified && enabled,detail);if(!ok)game_version::bind_gameplay_agreement(false);return ok; }
  bool register_rule(std::uint16_t id,std::uint16_t revision,std::array<std::uint32_t,4> effective,bool verified)
- { const bool enabled=enlist();const bool ok=capabilities.add(id,revision,effective,verified && enabled);if(!ok)game_version::bind_gameplay_agreement(false);return ok; }
+ { return register_rule(id,revision,effective,verified,nullptr); }
  void reject_unregistered_rule(const char* name)
  { enlist();capabilities.invalidate();game_version::bind_gameplay_agreement(false);logger::write("online: %s has no assigned gameplay rule ID; online remains blocked",name); }
  bool register_entity_layout(std::uint16_t revision,std::uint32_t actors,std::uint32_t generic,std::uint32_t world,std::uint32_t token_bits,bool verified)
@@ -370,7 +372,9 @@ namespace gameplay_agreement
   logger::write("online: shared gameplay capability record verified (%u bytes, protocol %u, %u rules); release identity unchanged",unsigned(capabilities.bytes().size()),unsigned(gameplay_capabilities::protocol_revision),unsigned(capabilities.count()));
   // The wire carries a digest only: the canonical list is logged here, so two players' logs show what differs.
   for(std::size_t i=0;i<capabilities.count();++i){const auto& r=capabilities.rule(i);
-   logger::write("online: rule %u (%s) revision %u {%u,%u,%u,%u}",unsigned(r.id),gameplay_capabilities::rule_name(r.id),unsigned(r.revision),r.values[0],r.values[1],r.values[2],r.values[3]);}
+   logger::write("online: rule %u (%s) revision %u {%u,%u,%u,%u}",unsigned(r.id),gameplay_capabilities::rule_name(r.id),unsigned(r.revision),r.values[0],r.values[1],r.values[2],r.values[3]);
+   if(const auto* d=capabilities.detail(r.id)){char hex[65]{};for(std::size_t j=0;j<32;++j)std::snprintf(hex+2*j,3,"%02x",unsigned((*d)[j]));
+    logger::write("online: rule %u detail sha256 %s",unsigned(r.id),hex);}}
   return true;
  }
  bool prepare(HMODULE game)

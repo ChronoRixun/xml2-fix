@@ -10,14 +10,89 @@ on:
 permissions:
   contents: write # to publish releases from tags
 
+env:
+  # GameNetworkingSockets package (include/, lib/, ca-pin.txt): built by scripts/build-gns.ps1, linked statically into
+  # dinput.dll, so the release has no GNS, protobuf or abseil DLL to ship. No spaces in these paths.
+  GNS_ROOT: C:/gns-pkg
+  GNS_WORK: C:/gns-work
+
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
 
+      - name: Test release policy
+        run: python scripts/test_release_metadata.py
+
+      - name: Test the native runner's matrix mode
+        run: python scripts/test_run_native.py
+
+      - name: Validate release tag
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path CMakeLists.txt -Pattern '^project\(xml2_fix VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          python scripts/release_metadata.py --tag $env:GITHUB_REF_NAME --built-version $version
+          if ($LASTEXITCODE) { throw 'invalid release tag or project version' }
+
+      # Without the GNS package the DLL still builds, passes its tests and reports the same version, but has no online
+      # rooms or drop-in. So the package is built here (pinned: packaging/gns, scripts/build-gns.ps1) and cached; the key
+      # holds the files that decide the build and the MSVC toolset, so a runner image with a newer compiler rebuilds it
+      # (libraries from a newer toolset do not link with an older one). A cold build takes about 20 minutes.
+      - name: MSVC toolset
+        id: msvc
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          $tools = (Get-Content (Join-Path $vs 'VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt') -TotalCount 1).Trim()
+          # the generator of the same Visual Studio that scripts/build-gns.ps1 builds the libraries with
+          $major = [int](& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion).Split('.')[0]
+          $generator = switch ($major) { 18 { 'Visual Studio 18 2026' } 17 { 'Visual Studio 17 2022' } default { throw "Visual Studio $major is not one scripts/build-gns.ps1 knows" } }
+          "version=$tools" >> $env:GITHUB_OUTPUT
+          "generator=$generator" >> $env:GITHUB_OUTPUT
+          "MSVC $tools, $generator"
+
+      - name: Restore the GNS package
+        id: gns-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.GNS_ROOT }}
+          key: gns-win32-msvc${{ steps.msvc.outputs.version }}-${{ hashFiles('scripts/build-gns.ps1', 'packaging/gns/**') }}
+
+      - name: Build the GNS package
+        if: steps.gns-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: scripts/build-gns.ps1 -OutDir $env:GNS_ROOT -WorkDir $env:GNS_WORK
+
+      - name: Save the GNS package
+        if: steps.gns-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.GNS_ROOT }}
+          key: gns-win32-msvc${{ steps.msvc.outputs.version }}-${{ hashFiles('scripts/build-gns.ps1', 'packaging/gns/**') }}
+
+      # A restored cache is only used when every library is the one gns-package.txt recorded.
+      - name: Check the GNS package
+        shell: pwsh
+        run: |
+          $manifest = Get-Content "$env:GNS_ROOT/gns-package.txt"
+          $libs = $manifest | Where-Object { $_ -match '^[0-9a-f]{64} \*lib/' }
+          if ($libs.Count -lt 50) { throw "gns-package.txt lists only $($libs.Count) libraries" }
+          foreach ($line in $libs) {
+            $hash, $rel = $line -split ' \*', 2
+            if ((Get-FileHash "$env:GNS_ROOT/$rel" -Algorithm SHA256).Hash.ToLowerInvariant() -ne $hash) { throw "$rel does not match gns-package.txt" }
+          }
+          foreach ($need in 'ca-pin.txt', 'THIRD-PARTY-NOTICES.txt', 'include/steam/steamnetworkingsockets.h') {
+            if (-not (Test-Path "$env:GNS_ROOT/$need")) { throw "GNS package lacks $need" }
+          }
+          if ((Get-Content "$env:GNS_ROOT/ca-pin.txt" -TotalCount 1).Trim() -ne (Get-Content packaging/gns/ca-pin.txt -TotalCount 1).Trim()) { throw 'the GNS package carries another CA pin than packaging/gns/ca-pin.txt' }
+          $manifest | Select-Object -First 8
+
       - name: Configure
-        run: cmake -S . -B build -A Win32
+        run: cmake -S . -B build -G "${{ steps.msvc.outputs.generator }}" -A Win32 -DXML2_FIX_GNS_ROOT=${{ env.GNS_ROOT }}
 
       - name: Build
         run: cmake --build build --config Release
@@ -28,34 +103,57 @@ jobs:
       - name: Test the save library
         run: build/bin/Release/lcsave_test.exe
 
+      # Fails the job unless this is the online DLL: GNS + protobuf + the CA pin linked in, version = project(... VERSION),
+      # nothing imported that the game's PC does not have. Checked again below on the DLL taken out of the finished zip.
+      - name: Check the DLL is the online build
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path CMakeLists.txt -Pattern '^project\(xml2_fix VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          python -I scripts/check_release_dll.py build/bin/Release/dinput.dll --version $version --ca-pin packaging/gns/ca-pin.txt
+          if ($LASTEXITCODE) { throw 'dinput.dll is not the online build' }
+
       - name: Package
         shell: pwsh
         run: |
-          # A release tag must match the version built into the DLL (project(... VERSION) in CMakeLists.txt),
-          # which the log and the file's properties report.
+          # VERSIONINFO stays numeric. The tag is the full release identity, including beta/rc.
           $built = (Get-Item build/bin/Release/dinput.dll).VersionInfo.ProductVersion
-          if ($env:GITHUB_REF_TYPE -eq 'tag' -and "v$($built)" -ne $env:GITHUB_REF_NAME) {
-            throw "Tag $($env:GITHUB_REF_NAME), but dinput.dll is version $($built): update project(... VERSION) in CMakeLists.txt"
+          $releaseVersion = $built
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $metadata = python scripts/release_metadata.py --tag $env:GITHUB_REF_NAME --built-version $built
+            if ($LASTEXITCODE) { throw 'release tag does not match dinput.dll' }
+            $releaseVersion = ($metadata | ConvertFrom-Json).version
           }
           $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { "dev-$($env:GITHUB_SHA.Substring(0, 7))" }
           $name = "xml2-fix-$version"
           New-Item -ItemType Directory "dist/$name" -Force | Out-Null
-          Copy-Item build/bin/Release/dinput.dll, LICENSE, packaging/INSTALL.txt "dist/$name/"
+          # GNS, protobuf and abseil are linked into dinput.dll (/MT): dinput.dll is the only DLL, and their licences travel with it.
+          Copy-Item build/bin/Release/dinput.dll, LICENSE, packaging/INSTALL.txt, "$env:GNS_ROOT/THIRD-PARTY-NOTICES.txt" "dist/$name/"
           Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
+          Copy-Item "$env:GNS_ROOT/gns-package.txt" dist/gns-package.txt
           "PACKAGE=dist/$name.zip" >> $env:GITHUB_ENV
 
-          # Loose DLL plus a patch manifest ([name, size, SHA-1, destination]) for launchers such as
-          # Ultimate Legends, which fetch releases/latest/download/ultimate-legends.json.
+          # Preserve the legacy patch manifest bytes: [[name, size, SHA-1, destination]].
+          # Beta launchers take the full release version from the selected tag, not this manifest.
           Copy-Item build/bin/Release/dinput.dll dist/dinput.dll
           $dll = Get-Item dist/dinput.dll
           $sha1 = (Get-FileHash dist/dinput.dll -Algorithm SHA1).Hash.ToUpperInvariant()
           ConvertTo-Json -Compress -Depth 3 -InputObject @(, @('dinput.dll', $dll.Length, $sha1, 'game')) | Set-Content -NoNewline dist/ultimate-legends.json
           Get-Content dist/ultimate-legends.json
 
+          # What the player gets, not what was built: unpack the zip and check its DLL, the loose DLL and the manifest.
+          $check = Join-Path $env:RUNNER_TEMP 'release-check'
+          Expand-Archive "dist/$name.zip" $check -Force
+          python -I scripts/check_release_dll.py "$check/dinput.dll" --version $releaseVersion --ca-pin packaging/gns/ca-pin.txt --ship $check
+          if ($LASTEXITCODE) { throw 'the DLL in the release zip is not the online build' }
+          if ((Get-FileHash "$check/dinput.dll" -Algorithm SHA1).Hash -ne $sha1) { throw 'the zip carries another dinput.dll than the loose one' }
+          if (-not (Test-Path "$check/THIRD-PARTY-NOTICES.txt")) { throw 'the zip lacks THIRD-PARTY-NOTICES.txt' }
+
       - uses: actions/upload-artifact@v7
         with:
           name: xml2-fix
-          path: ${{ env.PACKAGE }}
+          path: |
+            ${{ env.PACKAGE }}
+            dist/gns-package.txt
 
       - name: Publish release
         if: github.ref_type == 'tag'
@@ -63,10 +161,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $notes = "packaging/release-notes/$($env:GITHUB_REF_NAME).md"
+          $metadata = python scripts/release_metadata.py --tag $env:GITHUB_REF_NAME --notes-output dist/release-notes.md
+          if ($LASTEXITCODE) { throw 'invalid release metadata or missing prerelease notes' }
+          $release = $metadata | ConvertFrom-Json
+          $flags = @($release.flags)
           $assets = @($env:PACKAGE, 'dist/dinput.dll', 'dist/ultimate-legends.json')
-          if (Test-Path $notes) {
-            gh release create $env:GITHUB_REF_NAME @assets --title "XML2 Fix $($env:GITHUB_REF_NAME)" --notes-file $notes
+          if ($release.notes_file) {
+            gh release create $env:GITHUB_REF_NAME @assets @flags --title "XML2 Fix $($env:GITHUB_REF_NAME)" --notes-file $release.notes_file
           } else {
-            gh release create $env:GITHUB_REF_NAME @assets --title "XML2 Fix $($env:GITHUB_REF_NAME)" --generate-notes
+            gh release create $env:GITHUB_REF_NAME @assets @flags --title "XML2 Fix $($env:GITHUB_REF_NAME)" --generate-notes
           }
+          if ($LASTEXITCODE) { throw 'release publication failed' }

@@ -2,6 +2,7 @@
 #include "gameplay_agreement.hpp"
 #include "gameplay_agreement_rules.hpp"
 #include "conversations_rules.hpp"
+#include <tuple>
 #include "game_version.hpp"
 #include "game_version_rules.hpp"
 #include "explosive_first_hit.hpp"
@@ -140,11 +141,25 @@ void records(){
   stun(true).describe(rev2.buckets,rev2.local_only,true,rev2_name,sizeof(rev2_name));
   check(std::string(rev2_name).find("18 StunRule")!=std::string::npos,std::string("the revision 2 refusal names the rule: ")+rev2_name);
  }
+ {
+  // Rule 10: XML2 Fix 1.5.0 to 1.8.0-beta.7 registered RevivalCost=xml1 as revision 2 and charged 200 * level^2; 1.8.0
+  // charges the first game's 200 * G^2 as revision 3 (same values), so the two refuse each other naming rule 10.
+  // Without the key the entry keeps the released revision 2.
+  auto services=[](std::uint16_t rev,std::array<std::uint32_t,4> v){record r;r.add(gameplay_capabilities::xtraction_services_id,rev,v,true);r.finalize();return r;};
+  const std::array<std::uint32_t,4> lc{1,0x3f,1,1},shop{1,0x3f,1,0};
+  const auto fixed=services(gameplay_capabilities::xtraction_services_revival_revision,lc),old=services(2,lc);
+  gameplay_capabilities::difference d;char name[160];
+  check(gameplay_capabilities::xtraction_services_revision==2 && gameplay_capabilities::xtraction_services_revival_revision==3,"rule 10: released revision 2, revival revision 3");
+  check(fixed.compare(old.bytes(),&d)==result::value && old.compare(fixed.bytes())==result::value,"rule 10 revival revision 3 and the 200 * level^2 revision 2 refuse both directions");
+  fixed.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name).find("10 Xtraction services/RevivalCost")!=std::string::npos,std::string("the revival refusal names rule 10: ")+name);
+  check(services(2,shop).compare(services(gameplay_capabilities::xtraction_services_revision,shop).bytes())==result::match,"rule 10 without RevivalCost keeps the released revision 2");
+ }
  record future;future.add(17,1,{1,0,0,0},true);future.add(18,stun_rule::revision,{1,0,0,0},true);future.finalize();
  check(future.compare(stun(true,true,stun_rule::revision,true).bytes())==result::match,"later rule 17 registration agrees in either order");
  check(stun(true).compare(future.bytes())==result::entries,"missing future rule 17 is refused, not silently ignored");
  // New requested-only rules preserve the pre-integration OFF bytes and name both mismatch directions.
- for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id,gameplay_capabilities::box_harm_origin_id,gameplay_capabilities::danger_room_healthbars_id,gameplay_capabilities::harm_single_chain_id,gameplay_capabilities::online_conversations_id}) {
+ for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id,gameplay_capabilities::box_harm_origin_id,gameplay_capabilities::danger_room_healthbars_id,gameplay_capabilities::harm_single_chain_id,gameplay_capabilities::online_conversations_id,gameplay_capabilities::model_pools_id,gameplay_capabilities::tick_rate_id,gameplay_capabilities::world_backfaces_id}) {
   auto optional=[&](bool wanted,bool verified=true){record r;if(wanted)r.add(id,1,{1,0,0,0},verified);r.finalize();return r;};
   const auto yes=optional(true),no=optional(false),failed=optional(true,false);
   check(yes.compare(optional(true).bytes())==result::match,"matching new requested-only rule accepts");
@@ -190,15 +205,72 @@ void records(){
   gameplay_capabilities::difference d;char name[160];on.compare(off.bytes(),&d);on.describe(d.buckets,d.local_only,true,name,sizeof(name));
   check(std::string(name)=="27 OnlineConversations (not on the other PC)","the ON peer names rule 27: "+std::string(name));
  }
+ // Rule 28, [Engine] ModelPools: requested only, revision 1, {installed, model handles, IGB models, actors}. XML2 Fix
+ // 1.8.0-beta.1 (no rule 28) and a beta.2 peer with a raise refuse each other; x2 and x4 refuse; OFF keeps the released bytes.
+ {
+  const auto id=gameplay_capabilities::model_pools_id;
+  check(id==28 && std::string(gameplay_capabilities::rule_name(id))=="ModelPools","model pools use assigned rule 28");
+  check(gameplay_capabilities::bucket_of(id)!=gameplay_capabilities::bucket_of(gameplay_capabilities::online_conversations_id),"rule 28 has a bucket of its own");
+  auto pools=[&](bool wanted,std::uint32_t handles=4096,std::uint32_t igb=2048,std::uint32_t actors=128){record r;if(wanted)r.add(id,1,{1,handles,igb,actors},true);r.finalize();return r;};
+  const auto x4=pools(true),beta1=pools(false),x2=pools(true,2048,1024,64);
+  check(x4.compare(pools(true).bytes())==result::match,"ModelPools x4 peers agree");
+  check(x4.compare(beta1.bytes())==result::entries && beta1.compare(x4.bytes())==result::entries,"ModelPools x4 and a peer without rule 28 refuse both ways");
+  check(x4.compare(x2.bytes())==result::value && x2.compare(x4.bytes())==result::value,"ModelPools x4 and x2 refuse both ways");
+  gameplay_capabilities::difference d;char name[160];x4.compare(beta1.bytes(),&d);x4.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name)=="28 ModelPools (not on the other PC)","the x4 peer names rule 28: "+std::string(name));
+  beta1.compare(x4.bytes(),&d);beta1.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name)=="28 ModelPools (disabled on this PC)","a beta.2 peer with the pools off names rule 28: "+std::string(name));
+  x4.compare(x2.bytes(),&d);x4.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name)=="28 ModelPools","x4 against x2 names rule 28: "+std::string(name));
+ }
+ // Rule 29, [Online] TickRate: {rate in effect, 0, 0, 0} whenever the key is there, revision 1. A 60 and a 30 PC refuse
+ // by name both ways; a PC without the key (the game's 30, no entry) and a 60 PC too; absent keeps the released bytes.
+ {
+  const auto id=gameplay_capabilities::tick_rate_id;
+  check(id==29 && std::string(gameplay_capabilities::rule_name(id))=="TickRate","the tick rate uses assigned rule 29");
+  check(gameplay_capabilities::bucket_of(id)!=gameplay_capabilities::bucket_of(gameplay_capabilities::model_pools_id),"rule 29 has a bucket of its own");
+  auto tick=[&](unsigned rate){record r;r.add(gameplay_capabilities::model_pools_id,1,{1,4096,2048,128},true);if(rate)r.add(id,1,{rate,0,0,0},true);r.finalize();return r;};
+  const auto sixty=tick(60),thirty=tick(30),beta2=tick(0);
+  check(sixty.compare(tick(60).bytes())==result::match && thirty.compare(tick(30).bytes())==result::match,"same tick rates agree");
+  check(sixty.compare(thirty.bytes())==result::value && thirty.compare(sixty.bytes())==result::value,"60 and 30 refuse both ways");
+  check(sixty.compare(beta2.bytes())==result::entries && beta2.compare(sixty.bytes())==result::entries,"60 and a PC without rule 29 refuse both ways");
+  check(thirty.compare(beta2.bytes())==result::entries,"an explicit 30 and a PC without the key refuse (other builds)");
+  gameplay_capabilities::difference d;char name[160];
+  sixty.compare(thirty.bytes(),&d);sixty.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name)=="29 TickRate","60 against 30 names rule 29: "+std::string(name));
+  thirty.compare(sixty.bytes(),&d);thirty.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name)=="29 TickRate","30 against 60 names rule 29: "+std::string(name));
+  sixty.compare(beta2.bytes(),&d);sixty.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name)=="29 TickRate (not on the other PC)","60 against a beta.2 peer: "+std::string(name));
+  beta2.compare(sixty.bytes(),&d);beta2.describe(d.buckets,d.local_only,true,name,sizeof(name));
+  check(std::string(name)=="29 TickRate (disabled on this PC)","a beta.3 peer without the key against 60: "+std::string(name));
+ }
  // Rule 16, the NPC power rule ([Game] NpcPowerRule): enemies that pay for powers and decide every 2 s never share a
  // lockstep game with enemies that don't; revision 3 adds the visibility word; absent is {0,0,0,0}, a failed install unverified.
  auto npc=[](bool on,bool verified=true){record r;r.add(2,1,{1,0,0,0},true);r.add(gameplay_capabilities::npc_power_rule_id,npc_power::revision_for(on || !verified),{on ? 1u : 0u,on ? 1u : 0u,0,0},verified);r.finalize();return r;};
- check(gameplay_capabilities::npc_power_rule_id==16 && npc_power::revision==4 && npc(true).compare(npc(false).bytes())==result::value && npc(false).compare(npc(true).bytes())==result::value,"NPC power rule on/off refuses both directions");
+ check(gameplay_capabilities::npc_power_rule_id==16 && npc_power::revision==11 && npc(true).compare(npc(false).bytes())==result::value && npc(false).compare(npc(true).bytes())==result::value,"NPC power rule on/off refuses both directions");
  check(npc(true).compare(npc(true).bytes())==result::match && npc(false).compare(npc(false).bytes())==result::match,"same NPC power rule accepts");
  record npc_previous; npc_previous.add(2,1,{1,0,0,0},true);npc_previous.add(gameplay_capabilities::npc_power_rule_id,2,{1,0,0,0},true);npc_previous.finalize();
  check(npc(true).compare(npc_previous.bytes())!=result::match && npc_previous.compare(npc(true).bytes())!=result::match,"NPC visibility policy rejects the previous power/combo-only revision both ways");
  record npc_visibility; npc_visibility.add(2,1,{1,0,0,0},true);npc_visibility.add(gameplay_capabilities::npc_power_rule_id,3,{1,1,0,0},true);npc_visibility.finalize();
  check(npc(true).compare(npc_visibility.bytes())!=result::match && npc_visibility.compare(npc(true).bytes())!=result::match,"NPC combo timing rejects revision 3 peers both ways");
+ record npc_timers; npc_timers.add(2,1,{1,0,0,0},true);npc_timers.add(gameplay_capabilities::npc_power_rule_id,4,{1,1,0,0},true);npc_timers.finalize();
+ check(npc(true).compare(npc_timers.bytes())!=result::match && npc_timers.compare(npc(true).bytes())!=result::match,"NPC reaction-spent combo steps reject revision 4 peers both ways");
+ // Revisions 5-9 were unreleased candidates (5: the first reaction-spent build and a withdrawn role experiment; 6-9:
+ // officer weapon candidates, 9 with words 2-3 set). Revisions 10 and 11 carry both and refuse every one of them.
+ for(const std::uint16_t candidate:{5,6,7,8,9})for(const auto words:{std::array<std::uint32_t,4>{1,1,0,0},std::array<std::uint32_t,4>{1,1,1,0x6BED0A4Cu}}){
+  record peer;peer.add(2,1,{1,0,0,0},true);peer.add(gameplay_capabilities::npc_power_rule_id,candidate,words,true);peer.finalize();
+  check(npc(true).compare(peer.bytes())!=result::match && peer.compare(npc(true).bytes())!=result::match,"revision 11 refuses candidate revisions 5-9 both ways");
+ }
+ // Revision 10 is XML2 Fix 1.8.0-beta.6 (released): its enemies do not spend the call-gap re-checks/decisions and
+ // still roll power attacks, so a beta 7 peer refuses it both ways, with and without the weapon brain words.
+ for(const auto words:{std::array<std::uint32_t,4>{1,1,0,0},std::array<std::uint32_t,4>{1,1,1,0x6BED0A4Cu}}){
+  record beta6;beta6.add(2,1,{1,0,0,0},true);beta6.add(gameplay_capabilities::npc_power_rule_id,10,words,true);beta6.finalize();
+  check(npc(true).compare(beta6.bytes())!=result::match && beta6.compare(npc(true).bytes())!=result::match,"revision 11 refuses the released revision 10 (1.8.0-beta.6) both ways");
+ }
+ // The officer weapon brain (words 2-3) under the same revision: with and without it refuse each other by value.
+ record officer;officer.add(2,1,{1,0,0,0},true);officer.add(gameplay_capabilities::npc_power_rule_id,npc_power::revision,{1,1,1,0x6BED0A4Cu},true);officer.finalize();
+ check(npc(true).compare(officer.bytes())==result::value && officer.compare(npc(true).bytes())==result::value,"officer weapon brain on/off refuses both ways by value");
  // Released OFF peers retain the exact record, including rule 16's old revision and no rule 18.
  record released_off;released_off.add(2,1,{1,0,0,0},true);released_off.add(16,3,{0,0,0,0},true);released_off.finalize();
  const auto current_off=npc(false),stun_off=stun(false);
@@ -258,6 +330,25 @@ void records(){
  // SHA-256 is FIPS 180-4's (the digest is the admission decision).
  {const std::uint8_t abc[]{'a','b','c'};const auto h=sha256_fips::digest(abc,3);check(h[0]==0xba && h[1]==0x78 && h[30]==0x15 && h[31]==0xad,"SHA-256(\"abc\") test vector");
   const auto e=sha256_fips::digest(nullptr,0);check(e[0]==0xe3 && e[1]==0xb0 && e[31]==0x55,"SHA-256 of nothing test vector");}
+ // Rule details (beta 7 review finding 1): a record without one hashes the canonical list exactly as protocol 4 always
+ // has (the released OFF digest), a detail appends "GDTL", its count and (ID, digest) after the entries.
+ {
+  auto le=[](std::vector<std::uint8_t>& v,std::uint32_t x,int n){for(int i=0;i<n;++i)v.push_back(std::uint8_t(x>>(8*i)));};
+  std::vector<std::uint8_t> list;le(list,0x50414347,4);le(list,4,2);le(list,2,2);
+  for(const auto& [id,rev,w]:{std::tuple<std::uint16_t,std::uint16_t,std::array<std::uint32_t,4>>{1,1,{32,224,256,8}},{16,11,{1,1,1,0x12345678}}}){le(list,id,2);le(list,rev,2);for(auto x:w)le(list,x,4);}
+  record plain,detailed,other;gameplay_capabilities::detail_digest d{},d2{};for(std::size_t i=0;i<32;++i){d[i]=std::uint8_t(i*7+1);d2[i]=d[i];}d2[31]^=1;
+  plain.add(16,11,{1,1,1,0x12345678},true);detailed.add(16,11,{1,1,1,0x12345678},true,&d);other.add(16,11,{1,1,1,0x12345678},true,&d2);
+  plain.finalize();detailed.finalize();other.finalize();
+  const auto h=sha256_fips::digest(list.data(),list.size());
+  check(std::memcmp(plain.bytes().data()+gameplay_capabilities::digest_at,h.data(),32)==0,"a record without details keeps the protocol 4 canonical digest");
+  le(list,0x4c544447,4);le(list,1,2);le(list,16,2);list.insert(list.end(),d.begin(),d.end());
+  const auto hd=sha256_fips::digest(list.data(),list.size());
+  check(std::memcmp(detailed.bytes().data()+gameplay_capabilities::digest_at,hd.data(),32)==0,"a detail extends the canonical list after the entries");
+  check(detailed.compare(plain.bytes())==result::value && plain.compare(detailed.bytes())==result::value,"a detail difference refuses both ways as a value difference");
+  check(detailed.compare(other.bytes())==result::value,"one detail bit refuses");
+  record full;bool all=true;for(std::uint16_t id=2;id<2+gameplay_capabilities::max_details;++id)all&=full.add(id,1,{},true,&d);
+  check(all && !full.add(40,1,{},true,&d) && !full.finalize(),"more details than the record holds poison it");
+ }
  // Rules 11 and 12 (xml1_capability_rules::installed_switch): no key = verified off {0,0,0,0}, so a peer whose fix
  // has neither key still matches one whose keys are absent or set to the game's own value; requested and installed
  // = {1,0,0,0}; requested but not installed = unverified, which poisons the record and closes host and join.

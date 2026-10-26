@@ -22,6 +22,8 @@ namespace entity_capacity
 	// True when the raise is requested and prepared: the actor-arena teardown at 0x4613e0 is then this module's
 	// (AllocatorShutdown), which calls limits::retire_move_trigger_times() after the native teardown.
 	bool owns_arena_teardown();
+	// True only when the FastTransfer replacement was installed; receive validation uses its record format then.
+	bool fast_transfer_active();
 	// Adds the ledger's guards, region hashes and writes bound to this DLL's symbols.
 	void contribute(patch_transaction::transaction& transaction, HMODULE game);
 	// After the one commit: publishes the descriptor, registers the GCAP layout entry (verified on success,

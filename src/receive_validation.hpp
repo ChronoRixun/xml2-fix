@@ -23,6 +23,9 @@ namespace receive_validation
 	// the retail dispatch entry skips the contribution instead of refusing the transaction (optional part).
 	void contribute(patch_transaction::transaction& transaction, HMODULE game);
 	bool installed();
+	// True when this module's own jump is what sits at the dispatch entry (written by the startup transaction). Other
+	// signature checks over the retail dispatcher (the GNS transport's) accept exactly that patch and nothing else.
+	bool owns_dispatch_entry();
 	// Drops since startup (also the rate-limited log's source), for the status line and the native test.
 	std::uint32_t dropped();
 }

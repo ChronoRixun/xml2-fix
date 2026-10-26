@@ -32,11 +32,21 @@
 | Big mods              | 40 actors per zone, then a crash | up to 127 when a mod asks for it ([details](#bigger-zones)) |
 | Setup                 | — | copy one file |
 
-**Current release: XML2 Fix 1.7.1**, paired with Legends Classic builder 0.2.5 (content 23).
-For the port, Rebuild in Ultimate Legends, then Play; both co-op PCs need this pair. Launcher 0.3.2 supports it.
-This release draws the bedroom items' pictures in the first game's picture window and re-stuns party heroes on every stun hit.
-The new settings are opt-in; ordinary XML2 installs keep their previous behavior.
-See [CHANGELOG.md](CHANGELOG.md) and the [1.7.1 release notes](packaging/release-notes/v1.7.1.md).
+**Current release: XML2 Fix 1.8.0** (stable), paired with Legends Classic builder 0.4.0 (content 27 / LC36, the same
+game as 0.4.0-beta.7; 1.8.0 adds the first game's revival price, so it refuses 1.8.0-beta.7 in co-op) and Ultimate
+Legends launcher 0.4.0. Update the launcher first, then update both parts,
+Rebuild, then Play.
+
+Maintainers: [stable and beta release instructions](RELEASING.md).
+
+Online codes, public games, default-on drop-in in the port and solo-story watchers. Four-player start is fixed;
+hero swaps survive level changes, with solo hand-back only through the segment and its end (rule 26 revision 6).
+Slow-player drops are disabled; LAG warnings may remain. Frozen or disconnected guests are removed by agreement
+while survivors continue (rule 25 revision 4). Host drop/freeze ends the joiners' session with "lost connection to
+the host"; no host migration. Includes 1.7.1. Online was tested on one PC with two instances of the game; play
+between separate PCs and four-player WAN coverage are not certified here.
+See [CHANGELOG.md](CHANGELOG.md), [1.8.0 release notes](packaging/release-notes/v1.8.0.md),
+and the [player guide](https://github.com/ChronoRixun/legends-classic/blob/main/docs/ONLINE.md).
 
 ## ⚡ Install
 
@@ -59,6 +69,7 @@ No settings file is needed. Without one, the fix does the following; everything 
 | [OpenSpy redirect](#-online) | the game's GameSpy lookups go to OpenSpy | `[Online]` `Domain=off` |
 | [LocalIP](#-online) | the game takes the address this PC reaches the internet from as its own, not a virtual adapter's | `[Online]` `LocalIP=first` |
 | [Four rows in *Advanced options*](#%EF%B8%8F-display) | display mode, frame rate, VSync and run in background; they change nothing until you change them | `[Display]` `InGameOptions=0` |
+| Combo popup guard | a team-combo popup that could not get both heroes' heads (the game's model pools full) is hidden instead of crashing the game (XMen2.exe+0x1a6848); the combo still counts | `[Game]` `ComboPopupGuard=0` |
 | [Mods folder](#-mods) | files in `mods\` next to the game are used in place of the game's; with no files there, nothing is hooked | remove or empty `mods\`, or switch a mod off in `mods\load-order.txt` |
 | `xml2-fix.log` | what the game saw and what the fix did, written next to the DLL at every start | — |
 
@@ -209,7 +220,7 @@ fails on your PC, `Mode=borderless` runs at your desktop's resolution and refres
 
 In borderless mode with `Width`/`Height` at 0 the game starts at the desktop size every time; a resolution picked in the menu applies for that session (it is stretched to the screen). Everything the fix decides about the window, the Direct3D device and the list is written to `xml2-fix.log`.
 
-**Frame rate.** The game caps itself at 60 fps by spinning on a core at the end of every frame, whatever your monitor does. `FrameRate` switches that spin off and paces frames with a high-resolution timer instead: `FrameRate=144` for 144 fps, `FrameRate=refresh` for your desktop's refresh rate, `FrameRate=0` for no cap at all. The game's simulation runs on wall-clock time, so a higher frame rate doesn't change its speed. Menus, popups and conversations stay at 60 fps (or at `FrameRate` when that is lower): their animations and key repeat run on time as well, but they take a button press from one frame to the next with no debounce, so at 180 fps a d-pad's bounce or a stick resting near its threshold registers as a second press and the highlight skips items. The fix reads the same state the game's own "is a menu up" test reads and goes back to your `FrameRate` as soon as you are playing; movies and loading screens keep it too. `FrameRate` and `VSync` work in every mode, the game's own included; without them nothing about the frame timing changes.
+**Frame rate.** The game caps itself at 60 fps by spinning on a core at the end of every frame, whatever your monitor does. `FrameRate` switches that spin off and paces frames with a high-resolution timer instead: `FrameRate=144` for 144 fps, `FrameRate=refresh` for your desktop's refresh rate, `FrameRate=0` for no cap at all. The game's simulation clock runs on wall-clock time (measured game-clock to wall-clock ratios stay near 1), so a higher frame rate doesn't change its speed. That is a statement about speed, not a promise that every per-frame event, such as the enemy AI's decision scheduling, plays out identically at every rate. Menus, popups and conversations stay at 60 fps (or at `FrameRate` when that is lower): their animations and key repeat run on time as well, but they take a button press from one frame to the next with no debounce, so at 180 fps a d-pad's bounce or a stick resting near its threshold registers as a second press and the highlight skips items. The fix reads the same state the game's own "is a menu up" test reads and goes back to your `FrameRate` as soon as you are playing; movies and loading screens keep it too. `FrameRate` and `VSync` work in every mode, the game's own included; without them nothing about the frame timing changes.
 
 **VSync.** In `fullscreen` (and the game's own mode) `VSync=1` waits for the vertical blank and `VSync=0` never does (the engine's own default). In `borderless` and `windowed` Direct3D 8 has no usable vsync (the only one it offers runs at about 32 fps on a modern desktop), so there `VSync=1` means frames are paced at your desktop's refresh rate, never above `FrameRate`, and the desktop compositor shows them without tearing; with `FrameRate` left out the game's own 60 fps cap stays in charge.
 
@@ -467,7 +478,8 @@ ExplosiveFirstHit=1   ; an explosion is a new attack for the victim its projecti
 RankCosts=1           ; a talent rank costs its <level cost> skill points (X-Men Legends I's Xtreme / Legend ranks: 2)
 LevelSkillPoints=xml1 ; 2 skill points on every 5th level, 1 on the others (X-Men Legends I's rule)
 LevelStatPoints=xml1  ; 8 stat points on every 5th level, 4 on the others (X-Men Legends I's 2 / 1 on the port's x4 stat scale)
-NpcPowerRule=xml1     ; enemies pay energy, decide every 2 s at half energy, and use X-Men Legends I combos
+NpcPowerRule=xml1     ; enemies pay energy, decide every 2 s at half energy, use X-Men Legends I combos, and a hit reaction spends the combo
+NpcSemiAuto=xml1      ; X-Men Legends I's weapon brain for the [NpcSemiAuto] rows (needs NpcPowerRule=xml1; the port's builder writes both)
 ObjectWorldImpact=xml1 ; zero ordinary landing damage against non-physical targets
 StunRule=xml1         ; original party-hero stun timing and reaction ownership
 DeathSwitchClear=1    ; the hero handed a dead hero's controller stops the walk its AI had started (X-Men Legends I's hand-over)
@@ -619,6 +631,8 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `Domain` | `openspy.net` | GameSpy lookups go to the same host under this domain; `off`: no redirect |
 | `Server` | *(none)* | an IPv4 address every GameSpy and OpenSpy host name resolves to (a self-hosted OpenSpy); wins over `Domain` |
 | `LocalIP` | `auto` | `auto`: the address Windows reaches the internet from goes first; `first`: Windows' order, as without the fix; or one of this PC's addresses |
+| `TickRate` | *(the game's own, 30)* | `60`: online sessions run at 60 frames a second like single-player (the game's speed is unchanged); `30`: the game's own rate, the fallback for a slow PC. Online it is gameplay-agreement rule 29, so every player needs the same value ([details](docs/online-tick-rate.md)) |
+| `TickWait` | `timer` (with `TickRate`) | how an online frame waits for its turn: `timer` sleeps on a high-resolution timer (the game uses a fraction of a CPU and holds 60 on a busy PC); `spin` is the game's own busy-spin, as in 1.8.0-beta.3 ([details](docs/online-tick-rate.md#the-15-fps-cliff-tickwait)) |
 | `GameVersion` | *(the game's own, `1.30`)* | 1 to 4 letters, digits, `.`, `-` or `_`; only players on the same version see each other's games (for mods that are another game, such as the X-Men Legends I port) |
 
 **[Discord]** ([details](#-discord))
@@ -653,13 +667,14 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `PersonalItemText` | `1` | Personal-item pictures sit behind their descriptions; `0` retains the original image depth. Other menus and explicit menu `depth` values are unchanged ([details](docs/personal-item-text.md)). |
 | `Xtract` | `1` | `0`: an Xtraction Point's menu has no "Xtract" world map choice |
 | `XtractionShop` | `0` | `1`: let a companion builder append the first game's Xtraction services (Load, Danger Room, Healer, Forge) as each point permits through `extractionPointServices` ([details](docs/xtraction-shop.md)) |
-| `RevivalCost` | (none) | `xml1`: a fallen hero costs the first game's 200 x (the roster's highest level)^2 instead of max(200, 2 x level^2) ([details](docs/xtraction-shop.md#revival-price)) |
+| `RevivalCost` | (none) | `xml1`: a fallen hero costs the first game's 200 x G^2, G = min(5, the roster's highest level / 10 + 1) - 200 / 800 / 1,800 / 3,200 / 5,000 Tech Bits - instead of max(200, 2 x level^2); rule 10 revision 3 since 1.8.0 (the 200 x level^2 of 1.5.0 to 1.8.0-beta.7 is refused) ([details](docs/xtraction-shop.md#revival-price)) |
 | `DangerRoomGate` | (none) | a main-menu item name (the port: `button3`): disabled until Phoenix has been in a campaign on this profile, the first game's Danger Room gate ([details](docs/xtraction-shop.md#main-menu-danger-room-gate)) |
 | `XPCurve` | `xml2` | `xml1`: X-Men Legends I's level table (cap 45) and kill XP |
 | `StatHelp` | `1` | the stats screen's Body and Strike help texts state the applied `[Balance]` numbers instead of the engine's retail ones; `0` keeps the game's own texts (details: the `[Balance]` paragraph above and [docs/stat-help.md](docs/stat-help.md)) |
 | `BreakRule` | `xml2` | `xml1`: an object whose definition carries `xml1structure` breaks only to an attack of that level on X-Men Legends I's scale ([details](docs/break-rule.md)) |
 | `PlacementCrush` | `xml2` | `xml1`: while an object is settled on the floor (at a zone's load, or 0.5 s after a spawn in play) it no longer crushes another, so furniture authored overlapping makes no hits on entry ([details](docs/placement-crush.md)) |
 | `DoubleHeal` | `1` | `0`: a health or energy pack always heals its single amount and plays the pack's own sound, as in X-Men Legends I (XMen2.exe sometimes doubles it and plays a darker "double" sound; see `src/double_heal_rules.hpp`); the stats screen's Body and Focus helps drop their double-chance lines |
+| `ComboPopupGuard` | `1` | `0`: the game's own team-combo popup, which crashes (XMen2.exe+0x1a6848) when one of the two heroes' heads could not be made because the game's model pools were full; with `1` such a popup is hidden as its own timeout hides it, the combo's XP and count unchanged (see `src/combo_heads_rules.hpp`) |
 | `CharacterLadderPaths` | `0` | `1`: characters follow the descent paths a mod gives their ladder animations ([details](docs/character-ladder-paths.md)) |
 | `AutoAdvance` | `1` | a conversation line with a negative `timeDelay` goes on by itself once its voice has played; `0`: every line waits for accept |
 | `ReplyVoices` | `1` | a chosen reply's voice plays out before its answer; `0`: cut one frame in, as the game has it |
@@ -671,7 +686,8 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `RankCosts` | `0` | `1`: a talent rank costs the `cost` of its `<level>` (1 without one) when it is bought, refunded, auto-spent, respecced or lost with a level, and the skills screen offers it only when the hero can pay, as in X-Men Legends I ([details](docs/rank-costs.md)) |
 | `LevelSkillPoints` | (none) | `xml1`: a level divisible by 5 gives (and a level lost takes back) 2 skill points, any other 1, as in X-Men Legends I ([details](docs/rank-costs.md#skill-points-per-level-gamelevelskillpointsxml1)) |
 | `LevelStatPoints` | (none) | `xml1`: a level divisible by 5 gives (and a level lost takes back) 8 stat points, any other 4: X-Men Legends I's 2 / 1 for heroes whose stats are its x 4 ([details](docs/rank-costs.md)) |
-| `NpcPowerRule` | `xml2` | `xml1`: enemies pay energy for powers, decide every 2 s with at least half energy, use the first game's combos and visibility rules (gameplay rule 16 revision 4; [details](docs/npc-power-rule.md)). Heroes still get stunned more than in the original (Legends Classic issue #101, open). |
+| `NpcPowerRule` | `xml2` | `xml1`: enemies pay energy for powers, decide every 2 s with at least half energy, use the first game's combos and visibility rules and a hit reaction spends the enemy's combo step and attack decision as in the original, the brain runs through locked attacks and powers as in the original and power attacks are never blocked (gameplay rule 16 revision 11 from 1.8.0-beta.7, revision 10 in beta.6, revision 4 before; [details](docs/npc-power-rule.md)). Whether hero stun time now matches the original has not been measured since `StunRule` revision 3 (Legends Classic issue #101, open). |
+| `NpcSemiAuto` | off | `xml1` with `[NpcSemiAuto] Count` and `W1..Wn` rows (actor, recoil, range, burst, leader, warm-up, flags, trace time, accuracy; pipe-separated, binary32 hex; schema 4 since 1.8.0-beta.7): X-Men Legends I's weapon brain for those NPCs - one shot per recoil period, no bursts or melee at range, the grenade held at full energy, bullet hits gated by the weapon's trace time (1.8.0-beta.6; trace time 1.8.0-beta.7; needs `NpcPowerRule = xml1`; adds the weapon brain to gameplay rule 16 revision 10's record; [details](docs/npc-semi-auto.md)) |
 | `ObjectWorldImpact` | `xml2` | `xml1`: zero ordinary landing damage against non-physical targets, as in XML1 (gameplay rule 17 revision 1; [details](docs/object-world-impact.md)). |
 | `BoxHarmOrigin` | `xml2` | `xml1`: original boxed-harm zero dispatch origin, correcting the PC centre-based upward-fire impulse. Builder default on; requested-only gameplay rule 21, revision 1 ([evidence and limits](docs/box-harm-origin.md)). |
 | `HarmLoopStartup` | `xml2` | Opt-in `xml1`: keep the authored creation-relative first activation and ordinary start-on loop. Requires matching builder output; developer option, online blocked when requested; no gameplay rule ([details](docs/harm-loop-startup.md)). |
@@ -685,6 +701,9 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `DeathSwitchClear` | `0` | `1`: when the controlled hero dies, the hero given its controller stops the walk its AI had started instead of finishing it with no input, as in X-Men Legends I ([details](docs/death-switch.md)) |
 | `ClassicMainBackdrop` | `0` | `1`: the classic main menu's Cerebro room is drawn with its original bright textures ([details](#classic-main-menu-backdrop)) |
 | `ClassicMainPanelBounds` | `0` | `1`: the classic main menu's buttons answer the mouse over their whole visible panels ([details](#classic-main-menu-backdrop)) |
+| `ClassicHud` | off | `xml1`: the HUD drawn from a Legends Classic build's classic atlas and models (1.8.0-beta.5; the small map stays XML2's own, unframed; display only; refuses without the build's assets) ([details](docs/classic-hud-pilot.md)) |
+| `ClassicCodex` | `0` | `1`: the Codex's Details opens the list entry under the cursor and Back from a biography returns to the list (1.8.0-beta.5; display only) |
+| `ClassicSpeakers` | `0` | `1`: a conversation line the mod marks `speakerLabel="<name>"` shows that name beside the line while its `%TOKEN%` keeps the portrait and talk animation - X-Men Legends I's "Alison" on Magma's lines (1.8.0-beta.7; display only) |
 | `DangerRoomParty` | `xml2` | `xml1`: original Cyclops/Phoenix/Storm/Wolverine fallback for an incomplete non-solo course party (requested-only rule 19 revision 1). |
 | `DangerRoomHealthBars` | `xml2` | `xml1`: show the target health gauge for protected Danger Room training opponents. Builder default on; requested-only gameplay rule 22, revision 1. Protection and course limits remain; native dirty-stat refresh/clamp timing parity is unproved. Required combo hits kill training targets through the native [course death/progress path](docs/danger-room-courses.md). |
 | `ResistanceDisplay` | `xml2` | `xml1`: original colored resistance subtitles under a targeted enemy's health gauge, using active scoped modifiers. Display only; no gameplay rule ([details](docs/resistance-display.md)). |
@@ -734,6 +753,12 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `MoveTriggers` | *(the game's own, 19)* | `20` to `127` triggers per move (sounds, flashes and other events of a long attack) |
 | `EntityCapacity` | `0` | `1`: 32 actor / 768 generic / 1024 World entity handles instead of 32 / 224 / 256; needs `[Save] Format=lc` ([details](docs/entity-capacity.md)) |
 | `ScriptFunctions` | *(1024 with `[Game] ForcedTeams`, otherwise the game's own, 320)* | `321` to `4096` script function names; `320` keeps the game's own limit ([details](docs/script-functions.md)) |
+
+**[Engine]** ([details](docs/model-pools.md))
+
+| Key | Default | Meaning |
+| --- | ------- | ------- |
+| `ModelPools` | `off` | `x4`: the model component pools four times the game's (handles and transforms 4096, IGB 2048, shader effects 2048, actors 128, particle clouds 128 ...), `x2`: half that; online it is gameplay-agreement rule 28, so every player needs the same value ([details](docs/model-pools.md#co-op)) |
 
 **[TestMode]**: optional player testing tools ([details](#player-testing-mode)); either switch disables online play until both are off and the game is restarted.
 
@@ -838,6 +863,10 @@ cmake -S . -B build -A Win32
 cmake --build build --config Release
 build\bin\Release\xml2_test.exe          # add --live to watch your pad as the game sees it
 ```
+
+That builds the fix without online rooms and drop-in (they need GameNetworkingSockets). The release build links it in:
+`pwsh scripts/build-gns.ps1 -OutDir C:\gns -WorkDir C:\gns-work` builds the pinned libraries (about 20 minutes, once), then add
+`-DXML2_FIX_GNS_ROOT=C:/gns` to the first command. [Details](docs/gns-transport.md#build).
 
 The output is `build\bin\Release\dinput.dll`. `xml2_test.exe` loads it the way the game does, then reads a connected controller through both of the game's DirectInput paths and checks the OpenSpy redirect; with no controller connected it still checks both paths on two virtual pads, driven through the test pipe. Release builds are produced by [GitHub Actions](.github/workflows/build.yml) from tagged source.
 

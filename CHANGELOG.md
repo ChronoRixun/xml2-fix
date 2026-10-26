@@ -1,5 +1,228 @@
 # Changelog
 
+## 1.8.0 - 2026-10-25
+
+The first stable release since 1.7.1, the engine half of Legends Classic 0.4.0 (content 27 / `LC36`, the same
+game as 0.4.0-beta.7; `dinput.dll` is the 1.8.0-beta.7 sources plus the revival price fix below, so it refuses a
+beta 7 PC that charges the old price). In short: online co-op by code and
+public games with drop-in and solo-segment watchers, online at 60 fps, the team-combo and quit crashes fixed with
+four times bigger model pools, the classic HUD and Codex, enemies that fight like the first game (combos, every
+gunman's weapon brain and bullet timer, powers on time, power attacks never blocked), one-sided walls in the first
+game's levels, the "Alison" speaker label and the first game's revival price. The entries below are 1.8.0's own
+fix and then the betas' changes, newest first.
+
+- **The first game's revival price: gameplay rule 10 revision 3** (`[Game] RevivalCost = xml1`; 1.8.0,
+  [docs](docs/xtraction-shop.md#revival-price)). A fallen hero costs 200 x G^2 Tech Bits, G = min(5, L / 10 + 1),
+  L the roster's highest current level without guests: 200 / 800 / 1,800 / 3,200 / 5,000 for 0-9 / 10-19 / 20-29 /
+  30-39 / 40-45, whoever fell. That is X-Men Legends I's price: default.xbe 0xaf6b0 charges 200 x G^2 with the group
+  registry vt+0x58 = 0x54150 makes from vt+0x50 = 0x54c30's highest level. 1.5.0 to 1.8.0-beta.7 charged 200 x L^2
+  (80,000 at level 20 instead of 1,800): their notes took the neighbouring slot vt+0x54 = 0x54cb0 (the acknowledged
+  level) for the group. The 0x4b8830 hook stays; a fourth guard covers 0x449960's roster loop (guest skip, running
+  maximum). With the key set, rule 10 is revision 3 (values unchanged), so a 1.8.0 PC and a beta 7 PC refuse each
+  other naming `10 Xtraction services/RevivalCost` instead of debiting different amounts; without the key the entry
+  stays revision 2 and the OFF record is unchanged.
+
+- **XML1 bullet trace timing** (`[Game] NpcSemiAuto = xml1`, schema 4 rows; 1.8.0-beta.7,
+  [weapon brain](docs/npc-semi-auto.md)). Converted XML1 bullets keep their shot presentation (sound, muzzle,
+  tracer) while a separate per-actor trace timer gates collision and damage, as XML1's weapon trace time does: the
+  MP5's 0.5 s gate admits equality and survives input, burst and target changes. Rows append the source trace time
+  and accuracy (schema 4); rule 16 binds all eight words with SHA-256. Admitted traces keep the PC beam geometry;
+  the character bullet-ray adapter is deferred. Legends Classic 0.4.0-beta.7 (content 27 / LC36) writes the
+  schema 4 rows and the bullet markers and refuses a fix that cannot read them.
+
+- **One-sided level collision for movement: gameplay rule 30** (`[Game] WorldBackfaces = xml1`; 1.8.0-beta.7,
+  [docs](docs/world-backfaces.md)). XMen2.exe's common movement trace helper (0x4a9650) asks the collider
+  for the level hull's back faces before every sweep (0x4a96c0 `push 1` -> collider vt+0x88); X-Men Legends I's helper
+  (0xa0af0) never does and its hull test is always front-faces-only. In the first game's levels actors therefore
+  stopped or wedged against walls seen from behind: HAARP's officer in haarp2_1's 520 staging pocket is boxed in by
+  them and, below 60 fps, wedges at the free end of a wall strip (the G14 positioning stall at ~500). `xml1` changes
+  that argument to 0 in the zones `[WorldBackfaces] ZoneCount / Z1..Zn` lists (a port's XML1 levels; the list is
+  required, without a valid one nothing is patched): the six bytes at 0x4a96c0 jump to a bridge that pushes the current zone's flag (the zone manager's path), so
+  XML2-origin maps a port install still carries keep XMen2.exe's two-sided collision (owner decision); the
+  entity-capacity owner of the helper asks the same flag. Entity collision and every other trace are unchanged.
+  Absent/`xml2` is byte-identical and adds no agreement entry; revision 2 `{1, scoped, zones, 0}` plus the zone list's
+  SHA-256 as the rule's detail: an `xml1` PC and one without the key or with another list refuse each other naming
+  `30 WorldBackfaces`.
+
+- **Enemy AI fidelity, part 2: gameplay rule 16 revision 11** (`[Game] NpcPowerRule = xml1`, `[Game] NpcSemiAuto =
+  xml1`; 1.8.0-beta.7; [docs](docs/npc-power-rule.md), [weapon brain](docs/npc-semi-auto.md),
+  [round 8](docs/npc-weapon-round8.md)). (1) The brain runs through locked moves, as XML1's (items 16-18):
+  XMen2.exe's attack-state update returned at once in every input-locked frame of an enemy that had used a power
+  (0x512f01..0x512f14; XML1's 0x10ad70 has no such exit), so its visibility query, brain and power decision did not
+  run during attacks, powers and reactions (2.6 power-decision calls/s in attacks, 0 in powers, against the
+  original's 23-39) and a power re-check due then went off on the first free frame, 0.5-7 s late (median 2.5 s on
+  the still-hero bench). The exit is never taken (0x512f0b jz -> jmp), the melee brain's power decision skips its own
+  lock test (0x5187c4; the officer weapon brain's call keeps it) and its picker is entered past the picker's lock
+  test (0x50fe5c; the per-slot chain test still refuses). NpcSemiAuto's own lock bridge at 0x512f0d is withdrawn (rule
+  16 now covers every actor), and the interim call-gap fronts (beta7 development) are withdrawn with it. (2) A block
+  is a counted melee to-hit miss, as in XML1 (items 14-15): an attack whose damagescale isn't `normal` (XML1's
+  PowerAttack) is never rolled (0x44f58e), and the damage receive's `block_chance` roll never zeroes a hit
+  (0x437b08); on the PC about a quarter of such rolled power attacks were blocked with no damage. (3) The weapon brain
+  takes schema 3 rows (`actor|recoil|range|burst|leader|warmup|flags`) and covers every XML1 gun family: the input
+  gate's warm-up deadline (nullifier, knockback: before every shot; lightning, flame: once per hold), the continuous
+  play flag, the pistol's default-handler primary, the original 0.25 s idle transition (was 0.05 s), the bullet
+  line-of-sight drop (0x519e3a, XMen2.exe's visibility test through rule 16's XML1 ray) and both empty-query branches
+  (0x51a359: bullet bursts and pauses, the other types' burst/strafe with the continuous-beam sweep). Schema 2
+  tables are refused. (4) No scheduler change: the original's measured "query starvation" was a stale reservation
+  planted by the measurement staging; `xml2_npc_query_scheduler_test` now executes XML1's and XMen2.exe's admission
+  code side by side. The record: absent/`xml2` = revision 3 `{0,0,0,0}` (released OFF, nothing patched);
+  `NpcPowerRule = xml1` = revision 11 `{1,1,0,0}`; with the weapon brain `{1,1,1,first four bytes of the table's
+  SHA-256}` and the whole SHA-256 of the canonical rows as rule 16's detail (the agreement digest covers it; a 32-bit
+  fold of the rows let two different tables agree). Revision 11 refuses 1.8.0-beta.6's revision 10 (and 3, 4, 5-9)
+  both ways naming `16 NpcPowerRule`. A weapon brain that cannot install takes the power rule's sites back out too
+  (all or nothing; online stays closed). The aiming's exponentials and trigonometry are deterministic
+  (`det_math.hpp`, correctly rounded double operations only), not the CRT's, and every weapon-brain entry runs under a
+  fixed x87 control word and MXCSR, restored on return. A failed withdrawal refuses startup.
+- **Gameplay agreement: rule details.** A rule whose effective state does not fit four words registers the SHA-256 of
+  its complete canonical data; details extend the canonical list only when present, so every OFF and released digest
+  is unchanged (protocol 4, 108 bytes, no wire change).
+- **XML1's speaker labels, opt-in** (`[Game] ClassicSpeakers = 1`; 1.8.0-beta.7): XMen2.exe takes a conversation
+  line's name label, portrait and talk-animation entity from one `%TOKEN%` (the line parser 0x458820 -> 0x456d00
+  writes the stats entry's display name and a newline in front of the text). X-Men Legends I keyed its 213 `%ALISON%`
+  lines to Magma but labelled them "Alison" (default.xbe string 503), so the Legends Classic builder keeps `%MAGMA%`
+  on the party Magma's ex-`%ALISON%` lines and writes `speakerLabel="Alison"` beside it. With the key the fix
+  redirects the line parser's two calls of its common part (0x458da8, 0x458e7b; seven guarded sites, one
+  transaction): after the game's own parse, a line with `speakerLabel` whose text starts with a token the game
+  resolved gets the label in place of the display name (text and textb, re-interned through 0x4566b0); the speaker
+  key stays, so the portrait and the talk animation are still Magma's. Anything else (no attribute, an unresolved
+  token, a token not at the start, a second token) is left as parsed. Absent, `0` or `off` make no writes; without
+  the fix the attribute is never read and the line reads "Magma" as before. Display only: no gameplay-agreement rule,
+  no save change.
+- **Enemy AI fidelity: gameplay rule 16 revision 10** (`[Game] NpcPowerRule = xml1`, `[Game] NpcSemiAuto = xml1`;
+  1.8.0-beta.6). One new rule-16 revision covers two restorations ([docs](docs/npc-power-rule.md),
+  [weapon brain](docs/npc-semi-auto.md)). (1) With `NpcPowerRule = xml1`, a hit reaction now spends an enemy's combo
+  step, power re-check and attack decision as in X-Men Legends (the reaction sites 0x435b6e, 0x518770, 0x518fd0);
+  measured on the single-Brotherhood moving-hero bench, enemy offensive entries fall from 48.7 to 25.2 per minute
+  (original 27.7, gate 23.6-31.9) with the still-hero control unchanged. (2) `NpcSemiAuto = xml1` with
+  `[NpcSemiAuto] Count / W1..Wn` rows (`actor|recoil|range|burst|leader`, binary32 bits, written by Legends Classic from
+  the owner's XML1 data) gives those NPCs the original weapon brain: the recoil deadline, the held fire, the
+  grenade-press and input-lock bridges (0x51a359, 0x519fe7, 0x512f0d) - the HAARP officer fires one aimed shot per
+  ~0.9 s, never bursts or melees at range, closes from 520 to ~340 and holds his grenade at full energy, within +/-15 %
+  of the original's shot count in all six range/energy cells at 60 fps. It needs `NpcPowerRule = xml1` (otherwise it
+  is refused and host/join close). The record: absent/`xml2` = revision 3 `{0,0,0,0}` (released OFF, nothing
+  patched); `NpcPowerRule = xml1` = revision 10 `{1,1,0,0}`; with the weapon brain `{1,1,1,metadata fingerprint}`.
+  A revision-10 PC refuses the released revisions 3 and 4 and the unreleased candidates 5-9 both ways, and a PC with
+  the weapon brain refuses one without it, each naming `16 NpcPowerRule`.
+- **The classic HUD no longer frames the small map** (`[Game] ClassicHud = xml1`; 1.8.0-beta.6): beta 5 drew a bevel
+  around XMen2.exe's small map and moved the map's safe-area inset (two operands at 0x5a023f and 0x5a0717) to fit
+  it; hand-testing found the frame oversized and the original game's small map had none. The adapter now leaves the
+  map alone: the map draw callback (0x69db98) is not hooked, the two inset operands keep their stock bytes, and the
+  twelve read-only guards that existed only for the frame are gone (the transaction is seven pointer writes and one
+  call redirect). The map, its fog and markers sit where XML2 puts them, and every other classic HUD piece is
+  unchanged. Off (`ClassicHud` absent) is byte-identical as before. A builder whose atlas still has the frame is
+  harmless (sprite 38 is never drawn); Legends Classic 0.4.0-beta.6 (content 26 / LC35) stops writing it.
+- **Online at 60 fps** (`[Online] TickRate = 60`; 1.8.0-beta.3): the stock game runs an online session at 30
+  frames a second (`CClient::frame` writes a 1/30 s minimum frame while the online flag is set, 1/60 s otherwise).
+  `60` replaces the online 1/30 with 1/60 (guarded, read back; `[Display] FrameRate`'s patch of the offline 1/60 in
+  the same bytes accepts it). Lockstep runs one simulation step per frame with the slowest player's measured frame
+  time as the step, so the game keeps its speed; upload per player roughly doubles (~11 KB/s). The rate is
+  **gameplay-agreement rule 29 (TickRate)**, `{rate in effect, 0, 0, 0}`, registered whenever the key is there: a 60
+  and a 30 PC refuse each other naming `29 TickRate`; a 60 request that cannot patch the game advertises 30. The
+  lost-player records a survivor re-sends keep their length in seconds (64 at 30, 128 at 60). Absent = the game's
+  30 and the released record; Legends Classic 0.3.0-beta.3 builds write `60` ([docs](docs/online-tick-rate.md)).
+- **Online frames wait instead of spinning** (`[Online] TickWait`, 1.8.0-beta.4): beta 3 at `TickRate = 60` fell to
+  ~15-20 fps on a busy PC (other games running). The game's online minimum-frame wait is a busy-spin, so every online
+  game is a 100 % CPU thread; on a saturated PC the scheduler takes it off the CPU for whole quanta, and a 1/60 s
+  frame has no slack to absorb that (a 1/30 s frame's spin did). With `TickRate` set the online minimum is now 0.0
+  and the fix paces online frames at the tick rate from its Present hook: a high-resolution timer, a 0.6 ms spin,
+  the wait at above-normal thread priority. Measured with the host on 4 CPUs shared with 12 busy processes:
+  spin 20.9 fps, timer at normal priority 18.1, timer above normal 55.4 (p90 17.1 ms), the game using ~0.2 of a CPU
+  instead of a whole one. `TickWait = spin` keeps the beta 3 behaviour; rule 29 is unchanged
+  ([docs](docs/online-tick-rate.md#the-15-fps-cliff-tickwait)).
+- **The classic look, opt-in** (`[Game] ClassicHud = xml1`, `[Game] ClassicCodex = 1`; 1.8.0-beta.5): two
+  presentation-only adapters for Legends Classic 0.4.0-beta.5's builder-generated assets. `ClassicHud = xml1` draws
+  the HUD from the build's composite atlas and panel/emblem models (one guarded transaction: eight four-byte pointer
+  writes and one five-byte call redirect, each checked against the retail bytes; scoped hero fills and target frame,
+  only the three HUD sprite batches remapped) and gives the small map a larger frame with a matching safe-area inset,
+  so fog and edge markers stay inside it; it refuses (stock HUD, logged reason) without the build's `lc-hud.txt`
+  marker `LC-HUD-4`, on an unexpected image base or on any retail-byte mismatch. `ClassicCodex = 1` binds the Codex's
+  Details action to the list entry under the cursor and makes Back from a biography return to that list (List Back
+  keeps the native Close); both hooks commit in one transaction with verified rollback. Absent, `0` or `off` make no
+  writes (the retired `ClassicHudPilot` key is ignored). Display only: no gameplay-agreement rule, no save change
+  ([docs](docs/classic-hud-pilot.md)). Refused-save dialogs now show the save's file name instead of its full path
+  (a long absolute path ran past the dialog box); the log and the refusal record keep the full path.
+- **Bigger model pools, opt-in** (`[Engine] ModelPools = x4`; SPEC-runtime-limits 2.4): every model the game shows
+  takes a handle and components from fixed pools (handles 692, IGB geometry 400, shader effects 432, animated actors
+  32, particle clouds 40, ...). When one is full the model is silently not made - an effect, a prop or a HUD head goes
+  missing (the beta 1 crash was the full IGB pool). `x4` moves the whole model aggregate (0x7bf6d0) into a block of
+  the fix's own and raises handles and transforms to 4096, attributes 1024, shader effects 2048, IGB 2048, actors
+  128, procedural geometry 1024 and particle clouds 128 (`x2`: half, clouds 80). Each particle cloud takes one of
+  the particle systems of a second static manager (0x7dad78, 40 retail; with more clouds than systems the game reads
+  through a NULL system at 0x578df3), so that manager moves and grows with the clouds; 753 fields of the model code are patched and
+  36 imm8 sites and five bitmap clears move into caves, and the procedural-geometry destructor gets its own copy of
+  the `bitset<220>::findNext` it shares with the FX templates (beta 3: under beta 2 that destructor read the helper's
+  end value 220 as a live slot, and the attributes and procedural-geometry destructors cleared only the retail part of
+  their bitmaps, so a zone change or exit with those pools in use could destroy items twice), all or nothing (on any byte that isn't the retail build's the game keeps its own
+  pools and the log says so). A full pool refuses spawns as well as models, so online a raise is **gameplay-agreement
+  rule 28 (ModelPools)**, `{installed, handles, IGB, actors}`, registered only when requested: peers must share the
+  pools, and a 1.8.0-beta.1 peer and a beta.2 peer with `x4` refuse each other at admission (the beta.2 PC names
+  `28 ModelPools`). Off by default in the DLL; Legends Classic 0.3.0-beta.2 builds write `x4`. The test pipe's status
+  shows the nine live counts.
+- **Quit no longer races the controller-enumeration workers** (retail `0x618c90`, manager `0xA6A7E4`): several
+  enumeration workers can be alive after returning to the main menu, and each one cleared the shared manager and
+  published "stopped" (`0xA6A7E1`) on exit while a peer was still enumerating - the peer then reloaded a null manager
+  for its count call and faulted at `0x627375` (read of `0xC`), intermittently on Quit. Entry/exit accounting now lets
+  only the last active worker clear the manager and acknowledge shutdown. Eleven short retail signatures guard the two
+  sites; any mismatch logs its address and keeps the stock behaviour. See `docs/input-enumeration-shutdown.md`.
+- **The team-combo popup no longer crashes the game** (owner report on 1.8.0-beta.1, Maintenance Garage hosting alone;
+  `XMen2.exe+0x1a6848`): when two heroes land a combo the game shows both heroes' heads, and makes each head model
+  from fixed model pools. With a pool full (the dump: 400 of 400 `CModelIGB`), the second head is never made, but
+  the game still showed the popup and its draw called through the missing head. The popup is now hidden in that
+  case, the way its own timeout hides it; the combo's XP and count are unchanged. Display only (no gameplay-agreement
+  rule of its own). `[Game] ComboPopupGuard=0` keeps the game's own behaviour.
+- **A frozen or silent player no longer splits the session** (0.3.0e, rule 25 revision 4): with three or more
+  players, a player whose game froze (or whose network went silent) was removed by the host's own 10 s timeout
+  without the survivors' agreed cut frame; the other joiner then waited for the host's part of the agreement, its
+  own timeout ran out and it left ("You have lost connection to the host"). Now every way a player is lost - its
+  connection closing, the host's timeout or lag-report removal, another player reporting it lost - takes the same
+  path: every remaining PC exchanges the lost player's last inputs and removes it at one agreed frame, and the
+  session carries on. The frozen player, when its game resumes, gets the normal "lost connection" message.
+  0.3.0d peers are refused by name (`differs: 25`).
+- **Hero switches survive level changes online** (0.3.0d, rule 26 revision 6): the solo-segment hand-back ran at
+  every level change and gave each player the hero they had at the previous zone's start, undoing d-pad switches
+  (and handing a dead hero back, which the game then passed on again). It now runs only inside a solo story segment
+  and in the zone where it ends, with the heroes the players held when the segment started. 0.3.0c peers are refused
+  by name (`differs: 26`) instead of desynchronizing.
+- **A slow player is no longer dropped online** (rule 26 revision 6): the game's slow-player guard dropped whoever
+  reported frames over 50 ms for 1,700 frames in a session - a joiner in the owner's three-PC test, the host itself
+  on a busy PC (which ended the session for everybody). The warnings stay; the drop is gone. Switching onto a hero
+  another player controls stays refused, as in the original game; switching to an AI hero works online.
+- **Four-player Start Game no longer crashes:** each participant keeps its own mesh peer; the start race no longer rebinds two players to the same peer.
+
+- **The release is built with online play:** the release workflow now builds GameNetworkingSockets 1.6.1 (pinned commit, the
+  project CA and the cert-enforcement patch in `packaging/gns/`; protobuf and abseil from a pinned vcpkg) with
+  `scripts/build-gns.ps1`, links it statically into `dinput.dll` and fails unless the DLL it publishes has GNS, protobuf and
+  the CA pin in it and imports Windows system DLLs only (`scripts/check_release_dll.py`, run on the built DLL and on the one in
+  the finished zip). Before, CI built without GNS: the same version number, no online rooms or drop-in. Nothing ships next to
+  `dinput.dll`; the release zip now also carries `THIRD-PARTY-NOTICES.txt` (the licences of what is linked in).
+
+- **Public game browser and join codes match builds by game version:** a room now carries the build's
+  `[Online] GameVersion` (for example `LC33`) as its version token, exactly what the launcher's Browse games list
+  compares with its own build; before, the token also held part of the content fingerprint and every listed game
+  of the same build showed "Different game version" with Join off. A joiner of another build is still refused
+  before it connects (`version_mismatch`).
+- Rule 27 OnlineConversations (1.7.0) is the only conversation fix online; Legends Classic 0.3.0 writes it.
+- **Online hardening** for room startup, message handling and logging.
+- `online-status.json` (contract v1.5): a room that exists but takes no players right now (the broker's
+  `room_not_joinable`) is the new error id `room_closed`; `room_full` now means only that all four places are taken.
+
+- Online rooms for the launcher (contract v1.5): `[Online] Host` / `JoinCode` are read once at start and removed from `xml2-fix.ini`; `online-status.json` next to the game reports connecting / room / joined / in_game / ended / error (ids broker_unreachable, broker_rejected, code_not_found, code_expired, room_full, room_closed, version_mismatch, test_mode_on, tls_pin_mismatch, internal), written atomically; a room carries a version token so another build's joiner is refused before connecting; with a join code Join Game lists the room's game only - master server entries are left out until the session runs (no Connect by IP needed). [details](docs/online-status-file.md)
+- Online rooms keep the broker's credentials between starts: the 24 h certificate (reused with more than an hour left) and the 6 h TURN relay credentials (reused with more than 30 minutes left, for the same broker and TURN secret; sealed with DPAPI for the Windows user because they hold the relay password, never logged). A connection that fails while cached TURN credentials are in use gets new ones from the broker once. `xml2-fix.log` says whether each came from the broker or this install's cache. A member's keepalive that overtakes its hello at the start is ignored instead of counted as a refused tunnel message, and refused tunnel messages are logged with the reason.
+
+- **Solo story segments online** (`[Online] JoinInProgress=1`, rule 26 revision 6): a player without a hero in a
+  segment stays connected and watches, with the message "Solo story segment - you rejoin when it ends"; when the
+  party widens each player gets back the hero they had before (docs/join-in-progress.md).
+- **Guest loss and freezes:** with three or more players, survivors exchange the lost player's last inputs
+  and remove it at one agreed frame (rule 25 revision 4, framing 3). This includes a closed connection,
+  the native host timeout and lag-report removal. A guest can join again by code at the next level boundary.
+  A host drop or freeze still ends the session for joiners with "lost connection to the host"; no host migration.
+
+- **Host alone and drop-in** (`[Online] JoinInProgress=1`): the host can Start Game with nobody else in the room and
+  play; players are admitted mid-level and brought in at the next level change (rule-26 flow). When the last player
+  leaves or vanishes the host keeps hosting (the native rule ended a session of two), so a replacement can drop in.
+  The native slow-player counters start again with every restored session (a host that had played alone dropped
+  itself right after the first bring-in).
+
 ## 1.7.1 - 2026-10-20
 
 XML2 Fix 1.7.1 is the engine half of Legends Classic 0.2.5. Both co-op PCs need

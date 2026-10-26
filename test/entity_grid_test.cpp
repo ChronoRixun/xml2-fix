@@ -2,6 +2,7 @@
 // (copied from an executable given on the command line into a fixture at its own addresses) against the port at
 // 256, comparing raw object memory and every result after every scripted step. No game, no game content.
 #include "entity_grid.hpp"
+#include "det_math.hpp"
 #include <Windows.h>
 #include <array>
 #include <cfloat>
@@ -406,6 +407,49 @@ const char* region_name(std::uint32_t off)
 	if (off < off_coarse) return "head"; if (off < L.pool) return "coarse map"; if (off < L.block_bitmap) return "cells"; if (off < L.ring) return "block bitmap";
 	if (off < L.ring_enqueue) return "ring"; if (off < L.alloc_bitmap) return "ring counters"; if (off < L.extents) return "alloc bitmap/count"; if (off < L.caches) return "extents"; return "caches";
 }
+// Review round 3: the weapon brain's det_math::fp_env must load the game's own simulation word. XMen2.exe's CRT
+// startup sets 53-bit precision (0x6729f6: _controlfp(_PC_53, _MCW_PC)) and its Direct3D 8 device is created with
+// D3DCREATE_FPU_PRESERVE (libIGGfx 0x2cbd7: alchemy.ini preserveFPU, default true; the logged behaviour 0x86), so the
+// simulation runs at 0x027f. The grid picks float or double from the live precision (cell_range), and at the
+// boundary min -1024, inverse 1/256, x = 512.4999389648438 the cell is 5 in double but 6 in float. An entity
+// registered by the game (unguarded, its word) must be found by a query made from inside the brain's guard whatever
+// precision the guard's caller had, and the same query made at 24 bits must show why the word matters.
+void game_word_boundary()
+{
+	void* g = create(stock_descriptor);
+	check(g != nullptr, "boundary grid created");
+	if (!g) return;
+	unsigned saved = 0, ignored = 0;
+	_controlfp_s(&saved, 0, 0);
+	const auto word = [&](unsigned pc) { _controlfp_s(&ignored, pc | _RC_NEAR, _MCW_PC | _MCW_RC); };
+	const vec3 lo{-1024.f, -1024.f, -1024.f}, hi{1024.f, 1024.f, 1024.f}, cell{256.f, 256.f, 256.f};
+	const bounds box{{500.f, 0.f, 0.f}, {512.4999389648438f, 10.f, 10.f}};
+	const vec3 at_lo{512.4999389648438f, 5.f, 5.f}, at_hi = at_lo;
+	const auto found = [&](bool guard, unsigned caller) {
+		word(caller);
+		std::uint32_t set[8]{};
+		if (guard) { det_math::fp_env fp; query(g, nullptr, &at_lo, &at_hi, set); }
+		else query(g, nullptr, &at_lo, &at_hi, set);
+		word(_PC_53);
+		return bit(set, 5);
+	};
+	word(_PC_53); // the game's word: the zone's grid and the entity registration
+	reset(g, nullptr);
+	init(g, nullptr, &lo, &hi, &cell);
+	update(g, nullptr, 0x105, &box);
+	view v(g);
+	check(v.extent(5)[0] == 5 && v.extent(5)[1] == 5, "registered under the game's word (53-bit): cells x 5..5");
+	check(found(false, _PC_53), "an unguarded query under the game's word finds it");
+	bool guarded = true;
+	for (const unsigned caller : {unsigned(_PC_24), unsigned(_PC_53), unsigned(_PC_64)}) guarded &= found(true, caller);
+	check(guarded, "a query from inside the brain's fp_env finds it whatever precision the caller had (24, 53, 64-bit)");
+	check(!found(false, _PC_24), "the same query at 24-bit precision computes cell 6 and misses it (the word must be the game's)");
+	check(det_math::default_x87_cw == 0x027f && det_math::game_x87_cw == det_math::default_x87_cw,
+	      "fp_env loads the game's own simulation word 0x027f");
+	_controlfp_s(&ignored, saved, _MCW_PC | _MCW_RC);
+	destroy(g);
+}
+
 int differential_run(unsigned precision, const char* label)
 {
 	alignas(16) static std::uint8_t native_obj[native_size + 0x100];
@@ -462,6 +506,7 @@ int main(int argc, char** argv)
 	layout_checks();
 	synthetic(stock_world);
 	synthetic(raised_world);
+	game_word_boundary();
 	const char* path = argc > 1 ? argv[1] : std::getenv("XML2_FIX_TEST_EXE");
 	int steps = 0;
 	if (!path) std::puts("SKIPPED differential: no retail executable path given (argument 1 or XML2_FIX_TEST_EXE)");
