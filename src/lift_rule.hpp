@@ -15,6 +15,8 @@
 // peers must share: rule 38 of the gameplay agreement.
 namespace lift_rule
 {
+	// The existing handle-keyed XML1 consumer value, shared with rule46.
+	int heaviness(void* object);
 	void install(HMODULE game);
 	std::string status(); // "lift rule xml1" / "lift rule game's own" / "lift rule unavailable"
 

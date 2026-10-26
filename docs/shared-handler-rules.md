@@ -66,6 +66,10 @@ emulator is launched by this test.
 
 ## Deferred design notes (no patches)
 
+These are the original rule42 audit notes. Subsequent rule46 work implements
+telekinesis and guard through the installed rule45 lifecycle; see
+[the coupled contracts and remaining live checks](tk-guard.md).
+
 * `ch_move`: identify stats `+2b0`, its initialization, parser and all effective
   controller-assigned values before removing PC's animation-rate division at
   `4f01c5..4f01da` (XML1 `de7f2..de7f9`). A default-only guess is insufficient.

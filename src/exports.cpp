@@ -464,10 +464,6 @@ namespace
 				npc_semi_auto::values(npc_power::values()), npc_power::verified() && npc_semi_auto::verified(),
 				npc_semi_auto::detail());
 		stun_rule::install(game);
-		shared_handlers_c::install(game);
-		if (shared_handlers_c::requested())
-			gameplay_agreement::register_rule(gameplay_capabilities::shared_handlers_c_id, shared_handlers_c::revision,
-				shared_handlers_c::values(), shared_handlers_c::verified());
 		shared_handlers::install(game);
 		if (shared_handlers::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::shared_handlers_id, shared_handlers::revision,
@@ -586,6 +582,10 @@ namespace
 		if (xml1_grab_carry::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::grab_carry_id, xml1_grab_carry_rules::agreement_revision,
 				{xml1_grab_carry::installed() ? 1u : 0u, xml1_grab_carry_rules::feature_mask,0,0}, xml1_grab_carry::verified());
+		shared_handlers_c::install(game);
+		if (shared_handlers_c::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::shared_handlers_c_id, shared_handlers_c::revision,
+				shared_handlers_c::values(), shared_handlers_c::verified());
 		xml1_rogue_decide::install(game);
 		if (xml1_rogue_decide::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::rogue_decide_id, xml1_rogue_decide_rules::agreement_revision,

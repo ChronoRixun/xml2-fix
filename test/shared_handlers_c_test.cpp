@@ -2,6 +2,7 @@
 #include "shared_handlers_c.hpp"
 #include "shared_handler_c_rules.hpp"
 #include "shared_handler_c_bridges.hpp"
+#include "tk_guard_bridges.hpp"
 #include "gameplay_capabilities.hpp"
 #include <optional>
 #include <cwchar>
@@ -12,15 +13,17 @@ using namespace handler_fixture;
 constexpr u32 bias=0x10000000;
 extern "C" unsigned char fixture_space[0x400000];
 namespace ini {
- std::array<std::optional<std::string>,9> settings{};
+ std::array<std::optional<std::string>,11> settings{};
  std::optional<std::string> text(const wchar_t*,const wchar_t* key) {for(unsigned i=0;i<settings.size();++i)if(!std::wcscmp(key,shared_handler_c_rules::keys[i]))return settings[i];return {};}
 }
 namespace logger {void write(const char*,...) {}}
 namespace entity_capacity {
- struct ownership {u32 site=0,target=0;};std::array<ownership,5> owners{};
+ struct ownership {u32 site=0,target=0;};std::array<ownership,16> owners{};
  u32 installed_target(u32 site){for(const auto& owner:owners)if(owner.site==site)return owner.target;return 0;}
 }
 namespace game_version {bool refused=false;void refuse_startup(){refused=true;}}
+namespace xml1_grab_carry {bool available=true;bool installed(){return available;}}
+namespace lift_rule {int heaviness(void* object){return handler_fixture::field<unsigned char>(object,0x31d);}}
 namespace {
 using shared_handler_bridges::entry;using shared_handler_bridges::input;
 using shared_handler_c_bridges::contact_callback;
@@ -438,14 +441,33 @@ int main(int argc,char** argv) {
  DWORD old=0;if(!VirtualProtect(at(0x401000),0x400000,PAGE_EXECUTE_READWRITE,&old))return 2;
  if(VirtualAlloc(at(bias),0x600000,MEM_RESERVE|MEM_COMMIT,PAGE_EXECUTE_READWRITE)!=at(bias))return 2;
  image pc(argv[1],pc_hash),x1(argv[2],x1_hash);if(failures)return 1;
- const u32 mask=argc>3?static_cast<u32>(std::stoul(argv[3],nullptr,0)):511;
- if(!mask||mask>511)return 2;
+ if(argc>3&&!std::strcmp(argv[3],"--off-proof")){
+  seed(pc);const auto before=std::vector<unsigned char>(at(0x401000),at(0x801000));
+  gameplay_capabilities::record reference;check(reference.finalize(),"OFF reference agreement finalizes");
+  const auto module=GetModuleHandleW(nullptr);
+  for(const char* choice:{"xml2",""}){
+   keys(shared_handler_c_rules::all,choice);DWORD protection=0,unused=0;
+   check(VirtualProtect(at(0x401000),0x400000,PAGE_NOACCESS,&protection)!=0,"OFF proof image made inaccessible");
+   shared_handlers_c::install(module);
+   check(VirtualProtect(at(0x401000),0x400000,protection,&unused)!=0,"OFF proof image protection restored");
+   check(!shared_handlers_c::requested()&&!shared_handlers_c::installed()&&shared_handlers_c::verified(),"all eleven native choices remain OFF without image reads");
+   check(std::equal(before.begin(),before.end(),at(0x401000)),"all eleven OFF choices are byte-identical across four MB");
+   gameplay_capabilities::record actual;
+   if(shared_handlers_c::requested())actual.add(46,shared_handlers_c::revision,shared_handlers_c::values(),shared_handlers_c::verified());
+   check(actual.finalize()&&actual.bytes().size()==reference.bytes().size()&&std::equal(actual.bytes().begin(),actual.bytes().end(),reference.bytes().begin()),"OFF agreement bytes identical to rule46 absent");
+  }
+  keys(0);shared_handlers_c::install(nullptr);check(!shared_handlers_c::requested()&&shared_handlers_c::verified(),"missing keys preserve OFF");
+  std::printf("OFF proof: %d checks, %d failures; 4194304 image bytes and agreement bytes identical\n",checks,failures);return failures?1:0;
+ }
+ const u32 mask=argc>3?static_cast<u32>(std::stoul(argv[3],nullptr,0)):2047;
+ if(!mask||mask>2047)return 2;
  for(const auto& g:shared_handler_c_rules::guards){auto* b=pc.read(g.bytes.va,g.bytes.hex.size()/2);check(b&&limits_rules::matches(b,g.bytes.hex),g.bytes.what);}
  if(failures)return 1;
  seed(pc);const auto baseline=std::vector<unsigned char>(at(0x401000),at(0x801000));
- for(const char* off:{"xml2",""}) {keys(511,off);shared_handlers_c::install(nullptr);check(!shared_handlers_c::requested()&&shared_handlers_c::verified()&&std::equal(baseline.begin(),baseline.end(),at(0x401000)),"OFF does not access image or change agreement");}
+ for(const char* off:{"xml2",""}) {keys(2047,off);shared_handlers_c::install(nullptr);check(!shared_handlers_c::requested()&&shared_handlers_c::verified()&&std::equal(baseline.begin(),baseline.end(),at(0x401000)),"OFF does not access image or change agreement");}
  keys(0);shared_handlers_c::install(nullptr);check(!shared_handlers_c::requested()&&shared_handlers_c::verified(),"absent selection stays OFF");
  keys(mask,"invalid");shared_handlers_c::install(GetModuleHandleW(nullptr));check(!shared_handlers_c::verified()&&!shared_handlers_c::installed()&&std::equal(baseline.begin(),baseline.end(),at(0x401000)),"invalid selection refuses without writes");
+ if(mask&1536){keys(mask);xml1_grab_carry::available=false;shared_handlers_c::install(GetModuleHandleW(nullptr));check(!shared_handlers_c::verified()&&!shared_handlers_c::installed()&&std::equal(baseline.begin(),baseline.end(),at(0x401000)),"missing lifecycle dependency refuses the complete transaction");xml1_grab_carry::available=true;}
  keys(mask);shared_handlers_c::install(reinterpret_cast<HMODULE>(0x500000));check(!shared_handlers_c::verified()&&!shared_handlers_c::installed(),"relocated image refused");
  for(const auto& g:shared_handler_c_rules::guards)if(g.parts&mask) {seed(pc);*at(g.bytes.va)^=1;auto before=std::vector<unsigned char>(at(0x401000),at(0x801000));shared_handlers_c::install(GetModuleHandleW(nullptr));check(!shared_handlers_c::installed()&&!shared_handlers_c::verified()&&std::equal(before.begin(),before.end(),at(0x401000)),"selected dependency failure refuses atomically");}
  if(mask&shared_handler_c_rules::colossus)for(u32 site:{0x4a95c0u,0x4a95f0u,0x4a9600u,0x4a9610u,0x4a97a0u}) {
@@ -456,6 +478,12 @@ int main(int argc,char** argv) {
   check(!shared_handlers_c::installed()&&!shared_handlers_c::verified()&&std::equal(before.begin(),before.end(),at(0x401000)),"capacity query accepts only its exact published target, never a foreign jump");
  }
  for(auto& owner:entity_capacity::owners)owner={};
+ if(mask&1536)for(u32 site:{0x4ab6d0u,0x4ab720u,0x44fe10u,0x4a9570u,0x4a9590u,0x4a95c0u,0x4a9600u}){
+  seed(pc);entity_capacity::owners[0]={site,0x10001230};jump(site,reinterpret_cast<void*>(0x10001234));
+  const auto before=std::vector<unsigned char>(at(0x401000),at(0x801000));shared_handlers_c::install(GetModuleHandleW(nullptr));
+  check(!shared_handlers_c::installed()&&!shared_handlers_c::verified()&&std::equal(before.begin(),before.end(),at(0x401000)),"TK/guard query service accepts only its exact published capacity target");
+  entity_capacity::owners[0]={};
+ }
  seed(pc);
  // Other owners may replace fly-charge collision and pickup cancellation.
  // These slots are outside C's producer/input responsibilities and must remain
@@ -474,16 +502,23 @@ int main(int argc,char** argv) {
    std::copy_n(at(sites[i]),5,installation_baseline.begin()+sites[i]-0x401000);
   }
  }
+ if(mask&1536){unsigned index=5;for(u32 site:{0x4ab6d0u,0x4ab720u,0x44fe10u,0x4a9570u,0x4a9590u,0x4a95c0u,0x4a9600u}){
+  // Reuse an existing claim when a selected C callback shares this service.
+  if(entity_capacity::installed_target(site))continue;
+  entity_capacity::owners[index]={site,0x10005000u+0x100u*index};++index;const u32 destination=entity_capacity::installed_target(site);
+  jump(site,reinterpret_cast<void*>(destination));std::copy_n(at(site),5,installation_baseline.begin()+site-0x401000);
+ }}
  shared_handlers_c::install(GetModuleHandleW(nullptr));check(shared_handlers_c::installed()&&shared_handlers_c::verified()&&shared_handlers_c::values()[0]==mask,"exact selected rule-46 mask installed");
  using namespace shared_handler_c_bridges;
- const shared_handler_c_rules::targets targets{&jump_damage_bridge,&fly_damage_bridge,&colossus_input,&colossus_contact,&bounce_contact,&fastball_bridge};
+ const shared_handler_c_rules::targets targets{&jump_damage_bridge,&fly_damage_bridge,&colossus_input,&colossus_contact,&bounce_contact,&fastball_bridge,
+  &tk_guard_bridges::tk_entry,&tk_guard_bridges::tk_update,&tk_guard_bridges::tk_cancel,&tk_guard_bridges::tk_input,&tk_guard_bridges::tk_filter,&tk_guard_bridges::guard_entry,&tk_guard_bridges::tk_parse};
  auto expected=installation_baseline;auto writes=shared_handler_c_rules::patches(mask,targets);
  for(const auto& p:writes){check(p.before.size()==p.after.size()&&std::equal(p.before.begin(),p.before.end(),pc.read(p.address,p.before.size())),"every written byte is guarded");std::copy(p.after.begin(),p.after.end(),expected.begin()+p.address-0x401000);}
  check(std::equal(expected.begin(),expected.end(),at(0x401000)),"production installer exact footprint preserves other owners' collision/cancel hooks");
  gameplay_capabilities::record off,on,other;check(off.finalize(),"OFF agreement finalizes");check(gameplay_capabilities::shared_handlers_c_id==46,"coordinator rule 46");
  check(on.add(46,1,shared_handlers_c::values(),true)&&on.finalize()&&on.compare(off.bytes())!=gameplay_capabilities::result::match,"selected C rules refuse OFF peer");
- check(other.add(46,1,{mask^511u,0,0,0},true)&&other.finalize()&&other.compare(on.bytes())!=gameplay_capabilities::result::match,"different C selections refuse peer");
- if(mask!=511){std::printf("shared handlers C mask %u: %d checks, %d failures\n",mask,checks,failures);return failures?1:0;}
+ check(other.add(46,1,{mask^2047u,0,0,0},true)&&other.finalize()&&other.compare(on.bytes())!=gameplay_capabilities::result::match,"different C selections refuse peer");
+ if(mask!=2047){std::printf("shared handlers C mask %u: %d checks, %d failures\n",mask,checks,failures);return failures?1:0;}
  pc.load(0x4f4ad0,0xc3);load_x1(x1,0xdabe0,0x65);load_x1(x1,0xe11d0,0x100);load_x1(x1,0xdaa00,0x8c);load_x1(x1,0xdad20,0x2e7);
  for(auto a:{0x3c6de4u,0x3c6e40u,0x3d6438u,0x3d643cu,0x3d6430u})x1.load(a,4,bias);
  for(const auto& p:writes)std::memcpy(at(p.address),p.after.data(),p.after.size());

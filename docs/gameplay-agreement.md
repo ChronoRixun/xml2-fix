@@ -221,6 +221,8 @@ a refusal is unverified and closes host/join. OFF still has no rule45 entry.
 Revision 2 and revision 3 refuse each other. See `xml1-grab-carry.md` for the
 required companion content switch (`XML1_FLIGHT_UPKEEP=True`).
 
+Rule46 additionally assigns bit512 to `TelekinesisRule` and bit1024 to `GuardDecideRule`, each requested-only and dependent on installed rule45. Existing mask bits and revision1 are unchanged; new selections refuse older/native selections through their installed-mask values. See [TK/guard](tk-guard.md).
+
 Rule 49 (`CharSounds`, `[Limits] CharSounds=127`) is revision 1, values `{127,0,0,0}` after its atomic install.
 Absent or 16 adds no entry and writes nothing; other values and failed installs close host/join with an
 unverified request. A mismatched peer is refused by name in both directions. See [char-sounds.md](char-sounds.md).

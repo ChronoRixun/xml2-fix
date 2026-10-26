@@ -1,6 +1,8 @@
 #include "shared_handlers_c.hpp"
 #include "shared_handler_c_rules.hpp"
 #include "shared_handler_c_bridges.hpp"
+#include "tk_guard_bridges.hpp"
+#include "xml1_grab_carry.hpp"
 #include "game_version.hpp"
 #include "entity_capacity.hpp"
 #include "ini.hpp"
@@ -25,6 +27,9 @@ void install(HMODULE game) {
  if(!valid||reinterpret_cast<std::uintptr_t>(game)!=limits_rules::image_base) {
   logger::write("shared handlers C: invalid selection/image; online agreement refused");return;
  }
+ if((wanted&(telekinesis|guard))&&!xml1_grab_carry::installed()){
+  logger::write("shared handlers C: TK/guard require installed rule45 grab lifecycle; online agreement refused");return;
+ }
  xml1_hook_transaction::memory memory;
  for(const auto& g:guards)if(g.parts&wanted) {
   std::vector<unsigned char> b(g.bytes.hex.size()/2);
@@ -39,7 +44,8 @@ void install(HMODULE game) {
   }
  }
  using namespace shared_handler_c_bridges;
- const targets callbacks{&jump_damage_bridge,&fly_damage_bridge,&colossus_input,&colossus_contact,&bounce_contact,&fastball_bridge};
+ const targets callbacks{&jump_damage_bridge,&fly_damage_bridge,&colossus_input,&colossus_contact,&bounce_contact,&fastball_bridge,
+  &tk_guard_bridges::tk_entry,&tk_guard_bridges::tk_update,&tk_guard_bridges::tk_cancel,&tk_guard_bridges::tk_input,&tk_guard_bridges::tk_filter,&tk_guard_bridges::guard_entry,&tk_guard_bridges::tk_parse};
  bool safe=true;
  if(xml1_hook_transaction::apply(memory,patches(wanted,callbacks),&safe)) {
   applied=wanted;logger::write("shared handlers C: installed mask %03X revision 1",applied);

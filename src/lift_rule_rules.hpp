@@ -73,7 +73,10 @@ namespace lift_rule_rules
 	constexpr bool telekinesis_allows(int h, int limit) { return h <= limit; } // XML1 0xdf426
 	// Pairing correction: 0xdf3b0 is the TK filter and 0x39a30 attenuates impulse. The actual corresponding
 	// throw path is 0xdff10, at 0xe07ef: signed damagelevel / 3, independent of heaviness. XML2 0x4f3e85
-	// instead uses max(damage / 10, 3) * max(byte, 1). The cache's +0xb is damagelevel (0x4f3691).
+	// instead uses max(damage / 10, 3) * max(byte, 1). The suspend cache's +0xb is tklevel (0x4f3691), not source damagelevel.
+	// Rule46 TelekinesisRule replaces this entire callback and reads separate
+	// damagelevel from the attack record. Without rule46 the legacy revision2
+	// bridge below remains in effect; its parameter pairing is not source parity.
 	constexpr int carried_damage(int damagelevel) { return damagelevel / 3; }
 
 	// The gate's answer: the game's rule unless the object carries XML1's heaviness and its byte is still the one
@@ -131,7 +134,7 @@ namespace lift_rule_rules
 		{impact_hook_va, "8a861d030000fec0d0e08886e2020000", "throw impact level, then store at +0x2e2"},
 		{carry_hook_va, "8a861d0300003c01bb0100000072030fb6d88b4424100fbf4808b867666666f7e9c1fa028bc2c1e81f03c283f8037d05b8030000000fafc389442428db442428d95c2420", "carried throw damage, then integer-to-float conversion"},
 		{tk_hook_va, "0fb6961d0300000fbe470a3bd07f51", "TK unsigned heaviness vs signed trigger limit, skip 0x4f2e76"},
-		{0x4f3674, "558d4b1ae8f388fbff558d4b1888470ae89776feff558d4b1c66894708e8da88fbff88470b", "cache heaviness +0xa, damage +8 and damagelevel +0xb"},
+		{0x4f3674, "558d4b1ae8f388fbff558d4b1888470ae89776feff558d4b1c66894708e8da88fbff88470b", "cache heaviness +0xa, ImpactDamage +8 and tklevel +0xb"},
 		{0x4f3948, "b9e09c7800e8defbffff89442410", "throw cache entry kept at stack +0x10"},
 		{0x4f3ef1, "8b442420d99ef0020000d94424208986b8020000", "computed carried damage stored at physent +0x2b8"},
 		{0x4f2e76, "32c05ec3", "TK filter refusal epilogue"},

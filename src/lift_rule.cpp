@@ -232,6 +232,7 @@ namespace lift_rule
 		}
 	}
 
+	int heaviness(void* object) { return scaled_heaviness(object); }
 	std::string status()
 	{
 		const int s = state.load();

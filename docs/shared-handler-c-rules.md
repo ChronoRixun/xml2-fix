@@ -13,20 +13,24 @@ All keys are under `[Game]`, accept `xml1` or `xml2`, and default to native. Abs
 | 64 | LocomotionScaleRule | Remove the local animation-rate division by scale_factor at 4f01d4. |
 | 128 | AnimationPhaseRule | Remove additional input phase-preservation bit write at 4f026a, shared by move and pickup idle/walk. Preserve all incoming flags and default input result. |
 | 256 | TeleportVisibilityRule | Temporary suppression cleanup at 4efc7e and 4f44a4 follows the source even with an invisibility affecter. This key affects visuals and participates in rule 46 for exact selection agreement. |
+| 512 | TelekinesisRule | Coupled suspend parser/entry/control/release/cancel, signed tklevel and damagelevel, token sidecar and rule45 lifecycle. |
+| 1024 | GuardDecideRule | Complete entry-scheduled interaction policy, source pickup claim and rank-3 walllunge acquisition. |
 
 The values reader selects `value[name=L3].min` from `data/values.xmlb`; the supplied source profile has minimum 15. PC's native value manager only retains DMG2/DMG3/DMG4/K2/K3, so asking that manager for L3 would return zero. The local reader avoids mutating DMG3 and does not draw random numbers. Content must retain the L3 row; missing/unreadable content does not fabricate a fallback damage value.
 
-Phoenix telekinesis and guard selection have **not been implemented or enabled** in this module. Telekinesis requires the complete source parameter/control/energy/damage/release lifecycle. Guard requires the complete source interaction policy, its rank-3 wall-lunge acquisition, and source object-claim admission. G7 rule 39 supplies the separate rank-2 cling/backflip path. Source guard marks a physical object before pickup; that must be integrated with the grab/carry owner's admission repair before enabling guard replacement. Do not describe this module as completing those fixes.
+`TelekinesisRule` and `GuardDecideRule` require installed rule 45, whose pickup entry admits the source guard claim and whose victim lifecycle retains telekinesis. Rule 46 installs after that dependency. Rule 39 supplies the separate rank-2 cling/backflip path; guard restores rank-3 `walllunge`. See [the coupled contracts, native fixtures and remaining live checks](tk-guard.md).
 
 ## Verification
 
 Build below normal priority with MSBuild `/nr:false`:
 
 ```powershell
-cmake -S . -B build -A Win32
-cmake --build build --config Release -- /m:1 /nr:false
-build/bin/Release/xml2_shared_handlers_c_test.exe <owner-XMen2.exe> <owner-default.xbe>
+cmake -S . -B build/native -A Win32
+cmake --build build/native --config Release -- /m:1 /nr:false
+build/native/bin/Release/xml2_shared_handlers_c_test.exe <owner-XMen2.exe> <owner-default.xbe>
 python -B scripts/shared_handlers_c_matrix.py <owner-XMen2.exe> <owner-default.xbe>
 ```
 
 The fixture hash-binds both owner binaries, compares every selected guard, checks OFF/invalid/foreign-image/failure states and exact production write footprints, negotiates rule-46 masks, and executes original callback slices with synthetic services. It covers signed stages, energy/input exits, dispatch recipients, crash boundaries, idle policy, local locomotion rate/phase and temporary visibility cleanup. Live physics, resource loading in the complete engine, animation, authored triggers and combined grab/flight integration remain live checks. No game or emulator may be launched by this task.
+
+The selection matrix now covers all 2,047 nonempty masks. `xml2_tk_guard_test` executes owner XML1 entry/control/filter/cancel/guard instructions and PC suspend parser/evaluators. The separate `--off-proof` mode makes the four-MB fixture image inaccessible while OFF, then compares image and serialized agreement bytes.

@@ -17,8 +17,9 @@ attribute and every decision.
 The builder writes XML1 heaviness h as max(h - 1, 0) and 4 and 5 both as 3, and gives might rank r the affecter
 might_heaviness r. For heaviness 0-3 that is XML1's table at every rank; XML1's 4 (Might 3 lifts it) and 5 (never)
 share XMen2.exe's never-lifted 3. The rule tells them apart by the attribute, never by a wider byte, so every other
-reader keeps its existing scale except thrown impact and telekinesis, explicitly bridged below. The carried
-throw formula is also restored to XML1.
+reader keeps its existing scale except thrown impact and telekinesis, explicitly bridged below. The legacy
+revision2 movement-hit bridge changes the native formula; the complete source parameter pairing is supplied
+by rule46 `TelekinesisRule`.
 
 ## The patch
 
@@ -47,7 +48,7 @@ rescale's offset at thrown impact and the telekinesis filter; other readers reta
 | `0x4f3f3b` | handler throw: level 1, flag 8 when h > 1 | `0xe0848` (`0xdff10`/`0xe0008`/`0xe000d`) | same (3 > 1, XML1 4 > 1) |
 | `0x42e9e7` | drop/launch: flag 8 when h > level | `0x3db50` | same |
 | `0x4ef3bd` | handler: carried heaviness against 1.0 (heavy carry branch) | `0xdff10` family (`cmp h, 1`) | same branch (heavy) |
-| `0x4f3e85` | carried-object hit: damage x max(h, 1) | `0xdff10`, damage at `0xe07ef` (verified pairing; see below) | revision 2: signed DamageLevel / 3, independent of heaviness |
+| `0x4f3e85` | TK movement hit: damage x max(h, 1) | `0xdff10`, damage at `0xe07ef` | legacy revision2: signed cache+B / 3; source DamageLevel pairing requires rule46 |
 | `0x4f2e16` | telekinesis / suspend trigger target filter: byte <= trigger `Heaviness` | `0xdf426` (heaviness > limit -> skip) | revision 2: XML1 heaviness <= signed trigger limit (Phoenix 2/3/4); class 5 fails all three limits |
 | `0x497376` / `0x497383` | collision: mass x heaviness of both | `0x91560` | unchanged byte |
 | `0x497907`, `0x49797c` | impact damage by heaviness difference (clamped 0..3) | `0x912b0` | unchanged byte |
@@ -81,17 +82,18 @@ byte) retains the native byte in these two consumers, as the pickup gate retains
 - **Thrown impact:** bridge `0x4306c7..0x4306d0`, continue `0x4306d1`. ESI is the object; replace only AL's
   heaviness input, replay `(h + 1) * 2`, and retain the native byte store at physent +0x2e2. XML1
   `0x3fd7a..0x3fd9e` inside `0x3f980` stores `2*h + 2` at physent +0x298. No Might multiplier.
-- **Carried throw damage (pairing correction):** `0xdf3b0` is the TK filter, not the counterpart of `0x4f3e85`;
-  `0x39a30` divides impulse for heavier victims, not carried-object damage. The corresponding XML1 throw update
+- **TK movement-hit damage (legacy bridge):** `0xdf3b0` is the TK filter, not the counterpart of `0x4f3e85`;
+  `0x39a30` divides impulse for heavier victims. The corresponding XML1 control update
   is `0xdff10`, whose damage calculation at `0xe07ef..0xe083d`
   reads signed actor +0x53b DamageLevel, divides by 3 toward zero and stores the result at thrown physent +0x294.
   It has no heaviness multiplier. XML1's parser `0xd40fe..0xd4124` resolves `damagelevel`; `0xd421b` copies it
-  to actor +0x53b. XML2 `0x4f3674..0x4f3696` caches Heaviness at entry +0xa, Damage at +8 and DamageLevel
-  at +0xb; `0x4f3948..0x4f3952` keeps that entry at stack +0x10. The revision replaces
+  to actor +0x53b. XML2 `0x4f3674..0x4f3696` caches Heaviness at entry +0xa, ImpactDamage at +8 and **tklevel**
+  at +0xb; `0x4f3948..0x4f3952` keeps that entry at stack +0x10. The legacy revision2 bridge replaces
   `0x4f3e85..0x4f3ebc` with signed entry +0xb / 3 in EAX, then resumes at `0x4f3ebd` for the game's existing
-  float conversion and damage store at physent +0x2b8. Thus a DamageLevel of 9 yields damage 3 for every class,
-  instead of XML2's `max(Damage / 10, 3) * max(byte, 1)`. Merely increasing the multiplier would preserve a
-  formula XML1 does not use. DamageLevel is a trigger field, not the hero's strength stat or Might rank.
+  float conversion and damage store at physent +0x2b8. Thus cache tklevel 9 produces damage 3 there,
+  instead of XML2's `max(ImpactDamage / 10, 3) * max(byte, 1)`. This legacy bridge mispairs the source
+  parameter. Rule46 replaces the complete control callback and reads the distinct signed DamageLevel from
+  the attack record; LiftRule supplies decoded heaviness for its filter and hit flags.
 - **Telekinesis:** bridge `0x4f2e16..0x4f2e1c` supplies XML1 heaviness in EDX, then resumes at `0x4f2e1d`.
   Keep the signed trigger limit, comparison, skip target `0x4f2e76` and all other eligibility tests. This is
   XML1 `0xdf426` inside the correctly paired `0xdf3b0`. Phoenix limits 2/3/4 select at most classes 2/3/4;
@@ -121,3 +123,7 @@ Use objects built with the existing companion builder's `xml1heaviness` (4/5) an
    combined-install proofs when the PC is free. No game registry or installed files were touched here.
 6. Co-op: revision 2/revision 2 joins; revision 2/revision 1 refuses both ways naming `38 LiftRule`; revision 2/OFF
    refuses both ways. Confirm matching thrown damage/impact and Phoenix target choices during play.
+
+### Telekinesis parameter correction
+
+The revision-2 bridge at `4F3E85` reads cache byte+B. Further owner-parser inspection identifies that byte as **tklevel**, not XML1 damagelevel. The legacy bridge alone does not establish the source TK damage contract. `TelekinesisRule=xml1` (rule46, [coupled contract](tk-guard.md)) replaces the entire control callback, obtains the distinct signed damagelevel from the native attack record, and uses LiftRule only for candidate heaviness. Revision2 behavior stays unchanged when the new key is absent.

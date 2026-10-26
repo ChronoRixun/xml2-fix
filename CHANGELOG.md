@@ -62,7 +62,7 @@
   enums fixed IDs 0xD2..0xE8 (81 operand edits, five caves, two hooks, one startup transaction). The DLL publishes the names as a marked table (`XML2FIX.ANIMENUMS.1`) that the Legends
   Classic builder compares with its own. Absent or 0: nothing written, no entry. Not played yet.
 
-- **Shared handlers wave C: gameplay rule 46** (nine `[Game]` keys = `xml1`; 1.9.0-beta.1,
+- **Shared handlers wave C: gameplay rule 46** (eleven `[Game]` keys = `xml1`; 1.9.0-beta.1,
   [docs](docs/shared-handler-c-rules.md)). `JumpAttackDamageRule` / `FlyChargeDamageRule`: the producer's damage
   from `values.xmlb`'s L3 minimum with the first game's signed 16-bit stages (0x4ee99b / 0x4eeb88; velocity,
   deadline and knockback stay native). `ColossusChargeRule`: input 0x4eced0 and contact 0x4ed220 as one unit
@@ -70,8 +70,9 @@
   emits, stops and timestamps), `FastballRule` (0x4f4adf emits for actors, objects and null contacts),
   `IdleBoredRule` (no controller/team or non-humanoid exclusions; stun stays rule 18's), `LocomotionScaleRule`
   (0x4f01d4), `AnimationPhaseRule` (0x4f026a), `TeleportVisibilityRule` (0x4efc7e / 0x4f44a4). One mask
-  `{installed_mask,0,0,0}`; rule 42 unchanged. Phoenix's telekinesis and the guard decide are NOT in it (handoff in
-  the docs). Not played yet.
+  `{installed_mask,0,0,0}`; rule 42 unchanged. `TelekinesisRule` and `GuardDecideRule` add the coupled suspend
+  contract and interaction policy, requiring installed rule45; guard restores rank3 walllunge beside rule39.
+  [Contracts and native fixtures](docs/tk-guard.md). Live integration checks remain.
 
 - **E4 stage 1, actor pools: gameplay rule 44** (`[Limits] ActorPools = 124`; 1.9.0-beta.1,
   [docs](docs/actor-pools.md)). The path, shadow and delayed-damage pools sized for 32 actors grow to 124 in one
