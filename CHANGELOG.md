@@ -2,6 +2,13 @@
 
 ## 1.9.0 - <date TBD>
 
+- **Attached powerups and callback nodes:** `[Limits] AttachedPowerups=256` and
+  `VFNodes=256` enlarge the native pools from 128 and 192 to 256. Each key is
+  independent and accepts only 256; absent keys keep retail bytes and agreement.
+  Installed capacities register gameplay rules 61/62. The layout, bitmap clears,
+  free rings and diagnostic readers move together, with private copies of shared
+  helpers. [Implementation and native verification](docs/power-pools.md).
+
 - **The first game's revival price: gameplay rule 10 revision 3** (`[Game] RevivalCost = xml1`; 1.9.0-beta.1 and
   1.8.0, [docs](docs/xtraction-shop.md#revival-price)). A fallen hero costs 200 x G^2 Tech Bits, G = min(5, L / 10 +
   1), L the roster's highest current level without guests: 200 / 800 / 1,800 / 3,200 / 5,000 for 0-9 / 10-19 /

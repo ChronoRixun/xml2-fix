@@ -139,6 +139,7 @@ add_library(xml2_fix SHARED
 	src/xp_curve.cpp
 	src/balance.cpp
 	src/limits.cpp
+	src/power_pools.cpp
 	src/entity_capacity.cpp
 	src/actor_pools.cpp
 	src/entity_owners.cpp
@@ -683,3 +684,9 @@ add_executable(xml2_xml1_air_carry_test test/xml1_air_carry_test.cpp
     src/xml1_grab_carry.cpp src/xml1_air_carry.cpp src/xml1_cling.cpp src/xml1_rogue_decide.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
 target_include_directories(xml2_xml1_air_carry_test PRIVATE src)
 target_link_options(xml2_xml1_air_carry_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# W3-10/11: actual retail pool methods on synthetic canaried owners, no game entry.
+add_executable(xml2_power_pools_host test/power_pools_host.cpp src/power_pools.cpp src/patch_transaction.cpp tools/union_host/union_space.asm)
+target_include_directories(xml2_power_pools_host PRIVATE src)
+target_link_options(xml2_power_pools_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
+target_compile_options(xml2_power_pools_host PRIVATE /UNDEBUG)

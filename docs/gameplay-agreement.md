@@ -55,6 +55,12 @@ IDs 1-4 date from 1.4.0 and 5-16 from 1.5.x (the 0.2.2 wave); 17 is ObjectWorldI
 
 The export startup contributes the refusal and transport sites to the startup transaction, lets installers register effective state, then freezes the record at the very end. Add future installers before that finalization point. Registration after finalization is rejected and closes the gate; it never changes an advertised frozen record. No controller or capacity module edits transport code.
 
+Rules 61 and 62 are the requested-only power-pool raises ([details](power-pools.md)):
+`AttachedPowerups` and `VFNodes`, revision 1, `{effective capacity,0,0,0}`. Each
+accepts only 256. Successful installation advertises `{256,0,0,0}`; a requested
+invalid or failed installation registers unverified and closes admission. An absent
+key adds no rule and writes no pool bytes.
+
 ## Record and transport
 
 Protocol revision 4 retains the fixed 108-byte record introduced in revision 3 (1.5.0), whatever the number of rules: canonical
