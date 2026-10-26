@@ -973,10 +973,12 @@ namespace limits_rules
 	constexpr DWORD igb_live_retail = 0x7b7fb0 + 0x73ec; // CIGBInfoCache2's live count, retail (object + 4 + live)
 	constexpr int igb_capacity = stock_igb_records;
 
-	inline constexpr std::array<guard, 2> motion_counter_guards{{
-		{0x56a3e3, "81bfe0460000f4010000", "the motion pool's full check (0x56a3e3)"},
-		{0x56a480, "a1bc057b00", "the motion pool's getter (0x56a480)"},
-	}};
+	inline std::array<guard, 2> motion_counter_guards(std::string_view full_check = "81bfe0460000f4010000")
+	{
+		// Production supplies R3's verified descriptor signature; pure stock tests use the default.
+		return {{{0x56a3e3, full_check, "the motion pool's descriptor full check"},
+		         {0x56a480, "a1bc057b00", "the motion pool's getter (0x56a480)"}}};
+	}
 
 	inline constexpr std::array<guard, 2> igb_counter_guards{{
 		{0x56ede5, "81bbec730000c8000000", "the IGB cache's cap check (0x56ede5)"},

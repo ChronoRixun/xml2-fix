@@ -3,6 +3,7 @@
 #include "entity_capacity_layout.hpp"
 #include "actor_pools.hpp"
 #include "char_sounds.hpp"
+#include "motion_pool.hpp"
 #include "test_state_rules.hpp"
 #include <Windows.h>
 #include <mutex>
@@ -91,6 +92,7 @@ namespace test_state
 		{
 			return state;
 		}
+		if (command == "motion_pool") return motion_pool::telemetry_json();
 		if (command == "char_sounds") return char_sounds::telemetry_json();
 		if (command == "actor_pools") return actor_pools::telemetry_json();
 		if (command == "objectives")

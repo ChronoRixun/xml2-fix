@@ -224,3 +224,7 @@ required companion content switch (`XML1_FLIGHT_UPKEEP=True`).
 Rule 49 (`CharSounds`, `[Limits] CharSounds=127`) is revision 1, values `{127,0,0,0}` after its atomic install.
 Absent or 16 adds no entry and writes nothing; other values and failed installs close host/join with an
 unverified request. A mismatched peer is refused by name in both directions. See [char-sounds.md](char-sounds.md).
+
+Rule 51 (`MotionPool`, `[Limits] MotionPool=22528`) is revision 1, `{22528,0,0,0}` after verified installation.
+Absent/500 contributes no entry; invalid or refused requests close admission. It includes bounded owner clip
+append/read behavior and retains native handle masking. See [motion-pool.md](motion-pool.md).

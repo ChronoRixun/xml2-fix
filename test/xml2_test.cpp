@@ -1714,7 +1714,7 @@ namespace
 		CHECK(clone_ok);
 		for (const auto& g : actor_guards) CHECK(valid_hex(g.hex));
 		for (const auto& g : name_guards) CHECK(valid_hex(g.hex));
-		CHECK(valid_hex(motion_counter_guards[0].hex) && valid_hex(motion_counter_guards[1].hex) && valid_hex(igb_counter_guards[0].hex) && valid_hex(igb_counter_guards[1].hex));
+		CHECK(valid_hex(motion_counter_guards()[0].hex) && valid_hex(motion_counter_guards()[1].hex) && valid_hex(igb_counter_guards[0].hex) && valid_hex(igb_counter_guards[1].hex));
 		CHECK(igb_live_retail == 0x7bf39c);
 
 		// Moving code: a rel32 keeps its target. E8 FB 0F 00 00 at 0x1000 calls 0x2000; copied to 0x5000 it reads 0x2000 - 0x5005.
@@ -1820,7 +1820,7 @@ namespace
 		expect(clone.va, clone.hex);
 		for (const auto& s : name_sites) expect(s.va, s.hex);
 		for (const auto& g : name_guards) expect(g.va, g.hex);
-		for (const auto& g : motion_counter_guards) expect(g.va, g.hex);
+		for (const auto& g : motion_counter_guards()) expect(g.va, g.hex);
 		for (const auto& g : igb_counter_guards) expect(g.va, g.hex);
 		for (const auto& st : item_sites) expect(st.va, st.hex);
 		for (const auto& g : item_guards) expect(g.va, g.hex);

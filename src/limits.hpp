@@ -72,4 +72,6 @@ namespace limits
 	// 374/512; styles 22/32; curves 943/3600" (live count/cap; "-" where this isn't the retail XMen2.exe
 	// or the structure doesn't exist yet).
 	std::string status();
+	// Published CAnimMotionCache capacity, after its guarded install (40 stock).
+	unsigned actor_capacity();
 }

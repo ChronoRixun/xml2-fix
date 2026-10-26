@@ -107,6 +107,7 @@
 #include "pad_prompts.hpp"
 #include "anim_enums.hpp"
 #include "char_sounds.hpp"
+#include "motion_pool.hpp"
 #include "patch_transaction.hpp"
 #include "entity_capacity.hpp"
 #include "postgame.hpp"
@@ -248,6 +249,7 @@ namespace
 		// install contribute their guards and writes; every expectation is unioned and checked once, every touched
 		// page acquired once, and nothing is published unless the whole set verified. A refusal leaves stock bytes.
 		patch_transaction::transaction startup;
+		motion_pool::require_agreement(game);
 		char_sounds::require_agreement(game);
 		anim_enums::contribute(startup, game);
 		if (game_version::needs_gameplay_agreement()) gameplay_agreement::contribute(startup, game);
@@ -486,6 +488,12 @@ namespace
 		// the CPrecacheMgr constructor, during its start-up.
 		limits::install(game);
 		limits::register_resource_agreement();
+		// R3 uses the published ActorSlots bound before the lazy motion pool exists.
+		patch_transaction::transaction motions;
+		motion_pool::contribute(motions, game);
+		const auto motion_result = motions.commit();
+		if (motions.contributions()) logger::write("MotionPool transaction: %s (%s)", patch_transaction::name(motion_result), motions.report().c_str());
+		if (!game_version::startup_allowed()) return;
 		// [Limits] IGBCache is rule 31 (IGBCache): a full cache refuses a zone's map IGB (the game reloads the previous
 		// zone) and every model past it, so co-op peers must share the capacity. Requested only: absent or stock adds no
 		// entry (the released record); a requested raise that did not install is unverified (host/join closed).

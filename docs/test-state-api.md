@@ -83,3 +83,6 @@ physical controller state; a non-centered pad can fail its unrelated idle assert
 `CHAR_SOUNDS` observes the installed character sound cache: JSON fields `installed`, `requested`, `capacity`,
 `peak`, `refusals`, `empty_sounddir_actors` and `allocations`. The exact allocation observer updates counters on the
 game thread; the pipe reads atomics. Absent/16 leaves retail bytes uninstrumented. See [char-sounds.md](char-sounds.md).
+
+`MOTION_POOL` reports the installed motion descriptor and exact allocation/clip/reader refusal counters,
+including peak occupancy and per-owner counts. See [motion-pool.md](motion-pool.md).

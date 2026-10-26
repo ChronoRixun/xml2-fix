@@ -1,4 +1,5 @@
 #include "limits.hpp"
+#include "motion_pool.hpp"
 #include "limits_agreement_rules.hpp"
 #include "gameplay_agreement.hpp"
 #include "limits_rules.hpp"
@@ -838,7 +839,7 @@ namespace limits
 			{
 				name_count_offset = name_layout_for(stock_resource_names).count;
 			}
-			motions_readable = !first_mismatch(motion_counter_guards);
+			motions_readable = !first_mismatch(motion_counter_guards(motion_pool::counter_guard_hex()));
 			igb_readable = !first_mismatch(igb_counter_guards);
 			if (igb_readable) igb_live_va = igb_live_retail;
 			items_readable = !items_mismatch();
@@ -948,6 +949,8 @@ namespace limits
 		return {igb_installed ? 1u : 0u, static_cast<std::uint32_t>(igb_cap), static_cast<std::uint32_t>(name_cap), 0u};
 	}
 
+	unsigned actor_capacity() { return static_cast<unsigned>(actor_cap); }
+
 	std::string status()
 	{
 		std::optional<DWORD> names;
@@ -963,7 +966,7 @@ namespace limits
 		{
 			if (const auto pool = read(motion_pool_pointer); pool && *pool)
 			{
-				motions = read(*pool + motion_pool_live);
+				motions = read(*pool + motion_pool::layout().live);
 			}
 		}
 		std::optional<DWORD> items;
@@ -979,7 +982,7 @@ namespace limits
 		{
 			if (const auto manager = read(style_manager_pointer); manager && *manager) styles = read(*manager + style_count_offset);
 		}
-		return "actors " + counter(read(actor_live_va), actor_cap) + "; names " + counter(names, name_cap) + "; motions " + counter(motions, motion_pool_capacity) + "; igb " +
+		return "actors " + counter(read(actor_live_va), actor_cap) + "; names " + counter(names, name_cap) + "; motions " + counter(motions, static_cast<int>(motion_pool::layout().capacity)) + "; igb " +
 		       counter(read(igb_live_va), igb_cap) + "; items " + counter(items, item_cap) + "; styles " + counter(styles, style_cap) + "; curves " +
 		       counter(read(curve_live_va), curve_cap) + "; move_triggers " + std::to_string(move_trigger_cap);
 	}

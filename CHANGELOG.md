@@ -2,6 +2,14 @@
 
 ## 1.9.0 - <date TBD>
 
+- **Motion pool: gameplay rule 51** (`[Limits] MotionPool=22528`; candidate). Raises the 500-record
+  native motion pool to 22,528 with all three lazy allocations, all bitmap clears and the generated 82-row
+  ledger applied together. Owners admit clips 0..175; longer lists are refused and logged once per owner
+  lifetime. Four readers return the native fallback outside the valid list. The published ActorSlots bound
+  must fit and the pool must not exist yet. Absent or 500 preserves stock bytes and agreement; other values
+  refuse online. The test pipe reports motion peak and refusals. Live RV4 acceptance remains pending.
+
+
 - **Character sound cache: gameplay rule 49** (`[Limits] CharSounds=127`; 1.9.0-beta.1). Raises the
   16-record cache to 127 so a seventeenth live sound directory keeps its own sounds. Six address edits and both
   getter/teardown bounds commit together; the published actor capacity must be below 127. Absent or 16 keeps stock

@@ -126,6 +126,7 @@ add_library(xml2_fix SHARED
 	src/solo_mode.cpp
 	src/conversations.cpp
 	src/gameplay_agreement.cpp
+	src/motion_pool.cpp
 	src/char_sounds.cpp
 	src/anim_enums.cpp
 	src/anim_enum_registry.cpp
@@ -696,3 +697,8 @@ add_executable(xml2_xml1_air_carry_test test/xml1_air_carry_test.cpp
     src/xml1_grab_carry.cpp src/xml1_air_carry.cpp src/xml1_cling.cpp src/xml1_rogue_decide.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
 target_include_directories(xml2_xml1_air_carry_test PRIVATE src)
 target_link_options(xml2_xml1_air_carry_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_motion_pool_test test/motion_pool_test.cpp src/motion_pool.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_motion_pool_test PRIVATE src)
+target_compile_options(xml2_motion_pool_test PRIVATE /UNDEBUG)
+target_link_options(xml2_motion_pool_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
