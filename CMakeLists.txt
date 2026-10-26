@@ -134,6 +134,7 @@ add_library(xml2_fix SHARED
 	src/native_save_layout.cpp
 	src/xml1_economy.cpp
 	src/xml1_economy_prices.cpp
+	src/xml1_economy_shop.cpp
 	src/xml1_roll.cpp
 	src/smart_entities.cpp
 	src/entity_owners.cpp
@@ -624,7 +625,7 @@ add_executable(xml2_item_capacity_test test/item_capacity_test.cpp src/item_capa
 target_include_directories(xml2_item_capacity_test PRIVATE src)
 target_link_options(xml2_item_capacity_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
-add_executable(xml2_economy_test test/xml1_economy_test.cpp src/xml1_economy.cpp src/xml1_economy_prices.cpp src/xml1_roll.cpp src/item_capacity.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+add_executable(xml2_economy_test test/xml1_economy_test.cpp src/xml1_economy.cpp src/xml1_economy_prices.cpp src/xml1_economy_shop.cpp src/xml1_roll.cpp src/item_capacity.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
 target_include_directories(xml2_economy_test PRIVATE src)
 target_link_options(xml2_economy_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 

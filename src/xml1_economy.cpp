@@ -1,6 +1,7 @@
 #include "xml1_economy.hpp"
 #include "xml1_roll.hpp"
 #include "xml1_economy_prices.hpp"
+#include "xml1_economy_shop.hpp"
 #include "native_save_layout.hpp"
 #include "entity_capacity.hpp"
 #include "item_capacity.hpp"
@@ -36,6 +37,7 @@ void register_result(bool verified){
  if(registered)return;registered=true;
  auto values=agreement_values(mode,data);if(roller::installed())values[0]|=1;
  if(prices::installed())values[0]|=2;
+ if(shop::installed())values[0]|=4|16;
  const bool agreed=gameplay_agreement::register_rule(rule_id,rule_revision,values,verified);
  active.store(verified&&agreed,std::memory_order_release);
  logger::write("economy: rule 52 Xml1Economy %s%s%s",active.load()?"verified":"unverified; online closed",failure.empty()?"":"; ",failure.c_str());
@@ -87,7 +89,7 @@ void prepare_impl(patch_transaction::transaction& transaction,HMODULE game,bool 
  c.abandon=[]{hooks=false;};
  c.retain=[storage]{retained.push_back(storage);original=reinterpret_cast<make_t>(storage->p);hooks=false;};
  if(!transaction.add(std::move(c)))failure="startup transaction is sealed";
- else if(!roller::contribute(transaction,failure)||!prices::contribute(transaction,failure)){
+ else if(!roller::contribute(transaction,failure)||!prices::contribute(transaction,failure)||!shop::contribute(transaction,failure)){
   // Any failed required contribution must refuse the entire union, including
   // stale legacy leader ownership and every prices/sales retail guard.
   patch_transaction::contribution veto;veto.owner="Xml1Economy required contribution: "+failure;
@@ -114,7 +116,7 @@ void after_commit(patch_transaction::outcome outcome){
  if(!native_save_layout::installed()||item_capacity::installed_capacity()!=lcsave::w2_layout.attached_enhancements){
   failure="Xml1Economy requires verified rule 47 NativeSaveLayout (SaveLayout=w2)";register_result(false);return;
  }
- if(!hooks||!roller::installed()||!prices::installed()||outcome!=patch_transaction::outcome::committed||!data.ok()){
+ if(!hooks||!roller::installed()||!prices::installed()||!shop::installed()||outcome!=patch_transaction::outcome::committed||!data.ok()){
   if(failure.empty())failure="constructor/table hooks not committed: "+std::string(patch_transaction::name(outcome));
   register_result(false);return;
  }

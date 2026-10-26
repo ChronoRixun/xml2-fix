@@ -140,6 +140,7 @@ bool same(const snapshot& a,const snapshot& b){return a.instance==b.instance&&a.
 unsigned allocation_calls=0;
 descriptor* __fastcall allocation_spy(void* self,void*,descriptor* out){++allocation_calls;return native<descriptor*(__fastcall*)(void*,void*,descriptor*)>(0x47c990)(self,nullptr,out);}
 #include "xml1_economy_prices_checks.hpp"
+#include "xml1_economy_shop_checks.hpp"
 }
 LONG WINAPI fault(EXCEPTION_POINTERS* e){std::printf("FAULT %08lx EIP=%08lx ESP=%08lx EAX=%08lx ECX=%08lx EDX=%08lx\n",e->ExceptionRecord->ExceptionCode,e->ContextRecord->Eip,e->ContextRecord->Esp,e->ContextRecord->Eax,e->ContextRecord->Ecx,e->ContextRecord->Edx);return EXCEPTION_CONTINUE_SEARCH;}
 int main(int argc,char** argv){
@@ -159,14 +160,22 @@ int main(int argc,char** argv){
   check(!tx.contributions()&&!gameplay_agreement::good&&gameplay_agreement::registrations==1&&!xml1_economy::installed(),"missing rule 47: no hook contribution, rule 52 unverified, online closed");return failures?1:0;
  }
  std::string body;for(unsigned i=0;i<economy_count;++i){char row[100];std::snprintf(row,sizeof row,"item%04u 1 2 %x %s %s - %u\n",i+first_economy,i<equipment_count?(i%3==0?0x51:0x50):(i%2?0x10:0),i==1?"0":i==2?"-":"137",i<equipment_count?"forge":"none",i);body+=row;}
+ if(scenario=="shop"){
+  body.clear();for(unsigned i=0;i<economy_count;++i){
+   const int group=i<18?1:i<37?2:i<52?3:i<69?4:i<95?5:-1;
+   const unsigned flags=i<equipment_count?(0x50|(i%3==0?1:0)|(i>=85&&i<95?2:0)):0;
+   char row[120];std::snprintf(row,sizeof row,"item%04u %d %d %x 137 %s - %u\n",i+first_economy,group,i==5?3:2,flags,i<equipment_count?"forge":"none",i);body+=row;
+  }
+ }
  const auto text=sidecar_file(body,economy_count);const auto chosen=scenario=="1roll"?plan::one_roll:plan::zero_draw;
  patch_transaction::contribution w2;std::string why;check(item_capacity::contribute_w2(w2,why),"W2 complete pool and definition guards: "+why);
  patch_transaction::transaction tx;tx.add(std::move(w2));
  if(scenario=="legacy-count"||scenario=="legacy-pick")put(at(scenario=="legacy-count"?0x46e735:0x46e774),0,std::uint8_t(0xe9));
  if(scenario=="prices-pre-guard")put(at(0x5d2639),0,std::uint8_t(0xcc));
+ if(scenario=="shop-pre-guard")put(at(0x5d3ff0),0,std::uint8_t(0xcc));
  if(scenario=="missingfile"){ini::wanted=true;xml1_economy::prepare(tx,static_cast<HMODULE>(at(0x400000)));}
  else xml1_economy::prepare_for_testing(tx,static_cast<HMODULE>(at(0x400000)),true,scenario=="sidecar"?"":text,chosen);
- if(scenario=="legacy-count"||scenario=="legacy-pick"||scenario=="prices-pre-guard"){
+ if(scenario=="legacy-count"||scenario=="legacy-pick"||scenario=="prices-pre-guard"||scenario=="shop-pre-guard"){
   const auto before=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
   check(tx.commit()==patch_transaction::outcome::refused_unresolved&&std::equal(before.begin(),before.end(),fixture_space),"failed required contribution vetoes entire W2/economy union without writes");
   xml1_economy::after_commit(tx.result());
@@ -178,7 +187,8 @@ int main(int argc,char** argv){
  }
  const auto stock=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
  if(scenario.starts_with("guard")){
-  const std::array<unsigned,11> guards{0x47bb50,0x4806ad,0x421f3f,0x5a9cd8,0x5a9d2c,0x481170,0x480dd8,0x5a9b8d,0x5d3ee9,0x5d404b,0x5d2639};
+  const std::array<unsigned,25> guards{0x47bb50,0x4806ad,0x421f3f,0x5a9cd8,0x5a9d2c,0x481170,0x480dd8,0x5a9b8d,0x5d3ee9,0x5d404b,0x5d2639,
+   0x49e64b,0x46a1a0,0x5d2a55,0x5d2b18,0x5d35d0,0x5d36c8,0x5d3a34,0x5d3b2a,0x5d2b70,0x5d3ff0,0x5d4104,0x5d4119,0x5d412e,0x480e20};
   const auto site=guards.at(static_cast<unsigned>(std::stoi(scenario.substr(5))));*static_cast<std::uint8_t*>(at(site))^=1;
   const auto before=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);check(tx.commit()!=patch_transaction::outcome::committed&&std::equal(before.begin(),before.end(),fixture_space),"guard mutation: entire W2/economy union refuses, zero writes");xml1_economy::after_commit(tx.result());check(!gameplay_agreement::good&&!xml1_economy::installed(),"guard failure leaves rule 52 unverified");return failures?1:0;
  }
@@ -227,8 +237,9 @@ int main(int argc,char** argv){
  }
  check(xml1_economy::installed()&&gameplay_agreement::holds==0&&gameplay_agreement::registrations==1,"all 132 names resolved with real W2 by-name lookup, incl indices255/256; rule verified once");
  if(!xml1_economy::installed()){std::printf("resolution failure: %s\n",logger::last.c_str());return 1;}
- auto expected_values=agreement_values(chosen,parse(text));expected_values[0]|=3;
+ auto expected_values=agreement_values(chosen,parse(text));expected_values[0]|=23;
  check(gameplay_agreement::rules.rule(1).values==expected_values,"rule 52 exact parts/revision/digest/count values, including roller and sales bits");
+ if(scenario=="shop"){restore();shop_checks();std::printf("Shop execution: %d checks, %d failure(s)\n",checks,failures);return failures?1:0;}
  if(scenario=="prices"){
   restore();price_checks();
   std::printf("Prices/transactions/lists: %d checks, %d failure(s)\n",checks,failures);return failures?1:0;

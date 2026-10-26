@@ -34,6 +34,24 @@ def symbols(path):
         if m:out.append((int(m[2],16),m[1]))
     return sorted(out)
 
+def reconstruct_image(pe, before, changes):
+    image = bytearray(pe.get_memory_mapped_image())
+    assert len(before) == pe.OPTIONAL_HEADER.SizeOfImage, "pre-patch image size differs from retail SizeOfImage"
+    # Imports resolve BEFORE the host snapshot; its write log is sparse. A
+    # callback byte equal to the resolved import byte is omitted even if it
+    # differs from the raw PE. Recover each touched import slot in full before
+    # applying the writes. Untouched imports stay raw (unrelated loader ASLR).
+    for entry in pe.DIRECTORY_ENTRY_IMPORT:
+        for imp in entry.imports:
+            if any(imp.address + n in changes for n in range(4)):
+                off = imp.address - pe.OPTIONAL_HEADER.ImageBase
+                assert 0 <= off <= len(before) - 4, "import slot outside captured image"
+                image[off:off + 4] = before[off:off + 4]
+    for va, value in changes.items():
+        image[va - pe.OPTIONAL_HEADER.ImageBase] = value
+    return image
+
+
 def capture(tag,dll_dir,host,retail,engine,data,out):
     folder=out/tag;folder.mkdir(parents=True,exist_ok=True)
     shutil.copytree(data,folder/"Data",dirs_exist_ok=True)
@@ -51,6 +69,7 @@ def capture(tag,dll_dir,host,retail,engine,data,out):
     code=folder/"code";code.mkdir(exist_ok=True)
     for previous in code.glob("*.bin"):os.remove(str(previous.resolve()))
     env=os.environ.copy();env["UNION_CODE_OUT"]=str(code);env["UNION_PRIVATE_DESKTOP"]="1"
+    before_image=folder/"before-image.bin";env["UNION_IMAGE_OUT"]=str(before_image)
     r=subprocess.run(cmd,cwd=folder,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,creationflags=0x08004000,timeout=180)
     (out/(tag+"-host.log")).write_bytes(r.stdout)
     assert r.returncode==0,(tag,r.returncode,r.stdout[-1000:])
@@ -71,8 +90,7 @@ def capture(tag,dll_dir,host,retail,engine,data,out):
         fields=line.split("\t")
         if fields[0]=="I":modules[fields[1]]=int(fields[2],16)
         elif fields[0]=="W" and fields[1]=="XMen2.exe":changes[int(fields[2],16)]=int(fields[4],16)
-    pe=pefile.PE(str(retail));image=bytearray(pe.get_memory_mapped_image())
-    for va,b in changes.items():image[va-0x400000]=b
+    pe=pefile.PE(str(retail));image=reconstruct_image(pe,before_image.read_bytes(),changes)
     dll=pefile.PE(str(dll_dir/"dinput.dll")).get_memory_mapped_image()
     blocks={int(p.stem,16):p.read_bytes() for p in code.glob("*.bin") if re.fullmatch(r"[0-9a-fA-F]+",p.stem)}
     data={int(p.stem[5:],16):p.read_bytes() for p in code.glob("data-*.bin")}

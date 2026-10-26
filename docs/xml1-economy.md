@@ -1,4 +1,4 @@
-# XML1 economy construction, drops and prices
+# XML1 economy construction, drops, prices and shops
 
 `[Game] Xml1Economy=1` requests **52 Xml1Economy**, revision **1**. An absent
 or false key reads no sidecar, contributes no patches and registers no rule.
@@ -22,16 +22,20 @@ sidecar or name resolution leaves rule 52 unverified and online closed.
 | Sales and prices | 25% ordinary / exact float 33% unique, definition-cost cache, XML1 packs and raw-level courses |
 | Obtained transactions | Purchase sets unique obtained; inventory sale clears it; equipped sales and stash transfers preserve it |
 | Shared sell list | Carried/equipped equipment including zero-cost rewards, positive-quantity packs and held sidecar-sellable plain items |
+| Forge / Healer | Script-selected vendor mode; fixed Forge catalog, native Healer packs/Grab Bag/eligible courses |
+| Two shop tabs | Buy and sell only; empty third label, empty Training builder and refusal before Training debit/dispatch |
+| Rare styling | Economy unique first (12), non-unique frequency-2 equipment palette 11, all other styling native |
 
-Later Forge/Healer stock, Grab Bag, Training and saved-instance migration parts remain clear.
+Grab Bag replacement and saved-instance migration parts remain clear.
 Plan A is `xml1_economy_rules::default_plan`. The selected plan controls both
 dispatch and the agreement value; there is no independent runtime override.
 
-Rule values: `{parts, 1, digest_prefix_le, entry_count}`. Parts = **35** for
-plan A, **3** for fallback: mask 1 covers the complete roller/category/treasure/
+Rule values: `{parts, 1, digest_prefix_le, entry_count}`. Parts = **55** for
+plan A, **23** for fallback: mask 1 covers the complete roller/category/treasure/
 generator-disposition install, mask 2 covers all sales/prices/obtained/sell-list
-sites, and mask 32 selects zero-draw construction. Masks 4, 8, 16 and 64 remain
-clear. Mask 2 is published only after the whole guarded contribution commits;
+sites, mask 4 covers vendor mode/catalog/buy list/style, mask 16 removes Training,
+and mask 32 selects zero-draw construction. Masks 8 and 64 remain clear.
+Each part is published only after the whole guarded contribution commits;
 table resolution and all existing prerequisites still gate verified rule 52.
 The first four
 SHA-256 bytes are packed little endian (bytes `01 23 45 67` become
@@ -99,6 +103,16 @@ catalogue/sidecar agreement.
 | `0x5d3ee9`, 6 bytes | Capture owner by native transaction frame before equipped removal |
 | `0x5d404b`, 6 bytes | Forward shared native state call, then update economy-unique obtained by state/stash/owner |
 | `0x5d2639`, 7 bytes | Replace non-stash plain-item appends; both native equipment walks, stash branch and final presentation remain |
+| `0x49e64b`, 7 bytes | Capture the native `shopMenu` value's text before its original open queue |
+| `0x46a1a0`, 6 bytes | Reconcile stock before any native refill or top-up draw |
+| `0x5d2a55`, 7 bytes; `0x5d2b18`, 8 bytes | Forge instance-only rows in definition order; Healer retains synthetic rows and skips stock walks |
+| `0x5d35d0`, 9 bytes; `0x5d36c8`, 15 bytes | Clamp direct selection and native navigation to two tabs in a normal shop |
+| `0x5d3a34`, 5 bytes | Successful open sets fix-owned shop state, reconciles fresh G, then selects the initial tab |
+| `0x5d3b2a`, 8 bytes | Empty third shop label; stash label path unchanged |
+| `0x5d2b70`, 5 bytes | Training builder clears the shared row count and adds nothing |
+| `0x5d3ff0`, 9 bytes | Refuse Training row types 3–5 before price calculation or debit |
+| `0x5d4104`, `0x5d4119`, `0x5d412e`, 5 bytes each | Refuse each Training service dispatch in a normal shop |
+| `0x480e20`, 5 bytes | Unique-first economy frequency styling; displaced native entry retained |
 
 All sites join W2's startup transaction with retail guards, verified
 readback/protections and rollback. Census: zero direct calls/jumps to
@@ -167,8 +181,37 @@ The shared non-stash sell builder retains carried and equipped equipment with
 no cost filter. It appends HEALTH_ITEM then ENERGY_ITEM only with positive
 quantity, then other sidecar flag-0x10 non-equipment in definition order with
 positive quantity. The native append plus an explicit bound preserve the
-shared 100-row capacity. Both vendors use this same builder; vendor selection
-and stock reconciliation remain later work. Stash skips the new block.
+shared 100-row capacity. Both vendors use this same builder. Stash skips the new block.
+
+`shopMenu` consumes its text getter once and records `equip` as Forge (ASCII
+case-insensitive); `item`, empty and other values select Healer. Its native menu
+availability check and `openmenu shop` queue remain. A successful non-stash open
+reads the registry's current highest roster level (`0x449960`) and computes
+`G = clamp(highest / 10 + 1, 1, 5)`. Forge reconciles again when its buy list is
+rebuilt, so non-unique purchases immediately regain their catalog row.
+
+The Forge catalog contains sidecar equipment with group 1 through G, excluding
+Grab Bag flags and obtained uniques. It retains exactly one state-3 instance
+per definition, frees duplicate/out-of-catalog stock and all state-4 sold units,
+then constructs missing stock through `x1_make_instance` in definition order.
+Individual native unlink/free calls preserve obtained flags: the native bulk
+state deletion resets unique obtained flags and is deliberately avoided.
+Carried/equipped/stashed units are untouched. The buy rows also follow definition
+order, independent of the native linked-list insertion order. Plan A draws zero;
+the agreed fallback retains its per-own-record native construction draws.
+W2's constructor preflight refuses missing units without partial allocation
+when either pool is full. The real catalog uses at most 85 of 1024 instances;
+the shared array has capacity 100. No native stock generator runs.
+
+Healer opens clear equipment stock and retain the native pack, Grab Bag and
+eligible-course synthetic builders. Grab Bag still uses the native generator
+until its separate part 8 is installed; only the refill tripwire is closed here.
+The fix-owned no-Training state is set at successful open and checked with the
+shop identity and native stash predicate. It never changes `shop+0x18e8` bit 0.
+Stash navigation, selection, labels, builders and service routing stay native.
+Training refusal covers both stale buy rows before debit and the three direct
+dispatch call sites. The actual style entry is `0x480e20`; `0x480e25` in DESIGN
+identifies the unique-check call inside it.
 
 `xml2_economy_rules_test` checks parsing/refusals/agreement.
 `xml2_economy_test` maps the owned retail executable inside a synthetic host,
@@ -202,8 +245,8 @@ before/after the patch and asserts placement draws separately.
 Engine objects and dependency methods in these tests are synthetic; full game
 lifecycle reachability and per-zone tripwire acceptance remain live gates.
 `scripts/check_xml1_roll_text.py <retail-exe>` checks all guards and the static
-generator census. Vendor refill and Grab Bag generator callers remain for their
-later implementation parts and are intentionally visible to the tripwire.
+generator census. The vendor refill generator caller is now unreachable through
+the rule's paths; Grab Bag remains intentionally visible to the tripwire.
 
 `xml2_economy_test <retail-exe> prices` executes the native getters, sale x87
 paths, full course helper, deserializer, buy/sale blocks and sell builder.
@@ -214,5 +257,19 @@ positive-quantity plain items, shared vendor rows and the final row at capacity.
 UI, roster, cached descriptors, stream payload and manager state-list service
 are synthetic environment edges; this is not a live shop/co-op acceptance run.
 Row comparisons ignore the native row's three unwritten padding bytes.
+
+`xml2_economy_test <retail-exe> shop` runs T-FORGE, T-TAB and T-STYLE on mapped
+retail code: synthetic sidecar-shaped 18/37/52/69/85 catalogs, native pools and
+list mutation, old/duplicate stock, unique flags, idempotence and exact pool
+budgets, non-unique restock, zero selection draws/tripwires, both vendors and
+stash, native tab cycle/setup, empty Training builder, pre-debit/direct-dispatch
+refusal, pool exhaustion and agreement differences naming rule 52 for either
+part 4 or 16. Script values, registry highest level, UI and course eligibility
+results are synthetic environment edges. Visual rendering, real gameplay,
+online menu lockstep and actual-builder catalog counts remain live/content gates.
+`scripts/check_xml1_economy_shop_text.py <retail-exe>` checks all 14 retail
+guards, instruction boundaries, refill ABI, stash bypass, service targets and
+absence of direct branches into displaced spans. All new guards participate in
+the full-image refusal/rollback fixture and production startup gate.
 `scripts/check_xml1_economy_prices_text.py <retail-exe>` checks all eight guards,
 three cache callers, unchanged pack epilogue, stash bypass and interior branches.

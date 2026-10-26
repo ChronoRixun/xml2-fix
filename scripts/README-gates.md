@@ -25,11 +25,26 @@ and conditional refusal branches are included. This allows the W2-enabled
 comparison to cover the full supplied page manifest as well as the economy
 pages.
 
+The host's `UNION_IMAGE_OUT` pre-patch capture supplies all four bytes of a
+touched import slot before sparse write-log bytes are applied. This handles a
+callback byte that already equalled the resolved system import byte; untouched
+imports retain the raw retail bytes to avoid unrelated loader relocation.
+Named callback/addend checks still apply. The synthetic regression is
+`python -B scripts/test_prove_w2_step3_off.py`.
+
 `xml2_economy_rules_test --builder <build-folder>` additionally checks a final
 loot builder output through the C++ sidecar and catalogue/bind readers: 131
 rows (including inert flags-zero rows), absent pack costs, equipment vendors,
 the noaward helmet, PC definition order, and the catalogue's 19 ITEM attribute
 mask-0x1 markers against sidecar rebuilt mask 0x4. This mode only reads the build.
+
+`xml2_economy_test <retail-exe> shop` covers Forge reconcile/catalog/pool budgets,
+Healer synthetic rows, two-tab navigation/setup, Training refusal before debit
+and at all three service calls, rare style, stash preservation and rule-52 parts
+4/16 mismatch refusal. `run_native.py` includes this mode, 25 guard mutations,
+preparation refusal and full-image rollback. The read-only static shop gate is
+`python scripts/check_xml1_economy_shop_text.py <retail-exe>`. The production
+startup script also checks all 14 shop hook states.
 
 These scripts run the native, startup and OFF-proof gates on a developer PC. They never launch the game. Machine-specific
 inputs come from environment variables; the scripts stop with a message when a required value is missing (the proof scripts use Python environment lookup):
