@@ -4,6 +4,9 @@
 #include <Windows.h>
 #include "xml1_grab_carry.hpp"
 #include "xml1_grab_carry_rules.hpp"
+#include "xml1_air_carry_rules.hpp"
+#include "anim_enums.hpp"
+#include "anim_enum_names.hpp"
 #include "xml1_cling.hpp"
 #include "xml1_rogue_decide.hpp"
 #include "xml1_rogue_decide_rules.hpp"
@@ -31,7 +34,7 @@ std::vector<std::string> events;
 float now=0;
 void* selected=nullptr;
 std::array<unsigned char,0x900> actor{},victim{},stats{},move{},other{},idle{},style{};
-std::array<void*,100> actor_vt{},move_vt{};
+std::array<void*,128> actor_vt{},move_vt{};
 std::array<u32,16> class_info{};
 std::array<unsigned char,0x4100> name_table{};
 bool log_resolved=false, ally_mode=false, physical_class=true, button4=false, button5=false;
@@ -329,14 +332,26 @@ void lifecycle_boundaries(){
     }
 }
 }
+namespace lift_rule { bool fixture_installed=true;bool installed(){return fixture_installed;} }
+namespace anim_enums {
+bool fixture_available=true;
+const anim_enum_layout::descriptor* layout(){return fixture_available?&anim_enum_layout::raised:nullptr;}
+int extension_id(const char* name){for(unsigned i=0;i<anim_enum_registry::builtin_names.size();++i)if(anim_enum_registry::builtin_names[i]==name)return int(anim_enum_layout::raised.builtin_first+i);return -1;}
+}
 namespace ini {
 std::optional<std::string> text(const wchar_t*,const wchar_t* name){if(std::wstring(name)==L"Xml1GrabCarry")return key;if(std::wstring(name)==L"Xml1RogueDecide")return rogue_key;return cling_key;}
 bool flag(const wchar_t*,const wchar_t*,bool fallback){return fallback;}
 }
 namespace logger {void write(const char*,...){} }
 namespace game_version {void refuse_startup(){refused=true;} }
-namespace entity_capacity {u32 installed_target(u32){return 0;}const entity_capacity_layout::descriptor& installed(){return entity_capacity_layout::stock_descriptor;} }
-namespace entity_query {void* installed_manager(){return nullptr;} }
+namespace entity_capacity {
+bool fixture_raised=false;
+void* fixture_manager=reinterpret_cast<void*>(0x7f0000);
+u32 installed_target(u32 va){if(!fixture_raised)return 0;for(unsigned i=0;i<xml1_rogue_decide_rules::query_entries.size();++i)if(xml1_rogue_decide_rules::query_entries[i].va==va)return 0x7f0100+i*16;return 0;}
+const entity_capacity_layout::descriptor& installed(){static const auto raised=entity_capacity_layout::raised_descriptor_for(0,0,0x7f0000,0);return fixture_raised?raised:entity_capacity_layout::stock_descriptor;}
+}
+namespace entity_query {void* installed_manager(){return entity_capacity::fixture_raised?entity_capacity::fixture_manager:nullptr;} }
+
 int main(int argc,char** argv){
     std::setvbuf(stdout,nullptr,_IONBF,0);
     if(argc<2){std::puts("owned retail executable argument required");return 1;}
@@ -350,24 +365,37 @@ int main(int argc,char** argv){
     // Include the complete ret8 at 0x4f4abe (ends at 0x4f4ac1).
     native(0x4f49c0,0x101);native(0x4f4650,0x2c);
     native(0x4f0b68,11);
-    native(0x4ee800,0xe5);
+    native(0x4ecf30,0x4b);native(0x4ec820,0x17);native(0x4ee800,0xe5);native(0x4f74b2,39);
     native(0x4de880,0x1e);native(0x42c270,0xc7);native(0x59eb10,3);
     for(const auto table:{0x693318u,0x693438u,0x69345cu,0x6933a8u})native(table,32);
     for(const auto& g:guards)signature(g.va,g.hex);
+    for(const auto& g:xml1_air_carry_rules::guards)signature(g.va,g.hex);
     const auto game=reinterpret_cast<HMODULE>(0x400000);
     std::vector<unsigned char> before(0x400000);std::memcpy(before.data(),ptr(0x401000),before.size());
     for(const auto* value:{"","xml2","off","0"}){key=value;xml1_grab_carry::install(game);check(!xml1_grab_carry::requested()&&xml1_grab_carry::verified(),"OFF unrequested and verified");check(std::memcmp(before.data(),ptr(0x401000),before.size())==0,"OFF entire4MiB byte-identical");}
     key="typo";xml1_grab_carry::install(game);check(xml1_grab_carry::requested()&&!xml1_grab_carry::verified(),"invalid key unverified");check(std::memcmp(before.data(),ptr(0x401000),before.size())==0,"invalid key changes nothing");
-    key="xml1";xml1_grab_carry::install(nullptr);check(!xml1_grab_carry::installed(),"wrong base refused");
+    key="xml1";anim_enums::fixture_available=false;xml1_grab_carry::install(game);check(!xml1_grab_carry::installed()&&std::memcmp(before.data(),ptr(0x401000),before.size())==0,"missing AnimEnums refuses entire rule with no writes");anim_enums::fixture_available=true;
+    lift_rule::fixture_installed=false;xml1_grab_carry::install(game);check(!xml1_grab_carry::installed()&&std::memcmp(before.data(),ptr(0x401000),before.size())==0,"missing XML1 object lift policy refuses all rule45 writes");lift_rule::fixture_installed=true;
+    xml1_grab_carry::install(nullptr);check(!xml1_grab_carry::installed(),"wrong base refused");
     for(const auto& g:guards){const auto saved=get<unsigned char>(ptr(g.va),0);put<unsigned char>(ptr(g.va),0,saved^0xff);xml1_grab_carry::install(game);check(!xml1_grab_carry::installed(),"each service guard refusal");put<unsigned char>(ptr(g.va),0,saved);check(std::memcmp(before.data(),ptr(0x401000),before.size())==0,"guard refusal writes no image bytes");}
     put<unsigned char>(ptr(0x4fd860),0,0xcc);xml1_grab_carry::install(game);check(!xml1_grab_carry::installed()&&!refused,"foreign lookup refuses and rolls back ground patches");put<unsigned char>(ptr(0x4fd860),0,before[0x4fd860-0x401000]);check(std::memcmp(before.data(),ptr(0x401000),before.size())==0,"lookup failure whole image restored");
+    for(const auto& g:xml1_air_carry_rules::guards){const auto saved=get<unsigned char>(ptr(g.va),0);put<unsigned char>(ptr(g.va),0,saved^0xff);xml1_grab_carry::install(game);check(!xml1_grab_carry::installed(),"each flight/carry service guard refusal");put<unsigned char>(ptr(g.va),0,saved);check(std::memcmp(before.data(),ptr(0x401000),before.size())==0,"flight/carry refusal writes nothing");}
     const bool both=argc>2&&std::string(argv[2])=="both";
     if(both){cling_key=rogue_key="xml1";xml1_cling::install(game);xml1_rogue_decide::install(game);check(xml1_cling::installed()&&xml1_rogue_decide::installed(),"cling and Rogue installed before grab");}
-    xml1_grab_carry::install(game);check(xml1_grab_carry::installed()&&!refused,"ground installation succeeded");
+    const bool raised=argc>2&&std::string(argv[2])=="raised";
+    if(raised){
+        entity_capacity::fixture_raised=true;
+        for(const auto& e:xml1_rogue_decide_rules::query_entries){const u32 destination=entity_capacity::installed_target(e.va);jump(e.va,ptr(destination));put<unsigned char>(ptr(destination),0,0xc3);}
+        // Invented published query-manager getter, no retail layout assumptions.
+        const u32 getter=entity_capacity::installed_target(0x4ab550);put<unsigned char>(ptr(getter),0,0xb8);put(ptr(getter),1,0x7f0000u);put<unsigned char>(ptr(getter),5,0xc3);
+        auto saved=get<u32>(ptr(0x4ab6d0),1);put(ptr(0x4ab6d0),1,saved+1);xml1_grab_carry::install(game);check(!xml1_grab_carry::installed(),"raised query bridge must match exact published owner target");put(ptr(0x4ab6d0),1,saved);
+        entity_capacity::fixture_manager=nullptr;xml1_grab_carry::install(game);check(!xml1_grab_carry::installed(),"raised carry requires published query manager");entity_capacity::fixture_manager=ptr(0x7f0000);
+    }
+    xml1_grab_carry::install(game);check(xml1_grab_carry::installed()&&!refused,"ground/carry installation succeeded with stock or published raised query bridges");
     auto lookup=reinterpret_cast<void*(__cdecl*)(const char*)>(0x4fd860);void* handler=lookup("CH_GRAB_ATTACK");check(handler!=nullptr,"case-insensitive attack lookup");
     const unsigned char fallback[]{0x33,0xc0,0x5e,0xc3};std::memcpy(ptr(0x4fd865),fallback,sizeof fallback);
     check((lookup("ch_roguedecide")!=nullptr)==both&&(lookup("ch_clingwalldecide")!=nullptr)==both,"all enabled lookup resolvers coexist");
-    check(lookup("ch_air_grab_pickup")==nullptr&&lookup("unknown")==nullptr,"deferred carry and unknown names fall through");
+    check(lookup("ch_air_grab_pickup")!=nullptr&&lookup("unknown")==nullptr,"carry registered and unknown names fall through");
     bind();callbacks(handler);hold_branches();lifecycle();flying_collision();lifecycle_boundaries();
     std::printf("%s real grab installer/callbacks (%s): %d checks, %d failures\n",failures?"FAIL":"PASS",both?"cling+Rogue+grab":"grab only",checks,failures);return failures?1:0;
 }

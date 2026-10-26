@@ -212,3 +212,11 @@ host/join. Outside the game image (not at 0x400000) the key is ignored and adds 
 capacities. See [actor-pools.md](actor-pools.md).
 
 Rule 46 (SharedHandlersC), revision 1, is the independently selected wave-C mask `{installed_mask,0,0,0}`. It registers only when requested; missing/native keys preserve the OFF record, and invalid or failed requests are unverified. See [handler C keys and verification](shared-handler-c-rules.md). ID 46 is coordinator-assigned and does not replace rule 42 or rule 18.
+
+
+Rule 45 carry extension: revision 3, values `{installed ? 1 : 0, 15, 0, 0}`,
+requested only. Bit 8 adds flying carry, XML1 flight admission and upkeep to
+revision 2's mask 7. Installation requires published AnimEnums and XML1 LiftRule;
+a refusal is unverified and closes host/join. OFF still has no rule45 entry.
+Revision 2 and revision 3 refuse each other. See `xml1-grab-carry.md` for the
+required companion content switch (`XML1_FLIGHT_UPKEEP=True`).

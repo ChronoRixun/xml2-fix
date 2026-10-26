@@ -105,6 +105,7 @@
 #include "pad_profile.hpp"
 #include "pad_bindings.hpp"
 #include "pad_prompts.hpp"
+#include "anim_enums.hpp"
 #include "patch_transaction.hpp"
 #include "entity_capacity.hpp"
 #include "postgame.hpp"
@@ -246,6 +247,7 @@ namespace
 		// install contribute their guards and writes; every expectation is unioned and checked once, every touched
 		// page acquired once, and nothing is published unless the whole set verified. A refusal leaves stock bytes.
 		patch_transaction::transaction startup;
+		anim_enums::contribute(startup, game);
 		if (game_version::needs_gameplay_agreement()) gameplay_agreement::contribute(startup, game);
 
 		new_game::install(game);

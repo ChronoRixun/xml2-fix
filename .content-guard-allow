@@ -1,5 +1,7 @@
 # Scoped exceptions for the builder content guard used on this C++ repository.
 # Each entry describes original code/art or invented test data; no game assets are accepted.
+DISASM src/anim_enums.cpp # Authored native-map miss bridge preserves the retail wrapper stack and calls our DLL extension lookup; only the short displaced comparison is replayed, no game listing or decompiled body.
+DISASM test/anim_enums_test.cpp # Authored synthetic caller frames execute owned retail routines read from disk at runtime; inline assembler contains only our ABI probes, no game instruction listing.
 DISASM src/input_worker.cpp # Authored register-preserving lifetime-accounting bridges; only the short guarded entry prologue is replayed, with no game listing or decompiled body.
 DISASM test/input_worker_test.cpp # Authored synthetic ABI probe seeds invented register values and measures our bridges; no game instruction listing or decompiled body.
 DISASM src/lift_rule.cpp # Authored naked bridges: the game's own four-instruction heaviness clamp replayed before our callback, and a heaviness compare replayed on the game-rule path; no game listing or decompiled body.
@@ -102,3 +104,6 @@ DISASM  src/classic_objectives.cpp  # Authored register-preserving bridges into 
 DISASM  src/shared_handler_c_bridges.hpp  # Authored x87 and register-preserving rule-46 bridges; no copied game body or instruction listing.
 DISASM  test/shared_handlers_c_test.cpp  # Synthetic ABI drivers execute owner-loaded original callbacks, never embedded game code.
 DISASM  test/actor_pools_host.cpp  # Authored naked frame/capture thunks (register snapshot, synthetic caller frame) drive the retail pool and null-team code loaded from the owner's executable at run time; no game instruction listing or decompiled body.
+
+DISASM  src/xml1_air_carry.cpp  # Authored flight-debit parsing bridge preserves registers and skips only the flight_pwr drain; no game body or disassembly listing.
+DISASM  test/xml1_air_carry_test.cpp  # Authored synthetic parser/stack drivers test the production bridge and callback ABI; game instruction slices are read only from the owner's executable at runtime.

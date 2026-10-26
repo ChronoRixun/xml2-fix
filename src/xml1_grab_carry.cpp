@@ -1,4 +1,5 @@
 #include "xml1_grab_carry.hpp"
+#include "xml1_air_carry.hpp"
 #include "xml1_grab_carry_rules.hpp"
 #include "xml1_cling.hpp"
 #include "xml1_hook_memory.hpp"
@@ -177,7 +178,7 @@ void __fastcall attack_entry(void*, void*, void* actor, void*, void*)
 void* __fastcall persistent_destructor(void* self, void*, unsigned) { return self; }
 void* __cdecl lookup(const char* name)
 {
-    return attack_handler && name && _stricmp(name, "ch_grab_attack") == 0 ? &attack_handler : nullptr;
+    return attack_handler && name && _stricmp(name, "ch_grab_attack") == 0 ? &attack_handler : xml1_air_carry::lookup(name);
 }
 
 // XML1 0xdc690: publish each flag change, then detach relative to the current
@@ -319,6 +320,13 @@ void install(HMODULE game)
 
     using namespace xml1_hook_transaction;
     std::vector<patch> writes;
+    if (!xml1_air_carry::prepare(writes))
+    {
+        attack_handler = nullptr;
+        xml1_air_carry::abandon();
+        logger::write("grab carry: AnimEnums, LiftRule=xml1 or flight/carry services unavailable; no patches installed");
+        return;
+    }
     auto pointer = [&](u32 va, const void* value) {
         const auto* old = reinterpret_cast<const unsigned char*>(va);
         writes.push_back({va, {old, old + 4}, pointer_bytes(value)});
@@ -371,8 +379,9 @@ void install(HMODULE game)
     if (!apply(mem, writes, &safe))
     {
         attack_handler = nullptr;
+        xml1_air_carry::abandon();
         if (!safe) game_version::refuse_startup();
-        logger::write("grab carry: ground patch transaction refused");
+        logger::write("grab carry: grab/carry/flight transaction refused");
         return;
     }
     if (!xml1_cling::register_lookup(game, &lookup))
@@ -381,15 +390,16 @@ void install(HMODULE game)
         for (const auto& p : writes) undo.push_back({p.address, p.after, p.before});
         if (!apply(mem, undo, &safe) || !safe) game_version::refuse_startup();
         attack_handler = nullptr;
-        logger::write("grab carry: shared lookup refused; ground patches rolled back");
+        xml1_air_carry::abandon();
+        logger::write("grab carry: shared lookup refused; all rule45 patches rolled back");
         return;
     }
     trace = ini::flag(L"Test", L"GrabCarryTrace", false);
     state = 1;
-    logger::write("grab carry: XML1 grab/pickup/recovery installed (rule 45 revision %u, feature mask %u); flying carry deferred",
+    logger::write("grab carry: XML1 grab/pickup/recovery installed (rule 45 revision %u, feature mask %u); flying carry, fix7 and XML1 upkeep installed",
                   static_cast<unsigned>(agreement_revision), feature_mask);
 }
-std::string status() { const int s = state.load(); return std::string("grab carry ") + (s == 1 ? "xml1 grab/pickup/recovery + charge collision (carry deferred)" : s == -1 ? "game's own" : "unavailable"); }
+std::string status() { const int s = state.load(); return std::string("grab carry ") + (s == 1 ? "xml1 grab + flying carry + flight upkeep" : s == -1 ? "game's own" : "unavailable"); }
 bool requested() { return state.load() != -1; }
 bool installed() { return state.load() == 1; }
 bool verified() { return !requested() || installed(); }

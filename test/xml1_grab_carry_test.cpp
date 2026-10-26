@@ -1,6 +1,7 @@
 // Native guards and multiplayer agreement. Reads the owned executable only.
 #include <Windows.h>
 #include "xml1_grab_carry_rules.hpp"
+#include "xml1_air_carry_rules.hpp"
 #include "gameplay_capabilities.hpp"
 #include <cstdio>
 #include <cstdlib>
@@ -27,6 +28,8 @@ void rules(){
     check(on.compare(on2.bytes())==result::match,"ON peers agree");
     record old_ground;old_ground.add(grab_carry_id,1,{1,1,0,0},true);old_ground.finalize();
     check(on.compare(old_ground.bytes())!=result::match&&old_ground.compare(on.bytes())!=result::match,"ground-only candidate refuses the new lifecycle contract in both directions");
+    record old_lifecycle;old_lifecycle.add(grab_carry_id,2,{1,7,0,0},true);old_lifecycle.finalize();
+    check(on.compare(old_lifecycle.bytes())!=result::match&&old_lifecycle.compare(on.bytes())!=result::match,"revision2 mask7 refuses carry revision3 both directions");
     difference diff;
     check(on.compare(off.bytes(),&diff)!=result::match&&diff.buckets==(1ull<<44),"ON/OFF refuses only rule45");
     char text[256]{};on.describe(diff.buckets,diff.local_only,true,text,sizeof text);
@@ -41,7 +44,8 @@ void retail(const char* path){
     if(bytes.size()<4096){check(false,"readable retail image");return;}
     const auto* nt=reinterpret_cast<const IMAGE_NT_HEADERS32*>(bytes.data()+reinterpret_cast<const IMAGE_DOS_HEADER*>(bytes.data())->e_lfanew);
     const auto* sections=IMAGE_FIRST_SECTION(nt);
-    for(const auto& g:guards){
+    std::vector<limits_rules::guard> all(guards.begin(),guards.end());all.insert(all.end(),xml1_air_carry_rules::guards.begin(),xml1_air_carry_rules::guards.end());
+    for(const auto& g:all){
         const unsigned char* b=nullptr;
         for(unsigned i=0;i<nt->FileHeader.NumberOfSections;++i){const auto& s=sections[i];const auto rva=g.va-0x400000;
             if(rva>=s.VirtualAddress&&rva+g.hex.size()/2<=s.VirtualAddress+s.SizeOfRawData)b=bytes.data()+s.PointerToRawData+rva-s.VirtualAddress;

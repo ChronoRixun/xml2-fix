@@ -64,6 +64,7 @@ add_library(xml2_fix SHARED
 	src/xml1_cling.cpp
 	src/xml1_rogue_decide.cpp
 	src/xml1_grab_carry.cpp
+	src/xml1_air_carry.cpp
 	src/lift_rule.cpp
 	src/combo_heads.cpp
 	src/model_pools.cpp
@@ -125,6 +126,8 @@ add_library(xml2_fix SHARED
 	src/solo_mode.cpp
 	src/conversations.cpp
 	src/gameplay_agreement.cpp
+	src/anim_enums.cpp
+	src/anim_enum_registry.cpp
 	src/patch_transaction.cpp
 	src/receive_validation.cpp
 	src/explosive_first_hit.cpp
@@ -637,7 +640,7 @@ target_compile_options(xml2_boss_wave3_bridge_test PRIVATE /UNDEBUG)
 add_executable(xml2_xml1_grab_carry_test test/xml1_grab_carry_test.cpp)
 target_include_directories(xml2_xml1_grab_carry_test PRIVATE src)
 add_executable(xml2_xml1_grab_carry_install_test test/xml1_grab_carry_install_test.cpp
-    src/xml1_grab_carry.cpp src/xml1_cling.cpp src/xml1_rogue_decide.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+    src/xml1_grab_carry.cpp src/xml1_air_carry.cpp src/xml1_cling.cpp src/xml1_rogue_decide.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
 target_include_directories(xml2_xml1_grab_carry_install_test PRIVATE src)
 target_link_options(xml2_xml1_grab_carry_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 add_executable(xml2_shared_handlers_c_test test/shared_handlers_c_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/shared_handlers_c.cpp)
@@ -666,3 +669,17 @@ if(ACTOR_POOLS_BASE_RESULT EQUAL 0)
 else()
     message(STATUS "Actor descriptor byte differential unavailable: fetch 9677892 (release-1.9.0-beta1 before E4) to run this required E4 test")
 endif()
+
+add_executable(xml2_anim_enum_registry_test test/anim_enum_registry_test.cpp src/anim_enum_registry.cpp)
+target_include_directories(xml2_anim_enum_registry_test PRIVATE src)
+target_compile_options(xml2_anim_enum_registry_test PRIVATE /UNDEBUG)
+
+add_executable(xml2_anim_enums_test test/anim_enums_test.cpp src/anim_enums.cpp src/anim_enum_registry.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_anim_enums_test PRIVATE src)
+target_compile_options(xml2_anim_enums_test PRIVATE /UNDEBUG)
+target_link_options(xml2_anim_enums_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_xml1_air_carry_test test/xml1_air_carry_test.cpp
+    src/xml1_grab_carry.cpp src/xml1_air_carry.cpp src/xml1_cling.cpp src/xml1_rogue_decide.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_xml1_air_carry_test PRIVATE src)
+target_link_options(xml2_xml1_air_carry_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)

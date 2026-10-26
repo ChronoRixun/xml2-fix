@@ -3,11 +3,18 @@
 
 namespace xml1_grab_carry_rules
 {
+// XML1 actor ctor 0x341e0..0x341f0 sets +0x335 & 0x20 for every actor;
+// reset 0x2e7b9 preserves it, and no clearer was found among the 29 stores.
+// PC removed this field. Emulate it only at flight restriction test points
+// XML1 0xda3d5 and 0xda4e5 (after manager vt+0x74, before +0x334 & 1).
+// This does not replace PC actteamplayer (+0x3d4 controller index).
+// The separate fix7/carry port consumes this seam at those two tests.
+constexpr bool xml1_flight_eligible(const void* /*actor*/) noexcept { return true; }
 using xml1_cling_rules::setting;
 using xml1_cling_rules::parse;
 using limits_rules::guard;
-constexpr std::uint16_t agreement_revision = 2;
-constexpr std::uint32_t feature_mask = 7; // grab + pickup/recovery + flying-charge collision; no carry/upkeep
+constexpr std::uint16_t agreement_revision = 3;
+constexpr std::uint32_t feature_mask = 15; // grab1 + pickup/recovery2 + charge collision4 + carry/fix7/upkeep8
 constexpr std::uint32_t hold_vtable = 0x6932f4, victim_vtable = 0x693360;
 constexpr std::uint32_t timeout_va = 0x4edb83;
 
