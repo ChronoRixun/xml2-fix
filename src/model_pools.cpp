@@ -49,6 +49,14 @@ namespace model_pools
 		}
 	}
 
+    std::array<pool_counter_rules::source,10> diagnostic_sources()
+    {
+        std::array<pool_counter_rules::source,10> out{};
+        for(std::size_t i=0;i<kinds;++i)
+            out[i]={readable?live_address(static_cast<kind>(i)):0,0,static_cast<DWORD>(layout.capacity[i]),init_guard,false,false};
+        out[9]={readable?particle_manager_va:0,layout.psys.count,static_cast<DWORD>(layout.psys.capacity),particle_manager_guard,false,true};
+        return out;
+    }
 	long live(const int kind_index)
 	{
 		if (!readable || kind_index < 0 || kind_index >= static_cast<int>(kinds)) return -1;

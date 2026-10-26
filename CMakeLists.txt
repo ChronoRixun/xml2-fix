@@ -68,6 +68,7 @@ add_library(xml2_fix SHARED
 	src/lift_rule.cpp
 	src/combo_heads.cpp
 	src/model_pools.cpp
+	src/pool_counters.cpp
 	src/online_tick.cpp
 	src/npc_power.cpp
 	src/npc_semi_auto.cpp
@@ -731,3 +732,15 @@ add_executable(xml2_resident_stats_test test/resident_stats_test.cpp src/residen
 target_include_directories(xml2_resident_stats_test PRIVATE src)
 target_compile_options(xml2_resident_stats_test PRIVATE /UNDEBUG)
 target_link_options(xml2_resident_stats_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# Diagnostics: fixed-storage sampler rules and native observer semantics (no game launches).
+add_executable(xml2_pool_counters_test test/pool_counters_test.cpp)
+target_include_directories(xml2_pool_counters_test PRIVATE src)
+target_compile_options(xml2_pool_counters_test PRIVATE /UNDEBUG)
+
+add_executable(xml2_pool_counters_runtime_test test/pool_counters_runtime_test.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_pool_counters_runtime_test PRIVATE src)
+target_link_options(xml2_pool_counters_runtime_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_pool_counter_observers_test test/pool_counter_observers_test.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_pool_counter_observers_test PRIVATE src)
+target_link_options(xml2_pool_counter_observers_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)

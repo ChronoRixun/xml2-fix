@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include "pool_counter_rules.hpp"
 
 // The model component pools (SPEC-runtime-limits 2.4): every model the game shows - heroes, enemies, props, effects,
 // HUD heads - takes a handle and components from fixed pools in one static object (handles 692, transforms 692,
@@ -27,6 +28,8 @@
 // so peers must share the capacities; absent/off registers nothing (model_pools_rules::agreement_for).
 namespace model_pools
 {
+    // Installed addresses/capacities, including the relocated particle free count.
+    std::array<pool_counter_rules::source,10> diagnostic_sources();
 	// Reads [Engine] ModelPools and raises the pools. From DllMain, before XMen2.exe's own code runs.
 	void install(HMODULE game);
 

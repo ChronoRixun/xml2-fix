@@ -73,6 +73,7 @@
 #include "iat_hook.hpp"
 #include "ini.hpp"
 #include "limits.hpp"
+#include "pool_counters.hpp"
 #include "model_pools.hpp"
 #include "actor_pools.hpp"
 #include "model_pools_rules.hpp"
@@ -620,6 +621,7 @@ namespace
 		// transport, which it requires.
 		join_in_progress::install(game);
 
+		pool_counters::install(game); // D0 has no image writes; D1 is explicit [Test] only
 		test_mode::install(game);
 		test_input::install(); // first: its screenshots need the display fix's device hook
 		display::install(game);
@@ -675,6 +677,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, const DWORD reason, LPVOID)
 			MessageBoxA(nullptr, notice.c_str(), "XML2 Fix: entity capacity unavailable", MB_OK | MB_ICONWARNING);
 			logger::write("startup: entity capacity notice closed");
 		}
+        pool_counters::start_logging();
 	}
 	else if (reason == DLL_PROCESS_DETACH)
 	{

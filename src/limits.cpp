@@ -952,6 +952,17 @@ namespace limits
 
 	unsigned actor_capacity() { return static_cast<unsigned>(actor_cap); }
 
+    pool_diagnostics diagnostic_sources()
+    {
+        const auto l=style_layout_for(style_cap);
+        const bool styles=style_count_offset!=0;
+        return {
+            {styles?style_manager_pointer:0,style_count_offset,static_cast<DWORD>(style_cap),0,true,false},
+            {styles?style_manager_pointer:0,l.auxiliary+0x16ee0,1064,0,true,false},
+            {curve_live_va,0,static_cast<DWORD>(curve_cap),curve_init_guard,false,false},
+            {styles?style_manager_pointer:0,l.styles,l.bitmap,style_record_size,0xc60,static_cast<DWORD>(style_cap)}
+        };
+    }
 	std::string status()
 	{
 		std::optional<DWORD> names;

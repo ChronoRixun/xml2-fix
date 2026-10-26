@@ -1,4 +1,5 @@
 #include "display.hpp"
+#include "pool_counters.hpp"
 #include "d3d8_min.hpp"
 #include "display_rules.hpp"
 #include "display_settings.hpp"
@@ -430,6 +431,7 @@ namespace display
 			const HRESULT result = real_present(self, source, destination, override, dirty);
 			if (SUCCEEDED(result))
 			{
+				pool_counters::sample(); // fixed-storage reads, between simulation steps
 				frame_rate::on_present(); // paces the frame (FrameRate) and counts it (the pipe's "status")
 			}
 			return result;
@@ -564,9 +566,9 @@ namespace display
 				hook_slot(device, d3d8::device_slot::test_cooperative_level, &hooked_test_cooperative_level, real_test_cooperative_level);
 			}
 			present_hooked = present_hooked && d3d8::method<void*>(device, d3d8::device_slot::present) == reinterpret_cast<void*>(&hooked_present);
-			if (can_pause || frame_hook || frame_rate::paces())
+			if (can_pause || frame_hook || frame_rate::paces() || pool_counters::enabled())
 			{
-				hook_present(can_pause ? "the window's pause without the focus" : frame_hook ? "the test pipe's screenshots" : "the frame limiter");
+				hook_present(can_pause ? "the window's pause without the focus" : frame_hook ? "the test pipe's screenshots" : pool_counters::enabled() ? "read-only pool sampling" : "the frame limiter");
 			}
 			logger::write("display: device created - %s", describe(wanted).c_str());
 			return result;

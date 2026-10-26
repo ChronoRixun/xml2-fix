@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include "pool_counter_rules.hpp"
 
 // The engine limit adjuster: raises fixed caps of XMen2.exe in memory at startup, without touching
 // the exe on disk.
@@ -49,6 +50,11 @@ namespace patch_transaction { class transaction; }
 
 namespace limits
 {
+    struct pool_diagnostics {
+        pool_counter_rules::source styles, events, curves;
+        pool_counter_rules::range style_moves;
+    };
+    pool_diagnostics diagnostic_sources();
 	// [Limits] MoveTriggers as a contribution to the one startup transaction (its sites share the actor-arena
 	// teardown at 0x4613e0 with the entity-capacity install): guards, writes and publication; false when the
 	// key is absent/stock or the guards refused. With `teardown_owned_elsewhere` the teardown is not wrapped
