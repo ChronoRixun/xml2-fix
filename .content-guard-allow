@@ -101,3 +101,4 @@ DISASM  src/classic_objectives.cpp  # Authored register-preserving bridges into 
 
 DISASM  src/shared_handler_c_bridges.hpp  # Authored x87 and register-preserving rule-46 bridges; no copied game body or instruction listing.
 DISASM  test/shared_handlers_c_test.cpp  # Synthetic ABI drivers execute owner-loaded original callbacks, never embedded game code.
+DISASM  test/actor_pools_host.cpp  # Authored naked frame/capture thunks (register snapshot, synthetic caller frame) drive the retail pool and null-team code loaded from the owner's executable at run time; no game instruction listing or decompiled body.
