@@ -3,6 +3,7 @@
 #include "motion_pool.hpp"
 #include "effect_templates.hpp"
 #include "primitives_per_effect.hpp"
+#include "script_pools.hpp"
 #include "limits_agreement_rules.hpp"
 #include "gameplay_agreement.hpp"
 #include "game_version.hpp"
@@ -1042,6 +1043,6 @@ namespace limits
 		const bool observing_refusals=published_manager && (published_manager->capacity>32 || published_manager->events.capacity!=stock_style_events);
         return (residency.empty()?std::string{}:residency+"; ")+"actors " + counter(read(actor_live_va), actor_cap) + "; names " + counter(names, name_cap) + "; motions " + counter(motions, static_cast<int>(motion_pool::layout().capacity)) + "; igb " +
 		       counter(read(igb_live_va), igb_cap) + "; items " + counter(items, item_cap) + "; styles " + counter(styles, style_cap) + "; events " + counter(events,event_cap) + "; style_refused " + (observing_refusals?std::to_string(style_refusals):"-") + "; event_refused " + (observing_refusals?std::to_string(event_refusals):"-") + "; curves " +
-		       counter(read(curve_live_va), curve_cap) + "; " + fight_moves::status() + "; move_triggers " + std::to_string(move_trigger_cap) + "; " + effect_templates::status() + "; " + primitives_per_effect::status() + "; " + effect_pools::status();
+		       counter(read(curve_live_va), curve_cap) + "; " + fight_moves::status() + "; move_triggers " + std::to_string(move_trigger_cap) + "; " + effect_templates::status() + "; " + primitives_per_effect::status() + "; " + effect_pools::status() + "; " + script_pools::status();
 	}
 }

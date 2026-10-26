@@ -633,7 +633,7 @@ namespace forced_teams_rules
 
 	// Every byte of XMen2.exe the functions rely on, read from the retail build. All must match
 	// before anything is patched; xml2_test compares them with a copy of the exe.
-	inline constexpr std::array<guard, 120> guards{{
+	inline constexpr std::array<guard, 118> guards{{
 		// The registration and the tree.
 		{0x49fe30, "6808a968006821010000e8318903008bc8e85a770300c3", "the registration (0x49fe30: push table, push count, call 0x4d75a0)"},
 		{0x4d7637, "81bf4819000040010000", "the tree's 320-name cap (0x4d7637)"},
@@ -645,8 +645,8 @@ namespace forced_teams_rules
 		// Arguments and results.
 		{0x4d5830, "8b511c33c085d2740d568b7424083bf27d038b04b15ec20400", "the argument getter (0x4d5830)"},
 		{0x4d8770, "64a1000000006aff681149670050a140777800", "the script system's getter (0x4d8770)"},
-		{0x4d6570, "8b9190c0000033c081fa14060000", "the int value maker (0x4d6570)"},
-		{0x4d9445, "8b9190c0000083ec0833c081fa14060000", "the string value maker (0x4d9430)"},
+		// Value makers are certified by script_pools::value_makers_match(),
+		// which consumes the installed relocation/cave descriptor (W3-8).
 		{0x6907a0, "e0d75500", "a string value's text (vt+0x14 = 0x55d7e0)"},
 		{0x69060c, "e0d75500", "an int value's number (vt+0x10 = 0x55d7e0)"},
 		{0x55d7e0, "8b4104c3", "the value accessor (0x55d7e0)"},

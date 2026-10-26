@@ -4211,7 +4211,9 @@ namespace
 		bool guards_ok = true;
 		std::set<DWORD> addresses;
 		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
-		CHECK(guards_ok && guards.size() == 120);
+		// The two value makers are checked through ScriptPools' published
+		// guards; its native fixture tests their retail and relocated bytes.
+		CHECK(guards_ok && guards.size() == 118);
 
 		// Change Team in the Xtraction menus: greyed out only with ForcedTeams=1 and the flag read as set.
 		CHECK(change_team_disabled(true, 1) && !change_team_disabled(true, 0) && !change_team_disabled(true, std::nullopt) && !change_team_disabled(false, 1) &&

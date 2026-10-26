@@ -6,6 +6,7 @@
 #include "motion_pool.hpp"
 #include "resident_stats.hpp"
 #include "particle_scratch.hpp"
+#include "script_pools.hpp"
 #include "test_state_rules.hpp"
 #include <Windows.h>
 #include <mutex>
@@ -99,6 +100,7 @@ namespace test_state
 		if (command == "resident_census") return resident_stats::census_json();
 		if (command == "motion_pool") return motion_pool::telemetry_json();
 		if (command == "char_sounds") return char_sounds::telemetry_json();
+		if (command == "script_pools") return script_pools::telemetry_json();
 		if (command == "actor_pools") return actor_pools::telemetry_json();
 		if (command == "particle_scratch") return particle_scratch::telemetry_json();
 		if (command == "objectives")

@@ -34,6 +34,7 @@
 //                           ; record pool, past which Data/items stops loading
 //   FightStyles = 64        ; 20..127 (19 is the game's own)
 //   StyleEvents = 4096      ; 1065..8192 (1064 is the game's own); one manager with FightStyles
+//   ScriptPools = x1        ; 4096 statements, 8192 values, 512 scripts, 128 contexts
 //   EffectCurves = 3600     ; 901..16384 (900 is the game's own): the effect curve pool
 //   PrimitiveDefs = 2048    ; 817..8192 (816 is stock): primitive definition heap pool
 //   EffectVectors = 4096    ; 711..16384 (710 is stock): vectors, 84 presets unchanged

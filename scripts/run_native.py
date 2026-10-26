@@ -34,7 +34,7 @@ with_exe = {
     "xml2_gns_transport_test", "xml2_confirmation_release_test", "xml2_objective_text_test",
     "xml2_entity_grid_test", "xml2_entity_world_test", "xml2_entity_frames_test",
     "xml2_entity_query_test", "xml2_entity_transfer_test", "xml2_gameplay_agreement_test",
-    "xml2_rank_costs_test", "xml2_multipart_install_test", "xml2_script_functions_test",
+    "xml2_rank_costs_test", "xml2_multipart_install_test", "xml2_script_functions_test", "xml2_script_pools_test",
     "xml2_death_switch_test", "xml2_world_impact_test", "xml2_stun_rule_test",
     "xml2_test_mode_test", "xml2_lockon_effects_test", "xml2_box_harm_test",
     "xml2_harm_single_chain_test", "xml2_world_backfaces_test", "xml2_harm_loop_startup_test", "xml2_reliable_receive_test",
@@ -60,6 +60,7 @@ for exe in sorted(b.glob("*.exe")):
     if name not in skip:
         cmds.append(([str(exe), EXE] + ([XBE] if name in with_xbe else [])) if name in with_exe else [str(exe)])
 cmds.append([str(b / "lcsave_test.exe"), "--fuzz", "2000"])
+cmds += [[str(b / "xml2_script_pools_test.exe"), EXE, mode] for mode in ("invalid", "owner", "guard", "functions")]
 vectors = Path(_need("XML2_FIX_LEGACY_VECTORS_DIR"))
 for directory in sorted(p for p in vectors.iterdir() if p.is_dir() and (p / "cases.tsv").exists()):
     cmds.append([str(b / "lcsave_durable_parity.exe"), str(directory)])
