@@ -139,6 +139,7 @@ add_library(xml2_fix SHARED
 	src/xp_curve.cpp
 	src/balance.cpp
 	src/limits.cpp
+	src/effect_pools.cpp
 	src/entity_capacity.cpp
 	src/actor_pools.cpp
 	src/entity_owners.cpp
@@ -683,3 +684,8 @@ add_executable(xml2_xml1_air_carry_test test/xml1_air_carry_test.cpp
     src/xml1_grab_carry.cpp src/xml1_air_carry.cpp src/xml1_cling.cpp src/xml1_rogue_decide.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
 target_include_directories(xml2_xml1_air_carry_test PRIVATE src)
 target_link_options(xml2_xml1_air_carry_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_effect_pools_test test/effect_pools_test.cpp src/effect_pools.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_effect_pools_test PRIVATE src)
+target_compile_options(xml2_effect_pools_test PRIVATE /UNDEBUG)
+target_link_options(xml2_effect_pools_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)

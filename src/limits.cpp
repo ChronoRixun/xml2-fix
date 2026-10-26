@@ -7,6 +7,8 @@
 #include "ini.hpp"
 #include "log.hpp"
 #include "patch_transaction.hpp"
+#include "effect_pools.hpp"
+#include "model_pools.hpp"
 
 #include <Windows.h>
 
@@ -855,6 +857,8 @@ namespace limits
 		const auto move_triggers = ini_value(L"MoveTriggers"); // contributed to the startup transaction earlier (contribute())
 		if (!actor_slots && !resource_names && !item_enhancements && !fight_styles && !effect_curves && !move_triggers && !igb_records)
 		{
+			model_pools::install(game);
+			effect_pools::install(game);
 			logger::write("limits: the game's own caps - 40 actor slots, 450 resource names, 375 item enhancements (no [Limits] in xml2-fix.ini)");
 			return;
 		}
@@ -870,21 +874,6 @@ namespace limits
 		for (const auto& note : chosen.notes)
 		{
 			logger::write("limits: %s", note.c_str());
-		}
-		if (chosen.fight_styles > stock_fight_styles) raise_styles(chosen.fight_styles);
-		// The effect curve pool: on its own, before the game's first effect (the getter builds the pool
-		// at its first call, in the game's start-up, after DllMain).
-		if (chosen.effect_curves > stock_effect_curves) raise_curves(chosen.effect_curves);
-		// The item enhancement pool: on its own, before the game's first item load (the manager is built
-		// at its first use, long after DllMain).
-		if (chosen.item_enhancements > stock_item_enhancements && base)
-		{
-			raise_items(chosen.item_enhancements);
-		}
-		if (chosen.actor_slots == stock_actor_slots && chosen.resource_names == stock_resource_names && chosen.igb_records == stock_igb_records)
-		{
-			logger::write("limits: the game's own caps - 40 actor slots, 450 resource names, 200 IGB records");
-			return;
 		}
 
 		// The name table first: the actor table needs it.
@@ -916,6 +905,13 @@ namespace limits
 				              names_needed(chosen.actor_slots));
 			}
 		}
+		// DESIGN revision 2 section 7: actor cache, model pools, effect pools,
+		// then styles. W3-4/W3-7 and W3-9 insert before these two independent rows.
+		model_pools::install(game);
+		effect_pools::install(game);
+		if (chosen.fight_styles > stock_fight_styles) raise_styles(chosen.fight_styles);
+		if (chosen.effect_curves > stock_effect_curves) raise_curves(chosen.effect_curves);
+		if (chosen.item_enhancements > stock_item_enhancements && base) raise_items(chosen.item_enhancements);
 	}
 
 	void register_resource_agreement()
@@ -981,6 +977,6 @@ namespace limits
 		}
 		return "actors " + counter(read(actor_live_va), actor_cap) + "; names " + counter(names, name_cap) + "; motions " + counter(motions, motion_pool_capacity) + "; igb " +
 		       counter(read(igb_live_va), igb_cap) + "; items " + counter(items, item_cap) + "; styles " + counter(styles, style_cap) + "; curves " +
-		       counter(read(curve_live_va), curve_cap) + "; move_triggers " + std::to_string(move_trigger_cap);
+		       counter(read(curve_live_va), curve_cap) + "; move_triggers " + std::to_string(move_trigger_cap) + "; " + effect_pools::status();
 	}
 }

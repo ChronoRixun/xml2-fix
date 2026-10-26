@@ -193,6 +193,17 @@ A requested capacity that failed to install invalidates admission. Stock/absent 
 rule, preserving the released bytes. In particular ResourceNames=450 versus 2048 refuses by name even
 when IGBCache is absent or 200 on both PCs. Rules 31 and 28 retain their existing encodings.
 
+| Resource key | Rule | Values on verified installation | Accepted raise |
+| --- | --- | --- | --- |
+| `[Limits] PrimitiveDefs` | 56, revision 1 | `{N,0,0,0}` | 817..8192 (stock 816) |
+| `[Limits] EffectVectors` | 57, revision 1 | `{N,0,0,0}` | 711..16384 (stock 710) |
+
+These independent effect pools register only for a requested raise. Absent or
+stock keys preserve the released digest. A failed requested installation is
+unverified and closes admission; differing capacities refuse both ways naming
+`PrimitiveDefs` or `EffectVectors`. See [primitive definitions](primitive-defs.md)
+and [effect vectors](effect-vectors.md).
+
 Rule 45 (`Xml1GrabCarry`, `[Game] Xml1GrabCarry=xml1`, candidate) is requested-only, revision 2, values
 `{installed ? 1 : 0,7,0,0}`. Feature mask 7 includes ground grab (1), the pickup/recovery lifecycle (2), and
 flying-charge collision (4). Carry/upkeep and flight admission remain deferred. The earlier ground-only
