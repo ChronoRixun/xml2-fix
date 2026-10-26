@@ -44,7 +44,7 @@ with_exe = {
     "xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test", "xml2_shared_handlers_test",
     "xml2_xml1_cling_test", "xml2_lift_rule_test", "xml2_xml1_controllers_test", "xml2_dopple_xbe_test",
     "xml2_xml1_grab_carry_test", "xml2_xml1_grab_carry_install_test", "xml2_xml1_air_carry_test", "xml2_shared_handlers_c_test",
-    "xml2_anim_enums_test",
+    "xml2_anim_enums_test", "xml2_effect_templates_test",
 }
 # Second argument: the XBE (beta 7: the scheduler suite requires it, the weapon brain compares the original callbacks).
 with_xbe = {"xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test", "xml2_shared_handlers_test", "xml2_shared_handlers_c_test", "xml2_dopple_xbe_test"}
@@ -63,7 +63,7 @@ vectors = Path(_need("XML2_FIX_LEGACY_VECTORS_DIR"))
 for directory in sorted(p for p in vectors.iterdir() if p.is_dir() and (p / "cases.tsv").exists()):
     cmds.append([str(b / "lcsave_durable_parity.exe"), str(directory)])
 cmds += [[str(b / "xml2_danger_room_party_install_test.exe"), mode] for mode in ("on", "off", "invalid", "base", "guard0", "guard1", "guard2", "guard3")]
-cmds += [[str(b / "xml2_lockon_effects_install_test.exe"), EXE, mode] for mode in ("on", "off", "visual", "no-effects", "bad-paths", "empty-effects", "effects-off", "both-off", "invalid", "base", "guard0", "guard1", "guard2", "guard3", "guard4", "dependency")]
+cmds += [[str(b / "xml2_lockon_effects_install_test.exe"), EXE, mode] for mode in ("on", "raised", "off", "visual", "no-effects", "bad-paths", "empty-effects", "effects-off", "both-off", "invalid", "base", "guard0", "guard1", "guard2", "guard3", "guard4", "dependency")]
 cmds += [[str(b / "xml2_danger_room_healthbars_install_test.exe"), mode] for mode in ("on", "off", "xml2", "invalid", "base", "guard0", "guard1")]
 # Install-mode suites that take the retail exe and a mode (each exits non-zero without both).
 cmds += [[str(b / "xml2_speaker_label_install_test.exe"), EXE, mode] for mode in ["rule", "on", "off"] + [f"guard{i}" for i in range(7)]]
@@ -74,6 +74,11 @@ _hud_sites = len(re.findall(r"0x[0-9a-fA-F]+", re.search(r"sites\[\]\s*\{(.*?)\}
 cmds += [[str(b / "xml2_classic_hud_install_test.exe"), EXE, mode] for mode in ["on", "off", "zero", "named-off", "legacy", "invalid", "base", "assets", "alias", "stale"] + [f"guard{i}" for i in range(_hud_sites)]]
 cmds.append([str(b / "xml2_xml1_grab_carry_install_test.exe"), EXE, "both"])
 cmds += [[str(b / "xml2_xml1_air_carry_test.exe"), EXE, mode] for mode in ("both", "raised")]
+installer_modes = {"xml2_effect_templates_test": (
+    "primitives", "off", "stock", "invalid", "on", "base", "built", "guard", "foreign-model", "allocation", "protect",
+    "prim-on", "prim-raised", "prim-stock", "prim-invalid", "prim-built", "prim-guard", "prim-allocation", "prim-protect")}
+for name,modes in installer_modes.items():
+    cmds += [[str(b / (name + ".exe")), EXE, mode] for mode in modes]
 
 if LIST_ONLY:
     # The command matrix only: for checking the runner against another gate's matrix. Everything above only reads.
@@ -98,7 +103,7 @@ for cmd in cmds:
         tag += "+xbe"
     if tag.removesuffix("+exe").endswith("_install_test") and cmd[-1] not in (EXE, XBE):
         tag += "-" + cmd[-1]
-    if Path(cmd[0]).stem in installer_modes:
+    if Path(cmd[0]).stem in installer_modes and len(cmd)>2:
         tag += "-" + cmd[-1]
     if len(cmd) == 1 and tag == "xml2_test":
         tag += "-plain"

@@ -1,4 +1,6 @@
 #include "limits.hpp"
+#include "effect_templates.hpp"
+#include "primitives_per_effect.hpp"
 #include "limits_agreement_rules.hpp"
 #include "gameplay_agreement.hpp"
 #include "limits_rules.hpp"
@@ -981,6 +983,6 @@ namespace limits
 		}
 		return "actors " + counter(read(actor_live_va), actor_cap) + "; names " + counter(names, name_cap) + "; motions " + counter(motions, motion_pool_capacity) + "; igb " +
 		       counter(read(igb_live_va), igb_cap) + "; items " + counter(items, item_cap) + "; styles " + counter(styles, style_cap) + "; curves " +
-		       counter(read(curve_live_va), curve_cap) + "; move_triggers " + std::to_string(move_trigger_cap);
+		       counter(read(curve_live_va), curve_cap) + "; move_triggers " + std::to_string(move_trigger_cap) + "; " + effect_templates::status() + "; " + primitives_per_effect::status();
 	}
 }

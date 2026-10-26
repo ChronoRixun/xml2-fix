@@ -27,6 +27,7 @@
 // so peers must share the capacities; absent/off registers nothing (model_pools_rules::agreement_for).
 namespace model_pools
 {
+    std::uint32_t installed_target(std::uint32_t call);
 	// Reads [Engine] ModelPools and raises the pools. From DllMain, before XMen2.exe's own code runs.
 	void install(HMODULE game);
 

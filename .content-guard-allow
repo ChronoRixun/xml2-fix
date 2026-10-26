@@ -107,3 +107,4 @@ DISASM  test/actor_pools_host.cpp  # Authored naked frame/capture thunks (regist
 
 DISASM  src/xml1_air_carry.cpp  # Authored flight-debit parsing bridge preserves registers and skips only the flight_pwr drain; no game body or disassembly listing.
 DISASM  test/xml1_air_carry_test.cpp  # Authored synthetic parser/stack drivers test the production bridge and callback ABI; game instruction slices are read only from the owner's executable at runtime.
+DISASM  test/effect_templates_test.cpp  # Authored register/flag capture driver for our generated spill caves; the retail image is read from the owner's executable at runtime, never embedded game content.
