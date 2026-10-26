@@ -195,7 +195,7 @@ Absent, empty, off or xml2 omits a rule. Invalid or failed requested installs re
 
 Resource-loading limits also participate independently of ModelPools and IGBCache. Requested/effective
 non-stock `[Limits] ResourceNames`, `ActorSlots`, `ItemEnhancements`, `FightStyles`, `EffectCurves`, and
-`MoveTriggers` use named rules 32 through 37 respectively (revision 1, `{effective capacity,0,0,0}`).
+`MoveTriggers` use named rules 32 through 37 respectively (`{effective capacity,0,0,0}`; revision 1 except FightStyles above 32, which uses revision 2).
 A requested capacity that failed to install invalidates admission. Stock/absent limits contribute no
 rule, preserving the released bytes. In particular ResourceNames=450 versus 2048 refuses by name even
 when IGBCache is absent or 200 on both PCs. Rules 31 and 28 retain their existing encodings.
@@ -250,3 +250,7 @@ Absent/500 contributes no entry; invalid or refused requests close admission. It
 append/read behavior and retains native handle masking. See [motion-pool.md](motion-pool.md).
 
 Rule 50 (`ResidentStats`, `[Limits] ResidentStats=320`) revision 1 advertises `{320,22,320,1}` after verified installation. Outer and NPC residency rise together; hero payloads stay22. Absent/31 leaves the agreement unchanged; a failed requested install closes online admission.
+
+### Shared style manager (rules 35 and 53)
+
+`[Limits] FightStyles` (20..127; stock 19) contributes rule 35 with values `{N,0,0,0}`: revision 1 through 32, revision 2 above 32 for multiword bitmap clears. `[Limits] StyleEvents` (1065..8192; stock 1064) contributes assigned rule 53, revision 1, values `{E,0,0,0}`. Each successful key is requested-only. Both absent/stock add neither rule. Because both capacities occupy one allocation, an invalid key or failed transaction leaves both unchanged and registers both rules unverified, including the otherwise absent partner. Mismatches refuse both directions and name FightStyles or StyleEvents, also when locally disabled. See [fight-styles.md](fight-styles.md) and [style-events.md](style-events.md).

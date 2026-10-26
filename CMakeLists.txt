@@ -766,3 +766,8 @@ add_executable(xml2_effect_pools_test test/effect_pools_test.cpp src/effect_pool
 target_include_directories(xml2_effect_pools_test PRIVATE src)
 target_compile_options(xml2_effect_pools_test PRIVATE /UNDEBUG)
 target_link_options(xml2_effect_pools_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# W3 shared style/event manager: retail instructions, synthetic content only.
+add_executable(xml2_style_manager_host test/style_manager_host.cpp src/patch_transaction.cpp tools/union_host/union_space.asm)
+target_include_directories(xml2_style_manager_host PRIVATE src)
+target_compile_options(xml2_style_manager_host PRIVATE /UNDEBUG)
+target_link_options(xml2_style_manager_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
