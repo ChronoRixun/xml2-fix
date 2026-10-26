@@ -13,12 +13,17 @@
 
 namespace patch_transaction { class transaction; }
 namespace entity_capacity_layout { struct descriptor; }
+namespace save_format_rules { struct native_profile; }
 
 namespace entity_capacity
 {
 	// Reads the INI, decides, and prepares every owner object and backing before anything is contributed (the
 	// save seam needs the chosen native profile first). Nothing is written to the game.
 	void prepare(patch_transaction::transaction& transaction, HMODULE game);
+	// Step-3 layout input for the eventual W2 selector, after later contributors
+	// complete the layout. The current startup
+	// caller uses the overload above, which always requests E10A2.
+	void prepare(patch_transaction::transaction& transaction, HMODULE game, const save_format_rules::native_profile& profile);
 	// True when the raise is requested and prepared: the actor-arena teardown at 0x4613e0 is then this module's
 	// (AllocatorShutdown), which calls limits::retire_move_trigger_times() after the native teardown.
 	bool owns_arena_teardown();

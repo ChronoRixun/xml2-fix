@@ -1,4 +1,5 @@
 #include "zone_strings.hpp"
+#include "save_manager_rules.hpp"
 #include "save_format.hpp"
 #include <memory>
 
@@ -101,6 +102,15 @@ namespace zone_strings
   };
   for(const auto& s:in_place)if(s.va>=compact_lo&&s.va<compact_hi)edit(s);
   for(const auto& s:compact_edits)edit(s);
+  // The copied owner executes on W2 zone records and managers. Patching only
+  // the retired retail body leaves its offsets at 0x4804 / 0x1ad64. These
+  // twelve operands used to be duplicated as literals in compact_edits.
+  for(const auto& s:entity_capacity_sites::literal_sites)
+   if(s.owner=="save" && s.va>=compact_lo && s.va<compact_hi)
+   {
+    const auto b=save_manager_rules::literal(s,save_format_rules::w2_profile);
+    std::memcpy(code.data()+s.va-compact_lo,b.data(),b.size());
+   }
   block->memory=VirtualAlloc(nullptr,size,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);
   if(!block->memory) {why="cannot allocate compaction copy";c={};return false;}
   const auto base=address_of(block->memory);

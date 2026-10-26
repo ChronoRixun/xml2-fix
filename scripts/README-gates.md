@@ -6,6 +6,7 @@ inputs come from environment variables; the scripts stop with a message when a r
 | Variable | Used by | What it points at |
 |---|---|---|
 | `XML2_FIX_TEST_EXE` | run_native, prove_off_wire, prove_combined_install | a retail XML2 PC `XMen2.exe`, read only |
+| `XML2_FIX_TEST_XBE` | run_native | the owned XML1 Xbox `default.xbe`, read only, for the native NPC differentials |
 | `XML2_FIX_TEST_GAME_DIR` | run_native | an XML2 PC install folder, read only |
 | `XML2_FIX_LEGACY_VECTORS_DIR` | run_native | the legacy save test vectors folder |
 | `XML2_FIX_UNION` | prove_off_wire, prove_combined_install | the folder prepared by `tools/union_host/prepare_union.py` |
@@ -35,3 +36,18 @@ dinput.map) and this tree's /MAP DLL (`XML2_FIX_LIMITS_DLL`, default `native-map
 the run023 ini: OFF and `ModelPools=x4` alone must give the reference's agreement record and limits log lines; with
 `IGBCache=1024`, `ResourceNames=2048` and `ModelHandles=8192` the three raises must install and rule 31 must register.
 It exports and restores the game's registry key around each run.
+
+W2 step 3 has an additional mapped-retail union test and text gate. It keeps W2 unselectable:
+
+```powershell
+native/bin/Release/xml2_save_manager_test.exe $env:XML2_FIX_TEST_EXE build/w2
+python scripts/check_w2_save_text.py $env:XML2_FIX_TEST_EXE build/w2-text.bin build/w2-gc.bin
+```
+
+For the OFF proof, build the pre-change checkout and this checkout with `/MAP`, then run
+`scripts/prove_w2_step3_off.py` with their DLL directories, the union host, retail exe,
+engine DLL directory, Data input directory, a workspace output directory and `build/w2-pages.txt`.
+It compares every byte of the W2 write pages and the agreement record. DLL symbols and ASLR
+addresses are normalized explicitly; referenced generated-code allocations must match too.
+The registry export must succeed and its before/after bytes must match. All copies and dumps
+stay under the output directory; no game starts.

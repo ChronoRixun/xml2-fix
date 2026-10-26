@@ -4,7 +4,11 @@ Status: design, revision 3, 2026-10-25 (Fable lead; owner-approved brief `task-f
 1 is kept as `limits-wave2.v1.md`. Revision 2 answered the eight CONFIRMED findings of the first GPT Astra review
 (`20261025-165428-gpt-astra-high-81ac`; section 13). Revision 3 answers the re-review (`20261025-172352-gpt-astra-high-e377`:
 five of the eight closed, the layout arithmetic confirmed, seven new findings, RE-1..13 answered) - section 13.1 - and
-adds the implementation-ready ledger (section 15). The one-page summary is `DECISIONS.md` beside this file.
+adds the implementation-ready ledger (section 15). Revision 3.1 folds Astra report `20261025-180422-gpt-astra-high-0822`
+(RE-14 / 15 / 16 answered: ledger rows W2-E15-14a..l, W2-L-17, W2-E14-04a/b, the R17 loader-condition matrix). The
+one-page summary is `DECISIONS.md` beside this file. Revision 3.2 folds the seven design corrections the step 1-2
+implementer sent back (`agent-work/w2-impl-REPORT.md` "Design corrections"; xml2-fix `w2/impl-1` 6f543e6, 2ad158b),
+each checked against that code.
 
 Scope: the rows of gap-audit PLAN 2.5 whose capacity is written into a save (E2, E3, E3b, E3c, E7, E9, E14, E15),
 landing in **one** native save-layout change, "W2", with the owner's one-pass rule (every save-bound and engine limit
@@ -171,15 +175,22 @@ three floats at +0x14 unchanged (bit-exact). The LC `STATE.position` is already 
 audit): the record clear 0x465ec0 (its per-record loop writes `[esi-0x12]..[esi+4]` relative to `lea esi, [ebp+0x16]`
 and advances `add esi, 0x18` at 0x465f17, V: replaced whole, section 4.6), the constructors 0x465e70 / 0x4664a0 /
 0x487610, the smart-capture copies 0x46678b..0x46679f, the restore copies into a **24-byte stack record** at
-0x46686c..0x466882 (the stack frame grows to 0x20), the smart-manager copy 0x4b7630 and the vector strides 0x48759a /
-0x48764a / 0x48766a (RE-8). A W2 record's slot field is 0xffff and its floats 0.0 after a clear.
+0x46686c..0x466882 (the stack record grows to 0x20; frame references grow by 8); the restore-loop clear
+0x466906..0x466932 and cleanup funclet 0x673630 (`8d4dd8` -> `8d4dd0`) grow too. The 0x4b7630 copy is dead under E15-13. The vector strides 0x48759a /
+0x48764a / 0x48766a grow to 0x20 (RE-8). A W2 record's slot field is 0xffff and its floats 0.0 after a clear. **Non-owning records
+(correction 7, implemented `oldsave.cpp` read / write, `reverse.cpp:445`):** the slot field is meaningful only when
+flags A bit 0 is set; the converter writes **0xffff** on every record that owns no item and a non-0xffff value read
+there is **not carried** into the LC file; the engine rows (clear, constructors, the slot-write bridge) must keep
+writing 0xffff on such records, so the engine and the converter agree byte for byte.
 
 **Disposal adapter (re-review finding 1, V).** The record clear 0x465ec0 calls **0x479c10** (0x465ee7) for every state
-record with flags A bit 0; 0x479c10 reads **one payload byte** through 0x4655d0 (0x479c2b, `push 1`) and passes it to
+record with **flags B bit 0** (+0x11; 0x465edd `f646ff01`). 0x465e70 likewise tests flags B at
+0x465e7e (`f6461101`). Then 0x479c10 tests **flags A bit 0** at 0x479c15 (`f6461001`): disposal requires both flags.
+The retail adapter reads **one payload byte** through 0x4655d0 (0x479c2b, `push 1`) and passes it to
 **0x479ad0**, which zero-extends it (`movzx ecx, byte [esp+0x10]` 0x479aed) and releases that slot through manager
 vt+0x120 (0x479af5). Under W2 the payload byte is 0 and the slot is at +0x12, so an unpatched disposal would free slot 0
-and leak the real slot. The adapter: 0x479c10's read (the `call 0x4655d0` at 0x479c2b and its `push 1`) becomes a call
-to a DLL function that returns the u16 at `record + 0x12` (the record pointer is esi), and 0x479ad0's `movzx` becomes a
+and leak the real slot. The W2 whole-function adapter at 0x479c10 preserves the payload cursor start/end, reads
+the u16 at `record + 0x12`, skips the non-owning 0xffff sentinel, and calls 0x479ad0 with the full slot; its `movzx` becomes a
 word load; vt+0x120 and its 5 callers are full-width (section 4.4). The same adapter serves the eviction path
 (0x466960 -> 0x465ec0), the reset 0x465f90 and the destructor 0x4875f4, which all go through 0x465ec0.
 
@@ -222,10 +233,12 @@ replacements) but the ledger does not, and it is the largest single function in 
 save-bound: the one-pass rule covers limits written into a save, and this one can be raised later without a save break
 (the 4096 ordinal map already leaves room); (3) the data needs 56.8 % (XML1) / 73.2 % (XML2 stock, not played in the XML1
 mode) of 1,024. What W2 does instead: (a) **builder / validator error** for any shipped zone with more than 1,024
-placements (`<inst>` count per `Maps/*.XMLB`, the C2 counting rule), (b) a **runtime guard** in the DLL: the placement
-loop hook (the numbering bridge at 0x48624c already observes every placement) counts the zone's placements against the
-descriptor's `loader_placements` (1024) before the arrays are filled and refuses the zone load with a logged, named
-message instead of an overrun. The later raise to 2,048 (the <= 50 % rule for XML2 stock zones) is a runtime row with its
+placements (`<inst>` count per `Maps/*.XMLB`, the C2 counting rule), (b) a **runtime preflight** in the DLL at
+0x485724, before the nine-argument parser call fills the arrays. It counts every `<inst>` in the recursive XML tree
+against `loader_placements` (1024), refuses by zone name, destroys the XML reader and uses the native failure cleanup.
+Correction: the numbering hook 0x48624c runs **after** the arrays fill. The parser 0x461d10 already has a count == 1024
+check at 0x461d99, but silently truncates the rest; preflight turns that into a named refusal. The bridge depends on
+the CMap frame and cleanup, guarded by SHA-256 of [0x484ce0, 0x486353). The later raise to 2,048 (the <= 50 % rule for XML2 stock zones) is a runtime row with its
 own frame ledger (**RE-17**, Astra: the complete esp-displacement map of 0x484ce0 relative to the seven arrays).
 
 ### 3.7 Manager (`CMap`+0x3b0 allocation; SPEC-old 2.8)
@@ -310,6 +323,10 @@ LC seam is not installed (the game refuses to start with the LC notice, as a Pha
 bytes**; both checked by the whole-exe text gate (section 10, T2). Modules that already hook W2-affected sites
 (`objective_text`, `forced_teams`, `test_state`, SaveTrace, the save-core bridges) contribute to the same transaction
 with descriptor-derived expectations, so an overlap is a union-guard disagreement, never two patches on one site.
+**When (correction 6):** `objective_text::contribute()` exists now (2ad158b) and its standalone `install()` commits the
+same four writes through `patch_transaction`; it is **wired into the startup transaction by the W2 install at step 6**
+(when the allocation-site overlap exists), not before - joining it earlier would tie the module to every other
+startup contributor and change the configured-baseline behaviour.
 
 ---
 
@@ -404,10 +421,12 @@ side table** (decision; RE-6 CONFIRMED that **+0x1aa is occupied** by the target
 `u16 wide_index[127]`, indexed by **pool slot** = (record - (manager + 8)) / 0x1ac; the byte at +0x1a9 keeps the low
 8 bits (so every unpatched reader of the byte still sees a consistent value for indices < 256 and the test pipe can
 cross-check); the 13 readers of +0x1a9 become `wide_index[slot]` through caves; the registrar's store 0x489a01 writes
-both; **copy semantics**: the whole-record copy 0x488430 (0x4884d2 / 0x4884de copy the byte) also copies
-`wide_index[src] -> wide_index[dst]` in its bridge, and a copy whose destination is outside the pool (a stack
-temporary, if the sort uses one) goes through a one-entry shadow that the next in-pool copy consumes - **RE-16 (Astra):**
-every caller of 0x488430 and whether any destination is not a pool record; **reuse**: the pool allocation sets
+both; **copy semantics (RE-16, CONFIRMED)**: every move of a loaded-objective record happens inside the **heapsort 0x489680**
+(called at 0x489a60): three helper calls 0x488430 into two stack temporaries and six inline `rep movsd` copies of 0x1ac
+bytes back and forth between pool records and those temporaries (ledger row W2-E14-04b lists all nine). Hooking the
+helper alone never sees the copies back into the pool, so the sort is **replaced whole** by a DLL heapsort that yields
+the identical permutation and moves the wide indices with the records; the fallback is nine bridges with one shadow
+value consumed only on temporary-to-pool copies and scoped to the invocation; **reuse**: the pool allocation sets
 `wide_index[slot] = 0xffff` and the release / bitmap clear does the same (the two unrolled clears and the 16 bitmap
 sites are the hooks), so a stale index can never be read from a reused slot; **sorting**: if records are sorted by
 swapping in place the two copies above cover it; `objective_text`'s own 256-entry table is indexed by the same wide
@@ -455,9 +474,15 @@ and Grid owners); the 45 rows of SPEC-old 2.7 (R2 block) are its ledger; (d) **z
 arena** (section 2): the 11 slot sites (hash mask 0x7ff at 0x41a3fb, 0x465816, 0x46582d, 0x4658d1, 0x4658df; `mov ecx,
 0x800` clears at 0x46568d, 0x465fed, 0x4661d8, 0x466394, 0x6021b9; `cmp esi, 0x800` 0x466258), the arena bound
 `cmp ecx, 0x3800` 0x41a427, the garbage collector 0x466020 and the stream copy of the 0x5808 block in 0x484a60 /
-0x484b70 - **RE-14 (Astra):** the complete site list for the table object (`OldZoneStrings` moves to a DLL backing of
-0x28008), including the intern 0x41a3c0, the lookup 0x465be0 and every `offsets[]` / `arena` access; (e) **E9:
-`record_count` 8** (section 3.7: 3 imm8 edits + regenerated offsets +
+0x484b70 - **RE-14 (Astra, CONFIRMED sites, LIKELY complete)**: six probe masks (0x419d70 added), 11 arena-used and 20
+arena / reserved-byte displacements (0x2004 / 0x2008 / 0x2009 -> 0x8004 / 0x8008 / 0x8009), 24 base-relative accesses
+that keep their bytes, the stream sizes 0x484ac1 / 0x484ba6, the static getter / initialiser [0x6021a0, 0x6021f4)
+replaced, **the GC frame 0x466020 replaced** (0x110 -> 0x410 frame, 64 -> 256-dword bitmap, scan bound 0x40 -> 0x100,
+stack argument +0x124 -> +0x424), bounded probing with a named refusal (0x419d40 has no cycle stop and 0x41a41a
+publishes the offset before the space check), the existing `capture_compare` arena cave regenerated, and the
+`OldZoneStrings` consumers (`internal.hpp:112`, `oldsave.cpp`, `reverse.cpp`, `save_format.cpp:984` `record_zone`)
+on the descriptor - ledger rows W2-E15-14a..l and W2-L-17; 8,191 non-empty names stays an explicit supported limit;
+(e) **E9: `record_count` 8** (section 3.7: 3 imm8 edits + regenerated offsets +
 the allocation size). The capture's world-handle scan `cmp ebx, 0x100` 0x4666bd (V) -> 1024 (the World is already
 1024 handles; SPEC-new R6 "capture bound taken from the world table's size"). Risk **M** (mechanical, large).
 
@@ -503,8 +528,12 @@ pool C at +0x289c (100 x 0x10; ring +0x644, head +0x7dc, bitmap +0x7e4, count +0
   largest per-hero file 15 positions, stats table 246 entries; M = 200 holds every planned and pessimistic case
   (<= 102 shared = 51 %), so **M = 200 is final** unless a mod needs more. The registry pool is the binding table today
   (99 of 100 names in five zones, 92 in 694 of 757 zones): the 256 raise brings the worst zone to 39 %.
-- **Consumers**: `tables.cpp:557` (`engine_id = (group + 1) * 100 + position`), `api.cpp:207` (`shared = tid < 100`),
-  `reverse.cpp:190` (`e.id / 100` owner check) take the descriptor's M; **historical imports keep 100**: the legacy
+- **Consumers (correction 3, implemented)**: `tables.cpp:557` (`engine_id = (group + 1) * 100 + position`),
+  **`tables.cpp:733` (`herostat_talents`)**, `api.cpp:207` (`shared = tid < 100`), `reverse.cpp:190` (`e.id / 100`
+  owner check) and the **Python `PositionTables._tal` / preflight owner check** held M = 100 ids; the tables now keep
+  **(owner + 1, position) codes** and the engine id is computed per layout (`talent_engine_id`, `oldsave.cpp:907`:
+  `(owner + 1) x M + position`), which refuses a position >= M or a shared position >= M - 1 **by name** instead of
+  colliding, and refuses an id above 0xffff; **historical imports keep 100**: the legacy
   eras of `legacy.lcm` resolve old u16 ids with the multiplier of the era that wrote them (today always 100), and the
   LC file stores catalogue IDs (TALN), so **re-basing M changes no LC byte and never marks a save** (section 7).
   The missing-talent insertion (`save-format.md` "Missing talents on load") classifies shared talents by `< M`.
@@ -522,7 +551,7 @@ in and out of a 5-record manager (revision 1). Reasons, all V:
 
 1. The eviction path 0x466960 (called at zone leave from 0x484900 at 0x484969 - 0x484900's one caller is at
    0x48462c, in the function starting near 0x4844a0 - and from the serializer 0x484a60 at 0x484a96) clears the oldest record with **0x465ec0, which frees the record's world-item slots**
-   (flags A bit 0; SPEC-old 1.13, 0x479c10). A sixth record held outside the manager would have to carry its item
+   (flags B bit 0 gates the clear call, then flags A bit 0 gates disposal; SPEC-old 1.13, 0x479c10). A sixth record held outside the manager would have to carry its item
    instances outside the item manager too and re-insert them on swap-in: a second item lifecycle. Natively at 8, the
    engine's own lifecycle handles dependent items, names (the zone string table, 0x800 slots) and provenance.
 2. `retain_sections()` (`convert.cpp:1318`) carries only `LGCY` and unknown KEEP sections; it never merged extra `ZONE`
@@ -544,15 +573,38 @@ returns true (untraced) or the zone's vt+0xa4 "nosave" is set). Records are also
 0x5f2e70 (`campaign_reset_hook`) and clears its own capture metadata there.
 
 **R17 (does the port clear zone memory at mission boundaries like XML1's "DumpZoneMission"?)** The reset is a
-**conditional part of zone unloading**, selected by the unload method's boolean, not only a new-game path; which
-callers pass it set - and whether the port's converted mission scripts (`loadmap`, `restorelastzone`, the mansion
-returns) do so where XML1 dumped its zone memory - is **NOT FOUND statically**: **RE-15 (Astra):** every caller of
-`CMap` vt+0x30 (0x4844a0) and the value of its boolean per caller, including the script-command paths; then a
-mission-script coverage read on the port side. Revision 2's claim that records "survive mission boundaries" is
-**withdrawn**. Decision regardless of the answer: **W2 preserves XML2's actual conditional lifecycle unchanged** (the
-raise changes capacity, never when a reset or capture happens) and documents the result of RE-15 as the behaviour
-difference beside eviction (D13); the live gate (section 10, L3) walks a mission boundary and records what is
-remembered, as evidence, not as an acceptance line until RE-15 is answered.
+**conditional part of zone unloading**, selected by the unload method's boolean. **RE-15 (Astra, CONFIRMED call values,
+LIKELY exhaustive callers):** 0x4844a0 has no direct caller; its only literal reference is the vtable entry 0x6887bc
+(V). The immediate callers of vt+0x30 and the value they pass:
+
+| Caller | Reset selector (first argument) | Second argument |
+|---|---|---|
+| 0x4698cf in the CGame forwarding method 0x4698c0 (CGame vt+0x148) | forwards its own first argument | forwards its second |
+| 0x484e48 in the zone loader 0x484ce0 | **`reset = !loader_argument && ((CMap.flags_220 & 1) != 0 \|\| CMap.string_120[0] == 0)`** (initialisation 0x484dce; argument test 0x484e00 `mov al, [esp+0xf3f8]` V; flag / string tests 0x484e0b `test byte [ebp+0x220], 1` V .. 0x484e26; set-true 0x484e28 V) | 0 |
+| 0x4876a9 in the CMap teardown 0x4876a0 (vt+0x08) | 1 | 1 |
+
+The CGame forwarding method's eight virtual callers: 0x469959 (CGame vt+0x140 teardown) `(0,1)` capture, then the map
+teardown resets; 0x46e2bc (the native save loader) `(1,1)` reset; 0x5b5e45 (branch before `mainmenuexit`) `(1,1)` reset;
+0x5c9e79 `(0,1)` capture; 0x5e1eeb `(0,1)` capture; 0x5f2eaf (conditional branch in `resetgame`) `(1,1)` reset;
+0x5f3c2e `(1,0)` reset; 0x613eae (network soft reset) `(1,0)` reset. "Reset selected" stays conditional inside
+0x484370 (the manager reset runs only when the flag +0x1afd4 is clear, 0x48438f..0x4843b2), and capture keeps its
+empty-name / pending-restore / mode / `nosave` exclusions.
+
+The script connection: `loadMapKeepTeam` emits `loadmap %s 0 0` (string 0x68d30c, queue call 0x4a0d03) and
+`loadMapChooseTeam` `loadmap %s 0 1` (0x68d31c); the console `loadmap` computes **side-mission stack count > 0** at
+0x5f47dd..0x5f47eb (`call [edx+0x44]` V) and passes it at 0x5f48c9 through CGame 0x4698f0 to CMap 0x4840b0, whose
+load-map method sets flags bits 0 and 1 (0x484101 `or byte [esi+0x220], 3` V) and forwards that boolean to the loader
+at 0x484144; the zone-transition method 0x484010 clears bit 0 and sets bit 1 (0x484064 `and dl, 0xfe` V ..0x48406a);
+`restorelastzone` / the ForcedTeams return pass the non-empty-stack boolean, which suppresses the loader reset. **So an
+ordinary `loadmap` with an empty side-mission stack selects reset; a stacked return selects capture; a normal zone
+transition preserves the cache while `string_120` is non-empty.** The converted scripts use all three paths
+(`begin_mansion2.py:59/63` KeepTeam / ChooseTeam, `mansion/man2/from_backyard.py:3` `loadZone`,
+`x1/missions/end_jug_fb.py:13` `popParty`), so zone memory is **not** universally retained across missions. **NOT
+FOUND:** a proof that every converted boundary matches XML1's `DumpZoneMission` exactly (a port-side mission-script
+coverage read remains; it is a behaviour question, not a W2 layout question). Revision 2's claim that records "survive
+mission boundaries" is **withdrawn**. Decision: **W2 preserves XML2's actual conditional lifecycle unchanged** (the
+raise changes capacity, never when a reset or capture happens); the matrix above is the contract the live gate L3
+checks (an empty-stack `loadmap` forgets, a stacked return and a plain transition remember).
 
 Cached-capture metadata (`cached_captures`, provenance per record) already follows the manager's records by zone name
 and time stamp; with 8 records its vector simply holds up to 8.
@@ -575,6 +627,9 @@ Both directions take the layout explicitly (never inferred from a size; `old_str
   walk at 1332 / 1528) take the profile: the missing-talent insertion, the level catch-up and the class-growth migration
   walk W2 streams correctly (Astra 1). A `static_assert` ties `item_head_size(profile)` to `sizeof(OldItemHead<layout>)`.
 - **`convert.cpp`** `item_pools {375, 512}` -> the descriptor; the importer (`convert_slot`) stays retail-only.
+- **Profile file (correction 4)**: the profile directions validate the build's table budgets (item definitions 160), so
+  a 1024-definition build would have `profile.lcsave` refused; `old_profile_to_new` / `new_to_old_profile` get layout
+  overloads (`lcsave.hpp:314-315`) and `save_format` passes the installed layout (implemented).
 - **Python reference** (`tools/lcsave/layout.py` in legends-classic): the same W2 descriptor, so the vectors are
   exported by the reference and the C++ is checked against them (section 10, codec gate).
 
@@ -604,12 +659,18 @@ enough, because `reverse.cpp:241` accepts objective indices through 299 while th
 enhancement check proves u16 width but not the old pool, and the W2 talent mapping would misjudge an M = 100 build).
 The probe:
 
-1. runs the **target's** reverse translation (`new_to_old_stream` with `e10a2_layout`) using the **target's mappings**:
-   talent ids with M = 100 (owner check `id / 100`, shared `< 99`), the target's position / zone-record / pool checks;
-   a refusal or any non-zero `dropped` counter marks the file;
+1. runs the **target's** reverse translation (`new_to_old_stream` with `e10a2_layout`) **in probe mode** (correction 1,
+   `reverse.cpp:124-131, 680`): the target's pools, handles, positions, record count, ordinals, lists, snapshot
+   objectives and talent multiplier (M = 100: owner check, shared `< 99`), but **definition indices bounded by this
+   build's table** (a literal target pass would refuse every index > 159 and contradict the oracle), the model **not
+   written** at the target's widths, and a bit 1 the file already carries **ignored** (the probe judges content); a
+   refusal or any non-zero `dropped` counter marks the file;
 2. then applies the **engine constraints the old translation does not check**: every objective index resolved on this
    build must be **<= 255** (the old +0x1a9 byte and the 0x72b590 base table truncate above it; the old reverse accepts
-   up to 299), every enhancement record number `< 512` (the pre-W2 release default of `[Limits] ItemEnhancements`; the
+   up to 299) - **per registered objective** (correction 2): the forward writes every objective the build registers
+   into every snapshot, so **a build that registers more than 256 objectives marks every save it writes: its saves are
+   always W2-only** (and > 299 is refused by the target translation anyway); this is the conservative reading and is
+   implemented that way, every enhancement record number `< 512` (the pre-W2 release default of `[Limits] ItemEnhancements`; the
    target's actual INI is unknowable, so the release default is the contract), attached elements `<= 375`, instances
    `<= 256`, world items `<= 150` and handles `< 150`, zone records `<= 5`, every talent position `< 100` and every
    shared id `< 99` **on the target's mapping**, positions integral in -32767..32767;
@@ -625,7 +686,7 @@ tests) for the probe, not the implementation:
 | more than 5 zone records | 8 records of which 3 are empty / never captured (the writer writes only live records) |
 | more than 256 instances, 375 attached elements or 150 world items in the stream | an item whose definition index is > 159 on this build but whose catalogue id resolves on the older build too (the index is per build; the older build's own demand check decides) |
 | a world-item handle >= 150 | retained KEEP / LGCY sections (opaque, carried; layout-independent) |
-| a mission snapshot with an objective whose index is >= 256 (truncation on the old engine), an enhancement record >= 512, a talent position >= 100 or a shared talent id >= 99 | the level catch-up / class-growth optional bits (optional features) |
+| any registered objective with index > 255 on this build (every save of a build registering more than 256 objectives), an enhancement record >= 512, a talent position >= 100 or a shared talent id >= 99 | the level catch-up / class-growth optional bits (optional features) |
 
 The probe costs one extra reverse pass per write (milliseconds; the writer already re-reads its own output). Its
 rules are a table in `lcsave` keyed by target layout, so a later layout adds a column, not code.
@@ -634,8 +695,14 @@ rules are a table in `lcsave` keyed by target layout, so a later layout adds a c
 the bit's **name but not the feature** cannot exist (knowing the bit means implementing it). What W2 adds is the table
 `{bit -> "needs Legends Classic 0.4.2 (XML2 Fix 1.9) or newer"}` for its *own* future: the save menu and the log name
 the minimum version for bits this build knows about but refuses for another reason (a W2 build with `SaveLayout`
-absent, loading a bit-1 file: "this save needs the W2 save layout; enable it or use the build that wrote it"). Released
-1.8.x binaries keep their generic message; that is accepted (Astra 7, last point).
+absent, loading a bit-1 file: "this save needs the W2 save layout ([Limits] SaveLayout=w2); enable it or use the build
+that wrote it"). Released 1.8.x binaries keep their generic message; that is accepted (Astra 7, last point).
+
+**Bit-1 edge cases (correction 5, implemented):** a bit-1 file on a **RETAIL** layout shows the entity-capacity
+downgrade text first (bit 0 is always set with bit 1, and capacity is the prerequisite); **bit 1 without bit 0 is a
+damaged marker** (`container.cpp:608`: reader and decision refuse, the writer never emits it); the slot list shows
+`(needs the W2 save layout) <description>` (`rules.hpp:954`); the log / reason `w2_refused` names `[Limits]
+SaveLayout=w2` and Legends Classic 0.4.2 / XML2 Fix 1.9.
 
 ---
 
@@ -749,8 +816,9 @@ that campaign (agent-run, private desktop, the launch rules). A failure of any r
 enhancement record 255 (readable, no longer "none") and 4095; attached 375 / 376 / 4096; instances 256 / 257 / 1024;
 world item handle 149 / 150 / 255 / 256 / 1023; objective 255 / 256 / 1023 in a snapshot, in both stack frames and
 across a mission file whose base index is > 255; zone records 5 / 6 / 8 (then the 9th evicts); state positions 0.5,
--32768.5, 40000.0 (bit-exact); talent ids at M = 200 for stats index 1 and 21; a mission-boundary walk (R17: zones of
-the previous mission still remembered); each case loaded on an E10A2 build (refused by name or loaded, per section 7's
+-32768.5, 40000.0 (bit-exact); talent ids at M = 200 for stats index 1 and 21; the **loader-condition matrix** of
+section 5 (an empty-stack `loadmap` resets the cache, a stacked `restorelastzone` return and a plain zone transition
+keep it; the manager flag +0x1afd4 set suppresses both); each case loaded on an E10A2 build (refused by name or loaded, per section 7's
 oracle) and on the W2 build.
 
 What fixtures **cannot** certify (Astra 8): pointer-flow completeness of the relocated pools (U16) - covered by the
@@ -793,9 +861,9 @@ after load (G3 in game: compare an item's stats before save and after reload), c
 | RE-11 | The 27 immediates | **CONFIRMED**: pools A / B / C, common fullness 0x4c0115, M, cap, unrelated 0x4c07c5; plus the missed endpoint 0x4c0644 (V) | 4.7 |
 | RE-12 | Registry layout | **CONFIRMED**: 0x3228 at 0x4c0584 (V), ctor 0x4c0370 (V), singleton 0x77339c, three pools + index tables (A) | 4.7 |
 | RE-13 | 0x484370's slot and callers | **CONFIRMED chain**: vt+0x34 (V), caller 0x484627 in the unload method 0x4844a0 = vt+0x30 (V), zone loader 0x484e48 (V); mission-wide behaviour **NOT FOUND** | 5 |
-| **RE-14** (open) | Complete site list of the zone-string table object (slots 0x800 -> 0x2000, arena 0x3800 -> 0x20000): intern 0x41a3c0, lookup 0x465be0, GC 0x466020, the stream copies in 0x484a60 / 0x484b70, every `offsets[]` / `arena` access | 4.6 (d) |
-| **RE-15** (open) | Every caller of `CMap` vt+0x30 (0x4844a0) with the value of its boolean, including the script-command paths (`loadmap`, `restorelastzone`, mansion returns); then the port's mission-script coverage | 5 (R17), L3 wording |
-| **RE-16** (open) | Every caller of the objective copy 0x488430 and whether any destination is outside the loaded-objective pool (stack temporaries in a sort) | 4.5 side-table shadow |
+| RE-14 | Zone-string table sites | **CONFIRMED sites, LIKELY complete** (A, report 0822): six masks incl. 0x419d70, 31 displaced fields, 24 base-relative accesses, stream sizes, static getter, the GC frame, unbounded probing, `capture_compare` cave, consumers (V: 0x419d70, 0x484ac1 / 0x484ba6, 0x466020 / 0x46602e / 0x4661b7 / 0x466052 / 0x4661ff, 0x41a414, 0x41a42f, 0x4656a1, 0x6021a0 / 0x6021c0) | 4.6 (d), rows W2-E15-14a..l, W2-L-17 |
+| RE-15 | Callers of `CMap` vt+0x30 and their boolean | **CONFIRMED values, LIKELY exhaustive** (A): three immediate callers, the loader condition, eight CGame callers, the `loadmap` / stack-count script connection (V: 0x6887bc, 0x484e00, 0x484e0b, 0x484e28, 0x4698cf, 0x4876a9, 0x5f47dd, 0x484101, 0x484064) | 5 (matrix), G4, L3 |
+| RE-16 | Objective copy destinations | **CONFIRMED** (A): all three 0x488430 callers are in the heapsort 0x489680 (called at 0x489a60), destinations are stack temporaries, plus six `rep movsd` copies (V: the three calls, the caller, the six `mov ecx, 0x6b`) | 4.5, row W2-E14-04b |
 | C1, C2 (done: `census-c1-c2.md`) | C1: team bonuses 0, immunities 14, shared 63, largest hero file 15 -> M = 200 final, pool 256 needed (99 of 100 today); C2: largest XML1 zone 582 placements (XML2 stock 750), loader arrays 1,024 unbounded -> not raised in W2, validator + runtime guard (3.6) | 4.7, 3.6 |
 | C3 (collection list done; the runs are G3) | peak instances / attached / world items / objectives / definitions / talents / zone-string names per real save; the probe verdict per file | G3 |
 | **RE-17** (open, later runtime row) | esp-displacement map of the zone loader 0x484ce0 relative to its seven 0x400 arrays, for the 2,048 raise after W2 | not W2 |
@@ -809,12 +877,12 @@ and a live-gate line, RE-16 decides whether the side table's one-entry shadow is
 
 | Step | What | Gate | Who | Risk |
 |---|---|---|---|---|
-| 1 | Descriptors: layout.hpp `w2_layout` (parameterised state size / record count), rules.hpp `w2_profile`, layout identity (3.9), Python reference mirror | G1 static asserts, parity of the three layouts | Sol + Sonnet | low |
-| 2 | Converter both directions at W2, walkers, demand caps, the target-aware representability probe and bit 1, named refusal table; the three consumer modules on the descriptor (W2-L-10..12) | G1 (vectors, round trips, legacy vectors), G4 fixtures | Sol | low-M (many fields, all specified) |
-| 3 | Ledger generator for E15 + E9 (record 0x20, 8 records, R6 counts, `CSmartEntMgr` method family, zone-string table 8192 / 0x20000), position functions, record clear + disposal adapter, capture bound, loader runtime guard | G2 T1-T4, T9 | Sol (RE-8 / RE-9 answered; Astra RE-14 first for the string table) | M (large, mechanical) |
+| 1 | **DONE (6f543e6)**: descriptors (`NativeShape`, `w2_layout`, `w2_profile`), layout identity, Python mirror | G1 static asserts, parity of the three layouts (77 parity cases, 0 failures) | Sol + Sonnet | low |
+| 2 | **DONE (6f543e6, 2ad158b)**: converter both directions, walkers, demand caps, the probe in probe mode and bit 1 with its edge cases, named refusals, profile overloads, talent codes, the three consumer modules on the layout view; the `[Limits] SaveLayout` key and combination table wait for the W2 install (nothing can select W2 yet, the baseline is untouched) | G1 (vectors, round trips, legacy vectors, 74 W2 check sites, fuzz 2000 x 2), G4 fixtures | Sol | low-M |
+| 3 | Ledger generator for E15 + E9 (record 0x20, 8 records, R6 counts, `CSmartEntMgr` method family, zone-string table 8192 / 0x20000 incl. the GC frame and `capture_compare`'s arena cave, W2-E15-14d), position functions, record clear + disposal adapter (non-owning slots 0xffff), capture bound, loader runtime guard; publish the string-table backing to `zone_strings_object` | G2 T1-T4, T9 | Sol (RE-8 / 9 / 14 answered) | M (large, mechanical) |
 | 4 | E3c pools and entity u16 slot (owner-specific), disposal chain; E3b pool; E3 records + sentinel + pickers to the RE-4 spec | T7, T8, T6, T9 disposal, guard-page proof | Sol (RE-4 / RE-5 answered) | M-L (99 pool sites, shared helper, picker reimplementation) |
 | 5 | E2 definitions (RE-1..3 answered: u16 count in place, 3 truncating callers + success return, reward u16 at +8) | T5, text gate | Sol, Opus review | **L** (the largest mixed inventory) |
-| 6 | E14 objectives: side table, pool relocation shared with objective_text, snapshot 0x540 / stack 0xa88, ForcedTeams + test_state on the descriptor | T10 | Sol (Astra RE-16 first for the copy destinations) | M |
+| 6 | E14 objectives: side table, heapsort replacement, pool relocation shared with objective_text (**wire `objective_text::contribute()` into the startup transaction here**), snapshot 0x540 / stack 0xa88; ForcedTeams + test_state already on the view | T10 | Sol | M |
 | 7 | E7: whole-registry relocation at 256, generation loop replaced, eight-dword clears, M = 200 (helper tail, endpoint cave, cap thunk), consumers, builder V44 + position rule | T11 | Sol (RE-10..12 and census C1 answered) | M |
 | 8 | Rule 47, builder key, refusal texts, test-pipe status (`layout W2; defs n/1024; enh n/4096; att n/4096; inst n/1024; world n/1024; obj n/1024; talents n/256; zones n/8`) | T12, T13 | Sol + Sonnet | low |
 | 9 | G3 real saves (the C3 list: collection, offline runs, census table), G4 in game, live runs (cold load, zone change, mission boundary as evidence, co-op) | G3, G4 | Sonnet (collection + offline), Sol (live), owner's own test last | - |
@@ -824,8 +892,8 @@ Risks, ranked: E2 (mixed inventory; a missed byte consumer gives a wrong item si
 guard-page proof are the answer) > E3c (99 sites plus a shared bitset helper - the clone must leave the original for
 its other callers) > E14 (snapshot and stack relocation touch three copies and two stack frames) > E15 / E9 (large
 but generated; the risk is a missed 0x18 stride - RE-8) > E3 pickers (semantic reimplementation - T6 differential) >
-E7 (whole-registry relocation; the five-at-a-time loop) > E3b (ledger complete, sweep done). Open RE-14 / 15 / 16 do not
-gate the start: each has a fallback the ledger already names (section 15).
+E7 (whole-registry relocation; the five-at-a-time loop) > E3b (ledger complete, sweep done). RE-14 / 15 / 16 are
+answered (report 0822) and folded into the ledger; no RE gates the start.
 
 ---
 
@@ -847,11 +915,11 @@ gate the start: each has a fallback the ledger already names (section 15).
 | # | Finding | Answer |
 |---|---|---|
 | 1 | Eviction can free the wrong world item (0x465ec0 -> 0x479c10 -> 0x4655d0 byte -> 0x479ad0) | 3.5 "Disposal adapter" (chain re-read: 0x465ee7, 0x479c2b, 0x479aed, 0x479af5 V); T9 disposal line; ledger rows W2-E3c-10..12 |
-| 2 | Objective widening overwrites +0x1aa; objective_text / ForcedTeams / test_state keep literals | 4.5: side table with pool-slot key, copy / reuse / sort contract, RE-16 for stack temporaries; the three modules read the descriptor and join the transaction (3.1, 3.9); rows W2-L-10..12, W2-E14-04 |
+| 2 | Objective widening overwrites +0x1aa; objective_text / ForcedTeams / test_state keep literals | 4.5: side table with pool-slot key; the heapsort 0x489680 (nine moves, RE-16) replaced whole or bridged with an invocation-scoped shadow; the three modules read the descriptor and join the transaction (3.1, 3.9); rows W2-L-10..12, W2-E14-04a/b |
 | 3 | E7: endpoint 0x4c0644, five-at-a-time loop 0x4bfa20..0x4bfaf8, four-dword clears | 4.7: endpoint cave, loop replaced whole, eight-dword clears, whole-registry relocation from RE-12's layout; rows W2-E7-01..07 |
-| 4 | A reverse dry run does not prove old-engine representability | 7: target-aware probe with the engine constraints (objective <= 255, records < 512, pools, positions), the target's talent mapping (M = 100), drops and feature gates; row W2-L-08 |
-| 5 | Name storage is a smaller independent ceiling | Section 2 / 3.1 / 4.6 (d): 8192 slots, 0x20000 arena, saved 0x28008; stream bound recomputed (3.8); RE-14 for the site list; row W2-E15-14 |
-| 6 | R17 overstated | 5: conditional unload lifecycle described from the bytes; "survive missions" withdrawn; RE-15; L3 is evidence, not acceptance, until answered |
+| 4 | A reverse dry run does not prove old-engine representability | 7: target-aware probe in probe mode (definition indices per build) with the engine constraints (objective > 255 per registered objective, records < 512, pools, positions), the target's talent mapping (M = 100), drops and feature gates, and the bit-1 edge cases; row W2-L-08 (done) |
+| 5 | Name storage is a smaller independent ceiling | Section 2 / 3.1 / 4.6 (d): 8192 slots, 0x20000 arena, saved 0x28008; stream bound recomputed (3.8); RE-14's full inventory incl. the GC frame and bounded probing; rows W2-E15-14a..l, W2-L-17 |
+| 6 | R17 overstated | 5: the loader-condition matrix and the eight CGame callers (RE-15); "survive missions" withdrawn; G4 / L3 check the matrix |
 | 7 | Explicit position < M rule | 2 / 4.7: `p < M`, shared `< M-1`, `298 x M - 1 <= 65535` -> M in 101..219; builder validator refuses beyond; pool capacity bounds registrations only |
 
 Also folded: the E10A2 offsets of 3.7 (0x809a8 / 0x809ac / 0x809b0 / 0x80c1c / 0x80c20), the stream bound (10 tags,
@@ -868,9 +936,11 @@ error and a runtime guard; RE-17 for the later raise), census C3 (the G3 collect
   fallback (side table / cave); the union-host tests write and read the widened fields through retail code.
 - The picker semantics (RE-4, specified) and `CSmartEntMgr`'s method family (RE-9, enumerated): whole-function
   replacements are gated by differential tests against the retail code on the union host.
-- When XML2 resets zone memory beyond the chain found (RE-15): the decision (preserve the conditional lifecycle
-  unchanged) does not depend on it; L3 records what happens and RE-15 names the callers.
-- The zone-string site list (RE-14) and the objective copy destinations (RE-16): both complete a known-shape ledger.
+- Whether every converted mission boundary matches XML1's `DumpZoneMission` (RE-15 gives the engine's matrix and the
+  script paths, not a per-boundary proof): a behaviour question outside the layout; W2 preserves the engine's conditions
+  unchanged and L3 checks the matrix.
+- RE-14's inventory is LIKELY complete (direct-reference and literal sweeps): the guard-page proof on the retired
+  0xa26c30 object catches any indirect reader; 8,191 non-empty names is an explicit supported limit.
 - The zone loader's 1,024 placement arrays stay unbounded natively; the validator error and the runtime guard make an
   overrun impossible for shipped content and loud for mods (3.6).
 - The in-game truths no fixture certifies (bonus application after load, zone transitions, co-op): G3 on the real
@@ -890,22 +960,24 @@ guard expects (bytes quoted where re-read in this pass, otherwise the SPEC-old r
 
 | ID | Site | Retail | W2 | Kind | Status | Check |
 |---|---|---|---|---|---|---|
-| W2-L-01 | `lcsave/layout.hpp` `make_native_layout` | state size and record count constants | parameters `state_record_size`, `record_count`, `zone_string_slots`, `zone_arena`; `w2_layout` = section 3.1; static asserts of 3.6 / 3.7 | S | V | G1 |
-| W2-L-02 | `save_format_rules.hpp` `native_profile` | `retail_profile`, `e10a2_profile` | `w2_profile` with the same fields; cross static asserts against `w2_layout` | S | V | G1 |
-| W2-L-03 | `save_format.cpp:2056` | `usable_end` comparison | select by `profile.name` through `lcsave::native_layout(id)`; veto on null / mismatch; `lc_known_required_features = layout->feature_bits` | S | V | G1, T12 |
-| W2-L-04 | `oldsave.cpp` item head / instance head / snapshot / state record / zone count (`ceil_zone_records`, `internal.hpp:28`) | retail widths, `ceil_zone_records = 5` | layout-driven widths; count <= `native.record_count` | S | V | G1 |
-| W2-L-05 | `reverse.cpp:100, 241, 446, 505, 909`; `api_engine.cpp:453`; `save_format.cpp:1225-1228`; `convert.cpp:25` | literal 256 / 375 / 150 / 300 / 5 / {375, 512}; i16 position refusal | descriptor values; W2 positions stored as floats; narrowing messages name the layout's limit | S | V | G1, G4 |
-| W2-L-06 | `save_format_rules.hpp:1143-1240, 1332, 1528` (`item_head_size`, `instance_fixed`, equipped walks) | 0x165 / 5 | `item_head_size(profile)`, `instance_fixed(profile)`; static assert against `OldItemHead` | S | V | G1 |
-| W2-L-07 | `tables.cpp:557`, `api.cpp:207`, `reverse.cpp:190`, missing-talent insertion | `* 100`, `< 100`, `/ 100` | descriptor M; legacy eras keep their own M (100) | S | V | T11, G1 |
-| W2-L-08 | Representability probe (section 7) | - | `representable(file, e10a2)`: target translation with target mappings + engine constraints + drops + feature gates; sets bit 1; logs the rule | S | - | G4 oracle |
-| W2-L-09 | `container.cpp:602`, `rules.hpp:925`, slot list | generic "needs a newer version" | known-bit name table (bit 1 -> "Legends Classic 0.4.2 / XML2 Fix 1.9"; "SaveLayout absent" wording) | S | V | G4 |
-| W2-L-10 | `objective_text.cpp` / `_rules.hpp` (`state_bytes 0x72b118`, `index_offset 0x1a9`, 256 entries, allocation site) | literals | reads `wide_index[slot]`, table 1024, state array from the descriptor; contributes its allocation-site expectation to the transaction | S | A | T10, T2 |
-| W2-L-11 | `forced_teams_rules.hpp:428-433` (`side_record_size`, `side_count_offset`, names offset) | 0x26c / 0x4dc / 0xa4 | descriptor snapshot size and count offset (0x540 / 0xa84 under W2) | S | V | T10 |
-| W2-L-12 | `test_state_rules.hpp:27-29, 502-512` | byte index, "<= 75", 0x72b118 | descriptor-driven | S | V | T10 |
-| W2-L-13 | Python reference `tools/lcsave/layout.py` + vector export | RETAIL / E10A2 | W2 descriptor, `w2-*` modes | S | - | G1 |
+| W2-L-01 | `lcsave/layout.hpp` `make_native_layout` | state size and record count constants | parameters `state_record_size`, `record_count`, `zone_string_slots`, `zone_arena`; `w2_layout` = section 3.1; static asserts of 3.6 / 3.7 | S | **done 6f543e6** | G1 |
+| W2-L-02 | `save_format_rules.hpp` `native_profile` | `retail_profile`, `e10a2_profile` | `w2_profile` with the same fields; cross static asserts against `w2_layout` | S | **done 6f543e6** | G1 |
+| W2-L-03 | `save_format.cpp:2056` | `usable_end` comparison | select by `profile.name` through `lcsave::native_layout(id)`; veto on null / mismatch; `lc_known_required_features = layout->feature_bits` | S | **done 6f543e6** | G1, T12 |
+| W2-L-04 | `oldsave.cpp` item head / instance head / snapshot / state record / zone strings / world slots / zone count (`ceil_zone_records`, `internal.hpp:28`) | retail widths, `ceil_zone_records = 5` | layout-driven widths; count <= `native.record_count`; non-owning records carry slot 0xffff (3.5) | S | **done 6f543e6** | G1 |
+| W2-L-05 | `reverse.cpp:100, 241, 446, 505, 909`; `api_engine.cpp:453`; `save_format.cpp:1225-1228`; `convert.cpp:25` | literal 256 / 375 / 150 / 300 / 5 / {375, 512}; i16 position refusal | descriptor values (`demand_refusal`); W2 positions stored as floats; narrowing messages name the layout's limit | S | **done 6f543e6** | G1, G4 |
+| W2-L-06 | `save_format_rules.hpp:1143-1240, 1332, 1528` (`item_head_size`, `instance_fixed`, equipped walks) | 0x165 / 5 | `item_head_size(profile)`, `instance_fixed(profile)`; static assert against `OldItemHead` | S | **done 6f543e6** | G1 |
+| W2-L-07 | `tables.cpp:557` and **`:733` (`herostat_talents`)**, `api.cpp:207`, `reverse.cpp:190`, missing-talent insertion, the Python `PositionTables._tal` / preflight owner check | `* 100`, `< 100`, `/ 100` ids in the tables | tables keep (owner + 1, position) **codes**; `talent_engine_id(code, layout)` = `(owner + 1) x M + position`, refusing position >= M / shared >= M - 1 / id > 0xffff by name; legacy importer keeps 100 | S | **done 6f543e6** | T11, G1 |
+| W2-L-08 | Representability probe (section 7): `reverse.cpp:955` `representable`, probe mode `reverse.cpp:124-131, 680`, saver `convert.cpp:1430-1446` | - | `representable(file, e10a2)` in probe mode (definition indices per build, model not written at target widths, carried bit 1 ignored) + engine constraints (objective > 255 **per registered objective**, records >= 512, pools, positions) + target talent mapping + drops + feature gates; sets bit 1 exactly when it fails; names the rule | S | **done 6f543e6** | G4 oracle |
+| W2-L-09 | `container.cpp:602, 608`, `rules.hpp:640-643, 954`, `typed_registry.cpp`, slot list | generic "needs a newer version" | `w2_refused` names `[Limits] SaveLayout=w2` and 0.4.2 / 1.9; slot list "(needs the W2 save layout) <description>"; RETAIL + bit 1 -> the downgrade text; bit 1 without bit 0 -> "damaged marker" refusal, never written | S | **done 6f543e6** | G4 |
+| W2-L-10 | `objective_text.cpp` / `_rules.hpp` (`state_bytes 0x72b118`, `index_offset 0x1a9`, 256 entries, allocation site) | literals | reads the layout's objective view (1024-entry table by global index, index / state array from `save_layout_view`); `contribute()` provided, standalone `install()` commits through `patch_transaction` (same four writes, same bytes); **the W2 install wires `contribute()` into the startup transaction at step 6** when the allocation-site overlap exists | S | **done 2ad158b** (step-6 wiring open) | T10, T2 |
+| W2-L-11 | `forced_teams_rules.hpp:428-433` (`side_record_size`, `side_count_offset`, names offset) | 0x26c / 0x4dc / 0xa4 | descriptor snapshot size and count offset (0x540 / 0xa84 under W2) | S | **done 2ad158b** | T10 |
+| W2-L-12 | `test_state_rules.hpp:27-29, 502-512` | byte index, "<= 75", 0x72b118 | descriptor-driven | S | **done 2ad158b** | T10 |
+| W2-L-13 | Python reference `tools/lcsave/layout.py` + vector export | RETAIL / E10A2 | W2 descriptor, `w2-*` modes | S | **done 6f543e6** (legends-classic `tools/lcsave/*`, `export_lcsave_typed_vectors.py` `w2-reverse` / `w2-bit1`) | G1 |
 | W2-L-14 | Builder `fix_ini.py`, V44, key lists, harness; zone validator | - | `SaveLayout=w2`, `ItemEnhancements=4096`; validator refuses talent position >= M, shared >= M-1, definitions > 1024, **any zone with > 1024 placements** (C2 counting rule) | S | - | builder tests |
 | W2-L-15 | Agreement rule 47 (section 8); status line | - | registered only with W2 installed; values as 8 | S | - | T13 |
-| W2-L-16 | Zone loader runtime guard (3.6): the placement-loop hook at 0x48624c | no bound on the seven 0x400 arrays | count placements against `loader_placements` (1024) before the arrays fill; refuse the zone load with a named log line | S/C | V (census C2 disassembly) | T9 (a 1,025-placement synthetic zone refused) |
+| W2-L-16 | Zone loader preflight (3.6): 0x485724, CMap owner [0x484ce0,0x486353) | parser 0x461d99 silently truncates at 1024; numbering 0x48624c is too late | count recursive `<inst>` nodes before parser fills arrays; refuse by zone name and use native reader/array cleanup | S/C | implemented step 3 | T9 (1024 accepted, 1025 refused before parser), T3 (outside-hook frame mutation) |
+| W2-L-17 | `save_format.cpp:984` `record_zone` (DLL consumer of the zone-string table): reads the static object **0xa26c30** directly with 2,048 slots and the retail displacements (+0x2004, +4 + slot*4, +0x2008) | hard-coded retail object | reads through the published backing pointer and the descriptor's slot count / arena-used / arena offsets (W2: the DLL backing, 0x2000 slots, +0x8004 / +0x8008) | S | **done** (`zone_strings_object`, 0xa26c30 until the W2 install publishes its backing) | T9 (a record whose name lives in slot > 2047 is named) |
+| W2-L-18 | Profile file directions `old_profile_to_new` / `new_to_old_profile` (`lcsave.hpp:314-315`, `api_engine.cpp:102, 125`, `reverse.cpp:941`), `save_format` call sites | retail-only; refuses a build with > 160 definitions | layout overloads; `save_format` passes the installed layout | S | **done 6f543e6** | G1 (a 1024-definition build's `profile.lcsave` round-trips) |
 
 ### 15.2 Zone records, manager, strings, smart manager (E15 / E9)
 
@@ -916,15 +988,26 @@ guard expects (bytes quoted where re-read in this pass, otherwise the SPEC-old r
 | W2-E15-03 | 0x4669b0 `8d96b8ab0000` | record 1 time stamp 0xabb8 | 0x48708 | R | S | T9 |
 | W2-E15-04 | 0x48733d `68dcaf0100` and the Phase A backing claim at 0x487344 / 0x487362 | 0x1afdc (E10A2 0x80c24) | 0x122190 backing | R | S | T9 |
 | W2-E15-05 | 0x4666bd `81fb00010000` | capture scans handles < 0x100 | < 1024 | I | V | T9 |
-| W2-E15-06 | scaled 3x8 addressing 0x465c2f/32, 0x465c87/8a, 0x4666ab/ae, 0x466736/739, 0x466838/83b/83f | stride 0x18 as 3x8 | stride 0x20 (shift or regenerated scale) | C/R | A | T9, T4 |
-| W2-E15-07 | stride advances 0x465f17 `83c618` (V), 0x4660ee, 0x4662fd, 0x466415 | `add r, 0x18` | 0x20 | I | A | T9 |
+| W2-E15-06 | scaled 3x8 addressing 0x465c2f/32 (+4 added at 0x465c3e), 0x465c87/8a, 0x4666ab/ae, 0x466736/739, 0x466838/83b/83f | stride 0x18 as 3x8 | stride 0x20 (shift or regenerated scale) | C/R | A | T9, T4 |
+| W2-E15-07 | stride advances 0x465f17 `83c618` (V), 0x4660ee, 0x4662fd, 0x466415 | `add r, 0x18` | 0x20; 0x465f17 is in the whole record-clear replacement, 0x4660ee / 0x4662fd / 0x466415 in the copied whole GC owner; no external advance | I/F | implemented step 3 | T9, T4 |
 | W2-E15-08 | 0x465ec0 record clear (0x465ec0..0x465f8f) | per-record clear, 256-slot map clear 0x465f32, disposal call 0x465ee7 | replaced whole: W2 record fields (slot 0xffff, floats 0), 4096 map clear, calls the disposal adapter (W2-E3c-10) | F | V | T9 |
 | W2-E15-09 | constructors / clears 0x465e70, 0x4664a0, 0x487610; vector strides 0x48759a, 0x48764a, 0x48766a | 0x18 records | 0x20 records, new fields initialised | R/C | A | T9 |
-| W2-E15-10 | smart-capture copies 0x46678b..0x46679f; restore copies 0x46686c..0x466882 (24-byte stack record); 0x4b7630 copy | 24-byte copies | 32-byte copies; stack frame grown | C | A | T9 |
+| W2-E15-10 | smart-capture copies 0x46678b..0x46679f; restore copies 0x46686c..0x466882 (24-byte stack record); loop clear [0x466906,0x466932), funclet 0x673630; 0x4b7630 dead under E15-13 | 24-byte copies | 32-byte copies; stack frame grown | C | A | T9 |
 | W2-E15-11 | 0x4656c0 packer, 0x4654f0 reader (`0fbf4e12` 0x46550c, `0fbf5614` 0x465526) | i16 round / clamp | F: store / load 3 x f32 at +0x14 bit-exact | F | V | T9 |
 | W2-E15-12 | bounds 0x46667a, 0x46668a, 0x4666f3 and `save_core_rules::capture_bridges` | 1024 / 1024 / 1024 (E10A2) | 4096 / 2048 / 2048 from the profile | R | S | T9 |
-| W2-E15-13 | `CSmartEntMgr` via getter 0x4b76f0; vtable 0x68e440 (8 slots: 0x4b76d0, 0x4b7100, 0x4b7000, 0x4b70e0, 0x4b6fc0, 0x4b6fb0, 0x4b6ff0, 0x4b75c0); SPEC-old 2.7 R2 block (45 rows) | static 768 x 0x18, count +0x4868 | DLL object: 2048 x 0x20 at +0, bitmap +0x10008, count +0x10108, size 0x1010c; whole method family; owner hash SHA-256[0x4b6e70,0x4b7744) = 1969cfd9...04a4b | D/F | A | T9 (differential <= 768) |
-| W2-E15-14 | zone-string table: mask sites 0x41a3fb, 0x465816, 0x46582d, 0x4658d1, 0x4658df; clears 0x46568d, 0x465fed, 0x4661d8, 0x466394, 0x6021b9; bound 0x466258; arena bound 0x41a427 `81f900380000`; intern 0x41a3c0, lookup 0x465be0, GC 0x466020, stream copies in 0x484a60 / 0x484b70 | 0x7ff / 0x800 / 0x3800 / 0x5808 block | 0x1fff / 0x2000 / 0x20000 / 0x28008 block in a DLL backing | R/D | S + **RE-14 open** | T9 (strings) |
+| W2-E15-13 | `CSmartEntMgr` via getter 0x4b76f0; vtable 0x68e440 (8 slots: 0x4b76d0, 0x4b7100, 0x4b7000, 0x4b70e0, 0x4b6fc0, 0x4b6fb0, 0x4b6ff0, 0x4b75c0); SPEC-old 2.7 R2 block (45 rows) | static 768 x 0x18, count +0x4868 | DLL object: 2048 x 0x20 at +8 (vtable +0, cursor +4), bitmap +0x10008, count +0x10108, size 0x1010c; whole method family; append-copy 0x4b75c0 refuses at 2048 (retail has no bound); owner hash SHA-256[0x4b6e70,0x4b7744) = 1969cfd9...04a4b | D/F | A | T9 (differential <= 768) |
+| W2-E15-14a | zone-string object layout (`OldZoneStrings`): generation +0, offsets +4, arena-used, arena | 0x800 x u32, used +0x2004, arena +0x2008, 0x5808 | DLL backing **0x28008**: generation +0, 0x2000 offsets at +4, **arena-used +0x8004, arena +0x8008**; generation encoding, 24-bit handle index, reserved slot 0 (value 1) and initial arena-used 2 preserved | D | A (RE-14) | T9 (strings) |
+| W2-E15-14b | hash / probe masks: **0x419d70** `81e3ff070000` (collision-probe helper called by intern, V), 0x41a3fb `25ff070000` (V), 0x465816, 0x46582d, 0x4658d1, 0x4658df | `and r, 0x7ff` | `and r, 0x1fff` (six sites, same length) | I | V + A | T9 |
+| W2-E15-14c | offset-table clears 0x46568d, 0x465fed, 0x4661d8, 0x466394, 0x6021b9 (`mov ecx, 0x800`); GC slot bound 0x466258 (`cmp esi, 0x800`) | 0x800 | 0x2000 (imm32 in place) | I | S + A | T9 |
+| W2-E15-14d | arena bound 0x41a427 `81f900380000` - **already a cave of the LC seam**: `save_core_rules.hpp:138` `capture_compare` replays the retail 0x3800 | 0x3800 replayed by the existing capture bridge | the bridge replays the descriptor's `zone_arena` (0x20000): regenerate that cave, do not add a second patch on the site | R | V (source) + A | T9, T2 |
+| W2-E15-14e | arena-used displacement 0x2004 -> **0x8004** at 0x41a414 `8b8304200000` (V), 0x41a41e, 0x41a446, 0x4656a7, 0x465ac5, 0x465b2f, 0x465b47, 0x465bb5, 0x465bc9, 0x46600a, 0x4661f4 (11) | +0x2004 | +0x8004 (disp32 in place) | R | V (one) + A | T9 |
+| W2-E15-14f | arena displacement 0x2008 -> **0x8008** at 0x419d62, 0x41a42f `8dbc1808200000` (V), 0x46569b, 0x4657d7, 0x465882, 0x4658aa, 0x4658f2, 0x465af0, 0x465bfd, 0x465cc3, 0x465ce6, 0x465dd4, 0x465ffe, 0x4661e8, 0x466234, 0x46623d, 0x4668b0 (17); second reserved arena byte 0x2009 -> **0x8009** at 0x4656a1 `888209200000` (V), 0x466004, 0x4661ee (3) | +0x2008 / +0x2009 | +0x8008 / +0x8009 (disp32 in place) | R | V (two) + A | T9 |
+| W2-E15-14g | offset-table accesses that keep `base + 4 + index*4` (no displacement change; they need the right backing and index): probe / intern 0x419d4b, 0x419d56, 0x419d7a, 0x41a41a; rehash / compaction 0x465820, 0x465844, 0x4658d8, 0x465913; lookup consumers 0x465bf9, 0x465cbf, 0x465ce2, 0x465dd0, 0x4668ac; GC 0x46622c, 0x466251, 0x4662ac, 0x4662d9, 0x4662f1, 0x466351, 0x46637b; clear bases / reserved-slot stores 0x465686 / 0x465695, 0x465fe8 / 0x465ff7, 0x4661d1 / 0x4661e0, 0x46638f / 0x46639d | retail backing | unchanged bytes; verified by the guard-page proof (W2-T-GP) that none still reaches 0xa26c30 | - | A | T9, W2-T-GP |
+| W2-E15-14h | stream sizes 0x484ac1 `6808580000` (save) and 0x484ba6 `6808580000` (load) (V) | `push 0x5808` | `push 0x28008` (imm32 in place); the `[MAP: ZONESTRINGS]` block is 0x28008 bytes in the W2 stream (3.8) | I | V | T9, G1 |
+| W2-E15-14i | static getter / initialiser **[0x6021a0, 0x6021f4)** (`test byte [0xa2c438], 1` V; backing addresses embedded at 0x6021c0 `bf346ca200` (V), 0x6021c5, 0x6021cd, 0x6021d7, 0x6021dd, 0x6021e3, 0x6021ee) | returns and clears the static 0xa26c30 object | F: returns and initialises the DLL backing (a larger clear against retail storage would overwrite adjacent globals) | F | V + A | T9 |
+| W2-E15-14j | **GC frame 0x466020** (`sub esp, 0x110` V; releases 0x4661ff `add esp, 0x110` V, 0x466496): one bit per string slot: bitmap clear 0x46602e `mov ecx, 0x40` (V), scan bound 0x4661b7 `83f840` (V), bitmap base 0x466033 with indexed accesses 0x46607e, 0x466082, 0x4660b9, 0x4660bd, 0x4660da, 0x4660e5, 0x466154, 0x46615d, 0x46618f, 0x46619a, 0x4661b0, 0x466221; stack argument `[esp+0x124]` at 0x466052 (V), 0x466292, 0x4663b7 | 0x110 frame, 64-dword bitmap, bound 0x40, arg +0x124 | **frame 0x410, 256-dword bitmap (0x400 bytes at esp+0x20), scan bound 0x100 (`80fc01`, cmp ah,1; same length), stack argument [esp+0x424]**: a whole-frame replacement under a region hash of [0x466020, 0x46649f), as Phase A's caller-frame replacements; the copied body also regenerates every Phase A save operand for W2 | F | implemented step 3 | T9 (GC with slots above 2047), T4 (copied-body offsets/strides) |
+| W2-E15-14k | **bounded probing and failure contract**: the probe 0x419d40 has **no full-cycle stop** (it loops until a match or a free slot), and the intern publishes the offset at 0x41a41a **before** the arena space check at 0x41a427 | unbounded probe; offset published before the space check | the intern / probe pair is replaced (F, region hash) so that a full table (8,191 non-empty names) and a full arena are **named refusals** that publish nothing: the probe counts tries against `zone_string_slots` and the offset is written only after the space check succeeds; the capture flag (incomplete) is raised and the write refused, as a full state list is today | F | A | T9 (the 8,192nd name refused by name; collision-full table) |
+| W2-E15-14l | `OldZoneStrings` consumers in the library and DLL: `lcsave/internal.hpp:112` (fixed `OldZoneStrings` member), `oldsave.cpp:246, 281, 558, 661` (fixed copies / stream reads and writes), `reverse.cpp:288-309` (intern with `native.zone_string_slots` / `zone_arena`: already descriptor-driven, the struct is not) | fixed 0x5808 struct | layout-driven representation (slot count and arena from the descriptor; retail / E10A2 keep 0x5808) | S | A | G1 |
 
 ### 15.3 Item instances, world slots, attached pool, enhancement records (E3c / E3b / E3)
 
@@ -970,7 +1053,8 @@ guard expects (bytes quoted where re-read in this pass, otherwise the SPEC-old r
 | W2-E14-01 | 0x4885c0 `817c241c2b010000` | 0x12b | 0x400 | I | V | T10 |
 | W2-E14-02 | 0x4899e0 `83bf787d00004b` | 0x4b | 0x7f | I | V | T10 |
 | W2-E14-03 | loaded-objective pool manager+8: stride rows (17), bitmap / count (16), unrolled clears (2) (SPEC-old 2.6); the allocation site shared with `objective_text` | 75 x 0x1ac | 127 x 0x1ac relocated; clears as caves; one union expectation with objective_text | D/R/C | S | T10 |
-| W2-E14-04 | side table `wide_index[127]` (D); readers of +0x1a9 (13 sites, SPEC-old 2.6), registrar store 0x489a01 `8890a9010000` | u8 at +0x1a9 | readers -> `wide_index[slot]` caves; store writes both; allocation / release set 0xffff; copy 0x488430 bridge at 0x4884d2 / 0x4884de copies the entry | D/C | V (0x489a01) + A (RE-6) + **RE-16 open** | T10 |
+| W2-E14-04a | side table `wide_index[127]` (D); readers of +0x1a9 (13 sites, SPEC-old 2.6), registrar store 0x489a01 `8890a9010000` | u8 at +0x1a9 | readers -> `wide_index[slot]` caves; store writes both; pool allocation / release set 0xffff | D/C | V (0x489a01) + A (RE-6) | T10 |
+| W2-E14-04b | **the heapsort 0x489680** (called at 0x489a60 `e81bfcffff` V; the only three callers of 0x488430 are inside it): nine record moves, each of a whole 0x1ac record - helper calls into **stack temporaries** `0x4896f5 -> 0x488430` (parent pool record -> temporary A at S+0x1c), `0x489795 -> 0x488430` (root -> temporary A), `0x489819 -> 0x488430` (selected child -> temporary B at S+0x1c8); and six `rep movsd` copies of 0x6b dwords at 0x489709 (child -> parent), 0x48971a (temporary A -> child), 0x4897a7 (last active -> root), 0x4897b9 (temporary A -> last active), 0x489829 (parent -> selected child), 0x489839 (temporary B -> parent); the six `mov ecx, 0x6b` sites 0x489704, 0x489711, 0x48979e, 0x4897a9, 0x489822, 0x48982b (V: exactly six in .text) | records permuted in place through two stack temporaries; the index byte travels inside the 0x1ac bytes | **the sort is replaced whole (F, region hash over [0x489680, 0x4898d1))** by a DLL heapsort that produces the identical record permutation and moves `wide_index[]` entries with the records (temporaries carry their wide index in a local). Alternative kept as a fallback only: bridge all nine moves with one shadow value **consumed solely on temporary-to-pool copies and scoped to one sort invocation** (a pool-to-pool copy copies `wide_index[src] -> wide_index[dst]`; a pool-to-temporary copy saves the source entry in the shadow; a temporary-to-pool copy writes the shadow into the destination). Hooking 0x4884d2 / 0x4884de alone never sees the copies back into the pool | F (or 9 x C) | V (calls, copies) + A (sequencing) | T10 (all three swap kinds with indices above 255; permutation identical to retail at <= 255 by differential) |
 | W2-E14-05 | base table 0x72b590: 0x489252 store, 0x489bdf read | u8 x 25 | DLL u16 x 64 | D/C | S | T10 |
 | W2-E14-06 | state array 0x72b118 (15 rows), 300-byte clears (4), snapshot copies (2: 0x4b dwords + 1) | 300 | DLL 1024-byte array; 0x100-dword copies | D/C | S | T10 |
 | W2-E14-07 | snapshot constructor 0x487505 `682c010000`; capture 0x48a170 / 0x489a80; restore 0x489300 / 0x4892e0 | 0x12c / 0x26c layout | 0x400 / 0x540 layout | I/R | S | T10 |
@@ -1000,5 +1084,5 @@ guard expects (bytes quoted where re-read in this pass, otherwise the SPEC-old r
 | W2-T-GP | guard-page proof for every relocated pool / object (W2-E15-13/14, E3c-01/07, E3b-01, E2-01, E14-03, E7-01) | 10, 14 |
 
 A row is **done** when its guard bytes, its W2 bytes (or source) and its check are in the repository and the checker
-has matched all three against this table; a row whose status is O (RE-14, RE-15, RE-16) is implemented against its
-named fallback until the answer arrives, and the answer may only shrink the work.
+has matched all three against this table. No row is open (revision 3.1 folded RE-14 / 15 / 16); rows marked LIKELY
+rest on sweeps and are closed by the guard-page proof (W2-T-GP) and the union-host differentials.

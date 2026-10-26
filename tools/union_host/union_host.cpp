@@ -202,6 +202,36 @@ int wmain(int argc, wchar_t** argv)
 	Sleep(1000);
 
 	// ---- After ----------------------------------------------------------------------------------------------------
+	// Optional OFF-proof evidence: executable private allocations contain the
+	// generated bridges. Capture them so a rebuilt DLL's relocated targets can
+	// be compared by allocation contents instead of ignored as address noise.
+	wchar_t code_out[MAX_PATH]{};
+	if (GetEnvironmentVariableW(L"UNION_CODE_OUT", code_out, MAX_PATH))
+	{
+		SYSTEM_INFO system{}; GetSystemInfo(&system);
+		auto cursor = reinterpret_cast<std::uintptr_t>(system.lpMinimumApplicationAddress);
+		const auto end = reinterpret_cast<std::uintptr_t>(system.lpMaximumApplicationAddress);
+		while (cursor < end)
+		{
+			MEMORY_BASIC_INFORMATION info{};
+			if (!VirtualQuery(reinterpret_cast<void*>(cursor), &info, sizeof info) || !info.RegionSize) break;
+			const auto next = reinterpret_cast<std::uintptr_t>(info.BaseAddress) + info.RegionSize;
+			const auto protection = info.Protect & 0xff;
+			if (info.State == MEM_COMMIT && info.Type == MEM_PRIVATE && !(info.Protect & PAGE_GUARD) &&
+			    (protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_READ))
+			{
+				wchar_t path[MAX_PATH]{};
+				swprintf_s(path, L"%s/%08x.bin", code_out, unsigned(reinterpret_cast<std::uintptr_t>(info.BaseAddress)));
+				if (FILE* f = _wfopen(path, L"wb"))
+				{
+					std::fwrite(info.BaseAddress, 1, info.RegionSize, f); std::fclose(f);
+				}
+			}
+			if (next <= cursor) break;
+			cursor = next;
+		}
+	}
+
 	FILE* tsv = _wfopen(argv[4], L"wb");
 	if (!tsv) return 6;
 	std::size_t changed = 0;

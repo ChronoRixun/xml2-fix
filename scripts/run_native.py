@@ -33,6 +33,7 @@ if "--plain" in sys.argv:
     cmds.append([str(b / "xml2_test.exe")])
 with_exe = {
     "xml2_gns_transport_test", "xml2_confirmation_release_test", "xml2_objective_text_test",
+    "xml2_npc_query_scheduler_test", "xml2_npc_semi_auto_test",
     "xml2_entity_grid_test", "xml2_entity_world_test", "xml2_entity_frames_test",
     "xml2_entity_query_test", "xml2_entity_transfer_test", "xml2_gameplay_agreement_test",
     "xml2_rank_costs_test", "xml2_multipart_install_test", "xml2_script_functions_test",
@@ -42,6 +43,12 @@ with_exe = {
     "xml2_campaign_sender_test", "xml2_receive_validation_test", "xml2_join_in_progress_test",
     "xml2_combo_heads_test", "xml2_input_worker_test", "xml2_model_pools_test", "xml2_model_pools_lifecycle_test",
 }
+install_modes = {
+    "xml2_classic_hud_install_test": ("on", "off", "invalid", "base", "assets", "stale", "alias", *(f"guard{i}" for i in range(8))),
+    "xml2_codex_back_install_test": ("on", "off", *(f"guard{i}" for i in range(8))),
+    "xml2_resistance_display_install_test": ("on", "on-native", "off", "xml2", "invalid", "base", *(f"guard{i}" for i in range(6))),
+    "xml2_speaker_label_install_test": ("rule", "on", "off", *(f"guard{i}" for i in range(7))),
+}
 skip = {
     "xml2_test", "lcsave_durable_parity", "lcsave_test", "xml2_save_startup_test",
     "xml2_danger_room_party_install_test", "xml2_lockon_effects_install_test",
@@ -49,8 +56,13 @@ skip = {
 }
 for exe in sorted(b.glob("*.exe")):
     name = exe.stem
-    if name not in skip:
-        cmds.append([str(exe), EXE] if name in with_exe else [str(exe)])
+    if name in install_modes:
+        cmds.extend([str(exe), EXE, mode] for mode in install_modes[name])
+    elif name not in skip:
+        if name in ("xml2_npc_query_scheduler_test", "xml2_npc_semi_auto_test"):
+            cmds.append([str(exe), EXE, _need("XML2_FIX_TEST_XBE")])
+        else:
+            cmds.append([str(exe), EXE] if name in with_exe else [str(exe)])
 cmds.append([str(b / "lcsave_test.exe"), "--fuzz", "2000"])
 vectors = Path(_need("XML2_FIX_LEGACY_VECTORS_DIR"))
 for directory in sorted(p for p in vectors.iterdir() if p.is_dir() and (p / "cases.tsv").exists()):
@@ -68,7 +80,7 @@ for cmd in cmds:
         tag += "-" + Path(cmd[1]).name
     if len(cmd) > 1 and cmd[1] == EXE:
         tag += "+exe"
-    if "party_install" in tag or "effects_install" in tag or "healthbars_install" in tag:
+    if Path(cmd[0]).stem in install_modes or "party_install" in tag or "effects_install" in tag or "healthbars_install" in tag:
         tag += "-" + cmd[-1]
     if len(cmd) == 1 and tag == "xml2_test":
         tag += "-plain"
