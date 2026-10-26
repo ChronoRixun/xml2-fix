@@ -74,7 +74,12 @@
   (mask 15 = grab, pickup/recovery, charge collision, carry/fix7/upkeep); revisions 1 and 2 (080b) are refused both
   ways. Absent: nothing written, no entry. The carry input no longer reports the established carry node as a new
   chain when the idle / walk / run choice resolves to itself (the PC re-entered the carry every frame and the victim
-  never followed; live 080d); logged as `flying carry keeps its established node (no self-chain)`. Not played yet.
+  never followed; live 080d); logged as `flying carry keeps its established node (no self-chain)`. Live 080e/080f fixes
+  (fix3): the carrier frame restores the victim's constraint bits after the native node reset (0x42C270), a paired
+  pickup no longer falls through the general descent (0x433E6C) while Guard is held, a thrown body's world impact reaches
+  its receiver again (the PC-only gate at 0x42C09E is opened; amount, deadline, defenses and cooldown stay native) and
+  the carry pose reads the animated skeleton (0x41D620 with `false,false`) so XML1's offsets no longer sink the victim
+  30 units; logged as `thrown bodies forward world impacts (42C09E); carry pose on animated bones`. Not played yet.
 
 - **XML1's animation enums: gameplay rule 48** (`[Limits] AnimEnums = 512`; 1.9.0-beta.1,
   [docs](docs/anim-enums.md)). XMen2.exe's animation enum table holds 210 names, every slot taken; the key raises it to
@@ -96,6 +101,12 @@
   Phoenix's telekinesis sounds (`power1a` / `power1b`) resolve through the PC sound manager's name lookup (slot 0x38,
   0x590bd0); slot 0x34 is a PC bool query with a 4-byte return, and the XML1 call corrupted the stack at the first
   telekinesis hold (live 080d crash). Logged as `telekinesis sounds resolve through PC audio slot 38`.
+  Live 080e/080f fixes (fix3): a telekinesis throw released with no velocity keeps the victim's facing fallback with
+  the native upward impulse instead of dividing zero by zero (`a still telekinesis throw keeps the victim's facing (no
+  zero divide)`); guard decide runs its policy in the input slot (0x693018) with XML1's short entry, so a tapped guard
+  exits without moving the stick (`guard decide runs at input and exits after a tap`); Colossus's charge evaluates its
+  converted damage, knockback and range on the caster, as the PC's own 0x4ED220 does, not on the struck soldier (zero
+  damage before; `Colossus charge evaluates its talents on the caster`).
 
 - **E4 stage 1, actor pools: gameplay rule 44** (`[Limits] ActorPools = 124`; 1.9.0-beta.1,
   [docs](docs/actor-pools.md)). The path, shadow and delayed-damage pools sized for 32 actors grow to 124 in one

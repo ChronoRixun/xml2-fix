@@ -51,6 +51,10 @@ void install(HMODULE game) {
   applied=wanted;logger::write("shared handlers C: installed mask %03X revision 1",applied);
   // The builder's DLL gate reads this line (beta 8 080e: Phoenix power1a/1b resolve through PC audio slot 0x38).
   if(applied&telekinesis)logger::write("shared handlers C: telekinesis sounds resolve through PC audio slot 38");
+  // Beta 8 080g (fix3): the builder's DLL gate reads these lines too (still TK throw, guard tap exit, Colossus talent owner).
+  if(applied&telekinesis)logger::write("shared handlers C: a still telekinesis throw keeps the victim's facing (no zero divide)");
+  if(applied&guard)logger::write("shared handlers C: guard decide runs at input and exits after a tap");
+  if(applied&colossus)logger::write("shared handlers C: Colossus charge evaluates its talents on the caster");
  } else {
   if(!safe)game_version::refuse_startup();
   logger::write("shared handlers C: transaction refused; online agreement refused");
