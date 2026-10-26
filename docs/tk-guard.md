@@ -156,3 +156,13 @@ and interruptions on actors and objects, psylift/psycarry transitions, sound and
 energy over authored ranks; guard pickup ownership, ally throws and wall-lunge
 alongside rule39; and two-peer agreement checks. No game or emulator was launched
 for this work.
+
+The PC audio name resolver is **vtable 0x69d1ac +0x38**, function **0x590bd0**,
+with three stack arguments and `ret 12`. XML1 sound helper **0xdf4a0** uses
+Xbox slot +0x34 for that operation; the PC slot +0x34 is **0x590120**, a
+one-argument boolean query (`ret 4`). Both loop start (`power1a`) and thrown
+sound lookup (`power1b`) use PC +0x38. Copying the Xbox slot corrupted the PC
+stack. The TK fixture now executes the retail disabled-audio lookup and return
+instructions through entry and release, with the real incompatible +0x34
+callee present as a regression trap. The installer guards the lookup table,
+callee ABI and loop/validity/position/stop slots before enabling TK.

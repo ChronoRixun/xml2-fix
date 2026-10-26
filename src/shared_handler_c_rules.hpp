@@ -9,6 +9,12 @@ using shared_handler_rules::branch;
 inline constexpr std::array<const wchar_t*,11> keys{L"JumpAttackDamageRule",L"FlyChargeDamageRule",L"ColossusChargeRule",L"BeastBounceRule",L"FastballRule",L"IdleBoredRule",L"LocomotionScaleRule",L"AnimationPhaseRule",L"TeleportVisibilityRule",L"TelekinesisRule",L"GuardDecideRule"};
 enum part : u32 {jump_damage=1,fly_damage=2,colossus=4,bounce=8,fastball=16,idle=32,scale=64,phase=128,visibility=256,telekinesis=512,guard=1024,all=2047};
 inline constexpr dependency guards[]{
+ {512,{0x69d1e4,"d00b5900","PC audio name lookup slot38"}},
+ {512,{0x590bd0,"81ec54010000a1f8386f0056","PC sound name lookup entry"}},
+ {512,{0x590df0,"c20c00","PC sound name lookup ret12"}},
+ {512,{0x69d1f8,"f0175900","PC positional sound start slot4c"}},
+ {512,{0x69d20c,"a0095900","PC sound handle validity slot60"}},
+ {512,{0x69d21c,"d03f4c0080075900","PC sound position ret8 and stop ret4 slots70/74"}},
  {512,{0x4f8d30,"568bf1e8b83ffeffc7067c22690033c0668946186689461a6689461cb9ff7f000066214e1cc6461c0166214e1a88461a668946188bc65ec3","suspend and damage-record constructor defaults"}},
  {512,{0x4dc5d0,"8bc133c966894804894810894814c7400c80000000ba0100000089500889481888481d88481e88481f8848206689086689480288501c66894804816018ffffff7f8948186689482489482889482c8948308948346689483888483a89483c8948406689484466894846806048fcc3","suspend and damage-record constructor defaults"}},
  {512,{0x4dad70,"51568bf1e85770feff8b106a008d4c2408518b4c2414518bc8ff52186685c0740d0d008000006689065e59c20400d9442404e8d57319006689065e59c20400","native suspend word parser with talent references"}},

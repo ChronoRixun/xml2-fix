@@ -10,9 +10,12 @@ extern "C" unsigned char fixture_space[0x400000];
 constexpr u32 bias=0x10000000;
 namespace lift_rule {int source_override=-1;int heaviness(void* p){return source_override>=0?source_override:field<unsigned char>(p,0x31d);}}
 namespace {
-std::array<unsigned char,0x1000> actor{},source_actor{},target{},stats{},input{},context{},node{},event{},attack{},type{},move{},query{},audio{},manager{};
+std::array<unsigned char,0x1000> actor{},source_actor{},target{},stats{},input{},context{},node{},event{},attack{},type{},move{},query{},manager{};
 std::array<void*,170> actor_vt{},target_vt{},node_vt{},event_vt{},move_vt{},query_vt{},audio_vt{},manager_vt{};
 std::array<unsigned char,16> ui{};std::array<void*,32> ui_vt{};
+// The real audio lookup reads its disabled byte at +d0ae. Keep its complete
+// footprint so the contract check executes retail instructions, not a fake ABI.
+std::array<unsigned char,0xd100> audio{};
 std::array<unsigned char,16> ordered{};std::array<void*,4> ordered_vt{};
 bool source=false,target_actor=true,token_valid=true,target_alive=true,wall=false,can_lift=true,target_ok=true,can_grab=true,friend_damage=false,session_busy=false,fallback_result=false,immune=false;
 int acrobatics=0,might=0,effective_might_override=-1,owner_team=1,target_team=2,query_calls=0,destructs=0,action_id=-1,starts=0,sounds=0,stops=0,debits=0,publications=0;
@@ -107,7 +110,7 @@ __declspec(naked) void truncate(){__asm {
  add esp,16
  ret
 }}
-u32 __fastcall sound_resource(void*,void*,const char*,int,int){return 77;}
+u32 __fastcall sound_resource(void*,void*,const char* name,int a,int b){if(!source)check(name&&(!std::strcmp(name,"character/phoen_m/power1a")||!std::strcmp(name,"character/phoen_m/power1b"))&&!a&&!b,"PC name lookup takes name and two zero modes");return 77;}
 bool __fastcall sound_valid(void*,void*,u32){return true;}
 u32 __fastcall start_sound(void*,void*,u32,const vec*,float,float,float){++sounds;return 88;}
 void __fastcall sound_position(void*,void*,u32,const vec*){}
@@ -198,7 +201,7 @@ unsigned char __fastcall source_might(void*,void*,int,void* context_actor,void*)
 void reset(){
  lift_rule::source_override=-1;
  stale_resolution=false;
- actor.fill(0);source_actor.fill(0);target.fill(0);stats.fill(0);input.fill(0);context.fill(0);node.fill(0);event.fill(0);attack.fill(0);type.fill(0);move.fill(0);query.fill(0);audio.fill(0);manager.fill(0);
+ actor.fill(0);source_actor.fill(0);target.fill(0);stats.fill(0);input.fill(0);context.fill(0);node.fill(0);event.fill(0);attack.fill(0);type.fill(0);move.fill(0);query.fill(0);audio.fill(0);manager.fill(0);field<unsigned char>(audio.data(),0xd0ae)=1;
  actor_vt.fill(nullptr);target_vt.fill(nullptr);node_vt.fill(nullptr);move_vt.fill(nullptr);query_vt.fill(nullptr);audio_vt.fill(nullptr);manager_vt.fill(nullptr);
  for(auto* a:{actor.data(),source_actor.data()}){field<void*>(a,0)=actor_vt.data();field<u32>(a,0x1c)=111;field<void*>(a,0x35c)=field<void*>(a,0x2d8)=stats.data();field<void*>(a,0x378)=field<void*>(a,0x2f4)=move.data();field<void*>(a,0x3c0)=field<void*>(a,0x328)=node.data();}
  field<void*>(target.data(),0)=target_vt.data();field<u32>(target.data(),0x1c)=222;field<float>(target.data(),0x240)=field<float>(target.data(),0x27c)=100;field<void*>(target.data(),0x35c)=field<void*>(target.data(),0x2d8)=stats.data();
@@ -209,7 +212,7 @@ void reset(){
  move_vt[0x28/4]=move_vt[0x30/4]=reinterpret_cast<void*>(&handler_of);
  target_vt[0x84/4]=target_vt[0x8c/4]=reinterpret_cast<void*>(&one_shot);
  query_vt[0x40/4]=reinterpret_cast<void*>(&query_filter);query_vt[0x70/4]=reinterpret_cast<void*>(source?&query_source:reinterpret_cast<decltype(&query_source)>(&query_pc));query_vt[0x20/4]=reinterpret_cast<void*>(&query_contact);
- audio_vt[0x34/4]=reinterpret_cast<void*>(&sound_resource);audio_vt[0x4c/4]=reinterpret_cast<void*>(&start_sound);audio_vt[0x60/4]=reinterpret_cast<void*>(&sound_valid);audio_vt[0x70/4]=reinterpret_cast<void*>(&sound_position);audio_vt[0x74/4]=reinterpret_cast<void*>(&stop_sound);
+ audio_vt[0x34/4]=source?reinterpret_cast<void*>(&sound_resource):reinterpret_cast<void*>(0x590120);audio_vt[0x38/4]=reinterpret_cast<void*>(&sound_resource);audio_vt[0x4c/4]=reinterpret_cast<void*>(&start_sound);audio_vt[0x60/4]=reinterpret_cast<void*>(&sound_valid);audio_vt[0x70/4]=reinterpret_cast<void*>(&sound_position);audio_vt[0x74/4]=reinterpret_cast<void*>(&stop_sound);
  manager_vt[0x104/4]=manager_vt[0x160/4]=reinterpret_cast<void*>(&sim_time);manager_vt[0x148/4]=manager_vt[0x1a8/4]=reinterpret_cast<void*>(&not_busy);manager_vt[0x54/4]=manager_vt[0x5c/4]=reinterpret_cast<void*>(&friends);manager_vt[0x34/4]=manager_vt[0x3c/4]=reinterpret_cast<void*>(&not_busy);manager_vt[0x15c/4]=manager_vt[0x178/4]=reinterpret_cast<void*>(&camera_visible);manager_vt[0x1c/4]=manager_vt[0x20/4]=reinterpret_cast<void*>(&effect_serial);
  field<u32>(type.data(),0x18)=2;field<int>(stats.data(),0xbc)=2;field<std::uint16_t>(stats.data(),0x20)=1;field<std::uint16_t>(stats.data(),0x28)=2;field<unsigned char>(stats.data(),0x22)=static_cast<unsigned char>(acrobatics);field<unsigned char>(stats.data(),0x2a)=static_cast<unsigned char>(might);field<unsigned char>(stats.data(),0x198)=static_cast<unsigned char>(acrobatics);
  node_vt[0x14/4]=reinterpret_cast<void*>(&find_talent);manager_vt[0x14/4]=reinterpret_cast<void*>(&find_talent);node_vt[0x1c/4]=reinterpret_cast<void*>(&get_event);node_vt[0x28/4]=reinterpret_cast<void*>(&event_stats);
@@ -307,6 +310,25 @@ void entry_tests(const image& pc){
   check(std::equal(std::begin(audit_before),std::end(audit_before),std::begin(audit_after)),"auxiliary entry preserves stack and every native callee-saved register");
   check(auxiliary_calls==1&&auxiliary_events==1,"auxiliary acquisition dispatch agrees with source even on same-team objects");
  }
+}
+void retail_audio_contract_tests(const image& pc){
+ // Execute the real disabled-audio paths through both retail vtable entries.
+ // Only the external stack-cookie verifier is stubbed. Returning via ret4 at
+ // slot34 instead of ret12 at slot38 corrupts this caller and fails the test.
+ pc.load(0x590120,0x66);pc.load(0x590bd0,0x223);at(0x672161)[0]=0xc3;
+ pc.load(0x69d058,4);
+ source=false;reset();bind();audio_vt[0x38/4]=reinterpret_cast<void*>(0x590bd0);
+ field<void*>(event.data(),0x14)=attack.data();
+ field<std::int16_t>(event.data(),0x18)=19;field<std::int16_t>(event.data(),0x1a)=2;field<std::int16_t>(event.data(),0x1c)=11;
+ unsigned before=0,after=0;__asm mov before,esp
+ tk_guard_bridges::tk_entry(nullptr,nullptr,actor.data(),input.data(),context.data());
+ __asm mov after,esp
+ check(before==after&&sounds==1&&tk_guard_bridges::tk_states.count(111)==1,"TK entry survives the real retail audio lookup ABI");
+ auto state=tk_guard_bridges::tk_states[111];
+ __asm mov before,esp
+ tk_guard_bridges::release(actor.data(),state,{1,2,3},true);
+ __asm mov after,esp
+ check(before==after&&stops==1&&state.sound==0xffffffffu&&release_mode==1,"TK throw/release survives the real retail audio lookup ABI and stops its loop");
 }
 void constructor_tests(const image& pc,const image& x1){
  source=false;reset();bind();pc.load(0x4dc5d0,0x6e);pc.load(0x4f8d30,0x38);load_source(x1,0xe46a0,0x24);
@@ -499,7 +521,9 @@ int main(int argc,char** argv){
  if(argc<3)return 2;DWORD old=0;if(!VirtualProtect(at(0x401000),0x400000,PAGE_EXECUTE_READWRITE,&old))return 2;
  if(VirtualAlloc(at(bias),0x600000,MEM_RESERVE|MEM_COMMIT,PAGE_EXECUTE_READWRITE)!=at(bias))return 2;
  image pc(argv[1],pc_hash),x1(argv[2],x1_hash);if(failures)return 1;
+ check(field<u32>(const_cast<unsigned char*>(pc.read(0x69d1ac,0x3c)),0x34)==0x590120&&field<u32>(const_cast<unsigned char*>(pc.read(0x69d1ac,0x3c)),0x38)==0x590bd0,"retail audio table distinguishes boolean from resource lookup");
+ pc.load(0x590120,0x66);
  load_source(x1,0xdf640,0xfd);load_source(x1,0xd99d0,0x7c6);load_source(x1,0xdff10,0xc71);load_source(x1,0xdfc80,0x28b);load_source(x1,0x38210,0x15);load_source(x1,0xdf3b0,0xed);
- std::puts("cancel");cancel_tests();std::puts("entry");entry_tests(pc);std::puts("constructors");constructor_tests(pc,x1);std::puts("parser");parser_tests(pc);std::puts("filter");filter_tests();std::puts("acquisition");acquisition_tests(pc,x1);std::puts("guard");guard_tests();std::puts("control");control_tests();
+ std::puts("cancel");cancel_tests();std::puts("entry");entry_tests(pc);std::puts("constructors");constructor_tests(pc,x1);std::puts("parser");parser_tests(pc);std::puts("filter");filter_tests();std::puts("acquisition");acquisition_tests(pc,x1);std::puts("guard");guard_tests();std::puts("control");control_tests();std::puts("retail audio ABI");retail_audio_contract_tests(pc);
  std::printf("TK/guard native: %d checks, %d failures\n",checks,failures);return failures?1:0;
 }

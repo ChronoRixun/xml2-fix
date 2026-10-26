@@ -224,7 +224,13 @@ bool __fastcall carry_update(void* self,void*,void* actor,void* input){
     else if(fn<float(__fastcall*)(void*,void*,int)>(0x425b70)(actor,nullptr,8)>=speed)action=0;
     else if(fn<float(__fastcall*)(void*,void*,int)>(0x425b70)(actor,nullptr,9)>=speed)action=9;
     else action=11;
-    void* next=fn<action_t>(0x427c80)(actor,nullptr,action);if(!next)return false;put(actor,0x3bc,next);return true;
+    void* next=fn<action_t>(0x427c80)(actor,nullptr,action);if(!next)return false;
+    // XML1 DC0B0 selects the idle/walk/run chain on every input callback.
+    // On PC, reporting the current node as a new chain sends it through
+    // 4341E8 -> 4315D0 again, restarting entry and its time-zero victim event.
+    // Keep the established node running so its frame attachment can advance.
+    if(next==at<void*>(actor,0x378))return false;
+    put(actor,0x3bc,next);return true;
 }
 void __fastcall carry_frame(void*,void*,void* actor,void*){
     if(!actor)return;det_math::fp_env fp;
