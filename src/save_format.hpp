@@ -22,6 +22,8 @@ namespace save_format
 	// publication; false when LC is off or the guards/stubs refused (installation_failure says why). The native
 	// profile (retail, or the expanded E10A2 layout of the entity-capacity install) must be chosen before.
 	bool contribute(patch_transaction::transaction& transaction, HMODULE game);
+	// Published only after the zone-string transaction commits. Game thread only.
+	void publish_zone_strings(std::uint32_t address);
 	void use_native_profile(const save_format_rules::native_profile& chosen);
 	const save_format_rules::native_profile& installed_profile();
 

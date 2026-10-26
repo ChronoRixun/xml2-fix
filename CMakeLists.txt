@@ -89,6 +89,7 @@ add_library(xml2_fix SHARED
 	src/options_menu.cpp
 	src/new_game.cpp
 	src/save_format.cpp
+	src/zone_strings.cpp
 	src/save_content_guards.cpp
 	src/save_trace.cpp
 	src/postgame.cpp
@@ -579,3 +580,8 @@ add_executable(xml2_union_host tools/union_host/union_host.cpp tools/union_host/
 # Its own folder: no dinput.dll may sit next to it, or the engine DLLs' dinput import would load that one first.
 set_target_properties(xml2_union_host PROPERTIES OUTPUT_NAME union_host RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/union")
 target_link_options(xml2_union_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
+
+# W2 zone-string capacity: guarded contribution, native intern/getter and copied GC in a private fixture.
+add_executable(xml2_zone_strings_test test/zone_strings_test.cpp src/zone_strings.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_zone_strings_test PRIVATE src)
+target_link_options(xml2_zone_strings_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
