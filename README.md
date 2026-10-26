@@ -32,9 +32,14 @@
 | Big mods              | 40 actors per zone, then a crash | up to 127 when a mod asks for it ([details](#bigger-zones)) |
 | Setup                 | — | copy one file |
 
-**Current release: XML2 Fix 1.8.0**, paired with Legends Classic builder 0.4.0 (content 27 / LC36 from
-0.4.0-beta.7, every gunman's weapon brain and one-sided walls; beta 6: content 26 / LC35; beta 5: content 25 / LC34;
-betas 1-4: content 24 / LC33) and Ultimate Legends launcher 0.4.0. Update the launcher first, then Rebuild, then Play.
+**Current release: XML2 Fix 1.8.0** (stable), paired with Legends Classic builder 0.4.0 (content 27 / LC36, the same
+game as 0.4.0-beta.7; 1.8.0 adds the first game's revival price, so it refuses 1.8.0-beta.7 in co-op) and Ultimate
+Legends launcher 0.4.0. Update the launcher first, then update both parts,
+Rebuild, then Play.
+
+**Beta: XML2 Fix 1.9.0-beta.1** (the port's beta 8, the launcher's Beta channel), paired with Legends Classic builder
+0.4.1-beta.1 (content 28 / LC37). A 1.9.0 game and a 1.8.0 game refuse each other at join. See the
+[1.9.0 release notes](packaging/release-notes/v1.9.0.md).
 
 Maintainers: [stable and beta release instructions](RELEASING.md).
 
@@ -42,8 +47,8 @@ Online codes, public games, default-on drop-in in the port and solo-story watche
 hero swaps survive level changes, with solo hand-back only through the segment and its end (rule 26 revision 6).
 Slow-player drops are disabled; LAG warnings may remain. Frozen or disconnected guests are removed by agreement
 while survivors continue (rule 25 revision 4). Host drop/freeze ends the joiners' session with "lost connection to
-the host"; no host migration. Includes 1.7.1. Owner 030e acceptance on three real PCs including a hotspot PC is
-still pending; four-player WAN coverage is not certified here.
+the host"; no host migration. Includes 1.7.1. Online was tested on one PC with two instances of the game; play
+between separate PCs and four-player WAN coverage are not certified here.
 See [CHANGELOG.md](CHANGELOG.md), [1.8.0 release notes](packaging/release-notes/v1.8.0.md),
 and the [player guide](https://github.com/ChronoRixun/legends-classic/blob/main/docs/ONLINE.md).
 
@@ -700,8 +705,8 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `LiftRule` | `xml2` | `xml1`: an object the Legends Classic builder marked with `xml1heaviness` (the first game's heaviness 4 and 5, which XMen2.exe folds into its unliftable class 3) is lifted by X-Men Legends I's rule - Might rank 3 lifts heaviness 4, nobody lifts 5 - with XML1's throw impact levels and carried damage; every other object keeps the game's rule. Requested-only gameplay rule 38, revision 2 ([details](docs/lift-rule.md)). |
 | `Xml1WallCling` | `xml2` | `xml1`: the acrobat moveset's wall cling and back-flip (`ch_clingwalldecide` / `ch_clingwallbackflip`, acrobatics 2) get X-Men Legends I's handlers; XML2 carried the moves with none. Requested-only gameplay rule 39 ([details](docs/xml1-cling.md)). |
 | `Xml1RogueDecide` | `xml2` | `xml1`: Rogue's power decision `ch_roguedecide` (drain a victim in front of her, else `drain_notarget`), with the matching Legends Classic heroes output only. Requested-only gameplay rule 43 ([details](docs/xml1-rogue-decide.md)). |
-| `Xml1GrabCarry` | `xml2` | `xml1`: X-Men Legends I's grab lifecycle (1.9.0-beta.1): Juggernaut's grab-and-hit (`ch_grab_attack`), the shared grab victim, pickup and thrown-landing recovery, the ally throw and the flying charge picking up the character it hits. The flying carry itself is not restored yet. Requested-only gameplay rule 45 revision 2, values `{installed,7,0,0}` ([details](docs/xml1-grab-carry.md)). |
-| `JumpAttackDamageRule`, `FlyChargeDamageRule`, `ColossusChargeRule`, `BeastBounceRule`, `FastballRule`, `IdleBoredRule`, `LocomotionScaleRule`, `AnimationPhaseRule`, `TeleportVisibilityRule`, `TelekinesisRule`, `GuardDecideRule` | `xml2` | Independently opt into `xml1` (1.9.0-beta.1): the jump attack's and flying charge's damage from `values.xmlb`'s L3 row, Colossus's charge, Beast's bounce, the fastball contact, the idle/bored choice, the animation rate's scale and phase and Nightcrawler's teleport visibility as in X-Men Legends I. Phoenix telekinesis and guard interaction policy additionally require installed rule 45 ([contracts and live checks](docs/tk-guard.md)). One requested-only gameplay rule 46 mask `{installed_mask,0,0,0}` ([details](docs/shared-handler-c-rules.md)). |
+| `Xml1GrabCarry` | `xml2` | `xml1`: X-Men Legends I's grab lifecycle (1.9.0-beta.1): Juggernaut's grab-and-hit (`ch_grab_attack`), the shared grab victim, pickup and thrown-landing recovery, the ally throw and the flying charge picking up the character it hits. Revision 3 adds the flying carry and XML1's flight upkeep; `[Game] Xml1FlyingCarry = 0` (what the beta 8 builder writes) keeps the rule without the flying carry. Requested-only gameplay rule 45 revision 3, values `{1,15,0,0}`, or `{1,23,0,0}` without the carry ([details](docs/xml1-grab-carry.md)). |
+| `JumpAttackDamageRule`, `FlyChargeDamageRule`, `ColossusChargeRule`, `BeastBounceRule`, `FastballRule`, `IdleBoredRule`, `LocomotionScaleRule`, `AnimationPhaseRule`, `TeleportVisibilityRule`, `TelekinesisRule`, `GuardDecideRule` | `xml2` | Independently opt into `xml1` (1.9.0-beta.1): the jump attack's and flying charge's damage from `values.xmlb`'s L3 row, Colossus's charge, Beast's bounce, the fastball contact, the idle/bored choice, the animation rate's scale and phase and Nightcrawler's teleport visibility as in X-Men Legends I. Phoenix telekinesis and guard interaction policy additionally require installed rule 45 and are in progress (the beta 8 builder does not write them; [contracts and live checks](docs/tk-guard.md)). One requested-only gameplay rule 46 mask `{installed_mask,0,0,0}` ([details](docs/shared-handler-c-rules.md)). |
 | `Xml1Bosses` | *(none)* | A comma list of X-Men Legends I boss brains XMen2.exe lacks (`dopples`, `avalanche`, `pyro`, `mystique`, `shadowking`, `marrow`, `magneto`, `blob`), run by one shared dispatcher beside Master Mold; the builder lists only the bosses a build carries. Gameplay rule 40 ([details](docs/xml1-controllers.md)). |
 | `PackAmount` | `xml2` | `xml1`: a health or energy pack restores a quarter of the maximum, as in X-Men Legends I, instead of a third ([details](docs/pack-amount.md)) |
 | `DeathRule` | `xml2` | `xml1`: an entity dies on the hit that leaves it below 1 health, as in X-Men Legends I, instead of only at 0 ([details](docs/death-threshold.md)) |
