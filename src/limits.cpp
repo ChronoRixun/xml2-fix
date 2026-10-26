@@ -1,6 +1,8 @@
 #include "resident_stats.hpp"
 #include "limits.hpp"
 #include "motion_pool.hpp"
+#include "effect_templates.hpp"
+#include "primitives_per_effect.hpp"
 #include "limits_agreement_rules.hpp"
 #include "gameplay_agreement.hpp"
 #include "limits_rules.hpp"
@@ -997,6 +999,6 @@ namespace limits
 		const auto residency=resident_stats::status();
         return (residency.empty()?std::string{}:residency+"; ")+"actors " + counter(read(actor_live_va), actor_cap) + "; names " + counter(names, name_cap) + "; motions " + counter(motions, static_cast<int>(motion_pool::layout().capacity)) + "; igb " +
 		       counter(read(igb_live_va), igb_cap) + "; items " + counter(items, item_cap) + "; styles " + counter(styles, style_cap) + "; curves " +
-		       counter(read(curve_live_va), curve_cap) + "; move_triggers " + std::to_string(move_trigger_cap);
+		       counter(read(curve_live_va), curve_cap) + "; move_triggers " + std::to_string(move_trigger_cap) + "; " + effect_templates::status() + "; " + primitives_per_effect::status();
 	}
 }

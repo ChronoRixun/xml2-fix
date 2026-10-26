@@ -76,6 +76,8 @@
 #include "pool_counters.hpp"
 #include "model_pools.hpp"
 #include "particle_scratch.hpp"
+#include "effect_templates.hpp"
+#include "primitives_per_effect.hpp"
 #include "actor_pools.hpp"
 #include "model_pools_rules.hpp"
 #include "online_tick.hpp"
@@ -510,6 +512,8 @@ namespace
 		// [Engine] ModelPools: the model aggregate (0x7bf6d0) is built at the first getter call, after this.
 		model_pools::install(game);
 		particle_scratch::install(game); // W3-9: independent count spans after ModelPools publication
+        effect_templates::install(game);
+        primitives_per_effect::install(game);
 		// A raise is rule 28 (ModelPools): a full pool refuses spawns, so co-op peers must share the capacities.
 		// Requested only: absent/off adds no entry (the released record); a requested raise that failed is unverified.
 		if (model_pools::requested())

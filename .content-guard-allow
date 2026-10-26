@@ -117,3 +117,4 @@ DISASM  test/resident_stats_test.cpp  # Authored register and stack capture prob
 
 DISASM  src/tk_guard_bridges.hpp  # Authored rule-46 TK/guard bridges: two resume trampolines that repeat only the displaced prologue before jumping back into the owner-loaded routine, and an argument-forwarding filter thunk; no game body or instruction listing.
 DISASM  test/tk_guard_test.cpp  # Authored fixture stubs (synthetic acquisition and grab tails) and x87 modulus/truncation helpers standing in for the runtime calls of owner-loaded XML1 code; no embedded game code.
+DISASM  test/effect_templates_test.cpp  # Authored register/flag capture driver for our generated spill caves; the retail image is read from the owner's executable at runtime, never embedded game content.

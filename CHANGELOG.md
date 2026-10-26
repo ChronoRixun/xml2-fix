@@ -44,6 +44,15 @@
   Logs once per array address and exposes per-operation peaks and clamp counts
   through `PARTICLE_SCRATCH`. Rule 60; absent/0/off keeps the released bytes and
   agreement. [Details](docs/particle-scratch.md).
+- **Effect library capacity and primitives per effect**: `[Limits] EffectTemplates=512`
+  raises both native 220-entry tables together (221..2048); gameplay rule 55
+  `EffectFiles`. `[Limits] PrimitivesPerEffect=32` raises the ten-primitive bound
+  (11..32), retaining the original record and first ten pointers with additional
+  pointers in DLL spill storage; rule 58 `PrimitivesPerEffect`. Lock-on and
+  multipart use the published effect layout. Both shared bitmap helpers remain
+  native for other containers. Missing/stock keys preserve the existing patch
+  and agreement record. See [effect templates](docs/effect-templates.md) and
+  [primitives per effect](docs/primitives-per-effect.md).
 
 - **The first game's revival price: gameplay rule 10 revision 3** (`[Game] RevivalCost = xml1`; 1.9.0-beta.1 and
   1.8.0, [docs](docs/xtraction-shop.md#revival-price)). A fallen hero costs 200 x G^2 Tech Bits, G = min(5, L / 10 +

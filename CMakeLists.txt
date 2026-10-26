@@ -70,6 +70,8 @@ add_library(xml2_fix SHARED
 	src/model_pools.cpp
 	src/pool_counters.cpp
 	src/particle_scratch.cpp
+    src/effect_templates.cpp
+    src/primitives_per_effect.cpp
 	src/online_tick.cpp
 	src/npc_power.cpp
 	src/npc_semi_auto.cpp
@@ -599,6 +601,11 @@ target_compile_options(xml2_lockon_effects_install_test PRIVATE /UNDEBUG)
 target_link_options(xml2_lockon_effects_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
 add_executable(xml2_model_pools_test test/model_pools_test.cpp)
+add_executable(xml2_effect_templates_test test/effect_templates_test.cpp src/effect_templates.cpp src/primitives_per_effect.cpp src/patch_transaction.cpp tools/union_host/union_space.asm)
+target_include_directories(xml2_effect_templates_test PRIVATE src)
+target_compile_definitions(xml2_effect_templates_test PRIVATE XML2_EFFECT_TEMPLATES_TEST)
+target_compile_options(xml2_effect_templates_test PRIVATE /UNDEBUG)
+target_link_options(xml2_effect_templates_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
 target_include_directories(xml2_model_pools_test PRIVATE src)
 target_compile_options(xml2_model_pools_test PRIVATE /UNDEBUG)
 # The pools' lifecycle executed: the retail code at its own addresses with the x2/x4 plans applied, on fake items.
