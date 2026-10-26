@@ -121,6 +121,7 @@ add_library(xml2_fix SHARED
 	src/balance.cpp
 	src/limits.cpp
 	src/entity_capacity.cpp
+	src/state_records.cpp
 	src/entity_owners.cpp
 	src/entity_transfer.cpp
 	src/entity_world.cpp
@@ -396,6 +397,12 @@ target_link_options(xml2_test_mode_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 add_executable(xml2_entity_transfer_test test/entity_transfer_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/entity_transfer.cpp)
 target_include_directories(xml2_entity_transfer_test PRIVATE src)
 target_link_options(xml2_entity_transfer_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# W2 state-record stride, constructors and copies executed at their retail addresses.
+add_executable(xml2_state_records_test test/state_records_test.cpp src/state_records.cpp
+    src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_state_records_test PRIVATE src)
+target_link_options(xml2_state_records_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/reliable_receive_fixture.asm"
 ".386
