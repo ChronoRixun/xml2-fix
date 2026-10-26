@@ -148,6 +148,7 @@ add_library(xml2_fix SHARED
 	src/limits.cpp
 	src/address_space.cpp
 	src/effect_pools.cpp
+	src/fight_moves.cpp
 	src/entity_capacity.cpp
 	src/actor_pools.cpp
 	src/entity_owners.cpp
@@ -686,6 +687,30 @@ target_compile_definitions(xml2_actor_pools_host PRIVATE XML2_ACTOR_POOLS_TEST)
 target_compile_options(xml2_actor_pools_host PRIVATE /UNDEBUG)
 target_link_options(xml2_actor_pools_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
 set_target_properties(xml2_actor_pools_host PROPERTIES OUTPUT_NAME actor_pools_host)
+
+# W3-3: retail FightMove/map routines in a native union image; never starts the game.
+add_executable(xml2_fight_moves_host test/fight_moves_host.cpp src/fight_moves.cpp src/patch_transaction.cpp tools/union_host/union_space.asm)
+target_include_directories(xml2_fight_moves_host PRIVATE src)
+target_compile_options(xml2_fight_moves_host PRIVATE /UNDEBUG)
+target_link_options(xml2_fight_moves_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
+
+set(FIGHT_MOVES_BASE_AVAILABLE TRUE)
+foreach(header move_triggers_rules.hpp limits_rules.hpp ini_rules.hpp)
+    execute_process(COMMAND git show "69f5115:src/${header}" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE FIGHT_MOVES_BASE_HEADER RESULT_VARIABLE FIGHT_MOVES_BASE_RESULT ERROR_QUIET)
+    if(FIGHT_MOVES_BASE_RESULT EQUAL 0)
+        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/baseline/${header}" "${FIGHT_MOVES_BASE_HEADER}")
+    else()
+        set(FIGHT_MOVES_BASE_AVAILABLE FALSE)
+    endif()
+endforeach()
+if(FIGHT_MOVES_BASE_AVAILABLE)
+    add_executable(xml2_fight_moves_off_test test/fight_moves_off_test.cpp)
+    target_include_directories(xml2_fight_moves_off_test PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}")
+    target_compile_options(xml2_fight_moves_off_test PRIVATE /UNDEBUG)
+else()
+    message(STATUS "FightMoves OFF differential unavailable: fetch 69f5115 to run this test (source archives and shallow builds remain supported)")
+endif()
 
 execute_process(COMMAND git show 9677892:src/npc_power_rules.hpp WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     OUTPUT_VARIABLE ACTOR_POOLS_BETA7_POWER RESULT_VARIABLE ACTOR_POOLS_BASE_RESULT)

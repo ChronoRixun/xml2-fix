@@ -62,6 +62,15 @@
   game bytes or agreement entries. Status adds `prim defs` and `vectors` counters.
   [Primitive definitions](docs/primitive-defs.md), [vectors](docs/effect-vectors.md).
 - **Shared fighting-style and event manager headroom** (`[Limits] FightStyles=64`, `StyleEvents=4096`; [styles](docs/fight-styles.md), [events](docs/style-events.md)). Styles accept 20..127; events accept 1065..8192, with stock 19/1064 when absent. Both keys use one guarded allocation layout and transaction. Four bitmap clear caves make styles above 32 reusable through unload/destruction. Rule 35 stays revision 1 through 32 and becomes revision 2 above 32; new rule 53 covers events. Legacy style-only byte plans through 32 and absent-key behavior are preserved. Retail native lifecycle tests include both bitmap words, full-pool refusals and event generation reuse. Live campaign/multiplayer validation remains pending.
+- **FightMove headroom and clean exhaustion refusal** (`[Limits] FightMoves=1024`,
+  333..2048; [docs](docs/fight-moves.md)). Expands the native 332-record pool using
+  a generated operand ledger, and refuses before allocation when the pool or a
+  style's 150-node map is full. Reports pool/map refusals and aliasing observations.
+  Rule 54 revision 1 records the capacity. MoveTriggers sizes and validates its
+  side arrays through the published descriptor, retaining rule 37 revision 1 and
+  its exact existing patch plan when FightMoves is absent. Native fixtures include
+  a retail allocation-333 corruption control, guarded boundaries, map preservation,
+  recycling, teardown, and high-slot trigger arrays.
 
 - **The first game's revival price: gameplay rule 10 revision 3** (`[Game] RevivalCost = xml1`; 1.9.0-beta.1 and
   1.8.0, [docs](docs/xtraction-shop.md#revival-price)). A fallen hero costs 200 x G^2 Tech Bits, G = min(5, L / 10 +
