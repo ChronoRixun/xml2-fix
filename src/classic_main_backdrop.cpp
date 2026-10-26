@@ -36,7 +36,8 @@ namespace classic_main_backdrop
 		{
 			bool read(address where, void* out, std::size_t size)
 			{
-				if (where < 0x10000 || size > 1024 || where > 0x7fffffff - size) return false;
+				// the whole user space of a large-address-aware exe (E12: objects above 2 GB are valid); the read is guarded
+				if (where < 0x10000 || size > 1024 || where > 0xFFFEFFFFu - size) return false;
 				__try { std::memcpy(out, reinterpret_cast<const void*>(where), size); return true; }
 				__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 			}

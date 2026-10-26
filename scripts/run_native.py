@@ -12,7 +12,7 @@ def _need(name):
     return value
 
 R = Path(__file__).resolve().parent.parent
-b = R / "native/bin/Release"
+b = Path(os.environ.get("XML2_FIX_TEST_BIN_DIR", R / "native/bin/Release"))
 out = R / "logs/native"
 LIST_ONLY = "--list" in sys.argv  # print the command matrix; nothing runs, nothing is created or deleted
 EXE = _need("XML2_FIX_TEST_EXE")
@@ -41,12 +41,16 @@ with_exe = {
     "xml2_campaign_sender_test", "xml2_receive_validation_test", "xml2_join_in_progress_test",
     "xml2_combo_heads_test", "xml2_input_worker_test", "xml2_model_pools_test", "xml2_model_pools_lifecycle_test",
     "xml2_npc_combo_timing_test", "xml2_x1_leader_test", "xml2_solo_mode_test", "xml2_resistance_display_install_test",
-    "xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test",
+    "xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test", "xml2_shared_handlers_test",
+    "xml2_xml1_cling_test", "xml2_lift_rule_test", "xml2_xml1_controllers_test", "xml2_dopple_xbe_test",
+    "xml2_xml1_grab_carry_test", "xml2_xml1_grab_carry_install_test", "xml2_xml1_air_carry_test", "xml2_shared_handlers_c_test", "xml2_tk_guard_test",
+    "xml2_anim_enums_test", "xml2_char_sounds_test", "xml2_motion_pool_test", "xml2_resident_stats_test", "xml2_resident_payload_test",
+    "xml2_pool_counter_observers_test",
 }
 # Second argument: the XBE (beta 7: the scheduler suite requires it, the weapon brain compares the original callbacks).
-with_xbe = {"xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test"}
+with_xbe = {"xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test", "xml2_shared_handlers_test", "xml2_shared_handlers_c_test", "xml2_dopple_xbe_test", "xml2_tk_guard_test"}
 skip = {
-    "xml2_test", "lcsave_durable_parity", "lcsave_test", "xml2_save_startup_test",
+    "xml2_test", "lcsave_durable_parity", "lcsave_test", "xml2_save_startup_test", "lcsave_zone_records",
     "xml2_danger_room_party_install_test", "xml2_lockon_effects_install_test",
     "xml2_danger_room_healthbars_install_test", "xml2_speaker_label_install_test", "xml2_classic_hud_install_test",
     "xml2_codex_back_install_test", "xml2_resistance_display_install_test",
@@ -69,6 +73,11 @@ cmds += [[str(b / "xml2_resistance_display_install_test.exe"), EXE, mode] for mo
 _hud = (R / "test/classic_hud_install_test.cpp").read_text(encoding="utf-8")
 _hud_sites = len(re.findall(r"0x[0-9a-fA-F]+", re.search(r"sites\[\]\s*\{(.*?)\};", _hud, re.S)[1]))
 cmds += [[str(b / "xml2_classic_hud_install_test.exe"), EXE, mode] for mode in ["on", "off", "zero", "named-off", "legacy", "invalid", "base", "assets", "alias", "stale"] + [f"guard{i}" for i in range(_hud_sites)]]
+# Suites run once per mode beside the exe: their logs need the mode in the tag (else the second run overwrites the first).
+installer_modes = {"xml2_xml1_air_carry_test"}
+cmds.append([str(b / "xml2_xml1_grab_carry_install_test.exe"), EXE, "both"])
+cmds += [[str(b / "xml2_xml1_air_carry_test.exe"), EXE, mode] for mode in ("both", "raised")]
+cmds.append([str(b / "xml2_shared_handlers_c_test.exe"), EXE, XBE, "--off-proof"])
 
 if LIST_ONLY:
     # The command matrix only: for checking the runner against another gate's matrix. Everything above only reads.
@@ -92,6 +101,8 @@ for cmd in cmds:
     if XBE in cmd:
         tag += "+xbe"
     if tag.removesuffix("+exe").endswith("_install_test") and cmd[-1] not in (EXE, XBE):
+        tag += "-" + cmd[-1]
+    if Path(cmd[0]).stem in installer_modes:
         tag += "-" + cmd[-1]
     if len(cmd) == 1 and tag == "xml2_test":
         tag += "-plain"

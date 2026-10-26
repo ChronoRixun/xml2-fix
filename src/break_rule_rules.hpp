@@ -18,9 +18,13 @@
 // (0x498974) and 2 is unbreakable; the object's damage function (0x497e70, shared by ten classes) refuses a hit
 // whose level byte (hit+0x2e) is below the structure byte (object+0x31c) at 0x498044-0x498062. The melee level
 // (0x44f770: authored + the might_structure affecter + the damageLevel affecter) is capped at 1; it is slot 0x34 of
-// the combat object's vtable (0x685a98), called from one place (0x4501e9, the melee sweep), and its result replaces
-// the hit's authored byte (0x4501fb). Both bytes are read by much else: a character takes a hit only when the
-// level byte is above its own structure byte (0x4293e0), about thirty sites test the structure byte for 2. So
+// the combat object's vtable (0x685a98), called from five places: the melee sweep (0x4501e9), whose result replaces
+// the hit's authored byte (0x4501fb), and four that store it as the actor's impact level at actor+0x2e2 (0x4df1b2,
+// 0x4ec026, 0x4ee9fe, 0x4eebc8: the level byte of the impact attack an actor carries at +0x2b4, for throws, dashes
+// and handler impacts; XML1's 0x59a50 has four callers too: 0xd19b4, 0xd9461, 0xdd648, 0xdd85e). The slot hook sees
+// all five; whether an impact hit later finds its remembered XML1 level is not traced (2026-10-25 G10 audit).
+// Both bytes are read by much else: a character takes a hit only when the level byte is above its own structure
+// byte (0x4293e0), about thirty sites test the structure byte for 2. So
 // neither can hold XML1's 0..10, and a port that maps XML1's structure 2-9 to 1 (to keep those objects
 // breakable at all) lets a plain punch break what XML1 kept for powers.
 //

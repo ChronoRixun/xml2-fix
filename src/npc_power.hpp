@@ -49,7 +49,12 @@ namespace npc_power
 	// visibility. Revisions 5-9 were unreleased candidates and are never reused: 5 a withdrawn role experiment (and
 	// the first reaction-spent build, beta6-interrupt), 6-9 the officer weapon candidates (9 = the held-fire brain
 	// carried by revisions 10 and 11). A peer on any of them, or on the released 3, 4 and 10, is refused by revision.
-	constexpr std::uint16_t revision = 11;
+	// Revision 14 (beta 8, one revision for two branches): the picker's and the power decision's lock tests go for
+	// every caller (the seven other picker callers and the officer weapon brain), XML1's class selection for Advanced
+	// Sentinel and Juggernaut, no Danger Room reaction gate (items 19-22, beta8/parity-a) and the character bullet ray
+	// with the schema 4 trace contract (beta8/bullet-ray). 12 (parity A alone, measured live) and 13 (the bullet ray
+	// alone) were unreleased candidates and are never reused; a revision 11 (1.8.0-beta.7) peer is refused by revision.
+	constexpr std::uint16_t revision = 14;
 	// Released LC peers already advertise rule 16 revision 3 when disabled.
 	constexpr std::uint16_t revision_for(bool requested) { return requested ? revision : 3; }
 	std::array<std::uint32_t, 4> values();

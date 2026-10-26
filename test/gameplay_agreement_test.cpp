@@ -12,6 +12,8 @@
 #include "world_impact_rules.hpp"
 #include "xml1_capability_rules.hpp"
 #include "script_functions_rules.hpp"
+#include "limits_agreement_rules.hpp"
+#include "lift_rule_rules.hpp"
 #include <cstdio>
 #include <string>
 #include <cstdarg>
@@ -159,8 +161,8 @@ void records(){
  check(future.compare(stun(true,true,stun_rule::revision,true).bytes())==result::match,"later rule 17 registration agrees in either order");
  check(stun(true).compare(future.bytes())==result::entries,"missing future rule 17 is refused, not silently ignored");
  // New requested-only rules preserve the pre-integration OFF bytes and name both mismatch directions.
- for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id,gameplay_capabilities::box_harm_origin_id,gameplay_capabilities::danger_room_healthbars_id,gameplay_capabilities::harm_single_chain_id,gameplay_capabilities::online_conversations_id,gameplay_capabilities::model_pools_id,gameplay_capabilities::tick_rate_id,gameplay_capabilities::world_backfaces_id}) {
-  auto optional=[&](bool wanted,bool verified=true){record r;if(wanted)r.add(id,1,{1,0,0,0},verified);r.finalize();return r;};
+ for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id,gameplay_capabilities::box_harm_origin_id,gameplay_capabilities::danger_room_healthbars_id,gameplay_capabilities::harm_single_chain_id,gameplay_capabilities::online_conversations_id,gameplay_capabilities::model_pools_id,gameplay_capabilities::tick_rate_id,gameplay_capabilities::world_backfaces_id,gameplay_capabilities::igb_cache_id,gameplay_capabilities::balance_parity_id,gameplay_capabilities::lift_rule_id,gameplay_capabilities::wall_cling_id,gameplay_capabilities::rogue_decide_id}) {
+  auto optional=[&](bool wanted,bool verified=true){record r;if(wanted)r.add(id,id==gameplay_capabilities::lift_rule_id ? lift_rule_rules::agreement_revision : 1,{1,0,0,0},verified);r.finalize();return r;};
   const auto yes=optional(true),no=optional(false),failed=optional(true,false);
   check(yes.compare(optional(true).bytes())==result::match,"matching new requested-only rule accepts");
   check(std::equal(no.bytes().begin(),no.bytes().end(),native.bytes().begin(),native.bytes().end()),"new rule OFF record is byte-identical to base");
@@ -171,6 +173,15 @@ void records(){
   no.describe(d.buckets,0,false,name,sizeof(name));
   check(std::string(name)==std::string(gameplay_capabilities::rule_name(id))+" (disabled on this PC)","disabled peer names known new rule");
   check(!failed.ready() && failed.compare(yes.bytes())==result::unavailable && yes.compare(failed.bytes())!=result::match,"failed new request closes host/join");
+ }
+ {
+  record old_lift,new_lift;
+  old_lift.add(gameplay_capabilities::lift_rule_id,1,{1,0,0,0},true);old_lift.finalize();
+  new_lift.add(gameplay_capabilities::lift_rule_id,lift_rule_rules::agreement_revision,{1,0,0,0},true);new_lift.finalize();
+  gameplay_capabilities::difference d;char name[160];
+  check(new_lift.compare(old_lift.bytes(),&d)==result::value && old_lift.compare(new_lift.bytes())==result::value,"LiftRule revision 2 refuses revision 1 both ways");
+  new_lift.describe(d.buckets,d.local_only,false,name,sizeof(name));
+  check(std::string(name).find("LiftRule")!=std::string::npos,"LiftRule revision mismatch names the rule");
  }
  // [Online] FastTransfer is rule 24: an unassigned (0) ID is refused by add(); the assigned rule is checked in both mismatch
  // directions and for its record values.
@@ -223,6 +234,38 @@ void records(){
   x4.compare(x2.bytes(),&d);x4.describe(d.buckets,d.local_only,true,name,sizeof(name));
   check(std::string(name)=="28 ModelPools","x4 against x2 names rule 28: "+std::string(name));
  }
+ // ResourceNames must participate even when IGBCache is absent or explicitly stock.
+ {
+  using namespace limits_agreement_rules;
+  auto limits_record = [](capacities wanted, capacities effective, bool explicit_stock_igb) {
+   record r;
+   // IGBCache absent and 200 both leave rule 31 absent, just as exports.cpp does.
+   const auto chosen = limits_rules::decide(std::nullopt, std::to_string(wanted[0]),
+    std::nullopt, std::nullopt, std::nullopt,
+    explicit_stock_igb ? std::optional<std::string_view>("200") : std::nullopt);
+   check(chosen.igb_records == 200, "standalone names keep stock IGB cache");
+   register_rules(wanted, effective, [&](auto id, auto rev, auto values, bool verified) { r.add(id, rev, values, verified); });
+   r.finalize(); return r;
+  };
+  record released; released.finalize();
+  for (bool explicit_igb : {false, true}) {
+   const auto off = limits_record(stock, stock, explicit_igb);
+   check(std::ranges::equal(off.bytes(), released.bytes()), "absent/stock limits preserve released bytes");
+   for (std::size_t i = 0; i < stock.size(); ++i) {
+    auto raised = stock; raised[i] = i == 0 ? 2048 : stock[i] + 1;
+    const auto on = limits_record(raised, raised, explicit_igb);
+    check(on.compare(off.bytes()) == result::entries && off.compare(on.bytes()) == result::entries,
+     "non-stock resource capacity refuses stock both ways");
+    check(on.compare(limits_record(raised, raised, explicit_igb).bytes()) == result::match, "equal capacities agree");
+    check(!limits_record(raised, stock, explicit_igb).ready(), "failed requested capacity closes admission");
+    gameplay_capabilities::difference d; char name[160];
+    on.compare(off.bytes(), &d); on.describe(d.buckets, d.local_only, true, name, sizeof(name));
+    check(std::string(name).find(gameplay_capabilities::rule_name(ids[i])) != std::string::npos, "raised peer names capacity");
+    off.compare(on.bytes(), &d); off.describe(d.buckets, d.local_only, true, name, sizeof(name));
+    check(std::string(name).find(gameplay_capabilities::rule_name(ids[i])) != std::string::npos, "stock peer names capacity");
+   }
+  }
+ }
  // Rule 29, [Online] TickRate: {rate in effect, 0, 0, 0} whenever the key is there, revision 1. A 60 and a 30 PC refuse
  // by name both ways; a PC without the key (the game's 30, no entry) and a 60 PC too; absent keeps the released bytes.
  {
@@ -248,7 +291,7 @@ void records(){
  // Rule 16, the NPC power rule ([Game] NpcPowerRule): enemies that pay for powers and decide every 2 s never share a
  // lockstep game with enemies that don't; revision 3 adds the visibility word; absent is {0,0,0,0}, a failed install unverified.
  auto npc=[](bool on,bool verified=true){record r;r.add(2,1,{1,0,0,0},true);r.add(gameplay_capabilities::npc_power_rule_id,npc_power::revision_for(on || !verified),{on ? 1u : 0u,on ? 1u : 0u,0,0},verified);r.finalize();return r;};
- check(gameplay_capabilities::npc_power_rule_id==16 && npc_power::revision==11 && npc(true).compare(npc(false).bytes())==result::value && npc(false).compare(npc(true).bytes())==result::value,"NPC power rule on/off refuses both directions");
+ check(gameplay_capabilities::npc_power_rule_id==16 && npc_power::revision==14 && npc(true).compare(npc(false).bytes())==result::value && npc(false).compare(npc(true).bytes())==result::value,"NPC power rule on/off refuses both directions");
  check(npc(true).compare(npc(true).bytes())==result::match && npc(false).compare(npc(false).bytes())==result::match,"same NPC power rule accepts");
  record npc_previous; npc_previous.add(2,1,{1,0,0,0},true);npc_previous.add(gameplay_capabilities::npc_power_rule_id,2,{1,0,0,0},true);npc_previous.finalize();
  check(npc(true).compare(npc_previous.bytes())!=result::match && npc_previous.compare(npc(true).bytes())!=result::match,"NPC visibility policy rejects the previous power/combo-only revision both ways");
@@ -260,13 +303,26 @@ void records(){
  // officer weapon candidates, 9 with words 2-3 set). Revisions 10 and 11 carry both and refuse every one of them.
  for(const std::uint16_t candidate:{5,6,7,8,9})for(const auto words:{std::array<std::uint32_t,4>{1,1,0,0},std::array<std::uint32_t,4>{1,1,1,0x6BED0A4Cu}}){
   record peer;peer.add(2,1,{1,0,0,0},true);peer.add(gameplay_capabilities::npc_power_rule_id,candidate,words,true);peer.finalize();
-  check(npc(true).compare(peer.bytes())!=result::match && peer.compare(npc(true).bytes())!=result::match,"revision 11 refuses candidate revisions 5-9 both ways");
+  check(npc(true).compare(peer.bytes())!=result::match && peer.compare(npc(true).bytes())!=result::match,"revision 14 refuses candidate revisions 5-9 both ways");
  }
  // Revision 10 is XML2 Fix 1.8.0-beta.6 (released): its enemies do not spend the call-gap re-checks/decisions and
  // still roll power attacks, so a beta 7 peer refuses it both ways, with and without the weapon brain words.
  for(const auto words:{std::array<std::uint32_t,4>{1,1,0,0},std::array<std::uint32_t,4>{1,1,1,0x6BED0A4Cu}}){
   record beta6;beta6.add(2,1,{1,0,0,0},true);beta6.add(gameplay_capabilities::npc_power_rule_id,10,words,true);beta6.finalize();
-  check(npc(true).compare(beta6.bytes())!=result::match && beta6.compare(npc(true).bytes())!=result::match,"revision 11 refuses the released revision 10 (1.8.0-beta.6) both ways");
+  check(npc(true).compare(beta6.bytes())!=result::match && beta6.compare(npc(true).bytes())!=result::match,"revision 14 refuses the released revision 10 (1.8.0-beta.6) both ways");
+ }
+ // Revision 11 is XML2 Fix 1.8.0-beta.7: its picker callers other than the melee gate and its officer weapon brain still
+ // refuse a locked body, its Advanced Sentinel / Juggernaut classes are XMen2.exe's and its Danger Room gate stays, so a
+ // revision 14 peer refuses it both ways, with and without the weapon brain words.
+ for(const auto words:{std::array<std::uint32_t,4>{1,1,0,0},std::array<std::uint32_t,4>{1,1,1,0x6BED0A4Cu},std::array<std::uint32_t,4>{1,1,1,0x559D0BA1u}}){
+  record beta7;beta7.add(2,1,{1,0,0,0},true);beta7.add(gameplay_capabilities::npc_power_rule_id,11,words,true);beta7.finalize();
+  check(npc(true).compare(beta7.bytes())!=result::match && beta7.compare(npc(true).bytes())!=result::match,"revision 14 refuses revision 11 (1.8.0-beta.7) both ways");
+ }
+ // Revision 11 (released) and the unreleased candidates 12 (parity A alone) and 13 (the bullet ray alone) differ.
+ for (const auto revision : {11, 12, 13}) {
+  record previous;previous.add(2,1,{1,0,0,0},true);previous.add(16,std::uint16_t(revision),{1,1,0,0},true);previous.finalize();
+  check(npc(true).compare(previous.bytes())==result::value && previous.compare(npc(true).bytes())==result::value,
+        "revision 14 refuses revisions 11, 12 and 13 both ways");
  }
  // The officer weapon brain (words 2-3) under the same revision: with and without it refuse each other by value.
  record officer;officer.add(2,1,{1,0,0,0},true);officer.add(gameplay_capabilities::npc_power_rule_id,npc_power::revision,{1,1,1,0x6BED0A4Cu},true);officer.finalize();

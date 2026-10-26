@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(xml2_fix VERSION 1.8.0 LANGUAGES CXX RC)
+project(xml2_fix VERSION 1.9.0 LANGUAGES CXX RC)
 
 if(NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
 	message(FATAL_ERROR "Build with MSVC for Win32 (cmake -A Win32) - X-Men Legends II is a 32-bit game.")
@@ -36,6 +36,14 @@ target_include_directories(lcsave PUBLIC src/lcsave)
 add_library(xml2_fix SHARED
 	src/mold_beam.cpp
 	src/mold_controller.cpp
+	src/xml1_bosses.cpp
+	src/boss_dopples.cpp
+	src/boss_avalanche.cpp
+	src/boss_pyro.cpp
+	src/boss_mystique.cpp
+	src/boss_shadowking.cpp
+	src/boss_magneto.cpp
+	src/boss_blob.cpp
 	src/multipart.cpp
 	src/mold_query.cpp
 	src/mold_effects.cpp
@@ -52,17 +60,27 @@ add_library(xml2_fix SHARED
 	src/harm_single_chain.cpp
 	src/double_heal.cpp
 	src/world_backfaces.cpp
+	src/balance_parity.cpp
+	src/xml1_cling.cpp
+	src/xml1_rogue_decide.cpp
+	src/xml1_grab_carry.cpp
+	src/xml1_air_carry.cpp
+	src/lift_rule.cpp
 	src/combo_heads.cpp
 	src/model_pools.cpp
+	src/pool_counters.cpp
 	src/online_tick.cpp
 	src/npc_power.cpp
 	src/npc_semi_auto.cpp
 	src/stun_rule.cpp
+	src/shared_handlers.cpp
+	src/shared_handlers_c.cpp
 	src/danger_room_party.cpp
 	src/danger_room_healthbars.cpp
 	src/resistance_display.cpp
 	src/classic_hud.cpp
 	src/codex_menu.cpp
+	src/classic_objectives.cpp
 	src/speaker_label.cpp
 	src/pack_amount.cpp
 	src/exports.cpp
@@ -109,6 +127,11 @@ add_library(xml2_fix SHARED
 	src/solo_mode.cpp
 	src/conversations.cpp
 	src/gameplay_agreement.cpp
+	src/resident_stats.cpp
+	src/motion_pool.cpp
+	src/char_sounds.cpp
+	src/anim_enums.cpp
+	src/anim_enum_registry.cpp
 	src/patch_transaction.cpp
 	src/receive_validation.cpp
 	src/explosive_first_hit.cpp
@@ -120,7 +143,9 @@ add_library(xml2_fix SHARED
 	src/xp_curve.cpp
 	src/balance.cpp
 	src/limits.cpp
+	src/address_space.cpp
 	src/entity_capacity.cpp
+	src/actor_pools.cpp
 	src/entity_owners.cpp
 	src/entity_transfer.cpp
 	src/entity_world.cpp
@@ -196,10 +221,16 @@ target_include_directories(xml2_danger_room_healthbars_test PRIVATE src)
 target_compile_options(xml2_danger_room_healthbars_test PRIVATE /UNDEBUG)
 
 add_executable(xml2_xml1_controllers_test test/xml1_controllers_test.cpp src/game_version.cpp)
+add_executable(xml2_boss_mystique_bridge_test test/boss_mystique_bridge_test.cpp)
+target_include_directories(xml2_boss_mystique_bridge_test PRIVATE src)
 target_include_directories(xml2_xml1_controllers_test PRIVATE src)
 target_link_libraries(xml2_xml1_controllers_test PRIVATE ws2_32)
 
 # Pure rules; no game process or graphics.
+add_executable(xml2_classic_objectives_test test/classic_objectives_test.cpp)
+target_include_directories(xml2_classic_objectives_test PRIVATE src)
+target_compile_options(xml2_classic_objectives_test PRIVATE /UNDEBUG)
+
 add_executable(xml2_objective_text_test test/objective_text_test.cpp)
 target_include_directories(xml2_objective_text_test PRIVATE src)
 
@@ -217,6 +248,16 @@ target_include_directories(xml2_stat_points_test PRIVATE src)
 add_executable(xml2_solo_mode_test test/solo_mode_test.cpp)
 target_include_directories(xml2_solo_mode_test PRIVATE src)
 
+# E12: the address space words, the 2 GB guard's straddle test, the high-address test's reservations, the pipe verb
+add_executable(xml2_address_space_test test/address_space_test.cpp)
+target_include_directories(xml2_address_space_test PRIVATE src)
+target_compile_options(xml2_address_space_test PRIVATE /UNDEBUG)
+# the module itself in a large-address-aware host: the guard, the status, the high-address test, the crash line
+add_executable(xml2_address_space_host test/address_space_host.cpp src/address_space.cpp src/log.cpp)
+target_include_directories(xml2_address_space_host PRIVATE src)
+target_compile_definitions(xml2_address_space_host PRIVATE FIX_LOG_FILE=L"address-space-test.log")
+target_link_options(xml2_address_space_host PRIVATE /LARGEADDRESSAWARE)
+
 add_executable(xml2_stat_help_test test/stat_help_test.cpp)
 target_include_directories(xml2_stat_help_test PRIVATE src)
 
@@ -224,6 +265,10 @@ target_include_directories(xml2_stat_help_test PRIVATE src)
 # command line), and a fuzz of the readers.
 add_executable(lcsave_test test/lcsave_test.cpp test/lcsave_vectors.cpp)
 target_link_libraries(lcsave_test PRIVATE lcsave)
+# The per-zone save-compatibility release gate (scripts/zone_records_gate.py): applied zone records of real saves on
+# a real build's tables (no engine, no game). Takes arguments; run_native.py does not run it.
+add_executable(lcsave_zone_records test/lcsave_zone_records.cpp)
+target_link_libraries(lcsave_zone_records PRIVATE lcsave)
 add_executable(xml2_confirmation_release_test test/confirmation_release_test.cpp)
 target_include_directories(xml2_confirmation_release_test PRIVATE src)
 
@@ -308,7 +353,13 @@ target_include_directories(xml2_npc_semi_auto_test PRIVATE src)
 # The shared AI query scheduler of both games executed side by side (XML1 0xfc990 from the owner's default.xbe,
 # XMen2.exe 0x502730 retail and with rule 16): budget, reservation, the stale-reservation throttle, random schedules.
 add_executable(xml2_npc_query_scheduler_test test/npc_query_scheduler_test.cpp)
+add_executable(xml2_dopple_xbe_test test/dopple_xbe_test.cpp)
+target_include_directories(xml2_dopple_xbe_test PRIVATE src)
 target_include_directories(xml2_npc_query_scheduler_test PRIVATE src)
+# [Balance] ReceiveRounding / DamageCap executed side by side (XML1 0x45517 / 0x5ce0d from the owner's default.xbe,
+# XMen2.exe 0x437a54 / 0x453bfb retail and with rule 31's stubs), in 24- and 53-bit x87 precision.
+add_executable(xml2_balance_parity_test test/balance_parity_test.cpp)
+target_include_directories(xml2_balance_parity_test PRIVATE src)
 target_include_directories(xml2_gameplay_agreement_test PRIVATE src)
 target_link_libraries(xml2_gameplay_agreement_test PRIVATE ws2_32)
 
@@ -423,6 +474,9 @@ add_executable(xml2_plugin_scan_test test/plugin_scan_test.cpp src/plugin_scan.c
 target_include_directories(xml2_plugin_scan_test PRIVATE src)
 
 add_executable(xml2_stun_rule_test test/stun_rule_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/stun_rule.cpp)
+add_executable(xml2_shared_handlers_test test/shared_handlers_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/shared_handlers.cpp)
+target_include_directories(xml2_shared_handlers_test PRIVATE src)
+target_link_options(xml2_shared_handlers_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 target_include_directories(xml2_stun_rule_test PRIVATE src)
 target_link_options(xml2_stun_rule_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 add_executable(xml2_box_harm_test test/box_harm_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/box_harm.cpp)
@@ -490,6 +544,14 @@ target_link_options(xml2_harm_single_chain_test PRIVATE /BASE:0x400000 /DYNAMICB
 add_executable(xml2_world_backfaces_test test/world_backfaces_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/world_backfaces.cpp)
 target_include_directories(xml2_world_backfaces_test PRIVATE src)
 target_link_options(xml2_world_backfaces_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# [Game] Xml1WallCling=xml1 (rule 31): the wall-cling rules and every guard against the retail executable
+# (XML2_FIX_TEST_EXE or the first argument); nothing of the game runs.
+add_executable(xml2_xml1_cling_test test/xml1_cling_test.cpp)
+target_include_directories(xml2_xml1_cling_test PRIVATE src)
+# [Game] LiftRule=xml1 (rule 38): XML1 tables, retail guards, OFF bytes and emitted revision 2 bridges.
+add_executable(xml2_lift_rule_test test/lift_rule_test.cpp src/lift_rule.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_lift_rule_test PRIVATE src)
+target_link_options(xml2_lift_rule_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 # multipart::install against the retail image (review cases: invalid table operand, foreign setSegmentVisible handler,
 # relocated table, changed guard) and the loop length's generator draw. SKIPPED without XML2_FIX_TEST_EXE.
 add_executable(xml2_multipart_install_test test/multipart_install_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
@@ -579,3 +641,110 @@ add_executable(xml2_union_host tools/union_host/union_host.cpp tools/union_host/
 # Its own folder: no dinput.dll may sit next to it, or the engine DLLs' dinput import would load that one first.
 set_target_properties(xml2_union_host PROPERTIES OUTPUT_NAME union_host RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/union")
 target_link_options(xml2_union_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
+
+add_executable(xml2_xml1_rogue_decide_test test/xml1_rogue_decide_test.cpp)
+target_include_directories(xml2_xml1_rogue_decide_test PRIVATE src)
+
+add_executable(xml2_xml1_rogue_decide_install_test test/xml1_rogue_decide_install_test.cpp
+    src/xml1_rogue_decide.cpp src/xml1_cling.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_xml1_rogue_decide_install_test PRIVATE src)
+target_link_options(xml2_xml1_rogue_decide_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+add_executable(xml2_boss_wave3_test test/boss_wave3_test.cpp)
+target_include_directories(xml2_boss_wave3_test PRIVATE src)
+target_compile_options(xml2_boss_wave3_test PRIVATE /UNDEBUG)
+
+add_executable(xml2_boss_wave3_bridge_test test/boss_wave3_bridge_test.cpp)
+target_include_directories(xml2_boss_wave3_bridge_test PRIVATE src)
+target_compile_options(xml2_boss_wave3_bridge_test PRIVATE /UNDEBUG)
+add_executable(xml2_xml1_grab_carry_test test/xml1_grab_carry_test.cpp)
+target_include_directories(xml2_xml1_grab_carry_test PRIVATE src)
+add_executable(xml2_xml1_grab_carry_install_test test/xml1_grab_carry_install_test.cpp
+    src/xml1_grab_carry.cpp src/xml1_air_carry.cpp src/xml1_cling.cpp src/xml1_rogue_decide.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_xml1_grab_carry_install_test PRIVATE src)
+target_link_options(xml2_xml1_grab_carry_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+add_executable(xml2_shared_handlers_c_test test/shared_handlers_c_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/shared_handlers_c.cpp)
+target_include_directories(xml2_shared_handlers_c_test PRIVATE src)
+target_link_options(xml2_shared_handlers_c_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+add_executable(xml2_tk_guard_test test/tk_guard_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_tk_guard_test PRIVATE src)
+target_link_options(xml2_tk_guard_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# E4 stage 1: the production transaction plus retail pool/guard instructions inside
+# (the descriptor test compares against 9677892 = release-1.9.0-beta1 before E4: NpcPowerRule revision 14)
+# a union image. These are ordinary native tests; neither game nor engine starts.
+add_executable(xml2_actor_pools_host test/actor_pools_host.cpp src/actor_pools.cpp src/patch_transaction.cpp tools/union_host/union_space.asm)
+target_include_directories(xml2_actor_pools_host PRIVATE src)
+target_compile_definitions(xml2_actor_pools_host PRIVATE XML2_ACTOR_POOLS_TEST)
+target_compile_options(xml2_actor_pools_host PRIVATE /UNDEBUG)
+target_link_options(xml2_actor_pools_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
+set_target_properties(xml2_actor_pools_host PROPERTIES OUTPUT_NAME actor_pools_host)
+
+execute_process(COMMAND git show 9677892:src/npc_power_rules.hpp WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_VARIABLE ACTOR_POOLS_BETA7_POWER RESULT_VARIABLE ACTOR_POOLS_BASE_RESULT)
+if(ACTOR_POOLS_BASE_RESULT EQUAL 0)
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/npc_power_rules_beta7.hpp" "${ACTOR_POOLS_BETA7_POWER}")
+    execute_process(COMMAND git show 9677892:src/gameplay_capabilities.hpp WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE ACTOR_POOLS_BETA7_AGREEMENT COMMAND_ERROR_IS_FATAL ANY)
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/gameplay_capabilities_beta7.hpp" "${ACTOR_POOLS_BETA7_AGREEMENT}")
+    add_executable(xml2_actor_ai_descriptor_test test/actor_ai_descriptor_test.cpp)
+    target_include_directories(xml2_actor_ai_descriptor_test PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}")
+    target_compile_options(xml2_actor_ai_descriptor_test PRIVATE /UNDEBUG)
+else()
+    message(STATUS "Actor descriptor byte differential unavailable: fetch 9677892 (release-1.9.0-beta1 before E4) to run this required E4 test")
+endif()
+
+add_executable(xml2_anim_enum_registry_test test/anim_enum_registry_test.cpp src/anim_enum_registry.cpp)
+target_include_directories(xml2_anim_enum_registry_test PRIVATE src)
+target_compile_options(xml2_anim_enum_registry_test PRIVATE /UNDEBUG)
+
+add_executable(xml2_anim_enums_test test/anim_enums_test.cpp src/anim_enums.cpp src/anim_enum_registry.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_anim_enums_test PRIVATE src)
+target_compile_options(xml2_anim_enums_test PRIVATE /UNDEBUG)
+target_link_options(xml2_anim_enums_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+execute_process(COMMAND git show 69f5115:src/gameplay_capabilities.hpp WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_VARIABLE CHAR_SOUNDS_BETA8_AGREEMENT RESULT_VARIABLE CHAR_SOUNDS_BASE_RESULT)
+if(CHAR_SOUNDS_BASE_RESULT EQUAL 0)
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/gameplay_capabilities_charsounds_base.hpp" "${CHAR_SOUNDS_BETA8_AGREEMENT}")
+    add_executable(xml2_char_sounds_test test/char_sounds_test.cpp src/char_sounds.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+    target_include_directories(xml2_char_sounds_test PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}")
+    target_compile_options(xml2_char_sounds_test PRIVATE /UNDEBUG)
+    target_link_options(xml2_char_sounds_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+else()
+    message(STATUS "CharSounds TS2 baseline unavailable: fetch 69f5115 to run the required CharSounds fixture")
+endif()
+
+add_executable(xml2_xml1_air_carry_test test/xml1_air_carry_test.cpp
+    src/xml1_grab_carry.cpp src/xml1_air_carry.cpp src/xml1_cling.cpp src/xml1_rogue_decide.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_xml1_air_carry_test PRIVATE src)
+target_link_options(xml2_xml1_air_carry_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_motion_pool_test test/motion_pool_test.cpp src/motion_pool.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_motion_pool_test PRIVATE src)
+target_compile_options(xml2_motion_pool_test PRIVATE /UNDEBUG)
+target_link_options(xml2_motion_pool_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_resident_payload_test test/resident_payload_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_resident_payload_test PRIVATE src)
+target_compile_options(xml2_resident_payload_test PRIVATE /UNDEBUG)
+target_link_options(xml2_resident_payload_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_stats_layout_test test/stats_layout_test.cpp)
+target_include_directories(xml2_stats_layout_test PRIVATE src)
+target_compile_options(xml2_stats_layout_test PRIVATE /UNDEBUG)
+
+add_executable(xml2_resident_stats_test test/resident_stats_test.cpp src/resident_stats.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_resident_stats_test PRIVATE src)
+target_compile_options(xml2_resident_stats_test PRIVATE /UNDEBUG)
+target_link_options(xml2_resident_stats_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# Diagnostics: fixed-storage sampler rules and native observer semantics (no game launches).
+add_executable(xml2_pool_counters_test test/pool_counters_test.cpp)
+target_include_directories(xml2_pool_counters_test PRIVATE src)
+target_compile_options(xml2_pool_counters_test PRIVATE /UNDEBUG)
+
+add_executable(xml2_pool_counters_runtime_test test/pool_counters_runtime_test.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_pool_counters_runtime_test PRIVATE src)
+target_link_options(xml2_pool_counters_runtime_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_pool_counter_observers_test test/pool_counter_observers_test.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_pool_counter_observers_test PRIVATE src)
+target_link_options(xml2_pool_counter_observers_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)

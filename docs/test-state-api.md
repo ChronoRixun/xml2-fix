@@ -79,3 +79,12 @@ stock tutorial/Genosha conversations. The game-over aliases remain unverified.
 `xml2_test.exe --state-rules` runs the observer and input-parser fixtures without
 requiring a connected controller or a renderer. The default full suite also checks
 physical controller state; a non-centered pad can fail its unrelated idle assertion.
+
+`CHAR_SOUNDS` observes the installed character sound cache: JSON fields `installed`, `requested`, `capacity`,
+`peak`, `refusals`, `empty_sounddir_actors` and `allocations`. The exact allocation observer updates counters on the
+game thread; the pipe reads atomics. Absent/16 leaves retail bytes uninstrumented. See [char-sounds.md](char-sounds.md).
+
+`MOTION_POOL` reports the installed motion descriptor and exact allocation/clip/reader refusal counters,
+including peak occupancy and per-owner counts. See [motion-pool.md](motion-pool.md).
+
+`RESIDENT_STATS` reports resident/hero/NPC counts and peaks, refusal counters (outer/hero/NPC), and zone invariant failures. `RESIDENT_CENSUS` queues a game-thread census; polling after the next sample returns cached definition indices, handles, flags and payload classes.

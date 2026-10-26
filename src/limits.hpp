@@ -2,7 +2,10 @@
 
 #include <Windows.h>
 
+#include <array>
+#include <cstdint>
 #include <string>
+#include "pool_counter_rules.hpp"
 
 // The engine limit adjuster: raises fixed caps of XMen2.exe in memory at startup, without touching
 // the exe on disk.
@@ -31,6 +34,9 @@
 //                           ; record pool, past which Data/items stops loading
 //   FightStyles = 32        ; 20..32 (19 is the game's own)
 //   EffectCurves = 3600     ; 901..16384 (900 is the game's own): the effect curve pool
+//   IGBCache = 1024         ; 201..2048 (200 is the game's own): the IGB info cache, past which a
+//                           ; zone's map IGB fails to load and the game bounces back to the previous
+//                           ; zone; with no ResourceNames, 2048 (or what it and ActorSlots need)
 //
 // Without the keys nothing is patched. With them, every instruction that carries the old cap (its
 // displacements into the structure, its immediates) is compared with the retail build's bytes first:
@@ -44,6 +50,11 @@ namespace patch_transaction { class transaction; }
 
 namespace limits
 {
+    struct pool_diagnostics {
+        pool_counter_rules::source styles, events, curves;
+        pool_counter_rules::range style_moves;
+    };
+    pool_diagnostics diagnostic_sources();
 	// [Limits] MoveTriggers as a contribution to the one startup transaction (its sites share the actor-arena
 	// teardown at 0x4613e0 with the entity-capacity install): guards, writes and publication; false when the
 	// key is absent/stock or the guards refused. With `teardown_owned_elsewhere` the teardown is not wrapped
@@ -56,8 +67,17 @@ namespace limits
 	// start-up, from the CPrecacheMgr constructor.
 	void install(HMODULE game);
 
+	// [Limits] IGBCache: requested = a raise was asked for (gameplay-agreement rule 31, IGBCache, registers);
+	// installed = it is in. Values {installed, IGB records, resource names, 0} as installed.
+	void register_resource_agreement(); // named rules for every non-stock resource-loading capacity
+	bool igb_cache_requested();
+	bool igb_cache_installed();
+	std::array<std::uint32_t, 4> igb_cache_values();
+
 	// For the test pipe's status: "actors 23/127; names 301/1024; motions 312/500; igb 150/200; items
 	// 374/512; styles 22/32; curves 943/3600" (live count/cap; "-" where this isn't the retail XMen2.exe
 	// or the structure doesn't exist yet).
 	std::string status();
+	// Published CAnimMotionCache capacity, after its guarded install (40 stock).
+	unsigned actor_capacity();
 }

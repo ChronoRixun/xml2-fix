@@ -48,6 +48,13 @@ def capture(tag, dlldir, edit, rules):
     # revision 2, so the transport's OFF claim is compared with the key removed (rule count unchanged).
     if cfg.has_option("Game", "RevivalCost"):
         cfg.remove_option("Game", "RevivalCost")
+    # XML2 Fix 1.9.0-beta.1 (limits wave 1) registers every non-stock resource limit as its own rule (32-37,
+    # docs/gameplay-agreement.md "Resource-loading limits") on purpose: two PCs with different name/slot capacities
+    # refuse each other by name. The reference predates those rules, so the transport's OFF claim is compared with
+    # the six limit keys removed (rule count unchanged: the reference never registered them).
+    for option in ("ActorSlots", "ResourceNames", "ItemEnhancements", "FightStyles", "EffectCurves", "MoveTriggers"):
+        if cfg.has_option("Limits", option):
+            cfg.remove_option("Limits", option)
     edit(cfg)
     with (folder / "xml2-fix.ini").open("w") as handle:
         cfg.write(handle)

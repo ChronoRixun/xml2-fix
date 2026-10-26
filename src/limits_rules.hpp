@@ -58,12 +58,15 @@ namespace limits_rules
 	constexpr int max_fight_styles = 32; // both pool bitmaps remain one dword
 	constexpr int stock_effect_curves = 900; // the effect curve pool (every loaded effect's animation curves)
 	constexpr int max_effect_curves = 16384; // the ini's ceiling; the ids are 16-bit (65536 by their width, see curve_layout)
+	constexpr int stock_igb_records = 200;   // CIGBInfoCache2 (the IGB info cache): every precached model, motion path, effect and HUD head
+	constexpr int max_igb_records = 2048;    // twice the wave-1 target; with ActorSlots 127 it needs 2385 names, within ResourceNames' 4096 (ids keep 32 - 11 - 1 = 20 positive generation bits)
+	constexpr int default_igb_names = 2048;  // what IGBCache brings along when ResourceNames is absent (limits-check: 450 + 824 + 87 = 1361 at 1024 records)
 
-	// Every record of the actor table takes a name, so the name table has to grow by at least the
-	// actor table's growth. (The IGB cache's raise, when it comes, adds its own growth here.)
-	constexpr int names_needed(const int actor_slots)
+	// Every record of the actor table and of the IGB cache takes a name, so the name table has to grow
+	// by at least the two tables' growth.
+	constexpr int names_needed(const int actor_slots, const int igb_records = stock_igb_records)
 	{
-		return stock_resource_names + std::max(0, actor_slots - stock_actor_slots);
+		return stock_resource_names + std::max(0, actor_slots - stock_actor_slots) + std::max(0, igb_records - stock_igb_records);
 	}
 
 	inline std::string_view trimmed(std::string_view text)
@@ -106,6 +109,7 @@ namespace limits_rules
 		int item_enhancements = stock_item_enhancements;
 		int fight_styles = stock_fight_styles;
 		int effect_curves = stock_effect_curves;
+		int igb_records = stock_igb_records;
 		std::vector<std::string> notes; // for the log, in order
 	};
 
@@ -117,12 +121,28 @@ namespace limits_rules
 	// own, anything else is logged and left stock; independent of the two tables.
 	// EffectCurves: 901..16384 raises the effect curve pool, 900 is the game's own, anything else is
 	// logged and left stock; independent of the others.
+	// IGBCache: 201..2048 raises the IGB info cache, 200 is the game's own, anything else is logged and
+	// left stock. Like ActorSlots it needs the name table: without a (usable) ResourceNames it gets
+	// 2048 (or what the two tables need, if more), and a ResourceNames too small is raised to that.
 	inline choice decide(const std::optional<std::string_view> actor_slots, const std::optional<std::string_view> resource_names,
 	                     const std::optional<std::string_view> item_enhancements = std::nullopt,
 	                     const std::optional<std::string_view> fight_styles = std::nullopt,
-	                     const std::optional<std::string_view> effect_curves = std::nullopt)
+	                     const std::optional<std::string_view> effect_curves = std::nullopt,
+	                     const std::optional<std::string_view> igb_records = std::nullopt)
 	{
 		choice result;
+		if (igb_records)
+		{
+			const auto value = parse_count(*igb_records);
+			if (value && *value >= stock_igb_records && *value <= max_igb_records)
+			{
+				result.igb_records = *value;
+			}
+			else
+			{
+				result.notes.push_back("IGBCache=" + std::string(value_text(*igb_records)) + " isn't a number from 201 to 2048 (200 is the game's own) - the IGB cache stays at 200 records");
+			}
+		}
 		if (effect_curves)
 		{
 			const auto value = parse_count(*effect_curves);
@@ -185,7 +205,23 @@ namespace limits_rules
 				result.notes.push_back("ResourceNames=" + std::string(value_text(*resource_names)) + " isn't a number from 451 to 4096 (450 is the game's own) - ignored");
 			}
 		}
-		if (result.actor_slots > stock_actor_slots)
+		if (result.igb_records > stock_igb_records)
+		{
+			const int needed = names_needed(result.actor_slots, result.igb_records);
+			if (!names_set)
+			{
+				result.resource_names = std::max(default_igb_names, needed);
+				result.notes.push_back("IGBCache=" + std::to_string(result.igb_records) + " needs a bigger resource name table (every IGB record takes a name) - ResourceNames=" +
+				                       std::to_string(result.resource_names) + ", as no ResourceNames says otherwise");
+			}
+			else if (result.resource_names < needed)
+			{
+				result.notes.push_back("ResourceNames=" + std::to_string(result.resource_names) + " is too few for IGBCache=" + std::to_string(result.igb_records) + " and ActorSlots=" +
+				                       std::to_string(result.actor_slots) + " (450 plus one per actor slot over 40 and one per IGB record over 200) - using " + std::to_string(needed));
+				result.resource_names = needed;
+			}
+		}
+		else if (result.actor_slots > stock_actor_slots)
 		{
 			const int needed = names_needed(result.actor_slots);
 			if (!names_set)
@@ -240,14 +276,17 @@ namespace limits_rules
 	};
 
 	constexpr DWORD actor_record_size = 0x2e0;
+	constexpr DWORD igb_record_size = 0x90;
 
-	constexpr actor_layout actor_layout_for(const int slots)
+	// The pool template both caches share (CAnimMotionCache and CIGBInfoCache2 are two instantiations of
+	// it, each with its own copy of every method): only the record size differs.
+	constexpr actor_layout cache_layout_for(const int slots, const DWORD record_size)
 	{
 		actor_layout l;
 		const auto n = static_cast<DWORD>(slots);
 		l.slots = slots;
 		l.bitmap_words = dwords_for_bits(slots);
-		l.bitmap_a = n * actor_record_size;
+		l.bitmap_a = n * record_size;
 		l.ring = l.bitmap_a + l.bitmap_words * 4;
 		l.ring_write = l.ring + (n + 1) * 4;
 		l.ring_read = l.ring_write + 4;
@@ -268,6 +307,19 @@ namespace limits_rules
 			seed >>= 1;
 		} while (seed);
 		return l;
+	}
+
+	constexpr actor_layout actor_layout_for(const int slots)
+	{
+		return cache_layout_for(slots, actor_record_size);
+	}
+
+	// CIGBInfoCache2 (igb-cache.md sections 1-2): a static object at 0x7b7fb0 - vtable, then the pool S
+	// (records of 0x90 bytes). igb_layout_for(200) is the retail layout (object 0x7718 bytes: its init
+	// guard 0x7bf6c8 sits right after it).
+	constexpr actor_layout igb_layout_for(const int records)
+	{
+		return cache_layout_for(records, igb_record_size);
 	}
 
 	// ratl::map_os<string_vs<68>, SCacheHandle, M>, a heap object the getter 0x55af80 keeps at
@@ -341,7 +393,8 @@ namespace limits_rules
 		ring_read_via_ring,  // ring-relative (0x455a50)
 		ring_count_via_ring,
 		object,              // the object's address (imm32)
-		clone_call,          // rel32 of a call to the clone of 0x4554e0
+		clone_call,          // rel32 of a call to the clone of 0x4554e0 (the IGB cache: of 0x490d70)
+		pool_object,         // the object's address + 4: its pool S (the IGB cache getter's constructor this)
 	};
 
 	enum class name_field : std::uint8_t
@@ -388,7 +441,7 @@ namespace limits_rules
 		case actor_field::mask_via_cache: return l.mask + 4;
 		case actor_field::ring_read_via_ring: return l.ring_read - l.ring;
 		case actor_field::ring_count_via_ring: return l.ring_count - l.ring;
-		default: return 0; // object, clone_call: addresses, see reference_value
+		default: return 0; // object, clone_call, pool_object: addresses, see reference_value
 		}
 	}
 
@@ -750,10 +803,166 @@ namespace limits_rules
 		 "the resource name table's getter (0x55af80)"},
 	}};
 
-	// TODO(IGB cache): CIGBInfoCache2's 200 records (igb-cache.md sections 1-7: a static object at
-	// 0x7b7fb0, 88 fields, a clone of bitset<200>::findNext 0x490d70) are the third structure. Its
-	// sites go here, as actor_sites do; its growth adds to names_needed, since every IGB record takes a
-	// name too; and limits::install raises it between the name table and the actor table.
+	// ---- The IGB info cache's sites (every N-dependent field of its 16 functions and ring<200>::pop) ---
+	//
+	// CIGBInfoCache2 (igb-cache.md sections 1-7): one static object at 0x7b7fb0 (vtable 0x69c034, then
+	// the pool S at +4: 200 records of 0x90 bytes, the same pool template as the actor table). Every
+	// precached IGB - a package's `model` entries (the zone's own map last), motion paths, effect models,
+	// HUD heads, on-demand model loads - takes a record, and precache (0x56ed00) returns NULL without a
+	// word when 200 are live (0x56ede5): the zone's map IGB then fails and CMap reloads the previous zone.
+	// Raised to N (201..4096) by moving the object into a block of the DLL: the game's own constructor
+	// (reached only from the getter 0x56f9f0), destructor (only at exit, from the atexit thunk 0x67e190)
+	// and methods work on the block once these 82 numbers, four references to the object and the three
+	// calls of the shared bitset<200>::findNext (0x490d70; two unrelated 200-bit sets use it too, 0x4916b9
+	// and 0x57d8d0) are patched. Regenerated from the exe with capstone (every disp32/imm32 of
+	// 0x56e840..0x56f980 and 0x491180..0x4911ac holding one of the pool's retail field values;
+	// scripts/check_igb_cache_text.py proves the rest of .text has none). The cache methods reach the live
+	// count and the mask this-relative (live_via_cache, mask_via_cache), the pool's own methods S-relative.
+	// The pool destructor's tail clears bitmap A seven dwords at a time (0x56e8d2): it runs once, at exit,
+	// after which nothing walks the bitmap, so the tail stays. Nothing in the records depends on N.
+
+	inline constexpr std::array<actor_site, 82> igb_sites{{
+		// ring<200>::pop (0x491180; its only caller is takeFreeIndex, 0x56f6b9)
+		{0x491180, "8b8128030000", 2, 4, 0x328, actor_field::ring_read_via_ring},
+		{0x491187, "898128030000", 2, 4, 0x328, actor_field::ring_read_via_ring},
+		{0x49118d, "3dc8000000", 1, 4, 0xc8, actor_field::slots},
+		{0x491192, "8b812c030000", 2, 4, 0x32c, actor_field::ring_count_via_ring},
+		{0x49119a, "c7812803000000000000", 2, 4, 0x328, actor_field::ring_read_via_ring},
+		{0x4911a5, "89812c030000", 2, 4, 0x32c, actor_field::ring_count_via_ring},
+		// pool destructor (0x56e840; only from the object destructor 0x56f980, at exit), its bitmap scan inlined
+		{0x56e844, "8b8380700000", 2, 4, 0x7080, actor_field::bitmap_a},
+		{0x56e84b, "8dbb80700000", 2, 4, 0x7080, actor_field::bitmap_a},
+		{0x56e866, "81fec8000000", 2, 4, 0xc8, actor_field::slots},
+		{0x56e8a7, "81fec8000000", 2, 4, 0xc8, actor_field::slots},
+		{0x56e8ca, "81fec8000000", 2, 4, 0xc8, actor_field::slots},
+		// ring fill (0x56e8f0)
+		{0x56e8f4, "89b1c0730000", 2, 4, 0x73c0, actor_field::ring_write},
+		{0x56e8fa, "89b1c4730000", 2, 4, 0x73c4, actor_field::ring_read},
+		{0x56e900, "89b1c8730000", 2, 4, 0x73c8, actor_field::ring_count},
+		{0x56e910, "8b81c0730000", 2, 4, 0x73c0, actor_field::ring_write},
+		{0x56e916, "8bb9c8730000", 2, 4, 0x73c8, actor_field::ring_count},
+		{0x56e91e, "3dc8000000", 1, 4, 0xc8, actor_field::slots},
+		{0x56e923, "8981c0730000", 2, 4, 0x73c0, actor_field::ring_write},
+		{0x56e929, "89b9c8730000", 2, 4, 0x73c8, actor_field::ring_count},
+		{0x56e931, "89b1c0730000", 2, 4, 0x73c0, actor_field::ring_write},
+		{0x56e937, "b8c7000000", 1, 4, 0xc7, actor_field::last_slot},
+		{0x56e93f, "8994819c700000", 3, 4, 0x709c, actor_field::ring},
+		{0x56e947, "81fac8000000", 2, 4, 0xc8, actor_field::slots},
+		// pool constructor (0x56e960 / 0x56e9c0): zeroes, mask and shift, ids
+		{0x56e965, "8d8e80700000", 2, 4, 0x7080, actor_field::bitmap_a},
+		{0x56e97f, "8986c0730000", 2, 4, 0x73c0, actor_field::ring_write},
+		{0x56e985, "8986c4730000", 2, 4, 0x73c4, actor_field::ring_read},
+		{0x56e98b, "8986c8730000", 2, 4, 0x73c8, actor_field::ring_count},
+		{0x56e993, "8d8ecc730000", 2, 4, 0x73cc, actor_field::bitmap_b},
+		{0x56e9af, "8986e8730000", 2, 4, 0x73e8, actor_field::live},
+		{0x56e9cd, "89860c770000", 2, 4, 0x770c, actor_field::mask},
+		{0x56e9d3, "898610770000", 2, 4, 0x7710, actor_field::shift},
+		{0x56e9d9, "bac7000000", 1, 4, 0xc7, actor_field::last_slot},
+		{0x56e9ec, "898e0c770000", 2, 4, 0x770c, actor_field::mask},
+		{0x56e9f2, "89be10770000", 2, 4, 0x7710, actor_field::shift},
+		{0x56e9f8, "8d96ec730000", 2, 4, 0x73ec, actor_field::ids},
+		{0x56ea02, "8b8e10770000", 2, 4, 0x7710, actor_field::shift},
+		{0x56ea18, "3dc8000000", 1, 4, 0xc8, actor_field::slots},
+		// slot 6 (0x56eb40): every live record, and its iterator step (0x56ebb0)
+		{0x56eb52, "8d8ecc730000", 2, 4, 0x73cc, actor_field::bitmap_b},
+		{0x56eb61, "bec8000000", 1, 4, 0xc8, actor_field::slots},
+		{0x56ebc0, "8d8bcc730000", 2, 4, 0x73cc, actor_field::bitmap_b},
+		// get, slot 4 (0x56ebe0)
+		{0x56eca8, "8b8e10770000", 2, 4, 0x7710, actor_field::mask_via_cache},
+		// precache, slot 5 (0x56ed00): the id mask, the cap check, the ids
+		{0x56edcd, "8b8b10770000", 2, 4, 0x7710, actor_field::mask_via_cache},
+		{0x56ede5, "81bbec730000c8000000", 2, 4, 0x73ec, actor_field::live_via_cache},
+		{0x56ede5, "81bbec730000c8000000", 6, 4, 0xc8, actor_field::slots},
+		{0x56f1a7, "8b8486ec730000", 3, 4, 0x73ec, actor_field::ids},
+		{0x56f4d1, "8bb486ec730000", 3, 4, 0x73ec, actor_field::ids},
+		// allocAt (0x56f640)
+		{0x56f64c, "8db48a80700000", 3, 4, 0x7080, actor_field::bitmap_a},
+		// takeFreeIndex (0x56f680)
+		{0x56f684, "8b8ec4730000", 2, 4, 0x73c4, actor_field::ring_read},
+		{0x56f68a, "8d869c700000", 2, 4, 0x709c, actor_field::ring},
+		{0x56f6a5, "8b8c96cc730000", 3, 4, 0x73cc, actor_field::bitmap_b},
+		{0x56f6ac, "8d9496cc730000", 3, 4, 0x73cc, actor_field::bitmap_b},
+		{0x56f6be, "ff86e8730000", 2, 4, 0x73e8, actor_field::live},
+		// alloc (0x56f7e0)
+		{0x56f7e2, "8b82c4730000", 2, 4, 0x73c4, actor_field::ring_read},
+		{0x56f7e9, "8bb4829c700000", 3, 4, 0x709c, actor_field::ring},
+		{0x56f805, "09bc10cc730000", 3, 4, 0x73cc, actor_field::bitmap_b},
+		{0x56f80c, "8b8ac4730000", 2, 4, 0x73c4, actor_field::ring_read},
+		{0x56f813, "81f9c8000000", 2, 4, 0xc8, actor_field::slots},
+		{0x56f819, "898ac4730000", 2, 4, 0x73c4, actor_field::ring_read},
+		{0x56f821, "c782c473000000000000", 2, 4, 0x73c4, actor_field::ring_read},
+		{0x56f82b, "ff8ac8730000", 2, 4, 0x73c8, actor_field::ring_count},
+		{0x56f831, "ff82e8730000", 2, 4, 0x73e8, actor_field::live},
+		{0x56f837, "09bc1080700000", 3, 4, 0x7080, actor_field::bitmap_a},
+		// release, slot 0 (0x56f850)
+		{0x56f855, "8bb110770000", 2, 4, 0x7710, actor_field::mask_via_cache},
+		// bumpGeneration (0x56f880)
+		{0x56f886, "8b8810770000", 2, 4, 0x7710, actor_field::shift},
+		{0x56f894, "01b490ec730000", 3, 4, 0x73ec, actor_field::ids},
+		{0x56f89d, "899490ec730000", 3, 4, 0x73ec, actor_field::ids},
+		{0x56f8a4, "8b8810770000", 2, 4, 0x7710, actor_field::shift},
+		{0x56f8b3, "89b490ec730000", 3, 4, 0x73ec, actor_field::ids},
+		// free (0x56f8c0)
+		{0x56f8df, "8b8c86cc730000", 3, 4, 0x73cc, actor_field::bitmap_b},
+		{0x56f8e6, "8d8486cc730000", 3, 4, 0x73cc, actor_field::bitmap_b},
+		{0x56f8f3, "8b86c0730000", 2, 4, 0x73c0, actor_field::ring_write},
+		{0x56f8f9, "8b96c8730000", 2, 4, 0x73c8, actor_field::ring_count},
+		{0x56f901, "3dc8000000", 1, 4, 0xc8, actor_field::slots},
+		{0x56f906, "8986c0730000", 2, 4, 0x73c0, actor_field::ring_write},
+		{0x56f90c, "8996c8730000", 2, 4, 0x73c8, actor_field::ring_count},
+		{0x56f914, "c786c073000000000000", 2, 4, 0x73c0, actor_field::ring_write},
+		{0x56f91e, "b8c7000000", 1, 4, 0xc7, actor_field::last_slot},
+		{0x56f926, "89bc869c700000", 3, 4, 0x709c, actor_field::ring},
+		{0x56f92d, "8b86e8730000", 2, 4, 0x73e8, actor_field::live},
+		{0x56f935, "8986e8730000", 2, 4, 0x73e8, actor_field::live},
+		// destroy record (0x56f940)
+		{0x56f966, "8b8c8780700000", 3, 4, 0x7080, actor_field::bitmap_a},
+		{0x56f96d, "8d848780700000", 3, 4, 0x7080, actor_field::bitmap_a},
+	}};
+
+	constexpr DWORD igb_object_retail = 0x7b7fb0;
+	constexpr DWORD igb_init_guard = 0x7bf6c8; // bit 0: the getter has built the object (the dword right after it)
+	constexpr DWORD find_next_200_va = 0x490d70;
+
+	// The getter's three references (the constructor's `this` is the pool, object + 4; the vtable store;
+	// the returned object), the atexit thunk's, and the cache's three calls of the 200-bit findNext (the
+	// pool destructor's scan of bitmap A, slot 6 and its iterator step over bitmap B), which go to the clone.
+	// Nothing else in the image refers to 0x7b7fb0..0x7bf6c7 (check_igb_cache_text.py).
+	inline constexpr std::array<actor_site, 7> igb_references{{
+		{0x56e8c3, "e8a824f2ff", 1, 4, 0xfff224a8, actor_field::clone_call},                 // pool destructor
+		{0x56eb58, "e81322f2ff", 1, 4, 0xfff22213, actor_field::clone_call},                 // slot 6
+		{0x56ebc6, "e8a521f2ff", 1, 4, 0xfff221a5, actor_field::clone_call},                 // iterator step
+		{0x56fa07, "b9b47f7b00", 1, 4, igb_object_retail + 4, actor_field::pool_object},     // getter: mov ecx, S (the constructor's this)
+		{0x56fa12, "c705b07f7b0034c06900", 2, 4, igb_object_retail, actor_field::object},     // getter: mov [object], vtable
+		{0x56fa2e, "b8b07f7b00", 1, 4, igb_object_retail, actor_field::object},              // getter: mov eax, object (returned)
+		{0x67e190, "b9b07f7b00", 1, 4, igb_object_retail, actor_field::object},              // atexit thunk: mov ecx, object; jmp 0x56f980
+	}};
+
+	// The getter as a whole (no SEH frame: guard bit, constructor call, atexit registration), the atexit
+	// thunk, ring<200>::pop's only call and the pool destructor's only call (from the object destructor).
+	inline constexpr std::array<guard, 4> igb_guards{{
+		{0x56f9f0, "8a0dc8f67b00b80100000084c8752f8b15c8f67b000bd0b9b47f7b008915c8f67b00c705b07f7b0034c06900e89fefffff6890e16700e8f326100083c404b8b07f7b00c3",
+		 "the IGB cache's getter (0x56f9f0)"},
+		{0x67e190, "b9b07f7b00e9e617efff", "the IGB cache's atexit thunk (0x67e190)"},
+		{0x56f6b9, "e8c21af2ff", "takeFreeIndex's call of ring<200>::pop (0x56f6b9)"},
+		{0x56f9ae, "e88deeffff", "the object destructor's call of the pool destructor (0x56f9ae)"},
+	}};
+
+	// bitset<200>::findNext (0x490d70): 0x99 bytes, position-independent (short jumps only, no calls, no
+	// globals); N in five imm32 (the start index, "none", the next word, the found index, "none").
+	inline constexpr function_clone find_next_200{
+		find_next_200_va,
+		"8b4424043dc8000000568bf17c09b8c80000005ec20800538a5c24108bc8c1f90584db8b148e7502f7d28bc883e11fd3ea85d2751f83e0e083c0203dc80000007d4d8bd0c1fa0584db8b14967502f7d285d274e1f7c2ffff0000750683c010c1ea1084d2750683c008c1ea08f6c20f750683c004c1ea04f6c201750c8d642400d1ea40f6c20174f83dc80000007c05b8c80000005b5ec20800",
+		{{
+			{0x05, 4, 0xc8, actor_field::slots},
+			{0x0f, 4, 0xc8, actor_field::slots},
+			{0x3c, 4, 0xc8, actor_field::slots},
+			{0x89, 4, 0xc8, actor_field::slots},
+			{0x90, 4, 0xc8, actor_field::slots},
+		}},
+		{},
+		0,
+	};
 
 	// ---- The counters the test pipe's status reports ------------------------------------------------
 
@@ -761,13 +970,15 @@ namespace limits_rules
 	constexpr DWORD motion_pool_pointer = 0x7b05bc; // the motion pool (500 entries, one per animation of every resident animation database)
 	constexpr DWORD motion_pool_live = 0x46e0;
 	constexpr int motion_pool_capacity = 500;
-	constexpr DWORD igb_live_retail = 0x7b7fb0 + 0x73ec; // CIGBInfoCache2's live count (not relocated yet)
-	constexpr int igb_capacity = 200;
+	constexpr DWORD igb_live_retail = 0x7b7fb0 + 0x73ec; // CIGBInfoCache2's live count, retail (object + 4 + live)
+	constexpr int igb_capacity = stock_igb_records;
 
-	inline constexpr std::array<guard, 2> motion_counter_guards{{
-		{0x56a3e3, "81bfe0460000f4010000", "the motion pool's full check (0x56a3e3)"},
-		{0x56a480, "a1bc057b00", "the motion pool's getter (0x56a480)"},
-	}};
+	inline std::array<guard, 2> motion_counter_guards(std::string_view full_check = "81bfe0460000f4010000")
+	{
+		// Production supplies R3's verified descriptor signature; pure stock tests use the default.
+		return {{{0x56a3e3, full_check, "the motion pool's descriptor full check"},
+		         {0x56a480, "a1bc057b00", "the motion pool's getter (0x56a480)"}}};
+	}
 
 	inline constexpr std::array<guard, 2> igb_counter_guards{{
 		{0x56ede5, "81bbec730000c8000000", "the IGB cache's cap check (0x56ede5)"},
@@ -792,7 +1003,7 @@ namespace limits_rules
 
 	constexpr std::uint32_t reference_value(const actor_site& s, const DWORD object, const DWORD clone)
 	{
-		return s.field == actor_field::object ? object : rel32(s.va, clone);
+		return s.field == actor_field::object ? object : s.field == actor_field::pool_object ? object + 4 : rel32(s.va, clone);
 	}
 
 	// Everything the actor table's raise writes into XMen2.exe for `layout`, with the object and the
@@ -805,6 +1016,22 @@ namespace limits_rules
 			writes.push_back({s.va + s.offset, s.size, value_of(s.field, layout)});
 		}
 		for (const auto& s : actor_references)
+		{
+			writes.push_back({s.va + s.offset, s.size, reference_value(s, object, clone)});
+		}
+		return writes;
+	}
+
+	// Everything the IGB cache's raise writes into XMen2.exe for `layout`, with the object and the
+	// findNext clone at those addresses.
+	inline std::vector<operand_write> igb_writes(const actor_layout& layout, const DWORD object, const DWORD clone)
+	{
+		std::vector<operand_write> writes;
+		for (const auto& s : igb_sites)
+		{
+			writes.push_back({s.va + s.offset, s.size, value_of(s.field, layout)});
+		}
+		for (const auto& s : igb_references)
 		{
 			writes.push_back({s.va + s.offset, s.size, reference_value(s, object, clone)});
 		}

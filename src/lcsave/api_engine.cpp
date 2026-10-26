@@ -311,6 +311,8 @@ namespace lcsave
 				const auto* numbering = tables.data->build->zone_numbering(metadata.zone);
 				if (!numbering) continue; // no placement metadata: discard this record cleanly
 				const auto* prefix = tables.data->build->zone_prefix(metadata.zone,record["content_hash"].as_bytes(),*numbering);
+				// equivalent maps: the capture describes the current map, as an exact-hash record does
+				if (prefix && prefix->placements == numbering->placement) prefix = nullptr;
 				metadata.placement_sha1 = numbering->sha1;
 				if (prefix) metadata.source_placement_sha1 = prefix->old;
 				const auto restored = std::find_if(native.zones.begin(), native.zones.end(), [&](const auto& z)

@@ -49,6 +49,14 @@ namespace model_pools
 		}
 	}
 
+    std::array<pool_counter_rules::source,10> diagnostic_sources()
+    {
+        std::array<pool_counter_rules::source,10> out{};
+        for(std::size_t i=0;i<kinds;++i)
+            out[i]={readable?live_address(static_cast<kind>(i)):0,0,static_cast<DWORD>(layout.capacity[i]),init_guard,false,false};
+        out[9]={readable?particle_manager_va:0,layout.psys.count,static_cast<DWORD>(layout.psys.capacity),particle_manager_guard,false,true};
+        return out;
+    }
 	long live(const int kind_index)
 	{
 		if (!readable || kind_index < 0 || kind_index >= static_cast<int>(kinds)) return -1;
@@ -94,7 +102,9 @@ namespace model_pools
 	{
 		readable = reinterpret_cast<std::uintptr_t>(game) == image_base && retail_build();
 		combo_heads::set_pool_live_addresses(live_address(kind::igb), live_address(kind::shader_fx), layout.capacity[index(kind::igb)], layout.capacity[index(kind::shader_fx)]);
-		const auto set = parse_setting(ini::text(L"Engine", L"ModelPools"));
+		std::string handles_note;
+		const auto set = with_handles(parse_setting(ini::text(L"Engine", L"ModelPools")), ini::text(L"Engine", L"ModelHandles"), &handles_note);
+		if (!handles_note.empty()) logger::write("model pools: %s", handles_note.c_str());
 		rule = agreement_for(set, std::nullopt); // unverified until the raise is committed
 		if (!set.valid)
 			logger::write("model pools: [Engine] ModelPools is not x2, x4 or off - the game's own model pools stay (handles 692, IGB 400, actors 32)");

@@ -1,4 +1,5 @@
 #pragma once
+#include "stats_layout.hpp"
 
 // Discord Rich Presence's decisions, kept apart from the pipe and the game's memory so xml2_test can
 // check them without Discord or the game: the [Discord] keys, which game this is (the X-Men Legends I
@@ -1174,7 +1175,8 @@ namespace discord_rules
 	{
 		for (const auto& g : guards)
 		{
-			if (!limits_rules::matches(image + (g.va - limits_rules::image_base), g.hex))
+			const auto expected=stats_layout::expected(g.va,g.hex);
+			if (!expected || !limits_rules::matches(image + (g.va - limits_rules::image_base), expected->c_str()))
 			{
 				return &g;
 			}
@@ -1341,8 +1343,8 @@ namespace discord_rules
 			{
 				return;
 			}
-			const auto count = u32(*registry + registry_hero_count);
-			const auto mask = u32(*registry + registry_stats_mask);
+			const auto count = u32(*registry + stats_layout::current().hero_count);
+			const auto mask = u32(*registry + stats_layout::current().pool_mask);
 			if (!count || !mask || static_cast<int>(*count) < 0 || static_cast<int>(*count) > registry_hero_max)
 			{
 				return;
@@ -1372,11 +1374,11 @@ namespace discord_rules
 			for (std::uint32_t i = 0; i < count; ++i)
 			{
 				std::uint16_t index = 0;
-				if (!memory_.read(registry + registry_heroes + i * 2, &index, sizeof(index)) || index == 0 || index > registry_names_max)
+				if (!memory_.read(registry + stats_layout::current().heroes + i * 2, &index, sizeof(index)) || index == 0 || index > registry_names_max)
 				{
 					continue;
 				}
-				const DWORD entry = registry + registry_entries + index * entry_size;
+				const DWORD entry = registry + stats_layout::current().entries + index * entry_size;
 				const auto name_handle = u32(entry + entry_name);
 				if (!name_handle)
 				{
