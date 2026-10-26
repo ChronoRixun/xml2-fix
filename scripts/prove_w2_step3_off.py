@@ -31,21 +31,29 @@ def capture(tag,dll_dir,host,retail,engine,data,out):
     folder=out/tag;folder.mkdir(parents=True,exist_ok=True)
     shutil.copytree(data,folder/"Data",dirs_exist_ok=True)
     shutil.copyfile(dll_dir/"dinput.dll",folder/"dinput.dll")
-    (folder/"xml2-fix.ini").write_text("[Save]\nFormat=lc\n[Limits]\nEntityCapacity=1\n",encoding="utf-8")
+    mode=os.environ.get("XML2_FIX_OFF_CASE","e10a2")
+    configurations={"e10a2":"[Save]\nFormat=lc\n[Limits]\nEntityCapacity=1\n","retail":"[Save]\nFormat=lc\n","native":""}
+    assert mode in configurations,"XML2_FIX_OFF_CASE must be e10a2, retail or native"
+    (folder/"xml2-fix.ini").write_text(configurations[mode],encoding="utf-8")
     sym=symbols(dll_dir/"dinput.map")
     cap=[a for a,n in sym if n.startswith("?capabilities@") and "3Vrecord@gameplay_capabilities@@A" in n]
     assert len(cap)==1,cap
     cmd=[str(host),str(folder/"dinput.dll"),str(retail),str(engine),str(out/(tag+".tsv")),hex(cap[0]-0x10000000),str(out/(tag+".gcap")),"108"]
     code=folder/"code";code.mkdir(exist_ok=True)
     for previous in code.glob("*.bin"):os.remove(str(previous.resolve()))
-    env=os.environ.copy();env["UNION_CODE_OUT"]=str(code)
+    env=os.environ.copy();env["UNION_CODE_OUT"]=str(code);env["UNION_PRIVATE_DESKTOP"]="1"
     r=subprocess.run(cmd,cwd=folder,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,creationflags=0x08004000,timeout=180)
     (out/(tag+"-host.log")).write_bytes(r.stdout)
     assert r.returncode==0,(tag,r.returncode,r.stdout[-1000:])
     log=(folder/"xml2-fix.log").read_text(errors="replace")
-    assert "entity capacity: installed" in log,(tag,"capacity did not install")
-    assert "native layout E10A2" in log,(tag,"OFF did not keep E10A2")
-    assert "save manager backing" in log
+    if mode=="e10a2":
+        assert "entity capacity: installed" in log,(tag,"capacity did not install")
+        assert "native layout E10A2" in log,(tag,"OFF did not keep E10A2")
+        assert "save manager backing" in log
+    elif mode=="retail":
+        assert "native layout retail" in log and "entity capacity: installed" not in log,(tag,"OFF did not keep RETAIL")
+    else:
+        assert "native layout W2" not in log and "LC ([Save] Format=lc)" not in log,(tag,"native OFF unexpectedly installed LC")
     changes={};modules={}
     for line in (out/(tag+".tsv")).read_text().splitlines():
         fields=line.split("\t")

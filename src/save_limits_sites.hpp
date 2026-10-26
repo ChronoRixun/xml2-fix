@@ -334,6 +334,9 @@ inline const std::vector<row> direct{
 struct change {unsigned offset,size;const char* value;unsigned target;};
 struct block {unsigned lo,hi;const char* hash;std::vector<change> edits;};
 inline const std::vector<block> blocks{
+ {0x48864b,0x488650,"5fdc280aa365e4c075e7c2bc8333744e54529f616f951c5bb34bc073849eff67",{
+  {0x0,4,"8b44241c9c608b44241c50b81200edfeffd083c404619d",0x0},
+ }},
  {0x48872a,0x488731,"09b59fa82972e3fc90b800fa1eb001be5a3faedf3f429168c817d41f5d21074f",{
   {0x0,7,"9c608b44240050b80100edfeffd083c40489442418619d",0x0},
  }},

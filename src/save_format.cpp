@@ -1,6 +1,7 @@
 #define _CRT_RAND_S
 #include "save_format.hpp"
 #include "item_capacity.hpp"
+#include "native_save_layout.hpp"
 #include "patch_transaction.hpp"
 
 #include "save_format_rules.hpp"
@@ -61,6 +62,7 @@ namespace save_format
 
 		bool enabled = false;         // [Save] Format=lc and every guard matched
 		native_profile layout_profile = retail_profile; // chosen before the contribution; immutable after publication
+		native_profile published_profile = retail_profile;
 		bool layout_vetoed = false;   // use_native_profile refused a profile (unknown or mismatching descriptor)
 		const lcsave::NativeLayout* native_layout = &lcsave::retail_layout; // the lcsave descriptor matching layout_profile
 		lcsave::TypedRegistry typed_registry;        // the build's typed entity-id registry, when verified against the scripts
@@ -1980,6 +1982,12 @@ namespace save_format
 		{
 			return "ok " + status();
 		}
+		if (verb == "layout")
+		{
+			if(!rest.empty())return "error save layout takes no arguments";
+			const auto detail=native_save_layout::status();
+			return detail.empty()?"layout "+std::string(installed_profile().layout_id):detail;
+		}
 		if (!enabled)
 		{
 			return "error the LC save mode is off ([Save] Format isn't lc, or a guard didn't match)";
@@ -2090,7 +2098,7 @@ namespace save_format
 		lc_known_required_features = layout->feature_bits;   // RETAIL 0, E10A2 1, W2 3
 	}
 
-	const native_profile& installed_profile() { return layout_profile; }
+	const native_profile& installed_profile() { return published_profile; }
 
 	void install(const HMODULE game)
 	{
@@ -2254,6 +2262,7 @@ namespace save_format
 		{
 			(void)memory;
 			enabled = true;
+			published_profile = layout_profile;
 			installation_failure.clear();
 			logger::write("save format: guarded trivia getter/setter and independent per-act cursors installed; TRIV bind rule 2 uses compact native bits; rule 1 retains legacy positions");
 			logger::write("save core: guarded actual numbering/capture/reset and load lifetime installed; capture masks 1/2; W11 open");

@@ -20,13 +20,14 @@ namespace entity_capacity
 	// Reads the INI, decides, and prepares every owner object and backing before anything is contributed (the
 	// save seam needs the chosen native profile first). Nothing is written to the game.
 	void prepare(patch_transaction::transaction& transaction, HMODULE game);
-	// Step-3 layout input for the eventual W2 selector, after later contributors
-	// complete the layout. The current startup
-	// caller uses the overload above, which always requests E10A2.
+	// Explicit profile selected by native_save_layout. The default overload
+	// preserves E10A2 when the W2 key is absent.
 	void prepare(patch_transaction::transaction& transaction, HMODULE game, const save_format_rules::native_profile& profile);
 	// True when the raise is requested and prepared: the actor-arena teardown at 0x4613e0 is then this module's
 	// (AllocatorShutdown), which calls limits::retire_move_trigger_times() after the native teardown.
 	bool owns_arena_teardown();
+	bool prepared_for_w2();
+	unsigned zone_record_count();
 	// True only when the FastTransfer replacement was installed; receive validation uses its record format then.
 	bool fast_transfer_active();
 	// Adds the ledger's guards, region hashes and writes bound to this DLL's symbols.

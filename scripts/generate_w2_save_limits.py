@@ -117,6 +117,10 @@ edit(0x489f16,preserve_call([('esi',-0x1a9)],1,'eax'),'wide objective cursor')
 # The only index store shared with objective_text. The W2 description
 # contribution omits this write and resets by the same full index callback.
 edit(0x489a01,bytes.fromhex('8890a9010000')+preserve_call([('edx',0),('eax',0)],2),'wide objective registration')
+# The global registrar returns the cumulative number of registered objective
+# definitions. Observe its return without changing flags/registers/ret8, so
+# step8 status reports global use rather than the current act's loaded pool.
+edit(0x48864b,raw(0x48864b,4)+preserve_call([('eax',0)],18),'registered objective count observer')
 # Allocation/reuse/reset manage the side table, even with descriptions disabled.
 replace(0x489620,0x489678,3,'objective allocate')
 replace(0x488c20,0x488cf8,4,'objective release bitmap')

@@ -858,12 +858,13 @@ namespace limits
 		const auto move_triggers = ini_value(L"MoveTriggers"); // contributed to the startup transaction earlier (contribute())
 		if (!actor_slots && !resource_names && !item_enhancements && !fight_styles && !effect_curves && !move_triggers && !igb_records)
 		{
-			logger::write("limits: the game's own caps - 40 actor slots, 450 resource names, 375 item enhancements (no [Limits] in xml2-fix.ini)");
+			if(w2_items)logger::write("limits: W2 owns the 4096-record item enhancement pool");
+			else logger::write("limits: the game's own caps - 40 actor slots, 450 resource names, 375 item enhancements (no [Limits] in xml2-fix.ini)");
 			return;
 		}
 		const auto chosen = decide(actor_slots ? std::optional<std::string_view>(*actor_slots) : std::nullopt,
 		                           resource_names ? std::optional<std::string_view>(*resource_names) : std::nullopt,
-		                           item_enhancements ? std::optional<std::string_view>(*item_enhancements) : std::nullopt,
+		                           item_enhancements && !w2_items ? std::optional<std::string_view>(*item_enhancements) : std::nullopt,
 		                           fight_styles ? std::optional<std::string_view>(*fight_styles) : std::nullopt,
 		                           effect_curves ? std::optional<std::string_view>(*effect_curves) : std::nullopt,
 		                           igb_records ? std::optional<std::string_view>(*igb_records) : std::nullopt);

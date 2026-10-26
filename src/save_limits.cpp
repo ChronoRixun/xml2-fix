@@ -6,6 +6,7 @@
 #include "save_format.hpp"
 #include "log.hpp"
 #include <array>
+#include <atomic>
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -39,6 +40,8 @@ std::uint8_t* registry=nullptr;
 std::uint16_t* wide=nullptr;
 save_layout_view::objectives_view view=save_layout_view::w2_objectives_shape;
 unsigned copy_original=0;
+std::atomic<unsigned> objective_total{0};
+void __cdecl registered_total(unsigned count){if(count<=1024)objective_total.store(count,std::memory_order_relaxed);}
 unsigned generation_return=0x4bfafe,shared_cap_target=0x4c0460;
 static_assert(save_layout_view::w2_objectives_shape.count_offset==8+objective_count);
 int slot(const void* record){
@@ -152,6 +155,7 @@ void append(contribution& owner,contribution c){
 }
 }
 bool installed(){return active;}
+unsigned objective_registered_count(){return active?objective_total.load(std::memory_order_relaxed):0;}
 unsigned talent_capacity(){return active?256:100;}
 unsigned talent_count_offset(unsigned pool){const unsigned old[]={0x1654,0x26f4,0x3090},raised[]={talent_a+a_live,talent_b+b_live,talent_c+c_live};return pool<3?(active?raised[pool]:old[pool]):0;}
 bool contribute_w2(contribution& owner,std::string& why) try {
@@ -160,7 +164,7 @@ bool contribute_w2(contribution& owner,std::string& why) try {
  auto* registry_bytes=store->allocate(talent_size);
  auto* states=store->allocate(1024);auto* names=store->allocate(64*32+8);auto* acts=store->allocate(64+4);auto* bases=store->allocate(64*2+4);auto* side=store->allocate(0xa88);
  const std::array<unsigned,10> data{0,address_of(states),address_of(names),address_of(names)+64*32+4,address_of(acts),address_of(acts)+64,address_of(bases),address_of(bases)+128,address_of(side),address_of(side)+0xa84};
- const std::array<unsigned,18> target{0,address_of(&record_index),address_of(&registered),address_of(&allocate_objective),address_of(&reset_objectives),address_of(&sort_objectives),address_of(&manager_get),address_of(&manager_stop),address_of(&ring_reset),address_of(&ring_push),address_of(&generation_stub),address_of(&multiplier_stub),address_of(&cap_stub),address_of(&copy_record),address_of(&registry_allocate),address_of(&registry_free),address_of(&acts_construct),address_of(&bases_construct)};
+ const std::array<unsigned,19> target{0,address_of(&record_index),address_of(&registered),address_of(&allocate_objective),address_of(&reset_objectives),address_of(&sort_objectives),address_of(&manager_get),address_of(&manager_stop),address_of(&ring_reset),address_of(&ring_push),address_of(&generation_stub),address_of(&multiplier_stub),address_of(&cap_stub),address_of(&copy_record),address_of(&registry_allocate),address_of(&registry_free),address_of(&acts_construct),address_of(&bases_construct),address_of(&registered_total)};
  auto resolve=[&](std::vector<std::uint8_t>& bytes){for(unsigned i=0;i+4<=bytes.size();++i){unsigned v=read<unsigned>(bytes.data(),i);if(v>0xfeed0000&&v<0xfeed0000+target.size())put(bytes.data(),i,target[v-0xfeed0000]);if(v>0xfeed1000&&v<0xfeed1000+data.size())put(bytes.data(),i,data[v-0xfeed1000]);}};
  for(const auto& g:save_limits_sites::ledger)c.guards.push_back({g.va,bytes_of(g.bytes),"E14/E7 reviewed retail ledger"});
  for(const auto cell:{0x72b108u,0x77339cu})c.guards.push_back({cell,{0,0,0,0},"W2 objectives/talents startup quiescence"});

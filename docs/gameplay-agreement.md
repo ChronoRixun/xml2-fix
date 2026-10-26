@@ -179,3 +179,14 @@ non-stock `[Limits] ResourceNames`, `ActorSlots`, `ItemEnhancements`, `FightStyl
 A requested capacity that failed to install invalidates admission. Stock/absent limits contribute no
 rule, preserving the released bytes. In particular ResourceNames=450 versus 2048 refuses by name even
 when IGBCache is absent or 200 on both PCs. Rules 31 and 28 retain their existing encodings.
+
+
+Rule47 NativeSaveLayout is assigned to W2, revision1. It registers only for
+verified `[Save] Format=lc`, `[Limits] EntityCapacity=1`, `SaveLayout=w2`; failed
+requests poison admission. Effective values are
+`{ordinal | zone_records<<8 | structural_revision<<16,
+definitions | enhancement_records<<16, instances | world_slots<<16,
+objectives | talent_multiplier<<16}`. W2 currently uses
+`{0x10802,0x10000400,0x4000400,0xc80400}`. The absent SaveLayout key adds no
+entry and preserves the released digest. Rule1 alone cannot distinguish these
+native streams. See [limits-wave2.md](limits-wave2.md#step-8-dll-selection-admission-and-builder-contract).

@@ -99,3 +99,32 @@ W2 remains unselectable; the builder key and rule47 are step8.
 The durable-parity test writes `actual.*` next to each vector. Point
 XML2_FIX_LEGACY_VECTORS_DIR at a writable copy inside the workspace when the
 source vector folder is read-only; this task used build/native-vectors67.
+
+
+Step8 startup/admission gate (Win32 Release, no game launch): configure
+`XML2_SAVE_STARTUP_FAULT_TEST=ON` for the opt-in fault DLL, build ALL_BUILD below
+normal priority with `/m:1 /nr:false`, then run:
+
+```powershell
+python scripts/check_w2_startup.py native/bin/Release build/step8-startup
+```
+
+The script expects the owned engine/Data copies produced by the prior OFF proof
+under build/off-proof67-final and the pre-change DLL/map under
+build/step8-baseline. All run folders are workspace-owned, all host desktops are
+private, and processes exit after collecting evidence. Optional final CASE runs
+just that configuration. The production DLL contains no fault hooks; the fault
+DLL snapshots the complete owned image before/after the union for T12. Rule47
+peer checks call the current and baseline DLLs' compiled description routines.
+`save layout` is the standalone pipe telemetry command; ordinary `status` also
+includes its exact W2 segment. Builder output/validation contract is documented
+in limits-wave2.md. Live-game gates are not executed by this task.
+
+
+Every step8 case uses a fresh UUID directory under OUTPUT_DIR; results.json
+names the case artifacts. Unknown CASE arguments fail. The default20-case run
+includes a negative control that must reject missing current snapshots.
+For all three absent-key OFF configurations, run the existing proof with
+XML2_FIX_OFF_CASE=e10a2 (default), retail, or native. Use build/step8-pages.txt;
+the reference is build/step8-baseline. The proof's union hosts use private
+desktops and compare symbols/relocations plus complete generated allocations.

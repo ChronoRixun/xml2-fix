@@ -126,6 +126,7 @@ add_library(xml2_fix SHARED
 	src/save_manager.cpp
 	src/item_capacity.cpp
 	src/save_limits.cpp
+	src/native_save_layout.cpp
 	src/smart_entities.cpp
 	src/entity_owners.cpp
 	src/entity_transfer.cpp

@@ -710,7 +710,7 @@ SaveLayout=w2` and Legends Classic 0.4.2 / XML2 Fix 1.9.
 
 | Change | Online effect | Covered by |
 |---|---|---|
-| W2 layout (all structures of section 3) | the host's 2 MiB native image and every joiner's reader must agree on the stream layout; equal actor capacities do not imply equal streams | **rule 47 `NativeSaveLayout`** (ID requested from the coordinator; `_rule-ids.md` 45+ free), revision 1, values `{layout ordinal (0 RETAIL, 1 E10A2, 2 W2) \| record_count << 8 \| structural revision << 16, definitions \| enhancement_records << 16, instances \| world_slots << 16, objectives \| talent_multiplier << 16}`; registered **only when W2 is installed** (as rules 28 and 31 do: absent key, RETAIL or E10A2 add no entry, so the released record of every 0.4.x build is unchanged and a 0.4.1 peer is refused as "a rule this PC does not have" on its side and as `47 NativeSaveLayout` on the W2 side); a requested W2 that did not install registers unverified and closes host / join. The structural revision increments whenever equal capacities could still encode the stream differently |
+| W2 layout (all structures of section 3) | the host's 2 MiB native image and every joiner's reader must agree on the stream layout; equal actor capacities do not imply equal streams | **rule 47 `NativeSaveLayout`** (coordinator-assigned ID 47), revision 1, values `{layout ordinal (0 RETAIL, 1 E10A2, 2 W2) \| record_count << 8 \| structural revision << 16, definitions \| enhancement_records << 16, instances \| world_slots << 16, objectives \| talent_multiplier << 16}`; registered **only when W2 is installed** (as rules 28 and 31 do: absent key, RETAIL or E10A2 add no entry, so the released record of every 0.4.x build is unchanged and a 0.4.1 peer is refused as "a rule this PC does not have" on its side and as `47 NativeSaveLayout` on the W2 side); a requested W2 that did not install registers unverified and closes host / join. The structural revision increments whenever equal capacities could still encode the stream differently |
 | E2 / E3 / E3b / E3c pools | a full pool refuses an item, a bonus or a drop (lockstep state) | rule 47 values 1-2; `ItemEnhancements=4096` also registers rule 34 as today |
 | E7 pool and M | registration refusals and the talent-id space are lockstep state | rule 47 value 3 (M); the pool is implied by the layout ordinal |
 | E9 8 records | eviction order and what a revisited zone remembers are lockstep state | rule 47 value 0 (record_count) |
@@ -1237,3 +1237,91 @@ byte differences; agreement and registry exports are identical. Content guard:
 627 indexed files plus all 25 changed/new files clean. Synthetic guard self-test
 30/30 (temporary Git plumbing excluded under the task's no-Git-write rule).
 No game or emulator was launched. Live G3/G4 and step8 remain separate gates.
+
+
+### Step 8: DLL selection, admission and builder contract
+
+The DLL now reads `[Limits] SaveLayout=w2` through `native_save_layout` before
+preparing the capacity union. The absent-key path still calls the original
+E10A2/retail selector. A non-LC save mode ignores SaveLayout; unknown explicit
+values under LC, missing EntityCapacity, and conflicting ItemEnhancements are
+refused before any startup-union write. Failed requested W2 preparation adds a
+transaction veto; it cannot silently commit the LC seam on another layout.
+A failed transaction registers rule47 unverified, leaves the affected image
+stock, and refuses DLL initialization. The pre-existing socket exclusion may
+already be installed before this union; the fault gate measures image bytes
+immediately before preparation and after the union, independently of that hook.
+
+The save seam's public `installed_profile()` exposes its committed profile,
+not the profile staged to generate its bridges. Rule47 is revision1 with
+structural revision1 and effective values:
+`{0x00010802,0x10000400,0x04000400,0x00c80400}`. Rule34 ItemEnhancements is
+also registered as `{4096,0,0,0}` under W2, even when that key is implicit.
+E10A2 and W2 retain the same rule1 actor values but refuse one another via47.
+This DLL names47 NativeSaveLayout in either direction; the preserved pre-step8
+DLL calls the unknown rule `a rule this PC does not have`.
+
+Builder output required for W2 (the external builder is maintained separately):
+
+```ini
+[Save]
+Format=lc
+[Limits]
+EntityCapacity=1
+SaveLayout=w2
+ItemEnhancements=4096
+```
+
+ItemEnhancements may be omitted because W2 owns4096; if present it must be4096.
+Write canonical values. Preserve the coordinator-assigned existing online
+GameVersion/release token; this step assigns no release identity. The DLL checks
+these prerequisites, supported retail bytes/whole-owner hashes, startup owner
+quiescence, every composed write and page protection/readback/rollback, and the
+committed layout descriptor before publishing W2/admission. The builder must
+still validate its data:1024 definitions/instances/world slots/objectives,
+4096 enhancement/attached records,127 loaded objectives per act,64 mission files,
+256 registrations per talent pool, hero position<200/shared position<199,
+(saved talent id<=65535), and recursive zone placement count<=1024. Talent-file
+slots remain9; M=200 is the descriptor's constant, not an independent INI key.
+There is no separate switch for one W2 engine raise. Feature bit1 remains the
+representability probe's decision, never a builder flag inferred from SaveLayout.
+
+The test pipe's ordinary `status` includes the W2 status segment. `save layout`
+returns exactly the standalone line (without an `ok` prefix):
+
+```text
+layout W2; defs n/1024; enh n/4096; att n/4096; inst n/1024; world n/1024; obj n/1024; talents n/256; zones n/8
+```
+
+Counters are live definitions, total prefix+suffix enhancement records,
+attached/instance occupancy, occupied world slots, globally registered objective
+definitions, maximum occupancy across the three talent pools, and resident zone
+records. Unconstructed owners report0. The new guarded observer at0x48864b
+preserves the global registrar's EAX/flags/ret8 and records its cumulative return
+atomically; this avoids confusing the per-act loaded count (<=127) with the global
+objective ceiling1024. With W2 off, `save layout` returns `layout RETAIL` or
+`layout E10A2`; ordinary status/engine bytes/agreement stay at the configured
+baseline.
+
+`check_w2_startup.py` runs complete production/fault DLL initializations on
+private desktops in the owned union host. It checks configurations, explicit/
+implicit4096, ObjectiveDescriptions composition, guard mutation, backing failure,
+an actually RX page whose protection change is refused, rule47 values/digest,
+nonzero status including the real pipe handler, and current/pre-step8 compiled
+refusal wording. Fault-only snapshots compare the entire7MiB owned image before
+preparation and after refusal; faults are excluded from production dinput.dll.
+No game or emulator is launched. The external builder integration and live G3/G4
+validation remain separate work.
+
+
+Step8 final gates:20 startup/T12/T13/evidence-control cases,70 legacy startup
+cases,170 native invocations,77 parity vectors,52 objective/talent checks,
+36 full-union checks and47 item checks, all with zero failures. The new
+objective text gate checks138 reviewed guards,49 owner hashes,40 caves and
+899333 instructions; save and item text gates pass too. Absent-key OFF proofs
+compare the native, RETAIL-LC and E10A2-LC configurations against68cd9c0 on
+50 pages/204800 bytes each:zero other byte differences,identical agreement and
+registry exports. Each startup run uses a fresh case directory so stale
+snapshots/markers cannot certify a rerun; a missing-evidence negative control
+proves that check. A fresh read-only review found no production defects; its
+stale-evidence observation was reproduced and fixed. No live-game gate ran.

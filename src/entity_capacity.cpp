@@ -21,6 +21,10 @@
 #include <atomic>
 #include <cstring>
 #include <map>
+#ifdef XML2_SAVE_STARTUP_FAULT_TEST
+#include "../test/w2_startup_faults.hpp"
+#define VirtualAlloc w2_startup_faults::allocate
+#endif
 
 namespace entity_capacity
 {
@@ -478,6 +482,13 @@ namespace entity_capacity
 	}
 
 	bool owns_arena_teardown() { return prepared; }
+	bool prepared_for_w2() { return prepared && built_ok && !fatal && std::string_view(prepared_profile.layout_id)=="W2"; }
+	unsigned zone_record_count() {
+		unsigned count=0;
+		if(install_published&&save_backing&&claim==claim_state::in_use)
+			patch_transaction::read_memory(address_of(save_backing)+prepared_profile.record_count*prepared_profile.record_size+4,&count,4);
+		return count;
+	}
 	bool fast_transfer_active() { return fast_installed; }
 
 	void contribute(patch_transaction::transaction& transaction, HMODULE game)
