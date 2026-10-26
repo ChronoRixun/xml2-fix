@@ -1,4 +1,5 @@
 #include "gamepad_fix.hpp"
+#include "controller_scan_cache.hpp"
 #include "log.hpp"
 #include "pad_input.hpp"
 #include "pad_profile.hpp"
@@ -30,6 +31,7 @@ namespace gamepad_fix
 		constexpr std::uint16_t microsoft_vid = 0x045E;
 
 		const pad_profile::profile* active = &pad_profile::logitech_dual_action;
+		bool cache_scans = true;
 
 		// COM vtable slots. Every IDirectInput version shares the first ones, as do the device interfaces.
 		constexpr int slot_create_device = 3;
@@ -707,8 +709,32 @@ namespace gamepad_fix
 				return real(self, type, callback, user, flags);
 			}
 
-			enum_context context{callback, user, is_di8(self)};
-			const HRESULT result = real(self, type, &enum_callback, &context, flags);
+			int version = 0;
+			{
+				std::lock_guard lock(mutex);
+				version = vtables[*static_cast<void***>(self)].version;
+			}
+			enum_context context{callback, user, version == 8};
+			const DWORD main_type = GET_DIDEVICE_TYPE(type);
+			const bool controllers = type == 0 || (context.di8 ? type == DI8DEVCLASS_GAMECTRL ||
+				(main_type >= DI8DEVTYPE_JOYSTICK && main_type <= DI8DEVTYPE_SUPPLEMENTAL) : main_type == 4);
+			HRESULT result = DI_OK;
+			if (cache_scans && controllers && controller_scan_cache::start())
+			{
+				const auto list = controller_scan_cache::request({self, version, is_wide(self), type, flags}, real);
+				if (list)
+				{
+					result = list->result;
+					for (const auto& item : list->devices)
+						if (enum_callback(reinterpret_cast<LPCDIDEVICEINSTANCEW>(item.bytes.data()), &context) == DIENUM_STOP) break;
+				}
+			}
+			else
+			{
+				if (cache_scans && controllers)
+					logger::write_once("scan-worker-failed", "dinput: controller scan worker unavailable - original enumeration retained");
+				result = real(self, type, &enum_callback, &context, flags);
+			}
 			// The virtual pads after the real devices, so each is always the same pad in the game's list.
 			if (SUCCEEDED(result) && !context.stopped && virtual_pad::count() > 0 && virtual_pad_rules::lists_pads(context.di8, type, flags))
 			{
@@ -741,6 +767,12 @@ namespace gamepad_fix
 			{&IID_IDirectInput2A, false, false, 5}, {&IID_IDirectInput2W, true, false, 5},
 			{&IID_IDirectInputA, false, false, 3}, {&IID_IDirectInputW, true, false, 3},
 		}};
+	}
+
+	void cache_device_scan(const bool enabled)
+	{
+		cache_scans = enabled;
+		logger::write("input: CacheDeviceScan=%d (DirectInput scans and XInput connection discovery)", enabled ? 1 : 0);
 	}
 
 	void use_profile(const pad_profile::profile& profile)

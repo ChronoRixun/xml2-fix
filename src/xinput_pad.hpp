@@ -21,14 +21,16 @@ namespace xinput_pad
 
 	// Loads XInput and makes its first call on a thread of its own (DllMain: it runs once the loader
 	// is done). Without it, the first read does both, on the reader's thread.
-	void start();
+	void start(bool cache_connections = true);
 
 	// XInput is still loading on its own thread: reads answer "no pad" without waiting for it.
 	bool starting();
+	bool connections_cached();
 
 	// Unprocessed XInput state (no deadzones); false if the pad is not connected, or XInput isn't ready.
 	bool read_raw(int index, raw_state& out);
 
-	// Indices of the currently connected XInput pads, in slot order (none until XInput is ready).
+	// Indices in slot order. With CacheDeviceScan on, this copies the worker's
+	// atomic connection mask; discovery runs every second or after a failed read.
 	std::vector<int> connected_indices();
 }

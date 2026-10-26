@@ -16,6 +16,7 @@ SETTINGS
   https://github.com/ChronoRixun/xml2-fix#%EF%B8%8F-settings-xml2-fixini
 
 ON BY DEFAULT, AND HOW TO SWITCH EACH OFF
+  Controller scan cache      [Input]   CacheDeviceScan=0 (restore the previous controller scanning paths)
   Pad button prompts         [Input]   Prompts=off      (or keyboard; PromptColors=0 for plain [A] text)
   Discord Rich Presence      [Discord] Enabled=0        (or ShowZone=0 / ShowParty=0 to share less)
   OpenSpy online redirect    [Online]  Domain=off

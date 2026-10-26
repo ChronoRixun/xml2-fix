@@ -63,6 +63,7 @@ No settings file is needed. Without one, the fix does the following; everything 
 | ------------- | ------------ | ---------------- |
 | Pad support and the [layout](#-the-layout) | pads are presented to the game as one it understands; the console layout is added to empty or default bindings | uninstall; rebind in *Advanced options* (your own bindings are never overwritten) |
 | [Button prompts](#button-prompts) | a player on a pad sees the pad's buttons in prompts | `[Input]` `Prompts=off` |
+| Controller scan cache | lists controllers in the background and discovers XInput slots once a second | `[Input]` `CacheDeviceScan=0` |
 | Mouse in cutscenes | while a cutscene plays, the mouse no longer outlines characters or clicks to move (the keyboard and pads were already ignored there) | `[Input]` `CutsceneMouse=0` |
 | [Discord Rich Presence](#-discord) | with the Discord app running, your profile shows the zone, your heroes and the mode | `[Discord]` `Enabled=0` |
 | [OpenSpy redirect](#-online) | the game's GameSpy lookups go to OpenSpy | `[Online]` `Domain=off` |
@@ -625,6 +626,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | --- | ------- | ------- |
 | `Prompts` | `auto` | `auto`: each player's prompts follow the device they last used; `pad`; `keyboard`; `off`: the game's own prompts |
 | `PromptColors` | `1` | `0`: every pad button as plain `[A]`-style text |
+| `CacheDeviceScan` | `1` | background controller scans and XInput slot discovery; `0` restores the previous paths ([details](docs/controller-scan-cache.md)) |
 | `CutsceneMouse` | `1` | `0`: the game's own rule, where only a locked-controls cutscene stops the mouse (a mod's cinematic without `lockControls` lets it outline characters and click to move) |
 
 **[Online]** ([details](#-online))
