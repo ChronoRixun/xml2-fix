@@ -579,3 +579,11 @@ add_executable(xml2_union_host tools/union_host/union_host.cpp tools/union_host/
 # Its own folder: no dinput.dll may sit next to it, or the engine DLLs' dinput import would load that one first.
 set_target_properties(xml2_union_host PROPERTIES OUTPUT_NAME union_host RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/union")
 target_link_options(xml2_union_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
+
+# W2-E15-13: CSmartEntMgr replaced by a DLL object at 2048 x 0x20 records. The retail methods are copied from the exe
+# given on the command line (or XML2_FIX_TEST_EXE) and run at their own addresses next to the replacement; without
+# the exe only the W2 cases run (the retail differential is SKIPPED).
+add_executable(xml2_smart_entities_test test/smart_entities_test.cpp src/smart_entities.cpp src/patch_transaction.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_smart_entities_test PRIVATE src)
+target_link_options(xml2_smart_entities_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
