@@ -4,6 +4,7 @@
 #include "effect_templates.hpp"
 #include "primitives_per_effect.hpp"
 #include "script_pools.hpp"
+#include "power_pools.hpp"
 #include "limits_agreement_rules.hpp"
 #include "gameplay_agreement.hpp"
 #include "game_version.hpp"
@@ -863,6 +864,7 @@ namespace limits
 
 	void install(const HMODULE game)
 	{
+		power_pools::install(game);
 		base = reinterpret_cast<std::uintptr_t>(game) == image_base ? reinterpret_cast<std::uint8_t*>(game) : nullptr;
 		if (game) log_address_space(game);
 		if (base)
@@ -960,6 +962,7 @@ namespace limits
 
 	void register_resource_agreement()
 	{
+		power_pools::register_agreement();
 		// Not the game (XMen2.exe isn't at 0x400000): nothing was raised and nothing can be patched, like every other
 		// module that returns before registering there - a "requested but not installed" entry would make the
 		// agreement demand its network exclusion hook in a process that has none and refuse that process's startup
@@ -1044,6 +1047,6 @@ namespace limits
 		const bool observing_refusals=published_manager && (published_manager->capacity>32 || published_manager->events.capacity!=stock_style_events);
         return (residency.empty()?std::string{}:residency+"; ")+"actors " + counter(read(actor_live_va), actor_cap) + "; names " + counter(names, name_cap) + "; motions " + counter(motions, static_cast<int>(motion_pool::layout().capacity)) + "; igb " +
 		       counter(read(igb_live_va), igb_cap) + "; items " + counter(items, item_cap) + "; styles " + counter(styles, style_cap) + "; events " + counter(events,event_cap) + "; style_refused " + (observing_refusals?std::to_string(style_refusals):"-") + "; event_refused " + (observing_refusals?std::to_string(event_refusals):"-") + "; curves " +
-		       counter(read(curve_live_va), curve_cap) + "; " + fight_moves::status() + "; move_triggers " + std::to_string(move_trigger_cap) + "; " + effect_templates::status() + "; " + primitives_per_effect::status() + "; " + effect_pools::status() + "; " + script_pools::status();
+		       counter(read(curve_live_va), curve_cap) + "; " + fight_moves::status() + "; move_triggers " + std::to_string(move_trigger_cap) + "; " + effect_templates::status() + "; " + primitives_per_effect::status() + "; " + effect_pools::status() + "; " + script_pools::status() + power_pools::status();
 	}
 }

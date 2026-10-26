@@ -150,6 +150,7 @@ add_library(xml2_fix SHARED
 	src/address_space.cpp
 	src/effect_pools.cpp
 	src/fight_moves.cpp
+	src/power_pools.cpp
 	src/entity_capacity.cpp
 	src/actor_pools.cpp
 	src/entity_owners.cpp
@@ -802,3 +803,9 @@ add_executable(xml2_script_pools_test test/script_pools_test.cpp src/script_pool
 target_include_directories(xml2_script_pools_test PRIVATE src)
 target_compile_options(xml2_script_pools_test PRIVATE /UNDEBUG)
 target_link_options(xml2_script_pools_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# W3-10/11: actual retail pool methods on synthetic canaried owners, no game entry.
+add_executable(xml2_power_pools_host test/power_pools_host.cpp src/power_pools.cpp src/patch_transaction.cpp tools/union_host/union_space.asm)
+target_include_directories(xml2_power_pools_host PRIVATE src)
+target_link_options(xml2_power_pools_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
+target_compile_options(xml2_power_pools_host PRIVATE /UNDEBUG)

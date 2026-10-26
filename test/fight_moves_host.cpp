@@ -89,6 +89,7 @@ namespace effect_templates {void install(HMODULE){std::abort();} std::string sta
 namespace primitives_per_effect {void install(HMODULE){std::abort();} std::string status(){std::abort();}}
 namespace effect_pools {void install(HMODULE){std::abort();} std::string status(){std::abort();}}
 namespace script_pools {std::string status(){std::abort();}}
+namespace power_pools {void install(HMODULE){std::abort();} void register_agreement(){std::abort();} std::string status(){std::abort();}}
 
 int main(int argc,char** argv){
     std::setvbuf(stdout,nullptr,_IONBF,0);

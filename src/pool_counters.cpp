@@ -309,7 +309,7 @@ void install(HMODULE game) {
     if(sampling) {
         // The capacities of the tables limits wave 3 can raise, as the sampler will report them (stock when absent).
         std::string caps;
-        for(const char* name:{"styles","events","moves","fx_files","fx_defs","prims_per_effect","prim_defs","vectors","statements","values","objects","contexts"}) {
+        for(const char* name:{"styles","events","moves","fx_files","fx_defs","prims_per_effect","prim_defs","vectors","statements","values","objects","contexts","powerups","vf_nodes"}) {
             const auto i=find(name);
             if(i>=counters.state.size)continue;
             if(!caps.empty())caps+=", ";
