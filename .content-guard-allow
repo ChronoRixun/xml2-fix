@@ -1,5 +1,6 @@
 # Scoped exceptions for the builder content guard used on this C++ repository.
 # Each entry describes original code/art or invented test data; no game assets are accepted.
+DISASM test/xml1_grab_bag_checks.hpp # Authored synthetic caller frame and stack cleanup for mapped native buy dispatch; owned instructions are loaded at runtime, no extracted listing or game body is stored.
 DISASM src/xml1_roll.cpp # Authored register-preserving callbacks and nested-frame bridges; only the guarded two-instruction SEH restore is replayed. No extracted listing or decompiled game body.
 DISASM test/xml1_roll_test.cpp # Authored synthetic stack/register probes and matching ABI continuations; retail instructions are supplied locally and executed in the fixture, never stored here.
 DISASM src/input_worker.cpp # Authored register-preserving lifetime-accounting bridges; only the short guarded entry prologue is replayed, with no game listing or decompiled body.
