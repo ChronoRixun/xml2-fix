@@ -61,7 +61,12 @@ namespace style_manager_plan
  {
   plan p; auto& c=p.transaction; c.owner="style manager (FightStyles + StyleEvents)";
   const auto guard_rows=[&](const auto& rows) { for(const auto& s:rows) c.guards.push_back({s.va,patch_transaction::bytes_of(s.hex),"style manager ledger"}); };
-  guard_rows(style_sites); guard_rows(style_guards); guard_rows(event_sites); guard_rows(cave_guards);
+  guard_rows(style_sites); guard_rows(style_guards);
+  for(const auto& s:event_sites)
+   if(l.events.capacity!=stock_style_events||s.field!=event_field::parser_size)
+    c.guards.push_back({s.va,patch_transaction::bytes_of(s.hex),"style manager ledger"});
+  guard_rows(cave_guards);
+  if(l.events.capacity!=stock_style_events)guard_rows(event_owner_guards);
   const bool expanded=l.capacity>32;
   for(const auto& w:style_writes(l,construct,push))
   {

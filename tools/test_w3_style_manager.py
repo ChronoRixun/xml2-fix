@@ -32,7 +32,7 @@ def models(n,e):
  return node+[count,styles,bitmap,iterator,iterator+4,aux,aux+off],part
 
 def main():
- a=argparse.ArgumentParser();a.add_argument('--host',type=Path,default=ROOT/'native/bin/Release/xml2_style_manager_host.exe');a.add_argument('--work',type=Path);args=a.parse_args()
+ a=argparse.ArgumentParser();a.add_argument('--host',type=Path,default=ROOT/'native/bin/Release/xml2_style_manager_host.exe');a.add_argument('--work',type=Path);a.add_argument('--foreign-src',type=Path,default=ROOT/'src');args=a.parse_args()
  work=(args.work or ROOT/'native/style-manager-proof').resolve();work.mkdir(parents=True,exist_ok=True)
  old=subprocess.check_output(['git','show','69f5115:src/limits_rules.hpp'],cwd=ROOT,text=True)
  oldrows=re.findall(r'\{(0x[0-9a-f]+), "([0-9a-f]+)", (\d+), (\d+), (0x[0-9a-f]+), style_field::(\w+)\}',old)
@@ -51,10 +51,13 @@ def main():
   for va,target in [(0x4ff7c2,0x12340000),(0x4ffa52,0x12340100)]:expected.append((va+1,((target-va-5)&0xffffffff).to_bytes(4,'little')))
   assert writes==expected,(n,writes,expected)
  print('PASS revision 1: exact 74-write plan unchanged for every N=20..32, E=1064')
+ writes,_,_=run(args.host,work,64,1064)
+ assert not any(va<=site+1<va+len(b) for va,b in writes for site in ledger.PARSER_ALLOCATIONS)
+ print('PASS E=1064 keeps both parser allocation operands retail, including expanded styles')
  writes,_,_=run(args.host,work,64,4096)
  touched={va+i for va,b in writes for i in range(len(b))}
  own={'w3_style_manager_sites.hpp','style_manager_plan.hpp'};overlaps=[];guards=0
- for source in (ROOT/'src').glob('*'):
+ for source in args.foreign_src.glob('*'):
   if source.suffix not in ('.hpp','.cpp') or source.name in own:continue
   text=source.read_text(encoding='utf-8')
   if source.name=='limits_rules.hpp':

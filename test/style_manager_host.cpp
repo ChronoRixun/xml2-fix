@@ -93,6 +93,7 @@ static void lifecycle(const bytes& retail,int n,int e,void* cave)
 {
  load(retail);capacity=n;style_refused=event_refused=0;names.clear();destroyed.clear();
  const auto l=manager_layout(n,e);check(install(l,cave),"shared production transaction installs");dependencies();
+ check(word(ptr(0x4fb5f3))==34,"event subtype constructor keeps retail SEH unwind state 34");
  bytes backing(l.manager_size+128,0xa5);void* manager=backing.data()+64;
  std::memset(manager,0xcd,l.manager_size);
  check(reinterpret_cast<method>(0x4ffcc0)(manager,nullptr)==manager,"retail manager constructor returns owner");
@@ -137,6 +138,124 @@ static void lifecycle(const bytes& retail,int n,int e,void* cave)
  if(n>32||e!=1064)check(style_refused==1&&event_refused==1,"production refusal caves count both capacity refusals");
  std::printf("MATRIX styles=%d events=%d size=0x%lx\n",n,e,l.manager_size);
 }
+// Run all three *retail allocation sequences*, including their size operands and
+// complete owner constructors. Only the heap service and post-construction
+// continuation are synthetic. The exact allocation ends at a PAGE_NOACCESS page.
+static void* owner_reservation=nullptr;
+static void* owner_memory=nullptr;
+static DWORD owner_bytes=0;
+// A relocated bitmap can jump far beyond the first guard page. Reserve the
+// complete possible raised footprint as no-access tail, not just one page.
+static constexpr DWORD owner_guard_bytes=0x200000;
+static_assert(manager_layout(max_fight_styles,max_style_events).manager_size<owner_guard_bytes);
+static HANDLE owner_probe_log=INVALID_HANDLE_VALUE;
+static constexpr DWORD guard_probe_exit=0xe04f78f4;
+static void* __cdecl owner_heap(DWORD size,DWORD,DWORD=0)
+{
+ owner_bytes=size;
+ const DWORD committed=(size+64+4095)&~4095u;
+ owner_reservation=VirtualAlloc(nullptr,committed+owner_guard_bytes,MEM_RESERVE,PAGE_NOACCESS);
+ if(!owner_reservation||!VirtualAlloc(owner_reservation,committed,MEM_COMMIT,PAGE_READWRITE))return nullptr;
+ owner_memory=static_cast<std::uint8_t*>(owner_reservation)+committed-size;
+ std::memset(static_cast<std::uint8_t*>(owner_memory)-64,0xa5,size+64);
+ return owner_memory;
+}
+static LONG CALLBACK guard_probe(EXCEPTION_POINTERS* e)
+{
+ const auto& x=*e->ExceptionRecord;const auto ip=e->ContextRecord->Eip;
+ const auto end=address(owner_memory)+owner_bytes;
+ if(owner_probe_log!=INVALID_HANDLE_VALUE)
+ {
+  char line[192]{};const int n=std::snprintf(line,sizeof(line),"code=0x%lx ip=0x%lx access=%lu address=0x%lx end=0x%lx\n",x.ExceptionCode,ip,x.ExceptionInformation[0],x.ExceptionInformation[1],end);
+  DWORD written=0;WriteFile(owner_probe_log,line,n,&written,nullptr);
+ }
+ if(x.ExceptionCode==EXCEPTION_ACCESS_VIOLATION&&x.NumberParameters>=2&&x.ExceptionInformation[0]==1&&
+    x.ExceptionInformation[1]>=end&&x.ExceptionInformation[1]<end+owner_guard_bytes&&ip>=0x4f78e0&&ip<0x4f7985)
+  ExitProcess(guard_probe_exit);
+ return EXCEPTION_CONTINUE_SEARCH;
+}
+static bool owner_prefix()
+{
+ auto* p=static_cast<std::uint8_t*>(owner_memory)-64;
+ return std::all_of(p,p+64,[](auto v){return v==0xa5;});
+}
+static void all_owners(const bytes& retail,void* cave)
+{
+ for(int e:{1064,1065,2048,4096,8192})
+ for(DWORD entry:{0x4ffdf0u,0x4f7f2du,0x5010ebu})
+ {
+  load(retail);capacity=64;const auto l=manager_layout(capacity,e);
+  check(install(l,cave),"all-owner production transaction installs");dependencies();
+  jump(0x5605e0,reinterpret_cast<void*>(&owner_heap));
+  jump(0x5606e0,reinterpret_cast<void*>(&owner_heap));
+  // These continuations belong to content loading, outside the owner constructor.
+  *static_cast<std::uint8_t*>(ptr(0x4f7f47))=0xc3;
+  *static_cast<std::uint8_t*>(ptr(0x501105))=0xc3;
+  owner_memory=owner_reservation=nullptr;owner_bytes=0;
+  const bool constructed=reinterpret_cast<void*(__cdecl*)()>(entry)()==owner_memory&&owner_memory;
+  std::printf("OWNER allocation=0x%lx events=%d bytes=0x%lx\n",entry,e,owner_bytes);
+  {
+   check(constructed,"every retail owner constructor stays within its requested allocation");
+   const DWORD offset=entry==0x4ffdf0?l.auxiliary:0x2904;
+   check(owner_bytes==offset+l.events.size,"real allocation operand covers the complete shared event layout");
+   if(constructed&&owner_bytes==offset+l.events.size)
+   {
+    auto* events=static_cast<std::uint8_t*>(owner_memory)+offset;
+    check(word(events,l.events.free)==static_cast<DWORD>(e)&&word(events,l.events.live)==0&&
+     clear(events,l.events.built,l.events.words)&&clear(events,l.events.used,l.events.words),"every owner initializes full event bitmaps and ring");
+    std::vector<DWORD> handles;bool good=true;
+    for(int i=0;i<e;++i)
+    {
+     auto h=reinterpret_cast<with_int>(0x4faea0)(events,nullptr,0x692f18);
+     handles.push_back(h);
+     good&=h&&reinterpret_cast<with_int>(0x4faac0)(events,nullptr,h)==address(events)+i*0x54;
+    }
+    check(good&&reinterpret_cast<with_int>(0x4faea0)(events,nullptr,0x692f18)==0,"every owner fills and resolves E events and refuses E+1 at guarded boundary");
+    for(auto h:handles)reinterpret_cast<with_int>(0x4fbd40)(events,nullptr,h);
+    check(word(events,l.events.live)==0&&word(events,l.events.free)==static_cast<DWORD>(e),"every owner releases all events through checked shared free");
+    // Refill, then exercise the loader's teardown while records are constructed.
+    for(int i=0;i<e;++i)reinterpret_cast<with_int>(0x4faea0)(events,nullptr,0x692f18);
+    if(entry==0x4ffdf0)reinterpret_cast<method>(0x4ffc60)(owner_memory,nullptr);
+    else {reinterpret_cast<method>(0x4f61c0)(events,nullptr);reinterpret_cast<method>(0x4f6310)(static_cast<std::uint8_t*>(owner_memory)+0x1110,nullptr);}
+    check(clear(events,l.events.built,l.events.words)&&owner_prefix(),"every owner's live-event teardown preserves allocation guards");
+   }
+  }
+  if(owner_reservation)VirtualFree(owner_reservation,0,MEM_RELEASE);
+ }
+}
+static int undersized_probe(const bytes& retail,void* cave,DWORD entry)
+{
+ if(entry!=0x4f7f2d&&entry!=0x5010eb)return 2;
+ load(retail);capacity=64;
+ if(!install(manager_layout(64,4096),cave))return 2;
+ jump(0x5606e0,reinterpret_cast<void*>(&owner_heap));
+ *static_cast<std::uint8_t*>(ptr(0x4f7f47))=0xc3;
+ *static_cast<std::uint8_t*>(ptr(0x501105))=0xc3;
+ word(ptr(entry==0x4f7f2d?0x4f7f30:0x5010ee))=0x1a890;
+ // Observe before stack unwinding: retail assembly has no host unwind metadata.
+ if(!AddVectoredExceptionHandler(1,&guard_probe))return 2;
+ reinterpret_cast<void*(__cdecl*)()>(entry)();
+ return 3; // The undersized constructor must never return.
+}
+static void owner_negative_controls(const char* retail_path)
+{
+ char exe[MAX_PATH]{};GetModuleFileNameA(nullptr,exe,MAX_PATH);
+ for(DWORD entry:{0x4f7f2du,0x5010ebu})
+ {
+  std::string trace=std::string(exe)+".probe-"+std::to_string(entry)+".txt";
+  std::string command="\""+std::string(exe)+"\" --undersized \""+retail_path+"\" "+std::to_string(entry)+" \""+trace+"\"";
+  STARTUPINFOA si{};si.cb=sizeof(si);PROCESS_INFORMATION pi{};
+  const bool started=CreateProcessA(exe,command.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW|BELOW_NORMAL_PRIORITY_CLASS,nullptr,nullptr,&si,&pi)!=FALSE;
+  DWORD code=0;
+  if(started)
+  {
+   if(WaitForSingleObject(pi.hProcess,30000)!=WAIT_OBJECT_0) {TerminateProcess(pi.hProcess,96);WaitForSingleObject(pi.hProcess,5000);}
+   GetExitCodeProcess(pi.hProcess,&code);CloseHandle(pi.hThread);CloseHandle(pi.hProcess);
+  }
+  std::printf("NEGATIVE OWNER entry=0x%lx exit=0x%lx\n",entry,code);
+  check(started&&code==guard_probe_exit,"NEGATIVE CONTROL: child confirms constructor write past old parser allocation");
+ }
+}
 static void negative_control(const bytes& retail,void* cave)
 {
  load(retail);capacity=33;const auto l=manager_layout(33,1064);check(install(l,cave,true),"negative control installs same layout with retail one-word clear");
@@ -147,18 +266,22 @@ static void negative_control(const bytes& retail,void* cave)
 static void refusals(const bytes& retail,void* cave)
 {
  const auto l=manager_layout(64,4096);
- for(int mode=0;mode<5;++mode)
+ for(int mode=0;mode<9;++mode)
  {
   load(retail);auto p=style_manager_plan::make(l,address(reinterpret_cast<void*>(&ring_construct)),address(reinterpret_cast<void*>(&ring_push)),address(cave),address(&style_refused),address(&event_refused));
   p.transaction.guards.push_back({style_manager_pointer,{0,0,0,0},"manager absent"});
   if(mode==0)word(ptr(style_manager_pointer))=1;
   if(mode==1)*static_cast<std::uint8_t*>(ptr(0x4faeb9))^=1;
   if(mode==2)p.transaction.guards.push_back({0x4ffb8a,{0x90},"overlapping foreign guard"});
+  if(mode==5)*static_cast<std::uint8_t*>(ptr(0x4f7f30))^=1;
+  if(mode==6)*static_cast<std::uint8_t*>(ptr(0x5010ee))^=1;
+  if(mode==7)*static_cast<std::uint8_t*>(ptr(0x4f7ecf))^=1;
+  if(mode==8)*static_cast<std::uint8_t*>(ptr(0x4fb5f3))^=1;
   const bytes before(union_space,union_space+0x300000);bool published=false;p.transaction.publish=[&]{published=true;};
   patch_transaction::transaction t;t.add(std::move(p.transaction));patch_transaction::hooks h;
   if(mode==3)h.protect=[](void*,std::size_t,DWORD,DWORD*){return false;};
   if(mode==4)h.flush=[](void*,std::size_t){return false;};
-  auto result=t.commit(mode>=3?&h:nullptr);
+  auto result=t.commit(mode==3||mode==4?&h:nullptr);
   check(result!=patch_transaction::outcome::committed&&!published&&std::equal(before.begin(),before.end(),union_space),"install refusal/rollback leaves every guarded code byte unchanged and unpublished");
  }
  for(const auto& pair:std::array<std::pair<const char*,const char*>,5>{{{"128","4096"},{"64","8193"},{"18","4096"},{"64","1063"},{"bad","4096"}}})
@@ -208,12 +331,16 @@ static int dump_plan(int n,int e,const char* path)
 }
 int main(int argc,char** argv)
 {
+ SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
  if(argc==5&&std::strcmp(argv[1],"--plan")==0)return dump_plan(std::atoi(argv[2]),std::atoi(argv[3]),argv[4]);
- const auto* path=argc>1?argv[1]:std::getenv("XML2_FIX_TEST_EXE");if(!path){std::puts("FAIL XML2_FIX_TEST_EXE required");return 2;}
+ const bool probe=argc==5&&std::strcmp(argv[1],"--undersized")==0;
+ const auto* path=probe?argv[2]:argc>1?argv[1]:std::getenv("XML2_FIX_TEST_EXE");if(!path){std::puts("FAIL XML2_FIX_TEST_EXE required");return 2;}
  const auto retail=read(path);if(retail.size()<0x400)return 2;
  void* cave=VirtualAlloc(nullptr,6*128,MEM_RESERVE|MEM_COMMIT,PAGE_EXECUTE_READWRITE);
+ if(probe) {owner_probe_log=CreateFileA(argv[4],GENERIC_WRITE,FILE_SHARE_READ,nullptr,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);return undersized_probe(retail,cave,std::strtoul(argv[3],nullptr,10));}
  for(int n:{19,32,33,63,64,65,127})for(int e:{1064,1065,4096})lifecycle(retail,n,e,cave);
- lifecycle(retail,127,8192,cave);negative_control(retail,cave);refusals(retail,cave);agreement_tests();
+ lifecycle(retail,127,8192,cave);refusals(retail,cave);agreement_tests();
+ all_owners(retail,cave);owner_negative_controls(path);negative_control(retail,cave);
  VirtualFree(cave,0,MEM_RELEASE);
  std::printf("style manager host: %u checks, %u failures\n",checks,failures);return failures?1:0;
 }

@@ -74,7 +74,7 @@ inline constexpr std::array<site<style_field>, 72> style_sites{{
 	{0x4ffdf4, "68189a0200", 1, 4, 0x29a18, style_field::manager_size},
 }};
 
-inline constexpr std::array<site<event_field>, 84> event_sites{{
+inline constexpr std::array<site<event_field>, 85> event_sites{{
 	{0x4f58d4, "3d28040000", 1, 4, 0x428, event_field::capacity},
 	{0x4f58de, "b828040000", 1, 4, 0x428, event_field::capacity},
 	{0x4f590b, "3d28040000", 1, 4, 0x428, event_field::capacity},
@@ -157,8 +157,9 @@ inline constexpr std::array<site<event_field>, 84> event_sites{{
 	{0x4faeb9, "81bde06e010028040000", 6, 4, 0x428, event_field::capacity},
 	{0x4faeec, "8bbc8d205d0100", 3, 4, 0x15d20, event_field::built},
 	{0x4faef3, "8d948d205d0100", 3, 4, 0x15d20, event_field::built},
-	{0x4fb5ef, "c744241c22000000", 4, 4, 0x22, event_field::words},
 	{0x4fbd1b, "8b848de46e0100", 3, 4, 0x16ee4, event_field::ids},
+	{0x4f7f2f, "6890a80100", 1, 4, 0x1a890, event_field::parser_size},
+	{0x5010ed, "6890a80100", 1, 4, 0x1a890, event_field::parser_size},
 }};
 
 inline constexpr std::array<guard, 6> style_manager_cave_guards{{
@@ -168,4 +169,11 @@ inline constexpr std::array<guard, 6> style_manager_cave_guards{{
 	{0x4ffce8, "8986801a0100", "manager bitmap clear"},
 	{0x4ffb93, "5f5e33c05bc20c00", "style refusal epilogue"},
 	{0x4faec5, "33c05d8b4c2404", "event refusal epilogue"},
+}};
+
+inline constexpr std::array<guard, 4> event_owner_guards{{
+	{0x4f7ea0, "568bf18d4e0cc74604ffffff3fc74608ffffffffc706e41c6900e891f7ffff33c08d8ef828000089018941048941088d8e04290000c706fc1c6900e800faffff8bc65ec3", "temporary owner constructor and event offset"},
+	{0x4f7f2d, "6a416890a80100e8a787060083c4083bc5740d8bc8e859ffffff", "event loader allocation and constructor"},
+	{0x5010eb, "6a406890a80100e8e9f5050083c40885c0740b8bc8e89b6dffff", "style loader allocation and constructor"},
+	{0x4fb5ef, "c744241c22000000", "event constructor EH state remains retail"},
 }};
