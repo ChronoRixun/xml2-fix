@@ -26,5 +26,11 @@ for file in sorted((ROOT/'src').rglob('*')):
         lo,hi=(int(x,16) for x in match.groups())
         if any(lo < b and a < hi for a,b in spans):
             overlaps.append((str(file.relative_to(ROOT)),hex(lo),hex(hi),'region'))
+# Integration (w3/integrated): the pool diagnostics' eleven per-operation particle observers sit on the same count
+# calls. They stand down when W3-9 is installed (pool_counters.cpp: the bytes are no longer retail) and hook the retail
+# bytes when it is not, so these are the only accepted pairs: one per span, from pool_counter_sites.hpp.
+standing=[o for o in overlaps if o[0].endswith('pool_counter_sites.hpp')]
+assert len(standing)==len(spans) and all(any(lo < int(o[2],16) and int(o[1],16) < hi for o in standing) for lo,hi in spans), standing
+overlaps=[o for o in overlaps if o not in standing]
 assert not overlaps, overlaps
 print(f'PASS all-src guard-vs-site scan: {guards} literal guards, {areas} regions; zero overlaps with eleven W3-9 spans')
