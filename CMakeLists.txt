@@ -89,6 +89,7 @@ add_library(xml2_fix SHARED
 	src/options_menu.cpp
 	src/new_game.cpp
 	src/save_format.cpp
+	src/zone_strings.cpp
 	src/save_content_guards.cpp
 	src/save_trace.cpp
 	src/postgame.cpp
@@ -587,3 +588,8 @@ add_executable(xml2_smart_entities_test test/smart_entities_test.cpp src/smart_e
     "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
 target_include_directories(xml2_smart_entities_test PRIVATE src)
 target_link_options(xml2_smart_entities_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# W2 zone-string capacity: guarded contribution, native intern/getter and copied GC in a private fixture.
+add_executable(xml2_zone_strings_test test/zone_strings_test.cpp src/zone_strings.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_zone_strings_test PRIVATE src)
+target_link_options(xml2_zone_strings_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)

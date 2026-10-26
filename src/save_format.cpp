@@ -2071,6 +2071,8 @@ namespace save_format
 	              profile_matches(w2_profile, lcsave::w2_layout));
 	static_assert(!profile_matches(w2_profile, lcsave::e10a2_layout) && !profile_matches(e10a2_profile, lcsave::w2_layout));
 
+	void publish_zone_strings(std::uint32_t address) { zone_strings_object = address; }
+
 	void use_native_profile(const native_profile& chosen)
 	{
 		if (contributed) return;
