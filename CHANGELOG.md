@@ -2,6 +2,12 @@
 
 ## 1.9.0 - <date TBD>
 
+- **Character sound cache: gameplay rule 49** (`[Limits] CharSounds=127`; 1.9.0-beta.1). Raises the
+  16-record cache to 127 so a seventeenth live sound directory keeps its own sounds. Six address edits and both
+  getter/teardown bounds commit together; the published actor capacity must be below 127. Absent or 16 keeps stock
+  bytes and no agreement entry; other values refuse online. `CHAR_SOUNDS` on the test pipe reports peak occupancy,
+  refusals and empty-sounddir actors. Native fixtures verified; live RV1 acceptance pending.
+
 - **The first game's revival price: gameplay rule 10 revision 3** (`[Game] RevivalCost = xml1`; 1.9.0-beta.1 and
   1.8.0, [docs](docs/xtraction-shop.md#revival-price)). A fallen hero costs 200 x G^2 Tech Bits, G = min(5, L / 10 +
   1), L the roster's highest current level without guests: 200 / 800 / 1,800 / 3,200 / 5,000 for 0-9 / 10-19 /

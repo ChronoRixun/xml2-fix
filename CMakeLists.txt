@@ -126,6 +126,7 @@ add_library(xml2_fix SHARED
 	src/solo_mode.cpp
 	src/conversations.cpp
 	src/gameplay_agreement.cpp
+	src/char_sounds.cpp
 	src/anim_enums.cpp
 	src/anim_enum_registry.cpp
 	src/patch_transaction.cpp
@@ -678,6 +679,18 @@ add_executable(xml2_anim_enums_test test/anim_enums_test.cpp src/anim_enums.cpp 
 target_include_directories(xml2_anim_enums_test PRIVATE src)
 target_compile_options(xml2_anim_enums_test PRIVATE /UNDEBUG)
 target_link_options(xml2_anim_enums_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+execute_process(COMMAND git show 69f5115:src/gameplay_capabilities.hpp WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_VARIABLE CHAR_SOUNDS_BETA8_AGREEMENT RESULT_VARIABLE CHAR_SOUNDS_BASE_RESULT)
+if(CHAR_SOUNDS_BASE_RESULT EQUAL 0)
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/gameplay_capabilities_charsounds_base.hpp" "${CHAR_SOUNDS_BETA8_AGREEMENT}")
+    add_executable(xml2_char_sounds_test test/char_sounds_test.cpp src/char_sounds.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+    target_include_directories(xml2_char_sounds_test PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}")
+    target_compile_options(xml2_char_sounds_test PRIVATE /UNDEBUG)
+    target_link_options(xml2_char_sounds_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+else()
+    message(STATUS "CharSounds TS2 baseline unavailable: fetch 69f5115 to run the required CharSounds fixture")
+endif()
 
 add_executable(xml2_xml1_air_carry_test test/xml1_air_carry_test.cpp
     src/xml1_grab_carry.cpp src/xml1_air_carry.cpp src/xml1_cling.cpp src/xml1_rogue_decide.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")

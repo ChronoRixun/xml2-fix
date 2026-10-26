@@ -106,6 +106,7 @@
 #include "pad_bindings.hpp"
 #include "pad_prompts.hpp"
 #include "anim_enums.hpp"
+#include "char_sounds.hpp"
 #include "patch_transaction.hpp"
 #include "entity_capacity.hpp"
 #include "postgame.hpp"
@@ -247,6 +248,7 @@ namespace
 		// install contribute their guards and writes; every expectation is unioned and checked once, every touched
 		// page acquired once, and nothing is published unless the whole set verified. A refusal leaves stock bytes.
 		patch_transaction::transaction startup;
+		char_sounds::require_agreement(game);
 		anim_enums::contribute(startup, game);
 		if (game_version::needs_gameplay_agreement()) gameplay_agreement::contribute(startup, game);
 
@@ -266,6 +268,12 @@ namespace
 		logger::write("startup transaction: %s (%s)", patch_transaction::name(committed), startup.report().c_str());
 		entity_capacity::after_commit(committed == patch_transaction::outcome::committed, committed == patch_transaction::outcome::rollback_failed);
 		if (!save_format::startup_allowed() || !entity_capacity::startup_allowed()) return;
+		// R1 uses the published entity layout for its strict actor-capacity check.
+		patch_transaction::transaction sounds;
+		char_sounds::contribute(sounds, game);
+		const auto sound_result = sounds.commit();
+		if (sounds.contributions()) logger::write("CharSounds transaction: %s (%s)", patch_transaction::name(sound_result), sounds.report().c_str());
+		if (!game_version::startup_allowed()) return;
 		actor_pools::install(game); // publishes CAI descriptor before every A12/A13 consumer
 		if (!game_version::startup_allowed()) return;
 		// Start background work only after required startup hooks have verified.

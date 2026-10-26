@@ -35,7 +35,7 @@ inline constexpr std::array<limits_rules::guard,48> guards{{
     {0x4c8820, "a124487800c3cccc", "special mode value"},
     {0x4fbe80, "83ec0c568b7424146a028bce", "movement fallback"},
     {0x425b70, "8b813c0400008b4c2404", "movement parameters"},
-    {0x438cb0, "8b44240485c07c1183f8107d", "pickup sound set lookup"},
+    {0x438cb0, "8b44240485c07c11", "pickup sound set lookup (prefix before CharSounds bound)"},
     {0x477310, "8a0dfca17200b80100000084", "sound manager"},
     {0x4bdb30, "8a0d98337700b80100000084", "message manager"},
     {0x59ee20, "64a1000000008a0d94618a00", "UI manager"},

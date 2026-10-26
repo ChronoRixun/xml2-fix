@@ -577,6 +577,7 @@ namespace test_input
 			case command::kind::state: return test_state::reply("state");
 			case command::kind::objectives: return test_state::reply("objectives");
 			case command::kind::events: return test_state::reply("events");
+			case command::kind::char_sounds: return test_state::reply("char_sounds");
 			case command::kind::actor_pools: return test_state::reply("actor_pools");
 			case command::kind::pad:
 				return pad_input::handle(cmd.pad);

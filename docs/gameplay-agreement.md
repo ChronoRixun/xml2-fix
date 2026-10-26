@@ -220,3 +220,7 @@ revision 2's mask 7. Installation requires published AnimEnums and XML1 LiftRule
 a refusal is unverified and closes host/join. OFF still has no rule45 entry.
 Revision 2 and revision 3 refuse each other. See `xml1-grab-carry.md` for the
 required companion content switch (`XML1_FLIGHT_UPKEEP=True`).
+
+Rule 49 (`CharSounds`, `[Limits] CharSounds=127`) is revision 1, values `{127,0,0,0}` after its atomic install.
+Absent or 16 adds no entry and writes nothing; other values and failed installs close host/join with an
+unverified request. A mismatched peer is refused by name in both directions. See [char-sounds.md](char-sounds.md).
