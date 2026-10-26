@@ -8,6 +8,7 @@
 #include "item_capacity.hpp"
 #include "item_capacity_rules.hpp"
 #include "lcsave/layout.hpp"
+#include "lcsave/lcsave.hpp"
 #include "gameplay_agreement.hpp"
 #include "ini.hpp"
 #include "log.hpp"
@@ -40,8 +41,10 @@ void register_result(bool verified){
  if(prices::installed())values[0]|=2;
  if(shop::installed())values[0]|=4|16;
  if(grab_bag::installed())values[0]|=8;
+ values[0]|=64;
  const bool agreed=gameplay_agreement::register_rule(rule_id,rule_revision,values,verified);
  active.store(verified&&agreed,std::memory_order_release);
+ lcsave::set_xml1_economy_verifier(&installed);
  logger::write("economy: rule 52 Xml1Economy %s%s%s",active.load()?"verified":"unverified; online closed",failure.empty()?"":"; ",failure.c_str());
  if(held){held=false;gameplay_agreement::resume_finalization();}
 }

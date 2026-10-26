@@ -84,7 +84,7 @@ void bag_checks(){
  auto local=gameplay_agreement::rules;
  check(local.finalize(),"installed rule52 finalizes");
  auto values=local.rule(1).values;
- check(values[0]==63,"merged rule52 parts 63 = 1|2|4|8|16|32");
+ check(values[0]==127,"merged rule52 parts 127 = 1|2|4|8|16|32|64 (plan A full set)");
  gameplay_capabilities::record same_peer;
  same_peer.add(52,1,values,true);same_peer.finalize();
  check(local.compare(same_peer.bytes())==gameplay_capabilities::result::match,"matching step6 peer agrees");
