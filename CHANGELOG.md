@@ -13,6 +13,42 @@
   refuse each other naming `10 Xtraction services/RevivalCost`; without the key the entry stays revision 2 and the
   OFF record is unchanged.
 
+- **The objectives page lists what the first game listed** (`[Game] ClassicObjectives = 1`; 1.9.0-beta.1, display
+  only, [docs](docs/classic-objectives.md)). XMen2.exe's PDA page gives slot n to the n-th top-level objective
+  including hidden ones (0x5cce40), so a hidden objective left a hole and the page opened on slot 1, often a finished
+  mission. The key makes the selector walk (0x5cce98) and the page walk (0x5ce148) count visible objectives only, opens
+  the page on the current one (0x5ce484, the remembered-focus cell 0x8afe40) with a six-slot window (slot 7 stays the
+  optional page) and leaves the Danger Room results page native. Checked live on 10-25 at 1280x720 windowed and
+  2560x1440 borderless, beside X-Men Legends I in xemu.
+
+- **XML1's grab lifecycle: gameplay rule 45 revision 2** (`[Game] Xml1GrabCarry = xml1`; 1.9.0-beta.1,
+  [docs](docs/xml1-grab-carry.md)). Juggernaut's grab-and-hit (`ch_grab_attack`: the grabattackvictim lookup the PC
+  never registered, the large-actor hold after the strict deadline at 0x4edb83), the shared grab victim's retention
+  and cleanup, the ally throw, pickup admission and cancellation, the thrown-landing recovery (0x4f49e9's owner gate
+  and two-second clear bypassed) and the flying charge acquiring the live character it strikes (0x4ee87c / 0x4ee8b3)
+  follow X-Men Legends I. Values `{installed,7,0,0}` (mask 7 = grab, pickup/recovery, charge collision); the earlier
+  ground-only candidate (revision 1) is refused both ways. The flying carry (the fly-grab handlers, upkeep) is not
+  restored yet. Absent: nothing written, no entry. Not played yet.
+
+- **Shared handlers wave C: gameplay rule 46** (nine `[Game]` keys = `xml1`; 1.9.0-beta.1,
+  [docs](docs/shared-handler-c-rules.md)). `JumpAttackDamageRule` / `FlyChargeDamageRule`: the producer's damage
+  from `values.xmlb`'s L3 minimum with the first game's signed 16-bit stages (0x4ee99b / 0x4eeb88; velocity,
+  deadline and knockback stay native). `ColossusChargeRule`: input 0x4eced0 and contact 0x4ed220 as one unit
+  (event-100 affordability, the -0.71 crash test, special action, 450 recoil). `BeastBounceRule` (0x4ed1a0 always
+  emits, stops and timestamps), `FastballRule` (0x4f4adf emits for actors, objects and null contacts),
+  `IdleBoredRule` (no controller/team or non-humanoid exclusions; stun stays rule 18's), `LocomotionScaleRule`
+  (0x4f01d4), `AnimationPhaseRule` (0x4f026a), `TeleportVisibilityRule` (0x4efc7e / 0x4f44a4). One mask
+  `{installed_mask,0,0,0}`; rule 42 unchanged. Phoenix's telekinesis and the guard decide are NOT in it (handoff in
+  the docs). Not played yet.
+
+- **E4 stage 1, actor pools: gameplay rule 44** (`[Limits] ActorPools = 124`; 1.9.0-beta.1,
+  [docs](docs/actor-pools.md)). The path, shadow and delayed-damage pools sized for 32 actors grow to 124 in one
+  guarded transaction over an independently audited ledger (367 role rows / 357 instructions, five null-team guards);
+  actor/controller/team counts and the save layout stay stock, the CAI descriptor is published for later stages, and
+  NpcPowerRule's side tables reset when a controller slot is allocated (unhooked again if rule 16 is withdrawn). Values
+  `{32,4,124|124<<16,1}`; any other value is unverified; outside the game image the key is ignored (no entry). Absent:
+  nothing written. None of its live runs has happened; Legends Classic 0.4.1-beta.1 leaves it off by default.
+
 - **XML1 boss brains: gameplay rule 40** (`[Game] Xml1Bosses = dopples,avalanche,pyro,mystique,shadowking,marrow,magneto,blob`;
   1.9.0-beta.1, [docs](docs/xml1-controllers.md#shared-boss-dispatcher)). One module owns the brain-dispatch
   detour (0x5173f3) and the script-table entries Master Mold used; Master Mold is its first client and writes exactly

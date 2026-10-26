@@ -1,7 +1,7 @@
 # Classic objectives page
 
 `[Game] ClassicObjectives=1` makes the pause menu's Objectives page (PDA mode 1) follow the
-first game. It is off by default; Legends Classic 0.4.0-beta.8 builds write it.
+first game. It is off by default; Legends Classic 0.4.1-beta.1 (the port's beta 8) builds write it.
 
 X-Men Legends lists the visible objectives of the current mission, completed ones ticked, and
 the player reads the first unticked line. The PC PDA has seven selector slots (`icon01` ..
