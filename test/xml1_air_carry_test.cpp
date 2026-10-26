@@ -16,6 +16,8 @@ std::string requested_name;
 std::vector<std::string> air_events;
 int flight_rank=3,actor_team=1,victim_team=2,first_reads=0,releases=0,queries=0,preparations=0,notifications=0,ui_errors=0,feedbacks=0,debits=0,flight_sets=0,air_starts=0,bone_mask=0x61,anim_id=-1,generic_calls=0,selects=0,air_forces=0,sounds_played=0,displacements=0,air_placements=0;
 int drops=0;
+int probes=0,carry_entries=0,descent_forces=0;bool probe_hit=true,native_descent_blocked=false,current_flying=true;
+u32 current_move_key=102;
 int action_chosen=-1,last_flight=-1,mode_value=0;
 bool mode_a=false,mode_b=false,mode_c=false,map_restricted=false,session_gate=false,old_map_bit=false,neutral_ok=false,immunity=false,valid=true,liftable=true,friendly=false,hit=false,available=true,contact_exists=true,fallback=false,sound_valid=true,sound_empty=false;
 float energy=1000.f,last_debit=0.f,parameter2=1.f,parameter8=50.f,parameter9=100.f;
@@ -35,15 +37,17 @@ void air_reset(){
  put(victim.data(),0x35c,victim_stats.data());put<unsigned char>(victim_stats.data(),0x2ad,0);put<unsigned char>(victim.data(),0x764,0x80);put<unsigned char>(victim.data(),0x765,0);
  put(actor.data(),0x20,V{10,20,30});put(victim.data(),0x20,V{0,0,0});put(actor.data(),0x2c,V{0,0,1});put(actor.data(),0x1f4,V{1,2,3});put(victim.data(),0x2c,V{0.1f,0.2f,0.3f});put(actor.data(),0x378,move.data());put(victim.data(),0x378,move.data());
  put(air_context.data(),0x64,0.375f);put<void*>(actor.data(),0x3bc,nullptr);
+ probes=carry_entries=descent_forces=0;probe_hit=current_flying=true;native_descent_blocked=false;
+ put(actor.data(),0x3d4,0);put(ptr(0x70b814),0,0x1111u);put<unsigned char>(victim_stats.data(),0x2ad,0);
 }
 void* __cdecl air_cast(void* e){return e==actor.data()||e==char_target?e:nullptr;}
 void* __cdecl air_physical(void* e){return e==physical_target?e:nullptr;}
-void* __fastcall intern(u32* token,void*,const char* name){requested_name=name;*token=101;return token;}
+void* __fastcall intern(u32* token,void*,const char* name){requested_name=name;*token=std::strcmp(name,"flying")==0?102u:101u;return token;}
 void* __fastcall air_named(void*,void*,const u32*,void* optional){check(optional==nullptr,"air named lookup uses null optional actor");return requested_name=="idle"?idle.data():move_present?move.data():nullptr;}
 void* __fastcall flight_named(void*,void*,const u32* token){check(token==ptr(0x78a8c8),"native landing resolves named Idle");return idle.data();}
 void __fastcall air_start(void* who,void*,void* chosen,int reset){++air_starts;check(reset==1&&chosen==idle.data(),"source recovery starts named Idle reset1");idle_actors.push_back(who);air_events.push_back("idle");}
 void __fastcall air_publish(void* who,void*){air_published.push_back(get<u32>(who,4));air_events.push_back("publish");}
-void __fastcall air_force(void* who,void*,void*,int priority,float timing,u32 a,u32 b,u32 c){++air_forces;check(who==victim.data()&&priority==-1&&timing==0.375f&&a==0&&b==1&&c==0,"carry forced transition six-argument ABI/timing");air_events.push_back("force");}
+void __fastcall air_force(void* who,void*,void* chosen,int priority,float timing,u32 a,u32 b,u32 c){if(who==actor.data()){++descent_forces;if(chosen)++carry_entries;check(priority==-1&&timing==-1.f&&a==0&&b==0&&c==0&&requested_name=="flyguarddecide","descent enters named decide with source forced ABI");return;}++air_forces;check(who==victim.data()&&priority==-1&&timing==0.375f&&a==0&&b==1&&c==0,"carry forced transition six-argument ABI/timing");air_events.push_back("force");}
 void* __fastcall air_action(void*,void*,int a){action_chosen=a;air_events.push_back("action");return selected;}
 void __fastcall air_lock(void* who,void*,u32 handle){++locks;check(who==actor.data()&&handle==0x2222,"carry locks selected handle");air_events.push_back("lock");}
 void __fastcall selection(void* who,void*,u32 h){++selects;check(who==actor.data()&&h==0x2222,"selection uses attacker target handle");air_events.push_back("select");}
@@ -90,15 +94,37 @@ u32 __fastcall error_ui(void*,void*,u32,const char*,float duration,std::array<fl
 void __fastcall feedback(void*,void*){++feedbacks;}
 void __fastcall emergency_drop(void* who,void*){check(who==actor.data(),"emergency release receives carrier");++drops;}
 void __fastcall prepare_flight(void*,void*){++preparations;}
-void __fastcall air_flight(void* who,void*,int on,int emit){check(who==actor.data()&&emit==1,"flight setter emits source state change");++flight_sets;last_flight=on;}
+void __fastcall air_flight(void* who,void*,int on,int emit){check(who==actor.data()&&emit==(descent_forces?0:1),"flight setter uses source emission argument");++flight_sets;last_flight=on;}
+const u32* __fastcall flight_name(void*,void*){current_move_key=current_flying?102u:103u;return &current_move_key;}
+bool __fastcall downward_probe(void* who,void*,const V* start,const V* delta,int flag,V*,void** contact){++probes;check(who==actor.data()&&start->x==10&&start->y==20&&start->z==30&&delta->x==0&&delta->y==0&&delta->z==-20&&flag==1,"entry probes from actor position 20 down with character stop flag");*contact=contact_exists?victim.data():nullptr;return probe_hit;}
+bool __cdecl descent_blocked(int index){check(index==get<int>(actor.data(),0x3d4),"native descent controller gate");return native_descent_blocked;}
+u32 descent_site=0x433e46;
+__declspec(naked) bool __fastcall descent_probe(void*,void*,void*){
+ __asm {
+  push esi
+  push edi
+  mov edi,ecx
+  mov esi,[esp+12]
+  call dword ptr [descent_site]
+  pop edi
+  pop esi
+  ret 4
+ }
+}
+__declspec(naked) void descent_rejected(){__asm {add esp,4} __asm {xor eax,eax} __asm {ret}}
+__declspec(naked) void descent_accepted(){__asm {mov eax,1} __asm {ret}}
 float __fastcall air_energy(void*,void*){return energy;}
 void __fastcall spend(void*,void*,float cost){++debits;last_debit=cost;}
 void air_bind(){
+ // Keep the real Guard/no-power/native-refusal instructions. Only the
+ // vector descent tail is replaced by a return in this invented caller.
+ native(0x433e46,0x26);if(get<unsigned char>(ptr(0x433e6c),0)!=0xe9)jump(0x433e6c,&descent_rejected);jump(0x433e72,&descent_rejected);jump(0x433ea5,&descent_accepted);jump(0x61a3a0,&descent_blocked);jump(0x42b6c0,&downward_probe);
  jump(0x427ca0,&flight_named);jump(0x431e00,&emergency_drop);jump(0x402b60,&air_cast);jump(0x429110,&air_physical);jump(0x41b120,&intern);jump(0x501a50,&air_named);jump(0x42c340,&air_start);jump(0x45fe40,&air_publish);jump(0x432030,&air_force);jump(0x427c80,&air_action);jump(0x42d8e0,&air_lock);jump(0x42c7c0,&selection);jump(0x43b180,&air_rank);
  jump(0x484990,&manager);jump(0x59ee20,&ui);jump(0x4bdb30,&manager);jump(0x48de40,&session);jump(0x5252e0,&manager);jump(0x41a220,&air_team);jump(0x429210,&target_valid);jump(0x54d710,&immune);jump(0x427f60,&object_lift);jump(0x4c87a0,&ma);jump(0x4c87b0,&mb);jump(0x4c87c0,&mc);jump(0x4c8820,&mv);jump(0x425b70,&air_parameter);jump(0x4fce50,&generic);jump(0x4fbe80,&air_fallback);
  jump(0x4ab740,&free_query);jump(0x4ab6d0,&acquire);jump(0x4ab720,&release);jump(0x4a9590,&contact_entity);jump(0x560990,&air_facing);jump(0x5607b0,&inverse);jump(0x41d620,&air_bone);jump(0x438cb0,&sound_set);jump(0x477310,&manager);jump(0x421080,&feedback);jump(0x41f7d0,&air_flight);jump(0x41d5d0,&air_energy);jump(0x4318d0,&spend);
  actor_vt[0x24/4]=reinterpret_cast<void*>(&center);actor_vt[0x1c/4]=reinterpret_cast<void*>(&air_position);actor_vt[0x2c/4]=reinterpret_cast<void*>(&air_angles);actor_vt[0x158/4]=reinterpret_cast<void*>(&air_place);actor_vt[0x130/4]=reinterpret_cast<void*>(&displace);actor_vt[0x8c/4]=reinterpret_cast<void*>(&play);actor_vt[0x1e0/4]=reinterpret_cast<void*>(&prepare_flight);
  move_vt[0xe8/4]=reinterpret_cast<void*>(&animation);move_vt[0x58/4]=reinterpret_cast<void*>(&animation);
+ move_vt[0xd0/4]=reinterpret_cast<void*>(&flight_name);
  manager_vt[0]=reinterpret_cast<void*>(&sound_ok);manager_vt[2]=reinterpret_cast<void*>(&air_message);manager_vt[0x3c/4]=reinterpret_cast<void*>(&acquisition_gate);manager_vt[0x44/4]=reinterpret_cast<void*>(&old_admission);manager_vt[0x8c/4]=reinterpret_cast<void*>(&restriction);manager_vt[0x78/4]=reinterpret_cast<void*>(&air_neutral);
  ui_vt[0x40/4]=reinterpret_cast<void*>(&notify);ui_vt[0x34/4]=reinterpret_cast<void*>(&error_ui);session_vt[0x5c/4]=reinterpret_cast<void*>(&friendly_test);
  query_vt[0x40/4]=reinterpret_cast<void*>(&filter);query_vt[0x80/4]=reinterpret_cast<void*>(&query_mode);query_vt[0x74/4]=reinterpret_cast<void*>(&sweep);query_vt[0x20/4]=reinterpret_cast<void*>(&first);
@@ -180,7 +206,17 @@ void flight_tests(){
  auto upkeep=reinterpret_cast<void(__cdecl*)(void*)>(0x4ec7a0);
  for(auto e:{enter,move_enter})for(int c=0;c<4;++c){air_reset();map_restricted=c<2;old_map_bit=true;if(c==1)put<unsigned char>(actor.data(),0x3d8,5);if(c==3)put<unsigned char>(actor.data(),0x3d8,0);put<unsigned char>(air_context.data(),0x6c,0x80);e(nullptr,nullptr,actor.data(),air_input.data(),air_context.data());check(air_starts==(c<2?1:0)&&notifications==(c==0?1:0)&&flight_sets==(c<2?0:1)&&preparations==(c==3?1:0),"fix7 mapped map8c/default-true restriction, AI notification skip, source preparation");check(get<unsigned char>(air_context.data(),0x6c)==0x80,"old PC map44 refusal does not set context failure");}
  for(float speed:{0.f,0.2f,0.21f,0.6f,0.61f}){air_reset();anim_id=1;put(air_input.data(),8,speed);enter(nullptr,nullptr,actor.data(),air_input.data(),air_context.data());check(get<int>(air_context.data(),0)==(speed>0.6f?0x13:speed>0.2f?0x12:0x11),"source flight entry animation thresholds");}
- air_reset();put(air_input.data(),0,8u);check(tick(nullptr,nullptr,actor.data(),air_input.data())&&requested_name=="flyguarddecide"&&get<void*>(actor.data(),0x3bc)==move.data(),"flying guard routes to restored named decide");
+ for(u32 buttons:{0x100u,0x08u}){air_reset();put(air_input.data(),0,buttons);check(tick(nullptr,nullptr,actor.data(),air_input.data())&&carry_entries==0&&generic_calls==1&&get<void*>(actor.data(),0x3bc)==nullptr,"flying update retains native generic input before descent");}
+ for(int c=0;c<13;++c){air_reset();put(air_input.data(),0,c==1?0x08u:c==2?0x180u:0x100u);
+  if(c==3)flight_rank=2;if(c==4)probe_hit=false;if(c==5)contact_exists=false;if(c==6)char_target=nullptr;
+  if(c==7)put<unsigned char>(victim_stats.data(),0x2ad,8);if(c==8)put(ptr(0x70b814),0,0x3333u);
+  if(c==9)current_flying=false;if(c==10)native_descent_blocked=true;if(c==11)put(actor.data(),0x3d4,-1);if(c==12)move_present=false;
+  const bool handled=descent_probe(actor.data(),nullptr,air_input.data());check(carry_entries==(c==0?1:0),"Guard 0x100 admission; 0x08/power/rank2/miss/noncharacter/large/inactive/move/native refusal negatives");
+  if(c==3||c==9)check(handled&&probes==1,"source valid contact suppresses descent even when rank/current move prevents pickup");
+  if(c==4||c==7)check(!handled,"miss or large contact retains native descent");
+  if(c==12)check(handled&&descent_forces==1&&flight_sets==1,"missing decide node retains source null-force and flight path");
+  if(c==0)check(probes==1&&flight_sets==1&&last_flight==1,"successful downward contact enters decide and keeps flight without emission");
+ }
  air_reset();check(tick(nullptr,nullptr,actor.data(),air_input.data())&&generic_calls==1&&flight_sets==0,"flying wrapper retains native airborne generic input");
  air_reset();put(actor.data(),0xbc,0x3333u);check(tick(nullptr,nullptr,actor.data(),air_input.data())&&last_flight==0&&get<void*>(actor.data(),0x3bc)==idle.data(),"native landing tail selects Idle and disables flight");
  for(int on=0;on<2;++on){air_reset();flight_rank=0;put<unsigned char>(actor.data(),0x3d8,on?4:0);get<frame_t>(ptr(0x6931f8),16)(nullptr,nullptr,actor.data(),ptr(0x123));check(air_starts==on,"native flight frame dispatches central upkeep only while flying, ret8");}

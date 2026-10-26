@@ -3,7 +3,11 @@
 #include <array>
 namespace xml1_air_carry_rules {
 // Short retail service guards and complete handler tables, read before writing.
-inline constexpr std::array<limits_rules::guard,48> guards{{
+inline constexpr std::array<limits_rules::guard,52> guards{{
+    {0x433e46, "8b068bc8c1e908f6c1017453c1e807a801754c8b97d403000052e83b651e0083c40484c07539", "flight descent Guard bit8, no power bit7 and native controller gate"},
+    {0x433e6c, "6a028d4c241c", "flight descent carry admission seam"},
+    {0x42b6c0, "6aff68882e670064a10000000050", "actor movement probe with stop flag and contact output"},
+    {0x4a176d, "8d048514b87000", "per-player active hero handle table"},
     {0x6931f8, "30d74f0000c74e0010eb5900d0c64e0020c84e0000c54f0030cf4e0060c84f00", "flying handler table"},
     {0x6932d0, "30d74f0040c84e0010eb5900e0c64e00b0cb480000c54f0030cf4e0060c84f00", "fly move handler table"},
     {0x4ec7a0, "568b74240885f67474", "retail upkeep entry"},

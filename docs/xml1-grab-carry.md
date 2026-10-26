@@ -27,8 +27,10 @@ Its entry follows XML1 0xdc140: resolve the target, require a character, look up
 `grabattackvictim` in the victim's style collection with null optional actor,
 then call 0x432030 with `(move,-1,-1.0,0,0,0)`. No default entry runs; generic
 update remains slot 6. A null move takes the native no-op path. The first
-character entry logs whether lookup resolved, whether the victim's current
+character entry logs `move_resolves`, whether the victim's current
 move matches, and whether it changed; `[Test] GrabCarryTrace=1` logs each entry.
+The authored `juggrabthrowforwardvictim` lookup/current-match diagnostic is a
+separate line and never substitutes a move or adds a `grabattackvictim` node.
 Current-move observation is not a complete forced-transition acceptance probe.
 The PC service retains its additional health/state acceptance paths.
 
@@ -182,7 +184,21 @@ The two source tests use `xml1_flight_eligible(actor)`: a documented constant-tr
 emulation of XML1 +0x335 bit0x20, whose PC field was removed. AI suppresses the
 notification; restricted actors start Idle. Source flight preparation and entry
 animation selection are restored. Matching native exit and landing/input paths
-remain, with flying Guard selecting `flyguarddecide` by name.
+remain. Carry admission runs at **0x433e6c** inside PC flight descent
+**0x433e46**, after its Guard **0x100**, no-power-modifier **0x80** and native
+controller-refusal tests. XML1 **0x43312..0x43467** then requires a 20-unit
+downward movement probe from the actor position (stop flag 1), a character
+contact, the active hero in the actor's player slot, a non-large target,
+Flight rank above two and the current move named `flying`. Only then does it
+force `flyguarddecide` and retain flight without emission. Ordinary descent
+continues on a probe miss, a non-character/large contact or an inactive carrier.
+As in XML1, a valid contact
+suppresses descent even when rank/current move prevents pickup. There is no
+airborne-Guard shortcut in `ch_flying`.
+The decide handler's second sweep remains first-contact-only, including its
+normal LiftRule service for objects (Might + 1 >= XML1 heaviness, heaviness 5
+refused, native refusal flags retained). An isolated prop cannot satisfy the
+outer character-contact gate.
 
 The UI owner notification maps XML1 slot +0x2c to PC **+0x40** (0x48cbb0,
 `ret 8`). Both original slots are no-ops in the inspected binaries. The call is

@@ -103,7 +103,9 @@ void schedule_jump(void* actor,float deadline){
 }
 struct game {
     void* b;void* a;void* hero;u32* output;
-    bool available(int n,bool alt){return alt?alternate(b,a,n):boss_runtime::available(b,a,n);}
+    // -1 means short-circuited, so tracing never calls a gameplay predicate twice.
+    int arrival=-1,prop_facing=-1,alternate3=-1;
+    bool available(int n,bool alt){const bool result=alt?alternate(b,a,n):boss_runtime::available(b,a,n);if(alt&&n==3)alternate3=result;return result;}
     void buttons(u32 n){boss_runtime::buttons(output,n);}
     void taunt(float p){boss_runtime::taunt(b,p);}
     void wait(float t){boss_runtime::wait(b,t);}
@@ -116,7 +118,8 @@ struct game {
     u32 query(){return query_prop(a);}
     bool valid(u32 h){return mold_query::is_a(resolve(h),0x753f64);}
     void approach(u32 h){auto* prop=resolve(h);if(!prop)return;move_to(a,prop);fn<unsigned char(__fastcall*)(void*,void*,u32)>(0x4a7da0)(a,nullptr,h);}
-    bool arrived(u32 h){
+    bool arrived(u32 h){const bool result=arrived_impl(h);arrival=result;return result;}
+    bool arrived_impl(u32 h){
         auto* prop=resolve(h);if(!prop)return false;
         auto* nav=at<void*>(a,0x3e8);
         if((nav&&virt<int(__fastcall*)(void*,void*)>(nav,8)(nav,nullptr)==3)||
@@ -126,7 +129,7 @@ struct game {
         const float dx=bounds[3]-bounds[0],dy=bounds[4]-bounds[1];
         return boss_runtime::distance(a,prop)<(std::min)(100.f,std::sqrt(dx*dx+dy*dy));
     }
-    bool face_prop(u32 h,float t){return facing(b,a,resolve(h),output,t);}
+    bool face_prop(u32 h,float t){const bool result=facing(b,a,resolve(h),output,t);prop_facing=result;return result;}
     void clear_navigation_counter(){put(b,0x1c0,0);}
     u32 carried(){return at<u32>(a,0x76c);}
     void drop_other(){
@@ -184,7 +187,10 @@ bool brain(void* b,u32* output){
     if(!blob_rules::indexed_target(living(hero),hero?distance(a,hero):0)){s.hero_index=(s.hero_index+1)%count;u32 active=0;hero=mold_query::active_hero(active);}
     if(!living(hero))return true;const u32 target_id=at<u32>(hero,0x1c);target(b,a,target_id);follow(b,a,target_id);
     game g{b,a,hero,output};const auto pc=s.pc,op=blob_rules::opcode(s,zone("astral/ast3/astral3_5"));blob_rules::update(s,op,now(),g);
-    if(trace)logger::write("blob trace owner %08X pc %u opcode %u next %u prop %08X until %.3f wait %.3f",owner,pc,op,s.pc,s.prop,s.until,s.wait_until);
+    if(trace){
+        logger::write("blob trace owner %08X pc %u opcode %u next %u prop %08X until %.3f wait_until %.3f now %.3f",owner,pc,op,s.pc,s.prop,s.until,s.wait_until,now());
+        if(op==12)logger::write("blob pickup owner %08X prop %08X arrival=%d facing=%d alternate_action_slot_3=%d carried=%08X (-1=not_evaluated)",owner,s.prop,g.arrival,g.prop_facing,g.alternate3,g.carried());
+    }
     return true;
 }
 }

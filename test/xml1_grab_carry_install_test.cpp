@@ -70,11 +70,15 @@ bool __fastcall valid_handle(const u32* handle,void*){return resolve(handle,null
 void* __cdecl cast(void* entity){return is_character?entity:nullptr;}
 void* __fastcall styles(void* who,void*){check(who==victim.data()||who==actor.data(),"named move uses an actor style collection");return style.data();}
 void* __fastcall named(void* who,void*,const u32* name,void* optional){
+    if(name!=ptr(0x78a87c)&&name!=ptr(0x78a8d0)&&name!=ptr(0x78a8c8)){
+        check(*name==104,"diagnostic resolves authored victim move separately");return other.data();
+    }
     check(who==style.data()&&optional==nullptr,"named lookup style and null optional actor");++lookup_count;
     if(name==ptr(0x78a87c))return move_present?move.data():nullptr;
     if(name==ptr(0x78a8d0))return move_present?move.data():nullptr;
     check(name==ptr(0x78a8c8),"only hard-coded attack victim or idle name requested");return idle.data();
 }
+void* __fastcall authored_name(u32* key,void*,const char* name){check(std::strcmp(name,"juggrabthrowforwardvictim")==0,"diagnostic names authored victim transition");*key=104;return key;}
 void __fastcall force(void* who,void*,void* chosen,int priority,float timing,u32 a,u32 b,u32 c){
     ++forced;check(who==victim.data()&&priority==-1&&timing==(ally_mode?0.375f:-1.f)&&a==0&&b==(ally_mode?1u:0u)&&c==0,"forced transition exact six-argument ABI");
     if(ally_mode)check(publishes==3&&get<u32>(who,4)==0x87&&(get<unsigned char>(who,0x764)&0x10),"ally flags/marker precede victim transition");
@@ -132,6 +136,7 @@ void move_name(const char* name){
     std::memcpy(name_table.data()+0x4008,name,std::strlen(name)+1);put(move.data(),8,1u);put(name_table.data(),8,0u);
 }
 void bind(){
+    jump(0x41b120,&authored_name);
     jump(0x4654b0,&resolve);jump(0x4654d0,&valid_handle);jump(0x402b60,&cast);jump(0x41d0d0,&styles);jump(0x501a50,&named);jump(0x432030,&force);
     jump(0x45fe40,&publish);jump(0x42c340,&start);jump(0x602280,&names);jump(0x41d020,&auxiliary);jump(0x41d060,&auxiliary);
     jump(0x45fe60,&time_now);jump(0x427c80,&action);jump(0x420b10,&sound);

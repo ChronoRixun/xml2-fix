@@ -265,13 +265,54 @@ void __fastcall fly_move_entry(void*,void*,void* actor,void*,void*){
     if(manager_flag(0x8c)&&xml1_grab_carry_rules::xml1_flight_eligible(actor)){if(!ai(actor))notify_text(actor,message(0x8a));idle(actor);return;}
     if(!flying(actor))slot<unary>(actor,0x1e0)(actor,nullptr);flight(actor,true);
 }
-bool __fastcall flying_update(void* self,void*,void* actor,void* input){
-    // Preserve the native landing/input paths, adding the engine-name entry
-    // PC lacks. Only ch_flying routes guard; ch_fly_move keeps native input.
-    if(actor&&input&&!grounded(actor)&&(at<u32>(input,0)&8u)){
-        if(void* next=named(actor,"flyguarddecide")){put(actor,0x3bc,next);return true;}
+// XML1 0x43312..0x43467, inside flight descent. The native PC branch
+// 0x433e46..0x433e6a already requires Guard (0x100), no power modifier
+// (0x80), and no native controller refusal. Keep those instructions intact.
+bool __cdecl descend_carry(void* actor){
+    det_math::fp_env fp;
+    const vec start=at<vec>(actor,0x20),delta{0.f,0.f,-20.f};vec shift{};
+    void* contact=nullptr;
+    using probe=bool(__fastcall*)(void*,void*,const vec*,const vec*,int,vec*,void**);
+    const bool hit=fn<probe>(0x42b6c0)(actor,nullptr,&start,&delta,1,&shift,&contact);
+    void* victim=character(fn<pointer>(0x4a9590)(&contact,nullptr));
+    if(!hit||!victim)return false;
+    const int player=at<int>(actor,0x3d4);
+    if(player<0||player>=4||at<u32>(reinterpret_cast<const void*>(0x70b814),4u*player)!=at<u32>(actor,0x1c))return false;
+    void* stats=at<void*>(victim,0x35c);
+    if(!stats||(at<unsigned char>(stats,0x2ad)&8))return false;
+    // XML1's valid contact consumes this descent step even when rank or
+    // current move prevents pickup (0x43418/0x43430 -> 0x4348d).
+    if(rank(actor)<=2)return true;
+    void* move=at<void*>(actor,0x378);if(!move)return true;
+    u32 flying_key=0;fn<void*(__fastcall*)(u32*,void*,const char*)>(0x41b120)(&flying_key,nullptr,"flying");
+    const auto* key=slot<const u32*(__fastcall*)(void*,void*)>(move,0xd0)(move,nullptr);
+    if(!key||*key!=flying_key)return true;
+    void* next=named(actor,"flyguarddecide");
+    fn<forced>(0x432030)(actor,nullptr,next,-1,-1.f,0,0,0);
+    flight(actor,true,0);
+    return true;
+}
+auto descend_carry_function=&descend_carry;
+u32 descent_resume=0x433e72,descent_done=0x433ea5;
+__declspec(naked) void descent_bridge(){
+    __asm {
+        pushfd
+        pushad
+        push edi
+        call dword ptr [descend_carry_function]
+        add esp,4
+        test al,al
+        jz native_descent
+        popad
+        popfd
+        jmp dword ptr [descent_done]
+    native_descent:
+        popad
+        popfd
+        push 2
+        lea ecx,[esp+1ch]
+        jmp dword ptr [descent_resume]
     }
-    return fn<update>(0x4ecf30)(self,nullptr,actor,input);
 }
 }
 
@@ -297,13 +338,16 @@ bool prepare(std::vector<xml1_hook_transaction::patch>& writes){
     tables[3][1]=reinterpret_cast<void*>(&throw_entry);tables[3][2]=tables[3][3]=reinterpret_cast<void*>(&throw_cleanup);
     tables[4][3]=reinterpret_cast<void*>(&victim_cleanup);tables[4][4]=reinterpret_cast<void*>(&victim_frame);
     auto pointer_patch=[&](u32 va,const void* p){const auto* old=reinterpret_cast<const unsigned char*>(va);writes.push_back({va,{old,old+4},xml1_hook_transaction::pointer_bytes(p)});};
-    pointer_patch(0x6931f8+4,reinterpret_cast<void*>(&flying_entry));pointer_patch(0x6931f8+24,reinterpret_cast<void*>(&flying_update));
+    pointer_patch(0x6931f8+4,reinterpret_cast<void*>(&flying_entry));
     pointer_patch(0x6932d0+4,reinterpret_cast<void*>(&fly_move_entry));
     const u32 va=0x4ec7a0;std::vector<unsigned char> after(5,0xe9);const u32 relative=u32(reinterpret_cast<std::uintptr_t>(&upkeep))-va-5;std::memcpy(after.data()+1,&relative,4);
     const auto* old=reinterpret_cast<const unsigned char*>(va);writes.push_back({va,{old,old+5},after});
     const u32 parser=0x4f74b2;const auto* before=reinterpret_cast<const unsigned char*>(parser);
     std::vector<unsigned char> filter(5,0xe9);const u32 target=u32(reinterpret_cast<std::uintptr_t>(&flight_powerup_bridge))-parser-5;std::memcpy(filter.data()+1,&target,4);
     writes.push_back({parser,{before,before+5},filter});
+    const u32 descent=0x433e6c;const auto* original=reinterpret_cast<const unsigned char*>(descent);
+    std::vector<unsigned char> bridge(6,0x90);bridge[0]=0xe9;const u32 offset=u32(reinterpret_cast<std::uintptr_t>(&descent_bridge))-descent-5;std::memcpy(bridge.data()+1,&offset,4);
+    writes.push_back({descent,{original,original+6},bridge});
     return true;
 }
 void abandon(){handlers.fill(nullptr);}

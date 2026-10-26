@@ -84,6 +84,14 @@ namespace
 	}
 	struct reader { void** vt; int h; };
 	void __fastcall read_number(reader* r, void*, const char*, std::int16_t* out) { *out = static_cast<std::int16_t>(r->h); }
+	unsigned char fixture_might=0;
+	unsigned char __fastcall might(void*,void*) { return fixture_might; }
+	bool __cdecl ordinary_mode() { return false; }
+	template<class T> void jump(address va,T target) {
+		auto* p=reinterpret_cast<unsigned char*>(va);p[0]=0xe9;
+		const auto relative=std::uint32_t(reinterpret_cast<std::uintptr_t>(target))-va-5;
+		std::memcpy(p+1,&relative,4);
+	}
 
 	// X-Men Legends 1, written out: rows might rank 0..4, columns heaviness 0..5 (5 is never lifted; rank r lifts up to
 	// r + 1). Rank 4 is what an npcstat `might level="4"` gives.
@@ -205,6 +213,9 @@ namespace
 		DWORD old = 0;
 		check(VirtualProtect(fixture_space, 0x400000, PAGE_EXECUTE_READWRITE, &old) != 0, "fixture writable");
 		for (const auto& g : guards) std::memcpy(reinterpret_cast<void*>(g.va), bytes(g.va), g.hex.size()/2);
+		// Flying carry calls this same normal lift service. Retain its native
+		// refusal prefix/tail around the installed XML1 heaviness bridge.
+		std::memcpy(reinterpret_cast<void*>(0x427f60),bytes(0x427f60),0x75);
 		const std::vector<unsigned char> before(fixture_space, fixture_space + 0x400000);
 		ini::lift_value.reset();
 		lift_rule::install(reinterpret_cast<HMODULE>(0x400000));
@@ -242,6 +253,19 @@ namespace
 		std::array<unsigned char,0x400> object{};
 		const std::uint32_t handle = 0x1234;
 		std::memcpy(object.data()+entity_handle,&handle,4);
+		jump(might_getter_va,&might);jump(0x4c87a0,&ordinary_mode);
+		std::array<unsigned char,0x600> actor{};
+		const auto may_lift=reinterpret_cast<unsigned char(__fastcall*)(void*,void*,void*)>(0x427f60);
+		for(int h=0;h<=5;++h) {
+			r.h=h;object[object_heaviness]=static_cast<unsigned char>(engine_heaviness(h));
+			run_parse(object.data(),&r,object[object_heaviness]);
+			for(int m=0;m<5;++m)for(int carried=0;carried<2;++carried) {
+				fixture_might=static_cast<unsigned char>(m);object[0x30d]=carried?4:0;
+				check(bool(may_lift(actor.data(),nullptr,object.data()))==(!carried&&xml1_table[m][h]),
+				      "carry object service: native refusal and XML1 heaviness 0..5 / Might 0..4 table");
+			}
+		}
+		object[0x30d]=0;
 		std::array<unsigned char,0x2c> entry{};
 		constexpr int impacts[]{2,4,6,8,10,12}, levels[]{0,2,5,9,15}, damages[]{0,0,1,3,5}, limits[]{0,2,3,4,4};
 		for (int h=0;h<=5;++h) {

@@ -169,9 +169,17 @@ void __fastcall attack_entry(void*, void*, void* actor, void*, void*)
     fn<forced_t>(0x432030)(victim, nullptr, move, -1, -1.f, 0, 0, 0);
     if (trace || !logged_lookup)
     {
-        logger::write("grab carry: grabattackvictim actor %08X victim %08X resolves=%d current_matches=%d changed=%d",
+        logger::write("grab carry: grabattackvictim actor %08X victim %08X move_resolves=%d current_matches=%d changed=%d",
                       at<u32>(actor, 0x1c), at<u32>(victim, 0x1c), move != nullptr,
                       move && at<void*>(victim, 0x378) == move, before != at<void*>(victim, 0x378));
+        // The authored time-zero victim trigger is independent of the optional
+        // grabattackvictim lookup above. Observe it; never force or substitute it.
+        u32 key = 0;
+        fn<void*(__fastcall*)(u32*, void*, const char*)>(0x41b120)(&key, nullptr, "juggrabthrowforwardvictim");
+        void* authored = fn<named_t>(0x501a50)(fn<pointer_t>(0x41d0d0)(victim, nullptr), nullptr, &key, nullptr);
+        logger::write("grab carry: authored victim transition juggrabthrowforwardvictim actor %08X victim %08X move_resolves=%d current_matches=%d",
+                      at<u32>(actor, 0x1c), at<u32>(victim, 0x1c), authored != nullptr,
+                      authored && at<void*>(victim, 0x378) == authored);
         logged_lookup = true;
     }
 }

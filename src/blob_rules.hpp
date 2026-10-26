@@ -7,6 +7,7 @@
 namespace blob_rules {
 constexpr std::array<unsigned,19> nyc{11,12,13,3,8,1,10,11,12,13,7,8,1,10,5,10,9,14,15};
 constexpr std::array<unsigned,13> astral{3,8,1,10,7,8,1,10,5,10,9,14,15};
+// wait_until is an absolute simulation-time deadline, including at pickup opcode 12.
 struct state {unsigned pc=0,hero_index=0;float advanced_at=0,until=0,melee_at=0,wait_until=0;std::uint32_t prop=0;bool close=false;unsigned scratch=0;};
 inline unsigned opcode(const state& s,bool astral_mode){return astral_mode?astral[s.pc%astral.size()]:nyc[s.pc%nyc.size()];}
 inline void advance(state& s,float now){++s.pc;s.advanced_at=now;s.scratch=0;}
