@@ -21,14 +21,26 @@
   optional page) and leaves the Danger Room results page native. Checked live on 10-25 at 1280x720 windowed and
   2560x1440 borderless, beside X-Men Legends I in xemu.
 
-- **XML1's grab lifecycle: gameplay rule 45 revision 2** (`[Game] Xml1GrabCarry = xml1`; 1.9.0-beta.1,
-  [docs](docs/xml1-grab-carry.md)). Juggernaut's grab-and-hit (`ch_grab_attack`: the grabattackvictim lookup the PC
-  never registered, the large-actor hold after the strict deadline at 0x4edb83), the shared grab victim's retention
-  and cleanup, the ally throw, pickup admission and cancellation, the thrown-landing recovery (0x4f49e9's owner gate
-  and two-second clear bypassed) and the flying charge acquiring the live character it strikes (0x4ee87c / 0x4ee8b3)
-  follow X-Men Legends I. Values `{installed,7,0,0}` (mask 7 = grab, pickup/recovery, charge collision); the earlier
-  ground-only candidate (revision 1) is refused both ways. The flying carry (the fly-grab handlers, upkeep) is not
-  restored yet. Absent: nothing written, no entry. Not played yet.
+- **XML1's grab lifecycle and flying carry: gameplay rule 45 revision 3** (`[Game] Xml1GrabCarry = xml1`;
+  1.9.0-beta.1, [docs](docs/xml1-grab-carry.md)). Juggernaut's grab-and-hit (`ch_grab_attack`: the grabattackvictim
+  lookup the PC never registered, the large-actor hold after the strict deadline at 0x4edb83), the shared grab victim's
+  retention and cleanup, the ally throw, pickup admission and cancellation, the thrown-landing recovery (0x4f49e9's
+  owner gate and two-second clear bypassed) and the flying charge acquiring the live character it strikes (0x4ee87c /
+  0x4ee8b3) follow X-Men Legends I. New in revision 3: Phoenix's, Rogue's and Storm's **flying carry** (XML1's
+  `ch_fly_guard_decide`, `ch_air_grab_pickup`, `..._idle`, `..._throw` and the victim handler: acquisition, hand
+  attachment, walk / run, throw, smash, interrupted drop and both actors' cleanup), the fix7 flight admission and
+  XML1's strict one-second **flight upkeep**; the parser filter (0x4f74b2) drops only the `%flight_pwr` per-second
+  expression, so a converted PC flying node is never charged twice. Revision 3 needs `[Limits] AnimEnums` and
+  `[Game] LiftRule = xml1` installed; without them it writes nothing and stays an unverified request (host / join
+  closed). Values `{1,15,0,0}`
+  (mask 15 = grab, pickup/recovery, charge collision, carry/fix7/upkeep); revisions 1 and 2 (080b) are refused both
+  ways. Absent: nothing written, no entry. Not played yet.
+
+- **XML1's animation enums: gameplay rule 48** (`[Limits] AnimEnums = 512`; 1.9.0-beta.1,
+  [docs](docs/anim-enums.md)). XMen2.exe's animation enum table holds 210 names, every slot taken; the key raises it to
+  512 (and the animation-set cache 16 -> 128 records) and gives XML1's 23 flying-carry and Juggernaut-grab-victim
+  enums fixed IDs 0xD2..0xE8 (81 operand edits, five caves, two hooks, one startup transaction). The DLL publishes the names as a marked table (`XML2FIX.ANIMENUMS.1`) that the Legends
+  Classic builder compares with its own. Absent or 0: nothing written, no entry. Not played yet.
 
 - **Shared handlers wave C: gameplay rule 46** (nine `[Game]` keys = `xml1`; 1.9.0-beta.1,
   [docs](docs/shared-handler-c-rules.md)). `JumpAttackDamageRule` / `FlyChargeDamageRule`: the producer's damage
