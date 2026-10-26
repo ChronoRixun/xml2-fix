@@ -64,6 +64,8 @@ bool scripted=false;
 bool __fastcall script_allowed(void*,void*,int){return scripted;}
 bool __fastcall liftable(void*,void*,void*){return can_lift;}
 bool __fastcall fallback(void*,void*,void*,void*){return fallback_result;}
+int native_fallback_parameters=0;
+float __fastcall native_movement_parameter(void*,void*,int id){++native_fallback_parameters;check(id==2,"zero-input guard fallback requests only movement scale");return 100.f;}
 bool __fastcall immunity(void*,void*,int id,int){check(id==(source?0x17:0x2c),"def_pickup enum translated by name");return immune;}
 void* __fastcall source_action(void*,void*,int id){action_id=id;return move.data();}
 void* __fastcall named_lookup(void*,void*,const u32*,void*){return move.data();}
@@ -425,11 +427,14 @@ void acquisition_tests(const image& pc,const image& x1){
   }
  }
 }
-void guard_tests(){
+void guard_tests(const image& pc){
+ source=false;reset();bind();field<unsigned char>(context.data(),0x6c)=0x80;
+ tk_guard_bridges::guard_entry(nullptr,nullptr,actor.data(),input.data(),context.data());
+ check(field<unsigned char>(context.data(),0x6c)==0x81&&query_calls==0&&starts==0,"guard entry only requests source immediate input; it cannot recursively start a move");
  for(int kind=0;kind<4;++kind)for(bool original:{true,false}){
   source=original;acrobatics=0;might=0;reset();bind();target_actor=kind<2;target_team=kind==1?0x1c:2;can_lift=kind!=3;
   if(original)reinterpret_cast<bool(__thiscall*)(void*,void*,void*)>(bias+0xd99d0)(nullptr,source_actor.data(),input.data());
-  else tk_guard_bridges::guard_entry(nullptr,nullptr,actor.data(),input.data(),context.data());
+  else tk_guard_bridges::guard_input(nullptr,nullptr,actor.data(),input.data());
   if(kind!=3){check(query_calls==1&&destructs==1,"guard query acquires/releases once");
    if(kind==0)check(action_id==3,"enemy guard selects grab action");
    if(kind==2)check(action_id==24&&field<unsigned char>(target.data(),original?0x2b9:0x30d)&4,"object guard retains pickup claim");
@@ -437,14 +442,14 @@ void guard_tests(){
   else check(action_id==0&&std::find(order.begin(),order.end(),8)!=order.end(),"cannot lift reports source feedback and takes idle");
  }
  for(int r:{0,2,3})for(float z:{-.8f,0.f,.2f,.8f}){
-  struct result{int starts,action;vec position,angles;};result a{};
+  struct result{int starts,action;vec position,angles;bool pending;};result a{};
   for(bool original:{true,false}){
    source=original;acrobatics=r;might=0;reset();bind();wall=true;normal={-1,0,z};
-   if(original)reinterpret_cast<bool(__thiscall*)(void*,void*,void*)>(bias+0xd99d0)(nullptr,source_actor.data(),input.data());
-   else tk_guard_bridges::guard_entry(nullptr,nullptr,actor.data(),input.data(),context.data());
-   result b{starts-(!original&&!(r==3&&z<.2f)?1:0),action_id,placed,turned};
+   const bool pending=original?reinterpret_cast<bool(__thiscall*)(void*,void*,void*)>(bias+0xd99d0)(nullptr,source_actor.data(),input.data()):tk_guard_bridges::guard_input(nullptr,nullptr,actor.data(),input.data());
+   result b{starts,action_id,placed,turned,pending};
    if(original)a=b;else{
     check(a.starts==b.starts&&a.action==b.action&&!std::memcmp(&a.position,&b.position,sizeof(vec))&&!std::memcmp(&a.angles,&b.angles,sizeof(vec)),"rank3 wall acquisition and signed normal boundary agree with owner XML1");
+    check(a.pending==b.pending,"guard returns source false after immediate wall-lunge, true for pending decisions");
     if(r==3&&z<.2f)check(played_name=="walllunge"&&destructs==1,"guard selects walllunge and releases query, independently of rank2 cling/backflip");
    }
   }
@@ -454,9 +459,9 @@ void guard_tests(){
   for(bool original:{true,false}){
    source=original;acrobatics=r;might=0;reset();bind();immune=is_immune;field<unsigned char>(target.data(),0x54d)=field<unsigned char>(target.data(),0x765)=1;
    if(original)reinterpret_cast<bool(__thiscall*)(void*,void*,void*)>(bias+0xd99d0)(nullptr,source_actor.data(),input.data());
-   else tk_guard_bridges::guard_entry(nullptr,nullptr,actor.data(),input.data(),context.data());
+   else tk_guard_bridges::guard_input(nullptr,nullptr,actor.data(),input.data());
    const int notices=static_cast<int>(std::count(order.begin(),order.end(),7));
-   if(original){a_action=action_id;a_starts=starts;a_notices=notices;}else check(a_action==action_id&&a_starts==starts-(r>2&&!is_immune?0:1)&&a_notices==notices,"stun immunity and acrobatics air-grab follow source decisions");
+   if(original){a_action=action_id;a_starts=starts;a_notices=notices;}else check(a_action==action_id&&a_starts==starts&&a_notices==notices,"stun immunity and acrobatics air-grab follow source decisions");
   }
  }
  for(bool fastball:{false,true}){
@@ -466,21 +471,26 @@ void guard_tests(){
    field<unsigned char>(stats.data(),0x3a3)=1;field<unsigned char>(stats.data(),0x2ae)=0x20;
    field<unsigned char>(stats.data(),0x3a2)=fastball?1:0;field<unsigned char>(stats.data(),0x2ad)=fastball?0x80:0;
    if(original)reinterpret_cast<bool(__thiscall*)(void*,void*,void*)>(bias+0xd99d0)(nullptr,source_actor.data(),input.data());
-   else tk_guard_bridges::guard_entry(nullptr,nullptr,actor.data(),input.data(),context.data());
+   else tk_guard_bridges::guard_input(nullptr,nullptr,actor.data(),input.data());
    const u32 held_token=field<u32>(self_actor(),original?0x554:0x76c);
    if(original){old_action=action_id;old_starts=starts;old_held=held_token;}
    else{
-    check(old_action==action_id&&old_starts==starts-(fastball?0:1)&&old_held==held_token,"actor-aware Might, distinct from raw rank zero, preserves source ally policy");
+    check(old_action==action_id&&old_starts==starts&&old_held==held_token,"actor-aware Might, distinct from raw rank zero, preserves source ally policy");
     if(fastball)check(played_name=="throwally"&&held_token==222,"eligible ally starts throwally with the rule45 owner established");
    }
   }
  }
  effective_might_override=-1;
+ source=false;reset();bind();field<u32>(target.data(),4)=0x40010;
+ pc.load(0x4fbe80,0x32);pc.load(0x680030,4);jump(0x425b70,&native_movement_parameter);native_fallback_parameters=0;
+ check(tk_guard_bridges::guard_input(nullptr,nullptr,actor.data(),input.data()),"released empty guard produces one schedulable decision");
+ check(native_fallback_parameters==1&&action_id==0&&starts==0&&field<void*>(actor.data(),0x3bc)==move.data(),"real native zero-input fallback selects Idle without recursively entering guard");
 }
 struct control_result{vec v;float cost,deadline,damage;int debits;u32 token,hit_flags;};
-control_result control_case(bool original,int level,int damage,float available,bool button,float current_time=10.f,int source_heaviness=0){
+control_result control_case(bool original,int level,int damage,float available,bool button,float current_time=10.f,int source_heaviness=0,vec initial_velocity={10,0,0},bool as_character=true,bool caster_ai=false){
  source=original;reset();bind();time_now=current_time;energy=available;
- field<vec>(target.data(),0x20)={20,0,0};field<vec>(target.data(),0x100)=field<vec>(target.data(),0x120)={10,0,0};
+ target_actor=as_character;if(caster_ai)field<unsigned char>(actor.data(),0x3d8)|=1;
+ field<vec>(target.data(),0x20)={20,0,0};field<vec>(target.data(),0x100)=field<vec>(target.data(),0x120)=initial_velocity;
  field<unsigned char>(target.data(),0x2c3)=static_cast<unsigned char>(source_heaviness);field<unsigned char>(target.data(),0x31d)=static_cast<unsigned char>(source_heaviness>0?std::min(source_heaviness-1,3):0);lift_rule::source_override=source_heaviness;
  field<u32>(input.data(),0)=button?16:0;
  if(original){
@@ -497,6 +507,16 @@ control_result control_case(bool original,int level,int damage,float available,b
  return {last_velocity,last_cost,field<float>(target.data(),original?0x28c:0x2f0),original?static_cast<float>(field<std::int16_t>(target.data(),0x294)):field<float>(target.data(),0x2b8),debits,field<u32>(target.data(),original?0x558:0x770),field<u32>(target.data(),original?0x288:0x2c8)};
 }
 void control_tests(){
+ // A still target must reach the native release's facing fallback as zero.
+ // The original callback's final unguarded reciprocal produces NaNs here.
+ for(bool ai:{false,true})for(bool body:{false,true})for(vec v:{vec{},vec{0,0,90},vec{1.e-30f,0,0}}){
+  control_case(false,1,17,100,false,10.05f,0,v,body,ai);
+  check(std::isfinite(release_velocity.x)&&std::isfinite(release_velocity.y)&&std::isfinite(release_velocity.z),"stationary/vertical/tiny TK release direction is finite");
+  check(release_velocity.x==0&&release_velocity.y==0&&release_velocity.z==0,"zero horizontal TK release reaches native facing fallback");
+  check(release_mode==1&&stops==1&&tk_guard_bridges::tk_states.empty(),"stationary throw releases once and clears hold/sound");
+ }
+ const auto stopped=control_case(false,1,17,100,true,9.9f);
+ check(stopped.v.x==0&&stopped.v.y==0&&stopped.v.z==0,"zero timestep retains finite stationary hold without a time division");
  source=false;reset();bind();check(tk_guard_bridges::tk_input(nullptr,nullptr,actor.data(),input.data())&&action_id==0,"failed acquisition returns through PC input scheduling to idle");
  for(int level:{-1,1,11,127})for(int damage:{-128,-1,1,17,127})for(float current_time:{10.f,10.05f}){
   auto a=control_case(true,level,damage,100,true,current_time),b=control_case(false,level,damage,100,true,current_time);
@@ -524,6 +544,6 @@ int main(int argc,char** argv){
  check(field<u32>(const_cast<unsigned char*>(pc.read(0x69d1ac,0x3c)),0x34)==0x590120&&field<u32>(const_cast<unsigned char*>(pc.read(0x69d1ac,0x3c)),0x38)==0x590bd0,"retail audio table distinguishes boolean from resource lookup");
  pc.load(0x590120,0x66);
  load_source(x1,0xdf640,0xfd);load_source(x1,0xd99d0,0x7c6);load_source(x1,0xdff10,0xc71);load_source(x1,0xdfc80,0x28b);load_source(x1,0x38210,0x15);load_source(x1,0xdf3b0,0xed);
- std::puts("cancel");cancel_tests();std::puts("entry");entry_tests(pc);std::puts("constructors");constructor_tests(pc,x1);std::puts("parser");parser_tests(pc);std::puts("filter");filter_tests();std::puts("acquisition");acquisition_tests(pc,x1);std::puts("guard");guard_tests();std::puts("control");control_tests();std::puts("retail audio ABI");retail_audio_contract_tests(pc);
+ std::puts("cancel");cancel_tests();std::puts("entry");entry_tests(pc);std::puts("constructors");constructor_tests(pc,x1);std::puts("parser");parser_tests(pc);std::puts("filter");filter_tests();std::puts("acquisition");acquisition_tests(pc,x1);std::puts("guard");guard_tests(pc);std::puts("control");control_tests();std::puts("retail audio ABI");retail_audio_contract_tests(pc);
  std::printf("TK/guard native: %d checks, %d failures\n",checks,failures);return failures?1:0;
 }

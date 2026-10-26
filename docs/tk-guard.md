@@ -83,12 +83,23 @@ state, stop the held sound and discard the sidecar. Rule 45's shared victim
 retention recognizes the `tele` move family and its pickup entry accepts the
 source's already-marked objects.
 
+Stationary/vertical-only releases retain a zero horizontal direction through
+normalization. XML1's release service `3DCA9/3DD0B` and PC `42E6DE/42E752` then
+use the **victim's facing**, including the native upward impulse. XML1's higher
+controller `E0A6E` itself has the undefined reciprocal; copying that operation
+would supply NaNs and bypass the service fallback. All bridge normalization
+divisors require a positive finite length; the velocity/time divisor retains its
+positive timestep threshold. Rule45 also restores XML1 world-contact forwarding
+to the native thrown-body impact receiver; see [grab/carry](xml1-grab-carry.md).
+
 ## Guard policy and the wall paths
 
-XML1 input `D99D0..DA193` runs once in the PC entry slot `693004`; transplanting
-XML1's short entry would remove PC interactions. The replacement keeps PC's
-entry-context processing flag and commits pending source decisions through the
-PC move dispatcher. Immediate wall/air-grab transitions are dispatched once.
+XML1 entry `DA3A0` sets context bit0; input `D99D0..DA193` runs in PC input slot
+`693018`. The replacement keeps the interaction policy in that input callback,
+leaves pending decisions for the PC scheduler, and never recursively dispatches
+them from entry `693004`. An empty released tap reaches native movement fallback
+`4FBE80`, selects Idle, and exits. Immediate wall-lunge dispatch returns **false**
+as at XML1 `D9E73`, so the scheduler does not dispatch another chain afterward.
 
 The policy includes an existing held interaction (`use_button`), repeated
 movement fallback, the 48-unit probe and 16-unit box, actor and neutral targets,

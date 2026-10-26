@@ -154,6 +154,8 @@ inline bool __fastcall colossus_input(void* self,void*,void* actor,void* buttons
 // Preserve the source x87 product/store order at the crash threshold and
 // recoil. In particular X uses the live reciprocal while Y uses its float store.
 inline bool crash_angle(const float* velocity,const float* normal) {
+ const float horizontal_squared=velocity[0]*velocity[0]+velocity[1]*velocity[1];
+ if(!(horizontal_squared>0.f)||!std::isfinite(horizontal_squared))return false;
  float direction[3]{},reciprocal=0.f;unsigned char result=0;
  constexpr float limit=-.71f;
  __asm {
@@ -222,7 +224,12 @@ inline void __fastcall colossus_contact(void*,void*,void* actor,void* hit,void* 
  bool damaged=true;
  if(damageable) {
   const short before=narrow(field<float>(damageable,0x27c));
-  dispatch(actor,1,struck);
+  // PC CCEAtkMeleePunch's second actor is the talent-evaluation owner
+  // (4DC40D -> 4DC353/4DC37E and 4DC44D), not a direct hit recipient.
+  // XML1 CF250 ignores its second actor and uses caster/literal data. Native
+  // PC Colossus supplies actor twice; a soldier here resolves %xco_* to zero.
+  // Keep the collision victim for the health/crash decision below.
+  dispatch(actor,1,actor);
   damaged=!(static_cast<float>(before)<=field<float>(damageable,0x27c));
  }
  const bool level=fn<bool(__thiscall*)(void*)>(0x4a95c0)(contact);

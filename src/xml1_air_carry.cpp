@@ -57,7 +57,9 @@ void chain(void* actor,int action){put(actor,0x3bc,fn<action_t>(0x427c80)(actor,
 void lock(void* actor,void* target){fn<handle_set>(0x42d8e0)(actor,nullptr,at<u32>(target,0x1c));}
 vec subtract(vec a,vec b){return {a.x-b.x,a.y-b.y,a.z-b.z};}
 vec blend(vec from,vec to,float amount){return {from.x+(to.x-from.x)*amount,from.y+(to.y-from.y)*amount,from.z+(to.z-from.z)*amount};}
-bool bone(void* actor,int id,vec& out){return fn<bool(__fastcall*)(void*,void*,int,vec*,bool,bool)>(0x41d620)(actor,nullptr,id,&out,true,true);}
+// PC 568E90's (1,1) branch supplies fixed approximations (bone0=root+25),
+// not the animated skeleton used by XML1 12CAD0. Both added flags must be off.
+bool bone(void* actor,int id,vec& out){return fn<bool(__fastcall*)(void*,void*,int,vec*,bool,bool)>(0x41d620)(actor,nullptr,id,&out,false,false);}
 void face(void* actor,void* victim){vec direction=subtract(at<vec>(victim,0x20),at<vec>(actor,0x20)),angles{};const vec* result=fn<vec*(__cdecl*)(vec*,const vec*)>(0x5607b0)(&angles,&direction);slot<vector_set>(actor,0x2c)(actor,nullptr,result);}
 // Native hold entry's sound contract: pickup field at sound-set+0x14.
 void pickup_sound(void* actor){void* sounds=fn<void*(__cdecl*)(int)>(0x438cb0)(at<int>(actor,0x444));const u32 sound=at<u32>(sounds,0x14);if(sound==*reinterpret_cast<const u32*>(0x69d058))return;void* manager=fn<getter>(0x477310)();if(slot<bool(__fastcall*)(void*,void*,u32)>(manager,0)(manager,nullptr,sound))slot<void(__fastcall*)(void*,void*,u32)>(actor,0x8c)(actor,nullptr,sound);}
@@ -235,7 +237,12 @@ bool __fastcall carry_update(void* self,void*,void* actor,void* input){
 void __fastcall carry_frame(void*,void*,void* actor,void*){
     if(!actor)return;det_math::fp_env fp;
     void* victim=character(resolve(actor,0x76c));if(!victim)return;
-    mark(victim);attachment(actor,victim);upkeep(actor);
+    mark(victim);
+    // PC can reset the victim after the new carrier node's entry/trigger.
+    // Reassert the source pair constraints before movement as well as in the
+    // victim callback; actor callback order must not open a physics frame.
+    if(character(resolve(victim,0x178))==actor&&flying(actor)&&!grounded(actor))bits(victim,true);
+    attachment(actor,victim);upkeep(actor);
 }
 bool friendly_damage(){if(*reinterpret_cast<const unsigned char*>(0x70b6fd))return true;void* s=fn<getter>(0x48de40)();return slot<boolean>(s,0x5c)(s,nullptr);}
 void __fastcall throw_entry(void*,void*,void* actor,void*,void* context){
@@ -276,6 +283,17 @@ void __fastcall fly_move_entry(void*,void*,void* actor,void*,void*){
 // (0x80), and no native controller refusal. Keep those instructions intact.
 bool __cdecl descend_carry(void* actor){
     det_math::fp_env fp;
+    // Protect pickup's time-zero stop/interpolation from PC's general descent
+    // tail once contact has established the pair. Established carry retains
+    // the source probe/descent policy, including descending through empty air.
+    void* current=at<void*>(actor,0x378);
+    if(current){
+        void* handler=slot<pointer>(current,0x30)(current,nullptr);
+        if(handler==&handlers[1]){
+            void* victim=character(resolve(actor,0x76c));
+            if(victim&&alive(victim)&&character(resolve(victim,0x178))==actor&&flying(actor)&&!grounded(actor))return true;
+        }
+    }
     const vec start=at<vec>(actor,0x20),delta{0.f,0.f,-20.f};vec shift{};
     void* contact=nullptr;
     using probe=bool(__fastcall*)(void*,void*,const vec*,const vec*,int,vec*,void**);

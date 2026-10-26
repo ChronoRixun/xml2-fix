@@ -14,6 +14,7 @@
 #include "entity_query.hpp"
 #include "ini.hpp"
 #include "game_version.hpp"
+#include "thrown_body_fixture.hpp"
 #include <cstdio>
 #include <fstream>
 #include <iterator>
@@ -402,5 +403,6 @@ int main(int argc,char** argv){
     check((lookup("ch_roguedecide")!=nullptr)==both&&(lookup("ch_clingwalldecide")!=nullptr)==both,"all enabled lookup resolvers coexist");
     check(lookup("ch_air_grab_pickup")!=nullptr&&lookup("unknown")==nullptr,"carry registered and unknown names fall through");
     bind();callbacks(handler);hold_branches();lifecycle();flying_collision();lifecycle_boundaries();
+    thrown_body_fixture::run([](u32 a,std::size_t n){native(a,n);},[](bool b,const char* s){check(b,s);});
     std::printf("%s real grab installer/callbacks (%s): %d checks, %d failures\n",failures?"FAIL":"PASS",both?"cling+Rogue+grab":"grab only",checks,failures);return failures?1:0;
 }

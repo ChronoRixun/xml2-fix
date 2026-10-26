@@ -168,7 +168,11 @@ capacity owner's published entry bridges and virtual methods.
 
 Pickup moves XY one percent per callback toward bone 6, preserves Z and adds
 3.14 to carrier yaw. The default attachment uses bone 0 minus 55 Z (missing bone:
-position plus 38 minus 55). Enemy poses align bone-5/6 hand midpoints. Pickup
+position plus 38 minus 55). Enemy poses align bone-5/6 hand midpoints. Bone
+lookup requests real animated skeletons with PC's added flags `(false,false)`.
+`(true,true)` selects fixed approximations in `568E90`: bone0 becomes root+25
+and the source -55 offset incorrectly puts an ally at root-30. XML1 `12CAD0`
+queries the actual skeleton. Pickup
 poses interpolate by 0.1. The selector reads the **victim's** selected move enum through PC slot +0xe8
 (0x500840, table entry 0x694484); every ID
 comes from `anim_enums::extension_id`, checked against `layout()`. Missing hand
@@ -264,9 +268,24 @@ and smash, still select a chain. Guard is not converted into a throw input.
 The multi-frame fixture starts with empty owner handles, executes the retail
 victim-event constructor and ownership/release instructions, and drives the
 retail PC input/chain path. It covers pickup, an established victim following
-XYZ movement for twelve frames, throw or landing/drop, and cleared reciprocal
-owners/constraints, with Guard both held and released at contact. Bone and
-collision outputs are synthetic. The self-chain defect is reproduced against
-the previous source; its responsibility for 080d's live failure remains
-**likely** until an actual held/released-Guard carry is observed. A held Guard
-can still descend and landing still releases the pair.
+XYZ movement over 120 frames, five genuine idle/walk/run transitions, turning,
+ascending/descending inputs, throw or landing/drop, and cleared reciprocal
+owners/constraints, with Guard both held and released at contact. Native victim
+reset instructions also run after carrier entry and before frame movement.
+Carrier frame restores constraints for a reciprocal flying airborne pair before
+attachment, closing that callback-order gap. While pickup owns the pair,
+the general PC Guard-descent tail is consumed without another contact probe.
+Established carry retains XML1's probe policy: contacts consume descent, while
+Guard through empty air still descends and preserves the carried pair.
+Landing and flight loss still release the pair. The retail bone path executes
+down to a synthetic renderer matrix; actual animation/collision remains live.
+
+World impact forwarding at `42BF70` retains the owner, neutral and friendly
+prechecks, then removes PC's extra physical-target/temporary-psy gate at
+`42C09E`, matching XML1 `3AF9E`. This covers both carry and TK throws through
+their installed rule45 lifecycle. Retail receiver `499100` still owns armed
+damage, deadline, speed, ordinary impact fallback and cooldown; no immediate HP
+debit is added. The fixture executes that receiver and its native descriptor
+constructor/copies with amounts 5/19/42, attribution, expired/stationary contacts
+and repeated-contact cooldown. Its terminal damage sink is synthetic, so live
+health and defense behavior still require verification.

@@ -382,6 +382,12 @@ void install(HMODULE game)
     // on acquisition or stuck when a victim transitions to a default move.
     branch(0x4de896, static_cast<u32>(reinterpret_cast<std::uintptr_t>(&grab_acquired_bridge)), 8, 0xe9);
     branch(0x42c32f, static_cast<u32>(reinterpret_cast<std::uintptr_t>(&reset_constraints_bridge)), 6, 0xe9);
+    // XML1 3AF9E forwards collision velocity/thrower to the body's impact
+    // receiver even for world geometry. PC 42C093 additionally requires a
+    // physical target or its temporary psy flag, which reset clears on throw.
+    // The native receiver still owns timing, amount, defenses and attribution.
+    writes.push_back({world_hit_gate,{world_hit_before.begin(),world_hit_before.end()},
+                     {world_hit_after.begin(),world_hit_after.end()}});
     memory mem;
     bool safe = true;
     if (!apply(mem, writes, &safe))

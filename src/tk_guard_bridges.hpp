@@ -16,7 +16,7 @@ inline vec add(vec a,vec b){return {a.x+b.x,a.y+b.y,a.z+b.z};}
 inline vec sub(vec a,vec b){return {a.x-b.x,a.y-b.y,a.z-b.z};}
 inline vec mul(vec a,float b){return {a.x*b,a.y*b,a.z*b};}
 inline float length(vec a){return std::sqrt(a.x*a.x+a.y*a.y+a.z*a.z);}
-inline vec unit(vec a){const float n=length(a);return n>0?mul(a,1.f/n):vec{};}
+inline vec unit(vec a){const float n=length(a);return n>0&&std::isfinite(n)?mul(a,1.f/n):vec{};}
 inline void* resolve(u32 token){return token?fn<void*(__thiscall*)(u32*)>(0x4654b0)(&token):nullptr;}
 inline bool valid(u32 token){return token&&fn<bool(__thiscall*)(u32*)>(0x4654d0)(&token);}
 inline void* cast(void* p,u32 va){return fn<void*(__cdecl*)(void*)>(va)(p);}
@@ -89,14 +89,14 @@ inline bool wall_lunge(void* actor,void* initial,void* entity){
  method<void(__thiscall*)(void*,const vec*)>(actor,0x1c)(actor,&position);
  if(auto* next=named(actor,"walllunge")){play(actor,next);return true;}return false;
 }
-// Source D99D0 policy, executed once at PC entry (4EC090). PC's context flag
-// requests the normal scheduler's processing; its input remains arg2.
-inline void __fastcall guard_entry(void* self,void*,void* actor,void* input,void* context){
- if(!context||!field<void*>(context,4))return;
- field<unsigned char>(context,0x6c)|=4;
+// XML1 DA3A0 entry requests immediate input. D99D0 is the input policy,
+// not an entry callback: the PC scheduler must consume its pending chain once.
+inline void __fastcall guard_entry(void*,void*,void*,void*,void* context){
+ if(context)field<unsigned char>(context,0x6c)|=1;
+}
+inline bool __fastcall guard_input(void* self,void*,void* actor,void* input){
+ if(!actor||!input)return false;
  det_math::fp_env fp;
- bool immediate=false;
- auto finish=[&](){if(!immediate)if(auto* next=field<void*>(actor,0x3bc))play(actor,next);};
  const u32 held=field<u32>(actor,0x774);
  if(valid(held)&&!manager_flag(0x46dce0,0x1a8)){
   auto* entity=resolve(held);
@@ -105,7 +105,7 @@ inline void __fastcall guard_entry(void* self,void*,void* actor,void* input,void
   }else{
    fn<void(__thiscall*)(void*)>(0x42c120)(actor);
    if(!fallback(self,actor,input))chain(actor,0);
-  }finish();return;
+  }return true;
  }
  const bool friendly=!(*reinterpret_cast<unsigned char*>(0x70b6fd))&&!manager_flag(0x48de40,0x5c);
  // Source B1BA0(actor) includes active Might; PC's actor lift statistics expose
@@ -113,20 +113,22 @@ inline void __fastcall guard_entry(void* self,void*,void* actor,void* input,void
  const bool allies=friendly&&(field<unsigned char>(field<void*>(actor,0x35c),0x2ae)&0x20)&&
   fn<unsigned char(__thiscall*)(void*)>(0x427dc0)(static_cast<unsigned char*>(actor)+0x470)>0;
  {
-  query_holder holder(actor);auto* q=holder.q;if(!q){if(!fallback(self,actor,input))chain(actor,0);finish();return;}
+  query_holder holder(actor);auto* q=holder.q;if(!q){if(!fallback(self,actor,input))chain(actor,0);return true;}
   method<void(__thiscall*)(void*,int,int)>(q,0x40)(q,1,1);
   if(friendly&&!allies)fn<void(__cdecl*)(void**,void*)>(0x44fe10)(&holder.q,actor);
   const vec box{16,16,16};vec center{};const auto* p=method<const vec*(__thiscall*)(void*,vec*)>(actor,0x24)(actor,&center);center=*p;
   method<void(__thiscall*)(void*,const vec*,const void*,float,const vec*)>(q,0x70)(q,&center,static_cast<unsigned char*>(actor)+0x2c,48.f,&box);
   void* contact=nullptr;method<void**(__thiscall*)(void*,void**)>(q,0x20)(q,&contact);
   auto* entity=cast(fn<void*(__thiscall*)(void**)>(0x4a9590)(&contact),0x429110);
-  if(wall_lunge(actor,contact,entity))return;
+  // XML1 D9E73: the immediate move is already staged, so do not ask the
+  // PC input scheduler to dispatch a pending chain on top of it.
+  if(wall_lunge(actor,contact,entity))return false;
   if(!entity||(field<u32>(entity,4)&0x40010)||manager_flag(0x484990,0x3c)){
    if(!fallback(self,actor,input))chain(actor,0);
   }else if(auto* victim=character(entity)){
    if(!fn<bool(__thiscall*)(void*)>(reinterpret_cast<u32>(&source_grabbable))(victim))chain(actor,0);
    else if(allies&&team(actor)==team(victim)&&!manager_flag(0x48de40,0x5c)){
-    if(field<unsigned char>(field<void*>(victim,0x35c),0x2ad)&0x80){field<void*>(actor,0x3bc)=named(actor,"throwally");lock(actor,victim);}
+    if(field<unsigned char>(field<void*>(victim,0x35c),0x2ad)&0x80){play(actor,named(actor,"throwally"));lock(actor,victim);}
     else if(!fallback(self,actor,input))chain(actor,0);
    }else if(team(victim)!=0x1c){
     chain(actor,3);
@@ -134,8 +136,8 @@ inline void __fastcall guard_entry(void* self,void*,void* actor,void* input,void
      if(fn<bool(__thiscall*)(void*,int,int)>(0x54d710)(victim,0x2c,0))notify(actor,"");
      else if(rank(actor,"acrobatics")>2){
       const std::array<vec,2> up{{{0,0,20},{0,0,0}}};method<float(__thiscall*)(void*,const void*)>(actor,0x130)(actor,up.data());
-      play(actor,named(actor,"airgrabpickup"));immediate=true;
-     }else if(rank(actor,"might")<=0&&!(field<unsigned char>(victim,0x765)&1)){play(actor,named(actor,"grabfailed"));immediate=true;}
+      play(actor,named(actor,"airgrabpickup"));
+     }else if(rank(actor,"might")<=0&&!(field<unsigned char>(victim,0x765)&1)){play(actor,named(actor,"grabfailed"));}
      else chain(actor,25);
     }lock(actor,victim);
    }
@@ -143,7 +145,7 @@ inline void __fastcall guard_entry(void* self,void*,void* actor,void* input,void
    lock(actor,entity);chain(actor,24);field<unsigned char>(entity,0x30d)|=4;
   }else{cannot_lift(actor);chain(actor,0);}
  }
- finish();
+ return true;
 }
 
 struct tk_state {
@@ -318,8 +320,10 @@ inline void __fastcall tk_update(void* self,void*,void* actor,void* input){
  if(exhausted||!held(input,rogue?5:4)){
   vec v=field<vec>(target,0x120);const float horizontal=std::sqrt(v.x*v.x+v.y*v.y);
   if(horizontal>=5.f){v=sub(field<vec>(target,0x20),field<vec>(actor,0x20));v.z=0;v=mul(unit(v),5.f);}
-  const float n=std::sqrt(v.x*v.x+v.y*v.y);
-  const vec direction{v.x/n,v.y/n,0.f/n};
+  // XML1 3DCA9/3DD0B and PC 42E6DE/42E752 use the victim's facing
+  // when release receives zero motion. Keep zero intact instead of the
+  // source callback E0A6E's undefined reciprocal (which bypasses that test).
+  const vec direction=unit({v.x,v.y,0.f});
   release(actor,s,direction,true);tk_states.erase(it);chain(actor,0);return;
  }
  if(static_cast<int>(s.time)<static_cast<int>(time))field<u32>(target,0x2dc)=effect_serial();

@@ -3,12 +3,14 @@
 #include "shared_handler_c_rules.hpp"
 #include "shared_handler_c_bridges.hpp"
 #include "tk_guard_bridges.hpp"
+#include "colossus_context_fixture.hpp"
 #include "gameplay_capabilities.hpp"
 #include <optional>
 #include <cwchar>
 #include <cmath>
 #include <algorithm>
 #include <cstdlib>
+#include <float.h>
 using namespace handler_fixture;
 constexpr u32 bias=0x10000000;
 extern "C" unsigned char fixture_space[0x400000];
@@ -31,7 +33,7 @@ void seed(const image& pc){for(const auto& g:shared_handler_c_rules::guards)pc.l
 void keys(u32 mask,const char* v="xml1"){for(unsigned i=0;i<ini::settings.size();++i)ini::settings[i]=(mask&(1u<<i))?std::optional<std::string>(v):std::nullopt;}
 void load_x1(const image& x1,u32 a,std::size_t n) {
  x1.load(a,n,bias);
- constexpr u32 references[]{0x3d64e0,0x3c97d0,0x3ca9dc,0x3c6e40,0x485878,0x4c0a60,0x4997ec,0x3d6438,0x3d643c,0x3d6430,0x450e48,0x5bc9d0,0x3c6de4,0x3cb1f0,0x498d90,0x3c8244,0x3d6664,0x4c2aa0,0x4c2aa4};
+ constexpr u32 references[]{0x3d64e0,0x3c97d0,0x3ca9dc,0x3c6e40,0x485878,0x4c0a60,0x4997ec,0x3d6438,0x3d643c,0x3d6430,0x3d642c,0x450e48,0x5bc9d0,0x3c6de4,0x3cb1f0,0x498d90,0x3c8244,0x3d6664,0x4c2aa0,0x4c2aa4};
  for(std::size_t i=0;i+4<=n;++i) {
   u32 v=field<u32>(at(a+bias),static_cast<unsigned>(i));
   if(std::find(std::begin(references),std::end(references),v)!=std::end(references)) {field<u32>(at(a+bias),static_cast<unsigned>(i))=v+bias;i+=3;}
@@ -236,7 +238,48 @@ void bounce_fastball_tests(const image& pc,const image& x1) {
   }
  }
 }
+struct charge_vec{float x,y,z;};
+charge_vec* __cdecl charge_facing(charge_vec* out,const charge_vec* a){*out={std::cos(a->z),std::sin(a->z),0};return out;}
+charge_vec* __fastcall charge_zero(charge_vec* p,void*){*p={};return p;}
+charge_vec* __fastcall charge_copy(charge_vec* p,void*,const charge_vec* q){*p=*q;return p;}
+charge_vec* __fastcall charge_product(charge_vec* p,void*,const float* q){p->x*=*q;p->y*=*q;p->z*=*q;return p;}
+float* __fastcall charge_component(charge_vec* p,void*,int i){return &p->x+i;}
+float __fastcall charge_const_component(charge_vec* p,void*,int i){return *(&p->x+i);}
+float __fastcall charge_length(charge_vec* p,void*){return std::sqrt(p->x*p->x+p->y*p->y+p->z*p->z);}
+void __fastcall charge_scale(charge_vec* p,void*,float v){p->x*=v;p->y*=v;p->z*=v;}
+void colossus_trajectory_tests(const image& pc,const image& x1){
+ pc.load(0x4ecdc0,0x70);pc.load(0x4ece30,0xa0);load_x1(x1,0xda900,0x57);load_x1(x1,0xda960,0x99);
+ for(u32 a:{0x691714u,0x691718u,0x680514u})pc.load(a,4);
+ for(u32 a:{0x3d642cu,0x3d6430u,0x3c8244u})x1.load(a,4,bias);
+ const u32 imports[]{0x67fa60,0x67fa2c,0x67f9b4,0x67f9c4,0x67f9d8,0x67f9e0,0x67fa50,0x67f8b0};std::array<void*,8> saved{};
+ const void* replacements[]{&charge_zero,&charge_copy,&charge_product,&charge_component,&charge_const_component,&charge_copy,&charge_length,&charge_scale};
+ for(unsigned i=0;i<8;++i){saved[i]=field<void*>(at(imports[i]),0);field<const void*>(at(imports[i]),0)=replacements[i];}
+ jump(0x560990,&charge_facing);jump(bias+0x1209c0,&charge_facing);
+ for(float yaw:{0.f,1.5707963f,3.1415927f})for(float z:{-250.f,0.f,100.f,400.f}){
+  reset();bind();field<charge_vec>(actor.data(),0x2c)=field<charge_vec>(original_actor.data(),0x2c)={0,0,yaw};field<float>(actor.data(),0x128)=field<float>(original_actor.data(),0x108)=z;
+  unsigned before=0,after=0;__asm mov before,esp
+  reinterpret_cast<void(__thiscall*)(void*,void*)>(bias+0xda900)(nullptr,original_actor.data());
+  const charge_vec source_motion{observed_velocity[0],observed_velocity[1],observed_velocity[2]};
+  reinterpret_cast<void(__thiscall*)(void*,void*,void*)>(0x4ecdc0)(nullptr,actor.data(),nullptr);
+  __asm mov after,esp
+  check(before==after,"source ret4 and PC ret8 charge frame ABIs balance stack");
+  check(std::fabs(source_motion.x-observed_velocity[0])<.001f&&std::fabs(source_motion.y-observed_velocity[1])<.001f&&source_motion.z==observed_velocity[2]&&observed_velocity[2]==z,"retail charge frame matches XML1 facing*320 and preserves airborne vertical velocity");
+ }
+ for(charge_vec v:{charge_vec{},charge_vec{320,0,400},charge_vec{320,0,-250},charge_vec{900,0,400}}){
+  reset();bind();field<charge_vec>(actor.data(),0x120)=field<charge_vec>(original_actor.data(),0x100)=v;
+  unsigned before=0,after=0;__asm mov before,esp
+  reinterpret_cast<void(__thiscall*)(void*,void*)>(bias+0xda960)(nullptr,original_actor.data());const charge_vec source_motion{observed_velocity[0],observed_velocity[1],observed_velocity[2]};
+  reinterpret_cast<void(__thiscall*)(void*,void*)>(0x4ece30)(nullptr,actor.data());
+  __asm mov after,esp
+  check(before==after,"source and PC charge cleanup ret4 ABIs balance stack");
+  check(std::fabs(source_motion.x-observed_velocity[0])<.001f&&std::fabs(source_motion.y-observed_velocity[1])<.001f&&std::fabs(source_motion.z-observed_velocity[2])<.001f,"retail charge cleanup matches XML1 Z100 and total-speed450 caps including stopped motion");
+ }
+ for(unsigned i=0;i<8;++i)field<void*>(at(imports[i]),0)=saved[i];
+}
 void colossus_tests(const image& pc,const image& x1) {
+ colossus_trajectory_tests(pc,x1);
+ const float stopped[]{0,0,0},normal_at_rest[]{-1,0,0};_clearfp();
+ check(!shared_handler_c_bridges::crash_angle(stopped,normal_at_rest)&&!(_statusfp()&(_SW_INVALID|_SW_ZERODIVIDE)),"stationary charge contact avoids zero reciprocal and leaves FP exception state clean");
  pc.load(0x4a97a0,0xb3);load_x1(x1,0xa09d0,0xb3);
  jump(0x4876e0,&material_type);jump(bias+0x83730,&material_type);native_material_proof=true;
  check(pc.read(0x4a9852,1)[0]==0xc3&&x1.read(0xa0a82,1)[0]==0xc3,"owner material accessors return without consuming stack arguments");
@@ -250,7 +293,10 @@ void colossus_tests(const image& pc,const image& x1) {
   field<float>(contact.data(),0x28)=5+height;field<float>(contact.data(),0x10)=-1.f;field<float>(contact.data(),0x30)=dot;
   original=true;classify(true);reinterpret_cast<contact_callback>(bias+0xdad20)(nullptr,original_actor.data(),target.data(),contact.data());auto order=calls;auto rec=recipient;std::array<float,3> v{observed_velocity[0],observed_velocity[1],observed_velocity[2]};auto choice=action_id;const auto effect_expected=effect_vectors;calls.clear();std::fill_n(observed_velocity,3,999.f);field<float>(target.data(),0x27c)=previous_health;contact_phase=false;effect_vectors.fill(0.f);
   original=false;classify(false);reinterpret_cast<contact_callback>(0x4ed220)(nullptr,actor.data(),target.data(),contact.data());
-  check(order==calls&&rec==recipient&&choice==action_id&&std::equal(v.begin(),v.end(),observed_velocity)&&effect_expected==effect_vectors,"Colossus source recipient, admission, crash threshold, action and rebound match owner code");
+  const void* source_recipient=(kind&1)&&(kind&4)?target.data():nullptr;
+  // Source's unused second argument is not PC's talent-context contract;
+  // the real PC tag/punch pipeline below tests that context independently.
+  check(order==calls&&rec==source_recipient&&choice==action_id&&std::equal(v.begin(),v.end(),observed_velocity)&&effect_expected==effect_vectors,"Colossus source admission/crash/rebound policy matches; talent context tested natively");
  }
 }
 
@@ -495,6 +541,10 @@ int main(int argc,char** argv) {
   std::memcpy(installation_baseline.data()+slot-0x401000,&external_callback,4);
  }
  if(mask&shared_handler_c_rules::colossus) {
+  // BalanceParity owns the preceding store/context-stats load. C's contract
+  // guards must coexist with its nine-byte CALL/NOP span in the full INI.
+  pc.load(0x4dc37b,9);at(0x4dc37b)[0]=0xe8;field<u32>(at(0x4dc37b),1)=0x10006000u-0x4dc380u;std::fill_n(at(0x4dc380),4,0x90);
+  std::copy_n(at(0x4dc37b),9,installation_baseline.begin()+0x4dc37b-0x401000);
   constexpr u32 sites[]{0x4a95c0,0x4a95f0,0x4a9600,0x4a9610,0x4a97a0};
   for(unsigned i=0;i<5;++i) {
    entity_capacity::owners[i]={sites[i],0x10004000u+0x100u*i};
@@ -511,7 +561,7 @@ int main(int argc,char** argv) {
  shared_handlers_c::install(GetModuleHandleW(nullptr));check(shared_handlers_c::installed()&&shared_handlers_c::verified()&&shared_handlers_c::values()[0]==mask,"exact selected rule-46 mask installed");
  using namespace shared_handler_c_bridges;
  const shared_handler_c_rules::targets targets{&jump_damage_bridge,&fly_damage_bridge,&colossus_input,&colossus_contact,&bounce_contact,&fastball_bridge,
-  &tk_guard_bridges::tk_entry,&tk_guard_bridges::tk_update,&tk_guard_bridges::tk_cancel,&tk_guard_bridges::tk_input,&tk_guard_bridges::tk_filter,&tk_guard_bridges::guard_entry,&tk_guard_bridges::tk_parse};
+  &tk_guard_bridges::tk_entry,&tk_guard_bridges::tk_update,&tk_guard_bridges::tk_cancel,&tk_guard_bridges::tk_input,&tk_guard_bridges::tk_filter,&tk_guard_bridges::guard_entry,&tk_guard_bridges::tk_parse,&tk_guard_bridges::guard_input};
  auto expected=installation_baseline;auto writes=shared_handler_c_rules::patches(mask,targets);
  for(const auto& p:writes){check(p.before.size()==p.after.size()&&std::equal(p.before.begin(),p.before.end(),pc.read(p.address,p.before.size())),"every written byte is guarded");std::copy(p.after.begin(),p.after.end(),expected.begin()+p.address-0x401000);}
  check(std::equal(expected.begin(),expected.end(),at(0x401000)),"production installer exact footprint preserves other owners' collision/cancel hooks");
@@ -526,5 +576,6 @@ int main(int argc,char** argv) {
  std::puts("damage");damage_tests(x1);std::puts("native value reader");native_value_reader_tests(pc,x1);std::puts("input");input_tests();std::puts("bounce/fastball");bounce_fastball_tests(pc,x1);std::puts("Colossus");colossus_tests(pc,x1);native_material_proof=false;shifted_contact=false;
  std::puts("idle");idle_tests(pc,x1,writes);std::puts("animation");animation_tests(pc,x1,writes);std::puts("visibility");visibility_tests(pc,x1,writes);std::puts("native visibility state");native_visibility_state_tests(pc,x1);std::puts("ABI");abi_tests();
  check(!game_version::refused,"guard refusal retains safe startup");
+ std::puts("Colossus native talent context");colossus_context_fixture::run(pc,&truncate_x87);
  std::printf("shared handlers C: %d checks, %d failures\n",checks,failures);return failures?1:0;
 }

@@ -17,6 +17,11 @@ std::vector<std::string> air_events;
 int flight_rank=3,actor_team=1,victim_team=2,first_reads=0,releases=0,queries=0,preparations=0,notifications=0,ui_errors=0,feedbacks=0,debits=0,flight_sets=0,air_starts=0,bone_mask=0x61,anim_id=-1,generic_calls=0,selects=0,air_forces=0,sounds_played=0,displacements=0,air_placements=0;
 int drops=0;
 bool sequence_mode=false;
+bool sequence_states=false;
+std::array<void*,3> sequence_nodes{};
+void* sequence_carry=nullptr;
+void* sequence_handler_now=nullptr;
+void* __fastcall air_move_handler(void*,void*){return sequence_mode?sequence_handler_now:nullptr;}
 int sequence_chains=0;
 int probes=0,carry_entries=0,descent_forces=0;bool probe_hit=true,native_descent_blocked=false,current_flying=true;
 u32 current_move_key=102;
@@ -31,7 +36,7 @@ std::vector<void*> idle_actors;
 bool close_float(float a,float b){return std::fabs(a-b)<0.0001f;}
 void air_reset(){
  reset();air_context.fill(0);air_input.fill(0);requested_name.clear();air_events.clear();air_published.clear();filters.clear();idle_actors.clear();
- drops=0;first_reads=releases=queries=preparations=notifications=ui_errors=feedbacks=debits=flight_sets=air_starts=generic_calls=selects=air_forces=sounds_played=displacements=air_placements=0;action_chosen=last_flight=-1;
+ sequence_states=false;drops=0;first_reads=releases=queries=preparations=notifications=ui_errors=feedbacks=debits=flight_sets=air_starts=generic_calls=selects=air_forces=sounds_played=displacements=air_placements=0;action_chosen=last_flight=-1;
  flight_rank=3;actor_team=1;victim_team=2;bone_mask=0x61;anim_id=-1;energy=1000.f;last_debit=0.f;parameter2=1.f;parameter8=50.f;parameter9=100.f;
  mode_a=mode_b=mode_c=map_restricted=session_gate=old_map_bit=neutral_ok=immunity=friendly=hit=fallback=sound_empty=false;
  mode_value=0;valid=liftable=available=contact_exists=sound_valid=true;physical_target=char_target=victim.data();now=0;
@@ -50,7 +55,7 @@ void* __fastcall flight_named(void*,void*,const u32* token){check(token==ptr(0x7
 void __fastcall air_start(void* who,void*,void* chosen,int reset){++air_starts;check(reset==1&&chosen==idle.data(),"source recovery starts named Idle reset1");idle_actors.push_back(who);air_events.push_back("idle");if(sequence_mode)put(who,0x378,chosen);}
 void __fastcall air_publish(void* who,void*){air_published.push_back(get<u32>(who,4));air_events.push_back("publish");}
 void __fastcall air_force(void* who,void*,void* chosen,int priority,float timing,u32 a,u32 b,u32 c){if(who==actor.data()){++descent_forces;if(chosen)++carry_entries;check(priority==-1&&timing==-1.f&&a==0&&b==0&&c==0&&requested_name=="flyguarddecide","descent enters named decide with source forced ABI");return;}++air_forces;check(who==victim.data()&&priority==-1&&timing==0.375f&&a==0&&b==1&&c==0,"carry forced transition six-argument ABI/timing");air_events.push_back("force");if(sequence_mode){reinterpret_cast<void(__thiscall*)(void*)>(0x42c270)(who);put(who,0x378,chosen);}}
-void* __fastcall air_action(void*,void*,int a){action_chosen=a;air_events.push_back("action");return selected;}
+void* __fastcall air_action(void*,void*,int a){action_chosen=a;air_events.push_back("action");if(sequence_mode&&sequence_states&&(a==0||a==9||a==11))return sequence_nodes[a==0?0:a==9?1:2];return selected;}
 void __fastcall air_lock(void* who,void*,u32 handle){++locks;check(who==actor.data()&&(handle==0x2222||(sequence_mode&&handle==0)),"carry locks selected handle");air_events.push_back("lock");if(sequence_mode)put(who,0x76c,handle);}
 void __fastcall selection(void* who,void*,u32 h){++selects;check(who==actor.data()&&h==0x2222,"selection uses attacker target handle");air_events.push_back("select");}
 unsigned char __fastcall air_rank(void* who,void*,const void* rank_key,void* a,void* output){check(who==stats.data()+4&&rank_key==ptr(0x711c28)&&a==actor.data()&&output==nullptr,"rank uses stats skill view, cached flight ID and actor");return static_cast<unsigned char>(flight_rank);}
@@ -80,7 +85,7 @@ V* __cdecl air_facing(V* out,const void*){*out={1,0,0};return out;}
 void __fastcall sweep(void*,void*,const V* begin,const V* end,const V* box){check(begin->x==10&&begin->y==20&&begin->z==30&&end->x==58&&end->y==20&&end->z==-18,"source 48 ahead, -48 below geometry");check(box->x==16&&box->y==16&&box->z==16,"16x16x16 acquisition box");}
 void** __fastcall first(void*,void*,void** out){++first_reads;*out=contact_exists?victim.data():nullptr;return out;}
 void* __fastcall contact_entity(void** contact,void*){return *contact;}
-bool __fastcall air_bone(void* who,void*,int id,V* out,bool a,bool b){check(a&&b&&(id==0||id==5||id==6),"expanded PC bone ABI uses (1,1)");if(!(bone_mask&(1<<id)))return false;if(sequence_mode){*out=get<V>(who,0x20);out->z+=id==0?38.f:id==5?20.f:40.f;return true;}if(id==0)*out={100,200,300};else if(who==actor.data())*out=id==5?V{10,30,50}:V{30,50,70};else *out=id==5?V{0,10,20}:V{20,30,40};return true;}
+bool __fastcall air_bone(void* who,void*,int id,V* out,bool a,bool b){check(!a&&!b&&(id==0||id==5||id==6),"carry requests real animated bones, never PC approximate (1,1) positions");if(!(bone_mask&(1<<id)))return false;if(sequence_mode){*out=get<V>(who,0x20);out->z+=id==0?38.f:id==5?20.f:40.f;return true;}if(id==0)*out={100,200,300};else if(who==actor.data())*out=id==5?V{10,30,50}:V{30,50,70};else *out=id==5?V{0,10,20}:V{20,30,40};return true;}
 void __fastcall air_position(void* who,void*,const V* p){last_position=*p;air_events.push_back("position");if(sequence_mode)put(who,0x20,*p);}
 void __fastcall air_angles(void* who,void*,const V* p){last_angles=*p;air_events.push_back("angles");if(sequence_mode)put(who,0x2c,*p);}
 V* __cdecl inverse(V* out,const V* direction){if(!sequence_mode)check(direction->x==-10&&direction->y==-20&&direction->z==-30,"carrier faces target through inverse facing");*out={4,5,6};return out;}
@@ -118,6 +123,7 @@ __declspec(naked) void descent_accepted(){__asm {mov eax,1} __asm {ret}}
 float __fastcall air_energy(void*,void*){return energy;}
 void __fastcall spend(void*,void*,float cost){++debits;last_debit=cost;}
 void air_bind(){
+ move_vt[0x30/4]=reinterpret_cast<void*>(&air_move_handler);
  // Keep the real Guard/no-power/native-refusal instructions. Only the
  // vector descent tail is replaced by a return in this invented caller.
  native(0x433e46,0x26);if(get<unsigned char>(ptr(0x433e6c),0)!=0xe9)jump(0x433e6c,&descent_rejected);jump(0x433e72,&descent_rejected);jump(0x433ea5,&descent_accepted);jump(0x61a3a0,&descent_blocked);jump(0x42b6c0,&downward_probe);
@@ -180,13 +186,14 @@ void release_tests(){
 // Execute the real PC input/chain decision and CCEAtkVictim ownership writes.
 // Rendering, bone output and collision movement remain deterministic services;
 // their setters advance actual fixture actor positions across frames.
-void* sequence_carry=nullptr;
+void* __fastcall sequence_handler(void*,void*){return sequence_handler_now;}
 bool __fastcall sequence_input(void*,void*,void* who,void* input){return callback<update_t>(sequence_carry,6)(sequence_carry,nullptr,who,input);}
 unsigned char __fastcall sequence_kind(void*,void*){return 0;}
 void __fastcall sequence_exit(void*,void*,void*){}
 void __fastcall sequence_transition(void* who,void*,void*,void* next,int,float,int,int,int,float){
- ++sequence_chains;check(who==actor.data()&&next==get<void*>(who,0x378),"native PC dispatcher restarts the selected current carry node");
+ ++sequence_chains;check(who==actor.data()&&next!=nullptr,"native PC dispatcher receives the selected carry node");
  reinterpret_cast<void(__thiscall*)(void*)>(0x42c270)(who);
+ put(who,0x378,next);
  callback<entry_t>(sequence_carry,1)(sequence_carry,nullptr,who,air_input.data(),air_context.data());
  put<unsigned char>(who,0x764,get<unsigned char>(who,0x764)&~0x20);
 }
@@ -200,11 +207,13 @@ __declspec(naked) void __fastcall sequence_control(void*,void*,void*){__asm {
 }}
 __declspec(naked) void sequence_control_done(){__asm {pop edi} __asm {pop esi} __asm {ret 4}}
 void sequence_tests(){
+ std::array<unsigned char,0x400> fast_move{};put(fast_move.data(),0,move_vt.data());sequence_nodes={move.data(),other.data(),fast_move.data()};
  native(0x4341bb,0x35);jump(0x4341f0,&sequence_control_done);native(0x4315d0,0x9e);jump(0x430d40,&sequence_transition);
  native(0x4daf00,0x430);native(0x4db580,0xc8);native(0x4f9120,0x5c);native(0x680030,4);
  sequence_carry=air_handler("ch_air_grab_pickup_idle");
  void* pickup=air_handler("ch_air_grab_pickup"),*decide=air_handler("ch_fly_guard_decide"),*victim_handler=air_handler("ch_air_grab_victim"),*throw_handler=air_handler("ch_air_grab_pickup_throw");
- const auto saved48=move_vt[0x48/4],saved58=move_vt[0x58/4],saved3c=move_vt[0x3c/4];
+ const auto saved48=move_vt[0x48/4],saved58=move_vt[0x58/4],saved3c=move_vt[0x3c/4],saved30=move_vt[0x30/4];
+ move_vt[0x30/4]=reinterpret_cast<void*>(&sequence_handler);
  move_vt[0x48/4]=reinterpret_cast<void*>(&sequence_input);move_vt[0x58/4]=reinterpret_cast<void*>(&sequence_kind);move_vt[0x3c/4]=reinterpret_cast<void*>(&sequence_exit);
  put(other.data(),0,move_vt.data());
  for(bool held_guard:{false,true})for(bool throwing:{false,true}){
@@ -220,30 +229,70 @@ void sequence_tests(){
   reinterpret_cast<void(__thiscall*)(void*,void*,void*)>(0x4daf00)(event.data(),actor.data(),nullptr);
   check(get<u32>(actor.data(),0x178)==0x2222&&get<u32>(victim.data(),0x178)==0x1111,"retail time-zero victim event establishes both owners from empty handles");
   put(air_input.data(),0,held_guard?0x100u:0u);
-  for(int frame=0;frame<4;++frame){callback<frame_t>(pickup,4)(pickup,nullptr,actor.data(),nullptr);callback<frame_t>(victim_handler,4)(victim_handler,nullptr,victim.data(),nullptr);}
+  sequence_handler_now=pickup;probe_hit=false;
+  for(int frame=0;frame<4;++frame){callback<frame_t>(pickup,4)(pickup,nullptr,actor.data(),nullptr);const int old_probes=probes;descent_probe(actor.data(),nullptr,air_input.data());check(probes==old_probes,"held Guard cannot resume native descent during paired pickup even when its contact probe would miss");callback<frame_t>(victim_handler,4)(victim_handler,nullptr,victim.data(),nullptr);}
   check(air_starts==0&&get<u32>(victim.data(),4)==0x87,"pickup remains paired across frames with Guard held or released at contact");
   selected=move.data();put(actor.data(),0x378,move.data());put<void*>(actor.data(),0x3bc,nullptr);put(actor.data(),0x20,V{20,30,130});anim_id=anim_enums::extension_id("ea_flyingcarry_idle_a");
+  sequence_handler_now=sequence_carry;
   callback<entry_t>(sequence_carry,1)(sequence_carry,nullptr,actor.data(),air_input.data(),air_context.data());
+  sequence_states=true;
   const int established_entries=air_placements;
-  for(int frame=0;frame<12;++frame){
+  for(int frame=0;frame<120;++frame){
    now=frame*.016f;put(actor.data(),0x20,V{20.f+frame*3.f,30.f+frame*2.f,130.f+frame});put(actor.data(),0x1f4,V{0,0,frame*.1f});
+   // Real changes between idle and forward/turning/up/down movement nodes.
+   // A native victim reset can run after carrier entry/time-zero setup and
+   // before either actor's next frame, so test that ordering explicitly.
+   const int phase=frame/20;const float speed=phase==0||phase==5?0.f:phase==1||phase==3?75.f:150.f;
+   put(air_input.data(),8,speed);put(air_input.data(),0,(held_guard?0x100u:0u)|(phase==3?64u:phase==4?256u:0u));
+   anim_id=anim_enums::extension_id(speed==0?"ea_flyingcarry_idle_a":speed<100?"ea_flyingcarry_flyslow_a":"ea_flyingcarry_flyfast_a");
+   if(phase==3)put(actor.data(),0x28,180.f+(frame-60));else if(phase==4)put(actor.data(),0x28,200.f-(frame-80));
    sequence_control(actor.data(),nullptr,air_input.data());
-   const int previous_probes=probes;descent_probe(actor.data(),nullptr,air_input.data());
-   check(probes==previous_probes+(held_guard?1:0)&&carry_entries==1,"held Guard consumes contact without re-admitting an established carry; released Guard skips the probe");
+   if(frame&&frame%20==0)reinterpret_cast<void(__thiscall*)(void*)>(0x42c270)(victim.data());
+   probe_hit=phase!=4;const int previous_probes=probes;const bool consumed=descent_probe(actor.data(),nullptr,air_input.data());
+   const bool down=(get<u32>(air_input.data(),0)&0x100)!=0;
+   check(probes==previous_probes+(down?1:0)&&carry_entries==1,"established carry retains source descent probe without readmitting decide");
+   if(phase==4)check(!consumed,"established carry can descend with Guard through empty airspace");
    callback<frame_t>(sequence_carry,4)(sequence_carry,nullptr,actor.data(),nullptr);
+   check(get<u32>(victim.data(),4)==0x87,"carrier frame closes native victim reset gap before physical movement");
    callback<frame_t>(victim_handler,4)(victim_handler,nullptr,victim.data(),nullptr);
    const auto a=get<V>(actor.data(),0x20),v=get<V>(victim.data(),0x20);
    check(close_float(a.x,v.x)&&close_float(a.y,v.y)&&close_float(a.z-17.f,v.z)&&get<u32>(victim.data(),0x178)==0x1111,"established victim follows moving carrier in XYZ for every frame");
   }
-  check(sequence_chains==0&&air_placements==established_entries&&air_starts==0,"native PC input path never restarts the established carry while Guard is held or released");
-  if(throwing){put(air_input.data(),0,16u);selected=other.data();check(callback<update_t>(sequence_carry,6)(sequence_carry,nullptr,actor.data(),air_input.data())&&action_chosen==1,"established carry can select throw");callback<entry_t>(throw_handler,1)(throw_handler,nullptr,actor.data(),air_input.data(),air_context.data());}
+  check(sequence_chains==5&&air_placements==established_entries+5&&air_starts==0,"120 frames retain pair over five genuine movement transitions and suppress same-node restarts");
+  if(throwing){put(air_input.data(),0,16u);selected=get<void*>(actor.data(),0x378)==move.data()?other.data():move.data();check(callback<update_t>(sequence_carry,6)(sequence_carry,nullptr,actor.data(),air_input.data())&&action_chosen==1,"established carry can select throw");callback<entry_t>(throw_handler,1)(throw_handler,nullptr,actor.data(),air_input.data(),air_context.data());}
   else{put(actor.data(),0xbc,1u);callback<frame_t>(victim_handler,4)(victim_handler,nullptr,victim.data(),nullptr);check(air_starts==2,"landing drops and Idles the carried pair");}
   callback<cleanup_t>(victim_handler,3)(victim_handler,nullptr,victim.data());
   put(event.data(),0x10,-1.f);reinterpret_cast<void(__thiscall*)(void*,void*,void*)>(0x4db580)(event.data(),actor.data(),nullptr);
   check(get<u32>(actor.data(),0x76c)==0&&get<u32>(actor.data(),0x178)==0&&get<u32>(victim.data(),0x178)==0&&get<u32>(victim.data(),4)==0x80,"native unvictim and carry cleanup release both owners, selection and constraints");
   sequence_mode=false;
  }
- move_vt[0x48/4]=saved48;move_vt[0x58/4]=saved58;move_vt[0x3c/4]=saved3c;
+ move_vt[0x48/4]=saved48;move_vt[0x58/4]=saved58;move_vt[0x3c/4]=saved3c;move_vt[0x30/4]=saved30;
+}
+
+struct Matrix{float f[16];};
+std::array<unsigned char,16> render{},skeleton{},bone_model_data{};
+std::array<void*,32> render_vt{},skeleton_vt{};
+int native_bone_reads=0;
+Matrix* __fastcall matrix_identity(Matrix* m,void*){std::fill_n(m->f,16,0.f);m->f[0]=m->f[5]=m->f[10]=m->f[15]=1.f;return m;}
+V* __fastcall vector_construct(V* v,void*,float x,float y,float z){*v={x,y,z};return v;}
+void __fastcall matrix_translation(Matrix* m,void*,const V* v){matrix_identity(m,nullptr);m->f[12]=v->x;m->f[13]=v->y;m->f[14]=v->z;}
+void __fastcall matrix_position(const Matrix* m,void*,V* v){*v={m->f[12],m->f[13],m->f[14]};}
+void* __fastcall bone_model(void*,void*){return bone_model_data.data();}
+void* __fastcall bone_skeleton(void*,void*){return skeleton.data();}
+void* __fastcall no_transform(void*,void*){return nullptr;}
+bool __fastcall skeleton_bone(void*,void*,int id,Matrix* out){++native_bone_reads;V v{id==5?-10.f:10.f,0,id==0?85.f:65.f};matrix_translation(out,nullptr,&v);return true;}
+void native_bone_tests(){
+ // Execute every retail layer down to the renderer's real bone getter.
+ // Only renderer matrices are invented; no fake chooses the ABI flags.
+ air_reset();const auto saved188=actor_vt[0x188/4];actor_vt[0x188/4]=reinterpret_cast<void*>(&bone_model);
+ put(bone_model_data.data(),0,render.data());put(render.data(),0,render_vt.data());put(skeleton.data(),0,skeleton_vt.data());
+ render_vt[0x14/4]=reinterpret_cast<void*>(&bone_skeleton);render_vt[8/4]=reinterpret_cast<void*>(&no_transform);skeleton_vt[0x64/4]=reinterpret_cast<void*>(&skeleton_bone);
+ native(0x41d620,0x5f);native(0x569370,0x4b);native(0x5692e0,0x90);native(0x568e90,0x448);
+ put(ptr(0x67fa28),0,reinterpret_cast<void*>(&matrix_identity));put(ptr(0x67fa1c),0,reinterpret_cast<void*>(&vector_construct));put(ptr(0x67fa94),0,reinterpret_cast<void*>(&matrix_translation));put(ptr(0x67fa00),0,reinterpret_cast<void*>(&matrix_position));
+ put(actor.data(),4,0x10080u);native_bone_reads=0;
+ auto h=air_handler("ch_air_grab_pickup_idle");callback<entry_t>(h,1)(h,nullptr,actor.data(),nullptr,air_context.data());
+ check(native_bone_reads==1&&last_position.z==30.f,"retail carry bone0 reaches animated skeleton (85-55), not approximate root-30");
+ actor_vt[0x188/4]=saved188;air_bind();
 }
 
 int expression_parses=0;
@@ -314,7 +363,9 @@ void flight_tests(){
 
 }
 int main(int argc,char** argv){
- const int lifecycle=lifecycle_main(argc,argv);if(lifecycle)return lifecycle;
- air_bind();admission_tests();pickup_tests();carry_tests();release_tests();sequence_tests();flight_tests();powerup_tests();
+ SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
+ AddVectoredExceptionHandler(1,[](PEXCEPTION_POINTERS e)->LONG{std::printf("air fixture exception %08lX at %p ESP=%08lX ECX=%08lX ESI=%08lX\n",e->ExceptionRecord->ExceptionCode,e->ExceptionRecord->ExceptionAddress,e->ContextRecord->Esp,e->ContextRecord->Ecx,e->ContextRecord->Esi);ExitProcess(1);});
+ const int lifecycle=lifecycle_main(argc,argv);if(lifecycle&&!xml1_grab_carry::installed())return lifecycle;
+ air_bind();admission_tests();pickup_tests();carry_tests();release_tests();sequence_tests();flight_tests();powerup_tests();native_bone_tests();
  std::printf("%s flying carry callbacks: %d checks, %d failures\n",failures?"FAIL":"PASS",checks,failures);return failures?1:0;
 }

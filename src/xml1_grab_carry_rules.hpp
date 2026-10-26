@@ -17,6 +17,8 @@ constexpr std::uint16_t agreement_revision = 3;
 constexpr std::uint32_t feature_mask = 15; // grab1 + pickup/recovery2 + charge collision4 + carry/fix7/upkeep8
 constexpr std::uint32_t hold_vtable = 0x6932f4, victim_vtable = 0x693360;
 constexpr std::uint32_t timeout_va = 0x4edb83;
+constexpr std::uint32_t world_hit_gate = 0x42c09e;
+inline constexpr std::array<unsigned char,2> world_hit_before{0x74,0x6e},world_hit_after{0x90,0x90};
 
 // XML1 0xdce20 compares the first four bytes case-insensitively. Short names
 // cannot match. Do not change these into full-name or substring comparisons.
@@ -35,7 +37,8 @@ inline bool retaining_prefix(const char* name)
 }
 
 // Native bytes and services are listed below, checked before any patch is made.
-inline constexpr std::array<guard, 58> guards{{
+inline constexpr std::array<guard, 59> guards{{
+    {0x42c093, "85ed7509f683d803000008746e", "PC-only physical/psy gate suppresses thrown-body world impact; XML1 3AF9E forwards it"},
     {0x6932f4, "30d74f00c0d94e0090d84e0010df4e00b0cb480000c54f0040da4e0060c84f00", "hold eight-slot table"},
     {0x693360, "30d74f0040d94e0070d94e0060dd4e0020de4e0000c54f0050ce4f0060c84f00", "shared victim eight-slot table"},
     {0x692f4c, "10d74f00d0bd4f0010eb590010eb5900b0cb480000c54f0050ce4f0060c84f00", "default eight-slot handler"},
