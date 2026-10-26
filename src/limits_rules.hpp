@@ -53,7 +53,8 @@ namespace limits_rules
 	constexpr int max_resource_names = 4096;
 	constexpr int default_resource_names = 1024; // what ActorSlots brings along when ResourceNames is absent
 	constexpr int stock_item_enhancements = 375;  // the item manager's enhancement record pool
-	constexpr int max_item_enhancements = 1024;
+	constexpr int max_item_enhancements = 4096; // W2 descriptor, installed only as part of the complete save layout
+	constexpr int max_legacy_item_enhancements = 1024; // existing ini contract until W2 becomes selectable
 	constexpr int stock_fight_styles = 19;
 	constexpr int max_fight_styles = 32; // both pool bitmaps remain one dword
 	constexpr int stock_effect_curves = 900; // the effect curve pool (every loaded effect's animation curves)
@@ -170,7 +171,7 @@ namespace limits_rules
 		if (item_enhancements)
 		{
 			const auto value = parse_count(*item_enhancements);
-			if (value && *value >= stock_item_enhancements && *value <= max_item_enhancements)
+			if (value && *value >= stock_item_enhancements && *value <= max_legacy_item_enhancements)
 			{
 				result.item_enhancements = *value;
 			}

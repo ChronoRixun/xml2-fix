@@ -1013,38 +1013,38 @@ guard expects (bytes quoted where re-read in this pass, otherwise the SPEC-old r
 
 | ID | Site | Retail | W2 | Kind | Status | Check |
 |---|---|---|---|---|---|---|
-| W2-E3c-01 | instance pool [0x72a524]: SPEC-old 2.5 pool rows (47: capacity 0x100 / mask 0xff, stride 0x34, object 0x3c60) | 256 x 0x34 + tables | DLL backing 1024 x 0x34 + tables; all offsets regenerated | D/R | S | T7 |
-| W2-E3c-02 | ring init 0x483090 (12 rows of pool_omissions: +0x3824/+0x3828/+0x382c, ring +0x3420, 0x4830be `3d00010000`, 0x4830d7 `b8ff000000`, 0x4830e7 `81fa00010000`) | 256 / 0xff | 1024 / 0x3ff; offsets regenerated | I/R | A (52 byte-checked) | T7 |
-| W2-E3c-03 | ring pop 0x483410 (5: +0x408 / +0x40c) | relocated fields | regenerated | R | A | T7 |
-| W2-E3c-04 | destructor walk 0x482a20 (6: bitmap +0x3400, 0x482a39 / 0x482a79 `81fa00010000`, helper call 0x482a89, 0x482a8e `3d00010000`) | 256 | 1024; helper re-aimed | I/R | A | T7 |
-| W2-E3c-05 | shared bitset helper 0x44d0d0 (bounds 0x44d0d4, 0x44d0de, 0x44d10b, 0x44d158, 0x44d15f) | 256-bit, shared with other callers | clone at 1024 bits; only the instance pool's calls re-aimed; original untouched | C | A | T7 (clone vs original at 256) |
-| W2-E3c-06 | eight-dword clears 0x48310b..0x48311f, 0x48313c..0x483150, 0x482a97..0x482aab | 8 dwords (256 bits) | 32-dword clears (block replaced as a unit) | C | A | T7 |
-| W2-E3c-07 | world-slot table manager+0x72a0 / bitmap +0x7750: 17 x imm 0x96 + 44 table / bitmap rows + unwind `add ecx, 0x72a0` (SPEC-old 2.5) | 150 x 8, 5 dwords | 1024 x 8 + 32 dwords at the manager's end (as `item_layout_for`); all regenerated | R/D | S | T7 |
-| W2-E3c-08 | `CInventoryEntity`+0x320 sentinel sites 0x479c64, 0x479d27, 0x479da9 `c68520030000ff` (V), 0x479f59, 0x47a117, 0x47aa1c; constructor init 0x47aa1c / 0x47aa23 | u8 slot, 0xff | u16 at +0x320, 0xffff (owner-class sites only) | I/C | V + A (LIKELY +0x321 free) | T7 |
-| W2-E3c-09 | vt+0x120 callers 0x42ec6e, 0x479af5, 0x479d46, 0x47a017, 0x47a1f4; 0x47d390 | byte slot zero-extended | word | I/C | S | T7 |
-| W2-E3c-10 | **disposal adapter**: 0x479c10 (`push 1` 0x479c22, `call 0x4655d0` 0x479c2b) | reads payload byte +8 | reads u16 at record+0x12 (record pointer esi) via a DLL function | C | V | T9 (disposal) |
-| W2-E3c-11 | 0x479ad0 `0fb64c2410` (0x479aed) | movzx byte | movzx word | I | V | T9 (disposal) |
-| W2-E3c-12 | 0x479a70 slot write (`lea eax,[edi+0x320]; push 1` 0x479a88..) and 0x479fc0 slot read | payload byte | bridge: write / read the u16 field at +0x12; quantity bytes unchanged | C | V (write side) / S (read side) | T7, T9 |
-| W2-E3b-01 | `CPoolInterface<IAttachedEnhancements,375>`: SPEC-old 2.4 (87 rows), allocation 0x45fb0e | object 0x2984, 375 x 0x14 | DLL backing at 4096; all 68 layout rows regenerated | D/R | S | T8 |
-| W2-E3b-02 | second `findNext` clone of 0x45e5f0 (0x45e5f4, 0x45e5fe, 0x45e62b, 0x45e678, 0x45e67f); 0x45f309 `e8e2f2ffff` | 375 | clone at 4096; 0x45f309 re-aimed | C | S | T8 |
-| W2-E3b-03 | 0x45f920 full return -> 0x481938 skip | silent | logged error, load refused by preflight | C | S | T8 |
-| W2-E3-01 | `limits_rules.hpp:56` `max_item_enhancements` and the 41 `item_sites` | 1024 ceiling | 4096 | S | V | T6 |
-| W2-E3-02 | 0x47ad22 `663dff00` | `cmp ax, 0xff` | `cmp ax, 0xffff` (`663dffff`) | I | V | T6 |
-| W2-E3-03 | 0x47e690 (`81ecf4050000 55 56 8bf1`), 0x47ee90 (`81ecf4050000 53 55 8bd9`) pickers | 375-int stack arrays | F per the RE-4 specification, descriptor-sized arrays | F | V (prologues) + A (spec) | T6 |
+| W2-E3c-01 | instance pool [0x72a524]: SPEC-old 2.5 pool rows (47: capacity 0x100 / mask 0xff, stride 0x34, object 0x3c60) | 256 x 0x34 + tables | DLL backing 1024 x 0x34 + tables; all offsets regenerated | D/R | implemented steps 4/5 | T7 |
+| W2-E3c-02 | ring init 0x483090 (12 rows of pool_omissions: +0x3824/+0x3828/+0x382c, ring +0x3420, 0x4830be `3d00010000`, 0x4830d7 `b8ff000000`, 0x4830e7 `81fa00010000`) | 256 / 0xff | 1024 / 0x3ff; offsets regenerated | I/R | implemented steps 4/5 | T7 |
+| W2-E3c-03 | ring pop 0x483410 (5: +0x408 / +0x40c) | relocated fields | regenerated | R | implemented steps 4/5 | T7 |
+| W2-E3c-04 | destructor walk 0x482a20 (6: bitmap +0x3400, 0x482a39 / 0x482a79 `81fa00010000`, helper call 0x482a89, 0x482a8e `3d00010000`) | 256 | 1024; helper re-aimed | I/R | implemented steps 4/5 | T7 |
+| W2-E3c-05 | shared bitset helper 0x44d0d0 (bounds 0x44d0d4, 0x44d0de, 0x44d10b, 0x44d158, 0x44d15f) | 256-bit, shared with other callers | clone at 1024 bits; only the instance pool's calls re-aimed; original untouched | C | implemented steps 4/5 | T7 (clone vs original at 256) |
+| W2-E3c-06 | eight-dword clears 0x48310b..0x48311f, 0x48313c..0x483150, 0x482a97..0x482aab | 8 dwords (256 bits) | 32-dword clears (block replaced as a unit) | C | implemented steps 4/5 | T7 |
+| W2-E3c-07 | world-slot table manager+0x72a0 / bitmap +0x7750: 17 x imm 0x96 + 44 table / bitmap rows + unwind `add ecx, 0x72a0` (SPEC-old 2.5) | 150 x 8, 5 dwords | 1024 x 8 + 32 dwords at the manager's end (as `item_layout_for`); all regenerated | R/D | implemented steps 4/5 | T7 |
+| W2-E3c-08 | `CInventoryEntity`+0x320 sentinel sites 0x479c64, 0x479d27, 0x479da9 `c68520030000ff` (V), 0x479f59, 0x47a117, 0x47aa1c; constructor init 0x47aa1c / 0x47aa23 | u8 slot, 0xff | u16 at +0x320, 0xffff (owner-class sites only) | I/C | implemented steps 4/5 | T7 |
+| W2-E3c-09 | vt+0x120 callers 0x42ec6e, 0x479af5, 0x479d46, 0x47a017, 0x47a1f4; 0x47d390 | byte slot zero-extended | word | I/C | implemented steps 4/5 | T7 |
+| W2-E3c-10 | **disposal adapter**: 0x479c10 (`push 1` 0x479c22, `call 0x4655d0` 0x479c2b) | reads payload byte +8 | reads u16 at record+0x12 (record pointer esi) via a DLL function | C | implemented steps 4/5 | T9 (disposal) |
+| W2-E3c-11 | 0x479ad0 `0fb64c2410` (0x479aed) | movzx byte | movzx word | I | implemented steps 4/5 | T9 (disposal) |
+| W2-E3c-12 | 0x479a70 slot write (`lea eax,[edi+0x320]; push 1` 0x479a88..) and 0x479fc0 slot read | payload byte | bridge: write / read the u16 field at +0x12; quantity bytes unchanged | C | implemented steps 4/5 | T7, T9 |
+| W2-E3b-01 | `CPoolInterface<IAttachedEnhancements,375>`: SPEC-old 2.4 (87 rows), allocation 0x45fb0e | object 0x2984, 375 x 0x14 | DLL backing at 4096; all 68 layout rows regenerated | D/R | implemented steps 4/5 | T8 |
+| W2-E3b-02 | second `findNext` clone of 0x45e5f0 (0x45e5f4, 0x45e5fe, 0x45e62b, 0x45e678, 0x45e67f); 0x45f309 `e8e2f2ffff` | 375 | clone at 4096; 0x45f309 re-aimed | C | implemented steps 4/5 | T8 |
+| W2-E3b-03 | 0x45f920 full return -> 0x481938 skip | silent | logged error, load refused by preflight | C | implemented steps 4/5 | T8 |
+| W2-E3-01 | `limits_rules.hpp:56` `max_item_enhancements` and the 41 `item_sites` | 1024 ceiling | 4096 | S | implemented steps 4/5 | T6 |
+| W2-E3-02 | 0x47ad22 `663dff00` | `cmp ax, 0xff` | `cmp ax, 0xffff` (`663dffff`) | I | implemented steps 4/5 | T6 |
+| W2-E3-03 | 0x47e690 (`81ecf4050000 55 56 8bf1`), 0x47ee90 (`81ecf4050000 53 55 8bd9`) pickers | 375-int stack arrays | F per the RE-4 specification, descriptor-sized arrays | F | implemented steps 4/5 | T6 |
 
 ### 15.4 Item definitions (E2)
 
 | ID | Site | Retail | W2 | Kind | Status | Check |
 |---|---|---|---|---|---|---|
-| W2-E2-01 | definition array manager+4 (160 x 0x3c), state pairs +0x785c; allocation 0x480a25; constructors / destructors 0x480725-0x48073a, 0x48098f-0x4809a2, 0x673aa4; 18 `imul` + 6 loops (SPEC-old 2.2 groups) | inline, 160 | relocated to the manager's end at 1024 (same constructors on the new storage); stride 0x3c unchanged | D/R | S | T5 |
-| W2-E2-02 | 0x480430 `817c241ca0000000` | cap 0xa0 | 0x400 | I | V | T5 |
-| W2-E2-03 | count byte +0x2588: 31 sites; stores 0x4802b8, 0x480576, 0x4805ed | u8 | u16 in place (+0x2589 padding, LIKELY); word accesses, caves where longer | I/C | A | T5 |
-| W2-E2-04 | 14 accessor thunks (`cmp al`), 0x47c250 result, 3 external vt+0x18 callers, loader `inc cl` 0x480574 | byte index | word / dword | I/C | S | T5, T4 |
-| W2-E2-05 | picker 0x47b590 loop 0x47b732-0x47b769 (`inc al` 0x47b74e), sentinel tests 0x47d6a0 `3cff`, 0x47ecdf | byte counter / result, 0xff | cave: DLL loop; 0xffff | C | V (0x47d6a0) + S | T5 |
-| W2-E2-06 | by-name lookup 0x47e320: 0x47e389 `0cff`, 0x47e393 `8ac3`; callers 0x49ed9d `88442408`, 0x49ee11 `88442404` | al result; byte stack slots | `or eax,-1` / `movzx eax,bx` (cave); the two stack stores widened with their readers; 10 other callers unchanged | C | V | T5 |
-| W2-E2-07 | Danger Room reward: 0x4d47da `884708`, readers 0x4c8fe1 / 0x4ca138, sentinels 0x4c8fd2 / 0x4ca129 `807e08ff`, reward constructor | u8 at +8, 0xff | u16 at +8 (+9 unused, LIKELY), 0xffff, readers / compares word | I/C | V + A | T5 |
-| W2-E2-08 | global 0x6d83bc (9 sites) | u8 | DLL u32, sites re-aimed | C/D | S | T5 |
-| W2-E2-09 | stream: 0x47c52c `6840010000` / 0x47f81f (0x140 block), 0x481622 / 0x482b98 (u8 definition) | retail head / instance head | W2 head (count-sized block, u16 count) and u16 definition | C | S | T5, G1 |
+| W2-E2-01 | definition array manager+4 (160 x 0x3c), state pairs +0x785c; allocation 0x480a25; constructors / destructors 0x480725-0x48073a, 0x48098f-0x4809a2, 0x673aa4; 18 `imul` + 6 loops (SPEC-old 2.2 groups) | inline, 160 | relocated to the manager's end at 1024 (same constructors on the new storage); stride 0x3c unchanged | D/R | implemented steps 4/5 | T5 |
+| W2-E2-02 | 0x480430 `817c241ca0000000` | cap 0xa0 | 0x400 | I | implemented steps 4/5 | T5 |
+| W2-E2-03 | count byte +0x2588: 31 sites; stores 0x4802b8, 0x480576, 0x4805ed | u8 | u16 in place (+0x2589 padding, LIKELY); word accesses, caves where longer | I/C | implemented steps 4/5 | T5 |
+| W2-E2-04 | 14 accessor thunks (`cmp al`), 0x47c250 result, 3 external vt+0x18 callers, loader `inc cl` 0x480574 | byte index | word / dword | I/C | implemented steps 4/5 | T5, T4 |
+| W2-E2-05 | picker 0x47b590 loop 0x47b732-0x47b769 (`inc al` 0x47b74e), sentinel tests 0x47d6a0 `3cff`, 0x47ecdf | byte counter / result, 0xff | cave: DLL loop; 0xffff | C | implemented steps 4/5 | T5 |
+| W2-E2-06 | by-name lookup 0x47e320: 0x47e389 `0cff`, 0x47e393 `8ac3`; callers 0x49ed9d `88442408`, 0x49ee11 `88442404` | al result; byte stack slots | `or eax,-1` / `movzx eax,bx` (cave); the two stack stores widened with their readers; 10 other callers unchanged | C | implemented steps 4/5 | T5 |
+| W2-E2-07 | Danger Room reward: 0x4d47da `884708`, readers 0x4c8fe1 / 0x4ca138, sentinels 0x4c8fd2 / 0x4ca129 `807e08ff`, reward constructor | u8 at +8, 0xff | u16 at +8 (+9 unused, LIKELY), 0xffff, readers / compares word | I/C | implemented steps 4/5 | T5 |
+| W2-E2-08 | global 0x6d83bc (9 sites) | u8 | DLL u32, sites re-aimed | C/D | implemented steps 4/5 | T5 |
+| W2-E2-09 | stream: 0x47c52c `6840010000` / 0x47f81f (0x140 block), 0x481622 / 0x482b98 (u8 definition) | retail head / instance head | W2 head (count-sized block, u16 count) and u16 definition | C | implemented steps 4/5 | T5, G1 |
 
 ### 15.5 Objectives (E14)
 
@@ -1086,3 +1086,70 @@ guard expects (bytes quoted where re-read in this pass, otherwise the SPEC-old r
 A row is **done** when its guard bytes, its W2 bytes (or source) and its check are in the repository and the checker
 has matched all three against this table. No row is open (revision 3.1 folded RE-14 / 15 / 16); rows marked LIKELY
 rest on sweeps and are closed by the guard-page proof (W2-T-GP) and the union-host differentials.
+
+### Implementation notes: steps 4/5
+
+`item_capacity.cpp`, `item_capacity_rules.hpp` and generated `item_capacity_sites.hpp`
+compose E2 / E3 / E3b / E3c with the step-3 transaction. All 469 SPEC-old item
+rows and the 52 instance-pool omissions have explicit retail guards. Shared
+256-bit / 375-bit helpers remain untouched; separate hash-guarded clones serve
+the raised pools. Instance and attached objects have DLL-owned backing with an
+inaccessible page immediately after each object, initialized by the retail
+constructors through replaced singleton getters only after publication.
+
+The aggregate item manager is 0x41480 bytes: enhancement records +0x7a00,
+record bitmap +0x2fa00, definitions +0x2fc00, state pairs +0x3ec00,
+world slots +0x3f400 and world bitmap +0x41400. The instance object is 0xf120
+bytes and the attached object 0x1c420. LC preflight reads their object-relative
+live counts from the same layouts and checks free world slots for W2.
+
+W2's maximum is 4096 enhancement records. The existing ItemEnhancements ini
+contract remains capped at 1024 until layout selection is enabled at step 8.
+After a W2 transaction publishes, the legacy limits installer accepts the
+published 4096 capacity and never patches that owner a second time. Startup
+still calls prepare with E10A2; no SaveLayout key is read.
+
+Additional ledger corrections found while executing the retail code:
+
+- E2-01: constructor and destructor unwind bases at 0x673a43 / 0x673ad3
+  (`83c104`, add ecx,4) must follow the relocated definition array. Merely
+  widening the vector count at 0x47ddf5 leaves exception cleanup on old storage.
+- E3c-07: the destructor's five unrolled bitmap stores at
+  [0x47dbe7,0x47dbf5) must become a 32-dword clear, in addition to the
+  constructor clear at [0x480827,0x480845).
+- E2-07: the three reward sentinels are initialized at 0x4c891a / 0x4c894a /
+  0x4c896f (course+0xc / +0x20 / +0x34, each reward+8). Their old bytes
+  `c6400cff`, `c64020ff`, `c64034ff` become word stores of 0xffff.
+  Reward+0xa is a separate existing u16 and is preserved, not repurposed.
+- Width caves must not displace an incoming loop target. In particular,
+  relocating the by-name base at 0x47e333 displaces the loop at 0x47e336.
+  The generator promotes such edits to a whole copied owner under its region
+  hash and relocates all internal branches. The definition picker also uses
+  a complete copied owner; its index/result locals are u16 within the original
+  frame, retaining every retail FP instruction and RNG call.
+- The 1000-drop coverage requirement needs a table-size qualification: two
+  random affixes per drop provide at most 2000 selections and cannot cover
+  4096 distinct IDs. The executed 1000-drop fixture covers all 375 offered IDs
+  (2000 calls, controlled exhaustive RNG). Separate full-capacity fixtures
+  cover every index of 376- and 4096-entry tables in both picker ranges
+  (8944 draws). This does not reduce W2's capacity.
+
+The mapped-retail item fixture tests actual retail RNG state as well as a
+recording RNG (16000 differential cases each, with duplicate-key chains),
+32768 private-helper comparisons, 255/256/1023 boundaries, native definition
+and instance stream headers, both reward consumers, pool exhaustion and named
+LC preflight refusals. `xml2_save_manager_test` now commits the union of steps
+3/4/5 before its 36 capture/restore/disposal/LRU/placement checks. External
+engine dependencies use recording fakes; no game or emulator is launched.
+
+The inventory slot-write bridge writes zero to payload +8 through the original
+one-byte cursor operation, retaining quantity at +9..+0xa and the authoritative
+u16 at +0x12. Whole serializer-owner hashes cover both call frames and their
+arguments. Native registration refusal branches at 0x480438, 0x47ca4b,
+0x47cb44, 0x47cd4b and 0x4804ab preserve flags/registers, report the 1024/4096
+capacity, latch reconstruction failure and follow the original cleanup targets.
+Their complete registrar-owner hashes include the final cleanup instruction and
+ret at 0x4806e0 (owner end 0x4806e1). T9b executes every comparison/branch with
+the largest valid index and count+1, and the native record accessor at 4095/4096.
+
+Verification commands are in `scripts/README-gates.md`.

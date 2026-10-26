@@ -51,3 +51,26 @@ It compares every byte of the W2 write pages and the agreement record. DLL symbo
 addresses are normalized explicitly; referenced generated-code allocations must match too.
 The registry export must succeed and its before/after bytes must match. All copies and dumps
 stay under the output directory; no game starts.
+
+
+W2 steps 4/5 add the item-capacity fixture and a separate whole-text gate:
+
+```powershell
+native/bin/Release/xml2_item_capacity_test.exe $env:XML2_FIX_TEST_EXE build/items
+python scripts/check_w2_items_text.py $env:XML2_FIX_TEST_EXE build/items
+native/bin/Release/xml2_save_manager_test.exe $env:XML2_FIX_TEST_EXE build/w2-items
+python scripts/check_w2_save_text.py $env:XML2_FIX_TEST_EXE build/w2-items-text.bin build/w2-items-gc.bin
+```
+
+The item fixture emits every copied instruction owner before installing its
+external dependency fakes. Its gate checks the 469 reviewed item rows plus all
+52 omissions, every complete-owner hash, and the entire patched text and copied
+owners for old class-owned operands. The generator can be rerun with
+`python scripts/generate_w2_items.py <retail exe> <SPEC-old sites.json>`; the
+reviewed `funcs.txt` must sit beside that research ledger. The retail SHA-1 is
+required. No extracted function bodies are emitted into source.
+
+Use `build/w2-items-pages.txt` as the page list for the same OFF proof described
+above. W2 remains unselectable; ordinary startup still selects E10A2. Full
+capacity affix coverage uses exhaustive draws separately from the 1000-drop,
+375-offered-ID fixture (see the implementation notes in limits-wave2.md).

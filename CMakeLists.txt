@@ -124,6 +124,7 @@ add_library(xml2_fix SHARED
 	src/entity_capacity.cpp
 	src/state_records.cpp
 	src/save_manager.cpp
+	src/item_capacity.cpp
 	src/smart_entities.cpp
 	src/entity_owners.cpp
 	src/entity_transfer.cpp
@@ -604,7 +605,11 @@ target_include_directories(xml2_zone_strings_test PRIVATE src)
 target_link_options(xml2_zone_strings_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
 # W2 generated native-save ledger and union-host execution (no game process).
-add_executable(xml2_save_manager_test test/save_manager_test.cpp src/save_manager.cpp src/state_records.cpp
+add_executable(xml2_save_manager_test test/save_manager_test.cpp src/save_manager.cpp src/item_capacity.cpp src/state_records.cpp
     src/smart_entities.cpp src/zone_strings.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
 target_include_directories(xml2_save_manager_test PRIVATE src)
 target_link_options(xml2_save_manager_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_item_capacity_test test/item_capacity_test.cpp src/item_capacity.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_item_capacity_test PRIVATE src)
+target_link_options(xml2_item_capacity_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)

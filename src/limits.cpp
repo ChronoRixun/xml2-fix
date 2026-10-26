@@ -1,4 +1,5 @@
 #include "limits.hpp"
+#include "item_capacity.hpp"
 #include "limits_agreement_rules.hpp"
 #include "gameplay_agreement.hpp"
 #include "limits_rules.hpp"
@@ -827,6 +828,8 @@ namespace limits
 	{
 		base = reinterpret_cast<std::uintptr_t>(game) == image_base ? reinterpret_cast<std::uint8_t*>(game) : nullptr;
 		if (game) log_address_space(game);
+		const auto w2_items = item_capacity::installed_capacity();
+		if (w2_items) item_cap = wanted_caps[2] = static_cast<int>(w2_items);
 		if (base)
 		{
 			// The counters status() reports, where the code that uses them is the retail build's.
@@ -841,7 +844,7 @@ namespace limits
 			motions_readable = !first_mismatch(motion_counter_guards);
 			igb_readable = !first_mismatch(igb_counter_guards);
 			if (igb_readable) igb_live_va = igb_live_retail;
-			items_readable = !items_mismatch();
+			items_readable = w2_items || !items_mismatch();
 			if (!styles_mismatch()) style_count_offset = style_layout_for(stock_fight_styles).count;
 			if (!curves_mismatch()) curve_live_va = curve_object_retail + curve_layout_for(stock_effect_curves).live;
 		}
@@ -867,6 +870,7 @@ namespace limits
 		igb_requested = chosen.igb_records > stock_igb_records;
 		wanted_caps = {chosen.resource_names, chosen.actor_slots, chosen.item_enhancements,
 		               chosen.fight_styles, chosen.effect_curves, move_triggers_rules::capacity(move_triggers)};
+		if (w2_items) wanted_caps[2] = static_cast<int>(w2_items);
 		for (const auto& note : chosen.notes)
 		{
 			logger::write("limits: %s", note.c_str());
@@ -877,7 +881,7 @@ namespace limits
 		if (chosen.effect_curves > stock_effect_curves) raise_curves(chosen.effect_curves);
 		// The item enhancement pool: on its own, before the game's first item load (the manager is built
 		// at its first use, long after DllMain).
-		if (chosen.item_enhancements > stock_item_enhancements && base)
+		if (!w2_items && chosen.item_enhancements > stock_item_enhancements && base)
 		{
 			raise_items(chosen.item_enhancements);
 		}

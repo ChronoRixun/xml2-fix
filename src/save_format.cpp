@@ -1,5 +1,6 @@
 #define _CRT_RAND_S
 #include "save_format.hpp"
+#include "item_capacity.hpp"
 #include "patch_transaction.hpp"
 
 #include "save_format_rules.hpp"
@@ -1225,15 +1226,7 @@ namespace save_format
 		{
 			lcsave::NativeLoadDemand demand;
 			if (!lcsave::native_load_demand(image,demand,error,*native_layout)) return false;
-			std::uint32_t attached=0,instances=0,pointer=0;
-			if (!try_copy(&pointer,in_game(0x717b30),4) || !pointer || !try_copy(&attached,in_game(pointer+0x239c),4) ||
-			    !try_copy(&pointer,in_game(0x72a524),4) || !pointer || !try_copy(&instances,in_game(pointer+0x3854),4))
-			{error="native item/attached pool occupancy cannot be read";return false;}
-			if (!save_core_rules::capacity_fits(demand.instances,instances,256))
-			{error="native item-instance free capacity (256) is insufficient";return false;}
-			if (!save_core_rules::capacity_fits(demand.attached_enhancements,attached,375))
-			{error="native attached-enhancement free capacity (375) is insufficient";return false;}
-			return true;
+			return item_capacity::preflight(demand.instances,demand.attached_enhancements,demand.world_items,*native_layout,error);
 		}
 		// CORE-END
 

@@ -13,6 +13,7 @@
 #include "patch_transaction.hpp"
 #include "save_format.hpp"
 #include "save_manager.hpp"
+#include "item_capacity.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -400,7 +401,7 @@ namespace entity_capacity
 				failure = "the startup transaction could not be rolled back; prepared owners and backing retained";
 				fatal = true;
 			};
-			if (std::string_view(prepared_profile.layout_id) == "W2" && !save_manager::contribute_w2(c, failure)) return false;
+			if (std::string_view(prepared_profile.layout_id) == "W2" && (!save_manager::contribute_w2(c, failure) || !item_capacity::contribute_w2(c, failure))) return false;
 			return true;
 		}
 	}

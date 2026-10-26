@@ -86,3 +86,5 @@ DISASM  test/state_records_test.cpp  # Synthetic register/stack callers and reco
 DISASM  test/zone_strings_test.cpp  # Synthetic ABI measurement callers for our replacement; retail bytes are read at runtime.
 DISASM  src/save_manager.cpp  # Authored XML-loader preflight bridge with native ABI preservation and failure cleanup.
 DISASM  test/save_manager_test.cpp  # Synthetic loader caller and continuations execute our preflight without launching the game.
+
+DISASM  test/item_capacity_test.cpp  # Authored ABI callers and synthetic header/reward continuations execute retail code from the owner-supplied PE; no extracted instruction listing.
