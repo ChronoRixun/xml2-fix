@@ -80,6 +80,12 @@
   its receiver again (the PC-only gate at 0x42C09E is opened; amount, deadline, defenses and cooldown stay native) and
   the carry pose reads the animated skeleton (0x41D620 with `false,false`) so XML1's offsets no longer sink the victim
   30 units; logged as `thrown bodies forward world impacts (42C09E); carry pose on animated bones`. Not played yet.
+  `[Game] Xml1FlyingCarry = 0` (beta 8 candidate 080h; default on) keeps the rule without the flying carry, which is
+  in progress for beta 9: the five carry handlers are not registered and the descent admission (0x433E6C) stays PC's,
+  while Juggernaut's grab, pickup/recovery, the charge collision, fix7 and XML1's flight upkeep are written as with it.
+  Values `{1,23,0,0}` (bit 16 = fix7/upkeep without the carry), so peers with and without the carry refuse each other
+  both ways; logged as `fix7 and XML1 upkeep installed` and `flying carry off (Xml1FlyingCarry=0): no carry handlers, PC
+  flight descent`.
 
 - **XML1's animation enums: gameplay rule 48** (`[Limits] AnimEnums = 512`; 1.9.0-beta.1,
   [docs](docs/anim-enums.md)). XMen2.exe's animation enum table holds 210 names, every slot taken; the key raises it to

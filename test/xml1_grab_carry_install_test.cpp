@@ -28,6 +28,7 @@ using namespace xml1_grab_carry_rules;
 using u32=std::uint32_t;
 int checks=0,failures=0;
 std::string key,cling_key,rogue_key;
+std::optional<bool> flying_carry_key; // [Game] Xml1FlyingCarry (absent = default on)
 bool refused=false,target_present=true,is_character=true,reciprocal=true,move_present=true;
 int forced=0,lookup_count=0,publishes=0,relatives=0,starts=0,exclusions=0,aux=0,actions=0,last_action=-1,times=0;
 std::vector<u32> published;
@@ -346,7 +347,7 @@ int extension_id(const char* name){for(unsigned i=0;i<anim_enum_registry::builti
 }
 namespace ini {
 std::optional<std::string> text(const wchar_t*,const wchar_t* name){if(std::wstring(name)==L"Xml1GrabCarry")return key;if(std::wstring(name)==L"Xml1RogueDecide")return rogue_key;return cling_key;}
-bool flag(const wchar_t*,const wchar_t*,bool fallback){return fallback;}
+bool flag(const wchar_t*,const wchar_t* name,bool fallback){return std::wstring(name)==L"Xml1FlyingCarry"&&flying_carry_key?*flying_carry_key:fallback;}
 }
 namespace logger {void write(const char*,...){} }
 namespace game_version {void refuse_startup(){refused=true;} }
@@ -397,12 +398,23 @@ int main(int argc,char** argv){
         auto saved=get<u32>(ptr(0x4ab6d0),1);put(ptr(0x4ab6d0),1,saved+1);xml1_grab_carry::install(game);check(!xml1_grab_carry::installed(),"raised query bridge must match exact published owner target");put(ptr(0x4ab6d0),1,saved);
         entity_capacity::fixture_manager=nullptr;xml1_grab_carry::install(game);check(!xml1_grab_carry::installed(),"raised carry requires published query manager");entity_capacity::fixture_manager=ptr(0x7f0000);
     }
+    // [Game] Xml1FlyingCarry=0 (beta 8 080h): everything but the flying carry's handlers and descent admission.
+    const bool nocarry=argc>2&&std::string(argv[2])=="nocarry";
+    if(nocarry)flying_carry_key=false;
+    std::vector<unsigned char> pre(0x400000);std::memcpy(pre.data(),ptr(0x401000),pre.size());
+    auto changed=[&](u32 va,std::size_t n){return std::memcmp(pre.data()+(va-0x401000),ptr(va),n)!=0;};
     xml1_grab_carry::install(game);check(xml1_grab_carry::installed()&&!refused,"ground/carry installation succeeded with stock or published raised query bridges");
+    check(xml1_grab_carry::flying_carry()==!nocarry&&xml1_grab_carry::feature_mask()==(nocarry?23u:15u),"Xml1FlyingCarry selects mask 15 (carry) or 23 (no carry)");
+    check(xml1_grab_carry::status().find(nocarry?"flying carry off":"flying carry + flight upkeep")!=std::string::npos,"status names the flying carry state");
+    check(changed(0x433e6c,6)!=nocarry,"descent admission 0x433e6c written only with the flying carry");
+    check(changed(0x6931f8+4,4)&&changed(0x6932d0+4,4)&&changed(0x4ec7a0,5)&&changed(0x4f74b2,5),"fix7 entries, upkeep and %flight_pwr filter written either way");
+    check(changed(timeout_va,5)&&changed(0x4f49e9,7)&&changed(0x4ee8b3,10)&&changed(0x4de896,8)&&changed(0x42c32f,6)&&changed(world_hit_gate,2)&&changed(hold_vtable+8,8)&&changed(victim_vtable+4,16),"ground grab, recovery, charge collision and world impact written either way");
     auto lookup=reinterpret_cast<void*(__cdecl*)(const char*)>(0x4fd860);void* handler=lookup("CH_GRAB_ATTACK");check(handler!=nullptr,"case-insensitive attack lookup");
     const unsigned char fallback[]{0x33,0xc0,0x5e,0xc3};std::memcpy(ptr(0x4fd865),fallback,sizeof fallback);
     check((lookup("ch_roguedecide")!=nullptr)==both&&(lookup("ch_clingwalldecide")!=nullptr)==both,"all enabled lookup resolvers coexist");
-    check(lookup("ch_air_grab_pickup")!=nullptr&&lookup("unknown")==nullptr,"carry registered and unknown names fall through");
+    for(const char* name:{"ch_fly_guard_decide","ch_air_grab_pickup","ch_air_grab_pickup_idle","ch_air_grab_pickup_throw","ch_air_grab_victim"})check((lookup(name)!=nullptr)==!nocarry,"the five carry handlers registered only with the flying carry");
+    check(lookup("unknown")==nullptr,"unknown names fall through");
     bind();callbacks(handler);hold_branches();lifecycle();flying_collision();lifecycle_boundaries();
     thrown_body_fixture::run([](u32 a,std::size_t n){native(a,n);},[](bool b,const char* s){check(b,s);});
-    std::printf("%s real grab installer/callbacks (%s): %d checks, %d failures\n",failures?"FAIL":"PASS",both?"cling+Rogue+grab":"grab only",checks,failures);return failures?1:0;
+    std::printf("%s real grab installer/callbacks (%s): %d checks, %d failures\n",failures?"FAIL":"PASS",both?"cling+Rogue+grab":nocarry?"grab only, Xml1FlyingCarry=0":"grab only",checks,failures);return failures?1:0;
 }

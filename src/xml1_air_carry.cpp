@@ -340,7 +340,7 @@ __declspec(naked) void descent_bridge(){
 }
 }
 
-bool prepare(std::vector<xml1_hook_transaction::patch>& writes){
+bool prepare(std::vector<xml1_hook_transaction::patch>& writes,bool flying_carry){
     const auto* layout=anim_enums::layout();
     if(!layout||layout->builtin_count!=anim_enum_registry::builtin_names.size()||!lift_rule::installed())return false;
     // Validate every published builtin against the descriptor; attachment IDs
@@ -355,12 +355,15 @@ bool prepare(std::vector<xml1_hook_transaction::patch>& writes){
     for(const auto& e:xml1_rogue_decide_rules::query_entries){std::array<unsigned char,24>b{};if(!memory.read(e.va,b.data(),e.retail.size()/2)||!mold_query_rules::entry_ok(raised,b.data(),e,raised?entity_capacity::installed_target(e.va):0))return false;}
     if(raised&&(!entity_query::installed_manager()||fn<getter>(0x4ab550)()!=entity_query::installed_manager()))return false;
     if(!raised)for(const auto& g:xml1_rogue_decide_rules::query_guards){std::vector<unsigned char>b(g.hex.size()/2);if(!memory.read(g.va,b.data(),b.size())||!limits_rules::matches(b.data(),g.hex))return false;}
+    handlers.fill(nullptr);
+    if(flying_carry){
     for(unsigned i=0;i<tables.size();++i){std::memcpy(tables[i].data(),reinterpret_cast<const void*>(0x692f4c),32);tables[i][0]=reinterpret_cast<void*>(&destructor);tables[i][4]=reinterpret_cast<void*>(&frame_noop);handlers[i]=tables[i].data();}
     tables[0][1]=reinterpret_cast<void*>(&decide_entry);tables[0][6]=reinterpret_cast<void*>(&decide_update);
     tables[1][1]=reinterpret_cast<void*>(&pickup_entry);tables[1][4]=reinterpret_cast<void*>(&pickup_frame);
     tables[2][1]=reinterpret_cast<void*>(&carry_entry);tables[2][3]=reinterpret_cast<void*>(&interrupted);tables[2][4]=reinterpret_cast<void*>(&carry_frame);tables[2][6]=reinterpret_cast<void*>(&carry_update);
     tables[3][1]=reinterpret_cast<void*>(&throw_entry);tables[3][2]=tables[3][3]=reinterpret_cast<void*>(&throw_cleanup);
     tables[4][3]=reinterpret_cast<void*>(&victim_cleanup);tables[4][4]=reinterpret_cast<void*>(&victim_frame);
+    }
     auto pointer_patch=[&](u32 va,const void* p){const auto* old=reinterpret_cast<const unsigned char*>(va);writes.push_back({va,{old,old+4},xml1_hook_transaction::pointer_bytes(p)});};
     pointer_patch(0x6931f8+4,reinterpret_cast<void*>(&flying_entry));
     pointer_patch(0x6932d0+4,reinterpret_cast<void*>(&fly_move_entry));
@@ -369,6 +372,7 @@ bool prepare(std::vector<xml1_hook_transaction::patch>& writes){
     const u32 parser=0x4f74b2;const auto* before=reinterpret_cast<const unsigned char*>(parser);
     std::vector<unsigned char> filter(5,0xe9);const u32 target=u32(reinterpret_cast<std::uintptr_t>(&flight_powerup_bridge))-parser-5;std::memcpy(filter.data()+1,&target,4);
     writes.push_back({parser,{before,before+5},filter});
+    if(!flying_carry)return true; // no carry admission: PC's own flight descent at 0x433e6c
     const u32 descent=0x433e6c;const auto* original=reinterpret_cast<const unsigned char*>(descent);
     std::vector<unsigned char> bridge(6,0x90);bridge[0]=0xe9;const u32 offset=u32(reinterpret_cast<std::uintptr_t>(&descent_bridge))-descent-5;std::memcpy(bridge.data()+1,&offset,4);
     writes.push_back({descent,{original,original+6},bridge});

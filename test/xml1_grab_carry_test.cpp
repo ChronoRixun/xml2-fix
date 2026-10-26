@@ -30,6 +30,13 @@ void rules(){
     check(on.compare(old_ground.bytes())!=result::match&&old_ground.compare(on.bytes())!=result::match,"ground-only candidate refuses the new lifecycle contract in both directions");
     record old_lifecycle;old_lifecycle.add(grab_carry_id,2,{1,7,0,0},true);old_lifecycle.finalize();
     check(on.compare(old_lifecycle.bytes())!=result::match&&old_lifecycle.compare(on.bytes())!=result::match,"revision2 mask7 refuses carry revision3 both directions");
+    // [Game] Xml1FlyingCarry=0 (080h): mask 23; it agrees with itself and refuses the carry's mask 15 both ways.
+    check(mask_for(true)==15&&mask_for(false)==23&&feature_mask_no_flying_carry==23,"flying carry masks 15 / 23");
+    record nocarry,nocarry2;nocarry.add(grab_carry_id,agreement_revision,{1,mask_for(false),0,0},true);nocarry.finalize();
+    nocarry2.add(grab_carry_id,agreement_revision,{1,mask_for(false),0,0},true);nocarry2.finalize();
+    check(nocarry.compare(nocarry2.bytes())==result::match,"two Xml1FlyingCarry=0 peers agree");
+    check(on.compare(nocarry.bytes())!=result::match&&nocarry.compare(on.bytes())!=result::match,"flying carry on / off refuse each other both directions");
+    check(nocarry.compare(old_lifecycle.bytes())!=result::match&&old_lifecycle.compare(nocarry.bytes())!=result::match,"revision2 mask7 refuses Xml1FlyingCarry=0 both directions");
     difference diff;
     check(on.compare(off.bytes(),&diff)!=result::match&&diff.buckets==(1ull<<44),"ON/OFF refuses only rule45");
     char text[256]{};on.describe(diff.buckets,diff.local_only,true,text,sizeof text);

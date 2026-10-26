@@ -218,6 +218,18 @@ the debit with 120 **after** the base affordability test, as in XML1. Ordinary
 flight's native frame and carry's frame both reach this policy. New arithmetic
 uses `det_math::fp_env`, restoring caller x87 control and MXCSR.
 
+### `[Game] Xml1FlyingCarry=0` (beta 8 candidate 080h)
+
+Default on (the key absent or any value other than a false flag = everything above). `0` keeps revision 3 without the
+flying carry: `xml1_air_carry::prepare(writes, false)` registers none of the five carry handlers (their names fall
+through the shared lookup to the native one) and leaves the descent admission at 0x433e6c native, so a hovering
+Guard descends as on PC. Fix7's two flight entries, the upkeep at 0x4ec7a0, the `%flight_pwr` parser filter and every
+ground write are unchanged; the dependency checks (AnimEnums, LiftRule, all guards) are the same. The rule advertises
+`{1,23,0,0}` (bit 16 = fix7/upkeep without the carry) instead of `{1,15,0,0}`, so the two configurations refuse each
+other online. Install lines: `... (rule 45 revision 3, feature mask 23); fix7 and XML1 upkeep installed`, `flying carry
+off (Xml1FlyingCarry=0): no carry handlers, PC flight descent`, `thrown bodies forward world impacts (42C09E)`.
+Fixture: `xml2_xml1_grab_carry_install_test.exe <owned-XMen2.exe> nocarry`; the rules fixture checks 15 / 23 agreement.
+
 ### Builder handoff (must ship together)
 
 In the companion builder, set **`xml1build.anim_enums.XML1_FLIGHT_UPKEEP = True`**

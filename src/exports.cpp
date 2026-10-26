@@ -586,7 +586,7 @@ namespace
 		xml1_grab_carry::install(game);
 		if (xml1_grab_carry::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::grab_carry_id, xml1_grab_carry_rules::agreement_revision,
-				{xml1_grab_carry::installed() ? 1u : 0u, xml1_grab_carry_rules::feature_mask,0,0}, xml1_grab_carry::verified());
+				{xml1_grab_carry::installed() ? 1u : 0u, xml1_grab_carry::feature_mask(),0,0}, xml1_grab_carry::verified());
 		shared_handlers_c::install(game);
 		if (shared_handlers_c::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::shared_handlers_c_id, shared_handlers_c::revision,

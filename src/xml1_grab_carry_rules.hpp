@@ -15,6 +15,11 @@ using xml1_cling_rules::parse;
 using limits_rules::guard;
 constexpr std::uint16_t agreement_revision = 3;
 constexpr std::uint32_t feature_mask = 15; // grab1 + pickup/recovery2 + charge collision4 + carry/fix7/upkeep8
+// [Game] Xml1FlyingCarry=0 (beta 8 080h): the same rule without the flying carry (its five handlers and the descent
+// admission at 0x433e6c); fix7 and the XML1 flight upkeep stay. Bit 16 = fix7/upkeep without the carry, so a peer
+// with the carry (mask 15) and one without it (mask 23) refuse each other both ways.
+constexpr std::uint32_t feature_mask_no_flying_carry = 1 | 2 | 4 | 16;
+constexpr std::uint32_t mask_for(bool flying_carry) noexcept { return flying_carry ? feature_mask : feature_mask_no_flying_carry; }
 constexpr std::uint32_t hold_vtable = 0x6932f4, victim_vtable = 0x693360;
 constexpr std::uint32_t timeout_va = 0x4edb83;
 constexpr std::uint32_t world_hit_gate = 0x42c09e;

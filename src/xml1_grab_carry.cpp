@@ -16,7 +16,7 @@ namespace
 using namespace xml1_grab_carry_rules;
 using u32 = std::uint32_t;
 std::atomic<int> state{-1};
-bool trace = false, logged_lookup = false;
+bool trace = false, logged_lookup = false, carry = true;
 std::array<void*, 8> attack_slots{};
 void* attack_handler = nullptr;
 template<class T> T at(const void* p, u32 off) { T v{}; std::memcpy(&v, static_cast<const unsigned char*>(p) + off, sizeof v); return v; }
@@ -313,9 +313,13 @@ bool supported()
 void install(HMODULE game)
 {
     state = -1;
+    carry = true;
     const auto wanted = parse(ini::text(L"Game", L"Xml1GrabCarry").value_or(""));
     if (wanted == setting::native) return;
     state = 0;
+    // [Game] Xml1FlyingCarry=0 (beta 8 080h): no flying carry; everything else in the rule as with it. Read before any
+    // refusal so a refused request advertises the mask it asked for.
+    carry = ini::flag(L"Game", L"Xml1FlyingCarry", true);
     if (wanted != setting::xml1 || reinterpret_cast<std::uintptr_t>(game) != limits_rules::image_base || !supported())
     {
         logger::write("grab carry: requested but unavailable; requires retail services and Xml1GrabCarry=xml1");
@@ -328,7 +332,7 @@ void install(HMODULE game)
 
     using namespace xml1_hook_transaction;
     std::vector<patch> writes;
-    if (!xml1_air_carry::prepare(writes))
+    if (!xml1_air_carry::prepare(writes, carry))
     {
         attack_handler = nullptr;
         xml1_air_carry::abandon();
@@ -410,6 +414,15 @@ void install(HMODULE game)
     }
     trace = ini::flag(L"Test", L"GrabCarryTrace", false);
     state = 1;
+    if (!carry)
+    {
+        // The builder's DLL gate reads this line ([Game] Xml1FlyingCarry, beta 8 080h).
+        logger::write("grab carry: XML1 grab/pickup/recovery installed (rule 45 revision %u, feature mask %u); fix7 and XML1 upkeep installed",
+                      static_cast<unsigned>(agreement_revision), feature_mask_no_flying_carry);
+        logger::write("grab carry: flying carry off (Xml1FlyingCarry=0): no carry handlers, PC flight descent");
+        logger::write("grab carry: thrown bodies forward world impacts (42C09E)");
+        return;
+    }
     logger::write("grab carry: XML1 grab/pickup/recovery installed (rule 45 revision %u, feature mask %u); flying carry, fix7 and XML1 upkeep installed",
                   static_cast<unsigned>(agreement_revision), feature_mask);
     // The builder's DLL gate reads this line (beta 8 080e: a carry chain that resolves to itself no longer re-enters).
@@ -417,7 +430,9 @@ void install(HMODULE game)
     // Beta 8 080g (fix3): world impacts reach a thrown body's receiver (0x42C09E), carry pose from animated bones.
     logger::write("grab carry: thrown bodies forward world impacts (42C09E); carry pose on animated bones");
 }
-std::string status() { const int s = state.load(); return std::string("grab carry ") + (s == 1 ? "xml1 grab + flying carry + flight upkeep" : s == -1 ? "game's own" : "unavailable"); }
+std::string status() { const int s = state.load(); return std::string("grab carry ") + (s == 1 ? (carry ? "xml1 grab + flying carry + flight upkeep" : "xml1 grab + flight upkeep (flying carry off)") : s == -1 ? "game's own" : "unavailable"); }
+std::uint32_t feature_mask() { return mask_for(carry); }
+bool flying_carry() { return carry; }
 bool requested() { return state.load() != -1; }
 bool installed() { return state.load() == 1; }
 bool verified() { return !requested() || installed(); }
