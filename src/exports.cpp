@@ -74,6 +74,7 @@
 #include "ini.hpp"
 #include "limits.hpp"
 #include "pool_counters.hpp"
+#include "effect_pools.hpp"
 #include "model_pools.hpp"
 #include "particle_scratch.hpp"
 #include "effect_templates.hpp"
@@ -263,6 +264,7 @@ namespace
 		char_sounds::require_agreement(game);
 		anim_enums::contribute(startup, game);
 		particle_scratch::require_agreement(game);
+		effect_pools::require_agreement(game);
 		if (game_version::needs_gameplay_agreement()) gameplay_agreement::contribute(startup, game);
 
 		new_game::install(game);
@@ -510,10 +512,8 @@ namespace
 		if (limits::igb_cache_requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::igb_cache_id, 1, limits::igb_cache_values(), limits::igb_cache_installed());
 		// [Engine] ModelPools: the model aggregate (0x7bf6d0) is built at the first getter call, after this.
-		model_pools::install(game);
-		particle_scratch::install(game); // W3-9: independent count spans after ModelPools publication
-        effect_templates::install(game);
-        primitives_per_effect::install(game);
+		// ModelPools, W3-9, W3-4, W3-7, W3-5, W3-6: installed inside limits::install (limits::install_effect_rows),
+		// after ActorSlots and before the style manager (DESIGN revision 2 section 7).
 		// A raise is rule 28 (ModelPools): a full pool refuses spawns, so co-op peers must share the capacities.
 		// Requested only: absent/off adds no entry (the released record); a requested raise that failed is unverified.
 		if (model_pools::requested())

@@ -54,7 +54,7 @@ Found by data flow from the object's address, not by pattern alone: the image ho
 
 That is 98 operands (displacements past the records, `900`, `899`, the bitmaps' dword count `29`) and 5 references. A reader tests the id's "in use" bit and reads record 0 when it is clear; it has no bound check against the capacity. The helpers the allocator calls (`0x415440` compares, `0x415c60` copies a record) work on one record and carry nothing that depends on the capacity. There is no reset or zone-unload path of the pool itself: a zone change destroys the zone's effect definitions, and each primitive definition's destructor releases its ids.
 
-A second pool of the same shape sits next to it (`0x706680`, 710 records of 24 bytes, getter `0x4165a0`): the effects' vectors. It is not touched; its counter read 572 of 710 where the curves needed 943.
+A second pool of the same shape sits next to it (`0x706680`, 710 records of 24 bytes, getter `0x4165a0`): the effects' vectors. Its counter read 572 of 710 where the curves needed 943. It can now be raised independently with `[Limits] EffectVectors`; see [effect-vectors.md](effect-vectors.md).
 
 ### Curve ids and their width
 

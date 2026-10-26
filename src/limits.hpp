@@ -34,6 +34,8 @@
 //                           ; record pool, past which Data/items stops loading
 //   FightStyles = 32        ; 20..32 (19 is the game's own)
 //   EffectCurves = 3600     ; 901..16384 (900 is the game's own): the effect curve pool
+//   PrimitiveDefs = 2048    ; 817..8192 (816 is stock): primitive definition heap pool
+//   EffectVectors = 4096    ; 711..16384 (710 is stock): vectors, 84 presets unchanged
 //   IGBCache = 1024         ; 201..2048 (200 is the game's own): the IGB info cache, past which a
 //                           ; zone's map IGB fails to load and the game bounces back to the previous
 //                           ; zone; with no ResourceNames, 2048 (or what it and ActorSlots need)

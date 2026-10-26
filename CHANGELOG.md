@@ -53,6 +53,14 @@
   native for other containers. Missing/stock keys preserve the existing patch
   and agreement record. See [effect templates](docs/effect-templates.md) and
   [primitives per effect](docs/primitives-per-effect.md).
+- **More primitive definitions and effect vectors for converted content and graphics
+  mods.** `[Limits] PrimitiveDefs=2048` (817..8192, stock 816) and
+  `EffectVectors=4096` (711..16384, stock 710) enlarge the native pools with generated
+  retail-byte ledgers and independent transactions. Native allocation, refusal,
+  reuse and teardown remain; vectors keep their 84 presets and 16-bit IDs.
+  Rules 56 and 57 advertise the installed capacities; absent/stock keys change no
+  game bytes or agreement entries. Status adds `prim defs` and `vectors` counters.
+  [Primitive definitions](docs/primitive-defs.md), [vectors](docs/effect-vectors.md).
 
 - **The first game's revival price: gameplay rule 10 revision 3** (`[Game] RevivalCost = xml1`; 1.9.0-beta.1 and
   1.8.0, [docs](docs/xtraction-shop.md#revival-price)). A fallen hero costs 200 x G^2 Tech Bits, G = min(5, L / 10 +
