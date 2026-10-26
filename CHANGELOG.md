@@ -109,7 +109,9 @@
   `[Game] LiftRule = xml1` installed; without them it writes nothing and stays an unverified request (host / join
   closed). Values `{1,15,0,0}`
   (mask 15 = grab, pickup/recovery, charge collision, carry/fix7/upkeep); revisions 1 and 2 (080b) are refused both
-  ways. Absent: nothing written, no entry. Not played yet.
+  ways. Absent: nothing written, no entry. The carry input no longer reports the established carry node as a new
+  chain when the idle / walk / run choice resolves to itself (the PC re-entered the carry every frame and the victim
+  never followed; live 080d); logged as `flying carry keeps its established node (no self-chain)`. Not played yet.
 
 - **XML1's animation enums: gameplay rule 48** (`[Limits] AnimEnums = 512`; 1.9.0-beta.1,
   [docs](docs/anim-enums.md)). XMen2.exe's animation enum table holds 210 names, every slot taken; the key raises it to
@@ -128,6 +130,9 @@
   `{installed_mask,0,0,0}`; rule 42 unchanged. `TelekinesisRule` and `GuardDecideRule` add the coupled suspend
   contract and interaction policy, requiring installed rule45; guard restores rank3 walllunge beside rule39.
   [Contracts and native fixtures](docs/tk-guard.md). Live integration checks remain.
+  Phoenix's telekinesis sounds (`power1a` / `power1b`) resolve through the PC sound manager's name lookup (slot 0x38,
+  0x590bd0); slot 0x34 is a PC bool query with a 4-byte return, and the XML1 call corrupted the stack at the first
+  telekinesis hold (live 080d crash). Logged as `telekinesis sounds resolve through PC audio slot 38`.
 
 - **E4 stage 1, actor pools: gameplay rule 44** (`[Limits] ActorPools = 124`; 1.9.0-beta.1,
   [docs](docs/actor-pools.md)). The path, shadow and delayed-damage pools sized for 32 actors grow to 124 in one

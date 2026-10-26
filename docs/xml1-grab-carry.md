@@ -253,3 +253,20 @@ Pending live checks (never run by this code-only task):
    exactly one debit with the rebuilt flight content.
 7. Missing enums/nodes, simultaneous/repeated carries, EntityCapacity, cling,
    Rogue and co-op agreement. Animation design L1..L7 remain live-only too.
+
+The carry input bridge leaves an already-selected current idle/walk/run node
+running. XML1 **0xdc0b0** selects that chain on every input callback; PC
+**0x4341d3..0x4341eb** sends a reported chain through **0x4315d0** and move
+entry again. Reporting the current node repeatedly restarted carry entry and
+its time-zero victim event in the PC port. Different nodes, including throw
+and smash, still select a chain. Guard is not converted into a throw input.
+
+The multi-frame fixture starts with empty owner handles, executes the retail
+victim-event constructor and ownership/release instructions, and drives the
+retail PC input/chain path. It covers pickup, an established victim following
+XYZ movement for twelve frames, throw or landing/drop, and cleared reciprocal
+owners/constraints, with Guard both held and released at contact. Bone and
+collision outputs are synthetic. The self-chain defect is reproduced against
+the previous source; its responsibility for 080d's live failure remains
+**likely** until an actual held/released-Guard carry is observed. A held Guard
+can still descend and landing still releases the pair.

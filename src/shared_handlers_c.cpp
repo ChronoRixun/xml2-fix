@@ -49,6 +49,8 @@ void install(HMODULE game) {
  bool safe=true;
  if(xml1_hook_transaction::apply(memory,patches(wanted,callbacks),&safe)) {
   applied=wanted;logger::write("shared handlers C: installed mask %03X revision 1",applied);
+  // The builder's DLL gate reads this line (beta 8 080e: Phoenix power1a/1b resolve through PC audio slot 0x38).
+  if(applied&telekinesis)logger::write("shared handlers C: telekinesis sounds resolve through PC audio slot 38");
  } else {
   if(!safe)game_version::refuse_startup();
   logger::write("shared handlers C: transaction refused; online agreement refused");

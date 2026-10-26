@@ -213,7 +213,9 @@ inline void velocity(void* p,const vec& v){fn<void(__thiscall*)(void*,const vec*
 inline void tk_sound(tk_state& s,void* target,bool initial){
  auto audio=fn<getter>(0x592480);
  if(initial||!sound_valid(audio(),s.sound)){
-  void* manager=audio();const u32 resource=method<u32(__thiscall*)(void*,const char*,int,int)>(manager,0x34)(manager,"character/phoen_m/power1a",0,0);
+  // XML1 DF556 uses Xbox slot34. PC's matching name resolver is slot38
+  // (590BD0, ret12); PC slot34 is a bool query (590120, ret4).
+  void* manager=audio();const u32 resource=method<u32(__thiscall*)(void*,const char*,int,int)>(manager,0x38)(manager,"character/phoen_m/power1a",0,0);
   manager=audio();s.sound=method<u32(__thiscall*)(void*,u32,const vec*,float,float,float)>(manager,0x4c)(manager,resource,&field<vec>(target,0x20),1.f,1300.f,150.f);
  }
  if(sound_valid(audio(),s.sound)){void* manager=audio();method<void(__thiscall*)(void*,u32,const vec*)>(manager,0x70)(manager,s.sound,&field<vec>(target,0x20));}
@@ -230,7 +232,7 @@ inline void release(void* actor,tk_state& s,vec v,bool thrown){
   }
   if(thrown){
    field<float>(target,0x2b8)=static_cast<float>(s.impact);field<unsigned char>(target,0x2e2)=static_cast<unsigned char>(s.damage);
-   void* manager=fn<getter>(0x592480)();const u32 sound=method<u32(__thiscall*)(void*,const char*,int,int)>(manager,0x34)(manager,"character/phoen_m/power1b",0,0);
+   void* manager=fn<getter>(0x592480)();const u32 sound=method<u32(__thiscall*)(void*,const char*,int,int)>(manager,0x38)(manager,"character/phoen_m/power1b",0,0);
    method<void(__thiscall*)(void*,u32)>(target,0x8c)(target,sound);
   }
  }
