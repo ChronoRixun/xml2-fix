@@ -113,3 +113,6 @@ DISASM  src/motion_pool.cpp  # Authored owner/reader bounds and register-preserv
 DISASM  test/motion_pool_test.cpp  # Authored synthetic ESI/EBX and stack/FS callers drive production bridges and owner-loaded retail routines; no embedded game code.
 
 DISASM  test/resident_stats_test.cpp  # Authored register and stack capture probes drive production R2 caves and owner-loaded functions; no copied game instruction body.
+
+DISASM  src/tk_guard_bridges.hpp  # Authored rule-46 TK/guard bridges: two resume trampolines that repeat only the displaced prologue before jumping back into the owner-loaded routine, and an argument-forwarding filter thunk; no game body or instruction listing.
+DISASM  test/tk_guard_test.cpp  # Authored fixture stubs (synthetic acquisition and grab tails) and x87 modulus/truncation helpers standing in for the runtime calls of owner-loaded XML1 code; no embedded game code.
