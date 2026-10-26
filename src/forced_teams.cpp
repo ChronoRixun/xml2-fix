@@ -318,7 +318,7 @@ namespace forced_teams
 				{
 					return false;
 				}
-				std::memcpy(&count, stack + side_count_offset, sizeof(count));
+				std::memcpy(&count, stack + save_layout_view::objectives().side_count_offset, sizeof(count));   // the installed layout's (W2-L-11)
 				return true;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
@@ -336,7 +336,8 @@ namespace forced_teams
 				{
 					return false;
 				}
-				const std::uint8_t* record = stack + i * side_record_size;
+				const auto& layout = save_layout_view::objectives();
+				const std::uint8_t* record = stack + i * layout.snapshot_size;
 				for (std::size_t c = 0; c < side_zone_size; ++c)
 				{
 					zone[c] = static_cast<char>(record[c]);
@@ -346,7 +347,7 @@ namespace forced_teams
 				{
 					for (std::size_t c = 0; c < side_name_size; ++c)
 					{
-						names[n][c] = static_cast<char>(record[side_names_offset + n * side_name_size + c]);
+						names[n][c] = static_cast<char>(record[layout.side_names_offset + n * side_name_size + c]);
 					}
 					names[n][side_name_size] = 0;
 				}
@@ -369,7 +370,8 @@ namespace forced_teams
 				{
 					return false;
 				}
-				std::uint8_t* field = stack + i * side_record_size + side_names_offset + slot * side_name_size;
+				const auto& layout = save_layout_view::objectives();
+				std::uint8_t* field = stack + i * layout.snapshot_size + layout.side_names_offset + slot * side_name_size;
 				std::memset(field, 0, side_name_size);
 				for (std::size_t c = 0; name[c] && c + 1 < side_name_size; ++c)
 				{

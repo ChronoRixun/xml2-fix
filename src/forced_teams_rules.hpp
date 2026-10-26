@@ -27,6 +27,7 @@
 // function, otherwise a value from the script system's pool (0x4d8770() -> 0x4d6570 for an int,
 // 0x4d9430 for a string), as the game's own handlers do (getGameFlag 0x4a5db0, getName 0x4a1fb0).
 
+#include "save_layout_view.hpp"
 #include "limits_rules.hpp" // guard, matches, value_text
 
 #include <Windows.h>
@@ -425,12 +426,15 @@ namespace forced_teams_rules
 	// way (0x5f4678: always 1), whose load puts the party on that spot and pops the record (0x5f48d3).
 	// "cancelsidemission" (0x5f2ce0) takes the top record off without loading anything. The stack is
 	// saved with the game (0x46bcd4) and loaded with it (0x46e3ec).
+	// the retail stack; the module reads the installed layout's (save_layout_view::objectives(): W2 0x540 / 0xa84)
 	constexpr DWORD side_record_size = 0x26c;
 	constexpr DWORD side_count_offset = 0x4dc;
 	constexpr DWORD side_zone_size = 0x40;
 	constexpr DWORD side_names_offset = 0xa4;
 	constexpr DWORD side_name_size = 0x20;
 	constexpr int side_records_max = 2;
+	static_assert(side_record_size == save_layout_view::retail_objectives.snapshot_size && side_count_offset == save_layout_view::retail_objectives.side_count_offset &&
+	              side_names_offset == save_layout_view::retail_objectives.side_names_offset);
 
 	struct side_record
 	{
