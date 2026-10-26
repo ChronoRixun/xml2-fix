@@ -260,7 +260,12 @@ bool enabled(){return sampling;}
 void install(HMODULE game) {
     if(address(game)!=0x400000)return;
     memory mem;unsigned char signature[7]{};
-    if(!mem.read(0x4d6570,signature,sizeof(signature)) || std::memcmp(signature,"\x8b\x91\x90\xc0\x00\x00\x33",7))return;
+    // The values allocator's live-count load (mov edx,[ecx+live]; xor ...): retail 0xc090, or the published offset after
+    // W3-8 ScriptPools relocated it (w3/integrated: the fixed retail compare turned D0 off whenever ScriptPools installed).
+    const auto& values=script_pools::descriptor()[1];
+    const u32 values_live=values.base+values.live;
+    if(!mem.read(0x4d6570,signature,sizeof(signature)) || signature[0]!=0x8b || signature[1]!=0x91 || signature[6]!=0x33 ||
+       std::memcmp(signature+2,&values_live,4))return;
     for(const auto& r:pool_counter_sites::readers) {
         const auto i=counters.add(r.name,r.cap);sources[i]={r.root,r.offset,r.cap,0,r.indirect,false};
     }
@@ -289,7 +294,17 @@ void install(HMODULE game) {
     bind_observers();
     sampling=ini::flag(L"Test",L"PoolSampling",true);
     install_observers();
-    if(sampling)logger::write("pools: read-only sampling enabled; %zu pools; refusal observers %s",counters.state.size,observers?"on":"off");
+    if(sampling) {
+        // The capacities of the tables limits wave 3 can raise, as the sampler will report them (stock when absent).
+        std::string caps;
+        for(const char* name:{"styles","events","moves","fx_files","fx_defs","prims_per_effect","prim_defs","vectors","statements","values","objects","contexts"}) {
+            const auto i=find(name);
+            if(i>=counters.state.size)continue;
+            if(!caps.empty())caps+=", ";
+            caps+=std::string(name)+" "+std::to_string(counters.state.pools[i].cap);
+        }
+        logger::write("pools: read-only sampling enabled; %zu pools; refusal observers %s; capacities %s",counters.state.size,observers?"on":"off",caps.c_str());
+    }
 }
 void start_logging() {
     if(!sampling || wake)return;
