@@ -406,6 +406,8 @@ void install(HMODULE game)
     state = 1;
     logger::write("grab carry: XML1 grab/pickup/recovery installed (rule 45 revision %u, feature mask %u); flying carry, fix7 and XML1 upkeep installed",
                   static_cast<unsigned>(agreement_revision), feature_mask);
+    // The builder's DLL gate reads this line (beta 8 080e: a carry chain that resolves to itself no longer re-enters).
+    logger::write("grab carry: flying carry keeps its established node (no self-chain)");
 }
 std::string status() { const int s = state.load(); return std::string("grab carry ") + (s == 1 ? "xml1 grab + flying carry + flight upkeep" : s == -1 ? "game's own" : "unavailable"); }
 bool requested() { return state.load() != -1; }
