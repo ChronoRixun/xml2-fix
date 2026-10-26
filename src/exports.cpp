@@ -228,6 +228,9 @@ namespace
 		// opens - here, before any of its code runs.
 		game_version::install(game);
 		if (!game_version::startup_allowed()) return;
+		// Economy owns the roller loop. Install X1Leader's pain/classification
+		// bridges while their full retail guards still precede the union writes.
+		if (ini::flag(L"Game",L"Xml1Economy",false)) x1_leader::install(game);
 
 		// The one startup transaction (docs/entity-capacity-phase-a-plan.md section 7): the shared gameplay
 		// agreement's refusal and transport sites, the LC save seam, [Limits] MoveTriggers and the entity-capacity

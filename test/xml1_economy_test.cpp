@@ -154,15 +154,22 @@ int main(int argc,char** argv){
  const auto text=sidecar_file(body,economy_count);const auto chosen=scenario=="1roll"?plan::one_roll:plan::zero_draw;
  patch_transaction::contribution w2;std::string why;check(item_capacity::contribute_w2(w2,why),"W2 complete pool and definition guards: "+why);
  patch_transaction::transaction tx;tx.add(std::move(w2));
+ if(scenario=="legacy-count"||scenario=="legacy-pick")put(at(scenario=="legacy-count"?0x46e735:0x46e774),0,std::uint8_t(0xe9));
  if(scenario=="missingfile"){ini::wanted=true;xml1_economy::prepare(tx,static_cast<HMODULE>(at(0x400000)));}
  else xml1_economy::prepare_for_testing(tx,static_cast<HMODULE>(at(0x400000)),true,scenario=="sidecar"?"":text,chosen);
+ if(scenario=="legacy-count"||scenario=="legacy-pick"){
+  const auto before=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
+  check(tx.commit()==patch_transaction::outcome::refused_unresolved&&std::equal(before.begin(),before.end(),fixture_space),"legacy count/pick owner vetoes entire W2/economy union without writes");
+  xml1_economy::after_commit(tx.result());
+  check(!gameplay_agreement::good&&!xml1_economy::installed()&&gameplay_agreement::registrations==1,"legacy roller combination leaves rule52 unverified and online closed");return failures?1:0;
+ }
  if(scenario=="sidecar"||scenario=="missingfile"){
   check(tx.commit()==patch_transaction::outcome::committed,"W2 alone commits with missing economy sidecar");xml1_economy::after_commit(tx.result());
   check(!xml1_economy::installed()&&!gameplay_agreement::good&&gameplay_agreement::registrations==1,"missing sidecar unverified");return failures?1:0;
  }
  const auto stock=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
  if(scenario.starts_with("guard")){
-  const auto site=scenario=="guard0"?0x47bb50u:0x4806adu;*static_cast<std::uint8_t*>(at(site))^=1;
+  const auto site=scenario=="guard0"?0x47bb50u:scenario=="guard1"?0x4806adu:0x421f3fu;*static_cast<std::uint8_t*>(at(site))^=1;
   const auto before=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);check(tx.commit()!=patch_transaction::outcome::committed&&std::equal(before.begin(),before.end(),fixture_space),"guard mutation: entire W2/economy union refuses, zero writes");xml1_economy::after_commit(tx.result());check(!gameplay_agreement::good&&!xml1_economy::installed(),"guard failure leaves rule 52 unverified");return failures?1:0;
  }
  if(scenario=="rollback"){
@@ -181,8 +188,12 @@ int main(int argc,char** argv){
   check(!out.handle&&!out.pool,"retained trampoline safely preserves native null-definition ABI");
   return failures?1:0;
  }
- check(tx.commit()==patch_transaction::outcome::committed,"W2 plus constructor/table hooks commit in one union: "+tx.report());
+ const auto committed=tx.commit();
+ check(committed==patch_transaction::outcome::committed,"W2 plus constructor/table hooks commit in one union: "+tx.report());
+ if(committed!=patch_transaction::outcome::committed)return 1;
  xml1_economy::after_commit(tx.result());check(gameplay_agreement::holds==1&&!xml1_economy::installed()&&gameplay_agreement::registrations==0,"agreement held before table resolution");
+ auto* picker_copy=item_capacity::prepared_definition_picker();
+ check(picker_copy&&read<unsigned char>(picker_copy)==0xe9&&0x47b595+read<unsigned>(at(0x47b591))==addr(picker_copy),"picker tripwire composes at W2 copied entry; original width redirect retained");
  setup_table(legacy_definition+1); // high indices exercise widened AX lookup; one extra legacy definition
  auto* ip=native<void*(__cdecl*)()>(0x483610)();auto* ap=native<void*(__cdecl*)()>(0x45fb00)();
  const std::vector<std::uint8_t> initial_i(static_cast<std::uint8_t*>(ip),static_cast<std::uint8_t*>(ip)+item_capacity_rules::instances.size),initial_a(static_cast<std::uint8_t*>(ap),static_cast<std::uint8_t*>(ap)+item_capacity_rules::attached.size);
@@ -200,7 +211,8 @@ int main(int argc,char** argv){
  }
  check(xml1_economy::installed()&&gameplay_agreement::holds==0&&gameplay_agreement::registrations==1,"all 132 names resolved with real W2 by-name lookup, incl indices255/256; rule verified once");
  if(!xml1_economy::installed()){std::printf("resolution failure: %s\n",logger::last.c_str());return 1;}
- check(gameplay_agreement::rules.rule(1).values==agreement_values(chosen,parse(text)),"rule 52 exact parts/revision/digest/count values");
+ auto expected_values=agreement_values(chosen,parse(text));expected_values[0]|=1;
+ check(gameplay_agreement::rules.rule(1).values==expected_values,"rule 52 exact parts/revision/digest/count values, including installed roller bit1");
  bool parity=true,draws=true,other_stream_unchanged=true;
  for(unsigned i=0;i<economy_count;++i){restore();descriptor out{};auto* def=manager.data()+item_capacity_rules::definitions+(i+first_economy)*0x3c;native<make_t>(0x47bb50)(manager.data(),nullptr,&out,def,1,0,0,0,0);const auto s=capture(out);const bool equal=same(s,native_results[i]);parity&=equal;draws&=s.draws==(chosen==plan::zero_draw?0u:own_count(i))&&s.rng_state==(chosen==plan::zero_draw?12345u:native_results[i].rng_state);
   if(!equal){std::printf("parity definition %u: bonus %d/%d, records %zu/%zu\n",i,s.bonus,native_results[i].bonus,s.attached.size(),native_results[i].attached.size());for(unsigned n=0;n<0x34;++n)if(s.instance[n]!=native_results[i].instance[n])std::printf(" instance +%02x %02x/%02x\n",n,s.instance[n],native_results[i].instance[n]);}

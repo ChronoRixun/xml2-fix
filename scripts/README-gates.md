@@ -159,3 +159,17 @@ For all three absent-key OFF configurations, run the existing proof with
 XML2_FIX_OFF_CASE=e10a2 (default), retail, or native. Use build/step8-pages.txt;
 the reference is build/step8-baseline. The proof's union hosts use private
 desktops and compare symbols/relocations plus complete generated allocations.
+
+XML1 economy drops (step3b, no game process): build `xml2_roll_rules_test`,
+`xml2_roll_test`, `xml2_dr_reward_test`, `xml2_economy_test` and
+`xml2_x1_leader_test`. The first is the 100,000-roll XBE oracle differential;
+the mapped-retail fixtures receive the owned executable as their first argument.
+Run the leader fixture both without arguments and with `economy` to cover both
+installer modes. `scripts/run_native.py` includes these cases and requires the
+usual EXE/XBE/game-directory/writable-vector environment variables above.
+Run `python -B scripts/check_xml1_roll_text.py <owned-retail-exe>` for guards,
+static caller census and unchanged placement/DR branch contracts.
+The production DLL startup check and full W2 OFF proof remain applicable.
+The latter must compare against the committed 3a DLL/map, include all roller
+pages, and run absent-key and explicit-zero cases. Outputs belong in a local
+work folder; never add binary fixtures, source game assets or listings to git.

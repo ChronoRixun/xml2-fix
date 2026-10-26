@@ -1,5 +1,7 @@
 # Scoped exceptions for the builder content guard used on this C++ repository.
 # Each entry describes original code/art or invented test data; no game assets are accepted.
+DISASM src/xml1_roll.cpp # Authored register-preserving callbacks and nested-frame bridges; only the guarded two-instruction SEH restore is replayed. No extracted listing or decompiled game body.
+DISASM test/xml1_roll_test.cpp # Authored synthetic stack/register probes and matching ABI continuations; retail instructions are supplied locally and executed in the fixture, never stored here.
 DISASM src/input_worker.cpp # Authored register-preserving lifetime-accounting bridges; only the short guarded entry prologue is replayed, with no game listing or decompiled body.
 DISASM test/input_worker_test.cpp # Authored synthetic ABI probe seeds invented register values and measures our bridges; no game instruction listing or decompiled body.
 GAME_EXT tools/union_host/union_space.asm # Authored MASM zero-filled address-space reservation (DB DUP(0)) for the synthetic DLL host; no game bytes, instructions or disassembly. Retail image supplied locally at runtime.

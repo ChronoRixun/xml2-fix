@@ -32,6 +32,7 @@ cmds = [[str(b / "xml2_test.exe"), flag] for flag in flags]
 if "--plain" in sys.argv:
     cmds.append([str(b / "xml2_test.exe")])
 with_exe = {
+    "xml2_roll_test", "xml2_dr_reward_test",
     "xml2_gns_transport_test", "xml2_confirmation_release_test", "xml2_objective_text_test",
     "xml2_npc_query_scheduler_test", "xml2_npc_semi_auto_test",
     "xml2_save_limits_test", "xml2_item_capacity_test", "xml2_entity_grid_test", "xml2_entity_world_test", "xml2_entity_frames_test",
@@ -44,7 +45,7 @@ with_exe = {
     "xml2_combo_heads_test", "xml2_input_worker_test", "xml2_model_pools_test", "xml2_model_pools_lifecycle_test",
 }
 install_modes = {
-    "xml2_economy_test": ("A", "1roll", "off", "zero", "prerequisite", "sidecar", "missingfile", "guard0", "guard1", "rollback", "rollback-failed", "unresolved"),
+    "xml2_economy_test": ("A", "1roll", "off", "zero", "prerequisite", "sidecar", "missingfile", "guard0", "guard1", "guard2", "legacy-count", "legacy-pick", "rollback", "rollback-failed", "unresolved"),
     "xml2_classic_hud_install_test": ("on", "off", "invalid", "base", "assets", "stale", "alias", *(f"guard{i}" for i in range(8))),
     "xml2_codex_back_install_test": ("on", "off", *(f"guard{i}" for i in range(8))),
     "xml2_resistance_display_install_test": ("on", "on-native", "off", "xml2", "invalid", "base", *(f"guard{i}" for i in range(6))),
@@ -65,6 +66,7 @@ for exe in sorted(b.glob("*.exe")):
         else:
             cmds.append([str(exe), EXE] if name in with_exe else [str(exe)])
 cmds.append([str(b / "lcsave_test.exe"), "--fuzz", "2000"])
+cmds.append([str(b / "xml2_x1_leader_test.exe"), "economy"])
 vectors = Path(_need("XML2_FIX_LEGACY_VECTORS_DIR"))
 for directory in sorted(p for p in vectors.iterdir() if p.is_dir() and (p / "cases.tsv").exists()):
     cmds.append([str(b / "lcsave_durable_parity.exe"), str(directory)])

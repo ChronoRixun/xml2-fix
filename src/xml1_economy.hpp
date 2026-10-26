@@ -6,6 +6,7 @@ void prepare(patch_transaction::transaction&,HMODULE game);
 void after_commit(patch_transaction::outcome);
 bool installed(); // table resolved, hooks and prerequisite verified
 const xml1_economy_rules::record* record_for(unsigned definition);
+const std::vector<xml1_economy_rules::record>& records();
 bool is_economy(const void* definition);
 std::string status(); // empty OFF
 

@@ -74,6 +74,7 @@ void __cdecl definitions_full(){logger::write("W2 item-definition registration r
 void __cdecl records_full(){logger::write("W2 enhancement-record registration refused: capacity 4096 exhausted");save_format::latch_reconstruction_failure("enhancement-record capacity 4096 exhausted");}
 void __cdecl world_full(){logger::write("W2 world-item allocation refused: capacity 1024 exhausted");}
 std::uint8_t* instance_backing=nullptr;std::uint8_t* attached_backing=nullptr;unsigned published_capacity=0;
+void* definition_picker_copy=nullptr;
 void* __cdecl instance_get(){auto& cell=*native<void**>(0x72a524);if(!cell){put(instance_backing,0,0x6884a8u);native<void*(__fastcall*)(void*,void*)>(0x483170)(instance_backing+4,nullptr);cell=instance_backing;}return cell;}
 void* __cdecl attached_get(){auto& cell=*native<void**>(0x717b30);if(!cell){put(attached_backing,0,0x686598u);native<void*(__fastcall*)(void*,void*)>(0x45f6c0)(attached_backing+4,nullptr);cell=attached_backing;}return cell;}
 struct storage {
@@ -125,6 +126,7 @@ int pick(void* manager,int level,std::uint32_t handle,void* chain,bool prefix,st
  return candidates[static_cast<unsigned>(choice)];
 }
 unsigned installed_capacity(){return published_capacity;}
+void* prepared_definition_picker(){return definition_picker_copy;}
 bool preflight(unsigned instance_demand,unsigned attached_demand,unsigned world_demand,const lcsave::NativeLayout& layout,std::string& error) {
  const bool w2=std::string_view(layout.id)=="W2";
  unsigned ip=0,ap=0,live_instances=0,live_attached=0;
@@ -146,6 +148,7 @@ bool preflight(unsigned instance_demand,unsigned attached_demand,unsigned world_
  error.clear();return true;
 }
 bool contribute_w2(contribution& owner,std::string& why) try {
+ definition_picker_copy=nullptr;void* prepared_picker=nullptr;
  contribution c;c.owner="W2 item capacities";
  auto storage=std::make_shared<struct storage>();
  for(const auto& g:item_capacity_sites::ledger)c.guards.push_back({g.va,bytes_of(g.bytes),"reviewed SPEC-old item ledger"});
@@ -172,6 +175,7 @@ bool contribute_w2(contribution& owner,std::string& why) try {
  }
  for(const auto& block:item_capacity_sites::blocks) {
   auto* memory=storage->allocate(block.hi-block.lo+0x2000);
+  if(block.lo==0x47b590)prepared_picker=memory;
   built b{block.lo,block.hi,address_of(memory),block.edits};
   c.regions.push_back({"W2 item copied instruction owner",block.lo,block.hi,sha256_of(block.hash)});
   c.guards.push_back({block.lo,std::vector<std::uint8_t>(native<const std::uint8_t*>(block.lo),native<const std::uint8_t*>(block.hi)),"hashed displaced owner bytes"});
@@ -224,9 +228,9 @@ bool contribute_w2(contribution& owner,std::string& why) try {
  c.regions.push_back({"DLL item pool getter",0x45fb00,0x45fb4d,sha256_of("ffafbe2308a18aed7563b79225f60176d6e04ab08d3ce2b5ecf8dc126132a866")});
  c.writes.push_back(relocation(0x45fb00,"e9",true,address_of(&attached_get),0,"DLL item pool getter"));
  if(!verify_expectations(c,why))return false;
- c.publish=[storage,instances,attached]{retained.push_back(storage);instance_backing=instances;attached_backing=attached;published_capacity=4096;};c.abandon=[storage]{};c.retain=[storage]{retained.push_back(storage);};
+ c.publish=[storage,instances,attached]{retained.push_back(storage);instance_backing=instances;attached_backing=attached;published_capacity=4096;};c.abandon=[storage]{definition_picker_copy=nullptr;};c.retain=[storage]{retained.push_back(storage);};
  // W2 supersedes the same existing limit rows in the capacity union.
  owner.writes.erase(std::remove_if(owner.writes.begin(),owner.writes.end(),[](const auto& w){for(const auto& s:limits_rules::item_sites)if(w.va>=s.va&&w.va<s.va+bytes_of(s.hex).size())return true;return w.va==limits_rules::item_clone_call.va+1;}),owner.writes.end());
- append(owner,std::move(c));why.clear();return true;
+ append(owner,std::move(c));definition_picker_copy=prepared_picker;why.clear();return true;
 } catch(const std::exception& e){why=std::string("W2 items: ")+e.what();return false;}
 }

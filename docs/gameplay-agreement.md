@@ -183,9 +183,11 @@ when IGBCache is absent or 200 on both PCs. Rules 31 and 28 retain their existin
 
 Rule52 Xml1Economy is requested only by `[Game] Xml1Economy=1`, revision1.
 Its four values are `{parts, sidecar format revision, digest prefix, entry count}`.
-This foundation installs parts **32** for zero-draw plan A (**0** for the accepted
-native one-roll fallback), format **1**, the first four body SHA-256 bytes packed
-little endian, and the resolved sidecar count. Bits 1 through 16 remain clear.
+Construction and drops install parts **33** for zero-draw plan A (**1** for the
+accepted native one-roll fallback), format **1**, the first four body SHA-256
+bytes packed little endian, and the resolved sidecar count. Mask1 covers the
+roller, category, treasure, DR/regeneration dispositions and census; mask32
+selects plan A. Masks2/4/8/16 remain clear for the later economy steps.
 It requires verified rule47. The shared record remains unfrozen and online closed
 until the item table loads and every sidecar name resolves in PC definition-index
 order. Any refusal registers the requested rule unverified and closes host/join;

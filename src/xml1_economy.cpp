@@ -1,4 +1,5 @@
 #include "xml1_economy.hpp"
+#include "xml1_roll.hpp"
 #include "native_save_layout.hpp"
 #include "entity_capacity.hpp"
 #include "item_capacity.hpp"
@@ -32,7 +33,8 @@ void* table=nullptr;
 make_t original=nullptr;
 void register_result(bool verified){
  if(registered)return;registered=true;
- const bool agreed=gameplay_agreement::register_rule(rule_id,rule_revision,agreement_values(mode,data),verified);
+ auto values=agreement_values(mode,data);if(roller::installed())values[0]|=1;
+ const bool agreed=gameplay_agreement::register_rule(rule_id,rule_revision,values,verified);
  active.store(verified&&agreed,std::memory_order_release);
  logger::write("economy: rule 52 Xml1Economy %s%s%s",active.load()?"verified":"unverified; online closed",failure.empty()?"":"; ",failure.c_str());
  if(held){held=false;gameplay_agreement::resume_finalization();}
@@ -83,6 +85,13 @@ void prepare_impl(patch_transaction::transaction& transaction,HMODULE game,bool 
  c.abandon=[]{hooks=false;};
  c.retain=[storage]{retained.push_back(storage);original=reinterpret_cast<make_t>(storage->p);hooks=false;};
  if(!transaction.add(std::move(c)))failure="startup transaction is sealed";
+ else if(!roller::contribute(transaction,failure)){
+  // A stale legacy leader bridge or any failed roller guard must refuse the
+  // entire union, rather than publish a constructor beside another loop owner.
+  patch_transaction::contribution veto;veto.owner="Xml1Economy roller prerequisite: "+failure;
+  veto.requires_written.push_back({0xffffffff,"roller ownership/guards refused"});
+  transaction.add(std::move(veto));
+ }
 }
 }
 void prepare(patch_transaction::transaction& transaction,HMODULE game){
@@ -103,7 +112,7 @@ void after_commit(patch_transaction::outcome outcome){
  if(!native_save_layout::installed()||item_capacity::installed_capacity()!=lcsave::w2_layout.attached_enhancements){
   failure="Xml1Economy requires verified rule 47 NativeSaveLayout (SaveLayout=w2)";register_result(false);return;
  }
- if(!hooks||outcome!=patch_transaction::outcome::committed||!data.ok()){
+ if(!hooks||!roller::installed()||outcome!=patch_transaction::outcome::committed||!data.ok()){
   if(failure.empty())failure="constructor/table hooks not committed: "+std::string(patch_transaction::name(outcome));
   register_result(false);return;
  }
@@ -127,6 +136,7 @@ void table_loaded(void* manager){
 }
 bool installed(){return active.load(std::memory_order_acquire);}
 const record* record_for(unsigned index){return installed()&&index<rows.size()&&rows[index]>=0?&data.rows[static_cast<unsigned>(rows[index])]:nullptr;}
+const std::vector<record>& records(){return data.rows;}
 bool is_economy(const void* definition){if(!installed())return false;const auto i=definition_index(definition);return i&&rows[*i]>=0;}
 descriptor* __fastcall make_instance(void* manager,void*,descriptor* out,void* definition,int level,int prefixes,int suffixes,int special_a,int special_b){
  if(!installed()||!plain(level,prefixes,suffixes,special_a,special_b)||!is_economy(definition))return original(manager,nullptr,out,definition,level,prefixes,suffixes,special_a,special_b);
@@ -155,6 +165,6 @@ descriptor* __fastcall make_instance(void* manager,void*,descriptor* out,void* d
 }
 std::string status(){
  if(!wanted)return {};
- return "econ on; plan "+std::string(mode==plan::zero_draw?"A":"1roll")+"; defs "+std::to_string(installed()?data.rows.size():0)+"; digest "+digest_hex(data.digest).substr(0,8)+"; refused "+std::to_string(refusals.load());
+ return "econ on; plan "+std::string(mode==plan::zero_draw?"A":"1roll")+"; defs "+std::to_string(installed()?data.rows.size():0)+"; digest "+digest_hex(data.digest).substr(0,8)+"; refused "+std::to_string(refusals.load())+roller::status();
 }
 }

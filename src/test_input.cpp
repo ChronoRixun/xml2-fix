@@ -25,6 +25,7 @@
 #include "entity_capacity.hpp"
 #include "native_save_layout.hpp"
 #include "xml1_economy.hpp"
+#include "xml1_roll.hpp"
 #include "test_input_rules.hpp"
 
 #define DIRECTINPUT_VERSION 0x0800
@@ -582,6 +583,10 @@ namespace test_input
 				return save_format::pipe(cmd.text);
 			case command::kind::entity:
 				return entity_pipe(cmd.text);
+			case command::kind::economy:
+				if(cmd.text.empty()||cmd.text=="status")return xml1_economy::status();
+				if(cmd.text=="rolls")return xml1_economy::roller::recent_rolls();
+				return "error economy takes status or rolls";
 			case command::kind::mouse:
 			{
 				using action = command::pointer_action;

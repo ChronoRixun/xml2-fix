@@ -379,6 +379,7 @@ namespace test_input_rules
 			ping,
 			save, // save_format's commands: `text` is the rest of the line
 			entity, // entity_capacity's commands (status, retire N): `text` is the rest of the line
+			economy, // read-only economy status and recent roll diagnostics
 			mouse, // `mouse X Y [move|down|up|click]`: `pointer` says which, at client point x,y
 			unknown
 		};
@@ -439,6 +440,12 @@ namespace test_input_rules
 		if (verb == "ENTITY")
 		{
 			result.what = command::kind::entity;
+			result.text = std::string(rest);
+			return result;
+		}
+		if (verb == "ECONOMY")
+		{
+			result.what = command::kind::economy;
 			result.text = std::string(rest);
 			return result;
 		}
