@@ -1,5 +1,10 @@
 # Test state API (schema 1)
 
+`PARTICLE_SCRATCH` returns the [particle scratch](particle-scratch.md) counters:
+`installed`, `requested`, `capacity`, `logged_arrays`, and an `operations` array
+with `va`, `peak` (unclamped demand), and `clamps` for each of the eleven methods.
+Counters are session totals and are collected when `ParticleScratch=40` installs.
+
 With `[Test] InputPipe=1`, the existing pipe accepts `state`, `objectives`, and
 `events` (no arguments, case insensitive). Each returns one JSON line, without
 an `ok` prefix. Existing input commands retain their protocol. With InputPipe=0

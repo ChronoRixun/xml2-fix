@@ -2,6 +2,12 @@
 
 ## 1.9.0 - <date TBD>
 
+- `[Limits] ParticleScratch=40` clamps all eleven particle operations to the
+  manager's 40 shared scratch records, preventing overruns with larger arrays.
+  Logs once per array address and exposes per-operation peaks and clamp counts
+  through `PARTICLE_SCRATCH`. Rule 60; absent/0/off keeps the released bytes and
+  agreement. [Details](docs/particle-scratch.md).
+
 - **The first game's revival price: gameplay rule 10 revision 3** (`[Game] RevivalCost = xml1`; 1.9.0-beta.1 and
   1.8.0, [docs](docs/xtraction-shop.md#revival-price)). A fallen hero costs 200 x G^2 Tech Bits, G = min(5, L / 10 +
   1), L the roster's highest current level without guests: 200 / 800 / 1,800 / 3,200 / 5,000 for 0-9 / 10-19 /

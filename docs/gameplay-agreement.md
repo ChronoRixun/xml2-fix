@@ -1,5 +1,10 @@
 # Shared effective gameplay agreement
 
+Rule **60 ParticleScratch**, revision 1, registers `{40,0,0,0}` only after
+`[Limits] ParticleScratch=40` installs all eleven scratch clamps. Absent/0/off adds
+no rule. Refused installs register unverified with zero effective capacity.
+See [particle scratch](particle-scratch.md) for the bounded behavior and counters.
+
 The release token (`[Online] GameVersion`, LC26 for builder 0.2.0, LC27 for 0.2.2) remains separate. LC builds and explicit ExplosiveFirstHit or DeathSwitchClear opt-ins require this protocol. Ordinary no-key XML2 without participating installers remains native. Compatibility uses actual installed values, never requested INI values alone.
 
 Protocol **4** adds the [native fresh-tail transfer contract](native-fresh-tail.md).
