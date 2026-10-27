@@ -98,3 +98,45 @@ Live verification still matters: use ordinary key input, observe health and acto
 state, check movement after a return, and distinguish setup teleports/roster changes
 from player actions. A scripted actor intentionally left alive is not a promise
 that the testing key can bypass that encounter.
+
+
+## Background test windows
+
+`[Test] NoActivate=1` is a separate, requested-only window isolation switch. It
+works with or without `InputPipe`. Missing, false or invalid values preserve the
+existing behavior and install none of its hooks. It adds no gameplay agreement
+rule and does not change `[TestMode]` permissions.
+
+For unattended copies use:
+
+```ini
+[Test]
+NoActivate=1
+[Display]
+Mode=windowed
+RunInBackground=1
+```
+
+With NoActivate enabled, the display stays windowed and non-topmost, including
+Direct3D creation/reset fallback attempts. The window is created with
+`WS_EX_NOACTIVATE`; show/position calls are made nonactivating. A CBT hook on each
+creation thread vetoes activation and keyboard focus, including calls made
+inside Direct3D or through dynamically resolved APIs. Its chained window
+procedure rejects mouse activation, protects the extended style, and keeps
+position/show operations at the bottom of the z-order. Every suppression writes
+`test: NoActivate suppressed ...` with the HWND and thread ID. The original
+activation/lifecycle/paint messages still reach the engine. The keyboard uses
+background/nonexclusive cooperation and is cleared while another application
+has the foreground; pipe input remains available when explicitly enabled.
+
+`RunInBackground` retains its existing meaning: use `1` to continue the render
+loop. NoActivate does not silently override an explicit `RunInBackground=0`.
+If the CBT hook cannot be installed, creation of the game window is refused and
+logged rather than opening an unprotected test window.
+
+The `xml2_no_activate_test` native host tests the production callbacks using a
+fake API dispatch, then verifies the Win32 veto on a synthetic window on a
+private, never-displayed desktop. It never launches a game or sends desktop
+input. It tests the suppression mechanisms; the historical live focus blips
+cannot be attributed to a particular caller without a separate authorized live
+run.

@@ -22,6 +22,11 @@ target_include_directories(xml2_economy_digest_rules_test PRIVATE src)
 add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
 add_compile_options(/W4 /permissive- /utf-8)
 
+add_executable(xml2_no_activate_test test/no_activate_test.cpp)
+target_include_directories(xml2_no_activate_test PRIVATE src)
+target_compile_options(xml2_no_activate_test PRIVATE /UNDEBUG)
+target_link_libraries(xml2_no_activate_test PRIVATE user32)
+
 # lcsave: the LC save format and the old-save converter (C++ translation of legends-classic tools/lcsave).
 add_library(lcsave STATIC
 	src/lcsave/keys.cpp
@@ -115,6 +120,7 @@ add_library(xml2_fix SHARED
 	src/plugin_scan.cpp
 	src/mod_loader.cpp
 	src/display.cpp
+	src/no_activate.cpp
 	src/display_settings.cpp
 	src/frame_rate.cpp
 	src/options_menu.cpp
