@@ -59,6 +59,7 @@
 #include "objective_text.hpp"
 #include "discord_presence.hpp"
 #include "display.hpp"
+#include "no_activate.hpp"
 #include "forced_teams.hpp"
 #include "script_functions.hpp"
 #include "solo_mode.hpp"
@@ -224,6 +225,7 @@ namespace
 		// E12: XMen2.exe's address space - the 2 GB guard when the build's exe is large-address-aware, and the crash
 		// line in this log. First, before anything here allocates: refuses nothing, changes no game behaviour.
 		address_space::install(game);
+		no_activate::install(game); // also protects startup notices; before display/title save their imports
 		input_worker::install(game);
 		// The button prompts: the pad's names for a player on a pad, the power wheel's buttons of play. Code and
 		// data the game runs from its first menu on; none of the sites is another module's.

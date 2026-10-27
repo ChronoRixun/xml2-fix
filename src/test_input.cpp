@@ -1,5 +1,6 @@
 #include "anim_enums.hpp"
 #include "test_input.hpp"
+#include "no_activate.hpp"
 #include "pool_counters.hpp"
 #include "test_state.hpp"
 #include "test_mode.hpp"
@@ -291,7 +292,7 @@ namespace test_input
 
 		HRESULT STDMETHODCALLTYPE hooked_set_cooperative_level(void* self, const HWND window, const DWORD flags)
 		{
-			if (!enabled || !is_keyboard(self))
+			if ((!enabled && !no_activate::enabled()) || !is_keyboard(self))
 			{
 				const HRESULT result = real_set_cooperative_level(self, window, flags);
 				if (SUCCEEDED(result) && is_keyboard(self)) test_mode::watch_window(window);
@@ -303,6 +304,7 @@ namespace test_input
 			logger::write("test: keyboard cooperative level %lX -> %lX (background, non-exclusive): %s", flags, ours, SUCCEEDED(result) ? "ok" : "refused");
 			if (FAILED(result))
 			{
+				if (no_activate::enabled()) return result; // never restore foreground-only cooperation in isolation mode
 				return real_set_cooperative_level(self, window, flags); // the game's own, as if we weren't here
 			}
 			return result;
@@ -728,7 +730,7 @@ namespace test_input
 
 	void hook_direct_input8(void* direct_input)
 	{
-		if ((!enabled && !test_mode::hotkeys_enabled()) || !direct_input)
+		if ((!enabled && !no_activate::enabled() && !test_mode::hotkeys_enabled()) || !direct_input)
 		{
 			return;
 		}

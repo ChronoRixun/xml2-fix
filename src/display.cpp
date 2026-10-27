@@ -1,4 +1,5 @@
 #include "display.hpp"
+#include "no_activate.hpp"
 #include "pool_counters.hpp"
 #include "d3d8_min.hpp"
 #include "display_rules.hpp"
@@ -453,6 +454,7 @@ namespace display
 
 		HRESULT STDMETHODCALLTYPE hooked_reset(void* self, d3d8::present_parameters* pp)
 		{
+			if (pp) no_activate::presentation(*pp, "D3D8 Reset exclusive parameters");
 			if (!pp || stock_fallback)
 			{
 				return real_reset(self, pp);
@@ -482,7 +484,7 @@ namespace display
 			}
 			const d3d8::present_parameters guaranteed =
 			    opts.window_mode == mode::fullscreen && !requested.windowed && d3d ? desktop_mode_fallback(d3d, requested) : requested;
-			const HRESULT result = apply_with_fallbacks([&](d3d8::present_parameters& pp_to_use) { return real_reset(self, &pp_to_use); }, wanted, requested,
+			const HRESULT result = apply_with_fallbacks([&](d3d8::present_parameters& pp_to_use) { no_activate::presentation(pp_to_use, "D3D8 Reset fallback"); return real_reset(self, &pp_to_use); }, wanted, requested,
 			                                            opts.window_mode == mode::fullscreen && !requested.windowed && d3d ? &guaranteed : nullptr, "reset", true);
 			if (SUCCEEDED(result))
 			{
@@ -500,6 +502,7 @@ namespace display
 		HRESULT STDMETHODCALLTYPE hooked_create_device(void* self, const UINT which, const DWORD type, const HWND focus, const DWORD engine_behaviour,
 		                                               d3d8::present_parameters* pp, void** out)
 		{
+			if (pp) no_activate::presentation(*pp, "D3D8 CreateDevice exclusive parameters");
 			// The simulation's x87 word is XMen2.exe's 53-bit one only while Direct3D preserves it: the engine asks for
 			// D3DCREATE_FPU_PRESERVE (alchemy.ini preserveFPU, true unless edited), and the fix keeps it set, because the
 			// lockstep weapon brain runs the game's routines under exactly that word (det_math::game_x87_cw).
@@ -535,7 +538,7 @@ namespace display
 			const bool fullscreen = opts.window_mode == mode::fullscreen && !requested.windowed;
 			const auto guaranteed = fullscreen ? desktop_mode_fallback(self, requested) : requested;
 			const HRESULT result = apply_with_fallbacks(
-				[&](d3d8::present_parameters& pp_to_use) { return real_create_device(self, which, type, focus, behaviour, &pp_to_use, out); },
+				[&](d3d8::present_parameters& pp_to_use) { no_activate::presentation(pp_to_use, "D3D8 CreateDevice fallback"); return real_create_device(self, which, type, focus, behaviour, &pp_to_use, out); },
 				wanted, requested, fullscreen ? &guaranteed : nullptr, "device creation", false);
 			if (FAILED(result) || !*out)
 			{
@@ -1355,6 +1358,12 @@ namespace display
 	void install(const HMODULE game)
 	{
 		opts = read_options();
+		if (no_activate::enabled())
+		{
+			opts.window_mode = mode::windowed;
+			opts.topmost = false;
+			logger::write("test: NoActivate keeps the D3D device windowed and Topmost off; RunInBackground=%u", opts.run_in_background);
+		}
 		const bool caps_frames = frame_rate_rules::disables_stock_cap(opts.frame_rate);
 
 		desktop = current_desktop();
