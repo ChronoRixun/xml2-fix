@@ -31,6 +31,9 @@
 #include "entity_capacity.hpp"
 #include "address_space.hpp"
 #include "native_save_layout.hpp"
+#include "xml1_economy.hpp"
+#include "xml1_economy_digest.hpp"
+#include "xml1_roll.hpp"
 #include "test_input_rules.hpp"
 
 #define DIRECTINPUT_VERSION 0x0800
@@ -535,9 +538,10 @@ namespace test_input
 			// fps: Presents counted over the last full second (0 until then), so a frame cap can be
 			// checked from a script. Then the engine tables' use, live/cap ([Limits], limits.hpp).
 			const auto layout = native_save_layout::status();
+			const auto economy = xml1_economy::status();
 			return "ok XML2 Fix " FIX_VERSION "; keyboard devices " + std::to_string(devices) + "; reads " + std::to_string(reads.load()) + "; keys held " +
 			       std::to_string(held) + "; " + pad_input::status() + "; game " + (game_in_foreground() ? "has" : "doesn't have") + " the focus; fps " +
-			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + anim_enums::status() + "; " + limits::status() + "; " + model_pools::status() + "; " + geometry_sharing::status() + "; " + ladder_paths::status() + "; " + break_rule::status() + "; " + placement_crush::status() + "; " + world_impact::status() + "; " + double_heal::status() + "; " + world_backfaces::status() + "; " + xml1_cling::status() + "; " + xml1_rogue_decide::status() + "; " + xml1_grab_carry::status() + "; " + lift_rule::status() + "; " + combo_heads::status() + "; " + pack_amount::status() + "; " + save_format::status() + "; " + balance::status() + "; " + entity_capacity::status() + (layout.empty() ? "" : "; " + layout) + "; memory " + address_space::status() + "; " + test_mode::status();
+			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + anim_enums::status() + "; " + limits::status() + "; " + model_pools::status() + "; " + geometry_sharing::status() + "; " + ladder_paths::status() + "; " + break_rule::status() + "; " + placement_crush::status() + "; " + world_impact::status() + "; " + double_heal::status() + "; " + world_backfaces::status() + "; " + xml1_cling::status() + "; " + xml1_rogue_decide::status() + "; " + xml1_grab_carry::status() + "; " + lift_rule::status() + "; " + combo_heads::status() + "; " + pack_amount::status() + "; " + save_format::status() + "; " + balance::status() + "; " + entity_capacity::status() + (layout.empty() ? "" : "; " + layout) + (economy.empty() ? "" : "; " + economy) + "; memory " + address_space::status() + "; " + test_mode::status();
 		}
 
 		std::string handle(const std::string& line)
@@ -601,6 +605,10 @@ namespace test_input
 				if (cmd.text.find("high") != std::string::npos) logger::write("test: memory%s -> %s", cmd.text.c_str(), reply.c_str());
 				return reply;
 			}
+			case command::kind::economy:
+				if(cmd.text.empty()||cmd.text=="status")return xml1_economy::status();
+				if(cmd.text=="rolls")return xml1_economy::roller::recent_rolls();
+				return xml1_economy::digest::pipe(cmd.text);
 			case command::kind::mouse:
 			{
 				using action = command::pointer_action;
@@ -709,6 +717,7 @@ namespace test_input
 			logger::write("test: [Test] %s - using %s", pipe.error.c_str(), pipe.name.c_str());
 		}
 		pipe_path = pipe.path;
+		xml1_economy::digest::enable();
 
 		read_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 		capture_done = CreateEventW(nullptr, FALSE, FALSE, nullptr);

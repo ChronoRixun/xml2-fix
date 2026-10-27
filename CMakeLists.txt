@@ -7,9 +7,17 @@ endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>") # no VC++ redistributable needed
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin") # the test runs next to the DLL
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+add_executable(xml2_economy_rules_test test/xml1_economy_rules_test.cpp)
+target_include_directories(xml2_economy_rules_test PRIVATE src)
+add_executable(xml2_grab_bag_rules_test test/xml1_grab_bag_rules_test.cpp)
+target_include_directories(xml2_grab_bag_rules_test PRIVATE src)
+add_executable(xml2_economy_digest_rules_test test/xml1_economy_digest_rules_test.cpp)
+target_include_directories(xml2_economy_digest_rules_test PRIVATE src)
 
 add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
 add_compile_options(/W4 /permissive- /utf-8)
@@ -31,6 +39,7 @@ add_library(lcsave STATIC
 	src/lcsave/api_engine.cpp
 	src/lcsave/typed_registry.cpp)
 target_include_directories(lcsave PUBLIC src/lcsave)
+target_link_libraries(xml2_economy_rules_test PRIVATE lcsave)
 
 # The fix: a drop-in dinput.dll for the game folder.
 add_library(xml2_fix SHARED
@@ -160,6 +169,12 @@ add_library(xml2_fix SHARED
 	src/item_capacity.cpp
 	src/save_limits.cpp
 	src/native_save_layout.cpp
+	src/xml1_economy.cpp
+	src/xml1_economy_prices.cpp
+	src/xml1_economy_shop.cpp
+	src/xml1_economy_digest.cpp
+	src/xml1_grab_bag.cpp
+	src/xml1_roll.cpp
 	src/smart_entities.cpp
 	src/entity_owners.cpp
 	src/entity_transfer.cpp
@@ -278,7 +293,7 @@ target_include_directories(xml2_stat_help_test PRIVATE src)
 
 # lcsave: the reference's test vectors, the real-save corpus against the Python outputs (folders given on the
 # command line), and a fuzz of the readers.
-add_executable(lcsave_test test/lcsave_test.cpp test/lcsave_vectors.cpp)
+add_executable(lcsave_test test/lcsave_test.cpp test/lcsave_vectors.cpp test/lcsave_rebuilt_corpus.cpp)
 target_link_libraries(lcsave_test PRIVATE lcsave)
 # The per-zone save-compatibility release gate (scripts/zone_records_gate.py): applied zone records of real saves on
 # a real build's tables (no engine, no game). Takes arguments; run_native.py does not run it.
@@ -855,6 +870,22 @@ target_link_options(xml2_save_manager_test PRIVATE /BASE:0x400000 /DYNAMICBASE:N
 add_executable(xml2_item_capacity_test test/item_capacity_test.cpp src/item_capacity.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
 target_include_directories(xml2_item_capacity_test PRIVATE src)
 target_link_options(xml2_item_capacity_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_economy_test test/xml1_economy_test.cpp src/xml1_economy.cpp src/xml1_economy_prices.cpp src/xml1_economy_shop.cpp src/xml1_economy_digest.cpp src/xml1_grab_bag.cpp src/xml1_roll.cpp src/item_capacity.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_economy_test PRIVATE src)
+target_link_libraries(xml2_economy_test PRIVATE lcsave)
+target_link_options(xml2_economy_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_roll_rules_test test/xml1_roll_rules_test.cpp)
+target_include_directories(xml2_roll_rules_test PRIVATE src)
+
+add_executable(xml2_roll_test test/xml1_roll_test.cpp src/xml1_roll.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_roll_test PRIVATE src)
+target_link_options(xml2_roll_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_dr_reward_test test/xml1_dr_reward_test.cpp src/xml1_roll.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_dr_reward_test PRIVATE src)
+target_link_options(xml2_dr_reward_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
 add_executable(xml2_save_limits_test test/save_limits_test.cpp src/save_limits.cpp src/objective_text.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
 target_include_directories(xml2_save_limits_test PRIVATE src)

@@ -163,6 +163,12 @@ namespace lcsave
 	Result convert_old_to_new(const std::vector<std::uint8_t>& old_file, const Tables& tables);
 	Result convert_old_to_new(const std::vector<std::uint8_t>& old_file, const Tables& tables, const ConvertOptions& options);
 
+	// Runtime rule-52 verification predicate. Default is absent (migration disabled); the economy
+	// installer binds its live verified state after agreement registration. The callback must outlive loads.
+	// This is converter policy only: catalogue attributes alone never enable the migration.
+	void set_xml1_economy_verifier(bool (*verified)());
+	bool item_own_rebuilt_enabled();
+
 	// LC campaign file -> the internal stream the engine's loader reads (convert.reverse_slot through the running
 	// build's tables): the whole old slot image, 0x84 + 0x2fc00 bytes (description + length + payload); the payload
 	// alone is bytes [0x84, end). Dropped fields are written as zero. Zone records whose placement file changed are

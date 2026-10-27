@@ -274,6 +274,20 @@ Rule 50 (`ResidentStats`, `[Limits] ResidentStats=320`) revision 1 advertises `{
 
 `[Limits] FightStyles` (20..127; stock 19) contributes rule 35 with values `{N,0,0,0}`: revision 1 through 32, revision 2 above 32 for multiword bitmap clears. `[Limits] StyleEvents` (1065..8192; stock 1064) contributes assigned rule 53, revision 1, values `{E,0,0,0}`. Each successful key is requested-only. Both absent/stock add neither rule. Because both capacities occupy one allocation, an invalid key or failed transaction leaves both unchanged and registers both rules unverified, including the otherwise absent partner. Mismatches refuse both directions and name FightStyles or StyleEvents, also when locally disabled. See [fight-styles.md](fight-styles.md) and [style-events.md](style-events.md).
 
+Rule52 Xml1Economy is requested only by `[Game] Xml1Economy=1`, revision1.
+Its four values are `{parts, sidecar format revision, digest prefix, entry count}`.
+Construction and drops install parts **33** for zero-draw plan A (**1** for the
+accepted native one-roll fallback), format **1**, the first four body SHA-256
+bytes packed little endian, and the resolved sidecar count. Mask1 covers the
+roller, category, treasure, DR/regeneration dispositions and census; mask32
+selects plan A. Masks2/4/8/16 remain clear for the later economy steps.
+It requires verified rule47. The shared record remains unfrozen and online closed
+until the item table loads and every sidecar name resolves in PC definition-index
+order. Any refusal registers the requested rule unverified and closes host/join;
+an absent/false key adds no entry and preserves the released OFF digest. A peer
+differing in any value is refused naming **52 Xml1Economy**. See
+[XML1 economy](xml1-economy.md) for sites, sidecar contract and tests.
+
 Rule47 NativeSaveLayout is assigned to W2, revision1. It registers only for
 verified `[Save] Format=lc`, `[Limits] EntityCapacity=1`, `SaveLayout=w2`; failed
 requests poison admission. Effective values are

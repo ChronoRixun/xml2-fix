@@ -31,6 +31,7 @@ cmds = [[str(b / "xml2_test.exe"), flag] for flag in flags]
 if "--plain" in sys.argv:
     cmds.append([str(b / "xml2_test.exe")])
 with_exe = {
+    "xml2_roll_test", "xml2_dr_reward_test",
     "xml2_gns_transport_test", "xml2_confirmation_release_test", "xml2_objective_text_test",
     "xml2_save_limits_test", "xml2_item_capacity_test", "xml2_entity_grid_test", "xml2_entity_world_test", "xml2_entity_frames_test",
     "xml2_entity_query_test", "xml2_entity_transfer_test", "xml2_gameplay_agreement_test",
@@ -54,7 +55,7 @@ skip = {
     "xml2_test", "lcsave_durable_parity", "lcsave_test", "xml2_save_startup_test", "lcsave_zone_records",
     "xml2_danger_room_party_install_test", "xml2_lockon_effects_install_test",
     "xml2_danger_room_healthbars_install_test", "xml2_speaker_label_install_test", "xml2_classic_hud_install_test",
-    "xml2_codex_back_install_test", "xml2_resistance_display_install_test",
+    "xml2_codex_back_install_test", "xml2_resistance_display_install_test", "xml2_economy_test",
 }
 for exe in sorted(b.glob("*.exe")):
     name = exe.stem
@@ -62,6 +63,7 @@ for exe in sorted(b.glob("*.exe")):
         cmds.append(([str(exe), EXE] + ([XBE] if name in with_xbe else [])) if name in with_exe else [str(exe)])
 cmds.append([str(b / "lcsave_test.exe"), "--fuzz", "2000"])
 cmds += [[str(b / "xml2_script_pools_test.exe"), EXE, mode] for mode in ("invalid", "owner", "guard", "functions")]
+cmds.append([str(b / "xml2_x1_leader_test.exe"), "economy"])
 vectors = Path(_need("XML2_FIX_LEGACY_VECTORS_DIR"))
 for directory in sorted(p for p in vectors.iterdir() if p.is_dir() and (p / "cases.tsv").exists()):
     cmds.append([str(b / "lcsave_durable_parity.exe"), str(directory)])
@@ -89,6 +91,10 @@ for name,modes in mode_suites.items():
     cmds += [[str(b / (name + ".exe")), EXE, mode] for mode in modes]
 cmds += [[str(b / "xml2_effect_pools_test.exe"), EXE, mode] for mode in ("refuse-vector", "refuse-primitive")]
 installer_modes |= {"xml2_effect_pools_test"}
+# 0.4.2 integration: the XML1 economy fixture runs once per mode (loot/digest's matrix), tagged by mode.
+economy_modes = ("A", "1roll", "prices", "shop", "bag", "digest", "off", "zero", "prerequisite", "sidecar", "missingfile", *(f"guard{i}" for i in range(34)), "bag-pre-guard", "prices-pre-guard", "shop-pre-guard", "digest-pre-guard", "legacy-count", "legacy-pick", "rollback", "rollback-failed", "unresolved")
+cmds += [[str(b / "xml2_economy_test.exe"), EXE, mode] for mode in economy_modes]
+installer_modes |= {"xml2_economy_test"}
 
 if LIST_ONLY:
     # The command matrix only: for checking the runner against another gate's matrix. Everything above only reads.

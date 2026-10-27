@@ -1,5 +1,50 @@
 # Local gate scripts
 
+XML1 economy foundation adds `xml2_economy_rules_test` and the mapped-retail
+`xml2_economy_test` modes run by `run_native.py`. The read-only constructor
+census is `python scripts/check_xml1_economy_text.py <retail exe>`. The existing
+`prove_w2_step3_off.py` comparison accepts `XML2_FIX_OFF_CASE=w2` or `w2zero`
+to compare an exact baseline DLL with this DLL while W2 remains enabled and
+Xml1Economy is absent or explicitly zero; include pages `47b000` and `480000`
+in its page list. Both configurations must retain the baseline agreement and
+every watched byte after named relocation normalization. See
+`docs/xml1-economy.md` for the rule and constructor contract.
+
+`python scripts/check_xml1_economy_startup.py <union_host.exe> <DLL directory>
+<retail.exe> <engine directory> <output directory>` checks the actual DLL's
+missing-W2, missing-sidecar and valid-sidecar-before-table cases. It requires
+the DLL's `/MAP` file, checks both hook sites and unavailable admission, keeps
+Discord off, and verifies that the registry stayed unchanged. In particular,
+economy preparation must run before `entity_capacity::contribute()` consumes
+the W2 prepared-state marker.
+
+With `UNION_CODE_OUT`, the host also dumps W2's guarded RW backings. The OFF
+comparison pairs them by referring instruction and compares every initial
+byte before accepting a relocated data operand; indexed absolute operands
+and conditional refusal branches are included. This allows the W2-enabled
+comparison to cover the full supplied page manifest as well as the economy
+pages.
+
+The host's `UNION_IMAGE_OUT` pre-patch capture supplies all four bytes of a
+touched import slot before sparse write-log bytes are applied. This handles a
+callback byte that already equalled the resolved system import byte; untouched
+imports retain the raw retail bytes to avoid unrelated loader relocation.
+Named callback/addend checks still apply. The synthetic regression is
+`python -B scripts/test_prove_w2_step3_off.py`.
+
+`xml2_economy_rules_test --builder <build-folder>` additionally checks a final
+loot builder output through the C++ sidecar and catalogue/bind readers: 131
+rows (including inert flags-zero rows), absent pack costs, equipment vendors,
+the noaward helmet, PC definition order, and the catalogue's 19 ITEM attribute
+mask-0x1 markers against sidecar rebuilt mask 0x4. This mode only reads the build.
+
+`xml2_economy_test <retail-exe> shop` covers Forge reconcile/catalog/pool budgets,
+Healer synthetic rows, two-tab navigation/setup, Training refusal before debit
+and at all three service calls, rare style, stash preservation and rule-52 parts
+4/16 mismatch refusal. `run_native.py` includes this mode, 25 guard mutations,
+preparation refusal and full-image rollback. The read-only static shop gate is
+`python scripts/check_xml1_economy_shop_text.py <retail-exe>`. The production
+startup script also checks all 14 shop hook states.
 These scripts run the native, startup and OFF-proof gates on a developer PC (`run_native.py --list` prints its command matrix without running anything). They never launch the game. Machine-specific
 inputs come from environment variables; the scripts stop with a message when a required value is missing (the proof scripts use Python environment lookup):
 
@@ -138,3 +183,17 @@ For all three absent-key OFF configurations, run the existing proof with
 XML2_FIX_OFF_CASE=e10a2 (default), retail, or native. Use build/step8-pages.txt;
 the reference is build/step8-baseline. The proof's union hosts use private
 desktops and compare symbols/relocations plus complete generated allocations.
+
+XML1 economy drops (step3b, no game process): build `xml2_roll_rules_test`,
+`xml2_roll_test`, `xml2_dr_reward_test`, `xml2_economy_test` and
+`xml2_x1_leader_test`. The first is the 100,000-roll XBE oracle differential;
+the mapped-retail fixtures receive the owned executable as their first argument.
+Run the leader fixture both without arguments and with `economy` to cover both
+installer modes. `scripts/run_native.py` includes these cases and requires the
+usual EXE/XBE/game-directory/writable-vector environment variables above.
+Run `python -B scripts/check_xml1_roll_text.py <owned-retail-exe>` for guards,
+static caller census and unchanged placement/DR branch contracts.
+The production DLL startup check and full W2 OFF proof remain applicable.
+The latter must compare against the committed 3a DLL/map, include all roller
+pages, and run absent-key and explicit-zero cases. Outputs belong in a local
+work folder; never add binary fixtures, source game assets or listings to git.

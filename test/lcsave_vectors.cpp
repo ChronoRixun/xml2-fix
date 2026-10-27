@@ -1053,6 +1053,173 @@ namespace
 
 	}
 
+	// Rule 52 part64: the loader replaces only rebuilt definitions' own lists.
+	void test_rebuilt_own(const fs::path& folder)
+	{
+		auto t = make_tables(folder, "sh_might", false);
+		Tables tables; tables.data = t;
+		auto model = make_old_save();
+		const auto reward = instance(0, {{4, 0x3f400000}, {5, 0x3e800000}}, {{1, 0x3f000000}}, {{2, 0x3f800000}}, 0, 0, 0, 5);
+		model.carried[2] = reward; // special name, location=stash (5); quantity belongs to DEFSTATE
+		model.world[0].instance = reward;
+		model.restore[1].equipment.equipped = {reward};
+		model.items.def_state[0] = 7;
+		model.items.def_state[1] = 9; // obtained bit plus another state bit
+		const auto converted = convert_old_to_new(write_slot(model), tables);
+		check(converted.ok, "rebuilt synthetic old save imports");
+		if (!converted.ok) return;
+		const auto plain = new_to_old_stream(converted.bytes, tables);
+		check(plain.ok && !item_own_rebuilt_enabled(), "rebuilt migration defaults OFF");
+		if (!plain.ok) return;
+		auto* entry = const_cast<CatEntry*>(t->catalogue.entry_of(t->build->T.ITEM[0]));
+		entry->attributes = ITEM_OWN_REBUILT;
+		t->build->T.ITEM_own[0] = {t->build->T.ENHC[5], t->build->T.ENHC[4]}; // native slot order, not sorted
+		const auto disabled = new_to_old_stream(converted.bytes, tables);
+		check(disabled.ok && disabled.bytes == plain.bytes, "catalogue attribute without verified rule52 is byte-identical OFF");
+		static bool verified = false;
+		set_xml1_economy_verifier(+[] { return verified; });
+		check(!item_own_rebuilt_enabled() && new_to_old_stream(converted.bytes, tables).bytes == plain.bytes,
+			"requested but unverified rule52 keeps exact loader bytes");
+		verified = true;
+		const auto migrated = new_to_old_stream(converted.bytes, tables);
+		check(migrated.ok && item_own_rebuilt_enabled(), "verified rule52 enables rebuilt migration");
+		auto expected = read_slot(plain.bytes.data(), plain.bytes.size());
+		unsigned count = 0;
+		auto rebuild = [&](OldInstance& i)
+		{
+			if (i.head.definition == 0) { i.lists[1] = {{5, 0}, {4, 0}}; ++count; }
+		};
+		for (auto& i : expected.carried) rebuild(i);
+		for (auto& w : expected.world) rebuild(w.instance);
+		for (auto& h : expected.heroes) for (auto& i : h.equipment.equipped) rebuild(i);
+		for (auto& r : expected.restore) for (auto& i : r.equipment.equipped) rebuild(i);
+		check(count == 4 && migrated.bytes == write_slot(expected),
+			"four rebuilt instances: equipped/carried/stash/world/restore, native slot order; affixes/names/location/quantity/state/obtained and all other bytes kept");
+		if (migrated.ok)
+		{
+			NewFileContext context; context.description = "desc";
+			const auto saved = old_stream_to_new(std::vector<u8>(migrated.bytes.begin() + old_envelope, migrated.bytes.end()), tables, context);
+			const auto loaded = new_to_old_stream(saved.bytes, tables);
+			check(saved.ok && loaded.ok && loaded.bytes == migrated.bytes, "rebuilt load-save-load fixed point");
+		}
+		entry->attributes = 2; // unrelated catalogue attribute
+		check(new_to_old_stream(converted.bytes, tables).bytes == plain.bytes, "unmarked legacy equipment is byte-identical with economy verified");
+		entry->attributes = ITEM_OWN_REBUILT;
+		t->build->T.ITEM_own[0] = {t->build->T.ENHC[6]}; // old own records no longer belong to this definition
+		check(new_to_old_stream(converted.bytes, tables).ok, "replace old own list before validating current definition ownership");
+		t->build->T.ITEM_own[0].clear();
+		const auto empty = new_to_old_stream(converted.bytes, tables);
+		check(empty.ok && read_slot(empty.bytes.data(), empty.bytes.size()).carried[2].lists[1].empty(),
+			"rebuilt zero-record definition also clears special item's old own list");
+		t->build->T.ITEM_own[0].assign(8, t->build->T.ENHC[4]);
+		const auto eight = new_to_old_stream(converted.bytes, tables);
+		check(eight.ok && read_slot(eight.bytes.data(), eight.bytes.size()).carried[2].lists[1].size() == 8, "all eight native own slots allowed");
+		t->build->T.ITEM_own[0].push_back(t->build->T.ENHC[4]);
+		const auto nine = new_to_old_stream(converted.bytes, tables);
+		check(!nine.ok && nine.bytes.empty() && contains(nine.error, "8 own records"), "oversized rebuilt own list refuses without output");
+		t->build->T.ITEM_own[0] = {0x03ffffff};
+		const auto unknown = new_to_old_stream(converted.bytes, tables);
+		check(!unknown.ok && unknown.bytes.empty() && contains(unknown.error, "enhancement"), "unmapped rebuilt record refuses without output");
+		t->build->T.ITEM_own[0] = {t->build->T.ENHC[5], t->build->T.ENHC[4]};
+		verified = false;
+		check(!item_own_rebuilt_enabled() && new_to_old_stream(converted.bytes, tables).bytes == plain.bytes,
+			"live verification loss immediately restores byte-identical OFF behavior");
+		set_xml1_economy_verifier(nullptr);
+		std::printf("rebuilt synthetic: 4 migrated instances, 14 checks\n");
+	}
+
+	void test_rebuilt_removed_records(const fs::path& folder)
+	{
+		auto t = make_tables(folder, "sh_might", false); Tables tables; tables.data = t;
+		const auto converted = convert_old_to_new(write_slot(make_old_save()), tables);
+		check(converted.ok, "removed-record fixture imports before definition rebuild");
+		if (!converted.ok) return;
+		const auto source = read_file(converted.bytes.data(), converted.bytes.size(), kind_campaign);
+		auto item = source.data("ITEM"); auto instances = item["instances"];
+		auto obsolete = Value::list();
+		obsolete.push(Value::dict({{"enhancement", Value::integer(0x03ffffff)}, {"value", Value::integer(0x3f400000)}}));
+		instances.as_list()[2].set("own", obsolete); item.set("instances", instances);
+		const auto input = rewrite_file(source, "ITEM", source.sections.at("ITEM").entry.minor, encode_section("ITEM", item));
+		auto* entry = const_cast<CatEntry*>(t->catalogue.entry_of(t->build->T.ITEM[0])); entry->attributes = ITEM_OWN_REBUILT;
+		set_xml1_economy_verifier(+[] { return true; });
+		t->build->T.ITEM_own[0] = {t->build->T.ENHC[5], t->build->T.ENHC[4]};
+		const auto shrunk = new_to_old_stream(input, tables);
+		check(shrunk.ok && read_slot(shrunk.bytes.data(), shrunk.bytes.size()).carried[2].lists[1].size() == 2,
+			"rebuilt shortened own list replaces an unmapped saved record before resolution");
+		t->build->T.ITEM_own[0].clear();
+		const auto empty = new_to_old_stream(input, tables);
+		check(empty.ok && read_slot(empty.bytes.data(), empty.bytes.size()).carried[2].lists[1].empty(),
+			"rebuilt zero-record definition ignores its removed saved own record");
+		instances.as_list()[2].set("prefixes", obsolete); item.set("instances", instances);
+		const auto bad_prefix = rewrite_file(source, "ITEM", source.sections.at("ITEM").entry.minor, encode_section("ITEM", item));
+		check(!new_to_old_stream(bad_prefix, tables).ok, "unmapped prefixes still refuse on rebuilt items");
+		entry->attributes = 0;
+		check(!new_to_old_stream(input, tables).ok, "unmarked item still refuses an unmapped own record");
+		entry->attributes = ITEM_OWN_REBUILT; set_xml1_economy_verifier(nullptr);
+		check(!new_to_old_stream(input, tables).ok, "rule52 OFF still refuses an unmapped saved own record");
+		std::printf("rebuilt removed records: 6 checks\n");
+	}
+
+	void test_rebuilt_equipment_class(const fs::path& folder)
+	{
+		auto t = make_tables(folder, "sh_might", false); Tables tables; tables.data = t;
+		auto model = make_old_save(); model.carried.assign(20, instance(2));
+		model.heroes[0].equipment.equipped = {instance(0, {{4, 7}}, {{1, 9}}, {{2, 5}}, 0xff, 0xff, 0xff, 1),
+			instance(1, {{6, 3}}, {}, {}, 0xff, 0xff, 0xff, 1), instance(3, {{7, 1}}, {}, {}, 0xff, 0xff, 0xff, 1)};
+		model.restore[1].equipment.equipped = {instance(0, {{4, 7}}, {}, {}, 0xff, 0xff, 0xff, 1)};
+		for (const unsigned d : {0u, 1u, 3u}) { model.items.def_state[2*d] = 7; model.items.def_state[2*d+1] = 9; }
+		const auto converted = convert_old_to_new(write_slot(model), tables);
+		check(converted.ok, "class-change fixture imports with legacy belt/gloves/armor"); if (!converted.ok) return;
+		const auto baseline = new_to_old_stream(converted.bytes, tables); check(baseline.ok, "class-change baseline loads"); if (!baseline.ok) return;
+		for (const unsigned d : {0u, 1u, 3u}) const_cast<CatEntry*>(t->catalogue.entry_of(t->build->T.ITEM[d]))->attributes = ITEM_OWN_REBUILT;
+		t->build->T.ITEM_cat[0] = t->build->T.ITEM_cat[3] = 2; // historical belt and armor now gloves
+		t->catalogue.revision = 8; // actual catalogue that first marks the 19 rebuilt rewards
+		const auto off = new_to_old_stream(converted.bytes, tables);
+		check(off.ok && off.bytes == baseline.bytes, "rule52 OFF keeps worn reward bytes unchanged");
+		set_xml1_economy_verifier(+[] { return true; });
+		const auto moved = new_to_old_stream(converted.bytes, tables);
+		check(moved.ok, "class-change migration loads without loss");
+		if (moved.ok)
+		{
+			const auto loaded = read_slot(moved.bytes.data(), moved.bytes.size());
+			check(loaded.carried.size() == 23 && loaded.heroes[0].equipment.equipped.size() == 1 &&
+				loaded.heroes[0].equipment.equipped[0].head.definition == 1 && loaded.restore[1].equipment.equipped.empty(),
+				"legacy belt/armor and restore reward move to carried even above twenty; fitting gloves stay equipped");
+			check(loaded.carried.size() == 23 && loaded.carried[20].head.definition == 0 && loaded.carried[21].head.definition == 3 &&
+				loaded.carried[22].head.definition == 0 && loaded.carried[20].head.location == 2 &&
+				loaded.carried[21].head.location == 2 && loaded.carried[22].head.location == 2,
+				"relocated instances retain order and gain carried location 2");
+			check(std::equal(std::begin(loaded.items.def_state), std::end(loaded.items.def_state), std::begin(model.items.def_state)) && loaded.carried.size() == 23 &&
+				loaded.carried[20].lists[0].size() == 1 && loaded.carried[20].lists[0][0].value == 9 &&
+				loaded.carried[20].lists[2].size() == 1 && loaded.carried[20].lists[2][0].value == 5,
+				"relocation preserves quantity/obtained/state and both affixes");
+			std::size_t notes = 0, at = 0; while ((at = moved.ledger.find("moved to carried", at)) != std::string::npos) { ++notes; at += 16; }
+			check(notes == 3, "one relocation ledger note per moved instance");
+			NewFileContext context; context.description = "desc";
+			const auto saved = old_stream_to_new(moved.bytes, tables, context);
+			const auto again = new_to_old_stream(saved.bytes, tables);
+			check(saved.ok && again.ok && again.bytes == moved.bytes && again.ledger.find("moved to carried") == std::string::npos,
+				"class relocation load-save-load fixed point has no repeated notes");
+			const auto imported = convert_old_to_new(write_slot(model), tables);
+			const auto imported_loaded = new_to_old_stream(imported.bytes, tables);
+			check(imported.ok && imported_loaded.ok && read_slot(imported_loaded.bytes.data(), imported_loaded.bytes.size()).carried.size() == 23,
+				"retail import against catalogue8 still recovers historical worn classes without importer changes");
+			if (loaded.carried.size() < 23) { set_xml1_economy_verifier(nullptr); return; } // keep the failing vector safe
+			// A current-catalogue save can equip the rebuilt gloves normally; later catalogue growth must not undo it.
+			auto current = loaded; current.heroes[0].equipment.equipped = {current.carried[20]};
+			current.heroes[0].equipment.equipped[0].head.location = 1; current.carried.erase(current.carried.begin()+20);
+			const auto equipped = old_stream_to_new(write_slot(current), tables, context);
+			t->catalogue.revision = 9;
+			const auto equipped_again = new_to_old_stream(equipped.bytes, tables);
+			check(equipped.ok && equipped_again.ok &&
+				read_slot(equipped_again.bytes.data(), equipped_again.bytes.size()).heroes[0].equipment.equipped.size() == 1 &&
+				equipped_again.ledger.find("moved to carried") == std::string::npos,
+				"catalogue8 and later saves keep newly equipped rebuilt gloves, including after catalogue growth");
+		}
+		set_xml1_economy_verifier(nullptr);
+		std::printf("rebuilt equipment class: 11 checks\n");
+	}
+
 	// the API on the synthetic tables: missing talents, the saver's direction, dump of both formats
 	void test_api(const fs::path& folder)
 	{
@@ -2484,6 +2651,9 @@ void run_vectors(const fs::path& scratch)
 	test_convert(scratch / "convert");
 	test_talent_era(scratch / "era");
 	test_api(scratch / "api");
+	test_rebuilt_own(scratch / "rebuilt");
+	test_rebuilt_removed_records(scratch / "rebuilt-removed");
+	test_rebuilt_equipment_class(scratch / "rebuilt-class");
 	test_capture_twins(scratch / "twins");
 	test_zone_prefix_review(scratch / "zone-prefix-review");
 	test_review_resets(scratch / "review");

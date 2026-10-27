@@ -257,6 +257,10 @@ namespace lcsave::detail
 		const ZoneDelta* zone_map(u32 zone) const;
 	};
 
+	inline constexpr u32 ITEM_OWN_REBUILT = 0x1; // catalogue attribute (distinct from sidecar flag 0x4)
+	// Existing catalogue revision that introduced rebuilt reward classes; a migration boundary, not a new identity.
+	inline constexpr u32 item_own_rebuilt_catalogue_revision = 8;
+
 	struct CatEntry
 	{
 		unsigned domain = 0;

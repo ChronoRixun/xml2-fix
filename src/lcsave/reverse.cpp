@@ -5,9 +5,29 @@
 #include "internal.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <set>
+
+namespace
+{
+	std::atomic<bool (*)()> economy_verifier{nullptr};
+}
+
+namespace lcsave
+{
+	bool item_own_rebuilt_enabled()
+	{
+		const auto verify = economy_verifier.load(std::memory_order_acquire);
+		return verify != nullptr && verify();
+	}
+
+	void set_xml1_economy_verifier(bool (*verified)())
+	{
+		economy_verifier.store(verified, std::memory_order_release);
+	}
+}
 
 namespace lcsave::detail
 {
@@ -121,12 +141,13 @@ namespace lcsave::detail
 			const TablesData& t;
 			const Build& b;
 			const NativeLayout& native;
+			const bool rebuild_own;               // snapshot of the live verified rule-52 predicate
 			const bool probe;                     // the representability probe: definition indices are per build
 			const u32 definitions;                // the definition table the indices address
 
 			// Installed native arrays, independent of the LC reader's future-facing ceilings (SPEC 2.16).
 			Pos(const TablesData& tables, const Build& build, const NativeLayout& layout = retail_layout, bool probe_pass = false)
-				: t(tables), b(build), native(layout), probe(probe_pass), definitions(probe_pass ? max_definitions : layout.definitions)
+				: t(tables), b(build), native(layout), rebuild_own(item_own_rebuilt_enabled()), probe(probe_pass), definitions(probe_pass ? max_definitions : layout.definitions)
 			{
 				validate_native_tables(tables, probe ? w2_layout : native);
 			}
@@ -148,9 +169,12 @@ namespace lcsave::detail
 				inst.head.name_b = r["name_b"].truthy() ? narrow<u8>(get(t.p_namb, r["name_b"].as_int(), "item name"), 0, 3, "native category name index") : 0xff;
 				inst.head.special = r["special"].truthy() ? narrow<u8>(get(t.p_trit, r["special"].as_int(), "special item"), 0, 127, "native special item index") : 0xff;
 				inst.head.location = B(r["location"]);
+				const auto* entry = rebuild_own ? t.catalogue.entry_of(U(r["definition"])) : nullptr;
+				const bool rebuilt = entry && (entry->attributes & ITEM_OWN_REBUILT);
 				const char* const lists[3] = {"prefixes", "own", "suffixes"};
 				for (int k = 0; k < 3; ++k)
 				{
+					if (k == 1 && rebuilt) continue; // discarded saved own records may no longer have native mappings
 					for (const auto& e : r[lists[k]].as_list())
 					{
 						OldEnhElement el{};
@@ -160,6 +184,17 @@ namespace lcsave::detail
 					}
 				}
 				const auto& era = b.T;
+				if (rebuilt)
+				{
+					if (inst.head.definition >= era.ITEM_own.size()) fail("rebuilt definition has no own-record table");
+					const auto& own = era.ITEM_own[inst.head.definition];
+					if (own.size() > 8) fail("rebuilt definition exceeds 8 own records");
+					// ITEM_own is in native definition-slot order. Replace only the own list, even for
+					// special-name items; records are single-valued, so interpolation is the bits of 0.0f.
+					inst.lists[1].clear();
+					for (const auto id : own)
+						inst.lists[1].push_back({narrow<u16>(get(t.p_enh, id, "enhancement"), 0, 65535, "H"), 0});
+				}
 				if (r["name_b"].truthy())
 				{
 					const auto category = inst.head.definition < era.ITEM_cat.size() ? era.ITEM_cat[inst.head.definition] : 0;
@@ -173,6 +208,31 @@ namespace lcsave::detail
 				if (inst.head.special != 0xff && inst.head.special < era.TRIT_own.size()) allowed.insert(era.TRIT_own[inst.head.special].begin(), era.TRIT_own[inst.head.special].end());
 				for (const auto& e : inst.lists[1]) if (e.record >= era.ENHC.size() || !allowed.count(era.ENHC[e.record])) fail("own enhancement does not belong to definition");
 				return inst;
+			}
+
+			void relocate_equipment(OldEquipment& eq, std::vector<OldInstance>& carried, const EraTables& saved,
+				const std::string& owner, std::vector<std::string>& notes) const
+			{
+				// Equipped lists carry membership, not a slot number. In a legacy save the historical
+				// definition class identifies that slot. Preserve each displaced instance before native equip.
+				for (auto it = eq.equipped.begin(); it != eq.equipped.end();)
+				{
+					const auto d = it->head.definition;
+					const auto* entry = d < b.T.ITEM.size() ? t.catalogue.entry_of(b.T.ITEM[d]) : nullptr;
+					const auto old = entry ? std::find(saved.ITEM.begin(), saved.ITEM.end(), entry->id) : saved.ITEM.end();
+					const auto index = old == saved.ITEM.end() ? saved.ITEM_cat.size() : static_cast<std::size_t>(old - saved.ITEM.begin());
+					const auto old_class = index < saved.ITEM_cat.size() ? saved.ITEM_cat[index] : 0;
+					const auto current_class = d < b.T.ITEM_cat.size() ? b.T.ITEM_cat[d] : 0;
+					if (rebuild_own && entry && (entry->attributes & ITEM_OWN_REBUILT) && old != saved.ITEM.end() &&
+						old_class >= 1 && old_class <= 3 && current_class >= 1 && current_class <= 3 && old_class != current_class)
+					{
+						auto moved = *it; moved.head.location = 2; // carried, independently of the gameplay's pickup limit
+						carried.push_back(std::move(moved)); it = eq.equipped.erase(it);
+						static const char* const slots[] = {"", "belt", "gloves", "armor"};
+						notes.push_back("rebuilt reward " + b.item[d] + " moved to carried from " + owner + " " + slots[old_class] + " slot (class changed)");
+					}
+					else ++it;
+				}
 			}
 
 			void hero_block(const Value& h, OldAttributes& a, OldEquipment& eq) const
@@ -699,6 +759,12 @@ namespace lcsave::detail
 		const auto note = migration_note(migration);
 		if (!note.empty()) notes.push_back(note);
 		const auto& meta = f.data("META");
+		// The ordinary saver stamps catalogue8+ and native origin. A retail import still describes
+		// historical equipment even when imported against today's catalogue; no importer inference changes.
+		const bool old_equipment = pos.rebuild_own &&
+			(f.header.catalogue_revision < item_own_rebuilt_catalogue_revision || meta["origin"].as_int() == 1);
+		const auto* equipment_era = t.by_cv(static_cast<int>(f.header.content_version));
+		if (!equipment_era) equipment_era = &t.reference;
 		const auto description = meta["description"].as_text();
 		set_cstr(reinterpret_cast<char*>(m.description_raw), 0x80, description, meta["description"].enc);
 		m.begin_tag = "[SAVEGAMEBEGIN: " + description + "]";
@@ -789,6 +855,7 @@ namespace lcsave::detail
 			if (!costume_ok) fail("costume does not belong to hero");
 			OldHero hb;
 			pos.hero_block(h, hb.attributes, hb.equipment);
+			if (old_equipment) pos.relocate_equipment(hb.equipment, m.carried, *equipment_era, "HERO " + b.stat[owner], notes);
 			// convert.power_slots: a slot the file does not list is empty and usable (flag byte 1). Each listed slot carries
 			// its whole flag byte (bit 0 = usable: get 0x4b83b0; the power handler 0x4fd4de refuses a slot without it). A
 			// PWR record of a HERO 1.0 file (SPEC revision 2.2, written only by the 0.2.0 candidates) has no flag byte: it
@@ -840,6 +907,7 @@ namespace lcsave::detail
 			const auto n = pos.stat(r["owner"].as_int());
 			if (n >= old_restore_records) fail("IndexError: list assignment index out of range");
 			pos.hero_block(r, m.restore[n].attributes, m.restore[n].equipment);
+			if (old_equipment) pos.relocate_equipment(m.restore[n].equipment, m.carried, *equipment_era, "REST " + b.stat[n], notes);
 		}
 		// ---- MISS
 		const auto& MISS = f.data("MISS");
