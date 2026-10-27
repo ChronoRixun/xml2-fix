@@ -369,6 +369,10 @@ namespace
 		return c;
 	}
 
+	// --w2-only (limits wave 2 + the 0.4.2 economy): the build's tables exceed the E10A2 / retail budgets (185 item
+	// definitions > 160), so a save of that build loads only through W2; the E10A2 half is not run (W2 on and off is
+	// gated on a W2-off build of the same tree).
+	bool w2_only = false;
 	// one campaign LC file through the W2 and E10A2 loaders and savers
 	void campaign(const std::vector<std::uint8_t>& file, const Tables& tables, const TypedRegistry& reg, const Paths& P, Obj& o, std::vector<std::string>& failures)
 	{
@@ -392,17 +396,17 @@ namespace
 		o.b("slot_list_w2_ok", iw.status == R::file_status::ok).b("slot_list_e10a2_ok", ie.status == R::file_status::ok)
 			.b("slot_list_retail_ok", ir.status == R::file_status::ok).t("slot_list_retail_why", ir.why);
 		if (iw.status != R::file_status::ok) fail("W2 slot list: " + iw.why);
-		if (ie.status != R::file_status::ok) fail("E10A2 slot list: " + ie.why);
+		if (!w2_only && ie.status != R::file_status::ok) fail("E10A2 slot list: " + ie.why);
 		const auto dw = decide_features(file, w);
 		const auto de = decide_features(file, e);
 		const auto dr = decide_features(file, retail_layout);
 		o.b("decide_w2", dw.ok).b("decide_w2_migrate", dw.migrate_typed_fields).b("decide_e10a2", de.ok).b("decide_retail", dr.ok).t("decide_retail_reason", dr.reason);
 		if (!dw.ok) fail("W2 feature decision: " + dw.reason);
-		if (!de.ok) fail("E10A2 feature decision: " + de.reason);
+		if (!w2_only && !de.ok) fail("E10A2 feature decision: " + de.reason);
 		// ---- W2 on and W2 off (E10A2, the shipping capacity layout): load, save, reload, save, reload
 		const auto cw = cycle(file, f, tables, reg, w, "w2", o, failures);
-		const auto ce = cycle(file, f, tables, reg, e, "e10a2", o, failures);
-		if (cw.s1.ok != ce.s1.ok) fail("W2 and E10A2 loaders disagree");
+		const auto ce = w2_only ? Cycle{} : cycle(file, f, tables, reg, e, "e10a2", o, failures);
+		if (!w2_only && cw.s1.ok != ce.s1.ok) fail("W2 and E10A2 loaders disagree");
 		if (cw.s1.ok)
 		{
 			const auto& sw = cw.s1;
@@ -445,12 +449,13 @@ namespace
 			if (fw.header.required_features != feature_entity_layout_contiguous10) fail("W2 resave required_features " + std::to_string(fw.header.required_features) + " (" + lw.ledger + ")");
 			const auto probe = representable(lw.bytes, tables, e);
 			o.t("e10a2_dry_run", probe.empty() ? "representable" : probe);
-			if (!probe.empty()) fail("E10A2 dry run: " + probe);
+			if (!w2_only && !probe.empty()) fail("E10A2 dry run: " + probe);
 			write_text(P.out / (P.id + ".w2.json"), dump(lw.bytes, tables));
 			// the W2 save loads on the W2-off build to the stream the W2-off build makes of its own save
-			const auto we = new_to_old_stream(lw.bytes, tables, e, &reg);
-			o.b("w2_resave_on_e10a2", we.ok);
-			if (!we.ok) fail("the W2 resave on E10A2: " + we.error);
+			const auto we = w2_only ? decltype(new_to_old_stream(lw.bytes, tables, e, &reg)){} : new_to_old_stream(lw.bytes, tables, e, &reg);
+			if (!w2_only) o.b("w2_resave_on_e10a2", we.ok);
+			if (w2_only) {}
+			else if (!we.ok) fail("the W2 resave on E10A2: " + we.error);
 			else if (ce.s2.ok && we.bytes != ce.s2.bytes) fail("the W2 resave loads on E10A2 to another stream than the E10A2 resave (" + byte_diff(we.bytes, ce.s2.bytes) + ")");
 			if (ce.l1.ok)
 			{
@@ -474,8 +479,8 @@ namespace
 		const auto pr = new_to_old_profile(file, tables);
 		o.b("w2_load", pw.ok).t("w2_load_error", pw.error).b("e10a2_load", pe.ok).b("retail_load", pr.ok);
 		if (!pw.ok) { fail("W2 profile load: " + pw.error); return; }
-		if (!pe.ok || pe.bytes != pw.bytes) fail("E10A2 profile load differs: " + pe.error);
-		if (!pr.ok || pr.bytes != pw.bytes) fail("retail profile load differs: " + pr.error);
+		if (!w2_only && (!pe.ok || pe.bytes != pw.bytes)) fail("E10A2 profile load differs: " + pe.error);
+		if (!w2_only && (!pr.ok || pr.bytes != pw.bytes)) fail("retail profile load differs: " + pr.error);
 		const auto f = read_file(file.data(), file.size(), kind_profile);
 		o.n("required_features", f.header.required_features);
 		NewFileContext ctx;
@@ -492,8 +497,9 @@ namespace
 		const auto again = new_to_old_profile(lw.bytes, tables, w2_layout);
 		o.b("w2_idempotent", again.ok && again.bytes == pw.bytes);
 		if (!(again.ok && again.bytes == pw.bytes)) fail("profile LC -> old -> LC -> old not byte-exact");
-		const auto le = old_profile_to_new(pe.bytes, tables, ctx, e10a2_layout);
-		if (!le.ok) fail("E10A2 profile save: " + le.error);
+		const auto le = w2_only ? decltype(old_profile_to_new(pe.bytes, tables, ctx, e10a2_layout)){} : old_profile_to_new(pe.bytes, tables, ctx, e10a2_layout);
+		if (w2_only) {}
+		else if (!le.ok) fail("E10A2 profile save: " + le.error);
 		else
 		{
 			o.b("w2_e10a2_resave_bytes_equal", le.bytes == lw.bytes);
@@ -510,9 +516,11 @@ int main(int argc, char** argv)
 	for (int k = 1; k + 1 < argc; k += 2) args[argv[k]] = argv[k + 1];
 	if (!args.count("--list") || !args.count("--data") || !args.count("--registry") || !args.count("--out"))
 	{
-		std::printf("usage: lcsave_real_saves --list FILE --data BUILD --registry FILE --out DIR\n");
+		std::printf("usage: lcsave_real_saves --list FILE --data BUILD --registry FILE --out DIR [--w2-only 1]\n");
 		return 2;
 	}
+	w2_only = args.count("--w2-only") && args["--w2-only"] == "1";
+	if (w2_only) std::printf("W2 only: the E10A2 / retail halves are not run (a --save-layout w2 build's tables)\n");
 	Tables tables;
 	std::string error;
 	const auto build = fs::path(args["--data"]).wstring();

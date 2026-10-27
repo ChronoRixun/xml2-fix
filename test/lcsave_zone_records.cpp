@@ -5,7 +5,7 @@
 //   lcsave_zone_records --list FILE --data BUILD --registry FILE --out FILE.jsonl
 //
 // FILE lists "<id>\t<path>" lines. A retail slot (.save) is imported first, as the game does; LC profiles, settings
-// and other files are listed as skipped. For each campaign and each native layout (retail, E10A2) it writes the zones
+// and other files are listed as skipped. For each campaign and each native layout (retail, E10A2, W2) it writes the zones
 // the file's ZONE section holds, the zones the load applies (new_to_old_stream), and the zones that still apply after
 // one save of that load and a reload (the resave must keep every record the load applied). One JSON object per line.
 
@@ -162,6 +162,7 @@ int main(int argc, char** argv)
 				o << ", \"saved\": " << list(saved);
 				o << ", \"retail\": " << layout_run(lc, tables, reg, retail_layout);
 				o << ", \"e10a2\": " << layout_run(lc, tables, reg, e10a2_layout);
+				o << ", \"w2\": " << layout_run(lc, tables, reg, w2_layout);   // limits wave 2: the W2 native layout
 			}
 			catch (const std::exception& x) { problem = std::string("exception: ") + x.what(); }
 			catch (const Error& x) { problem = "library error: " + x.message; }
