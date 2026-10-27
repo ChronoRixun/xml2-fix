@@ -177,5 +177,7 @@ inline constexpr script_functions_rules::guard guards[]{
     {0x005caff0, "83ec14a1f8386f00566a006a008944241c8bf1e8080204008bc8e8f1fd0300566890a95c00e896e703008bc8e80fbe03008b44241c508bce", "native online-menu activation ABI and callback"},
     {0x005b8f03, "683ce369008bce889ea4190000899e60190000", "native fresh Game Options edit-state initialization"},
     {0x005f1c10, "5657e879acf6ff8b74240c8b10568bc8ff52088bf8e8f66cfeff8b1056578bc8ff52745f5ec3", "native openmenu console handler parses name and toggles manager +74"},
+    {0x0049faa0, "e8ebcd0b008b1068dcd168008bc8ff521c33c0c3", "native setupHost script queues setuphost"},
+    {0x00612960, "568bf18a862104000084c00f84bf0000008b467085c0c686210400000074158b8e1c040000506a09e853c8ffffc7467000000000558bcee854e8ffff83cdff85c074098bc8e8261900008be88b867802000085c0750433c0eb158b866c0200008986740200008b4808898e7402000085c07429578b78088b40106a00680611000068061100008bc8e823180000508bcee85bebffff85ff8bc775d95f6a008bcee86bf6ffffe8165ffcff8b10558bc8ff9234020000e8b6f4f3ff8b10558bc8ff5268e819b4e7ff8b105d8bc85eff62445ec3", "native session teardown clears setup flag then participants and controllers"},
 };
 }

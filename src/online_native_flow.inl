@@ -22,17 +22,44 @@ struct native_open_token {
 struct native_token_queue {
     std::array<native_open_token,16> items{};
     unsigned count=0;
+    std::array<unsigned,2> canceled_commands{};
+    std::array<bool,2> retired{};
+    static unsigned index(native_phase role) { return role==native_phase::host ? 0 : 1; }
+    void cancel() {
+        for(unsigned i=0;i<count;++i) if(items[i].owned) {
+            const auto role=index(items[i].role);retired[role]=true;
+            // Retain only a per-role denial count, not obsolete generations
+            // taking capacity from a later request of the same role.
+            if(canceled_commands[role]!=~0u) ++canceled_commands[role];
+        }
+        count=0;
+    }
     bool push(native_open_token value) {
         if(count==items.size()) return false;
         items[count++]=value;return true;
     }
     bool pop(native_phase role,native_open_token& out) {
+        if(auto& canceled=canceled_commands[index(role)];canceled) { --canceled;out={role};return true; }
         for(unsigned i=0;i<count;++i) if(items[i].role==role) {
             out=items[i];for(unsigned j=i+1;j<count;++j) items[j-1]=items[j];--count;return true;
         }
         return false;
     }
-} host_commands, lobby_opens;
+} lobby_opens;
+struct native_command_queue {
+    // One marker per actually accepted console command, consumed on dispatch.
+    // Legacy commands participate too: omitting them shifts owned provenance.
+    // This has no menu-activation capacity limit; the native console owns the
+    // lifetime/bound of the queued commands themselves.
+    std::deque<native_open_token> items;
+    void cancel() {
+        for(auto& item:items) if(item.owned) { item.pending=false;item.serial=0;item.ticket={}; }
+    }
+    bool pop(native_phase role,native_open_token& out) {
+        if(items.empty() || items.front().role!=role) return false;
+        out=items.front();items.pop_front();return true;
+    }
+} host_commands, setup_commands;
 std::array<std::uintptr_t,2> rejected_lobbies{}; // opaque identities only; never dereferenced
 void native_flow_error(const char* why);
 std::uintptr_t options_owner=0;
@@ -61,6 +88,13 @@ bool native_owned_room() {
     return native_flow.phase!=native_phase::idle || (broker_live() && broker_calls.admission_target && broker_view().state==broker::phase::room);
 }
 bool native_queue_open(native_phase role,bool owned) {
+    // Legacy requests need no generation token and must never consume bounded
+    // owned-request capacity. An explicit fresh legacy route retires old denial.
+    if(!owned) {
+        const auto index=native_token_queue::index(role);
+        lobby_opens.retired[index]=false;lobby_opens.canceled_commands[index]=0;return true;
+    }
+    for(unsigned i=0;i<lobby_opens.count;++i) if(native_token_current(lobby_opens.items[i]) && lobby_opens.items[i].role==role) return true;
     if(lobby_opens.push({role,native_flow.serial,native_flow.ticket,true,owned})) return true;
     if(owned) native_flow_error("native_open_queue_full");
     return false;
@@ -118,8 +152,8 @@ bool native_lobby_permit(void* menu) {
     const auto role=native_lobby_role(menu);if(role==native_phase::idle) return false;
     native_open_token token;bool accept=false;
     if(lobby_opens.pop(role,token)) accept=token.owned ? native_token_current(token) : !native_owned_room();
-    else accept=!native_owned_room() || (native_flow.lobby_active && native_flow.phase==role);
-    if(accept) { for(auto& id:rejected_lobbies) if(id==reinterpret_cast<std::uintptr_t>(menu)) id=0; }
+    else accept=(!native_owned_room() && !lobby_opens.retired[native_token_queue::index(role)]) || (native_flow.lobby_active && native_flow.phase==role);
+    if(accept) { lobby_opens.retired[native_token_queue::index(role)]=false;for(auto& id:rejected_lobbies) if(id==reinterpret_cast<std::uintptr_t>(menu)) id=0; }
     else rejected_lobbies[role==native_phase::host ? 0 : 1]=reinterpret_cast<std::uintptr_t>(menu);
     return accept;
 }
@@ -158,6 +192,7 @@ void native_flow_cancel() {
     const bool setup_name=options_owner==native_flow.serial;
     const auto serial=native_flow.serial+1;
     native_flow={};native_flow.serial=serial;
+    host_commands.cancel();setup_commands.cancel();lobby_opens.cancel();
     if(setup_name) native_options_abandon_name();
     if(callback) native_callback_clear();
     __try {
@@ -178,6 +213,17 @@ void native_flow_error(const char* why) {
     broker_cancel(broker_view().state==broker::phase::room);
     message("lc_notice_admission"); // localized LC adapter node
     if(setup) native_request("lc_host");
+}
+void __fastcall native_session_cleared(void* session,void*,bool clear) {
+    const auto serial=native_flow.serial;
+    at<void(__thiscall*)(void*,bool)>(0x612070)(session,clear);
+    // Retail teardown has already cleared +421 and removed participants. Retire
+    // broker membership now, even if the next screen is a legacy LAN menu.
+    if(ready && session==at<void*>(0xa53058) && native_flow.serial==serial && native_flow.lobby_active &&
+        !static_cast<unsigned char*>(session)[0x421]) {
+        native_flow.touched=false; // the native session is already torn down
+        broker_cancel(true);
+    }
 }
 bool native_request(const char* name) {
     __try { at<request_fn>(0x5d5db0)(manager(),name,nullptr);return true; }
@@ -294,9 +340,16 @@ void __fastcall options_tick(void* menu,void*) {
 }
 // Run the actual retail handler, including address preparation, native Host
 // participant/controller allocation and the native save/profile tail.
-void setuphost_native() { at<void(__cdecl*)()>(0x5f1bb0)(); }
+__declspec(naked) void setuphost_native() {
+    // Replay the guarded first call, then resume the untouched handler. The
+    // console entry itself is routed through dispatch, including setupHost().
+    __asm { mov eax,0x6097b0
+            call eax
+            push 0x5f1bb5
+            ret }
+}
 void __cdecl setuphost_dispatch() {
-    if(!ready || native_flow.phase==native_phase::idle) { setuphost_native();return; }
+    if(!ready || native_flow.phase==native_phase::idle) { if(ready && (options_owner || native_owned_room())) return;setuphost_native();return; }
     if(native_flow.phase!=native_phase::setup) return; // queued duplicate Post
     try {
         native_host_settings settings;
@@ -313,6 +366,16 @@ void __cdecl setuphost_dispatch() {
         if(!native_request("lc_host")) native_flow_error("native_setup_return_unavailable");
     } catch(...) { native_flow_error("host_post_exception"); }
 }
+void __cdecl setuphost_command() {
+    native_open_token token;
+    if(setup_commands.pop(native_phase::setup,token)) {
+        if(token.owned) {
+            if(!token.pending || token.serial!=native_flow.serial || native_flow.phase!=native_phase::setup) return;
+        } else if(native_owned_room() || options_owner) return;
+    }
+    setuphost_dispatch();
+}
+bool __fastcall setuphost_script_queue(void* console,void*,const char* line);
 bool __fastcall setuphost_queue(void* console,void*,const char* line) {
     if(!line || std::strcmp(line,"setuphost")) return at<command_fn>(0x55c410)(console,line);
     // Base input may cancel/deactivate this Game Options during the same tick.
@@ -321,7 +384,7 @@ bool __fastcall setuphost_queue(void* console,void*,const char* line) {
         if(native_flow.phase==native_phase::setup && native_flow.serial==options_call.serial && native_options_current(options_call.menu)) setuphost_dispatch();
         return true;
     }
-    if(native_flow.phase==native_phase::idle) { if(options_owner) return true;return at<command_fn>(0x55c410)(console,line); }
+    if(native_flow.phase==native_phase::idle) { if(options_owner) return true;return setuphost_script_queue(console,nullptr,line); }
     if(native_flow.phase==native_phase::setup && native_options_current(current())) setuphost_dispatch();
     return true;
 }
@@ -369,7 +432,8 @@ bool native_search_query(std::uint32_t address) {
         return true;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
-// Zero records waits. Anything other than one valid host record fails closed.
+// Zero host records waits. Only the proven host's source address participates;
+// another room member's game-info response cannot make this host ambiguous.
 // Do not retain this pointer across a frame, callback, table clear or generation.
 int native_discovery_record(std::uint32_t address,void*& out) {
     out=nullptr;
@@ -378,18 +442,24 @@ int native_discovery_record(std::uint32_t address,void*& out) {
         auto* table=campaign+0x2208;
         const auto count=*reinterpret_cast<unsigned*>(table+0xc);
         if(!count) return 0;
-        if(count!=1) return -1;
+        if(count>100) return -1;
         auto* node=*reinterpret_cast<unsigned char**>(table);
-        if(!node || *reinterpret_cast<void**>(node+8)) return -1;
-        auto* record=*reinterpret_cast<unsigned char**>(node+0x10);
-        const auto offset=reinterpret_cast<std::uintptr_t>(record)-reinterpret_cast<std::uintptr_t>(campaign+0x5b4);
-        if(offset>=100*0x44 || offset%0x44 || !record[0x11] || record[0xf]!=1 ||
-            *reinterpret_cast<unsigned short*>(record+0xc)!=5165) return -1;
-        const auto ip=(std::uint32_t(record[8])<<24)|(std::uint32_t(record[9])<<16)|(std::uint32_t(record[10])<<8)|record[11];
-        if(ip!=address) return -1;
-        const auto* version=at<const unsigned char*>(0xa53058+0x410);
-        if(!std::memchr(record+0x3e,0,6) || !std::memchr(version,0,6) || std::strcmp(reinterpret_cast<const char*>(record+0x3e),reinterpret_cast<const char*>(version))) return -1;
-        out=record;return 1;
+        int matched=0;
+        for(unsigned i=0;i<count;++i) {
+            if(!node) return -1;
+            auto* record=*reinterpret_cast<unsigned char**>(node+0x10);
+            const auto offset=reinterpret_cast<std::uintptr_t>(record)-reinterpret_cast<std::uintptr_t>(campaign+0x5b4);
+            if(offset>=100*0x44 || offset%0x44) return -1;
+            const auto ip=(std::uint32_t(record[8])<<24)|(std::uint32_t(record[9])<<16)|(std::uint32_t(record[10])<<8)|record[11];
+            if(ip==address) {
+                if(matched || !record[0x11] || record[0xf]!=1 || *reinterpret_cast<unsigned short*>(record+0xc)!=5165) return -1;
+                const auto* version=at<const unsigned char*>(0xa53058+0x410);
+                if(!std::memchr(record+0x3e,0,6) || !std::memchr(version,0,6) || std::strcmp(reinterpret_cast<const char*>(record+0x3e),reinterpret_cast<const char*>(version))) return -1;
+                out=record;++matched;
+            }
+            node=*reinterpret_cast<unsigned char**>(node+8);
+        }
+        return node ? -1 : matched;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return -1; }
 }
 bool native_admit(void* record) {
@@ -400,13 +470,25 @@ bool native_console_queue(void* console,const char* line) {
     __try { return at<command_fn>(0x55c410)(console,line); }
     __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
+bool native_track_command(native_command_queue& queue,void* console,const char* line,native_open_token token) {
+    try { queue.items.push_back(token); }
+    catch(...) { return false; } // allocation failure, never a legacy capacity refusal
+    if(native_console_queue(console,line)) return true;
+    queue.items.pop_back();return false;
+}
+bool __fastcall setuphost_script_queue(void* console,void*,const char* line) {
+    const bool owned=native_flow.phase!=native_phase::idle || options_owner!=0;
+    return native_track_command(setup_commands,console,line,{native_phase::setup,native_flow.serial,native_flow.ticket,
+        native_flow.phase==native_phase::setup,owned});
+}
+__declspec(naked) void setuphost_script_queue_stub() {
+    __asm { mov ecx,eax
+            jmp setuphost_script_queue }
+}
 bool __fastcall native_host_queue(void* console,void*,const char* line) {
     const bool own=native_flow.phase==native_phase::host && !native_flow.lobby_active;
-    // Track every accepted producer call, including legacy, in actual console
-    // order. Never overwrite an old canceled generation with a newer one.
-    if(host_commands.count==host_commands.items.size()) return false;
-    const bool queued=native_console_queue(console,line);
-    if(queued) host_commands.push({native_phase::host,native_flow.serial,native_flow.ticket,true,own});
+    // Preserve mixed legacy/owned FIFO ordering without an activation-slot cap.
+    const bool queued=native_track_command(host_commands,console,line,{native_phase::host,native_flow.serial,native_flow.ticket,true,own});
     if(own) native_flow.host_queued=queued;
     return queued;
 }
@@ -437,7 +519,8 @@ bool native_flow_tick(screen s) {
         view.state==broker::phase::refused || (view.state==broker::phase::room && !view.authenticated)) {
         native_flow_error("room_generation_or_service_lost");return false;
     }
-    if(now_ms()-native_flow.started>=15000) { native_flow_error("native_timeout");return false; }
+    const DWORD deadline=phase==native_phase::tunnel ? 45000 : 15000;
+    if(now_ms()-native_flow.started>=deadline) { native_flow_error("native_timeout");return false; }
     if(phase==native_phase::posting) {
         if(view.state!=broker::phase::room) return false;
         native_flow.phase=native_phase::host;native_flow.touched=true;native_flow.started=now_ms();

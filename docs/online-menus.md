@@ -920,7 +920,11 @@ sites are Game Options activation `0x69f66c`, tick `0x69f694`, Back
 request slot). Difficulty shares the
 Post call site, so commands other than the exact `setuphost` still go through
 the stock queue. Native Host posting runs the actual `0x5f1bb0` handler,
-including `0x606e90` and `0x609f50`; native Join admission runs `0x60a0a0` with
+including `0x606e90` and `0x609f50`. The console handler entry `0x5f1bb0`
+and script producer boundary `0x49faac` also retain setup-generation ownership.
+Session teardown is observed at `0x612a00`, after the native setup flag and
+participants are cleared; broker Leave immediately releases the code filter,
+even when the next screen is a native LAN list. Native Join admission runs `0x60a0a0` with
 an actual 0x44-byte native discovery record.
 
 | State | Event | Effect |
@@ -936,19 +940,30 @@ an actual 0x44-byte native discovery record.
 | Admission | Native success plus a real local participant | Open native Join; Ready remains native |
 | Any pending phase | Cancel, refusal, ambiguity, expiry | Invalidate generation/callback/queued open, native cleanup, broker leave |
 | Native lobby | Start/Ready/Unready/Leave | Existing native actions, readiness gates and rule-26 next-area wait |
+| Native session | Teardown | Leave broker room and release discovery filters without a Hub visit |
 
-Each tunnel/discovery/admission/menu-activation wait is bounded to 15 seconds;
-the broker retains its own 10-second deadline and shared limiter. The UI never
+The tunnel/certificate/ICE wait is bounded to 45 seconds to allow relay/TURN
+negotiation over a hotspot. Discovery, admission and menu activation each keep
+their 15-second deadline; the broker retains its own 10-second deadline and shared limiter. The UI never
 waits synchronously for the broker or a tunnel. Missing, duplicate, wrong-port,
 wrong-address, disabled or incompatible records never select master/plain-IP
 fallback. Native discovery is reset before searching, queries only the proven
-host virtual address, and never keeps a record pointer across frames.
+host virtual address, and never keeps a record pointer across frames. Records
+from another room member are ignored; only records sourced from the proven
+host tunnel count toward uniqueness. A duplicate or invalid host record still
+fails closed; zero host records waits until the discovery deadline.
 
 The native admission callback contains a generation, not a menu pointer.
 Success event 8 is insufficient without a native local participant; the retail
-response can emit that event after allocation failure. Queued Host commands and
-Host/Join activation have separate one-use generation tokens in bounded
-16-entry queues; canceled entries remain until consumed. A canceled open
+response can emit that event after allocation failure. Both native setuphost producers and queued Host commands retain their actual
+console FIFO order, including legacy commands. Cancel invalidates old ticket/
+serial metadata in place while retaining denial markers until those actual
+commands drain. Console tracking has no 16-slot activation limit. Host/Join
+activation tokens use bounded current-generation storage; cancel drops old
+entries into compact per-role denial counts, consumed before a replacement
+activation of the same role. Fresh explicit legacy routing clears those role
+counts and allocates no activation tokens, so unactivated legacy requests never
+exhaust the owned-flow capacity. A canceled open
 cannot later become a legacy Host or attach to a new controller/room. The custom
 Host -> Game Options close is an explicit handoff; other current-screen closes
 cancel pending work. Cached noncurrent menu closes cannot cancel a newer request.
@@ -1007,6 +1022,12 @@ openmenu handler and delays old commands/activation across a newer opposite
 role; denied mouse/Back/refresh/base-input are tested before recovery. Dialog,
 input, save-service results, participant factories and transport services are
 invented. Loading a real save from disk and actual rendering are not inferred.
+The twelve `r6-nit-*` cases cover the alternate retail setupHost script and
+console handler, canceled/replacement script commands and mixed producer FIFO,
+real session teardown for both roles, more than 16 unactivated legacy requests,
+24 canceled replacement Hosts, delayed same-role activations, another member
+beside the host discovery record, and a tunnel that succeeds at 44 seconds or
+expires at 45 seconds. External participant/UI services remain invented.
 The production broker fixture separately drives current-generation target
 checks, real in-memory GNS socket pairs, v2 max/mode/joinable metadata, raw-UDP
 refusal, stale packets/status callbacks and existing broker-loss survival.
@@ -1024,11 +1045,17 @@ input is part of this round. After LC integration and review:
    native Host with no launcher keys/manual list step.
 3. Private Code and public Browse each 3/3 across real peers, including hotspot
    and forced relay. Verify a tunnel precedes discovery, actual native admission
-   precedes Join/Ready, and malformed/duplicate/absent discovery has no fallback.
+   precedes Join/Ready, and malformed/duplicate/absent host discovery has no fallback.
+   On hotspot/forced relay, verify Connecting survives 15 seconds and allows
+   negotiation through 44 seconds; a tunnel still unavailable at 45 seconds
+   cancels cleanly. Discovery/admission/activation retain separate 15-second waits.
 4. Exercise Host alone, unready Start block, all-ready Start, duplicate Ready,
    Unready, pending/ready Leave, native next-area wait/solo watcher, Kick, broker
    loss with healthy P2P and Host -> Leave -> Join -> Leave -> Host. Cancel while
-   each lookup/open is pending; delayed old replies/opens must remain inert.
+   each lookup/open is pending; delayed old replies/opens, including same-role
+   replacement and mixed legacy/scripted setup commands, must remain inert.
+   End the native session as Host and as Join, then go Main -> native Join Game
+   without a Hub visit: the old room must be left and LAN/master discovery restored.
 5. After ordinary joins play >=10 minutes and cross two transitions with zero
    desyncs. Capture actual 02/04/05 and native service intermediates at 4:3 and
    stretched 16:9, keyboard -> pad -> keyboard, mouse rectangles, 720p/1080p,

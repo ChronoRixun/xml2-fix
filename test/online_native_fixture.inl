@@ -237,7 +237,7 @@ void run(const script_functions_rules::func_entry* registration) {
         for(int i=32;i<40;++i) { post(static_cast<intent>(i));tick(child.data(),nullptr); }
         menu_complete=true;tick(child.data(),nullptr);assert(menu_view().state==bm::phase::room);
     };
-    resolve();tunnel_ready=false;ticks+=15000;tick(child.data(),nullptr);
+    resolve();tunnel_ready=false;ticks+=45000;tick(child.data(),nullptr);
     assert(menu_view().state==bm::phase::idle && searches==0);cancel();
     // Authenticated broker membership waits for the proven host tunnel.
     resolve();assert(searches==0);
@@ -259,7 +259,7 @@ void run(const script_functions_rules::func_entry* registration) {
     for(int kind:{0,1,2,3}) {
         resolve();tick(child.data(),nullptr);
         if(kind==0) { ticks+=15000;tick(child.data(),nullptr); }
-        else { reply(kind==1 ? 2 : 1,kind==2,kind!=3);tick(child.data(),nullptr); }
+        else { reply(kind==1 ? 2 : 1,kind==2,kind!=3);tick(child.data(),nullptr);if(kind==2) { ticks+=15000;tick(child.data(),nullptr); } }
         assert(menu_view().state==bm::phase::idle && !visibility["lc_notice_admission"]);cancel();
     }
     resolve();tick(child.data(),nullptr);reply();tick(child.data(),nullptr);
@@ -413,6 +413,123 @@ void generation_run(const script_functions_rules::func_entry* registration) {
     assert(menu_view().state==bm::phase::idle && !*reinterpret_cast<void**>(0xa53058+0x78));
     std::cout<<"round6 generations PASS actual console +74 handler FIFO; delayed Host command after replacement Host; old Host/Join activation across opposite new roles; denied tick/deactivation; first-activation auth loss versus active-lobby survival\n";
     mode=original_mode;
+}
+
+// Review regressions exercise the retail producers/handlers, not bridge internals.
+void review_run(const script_functions_rules::func_entry* registration) {
+    const auto original_mode=mode;restore_services();
+    const auto tick=*reinterpret_cast<tick_t*>(0x69e454);
+    auto post=[&](intent value) { int_value[1]=unsigned(value);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(registration->handler))(nullptr); };
+    auto begin=[&] {
+        screen("lc_host");tick(child.data(),nullptr);post(intent::open_room);tick(child.data(),nullptr);custom_close();
+        screen("game_options");(*reinterpret_cast<lobby_activate_t*>(0x69f66c))(child.data(),nullptr,0);script(0x49f9b0,4);
+    };
+    auto resolve=[&] {
+        screen("lc_code");tick(child.data(),nullptr);
+        for(int n=32;n<40;++n) { post(static_cast<intent>(n));tick(child.data(),nullptr); }
+        menu_auth=menu_complete=true;tick(child.data(),nullptr);assert(menu_view().state==bm::phase::room);
+    };
+    if(mode=="r6-nit-script") {
+        begin();const auto before=allocations,hosts_before=menu_hosts;
+        script(0x49faa0,0);assert(calls.back()=="queue:setuphost");
+        reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)();
+        assert(menu_hosts==hosts_before+1 && allocations==before); // no native Host before broker confirmation
+        screen("lc_host");menu_auth=menu_complete=true;tick(child.data(),nullptr);
+        assert(allocations==before+1 && menu_view().state==bm::phase::room);
+        reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)();assert(allocations==before+1);
+        post(intent::back);tick(child.data(),nullptr);assert(menu_view().state==bm::phase::idle && !*reinterpret_cast<void**>(0xa53058+0x78));
+        const auto after=allocations;reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)();assert(allocations==after); // canceled queued script
+    } else if(mode=="r6-nit-end" || mode=="r6-nit-end-guest") {
+        const bool hosting=mode=="r6-nit-end";
+        if(hosting) { begin();action("text_inviteslots");screen("lc_host");menu_auth=menu_complete=true;tick(child.data(),nullptr);host_request(); }
+        else { tunnel_ready=true;resolve();reply();tick(child.data(),nullptr);event(8);tick(child.data(),nullptr); }
+        custom_close();mode="r4-r6";setup_lobby(hosting);(*reinterpret_cast<lobby_activate_t*>(hosting ? 0x69f284 : 0x69f350))(child.data(),nullptr,0);
+        assert(menu_view().state==bm::phase::room && (hosting ? published==1 : published==0));
+        // Restore the real session teardown entry (the ordinary fixture replaces
+        // only its first five bytes). Keep participant/UI services invented.
+        const auto entry=patch_transaction::bytes_of("568bf18a86");std::memcpy(reinterpret_cast<void*>(0x612960),entry.data(),entry.size());
+        clear_people(reinterpret_cast<void*>(0xa53058),nullptr,false);
+        reinterpret_cast<unsigned char*>(0xa53058)[0x421]=1;
+        fake_game_vt[0x234/4]=unsigned(reinterpret_cast<std::uintptr_t>(&one_int));
+        fake_game_vt[0x68/4]=unsigned(reinterpret_cast<std::uintptr_t>(&one_int));fake_game_vt[0x44/4]=unsigned(reinterpret_cast<std::uintptr_t>(&no_op));
+        for(unsigned getter:{0x5d8920u,0x551ed0u,0x48de40u}) redirect(getter,game_getter);
+        reinterpret_cast<tick_t>(0x612960)(reinterpret_cast<void*>(0xa53058),nullptr);
+        assert(!reinterpret_cast<unsigned char*>(0xa53058)[0x421]);
+        assert(menu_view().state==bm::phase::idle && menu_leaves==1); // no Hub navigation/tick needed
+        reinterpret_cast<tick_t>(0x612960)(reinterpret_cast<void*>(0xa53058),nullptr);assert(menu_leaves==1);
+    } else if(mode=="r6-nit-tokens") {
+        for(const char* name:{"host","join"}) for(unsigned n=0;n<40;++n) {
+            const auto before=calls.size();reinterpret_cast<void(__cdecl*)(const char*)>(0x5f1c10)(name);
+            assert(calls.size()==before+1 && calls.back()==std::string("request:")+name);
+        }
+        begin();(*reinterpret_cast<int(__fastcall**)(void*,void*)>(0x69f688))(child.data(),nullptr);
+        screen("lc_online");tick(child.data(),nullptr);
+        for(unsigned n=0;n<40;++n) { const auto before=calls.size();host_request();assert(calls.size()==before+1); }
+        for(unsigned n=0;n<24;++n) {
+            ticks+=2000;begin();action("text_inviteslots");screen("lc_host");menu_auth=menu_complete=true;tick(child.data(),nullptr);
+            assert(menu_view().state==bm::phase::room);post(intent::back);tick(child.data(),nullptr);assert(menu_view().state==bm::phase::idle);
+            screen("lc_online");tick(child.data(),nullptr);
+        }
+        // Canceled console commands still drain in FIFO order, without occupying
+        // token slots needed by the 24 replacement rooms above.
+        for(unsigned n=0;n<24;++n) { const auto before=calls.size();host_request();assert(calls.size()==before); }
+        const auto before=calls.size();host_request();assert(calls.size()==before+1);
+    } else if(mode=="r6-nit-mixed") {
+        reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)(); // queued legacy Host first
+        begin();action("text_inviteslots");screen("lc_host");menu_auth=menu_complete=true;tick(child.data(),nullptr);
+        post(intent::back);tick(child.data(),nullptr);screen("lc_online");tick(child.data(),nullptr);
+        auto before=calls.size();host_request();assert(calls.size()==before+1 && calls.back()=="request:host");
+        before=calls.size();host_request();assert(calls.size()==before); // canceled owned command second
+    } else if(mode=="r6-nit-same-host" || mode=="r6-nit-same-guest") {
+        const bool hosting=mode=="r6-nit-same-host";
+        auto open=[&] {
+            if(hosting) { begin();action("text_inviteslots");screen("lc_host");menu_auth=menu_complete=true;tick(child.data(),nullptr);host_request(); }
+            else { tunnel_ready=true;resolve();reply();tick(child.data(),nullptr);event(8);tick(child.data(),nullptr); }
+        };
+        open();if(!hosting) { post(intent::clear);tick(child.data(),nullptr); }
+        post(intent::back);tick(child.data(),nullptr);screen("lc_online");tick(child.data(),nullptr);ticks+=2000;
+        open();custom_close();const auto generation=menu_view().generation;
+        mode="r4-r6";setup_lobby(hosting);
+        hub.fill(0);put(hub.data(),0,hosting ? 0x69f274 : 0x69f33c);hub[4]=1;
+        std::strcpy(reinterpret_cast<char*>(hub.data()+0xc),hosting ? "host" : "join");set_current(hub.data());
+        auto activate=*reinterpret_cast<lobby_activate_t*>(hosting ? 0x69f284 : 0x69f350);
+        const auto before=activations;activate(hub.data(),nullptr,0);assert(activations==before && menu_view().generation==generation);
+        set_current(child.data());activate(child.data(),nullptr,0);assert(activations==before+1 && menu_view().state==bm::phase::room);
+    } else if(mode=="r6-nit-setup-mixed") {
+        screen("game_options");script(0x49f9b0,4);action("text_inviteslots");assert(calls.back()=="queue:setuphost");
+        begin();script(0x49faa0,0);(*reinterpret_cast<int(__fastcall**)(void*,void*)>(0x69f688))(child.data(),nullptr);
+        screen("lc_online");tick(child.data(),nullptr);ticks+=2000;begin();const auto before=menu_hosts;
+        reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)();assert(menu_hosts==before);
+        reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)();assert(menu_hosts==before);
+        script(0x49faa0,0);reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)();assert(menu_hosts==before+1);
+    } else if(mode=="r6-nit-script-old") {
+        begin();script(0x49faa0,0);(*reinterpret_cast<int(__fastcall**)(void*,void*)>(0x69f688))(child.data(),nullptr);
+        screen("lc_online");tick(child.data(),nullptr);ticks+=2000;begin();
+        const auto before=menu_hosts;reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)();assert(menu_hosts==before);
+        script(0x49faa0,0);reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)();assert(menu_hosts==before+1 && allocations==0);
+    } else if(mode=="r6-nit-hosttokens") {
+        for(unsigned n=0;n<40;++n) {
+            const auto before=posts;reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)();assert(posts==before+1);
+        }
+    } else if(mode=="r6-nit-discovery") {
+        tunnel_ready=true;resolve();reply(1,true);reply();
+        assert(*reinterpret_cast<unsigned*>(0xa3bc40+0x2208+0xc)==2);
+        tick(child.data(),nullptr);
+        assert(menu_view().state==bm::phase::room && *reinterpret_cast<unsigned*>(0xa3bc40+0x22bc));
+        assert(*reinterpret_cast<unsigned*>(0xa53058+0x3a4+8)==0x01004d0a); // admit host, ignore another member
+    } else if(mode=="r6-nit-tunnel") {
+        resolve();ticks+=15000;tick(child.data(),nullptr);
+        assert(menu_view().state==bm::phase::room && searches==0);
+        ticks+=29999;tick(child.data(),nullptr);assert(menu_view().state==bm::phase::room && searches==0);
+        ++ticks;tick(child.data(),nullptr);assert(menu_view().state==bm::phase::idle);
+        post(intent::clear);tick(child.data(),nullptr);ticks+=2000;resolve();
+        ticks+=44000;tick(child.data(),nullptr);assert(menu_view().state==bm::phase::room && searches==0);
+        tunnel_ready=true;tick(child.data(),nullptr);assert(searches==1);
+        reply();tick(child.data(),nullptr);event(8);tick(child.data(),nullptr);
+        assert(calls.back()=="request:join" && menu_view().state==bm::phase::room);
+    } else assert(false);
+    mode=original_mode;
+    std::cout<<"round6 review PASS "<<mode<<" (retail path; invented external services)\n";
 }
 
 }

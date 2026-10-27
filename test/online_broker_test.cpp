@@ -365,6 +365,8 @@ void native_target_test() {
     room::arrivals.push_back({0x0a4d0001,5165,{1,2,3}});room::arrivals_bytes=3;
     const auto old_connection=room::connection_generation.load();room::leave();pump_until([] { return room::worker_done.load(); });
     assert(room::arrivals.empty() && !room::arrivals_bytes && room::tunnels.empty() && !room::own_virtual());
+    assert(room::configured_code.empty() && !room::wanted);
+    packet[2]=0x18;assert(room::room_recvfrom(0,packet,sizeof(packet),0,nullptr,nullptr)==17); // Leave restores legacy UDP discovery immediately
     assert(!room::on_status(&status));room::sockets()->CloseConnection(peer,0,"fixture complete",false);
     fake::clock+=2000;assert(room::resolve("23456789"));pump_until([] { return room::view().state==b::phase::room; });
     const auto current=room::view().generation;assert(current!=generation && !room::admission_target(generation,address));
