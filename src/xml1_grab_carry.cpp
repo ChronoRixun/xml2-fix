@@ -17,6 +17,7 @@ using namespace xml1_grab_carry_rules;
 using u32 = std::uint32_t;
 std::atomic<int> state{-1};
 bool trace = false, logged_lookup = false, carry = true, guard_ally_victim = false;
+telekinesis_pair_test tk_pair=nullptr;
 std::array<void*, 8> attack_slots{};
 void* attack_handler = nullptr;
 template<class T> T at(const void* p, u32 off) { T v{}; std::memcpy(&v, static_cast<const unsigned char*>(p) + off, sizeof v); return v; }
@@ -233,6 +234,7 @@ void __fastcall victim_frame(void*, void*, void* victim, void*)
         void* move = at<void*>(owner, 0x378);
         if (paired == victim && move)
         {
+            if(tk_pair&&tk_pair(at<u32>(owner,0x1c),at<u32>(victim,0x1c)))return;
             const char* name = move_name(move);
             if (retaining_prefix(name)) return;
             // The converter adds ch_grab_victim to throwallyvictim; XML1
@@ -442,6 +444,7 @@ void install(HMODULE game)
 }
 std::string status() { const int s = state.load(); return std::string("grab carry ") + (s == 1 ? (carry ? "xml1 grab + flying carry + flight upkeep" : "xml1 grab + flight upkeep (flying carry off)") : s == -1 ? "game's own" : "unavailable"); }
 std::uint32_t feature_mask() { return mask_for(carry); }
+void set_telekinesis_pair_test(telekinesis_pair_test predicate){tk_pair=predicate;}
 bool flying_carry() { return carry; }
 bool requested() { return state.load() != -1; }
 bool installed() { return state.load() == 1; }

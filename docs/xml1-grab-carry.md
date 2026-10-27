@@ -215,6 +215,17 @@ Before starting pickup it lowers the carrier to the authored pickup height
 (target root +40), using the native movement probe with character stopping
 disabled. Solid-world blockage prevents pickup; the target is not pulled up
 to compensate. Completion/interruption discards the saved contact.
+The 082d follow-up corrects the probe contract: flag0 intersects property8,
+which can include the contacted character. It temporarily supplies that
+victim as the native owner exclusion at actor+178 for this one probe, then
+restores the actual owner before applying movement. The complete native
+42B6C0 fixture runs with owned libIGMath operations and separate character
+and solid-ledge intersections. It checks stack balance and owner restoration.
+The original 082d CarryTrace began only after pickup; its absence cannot
+prove which earlier gate blocked a historical hover. With CarryTrace=1,
+flight-input, effective `flight-rank-N`, pre-pickup gate results and position/
+control flags are now logged before carry entry. No extra pickup predicate
+or bone call is made for these diagnostics.
 The decide handler's sweep for other entry paths remains first-contact-only, including its
 normal LiftRule service for objects (Might + 1 >= XML1 heaviness, heaviness 5
 refused, native refusal flags retained). An isolated prop cannot satisfy the

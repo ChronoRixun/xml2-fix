@@ -3,6 +3,7 @@
 #include "xml1_cling_rules.hpp"
 #include "det_math.hpp"
 #include "lift_rule.hpp"
+#include "stun_rules.hpp"
 #include "log.hpp"
 #include <cmath>
 #include <algorithm>
@@ -12,6 +13,7 @@
 // anchors and field translations are recorded in docs/tk-guard.md.
 namespace tk_guard_bridges {
 using namespace shared_handler_bridges;
+inline bool trace_guard=false;
 struct vec {float x=0,y=0,z=0;};
 inline vec add(vec a,vec b){return {a.x+b.x,a.y+b.y,a.z+b.z};}
 inline vec sub(vec a,vec b){return {a.x-b.x,a.y-b.y,a.z-b.z};}
@@ -71,6 +73,23 @@ __declspec(naked) inline bool source_grabbable(void*){__asm {
  mov esi,ecx
  jmp dword ptr [grabbable_body]
 }}
+inline u32 grabbable_precheck=0x42b840,grabbable_after_stun=0x42925e;
+// A native timed stun has the same grab eligibility as reaction bit0: keep
+// the status precheck and every native suffix gate, bypass only its clock.
+__declspec(naked) inline bool stunned_grabbable(void*){__asm {
+ push ecx
+ push esi
+ mov esi,ecx
+ call dword ptr [grabbable_precheck]
+ test al,al
+ jnz denied
+ jmp dword ptr [grabbable_after_stun]
+ denied:
+ xor al,al
+ pop esi
+ pop ecx
+ ret
+}}
 inline bool wall_lunge(void* actor,void* initial,void* entity){
  if(rank(actor,"acrobatics")<=2)return false;
  auto level=fn<bool(__thiscall*)(void**)>(0x4a95c0);
@@ -89,6 +108,30 @@ inline bool wall_lunge(void* actor,void* initial,void* entity){
  const vec position=add(field<vec>(actor,0x20),shift);
  method<void(__thiscall*)(void*,const vec*)>(actor,0x1c)(actor,&position);
  if(auto* next=named(actor,"walllunge")){play(actor,next);return true;}return false;
+}
+struct power_ref {u32 handle=0;void* pool=nullptr;};
+inline bool enemy_stunned(void* victim){
+ if(field<unsigned char>(victim,0x765)&1)return true;
+ // Rule18 deliberately clears a party hero's reaction flag after a refused
+ // or interrupted stun. Its still-pending PC powerup must not undo that.
+ if(stun_rules::party_hero(field<u32>(victim,4),field<int>(victim,0x3d4)))return false;
+ // Native54EE0F traverses the entity's attachment references at21C/220.
+ // The timed shared_stunned attachment and the reaction flag have separate
+ // lifetimes; do not infer the former from the current animation or flag.
+ power_ref cursor=field<power_ref>(victim,0x21c);if(!cursor.pool)return false;
+ auto* factory=fn<getter>(0x543f80)();power_ref stun;
+ method<power_ref*(__thiscall*)(void*,power_ref*,const char*)>(factory,0x58)(factory,&stun,"shared_stunned");
+ if(!stun.pool)return false;
+ for(unsigned n=0;n<256&&cursor.pool;++n){ // maximum supported AttachedPowerups
+  if(!method<bool(__thiscall*)(void*,u32)>(cursor.pool,0)(cursor.pool,cursor.handle))return false;
+  auto* attached=method<void*(__thiscall*)(void*,u32)>(cursor.pool,8)(cursor.pool,cursor.handle);if(!attached)return false;
+  power_ref definition;
+  method<power_ref*(__thiscall*)(void*,power_ref*)>(attached,0x64)(attached,&definition);
+  if(definition.handle==stun.handle&&definition.pool==stun.pool)return true;
+  power_ref next;method<power_ref*(__thiscall*)(void*,power_ref*)>(attached,0x4c)(attached,&next);
+  if(next.handle==cursor.handle&&next.pool==cursor.pool)return false;cursor=next;
+ }
+ return false;
 }
 inline bool guard_policy(void* self,void* actor,void* input,void* incoming=nullptr){
  if(!actor||!input)return false;
@@ -134,7 +177,9 @@ inline bool guard_policy(void* self,void* actor,void* input,void* incoming=nullp
   if(!entity||(field<u32>(entity,4)&0x40010)||manager_flag(0x484990,0x3c)){
    if(!movement())choose(0);
   }else if(auto* victim=character(entity)){
-   if(!fn<bool(__thiscall*)(void*)>(reinterpret_cast<u32>(&source_grabbable))(victim))choose(0);
+   const bool stunned=enemy_stunned(victim);
+   const auto admission=stunned&&!(field<unsigned char>(victim,0x765)&1)?&stunned_grabbable:&source_grabbable;
+   if(!fn<bool(__thiscall*)(void*)>(reinterpret_cast<u32>(admission))(victim)){if(trace_guard)logger::write("guard eligibility actor=%08X victim=%08X native_grab=0 reaction=%02X attachment=%08X stunned=%d status=%02X deadline=%.3f",field<u32>(actor,0x1c),field<u32>(victim,0x1c),field<unsigned char>(victim,0x765),field<u32>(victim,0x21c),int(stunned),field<unsigned char>(victim,0x579),field<float>(victim,0x2f0));choose(0);}
    else if(allies&&team(actor)==team(victim)&&!manager_flag(0x48de40,0x5c)){
     if(field<unsigned char>(field<void*>(victim,0x35c),0x2ad)&0x80){play(actor,named(actor,"throwally"));lock(actor,victim);}
     else if(!movement())choose(0);
@@ -143,14 +188,15 @@ inline bool guard_policy(void* self,void* actor,void* input,void* incoming=nullp
     // test. The incoming guard chain's action 3 is grabstart. Since the
     // entry bridge dispatches it immediately, gate enemy grabs here;
     // ally Fastball and physical-object pickup keep their own branches.
-    if(!(field<unsigned char>(victim,0x765)&1)){if(!movement())choose(0);return true;}
+    if(trace_guard)logger::write("guard eligibility actor=%08X victim=%08X native_grab=1 reaction=%02X attachment=%08X stunned=%d",field<u32>(actor,0x1c),field<u32>(victim,0x1c),field<unsigned char>(victim,0x765),field<u32>(victim,0x21c),int(stunned));
+    if(!stunned){if(!movement())choose(0);return true;}
     choose(3);
-    if(field<unsigned char>(victim,0x765)&1){
+    if(stunned){
      if(fn<bool(__thiscall*)(void*,int,int)>(0x54d710)(victim,0x2c,0))notify(actor,"");
      else if(rank(actor,"acrobatics")>2){
       const std::array<vec,2> up{{{0,0,20},{0,0,0}}};method<float(__thiscall*)(void*,const void*)>(actor,0x130)(actor,up.data());
       play(actor,named(actor,"airgrabpickup"));
-     }else if(rank(actor,"might")<=0&&!(field<unsigned char>(victim,0x765)&1)){play(actor,named(actor,"grabfailed"));}
+     }else if(rank(actor,"might")<=0&&!stunned){play(actor,named(actor,"grabfailed"));}
      else choose(25);
     }lock(actor,victim);
    }
@@ -188,6 +234,7 @@ struct tk_state {
  float distance=0,time=0,heading=0;vec offset{},last{};
  bool auxiliary_done=false;
  u32 attempts=0;
+ u32 control_frames=0;
 };
 inline u32 suspend_parse_resume=0x4e39f6;
 __declspec(naked) inline void suspend_parse_native(){__asm {
@@ -204,18 +251,31 @@ inline bool __fastcall tk_parse(void* event,void*,const char* key,const char* va
  return reinterpret_cast<bool(__thiscall*)(void*,const char*,const char*)>(&suspend_parse_native)(event,key,value);
 }
 inline std::unordered_map<u32,tk_state> tk_states;
+inline bool __cdecl owns_tk_pair(u32 owner,u32 victim){const auto found=tk_states.find(owner);return found!=tk_states.end()&&found->second.victim==victim;}
 inline bool trace_acquisition=false;
 struct tk_attempt {tk_state state;void* node;};
 inline std::unordered_map<u32,tk_attempt> tk_attempts;
+enum class tk_rejection:unsigned {object_claim,nonphysical,pickup_claim,physical_lock,dead,heavy,grab_gate,tk_gate,tile,friendly,count};
+struct tk_scan {u32 candidates=0,accepted=0,last=0,physical=0;std::array<u32,unsigned(tk_rejection::count)> rejected{};};
+inline tk_scan* scanning=nullptr;
+inline bool tk_reject(tk_rejection reason){if(scanning)++scanning->rejected[unsigned(reason)];return false;}
+inline bool tk_accept(){if(scanning)++scanning->accepted;return true;}
 inline bool __cdecl tk_eligible(void* actor,void* entity,void* parameters){
- if(!entity||!parameters||(field<unsigned char>(entity,0xc5)&0x40))return false;
- if((field<u32>(entity,4)&0x40000)&&fn<bool(__thiscall*)(void*,int)>(0x41a820)(entity,0))return true;
- auto* target=cast(entity,0x429110);if(!target)return false;
- if((field<unsigned char>(target,0x30d)&4)||(field<u32>(target,4)&0x18)||!fn<bool(__thiscall*)(void*)>(0x41c540)(target))return false;
- if(lift_rule::heaviness(target)>field<std::int8_t>(parameters,0xa))return false;
- if(auto* victim=character(target))if(!fn<bool(__thiscall*)(void*)>(reinterpret_cast<u32>(&source_grabbable))(victim)||!fn<bool(__thiscall*)(void*)>(0x427e00)(victim))return false;
- if(cast(target,0x41e4d0))return false;
- return manager_flag(0x48de40,0x5c)||team(target)!=team(actor);
+ if(scanning){++scanning->candidates;scanning->last=entity?field<u32>(entity,0x1c):0;scanning->physical=entity?field<u32>(entity,4):0;}
+ if(!entity||!parameters||(field<unsigned char>(entity,0xc5)&0x40))return tk_reject(tk_rejection::object_claim);
+ if((field<u32>(entity,4)&0x40000)&&fn<bool(__thiscall*)(void*,int)>(0x41a820)(entity,0))return tk_accept();
+ auto* target=cast(entity,0x429110);if(!target)return tk_reject(tk_rejection::nonphysical);
+ if(field<unsigned char>(target,0x30d)&4)return tk_reject(tk_rejection::pickup_claim);
+ if(field<u32>(target,4)&0x18)return tk_reject(tk_rejection::physical_lock);
+ if(!fn<bool(__thiscall*)(void*)>(0x41c540)(target))return tk_reject(tk_rejection::dead);
+ if(lift_rule::heaviness(target)>field<std::int8_t>(parameters,0xa))return tk_reject(tk_rejection::heavy);
+ if(auto* victim=character(target)){
+  if(!fn<bool(__thiscall*)(void*)>(reinterpret_cast<u32>(&source_grabbable))(victim))return tk_reject(tk_rejection::grab_gate);
+  if(!fn<bool(__thiscall*)(void*)>(0x427e00)(victim))return tk_reject(tk_rejection::tk_gate);
+ }
+ if(cast(target,0x41e4d0))return tk_reject(tk_rejection::tile);
+ if(manager_flag(0x48de40,0x5c)||team(target)!=team(actor))return tk_accept();
+ return tk_reject(tk_rejection::friendly);
 }
 __declspec(naked) inline void tk_filter(){__asm {
  push edi
@@ -315,10 +375,14 @@ inline bool tk_acquire(void* actor,void* node,tk_state& s){
  std::array<unsigned char,0x2c> parameters{};
  field<std::int16_t>(parameters.data(),8)=s.impact;field<std::int8_t>(parameters.data(),0xa)=s.heaviness;field<std::int8_t>(parameters.data(),0xb)=s.level;
  u32 auxiliary=0,selected=0;
- acquire(actor,&selected,&auxiliary,parameters.data());
+ tk_scan scan;
+ {struct scope{tk_scan* previous;scope(tk_scan* current):previous(scanning){scanning=current;}~scope(){scanning=previous;}} capture(trace_acquisition?&scan:nullptr);
+ acquire(actor,&selected,&auxiliary,parameters.data());}
  ++s.attempts;
  if(trace_acquisition&&(s.attempts&(s.attempts-1))==0)
-  logger::write("tk acquisition actor=%08X attempt=%u selected=%08X auxiliary=%08X energy=%.3f level=%d heaviness=%d",token,s.attempts,selected,auxiliary,field<float>(actor,0x288),int(s.level),int(s.heaviness));
+ {logger::write("tk acquisition actor=%08X attempt=%u selected=%08X auxiliary=%08X energy=%.3f level=%d heaviness=%d candidates=%u accepted=%u post_filter_miss=%u last=%08X phys=%08X",token,s.attempts,selected,auxiliary,field<float>(actor,0x288),int(s.level),int(s.heaviness),scan.candidates,scan.accepted,unsigned(!selected&&scan.accepted),scan.last,scan.physical);
+  constexpr const char* reasons[]{"object-claim","nonphysical","pickup-claim","physical-lock","dead","heavy","grab-gate","tk-gate","tile","friendly"};
+  for(unsigned i=0;i<scan.rejected.size();++i)if(scan.rejected[i])logger::write("tk reject actor=%08X reason=%s count=%u",token,reasons[i],scan.rejected[i]);}
  if(!s.auxiliary_done&&valid(auxiliary))if(auto* object=fn<void*(__cdecl*)(u32)>(0x4297b0)(auxiliary)){
   if(auto* e=method<void*(__thiscall*)(void*,int)>(node,0x1c)(node,1)){
    auxiliary_effects(actor,object,1);method<void(__thiscall*)(void*,void*,void*)>(e,8)(e,object,actor);s.auxiliary_done=true;
@@ -378,6 +442,7 @@ inline void __fastcall tk_update(void* self,void*,void* actor,void* input){
   tk_cancel(self,nullptr,actor);field<void*>(actor,0x3bc)=named(actor,"idle");return;
  }
  const float time=simulation_time(),dt=time-s.time;
+ if(trace_acquisition&&((s.control_frames++&15)==0)){const auto* victim=character(target);logger::write("tk control actor=%08X victim=%08X dt=%.5f owner=%08X phys=%08X actor_flags=%08X contact=%02X offset_z=%.3f z=%.3f",field<u32>(actor,0x1c),s.victim,dt,field<u32>(target,0x178),field<u32>(target,4),victim?field<u32>(target,0x3d8):0,field<unsigned char>(target,0x30c),s.offset.z,field<vec>(target,0x20).z);}
  bool exhausted=false;
  // The original divisor is a binary32 0.2 widened to binary64 (3D6610).
  const double period=static_cast<double>(.2f);

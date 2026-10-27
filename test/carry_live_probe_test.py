@@ -2,6 +2,8 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest import mock
+import io
 
 spec = importlib.util.spec_from_file_location("probe", Path(__file__).parents[1] / "scripts/carry_live_probe.py")
 probe = importlib.util.module_from_spec(spec)
@@ -61,6 +63,29 @@ class ProbeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "hard release"):
             probe.record_hold(fake.send, 17, "pad", 1, 12000, 20., lambda: fake.now, fake.sleep)
         self.assertEqual(fake.commands, [])
+
+    def test_execute_requires_rank_evidence_before_opening_pipe(self):
+        argv = ["carry_live_probe.py", "--device", "pad", "--actor", "17", "--execute"]
+        with mock.patch("sys.argv", argv), mock.patch("sys.stderr", new=io.StringIO()), mock.patch("builtins.open", side_effect=AssertionError("pipe opened before rank evidence was required")):
+            with self.assertRaises(SystemExit) as error:
+                probe.main()
+        self.assertEqual(error.exception.code, 2)
+
+    def test_rank_comes_from_fresh_same_generation_trace(self):
+        verify = getattr(probe, "require_flight_rank", lambda *args: None)
+        log = "[11:40:00] carry trace flight-rank-3 ms=1000 actor=00000011 victim=00000000\n"
+        self.assertEqual(verify(log, 17, 1500), 3)
+
+    def test_wrong_rank_is_not_a_valid_rank_three_trial(self):
+        verify = getattr(probe, "require_flight_rank", lambda *args: None)
+        with self.assertRaises(RuntimeError):
+            verify("carry trace flight-rank-1 ms=1000 actor=00000011 ", 17, 1500)
+
+    def test_stale_or_different_generation_rank_cannot_validate_trial(self):
+        verify = getattr(probe, "require_flight_rank", lambda *args: None)
+        for log in ("carry trace flight-rank-3 ms=1 actor=00000011 ", "carry trace flight-rank-3 ms=1000 actor=00010011 "):
+            with self.assertRaises(RuntimeError):
+                verify(log, 17, 1500)
 
 
 if __name__ == "__main__":

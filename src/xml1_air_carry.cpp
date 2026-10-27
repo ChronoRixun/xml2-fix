@@ -14,6 +14,7 @@
 #include <array>
 #include <algorithm>
 #include <cstring>
+#include <cstdio>
 #include <cmath>
 #include <unordered_map>
 
@@ -53,7 +54,9 @@ void trace(void* actor,void* victim,const char* stage,unsigned kind,void* input=
     logger::write("carry trace %s ms=%llu actor=%08X victim=%08X energy=%.3f max_energy=%.3f pending_energy=%.3f phys=%08X flags=%08X status=%02X ground=%08X owner=%08X selected=%08X move=%p handler=%p enum=%d victim_move=%p victim_enum=%d held=%08X pressed=%08X magnitude=%.3f",
         stage,now,token,victim?at<u32>(victim,0x1c):0,at<float>(actor,0x288),at<float>(actor,0x314),at<float>(actor,0x6ac),at<u32>(actor,4),at<u32>(actor,0x3d8),at<unsigned char>(actor,0x579),at<u32>(actor,0xbc),at<u32>(actor,0x178),at<u32>(actor,0x76c),move,move?at<void*>(move,0xc8):nullptr,move?at<int>(move,0xbc):-1,vm,vm?at<int>(vm,0xbc):-1,input?at<u32>(input,0):0,input?at<u32>(input,4):0,input?at<float>(input,8):0.f);
     if(carrier_hand&&victim_hand&&target)logger::write("carry trace hands selectors=6,5 valid_mask=%X animated/world carrier=(%.3f,%.3f,%.3f) victim=(%.3f,%.3f,%.3f) target_root=(%.3f,%.3f,%.3f)",hand_valid,carrier_hand->x,carrier_hand->y,carrier_hand->z,victim_hand->x,victim_hand->y,victim_hand->z,target->x,target->y,target->z);
+    const vec p=at<vec>(actor,0x20);logger::write("carry trace position stage=%s root=(%.3f,%.3f,%.3f) control=%02X",stage,p.x,p.y,p.z,at<unsigned char>(actor,0x259));
 }
+bool __fastcall traced_flight_input(void* self,void*,void* actor,void* input){trace(actor,nullptr,"flight-input",0,input);return fn<update>(0x4ecf30)(self,nullptr,actor,input);}
 // Full generation-bearing handles; one acquisition press lasts until release.
 std::unordered_map<u32,u32> pickup_guard;
 // The downward contact and the forward decide sweep have different geometry.
@@ -138,6 +141,7 @@ void __cdecl upkeep(void* actor){
     if(!actor)return;
     det_math::fp_env fp;
     const int r=rank(actor);
+    if(trace_enabled){char stage[32]{};std::snprintf(stage,sizeof stage,"flight-rank-%d",r);trace(actor,nullptr,stage,2);}
     if(r>5)return;
     constexpr float costs[]{40.f,40.f,30.f,20.f,10.f,5.f};
     if(r<=0||fn<float(__fastcall*)(void*,void*)>(0x41d5d0)(actor,nullptr)<costs[r]){flight(actor,false);idle(actor);return;}
@@ -375,7 +379,7 @@ void __fastcall fly_move_entry(void*,void*,void* actor,void*,void*){
 // XML1 0x43312..0x43467, inside flight descent. The native PC branch
 // 0x433e46..0x433e6a already requires Guard (0x100), no power modifier
 // (0x80), and no native controller refusal. Keep those instructions intact.
-bool __cdecl descend_carry(void* actor){
+bool __cdecl descend_carry(void* actor,void* input){
     det_math::fp_env fp;
     // Protect pickup's time-zero stop/interpolation from PC's general descent
     // tail once contact has established the pair. Established carry retains
@@ -395,35 +399,38 @@ bool __cdecl descend_carry(void* actor){
     using probe=bool(__fastcall*)(void*,void*,const vec*,const vec*,int,vec*,void**);
     const bool hit=fn<probe>(0x42b6c0)(actor,nullptr,&start,&delta,1,&shift,&contact);
     void* victim=character(fn<pointer>(0x4a9590)(&contact,nullptr));
-    if(!hit||!victim)return false;
+    if(!hit||!victim){trace(actor,victim,hit?"descent-not-character":"descent-miss",1,input);return false;}
     const int player=at<int>(actor,0x3d4);
-    if(player<0||player>=4||at<u32>(reinterpret_cast<const void*>(0x70b814),4u*player)!=at<u32>(actor,0x1c))return false;
+    if(player<0||player>=4||at<u32>(reinterpret_cast<const void*>(0x70b814),4u*player)!=at<u32>(actor,0x1c)){trace(actor,victim,"descent-inactive",1,input);return false;}
     void* stats=at<void*>(victim,0x35c);
-    if(!stats||(at<unsigned char>(stats,0x2ad)&8))return false;
+    if(!stats||(at<unsigned char>(stats,0x2ad)&8)){trace(actor,victim,"descent-large",1,input);return false;}
     // XML1's valid contact consumes this descent step even when rank or
     // current move prevents pickup (0x43418/0x43430 -> 0x4348d).
-    if(rank(actor)<=2)return true;
+    if(rank(actor)<=2){trace(actor,victim,"descent-rank",1,input);return true;}
     void* move=at<void*>(actor,0x378);if(!move)return true;
     u32 flying_key=0;fn<void*(__fastcall*)(u32*,void*,const char*)>(0x41b120)(&flying_key,nullptr,"flying");
     const auto* key=slot<const u32*(__fastcall*)(void*,void*)>(move,0xd0)(move,nullptr);
-    if(!key||*key!=flying_key)return true;
+    if(!key||*key!=flying_key){trace(actor,victim,"descent-other-move",1,input);return true;}
     // PC character cylinders report contact above the authored pickup
     // height. The old bridge discarded the permitted movement and skipped
     // the descent tail, then the victim event pulled the target upward.
-    // Descend the carrier first, using the native world probe without the
-    // contacted character as a stop. Keep solid-world obstruction checks.
+    // Flag0 selects property8, it does not exclude characters. The native
+    // probe excludes actor+178 and self at42B795..42B7AF. Scope that owner
+    // exclusion to the contacted victim, then restore the actual owner.
     const float pickup_z=at<vec>(victim,0x20).z+40.f;
     if(start.z>pickup_z){
         const vec lower{0.f,0.f,pickup_z-start.z};vec allowed{};void* obstacle=nullptr;
-        fn<probe>(0x42b6c0)(actor,nullptr,&start,&lower,0,&allowed,&obstacle);
+        {struct scoped_owner{void* actor;u32 previous;scoped_owner(void* a,u32 token):actor(a),previous(at<u32>(a,0x178)){put(a,0x178,token);}~scoped_owner(){put(actor,0x178,previous);}} ignore(actor,at<u32>(victim,0x1c));
+         fn<probe>(0x42b6c0)(actor,nullptr,&start,&lower,0,&allowed,&obstacle);}
         if(!std::isfinite(allowed.z)||allowed.z>0.f||allowed.z<lower.z)return true;
         if(!std::isfinite(allowed.x)||!std::isfinite(allowed.y))return true;
         const vec position{start.x+allowed.x,start.y+allowed.y,start.z+allowed.z};
         slot<vector_set>(actor,0x1c)(actor,nullptr,&position);
-        if(position.z>pickup_z+0.01f)return true;
+        if(position.z>pickup_z+0.01f){trace(actor,victim,"descent-solid-block",1,input);return true;}
     }
     descent_target[at<u32>(actor,0x1c)]=at<u32>(victim,0x1c);
     void* next=named(actor,"flyguarddecide");
+    trace(actor,victim,"descent-decide",1,input,true);
     fn<forced>(0x432030)(actor,nullptr,next,-1,-1.f,0,0,0);
     flight(actor,true,0);
     return true;
@@ -434,9 +441,10 @@ __declspec(naked) void descent_bridge(){
     __asm {
         pushfd
         pushad
+        push esi
         push edi
         call dword ptr [descend_carry_function]
-        add esp,4
+        add esp,8
         test al,al
         jz native_descent
         popad
@@ -480,6 +488,7 @@ bool prepare(std::vector<xml1_hook_transaction::patch>& writes,bool flying_carry
     auto pointer_patch=[&](u32 va,const void* p){const auto* old=reinterpret_cast<const unsigned char*>(va);writes.push_back({va,{old,old+4},xml1_hook_transaction::pointer_bytes(p)});};
     pointer_patch(0x6931f8+4,reinterpret_cast<void*>(&flying_entry));
     pointer_patch(0x6932d0+4,reinterpret_cast<void*>(&fly_move_entry));
+    if(trace_enabled){pointer_patch(0x6931f8+24,reinterpret_cast<void*>(&traced_flight_input));pointer_patch(0x6932d0+24,reinterpret_cast<void*>(&traced_flight_input));}
     const u32 va=0x4ec7a0;std::vector<unsigned char> after(5,0xe9);const u32 relative=u32(reinterpret_cast<std::uintptr_t>(&upkeep))-va-5;std::memcpy(after.data()+1,&relative,4);
     const auto* old=reinterpret_cast<const unsigned char*>(va);writes.push_back({va,{old,old+5},after});
     const u32 parser=0x4f74b2;const auto* before=reinterpret_cast<const unsigned char*>(parser);

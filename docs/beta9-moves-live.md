@@ -109,3 +109,38 @@ a successful trial. No wake keys, direct actor button writes or desktop input.
 Record failures without replacing the DLL with a diagnostic build mid-trial.
 The retained 082c logs cannot identify each historical TK miss; the new trace
 is for making the next result attributable.
+
+## After the 082d live follow-up
+
+Save complete `state` replies during each trial, not only position/move
+summaries. Keep physical/actor/status flags, selected and owner handles,
+flying state and current energy alongside the log and screenshots.
+
+Verify learned/effective Flight rank before counting a carry trial. The
+shortcut grants unspent points; that is not a rank purchase. Several 082d
+captures show about40-point debit steps and become Idle around1.5 s; those
+records do not establish effective Flight3 (native cost modifiers also exist).
+Require a fresh `carry trace flight-rank-3 ... actor=<same full token>` line.
+Do not remove the rank<=2 negative to compensate for an uncalibrated setup.
+
+The measured carry probe now requires that evidence for `--execute`:
+
+```text
+python -B scripts/carry_live_probe.py --device pad --actor ID --rank 3 --trace-log PATH_TO_RUNNING_COPY/xml2-fix.log
+python -B scripts/carry_live_probe.py --device pad --actor ID --rank 3 --trace-log PATH_TO_RUNNING_COPY/xml2-fix.log --execute
+```
+
+The first command is plan only. Keyboard uses `--device keyboard`. The rank
+line must match the full actor generation and be within1 s of sampled state;
+the carrier must already be airborne. Energy still requires a measured fresh
+refill, never only the queued script acknowledgement. `restoreEnergy` did
+not refill these 082d sessions, so retain a failed refill as a harness failure
+and use verified natural regeneration for manual trials.
+
+For a failed Guard press, retain `guard eligibility` with `native_grab`,
+reaction, attachment and computed `stunned`. For TK misses, retain every
+`tk acquisition`, `tk reject` and `tk control` line; candidate acceptance
+followed by a native post-filter miss differs from an eligibility rejection.
+For hover, retain `flight-input`, `flight-rank-N` and `descent-*` lines.
+No descent line plus a flight-input line distinguishes an earlier input gate
+from `descent-rank`, `descent-solid-block` or a probe miss.
