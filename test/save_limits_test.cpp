@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdarg>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <set>
@@ -224,11 +225,44 @@ __declspec(naked) void endpoint_done(){__asm {
  mov cap_observed,eax
  ret
 }}
+// 0x4be010 / 0x4be9c0 are ratl pool<16-byte, 100>::pop / clear, shared by
+// every such pool. W2 a27495f widened both bodies in place, so the foreign
+// owners below popped and cleared 256 entries at the talent offsets, writing
+// up to 0xc38 bytes past their own 0x7f8-byte pool (three run as CRT static
+// constructors at process start). Only the talent edges may reach 256 copies.
+std::vector<std::uint8_t> retail_pool_pop,retail_pool_clear;
+unsigned edge_target(unsigned call){return call+5+read<unsigned>(at(call+1));}
+bool retail_pool_semantics(unsigned pop,unsigned clear){
+ constexpr unsigned size=0x7f8; // ring +0x644, head +0x7d8, tail +0x7dc, count +0x7e0, buckets +0x7e4, live +0x7f4
+ auto* m=static_cast<std::uint8_t*>(VirtualAlloc(nullptr,0x3000,MEM_COMMIT|MEM_RESERVE,PAGE_READWRITE));
+ std::memset(m,0xa5,0x3000);std::memset(m,0,size);
+ native<void(__fastcall*)(void*,void*)>(clear)(m,nullptr);
+ bool ok=read<unsigned>(m,0x7d8)==0&&read<unsigned>(m,0x7dc)==0&&read<unsigned>(m,0x7e0)==100;
+ for(unsigned i=0;i<100;++i)ok&=read<unsigned>(m,0x644+4*i)==i;
+ std::set<unsigned> ids;for(unsigned i=0;i<100;++i)ids.insert(native<unsigned(__fastcall*)(void*,void*)>(pop)(m,nullptr));
+ ok&=ids.size()==100&&*ids.rbegin()==99&&read<unsigned>(m,0x7dc)==0&&read<unsigned>(m,0x7e0)==0&&read<unsigned>(m,0x7f4)==100;
+ for(unsigned i=0;i<3;++i)ok&=read<unsigned>(m,0x7e4+4*i)==0xffffffff;
+ ok&=read<unsigned>(m,0x7f0)==0xf;
+ for(unsigned i=size;i<0x3000;++i)ok&=m[i]==0xa5;
+ VirtualFree(m,0,MEM_RELEASE);return ok;
+}
+void shared_pool_tests(){
+ check(!std::memcmp(at(0x4be010),retail_pool_pop.data(),retail_pool_pop.size())&&!std::memcmp(at(0x4be9c0),retail_pool_clear.data(),retail_pool_clear.size()),
+       "shared ratl pool<16,100> pop 0x4be010 / clear 0x4be9c0 bodies byte-identical to retail after the W2 union");
+ bool foreign=true;
+ for(unsigned a:{0x4d6b09u,0x4fd8d9u})foreign&=*native<std::uint8_t*>(a)==0xe8&&edge_target(a)==0x4be010;
+ for(unsigned a:{0x4605c2u,0x4d7020u,0x4d81feu})foreign&=*native<std::uint8_t*>(a)==0xe8&&edge_target(a)==0x4be9c0;
+ check(foreign,"five foreign ratl pool edges (0x4d6b09, 0x4fd8d9 pop; 0x4605c2, 0x4d7020, 0x4d81fe clear) still call the retail helpers");
+ const auto pop=edge_target(0x4bfce9),clear=edge_target(0x4bfe10);
+ check(pop!=0x4be010&&clear!=0x4be9c0&&edge_target(0x4c043d)==clear,"talent C-pool edges 0x4bfce9 / 0x4bfe10 / 0x4c043d reach the private 256-entry copies");
+ check(retail_pool_semantics(0x4be010,0x4be9c0),"foreign-layout ratl pool<16,100>: clear 100, pop 100 distinct, wrap, 100 bucket bits, nothing written past 0x7f8");
+ check(!retail_pool_semantics(pop,clear),"negative control: the 256-entry instruction stream (the old in-place W2 body) fails the foreign-layout check");
+}
 void talent_tests(){
  auto* reg=static_cast<std::uint8_t*>(native<void*(__cdecl*)()>(0x4c05b0)());
  check(reg&&reg==*native<void**>(0x77339c)&&read<unsigned>(reg,talent_b+b_mask)==255&&read<unsigned>(reg,talent_b+b_shift)==8,"T11 native constructor on DLL registry, B mask FF / shift 8");
  check(inaccessible(reg+talent_size),"GP relocated entire talent registry ends at guard page");
- const unsigned offsets[]={talent_a,talent_b,talent_c},allocators[]={0x4bdfb0,0x4be7b0,0x4be010},counts[]={a_live,b_live,c_live},bits[]={a_buckets,b_buckets,c_buckets};
+ const unsigned offsets[]={talent_a,talent_b,talent_c},allocators[]={0x4bdfb0,0x4be7b0,edge_target(0x4bfce9)},counts[]={a_live,b_live,c_live},bits[]={a_buckets,b_buckets,c_buckets};
  bool all=true;
  for(unsigned k=0;k<3;++k){auto* p=reg+offsets[k];std::set<unsigned> ids;
   for(unsigned i=0;i<256;++i){const auto id=native<unsigned(__fastcall*)(void*,void*)>(allocators[k])(p,nullptr);ids.insert(id);all&=id<256;}
@@ -284,11 +318,12 @@ int main(int argc,char** argv){
  check(load_image(path),"retail bytes restored before contribution guards");
  patch_transaction::contribution c;std::string why;check(save_limits::contribute_w2(c,why),"E14/E7 retail guards and owner hashes: "+why);if(c.writes.empty())return 1;
  for(auto a:{0x4885c0u,0x489a01u,0x489800u,0x4bfa50u,0x4c083cu}){auto& byte=*native<std::uint8_t*>(a);byte^=1;const auto before=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);patch_transaction::transaction bad;bad.add(c);const auto r=bad.commit();check((r==patch_transaction::outcome::refused_guard||r==patch_transaction::outcome::refused_region)&&std::equal(before.begin(),before.end(),fixture_space)&&!save_limits::installed(),"T3 mutated ledger/whole-owner byte refuses all writes at "+patch_transaction::hex(a));byte^=1;}
+ retail_pool_pop.assign(native<const std::uint8_t*>(0x4be010),native<const std::uint8_t*>(0x4be06f));retail_pool_clear.assign(native<const std::uint8_t*>(0x4be9c0),native<const std::uint8_t*>(0x4bea1d));
  patch_transaction::transaction tx;tx.add(c);check(objective_text::contribute(tx,reinterpret_cast<HMODULE>(0x400000),true),"W2 objective_text joins same transaction with one allocation-site writer");const auto outcome=tx.commit();check(outcome==patch_transaction::outcome::committed,"combined E14/E7/descriptions commit: "+tx.report());if(outcome!=patch_transaction::outcome::committed)return 1;
  if(argc>2){const std::string prefix=argv[2];std::ofstream text(prefix+"-text.bin",std::ios::binary);text.write(native<const char*>(0x401000),0x27d7b5);std::ofstream manifest(prefix+"-caves.tsv");std::set<unsigned> pages;
   for(const auto& w:c.writes)for(unsigned a=w.va&~4095u;a<((w.va+w.bytes.size()+4095u)&~4095u);a+=4096)pages.insert(a);
   std::ofstream page_file(prefix+"-pages.txt");for(auto a:pages)page_file<<std::hex<<a<<'\n';
   for(const auto& block:blocks){const auto base=block.lo+5+read<unsigned>(at(block.lo+1));int size=block.hi-block.lo+5;for(const auto& e:block.edits)size+=static_cast<int>(patch_transaction::bytes_of(e.value).size())-e.size;const auto dump_path=prefix+"-code-"+patch_transaction::hex(block.lo)+".bin";std::ofstream dump(dump_path,std::ios::binary);dump.write(native<const char*>(base),size);manifest<<std::hex<<block.lo<<'\t'<<block.hi<<'\t'<<base<<'\t'<<size<<'\t'<<dump_path<<'\n';}
  }
- externals();objective_tests();files_tests();side_tests();talent_tests();std::printf("W2 objectives/talents: %d checks, %d failure(s)\n",checks,failures);return failures?1:0;
+ externals();objective_tests();files_tests();side_tests();shared_pool_tests();talent_tests();std::printf("W2 objectives/talents: %d checks, %d failure(s)\n",checks,failures);return failures?1:0;
 }

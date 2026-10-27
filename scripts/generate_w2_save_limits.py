@@ -185,8 +185,15 @@ oldB={0xe10:'bitmap',0xe20:'ring',0xfb4:'head',0xfb8:'tail',0xfbc:'ringcount',0x
 B['generation1']=B['generations']+4
 oldC={0x640:'bitmap',0x644:'ring',0x7d8:'head',0x7dc:'tail',0x7e0:'ringcount',0x7e4:'buckets',0x7f4:'live'}
 outer={0x1654:a_pool+A['live'],0x1658:a_index,0x1724:b_pool,0x26e4:b_pool+B['buckets'],0x26f4:b_pool+B['live'],0x26f8:b_pool+B['generations'],0x2888:b_pool+B['mask'],0x288c:b_pool+B['shift'],0x2890:c_outer,0x2894:c_outer+4,0x2898:c_outer+8,0x289c:c_pool,0x3090:c_pool+C['live'],0x3094:c_index}
+# 0x4be010 / 0x4be9c0 are ratl pool<16-byte, 100>::pop / clear, identical-code
+# folded for every such pool: 0x4d6b00 and 0x4fd8d0 (pop), 0x460580, 0x4d6ff0
+# and 0x4d8170 (clear) are foreign owners. Both bodies stay retail; only the
+# talent registry's own C-pool edges call private 256-entry copies (below).
+SHARED_POOL=((0x4be010,0x4be06f),(0x4be9c0,0x4bea1d))
+def shared_pool(a):return any(l<=a<h for l,h in SHARED_POOL)
 for i in decode(0x4bdfb0,0x4c06a0):
     d=i.disp;new=None;a=i.address
+    if shared_pool(a):continue
     # The pool-specific offsets are unique in this owner range, apart from
     # the two appended index-table offsets, classified by the outer object.
     if d in outer:new=outer[d]
@@ -200,11 +207,15 @@ for i in decode(0x4bdfb0,0x4c06a0):
 # foreign classes. Replace only the three talent-owned call edges.
 for a,target in ((0x4befbf,8),(0x4bfba2,9),(0x4bfc32,9)):
     call(a,target,'private 256-entry ring helper')
+for a,target in ((0x4bfce9,19),(0x4bfe10,20),(0x4c043d,20)):
+    assert ins(a).mnemonic=='call' and ins(a).operands[0].imm==(0x4be010 if target==19 else 0x4be9c0)
+    call(a,target,'private 256-entry talent pool helper')
 # 27 classified capacity/last-index operands (26 in the design's E7-02
 # list plus the full-loop-owned one); M/cap/stack are separate classifications.
 caps=[0x4bdfe4,0x4beabe,0x4bead5,0x4beae5,0x4befa6,0x4be58f,0x4be5ec,0x4be62d,0x4be650,0x4be676,0x4be6b8,0x4be7e4,0x4beb03,0x4beede,0x4beef5,0x4bef05,0x4bef60,0x4bef7b,0x4bf319,0x4bf358,0x4bfaf5,0x4bfed1,0x4be044,0x4be9ee,0x4bea05,0x4bea15,0x4c0115]
 for a in caps:
     i=ins(a);v=i.operands[-1].imm;assert v in (99,100)
+    if shared_pool(a):continue # guarded retail in the ledger, never edited
     nv=255 if v==99 else 256
     if i.imm_size==4:new=operand(i,nv)
     else:

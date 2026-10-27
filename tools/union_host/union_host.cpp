@@ -19,6 +19,7 @@
 #include <string>
 #include <vector>
 #include "../../src/gameplay_capabilities.hpp"
+#include "../../test/w2_boot_probe.hpp"
 
 extern "C" unsigned char union_space[]; // union_space.asm: the code-class block right after the headers (.text$a)
 namespace
@@ -247,6 +248,18 @@ int wmain(int argc, wchar_t** argv)
 	const HMODULE fix = LoadLibraryW(argv[1]);
 	const DWORD load_error=fix?0:GetLastError();
 	if (!fix) { std::fwprintf(stderr, L"cannot load %s (%lu)\n", argv[1], load_error);if(!GetEnvironmentVariableW(L"UNION_ALLOW_REFUSAL",nullptr,0))return 5; }
+	// Optional native boot regression; its XMLB is an owned read-only input.
+	wchar_t boot_xml[MAX_PATH]{};
+	if (fix && GetEnvironmentVariableW(L"UNION_W2_BOOT_PROBE",boot_xml,MAX_PATH)) {
+		std::setvbuf(stdout,nullptr,_IONBF,0);SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
+		DWORD old;VirtualProtect(union_space,space_size,PAGE_EXECUTE_READWRITE,&old);
+		const auto core=GetModuleHandleW(L"libIGCore.dll");
+		reinterpret_cast<void(__cdecl*)()>(GetProcAddress(core,"?igInitBootstrap@Core@Gap@@YAXXZ"))();
+		reinterpret_cast<void(__cdecl*)()>(GetProcAddress(core,"?_libIGCore_Init@Gap@@YAXXZ"))();
+		char path[MAX_PATH]{};WideCharToMultiByte(CP_ACP,0,boot_xml,-1,path,MAX_PATH,nullptr,nullptr);
+		int result=9;try {result=w2_boot_probe::run(path);} catch(const std::exception& e){std::printf("W2 boot probe: %s\n",e.what());}
+		std::fflush(stdout);TerminateProcess(GetCurrentProcess(),result);
+	}
 	Sleep(1000);
 	if(readonly_va){MEMORY_BASIC_INFORMATION page{};VirtualQuery(reinterpret_cast<void*>(readonly_va),&page,sizeof page);
 		if(page.Protect!=PAGE_EXECUTE_READ){std::fprintf(stderr,"readonly page protection changed\n");return 7;}

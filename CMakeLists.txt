@@ -103,6 +103,7 @@ add_library(xml2_fix SHARED
 	src/pad_profile.cpp
 	src/pad_bindings.cpp
 	src/pad_prompts.cpp
+	src/lc_fonts.cpp
 	src/pad_input.cpp
 	src/virtual_pad.cpp
 	src/xinput_pad.cpp
@@ -850,6 +851,10 @@ add_executable(xml2_style_manager_host test/style_manager_host.cpp src/patch_tra
 target_include_directories(xml2_style_manager_host PRIVATE src)
 target_compile_options(xml2_style_manager_host PRIVATE /UNDEBUG)
 target_link_options(xml2_style_manager_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
+add_executable(xml2_lc_fonts_host test/lc_fonts_host.cpp src/patch_transaction.cpp tools/union_host/union_space.asm)
+target_include_directories(xml2_lc_fonts_host PRIVATE src)
+target_compile_options(xml2_lc_fonts_host PRIVATE /UNDEBUG)
+target_link_options(xml2_lc_fonts_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
 # W3-8: production transaction and isolated retail pool lifecycle fixture.
 add_executable(xml2_script_pools_test test/script_pools_test.cpp src/script_pools.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
 target_include_directories(xml2_script_pools_test PRIVATE src)

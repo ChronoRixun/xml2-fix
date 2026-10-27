@@ -113,6 +113,7 @@
 #include "pad_profile.hpp"
 #include "pad_bindings.hpp"
 #include "pad_prompts.hpp"
+#include "lc_fonts.hpp"
 #include "anim_enums.hpp"
 #include "char_sounds.hpp"
 #include "motion_pool.hpp"
@@ -237,6 +238,7 @@ namespace
 		// The button prompts: the pad's names for a player on a pad, the power wheel's buttons of play. Code and
 		// data the game runs from its first menu on; none of the sites is another module's.
 		pad_prompts::install(game);
+		lc_fonts::install(game);
 		real_get_proc_address = reinterpret_cast<get_proc_address_t>(
 			iat_hook::hook(game, "KERNEL32.dll", "GetProcAddress", 0, reinterpret_cast<void*>(&game_get_proc_address)));
 		if (!real_get_proc_address)

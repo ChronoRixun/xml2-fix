@@ -53,6 +53,9 @@ for key in ('item-defs','enhancements','attached-pool','item-handles'):
   a=int(row['addr'],16);b=bytes.fromhex(row['bytes']);assert raw(a,len(b))==b,(key,hex(a),'retail guard')
 # Pool-relative vs object-relative accesses are deliberately separate.
 for i in decode(0x483090,0x483480)+decode(0x482a20,0x482ab0):
+ # Shared ring<256>::pop has three foreign callers. The item call alone is
+ # redirected to a private 1024-entry implementation; never widen this body.
+ if 0x483410<=i.address<0x48343c:continue
  new=map_pool(i,oldi,ip,1024)
  if new:edit(i.address,new,'instance-layout')
 for i in decode(0x45f2a0,0x45fb60):
@@ -61,8 +64,6 @@ for i in decode(0x45f2a0,0x45fb60):
 # Object live-count compare; ring-relative pop helpers.
 for a,offs in ((0x483390,ip['live']+4),(0x45f920,ap['live']+4)):
  i=ins(a);b=operand(i,offs,True);b[i.imm_offset:i.imm_offset+4]=p32(1024 if a==0x483390 else 4096);edit(a,b,'object-count')
-for i in decode(0x483410,0x48343c):
- if i.disp in (0x408,0x40c):edit(i.address,operand(i,1024*4+(i.disp-1024),True),'instance-ring-relative')
 for i in decode(0x45f9a0,0x45f9ce):
  if i.disp in (0x5e4,0x5e8):edit(i.address,operand(i,4096*4+(i.disp-375*4),True),'attached-ring-relative')
 for a in (0x45f315,0x45f6c9,0x45f6e8):edit(a,operand(ins(a),128),'attached-bitmap-clear')
@@ -70,7 +71,7 @@ edit(0x48361e,b'\x68'+p32(ip['size']),'instance-allocation')
 edit(0x45fb0e,b'\x68'+p32(ap['size']),'attached-allocation')
 # All original helper entry points stay untouched. Calls acquire private clones.
 # Synthetic branch targets 1/2 resolve to the private helper clones at runtime.
-for a,target in ((0x482a89,1),(0x45f309,2)):
+for a,target in ((0x482a89,1),(0x45f309,2),(0x4833f9,5)):
  edit(a,b'\xe8'+p32(0),'helper-call');extra[a]=target
 # Clears keep flags and every GP register (the retail unrolled stores do too).
 def clear(reg,n):return bytes.fromhex('9c6057')+bytes([0x8b,0xf8+reg])+b'\x33\xc0\xb9'+p32(n)+bytes.fromhex('f3ab5f619d')
