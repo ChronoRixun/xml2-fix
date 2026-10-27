@@ -9,6 +9,11 @@ using shared_handler_rules::branch;
 inline constexpr std::array<const wchar_t*,11> keys{L"JumpAttackDamageRule",L"FlyChargeDamageRule",L"ColossusChargeRule",L"BeastBounceRule",L"FastballRule",L"IdleBoredRule",L"LocomotionScaleRule",L"AnimationPhaseRule",L"TeleportVisibilityRule",L"TelekinesisRule",L"GuardDecideRule"};
 enum part : u32 {jump_damage=1,fly_damage=2,colossus=4,bounce=8,fastball=16,idle=32,scale=64,phase=128,visibility=256,telekinesis=512,guard=1024,all=2047};
 inline constexpr dependency guards[]{
+ {512,{0x42e914,"d9442410d81d2c016800dfe0f6c4410f85ea000000","native release speed gate before L2 arming"}},
+ {1024,{0x501af0, "538b5c240885db5556578be9750933c05f5e5d5bc20c00", "entry-context chain resolver"}},
+ {1024,{0x4310b0, "f6842490000000040f85ff040000", "entry abort bit2 checked before parent transition commits"}},
+ {512,{0x42e99b, "8a842480000000d99ef002000084c0c786c002000003000000740a8b4424748986b8020000", "TK final selector chooses native L2 amount"}},
+
  {4,{0x4dc353,"8b855c0300008d4c241851508bcf","punch damage evaluates second actor stats"}},
  {4,{0x4dc387,"508d4f04e890e9ffff","punch knockback consumes context stats after BalanceParity-owned load"}},
  {4,{0x4dc44d,"8b8d5c030000518d4824e8c4e8ffff","punch MaxRange evaluates second actor stats"}},
@@ -155,7 +160,7 @@ inline std::vector<unsigned char> retail(u32 va,std::size_t n) {
  return {};
 }
 struct targets {const void *jump,*fly,*colossus_input,*colossus_contact,*bounce,*fastball;
- const void *tk_entry=nullptr,*tk_update=nullptr,*tk_cancel=nullptr,*tk_input=nullptr,*tk_filter=nullptr,*guard_entry=nullptr,*tk_parse=nullptr,*guard_input=nullptr;};
+ const void *tk_entry=nullptr,*tk_update=nullptr,*tk_cancel=nullptr,*tk_input=nullptr,*tk_filter=nullptr,*guard_entry=nullptr,*tk_parse=nullptr,*guard_input=nullptr,*tk_release_arm=nullptr;};
 inline std::vector<xml1_hook_transaction::patch> patches(u32 mask,const targets& t) {
  std::vector<xml1_hook_transaction::patch> out;
  auto write=[&](u32 a,std::vector<unsigned char> b){out.push_back({a,retail(a,b.size()),std::move(b)});};
@@ -189,6 +194,7 @@ inline std::vector<xml1_hook_transaction::patch> patches(u32 mask,const targets&
   write(0x6938b8,xml1_hook_transaction::pointer_bytes(t.tk_input));
   jump(0x4f2da0,t.tk_filter,5);
   jump(0x4e39f0,t.tk_parse,6);
+  jump(0x42e923,t.tk_release_arm,6);
  }
  if(mask&guard){write(0x693004,xml1_hook_transaction::pointer_bytes(t.guard_entry));write(0x693018,xml1_hook_transaction::pointer_bytes(t.guard_input));}
  return out;

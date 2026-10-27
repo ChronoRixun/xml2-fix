@@ -45,7 +45,7 @@ void install(HMODULE game) {
  }
  using namespace shared_handler_c_bridges;
  const targets callbacks{&jump_damage_bridge,&fly_damage_bridge,&colossus_input,&colossus_contact,&bounce_contact,&fastball_bridge,
-  &tk_guard_bridges::tk_entry,&tk_guard_bridges::tk_update,&tk_guard_bridges::tk_cancel,&tk_guard_bridges::tk_input,&tk_guard_bridges::tk_filter,&tk_guard_bridges::guard_entry,&tk_guard_bridges::tk_parse,&tk_guard_bridges::guard_input};
+  &tk_guard_bridges::tk_entry,&tk_guard_bridges::tk_update,&tk_guard_bridges::tk_cancel,&tk_guard_bridges::tk_input,&tk_guard_bridges::tk_filter,&tk_guard_bridges::guard_entry,&tk_guard_bridges::tk_parse,&tk_guard_bridges::guard_input,&tk_guard_bridges::release_arming_gate};
  bool safe=true;
  if(xml1_hook_transaction::apply(memory,patches(wanted,callbacks),&safe)) {
   applied=wanted;logger::write("shared handlers C: installed mask %03X revision 1",applied);

@@ -168,7 +168,10 @@ capacity owner's published entry bridges and virtual methods.
 
 Pickup moves XY one percent per callback toward bone 6, preserves Z and adds
 3.14 to carrier yaw. The default attachment uses bone 0 minus 55 Z (missing bone:
-position plus 38 minus 55). Enemy poses align bone-5/6 hand midpoints. Bone
+position plus 38 minus 55). Known enemy and ally carry poses align bone-5/6
+hand midpoints in beta 9. Extending hand alignment to allies is the requested
+visual adaptation: XML1 `30300` uses hands for enemy enums and root offset for
+allies. Unknown poses retain the root fallback. Bone
 lookup requests real animated skeletons with PC's added flags `(false,false)`.
 `(true,true)` selects fixed approximations in `568E90`: bone0 becomes root+25
 and the source -55 offset incorrectly puts an ally at root-30. XML1 `12CAD0`
@@ -287,8 +290,11 @@ reset instructions also run after carrier entry and before frame movement.
 Carrier frame restores constraints for a reciprocal flying airborne pair before
 attachment, closing that callback-order gap. While pickup owns the pair,
 the general PC Guard-descent tail is consumed without another contact probe.
-Established carry retains XML1's probe policy: contacts consume descent, while
-Guard through empty air still descends and preserves the carried pair.
+Beta 9 retains the acquisition Guard press through established carry with a
+full-handle sidecar, even when the PC's 20-unit probe misses. Release during
+pickup or carry clears it. A fresh Guard press retains the probe/descent policy:
+contacts consume descent, while empty air permits descent. Movement transitions
+retain the latch; interruption, pair loss, a new acquisition and throw clear it.
 Landing and flight loss still release the pair. The retail bone path executes
 down to a synthetic renderer matrix; actual animation/collision remains live.
 
@@ -301,3 +307,20 @@ debit is added. The fixture executes that receiver and its native descriptor
 constructor/copies with amounts 5/19/42, attribution, expired/stationary contacts
 and repeated-contact cooldown. Its terminal damage sink is synthetic, so live
 health and defense behavior still require verification.
+
+Beta 9 wraps native `victim_throw` registration `692378` only when flying carry
+is enabled. Unrelated events execute the same retail `4DB830` once. Successful
+events on our carry-throw handler also restore XML1 `CEC34..CEC74`'s complete
+constraint release/detach (PC `4DB9DF` clears only bit2), then arm enemies with
+the same evaluated `L2` and caster multiplier as the XML1 generic throw service,
+a two-second window and native descriptor/attribution fields. Native authored
+motion, ownership exclusions, impact receiver, defenses and cooldown remain.
+Friendly-damage-off allies and neutral NPCs do not receive this amount.
+The source carry event `CEA90` itself does not arm a separate amount: applying
+the generic throw damage policy here is an adaptation to the reported carry
+damage failure, not a claim that that event contains an omitted L2 write.
+The fixture executes the complete native event including both return paths,
+Attack/Smash velocities, eligibility negatives and the arming stores.
+
+[Live acceptance and input driver](beta9-moves-live.md) cover the outstanding
+hardware, HP/defense and visible-pose checks.

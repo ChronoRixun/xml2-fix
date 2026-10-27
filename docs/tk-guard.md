@@ -83,6 +83,18 @@ state, stop the held sound and discard the sidecar. Rule 45's shared victim
 retention recognizes the `tele` move family and its pickup entry accepts the
 source's already-marked objects.
 
+For a voluntary TK throw the final PC-only argument to `42E570` is private
+mode **2**. The guarded bridge at `42E923` admits the native arming block even
+when the normalized moving direction has speed exactly one. Retail skips that
+whole block at speed <=1; setting its ordinary overwrite flag alone therefore
+does not fix moving throws. The subsequent nonzero selector at
+`42E99B..42E9BA` writes computed native `L2` damage, matching XML1's generic
+throw policy `3DF3F..3DFAD`. Ordinary PC modes 0/1 replay their original speed
+condition; cancellation passes zero. The regression executes `42E914..42EA13`,
+including the real speed comparison, native L2/caster evaluation calls,
+deadline and complete descriptor stores, for speeds 0/1/1.0001/500 and modes
+0/1/2. It covers actor/object and moving/still TK releases.
+
 Stationary/vertical-only releases retain a zero horizontal direction through
 normalization. XML1's release service `3DCA9/3DD0B` and PC `42E6DE/42E752` then
 use the **victim's facing**, including the native upward impulse. XML1's higher
@@ -94,12 +106,20 @@ to the native thrown-body impact receiver; see [grab/carry](xml1-grab-carry.md).
 
 ## Guard policy and the wall paths
 
-XML1 entry `DA3A0` sets context bit0; input `D99D0..DA193` runs in PC input slot
-`693018`. The replacement keeps the interaction policy in that input callback,
-leaves pending decisions for the PC scheduler, and never recursively dispatches
-them from entry `693004`. An empty released tap reaches native movement fallback
-`4FBE80`, selects Idle, and exits. Immediate wall-lunge dispatch returns **false**
-as at XML1 `D9E73`, so the scheduler does not dispatch another chain afterward.
+XML1 entry `DA3A0` sets context bit0; input `D99D0..DA193` corresponds to PC slot
+`693018`. Beta 9 performs the one-shot interaction policy at entry `693004`,
+so admission no longer depends on a later input tick while Guard is held. This
+is a candidate fix for the hardware-input symptom; no live hardware run was
+performed. The incoming context's move is used for chain resolution (`501AF0`):
+PC installs it at actor+378 only later, at `431252`. The incoming pending move
+is cleared first. An actual result is dispatched once, and context bit2 aborts
+the parent transition at `4310B0`; no unconditional pending dispatcher runs.
+The slot-6 policy remains available if an authored chain cannot be resolved.
+An empty decision selects Idle. Immediate wall-lunge dispatch still returns
+**false**, matching XML1 `D9E73`, preventing an extra dispatch.
+
+Use [the human-length pad/keyboard acceptance procedure](beta9-moves-live.md).
+Direct handler fixtures establish scheduling behavior, not hardware routing.
 
 The policy includes an existing held interaction (`use_button`), repeated
 movement fallback, the 48-unit probe and 16-unit box, actor and neutral targets,

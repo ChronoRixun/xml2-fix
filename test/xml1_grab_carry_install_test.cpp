@@ -339,7 +339,7 @@ void lifecycle_boundaries(){
     }
 }
 }
-namespace lift_rule { bool fixture_installed=true;bool installed(){return fixture_installed;} }
+namespace lift_rule { bool fixture_installed=true;bool installed(){return fixture_installed;} int heaviness(void* p){return reinterpret_cast<unsigned char*>(p)[0x31d];} }
 namespace anim_enums {
 bool fixture_available=true;
 const anim_enum_layout::descriptor* layout(){return fixture_available?&anim_enum_layout::raised:nullptr;}
