@@ -49,6 +49,24 @@ namespace
 int main(int argc, char** argv)
 {
 	{
+		char out[128]{};
+		auto format = [](char* dst, int size, const char* pattern, const char* hero) {
+			return std::snprintf(dst, static_cast<std::size_t>(size), pattern, hero);
+		};
+		check(format_roster_hero(format, out, 128, " (%s)", "") == 13 && std::strcmp(out, " (Spectating)") == 0,
+		      "B3 one-hero party: the joiner's empty hero label says Spectating");
+		format_roster_hero(format, out, 128, " (%s)", "Wolverine");
+		check(std::strcmp(out, " (Wolverine)") == 0, "host's native hero display name is preserved");
+		format_roster_hero(format, out, 128, " (%s)", "Cyclops");
+		check(std::strcmp(out, " (Cyclops)") == 0, "party widens: the current hero replaces Spectating immediately");
+		format_roster_hero(format, out, 128, " (%s)", nullptr);
+		check(std::strcmp(out, " (Spectating)") == 0, "a missing label is safe too");
+		std::memset(out, 0x5a, sizeof(out));
+		format_roster_hero(format, out, 8, " (%s)", "");
+		check(out[7] == 0 && out[8] == 0x5a, "spectator suffix respects the native formatter's supplied capacity");
+	}
+
+	{
 		std::array<std::uint8_t, 64> wrapper{};wrapper[0]=0x5a;
 		auto* cursor=wrapper.data()+24;
 		std::memcpy(wrapper.data()+32,&cursor,sizeof(cursor));
@@ -273,9 +291,16 @@ int main(int argc, char** argv)
 			seats_changed[0x612b25 - limits_rules::image_base] ^= 1;
 			const auto* seats_bad = join_in_progress_rules::first_mismatch(seats_changed.data());
 			check(seats_bad && seats_bad->va == 0x612b25, "participant creation hero-seat side effects have an exact retail guard");
+			for (const auto va : {0x5d950cu, 0x5d95bdu, 0x5604f0u})
+			{
+				auto changed = mapped;
+				changed[va - limits_rules::image_base] ^= 1;
+				check(join_in_progress_rules::first_mismatch(changed.data()) != nullptr,
+				      "roster hook refuses a changed hero lookup, format call or formatter ABI");
+			}
 			using namespace join_in_progress_rules;
 			auto same = [&](std::uint32_t va, const auto& bytes) { return std::memcmp(mapped.data() + va - limits_rules::image_base, bytes.data(), bytes.size()) == 0; };
-			check(same(teardown_call, teardown_original) && same(gamespy_call, gamespy_original) && same(add_entry, add_original) &&
+			check(same(roster_hero_call, roster_hero_original) && same(teardown_call, teardown_original) && same(gamespy_call, gamespy_original) && same(add_entry, add_original) &&
 			      same(record_seats, record_seats_original) &&
 			      same(area_barrier_call, area_barrier_original) &&
 			      same(campaign_unregister_call, campaign_unregister_original) &&

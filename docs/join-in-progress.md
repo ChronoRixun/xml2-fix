@@ -151,3 +151,20 @@ ends for it ("Player has been dropped from the game session" / "You have lost co
 three-PC test (0.3.0c) lost a joiner this way after a hero switch. With rule 26 the drop call is replaced: the
 player stays, one log line names it, the native warnings and the native reset after the drop stay. A frozen or
 vanished player is still removed by the game's own timeout and the GNS link checks.
+
+The online ready roster (including Xtraction) labels a participant without a held
+hero as `Player (Spectating)` instead of leaving empty parentheses. `Player` is
+the participant nickname; the parentheses contain the native hero display name.
+The current hero name resumes as soon as the story gives that participant a hero.
+The formatting call at `0x5d95bd` is guarded and installed with JoinInProgress;
+this display change does not alter hero ownership or the shared gameplay rule.
+
+The synthetic `xml2_union_host` also accepts `UNION_COOP_PROBE=on` with
+`Transport=gns` and `JoinInProgress=1` in its fixture INI. It executes the installed
+DLL's roster wrapper through the real native formatter and both GNS removal
+entry bridges on synthetic records, checks stack balance, and exits without a
+game session. Use `UNION_COOP_PROBE=off` for an absent/zero JoinInProgress key or
+for the guard-refusal case (`UNION_MUTATE_VA=5604f0`). Outputs should show zero
+fixture failures, and the ON log should include the synthetic notice reasons
+`0x10ce/0x10cf`, flag 1 and the removal reason `0x10ce`. As with other union runs,
+use a private desktop and compare registry snapshots.

@@ -20,6 +20,7 @@
 #include <vector>
 #include "../../src/gameplay_capabilities.hpp"
 #include "../../test/w2_boot_probe.hpp"
+#include "../../test/coop_lifecycle_probe.hpp"
 
 extern "C" unsigned char union_space[]; // union_space.asm: the code-class block right after the headers (.text$a)
 namespace
@@ -248,6 +249,13 @@ int wmain(int argc, wchar_t** argv)
 	const HMODULE fix = LoadLibraryW(argv[1]);
 	const DWORD load_error=fix?0:GetLastError();
 	if (!fix) { std::fwprintf(stderr, L"cannot load %s (%lu)\n", argv[1], load_error);if(!GetEnvironmentVariableW(L"UNION_ALLOW_REFUSAL",nullptr,0))return 5; }
+	// Optional co-op regression: only synthetic calls, no game/session startup.
+	wchar_t coop[16]{};
+	if (fix && GetEnvironmentVariableW(L"UNION_COOP_PROBE", coop, 16)) {
+		std::setvbuf(stdout, nullptr, _IONBF, 0);
+		const int result = coop_lifecycle_probe::run(std::wcscmp(coop, L"on") == 0);
+		std::fflush(stdout); TerminateProcess(GetCurrentProcess(), result);
+	}
 	// Optional native boot regression; its XMLB is an owned read-only input.
 	wchar_t boot_xml[MAX_PATH]{};
 	if (fix && GetEnvironmentVariableW(L"UNION_W2_BOOT_PROBE",boot_xml,MAX_PATH)) {

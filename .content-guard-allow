@@ -145,3 +145,5 @@ DISASM  test/xml1_economy_shop_checks.hpp  # Authored isolated tab-loop and stal
 DISASM test/e4_observe_host.cpp # Authored synthetic CPU entry/capture and deliberate register/FPU clobber probes; native input is read locally at runtime, no game listing is embedded.
 
 GAME_EXT src/e4_unwind.asm # Authored SafeSEH observer thunk; only forwards to our callback, no game instructions or listing.
+
+DISASM test/coop_lifecycle_probe.hpp # Authored synthetic stack probes and return tail exercise the production DLL against the locally owned PE; no extracted game body.

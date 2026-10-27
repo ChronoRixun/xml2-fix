@@ -125,3 +125,12 @@ output boundary so remote text cannot inject lines.
 v1.6.1 static `/MT`, protobuf and abseil from vcpkg `x86-windows-static`, same toolset). Without `XML2_FIX_GNS_ROOT`
 the DLL has no GNS and `Transport=gns` logs that the stock transport stays in use. Native test:
 `xml2_gns_transport_test [XMen2.exe]`.
+
+Native participant removals log the entry caller, participant index, both notice
+reason codes and flag before the existing removal filter runs. The corresponding
+removal logs its caller, record and reason. The best-effort stack can be truncated
+by the engine's x86 frame omission; the explicitly captured entry caller is still
+available. These rare lifecycle lines are outside the capped packet trace.
+Opcode `0x2b` is the native 12-byte participant-removal notice (`0x611550`), so its
+presence alone does not distinguish a network failure, checksum vote or session
+teardown. The diagnostics do not suppress a reset, removal or checksum decision.
