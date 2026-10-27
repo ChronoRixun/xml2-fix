@@ -1,4 +1,5 @@
 #define _CRT_RAND_S
+#include "e4_observe.hpp"
 #include "save_format.hpp"
 #include "item_capacity.hpp"
 #include "native_save_layout.hpp"
@@ -1181,7 +1182,7 @@ namespace save_format
 		{
 			__try
 			{
-				reinterpret_cast<native_load_t>(in_game(game_load))(game,nullptr,buffer,mode);return true;
+				e4_observe::native_call("save:native load", [&] { reinterpret_cast<native_load_t>(in_game(game_load))(game,nullptr,buffer,mode); });return true;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER){return false;}
 		}
@@ -1805,7 +1806,8 @@ namespace save_format
 			{
 				void* game = reinterpret_cast<game_getter_t>(in_game(game_getter))();
 				const auto* vtable = at<const std::uint8_t*>(game, 0);
-				at<serialize_t>(vtable, 0x208)(game, nullptr, base);
+				const auto serialize = at<serialize_t>(vtable, 0x208);
+				e4_observe::native_call("save:serializer", [&] { serialize(game, nullptr, base); });
 				return true;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)

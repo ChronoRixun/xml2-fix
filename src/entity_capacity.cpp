@@ -50,15 +50,31 @@ namespace entity_capacity
 		std::uint32_t address_of(const void* p) { return static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(p)); }
 		bool read_dword(std::uint32_t va, std::uint32_t& out) { return patch_transaction::read_memory(va, &out, 4); }
 
-		[[noreturn]] void fail_stop(const char* what)
+        [[noreturn]] void fatal_exit()
+        {
+            RaiseFailFastException(nullptr,nullptr,0);
+            TerminateProcess(GetCurrentProcess(),3);
+            for(;;){}
+        }
+        void lifecycle_log(const char* what) noexcept
+        {
+            try { logger::write("E4: FATAL: %s; simulation cannot continue after a lifecycle exception",what); }
+            catch(...) {} // diagnostic failure cannot cancel the mandatory exit
+        }
+        [[noreturn]] void lifecycle_stop(const char* what)
+        {
+            __try { lifecycle_log(what); }
+            __except(EXCEPTION_EXECUTE_HANDLER) {}
+            fatal_exit();
+        }
+		[[noreturn]] void fail_stop(const char* what, bool lifecycle = false)
 		{
+            if(lifecycle)lifecycle_stop(what);
 			logger::write("entity capacity: FATAL: %s; the process stops rather than run a half-initialised save manager", what);
 			MessageBoxA(nullptr, (std::string("X-Men Legends II could not initialise its save manager under the entity-capacity install:\n") + what +
 			                      "\n\nThe game stops here instead of continuing with an invalid layout. See xml2-fix.log.").c_str(),
 			            "XML2 Fix: entity capacity", MB_OK | MB_ICONERROR);
-			RaiseFailFastException(nullptr, nullptr, 0);
-			TerminateProcess(GetCurrentProcess(), 3);
-			for (;;) {}
+            fatal_exit();
 		}
 
 		// ---- allocator (retail 0x461910 / 0x4613e0 and the two full-bitmap-clear helpers) ----------------------
@@ -410,6 +426,11 @@ namespace entity_capacity
 			if (std::string_view(prepared_profile.layout_id) == "W2" && (!save_manager::contribute_w2(c, failure) || !item_capacity::contribute_w2(c, failure) || !save_limits::contribute_w2(c, failure))) return false;
 			return true;
 		}
+	}
+
+	[[noreturn]] void fail_stop_lifecycle(const char* site)
+	{
+		fail_stop(site, true);
 	}
 
 	void prepare(patch_transaction::transaction& transaction, HMODULE game)

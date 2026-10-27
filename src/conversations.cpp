@@ -1,3 +1,4 @@
+#include "e4_observe.hpp"
 #include "conversations.hpp"
 
 #include "conversations_rules.hpp"
@@ -222,7 +223,8 @@ namespace conversations
 					const std::uint32_t none = none_handle;
 					std::memcpy(cs + cs_voice, &none, sizeof(none));
 				}
-				method<pick_t>(cs, cs_pick_slot)(cs, nullptr, 0);
+				const auto pick = method<pick_t>(cs, cs_pick_slot);
+				e4_observe::native_call("conversations:pick", [&] { pick(cs, nullptr, 0); });
 				return true;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)

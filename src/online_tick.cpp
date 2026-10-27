@@ -3,6 +3,7 @@
 #include "frame_rate_rules.hpp"
 #include "ini.hpp"
 #include "log.hpp"
+#include "patch_transaction.hpp"
 
 #include <cstring>
 
@@ -37,6 +38,14 @@ namespace online_tick
 				return false;
 			}
 			auto* field = at + online_tick_patch.offset;
+            patch_transaction::write diagnostic_before, diagnostic_after;
+            if(patch_transaction::record_verified_writes){
+                const auto va=static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(field));
+                diagnostic_before={va,{field,field+online_tick_patch.replacement.size()},"TickRate"};
+                diagnostic_after={va,{online_tick_patch.replacement.begin(),online_tick_patch.replacement.end()},"TickRate"};
+                patch_transaction::verified_originals.reserve(patch_transaction::verified_originals.size()+1);
+                patch_transaction::verified_writes.reserve(patch_transaction::verified_writes.size()+1);
+            }
 			DWORD old_protect = 0;
 			if (!VirtualProtect(field, online_tick_patch.replacement.size(), PAGE_EXECUTE_READWRITE, &old_protect))
 			{
@@ -55,6 +64,10 @@ namespace online_tick
 			{
 				logger::write("online tick rate: the patch didn't read back - put back, online stays at 30 fps");
 			}
+            if(ok&&patch_transaction::record_verified_writes){
+                patch_transaction::verified_originals.push_back(std::move(diagnostic_before));
+                patch_transaction::verified_writes.push_back(std::move(diagnostic_after));
+            }
 			return ok;
 		}
 	}

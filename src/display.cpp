@@ -2,6 +2,7 @@
 #include "no_activate.hpp"
 #include "pool_counters.hpp"
 #include "script_pools.hpp"
+#include "e4_observe.hpp"
 #include "d3d8_min.hpp"
 #include "display_rules.hpp"
 #include "display_settings.hpp"
@@ -435,6 +436,7 @@ namespace display
 			if (SUCCEEDED(result))
 			{
 				pool_counters::sample(); // fixed-storage reads, between simulation steps
+                e4_observe::sample();
 				frame_rate::on_present(); // paces the frame (FrameRate) and counts it (the pipe's "status")
 			}
 			return result;
@@ -571,9 +573,9 @@ namespace display
 				hook_slot(device, d3d8::device_slot::test_cooperative_level, &hooked_test_cooperative_level, real_test_cooperative_level);
 			}
 			present_hooked = present_hooked && d3d8::method<void*>(device, d3d8::device_slot::present) == reinterpret_cast<void*>(&hooked_present);
-			if (can_pause || frame_hook || frame_rate::paces() || pool_counters::enabled())
+			if (can_pause || frame_hook || frame_rate::paces() || pool_counters::enabled() || e4_observe::enabled())
 			{
-				hook_present(can_pause ? "the window's pause without the focus" : frame_hook ? "the test pipe's screenshots" : pool_counters::enabled() ? "read-only pool sampling" : "the frame limiter");
+				hook_present(can_pause ? "the window's pause without the focus" : frame_hook ? "the test pipe's screenshots" : pool_counters::enabled() ? "read-only pool sampling" : e4_observe::enabled() ? "E4 observation sampling" : "the frame limiter");
 			}
 			logger::write("display: device created - %s", describe(wanted).c_str());
 			return result;
@@ -1384,7 +1386,7 @@ namespace display
 			// the device to start the frame limiter live, but every hook passes the engine's calls
 			// through unchanged until a value is set (Present itself waits for that: hook_present).
 			std::string why;
-			for (const auto& [wanted, reason] : {std::pair{frame_hook != nullptr, "the test pipe's screenshots"}, std::pair{caps_frames, "the frame rate cap"},
+			for (const auto& [wanted, reason] : {std::pair{frame_hook != nullptr, "the test pipe's screenshots"}, std::pair{e4_observe::enabled(), "E4 observation sampling"}, std::pair{caps_frames, "the frame rate cap"},
 			                                     std::pair{opts.vsync.has_value(), "VSync"}, std::pair{options_menu::installed(), "the in-game options"},
 			                                     std::pair{list_hooked, "the Video options list (ResolutionList)"}})
 			{

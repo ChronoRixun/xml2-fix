@@ -1,4 +1,5 @@
 #include <winsock2.h>
+#include "e4_observe.hpp"
 #include "gns_transport.hpp"
 #include "gns_transport_core.hpp"
 #include "network_validation.hpp"
@@ -802,12 +803,12 @@ namespace gns_transport
 					as_host = s[session_host] != 0;
 					if (as_host)
 					{
-						reinterpret_cast<notice_t>(native_drop_notice)(s, index, 0x10cc, 0x1107, 0);
-						reinterpret_cast<lost_t>(native_lost)(s, r, 0x10cd, 0);
+						e4_observe::native_call("gns:drop notice", [&] { reinterpret_cast<notice_t>(native_drop_notice)(s, index, 0x10cc, 0x1107, 0); });
+						e4_observe::native_call("gns:host removal", [&] { reinterpret_cast<lost_t>(native_lost)(s, r, 0x10cd, 0); });
 						return true;
 					}
 					if (index == 0) return false; // the host: the native watchdog and its "lost connection to the host" dialog
-					reinterpret_cast<lost_t>(native_lost)(s, r, 0x1107, 0);
+					e4_observe::native_call("gns:peer removal", [&] { reinterpret_cast<lost_t>(native_lost)(s, r, 0x1107, 0); });
 					return true;
 				}
 				return false;

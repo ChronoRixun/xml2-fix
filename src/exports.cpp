@@ -122,6 +122,7 @@
 #include "save_limits.hpp"
 #include "native_save_layout.hpp"
 #include "xml1_economy.hpp"
+#include "e4_observe.hpp"
 #include "postgame.hpp"
 #include "review_menu.hpp"
 #include "cutscene_mouse.hpp"
@@ -229,6 +230,7 @@ namespace
 		virtual_pad::install();
 		xml2_pad_bindings::install();
 
+		e4_observe::configure();
 		const HMODULE game = GetModuleHandleW(nullptr);
 		// E12: XMen2.exe's address space - the 2 GB guard when the build's exe is large-address-aware, and the crash
 		// line in this log. First, before anything here allocates: refuses nothing, changes no game behaviour.
@@ -644,6 +646,7 @@ namespace
 		// transport, which it requires.
 		join_in_progress::install(game);
 
+		e4_observe::install(game);
 		pool_counters::install(game); // D0 has no image writes; D1 is explicit [Test] only
 		test_mode::install(game);
 		test_input::install(); // first: its screenshots need the display fix's device hook

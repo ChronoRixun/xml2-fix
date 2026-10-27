@@ -1,3 +1,4 @@
+#include "e4_observe.hpp"
 #include "stats_layout.hpp"
 #include "forced_teams.hpp"
 #include "forced_teams_rules.hpp"
@@ -194,7 +195,8 @@ namespace forced_teams
 				{
 					return false;
 				}
-				seated = method<add_hero_t>(game, game_add_hero_slot)(game, nullptr, name);
+				const auto add = method<add_hero_t>(game, game_add_hero_slot);
+				seated = e4_observe::native_call("forced_teams:addHero", [&] { return add(game, nullptr, name); });
 				return true;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
@@ -431,7 +433,10 @@ namespace forced_teams
 				{
 					return false;
 				}
-				accepted = method<console_line_t>(console, slot)(console, nullptr, line);
+				const auto execute = method<console_line_t>(console, slot);
+				// Queue insertion does not execute script actions (X1 SAFE).
+                accepted = slot == console_queue_slot ? execute(console, nullptr, line)
+                    : e4_observe::native_call("forced_teams:console", [&] { return execute(console, nullptr, line); });
 				return true;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
@@ -521,7 +526,8 @@ namespace forced_teams
 				{
 					return false;
 				}
-				method<hud_leave_t>(hud, hud_leave_slot)(hud, nullptr);
+				const auto leave = method<hud_leave_t>(hud, hud_leave_slot);
+				e4_observe::native_call("forced_teams:leaveHud", [&] { leave(hud, nullptr); });
 				return true;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
@@ -892,6 +898,7 @@ namespace forced_teams
 			}
 			catch (...)
 			{
+				if (e4_observe::enabled()) e4_observe::fatal("forced_teams:script handler C++ exception");
 				logger::write("forced teams: ERROR: an exception in a script function - no change");
 			}
 			return ret == 'i' ? e.make_int(0) : ret == 's' ? e.make_string("") : nullptr;

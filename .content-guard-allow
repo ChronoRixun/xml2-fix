@@ -140,3 +140,7 @@ DISASM  test/xml1_economy_prices_checks.hpp  # Authored synthetic transaction ca
 DISASM  test/xml1_economy_test.cpp  # Authored x87 truncation veneer for the mapped-retail fixture; control word is saved/restored and native code is loaded from the owned PE at runtime.
 DISASM  src/xml1_economy_shop.cpp  # Authored ABI adapters for vendor text, buy rows, tabs and pre-debit refusal; owned retail code is never extracted into this file.
 DISASM  test/xml1_economy_shop_checks.hpp  # Authored isolated tab-loop and stale-purchase callers for mapped-retail tests; no extracted game instruction listing.
+
+DISASM test/e4_observe_host.cpp # Authored synthetic CPU entry/capture and deliberate register/FPU clobber probes; native input is read locally at runtime, no game listing is embedded.
+
+GAME_EXT src/e4_unwind.asm # Authored SafeSEH observer thunk; only forwards to our callback, no game instructions or listing.

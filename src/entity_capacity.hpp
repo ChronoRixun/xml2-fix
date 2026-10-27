@@ -17,6 +17,7 @@ namespace save_format_rules { struct native_profile; }
 
 namespace entity_capacity
 {
+    [[noreturn]] void fail_stop_lifecycle(const char* site);
 	// Reads the INI, decides, and prepares every owner object and backing before anything is contributed (the
 	// save seam needs the chosen native profile first). Nothing is written to the game.
 	void prepare(patch_transaction::transaction& transaction, HMODULE game);

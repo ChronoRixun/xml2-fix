@@ -169,6 +169,8 @@ add_library(xml2_fix SHARED
 	src/fight_moves.cpp
 	src/power_pools.cpp
 	src/entity_capacity.cpp
+	src/e4_observe.cpp
+	src/e4_observe_runtime.cpp
 	src/actor_pools.cpp
 	src/state_records.cpp
 	src/save_manager.cpp
@@ -434,6 +436,11 @@ target_link_options(xml2_entity_grid_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO
 # The test's own image must own the retail range 0x401000..0x801000: a 4 MB code-class block in .text$a (generated
 # here, never a source file) sorts before the compiler's .text$mn, so the test's code starts above it.
 enable_language(ASM_MASM)
+# Assemble the SafeSEH thunk without DLL-only C++ string/tuple definitions
+# (version tuple and the GNS CA pin are not valid MASM /D arguments).
+add_library(e4_unwind_asm OBJECT src/e4_unwind.asm)
+target_compile_options(e4_unwind_asm PRIVATE /safeseh)
+target_sources(xml2_fix PRIVATE $<TARGET_OBJECTS:e4_unwind_asm>)
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/entity_frames_fixture.asm"
 ".386
 .MODEL FLAT
@@ -896,3 +903,22 @@ target_link_options(xml2_dr_reward_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 add_executable(xml2_save_limits_test test/save_limits_test.cpp src/save_limits.cpp src/objective_text.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
 target_include_directories(xml2_save_limits_test PRIVATE src)
 target_link_options(xml2_save_limits_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# E4 X1: fault injection in a child process, never a game launch.
+add_executable(xml2_e4_exception_test test/e4_exception_test.cpp src/e4_observe.cpp)
+target_include_directories(xml2_e4_exception_test PRIVATE src)
+
+add_executable(xml2_e4_observe_test test/e4_observe_test.cpp)
+target_include_directories(xml2_e4_observe_test PRIVATE src)
+target_compile_definitions(xml2_e4_observe_test PRIVATE XML2_E4_TEST)
+add_executable(xml2_e4_observe_host test/e4_observe_host.cpp src/e4_observe.cpp src/e4_observe_runtime.cpp $<TARGET_OBJECTS:e4_unwind_asm> src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_e4_observe_host PRIVATE src)
+target_compile_definitions(xml2_e4_observe_host PRIVATE XML2_E4_TEST)
+target_compile_options(xml2_e4_observe_host PRIVATE $<$<COMPILE_LANGUAGE:ASM_MASM>:/safeseh>)
+target_link_options(xml2_e4_observe_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# Real X1 wrappers are included unchanged by the fixture translation unit.
+add_executable(xml2_e4_x1_real_test test/e4_x1_real_test.cpp src/e4_observe.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_e4_x1_real_test PRIVATE src)
+target_compile_options(xml2_e4_x1_real_test PRIVATE /Gy)
+target_link_options(xml2_e4_x1_real_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /OPT:REF)

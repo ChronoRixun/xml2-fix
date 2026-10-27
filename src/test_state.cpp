@@ -3,6 +3,7 @@
 #include "entity_capacity.hpp"
 #include "entity_capacity_layout.hpp"
 #include "actor_pools.hpp"
+#include "e4_observe.hpp"
 #include "char_sounds.hpp"
 #include "motion_pool.hpp"
 #include "resident_stats.hpp"
@@ -70,6 +71,7 @@ namespace test_state
 			return;
 		}
 		last = now;
+		e4_observe::sample();
 		actor_pools::sample();
 		resident_stats::sample();
 		static const bool valid = supported();
