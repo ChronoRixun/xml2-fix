@@ -70,6 +70,22 @@ attempts 1/2/4/8/... with selected/auxiliary handles, current energy and limits.
 The historical 4/10 misses have no acquisition telemetry, so their individual
 causes cannot be recovered from the live report.
 
+082d follow-up: TKTrace now reports candidate/accepted counts, rejection
+categories and `post_filter_miss`, plus periodic control owner/flags/dt. The
+082d trace's selected=0 through128 proves repeated native misses; it does not
+identify eligibility versus height/team/LOS rejection. The native fixture
+reproduces128 misses with a different first LOS contact, and acquires when
+that obstruction clears. That is a preserved XML1 rule, not evidence that
+the historical misses were all obstructed.
+
+The `psycarry` victim uses `ch_grab_victim`. Its normal prefix policy retained
+an owner named `tele...`, but the converted Phoenix start is `power1`.
+Installed rule46 now supplies a complete-token ownership predicate to rule45,
+so the victim callback can run before the start-to-hold transition without
+dropping the pair. No blanket retention of arbitrary `power...` moves is
+added. Missing ownership, a different generation, or cancellation still
+allows normal cleanup.
+
 The moving-hit flag also uses LiftRule's decoded source heaviness. Testing the
 native byte would miss source heaviness 2, which the conversion encodes as byte
 1. Control and cancellation reread the actor's current held token, and invalid
@@ -137,6 +153,23 @@ This implements the brief's untouched-enemy negative. The inspected generic
 XML1 callback itself also selects action 3 for an admitted nonstunned enemy
 (`D9F5A..D9F70`), so that callback alone does not establish the narrower live
 XML1 expectation. The host test records this deliberate policy difference.
+
+The 082d follow-up also recognizes a native active `shared_stunned`
+attachment when reaction bit0 is clear. Native traversal starts at entity
+`+21C/+220`; attachment slot64 supplies its definition and slot4C its next
+reference. All dereferences use the pool's generation-validating virtual
+methods, including raised AttachedPowerups. For an active timed stun, a
+private call bridge retains native `42B840` and `42925E` onward, bypassing
+only the reaction-or-recent-hit clock gate just as reaction bit0 does.
+Other native status/ownership restrictions remain. This treatment applies
+to nonparty stunned allies too. Party heroes retain rule18's reaction-owned
+eligibility: a refused/interrupted reaction cannot be reinstated merely by
+the pending PC powerup; a genuine flagged stun retains Fastball admission.
+
+`[Test] GuardTrace=1` (or TKTrace with both rules enabled) records reaction,
+attachment handle, computed stun eligibility and native admission. The old
+082d JSON records idle/visible stars, not those raw fields; do not present
+the attachment/reaction-clear fixture as a captured historical state.
 
 Use [the human-length pad/keyboard acceptance procedure](beta9-moves-live.md).
 Direct handler fixtures establish scheduling behavior, not hardware routing.

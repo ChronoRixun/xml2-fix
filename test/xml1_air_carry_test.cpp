@@ -1,6 +1,8 @@
 // Full production installer plus carry callbacks in an invented native image.
 // The included lifecycle harness supplies retail input, OFF/guard/rollback probes
 // and shared-lookup coexistence; no game, rendering or world startup executes.
+#include <Windows.h>
+#include "tk_guard_bridges.hpp"
 #define main lifecycle_main
 #include "xml1_grab_carry_install_test.cpp"
 #undef main
@@ -19,6 +21,7 @@ int drops=0;
 bool sequence_mode=false,event_mode=false;
 bool round3_pose=false;
 bool clearance_blocked=false;
+bool live_character_clearance=false;
 bool sequence_states=false;
 std::array<void*,3> sequence_nodes{};
 void* sequence_carry=nullptr;
@@ -105,7 +108,7 @@ void __fastcall emergency_drop(void* who,void*){check(who==actor.data(),"emergen
 void __fastcall prepare_flight(void*,void*){++preparations;}
 void __fastcall air_flight(void* who,void*,int on,int emit){check(who==actor.data()&&emit==(descent_forces?0:1),"flight setter uses source emission argument");++flight_sets;last_flight=on;}
 const u32* __fastcall flight_name(void*,void*){current_move_key=current_flying?102u:103u;return &current_move_key;}
-bool __fastcall downward_probe(void* who,void*,const V* start,const V* delta,int flag,V* shift,void** contact){++probes;const auto position=sequence_mode?get<V>(actor.data(),0x20):V{10,20,30};check(who==actor.data()&&start->x==position.x&&start->y==position.y&&start->z==position.z&&delta->x==0&&delta->y==0&&((delta->z==-20&&flag==1)||(delta->z<0&&flag==0)),"entry probes down; clearance movement excludes the contacted character");*shift=flag==0&&!clearance_blocked?*delta:V{};*contact=contact_exists?victim.data():nullptr;return probe_hit;}
+bool __fastcall downward_probe(void* who,void*,const V* start,const V* delta,int flag,V* shift,void** contact){++probes;const auto position=sequence_mode?get<V>(actor.data(),0x20):V{10,20,30};check(who==actor.data()&&start->x==position.x&&start->y==position.y&&start->z==position.z&&delta->x==0&&delta->y==0&&((delta->z==-20&&flag==1)||(delta->z<0&&flag==0)),"entry probes down; clearance movement excludes the contacted character");*shift=flag==0&&!clearance_blocked?*delta:V{};if(flag==0&&live_character_clearance&&(get<u32>(victim.data(),4)&0x100)&&get<u32>(actor.data(),0x178)!=get<u32>(victim.data(),0x1c))*shift={};*contact=contact_exists?victim.data():nullptr;return probe_hit;}
 bool __cdecl descent_blocked(int index){check(index==get<int>(actor.data(),0x3d4),"native descent controller gate");return native_descent_blocked;}
 u32 descent_site=0x433e46;
 __declspec(naked) bool __fastcall descent_probe(void*,void*,void*){
@@ -578,6 +581,30 @@ void round3_contact_pose_tests(){
   move_vt[0xd0/4]=reinterpret_cast<void*>(&flight_name);
  }
 }
+void live_character_clearance_test(){
+ air_reset();sequence_mode=true;selected=move.data();put(air_input.data(),0,0x100u);
+ put(actor.data(),0x20,V{10,20,73});put(victim.data(),0x20,V{10,20,3});put(victim.data(),4,0x180u);
+ put(actor.data(),0x178,0x3333u);live_character_clearance=true;
+ descent_probe(actor.data(),nullptr,air_input.data());
+ check(carry_entries==1&&get<V>(actor.data(),0x20).z==43.f&&get<V>(victim.data(),0x20).z==3.f,"PC property8 victim must be excluded explicitly from lowering probe, not treated as a solid ledge");
+ check(get<u32>(actor.data(),0x178)==0x3333u,"lowering probe restores the original physical owner after its scoped exclusion");
+ live_character_clearance=false;sequence_mode=false;
+ callback<cleanup_t>(air_handler("ch_fly_guard_decide"),3)(nullptr,nullptr,actor.data());
+}
+void live_tk_victim_order_test(){
+ // Selected1CC1 -> owner power1 -> victim callback -> telekinesis_hold.
+ xml1_grab_carry::set_telekinesis_pair_test(&tk_guard_bridges::owns_tk_pair);
+ for(int state:{0,1,2}){
+ air_reset();move_name("power1");requested_name="idle";put(victim.data(),4,0x87u);put<unsigned char>(actor.data(),0x259,2);
+ tk_guard_bridges::tk_state held_state;held_state.victim=state==1?0x12222:0x2222;if(state!=2)tk_guard_bridges::tk_states[0x1111]=held_state;
+ auto frame=get<frame_t>(ptr(0x693360),16);
+ frame(nullptr,nullptr,victim.data(),nullptr);
+ if(!state)check(get<u32>(victim.data(),4)==0x87&&relatives==0&&air_starts==0,"live selected TK victim retains constraints during power1 before telekinesis_hold");
+ else check(get<u32>(victim.data(),4)==0x80&&relatives==1&&air_starts==1,"recycled victim generation or completed/cancelled TK ownership releases constraints on the next callback");
+ tk_guard_bridges::tk_states.clear();
+ }
+}
+#include "carry_native_probe_fixture.hpp"
 void flight_tests(){
  const auto enter=get<entry_t>(ptr(0x6931f8),4),move_enter=get<entry_t>(ptr(0x6932d0),4);
  const auto tick=get<update_t>(ptr(0x6931f8),24);
@@ -625,6 +652,6 @@ int main(int argc,char** argv){
  SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
  AddVectoredExceptionHandler(1,[](PEXCEPTION_POINTERS e)->LONG{std::printf("air fixture exception %08lX at %p ESP=%08lX ECX=%08lX ESI=%08lX\n",e->ExceptionRecord->ExceptionCode,e->ExceptionRecord->ExceptionAddress,e->ContextRecord->Esp,e->ContextRecord->Ecx,e->ContextRecord->Esi);for(unsigned i=0;i<12;++i)std::printf(" %08X",reinterpret_cast<u32*>(e->ContextRecord->Esp)[i]);std::puts("");ExitProcess(1);});
  const int lifecycle=lifecycle_main(argc,argv);if(lifecycle&&!xml1_grab_carry::installed())return lifecycle;
- air_bind();round3_contact_pose_tests();std::puts("admission");admission_tests();std::puts("finite energy");finite_energy_hold_test();std::puts("native shortcut");native_shortcut_admission_test();std::puts("native entry pose");native_entry_pose_test();std::puts("pickup");pickup_tests();std::puts("carry");carry_tests();std::puts("release");release_tests();std::puts("sequence");sequence_tests();std::puts("held acquisition");held_acquisition_test();std::puts("carry damage");carry_damage_test();std::puts("fastball authored event");fastball_authored_event_test();std::puts("flight");flight_tests();powerup_tests();native_bone_tests();std::puts("native world pose");native_world_pose_test();std::puts("native generic stick");native_generic_stick_test();
+ air_bind();complete_native_clearance_test();live_character_clearance_test();live_tk_victim_order_test();round3_contact_pose_tests();std::puts("admission");admission_tests();std::puts("finite energy");finite_energy_hold_test();std::puts("native shortcut");native_shortcut_admission_test();std::puts("native entry pose");native_entry_pose_test();std::puts("pickup");pickup_tests();std::puts("carry");carry_tests();std::puts("release");release_tests();std::puts("sequence");sequence_tests();std::puts("held acquisition");held_acquisition_test();std::puts("carry damage");carry_damage_test();std::puts("fastball authored event");fastball_authored_event_test();std::puts("flight");flight_tests();powerup_tests();native_bone_tests();std::puts("native world pose");native_world_pose_test();std::puts("native generic stick");native_generic_stick_test();
  std::printf("%s flying carry callbacks: %d checks, %d failures\n",failures?"FAIL":"PASS",checks,failures);return failures?1:0;
 }

@@ -24,7 +24,7 @@ namespace entity_capacity {
  u32 installed_target(u32 site){for(const auto& owner:owners)if(owner.site==site)return owner.target;return 0;}
 }
 namespace game_version {bool refused=false;void refuse_startup(){refused=true;}}
-namespace xml1_grab_carry {bool available=true;bool installed(){return available;}}
+namespace xml1_grab_carry {bool available=true;bool installed(){return available;}void set_telekinesis_pair_test(bool(__cdecl*)(u32,u32)) {}}
 namespace lift_rule {int heaviness(void* object){return handler_fixture::field<unsigned char>(object,0x31d);}}
 namespace {
 using shared_handler_bridges::entry;using shared_handler_bridges::input;

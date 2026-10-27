@@ -9,6 +9,13 @@ using shared_handler_rules::branch;
 inline constexpr std::array<const wchar_t*,11> keys{L"JumpAttackDamageRule",L"FlyChargeDamageRule",L"ColossusChargeRule",L"BeastBounceRule",L"FastballRule",L"IdleBoredRule",L"LocomotionScaleRule",L"AnimationPhaseRule",L"TeleportVisibilityRule",L"TelekinesisRule",L"GuardDecideRule"};
 enum part : u32 {jump_damage=1,fly_damage=2,colossus=4,bounce=8,fastball=16,idle=32,scale=64,phase=128,visibility=256,telekinesis=512,guard=1024,all=2047};
 inline constexpr dependency guards[]{
+ {1024,{0x42b840,"8a817a050000a801568db17004000074078bcee8c80611008a8609010000c0e80624015ec3","native status precheck before timed-stun grab suffix"}},
+ {1024,{0x543f80,"8a0d78b67900b80100000084c87525","powerup definition manager getter"}},
+ {1024,{0x69785c,"60135400","powerup definition by-name virtual slot58"}},
+ {1024,{0x541360,"5355568b7424145733db33ff","powerup definition name lookup ret8"}},
+ {1024,{0x54ee0f,"8bbb1c0200008bb320020000","native entity active-powerup list layout"}},
+ {1024,{0x538140,"8b51048b44240489108b4908894804c20400","attached next-reference getter slot4c"}},
+ {1024,{0x5381c0,"8b51208b44240489108b4924894804c20400","attached definition-reference getter slot64"}},
  {512,{0x42e914,"d9442410d81d2c016800dfe0f6c4410f85ea000000","native release speed gate before L2 arming"}},
  {1024,{0x501af0, "538b5c240885db5556578be9750933c05f5e5d5bc20c00", "entry-context chain resolver"}},
  {1024,{0x4310b0, "f6842490000000040f85ff040000", "entry abort bit2 checked before parent transition commits"}},
