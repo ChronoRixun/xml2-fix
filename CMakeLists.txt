@@ -21,6 +21,9 @@ target_include_directories(xml2_economy_digest_rules_test PRIVATE src)
 
 add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
 add_compile_options(/W4 /permissive- /utf-8)
+# Native diagnostic probes may fault after allocating strings/vectors. Unwind
+# their C++ owners at the SEH boundary as well as containing the fault itself.
+set_source_files_properties(src/xml1_economy_digest.cpp PROPERTIES COMPILE_OPTIONS "/EHa")
 
 add_executable(xml2_no_activate_test test/no_activate_test.cpp)
 target_include_directories(xml2_no_activate_test PRIVATE src)
@@ -902,6 +905,7 @@ target_link_options(xml2_item_capacity_test PRIVATE /BASE:0x400000 /DYNAMICBASE:
 
 add_executable(xml2_economy_test test/xml1_economy_test.cpp src/xml1_economy.cpp src/xml1_economy_prices.cpp src/xml1_economy_shop.cpp src/xml1_economy_digest.cpp src/xml1_grab_bag.cpp src/xml1_roll.cpp src/item_capacity.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
 target_include_directories(xml2_economy_test PRIVATE src)
+target_compile_definitions(xml2_economy_test PRIVATE XML2_ECONOMY_DIGEST_TEST)
 target_link_libraries(xml2_economy_test PRIVATE lcsave)
 target_link_options(xml2_economy_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 

@@ -107,6 +107,7 @@ void setup_table(unsigned count){
  put(manager.data(),0x2588,static_cast<std::uint16_t>(count));put(at(0x72a514),0,addr(manager.data()));
  // The native by-name walker uses interned name IDs. Only its external name
  // table and strcmp are supplied; W2's real lookup is called by the loader.
+ put(names.data(),0x8004,2+count*40);
  jump(0x602140,&get_names);jump(0x672562,&compare);jump(0x480a00,&get_manager);
  jump(0x67233c,&as_number);jump(0x67217c,&ftol);
  put(at(0x688314),0x7c,addr(&property_key));put(at(0x688314),0xac,addr(&property_text));
@@ -121,7 +122,7 @@ void setup_table(unsigned count){
   const auto ordinal=i>=first_economy?i-first_economy:economy_count+1;
   put(d,8,i+1);put(d,0x10,ordinal<equipment_count||i==legacy_definition?2u:1u);
   if(ordinal<equipment_count&&ordinal%3==0)put(d,0x3b,std::uint8_t(4)); // unique, not obtained
-  const unsigned offset=i*40;put(names.data(),4+(i+1)*4,offset);std::snprintf(reinterpret_cast<char*>(names.data())+0x8008+offset,40,"item%04u",i);
+  const unsigned offset=2+i*40;put(names.data(),4+(i+1)*4,offset);std::snprintf(reinterpret_cast<char*>(names.data())+0x8008+offset,40,"item%04u",i);
   for(unsigned slot=0;slot<8;++slot)put(d,0x24+2*slot,std::uint16_t(0xffff));
   const unsigned n=own_count(ordinal);
   for(unsigned j=0;j<n;++j){const unsigned slot=(i+j)%8,record=i*5+j;put(d,0x24+2*slot,static_cast<std::uint16_t>(record));auto* r=manager.data()+records+record*0x28;put(r,0,addr(record_vt));put(manager.data(),enhancement_bitmap+(record/32)*4,read<unsigned>(manager.data(),enhancement_bitmap+(record/32)*4)|(1u<<(record%32)));}

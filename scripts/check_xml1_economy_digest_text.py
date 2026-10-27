@@ -24,6 +24,10 @@ def main():
     # routes consume one out-player pointer. The draw counter is the native getter.
     for va, expected in ((0x5d3aa1,"c20800"),(0x5d417d,"c3"),(0x5d4a87,"c20400"),(0x5d4b9d,"c20400"),(0x560180,"a1b4d87a00c3")):
         assert image[va-0x400000:va-0x400000+len(bytes.fromhex(expected))] == bytes.fromhex(expected), hex(va)
+    # +0x324 stores a CUIObject pointer: setter, virtual dereference, and
+    # the shop's native dynamic_cast argument. Never feed it to the name table.
+    for va, expected in ((0x5aafa1,"89be24030000"),(0x5aafda,"f6405408"),(0x5d3d90,"8b8624030000")):
+        assert image[va-0x400000:va-0x400000+len(bytes.fromhex(expected))] == bytes.fromhex(expected), hex(va)
     # No immediate direct transfer may enter a displaced span's interior.
     md.skipdata = True
     for section in pe.sections:
@@ -36,7 +40,7 @@ def main():
             for op in i.operands:
                 if op.type == capstone.x86.X86_OP_IMM:
                     assert not any(a < op.imm < a+len(b) for a,b in guards), f"interior entry {op.imm:#x} from {i.address:#x}"
-    print("PASS: 8 digest guards, instruction boundaries, open/update/input ABIs, native lockstep counter and no interior direct entries")
+    print("PASS: 8 digest guards, instruction boundaries, open/update/input ABIs, native lockstep counter, focused-widget pointer contract and no interior direct entries")
 
 
 if __name__ == "__main__":

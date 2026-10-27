@@ -185,23 +185,36 @@ void checkpoint(u32 esp,u32 thread){
     }
 }
 void sample_accounting(){
+    const auto faults_before=probe_faults;
     bool open=false;for(const auto& c:m.records)open|=c.open;
     if(open||m.resetting||(value(0x72a798,1)&3))return;
-    const auto& d=actor_ai::installed();u32 actors=0,arena_actors=0;
+    const auto& d=actor_ai::installed();u32 actors=0,arena_actors=0,bad_tokens=0;
     const auto allocator=value(entity_capacity_layout::allocator_pointer_cell);
     if(allocator) {
         const auto mask=value(allocator+0x10998);
         for(unsigned i=0;i<32;++i)if(mask&(1u<<i)){
             ++arena_actors;const auto actor=allocator+8+i*0x848,token=value(actor+0x7dc),slot=index(token);
-            if(token&&slot<d.controllers&&generation(slot)==token)++actors;
+            // Actor allocation does not imply an AI controller (e.g. team heroes).
+            // A non-null token, however, must resolve to a unique live controller.
+            if(token){
+                if(slot<d.controllers&&generation(slot)==token&&m.slots[slot].at==state::published&&m.slots[slot].owner==actor)++actors;
+                else ++bad_tokens;
+            }
         }
     }
+    std::array<bool,max_slots> orphaned{};
     for(unsigned i=0;i<d.controllers;++i)if(m.slots[i].at==state::published){
         const auto owner=m.slots[i].owner;
-        if(!owner||value(owner+0x7dc)!=m.slots[i].generation)m.slots[i].at=state::orphaned;
+        orphaned[i]=!owner||value(owner+0x7dc)!=m.slots[i].generation;
     }
-    m.account(value(d.primary_base+0xc418),d.controllers,actors,true);
-    if(actors!=arena_actors)m.emit(event_kind::accounting,max_slots,0,arena_actors);
+    const auto live=value(d.primary_base+0xc418);
+    const auto arena_live=allocator?value(allocator+0x1099c):0;
+    // Unreadable probes are not evidence of an accounting mismatch.
+    if(probe_faults!=faults_before)return;
+    for(unsigned i=0;i<d.controllers;++i)if(orphaned[i])m.slots[i].at=state::orphaned;
+    m.account(live,d.controllers,actors,true);
+    m.account_event(1,!bad_tokens&&arena_actors==arena_live,
+        {arena_actors,arena_live,bad_tokens},arena_actors);
     for(unsigned i=0;i<d.controllers;++i)if(m.slots[i].at==state::published)handler(i);
 }
 void writer_enter(u32 point,u32 team){
@@ -283,7 +296,9 @@ void __cdecl observe(unsigned encoded,const u32* r) {
             if(dying||stale){m.emit(dying?event_kind::team_resolve_destroy:event_kind::team_stale,0x10000|i,arg(r,1),token);m.events[(m.head-1)%64].generation=current;}
         }break;}
     case kind::reset:checkpoint(sp(r),thread);m.resetting=true;break;
-    case kind::reset_done:m.resetting=false;for(auto& x:m.slots)x={};team_destroying.fill(false);teams.fill({});break;
+    // 523660 resets CAI session/team metadata; it never clears the controller
+    // arena (5238B0). Keep controller lifetimes for the later 523977 releases.
+    case kind::reset_done:m.resetting=false;team_destroying.fill(false);teams.fill({});break;
     case kind::borrow_update:case kind::borrow_handler:case kind::borrow_event:
         if(!post){u32 i=max_slots;
             if(s.type==kind::borrow_update)i=controller(r[6]);
@@ -400,7 +415,7 @@ std::string json() {
     out<<"{\"enabled\":"<<(enabled()?"true":"false")<<",\"installed\":"<<(installed?"true":"false")<<",\"spans\":"<<installed_spans<<",\"step\":"<<m.step
        <<",\"admitted\":"<<m.admitted<<",\"published_total\":"<<m.published<<",\"boundary_unwinds\":"<<boundary_unwinds<<",\"escaped\":"<<m.escaped
        <<",\"published\":"<<a.published<<",\"constructing\":"<<a.constructing<<",\"destroying\":"<<a.destroying<<",\"orphaned\":"<<a.orphaned
-       <<",\"reserved\":"<<a.reserved<<",\"context_bytes\":"<<sizeof(context_slot)*context_capacity<<",\"context_capacity\":"<<context_capacity<<",\"contexts_live\":"<<contexts_live<<",\"contexts_peak\":"<<contexts_peak<<",\"probe_faults\":"<<probe_faults<<",\"counts\":[";
+       <<",\"accounting_suppressed\":"<<m.accounting_suppressed<<",\"reserved\":"<<a.reserved<<",\"context_bytes\":"<<sizeof(context_slot)*context_capacity<<",\"context_capacity\":"<<context_capacity<<",\"contexts_live\":"<<contexts_live<<",\"contexts_peak\":"<<contexts_peak<<",\"probe_faults\":"<<probe_faults<<",\"counts\":[";
     for(unsigned n=0;n<m.counts.size();++n){if(n)out<<',';out<<m.counts[n];}out<<"],\"events\":[";
     const auto count=(std::min)(m.head,u32(64));
     for(unsigned n=0;n<count;++n){if(n)out<<',';const auto& e=m.events[(m.head-count+n)%64];

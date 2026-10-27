@@ -7,6 +7,10 @@
 #include <vector>
 
 namespace xml1_economy::digest_rules {
+constexpr unsigned name_slots=0x2000,name_arena=0x14400;
+inline const char* list_name(int tab,bool stash){
+ return tab==0?(stash?"withdraw":"buy"):tab==1?(stash?"deposit":"sell"):tab==2&&!stash?"training":"-";
+}
 // FNV-1a/64 over canonical little-endian words and length-prefixed byte strings.
 // Never feed native structs: they contain pointers, padding and byte-sized fields.
 class hash {

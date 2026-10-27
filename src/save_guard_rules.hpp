@@ -14,6 +14,12 @@ namespace save_guard_rules
 		return (kind != writer_kind_fix && kind != writer_kind_import) || (source >> 8) > (current >> 8);
 	}
 
+	inline std::string newer_save_message(const inspection& source)
+	{
+		if (source.needs_layout) return source.why; // retain the named, actionable W2 refusal
+		return "This save was made by a newer Legends Classic build - update to load it";
+	}
+
 	inline bool protected_source(const inspection& source, const inspection& replacement)
 	{
 		return source.status == file_status::needs_newer ||

@@ -1399,7 +1399,8 @@ namespace save_format
 			}
 			if (file.info.status == file_status::needs_newer)
 			{
-				refuse("this save needs a newer version of XML2 Fix (" + file.info.why + ")");
+				logger::write("save format: newer save refused (%s)",file.info.why.c_str());
+				refuse(save_guard_rules::newer_save_message(file.info));
 				return false;
 			}
 			if (file.info.status == file_status::wrong_kind)
