@@ -155,6 +155,30 @@ void append(contribution& owner,contribution c){
 }
 }
 bool installed(){return active;}
+std::optional<std::string> expected(unsigned va,std::string_view hex){
+ if(!active)return std::string(hex);
+ if(hex.size()%2)return std::nullopt;
+ auto digit=[](char c)->int{if(c>='0'&&c<='9')return c-'0';if(c>='a'&&c<='f')return c-'a'+10;if(c>='A'&&c<='F')return c-'A'+10;return -1;};
+ std::vector<std::uint8_t> bytes;
+ for(std::size_t i=0;i<hex.size();i+=2){const int a=digit(hex[i]),b=digit(hex[i+1]);if(a<0||b<0)return std::nullopt;bytes.push_back(static_cast<std::uint8_t>(a<<4|b));}
+ const std::uint64_t end=std::uint64_t(va)+bytes.size();
+ // one W2-owned span: [lo, lo+size); `old` = W2's retail bytes for it (rows), nullptr for caves / replacements
+ auto take=[&](unsigned lo,unsigned size,const char* old)->bool{
+  if(!(std::uint64_t(lo)<end&&std::uint64_t(va)<std::uint64_t(lo)+size))return true;
+  for(unsigned i=0;i<size;++i){
+   const std::uint64_t at=std::uint64_t(lo)+i;if(at<va||at>=end)continue;
+   if(old){const int h=digit(old[2*i]),l=digit(old[2*i+1]);if(h<0||l<0||bytes[at-va]!=static_cast<std::uint8_t>(h<<4|l))return false;}
+   bytes[at-va]=*native<const std::uint8_t*>(static_cast<unsigned>(at));
+  }
+  return true;
+ };
+ for(const auto& r:direct)if(!take(r.va,static_cast<unsigned>(std::strlen(r.old)/2),r.old))return std::nullopt;
+ for(const auto& b:blocks)if(!take(b.lo,b.hi-b.lo,nullptr))return std::nullopt;
+ for(const auto& r:replacements)if(!take(r.lo,r.hi-r.lo,nullptr))return std::nullopt;
+ constexpr char digits[]="0123456789abcdef";std::string out;out.reserve(hex.size());
+ for(auto b:bytes){out+=digits[b>>4];out+=digits[b&15];}
+ return out;
+}
 unsigned objective_registered_count(){return active?objective_total.load(std::memory_order_relaxed):0;}
 unsigned talent_capacity(){return active?256:100;}
 unsigned talent_count_offset(unsigned pool){const unsigned old[]={0x1654,0x26f4,0x3090},raised[]={talent_a+a_live,talent_b+b_live,talent_c+c_live};return pool<3?(active?raised[pool]:old[pool]):0;}

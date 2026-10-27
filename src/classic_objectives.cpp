@@ -4,6 +4,8 @@
 #include "log.hpp"
 #include "game_version.hpp"
 #include "limits_rules.hpp"
+#include "save_layout_view.hpp"
+#include "save_limits.hpp"
 #include "xml1_hook_memory.hpp"
 #include "xml1_hook_transaction.hpp"
 
@@ -23,7 +25,21 @@ namespace classic_objectives
 
 		bool installed = false;
 		int window_offset = 0; // set when the objectives page opens; 0 until then and on the results page
-		constexpr std::size_t max_records = 128; // the engine loads at most 75 per act (0x4899e0)
+		constexpr std::size_t max_records = 128; // the engine loads at most 75 per act (0x4899e0); W2 127
+		// The installed native save layout's objective pool (limits wave 2, save_layout_view): the live count sits at
+		// CMissionMgr + count_offset and the records at + pool_offset, so relative to the record array it is
+		// count_offset - pool_offset (retail 0x7d70, W2 0xd46c); records per act 75 / 127, stride 0x1ac in both.
+		static_assert(record_count_offset == save_layout_view::retail_objectives.count_offset - save_layout_view::retail_objectives.pool_offset &&
+		              record_stride == save_layout_view::retail_objectives.record_size && record_stride == save_layout_view::w2_objectives_shape.record_size &&
+		              save_layout_view::w2_objectives_shape.objectives_per_act <= max_records);
+		int live_count(const unsigned char* base)
+		{
+			const auto& v = save_layout_view::objectives();
+			int count = *reinterpret_cast<const int*>(base + (v.count_offset - v.pool_offset));
+			if (count < 0) count = 0;
+			if (count > static_cast<int>(v.objectives_per_act)) count = static_cast<int>(v.objectives_per_act);
+			return count;
+		}
 
 		struct records
 		{
@@ -40,9 +56,7 @@ namespace classic_objectives
 			if (!mission) return nullptr;
 			const auto* base = reinterpret_cast<records_t>((*static_cast<void***>(mission))[0x34 / 4])(mission);
 			if (!base) return nullptr;
-			count = *reinterpret_cast<const int*>(base + record_count_offset);
-			if (count < 0) count = 0;
-			if (count > static_cast<int>(max_records)) count = static_cast<int>(max_records);
+			count = live_count(base);
 			return base;
 		}
 
@@ -69,8 +83,8 @@ namespace classic_objectives
 			{
 				if (!base || rec < base) return false;
 				const auto index = static_cast<std::size_t>(rec - base) / record_stride;
-				int count = *reinterpret_cast<const int*>(base + record_count_offset);
-				if (count < 0 || index >= static_cast<std::size_t>(count) || index >= max_records) return false;
+				const int count = live_count(base);
+				if (index >= static_cast<std::size_t>(count) || index >= max_records) return false;
 				// The draw asks seven walks a frame: read only the records up to this one (the rank needs no more).
 				const auto r = read(base, static_cast<int>(index) + 1);
 				return fills_slot(r, index, window_offset);
@@ -190,10 +204,15 @@ namespace classic_objectives
 			return;
 		}
 		xml1_hook_transaction::memory memory;
+		// Limits wave 2: the W2 save layout replaces the mission getter (its DLL objective manager, hash-checked) and
+		// routes both state lookups through its wide objective index; the bytes W2 rewrote are compared with what W2
+		// wrote (save_limits::expected), every other guard byte with retail. The record walk reads the published view.
+		const bool w2_objectives = save_limits::installed();
 		for (const auto& g : guards)
 		{
 			std::array<unsigned char, 32> bytes{};
-			if (!memory.read(g.va, bytes.data(), g.hex.size() / 2) || !limits_rules::matches(bytes.data(), g.hex))
+			const auto expected = save_limits::expected(g.va, g.hex);
+			if (!expected || !memory.read(g.va, bytes.data(), g.hex.size() / 2) || !limits_rules::matches(bytes.data(), *expected))
 			{
 				logger::write("classic objectives: guard refused at %08X (%s); the native PDA objective page is kept", g.va, g.what);
 				return;
@@ -207,7 +226,8 @@ namespace classic_objectives
 		bool safe = true;
 		installed = xml1_hook_transaction::apply(memory, patches, &safe);
 		if (!safe) game_version::refuse_startup();
-		logger::write("classic objectives: %s (visible objectives only, the page opens on the current one)",
-		              installed ? "enabled" : "could not be installed; the native PDA objective page is kept");
+		logger::write("classic objectives: %s (visible objectives only, the page opens on the current one)%s",
+		              installed ? "enabled" : "could not be installed; the native PDA objective page is kept",
+		              w2_objectives ? "; W2 objective pool (127 per act)" : "");
 	}
 }

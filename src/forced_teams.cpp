@@ -1,6 +1,7 @@
 #include "stats_layout.hpp"
 #include "forced_teams.hpp"
 #include "forced_teams_rules.hpp"
+#include "save_limits.hpp"
 #include "join_in_progress.hpp"
 #include "ini.hpp"
 #include "log.hpp"
@@ -100,7 +101,9 @@ namespace forced_teams
 				return false;
 			}
 		}
-		bool bytes_match(const guard& g) { const auto expected=stats_layout::expected(g.va,g.hex);return expected&&bytes_match_raw(g,expected->c_str()); }
+		// The published ResidentStats / MotionPool operands, then the W2 save layout's rewritten bytes (limits wave 2: the
+		// mission getter, the side-mission stack's address and the 0x4dc / 0x26c operands it raises to 0xa84 / 0x540).
+		bool bytes_match(const guard& g) { const auto stats=stats_layout::expected(g.va,g.hex);if(!stats)return false;const auto expected=save_limits::expected(g.va,*stats);return expected&&bytes_match_raw(g,expected->c_str()); }
 
 
 		// A game object from its getter, when it is the class the guards were read for.
