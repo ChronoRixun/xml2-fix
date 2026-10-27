@@ -1070,6 +1070,9 @@ Replace it with these localized variants; retain the original approved geometry.
 `lc_host_drop_on`, `lc_host_drop_off`, `lc_host_drop_unknown` report the effective
 installed rule-26 policy. This is read-only; the UI does not change that policy.
 
+The DLL hides `lc_broker_room` while a native status node is shown, so LC can draw the four native nodes at the
+same status anchor as the room line without the two overlapping (fixture `r6-native` asserts exactly one at a time).
+
 Add status nodes `lc_native_tunnel` (Connecting to host),
 `lc_native_discovery` (Finding the host's game), `lc_native_admission`
 (Requesting native admission), `lc_native_posting` (Opening native lobby), and

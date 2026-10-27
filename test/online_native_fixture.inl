@@ -196,6 +196,17 @@ void event(int value) {
     reinterpret_cast<int(__cdecl*)(void*)>(value==8 ? 0x607810 : 0x609ad0)(packet.data());
 }
 
+bool vis(const char* key) { return visibility.count(key) && !visibility[key]; }
+bool hid(const char* key) { return visibility.count(key) && visibility[key]; }
+// One native status variant at a time, and never beside the broker's own room line: LC draws them at one anchor.
+void native_status(const char* shown) {
+    (*reinterpret_cast<tick_t*>(0x69e454))(child.data(),nullptr); // the bindings of the frame that follows the phase change
+    for(const char* key:{"lc_native_tunnel","lc_native_discovery","lc_native_admission","lc_native_posting"}) {
+        const bool want=shown && std::string_view(key)==shown;
+        if(want ? !vis(key) : !hid(key)) { std::cerr<<"native status "<<key<<" should be "<<(want ? "shown" : "hidden")<<" while "<<shown<<"\n";assert(false); }
+    }
+    if(!hid("lc_broker_room")) { std::cerr<<"lc_broker_room is drawn beside "<<shown<<"\n";assert(false); }
+}
 void cancel_options_in_base() {
     base_mutation=nullptr;(*reinterpret_cast<int(__fastcall**)(void*,void*)>(0x69f688))(child.data(),nullptr);
 }
@@ -223,6 +234,7 @@ void run(const script_functions_rules::func_entry* registration) {
     screen("lc_host");menu_auth=true;menu_complete=true;tick(child.data(),nullptr);
     assert(!selected_danger_room);
     assert(allocations==1 && *reinterpret_cast<void**>(0xa53058+0x78)==person.data() && calls.back()=="queue:openmenu host" && published==0);
+    native_status("lc_native_posting");
     // Missing native lobby activation (including queue failure) times out and
     // releases the actual native Host participant and broker room.
     ticks+=15000;tick(child.data(),nullptr);assert(menu_view().state==bm::phase::idle && departures && published==0);
@@ -252,13 +264,13 @@ void run(const script_functions_rules::func_entry* registration) {
     resolve();tunnel_ready=false;ticks+=45000;tick(child.data(),nullptr);
     assert(menu_view().state==bm::phase::idle && searches==0);cancel();
     // Authenticated broker membership waits for the proven host tunnel.
-    resolve();assert(searches==0);
+    resolve();assert(searches==0);native_status("lc_native_tunnel");
     const auto before_old_menu=menu_view().generation;
     std::strcpy(reinterpret_cast<char*>(hub.data()+0xc),"lc_code");(*reinterpret_cast<tick_t*>(0x69e438))(hub.data(),nullptr);
     std::strcpy(reinterpret_cast<char*>(hub.data()+0xc),"lc_online");set_current(child.data());
     assert(menu_view().generation==before_old_menu && menu_view().state==bm::phase::room);
-    tunnel_ready=true;tick(child.data(),nullptr);assert(searches==1);
-    reply();tick(child.data(),nullptr);
+    tunnel_ready=true;tick(child.data(),nullptr);assert(searches==1);native_status("lc_native_discovery");
+    reply();tick(child.data(),nullptr);native_status("lc_native_admission");
     assert(*reinterpret_cast<unsigned*>(0xa53058+0x3a4+8)==0x01004d0a && *reinterpret_cast<unsigned*>(0xa3bc40+0x22bc));
     const auto callback=*reinterpret_cast<int(__cdecl**)(int,void*,void*)>(0xa3bc40+0x2298);
     const auto old_generation=*reinterpret_cast<void**>(0xa3bc40+0x229c);

@@ -626,15 +626,17 @@ void bind_broker(void* menu,screen s) {
     bind_text(menu,"self_state",connected_plain ? "" : waiting ? "Please wait" : v.state==broker::phase::room ? "Room connected" : service);
     bind_text(menu,"browse_hint",v.list_known ? std::to_string(v.rows.size()).append(v.stale ? " last known games" : " public games").c_str() : "Browse public games");
     // LC localizes these mutually exclusive variants at the approved status/error anchors.
+    const bool native_tunnel=native_flow.phase==native_phase::tunnel,native_discovery=native_flow.phase==native_phase::discovery,
+        native_admission=native_flow.phase==native_phase::admitting,native_posting=native_flow.phase==native_phase::host && !native_flow.lobby_active;
+    // The room line and a native step share one status anchor in LC: while a native step is shown the room line is not.
+    const bool native_step=native_tunnel || native_discovery || native_admission || native_posting;
     const std::pair<const char*,bool> variants[]{
-        {"lc_native_tunnel",native_flow.phase==native_phase::tunnel},
-        {"lc_native_discovery",native_flow.phase==native_phase::discovery},
-        {"lc_native_admission",native_flow.phase==native_phase::admitting},
-        {"lc_native_posting",native_flow.phase==native_phase::host && !native_flow.lobby_active},
+        {"lc_native_tunnel",native_tunnel},{"lc_native_discovery",native_discovery},
+        {"lc_native_admission",native_admission},{"lc_native_posting",native_posting},
         {"lc_broker_auth",v.state==broker::phase::authenticating},{"lc_broker_list",v.state==broker::phase::listing},
         {"lc_broker_host",v.state==broker::phase::hosting},{"lc_broker_resolve",v.state==broker::phase::resolving},
         {"lc_broker_empty",s==screen::browse && v.list_known && !waiting && !failed && v.rows.empty()},
-        {"lc_broker_stale",v.stale && v.state!=broker::phase::room},{"lc_broker_room",v.state==broker::phase::room},
+        {"lc_broker_stale",v.stale && v.state!=broker::phase::room},{"lc_broker_room",v.state==broker::phase::room && !native_step},
         {"lc_broker_cancel",v.state==broker::phase::canceling || v.state==broker::phase::leaving}};
     for(const auto& variant:variants) hide(menu,variant.first,!variant.second);
     // Exactly one cause scene while failed. The raw id stays a bounded diagnostic and is never a command.
