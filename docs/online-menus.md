@@ -479,7 +479,7 @@ keyboard/pad chord. Base UI input still handles authored inline buttons. The
 manager mask hook filters only returns 0x5bad33 / 0x5c88d2 while this same menu
 and activation generation are ticking. Native input/wait/transfer flags remain untouched; only the documented Host
 confirmation phase is deferred through native state 0/2. Native ticks run once. Back dismisses inline state before
-native Back can act when the presentation is valid; otherwise it exits the
+native Back can act, independently of roster-read validity; otherwise it exits the
 Kick picker, unreadies a ready guest or leaves according to native state. The
 actual native Join tick and mouse/help Leave branches dispatching the Back
 slot always retain their native behavior through visible notices. A failed
@@ -489,7 +489,10 @@ Roster counts match the native participant count, bounded at four. HOST alone
 owns native row values: use its distinct row IDs and native session lookup.
 JOIN's actual 0x5c8150 refresh never sets row values (they remain constructor
 zero), so map its rows through exactly the participant order at menu+0x1968,
-from 0x610ca0. Read head/+8-next/+0x10-record without changing the native cursor.
+from 0x610ca0. Read real head/+8-next/+0x0c-previous/+0x10-record nodes: head.previous and
+tail.next are NULL, there is no sentinel, every linked node has a participant,
+and walked-node count must equal +0xc. Restore the shared iterator cursor
+after native lookups (including faults), since those helpers also use it.
 Validate counts/live pool slots/ID agreement where appropriate. Empty/pending
 rosters accept native's disabled name placeholder plus zero ready rows; no
 placeholder becomes an admitted member. Local identity comes from 0x6111f0
@@ -497,13 +500,16 @@ and its actual record ID; NULL is distinct from a valid index-zero participant.
 
 Validation repeats after base input for a known valid Host picker selection;
 self/out-of-range Kick is refused without blocking Back. An unavailable view
-is presentation failure and defers to native policy. It does not veto any native
-action or latch an error every tick. Transient target errors clear on recovery.
+is presentation failure and defers to native policy for normal actions and
+exit. Picker acceptance alone fails safe: self or unknown targets/local identity
+are refused even when the full view is unavailable. Back and Leave stay usable;
+no read failure latches an error every tick. Transient target errors clear on recovery.
 Native Start independently repeats role/readiness/count checks; an invalid view
 also restores only a previous dim applied by this adapter, within native mode
 and transfer gates. No DLL reads of readiness replace native authority.
 
-The adapter hooks native activation, update and both roster-event/refresh slots.
+The adapter hooks native activation, update and all three roster-event/refresh
+slots (+0xa0, +0xac and +0xb4), including Host 0x69f314 and Join 0x69f3dc.
 It hides backing lists before refresh and rewrites HOST picker text before the
 refresh returns. The two exact guarded name-formatting reads at 0x5ba66e and
 0x5c829b receive <=31-byte allowlisted text during marked UI refresh only. This
@@ -743,3 +749,37 @@ Join mouse-help Leave through a notice, renderer-visible Host row safety,
 hidden unchanged Join formatted rows, one-use consent, safe focus restoration
 and fault-contained native access are explicit regression cases. No game or
 desktop input was used. Full LC integration and real peer/render gates remain.
+
+
+## Re-review correction on 2454786: real participant containers
+
+The prior fixture was wrong: it appended a null-payload sentinel to a circular
+chain, while the retail container is NULL-terminated and has no sentinel.
+`read_lobby` now validates exactly the declared number of non-NULL payload
+nodes, the head/previous/tail/next links, and then a NULL next pointer before
+calling any lookup. It never requires or dereferences an invented terminal
+node. A bounded bad-shape check avoids hanging native lookups on a malformed
+cycle. Native lookup cursor changes are restored around UI reads.
+
+The fixture builds the actual list at session+0x26c using retail 0x611e00
+insertion, which calls retail 0x611da0 allocation and 0x605740 pool allocation.
+Only the pool backing-store singleton is supplied by the fixture. Reversed
+inserts exercise native sorting; no next/previous/payload links are fabricated.
+The real 0x610ca0, 0x6110c0, 0x6111f0 and 0x611250 run without replacement.
+Local flag/cache fields model actual native state, including absent/zero and
+pending cases. Real LISTBOX +0xc4 selection/scroll clamping also runs; its parsed
+visible-row count is initialized instead of replacing the method with a no-op.
+
+`r4-retail-list` tests both roles at 1..4 members and real successful/missing/local
+lookups; `r4-refresh-paths` covers +0xa0/+0xac/+0xb4 immediate renderer-boundary
+observations. `r4-back-combos` verifies Back+Accept cannot bypass pending Copy,
+modal/tool, Copy-latch or picker target checks. Only the Back bit is forwarded
+when suppression applies. `r4-unknown-kick` verifies invalid views/selections
+cannot alias a real remote index zero, unknown local cannot authorize Kick, and
+Back still exits. `r4-dismiss-invalid` verifies notice dismissal does not require
+a roster read: first Back dismisses, a later intentional Back uses native Leave.
+
+Missing-list activation still queues return to native online rather than calling
+the unsafe activator. Its real manager processing/one-native-tick interval is a
+live residual to check, not proven by the queued-request fixture. No live game,
+raster capture or desktop input was executed for this correction.

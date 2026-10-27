@@ -17,7 +17,7 @@ import subprocess
 HOOKS = {0x5C971B: 6, 0x6A23D8: 4, 0x69E454: 4, 0x69E464: 4,
          0x69E438: 4, 0x69E440: 4, 0x5BC3D0: 5,
          0x69F284: 4, 0x69F350: 4, 0x69F290: 4, 0x69F358: 4,
-         0x69F2A0: 4, 0x69F368: 4, 0x69F2AC: 4, 0x69F374: 4, 0x6A24AC: 4, 0x69F2A4: 4, 0x69F320: 4, 0x69F328: 4, 0x69F3E8: 4, 0x69F3F0: 4, 0x69F2F4: 4, 0x69F3BC: 4, 0x5BAD1F: 5, 0x5C88BE: 5, 0x6141E0: 5, 0x69F36C: 4}
+         0x69F2A0: 4, 0x69F368: 4, 0x69F2AC: 4, 0x69F374: 4, 0x6A24AC: 4, 0x69F2A4: 4, 0x69F320: 4, 0x69F328: 4, 0x69F3E8: 4, 0x69F3F0: 4, 0x69F2F4: 4, 0x69F3BC: 4, 0x5BAD1F: 5, 0x5C88BE: 5, 0x6141E0: 5, 0x69F36C: 4, 0x69F314: 4, 0x69F3DC: 4}
 REGISTRY = r"HKCU\Software\Activision\X-Men Legends 2"
 
 
@@ -72,7 +72,7 @@ def main():
             assert bool(changed.intersection(range(site, site + size))) == installed, (mode, hex(site))
         if installed:
             assert "script functions: 1024 names" in log
-            assert "dispatcher lcOnlineIntent n(i) registered; 27 hooks committed atomically" in log
+            assert "dispatcher lcOnlineIntent n(i) registered; 29 hooks committed atomically" in log
         else:
             assert "dispatcher lcOnlineIntent" not in log
         if mode in ("on", "ui-guard"):
