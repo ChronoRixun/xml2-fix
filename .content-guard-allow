@@ -144,3 +144,4 @@ DISASM  src/xml1_economy_shop.cpp  # Authored ABI adapters for vendor text, buy 
 DISASM  test/xml1_economy_shop_checks.hpp  # Authored isolated tab-loop and stale-purchase callers for mapped-retail tests; no extracted game instruction listing.
 DISASM  src/lc_fonts.cpp  # Authored register/flag-preserving style and scale adapters; implementation source, not a copied game instruction body.
 DISASM  test/lc_fonts_host.cpp  # Synthetic x87 conversion and ABI callers exercise our font hooks; retail routines are loaded from the owned PE at runtime, not embedded here.
+PRIVATE_IP test/online_native_fixture.inl # Invented native-discovery fixtures use the protocol virtual host address; no personal or device IP.

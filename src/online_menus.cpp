@@ -1,6 +1,7 @@
 #include "online_menus.hpp"
 #include "online_room.hpp"
 #include "gns_transport.hpp"
+#include "join_in_progress.hpp"
 #include "online_menus_rules.hpp"
 #include "online_menus_guards.hpp"
 #include "game_version.hpp"
@@ -21,6 +22,7 @@
 #include <intrin.h>
 #include <atomic>
 #include <vector>
+#include <deque>
 
 namespace online_menus {
 namespace {
@@ -78,6 +80,7 @@ std::uint64_t fixture_ticket=0;
 std::string fixture_code;
 bool (*lobby_fields)(lobby_fixture&)=nullptr;
 bool lobby_live(void* menu);
+bool native_route_request(const char* name,bool console=false);
 
 struct clipboard_api {
     HANDLE handle=nullptr;
@@ -380,6 +383,7 @@ __declspec(naked) void capture_stub() {
 }
 
 void request_impl(void* m,const char* name,const char* args) {
+    if(ready && !native_route_request(name)) return;
     pending.clear();keyboard_input.clear();
     if(name_edit.owned && name && std::strcmp(name,"text_entry") && std::strcmp(name,"lc_online") && !abandon_name()) return;
     auto* source=current();
@@ -540,7 +544,7 @@ bool offline_fixture = false;
 #if XML2_FIX_GNS
 void production_broker_tick() { online_room::ui_tick(); gns_transport::room_ui_tick(); }
 broker_api broker_calls{online_room::available,online_room::view,production_broker_tick,online_room::list,
-    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due};
+    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due,online_room::host_native,online_room::admission_target,online_room::host_posted,join_in_progress::installed};
 #else
 broker_api broker_calls{};
 #endif
@@ -561,12 +565,15 @@ broker::ticket completed_list_ticket{};
 DWORD last_list_at=0,list_done_at=0;
 bool listed_started=false,list_done=false;
 broker::ticket resolve_ticket{}, remembered_ticket{};
+void native_flow_cancel();
 void broker_cancel(bool leave_room=false) {
+    native_flow_cancel();
     if(!broker_live()) return;
     if(leave_room && broker_calls.leave) broker_calls.leave();
     else if(broker_calls.cancel) broker_calls.cancel();
     resolve_edit=0;resolve_ticket={};
 }
+#include "online_native_flow.inl"
 void broker_scope(screen s) {
     if(!broker_live()) return;
     if(broker_screen!=s) {
@@ -620,6 +627,10 @@ void bind_broker(void* menu,screen s) {
     bind_text(menu,"browse_hint",v.list_known ? std::to_string(v.rows.size()).append(v.stale ? " last known games" : " public games").c_str() : "Browse public games");
     // LC localizes these mutually exclusive variants at the approved status/error anchors.
     const std::pair<const char*,bool> variants[]{
+        {"lc_native_tunnel",native_flow.phase==native_phase::tunnel},
+        {"lc_native_discovery",native_flow.phase==native_phase::discovery},
+        {"lc_native_admission",native_flow.phase==native_phase::admitting},
+        {"lc_native_posting",native_flow.phase==native_phase::host && !native_flow.lobby_active},
         {"lc_broker_auth",v.state==broker::phase::authenticating},{"lc_broker_list",v.state==broker::phase::listing},
         {"lc_broker_host",v.state==broker::phase::hosting},{"lc_broker_resolve",v.state==broker::phase::resolving},
         {"lc_broker_empty",s==screen::browse && v.list_known && !waiting && !failed && v.rows.empty()},
@@ -644,6 +655,21 @@ void bind_broker(void* menu,screen s) {
         enable(menu,"done",code.text.size()==8 && !waiting && v.state!=broker::phase::room);
     }
     if(s==screen::host) {
+        const bool settings=native_flow.maximum!=0;
+        // Drop all round-1 fixture prose; LC composes localized labels from
+        // these variants and the numeric maximum at the same approved anchors.
+        for(const auto* field:{"campaign","save","preview_save","preview_slots","drop_in","preview_drop"}) bind_text(menu,field,"");
+        bind_text(menu,"lc_host_max_players",settings ? std::to_string(native_flow.maximum).c_str() : "");
+        const std::pair<const char*,bool> choices[]{
+            {"lc_host_settings_unknown",!settings},{"lc_host_new",settings && !native_flow.loaded},
+            {"lc_host_load",settings && native_flow.loaded},{"lc_host_campaign",settings && !native_flow.danger_room},
+            {"lc_host_danger_room",settings && native_flow.danger_room},{"lc_host_easy",settings && native_flow.difficulty==0},
+            {"lc_host_normal",settings && native_flow.difficulty==1},{"lc_host_hard",settings && native_flow.difficulty==2}};
+        for(const auto& choice:choices) hide(menu,choice.first,!choice.second);
+        const bool policy_known=broker_calls.drop_in!=nullptr;
+        const bool drop_in=policy_known && broker_calls.drop_in();
+        hide(menu,"lc_host_drop_unknown",policy_known);hide(menu,"lc_host_drop_on",!policy_known || !drop_in);
+        hide(menu,"lc_host_drop_off",!policy_known || drop_in);
         bind_text(menu,"room_name",display(host_room_name,32).c_str());
         bind_text(menu,"preview_name",display(host_room_name,24).c_str());
         bind_text(menu,"room_code",v.code.empty() ? "---- ----" : v.code.c_str());
@@ -1175,6 +1201,7 @@ void lobby_tick(void* menu,unsigned original,bool& called) {
 }
 void lobby_frame(void* menu,unsigned original) noexcept {
     bool called=false;
+    if(native_lobby_rejected(menu)) return;
     if(!input_thread("lobby tick",false)) { lobby_original(menu,original);return; }
     try { if(broker_live() && broker_calls.tick) broker_calls.tick(); lobby_tick(menu,original,called); }
     catch(...) {
@@ -1186,10 +1213,12 @@ void lobby_frame(void* menu,unsigned original) noexcept {
 void __fastcall host_tick(void* menu,void*) { lobby_frame(menu,0x5bacd0); }
 void __fastcall join_tick(void* menu,void*) { lobby_frame(menu,0x5c8840); }
 void __fastcall lobby_base_tick(void* menu,void*) {
+    if(native_lobby_rejected(menu)) return;
     const bool previous=base_ui_dispatch;base_ui_dispatch=true;
     lobby_original(menu,0x5aaeb0);base_ui_dispatch=previous;
 }
 void lobby_refresh(void* menu,unsigned original) {
+    if(native_lobby_rejected(menu)) return;
     const bool marked=lobby_live(menu);
     if(marked) { if(lobby_state.owner==menu) lobby_state.picker_safe=false;picker_visibility(menu,false); }
     if(marked) ++refreshing_names;
@@ -1203,14 +1232,24 @@ void __fastcall host_update(void* menu,void*) { lobby_refresh(menu,0x5babc0); }
 void __fastcall join_refresh(void* menu,void*) { lobby_refresh(menu,0x5c8620); }
 void __fastcall join_update(void* menu,void*) { lobby_refresh(menu,0x5c8480); }
 void lobby_activate(void* menu,int argument,unsigned original) {
-    if(!lobby_live(menu)) { lobby_native_activate(menu,argument,original);return; }
+    if(!native_lobby_permit(menu)) { native_lobby_recover();return; }
+    if(!lobby_live(menu)) {
+        if(lobby_native_activate(menu,argument,original)) {
+            if(!native_lobby_entered(menu)) lobby_exit(menu);
+        } else if(native_flow.phase!=native_phase::idle) native_flow_error("native_lobby_activation");
+        return;
+    }
     lobby_state.reset(menu);bindings.clear();pending.clear();
     if(!lobby_lists(menu)) {
         logger::write("online menus: malformed lobby skin; returning to native online");
+        if(native_flow.phase!=native_phase::idle) native_flow_error("native_lobby_skin");
         lobby_state.reset();lobby_exit(menu);return;
     }
     picker_visibility(menu,false);
-    if(!lobby_native_activate(menu,argument,original)) { lobby_state.reset();lobby_exit(menu);return; }
+    if(!lobby_native_activate(menu,argument,original) || !native_lobby_entered(menu)) {
+        if(native_flow.phase!=native_phase::idle) native_flow_error("native_lobby_activation");
+        lobby_state.reset();lobby_exit(menu);return;
+    }
     lobby_after_refresh(menu);
     try { lobby_view view{};const bool valid=read_lobby(menu,view);bind_lobby(menu,view,valid); }
     catch(...) { pending.clear();bindings.clear();logger::write("online menus: activation fields unavailable; native controls retained"); }
@@ -1218,6 +1257,7 @@ void lobby_activate(void* menu,int argument,unsigned original) {
 void __fastcall host_activate(void* menu,void*,int arg) { lobby_activate(menu,arg,0x5ba870); }
 void __fastcall join_activate(void* menu,void*,int arg) { lobby_activate(menu,arg,0x5c8590); }
 int lobby_back(void* menu,unsigned original) {
+    if(native_lobby_rejected(menu)) return 2;
     // A native Join tick/mouse Leave branch dispatches this same slot. It must
     // retain native Unready/Leave behavior even while Copy/error text is visible.
     const bool native_dispatch=(lobby_ticking && !base_ui_dispatch) || native_mouse;
@@ -1233,8 +1273,11 @@ int lobby_back(void* menu,unsigned original) {
 int __fastcall host_back(void* menu,void*) { return lobby_back(menu,0x5aaff0); }
 int __fastcall join_back(void* menu,void*) { return lobby_back(menu,0x5c8c60); }
 void lobby_deactivate(void* menu,unsigned original) {
+    if(native_lobby_skip_deactivate(menu)) return;
     if(lobby_state.owner==menu) { lobby_state.reset();bindings.clear();pending.clear(); }
+    const bool departing=native_lobby_departing(menu);
     lobby_original(menu,original);
+    if(departing) native_lobby_left();
 }
 void __fastcall host_deactivate(void* menu,void*) { lobby_deactivate(menu,0x5ba280); }
 void __fastcall join_deactivate(void* menu,void*) { lobby_deactivate(menu,0x5c8070); }
@@ -1243,6 +1286,7 @@ bool lobby_mouse_native(void* menu,unsigned original,int x,int y,int flags,int m
     __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 bool lobby_mouse(void* menu,unsigned original,int x,int y,int flags,int message,int extra) {
+    if(native_lobby_rejected(menu)) return true;
     const bool previous=native_mouse;native_mouse=true;
     const bool result=lobby_mouse_native(menu,original,x,y,flags,message,extra);
     native_mouse=previous;
@@ -1255,7 +1299,7 @@ void show_notice(void* menu) {
     // Builder-owned localized text. Only visibility, never English replacement.
     constexpr const char* notices[]{"lc_notice_unavailable","lc_notice_resolving","lc_notice_fixture",
         "lc_notice_paste_invalid","lc_notice_code_invalid","lc_notice_name_invalid",
-        "lc_notice_profile_save","lc_notice_name_open","lc_notice_recent_save"};
+        "lc_notice_profile_save","lc_notice_name_open","lc_notice_recent_save","lc_notice_admission"};
     bool found=false;
     for(const auto* item:notices) {
         const bool selected=error_visible && feedback==item;
@@ -1408,8 +1452,8 @@ void tick_impl(void* menu,bool& native_called) {
     case intent::refresh:
         if(s==screen::browse && broker_live() && broker_calls.list && broker_calls.list()) { last_list_at=now_ms();listed_started=true; } break;
     case intent::open_room:
-        if(s==screen::host && broker_live() && broker_calls.host) broker_calls.host(host_room_name,host_public); break;
-    case intent::visibility: if(s==screen::host) host_public=!host_public; break;
+        if(s==screen::host && broker_live()) { native_host_begin(); return; } break;
+    case intent::visibility: if(s==screen::host && native_flow.phase==native_phase::idle) host_public=!host_public; break;
     case intent::retry:
         if(broker_live() && broker_calls.retry && broker_calls.retry() && s==screen::code) {
             resolve_ticket=broker_view().generation;resolve_edit=code.generation;code.submitted=code.generation;
@@ -1452,6 +1496,7 @@ void tick_impl(void* menu,bool& native_called) {
         remembered_ticket=broker_view().generation;
         if(!remember_game(broker_view().code,broker_view().room_name.empty() ? "Online game" : broker_view().room_name)) message("lc_notice_recent_save");
     }
+    if(!destination && native_flow_tick(s)) return;
     if(destination) {
         if(s==screen::code) { code.close(); fixture_ticket=0; }
         pending.clear();keyboard_input.clear();error_visible=false;accepted=-1;
@@ -1513,8 +1558,10 @@ void deactivate_state(void* menu,bool departure) {
     const auto s=which(menu);
     // +48 is resource cleanup and may run while constructing a noncurrent
     // cached menu. Only real +1c deactivation owns a requested Hub departure.
-    if(s==screen::code && (departure || current()==menu)) { code.close(); fixture_ticket=0; }
-    if(departure && broker_live() && (s==screen::code || s==screen::browse || s==screen::host) && broker_view().state!=broker::phase::room) broker_cancel();
+    const bool active_departure=departure && current()==menu;
+    const bool native_departure=active_departure && native_flow_departure(s);
+    if(s==screen::code && current()==menu) { code.close(); fixture_ticket=0; }
+    if(active_departure && !native_departure && broker_live() && (s==screen::code || s==screen::browse || s==screen::host) && broker_view().state!=broker::phase::room) broker_cancel();
     if(departure && s==screen::hub && name_edit.owned) name_edit.departed=true;
 }
 void __fastcall deactivate(void* menu,void*) {
@@ -1623,6 +1670,25 @@ patch_transaction::contribution contribution() {
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&lobby_base_tick)),0,"native lobby base-input boundary"));
     c.writes.push_back(patch_transaction::relocation(0x6141e0,"e9",true,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&participant_display_name)),0,"refresh-scoped display name getter"));
+    c.writes.push_back(patch_transaction::relocation(0x5f1bb0,"e9",true,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&setuphost_command)),0,"all native setuphost producers"));
+    c.writes.push_back(patch_transaction::relocation(0x49faac,"e8",true,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&setuphost_script_queue_stub)),0,"native setupHost script command generation"));
+    for(const auto site:{0x6128abu,0x612d1fu,0x612ddau}) c.writes.push_back(patch_transaction::relocation(site,"e8",true,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&native_session_cleared)),0,"native terminal session clear ends room"));
+    c.writes.push_back(patch_transaction::relocation(0x5b9609,"e8",true,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&setuphost_queue_stub)),0,"native Host posting boundary"));
+    c.writes.push_back({0x5b960e,{0x90,0x90},"native Post call padding"});
+    c.writes.push_back(patch_transaction::relocation(0x5f1c2e,"e8",true,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&console_open_stub)),0,"native console menu request ownership"));
+    c.writes.push_back(patch_transaction::relocation(0x60a095,"e8",true,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&native_host_queue_stub)),0,"native Host queued request ownership"));
+    c.writes.push_back(patch_transaction::relocation(0x69f66c,"",false,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&options_activate)),0,"native Host settings activation"));
+    c.writes.push_back(patch_transaction::relocation(0x69f694,"",false,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&options_tick)),0,"native Host settings seed"));
+    c.writes.push_back(patch_transaction::relocation(0x69f688,"",false,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&options_back)),0,"native Host setup cancel"));
     return c;
 }
 void install(HMODULE game,const install_hooks* hooks) {
@@ -1654,6 +1720,6 @@ void install(HMODULE game,const install_hooks* hooks) {
         game_version::refuse_startup(); return;
     }
     ready=true;
-    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 29 hooks committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability);
+    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 40 hooks committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability);
 }
 }

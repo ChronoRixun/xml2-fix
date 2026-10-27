@@ -26,6 +26,10 @@ namespace online_room
 	void ui_tick();
 	bool list();
 	bool host(const std::string& name, bool public_room);
+	bool host_native(const std::string& name, bool public_room, int max_players, bool danger_room);
+	bool host_posted(online_browser_core::ticket generation);
+	// Game-thread admission target, only for the current authenticated room and proven host tunnel.
+	bool admission_target(online_browser_core::ticket generation, std::uint32_t& address);
 	bool resolve(const std::string& code);
 	bool retry();
 	void cancel();

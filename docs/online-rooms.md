@@ -6,7 +6,8 @@ stack. `[Online] Menus=1`, the compatible LC menu assets, an installed
 Broker are required for that route. TestMode remains refused. Hub entry performs
 no room operation. Launcher Host/Public/RoomName and JoinCode keys are consumed
 once as Host Setup / Code presets after real controller acceptance. Host Setup
-still requires Open; a complete Code submits one resolve per edit generation.
+requires Open, native Game Options acceptance, then native Post; a complete Code
+submits one resolve per edit generation.
 The legacy non-menu Host/JoinCode route retains its one-shot start.
 
 The broker contract remains protocol 2: `auth`, `cert`, `list_rooms`, `host`,
@@ -20,10 +21,13 @@ Any future wire/gameplay contract **needs a rule id** from the coordinator.
 |---|---|---|
 | Idle Hub | Host / Code / Browse navigation | Open the corresponding UI; no host side effect |
 | Idle | Browse or Refresh | Authenticate, then list; retain prior rows while pending |
-| Idle | Open room / complete Code / selected Browse Join | Authenticate, then host / resolve, one outstanding operation |
+| Idle | Open room | Native Game Options/save/difficulty/name/max choices; no broker room yet |
+| Native setup | Native Post / cancel | Accepted settings start host / cancel releases the selected image |
+| Idle | Complete Code / selected Browse Join | Authenticate, then resolve, one outstanding operation |
 | Authenticating | Verified protocol-2 challenge/auth identity and pinned CA | Listing / Hosting / Resolving; post that operation once |
 | Listing | Valid list, including zero rooms | Idle with fresh, atomically replaced snapshot |
-| Hosting / Resolving | Valid code/roster; compatible optional release token | Room; native admission is a separate next-round step |
+| Hosting | Valid code/roster | Room stays unjoinable until actual native Host activation |
+| Resolving | Valid code/roster; compatible token | Room -> authenticated host tunnel -> room-only discovery -> native admission -> Join |
 | Pending | Back, edit of submitted Code, close or route departure | Canceling; invalidate request/room generation, shut down worker socket |
 | Room | Intentional Back/Leave from custom screen, or a change to committed Code | Leaving; release tunnels/listener/queues and room-scoped state |
 | Canceling / Leaving | Worker has finished | Idle; no game-thread join/wait |
@@ -151,7 +155,7 @@ Host = broker                       ; this PC opens a room when its online sessi
 3. **Room.** The host writes the full eight-character code to `online-room.txt` next to the game for sharing; logs
    show only its first two characters. Codes and broker `host_ok` / `resolve_ok` responses are checked against the
    31-symbol alphabet. The room's protocol-2 metadata comes from the game (contract v1.3/v1.4, the public game
-   browser; `max_players` is 4, read-only live `players` stays server-derived): `public` from `[Online] Public`,
+   browser; `max_players` is the accepted native 2/3/4 for the menu route (legacy default 4); read-only live `players` stays server-derived): `public` from `[Online] Public`,
    `name` from `RoomName` (printable ASCII, at most 32, no `;` or `"`; public rooms only; default "<screen name>'s
    game"), `host_display_name` = the online screen name (the session's local player name, +0x3e8 of 0xa53058, set by
    the Play Online menus), `game_mode` `campaign` / `danger_room`, `zone` = the current zone's path (printable ASCII,
@@ -227,3 +231,28 @@ checks are development evidence, not real-network acceptance of this release.
 Rule 25 GnsTransport revision 4, values `{1, 1000, framing revision 3, 0}`. Framing 2 introduced the room datagram
 kind 4; framing 3 adds agreed lost-player input/cut messages (kinds 5/6). Survivors agree the lost guest's cut frame
 before removal; earlier revisions are refused by name. See [gns-transport.md](gns-transport.md).
+
+
+## Native menu bridge
+
+See [online-menus.md](online-menus.md#native-host-setup-and-automatic-admission-round-6)
+for the state/flow table, LC nodes, ABI addresses and the pending G/V procedure.
+`host_native` accepts the confirmed native name (1..31 bytes), maximum and
+campaign/Danger Room choice. These set only existing v2 metadata fields.
+Difficulty/load-image selection stays native; no unrecognized broker field is
+added. `joinable=false` is sent with host, kept through posting, then an existing
+presence update enables it after actual native Host activation. Repeated
+activation does not post again. The accepted game mode is retained between
+native setup and the first loaded world, where the ordinary live world reader
+would otherwise still report the old menu mode.
+
+`admission_target(ticket,address)` requires the current room generation,
+authenticated broker room, installed certificate, ICE readiness and a connected
+host tunnel whose identity passed the existing GNS callback check. It returns
+no address on failure. Native menu discovery suppresses master records even
+after native hello binds the transport, and raw UDP game-info replies cannot
+seed the room table. The established native admission/Ready/JIP handlers still
+own membership and play. Intentional Leave drops queued datagrams, callbacks,
+room listener/roster and old-generation worker results before later attempts.
+Rules 25/26, their revisions/values, framing and release identities are unchanged.
+Any distinct future peer-visible contract still **needs a rule id**.
