@@ -146,5 +146,7 @@ inline constexpr script_functions_rules::guard guards[]{
     {0x0069f36c, "80845c00", "join update slot"},
     {0x005ba669, "e8729b0500", "host refresh display-name call"},
     {0x005c8296, "e845bf0400", "join refresh display-name call"},
+    {0x0069f314, "30a95b00", "first native roster refresh slot"},
+    {0x0069f3dc, "20865c00", "first native roster refresh slot"},
 };
 }

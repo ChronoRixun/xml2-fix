@@ -707,7 +707,14 @@ unsigned __fastcall lobby_input(void* mgr,void*) {
     unsigned mask=0;lobby_mask(mgr,mask);
     const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
     if(lobby_ticking && input_generation==lobby_state.generation && current()==lobby_state.owner && (caller==0x5bad33 || caller==0x5c88d2)) {
-        if(mask&0x200000) return back_consumed ? 0 : mask; // a failed DLL view never vetoes native Back
+        if(mask&0x200000) {
+            if(back_consumed) return 0;
+            // Back must remain available, but may not smuggle a coincident
+            // Accept past modal/Copy or Kick-target suppression.
+            if(suppress_lobby_action || lobby_state.copy_block || pending.action==int(intent::copy_code) ||
+                !lobby_action_valid(lobby_state.owner,mask)) return mask&0x200000;
+            return mask;
+        }
         if(pending.action==int(intent::copy_code)) lobby_state.copy_block=true;
         if(suppress_lobby_action || lobby_state.copy_block) return 0;
         const auto action=role_accept ? mask|0x10 : mask;
@@ -733,7 +740,7 @@ bool lobby_lists(void* menu) {
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 // Raw native reads stay inside this small SEH boundary; never retain pointers.
-bool read_lobby(void* menu,lobby_view& out) {
+bool read_lobby_impl(void* menu,lobby_view& out) {
     __try {
         if(!lobby_lists(menu)) return false;
         const bool host=which(menu)==screen::lobby_host;
@@ -742,6 +749,19 @@ bool read_lobby(void* menu,lobby_view& out) {
         if(!table || table!=at<void*(__thiscall*)(void*)>(0x610ca0)(session)) return false;
         const auto participants=*reinterpret_cast<int*>(static_cast<char*>(table)+0xc);
         if(participants<0 || participants>4) return false;
+        void* records[4]{};
+        auto* node=*static_cast<void**>(table);
+        void* previous=nullptr;
+        // The retail allocator/insert build ordinary NULL-terminated doubly
+        // linked nodes. Validate the bounded shape BEFORE invoking the native
+        // lookups, which themselves assume every linked node has a payload.
+        for(int row=0;row<participants;++row) {
+            if(!node || *reinterpret_cast<void**>(static_cast<char*>(node)+0xc)!=previous) return false;
+            records[row]=*reinterpret_cast<void**>(static_cast<char*>(node)+0x10);
+            if(!records[row]) return false;
+            previous=node;node=*reinterpret_cast<void**>(static_cast<char*>(node)+8);
+        }
+        if(node || *reinterpret_cast<void**>(static_cast<char*>(table)+4)!=previous) return false;
         auto* local=at<void*(__thiscall*)(void*)>(0x6111f0)(session);
         out.local_known=local!=nullptr;
         if(local) out.local=at<unsigned(__thiscall*)(void*)>(0x614210)(local);
@@ -763,11 +783,8 @@ bool read_lobby(void* menu,lobby_view& out) {
             slots[index]=true;
         }
         out.count=count;out.selected=at<int(__thiscall*)(void*)>(0x5bf5c0)(names);
-        auto* node=*static_cast<void**>(table);
         for(int row=0;row<count;++row) {
-            if(!node) return false;
-            auto* participant=*reinterpret_cast<void**>(static_cast<char*>(node)+0x10);
-            if(!participant) return false;
+            auto* participant=records[row];
             if(host) {
                 out.ids[row]=at<unsigned(__thiscall*)(void*,int)>(0x5bfc20)(names,row);
                 participant=at<void*(__thiscall*)(void*,unsigned)>(0x6110c0)(session,out.ids[row]);
@@ -784,9 +801,21 @@ bool read_lobby(void* menu,lobby_view& out) {
             out.ready[row]=at<bool(__thiscall*)(void*)>(0x614240)(participant);
             out.host[row]=at<bool(__thiscall*)(void*)>(0x6142a0)(participant);
             out.ready_count+=out.ready[row] ? 1 : 0;
-            node=*reinterpret_cast<void**>(static_cast<char*>(node)+8);
         }
-        return node && !*reinterpret_cast<void**>(static_cast<char*>(node)+0x10);
+        return true; // exactly `participants` real payloads, then NULL
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool read_lobby(void* menu,lobby_view& out) {
+    // Retail lookup helpers use the list's shared iterator cursor. A UI read
+    // must return it exactly as the native callback left it, including faults.
+    __try {
+        auto* table=at<void*(__thiscall*)(void*)>(0x610ca0)(at<getter>(0x612be0)());
+        if(!table) return false;
+        auto** cursor=reinterpret_cast<void**>(static_cast<char*>(table)+8);
+        auto* saved=*cursor;bool result=false;
+        __try { result=read_lobby_impl(menu,out); }
+        __finally { *cursor=saved; }
+        return result;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 struct lobby_native_state { int phase=0;bool host=false,gate=false,transfer=false,authority=false;unsigned minimum=2; };
@@ -863,11 +892,22 @@ void lobby_after_refresh(void* menu) {
     picker_visibility(menu,safe && lobby_state_read(menu,state) && state.phase==1);
 }
 bool lobby_action_valid(void* menu,unsigned mask) {
-    lobby_view view{};lobby_native_state state{};
-    // Presentation failure is not native session policy and never traps input.
-    if(!read_lobby(menu,view) || !lobby_state_read(menu,state)) return true;
-    if(state.host && state.phase==1 && (mask&0x10) && view.local_known)
+    lobby_view view{};
+    // Missing presentation data must never trap Back/Leave. Kick is different:
+    // accepting the picker requires a positively known, nonlocal native target.
+    bool picker=false;
+    __try {
+        if(which(menu)==screen::lobby_host && (mask&0x10)) {
+            const auto* bytes=static_cast<const char*>(menu);
+            picker=*reinterpret_cast<const int*>(bytes+0x1960)==1 &&
+                *reinterpret_cast<void* const*>(bytes+0x1964) &&
+                *reinterpret_cast<void* const*>(bytes+0x324)==*reinterpret_cast<void* const*>(bytes+0x1964);
+        }
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+    if(picker) {
+        if(!read_lobby(menu,view) || !view.local_known) return false;
         return view.selected>=0 && unsigned(view.selected)<view.count && view.ids[view.selected]!=view.local;
+    }
     return true;
 }
 void restore_lobby_focus(void* menu) {
@@ -1127,13 +1167,10 @@ int lobby_back(void* menu,unsigned original) {
     const bool native_dispatch=(lobby_ticking && !base_ui_dispatch) || native_mouse;
     if(!native_dispatch && lobby_live(menu) && lobby_state.owner==menu &&
         (lobby_state.confirm || lobby_state.error || lobby_state.copied)) {
-        lobby_view view{};const bool valid=read_lobby(menu,view);
         lobby_state.confirm=lobby_state.error=lobby_state.copied=lobby_state.target_error=false;pending.clear();
-        if(valid) {
-            restore_lobby_focus(menu);
-            if(lobby_ticking) suppress_lobby_action=back_consumed=true;
-            return 2;
-        }
+        restore_lobby_focus(menu);
+        if(lobby_ticking) suppress_lobby_action=back_consumed=true;
+        return 2;
     }
     return lobby_native_back(menu,original);
 }
@@ -1513,6 +1550,8 @@ patch_transaction::contribution contribution() {
         {0x69f328,reinterpret_cast<const void*>(&host_refresh_other)},
         {0x69f3e8,reinterpret_cast<const void*>(&join_refresh)},
         {0x69f3f0,reinterpret_cast<const void*>(&join_refresh)},
+        {0x69f314,reinterpret_cast<const void*>(&host_refresh)},
+        {0x69f3dc,reinterpret_cast<const void*>(&join_refresh)},
         {0x69f36c,reinterpret_cast<const void*>(&join_update)},
         {0x69f2f4,reinterpret_cast<const void*>(&host_mouse)},
         {0x69f3bc,reinterpret_cast<const void*>(&join_mouse)}};
@@ -1552,6 +1591,6 @@ void install(HMODULE game,const install_hooks* hooks) {
         game_version::refuse_startup(); return;
     }
     ready=true;
-    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 27 hooks committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability);
+    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 29 hooks committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability);
 }
 }
