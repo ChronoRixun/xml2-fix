@@ -177,11 +177,37 @@ namespace
 }
 int main(int argc,char** argv)
 {
-    if(argc!=2) return 2;
+    if(argc<2) return 2;
+    const bool on=configure_latepads(argc,argv);
     load(argv[1]);at(0x62887d)[0]=0xc3;jump(0x672170,reinterpret_cast<const void*>(&copy));
     setup_live();system_startup();scan();
     check(!device(0),"gameplay has no startup pad");
     pad_hotplug::install(reinterpret_cast<HMODULE>(0x400000));
+    if (!on)
+    {
+        check(at(0x61862a)[0]==0x39,"LatePads=0 leaves Options bridge absent");
+        const auto primary_before=manager, discovery_before=discovery;
+        const auto maps_before=configs;
+        const auto scans_before=fixture_enumerations;
+        const auto records_before=gamepad_fix::source_slots;
+        di.attached=discovery_di.attached={1};xinput_pad::fixture_mask=xinput_pad::fixture_pressed=1;
+        // A disabled callback must not dereference even an invalid device, or
+        // touch the primary/discovery input, any of the five maps or XInput leases.
+        for(unsigned i=0;i<3;++i)
+        {
+            pad_hotplug::on_keyboard_read(reinterpret_cast<void*>(1),256);
+            pad_hotplug::on_keyboard_read(field<void*>(manager.data(),4),256);
+            Sleep(510);
+        }
+        check(manager==primary_before && discovery==discovery_before,"OFF callback makes no CInput/state/GUID writes");
+        check(configs==maps_before,"OFF callback makes no five-row binding/action/metadata writes");
+        check(fixture_enumerations==scans_before,"OFF callback does not scan");
+        check(gamepad_fix::source_slots==records_before && !gamepad_fix::topology_known,"OFF callback leaves XInput topology/leases unchanged");
+        frame();
+        check(!device(0) && !player_down(0) && configs==maps_before,"OFF production keyboard hook retains stock missing primary pad and saved maps");
+        std::printf("pad hotplug live OFF: %u checks PASS (no refresh, map, state or XInput topology writes)\n",checks);
+        return 0;
+    }
     frame();
     // Only the discovery manager gets the recurring scan in the unmodified game.
     di.attached=discovery_di.attached={1};xinput_pad::fixture_mask=xinput_pad::fixture_pressed=1;

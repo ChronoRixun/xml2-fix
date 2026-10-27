@@ -638,6 +638,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `Prompts` | `auto` | `auto`: each player's prompts follow the device they last used; `pad`; `keyboard`; `off`: the game's own prompts |
 | `PromptColors` | `1` | `0`: every pad button as plain `[A]`-style text |
 | `CacheDeviceScan` | `1` | background controller scans and XInput slot discovery; `0` restores the previous paths ([details](docs/controller-scan-cache.md)) |
+| `LatePads` | `1` | binds controllers connected after startup and preserves absent-pad bindings in Advanced Options; `0` restores the behavior before this fix. Restart after changing it ([details](docs/controller-hotplug.md)) |
 | `CutsceneMouse` | `1` | `0`: the game's own rule, where only a locked-controls cutscene stops the mouse (a mod's cinematic without `lockControls` lets it outline characters and click to move) |
 
 **[Online]** ([details](#-online))

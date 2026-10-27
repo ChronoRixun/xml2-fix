@@ -2,6 +2,7 @@
 #include "pad_hotplug_rules.hpp"
 #include "game_version.hpp"
 #include "gamepad_fix.hpp"
+#include "ini.hpp"
 #include "log.hpp"
 #include "pad_prompts_rules.hpp"
 #include "xml1_hook_memory.hpp"
@@ -116,6 +117,13 @@ namespace pad_hotplug
     }
     void install(HMODULE game)
     {
+        // Startup-only switch: OFF must leave both the Options bridge and
+        // every gameplay arrival write absent. The callback stays inert.
+        if (!ini::flag(L"Input", L"LatePads", true))
+        {
+            logger::write("input: LatePads=0 - stock late controller assignment retained");
+            return;
+        }
         using namespace pad_hotplug_rules;
         if (reinterpret_cast<std::uintptr_t>(game) != image_base) return;
         xml1_hook_transaction::memory memory;

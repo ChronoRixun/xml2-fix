@@ -14,9 +14,15 @@
 #include <vector>
 #include <cstdarg>
 #include <string>
+#include <filesystem>
 
 namespace logger
 {
+    const std::filesystem::path& module_dir()
+    {
+        static const auto path = std::filesystem::current_path();
+        return path;
+    }
     std::vector<std::string> lines;
     void write(const char* format, ...)
     {
@@ -36,6 +42,15 @@ namespace
     {
         ++checks;
         if (!ok) { std::fprintf(stderr, "FAIL %u: %s\n", checks, what); std::exit(1); }
+    }
+    bool configure_latepads(int argc, char** argv)
+    {
+        check(argc==2 || (argc==3 && (std::strcmp(argv[2],"0")==0 || std::strcmp(argv[2],"1")==0)), "LatePads fixture mode absent/1/0");
+        std::ofstream config(logger::module_dir()/"xml2-fix.ini", std::ios::trunc);
+        config << "[Test]\nNoActivate=1\n[Input]\n";
+        if(argc==3) config << "LatePads=" << argv[2] << "\n";
+        config.close();check(bool(config),"fixture INI written for production reader");
+        return argc!=3 || std::strcmp(argv[2],"0")!=0;
     }
     unsigned char* at(unsigned va) { return reinterpret_cast<unsigned char*>(va); }
     template<class T> T& field(void* p, unsigned offset) { return *reinterpret_cast<T*>(static_cast<unsigned char*>(p) + offset); }
@@ -182,9 +197,19 @@ namespace
 }
 int main(int argc,char** argv)
 {
-    if (argc!=2) { std::fprintf(stderr,"usage: xml2_pad_hotplug_test <owned retail exe>\n"); return 2; }
+    if (argc<2) { std::fprintf(stderr,"usage: xml2_pad_hotplug_test <owned retail exe> [1|0]\n"); return 2; }
+    const bool on=configure_latepads(argc,argv);
     check(fixture_space==at(0x401000),"fixed owned fixture address");
     load(argv[1]);
+    if (!on)
+    {
+        const std::vector<unsigned char> before(at(0x400000),at(0x400000)+image.size());
+        pad_hotplug::install(reinterpret_cast<HMODULE>(0x400000));
+        pad_hotplug::on_keyboard_read(reinterpret_cast<void*>(1),256);
+        check(std::memcmp(at(0x400000),before.data(),before.size())==0,"LatePads=0 leaves entire mapped retail image identical, bridge and globals included");
+        std::printf("pad hotplug OFF: %u checks PASS (no bridge or image writes)\n",checks);
+        return 0;
+    }
     // Guard signatures are compared to the owned executable, including every
     // dependency; each mutated byte must refuse without writing the hook site.
     for (const auto& g:pad_hotplug_rules::guards) for(size_t i=0;i<g.hex.size()/2;++i)

@@ -838,12 +838,12 @@ add_executable(xml2_xinput_connections_test test/xinput_connections_test.cpp)
 target_include_directories(xml2_xinput_connections_test PRIVATE src)
 
 # Executes the retail controller scan/callback/read code against fake COM devices.
-add_executable(xml2_pad_hotplug_test test/pad_hotplug_test.cpp src/pad_hotplug.cpp "${CMAKE_CURRENT_BINARY_DIR}/input_worker_fixture.asm")
+add_executable(xml2_pad_hotplug_test test/pad_hotplug_test.cpp src/pad_hotplug.cpp src/ini.cpp "${CMAKE_CURRENT_BINARY_DIR}/input_worker_fixture.asm")
 target_include_directories(xml2_pad_hotplug_test PRIVATE src)
 target_link_options(xml2_pad_hotplug_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 target_link_libraries(xml2_pad_hotplug_test PRIVATE dxguid)
 
-add_executable(xml2_pad_hotplug_live_test test/pad_hotplug_live_test.cpp src/pad_hotplug.cpp src/controller_scan_cache.cpp src/pad_profile.cpp "${CMAKE_CURRENT_BINARY_DIR}/input_worker_fixture.asm")
+add_executable(xml2_pad_hotplug_live_test test/pad_hotplug_live_test.cpp src/pad_hotplug.cpp src/ini.cpp src/controller_scan_cache.cpp src/pad_profile.cpp "${CMAKE_CURRENT_BINARY_DIR}/input_worker_fixture.asm")
 target_include_directories(xml2_pad_hotplug_live_test PRIVATE src)
 target_link_options(xml2_pad_hotplug_live_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 target_link_libraries(xml2_pad_hotplug_live_test PRIVATE dxguid)
