@@ -185,6 +185,13 @@ callbacks, including empty ones, use PC `ret 8`. Victim release requires
 reciprocal pairing, flying and airborne carrier; mismatch recovery excludes
 both existing pair members for 0.6 seconds, detaches and Idles both.
 
+082c's live carrier and victim enums were `-1` (`m31c`, 07:13:16 onward),
+which bypassed that enum list and selected the root-minus-55 fallback. For
+our victim handler, 082d also maps the eight authored pickup/idle/walk/run
+victim/ally move names to the same attachment IDs. Break and unknown nodes
+retain the fallback. This repairs attachment selection; the reason the live
+enum getter was `-1` and the rendered asset pose still need live observation.
+
 Fix7 replaces the entries of `ch_flying` (table 0x6931f8) and `ch_fly_move`
 (0x6932d0). Map restriction reads manager **+0x8c / 0x483de0**, not +0x44.
 The two source tests use `xml1_flight_eligible(actor)`: a documented constant-true
@@ -202,10 +209,26 @@ continues on a probe miss, a non-character/large contact or an inactive carrier.
 As in XML1, a valid contact
 suppresses descent even when rank/current move prevents pickup. There is no
 airborne-Guard shortcut in `ch_flying`.
-The decide handler's second sweep remains first-contact-only, including its
+082d retains the downward contact's complete handle for the decide callback,
+instead of losing a directly-below target in the separate forward/down sweep.
+Before starting pickup it lowers the carrier to the authored pickup height
+(target root +40), using the native movement probe with character stopping
+disabled. Solid-world blockage prevents pickup; the target is not pulled up
+to compensate. Completion/interruption discards the saved contact.
+The decide handler's sweep for other entry paths remains first-contact-only, including its
 normal LiftRule service for objects (Might + 1 >= XML1 heaviness, heaviness 5
 refused, native refusal flags retained). An isolated prop cannot satisfy the
 outer character-contact gate.
+
+Carry Attack and Smash use XML1's generic throw amount: `L2` minimum **9**,
+times the caster multiplier, truncated to the source signed damage word.
+XML1 `3DF3F..3DFAD` calls `B7E60("L2", nullptr)`: max **11** is only returned
+through the optional range output. PC numeric selector **1** (`4C49F0`) is
+**DMG3**, not L2 (`6DA240`); the 082c values file gives DMG3 min3/max5. The
+earlier fixture substituted 12 for that lookup and missed the wrong table.
+The native throw event still executes once and owns motion, target release
+and attribution. Damage after defenses and the visible landing remain live
+checks.
 
 The UI owner notification maps XML1 slot +0x2c to PC **+0x40** (0x48cbb0,
 `ret 8`). Both original slots are no-ops in the inspected binaries. The call is

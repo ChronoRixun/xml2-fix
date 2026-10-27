@@ -3,6 +3,7 @@
 #include "xml1_cling_rules.hpp"
 #include "det_math.hpp"
 #include "lift_rule.hpp"
+#include "log.hpp"
 #include <cmath>
 #include <algorithm>
 #include <unordered_map>
@@ -138,6 +139,11 @@ inline bool guard_policy(void* self,void* actor,void* input,void* incoming=nullp
     if(field<unsigned char>(field<void*>(victim,0x35c),0x2ad)&0x80){play(actor,named(actor,"throwally"));lock(actor,victim);}
     else if(!movement())choose(0);
    }else if(team(victim)!=0x1c){
+    // 429228 is general target admission (XML1 391A0), not a stun
+    // test. The incoming guard chain's action 3 is grabstart. Since the
+    // entry bridge dispatches it immediately, gate enemy grabs here;
+    // ally Fastball and physical-object pickup keep their own branches.
+    if(!(field<unsigned char>(victim,0x765)&1)){if(!movement())choose(0);return true;}
     choose(3);
     if(field<unsigned char>(victim,0x765)&1){
      if(fn<bool(__thiscall*)(void*,int,int)>(0x54d710)(victim,0x2c,0))notify(actor,"");
@@ -180,6 +186,8 @@ struct tk_state {
  u32 victim=0,sound=0xffffffffu;std::int16_t impact=5;
  std::int8_t damage=1,heaviness=0,level=1;
  float distance=0,time=0,heading=0;vec offset{},last{};
+ bool auxiliary_done=false;
+ u32 attempts=0;
 };
 inline u32 suspend_parse_resume=0x4e39f6;
 __declspec(naked) inline void suspend_parse_native(){__asm {
@@ -196,6 +204,9 @@ inline bool __fastcall tk_parse(void* event,void*,const char* key,const char* va
  return reinterpret_cast<bool(__thiscall*)(void*,const char*,const char*)>(&suspend_parse_native)(event,key,value);
 }
 inline std::unordered_map<u32,tk_state> tk_states;
+inline bool trace_acquisition=false;
+struct tk_attempt {tk_state state;void* node;};
+inline std::unordered_map<u32,tk_attempt> tk_attempts;
 inline bool __cdecl tk_eligible(void* actor,void* entity,void* parameters){
  if(!entity||!parameters||(field<unsigned char>(entity,0xc5)&0x40))return false;
  if((field<u32>(entity,4)&0x40000)&&fn<bool(__thiscall*)(void*,int)>(0x41a820)(entity,0))return true;
@@ -290,29 +301,14 @@ inline void release(void* actor,tk_state& s,vec v,bool thrown){
 }
 inline void __fastcall tk_cancel(void*,void*,void* actor){
  const u32 token=field<u32>(actor,0x1c);auto it=tk_states.find(token);
+ tk_attempts.erase(token);
  if(it==tk_states.end())return;
  auto& s=it->second;s.victim=field<u32>(actor,0x76c);vec v{};
  if(valid(s.victim))if(auto* target=cast(resolve(s.victim),0x429110))v=field<vec>(target,0x120);
  release(actor,s,v,false);tk_states.erase(token);
 }
-inline void __fastcall tk_entry(void*,void*,void* actor,void*,void* context){
- det_math::fp_env fp;
+inline bool tk_acquire(void* actor,void* node,tk_state& s){
  const u32 token=field<u32>(actor,0x1c);
- if((field<unsigned char>(actor,0x259)&2)&&tk_states.count(token))return;
- tk_states.erase(token);
- if(!context||!field<void*>(context,4))return;
- // The native pre-entry executes suspend/tag dispatch and initial energy once.
- fn<void(__stdcall*)(void*,void*)>(0x4f2b00)(actor,context);
- auto* node=field<void*>(context,4);
- auto* event=method<void*(__thiscall*)(void*,int)>(node,0x1c)(node,1);
- event=fn<void*(__cdecl*)(void*,int,void*,void*,int)>(0x67234e)(event,0,reinterpret_cast<void*>(0x6db300),reinterpret_cast<void*>(0x6db700),0);
- if(!event)return;
- auto* stats=method<void*(__thiscall*)(void*,void*)>(node,0x28)(node,actor);if(!stats)return;
- tk_state s;
- s.impact=fn<std::int16_t(__thiscall*)(void*,void*)>(0x4dad20)(static_cast<unsigned char*>(event)+0x18,stats);
- s.heaviness=fn<std::int8_t(__thiscall*)(void*,void*)>(0x4abf70)(static_cast<unsigned char*>(event)+0x1a,stats);
- s.level=fn<std::int8_t(__thiscall*)(void*,void*)>(0x4abf70)(static_cast<unsigned char*>(event)+0x1c,stats);
- s.damage=field<std::int8_t>(field<void*>(event,0x14),0x1c);
  // Native acquisition retains engine world enumeration, scripts, class tests
  // and the installed LiftRule heaviness predicate. Its compact state is local;
  // it never aliases the source's distance/time/sound sidecar.
@@ -320,15 +316,18 @@ inline void __fastcall tk_entry(void*,void*,void* actor,void*,void* context){
  field<std::int16_t>(parameters.data(),8)=s.impact;field<std::int8_t>(parameters.data(),0xa)=s.heaviness;field<std::int8_t>(parameters.data(),0xb)=s.level;
  u32 auxiliary=0,selected=0;
  acquire(actor,&selected,&auxiliary,parameters.data());
- if(valid(auxiliary))if(auto* object=fn<void*(__cdecl*)(u32)>(0x4297b0)(auxiliary)){
+ ++s.attempts;
+ if(trace_acquisition&&(s.attempts&(s.attempts-1))==0)
+  logger::write("tk acquisition actor=%08X attempt=%u selected=%08X auxiliary=%08X energy=%.3f level=%d heaviness=%d",token,s.attempts,selected,auxiliary,field<float>(actor,0x288),int(s.level),int(s.heaviness));
+ if(!s.auxiliary_done&&valid(auxiliary))if(auto* object=fn<void*(__cdecl*)(u32)>(0x4297b0)(auxiliary)){
   if(auto* e=method<void*(__thiscall*)(void*,int)>(node,0x1c)(node,1)){
-   auxiliary_effects(actor,object,1);method<void(__thiscall*)(void*,void*,void*)>(e,8)(e,object,actor);
+   auxiliary_effects(actor,object,1);method<void(__thiscall*)(void*,void*,void*)>(e,8)(e,object,actor);s.auxiliary_done=true;
   }
  }
- if(!valid(selected))return;
- auto* target=resolve(selected);if(!target)return;
+ if(!valid(selected))return false;
+ auto* target=resolve(selected);if(!target)return false;
  if(auto* scripted=cast(target,0x41b0e0);scripted&&(field<u32>(scripted,4)&0x40000)&&fn<bool(__thiscall*)(void*,int)>(0x41a820)(scripted,0)){
-  method<void(__thiscall*)(void*,void*)>(scripted,0x9c)(scripted,actor);field<float>(actor,0x460)=simulation_time();return;
+  method<void(__thiscall*)(void*,void*)>(scripted,0x9c)(scripted,actor);field<float>(actor,0x460)=simulation_time();return true;
  }
  s.victim=selected;s.time=simulation_time();field<float>(actor,0x460)=s.time;field<float>(actor,0x5e8)=now();
  if(auto* victim=character(target)){play(victim,named(victim,"psycarry"));field<unsigned char>(victim,0x3d8)|=8;}
@@ -341,8 +340,35 @@ inline void __fastcall tk_entry(void*,void*,void* actor,void*,void* context){
  s.distance=length(difference);s.offset=difference;s.offset.z+=120.f;s.last=field<vec>(target,0x20);
  field<u32>(target,4)|=4;publish(target);field<unsigned char>(actor,0x259)|=2;
  tk_states[token]=s;
+ return true;
+}
+inline void __fastcall tk_entry(void*,void*,void* actor,void*,void* context){
+ det_math::fp_env fp;
+ const u32 token=field<u32>(actor,0x1c);
+ if((field<unsigned char>(actor,0x259)&2)&&tk_states.count(token))return;
+ tk_states.erase(token);tk_attempts.erase(token);
+ if(!context||!field<void*>(context,4))return;
+ // Pre-entry/tag events run once. A missed query may be retried while the
+ // acquisition input stays held, without another suspend event or debit.
+ fn<void(__stdcall*)(void*,void*)>(0x4f2b00)(actor,context);
+ auto* node=field<void*>(context,4);
+ auto* event=method<void*(__thiscall*)(void*,int)>(node,0x1c)(node,1);
+ event=fn<void*(__cdecl*)(void*,int,void*,void*,int)>(0x67234e)(event,0,reinterpret_cast<void*>(0x6db300),reinterpret_cast<void*>(0x6db700),0);
+ if(!event)return;
+ auto* stats=method<void*(__thiscall*)(void*,void*)>(node,0x28)(node,actor);if(!stats)return;
+ tk_state s;
+ s.impact=fn<std::int16_t(__thiscall*)(void*,void*)>(0x4dad20)(static_cast<unsigned char*>(event)+0x18,stats);
+ s.heaviness=fn<std::int8_t(__thiscall*)(void*,void*)>(0x4abf70)(static_cast<unsigned char*>(event)+0x1a,stats);
+ s.level=fn<std::int8_t(__thiscall*)(void*,void*)>(0x4abf70)(static_cast<unsigned char*>(event)+0x1c,stats);
+ s.damage=field<std::int8_t>(field<void*>(event,0x14),0x1c);
+ if(!tk_acquire(actor,node,s))tk_attempts[token]={s,node};
 }
 inline bool held(void* input,int bit){return input&&(field<u32>(input,0)&(1u<<bit));}
+inline bool tk_held(void* actor,void* input){
+ const u32 name=field<u32>(actor,0x18);bool rogue=false;
+ if(name){auto* table=fn<unsigned char*(__cdecl*)()>(0x602280)();const u32 index=name&0xffffff;const char* text=reinterpret_cast<const char*>(table+field<u32>(table,4+index*4)+0x4008);rogue=*text=='r'||*text=='R';}
+ return held(input,rogue?5:4);
+}
 inline void __fastcall tk_update(void* self,void*,void* actor,void* input){
  det_math::fp_env fp;
  if(!(field<unsigned char>(actor,0x259)&2))return;
@@ -361,9 +387,7 @@ inline void __fastcall tk_update(void* self,void*,void* actor,void* input){
   exhausted=fn<float(__thiscall*)(void*)>(0x41d5d0)(actor)<cost;
   fn<void(__thiscall*)(void*,float)>(0x4318d0)(actor,cost);
  }
- const u32 name=field<u32>(actor,0x18);bool rogue=false;
- if(name){auto* table=fn<unsigned char*(__cdecl*)()>(0x602280)();const u32 index=name&0xffffff;const char* text=reinterpret_cast<const char*>(table+field<u32>(table,4+index*4)+0x4008);rogue=*text=='r'||*text=='R';}
- if(exhausted||!held(input,rogue?5:4)){
+ if(exhausted||!tk_held(actor,input)){
   vec v=field<vec>(target,0x120);const float horizontal=std::sqrt(v.x*v.x+v.y*v.y);
   if(horizontal>=5.f){v=sub(field<vec>(target,0x20),field<vec>(actor,0x20));v.z=0;v=mul(unit(v),5.f);}
   // XML1 3DCA9/3DD0B and PC 42E6DE/42E752 use the victim's facing
@@ -416,8 +440,17 @@ inline void __fastcall tk_update(void* self,void*,void* actor,void* input){
  if(auto* victim=character(target))field<u32>(victim,0x770)=field<u32>(actor,0x1c);
  else fn<void(__thiscall*)(void*,float,int)>(0x475d10)(target,-1.f,0);
 }
-inline bool __fastcall tk_input(void*,void*,void* actor,void*){
+inline bool __fastcall tk_input(void*,void*,void* actor,void* input){
+ det_math::fp_env fp;
  if(!(field<unsigned char>(actor,0x259)&2)){
+  const u32 token=field<u32>(actor,0x1c);auto pending=tk_attempts.find(token);
+  if(pending!=tk_attempts.end()){
+   if(tk_held(actor,input)){
+    if(!tk_acquire(actor,pending->second.node,pending->second.state))return false;
+    tk_attempts.erase(pending);
+    if(field<unsigned char>(actor,0x259)&2)return false;
+   }else tk_attempts.erase(pending);
+  }
   if(!field<void*>(actor,0x3bc))chain(actor,0);
   return field<void*>(actor,0x3bc)!=nullptr;
  }

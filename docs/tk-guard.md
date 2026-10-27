@@ -60,6 +60,16 @@ sound, offset, last position and saved heading/time. It never overlays PC's
 compact token cache. An active same-handler hold entry retains the sidecar and
 does not execute another suspend trigger.
 
+After an entry acquisition miss, 082d retains the evaluated parameters and
+retries the native acquisition while the original TK button stays held.
+Release or interruption discards the attempt. Target filters, range, ordering,
+heaviness and team checks still belong to the same native acquisition path.
+Pre-entry and auxiliary events run once per attempt, including a two-second
+miss; retry never repeats their energy/event work. `[Test] TKTrace=1` logs
+attempts 1/2/4/8/... with selected/auxiliary handles, current energy and limits.
+The historical 4/10 misses have no acquisition telemetry, so their individual
+causes cannot be recovered from the live report.
+
 The moving-hit flag also uses LiftRule's decoded source heaviness. Testing the
 native byte would miss source heaviness 2, which the conversion encodes as byte
 1. Control and cancellation reread the actor's current held token, and invalid
@@ -117,6 +127,16 @@ the parent transition at `4310B0`; no unconditional pending dispatcher runs.
 The slot-6 policy remains available if an authored chain cannot be resolved.
 An empty decision selects Idle. Immediate wall-lunge dispatch still returns
 **false**, matching XML1 `D9E73`, preventing an extra dispatch.
+
+082d requires the native stun flag (`victim+765 & 1`) before an enemy ground
+grab. General admission at `429228` is not a stun test. Round two made its
+ordinary action-3 chain (`guarddecide -> grabstart`) execute immediately at
+entry, exposing untouched-enemy grabs. Ally Fastball and object pickup retain
+their separate branches; TK and flying carry retain their own eligibility.
+This implements the brief's untouched-enemy negative. The inspected generic
+XML1 callback itself also selects action 3 for an admitted nonstunned enemy
+(`D9F5A..D9F70`), so that callback alone does not establish the narrower live
+XML1 expectation. The host test records this deliberate policy difference.
 
 Use [the human-length pad/keyboard acceptance procedure](beta9-moves-live.md).
 Direct handler fixtures establish scheduling behavior, not hardware routing.
