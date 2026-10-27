@@ -1,5 +1,91 @@
 # [Online] Host=broker / JoinCode - rooms through the project broker (Legends Classic 0.3.0 / XML2 Fix 1.8.0)
 
+The in-game broker API (`lc-online-broker/1`) extends this same client and TLS
+stack. `[Online] Menus=1`, the compatible LC menu assets, an installed
+`Transport=gns`, ReceiveValidation, the checked campaign loader, and a configured
+Broker are required for that route. TestMode remains refused. Hub entry performs
+no room operation. Launcher Host/Public/RoomName and JoinCode keys are consumed
+once as Host Setup / Code presets after real controller acceptance. Host Setup
+still requires Open; a complete Code submits one resolve per edit generation.
+The legacy non-menu Host/JoinCode route retains its one-shot start.
+
+The broker contract remains protocol 2: `auth`, `cert`, `list_rooms`, `host`,
+`resolve`, `turn`, `presence`, `signal`, and `ping`. Intentional cancel/leave
+shuts down the worker connection; the existing broker disconnect semantics
+remove membership and close a host's room. No new server operation, gameplay
+rule, agreement revision, transport framing, or release identity is introduced.
+Any future wire/gameplay contract **needs a rule id** from the coordinator.
+
+| Current state | Input / result | Next state and effect |
+|---|---|---|
+| Idle Hub | Host / Code / Browse navigation | Open the corresponding UI; no host side effect |
+| Idle | Browse or Refresh | Authenticate, then list; retain prior rows while pending |
+| Idle | Open room / complete Code / selected Browse Join | Authenticate, then host / resolve, one outstanding operation |
+| Authenticating | Verified protocol-2 challenge/auth identity and pinned CA | Listing / Hosting / Resolving; post that operation once |
+| Listing | Valid list, including zero rooms | Idle with fresh, atomically replaced snapshot |
+| Hosting / Resolving | Valid code/roster; compatible optional release token | Room; native admission is a separate next-round step |
+| Pending | Back, edit of submitted Code, close or route departure | Canceling; invalidate request/room generation, shut down worker socket |
+| Room | Intentional Back/Leave from custom screen | Leaving; release tunnels/listener/queues and room-scoped state |
+| Canceling / Leaving | Worker has finished | Idle; no game-thread join/wait |
+| Pending | Timeout, invalid reply, broker error or TLS refusal | Retry wait; retain last list as stale; discard late completions |
+| Retry wait | Retry / explicit Refresh after limiter and backoff | Authenticate and retry the chosen operation |
+| Room | Broker loss / room closed | Keep established P2P connections, stop new admission, show service loss; no replacement room |
+| Any start | Missing dependency / TestMode / invalid room name | Refused; no network success advertised |
+
+One shared lookup budget reserves at least 2 seconds between starts, including
+authentication. It also paces host/retry attempts conservatively. Back, Leave,
+re-entry and manual Refresh do not reset it. Failures back off 2/4/8/.../60
+seconds; `rate_limited` imposes at least 10 seconds. A successful operation resets
+backoff. Browse automatically refreshes after 10 seconds idle following a
+successful reply; failures need an explicit retry. Each attempt has a 10-second
+deadline. The UI never waits for network, DNS, TLS or worker completion. If native
+networking initialized GNS first, an idle instance may adopt the install identity
+through the existing GNS ResetIdentity API. Live native links prevent that
+switch and refuse the broker attempt; they are never disconnected by Hub work.
+A launcher code preset cannot filter native discovery before user selection.
+Cancel/Leave release room mode so Other ways can restore the native IP listener;
+the sendto/recvfrom adapters delegate directly while room mode is inactive.
+
+There is one worker slot and one pending user operation. Socket shutdown
+interrupts connect/TLS/receive work. A synchronous Winsock DNS lookup may finish
+later; its result is canceled by generation and the slot is not reused until
+the old worker exits. No unbounded canceled-thread pool is created. Every inbox
+entry carries connection, request and room generations. Protocol 2 has no request
+IDs, so canceled/timed-out work uses a fresh connection; stale identities cannot
+be attached to a newer room.
+
+The existing 16 KiB **including LF** line bound is sufficient: broker SPEC 3.4
+and its `_op_list_rooms` cap the list at 50 summaries and remove whole trailing
+summaries until the serialized reply fits that bound. The client refuses an
+oversized line, 51 rows, duplicate/noncanonical codes, malformed JSON, invalid
+UTF-8, duplicate object keys and invalid known field types. It never truncates
+a room identity or publishes a partial malformed list. Optional metadata stays
+unknown. Inbox/outbox each retain at most 256 entries and 256 KiB; worker pending
+plaintext is capped at 64 KiB, TLS buffered input/handshake input at 64 KiB.
+Inbox overflow fails the attempt instead of evicting an identity/completion.
+
+In-game room names are validated as trimmed printable ASCII, at most 32 bytes,
+excluding semicolon and quote. Invalid input is refused, rather than silently
+edited into another room name. Native screen names remain at most 31 game
+bytes. All remote displayed names use the round-3 renderer allowlist. Browse
+RTT stays `--`/Measuring; SAME means only an equal known release token. Unknown
+tokens never claim SAME. Full, nonjoinable, stale and password-protected rows
+cannot be selected for Join through this password-free UI.
+
+`online_status` v1 retains its process-final error semantics. Per-attempt
+retry/cancel/service errors are local `client_view` fields; retry does not reset
+the legacy file's final error. Successful Code or Browse resolve stores the
+canonical code and allowlisted room title in the existing bounded local Rejoin
+record. Broker membership is not native admission or Playing.
+
+Host evidence: `xml2_online_broker_test` executes the production worker/lifecycle
+against invented socket and pinned-TLS transcripts; `xml2_broker_tls_test`
+separately checks real certificate trust and protocol selection. Its optional
+`--live` handshake/record path is a separately scheduled controlled-broker gate. Browser and menu fixtures
+cover limits, backoff, stale data, navigation and renderer bindings. These
+fixtures do not establish game rendering, real broker connectivity, native
+admission or healthy gameplay during broker loss.
+
 Requested-only. Absent `Host`/`JoinCode`: nothing is hooked or written (the step-4 `Transport=gns` LAN mode and the
 stock transport are unchanged). Either key implies `[Online] Transport=gns` (gameplay rule 25, revision 4).
 

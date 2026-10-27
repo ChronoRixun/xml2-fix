@@ -35,6 +35,7 @@ namespace broker_tls
 			char chunk[BROKER_TLS_TEST_READ_GRAIN];
 			const int n = recv(socket, chunk, sizeof(chunk), 0);
 			if (n <= 0) return false;
+			if (input.size() > 65536 - static_cast<std::size_t>(n)) return false;
 			input.append(chunk, static_cast<std::size_t>(n));
 			return true;
 		}

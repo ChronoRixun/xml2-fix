@@ -9,4 +9,7 @@ namespace gns_transport
 	void install(HMODULE game);
 	bool requested();
 	bool installed();
+	// Menu-thread pump after the room worker loaded the authenticated identity.
+	void room_ui_tick();
+	bool room_can_start();
 }

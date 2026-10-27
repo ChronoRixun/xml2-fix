@@ -1,4 +1,6 @@
 #include "online_menus.hpp"
+#include "online_room.hpp"
+#include "gns_transport.hpp"
 #include "online_menus_rules.hpp"
 #include "online_menus_guards.hpp"
 #include "game_version.hpp"
@@ -114,9 +116,9 @@ void load_recent() {
     file.read(data.data(),data.size());
     if(!file.bad() && file.gcount()>0 && file.gcount()<=128) recent=decode_recent({data.data(),std::size_t(file.gcount())});
 }
-bool remember_fixture() {
-    // This is explicitly an offline fixture record, never successful admission.
-    recent_game next{code.text,"Offline fixture",std::uint64_t(std::time(nullptr))};
+bool broker_live();
+bool remember_game(const std::string& value,const std::string& title) {
+    recent_game next{value,display(title,48),std::uint64_t(std::time(nullptr))};
     const auto path=recent_path(); if(path.empty()) return false;
     std::error_code ec; std::filesystem::create_directories(path.parent_path(),ec); if(ec) return false;
     const auto bytes=encode_recent(next);if(bytes.empty()) return false;
@@ -131,6 +133,7 @@ bool remember_fixture() {
     if(!saved) { DeleteFileW(temporary.c_str());return false; } // only our CREATE_NEW file
     recent=std::move(next);return true;
 }
+bool remember_fixture() { return remember_game(code.text,"Offline fixture"); }
 void message(const char* text) { feedback=text; error_visible=true; }
 
 
@@ -449,13 +452,14 @@ bool __fastcall queue(void* console,void*,const char* line) {
     // Model/name/clipboard text can never become a script or console command.
     if(ready && line) for(int value=2;value<=62;++value) {
         if(value==int(intent::invalid_key)) continue; // internal keyboard feedback, never a published command
-        if(value>int(intent::confirm_leave) && value<32) continue;
+
         char command[48]{};
         std::snprintf(command,sizeof(command),"runscript lcOnlineIntent(%d)",value);
         if(std::strcmp(command,line)) continue;
         auto* menu=current();
         if(live(menu)) {
             if(pending.action || pending.post(value,reinterpret_cast<std::uintptr_t>(menu),which(menu))) return true;
+            if(value>=18 && value<=31) return true; // wrong-scope broker intent is discarded, never delayed
         }
         break; // no supported live source: preserve native queue result/behavior
     }
@@ -527,6 +531,137 @@ void enable(void* menu,const char* item,bool enabled) {
     if(old!=bindings.enabled.end() && old->second==enabled) return;
     if(enable_native(menu,item,enabled)) bindings.enabled.insert_or_assign(item,enabled);
 }
+namespace broker = online_browser_core;
+bool offline_fixture = false;
+#if XML2_FIX_GNS
+void production_broker_tick() { online_room::ui_tick(); gns_transport::room_ui_tick(); }
+broker_api broker_calls{online_room::available,online_room::view,production_broker_tick,online_room::list,
+    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due};
+#else
+broker_api broker_calls{};
+#endif
+bool broker_live() { return broker_calls.available && broker_calls.available() && broker_calls.view; }
+const broker::client_view& broker_view() {
+    static const broker::client_view empty;
+    return broker_live() ? broker_calls.view() : empty;
+}
+screen broker_screen = screen::none;
+unsigned browse_offset = 0, browse_selected = 0;
+std::string browse_code, host_room_name;
+bool host_public = false;
+std::uint64_t resolve_edit = 0;
+broker::ticket completed_list_ticket{};
+DWORD last_list_at=0;
+bool listed_started=false;
+broker::ticket resolve_ticket{}, remembered_ticket{};
+void broker_cancel(bool leave_room=false) {
+    if(!broker_live()) return;
+    if(leave_room && broker_calls.leave) broker_calls.leave();
+    else if(broker_calls.cancel) broker_calls.cancel();
+    resolve_edit=0;resolve_ticket={};
+}
+void broker_scope(screen s) {
+    if(!broker_live()) return;
+    if(broker_screen!=s) {
+        if(broker_screen==screen::browse || broker_screen==screen::code || broker_screen==screen::host) {
+            const auto state=broker_view().state;
+            if(state!=broker::phase::room) broker_cancel();
+        }
+        broker_screen=s;
+        if(s==screen::host && host_room_name.empty()) host_room_name=online_browser_core::room_name(std::string(local_name)+"'s game");
+    }
+}
+void broker_pump(screen s) {
+    if(!broker_live()) return;
+    if(broker_calls.tick) broker_calls.tick();
+    const auto& state=broker_view();
+    if(state.list_known && state.state==broker::phase::idle && state.action==broker::operation::list && state.generation!=completed_list_ticket) {
+        completed_list_ticket=state.generation;last_list_at=now_ms();listed_started=true;
+    }
+    if(s==screen::browse && state.state!=broker::phase::refused && state.state!=broker::phase::retry_wait &&
+        state.state!=broker::phase::room && broker_calls.list &&
+        (state.state==broker::phase::idle) && broker_calls.view &&
+        // 10-second idle refresh, including an empty successful list.
+        (broker_calls.refresh_due ? broker_calls.refresh_due() : !listed_started || now_ms()-last_list_at>=broker::list_refresh_ms)) {
+        if(broker_calls.list()) { last_list_at=now_ms();listed_started=true; }
+    }
+}
+void bind_broker(void* menu,screen s) {
+    if(!broker_live()) {
+        if(!offline_fixture) { bind_text(menu,"service","Unavailable");bind_text(menu,"self_state","Unavailable");hide(menu,"lc_broker_error",false); }
+        return;
+    }
+    const auto& v=broker_view();
+    const bool waiting=v.state==broker::phase::authenticating || v.state==broker::phase::listing || v.state==broker::phase::hosting || v.state==broker::phase::resolving;
+    const bool failed=v.state==broker::phase::retry_wait || v.state==broker::phase::error || v.state==broker::phase::refused;
+    const char* service=v.authenticated ? "Connected" : waiting ? "Connecting" : failed ? "Unavailable" : "Not connected";
+    bind_text(menu,"service",service);
+    bind_text(menu,"self_state",waiting ? "Please wait" : v.state==broker::phase::room ? "Room connected" : service);
+    bind_text(menu,"browse_hint",v.list_known ? std::to_string(v.rows.size()).append(v.stale ? " last known games" : " public games").c_str() : "Browse public games");
+    // LC localizes these mutually exclusive variants at the approved status/error anchors.
+    const std::pair<const char*,bool> variants[]{
+        {"lc_broker_auth",v.state==broker::phase::authenticating},{"lc_broker_list",v.state==broker::phase::listing},
+        {"lc_broker_host",v.state==broker::phase::hosting},{"lc_broker_resolve",v.state==broker::phase::resolving},
+        {"lc_broker_empty",s==screen::browse && v.list_known && !waiting && !failed && v.rows.empty()},
+        {"lc_broker_stale",v.stale},{"lc_broker_error",failed},{"lc_broker_room",v.state==broker::phase::room},
+        {"lc_broker_cancel",v.state==broker::phase::canceling || v.state==broker::phase::leaving}};
+    for(const auto& variant:variants) hide(menu,variant.first,!variant.second);
+    bind_text(menu,"broker_error",display(v.error,64).c_str());
+    hide(menu,"lc_broker_offline_room",v.state!=broker::phase::room || v.authenticated);
+    enable(menu,"retry",v.state==broker::phase::retry_wait || v.state==broker::phase::error);
+    if(s==screen::code) {
+        const bool status=waiting || failed || v.state==broker::phase::room || error_visible;
+        hide(menu,"code_status",status || code.text.size()==8);
+        hide(menu,"lc_code_complete",status || code.text.size()!=8);
+        enable(menu,"done",code.text.size()==8 && !waiting && v.state!=broker::phase::room);
+    }
+    if(s==screen::host) {
+        bind_text(menu,"room_name",display(host_room_name,32).c_str());
+        bind_text(menu,"preview_name",display(host_room_name,24).c_str());
+        bind_text(menu,"room_code",v.code.empty() ? "---- ----" : v.code.c_str());
+        hide(menu,"lc_host_public",!host_public);hide(menu,"lc_host_private",host_public);
+        enable(menu,"open",!waiting && v.state!=broker::phase::room);
+        enable(menu,"prompt_open",!waiting && v.state!=broker::phase::room);
+    }
+    if(s!=screen::browse) return;
+    if(!browse_code.empty()) {
+        auto found=std::find_if(v.rows.begin(),v.rows.end(),[](const broker::public_room& r) { return r.code==browse_code; });
+        if(found!=v.rows.end()) browse_selected=unsigned(found-v.rows.begin()); else browse_code.clear();
+    }
+    if(browse_selected>=v.rows.size()) browse_selected=0;
+    if(!v.rows.empty()) browse_code=v.rows[browse_selected].code;
+    if(browse_offset>browse_selected) browse_offset=browse_selected;
+    if(browse_selected>=browse_offset+7) browse_offset=browse_selected-6;
+    const auto version=broker_calls.version ? broker_calls.version() : std::string();
+    for(unsigned i=0;i<7;++i) {
+        const auto index=browse_offset+i;
+        const bool present=index<v.rows.size();
+        const auto* row=present ? &v.rows[index] : nullptr;
+        std::string fields[7];
+        if(row) {
+            fields[0]=display(row->name.empty() ? "Unnamed game" : row->name,24);
+            fields[1]=display(row->host_name.empty() ? "Unknown" : row->host_name,12);
+            fields[2]=display(row->zone.empty() ? "In lobby" : row->zone,17);
+            fields[3]=(row->players<0 ? std::string("--") : std::to_string(row->players))+"/"+std::to_string(row->max_players);
+            fields[4]=row->players>=row->max_players ? "Full" : !row->joinable ? "Closed" : row->in_progress ? "In progress" : "In lobby";
+            fields[5]="--";
+            fields[6]=row->version.empty() ? "CHECK" : row->version==version ? "SAME" : "OTHER";
+        }
+        for(unsigned col=0;col<7;++col) {
+            const auto key="room_"+std::to_string(i)+"_"+std::to_string(col);
+            bind_text(menu,key.c_str(),fields[col].c_str());enable(menu,key.c_str(),present && !waiting);
+        }
+        const auto key="lc_row"+std::to_string(i)+"_selected";hide(menu,key.c_str(),!present || index!=browse_selected);
+    }
+    const auto* selected=v.rows.empty() ? nullptr : &v.rows[browse_selected];
+    bind_text(menu,"details_name",selected ? display(selected->name,24).c_str() : "");
+    bind_text(menu,"details",selected ? "Friends join at the next area" : v.stale ? "Refresh to update games" : "No public games right now");
+    const bool join=selected && !waiting && !v.stale && selected->joinable && !selected->password && selected->players<selected->max_players &&
+        (selected->version.empty() || selected->version==version);
+    enable(menu,"prompt_join",join);
+    enable(menu,"prompt_refresh",!waiting);
+}
+
 // Native lobbies retain their complete controller/vtable and campaign callback.
 // No additional pooled rows, participant writes, admission or direct Start leaf.
 struct lobby_view {
@@ -743,7 +878,18 @@ void restore_lobby_focus(void* menu) {
 // provider, so an unknown room/RTT/build stays unknown until round 5.
 void bind_lobby(void* menu,const lobby_view& view,bool valid) {
     lobby_fixture extra{};
-    const bool fixture=lobby_fields && lobby_fields(extra) && extra.count<=4;
+    bool fixture=lobby_fields && lobby_fields(extra) && extra.count<=4;
+    if(!fixture && broker_live()) {
+        const auto& state=broker_view();
+        if(state.state==broker::phase::room && state.code.size()==8) {
+            std::memcpy(extra.code,state.code.c_str(),9);fixture=true;
+        }
+    }
+    if(broker_live() && broker_view().state==broker::phase::room) {
+        const auto& state=broker_view();
+        if(!state.room_name.empty()) bind_text(menu,"lc_room_name",display(state.room_name,32).c_str());
+        if(state.room_metadata_known) bind_text(menu,"lc_room_visibility",state.public_room ? "Public" : "Private");
+    }
     std::optional<std::string> code_value;
     if(fixture) {
         const auto end=std::find(std::begin(extra.code),std::end(extra.code),char(0));
@@ -934,7 +1080,7 @@ void lobby_tick(void* menu,unsigned original,bool& called) {
 void lobby_frame(void* menu,unsigned original) noexcept {
     bool called=false;
     if(!input_thread("lobby tick",false)) { lobby_original(menu,original);return; }
-    try { lobby_tick(menu,original,called); }
+    try { if(broker_live() && broker_calls.tick) broker_calls.tick(); lobby_tick(menu,original,called); }
     catch(...) {
         pending.clear();bindings.clear();
         logger::write("online menus: lobby fields unavailable; native controls retained");
@@ -1067,8 +1213,21 @@ unsigned input_mask() {
     unsigned mask=0;lobby_current_mask(mask);return mask;
 }
 void schedule_fixture(bool retry=false) {
+    if(broker_live()) {
+        if(resolve_edit && (resolve_edit!=code.generation || code.text.size()!=8)) broker_cancel(broker_view().state==broker::phase::room);
+        const auto state=broker_view().state;
+        if(state==broker::phase::authenticating || state==broker::phase::resolving || state==broker::phase::room ||
+            state==broker::phase::canceling || state==broker::phase::leaving) return;
+        const auto ticket=code.resolve(retry);
+        if(ticket && broker_calls.resolve) {
+            if(broker_calls.resolve(code.text)) { resolve_edit=ticket;resolve_ticket=broker_view().generation;error_visible=false; }
+            else if(broker_view().state!=broker::phase::refused) code.submitted=0; // defer only retryable starts
+        }
+        return;
+    }
     const auto ticket=code.resolve(retry);
-    if(ticket) { fixture_ticket=ticket; fixture_code=code.text; message("lc_notice_resolving"); }
+    if(ticket && offline_fixture) { fixture_ticket=ticket; fixture_code=code.text; message("lc_notice_resolving"); }
+    else if(ticket) message("lc_notice_unavailable");
 }
 void code_input(int value) {
     switch(static_cast<intent>(value)) {
@@ -1102,15 +1261,17 @@ void tick_impl(void* menu,bool& native_called) {
             } else if(s==screen::hub) {
                 if(mask&0x1000000) shortcut=int(intent::edit_name);
                 else if(mask&0x400000) shortcut=int(intent::rejoin);
-            }
+            } else if(s==screen::browse && (mask&0x400000)) shortcut=int(intent::refresh);
+            else if(s==screen::host && (mask&0x100000)) shortcut=int(intent::open_room);
             if(shortcut) pending.post(shortcut,reinterpret_cast<std::uintptr_t>(menu),s);
         }
     }
     native_called=true;
     at<tick_fn>(0x5aaeb0)(menu);
     if(tick_fault) tick_fault();
-    if(!ready || !live(menu)) { pending.clear();keyboard_input.clear();return; }
+    if(!ready || !live(menu)) { pending.clear();keyboard_input.clear();if(broker_live() && broker_view().state!=broker::phase::room) broker_cancel();return; }
     const auto s=which(menu);
+    broker_scope(s);
     if(s==screen::hub) entry.clear();
     load_recent();
     if(s==screen::hub) poll_name();
@@ -1129,6 +1290,13 @@ void tick_impl(void* menu,bool& native_called) {
         for(unsigned i=0;i<keyboard_input.count;++i) code_input(keyboard_input.values[i]);
     keyboard_input.clear();
     const char* destination=nullptr;
+    if(s==screen::hub && !int(action) && broker_live() && broker_calls.take_preset) {
+        broker::launch_preset preset;
+        if(broker_calls.take_preset(preset)) {
+            if(preset.action==broker::operation::host) { host_room_name=preset.name;host_public=preset.public_room;destination="lc_host"; }
+            else if(preset.action==broker::operation::resolve) { rejoin_seed=preset.code;destination="lc_code"; }
+        }
+    }
     switch(action) {
     case intent::host: if(s==screen::hub) destination="lc_host"; break;
     case intent::code: if(s==screen::hub) destination="lc_code"; break;
@@ -1144,9 +1312,32 @@ void tick_impl(void* menu,bool& native_called) {
     case intent::rejoin: if(s==screen::hub && recent) {
         rejoin_seed=recent->code;destination="lc_code";
     } break;
+    case intent::refresh:
+        if(s==screen::browse && broker_live() && broker_calls.list && broker_calls.list()) { last_list_at=now_ms();listed_started=true; } break;
+    case intent::open_room:
+        if(s==screen::host && broker_live() && broker_calls.host) broker_calls.host(host_room_name,host_public); break;
+    case intent::visibility: if(s==screen::host) host_public=!host_public; break;
+    case intent::retry:
+        if(broker_live() && broker_calls.retry && broker_calls.retry() && s==screen::code) {
+            resolve_ticket=broker_view().generation;resolve_edit=code.generation;code.submitted=code.generation;
+        } break;
+    case intent::previous: if(s==screen::browse) { browse_selected=browse_selected>=7 ? browse_selected-7 : 0; browse_code.clear(); } break;
+    case intent::next: if(s==screen::browse && !broker_view().rows.empty()) { browse_selected=std::min<unsigned>(browse_selected+7,unsigned(broker_view().rows.size()-1));browse_code.clear(); } break;
+    case intent::join_selected: if(s==screen::browse && broker_live()) {
+        const auto& v=broker_view();const auto version=broker_calls.version ? broker_calls.version() : std::string();
+        if(!v.stale && browse_selected<v.rows.size()) {
+            const auto& row=v.rows[browse_selected];
+            if(row.code==browse_code && row.joinable && !row.password && row.players<row.max_players &&
+                (row.version.empty() || row.version==version) && broker_calls.resolve) broker_calls.resolve(row.code);
+        }
+    } break;
     case intent::unavailable: message("lc_notice_unavailable"); break;
     case intent::dismiss: error_visible=false; break;
     default:
+        if(s==screen::browse && int(action)>=24 && int(action)<=30) {
+            const auto selected=browse_offset+unsigned(int(action)-24);
+            if(selected<broker_view().rows.size()) { browse_selected=selected; browse_code=broker_view().rows[selected].code; }
+        }
         if(s==screen::code && int(action)>=32 && int(action)<=62) {
             code.append(alphabet[int(action)-32]); error_visible=false;
         }
@@ -1156,7 +1347,18 @@ void tick_impl(void* menu,bool& native_called) {
     if(completed_ticket && code.complete(completed_ticket) && completed_code==code.text && s==screen::code && !destination) {
         message(remember_fixture() ? "lc_notice_fixture" : "lc_notice_recent_save");
     }
-    if(s==screen::code) schedule_fixture();
+    if(s==screen::code) schedule_fixture(); // invalidate edits before draining worker completions
+    if(destination && broker_live()) broker_cancel(broker_view().state==broker::phase::room);
+    if(!destination) broker_pump(s);
+    else if(broker_live() && broker_calls.tick) broker_calls.tick();
+    if(s==screen::code && broker_live() && broker_view().state==broker::phase::room && resolve_ticket==broker_view().generation && code.complete(resolve_edit) && remembered_ticket!=resolve_ticket) {
+        remembered_ticket=resolve_ticket;
+        if(!remember_game(broker_view().code,broker_view().room_name.empty() ? "Online game" : broker_view().room_name)) message("lc_notice_recent_save");
+    }
+    if(s==screen::browse && broker_live() && broker_view().state==broker::phase::room && remembered_ticket!=broker_view().generation) {
+        remembered_ticket=broker_view().generation;
+        if(!remember_game(broker_view().code,broker_view().room_name.empty() ? "Online game" : broker_view().room_name)) message("lc_notice_recent_save");
+    }
     if(destination) {
         if(s==screen::code) { code.close(); fixture_ticket=0; }
         pending.clear();keyboard_input.clear();error_visible=false;accepted=-1;
@@ -1190,6 +1392,7 @@ void tick_impl(void* menu,bool& native_called) {
 
     }
     show_notice(menu);
+    bind_broker(menu,s);
 }
 void __fastcall tick(void* menu,void*) {
     bool native_called=false;
@@ -1212,6 +1415,7 @@ void deactivate_state(void* menu,bool departure) {
     // +48 is resource cleanup and may run while constructing a noncurrent
     // cached menu. Only real +1c deactivation owns a requested Hub departure.
     if(s==screen::code && (departure || current()==menu)) { code.close(); fixture_ticket=0; }
+    if(departure && broker_live() && (s==screen::code || s==screen::browse || s==screen::host) && broker_view().state!=broker::phase::room) broker_cancel();
     if(departure && s==screen::hub && name_edit.owned) name_edit.departed=true;
 }
 void __fastcall deactivate(void* menu,void*) {
@@ -1243,6 +1447,12 @@ void keyboard(unsigned char* state) {
         if(!alt && control && edges[0x2e]) pending.post(int(intent::copy_code),address,s);
         if(!alt && control) state[0x2e]=0;
         return;
+    }
+    if(s==screen::browse && !alt && !control) {
+        if(edges[0x3f]) pending.post(int(intent::refresh),address,s); // F5
+        else if(edges[0xc9]) pending.post(int(intent::previous),address,s);
+        else if(edges[0xd1]) pending.post(int(intent::next),address,s);
+        state[0x3f]=state[0xc9]=state[0xd1]=0;return;
     }
     if(s!=screen::code || alt) return;
     const bool shift=(state[0x2a]|state[0x36])&0x80;
@@ -1321,6 +1531,8 @@ void install(HMODULE game,const install_hooks* hooks) {
         logger::write("online menus: registration/capacity refused; native online entry retained"); return;
     }
     if(hooks) {
+        offline_fixture=hooks->broker==nullptr;
+        if(hooks->broker) broker_calls=*hooks->broker;
         if(hooks->clock) clock_source=hooks->clock;
         request_fault=hooks->before_request;tick_fault=hooks->before_tick;
         lobby_fields=hooks->lobby_fields;
@@ -1340,6 +1552,6 @@ void install(HMODULE game,const install_hooks* hooks) {
         game_version::refuse_startup(); return;
     }
     ready=true;
-    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 27 hooks committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s",script_functions::capacity(),input_capability,lobby_capability);
+    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 27 hooks committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability);
 }
 }
