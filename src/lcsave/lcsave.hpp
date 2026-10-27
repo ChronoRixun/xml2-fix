@@ -22,8 +22,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <optional>
-#include <string_view>
 
 namespace lcsave
 {
@@ -242,11 +240,6 @@ namespace lcsave
 
 	struct NewFileContext
 	{
-		std::uint32_t live_actor_count = 0;
-		// The engine follows the same definition -> class factory -> size query
-		// as 0x4612e0 / 0x423a90, without constructing an entity. Unknown refuses
-		// a write whose dynamic list might need the actor-capacity feature.
-		std::function<std::optional<bool>(std::string_view)> actor_definition;
 		std::string description;                       // META description (cp1252; the card's description text)
 		std::uint64_t saved_at = 0;                    // FILETIME (UTC) of the write
 		std::uint8_t slot = 0;

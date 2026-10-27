@@ -320,10 +320,6 @@ void timeout_reference(const char* input,const char* output){
  }
  check(exercised>0&&heroes>0&&bool(out),"T22 retail timeout covers hero and nonhero extended members");
 }
-bool clean_events(const std::string& observed){
- const auto start=observed.find("\"counts\":[");if(start==std::string::npos)return false;
- std::istringstream in(observed.substr(start+10));for(unsigned i=0;i<14;++i){unsigned n=0;char separator=0;if(!(in>>n))return false;if(i!=5&&n)return false;in>>separator;}return true;
-}
 void reservation_tests(){
  std::vector<void*> live;for(unsigned i=0;i<95;++i)live.push_back(spawn());
  const auto leaked=word(address(live[0]),0x7dc);
@@ -420,6 +416,36 @@ void plan_mutations(){
  rows.assign(e4_core_sites::edits.begin(),e4_core_sites::edits.end());rows[0].value^=1;check(!e4_core_plan::make(0x20000000,0x21000000,targets,rows),"T3 altered core replacement value refused");
  rows.assign(e4_core_sites::edits.begin(),e4_core_sites::edits.end());rows[0].hex="00";check(!e4_core_plan::make(0x20000000,0x21000000,targets,rows),"T3 altered core guard refused");
 }
+bool clean_events(const std::string& observed){
+ const auto start=observed.find("\"counts\":[");if(start==std::string::npos)return false;
+ std::istringstream in(observed.substr(start+10));for(unsigned i=0;i<14;++i){unsigned n=0;char separator=0;if(!(in>>n))return false;if(i!=5&&n)return false;in>>separator;}return true;
+}
+std::vector<void*> stale_fold_tests(bool destroy_reactivated,const std::string& state){
+ // Retail activation re-registers without leaving the old team (0x51684e);
+ // destruction leaves only +0x538 (0x511ce4). Keep that old token listed.
+ std::vector<void*> actors;for(unsigned i=0;i<34;++i){auto* p=spawn();check(p!=nullptr,"T15 stale sequence spawns34 controllers");word(address(p),0x800)=30;real(address(p),0x20)=float(i/8)*300;actors.push_back(p);}
+ for(auto* p:actors)join(p);
+ const auto arena=actor_ai::installed().team_base,mask=word(arena,e4_core_state::team_mask);
+ const auto moved=word(address(actors[32]),0x7dc),old_team=word(address(resolve(moved)),0x538);
+ check((old_team&mask)==4&&word(arena+4*0x268,0x28)==2,"T15 extended team initially holds two members");
+ destroy(actors[0]);real(address(actors[32]),0x20)=0;
+ const auto current=join(actors[32]);
+ check(current&&(current&mask)==0&&word(arena+4*0x268,0x28)==2,"T15 reactivation overwrites current team and retains old membership");
+ destroy(actors[destroy_reactivated?32:1]);
+ check(word(cai+4,e4_core_state::primary_live)==32,"T15 reactivate then destroy shrinks34 to32");
+ check((resolve(moved)==nullptr)==destroy_reactivated,"T15 stale membership covers dead and living resolvers");
+ word(address(actors[33]),0x800)=29;
+ std::vector<void*> survivors;for(unsigned i=1;i<34;++i)if(i!=(destroy_reactivated?32u:1u))survivors.push_back(actors[i]);
+ save_tref_state(state+".pre",survivors);
+ std::vector<bytes> before;for(auto* p:survivors){const auto c=address(resolve(word(address(p),0x7dc)));before.emplace_back(reinterpret_cast<unsigned char*>(c),reinterpret_cast<unsigned char*>(c)+0x61c);}
+ boundary();
+ check(word(arena,e4_core_state::team_live)==4,"T15 stale extended team retired without fail-stop");
+ for(unsigned i=4;i<96;++i)check(!(word(arena,e4_core_state::team_active+(i/32)*4)&(1u<<(i%32))),"T15 no stale extended team survives");
+ for(unsigned i=0;i<survivors.size();++i){const auto c=address(resolve(word(address(survivors[i]),0x7dc)));u32 team=0;std::memcpy(&team,before[i].data()+0x538,4);if(team&&(team&mask)>=4)std::memset(before[i].data()+0x538,0,4);check(std::memcmp(before[i].data(),ptr(c),0x61c)==0,"T22 stale fold preserves all controller bytes except current extended membership");}
+ if(!destroy_reactivated)check(word(address(resolve(moved)),0x538)==current,"T22 old membership retirement preserves reactivated tier0 team");
+ check(clean_events(e4_observe::json()),"T19/T23 stale retirement raises no illegal lifetime/accounting/team events");
+ save_controller_bytes(state+".post",survivors);return survivors;
+}
 std::vector<void*> team_tests(bool keep=false,const std::string& tref={}){
  std::vector<void*> actors;
  for(unsigned i=0;i<90;++i){auto* p=spawn();check(p!=nullptr,"T15 expanded actor");word(address(p),0x800)=30;real(address(p),0x20)=float(i%12)*300;actors.push_back(p);
@@ -475,9 +501,20 @@ int main(int argc,char** argv){
  }
  e4_core::contribute(tx,reinterpret_cast<HMODULE>(0x400000));const auto result=tx.commit();e4_core::after_commit(result==patch_transaction::outcome::committed);
  std::printf("core transaction: %s (%s)\n",patch_transaction::name(result),tx.report().c_str());
- const bool execute=stock||mode=="on"||mode=="reservation"||mode=="backstop"||mode=="aliases"||mode=="destructors"||mode.starts_with("brain")||mode.starts_with("throw")||mode.starts_with("trace")||mode.starts_with("foldtrace");
+ const bool execute=stock||mode=="on"||mode=="reservation"||mode=="backstop"||mode=="aliases"||mode=="destructors"||mode.starts_with("brain")||mode.starts_with("throw")||mode.starts_with("trace")||mode.starts_with("foldtrace")||mode.starts_with("stalefold")||mode.starts_with("stalelive");
  if(!execute){
   check(!e4_core::installed()&&snapshot()==original,"T25/OFF no Stage2 image write or descriptor publication");
+  if(mode.starts_with("missing")||mode.starts_with("wrong")){
+   // Review should-fix: a missing/wrong prerequisite key leaves Stage 2 with
+   // zero written bytes, while prerequisite-free contributions (here the six
+   // one-byte external fixtures) still commit in their own transaction.
+   const auto i=std::stoul(mode.substr(mode.starts_with("missing")?7:5));
+   check(result==patch_transaction::outcome::committed&&tx.written_bytes()==6,"T25 prerequisite-free contributions commit; Stage2 contributes zero written bytes");
+   check(!e4_core_state::prepared&&!e4_core_state::cai&&!save_enabled,"T25 no Stage2 backing, caves or save capability");
+   std::string name;for(auto p=names[i];*p;++p)name+=char(*p);const auto status=e4_core::status();
+   const auto expected=mode.starts_with("missing")?"missing prerequisite [Limits] "+name+"="+values[i]:"wrong prerequisite [Limits] "+name+"=wrong (needs "+std::string(values[i])+")";
+   check(status.find(expected)!=std::string::npos,"T25 refusal names the exact missing or wrong prerequisite");
+  }
   if(mode=="off"){gameplay_capabilities::record released;released.finalize();agreement.finalize();check(std::equal(agreement.bytes().begin(),agreement.bytes().end(),released.bytes().begin()),"OFF agreement unchanged");}
   else check(!agreement.finalize(),"T25 rule44 unverified");
  }else {
@@ -491,6 +528,7 @@ int main(int argc,char** argv){
   else if(mode=="stock-trace")team_trace(argv[3]);
   else if(mode=="stockclone"){auto live=load_fold_state(argv[4]);team_trace(argv[3],live,90);}
   else if(mode=="tref")timeout_reference(argv[3],argv[4]);
+  else if(mode.starts_with("stalefold")||mode.starts_with("stalelive")){check(e4_core::test_set_encoding(std::stoul(mode.substr(9))),"T21 stale fold encoding");auto survivors=stale_fold_tests(mode.starts_with("stalefold"),argv[4]);save_fold_state(argv[4],survivors);std::vector<live_actor> live;for(unsigned i=0;i<survivors.size();++i)live.push_back({survivors[i],58+i});team_trace(argv[3],live,90);}
   else if(mode.starts_with("foldtrace")){check(e4_core::test_set_encoding(std::stoul(mode.substr(9))),"T21 fold-back encoding");auto survivors=team_tests(true,argv[4]);save_fold_state(argv[4],survivors);std::vector<live_actor> live;for(unsigned i=0;i<survivors.size();++i)live.push_back({survivors[i],58+i});team_trace(argv[3],live,90);}
   else if(mode=="backstop"){for(unsigned i=0;i<96;++i)spawn();reinterpret_cast<u32(__fastcall*)(void*,void*,void*,void*)>(0x523060)(ptr(cai),nullptr,ptr(0x1234),nullptr);check(false,"T17 backstop must fail-stop");}
   else if(mode.starts_with("throw")){
@@ -506,7 +544,7 @@ int main(int argc,char** argv){
   else if(mode=="aliases")alias_tests();
   else {actor_tests();team_tests();reservation_tests();churn_tests();damage_tests();}
   bool canary=true;for(unsigned i=0;i<64;++i)canary&=*reinterpret_cast<unsigned char*>(allocator+0x1aa520+i)==0xa5;check(canary,"T12 allocator trailing canary intact");
-  const auto observed=e4_observe::json();std::ofstream("e4-core-observation.json")<<observed;if(!stock&&mode!="aliases"&&!mode.starts_with("brain")&&!mode.starts_with("trace")&&!mode.starts_with("foldtrace"))check(clean_events(observed),"T19/T23 zero illegal lifetime/accounting events (T13 intentional stale probes excluded)");
+  const auto observed=e4_observe::json();std::ofstream("e4-core-observation.json")<<observed;if(!stock&&mode!="aliases"&&!mode.starts_with("brain")&&!mode.starts_with("trace")&&!mode.starts_with("foldtrace")&&!mode.starts_with("stale"))check(clean_events(observed),"T19/T23 zero illegal lifetime/accounting events (T13 intentional stale probes excluded)");
  }
  std::printf("E4 core host: %u checks, %u failures\n",checks,failures);return failures?1:0;
 }

@@ -490,7 +490,7 @@ std::string json() {
        <<",\"admitted\":"<<m.admitted<<",\"published_total\":"<<m.published<<",\"boundary_unwinds\":"<<boundary_unwinds<<",\"escaped\":"<<m.escaped
        <<",\"published\":"<<a.published<<",\"constructing\":"<<a.constructing<<",\"destroying\":"<<a.destroying<<",\"orphaned\":"<<a.orphaned
        <<",\"accounting_suppressed\":"<<m.accounting_suppressed<<",\"reserved\":"<<a.reserved<<",\"context_bytes\":"<<sizeof(context_slot)*context_capacity<<",\"context_capacity\":"<<context_capacity<<",\"contexts_live\":"<<contexts_live<<",\"contexts_peak\":"<<contexts_peak<<",\"probe_faults\":"<<probe_faults;
-    if(e4_core_state::installed&&e4_core_state::on_snapshot){u32 core[5]{};e4_core_state::on_snapshot(core);out<<",\"native_reserved\":"<<core[0]<<",\"pending_reservations\":["<<core[1]<<','<<core[2]<<','<<core[3]<<"],\"foldbacks\":"<<core[4];}
+    if(e4_core_state::installed&&e4_core_state::on_snapshot){u32 core[6]{};e4_core_state::on_snapshot(core);out<<",\"native_reserved\":"<<core[0]<<",\"pending_reservations\":["<<core[1]<<','<<core[2]<<','<<core[3]<<"],\"foldbacks\":"<<core[4]<<",\"stale_fold_retirements\":"<<core[5];}
     out<<",\"counts\":[";
     for(unsigned n=0;n<m.counts.size();++n){if(n)out<<',';out<<m.counts[n];}out<<"],\"events\":[";
     const auto count=(std::min)(m.head,u32(64));

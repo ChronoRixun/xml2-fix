@@ -1448,17 +1448,14 @@ namespace lcsave::detail
 				read_file(file.data(), file.size(), kind_campaign);
 			}
 		}
-		bool actors_needed=context.live_actor_count>32;
-		if(native.feature_bits&feature_actor_capacity96)for(const auto& zone:old.zones)if(zone.tail.dynamic_count>32){
-			if(!context.actor_definition)fail("actor-capacity writer needs definition classification for remembered dynamic records");
-			unsigned actors=0;
-			for(unsigned i=0;i<zone.tail.dynamic_count;++i){const auto index=zone.tail.dynamic.at(i);if(index>=zone.states.size())fail("dynamic actor state index outside record");
-				const auto result=context.actor_definition(zone_string(*old.zone_strings,zone.states[index].def_name));
-				if(!result)fail("actor-capacity writer could not classify dynamic definition");if(*result)++actors;
-			}actors_needed|=actors>32;
-		}
-		if(actors_needed){
-			if(!(native.feature_bits&feature_actor_capacity96))fail("more than 32 actors require the actor-capacity writer");
+		// E4 section 7 (amended 10-27: conservative marking after review - demand
+		// counting missed remembered zones). Every campaign written by a layout
+		// carrying the actor-capacity feature - only a build whose Stage 2 core
+		// was installed and verified - requires bit 0x4. Older builds refuse it
+		// with the readable newer-save message; files without it load unchanged.
+		if(native.feature_bits&feature_actor_capacity96)
+		{
+			state.notes.push_back("ACTOR_CAPACITY_96 (required feature bit 2) set: written by the actor-capacity build");
 			h.required_features|=feature_actor_capacity96;file=write_file(kind_campaign,sections,h);read_file(file.data(),file.size(),kind_campaign);
 		}
 		return file;

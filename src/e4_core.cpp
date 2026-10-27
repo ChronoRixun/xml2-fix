@@ -27,7 +27,7 @@ using u32=std::uint32_t;using namespace e4_core_state;
 e4_core_rules::tiers teams;
 e4_core_rules::reservations reservations;
 void* backing=nullptr;void* caves=nullptr;bool retained=false,fold_pending=false;
-std::atomic<unsigned> folds{0};std::string failure;HMODULE image=nullptr;
+std::atomic<unsigned> folds{0},stale_retired{0};std::string failure;HMODULE image=nullptr;
 __declspec(thread) u32 entering_actor=0;
 u32 address(const void* p){return static_cast<u32>(reinterpret_cast<std::uintptr_t>(p));}
 u32& field(u32 p,u32 off){return *reinterpret_cast<u32*>(static_cast<std::uintptr_t>(p+off));}
@@ -102,15 +102,18 @@ u32 __fastcall registration(void* ai,void*,u32 token){
     return field(p,team_generations+4*i);
 }
 void release_prepared(){if(retained)return;if(backing)VirtualFree(backing,0,MEM_RELEASE);if(caves)VirtualFree(caves,0,MEM_RELEASE);backing=caves=nullptr;cai=0;prepared=false;}
-void fail(const std::string& why){failure=why;eligible=false;logger::write("Actors: %s; no Stage 2 bytes; ActorAI unverified",why.c_str());}
-void snapshot(u32* out){out[0]=reservations.reserved;for(unsigned i=0;i<3;++i)out[i+1]=reservations.pending[i];out[4]=folds.load(std::memory_order_relaxed);}
+// Stage 2 itself writes nothing on any refusal; features without a Stage 2
+// prerequisite still commit their own contributions.
+void fail(const std::string& why){failure=why;eligible=false;logger::write("Actors: %s; stage 2 writes nothing (other features keep their own transactions); ActorAI unverified",why.c_str());}
+void snapshot(u32* out){out[0]=reservations.reserved;for(unsigned i=0;i<3;++i)out[i+1]=reservations.pending[i];out[4]=folds.load(std::memory_order_relaxed);out[5]=stale_retired.load(std::memory_order_relaxed);}
 }
 void configure(){
     const auto key=ini::text(L"Limits",L"Actors");e4_core_state::requested=key.has_value();eligible=false;
     if(!key)return;
     if(*key!="96"){fail("[Limits] Actors requires 96");return;}
     const std::array<std::pair<const wchar_t*,const char*>,6> keys{{{L"EntityCapacity","1"},{L"ActorPools","124"},{L"AnimEnums","512"},{L"CharSounds","127"},{L"ResidentStats","320"},{L"MotionPool","22528"}}};
-    for(const auto& [name,value]:keys){const auto v=ini::text(L"Limits",name);if(!v||*v!=value){std::string ascii;for(auto p=name;*p;++p)ascii+=char(*p);fail("missing or wrong prerequisite "+ascii+"="+value);return;}}
+    for(const auto& [name,value]:keys){const auto v=ini::text(L"Limits",name);if(!v||*v!=value){std::string ascii;for(auto p=name;*p;++p)ascii+=char(*p);
+        fail(!v?"missing prerequisite [Limits] "+ascii+"="+value:"wrong prerequisite [Limits] "+ascii+"="+*v+" (needs "+value+")");return;}}
     eligible=true;const auto power=ini::text(L"Game",L"NpcPowerRule");elide_power=power&&*power=="xml1";
 }
 void require_agreement(HMODULE game){if(e4_core_state::requested)game_version::require_gameplay_agreement(game);}
@@ -131,13 +134,13 @@ void contribute(patch_transaction::transaction& tx,HMODULE game){
     bool prerequisites=true;
     tx.compose([&](auto& pending){for(const char* name:{"entity_capacity","ActorPools","AnimEnums","CharSounds","ResidentStats","MotionPool"}){
         const auto it=std::find_if(pending.begin(),pending.end(),[&](const auto& c){return c.owner==name;});
-        if(it==pending.end()||!patch_transaction::verify_expectations(*it,why)){why=std::string(name)+": "+(it==pending.end()?"prerequisite not prepared":why);prerequisites=false;break;}
+        if(it==pending.end()||!patch_transaction::verify_expectations(*it,why)){why="prerequisite "+std::string(name)+(it==pending.end()?" not prepared":" not verified: "+why);prerequisites=false;break;}
     }return true;});
     if(!p||!prerequisites){fail(why.empty()?"core ledger preparation failed":why);patch_transaction::contribution veto;veto.owner="Actors prerequisite refusal";veto.requires_written.push_back({0xffffffff,failure});tx.add(std::move(veto));return;}
     std::memcpy(caves,p->code.data(),p->code.size());DWORD old=0;
     if(!VirtualProtect(caves,8192,PAGE_EXECUTE_READ,&old)||!FlushInstructionCache(GetCurrentProcess(),caves,p->code.size())){fail("core cave protection failed");patch_transaction::contribution veto;veto.owner="Actors protection refusal";veto.requires_written.push_back({0xffffffff,failure});tx.add(std::move(veto));return;}
     p->contribution.publish=[] {
-        retained=true;e4_core_state::installed=true;reservations={};teams.reset();fold_pending=false;folds=0;
+        retained=true;e4_core_state::installed=true;reservations={};teams.reset();fold_pending=false;folds=0;stale_retired=0;
         actor_ai::published={2,cai,cai+4,0x61c,96,cai+team_offset,0x268,96,2,0x24db0,0x525302};
         save_format::enable_actor_capacity96();
         logger::write("Actors: 96 installed; actor/controller arena 96, team storage96 P2; rule 1 revision4; rule44 revision2 {96,131168,8126588,15}; actor save feature0x4");
@@ -182,16 +185,26 @@ void boundary(){
         auto& s=snapshots[total++];s.token=field(arena,team_generations+4*i);s.count=field(arena+i*0x268,0x28);
         if(s.count>9)broken("team member count");for(unsigned j=0;j<s.count;++j)s.members[j]=field(arena+i*0x268,4+4*j);
     }
+    using leave_t=void(__fastcall*)(void*,void*,u32,u32);const auto leave=reinterpret_cast<leave_t>(0x522b30);
     for(unsigned j=0;j<total;++j)for(unsigned k=0;k<snapshots[j].count;++k){const auto token=snapshots[j].members[k];
         auto* controller=reinterpret_cast<void*(__fastcall*)(void*,void*,u32)>(0x525160)(reinterpret_cast<void*>(cai),nullptr,token);
-        if(!controller)broken("fold-back stale member");const auto i=(address(controller)-cai-4)/0x61c;
+        // Retail leaves stale memberships listed: reactivation re-registers and
+        // overwrites +0x538 without leaving the old team (0x516845-0x51684e), and
+        // destruction leaves only the current +0x538 team (0x511cdb-0x511ce4).
+        // Retail timeout skips a member that no longer resolves (0x5276a4). The
+        // native leave works on the token alone, so a stale listing is retired
+        // without touching any controller: a dead member is just removed, and a
+        // living member that moved keeps its current team.
+        if(!controller){leave(reinterpret_cast<void*>(cai),nullptr,snapshots[j].token,token);++stale_retired;continue;}
+        const auto i=(address(controller)-cai-4)/0x61c;
         e4_observe::core_fold_snapshot(i,snapshots[j].token,false);
-        reinterpret_cast<void(__fastcall*)(void*,void*,u32,u32)>(0x522b30)(reinterpret_cast<void*>(cai),nullptr,snapshots[j].token,token);
-        field(address(controller),0x538)=0;e4_observe::core_fold_snapshot(i,snapshots[j].token,true);
+        leave(reinterpret_cast<void*>(cai),nullptr,snapshots[j].token,token);
+        if(field(address(controller),0x538)==snapshots[j].token)field(address(controller),0x538)=0;else ++stale_retired;
+        e4_observe::core_fold_snapshot(i,snapshots[j].token,true);
     }
     if(teams.extended())broken("fold-back extended team survived");++folds;
 }
-std::string status(){return "Actors "+std::to_string(e4_core_state::installed?96:32)+" reserved "+std::to_string(reservations.reserved)+" foldbacks "+std::to_string(folds.load())+(failure.empty()?"":"; "+failure);}
+std::string status(){return "Actors "+std::to_string(e4_core_state::installed?96:32)+" reserved "+std::to_string(reservations.reserved)+" foldbacks "+std::to_string(folds.load())+" stale "+std::to_string(stale_retired.load())+(failure.empty()?"":"; "+failure);}
 #ifdef XML2_E4_TEST
 bool test_set_encoding(unsigned variant){
     if(!e4_core_state::installed||variant>3||field(cai+4,primary_live)||field(cai+team_offset,team_live)||reservations.reserved)return false;

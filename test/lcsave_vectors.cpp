@@ -2310,44 +2310,73 @@ namespace
 		const auto saved = old_stream_to_new(w2s.bytes, tables, ctx, w);
 		check(saved.ok, "W2 save: " + saved.error);
 		if (!saved.ok) return;
-		// E4 section 7, coordinator amendment: actor bit 2 is independent of
-		// W2 bit 1, and is conditional on the actual actor demand.
+		// E4 section 7, amended 10-27 after review: conservative marking. Bit 2
+		// is independent of W2 bit 1. Every campaign written while the Stage 2
+		// core is installed (the layout carries feature_actor_capacity96) is
+		// marked; demand counting missed remembered zones and mixed demand.
 		{
 			auto actor_layout=w;actor_layout.feature_bits|=feature_actor_capacity96;
-			for(unsigned live:{20u,32u,33u,60u,96u}){
-				auto actor_context=ctx;actor_context.live_actor_count=live;
-				const auto result=old_stream_to_new(w2s.bytes,tables,actor_context,actor_layout);
-				check(result.ok,"E4 conditional marker save: "+result.error);
+			const auto marked=[&](const Result& r){return r.ok&&(read_file(r.bytes.data(),r.bytes.size(),kind_campaign).header.required_features&feature_actor_capacity96)!=0;};
+			const auto older_refuses=[&](const Result& r){const auto old_reader=new_to_old_stream(r.bytes,tables,w,&reg);return !old_reader.ok&&contains(old_reader.error,"needs a newer version");};
+			{
+				const auto result=old_stream_to_new(w2s.bytes,tables,ctx,actor_layout);
+				check(result.ok,"E4 conservative marker save: "+result.error);
 				if(result.ok){const auto bits=read_file(result.bytes.data(),result.bytes.size(),kind_campaign).header.required_features;
-					check(bits==(live>32?5u:1u),"E4 32/33 boundary uses only actor bit0x4");
-					if(live<=32)check(result.bytes==saved.bytes,"E4 representable save byte-identical with feature capability enabled");
+					check(bits==5u,"E4 every Stage2 write carries actor bit0x4 (bit0 + bit2, no W2 bit1)");
 					const auto reload=new_to_old_stream(result.bytes,tables,actor_layout,&reg);
-					check(reload.ok&&reload.bytes==w2s.bytes,"E4 marked/unmarked save native round trip unchanged");
-					if(live>32){const auto old_reader=new_to_old_stream(result.bytes,tables,w,&reg);check(!old_reader.ok&&contains(old_reader.error,"needs a newer version"),"E4 older actor32 reader refuses readable newer-save marker");}
+					check(reload.ok&&reload.bytes==w2s.bytes,"E4 marked save native round trip unchanged");
+					check(older_refuses(result),"E4 older actor32 reader refuses readable newer-save marker");
 				}
 			}
 			const auto old_load=new_to_old_stream(legacy.bytes,tables,actor_layout,&reg);
 			check(old_load.ok&&old_load.bytes==w2s.bytes,"E4 existing feature0 save loads unchanged");
 			auto float_state=wm;for(auto& state:float_state.zones[0].states)if(state.def_name){state.position[0]=0.5f;break;}
-			auto actor_context=ctx;actor_context.live_actor_count=60;
-			const auto combined=old_stream_to_new(write_slot(float_state,w),tables,actor_context,actor_layout);
+			const auto combined=old_stream_to_new(write_slot(float_state,w),tables,ctx,actor_layout);
 			check(combined.ok&&read_file(combined.bytes.data(),combined.bytes.size(),kind_campaign).header.required_features==7,"E4 actor bit0x4 and NATIVE_W2 bit0x2 coexist");
 			const auto old_w2=old_stream_to_new(write_slot(float_state,w),tables,ctx,w);
 			const auto old_w2_load=new_to_old_stream(old_w2.bytes,tables,actor_layout,&reg);
 			const auto old_w2_reference=new_to_old_stream(old_w2.bytes,tables,w,&reg);
+			check(old_w2.ok&&!(read_file(old_w2.bytes.data(),old_w2.bytes.size(),kind_campaign).header.required_features&feature_actor_capacity96),"E4 a build without the core never marks bit0x4");
 			check(old_w2_load.ok&&old_w2_load.bytes==old_w2_reference.bytes,"E4 existing bit0x2 W2 save loads unchanged");
-			auto dynamic=wm;auto& zone=dynamic.zones[0];const auto prototype=*std::find_if(zone.states.begin(),zone.states.end(),[](const auto& s){return s.def_name!=0;});
-			zone.tail.dynamic_count=33;zone.tail.state_count=std::max(zone.tail.state_count,633u);
-			for(unsigned i=0;i<33;++i){zone.tail.dynamic[i]=static_cast<u16>(600+i);zone.states[600+i]=prototype;}
-			const auto stream=write_slot(dynamic,w);
-			actor_context=ctx;actor_context.live_actor_count=20;actor_context.actor_definition=[](std::string_view)->std::optional<bool>{return true;};
-			const auto remembered=old_stream_to_new(stream,tables,actor_context,actor_layout);
-			check(remembered.ok&&(read_file(remembered.bytes.data(),remembered.bytes.size(),kind_campaign).header.required_features&4),"E4 remembered33 dynamic actors sets bit despite current20: "+remembered.error);
-			actor_context.actor_definition=[](std::string_view)->std::optional<bool>{return false;};
-			const auto props=old_stream_to_new(stream,tables,actor_context,actor_layout);
-			check(props.ok&&!(read_file(props.bytes.data(),props.bytes.size(),kind_campaign).header.required_features&4),"E4 33 nonactor dynamic records do not set actor bit: "+props.error);
-			actor_context.actor_definition=[](std::string_view)->std::optional<bool>{return {};};
-			check(!old_stream_to_new(stream,tables,actor_context,actor_layout).ok,"E4 unknown dynamic class refuses write instead of dropping required feature");
+			const auto prototype=*std::find_if(wm.zones[0].states.begin(),wm.zones[0].states.end(),[](const auto& s){return s.def_name!=0;});
+			// Review case: a remembered zone with 40 living PLACED actors (no
+			// dynamic list), saved while the current zone holds20.
+			{
+				auto placed=wm;auto& zone=placed.zones.back();zone.tail.dynamic_count=0;zone.tail.state_count=std::max(zone.tail.state_count,640u);
+				for(unsigned i=0;i<40;++i)zone.states[600+i]=prototype;
+				const auto stream=write_slot(placed,w);
+				const auto remembered=old_stream_to_new(stream,tables,ctx,actor_layout);
+				check(marked(remembered)&&older_refuses(remembered),"E4 remembered zone with40 placed actors requires the actor build: "+remembered.error);
+				const auto unmarked=old_stream_to_new(stream,tables,ctx,w);
+				const auto reload=new_to_old_stream(remembered.bytes,tables,actor_layout,&reg),reference=new_to_old_stream(unmarked.bytes,tables,w,&reg);
+				check(reload.ok&&reference.ok&&reload.bytes==reference.bytes,"E4 remembered40 marker leaves the native stream unchanged: "+reload.error);
+			}
+			// Review case: mixed demand, 30 remembered dynamic actors plus the
+			// party's heroes (34 actors in play with a four-hero party). Demand
+			// counting saw only the 30 dynamic records. The synthetic tables
+			// define two heroes, so the stream carries both hero blocks.
+			{
+				auto mixed=wm;check(!mixed.heroes.empty(),"E4 mixed fixture has hero blocks");auto& zone=mixed.zones.back();zone.tail.dynamic_count=30;zone.tail.state_count=std::max(zone.tail.state_count,630u);
+				for(unsigned i=0;i<30;++i){zone.tail.dynamic[i]=static_cast<u16>(600+i);zone.states[600+i]=prototype;}
+				const auto stream=write_slot(mixed,w);
+				const auto result=old_stream_to_new(stream,tables,ctx,actor_layout);
+				check(marked(result)&&older_refuses(result),"E4 mixed30 dynamic plus four heroes requires the actor build: "+result.error);
+				const auto unmarked=old_stream_to_new(stream,tables,ctx,w);
+				const auto reload=new_to_old_stream(result.bytes,tables,actor_layout,&reg),reference=new_to_old_stream(unmarked.bytes,tables,w,&reg);
+				check(reload.ok&&reference.ok&&reload.bytes==reference.bytes,"E4 mixed marker leaves the native stream unchanged: "+reload.error);
+			}
+			// 33 remembered dynamic records of any class: marked, with no
+			// classification query at save time.
+			{
+				auto dynamic=wm;auto& zone=dynamic.zones[0];
+				zone.tail.dynamic_count=33;zone.tail.state_count=std::max(zone.tail.state_count,633u);
+				for(unsigned i=0;i<33;++i){zone.tail.dynamic[i]=static_cast<u16>(600+i);zone.states[600+i]=prototype;}
+				const auto stream=write_slot(dynamic,w);
+				const auto result=old_stream_to_new(stream,tables,ctx,actor_layout);
+				check(marked(result)&&older_refuses(result),"E4 remembered33 dynamic records marked without classification: "+result.error);
+				const auto unmarked=old_stream_to_new(stream,tables,ctx,w);
+				check(unmarked.ok&&!(read_file(unmarked.bytes.data(),unmarked.bytes.size(),kind_campaign).header.required_features&feature_actor_capacity96),"E4 same stream from a core-free build stays unmarked");
+			}
 		}
 		const auto f = read_file(saved.bytes.data(), saved.bytes.size(), kind_campaign);
 		check(f.header.required_features == 1 && representable(saved.bytes, tables, e).empty(), "a representable W2 save carries bit 0 only");
