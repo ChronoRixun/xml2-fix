@@ -13,19 +13,23 @@ namespace online_menus_rules {
 inline constexpr char capability[] = "lc-online-menus/1\n";
 // Additive input API probe: LC must require this before selecting intents 9..62.
 inline constexpr char input_capability[] = "lc-online-input/1";
+inline constexpr char lobby_capability[] = "lc-online-lobby/1";
 inline constexpr char function_name[] = "lcOnlineIntent";
 enum class intent : int { enter=1, host, code, browse, other, back, unavailable, dismiss, edit_name, paste, erase, clear, done, rejoin, invalid_key,
-    symbol_first=32, symbol_last=62 };
-enum class screen { none, main, hub, host, code, browse };
+    copy_code=16, confirm_leave=17, symbol_first=32, symbol_last=62 };
+enum class screen { none, main, hub, host, code, browse, lobby_host, lobby_join };
 inline screen identify(std::string_view name) {
     if(name=="main") return screen::main;
     if(name=="lc_online") return screen::hub;
     if(name=="lc_host") return screen::host;
     if(name=="lc_code") return screen::code;
     if(name=="lc_browse") return screen::browse;
+    if(name=="host") return screen::lobby_host;
+    if(name=="join") return screen::lobby_join;
     return screen::none;
 }
-inline bool custom(screen s) { return s>=screen::hub; }
+inline bool custom(screen s) { return s>=screen::hub && s<=screen::browse; }
+inline bool lobby(screen s) { return s==screen::lobby_host || s==screen::lobby_join; }
 inline bool controller_valid(int p) { return p>=0 && p<4; }
 inline bool enabled(std::optional<std::string_view> value) {
     return value && ini_rules::value_text(*value)=="1";
@@ -78,7 +82,11 @@ template<class Clipboard> std::optional<std::string> read_clipboard(Clipboard& a
     const auto count=std::min<std::size_t>(bytes/2,257);
     for(std::size_t i=0;i<count;++i) {
         const auto c=data[i];
-        if(!c) return parse_code(text);
+        if(!c) {
+            // Zero padding is fine; a hidden second string is not a code.
+            for(std::size_t tail=i+1;tail<bytes/2;++tail) if(data[tail]) return {};
+            return parse_code(text);
+        }
         if(c>127) return {};
         text+=char(c);
     }
@@ -121,6 +129,18 @@ struct key_edges {
             previous[i]=state[i];
         }
         primed=true; return edges;
+    }
+};
+// Bounded game-thread input inbox. Multiple rising edges from one DirectInput
+// poll keep scan-code order; close/navigation invalidates even address reuse.
+struct input_inbox {
+    std::array<int,64> values{};
+    std::uintptr_t source=0;
+    unsigned count=0;
+    void clear() { source=0;count=0; }
+    void push(std::uintptr_t menu,int value) {
+        if(source!=menu) { clear();source=menu; }
+        if(count<values.size()) values[count++]=value;
     }
 };
 // Native setters read these FULL buffers, including the initialized tail.
@@ -187,10 +207,13 @@ struct mailbox {
     int action=0;
     void clear() { source=0; from=screen::none; action=0; }
     bool post(int value, std::uintptr_t menu, screen s) {
-        if(action || !menu || value<int(intent::enter) || (value>int(intent::invalid_key) && (value<32 || value>62))) return false;
+        if(action || !menu || value<int(intent::enter) || (value>int(intent::confirm_leave) && (value<32 || value>62))) return false;
         // Entry is a native queued openmenu request with captured real input;
         // scripts cannot manufacture it. Value 1 remains reserved.
-        if(!custom(s) || value==int(intent::enter)) return false;
+        if(lobby(s)) {
+            if(value!=int(intent::copy_code) && value!=int(intent::dismiss) &&
+               value!=int(intent::back) && !(s==screen::lobby_host && value==int(intent::confirm_leave))) return false;
+        } else if(!custom(s) || value==int(intent::enter) || (value>=int(intent::copy_code) && value<=int(intent::confirm_leave))) return false;
         source=menu; from=s; action=value; return true;
     }
     int take(std::uintptr_t menu, screen s) {

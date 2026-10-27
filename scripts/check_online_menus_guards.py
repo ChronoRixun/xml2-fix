@@ -32,7 +32,7 @@ def main():
     for va, body, what in guards:
         assert image[va - 0x400000:va - 0x400000 + len(body)] == body, (hex(va), what)
         covered.update(range(va, va + len(body)))
-    writes = {0x5C971B: 6, 0x6A23D8: 4, 0x69E454: 4, 0x69E464: 4, 0x5BC3D0: 5, 0x69E440: 4, 0x69E438: 4}
+    writes = {0x5C971B: 6, 0x6A23D8: 4, 0x69E454: 4, 0x69E464: 4, 0x5BC3D0: 5, 0x69E440: 4, 0x69E438: 4, 0x69F284: 4, 0x69F350: 4, 0x69F290: 4, 0x69F358: 4, 0x69F2A0: 4, 0x69F368: 4, 0x69F2AC: 4, 0x69F374: 4, 0x6A24AC: 4}
     touched = {va + i for va, size in writes.items() for i in range(size)}
     assert touched <= covered
     # No other feature writes/guards our mutated bytes, except MAIN_MENU's

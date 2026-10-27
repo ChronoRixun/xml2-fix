@@ -15,6 +15,9 @@
 #include <ctime>
 #include <map>
 #include <cstdio>
+#include <intrin.h>
+#include <atomic>
+#include <vector>
 
 namespace online_menus {
 namespace {
@@ -59,11 +62,16 @@ code_model code;
 name_request name_edit;
 DWORD name_requested_at=0;
 key_edges keyboard_edges;
+input_inbox keyboard_input;
+std::optional<std::string> rejoin_seed;
+std::atomic<DWORD> game_thread{0},keyboard_thread{0};
 bool back_held=false;
 std::optional<recent_game> recent;
 bool recent_loaded=false;
 std::uint64_t fixture_ticket=0;
 std::string fixture_code;
+bool (*lobby_fields)(lobby_fixture&)=nullptr;
+bool lobby_live(void* menu);
 
 struct clipboard_api {
     HANDLE handle=nullptr;
@@ -73,14 +81,28 @@ struct clipboard_api {
     const std::uint16_t* lock() { return static_cast<const std::uint16_t*>(GlobalLock(handle)); }
     void unlock() { GlobalUnlock(handle); }
 };
+BOOL CALLBACK clipboard_owner_window(HWND window,LPARAM out) {
+    DWORD process=0;GetWindowThreadProcessId(window,&process);
+    char name[64]{};
+    if(process==GetCurrentProcessId() && GetClassNameA(window,name,sizeof(name))>0 &&
+        std::strcmp(name,"igWin32WindowClass")==0) {
+        *reinterpret_cast<HWND*>(out)=window;return FALSE;
+    }
+    return TRUE;
+}
+HWND clipboard_owner() {
+    HWND owner=nullptr;
+    EnumThreadWindows(GetCurrentThreadId(),clipboard_owner_window,reinterpret_cast<LPARAM>(&owner));
+    return owner; // read only; no activation/focus or foreign-process window
+}
 // LocalAppData is deliberately outside game/mod folders and all shared state.
 // Reject network drives. No identity, credential or address is written here.
 std::filesystem::path recent_path() {
-    wchar_t path[32768]{};
-    const auto n=GetEnvironmentVariableW(L"LOCALAPPDATA",path,32768);
+    std::vector<wchar_t> path(32768);
+    const auto n=GetEnvironmentVariableW(L"LOCALAPPDATA",path.data(),DWORD(path.size()));
     if(!n || n>=32768) return {};
     if(path[0]==L'\\' && path[1]==L'\\') return {}; // no UNC/device namespace query or I/O
-    const std::filesystem::path base(path);
+    const std::filesystem::path base(path.data());
     if(!base.is_absolute() || GetDriveTypeW(base.root_path().c_str())!=DRIVE_FIXED) return {};
     return base/L"XML2 Fix"/L"online"/L"last-game.txt";
 }
@@ -90,20 +112,56 @@ void load_recent() {
     const auto path=recent_path(); if(path.empty()) return;
     std::ifstream file(path,std::ios::binary); std::array<char,129> data{};
     file.read(data.data(),data.size());
-    if(file.gcount()>0 && file.gcount()<=128) recent=decode_recent({data.data(),std::size_t(file.gcount())});
+    if(!file.bad() && file.gcount()>0 && file.gcount()<=128) recent=decode_recent({data.data(),std::size_t(file.gcount())});
 }
-void remember_fixture() {
+bool remember_fixture() {
     // This is explicitly an offline fixture record, never successful admission.
-    recent=recent_game{code.text,"Offline fixture",std::uint64_t(std::time(nullptr))};
-    const auto path=recent_path(); if(path.empty()) return;
-    std::error_code ec; std::filesystem::create_directories(path.parent_path(),ec); if(ec) return;
-    const auto bytes=encode_recent(*recent);
-    std::ofstream file(path,std::ios::binary|std::ios::trunc); file.write(bytes.data(),bytes.size());
+    recent_game next{code.text,"Offline fixture",std::uint64_t(std::time(nullptr))};
+    const auto path=recent_path(); if(path.empty()) return false;
+    std::error_code ec; std::filesystem::create_directories(path.parent_path(),ec); if(ec) return false;
+    const auto bytes=encode_recent(next);if(bytes.empty()) return false;
+    static unsigned serial=0;
+    const auto temporary=path.wstring()+L".tmp."+std::to_wstring(GetCurrentProcessId())+L"."+std::to_wstring(++serial);
+    const auto file=CreateFileW(temporary.c_str(),GENERIC_WRITE,0,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);
+    if(file==INVALID_HANDLE_VALUE) return false;
+    DWORD written=0;
+    bool saved=WriteFile(file,bytes.data(),DWORD(bytes.size()),&written,nullptr) && written==bytes.size();
+    if(saved) saved=FlushFileBuffers(file)!=FALSE;
+    if(!CloseHandle(file)) saved=false;
+    if(saved) saved=MoveFileExW(temporary.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=FALSE;
+    if(!saved) { DeleteFileW(temporary.c_str());return false; } // only our CREATE_NEW file
+    recent=std::move(next);return true;
 }
 void message(const char* text) { feedback=text; error_visible=true; }
 
 
 void* manager() { return at<getter>(0x5d8920)(); }
+void* current_peek() {
+    __try {
+        auto* m=*reinterpret_cast<void**>(0x8aff18);
+        if(!m || *static_cast<unsigned*>(m)!=0x6a236c) return nullptr;
+        auto* menu=*reinterpret_cast<void**>(static_cast<char*>(m)+0x86090);
+        return menu && (static_cast<unsigned char*>(menu)[4]&1) ? menu : nullptr;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+bool input_thread(const char* where,bool keyboard_call) {
+    const auto id=GetCurrentThreadId();
+    if(keyboard_call) {
+        DWORD empty=0;keyboard_thread.compare_exchange_strong(empty,id);
+        logger::write_once("online:keyboard-thread","online menus: keyboard thread=%lu",id);
+    } else {
+        DWORD empty=0;game_thread.compare_exchange_strong(empty,id);
+        logger::write_once("online:tick-thread","online menus: game tick thread=%lu",game_thread.load());
+    }
+    const auto owner=game_thread.load(),keys=keyboard_thread.load();
+    if(owner && keys) logger::write_once("online:thread-agreement",
+        "online menus: keyboard/game-thread assertion %s (keyboard=%lu game=%lu)",owner==keys ? "matched" : "FAILED",keys,owner);
+    if(owner && owner!=id) {
+        logger::write_once("online:thread-refused","online menus: %s refused outside game thread=%lu (caller=%lu)",where,owner,id);
+        return false;
+    }
+    return true;
+}
 void* current() {
     __try {
         auto* m=manager();
@@ -118,11 +176,14 @@ screen which(void* menu) {
         std::memcpy(name,static_cast<char*>(menu)+0xc,63);
         const auto s=identify(name);
         if(custom(s) && *static_cast<std::uint32_t*>(menu)!=0x69e41c) return screen::none;
+        if(s==screen::lobby_host && *static_cast<std::uint32_t*>(menu)!=0x69f274) return screen::none;
+        if(s==screen::lobby_join && *static_cast<std::uint32_t*>(menu)!=0x69f33c) return screen::none;
         return s;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return screen::none; }
 }
 bool live(void* menu) {
-    __try { return menu && current()==menu && (static_cast<unsigned char*>(menu)[4]&1) && custom(which(menu)); }
+    __try { return menu && current()==menu && (static_cast<unsigned char*>(menu)[4]&1) &&
+        (custom(which(menu)) || lobby_live(menu)); }
     __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 
@@ -228,15 +289,68 @@ struct native_engine {
     }
 };
 
-void abandon_name() {
-    if(!name_edit.owned) return;
-    auto* request=at<getter>(0x60c7e0)();
-    if(at<int(__thiscall*)(void*)>(0x60b9a0)(request)==0) {
-        if(at<bool(__thiscall*)(void*)>(0x60b960)(request))
-            at<const char*(__thiscall*)(void*)>(0x60c780)(request);
-        else at<select_fn>(0x60b990)(request,4);
-    }
-    name_edit.owned=false;
+enum class name_operation { abandon, begin, poll, apply };
+struct name_io {
+    int tag=4;
+    bool result=false,saved=false;
+    char copy[256]{};
+    const char* accepted=nullptr;
+};
+// /EHsc does not catch access violations. Keep ALL native name-service calls
+// and result copying in this POD-only SEH boundary, including save side effects.
+bool name_native(name_operation operation,name_io& io) {
+    __try {
+        auto* request=at<getter>(0x60c7e0)();
+        if(request!=at<void*>(0xa3e168) || *static_cast<unsigned*>(request)!=0x6a4730) return false;
+        if(operation==name_operation::abandon) {
+            if(at<int(__thiscall*)(void*)>(0x60b9a0)(request)==0) {
+                if(at<bool(__thiscall*)(void*)>(0x60b960)(request))
+                    at<const char*(__thiscall*)(void*)>(0x60c780)(request);
+                else at<select_fn>(0x60b990)(request,4);
+            }
+        } else if(operation==name_operation::begin) {
+            if(at<bool(__thiscall*)(void*)>(0x60b960)(request))
+                at<const char*(__thiscall*)(void*)>(0x60c780)(request);
+            at<select_fn>(0x60b990)(request,0);
+            at<select_fn>(0x60b970)(request,31);
+            at<name_fn>(0x60c6e0)(request,name_edit.seed.data());
+            at<name_fn>(0x60c710)(request,name_edit.title.data());
+            auto* m=*reinterpret_cast<void**>(0x8aff18);
+            if(!m || *static_cast<unsigned*>(m)!=0x6a236c) return false;
+            at<request_fn>(0x5d5db0)(m,"text_entry",nullptr);
+        } else if(operation==name_operation::poll) {
+            io.result=at<bool(__thiscall*)(void*)>(0x60b960)(request);
+            io.tag=at<int(__thiscall*)(void*)>(0x60b9a0)(request);
+            if(io.result && io.tag==0) {
+                const auto* text=at<const char*(__thiscall*)(void*)>(0x60c780)(request);
+                std::memcpy(io.copy,text,sizeof(io.copy));
+            }
+            if(!io.result && io.tag==0) at<select_fn>(0x60b990)(request,4);
+        } else {
+            auto* session=at<getter>(0x612be0)();
+            auto* profile=at<getter>(0x48fed0)();
+            auto* console=at<getter>(0x55c890)();
+            if(session!=at<void*>(0xa53058) || *static_cast<unsigned*>(session)!=0x6a481c ||
+                !profile || *static_cast<unsigned*>(profile)!=0x689994 ||
+                !console || *static_cast<unsigned*>(console)!=0x69a81c) return false;
+            at<name_fn>(0x610d80)(session,io.accepted);
+            at<name_fn>(0x48f3f0)(profile,io.accepted);
+            io.saved=at<command_fn>(0x55beb0)(console,"runscript saveloadProcess(2)");
+        }
+        return true;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void name_fault() {
+    name_edit.owned=false;name_edit.departed=false;++name_edit.generation;
+    name_io ignored;name_native(name_operation::abandon,ignored); // one bounded best-effort drain
+    message("lc_notice_name_open");
+}
+bool abandon_name() {
+    if(!name_edit.owned) return true;
+    name_edit.owned=false;name_edit.departed=false;
+    name_io ignored;
+    if(!name_native(name_operation::abandon,ignored)) { name_fault();return false; }
+    return true;
 }
 
 // EBX is the native MAIN_MENU input mask at the guarded call site; p is the
@@ -244,6 +358,7 @@ void abandon_name() {
 void __cdecl capture(void* m,int p,unsigned mask) {
     at<select_fn>(0x5d8560)(m,p);
     accepted=controller_valid(p) && (mask&0x10) && which(current())==screen::main ? p : -1;
+    if(which(current())==screen::main && (mask&0x10)) accept_hint(current(),true);
     accepted_at=now_ms();
 }
 __declspec(naked) void capture_stub() {
@@ -259,10 +374,11 @@ __declspec(naked) void capture_stub() {
 }
 
 void request_impl(void* m,const char* name,const char* args) {
-    pending.clear();
-    if(name_edit.owned && name && std::strcmp(name,"text_entry") && std::strcmp(name,"lc_online")) abandon_name();
+    pending.clear();keyboard_input.clear();
+    if(name_edit.owned && name && std::strcmp(name,"text_entry") && std::strcmp(name,"lc_online") && !abandon_name()) return;
     auto* source=current();
     const auto source_id=reinterpret_cast<std::uintptr_t>(source);
+    if(name && std::strcmp(name,"lc_code")) rejoin_seed.reset();
     if(ready && name && std::strcmp(name,"online")==0 && which(source)==screen::main) {
         // Availability precedes the capture gate: missing/wrong assets always
         // retain native online, including console requests and delayed queues.
@@ -290,7 +406,7 @@ void request_impl(void* m,const char* name,const char* args) {
         }
         logger::write("online menus: native initialization refused; keeping native online entry");
         entry.clear();
-    } else if(name && entry.source==source_id && which(source)==screen::main && std::strcmp(name,"lc_online")) {
+    } else if(name && which(source)==screen::main && std::strcmp(name,"lc_online")) {
         entry.clear();accept_hint(source,true);
     }
     at<request_fn>(0x5d5db0)(m,name,args);
@@ -318,7 +434,8 @@ int argument(void* args) {
 void* __cdecl handler(void* args) {
     if(ready) {
         auto* menu=current();
-        if(live(menu)) pending.post(argument(args),reinterpret_cast<std::uintptr_t>(menu),which(menu));
+        const auto value=argument(args);
+        if(value!=int(intent::invalid_key) && live(menu)) pending.post(value,reinterpret_cast<std::uintptr_t>(menu),which(menu));
     }
     return nullptr;
 }
@@ -332,13 +449,16 @@ bool __fastcall queue(void* console,void*,const char* line) {
     // Only exact canonical integer commands are accepted at this boundary.
     // Model/name/clipboard text can never become a script or console command.
     if(ready && line) for(int value=2;value<=62;++value) {
-        if(value>int(intent::invalid_key) && value<32) continue;
+        if(value==int(intent::invalid_key)) continue; // internal keyboard feedback, never a published command
+        if(value>int(intent::confirm_leave) && value<32) continue;
         char command[48]{};
         std::snprintf(command,sizeof(command),"runscript lcOnlineIntent(%d)",value);
         if(std::strcmp(command,line)) continue;
         auto* menu=current();
-        if(live(menu)) pending.post(value,reinterpret_cast<std::uintptr_t>(menu),which(menu));
-        return true;
+        if(live(menu)) {
+            if(pending.action || pending.post(value,reinterpret_cast<std::uintptr_t>(menu),which(menu))) return true;
+        }
+        break; // no supported live source: preserve native queue result/behavior
     }
     return at<command_fn>(0x55c410)(console,line);
 }
@@ -408,11 +528,353 @@ void enable(void* menu,const char* item,bool enabled) {
     if(old!=bindings.enabled.end() && old->second==enabled) return;
     if(enable_native(menu,item,enabled)) bindings.enabled.insert_or_assign(item,enabled);
 }
+// Native lobbies retain their complete controller/vtable and campaign callback.
+// No additional pooled rows, participant writes, admission or direct Start leaf.
+struct lobby_view {
+    unsigned count=0,ready_count=0,local=0;
+    int selected=-1;
+    unsigned ids[4]{};
+    bool ready[4]{};
+    bool host[4]{};
+    char names[4][32]{};
+};
+struct lobby_ui {
+    void* owner=nullptr;
+    std::uint64_t generation=0;
+    bool confirm=false,error=false,copied=false,copy_held=false,role_held=false,focus_confirm=false,leave_authorized=false,copy_keyboard=false,copy_block=false;
+    void reset(void* menu=nullptr) { ++generation;owner=menu;confirm=error=copied=copy_held=role_held=focus_confirm=leave_authorized=copy_keyboard=copy_block=false; }
+} lobby_state;
+bool lobby_ticking=false;
+bool suppress_lobby_action=false;
+bool role_accept=false;
+std::uint64_t input_generation=0;
+bool lobby_action_valid(void* menu,unsigned mask);
+unsigned __fastcall lobby_input(void* mgr,void*) {
+    const auto mask=at<unsigned(__thiscall*)(void*)>(0x5d4b00)(mgr);
+    const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    // Filter only each native class tick's action read, after base menu UI
+    // dispatch has processed authored inline buttons/Back. All other readers
+    // (including the base UI, help, transfer and other menus) retain native input.
+    if(lobby_ticking && input_generation==lobby_state.generation && current()==lobby_state.owner && (caller==0x5bad33 || caller==0x5c88d2)) {
+        if(pending.action==int(intent::copy_code)) lobby_state.copy_block=true;
+        if(suppress_lobby_action || lobby_state.copy_block) return 0;
+        const auto action=role_accept ? mask|0x10 : mask;
+        // Base tick can refresh/reselect a row. Validate again at the actual
+        // action boundary, rather than trusting the pre-base snapshot.
+        if(!lobby_action_valid(lobby_state.owner,action)) { lobby_state.error=true;return 0; }
+        return action;
+    }
+    return mask;
+}
+void* item(void* menu,const char* name) {
+    return at<void*(__thiscall*)(void*,const char*)>(0x5adc10)(menu,name);
+}
+bool lobby_live(void* menu) {
+    __try { return lobby(which(menu)) && item(menu,"lc_lobby_v1"); }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool lobby_lists(void* menu) {
+    __try {
+        auto* a=item(menu,"text_playername1");auto* b=item(menu,"text_readycheck1");
+        return a && b && a!=b && *static_cast<unsigned*>(a)==0x6a062c &&
+            *static_cast<unsigned*>(b)==0x6a062c &&
+            *reinterpret_cast<void**>(static_cast<char*>(a)+0xbc) &&
+            *reinterpret_cast<void**>(static_cast<char*>(b)+0xbc);
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+// Raw native reads stay inside this small SEH boundary; never retain pointers.
+bool read_lobby(void* menu,lobby_view& out) {
+    __try {
+        if(!lobby_lists(menu)) return false;
+        auto* names=item(menu,"text_playername1");auto* checks=item(menu,"text_readycheck1");
+        const auto count=at<int(__thiscall*)(void*)>(0x5bf750)(names);
+        const auto other=at<int(__thiscall*)(void*)>(0x5bf750)(checks);
+        const auto pool=*reinterpret_cast<unsigned*>(0x8abe20);
+        if(count<1 || count>4 || count!=other || pool>128 || pool<unsigned(count*2)) return false;
+        const auto* name_rows=*reinterpret_cast<unsigned char**>(static_cast<char*>(names)+0xbc);
+        const auto* ready_rows=*reinterpret_cast<unsigned char**>(static_cast<char*>(checks)+0xbc);
+        bool slots[128]{};
+        for(int row=0;row<count;++row) for(auto index:{name_rows[row],ready_rows[row]}) {
+            if(index>=128 || slots[index]) return false;
+            const auto bit=1u<<(index&31);
+            if(!(*reinterpret_cast<const unsigned*>(0x8a83f0+0x3800+4*(index/32))&bit) ||
+               !(*reinterpret_cast<const unsigned*>(0x8a83f0+0x3a20+4*(index/32))&bit)) return false;
+            slots[index]=true;
+        }
+        auto* session=at<getter>(0x612be0)();
+        out.count=count;out.local=at<unsigned(__thiscall*)(void*)>(0x611250)(session);
+        out.selected=at<int(__thiscall*)(void*)>(0x5bf5c0)(names);
+        for(int row=0;row<count;++row) {
+            out.ids[row]=at<unsigned(__thiscall*)(void*,int)>(0x5bfc20)(names,row);
+            for(int previous=0;previous<row;++previous) if(out.ids[previous]==out.ids[row]) return false;
+            auto* participant=at<void*(__thiscall*)(void*,unsigned)>(0x6110c0)(session,out.ids[row]);
+            if(!participant) return false;
+            if(at<unsigned(__thiscall*)(void*)>(0x614210)(participant)!=out.ids[row]) return false;
+            const auto* name=at<const char*(__thiscall*)(void*)>(0x6141e0)(participant);
+            unsigned size=0;while(size<31 && name[size]) { out.names[row][size]=name[size];++size; }
+            out.names[row][size]=0;
+            out.ready[row]=at<bool(__thiscall*)(void*)>(0x614240)(participant);
+            out.host[row]=at<bool(__thiscall*)(void*)>(0x6142a0)(participant);
+            out.ready_count+=out.ready[row] ? 1 : 0;
+        }
+        return true;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool lobby_action_valid(void* menu,unsigned mask) {
+    lobby_view view{};
+    if(!read_lobby(menu,view)) return false;
+    if(which(menu)==screen::lobby_host && *reinterpret_cast<int*>(static_cast<char*>(menu)+0x1960)==1 && (mask&0x10))
+        return view.selected>=0 && unsigned(view.selected)<view.count && view.ids[view.selected]!=view.local;
+    return true;
+}
+void restore_lobby_focus(void* menu) {
+    const auto* target=which(menu)==screen::lobby_host && *reinterpret_cast<int*>(static_cast<char*>(menu)+0x1960)==1 ?
+        "text_playername1" : "text_leaveroom";
+    at<void(__thiscall*)(void*,const char*,bool)>(0x5adf40)(menu,target,true);
+}
+// Snapshot fields supplied by host tests only. The ordinary DLL has no fixture
+// provider, so an unknown room/RTT/build stays unknown until round 5.
+void bind_lobby(void* menu,const lobby_view& view,bool valid) {
+    lobby_fixture extra{};
+    const bool fixture=lobby_fields && lobby_fields(extra) && extra.count<=4;
+    std::optional<std::string> code_value;
+    if(fixture) {
+        const auto end=std::find(std::begin(extra.code),std::end(extra.code),char(0));
+        if(end!=std::end(extra.code)) code_value=parse_code({extra.code,std::size_t(end-extra.code)});
+    }
+    std::string shown=code_value ? code_value->substr(0,4)+"-"+code_value->substr(4) : "---- ----";
+    const bool host=which(menu)==screen::lobby_host;
+    // Extra Copy never manufactures an Accept or invokes a native action.
+    const auto action=static_cast<intent>(pending.take(reinterpret_cast<std::uintptr_t>(menu),which(menu)));
+    if(action==intent::dismiss || action==intent::back) {
+        lobby_state.confirm=lobby_state.error=lobby_state.copied=false;
+        restore_lobby_focus(menu);
+    } else if(action==intent::confirm_leave && host && lobby_state.confirm) {
+        lobby_state.confirm=false;
+        lobby_state.leave_authorized=true;
+        restore_lobby_focus(menu);
+        *reinterpret_cast<int*>(static_cast<char*>(menu)+0x1960)=2; // next native tick owns shutdown
+    } else if(action==intent::copy_code && code_value) {
+        // Bounded Unicode payload. SetClipboardData takes ownership on success.
+        bool copied=false;
+        const auto owner=clipboard_owner();
+        if(owner && OpenClipboard(owner)) {
+            auto memory=GlobalAlloc(GMEM_MOVEABLE,(shown.size()+1)*sizeof(wchar_t));
+            if(memory) {
+                auto* target=static_cast<wchar_t*>(GlobalLock(memory));
+                if(target) {
+                    for(unsigned i=0;i<=shown.size();++i) target[i]=i<shown.size() ? wchar_t(shown[i]) : 0;
+                    GlobalUnlock(memory);
+                    copied=EmptyClipboard() && SetClipboardData(CF_UNICODETEXT,memory);
+                }
+                if(!copied) GlobalFree(memory);
+            }
+            CloseClipboard();
+        }
+        lobby_state.copied=copied;lobby_state.error=!copied;
+    }
+    bind_text(menu,"lc_room_code",shown.c_str());
+    enable(menu,"lc_copy_code",bool(code_value));
+    for(unsigned i=0;i<4;++i) {
+        const auto prefix="lc_p"+std::to_string(i+1)+"_";
+        const bool member=valid && i<view.count;
+        hide(menu,(prefix+"card").c_str(),!member);
+        for(const auto* field:{"empty","empty_title","empty_help","empty_plus"}) hide(menu,(prefix+field).c_str(),member);
+        for(const auto* field:{"name","slot","hero_fallback"}) hide(menu,(prefix+field).c_str(),!member);
+        if(!member) {
+            for(const auto* field:{"ready","not_ready","host","you","ping","ms","measuring","same_build","checking_build","selected"})
+                hide(menu,(prefix+field).c_str(),true);
+            continue;
+        }
+        const auto safe=display(view.names[i],31);
+        // The native picker renders its existing pool row. Replace only the
+        // bounded text payload with the same allowlisted name; row ownership,
+        // value/index/selection and pool counts are untouched. No format codes.
+        auto* row=const_cast<char*>(at<const char*(__thiscall*)(void*,int)>(0x5bfcd0)(item(menu,"text_playername1"),int(i)));
+        if(row && std::memcmp(row,safe.c_str(),safe.size()+1)) std::memcpy(row,safe.c_str(),safe.size()+1);
+        bind_text(menu,(prefix+"name").c_str(),safe.c_str());
+        bind_text(menu,(prefix+"slot").c_str(),("P"+std::to_string(i+1)).c_str());
+        hide(menu,(prefix+"ready").c_str(),!view.ready[i]);
+        hide(menu,(prefix+"not_ready").c_str(),view.ready[i]);
+        hide(menu,(prefix+"host").c_str(),!view.host[i]);
+        hide(menu,(prefix+"hero_fallback").c_str(),false);
+        hide(menu,(prefix+"you").c_str(),view.ids[i]!=view.local);
+        const lobby_fixture::member* data=nullptr;
+        if(fixture) for(unsigned j=0;j<extra.count;++j) if(extra.members[j].native_index==view.ids[i]) {
+            if(data) { data=nullptr;break; }data=&extra.members[j];
+        }
+        const bool measured=data && data->ping_ms>=0 && data->ping_ms<=60000 && view.ids[i]!=view.local;
+        bind_text(menu,(prefix+"ping").c_str(),measured ? std::to_string(data->ping_ms).c_str() : "");
+        hide(menu,(prefix+"ping").c_str(),!measured);
+        hide(menu,(prefix+"ms").c_str(),!measured);
+        hide(menu,(prefix+"measuring").c_str(),measured || view.ids[i]==view.local);
+        hide(menu,(prefix+"same_build").c_str(),!data || !data->same_build);
+        hide(menu,(prefix+"checking_build").c_str(),data && data->same_build);
+        const bool picked=which(menu)==screen::lobby_host && *reinterpret_cast<int*>(static_cast<char*>(menu)+0x1960)==1 && int(i)==view.selected;
+        hide(menu,(prefix+"selected").c_str(),!picked);
+    }
+    bind_text(menu,"lc_ready_count",std::to_string(valid ? view.ready_count : 0).c_str());
+    bind_text(menu,"lc_member_count",std::to_string(valid ? view.count : 0).c_str());
+    unsigned waiting=0;while(waiting<view.count && view.ready[waiting]) ++waiting;
+    bind_text(menu,"lc_waiting_name",valid && waiting<view.count ? display(view.names[waiting],31).c_str() : "");
+    hide(menu,"lc_ready_waiting",!valid || waiting==view.count);
+    hide(menu,"lc_ready_all",!valid || waiting!=view.count || view.count==1);
+    hide(menu,"lc_ready_solo",!valid || view.count!=1 || waiting!=view.count);
+    hide(menu,"lc_leave_confirm",!lobby_state.confirm);
+    hide(menu,"lc_lobby_error",!lobby_state.error);
+    hide(menu,"lc_code_copied",!lobby_state.copied);
+    for(const auto* button:{"lc_leave_yes","lc_leave_cancel","lc_lobby_dismiss"}) {
+        const bool visible=std::strcmp(button,"lc_lobby_dismiss")==0 ?
+            (lobby_state.error || lobby_state.copied) && !lobby_state.confirm : lobby_state.confirm;
+        hide(menu,button,!visible);enable(menu,button,visible);
+    }
+    if(lobby_state.focus_confirm) {
+        lobby_state.focus_confirm=false;
+        at<void(__thiscall*)(void*,const char*,bool)>(0x5adf40)(menu,"lc_leave_cancel",true);
+    }
+    const bool picker=host && *reinterpret_cast<int*>(static_cast<char*>(menu)+0x1960)==1;
+    // Geometry is LC-owned; this is the original, visible native picker.
+    for(const auto* name:{"text_playername1","text_readycheck1"}) {
+        auto* list=item(menu,name);const bool hidden=std::strcmp(name,"text_playername1") || !picker || !valid;
+        if(list && bool(static_cast<unsigned char*>(list)[0x54]&4)!=hidden) hide_native(menu,name,hidden);
+    }
+    if(host && !picker && !static_cast<unsigned char*>(menu)[0x1970]) {
+        const auto minimum=*reinterpret_cast<const unsigned char*>(0x5bae37); // existing rule 26 owns this byte
+        const bool authority=at<bool(__thiscall*)(void*)>(0x610d10)(at<getter>(0x612be0)());
+        const bool allowed=valid && authority && view.count>=minimum && view.ready_count==view.count &&
+            !lobby_state.confirm && static_cast<unsigned char*>(menu)[0x195c] &&
+            *reinterpret_cast<int*>(static_cast<char*>(menu)+0x1960)==0;
+        // Native roster/mode callbacks can alter this flag behind our cache.
+        // Read the native item each frame, and write only a real difference.
+        auto* start=item(menu,"text_startgame");
+        if(start && bool(static_cast<unsigned char*>(start)[0x54]&8)!=allowed)
+            enable_native(menu,"text_startgame",allowed);
+    }
+    const auto local=std::find(std::begin(view.ids),std::begin(view.ids)+view.count,view.local);
+    const auto local_row=unsigned(local-std::begin(view.ids));
+    const bool local_ready=valid && local_row<view.count && view.ready[local_row];
+    const auto self=valid && local_row<view.count ? display(view.names[local_row],31) : std::string();
+    bind_text(menu,"lc_self_name",self.c_str());
+    bind_text(menu,"lc_self_initial",self.empty() ? "" : self.substr(0,1).c_str());
+    hide(menu,"lc_self_hosting",!host);
+    hide(menu,"lc_self_joined",host || local_ready);
+    hide(menu,"lc_self_ready",host || !local_ready);
+    hide(menu,"lc_guest_unready",host || !local_ready);
+    hide(menu,"lc_guest_leave",host || local_ready);
+
+}
+void lobby_tick(void* menu,unsigned original,bool& called) {
+    if(!lobby_live(menu) || current()!=menu || !(static_cast<unsigned char*>(menu)[4]&1)) {
+        called=true;at<tick_fn>(original)(menu);return;
+    }
+    if(lobby_state.owner!=menu) { lobby_state.reset(menu);bindings.clear();pending.clear(); }
+    lobby_view before{};const bool valid=read_lobby(menu,before);
+    const bool host=which(menu)==screen::lobby_host;
+    if(host && !lobby_state.leave_authorized && *reinterpret_cast<int*>(static_cast<char*>(menu)+0x1960)==2) {
+        // Mouse/help/Back can request Leave before this tick begins as well.
+        // Only a confirmed, same-activation request may enter native shutdown.
+        *reinterpret_cast<int*>(static_cast<char*>(menu)+0x1960)=0;
+        lobby_state.confirm=lobby_state.focus_confirm=true;
+    }
+    const bool picker=host && *reinterpret_cast<int*>(static_cast<char*>(menu)+0x1960)==1;
+    const bool bad_target=picker && (before.selected<0 || unsigned(before.selected)>=before.count || before.ids[before.selected]==before.local);
+    const bool panel=lobby_state.confirm;
+    const auto input=at<unsigned(__thiscall*)(void*)>(0x5d4b00)(manager());
+    if(!(input&0x400010) && !lobby_state.copy_keyboard) lobby_state.copy_block=false;
+    if(input&0x400000) {
+        if(!lobby_state.copy_held) pending.post(int(intent::copy_code),reinterpret_cast<std::uintptr_t>(menu),which(menu));
+        lobby_state.copy_held=true;
+    } else lobby_state.copy_held=false;
+    const bool tool=pending.action!=0;
+    if(pending.action==int(intent::copy_code) || lobby_state.copy_held || lobby_state.copy_keyboard) lobby_state.copy_block=true;
+    role_accept=false;
+    if(input&0x1000000) {
+        if(!lobby_state.role_held && valid && !picker && !panel && !tool && static_cast<unsigned char*>(menu)[0x195c] &&
+            !(host ? static_cast<unsigned char*>(menu)[0x1970] : static_cast<unsigned char*>(menu)[0x196c])) {
+            bool local_ready=false;
+            for(unsigned i=0;i<before.count;++i) if(before.ids[i]==before.local) local_ready=before.ready[i];
+            const auto* target=host ? "text_kickplayer" : local_ready ? "text_leaveroom" : "text_readygame";
+            at<void(__thiscall*)(void*,const char*,bool)>(0x5adf40)(menu,target,true);
+            role_accept=true;
+        }
+        lobby_state.role_held=true;
+    } else lobby_state.role_held=false;
+    suppress_lobby_action=!valid || (bad_target && !(input&0x200000)) || panel || tool;
+    struct input_scope {
+        std::uint64_t generation;
+        ~input_scope() { lobby_ticking=suppress_lobby_action=role_accept=false; }
+    } restore{lobby_state.generation};
+    input_generation=lobby_state.generation;lobby_ticking=true;called=true;
+    at<tick_fn>(original)(menu); // exactly once; transfer/callback state remains native
+    lobby_ticking=false;
+    if(lobby_state.generation!=restore.generation) return;
+    if(current()!=menu) { lobby_state.reset();bindings.clear();pending.clear();return; }
+    if(!valid || (bad_target && (input&0x1100110))) lobby_state.error=true;
+    if(host && !panel && *reinterpret_cast<int*>(static_cast<char*>(menu)+0x1960)==2) {
+        *reinterpret_cast<int*>(static_cast<char*>(menu)+0x1960)=0;
+        lobby_state.confirm=true;
+        lobby_state.focus_confirm=true;
+    }
+    lobby_view after{};const bool usable=read_lobby(menu,after);
+    bind_lobby(menu,after,usable);
+}
+void lobby_frame(void* menu,unsigned original) noexcept {
+    bool called=false;
+    if(!input_thread("lobby tick",false)) { at<tick_fn>(original)(menu);return; }
+    try { lobby_tick(menu,original,called); }
+    catch(...) {
+        pending.clear();bindings.clear();lobby_state.error=true;
+        logger::write("online menus: lobby field update threw; frame contained");
+        if(!called) at<tick_fn>(original)(menu);
+    }
+}
+void __fastcall host_tick(void* menu,void*) { lobby_frame(menu,0x5bacd0); }
+void __fastcall join_tick(void* menu,void*) { lobby_frame(menu,0x5c8840); }
+using activate_fn=void(__thiscall*)(void*,int);
+void lobby_activate(void* menu,int argument,unsigned original) {
+    lobby_state.reset(menu);bindings.clear();pending.clear();
+    if(lobby_live(menu) && !lobby_lists(menu)) {
+        // The retail activator dereferences both lists without checking. Fail
+        // before it installs callbacks or touches a participant/list pool.
+        lobby_state.error=true;hide_native(menu,"lc_lobby_error",false);
+        logger::write("online menus: lobby skin missing native LISTBOX; activation refused");return;
+    }
+    at<activate_fn>(original)(menu,argument);
+    if(lobby_live(menu)) {
+        try {
+            lobby_view view{};const bool valid=read_lobby(menu,view);
+            bind_lobby(menu,view,valid); // sanitize the picker before its first render
+        } catch(...) {
+            pending.clear();bindings.clear();lobby_state.error=true;
+            logger::write("online menus: lobby activation fields threw; native activation retained");
+        }
+    }
+}
+void __fastcall host_activate(void* menu,void*,int arg) { lobby_activate(menu,arg,0x5ba870); }
+void __fastcall join_activate(void* menu,void*,int arg) { lobby_activate(menu,arg,0x5c8590); }
+int lobby_back(void* menu,unsigned original) {
+    if(lobby_live(menu) && lobby_state.owner==menu &&
+        (lobby_state.confirm || lobby_state.error || lobby_state.copied)) {
+        lobby_state.confirm=lobby_state.error=lobby_state.copied=false;pending.clear();
+        restore_lobby_focus(menu);
+        if(lobby_ticking) suppress_lobby_action=true;
+        return 2;
+    }
+    return at<int(__thiscall*)(void*)>(original)(menu);
+}
+int __fastcall host_back(void* menu,void*) { return lobby_back(menu,0x5aaff0); }
+int __fastcall join_back(void* menu,void*) { return lobby_back(menu,0x5c8c60); }
+void lobby_deactivate(void* menu,unsigned original) {
+    if(lobby_state.owner==menu) { lobby_state.reset();bindings.clear();pending.clear(); }
+    at<tick_fn>(original)(menu);
+}
+void __fastcall host_deactivate(void* menu,void*) { lobby_deactivate(menu,0x5ba280); }
+void __fastcall join_deactivate(void* menu,void*) { lobby_deactivate(menu,0x5c8070); }
 void show_notice(void* menu) {
     // Builder-owned localized text. Only visibility, never English replacement.
     constexpr const char* notices[]{"lc_notice_unavailable","lc_notice_resolving","lc_notice_fixture",
         "lc_notice_paste_invalid","lc_notice_code_invalid","lc_notice_name_invalid",
-        "lc_notice_profile_save","lc_notice_name_open"};
+        "lc_notice_profile_save","lc_notice_name_open","lc_notice_recent_save"};
     bool found=false;
     for(const auto* item:notices) {
         const bool selected=error_visible && feedback==item;
@@ -423,48 +885,29 @@ void show_notice(void* menu) {
 }
 bool begin_name() {
     if(!name_edit.begin(local_name)) return false;
-    error_visible=false; feedback.clear(); name_requested_at=now_ms();
-    auto* request=at<getter>(0x60c7e0)();
-    if(at<bool(__thiscall*)(void*)>(0x60b960)(request))
-        at<const char*(__thiscall*)(void*)>(0x60c780)(request); // stale, any tag
-    at<select_fn>(0x60b990)(request,0);
-    at<select_fn>(0x60b970)(request,31);
-    at<name_fn>(0x60c6e0)(request,name_edit.seed.data());
-    at<name_fn>(0x60c710)(request,name_edit.title.data());
-    at<request_fn>(0x5d5db0)(manager(),"text_entry",nullptr);
+    error_visible=false;feedback.clear();name_requested_at=now_ms();
+    name_io io;
+    if(!name_native(name_operation::begin,io)) { name_fault();return false; }
     return true;
 }
 void poll_name() {
     if(!name_edit.owned) return;
-    // Request is queued: an unchanged Hub before its close is NOT a cancelled
-    // keyboard. The close hook records departure, even across address reuse.
     if(!name_edit.departed) {
-        if(now_ms()-name_requested_at>5000) { abandon_name(); message("lc_notice_name_open"); }
+        if(now_ms()-name_requested_at>5000) { abandon_name();message("lc_notice_name_open"); }
         return;
     }
-    // Hub return is the ownership boundary. Never steal another menu's result.
-    auto* request=at<getter>(0x60c7e0)();
-    const bool result=at<bool(__thiscall*)(void*)>(0x60b960)(request);
-    const int tag=at<int(__thiscall*)(void*)>(0x60b9a0)(request);
-    std::array<char,256> copy{};
-    if(result && tag==0) {
-        const auto* text=at<const char*(__thiscall*)(void*)>(0x60c780)(request);
-        std::memcpy(copy.data(),text,copy.size());
+    name_io io;
+    if(!name_native(name_operation::poll,io)) { name_fault();return; }
+    if(io.result && io.tag==0) {
+        const auto end=std::find(std::begin(io.copy),std::end(io.copy),char(0));
+        if(end==std::end(io.copy) || !valid_name({io.copy,std::size_t(end-io.copy)})) message("lc_notice_name_invalid");
     }
-    if(result && tag==0) {
-        const auto end=std::find(copy.begin(),copy.end(),char(0));
-        if(end==copy.end() || !valid_name({copy.data(),std::size_t(end-copy.begin())}))
-            message("lc_notice_name_invalid");
-    }
-    if(!result && tag==0) at<select_fn>(0x60b990)(request,4);
-    const auto value=name_edit.finish(result ? tag : 4,copy.data(),copy.size());
+    const auto value=name_edit.finish(io.result ? io.tag : 4,io.copy,sizeof(io.copy));
     if(!value) return;
-    // Same native side effects as ONLINE_MENU Ready. No 32-byte truncation.
-    at<name_fn>(0x610d80)(at<getter>(0x612be0)(),value->c_str());
-    at<name_fn>(0x48f3f0)(at<getter>(0x48fed0)(),value->c_str());
-    const bool saved=at<command_fn>(0x55beb0)(at<getter>(0x55c890)(),"runscript saveloadProcess(2)");
+    io.accepted=value->c_str();
+    if(!name_native(name_operation::apply,io)) { name_fault();return; }
     std::memcpy(local_name,value->c_str(),value->size()+1);
-    if(!saved) message("lc_notice_profile_save");
+    if(!io.saved) message("lc_notice_profile_save");
 }
 // Base Back slot is scoped; native menus retain their original handler.
 // All paths (pad, keyboard, clickable MENU_BACK) enter the same single mailbox.
@@ -486,6 +929,22 @@ void schedule_fixture(bool retry=false) {
     const auto ticket=code.resolve(retry);
     if(ticket) { fixture_ticket=ticket; fixture_code=code.text; message("lc_notice_resolving"); }
 }
+void code_input(int value) {
+    switch(static_cast<intent>(value)) {
+    case intent::paste: {
+        clipboard_api api;const auto text=read_clipboard(api);
+        if(text) { code.replace(*text);error_visible=false; }
+        else message("lc_notice_paste_invalid");
+    } break;
+    case intent::erase: code.erase();error_visible=false;break;
+    case intent::clear: code.replace("");error_visible=false;break;
+    case intent::done: schedule_fixture(true);break;
+    case intent::invalid_key: message("lc_notice_code_invalid");break;
+    default:
+        if(value>=32 && value<=62) { code.append(alphabet[value-32]);error_visible=false; }
+        break;
+    }
+}
 void tick_impl(void* menu,bool& native_called) {
     if(ready && live(menu)) {
         // The native mask is rising-edge input (controller +2f8 XOR +374).
@@ -493,7 +952,7 @@ void tick_impl(void* menu,bool& native_called) {
         const auto mask=input_mask();
         if(!(mask&0x200000)) back_held=false;
         const auto s=which(menu);
-        if(!pending.action) {
+        if(!pending.action && !keyboard_input.count) {
             int shortcut=0;
             if(s==screen::code) {
                 if(mask&0x400000) shortcut=int(intent::paste); // MENU_NEXT (Y)
@@ -509,18 +968,25 @@ void tick_impl(void* menu,bool& native_called) {
     native_called=true;
     at<tick_fn>(0x5aaeb0)(menu);
     if(tick_fault) tick_fault();
-    if(!ready || !live(menu)) { pending.clear(); return; }
+    if(!ready || !live(menu)) { pending.clear();keyboard_input.clear();return; }
     const auto s=which(menu);
     if(s==screen::hub) entry.clear();
     load_recent();
     if(s==screen::hub) poll_name();
     else abandon_name();
-    if(s==screen::code && !code.active) code.open();
+    if(s==screen::code && !code.active) {
+        code.open();
+        if(rejoin_seed) { code.replace(*rejoin_seed);rejoin_seed.reset(); }
+    }
     if(s!=screen::code && code.active) { code.close(); fixture_ticket=0; }
     const auto completed_ticket=fixture_ticket;
     const auto completed_code=fixture_code;
     fixture_ticket=0;
     const auto action=static_cast<intent>(pending.take(reinterpret_cast<std::uintptr_t>(menu),s));
+    if(s==screen::hub && int(action) && action!=intent::rejoin) rejoin_seed.reset();
+    if(s==screen::code && action!=intent::back && keyboard_input.source==reinterpret_cast<std::uintptr_t>(menu))
+        for(unsigned i=0;i<keyboard_input.count;++i) code_input(keyboard_input.values[i]);
+    keyboard_input.clear();
     const char* destination=nullptr;
     switch(action) {
     case intent::host: if(s==screen::hub) destination="lc_host"; break;
@@ -532,18 +998,11 @@ void tick_impl(void* menu,bool& native_called) {
         else destination=s==screen::hub ? "main" : "lc_online";
         break;
     case intent::edit_name: if(s==screen::hub && begin_name()) return; break;
-    case intent::paste: if(s==screen::code) {
-        clipboard_api api; const auto value=read_clipboard(api);
-        if(value) { code.replace(*value); error_visible=false; }
-        else message("lc_notice_paste_invalid");
-    } break;
-    case intent::erase: if(s==screen::code) { code.erase(); error_visible=false; } break;
-    case intent::clear: if(s==screen::code) { code.replace(""); error_visible=false; } break;
-    case intent::done: if(s==screen::code) schedule_fixture(true); break;
+    case intent::paste: case intent::erase: case intent::clear: case intent::done: case intent::invalid_key:
+        if(s==screen::code) code_input(int(action));break;
     case intent::rejoin: if(s==screen::hub && recent) {
-        code.open(); code.replace(recent->code); destination="lc_code";
+        rejoin_seed=recent->code;destination="lc_code";
     } break;
-    case intent::invalid_key: if(s==screen::code) message("lc_notice_code_invalid"); break;
     case intent::unavailable: message("lc_notice_unavailable"); break;
     case intent::dismiss: error_visible=false; break;
     default:
@@ -554,13 +1013,13 @@ void tick_impl(void* menu,bool& native_called) {
     }
     // Apply this tick's edit/cancel BEFORE accepting a prior completion.
     if(completed_ticket && code.complete(completed_ticket) && completed_code==code.text && s==screen::code && !destination) {
-        remember_fixture(); message("lc_notice_fixture");
+        message(remember_fixture() ? "lc_notice_fixture" : "lc_notice_recent_save");
     }
     if(s==screen::code) schedule_fixture();
     if(destination) {
         if(s==screen::code) { code.close(); fixture_ticket=0; }
-        name_edit.owned=false;
-        pending.clear(); error_visible=false; accepted=-1;
+        pending.clear();keyboard_input.clear();error_visible=false;accepted=-1;
+        if(!abandon_name()) { show_notice(menu);return; }
         // Original manager request deliberately bypasses our Online interception:
         // Other ways opens the full native name/profile/Host/Join chain.
         at<request_fn>(0x5d5db0)(manager(),destination,nullptr);
@@ -593,9 +1052,10 @@ void tick_impl(void* menu,bool& native_called) {
 }
 void __fastcall tick(void* menu,void*) {
     bool native_called=false;
+    if(!input_thread("tick",false)) { at<tick_fn>(0x5aaeb0)(menu);return; }
     try { tick_impl(menu,native_called); }
     catch(...) {
-        pending.clear();++code.generation;code.submitted=code.generation;fixture_ticket=0;bindings.clear();
+        pending.clear();keyboard_input.clear();++code.generation;code.submitted=code.generation;fixture_ticket=0;bindings.clear();
         feedback.clear();error_visible=true;
         logger::write("online menus: UI update threw; frame contained");
         if(!native_called) {
@@ -606,7 +1066,7 @@ void __fastcall tick(void* menu,void*) {
 }
 void deactivate_state(void* menu,bool departure) {
     if(bindings.menu==reinterpret_cast<std::uintptr_t>(menu)) bindings.clear();
-    pending.clear();
+    pending.clear();keyboard_input.clear();
     const auto s=which(menu);
     // +48 is resource cleanup and may run while constructing a noncurrent
     // cached menu. Only real +1c deactivation owns a requested Hub departure.
@@ -624,29 +1084,45 @@ std::uint32_t __fastcall close(void* menu,void*) {
 }
 
 void keyboard(unsigned char* state) {
-    if(!ready) return;
-    if(!state) { keyboard_edges.reset(); return; }
-    // Sample outside Code too: keys held through entry are ignored, while a
-    // fresh first key after entry is not lost to a new-menu priming frame.
+    if(!ready || !input_thread("keyboard",true)) return;
+    if(!game_thread.load()) return; // no frontend/input model work before the first game tick
+    if(!state) { keyboard_edges.reset();keyboard_input.clear();lobby_state.copy_keyboard=false;return; }
     const auto edges=keyboard_edges.sample(state);
-    auto* menu=current();
-    if(!live(menu) || which(menu)!=screen::code) return;
+    // DirectInput can poll before frontend creation. Never invoke the lazy
+    // 0x5d8920 getter here; even validation must use the already-published cell.
+    auto* menu=current_peek();
+    if(!menu) return;
+    const auto s=which(menu);
+    if(!custom(s) && !lobby_live(menu)) return;
     const auto address=reinterpret_cast<std::uintptr_t>(menu);
     const bool control=(state[0x1d]|state[0x9d])&0x80;
-    const bool shift=(state[0x2a]|state[0x36])&0x80;
-    int action=0;
-    if(control && edges[0x2f]) action=int(intent::paste); // Ctrl+V
-    else if(edges[0xd3]) action=int(shift ? intent::clear : intent::erase);
-    else if(edges[0x0e]) action=int(intent::erase); // Backspace
-    else if(edges[0x1c] || edges[0x9c]) action=int(intent::done);
-    else if(!control) {
-        constexpr unsigned char scans[]{0x1e,0x30,0x2e,0x20,0x12,0x21,0x22,0x23,0x24,0x25,0x32,0x31,0x19,0x10,0x13,0x1f,0x14,0x16,0x2f,0x11,0x2d,0x15,0x2c,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a};
-        for(unsigned i=0;i<31;++i) if(edges[scans[i]]) { action=32+i; break; }
-        for(unsigned i:{0x0bu,0x18u,0x02u,0x17u,0x26u}) if(edges[i]) action=int(intent::invalid_key);
+    const bool alt=(state[0x38]|state[0xb8])&0x80;
+    if(lobby(s)) {
+        lobby_state.copy_keyboard=!alt && control && (state[0x2e]&0x80);
+        if(!alt && control && edges[0x2e]) pending.post(int(intent::copy_code),address,s);
+        if(!alt && control) state[0x2e]=0;
+        return;
     }
-    if(action) pending.post(action,address,screen::code);
-    // Enter is Done, never also accepts the focused grid cell. These keys
-    // are reserved for Code tools only while the Code menu owns keyboard input.
+    if(s!=screen::code || alt) return;
+    const bool shift=(state[0x2a]|state[0x36])&0x80;
+    auto post=[&](int value) { keyboard_input.push(address,value); };
+    if(control) {
+        if(edges[0x2f]) post(int(intent::paste));
+    } else if(edges[0xd3]) post(int(shift ? intent::clear : intent::erase));
+    else if(edges[0x0e]) post(int(intent::erase));
+    else {
+        bool valid=false,invalid=false;
+        constexpr unsigned char scans[]{0x1e,0x30,0x2e,0x20,0x12,0x21,0x22,0x23,0x24,0x25,0x32,0x31,0x19,0x10,0x13,0x1f,0x14,0x16,0x2f,0x11,0x2d,0x15,0x2c,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a};
+        constexpr unsigned char numpad[]{0x50,0x51,0x4b,0x4c,0x4d,0x47,0x48,0x49};
+        for(unsigned scan=0;scan<256;++scan) if(edges[scan]) {
+            for(unsigned i=0;i<31;++i) if(scans[i]==scan) { post(32+i);valid=true; }
+            for(unsigned i=0;i<8;++i) if(numpad[i]==scan) { post(32+23+i);valid=true; }
+            for(unsigned bad:{0x0bu,0x18u,0x02u,0x17u,0x26u,0x52u,0x4fu}) if(bad==scan) invalid=true;
+        }
+        const bool done=edges[0x1c] || edges[0x9c];
+        if(done) post(int(intent::done));
+        else if(invalid && !valid) post(int(intent::invalid_key));
+    }
     state[0x1c]=state[0x9c]=state[0x0e]=state[0xd3]=0;
 }
 
@@ -671,6 +1147,18 @@ patch_transaction::contribution contribution() {
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&on_back)),0,"scoped base Back"));
     c.writes.push_back(patch_transaction::relocation(0x5bc3d0,"e8",true,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&queue_stub)),0,"authored usecmd intent boundary"));
+    const std::pair<unsigned,const void*> lobby_hooks[]{
+        {0x69f284,reinterpret_cast<const void*>(&host_activate)},
+        {0x69f350,reinterpret_cast<const void*>(&join_activate)},
+        {0x69f290,reinterpret_cast<const void*>(&host_deactivate)},
+        {0x69f358,reinterpret_cast<const void*>(&join_deactivate)},
+        {0x69f2a0,reinterpret_cast<const void*>(&host_back)},
+        {0x69f368,reinterpret_cast<const void*>(&join_back)},
+        {0x69f2ac,reinterpret_cast<const void*>(&host_tick)},
+        {0x69f374,reinterpret_cast<const void*>(&join_tick)},
+        {0x6a24ac,reinterpret_cast<const void*>(&lobby_input)}};
+    for(const auto& hook:lobby_hooks) c.writes.push_back(patch_transaction::relocation(hook.first,"",false,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(hook.second)),0,"native lobby adapter"));
     return c;
 }
 void install(HMODULE game,const install_hooks* hooks) {
@@ -682,6 +1170,7 @@ void install(HMODULE game,const install_hooks* hooks) {
     if(hooks) {
         if(hooks->clock) clock_source=hooks->clock;
         request_fault=hooks->before_request;tick_fault=hooks->before_tick;
+        lobby_fields=hooks->lobby_fields;
     }
     patch_transaction::transaction tx;
     tx.add(contribution());
@@ -698,6 +1187,6 @@ void install(HMODULE game,const install_hooks* hooks) {
         game_version::refuse_startup(); return;
     }
     ready=true;
-    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 7 hooks committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s",script_functions::capacity(),input_capability);
+    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 16 hooks committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s",script_functions::capacity(),input_capability,lobby_capability);
 }
 }

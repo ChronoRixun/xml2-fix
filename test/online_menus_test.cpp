@@ -25,6 +25,13 @@ int capacity=1024;
 DWORD ticks=10000;
 unsigned asset_generation=1;
 int root_reads=0,asset_throw=0,request_throw=0,tick_throw=0,native_ticks=0;
+int manager_reads=0,name_fault_stage=0,name_bad_object=0;
+void name_fault_at(int stage) {
+    if(name_fault_stage==stage) { name_fault_stage=0;RaiseException(EXCEPTION_ACCESS_VIOLATION,0,0,nullptr); }
+}
+bool back_in_base=false;
+void (*base_mutation)()=nullptr;
+int (__fastcall* lobby_back_callback)(void*,void*)=nullptr;
 bool missing_prompt=false,null_argument=false;
 DWORD clock_stub() { return ticks; }
 void throw_fault(int kind) {
@@ -37,18 +44,25 @@ void fail_registration() { script_function_overflow::table().reset(0); }
 std::filesystem::path root;
 std::vector<std::string> calls;
 std::map<std::string,std::string> texts;
+std::map<std::string,std::string> once_logs;
 unsigned text_writes=0,hide_writes=0,enable_writes=0;
 bool hidden=true;
 std::map<std::string,bool> enabled_items;
-void __fastcall enable_stub(void*,void*,const char* name,bool value) { ++enable_writes;enabled_items[name]=value; }
+std::array<unsigned char,0xb0> start_item{};
+void __fastcall enable_stub(void*,void*,const char* name,bool value) {
+    ++enable_writes;enabled_items[name]=value;
+    if(std::string_view(name)=="text_startgame") start_item[0x54]=value ? 8 : 0;
+}
 unsigned mask=0;
 unsigned __fastcall mask_stub(void*,void*) { return mask; }
 std::vector<unsigned char> mgr(0xb0000),input(0x100);
 std::array<unsigned char,0x1a00> main_menu{},hub{},child{};
 std::array<unsigned char,0xb0> text_item{};
+std::array<unsigned char,0x100> lobby_names{},lobby_checks{};
+bool missing_list=false,missing_ready_list=false,lobby_marker=true;
 void put(void* p,unsigned off,std::uint32_t value) { std::memcpy(static_cast<char*>(p)+off,&value,4); }
 void set_current(void* menu) { *reinterpret_cast<void**>(mgr.data()+0x86090)=menu; }
-void* __cdecl manager_stub() { return mgr.data(); }
+void* __cdecl manager_stub() { ++manager_reads;return mgr.data(); }
 void* __cdecl seats_stub() { return reinterpret_cast<void*>(0x72c4f0); }
 void* __cdecl network_stub() { return reinterpret_cast<void*>(0xa3df68); }
 void* __cdecl session_stub() { return reinterpret_cast<void*>(0xa53058); }
@@ -62,23 +76,46 @@ bool __fastcall network_init(void*,void*) { return step("network"); }
 bool __fastcall session_init(void*,void*) { return step("session"); }
 bool __fastcall campaign_init(void*,void*) { return step("campaign"); }
 void __fastcall mode_stub(void*,void*,int n) { assert(n==1);calls.push_back("mode"); }
-void __fastcall name_stub(void*,void*,const char* s) { assert(valid_name(s));calls.push_back("name"); }
-void __fastcall profile_name_stub(void*,void*,const char* s) { assert(valid_name(s));calls.push_back("profile"); }
+void __fastcall name_stub(void*,void*,const char* s) { name_fault_at(9);assert(valid_name(s));calls.push_back("name"); }
+void __fastcall profile_name_stub(void*,void*,const char* s) { name_fault_at(10);assert(valid_name(s));calls.push_back("profile"); }
 bool __fastcall command_stub(void*,void*,const char* s) {
-    assert(std::string_view(s)=="runscript saveloadProcess(2)");return step("persist");
+    name_fault_at(11);assert(std::string_view(s)=="runscript saveloadProcess(2)");return step("persist");
 }
 bool __fastcall queue_stub(void*,void*,const char* s) { calls.push_back(std::string("queue:")+s);return false; }
-void __fastcall request_stub(void*,void*,const char* name,const char*) { calls.push_back(std::string("request:")+name); }
+void __fastcall request_stub(void*,void*,const char* name,const char*) { if(std::string_view(name)=="text_entry") name_fault_at(12);calls.push_back(std::string("request:")+name); }
 void __fastcall deactivate_stub(void*,void*) { set_current(nullptr); }
-void __fastcall tick_stub(void*,void*) { ++native_ticks;if(close_during_tick) set_current(nullptr); }
+void __fastcall tick_stub(void* menu,void*) {
+    ++native_ticks;
+    if(base_mutation) base_mutation();
+    if(back_in_base) { assert(lobby_back_callback);lobby_back_callback(menu,nullptr); }
+    if(close_during_tick) set_current(nullptr);
+}
 std::uint32_t __fastcall close_stub(void*,void*) { set_current(nullptr);return 0x12345678; }
 void __cdecl text_stub(void*,const char* item,const char* format,...) {
-    ++text_writes;assert(std::string_view(format)=="%s");
+    ++text_writes;
+    if(mode.starts_with("r4-") && std::string_view(format)!="%s") {
+        assert(std::string_view(format)=="Unready" || std::string_view(format)=="Leave");texts[item]=format;return;
+    }
+    assert(std::string_view(format)=="%s");
     va_list args;va_start(args,format);texts[item]=va_arg(args,const char*);va_end(args);
 }
 std::map<std::string,bool> visibility;
-void __fastcall hide_stub(void*,void*,const char* item,bool value) { ++hide_writes;visibility[item]=value;if(std::string_view(item)=="lc_inline_error")hidden=value; }
-void* __fastcall item_stub(void*,void*,const char* name) { return missing_prompt && std::string_view(name)=="lc_online_continue" ? nullptr : text_item.data(); }
+void __fastcall hide_stub(void*,void*,const char* item,bool value) {
+    ++hide_writes;visibility[item]=value;if(std::string_view(item)=="lc_inline_error")hidden=value;
+    if(mode.starts_with("r4-")) {
+        auto* list=std::string_view(item)=="text_playername1" ? lobby_names.data() : std::string_view(item)=="text_readycheck1" ? lobby_checks.data() : nullptr;
+        if(list) list[0x54]=static_cast<unsigned char>((list[0x54]&~4) | (value ? 4 : 0));
+    }
+}
+void* __fastcall item_stub(void*,void*,const char* name) {
+    if(mode.starts_with("r4-")) {
+        if(std::string_view(name)=="lc_lobby_v1" && !lobby_marker) return nullptr;
+        if(std::string_view(name)=="text_playername1") return missing_list ? nullptr : lobby_names.data();
+        if(std::string_view(name)=="text_readycheck1") return missing_ready_list ? nullptr : lobby_checks.data();
+        if(std::string_view(name)=="text_startgame") return start_item.data();
+    }
+    return missing_prompt && std::string_view(name)=="lc_online_continue" ? nullptr : text_item.data();
+}
 std::array<unsigned,2> int_value{0x6905fc,0};
 void* __fastcall argument_stub(void*,void*,int i) { assert(i==0);return null_argument ? nullptr : int_value.data(); }
 void redirect(unsigned va,const void* function) {
@@ -135,23 +172,26 @@ std::array<char,256> native_seed{},native_result{};
 std::array<char,64> native_title{};
 bool native_ready=false;
 int native_tag=4,native_max=0,consumes=0;
-int request_object=0;
-void* __cdecl name_request_stub() { return &request_object; }
-bool __fastcall ready_stub(void*,void*) { return native_ready; }
-int __fastcall tag_stub(void*,void*) { return native_tag; }
-void __fastcall set_tag_stub(void*,void*,int n) { native_tag=n; }
-void __fastcall max_stub(void*,void*,int n) { native_max=n; }
+void* __cdecl name_request_stub() { name_fault_at(13);return name_bad_object==1 ? nullptr : reinterpret_cast<void*>(name_bad_object==2 ? 0xa3e16c : 0xa3e168); }
+bool __fastcall ready_stub(void*,void*) { name_fault_at(1);return native_ready; }
+int __fastcall tag_stub(void*,void*) { name_fault_at(2);return native_tag; }
+void __fastcall set_tag_stub(void*,void*,int n) { name_fault_at(3);native_tag=n; }
+void __fastcall max_stub(void*,void*,int n) { name_fault_at(4);native_max=n; }
 void __fastcall seed_stub(void*,void*,const char* p) {
+    name_fault_at(5);
     std::memcpy(native_seed.data(),p,256);
     const auto n=std::strlen(p); assert(n<=31);
     for(unsigned i=unsigned(n);i<256;++i) assert(p[i]==0);
 }
 void __fastcall title_stub(void*,void*,const char* p) {
+    name_fault_at(6);
     std::memcpy(native_title.data(),p,64);assert(std::string_view(p)=="Screen name");
     for(unsigned i=11;i<64;++i) assert(p[i]==0);
 }
 const char* __fastcall consume_stub(void*,void*) {
-    ++consumes;native_ready=false;native_tag=4;native_seed.fill(0);native_title.fill(0);return native_result.data();
+    name_fault_at(7);
+    const bool null_result=name_fault_stage==8;if(null_result) name_fault_stage=0;
+    ++consumes;native_ready=false;native_tag=4;native_seed.fill(0);native_title.fill(0);return null_result ? nullptr : native_result.data();
 }
 void result(std::string_view text,int tag=0) {
     native_result.fill(0);std::copy(text.begin(),text.end(),native_result.begin());native_ready=true;native_tag=tag;
@@ -169,8 +209,11 @@ void fake_services() {
     redirect(0x5ace30,deactivate_stub);redirect(0x5aaeb0,tick_stub);redirect(0x5af5a0,close_stub);redirect(0x5adcf0,text_stub);
     redirect(0x5ade70,enable_stub);redirect(0x5ade10,hide_stub);redirect(0x4d5830,argument_stub);
     redirect(0x5adc10,item_stub);put(text_item.data(),0,0x6a0244);
+    put(start_item.data(),0,0x6a0244);
     redirect(0x55c410,queue_stub);
     put(mgr.data(),0,0x6a236c);put(input.data(),0,0x69a134);
+    put(reinterpret_cast<void*>(0x8aff18),0,unsigned(reinterpret_cast<std::uintptr_t>(mgr.data())));
+    put(reinterpret_cast<void*>(0xa3e168),0,0x6a4730);
     put(reinterpret_cast<void*>(0x72c4f0),0,0x6898c4);
     put(reinterpret_cast<void*>(0xa53058),0,0x6a481c);
     put(reinterpret_cast<void*>(0x72c530),0,0x689994);
@@ -228,18 +271,18 @@ void import_stub(const char* name,void* replacement) {
     assert(false && "clipboard import missing");
 }
 std::vector<std::uint16_t> clip_data;
-bool clip_available=true,clip_lockable=true;
+bool clip_available=true,clip_lockable=true,clip_missing=false,clip_zero_size=false;
 SIZE_T clip_bytes=0;
 int clip_opened=0,clip_closed=0,clip_locked=0,clip_unlocked=0;
 BOOL WINAPI clip_open(HWND) { ++clip_opened;return clip_available; }
 BOOL WINAPI clip_close() { ++clip_closed;return TRUE; }
-HANDLE WINAPI clip_get(UINT format) { assert(format==CF_UNICODETEXT);return reinterpret_cast<HANDLE>(0x1234); }
-SIZE_T WINAPI clip_size(HGLOBAL h) { assert(h==reinterpret_cast<HANDLE>(0x1234));return clip_bytes ? clip_bytes : clip_data.size()*2; }
+HANDLE WINAPI clip_get(UINT format) { assert(format==CF_UNICODETEXT);return clip_missing ? nullptr : reinterpret_cast<HANDLE>(0x1234); }
+SIZE_T WINAPI clip_size(HGLOBAL h) { assert(h==reinterpret_cast<HANDLE>(0x1234));return clip_zero_size ? 0 : clip_bytes ? clip_bytes : clip_data.size()*2; }
 LPVOID WINAPI clip_lock(HGLOBAL h) { assert(h==reinterpret_cast<HANDLE>(0x1234));++clip_locked;return clip_lockable ? clip_data.data() : nullptr; }
 BOOL WINAPI clip_unlock(HGLOBAL h) { assert(h==reinterpret_cast<HANDLE>(0x1234));++clip_unlocked;return FALSE; }
 void clipboard_text(std::string_view s) {
     clip_data.clear();for(unsigned char ch:s)clip_data.push_back(ch);clip_data.push_back(0);
-    clip_available=clip_lockable=true;clip_bytes=0;clip_opened=clip_closed=clip_locked=clip_unlocked=0;
+    clip_available=clip_lockable=true;clip_missing=clip_zero_size=false;clip_bytes=0;clip_opened=clip_closed=clip_locked=clip_unlocked=0;
 }
 void fake_clipboard_imports() {
     import_stub("OpenClipboard",reinterpret_cast<void*>(&clip_open));import_stub("CloseClipboard",reinterpret_cast<void*>(&clip_close));
@@ -320,12 +363,21 @@ void rules() {
     assert(table.add(&entry)==script_functions_rules::added::added && table.find(function_name)==&entry);
     assert(!registration_fits(table,321));
 }
+#include "online_lobby_fixture.inl"
+#include "online_menus_followup.inl"
 }
 namespace ini { std::optional<std::string> text(const wchar_t*,const wchar_t*) {
     return mode=="off" ? std::nullopt : mode=="zero" ? std::optional<std::string>("0") : std::optional<std::string>("1");
 } }
 namespace script_functions { int capacity() { return ::capacity; } }
-namespace logger { void write(const char*,...) {} }
+namespace logger {
+void write(const char*,...) {}
+void write_once(std::string_view key,const char* format,...) {
+    if(once_logs.contains(std::string(key))) return;
+    char value[512]{};va_list args;va_start(args,format);std::vsnprintf(value,sizeof(value),format,args);va_end(args);
+    once_logs.emplace(key,value);
+}
+}
 namespace game_version { void refuse_startup() { fatal=true; } }
 namespace mod_loader {
 unsigned generation() { return assets ? asset_generation : 0u; }
@@ -371,6 +423,7 @@ int main(int argc,char** argv) {
     if(mode=="capacity") { ::capacity=320;overflow.reset(0); }
     online_menus::install_hooks install_hooks;
     install_hooks.clock=clock_stub;install_hooks.before_request=request_fault_stub;install_hooks.before_tick=tick_fault_stub;
+    if(mode.starts_with("r4-")) install_hooks.lobby_fields=lobby_fields_stub;
     patch_transaction::hooks transaction_hooks;
     if(mode=="install-retain") {
         const auto site=online_menus::contribution().writes.front().va;
@@ -397,7 +450,9 @@ int main(int argc,char** argv) {
     online_menus::install(reinterpret_cast<HMODULE>(0x400000));
     assert(overflow.count()==1 && std::memcmp(installed_image.data(),reinterpret_cast<void*>(0x401000),installed_image.size())==0);
     asset_files();fake_services();
+    if(mode.starts_with("r4-")) { lobby_tests(entry);return 0; }
     SetEnvironmentVariableW(L"LOCALAPPDATA",(root/L"local").c_str());
+    if(mode.starts_with("follow-")) follow_prepare();
     if(mode=="r3-load" || mode=="r3-load-invalid") {
         std::filesystem::create_directories(root/L"local/XML2 Fix/online");
         std::ofstream file(root/L"local/XML2 Fix/online/last-game.txt",std::ios::binary);
@@ -490,6 +545,7 @@ int main(int argc,char** argv) {
     set_current(hub.data());tick(hub.data(),nullptr);
     assert(texts["local_name"]==(mode=="name31" ? std::string(31,'a') : mode=="blank-name" ? "Player" : "100??????openmenu bad"));
     assert(texts["service"]=="Offline preview" && hidden);
+    if(mode.starts_with("follow-")) { follow_tests(entry);return 0; }
     assert(queue(nullptr,nullptr,"openmenu original"));assert(calls.back()=="queue:openmenu original");calls.pop_back();
     auto writes_before=text_writes;put(text_item.data(),0xa0,1);tick(hub.data(),nullptr);assert(text_writes==writes_before);put(text_item.data(),0xa0,0);
     writes_before=text_writes;hub[4]=0;tick(hub.data(),nullptr);assert(text_writes==writes_before);hub[4]=1;
@@ -502,7 +558,7 @@ int main(int argc,char** argv) {
     assert(text_writes==writes_before && calls==expected);close_during_tick=false;
     assert(close(hub.data(),nullptr)==0x12345678);set_current(hub.data());tick(hub.data(),nullptr);
     assert(calls==expected); // close invalidated the old intent, including reused address
-    set_current(main_menu.data());assert(queue(nullptr,nullptr,"runscript lcOnlineIntent(2)"));assert(calls==expected);set_current(hub.data());
+    set_current(main_menu.data());assert(queue(nullptr,nullptr,"runscript lcOnlineIntent(2)"));assert(calls.back()=="queue:runscript lcOnlineIntent(2)");calls.pop_back();assert(calls==expected);set_current(hub.data());
     post(int(intent::code));post(int(intent::host));tick(hub.data(),nullptr);assert(calls.back()=="request:lc_code");
     set_current(child.data());post(int(intent::back));tick(child.data(),nullptr);assert(calls.back()=="request:lc_online");
     set_current(hub.data());post(int(intent::other));tick(hub.data(),nullptr);assert(calls.back()=="request:online");
@@ -529,7 +585,7 @@ int main(int argc,char** argv) {
         null_argument=true;post(2);tick(hub.data(),nullptr);assert(calls.empty());null_argument=false;
         int_value[0]=0x12345678;post(2);tick(hub.data(),nullptr);assert(calls.empty());int_value[0]=0x6905fc;
         post(1);tick(hub.data(),nullptr);assert(calls.empty());
-        put(hub.data(),0,0x69f134);post(2);queue(nullptr,nullptr,"runscript lcOnlineIntent(2)");tick(hub.data(),nullptr);assert(calls.empty());put(hub.data(),0,0x69e41c);
+        put(hub.data(),0,0x69f134);post(2);queue(nullptr,nullptr,"runscript lcOnlineIntent(2)");tick(hub.data(),nullptr);assert(calls==std::vector<std::string>{"queue:runscript lcOnlineIntent(2)"});calls.clear();put(hub.data(),0,0x69e41c);
         const char* destinations[]{"lc_host","lc_code","lc_browse","online","main"};
         for(int value=2;value<=8;++value) {
             set_current(hub.data());const auto n=calls.size();const auto command="runscript lcOnlineIntent("+std::to_string(value)+")";
@@ -610,6 +666,7 @@ int main(int argc,char** argv) {
         post(39);tick(child.data(),nullptr);tick(child.data(),nullptr);
         assert(!visibility["lc_notice_fixture"]);
         std::ifstream saved(root/L"local/XML2 Fix/online/last-game.txt",std::ios::binary);std::string bytes((std::istreambuf_iterator<char>(saved)),{});assert(decode_recent(bytes)->code=="ABCDEFGH");
+        saved.close(); // release the Windows reader before the atomic replacement retry
         auto stamp=std::filesystem::last_write_time(root/L"local/XML2 Fix/online/last-game.txt");tick(child.data(),nullptr);tick(child.data(),nullptr);assert(std::filesystem::last_write_time(root/L"local/XML2 Fix/online/last-game.txt")==stamp);
         post(int(intent::done));tick(child.data(),nullptr);tick(child.data(),nullptr);assert(!visibility["lc_notice_fixture"]);
         close(child.data(),nullptr);set_current(hub.data());tick(hub.data(),nullptr);post(int(intent::rejoin));tick(hub.data(),nullptr);assert(calls.back()=="request:lc_code");set_current(child.data());tick(child.data(),nullptr);assert(texts["code_value"]=="ABCD-EFGH");

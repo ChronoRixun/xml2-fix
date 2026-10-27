@@ -1,10 +1,12 @@
-# Online menus: round 3 DLL bridge
+# Online menus: round 4 native lobby bridge
 
 This is a guarded presentation bridge, pending Claude review and real-game
 acceptance. Host fixtures do not establish fresh-boot stability, rendering or
 input parity. Round 3 adds owned native name polling, Code input/clipboard
 and local Rejoin storage. Resolve ends at an explicitly offline fixture response;
-no broker operation, native hosting/admission or lobby replacement is introduced.
+no broker operation or native hosting/admission is introduced. Round 4 adds
+opt-in presentation adapters around the real native host/join classes; they
+remain current and own their roster, callback, modes and actions.
 
 ## Runtime contract
 
@@ -438,3 +440,244 @@ effect. Test console/delayed `openmenu online`: missing assets use native entry;
 available assets show localized Press Accept; failed Hub open retries after
 2500 ms; unrelated popup closure never causes a second initialization. Include
 localized text retention and no repeated setter/intern churn in the real matrix.
+
+
+## Round 4: native lobby contract (fixture level)
+
+Require the additive DLL probe `lc-online-lobby/1` before authoring this skin.
+Retain native menu names/types `host` / `join`, vtables 0x69f274 / 0x69f33c.
+The invisible marker item `lc_lobby_v1` opts each parsed native skin into the
+adapter. Without it, native activation/tick/Back/deactivation forward unchanged.
+Both parsed `text_playername1` and `text_readycheck1` must be real LISTBOXes
+with backing tables. A marked skin missing either is refused before native
+activation dereferences it; the inline error stays in that menu. This negative
+case is a builder defect, never a substitute for preserving native dependencies.
+
+Actions stay on their native items. Start uses `text_startgame` through retail
+0x5bacd0, including role/readiness, the existing rule-26 minimum, image transfer
+0x6094f0 and new-game opcode 0x26/broadcast/start. Ready uses `text_readygame`
+through 0x5c8840 after admission; ready Leave/Back unreadies before any departure.
+Kick uses `text_kickplayer`, native state 1, selected row value/native lookup and
+0x6133a0. Host Leave/Back, including a state-2 request arriving before the tick, first
+opens an inline confirmation; Yes authorizes only this activation and sets native
+state 2 for the next native tick's 0x607c40(false). Join departure keeps its
+0x196e flag/deactivation/0x6097f0 lifecycle. The DLL never opens a base Party or
+Hub to implement a pregame confirmation, Copy feedback or error.
+
+Host X focuses the native Kick bar; guest X focuses Ready or, if ready, the
+native Unready bar. A fresh edge supplies native Accept only at that class
+tick's guarded mask read. Y is Copy; Ctrl+C is keyboard Copy. Copy enumerates only the calling thread's
+existing windows and requires this process's igWin32WindowClass owner; no window
+is created, activated or focused. Missing/foreign/wrong-class owners fail inline.
+A real non-NULL window owner is required by the
+[Win32 clipboard contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-emptyclipboard). Neither Copy path
+manufactures native Accept. A coincident Copy/Accept suppresses the native
+class action until Copy and Accept have both been released, including a held
+keyboard/pad chord. Base UI input still handles authored inline buttons. The
+manager mask hook filters only returns 0x5bad33 / 0x5c88d2 while this same menu
+and activation generation are ticking. All native menu/mode/wait/transfer flags
+remain untouched. Native ticks run once. Back dismisses inline state before
+native Back can act; otherwise it exits the Kick picker, unreadies a ready guest
+or intentionally leaves according to native state.
+
+Roster counts must agree, be 1..4, fit the shared 128-row pool, reference distinct
+live allocated slots, and carry unique native IDs resolving to records with the
+same ID. Picker selection must be in range and not local. Validation repeats
+AFTER base UI input, at the actual native action boundary, because base input
+can refresh/reselect rows. Native Start still repeats its own readiness/count
+checks. Extra fields never clear/add/select roster rows, change native IDs or
+allocate pooled rows. The DLL only replaces each native name-row text payload
+with the <=31-byte round-3 display allowlist, including its NUL, preserving the
+row object/value/index/selection/ownership. The replacement uses at most 31
+bytes of the native 83-byte text payload. Native measurement was done before
+this replacement; LC must keep fixed picker/card clipping and real-game
+verification must check glyph widths and selection/mouse bounds. Every card/self/waiting name
+uses that same allowlist and all dynamic setters pass literal `%s`.
+
+The optional `install_hooks::lobby_fields` provider exists only for offline host
+fixtures. Production passes no hooks, so room code is a placeholder, Copy is
+disabled, RTT is neutral/Measuring, build is Checking and hero is the localized
+fallback. Invented members are created by the host test's native service stubs,
+never by the production DLL. Extras match native IDs, not row order; broker-only
+members cannot become native rows or kick targets. Round 5 must supply a reviewed,
+generation-bound real room snapshot before claiming real code/build/RTT data.
+
+### LC authoring handoff: exact names, anchors and commands
+
+LC changes are owned by the font/menu agent, not this DLL round. Preserve every
+native action item, BOTH LISTBOXes and all original mode/wait/transfer items,
+`data_name`, `desctext1..5`, callbacks and focus/mouse geometry dependencies. Keep
+native action `usecmd` behavior: do not add a script command or close/open command
+to Start/Ready/Kick/Leave. Map their actual hit rectangles to 05-lobby's left,
+middle and right bars. Host middle = Kick player; guest middle = Ready. Guest
+left is a dim Host-only placeholder, with no native action. Native guest Leave
+text can be visually retired behind the localized overlay in the same action
+rectangle; the original item stays enabled/focused and owns the click. Authored
+`lc_guest_unready` / `lc_guest_leave` select UNREADY / LEAVE and the matching
+B hint, including each overlay's model/glyph as part of that node's scene.
+
+| Anchor in approved 05-lobby | Exact items / binding |
+|---|---|
+| Nonvisual capability | `lc_lobby_v1`, retained parsed marker item; no input, no visible text |
+| Top-right self header | DATA text `lc_self_name`, `lc_self_initial`; localized scene variants `lc_self_hosting`, `lc_self_joined`, `lc_self_ready` |
+| Room code region | DATA `lc_room_code`; button `lc_copy_code` with exact `runscript lcOnlineIntent(16)`; localized `lc_code_copied` in the existing status region |
+| Four card panels N=1..4 | DATA `lc_pN_name`, `lc_pN_slot`, `lc_pN_ping`; named scenes/items `lc_pN_card`, `lc_pN_ready`, `lc_pN_not_ready`, `lc_pN_host`, `lc_pN_hero_fallback`, `lc_pN_you`, `lc_pN_ms`, `lc_pN_measuring`, `lc_pN_same_build`, `lc_pN_checking_build`, `lc_pN_selected` |
+| Empty card N | Separate named items/scenes `lc_pN_empty`, `lc_pN_empty_title`, `lc_pN_empty_help`, `lc_pN_empty_plus`; all are hidden on occupancy |
+| Summary beneath cards | DATA `lc_ready_count`, `lc_member_count`, `lc_waiting_name`; localized scene variants `lc_ready_waiting`, `lc_ready_all`, `lc_ready_solo` |
+| Native Kick picker | `text_playername1` inside the existing card panel region; visible and focusable only in native Kick mode. `text_readycheck1` remains a real native backing roster, visually hidden. Four-card selected decoration mirrors native selected row |
+| Inline confirmation/error region | Localized scenes/items `lc_leave_confirm`, `lc_lobby_error`; `lc_leave_yes` invokes exact `runscript lcOnlineIntent(17)`; `lc_leave_cancel` and `lc_lobby_dismiss` invoke exact `runscript lcOnlineIntent(8)` |
+| Guest native right bar + B hint | Localized scenes/items `lc_guest_unready` and `lc_guest_leave` with coincident native action rectangle; no competing input command |
+
+All listed localized scene variants are one individually hideable menu item
+whose scene contains its static text/model/glyph elements; do not assume that
+hiding a frame item hides unrelated sibling menu items. Ordinary card text
+fields are hidden individually on vacancy. DATA text must be normal interned
+text with no competing gamevar. Fields are bounded (names 31 bytes; code nine
+characters; counts one digit; fixture ping at most five digits); clip/ellipsis
+inside the approved region without changing the round-3 allowlist.
+
+Compose the localized summary from the numeric/name DATA nodes at the approved
+summary anchor: "2 of 3 ready. Waiting for Alex to get ready." Keep static words
+and suffix within the selected scene; `lc_ready_summary` may be a static scene
+container but is not overwritten by the DLL. The waiting scene shows only for
+an admitted unready member; all-ready and solo scenes are mutually exclusive.
+Hero fallback is "Hero assigned at start". RTT unknown = Measuring with neutral
+bars; local = You. SAME BUILD means fixture/token preview, not certified wire
+compatibility. No actual hero, room title, campaign, visibility or route is
+invented: retain localized pending/unknown content for `lc_room_name`,
+`lc_room_visibility`, `lc_campaign_summary` and route ornaments until later
+reviewed data exists. Static drop-in copy says next area. Native device modes/description glyphs must
+select keyboard-only Ctrl+C versus pad Y; do not display an unbound shortcut.
+The guest state variants also select X Ready/X Unready and B Leave/B Unready.
+
+Copy and confirmation use the existing card/status region; inline state must
+not use `openmenu`, `closemenu` or a base popup. Author each inline button as a separately named menu item, including safe mouse
+rectangles inside that region. The DLL hides/disables all three buttons outside
+their own panel, focuses Cancel on opening and restores native list/Leave focus
+on dismissal. Keep their links in the directional graph while hidden/disabled
+items are skipped; no overlapping invisible ordinary actions. Back ownership is
+in the DLL/native handlers, so do not add a second Back close command. Initially
+hide all optional/notice scenes; the adapter selects visible variants. Keep
+native input-enabled, wait, transfer, title/help and description dependencies
+intact. LC must include closure/localization, one/four/empty card focus graphs,
+visible picker, disabled Start, keyboard/pad/mouse, safe rectangles and resource
+budget checks in its builder/selftests.
+
+### Host and live verification
+
+`test_online_menus.py` includes every prior mode plus round-4 Host, Join,
+missing/corrupt-list negative, actual shared-pool and Copy modes, plus a negative
+mode for every new retail guard. The tests execute actual mapped class activators,
+Host/Join ticks, Accept predicate, ready setter/getter, Ready-aware Back and Join
+deactivation; presentation/network/participant/cleanup services are invented or
+stubbed. They never execute the game entry point. The pool case exercises real
+retail base add/clear through twelve 128-row allocation cycles, including 83-byte
+rows and shared exhaustion. It does not claim font measurement/render coverage.
+
+After coordinator integration and Claude review, run a separate authorized real
+boot/peer procedure: owned candidate copy, hash inputs, private/never displayed
+desktop, slot.py --wait, HOLD-GAMES/external XMen2 checks before every launch,
+registry export and byte-identical restore. Use verified `[Test] NoActivate=1`
+in every test-copy INI once supported. No desktop focus/input. Capture real
+host/join setup and both skins at one/four/pending members, both aspects and all
+devices. Verify native callbacks keep refreshing while Copy/inline confirmation
+or errors are open; Back closes inline state, then picker, then Unready, then
+intentional Leave in the appropriate role. Verify native roster indices, pool
+counts and role-X prompts; actual Start blocked by every admitted unready peer,
+solo only with rule 26, image-transfer success/failure and new-game broadcast.
+Check Kick refuses self and invalid/reselected rows, removes the chosen admitted
+peer once, and keeps the lobby open. Copy success/failure requires separately
+authorized clipboard harness/restore. Check Ctrl+C/Y/click plus coincident held
+Accept creates one Copy and no Start/Ready/Kick; Unready/B labels and Start alpha
+must match the native state. Finish the prior ten direct boots and three-peer
+hotspot/relay gates before any player-ready claim. No live gate was executed by
+this round; existing entry-time profile save and reentrant saveloadProcess(2)
+observations from round 3 remain pending real-game review.
+
+
+## Coordinator round-3 review follow-up, folded into round 4
+
+The coordinator reports Claude's review of 168547f..006471b approved round 3 as
+opt-in. S1..S4 and the nits below are included in this round-4 diff and tests;
+no history, rule identity, LC source or game installation was changed.
+
+- **S1:** Rejoin stages a separate `rejoin_seed`. Additional Hub ticks never open
+  or close a seeded Code model. Only Code's first tick consumes the seed;
+  another explicit Hub action or a different native menu request invalidates it.
+  The regression holds the Hub current for two extra ticks after Rejoin.
+- **S2:** DirectInput delivery reads the already-published manager cell 0x8aff18,
+  with SEH validation. It never invokes lazy getter 0x5d8920 or `live()` from that
+  path. Before the first game tick, keyboard delivery does no frontend/model
+  work. Once the game-thread ID is known, foreign-thread UI edits are refused.
+  One-time logs print keyboard/tick IDs and their matched/FAILED assertion.
+- **S3:** Custom destination requests call `abandon_name()` before the original
+  manager request. This drains an owned completed result or changes its pending
+  tag to 4. Host/Back immediately after queued Change name cannot later commit
+  that old result. An abandonment fault keeps the current custom menu available
+  with the name-open notice; a subsequent explicit navigation can retry.
+- **S4:** All native name operations (getter, stale drain, setters, polling,
+  immediate result copy and native profile/save side effects) go through one
+  POD-only SEH helper. The singleton must equal 0xa3e168 and carry native vtable
+  0x6a4730; apply validates session/profile/console too. A native access violation
+  invalidates local ownership, attempts one bounded tag-0 drain and selects
+  `lc_notice_name_open`. No retry loop or exception crossing DirectInput is
+  introduced. Calls completed before a native fault cannot be rolled back; the
+  adapter reports failure and makes no successful-name/profile claim.
+
+Keyboard text uses a fixed 64-entry game-thread inbox so multiple poll edges
+arrive in ascending DirectInput scan-code order rather than losing all but one.
+Valid symbols take precedence over simultaneous ambiguous-key feedback. Numpad
+2..9 are supported; numpad 0/1 give the existing invalid-symbol notice. Alt and
+AltGr combinations are left untouched. Enter follows any same-poll text in the
+inbox and is removed from the returned native key state, so it cannot also accept
+the focused grid cell. Close/navigation invalidates the inbox, including address
+reuse. Existing Back/delete and pad-tool precedence stay intact.
+
+Recent-game persistence uses a heap environment buffer, a same-directory
+CREATE_NEW temporary file, checked complete WriteFile, FlushFileBuffers and
+CloseHandle, then MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH). Only successful
+replacement publishes the new in-memory recent record. Failure removes only its
+own temporary file and preserves the previous disk/memory record. Directory,
+read-only, partial-write and flush failures are fixtures; bounded 128/129-byte
+malformed records and CRLF records are refused. The existing on-disk LF-only
+`lc-rejoin/1` schema is unchanged. Rejoin never implies admission.
+
+Clipboard Paste additionally rejects nonzero data after the Unicode terminator
+(embedded-NUL/hidden-suffix input); zero allocation padding is permitted. Logical
+text remains bounded at 256 characters, including outer whitespace. NULL handle,
+GlobalSize zero, lock failure and all success/refusal paths balance only acquired
+resources. No system clipboard is used by the fixtures.
+
+Intent 15 remains internal invalid-key feedback and is neither captured as an
+authored command nor accepted by the public handler. Exact strings with no
+supported live custom source return to the native console queue, preserving its
+result rather than reporting them consumed. The continuation hint is dismissed
+on another main-menu request or real main Accept. Public LC commands remain the
+round-3/4 constants already listed above; do not author intent 15.
+
+**Additional LC node:** author initially hidden localized text/scene
+`lc_notice_recent_save` at the existing inline/status notice anchor, meaning
+"Could not remember this game on this PC. Your previous recent game is unchanged."
+Keep no-admission/offline-fixture context in the screen's static copy. The generic
+`lc_inline_error` remains the fallback if the node is absent. No new menu, bar,
+identity, gameplay rule or command is needed.
+
+`test/online_menus_followup.inl` executes the new regressions against the real
+production online_menus.cpp. `xml2_online_input_wiring_test` includes the actual
+production test_input.cpp translation unit and runs its COM CreateDevice,
+GetDeviceState and SetCooperativeLevel hook chain. It tests Menus-only opt-in,
+pipe OFF/ON delivery, background filtering, failed-read reset and unrelated
+size/device/null pass-through. Only OS foreground answers and the UI consumer
+are faked; `install()`/pipe service/capture dependencies are unreachable and
+assert if invoked. The enabled branch uses an owned event and synthetic state,
+with no named pipe, worker, actual keyboard/device or desktop input.
+
+Add these cases to the future authorized live procedure: delayed native Code
+opening after Rejoin; null/prefrontend manager DirectInput reads; queued Change
+name then Host/Back; native editor failure without ownership/result leakage;
+keyboard/tick thread IDs; rapid two-key and text+Enter input, Alt/numpad and device
+transitions; unavailable/read-only recent storage without false Rejoin; and real
+clipboard NULL/zero/256-character/embedded-NUL behavior under a separately
+authorized clipboard-restoring harness. The clipboard strict-tail check may
+refuse nonzero spare allocation data; that refusal must preserve existing Code
+text and show the localized Paste notice. None of these live checks ran here.
