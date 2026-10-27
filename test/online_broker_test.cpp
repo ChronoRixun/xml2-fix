@@ -3,6 +3,8 @@
 // suite checks real certificate trust/protocol selection;
 // its optional --live handshake/record route is a separately scheduled gate.
 // No game, external broker, profile, key, registry or desktop access.
+// Production builds cannot reassign the room's certificate seam; only this fixture opts into it.
+#define XML2_ONLINE_ROOM_TEST_SEAMS 1
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include "broker_tls.hpp"
@@ -152,7 +154,7 @@ void reset(const std::string& mode) {
     room::room_clock=&fake::now;
     room::io={fake::address,fake::free_address,fake::socket,fake::connect,fake::socket_option,fake::ioctl,fake::close,fake::shutdown,fake::select,fake::receive,fake::send};
     room::cert_cache.clear();room::turn_cache.clear();fake::clock+=100000;
-    room::set_certificate=&fake::install;room::cert_ready=false;room::cert_identity.clear();
+    room::set_certificate=&fake::install;room::cert_ready=false;room::cert_identity.clear();room::cert_expires=0;
     fake::installs=fake::cert_replies=0;fake::cert_identity="str:legends:0000000000000000";
     fake::mode=mode;fake::hold=false;fake::hold_handshake=false;fake::handshake_entered=false;fake::requests.clear();fake::input.clear();fake::output.clear();
     fake::test_mode=fake::transport_busy=false;
@@ -221,8 +223,8 @@ void live_room_survival(const std::string& fault) {
     std::cout<<"PASS live-room real ui_tick/tick "<<fault<<": address/room/roster retained, real GNS flush+poll, virtual rewrite, retry refused\n";
 }
 
-std::string cert_ok_line(const std::string& identity, const char* body) {
-    return "{\"op\":\"cert_ok\",\"cert_pem\":\"-----BEGIN STEAMDATAGRAM CERT-----\\n"+std::string(body)+"\\n-----END STEAMDATAGRAM CERT-----\\n\",\"gns_identity\":"+online_room_core::quote(identity)+"}";
+std::string cert_ok_line(const std::string& identity, const char* body, long long expires=0) {
+    return "{\"op\":\"cert_ok\",\"cert_pem\":\"-----BEGIN STEAMDATAGRAM CERT-----\\n"+std::string(body)+"\\n-----END STEAMDATAGRAM CERT-----\\n\",\"gns_identity\":"+online_room_core::quote(identity)+(expires>0 ? ",\"expires\":"+std::to_string(expires) : std::string())+"}";
 }
 // Review R1: every new broker connection delivers a cert_ok right after auth_ok. After an attempt failed, Retry / Refresh / Done
 // open a new connection whose cert_ok meets the certificate the earlier attempt installed; that must not fail the attempt.
@@ -273,12 +275,32 @@ void certificate_identity_outside_room_test() {
     room::leave();pump_until([] { return room::worker_done.load(); });
     std::cout<<"PASS certificate identity outside a room: same identity ignored, other identity checked (refused and accepted)\n";
 }
+// Review N-a: a same-identity repeat that expires LATER than the installed certificate replaces it outside a room; an equal,
+// older or undated repeat is ignored; a refused renewal keeps the working certificate and the broker connection.
+void certificate_renewal_test() {
+    reset("timeout");assert(room::list());pump_until([] { return room::view().state==b::phase::listing && room::cert_ready; });
+    assert(fake::installs==1 && room::cert_expires==4102444800LL);
+    const std::string own="str:legends:0000000000000000";const auto ticket=room::view().generation;
+    for(const long long expires:{4102444800LL,4102444799LL,0LL}) {
+        enqueue(cert_ok_line(own,"QUJD",expires),ticket);room::tick();
+        assert(fake::installs==1 && room::cert_expires==4102444800LL && room::view().state==b::phase::listing && room::view().error.empty()); // equal / older / undated: ignored
+    }
+    enqueue(cert_ok_line(own,"AAAA",4102444900LL),ticket);room::tick();
+    assert(fake::installs==2 && room::cert_expires==4102444800LL && room::cert_identity==own && room::cert_ready); // later but refused: the installed certificate stays
+    assert(room::view().state==b::phase::listing && room::view().error.empty());
+    enqueue(cert_ok_line(own,"QUJD",4102445000LL),ticket);room::tick();
+    assert(fake::installs==3 && room::cert_expires==4102445000LL && room::cert_identity==own && room::view().state==b::phase::listing && room::view().error.empty()); // later and accepted: replaced
+    enqueue(cert_ok_line(own,"QUJD",4102445000LL),ticket);room::tick();
+    assert(fake::installs==3); // now equal: ignored again
+    room::leave();pump_until([] { return room::worker_done.load(); });
+    std::cout<<"PASS certificate renewal: later expiry replaces the installed one, equal/older ignored, refused renewal keeps the working certificate\n";
+}
 // In a room a repeat cert_ok, whoever it names and whatever it carries, is ignored and the broker connection stays up.
 void certificate_repeat_in_room_test() {
     reset("success");assert(room::host("Game",false));pump_until([] { return room::view().state==b::phase::room; });
     assert(room::cert_ready && fake::installs==1);
     const auto ticket=room::view().generation;const auto connections=fake::connections;
-    for(const auto& line:{cert_ok_line("str:legends:0000000000000000","QUJD"),cert_ok_line("str:legends:0000000000000000","AAAA"),cert_ok_line("str:legends:2222222222222222","QUJD"),std::string("{\"op\":\"cert_ok\",\"cert_pem\":\"bad\"}")}) {
+    for(const auto& line:{cert_ok_line("str:legends:0000000000000000","QUJD",4102444900LL),cert_ok_line("str:legends:0000000000000000","QUJD"),cert_ok_line("str:legends:0000000000000000","AAAA"),cert_ok_line("str:legends:2222222222222222","QUJD"),std::string("{\"op\":\"cert_ok\",\"cert_pem\":\"bad\"}")}) {
         enqueue(line,ticket);room::ui_tick();room::tick();
         assert(room::view().state==b::phase::room && room::view().generation==ticket && room::view().authenticated && room::view().error.empty());
         assert(!room::worker_done.load() && fake::installs==1 && room::cert_identity=="str:legends:0000000000000000" && fake::connections==connections);
@@ -353,7 +375,7 @@ int main() {
     for(const auto* fault:{"closed","overflow","bad_cert","refused_cert","cert_error","identity"}) live_room_survival(fault);
     for(const char* fault:{"rate_limited","no_such_room","room_full","version_mismatch","timeout","idle_disconnect"}) for(const char* next:{"retry","refresh","done"})
         if(!(std::string(fault)=="idle_disconnect" && std::string(next)=="retry")) certificate_after_failure_test(fault,next);
-    certificate_identity_outside_room_test();certificate_repeat_in_room_test();
+    certificate_identity_outside_room_test();certificate_renewal_test();certificate_repeat_in_room_test();
     reset("success");assert(room::list());pump_until([] { return room::view().state==b::phase::listing; });
     room::worker_generation=room::connection_generation.load();room::worker_ticket=room::view().generation;
     { std::lock_guard g(room::lock);for(unsigned i=0;i<256;++i) room::inbox.push_back({room::worker_ticket,room::worker_generation,"{}"}); }

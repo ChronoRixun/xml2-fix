@@ -612,6 +612,7 @@ namespace online_room
 		std::map<std::string, core::token_bucket> signal_rates;
 		bool cert_ready = false, ice_ready = false, room_ready = false;
 		std::string cert_identity; // the GNS identity of the certificate installed in this process (empty = none, or not known)
+		long long cert_expires = 0; // the `expires` of that certificate (0 = unknown); a same-identity repeat with a later one replaces it
 		HSteamListenSocket listener = k_HSteamListenSocket_Invalid;
 
 		struct datagram { DWORD at; std::uint16_t from, to; std::vector<std::uint8_t> data; };
@@ -643,8 +644,13 @@ namespace online_room
 
 		ISteamNetworkingSockets* sockets() { return SteamNetworkingSockets(); }
 		bool real_set_certificate(const void* data, int size, SteamNetworkingErrMsg& error) { return sockets()->SetCertificate(data, size, error); }
-		// The one place a certificate reaches GNS; the broker test swaps it because real GNS refuses anything the project CA did not sign.
+		// The one place a certificate reaches GNS. Production cannot reassign it; only the broker fixture, which defines
+		// XML2_ONLINE_ROOM_TEST_SEAMS before including this file, swaps it (real GNS refuses anything the project CA did not sign).
+#ifdef XML2_ONLINE_ROOM_TEST_SEAMS
 		bool (*set_certificate)(const void*, int, SteamNetworkingErrMsg&) = &real_set_certificate;
+#else
+		bool (*const set_certificate)(const void*, int, SteamNetworkingErrMsg&) = &real_set_certificate;
+#endif
 		tunnel* by_id(const std::string& id) { for (auto& t : tunnels) if (t->id == id) return t.get(); return nullptr; }
 		tunnel* by_address(std::uint32_t a) { for (auto& t : tunnels) if (t->address == a) return t.get(); return nullptr; }
 		tunnel* by_connection(HSteamNetConnection c) { for (auto& t : tunnels) if (t->connection == c && c != k_HSteamNetConnection_Invalid) return t.get(); return nullptr; }
@@ -790,17 +796,22 @@ namespace online_room
 		{
 			// The broker answers every new connection with a cert_ok (fresh or the cached one), so a repeat is normal: a later
 			// attempt, retry or refresh meets the certificate its earlier attempt installed. GNS keeps that certificate while
-			// the identity is not reset, so the repeat is only noted - never installed again, never a reason to drop the broker.
-			// A committed room never replaces its context's certificate, whoever the repeat names.
+			// the identity is not reset, so an equal or older repeat is only noted - never installed again, never a reason to drop
+			// the broker. A same-identity repeat that expires LATER (the broker renewed it) replaces the installed one outside a
+			// room; a failed replacement keeps the working certificate. A committed room never replaces its context's
+			// certificate, whoever the repeat names.
+			bool replacing = false;
 			if (cert_ready)
 			{
 				const auto subject = msg.text("gns_identity").empty() ? core::gns_identity(own_id) : msg.text("gns_identity");
 				const bool in_room = client.view().state == browser::phase::room;
-				if (in_room || (!cert_identity.empty() && subject == cert_identity))
+				const bool same_identity = !cert_identity.empty() && subject == cert_identity;
+				if (in_room || (same_identity && !(msg.number("expires") > cert_expires)))
 				{
 					logger::write_capped("online-cert-repeat", "online: certificate for %s is already installed - the repeat from the broker is ignored", online_security::sanitize_log_text(subject).c_str());
 					return;
 				}
+				replacing = same_identity;
 				// Outside a room another identity is checked exactly like a first certificate (GNS decides; nothing is skipped).
 			}
 #ifndef NDEBUG
@@ -828,6 +839,12 @@ namespace online_room
 			SteamNetworkingErrMsg error{};
 			const bool installed = set_certificate(blob.data(), int(blob.size()), error);
 			online_security::secure_erase(blob.data(), blob.size());
+            if (!installed && replacing)
+            {
+				// The renewed certificate was refused; the installed one is still in force, so the broker connection stays.
+				logger::write("online: GNS refused the renewed certificate (%s) - the installed one stays in use", error);
+				return;
+			}
             if (!installed)
             {
                 client.fail(client.view().generation, "invalid_certificate", room_clock());
@@ -837,6 +854,7 @@ namespace online_room
 			}
 			cert_ready = true;
 			cert_identity = msg.text("gns_identity").empty() ? core::gns_identity(own_id) : msg.text("gns_identity");
+			cert_expires = msg.number("expires");
 			logger::write("online: certificate for %s installed (expires %lld, %s)", online_security::sanitize_log_text(msg.text("gns_identity")).c_str(), msg.number("expires"),
 			              msg.text("from_cache") == "1" ? "reused from this install's cache" : "new from the broker");
 		}
@@ -1388,7 +1406,7 @@ namespace online_room
             signal_rates.clear(); members.clear(); own_address = 0;
             if (listener != k_HSteamListenSocket_Invalid && sockets()) sockets()->CloseListenSocket(listener);
             listener = k_HSteamListenSocket_Invalid;
-            room_ready = ice_ready = cert_ready = false; cert_identity.clear();
+            room_ready = ice_ready = cert_ready = false; cert_identity.clear(); cert_expires = 0;
             room_code.clear(); host_id.clear(); configured_code.clear();
             code_text[0] = short_code_text[0] = 0;
             room_progress = {}; pacer = {}; listed = {}; looked = 0;
