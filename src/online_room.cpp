@@ -611,6 +611,7 @@ namespace online_room
 		void browser_tick();
 		std::map<std::string, core::token_bucket> signal_rates;
 		bool cert_ready = false, ice_ready = false, room_ready = false;
+		std::string cert_identity; // the GNS identity of the certificate installed in this process (empty = none, or not known)
 		HSteamListenSocket listener = k_HSteamListenSocket_Invalid;
 
 		struct datagram { DWORD at; std::uint16_t from, to; std::vector<std::uint8_t> data; };
@@ -641,6 +642,9 @@ namespace online_room
 		constexpr std::size_t tunnel_game_cap = 1024 * 1024, arrivals_cap = 256 * 1024, waiting_cap = 128 * 1024;
 
 		ISteamNetworkingSockets* sockets() { return SteamNetworkingSockets(); }
+		bool real_set_certificate(const void* data, int size, SteamNetworkingErrMsg& error) { return sockets()->SetCertificate(data, size, error); }
+		// The one place a certificate reaches GNS; the broker test swaps it because real GNS refuses anything the project CA did not sign.
+		bool (*set_certificate)(const void*, int, SteamNetworkingErrMsg&) = &real_set_certificate;
 		tunnel* by_id(const std::string& id) { for (auto& t : tunnels) if (t->id == id) return t.get(); return nullptr; }
 		tunnel* by_address(std::uint32_t a) { for (auto& t : tunnels) if (t->address == a) return t.get(); return nullptr; }
 		tunnel* by_connection(HSteamNetConnection c) { for (auto& t : tunnels) if (t->connection == c && c != k_HSteamNetConnection_Invalid) return t.get(); return nullptr; }
@@ -784,9 +788,20 @@ namespace online_room
 		}
 		void apply_cert(const core::line& msg)
 		{
-			if (cert_ready) {
-				client.disconnected("unexpected_certificate", room_clock());
-				return; // never replace a live context's certificate from an unsolicited reply
+			// The broker answers every new connection with a cert_ok (fresh or the cached one), so a repeat is normal: a later
+			// attempt, retry or refresh meets the certificate its earlier attempt installed. GNS keeps that certificate while
+			// the identity is not reset, so the repeat is only noted - never installed again, never a reason to drop the broker.
+			// A committed room never replaces its context's certificate, whoever the repeat names.
+			if (cert_ready)
+			{
+				const auto subject = msg.text("gns_identity").empty() ? core::gns_identity(own_id) : msg.text("gns_identity");
+				const bool in_room = client.view().state == browser::phase::room;
+				if (in_room || (!cert_identity.empty() && subject == cert_identity))
+				{
+					logger::write_capped("online-cert-repeat", "online: certificate for %s is already installed - the repeat from the broker is ignored", online_security::sanitize_log_text(subject).c_str());
+					return;
+				}
+				// Outside a room another identity is checked exactly like a first certificate (GNS decides; nothing is skipped).
 			}
 #ifndef NDEBUG
 			if (const auto mode = ini::text(L"Dev", L"OnlineCert"); mode && _stricmp(mode->c_str(), "none") == 0)
@@ -811,7 +826,7 @@ namespace online_room
             if (!core::pem_body(pem, signed_cert)) { client.fail(client.view().generation, "invalid_certificate", room_clock()); if (!cert_cache.empty()) DeleteFileW(cert_cache.c_str()); logger::write("online: the broker's certificate is malformed - rooms stay off"); return; }
 			auto blob = core::certificate_blob(signed_cert, seed);
 			SteamNetworkingErrMsg error{};
-			const bool installed = sockets()->SetCertificate(blob.data(), int(blob.size()), error);
+			const bool installed = set_certificate(blob.data(), int(blob.size()), error);
 			online_security::secure_erase(blob.data(), blob.size());
             if (!installed)
             {
@@ -821,6 +836,7 @@ namespace online_room
 				return;
 			}
 			cert_ready = true;
+			cert_identity = msg.text("gns_identity").empty() ? core::gns_identity(own_id) : msg.text("gns_identity");
 			logger::write("online: certificate for %s installed (expires %lld, %s)", online_security::sanitize_log_text(msg.text("gns_identity")).c_str(), msg.number("expires"),
 			              msg.text("from_cache") == "1" ? "reused from this install's cache" : "new from the broker");
 		}
@@ -1372,7 +1388,7 @@ namespace online_room
             signal_rates.clear(); members.clear(); own_address = 0;
             if (listener != k_HSteamListenSocket_Invalid && sockets()) sockets()->CloseListenSocket(listener);
             listener = k_HSteamListenSocket_Invalid;
-            room_ready = ice_ready = cert_ready = false;
+            room_ready = ice_ready = cert_ready = false; cert_identity.clear();
             room_code.clear(); host_id.clear(); configured_code.clear();
             code_text[0] = short_code_text[0] = 0;
             room_progress = {}; pacer = {}; listed = {}; looked = 0;

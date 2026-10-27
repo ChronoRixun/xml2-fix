@@ -29,7 +29,8 @@ std::atomic<DWORD> clock{10000};
 std::atomic<bool> closed{false}, hold{false};
 std::atomic<bool> handshake_entered{false}, hold_handshake{false};
 bool test_mode=false,transport_busy=false;
-int pins=0,connections=0;
+int pins=0,connections=0,cert_replies=0,installs=0;
+std::string cert_identity;
 int native_sends=0,native_receives=0;
 int WSAAPI sendto(SOCKET,const char*,int size,int,const sockaddr*,int) { ++native_sends;return size; }
 int WSAAPI recvfrom(SOCKET,char*,int,int,sockaddr*,int*) { ++native_receives;return 17; }
@@ -67,6 +68,10 @@ int WSAAPI send(SOCKET,const char* data,int size,int) {
         requests.push_back(row);
         auto msg=online_room_core::parse(row);auto op=msg.text("op");
         if(op=="auth") reply("{\"op\":\"auth_ok\",\"identity\":\"legends:0000000000000000\",\"ca\":\"fixture-ca\"}");
+        if(op=="cert") { // like the real broker: one cert_ok per cert request, i.e. after auth_ok on every connection that has no cached certificate
+            ++cert_replies;
+            reply("{\"op\":\"cert_ok\",\"cert_pem\":\"-----BEGIN STEAMDATAGRAM CERT-----\\nQUJD\\n-----END STEAMDATAGRAM CERT-----\\n\",\"gns_identity\":"+online_room_core::quote(cert_identity)+",\"expires\":4102444800}");
+        }
         if(mode=="timeout") continue;
         if(op=="list_rooms") {
             if(mode=="malformed") reply("{\"op\":\"list_rooms_ok\",\"rooms\":[}");
@@ -90,6 +95,15 @@ int WSAAPI send(SOCKET,const char* data,int size,int) {
 
 #include "../src/online_room.cpp"
 
+namespace fake {
+// Real GNS refuses every certificate the project CA did not sign, so the fixture installs through the room's own seam:
+// it takes any certificate whose first byte is not 0 ("QUJD" -> "ABC") and refuses "AAAA" (000) like GNS refuses a foreign one.
+bool install(const void* data,int size,SteamNetworkingErrMsg& error) {
+    ++installs;
+    if(size>0 && static_cast<const unsigned char*>(data)[0]==0) { std::strcpy(error,"fixture: not signed by the project CA");return false; }
+    return true;
+}
+}
 namespace broker_tls {
 client::~client()=default;
 bool client::handshake(SOCKET,const std::string&,const std::string& pin,std::string& error) {
@@ -138,6 +152,8 @@ void reset(const std::string& mode) {
     room::room_clock=&fake::now;
     room::io={fake::address,fake::free_address,fake::socket,fake::connect,fake::socket_option,fake::ioctl,fake::close,fake::shutdown,fake::select,fake::receive,fake::send};
     room::cert_cache.clear();room::turn_cache.clear();fake::clock+=100000;
+    room::set_certificate=&fake::install;room::cert_ready=false;room::cert_identity.clear();
+    fake::installs=fake::cert_replies=0;fake::cert_identity="str:legends:0000000000000000";
     fake::mode=mode;fake::hold=false;fake::hold_handshake=false;fake::handshake_entered=false;fake::requests.clear();fake::input.clear();fake::output.clear();
     fake::test_mode=fake::transport_busy=false;
 }
@@ -183,9 +199,8 @@ void live_room_survival(const std::string& fault) {
     if(fault=="overflow") {
         room::worker_generation=room::connection_generation.load();room::worker_ticket=ticket;
         for(unsigned i=0;i<257;++i) room::arrived("{}");
-    } else if(fault=="bad_cert") enqueue(R"({"op":"cert_ok","cert_pem":"bad"})",ticket);
-    else if(fault=="refused_cert") enqueue("{\"op\":\"cert_ok\",\"cert_pem\":\"-----BEGIN STEAMDATAGRAM CERT-----\\nAAAA\\n-----END STEAMDATAGRAM CERT-----\\n\"}",ticket);
-    else if(fault=="unsolicited_cert") { room::cert_ready=true;enqueue(R"({"op":"cert_ok","cert_pem":"bad"})",ticket); }
+    } else if(fault=="bad_cert") { room::cert_ready=false;room::cert_identity.clear();enqueue(R"({"op":"cert_ok","cert_pem":"bad"})",ticket); }
+    else if(fault=="refused_cert") { room::cert_ready=false;room::cert_identity.clear();enqueue("{\"op\":\"cert_ok\",\"cert_pem\":\"-----BEGIN STEAMDATAGRAM CERT-----\\nAAAA\\n-----END STEAMDATAGRAM CERT-----\\n\"}",ticket); }
     else if(fault=="cert_error") enqueue(R"({"op":"error","in_reply_to":"cert","code":"quota_exceeded"})",ticket);
     else if(fault=="closed") enqueue(R"({"op":"_closed","kind":"broker_unreachable","msg":"invented loss"})",ticket);
     const auto original_id=room::own_id;
@@ -205,9 +220,76 @@ void live_room_survival(const std::string& fault) {
     closesocket(udp);WSACleanup();room::leave();pump_until([] { return room::worker_done.load(); });room::sockets()->CloseConnection(peer,0,"fixture complete",false);
     std::cout<<"PASS live-room real ui_tick/tick "<<fault<<": address/room/roster retained, real GNS flush+poll, virtual rewrite, retry refused\n";
 }
+
+std::string cert_ok_line(const std::string& identity, const char* body) {
+    return "{\"op\":\"cert_ok\",\"cert_pem\":\"-----BEGIN STEAMDATAGRAM CERT-----\\n"+std::string(body)+"\\n-----END STEAMDATAGRAM CERT-----\\n\",\"gns_identity\":"+online_room_core::quote(identity)+"}";
+}
+// Review R1: every new broker connection delivers a cert_ok right after auth_ok. After an attempt failed, Retry / Refresh / Done
+// open a new connection whose cert_ok meets the certificate the earlier attempt installed; that must not fail the attempt.
+void certificate_after_failure_test(const std::string& fault, const std::string& next) {
+    const bool on_resolve=fault=="no_such_room" || fault=="room_full" || fault=="version_mismatch";
+    reset(fault=="rate_limited" ? "error" : fault=="timeout" ? "timeout" : fault=="version_mismatch" ? "mismatch" : fault=="idle_disconnect" ? "success" : fault);
+    assert(on_resolve ? room::resolve("ABCDEFGH") : room::list());
+    if(fault=="timeout") { pump_until([] { return room::view().state==b::phase::listing && room::cert_ready; });fake::clock+=10000;room::ui_tick(); }
+    else pump_until([&] { return !room::client.pending(); });
+    if(fault=="idle_disconnect") {
+        assert(room::view().state==b::phase::idle && room::view().list_known);
+        fake::closed=true;pump_until([] { return room::worker_done.load(); }); // the broker dropped the idle connection
+    } else assert(room::view().state==b::phase::retry_wait);
+    for(int frame=0;frame<5;++frame) { room::ui_tick();room::tick(); } // the game's next frames close the failed attempt's worker
+    assert(room::cert_ready && fake::installs==1 && fake::cert_replies==1 && room::cert_identity==fake::cert_identity);
+    const auto connections=fake::connections;
+    fake::mode="success";fake::clock+=200000;
+    const bool opens_room=next=="done" || (next=="retry" && on_resolve);
+    if(next=="retry") assert(room::retry());
+    else if(next=="refresh") assert(room::list());
+    else assert(room::resolve("ABCDEFGH"));
+    if(opens_room) pump_until([] { return room::view().state==b::phase::room; });
+    else pump_until([] { return !room::client.pending(); });
+    assert(room::view().error.empty() && room::view().state==(opens_room ? b::phase::room : b::phase::idle));
+    assert(fake::connections>connections && fake::cert_replies==2 && fake::installs==1 && room::cert_ready);
+    if(opens_room) assert(room::view().code=="ABCDEFGH" && room::view().authenticated); else assert(room::view().rows.size()==1);
+    room::leave();pump_until([] { return room::worker_done.load(); });
+    std::cout<<"PASS certificate kept across attempts: "<<fault<<" then "<<next<<" on a new connection (cert_ok repeated, ignored, not reinstalled)\n";
+}
+// A repeat for the same identity is ignored outside a room; any other identity is validated exactly like a first certificate.
+void certificate_identity_outside_room_test() {
+    reset("timeout");assert(room::list());pump_until([] { return room::view().state==b::phase::listing && room::cert_ready; });
+    assert(fake::installs==1);
+    auto ticket=room::view().generation;
+    enqueue(cert_ok_line("str:legends:0000000000000000","AAAA"),ticket);room::tick();
+    assert(room::view().state==b::phase::listing && room::view().error.empty() && fake::installs==1); // same identity: not installed again, not fatal
+    enqueue(cert_ok_line("str:legends:2222222222222222","AAAA"),ticket);room::tick();
+    assert(fake::installs==2 && room::view().state==b::phase::retry_wait && room::view().error=="invalid_certificate"); // other identity: checked, refused
+    assert(room::cert_identity=="str:legends:0000000000000000");
+    reset("timeout");assert(room::list());pump_until([] { return room::view().state==b::phase::listing && room::cert_ready; });
+    ticket=room::view().generation;
+    enqueue(cert_ok_line("str:legends:2222222222222222","QUJD"),ticket);room::tick();
+    assert(fake::installs==2 && room::view().state==b::phase::listing && room::cert_identity=="str:legends:2222222222222222"); // other identity: checked, accepted
+    enqueue(cert_ok_line("str:legends:2222222222222222","AAAA"),ticket);room::tick();
+    assert(fake::installs==2 && room::view().state==b::phase::listing && room::view().error.empty());
+    enqueue("{\"op\":\"cert_ok\",\"cert_pem\":\"bad\"}",ticket);room::tick(); // names no identity = this PC's own, which is not the installed one here
+    assert(fake::installs==2 && room::view().state==b::phase::retry_wait && room::view().error=="invalid_certificate");
+    room::leave();pump_until([] { return room::worker_done.load(); });
+    std::cout<<"PASS certificate identity outside a room: same identity ignored, other identity checked (refused and accepted)\n";
+}
+// In a room a repeat cert_ok, whoever it names and whatever it carries, is ignored and the broker connection stays up.
+void certificate_repeat_in_room_test() {
+    reset("success");assert(room::host("Game",false));pump_until([] { return room::view().state==b::phase::room; });
+    assert(room::cert_ready && fake::installs==1);
+    const auto ticket=room::view().generation;const auto connections=fake::connections;
+    for(const auto& line:{cert_ok_line("str:legends:0000000000000000","QUJD"),cert_ok_line("str:legends:0000000000000000","AAAA"),cert_ok_line("str:legends:2222222222222222","QUJD"),std::string("{\"op\":\"cert_ok\",\"cert_pem\":\"bad\"}")}) {
+        enqueue(line,ticket);room::ui_tick();room::tick();
+        assert(room::view().state==b::phase::room && room::view().generation==ticket && room::view().authenticated && room::view().error.empty());
+        assert(!room::worker_done.load() && fake::installs==1 && room::cert_identity=="str:legends:0000000000000000" && fake::connections==connections);
+    }
+    room::leave();pump_until([] { return room::worker_done.load(); });
+    std::cout<<"PASS certificate repeat inside a room: ignored, broker connection and room kept\n";
+}
 }
 
 int main() {
+    std::cout<<std::unitbuf;
     SteamNetworkingIdentity id;id.Clear();id.ParseString("str:legends:0000000000000000");SteamNetworkingErrMsg error{};
     assert(GameNetworkingSockets_Init(nullptr,error));
     identity_lifecycle_test();
@@ -268,7 +350,10 @@ int main() {
         { std::lock_guard g(room::lock);room::inbox.push_back({old,room::connection_generation.load()-1,"{\"op\":\"host_ok\",\"code\":\"ABCDEFGH\"}"}); }
         room::process_inbox();assert(room::view().state==b::phase::idle);
     }
-    for(const auto* fault:{"closed","overflow","bad_cert","refused_cert","unsolicited_cert","cert_error","identity"}) live_room_survival(fault);
+    for(const auto* fault:{"closed","overflow","bad_cert","refused_cert","cert_error","identity"}) live_room_survival(fault);
+    for(const char* fault:{"rate_limited","no_such_room","room_full","version_mismatch","timeout","idle_disconnect"}) for(const char* next:{"retry","refresh","done"})
+        if(!(std::string(fault)=="idle_disconnect" && std::string(next)=="retry")) certificate_after_failure_test(fault,next);
+    certificate_identity_outside_room_test();certificate_repeat_in_room_test();
     reset("success");assert(room::list());pump_until([] { return room::view().state==b::phase::listing; });
     room::worker_generation=room::connection_generation.load();room::worker_ticket=room::view().generation;
     { std::lock_guard g(room::lock);for(unsigned i=0;i<256;++i) room::inbox.push_back({room::worker_ticket,room::worker_generation,"{}"}); }

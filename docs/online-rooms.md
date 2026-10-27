@@ -111,6 +111,9 @@ admission or healthy gameplay during broker loss. Room-survival fixtures drive
 the real `ui_tick()`/`tick()` using a real in-memory GNS socket pair and verify
 queued datagram flush, inbound polling, address rewriting and retry refusal
 after broker close, overflow, certificate failures and identity mismatch.
+The broker fixture answers `cert` like the real broker (a `cert_ok` after `auth_ok` on every connection) and installs
+through the room's certificate seam, and checks that Retry, Refresh and Done each succeed on a new connection after a
+rate limit, `no_such_room`, `room_full`, version mismatch, timeout or idle disconnect.
 
 Requested-only. Absent `Host`/`JoinCode`: nothing is hooked or written (the step-4 `Transport=gns` LAN mode and the
 stock transport are unchanged). Either key implies `[Online] Transport=gns` (gameplay rule 25, revision 4).
@@ -139,7 +142,11 @@ Host = broker                       ; this PC opens a room when its online sessi
    Trust is established before the `v:2` challenge is read. The client signs `"LCB1-auth-v2\0" || nonce || pubkey`,
    sends `cert` and `host` / `resolve(code)` after `auth_ok`, and requests `turn` after the room response. A `ping`
    every 30 seconds stays inside the broker's 120-second idle timeout. JSON lines, decrypted input, and both queues
-   are byte-bounded. The certificate (project-CA-signed, 24 h) is installed with `SetCertificate`; TURN/STUN servers
+   are byte-bounded. The certificate (project-CA-signed, 24 h) is installed with `SetCertificate`. Every new broker
+   connection delivers a `cert_ok` after `auth_ok` (fresh or cached), so a retry, refresh or later lookup meets the
+   certificate its earlier attempt installed: outside a room a repeat for the same identity is ignored (GNS keeps the
+   certificate while its identity is not reset), another identity is validated like a first certificate, and inside a
+   room any repeat is ignored without dropping the broker. TURN/STUN servers
    go into GNS's `P2P_STUN_ServerList` / `P2P_TURN_*`. ICE uses every candidate kind, or relay only with `Route=relay`.
 3. **Room.** The host writes the full eight-character code to `online-room.txt` next to the game for sharing; logs
    show only its first two characters. Codes and broker `host_ok` / `resolve_ok` responses are checked against the
