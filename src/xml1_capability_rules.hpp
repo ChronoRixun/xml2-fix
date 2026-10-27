@@ -63,4 +63,30 @@ inline registration installed_switch(bool requested,bool installed){
 // xml1 nor xml2): unverified, which closes host and join.
 constexpr std::uint16_t pack_amount_revision=1;
 inline registration pack_amount(bool requested,bool installed){ return installed_switch(requested,installed); }
+
+// XML1 boss brains ([Game] Xml1Bosses, xml1_bosses.cpp, ID 40), revision 1: values {installed boss bits (1 dopples,
+// 2 avalanche, 4 pyro, 8 mystique, 16 shadowking, 32 marrow [native], 64 magneto, 128 blob), FNV-1a-32 of
+// "name:revision;" over the installed bosses in bit order, option bits (1 = the dopples' bossfull flag is written), 0}.
+// Registered only when requested; any listed boss that is unknown or did not install is unverified (host/join closed).
+// A boss whose decision rules change bumps its own revision below, which changes word 1.
+constexpr std::uint16_t bosses_revision=1;
+struct boss_entry { const char* name; std::uint32_t bit; std::uint32_t revision; };
+constexpr std::array<boss_entry,8> boss_table{{{"dopples",1,1},{"avalanche",2,2},{"pyro",4,1},{"mystique",8,1},{"shadowking",16,1},{"marrow",32,1},{"magneto",64,1},{"blob",128,1}}};
+constexpr std::uint32_t boss_bit(std::string_view name){
+    for(const auto& b:boss_table)if(name==b.name)return b.bit;
+    return 0;
+}
+inline std::uint32_t bosses_fingerprint(std::uint32_t installed){
+    std::uint32_t h=2166136261u;
+    auto mix=[&](std::string_view s){for(unsigned char c:s){h^=c;h*=16777619u;}};
+    for(const auto& b:boss_table){
+        if(!(installed&b.bit))continue;
+        mix(b.name);mix(":");const char digit[2]{char('0'+b.revision%10),0};mix(digit);mix(";");
+    }
+    return h;
+}
+inline registration bosses(bool all_known,std::uint32_t requested_bits,std::uint32_t installed_bits,std::uint32_t options){
+    if(!all_known||!requested_bits||installed_bits!=requested_bits)return {{0,0,0,0},false};
+    return {{installed_bits,bosses_fingerprint(installed_bits),options,0},true};
+}
 }

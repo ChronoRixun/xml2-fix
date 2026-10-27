@@ -1,4 +1,6 @@
+#include "anim_enums.hpp"
 #include "test_input.hpp"
+#include "pool_counters.hpp"
 #include "test_state.hpp"
 #include "test_mode.hpp"
 #include "xml1_hook_memory.hpp"
@@ -16,6 +18,10 @@
 #include "world_backfaces.hpp"
 #include "combo_heads.hpp"
 #include "pack_amount.hpp"
+#include "xml1_cling.hpp"
+#include "xml1_rogue_decide.hpp"
+#include "xml1_grab_carry.hpp"
+#include "lift_rule.hpp"
 #include "geometry_sharing.hpp"
 #include "ladder_paths.hpp"
 #include "ini.hpp"
@@ -23,6 +29,7 @@
 #include "pad_input.hpp"
 #include "save_format.hpp"
 #include "entity_capacity.hpp"
+#include "address_space.hpp"
 #include "test_input_rules.hpp"
 
 #define DIRECTINPUT_VERSION 0x0800
@@ -528,7 +535,7 @@ namespace test_input
 			// checked from a script. Then the engine tables' use, live/cap ([Limits], limits.hpp).
 			return "ok XML2 Fix " FIX_VERSION "; keyboard devices " + std::to_string(devices) + "; reads " + std::to_string(reads.load()) + "; keys held " +
 			       std::to_string(held) + "; " + pad_input::status() + "; game " + (game_in_foreground() ? "has" : "doesn't have") + " the focus; fps " +
-			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + limits::status() + "; " + model_pools::status() + "; " + geometry_sharing::status() + "; " + ladder_paths::status() + "; " + break_rule::status() + "; " + placement_crush::status() + "; " + world_impact::status() + "; " + double_heal::status() + "; " + world_backfaces::status() + "; " + combo_heads::status() + "; " + pack_amount::status() + "; " + save_format::status() + "; " + balance::status() + "; " + entity_capacity::status() + "; " + test_mode::status();
+			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + anim_enums::status() + "; " + limits::status() + "; " + model_pools::status() + "; " + geometry_sharing::status() + "; " + ladder_paths::status() + "; " + break_rule::status() + "; " + placement_crush::status() + "; " + world_impact::status() + "; " + double_heal::status() + "; " + world_backfaces::status() + "; " + xml1_cling::status() + "; " + xml1_rogue_decide::status() + "; " + xml1_grab_carry::status() + "; " + lift_rule::status() + "; " + combo_heads::status() + "; " + pack_amount::status() + "; " + save_format::status() + "; " + balance::status() + "; " + entity_capacity::status() + "; memory " + address_space::status() + "; " + test_mode::status();
 		}
 
 		std::string handle(const std::string& line)
@@ -572,12 +579,24 @@ namespace test_input
 			case command::kind::state: return test_state::reply("state");
 			case command::kind::objectives: return test_state::reply("objectives");
 			case command::kind::events: return test_state::reply("events");
+			case command::kind::resident_stats: return test_state::reply("resident_stats");
+            case command::kind::resident_census: return test_state::reply("resident_census");
+            case command::kind::motion_pool: return test_state::reply("motion_pool");
+			case command::kind::char_sounds: return test_state::reply("char_sounds");
+			case command::kind::actor_pools: return test_state::reply("actor_pools");
+			case command::kind::pools: return pool_counters::json();
 			case command::kind::pad:
 				return pad_input::handle(cmd.pad);
 			case command::kind::save:
 				return save_format::pipe(cmd.text);
 			case command::kind::entity:
 				return entity_pipe(cmd.text);
+			case command::kind::memory:
+			{
+				const auto reply = address_space::pipe(cmd.text);
+				if (cmd.text.find("high") != std::string::npos) logger::write("test: memory%s -> %s", cmd.text.c_str(), reply.c_str());
+				return reply;
+			}
 			case command::kind::mouse:
 			{
 				using action = command::pointer_action;

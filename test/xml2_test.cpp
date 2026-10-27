@@ -1714,7 +1714,7 @@ namespace
 		CHECK(clone_ok);
 		for (const auto& g : actor_guards) CHECK(valid_hex(g.hex));
 		for (const auto& g : name_guards) CHECK(valid_hex(g.hex));
-		CHECK(valid_hex(motion_counter_guards[0].hex) && valid_hex(motion_counter_guards[1].hex) && valid_hex(igb_counter_guards[0].hex) && valid_hex(igb_counter_guards[1].hex));
+		CHECK(valid_hex(motion_counter_guards()[0].hex) && valid_hex(motion_counter_guards()[1].hex) && valid_hex(igb_counter_guards[0].hex) && valid_hex(igb_counter_guards[1].hex));
 		CHECK(igb_live_retail == 0x7bf39c);
 
 		// Moving code: a rel32 keeps its target. E8 FB 0F 00 00 at 0x1000 calls 0x2000; copied to 0x5000 it reads 0x2000 - 0x5005.
@@ -1820,7 +1820,7 @@ namespace
 		expect(clone.va, clone.hex);
 		for (const auto& s : name_sites) expect(s.va, s.hex);
 		for (const auto& g : name_guards) expect(g.va, g.hex);
-		for (const auto& g : motion_counter_guards) expect(g.va, g.hex);
+		for (const auto& g : motion_counter_guards()) expect(g.va, g.hex);
 		for (const auto& g : igb_counter_guards) expect(g.va, g.hex);
 		for (const auto& st : item_sites) expect(st.va, st.hex);
 		for (const auto& g : item_guards) expect(g.va, g.hex);
@@ -1961,6 +1961,300 @@ namespace
 		CHECK(is_full(full) && !full);
 		CHECK(run_thiscall(at(0x55aaa0), table.data(), result) && table.dword(8) == 700 && table.dword(names.count) == 1024 && table.slack_untouched());
 
+		VirtualFree(image, 0, MEM_RELEASE);
+	}
+
+	std::vector<void*> igb_destroyed_records;
+	void __fastcall test_destroy_igb_record(void* self, void*) { igb_destroyed_records.push_back(self); }
+	int igb_name_full_calls = 0;
+	int __fastcall test_igb_names_full(void*, void*) { ++igb_name_full_calls; return 1; }
+	bool run_thiscall_two(const std::uint8_t* function, void* self, int first, int second, int& result)
+	{
+		__try {
+			using fn = int(__fastcall*)(void*, void*, int, int);
+			result = reinterpret_cast<fn>(const_cast<std::uint8_t*>(function))(self, nullptr, first, second);
+			return true;
+		} __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+	}
+
+	// [Limits] IGBCache (one-pass limits wave 1, E1): the IGB info cache's rules, its patch table on its own and,
+	// with a copy of XMen2.exe, against it - the bytes, the writes, and the patched pool code at work on blocks of
+	// the test's own at 1024 records.
+	void check_igb_cache_rules()
+	{
+		using namespace limits_rules;
+		std::printf("IGB info cache ([Limits] IGBCache)\n");
+
+		// The ini: 201..4096, 200 the game's own; the name table comes along (2048 by default, or what both tables need).
+		CHECK(names_needed(40, 200) == 450 && names_needed(40, 1024) == 1274 && names_needed(127, 1024) == 1361 && names_needed(127, 2048) == 2385 && names_needed(127) == 537);
+		auto chosen = decide(std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt);
+		CHECK(chosen.igb_records == 200 && chosen.resource_names == 450 && chosen.notes.empty());
+		chosen = decide(std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, "200");
+		CHECK(chosen.igb_records == 200 && chosen.resource_names == 450 && chosen.notes.empty());
+		chosen = decide("127", std::nullopt, "512", "32", "3600", "1024 ; wave 1");
+		CHECK(chosen.igb_records == 1024 && chosen.actor_slots == 127 && chosen.resource_names == 2048 && chosen.notes.size() == 1 && chosen.notes[0].find("IGBCache=1024 needs") != std::string::npos);
+		chosen = decide("127", "2048", std::nullopt, std::nullopt, std::nullopt, "1024");
+		CHECK(chosen.igb_records == 1024 && chosen.resource_names == 2048 && chosen.notes.empty());
+		chosen = decide("127", "1024", std::nullopt, std::nullopt, std::nullopt, "1024"); // the shipped ResourceNames is too few: 1361
+		CHECK(chosen.igb_records == 1024 && chosen.resource_names == 1361 && chosen.notes.size() == 1 && chosen.notes[0].find("using 1361") != std::string::npos);
+		chosen = decide(std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, "2048");
+		CHECK(chosen.igb_records == 2048 && chosen.resource_names == 2298 && chosen.actor_slots == 40);
+		chosen = decide("127", "4096", std::nullopt, std::nullopt, std::nullopt, "2048"); // the most: 2385 names needed, within the name table's 4096
+		CHECK(chosen.igb_records == 2048 && chosen.resource_names == 4096 && chosen.notes.empty() && names_needed(max_actor_slots, max_igb_records) <= max_resource_names);
+		for (const char* bad : {"199", "2049", "4096", "0", "-1", "0x400", "1024x", "", "lots"})
+		{
+			chosen = decide(std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, bad);
+			CHECK(chosen.igb_records == 200 && chosen.resource_names == 450 && chosen.notes.size() == 1 && chosen.notes[0].find("stays at 200 records") != std::string::npos);
+		}
+		chosen = decide("127", std::nullopt); // without IGBCache, ActorSlots keeps its released 1024
+		CHECK(chosen.resource_names == 1024 && chosen.igb_records == 200);
+
+		// The layout: the retail one from 200, field for field (igb-cache.md 2), 512 (7.1) and 1024.
+		const auto retail = igb_layout_for(stock_igb_records);
+		CHECK(retail.bitmap_words == 7 && retail.bitmap_a == 0x7080 && retail.ring == 0x709c && retail.ring_write == 0x73c0 && retail.ring_read == 0x73c4 && retail.ring_count == 0x73c8);
+		CHECK(retail.bitmap_b == 0x73cc && retail.live == 0x73e8 && retail.ids == 0x73ec && retail.mask == 0x770c && retail.shift == 0x7710 && retail.pool_size == 0x7714);
+		CHECK(retail.object_size == 0x7718 && retail.id_mask == 0xff && retail.id_shift == 8 && igb_object_retail + retail.object_size == igb_init_guard);
+		CHECK(igb_object_retail + 4 + retail.live == igb_live_retail && igb_live_retail == 0x7bf39c);
+		const auto l512 = igb_layout_for(512);
+		CHECK(l512.bitmap_a == 0x12000 && l512.ring == 0x12040 && l512.ring_write == 0x12844 && l512.bitmap_b == 0x12850 && l512.live == 0x12890 && l512.ids == 0x12894);
+		CHECK(l512.mask == 0x13094 && l512.shift == 0x13098 && l512.pool_size == 0x1309c && l512.id_mask == 0x1ff && l512.id_shift == 9);
+		const auto big = igb_layout_for(1024);
+		CHECK(big.bitmap_words == 32 && big.bitmap_a == 0x24000 && big.ring == 0x24080 && big.ring_write == 0x25084 && big.live == 0x25110 && big.ids == 0x25114);
+		CHECK(big.mask == 0x26114 && big.shift == 0x26118 && big.object_size == 0x26120 && big.id_mask == 0x3ff && big.id_shift == 10);
+		bool layouts_ok = true;
+		for (int n = stock_igb_records; n <= max_igb_records; ++n)
+		{
+			const auto l = igb_layout_for(n);
+			const auto records = static_cast<DWORD>(n);
+			layouts_ok &= l.live + 4 == l.ids && l.mask + 4 == l.shift && l.bitmap_a == records * igb_record_size; // one displacement serves both bases
+			layouts_ok &= l.id_mask == (1u << l.id_shift) - 1 && l.id_mask >= records - 1 && l.id_mask / 2 < records - 1 && l.id_shift <= 11;
+			layouts_ok &= l.bitmap_words * 32 >= records && (l.bitmap_words - 1) * 32 < records && l.object_size == l.pool_size + 4;
+		}
+		CHECK(layouts_ok);
+
+		// The table on its own: well-formed, the operand inside its instruction holding its retail value, address
+		// order, the retail layout giving back every retail value; 82 rows (14 imm32: 11 N, 3 N-1; 68 disp32).
+		bool rows_ok = true;
+		DWORD previous = 0;
+		std::map<actor_field, int> counts;
+		for (const auto& s : igb_sites)
+		{
+			const bool row_ok = valid_hex(s.hex) && static_cast<std::size_t>(s.offset + s.size) <= hex_size(s.hex) && s.size == 4 && operand_in(s.hex, s.offset, s.size) == s.retail &&
+			                    value_of(s.field, retail) == s.retail && s.va >= previous;
+			if (!row_ok) std::printf("  info  IGB cache row 0x%08lX doesn't add up\n", s.va);
+			rows_ok &= row_ok;
+			previous = s.va;
+			++counts[s.field];
+		}
+		CHECK(rows_ok && igb_sites.size() == 82 && counts[actor_field::slots] == 11 && counts[actor_field::last_slot] == 3 && counts[actor_field::live_via_cache] == 1 &&
+		      counts[actor_field::mask_via_cache] == 3 && counts[actor_field::ring_read_via_ring] == 3 && counts[actor_field::ring_count_via_ring] == 2);
+		CHECK(std::ranges::count_if(igb_sites, [](const actor_site& s) { return s.va == 0x56ede5; }) == 2); // the cap check: its live count and its 200
+		bool references_ok = igb_references.size() == 7;
+		for (const auto& s : igb_references)
+			references_ok &= valid_hex(s.hex) && s.size == 4 && operand_in(s.hex, s.offset, s.size) == s.retail && reference_value(s, igb_object_retail, find_next_200_va) == s.retail;
+		CHECK(references_ok && std::ranges::count_if(igb_references, [](const actor_site& s) { return s.field == actor_field::clone_call; }) == 3);
+		const auto& clone = find_next_200;
+		bool clone_ok = valid_hex(clone.hex) && hex_size(clone.hex) == 0x99 && clone.rel32_count == 0 && clone.va == find_next_200_va;
+		for (const auto& f : clone.fields) clone_ok &= f.size == 4 && operand_in(clone.hex, f.offset, 4) == 0xc8 && value_of(f.field, retail) == 0xc8;
+		for (std::size_t i = 0; i < hex_size(clone.hex); ++i)
+		{
+			const auto b = hex_byte(clone.hex, i);
+			clone_ok &= b != 0xE8 && b != 0xE9 && !(b == 0x0F && i + 1 < hex_size(clone.hex) && (hex_byte(clone.hex, i + 1) & 0xF0) == 0x80);
+		}
+		CHECK(clone_ok);
+		for (const auto& g : igb_guards) CHECK(valid_hex(g.hex));
+
+		// No two writes share a byte, with every other [Limits] table raised at the same time (the wave 1 ini).
+		auto writes = igb_writes(big, 0x12340000, 0x00a80000);
+		{
+			auto all = writes;
+			const auto actors = actor_writes(actor_layout_for(max_actor_slots), 0x22340000, 0x00a90000);
+			const auto names = name_writes(name_layout_for(2048));
+			all.insert(all.end(), actors.begin(), actors.end());
+			all.insert(all.end(), names.begin(), names.end());
+			std::ranges::sort(all, [](const operand_write& a, const operand_write& b) { return a.va < b.va; });
+			bool apart = true;
+			for (std::size_t i = 1; i < all.size(); ++i) apart &= all[i - 1].va + all[i - 1].size <= all[i].va;
+			CHECK(apart && all.size() == 82 + 7 + 74 + 5 + 71);
+		}
+
+		const auto exe = game_executable();
+		if (!exe)
+		{
+			std::printf("  skip  no XMen2.exe to check the IGB cache sites against\n");
+			return;
+		}
+		DWORD image_size = 0;
+		std::uint8_t* image = map_image(*exe, image_size);
+		CHECK(image != nullptr);
+		if (!image) return;
+		const auto at = [&](const DWORD va) { return image + (va - image_base); };
+		bool same = true;
+		const auto expect = [&](const DWORD va, const std::string_view hex)
+		{
+			if (!matches(at(va), hex))
+			{
+				std::printf("  info  XMen2.exe at 0x%08lX isn't what the IGB table says\n", va);
+				same = false;
+			}
+		};
+		for (const auto& s : igb_sites) expect(s.va, s.hex);
+		for (const auto& s : igb_references) expect(s.va, s.hex);
+		for (const auto& g : igb_guards) expect(g.va, g.hex);
+		expect(clone.va, clone.hex);
+		CHECK(same);
+		const std::vector<std::uint8_t> before(image, image + image_size);
+
+		// The stock cap writes back exactly the retail bytes (with the retail object and findNext).
+		for (const auto& w : igb_writes(retail, igb_object_retail, find_next_200_va)) apply_write(image, w);
+		CHECK(std::memcmp(image, before.data(), image_size) == 0);
+
+		// 1024 records: the listed operand bytes change, to their new values, and nothing else does.
+		constexpr DWORD object = 0x12340000, clone_va = 0x00a80000;
+		for (const auto& w : writes) apply_write(image, w);
+		std::vector<bool> listed(image_size, false);
+		bool new_values = true;
+		for (const auto& w : writes)
+		{
+			for (std::size_t i = 0; i < w.size; ++i) listed[w.va - image_base + i] = true;
+			new_values &= operand_at(at(w.va), w.size) == w.value;
+		}
+		std::size_t changed = 0, outside = 0;
+		for (std::size_t i = 0; i < image_size; ++i)
+		{
+			if (image[i] != before[i])
+			{
+				++changed;
+				outside += !listed[i];
+			}
+		}
+		std::printf("  info  %zu operands written for 1024 IGB records, %zu bytes changed\n", writes.size(), changed);
+		CHECK(new_values && outside == 0 && changed > 0);
+		// Spot checks against igb-cache.md 5 (scaled to 1024): the cap, the masks, the ring pop, the references.
+		CHECK(operand_at(at(0x56ede5 + 2), 4) == big.live + 4 && operand_at(at(0x56ede5 + 6), 4) == 1024 && operand_at(at(0x56edcd + 2), 4) == big.mask + 4 && operand_at(at(0x56e9d9 + 1), 4) == 1023);
+		CHECK(operand_at(at(0x491180 + 2), 4) == big.ring_read - big.ring && operand_at(at(0x491192 + 2), 4) == big.ring_count - big.ring && operand_at(at(0x49118d + 1), 4) == 1024);
+		CHECK(operand_at(at(0x56fa07 + 1), 4) == object + 4 && operand_at(at(0x56fa12 + 2), 4) == object && operand_at(at(0x56fa2e + 1), 4) == object && operand_at(at(0x67e190 + 1), 4) == object);
+		CHECK(operand_at(at(0x56fa12 + 6), 4) == 0x69c034); // the vtable the getter stores stays
+		CHECK(operand_at(at(0x56e8c3 + 1), 4) == clone_va - (0x56e8c3 + 5) && operand_at(at(0x56eb58 + 1), 4) == clone_va - (0x56eb58 + 5) && operand_at(at(0x56ebc6 + 1), 4) == clone_va - (0x56ebc6 + 5));
+		CHECK(std::memcmp(at(clone.va), before.data() + (clone.va - image_base), hex_size(clone.hex)) == 0); // 0x4916b9 and 0x57d8d0 keep their 200 bits
+
+		// The clone: the five operands and nothing else, all 1024.
+		std::vector<std::uint8_t> clone_code(at(clone.va), at(clone.va) + hex_size(clone.hex));
+		finish_clone(clone_code.data(), clone, big, clone_va);
+		std::size_t clone_changed = 0;
+		for (std::size_t i = 0; i < clone_code.size(); ++i) clone_changed += clone_code[i] != hex_byte(clone.hex, i);
+		bool clone_values = true;
+		for (const auto& f : clone.fields) clone_values &= operand_at(&clone_code[f.offset], 4) == 1024;
+		CHECK(clone_changed > 0 && clone_changed <= 10 && clone_values);
+
+		// The patched code at work. The pool constructor (0x56e9c0, via 0x56e960 and the ring fill 0x56e8f0) builds
+		// 1024 free records with ids (1 << 10) | i; takeFreeIndex (0x56f680, through the patched ring<200>::pop at
+		// 0x491180) hands out all 1024 in order and allocAt (0x56f640) returns each record; bumpGeneration (0x56f880)
+		// steps a record's generation by 1 << 10; alloc (0x56f7e0) on a second pool hands out 1024 too; the clone scans
+		// the 1024-bit live bitmap. Nothing is written past the pool.
+		void* result = nullptr;
+		test_block pool(big.pool_size);
+		CHECK(run_thiscall(at(0x56e9c0), pool.data(), result) && result == pool.data() && pool.slack_untouched());
+		bool ring_ok = true, ids_ok = true;
+		for (DWORD i = 0; i < 1024; ++i)
+		{
+			ring_ok &= pool.dword(big.ring + i * 4) == i;
+			ids_ok &= pool.dword(big.ids + i * 4) == (0x400 | i);
+		}
+		CHECK(ring_ok && ids_ok && pool.dword(big.ring_write) == 0 && pool.dword(big.ring_read) == 0 && pool.dword(big.ring_count) == 1024 && pool.dword(big.live) == 0);
+		CHECK(pool.dword(big.mask) == 0x3ff && pool.dword(big.shift) == 10);
+		bool taken_ok = true;
+		for (DWORD i = 0; i < 1024; ++i)
+		{
+			taken_ok &= run_thiscall(at(0x56f680), pool.data(), result) && reinterpret_cast<std::uintptr_t>(result) == i;
+			int record = 0;
+			taken_ok &= run_thiscall_int(at(0x56f640), pool.data(), static_cast<int>(i), record) && static_cast<DWORD>(record) == static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(pool.data())) + i * igb_record_size;
+		}
+		CHECK(taken_ok && pool.dword(big.live) == 1024 && pool.dword(big.ring_count) == 0 && pool.dword(big.ring_read) == 0 && pool.slack_untouched());
+		bool bits_ok = true;
+		for (DWORD w = 0; w < big.bitmap_words; ++w) bits_ok &= pool.dword(big.bitmap_a + w * 4) == 0xffffffff && pool.dword(big.bitmap_b + w * 4) == 0xffffffff;
+		CHECK(bits_ok);
+		int ignored = 0;
+		CHECK(run_thiscall_int(at(0x56f880), pool.data(), 1000, ignored) && pool.dword(big.ids + 1000 * 4) == (0x800 | 1000) && pool.dword(big.ids + 999 * 4) == (0x400 | 999) && pool.slack_untouched());
+		test_block second(big.pool_size);
+		CHECK(run_thiscall(at(0x56e9c0), second.data(), result));
+		bool alloc_ok = true;
+		for (DWORD i = 0; i < 1024; ++i) alloc_ok &= run_thiscall(at(0x56f7e0), second.data(), result) && result == second.data() + i * igb_record_size;
+		CHECK(alloc_ok && second.dword(big.live) == 1024 && second.dword(big.ring_count) == 0 && second.dword(big.bitmap_a + 31 * 4) == 0xffffffff && second.slack_untouched());
+		auto* clone_exec = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, clone_code.size(), MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+		CHECK(clone_exec != nullptr);
+		if (clone_exec)
+		{
+			std::memcpy(clone_exec, clone_code.data(), clone_code.size());
+			std::uint8_t* live_bits = pool.data() + big.bitmap_b;
+			CHECK(run_find_next(clone_exec, live_bits, 0, true) == 0 && run_find_next(clone_exec, live_bits, 1023, true) == 1023 && run_find_next(clone_exec, live_bits, 1024, true) == 1024);
+			CHECK(run_find_next(clone_exec, live_bits, 0, false) == 1024); // every record live: none free
+			std::vector<std::uint32_t> bits(32, 0);
+			bits[0] = 1u << 3;
+			bits[6] = 1u << (200 - 192); // record 200: past the retail cap
+			bits[31] = 1u << (1023 - 992);
+			CHECK(run_find_next(clone_exec, bits.data(), 0, true) == 3 && run_find_next(clone_exec, bits.data(), 4, true) == 200 && run_find_next(clone_exec, bits.data(), 201, true) == 1023);
+			CHECK(run_find_next(clone_exec, bits.data(), 3, false) == 4);
+			// The retail findNext stops at 200: the reason it is cloned, not raised in place (its other users keep 200).
+			CHECK(run_find_next(at(clone.va), bits.data(), 4, true) == 200 && run_find_next(at(clone.va), bits.data(), 201, true) == 200);
+			// Execute release/reuse, the real precache entry's capacity failure, and the cache destructor.
+			// Only external services are replaced: no game filesystem, Alchemy or process globals run.
+			test_block cache(big.object_size);
+			auto* cache_pool = cache.data() + 4;
+			const auto target_va = [&](const void* p) {
+				return image_base + static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(p) - reinterpret_cast<std::uintptr_t>(image));
+			};
+			for (const auto& w : igb_writes(big, static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(cache.data())), target_va(clone_exec))) apply_write(image, w);
+			const auto jump_to = [&](DWORD va, const void* target) {
+				at(va)[0] = 0xe9;
+				const DWORD relative = target_va(target) - (va + 5);
+				std::memcpy(at(va) + 1, &relative, 4);
+			};
+			jump_to(0x56dad0, reinterpret_cast<const void*>(&test_destroy_igb_record));
+			jump_to(0x55a6a0, reinterpret_cast<const void*>(&test_igb_names_full));
+			// Name construction is cdecl; lookup is thiscall ret 4 and always misses.
+			at(0x58e970)[0] = 0xc3; at(0x5647f0)[0] = 0xc3;
+			const std::uint8_t miss[]{0x33, 0xc0, 0xc2, 4, 0};
+			std::memcpy(at(0x55ab00), miss, sizeof(miss));
+			const std::uint8_t getter[]{0x33, 0xc0, 0xc3};
+			std::memcpy(at(0x55af80), getter, sizeof(getter));
+			// Redirect the security-cookie load into the mapped image; the compiler check is external.
+			const DWORD cookie = static_cast<DWORD>(reinterpret_cast<std::uintptr_t>(at(0x6f38f8)));
+			std::memcpy(at(0x56ed1b) + 1, &cookie, 4);
+			at(0x672161)[0] = 0xc3;
+			FlushInstructionCache(GetCurrentProcess(), image, image_size);
+			CHECK(run_thiscall(at(0x56e9c0), cache_pool, result));
+			bool filled = true;
+			for (DWORD i = 0; i < 1024; ++i)
+				filled &= run_thiscall(at(0x56f7e0), cache_pool, result) && result == cache_pool + i * igb_record_size;
+			CHECK(filled && cache.dword(4 + big.live) == 1024 && cache.slack_untouched());
+			igb_destroyed_records.clear();
+			// Cache release masks the generation-bearing id, destroys the record, pushes its index,
+			// clears both live bits and advances the generation. Use the last slot, beyond retail 200.
+			CHECK(run_thiscall_two(at(0x56f850), cache.data(), 0x7ff, 0, ignored));
+			CHECK(igb_destroyed_records == std::vector<void*>{cache_pool + 1023 * igb_record_size});
+			CHECK(cache.dword(4 + big.live) == 1023 && cache.dword(4 + big.ring_count) == 1 &&
+			      cache.dword(4 + big.ids + 1023 * 4) == 0xbff &&
+			      cache.dword(4 + big.bitmap_a + 31 * 4) == 0x7fffffff &&
+			      cache.dword(4 + big.bitmap_b + 31 * 4) == 0x7fffffff && cache.slack_untouched());
+			igb_name_full_calls = 0;
+			CHECK(run_thiscall_two(at(0x56ed00), cache.data(), 0, 1, ignored) && ignored == 0 && igb_name_full_calls == 1);
+			CHECK(run_thiscall(at(0x56f7e0), cache_pool, result) && result == cache_pool + 1023 * igb_record_size);
+			CHECK(cache.dword(4 + big.live) == 1024 && cache.dword(4 + big.ring_count) == 0 &&
+			      cache.dword(4 + big.ids + 1023 * 4) == 0xbff);
+			const auto full_cache = cache.bytes;
+			igb_name_full_calls = 0;
+			CHECK(run_thiscall_two(at(0x56ed00), cache.data(), 0, 1, ignored) && ignored == 0 && igb_name_full_calls == 0);
+			CHECK(cache.bytes == full_cache); // capacity failure has no cache side effects
+			igb_destroyed_records.clear();
+			CHECK(run_thiscall(at(0x56f980), cache.data(), result));
+			bool destroyed_all = igb_destroyed_records.size() == 1024;
+			for (DWORD i = 0; i < igb_destroyed_records.size(); ++i)
+				destroyed_all &= igb_destroyed_records[i] == cache_pool + i * igb_record_size;
+			CHECK(destroyed_all && cache.dword(0) == 0x69befc && cache.slack_untouched());
+			// Native destruction is exit-only: its seven-word clear is not a reusable reset.
+			VirtualFree(clone_exec, 0, MEM_RELEASE);
+		}
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
 
@@ -3243,34 +3537,35 @@ namespace
 	struct retail_registry_engine : fake_engine
 	{
 		const std::uint8_t* image = nullptr;
-		std::vector<std::uint8_t> block = std::vector<std::uint8_t>(0x12334 + 0x100, 0);
+		stats_layout::descriptor descriptor;
+        std::vector<std::uint8_t> block;
 		std::array<std::uint8_t, 0x230> zones{};
 		const std::uint8_t* code(const DWORD va) const { return image + (va - limits_rules::image_base); }
 		void put32(const std::size_t offset, const std::uint32_t value) { std::memcpy(block.data() + offset, &value, 4); }
 		void put16(const std::size_t offset, const std::uint16_t value) { std::memcpy(block.data() + offset, &value, 2); }
 
-		explicit retail_registry_engine(const std::uint8_t* mapped) : image(mapped)
+		explicit retail_registry_engine(const std::uint8_t* mapped,stats_layout::descriptor d=stats_layout::stock) : image(mapped),descriptor(d),block(d.manager_size+0x100,0)
 		{
 			cast(*this);
-			put32(0x9b20, 0x1f); // the handle mask
+			put32(descriptor.pool_mask, descriptor.installed?0x1ff:0x1f); // the handle mask
 			std::uint32_t slot_number = 3;
 			for (std::size_t i = 0; i < heroes.size(); ++i)
 			{
 				const auto& h = heroes[i];
 				const std::size_t entry = static_cast<std::size_t>(h.index) * 0x1c;
-				put16(0x120dc + 2 * i, static_cast<std::uint16_t>(h.index));
-				block[entry + 0x9b40] = herostats.count(h.index) ? 1 : 0;
+				put16(descriptor.heroes + 2 * i, static_cast<std::uint16_t>(h.index));
+				block[entry + descriptor.entries+0x18] = herostats.count(h.index) ? 1 : 0;
 				if (h.stats)
 				{
-					put32(entry + 0x9b38, 0x2000 | slot_number); // a handle: generation bits above the mask
+					put32(entry + descriptor.entries+0x10, 0x2000 | slot_number); // a handle: generation bits above the mask
 					std::uint8_t* stats = block.data() + 4 + slot_number * 0x4f8;
 					stats[forced_teams_rules::stats_costume] = static_cast<std::uint8_t>(h.costume);
 					std::memcpy(stats + forced_teams_rules::stats_variants, h.variants.data(), h.variants.size());
 					slot_number += 4;
 				}
 			}
-			put32(0x12330, static_cast<std::uint32_t>(heroes.size()));
-			block[40 * 0x1c + 0x9b40] = 0; // profxgladiator: a character, not a herostat hero
+			put32(descriptor.hero_count, static_cast<std::uint32_t>(heroes.size()));
+			block[40 * 0x1c + descriptor.entries+0x18] = 0; // profxgladiator: a character, not a herostat hero
 		}
 		std::uint8_t* stats(const int index)
 		{
@@ -4086,6 +4381,15 @@ namespace
 		      registry.herostat(40) == false && registry.costume(9) == 8 && registry.has_variant(20, 8) == false && registry.has_variant(20, 3) == true);
 		check_forced_team_functions(registry, game_values);
 
+        // Same native accessors with R2's generated operand edits and manager layout.
+        for(const auto& site:resident_stats_sites::sites)if(site.type==resident_stats_sites::kind::operand)
+            for(unsigned j=0;j<site.size;++j)image[site.va-limits_rules::image_base+site.offset+j]=static_cast<std::uint8_t>(site.new_value>>(8*j));
+        retail_registry_engine raised_registry(image,stats_layout::raised);
+        raised_registry.get=game_reader.get;
+        CHECK(raised_registry.hero_count()==6 && raised_registry.hero_at(3)==20 && raised_registry.costume(9)==8 && raised_registry.herostat(40)==false);
+        check_forced_team_functions(raised_registry,game_values);
+
+
 		VirtualFree(image, 0, MEM_RELEASE);
 	}
 
@@ -4370,7 +4674,7 @@ namespace
 		CHECK(pipe.name == "xml2-join" && pipe.error.empty());
 		CHECK(choose_pipe("; commented out").name == "xml2-fix-input" && choose_pipe("; commented out").error.empty());
 		CHECK(choose_pipe(std::string(64, 'a')).name == std::string(64, 'a'));
-		for (const char* bad : {"has space", "back\\slash", "sl/ash", "dot.name", "colon:", "star*", "quote\"", "tést"})
+		for (const char* bad : {"has space", "back\\slash", "sl/ash", "dot.name", "colon:", "star*", "quote\"", "tÃ©st"})
 		{
 			pipe = choose_pipe(bad);
 			if (pipe.name != "xml2-fix-input" || pipe.error.empty())
@@ -8827,6 +9131,26 @@ namespace
 		CHECK(state && state->zone == "nyc/alison/nyc1_1_3" && state->zone_title == "East Manhattan" && state->act == 1 && !state->loading && !state->movie);
 		CHECK((state && state->party == std::vector<hero>{{"Wolverine", 3}, {"Cyclops", 1}} && !state->danger_room && !state->session && !state->online_menus));
 		CHECK(state && build(*state, all) == port_activity);
+
+        {
+            const auto stock_party=fake.read()->party;
+            fake_game moved;
+            moved.memory.block(fake_game::registry,stats_layout::raised.manager_size);
+            moved.memory.u32(fake_game::registry,registry_vtable);
+            moved.memory.u32(fake_game::registry+stats_layout::raised.pool_mask,0x1ff);
+            moved.memory.u32(fake_game::registry+stats_layout::raised.hero_count,4);
+            const std::uint16_t indices[]={3,5,7,9};
+            for(unsigned j=0;j<4;++j){moved.memory.u16(fake_game::registry+stats_layout::raised.heroes+j*2,indices[j]);
+                std::array<std::uint8_t,entry_size> entry{};
+                CHECK(fake.memory.read(fake_game::registry+registry_entries+indices[j]*entry_size,entry.data(),entry.size()));
+                for(unsigned k=0;k<entry.size();++k)moved.memory.u8(fake_game::registry+stats_layout::raised.entries+indices[j]*entry_size+k,entry[k]);
+            }
+            moved.memory.u8(fake_game::registry+4+2*stats_size+stats_level,3);
+            moved.memory.u8(fake_game::registry+4+4*stats_size+stats_level,9);
+            stats_layout::publish(stats_layout::raised);
+            const auto state=moved.read();CHECK(state&&state->party==stock_party);
+            stats_layout::publish(stats_layout::stock);
+        }
 		fake.party({"phoenix", "", "magneto", "wolverine"}); // the charactername; the placeholder isn't a hero
 		state = fake.read();
 		CHECK((state && state->party == std::vector<hero>{{"Jean Grey", 9}, {"Wolverine", 3}}));
@@ -12065,6 +12389,13 @@ int main(const int argc, char** argv)
 		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
 		return failures ? 1 : 0;
 	}
+	if (argc > 1 && std::strcmp(argv[1], "--igb-cache-rules") == 0)
+	{
+		check_limits_rules(); // the [Limits] rules the IGB cache extends (decide, names_needed, the actor and name tables), headless
+		check_igb_cache_rules();
+		std::printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+		return failures ? 1 : 0;
+	}
 	if (argc > 1 && std::strcmp(argv[1], "--fight-style-rules") == 0)
 	{
 		check_fight_style_rules();
@@ -12145,6 +12476,7 @@ int main(const int argc, char** argv)
 	check_resolution_rules();
 	check_geometry_sharing_rules();
 	check_limits_rules();
+	check_igb_cache_rules();
 	check_fight_style_rules();
 	check_move_trigger_rules();
 	check_actor_trigger_timing();

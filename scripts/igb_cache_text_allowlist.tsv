@@ -1,0 +1,609 @@
+# Retail SHA1 7d95cdb4a9a599b982147a3389ea7aff211cb82b. See docs/igb-cache.md.
+# VA	operand offset	exact instruction bytes	reason (no wildcard exemptions)
+004025f3	1	68c2010000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0x1c2
+0040261b	1	68c2010000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0x1c2
+004026bf	1	68c2010000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0x1c2
+004026e2	1	68c2010000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0x1c2
+00402804	1	68c2010000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0x1c2
+00402827	1	68c2010000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0x1c2
+00403ff8	2	8990c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [eax + 0xc8], edx
+004042d0	1	b80f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0xf
+00405522	2	8b8214070000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [edx + 0x714]
+0040554b	2	8bb214070000	Unrelated object field with a common small displacement; exact retail instruction retained; mov esi, dword ptr [edx + 0x714]
+0040555a	2	89b214070000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [edx + 0x714], esi
+00405562	2	c7821407000000000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [edx + 0x714], 0
+00405c94	2	89b110070000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + 0x710], esi
+00405c9a	2	89b114070000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + 0x714], esi
+00405cb0	2	8b8110070000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [ecx + 0x710]
+00405cc3	2	898110070000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + 0x710], eax
+00405cd1	2	89b110070000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + 0x710], esi
+00405d78	2	8b8810070000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [eax + 0x710]
+00405d8c	2	898810070000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [eax + 0x710], ecx
+00405d9a	2	c7801007000000000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [eax + 0x710], 0
+00407bfc	3	8d8c24c8000000	Stack frame/local offset; not a cache/name object field; lea ecx, [esp + 0xc8]
+00407df5	3	8d9424c8000000	Stack frame/local offset; not a cache/name object field; lea edx, [esp + 0xc8]
+00407e48	3	8d9424c8000000	Stack frame/local offset; not a cache/name object field; lea edx, [esp + 0xc8]
+00407f02	3	8d8424c8000000	Stack frame/local offset; not a cache/name object field; lea eax, [esp + 0xc8]
+00408308	3	8d8424c8000000	Stack frame/local offset; not a cache/name object field; lea eax, [esp + 0xc8]
+00409c3e	3	d99c24c8000000	Stack frame/local offset; not a cache/name object field; fstp dword ptr [esp + 0xc8]
+00409dee	3	898c24c8000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0xc8], ecx
+00409e0a	3	8d8c24c8000000	Stack frame/local offset; not a cache/name object field; lea ecx, [esp + 0xc8]
+0040bf8a	2	8981c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + 0xc8], eax
+0040cf90	3	d98424c8000000	Stack frame/local offset; not a cache/name object field; fld dword ptr [esp + 0xc8]
+0040df1e	3	8bb424c8000000	Stack frame/local offset; not a cache/name object field; mov esi, dword ptr [esp + 0xc8]
+0040e320	3	8d8424c8000000	Stack frame/local offset; not a cache/name object field; lea eax, [esp + 0xc8]
+00412865	1	bd0f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ebp, 0xf
+004146eb	3	d98424c8000000	Stack frame/local offset; not a cache/name object field; fld dword ptr [esp + 0xc8]
+00414979	3	d98424c8000000	Stack frame/local offset; not a cache/name object field; fld dword ptr [esp + 0xc8]
+00414c4c	3	899424c8000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0xc8], edx
+00415ce0	2	8b8180700000	Effect-curve pool bitmap; independent layout (curve_sites), not CIGBInfoCache2; mov eax, dword ptr [ecx + 0x7080]
+00415ce7	2	8db980700000	Effect-curve pool bitmap; independent layout (curve_sites), not CIGBInfoCache2; lea edi, [ecx + 0x7080]
+00415f3c	3	8bbc0180700000	Effect-curve pool bitmap; independent layout (curve_sites), not CIGBInfoCache2; mov edi, dword ptr [ecx + eax + 0x7080]
+00415f47	3	89bc0180700000	Effect-curve pool bitmap; independent layout (curve_sites), not CIGBInfoCache2; mov dword ptr [ecx + eax + 0x7080], edi
+004161dd	3	8d848f80700000	Effect-curve pool bitmap; independent layout (curve_sites), not CIGBInfoCache2; lea eax, [edi + ecx*4 + 0x7080]
+004162b9	2	8dae80700000	Effect-curve pool bitmap; independent layout (curve_sites), not CIGBInfoCache2; lea ebp, [esi + 0x7080]
+00416beb	3	c78424c800000000401c46	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0xc8], 0x461c4000
+00416f5d	3	8b9424c8000000	Stack frame/local offset; not a cache/name object field; mov edx, dword ptr [esp + 0xc8]
+0041997e	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+00419fc1	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+00419ff2	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+0041a656	2	388fc8000000	Unrelated object field with a common small displacement; exact retail instruction retained; cmp byte ptr [edi + 0xc8], cl
+0041a65e	2	8a97c7000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dl, byte ptr [edi + 0xc7]
+0041a6f9	2	8886c7000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov byte ptr [esi + 0xc7], al
+0041a7b5	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+0041a7d5	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+0041ab01	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+0041ae6c	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+0041b621	3	0fb686c7000000	Unrelated object field with a common small displacement; exact retail instruction retained; movzx eax, byte ptr [esi + 0xc7]
+0041b63b	2	3886c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; cmp byte ptr [esi + 0xc8], al
+0041b641	2	8886c7000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov byte ptr [esi + 0xc7], al
+0041b69c	2	c686c700000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov byte ptr [esi + 0xc7], 0
+0041b8f9	2	ff97c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edi + 0xc8]
+0041b910	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+0041bb31	2	8885c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov byte ptr [ebp + 0xc8], al
+0041c111	2	889ec7000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov byte ptr [esi + 0xc7], bl
+0041c117	2	889ec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov byte ptr [esi + 0xc8], bl
+0041dc65	2	8d9128030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea edx, [ecx + 0x328]
+00420717	2	ff93c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ebx + 0xc8]
+00420732	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+00420abe	2	ff93c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ebx + 0xc8]
+00421f7b	3	c68424c700000000	Stack frame/local offset; not a cache/name object field; mov byte ptr [esp + 0xc7], 0
+00421fec	3	8b8c24c8000000	Stack frame/local offset; not a cache/name object field; mov ecx, dword ptr [esp + 0xc8]
+00423390	2	c78628030000ac2b6800	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0x328], 0x682bac
+0042339a	2	899e2c030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0x32c], ebx
+00423ca3	1	05c8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; add eax, 0xc8
+00423cb5	1	b8c8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0xc8
+00424522	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+00424539	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+004245df	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+00424d13	1	05c8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; add eax, 0xc8
+00426b4d	4	c744247c0f000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x7c], 0xf
+00426c1b	3	c78424c8000000103d6800	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0xc8], 0x683d10
+004272a3	3	c784242803000038376800	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x328], 0x683738
+004272ae	3	c784242c0300006a000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x32c], 0x6a
+00427b30	7	c7842444060000c7000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x644], 0xc7
+00427b46	7	c784244c060000c8000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x64c], 0xc8
+0042ac0f	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+0042ac98	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+0042ba25	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+0042ba40	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+00431051	3	8b8424c8000000	Stack frame/local offset; not a cache/name object field; mov eax, dword ptr [esp + 0xc8]
+00431183	3	8b8424c8000000	Stack frame/local offset; not a cache/name object field; mov eax, dword ptr [esp + 0xc8]
+00431318	3	8b9c24c8000000	Stack frame/local offset; not a cache/name object field; mov ebx, dword ptr [esp + 0xc8]
+00437437	2	d88dc8000000	Unrelated object field with a common small displacement; exact retail instruction retained; fmul dword ptr [ebp + 0xc8]
+00439290	2	81c128030000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; add ecx, 0x328
+004392a0	2	81c128030000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; add ecx, 0x328
+00439379	2	d9862c030000	Unrelated object field with a common small displacement; exact retail instruction retained; fld dword ptr [esi + 0x32c]
+004393ed	2	d9862c030000	Unrelated object field with a common small displacement; exact retail instruction retained; fld dword ptr [esi + 0x32c]
+00439731	2	d99e2c030000	Unrelated object field with a common small displacement; exact retail instruction retained; fstp dword ptr [esi + 0x32c]
+00439957	2	898628030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0x328], eax
+00439ad6	2	8d8e28030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea ecx, [esi + 0x328]
+00439cee	2	ff97c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edi + 0xc8]
+00439d09	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+0043a0de	2	8d8e28030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea ecx, [esi + 0x328]
+0043eaa6	2	d88e28030000	Unrelated object field with a common small displacement; exact retail instruction retained; fmul dword ptr [esi + 0x328]
+0043eb38	2	d88e2c030000	Unrelated object field with a common small displacement; exact retail instruction retained; fmul dword ptr [esi + 0x32c]
+0043faad	2	d981c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; fld dword ptr [ecx + 0xc8]
+0043fada	2	89b1c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + 0xc8], esi
+00440de9	2	89be2c030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0x32c], edi
+00440def	2	89be28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0x328], edi
+00441600	2	d99e2c030000	Unrelated object field with a common small displacement; exact retail instruction retained; fstp dword ptr [esi + 0x32c]
+0044160c	2	d99e28030000	Unrelated object field with a common small displacement; exact retail instruction retained; fstp dword ptr [esi + 0x328]
+00441dca	3	d98424c8000000	Stack frame/local offset; not a cache/name object field; fld dword ptr [esp + 0xc8]
+00441f62	3	8d9424c8000000	Stack frame/local offset; not a cache/name object field; lea edx, [esp + 0xc8]
+0044209c	3	d88424c8000000	Stack frame/local offset; not a cache/name object field; fadd dword ptr [esp + 0xc8]
+00442d02	3	8d8424c8000000	Stack frame/local offset; not a cache/name object field; lea eax, [esp + 0xc8]
+00443e82	2	89bec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0xc8], edi
+00444b27	2	899e2c030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0x32c], ebx
+00444b2d	2	899e28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0x328], ebx
+0044db63	2	8dbec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; lea edi, [esi + 0xc8]
+0044df1c	2	d985c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; fld dword ptr [ebp + 0xc8]
+004515c7	3	8d8424c8000000	Stack frame/local offset; not a cache/name object field; lea eax, [esp + 0xc8]
+00452bda	3	8a9424c8000000	Stack frame/local offset; not a cache/name object field; mov dl, byte ptr [esp + 0xc8]
+00457406	3	8bb48628030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov esi, dword ptr [esi + eax*4 + 0x328]
+00457476	3	8bb48628030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov esi, dword ptr [esi + eax*4 + 0x328]
+00457596	3	8b948628030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov edx, dword ptr [esi + eax*4 + 0x328]
+004579fd	3	8b9c8628030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ebx, dword ptr [esi + eax*4 + 0x328]
+00457b2d	3	8b9c8628030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ebx, dword ptr [esi + eax*4 + 0x328]
+00457d50	3	89948e28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + ecx*4 + 0x328], edx
+00459301	3	8b8424c8000000	Stack frame/local offset; not a cache/name object field; mov eax, dword ptr [esp + 0xc8]
+004598e1	2	8b8628030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [esi + 0x328]
+0045b644	3	8b8cbe28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [esi + edi*4 + 0x328]
+0045b650	3	8b94be28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov edx, dword ptr [esi + edi*4 + 0x328]
+0045cb6d	2	8b8628030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [esi + 0x328]
+0045cb9a	2	8b8e28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [esi + 0x328]
+0045cbbb	3	8b8cae28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [esi + ebp*4 + 0x328]
+0045cbc8	3	8b84ae28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [esi + ebp*4 + 0x328]
+0045cbe4	3	8b8caf28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [edi + ebp*4 + 0x328]
+0045cc13	3	8b8caf28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [edi + ebp*4 + 0x328]
+0045cc57	3	8b8caf28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [edi + ebp*4 + 0x328]
+0045ccdd	3	8b8caf28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [edi + ebp*4 + 0x328]
+0045cd29	3	8b84af28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [edi + ebp*4 + 0x328]
+0045cd4d	3	8b8caf28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [edi + ebp*4 + 0x328]
+0045ce4f	3	8b848628030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [esi + eax*4 + 0x328]
+0045d316	3	8b8c8228030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [edx + eax*4 + 0x328]
+0045d6b7	2	8d9e28030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea ebx, [esi + 0x328]
+0045d724	2	8d9e2c030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea ebx, [esi + 0x32c]
+0045daff	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+0045db5c	2	8b962c030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov edx, dword ptr [esi + 0x32c]
+0045ddab	2	d98628030000	Unrelated object field with a common small displacement; exact retail instruction retained; fld dword ptr [esi + 0x328]
+0045ddce	2	d98628030000	Unrelated object field with a common small displacement; exact retail instruction retained; fld dword ptr [esi + 0x328]
+0045de91	2	d98628030000	Unrelated object field with a common small displacement; exact retail instruction retained; fld dword ptr [esi + 0x328]
+0045deaa	2	d98628030000	Unrelated object field with a common small displacement; exact retail instruction retained; fld dword ptr [esi + 0x328]
+00468d85	1	b80f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0xf
+00468ddd	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+0046da1c	1	b80f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0xf
+00477f07	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+004787ea	2	d998c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; fstp dword ptr [eax + 0xc8]
+00478a9b	2	d881c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; fadd dword ptr [ecx + 0xc8]
+00478f8e	2	d8a1c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; fsub dword ptr [ecx + 0xc8]
+00479498	2	d998c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; fstp dword ptr [eax + 0xc8]
+0047b626	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+0047b756	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+0048ac8f	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+0048c174	3	8d8c24c8000000	Stack frame/local offset; not a cache/name object field; lea ecx, [esp + 0xc8]
+0048e151	3	8a8424c8000000	Stack frame/local offset; not a cache/name object field; mov al, byte ptr [esp + 0xc8]
+0048e52c	3	8b9424c8000000	Stack frame/local offset; not a cache/name object field; mov edx, dword ptr [esp + 0xc8]
+0048ea01	3	8b8424c8000000	Stack frame/local offset; not a cache/name object field; mov eax, dword ptr [esp + 0xc8]
+0048efe5	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+00490d74	1	3dc8000000	Original shared bitset<200>::findNext; cache uses its raised clone, other callers keep 200; cmp eax, 0xc8
+00490d7e	1	b8c8000000	Original shared bitset<200>::findNext; cache uses its raised clone, other callers keep 200; mov eax, 0xc8
+00490dab	1	3dc8000000	Original shared bitset<200>::findNext; cache uses its raised clone, other callers keep 200; cmp eax, 0xc8
+00490df8	1	3dc8000000	Original shared bitset<200>::findNext; cache uses its raised clone, other callers keep 200; cmp eax, 0xc8
+00490dff	1	b8c8000000	Original shared bitset<200>::findNext; cache uses its raised clone, other callers keep 200; mov eax, 0xc8
+00491669	2	81fac8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; cmp edx, 0xc8
+004916a9	2	81fac8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; cmp edx, 0xc8
+004916be	1	3dc8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; cmp eax, 0xc8
+00491f74	2	81f9c8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; cmp ecx, 0xc8
+0049233e	1	3dc8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; cmp eax, 0xc8
+00492357	1	b8c7000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0xc7
+00492367	2	81fac8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; cmp edx, 0xc8
+00493249	6	81beb8000200c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; cmp dword ptr [esi + 0x200b8], 0xc8
+00497732	3	c78424c8000000ffffffff	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0xc8], 0xffffffff
+004985b2	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+00499e21	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+0049af91	3	8d8424c8000000	Stack frame/local offset; not a cache/name object field; lea eax, [esp + 0xc8]
+0049b44a	3	8d9424c8000000	Stack frame/local offset; not a cache/name object field; lea edx, [esp + 0xc8]
+0049b889	2	899ec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0xc8], ebx
+0049ced0	1	b828030000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0x328
+004abb40	1	b82c030000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0x32c
+004abbe8	2	c7852803000001000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ebp + 0x328], 1
+004abc0d	2	899d28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ebp + 0x328], ebx
+004abcf8	2	89ae28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0x328], ebp
+004abd5e	2	83be2803000001	Unrelated object field with a common small displacement; exact retail instruction retained; cmp dword ptr [esi + 0x328], 1
+004ac114	2	8b83201c0000	Independent 100-node pool bitmap (0x1c20 = 100 * 0x48), not resource-name entries; mov eax, dword ptr [ebx + 0x1c20]
+004ac11b	2	8dbb201c0000	Independent 100-node pool bitmap (0x1c20 = 100 * 0x48), not resource-name entries; lea edi, [ebx + 0x1c20]
+004acdc9	3	8b8c30201c0000	Independent 100-node pool bitmap (0x1c20 = 100 * 0x48), not resource-name entries; mov ecx, dword ptr [eax + esi + 0x1c20]
+004acdd4	3	898c30201c0000	Independent 100-node pool bitmap (0x1c20 = 100 * 0x48), not resource-name entries; mov dword ptr [eax + esi + 0x1c20], ecx
+004ad105	2	8d8e201c0000	Independent 100-node pool bitmap (0x1c20 = 100 * 0x48), not resource-name entries; lea ecx, [esi + 0x1c20]
+004ad2dc	3	8d8497201c0000	Independent 100-node pool bitmap (0x1c20 = 100 * 0x48), not resource-name entries; lea eax, [edi + edx*4 + 0x1c20]
+004ad6e4	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+004ad6f3	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+004ad702	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+004ae175	4	0fbe8c28c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; movsx ecx, byte ptr [eax + ebp + 0xc8]
+004ae292	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+004ae423	3	8d94dfc8000000	Unrelated object field with a common small displacement; exact retail instruction retained; lea edx, [edi + ebx*8 + 0xc8]
+004afcd7	6	c786d80000000f000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0xd8], 0xf
+004b01f0	6	c786d80000000f000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0xd8], 0xf
+004b06ad	6	c786d80000000f000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0xd8], 0xf
+004b3f06	2	8d8e2c030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea ecx, [esi + 0x32c]
+004b45ed	1	be0f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov esi, 0xf
+004b4681	1	be0f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov esi, 0xf
+004b4750	2	8990c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [eax + 0xc8], edx
+004b883d	1	3dc8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; cmp eax, 0xc8
+004b8844	1	b8c8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0xc8
+004ba01a	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+004c2593	2	80bf2803000002	Unrelated object field with a common small displacement; exact retail instruction retained; cmp byte ptr [edi + 0x328], 2
+004c2c84	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+004c2cfc	2	80bd2803000003	Unrelated object field with a common small displacement; exact retail instruction retained; cmp byte ptr [ebp + 0x328], 3
+004c3007	2	80be2803000003	Unrelated object field with a common small displacement; exact retail instruction retained; cmp byte ptr [esi + 0x328], 3
+004c30c7	2	80be2803000003	Unrelated object field with a common small displacement; exact retail instruction retained; cmp byte ptr [esi + 0x328], 3
+004c36f6	2	80bd2803000002	Unrelated object field with a common small displacement; exact retail instruction retained; cmp byte ptr [ebp + 0x328], 2
+004c3731	2	8a8d28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov cl, byte ptr [ebp + 0x328]
+004c378f	2	8a8d28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov cl, byte ptr [ebp + 0x328]
+004c37dd	2	8a8528030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov al, byte ptr [ebp + 0x328]
+004c3bb3	2	80be2803000003	Unrelated object field with a common small displacement; exact retail instruction retained; cmp byte ptr [esi + 0x328], 3
+004c3ce3	2	8d8628030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea eax, [esi + 0x328]
+004c3de9	2	8a8e28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov cl, byte ptr [esi + 0x328]
+004c40a3	2	80be2803000001	Unrelated object field with a common small displacement; exact retail instruction retained; cmp byte ptr [esi + 0x328], 1
+004c4103	2	80be2803000003	Unrelated object field with a common small displacement; exact retail instruction retained; cmp byte ptr [esi + 0x328], 3
+004cd36d	3	8b8424c8000000	Stack frame/local offset; not a cache/name object field; mov eax, dword ptr [esp + 0xc8]
+004d6cc1	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+004d6da1	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+004d845d	2	898128030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + 0x328], eax
+004d8463	2	89812c030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + 0x32c], eax
+004ddc52	3	8d8424c8000000	Stack frame/local offset; not a cache/name object field; lea eax, [esp + 0xc8]
+004e54bc	3	8d8c24c8000000	Stack frame/local offset; not a cache/name object field; lea ecx, [esp + 0xc8]
+004e8465	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+004eb614	3	8b8c24c8000000	Stack frame/local offset; not a cache/name object field; mov ecx, dword ptr [esp + 0xc8]
+004f14ba	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+004f6420	3	8bbc86c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov edi, dword ptr [esi + eax*4 + 0xc8]
+004f68ff	2	8986c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0xc8], eax
+004f6987	3	8bbc86c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov edi, dword ptr [esi + eax*4 + 0xc8]
+004f6bff	2	8986c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0xc8], eax
+004f7d6b	2	8b8fc8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [edi + 0xc8]
+004f7d71	2	898ec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0xc8], ecx
+004f8046	3	8bbc86c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov edi, dword ptr [esi + eax*4 + 0xc8]
+004fb248	4	c744241c0f000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x1c], 0xf
+004fc9ba	3	c684242803000000	Stack frame/local offset; not a cache/name object field; mov byte ptr [esp + 0x328], 0
+004fcc1a	3	8dbc24c8000000	Stack frame/local offset; not a cache/name object field; lea edi, [esp + 0xc8]
+004fcc99	1	68c7000000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0xc7
+004fcd80	3	8d942428030000	Stack frame/local offset; not a cache/name object field; lea edx, [esp + 0x328]
+004fd393	1	68c7000000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0xc7
+00500640	2	8b81c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [ecx + 0xc8]
+00503ceb	3	899424c8000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0xc8], edx
+005070af	3	8b8424c8000000	Stack frame/local offset; not a cache/name object field; mov eax, dword ptr [esp + 0xc8]
+0050716d	3	8b8424c8000000	Stack frame/local offset; not a cache/name object field; mov eax, dword ptr [esp + 0xc8]
+0050744c	3	8b8424c8000000	Stack frame/local offset; not a cache/name object field; mov eax, dword ptr [esp + 0xc8]
+005074b1	3	8b8424c8000000	Stack frame/local offset; not a cache/name object field; mov eax, dword ptr [esp + 0xc8]
+0050753a	3	8b8424c8000000	Stack frame/local offset; not a cache/name object field; mov eax, dword ptr [esp + 0xc8]
+00510c58	3	d99c24c8000000	Stack frame/local offset; not a cache/name object field; fstp dword ptr [esp + 0xc8]
+00514d02	2	89ae28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0x328], ebp
+00514ddc	2	d8962c030000	Unrelated object field with a common small displacement; exact retail instruction retained; fcom dword ptr [esi + 0x32c]
+00514e64	2	d99e2c030000	Unrelated object field with a common small displacement; exact retail instruction retained; fstp dword ptr [esi + 0x32c]
+00514f6e	2	d8962c030000	Unrelated object field with a common small displacement; exact retail instruction retained; fcom dword ptr [esi + 0x32c]
+00514f84	2	d99e2c030000	Unrelated object field with a common small displacement; exact retail instruction retained; fstp dword ptr [esi + 0x32c]
+005164e8	2	899e28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0x328], ebx
+005164ee	2	899e2c030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0x32c], ebx
+00520ec4	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+00521051	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+00521136	1	ba0f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov edx, 0xf
+0052571b	3	8db424c8000000	Stack frame/local offset; not a cache/name object field; lea esi, [esp + 0xc8]
+005257df	3	899434c8000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + esi + 0xc8], edx
+005259b7	3	8d8c84c8000000	Stack frame/local offset; not a cache/name object field; lea ecx, [esp + eax*4 + 0xc8]
+005272ef	3	8d8c24c8000000	Stack frame/local offset; not a cache/name object field; lea ecx, [esp + 0xc8]
+00527c4e	6	c705e4a978000f000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [0x78a9e4], 0xf
+00528705	3	8b8424c8000000	Stack frame/local offset; not a cache/name object field; mov eax, dword ptr [esp + 0xc8]
+00539f21	2	89bec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0xc8], edi
+0053b60c	2	d88ec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; fmul dword ptr [esi + 0xc8]
+0053b614	2	d99ec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; fstp dword ptr [esi + 0xc8]
+0053d793	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+0053da65	1	bbc8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ebx, 0xc8
+0053dd21	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+0054f267	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005525a8	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+00553d3d	4	c74424140f000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x14], 0xf
+005544a1	4	c74424140f000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x14], 0xf
+00554dc0	4	c74424180f000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x18], 0xf
+005554f0	4	c74424180f000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x18], 0xf
+00555c00	4	c74424180f000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x18], 0xf
+00556349	4	c74424140f000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x14], 0xf
+00556a10	4	c74424180f000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x18], 0xf
+00557120	4	c74424180f000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x18], 0xf
+005578e2	4	c74424180f000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x18], 0xf
+005593a5	7	813cc580fb7900c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; cmp dword ptr [eax*8 + 0x79fb80], 0xc8
+00559cda	1	b80f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0xf
+0055d3e3	2	8b8ec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [esi + 0xc8]
+0055d458	2	8981c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + 0xc8], eax
+0055d50d	2	8b8ec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [esi + 0xc8]
+0055d525	2	c786c800000000000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0xc8], 0
+0055d5fb	1	b80f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0xf
+0055f156	2	8986c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0xc8], eax
+00561c38	3	c68424c700000000	Stack frame/local offset; not a cache/name object field; mov byte ptr [esp + 0xc7], 0
+00561c85	3	c68424c800000000	Stack frame/local offset; not a cache/name object field; mov byte ptr [esp + 0xc8], 0
+00561ca1	3	8d8c24c8000000	Stack frame/local offset; not a cache/name object field; lea ecx, [esp + 0xc8]
+00561d16	3	8d8c24c8000000	Stack frame/local offset; not a cache/name object field; lea ecx, [esp + 0xc8]
+00564f0b	3	8d842428030000	Stack frame/local offset; not a cache/name object field; lea eax, [esp + 0x328]
+00566336	1	be0f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov esi, 0xf
+0056ac44	2	89bec0730000	Actor cache layout (actor_sites), independently relocated; not IGB layout; mov dword ptr [esi + 0x73c0], edi
+0056ac7e	2	8d96c4730000	Actor cache layout (actor_sites), independently relocated; not IGB layout; lea edx, [esi + 0x73c4]
+0056b2c3	2	83bbc473000028	Actor cache layout (actor_sites), independently relocated; not IGB layout; cmp dword ptr [ebx + 0x73c4], 0x28
+0056b42e	3	8b8487c4730000	Actor cache layout (actor_sites), independently relocated; not IGB layout; mov eax, dword ptr [edi + eax*4 + 0x73c4]
+0056b66e	2	ff86c0730000	Actor cache layout (actor_sites), independently relocated; not IGB layout; inc dword ptr [esi + 0x73c0]
+0056b774	3	01b490c4730000	Actor cache layout (actor_sites), independently relocated; not IGB layout; add dword ptr [eax + edx*4 + 0x73c4], esi
+0056b77d	3	899490c4730000	Actor cache layout (actor_sites), independently relocated; not IGB layout; mov dword ptr [eax + edx*4 + 0x73c4], edx
+0056b793	3	89b490c4730000	Actor cache layout (actor_sites), independently relocated; not IGB layout; mov dword ptr [eax + edx*4 + 0x73c4], esi
+0056b80b	2	8b86c0730000	Actor cache layout (actor_sites), independently relocated; not IGB layout; mov eax, dword ptr [esi + 0x73c0]
+0056b813	2	8986c0730000	Actor cache layout (actor_sites), independently relocated; not IGB layout; mov dword ptr [esi + 0x73c0], eax
+0056c3cd	2	89b8c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [eax + 0xc8], edi
+0056eaf8	3	889c2428030000	Stack frame/local offset; not a cache/name object field; mov byte ptr [esp + 0x328], bl
+0056eb04	3	8d8c2428030000	Stack frame/local offset; not a cache/name object field; lea ecx, [esp + 0x328]
+0056ec6f	3	889c242c030000	Stack frame/local offset; not a cache/name object field; mov byte ptr [esp + 0x32c], bl
+0057a555	1	b80f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0xf
+0057a9dd	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+0057ad8c	1	b80f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0xf
+0057d856	2	81f9c8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; cmp ecx, 0xc8
+0057d89a	2	81f9c8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; cmp ecx, 0xc8
+0057d8d7	2	81fec8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; cmp esi, 0xc8
+0057dec8	6	81b940030000c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; cmp dword ptr [ecx + 0x340], 0xc8
+0057df90	6	81ba40030000c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; cmp dword ptr [edx + 0x340], 0xc8
+0057e206	6	81b940030000c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; cmp dword ptr [ecx + 0x340], 0xc8
+00581bcb	2	898e28030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0x328], ecx
+00581bd1	2	898e2c030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0x32c], ecx
+00583010	2	8b81c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [ecx + 0xc8]
+005830b2	2	8b8ec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [esi + 0xc8]
+00583103	2	8b8ec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [esi + 0xc8]
+00583112	2	899ec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0xc8], ebx
+00583150	2	8b81c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [ecx + 0xc8]
+00583161	2	8b81c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [ecx + 0xc8]
+00583180	2	8b81c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [ecx + 0xc8]
+00583193	2	8b89c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [ecx + 0xc8]
+005831b0	2	8b81c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [ecx + 0xc8]
+005831d0	2	8b81c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [ecx + 0xc8]
+005831f0	2	8b89c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [ecx + 0xc8]
+00583220	2	8b89c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [ecx + 0xc8]
+00583581	2	8b86c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [esi + 0xc8]
+005835ba	2	8b86c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [esi + 0xc8]
+005835ed	2	8b86c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [esi + 0xc8]
+00583ca3	2	8b96c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov edx, dword ptr [esi + 0xc8]
+00583cb1	2	899ec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0xc8], ebx
+00583ec1	2	899ec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0xc8], ebx
+0058b965	1	b80f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0xf
+0058b9de	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+0058cbfd	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+0058e110	4	c74424140f000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x14], 0xf
+00596ada	2	8988c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [eax + 0xc8], ecx
+00597685	1	be0f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov esi, 0xf
+0059c3e5	1	b80f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0xf
+0059c491	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+0059c505	1	b80f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0xf
+0059c571	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+005a0841	1	b80f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0xf
+005a43d6	2	81ec2c030000	Stack frame/local offset; not a cache/name object field; sub esp, 0x32c
+005a48db	3	8d8424c8000000	Stack frame/local offset; not a cache/name object field; lea eax, [esp + 0xc8]
+005a4d46	1	68c8000000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0xc8
+005a5eb4	3	898424c8000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0xc8], eax
+005a9acc	1	b80f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0xf
+005ab689	2	8d8128030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea eax, [ecx + 0x328]
+005ab6ae	3	8d849128030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea eax, [ecx + edx*4 + 0x328]
+005ab8e4	2	89b110070000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + 0x710], esi
+005ab8ea	2	89b114070000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + 0x714], esi
+005ab900	2	8b8110070000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [ecx + 0x710]
+005ab911	2	898110070000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + 0x710], eax
+005ab91f	2	89b110070000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + 0x710], esi
+005ab942	2	8b8214070000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [edx + 0x714]
+005ab96b	2	8bb214070000	Unrelated object field with a common small displacement; exact retail instruction retained; mov esi, dword ptr [edx + 0x714]
+005ab977	2	89b214070000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [edx + 0x714], esi
+005ab97f	2	c7821407000000000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [edx + 0x714], 0
+005ac013	2	8d9328030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea edx, [ebx + 0x328]
+005ac06d	3	8d8c8b28030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea ecx, [ebx + ecx*4 + 0x328]
+005ac7c4	2	8d8d28030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea ecx, [ebp + 0x328]
+005ac821	3	8d848528030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea eax, [ebp + eax*4 + 0x328]
+005ac906	2	8d8d28030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea ecx, [ebp + 0x328]
+005ac961	3	8d848528030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea eax, [ebp + eax*4 + 0x328]
+005ad2f0	2	81ecc8000000	Stack frame/local offset; not a cache/name object field; sub esp, 0xc8
+005ad702	2	81c4c8000000	Stack frame/local offset; not a cache/name object field; add esp, 0xc8
+005ad711	2	81c4c8000000	Stack frame/local offset; not a cache/name object field; add esp, 0xc8
+005ad724	2	81c4c8000000	Stack frame/local offset; not a cache/name object field; add esp, 0xc8
+005af754	2	8dbe28030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea edi, [esi + 0x328]
+005af964	3	8d948e28030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea edx, [esi + ecx*4 + 0x328]
+005b0722	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005b2b69	2	ff97c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edi + 0xc8]
+005b2b89	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005b2cf5	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005b2d0c	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005b2d22	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005b2d87	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005b2d9e	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005b2df4	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005b37b3	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005b3826	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005b389a	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005b5018	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005b52a3	2	ff97c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edi + 0xc8]
+005b52d9	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005b533b	2	ff97c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edi + 0xc8]
+005b5412	2	ff97c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edi + 0xc8]
+005b5536	2	ff97c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edi + 0xc8]
+005b55b3	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005b5ff7	2	ff97c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edi + 0xc8]
+005b6092	2	ff93c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ebx + 0xc8]
+005b6116	2	ff93c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ebx + 0xc8]
+005b6180	2	ff97c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edi + 0xc8]
+005b63d8	3	8d8424c8000000	Stack frame/local offset; not a cache/name object field; lea eax, [esp + 0xc8]
+005b649e	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005b66fa	3	8d8c24c8000000	Stack frame/local offset; not a cache/name object field; lea ecx, [esp + 0xc8]
+005b87d5	4	c744241c0f000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x1c], 0xf
+005b9889	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005b9969	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005bac55	1	68c2010000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0x1c2
+005bac79	1	68c2010000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0x1c2
+005bf652	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005bf7a5	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005bfc75	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005c8515	1	68c2010000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0x1c2
+005c8539	1	68c2010000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0x1c2
+005cd473	3	8b842428030000	Stack frame/local offset; not a cache/name object field; mov eax, dword ptr [esp + 0x328]
+005cd49f	3	c784242c03000068196800	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x32c], 0x681968
+005cd4d3	3	8b8c2428030000	Stack frame/local offset; not a cache/name object field; mov ecx, dword ptr [esp + 0x328]
+005cd6a7	3	8b8c2428030000	Stack frame/local offset; not a cache/name object field; mov ecx, dword ptr [esp + 0x328]
+005cdc45	2	ff97c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edi + 0xc8]
+005cdc61	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005cdc75	2	ff93c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ebx + 0xc8]
+005d1b4e	2	ff96c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [esi + 0xc8]
+005d1b7b	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005d31ab	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005d3800	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005d380f	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005d3dc8	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005d3e11	2	ff95c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ebp + 0xc8]
+005d779a	3	8b84fdc8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [ebp + edi*8 + 0xc8]
+005d77ac	3	8b8cfdc8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [ebp + edi*8 + 0xc8]
+005d785a	3	8b84f7c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [edi + esi*8 + 0xc8]
+005d786c	3	8b8cf7c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [edi + esi*8 + 0xc8]
+005d78eb	3	8b94fec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov edx, dword ptr [esi + edi*8 + 0xc8]
+005d7907	3	8d84fec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; lea eax, [esi + edi*8 + 0xc8]
+005d7ad9	3	8d94cbc8000000	Unrelated object field with a common small displacement; exact retail instruction retained; lea edx, [ebx + ecx*8 + 0xc8]
+005d7c08	3	8d84c6c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; lea eax, [esi + eax*8 + 0xc8]
+005d7c83	3	8d84c6c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; lea eax, [esi + eax*8 + 0xc8]
+005d9247	1	68c8000000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0xc8
+005d952d	3	8d8424c8000000	Stack frame/local offset; not a cache/name object field; lea eax, [esp + 0xc8]
+005dc377	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005dc39c	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005df4af	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005e0f66	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005e0f82	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005e17fc	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005e2f5c	3	8d8411c7000000	Unrelated object field with a common small displacement; exact retail instruction retained; lea eax, [ecx + edx + 0xc7]
+005e52d9	2	ff93c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ebx + 0xc8]
+005e5432	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005e5499	2	ff93c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ebx + 0xc8]
+005e558f	2	ff93c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ebx + 0xc8]
+005e5faa	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005e6036	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005e6049	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005e6184	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005e632c	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005e6399	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005e7ca2	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005e8695	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005e8eb6	2	ff90c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [eax + 0xc8]
+005ec14b	3	8d8424c8000000	Stack frame/local offset; not a cache/name object field; lea eax, [esp + 0xc8]
+005ec184	3	8d9424c8000000	Stack frame/local offset; not a cache/name object field; lea edx, [esp + 0xc8]
+005ed4e1	3	d99c24c8000000	Stack frame/local offset; not a cache/name object field; fstp dword ptr [esp + 0xc8]
+005f0a1f	1	68c2010000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0x1c2
+005f39f2	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005f5b27	2	ff91c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ecx + 0xc8]
+005f5b39	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005f5b4b	2	ff91c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ecx + 0xc8]
+005f5b5d	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005f5b6f	2	ff91c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ecx + 0xc8]
+005f65c5	2	81ecc8000000	Stack frame/local offset; not a cache/name object field; sub esp, 0xc8
+005f673a	2	ff91c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ecx + 0xc8]
+005f674c	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005f675e	2	ff91c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ecx + 0xc8]
+005f6770	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005f6782	2	ff91c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ecx + 0xc8]
+005f6794	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005f67a6	2	ff91c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ecx + 0xc8]
+005f6bb1	2	81c4c8000000	Stack frame/local offset; not a cache/name object field; add esp, 0xc8
+005f6bd6	2	81c4c8000000	Stack frame/local offset; not a cache/name object field; add esp, 0xc8
+005f850e	3	d98424c8000000	Stack frame/local offset; not a cache/name object field; fld dword ptr [esp + 0xc8]
+005f8eb8	3	d8a424c8000000	Stack frame/local offset; not a cache/name object field; fsub dword ptr [esp + 0xc8]
+005f8ef5	3	d88424c8000000	Stack frame/local offset; not a cache/name object field; fadd dword ptr [esp + 0xc8]
+005f9bb9	3	d98424c8000000	Stack frame/local offset; not a cache/name object field; fld dword ptr [esp + 0xc8]
+005fbbb9	3	c78424c80000000000803f	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0xc8], 0x3f800000
+005fc161	2	ff91c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ecx + 0xc8]
+005fc173	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005fc185	2	ff91c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ecx + 0xc8]
+005fc197	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+005fc1a9	2	ff91c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ecx + 0xc8]
+005fc573	3	c78424c800000000000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0xc8], 0
+005fd7e0	2	81ecc8000000	Stack frame/local offset; not a cache/name object field; sub esp, 0xc8
+005fd96c	2	81c4c8000000	Stack frame/local offset; not a cache/name object field; add esp, 0xc8
+005fe5a4	2	81c4c8000000	Stack frame/local offset; not a cache/name object field; add esp, 0xc8
+005fe5b1	2	81c4c8000000	Stack frame/local offset; not a cache/name object field; add esp, 0xc8
+005ffed5	3	8d8424c8000000	Stack frame/local offset; not a cache/name object field; lea eax, [esp + 0xc8]
+00608044	2	81fec8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; cmp esi, 0xc8
+0060804c	1	bec8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov esi, 0xc8
+00608701	2	69c0c8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; imul eax, eax, 0xc8
+0060ab80	2	8b81c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [ecx + 0xc8]
+0060ab87	2	8db1c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; lea esi, [ecx + 0xc8]
+0060acdc	3	8bbc01c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov edi, dword ptr [ecx + eax + 0xc8]
+0060ace7	3	89bc01c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + eax + 0xc8], edi
+0060ae4b	3	8d948ec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; lea edx, [esi + ecx*4 + 0xc8]
+0060af93	3	8d948ec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; lea edx, [esi + ecx*4 + 0xc8]
+0060b0a0	2	8999c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + 0xc8], ebx
+00611d45	1	b80f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0xf
+0061221c	2	8d8e28030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea ecx, [esi + 0x328]
+00612386	2	8d8e28030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea ecx, [esi + 0x328]
+00614624	2	89b1c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + 0xc8], esi
+00614640	2	8b81c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [ecx + 0xc8]
+00614651	2	8981c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + 0xc8], eax
+0061465f	2	89b1c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + 0xc8], esi
+00614665	1	b80f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0xf
+006146a8	2	8b88c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [eax + 0xc8]
+006146b9	2	8988c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [eax + 0xc8], ecx
+006146c7	2	c780c800000000000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [eax + 0xc8], 0
+006146d1	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+00614d78	2	8b88c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [eax + 0xc8]
+00614d89	2	8988c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [eax + 0xc8], ecx
+00614d97	2	c780c800000000000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [eax + 0xc8], 0
+00614da1	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+00614f42	2	8999c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + 0xc8], ebx
+00616bf2	3	8b942428030000	Stack frame/local offset; not a cache/name object field; mov edx, dword ptr [esp + 0x328]
+00616d5c	3	8b8c242c030000	Stack frame/local offset; not a cache/name object field; mov ecx, dword ptr [esp + 0x32c]
+00616d63	3	8b942428030000	Stack frame/local offset; not a cache/name object field; mov edx, dword ptr [esp + 0x328]
+006191c1	1	68c8000000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0xc8
+00619c93	1	b80f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov eax, 0xf
+0061b301	3	c78424c8000000a0506a00	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0xc8], 0x6a50a0
+0061b6e3	1	68c8000000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0xc8
+0061b7b6	1	68c8000000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0xc8
+0061b845	1	68c8000000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0xc8
+0061ba3b	1	68c8000000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0xc8
+0061e879	7	c78424b00000000f000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0xb0], 0xf
+0062452e	2	ff91c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ecx + 0xc8]
+0062453e	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+0062454e	2	ff91c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ecx + 0xc8]
+0062455e	2	ff92c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [edx + 0xc8]
+0062456e	2	ff91c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; call dword ptr [ecx + 0xc8]
+00625a29	1	05c8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; add eax, 0xc8
+00625b5f	2	8b88c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [eax + 0xc8]
+0062f697	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+0063052d	3	8b8c24c8000000	Stack frame/local offset; not a cache/name object field; mov ecx, dword ptr [esp + 0xc8]
+00630b84	3	8b8c24c8000000	Stack frame/local offset; not a cache/name object field; mov ecx, dword ptr [esp + 0xc8]
+006311d2	3	8db424c8000000	Stack frame/local offset; not a cache/name object field; lea esi, [esp + 0xc8]
+006374f7	4	c744242c0f000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x2c], 0xf
+006376ca	4	c74424340f000000	Stack frame/local offset; not a cache/name object field; mov dword ptr [esp + 0x34], 0xf
+0063a80c	2	8b8628030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [esi + 0x328]
+0063a818	2	8b8e2c030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov ecx, dword ptr [esi + 0x32c]
+0063ae8d	2	81c328030000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; add ebx, 0x328
+0063b27d	2	8d9e28030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea ebx, [esi + 0x328]
+0063b2a2	2	8b862c030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [esi + 0x32c]
+0063b2b5	2	89be2c030000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0x32c], edi
+0063b48c	2	8d8628030000	Unrelated object field with a common small displacement; exact retail instruction retained; lea eax, [esi + 0x328]
+0063d2cc	2	8985c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ebp + 0xc8], eax
+0063d7dc	2	8b83c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [ebx + 0xc8]
+006409a8	3	8bb4242c030000	Stack frame/local offset; not a cache/name object field; mov esi, dword ptr [esp + 0x32c]
+00641e1f	3	8bac2428030000	Stack frame/local offset; not a cache/name object field; mov ebp, dword ptr [esp + 0x328]
+00641ebe	3	8b84242c030000	Stack frame/local offset; not a cache/name object field; mov eax, dword ptr [esp + 0x32c]
+00641eef	3	8b8c242c030000	Stack frame/local offset; not a cache/name object field; mov ecx, dword ptr [esp + 0x32c]
+00641f22	3	8b84242c030000	Stack frame/local offset; not a cache/name object field; mov eax, dword ptr [esp + 0x32c]
+0064219a	1	b90f000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; mov ecx, 0xf
+00646091	2	81ecc8000000	Stack frame/local offset; not a cache/name object field; sub esp, 0xc8
+00647646	2	81ecc8000000	Stack frame/local offset; not a cache/name object field; sub esp, 0xc8
+00650a85	3	c745fc0f000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ebp - 4], 0xf
+00653bb1	2	81ecc8000000	Stack frame/local offset; not a cache/name object field; sub esp, 0xc8
+006546c0	3	c74610c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0x10], 0xc8
+0065484d	1	3dc8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; cmp eax, 0xc8
+0065498b	1	3dc8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; cmp eax, 0xc8
+0065501a	2	888ec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov byte ptr [esi + 0xc8], cl
+006562b4	1	3dc8000000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; cmp eax, 0xc8
+00656e17	2	8b86c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [esi + 0xc8]
+0065ab6b	2	80bec800000000	Unrelated object field with a common small displacement; exact retail instruction retained; cmp byte ptr [esi + 0xc8], 0
+0065bd55	2	389ec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; cmp byte ptr [esi + 0xc8], bl
+0065bdc4	2	389ec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; cmp byte ptr [esi + 0xc8], bl
+0065c01c	2	c780c800000010476600	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [eax + 0xc8], 0x664710
+0065c0f9	2	c780c800000010476600	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [eax + 0xc8], 0x664710
+0065c44d	2	c781c8000000e6bb6600	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [ecx + 0xc8], 0x66bbe6
+0065d6dd	2	8b86c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [esi + 0xc8]
+0065d7c9	2	8dbec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; lea edi, [esi + 0xc8]
+0065da65	2	8986c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [esi + 0xc8], eax
+0065e017	2	8b86c8000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov eax, dword ptr [esi + 0xc8]
+0065ee80	2	389ec8000000	Unrelated object field with a common small displacement; exact retail instruction retained; cmp byte ptr [esi + 0xc8], bl
+0065f507	2	80bec800000000	Unrelated object field with a common small displacement; exact retail instruction retained; cmp byte ptr [esi + 0xc8], 0
+00678573	2	81c128030000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; add ecx, 0x328
+0067947b	2	81c128030000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; add ecx, 0x328
+006794db	2	81c128030000	Unrelated immediate arithmetic/loop constant; exact retail instruction retained; add ecx, 0x328
+0067a5ba	1	6828030000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0x328
+0067ab0a	1	6828030000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0x328
+0067ab3a	1	6828030000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0x328
+0067ab9a	1	6828030000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0x328
+0067ac1a	1	682c030000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0x32c
+0067ae2a	1	682c030000	Unrelated call argument constant in retail code; not a cache/name capacity patch; push 0x32c
+0067b946	6	c7051cb86d000f000000	Unrelated object field with a common small displacement; exact retail instruction retained; mov dword ptr [0x6db81c], 0xf
+0055af51	2	8b3544c27a00	Stable singleton pointer storage; getter/destructor use relocated allocation; mov esi, dword ptr [0x7ac244]
+0055af6d	2	c70544c27a0000000000	Stable singleton pointer storage; getter/destructor use relocated allocation; mov dword ptr [0x7ac244], 0
+0055af80	1	a144c27a00	Stable singleton pointer storage; getter/destructor use relocated allocation; mov eax, dword ptr [0x7ac244]
+0055afae	1	a344c27a00	Stable singleton pointer storage; getter/destructor use relocated allocation; mov dword ptr [0x7ac244], eax
+0055afb8	1	a144c27a00	Stable singleton pointer storage; getter/destructor use relocated allocation; mov eax, dword ptr [0x7ac244]

@@ -18,7 +18,10 @@
 // VirtualPads, when nothing is plugged in) and take screenshots without the focus. It also
 // shows what the game is doing in Discord (Rich Presence, [Discord]; on unless switched off).
 
+#include "address_space.hpp"
 #include "balance.hpp"
+#include "balance_parity.hpp"
+#include "balance_parity_rules.hpp"
 #include "break_rule.hpp"
 #include "placement_crush.hpp"
 #include "world_impact.hpp"
@@ -39,7 +42,17 @@
 #include "npc_power.hpp"
 #include "npc_semi_auto.hpp"
 #include "stun_rule.hpp"
+#include "shared_handlers.hpp"
+#include "shared_handlers_c.hpp"
 #include "pack_amount.hpp"
+#include "lift_rule.hpp"
+#include "lift_rule_rules.hpp"
+#include "xml1_cling.hpp"
+#include "xml1_rogue_decide.hpp"
+#include "xml1_grab_carry.hpp"
+#include "xml1_grab_carry_rules.hpp"
+#include "xml1_rogue_decide_rules.hpp"
+#include "xml1_cling_rules.hpp"
 #include "death_switch.hpp"
 #include "gameplay_agreement.hpp"
 #include "gameplay_capabilities.hpp"
@@ -50,6 +63,7 @@
 #include "script_functions.hpp"
 #include "solo_mode.hpp"
 #include "mold_controller.hpp"
+#include "xml1_bosses.hpp"
 #include "lockon_effects.hpp"
 #include "multipart.hpp"
 #include "xml1_turrets.hpp"
@@ -59,7 +73,9 @@
 #include "iat_hook.hpp"
 #include "ini.hpp"
 #include "limits.hpp"
+#include "pool_counters.hpp"
 #include "model_pools.hpp"
+#include "actor_pools.hpp"
 #include "model_pools_rules.hpp"
 #include "online_tick.hpp"
 #include "frame_rate_rules.hpp"
@@ -75,6 +91,7 @@
 #include "resistance_display.hpp"
 #include "classic_hud.hpp"
 #include "codex_menu.hpp"
+#include "classic_objectives.hpp"
 #include "speaker_label.hpp"
 #include "revival_cost.hpp"
 #include "mod_loader.hpp"
@@ -90,6 +107,10 @@
 #include "pad_profile.hpp"
 #include "pad_bindings.hpp"
 #include "pad_prompts.hpp"
+#include "anim_enums.hpp"
+#include "char_sounds.hpp"
+#include "motion_pool.hpp"
+#include "resident_stats.hpp"
 #include "patch_transaction.hpp"
 #include "entity_capacity.hpp"
 #include "postgame.hpp"
@@ -193,11 +214,16 @@ namespace
 	{
 		logger::write("XML2 Fix " FIX_VERSION);
 		gamepad_fix::use_profile(pad_profile::logitech_dual_action);
+		const bool cache_device_scan = ini::flag(L"Input", L"CacheDeviceScan", true);
+		gamepad_fix::cache_device_scan(cache_device_scan);
 		// [Test] VirtualPads: pads with nothing plugged in, in both DirectInput paths below - read before either exists.
 		virtual_pad::install();
 		xml2_pad_bindings::install();
 
 		const HMODULE game = GetModuleHandleW(nullptr);
+		// E12: XMen2.exe's address space - the 2 GB guard when the build's exe is large-address-aware, and the crash
+		// line in this log. First, before anything here allocates: refuses nothing, changes no game behaviour.
+		address_space::install(game);
 		input_worker::install(game);
 		// The button prompts: the pad's names for a player on a pad, the power wheel's buttons of play. Code and
 		// data the game runs from its first menu on; none of the sites is another module's.
@@ -231,6 +257,10 @@ namespace
 		// install contribute their guards and writes; every expectation is unioned and checked once, every touched
 		// page acquired once, and nothing is published unless the whole set verified. A refusal leaves stock bytes.
 		patch_transaction::transaction startup;
+		resident_stats::require_agreement(game);
+		motion_pool::require_agreement(game);
+		char_sounds::require_agreement(game);
+		anim_enums::contribute(startup, game);
 		if (game_version::needs_gameplay_agreement()) gameplay_agreement::contribute(startup, game);
 
 		new_game::install(game);
@@ -245,14 +275,25 @@ namespace
 		// [Online] ReceiveValidation: the stock dispatch guard. Optional and independent: a guard mismatch skips it
 		// (one log line), it shares no bytes with any other contribution, and OFF contributes nothing.
 		receive_validation::contribute(startup, game);
+        discord_presence::register_stats_layout(); forced_teams::register_stats_layout();
+        revival_cost::register_stats_layout(); xp_curve::register_stats_layout();
+        resident_stats::contribute(startup,game);
 		const auto committed = startup.commit();
 		logger::write("startup transaction: %s (%s)", patch_transaction::name(committed), startup.report().c_str());
 		entity_capacity::after_commit(committed == patch_transaction::outcome::committed, committed == patch_transaction::outcome::rollback_failed);
 		if (!save_format::startup_allowed() || !entity_capacity::startup_allowed()) return;
+		// R1 uses the published entity layout for its strict actor-capacity check.
+		patch_transaction::transaction sounds;
+		char_sounds::contribute(sounds, game);
+		const auto sound_result = sounds.commit();
+		if (sounds.contributions()) logger::write("CharSounds transaction: %s (%s)", patch_transaction::name(sound_result), sounds.report().c_str());
+		if (!game_version::startup_allowed()) return;
+		actor_pools::install(game); // publishes CAI descriptor before every A12/A13 consumer
+		if (!game_version::startup_allowed()) return;
 		// Start background work only after required startup hooks have verified.
 		// XInput's first call can take seconds (xinput_pad.hpp): made on a thread of its own, which runs once
 		// the loader is done, so the game's thread never waits for it; pads read as idle until then.
-		xinput_pad::start();
+		xinput_pad::start(cache_device_scan);
 		save_content_guards::install(game);
 		save_trace::install(game);
 		// What the end credits run: one push operand in CREDITS_MENU, used only when a campaign ends.
@@ -284,6 +325,12 @@ namespace
 		// [Balance]: X-Men Legends 1's combat numbers. Calls and one jump in the health, damage and roll functions and the
 		// style reader, first run when a character or a style loads; none of its sites or guards is anyone else's.
 		balance::install(game);
+		// [Balance] ReceiveRounding / DamageCap (rule 41, requested only): XML1's integer receive stages (0x437a54,
+		// 0x437a75) and its 32000 cap (0x453bfd, 0x453c0c); none of these bytes is another module's.
+		balance_parity::install(game);
+		if (balance_parity::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::balance_parity_id, balance_parity_rules::agreement_revision,
+				balance_parity::values(), balance_parity::verified());
 		// The stats screen's help text: the two literals that name [Balance] numbers (health per body, the
 		// strike bonus) follow the same applied values, through the string manager's vt+8; every other
 		// string passes to the game's getter. After balance: it reads what balance applied.
@@ -303,7 +350,9 @@ namespace
 		// registration; before forced_teams, whose table carries any [Test] probes.
 		script_functions::install(game);
 		forced_teams::install(game);
-		mold_controller::install(game);
+		// The shared XML1 boss dispatcher installs Master Mold ([Game] Xml1MasterMold) and the bosses [Game] Xml1Bosses
+		// lists in one transaction (one brain-dispatch detour); nothing requested writes nothing.
+		xml1_bosses::install(game);
 		lockon_effects::install(game);
 		if (lockon_effects::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::lockon_aim_id, 1,
@@ -333,6 +382,12 @@ namespace
 			gameplay_agreement::register_rule(gameplay_capabilities::turret_controller_id, xml1_capability_rules::turret_revision_for(xml1_turrets::requested()), turrets.values, turrets.verified);
 			const auto functions = script_functions::capability();
 			gameplay_agreement::register_rule(gameplay_capabilities::script_functions_id, script_functions_rules::agreement_revision, functions.values, functions.verified);
+		}
+		// XML1 boss brains (rule 40, requested only): every peer runs the same overlay from the lockstep AI update.
+		if (xml1_bosses::requested())
+		{
+			const auto bosses = xml1_bosses::capability();
+			gameplay_agreement::register_rule(gameplay_capabilities::xml1_bosses_id, xml1_capability_rules::bosses_revision, bosses.values, bosses.verified);
 		}
 		// Solo mode changes what every peer's AI heroes do (rule 8): peers must agree on it like the controllers.
 		if (game_version::needs_gameplay_agreement() || solo_mode::requested())
@@ -416,6 +471,10 @@ namespace
 				npc_semi_auto::values(npc_power::values()), npc_power::verified() && npc_semi_auto::verified(),
 				npc_semi_auto::detail());
 		stun_rule::install(game);
+		shared_handlers::install(game);
+		if (shared_handlers::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::shared_handlers_id, shared_handlers::revision,
+				shared_handlers::values(), shared_handlers::verified());
 		// New opt-in rule: absence preserves the released LC OFF digest.
 		if (stun_rule::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::stun_rule_id, stun_rule::revision, stun_rule::values(), stun_rule::verified());
@@ -436,6 +495,18 @@ namespace
 		// first asks for the actor table (getter 0x56b8e0) and the resource name table (0x55af80) from
 		// the CPrecacheMgr constructor, during its start-up.
 		limits::install(game);
+		limits::register_resource_agreement();
+		// R3 uses the published ActorSlots bound before the lazy motion pool exists.
+		patch_transaction::transaction motions;
+		motion_pool::contribute(motions, game);
+		const auto motion_result = motions.commit();
+		if (motions.contributions()) logger::write("MotionPool transaction: %s (%s)", patch_transaction::name(motion_result), motions.report().c_str());
+		if (!game_version::startup_allowed()) return;
+		// [Limits] IGBCache is rule 31 (IGBCache): a full cache refuses a zone's map IGB (the game reloads the previous
+		// zone) and every model past it, so co-op peers must share the capacity. Requested only: absent or stock adds no
+		// entry (the released record); a requested raise that did not install is unverified (host/join closed).
+		if (limits::igb_cache_requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::igb_cache_id, 1, limits::igb_cache_values(), limits::igb_cache_installed());
 		// [Engine] ModelPools: the model aggregate (0x7bf6d0) is built at the first getter call, after this.
 		model_pools::install(game);
 		// A raise is rule 28 (ModelPools): a full pool refuses spawns, so co-op peers must share the capacities.
@@ -477,6 +548,9 @@ namespace
 		resistance_display::install(game);
 		classic_hud::install(game);
 		codex_menu::install(game);
+		// [Game] ClassicObjectives=1: the PDA objective page lists visible objectives only and opens on the current one
+		// (docs/classic-objectives.md). Local menu presentation: no gameplay-agreement record.
+		classic_objectives::install(game);
 		// XML1's speaker labels ([Game] ClassicSpeakers=1): the line parser's two calls of its common part; display only,
 		// no agreement record (the label is drawn text; the speaker key, portrait and talk animation are the game's own).
 		speaker_label::install(game);
@@ -498,6 +572,31 @@ namespace
 		if (world_backfaces::requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::world_backfaces_id, world_backfaces_rules::agreement_revision,
 				world_backfaces::values(), world_backfaces::verified(), world_backfaces::detail());
+		// [Game] LiftRule=xml1 (requested-only, rule 38, docs/lift-rule.md): the heaviness clamp 0x498991 (after
+		// break_rule's 0x498970 bridge, which it does not touch) and the lift test's heaviness compare 0x427fa3.
+		lift_rule::install(game);
+		if (lift_rule::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::lift_rule_id, lift_rule_rules::agreement_revision,
+				{lift_rule::installed() ? 1u : 0u,0,0,0}, lift_rule::verified());
+		// [Game] Xml1WallCling=xml1 (requested-only, rule 39, docs/xml1-cling.md): the entry of the FightMove handler
+		// lookup 0x4fd860 (npc_semi_auto owns its parser call 0x4f6bf6, whose lookup falls through to this entry).
+		// After entity_capacity, whose bridges of the contact accessors it accepts.
+		xml1_cling::install(game);
+		if (xml1_cling::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::wall_cling_id, xml1_cling_rules::agreement_revision,
+				{xml1_cling::installed() ? 1u : 0u,0,0,0}, xml1_cling::verified());
+		xml1_grab_carry::install(game);
+		if (xml1_grab_carry::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::grab_carry_id, xml1_grab_carry_rules::agreement_revision,
+				{xml1_grab_carry::installed() ? 1u : 0u, xml1_grab_carry::feature_mask(),0,0}, xml1_grab_carry::verified());
+		shared_handlers_c::install(game);
+		if (shared_handlers_c::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::shared_handlers_c_id, shared_handlers_c::revision,
+				shared_handlers_c::values(), shared_handlers_c::verified());
+		xml1_rogue_decide::install(game);
+		if (xml1_rogue_decide::requested())
+			gameplay_agreement::register_rule(gameplay_capabilities::rogue_decide_id, xml1_rogue_decide_rules::agreement_revision,
+				{xml1_rogue_decide::installed() ? 1u : 0u,0,0,0}, xml1_rogue_decide::verified());
 		// X-Men Legends 1's packs ([Game] DoubleHeal=0, installed above, before stat_help): two branches of restoreHealth /
 		// restoreEnergy; no other module patches them.
 		// Both change what each peer simulates (objects broken while a zone settles; how much a pack heals): rules 11
@@ -524,6 +623,7 @@ namespace
 		// transport, which it requires.
 		join_in_progress::install(game);
 
+		pool_counters::install(game); // D0 has no image writes; D1 is explicit [Test] only
 		test_mode::install(game);
 		test_input::install(); // first: its screenshots need the display fix's device hook
 		display::install(game);
@@ -579,6 +679,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, const DWORD reason, LPVOID)
 			MessageBoxA(nullptr, notice.c_str(), "XML2 Fix: entity capacity unavailable", MB_OK | MB_ICONWARNING);
 			logger::write("startup: entity capacity notice closed");
 		}
+        pool_counters::start_logging();
 	}
 	else if (reason == DLL_PROCESS_DETACH)
 	{

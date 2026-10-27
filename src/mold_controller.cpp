@@ -1,3 +1,4 @@
+#include "actor_ai_layout.hpp"
 #include "mold_controller.hpp"
 #include "mold_beam.hpp"
 #include "ini.hpp"
@@ -46,8 +47,6 @@ bool enabled=false,was_requested=false,installed=false;
 bool trace=false;
 float trace_at=-1,trace_decision_at=-1;
 mold_combat_rules::stage_binding saved_stage;
-script_t real_sequence=nullptr,real_node=nullptr,real_default_target=nullptr;
-u32 brain_resume=0x5173f9,brain_postprocess=0x517a79;
 float now(){return fn<clock_t>(0x45fe60)();}
 void reset(u32 owner){
     // Other startup installers may replace native query pools after ours.
@@ -253,12 +252,11 @@ void request(const char* source,const char* sequence){
     else return;
     logger::write("mold controller: request %s, owner %08X",sequence,h);
 }
-void* __cdecl sequence_hook(void* args){
+void sequence_request(void* args){
     // Every pattern request passes here; read script arguments only in scope.
     if(enabled&&scope())request(argument(args,0),argument(args,1));
-    return real_sequence(args);
 }
-void* __cdecl spawn_hook(void* args){
+void default_target(void* args){
     // The authored spawn script selects its owner before reading saved stage
     // flags. Reset transient state even when a same-zone reload reuses an ID.
     if(enabled&&scope()){
@@ -267,13 +265,11 @@ void* __cdecl spawn_hook(void* args){
         auto* actor=find("mastermold",owner);
         if(actor&&candidate==actor){reset(owner);logger::write("mold controller: spawn/default-target reset %08X",owner);}
     }
-    return real_default_target(args);
 }
-void* __cdecl node_hook(void* args){
+void combat_node(void* args){
     if(enabled&&scope()&&std::strcmp(argument(args,0),"mastermold")==0&&std::strcmp(argument(args,1),"shockshield_off")==0){boss.target=0;boss.step=0;boss.shield=false;boss.pending_shield=false;}
-    return real_node(args);
 }
-bool __cdecl brain_update(void* brain,u32* output){
+bool brain_update(void* brain,u32* output){
     if(!scope()){boss=state{};mold_effects::reset();}
     if(!enabled||!boss.owner||!scope())return false;
     auto* actor=brain?at<void*>(brain,0x10):nullptr;
@@ -290,27 +286,6 @@ bool __cdecl brain_update(void* brain,u32* output){
     }
     return false;
 }
-__declspec(naked) void brain_stub(){
-    __asm {
-        pushfd
-        pushad
-        push edi
-        push esi
-        call brain_update
-        add esp,8
-        test al,al
-        jz native_state
-        popad
-        popfd
-        jmp dword ptr [brain_postprocess]
-    native_state:
-        popad
-        popfd
-        mov eax,[esi+8]
-        cmp eax,040h
-        jmp dword ptr [brain_resume]
-    }
-}
 }
 bool beam_target(void* actor,void*& target){
     target=nullptr;if(!enabled||!scope()||at<u32>(actor,0x1c)!=boss.owner||boss.step!=3||now()>boss.shot_until)return false;
@@ -320,16 +295,20 @@ bool requested(){return was_requested;}
 xml1_capability_rules::registration capability(){
     return xml1_capability_rules::master_mold(was_requested,installed,saved_stage.flag,saved_stage.first,saved_stage.width);
 }
-void install(HMODULE game){
+// The shared XML1 boss dispatcher (xml1_bosses.cpp) owns the brain-dispatch detour and the three script-table
+// entries; this controller contributes its beam patch and its guards, and runs from the shared hooks. With only
+// Game.Xml1MasterMold requested the transaction writes exactly what this controller wrote on its own (beam, sequence,
+// node, default target, brain dispatch, in that order).
+bool prepare(HMODULE game,xml1_hook_transaction::patch& beam){
+    actor_ai::register_consumer(actor_ai::consumer::mold);
     was_requested=ini::flag(L"Game",L"Xml1MasterMold",false);installed=false;
-    if(!was_requested)return;
+    if(!was_requested)return false;
     trace=ini::flag(L"Test",L"MoldTrace",false);
-    if(reinterpret_cast<std::uintptr_t>(game)!=limits_rules::image_base)return;
+    if(reinterpret_cast<std::uintptr_t>(game)!=limits_rules::image_base)return false;
     const auto binding=mold_combat_rules::parse_binding(ini::text(L"Game",L"Xml1MoldStage").value_or(""));
-    if(!binding){logger::write("mold controller: saved-stage binding unavailable; native fallback retained");return;}
+    if(!binding){logger::write("mold controller: saved-stage binding unavailable; native fallback retained");return false;}
     saved_stage=*binding;
-    xml1_hook_transaction::patch beam;
-    if(!mold_beam::prepare(beam)||!mold_query::supported()||!mold_effects::supported()){logger::write("mold controller: combat/query/effect compatibility unavailable; no shield/controller hooks enabled");return;}
+    if(!mold_beam::prepare(beam)||!mold_query::supported()||!mold_effects::supported()){logger::write("mold controller: combat/query/effect compatibility unavailable; no shield/controller hooks enabled");return false;}
     constexpr std::array<limits_rules::guard,29> guards{{
         {0x5173f3,"8b460883f840","brain state dispatch after native gates"},
         {0x517370,"83ec188b44241c535556578b","brain update frame"},
@@ -360,26 +339,18 @@ void install(HMODULE game){
         {0x402b60,"568b74240885f6742a8b06578bceff10","native ancestry layout"},
         {0x45fe60,"8b0d348471008b01ffa060010000","game clock"},
         {0x4a0190,"8b4424045650e8d58503008bc8e8fe660300","saved game flag read"}}};
-    for(const auto& g:guards)if(!limits_rules::matches(reinterpret_cast<const unsigned char*>(g.va),g.hex)){logger::write("mold controller: guard failed %08X",g.va);return;}
-    const auto table=at<u32>(reinterpret_cast<const void*>(0x49fe31),0);
-    const auto sequence=table+(0x68adb8-0x68a908),node=table+(0x68ae58-0x68a908),spawn=table+(0x68ae88-0x68a908);
-    real_sequence=at<script_t>(reinterpret_cast<const void*>(sequence),0);real_node=at<script_t>(reinterpret_cast<const void*>(node),0);
-    real_default_target=at<script_t>(reinterpret_cast<const void*>(spawn),0);
-    if(real_sequence!=fn<script_t>(0x4a4830)||real_node!=fn<script_t>(0x4a51a0)||real_default_target!=fn<script_t>(0x4a4e20)){logger::write("mold controller: active script table differs; no shield/controller hooks enabled");return;}
-    using xml1_hook_transaction::pointer_bytes;
-    xml1_hook_transaction::patch brain_patch{0x5173f3,{0x8b,0x46,0x08,0x83,0xf8,0x40},{0xe9,0,0,0,0,0x90}};
-    const u32 delta=static_cast<u32>(reinterpret_cast<std::uintptr_t>(&brain_stub))-0x5173f8;
-    std::memcpy(brain_patch.after.data()+1,&delta,4);
-    const std::vector<xml1_hook_transaction::patch> writes{
-        beam,
-        {sequence,pointer_bytes(real_sequence),pointer_bytes(&sequence_hook)},
-        {node,pointer_bytes(real_node),pointer_bytes(&node_hook)},
-        {spawn,pointer_bytes(real_default_target),pointer_bytes(&spawn_hook)},
-        brain_patch};
-    xml1_hook_transaction::memory memory;
-    bool safe=true;
-    if(xml1_hook_transaction::apply(memory,writes,&safe)){enabled=installed=true;logger::write("mold controller: scoped opt-in requests and native AI update installed (no external scheduled events)");}
-    else if(safe)logger::write("mold controller: dependency transaction refused; native fallback retained");
-    else {game_version::refuse_startup();logger::write("mold controller: rollback/protection verification failed; process startup refused");}
+    for(const auto& g:guards)if(!limits_rules::matches(reinterpret_cast<const unsigned char*>(g.va),actor_ai::guard(g.va,g.hex,actor_ai::installed()))){logger::write("mold controller: guard failed %08X",g.va);return false;}
+    return true;
 }
+void script_table_refused(){logger::write("mold controller: active script table differs; no shield/controller hooks enabled");}
+void committed(bool ok,bool safe){
+    if(ok){enabled=installed=true;logger::write("mold controller: scoped opt-in requests and native AI update installed (no external scheduled events)");}
+    else if(safe)logger::write("mold controller: dependency transaction refused; native fallback retained");
+    else logger::write("mold controller: rollback/protection verification failed; process startup refused");
+}
+bool active(){return enabled;}
+bool brain(void* brain_object,std::uint32_t* output){return brain_update(brain_object,output);}
+void on_sequence(void* args){sequence_request(args);}
+void on_default_target(void* args){default_target(args);}
+void on_node(void* args){combat_node(args);}
 }

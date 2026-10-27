@@ -1,4 +1,5 @@
 #pragma once
+#include "stats_layout.hpp"
 
 // Discord Rich Presence: while the game runs, a friend looking at your Discord profile sees what you
 // are playing - "X-Men Legends II, Act 1 · Sanctuary, Wolverine Lv 12 · Storm Lv 11", or the menus, a
@@ -34,3 +35,5 @@ namespace discord_presence
 	// Reads [Discord] and, in XMen2.exe, starts the presence's thread.
 	void install(HMODULE game);
 }
+
+namespace discord_presence { inline void register_stats_layout(){stats_layout::register_consumer(stats_layout::consumer::discord);} }

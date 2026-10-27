@@ -375,10 +375,15 @@ namespace test_input_rules
 			status,
 			state,
 			objectives,
+			actor_pools,
+			char_sounds,
+			resident_stats, resident_census, motion_pool,
+			pools,
 			events,
 			ping,
 			save, // save_format's commands: `text` is the rest of the line
 			entity, // entity_capacity's commands (status, retire N): `text` is the rest of the line
+			memory, // address_space's commands (status, high <MB>): `text` is the rest of the line
 			mouse, // `mouse X Y [move|down|up|click]`: `pointer` says which, at client point x,y
 			unknown
 		};
@@ -424,10 +429,10 @@ namespace test_input_rules
 			return result;
 		}
 
-		if (verb == "STATE" || verb == "OBJECTIVES" || verb == "EVENTS")
+		if (verb == "STATE" || verb == "OBJECTIVES" || verb == "EVENTS" || verb == "ACTOR_POOLS" || verb == "CHAR_SOUNDS" || verb == "RESIDENT_STATS" || verb == "RESIDENT_CENSUS" || verb == "MOTION_POOL" || verb == "POOLS")
 		{
 			if (!rest.empty()) return fail("observation commands take no arguments");
-			result.what = verb == "STATE" ? command::kind::state : verb == "OBJECTIVES" ? command::kind::objectives : command::kind::events;
+			result.what = verb == "STATE" ? command::kind::state : verb == "OBJECTIVES" ? command::kind::objectives : verb == "RESIDENT_STATS" ? command::kind::resident_stats : verb == "RESIDENT_CENSUS" ? command::kind::resident_census : verb == "MOTION_POOL" ? command::kind::motion_pool : verb == "CHAR_SOUNDS" ? command::kind::char_sounds : verb == "ACTOR_POOLS" ? command::kind::actor_pools : verb == "POOLS" ? command::kind::pools : command::kind::events;
 			return result;
 		}
 		if (verb == "SAVE")
@@ -439,6 +444,12 @@ namespace test_input_rules
 		if (verb == "ENTITY")
 		{
 			result.what = command::kind::entity;
+			result.text = std::string(rest);
+			return result;
+		}
+		if (verb == "MEMORY")
+		{
+			result.what = command::kind::memory;
 			result.text = std::string(rest);
 			return result;
 		}
@@ -482,7 +493,7 @@ namespace test_input_rules
 		else if (verb == "CONSOLE") result.what = command::kind::console;
 		else if (verb == "WM") return fail("wm is gone: the Advanced Options panel reads the DirectInput keyboard like every other screen - use tap (tap DOWN, tap ENTER, tap LEFT)");
 		else return fail("unknown command '" + std::string(text.substr(0, space)) +
-		                 "' (down, up, tap, hold, release, screenshot, script, console, mouse, pad, padhold, paddown, padup, padrelease, stick, trigger, status, ping, save, entity)");
+		                 "' (down, up, tap, hold, release, screenshot, script, console, mouse, pad, padhold, paddown, padup, padrelease, stick, trigger, status, ping, save, entity, memory)");
 
 		if (result.what == command::kind::script || result.what == command::kind::console)
 		{

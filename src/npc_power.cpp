@@ -21,6 +21,14 @@ namespace npc_power
 		bool wanted = false, applied = false;
 		std::vector<xml1_hook_transaction::patch> written; // the installed sites (retail -> rule bytes)
 		void* bridges = nullptr;
+        std::uint8_t* side_block = nullptr;
+        npc_power_rules::layout side_layout;
+        void reset_slot(std::uint32_t slot)
+        {
+            if (!side_block || slot >= side_layout.ai.controllers) return;
+            for (const auto table : {side_layout.next,side_layout.react,side_layout.react_power,side_layout.react_attack})
+                *reinterpret_cast<std::uint32_t*>(table+4*slot)=0;
+        }
 
 		template<class T> T& field(void* object, const std::size_t offset)
 		{
@@ -61,7 +69,7 @@ namespace npc_power
 		{
 			__try
 			{
-				return first_mismatch(reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(image_base)));
+				return first_mismatch(reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(image_base)),actor_ai::installed());
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
 			{
@@ -92,6 +100,8 @@ namespace npc_power
 		}
 		applied = false;
 		written.clear();
+		side_block = nullptr; // E4: the controller-slot reset must not touch the freed side tables
+		if (actor_ai::reset_controller_slot == &reset_slot) actor_ai::reset_controller_slot = nullptr;
 		if (bridges)
 		{
 			VirtualFree(bridges, 0, MEM_RELEASE);
@@ -103,6 +113,7 @@ namespace npc_power
 
 	void install(const HMODULE game)
 	{
+		actor_ai::register_consumer(actor_ai::consumer::power);
 		if (applied)
 		{
 			return;
@@ -141,7 +152,7 @@ namespace npc_power
 			return;
 		}
 		const auto base = static_cast<address>(reinterpret_cast<std::uintptr_t>(memory_block));
-		const auto code = block(base);
+		const auto code = block(base,actor_ai::installed());
 		std::memcpy(memory_block, code.data(), code.size()); // the data page (next press times) stays zero, read-write
 		DWORD old = 0;
 		if (!VirtualProtect(memory_block, code_size, PAGE_EXECUTE_READ, &old) || !FlushInstructionCache(GetCurrentProcess(), memory_block, code_size))
@@ -150,7 +161,7 @@ namespace npc_power
 			VirtualFree(memory_block, 0, MEM_RELEASE);
 			return;
 		}
-		const auto l = layout_at(base);
+		const auto l = layout_at(base,actor_ai::installed());
 		const auto picker_retail = retail_bytes(picker_site, 7); // push 4; call 0x50fe50: the call is the last 5
 		const std::vector<xml1_hook_transaction::patch> all{
 			{charge_site.va, retail_bytes(charge_site, charge_site.patched), charge_jump(l)},
@@ -183,7 +194,13 @@ namespace npc_power
 			// Revision 10: the brain runs through locked moves, as XML1's: no attack-state input-lock exit, and the melee
 			// brain's power decision and its picker don't refuse a locked body (the move's chain test still does).
 			{lock_exit_va, sub_bytes(lock_exit_site, 10, 2), lock_exit_bytes()},
-			{power_lock_va, sub_bytes(power_lock_site, 11, 6), power_lock_jump(l)},
+			// Revision 12: the picker's and the power decision's lock tests for every caller (items 19-20), XML1's
+			// class selection for Advanced Sentinel and Juggernaut (item 21), no Danger Room reaction gate (item 22).
+			{power_lock_va, sub_bytes(power_lock_site, 11, 6), power_lock_bytes()},
+			{picker_lock_jne_va, sub_bytes(picker_entry_site, 19, 6), picker_lock_bytes()},
+			{class_name_va, retail_bytes(class_name_site, 11), class_name_bytes()},
+			{class_juggernaut_va, sub_bytes(class_category_site, 4, 4), class_juggernaut_bytes()},
+			{danger_room_gate_va, retail_bytes(danger_room_gate_site, 5), danger_room_gate_bytes()},
 		};
 		xml1_hook_transaction::memory memory;
 		bool safe = true;
@@ -202,17 +219,21 @@ namespace npc_power
 		}
 		written = all;
 		bridges = memory_block;
+		side_block=memory_block; side_layout=l; actor_ai::reset_controller_slot=&reset_slot;
 		logger::write("npc power rule: X-Men Legends 1's ([Game] NpcPowerRule=xml1): enemies pay for their powers (0x4318e7 tests the AI time as "
 		              "default.xbe 0xcde95), the melee-range power decision re-checks every 2.0 s / 0.5 s (0x5188d8) and needs half of the "
 		              "character's energy (0x518920); NPCs combo with the first game's levels and combos (0x505011, rows 0x6dd508) and pause after a combo start (0x51993a, 0x519b04); "
 		              "AI visibility uses XML1's ray and query reservation/budget (0x505250, 0x5027bd, 0x5027e0); "
 		              "combo presses and completion use XML1 delays (0x51920b, 0x5192cb); a hit reaction spends the steps that come due "
 		              "during it, and a power re-check or attack decision that fell due then is spent, as XML1's brain does "
-		              "(0x435b6e, 0x51920b, 0x518770, 0x518fd0); the attack-state update, the melee brain's power decision and its "
-		              "picker run through locked moves as XML1's (0x512f0b, 0x5187c4, 0x50fe5c); "
+		              "(0x435b6e, 0x51920b, 0x518770, 0x518fd0); the attack-state update, the power decision and the "
+		              "picker run through locked moves for every caller as XML1's (0x512f0b, 0x5187c4, 0x50fe63); Advanced Sentinel and "
+		              "Juggernaut take XML1's classes (0x694f1e, 0x511fb8); no Danger Room reaction gate (0x435b09); "
 		              "a power attack (damagescale not normal) is never rolled to hit and the hit's block_chance roll never "
 		              "zeroes it, so only a counted melee miss is blocked, as default.xbe 0x5c240 / 0x5c965 (0x44f58e, 0x437b08); "
-		              "bridges at 0x%08lX",
+		              "bridges at 0x%08lX; rule 16 revision 14 (NPR14)",
 		              static_cast<unsigned long>(base));
+		// "NPR14" is a byte marker as well: the Legends Classic builder requires it in the DLL before it writes
+		// NpcPowerRule=xml1 for a beta 8 build (a 1.8.0-beta.7 DLL runs revision 11; the unreleased 12 / 13 lack it).
 	}
 }

@@ -201,12 +201,40 @@ int wmain(int argc, wchar_t** argv)
 	if (!fix) { std::fwprintf(stderr, L"cannot load %s (%lu)\n", argv[1], GetLastError()); return 5; }
 	Sleep(1000);
 
+    // Optional diagnostics gate: invoke the production DLL's read-only sampler
+    // at a point where no simulation runs, then compare the complete laid-out
+    // game image byte for byte. The RVA comes from this DLL's linker map; no
+    // engine/game entry point is called. Absent: the ordinary union is unchanged.
+    wchar_t sample_rva[32]{};
+    if(GetEnvironmentVariableW(L"UNION_POOL_SAMPLE_RVA",sample_rva,32))
+    {
+        module_copy sample_before{"XMen2.exe",image_base},sample_after{"XMen2.exe",image_base};
+        snapshot(sample_before,size);
+        const auto sample=reinterpret_cast<void(__cdecl*)()>(reinterpret_cast<std::uintptr_t>(fix)+std::wcstoul(sample_rva,nullptr,16));
+        for(unsigned i=0;i<16;++i)sample();
+        snapshot(sample_after,size);
+        if(sample_before.bytes!=sample_after.bytes || sample_before.readable!=sample_after.readable)
+        {
+            std::fprintf(stderr,"pool sampling: FAIL, game image changed\n");
+            return 7;
+        }
+        std::printf("pool sampling: 16 production calls, %zu image bytes identical, 0 game-byte writes\n",size);
+    }
+
 	// ---- After ----------------------------------------------------------------------------------------------------
 	FILE* tsv = _wfopen(argv[4], L"wb");
 	if (!tsv) return 6;
 	std::size_t changed = 0;
 	for (const auto& m : before) std::fprintf(tsv, "I\t%s\t%08x\n", m.name.c_str(), unsigned(m.base));
 	std::fprintf(tsv, "I\tdinput.dll\t%08x\n", unsigned(reinterpret_cast<std::uintptr_t>(fix)));
+	// ScriptFunctions may relocate the active script table to the heap, outside the image write union. Observe
+	// the three boss entries explicitly so a no-Mold install proves its request hooks are present too.
+	const auto script_table = *reinterpret_cast<const std::uint32_t*>(0x49fe31);
+	const std::pair<const char*,std::uint32_t> script_entries[] = {
+		{"sequence",0x68adb8-0x68a908},{"node",0x68ae58-0x68a908},{"default_target",0x68ae88-0x68a908}};
+	for (const auto& entry : script_entries)
+		std::fprintf(tsv, "S\t%s\t%08x\t%08x\n", entry.first, script_table + entry.second,
+			*reinterpret_cast<const std::uint32_t*>(script_table + entry.second));
 	for (const auto& m : before)
 	{
 		module_copy now{m.name, m.base};

@@ -171,7 +171,28 @@ namespace npc_semi_auto_rules
  constexpr u32 candidate_allow = 0x50fe94, candidate_deny = 0x50ff65;
  constexpr u32 default_vtable = 0x692f4c, default_entry = 0x4fbdd0;
  constexpr u32 resolve_action = 0x427c80, clock = 0x45fe60;
- inline constexpr std::array<limits_rules::guard, 64> guards{{
+ inline constexpr std::array<limits_rules::guard, 85> guards{{
+  {0x4e6e3b, "8b9cc7a8070000", "primary weapon model slot +0x7a8"},
+  {0x4e6e53, "ff9288010000", "actor model reference slot +0x188"},
+  {0x4e6e88, "ff5208", "weapon model resource slot +8"},
+  {0x4e6e9d, "8bcbff5530", "weapon Gun1 resource slot +0x30"},
+  {0x5692e0, "83ec4053568b74244c8b0e32db85c974778b01ff5014", "actor bolt world-frame service"},
+  {0x569261, "8b0e8b01ff50148b8c24a40000008b10518b8c24a4000000518bc8ff5264", "actor skeleton bolt slot +0x64"},
+  {0x451d60, "8b1540fa6700528d8c24bc010000ff15acf86700", "matrix identity import contract"},
+  {0x44fdcf, "ff15c4f967008b0f8b138b005152508bceff153cfa6700", "matrix rotation import contract"},
+  {0x44fda0, "8d44241c508bceff1504fa6700", "matrix translation import contract"},
+  {0x569348, "8d54240c52578bcfff15c0f86700", "matrix multiplication import contract"},
+  {0x468764, "0fb60dfdb67000", "friendlyfire debug flag field"},
+  {0x44fe33, "e808e003008b108bc8ff525c84c07429", "game-mode friendlyfire predicate slot +0x5c"},
+  {0x41a220, "8b41048bd0c1ea1df6c20174", "entity team getter"},
+  {0x44fe94, "568d4c2424e872b705008b4c24208b01683cb870006a02c744241c00000000ff50548b4c24208b116a1c6a02ff52408b0e8b018d542420526a01ff50348d4c2420c7442414ffffffffe83eb80500", "neutral actor temporary query and subtraction"},
+  {0x452362, "8b471c8d8c24f00000005168643f75008d4c2418898424f8000000e84e930500", "physent query class and source-token exclusion"},
+  {0x4523a0, "8b4c24108b016a016a01ff50408b4c24108b116a0e6a02ff5240", "bullet property filters 1 and 0xe"},
+  {0x4523ba, "8b4c24108b018d9424a0010000528d9424bc000000528d54244c52ff5074", "native swept segment virtual call"},
+  {0x4523d8, "8d442410508d8c2484000000e8477305008b4c24105051e87c93050083c40889442418c6", "contact order and query owner contract"},
+  {0x452419, "8b4c24188b5424208b0152ff50048b5424208b4c2418528d9424f80000008bf08b0152ff50088b8424f4000000", "first result and trace-record pointer"},
+  {0x452481, "ff9294010000803810740e8b068bce", "physent material getter slot +0x194"},
+  {0x5600d1, "db0574086e00d80d2cae6900c3", "simulation RNG returns its unrounded x87 ST0 value"},
   {0x407750, "64a1000000008a0de08e6f00", "tracer effect manager getter"},
   {0x407692, "c7060c196800", "tracer effect manager vtable"},
   {0x681940, "b0b24000", "tracer effect play slot"},

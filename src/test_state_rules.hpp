@@ -204,7 +204,8 @@ namespace test_state_rules
 		std::optional<T> get(address a)
 		{
 			T v{};
-			if (a < 0x10000 || a > 0x7fffffff - sizeof(T) || !m.read(a, &v, sizeof v))
+			// the whole user space of a large-address-aware exe (E12: game objects above 2 GB are valid)
+			if (a < 0x10000 || a > 0xFFFEFFFFu - sizeof(T) || !m.read(a, &v, sizeof v))
 			{
 				return {};
 			}

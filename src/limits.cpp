@@ -1,4 +1,8 @@
+#include "resident_stats.hpp"
 #include "limits.hpp"
+#include "motion_pool.hpp"
+#include "limits_agreement_rules.hpp"
+#include "gameplay_agreement.hpp"
 #include "limits_rules.hpp"
 #include "move_triggers_rules.hpp"
 #include "move_triggers_runtime.hpp"
@@ -30,6 +34,11 @@ namespace limits
 		int name_cap = stock_resource_names;
 		bool motions_readable = false;
 		bool igb_readable = false;
+		DWORD igb_live_va = 0;
+		int igb_cap = stock_igb_records;
+		bool igb_requested = false; // [Limits] IGBCache asked for a raise (rule 31 registers)
+		bool igb_installed = false;
+		limits_agreement_rules::capacities wanted_caps = limits_agreement_rules::stock;
 		int item_cap = stock_item_enhancements;
 		bool items_readable = false;
 		int style_cap = stock_fight_styles;
@@ -143,6 +152,23 @@ namespace limits
 				return va;
 			}
 			return bytes_match(find_next_40.va, find_next_40.hex) ? 0 : find_next_40.va;
+		}
+
+		DWORD igb_mismatch()
+		{
+			if (const DWORD va = first_mismatch(igb_sites))
+			{
+				return va;
+			}
+			if (const DWORD va = first_mismatch(igb_references))
+			{
+				return va;
+			}
+			if (const DWORD va = first_mismatch(igb_guards))
+			{
+				return va;
+			}
+			return bytes_match(find_next_200.va, find_next_200.hex) ? 0 : find_next_200.va;
 		}
 
 		DWORD styles_mismatch()
@@ -361,6 +387,71 @@ namespace limits
 			              "built and torn down by the game's own code; live count at 0x%08lX (was 0x7b79ac); %zu fields, 3 references and 2 calls patched, bitset<40>::findNext "
 			              "cloned to 0x%08lX with its %zu",
 			              slots, address_of(object), layout.object_size, layout.id_mask, actor_live_va, actor_sites.size(), address_of(clone), find_next_40.fields.size());
+			return true;
+		}
+
+		// The IGB info cache: its code patched for `records`, the getter (its constructor's `this`, the vtable
+		// store, the returned object), the atexit thunk and the three findNext calls pointed at a zero-filled
+		// block and a clone of the DLL's. The game builds the block with its own constructor at the first call
+		// of the getter (from the CPrecacheMgr constructor, in its start-up), as it did the static, and tears
+		// it down at exit with its own destructor.
+		bool raise_igb(const int records)
+		{
+			constexpr const char* stays = "the IGB cache stays at 200 records";
+			if (!base)
+			{
+				logger::write("limits: XMen2.exe isn't loaded at 0x400000 (not the game?) - %s", stays);
+				return false;
+			}
+			if (const DWORD va = igb_mismatch())
+			{
+				logger::write("limits: XMen2.exe doesn't have the expected code at 0x%08lX (not the retail build?) - %s", va, stays);
+				return false;
+			}
+			DWORD built = 0;
+			if (!read_dword(igb_init_guard, built) || (built & 1))
+			{
+				logger::write("limits: the game has built its IGB cache already (0x7bf6c8 = 0x%08lX) - %s", built, stays);
+				return false;
+			}
+			const auto layout = igb_layout_for(records);
+			const auto clone_size = hex_size(find_next_200.hex);
+			auto* object = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, layout.object_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)); // zero-filled: the pool constructor clears seven bitmap dwords only
+			auto* clone = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, clone_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+			const auto release = [&]
+			{
+				if (object) VirtualFree(object, 0, MEM_RELEASE);
+				if (clone) VirtualFree(clone, 0, MEM_RELEASE);
+			};
+			if (!object || !clone)
+			{
+				logger::write("limits: can't allocate the IGB cache (error %lu) - %s", GetLastError(), stays);
+				release();
+				return false;
+			}
+			std::memcpy(clone, at(find_next_200.va), clone_size); // compared with the retail bytes above
+			finish_clone(clone, find_next_200, layout, address_of(clone));
+			DWORD old_protection = 0;
+			if (!VirtualProtect(clone, clone_size, PAGE_EXECUTE_READ, &old_protection))
+			{
+				logger::write("limits: can't make the findNext clone executable (error %lu) - %s", GetLastError(), stays);
+				release();
+				return false;
+			}
+			FlushInstructionCache(GetCurrentProcess(), clone, clone_size);
+
+			const auto writes = igb_writes(layout, address_of(object), address_of(clone));
+			if (!patch(writes, stays))
+			{
+				release();
+				return false;
+			}
+			igb_cap = records;
+			igb_live_va = address_of(object) + 4 + layout.live;
+			igb_installed = true;
+			logger::write("limits: IGB cache raised from 200 to %d records - CIGBInfoCache2 moves from 0x7b7fb0 to 0x%08lX (%lu bytes, id mask 0x%lX), built and torn down by the game's own code; "
+			              "live count at 0x%08lX (was 0x7bf39c); %zu fields, 4 references and 3 calls patched, bitset<200>::findNext cloned to 0x%08lX with its %zu",
+			              records, address_of(object), layout.object_size, layout.id_mask, igb_live_va, igb_sites.size(), address_of(clone), find_next_200.fields.size());
 			return true;
 		}
 
@@ -680,6 +771,33 @@ namespace limits
 			return transaction.add(std::move(c));
 		}
 
+		// E12 (address space): whether XMen2.exe runs large-address-aware (the flag the Legends Classic build sets on
+		// its own copy of the exe; Windows reads it at process start, so there is no runtime switch), the highest user
+		// address Windows reports and the highest 64 KB block it will actually reserve top-down (released at once).
+		// Read only: nothing is written, so the log line is the same with every key off.
+		void log_address_space(const HMODULE game)
+		{
+			const char* laa = "unknown";
+			__try
+			{
+				const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(game);
+				const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(reinterpret_cast<const std::uint8_t*>(game) + dos->e_lfanew);
+				if (dos->e_magic == IMAGE_DOS_SIGNATURE && nt->Signature == IMAGE_NT_SIGNATURE)
+					laa = (nt->FileHeader.Characteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) ? "on" : "off";
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				laa = "unknown";
+			}
+			SYSTEM_INFO system{};
+			GetSystemInfo(&system);
+			void* top = VirtualAlloc(nullptr, 0x10000, MEM_RESERVE | MEM_TOP_DOWN, PAGE_NOACCESS);
+			const DWORD reservable = top ? address_of(top) + 0xffff : 0;
+			if (top) VirtualFree(top, 0, MEM_RELEASE);
+			logger::write("limits: address space - LAA %s (XMen2.exe header); highest user address 0x%08lX; highest reservable address 0x%08lX", laa,
+			              address_of(system.lpMaximumApplicationAddress), reservable);
+		}
+
 		std::optional<std::string> ini_value(const wchar_t* key)
 		{
 			return ini::text(L"Limits", key); // the fix's one rule, ini_rules.hpp
@@ -710,6 +828,7 @@ namespace limits
 	void install(const HMODULE game)
 	{
 		base = reinterpret_cast<std::uintptr_t>(game) == image_base ? reinterpret_cast<std::uint8_t*>(game) : nullptr;
+		if (game) log_address_space(game);
 		if (base)
 		{
 			// The counters status() reports, where the code that uses them is the retail build's.
@@ -721,8 +840,9 @@ namespace limits
 			{
 				name_count_offset = name_layout_for(stock_resource_names).count;
 			}
-			motions_readable = !first_mismatch(motion_counter_guards);
+			motions_readable = !first_mismatch(motion_counter_guards(motion_pool::counter_guard_hex()));
 			igb_readable = !first_mismatch(igb_counter_guards);
+			if (igb_readable) igb_live_va = igb_live_retail;
 			items_readable = !items_mismatch();
 			if (!styles_mismatch()) style_count_offset = style_layout_for(stock_fight_styles).count;
 			if (!curves_mismatch()) curve_live_va = curve_object_retail + curve_layout_for(stock_effect_curves).live;
@@ -733,8 +853,9 @@ namespace limits
 		const auto item_enhancements = ini_value(L"ItemEnhancements");
 		const auto fight_styles = ini_value(L"FightStyles");
 		const auto effect_curves = ini_value(L"EffectCurves");
+		const auto igb_records = ini_value(L"IGBCache");
 		const auto move_triggers = ini_value(L"MoveTriggers"); // contributed to the startup transaction earlier (contribute())
-		if (!actor_slots && !resource_names && !item_enhancements && !fight_styles && !effect_curves && !move_triggers)
+		if (!actor_slots && !resource_names && !item_enhancements && !fight_styles && !effect_curves && !move_triggers && !igb_records)
 		{
 			logger::write("limits: the game's own caps - 40 actor slots, 450 resource names, 375 item enhancements (no [Limits] in xml2-fix.ini)");
 			return;
@@ -743,7 +864,11 @@ namespace limits
 		                           resource_names ? std::optional<std::string_view>(*resource_names) : std::nullopt,
 		                           item_enhancements ? std::optional<std::string_view>(*item_enhancements) : std::nullopt,
 		                           fight_styles ? std::optional<std::string_view>(*fight_styles) : std::nullopt,
-		                           effect_curves ? std::optional<std::string_view>(*effect_curves) : std::nullopt);
+		                           effect_curves ? std::optional<std::string_view>(*effect_curves) : std::nullopt,
+		                           igb_records ? std::optional<std::string_view>(*igb_records) : std::nullopt);
+		igb_requested = chosen.igb_records > stock_igb_records;
+		wanted_caps = {chosen.resource_names, chosen.actor_slots, chosen.item_enhancements,
+		               chosen.fight_styles, chosen.effect_curves, move_triggers_rules::capacity(move_triggers)};
 		for (const auto& note : chosen.notes)
 		{
 			logger::write("limits: %s", note.c_str());
@@ -758,17 +883,28 @@ namespace limits
 		{
 			raise_items(chosen.item_enhancements);
 		}
-		if (chosen.actor_slots == stock_actor_slots && chosen.resource_names == stock_resource_names)
+		if (chosen.actor_slots == stock_actor_slots && chosen.resource_names == stock_resource_names && chosen.igb_records == stock_igb_records)
 		{
-			logger::write("limits: the game's own caps - 40 actor slots, 450 resource names");
+			logger::write("limits: the game's own caps - 40 actor slots, 450 resource names, 200 IGB records");
 			return;
 		}
 
 		// The name table first: the actor table needs it.
 		const bool names_raised = chosen.resource_names > stock_resource_names && raise_names(chosen.resource_names);
 
-		// TODO(IGB cache): the IGB cache's raise (limits_rules.hpp, igb-cache.md sections 1-7) goes
-		// here, after the name table (which its records take names in too) and on the same terms.
+		// The IGB cache after the name table (its records take names there too) and on the same terms.
+		if (chosen.igb_records > stock_igb_records)
+		{
+			if (names_raised && name_cap >= names_needed(chosen.actor_slots, chosen.igb_records))
+			{
+				raise_igb(chosen.igb_records);
+			}
+			else
+			{
+				logger::write("limits: the IGB cache stays at 200 records - %d records need a resource name table of at least %d names, and it wasn't raised", chosen.igb_records,
+				              names_needed(chosen.actor_slots, chosen.igb_records));
+			}
+		}
 
 		if (chosen.actor_slots > stock_actor_slots)
 		{
@@ -784,6 +920,49 @@ namespace limits
 		}
 	}
 
+	void register_resource_agreement()
+	{
+		// Not the game (XMen2.exe isn't at 0x400000): nothing was raised and nothing can be patched, like every other
+		// module that returns before registering there - a "requested but not installed" entry would make the
+		// agreement demand its network exclusion hook in a process that has none and refuse that process's startup
+		// (found by xml2_test's pipe child at the beta 8 integration).
+		if (!base)
+			return;
+		limits_agreement_rules::register_rules(wanted_caps,
+			{name_cap, actor_cap, item_cap, style_cap, curve_cap, move_trigger_cap},
+			[](auto id, auto revision, auto values, bool verified) {
+				gameplay_agreement::register_rule(id, revision, values, verified);
+			});
+	}
+
+	bool igb_cache_requested()
+	{
+		return igb_requested;
+	}
+
+	bool igb_cache_installed()
+	{
+		return igb_installed;
+	}
+
+	std::array<std::uint32_t, 4> igb_cache_values()
+	{
+		return {igb_installed ? 1u : 0u, static_cast<std::uint32_t>(igb_cap), static_cast<std::uint32_t>(name_cap), 0u};
+	}
+
+	unsigned actor_capacity() { return static_cast<unsigned>(actor_cap); }
+
+    pool_diagnostics diagnostic_sources()
+    {
+        const auto l=style_layout_for(style_cap);
+        const bool styles=style_count_offset!=0;
+        return {
+            {styles?style_manager_pointer:0,style_count_offset,static_cast<DWORD>(style_cap),0,true,false},
+            {styles?style_manager_pointer:0,l.auxiliary+0x16ee0,1064,0,true,false},
+            {curve_live_va,0,static_cast<DWORD>(curve_cap),curve_init_guard,false,false},
+            {styles?style_manager_pointer:0,l.styles,l.bitmap,style_record_size,0xc60,static_cast<DWORD>(style_cap)}
+        };
+    }
 	std::string status()
 	{
 		std::optional<DWORD> names;
@@ -799,7 +978,7 @@ namespace limits
 		{
 			if (const auto pool = read(motion_pool_pointer); pool && *pool)
 			{
-				motions = read(*pool + motion_pool_live);
+				motions = read(*pool + motion_pool::layout().live);
 			}
 		}
 		std::optional<DWORD> items;
@@ -815,8 +994,9 @@ namespace limits
 		{
 			if (const auto manager = read(style_manager_pointer); manager && *manager) styles = read(*manager + style_count_offset);
 		}
-		return "actors " + counter(read(actor_live_va), actor_cap) + "; names " + counter(names, name_cap) + "; motions " + counter(motions, motion_pool_capacity) + "; igb " +
-		       counter(igb_readable ? read(igb_live_retail) : std::nullopt, igb_capacity) + "; items " + counter(items, item_cap) + "; styles " + counter(styles, style_cap) + "; curves " +
+		const auto residency=resident_stats::status();
+        return (residency.empty()?std::string{}:residency+"; ")+"actors " + counter(read(actor_live_va), actor_cap) + "; names " + counter(names, name_cap) + "; motions " + counter(motions, static_cast<int>(motion_pool::layout().capacity)) + "; igb " +
+		       counter(read(igb_live_va), igb_cap) + "; items " + counter(items, item_cap) + "; styles " + counter(styles, style_cap) + "; curves " +
 		       counter(read(curve_live_va), curve_cap) + "; move_triggers " + std::to_string(move_trigger_cap);
 	}
 }
