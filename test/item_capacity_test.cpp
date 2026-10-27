@@ -135,7 +135,7 @@ namespace {
  void* last_definition=nullptr;
  unsigned __fastcall observe_definition0(void* p,void*){last_definition=p;return 1;}
  unsigned __fastcall observe_definition1(void* p,void*,unsigned){last_definition=p;return 1;}
- 
+
  __declspec(naked) void saved_header(){__asm {
  pop edi
  pop esi

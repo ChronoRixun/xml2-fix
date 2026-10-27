@@ -1,4 +1,5 @@
 #include "test_state.hpp"
+#include "save_limits.hpp"
 #include "entity_capacity.hpp"
 #include "entity_capacity_layout.hpp"
 #include "actor_pools.hpp"
@@ -50,7 +51,10 @@ namespace test_state
 			for (auto& g : guards)
 			{
 				std::uint8_t bytes[10]{};
-				if (!mem.read(g.va, bytes, sizeof bytes) || !limits_rules::matches(bytes, g.hex))
+				// Limits wave 2: the three objective lookups start with W2's wide-index caves when its layout is
+				// installed; those bytes are W2's (save_limits::expected), the rest of each guard stays retail.
+				const auto expected = save_limits::expected(g.va, g.hex);
+				if (!expected || !mem.read(g.va, bytes, sizeof bytes) || !limits_rules::matches(bytes, *expected))
 				{
 					return false;
 				}
