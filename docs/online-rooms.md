@@ -25,11 +25,11 @@ Any future wire/gameplay contract **needs a rule id** from the coordinator.
 | Listing | Valid list, including zero rooms | Idle with fresh, atomically replaced snapshot |
 | Hosting / Resolving | Valid code/roster; compatible optional release token | Room; native admission is a separate next-round step |
 | Pending | Back, edit of submitted Code, close or route departure | Canceling; invalidate request/room generation, shut down worker socket |
-| Room | Intentional Back/Leave from custom screen | Leaving; release tunnels/listener/queues and room-scoped state |
+| Room | Intentional Back/Leave from custom screen, or a change to committed Code | Leaving; release tunnels/listener/queues and room-scoped state |
 | Canceling / Leaving | Worker has finished | Idle; no game-thread join/wait |
 | Pending | Timeout, invalid reply, broker error or TLS refusal | Retry wait; retain last list as stale; discard late completions |
 | Retry wait | Retry / explicit Refresh after limiter and backoff | Authenticate and retry the chosen operation |
-| Room | Broker loss / room closed | Keep established P2P connections, stop new admission, show service loss; no replacement room |
+| Room | Broker loss, inbox overflow, bad/refused certificate or identity mismatch | Remain Room; retain virtual address/roster/tunnels and service flush/poll, stop new admission; only explicit Leave releases ownership |
 | Any start | Missing dependency / TestMode / invalid room name | Refused; no network success advertised |
 
 One shared lookup budget reserves at least 2 seconds between starts, including
@@ -44,7 +44,25 @@ through the existing GNS ResetIdentity API. Live native links prevent that
 switch and refuse the broker attempt; they are never disconnected by Hub work.
 A launcher code preset cannot filter native discovery before user selection.
 Cancel/Leave release room mode so Other ways can restore the native IP listener;
-the sendto/recvfrom adapters delegate directly while room mode is inactive.
+the sendto/recvfrom adapters delegate directly while room mode is inactive. The
+native GNS identity is captured before room adoption and restored, discarding
+the room certificate, only after all native links/strays are idle. This idle
+check occurs immediately before listener/identity changes, not solely at the
+earlier menu request. A committed room never resets its GNS context because of
+a broker error. An idle fresh Hub does not initialize GNS.
+
+Changing the committed value on the custom Code screen (Delete, Clear, Back
+deleting a symbol, or Paste replacing it) intentionally performs Leave and
+`clear_room()` before a new resolve. An unchanged value/ignored key does not.
+The screen remains Code; a later complete value is subject to the same lookup
+limiter. This is the custom broker-Code policy, not native in-session departure
+or admission. LC must show "Editing the code leaves this room" in its committed
+Code status copy.
+
+An invalid launcher RoomName is discarded as a value; it does not disable
+Browse or Code. Host falls back to the derived default name. The one-shot name
+is removed even without Host/JoinCode. Launcher presets do not start the legacy
+status file until an accepted menu action actually starts an operation.
 
 There is one worker slot and one pending user operation. Socket shutdown
 interrupts connect/TLS/receive work. A synchronous Winsock DNS lookup may finish
@@ -62,7 +80,11 @@ UTF-8, duplicate object keys and invalid known field types. It never truncates
 a room identity or publishes a partial malformed list. Optional metadata stays
 unknown. Inbox/outbox each retain at most 256 entries and 256 KiB; worker pending
 plaintext is capped at 64 KiB, TLS buffered input/handshake input at 64 KiB.
-Inbox overflow fails the attempt instead of evicting an identity/completion.
+Inbox overflow fails a pending attempt instead of evicting an identity/
+completion. In a committed room it closes only the broker worker and blocks
+admission, retaining the room generation, virtual address, roster and live
+tunnels. Certificate or identity errors follow the same room-survival policy;
+Retry/Host/Resolve cannot replace that room before intentional Leave.
 
 In-game room names are validated as trimmed printable ASCII, at most 32 bytes,
 excluding semicolon and quote. Invalid input is refused, rather than silently
@@ -79,12 +101,16 @@ canonical code and allowlisted room title in the existing bounded local Rejoin
 record. Broker membership is not native admission or Playing.
 
 Host evidence: `xml2_online_broker_test` executes the production worker/lifecycle
-against invented socket and pinned-TLS transcripts; `xml2_broker_tls_test`
+against invented socket and mock-TLS transcripts (the mock does not verify a
+cryptographic pin); `xml2_broker_tls_test`
 separately checks real certificate trust and protocol selection. Its optional
 `--live` handshake/record path is a separately scheduled controlled-broker gate. Browser and menu fixtures
 cover limits, backoff, stale data, navigation and renderer bindings. These
 fixtures do not establish game rendering, real broker connectivity, native
-admission or healthy gameplay during broker loss.
+admission or healthy gameplay during broker loss. Room-survival fixtures drive
+the real `ui_tick()`/`tick()` using a real in-memory GNS socket pair and verify
+queued datagram flush, inbound polling, address rewriting and retry refusal
+after broker close, overflow, certificate failures and identity mismatch.
 
 Requested-only. Absent `Host`/`JoinCode`: nothing is hooked or written (the step-4 `Transport=gns` LAN mode and the
 stock transport are unchanged). Either key implies `[Online] Transport=gns` (gameplay rule 25, revision 4).

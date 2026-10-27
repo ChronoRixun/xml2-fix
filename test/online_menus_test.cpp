@@ -433,7 +433,7 @@ int main(int argc,char** argv) {
     online_menus::install_hooks install_hooks;
     install_hooks.clock=clock_stub;install_hooks.before_request=request_fault_stub;install_hooks.before_tick=tick_fault_stub;
     if(mode.starts_with("r4-")) install_hooks.lobby_fields=lobby_fields_stub;
-    if(mode=="r5-broker") install_hooks.broker=&menu_api;
+    if(mode=="r5-broker" || mode=="r5-retail-lobby") install_hooks.broker=&menu_api;
     patch_transaction::hooks transaction_hooks;
     if(mode=="install-retain") {
         const auto site=online_menus::contribution().writes.front().va;
@@ -554,7 +554,11 @@ int main(int argc,char** argv) {
     request(mgr.data(),nullptr,"online",nullptr);assert(calls==expected); // duplicate entry cannot reinitialize
     set_current(hub.data());tick(hub.data(),nullptr);
     assert(texts["local_name"]==(mode=="name31" ? std::string(31,'a') : mode=="blank-name" ? "Player" : "100??????openmenu bad"));
-    if(mode=="r5-broker") { broker_menu_tests(entry);return 0; }
+    if(mode=="r5-broker" || mode=="r5-retail-lobby") {
+        broker_menu_tests(entry);
+        if(mode=="r5-retail-lobby") broker_retail_lobby_tests(entry);
+        return 0;
+    }
     assert(texts["service"]=="Offline preview" && hidden);
     if(mode.starts_with("follow-")) { follow_tests(entry);return 0; }
     assert(queue(nullptr,nullptr,"openmenu original"));assert(calls.back()=="queue:openmenu original");calls.pop_back();

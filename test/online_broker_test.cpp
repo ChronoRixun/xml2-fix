@@ -1,5 +1,6 @@
-// Production room worker + game-thread lifecycle, with invented pinned TLS and
-// broker I/O. The TLS suite checks real certificate trust/protocol selection;
+// Production room worker + game-thread lifecycle, with mock TLS outcomes and
+// broker I/O. This mock does NOT verify a cryptographic pin. The separate TLS
+// suite checks real certificate trust/protocol selection;
 // its optional --live handshake/record route is a separately scheduled gate.
 // No game, external broker, profile, key, registry or desktop access.
 #include <winsock2.h>
@@ -141,10 +142,76 @@ void reset(const std::string& mode) {
     fake::test_mode=fake::transport_busy=false;
 }
 void ready_list(const std::string& mode) { reset(mode);assert(room::list());pump_until([] { return !room::client.pending(); }); }
+void enqueue(const std::string& line, b::ticket ticket) {
+    std::lock_guard g(room::lock);
+    room::inbox.push_back({ticket,room::connection_generation.load(),line});room::inbox_bytes+=line.size();
+}
+void identity_lifecycle_test() {
+    struct adapter {
+        int resets=0,closes=0;
+        bool get_identity(SteamNetworkingIdentity& out) { return SteamNetworkingSockets()->GetIdentity(&out); }
+        void reset_identity(const SteamNetworkingIdentity& value) { ++resets;SteamNetworkingSockets()->ResetIdentity(&value); }
+        void close_listener() { ++closes; }
+    } io;
+    gns_transport_core::room_identity_lifecycle<SteamNetworkingIdentity> policy;
+    SteamNetworkingIdentity native,remote,current;
+    assert(io.get_identity(native));remote.Clear();remote.ParseString("str:legends:1111111111111111");
+    assert(policy.remember_native(io) && policy.synchronize(false,nullptr,true,false,io) && io.resets==0);
+    assert(!policy.synchronize(true,&remote,false,false,io) && io.resets==0 && io.closes==0);
+    assert(policy.synchronize(true,&remote,true,false,io) && io.resets==1 && io.get_identity(current) && current==remote);
+    assert(!policy.synchronize(false,nullptr,false,false,io) && io.resets==1); // a new live link prevents reset
+    assert(!policy.synchronize(false,nullptr,true,true,io) && io.resets==1); // committed room owns its context
+    assert(policy.synchronize(false,nullptr,true,false,io) && io.resets==2 && io.get_identity(current) && current==native);
+    assert(!gns_transport_core::room_ui_pump_needed(false,false) && gns_transport_core::room_ui_pump_needed(false,true) && gns_transport_core::room_ui_pump_needed(true,false));
+    std::cout<<"PASS native identity handoff: actual GNS native -> room -> native; busy/committed context untouched; fresh-Hub initialization gate\n";
+}
+void live_room_survival(const std::string& fault) {
+    reset("success");assert(room::host("Game",false));pump_until([] { return room::view().state==b::phase::room; });
+    const auto ticket=room::view().generation;const auto address=room::own_virtual();const auto code=room::view().code;
+    HSteamNetConnection local,peer;assert(room::sockets()->CreateSocketPair(&local,&peer,false,nullptr,nullptr));
+    const std::string id="legends:1111111111111111";assert(room::members.join(id));
+    auto member=std::make_unique<room::tunnel>();member->id=id;member->address=room::members.address(id);
+    member->connection=local;member->connected=member->transport_bound=true;member->reported=fake::clock-10001;
+    member->waiting.push_back({fake::clock,5165,5165,{1,2,3}});member->waiting_bytes=3;
+    auto* tunnel=member.get();room::tunnels.push_back(std::move(member));
+    const unsigned char keepalive=3;assert(room::sockets()->SendMessageToConnection(peer,&keepalive,1,k_nSteamNetworkingSend_Reliable,nullptr)==k_EResultOK);
+    WSADATA wsa{};assert(WSAStartup(MAKEWORD(2,2),&wsa)==0);
+    SOCKET udp=::socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);sockaddr_in bound{};bound.sin_family=AF_INET;bound.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+    assert(::bind(udp,reinterpret_cast<sockaddr*>(&bound),sizeof(bound))==0);int length=sizeof(bound);assert(getsockname(udp,reinterpret_cast<sockaddr*>(&bound),&length)==0);
+    std::vector<std::uint8_t> original(6);std::memcpy(original.data(),&bound.sin_addr.s_addr,4);const auto port=ntohs(bound.sin_port);std::memcpy(original.data()+4,&port,2);
+    fake::hold=true;
+    if(fault=="overflow") {
+        room::worker_generation=room::connection_generation.load();room::worker_ticket=ticket;
+        for(unsigned i=0;i<257;++i) room::arrived("{}");
+    } else if(fault=="bad_cert") enqueue(R"({"op":"cert_ok","cert_pem":"bad"})",ticket);
+    else if(fault=="refused_cert") enqueue("{\"op\":\"cert_ok\",\"cert_pem\":\"-----BEGIN STEAMDATAGRAM CERT-----\\nAAAA\\n-----END STEAMDATAGRAM CERT-----\\n\"}",ticket);
+    else if(fault=="unsolicited_cert") { room::cert_ready=true;enqueue(R"({"op":"cert_ok","cert_pem":"bad"})",ticket); }
+    else if(fault=="cert_error") enqueue(R"({"op":"error","in_reply_to":"cert","code":"quota_exceeded"})",ticket);
+    else if(fault=="closed") enqueue(R"({"op":"_closed","kind":"broker_unreachable","msg":"invented loss"})",ticket);
+    const auto original_id=room::own_id;
+    if(fault=="identity") room::own_id="legends:2222222222222222";
+    room::ui_tick();room::tick();room::own_id=original_id;
+    pump_until([&] { return tunnel->waiting.empty() && !tunnel->game.empty() && room::worker_done.load(); });
+    assert(room::view().state==b::phase::room && room::view().generation==ticket && room::view().code==code && !room::view().authenticated);
+    assert(room::own_virtual()==address && address && room::members.contains(id) && room::owns(local) && tunnel->connected && tunnel->transport_bound);
+    assert(tunnel->datagrams_out==1 && tunnel->waiting_bytes==0 && !room::room_ready);
+    SteamNetworkingMessage_t* received=nullptr;assert(room::sockets()->ReceiveMessagesOnConnection(peer,&received,1)==1);
+    auto datagram=gns_transport_core::parse(static_cast<const std::uint8_t*>(received->m_pData),received->m_cbSize);
+    assert(datagram.valid && datagram.k==gns_transport_core::kind::datagram && datagram.length==3);received->Release();
+    auto rewritten=original;room::present_virtual(udp,rewritten);const auto virtual_ip=htonl(address);
+    assert(std::memcmp(rewritten.data(),&virtual_ip,4)==0 && std::memcmp(rewritten.data(),original.data(),4)!=0);
+    assert(!room::retry() && !room::list() && !room::resolve("ABCDEFGH") && !room::host("Replacement",false));
+    room::cancel();assert(room::view().state==b::phase::room && room::own_virtual()==address);
+    closesocket(udp);WSACleanup();room::leave();pump_until([] { return room::worker_done.load(); });room::sockets()->CloseConnection(peer,0,"fixture complete",false);
+    std::cout<<"PASS live-room real ui_tick/tick "<<fault<<": address/room/roster retained, real GNS flush+poll, virtual rewrite, retry refused\n";
+}
 }
 
 int main() {
     SteamNetworkingIdentity id;id.Clear();id.ParseString("str:legends:0000000000000000");SteamNetworkingErrMsg error{};
+    assert(GameNetworkingSockets_Init(nullptr,error));
+    identity_lifecycle_test();
+    GameNetworkingSockets_Kill();
     assert(GameNetworkingSockets_Init(&id,error));
     reset("success");room::real_sendto=&fake::sendto;room::real_recvfrom=&fake::recvfrom;
     assert(room::room_sendto(0,nullptr,17,0,nullptr,0)==17 && fake::native_sends==1);
@@ -177,6 +244,12 @@ int main() {
     reset("success");fake::hold_handshake=true;assert(room::list());pump_until([] { return fake::handshake_entered.load(); });
     room::cancel();pump_until([] { return room::worker_done.load(); });assert(room::view().state==b::phase::idle);
     reset("timeout");assert(room::list());pump_until([] { return room::view().state==b::phase::listing; });fake::clock+=10000;room::ui_tick();assert(room::view().error=="timeout");
+    reset("timeout");assert(room::list());pump_until([] { return room::view().state==b::phase::listing; });
+    auto current_ticket=room::view().generation,stale_ticket=current_ticket;--stale_ticket.request;
+    enqueue(R"({"op":"error","in_reply_to":"cert","code":"quota_exceeded"})",stale_ticket);room::tick();
+    assert(room::view().state==b::phase::listing && room::view().error.empty());
+    enqueue(R"({"op":"error","in_reply_to":"cert","code":"quota_exceeded"})",current_ticket);room::tick();
+    assert(room::view().state==b::phase::retry_wait && room::view().error=="quota_exceeded");
     reset("mismatch");assert(room::resolve("ABCDEFGH"));pump_until([] { return !room::client.pending(); });assert(room::view().error=="version_mismatch" && !room::room_ready);
     for(const auto* mode:{"no_such_room","room_full","duplicate_members"}) {
         reset(mode);assert(room::resolve("ABCDEFGH"));pump_until([] { return !room::client.pending(); });
@@ -195,16 +268,11 @@ int main() {
         { std::lock_guard g(room::lock);room::inbox.push_back({old,room::connection_generation.load()-1,"{\"op\":\"host_ok\",\"code\":\"ABCDEFGH\"}"}); }
         room::process_inbox();assert(room::view().state==b::phase::idle);
     }
-    reset("success");assert(room::host("Game",false));pump_until([] { return room::view().state==b::phase::room; });
-    auto member=std::make_unique<room::tunnel>();member->id="legends:1111111111111111";
-    member->connection=42;member->connected=member->transport_bound=true;room::tunnels.push_back(std::move(member));
-    room::handle(online_room_core::parse(R"({"op":"_closed","kind":"broker_unreachable","msg":"invented broker loss"})"));
-    assert(room::view().state==b::phase::room && !room::view().authenticated && !room::room_ready && room::owns(42) && room::tunnels[0]->connected);
-    assert(!room::list() && !room::retry()); // preserve existing gameplay, no replacement room
+    for(const auto* fault:{"closed","overflow","bad_cert","refused_cert","unsolicited_cert","cert_error","identity"}) live_room_survival(fault);
     reset("success");assert(room::list());pump_until([] { return room::view().state==b::phase::listing; });
     room::worker_generation=room::connection_generation.load();room::worker_ticket=room::view().generation;
     { std::lock_guard g(room::lock);for(unsigned i=0;i<256;++i) room::inbox.push_back({room::worker_ticket,room::worker_generation,"{}"}); }
     room::arrived("{}");room::ui_tick();assert(room::view().error=="inbox_overflow");
     room::leave();pump_until([] { return room::worker_done.load(); });GameNetworkingSockets_Kill();
-    std::cout<<"PASS production broker worker: pinned TLS seam, auth/list/host/resolve/reentry, malformed/oversize/duplicate/error/timeout/pin/mismatch, limiter, cancel and stale inbox\n";
+    std::cout<<"PASS production broker worker: mock TLS outcomes (not cryptographic pin verification), auth/list/host/resolve/reentry, malformed/oversize/duplicate/error/timeout/mismatch, limiter, cancel and stale inbox\n";
 }

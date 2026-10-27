@@ -310,17 +310,34 @@ namespace gns_transport
 			logger::write_capped("gns-debug", "online: GNS: %s", text);
 		}
 
+        gns_transport_core::room_identity_lifecycle<SteamNetworkingIdentity> identity_lifecycle;
+        struct identity_io {
+            bool get_identity(SteamNetworkingIdentity& out) { return sockets()->GetIdentity(&out); }
+            void reset_identity(const SteamNetworkingIdentity& value) { sockets()->ResetIdentity(&value); }
+            void close_listener() {
+                if (listener != k_HSteamListenSocket_Invalid) sockets()->CloseListenSocket(listener);
+                listener = k_HSteamListenSocket_Invalid; listen_failed = listener_disabled = false;
+            }
+        };
+        bool transport_idle() {
+            // Leave already closed these room connections. Retire their native
+            // wrappers before checking for genuinely live links/strays.
+            if (!online_room::requested())
+                for (auto& l : links) if (l->tunnel && !l->closed && !online_room::owns(l->connection)) close(*l, "room left", false);
+            for (const auto& l : links) if (!l->closed) return false; // pending native links also own their context
+            return strays.empty();
+        }
 		bool ensure(void* manager)
 		{
 			if (failed) return false;
 			if (!ready)
 			{
 				SteamNetworkingErrMsg error{};
-				// Rooms ([Online] Host/JoinCode): GNS starts as this install's identity, so the broker's certificate fits.
+				// Capture GNS's native identity before adopting the room identity.
 				SteamNetworkingIdentity identity;
 				const bool room = online_room::identity(identity);
 				if (online_room::requested() && !room) return false; // worker still loading identity
-				if (!GameNetworkingSockets_Init(room ? &identity : nullptr, error))
+				if (!GameNetworkingSockets_Init(nullptr, error))
 				{
 					failed = true;
 					logger::write("online: GNS initialisation failed (%s) - the stock transport stays in use", error);
@@ -353,28 +370,18 @@ namespace gns_transport
 				ready = true;
 				logger::write("online: GNS initialised on the game's thread (fake loss %d %%, fake lag %d ms)", fake_loss, fake_lag);
 			}
-			// Native networking can have initialized GNS before a broker intent.
-			// Reset only an idle instance; never close a live native/P2P session
-			// merely because a menu asked for a different authenticated identity.
-			SteamNetworkingIdentity room_identity;
-			if (online_room::identity(room_identity)) {
-				SteamNetworkingIdentity current;
-				if (!sockets()->GetIdentity(&current) || current != room_identity) {
-					for (const auto& l : links) if (!l->closed && l->connection != k_HSteamNetConnection_Invalid) return false;
-					if (!strays.empty()) return false;
-					if (listener != k_HSteamListenSocket_Invalid) sockets()->CloseListenSocket(listener);
-					listener = k_HSteamListenSocket_Invalid;
-					listen_failed = listener_disabled = false;
-					sockets()->ResetIdentity(&room_identity);
-				}
-			}
-			static bool room_mode = false;
-			if (room_mode != online_room::requested()) {
-				if (listener != k_HSteamListenSocket_Invalid) sockets()->CloseListenSocket(listener);
-				listener = k_HSteamListenSocket_Invalid;
-				listen_failed = listener_disabled = false;
-				room_mode = online_room::requested();
-			}
+            identity_io identity_adapter;
+            if (!identity_lifecycle.remember_native(identity_adapter)) return false;
+            SteamNetworkingIdentity room_identity;
+            const bool requested_room = online_room::requested();
+            const bool have_room_identity = requested_room && online_room::identity(room_identity);
+            const bool committed_room = online_room::view().state == online_browser_core::phase::room;
+            if (!identity_lifecycle.synchronize(requested_room, have_room_identity ? &room_identity : nullptr,
+                    transport_idle(), committed_room, identity_adapter)) {
+                // A live room's tick degrades the broker. Keep its established
+                // transport queues running; do not reset identity or listener.
+                return committed_room && requested_room;
+            }
 			if (!manager) return true; // menus have no native transport manager yet
 			if (manager != manager_)
 			{
@@ -1623,15 +1630,16 @@ namespace gns_transport
 	bool room_can_start() {
 #if XML2_FIX_GNS
 		if (!installed()) return false;
-		for (const auto& l : links) if (!l->closed && l->connection != k_HSteamNetConnection_Invalid) return false;
-		return strays.empty();
+        return transport_idle();
 #else
 		return false;
 #endif
 	}
 	void room_ui_tick() {
 #if XML2_FIX_GNS
-		if (installed() && ensure(nullptr)) { sockets()->RunCallbacks(); online_room::tick(); }
+        if (!installed() || !gns_transport_core::room_ui_pump_needed(ready, online_room::requested())) return;
+        ensure(nullptr);
+        if (ready) { sockets()->RunCallbacks(); online_room::tick(); }
 #endif
 	}
 }

@@ -143,12 +143,16 @@ namespace online_browser_core
 		}
 		void fail(ticket t, const std::string& error, std::uint32_t now) {
 			if (t != view_.generation) return;
+			if (view_.state == phase::room) { disconnected(error, now); return; }
 			view_.error = error; view_.stale = listed_once_; view_.authenticated = false;
 			failed_ = now; backoff_ = backoff_ ? (backoff_ >= 30000 ? 60000 : backoff_ * 2) : 2000;
 			if (error == "rate_limited" && backoff_ < 10000) backoff_ = 10000;
 			view_.state = phase::retry_wait;
 		}
-		void refuse(const std::string& error) { view_.error = error; view_.state = phase::refused; }
+		void refuse(const std::string& error) {
+			if (view_.state == phase::room) { disconnected(error, 0); return; }
+			view_.error = error; view_.state = phase::refused;
+		}
 		void metadata(const std::string& name, bool public_room) { view_.room_name = name; view_.public_room = public_room; view_.room_metadata_known = true; }
 		void disconnected(const std::string& error, std::uint32_t now) {
 			if (view_.state != phase::room) { fail(view_.generation, error, now); return; }
@@ -157,6 +161,7 @@ namespace online_browser_core
 		bool expired(std::uint32_t now) const { return pending() && std::uint32_t(now - started_) >= request_timeout_ms; }
 		bool refresh_due(std::uint32_t now) const { return !pending() && view_.state != phase::room && may_lookup(now) && (!listed_once_ || std::uint32_t(now - refreshed_) >= list_refresh_ms); }
 		void cancel(bool leave = false) {
+			if (view_.state == phase::room && !leave) return; // only intentional Leave releases a committed room
 			++view_.generation.request; ++view_.generation.room;
 			view_.state = leave ? phase::leaving : phase::canceling;
 			view_.authenticated = false; view_.code.clear(); view_.error.clear(); view_.stale = listed_once_;

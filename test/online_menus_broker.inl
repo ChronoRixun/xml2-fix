@@ -96,3 +96,59 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     post(intent::done);tick(child.data(),nullptr);assert(menu_resolve_attempts==attempts+1);
     std::cout<<"round5 menus PASS Hub no host; row allowlist/RTT/build; bounded page/select; refresh limiter; host visibility; Back/edit before late completion; confirmed Rejoin storage\n";
 }
+
+// Combined round-5 broker data and the reviewed retail participant-list path.
+// No lobby_fields provider: code/title/visibility come through the production
+// broker snapshot branch, while native cards use real insert/lookup/refresh.
+void broker_retail_lobby_tests(const script_functions_rules::func_entry* registration) {
+    const auto base_tick=*reinterpret_cast<lobby_tick_t*>(0x69e454);
+    auto post=[&](intent value) { int_value[1]=unsigned(value);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(registration->handler))(nullptr); };
+    menu_refuse=false;menu_auth=true;menu_complete=false;menu_cancel();ticks+=10000;
+    std::strcpy(reinterpret_cast<char*>(child.data()+0xc),"lc_browse");set_current(child.data());base_tick(child.data(),nullptr);
+    assert(menu_view().action==bm::operation::list && menu_broker.pending());
+    menu_complete=true;base_tick(child.data(),nullptr);assert(menu_view().rows.size()==9);
+    post(intent::previous);base_tick(child.data(),nullptr); // reset the prior fixture's scrolled viewport
+    post(static_cast<intent>(int(intent::row_first)+1));base_tick(child.data(),nullptr);ticks+=2000;
+    post(intent::join_selected);base_tick(child.data(),nullptr);menu_complete=true;base_tick(child.data(),nullptr);
+    assert(menu_view().state==bm::phase::room && menu_view().code=="AAAAAAAB");
+    menu_broker.metadata("Broker ^ % title",true);
+    const auto saved_mode=mode;mode="r4-broker-combined"; // enable native presentation service stubs only
+    import_stub("OpenClipboard",reinterpret_cast<void*>(&copy_open));import_stub("CloseClipboard",reinterpret_cast<void*>(&copy_close));
+    import_stub("EmptyClipboard",reinterpret_cast<void*>(&copy_empty));import_stub("SetClipboardData",reinterpret_cast<void*>(&copy_set));
+    import_stub("EnumThreadWindows",reinterpret_cast<void*>(&copy_enum));
+    import_stub("GetWindowThreadProcessId",reinterpret_cast<void*>(&copy_window_process));import_stub("GetClassNameA",reinterpret_cast<void*>(&copy_class));
+    for(bool host:{true,false}) for(unsigned count=0;count<=4;++count) {
+        people_count=count;setup_lobby(host);mask=0;
+        const auto activate=*reinterpret_cast<lobby_activate_t*>(host ? 0x69f284 : 0x69f350);
+        const auto tick=*reinterpret_cast<lobby_tick_t*>(host ? 0x69f2ac : 0x69f374);
+        activate(child.data(),nullptr,0);tick(child.data(),nullptr);
+        assert(texts["lc_room_code"]=="AAAA-AAAB" && texts["lc_room_name"]=="Broker ? ? title" && texts["lc_room_visibility"]=="Public");
+        assert(texts["lc_member_count"]==std::to_string(count)); // never nine broker Browse rows
+        if(!host && count<2) { assert(current()!=child.data());continue; } // retail Join exits when there is no local participant
+        for(unsigned i=0;i<count;++i) {
+            const auto prefix="lc_p"+std::to_string(i+1)+"_";
+            assert(!visibility[prefix+"card"] && visibility[prefix+"same_build"] && texts[prefix+"ping"].empty());
+            assert(visibility[prefix+"you"]==(participant_ids[i]!=local_id));
+        }
+        assert(!*reinterpret_cast<void**>(people_table.data()+8));
+        // Both +a0 and +ac aliases run their actual retail refresh and preserve
+        // a non-NULL native iterator cursor through the UI snapshot read.
+        for(unsigned slot:{host ? 0x69f314u : 0x69f3dcu,host ? 0x69f320u : 0x69f3e8u}) {
+            auto refresh=*reinterpret_cast<lobby_tick_t*>(slot);refresh(child.data(),nullptr);
+            auto* cursor=count ? people_nodes[count-1] : nullptr;put(people_table.data(),8,unsigned(reinterpret_cast<std::uintptr_t>(cursor)));
+            tick(child.data(),nullptr);assert(*reinterpret_cast<void**>(people_table.data()+8)==cursor);
+            assert(texts["lc_member_count"]==std::to_string(count) && texts["lc_room_code"]=="AAAA-AAAB");
+        }
+        const auto old_copies=copies;post(intent::copy_code);tick(child.data(),nullptr);
+        if(copies!=old_copies+1 || copied_code!=L"AAAA-AAAB") std::cerr<<"combined Copy host="<<host<<" count="<<count<<" copies="<<copies<<" previous="<<old_copies<<" opens="<<copy_opens<<" enabled="<<enabled_items["lc_copy_code"]<<" current="<<(current()==child.data())<<"\n";
+        assert(copies==old_copies+1 && copied_code==L"AAAA-AAAB");post(intent::dismiss);tick(child.data(),nullptr);
+    }
+    // An invalid native row count fails closed without losing broker code or
+    // suppressing the native escape path; recovery restores the real cards.
+    people_count=3;setup_lobby(false);auto activate=*reinterpret_cast<lobby_activate_t*>(0x69f350);activate(child.data(),nullptr,0);
+    auto tick=*reinterpret_cast<lobby_tick_t*>(0x69f374);put(checks_table.data(),0x84,2);
+    tick(child.data(),nullptr);assert(texts["lc_member_count"]=="0" && texts["lc_room_code"]=="AAAA-AAAB");
+    refresh_now();tick(child.data(),nullptr);assert(texts["lc_member_count"]=="3");
+    mode=saved_mode;
+    std::cout<<"round5 combined PASS Browse resolve -> broker code/title/visibility + retail NULL list, Host/Join 0..4, real refresh aliases, cursor preservation, Copy and malformed-list recovery\n";
+}

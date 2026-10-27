@@ -145,6 +145,16 @@ int main()
 	check(wrapped.begin(b::operation::list,0xfffffff0u,true) && wrapped.issue(),"client: wrapping clock starts");
 	wrapped.listed(wrapped.view().generation,parse(R"({"op":"list_rooms_ok","rooms":[]})"),0xfffffff0u);
 	check(!wrapped.may_lookup(0x20u) && wrapped.may_lookup(0x800u),"client: limiter survives DWORD wrap");
+	b::client_state committed;
+	check(committed.begin(b::operation::host,100,true) && committed.issue() && committed.joined(committed.view().generation,b::operation::host,"ABCDEFGH"),"room: committed setup");
+	const auto room_ticket=committed.view().generation;
+	committed.fail(room_ticket,"inbox_overflow",200);
+	check(committed.view().state==b::phase::room && committed.view().generation==room_ticket && committed.view().code=="ABCDEFGH" && !committed.view().authenticated,"room: fail degrades service, preserves phase/identity");
+	committed.refuse("transport_identity_busy");committed.cancel();
+	check(committed.view().state==b::phase::room && committed.view().generation==room_ticket,"room: refuse/cancel cannot release committed ownership");
+	check(!committed.begin(b::operation::host,99999) && !committed.begin(b::operation::resolve,99999),"room: no retry/replacement before explicit Leave");
+	committed.cancel(true);committed.stopped();
+	check(committed.view().state==b::phase::idle && committed.view().generation.room>room_ticket.room && committed.begin(b::operation::resolve,99999),"room: explicit Leave releases ownership for next attempt");
 	std::printf("%d PASS / %d FAIL\n", passed, failed);
 	return failed ? 1 : 0;
 }

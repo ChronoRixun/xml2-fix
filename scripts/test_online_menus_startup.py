@@ -6,6 +6,7 @@ engine DLLs. This complements the invented services in online_menus_test.cpp.
 """
 from pathlib import Path
 import argparse
+import configparser
 import hashlib
 import json
 import os
@@ -32,7 +33,7 @@ def main():
     assert hashlib.sha256(retail.read_bytes()).hexdigest() == "146cd9c316edb57a267cd73753a7ce9af647e52aab750d449c6b278fb4a1669b"
     out.mkdir(parents=True, exist_ok=False)
     rows = []
-    for mode in ("off", "zero", "invalid", "on", "capacity", "lookup-refused", "ui-guard"):
+    for mode in ("off", "zero", "invalid", "on", "capacity", "lookup-refused", "ui-guard", "preset-code", "preset-host-name-invalid", "name-only-invalid"):
         folder = out / mode
         folder.mkdir()
         shutil.copyfile(dll, folder / "dinput.dll")
@@ -42,6 +43,13 @@ def main():
             ini += "[Online]\nMenus=" + value + "\n"
         if mode == "capacity":
             ini += "[Limits]\nScriptFunctions=320\n"
+        if mode in ("preset-code", "preset-host-name-invalid", "name-only-invalid"):
+            ini += "Transport=gns\nBroker=broker.invalid:10020\n"
+            if mode == "preset-code": ini += "JoinCode=ABCDEFGH\n"
+            else:
+                ini += "RoomName=" + "x" * 33 + "\n"
+                if mode == "preset-host-name-invalid": ini += "Host=broker\n"
+            ini += "[Save]\nFormat=lc\n"
         (folder / "xml2-fix.ini").write_text(ini, encoding="utf-8", newline="\n")
         before, after = folder / "before.reg", folder / "after.reg"
         subprocess.run(["reg", "export", REGISTRY, str(before), "/y"], check=True, capture_output=True)
@@ -67,7 +75,7 @@ def main():
             cells = line.split("\t")
             if cells[0:2] == ["W", "XMen2.exe"]:
                 changed.add(int(cells[2], 16))
-        installed = mode == "on"
+        installed = mode in ("on", "preset-code", "preset-host-name-invalid", "name-only-invalid")
         for site, size in HOOKS.items():
             assert bool(changed.intersection(range(site, site + size))) == installed, (mode, hex(site))
         if installed:
@@ -89,6 +97,16 @@ def main():
         if mode == "capacity":
             assert "registration/capacity refused; native online entry retained" in log
             assert "script functions: 1024 names" not in log
+        if mode in ("preset-code", "preset-host-name-invalid", "name-only-invalid"):
+            assert "menu broker client prepared; room creation waits for an explicit intent" in log, (mode, log)
+            assert not (folder / "online-status.json").exists(), "a launcher preset must not start status before controller acceptance"
+            assert not (folder / "online-room.txt").exists()
+            assert "GNS initialised on the game's thread" not in log, "startup must not initialize GNS for a menu preset"
+            parsed = configparser.ConfigParser(interpolation=None)
+            parsed.read(folder / "xml2-fix.ini")
+            for key in ("Host", "JoinCode", "RoomName"):
+                assert not parsed.has_option("Online", key), (mode, key)
+            if mode != "preset-code": assert "invalid launcher RoomName discarded; Browse/Code remain available" in log
         rows.append(dict(mode=mode, exit=done.returncode, hooks_installed=installed,
                          registry_equal=True, private_desktop=True))
         print(mode, "PASS", flush=True)

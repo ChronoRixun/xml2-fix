@@ -56,7 +56,7 @@ anchors. The DLL selects them; no remote text becomes a command:
 | `lc_broker_empty` | No public games right now. Host a game or go Back. |
 | `lc_broker_stale` | These games may be out of date. Refresh to try again. |
 | `lc_broker_error` | Online service could not complete the request. Retry or go Back. |
-| `lc_broker_room` | Room found/open. Native lobby setup is the next step. |
+| `lc_broker_room` | Code: Room found. Editing the code leaves this room. Host/Browse: Room found/open; native lobby setup is the next step. |
 | `lc_broker_cancel` | Canceling... / Leaving... |
 | `lc_broker_offline_room` | Online service unavailable. Existing connections stay open; new players cannot join. |
 | `lc_host_private` / `lc_host_public` | Mutually exclusive localized visibility labels |
@@ -110,12 +110,16 @@ The coordinator's separately authorized G/V procedure is:
    expired/mismatch replies and missing optional metadata. Check Retry and
    cancellation during authentication, list, host and resolve; verify stale
    rows remain labeled and cannot Join. Restore service and retry after backoff.
-5. With separately established real peers through the existing native route,
+5. After Browse -> Back/Cancel and after Host/Code -> Leave, take Other ways
+   and verify a fresh native LAN/IP GNS session still works under the restored
+   native identity, with no room certificate retained. Test a busy native link
+   during the request/transition: listener and identity must not reset.
+6. With separately established real peers through the existing native route,
    interrupt only the broker. Verify healthy P2P gameplay continues, new
    admission stops, no automatic replacement room opens, and explicit Leave
    still works. This is a live gate; a retained fixture tunnel is not proof of
    healthy traffic or gameplay.
-6. Compare actual screens 01 Hub, 02 Code/Host and 04 Browse plus 09 inline error
+7. Compare actual screens 01 Hub, 02 Code/Host and 04 Browse plus 09 inline error
    variants to the approved rev-2 frames at 4:3 and stretched 16:9, 720p/1080p,
    keyboard -> pad -> keyboard and mouse. Check long allowlisted names, seven
    columns/rows, neutral ping, pending/empty/stale/error copy, focus, safe
