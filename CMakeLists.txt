@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(xml2_fix VERSION 1.8.0 LANGUAGES CXX RC)
+project(xml2_fix VERSION 1.8.1 LANGUAGES CXX RC)
 
 if(NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
 	message(FATAL_ERROR "Build with MSVC for Win32 (cmake -A Win32) - X-Men Legends II is a 32-bit game.")
@@ -67,6 +67,7 @@ add_library(xml2_fix SHARED
 	src/pack_amount.cpp
 	src/exports.cpp
 	src/gamepad_fix.cpp
+	src/controller_scan_cache.cpp
 	src/input_worker.cpp
 	src/pad_profile.cpp
 	src/pad_bindings.cpp
@@ -579,3 +580,10 @@ add_executable(xml2_union_host tools/union_host/union_host.cpp tools/union_host/
 # Its own folder: no dinput.dll may sit next to it, or the engine DLLs' dinput import would load that one first.
 set_target_properties(xml2_union_host PROPERTIES OUTPUT_NAME union_host RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/union")
 target_link_options(xml2_union_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
+
+# Controller scan cache and XInput discovery, without a game or injected input.
+add_executable(xml2_controller_scan_cache_test test/controller_scan_cache_test.cpp src/controller_scan_cache.cpp src/pad_profile.cpp)
+target_include_directories(xml2_controller_scan_cache_test PRIVATE src)
+target_link_libraries(xml2_controller_scan_cache_test PRIVATE dxguid)
+add_executable(xml2_xinput_connections_test test/xinput_connections_test.cpp)
+target_include_directories(xml2_xinput_connections_test PRIVATE src)

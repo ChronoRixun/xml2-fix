@@ -11,6 +11,9 @@ namespace pad_profile
 
 namespace gamepad_fix
 {
+	// [Input] CacheDeviceScan, configured before any DirectInput object exists.
+	void cache_device_scan(bool enabled);
+
 	// The controller to present. Defaults to pad_profile::logitech_dual_action.
 	void use_profile(const pad_profile::profile& profile);
 
