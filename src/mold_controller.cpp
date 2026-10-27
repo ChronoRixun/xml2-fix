@@ -20,6 +20,7 @@
 // same native AI update, and shared gameplay rule 3 refuses peers whose
 // effective controller state differs.
 namespace mold_controller {
+void register_ai_layout(){actor_ai::register_consumer(actor_ai::consumer::mold);}
 namespace {
 using u32=std::uint32_t;
 template<class T> T at(const void* p,u32 off){T v{};std::memcpy(&v,static_cast<const unsigned char*>(p)+off,sizeof v);return v;}

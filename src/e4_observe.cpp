@@ -3,6 +3,7 @@
 #include "ini.hpp"
 #include "log.hpp"
 #include "patch_transaction.hpp"
+#include "e4_core_state.hpp"
 
 namespace e4_observe
 {
@@ -19,7 +20,7 @@ namespace e4_observe
             __except(EXCEPTION_EXECUTE_HANDLER) {}
         }
     }
-    void configure() { active = ini::flag(L"Test", L"E4Observe", false); patch_transaction::record_verified_writes = active; }
+    void configure() { active = ini::flag(L"Test", L"E4Observe", false) || e4_core_state::eligible; patch_transaction::record_verified_writes = active; }
     bool enabled() { return active; }
     [[noreturn]] void fatal(const char* site) { entity_capacity::fail_stop_lifecycle(site); }
     int native_exception(const char* site, EXCEPTION_POINTERS* exception)

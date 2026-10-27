@@ -378,7 +378,13 @@ namespace lcsave
 	// table (0x800 slots, 0x3800 arena) and the fog (0x34c) are the same in both (layouts.json changes neither).
 	constexpr u32 feature_entity_layout_contiguous10 = 1;      // header required_features bit 0: typed ids are ten-bit tokens
 	constexpr u32 feature_native_w2 = 2;                       // bit 1 NATIVE_W2: the file cannot be applied by a pre-W2 build (W2 section 7)
-	constexpr u32 known_required_features = feature_entity_layout_contiguous10 | feature_native_w2;   // every required bit this code implements
+	// amended 10-27 by the coordinator: bit 2 because bit 1 is NATIVE_W2
+	constexpr u32 feature_actor_capacity96 = 4;
+	constexpr u32 known_required_features = feature_entity_layout_contiguous10 | feature_native_w2
+#ifdef XML2_E4_CORE
+	    | feature_actor_capacity96
+#endif
+	    ; // only a build implementing Stage 2 recognizes its feature bit
 	constexpr u32 typed_generation_max = entity_capacity_layout::generation_max;   // 0x3fff: the largest minted generation
 	constexpr u32 transfer_chunk = 200;                        // the largest chunk of a 47/48 campaign transfer
 	constexpr u32 native_manager_records = 5;                  // RETAIL / E10A2 (W2: 8, the descriptor's record_count)

@@ -25,6 +25,7 @@
 // authored placement, as the original's constructor does. Shots use the native projectile service
 // with the turret physent as the source.
 namespace xml1_turrets {
+void register_ai_layout(){actor_ai::register_consumer(actor_ai::consumer::turrets);}
 namespace {
 using u32=std::uint32_t;
 using turret_rules::vec;

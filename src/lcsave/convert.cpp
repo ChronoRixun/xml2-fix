@@ -1428,7 +1428,7 @@ namespace lcsave::detail
 		HeaderIn h;
 		// the Phase A marker: the writer's layout decides (E10A2: bit 0). W2 sets bit 0 always and bit 1 NATIVE_W2 only
 		// when the representability probe finds the file cannot be applied by a pre-W2 build (limits-wave2.md section 7)
-		h.required_features = native.feature_bits & ~feature_native_w2;
+		h.required_features = native.feature_bits & ~(feature_native_w2|feature_actor_capacity96);
 		h.optional_features = context.optional_features;
 		h.writer_version = context.writer_version;
 		h.content_version = t.catalogue.content_version;
@@ -1447,6 +1447,19 @@ namespace lcsave::detail
 				file = write_file(kind_campaign, sections, h);
 				read_file(file.data(), file.size(), kind_campaign);
 			}
+		}
+		bool actors_needed=context.live_actor_count>32;
+		if(native.feature_bits&feature_actor_capacity96)for(const auto& zone:old.zones)if(zone.tail.dynamic_count>32){
+			if(!context.actor_definition)fail("actor-capacity writer needs definition classification for remembered dynamic records");
+			unsigned actors=0;
+			for(unsigned i=0;i<zone.tail.dynamic_count;++i){const auto index=zone.tail.dynamic.at(i);if(index>=zone.states.size())fail("dynamic actor state index outside record");
+				const auto result=context.actor_definition(zone_string(*old.zone_strings,zone.states[index].def_name));
+				if(!result)fail("actor-capacity writer could not classify dynamic definition");if(*result)++actors;
+			}actors_needed|=actors>32;
+		}
+		if(actors_needed){
+			if(!(native.feature_bits&feature_actor_capacity96))fail("more than 32 actors require the actor-capacity writer");
+			h.required_features|=feature_actor_capacity96;file=write_file(kind_campaign,sections,h);read_file(file.data(),file.size(),kind_campaign);
 		}
 		return file;
 	}

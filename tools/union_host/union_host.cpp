@@ -396,6 +396,13 @@ int wmain(int argc, wchar_t** argv)
 		// <rva> names the gameplay capability record object (dinput.map); its wire bytes ("GCAP", protocol, ...) sit
 		// after the entry table inside it, so the dump starts at the first "GCAP" within 64 KiB of the object.
 		const auto* at = reinterpret_cast<const unsigned char*>(fix) + rva;
+		// Optional model capture for rule-value inspection. The ordinary dump
+		// below continues to resolve the actual wire array by its GCAP magic.
+		wchar_t raw_record[MAX_PATH]{};
+		if(GetEnvironmentVariableW(L"UNION_RAW_RECORD_OUT",raw_record,MAX_PATH)){
+			FILE* raw=_wfopen(raw_record,L"wb");if(!raw)return 6;
+			std::fwrite(at,sizeof(gameplay_capabilities::entry),gameplay_capabilities::max_entries,raw);std::fclose(raw);
+		}
 		for (std::size_t i = 0; i + 4 <= 0x10000; ++i)
 			if (std::memcmp(at + i, "GCAP", 4) == 0) { at += i; break; }
 		FILE* bin = _wfopen(argv[6], L"wb");

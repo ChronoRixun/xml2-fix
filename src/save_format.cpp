@@ -1,5 +1,6 @@
 #define _CRT_RAND_S
 #include "e4_observe.hpp"
+#include "e4_core_state.hpp"
 #include "save_format.hpp"
 #include "item_capacity.hpp"
 #include "native_save_layout.hpp"
@@ -66,6 +67,29 @@ namespace save_format
 		native_profile published_profile = retail_profile;
 		bool layout_vetoed = false;   // use_native_profile refused a profile (unknown or mismatching descriptor)
 		const lcsave::NativeLayout* native_layout = &lcsave::retail_layout; // the lcsave descriptor matching layout_profile
+		lcsave::NativeLayout actor_native_layout{};
+		// Read-only definition/class queries; no entity or controller is created.
+		int actor_definition_probe(const char* name){
+			__try {
+				using getter=void*(__cdecl*)();using lookup=void*(__thiscall*)(void*,const char*);
+				auto* registry=reinterpret_cast<getter>(0x4625c0)();if(!registry)return -1;
+				auto** vt=*reinterpret_cast<void***>(registry);auto* definition=reinterpret_cast<lookup>(vt[8])(registry,name);if(!definition)return -1;
+				vt=*reinterpret_cast<void***>(definition);
+				const auto* cls=reinterpret_cast<const char*(__thiscall*)(void*,const char*,const char*)>(vt[4])(definition,reinterpret_cast<const char*>(0x686890),nullptr);if(!cls)return -1;
+				auto* factory=reinterpret_cast<void*(__cdecl*)(const char*)>(0x4611a0)(cls);if(!factory)return -1;
+				vt=*reinterpret_cast<void***>(factory);return reinterpret_cast<unsigned(__thiscall*)(void*)>(vt[1])(factory)==0x844?1:0;
+			}__except(EXCEPTION_EXECUTE_HANDLER){return -1;}
+		}
+		void actor_save_context(lcsave::NewFileContext& context){
+			if(!e4_core_state::installed)return;
+			std::uint32_t allocator=0,live=0;
+			if(!patch_transaction::read_memory(0x718fbc,&allocator,4)||!allocator||!patch_transaction::read_memory(allocator+0x31ca4,&live,4))throw std::runtime_error("actor capacity live count unreadable");
+			context.live_actor_count=live;
+			context.actor_definition=[cache=std::map<std::string,bool>{}](std::string_view name)mutable->std::optional<bool>{
+				const std::string key(name);if(const auto it=cache.find(key);it!=cache.end())return it->second;
+				const int result=actor_definition_probe(key.c_str());if(result<0)return {};cache.emplace(key,result!=0);return result!=0;
+			};
+		}
 		lcsave::TypedRegistry typed_registry;        // the build's typed entity-id registry, when verified against the scripts
 		bool typed_registry_verified = false;
 		std::string typed_registry_reason;             // why legacy (feature-0) loads refuse when it is not
@@ -1317,6 +1341,7 @@ namespace save_format
 			context.zone_captures=cached_captures;
 			context.origin=kind==kind_campaign?campaign_origin:0;
 			context.require_capture_metadata=kind==kind_campaign;
+			if(kind==kind_campaign)actor_save_context(context);
 			const auto result = kind == kind_profile ? lcsave::old_profile_to_new(image, tables, context, *native_layout) : lcsave::old_stream_to_new(image, tables, context, *native_layout);
 			if (!result.ok)
 			{
@@ -1862,6 +1887,7 @@ namespace save_format
 			context.campaign_serial = current.loaded ? current.serial : 0;
 			context.save_sequence = current.loaded ? current.sequence : 0;
 			context.origin=campaign_origin;context.zone_captures=cached_captures;context.require_capture_metadata=true;
+			actor_save_context(context);
 			context.retained_file=current.file; // CORE: dump reflects preservation too
 			context.optional_features=level_catchup_marker(rank_costs::level_installed(),rank_costs::stat_installed())|(growth_active?optional_class_growth:0u);
 			const auto result = lcsave::old_stream_to_new(image, tables, context, *native_layout);
@@ -2106,6 +2132,7 @@ namespace save_format
 		lc_known_required_features = layout->feature_bits;   // RETAIL 0, E10A2 1, W2 3
 	}
 
+	void enable_actor_capacity96(){actor_native_layout=*native_layout;actor_native_layout.feature_bits|=lcsave::feature_actor_capacity96;native_layout=&actor_native_layout;lc_known_required_features=native_layout->feature_bits;}
 	const native_profile& installed_profile() { return published_profile; }
 
 	void install(const HMODULE game)

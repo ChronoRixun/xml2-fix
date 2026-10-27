@@ -3,6 +3,7 @@
 #include "npc_power_rules_beta7.hpp"
 #undef npc_power_rules
 #include "gameplay_capabilities.hpp"
+#include "e4_core_rules.hpp"
 #define gameplay_capabilities gameplay_capabilities_beta7
 #include "gameplay_capabilities_beta7.hpp"
 #undef gameplay_capabilities
@@ -62,4 +63,16 @@ int main()
     beta7.describe(old_difference.buckets,old_difference.local_only,true,message,sizeof message);
     assert(std::strstr(message,"44 a rule this PC does not have"));
     std::puts("PASS T10: requested-only ActorAI values; matching peers accepted, mismatches/released peers refused both ways by name");
+    record core,peer,phase_a,changed;
+    for(auto* r:{&core,&peer,&changed})assert(r->layout(4,{96,768,1024,10},true));
+    assert(phase_a.layout(3,{32,768,1024,10},true));
+    assert(core.add(actor_ai_id,2,e4_core_rules::agreement,true)&&peer.add(actor_ai_id,2,e4_core_rules::agreement,true));
+    assert(phase_a.add(actor_ai_id,1,{32,4,0x007c007c,1},true));
+    auto policy=e4_core_rules::agreement;policy[3]=7;assert(changed.add(actor_ai_id,2,policy,true));
+    assert(core.finalize()&&peer.finalize()&&phase_a.finalize()&&changed.finalize());
+    assert(core.compare(peer.bytes())==result::match);
+    assert(core.compare(phase_a.bytes(),&d)!=result::match);core.describe(d.buckets,d.local_only,true,message,sizeof message);assert(std::strstr(message,"ActorAI"));
+    assert(phase_a.compare(core.bytes(),&d)!=result::match);phase_a.describe(d.buckets,d.local_only,true,message,sizeof message);assert(std::strstr(message,"ActorAI"));
+    assert(core.compare(changed.bytes(),&d)!=result::match);assert((d.buckets&(1ull<<bucket_of(actor_ai_id)))!=0);
+    std::puts("PASS T10 Stage2: rule1 revision4/rule44 revision2 values, matching peers, stage1 refusal both ways, reset-policy mismatch");
 }

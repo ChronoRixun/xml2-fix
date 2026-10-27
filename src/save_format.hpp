@@ -25,6 +25,7 @@ namespace save_format
 	// Published only after the zone-string transaction commits. Game thread only.
 	void publish_zone_strings(std::uint32_t address);
 	void use_native_profile(const save_format_rules::native_profile& chosen);
+	void enable_actor_capacity96();
 	const save_format_rules::native_profile& installed_profile();
 
 	// A requested LC installation must finish before the executable may start.

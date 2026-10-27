@@ -1838,7 +1838,7 @@ namespace
 		check(read_file(rewritten.data(), rewritten.size(), kind_profile).header.required_features == 1, "a rewrite keeps the marker");
 		auto bad_h = h; bad_h.required_features = 2;
 		check(contains(error_of([&] { write_file(kind_profile, sec, bad_h); }), "not implemented by this writer"), "the writer never emits a bit it does not implement");
-		for (const u32 b : {4u, 7u, 0x80000000u})
+		for (const u32 b : {8u, 15u, 0x80000000u})
 		{
 			const auto patched = with_required_features(plain, b);
 			char hexed[32]; std::snprintf(hexed, sizeof hexed, "0x%x", static_cast<unsigned>(b));
@@ -1858,7 +1858,10 @@ namespace
 			d3 = decide_features(3u, w2_layout); check(d3.ok && !d3.migrate_typed_fields, "W2 applies a bit-1 file as is");
 			d3 = decide_features(1u, w2_layout); check(d3.ok && !d3.migrate_typed_fields, "W2 applies a feature-1 (E10A2) file as is");
 			d3 = decide_features(0u, w2_layout); check(d3.ok && d3.migrate_typed_fields, "W2 migrates a feature-0 file");
-			check(std::string(required_feature_name(2)) == "NATIVE_W2" && contains(required_feature_needs(2), "0.4.2") && !required_feature_name(4), "feature name table");
+			check(std::string(required_feature_name(2)) == "NATIVE_W2" && contains(required_feature_needs(2), "0.4.2"), "W2 feature name unchanged");
+			auto actors=w2_layout;actors.feature_bits|=feature_actor_capacity96;
+			check(decide_features(7u,actors).ok&&!decide_features(7u,w2_layout).ok,"actor bit accepted only by actor-capacity layout");
+			check(decide_features(0u,actors).ok&&decide_features(1u,actors).ok&&decide_features(3u,actors).ok,"actor layout accepts every existing save marker unchanged");
 		}
 		auto d = decide_features(0u, retail_layout); check(d.ok && !d.migrate_typed_fields, "retail + feature 0");
 		d = decide_features(1u, retail_layout); check(!d.ok && d.reason == downgrade_refused && contains(d.reason, "needs the entity-capacity build"), "retail + feature 1 refused");
@@ -2066,11 +2069,11 @@ namespace
 		const auto retail_resave = old_stream_to_new(plain.bytes, tables, retail_ctx);
 		check(!retail_resave.ok && retail_resave.error == std::string("retained file: ") + downgrade_refused, "a retail writer never carries a feature-1 file: " + retail_resave.error);
 		// (6) an unknown required bit refuses everywhere with the established message
-		const auto unknown = with_required_features(legacy.bytes, 4);
+		const auto unknown = with_required_features(legacy.bytes, 8);
 		for (const auto* n : {&retail_layout, &e, &w2_layout})
 		{
 			const auto u = new_to_old_stream(unknown, tables, *n, &reg);
-			check(!u.ok && u.error == "required feature bits 0x4 not implemented (needs a newer version)", "unknown bit refused on " + std::string(n->id));
+			check(!u.ok && u.error == "required feature bits 0x8 not implemented (needs a newer version)", "unknown bit refused on " + std::string(n->id));
 		}
 		const auto w2_marked = with_required_features(legacy.bytes, 3);
 		const auto on_e10a2 = new_to_old_stream(w2_marked, tables, e, &reg);
@@ -2307,6 +2310,45 @@ namespace
 		const auto saved = old_stream_to_new(w2s.bytes, tables, ctx, w);
 		check(saved.ok, "W2 save: " + saved.error);
 		if (!saved.ok) return;
+		// E4 section 7, coordinator amendment: actor bit 2 is independent of
+		// W2 bit 1, and is conditional on the actual actor demand.
+		{
+			auto actor_layout=w;actor_layout.feature_bits|=feature_actor_capacity96;
+			for(unsigned live:{20u,32u,33u,60u,96u}){
+				auto actor_context=ctx;actor_context.live_actor_count=live;
+				const auto result=old_stream_to_new(w2s.bytes,tables,actor_context,actor_layout);
+				check(result.ok,"E4 conditional marker save: "+result.error);
+				if(result.ok){const auto bits=read_file(result.bytes.data(),result.bytes.size(),kind_campaign).header.required_features;
+					check(bits==(live>32?5u:1u),"E4 32/33 boundary uses only actor bit0x4");
+					if(live<=32)check(result.bytes==saved.bytes,"E4 representable save byte-identical with feature capability enabled");
+					const auto reload=new_to_old_stream(result.bytes,tables,actor_layout,&reg);
+					check(reload.ok&&reload.bytes==w2s.bytes,"E4 marked/unmarked save native round trip unchanged");
+					if(live>32){const auto old_reader=new_to_old_stream(result.bytes,tables,w,&reg);check(!old_reader.ok&&contains(old_reader.error,"needs a newer version"),"E4 older actor32 reader refuses readable newer-save marker");}
+				}
+			}
+			const auto old_load=new_to_old_stream(legacy.bytes,tables,actor_layout,&reg);
+			check(old_load.ok&&old_load.bytes==w2s.bytes,"E4 existing feature0 save loads unchanged");
+			auto float_state=wm;for(auto& state:float_state.zones[0].states)if(state.def_name){state.position[0]=0.5f;break;}
+			auto actor_context=ctx;actor_context.live_actor_count=60;
+			const auto combined=old_stream_to_new(write_slot(float_state,w),tables,actor_context,actor_layout);
+			check(combined.ok&&read_file(combined.bytes.data(),combined.bytes.size(),kind_campaign).header.required_features==7,"E4 actor bit0x4 and NATIVE_W2 bit0x2 coexist");
+			const auto old_w2=old_stream_to_new(write_slot(float_state,w),tables,ctx,w);
+			const auto old_w2_load=new_to_old_stream(old_w2.bytes,tables,actor_layout,&reg);
+			const auto old_w2_reference=new_to_old_stream(old_w2.bytes,tables,w,&reg);
+			check(old_w2_load.ok&&old_w2_load.bytes==old_w2_reference.bytes,"E4 existing bit0x2 W2 save loads unchanged");
+			auto dynamic=wm;auto& zone=dynamic.zones[0];const auto prototype=*std::find_if(zone.states.begin(),zone.states.end(),[](const auto& s){return s.def_name!=0;});
+			zone.tail.dynamic_count=33;zone.tail.state_count=std::max(zone.tail.state_count,633u);
+			for(unsigned i=0;i<33;++i){zone.tail.dynamic[i]=static_cast<u16>(600+i);zone.states[600+i]=prototype;}
+			const auto stream=write_slot(dynamic,w);
+			actor_context=ctx;actor_context.live_actor_count=20;actor_context.actor_definition=[](std::string_view)->std::optional<bool>{return true;};
+			const auto remembered=old_stream_to_new(stream,tables,actor_context,actor_layout);
+			check(remembered.ok&&(read_file(remembered.bytes.data(),remembered.bytes.size(),kind_campaign).header.required_features&4),"E4 remembered33 dynamic actors sets bit despite current20: "+remembered.error);
+			actor_context.actor_definition=[](std::string_view)->std::optional<bool>{return false;};
+			const auto props=old_stream_to_new(stream,tables,actor_context,actor_layout);
+			check(props.ok&&!(read_file(props.bytes.data(),props.bytes.size(),kind_campaign).header.required_features&4),"E4 33 nonactor dynamic records do not set actor bit: "+props.error);
+			actor_context.actor_definition=[](std::string_view)->std::optional<bool>{return {};};
+			check(!old_stream_to_new(stream,tables,actor_context,actor_layout).ok,"E4 unknown dynamic class refuses write instead of dropping required feature");
+		}
 		const auto f = read_file(saved.bytes.data(), saved.bytes.size(), kind_campaign);
 		check(f.header.required_features == 1 && representable(saved.bytes, tables, e).empty(), "a representable W2 save carries bit 0 only");
 		const auto again = new_to_old_stream(saved.bytes, tables, w, &reg);
