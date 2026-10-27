@@ -78,3 +78,7 @@ refresh. Native tests do not certify that visual/hardware result.
 Owner live check (2026-10-26, beta 8 candidate 080i, a physical pad): no once-a-second pause with the pad
 connected, and unplugging and replugging it is picked up. Starting with the pad off and switching it
 on later is still being checked.
+
+The separate [late-controller binding repair](controller-hotplug.md) preserves
+actions that the retail settings loader otherwise erases when a saved pad is
+absent at launch. Device discovery alone cannot restore those erased actions.

@@ -69,6 +69,7 @@
 #include "xml1_turrets.hpp"
 #include "game_version.hpp"
 #include "gamepad_fix.hpp"
+#include "pad_hotplug.hpp"
 #include "input_worker.hpp"
 #include "iat_hook.hpp"
 #include "ini.hpp"
@@ -225,6 +226,7 @@ namespace
 		// line in this log. First, before anything here allocates: refuses nothing, changes no game behaviour.
 		address_space::install(game);
 		input_worker::install(game);
+		pad_hotplug::install(game);
 		// The button prompts: the pad's names for a player on a pad, the power wheel's buttons of play. Code and
 		// data the game runs from its first menu on; none of the sites is another module's.
 		pad_prompts::install(game);
