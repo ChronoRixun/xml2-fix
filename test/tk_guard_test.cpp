@@ -8,6 +8,7 @@
 #include <cstdlib>
 using namespace handler_fixture;
 using vec=tk_guard_bridges::vec;
+namespace logger {void write(const char*,...) {}}
 extern "C" unsigned char fixture_space[0x400000];
 constexpr u32 bias=0x10000000;
 namespace lift_rule {int source_override=-1;int heaviness(void* p){return source_override>=0?source_override:field<unsigned char>(p,0x31d);}}
@@ -227,7 +228,7 @@ void reset(){
  field<u32>(at(bias+0x4c0a60),0)=0;field<u32>(at(bias+0x48338c),0)=1;field<u32>(at(bias+0x485878),0)=2;
  *at(0x70b6fd)=*at(bias+0x485840)=0;
  token_valid=target_alive=can_lift=target_ok=can_grab=true;target_actor=true;wall=friend_damage=session_busy=fallback_result=immune=false;normal={-1,0,0};
- acquired_token=222;auxiliary_token=0;auxiliary_calls=auxiliary_events=0;preentries=0;query_calls=destructs=starts=sounds=stops=debits=publications=0;action_id=-1;last_velocity=release_velocity=placed=turned={};release_heading=0;release_level=release_mode=0;last_cost=0;selected_name.clear();played_name.clear();order.clear();tk_guard_bridges::tk_states.clear();
+ acquired_token=222;auxiliary_token=0;auxiliary_calls=auxiliary_events=0;preentries=0;query_calls=destructs=starts=sounds=stops=debits=publications=0;action_id=-1;last_velocity=release_velocity=placed=turned={};release_heading=0;release_level=release_mode=0;last_cost=0;selected_name.clear();played_name.clear();order.clear();tk_guard_bridges::tk_states.clear();tk_guard_bridges::tk_attempts.clear();
 }
 void bind(){
  jump(0x4654b0,&resolve);jump(bias+0x6bf80,&resolve);jump(0x4654d0,&valid);jump(bias+0x6bfa0,&valid);
@@ -400,9 +401,9 @@ void release_damage_test(const image& pc){
  }
 }
 void guard_entry_timing_test(){
- source=false;reset();bind();field<void*>(context.data(),4)=move.data();
+ source=false;reset();bind();field<void*>(context.data(),4)=move.data();field<unsigned char>(target.data(),0x765)=1;
  tk_guard_bridges::guard_entry(nullptr,nullptr,actor.data(),nullptr,context.data());
- check(query_calls==1&&starts==1&&action_id==3,"Guard admission with no input object still makes its contextual decision");
+ check(query_calls==1&&starts==1&&action_id==25,"Guard admission with no input object still makes its contextual stunned-target decision");
  check(field<unsigned char>(context.data(),0x6c)&4,"null-input Guard admission also aborts its parent transition");
  for(int duration:{300,500,800})for(bool pad:{false,true}){
   pad_input_rules::synthetic_pad controller;test_input_rules::synthetic_keys keyboard;
@@ -411,16 +412,100 @@ void guard_entry_timing_test(){
    if(pad){xinput_pad::raw_state state{};std::vector<std::string> expired;controller.merge(state,ms,expired);return (state.buttons&XINPUT_GAMEPAD_X)!=0;}
    std::array<unsigned char,256> state{};std::vector<unsigned char> expired;keyboard.merge(state.data(),ms,expired);return (state[0x12]&0x80)!=0;
   };
-  source=false;reset();bind();check(raw_held(0),"raw pad-X/keyboard-E hold begins without a wake key");field<u32>(input.data(),0)=field<u32>(input.data(),4)=0x100;
+  source=false;reset();bind();field<unsigned char>(target.data(),0x765)=1;check(raw_held(0),"raw pad-X/keyboard-E hold begins without a wake key");field<u32>(input.data(),0)=field<u32>(input.data(),4)=0x100;
   field<void*>(context.data(),4)=move.data();
   tk_guard_bridges::guard_entry(nullptr,nullptr,actor.data(),input.data(),context.data());
-  check(query_calls==1&&starts==1&&action_id==3,"human keyboard/pad Guard entry selects and dispatches the contextual grab before a later input tick");
+  check(query_calls==1&&starts==1&&action_id==25,"human keyboard/pad Guard entry selects and dispatches the contextual stunned grab before a later input tick");
   check((field<unsigned char>(context.data(),0x6c)&4)!=0,"entry decision aborts parent transition after exactly one dispatch");
   // Neither the held-only frames nor the release introduces another entry.
   for(int ms=16;ms<duration;ms+=16){check(raw_held(ms),"raw injected Guard stays held for the human-length duration");field<u32>(input.data(),4)=0;}
   check(!raw_held(duration),"raw pad and keyboard Guard release at the requested duration");
   field<u32>(input.data(),0)=0;
   check(query_calls==1&&starts==1,"300-800 ms Guard holds cannot loop the entry decision");
+ }
+}
+
+void round3_guard_and_tk_test(){
+ // 082c admitted the ordinary Guard chain for a target which was merely
+ // grabbable. That service is not a stun predicate: exercise both flags.
+ for(bool stunned:{false,true})for(bool entry:{false,true}){
+  source=false;reset();bind();field<unsigned char>(target.data(),0x765)=stunned?1:0;
+  field<void*>(context.data(),4)=move.data();
+  if(entry)tk_guard_bridges::guard_entry(nullptr,nullptr,actor.data(),input.data(),context.data());
+  else tk_guard_bridges::guard_input(nullptr,nullptr,actor.data(),input.data());
+  check(action_id==(stunned?25:0),"round3 untouched enemy never selects grab; stunned enemy retains pickup");
+  if(!stunned)check(field<u32>(actor.data(),0x76c)==0,"round3 untouched enemy never becomes held target");
+ }
+ // A two-second hold must survive a transient acquisition miss at entry.
+ // Native admission policies stay in acquire/filter; no extra tag/debit.
+ for(int trial=0;trial<10;++trial){
+  source=false;reset();bind();field<u32>(input.data(),0)=16;
+  field<void*>(event.data(),0x14)=attack.data();field<std::int16_t>(event.data(),0x18)=19;
+  field<std::int16_t>(event.data(),0x1a)=2;field<std::int16_t>(event.data(),0x1c)=11;
+  acquired_token=trial%3==0?0u:222u;
+  tk_guard_bridges::tk_entry(nullptr,nullptr,actor.data(),input.data(),context.data());
+  if(!acquired_token){
+   check(!tk_guard_bridges::tk_input(nullptr,nullptr,actor.data(),input.data())&&action_id==-1,"round3 held TK miss retains acquisition window");
+   acquired_token=222;
+   tk_guard_bridges::tk_input(nullptr,nullptr,actor.data(),input.data());
+  }
+  check(tk_guard_bridges::tk_states.count(111)==1,"round3 ten valid held targets acquire, including four initial misses");
+  check(preentries==1,"round3 TK retry never repeats preentry events");
+  tk_guard_bridges::tk_cancel(nullptr,nullptr,actor.data());
+ }
+ for(bool cancelled:{false,true}){
+  source=false;reset();bind();acquired_token=0;auxiliary_token=222;
+  field<u32>(input.data(),0)=16;field<void*>(event.data(),0x14)=attack.data();
+  tk_guard_bridges::tk_entry(nullptr,nullptr,actor.data(),input.data(),context.data());
+  for(int frame=0;frame<120;++frame)tk_guard_bridges::tk_input(nullptr,nullptr,actor.data(),input.data());
+  check(auxiliary_calls==1&&auxiliary_events==1&&preentries==1,"round3 two-second failed TK hold dispatches auxiliary and entry events once");
+  if(cancelled)tk_guard_bridges::tk_cancel(nullptr,nullptr,actor.data());
+  else{field<u32>(input.data(),0)=0;tk_guard_bridges::tk_input(nullptr,nullptr,actor.data(),input.data());}
+  acquired_token=222;field<u32>(input.data(),0)=16;
+  tk_guard_bridges::tk_input(nullptr,nullptr,actor.data(),input.data());
+  check(tk_guard_bridges::tk_states.empty()&&tk_guard_bridges::tk_attempts.empty(),"round3 release or interruption ends retry and cannot acquire a later target");
+ }
+}
+
+void* __fastcall source_value_name(u32* key,void*,const char* text){check(std::strcmp(text,"L2")==0,"source throw requests the literal L2 value");*key=1;return key;}
+int __cdecl source_value_digit(int c){return c>='0'&&c<='9';}
+int __fastcall source_value_find(void*,void*,const u32*,u32){return 0;}
+bool __fastcall source_throw_parse_base(void*,void*,const char*,const char*){return true;}
+bool __fastcall pc_throw_parse_base(void*,void*,const char*,const char*){return false;}
+double __cdecl throw_parse_number(const char* text){return std::strtod(text,nullptr);}
+void source_throw_value_test(const image& pc,const image& x1){
+ reset();bind();load_source(x1,0xb7e60,0x99);
+ jump(bias+0x13eb0,&source_value_name);jump(bias+0x1186a0,&source_value_find);
+ jump(bias+0x341f4c,&source_value_digit);
+ field<float>(manager.data(),0x998)=9.f;field<float>(manager.data(),0x99c)=11.f;
+ auto source_value=reinterpret_cast<float(__thiscall*)(void*,const char*,float*)>(bias+0xb7e60);
+ float maximum=0;
+ check(source_value(manager.data(),"L2",nullptr)==9.f,"actual XML1 values getter returns min nine when throw omits range output");
+ check(source_value(manager.data(),"L2",&maximum)==9.f&&maximum==11.f,"XML1 eleven is the optional maximum, not a random throw draw");
+ u32 name=0;std::memcpy(&name,pc.read(0x6da24c,4),4);
+ check(std::strcmp(reinterpret_cast<const char*>(pc.read(name,5)),"DMG3")==0,"PC numeric throw selector one names DMG3, not XML1 L2");
+ pc.load(0x4c49f0,0x3b);field<float>(at(0x778ad0),0)=3.f;field<float>(at(0x778ad4),0)=5.f;
+ auto native_value=reinterpret_cast<float(__thiscall*)(void*,int,float*)>(0x4c49f0);
+ check(native_value(manager.data(),1,nullptr)==3.f,"actual PC getter reads the DMG3 minimum at numeric selector one");
+
+ // The shipped source Smash authors velocityup, while both binaries parse
+ // upvelocity. Preserve that source behavior, and test the real parsers so
+ // a manually populated -200 field cannot masquerade as the authored node.
+ pc.load(0x4db650,0x1d9);load_source(x1,0xce8f0,0x195);
+ const u32 strings[]{0x3d07a4,0x3d5ad4,0x3d5b28,0x3d5b18,0x3d5b0c,0x3d5afc,0x3d5af0,0x3d5ae4,0x3d5a64};
+ for(u32 value:strings){
+  x1.load(value,40,bias);
+  for(unsigned i=0;i+4<=0x195;++i)if(field<u32>(at(bias+0xce8f0),i)==value){field<u32>(at(bias+0xce8f0),i)=value+bias;i+=3;}
+ }
+ for(u32 value:{0x68a2d0u,0x690918u,0x69096cu,0x69095cu,0x690950u,0x690940u,0x690934u,0x690928u,0x690890u})pc.load(value,40);
+ jump(0x672562,&compare_key);jump(bias+0x343612,&compare_key);
+ jump(0x672210,&throw_parse_number);jump(bias+0x341736,&throw_parse_number);
+ jump(0x4f8240,&pc_throw_parse_base);jump(bias+0xe3fb0,&source_throw_parse_base);
+ for(bool original:{false,true})for(const char* key:{"upvelocity","velocityup","forwardvelocity"}){
+  event.fill(0);auto parse=reinterpret_cast<bool(__thiscall*)(void*,const char*,const char*)>(original?bias+0xce8f0:0x4db650);
+  parse(event.data(),key,std::strcmp(key,"forwardvelocity")==0?"600":"-200");
+  check(field<float>(event.data(),0x14)==(std::strcmp(key,"upvelocity")==0?-200.f:0.f),"native/source authored Smash spelling retains zero upvelocity; explicit upvelocity parses");
+  check(field<float>(event.data(),0x18)==(std::strcmp(key,"forwardvelocity")==0?600.f:0.f),"native/source Attack forwardvelocity parses to six hundred");
  }
 }
 
@@ -529,7 +614,7 @@ void guard_tests(const image& pc){
   if(original)reinterpret_cast<bool(__thiscall*)(void*,void*,void*)>(bias+0xd99d0)(nullptr,source_actor.data(),input.data());
   else tk_guard_bridges::guard_input(nullptr,nullptr,actor.data(),input.data());
   if(kind!=3){check(query_calls==1&&destructs==1,"guard query acquires/releases once");
-   if(kind==0)check(action_id==3,"enemy guard selects grab action");
+   if(kind==0)check(action_id==(original?3:0),"source generic admission is broader; requested ground policy rejects untouched enemies");
    if(kind==2)check(action_id==24&&field<unsigned char>(target.data(),original?0x2b9:0x30d)&4,"object guard retains pickup claim");
   }
   else check(action_id==0&&std::find(order.begin(),order.end(),8)!=order.end(),"cannot lift reports source feedback and takes idle");
@@ -537,7 +622,7 @@ void guard_tests(const image& pc){
  for(int r:{0,2,3})for(float z:{-.8f,0.f,.2f,.8f}){
   struct result{int starts,action;vec position,angles;bool pending;};result a{};
   for(bool original:{true,false}){
-   source=original;acrobatics=r;might=0;reset();bind();wall=true;normal={-1,0,z};
+   source=original;acrobatics=r;might=0;reset();bind();wall=true;normal={-1,0,z};field<unsigned char>(target.data(),0x54d)=field<unsigned char>(target.data(),0x765)=1;
    const bool pending=original?reinterpret_cast<bool(__thiscall*)(void*,void*,void*)>(bias+0xd99d0)(nullptr,source_actor.data(),input.data()):tk_guard_bridges::guard_input(nullptr,nullptr,actor.data(),input.data());
    result b{starts,action_id,placed,turned,pending};
    if(original)a=b;else{
@@ -637,6 +722,7 @@ int main(int argc,char** argv){
  check(field<u32>(const_cast<unsigned char*>(pc.read(0x69d1ac,0x3c)),0x34)==0x590120&&field<u32>(const_cast<unsigned char*>(pc.read(0x69d1ac,0x3c)),0x38)==0x590bd0,"retail audio table distinguishes boolean from resource lookup");
  pc.load(0x590120,0x66);
  load_source(x1,0xdf640,0xfd);load_source(x1,0xd99d0,0x7c6);load_source(x1,0xdff10,0xc71);load_source(x1,0xdfc80,0x28b);load_source(x1,0x38210,0x15);load_source(x1,0xdf3b0,0xed);
- std::puts("cancel");cancel_tests();std::puts("entry");entry_tests(pc);std::puts("constructors");constructor_tests(pc,x1);std::puts("parser");parser_tests(pc);std::puts("filter");filter_tests();std::puts("acquisition");acquisition_tests(pc,x1);std::puts("guard");guard_tests(pc);std::puts("control");control_tests();std::puts("retail audio ABI");retail_audio_contract_tests(pc);release_damage_test(pc);guard_entry_timing_test();
+ std::puts("cancel");cancel_tests();std::puts("entry");entry_tests(pc);std::puts("constructors");constructor_tests(pc,x1);std::puts("parser");parser_tests(pc);std::puts("filter");filter_tests();std::puts("acquisition");acquisition_tests(pc,x1);std::puts("guard");guard_tests(pc);std::puts("control");control_tests();std::puts("retail audio ABI");retail_audio_contract_tests(pc);release_damage_test(pc);guard_entry_timing_test();round3_guard_and_tk_test();
+ source_throw_value_test(pc,x1);
  std::printf("TK/guard native: %d checks, %d failures\n",checks,failures);return failures?1:0;
 }

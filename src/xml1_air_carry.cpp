@@ -14,6 +14,7 @@
 #include <array>
 #include <algorithm>
 #include <cstring>
+#include <cmath>
 #include <unordered_map>
 
 namespace xml1_air_carry {
@@ -55,6 +56,9 @@ void trace(void* actor,void* victim,const char* stage,unsigned kind,void* input=
 }
 // Full generation-bearing handles; one acquisition press lasts until release.
 std::unordered_map<u32,u32> pickup_guard;
+// The downward contact and the forward decide sweep have different geometry.
+// Retain the actual contacted full-generation handle until the decision runs.
+std::unordered_map<u32,u32> descent_target;
 void forget_guard(void* actor){pickup_guard.erase(at<u32>(actor,0x1c));}
 void* character(void* p){return fn<void*(__cdecl*)(void*)>(0x402b60)(p);}
 void* resolve(void* p,u32 off){const u32 h=at<u32>(p,off);return fn<void*(__fastcall*)(const u32*,void*)>(0x4654b0)(&h,nullptr);}
@@ -158,7 +162,20 @@ vec hands(void* carrier,void* victim){
 }
 vec attachment_target(void* carrier,void* victim,void* move,bool interpolate){
     if(!move)return base_position(carrier);
-    const int id=slot<int(__fastcall*)(void*,void*)>(move,0xe8)(move,nullptr);
+    int id=slot<int(__fastcall*)(void*,void*)>(move,0xe8)(move,nullptr);
+    // PC can select the animation by name while CMove::animenum stays -1
+    // (082c carry traces). Our victim handler still identifies the carry
+    // pose. Map only the authored hand poses, leaving break/other nodes on
+    // the source fallback. Rule45 already guards CName's getter and layout.
+    if(id==-1&&slot<pointer>(move,0x30)(move,nullptr)==&handlers[4]){
+        constexpr const char* poses[]{"airpickuprunvictim","airpickupwalkvictim","airpickupidlevictim","airgrabpickupvictim","airgrabpickupally","airpickuprunally","airpickupwalkally","airpickupidleally"};
+        const u32* key=slot<const u32*(__fastcall*)(void*,void*)>(move,0xd0)(move,nullptr);
+        if(key&&*key){
+            const void* table=fn<getter>(0x602280)();
+            const char* name=static_cast<const char*>(table)+0x4008+at<u32>(table,4+(*key&0xffffffu)*4);
+            for(unsigned i=0;i<attachment_ids.size();++i)if(_stricmp(name,poses[i])==0){id=attachment_ids[i];break;}
+        }
+    }
     const bool hand=std::find(attachment_ids.begin(),attachment_ids.end(),id)!=attachment_ids.end();
     vec desired=hand?hands(carrier,victim):base_position(carrier);
     if(interpolate&&(id==attachment_ids[3]||id==attachment_ids[4]))desired=blend(at<vec>(victim,0x20),desired,0.1f);
@@ -172,14 +189,21 @@ void attachment(void* carrier,void* victim){
     slot<float(__fastcall*)(void*,void*,const pose*)>(victim,0x130)(victim,nullptr,&delta);
 }
 void __fastcall decide_entry(void*,void*,void*,void*,void* context){if(context)put<unsigned char>(context,0x6c,at<unsigned char>(context,0x6c)|1);}
+void __fastcall decide_cleanup(void*,void*,void* actor){if(actor)descent_target.erase(at<u32>(actor,0x1c));}
 bool __fastcall decide_update(void* self,void*,void* actor,void* input){
     if(!actor||!input)return true;
     det_math::fp_env fp;
     if(rank(actor)<=2)return true;
     if(mode(0x4c87a0)&&(mode(0x4c87c0)||mode(0x4c87b0)))return true;
     struct query_holder{void* q=nullptr;~query_holder(){if(q)fn<void(__fastcall*)(void**,void*)>(0x4ab720)(&q,nullptr);}} holder;
-    void* entity=nullptr;
-    if(fn<int(__cdecl*)()>(0x4ab740)()>0){
+    void* entity=nullptr;bool contacted=false;
+    const auto saved=descent_target.find(at<u32>(actor,0x1c));
+    if(saved!=descent_target.end()){
+        const u32 token=saved->second;descent_target.erase(saved);contacted=true;
+        entity=fn<void*(__fastcall*)(const u32*,void*)>(0x4654b0)(&token,nullptr);
+        if(entity&&at<u32>(entity,0x1c)!=token)entity=nullptr;
+    }
+    if(!contacted&&fn<int(__cdecl*)()>(0x4ab740)()>0){
         const u32 excluded=at<u32>(actor,0x1c);
         fn<void**(__fastcall*)(void**,void*,const void*,const u32*)>(0x4ab6d0)(&holder.q,nullptr,reinterpret_cast<const void*>(0x70b83c),&excluded);
         if(holder.q){
@@ -225,7 +249,7 @@ void __fastcall pickup_entry(void*,void*,void* actor,void* input,void* context){
     void* victim=character(resolve(actor,0x76c));if(!victim){idle(actor);return;}
     if(input&&(at<u32>(input,0)&0x100))pickup_guard[at<u32>(actor,0x1c)]=at<u32>(victim,0x1c);
     mark(victim);put(victim,4,at<u32>(victim,4)|4u);publish(victim);
-    void* move=named(victim,"airgrabpickupvictim");
+    void* move=named(victim,team(actor)==team(victim)?"airgrabpickupally":"airgrabpickupvictim");
     fn<handle_set>(0x42c7c0)(actor,nullptr,at<u32>(actor,0x76c));face(actor,victim);
     fn<forced>(0x432030)(victim,nullptr,move,-1,context?at<float>(context,0x64):-1.f,0,1,0);
     mark(victim);pickup_sound(actor);
@@ -310,9 +334,14 @@ void __fastcall carry_throw_event(void* event,void*,void* actor,void* sponsor){
     bits(victim,false);
     slot<void(__fastcall*)(void*,void*,void*)>(victim,0x138)(victim,nullptr,actor);
     if(team(victim)==0x1c||(team(victim)==team(actor)&&!friendly_damage()))return;
-    void* values=fn<getter>(0x4c4bb0)();
-    float amount=slot<float(__fastcall*)(void*,void*,int,int)>(values,0xc)(values,nullptr,1,0); // L2
+    // XML1 3DF3F requests CValues::get("L2", nullptr). B7E60 returns
+    // its minimum (9), with max=11 only through the optional out pointer.
+    // PC's numeric selector 1 is DMG3 (table 6DA240), not XML1 L2.
+    float amount=9.f;
     if(void* stats=at<void*>(actor,0x35c))amount*=fn<float(__fastcall*)(void*,void*,int,void*,int)>(0x4b7970)(stats,nullptr,0,actor,0);
+    // 3DFA4..3DFAD truncates to the source's signed damage word. The
+    // native caster multiplier is bounded by its signed-short stat input.
+    amount=float(static_cast<std::int16_t>(static_cast<int>(amount)));
     put(victim,0x2b8,amount);put(victim,0x2bc,std::int16_t(0));put(victim,0x2c0,3u);put(victim,0x2c4,0x80u);
     put(victim,0x2c8,lift_rule::heaviness(victim)>1?8u:0u);
     put<unsigned char>(victim,0x2e2,1);put(victim,0x2f0,fn<float(__cdecl*)()>(0x45fe60)()+2.f);
@@ -378,6 +407,22 @@ bool __cdecl descend_carry(void* actor){
     u32 flying_key=0;fn<void*(__fastcall*)(u32*,void*,const char*)>(0x41b120)(&flying_key,nullptr,"flying");
     const auto* key=slot<const u32*(__fastcall*)(void*,void*)>(move,0xd0)(move,nullptr);
     if(!key||*key!=flying_key)return true;
+    // PC character cylinders report contact above the authored pickup
+    // height. The old bridge discarded the permitted movement and skipped
+    // the descent tail, then the victim event pulled the target upward.
+    // Descend the carrier first, using the native world probe without the
+    // contacted character as a stop. Keep solid-world obstruction checks.
+    const float pickup_z=at<vec>(victim,0x20).z+40.f;
+    if(start.z>pickup_z){
+        const vec lower{0.f,0.f,pickup_z-start.z};vec allowed{};void* obstacle=nullptr;
+        fn<probe>(0x42b6c0)(actor,nullptr,&start,&lower,0,&allowed,&obstacle);
+        if(!std::isfinite(allowed.z)||allowed.z>0.f||allowed.z<lower.z)return true;
+        if(!std::isfinite(allowed.x)||!std::isfinite(allowed.y))return true;
+        const vec position{start.x+allowed.x,start.y+allowed.y,start.z+allowed.z};
+        slot<vector_set>(actor,0x1c)(actor,nullptr,&position);
+        if(position.z>pickup_z+0.01f)return true;
+    }
+    descent_target[at<u32>(actor,0x1c)]=at<u32>(victim,0x1c);
     void* next=named(actor,"flyguarddecide");
     fn<forced>(0x432030)(actor,nullptr,next,-1,-1.f,0,0,0);
     flight(actor,true,0);
@@ -422,11 +467,11 @@ bool prepare(std::vector<xml1_hook_transaction::patch>& writes,bool flying_carry
     for(const auto& e:xml1_rogue_decide_rules::query_entries){std::array<unsigned char,24>b{};if(!memory.read(e.va,b.data(),e.retail.size()/2)||!mold_query_rules::entry_ok(raised,b.data(),e,raised?entity_capacity::installed_target(e.va):0))return false;}
     if(raised&&(!entity_query::installed_manager()||fn<getter>(0x4ab550)()!=entity_query::installed_manager()))return false;
     if(!raised)for(const auto& g:xml1_rogue_decide_rules::query_guards){std::vector<unsigned char>b(g.hex.size()/2);if(!memory.read(g.va,b.data(),b.size())||!limits_rules::matches(b.data(),g.hex))return false;}
-    handlers.fill(nullptr);pickup_guard.clear();
+    handlers.fill(nullptr);pickup_guard.clear();descent_target.clear();
     trace_enabled=flying_carry&&ini::flag(L"Test",L"CarryTrace",false);trace_stamps={};
     if(flying_carry){
     for(unsigned i=0;i<tables.size();++i){std::memcpy(tables[i].data(),reinterpret_cast<const void*>(0x692f4c),32);tables[i][0]=reinterpret_cast<void*>(&destructor);tables[i][4]=reinterpret_cast<void*>(&frame_noop);handlers[i]=tables[i].data();}
-    tables[0][1]=reinterpret_cast<void*>(&decide_entry);tables[0][6]=reinterpret_cast<void*>(&decide_update);
+    tables[0][1]=reinterpret_cast<void*>(&decide_entry);tables[0][2]=tables[0][3]=reinterpret_cast<void*>(&decide_cleanup);tables[0][6]=reinterpret_cast<void*>(&decide_update);
     tables[1][1]=reinterpret_cast<void*>(&pickup_entry);tables[1][4]=reinterpret_cast<void*>(&pickup_frame);tables[1][6]=reinterpret_cast<void*>(&pickup_update);
     tables[2][1]=reinterpret_cast<void*>(&carry_entry);tables[2][3]=reinterpret_cast<void*>(&interrupted);tables[2][4]=reinterpret_cast<void*>(&carry_frame);tables[2][6]=reinterpret_cast<void*>(&carry_update);
     tables[3][1]=reinterpret_cast<void*>(&throw_entry);tables[3][2]=tables[3][3]=reinterpret_cast<void*>(&throw_cleanup);
@@ -450,6 +495,6 @@ bool prepare(std::vector<xml1_hook_transaction::patch>& writes,bool flying_carry
     writes.push_back({descent,{original,original+6},bridge});
     return true;
 }
-void abandon(){handlers.fill(nullptr);pickup_guard.clear();}
+void abandon(){handlers.fill(nullptr);pickup_guard.clear();descent_target.clear();}
 void* lookup(const char* name){if(name)for(unsigned i=0;i<names.size();++i)if(handlers[i]&&_stricmp(name,names[i])==0)return &handlers[i];return nullptr;}
 }

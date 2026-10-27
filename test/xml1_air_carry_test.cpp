@@ -17,11 +17,13 @@ std::vector<std::string> air_events;
 int flight_rank=3,actor_team=1,victim_team=2,first_reads=0,releases=0,queries=0,preparations=0,notifications=0,ui_errors=0,feedbacks=0,debits=0,flight_sets=0,air_starts=0,bone_mask=0x61,anim_id=-1,generic_calls=0,selects=0,air_forces=0,sounds_played=0,displacements=0,air_placements=0;
 int drops=0;
 bool sequence_mode=false,event_mode=false;
+bool round3_pose=false;
+bool clearance_blocked=false;
 bool sequence_states=false;
 std::array<void*,3> sequence_nodes{};
 void* sequence_carry=nullptr;
 void* sequence_handler_now=nullptr;
-void* __fastcall air_move_handler(void*,void*){return sequence_mode?sequence_handler_now:nullptr;}
+void* __fastcall air_move_handler(void* move,void*){if(round3_pose&&move==other.data())return xml1_air_carry::lookup("ch_air_grab_victim");return sequence_mode?sequence_handler_now:nullptr;}
 int sequence_chains=0;
 int probes=0,carry_entries=0,descent_forces=0;bool probe_hit=true,native_descent_blocked=false,current_flying=true;
 u32 current_move_key=102;
@@ -37,7 +39,7 @@ bool close_float(float a,float b){return std::fabs(a-b)<0.0001f;}
 void air_reset(){
  reset();air_context.fill(0);air_input.fill(0);requested_name.clear();air_events.clear();air_published.clear();filters.clear();idle_actors.clear();
  sequence_states=false;drops=0;first_reads=releases=queries=preparations=notifications=ui_errors=feedbacks=debits=flight_sets=air_starts=generic_calls=selects=air_forces=sounds_played=displacements=air_placements=0;action_chosen=last_flight=-1;
- flight_rank=3;actor_team=1;victim_team=2;bone_mask=0x61;anim_id=-1;energy=1000.f;last_debit=0.f;parameter2=1.f;parameter8=50.f;parameter9=100.f;
+ flight_rank=3;actor_team=1;victim_team=2;bone_mask=0x61;anim_id=-1;energy=1000.f;last_debit=0.f;parameter2=1.f;parameter8=50.f;parameter9=100.f;clearance_blocked=false;
  mode_a=mode_b=mode_c=map_restricted=session_gate=old_map_bit=neutral_ok=immunity=friendly=hit=fallback=sound_empty=false;
  mode_value=0;valid=liftable=available=contact_exists=sound_valid=true;physical_target=char_target=victim.data();now=0;
  put(actor.data(),0x3d8,4u);put(actor.data(),0xbc,0u);put(actor.data(),4,0x80u);put(victim.data(),4,0x80u);put(victim.data(),0x27c,100.f);put(actor.data(),0x6a4,0.f);put(actor.data(),0x6a0,-2.f);
@@ -103,7 +105,7 @@ void __fastcall emergency_drop(void* who,void*){check(who==actor.data(),"emergen
 void __fastcall prepare_flight(void*,void*){++preparations;}
 void __fastcall air_flight(void* who,void*,int on,int emit){check(who==actor.data()&&emit==(descent_forces?0:1),"flight setter uses source emission argument");++flight_sets;last_flight=on;}
 const u32* __fastcall flight_name(void*,void*){current_move_key=current_flying?102u:103u;return &current_move_key;}
-bool __fastcall downward_probe(void* who,void*,const V* start,const V* delta,int flag,V*,void** contact){++probes;const auto position=sequence_mode?get<V>(actor.data(),0x20):V{10,20,30};check(who==actor.data()&&start->x==position.x&&start->y==position.y&&start->z==position.z&&delta->x==0&&delta->y==0&&delta->z==-20&&flag==1,"entry probes from actor position 20 down with character stop flag");*contact=contact_exists?victim.data():nullptr;return probe_hit;}
+bool __fastcall downward_probe(void* who,void*,const V* start,const V* delta,int flag,V* shift,void** contact){++probes;const auto position=sequence_mode?get<V>(actor.data(),0x20):V{10,20,30};check(who==actor.data()&&start->x==position.x&&start->y==position.y&&start->z==position.z&&delta->x==0&&delta->y==0&&((delta->z==-20&&flag==1)||(delta->z<0&&flag==0)),"entry probes down; clearance movement excludes the contacted character");*shift=flag==0&&!clearance_blocked?*delta:V{};*contact=contact_exists?victim.data():nullptr;return probe_hit;}
 bool __cdecl descent_blocked(int index){check(index==get<int>(actor.data(),0x3d4),"native descent controller gate");return native_descent_blocked;}
 u32 descent_site=0x433e46;
 __declspec(naked) bool __fastcall descent_probe(void*,void*,void*){
@@ -164,6 +166,7 @@ void admission_tests(){
 }
 void pickup_tests(){
  void* h=air_handler("ch_air_grab_pickup");auto enter=callback<entry_t>(h,1);auto frame=callback<frame_t>(h,4);
+ air_reset();victim_team=actor_team;enter(h,nullptr,actor.data(),nullptr,air_context.data());check(requested_name=="airgrabpickupally"&&air_forces==1,"ally pickup entry selects the authored ally pose before its time-zero event");
  air_reset();enter(h,nullptr,actor.data(),nullptr,air_context.data());check(get<unsigned char>(victim.data(),0x764)==0x90&&air_published==std::vector<u32>{0x84}&&air_forces==1&&selects==1&&sounds_played==1&&requested_name=="airgrabpickupvictim","pickup marker/bit2/named victim/selection/force/sound");check(air_events==std::vector<std::string>{"publish","select","angles","force"},"pickup ordering before sound");
  for(int c=0;c<2;++c){air_reset();if(c==0)target_present=false;else char_target=nullptr;enter(h,nullptr,actor.data(),nullptr,air_context.data());check(air_starts==1&&air_forces==0,"pickup missing or noncharacter target Idles");}
  for(int c=0;c<2;++c){air_reset();sound_valid=c==0;sound_empty=c==0;enter(h,nullptr,actor.data(),nullptr,air_context.data());check(sounds_played==0,"missing or invalid sound not played");}
@@ -289,9 +292,9 @@ void held_acquisition_test(){
  callback<entry_t>(pickup,1)(pickup,nullptr,actor.data(),air_input.data(),air_context.data());
  sequence_handler_now=carry;callback<entry_t>(carry,1)(carry,nullptr,actor.data(),air_input.data(),air_context.data());
  probe_hit=false;selected=move.data();
- for(int frame=0;frame<240;++frame){
+ for(int frame=0;frame<600;++frame){
   callback<update_t>(carry,6)(carry,nullptr,actor.data(),air_input.data());const int before=probes;
-  check(descent_probe(actor.data(),nullptr,air_input.data())&&probes==before,"holding the acquisition Guard through 240 established carry frames consumes descent even when the probe misses");
+  check(descent_probe(actor.data(),nullptr,air_input.data())&&probes==before,"holding the acquisition Guard through 600 established carry frames consumes descent even when the probe misses");
  }
  put(air_input.data(),0,0u);callback<update_t>(carry,6)(carry,nullptr,actor.data(),air_input.data());
  put(air_input.data(),0,0x100u);const int before=probes;
@@ -328,17 +331,17 @@ void carry_damage_test(){
   actor_vt[0xf0/4]=reinterpret_cast<void*>(&event_tick);put(victim.data(),0x2b8,0.f);put(victim.data(),0x2f0,0.f);
   victim_team=relation==1?actor_team:relation==2?0x1c:2;friendly=relation==3;
   if(friendly)victim_team=actor_team;
-  event.fill(0);put(event.data(),0x14,smash?-200.f:0.f);put(event.data(),0x18,smash?0.f:600.f);put(event.data(),0x2c,.5f);
+  event.fill(0);put(event.data(),0x14,0.f);put(event.data(),0x18,smash?0.f:600.f);put(event.data(),0x2c,.5f);
   put(event.data(),0x1c,1u);put(event.data(),0x20,1u);put(event.data(),0x24,1u);
   unsigned before=0,after=0;__asm mov before,esp
   execute(event.data(),actor.data(),nullptr);
   __asm mov after,esp
   const bool damaging=relation==0||relation==3;
   check(before==after&&get<u32>(actor.data(),0x76c)==0,"real retail victim_throw executes once and releases selection with balanced stack");
-  check(get<float>(victim.data(),0x2b8)==(damaging?18.f:0.f),"carry Attack/Smash arm evaluated L2 only for enemies or enabled friendly damage");
+  check(get<float>(victim.data(),0x2b8)==(damaging?13.f:0.f),"round3 carry Attack/Smash use XML1 L2 minimum nine times caster scale truncated to source word");
   check(get<u32>(victim.data(),4)==0x80&&relatives==1,"carry trigger restores all source release constraints and detaches once");
   if(damaging)check(get<float>(victim.data(),0x2f0)==now+2.f&&get<u32>(victim.data(),0x2b4)==0x1111&&(get<unsigned char>(victim.data(),0x2f8)&1),"carry throw arms source-length deadline and caster attribution");
-  const auto v=get<V>(victim.data(),0x120);check(smash?v.z==-200.f:v.x==600.f,"carry damage adaptation preserves authored native throw velocity");
+  const auto v=get<V>(victim.data(),0x120);check(smash?v.z==0.f:v.x==600.f,"carry damage adaptation preserves parsed source motion (Smash velocityup is ignored in both binaries)");
   sequence_mode=event_mode=false;
  }
  for(int negative:{0,1,2}){
@@ -377,16 +380,17 @@ void finite_energy_hold_test(){
  native(0x4319b5,0x56);native(0x680030,4);native(0x41d5d0,0x41);put<unsigned char>(ptr(0x70b705),0,0);jump(0x431a0b,&debit_done);
  put<unsigned char>(ptr(0x70b704),0,0);jump(0x44cce0,&manager);const auto old_switch=manager_vt[2];manager_vt[2]=reinterpret_cast<void*>(&infinite_energy);
  const auto old_setter=actor_vt[0x1a8/4];actor_vt[0x1a8/4]=reinterpret_cast<void*>(&energy_set);finite_debit=true;
- for(float initial:{40.f,60.f,200.f}){
+ for(float initial:{40.f,60.f,200.f,400.f}){
   air_reset();actor_team=0x1d;energy=initial;put(actor.data(),0x288,initial);put(actor.data(),0x314,1000.f);put(actor.data(),0x6a4,1.f);put(air_input.data(),0,0x100u);
   int landing=-1;
-  for(int frame=0;frame<240;++frame){
-   now=2.f+frame*.016f;callback<frame_t>(carry,4)(carry,nullptr,actor.data(),air_input.data());
+  for(int frame=0;frame<(initial==400.f?600:240);++frame){
+   now=2.f+frame*(initial==400.f?1.f/60.f:.016f);callback<frame_t>(carry,4)(carry,nullptr,actor.data(),air_input.data());
    if(last_flight==0){landing=frame;break;}
   }
   if(initial==40.f)check(landing>=63&&landing<=66,"a real 40-energy budget lands about one second after pickup while Guard remains held");
   if(initial==60.f)check(landing>=126&&landing<=130,"a real 60-energy budget reproduces the two-second held carry break");
   if(initial==200.f)check(landing==-1&&energy==120.f,"a verified sufficient budget survives four seconds of established held carry");
+  if(initial==400.f)check(landing==-1&&energy==200.f,"a finite Flight3 budget supports ten seconds of carry with ten real upkeep debits");
  }
  finite_debit=false;actor_vt[0x1a8/4]=old_setter;manager_vt[2]=old_switch;jump(0x41d5d0,&air_energy);
 }
@@ -471,7 +475,8 @@ V* __fastcall pose_add(V* out,void*,const V* in){out->x+=in->x;out->y+=in->y;out
 float __fastcall pose_component(const V* v,void*,int i){return (&v->x)[i];}
 void* __fastcall no_powerup(void*,void*,void*){return nullptr;}
 void native_world_pose_test(){
- air_reset();sequence_mode=true;flight_rank=6;
+ air_reset();sequence_mode=true;flight_rank=3;energy=400.f;finite_debit=true;
+ const auto saved_energy_set=actor_vt[0x1a8/4];actor_vt[0x1a8/4]=reinterpret_cast<void*>(&energy_set);
  const auto saved188=actor_vt[0x188/4],saved30=move_vt[0x30/4],saved28=move_vt[0x28/4],savede8=move_vt[0xe8/4];
  const auto saved130=actor_vt[0x130/4],saved158=actor_vt[0x158/4],saved34=actor_vt[0x34/4],saved150=actor_vt[0x150/4];
  actor_vt[0x188/4]=reinterpret_cast<void*>(&world_model);move_vt[0x30/4]=ptr(0x500640);move_vt[0xe8/4]=ptr(0x500840);move_vt[0x28/4]=reinterpret_cast<void*>(&no_powerup);
@@ -487,7 +492,9 @@ void native_world_pose_test(){
  put(other.data(),0,move_vt.data());put(other.data(),0xc8,air_handler("ch_air_grab_pickup_idle"));put<unsigned char>(other.data(),0x146,0);put(actor.data(),0x378,other.data());put(air_context.data(),4,other.data());put(move.data(),0xbc,anim_enums::extension_id("ea_flyingcarry_idle_a"));
  reinterpret_cast<void(__thiscall*)(void*,void*,void*,void*)>(0x4f5a30)(other.data(),actor.data(),air_input.data(),air_context.data());
  auto v=get<V>(victim.data(),0x20);check(v.x==105&&v.y==230&&v.z==310,"real CMove entry plus renderer world transforms aligns hand midpoints at (100,220,350)");
- for(int frame=0;frame<60;++frame){put(actor.data(),0x20,V{100.f+frame,200.f+2*frame,300.f+frame});reinterpret_cast<void(__thiscall*)(void*,void*,void*)>(0x4f5cf0)(other.data(),actor.data(),air_input.data());v=get<V>(victim.data(),0x20);check(v.x==105.f+frame&&v.y==230.f+2*frame&&v.z==310.f+frame,"real CMove frame and world-space hand path keeps moving attachment aligned each frame");}
+ for(int frame=0;frame<600;++frame){now=2.f+frame/60.f;put(actor.data(),0x20,V{100.f+frame,200.f+2*frame,300.f+frame});reinterpret_cast<void(__thiscall*)(void*,void*,void*)>(0x4f5cf0)(other.data(),actor.data(),air_input.data());v=get<V>(victim.data(),0x20);check(v.x==105.f+frame&&v.y==230.f+2*frame&&v.z==310.f+frame,"600 moving carry frames keep native CMove/world hand attachment aligned");}
+ check(energy==200.f&&debits==10&&air_starts==0,"ten simulated seconds of moving native hand attachment retain the pair with ten finite Flight3 debits");
+ finite_debit=false;actor_vt[0x1a8/4]=saved_energy_set;
  actor_vt[0x188/4]=saved188;actor_vt[0x130/4]=saved130;actor_vt[0x158/4]=saved158;actor_vt[0x34/4]=saved34;actor_vt[0x150/4]=saved150;move_vt[0x30/4]=saved30;move_vt[0x28/4]=saved28;move_vt[0xe8/4]=savede8;sequence_mode=false;air_bind();
 }
 
@@ -539,6 +546,38 @@ void powerup_tests(){
   check(get<u32>(move.data(),0xb8)==0x12345678u,"suppression leaves expression storage and unrelated bits alone");
  }
 }
+void round3_contact_pose_tests(){
+ air_reset();sequence_mode=true;selected=move.data();put(air_input.data(),0,0x100u);
+ put(actor.data(),0x20,V{10,20,73});put(victim.data(),0x20,V{10,20,3});
+ check(descent_probe(actor.data(),nullptr,air_input.data()),"round3 descending flight contact is consumed");
+ check(get<V>(actor.data(),0x20).z==43.f&&get<V>(victim.data(),0x20).z==3.f,"round3 carrier descends to authored pickup height before moving the victim");
+ contact_exists=false; // The forward sweep misses a target directly below.
+ auto* decide=air_handler("ch_fly_guard_decide");
+ callback<update_t>(decide,6)(decide,nullptr,actor.data(),air_input.data());
+ check(action_chosen==3&&locks==1&&queries==0,"round3 carry decision retains the full-token downward contact instead of losing it in a second sweep");
+ sequence_mode=false;
+ air_reset();sequence_mode=true;clearance_blocked=true;put(air_input.data(),0,0x100u);
+ put(actor.data(),0x20,V{10,20,73});put(victim.data(),0x20,V{10,20,3});
+ descent_probe(actor.data(),nullptr,air_input.data());
+ check(carry_entries==0&&get<V>(actor.data(),0x20).z==73.f&&get<V>(victim.data(),0x20).z==3.f,"round3 solid-world obstruction prevents lowering and pickup instead of pulling target through it");
+ sequence_mode=false;
+ for(bool ally:{false,true}){
+  air_reset();flight_rank=6;victim_team=ally?actor_team:2;round3_pose=true;
+  native(0x404030,4);move_vt[0xd0/4]=ptr(0x404030);move_name(ally?"airpickupidleally":"airpickupidlevictim");
+  put(other.data(),8,1u);
+  put(other.data(),0,move_vt.data());put(victim.data(),0x378,other.data());
+  auto* carry=air_handler("ch_air_grab_pickup_idle");
+  callback<entry_t>(carry,1)(carry,nullptr,actor.data(),air_input.data(),air_context.data());
+  check(last_position.z==30.f,"round3 name-selected carry animation enum minus one attaches to actual hands on entry");
+  callback<frame_t>(carry,4)(carry,nullptr,actor.data(),nullptr);
+  check(last_pose.position.z==30.f,"round3 name-selected ally and enemy poses keep hand attachment on frame");
+  move_name("airgrabbreakvictim");
+  callback<frame_t>(carry,4)(carry,nullptr,actor.data(),nullptr);
+  check(last_pose.position.z==245.f,"round3 unrecognized/break pose retains source base attachment");
+  round3_pose=false;
+  move_vt[0xd0/4]=reinterpret_cast<void*>(&flight_name);
+ }
+}
 void flight_tests(){
  const auto enter=get<entry_t>(ptr(0x6931f8),4),move_enter=get<entry_t>(ptr(0x6932d0),4);
  const auto tick=get<update_t>(ptr(0x6931f8),24);
@@ -586,6 +625,6 @@ int main(int argc,char** argv){
  SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
  AddVectoredExceptionHandler(1,[](PEXCEPTION_POINTERS e)->LONG{std::printf("air fixture exception %08lX at %p ESP=%08lX ECX=%08lX ESI=%08lX\n",e->ExceptionRecord->ExceptionCode,e->ExceptionRecord->ExceptionAddress,e->ContextRecord->Esp,e->ContextRecord->Ecx,e->ContextRecord->Esi);for(unsigned i=0;i<12;++i)std::printf(" %08X",reinterpret_cast<u32*>(e->ContextRecord->Esp)[i]);std::puts("");ExitProcess(1);});
  const int lifecycle=lifecycle_main(argc,argv);if(lifecycle&&!xml1_grab_carry::installed())return lifecycle;
- air_bind();std::puts("admission");admission_tests();std::puts("finite energy");finite_energy_hold_test();std::puts("native shortcut");native_shortcut_admission_test();std::puts("native entry pose");native_entry_pose_test();std::puts("pickup");pickup_tests();std::puts("carry");carry_tests();std::puts("release");release_tests();std::puts("sequence");sequence_tests();std::puts("held acquisition");held_acquisition_test();std::puts("carry damage");carry_damage_test();std::puts("fastball authored event");fastball_authored_event_test();std::puts("flight");flight_tests();powerup_tests();native_bone_tests();std::puts("native world pose");native_world_pose_test();std::puts("native generic stick");native_generic_stick_test();
+ air_bind();round3_contact_pose_tests();std::puts("admission");admission_tests();std::puts("finite energy");finite_energy_hold_test();std::puts("native shortcut");native_shortcut_admission_test();std::puts("native entry pose");native_entry_pose_test();std::puts("pickup");pickup_tests();std::puts("carry");carry_tests();std::puts("release");release_tests();std::puts("sequence");sequence_tests();std::puts("held acquisition");held_acquisition_test();std::puts("carry damage");carry_damage_test();std::puts("fastball authored event");fastball_authored_event_test();std::puts("flight");flight_tests();powerup_tests();native_bone_tests();std::puts("native world pose");native_world_pose_test();std::puts("native generic stick");native_generic_stick_test();
  std::printf("%s flying carry callbacks: %d checks, %d failures\n",failures?"FAIL":"PASS",checks,failures);return failures?1:0;
 }

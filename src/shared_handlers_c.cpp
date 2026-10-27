@@ -48,6 +48,7 @@ void install(HMODULE game) {
   &tk_guard_bridges::tk_entry,&tk_guard_bridges::tk_update,&tk_guard_bridges::tk_cancel,&tk_guard_bridges::tk_input,&tk_guard_bridges::tk_filter,&tk_guard_bridges::guard_entry,&tk_guard_bridges::tk_parse,&tk_guard_bridges::guard_input,&tk_guard_bridges::release_arming_gate};
  bool safe=true;
  if(xml1_hook_transaction::apply(memory,patches(wanted,callbacks),&safe)) {
+  tk_guard_bridges::trace_acquisition=(wanted&telekinesis)&&ini::text(L"Test",L"TKTrace").value_or("")=="1";
   applied=wanted;logger::write("shared handlers C: installed mask %03X revision 1",applied);
   // The builder's DLL gate reads this line (beta 8 080e: Phoenix power1a/1b resolve through PC audio slot 0x38).
   if(applied&telekinesis)logger::write("shared handlers C: telekinesis sounds resolve through PC audio slot 38");
