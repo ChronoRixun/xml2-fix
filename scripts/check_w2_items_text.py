@@ -24,7 +24,7 @@ if len(guards)!=521:errors.append(f'ledger inventory {len(guards)}, expected 469
 blocks=[(int(a,16),int(b,16),h) for a,b,h in re.findall(r'\{(0x[0-9a-f]+),(0x[0-9a-f]+),"([0-9a-f]{64})",\{',source)]
 cpp=(ROOT/'src/item_capacity.cpp').read_text()
 regions=blocks[:]
-regions += [(int(a,16),int(b,16),h) for a,b,h in re.findall(r'"(?:DLL item pool getter|W2 inventory slot serializer|W2 item registrar owner)",(0x[0-9a-f]+),(0x[0-9a-f]+),sha256_of\("([0-9a-f]{64})"\)',cpp)]
+regions += [(int(a,16),int(b,16),h) for a,b,h in re.findall(r'"(?:DLL item pool getter|W2 inventory slot serializer|W2 item registrar owner|shared instance ring pop)",(0x[0-9a-f]+),(0x[0-9a-f]+),sha256_of\("([0-9a-f]{64})"\)',cpp)]
 regions += [(int(a,16),int(b,16),h) for a,b,h in re.findall(r'\{(0x[0-9a-f]+),(0x[0-9a-f]+),"([0-9a-f]{64})",&',cpp)]
 helper_hashes=re.search(r'hash=id==1\?"([0-9a-f]{64})":"([0-9a-f]{64})"',cpp)
 assert helper_hashes
@@ -55,7 +55,7 @@ def inspect(i,owner):
   if owner in (0x673a43,0x673ad3) and o.type==x86.X86_OP_IMM and o.imm==4:errors.append(f'old definition unwind base {owner:x}')
   if o.type==x86.X86_OP_IMM and i.mnemonic in ('cmp','mov','push'):
    v=o.imm & 0xffffffff
-   if INSTANCES[0]<=owner<INSTANCES[1] and v==256:errors.append(f'old instance capacity {owner:x}')
+   if INSTANCES[0]<=owner<INSTANCES[1] and not 0x483410<=owner<0x48343c and v==256:errors.append(f'old instance capacity {owner:x}')
    if ATTACHED[0]<=owner<ATTACHED[1] and v==375:errors.append(f'old attached capacity {owner:x}')
    if MANAGER[0]<=owner<MANAGER[1] and v==150:errors.append(f'old world-slot capacity {owner:x}')
 
@@ -72,8 +72,10 @@ for line in Path(str(prefix)+'-caves.tsv').read_text().splitlines():
  for i in decode(md,code,at):inspect(i,a) # each copied span belongs wholly to one owner class
  caves+=1
 # The original bitset helper is shared: the install must leave it byte-identical.
-for lo,hi in ((0x44d0d0,0x44d169),(0x45e5f0,0x45e689)):
+for lo,hi in ((0x44d0d0,0x44d169),(0x45e5f0,0x45e689),(0x483410,0x48343c)):
  if patched[lo-base:hi-base]!=image[lo-0x400000:hi-0x400000]:errors.append(f'shared helper changed {lo:x}')
+for caller in (0x4c7089,0x5421f9,0x58a209):
+ if patched[caller-base:caller-base+5]!=image[caller-0x400000:caller-0x400000+5]:errors.append(f'foreign ring caller changed {caller:x}')
 # No live original instruction may branch into the five bytes displaced by a
 # cave or full replacement. Internal copied branches are resolved in the dump.
 entries=[(lo,lo+5) for lo,hi,h in blocks]+[(0x47e690,0x47e695),(0x47ee90,0x47ee95),(0x481938,0x48193d),(0x483610,0x483615),(0x45fb00,0x45fb05)]

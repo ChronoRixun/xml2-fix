@@ -75,6 +75,19 @@ void __cdecl records_full(){logger::write("W2 enhancement-record registration re
 void __cdecl world_full(){logger::write("W2 world-item allocation refused: capacity 1024 exhausted");}
 std::uint8_t* instance_backing=nullptr;std::uint8_t* attached_backing=nullptr;unsigned published_capacity=0;
 void* definition_picker_copy=nullptr;
+// 0x483410 is the shared ring<256>::pop, also called by the file, attribute
+// and pointer pools at 0x58a209 / 0x5421f9 / 0x4c7089. Its retail body stays
+// intact; only the item allocator's edge 0x4833f9 calls this 1024-entry pop.
+// Same effect at the W2 offsets: advance the read index (wrap at 1024),
+// decrement the live count and return it. The caller reads no register after
+// the call (it reloads EAX), so a plain thiscall-compatible function fits.
+unsigned __fastcall instance_ring_pop(std::uint8_t* ring,void*){
+ const auto next=read<unsigned>(ring,0x1008)+1;
+ put(ring,0x1008,static_cast<int>(next)<1024?next:0u);
+ const auto count=read<unsigned>(ring,0x100c)-1;
+ put(ring,0x100c,count);
+ return count;
+}
 void* __cdecl instance_get(){auto& cell=*native<void**>(0x72a524);if(!cell){put(instance_backing,0,0x6884a8u);native<void*(__fastcall*)(void*,void*)>(0x483170)(instance_backing+4,nullptr);cell=instance_backing;}return cell;}
 void* __cdecl attached_get(){auto& cell=*native<void**>(0x717b30);if(!cell){put(attached_backing,0,0x686598u);native<void*(__fastcall*)(void*,void*)>(0x45f6c0)(attached_backing+4,nullptr);cell=attached_backing;}return cell;}
 struct storage {
@@ -153,7 +166,7 @@ bool contribute_w2(contribution& owner,std::string& why) try {
  auto storage=std::make_shared<struct storage>();
  for(const auto& g:item_capacity_sites::ledger)c.guards.push_back({g.va,bytes_of(g.bytes),"reviewed SPEC-old item ledger"});
  for(const auto& g:item_capacity_sites::omissions)c.guards.push_back({g.va,bytes_of(g.bytes),"52 instance-pool omissions"});
- std::array<std::uint32_t,5> targets{};
+ std::array<std::uint32_t,6> targets{};
  auto* instances=storage->allocate(item_capacity_rules::instances.size,false);auto* attached=storage->allocate(item_capacity_rules::attached.size,false);
  for(const auto cell:{0x72a524u,0x717b30u,0x72a514u})c.guards.push_back({cell,{0,0,0,0},"W2 item owner must not already exist"});
  // Clone both shared bitset scans, guard complete owners, preserve originals.
@@ -167,6 +180,8 @@ bool contribute_w2(contribution& owner,std::string& why) try {
   c.regions.push_back({"private bitset clone",lo,hi,sha256_of(hash)});targets[id]=address_of(code);
  }
  targets[3]=address_of(&slot_write);targets[4]=address_of(&slot_read);
+ targets[5]=address_of(&instance_ring_pop);
+ c.regions.push_back({"shared instance ring pop",0x483410,0x48343c,sha256_of("8ccbe1f044600d538d1cf993f6b3ca9802496b85b8589f2b629c691e8d601cbd")});
  for(const auto& r:item_capacity_sites::direct) {
   c.guards.push_back({r.va,bytes_of(r.old),r.kind});auto value=bytes_of(r.value);
   resolve_data(value);

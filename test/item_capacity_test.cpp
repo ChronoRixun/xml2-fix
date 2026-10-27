@@ -2,6 +2,7 @@
 #include "item_capacity.hpp"
 #include "item_capacity_rules.hpp"
 #include "item_capacity_sites.hpp"
+#include "w2_boot_probe.hpp"
 #include <array>
 #include <cstdio>
 #include <cstdarg>
@@ -153,6 +154,79 @@ namespace {
  ret 4
  }}
  unsigned __fastcall zero2(void*,void*,unsigned,unsigned){return 0;}
+ void shared_ring_consumers(){
+  struct consumer {unsigned entry,ring,live,size;const char* name;};
+  for(const auto& s:std::initializer_list<consumer>{{0x4c7050,0x404,0x834,0xc40,"4c7050"},{0x5421c0,0x8820,0x8c50,0x905c,"5421c0"},{0x58a1d0,0x820,0xc50,0x105c,"58a1d0"}}){
+   // Padding makes the historical out-of-owner writes observable without an
+   // AV ending the fixture before it can identify all three foreign callers.
+   protected_buffer p(s.size+0x1000);std::memset(p.data+s.size,0xa5,0x1000);
+   for(unsigned i=0;i<256;++i)put(p.data,s.ring+4*i,i);
+   put(p.data,s.ring+0x408,0u);put(p.data,s.ring+0x40c,256u);
+   const auto first=native<unsigned(__fastcall*)(void*,void*)>(s.entry)(p.data,nullptr);
+   const auto second=native<unsigned(__fastcall*)(void*,void*)>(s.entry)(p.data,nullptr);
+   bool canary=true;for(unsigned i=0;i<0x1000;++i)canary&=p.data[s.size+i]==0xa5;
+   check(first==0&&second==1&&read<unsigned>(p.data,s.ring+0x408)==2&&read<unsigned>(p.data,s.ring+0x40c)==254&&canary,
+         std::string("shared 256-entry ring: foreign allocator ")+s.name+" advances distinct slots and preserves its allocation boundary");
+  }
+ }
+ // Boot coverage: the older definition tests seeded the relocated array by
+ // hand and never executed the manager constructor or XML registration loop.
+ struct boot_node {unsigned unused[3]{};int fields=1;unsigned key=1,value=0;};
+ std::vector<boot_node> boot_nodes;
+ boot_node empty_document{};
+ void* selected_document=nullptr;
+ unsigned boot_manager_vt[80]{},boot_resource_vt[2]{};
+ unsigned* boot_resource=boot_resource_vt;
+ void* __cdecl boot_resource_get(){return &boot_resource;}
+ void* __fastcall boot_root(void*,void*,const char*){return selected_document;}
+ void* __fastcall boot_next_root(void*,void*,const char*){return nullptr;}
+ void* __fastcall boot_child(void* document,void*,const char*,void* previous){
+  if(document==&empty_document)return nullptr;
+  if(!previous)return boot_nodes.data();
+  auto* p=static_cast<boot_node*>(previous)+1;
+  return p<boot_nodes.data()+boot_nodes.size()?p:nullptr;
+ }
+ void* __fastcall boot_no_child(void*,void*,const char*){return nullptr;}
+ unsigned* __fastcall boot_pair(void*,void*,unsigned* out,unsigned){out[0]=out[1]=0;return out;}
+ void __stdcall boot_array(void* p,unsigned stride,unsigned count,unsigned construct,unsigned){
+  for(unsigned i=0;i<count;++i){auto* record=static_cast<std::uint8_t*>(p)+i*stride;
+   native<void*(__fastcall*)(void*,void*)>(construct)(record,nullptr);
+   // Keep the retail definition vtable and name parser.
+  }
+ }
+ void boot_registration(){
+  using namespace item_capacity_rules;
+  const auto saved=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);
+  protected_buffer m(manager_size);current_manager=m.data;
+  std::memcpy(boot_manager_vt,at(0x688314),sizeof boot_manager_vt);
+  boot_manager_vt[0xfc/4]=addr(&zero2);boot_manager_vt[0x100/4]=addr(&zero1);
+  boot_manager_vt[0x12c/4]=addr(&boot_pair);boot_resource_vt[1]=addr(&zero2);
+  jump(0x6722d4,&boot_array);jump(0x541080,&zero0);
+  jump(0x47dd10,&zero0);jump(0x57d750,&zero0);jump(0x47f410,&zero0);
+  jump(0x480290,&zero0);
+  native<void*(__fastcall*)(void*,void*)>(0x480700)(m.data,nullptr);
+  std::memcpy(at(0x480290),saved.data()+0x480290-addr(fixture_space),5);
+  put(m.data,0,addr(boot_manager_vt));
+  jump(0x563070,&boot_resource_get);jump(0x47b4e0,&zero0);
+  jump(0x564ac0,&boot_root);jump(0x564a40,&boot_next_root);
+  jump(0x564cb0,&boot_child);jump(0x564c70,&boot_no_child);
+  for(unsigned a:{0x47c9e0u,0x47e820u,0x47f230u,0x47cc20u})jump(a,&yes1);
+  jump(0x47f4f0,&zero1);jump(0x47ce80,&zero0);
+  jump(0x602120,&std::strlen);jump(0x672562,&compare_names);
+  for(unsigned count:{1u,185u,256u,1024u}){
+   boot_nodes.assign(count,{});
+   for(unsigned i=0;i<count;++i){boot_nodes[i].key=0x681d90;boot_nodes[i].value=addr(names.data()+0x8008+i*12);
+    std::snprintf(reinterpret_cast<char*>(names.data())+0x8008+i*12,12,i?"item%04u":"MONEY1",i);}
+   w2_boot_probe::cached_input input(boot_nodes.data(),unsigned(boot_nodes.size()*sizeof(boot_node)),&empty_document,sizeof empty_document);
+   selected_document=input.first_buffer();
+   native<unsigned(__fastcall*)(void*,void*)>(0x480290)(m.data,nullptr);
+   const auto found=native<unsigned(__fastcall*)(void*,void*,const char*)>(0x47e320)(m.data,nullptr,"MONEY1");
+   std::printf("boot registered %u: count=%u MONEY1=%08x\n",count,read<unsigned short>(m.data,0x2588),found);
+   check(read<unsigned short>(m.data,0x2588)==count&&found==0,"boot constructor/registration/name lookup, count "+std::to_string(count));
+   check(w2_boot_probe::release_cached_inputs(input,boot_nodes.data(),&empty_document),"menu file-buffer release frees each source once, count "+std::to_string(count));
+  }
+  std::memcpy(fixture_space,saved.data(),saved.size());FlushInstructionCache(GetCurrentProcess(),fixture_space,sizeof fixture_space);
+ }
  __declspec(naked) void reward_done(){__asm {
  pop esi
  ret
@@ -391,10 +465,24 @@ int main(int argc,char** argv) {
   const auto mutated=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);patch_transaction::transaction bad;bad.add(c);
   check(bad.commit()==patch_transaction::outcome::refused_region&&std::equal(mutated.begin(),mutated.end(),fixture_space),"T3 native registrar cleanup ret mutated: entire union refused by complete owner hash");*static_cast<std::uint8_t*>(at(0x4806e0))=saved;
  }
+ {const auto saved=*static_cast<std::uint8_t*>(at(0x483434));*static_cast<std::uint8_t*>(at(0x483434))^=1;
+  const auto mutated=std::vector<std::uint8_t>(fixture_space,fixture_space+sizeof fixture_space);patch_transaction::transaction bad;bad.add(c);
+  check(bad.commit()==patch_transaction::outcome::refused_region&&std::equal(mutated.begin(),mutated.end(),fixture_space),"shared ring body mutation outside operand guards refuses the whole union with zero writes");*static_cast<std::uint8_t*>(at(0x483434))=saved;
+ }
  patch_transaction::transaction tx;tx.add(std::move(c));const auto result=tx.commit();
  check(result==patch_transaction::outcome::committed,"W2 item union commits: "+tx.report());
  if(result!=patch_transaction::outcome::committed)return 1;
- if(argc>2){
+ check(!std::memcmp(at(0x483410),stock.data()+0x483410-addr(fixture_space),0x2c),"shared 256-entry ring body remains byte-identical to retail");
+ const bool legacy_ring=argc>2&&std::string_view(argv[2])=="--legacy-shared-ring";
+ if(legacy_ring){
+  // Replay exactly the six in-place writes shipped by W2 a27495f/b603cc8.
+  for(unsigned a:{0x483412u,0x483419u,0x48342cu})put(at(a),0,0x1008u);
+  for(unsigned a:{0x483424u,0x483437u})put(at(a),0,0x100cu);
+  put(at(0x48341e),0,1024u);
+  const auto old_call=patch_transaction::bytes_of("e812000000");std::memcpy(at(0x4833f9),old_call.data(),old_call.size());
+  FlushInstructionCache(GetCurrentProcess(),at(0x4833f9),0x43);
+ }
+ if(argc>2&&!legacy_ring){
   const std::string prefix=argv[2];std::ofstream text(prefix+"-text.bin",std::ios::binary);text.write(static_cast<const char*>(at(0x401000)),0x27d7b5);
   std::ofstream manifest(prefix+"-caves.tsv");
   for(const auto& b:item_capacity_sites::blocks){const auto base=b.lo+5+read<unsigned>(at(b.lo+1));int size=int(b.hi-b.lo)+5;for(const auto& e:b.edits)size+=int(patch_transaction::bytes_of(e.value).size())-int(e.size);
@@ -404,7 +492,7 @@ int main(int argc,char** argv) {
 
  const auto instance=native<void*(__cdecl*)()>(0x483610)(),attached=native<void*(__cdecl*)()>(0x45fb00)();
  check(instance&&attached&&instance==native<void*(__cdecl*)()>(0x483610)()&&attached==native<void*(__cdecl*)()>(0x45fb00)()&&item_capacity::installed_capacity()==4096,"T7/T8 DLL-owned protected pools initialized once through retail getters only after publication");
- helper_differential();pool_tests();large_pickers();thousand_drops();definition_tests();entity_slot_tests();world_and_preflight();registration_tests();
+ shared_ring_consumers();boot_registration();helper_differential();pool_tests();large_pickers();thousand_drops();definition_tests();entity_slot_tests();world_and_preflight();registration_tests();
  *static_cast<std::uint8_t*>(at(0x481a02))=0xc3;const auto refusals=save_format::refusals;
  native<void(__fastcall*)(void*,void*)>(0x481938)(nullptr,nullptr);
  check(save_format::refusals==refusals+1&&logger::last.find("attached-enhancement allocation refused: capacity 4096")!=std::string::npos,"T8 actual attachment null-handle branch logs 4096 and latches failed reconstruction");

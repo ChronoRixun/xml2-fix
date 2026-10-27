@@ -118,6 +118,36 @@ void __fastcall ring_push(void* ring,void*,const unsigned* value){
  auto head=read<unsigned>(ring,256*4+4),count=read<unsigned>(ring,256*4+12);
  put(ring,head*4,*value);put(ring,256*4+4,(head+1)%256);put(ring,256*4+12,count+1);
 }
+// 0x4be010 / 0x4be9c0 are the ratl pool<16-byte, 100>::pop / clear shared
+// (identical-code folded) by every such pool; 0x4d6b00, 0x4fd8d0, 0x460580,
+// 0x4d6ff0 and 0x4d8170 are foreign owners, so both retail bodies stay intact.
+// Only the talent registry's C-pool edges (0x4bfce9 pop; 0x4bfe10, 0x4c043d
+// clear) call these 256-entry versions at the W2 C-pool offsets. The callers
+// use only EAX (the popped id) afterwards, as for any thiscall.
+using save_limits_sites::c_ring;using save_limits_sites::c_head;using save_limits_sites::c_tail;
+using save_limits_sites::c_ringcount;using save_limits_sites::c_buckets;using save_limits_sites::c_live;
+unsigned __fastcall talent_pool_pop(std::uint8_t* pool,void*){
+ const auto tail=read<unsigned>(pool,c_tail);
+ const auto id=read<unsigned>(pool,c_ring+tail*4);
+ const auto word=c_buckets+static_cast<unsigned>(static_cast<int>(id)>>5)*4;
+ put(pool,word,read<unsigned>(pool,word)|1u<<(id&31));
+ put(pool,c_tail,static_cast<int>(tail+1)<256?tail+1:0u);
+ put(pool,c_ringcount,read<unsigned>(pool,c_ringcount)-1);
+ put(pool,c_live,read<unsigned>(pool,c_live)+1);
+ return id;
+}
+// Head, tail and count start at zero; ids 0..255 are pushed in order, each at
+// the slot before the advanced head (the 256th wraps the head to 0, slot 255).
+void __fastcall talent_pool_clear(std::uint8_t* pool,void*){
+ put(pool,c_head,0u);put(pool,c_tail,0u);put(pool,c_ringcount,0u);
+ for(unsigned id=0;id<256;++id){
+  const auto head=read<unsigned>(pool,c_head)+1;
+  put(pool,c_ringcount,read<unsigned>(pool,c_ringcount)+1);
+  unsigned slot=head-1;
+  if(static_cast<int>(head)<256)put(pool,c_head,head);else{put(pool,c_head,0u);slot=255;}
+  put(pool,c_ring+slot*4,id);
+ }
+}
 void* __cdecl registry_allocate(unsigned,unsigned,unsigned){std::memset(registry,0,talent_size);return registry;}
 void __cdecl registry_free(void*,unsigned){} // DLL backing lives through process shutdown.
 void* __fastcall acts_construct(void* p,void*){put(p,64,0u);return p;}
@@ -188,7 +218,7 @@ bool contribute_w2(contribution& owner,std::string& why) try {
  auto* registry_bytes=store->allocate(talent_size);
  auto* states=store->allocate(1024);auto* names=store->allocate(64*32+8);auto* acts=store->allocate(64+4);auto* bases=store->allocate(64*2+4);auto* side=store->allocate(0xa88);
  const std::array<unsigned,10> data{0,address_of(states),address_of(names),address_of(names)+64*32+4,address_of(acts),address_of(acts)+64,address_of(bases),address_of(bases)+128,address_of(side),address_of(side)+0xa84};
- const std::array<unsigned,19> target{0,address_of(&record_index),address_of(&registered),address_of(&allocate_objective),address_of(&reset_objectives),address_of(&sort_objectives),address_of(&manager_get),address_of(&manager_stop),address_of(&ring_reset),address_of(&ring_push),address_of(&generation_stub),address_of(&multiplier_stub),address_of(&cap_stub),address_of(&copy_record),address_of(&registry_allocate),address_of(&registry_free),address_of(&acts_construct),address_of(&bases_construct),address_of(&registered_total)};
+ const std::array<unsigned,21> target{0,address_of(&record_index),address_of(&registered),address_of(&allocate_objective),address_of(&reset_objectives),address_of(&sort_objectives),address_of(&manager_get),address_of(&manager_stop),address_of(&ring_reset),address_of(&ring_push),address_of(&generation_stub),address_of(&multiplier_stub),address_of(&cap_stub),address_of(&copy_record),address_of(&registry_allocate),address_of(&registry_free),address_of(&acts_construct),address_of(&bases_construct),address_of(&registered_total),address_of(&talent_pool_pop),address_of(&talent_pool_clear)};
  auto resolve=[&](std::vector<std::uint8_t>& bytes){for(unsigned i=0;i+4<=bytes.size();++i){unsigned v=read<unsigned>(bytes.data(),i);if(v>0xfeed0000&&v<0xfeed0000+target.size())put(bytes.data(),i,target[v-0xfeed0000]);if(v>0xfeed1000&&v<0xfeed1000+data.size())put(bytes.data(),i,data[v-0xfeed1000]);}};
  for(const auto& g:save_limits_sites::ledger)c.guards.push_back({g.va,bytes_of(g.bytes),"E14/E7 reviewed retail ledger"});
  for(const auto cell:{0x72b108u,0x77339cu})c.guards.push_back({cell,{0,0,0,0},"W2 objectives/talents startup quiescence"});
