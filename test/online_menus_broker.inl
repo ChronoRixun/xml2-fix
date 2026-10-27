@@ -11,7 +11,9 @@ bool menu_refuse=false;
 unsigned menu_resolve_attempts=0;
 bool menu_has_preset=false;
 bm::launch_preset menu_launch;
-bool menu_available() { return true; }
+bool menu_up=true;
+std::string menu_rows_json,menu_error; // R5b: invented list body / failure id for the next completion
+bool menu_available() { return menu_up; }
 const bm::client_view& menu_view() { return menu_broker.view(); }
 bool menu_begin(bm::operation op) {
     if(!menu_broker.begin(op,ticks)) return false;
@@ -30,7 +32,10 @@ void menu_tick() {
     if(menu_auth && menu_broker.pending()) { menu_broker.authenticated(menu_reply);menu_broker.issue(); }
     if(!menu_complete) return;
     menu_complete=false;
-    if(menu_reply_op==bm::operation::list) {
+    if(!menu_error.empty()) { menu_broker.fail(menu_reply,menu_error,ticks);menu_error.clear();return; }
+    if(menu_reply_op==bm::operation::list && !menu_rows_json.empty()) {
+        menu_broker.listed(menu_reply,online_room_core::parse("{\"op\":\"list_rooms_ok\",\"rooms\":["+(menu_rows_json=="-" ? std::string() : menu_rows_json)+"]}"),ticks);
+    } else if(menu_reply_op==bm::operation::list) {
         std::string json="{\"op\":\"list_rooms_ok\",\"rooms\":[";
         for(unsigned i=0;i<9;++i) {
             if(i) json+=',';
@@ -50,7 +55,7 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     screen("lc_browse");tick(child.data(),nullptr);assert(menu_lists==1 && !visibility["lc_broker_auth"]);
     menu_auth=true;tick(child.data(),nullptr);assert(!visibility["lc_broker_list"]);
     menu_complete=true;tick(child.data(),nullptr);
-    assert(menu_view().rows.size()==9 && texts["room_0_0"]=="Remote ? ? ? name" && texts["room_0_5"]=="--" && texts["room_0_6"]=="SAME");
+    assert(menu_view().rows.size()==9 && texts["room_0_0"]=="Remote ? ? ? name" && texts["room_0_6"].empty() && !visibility["lc_row0_build_same"] && visibility["lc_row0_build_other"]);
     for(unsigned i=0;i<20;++i) { post(intent::refresh);tick(child.data(),nullptr); }
     assert(menu_lists==1);
     post(intent::next);tick(child.data(),nullptr);assert(!visibility["lc_row6_selected"]);
@@ -92,7 +97,7 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     for(int i=32;i<40;++i) { post(static_cast<intent>(i));tick(child.data(),nullptr); }
     const auto attempts=menu_resolve_attempts;
     for(unsigned i=0;i<20;++i) tick(child.data(),nullptr);
-    assert(menu_view().state==bm::phase::refused && menu_resolve_attempts==attempts && visibility["lc_code_complete"] && !visibility["lc_broker_error"]);
+    assert(menu_view().state==bm::phase::refused && menu_resolve_attempts==attempts && visibility["lc_code_complete"] && !visibility["lc_broker_err_generic"] && visibility["retry"]);
     post(intent::done);tick(child.data(),nullptr);assert(menu_resolve_attempts==attempts+1);
     std::cout<<"round5 menus PASS Hub no host; row allowlist/RTT/build; bounded page/select; refresh limiter; host visibility; Back/edit before late completion; confirmed Rejoin storage\n";
 }
@@ -151,4 +156,144 @@ void broker_retail_lobby_tests(const script_functions_rules::func_entry* registr
     refresh_now();tick(child.data(),nullptr);assert(texts["lc_member_count"]=="3");
     mode=saved_mode;
     std::cout<<"round5 combined PASS Browse resolve -> broker code/title/visibility + retail NULL list, Host/Join 0..4, real refresh aliases, cursor preservation, Copy and malformed-list recovery\n";
+}
+
+// Round 5b: every row/list/error/service selector the DLL publishes, with invented broker bodies only.
+void broker_presentation_tests(const script_functions_rules::func_entry* registration) {
+    using tick_t=void(__fastcall*)(void*,void*);
+    const auto tick=*reinterpret_cast<tick_t*>(0x69e454);
+    auto post=[&](intent value) { int_value[1]=unsigned(value);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(registration->handler))(nullptr); };
+    auto screen=[&](const char* name) { std::strcpy(reinterpret_cast<char*>(child.data()+0xc),name);child[4]=1;set_current(child.data()); };
+    auto shown=[&](const std::string& key) { return visibility.count(key) && !visibility[key]; };
+    auto gone=[&](const std::string& key) { return visibility.count(key) && visibility[key]; };
+    // Pure selectors first: boundaries, wraparound and hostile ids.
+    assert(age_text(0)=="Updated 0 s ago" && age_text(119999)=="Updated 119 s ago" && age_text(120000)=="Updated 2 min ago");
+    assert(age_text(5999999)=="Updated 99 min ago" && age_text(6000000)=="Updated long ago");
+    assert(age_text(std::uint32_t(5u-0xfffffffcu))=="Updated 0 s ago"); // 9 ms across a 32-bit wrap
+    assert(age_segments(0)==0 && age_segments(1999)==0 && age_segments(2000)==1 && age_segments(9999)==4 && age_segments(10000)==5 && age_segments(99999999)==5);
+    assert(relative_age(100,0).empty() && relative_age(100,200)=="just now" && relative_age(7300,100)=="2 hours ago" && relative_age(160,100)=="1 minute ago");
+    assert(relative_age(100+86400,100)=="1 day ago" && relative_age(100+86400ull*400,100)=="a long time ago");
+    assert(classify_row(4,4,true,false)==row_status::full && classify_row(-1,4,true,false)==row_status::lobby && classify_row(2,4,true,true)==row_status::progress);
+    assert(classify_row(2,4,false,false)==row_status::closed && classify_row(0,1,true,false)==row_status::lobby && pip_count(-1)==0 && pip_count(9)==4);
+    assert(relate_build("LC33","LC33")==build_relation::same && relate_build("LC33","LC34")==build_relation::other);
+    assert(relate_build("","LC33")==build_relation::check && relate_build("LC33","")==build_relation::check && relate_build("","")==build_relation::check);
+    assert(classify_error("")==error_cause::generic && classify_error("no_such_room")==error_cause::code_not_found && classify_error("unsupported_version")==error_cause::refused);
+    assert(classify_error(std::string(4000,'x'))==error_cause::generic && classify_error("room_full ")==error_cause::generic && classify_error("TIMEOUT")==error_cause::generic);
+
+    // Browse with eight invented rows covering every status, build relation, pip count and the hostile/maximal row.
+    auto code=[&](unsigned i) { return std::string("\"code\":\"AAAAAAA")+alphabet[i]+"\""; };
+    menu_rows_json="{"+code(0)+",\"name\":\"Weekend co-op\",\"host_display_name\":\"Logan\",\"zone_name\":\"Mansion\",\"players\":2,\"max_players\":4,\"joinable\":true,\"version_token\":\"FIXTURE\"},"
+        "{"+code(1)+",\"name\":\"Kitty's game\",\"players\":3,\"in_progress\":true,\"joinable\":true,\"version_token\":\"FIXTURE\"},"
+        "{"+code(2)+",\"name\":\"Full house\",\"players\":4,\"max_players\":4,\"joinable\":false,\"version_token\":\"FIXTURE\"},"
+        "{"+code(3)+",\"name\":\"Other build\",\"players\":1,\"joinable\":true,\"version_token\":\"LC36\"},"
+        "{"+code(4)+",\"name\":\"No data\"},"
+        "{"+code(5)+",\"name\":\"Closed lobby\",\"players\":1,\"joinable\":false,\"in_progress\":false,\"version_token\":\"FIXTURE\"},"
+        "{"+code(6)+",\"name\":\"Passworded\",\"players\":1,\"password_protected\":true,\"version_token\":\"FIXTURE\"},"
+        "{"+code(7)+",\"name\":\""+std::string(180,'A')+"%s%n~^|;$\",\"host_display_name\":\""+std::string(120,'H')+"\",\"zone_name\":\""+std::string(180,'Z')+"\",\"players\":0,\"version_token\":\"ABCDEFGHIJKLMNOPQRSTUVWXYZ012345\"}";
+    screen("lc_browse");tick(child.data(),nullptr);menu_auth=true;tick(child.data(),nullptr);
+    menu_complete=true;tick(child.data(),nullptr);
+    const auto done_at=ticks;
+    assert(menu_view().rows.size()==8 && menu_view().list_known && !menu_view().stale);
+    assert(texts["list_count"]=="- 8" && texts["list_age"]=="Updated 0 s ago" && gone("lc_age_fill1"));
+    assert(texts["self_initial"].size()==1 && texts["self_initial"]==std::string(1,char(std::toupper(texts["self_name"][0]))));
+    ticks+=4000;tick(child.data(),nullptr);
+    assert(texts["list_age"]=="Updated 4 s ago" && shown("lc_age_fill1") && shown("lc_age_fill2") && gone("lc_age_fill3") && gone("lc_age_fill5"));
+    // Connected service: the scene shows, the plain text stays empty so the word is never drawn twice.
+    assert(shown("lc_service_ok") && texts["service"].empty() && texts["self_state"].empty());
+    const char* kinds[]{"lobby","progress","full","lobby","lobby","closed","lobby"};
+    const int pips[]{2,3,4,1,0,1,1};
+    const char* builds[]{"same","same","same","other","check","same","same"};
+    const bool dims[]{false,false,true,true,false,true,true};
+    for(unsigned r=0;r<7;++r) {
+        const auto id="lc_row"+std::to_string(r);
+        for(const char* k:row_status_key) assert((std::string(k)==kinds[r] ? shown(id+"_st_"+k) : gone(id+"_st_"+k)));
+        for(int k=0;k<=4;++k) assert((k==pips[r] ? shown(id+"_pips_"+std::to_string(k)) : gone(id+"_pips_"+std::to_string(k))));
+        for(const char* k:build_key) assert((std::string(k)==builds[r] ? shown(id+"_build_"+k) : gone(id+"_build_"+k)));
+        assert(dims[r] ? shown(id+"_dim") : gone(id+"_dim"));
+        // The status word, the ping "--" (no measurement exists) and SAME/CHECK are scenes: no DLL text, no cells [4]/[5].
+        assert(!texts.count("room_"+std::to_string(r)+"_4") && !texts.count("room_"+std::to_string(r)+"_5"));
+    }
+    assert(texts["room_0_3"]=="2/4" && texts["room_4_3"]=="--/4" && texts["room_0_2"]=="Mansion" && texts["room_1_2"]=="--");
+    assert(texts["room_3_6"]=="LC36" && texts["room_0_6"].empty() && texts["room_4_6"].empty()); // only the other build's token
+    assert(texts["details"]=="Friends join at the next area - Same build as you (FIXTURE)" && gone("lc_broker_empty"));
+    // Selecting the other-build row (row 3): the line names both tokens; its Join stays off.
+    post(static_cast<intent>(int(intent::row_first)+3));tick(child.data(),nullptr);
+    assert(texts["details"]=="Friends join at the next area - Other build (LC36 vs your FIXTURE)" && !enabled_items["prompt_join"]);
+    post(static_cast<intent>(int(intent::row_first)+4));tick(child.data(),nullptr);
+    assert(texts["details"]=="Friends join at the next area - Build not checked");
+    // Hostile / maximal row, on the page that shows it: every bound field is bounded, ASCII-allowlisted and `%` free.
+    post(intent::next);tick(child.data(),nullptr);
+    for(unsigned c=0;c<7;++c) {
+        const auto& t=texts["room_6_"+std::to_string(c)];
+        static const unsigned limits[]{24,12,17,5,13,9,8};
+        assert(t.size()<=limits[c]);
+        if(c!=3) for(unsigned char ch:t) assert(display_byte(ch)==char(ch)); // [3] is the DLL's own "n/4"
+    }
+    assert(texts["room_6_0"]==std::string(24,'A') && texts["room_6_6"]=="ABCDEFGH" && texts["details"].find('%')==std::string::npos);
+    // Oversized body (one name byte over the broker's 192): the whole list is refused, the old rows stay labelled stale.
+    menu_rows_json="{"+code(0)+",\"name\":\""+std::string(193,'N')+"\"}";
+    ticks+=70000;tick(child.data(),nullptr);assert(menu_broker.pending());
+    menu_auth=true;menu_complete=true;tick(child.data(),nullptr);
+    assert(menu_view().state==bm::phase::retry_wait && menu_view().error=="malformed_reply" && menu_view().stale && menu_view().rows.size()==8);
+    assert(shown("lc_broker_stale") && shown("lc_broker_err_generic") && shown("retry") && enabled_items["retry"] && !enabled_items["prompt_join"]);
+    assert(texts["list_age"]==age_text(ticks-done_at) && texts["list_count"]=="- 8"); // the age keeps counting from the last good list
+    // A stale list far in the past reads in minutes.
+    ticks=done_at+125000;tick(child.data(),nullptr);assert(texts["list_age"]=="Updated 2 min ago" && shown("lc_age_fill5"));
+
+    // Every cause selects exactly one scene; Retry is shown only where trying again can help.
+    struct cause_case { const char* id; const char* node; bool retry; };
+    const cause_case causes[]{{"no_such_room","code_not_found",false},{"room_closed","code_not_found",false},{"room_full","room_full",false},
+        {"room_not_joinable","room_full",false},{"version_mismatch","version_mismatch",false},{"rate_limited","rate_limited",true},
+        {"timeout","timeout",true},{"broker_unreachable","offline",true},{"worker_unavailable","offline",true},{"tls_pin_mismatch","refused",false},
+        {"broker_rejected","refused",false},{"malformed_reply","generic",true},{"weird%s\\^id","generic",true}};
+    menu_rows_json.clear();
+    for(const auto& c:causes) {
+        ticks+=70000;
+        if(menu_view().state==bm::phase::retry_wait) post(intent::retry);
+        tick(child.data(),nullptr);assert(menu_broker.pending());
+        menu_auth=true;menu_error=c.id;menu_complete=true;tick(child.data(),nullptr);
+        assert(menu_view().state==bm::phase::retry_wait);
+        unsigned visible=0;
+        for(const char* k:error_cause_key) {
+            const auto node=std::string("lc_broker_err_")+k;
+            if(shown(node)) { ++visible;assert(std::string(k)==c.node); }
+            else assert(gone(node));
+        }
+        assert(visible==1 && shown(std::string("lc_broker_err_")+c.node));
+        assert(c.retry ? (shown("retry") && enabled_items["retry"]) : (gone("retry") && !enabled_items["retry"]));
+        assert(gone("lc_service_ok") && texts["service"]=="Unavailable"); // not connected during a failure
+        for(unsigned char ch:texts["broker_error"]) assert(display_byte(ch)==char(ch));
+        assert(texts["broker_error"].size()<=64);
+    }
+    // The client's refused phase (guards, test mode) never offers Retry whatever the id.
+    ticks+=70000;post(intent::retry);tick(child.data(),nullptr);menu_broker.cancel();menu_broker.stopped();
+    menu_broker.refuse("test_mode_on");tick(child.data(),nullptr);
+    assert(menu_view().state==bm::phase::refused && shown("lc_broker_err_generic") && gone("retry") && !enabled_items["retry"]);
+    // Empty list: the table frame's message belongs to lc_broker_empty alone (the detail line stays empty).
+    menu_broker.cancel();menu_broker.stopped();menu_rows_json="-";
+    ticks+=70000;tick(child.data(),nullptr);assert(menu_broker.pending());
+    menu_auth=true;menu_complete=true;tick(child.data(),nullptr);
+    assert(menu_view().rows.empty() && menu_view().list_known && !menu_view().stale);
+    assert(texts["list_count"]=="- 0" && shown("lc_broker_empty") && texts["details"].empty() && texts["details_name"].empty());
+    for(const char* kind:row_status_key) assert(gone(std::string("lc_row0_st_")+kind));
+    for(unsigned r=0;r<7;++r) assert(gone("lc_row"+std::to_string(r)+"_dim") && gone("lc_row"+std::to_string(r)+"_build_check") && gone("lc_row"+std::to_string(r)+"_pips_0"));
+
+    // A committed room whose broker went away: the offline-room line shows, the stale label never beside it.
+    menu_broker.cancel();menu_broker.stopped();ticks+=70000;
+    assert(menu_resolve("AAAAAAAB") && menu_broker.pending());
+    menu_auth=true;menu_complete=true;tick(child.data(),nullptr);
+    assert(menu_view().state==bm::phase::room && shown("lc_broker_room") && gone("lc_broker_offline_room") && gone("lc_broker_stale"));
+    menu_broker.disconnected("broker_unreachable",ticks);tick(child.data(),nullptr);
+    assert(menu_view().stale && shown("lc_broker_offline_room") && gone("lc_broker_stale") && shown("lc_broker_room") && gone("lc_broker_err_offline"));
+    assert(texts["self_state"]=="Room connected" && gone("lc_service_ok"));
+
+    // Hub: a service never asked shows neutral text, the connected scene hidden.
+    menu_broker.cancel();menu_broker.stopped();set_current(hub.data());tick(hub.data(),nullptr);
+    assert(gone("lc_service_ok") && texts["service"]=="Not connected");
+    // No broker at all: a consistent private host card from the first frame, no error scene, no Retry.
+    menu_up=false;screen("lc_host");tick(child.data(),nullptr);
+    assert(shown("lc_host_private") && gone("lc_host_public") && gone("retry") && gone("lc_service_ok") && texts["service"]=="Unavailable");
+    for(const char* k:error_cause_key) assert(gone(std::string("lc_broker_err_")+k));
+    menu_up=true;
+    std::cout<<"round5b views PASS row status/pips/build/dim selectors, list count + age (wrap/stale), every error cause + Retry visibility, empty list, service scene, host pair without broker, hostile/oversized bodies\n";
 }

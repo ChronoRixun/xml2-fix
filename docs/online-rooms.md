@@ -1,6 +1,6 @@
 # [Online] Host=broker / JoinCode - rooms through the project broker (Legends Classic 0.3.0 / XML2 Fix 1.8.0)
 
-The in-game broker API (`lc-online-broker/1`) extends this same client and TLS
+The in-game broker API (`lc-online-broker/2`) extends this same client and TLS
 stack. `[Online] Menus=1`, the compatible LC menu assets, an installed
 `Transport=gns`, ReceiveValidation, the checked campaign loader, and a configured
 Broker are required for that route. TestMode remains refused. Hub entry performs

@@ -2,6 +2,7 @@
 #include "ini_rules.hpp"
 #include "script_functions_rules.hpp"
 #include <cstdint>
+#include <initializer_list>
 #include <array>
 #include <algorithm>
 #include <optional>
@@ -14,7 +15,8 @@ inline constexpr char capability[] = "lc-online-menus/1\n";
 // Additive input API probe: LC must require this before selecting intents 9..62.
 inline constexpr char input_capability[] = "lc-online-input/1";
 inline constexpr char lobby_capability[] = "lc-online-lobby/1";
-inline constexpr char broker_capability[] = "lc-online-broker/1";
+// /2: per-row status/pip/build/dim scenes, list count + age, per-cause error scenes, service scene (docs/online-menus.md).
+inline constexpr char broker_capability[] = "lc-online-broker/2";
 inline constexpr char function_name[] = "lcOnlineIntent";
 enum class intent : int { enter=1, host, code, browse, other, back, unavailable, dismiss, edit_name, paste, erase, clear, done, rejoin, invalid_key,
     copy_code=16, confirm_leave=17, refresh=18, open_room=19, retry=20, visibility=21,
@@ -184,6 +186,67 @@ inline std::optional<recent_game> decode_recent(std::string_view in) {
     for(char c:in) { if(c<'0' || c>'9' || time>(UINT64_MAX-unsigned(c-'0'))/10) return {}; time=time*10+c-'0'; }
     if(!code || !time) return {};
     return recent_game{*code,name,time};
+}
+
+
+// ---- Round 5b: presentation selectors computed from fields the broker already sends. No invented data. ----
+// A Browse row's status kind. The broker has no "loading" flag, so that kind does not exist here: a room is Full,
+// In progress (started), Closed (listed but not taking players) or In lobby.
+enum class row_status { lobby, progress, closed, full };
+inline constexpr const char* row_status_key[] = {"lobby","progress","closed","full"};
+inline row_status classify_row(int players,int max_players,bool joinable,bool in_progress) {
+    if(players>=0 && players>=max_players) return row_status::full;
+    if(in_progress) return row_status::progress;
+    return joinable ? row_status::lobby : row_status::closed;
+}
+// SAME only for a known equal token; OTHER only when both tokens are known and differ; otherwise CHECK.
+enum class build_relation { same, other, check };
+inline constexpr const char* build_key[] = {"same","other","check"};
+inline build_relation relate_build(std::string_view row_token,std::string_view own_token) {
+    if(row_token.empty() || own_token.empty()) return build_relation::check;
+    return row_token==own_token ? build_relation::same : build_relation::other;
+}
+// Pip scene index 0..4: filled pips = players; unknown counts as 0.
+inline int pip_count(int players) { return players<0 ? 0 : players>4 ? 4 : players; }
+// "Updated N s ago" from the elapsed milliseconds (clock may wrap: callers pass now-then as uint32).
+inline std::string age_text(std::uint32_t ms) {
+    const auto s=ms/1000;
+    if(s<120) return "Updated "+std::to_string(s)+" s ago";
+    if(s<100*60) return "Updated "+std::to_string(s/60)+" min ago";
+    return "Updated long ago";
+}
+// Refresh-age bar: five two-second segments (the 10 s idle refresh interval).
+inline int age_segments(std::uint32_t ms) { const auto n=ms/2000; return n>5 ? 5 : int(n); }
+// "2 hours ago" from stored epoch seconds. A future/zero timestamp (clock change) is "just now"/"" - never invented.
+inline std::string relative_age(std::uint64_t now,std::uint64_t then) {
+    if(!then) return {};
+    if(then>now) return "just now";
+    const auto d=now-then;
+    auto unit=[](std::uint64_t n,const char* name) { return std::to_string(n)+" "+name+(n==1 ? "" : "s")+" ago"; };
+    if(d<60) return "just now";
+    if(d<3600) return unit(d/60,"minute");
+    if(d<86400) return unit(d/3600,"hour");
+    if(d<86400ull*60) return unit(d/86400,"day");
+    return "a long time ago";
+}
+// Error cause selectors. The DLL shows exactly one lc_broker_err_<key> per failure; the id stays a diagnostic.
+enum class error_cause { code_not_found, room_full, version_mismatch, rate_limited, timeout, offline, refused, generic };
+inline constexpr const char* error_cause_key[] = {"code_not_found","room_full","version_mismatch","rate_limited","timeout","offline","refused","generic"};
+inline error_cause classify_error(std::string_view id) {
+    auto is=[&](std::initializer_list<std::string_view> list) { for(auto v:list) if(id==v) return true; return false; };
+    if(is({"no_such_room","code_not_found","room_closed","code_expired"})) return error_cause::code_not_found;
+    if(is({"room_full","room_not_joinable"})) return error_cause::room_full;
+    if(id=="version_mismatch") return error_cause::version_mismatch;
+    if(id=="rate_limited") return error_cause::rate_limited;
+    if(id=="timeout") return error_cause::timeout;
+    if(is({"broker_unreachable","worker_unavailable","send_queue_full","inbox_overflow"})) return error_cause::offline;
+    if(is({"tls_pin_mismatch","broker_rejected","invalid_certificate","bad_auth","auth_failed","unsupported_version"})) return error_cause::refused;
+    return error_cause::generic;
+}
+// Retry exists only where trying the same thing again can help: never for a wrong code, a full room, another build or
+// a refused/unverified service, and never once the client is in its non-retryable (refused) phase.
+inline bool cause_retryable(error_cause c) {
+    return c!=error_cause::code_not_found && c!=error_cause::room_full && c!=error_cause::version_mismatch && c!=error_cause::refused;
 }
 
 inline bool accept_fresh(int p,std::uint32_t captured,std::uint32_t now) {

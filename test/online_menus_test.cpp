@@ -36,6 +36,8 @@ void (*base_mutation)()=nullptr;
 int (__fastcall* lobby_back_callback)(void*,void*)=nullptr;
 bool missing_prompt=false,null_argument=false;
 DWORD clock_stub() { return ticks; }
+std::uint64_t wall_now=123+7300; // the Hub's "N hours ago" is computed against this (stored time 123 => 2 hours)
+std::uint64_t wall_stub() { return wall_now; }
 void throw_fault(int kind) {
     if(kind==1) throw std::bad_alloc();
     if(kind==2) throw std::filesystem::filesystem_error("synthetic",std::make_error_code(std::errc::invalid_argument));
@@ -431,9 +433,9 @@ int main(int argc,char** argv) {
     auto& overflow=script_function_overflow::table();overflow.reset(704);
     if(mode=="capacity") { ::capacity=320;overflow.reset(0); }
     online_menus::install_hooks install_hooks;
-    install_hooks.clock=clock_stub;install_hooks.before_request=request_fault_stub;install_hooks.before_tick=tick_fault_stub;
+    install_hooks.clock=clock_stub;install_hooks.wall_clock=wall_stub;install_hooks.before_request=request_fault_stub;install_hooks.before_tick=tick_fault_stub;
     if(mode.starts_with("r4-")) install_hooks.lobby_fields=lobby_fields_stub;
-    if(mode=="r5-broker" || mode=="r5-retail-lobby") install_hooks.broker=&menu_api;
+    if(mode=="r5-broker" || mode=="r5-retail-lobby" || mode=="r5b-views") install_hooks.broker=&menu_api;
     patch_transaction::hooks transaction_hooks;
     if(mode=="install-retain") {
         const auto site=online_menus::contribution().writes.front().va;
@@ -554,6 +556,7 @@ int main(int argc,char** argv) {
     request(mgr.data(),nullptr,"online",nullptr);assert(calls==expected); // duplicate entry cannot reinitialize
     set_current(hub.data());tick(hub.data(),nullptr);
     assert(texts["local_name"]==(mode=="name31" ? std::string(31,'a') : mode=="blank-name" ? "Player" : "100??????openmenu bad"));
+    if(mode=="r5b-views") { broker_presentation_tests(entry);return 0; }
     if(mode=="r5-broker" || mode=="r5-retail-lobby") {
         broker_menu_tests(entry);
         if(mode=="r5-retail-lobby") broker_retail_lobby_tests(entry);
@@ -614,7 +617,7 @@ int main(int argc,char** argv) {
         set_current(hub.data());tick(hub.data(),nullptr);
         const auto count=calls.size();post(int(intent::rejoin));tick(hub.data(),nullptr);
         if(mode=="r3-load") {
-            assert(texts["last_name"]=="Remembered fixture" && texts["last_code"]=="23456789" && texts["last_time"]=="123" && enabled_items["rejoin"]);
+            assert(texts["last_name"]=="Remembered fixture" && texts["last_code"]=="Code 2345-6789, 2 hours ago" && texts["last_time"]=="2 hours ago" && enabled_items["rejoin"]);
             assert(calls.back()=="request:lc_code");close(child.data(),nullptr);set_current(child.data());tick(child.data(),nullptr);assert(texts["code_value"]=="2345-6789");
             deactivate(child.data(),nullptr);set_current(hub.data());tick(hub.data(),nullptr);
             std::ifstream file(root/L"local/XML2 Fix/online/last-game.txt",std::ios::binary);std::string bytes((std::istreambuf_iterator<char>(file)),{});assert(decode_recent(bytes)->time==123);

@@ -11,7 +11,7 @@ remain current and own their roster, callback, modes and actions.
 
 ## Round 5 LC handoff and broker verification
 
-Require the additional DLL probe `lc-online-broker/1` before authoring these
+Require the additional DLL probe `lc-online-broker/2` (round 5b; `/1` is no longer present) before authoring these
 commands. The marker is an additive UI API capability, not a gameplay rule or
 release identity. Keep the existing resource marker and all native lobby types,
 items, modes and actions. No LC sources are changed by this DLL round.
@@ -55,7 +55,7 @@ anchors. The DLL selects them; no remote text becomes a command:
 | `lc_broker_resolve` | Looking up room code... |
 | `lc_broker_empty` | No public games right now. Host a game or go Back. |
 | `lc_broker_stale` | These games may be out of date. Refresh to try again. |
-| `lc_broker_error` | Online service could not complete the request. Retry or go Back. |
+| `lc_broker_err_<cause>` | Round 5b: one scene per failure cause, see "Round 5b presentation selectors" |
 | `lc_broker_room` | Code: Room found. Editing the code leaves this room. Host/Browse: Room found/open; native lobby setup is the next step. |
 | `lc_broker_cancel` | Canceling... / Leaving... |
 | `lc_broker_offline_room` | Online service unavailable. Existing connections stay open; new players cannot join. |
@@ -128,6 +128,50 @@ The coordinator's separately authorized G/V procedure is:
 
 No game launches, desktop input, LC build, live broker or visual acceptance are
 implied by host-fixture success.
+
+## Round 5b presentation selectors (probe `lc-online-broker/2`)
+
+Everything below is derived from fields the broker already sends (`list_rooms_ok` rows, the client phase and error id,
+the stored Rejoin record). No protocol, wire or release identity changed. The DLL shows/hides named nodes and binds DATA
+text; a node a screen does not author is skipped. LC authors all copy.
+
+**Per-cause error scenes.** While the client is in `retry_wait`/`error`/`refused` exactly one of
+`lc_broker_err_{code_not_found,room_full,version_mismatch,rate_limited,timeout,offline,refused,generic}` is shown (the
+one-size `lc_broker_error` is gone). The id is classified by `online_menus_rules::classify_error`: `no_such_room`,
+`code_not_found`, `room_closed`, `code_expired` -> code_not_found; `room_full`, `room_not_joinable` -> room_full;
+`version_mismatch`; `rate_limited`; `timeout`; `broker_unreachable`, `worker_unavailable`, `send_queue_full`,
+`inbox_overflow` -> offline; `tls_pin_mismatch`, `broker_rejected`, `invalid_certificate`, `bad_auth`, `auth_failed`,
+`unsupported_version` -> refused; anything else (including hostile ids) -> generic. `broker_error` stays a bounded
+diagnostic. Item `retry` is **hidden** (not merely disabled) unless the phase is `retry_wait`/`error` and the cause is
+retryable (rate_limited, timeout, offline, generic); a `refused` client phase never shows it. The version_mismatch error
+carries no host/own token (the reply path does not keep them), so its scene cannot name the builds; the Browse detail
+line does for the selected row.
+
+**Browse rows** (seven rows R=0..6, shared relative art): `lc_rowR_st_{lobby,progress,closed,full}` (status kind),
+`lc_rowR_pips_{0..4}` (players, unknown = 0), `lc_rowR_build_{same,other,check}`, `lc_rowR_dim` (shown for full,
+closed, other-build and password rows) and the existing `lc_rowR_selected`. Status: players >= max -> full; started ->
+progress; not joinable -> closed; else lobby. **There is no `loading` kind**: the broker has no such field, so none is
+invented. Build: SAME only for a known equal token, OTHER only when both tokens are known and differ, otherwise CHECK.
+Cells `room_R_4`/`room_R_5` no longer exist as DATA: the status word, the ping `--` (no measurement exists and no
+connection is opened per row) and SAME/CHECK are drawn by the row scenes; `room_R_6` holds only the other build's
+token (<= 8 characters). The hit/focus cells are columns 0,1,2,3,6 (a menu's authored scene anchors are capped at 256). Area shows `--` when the
+broker row has no zone. The detail line is `Friends join at the next area - Same build as you (TOKEN)` /
+`- Other build (THEIRS vs your TOKEN)` / `- Build not checked`; it is empty for an empty list so `lc_broker_empty` is the
+only empty-state message (it still says `Refresh to update games` for a stale list without selection).
+
+**List header**: DATA `list_count` (`- N`, empty before the first list), DATA `list_age` (`Updated N s ago`, then minutes,
+then `Updated long ago`; ticked from the *completion* of the last good list, 32-bit wrap safe, kept while a refresh
+fails) and scenes `lc_age_fill1..5` (one per two seconds of age, the 10 s idle refresh interval). `lc_broker_stale` is
+not shown beside a committed room (the offline-room line takes that place).
+
+**Service**: `lc_service_ok` (diamond + localized word) is shown when the client is authenticated, idle and not in a
+room; `service`/`self_state` are then empty so the word is never drawn twice. Hub authenticates nothing by itself, so the
+Hub shows it only while a previous operation's authentication is still live. With no live broker the DLL hides the
+service scene, every cause scene and `retry`, and sets the Host `lc_host_private`/`lc_host_public` pair from the
+visibility choice (private by default) so it is consistent from the first frame.
+
+**Rejoin**: DATA `last_code` is now `Code ABCD-EFGH, 2 hours ago` and `last_time` the age alone (`just now`, minutes,
+hours, days, `a long time ago`), computed from the stored epoch seconds (host fixtures inject the wall clock).
 
 ## Runtime contract
 

@@ -137,7 +137,7 @@ void follow_tests(const script_functions_rules::func_entry* registration) {
         else assert(disk_recent()==before);
         hub_again();
         if(mode=="follow-storage-directory") assert(!enabled_items["rejoin"]);
-        else assert(enabled_items["rejoin"] && texts["last_code"]==(success ? "ABCDEFGH" : "23456789"));
+        else assert(enabled_items["rejoin"] && texts["last_code"].starts_with(success ? "Code ABCD-EFGH" : "Code 2345-6789"));
         for(const auto& entry:std::filesystem::directory_iterator(recent_file().parent_path())) assert(entry.path().filename().wstring().find(L".tmp.")==std::wstring::npos);
         if(mode=="follow-storage-readonly") assert(SetFileAttributesW(recent_file().c_str(),FILE_ATTRIBUTE_NORMAL));
         std::cout<<"follow storage PASS atomic checked commit/publish and temp cleanup "<<mode<<"\n";return;

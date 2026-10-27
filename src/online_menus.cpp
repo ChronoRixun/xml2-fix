@@ -11,6 +11,7 @@
 #include "script_function_overflow.hpp"
 #include "patch_transaction.hpp"
 #include <array>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -39,6 +40,9 @@ bool ready=false;
 entry_latch entry;
 DWORD default_clock() { return GetTickCount(); }
 DWORD (*clock_source)()=&default_clock;
+std::uint64_t default_wall() { return std::uint64_t(std::time(nullptr)); }
+std::uint64_t (*wall_source)()=&default_wall; // epoch seconds; only the Hub's "N hours ago" reads it
+std::uint64_t wall_seconds() { return wall_source(); }
 void (*request_fault)()=nullptr;
 void (*tick_fault)()=nullptr;
 DWORD now_ms() { return clock_source(); }
@@ -548,11 +552,14 @@ const broker::client_view& broker_view() {
 screen broker_screen = screen::none;
 unsigned browse_offset = 0, browse_selected = 0;
 std::string browse_code, host_room_name;
+// Every per-cause error scene the DLL may select (LC authors the localized copy per screen; absent nodes are skipped).
+const char* const error_scene_keys[]{"lc_broker_err_code_not_found","lc_broker_err_room_full","lc_broker_err_version_mismatch",
+    "lc_broker_err_rate_limited","lc_broker_err_timeout","lc_broker_err_offline","lc_broker_err_refused","lc_broker_err_generic"};
 bool host_public = false;
 std::uint64_t resolve_edit = 0;
 broker::ticket completed_list_ticket{};
-DWORD last_list_at=0;
-bool listed_started=false;
+DWORD last_list_at=0,list_done_at=0;
+bool listed_started=false,list_done=false;
 broker::ticket resolve_ticket{}, remembered_ticket{};
 void broker_cancel(bool leave_room=false) {
     if(!broker_live()) return;
@@ -577,6 +584,7 @@ void broker_pump(screen s) {
     const auto& state=broker_view();
     if(state.list_known && state.state==broker::phase::idle && state.action==broker::operation::list && state.generation!=completed_list_ticket) {
         completed_list_ticket=state.generation;last_list_at=now_ms();listed_started=true;
+        list_done_at=last_list_at;list_done=true; // the list's age counts from its completion, not its request
     }
     if(s==screen::browse && state.state!=broker::phase::refused && state.state!=broker::phase::retry_wait &&
         state.state!=broker::phase::room && broker_calls.list &&
@@ -588,27 +596,47 @@ void broker_pump(screen s) {
 }
 void bind_broker(void* menu,screen s) {
     if(!broker_live()) {
-        if(!offline_fixture) { bind_text(menu,"service","Unavailable");bind_text(menu,"self_state","Unavailable");hide(menu,"lc_broker_error",false); }
+        if(!offline_fixture) {
+            bind_text(menu,"service","Unavailable");bind_text(menu,"self_state","Unavailable");
+            // No service: nothing connected, no error scene for a service that was never asked, and a host card whose
+            // visibility pair is consistent from the first frame (private is the default).
+            hide(menu,"lc_service_ok",true);
+            for(const auto* key:error_scene_keys) hide(menu,key,true);
+            hide(menu,"retry",true);enable(menu,"retry",false);
+            if(s==screen::host) { hide(menu,"lc_host_public",!host_public);hide(menu,"lc_host_private",host_public); }
+        }
         return;
     }
     const auto& v=broker_view();
     const bool waiting=v.state==broker::phase::authenticating || v.state==broker::phase::listing || v.state==broker::phase::hosting || v.state==broker::phase::resolving;
     const bool failed=v.state==broker::phase::retry_wait || v.state==broker::phase::error || v.state==broker::phase::refused;
     const char* service=v.authenticated ? "Connected" : waiting ? "Connecting" : failed ? "Unavailable" : "Not connected";
-    bind_text(menu,"service",service);
-    bind_text(menu,"self_state",waiting ? "Please wait" : v.state==broker::phase::room ? "Room connected" : service);
+    // A plainly connected service is drawn by the lc_service_ok scene (green diamond + localized word); its text fields
+    // stay empty then so the word is never drawn twice. Every other state keeps the neutral text.
+    const bool connected_plain=v.authenticated && !waiting && !failed && v.state!=broker::phase::room;
+    hide(menu,"lc_service_ok",!connected_plain);
+    bind_text(menu,"service",connected_plain ? "" : service);
+    bind_text(menu,"self_state",connected_plain ? "" : waiting ? "Please wait" : v.state==broker::phase::room ? "Room connected" : service);
     bind_text(menu,"browse_hint",v.list_known ? std::to_string(v.rows.size()).append(v.stale ? " last known games" : " public games").c_str() : "Browse public games");
     // LC localizes these mutually exclusive variants at the approved status/error anchors.
     const std::pair<const char*,bool> variants[]{
         {"lc_broker_auth",v.state==broker::phase::authenticating},{"lc_broker_list",v.state==broker::phase::listing},
         {"lc_broker_host",v.state==broker::phase::hosting},{"lc_broker_resolve",v.state==broker::phase::resolving},
         {"lc_broker_empty",s==screen::browse && v.list_known && !waiting && !failed && v.rows.empty()},
-        {"lc_broker_stale",v.stale},{"lc_broker_error",failed},{"lc_broker_room",v.state==broker::phase::room},
+        {"lc_broker_stale",v.stale && v.state!=broker::phase::room},{"lc_broker_room",v.state==broker::phase::room},
         {"lc_broker_cancel",v.state==broker::phase::canceling || v.state==broker::phase::leaving}};
     for(const auto& variant:variants) hide(menu,variant.first,!variant.second);
+    // Exactly one cause scene while failed. The raw id stays a bounded diagnostic and is never a command.
+    const auto cause=classify_error(v.error);
+    for(unsigned i=0;i<std::size(error_cause_key);++i)
+        hide(menu,(std::string("lc_broker_err_")+error_cause_key[i]).c_str(),!(failed && unsigned(cause)==i));
     bind_text(menu,"broker_error",display(v.error,64).c_str());
     hide(menu,"lc_broker_offline_room",v.state!=broker::phase::room || v.authenticated);
-    enable(menu,"retry",v.state==broker::phase::retry_wait || v.state==broker::phase::error);
+    // Retry is hidden, not merely disabled, where trying again cannot help (wrong code, full room, other build,
+    // refused service); the client's refused phase never retries either.
+    const bool retry_ok=(v.state==broker::phase::retry_wait || v.state==broker::phase::error) && cause_retryable(cause);
+    hide(menu,"retry",!retry_ok);
+    enable(menu,"retry",retry_ok);
     if(s==screen::code) {
         const bool status=waiting || failed || v.state==broker::phase::room || error_visible;
         hide(menu,"code_status",status || code.text.size()==8);
@@ -633,29 +661,57 @@ void bind_broker(void* menu,screen s) {
     if(browse_offset>browse_selected) browse_offset=browse_selected;
     if(browse_selected>=browse_offset+7) browse_offset=browse_selected-6;
     const auto version=broker_calls.version ? broker_calls.version() : std::string();
+    // List header: count and age. The age is DLL-ticked from the completion of the last good list.
+    bind_text(menu,"list_count",v.list_known ? (std::string("- ")+std::to_string(v.rows.size())).c_str() : "");
+    const bool aged=v.list_known && list_done;
+    const std::uint32_t age=aged ? std::uint32_t(now_ms()-list_done_at) : 0;
+    bind_text(menu,"list_age",aged ? age_text(age).c_str() : "");
+    for(int k=1;k<=5;++k) hide(menu,("lc_age_fill"+std::to_string(k)).c_str(),!(aged && age_segments(age)>=k));
     for(unsigned i=0;i<7;++i) {
         const auto index=browse_offset+i;
         const bool present=index<v.rows.size();
         const auto* row=present ? &v.rows[index] : nullptr;
         std::string fields[7];
+        row_status status=row_status::lobby;build_relation build=build_relation::check;bool dim=false;int pips=0;
         if(row) {
+            status=classify_row(row->players,row->max_players,row->joinable,row->in_progress);
+            build=relate_build(row->version,version);
+            pips=pip_count(row->players);
+            dim=status==row_status::full || status==row_status::closed || build==build_relation::other || row->password;
             fields[0]=display(row->name.empty() ? "Unnamed game" : row->name,24);
             fields[1]=display(row->host_name.empty() ? "Unknown" : row->host_name,12);
-            fields[2]=display(row->zone.empty() ? "In lobby" : row->zone,17);
+            fields[2]=display(row->zone.empty() ? "--" : row->zone,17);
             fields[3]=(row->players<0 ? std::string("--") : std::to_string(row->players))+"/"+std::to_string(row->max_players);
-            fields[4]=row->players>=row->max_players ? "Full" : !row->joinable ? "Closed" : row->in_progress ? "In progress" : "In lobby";
-            fields[5]="--";
-            fields[6]=row->version.empty() ? "CHECK" : row->version==version ? "SAME" : "OTHER";
+            // Status word, ping ("--": the broker sends no measurement and no connection is opened per row) and the
+            // SAME/CHECK words are drawn by the row scenes, so there are no cells [4]/[5]. [6]: only the other build's token.
+            fields[6]=build==build_relation::other ? display(row->version,8) : std::string();
         }
-        for(unsigned col=0;col<7;++col) {
+        for(const unsigned col:{0u,1u,2u,3u,6u}) {
             const auto key="room_"+std::to_string(i)+"_"+std::to_string(col);
             bind_text(menu,key.c_str(),fields[col].c_str());enable(menu,key.c_str(),present && !waiting);
         }
-        const auto key="lc_row"+std::to_string(i)+"_selected";hide(menu,key.c_str(),!present || index!=browse_selected);
+        const auto id=std::to_string(i);
+        for(unsigned k=0;k<std::size(row_status_key);++k) hide(menu,("lc_row"+id+"_st_"+row_status_key[k]).c_str(),!(present && unsigned(status)==k));
+        for(int k=0;k<=4;++k) hide(menu,("lc_row"+id+"_pips_"+std::to_string(k)).c_str(),!(present && pips==k));
+        for(unsigned k=0;k<std::size(build_key);++k) hide(menu,("lc_row"+id+"_build_"+build_key[k]).c_str(),!(present && unsigned(build)==k));
+        hide(menu,("lc_row"+id+"_dim").c_str(),!(present && dim));
+        const auto key="lc_row"+id+"_selected";hide(menu,key.c_str(),!present || index!=browse_selected);
     }
     const auto* selected=v.rows.empty() ? nullptr : &v.rows[browse_selected];
     bind_text(menu,"details_name",selected ? display(selected->name,24).c_str() : "");
-    bind_text(menu,"details",selected ? "Friends join at the next area" : v.stale ? "Refresh to update games" : "No public games right now");
+    {
+        // One honest line about the selected row. The empty-list message belongs to the lc_broker_empty scene alone.
+        std::string line;
+        if(selected) {
+            line="Friends join at the next area";
+            switch(relate_build(selected->version,version)) {
+            case build_relation::same: line+=" - Same build as you ("+display(version,8)+")";break;
+            case build_relation::other: line+=" - Other build ("+display(selected->version,8)+" vs your "+display(version,8)+")";break;
+            case build_relation::check: line+=" - Build not checked";break;
+            }
+        } else if(v.stale) line="Refresh to update games";
+        bind_text(menu,"details",line.c_str());
+    }
     const bool join=selected && !waiting && !v.stale && selected->joinable && !selected->password && selected->players<selected->max_players &&
         (selected->version.empty() || selected->version==version);
     enable(menu,"prompt_join",join);
@@ -1407,14 +1463,20 @@ void tick_impl(void* menu,bool& native_called) {
     }
     const auto name=display(local_name,31);
     bind_text(menu,s==screen::hub ? "local_name" : "self_name",name.c_str());
+    {   // The header avatar's initial: the screen name's first allowlisted character, upper case ("?" never shown).
+        char initial[2]{name.empty() || name[0]=='?' ? 'P' : char(std::toupper(static_cast<unsigned char>(name[0]))),0};
+        bind_text(menu,"self_initial",initial);
+    }
     if(recent) {
         bind_text(menu,"last_name",display(recent->name,31).c_str());
-        bind_text(menu,"last_code",recent->code.c_str());
+        // "Code K7QN-2X9M, 2 hours ago": the code in its display form and the age of the stored record (never invented).
+        const auto age=relative_age(wall_seconds(),recent->time);
+        bind_text(menu,"last_code",("Code "+recent->code.substr(0,4)+"-"+recent->code.substr(4)+(age.empty() ? "" : ", "+age)).c_str());
+        bind_text(menu,"last_time",age.c_str());
     }
     for(const auto* item:{"last_name","last_code","last_time"}) hide(menu,item,!recent);
     hide(menu,"lc_recent_empty",bool(recent));
     if(s==screen::hub) enable(menu,"rejoin",bool(recent));
-    if(recent) bind_text(menu,"last_time",std::to_string(recent->time).c_str());
     if(s==screen::code) {
         bind_text(menu,"code_value",code.shown().c_str());
         for(unsigned i=0;i<8;++i) {
@@ -1573,6 +1635,7 @@ void install(HMODULE game,const install_hooks* hooks) {
         offline_fixture=hooks->broker==nullptr;
         if(hooks->broker) broker_calls=*hooks->broker;
         if(hooks->clock) clock_source=hooks->clock;
+        if(hooks->wall_clock) wall_source=hooks->wall_clock;
         request_fault=hooks->before_request;tick_fault=hooks->before_tick;
         lobby_fields=hooks->lobby_fields;
     }

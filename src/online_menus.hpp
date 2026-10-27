@@ -35,6 +35,7 @@ bool installed();
 // not retained through this options object. No game/menu pointers cross threads.
 struct install_hooks {
     DWORD (*clock)()=nullptr;
+    std::uint64_t (*wall_clock)()=nullptr; // epoch seconds for the Hub's last-game age (host fixtures only)
     const patch_transaction::hooks* transaction=nullptr;
     void (*before_registration)()=nullptr;
     void (*before_request)()=nullptr;
