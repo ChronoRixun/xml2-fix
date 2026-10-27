@@ -1,12 +1,133 @@
-# Online menus: round 4 native lobby bridge
+# Online menus: round 5 broker lifecycle
 
 This is a guarded presentation bridge, pending Claude review and real-game
 acceptance. Host fixtures do not establish fresh-boot stability, rendering or
 input parity. Round 3 adds owned native name polling, Code input/clipboard
-and local Rejoin storage. Resolve ends at an explicitly offline fixture response;
-no broker operation or native hosting/admission is introduced. Round 4 adds
+and local Rejoin storage. Round 5 connects Host/Code/Browse to the existing
+authenticated broker client; native auto-admission remains a separate round.
+The old offline resolve path is available only through host-fixture hooks. Round 4 adds
 opt-in presentation adapters around the real native host/join classes; they
 remain current and own their roster, callback, modes and actions.
+
+## Round 5 LC handoff and broker verification
+
+Require the additional DLL probe `lc-online-broker/1` before authoring these
+commands. The marker is an additive UI API capability, not a gameplay rule or
+release identity. Keep the existing resource marker and all native lobby types,
+items, modes and actions. No LC sources are changed by this DLL round.
+
+| Intent | Exact constant command | Allowed screen |
+|---|---|---|
+| Refresh | `runscript lcOnlineIntent(18)` | Browse |
+| Open room | `runscript lcOnlineIntent(19)` | Host Setup; creates only the broker room |
+| Retry | `runscript lcOnlineIntent(20)` | Custom Hub/Host/Code/Browse |
+| Toggle private/public | `runscript lcOnlineIntent(21)` | Host Setup |
+| Previous / next page | `runscript lcOnlineIntent(22)` / `(23)` | Browse |
+| Select visible row 0..6 | `runscript lcOnlineIntent(24)` through `(30)` | Browse, any cell in that row |
+| Join selected room | `runscript lcOnlineIntent(31)` | Browse; resolve only |
+
+These are script intent values, not agreement rule IDs. Native campaign/save/
+difficulty setup and broker-to-native admission remain the next round. Room
+names accepted by the room API are trimmed printable ASCII <=32, without `;`
+or quote; the current Host card uses the configured launcher RoomName or a
+screen-name-derived default. A native room-name editor belongs with Host Setup
+services. Screen-name editing remains the existing native <=31-byte service.
+
+Preserve DATA items `service`, `self_state`, `browse_hint`, `room_name`,
+`preview_name`, `room_code`, `details_name`, `details`, and the seven by seven
+Browse matrix `room_R_C`, R/C=0..6. Add `broker_error` for a bounded allowlisted
+error identifier, and `retry` with intent 20. Host's Open item must be named
+`open` or `prompt_open`; Browse prompts retain `prompt_join`, `prompt_refresh`,
+`scroll` (23), `scroll_up` (22). Rows must exist even for an initially empty
+list, with dynamic text storage and row-specific constant commands. Retain
+closed directional focus and mouse rectangles when rows are disabled/rebound.
+F5 and the pad's MENU_NEXT refresh Browse; PageUp/PageDown change its bounded
+page. The Host pad's MENU_OK opens the room. These shortcuts have real handlers.
+
+Add named, initially hidden localized variants at the approved status/error
+anchors. The DLL selects them; no remote text becomes a command:
+
+| Node | Copy / meaning |
+|---|---|
+| `lc_broker_auth` | Connecting to Online service... |
+| `lc_broker_list` | Finding public games... |
+| `lc_broker_host` | Opening your room... |
+| `lc_broker_resolve` | Looking up room code... |
+| `lc_broker_empty` | No public games right now. Host a game or go Back. |
+| `lc_broker_stale` | These games may be out of date. Refresh to try again. |
+| `lc_broker_error` | Online service could not complete the request. Retry or go Back. |
+| `lc_broker_room` | Code: Room found. Editing the code leaves this room. Host/Browse: Room found/open; native lobby setup is the next step. |
+| `lc_broker_cancel` | Canceling... / Leaving... |
+| `lc_broker_offline_room` | Online service unavailable. Existing connections stay open; new players cannot join. |
+| `lc_host_private` / `lc_host_public` | Mutually exclusive localized visibility labels |
+| `lc_rowR_selected`, R=0..6 | Selected-row decoration at its approved geometry |
+
+Plain existing DATA fields receive short truthful service/count fallbacks; the
+new variants provide localized pending/empty/stale/error copy in screens 01/02/
+04/09. Replace the old resolving-fixture wording in production assets. Add
+specific localized explanations for `code_not_found`/`no_such_room`,
+`room_closed`, `room_full`, `version_mismatch`, `rate_limited`, timeout and TLS
+refusal using `broker_error` as a diagnostic field, not executable text. Retain
+inline layout; errors never tear down a native lobby. Numeric RTT is never
+invented; neutral `--` and Measuring remain. SAME means only known equal token.
+
+Rejoin is written only after a current successful Code/Browse resolve. Back,
+edits, close and screen departure invalidate pending tickets before inbox drain,
+including the frame where a reply arrives. Back on a full/partial Code first
+deletes one symbol; on empty Code it returns to Hub. Back from committed custom
+Host/Browse intentionally leaves that broker room. Deactivation of a committed
+room during a future native-lobby transition does not implicitly leave it.
+Native in-session departure/admission cleanup stays in the next round.
+
+For fixture verification, build and run `xml2_online_room_test`,
+`xml2_online_browser_test`, `xml2_online_security_test`, `xml2_broker_tls_test`,
+`xml2_online_broker_test` (GNS builds) and the complete `test_online_menus.py`
+matrix, including `r5-broker`. The broker fixture uses the production worker
+and lifecycle with invented socket/TLS responses; the separate TLS suite tests
+real certificate trust and protocol selection; its optional `--live` handshake/
+record path is not exercised by these offline gates. No real service/P2P success
+is inferred. Preserve the full
+native suite, PE guard scan, full-INI union and OFF proof against b603cc8 with
+Menus/Host/JoinCode absent, and the content guard.
+
+The coordinator's separately authorized G/V procedure is:
+
+1. Apply launch discipline before every boot: HOLD-GAMES/external XMen2 checks,
+   slot.py `--wait`, owned candidate copy, matching DLL/assets, verified
+   `[Test] NoActivate=1`, private/background capture, registry export and
+   byte-identical comparison. Never focus or drive the desktop.
+2. With a controlled protocol-2 TLS broker and its exact pin, fresh boot with
+   no launcher keys. Enter Hub through a real accepted controller and verify
+   the broker has **no new room**. Traverse Browse -> pending -> empty and
+   populated; refresh repeatedly, leave/re-enter, wait 10 seconds idle, and
+   compare request timestamps against the shared 2-second limiter/backoff.
+3. Host -> Open -> code -> Back, then Code/Browse resolve -> Back -> Host in
+   the same process. Delay each reply until after Back/edit/Leave/re-entry.
+   Verify zero duplicate rooms, stale members, stale codes or native admission
+   claims. Test launcher Host/Public/RoomName and JoinCode presets only after
+   real controller acceptance.
+4. Inject wrong pin, timeout, malformed/oversized JSON, error/rate-limit/full/
+   expired/mismatch replies and missing optional metadata. Check Retry and
+   cancellation during authentication, list, host and resolve; verify stale
+   rows remain labeled and cannot Join. Restore service and retry after backoff.
+5. After Browse -> Back/Cancel and after Host/Code -> Leave, take Other ways
+   and verify a fresh native LAN/IP GNS session still works under the restored
+   native identity, with no room certificate retained. Test a busy native link
+   during the request/transition: listener and identity must not reset.
+6. With separately established real peers through the existing native route,
+   interrupt only the broker. Verify healthy P2P gameplay continues, new
+   admission stops, no automatic replacement room opens, and explicit Leave
+   still works. This is a live gate; a retained fixture tunnel is not proof of
+   healthy traffic or gameplay.
+7. Compare actual screens 01 Hub, 02 Code/Host and 04 Browse plus 09 inline error
+   variants to the approved rev-2 frames at 4:3 and stretched 16:9, 720p/1080p,
+   keyboard -> pad -> keyboard and mouse. Check long allowlisted names, seven
+   columns/rows, neutral ping, pending/empty/stale/error copy, focus, safe
+   bounds and input prompts. Stop all owned helpers and clean only the created
+   copies/profile paths by checked absolute Python paths afterward.
+
+No game launches, desktop input, LC build, live broker or visual acceptance are
+implied by host-fixture success.
 
 ## Runtime contract
 
@@ -102,18 +223,18 @@ validator, with focused synthetic tests and its owned-input build gates:
 | Paste | `runscript lcOnlineIntent(10)` | Code; whole validated clipboard value |
 | Delete | `runscript lcOnlineIntent(11)` | Code; delete last symbol, stay when empty |
 | Clear | `runscript lcOnlineIntent(12)` | Code; erase entire value |
-| Done | `runscript lcOnlineIntent(13)` | Code; explicit complete-code fixture retry |
+| Done | `runscript lcOnlineIntent(13)` | Code; explicit complete-code retry |
 | Rejoin | `runscript lcOnlineIntent(14)` | Hub; load local remembered code, resolve afresh |
 | Symbol | `runscript lcOnlineIntent(32)` through `(62)` | Code; alphabet index 0..30 |
 
 Value 1 is reserved and rejected by the script dispatcher. There is one real
 script registration, `lcOnlineIntent`, return `n`, arguments `i`. Add no direct
 `setuphost`, `startgamedialog`, code resolution, admission or broker commands.
-Party/Host settings/Open room/Refresh/Join remain future rounds; show their
-preview state or map to 7 without implying success. Value 15 is an internal
-invalid-key feedback action; values 16..31 and values outside 2..62 are rejected.
-Remove synthetic Connected/recent-game/room-success claims from capability
-output. Browse/Host/Code may retain clearly labelled offline preview fixtures.
+Party/native Host settings/admission remain future rounds. Open room/Refresh/
+Browse Join now use intents 18..31 below. Value 15 remains internal invalid-key
+feedback; 16/17 are the reviewed lobby Copy/confirm actions. Values outside
+2..62 are rejected. Production emits no synthetic Connected or fixture-success
+claim. Offline responses require the explicit host-test seam.
 
 * Wire native `menu_cancel` to intent 6 on every screen; the default CMenu Back
   closes instead. The scoped base Back bridge intercepts custom menus before default close or
@@ -536,12 +657,12 @@ a Host to Start (or its still-active picker) and a Join guest to Ready, never
 implicitly to an unconfirmed guest Leave action.
 
 The optional `install_hooks::lobby_fields` provider exists only for offline host
-fixtures. Production passes no hooks, so room code is a placeholder, Copy is
-disabled, RTT is neutral/Measuring, build is Checking and hero is the localized
-fallback. Invented members are created by the host test's native service stubs,
+fixtures. Production now supplies a generation-bound room code/title/visibility
+from the broker snapshot, enabling Copy only for a committed valid code. RTT
+stays neutral/Measuring, build stays Checking and hero stays the localized fallback. Invented members are created by the host test's native service stubs,
 never by the production DLL. Extras match native IDs, not row order; broker-only
-members cannot become native rows or kick targets. Round 5 must supply a reviewed,
-generation-bound real room snapshot before claiming real code/build/RTT data.
+members cannot become native rows or kick targets. No broker membership is mapped into a native roster row; native participant
+identity/admission and actual peer telemetry remain separately guarded.
 
 ### LC authoring handoff: exact names, anchors and commands
 

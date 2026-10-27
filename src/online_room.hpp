@@ -1,6 +1,7 @@
 #pragma once
 #include <Windows.h>
 #include <cstdint>
+#include "online_browser_core.hpp"
 
 #if XML2_FIX_GNS
 #include <steam/steamnetworkingsockets.h>
@@ -18,6 +19,20 @@ namespace online_room
 	bool requested();
 	// Process exit: online-status.json says `ended` (loader-lock safe).
 	void shutdown();
+	// Game/UI thread only. Network/key I/O runs on one worker; one outstanding operation.
+	// Browsing/authentication never creates a room. Native admission is separate.
+	bool available();
+	const online_browser_core::client_view& view();
+	void ui_tick();
+	bool list();
+	bool host(const std::string& name, bool public_room);
+	bool resolve(const std::string& code);
+	bool retry();
+	void cancel();
+	void leave();
+	std::string version();
+	bool take_preset(online_browser_core::launch_preset& out);
+	bool refresh_due();
 #if XML2_FIX_GNS
 	// The identity GNS starts with (str:legends:<hex16> of this install's key); false when rooms are off or the key
 	// could not be loaded (then the PC stays without rooms, logged).

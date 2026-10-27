@@ -14,9 +14,11 @@ inline constexpr char capability[] = "lc-online-menus/1\n";
 // Additive input API probe: LC must require this before selecting intents 9..62.
 inline constexpr char input_capability[] = "lc-online-input/1";
 inline constexpr char lobby_capability[] = "lc-online-lobby/1";
+inline constexpr char broker_capability[] = "lc-online-broker/1";
 inline constexpr char function_name[] = "lcOnlineIntent";
 enum class intent : int { enter=1, host, code, browse, other, back, unavailable, dismiss, edit_name, paste, erase, clear, done, rejoin, invalid_key,
-    copy_code=16, confirm_leave=17, symbol_first=32, symbol_last=62 };
+    copy_code=16, confirm_leave=17, refresh=18, open_room=19, retry=20, visibility=21,
+    previous=22, next=23, row_first=24, row_last=30, join_selected=31, symbol_first=32, symbol_last=62 };
 enum class screen { none, main, hub, host, code, browse, lobby_host, lobby_join };
 inline screen identify(std::string_view name) {
     if(name=="main") return screen::main;
@@ -207,13 +209,17 @@ struct mailbox {
     int action=0;
     void clear() { source=0; from=screen::none; action=0; }
     bool post(int value, std::uintptr_t menu, screen s) {
-        if(action || !menu || value<int(intent::enter) || (value>int(intent::confirm_leave) && (value<32 || value>62))) return false;
+        if(action || !menu || value<int(intent::enter) || value>62) return false;
         // Entry is a native queued openmenu request with captured real input;
         // scripts cannot manufacture it. Value 1 remains reserved.
         if(lobby(s)) {
             if(value!=int(intent::copy_code) && value!=int(intent::dismiss) &&
                value!=int(intent::back) && !(s==screen::lobby_host && value==int(intent::confirm_leave))) return false;
         } else if(!custom(s) || value==int(intent::enter) || (value>=int(intent::copy_code) && value<=int(intent::confirm_leave))) return false;
+        if(value>=18 && value<=31) {
+            const bool browse=value==18 || (value>=22 && value<=31);
+            if(value==20 ? !custom(s) : browse ? s!=screen::browse : s!=screen::host) return false;
+        }
         source=menu; from=s; action=value; return true;
     }
     int take(std::uintptr_t menu, screen s) {

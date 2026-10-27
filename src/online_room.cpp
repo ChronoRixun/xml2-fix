@@ -1,6 +1,8 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include "online_room.hpp"
+#include "online_menus.hpp"
+#include "gns_transport.hpp"
 #include "receive_validation.hpp"
 #include "save_format.hpp"
 #include "online_room_core.hpp"
@@ -53,9 +55,13 @@ namespace online_room
 	namespace
 	{
 		namespace core = online_room_core;
-		bool wanted = false, hosting = false;
-		std::string configured_code, broker_address, broker_pin;
+		std::atomic<bool> wanted{false};
+		bool hosting = false, menu_client = false, configured = false;
+        online_browser_core::client_state client;
+        online_browser_core::operation preset = online_browser_core::operation::none;
+		std::string configured_code, launch_code, broker_address, broker_pin;
 		core::room_metadata metadata;
+		DWORD (WINAPI *room_clock)() = &GetTickCount;
 		std::string configured_room_name; // [Online] RoomName as read (public rooms only)
 		bool relay_only = false;
 	}
@@ -83,7 +89,8 @@ namespace online_room
 
 		// ---- this install's key (the user's profile, not the game folder; DPAPI-protected) ----
 		std::uint8_t seed[core::seed_size]{}, public_key[core::public_key_size]{};
-		bool key_loaded = false, key_failed = false;
+		std::atomic<bool> key_loaded{false};
+        bool key_failed = false;
 		std::string own_id;
 		std::uint32_t own_address = 0;
 
@@ -218,33 +225,67 @@ namespace online_room
 
 		// ---- the broker connection (its own thread: verified TLS 1.2+; the game's thread reads bounded lines) ----
 		std::mutex lock;
-		std::deque<std::string> inbox, outbox;
+        // Internal I/O seam used by the production-worker transcript fixture.
+        // Ordinary DLL instances retain these exact Winsock functions.
+        struct broker_io {
+            decltype(&::getaddrinfo) address = &::getaddrinfo;
+            decltype(&::freeaddrinfo) free_address = &::freeaddrinfo;
+            decltype(&::socket) socket = &::socket;
+            decltype(&::connect) connect = &::connect;
+            decltype(&::getsockopt) socket_option = &::getsockopt;
+            decltype(&::ioctlsocket) ioctl = &::ioctlsocket;
+            decltype(&::closesocket) close = &::closesocket;
+            decltype(&::shutdown) shutdown = &::shutdown;
+            decltype(&::select) select = &::select;
+            decltype(&::recv) receive = &::recv;
+            decltype(&::send) send = &::send;
+        } io;
+        std::atomic<bool> stop{false};
+		struct broker_event { online_browser_core::ticket ticket; std::uint64_t connection; std::string line; };
+        std::deque<broker_event> inbox, outbox;
+        std::atomic<std::uint64_t> connection_generation{0}, published_request{0}, published_room{0};
+        std::atomic<bool> worker_done{true};
+        thread_local std::uint64_t worker_generation = 0;
+        thread_local online_browser_core::ticket worker_ticket;
+        SOCKET worker_socket = INVALID_SOCKET;
+        std::atomic<bool> inbox_overflow{false};
+        void cancel_worker() {
+            stop = true;
+            ++connection_generation;
+            std::lock_guard g(lock);
+            if (worker_socket != INVALID_SOCKET) io.shutdown(worker_socket, SD_BOTH);
+            inbox.clear(); outbox.clear();
+        }
+        void close_worker_socket(SOCKET socket) {
+            std::lock_guard g(lock);
+            if (worker_socket == socket) worker_socket = INVALID_SOCKET;
+            io.close(socket);
+        }
 		std::size_t inbox_bytes = 0, outbox_bytes = 0;
 		constexpr std::size_t broker_queue_cap = 256 * 1024, broker_pending_cap = 64 * 1024;
-		std::atomic<bool> stop{false};
 		bool broker_started = false, broker_up = false, broker_gone = false;
 		std::string broker_error;
 
-		bool post(const std::string& line)
+		bool post(const std::string& line, std::uint64_t expected_room = 0)
 		{
 			std::lock_guard g(lock);
-			if (outbox.size() >= 256 || line.size() > broker_queue_cap || outbox_bytes > broker_queue_cap - line.size()) return false;
-			outbox.push_back(line);
+            if (stop || worker_done) return false;
+			if (expected_room && expected_room != published_room.load()) return false;
+            if (outbox.size() >= 256 || line.size() > broker_queue_cap || outbox_bytes > broker_queue_cap - line.size()) return false;
+			outbox.push_back({{published_request.load(), published_room.load()}, connection_generation.load(), line});
 			outbox_bytes += line.size();
 			return true;
 		}
-		void arrived(const std::string& line)
-		{
-			std::lock_guard g(lock);
-			if (line.size() > broker_queue_cap) return;
-			while (!inbox.empty() && (inbox.size() >= 256 || inbox_bytes > broker_queue_cap - line.size()))
-			{
-				inbox_bytes -= inbox.front().size();
-				inbox.pop_front();
-			}
-			inbox.push_back(line);
-			inbox_bytes += line.size();
-		}
+        void arrived(const std::string& line)
+        {
+            if (worker_generation != connection_generation.load() || stop) return;
+            std::lock_guard g(lock);
+            if (line.size() > broker_queue_cap || inbox.size() >= 256 || inbox_bytes > broker_queue_cap - line.size()) {
+                inbox_overflow = true; stop = true; return; // fail closed; never evict an identity/completion
+            }
+            inbox.push_back({worker_ticket, worker_generation, line});
+            inbox_bytes += line.size();
+        }
 		// kind: the contract's error id for the launcher (online-status.json): unreachable / rejected / tls.
 		void gone_text(const std::string& text, const char* kind = "broker_unreachable") { arrived(core::request("_closed", {{"msg", text}, {"kind", kind}})); }
 		void gone(const char* why, int code)
@@ -261,42 +302,62 @@ namespace online_room
 				? "tls_pin_mismatch" : "broker_unreachable";
 		}
 
-		void broker_thread(std::string where, bool host, std::string code, std::string pin, core::room_metadata room)
-		{
-			const auto colon = where.rfind(':');
+		void broker_thread(std::string where, std::string pin, std::uint64_t generation, online_browser_core::ticket initial)
+
+        {
+            worker_generation = generation; worker_ticket = initial;
+            if (!load_key()) { gone_text("the install identity could not be loaded", "broker_rejected"); return; }
+            if (stop || generation != connection_generation.load()) return;
+            WSADATA wsa{};
+            if (WSAStartup(MAKEWORD(2, 2), &wsa)) { gone_text("Winsock unavailable"); return; }
+            struct winsock_cleanup { ~winsock_cleanup() { WSACleanup(); } } cleanup;
+            const auto colon = where.rfind(':');
 			const std::string name = colon == std::string::npos ? where : where.substr(0, colon);
 			const std::string port = colon == std::string::npos ? "10020" : where.substr(colon + 1);
 			addrinfo hints{}, *found = nullptr;
 			hints.ai_family = AF_INET;
 			hints.ai_socktype = SOCK_STREAM;
-			if (getaddrinfo(name.c_str(), port.c_str(), &hints, &found) != 0 || !found) { gone("the broker's address does not resolve", WSAGetLastError()); return; }
-			SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+			if (io.address(name.c_str(), port.c_str(), &hints, &found) != 0 || !found) { gone("the broker's address does not resolve", WSAGetLastError()); return; }
+			if (stop || generation != connection_generation.load()) { io.free_address(found); return; }
+			SOCKET s = io.socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+            { std::lock_guard g(lock); worker_socket = s; }
+            if (s == INVALID_SOCKET || stop) { io.free_address(found); close_worker_socket(s); return; }
 			u_long nonblocking = 1;
-			ioctlsocket(s, FIONBIO, &nonblocking);
-			connect(s, found->ai_addr, int(found->ai_addrlen));
-			freeaddrinfo(found);
+			io.ioctl(s, FIONBIO, &nonblocking);
+			io.connect(s, found->ai_addr, int(found->ai_addrlen));
+			io.free_address(found);
 			{
-				fd_set w, e;
-				FD_ZERO(&w); FD_ZERO(&e); FD_SET(s, &w); FD_SET(s, &e);
-				timeval t{5, 0};
-				int socket_error = 0, error_size = sizeof(socket_error);
-				if (select(0, nullptr, &w, &e, &t) <= 0 || FD_ISSET(s, &e) || getsockopt(s, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&socket_error), &error_size) != 0 || socket_error)
+				int socket_error = 0;
+				bool connected = false;
+				const auto started = room_clock();
+				while (!stop && room_clock() - started < 5000) {
+					fd_set w, e;
+					FD_ZERO(&w); FD_ZERO(&e); FD_SET(s, &w); FD_SET(s, &e);
+					timeval t{0, 50000};
+					const int ready = io.select(0, nullptr, &w, &e, &t);
+					if (!ready) continue;
+					int error_size = sizeof(socket_error);
+					connected = ready > 0 && !FD_ISSET(s, &e) && io.socket_option(s, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&socket_error), &error_size) == 0 && !socket_error;
+					break;
+				}
+				if (!connected || stop)
 				{
-					closesocket(s);
+					close_worker_socket(s);
 					gone("the broker does not answer", socket_error ? socket_error : WSAGetLastError());
 					return;
 				}
 			}
 			broker_tls::client tls;
 			std::string error;
-			if (!tls.handshake(s, name, pin, error)) { closesocket(s); gone_text(error, tls_kind(error)); return; }
+			if (!tls.handshake(s, name, pin, error)) { close_worker_socket(s); gone_text(error, tls_kind(error)); return; }
 
 			core::broker_line_buffer lines;
 			std::string pending, failure, cached_cert, cached_turn;
 			const char* failure_kind = "broker_unreachable";
 			std::vector<std::uint8_t> wire;
-			DWORD pinged = GetTickCount();
-			bool authed = false;
+			DWORD pinged = room_clock();
+			bool authed = false, challenged = false;
+            const DWORD authenticated_at = room_clock();
 			auto append_pending = [&](const std::string& line)
 			{
 				if (core::bounded_append(pending, line, broker_pending_cap)) return true;
@@ -305,10 +366,13 @@ namespace online_room
 			};
 			auto consume = [&](const std::string& row)
 			{
-				const auto msg = core::parse(row);
-				if (msg.valid && msg.text("op") == "challenge")
+                const auto msg = core::parse(row);
+                if (!msg.valid) { failure = "malformed broker JSON"; return false; }
+                if (msg.text("op") == "challenge")
 				{
-					if (msg.number("v", 0) != 2) { failure = "the broker does not speak protocol 2"; failure_kind = "broker_rejected"; return false; }
+                    if (challenged || authed) { failure = "duplicate broker challenge"; return false; }
+                    challenged = true;
+                    if (msg["v"].t != core::value::type::number || msg["v"].text != "2") { failure = "the broker does not speak protocol 2"; failure_kind = "broker_rejected"; return false; }
 					std::vector<std::uint8_t> nonce;
 					if (!core::unbase64(msg.text("nonce"), nonce) || nonce.size() != core::nonce_size) { failure = "the broker's challenge is malformed"; return false; }
 					const auto signed_bytes = core::auth_message(nonce, public_key);
@@ -318,7 +382,11 @@ namespace online_room
 				}
 				if (msg.valid && msg.text("op") == "auth_ok" && !authed)
 				{
-					authed = true;
+                    if (!challenged || msg.text("identity") != own_id) { failure = "broker authentication identity mismatch"; failure_kind = "broker_rejected"; return false; }
+#ifdef XML2_FIX_GNS_CA_PIN
+                    if (msg.text("ca") != XML2_FIX_GNS_CA_PIN) { failure = "broker certificate authority mismatch"; failure_kind = "tls_pin_mismatch"; return false; }
+#endif
+                    authed = true;
 					// A cached certificate with more than an hour left is used instead of asking for a new one.
 					const auto now = static_cast<long long>(_time64(nullptr));
 					std::string cached;
@@ -341,9 +409,12 @@ namespace online_room
 							online_security::secure_erase(text.data(), text.size());
 						}
 					}
-					if ((cached.empty() && !append_pending(core::request("cert"))) || !append_pending(host ? core::host_request(room) : core::request("resolve", {{"code", code}}))) return false;
+					// UI operations are posted only after this verified auth_ok.
+                    if (cached.empty() && !append_pending(core::request("cert"))) return false;
 				}
-				const bool room_ok = authed && (msg.text("op") == "host_ok" || msg.text("op") == "resolve_ok");
+				else if (msg.text("op") == "auth_ok") { failure = "duplicate broker authentication"; return false; }
+                if (!authed && msg.text("op") != "challenge" && msg.text("op") != "error") { failure = "broker reply before authentication"; return false; }
+                const bool room_ok = authed && (msg.text("op") == "host_ok" || msg.text("op") == "resolve_ok");
 				if (room_ok && cached_turn.empty() && !append_pending(core::request("turn"))) return false;
 				if (msg.valid && msg.text("op") == "cert_ok" && !cert_cache.empty())
 					online_security::atomic_replace(std::filesystem::path(cert_cache), row.data(), row.size());
@@ -375,53 +446,56 @@ namespace online_room
 					if (!consume(row)) return false;
 				}
 			};
-			while (!stop)
-			{
+            while (!stop && generation == connection_generation.load())
+            {
+                if (!authed && room_clock() - authenticated_at >= 10000) { close_worker_socket(s); gone_text("broker authentication timeout"); return; }
 				{
 					std::lock_guard g(lock);
-					while (!outbox.empty() && pending.size() + outbox.front().size() <= broker_pending_cap)
+					while (!outbox.empty() && pending.size() + outbox.front().line.size() <= broker_pending_cap)
 					{
-						pending += outbox.front();
-						outbox_bytes -= outbox.front().size();
+                        if (outbox.front().connection != generation || outbox.front().ticket.room != published_room.load()) { outbox_bytes -= outbox.front().line.size(); outbox.pop_front(); continue; }
+                        worker_ticket = outbox.front().ticket;
+                        pending += outbox.front().line;
+                        outbox_bytes -= outbox.front().line.size();
 						outbox.pop_front();
 					}
 				}
 				while (!wire.empty())
 				{
-					const int n = send(s, reinterpret_cast<const char*>(wire.data()), int(wire.size()), 0);
+					const int n = io.send(s, reinterpret_cast<const char*>(wire.data()), int(wire.size()), 0);
 					if (n > 0) { wire.erase(wire.begin(), wire.begin() + n); continue; }
 					if (WSAGetLastError() == WSAEWOULDBLOCK) break;
-					closesocket(s); gone("the broker connection broke", WSAGetLastError()); return;
+					close_worker_socket(s); gone("the broker connection broke", WSAGetLastError()); return;
 				}
 				if (wire.empty() && !pending.empty())
 				{
-					if (!tls.encrypt(pending, wire, error)) { closesocket(s); gone_text(error); return; }
+					if (!tls.encrypt(pending, wire, error)) { close_worker_socket(s); gone_text(error); return; }
 					pending.clear();
 				}
 				std::string plain;
-				if (!tls.decrypt(nullptr, 0, plain, error)) { closesocket(s); gone_text(error); return; }
-				if (!accept_plain(plain)) { closesocket(s); gone_text(failure, failure_kind); return; }
+				if (!tls.decrypt(nullptr, 0, plain, error)) { close_worker_socket(s); gone_text(error); return; }
+				if (!accept_plain(plain)) { close_worker_socket(s); gone_text(failure, failure_kind); return; }
 				fd_set r;
 				FD_ZERO(&r); FD_SET(s, &r);
 				timeval t{0, 50000};
-				if (select(0, &r, nullptr, nullptr, &t) > 0)
+				if (io.select(0, &r, nullptr, nullptr, &t) > 0)
 				{
 					char chunk[4096];
-					const int n = recv(s, chunk, sizeof(chunk), 0);
-					if (n == 0) { closesocket(s); gone("the broker closed the connection", 0); return; }
-					if (n < 0 && WSAGetLastError() != WSAEWOULDBLOCK) { closesocket(s); gone("the broker connection broke", WSAGetLastError()); return; }
+					const int n = io.receive(s, chunk, sizeof(chunk), 0);
+					if (n == 0) { close_worker_socket(s); gone("the broker closed the connection", 0); return; }
+					if (n < 0 && WSAGetLastError() != WSAEWOULDBLOCK) { close_worker_socket(s); gone("the broker connection broke", WSAGetLastError()); return; }
 					plain.clear();
-					if (n > 0 && !tls.decrypt(reinterpret_cast<const std::uint8_t*>(chunk), std::size_t(n), plain, error)) { closesocket(s); gone_text(error); return; }
-					if (!accept_plain(plain)) { closesocket(s); gone_text(failure, failure_kind); return; }
+					if (n > 0 && !tls.decrypt(reinterpret_cast<const std::uint8_t*>(chunk), std::size_t(n), plain, error)) { close_worker_socket(s); gone_text(error); return; }
+					if (!accept_plain(plain)) { close_worker_socket(s); gone_text(failure, failure_kind); return; }
 				}
-				if (authed && GetTickCount() - pinged > 30000)
+				if (authed && room_clock() - pinged > 30000)
 				{
-					pinged = GetTickCount();
-					if (!append_pending(core::request("ping"))) { closesocket(s); gone_text(failure, failure_kind); return; }
+					pinged = room_clock();
+					if (!append_pending(core::request("ping"))) { close_worker_socket(s); gone_text(failure, failure_kind); return; }
 				}
 			}
 			// Leaving: the broker treats the closed connection as leave (a host's room closes).
-			closesocket(s);
+			close_worker_socket(s);
 		}
 
 		// ---- room state (the game's thread) ----
@@ -537,6 +611,7 @@ namespace online_room
 		void browser_tick();
 		std::map<std::string, core::token_bucket> signal_rates;
 		bool cert_ready = false, ice_ready = false, room_ready = false;
+		std::string cert_identity; // the GNS identity of the certificate installed in this process (empty = none, or not known)
 		HSteamListenSocket listener = k_HSteamListenSocket_Invalid;
 
 		struct datagram { DWORD at; std::uint16_t from, to; std::vector<std::uint8_t> data; };
@@ -567,6 +642,9 @@ namespace online_room
 		constexpr std::size_t tunnel_game_cap = 1024 * 1024, arrivals_cap = 256 * 1024, waiting_cap = 128 * 1024;
 
 		ISteamNetworkingSockets* sockets() { return SteamNetworkingSockets(); }
+		bool real_set_certificate(const void* data, int size, SteamNetworkingErrMsg& error) { return sockets()->SetCertificate(data, size, error); }
+		// The one place a certificate reaches GNS; the broker test swaps it because real GNS refuses anything the project CA did not sign.
+		bool (*set_certificate)(const void*, int, SteamNetworkingErrMsg&) = &real_set_certificate;
 		tunnel* by_id(const std::string& id) { for (auto& t : tunnels) if (t->id == id) return t.get(); return nullptr; }
 		tunnel* by_address(std::uint32_t a) { for (auto& t : tunnels) if (t->address == a) return t.get(); return nullptr; }
 		tunnel* by_connection(HSteamNetConnection c) { for (auto& t : tunnels) if (t->connection == c && c != k_HSteamNetConnection_Invalid) return t.get(); return nullptr; }
@@ -583,11 +661,12 @@ namespace online_room
 		struct signaling final : ISteamNetworkingConnectionSignaling
 		{
 			std::string peer;
+            std::uint64_t generation = published_room.load();
 			explicit signaling(std::string p) : peer(std::move(p)) {}
 			bool SendSignal(HSteamNetConnection, const SteamNetConnectionInfo_t&, const void* data, int size) override
 			{
-				if (size <= 0 || size > 8192) return false;
-				return post(core::request("signal", {{"to", peer}, {"data", core::base64(static_cast<const std::uint8_t*>(data), std::size_t(size))}}));
+				if (size <= 0 || size > 8192 || generation != published_room.load()) return false;
+				return post(core::request("signal", {{"to", peer}, {"data", core::base64(static_cast<const std::uint8_t*>(data), std::size_t(size))}}), generation);
 			}
 			void Release() override { delete this; }
 		};
@@ -662,7 +741,7 @@ namespace online_room
 			remote.Clear();
 			remote.ParseString(core::gns_identity(t.id).c_str());
 			t.outgoing = true;
-			t.started = GetTickCount();
+			t.started = room_clock();
 			++t.attempts;
 			t.connection = sockets()->ConnectP2PCustomSignaling(new signaling(t.id), &remote, 0, 0, nullptr);
 			logger::write("online: connecting to %s (%s, attempt %d)%s", t.id.c_str(), core::dotted(t.address).c_str(), t.attempts,
@@ -703,12 +782,27 @@ namespace online_room
 			const auto expires = core::turn_expires(msg);
 			const long long left = expires ? expires - static_cast<long long>(_time64(nullptr)) : msg.number("ttl");
 			// Never the username or password: host:port lists only.
-			logger::write("online: ICE: STUN %s, TURN %s (credentials %s, valid %lld s more), route %s", servers.stun.empty() ? "none" : servers.stun.c_str(),
-			              servers.turn.empty() ? "none" : servers.turn.c_str(), turn_from_cache ? "reused from this install's cache" : "new from the broker",
+			logger::write("online: ICE: STUN %s, TURN %s (credentials %s, valid %lld s more), route %s", servers.stun.empty() ? "none" : online_security::sanitize_log_text(servers.stun).c_str(),
+			              servers.turn.empty() ? "none" : online_security::sanitize_log_text(servers.turn).c_str(), turn_from_cache ? "reused from this install's cache" : "new from the broker",
 			              left, relay_only ? "relay only ([Online] Route=relay)" : "any");
 		}
 		void apply_cert(const core::line& msg)
 		{
+			// The broker answers every new connection with a cert_ok (fresh or the cached one), so a repeat is normal: a later
+			// attempt, retry or refresh meets the certificate its earlier attempt installed. GNS keeps that certificate while
+			// the identity is not reset, so the repeat is only noted - never installed again, never a reason to drop the broker.
+			// A committed room never replaces its context's certificate, whoever the repeat names.
+			if (cert_ready)
+			{
+				const auto subject = msg.text("gns_identity").empty() ? core::gns_identity(own_id) : msg.text("gns_identity");
+				const bool in_room = client.view().state == browser::phase::room;
+				if (in_room || (!cert_identity.empty() && subject == cert_identity))
+				{
+					logger::write_capped("online-cert-repeat", "online: certificate for %s is already installed - the repeat from the broker is ignored", online_security::sanitize_log_text(subject).c_str());
+					return;
+				}
+				// Outside a room another identity is checked exactly like a first certificate (GNS decides; nothing is skipped).
+			}
 #ifndef NDEBUG
 			if (const auto mode = ini::text(L"Dev", L"OnlineCert"); mode && _stricmp(mode->c_str(), "none") == 0)
 			{
@@ -729,19 +823,21 @@ namespace online_room
 			}
 #endif
 			std::vector<std::uint8_t> signed_cert;
-			if (!core::pem_body(pem, signed_cert)) { if (!cert_cache.empty()) DeleteFileW(cert_cache.c_str()); logger::write("online: the broker's certificate is malformed - rooms stay off"); return; }
+            if (!core::pem_body(pem, signed_cert)) { client.fail(client.view().generation, "invalid_certificate", room_clock()); if (!cert_cache.empty()) DeleteFileW(cert_cache.c_str()); logger::write("online: the broker's certificate is malformed - rooms stay off"); return; }
 			auto blob = core::certificate_blob(signed_cert, seed);
 			SteamNetworkingErrMsg error{};
-			const bool installed = sockets()->SetCertificate(blob.data(), int(blob.size()), error);
+			const bool installed = set_certificate(blob.data(), int(blob.size()), error);
 			online_security::secure_erase(blob.data(), blob.size());
-			if (!installed)
-			{
+            if (!installed)
+            {
+                client.fail(client.view().generation, "invalid_certificate", room_clock());
 				if (!cert_cache.empty()) DeleteFileW(cert_cache.c_str()); // a stale or foreign cached certificate: ask again next start
 				logger::write("online: GNS refused the certificate (%s) - rooms stay off", error);
 				return;
 			}
 			cert_ready = true;
-			logger::write("online: certificate for %s installed (expires %lld, %s)", msg.text("gns_identity").c_str(), msg.number("expires"),
+			cert_identity = msg.text("gns_identity").empty() ? core::gns_identity(own_id) : msg.text("gns_identity");
+			logger::write("online: certificate for %s installed (expires %lld, %s)", online_security::sanitize_log_text(msg.text("gns_identity")).c_str(), msg.number("expires"),
 			              msg.text("from_cache") == "1" ? "reused from this install's cache" : "new from the broker");
 		}
 
@@ -751,19 +847,21 @@ namespace online_room
 			if (op == "auth_ok")
 			{
 				broker_up = true;
-				if (msg.text("identity") != own_id) logger::write("online: the broker names this PC %s, expected %s", msg.text("identity").c_str(), own_id.c_str());
+                client.authenticated(client.view().generation);
+                if (msg.text("identity") != own_id) logger::write("online: the broker names this PC %s, expected %s", online_security::sanitize_log_text(msg.text("identity")).c_str(), own_id.c_str());
 #ifdef XML2_FIX_GNS_CA_PIN
 				if (msg.text("ca") != XML2_FIX_GNS_CA_PIN)
 				{
 					broker_up = room_ready = false;
 					broker_gone = stop = true;
-					members.deactivate_all();
-					logger::write("online: the broker's CA (%s) is not the one this build pins - room start refused", msg.text("ca").c_str());
+					client.disconnected("tls_pin_mismatch", room_clock());
+					if (client.view().state != browser::phase::room) members.deactivate_all();
+					logger::write("online: the broker's CA (%s) is not the one this build pins - room start refused", online_security::sanitize_log_text(msg.text("ca")).c_str());
 					online_status::error(st::error::tls_pin_mismatch, "the broker's certificate authority is not the one this build trusts");
 					return;
 				}
 #endif
-				logger::write("online: broker %s: signed in as %s", broker_address.c_str(), msg.text("identity").c_str());
+				logger::write("online: broker %s: signed in as %s", broker_address.c_str(), online_security::sanitize_log_text(msg.text("identity")).c_str());
 			}
 			else if (op == "cert_ok") apply_cert(msg);
 			else if (op == "turn_ok") apply_ice(msg);
@@ -773,9 +871,13 @@ namespace online_room
 				host_id = own_id;
 				room_ready = !room_code.empty() && members.reset({own_id});
 				own_address = members.address(own_id);
-				if (!room_ready) { host_id.clear(); own_address = 0; logger::write("online: broker returned an invalid host response - admission stays off"); online_status::error(st::error::internal, "the broker returned an invalid room"); return; }
+				if (!room_ready) { host_id.clear(); own_address = 0; client.fail(client.view().generation, "malformed_reply", room_clock()); logger::write("online: broker returned an invalid host response - admission stays off"); online_status::error(st::error::internal, "the broker returned an invalid room"); return; }
 				logger::write("online: room %s open (host %s, up to %lld players) - joiners set [Online] JoinCode=%s", online_security::redact_join_code(room_code).c_str(), own_id.c_str(), msg.number("max_participants"), online_security::redact_join_code(room_code).c_str());
-				write_room_file();
+                if (!client.joined(client.view().generation, browser::operation::host, msg.text("code"), listed.name)) {
+                    room_ready = false; client.fail(client.view().generation, "malformed_reply", room_clock()); return;
+                }
+                client.metadata(configured_room_name.empty() ? listed.name : configured_room_name, metadata.public_room);
+                write_room_file();
 				online_status::set(st::state::room, room_code, status_players());
 				online_status::room(metadata.public_room, listed.name);
 				logger::write("online: room %s is %s", online_security::redact_join_code(room_code).c_str(),
@@ -786,30 +888,52 @@ namespace online_room
 			}
 			else if (op == "resolve_ok")
 			{
-				room_code = core::join_code(msg.text("code"));
-				host_id = msg.text("host");
+                room_code = core::join_code(msg.text("code"));
+                if (room_code != configured_code || room_code != msg.text("code")) { client.fail(client.view().generation, "malformed_reply", room_clock()); return; }
+                host_id = msg.text("host");
 				std::vector<std::string> ordered;
-				for (const auto& m : msg["members"].items) if (core::valid_identity(m)) ordered.push_back(m);
+                std::set<std::string> unique;
+                for (const auto& m : msg["members"].items) {
+                    if (!core::valid_identity(m) || !unique.insert(m).second) { client.fail(client.view().generation, "malformed_reply", room_clock()); return; }
+                    ordered.push_back(m);
+                }
 				room_ready = !room_code.empty() && core::valid_identity(host_id) && !ordered.empty() && ordered.front() == host_id && members.reset(ordered) && members.contains(own_id);
 				own_address = members.address(own_id);
-				if (!room_ready) { host_id.clear(); own_address = 0; logger::write("online: broker returned an invalid resolve response - admission stays off"); online_status::error(st::error::internal, "the broker returned an invalid room"); return; }
+				if (!room_ready) { host_id.clear(); own_address = 0; client.fail(client.view().generation, "malformed_reply", room_clock()); logger::write("online: broker returned an invalid resolve response - admission stays off"); online_status::error(st::error::internal, "the broker returned an invalid room"); return; }
 				// Another game build's room: refused before any connection (the room carries the host's version token).
 				const auto room = core::parse(msg["room"].text);
+				if (msg["room"].t != core::value::type::missing && !room.valid) {
+					room_ready = false; client.fail(client.view().generation, "malformed_reply", room_clock()); return;
+				}
+				if (room.valid) {
+					const auto& token = room["version_token"];
+					const auto& name = room["name"];
+					const auto& visibility = room["public"];
+					if ((token.t != core::value::type::missing && (token.t != core::value::type::string || token.text.size() > 32 ||
+						std::any_of(token.text.begin(), token.text.end(), [](unsigned char c) { return c < 32 || c > 126; }))) ||
+						(name.t != core::value::type::missing && (name.t != core::value::type::string || name.text.size() > 192)) ||
+						(visibility.t != core::value::type::missing && visibility.t != core::value::type::boolean)) {
+						room_ready = false; client.fail(client.view().generation, "malformed_reply", room_clock()); return;
+					}
+				}
 				const auto theirs = room.valid ? room.text("version_token") : std::string();
 				if (!theirs.empty() && !own_version_token.empty() && theirs != own_version_token)
 				{
-					room_ready = false;
-					members.deactivate_all();
-					host_id.clear();
+                    client.fail(client.view().generation, "version_mismatch", room_clock());
+                    room_ready = false;
+                    members.deactivate_all();
+                    host_id.clear();
 					own_address = 0;
 					logger::write("online: room %s is another game build (%s, this PC %s) - not joining", online_security::redact_join_code(room_code).c_str(),
 					              online_security::sanitize_log_text(theirs).c_str(), own_version_token.c_str());
 					online_status::error(st::error::version_mismatch, "the host plays another build (" + online_security::sanitize_log_text(theirs) + "), this PC " + own_version_token);
 					return;
 				}
-				if (room.valid)
-				{
+                if (!client.joined(client.view().generation, browser::operation::resolve, room_code, room.text("name"))) { room_ready = false; return; }
+                if (room.valid)
+                {
 					const bool listed_room = room["public"].t == core::value::type::boolean && room["public"].text == "true";
+					if (room["public"].t == core::value::type::boolean) client.metadata(room.text("name"), listed_room);
 					online_status::room(listed_room, listed_room ? browser::clip_utf8(room.text("name"), browser::name_max) : std::string());
 				}
 				logger::write("online: join code %s: host %s at %s - in Join Game, Connect by IP ([Del]) type 0 (or that address), Enter; %zu members", online_security::redact_join_code(room_code).c_str(),
@@ -835,10 +959,11 @@ namespace online_room
 			}
 			else if (op == "room_closed")
 			{
-				logger::write("online: room %s closed (%s); established P2P connections stay up, new admission stops", online_security::redact_join_code(room_code).c_str(), msg.text("reason").c_str());
-				members.deactivate_all();
-				signal_rates.clear();
-				room_ready = false;
+				logger::write("online: room %s closed (%s); established P2P connections stay up, new admission stops", online_security::redact_join_code(room_code).c_str(), online_security::sanitize_log_text(msg.text("reason")).c_str());
+                client.disconnected("room_closed", room_clock());
+                if (client.view().state != browser::phase::room) members.deactivate_all();
+                signal_rates.clear();
+                room_ready = false;
 				// Before the session started the room is gone for good (a joiner can no longer get in).
 				if (online_status::current() != st::state::in_game) online_status::error(st::error::code_expired, "the room closed (" + online_security::sanitize_log_text(msg.text("reason")) + ")");
 			}
@@ -849,7 +974,7 @@ namespace online_room
 				std::vector<std::uint8_t> data;
 				if (!room_ready || !members.contains(from) || encoded.size() > 10924 || !core::unbase64(encoded, data) || data.empty() || data.size() > 8192) return;
 				auto rate = signal_rates.try_emplace(from, 20, 20).first;
-				if (!rate->second.allow(GetTickCount())) return;
+				if (!rate->second.allow(room_clock())) return;
 				incoming context;
 				context.from = from;
 				if (!sockets()->ReceivedP2PCustomSignal(data.data(), int(data.size()), &context))
@@ -857,24 +982,29 @@ namespace online_room
 			}
 			else if (op == "error")
 			{
-				const auto code = msg.text("code"), about = msg.text("in_reply_to");
+                const auto code = msg.text("code"), about = msg.text("in_reply_to");
+                if ((client.pending() || client.view().state == browser::phase::room) && (about == "resolve" || about == "host" || about == "list_rooms" || about == "auth" || about == "cert" || (about == "turn" && !ice_ready) || code == "auth_failed"))
+                    client.fail(client.view().generation, code.empty() ? "broker_rejected" : code, room_clock());
 				if (about == "resolve" && code == "no_such_room")
 					logger::write("online: join code %s is not an open room (wrong or expired code) - joining by code is not available", online_security::redact_join_code(configured_code).c_str());
 				else
-					logger::write("online: broker error %s%s%s: %s", code.c_str(), about.empty() ? "" : " in reply to ", about.c_str(), msg.text("msg").c_str());
+					logger::write("online: broker error %s%s%s: %s", online_security::sanitize_log_text(code).c_str(), about.empty() ? "" : " in reply to ", online_security::sanitize_log_text(about).c_str(), online_security::sanitize_log_text(msg.text("msg")).c_str());
 				// A refused sign-in, room or join ends this run's online start; signal/ping refusals do not.
 				// A TURN refusal once credentials are in use (a refresh) leaves the running room as it is.
-				if (about == "resolve" || about == "host" || about == "auth" || about == "cert" || (about == "turn" && !ice_ready) || code == "auth_failed")
+				if ((about == "resolve" || about == "host" || about == "auth" || about == "cert" || (about == "turn" && !ice_ready) || code == "auth_failed") &&
+				    (client.view().state != browser::phase::room || online_status::current() != st::state::in_game))
 					online_status::error(st::from_broker(code), online_security::sanitize_log_text(msg.text("msg")));
 			}
 			else if (op == "_closed")
 			{
-				broker_gone = true;
-				broker_error = msg.text("msg");
+                broker_gone = true;
+                broker_up = false;
+                client.disconnected(msg.text("kind").empty() ? "broker_unreachable" : msg.text("kind"), room_clock());
+                broker_error = msg.text("msg");
 				const bool had_room = room_ready;
 				room_ready = false;
-				members.deactivate_all();
-				logger::write("online: broker %s unavailable - %s; %s", broker_address.c_str(), broker_error.c_str(),
+				if (client.view().state != browser::phase::room) members.deactivate_all();
+				logger::write("online: broker %s unavailable - %s; %s", broker_address.c_str(), online_security::sanitize_log_text(broker_error).c_str(),
 				              had_room ? "connections already open stay up, no new ones" : (hosting ? "no room was opened (the game can still be hosted by IP/LAN)" : "joining by code is not available"));
 				// A session already running keeps going on its P2P connections; anything earlier cannot continue.
 				if (online_status::current() != st::state::in_game)
@@ -888,18 +1018,25 @@ namespace online_room
 
 		void process_inbox()
 		{
-			std::deque<std::string> lines;
+            std::deque<broker_event> lines;
 			{
 				std::lock_guard g(lock);
 				lines.swap(inbox);
 				inbox_bytes = 0;
 			}
-			for (const auto& row : lines)
-			{
-				const auto msg = core::parse(row);
-				if (msg.valid) handle(msg);
-				else logger::write_once("online-bad-line", "online: a broker line was not understood");
-			}
+            for (const auto& event : lines)
+            {
+                if (event.connection != connection_generation.load()) continue;
+                const auto msg = core::parse(event.line);
+                const auto op = msg.text("op");
+                const bool request_reply = op == "auth_ok" || op == "list_rooms_ok" || op == "host_ok" || op == "resolve_ok" || op == "error";
+                if (request_reply && event.ticket != client.view().generation) continue;
+                if (op == "list_rooms_ok") { client.listed(event.ticket, msg, room_clock()); continue; }
+                if (op == "host_ok" && !client.accepts(event.ticket, browser::operation::host)) continue;
+                if (op == "resolve_ok" && !client.accepts(event.ticket, browser::operation::resolve)) continue;
+                if (msg.valid) handle(msg);
+                if (client.view().state == browser::phase::room && !client.view().authenticated) break;
+            }
 		}
 
 		// Datagrams and messages arriving on room connections: datagrams for the game socket's reader, everything else
@@ -911,7 +1048,7 @@ namespace online_room
 			{
 				if (!t->connected) continue;
 				const int n = sockets()->ReceiveMessagesOnConnection(t->connection, batch, 64);
-				const auto now = GetTickCount();
+				const auto now = room_clock();
 				for (int i = 0; i < n; ++i)
 				{
 					const auto* data = static_cast<const std::uint8_t*>(batch[i]->m_pData);
@@ -1012,6 +1149,7 @@ namespace online_room
 		}
 		int WSAAPI room_sendto(SOCKET s, const char* data, int length, int flags, const sockaddr* where, int size)
 		{
+			if (!wanted) return real_sendto(s, data, length, flags, where, size);
 			if (where && size >= int(sizeof(sockaddr_in)) && where->sa_family == AF_INET && length >= 0)
 			{
 				const auto& to = *reinterpret_cast<const sockaddr_in*>(where);
@@ -1023,7 +1161,7 @@ namespace online_room
 					auto* t = by_address(address);
 					if (!t) { logger::write_once("online-no-member", "online: the game sent to %s, which is no member of the room - dropped", core::dotted(address).c_str()); return length; }
 					if (std::size_t(length) > gns_transport_core::max_datagram_body) return length;
-					datagram d{GetTickCount(), port_of(s), ntohs(to.sin_port), std::vector<std::uint8_t>(data, data + length)};
+					datagram d{room_clock(), port_of(s), ntohs(to.sin_port), std::vector<std::uint8_t>(data, data + length)};
 					present_virtual(s, d.data);
 					if (t->datagrams_out < 8) logger::write("online: tunnel trace: to %s:%u %d bytes, first byte %02x", core::dotted(address).c_str(), unsigned(d.to), length, length ? unsigned(std::uint8_t(data[0])) : 0u);
 					if (!(t->connected && send_datagram(*t, d)))
@@ -1046,7 +1184,7 @@ namespace online_room
 					int asked = 0;
 					for (auto& t : tunnels)
 					{
-						datagram d{GetTickCount(), port_of(s), ntohs(to.sin_port), std::vector<std::uint8_t>(data, data + length)};
+						datagram d{room_clock(), port_of(s), ntohs(to.sin_port), std::vector<std::uint8_t>(data, data + length)};
 						present_virtual(s, d.data);
 						if (t->connected && send_datagram(*t, d)) ++asked;
 					}
@@ -1058,6 +1196,7 @@ namespace online_room
 		}
 		int WSAAPI room_recvfrom(SOCKET s, char* data, int length, int flags, sockaddr* from, int* size)
 		{
+			if (!wanted) return real_recvfrom(s, data, length, flags, from, size);
 			if (reinterpret_cast<std::uintptr_t>(_ReturnAddress()) == pump_recvfrom_return && from && size && *size >= int(sizeof(sockaddr_in)) && SteamNetworkingSockets())
 			{
 				if (arrivals.empty()) poll();
@@ -1113,7 +1252,6 @@ namespace online_room
 			std::string filled;
 			if (text && std::count(text, text + std::strlen(text), '.') < 3 && !configured_code.empty())
 			{
-				for (int i = 0; i < 50 && host_id.empty() && !broker_gone && SteamNetworkingSockets(); ++i) { process_inbox(); if (host_id.empty()) Sleep(100); }
 				if (!host_id.empty())
 				{
 					filled = core::dotted(members.address(host_id));
@@ -1150,7 +1288,7 @@ namespace online_room
 
 		void report()
 		{
-			const auto now = GetTickCount();
+			const auto now = room_clock();
 			for (auto& t : tunnels)
 			{
 				if (!t->connected || now - t->reported < 10000) continue;
@@ -1184,7 +1322,7 @@ namespace online_room
 		void browser_tick()
 		{
 			if (!hosting || !room_ready || broker_gone) return;
-			const DWORD now = GetTickCount();
+			const DWORD now = room_clock();
 			if (now - looked < 500) return;
 			looked = now;
 			const auto g = read_game();
@@ -1231,9 +1369,154 @@ namespace online_room
 		}
 	}
 
+    namespace {
+        void invalidate_worker() {
+            cancel_worker();
+            std::lock_guard g(lock);
+            inbox_bytes = outbox_bytes = 0;
+            inbox_overflow = false;
+            broker_started = broker_up = false;
+        }
+        void publish_ticket() {
+            std::lock_guard g(lock);
+            published_request = client.view().generation.request;
+            published_room = client.view().generation.room;
+        }
+        void clear_room() {
+            for (auto& t : tunnels) drop(*t, "intentional room departure");
+            tunnels.clear(); arrivals.clear(); arrivals_bytes = 0;
+            signal_rates.clear(); members.clear(); own_address = 0;
+            if (listener != k_HSteamListenSocket_Invalid && sockets()) sockets()->CloseListenSocket(listener);
+            listener = k_HSteamListenSocket_Invalid;
+            room_ready = ice_ready = cert_ready = false; cert_identity.clear();
+            room_code.clear(); host_id.clear(); configured_code.clear();
+            code_text[0] = short_code_text[0] = 0;
+            room_progress = {}; pacer = {}; listed = {}; looked = 0;
+            turn_from_cache = turn_refreshed = false;
+            last_menu.clear(); last_menu_object = lobby_handle = 0; lobby_shown = false;
+        }
+        bool begin_operation(browser::operation action) {
+            if (session_bound() || room_ready || client.view().state == browser::phase::room) return false;
+            if (!configured || game_version::test_mode_active() || !gns_transport::installed()) {
+                client.refuse(game_version::test_mode_active() ? "test_mode_on" : "online_dependencies_unavailable"); return false;
+            }
+            if (!gns_transport::room_can_start()) { client.refuse("transport_identity_busy"); return false; }
+            if (const auto why = core::room_guard_refusal(action == browser::operation::host, receive_validation::installed(), save_format::campaign_load_checked())) {
+                client.refuse(why); return false;
+            }
+            const bool authenticated = broker_up && !broker_gone && !stop;
+            if (!client.begin(action, room_clock(), authenticated)) return false;
+            wanted = true;
+            publish_ticket();
+            if (action != browser::operation::list) {
+                // Status v1 keeps its process-final error meaning. Local retry
+                // state is carried only in client_view, never reset via begin().
+                if (!online_status::active()) online_status::begin(action == browser::operation::host ? st::role::host : st::role::join);
+                online_status::set(st::state::connecting, configured_code, 0);
+            }
+            return true;
+        }
+    }
+    bool available() { return menu_client; }
+    const browser::client_view& view() { return client.view(); }
+    std::string version() { return own_version_token; }
+    bool refresh_due() { return client.refresh_due(room_clock()); }
+    bool take_preset(browser::launch_preset& out) {
+        if (!menu_client || preset == browser::operation::none) return false;
+        out = {preset, launch_code, configured_room_name, metadata.public_room};
+        preset = browser::operation::none; return true;
+    }
+    bool list() { return begin_operation(browser::operation::list); }
+    bool host(const std::string& name, bool public_room) {
+        if (client.pending() || client.view().state == browser::phase::room) return false;
+        if (!browser::valid_room_name(name)) { client.refuse("invalid_room_name"); return false; }
+        if (!begin_operation(browser::operation::host)) return false;
+        hosting = true; configured_code.clear(); configured_room_name = browser::trim(name);
+        metadata.public_room = public_room;
+        room_progress = {}; pacer = {};
+        listed = browser::current(metadata, configured_room_name, read_game(), room_progress, join_in_progress::installed(), 1);
+        return true;
+    }
+    bool resolve(const std::string& typed) {
+        const auto code = core::join_code(typed);
+        if (code.empty()) return false;
+        if (!begin_operation(browser::operation::resolve)) return false;
+        hosting = false; configured_code = code; return true;
+    }
+    bool retry() {
+        const auto action = client.view().action;
+        if (client.view().state != browser::phase::retry_wait && client.view().state != browser::phase::error) return false;
+        return begin_operation(action);
+    }
+    void cancel() {
+        if (client.view().state == browser::phase::room) return; // explicit Leave owns a committed room
+        client.cancel(); publish_ticket(); invalidate_worker(); clear_room();
+        wanted = false;
+        if (worker_done) client.stopped();
+    }
+    void leave() {
+        client.cancel(true); publish_ticket(); invalidate_worker(); clear_room();
+        wanted = false;
+        if (worker_done) client.stopped();
+    }
+    void ui_tick() {
+        if (!wanted && !client.pending() && client.view().state != browser::phase::canceling && client.view().state != browser::phase::leaving) return;
+        if (!menu_client && preset != browser::operation::none && client.view().generation.request == 0) {
+            // Legacy presets start when native networking first pumps, not at
+            // DLL load (the player may spend minutes at the main menu).
+            client.begin(preset, room_clock()); preset = browser::operation::none;
+            if (hosting) {
+                const auto game = read_game(); room_progress.observe(game);
+                listed = browser::current(metadata, configured_room_name, game, room_progress, join_in_progress::installed(), 1);
+            }
+        }
+        if (inbox_overflow) {
+            client.disconnected("inbox_overflow", room_clock());
+            invalidate_worker();
+        }
+        if (client.expired(room_clock())) {
+            client.fail(client.view().generation, "timeout", room_clock()); invalidate_worker();
+        }
+        if (client.view().state == browser::phase::room && !client.view().authenticated) {
+            room_ready = false; broker_up = false; broker_gone = true;
+            if (broker_started) invalidate_worker();
+            return; // room identity, roster, queues and tunnels remain owned until Leave
+        }
+        if (client.view().state == browser::phase::retry_wait || client.view().state == browser::phase::error || client.view().state == browser::phase::refused) {
+            if (broker_started) invalidate_worker();
+            return;
+        }
+        if (worker_done) client.stopped();
+        if (worker_done && broker_started && client.view().state == browser::phase::room) broker_started = false;
+        if (!broker_started && client.pending() && worker_done) {
+            { std::lock_guard g(lock); inbox.clear(); outbox.clear(); inbox_bytes = outbox_bytes = 0; }
+            stop = false; broker_gone = broker_up = false; inbox_overflow = false;
+            broker_started = true; worker_done = false;
+            publish_ticket();
+            const auto generation = ++connection_generation;
+            try {
+                std::thread([where=broker_address, pin=broker_pin, generation, ticket=client.view().generation] {
+                    try { broker_thread(where, pin, generation, ticket); }
+                    catch (...) {
+                        SOCKET socket = INVALID_SOCKET;
+                        { std::lock_guard g(lock); socket = worker_socket; }
+                        if (socket != INVALID_SOCKET) close_worker_socket(socket);
+                        try { gone_text("broker worker failed", "broker_rejected"); } catch (...) {}
+                    }
+                    // Release the sole worker slot only after all exception and
+                    // socket cleanup. A new worker can never reuse its socket.
+                    worker_done = true;
+                }).detach();
+            } catch (...) {
+                worker_done = true; broker_started = false;
+                client.fail(client.view().generation, "worker_unavailable", room_clock());
+            }
+        }
+    }
+
 	bool identity(SteamNetworkingIdentity& out)
 	{
-		if (!wanted || !load_key()) return false;
+		if (!wanted || !key_loaded.load()) return false;
 		out.Clear();
 		std::string id = core::gns_identity(own_id);
 #ifndef NDEBUG
@@ -1249,30 +1532,37 @@ namespace online_room
 
 	void tick()
 	{
-		if (!wanted || !key_loaded) return;
-		if (!broker_started)
-		{
-			broker_started = true;
-			if (hosting)
-			{
-				// The room's first listing: what the game shows now (the Play Online menus; the screen name if entered).
-				const auto g = read_game();
-				room_progress.observe(g);
-				listed = browser::current(metadata, configured_room_name, g, room_progress, join_in_progress::installed(), 1);
-			}
-			std::thread(broker_thread, broker_address, hosting, configured_code, broker_pin, listed).detach();
-			logger::write("online: broker %s: %s", broker_address.c_str(), hosting ? "opening a room" : ("joining room " + online_security::redact_join_code(configured_code)).c_str());
+        if (!wanted) return;
+        if (!broker_started && client.pending()) ui_tick();
+        if (!key_loaded || !sockets()) return;
+        SteamNetworkingIdentity actual, expected;
+        if (!identity(expected) || !sockets()->GetIdentity(&actual) || actual != expected) {
+            if (client.view().state != browser::phase::room) { client.refuse("transport_identity_busy"); return; }
+            client.disconnected("transport_identity_busy", room_clock());
+        }
+        if (client.view().state != browser::phase::room || client.view().authenticated) process_inbox();
+        if (client.view().state == browser::phase::retry_wait || client.view().state == browser::phase::refused || client.view().state == browser::phase::error) {
+            room_ready = false; members.deactivate_all(); own_address = 0; host_id.clear();
+            return; // a failed attempt must not open a listener/tunnel this frame
+        }
+        if (client.view().authenticated && client.issue()) {
+            const auto action = client.view().action;
+            if (!post(action == browser::operation::host ? core::host_request(listed) : action == browser::operation::list ? core::request("list_rooms") : core::request("resolve", {{"code", configured_code}})))
+                client.fail(client.view().generation, "send_queue_full", room_clock());
+        }
+		if (client.view().state == browser::phase::room && !client.view().authenticated) {
+			room_ready = false; broker_up = false; broker_gone = true;
+			if (broker_started) invalidate_worker();
 		}
-		process_inbox();
 		browser_tick();
-		if (cert_ready && ice_ready && listener == k_HSteamListenSocket_Invalid)
+		if (cert_ready && ice_ready && room_ready && listener == k_HSteamListenSocket_Invalid)
 		{
 			listener = sockets()->CreateListenSocketP2P(0, 0, nullptr);
 			logger::write(listener == k_HSteamListenSocket_Invalid ? "online: GNS could not listen for room members" : "online: listening for room members (P2P, custom signaling)");
 		}
 		if (cert_ready && ice_ready && room_ready)
 		{
-			const auto now = GetTickCount();
+			const auto now = room_clock();
 			for (const auto& id : members.active_ids())
 			{
 				if (id == own_id || !opens_to(id)) continue;
@@ -1286,7 +1576,7 @@ namespace online_room
 			if (!t->connected) continue;
 			while (!t->waiting.empty())
 			{
-				if (GetTickCount() - t->waiting.front().at > 10000 || send_datagram(*t, t->waiting.front()))
+				if (room_clock() - t->waiting.front().at > 10000 || send_datagram(*t, t->waiting.front()))
 				{
 					t->waiting_bytes -= t->waiting.front().data.size();
 					t->waiting.pop_front();
@@ -1320,7 +1610,7 @@ namespace online_room
 			if (t.connection != k_HSteamNetConnection_Invalid && t.connection != c) drop(t, "replaced by the member's new connection");
 			t.connection = c;
 			t.outgoing = false;
-			t.started = GetTickCount();
+			t.started = room_clock();
 			if (!t.address || sockets()->AcceptConnection(c) != k_EResultOK)
 			{
 				logger::write("online: could not accept the connection from %s", remote);
@@ -1340,7 +1630,7 @@ namespace online_room
 				return true;
 			}
 			t->connected = true;
-			t->connected_at = GetTickCount();
+			t->connected_at = room_clock();
 			SteamNetConnectionRealTimeStatus_t st{};
 			sockets()->GetConnectionRealTimeStatus(c, &st, 0, nullptr);
 			logger::write("online: connected to %s (%s) in %lu ms - route %s, ping %d ms; the game reaches it at %s", t->id.c_str(), t->outgoing ? "outgoing" : "incoming",
@@ -1367,7 +1657,7 @@ namespace online_room
 				logger::write("online: a connection failed to come up with cached TURN credentials - %s", asked ? "asking the broker for new ones" : "cache cleared (the broker is not reachable now)");
 			}
 			drop(*t, "ended");
-			if (retry) t->retry_at = GetTickCount() + 3000;
+			if (retry) t->retry_at = room_clock() + 3000;
 			return false; // the GNS transport closes a link it had on this connection too
 		}
 		return state != k_ESteamNetworkingConnectionState_None;
@@ -1409,12 +1699,13 @@ namespace online_room
 	{
 		const auto host = ini::text(L"Online", L"Host");
 		const auto code = ini::text(L"Online", L"JoinCode");
+		menu_client = online_menus::installed();
 		// [Online] Public / RoomName (contract v1.3): one-shot with Host, read before the keys are removed.
 		const bool listed_publicly = ini::number(L"Online", L"Public", 0) != 0;
 		const auto raw_room_name = ini::text(L"Online", L"RoomName");
 		// One-shot keys (contract v1.1): read once, then removed from xml2-fix.ini before any room is created or
 		// joined, so a later direct start of the exe (Steam, a desktop shortcut) never re-hosts or re-joins.
-		if (host || code)
+		if (host || code || raw_room_name)
 		{
 			const bool removed = online_status::remove_launch_keys(online_status::game_ini());
 			logger::write("online: [Online] %s%s%s%s read for this start and %s xml2-fix.ini", host ? "Host" : "", host && code ? " / " : "", code ? "JoinCode" : "",
@@ -1429,17 +1720,18 @@ namespace online_room
 			{
 				logger::write("online: [Online] JoinCode is not 8 characters from the broker alphabet - ignored");
 				// The launcher validates the format; a hand-edited ini still gets an answer in online-status.json.
-				if (!hosting)
+				if (!hosting && !menu_client)
 				{
 					online_status::begin(st::role::join);
 					online_status::error(st::error::code_not_found, "the join code is not 8 characters from ABCDEFGHJKMNPQRSTUVWXYZ23456789");
 				}
 			}
 		}
-		if (!hosting && configured_code.empty()) return;
+        if (!hosting && configured_code.empty() && !menu_client) return;
 		if (hosting && !configured_code.empty()) { logger::write("online: [Online] JoinCode set - this PC joins room %s instead of hosting one", online_security::redact_join_code(configured_code).c_str()); hosting = false; }
-		online_status::begin(hosting ? st::role::host : st::role::join);
-		if (game_version::test_mode_active())
+        preset = hosting ? browser::operation::host : !configured_code.empty() ? browser::operation::resolve : browser::operation::none;
+        if (!menu_client && preset != browser::operation::none) online_status::begin(hosting ? st::role::host : st::role::join);
+        if (game_version::test_mode_active())
 		{
 			// [TestMode] blocks online play (game_version refuses the game's sockets): no room, no broker sign-in.
 			logger::write("online: [Online] %s refused - %s", hosting ? "Host=broker" : "JoinCode", game_version::test_mode_reason());
@@ -1463,8 +1755,10 @@ namespace online_room
 		if (const auto pin = ini::text(L"Online", L"BrokerPin")) broker_pin = *pin;
 		metadata = {};
 		metadata.public_room = listed_publicly;
-		configured_room_name = raw_room_name ? browser::room_name(*raw_room_name) : std::string();
-		if (raw_room_name && configured_room_name != browser::trim(*raw_room_name))
+		const bool invalid_room_name = menu_client && raw_room_name && !browser::valid_room_name(*raw_room_name);
+		configured_room_name = invalid_room_name || !raw_room_name ? std::string() : browser::room_name(*raw_room_name);
+		if (invalid_room_name) logger::write("online: invalid launcher RoomName discarded; Browse/Code remain available and Host uses the default name");
+		if (!invalid_room_name && raw_room_name && configured_room_name != browser::trim(*raw_room_name))
 			logger::write("online: [Online] RoomName kept to 32 printable ASCII characters without ; and \" (\"%s\")", configured_room_name.c_str());
 		// This build's token ([Online] GameVersion, contract v1.3): a host's room carries it, a joiner compares it
 		// with the room's before connecting (version_mismatch), the launcher's browser greys out other tokens.
@@ -1488,6 +1782,14 @@ namespace online_room
 		}
 		const auto r = ini::text(L"Online", L"Route");
 		relay_only = r && _stricmp(r->c_str(), "relay") == 0;
+		if (menu_client) {
+			const auto transport = ini::text(L"Online", L"Transport");
+			if (!transport || _stricmp(transport->c_str(), "gns")) {
+				client.refuse("online_dependencies_unavailable");
+				logger::write("online: menu broker client unavailable - select Transport=gns; native sockets retained");
+				return;
+			}
+		}
 		real_sendto = reinterpret_cast<sendto_t>(iat_hook::hook(game, "WS2_32.dll", "sendto", 20, reinterpret_cast<void*>(&room_sendto)));
 		real_recvfrom = reinterpret_cast<recvfrom_t>(iat_hook::hook(game, "WS2_32.dll", "recvfrom", 17, reinterpret_cast<void*>(&room_recvfrom)));
 		if (!real_sendto || !real_recvfrom)
@@ -1498,7 +1800,7 @@ namespace online_room
 			online_status::error(st::error::internal, "the game's network imports were not found");
 			return;
 		}
-		if (!configured_code.empty())
+		if (!configured_code.empty() || menu_client)
 		{
 			// master_list_entry: two guarded 5-byte calls (call 0x6097b0; mov ecx,eax; call 0x608c20 at each site).
 			bool safe = true;
@@ -1511,9 +1813,10 @@ namespace online_room
 			{
 				if (!safe) { game_version::refuse_startup(); logger::write("online: the master-list filter could not be rolled back; startup refused"); online_status::error(st::error::internal, "startup refused"); return; }
 				logger::write("online: the games list's master-server path is not the retail one - Join Game also shows master server entries");
+				if (menu_client) { client.refuse("native_discovery_guard"); return; }
 			}
 		}
-		if (!configured_code.empty())
+		if (!configured_code.empty() || menu_client)
 		{
 			bool safe = true;
 			xml1_hook_transaction::memory memory;
@@ -1524,15 +1827,34 @@ namespace online_room
 				logger::write("online: Enter IP is not the retail one - type the host's virtual address (logged once the room resolves)");
 			}
 		}
-		wanted = true;
-		online_status::set(st::state::connecting, hosting ? std::string() : configured_code, 0);
-		logger::write("online: rooms on - %s through broker %s (route %s); the game's datagrams to 10.77.x.y go through P2P connections",
+        configured = true;
+        wanted = !menu_client && preset != browser::operation::none;
+        launch_code = configured_code;
+        if (menu_client) configured_code.clear(); // a preset cannot filter native discovery before selection
+        if (wanted) {
+            listed = browser::current(metadata, configured_room_name, read_game(), room_progress, join_in_progress::installed(), 1);
+        }
+        if (!menu_client) online_status::set(st::state::connecting, hosting ? std::string() : configured_code, 0);
+		if (menu_client) logger::write("online: menu broker client prepared; room creation waits for an explicit intent");
+		else logger::write("online: rooms on - %s through broker %s (route %s); the game's datagrams to 10.77.x.y go through P2P connections",
 		              hosting ? "hosting a room" : ("joining room " + online_security::redact_join_code(configured_code)).c_str(), broker_address.c_str(), relay_only ? "relay only" : "any");
 	}
 }
 #else
 namespace online_room
 {
+    bool available() { return false; }
+    const online_browser_core::client_view& view() { return client.view(); }
+    std::string version() { return {}; }
+    bool refresh_due() { return false; }
+    bool take_preset(online_browser_core::launch_preset&) { return false; }
+    void ui_tick() {}
+    bool list() { return false; }
+    bool host(const std::string&, bool) { return false; }
+    bool resolve(const std::string&) { return false; }
+    bool retry() { return false; }
+    void cancel() {}
+    void leave() {}
 	void install(HMODULE)
 	{
 		const auto host = ini::text(L"Online", L"Host");
@@ -1551,5 +1873,10 @@ namespace online_room
 namespace online_room
 {
 	bool requested() { return wanted; }
-	void shutdown() { online_status::end(); }
+	void shutdown() {
+#if XML2_FIX_GNS
+        stop = true; // loader-lock safe: do not wait for workers or take a mutex
+#endif
+        online_status::end();
+    }
 }
