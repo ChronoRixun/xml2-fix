@@ -14,6 +14,15 @@ namespace save_manager_rules
  constexpr std::uint32_t snapshot(const native_profile& p) { return records_end(p)+8; }
  constexpr std::uint32_t ready(const native_profile& p) { return snapshot(p)+p.snapshot_size; }
  constexpr std::uint32_t fog(const native_profile& p) { return save_format_rules::smart_count(p)+4; }
+ // The side-mission block in the stream: two snapshots, a pad and the count (retail / E10A2 0x4e0, W2 0xa88).
+ constexpr std::uint32_t side_block(const native_profile& p) { return 2*p.snapshot_size+8; }
+ static_assert(side_block(save_format_rules::retail_profile)==0x4e0 && side_block(save_format_rules::e10a2_profile)==0x4e0 &&
+               side_block(save_format_rules::w2_profile)==0xa88 && side_block(save_format_rules::w2_profile)==save_format_rules::w2_profile.side_count_offset+4);
+ // The serializer's side-mission cursor advance, add dword ptr [ebx+0x2fc00], 0x4e0: its displacement is the payload
+ // operand below and its immediate the side block. W2 widens the block's bound check and copy (save_limits 0x46bcea /
+ // 0x46bcfa) and the loader's advance (0x46e423); leaving this immediate at 0x4e0 let the next section overwrite the
+ // block's last 0x5a8 bytes, so every W2 save read a garbage side-mission count and was refused.
+ constexpr std::uint32_t side_cursor_va = 0x46bd01, side_cursor_immediate = 6;
  struct operand { std::uint32_t old_value, value; };
  inline std::vector<operand> operands(const native_profile& p, std::uint32_t va)
  {
@@ -42,7 +51,17 @@ namespace save_manager_rules
    if(v!=reference[n].old_value)continue;
    std::memcpy(b.data()+off,&reference[n].value,4);
    if(b!=reviewed)continue;
-   std::memcpy(b.data()+off,&target[n].value,4);return b;
+   std::memcpy(b.data()+off,&target[n].value,4);
+   if(s.va==side_cursor_va)
+   {
+    std::uint32_t retail=0,phase_a=0;
+    if(b.size()!=side_cursor_immediate+4)throw std::runtime_error("side-mission cursor advance is not add [reg+disp32], imm32");
+    std::memcpy(&retail,old.data()+side_cursor_immediate,4);std::memcpy(&phase_a,reviewed.data()+side_cursor_immediate,4);
+    if(retail!=side_block(save_format_rules::retail_profile)||phase_a!=side_block(save_format_rules::e10a2_profile))
+     throw std::runtime_error("side-mission cursor advance immediate is not the reviewed 0x4e0");
+    const auto side=side_block(p);std::memcpy(b.data()+side_cursor_immediate,&side,4);
+   }
+   return b;
   }
   throw std::runtime_error("unclassified Phase A save operand at "+patch_transaction::hex(s.va));
  }

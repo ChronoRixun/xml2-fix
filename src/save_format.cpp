@@ -102,7 +102,11 @@ namespace save_format
 		std::uint8_t campaign_origin = 0;
 		lcsave::ZoneCaptureMetadata* capturing = nullptr;
 		void* restore_record = nullptr;
-		std::array<std::uint16_t,1024> original_restore_map{}; // layout_profile.ordinals entries in use
+		// The frozen ordinal map: every installed layout's ordinals (W2 4096). 1024 entries took W2's 8 KB copy into the
+		// statics after it (game_message, the ledger, zone_strings) at every zone reconstruction (save_core_rules.hpp).
+		std::array<std::uint16_t,save_core_rules::restore_map_entries> original_restore_map{};
+		static_assert(save_core_rules::restore_map_bounded && original_restore_map.size()>=save_format_rules::w2_profile.ordinals &&
+		              original_restore_map.size()>=save_format_rules::e10a2_profile.ordinals && original_restore_map.size()>=save_format_rules::retail_profile.ordinals);
 		std::atomic<unsigned> numbered_seen{0}, captures_seen{0}, capture_failures{0}, identity_resets{0}, resets_seen{0}, native_loads_completed{0};
 		using capture_t = bool(__fastcall*)(void*, void*, const char*, int, float);
 		using native_load_t = void(__fastcall*)(void*, void*, void*, int);
@@ -1120,7 +1124,8 @@ namespace save_format
 			{
 				// Freeze the reconstructed model map before changing any actual ordinal slot. Otherwise an
 				// earlier remap could overwrite the source needed by a later identical-name placement.
-				if (!try_copy(original_restore_map.data(),static_cast<const std::uint8_t*>(record)+layout_profile.ordinal_map,layout_profile.ordinals*2))
+				if (!save_core_rules::freeze_restore_map(original_restore_map.data(),original_restore_map.size(),static_cast<const std::uint8_t*>(record)+layout_profile.ordinal_map,
+				                                         layout_profile.ordinals,[](void* to,const void* from,std::size_t n){return try_copy(to,from,n);}))
 				{core_lifetime.write_blocked=true;return true;}
 				restore_record=record;
 			}

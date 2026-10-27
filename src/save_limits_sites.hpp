@@ -10,6 +10,8 @@ inline const std::vector<row> direct{
  {0x46e402,"81c1e0040000","81c1880a0000","side stream size",0},
  {0x46e412,"b938010000","b9a2020000","side stream copy",0},
  {0x46e423,"05e0040000","05880a0000","side stream size",0},
+ {0x484b49,"686c020000","6840050000","mission state stream size",0},
+ {0x484c20,"686c020000","6840050000","mission state stream size",0},
  {0x487505,"682c010000","6800040000","objective state capacity",0},
  {0x48751d,"8dbe54020000","8dbe28050000","snapshot vector offset",0},
  {0x48754e,"8d8e60020000","8d8e34050000","snapshot vector offset",0},

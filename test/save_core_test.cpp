@@ -94,6 +94,30 @@ int main()
   const auto stats=native_completion(1,true,3,true,false,false,false);
   check(stats.native_ok&&!stats.confirm_campaign&&!stats.refuse_campaign,"stats-only application cannot confirm campaign or profile");
  }
+ {
+  // The frozen restore map takes every installed layout's whole ordinal map, and never writes past itself.
+  using namespace save_format_rules;
+  check(restore_map_entries>=retail_profile.ordinals && restore_map_entries>=e10a2_profile.ordinals &&
+        restore_map_entries>=w2_profile.ordinals,"restore map holds the largest layout's ordinals (W2 4096)");
+  struct guarded { std::array<std::uint16_t,restore_map_entries> map; std::array<std::uint8_t,0x2000> after; };
+  static guarded g;
+  std::vector<std::uint16_t> record(w2_profile.ordinals*2+16);
+  for(std::size_t i=0;i<record.size();++i) record[i]=static_cast<std::uint16_t>((0x5a00+(i&0xff))|1);
+  const auto plain=[](void* to,const void* from,std::size_t n){std::memcpy(to,from,n);return true;};
+  for(const auto* p:{&retail_profile,&e10a2_profile,&w2_profile})
+  {
+   g.map.fill(0);g.after.fill(0xcc);
+   const bool copied=freeze_restore_map(g.map.data(),g.map.size(),record.data(),p->ordinals,plain);
+   bool intact=true;for(auto b:g.after)intact=intact&&b==0xcc;
+   check(copied && std::memcmp(g.map.data(),record.data(),p->ordinals*2)==0,
+         p==&w2_profile?"W2 ordinal map frozen whole":p==&e10a2_profile?"E10A2 ordinal map frozen whole":"retail ordinal map frozen whole");
+   check(intact,p==&w2_profile?"W2 freeze leaves the statics after the map untouched":"freeze leaves the statics after the map untouched");
+  }
+  g.after.fill(0xcc);
+  const bool refused=!freeze_restore_map(g.map.data(),1024,record.data(),w2_profile.ordinals,plain);
+  bool intact=true;for(auto b:g.after)intact=intact&&b==0xcc;
+  check(refused && intact,"a layout larger than the map is refused, nothing copied");
+ }
  std::printf("core runtime rules: %d failures\n",failures);
  return failures?1:0;
 }

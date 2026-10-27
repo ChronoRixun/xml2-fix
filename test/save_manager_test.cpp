@@ -68,6 +68,10 @@ namespace {
    ++rows;same&=save_manager_rules::literal(s,e10a2_profile)==patch_transaction::bytes_of(s.new_hex);
    if(s.va==0x48733d)check(save_manager_rules::literal(s,w2_profile)==patch_transaction::bytes_of("6890211200"),"W2 prepared manager allocation is 0x122190");
    if(s.va==0x4669b0)check(save_manager_rules::literal(s,w2_profile)==patch_transaction::bytes_of("8d9608870400"),"W2 eviction record 1 timestamp is 0x48708");
+   // The serializer copies the widened side-mission block (0x46bcea/0x46bcfa: 0xa88 bytes); its cursor advance shares
+   // this instruction with the payload operand and must move over the same 0xa88 bytes, as the loader does (0x46e423).
+   if(s.va==0x46bd01)check(save_manager_rules::literal(s,w2_profile)==patch_transaction::bytes_of("818300002000880a0000"),"W2 serializer advances the stream cursor over the whole 0xa88-byte side-mission block");
+   if(s.va==0x46bcca)check(save_manager_rules::literal(s,w2_profile)==patch_transaction::bytes_of("818300002000dc000000"),"W2 game block cursor advance stays 0xdc");
    if(s.va==0x4666bd)check(save_manager_rules::literal(s,w2_profile)==patch_transaction::bytes_of("81fb00040000"),"W2 scans exactly 1024 World handles");
   }
   check(rows==178&&same,"T1 all 178 regenerated E10A2 save rows equal reviewed Phase A bytes");
@@ -354,6 +358,15 @@ int main(int argc,char** argv) {
  check(result==patch_transaction::outcome::committed,"W2 combined contribution is conflict-free and commits: "+tx.report());
  if(result!=patch_transaction::outcome::committed)return 1;
  check(save_format::strings!=0,"zone-string backing published only after verified union commit");
+ {
+  // The stream must carry the W2 blocks at the sizes lcsave's W2 layout reads and writes (limits-wave2.md 3.4):
+  // CMap's [MAP: MISSION STATE] snapshot write/read and the serializer's side-mission cursor advance.
+  auto installed=[](unsigned va,const char* hex){const auto b=patch_transaction::bytes_of(hex);return std::memcmp(at(va),b.data(),b.size())==0;};
+  check(save_format_rules::w2_profile.snapshot_size==0x540&&installed(0x484b49,"6840050000")&&installed(0x484c20,"6840050000"),
+        "W2 CMap writes and reads the whole 0x540-byte mission snapshot (0x484b49 / 0x484c20 push 0x540)");
+  check(installed(0x46bd01,"818300002000880a0000")&&installed(0x46bcfa,"b9a2020000")&&installed(0x46e423,"05880a0000"),
+        "W2 serializer and loader advance the stream over the same 0xa88-byte side-mission block it copies");
+ }
  if(argc>2) {
   const std::string prefix=argv[2];
   std::ofstream text(prefix+"-text.bin",std::ios::binary);text.write(static_cast<const char*>(at(0x401000)),0x27d7b5);

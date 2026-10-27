@@ -162,6 +162,9 @@ for a,b in allcode:
     if i.mnemonic=='lea' and i.disp==-0x26c:edit(a,operand(i,-0x540,True),'side stack previous frame')
 for a in (0x46bcea,0x46e402,0x46e423):edit(a,operand(ins(a),0xa88),'side stream size')
 for a in (0x46bcfa,0x46e412):edit(a,operand(ins(a),0xa88//4),'side stream copy')
+# CMap's [MAP: MISSION STATE] stream write (0x484b49) and read (0x484c20) move the whole W2 snapshot; at 0x26c the
+# loader read the following profile/script variables 0x2d4 bytes early and the saver's stream failed lcsave's W2 reader.
+for a in (0x484b49,0x484c20):edit(a,operand(ins(a),0x540),'mission state stream size')
 for i in decode(0x5f3630,0x5f3728):
     if i.disp_size and i.operands and any(o.type==x86.X86_OP_MEM and o.mem.base==x86.X86_REG_ESP for o in i.operands) and i.disp>=0x278:edit(i.address,operand(i,i.disp+0x2d4,True),'side push frame argument/cookie')
     if i.mnemonic in ('sub','add') and i.op_str.startswith('esp,') and i.operands[-1].imm==0x278:edit(i.address,operand(i,0x54c),'side push stack frame')
