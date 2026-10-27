@@ -47,15 +47,18 @@ with_exe = {
     "xml2_xml1_grab_carry_test", "xml2_xml1_grab_carry_install_test", "xml2_xml1_air_carry_test", "xml2_shared_handlers_c_test", "xml2_tk_guard_test",
     "xml2_anim_enums_test", "xml2_char_sounds_test", "xml2_motion_pool_test", "xml2_resident_stats_test", "xml2_resident_payload_test",
     "xml2_pool_counter_observers_test", "xml2_particle_scratch_test", "xml2_effect_templates_test", "xml2_effect_pools_test", "xml2_fight_moves_host",
-    "xml2_power_pools_host",
+    "xml2_power_pools_host", "xml2_balance_parity_test",
 }
 # Second argument: the XBE (beta 7: the scheduler suite requires it, the weapon brain compares the original callbacks).
-with_xbe = {"xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test", "xml2_shared_handlers_test", "xml2_shared_handlers_c_test", "xml2_dopple_xbe_test", "xml2_tk_guard_test"}
+with_xbe = {"xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test", "xml2_shared_handlers_test", "xml2_shared_handlers_c_test", "xml2_dopple_xbe_test", "xml2_tk_guard_test", "xml2_balance_parity_test"}
 skip = {
     "xml2_test", "lcsave_durable_parity", "lcsave_test", "xml2_save_startup_test", "lcsave_zone_records",
     "xml2_danger_room_party_install_test", "xml2_lockon_effects_install_test",
     "xml2_danger_room_healthbars_install_test", "xml2_speaker_label_install_test", "xml2_classic_hud_install_test",
     "xml2_codex_back_install_test", "xml2_resistance_display_install_test", "xml2_economy_test",
+    # argument-taking tools run by their own gates: W2's G3 real-saves run (--list/--data/--registry/--out) and the
+    # E4 actor-pools host (scripts/test_actor_pools.py); without arguments both only print their usage (exit 2)
+    "lcsave_real_saves", "actor_pools_host",
 }
 for exe in sorted(b.glob("*.exe")):
     name = exe.stem
