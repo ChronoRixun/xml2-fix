@@ -376,6 +376,7 @@ namespace test_input_rules
 			state,
 			objectives,
 			actor_pools,
+            e4_observe,
 			char_sounds,
 			resident_stats, resident_census, motion_pool,
 			pools,
@@ -429,10 +430,10 @@ namespace test_input_rules
 			return result;
 		}
 
-		if (verb == "STATE" || verb == "OBJECTIVES" || verb == "EVENTS" || verb == "ACTOR_POOLS" || verb == "CHAR_SOUNDS" || verb == "RESIDENT_STATS" || verb == "RESIDENT_CENSUS" || verb == "MOTION_POOL" || verb == "POOLS")
+		if (verb == "STATE" || verb == "OBJECTIVES" || verb == "EVENTS" || verb == "E4_OBSERVE" || verb == "ACTOR_POOLS" || verb == "CHAR_SOUNDS" || verb == "RESIDENT_STATS" || verb == "RESIDENT_CENSUS" || verb == "MOTION_POOL" || verb == "POOLS")
 		{
 			if (!rest.empty()) return fail("observation commands take no arguments");
-			result.what = verb == "STATE" ? command::kind::state : verb == "OBJECTIVES" ? command::kind::objectives : verb == "RESIDENT_STATS" ? command::kind::resident_stats : verb == "RESIDENT_CENSUS" ? command::kind::resident_census : verb == "MOTION_POOL" ? command::kind::motion_pool : verb == "CHAR_SOUNDS" ? command::kind::char_sounds : verb == "ACTOR_POOLS" ? command::kind::actor_pools : verb == "POOLS" ? command::kind::pools : command::kind::events;
+			result.what = verb == "E4_OBSERVE" ? command::kind::e4_observe : verb == "STATE" ? command::kind::state : verb == "OBJECTIVES" ? command::kind::objectives : verb == "RESIDENT_STATS" ? command::kind::resident_stats : verb == "RESIDENT_CENSUS" ? command::kind::resident_census : verb == "MOTION_POOL" ? command::kind::motion_pool : verb == "CHAR_SOUNDS" ? command::kind::char_sounds : verb == "ACTOR_POOLS" ? command::kind::actor_pools : verb == "POOLS" ? command::kind::pools : command::kind::events;
 			return result;
 		}
 		if (verb == "SAVE")

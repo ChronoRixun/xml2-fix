@@ -116,3 +116,5 @@ DISASM  test/resident_stats_test.cpp  # Authored register and stack capture prob
 
 DISASM  src/tk_guard_bridges.hpp  # Authored rule-46 TK/guard bridges: two resume trampolines that repeat only the displaced prologue before jumping back into the owner-loaded routine, and an argument-forwarding filter thunk; no game body or instruction listing.
 DISASM  test/tk_guard_test.cpp  # Authored fixture stubs (synthetic acquisition and grab tails) and x87 modulus/truncation helpers standing in for the runtime calls of owner-loaded XML1 code; no embedded game code.
+
+DISASM test/e4_observe_host.cpp # Authored synthetic CPU entry/capture and deliberate register/FPU clobber probes; native input is read locally at runtime, no game listing is embedded.

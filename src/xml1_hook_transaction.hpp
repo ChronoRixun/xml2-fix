@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include "patch_transaction.hpp"
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -28,6 +29,12 @@ template<class Memory> bool apply(Memory& mem, const std::vector<patch>& writes,
             if(!found)pages.push_back({a,0});
             if(a==last)break;
         }
+    }
+    std::vector<patch_transaction::write> diagnostic_before, diagnostic_after;
+    if(patch_transaction::record_verified_writes){
+        for(const auto& p:writes){diagnostic_before.push_back({p.address,p.before,"legacy transaction"});diagnostic_after.push_back({p.address,p.after,"legacy transaction"});}
+        patch_transaction::verified_originals.reserve(patch_transaction::verified_originals.size()+writes.size());
+        patch_transaction::verified_writes.reserve(patch_transaction::verified_writes.size()+writes.size());
     }
     std::size_t acquired=0;
     for(;acquired<pages.size();++acquired) {
@@ -58,6 +65,10 @@ template<class Memory> bool apply(Memory& mem, const std::vector<patch>& writes,
         if(!mem.restore(pages[acquired].address,pages[acquired].protection)){
             ok=false;if(safe_to_run)*safe_to_run=false;
         }
+    }
+    if(ok&&patch_transaction::record_verified_writes){
+        for(auto& p:diagnostic_before)patch_transaction::verified_originals.push_back(std::move(p));
+        for(auto& p:diagnostic_after)patch_transaction::verified_writes.push_back(std::move(p));
     }
     return ok;
 }

@@ -1,6 +1,7 @@
 #include "anim_enums.hpp"
 #include "test_input.hpp"
 #include "pool_counters.hpp"
+#include "e4_observe.hpp"
 #include "test_state.hpp"
 #include "test_mode.hpp"
 #include "xml1_hook_memory.hpp"
@@ -584,7 +585,8 @@ namespace test_input
             case command::kind::motion_pool: return test_state::reply("motion_pool");
 			case command::kind::char_sounds: return test_state::reply("char_sounds");
 			case command::kind::actor_pools: return test_state::reply("actor_pools");
-			case command::kind::pools: return pool_counters::json();
+			case command::kind::e4_observe: return e4_observe::json();
+            case command::kind::pools: return pool_counters::json();
 			case command::kind::pad:
 				return pad_input::handle(cmd.pad);
 			case command::kind::save:

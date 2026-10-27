@@ -1,0 +1,30 @@
+#pragma once
+#include <Windows.h>
+#include <string>
+
+// Stage-2 diagnostics are explicitly opt-in. Probes remain in their original
+// recovery scopes; only native operations pass through native_call.
+namespace e4_observe
+{
+    void configure();
+    void install(HMODULE game);
+    void sample();
+    std::string json();
+#ifdef XML2_E4_TEST
+    void test_emit(unsigned point, bool post, const unsigned* registers);
+#endif
+    bool enabled();
+    [[noreturn]] void fatal(const char* site);
+    int native_exception(const char* site, EXCEPTION_POINTERS* exception);
+
+    template<class F> __declspec(noinline) auto native_call(const char* site, F&& call) -> decltype(call())
+    {
+        __try { return call(); }
+        __except(native_exception(site, GetExceptionInformation()))
+        {
+            // The filter either continues searching (OFF) or terminates (ON).
+            // Never translate an SEH record into a bare C++ rethrow.
+            fatal(site);
+        }
+    }
+}

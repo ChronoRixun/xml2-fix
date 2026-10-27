@@ -146,6 +146,8 @@ add_library(xml2_fix SHARED
 	src/limits.cpp
 	src/address_space.cpp
 	src/entity_capacity.cpp
+	src/e4_observe.cpp
+	src/e4_observe_runtime.cpp
 	src/actor_pools.cpp
 	src/entity_owners.cpp
 	src/entity_transfer.cpp
@@ -756,3 +758,15 @@ target_link_options(xml2_pool_counters_runtime_test PRIVATE /BASE:0x400000 /DYNA
 add_executable(xml2_pool_counter_observers_test test/pool_counter_observers_test.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
 target_include_directories(xml2_pool_counter_observers_test PRIVATE src)
 target_link_options(xml2_pool_counter_observers_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# E4 X1: fault injection in a child process, never a game launch.
+add_executable(xml2_e4_exception_test test/e4_exception_test.cpp src/e4_observe.cpp)
+target_include_directories(xml2_e4_exception_test PRIVATE src)
+
+add_executable(xml2_e4_observe_test test/e4_observe_test.cpp)
+target_include_directories(xml2_e4_observe_test PRIVATE src)
+target_compile_definitions(xml2_e4_observe_test PRIVATE XML2_E4_TEST)
+add_executable(xml2_e4_observe_host test/e4_observe_host.cpp src/e4_observe.cpp src/e4_observe_runtime.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_e4_observe_host PRIVATE src)
+target_compile_definitions(xml2_e4_observe_host PRIVATE XML2_E4_TEST)
+target_link_options(xml2_e4_observe_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)

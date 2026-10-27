@@ -27,6 +27,11 @@ namespace patch_transaction
 	struct region { std::string name; address lo = 0, hi_exclusive = 0; std::array<std::uint8_t, 32> sha256{}; };
 	struct write { address va; std::vector<std::uint8_t> bytes; std::string what; };
 
+	// Optional diagnostic ledger, enabled before startup; OFF collects nothing.
+	inline bool record_verified_writes = false;
+	inline std::vector<write> verified_writes;
+    inline std::vector<write> verified_originals;
+
 	struct contribution
 	{
 		std::string owner;
