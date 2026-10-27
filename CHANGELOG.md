@@ -8,7 +8,23 @@ Colossus's charge hitting and the GRSO Officer's and Captain's guns and grenades
 Legends Classic 0.4.1-beta.1 builder writes every key below except `TelekinesisRule`, `GuardDecideRule` and
 `[Limits] ActorPools`, and writes `[Game] Xml1FlyingCarry = 0`: Phoenix's XML1 telekinesis, the XML1 guard decide and
 the flying carry are in progress for the next beta (switched off, not removed), and the actor pools stay opt-in. A
-1.9.0 PC and a 1.8.0 PC (beta 7 or stable) refuse each other at join. The entries below are newest first.
+1.9.0 PC and a 1.8.0 PC (beta 7 or stable) refuse each other at join. 1.9.0-beta.2 is beta 8's hotfix: the
+controller scan cache below (the once-a-second pause with a controller connected), with no gameplay rule or agreement
+byte changes, so beta.2 and beta.1 PCs play together and the 0.4.1-beta.1 build needs no Rebuild. The entries below
+are newest first.
+
+- **Controller scan cache** (`[Input] CacheDeviceScan`, default `1`; 1.9.0-beta.2 and 1.8.1,
+  [docs](docs/controller-scan-cache.md)). The retail zone timer (`0x6256E0`) asks for a DirectInput controller scan
+  about once a second (worker `0x618C90` -> `0x628E20`, EnumDevices at `0x628E54`); the enumeration measured
+  170-900 ms, and with a pad connected it showed as a pause (Team Management's clouds). Controller enumerations are
+  now collected on a background worker and replayed from complete immutable snapshots on the caller's thread through
+  the existing spoof and virtual-pad callbacks (order, structure size, bytes, HRESULT and DIENUM_STOP preserved). Raw
+  Input topology is compared every 250 ms, with a 30-second safety rescan; a cold query still waits for its first
+  complete list (the startup scan, main-menu input, libIGDisplay's one-shot count). XInput slots are discovered on
+  XInput's own worker once a second and after a failed read; frames read only the selected slot.
+  `CacheDeviceScan=0` restores the previous enumeration and discovery paths. New native fixtures
+  `xml2_controller_scan_cache_test` and `xml2_xinput_connections_test`. Owner live check on the beta 8 candidate
+  080i: the pause is gone with a pad connected.
 
 - **Resident stats: gameplay rule 50** (`[Limits] ResidentStats=320`; candidate). Raises outer CStats and NPC
   payload pools together to 320; hero payloads stay 22. Admission checks payload availability before allocation,
@@ -213,6 +229,23 @@ the flying carry are in progress for the next beta (switched off, not removed), 
   the wall cling) sweeps 60 units ahead of Rogue, drains the first character it finds (`ability_drain`, with the
   target lock) or plays `drain_notarget`, and charges the energy once on the decide move, as default.xbe 0xDBD30.
   Needs the matching Legends Classic heroes output. Not yet played.
+
+## 1.8.1 - 2026-10-26
+
+A hotfix for 1.8.0 (Legends Classic 0.4.0, content 27 / `LC36`, unchanged): the once-a-second pause with a
+controller connected. No gameplay rule or agreement byte changes, so 1.8.1 and 1.8.0 PCs play together; no Rebuild.
+
+- **Controller scan cache** (`[Input] CacheDeviceScan`, default `1`; [docs](docs/controller-scan-cache.md)). The
+  retail zone timer (`0x6256E0`) asks for a DirectInput controller scan about once a second (worker `0x618C90` ->
+  `0x628E20`, EnumDevices at `0x628E54`); the enumeration measured 170-900 ms, and with a pad connected it showed as
+  a pause (Team Management's clouds). Controller enumerations are now collected on a background worker and replayed from
+  complete immutable snapshots on the caller's thread through the existing spoof and virtual-pad callbacks (order,
+  structure size, bytes, HRESULT and DIENUM_STOP preserved). Raw Input topology is compared every 250 ms, with a
+  30-second safety rescan; a cold query still waits for its first complete list (the startup scan, main-menu input,
+  libIGDisplay's one-shot count). XInput slots are discovered on XInput's own worker once a second and after a failed
+  read; frames read only the selected slot. `CacheDeviceScan=0` restores the previous enumeration and discovery paths.
+  New native fixtures `xml2_controller_scan_cache_test` and `xml2_xinput_connections_test`. Owner live check on the
+  beta 8 candidate 080i: the pause is gone with a pad connected.
 
 ## 1.8.0 - 2026-10-25
 

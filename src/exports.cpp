@@ -214,6 +214,8 @@ namespace
 	{
 		logger::write("XML2 Fix " FIX_VERSION);
 		gamepad_fix::use_profile(pad_profile::logitech_dual_action);
+		const bool cache_device_scan = ini::flag(L"Input", L"CacheDeviceScan", true);
+		gamepad_fix::cache_device_scan(cache_device_scan);
 		// [Test] VirtualPads: pads with nothing plugged in, in both DirectInput paths below - read before either exists.
 		virtual_pad::install();
 		xml2_pad_bindings::install();
@@ -291,7 +293,7 @@ namespace
 		// Start background work only after required startup hooks have verified.
 		// XInput's first call can take seconds (xinput_pad.hpp): made on a thread of its own, which runs once
 		// the loader is done, so the game's thread never waits for it; pads read as idle until then.
-		xinput_pad::start();
+		xinput_pad::start(cache_device_scan);
 		save_content_guards::install(game);
 		save_trace::install(game);
 		// What the end credits run: one push operand in CREDITS_MENU, used only when a campaign ends.

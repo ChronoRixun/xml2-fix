@@ -85,6 +85,7 @@ add_library(xml2_fix SHARED
 	src/pack_amount.cpp
 	src/exports.cpp
 	src/gamepad_fix.cpp
+	src/controller_scan_cache.cpp
 	src/input_worker.cpp
 	src/pad_profile.cpp
 	src/pad_bindings.cpp
@@ -740,6 +741,13 @@ target_link_options(xml2_resident_stats_test PRIVATE /BASE:0x400000 /DYNAMICBASE
 add_executable(xml2_pool_counters_test test/pool_counters_test.cpp)
 target_include_directories(xml2_pool_counters_test PRIVATE src)
 target_compile_options(xml2_pool_counters_test PRIVATE /UNDEBUG)
+
+# Controller scan cache and XInput discovery, without a game or injected input.
+add_executable(xml2_controller_scan_cache_test test/controller_scan_cache_test.cpp src/controller_scan_cache.cpp src/pad_profile.cpp)
+target_include_directories(xml2_controller_scan_cache_test PRIVATE src)
+target_link_libraries(xml2_controller_scan_cache_test PRIVATE dxguid)
+add_executable(xml2_xinput_connections_test test/xinput_connections_test.cpp)
+target_include_directories(xml2_xinput_connections_test PRIVATE src)
 
 add_executable(xml2_pool_counters_runtime_test test/pool_counters_runtime_test.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
 target_include_directories(xml2_pool_counters_runtime_test PRIVATE src)
