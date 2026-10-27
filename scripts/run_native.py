@@ -31,6 +31,7 @@ cmds = [[str(b / "xml2_test.exe"), flag] for flag in flags]
 if "--plain" in sys.argv:
     cmds.append([str(b / "xml2_test.exe")])
 with_exe = {
+    "xml2_lc_fonts_host",
     "xml2_roll_test", "xml2_dr_reward_test",
     "xml2_gns_transport_test", "xml2_confirmation_release_test", "xml2_objective_text_test",
     "xml2_save_limits_test", "xml2_item_capacity_test", "xml2_entity_grid_test", "xml2_entity_world_test", "xml2_entity_frames_test",
@@ -120,7 +121,7 @@ for cmd in cmds:
         tag += "+exe"
     if XBE in cmd:
         tag += "+xbe"
-    if tag.removesuffix("+exe").endswith("_install_test") and cmd[-1] not in (EXE, XBE):
+    if len(cmd)>1 and tag.removesuffix("+exe").endswith("_install_test") and cmd[-1] not in (EXE, XBE):
         tag += "-" + cmd[-1]
     if Path(cmd[0]).stem in installer_modes and len(cmd)>2:
         tag += "-" + cmd[-1]

@@ -724,6 +724,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `DeathSwitchClear` | `0` | `1`: when the controlled hero dies, the hero given its controller stops the walk its AI had started instead of finishing it with no input, as in X-Men Legends I ([details](docs/death-switch.md)) |
 | `ClassicMainBackdrop` | `0` | `1`: the classic main menu's Cerebro room is drawn with its original bright textures ([details](#classic-main-menu-backdrop)) |
 | `ClassicMainPanelBounds` | `0` | `1`: the classic main menu's buttons answer the mouse over their whole visible panels ([details](#classic-main-menu-backdrop)) |
+| `LegendsClassicFonts` | `0` | `1`: enable the online menus' four private font slots, per-style glyph scale and device-following prompt glyphs; requires the builder's complete private font assets ([details](docs/scoped-online-fonts.md)) |
 | `ClassicHud` | off | `xml1`: the HUD drawn from a Legends Classic build's classic atlas and models (1.8.0-beta.5; the small map stays XML2's own, unframed; display only; refuses without the build's assets) ([details](docs/classic-hud-pilot.md)) |
 | `ClassicCodex` | `0` | `1`: the Codex's Details opens the list entry under the cursor and Back from a biography returns to the list (1.8.0-beta.5; display only) |
 | `ClassicObjectives` | `0` | `1`: the pause menu's Objectives page lists only visible objectives (no hole for a hidden one) and opens on the current one, as the first game's list does (1.9.0-beta.1; display only, docs/classic-objectives.md) |
