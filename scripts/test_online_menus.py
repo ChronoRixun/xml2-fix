@@ -6,6 +6,12 @@ import re
 import subprocess
 
 
+def host_modes(root):
+    count = len(re.findall(r'\{0x', (root / "src/online_menus_guards.hpp").read_text()))
+    return ["review-binding", "review-entry", "review-no-prompt", "review-contracts", "review-exceptions", "asset-badalloc", "asset-filesystem", "install-retain", "install-add-fail", "r3", "r3-load", "r3-load-invalid", "r3-local-only", "on", "off", "zero", "base", "capacity", "assets", "bad-marker", "missing-file", "name31", "name32", "blank-name", "rollback", "protect", "flush", "retain",
+             "fail-network", "fail-session", "fail-campaign", "fail-persist"] + [f"guard{i}" for i in range(count)]
+
+
 def main():
     parser = argparse.ArgumentParser(__doc__)
     parser.add_argument("test", type=Path)
@@ -15,9 +21,7 @@ def main():
     binary, retail, out = args.test.resolve(), args.exe.resolve(), args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     root = Path(__file__).resolve().parent.parent
-    count = len(re.findall(r'\{0x', (root / "src/online_menus_guards.hpp").read_text()))
-    modes = ["on", "off", "zero", "base", "capacity", "assets", "bad-marker", "missing-file", "name31", "name32", "blank-name", "rollback", "protect", "flush", "retain",
-             "fail-network", "fail-session", "fail-campaign", "fail-persist"] + [f"guard{i}" for i in range(count)]
+    modes = host_modes(root)
     results = []
     for mode in modes:
         result = subprocess.run([str(binary), str(retail), mode], cwd=out, capture_output=True,

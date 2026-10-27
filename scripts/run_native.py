@@ -3,6 +3,8 @@ from pathlib import Path
 import subprocess, json, re, os, sys
 
 import os as _os
+sys.dont_write_bytecode = True
+from test_online_menus import host_modes
 
 def _need(name):
     """Machine-specific inputs come from the environment (see scripts/README-gates.md); nothing local is hardcoded."""
@@ -98,6 +100,9 @@ installer_modes |= {"xml2_effect_pools_test"}
 economy_modes = ("A", "1roll", "prices", "shop", "bag", "digest", "off", "zero", "prerequisite", "sidecar", "missingfile", *(f"guard{i}" for i in range(34)), "bag-pre-guard", "prices-pre-guard", "shop-pre-guard", "digest-pre-guard", "legacy-count", "legacy-pick", "rollback", "rollback-failed", "unresolved")
 cmds += [[str(b / "xml2_economy_test.exe"), EXE, mode] for mode in economy_modes]
 installer_modes |= {"xml2_economy_test"}
+
+cmds += [[str(b / "xml2_online_menus_test.exe"), EXE, mode] for mode in host_modes(R) if mode != "on"]
+installer_modes |= {"xml2_online_menus_test"}
 
 if LIST_ONLY:
     # The command matrix only: for checking the runner against another gate's matrix. Everything above only reads.

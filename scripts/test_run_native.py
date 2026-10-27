@@ -22,7 +22,10 @@ class ListModeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / 'repo'
             (root / 'scripts').mkdir(parents=True)
-            shutil.copyfile(HERE / 'run_native.py', root / 'scripts' / 'run_native.py')
+            for script in ('run_native.py','test_online_menus.py'):
+                shutil.copyfile(HERE / script, root / 'scripts' / script)
+            (root / 'src').mkdir()
+            shutil.copyfile(REPO / 'src/online_menus_guards.hpp',root / 'src/online_menus_guards.hpp')
             (root / 'test').mkdir()
             for name in ('xml2_test.cpp', 'classic_hud_install_test.cpp'):
                 shutil.copyfile(REPO / 'test' / name, root / 'test' / name)
@@ -50,6 +53,9 @@ class ListModeTests(unittest.TestCase):
             self.assertTrue(any(l.endswith('xml2_speaker_label_install_test.exe X:/game/XMen2.exe guard6') for l in lines))
             self.assertTrue(any('lcsave_durable_parity.exe' in l and l.endswith('case1') for l in lines))
             self.assertFalse(any('deleted a stale' in l for l in lines))
+            from test_online_menus import host_modes
+            listed=[line.split()[-1] for line in lines if 'xml2_online_menus_test.exe' in line]
+            self.assertEqual(sorted(listed),sorted(mode for mode in host_modes(REPO) if mode!='on'))
 
 
 if __name__ == '__main__':

@@ -557,6 +557,7 @@ target_compile_options(xml2_online_room_test PRIVATE /utf-8)
 add_executable(xml2_online_menus_test test/online_menus_test.cpp src/online_menus.cpp
     src/script_function_overflow.cpp src/patch_transaction.cpp tools/union_host/union_space.asm)
 target_include_directories(xml2_online_menus_test PRIVATE src)
+target_link_libraries(xml2_online_menus_test PRIVATE user32)
 target_compile_options(xml2_online_menus_test PRIVATE /UNDEBUG)
 target_link_options(xml2_online_menus_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
 # The public game browser (contract v1.3/v1.4): room name, metadata from the game's state, presence and its pacing.
