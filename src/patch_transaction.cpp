@@ -9,6 +9,9 @@
 
 #ifdef XML2_SAVE_STARTUP_FAULT_TEST
 #include "../test/save_startup_faults.hpp" // the owned fault DLL wraps the transaction's Windows calls
+#include "../test/w2_startup_faults.hpp"
+#undef VirtualProtect
+#define VirtualProtect w2_startup_faults::protect
 #endif
 
 namespace patch_transaction

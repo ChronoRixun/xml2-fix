@@ -5,6 +5,7 @@
 #include "primitives_per_effect.hpp"
 #include "script_pools.hpp"
 #include "power_pools.hpp"
+#include "item_capacity.hpp"
 #include "limits_agreement_rules.hpp"
 #include "gameplay_agreement.hpp"
 #include "game_version.hpp"
@@ -867,6 +868,8 @@ namespace limits
 		power_pools::install(game);
 		base = reinterpret_cast<std::uintptr_t>(game) == image_base ? reinterpret_cast<std::uint8_t*>(game) : nullptr;
 		if (game) log_address_space(game);
+		const auto w2_items = item_capacity::installed_capacity();
+		if (w2_items) item_cap = wanted_caps[2] = static_cast<int>(w2_items);
 		if (base)
 		{
 			// The counters status() reports, where the code that uses them is the retail build's.
@@ -881,7 +884,7 @@ namespace limits
 			motions_readable = !first_mismatch(motion_counter_guards(motion_pool::counter_guard_hex()));
 			igb_readable = !first_mismatch(igb_counter_guards);
 			if (igb_readable) igb_live_va = igb_live_retail;
-			items_readable = !items_mismatch();
+			items_readable = w2_items || !items_mismatch();
 			if (!styles_mismatch() && !first_mismatch(event_sites)) {
 				published_manager=manager_layout(stock_fight_styles,stock_style_events);
 			}
@@ -900,18 +903,20 @@ namespace limits
 		if (!actor_slots && !resource_names && !item_enhancements && !fight_styles && !style_events && !effect_curves && !move_triggers && !igb_records && !fight_moves)
 		{
 			install_effect_rows(game);
-			logger::write("limits: the game's own caps - 40 actor slots, 450 resource names, 375 item enhancements (no [Limits] in xml2-fix.ini)");
+			if(w2_items)logger::write("limits: W2 owns the 4096-record item enhancement pool");
+			else logger::write("limits: the game's own caps - 40 actor slots, 450 resource names, 375 item enhancements (no [Limits] in xml2-fix.ini)");
 			return;
 		}
 		const auto chosen = decide(actor_slots ? std::optional<std::string_view>(*actor_slots) : std::nullopt,
 		                           resource_names ? std::optional<std::string_view>(*resource_names) : std::nullopt,
-		                           item_enhancements ? std::optional<std::string_view>(*item_enhancements) : std::nullopt,
+		                           item_enhancements && !w2_items ? std::optional<std::string_view>(*item_enhancements) : std::nullopt,
 		                           fight_styles ? std::optional<std::string_view>(*fight_styles) : std::nullopt,
 		                           effect_curves ? std::optional<std::string_view>(*effect_curves) : std::nullopt,
 		                           igb_records ? std::optional<std::string_view>(*igb_records) : std::nullopt);
 		igb_requested = chosen.igb_records > stock_igb_records;
 		wanted_caps = {chosen.resource_names, chosen.actor_slots, chosen.item_enhancements,
 		               chosen.fight_styles, chosen.effect_curves, move_triggers_rules::capacity(move_triggers)};
+		if (w2_items) wanted_caps[2] = static_cast<int>(w2_items);
 		for (const auto& note : chosen.notes)
 		{
 			logger::write("limits: %s", note.c_str());
@@ -957,7 +962,8 @@ namespace limits
 			if (!manager_verified) logger::write("limits: FightStyles and StyleEvents unverified; shared manager unchanged (FightStyles 20..127, StyleEvents 1065..8192; stock 19/1064)");
 		}
 		if (chosen.effect_curves > stock_effect_curves) raise_curves(chosen.effect_curves);
-		if (chosen.item_enhancements > stock_item_enhancements && base) raise_items(chosen.item_enhancements);
+		// W2 owns the item enhancement pool when its layout is installed (item_capacity); the stock raise stays out.
+		if (!w2_items && chosen.item_enhancements > stock_item_enhancements && base) raise_items(chosen.item_enhancements);
 	}
 
 	void register_resource_agreement()

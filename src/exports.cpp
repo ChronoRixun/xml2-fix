@@ -118,6 +118,8 @@
 #include "resident_stats.hpp"
 #include "patch_transaction.hpp"
 #include "entity_capacity.hpp"
+#include "save_limits.hpp"
+#include "native_save_layout.hpp"
 #include "postgame.hpp"
 #include "review_menu.hpp"
 #include "cutscene_mouse.hpp"
@@ -276,7 +278,7 @@ namespace
 		// skip branches, the zone placement file's bytes), used from the first save menu on. After new_game, whose
 		// [Game] SaveFolder re-points the folder the card builds at start-up and this reads at its first file
 		// operation. The entity-capacity install chooses the native save layout before the seam is contributed.
-		entity_capacity::prepare(startup, game);
+		native_save_layout::prepare(startup, game);
 		save_format::contribute(startup, game);
 		limits::contribute(startup, game, entity_capacity::owns_arena_teardown());
 		entity_capacity::contribute(startup, game);
@@ -289,7 +291,8 @@ namespace
 		const auto committed = startup.commit();
 		logger::write("startup transaction: %s (%s)", patch_transaction::name(committed), startup.report().c_str());
 		entity_capacity::after_commit(committed == patch_transaction::outcome::committed, committed == patch_transaction::outcome::rollback_failed);
-		if (!save_format::startup_allowed() || !entity_capacity::startup_allowed()) return;
+		native_save_layout::after_commit(committed);
+		if (!native_save_layout::startup_allowed() || !save_format::startup_allowed() || !entity_capacity::startup_allowed()) return;
 		// R1 uses the published entity layout for its strict actor-capacity check.
 		patch_transaction::transaction sounds;
 		char_sounds::contribute(sounds, game);
@@ -496,7 +499,7 @@ namespace
 			const auto handover = death_switch::capability();
 			gameplay_agreement::register_rule(gameplay_capabilities::death_switch_clear_id, death_switch_rules::revision, handover.values, handover.verified);
 		}
-		objective_text::install(game);
+		if (!save_limits::installed()) objective_text::install(game);
 		// Before any of XMen2.exe's own code runs, as the engine limit adjuster must be: this DLL is a
 		// static import of libIGDisplay.dll, which XMen2.exe imports statically, so Windows runs this
 		// DllMain while it loads the process - before the exe's entry point (0x6725f4, the CRT start-up
@@ -670,9 +673,9 @@ BOOL WINAPI DllMain(HINSTANCE instance, const DWORD reason, LPVOID)
 	{
 		DisableThreadLibraryCalls(instance);
 		install();
-		if (!game_version::startup_allowed() || !save_format::startup_allowed() || !entity_capacity::startup_allowed())
+		if (!native_save_layout::startup_allowed() || !game_version::startup_allowed() || !save_format::startup_allowed() || !entity_capacity::startup_allowed())
 		{
-			const std::string startup_reason = !game_version::startup_allowed()
+			const std::string startup_reason = !native_save_layout::startup_allowed() ? "The requested W2 native save layout could not be installed.\n" + native_save_layout::startup_error() : !game_version::startup_allowed()
 				? std::string(game_version::startup_error())
 				: !save_format::startup_allowed() ? "The required LC save/trivia hooks could not be installed.\n" + save_format::startup_error()
 				: "The entity-capacity install could not be certified.\n" + entity_capacity::startup_error();

@@ -34,6 +34,7 @@
 // Events are bounded sampled transitions at keyboard polls (100ms), not hooks:
 // short transitions between samples may be missed. Script errors are unavailable.
 #include "frame_rate_rules.hpp"
+#include "save_layout_view.hpp"
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -499,18 +500,22 @@ namespace test_state_rules
 			auto mission = get<address>(0x72b108);
 			if (mission && *mission && get<address>(*mission) == 0x6892d4u)
 			{
-				auto n = get<unsigned>(*mission + 0x7d78);
-				if (n && *n <= 75)
+				const auto& layout = save_layout_view::objectives();   // the installed layout's pool, index and state array (W2-L-12)
+				auto n = get<unsigned>(*mission + layout.count_offset);
+				if (n && *n <= layout.objectives_per_act)
 				{
 					std::vector<objective> out;
 					bool valid = true;
 					for (unsigned i = 0; i < *n; ++i)
 					{
-						address rec = *mission + 8 + i * 0x1ac;
+						const address pool = layout.pool_address ? layout.pool_address : *mission + layout.pool_offset;
+						address rec = pool + i * layout.record_size;
 						auto nm = text(rec, 32);
-						auto ix = get<unsigned char>(rec + 0x1a9);
+						std::optional<unsigned> ix;
+						if (layout.wide_index) { if (layout.wide_index[i] != 0xffff) ix = layout.wide_index[i]; }
+						else if (auto byte = get<unsigned char>(rec + layout.index_offset)) ix = *byte;
 						auto goal = get<unsigned char>(rec + 0x1aa);
-						auto b = ix ? get<unsigned char>(0x72b118 + *ix) : std::nullopt;
+						auto b = ix && *ix < layout.objectives ? get<unsigned char>(layout.state_bytes + *ix) : std::nullopt;
 						if (!nm || !b || !goal)
 						{
 							valid = false;

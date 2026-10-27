@@ -12,11 +12,19 @@
 #include "log.hpp"
 #include "patch_transaction.hpp"
 #include "save_format.hpp"
+#include "save_manager.hpp"
+#include "item_capacity.hpp"
+#include "save_limits.hpp"
+#include "objective_text.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <map>
+#ifdef XML2_SAVE_STARTUP_FAULT_TEST
+#include "../test/w2_startup_faults.hpp"
+#define VirtualAlloc w2_startup_faults::allocate
+#endif
 
 namespace entity_capacity
 {
@@ -27,6 +35,7 @@ namespace entity_capacity
 	{
 		descriptor published = stock_descriptor;
 		descriptor prepared_descriptor = stock_descriptor;
+		save_format_rules::native_profile prepared_profile = save_format_rules::e10a2_profile;
 		bool requested = false, prepared = false, install_published = false, fatal = false;
 		// [Online] FastTransfer: requested-only; both peers must agree (gameplay agreement, docs/online-campaign-transfer.md).
 		bool fast_requested = false, fast_installed = false;
@@ -34,7 +43,7 @@ namespace entity_capacity
 		fallback_cause failure_cause = fallback_cause::internal; // picks the advice in the fallback warning
 		entity_owners::set owners;
 		std::uint8_t* allocator_backing = nullptr;  // 0x189218 bytes, zero-filled before every construction
-		std::uint8_t* save_backing = nullptr;       // 0x80c24 bytes, the prepared CMap save-manager claim
+		std::uint8_t* save_backing = nullptr;       // prepared_profile.manager_size bytes, CMap save-manager claim
 		claim_state claim = claim_state::unprepared;
 		std::atomic<unsigned> claim_rejections{0}, factory_failures{0}, transfer_refusals{0};
 
@@ -116,14 +125,14 @@ namespace entity_capacity
 		void* __cdecl AllocatePreparedSaveManager(std::uint32_t size, std::uint32_t pool, std::uint32_t tag)
 		{
 			(void)pool; (void)tag;
-			const auto decision = claim_allocate(claim, size, prepared_descriptor.raised ? e10a2_manager_size : 0);
+			const auto decision = claim_allocate(claim, size, prepared_descriptor.raised ? prepared_profile.manager_size : 0);
 			if (decision != claim_state::claimed)
 			{
 				claim_rejections.fetch_add(1);
 				fail_stop(claim == claim_state::poisoned ? "the save-manager claim is poisoned" : "the save-manager claim was requested in an unexpected state or size");
 			}
 			claim = claim_state::claimed;
-			std::memset(save_backing, 0, e10a2_manager_size);
+			std::memset(save_backing, 0, prepared_profile.manager_size);
 			return save_backing;
 		}
 
@@ -398,12 +407,19 @@ namespace entity_capacity
 				failure = "the startup transaction could not be rolled back; prepared owners and backing retained";
 				fatal = true;
 			};
+			if (std::string_view(prepared_profile.layout_id) == "W2" && (!save_manager::contribute_w2(c, failure) || !item_capacity::contribute_w2(c, failure) || !save_limits::contribute_w2(c, failure))) return false;
 			return true;
 		}
 	}
 
-	void prepare(patch_transaction::transaction&, HMODULE game)
+	void prepare(patch_transaction::transaction& transaction, HMODULE game)
 	{
+		prepare(transaction, game, save_format_rules::e10a2_profile);
+	}
+
+	void prepare(patch_transaction::transaction&, HMODULE game, const save_format_rules::native_profile& profile)
+	{
+		prepared_profile = profile;
 		requested = ini::flag(L"Limits", L"EntityCapacity", false);
 		fast_requested = requested && ini::flag(L"Online", L"FastTransfer", false);
 		if (!requested)
@@ -422,7 +438,7 @@ namespace entity_capacity
 			return;
 		}
 		allocator_backing = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, allocator_layout::object_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
-		save_backing = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, e10a2_manager_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+		save_backing = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, prepared_profile.manager_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
 		if (!allocator_backing || !save_backing)
 		{
 			failure = "cannot reserve the allocator/save-manager backing";
@@ -459,22 +475,31 @@ namespace entity_capacity
 			return;
 		}
 		built_ok = true;
-		save_format::use_native_profile(save_format_rules::e10a2_profile);
+		save_format::use_native_profile(prepared_profile);
 		logger::write("entity capacity: prepared actor %u / generic %u / world %u (ten-bit indices, generations 1..0x%X); allocator %lu bytes, World %p, Grid %p, query manager %p, save manager %lu bytes",
 		              prepared_descriptor.actors, prepared_descriptor.generic, prepared_descriptor.world, generation_max, static_cast<unsigned long>(allocator_layout::object_size),
-		              owners.world, owners.grid, owners.query_manager, static_cast<unsigned long>(e10a2_manager_size));
+		              owners.world, owners.grid, owners.query_manager, static_cast<unsigned long>(prepared_profile.manager_size));
 	}
 
 	bool owns_arena_teardown() { return prepared; }
+	bool prepared_for_w2() { return prepared && built_ok && !fatal && std::string_view(prepared_profile.layout_id)=="W2"; }
+	unsigned zone_record_count() {
+		unsigned count=0;
+		if(install_published&&save_backing&&claim==claim_state::in_use)
+			patch_transaction::read_memory(address_of(save_backing)+prepared_profile.record_count*prepared_profile.record_size+4,&count,4);
+		return count;
+	}
 	bool fast_transfer_active() { return fast_installed; }
 
-	void contribute(patch_transaction::transaction& transaction, HMODULE)
+	void contribute(patch_transaction::transaction& transaction, HMODULE game)
 	{
 		if (!prepared || !built_ok) return;
 		built_ok = false;
 		// save_format already chose the E10A2 profile at preparation: failing to join the transaction now would leave a
 		// mixed layout, so it is fatal (startup refused), never a silent stock fallback.
 		if (!transaction.add(std::move(built))) { failure = "the startup transaction was sealed before the capacity install joined it"; fatal = true; }
+		if (std::string_view(prepared_profile.layout_id) == "W2" && ini::flag(L"Game", L"ObjectiveDescriptions", false) && !objective_text::contribute(transaction, game, true))
+		{ failure = "W2 objective descriptions could not join startup"; fatal = true; patch_transaction::contribution refuse; refuse.owner = failure; refuse.requires_written.push_back({0xffffffff, failure}); transaction.add(std::move(refuse)); }
 	}
 
 	void after_commit(const bool committed, const bool rollback_failed)

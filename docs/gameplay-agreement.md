@@ -273,3 +273,13 @@ Rule 50 (`ResidentStats`, `[Limits] ResidentStats=320`) revision 1 advertises `{
 ### Shared style manager (rules 35 and 53)
 
 `[Limits] FightStyles` (20..127; stock 19) contributes rule 35 with values `{N,0,0,0}`: revision 1 through 32, revision 2 above 32 for multiword bitmap clears. `[Limits] StyleEvents` (1065..8192; stock 1064) contributes assigned rule 53, revision 1, values `{E,0,0,0}`. Each successful key is requested-only. Both absent/stock add neither rule. Because both capacities occupy one allocation, an invalid key or failed transaction leaves both unchanged and registers both rules unverified, including the otherwise absent partner. Mismatches refuse both directions and name FightStyles or StyleEvents, also when locally disabled. See [fight-styles.md](fight-styles.md) and [style-events.md](style-events.md).
+
+Rule47 NativeSaveLayout is assigned to W2, revision1. It registers only for
+verified `[Save] Format=lc`, `[Limits] EntityCapacity=1`, `SaveLayout=w2`; failed
+requests poison admission. Effective values are
+`{ordinal | zone_records<<8 | structural_revision<<16,
+definitions | enhancement_records<<16, instances | world_slots<<16,
+objectives | talent_multiplier<<16}`. W2 currently uses
+`{0x10802,0x10000400,0x4000400,0xc80400}`. The absent SaveLayout key adds no
+entry and preserves the released digest. Rule1 alone cannot distinguish these
+native streams. See [limits-wave2.md](limits-wave2.md#step-8-dll-selection-admission-and-builder-contract).

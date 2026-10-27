@@ -111,6 +111,7 @@ add_library(xml2_fix SHARED
 	src/options_menu.cpp
 	src/new_game.cpp
 	src/save_format.cpp
+	src/zone_strings.cpp
 	src/save_content_guards.cpp
 	src/save_trace.cpp
 	src/postgame.cpp
@@ -154,6 +155,12 @@ add_library(xml2_fix SHARED
 	src/power_pools.cpp
 	src/entity_capacity.cpp
 	src/actor_pools.cpp
+	src/state_records.cpp
+	src/save_manager.cpp
+	src/item_capacity.cpp
+	src/save_limits.cpp
+	src/native_save_layout.cpp
+	src/smart_entities.cpp
 	src/entity_owners.cpp
 	src/entity_transfer.cpp
 	src/entity_world.cpp
@@ -277,6 +284,9 @@ target_link_libraries(lcsave_test PRIVATE lcsave)
 # a real build's tables (no engine, no game). Takes arguments; run_native.py does not run it.
 add_executable(lcsave_zone_records test/lcsave_zone_records.cpp)
 target_link_libraries(lcsave_zone_records PRIVATE lcsave)
+# W2 gate G3 offline: real saves through the W2 / E10A2 loaders and savers on a real build's tables (no engine).
+add_executable(lcsave_real_saves test/lcsave_real_saves.cpp)
+target_link_libraries(lcsave_real_saves PRIVATE lcsave)
 add_executable(xml2_confirmation_release_test test/confirmation_release_test.cpp)
 target_include_directories(xml2_confirmation_release_test PRIVATE src)
 
@@ -455,6 +465,12 @@ target_link_options(xml2_test_mode_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 add_executable(xml2_entity_transfer_test test/entity_transfer_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm" src/entity_transfer.cpp)
 target_include_directories(xml2_entity_transfer_test PRIVATE src)
 target_link_options(xml2_entity_transfer_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# W2 state-record stride, constructors and copies executed at their retail addresses.
+add_executable(xml2_state_records_test test/state_records_test.cpp src/state_records.cpp
+    src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_state_records_test PRIVATE src)
+target_link_options(xml2_state_records_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/reliable_receive_fixture.asm"
 ".386
@@ -817,3 +833,29 @@ add_executable(xml2_power_pools_host test/power_pools_host.cpp src/power_pools.c
 target_include_directories(xml2_power_pools_host PRIVATE src)
 target_link_options(xml2_power_pools_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
 target_compile_options(xml2_power_pools_host PRIVATE /UNDEBUG)
+# W2-E15-13: CSmartEntMgr replaced by a DLL object at 2048 x 0x20 records. The retail methods are copied from the exe
+# given on the command line (or XML2_FIX_TEST_EXE) and run at their own addresses next to the replacement; without
+# the exe only the W2 cases run (the retail differential is SKIPPED).
+add_executable(xml2_smart_entities_test test/smart_entities_test.cpp src/smart_entities.cpp src/patch_transaction.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_smart_entities_test PRIVATE src)
+target_link_options(xml2_smart_entities_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# W2 zone-string capacity: guarded contribution, native intern/getter and copied GC in a private fixture.
+add_executable(xml2_zone_strings_test test/zone_strings_test.cpp src/zone_strings.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_zone_strings_test PRIVATE src)
+target_link_options(xml2_zone_strings_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# W2 generated native-save ledger and union-host execution (no game process).
+add_executable(xml2_save_manager_test test/save_manager_test.cpp src/save_manager.cpp src/item_capacity.cpp src/save_limits.cpp src/objective_text.cpp src/state_records.cpp
+    src/smart_entities.cpp src/zone_strings.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_save_manager_test PRIVATE src)
+target_link_options(xml2_save_manager_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_item_capacity_test test/item_capacity_test.cpp src/item_capacity.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_item_capacity_test PRIVATE src)
+target_link_options(xml2_item_capacity_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+add_executable(xml2_save_limits_test test/save_limits_test.cpp src/save_limits.cpp src/objective_text.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_save_limits_test PRIVATE src)
+target_link_options(xml2_save_limits_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)

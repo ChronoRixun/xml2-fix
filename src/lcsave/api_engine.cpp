@@ -96,6 +96,11 @@ namespace lcsave
 
 	Result old_profile_to_new(const std::vector<std::uint8_t>& old_stream, const Tables& tables, const NewFileContext& context)
 	{
+		return old_profile_to_new(old_stream, tables, context, retail_layout);
+	}
+
+	Result old_profile_to_new(const std::vector<std::uint8_t>& old_stream, const Tables& tables, const NewFileContext& context, const NativeLayout& native)
+	{
 		Result r;
 		if (!tables.loaded())
 		{
@@ -103,7 +108,7 @@ namespace lcsave
 			return r;
 		}
 		detail::ConvertState state;
-		r.ok = guarded(r.error, [&] { r.bytes = detail::profile_to_new(old_stream, *tables.data, context, state); });
+		r.ok = guarded(r.error, [&] { r.bytes = detail::profile_to_new(old_stream, *tables.data, context, state, native); });
 		if (!r.ok)
 		{
 			r.refused = 1;
@@ -114,13 +119,18 @@ namespace lcsave
 
 	Result new_to_old_profile(const std::vector<std::uint8_t>& new_file, const Tables& tables)
 	{
+		return new_to_old_profile(new_file, tables, retail_layout);
+	}
+
+	Result new_to_old_profile(const std::vector<std::uint8_t>& new_file, const Tables& tables, const NativeLayout& native)
+	{
 		Result r;
 		if (!tables.loaded())
 		{
 			r.error = "tables not loaded";
 			return r;
 		}
-		r.ok = guarded(r.error, [&] { r.bytes = detail::reverse_profile(new_file, *tables.data); });
+		r.ok = guarded(r.error, [&] { r.bytes = detail::reverse_profile(new_file, *tables.data, native); });
 		if (!r.ok)
 		{
 			r.refused = 1;
@@ -427,18 +437,7 @@ namespace lcsave
 				std::memcpy(image.data() + 0x80, &size, 4);
 				image.insert(image.end(), stream.begin(), stream.end());
 			}
-			const auto old = detail::read_slot(image.data(), image.size(), native);
-			auto count = [&](const detail::OldInstance& instance)
-			{
-				++out.instances;
-				for (const auto& list : instance.lists) out.attached_enhancements += static_cast<std::uint32_t>(list.size());
-			};
-			for (const auto& instance : old.carried) count(instance);
-			for (const auto& world : old.world) count(world.instance);
-			for (const auto& hero : old.heroes) for (const auto& instance : hero.equipment.equipped) count(instance);
-			// Every restore block is serialized and read even when its valid flag is clear. Include it conservatively.
-			for (const auto& restore : old.restore) for (const auto& instance : restore.equipment.equipped) count(instance);
-			out.world_items = static_cast<std::uint32_t>(old.world.size());
+			out = detail::model_demand(detail::read_slot(image.data(), image.size(), native));
 		});
 	}
 
@@ -452,12 +451,21 @@ namespace lcsave
 		NativeLoadDemand demand;
 		if (!tables.loaded()) { error = "tables not loaded"; return false; }
 		if (!native_load_demand(stream, demand, error, native)) return false;
-		if (demand.instances > 256 || demand.attached_enhancements > 375 || demand.world_items > 150)
-		{ error = "native instance/enhancement/world pool exhausted"; return false; }
+		// the layout's pools (RETAIL / E10A2 256 / 375 / 150; W2 1024 / 4096 / 1024), never literals
+		const auto refusal = detail::demand_refusal(demand, native);
+		if (!refusal.empty()) { error = refusal; return false; }
 		NewFileContext context;
 		const auto result = old_stream_to_new(stream, tables, context, native);
 		error = result.error;
 		return result.ok;
 	}
 
+
+	std::string representable(const std::vector<std::uint8_t>& file, const Tables& tables, const NativeLayout& target)
+	{
+		if (!tables.loaded()) return "tables not loaded";
+		std::string why, error;
+		if (!guarded(error, [&] { why = detail::representable(file, *tables.data, target); })) return error;
+		return why;
+	}
 }

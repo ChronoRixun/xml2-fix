@@ -130,7 +130,7 @@ namespace save_core_rules
  }};
  // The compare each capture bound bridge replays under the installed native profile. Every immediate and every record
  // displacement is the profile's (deviation 13, plan section 10): the retail bytes are the guard, never the replay.
- //   0x41a427 cmp ecx,0x3800              zone string arena (not part of the entity layout: retail)
+ //   0x41a427 cmp ecx,zone_arena          zone string arena of the installed profile
  //   0x466659 cmp ecx,states              ECX = the record's state count
  //   0x46668a cmp eax,dynamic             EAX = the dynamic list count
  //   0x4666e7 cmp esi,states              ESI = the record's state count again (NOT the smart bound)
@@ -143,6 +143,7 @@ namespace save_core_rules
   auto put=[&](std::size_t at,std::uint32_t v){std::memcpy(out.data()+at,&v,4);};
   switch(site.va)
   {
+  case 0x41a427: put(2,p.zone_arena); break;
   case 0x466659: put(2,p.states); break;
   case 0x46668a: put(1,p.dynamic); break;
   case 0x4666e7: put(2,p.states); break;

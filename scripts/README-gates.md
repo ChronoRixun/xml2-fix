@@ -46,3 +46,95 @@ dinput.map) and this tree's /MAP DLL (`XML2_FIX_LIMITS_DLL`, default `native-map
 the run023 ini: OFF and `ModelPools=x4` alone must give the reference's agreement record and limits log lines; with
 `IGBCache=1024`, `ResourceNames=2048` and `ModelHandles=8192` the three raises must install and rule 31 must register.
 It exports and restores the game's registry key around each run.
+
+W2 step 3 has an additional mapped-retail union test and text gate. It keeps W2 unselectable:
+
+```powershell
+native/bin/Release/xml2_save_manager_test.exe $env:XML2_FIX_TEST_EXE build/w2
+python scripts/check_w2_save_text.py $env:XML2_FIX_TEST_EXE build/w2-text.bin build/w2-gc.bin
+```
+
+For the OFF proof, build the pre-change checkout and this checkout with `/MAP`, then run
+`scripts/prove_w2_step3_off.py` with their DLL directories, the union host, retail exe,
+engine DLL directory, Data input directory, a workspace output directory and `build/w2-pages.txt`.
+It compares every byte of the W2 write pages and the agreement record. DLL symbols and ASLR
+addresses are normalized explicitly; referenced generated-code allocations must match too.
+The registry export must succeed and its before/after bytes must match. All copies and dumps
+stay under the output directory; no game starts.
+
+
+W2 steps 4/5 add the item-capacity fixture and a separate whole-text gate:
+
+```powershell
+native/bin/Release/xml2_item_capacity_test.exe $env:XML2_FIX_TEST_EXE build/items
+python scripts/check_w2_items_text.py $env:XML2_FIX_TEST_EXE build/items
+native/bin/Release/xml2_save_manager_test.exe $env:XML2_FIX_TEST_EXE build/w2-items
+python scripts/check_w2_save_text.py $env:XML2_FIX_TEST_EXE build/w2-items-text.bin build/w2-items-gc.bin
+```
+
+The item fixture emits every copied instruction owner before installing its
+external dependency fakes. Its gate checks the 469 reviewed item rows plus all
+52 omissions, every complete-owner hash, and the entire patched text and copied
+owners for old class-owned operands. The generator can be rerun with
+`python scripts/generate_w2_items.py <retail exe> <SPEC-old sites.json>`; the
+reviewed `funcs.txt` must sit beside that research ledger. The retail SHA-1 is
+required. No extracted function bodies are emitted into source.
+
+Use `build/w2-items-pages.txt` as the page list for the same OFF proof described
+above. W2 remains unselectable; ordinary startup still selects E10A2. Full
+capacity affix coverage uses exhaustive draws separately from the 1000-drop,
+375-offered-ID fixture (see the implementation notes in limits-wave2.md).
+
+
+W2 steps 6/7 add the objective/talent execution fixture and text gate:
+
+```powershell
+native/bin/Release/xml2_save_limits_test.exe $env:XML2_FIX_TEST_EXE build/save-limits
+python scripts/check_w2_save_limits_text.py $env:XML2_FIX_TEST_EXE build/save-limits
+native/bin/Release/xml2_save_manager_test.exe $env:XML2_FIX_TEST_EXE build/w2-complete
+```
+
+The save-manager test now commits steps 3 through 7 together. The new fixture
+compares 2500 retail sort permutations, executes high objective indices and
+snapshot/side-stack copies, all 256 talent slots, generation rollover and the
+M/cap/endpoint stubs. Its dump precedes dependency fakes. Recreate the instruction
+plan with `generate_w2_save_limits.py <retail exe> <SPEC-old sites.json>` (the
+reviewed funcs.txt must sit beside the ledger). No game is launched.
+
+Use the union of `build/save-limits-pages.txt` and `build/w2-complete-pages.txt`
+for the OFF proof, with `build/step67-baseline` as the pre-change DLL/map folder.
+W2 remains unselectable; the builder key and rule47 are step8.
+
+
+The durable-parity test writes `actual.*` next to each vector. Point
+XML2_FIX_LEGACY_VECTORS_DIR at a writable copy inside the workspace when the
+source vector folder is read-only; this task used build/native-vectors67.
+
+
+Step8 startup/admission gate (Win32 Release, no game launch): configure
+`XML2_SAVE_STARTUP_FAULT_TEST=ON` for the opt-in fault DLL, build ALL_BUILD below
+normal priority with `/m:1 /nr:false`, then run:
+
+```powershell
+python scripts/check_w2_startup.py native/bin/Release build/step8-startup
+```
+
+The script expects the owned engine/Data copies produced by the prior OFF proof
+under build/off-proof67-final and the pre-change DLL/map under
+build/step8-baseline. All run folders are workspace-owned, all host desktops are
+private, and processes exit after collecting evidence. Optional final CASE runs
+just that configuration. The production DLL contains no fault hooks; the fault
+DLL snapshots the complete owned image before/after the union for T12. Rule47
+peer checks call the current and baseline DLLs' compiled description routines.
+`save layout` is the standalone pipe telemetry command; ordinary `status` also
+includes its exact W2 segment. Builder output/validation contract is documented
+in limits-wave2.md. Live-game gates are not executed by this task.
+
+
+Every step8 case uses a fresh UUID directory under OUTPUT_DIR; results.json
+names the case artifacts. Unknown CASE arguments fail. The default20-case run
+includes a negative control that must reject missing current snapshots.
+For all three absent-key OFF configurations, run the existing proof with
+XML2_FIX_OFF_CASE=e10a2 (default), retail, or native. Use build/step8-pages.txt;
+the reference is build/step8-baseline. The proof's union hosts use private
+desktops and compare symbols/relocations plus complete generated allocations.
