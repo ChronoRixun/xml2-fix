@@ -554,6 +554,8 @@ namespace online_room
 		}
 		browser::room_state room_progress;
 		browser::presence_pacer pacer;
+        int native_mode = 0; // accepted menu mode: 0 legacy, 1 campaign, 2 Danger Room
+        bool native_posting = false; // menu Host stays unjoinable until actual native posting succeeds
 		core::room_metadata listed; // what the broker has (sent with host / the last presence)
 		DWORD looked = 0;
 		// The room code, as the host lobby menus show it ("Online room code: XXXX-XXXX"; the game keeps its own copy).
@@ -1253,9 +1255,15 @@ namespace online_room
 					return n;
 				}
 			}
-			return real_recvfrom(s, data, length, flags, from, size);
-		}
-		// Join Game -> Connect by IP ([Del]) -> Enter IP takes digits and dots only (and no empty Done), so a code cannot
+            const int received = real_recvfrom(s, data, length, flags, from, size);
+            // Menu auto-admission discovery is tunnel-only. A UDP packet with
+            // a forged virtual source must never seed the native room table.
+            if (menu_client && !configured_code.empty() && received >= 3 && data && static_cast<unsigned char>(data[2]) == 0x18) {
+                WSASetLastError(WSAEWOULDBLOCK); return SOCKET_ERROR;
+            }
+            return received;
+        }
+        // Join Game -> Connect by IP ([Del]) -> Enter IP takes digits and dots only (and no empty Done), so a code cannot
 		// be typed there. With [Online] JoinCode set, anything that is not a whole dotted address (e.g. "0") joins the
 		// room: the entry's copy into the game's address buffer (0x5cf078: call 0x5604f0(0xa3bc1c, 15, text)) gets the
 		// host's virtual address. A whole address is the game's as before (LAN / direct IP still work).
@@ -1287,7 +1295,7 @@ namespace online_room
 		// real address around the room (seen live: the joiner picked it and played over plain UDP, no NAT traversal).
 		void* __fastcall master_list_entry(void* table, void*)
 		{
-			if (!configured_code.empty() && !session_bound())
+			if (!configured_code.empty() && (menu_client || !session_bound()))
 			{
 				logger::write_once("online-master-list", "online: Join Game lists room %s's game only - master server entries are not listed while joining by code",
 				                   online_security::redact_join_code(configured_code).c_str());
@@ -1346,6 +1354,8 @@ namespace online_room
 			const auto g = read_game();
 			room_progress.observe(g);
 			auto desired = browser::current(listed, configured_room_name, g, room_progress, join_in_progress::installed(), status_players());
+            if (native_posting) desired.joinable = false;
+            if (native_mode) desired.game_mode = native_mode == 2 ? "danger_room" : "campaign";
 			online_status::room(metadata.public_room, desired.name);
 			if (pacer.may_send(now))
 			{
@@ -1409,7 +1419,7 @@ namespace online_room
             room_ready = ice_ready = cert_ready = false; cert_identity.clear(); cert_expires = 0;
             room_code.clear(); host_id.clear(); configured_code.clear();
             code_text[0] = short_code_text[0] = 0;
-            room_progress = {}; pacer = {}; listed = {}; looked = 0;
+            room_progress = {}; pacer = {}; listed = {}; looked = 0; native_posting = false; native_mode = 0;
             turn_from_cache = turn_refreshed = false;
             last_menu.clear(); last_menu_object = lobby_handle = 0; lobby_shown = false;
         }
@@ -1450,10 +1460,32 @@ namespace online_room
         if (!browser::valid_room_name(name)) { client.refuse("invalid_room_name"); return false; }
         if (!begin_operation(browser::operation::host)) return false;
         hosting = true; configured_code.clear(); configured_room_name = browser::trim(name);
-        metadata.public_room = public_room;
+        metadata.public_room = public_room; metadata.max_players = 4; native_posting = false; native_mode = 0;
         room_progress = {}; pacer = {};
         listed = browser::current(metadata, configured_room_name, read_game(), room_progress, join_in_progress::installed(), 1);
         return true;
+    }
+    bool host_native(const std::string& name, bool public_room, int max_players, bool danger_room) {
+        if (name.empty() || name.size() > 31 || max_players < 2 || max_players > 4 || !host(name, public_room)) return false;
+        metadata.max_players = listed.max_players = max_players;
+        native_mode = danger_room ? 2 : 1;
+        metadata.game_mode = listed.game_mode = danger_room ? "danger_room" : "campaign";
+        native_posting = true; listed.joinable = false;
+        return true;
+    }
+    bool host_posted(browser::ticket generation) {
+        if (!wanted || !hosting || !native_posting || generation != client.view().generation ||
+            client.view().state != browser::phase::room || !client.view().authenticated) return false;
+        native_posting = false; looked = room_clock() - 500; return true;
+    }
+    bool admission_target(browser::ticket generation, std::uint32_t& address) {
+        address = 0;
+        if (!menu_client || hosting || !wanted || generation != client.view().generation ||
+            client.view().state != browser::phase::room || !client.view().authenticated ||
+            !room_ready || !cert_ready || !ice_ready || broker_gone || host_id.empty() || !members.contains(host_id)) return false;
+        const auto* tunnel = by_address(members.address(host_id));
+        if (!tunnel || !tunnel->connected || tunnel->connection == k_HSteamNetConnection_Invalid || tunnel->id != host_id) return false;
+        address = tunnel->address; return core::is_virtual(address);
     }
     bool resolve(const std::string& typed) {
         const auto code = core::join_code(typed);
@@ -1869,6 +1901,9 @@ namespace online_room
     void ui_tick() {}
     bool list() { return false; }
     bool host(const std::string&, bool) { return false; }
+    bool host_native(const std::string&, bool, int, bool) { return false; }
+    bool host_posted(online_browser_core::ticket) { return false; }
+    bool admission_target(online_browser_core::ticket, std::uint32_t& address) { address = 0; return false; }
     bool resolve(const std::string&) { return false; }
     bool retry() { return false; }
     void cancel() {}

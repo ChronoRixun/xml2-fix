@@ -1,0 +1,418 @@
+// Real retail Host setup/post, discovery and admission paths with invented
+// menu/dialog, save-image, participant, clock and transport services. No game.
+namespace native_fixture {
+using tick_t=void(__fastcall*)(void*,void*);
+void retail_restore(unsigned va);
+unsigned searches=0,posts=0,allocations=0,departures=0,freed=0,published=0,save_requests=0;
+int maximum=0,difficulty=1;bool selected_danger_room=false;
+bool tunnel_ready=false,allocate_ok=true,post_ok=true,save_accept=false,queue_ok=true,host_refuse=false;
+std::array<unsigned,8> saves{};
+unsigned* save_object=saves.data();
+void* __cdecl save_get() { return &save_object; }
+void __fastcall save_process(void*,void*,int operation) { assert(operation==3);++save_requests;if(save_accept) put(reinterpret_cast<void*>(0xa3bc40),0x2250,0x123400); }
+std::array<unsigned char,0x2100> pool{};
+std::array<unsigned char,0xc0> person{},peer{};
+std::array<unsigned char,12> address{};
+std::array<unsigned,40> dialogs{};
+unsigned* dialog=dialogs.data();
+std::vector<std::string> choices;
+bool host_native(const std::string& name,bool visibility,int limit,bool danger_room) { maximum=limit;selected_danger_room=danger_room;if(host_refuse) return false;return menu_host(name,visibility); }
+bool target(bm::ticket ticket,std::uint32_t& result) {
+    result=0;if(!tunnel_ready || ticket!=menu_view().generation || menu_view().state!=bm::phase::room || !menu_view().authenticated) return false;
+    result=0x0a4d0001;return true;
+}
+bool posted(bm::ticket ticket) { if(ticket!=menu_view().generation || !post_ok) return false;++published;return true; }
+const online_menus::broker_api api{menu_available,menu_view,menu_tick,menu_list,menu_host,menu_resolve,menu_retry,menu_cancel,menu_leave,menu_version,menu_take_preset,menu_refresh_due,host_native,target,posted};
+void* __cdecl string_pool() { return pool.data(); }
+bool __fastcall input_ok(void*,void*,unsigned,int) { return true; }
+void __fastcall pop(void*,void*,const char* name,int) {
+    const auto* shown=current() ? static_cast<char*>(current())+0xc : "";
+    if(name && std::string_view(name)!=shown) calls.push_back(std::string("request:")+name);
+    else { calls.push_back("native-pop");set_current(nullptr); }
+}
+const char* __fastcall console_parse(void*,void*,const char* name) { return name; }
+void* __cdecl dialog_get() { return &dialog; }
+void __fastcall dialog_flag(void*,void*,int) {}
+void __fastcall dialog_title(void*,void*,const char*) { choices.clear(); }
+void __fastcall dialog_add(void*,void*,const char*,const char* command,int,int,int,int) { choices.emplace_back(command); }
+void __fastcall dialog_select(void*,void*,int) {}
+bool __fastcall dialog_busy(void*,void*) { return false; }
+void __fastcall dialog_show(void*,void*) {}
+void __fastcall set_difficulty(void*,void*,int value) { difficulty=value; }
+int __fastcall get_difficulty(void*,void*) { return difficulty; }
+bool __fastcall locked(void*,void*) { return false; }
+void __cdecl free_image(void*) { ++freed; }
+int __cdecl random_byte() { return 1; }
+void* __fastcall local_address(void*,void*) { return address.data(); }
+void __fastcall set_address(void*,void*,void*) {}
+void __fastcall register_person(void*,void*,void*) {}
+int __fastcall controller(void*,void*,int,int) { return 2; }
+void __fastcall one_int(void*,void*,int) {}
+void __fastcall two_ptrs(void*,void*,void*,void*) {}
+int __fastcall handler(void*,void*,int,void*,void*,int,int,int) { return 1; }
+void __fastcall unhandler(void*,void*,int,int) {}
+int __fastcall timer(void*,void*,void*,void*,int) { return 1; }
+void __fastcall untimer(void*,void*,int) {}
+void __fastcall clear_people(void* session,void*,bool) { reinterpret_cast<tick_t>(0x608d10)(static_cast<unsigned char*>(session)+0x26c,nullptr);put(session,0x78,0); }
+void* __fastcall make_person(void* session,void*,int index) {
+    ++allocations;if(!allocate_ok) return nullptr;
+    put(person.data(),0x18,unsigned(index));put(session,0x78,unsigned(reinterpret_cast<std::uintptr_t>(person.data())));return person.data();
+}
+void __fastcall release_people(void* session,void*) { ++departures;clear_people(session,nullptr,false);static_cast<unsigned char*>(session)[0x421]=0; }
+void __fastcall kick_local(void* session,void*,void*,int,int,int,int) { release_people(session,nullptr); }
+void* __fastcall connection(void*,void*,void*,int) { return peer.data(); }
+bool __fastcall connection_live(void*,void*) { return false; }
+void __fastcall connection_mark(void*,void*,bool) {}
+float __fastcall time(void*,void*,int) { return 1.f; }
+std::array<unsigned,12> clock_vt{};
+unsigned* clock_object=clock_vt.data();
+void* __cdecl clock_get() { return &clock_object; }
+void __fastcall session_send(void*,void*,unsigned,void*,int) {}
+unsigned short __stdcall htons_stub(unsigned short n) { return static_cast<unsigned short>((n>>8)|(n<<8)); }
+unsigned __stdcall inet_stub(const char* value) { assert(std::string_view(value)=="10.77.0.1");return 0x01004d0a; }
+int __fastcall game_port(void*,void*) { return 5165; }
+void __fastcall search_send(void*,void*,const unsigned char* destination,int,void* packet) {
+    assert(destination[8]==10 && destination[9]==77 && destination[10]==0 && destination[11]==1);
+    assert(static_cast<unsigned char*>(packet)[16]==0x19);++searches;
+}
+void* __fastcall peer_address(void*,void*) { return address.data(); }
+bool __fastcall same_guid(void*,void*,void*,void*) { return true; }
+unsigned short __fastcall peer_port(void*,void*) { return 5165; }
+bool __fastcall selected_image(void*,void*) { return *reinterpret_cast<void**>(0xa3bc40+0x2250)!=nullptr; }
+void __fastcall option_seed(void*,void*,const char* value) { native_seed.fill(0);std::strncpy(native_seed.data(),value,31); }
+void __fastcall option_title(void*,void*,const char* value) { native_title.fill(0);std::strncpy(native_title.data(),value,63); }
+void __fastcall option_name_format(void*,void*,const char* value,char* output,unsigned size) { std::strncpy(output,value,size-1);output[size-1]=0; }
+bool __fastcall console_queue(void*,void*,const char* line) {
+    calls.push_back(std::string("queue:")+line);
+    if(std::string_view(line)=="openmenu host") { ++posts;return queue_ok; }
+    return true;
+}
+void custom_close() { (*reinterpret_cast<tick_t*>(0x69e438))(child.data(),nullptr); }
+void host_request() { reinterpret_cast<void(__cdecl*)(const char*)>(0x5f1c10)("host"); }
+void restore_services() {
+    retail_restore(0x610d10);retail_restore(0x607c40);retail_restore(0x6097f0);retail_restore(0x60b9d0);
+    AddVectoredExceptionHandler(1,[](EXCEPTION_POINTERS* error)->LONG {
+        if(error->ExceptionRecord->ExceptionCode==EXCEPTION_ACCESS_VIOLATION)
+            std::cerr<<"r6 native fault eip="<<std::hex<<error->ContextRecord->Eip<<" address="<<error->ExceptionRecord->ExceptionInformation[1]<<std::dec<<"\n";
+        if(error->ExceptionRecord->ExceptionCode==EXCEPTION_ACCESS_VIOLATION) {
+            auto* stack=reinterpret_cast<unsigned*>(error->ContextRecord->Esp);
+            for(unsigned i=0;i<12;++i) std::cerr<<std::hex<<stack[i]<<' ';std::cerr<<std::dec<<"\n";
+        }
+        return EXCEPTION_CONTINUE_SEARCH;
+    });
+    redirect(0x5caff0,activated);redirect(0x55c410,console_queue);
+    redirect(*reinterpret_cast<unsigned*>(0x69a81c+8),console_parse);
+    redirect(0x60c6e0,option_seed);redirect(0x60c710,option_title);redirect(0x610e70,option_name_format);
+    redirect(0x5b8a50,no_op);redirect(0x5ad080,no_op);
+    redirect(0x672161,no_op);redirect(0x672170,reinterpret_cast<const void*>(&std::strncpy));
+    redirect(0x5604f0,native_format);redirect(0x602200,string_pool);
+    redirect(*reinterpret_cast<unsigned*>(0x6a236c+0x160),input_ok);
+    redirect(*reinterpret_cast<unsigned*>(0x6a236c+0xe8),sound_stub);
+    redirect(0x5db270,pop);
+    dialogs.fill(0);dialogs[0x14/4]=unsigned(reinterpret_cast<std::uintptr_t>(&dialog_flag));
+    dialogs[0x18/4]=unsigned(reinterpret_cast<std::uintptr_t>(&dialog_title));
+    dialogs[0x1c/4]=unsigned(reinterpret_cast<std::uintptr_t>(&dialog_add));
+    dialogs[0x34/4]=unsigned(reinterpret_cast<std::uintptr_t>(&dialog_select));
+    dialogs[0x68/4]=unsigned(reinterpret_cast<std::uintptr_t>(&dialog_show));
+    dialogs[0x78/4]=unsigned(reinterpret_cast<std::uintptr_t>(&dialog_busy));
+    saves[0x14/4]=unsigned(reinterpret_cast<std::uintptr_t>(&save_process));redirect(0x4b2880,save_get);
+    redirect(0x5eb300,dialog_get);locale_vt[2]=unsigned(reinterpret_cast<std::uintptr_t>(&locale_text));redirect(0x4bdb30,locale_getter);
+    redirect(*reinterpret_cast<unsigned*>(0x689994+0xb0),locked);
+    fake_game_vt[0x268/4]=unsigned(reinterpret_cast<std::uintptr_t>(&get_difficulty));
+    fake_game_vt[0x26c/4]=unsigned(reinterpret_cast<std::uintptr_t>(&set_difficulty));redirect(0x46dce0,game_getter);
+    redirect(0x60a760,local_address);redirect(0x59eb10,set_address);redirect(0x672532,random_byte);
+    for(unsigned routine:{0x615980u,0x615990u,0x6159a0u,0x6159b0u,0x6159e0u}) redirect(routine,no_op);
+    redirect(0x60edb0,handler);redirect(0x60f1e0,unhandler);redirect(0x60af70,timer);redirect(0x60afe0,untimer);
+    redirect(0x612070,clear_people);redirect(0x612a40,make_person);redirect(0x612960,release_people);
+    redirect(0x6133a0,kick_local);redirect(0x560700,free_image);
+    redirect(0x606f90,selected_image);
+    redirect(*reinterpret_cast<unsigned*>(0x69a134+0x38),controller);
+    redirect(*reinterpret_cast<unsigned*>(0x6898c4+0x38),one_int);
+    redirect(*reinterpret_cast<unsigned*>(0x6898c4+0x44),no_op);
+    redirect(*reinterpret_cast<unsigned*>(0x6898c4+0x68),no_op);
+    peer_ui_vt[0x1c/4]=unsigned(reinterpret_cast<std::uintptr_t>(&register_person));redirect(0x615580,peer_ui_getter);
+    redirect(0x615c60,one_int);redirect(0x48cbb0,two_ptrs);redirect(0x60db70,connection);redirect(0x6106e0,connection_live);redirect(0x6106f0,connection_mark);
+    redirect(0x60eec0,reinterpret_cast<void*>(&connection)); // normally unused: an invented connection already exists
+    clock_vt[0x28/4]=unsigned(reinterpret_cast<std::uintptr_t>(&time));redirect(0x55b610,clock_get);
+    redirect(0x6133f0,no_op);redirect(0x610f30,session_send);
+    redirect(0x671f3e,htons_stub);redirect(0x671f38,inet_stub);redirect(0x60d760,game_port);redirect(0x60d9c0,search_send);
+    redirect(0x4bdfa0,peer_address);redirect(0x517c20,same_guid);redirect(0x6106c0,peer_port);
+    redirect(0x6067d0,participant_node_pool_getter);initialize_node_pool();
+    put(int_value.data(),0,0x6905fc);put(reinterpret_cast<void*>(0x6905fc),0x10,0x55d7e0);
+    std::memset(reinterpret_cast<void*>(0xa3bc40),0,0x2310);*reinterpret_cast<unsigned char*>(0xa3bc40)=1;
+    put(reinterpret_cast<void*>(0xa3bc40),4,0xa3df68);
+    put(reinterpret_cast<void*>(0xa53058),0x41c,0xa3df68);put(reinterpret_cast<void*>(0xa53058),0x78,0);
+    put(reinterpret_cast<void*>(0xa3df68),0x1c0,1);
+    std::strcpy(reinterpret_cast<char*>(0xa53058+0x410),"FX06");
+    address.fill(0);address[8]=10;address[9]=77;address[11]=1;
+    put(peer.data(),4,123);put(pool.data(),8,0);
+}
+void screen(const char* name) {
+    put(child.data(),0,std::string_view(name)=="game_options" ? 0x69f65c : 0x69e41c);
+    std::strcpy(reinterpret_cast<char*>(child.data()+0xc),name);child[4]=1;set_current(child.data());
+}
+void action(const char* name) {
+    focused=name;
+    std::strcpy(reinterpret_cast<char*>(pool.data()+0x1008),name);put(text_item.data(),8,1);
+    put(child.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(text_item.data())));
+    mask=0x10;(*reinterpret_cast<tick_t*>(0x69f694))(child.data(),nullptr);mask=0;
+}
+void script(unsigned routine,int argument) {
+    int_value[1]=unsigned(argument);reinterpret_cast<void*(__cdecl*)(void*)>(routine)(nullptr);
+}
+void reply(unsigned count=1,bool wrong=false,bool enabled=true) {
+    // Execute the actual native game-info handler -> actual pool allocation,
+    // version check, sender-address copy and native table insertion.
+    for(unsigned i=0;i<count;++i) {
+        std::array<unsigned char,0x80> payload{};std::strcpy(reinterpret_cast<char*>(payload.data()+0x3e),"FX06");payload[0xf]=1;
+        std::array<unsigned char,0x18> packet{};
+        put(packet.data(),4,unsigned(reinterpret_cast<std::uintptr_t>(payload.data())));
+        put(packet.data(),0xc,0xa3bc40);put(packet.data(),0x10,unsigned(reinterpret_cast<std::uintptr_t>(peer.data())));
+        address[11]=wrong ? 2 : 1;
+        reinterpret_cast<int(__cdecl*)(void*)>(0x6090d0)(packet.data());
+    }
+    if(!enabled) reinterpret_cast<unsigned char*>(0xa3bc40+0x5b4)[0x11]=0;
+}
+void event(int value) {
+    assert(value==8 || value==9);
+    std::array<unsigned char,16> payload{};payload[0]=1;
+    std::array<unsigned char,0x18> packet{};packet[0]=0x1c;
+    put(packet.data(),4,unsigned(reinterpret_cast<std::uintptr_t>(payload.data())));
+    put(packet.data(),0xc,0xa3bc40);put(packet.data(),0x10,unsigned(reinterpret_cast<std::uintptr_t>(peer.data())));
+    // Execute the real native accepted/refused response handler, not a
+    // fabricated callback; success must allocate/mark the native local record.
+    reinterpret_cast<int(__cdecl*)(void*)>(value==8 ? 0x607810 : 0x609ad0)(packet.data());
+}
+
+void cancel_options_in_base() {
+    base_mutation=nullptr;(*reinterpret_cast<int(__fastcall**)(void*,void*)>(0x69f688))(child.data(),nullptr);
+}
+void run(const script_functions_rules::func_entry* registration) {
+    restore_services();
+    auto tick=*reinterpret_cast<tick_t*>(0x69e454);
+    auto post=[&](intent value) { int_value[1]=unsigned(value);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(registration->handler))(nullptr); };
+    auto cancel=[&] { screen("lc_host");post(intent::back);tick(child.data(),nullptr);screen("lc_online");tick(child.data(),nullptr);ticks+=2000; };
+    auto begin=[&] { screen("lc_host");tick(child.data(),nullptr);post(intent::open_room);tick(child.data(),nullptr);assert(calls.back()=="request:game_options");custom_close();screen("game_options");(*reinterpret_cast<lobby_activate_t*>(0x69f66c))(child.data(),nullptr,0); };
+    // All Game Options selection commands run through the retail action tick.
+    begin();const auto canceled_hosts=menu_hosts;
+    (*reinterpret_cast<int(__fastcall**)(void*,void*)>(0x69f688))(child.data(),nullptr);
+    assert(menu_hosts==canceled_hosts && menu_view().state==bm::phase::idle);cancel();
+    begin();const auto before_combined=menu_hosts;base_mutation=cancel_options_in_base;action("text_inviteslots");
+    assert(!current() && menu_hosts==before_combined && std::find(calls.begin(),calls.end(),"queue:setuphost")==calls.end());cancel();
+    begin();action("text_difficulty");assert(calls.back()=="queue:startgamedialog");
+    reinterpret_cast<void(__cdecl*)()>(0x5f2090)();assert(choices.size()==3 && choices[0]=="setDifficultyLevel(0)");
+    script(0x49f8f0,1);script(0x49f9b0,3);script(0x4a0930,2);
+    assert(*reinterpret_cast<unsigned char*>(0xa53058+0x3e0)==1 && *reinterpret_cast<unsigned char*>(0xa53058+0x3dd)==3 && *reinterpret_cast<unsigned char*>(0xa53058+0x3df)==2);
+    action("text_gamename");assert(native_tag==1 && native_max==31 && calls.back()=="request:text_entry");
+    result("New campaign",1);reinterpret_cast<tick_t>(0x5b8f90)(child.data(),nullptr);reinterpret_cast<tick_t>(0x5b8f90)(child.data(),nullptr);
+    assert(std::string_view(reinterpret_cast<char*>(0xa53058+0x3b6))=="New campaign");
+    const auto host_count=menu_hosts;action("text_inviteslots");assert(menu_hosts==host_count+1 && maximum==3 && menu_last_name=="New campaign");
+    action("text_inviteslots");assert(menu_hosts==host_count+1); // no delayed duplicate Post
+    screen("lc_host");menu_auth=true;menu_complete=true;tick(child.data(),nullptr);
+    assert(!selected_danger_room);
+    assert(allocations==1 && *reinterpret_cast<void**>(0xa53058+0x78)==person.data() && calls.back()=="queue:openmenu host" && published==0);
+    // Missing native lobby activation (including queue failure) times out and
+    // releases the actual native Host participant and broker room.
+    ticks+=15000;tick(child.data(),nullptr);assert(menu_view().state==bm::phase::idle && departures && published==0);
+    const auto before_stale=calls.size();host_request();assert(calls.size()==before_stale); // canceled native console command
+    cancel();
+    begin();action("text_gametype");assert(std::find(choices.begin(),choices.end(),"saveloadProcess(3)")!=choices.end());
+    save_accept=false;script(0x49ef60,3);assert(!*reinterpret_cast<void**>(0xa3bc40+0x2250));
+    save_accept=true;script(0x49ef60,3);assert(save_requests==2 && *reinterpret_cast<void**>(0xa3bc40+0x2250));
+    const auto freed_before=freed;
+    auto back=*reinterpret_cast<int(__fastcall**)(void*,void*)>(0x69f688);back(child.data(),nullptr);
+    assert(freed==freed_before+1 && !*reinterpret_cast<void**>(0xa3bc40+0x2250) && menu_hosts==host_count+1);
+    screen("lc_online");tick(child.data(),nullptr);ticks+=2000;
+    begin();(*reinterpret_cast<tick_t*>(0x69f694))(child.data(),nullptr);std::strcpy(reinterpret_cast<char*>(0xa53058+0x3b6),"Loaded campaign");
+    put(reinterpret_cast<void*>(0xa3bc40),0x2250,0x123400);script(0x49f9b0,4);action("text_inviteslots");
+    screen("lc_host");allocate_ok=false;menu_complete=true;tick(child.data(),nullptr);allocate_ok=true;
+    assert(menu_view().state==bm::phase::idle && !*reinterpret_cast<void**>(0xa3bc40+0x2250));
+    cancel();
+    begin();script(0x49f9b0,4);save_accept=true;script(0x49ef60,3);
+    host_refuse=true;action("text_inviteslots");host_refuse=false;
+    assert(menu_view().state==bm::phase::idle && !*reinterpret_cast<void**>(0xa3bc40+0x2250));
+    const auto refused_hosts=menu_hosts;action("text_inviteslots");assert(menu_hosts==refused_hosts && std::find(calls.begin(),calls.end(),"queue:setuphost")==calls.end());cancel();
+    auto resolve=[&] {
+        screen("lc_code");tick(child.data(),nullptr);
+        for(int i=32;i<40;++i) { post(static_cast<intent>(i));tick(child.data(),nullptr); }
+        menu_complete=true;tick(child.data(),nullptr);assert(menu_view().state==bm::phase::room);
+    };
+    resolve();tunnel_ready=false;ticks+=15000;tick(child.data(),nullptr);
+    assert(menu_view().state==bm::phase::idle && searches==0);cancel();
+    // Authenticated broker membership waits for the proven host tunnel.
+    resolve();assert(searches==0);
+    const auto before_old_menu=menu_view().generation;
+    std::strcpy(reinterpret_cast<char*>(hub.data()+0xc),"lc_code");(*reinterpret_cast<tick_t*>(0x69e438))(hub.data(),nullptr);
+    std::strcpy(reinterpret_cast<char*>(hub.data()+0xc),"lc_online");set_current(child.data());
+    assert(menu_view().generation==before_old_menu && menu_view().state==bm::phase::room);
+    tunnel_ready=true;tick(child.data(),nullptr);assert(searches==1);
+    reply();tick(child.data(),nullptr);
+    assert(*reinterpret_cast<unsigned*>(0xa53058+0x3a4+8)==0x01004d0a && *reinterpret_cast<unsigned*>(0xa3bc40+0x22bc));
+    const auto callback=*reinterpret_cast<int(__cdecl**)(int,void*,void*)>(0xa3bc40+0x2298);
+    const auto old_generation=*reinterpret_cast<void**>(0xa3bc40+0x229c);
+    event(8);tick(child.data(),nullptr);assert(calls.back()=="request:join");
+    cancel();assert(!*reinterpret_cast<void**>(0xa3bc40+0x2298));
+    resolve();tick(child.data(),nullptr);reply();tick(child.data(),nullptr);
+    callback(8,old_generation,nullptr);const auto requests=calls.size();tick(child.data(),nullptr);assert(calls.size()==requests);
+    event(9);tick(child.data(),nullptr);assert(menu_view().state==bm::phase::idle && !visibility["lc_notice_admission"]);
+    cancel();
+    for(int kind:{0,1,2,3}) {
+        resolve();tick(child.data(),nullptr);
+        if(kind==0) { ticks+=15000;tick(child.data(),nullptr); }
+        else { reply(kind==1 ? 2 : 1,kind==2,kind!=3);tick(child.data(),nullptr); }
+        assert(menu_view().state==bm::phase::idle && !visibility["lc_notice_admission"]);cancel();
+    }
+    resolve();tick(child.data(),nullptr);reply();tick(child.data(),nullptr);
+    allocate_ok=false;event(8);allocate_ok=true;tick(child.data(),nullptr);
+    assert(menu_view().state==bm::phase::idle && !visibility["lc_notice_admission"]);cancel();
+    // A console queue refusal must clean the native participant immediately.
+    begin();script(0x49f9b0,4);(*reinterpret_cast<tick_t*>(0x69f694))(child.data(),nullptr);
+    queue_ok=false;action("text_inviteslots");screen("lc_host");menu_complete=true;tick(child.data(),nullptr);queue_ok=true;
+    assert(menu_view().state==bm::phase::idle && !*reinterpret_cast<void**>(0xa53058+0x78));cancel();
+    // A request accepted before cancellation cannot activate on a later room.
+    begin();script(0x49f9b0,4);action("text_inviteslots");screen("lc_host");menu_complete=true;tick(child.data(),nullptr);host_request();
+    assert(calls.back()=="request:host");cancel();
+    put(child.data(),0,0x69f274);std::strcpy(reinterpret_cast<char*>(child.data()+0xc),"host");set_current(child.data());
+    (*reinterpret_cast<lobby_activate_t*>(0x69f284))(child.data(),nullptr,0);
+    assert(calls.back()=="request:lc_online" && menu_view().state==bm::phase::idle);screen("lc_online");tick(child.data(),nullptr);ticks+=2000;
+    // Host -> Leave -> Join -> Leave -> Host in the same installed dispatcher.
+    begin();(*reinterpret_cast<tick_t*>(0x69f694))(child.data(),nullptr);script(0x49f9b0,4);std::strcpy(reinterpret_cast<char*>(0xa53058+0x3b6),"Host again");action("text_inviteslots");
+    screen("lc_host");menu_complete=true;tick(child.data(),nullptr);assert(menu_view().state==bm::phase::room && allocations>=3);cancel();
+    assert(menu_view().state==bm::phase::idle && !*reinterpret_cast<void**>(0xa53058+0x78));
+    std::cout<<"round6 PASS real Game Options tick/startgamedialog/SetGameType/SetMaxPlayers/difficulty; real setuphost/Host allocation failure/cancel; native discovery query+reply+record/admission; no tunnel/timeout/duplicate/wrong/disabled/refusal/stale callback/reentry\n";
+}
+void retail_restore(unsigned va) {
+    for(const auto& guard:online_menus_guards::guards) if(guard.va==va) {
+        const auto bytes=patch_transaction::bytes_of(guard.hex);std::memcpy(reinterpret_cast<void*>(va),bytes.data(),bytes.size());return;
+    }
+    assert(false);
+}
+void __fastcall lobby_pop(void*,void*,const char* name,int) {
+    assert(name && (std::string_view(name)=="host" || std::string_view(name)=="join"));
+    if(current()) {
+        const auto deactivate=*reinterpret_cast<tick_t*>(std::string_view(name)=="host" ? 0x69f290 : 0x69f358);
+        deactivate(current(),nullptr);
+    }
+    set_current(nullptr);
+}
+void lobby_run(const script_functions_rules::func_entry* registration,bool loaded) {
+    restore_services();const auto original_mode=mode;
+    auto tick=*reinterpret_cast<tick_t*>(0x69e454);
+    auto post=[&](intent value) { int_value[1]=unsigned(value);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(registration->handler))(nullptr); };
+    screen("lc_host");tick(child.data(),nullptr);post(intent::open_room);tick(child.data(),nullptr);
+    assert(calls.back()=="request:game_options");custom_close();screen("game_options");(*reinterpret_cast<lobby_activate_t*>(0x69f66c))(child.data(),nullptr,0);script(0x49f8f0,1);script(0x49f9b0,3);
+    if(loaded) { save_accept=true;script(0x49ef60,3); }
+    (*reinterpret_cast<tick_t*>(0x69f694))(child.data(),nullptr);std::strcpy(reinterpret_cast<char*>(0xa53058+0x3b6),loaded ? "Loaded lobby" : "New lobby");action("text_inviteslots");
+    screen("lc_host");menu_auth=menu_complete=true;tick(child.data(),nullptr);assert(menu_view().state==bm::phase::room && published==0);
+    // Real Host activation + roster refresh, with the reviewed invented UI /
+    // participant services. Keep real campaign Leave routines for this bridge.
+    host_request();custom_close();
+    mode="r4-r6";setup_lobby(true);retail_restore(0x607c40);retail_restore(0x6097f0);
+    redirect(0x5db270,lobby_pop);
+    { const auto bytes=patch_transaction::bytes_of("8b442404c1");std::memcpy(reinterpret_cast<void*>(0x5d4d60),bytes.data(),bytes.size()); }
+    auto activate=*reinterpret_cast<lobby_activate_t*>(0x69f284);activate(child.data(),nullptr,0);
+    assert(published==1 && menu_view().state==bm::phase::room);
+    activate(child.data(),nullptr,0);assert(published==1 && menu_view().state==bm::phase::room);
+    const auto healthy=menu_broker;menu_broker.disconnected("invented service loss",ticks);
+    activate(child.data(),nullptr,0);assert(published==1 && menu_view().state==bm::phase::room);menu_broker=healthy;
+    auto host_tick=*reinterpret_cast<tick_t*>(0x69f2ac);
+    ready_person(2,false);refresh_now();mask=0x10;host_tick(child.data(),nullptr);assert(!transfers && !starts && !broadcasts);
+    focus_stub(child.data(),nullptr,"text_leaveroom",true);mask=0x10;host_tick(child.data(),nullptr);
+    mask=0;post(intent::confirm_leave);host_tick(child.data(),nullptr);host_tick(child.data(),nullptr);
+    assert(!current() && menu_view().state==bm::phase::idle && menu_leaves==1 && !*reinterpret_cast<void**>(0xa53058+0x78));
+    // Complete a fresh resolve through real discovery / native admission and
+    // activate the real Join; Ready remains its native role-aware action.
+    mode=original_mode;restore_services();screen("lc_online");tick(child.data(),nullptr);ticks+=2000;
+    screen("lc_code");tick(child.data(),nullptr);for(int i=32;i<40;++i) { post(static_cast<intent>(i));tick(child.data(),nullptr); }
+    tunnel_ready=true;menu_complete=true;tick(child.data(),nullptr);reply();tick(child.data(),nullptr);event(8);tick(child.data(),nullptr);
+    assert(calls.back()=="request:join");custom_close();assert(menu_view().state==bm::phase::room);mode="r4-r6";setup_lobby(false);retail_restore(0x6097f0);redirect(0x6133a0,kick_local);redirect(0x5db270,lobby_pop);
+    { const auto bytes=patch_transaction::bytes_of("8b442404c1");std::memcpy(reinterpret_cast<void*>(0x5d4d60),bytes.data(),bytes.size()); }
+    activate=*reinterpret_cast<lobby_activate_t*>(0x69f350);activate(child.data(),nullptr,0);
+    auto join_tick=*reinterpret_cast<tick_t*>(0x69f374);
+    ready_person(1,false);refresh_now();mask=0;join_tick(child.data(),nullptr);
+    mask=0x1000000;join_tick(child.data(),nullptr);assert(announces==1 && last_ready && menu_view().state==bm::phase::room);
+    join_tick(child.data(),nullptr);assert(announces==1); // held duplicate Ready tool
+    mask=0;join_tick(child.data(),nullptr);auto back=*reinterpret_cast<lobby_back_t*>(0x69f368);
+    back(child.data(),nullptr);assert(announces==2 && !last_ready && current() && menu_view().state==bm::phase::room);
+    // The native waiting/transfer flag keeps Ready idle until the next area;
+    // the adapter must leave this native state and its cancellation intact.
+    if(!loaded) {
+        child[0x196c]=1;mask=0x10;const auto before=announces;join_tick(child.data(),nullptr);
+        assert(announces==before && current() && menu_view().state==bm::phase::room);mask=0;
+    }
+    back(child.data(),nullptr);assert(!current() && menu_view().state==bm::phase::idle && menu_leaves==2);
+    std::cout<<"round6 lobby PASS "<<(loaded ? "load" : "new")<<" -> actual Host activation/publication/unready gate/native Leave -> actual discovery/admission/Join activation/Ready duplicate/Unready/Leave; broker and native cleanup\n";
+    mode=original_mode;
+}
+
+void generation_run(const script_functions_rules::func_entry* registration) {
+    const auto original_mode=mode;restore_services();
+    const auto tick=*reinterpret_cast<tick_t*>(0x69e454);
+    auto post=[&](intent value) { int_value[1]=unsigned(value);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(registration->handler))(nullptr); };
+    auto hub_screen=[&] { mode=original_mode;screen("lc_online");tick(child.data(),nullptr);ticks+=2000; };
+    auto host=[&] {
+        mode=original_mode;screen("lc_host");tick(child.data(),nullptr);post(intent::open_room);tick(child.data(),nullptr);custom_close();
+        screen("game_options");(*reinterpret_cast<lobby_activate_t*>(0x69f66c))(child.data(),nullptr,0);
+        script(0x49f8f0,1);script(0x49f9b0,4);action("text_inviteslots");
+        screen("lc_host");menu_auth=menu_complete=true;tick(child.data(),nullptr);assert(menu_view().state==bm::phase::room);
+    };
+    auto cancel_host=[&] { screen("lc_host");post(intent::back);tick(child.data(),nullptr);assert(menu_view().state==bm::phase::idle);hub_screen(); };
+    auto join=[&] {
+        mode=original_mode;screen("lc_code");tick(child.data(),nullptr);
+        for(int n=32;n<40;++n) { post(static_cast<intent>(n));tick(child.data(),nullptr); }
+        tunnel_ready=true;menu_auth=menu_complete=true;tick(child.data(),nullptr);reply();tick(child.data(),nullptr);event(8);tick(child.data(),nullptr);
+        assert(calls.back()=="request:join" && menu_view().state==bm::phase::room);
+    };
+    auto cancel_join=[&] { post(intent::clear);tick(child.data(),nullptr);post(intent::back);tick(child.data(),nullptr);assert(menu_view().state==bm::phase::idle);hub_screen(); };
+    auto denied=[&](bool old_host,bool cleanup=false) {
+        hub.fill(0);put(hub.data(),0,old_host ? 0x69f274 : 0x69f33c);hub[4]=1;
+        std::strcpy(reinterpret_cast<char*>(hub.data()+0xc),old_host ? "host" : "join");set_current(hub.data());
+        const auto before=activations;const auto leaves_before=departures;
+        (*reinterpret_cast<lobby_activate_t*>(old_host ? 0x69f284 : 0x69f350))(hub.data(),nullptr,0);
+        assert(activations==before);
+        const auto before_ticks=native_ticks;const auto before_announces=announces;
+        auto* local=*reinterpret_cast<unsigned char**>(0xa53058+0x78);const auto flags=local ? *reinterpret_cast<unsigned*>(local+0x1c) : 0;
+        const auto back=*reinterpret_cast<lobby_back_t*>(old_host ? 0x69f2a0 : 0x69f368);assert(back(hub.data(),nullptr)==2);
+        const auto mouse=*reinterpret_cast<bool(__fastcall**)(void*,void*,int,int,int,int,int)>(old_host ? 0x69f2f4 : 0x69f3bc);
+        assert(mouse(hub.data(),nullptr,510,475,0,WM_LBUTTONUP,0));
+        (*reinterpret_cast<tick_t*>(old_host ? 0x69f320 : 0x69f3e8))(hub.data(),nullptr);
+        const unsigned base_site=old_host ? 0x5bad1f : 0x5c88be;
+        const auto base_input=reinterpret_cast<tick_t>(base_site+5+*reinterpret_cast<unsigned*>(base_site+1));base_input(hub.data(),nullptr);
+        assert(native_ticks==before_ticks && announces==before_announces && (!local || *reinterpret_cast<unsigned*>(local+0x1c)==flags));
+        (*reinterpret_cast<tick_t*>(old_host ? 0x69f2ac : 0x69f374))(hub.data(),nullptr);
+        (*reinterpret_cast<tick_t*>(old_host ? 0x69f290 : 0x69f358))(hub.data(),nullptr);
+        assert(cleanup ? departures>leaves_before : departures==leaves_before);
+        std::strcpy(reinterpret_cast<char*>(hub.data()+0xc),"lc_online");put(hub.data(),0,0x69e41c);
+    };
+    // Old Host console command remains ahead of the new Host command; the
+    // actual retail openmenu handler must consume their separate generations.
+    host();cancel_host();host();const auto replacement=menu_view().generation;
+    auto before=calls.size();host_request();assert(calls.size()==before && menu_view().generation==replacement);
+    host_request();assert(calls.back()=="request:host");cancel_host();
+    // Deliver that old Host activation only after a newer Join token exists.
+    join();const auto guest_generation=menu_view().generation;custom_close();denied(true);
+    assert(calls.back()=="request:join" && menu_view().generation==guest_generation && menu_view().state==bm::phase::room);
+    mode="r4-r6";setup_lobby(false);retail_restore(0x6097f0);redirect(0x6133a0,kick_local);redirect(0x5db270,lobby_pop);
+    { const auto bytes=patch_transaction::bytes_of("8b442404c1");std::memcpy(reinterpret_cast<void*>(0x5d4d60),bytes.data(),bytes.size()); }
+    (*reinterpret_cast<lobby_activate_t*>(0x69f350))(child.data(),nullptr,0);assert(menu_view().state==bm::phase::room);
+    // Once active, losing the broker must not revoke a healthy native lobby.
+    const auto healthy=menu_broker;menu_broker.disconnected("after activation",ticks);
+    (*reinterpret_cast<lobby_activate_t*>(0x69f350))(child.data(),nullptr,0);assert(menu_view().state==bm::phase::room);menu_broker=healthy;
+    ready_person(1,false);refresh_now();(*reinterpret_cast<lobby_back_t*>(0x69f368))(child.data(),nullptr);assert(menu_view().state==bm::phase::idle);
+    mode=original_mode;restore_services();hub_screen();
+    // Reverse roles: an old guest activation cannot close or mutate a new host.
+    join();cancel_join();host();host_request();custom_close();const auto host_generation=menu_view().generation;denied(false);
+    assert(calls.back()=="request:host" && menu_view().generation==host_generation && *reinterpret_cast<void**>(0xa53058+0x78));
+    mode="r4-r6";setup_lobby(true);retail_restore(0x607c40);retail_restore(0x6097f0);redirect(0x5db270,lobby_pop);
+    (*reinterpret_cast<lobby_activate_t*>(0x69f284))(child.data(),nullptr,0);assert(menu_view().state==bm::phase::room);
+    (*reinterpret_cast<tick_t*>(0x69f290))(child.data(),nullptr);set_current(nullptr);assert(menu_view().state==bm::phase::idle);
+    mode=original_mode;restore_services();hub_screen();
+    // Loss before first activation is a pending-flow failure, not the already-
+    // active survival policy exercised above.
+    join();menu_broker.disconnected("before activation",ticks);custom_close();denied(false,true);
+    assert(menu_view().state==bm::phase::idle && !*reinterpret_cast<void**>(0xa53058+0x78));
+    std::cout<<"round6 generations PASS actual console +74 handler FIFO; delayed Host command after replacement Host; old Host/Join activation across opposite new roles; denied tick/deactivation; first-activation auth loss versus active-lobby survival\n";
+    mode=original_mode;
+}
+
+}

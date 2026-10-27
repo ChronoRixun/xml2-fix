@@ -16,6 +16,7 @@
 #include <vector>
 #include <stdexcept>
 #include <new>
+#include <intrin.h>
 
 namespace {
 using namespace online_menus_rules;
@@ -100,6 +101,7 @@ void __cdecl text_stub(void*,const char* item,const char* format,...) {
     if(mode.starts_with("r4-") && std::string_view(format)!="%s") {
         assert(std::string_view(format)=="Unready" || std::string_view(format)=="Leave");texts[item]=format;return;
     }
+    if(mode.starts_with("r6-") && std::string_view(item)=="data_gamename" && std::string_view(format)!="%s") { texts[item]=format;return; }
     assert(std::string_view(format)=="%s");
     va_list args;va_start(args,format);texts[item]=va_arg(args,const char*);va_end(args);
 }
@@ -205,6 +207,7 @@ void result(std::string_view text,int tag=0) {
     native_result.fill(0);std::copy(text.begin(),text.end(),native_result.begin());native_ready=true;native_tag=tag;
 }
 void fake_services() {
+    redirect(0x672170,reinterpret_cast<const void*>(&std::strncpy));
     redirect(0x60c7e0,name_request_stub);redirect(0x60b960,ready_stub);redirect(0x60b9a0,tag_stub);
     redirect(0x60b990,set_tag_stub);redirect(0x60b970,max_stub);redirect(0x60c6e0,seed_stub);
     redirect(0x60c710,title_stub);redirect(0x60c780,consume_stub);
@@ -374,13 +377,14 @@ void rules() {
 #include "online_lobby_fixture.inl"
 #include "online_menus_followup.inl"
 #include "online_menus_broker.inl"
+#include "online_native_fixture.inl"
 }
 namespace ini { std::optional<std::string> text(const wchar_t*,const wchar_t*) {
     return mode=="off" ? std::nullopt : mode=="zero" ? std::optional<std::string>("0") : std::optional<std::string>("1");
 } }
 namespace script_functions { int capacity() { return ::capacity; } }
 namespace logger {
-void write(const char*,...) {}
+void write(const char* format,...) { if(!mode.starts_with("r6-")) return; char buffer[512]{};va_list args;va_start(args,format);std::vsnprintf(buffer,sizeof(buffer),format,args);va_end(args);std::cout<<buffer<<"\n"; }
 void write_once(std::string_view key,const char* format,...) {
     if(once_logs.contains(std::string(key))) return;
     char value[512]{};va_list args;va_start(args,format);std::vsnprintf(value,sizeof(value),format,args);va_end(args);
@@ -395,6 +399,12 @@ std::wstring resolve_file(const std::wstring& path) { return path; }
 }
 
 int main(int argc,char** argv) {
+    SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
+    SetUnhandledExceptionFilter([](EXCEPTION_POINTERS* error)->LONG {
+        std::cerr<<"fixture fault eip="<<std::hex<<error->ContextRecord->Eip<<" code="<<error->ExceptionRecord->ExceptionCode<<" address="<<error->ExceptionRecord->ExceptionInformation[1]<<"\n";
+        ExitProcess(error->ExceptionRecord->ExceptionCode);
+    });
+    std::cout<<std::unitbuf;
     assert(argc>=2);if(argc>=3) mode=argv[2];rules();
     std::ifstream file(argv[1],std::ios::binary);
     std::vector<unsigned char> image((std::istreambuf_iterator<char>(file)),{});assert(image.size()>0x1000);
@@ -434,6 +444,7 @@ int main(int argc,char** argv) {
     install_hooks.clock=clock_stub;install_hooks.before_request=request_fault_stub;install_hooks.before_tick=tick_fault_stub;
     if(mode.starts_with("r4-")) install_hooks.lobby_fields=lobby_fields_stub;
     if(mode=="r5-broker" || mode=="r5-retail-lobby") install_hooks.broker=&menu_api;
+    if(mode.starts_with("r6-")) install_hooks.broker=&native_fixture::api;
     patch_transaction::hooks transaction_hooks;
     if(mode=="install-retain") {
         const auto site=online_menus::contribution().writes.front().va;
@@ -554,6 +565,9 @@ int main(int argc,char** argv) {
     request(mgr.data(),nullptr,"online",nullptr);assert(calls==expected); // duplicate entry cannot reinitialize
     set_current(hub.data());tick(hub.data(),nullptr);
     assert(texts["local_name"]==(mode=="name31" ? std::string(31,'a') : mode=="blank-name" ? "Player" : "100??????openmenu bad"));
+    if(mode=="r6-native") { native_fixture::run(entry);return 0; }
+    if(mode=="r6-generations") { native_fixture::generation_run(entry);return 0; }
+    if(mode=="r6-lobby-new" || mode=="r6-lobby-load") { native_fixture::lobby_run(entry,mode=="r6-lobby-load");return 0; }
     if(mode=="r5-broker" || mode=="r5-retail-lobby") {
         broker_menu_tests(entry);
         if(mode=="r5-retail-lobby") broker_retail_lobby_tests(entry);

@@ -19,19 +19,22 @@ items, modes and actions. No LC sources are changed by this DLL round.
 | Intent | Exact constant command | Allowed screen |
 |---|---|---|
 | Refresh | `runscript lcOnlineIntent(18)` | Browse |
-| Open room | `runscript lcOnlineIntent(19)` | Host Setup; creates only the broker room |
+| Open room | `runscript lcOnlineIntent(19)` | Host Setup; opens native Game Options before broker posting |
 | Retry | `runscript lcOnlineIntent(20)` | Custom Hub/Host/Code/Browse |
 | Toggle private/public | `runscript lcOnlineIntent(21)` | Host Setup |
 | Previous / next page | `runscript lcOnlineIntent(22)` / `(23)` | Browse |
 | Select visible row 0..6 | `runscript lcOnlineIntent(24)` through `(30)` | Browse, any cell in that row |
-| Join selected room | `runscript lcOnlineIntent(31)` | Browse; resolve only |
+| Join selected room | `runscript lcOnlineIntent(31)` | Browse; resolve, then automatic room-only native admission |
 
-These are script intent values, not agreement rule IDs. Native campaign/save/
-difficulty setup and broker-to-native admission remain the next round. Room
-names accepted by the room API are trimmed printable ASCII <=32, without `;`
-or quote; the current Host card uses the configured launcher RoomName or a
-screen-name-derived default. A native room-name editor belongs with Host Setup
-services. Screen-name editing remains the existing native <=31-byte service.
+These are script intent values, not agreement rule IDs. The native bridge
+(`lc-online-native/1` DLL probe) now completes Game Options/save/difficulty
+selection before posting and joins resolved rooms through actual native
+discovery. The broker API keeps printable ASCII room names <=32, without `;`
+or quote; native game names and screen names are each <=31 game bytes.
+Host Setup seeds Game Options from its valid native-length preset/default.
+An incompatible/overlong native seed becomes the visible "Online game" choice
+for confirmation/editing there; it is never silently cut to 31 bytes. The
+accepted native name, rather than an earlier card value, names the broker room.
 
 Preserve DATA items `service`, `self_state`, `browse_hint`, `room_name`,
 `preview_name`, `room_code`, `details_name`, `details`, and the seven by seven
@@ -42,7 +45,7 @@ error identifier, and `retry` with intent 20. Host's Open item must be named
 list, with dynamic text storage and row-specific constant commands. Retain
 closed directional focus and mouse rectangles when rows are disabled/rebound.
 F5 and the pad's MENU_NEXT refresh Browse; PageUp/PageDown change its bounded
-page. The Host pad's MENU_OK opens the room. These shortcuts have real handlers.
+page. The Host pad's MENU_OK opens native Game Options. These shortcuts have real handlers.
 
 Add named, initially hidden localized variants at the approved status/error
 anchors. The DLL selects them; no remote text becomes a command:
@@ -904,3 +907,132 @@ Missing-list activation still queues return to native online rather than calling
 the unsafe activator. Its real manager processing/one-native-tick interval is a
 live residual to check, not proven by the queued-request fixture. No live game,
 raster capture or desktop input was executed for this correction.
+
+
+## Native Host setup and automatic admission (round 6)
+
+The bridge is `src/online_native_flow.inl`, included by the existing dispatcher;
+it adds no thread, transport, broker operation or script function. Its guarded
+sites are Game Options activation `0x69f66c`, tick `0x69f694`, Back
+`0x69f688`, accepted Post queue
+`0x5b9609`, the native Host open queue at `0x60a095`, and console `openmenu` dispatch at
+`0x5f1c2e` (the retail handler calls manager +0x74, separately from the +0x6c
+request slot). Difficulty shares the
+Post call site, so commands other than the exact `setuphost` still go through
+the stock queue. Native Host posting runs the actual `0x5f1bb0` handler,
+including `0x606e90` and `0x609f50`; native Join admission runs `0x60a0a0` with
+an actual 0x44-byte native discovery record.
+
+| State | Event | Effect |
+|---|---|---|
+| Host Setup | Open (19) | Native Game Options; no broker room yet |
+| Native setup | New/load, difficulty, name, max players | Established native dialogs/save services; max 2/3/4, native name <=31 |
+| Native setup | Back/cancel | Native cancel, release selected image; no broker post |
+| Native setup | Native Post | Capture accepted name/max/mode/difficulty/load choice; start one broker host request |
+| Posting | Broker room confirmed | Run native setuphost; broker listing stays unjoinable |
+| Host requested | Actual native Host activation | Publish existing v2 joinable metadata; keep native Host current |
+| Code/Browse | Resolve confirmed | Wait for certificate, ICE and authenticated host tunnel |
+| Discovery | Exactly one eligible current host record | Invoke native admission once; wait for native response |
+| Admission | Native success plus a real local participant | Open native Join; Ready remains native |
+| Any pending phase | Cancel, refusal, ambiguity, expiry | Invalidate generation/callback/queued open, native cleanup, broker leave |
+| Native lobby | Start/Ready/Unready/Leave | Existing native actions, readiness gates and rule-26 next-area wait |
+
+Each tunnel/discovery/admission/menu-activation wait is bounded to 15 seconds;
+the broker retains its own 10-second deadline and shared limiter. The UI never
+waits synchronously for the broker or a tunnel. Missing, duplicate, wrong-port,
+wrong-address, disabled or incompatible records never select master/plain-IP
+fallback. Native discovery is reset before searching, queries only the proven
+host virtual address, and never keeps a record pointer across frames.
+
+The native admission callback contains a generation, not a menu pointer.
+Success event 8 is insufficient without a native local participant; the retail
+response can emit that event after allocation failure. Queued Host commands and
+Host/Join activation have separate one-use generation tokens in bounded
+16-entry queues; canceled entries remain until consumed. A canceled open
+cannot later become a legacy Host or attach to a new controller/room. The custom
+Host -> Game Options close is an explicit handoff; other current-screen closes
+cancel pending work. Cached noncurrent menu closes cannot cancel a newer request.
+Back+Post in one native setup tick consumes that old frame instead of queuing an
+unbrokered setuphost. Failed setup returns to Host Setup and keeps that native
+options context owned until it closes; a second Post cannot fall through to
+legacy hosting. Tag-1 name completions and the native cached edit state are
+drained/reset on a fresh setup without consuming the Hub's tag-0 name request. Rejected stale activation also suppresses its native tick, base input, mouse,
+Back, refresh and deactivation, so it cannot mutate a replacement session while
+recovery is queued. Initial activation still requires broker authentication;
+already-active lobby reactivation survives broker loss. Native lobby activation
+can repeat without publishing twice.
+
+Native Host/Join deactivation retains its original Start/transfer flags. Real
+Leave completes native cleanup before room cleanup; the native host-authority
+latch makes repeated teardown harmless. Broker loss in an already activated
+lobby retains native ownership and established tunnels. This adds no readiness
+waiver, immediate mid-area admission, reload-free join or peer wire contract.
+
+### LC adapter work
+
+Require the additive `lc-online-native/1` probe for this route. Keep intent 19
+on Open and use it for Host settings entry rather than fixture-only scripts;
+all settings themselves are selected by native Game Options. Preserve the
+native Game Options/save/text-entry return chain, paired menu halves, native
+Host/Join class/roster/wait/transfer modes, focus links and mouse rectangles.
+No LC checkout was edited in this DLL-only round.
+
+At the existing Host status/preview anchors add initially hidden localized
+nodes `lc_host_settings_unknown`, `lc_host_new`, `lc_host_load`,
+`lc_host_campaign`, `lc_host_danger_room`, `lc_host_easy`, `lc_host_normal`,
+`lc_host_hard`. Compose the player-count label from numeric DATA
+`lc_host_max_players`. New/load and campaign/mode selectors are independent;
+unknown difficulty selects none. The runtime clears the old fixture prose in
+`campaign`, `save`, `preview_save`, `preview_slots`, `drop_in`, `preview_drop`.
+Replace it with these localized variants; retain the original approved geometry.
+`lc_host_drop_on`, `lc_host_drop_off`, `lc_host_drop_unknown` report the effective
+installed rule-26 policy. This is read-only; the UI does not change that policy.
+
+Add status nodes `lc_native_tunnel` (Connecting to host),
+`lc_native_discovery` (Finding the host's game), `lc_native_admission`
+(Requesting native admission), `lc_native_posting` (Opening native lobby), and
+`lc_notice_admission` (Setup/admission failed; go Back and try again). Keep the
+existing generic inline fallback when a specialized node is absent. Do not
+advertise broker membership as native admission, readiness or Playing. Use
+"waiting for the next area" for late joins; no fabricated transfer percentage.
+
+### Host-fixture and live verification
+
+`r6-native`, `r6-lobby-new`, `r6-lobby-load`, `r6-generations` run in the mapped owned PE. They
+execute retail Game Options tick, difficulty dialog, native game-type/max/
+difficulty handlers, name accept polling/setter, setuphost, discovery request
+and reply allocation/insertion, `0x60a0a0`, accepted/refused native response
+handlers, Host/Join activation/refresh/Ready/Back and native Leave. The generation case also executes the actual console
+openmenu handler and delays old commands/activation across a newer opposite
+role; denied mouse/Back/refresh/base-input are tested before recovery. Dialog,
+input, save-service results, participant factories and transport services are
+invented. Loading a real save from disk and actual rendering are not inferred.
+The production broker fixture separately drives current-generation target
+checks, real in-memory GNS socket pairs, v2 max/mode/joinable metadata, raw-UDP
+refusal, stale packets/status callbacks and existing broker-loss survival.
+
+G/V remains a separately authorized release gate; no game launch or desktop
+input is part of this round. After LC integration and review:
+
+1. Before each boot follow the common HOLD-GAMES/external-process checks,
+   slot.py --wait, private/background copy, registry export/byte-identical
+   restore and no-focus rules. Use NoActivate only once supported by that DLL;
+   this HEAD does not contain that setting. Never drive the owner's desktop.
+2. Fresh direct executable entry, real controller acceptance -> Hub -> Host.
+   Exercise new/load, every difficulty/max choice, name accept/cancel, native
+   save cancel and posting failure. Confirm accepted metadata and a usable
+   native Host with no launcher keys/manual list step.
+3. Private Code and public Browse each 3/3 across real peers, including hotspot
+   and forced relay. Verify a tunnel precedes discovery, actual native admission
+   precedes Join/Ready, and malformed/duplicate/absent discovery has no fallback.
+4. Exercise Host alone, unready Start block, all-ready Start, duplicate Ready,
+   Unready, pending/ready Leave, native next-area wait/solo watcher, Kick, broker
+   loss with healthy P2P and Host -> Leave -> Join -> Leave -> Host. Cancel while
+   each lookup/open is pending; delayed old replies/opens must remain inert.
+5. After ordinary joins play >=10 minutes and cross two transitions with zero
+   desyncs. Capture actual 02/04/05 and native service intermediates at 4:3 and
+   stretched 16:9, keyboard -> pad -> keyboard, mouse rectangles, 720p/1080p,
+   safe bounds, focus, wrapping and role-specific prompts against approved frames.
+6. Stop all owned helpers, verify registry/input hashes, and remove only created
+   copies/profiles with checked absolute Python paths. Record missing proof as
+   pending; host fixtures do not establish G/V or WAN acceptance.

@@ -27,6 +27,10 @@ struct broker_api {
     std::string (*version)()=nullptr;
     bool (*take_preset)(online_browser_core::launch_preset&)=nullptr;
     bool (*refresh_due)()=nullptr;
+    bool (*host_native)(const std::string&,bool,int,bool)=nullptr;
+    bool (*admission_target)(online_browser_core::ticket,std::uint32_t&)=nullptr;
+    bool (*host_posted)(online_browser_core::ticket)=nullptr;
+    bool (*drop_in)()=nullptr;
 };
 void keyboard(unsigned char* state);
 bool requested();

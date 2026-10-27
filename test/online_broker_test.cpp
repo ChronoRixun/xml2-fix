@@ -24,7 +24,7 @@
 #include <cstring>
 
 namespace fake {
-std::mutex lock;
+std::mutex lock, requests_lock;
 std::string input, output, mode;
 std::vector<std::string> requests;
 std::atomic<DWORD> clock{10000};
@@ -67,7 +67,7 @@ int WSAAPI send(SOCKET,const char* data,int size,int) {
     for(;;) {
         auto end=output.find('\n');if(end==std::string::npos) break;
         auto row=output.substr(0,end);output.erase(0,end+1);
-        requests.push_back(row);
+        { std::lock_guard g(requests_lock);requests.push_back(row); }
         auto msg=online_room_core::parse(row);auto op=msg.text("op");
         if(op=="auth") reply("{\"op\":\"auth_ok\",\"identity\":\"legends:0000000000000000\",\"ca\":\"fixture-ca\"}");
         if(op=="cert") { // like the real broker: one cert_ok per cert request, i.e. after auth_ok on every connection that has no cached certificate
@@ -310,6 +310,75 @@ void certificate_repeat_in_room_test() {
 }
 }
 
+namespace {
+void native_host_metadata_test() {
+    reset("success");assert(!room::host_native("Native host",true,1,true));
+    assert(room::host_native("Native host",true,3,true));
+    pump_until([] { return room::view().state==b::phase::room; });
+    const auto generation=room::view().generation;
+    assert(room::native_posting && room::listed.max_players==3 && !room::listed.joinable && room::listed.game_mode=="danger_room");
+    auto old=generation;--old.room;assert(!room::host_posted(old));
+    assert(room::host_posted(generation) && !room::host_posted(generation));
+    fake::clock+=501;room::ui_tick();room::tick();
+    pump_until([] {
+        std::lock_guard g(fake::requests_lock);
+        for(const auto& line:fake::requests) {
+            const auto message=online_room_core::parse(line);
+            if(message.text("op")=="presence" && online_room_core::parse(message["metadata"].text)["joinable"].text=="true") return true;
+        }
+        return false;
+    });
+    room::leave();pump_until([] { return room::worker_done.load(); });
+    bool hosted=false,opened=false;
+    for(const auto& line:fake::requests) {
+        const auto message=online_room_core::parse(line);
+        if(message.text("op")=="host") {
+            const auto metadata=online_room_core::parse(message["metadata"].text);
+            assert(metadata.number("max_players")==3 && metadata["joinable"].text=="false" && metadata.text("game_mode")=="danger_room");hosted=true;
+        }
+        if(message.text("op")=="presence" && online_room_core::parse(message["metadata"].text)["joinable"].text=="true") opened=true;
+    }
+    assert(hosted && opened && !room::native_posting);
+    std::cout<<"PASS native Host wire metadata: accepted name/max=3, initially unjoinable, current-generation activation publishes joinable; no extra v2 field\n";
+}
+void native_target_test() {
+    reset("success");assert(room::resolve("ABCDEFGH"));pump_until([] { return room::view().state==b::phase::room && room::cert_ready; });
+    const auto generation=room::view().generation;
+    std::uint32_t address=123;assert(!room::admission_target(generation,address) && address==0);
+    room::ice_ready=true;
+    HSteamNetConnection local,peer;assert(room::sockets()->CreateSocketPair(&local,&peer,false,nullptr,nullptr));
+    auto& tunnel=room::ensure_tunnel(room::host_id);tunnel.connection=local;tunnel.connected=false;
+    assert(!room::admission_target(generation,address));
+    SteamNetConnectionStatusChangedCallback_t status{};status.m_hConn=local;status.m_info.m_eState=k_ESteamNetworkingConnectionState_Connected;
+    status.m_info.m_identityRemote.ParseString(online_room_core::gns_identity(room::host_id).c_str());
+    assert(room::on_status(&status));assert(room::admission_target(generation,address) && address==room::members.address(room::host_id));
+    auto old=generation;--old.room;assert(!room::admission_target(old,address) && address==0);
+    room::cert_ready=false;assert(!room::admission_target(generation,address));room::cert_ready=true;
+    room::ice_ready=false;assert(!room::admission_target(generation,address));room::ice_ready=true;
+    const auto authenticated=room::client;room::client.disconnected("invented broker loss",fake::clock);
+    assert(!room::admission_target(generation,address) && tunnel.connected);room::client=authenticated;
+    tunnel.transport_bound=true;assert(room::master_list_entry(nullptr,nullptr)==nullptr); // still room-only after native hello
+    char packet[32]{};packet[2]=0x18;assert(room::room_recvfrom(0,packet,sizeof(packet),0,nullptr,nullptr)==SOCKET_ERROR && WSAGetLastError()==WSAEWOULDBLOCK);
+    packet[2]=0x19;assert(room::room_recvfrom(0,packet,sizeof(packet),0,nullptr,nullptr)==17);
+    status.m_info.m_identityRemote.ParseString("str:legends:2222222222222222");assert(room::on_status(&status));
+    assert(!room::admission_target(generation,address) && tunnel.connection==k_HSteamNetConnection_Invalid);
+    room::arrivals.push_back({0x0a4d0001,5165,{1,2,3}});room::arrivals_bytes=3;
+    const auto old_connection=room::connection_generation.load();room::leave();pump_until([] { return room::worker_done.load(); });
+    assert(room::arrivals.empty() && !room::arrivals_bytes && room::tunnels.empty() && !room::own_virtual());
+    assert(!room::on_status(&status));room::sockets()->CloseConnection(peer,0,"fixture complete",false);
+    fake::clock+=2000;assert(room::resolve("23456789"));pump_until([] { return room::view().state==b::phase::room; });
+    const auto current=room::view().generation;assert(current!=generation && !room::admission_target(generation,address));
+    {
+        std::lock_guard g(room::lock);
+        for(const auto* line:{R"({"op":"peer_joined","identity":"legends:2222222222222222"})",R"({"op":"room_closed"})",R"({"op":"_closed","kind":"broker_unreachable"})"})
+            room::inbox.push_back({generation,old_connection,line});
+    }
+    room::ui_tick();room::tick();assert(room::view().generation==current && room::view().authenticated && room::members.active_size()==2);
+    room::leave();pump_until([] { return room::worker_done.load(); });
+    std::cout<<"PASS production admission target: certificate/ICE/current generation/proven host identity, no master/plain UDP discovery, mismatch refusal, Leave queues and old callbacks/events discarded\n";
+}
+}
+
 int main() {
     std::cout<<std::unitbuf;
     SteamNetworkingIdentity id;id.Clear();id.ParseString("str:legends:0000000000000000");SteamNetworkingErrMsg error{};
@@ -375,6 +444,7 @@ int main() {
     for(const auto* fault:{"closed","overflow","bad_cert","refused_cert","cert_error","identity"}) live_room_survival(fault);
     for(const char* fault:{"rate_limited","no_such_room","room_full","version_mismatch","timeout","idle_disconnect"}) for(const char* next:{"retry","refresh","done"})
         if(!(std::string(fault)=="idle_disconnect" && std::string(next)=="retry")) certificate_after_failure_test(fault,next);
+    native_host_metadata_test();native_target_test();
     certificate_identity_outside_room_test();certificate_renewal_test();certificate_repeat_in_room_test();
     reset("success");assert(room::list());pump_until([] { return room::view().state==b::phase::listing; });
     room::worker_generation=room::connection_generation.load();room::worker_ticket=room::view().generation;

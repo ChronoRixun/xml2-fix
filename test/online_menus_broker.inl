@@ -61,9 +61,8 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     set_current(hub.data());tick(hub.data(),nullptr);ticks+=2000;
     screen("lc_host");tick(child.data(),nullptr);assert(menu_hosts==0);
     post(intent::visibility);tick(child.data(),nullptr);post(intent::open_room);tick(child.data(),nullptr);
-    assert(menu_hosts==1 && menu_last_public && bm::valid_room_name(menu_last_name));
-    menu_complete=true;tick(child.data(),nullptr);assert(menu_view().state==bm::phase::room && texts["room_code"]=="ABCDEFGH");
-    post(intent::back);tick(child.data(),nullptr);assert(menu_leaves==1 && menu_view().state==bm::phase::idle);
+    assert(menu_hosts==0 && calls.back()=="request:game_options");
+    post(intent::back);tick(child.data(),nullptr);assert(menu_leaves==0 && menu_view().state==bm::phase::idle);
     set_current(hub.data());tick(hub.data(),nullptr);ticks+=2000;
     screen("lc_code");tick(child.data(),nullptr);
     for(int i=32;i<40;++i) { post(static_cast<intent>(i));tick(child.data(),nullptr); }
@@ -74,7 +73,7 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     assert(menu_view().state==bm::phase::room && std::filesystem::exists(root/L"local/XML2 Fix/online/last-game.txt"));
     auto record=std::ifstream(root/L"local/XML2 Fix/online/last-game.txt",std::ios::binary);std::string bytes((std::istreambuf_iterator<char>(record)),{});
     assert(decode_recent(bytes)->name=="Remote ? ? name");
-    post(intent::erase);tick(child.data(),nullptr);assert(menu_leaves==2);
+    post(intent::erase);tick(child.data(),nullptr);assert(menu_leaves==1);
     screen("lc_browse");ticks+=10000;tick(child.data(),nullptr);assert(menu_lists==2);
     auto ticket=menu_view().generation;menu_auth=false;menu_complete=true;post(intent::back);tick(child.data(),nullptr);
     assert(menu_view().generation!=ticket && menu_view().state==bm::phase::idle && menu_lists==2);
@@ -84,9 +83,9 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     screen("lc_code");ticks+=2000;tick(child.data(),nullptr);assert(texts["code_value"]=="2345-6789" && menu_resolves==4);
     post(intent::clear);tick(child.data(),nullptr);post(intent::back);tick(child.data(),nullptr);
     menu_launch={bm::operation::host,{},"Preset room",true};menu_has_preset=true;
-    set_current(hub.data());tick(hub.data(),nullptr);assert(calls.back()=="request:lc_host" && menu_hosts==1);
+    set_current(hub.data());tick(hub.data(),nullptr);assert(calls.back()=="request:lc_host" && menu_hosts==0);
     screen("lc_host");tick(child.data(),nullptr);ticks+=2000;post(intent::open_room);tick(child.data(),nullptr);
-    assert(menu_hosts==2 && menu_last_public && menu_last_name=="Preset room");
+    assert(menu_hosts==0 && calls.back()=="request:game_options");
     post(intent::back);tick(child.data(),nullptr);set_current(hub.data());tick(hub.data(),nullptr);
     ticks+=2000;screen("lc_code");tick(child.data(),nullptr);menu_refuse=true;
     for(int i=32;i<40;++i) { post(static_cast<intent>(i));tick(child.data(),nullptr); }

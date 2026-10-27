@@ -15,6 +15,7 @@ inline constexpr char capability[] = "lc-online-menus/1\n";
 inline constexpr char input_capability[] = "lc-online-input/1";
 inline constexpr char lobby_capability[] = "lc-online-lobby/1";
 inline constexpr char broker_capability[] = "lc-online-broker/1";
+inline constexpr char native_capability[] = "lc-online-native/1";
 inline constexpr char function_name[] = "lcOnlineIntent";
 enum class intent : int { enter=1, host, code, browse, other, back, unavailable, dismiss, edit_name, paste, erase, clear, done, rejoin, invalid_key,
     copy_code=16, confirm_leave=17, refresh=18, open_room=19, retry=20, visibility=21,
