@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.8.1 - 2026-10-26
+
+A hotfix for 1.8.0 (Legends Classic 0.4.0, content 27 / `LC36`, unchanged): the once-a-second pause with a
+controller connected. No gameplay rule or agreement byte changes, so 1.8.1 and 1.8.0 PCs play together; no Rebuild.
+
+- **Controller scan cache** (`[Input] CacheDeviceScan`, default `1`; [docs](docs/controller-scan-cache.md)). The
+  retail zone timer (`0x6256E0`) asks for a DirectInput controller scan about once a second (worker `0x618C90` ->
+  `0x628E20`, EnumDevices at `0x628E54`); the enumeration measured 170-900 ms, and with a pad connected it showed as
+  a pause (Team Management's clouds). Controller enumerations are now collected on a background worker and replayed from
+  complete immutable snapshots on the caller's thread through the existing spoof and virtual-pad callbacks (order,
+  structure size, bytes, HRESULT and DIENUM_STOP preserved). Raw Input topology is compared every 250 ms, with a
+  30-second safety rescan; a cold query still waits for its first complete list (the startup scan, main-menu input,
+  libIGDisplay's one-shot count). XInput slots are discovered on XInput's own worker once a second and after a failed
+  read; frames read only the selected slot. `CacheDeviceScan=0` restores the previous enumeration and discovery paths.
+  New native fixtures `xml2_controller_scan_cache_test` and `xml2_xinput_connections_test`. Owner live check on the
+  beta 8 candidate 080i: the pause is gone with a pad connected.
+
 ## 1.8.0 - 2026-10-25
 
 The first stable release since 1.7.1, the engine half of Legends Classic 0.4.0 (content 27 / `LC36`, the same
