@@ -66,6 +66,7 @@ namespace save_format
 		native_profile published_profile = retail_profile;
 		bool layout_vetoed = false;   // use_native_profile refused a profile (unknown or mismatching descriptor)
 		const lcsave::NativeLayout* native_layout = &lcsave::retail_layout; // the lcsave descriptor matching layout_profile
+		lcsave::NativeLayout actor_native_layout{};
 		lcsave::TypedRegistry typed_registry;        // the build's typed entity-id registry, when verified against the scripts
 		bool typed_registry_verified = false;
 		std::string typed_registry_reason;             // why legacy (feature-0) loads refuse when it is not
@@ -2106,6 +2107,7 @@ namespace save_format
 		lc_known_required_features = layout->feature_bits;   // RETAIL 0, E10A2 1, W2 3
 	}
 
+	void enable_actor_capacity96(){actor_native_layout=*native_layout;actor_native_layout.feature_bits|=lcsave::feature_actor_capacity96;native_layout=&actor_native_layout;lc_known_required_features=native_layout->feature_bits;}
 	const native_profile& installed_profile() { return published_profile; }
 
 	void install(const HMODULE game)

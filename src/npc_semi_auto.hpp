@@ -4,6 +4,7 @@
 #include <cstdint>
 namespace npc_semi_auto
 {
+ void register_ai_layout();
  void install(HMODULE game);
  bool requested();
  bool installed();

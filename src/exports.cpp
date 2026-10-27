@@ -83,6 +83,8 @@
 #include "effect_templates.hpp"
 #include "primitives_per_effect.hpp"
 #include "actor_pools.hpp"
+#include "e4_core.hpp"
+#include "e4_core_state.hpp"
 #include "model_pools_rules.hpp"
 #include "online_tick.hpp"
 #include "frame_rate_rules.hpp"
@@ -231,6 +233,7 @@ namespace
 		virtual_pad::install();
 		xml2_pad_bindings::install();
 
+		e4_core::configure();
 		e4_observe::configure();
 		const HMODULE game = GetModuleHandleW(nullptr);
 		// E12: XMen2.exe's address space - the 2 GB guard when the build's exe is large-address-aware, and the crash
@@ -275,6 +278,9 @@ namespace
 		// install contribute their guards and writes; every expectation is unioned and checked once, every touched
 		// page acquired once, and nothing is published unless the whole set verified. A refusal leaves stock bytes.
 		patch_transaction::transaction startup;
+		e4_core::require_agreement(game);
+		if(e4_core_state::eligible){npc_power::register_ai_layout();npc_semi_auto::register_ai_layout();mold_controller::register_ai_layout();xml1_turrets::register_ai_layout();}
+		e4_core::prepare(game);
 		resident_stats::require_agreement(game);
 		motion_pool::require_agreement(game);
 		char_sounds::require_agreement(game);
@@ -299,7 +305,14 @@ namespace
         discord_presence::register_stats_layout(); forced_teams::register_stats_layout();
         revival_cost::register_stats_layout(); xp_curve::register_stats_layout();
         resident_stats::contribute(startup,game);
+		if(e4_core_state::prepared){
+			actor_pools::contribute(startup,game);
+			char_sounds::contribute(startup,game);
+			motion_pool::contribute(startup,game);
+			e4_core::contribute(startup,game);
+		}
 		const auto committed = startup.commit();
+		e4_core::after_commit(committed==patch_transaction::outcome::committed);
 		logger::write("startup transaction: %s (%s)", patch_transaction::name(committed), startup.report().c_str());
 		entity_capacity::after_commit(committed == patch_transaction::outcome::committed, committed == patch_transaction::outcome::rollback_failed);
 		native_save_layout::after_commit(committed);
@@ -307,7 +320,7 @@ namespace
 		if (!native_save_layout::startup_allowed() || !save_format::startup_allowed() || !entity_capacity::startup_allowed()) return;
 		// R1 uses the published entity layout for its strict actor-capacity check.
 		patch_transaction::transaction sounds;
-		char_sounds::contribute(sounds, game);
+		if(!e4_core::installed())char_sounds::contribute(sounds, game);
 		const auto sound_result = sounds.commit();
 		if (sounds.contributions()) logger::write("CharSounds transaction: %s (%s)", patch_transaction::name(sound_result), sounds.report().c_str());
 		if (!game_version::startup_allowed()) return;
@@ -522,7 +535,7 @@ namespace
 		limits::register_resource_agreement();
 		// R3 uses the published ActorSlots bound before the lazy motion pool exists.
 		patch_transaction::transaction motions;
-		motion_pool::contribute(motions, game);
+		if(!e4_core::installed())motion_pool::contribute(motions, game);
 		const auto motion_result = motions.commit();
 		if (motions.contributions()) logger::write("MotionPool transaction: %s (%s)", patch_transaction::name(motion_result), motions.report().c_str());
 		if (!game_version::startup_allowed()) return;
@@ -648,6 +661,8 @@ namespace
 		// transport, which it requires.
 		join_in_progress::install(game);
 
+		e4_core::verify_consumers();
+		if(!game_version::startup_allowed())return;
 		e4_observe::install(game);
 		pool_counters::install(game); // D0 has no image writes; D1 is explicit [Test] only
 		test_mode::install(game);

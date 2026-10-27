@@ -5,6 +5,7 @@
 #include "xml1_hook_transaction.hpp"
 // Master Mold, a client of the shared XML1 boss dispatcher (xml1_bosses.hpp), which installs it.
 namespace mold_controller {
+void register_ai_layout();
 // Reads Game.Xml1MasterMold and checks this controller's guards; true = ready, with its beam patch in `beam`.
 bool prepare(HMODULE game,xml1_hook_transaction::patch& beam);
 // The shared transaction's outcome for a prepared controller (ok, or refused with/without a verified rollback).

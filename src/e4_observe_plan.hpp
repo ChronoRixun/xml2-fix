@@ -70,20 +70,36 @@ inline bytes boundary_stub(const e4_observe_sites::site& s,u32 base,u32 callback
     b.insert(b.end(),body.begin(),body.end());return b;
 }
 struct plan {patch_transaction::contribution contribution;bytes code;};
-inline std::optional<plan> make(u32 base,u32 callback,const std::vector<patch_transaction::write>& prior, const std::vector<patch_transaction::write>& originals={},std::string* why=nullptr,u32 unwind_handler=0) {
+inline std::optional<plan> make(u32 base,u32 callback,const std::vector<patch_transaction::write>& prior, const std::vector<patch_transaction::write>& originals={},std::string* why=nullptr,u32 unwind_handler=0,
+    const std::vector<patch_transaction::write>& pending={},bool core=false,bool elide_power=false) {
     const auto fail=[&](std::string message)->std::optional<plan>{if(why)*why=std::move(message);return std::nullopt;};
     plan p;p.contribution.owner="E4Observe";std::set<u32> emitted;
     for(unsigned id=0;id<e4_observe_sites::sites.size();++id){const auto& s=e4_observe_sites::sites[id];
         if(!emitted.insert(s.va).second)continue;
+        // The core's whole-function team-free replacement emits the same
+        // destruction/provenance notifications around its native destructor.
+        if(core&&(s.type==e4_observe_sites::kind::team_free||s.type==e4_observe_sites::kind::team_free_done))continue;
         std::vector<unsigned> group;for(unsigned n=0;n<e4_observe_sites::sites.size();++n)if(e4_observe_sites::sites[n].va==s.va)group.push_back(n);
         // Rule 16 intentionally removes this virtual call (ADD ESP,4). There
         // is no callback to borrow across; retain that certified replacement.
         bool elided=false;
         if(s.point==0x505011)for(const auto& w:prior)if(w.va==0x505011&&w.bytes==bytes{0x83,0xc4,0x04})elided=true;
+        if(core&&elide_power&&s.point==0x505011)elided=true;
         if(elided)continue;
         // A prior writer owns its span. Do not overwrite another rule's cave.
         for(const auto& w:prior)if(s.va<std::uint64_t(w.va)+w.bytes.size()&&w.va<s.next)return fail(std::string(s.name)+" overlaps "+w.what);
-        auto at=base+static_cast<u32>(p.code.size());auto code=unwind_handler&&(s.type==e4_observe_sites::kind::factory_entry||s.type==e4_observe_sites::kind::step)?boundary_stub(s,at,callback,id,unwind_handler,s.type==e4_observe_sites::kind::factory_entry?16:0):stub(s,at,callback,id,group);if(code.empty())return fail(std::string(s.name)+" stub length");
+        // Pending operand edits are emitted inside the observed instruction,
+        // not written beneath the observation detour. Opcode/branch shape is
+        // fixed by the audited observation ledger; only operands may compose.
+        auto composed=s;std::vector<e4_observe_sites::instruction> instructions(s.code,s.code+s.count);
+        std::vector<std::string> encoded;encoded.reserve(s.count);
+        for(unsigned n=0;n<s.count;++n){auto b=patch_transaction::bytes_of(s.code[n].hex);const auto original=b;
+            for(const auto& w:pending)for(unsigned j=0;j<w.bytes.size();++j)if(w.va+j>=instructions[n].va&&w.va+j<instructions[n].va+b.size())b[w.va+j-instructions[n].va]=w.bytes[j];
+            if(b[0]!=original[0])return fail(std::string(s.name)+" pending opcode change");
+            constexpr char digits[]="0123456789abcdef";std::string h;for(auto v:b){h+=digits[v>>4];h+=digits[v&15];}encoded.push_back(std::move(h));instructions[n].hex=encoded.back().c_str();
+        }
+        composed.code=instructions.data();
+        auto at=base+static_cast<u32>(p.code.size());auto code=unwind_handler&&(s.type==e4_observe_sites::kind::factory_entry||s.type==e4_observe_sites::kind::step)?boundary_stub(composed,at,callback,id,unwind_handler,s.type==e4_observe_sites::kind::factory_entry?16:0):stub(composed,at,callback,id,group);if(code.empty())return fail(std::string(s.name)+" stub length");
         p.code.insert(p.code.end(),code.begin(),code.end());
         p.contribution.guards.push_back({s.va,patch_transaction::bytes_of(s.hex),s.name});
         p.contribution.writes.push_back(patch_transaction::relocation(s.va,"e9",true,at,s.next-s.va-5,s.name));

@@ -32,7 +32,7 @@ namespace actor_pools_plan
         }
         return out;
     }
-    inline bytes team_code(address va,address base)
+    inline bytes team_code(address va,address base,address observer=0)
     {
         bytes b;
         if(va==0x50e1c2)
@@ -40,8 +40,15 @@ namespace actor_pools_plan
             b={0x85,0xc0,0x0f,0x84}; u32(b,0); // null -> activation below
             b.insert(b.end(),{0x8b,0x56,0x10}); branch(b,base,0x50e1c9);
             put(b,4,4,static_cast<address>(b.size())-8);
-            b.insert(b.end(),{0x8b,0x46,0x10,0x6a,0,0x50,0x8b,0xcf});
-            branch(b,base,0x41b5b0,0xe8);branch(b,base,0x50e21e);
+            const auto borrow=[&](unsigned post,address returned)->unsigned{
+                if(!observer)return 0;
+                auto save=patch_transaction::bytes_of("9c60fc8bdc81ec1002000083e4f00fae042468");b.insert(b.end(),save.begin(),save.end());
+                const auto fix=static_cast<unsigned>(b.size());u32(b,returned);auto args=patch_transaction::bytes_of("ff73046a");args.push_back(static_cast<std::uint8_t>(post));
+                b.insert(b.end(),args.begin(),args.end());branch(b,base,observer,0xe8);
+                auto restore=patch_transaction::bytes_of("83c40c0fae0c248be3619d");b.insert(b.end(),restore.begin(),restore.end());return fix;
+            };
+            b.insert(b.end(),{0x8b,0x46,0x10,0x6a,0,0x50,0x8b,0xcf});const auto fix=borrow(0,0);
+            branch(b,base,0x41b5b0,0xe8);const auto returned=base+static_cast<address>(b.size());if(observer)put(b,fix,4,returned);borrow(1,returned);branch(b,base,0x50e21e);
             return b;
         }
         // Preserve incoming flags for the load/call sites; the original compare/add
@@ -73,7 +80,8 @@ namespace actor_pools_plan
         return b;
     }
     inline std::optional<plan> make(address block,address caves,address observer,
-                                   std::span<const entity_capacity_b_sites::site> rows=entity_capacity_b_sites::sites)
+                                   std::span<const entity_capacity_b_sites::site> rows=entity_capacity_b_sites::sites,
+                                   bool core=false,address event_observer=0)
     {
         using namespace entity_capacity_b_sites;
         // A partial/corrupt contribution must never install a subset of the stage.
@@ -101,7 +109,7 @@ namespace actor_pools_plan
             if(clear||team||observed)
             {
                 const auto entry=caves+static_cast<address>(result.code.size());
-                bytes code=team?team_code(va,entry):observed?observed_compare(va,entry,block,observer,after):clear_code(after);
+                bytes code=team?team_code(va,entry,core?event_observer:0):observed?observed_compare(va,entry,block,observer,after):clear_code(after);
                 if(clear)branch(code,entry,va+static_cast<address>(before.size()));
                 result.code.insert(result.code.end(),code.begin(),code.end());
                 after=patch_transaction::relocation(va,"e9",true,entry,static_cast<unsigned>(before.size())-5,"cave").bytes;
@@ -113,7 +121,7 @@ namespace actor_pools_plan
         // W11: a controller slot is reset immediately after the native FIFO pop,
         // before any of the six brain constructors. The callback is empty until
         // NpcPowerRule has published its data block.
-        {
+        if(!core) {
             const auto entry=caves+static_cast<address>(result.code.size());
             auto code=patch_transaction::bytes_of(controller_reset.before);
             code.insert(code.end(),{0x9c,0x60,0x50,0x6a,3});
@@ -126,7 +134,7 @@ namespace actor_pools_plan
             const auto& r=controller_reset_region;
             result.contribution.regions.push_back({"W11 controller FIFO",r.lo,r.hi,patch_transaction::sha256_of(r.hash)});
         }
-        if(result.code.size()>4096)return std::nullopt;
+        if(result.code.size()>(core?8192u:4096u))return std::nullopt;
         return result;
     }
 }

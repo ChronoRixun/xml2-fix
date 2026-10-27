@@ -61,6 +61,7 @@ skip = {
     # argument-taking tools run by their own gates: W2's G3 real-saves run (--list/--data/--registry/--out) and the
     # E4 actor-pools host (scripts/test_actor_pools.py); without arguments both only print their usage (exit 2)
     "lcsave_real_saves", "actor_pools_host",
+    "xml2_e4_core_host", # its boundary/fault/encoding matrix runs through test_e4_core.py below
 }
 for exe in sorted(b.glob("*.exe")):
     name = exe.stem
@@ -87,6 +88,7 @@ installer_modes = {"xml2_xml1_air_carry_test", "xml2_pad_hotplug_test", "xml2_pa
 for fixture in ("xml2_pad_hotplug_test", "xml2_pad_hotplug_live_test"):
     cmds += [[str(b / (fixture + ".exe")), EXE, mode] for mode in ("1", "0")]
 cmds.append([str(b / "xml2_xml1_grab_carry_install_test.exe"), EXE, "both"])
+cmds += [[str(b / "xml2_xml1_rogue_decide_install_test.exe"), mode] for mode in ("both","raised")]
 cmds += [[str(b / "xml2_xml1_air_carry_test.exe"), EXE, mode] for mode in ("both", "raised")]
 cmds.append([str(b / "xml2_shared_handlers_c_test.exe"), EXE, XBE, "--off-proof"])
 mode_suites = {"xml2_effect_templates_test": (
@@ -103,6 +105,9 @@ economy_modes = ("A", "1roll", "prices", "shop", "bag", "digest", "off", "zero",
 cmds += [[str(b / "xml2_economy_test.exe"), EXE, mode] for mode in economy_modes]
 installer_modes |= {"xml2_economy_test"}
 
+if (b / "xml2_e4_core_host.exe").exists():
+    cmds.append([sys.executable,"-B",str(R / "scripts/test_e4_core.py"),"--host",str(b / "xml2_e4_core_host.exe"),"--exe",EXE,"--out",str(out / "e4-core")])
+
 if LIST_ONLY:
     # The command matrix only: for checking the runner against another gate's matrix. Everything above only reads.
     for cmd in cmds:
@@ -116,6 +121,7 @@ if stale.exists():
 results = []
 for cmd in cmds:
     tag = Path(cmd[0]).stem
+    if len(cmd)>2 and cmd[2]==str(R / "scripts/test_e4_core.py"):tag="e4-core-driver"
     if len(cmd) > 1 and cmd[1].startswith("--"):
         tag += cmd[1]
     if "durable_parity" in tag:
@@ -124,7 +130,7 @@ for cmd in cmds:
         tag += "+exe"
     if XBE in cmd:
         tag += "+xbe"
-    if tag.removesuffix("+exe").endswith("_install_test") and cmd[-1] not in (EXE, XBE):
+    if len(cmd)>1 and tag.removesuffix("+exe").endswith("_install_test") and cmd[-1] not in (EXE, XBE):
         tag += "-" + cmd[-1]
     if Path(cmd[0]).stem in installer_modes and len(cmd)>2:
         tag += "-" + cmd[-1]

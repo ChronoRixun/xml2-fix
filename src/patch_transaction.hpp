@@ -87,6 +87,12 @@ namespace patch_transaction
 		std::size_t pages() const { return pages_; }
 		std::size_t written_bytes() const { return written_; }
 		std::size_t guarded_bytes() const { return guarded_; }
+		// Preparation-only composition: a semantic owner may move an already
+		// guarded operand into an authored trampoline before the union is sealed.
+		// The ordinary guard/conflict/readback/rollback checks still cover the
+		// resulting union. No game byte is read or written by this operation.
+		bool compose(const std::function<bool(std::vector<contribution>&)>& prepare)
+		{ return !sealed_ && prepare(contributions_); }
 
 	private:
 		std::vector<contribution> contributions_;

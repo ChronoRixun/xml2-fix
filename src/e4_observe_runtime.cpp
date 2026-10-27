@@ -1,4 +1,5 @@
 #include "e4_observe.hpp"
+#include "e4_core_state.hpp"
 #include "e4_observe_rules.hpp"
 #include "e4_observe_plan.hpp"
 #include "actor_ai_layout.hpp"
@@ -132,21 +133,21 @@ u32 controller(u32 address) {
     const auto diff=address-d.primary_base;return diff%d.controller_stride?max_slots:diff/d.controller_stride;
 }
 u32 control_address(u32 i){return actor_ai::installed().primary_base+i*actor_ai::installed().controller_stride;}
-u32 generation(u32 i){return value(actor_ai::installed().primary_base+0xc41c+4*i);}
-u32 index(u32 token){return token&value(actor_ai::installed().cai_object+0xc4a0);}
+u32 generation(u32 i){const auto& d=actor_ai::installed();return value(d.primary_base+actor_ai::generations(d)+4*i);}
+u32 index(u32 token){const auto& d=actor_ai::installed();return token&value(d.cai_object+d.mask_offset_obj);}
 u32 team_token(u32 address) {
     const auto& d=actor_ai::installed();
     if(address<d.team_base||(address-d.team_base)%d.team_stride)return 0;
     const auto i=(address-d.team_base)/d.team_stride;if(i>=d.team_storage)return 0;
-    return value(d.cai_object+0xce74+4*i);
+    return value(d.team_base+actor_ai::team_generations(d)+4*i);
 }
 u32 logical_team(u32 token) {
     if(!token)return 0;
-    const auto& d=actor_ai::installed();const auto i=token&value(d.cai_object+0xce84);
+    const auto& d=actor_ai::installed();const auto i=token&value(d.cai_object+actor_ai::team_mask(d));
     // Only live team lifetimes have an identity. Stale tokens normalize to the
     // same teamless state as the native resolver, without consuming an entry.
-    if(i>=d.team_storage||i>=teams.size()||value(d.cai_object+0xce74+i*4)!=token||
-       !(value(d.team_base+0x9c4+(i>>5)*4)&(1u<<(i&31))))return 0;
+    if(i>=d.team_storage||i>=teams.size()||value(d.team_base+actor_ai::team_generations(d)+i*4)!=token||
+       !(value(d.team_base+actor_ai::team_active(d)+(i>>5)*4)&(1u<<(i&31))))return 0;
     auto& entry=teams[i];if(entry.token==token)return entry.id;
     if(next_team==0xffffffffu){m.emit(event_kind::overflow,max_slots);return 0;}
     entry={token,++next_team};return entry.id;
@@ -191,8 +192,8 @@ void sample_accounting(){
     const auto& d=actor_ai::installed();u32 actors=0,arena_actors=0,bad_tokens=0;
     const auto allocator=value(entity_capacity_layout::allocator_pointer_cell);
     if(allocator) {
-        const auto mask=value(allocator+0x10998);
-        for(unsigned i=0;i<32;++i)if(mask&(1u<<i)){
+        const auto bitmap=d.stage==2?0x31c98u:0x10998u;
+        for(unsigned i=0;i<(d.stage==2?96u:32u);++i)if(value(allocator+bitmap+(i/32)*4)&(1u<<(i%32))){
             ++arena_actors;const auto actor=allocator+8+i*0x848,token=value(actor+0x7dc),slot=index(token);
             // Actor allocation does not imply an AI controller (e.g. team heroes).
             // A non-null token, however, must resolve to a unique live controller.
@@ -207,8 +208,8 @@ void sample_accounting(){
         const auto owner=m.slots[i].owner;
         orphaned[i]=!owner||value(owner+0x7dc)!=m.slots[i].generation;
     }
-    const auto live=value(d.primary_base+0xc418);
-    const auto arena_live=allocator?value(allocator+0x1099c):0;
+    const auto live=value(d.primary_base+actor_ai::primary_live(d));
+    const auto arena_live=allocator?value(allocator+(d.stage==2?0x31ca4:0x1099c)):0;
     // Unreadable probes are not evidence of an accounting mismatch.
     if(probe_faults!=faults_before)return;
     for(unsigned i=0;i<d.controllers;++i)if(orphaned[i])m.slots[i].at=state::orphaned;
@@ -251,19 +252,29 @@ void __cdecl observe(unsigned encoded,const u32* r) {
     const unsigned id=encoded/2;const bool post=(encoded&1)!=0;
     if(id>=e4_observe_sites::sites.size()){ReleaseSRWLockExclusive(&mutex);current_context->inside=false;return;}
     const auto& s=e4_observe_sites::sites[id];
+    bool core_boundary=false;
     u32 return_address=s.point;
     for(unsigned n=0;n<s.count;++n)if(s.code[n].va==s.point)return_address+=static_cast<u32>(std::strlen(s.code[n].hex)/2);
     m.depth=current_context->depth;m.borrows=current_context->borrows;
     switch(s.type){
     case kind::checkpoint:checkpoint(sp(r),thread);break;
-    case kind::step:checkpoint(sp(r),thread);++m.step;sample_accounting();break;
+    case kind::step:{
+        checkpoint(sp(r),thread);++m.step;sample_accounting();
+        bool factory=false;for(unsigned n=0;n<context_capacity;++n)if(context_bank[n].thread&&context_bank[n].data.factory_depth)factory=true;
+        // Loading/reset/reentrant construction frames are not quiescent
+        // simulation boundaries. Never dissolve teams while this brain owns
+        // a borrowed callback frame; the next ordinary step consumes the flag.
+        u32 loading=0;const bool readable=read(0x72a798,&loading,1);
+        core_boundary=readable&&!m.resetting&&!factory&&!current_context->depth&&!(loading&3);
+        break;
+    }
     case kind::factory_entry:
         checkpoint(sp(r),thread);
         if(current_context->factory_depth<current_context->factory_stack.size())current_context->factory_stack[current_context->factory_depth++]=sp(r);
         else m.emit(event_kind::overflow,max_slots,s.point);
         break;
     case kind::factory_failed:if(current_context->factory_depth)--current_context->factory_depth;else m.emit(event_kind::transition,max_slots,s.point);break;
-    case kind::admitted:{const auto i=r[0];m.admit(i,r[1]+4+i*0x848,thread);
+    case kind::admitted:{const auto i=r[0];if(e4_core_state::installed&&e4_core_state::on_admitted)e4_core_state::on_admitted(i);m.admit(i,r[1]+4+i*0x848,thread);
         if(i<max_slots){
             if(current_context->factory_depth)m.records[i].esp=current_context->factory_stack[current_context->factory_depth-1];
             if(current_context->boundary)m.records[i].boundary=current_context->boundary->serial;
@@ -279,18 +290,18 @@ void __cdecl observe(unsigned encoded,const u32* r) {
         }else if(current_context->init_depth){const auto actor=current_context->init_stack[--current_context->init_depth];m.advance(actor,phase::init_returned);if(auto* c=m.find(actor))c->esp=sp(r);}
         else m.emit(event_kind::transition,max_slots,s.point);
         break;
-    case kind::controller_pop:{checkpoint(sp(r),thread);const auto i=r[7];observe_borrows(event_kind::reuse_borrowed,i,arg(r,0));const auto depth=m.depth;m.depth=0;m.take(i,generation(i),arg(r,0));m.depth=depth;if(auto* c=m.inner(thread))c->slot=i;break;}
+    case kind::controller_pop:{checkpoint(sp(r),thread);const auto i=r[7];if(e4_core_state::installed){if(e4_core_state::on_controller_pop)e4_core_state::on_controller_pop();if(actor_ai::reset_controller_slot)actor_ai::reset_controller_slot(i);}observe_borrows(event_kind::reuse_borrowed,i,arg(r,0));const auto depth=m.depth;m.depth=0;m.take(i,generation(i),arg(r,0));m.depth=depth;if(auto* c=m.inner(thread))c->slot=i;break;}
     case kind::controller_token:{const auto i=index(r[7]);m.publish(i,r[1],s.point);m.advance(r[1],phase::controller);
         if(i<max_slots){if(auto* c=m.find(r[1]))logical_actors[i]=c->logical;handler(i);trace_actor(s.point,i);}break;}
     case kind::factory_published:m.advance(r[1],phase::published);if(current_context->factory_depth)--current_context->factory_depth;else m.emit(event_kind::transition,max_slots,s.point);break;
-    case kind::actor_free:{checkpoint(sp(r),thread);const auto i=arg(r,1);if(i<max_slots)m.records[i].open=false;break;}
+    case kind::actor_free:{checkpoint(sp(r),thread);const auto i=arg(r,1);if(e4_core_state::installed&&e4_core_state::on_actor_free)e4_core_state::on_actor_free(i);if(i<max_slots)m.records[i].open=false;break;}
     case kind::controller_release:{checkpoint(sp(r),thread);const auto i=arg(r,1);observe_borrows(event_kind::release_borrowed,i,arg(r,0));const auto depth=m.depth;m.depth=0;m.release(i,arg(r,0));m.depth=depth;trace_actor(s.point,i);break;}
-    case kind::controller_free:m.free(r[0],s.point);break;
+    case kind::controller_free:m.free(r[0],s.point);if(e4_core_state::installed&&e4_core_state::on_controller_freed)e4_core_state::on_controller_freed(r[7]);break;
     case kind::resolve_hit:case kind::resolve_refused:{const auto token=r[1],i=index(token);
         if(i<actor_ai::installed().controllers){m.slots[i].generation=generation(i);m.resolve(i,token,arg(r,1),s.type==kind::resolve_hit);}break;}
     case kind::team_resolve_hit:case kind::team_resolve_refused:{
-        const auto& d=actor_ai::installed();const auto token=r[1],i=token&value(d.cai_object+0xce84);
-        if(token&&i<d.team_storage){const auto current=value(d.cai_object+0xce74+i*4);
+        const auto& d=actor_ai::installed();const auto token=r[1],i=token&value(d.cai_object+actor_ai::team_mask(d));
+        if(token&&i<d.team_storage){const auto current=value(d.team_base+actor_ai::team_generations(d)+i*4);
             const bool dying=s.type==kind::team_resolve_hit&&team_destroying[i];
             const bool stale=s.type==kind::team_resolve_refused&&token!=current;
             if(dying||stale){m.emit(dying?event_kind::team_resolve_destroy:event_kind::team_stale,0x10000|i,arg(r,1),token);m.events[(m.head-1)%64].generation=current;}
@@ -359,6 +370,7 @@ void __cdecl observe(unsigned encoded,const u32* r) {
     auto* completed=current_context;
     const bool recycled=recycle_context(completed,thread);
     ReleaseSRWLockExclusive(&mutex);if(!recycled)completed->inside=false;
+    if(core_boundary&&e4_core_state::installed&&e4_core_state::on_boundary)e4_core_state::on_boundary();
 }
 LONG CALLBACK first_chance(EXCEPTION_POINTERS* p) {
     if(installed&&current_context&&!current_context->inside){AcquireSRWLockExclusive(&mutex);
@@ -383,6 +395,68 @@ void test_emit(unsigned point,bool post,const unsigned* registers){
     for(unsigned n=0;n<e4_observe_sites::sites.size();++n)if(e4_observe_sites::sites[n].point==point){observe(n*2+(post?1:0),registers);return;}
 }
 #endif
+void core_checkpoint(){
+    if(!installed)return;
+    if(!attach_context())fatal("E4 core checkpoint context capacity exhausted");
+    if(current_context->inside)fatal("E4 recursive core checkpoint");
+    current_context->inside=true;AcquireSRWLockExclusive(&mutex);checkpoint(0,GetCurrentThreadId());
+    auto* completed=current_context;const bool recycled=recycle_context(completed,GetCurrentThreadId());
+    ReleaseSRWLockExclusive(&mutex);if(!recycled)completed->inside=false;
+}
+void core_team_lifecycle(unsigned i,bool after){
+    if(!installed||i>=max_slots)return;AcquireSRWLockExclusive(&mutex);
+    if(!after)team_destroying[i]=true;
+    else {const auto& d=actor_ai::installed();const auto token=team_token(d.team_base+i*d.team_stride);
+        team_destroying[i]=false;if(teams[i].token==token)teams[i]={};
+        for(auto& row:provenance_table)for(auto& f:row)if(f.team&&f.team==token)f.dissolved=true;
+    }ReleaseSRWLockExclusive(&mutex);
+}
+void core_fold_snapshot(unsigned i,std::uint32_t token,bool after){
+    if(!installed||i>=max_slots)return;AcquireSRWLockExclusive(&mutex);take_snapshot(i,0xe4000001,token,after);ReleaseSRWLockExclusive(&mutex);
+}
+void core_event_borrow(std::uint32_t brain,bool post,std::uint32_t returned){
+    if(!installed)return;if(!attach_context())fatal("E4 null-team callback context exhausted");
+    if(current_context->inside)fatal("E4 null-team callback reentry");current_context->inside=true;AcquireSRWLockExclusive(&mutex);
+    m.depth=current_context->depth;m.borrows=current_context->borrows;
+    if(!post){if(current_context->depth<max_depth){current_context->borrow_sp[current_context->depth]=0;m.push(controller(brain),returned);current_context->depth=m.depth;current_context->borrows=m.borrows;}else{++current_context->borrow_overflow;m.emit(event_kind::overflow,controller(brain),returned);}}
+    else if(current_context->borrow_overflow)--current_context->borrow_overflow;
+    else if(current_context->depth){m.pop(returned);current_context->depth=m.depth;current_context->borrows=m.borrows;}
+    else m.emit(event_kind::transition,controller(brain),returned);
+    auto* completed=current_context;const bool recycled=recycle_context(completed,GetCurrentThreadId());ReleaseSRWLockExclusive(&mutex);if(!recycled)completed->inside=false;
+}
+bool contribute_core(patch_transaction::transaction& tx,HMODULE game,std::string& why){
+    if(!enabled()||addr(game)!=0x400000||installed){why="mandatory observer not available for preparation";return false;}
+    constexpr unsigned capacity=65536;
+    auto* code=static_cast<std::uint8_t*>(VirtualAlloc(nullptr,capacity,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE));
+    context_bank=static_cast<context_slot*>(VirtualAlloc(nullptr,sizeof(context_slot)*context_capacity,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE));
+    if(context_bank)for(unsigned n=0;n<context_capacity;++n)::new(context_bank+n) context_slot{};
+    const auto release=[code]{if(code)VirtualFree(code,0,MEM_RELEASE);if(context_bank){VirtualFree(context_bank,0,MEM_RELEASE);context_bank=nullptr;}};
+    std::vector<patch_transaction::write> pending;
+    tx.compose([&](auto& contributions){for(const auto& c:contributions)for(const auto& w:c.writes)pending.push_back(w);return true;});
+    auto p=code&&context_bank?e4_observe_plan::make(addr(code),addr(reinterpret_cast<const void*>(&observe)),patch_transaction::verified_writes,patch_transaction::verified_originals,&why,addr(reinterpret_cast<const void*>(&e4_unwind_handler)),pending,true,e4_core_state::elide_power):std::nullopt;
+    if(!p||p->code.size()>capacity){release();return false;}
+    std::memcpy(code,p->code.data(),p->code.size());DWORD old=0;
+    if(!VirtualProtect(code,capacity,PAGE_EXECUTE_READ,&old)||!FlushInstructionCache(GetCurrentProcess(),code,p->code.size())){why="observer RX protection/flush failed";release();return false;}
+    veh=AddVectoredExceptionHandler(1,first_chance);if(!veh){why="first-chance observer unavailable";release();return false;}
+    // The exact pending operands have already been emitted into the observed
+    // instruction copies. Remove only bytes those observation detours own.
+    const auto spans=p->contribution.writes;
+    tx.compose([&](auto& contributions){for(auto& c:contributions){std::vector<patch_transaction::write> kept;
+        for(const auto& w:c.writes){patch_transaction::write part{0,{},w.what};
+            for(unsigned n=0;n<w.bytes.size();++n){const auto va=w.va+n;bool covered=false;for(const auto& s:spans)if(va>=s.va&&va<s.va+s.bytes.size()){covered=true;break;}
+                if(covered){if(!part.bytes.empty()){kept.push_back(std::move(part));part={0,{},w.what};}}
+                else {if(part.bytes.empty())part.va=va;part.bytes.push_back(w.bytes[n]);}
+            }if(!part.bytes.empty())kept.push_back(std::move(part));
+        }c.writes=std::move(kept);
+    }return true;});
+    const auto count=static_cast<unsigned>(p->contribution.guards.size());
+    std::vector<actor_ai::observed_span> published_guards;
+    for(std::size_t i=0;i<p->contribution.writes.size();++i)published_guards.push_back({p->contribution.writes[i].va,p->contribution.guards[i].bytes,p->contribution.writes[i].bytes});
+    p->contribution.publish=[count,published_guards=std::move(published_guards)]()mutable{installed=true;installed_spans=count;actor_ai::observed_spans=std::move(published_guards);e4_core_state::on_event_borrow=&core_event_borrow;logger::write("E4: mandatory 96-controller instrumentation installed (%u spans)",count);};
+    p->contribution.abandon=[release]{if(veh){RemoveVectoredExceptionHandler(veh);veh=nullptr;}release();};
+    p->contribution.retain=[]{game_version::refuse_startup();};
+    return tx.add(std::move(p->contribution));
+}
 void install(HMODULE game) {
     if(!enabled()||addr(game)!=0x400000)return;
     if(installed)return;
@@ -415,7 +489,9 @@ std::string json() {
     out<<"{\"enabled\":"<<(enabled()?"true":"false")<<",\"installed\":"<<(installed?"true":"false")<<",\"spans\":"<<installed_spans<<",\"step\":"<<m.step
        <<",\"admitted\":"<<m.admitted<<",\"published_total\":"<<m.published<<",\"boundary_unwinds\":"<<boundary_unwinds<<",\"escaped\":"<<m.escaped
        <<",\"published\":"<<a.published<<",\"constructing\":"<<a.constructing<<",\"destroying\":"<<a.destroying<<",\"orphaned\":"<<a.orphaned
-       <<",\"accounting_suppressed\":"<<m.accounting_suppressed<<",\"reserved\":"<<a.reserved<<",\"context_bytes\":"<<sizeof(context_slot)*context_capacity<<",\"context_capacity\":"<<context_capacity<<",\"contexts_live\":"<<contexts_live<<",\"contexts_peak\":"<<contexts_peak<<",\"probe_faults\":"<<probe_faults<<",\"counts\":[";
+       <<",\"accounting_suppressed\":"<<m.accounting_suppressed<<",\"reserved\":"<<a.reserved<<",\"context_bytes\":"<<sizeof(context_slot)*context_capacity<<",\"context_capacity\":"<<context_capacity<<",\"contexts_live\":"<<contexts_live<<",\"contexts_peak\":"<<contexts_peak<<",\"probe_faults\":"<<probe_faults;
+    if(e4_core_state::installed&&e4_core_state::on_snapshot){u32 core[6]{};e4_core_state::on_snapshot(core);out<<",\"native_reserved\":"<<core[0]<<",\"pending_reservations\":["<<core[1]<<','<<core[2]<<','<<core[3]<<"],\"foldbacks\":"<<core[4]<<",\"stale_fold_retirements\":"<<core[5];}
+    out<<",\"counts\":[";
     for(unsigned n=0;n<m.counts.size();++n){if(n)out<<',';out<<m.counts[n];}out<<"],\"events\":[";
     const auto count=(std::min)(m.head,u32(64));
     for(unsigned n=0;n<count;++n){if(n)out<<',';const auto& e=m.events[(m.head-count+n)%64];

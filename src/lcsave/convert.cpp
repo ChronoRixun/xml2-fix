@@ -1428,7 +1428,7 @@ namespace lcsave::detail
 		HeaderIn h;
 		// the Phase A marker: the writer's layout decides (E10A2: bit 0). W2 sets bit 0 always and bit 1 NATIVE_W2 only
 		// when the representability probe finds the file cannot be applied by a pre-W2 build (limits-wave2.md section 7)
-		h.required_features = native.feature_bits & ~feature_native_w2;
+		h.required_features = native.feature_bits & ~(feature_native_w2|feature_actor_capacity96);
 		h.optional_features = context.optional_features;
 		h.writer_version = context.writer_version;
 		h.content_version = t.catalogue.content_version;
@@ -1447,6 +1447,16 @@ namespace lcsave::detail
 				file = write_file(kind_campaign, sections, h);
 				read_file(file.data(), file.size(), kind_campaign);
 			}
+		}
+		// E4 section 7 (amended 10-27: conservative marking after review - demand
+		// counting missed remembered zones). Every campaign written by a layout
+		// carrying the actor-capacity feature - only a build whose Stage 2 core
+		// was installed and verified - requires bit 0x4. Older builds refuse it
+		// with the readable newer-save message; files without it load unchanged.
+		if(native.feature_bits&feature_actor_capacity96)
+		{
+			state.notes.push_back("ACTOR_CAPACITY_96 (required feature bit 2) set: written by the actor-capacity build");
+			h.required_features|=feature_actor_capacity96;file=write_file(kind_campaign,sections,h);read_file(file.data(),file.size(),kind_campaign);
 		}
 		return file;
 	}

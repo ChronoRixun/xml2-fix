@@ -66,6 +66,9 @@ namespace lcsave
 		{
 		case feature_entity_layout_contiguous10: return "ENTITY_LAYOUT_CONTIGUOUS10";
 		case feature_native_w2: return "NATIVE_W2";
+#ifdef XML2_E4_CORE
+		case feature_actor_capacity96:return "ACTOR_CAPACITY_96";
+#endif
 		default: return nullptr;
 		}
 	}
@@ -76,6 +79,9 @@ namespace lcsave
 		{
 		case feature_entity_layout_contiguous10: return "the entity-capacity build";
 		case feature_native_w2: return "Legends Classic 0.4.2 (XML2 Fix 1.9) or newer with [Limits] SaveLayout=w2";
+#ifdef XML2_E4_CORE
+		case feature_actor_capacity96:return "the actor-capacity build ([Limits] Actors=96)";
+#endif
 		default: return nullptr;
 		}
 	}
@@ -84,6 +90,11 @@ namespace lcsave
 	{
 		FeatureDecision d;
 		d.required_features = required_features;
+		if((required_features&feature_actor_capacity96)&&!(native.feature_bits&feature_actor_capacity96))
+		{
+			d.reason="required feature bits 0x4 not implemented (needs a newer version)";
+			return d;
+		}
 		if (required_features & ~known_required_features)
 		{
 			char b[32];

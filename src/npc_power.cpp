@@ -13,6 +13,7 @@
 
 namespace npc_power
 {
+	void register_ai_layout(){actor_ai::register_consumer(actor_ai::consumer::power);}
 	namespace
 	{
 		using namespace npc_power_rules;

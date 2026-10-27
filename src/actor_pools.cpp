@@ -1,6 +1,7 @@
 #include "actor_pools.hpp"
 #include "actor_pools_plan.hpp"
 #include "actor_ai_layout.hpp"
+#include "e4_core_state.hpp"
 #include "game_version.hpp"
 #include "gameplay_agreement.hpp"
 #include "gameplay_capabilities.hpp"
@@ -9,6 +10,7 @@
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <memory>
 
 #ifdef XML2_ACTOR_POOLS_TEST
 namespace actor_pools_test
@@ -39,6 +41,7 @@ namespace actor_pools
             while(peak<next&&!c.peak.compare_exchange_weak(peak,next,std::memory_order_relaxed)){}
         }
         std::uint32_t address(const void* p) { return static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(p)); }
+        void __cdecl observe_event(unsigned post,unsigned brain,unsigned return_address){if(e4_core_state::installed&&e4_core_state::on_event_borrow)e4_core_state::on_event_borrow(brain,post!=0,return_address);}
     }
     void install(HMODULE game)
     {
@@ -46,7 +49,7 @@ namespace actor_pools
         attempted=true;
         const auto setting=ini::text(L"Limits",L"ActorPools");
         if(!setting)return;
-        const auto register_result=[] { gameplay_agreement::register_rule(gameplay_capabilities::actor_ai_id,1,{32,4,124u|(124u<<16),1},applied); };
+        const auto register_result=[] { if(!e4_core_state::requested)gameplay_agreement::register_rule(gameplay_capabilities::actor_ai_id,1,{32,4,124u|(124u<<16),1},applied); };
         // Not the game (XMen2.exe isn't at 0x400000): nothing can be patched, so no entry, as the [Limits] capacities
         // (409f714) - an unverified entry there would demand the network exclusion hook and refuse that process.
         if(reinterpret_cast<std::uintptr_t>(game)!=0x400000)
@@ -90,6 +93,30 @@ namespace actor_pools
         logger::write("ActorPools: %s (%s); paths/shadows/delayed damage %u; actors/controllers 32, teams 4; block 0x%08lX",
                       patch_transaction::name(result),transaction.report().c_str(),applied?124:32,applied?address(block):0);
         register_result();
+    }
+    bool contribute(patch_transaction::transaction& tx,HMODULE game)
+    {
+        if(attempted||!e4_core_state::prepared||address(game)!=0x400000)return false;
+        attempted=true;
+        struct storage {
+            std::uint8_t* block=static_cast<std::uint8_t*>(VirtualAlloc(nullptr,0x3674,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE));
+            std::uint8_t* code=static_cast<std::uint8_t*>(VirtualAlloc(nullptr,8192,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE));
+            bool retained=false;
+            ~storage(){if(!retained){if(block)VirtualFree(block,0,MEM_RELEASE);if(code)VirtualFree(code,0,MEM_RELEASE);}}
+        };
+        auto s=std::make_shared<storage>();
+        const auto p=actor_pools_plan::make(address(s->block),address(s->code),address(reinterpret_cast<const void*>(&observe)),entity_capacity_b_sites::sites,true,address(reinterpret_cast<const void*>(&observe_event)));
+        if(!s->block||!s->code||!p)return false;
+        // The lazy pools must not exist before the shared startup transaction.
+        auto c=p->contribution;
+        c.guards.push_back({0x72c9c0,{0,0,0,0},"ActorPools path not created"});
+        c.guards.push_back({0x767388,{0,0,0,0},"ActorPools shadow not created"});
+        c.guards.push_back({0x753f60,{0,0,0,0},"ActorPools damage not live"});
+        std::memcpy(s->code,p->code.data(),p->code.size());DWORD prior=0;
+        if(!VirtualProtect(s->code,8192,PAGE_EXECUTE_READ,&prior)||!FlushInstructionCache(GetCurrentProcess(),s->code,p->code.size()))return false;
+        c.publish=[s]{s->retained=true;applied=true;actor_ai::published=actor_ai::stock;actor_ai::published.stage=1;};
+        c.retain=[s]{s->retained=true;game_version::refuse_startup();};
+        return tx.add(std::move(c));
     }
     std::string telemetry_json()
     {

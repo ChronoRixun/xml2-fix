@@ -47,10 +47,12 @@ add_library(lcsave STATIC
 	src/lcsave/api_engine.cpp
 	src/lcsave/typed_registry.cpp)
 target_include_directories(lcsave PUBLIC src/lcsave)
+target_compile_definitions(lcsave PUBLIC XML2_E4_CORE=1)
 target_link_libraries(xml2_economy_rules_test PRIVATE lcsave)
 
 # The fix: a drop-in dinput.dll for the game folder.
 add_library(xml2_fix SHARED
+	src/e4_core.cpp
 	src/mold_beam.cpp
 	src/mold_controller.cpp
 	src/xml1_bosses.cpp
@@ -931,6 +933,10 @@ target_include_directories(xml2_e4_exception_test PRIVATE src)
 add_executable(xml2_e4_observe_test test/e4_observe_test.cpp)
 target_include_directories(xml2_e4_observe_test PRIVATE src)
 target_compile_definitions(xml2_e4_observe_test PRIVATE XML2_E4_TEST)
+add_executable(xml2_e4_core_host test/e4_core_host.cpp src/e4_core.cpp src/actor_pools.cpp src/e4_observe.cpp src/e4_observe_runtime.cpp src/patch_transaction.cpp $<TARGET_OBJECTS:e4_unwind_asm> "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
+target_include_directories(xml2_e4_core_host PRIVATE src)
+target_compile_definitions(xml2_e4_core_host PRIVATE XML2_E4_TEST)
+target_link_options(xml2_e4_core_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 add_executable(xml2_e4_observe_host test/e4_observe_host.cpp src/e4_observe.cpp src/e4_observe_runtime.cpp $<TARGET_OBJECTS:e4_unwind_asm> src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
 target_include_directories(xml2_e4_observe_host PRIVATE src)
 target_compile_definitions(xml2_e4_observe_host PRIVATE XML2_E4_TEST)
