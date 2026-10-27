@@ -30,7 +30,6 @@ void __fastcall pop(void*,void*,const char* name,int) {
     if(name && std::string_view(name)!=shown) calls.push_back(std::string("request:")+name);
     else { calls.push_back("native-pop");set_current(nullptr); }
 }
-const char* __fastcall console_parse(void*,void*,const char* name) { return name; }
 void* __cdecl dialog_get() { return &dialog; }
 void __fastcall dialog_flag(void*,void*,int) {}
 void __fastcall dialog_title(void*,void*,const char*) { choices.clear(); }
@@ -82,13 +81,22 @@ bool __fastcall selected_image(void*,void*) { return *reinterpret_cast<void**>(0
 void __fastcall option_seed(void*,void*,const char* value) { native_seed.fill(0);std::strncpy(native_seed.data(),value,31); }
 void __fastcall option_title(void*,void*,const char* value) { native_title.fill(0);std::strncpy(native_title.data(),value,63); }
 void __fastcall option_name_format(void*,void*,const char* value,char* output,unsigned size) { std::strncpy(output,value,size-1);output[size-1]=0; }
+std::deque<std::string> setup_lines;
 bool __fastcall console_queue(void*,void*,const char* line) {
+    if(std::string_view(line).starts_with("setuphost")) setup_lines.emplace_back(line);
     calls.push_back(std::string("queue:")+line);
     if(std::string_view(line)=="openmenu host") { ++posts;return queue_ok; }
     return true;
 }
 void custom_close() { (*reinterpret_cast<tick_t*>(0x69e438))(child.data(),nullptr); }
-void host_request() { reinterpret_cast<void(__cdecl*)(const char*)>(0x5f1c10)("host"); }
+void console_request(const char* name) { reinterpret_cast<void(__cdecl*)(const char**)>(0x5f1c10)(&name); }
+void host_request() { console_request("host"); }
+void setup_unmarked() { const char* args="";reinterpret_cast<void(__cdecl*)(const char**)>(0x5f1bb0)(&args); }
+void setup_request() {
+    if(setup_lines.empty()) { setup_unmarked();return; }
+    auto line=std::move(setup_lines.front());setup_lines.pop_front();
+    const char* args=line.c_str()+9;reinterpret_cast<void(__cdecl*)(const char**)>(0x5f1bb0)(&args);
+}
 void restore_services() {
     retail_restore(0x610d10);retail_restore(0x607c40);retail_restore(0x6097f0);retail_restore(0x60b9d0);
     AddVectoredExceptionHandler(1,[](EXCEPTION_POINTERS* error)->LONG {
@@ -101,7 +109,6 @@ void restore_services() {
         return EXCEPTION_CONTINUE_SEARCH;
     });
     redirect(0x5caff0,activated);redirect(0x55c410,console_queue);
-    redirect(*reinterpret_cast<unsigned*>(0x69a81c+8),console_parse);
     redirect(0x60c6e0,option_seed);redirect(0x60c710,option_title);redirect(0x610e70,option_name_format);
     redirect(0x5b8a50,no_op);redirect(0x5ad080,no_op);
     redirect(0x672161,no_op);redirect(0x672170,reinterpret_cast<const void*>(&std::strncpy));
@@ -198,7 +205,7 @@ void run(const script_functions_rules::func_entry* registration) {
     (*reinterpret_cast<int(__fastcall**)(void*,void*)>(0x69f688))(child.data(),nullptr);
     assert(menu_hosts==canceled_hosts && menu_view().state==bm::phase::idle);cancel();
     begin();const auto before_combined=menu_hosts;base_mutation=cancel_options_in_base;action("text_inviteslots");
-    assert(!current() && menu_hosts==before_combined && std::find(calls.begin(),calls.end(),"queue:setuphost")==calls.end());cancel();
+    assert(!current() && menu_hosts==before_combined && std::none_of(calls.begin(),calls.end(),[](const auto& line){return line.starts_with("queue:setuphost");}));cancel();
     begin();action("text_difficulty");assert(calls.back()=="queue:startgamedialog");
     reinterpret_cast<void(__cdecl*)()>(0x5f2090)();assert(choices.size()==3 && choices[0]=="setDifficultyLevel(0)");
     script(0x49f8f0,1);script(0x49f9b0,3);script(0x4a0930,2);
@@ -231,7 +238,7 @@ void run(const script_functions_rules::func_entry* registration) {
     begin();script(0x49f9b0,4);save_accept=true;script(0x49ef60,3);
     host_refuse=true;action("text_inviteslots");host_refuse=false;
     assert(menu_view().state==bm::phase::idle && !*reinterpret_cast<void**>(0xa3bc40+0x2250));
-    const auto refused_hosts=menu_hosts;action("text_inviteslots");assert(menu_hosts==refused_hosts && std::find(calls.begin(),calls.end(),"queue:setuphost")==calls.end());cancel();
+    const auto refused_hosts=menu_hosts;action("text_inviteslots");assert(menu_hosts==refused_hosts && std::none_of(calls.begin(),calls.end(),[](const auto& line){return line.starts_with("queue:setuphost");}));cancel();
     auto resolve=[&] {
         screen("lc_code");tick(child.data(),nullptr);
         for(int i=32;i<40;++i) { post(static_cast<intent>(i));tick(child.data(),nullptr); }
@@ -415,6 +422,47 @@ void generation_run(const script_functions_rules::func_entry* registration) {
     mode=original_mode;
 }
 
+const char* __fastcall empty_text(void*,void*) { return ""; }
+bool __fastcall terminal_console(void*,void*,const char*) { return true; }
+void __fastcall end_notice(void*,void*,int,int,int,int) { std::cout<<"end native notice\n"; }
+void __fastcall remove_record(void* session,void*,void* record,bool) {
+    std::cout<<"end remove record "<<record<<"\n";auto* bytes=static_cast<unsigned char*>(session);
+    if(*reinterpret_cast<void**>(bytes+0x78)==record) put(session,0x78,0);
+    if(*reinterpret_cast<void**>(bytes+0x7c)==record) put(session,0x7c,0);
+    for(auto* node=*reinterpret_cast<unsigned char**>(bytes+0x26c);node;node=*reinterpret_cast<unsigned char**>(node+8)) {
+        if(*reinterpret_cast<void**>(node+0x10)==record) {
+            reinterpret_cast<bool(__thiscall*)(void*,void*)>(0x611e90)(bytes+0x26c,node);return;
+        }
+    }
+}
+void __fastcall end_one(void*,void*,int value) { std::cout<<"end int "<<value<<" return "<<_ReturnAddress()<<"\n"; }
+void __fastcall end_noop(void*,void*) { std::cout<<"end service return "<<_ReturnAddress()<<"\n"; }
+void session_end_services(bool hosting) {
+    // Keep the real 612070/612c40/6123e0/6133a0 caller chain. Only destruction
+    // of invented participants and UI/network/scheduler services are supplied.
+    for(auto [va,hex]:{std::pair{0x612070u,"558be98b85"},std::pair{0x6133a0u,"568b742408"}}) {
+        const auto bytes=patch_transaction::bytes_of(hex);std::memcpy(reinterpret_cast<void*>(va),bytes.data(),bytes.size());
+    }
+    redirect(0x611f50,remove_record);redirect(0x611550,end_notice);redirect(0x55beb0,terminal_console);
+    fake_game_vt[0x234/4]=unsigned(reinterpret_cast<std::uintptr_t>(&end_one));
+    for(unsigned slot:{0x30u,0x34u,0x38u,0x40u,0x68u}) fake_game_vt[slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&end_one));
+    fake_game_vt[0x44/4]=unsigned(reinterpret_cast<std::uintptr_t>(&end_noop));
+    for(unsigned getter:{0x5d8920u,0x551ed0u,0x48de40u,0x401b00u}) redirect(getter,game_getter);
+    redirect(0x5eb300,dialog_get);dialogs[0x10/4]=unsigned(reinterpret_cast<std::uintptr_t>(&end_one));
+    dialogs[0x50/4]=unsigned(reinterpret_cast<std::uintptr_t>(&empty_text));dialogs[0x6c/4]=unsigned(reinterpret_cast<std::uintptr_t>(&end_noop));
+    peer_ui_vt[8/4]=unsigned(reinterpret_cast<std::uintptr_t>(&end_noop));
+    clock_vt[0xc/4]=unsigned(reinterpret_cast<std::uintptr_t>(&end_noop));
+    redirect(0x55a390,network_stub);redirect(0x6162c0,end_one);redirect(0x6096c0,end_one);redirect(0x60c230,end_one);
+    for(unsigned routine:{0x606d00u,0x6068e0u,0x615120u,0x614fd0u,0x60b270u,0x559e50u,0x615da0u}) redirect(routine,end_noop);
+    redirect(0x559150,end_one);
+    *reinterpret_cast<unsigned char*>(0xa3bc40)=0; // real gameplay branch, not the native lobby
+    *reinterpret_cast<unsigned char*>(0xa53058+0x420)=1;*reinterpret_cast<unsigned char*>(0xa53058+0x421)=hosting ? 1 : 0;
+    put(lobby_people[0].data(),0x1c,hosting ? 3 : 1);put(lobby_people[1].data(),0x1c,hosting ? 0 : 2);
+    put(reinterpret_cast<void*>(0xa53058),0x7c,unsigned(reinterpret_cast<std::uintptr_t>(lobby_people[hosting ? 0 : 1].data())));
+    put(reinterpret_cast<void*>(0xa53058),0x424,4); // native full-session disconnect path
+    *reinterpret_cast<unsigned char*>(0x70b70d)=1;*reinterpret_cast<unsigned char*>(0x6f3c2d)=0;
+}
+
 // Review regressions exercise the retail producers/handlers, not bridge internals.
 void review_run(const script_functions_rules::func_entry* registration) {
     const auto original_mode=mode;restore_services();
@@ -429,37 +477,74 @@ void review_run(const script_functions_rules::func_entry* registration) {
         for(int n=32;n<40;++n) { post(static_cast<intent>(n));tick(child.data(),nullptr); }
         menu_auth=menu_complete=true;tick(child.data(),nullptr);assert(menu_view().state==bm::phase::room);
     };
-    if(mode=="r6-nit-script") {
+    if(mode=="r6-end-id-order") {
+        begin();script(0x49faa0,0);script(0x49faa0,0);assert(setup_lines.size()==2);
+        std::swap(setup_lines[0],setup_lines[1]);const auto before=menu_hosts;setup_request();assert(menu_hosts==before+1);
+        setup_request();assert(menu_hosts==before+1 && allocations==0);
+    } else if(mode=="r6-end-options" || mode=="r6-end-unmarked") {
+        begin();script(0x49faa0,0);const auto before=menu_hosts;
+        if(mode=="r6-end-options") { screen("text_entry");setup_request();assert(menu_hosts==before);screen("game_options");script(0x49faa0,0);setup_request();assert(menu_hosts==before+1); }
+        else {
+            setup_unmarked();setup_unmarked();assert(menu_hosts==before);
+            const char* raw="unmarked";const auto* saved=raw;
+            reinterpret_cast<void(__cdecl*)(const char**)>(0x5f1bb0)(&raw);assert(raw==saved && menu_hosts==before);
+            const char* unknown="lc-native:ffffffffffffffff";reinterpret_cast<void(__cdecl*)(const char**)>(0x5f1bb0)(&unknown);
+            setup_request();assert(menu_hosts==before+1);
+        }
+    } else if((mode.starts_with("r6-end-") || mode=="r6-nit-end" || mode=="r6-nit-end-guest")) {
+        std::cout<<"end fixture: establish room\n";
+        const bool hosting=mode.ends_with("host") || mode=="r6-nit-end";
+        if(hosting) { begin();action("text_inviteslots");screen("lc_host");menu_auth=menu_complete=true;tick(child.data(),nullptr);host_request(); }
+        else { tunnel_ready=true;resolve();reply();tick(child.data(),nullptr);event(8);tick(child.data(),nullptr); }
+        custom_close();mode="r4-r6";local_id=hosting ? 0 : 1;participant_ids[0]=local_id;participant_ids[1]=hosting ? 1 : 0;participant_ids[2]=2;participant_ids[3]=3;
+        if(original_mode=="r6-end-prune-host") people_count=2;setup_lobby(hosting);
+        local_id=hosting ? 0 : 1;put(lobby_people[0].data(),0x1c,hosting ? 3 : 1);put(lobby_people[1].data(),0x1c,hosting ? 0 : 2);
+        put(reinterpret_cast<void*>(0xa53058),0x78,unsigned(reinterpret_cast<std::uintptr_t>(lobby_people[0].data())));
+        (*reinterpret_cast<lobby_activate_t*>(hosting ? 0x69f284 : 0x69f350))(child.data(),nullptr,0);
+        assert(menu_view().state==bm::phase::room && menu_leaves==0);
+        std::cout<<"end fixture: activated native lobby\n";session_end_services(hosting);std::cout<<"end fixture: services ready\n";
+        const bool direct=original_mode=="r6-end-direct-guest",lobby=original_mode=="r6-end-lobby-guest";
+        if(direct) put(reinterpret_cast<void*>(0xa53058),0x424,0);
+        if(lobby) *reinterpret_cast<unsigned char*>(0xa3bc40)=1;
+        if(original_mode.starts_with("r6-end-prune-")) {
+            const bool solo=hosting;const auto remote=solo ? 1u : 2u;
+            if(solo) *reinterpret_cast<unsigned char*>(0x612d98)=1; // effective existing rule26 keep-hosting byte
+            put(lobby_people[remote].data(),0x1c,0);
+            reinterpret_cast<void(__thiscall*)(void*,void*,int,bool)>(0x612c40)(reinterpret_cast<void*>(0xa53058),lobby_people[remote].data(),0x1107,false);
+            assert(*reinterpret_cast<void**>(0xa53058+0x78) && *reinterpret_cast<unsigned char*>(0xa53058+0x420));
+            assert(menu_view().state==bm::phase::room && menu_leaves==0 && *reinterpret_cast<unsigned*>(0xa53058+0x278)==(solo ? 1u : 2u));
+            reinterpret_cast<void(__thiscall*)(void*,bool)>(0x612070)(reinterpret_cast<void*>(0xa53058),true);
+            const auto original=patch_transaction::bytes_of("51a1f8386f");std::memcpy(reinterpret_cast<void*>(0x609400),original.data(),original.size());
+            redirect(0x6159c0,end_noop);reinterpret_cast<void(__thiscall*)(void*)>(0x609400)(reinterpret_cast<void*>(0xa3bc40));
+            assert(*reinterpret_cast<void**>(0xa53058+0x78) && *reinterpret_cast<unsigned char*>(0xa53058+0x420) && menu_view().state==bm::phase::room && menu_leaves==0);
+            mode=original_mode;std::cout<<"retail keep PASS "<<mode<<"; remote prune/keep-local/campaign-start preserve room\n";return;
+        } else if(original_mode.starts_with("r6-end-quit-") || original_mode=="r6-nit-end" || original_mode=="r6-nit-end-guest") {
+            const char* args="main";reinterpret_cast<void(__cdecl*)(const char**)>(0x5f27a0)(&args);
+        } else if(original_mode.starts_with("r6-end-loss-")) {
+            menu_broker.disconnected("broker already unavailable",ticks);
+            put(lobby_people[1].data(),0x1c,2); // actual remote host flag
+            reinterpret_cast<void(__thiscall*)(void*,void*,int,bool)>(0x612c40)(reinterpret_cast<void*>(0xa53058),lobby_people[1].data(),0x1107,false);
+        } else {
+            reinterpret_cast<void(__thiscall*)(void*,void*,int,int,int,bool)>(0x6133a0)(reinterpret_cast<void*>(0xa53058),lobby_people[0].data(),0x10cc,0x10cc,0x1107,false);
+        }
+        assert(!*reinterpret_cast<void**>(0xa53058+0x78));
+        if(!direct && !lobby) assert(!*reinterpret_cast<unsigned char*>(0xa53058+0x420));
+        assert(menu_view().state==bm::phase::idle && menu_leaves==1);
+        script(0x49f990,0);assert(menu_view().state==bm::phase::idle && menu_leaves==1);
+        std::cout<<"retail end chain PASS "<<original_mode<<"; local removed; broker Leave without Hub navigation\n";
+    } else if(mode=="r6-nit-script") {
         begin();const auto before=allocations,hosts_before=menu_hosts;
-        script(0x49faa0,0);assert(calls.back()=="queue:setuphost");
-        reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)();
+        script(0x49faa0,0);assert(calls.back().starts_with("queue:setuphost"));
+        setup_request();
         assert(menu_hosts==hosts_before+1 && allocations==before); // no native Host before broker confirmation
         screen("lc_host");menu_auth=menu_complete=true;tick(child.data(),nullptr);
         assert(allocations==before+1 && menu_view().state==bm::phase::room);
-        reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)();assert(allocations==before+1);
+        setup_request();assert(allocations==before+1);
         post(intent::back);tick(child.data(),nullptr);assert(menu_view().state==bm::phase::idle && !*reinterpret_cast<void**>(0xa53058+0x78));
-        const auto after=allocations;reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)();assert(allocations==after); // canceled queued script
-    } else if(mode=="r6-nit-end" || mode=="r6-nit-end-guest") {
-        const bool hosting=mode=="r6-nit-end";
-        if(hosting) { begin();action("text_inviteslots");screen("lc_host");menu_auth=menu_complete=true;tick(child.data(),nullptr);host_request(); }
-        else { tunnel_ready=true;resolve();reply();tick(child.data(),nullptr);event(8);tick(child.data(),nullptr); }
-        custom_close();mode="r4-r6";setup_lobby(hosting);(*reinterpret_cast<lobby_activate_t*>(hosting ? 0x69f284 : 0x69f350))(child.data(),nullptr,0);
-        assert(menu_view().state==bm::phase::room && (hosting ? published==1 : published==0));
-        // Restore the real session teardown entry (the ordinary fixture replaces
-        // only its first five bytes). Keep participant/UI services invented.
-        const auto entry=patch_transaction::bytes_of("568bf18a86");std::memcpy(reinterpret_cast<void*>(0x612960),entry.data(),entry.size());
-        clear_people(reinterpret_cast<void*>(0xa53058),nullptr,false);
-        reinterpret_cast<unsigned char*>(0xa53058)[0x421]=1;
-        fake_game_vt[0x234/4]=unsigned(reinterpret_cast<std::uintptr_t>(&one_int));
-        fake_game_vt[0x68/4]=unsigned(reinterpret_cast<std::uintptr_t>(&one_int));fake_game_vt[0x44/4]=unsigned(reinterpret_cast<std::uintptr_t>(&no_op));
-        for(unsigned getter:{0x5d8920u,0x551ed0u,0x48de40u}) redirect(getter,game_getter);
-        reinterpret_cast<tick_t>(0x612960)(reinterpret_cast<void*>(0xa53058),nullptr);
-        assert(!reinterpret_cast<unsigned char*>(0xa53058)[0x421]);
-        assert(menu_view().state==bm::phase::idle && menu_leaves==1); // no Hub navigation/tick needed
-        reinterpret_cast<tick_t>(0x612960)(reinterpret_cast<void*>(0xa53058),nullptr);assert(menu_leaves==1);
+        const auto after=allocations;setup_request();assert(allocations==after); // canceled queued script
     } else if(mode=="r6-nit-tokens") {
         for(const char* name:{"host","join"}) for(unsigned n=0;n<40;++n) {
-            const auto before=calls.size();reinterpret_cast<void(__cdecl*)(const char*)>(0x5f1c10)(name);
+            const auto before=calls.size();console_request(name);
             assert(calls.size()==before+1 && calls.back()==std::string("request:")+name);
         }
         begin();(*reinterpret_cast<int(__fastcall**)(void*,void*)>(0x69f688))(child.data(),nullptr);
@@ -475,7 +560,7 @@ void review_run(const script_functions_rules::func_entry* registration) {
         for(unsigned n=0;n<24;++n) { const auto before=calls.size();host_request();assert(calls.size()==before); }
         const auto before=calls.size();host_request();assert(calls.size()==before+1);
     } else if(mode=="r6-nit-mixed") {
-        reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)(); // queued legacy Host first
+        setup_request(); // queued legacy Host first
         begin();action("text_inviteslots");screen("lc_host");menu_auth=menu_complete=true;tick(child.data(),nullptr);
         post(intent::back);tick(child.data(),nullptr);screen("lc_online");tick(child.data(),nullptr);
         auto before=calls.size();host_request();assert(calls.size()==before+1 && calls.back()=="request:host");
@@ -496,20 +581,20 @@ void review_run(const script_functions_rules::func_entry* registration) {
         const auto before=activations;activate(hub.data(),nullptr,0);assert(activations==before && menu_view().generation==generation);
         set_current(child.data());activate(child.data(),nullptr,0);assert(activations==before+1 && menu_view().state==bm::phase::room);
     } else if(mode=="r6-nit-setup-mixed") {
-        screen("game_options");script(0x49f9b0,4);action("text_inviteslots");assert(calls.back()=="queue:setuphost");
+        screen("game_options");script(0x49f9b0,4);action("text_inviteslots");assert(calls.back().starts_with("queue:setuphost"));
         begin();script(0x49faa0,0);(*reinterpret_cast<int(__fastcall**)(void*,void*)>(0x69f688))(child.data(),nullptr);
         screen("lc_online");tick(child.data(),nullptr);ticks+=2000;begin();const auto before=menu_hosts;
-        reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)();assert(menu_hosts==before);
-        reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)();assert(menu_hosts==before);
-        script(0x49faa0,0);reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)();assert(menu_hosts==before+1);
+        setup_request();assert(menu_hosts==before);
+        setup_request();assert(menu_hosts==before);
+        script(0x49faa0,0);setup_request();assert(menu_hosts==before+1);
     } else if(mode=="r6-nit-script-old") {
         begin();script(0x49faa0,0);(*reinterpret_cast<int(__fastcall**)(void*,void*)>(0x69f688))(child.data(),nullptr);
         screen("lc_online");tick(child.data(),nullptr);ticks+=2000;begin();
-        const auto before=menu_hosts;reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)();assert(menu_hosts==before);
-        script(0x49faa0,0);reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)();assert(menu_hosts==before+1 && allocations==0);
+        const auto before=menu_hosts;setup_request();assert(menu_hosts==before);
+        script(0x49faa0,0);setup_request();assert(menu_hosts==before+1 && allocations==0);
     } else if(mode=="r6-nit-hosttokens") {
         for(unsigned n=0;n<40;++n) {
-            const auto before=posts;reinterpret_cast<void(__cdecl*)()>(0x5f1bb0)();assert(posts==before+1);
+            const auto before=posts;setup_request();assert(posts==before+1);
         }
     } else if(mode=="r6-nit-discovery") {
         tunnel_ready=true;resolve();reply(1,true);reply();

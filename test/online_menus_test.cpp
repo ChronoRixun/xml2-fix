@@ -14,6 +14,7 @@
 #include <iostream>
 #include <map>
 #include <vector>
+#include <deque>
 #include <stdexcept>
 #include <new>
 #include <intrin.h>
@@ -565,7 +566,7 @@ int main(int argc,char** argv) {
     request(mgr.data(),nullptr,"online",nullptr);assert(calls==expected); // duplicate entry cannot reinitialize
     set_current(hub.data());tick(hub.data(),nullptr);
     assert(texts["local_name"]==(mode=="name31" ? std::string(31,'a') : mode=="blank-name" ? "Player" : "100??????openmenu bad"));
-    if(mode.starts_with("r6-nit-")) { native_fixture::review_run(entry);return 0; }
+    if(mode.starts_with("r6-nit-") || mode.starts_with("r6-end-")) { native_fixture::review_run(entry);return 0; }
     if(mode=="r6-native") { native_fixture::run(entry);return 0; }
     if(mode=="r6-generations") { native_fixture::generation_run(entry);return 0; }
     if(mode=="r6-lobby-new" || mode=="r6-lobby-load") { native_fixture::lobby_run(entry,mode=="r6-lobby-load");return 0; }

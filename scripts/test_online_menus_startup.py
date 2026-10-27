@@ -15,7 +15,7 @@ import shutil
 import subprocess
 
 
-HOOKS = {0x49FAAC: 5, 0x5F1BB0: 5, 0x612A00: 5, 0x5F1C2E: 5, 0x60A095: 5, 0x5B9609: 7, 0x69F688: 4, 0x69F694: 4, 0x69F66C: 4, 0x5C971B: 6, 0x6A23D8: 4, 0x69E454: 4, 0x69E464: 4,
+HOOKS = {0x49FAAC: 5, 0x5F1BB0: 5, 0x6128AB: 5, 0x612D1F: 5, 0x612DDA: 5, 0x5F1C2E: 5, 0x60A095: 5, 0x5B9609: 7, 0x69F688: 4, 0x69F694: 4, 0x69F66C: 4, 0x5C971B: 6, 0x6A23D8: 4, 0x69E454: 4, 0x69E464: 4,
          0x69E438: 4, 0x69E440: 4, 0x5BC3D0: 5,
          0x69F284: 4, 0x69F350: 4, 0x69F290: 4, 0x69F358: 4,
          0x69F2A0: 4, 0x69F368: 4, 0x69F2AC: 4, 0x69F374: 4, 0x6A24AC: 4, 0x69F2A4: 4, 0x69F320: 4, 0x69F328: 4, 0x69F3E8: 4, 0x69F3F0: 4, 0x69F2F4: 4, 0x69F3BC: 4, 0x5BAD1F: 5, 0x5C88BE: 5, 0x6141E0: 5, 0x69F36C: 4, 0x69F314: 4, 0x69F3DC: 4}
@@ -33,7 +33,7 @@ def main():
     assert hashlib.sha256(retail.read_bytes()).hexdigest() == "146cd9c316edb57a267cd73753a7ce9af647e52aab750d449c6b278fb4a1669b"
     out.mkdir(parents=True, exist_ok=False)
     rows = []
-    for mode in ("off", "zero", "invalid", "on", "capacity", "lookup-refused", "ui-guard", "native-guard", "post-guard", "seed-guard", "queue-guard", "handler-guard", "teardown-guard", "script-guard", "preset-code", "preset-host-name-invalid", "name-only-invalid"):
+    for mode in ("off", "zero", "invalid", "on", "capacity", "lookup-refused", "ui-guard", "native-guard", "post-guard", "seed-guard", "queue-guard", "handler-guard", "teardown-guard", "script-guard", "end-lobby-guard", "end-running-guard", "tokenizer-guard", "dispatch-guard", "preset-code", "preset-host-name-invalid", "name-only-invalid"):
         folder = out / mode
         folder.mkdir()
         shutil.copyfile(dll, folder / "dinput.dll")
@@ -60,8 +60,8 @@ def main():
             env["UNION_MUTATE_VA"] = "0x4d696a"
         elif mode == "ui-guard":
             env["UNION_MUTATE_VA"] = "0x5d8570"
-        if mode in ("native-guard", "post-guard", "seed-guard", "queue-guard", "handler-guard", "teardown-guard", "script-guard"):
-            env["UNION_MUTATE_VA"] = {"native-guard":"0x614290", "post-guard":"0x5b9609", "seed-guard":"0x610dc0", "queue-guard":"0x60a095", "handler-guard":"0x5f1bb0", "teardown-guard":"0x612a00", "script-guard":"0x49faac"}[mode]
+        if mode in ("native-guard", "post-guard", "seed-guard", "queue-guard", "handler-guard", "teardown-guard", "script-guard", "end-lobby-guard", "end-running-guard", "tokenizer-guard", "dispatch-guard"):
+            env["UNION_MUTATE_VA"] = {"native-guard":"0x614290", "post-guard":"0x5b9609", "seed-guard":"0x610dc0", "queue-guard":"0x60a095", "handler-guard":"0x5f1bb0", "teardown-guard":"0x6128ab", "end-lobby-guard":"0x612d1f", "end-running-guard":"0x612dda", "tokenizer-guard":"0x55b670", "dispatch-guard":"0x55bf2d", "script-guard":"0x49faac"}[mode]
         try:
             done = subprocess.run([str(host), str(folder / "dinput.dll"), str(retail), str(engine),
                                    str(folder / "writes.tsv")], cwd=folder, env=env, capture_output=True,

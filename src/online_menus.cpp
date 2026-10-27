@@ -1612,8 +1612,8 @@ patch_transaction::contribution contribution() {
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&setuphost_command)),0,"all native setuphost producers"));
     c.writes.push_back(patch_transaction::relocation(0x49faac,"e8",true,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&setuphost_script_queue_stub)),0,"native setupHost script command generation"));
-    c.writes.push_back(patch_transaction::relocation(0x612a00,"e8",true,
-        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&native_session_cleared)),0,"native session teardown ends room"));
+    for(const auto site:{0x6128abu,0x612d1fu,0x612ddau}) c.writes.push_back(patch_transaction::relocation(site,"e8",true,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&native_session_cleared)),0,"native terminal session clear ends room"));
     c.writes.push_back(patch_transaction::relocation(0x5b9609,"e8",true,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&setuphost_queue_stub)),0,"native Host posting boundary"));
     c.writes.push_back({0x5b960e,{0x90,0x90},"native Post call padding"});
@@ -1657,6 +1657,6 @@ void install(HMODULE game,const install_hooks* hooks) {
         game_version::refuse_startup(); return;
     }
     ready=true;
-    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 38 hooks committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability);
+    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 40 hooks committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability);
 }
 }

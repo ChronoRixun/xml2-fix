@@ -178,6 +178,11 @@ inline constexpr script_functions_rules::guard guards[]{
     {0x005b8f03, "683ce369008bce889ea4190000899e60190000", "native fresh Game Options edit-state initialization"},
     {0x005f1c10, "5657e879acf6ff8b74240c8b10568bc8ff52088bf8e8f66cfeff8b1056578bc8ff52745f5ec3", "native openmenu console handler parses name and toggles manager +74"},
     {0x0049faa0, "e8ebcd0b008b1068dcd168008bc8ff521c33c0c3", "native setupHost script queues setuphost"},
-    {0x00612960, "568bf18a862104000084c00f84bf0000008b467085c0c686210400000074158b8e1c040000506a09e853c8ffffc7467000000000558bcee854e8ffff83cdff85c074098bc8e8261900008be88b867802000085c0750433c0eb158b866c0200008986740200008b4808898e7402000085c07429578b78088b40106a00680611000068061100008bc8e823180000508bcee85bebffff85ff8bc775d95f6a008bcee86bf6ffffe8165ffcff8b10558bc8ff9234020000e8b6f4f3ff8b10558bc8ff5268e819b4e7ff8b105d8bc85eff62445ec3", "native session teardown clears setup flag then participants and controllers"},
+    {0x006128a8, "538bcee8c0f7ffff83ffff7e3c", "terminal full-session cleanup calls clear all participants"},
+    {0x00612d1a, "33db538bcee84cf3ffff3bfb742de8", "lobby or local participant loss clears whole session"},
+    {0x00612dd7, "538bcee891f2ffff3bfb742de8385bfcff", "running-session disconnect clears all participants"},
+    {0x00612070, "558be98b857802000085c0744c538a5c240c568bb56c02000089b5740200008b4608578985740200008da4240000000084db8b7e08740c8b4e10e8e121000084c0750d8b4e106a00518bcde890feffff85ff8bf775da5f5e5b5dc20400", "native participant clear keeps local only when requested"},
+    {0x0055b670, "56578b7c240c33f685ff8d813c060000c60000744b8b175385d2740b8a1a84db740580fb207e05803a3b750442ebe9908a1a80fb207e1480fb3b740f81fe000200007d0d881c30464275e581fe000200005b750233f6c6840e3c0600000089175f5ec20400", "native console tokenizer consumes pointer to argument cursor"},
+    {0x0055bf28, "8d4c241051ff948628040000", "console dispatcher passes pointer to argument cursor cdecl"},
 };
 }

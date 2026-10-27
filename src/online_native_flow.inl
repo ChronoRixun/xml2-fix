@@ -18,6 +18,7 @@ struct native_open_token {
     std::uintptr_t serial=0;
     broker::ticket ticket{};
     bool pending=false,owned=true;
+    std::uint64_t command=0;
 };
 struct native_token_queue {
     std::array<native_open_token,16> items{};
@@ -59,7 +60,14 @@ struct native_command_queue {
         if(items.empty() || items.front().role!=role) return false;
         out=items.front();items.pop_front();return true;
     }
+    bool take(std::uint64_t command,native_open_token& out) {
+        for(auto i=items.begin();i!=items.end();++i) if(i->command==command) {
+            out=*i;items.erase(i);return true;
+        }
+        return false;
+    }
 } host_commands, setup_commands;
+std::uint64_t next_setup_command=0;
 std::array<std::uintptr_t,2> rejected_lobbies{}; // opaque identities only; never dereferenced
 void native_flow_error(const char* why);
 std::uintptr_t options_owner=0;
@@ -214,13 +222,14 @@ void native_flow_error(const char* why) {
     message("lc_notice_admission"); // localized LC adapter node
     if(setup) native_request("lc_host");
 }
-void __fastcall native_session_cleared(void* session,void*,bool clear) {
+void __fastcall native_session_cleared(void* session,void*,bool keep_local) {
     const auto serial=native_flow.serial;
-    at<void(__thiscall*)(void*,bool)>(0x612070)(session,clear);
-    // Retail teardown has already cleared +421 and removed participants. Retire
-    // broker membership now, even if the next screen is a legacy LAN menu.
+    at<void(__thiscall*)(void*,bool)>(0x612070)(session,keep_local);
+    // Only terminal full-clear branches in 6123e0/612c40 call this wrapper.
+    // Host setup/admission resets, keep-local transfer work, and single remote
+    // removal do not. +421 is host authority, not the active-session byte +420.
     if(ready && session==at<void*>(0xa53058) && native_flow.serial==serial && native_flow.lobby_active &&
-        !static_cast<unsigned char*>(session)[0x421]) {
+        !keep_local && !*reinterpret_cast<void**>(static_cast<unsigned char*>(session)+0x78)) {
         native_flow.touched=false; // the native session is already torn down
         broker_cancel(true);
     }
@@ -366,13 +375,37 @@ void __cdecl setuphost_dispatch() {
         if(!native_request("lc_host")) native_flow_error("native_setup_return_unavailable");
     } catch(...) { native_flow_error("host_post_exception"); }
 }
-void __cdecl setuphost_command() {
+struct native_setup_argument { bool marked=false,valid=false;std::uint64_t command=0; };
+bool native_setup_argument_read(const char** cursor,native_setup_argument& result) {
+    __try {
+        // The console dispatch passes &cursor, not the text itself. Parse with
+        // the retail tokenizer so its outer command loop also advances safely.
+        const char* next=cursor ? *cursor : nullptr;
+        if(!next) return true;
+        const auto* word=at<const char*(__thiscall*)(void*,const char**)>(0x55b670)(at<getter>(0x55c890)(),&next);
+        if(!word) return false;
+        result.marked=std::memcmp(word,"lc-native:",10)==0;
+        if(!result.marked) return true;
+        *cursor=next; // only our private marker is an argument to this handler
+        if(word[26]) return true;
+        for(unsigned i=10;i<26;++i) {
+            const auto c=word[i];const int digit=c>='0' && c<='9' ? c-'0' : c>='a' && c<='f' ? c-'a'+10 : -1;
+            if(digit<0) return true;
+            result.command=(result.command<<4)|unsigned(digit);
+        }
+        result.valid=result.command!=0;return true;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void __cdecl setuphost_command(const char** cursor) {
+    native_setup_argument argument;
+    if(!native_setup_argument_read(cursor,argument)) return;
     native_open_token token;
-    if(setup_commands.pop(native_phase::setup,token)) {
+    if(argument.marked) {
+        if(!argument.valid || !setup_commands.take(argument.command,token)) return;
         if(token.owned) {
-            if(!token.pending || token.serial!=native_flow.serial || native_flow.phase!=native_phase::setup) return;
+            if(!token.pending || token.serial!=native_flow.serial || native_flow.phase!=native_phase::setup || !native_options_current(current())) return;
         } else if(native_owned_room() || options_owner) return;
-    }
+    } else if(native_owned_room() || options_owner) return; // typed/usecmd never consumes a queued marker
     setuphost_dispatch();
 }
 bool __fastcall setuphost_script_queue(void* console,void*,const char* line);
@@ -476,10 +509,12 @@ bool native_track_command(native_command_queue& queue,void* console,const char* 
     if(native_console_queue(console,line)) return true;
     queue.items.pop_back();return false;
 }
-bool __fastcall setuphost_script_queue(void* console,void*,const char* line) {
+bool __fastcall setuphost_script_queue(void* console,void*,const char*) {
     const bool owned=native_flow.phase!=native_phase::idle || options_owner!=0;
-    return native_track_command(setup_commands,console,line,{native_phase::setup,native_flow.serial,native_flow.ticket,
-        native_flow.phase==native_phase::setup,owned});
+    if(!++next_setup_command) return false;
+    char marked[64]{};std::snprintf(marked,sizeof(marked),"setuphost lc-native:%016llx",static_cast<unsigned long long>(next_setup_command));
+    return native_track_command(setup_commands,console,marked,{native_phase::setup,native_flow.serial,native_flow.ticket,
+        native_flow.phase==native_phase::setup,owned,next_setup_command});
 }
 __declspec(naked) void setuphost_script_queue_stub() {
     __asm { mov ecx,eax

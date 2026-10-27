@@ -922,9 +922,13 @@ Post call site, so commands other than the exact `setuphost` still go through
 the stock queue. Native Host posting runs the actual `0x5f1bb0` handler,
 including `0x606e90` and `0x609f50`. The console handler entry `0x5f1bb0`
 and script producer boundary `0x49faac` also retain setup-generation ownership.
-Session teardown is observed at `0x612a00`, after the native setup flag and
-participants are cleared; broker Leave immediately releases the code filter,
-even when the next screen is a native LAN list. Native Join admission runs `0x60a0a0` with
+Terminal full-participant clears are observed at `0x6128ab` (inside session
+shutdown `0x6123e0`) and `0x612d1f` / `0x612dda` (inside lost/local-participant
+handling `0x612c40`). Broker Leave runs after the real `0x612070(false)` removes
+the local participant, even without Hub navigation. The old host-only
+`0x612a00` hook is removed: `+0x421` is host authority, while `+0x420` is the
+active-session byte. Host setup/admission resets at `0x609fbe` / `0x60a0c9`,
+keep-local clears and remote-only removal do not signal terminal Leave. Native Join admission runs `0x60a0a0` with
 an actual 0x44-byte native discovery record.
 
 | State | Event | Effect |
@@ -955,10 +959,17 @@ fails closed; zero host records waits until the discovery deadline.
 
 The native admission callback contains a generation, not a menu pointer.
 Success event 8 is insufficient without a native local participant; the retail
-response can emit that event after allocation failure. Both native setuphost producers and queued Host commands retain their actual
-console FIFO order, including legacy commands. Cancel invalidates old ticket/
-serial metadata in place while retaining denial markers until those actual
-commands drain. Console tracking has no 16-slot activation limit. Host/Join
+response can emit that event after allocation failure. Both native setuphost producers attach an internal `lc-native:<command-id>`
+argument. The console handler consumes its real `const char**` cursor through
+the retail tokenizer, matches the issued command ID and, for an owned setup, checks the saved
+generation and requires Game Options to be current. Typed/usecmd unmarked
+setuphost is refused while a flow is owned and never consumes another queued
+command marker. Unmarked legacy argument cursors retain their original position.
+These arguments are process-local console provenance, not a peer message or LC
+command/API change. Queued Host opens still retain their actual console FIFO
+order, including legacy commands. Cancel invalidates old ticket/serial metadata
+while retaining denial markers until those actual commands drain. Console
+tracking has no 16-slot activation limit. Host/Join
 activation tokens use bounded current-generation storage; cancel drops old
 entries into compact per-role denial counts, consumed before a replacement
 activation of the same role. Fresh explicit legacy routing clears those role
@@ -1027,7 +1038,18 @@ console handler, canceled/replacement script commands and mixed producer FIFO,
 real session teardown for both roles, more than 16 unactivated legacy requests,
 24 canceled replacement Hosts, delayed same-role activations, another member
 beside the host discovery record, and a tunnel that succeeds at 44 seconds or
-expires at 45 seconds. External participant/UI services remain invented.
+expires at 45 seconds. The two end cases now drive the retail quit caller
+chain rather than calling `0x612960` directly. The twelve `r6-end-*` cases add
+Host/Join quit through `0x5f27a0 -> 0x6133a0 -> 0x612c40`, local disconnect,
+and guest host-loss through `0x612c40 -> 0x6123e0`, all reaching the real
+participant-clear routine. Separate direct running/lobby guest-removal cases
+reach `0x612dda` and `0x612d1f`; host records use native index zero. They also
+execute remote-only removal, the effective
+existing rule-26 solo-host branch, keep-local clear and campaign-start cleanup
+`0x609400` without leaving the room. Native argument tokenization, unmarked
+command refusal, noncurrent options and command-ID reordering are covered.
+Destruction of invented participants and UI/network/scheduler services remain
+invented; this does not claim a real gameplay launch, save, JIP transfer or rendering proof.
 The production broker fixture separately drives current-generation target
 checks, real in-memory GNS socket pairs, v2 max/mode/joinable metadata, raw-UDP
 refusal, stale packets/status callbacks and existing broker-loss survival.
@@ -1054,8 +1076,13 @@ input is part of this round. After LC integration and review:
    loss with healthy P2P and Host -> Leave -> Join -> Leave -> Host. Cancel while
    each lookup/open is pending; delayed old replies/opens, including same-role
    replacement and mixed legacy/scripted setup commands, must remain inert.
-   End the native session as Host and as Join, then go Main -> native Join Game
-   without a Hub visit: the old room must be left and LAN/master discovery restored.
+   After a real gameplay session, quit to menus independently as Host and as
+   Join; also test local disconnect and host loss. Without visiting the Hub,
+   open native Join Game and verify that LAN/master games are visible and the
+   old broker room/code filter is gone. Ordinary area changes and JIP/cohort
+   transfer must retain the room instead. Try queued setup commands while a
+   native save/name dialog is current and unmarked typed/usecmd setuphost
+   before a queued marked Post: neither may post or consume another command.
 5. After ordinary joins play >=10 minutes and cross two transitions with zero
    desyncs. Capture actual 02/04/05 and native service intermediates at 4:3 and
    stretched 16:9, keyboard -> pad -> keyboard, mouse rectangles, 720p/1080p,
