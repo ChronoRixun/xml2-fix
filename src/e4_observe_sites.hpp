@@ -44,82 +44,84 @@ inline constexpr instruction code35[]={{0x50b08d,"ff5204",0,0x0,0},{0x50b090,"eb
 inline constexpr instruction code36[]={{0x50b0d3,"ff5204",0,0x0,0},{0x50b0d6,"32c0",0,0x0,0}};
 inline constexpr instruction code37[]={{0x50b535,"899e54010000",0,0x0,0}};
 inline constexpr instruction code38[]={{0x50b53b,"895e18",0,0x0,0},{0x50b53e,"d9967c010000",0,0x0,0}};
-inline constexpr instruction code39[]={{0x50c450,"ff5010",0,0x0,0},{0x50c453,"84c0",0,0x0,0}};
-inline constexpr instruction code40[]={{0x50cb12,"ff5258",0,0x0,0},{0x50cb15,"5f",0,0x0,0},{0x50cb16,"5e",0,0x0,0}};
-inline constexpr instruction code41[]={{0x50ce4a,"8b11",0,0x0,0},{0x50ce4c,"ff5204",0,0x0,0}};
-inline constexpr instruction code42[]={{0x50ce55,"8b01",0,0x0,0},{0x50ce57,"ff505c",0,0x0,0}};
-inline constexpr instruction code43[]={{0x50cef5,"ff5204",0,0x0,0},{0x50cef8,"eb44",2,0x50cf3e,0}};
-inline constexpr instruction code44[]={{0x50cf39,"8b01",0,0x0,0},{0x50cf3b,"ff5004",0,0x0,0}};
-inline constexpr instruction code45[]={{0x50d093,"8b01",0,0x0,0},{0x50d095,"ff5024",0,0x0,0}};
-inline constexpr instruction code46[]={{0x50e1f6,"e8b5d3f0ff",1,0x41b5b0,0}};
-inline constexpr instruction code47[]={{0x50fd4f,"8b01",0,0x0,0},{0x50fd51,"ff5024",0,0x0,0}};
-inline constexpr instruction code48[]={{0x511ca7,"6a00",0,0x0,0},{0x511ca9,"ff502c",0,0x0,0}};
-inline constexpr instruction code49[]={{0x512862,"ff9214020000",0,0x0,0}};
-inline constexpr instruction code50[]={{0x512f2d,"8b01",0,0x0,0},{0x512f2f,"ff5024",0,0x0,0}};
-inline constexpr instruction code51[]={{0x51315b,"ff5208",0,0x0,0},{0x51315e,"84c0",0,0x0,0}};
-inline constexpr instruction code52[]={{0x51316a,"ff5018",0,0x0,0},{0x51316d,"84c0",0,0x0,0}};
-inline constexpr instruction code53[]={{0x513318,"ff5018",0,0x0,0},{0x51331b,"84c0",0,0x0,0}};
-inline constexpr instruction code54[]={{0x5134f4,"ff5218",0,0x0,0},{0x5134f7,"84c0",0,0x0,0}};
-inline constexpr instruction code55[]={{0x51360c,"ff5024",0,0x0,0},{0x51360f,"83f801",0,0x0,0}};
-inline constexpr instruction code56[]={{0x51372a,"8b01",0,0x0,0},{0x51372c,"ff10",0,0x0,0},{0x51372e,"84c0",0,0x0,0}};
-inline constexpr instruction code57[]={{0x5137f5,"ff504c",0,0x0,0},{0x5137f8,"84c0",0,0x0,0}};
-inline constexpr instruction code58[]={{0x51413f,"8b01",0,0x0,0},{0x514141,"ff5024",0,0x0,0}};
-inline constexpr instruction code59[]={{0x5150cc,"8b11",0,0x0,0},{0x5150ce,"ff5224",0,0x0,0}};
-inline constexpr instruction code60[]={{0x516c09,"ff5210",0,0x0,0},{0x516c0c,"84c0",0,0x0,0}};
-inline constexpr instruction code61[]={{0x516c37,"ff500c",0,0x0,0},{0x516c3a,"84c0",0,0x0,0}};
-inline constexpr instruction code62[]={{0x516ca2,"ff5204",0,0x0,0},{0x516ca5,"8ac3",0,0x0,0}};
-inline constexpr instruction code63[]={{0x5170cc,"ff505c",0,0x0,0},{0x5170cf,"6a00",0,0x0,0}};
-inline constexpr instruction code64[]={{0x517233,"8b11",0,0x0,0},{0x517235,"ff5204",0,0x0,0}};
-inline constexpr instruction code65[]={{0x518036,"8b11",0,0x0,0},{0x518038,"ff5224",0,0x0,0}};
-inline constexpr instruction code66[]={{0x52264d,"8bc8",0,0x0,0},{0x52264f,"ff5210",0,0x0,0}};
-inline constexpr instruction code67[]={{0x522a1f,"56",0,0x0,0},{0x522a20,"8bc8",0,0x0,0},{0x522a22,"c1f905",0,0x0,0}};
-inline constexpr instruction code68[]={{0x522ed0,"56",0,0x0,0},{0x522ed1,"57",0,0x0,0},{0x522ed2,"8b7c240c",0,0x0,0}};
-inline constexpr instruction code69[]={{0x522f57,"5f",0,0x0,0},{0x522f58,"898618c40000",0,0x0,0}};
-inline constexpr instruction code70[]={{0x523660,"83ec0c",0,0x0,0},{0x523663,"53",0,0x0,0},{0x523664,"55",0,0x0,0}};
-inline constexpr instruction code71[]={{0x5238a7,"5b",0,0x0,0},{0x5238a8,"83c40c",0,0x0,0},{0x5238ab,"c3",0,0x0,0}};
-inline constexpr instruction code72[]={{0x525152,"03c2",0,0x0,0},{0x525154,"5e",0,0x0,0},{0x525155,"c20400",0,0x0,0}};
-inline constexpr instruction code73[]={{0x525158,"33c0",0,0x0,0},{0x52515a,"5e",0,0x0,0},{0x52515b,"c20400",0,0x0,0}};
-inline constexpr instruction code74[]={{0x5251af,"03c2",0,0x0,0},{0x5251b1,"5e",0,0x0,0},{0x5251b2,"c20400",0,0x0,0}};
-inline constexpr instruction code75[]={{0x5251b5,"33c0",0,0x0,0},{0x5251b7,"5e",0,0x0,0},{0x5251b8,"c20400",0,0x0,0}};
-inline constexpr instruction code76[]={{0x5251f0,"56",0,0x0,0},{0x5251f1,"57",0,0x0,0},{0x5251f2,"8b7c240c",0,0x0,0}};
-inline constexpr instruction code77[]={{0x525262,"5f",0,0x0,0},{0x525263,"8986c8090000",0,0x0,0}};
-inline constexpr instruction code78[]={{0x52540d,"c6865003000000",0,0x0,0}};
-inline constexpr instruction code79[]={{0x52543d,"c7864003000001000000",0,0x0,0}};
-inline constexpr instruction code80[]={{0x52544d,"899644030000",0,0x0,0}};
-inline constexpr instruction code81[]={{0x525453,"c6865003000001",0,0x0,0}};
-inline constexpr instruction code82[]={{0x525700,"81ec18010000",0,0x0,0}};
-inline constexpr instruction code83[]={{0x52583d,"c780c002000008000000",0,0x0,0}};
-inline constexpr instruction code84[]={{0x525a24,"81c418010000",0,0x0,0},{0x525a2a,"c3",0,0x0,0}};
-inline constexpr instruction code85[]={{0x525a30,"83ec5c",0,0x0,0},{0x525a33,"53",0,0x0,0},{0x525a34,"56",0,0x0,0}};
-inline constexpr instruction code86[]={{0x525b74,"c786e402000004000000",0,0x0,0}};
-inline constexpr instruction code87[]={{0x525b8c,"83c45c",0,0x0,0},{0x525b8f,"c20c00",0,0x0,0}};
-inline constexpr instruction code88[]={{0x525ba0,"51",0,0x0,0},{0x525ba1,"53",0,0x0,0},{0x525ba2,"55",0,0x0,0},{0x525ba3,"56",0,0x0,0},{0x525ba4,"57",0,0x0,0}};
-inline constexpr instruction code89[]={{0x525c51,"8b4c2410",0,0x0,0},{0x525c55,"89481c",0,0x0,0}};
-inline constexpr instruction code90[]={{0x525cbc,"8b4c2410",0,0x0,0},{0x525cc0,"89481c",0,0x0,0}};
-inline constexpr instruction code91[]={{0x525ccc,"5b",0,0x0,0},{0x525ccd,"59",0,0x0,0},{0x525cce,"c20800",0,0x0,0}};
-inline constexpr instruction code92[]={{0x525ce0,"53",0,0x0,0},{0x525ce1,"8b5c240c",0,0x0,0}};
-inline constexpr instruction code93[]={{0x525d3b,"5d",0,0x0,0},{0x525d3c,"5b",0,0x0,0},{0x525d3d,"c20800",0,0x0,0}};
-inline constexpr instruction code94[]={{0x525fa0,"8b442408",0,0x0,0},{0x525fa4,"83ec6c",0,0x0,0}};
-inline constexpr instruction code95[]={{0x526134,"89a8e8020000",0,0x0,0}};
-inline constexpr instruction code96[]={{0x526152,"c680ec02000001",0,0x0,0}};
-inline constexpr instruction code97[]={{0x52618a,"c680ec02000001",0,0x0,0}};
-inline constexpr instruction code98[]={{0x5261c1,"c780e8020000ffffffff",0,0x0,0}};
-inline constexpr instruction code99[]={{0x5261d1,"83c46c",0,0x0,0},{0x5261d4,"c20c00",0,0x0,0}};
-inline constexpr instruction code100[]={{0x526211,"c780e802000001000000",0,0x0,0}};
-inline constexpr instruction code101[]={{0x526221,"83c46c",0,0x0,0},{0x526224,"c20c00",0,0x0,0}};
-inline constexpr instruction code102[]={{0x526249,"89a8e8020000",0,0x0,0}};
-inline constexpr instruction code103[]={{0x526269,"c680ec02000001",0,0x0,0}};
-inline constexpr instruction code104[]={{0x5262d8,"c780e8020000ffffffff",0,0x0,0}};
-inline constexpr instruction code105[]={{0x526326,"c780e802000001000000",0,0x0,0}};
-inline constexpr instruction code106[]={{0x526355,"c680ec02000001",0,0x0,0}};
-inline constexpr instruction code107[]={{0x52636c,"83c46c",0,0x0,0},{0x52636f,"c20c00",0,0x0,0}};
-inline constexpr instruction code108[]={{0x52637a,"83c46c",0,0x0,0},{0x52637d,"c20c00",0,0x0,0}};
-inline constexpr instruction code109[]={{0x527640,"51",0,0x0,0},{0x527641,"53",0,0x0,0},{0x527642,"55",0,0x0,0},{0x527643,"56",0,0x0,0},{0x527644,"8bf1",0,0x0,0}};
-inline constexpr instruction code110[]={{0x5276bf,"32c0",0,0x0,0},{0x5276c1,"5b",0,0x0,0},{0x5276c2,"59",0,0x0,0},{0x5276c3,"c3",0,0x0,0}};
-inline constexpr instruction code111[]={{0x527730,"8ac3",0,0x0,0},{0x527732,"5b",0,0x0,0},{0x527733,"59",0,0x0,0},{0x527734,"c3",0,0x0,0}};
-inline constexpr instruction code112[]={{0x527743,"8ac3",0,0x0,0},{0x527745,"5b",0,0x0,0},{0x527746,"59",0,0x0,0},{0x527747,"c3",0,0x0,0}};
+inline constexpr instruction code39[]={{0x50b53b,"895e18",0,0x0,0},{0x50b53e,"d9967c010000",0,0x0,0}};
+inline constexpr instruction code40[]={{0x50b544,"d805ac016800",0,0x0,0},{0x50b54a,"d95e1c",0,0x0,0}};
+inline constexpr instruction code41[]={{0x50c450,"ff5010",0,0x0,0},{0x50c453,"84c0",0,0x0,0}};
+inline constexpr instruction code42[]={{0x50cb12,"ff5258",0,0x0,0},{0x50cb15,"5f",0,0x0,0},{0x50cb16,"5e",0,0x0,0}};
+inline constexpr instruction code43[]={{0x50ce4a,"8b11",0,0x0,0},{0x50ce4c,"ff5204",0,0x0,0}};
+inline constexpr instruction code44[]={{0x50ce55,"8b01",0,0x0,0},{0x50ce57,"ff505c",0,0x0,0}};
+inline constexpr instruction code45[]={{0x50cef5,"ff5204",0,0x0,0},{0x50cef8,"eb44",2,0x50cf3e,0}};
+inline constexpr instruction code46[]={{0x50cf39,"8b01",0,0x0,0},{0x50cf3b,"ff5004",0,0x0,0}};
+inline constexpr instruction code47[]={{0x50d093,"8b01",0,0x0,0},{0x50d095,"ff5024",0,0x0,0}};
+inline constexpr instruction code48[]={{0x50e1f6,"e8b5d3f0ff",1,0x41b5b0,0}};
+inline constexpr instruction code49[]={{0x50fd4f,"8b01",0,0x0,0},{0x50fd51,"ff5024",0,0x0,0}};
+inline constexpr instruction code50[]={{0x511ca7,"6a00",0,0x0,0},{0x511ca9,"ff502c",0,0x0,0}};
+inline constexpr instruction code51[]={{0x512862,"ff9214020000",0,0x0,0}};
+inline constexpr instruction code52[]={{0x512f2d,"8b01",0,0x0,0},{0x512f2f,"ff5024",0,0x0,0}};
+inline constexpr instruction code53[]={{0x51315b,"ff5208",0,0x0,0},{0x51315e,"84c0",0,0x0,0}};
+inline constexpr instruction code54[]={{0x51316a,"ff5018",0,0x0,0},{0x51316d,"84c0",0,0x0,0}};
+inline constexpr instruction code55[]={{0x513318,"ff5018",0,0x0,0},{0x51331b,"84c0",0,0x0,0}};
+inline constexpr instruction code56[]={{0x5134f4,"ff5218",0,0x0,0},{0x5134f7,"84c0",0,0x0,0}};
+inline constexpr instruction code57[]={{0x51360c,"ff5024",0,0x0,0},{0x51360f,"83f801",0,0x0,0}};
+inline constexpr instruction code58[]={{0x51372a,"8b01",0,0x0,0},{0x51372c,"ff10",0,0x0,0},{0x51372e,"84c0",0,0x0,0}};
+inline constexpr instruction code59[]={{0x5137f5,"ff504c",0,0x0,0},{0x5137f8,"84c0",0,0x0,0}};
+inline constexpr instruction code60[]={{0x51413f,"8b01",0,0x0,0},{0x514141,"ff5024",0,0x0,0}};
+inline constexpr instruction code61[]={{0x5150cc,"8b11",0,0x0,0},{0x5150ce,"ff5224",0,0x0,0}};
+inline constexpr instruction code62[]={{0x516c09,"ff5210",0,0x0,0},{0x516c0c,"84c0",0,0x0,0}};
+inline constexpr instruction code63[]={{0x516c37,"ff500c",0,0x0,0},{0x516c3a,"84c0",0,0x0,0}};
+inline constexpr instruction code64[]={{0x516ca2,"ff5204",0,0x0,0},{0x516ca5,"8ac3",0,0x0,0}};
+inline constexpr instruction code65[]={{0x5170cc,"ff505c",0,0x0,0},{0x5170cf,"6a00",0,0x0,0}};
+inline constexpr instruction code66[]={{0x517233,"8b11",0,0x0,0},{0x517235,"ff5204",0,0x0,0}};
+inline constexpr instruction code67[]={{0x518036,"8b11",0,0x0,0},{0x518038,"ff5224",0,0x0,0}};
+inline constexpr instruction code68[]={{0x52264d,"8bc8",0,0x0,0},{0x52264f,"ff5210",0,0x0,0}};
+inline constexpr instruction code69[]={{0x522a1f,"56",0,0x0,0},{0x522a20,"8bc8",0,0x0,0},{0x522a22,"c1f905",0,0x0,0}};
+inline constexpr instruction code70[]={{0x522ed0,"56",0,0x0,0},{0x522ed1,"57",0,0x0,0},{0x522ed2,"8b7c240c",0,0x0,0}};
+inline constexpr instruction code71[]={{0x522f57,"5f",0,0x0,0},{0x522f58,"898618c40000",0,0x0,0}};
+inline constexpr instruction code72[]={{0x523660,"83ec0c",0,0x0,0},{0x523663,"53",0,0x0,0},{0x523664,"55",0,0x0,0}};
+inline constexpr instruction code73[]={{0x5238a7,"5b",0,0x0,0},{0x5238a8,"83c40c",0,0x0,0},{0x5238ab,"c3",0,0x0,0}};
+inline constexpr instruction code74[]={{0x525152,"03c2",0,0x0,0},{0x525154,"5e",0,0x0,0},{0x525155,"c20400",0,0x0,0}};
+inline constexpr instruction code75[]={{0x525158,"33c0",0,0x0,0},{0x52515a,"5e",0,0x0,0},{0x52515b,"c20400",0,0x0,0}};
+inline constexpr instruction code76[]={{0x5251af,"03c2",0,0x0,0},{0x5251b1,"5e",0,0x0,0},{0x5251b2,"c20400",0,0x0,0}};
+inline constexpr instruction code77[]={{0x5251b5,"33c0",0,0x0,0},{0x5251b7,"5e",0,0x0,0},{0x5251b8,"c20400",0,0x0,0}};
+inline constexpr instruction code78[]={{0x5251f0,"56",0,0x0,0},{0x5251f1,"57",0,0x0,0},{0x5251f2,"8b7c240c",0,0x0,0}};
+inline constexpr instruction code79[]={{0x525262,"5f",0,0x0,0},{0x525263,"8986c8090000",0,0x0,0}};
+inline constexpr instruction code80[]={{0x52540d,"c6865003000000",0,0x0,0}};
+inline constexpr instruction code81[]={{0x52543d,"c7864003000001000000",0,0x0,0}};
+inline constexpr instruction code82[]={{0x52544d,"899644030000",0,0x0,0}};
+inline constexpr instruction code83[]={{0x525453,"c6865003000001",0,0x0,0}};
+inline constexpr instruction code84[]={{0x525700,"81ec18010000",0,0x0,0}};
+inline constexpr instruction code85[]={{0x52583d,"c780c002000008000000",0,0x0,0}};
+inline constexpr instruction code86[]={{0x525a24,"81c418010000",0,0x0,0},{0x525a2a,"c3",0,0x0,0}};
+inline constexpr instruction code87[]={{0x525a30,"83ec5c",0,0x0,0},{0x525a33,"53",0,0x0,0},{0x525a34,"56",0,0x0,0}};
+inline constexpr instruction code88[]={{0x525b74,"c786e402000004000000",0,0x0,0}};
+inline constexpr instruction code89[]={{0x525b8c,"83c45c",0,0x0,0},{0x525b8f,"c20c00",0,0x0,0}};
+inline constexpr instruction code90[]={{0x525ba0,"51",0,0x0,0},{0x525ba1,"53",0,0x0,0},{0x525ba2,"55",0,0x0,0},{0x525ba3,"56",0,0x0,0},{0x525ba4,"57",0,0x0,0}};
+inline constexpr instruction code91[]={{0x525c51,"8b4c2410",0,0x0,0},{0x525c55,"89481c",0,0x0,0}};
+inline constexpr instruction code92[]={{0x525cbc,"8b4c2410",0,0x0,0},{0x525cc0,"89481c",0,0x0,0}};
+inline constexpr instruction code93[]={{0x525ccc,"5b",0,0x0,0},{0x525ccd,"59",0,0x0,0},{0x525cce,"c20800",0,0x0,0}};
+inline constexpr instruction code94[]={{0x525ce0,"53",0,0x0,0},{0x525ce1,"8b5c240c",0,0x0,0}};
+inline constexpr instruction code95[]={{0x525d3b,"5d",0,0x0,0},{0x525d3c,"5b",0,0x0,0},{0x525d3d,"c20800",0,0x0,0}};
+inline constexpr instruction code96[]={{0x525fa0,"8b442408",0,0x0,0},{0x525fa4,"83ec6c",0,0x0,0}};
+inline constexpr instruction code97[]={{0x526134,"89a8e8020000",0,0x0,0}};
+inline constexpr instruction code98[]={{0x526152,"c680ec02000001",0,0x0,0}};
+inline constexpr instruction code99[]={{0x52618a,"c680ec02000001",0,0x0,0}};
+inline constexpr instruction code100[]={{0x5261c1,"c780e8020000ffffffff",0,0x0,0}};
+inline constexpr instruction code101[]={{0x5261d1,"83c46c",0,0x0,0},{0x5261d4,"c20c00",0,0x0,0}};
+inline constexpr instruction code102[]={{0x526211,"c780e802000001000000",0,0x0,0}};
+inline constexpr instruction code103[]={{0x526221,"83c46c",0,0x0,0},{0x526224,"c20c00",0,0x0,0}};
+inline constexpr instruction code104[]={{0x526249,"89a8e8020000",0,0x0,0}};
+inline constexpr instruction code105[]={{0x526269,"c680ec02000001",0,0x0,0}};
+inline constexpr instruction code106[]={{0x5262d8,"c780e8020000ffffffff",0,0x0,0}};
+inline constexpr instruction code107[]={{0x526326,"c780e802000001000000",0,0x0,0}};
+inline constexpr instruction code108[]={{0x526355,"c680ec02000001",0,0x0,0}};
+inline constexpr instruction code109[]={{0x52636c,"83c46c",0,0x0,0},{0x52636f,"c20c00",0,0x0,0}};
+inline constexpr instruction code110[]={{0x52637a,"83c46c",0,0x0,0},{0x52637d,"c20c00",0,0x0,0}};
+inline constexpr instruction code111[]={{0x527640,"51",0,0x0,0},{0x527641,"53",0,0x0,0},{0x527642,"55",0,0x0,0},{0x527643,"56",0,0x0,0},{0x527644,"8bf1",0,0x0,0}};
+inline constexpr instruction code112[]={{0x5276bf,"32c0",0,0x0,0},{0x5276c1,"5b",0,0x0,0},{0x5276c2,"59",0,0x0,0},{0x5276c3,"c3",0,0x0,0}};
+inline constexpr instruction code113[]={{0x527730,"8ac3",0,0x0,0},{0x527732,"5b",0,0x0,0},{0x527733,"59",0,0x0,0},{0x527734,"c3",0,0x0,0}};
+inline constexpr instruction code114[]={{0x527743,"8ac3",0,0x0,0},{0x527745,"5b",0,0x0,0},{0x527746,"59",0,0x0,0},{0x527747,"c3",0,0x0,0}};
 struct site {const char* name; unsigned va,point,next; kind type; unsigned mode,arg; const char* hex; const instruction* code; unsigned count;};
-inline constexpr std::array<site,113> sites{{
+inline constexpr std::array<site,115> sites{{
 {"step",0x401d70,0x401d70,0x401d77,kind::step,0,0x0,"6aff687b2a6700",code0,2},
 {"controller_token",0x42394d,0x42394d,0x423953,kind::controller_token,1,0x0,"8986dc070000",code1,1},
 {"factory_entry",0x423a90,0x423a90,0x423a9c,kind::factory_entry,0,0x0,"518b0156c744240400000000",code2,4},
@@ -159,80 +161,82 @@ inline constexpr std::array<site,113> sites{{
 {"handler_50b0d3",0x50b0d3,0x50b0d3,0x50b0d8,kind::borrow_handler,2,0x0,"ff520432c0",code36,2},
 {"field_store_0x50b535",0x50b535,0x50b535,0x50b53b,kind::field_store,1,0x106,"899e54010000",code37,1},
 {"field_store_0x50b53b",0x50b53b,0x50b53b,0x50b544,kind::field_store,1,0x105,"895e18d9967c010000",code38,2},
-{"handler_50c450",0x50c450,0x50c450,0x50c455,kind::borrow_handler,2,0x0,"ff501084c0",code39,2},
-{"handler_50cb12",0x50cb12,0x50cb12,0x50cb17,kind::borrow_handler,2,0x0,"ff52585f5e",code40,3},
-{"handler_50ce4c",0x50ce4a,0x50ce4c,0x50ce4f,kind::borrow_handler,2,0x0,"8b11ff5204",code41,2},
-{"handler_50ce57",0x50ce55,0x50ce57,0x50ce5a,kind::borrow_handler,2,0x0,"8b01ff505c",code42,2},
-{"handler_50cef5",0x50cef5,0x50cef5,0x50cefa,kind::borrow_handler,2,0x0,"ff5204eb44",code43,2},
-{"handler_50cf3b",0x50cf39,0x50cf3b,0x50cf3e,kind::borrow_handler,2,0x0,"8b01ff5004",code44,2},
-{"handler_50d095",0x50d093,0x50d095,0x50d098,kind::borrow_handler,2,0x0,"8b01ff5024",code45,2},
-{"event_borrow",0x50e1f6,0x50e1f6,0x50e1fb,kind::borrow_event,2,0x0,"e8b5d3f0ff",code46,1},
-{"handler_50fd51",0x50fd4f,0x50fd51,0x50fd54,kind::borrow_handler,2,0x0,"8b01ff5024",code47,2},
-{"handler_511ca9",0x511ca7,0x511ca9,0x511cac,kind::borrow_handler,2,0x0,"6a00ff502c",code48,2},
-{"reregister",0x512862,0x512862,0x512868,kind::reregister,2,0x0,"ff9214020000",code49,1},
-{"handler_512f2f",0x512f2d,0x512f2f,0x512f32,kind::borrow_handler,2,0x0,"8b01ff5024",code50,2},
-{"handler_51315b",0x51315b,0x51315b,0x513160,kind::borrow_handler,2,0x0,"ff520884c0",code51,2},
-{"handler_51316a",0x51316a,0x51316a,0x51316f,kind::borrow_handler,2,0x0,"ff501884c0",code52,2},
-{"handler_513318",0x513318,0x513318,0x51331d,kind::borrow_handler,2,0x0,"ff501884c0",code53,2},
-{"handler_5134f4",0x5134f4,0x5134f4,0x5134f9,kind::borrow_handler,2,0x0,"ff521884c0",code54,2},
-{"handler_51360c",0x51360c,0x51360c,0x513612,kind::borrow_handler,2,0x0,"ff502483f801",code55,2},
-{"handler_51372c",0x51372a,0x51372c,0x513730,kind::borrow_handler,2,0x0,"8b01ff1084c0",code56,3},
-{"handler_5137f5",0x5137f5,0x5137f5,0x5137fa,kind::borrow_handler,2,0x0,"ff504c84c0",code57,2},
-{"handler_514141",0x51413f,0x514141,0x514144,kind::borrow_handler,2,0x0,"8b01ff5024",code58,2},
-{"handler_5150ce",0x5150cc,0x5150ce,0x5150d1,kind::borrow_handler,2,0x0,"8b11ff5224",code59,2},
-{"handler_516c09",0x516c09,0x516c09,0x516c0e,kind::borrow_handler,2,0x0,"ff521084c0",code60,2},
-{"handler_516c37",0x516c37,0x516c37,0x516c3c,kind::borrow_handler,2,0x0,"ff500c84c0",code61,2},
-{"handler_516ca2",0x516ca2,0x516ca2,0x516ca7,kind::borrow_handler,2,0x0,"ff52048ac3",code62,2},
-{"handler_5170cc",0x5170cc,0x5170cc,0x5170d1,kind::borrow_handler,2,0x0,"ff505c6a00",code63,2},
-{"handler_517235",0x517233,0x517235,0x517238,kind::borrow_handler,2,0x0,"8b11ff5204",code64,2},
-{"handler_518038",0x518036,0x518038,0x51803b,kind::borrow_handler,2,0x0,"8b11ff5224",code65,2},
-{"update_borrow",0x52264d,0x52264f,0x522652,kind::borrow_update,2,0x0,"8bc8ff5210",code66,2},
-{"controller_pop",0x522a1f,0x522a1f,0x522a25,kind::controller_pop,0,0x0,"568bc8c1f905",code67,3},
-{"controller_release",0x522ed0,0x522ed0,0x522ed6,kind::controller_release,0,0x0,"56578b7c240c",code68,3},
-{"controller_free",0x522f57,0x522f57,0x522f5e,kind::controller_free,0,0x0,"5f898618c40000",code69,2},
-{"reset",0x523660,0x523660,0x523665,kind::reset,0,0x0,"83ec0c5355",code70,3},
-{"reset_done_0x5238ab",0x5238a7,0x5238ab,0x5238ac,kind::reset_done,0,0x0,"5b83c40cc3",code71,3},
-{"team_resolver_hit",0x525152,0x525152,0x525158,kind::team_resolve_hit,1,0x0,"03c25ec20400",code72,3},
-{"team_resolver_refused",0x525158,0x525158,0x52515e,kind::team_resolve_refused,0,0x0,"33c05ec20400",code73,3},
-{"resolver_hit",0x5251af,0x5251af,0x5251b5,kind::resolve_hit,1,0x0,"03c25ec20400",code74,3},
-{"resolver_refused",0x5251b5,0x5251b5,0x5251bb,kind::resolve_refused,0,0x0,"33c05ec20400",code75,3},
-{"team_free",0x5251f0,0x5251f0,0x5251f6,kind::team_free,0,0x0,"56578b7c240c",code76,3},
-{"team_free_done",0x525262,0x525262,0x525269,kind::team_free_done,0,0x0,"5f8986c8090000",code77,2},
-{"field_store_0x52540d",0x52540d,0x52540d,0x525414,kind::field_store,1,0x10e,"c6865003000000",code78,1},
-{"field_store_0x52543d",0x52543d,0x52543d,0x525447,kind::field_store,1,0x10c,"c7864003000001000000",code79,1},
-{"field_store_0x52544d",0x52544d,0x52544d,0x525453,kind::field_store,1,0x10d,"899644030000",code80,1},
-{"field_store_0x525453",0x525453,0x525453,0x52545a,kind::field_store,1,0x10e,"c6865003000001",code81,1},
-{"writer_enter_0x525700",0x525700,0x525700,0x525706,kind::writer_enter,0,0x525700,"81ec18010000",code82,1},
-{"field_store_0x52583d",0x52583d,0x52583d,0x525847,kind::field_store,1,0x709,"c780c002000008000000",code83,1},
-{"writer_exit_0x525a2a",0x525a24,0x525a2a,0x525a2b,kind::writer_exit,0,0x525700,"81c418010000c3",code84,2},
-{"writer_enter_0x525a30",0x525a30,0x525a30,0x525a35,kind::writer_enter,0,0x525a30,"83ec5c5356",code85,3},
-{"field_store_0x525b74",0x525b74,0x525b74,0x525b7e,kind::field_store,1,0x103,"c786e402000004000000",code86,1},
-{"writer_exit_0x525b8f",0x525b8c,0x525b8f,0x525b92,kind::writer_exit,0,0x525a30,"83c45cc20c00",code87,2},
-{"writer_enter_0x525ba0",0x525ba0,0x525ba0,0x525ba5,kind::writer_enter,0,0x525ba0,"5153555657",code88,5},
-{"field_store_0x525c55",0x525c51,0x525c55,0x525c58,kind::field_store,1,0x708,"8b4c241089481c",code89,2},
-{"field_store_0x525cc0",0x525cbc,0x525cc0,0x525cc3,kind::field_store,1,0x708,"8b4c241089481c",code90,2},
-{"writer_exit_0x525cce",0x525ccc,0x525cce,0x525cd1,kind::writer_exit,0,0x525ba0,"5b59c20800",code91,3},
-{"writer_enter_0x525ce0",0x525ce0,0x525ce0,0x525ce5,kind::writer_enter,0,0x525ce0,"538b5c240c",code92,2},
-{"writer_exit_0x525d3d",0x525d3b,0x525d3d,0x525d40,kind::writer_exit,0,0x525ce0,"5d5bc20800",code93,3},
-{"writer_enter_0x525fa0",0x525fa0,0x525fa0,0x525fa7,kind::writer_enter,0,0x525fa0,"8b44240883ec6c",code94,2},
-{"field_store_0x526134",0x526134,0x526134,0x52613a,kind::field_store,1,0x70a,"89a8e8020000",code95,1},
-{"field_store_0x526152",0x526152,0x526152,0x526159,kind::field_store,1,0x70b,"c680ec02000001",code96,1},
-{"field_store_0x52618a",0x52618a,0x52618a,0x526191,kind::field_store,1,0x70b,"c680ec02000001",code97,1},
-{"field_store_0x5261c1",0x5261c1,0x5261c1,0x5261cb,kind::field_store,1,0x70a,"c780e8020000ffffffff",code98,1},
-{"writer_exit_0x5261d4",0x5261d1,0x5261d4,0x5261d7,kind::writer_exit,0,0x525fa0,"83c46cc20c00",code99,2},
-{"field_store_0x526211",0x526211,0x526211,0x52621b,kind::field_store,1,0x70a,"c780e802000001000000",code100,1},
-{"writer_exit_0x526224",0x526221,0x526224,0x526227,kind::writer_exit,0,0x525fa0,"83c46cc20c00",code101,2},
-{"field_store_0x526249",0x526249,0x526249,0x52624f,kind::field_store,1,0x70a,"89a8e8020000",code102,1},
-{"field_store_0x526269",0x526269,0x526269,0x526270,kind::field_store,1,0x70b,"c680ec02000001",code103,1},
-{"field_store_0x5262d8",0x5262d8,0x5262d8,0x5262e2,kind::field_store,1,0x70a,"c780e8020000ffffffff",code104,1},
-{"field_store_0x526326",0x526326,0x526326,0x526330,kind::field_store,1,0x70a,"c780e802000001000000",code105,1},
-{"field_store_0x526355",0x526355,0x526355,0x52635c,kind::field_store,1,0x70b,"c680ec02000001",code106,1},
-{"writer_exit_0x52636f",0x52636c,0x52636f,0x526372,kind::writer_exit,0,0x525fa0,"83c46cc20c00",code107,2},
-{"writer_exit_0x52637d",0x52637a,0x52637d,0x526380,kind::writer_exit,0,0x525fa0,"83c46cc20c00",code108,2},
-{"timeout",0x527640,0x527640,0x527646,kind::timeout_enter,0,0x0,"515355568bf1",code109,5},
-{"timeout_done_0x5276c3",0x5276bf,0x5276c3,0x5276c4,kind::timeout_exit,0,0x0,"32c05b59c3",code110,4},
-{"timeout_done_0x527734",0x527730,0x527734,0x527735,kind::timeout_exit,0,0x0,"8ac35b59c3",code111,4},
-{"timeout_done_0x527747",0x527743,0x527747,0x527748,kind::timeout_exit,0,0x0,"8ac35b59c3",code112,4},
+{"field_store_0x50b53e",0x50b53b,0x50b53e,0x50b544,kind::field_store,1,0x107,"895e18d9967c010000",code39,2},
+{"field_store_0x50b54a",0x50b544,0x50b54a,0x50b54d,kind::field_store,1,0x108,"d805ac016800d95e1c",code40,2},
+{"handler_50c450",0x50c450,0x50c450,0x50c455,kind::borrow_handler,2,0x0,"ff501084c0",code41,2},
+{"handler_50cb12",0x50cb12,0x50cb12,0x50cb17,kind::borrow_handler,2,0x0,"ff52585f5e",code42,3},
+{"handler_50ce4c",0x50ce4a,0x50ce4c,0x50ce4f,kind::borrow_handler,2,0x0,"8b11ff5204",code43,2},
+{"handler_50ce57",0x50ce55,0x50ce57,0x50ce5a,kind::borrow_handler,2,0x0,"8b01ff505c",code44,2},
+{"handler_50cef5",0x50cef5,0x50cef5,0x50cefa,kind::borrow_handler,2,0x0,"ff5204eb44",code45,2},
+{"handler_50cf3b",0x50cf39,0x50cf3b,0x50cf3e,kind::borrow_handler,2,0x0,"8b01ff5004",code46,2},
+{"handler_50d095",0x50d093,0x50d095,0x50d098,kind::borrow_handler,2,0x0,"8b01ff5024",code47,2},
+{"event_borrow",0x50e1f6,0x50e1f6,0x50e1fb,kind::borrow_event,2,0x0,"e8b5d3f0ff",code48,1},
+{"handler_50fd51",0x50fd4f,0x50fd51,0x50fd54,kind::borrow_handler,2,0x0,"8b01ff5024",code49,2},
+{"handler_511ca9",0x511ca7,0x511ca9,0x511cac,kind::borrow_handler,2,0x0,"6a00ff502c",code50,2},
+{"reregister",0x512862,0x512862,0x512868,kind::reregister,2,0x0,"ff9214020000",code51,1},
+{"handler_512f2f",0x512f2d,0x512f2f,0x512f32,kind::borrow_handler,2,0x0,"8b01ff5024",code52,2},
+{"handler_51315b",0x51315b,0x51315b,0x513160,kind::borrow_handler,2,0x0,"ff520884c0",code53,2},
+{"handler_51316a",0x51316a,0x51316a,0x51316f,kind::borrow_handler,2,0x0,"ff501884c0",code54,2},
+{"handler_513318",0x513318,0x513318,0x51331d,kind::borrow_handler,2,0x0,"ff501884c0",code55,2},
+{"handler_5134f4",0x5134f4,0x5134f4,0x5134f9,kind::borrow_handler,2,0x0,"ff521884c0",code56,2},
+{"handler_51360c",0x51360c,0x51360c,0x513612,kind::borrow_handler,2,0x0,"ff502483f801",code57,2},
+{"handler_51372c",0x51372a,0x51372c,0x513730,kind::borrow_handler,2,0x0,"8b01ff1084c0",code58,3},
+{"handler_5137f5",0x5137f5,0x5137f5,0x5137fa,kind::borrow_handler,2,0x0,"ff504c84c0",code59,2},
+{"handler_514141",0x51413f,0x514141,0x514144,kind::borrow_handler,2,0x0,"8b01ff5024",code60,2},
+{"handler_5150ce",0x5150cc,0x5150ce,0x5150d1,kind::borrow_handler,2,0x0,"8b11ff5224",code61,2},
+{"handler_516c09",0x516c09,0x516c09,0x516c0e,kind::borrow_handler,2,0x0,"ff521084c0",code62,2},
+{"handler_516c37",0x516c37,0x516c37,0x516c3c,kind::borrow_handler,2,0x0,"ff500c84c0",code63,2},
+{"handler_516ca2",0x516ca2,0x516ca2,0x516ca7,kind::borrow_handler,2,0x0,"ff52048ac3",code64,2},
+{"handler_5170cc",0x5170cc,0x5170cc,0x5170d1,kind::borrow_handler,2,0x0,"ff505c6a00",code65,2},
+{"handler_517235",0x517233,0x517235,0x517238,kind::borrow_handler,2,0x0,"8b11ff5204",code66,2},
+{"handler_518038",0x518036,0x518038,0x51803b,kind::borrow_handler,2,0x0,"8b11ff5224",code67,2},
+{"update_borrow",0x52264d,0x52264f,0x522652,kind::borrow_update,2,0x0,"8bc8ff5210",code68,2},
+{"controller_pop",0x522a1f,0x522a1f,0x522a25,kind::controller_pop,0,0x0,"568bc8c1f905",code69,3},
+{"controller_release",0x522ed0,0x522ed0,0x522ed6,kind::controller_release,0,0x0,"56578b7c240c",code70,3},
+{"controller_free",0x522f57,0x522f57,0x522f5e,kind::controller_free,0,0x0,"5f898618c40000",code71,2},
+{"reset",0x523660,0x523660,0x523665,kind::reset,0,0x0,"83ec0c5355",code72,3},
+{"reset_done_0x5238ab",0x5238a7,0x5238ab,0x5238ac,kind::reset_done,0,0x0,"5b83c40cc3",code73,3},
+{"team_resolver_hit",0x525152,0x525152,0x525158,kind::team_resolve_hit,1,0x0,"03c25ec20400",code74,3},
+{"team_resolver_refused",0x525158,0x525158,0x52515e,kind::team_resolve_refused,0,0x0,"33c05ec20400",code75,3},
+{"resolver_hit",0x5251af,0x5251af,0x5251b5,kind::resolve_hit,1,0x0,"03c25ec20400",code76,3},
+{"resolver_refused",0x5251b5,0x5251b5,0x5251bb,kind::resolve_refused,0,0x0,"33c05ec20400",code77,3},
+{"team_free",0x5251f0,0x5251f0,0x5251f6,kind::team_free,0,0x0,"56578b7c240c",code78,3},
+{"team_free_done",0x525262,0x525262,0x525269,kind::team_free_done,0,0x0,"5f8986c8090000",code79,2},
+{"field_store_0x52540d",0x52540d,0x52540d,0x525414,kind::field_store,1,0x10e,"c6865003000000",code80,1},
+{"field_store_0x52543d",0x52543d,0x52543d,0x525447,kind::field_store,1,0x10c,"c7864003000001000000",code81,1},
+{"field_store_0x52544d",0x52544d,0x52544d,0x525453,kind::field_store,1,0x10d,"899644030000",code82,1},
+{"field_store_0x525453",0x525453,0x525453,0x52545a,kind::field_store,1,0x10e,"c6865003000001",code83,1},
+{"writer_enter_0x525700",0x525700,0x525700,0x525706,kind::writer_enter,0,0x525700,"81ec18010000",code84,1},
+{"field_store_0x52583d",0x52583d,0x52583d,0x525847,kind::field_store,1,0x709,"c780c002000008000000",code85,1},
+{"writer_exit_0x525a2a",0x525a24,0x525a2a,0x525a2b,kind::writer_exit,0,0x525700,"81c418010000c3",code86,2},
+{"writer_enter_0x525a30",0x525a30,0x525a30,0x525a35,kind::writer_enter,0,0x525a30,"83ec5c5356",code87,3},
+{"field_store_0x525b74",0x525b74,0x525b74,0x525b7e,kind::field_store,1,0x103,"c786e402000004000000",code88,1},
+{"writer_exit_0x525b8f",0x525b8c,0x525b8f,0x525b92,kind::writer_exit,0,0x525a30,"83c45cc20c00",code89,2},
+{"writer_enter_0x525ba0",0x525ba0,0x525ba0,0x525ba5,kind::writer_enter,0,0x525ba0,"5153555657",code90,5},
+{"field_store_0x525c55",0x525c51,0x525c55,0x525c58,kind::field_store,1,0x708,"8b4c241089481c",code91,2},
+{"field_store_0x525cc0",0x525cbc,0x525cc0,0x525cc3,kind::field_store,1,0x708,"8b4c241089481c",code92,2},
+{"writer_exit_0x525cce",0x525ccc,0x525cce,0x525cd1,kind::writer_exit,0,0x525ba0,"5b59c20800",code93,3},
+{"writer_enter_0x525ce0",0x525ce0,0x525ce0,0x525ce5,kind::writer_enter,0,0x525ce0,"538b5c240c",code94,2},
+{"writer_exit_0x525d3d",0x525d3b,0x525d3d,0x525d40,kind::writer_exit,0,0x525ce0,"5d5bc20800",code95,3},
+{"writer_enter_0x525fa0",0x525fa0,0x525fa0,0x525fa7,kind::writer_enter,0,0x525fa0,"8b44240883ec6c",code96,2},
+{"field_store_0x526134",0x526134,0x526134,0x52613a,kind::field_store,1,0x70a,"89a8e8020000",code97,1},
+{"field_store_0x526152",0x526152,0x526152,0x526159,kind::field_store,1,0x70b,"c680ec02000001",code98,1},
+{"field_store_0x52618a",0x52618a,0x52618a,0x526191,kind::field_store,1,0x70b,"c680ec02000001",code99,1},
+{"field_store_0x5261c1",0x5261c1,0x5261c1,0x5261cb,kind::field_store,1,0x70a,"c780e8020000ffffffff",code100,1},
+{"writer_exit_0x5261d4",0x5261d1,0x5261d4,0x5261d7,kind::writer_exit,0,0x525fa0,"83c46cc20c00",code101,2},
+{"field_store_0x526211",0x526211,0x526211,0x52621b,kind::field_store,1,0x70a,"c780e802000001000000",code102,1},
+{"writer_exit_0x526224",0x526221,0x526224,0x526227,kind::writer_exit,0,0x525fa0,"83c46cc20c00",code103,2},
+{"field_store_0x526249",0x526249,0x526249,0x52624f,kind::field_store,1,0x70a,"89a8e8020000",code104,1},
+{"field_store_0x526269",0x526269,0x526269,0x526270,kind::field_store,1,0x70b,"c680ec02000001",code105,1},
+{"field_store_0x5262d8",0x5262d8,0x5262d8,0x5262e2,kind::field_store,1,0x70a,"c780e8020000ffffffff",code106,1},
+{"field_store_0x526326",0x526326,0x526326,0x526330,kind::field_store,1,0x70a,"c780e802000001000000",code107,1},
+{"field_store_0x526355",0x526355,0x526355,0x52635c,kind::field_store,1,0x70b,"c680ec02000001",code108,1},
+{"writer_exit_0x52636f",0x52636c,0x52636f,0x526372,kind::writer_exit,0,0x525fa0,"83c46cc20c00",code109,2},
+{"writer_exit_0x52637d",0x52637a,0x52637d,0x526380,kind::writer_exit,0,0x525fa0,"83c46cc20c00",code110,2},
+{"timeout",0x527640,0x527640,0x527646,kind::timeout_enter,0,0x0,"515355568bf1",code111,5},
+{"timeout_done_0x5276c3",0x5276bf,0x5276c3,0x5276c4,kind::timeout_exit,0,0x0,"32c05b59c3",code112,4},
+{"timeout_done_0x527734",0x527730,0x527734,0x527735,kind::timeout_exit,0,0x0,"8ac35b59c3",code113,4},
+{"timeout_done_0x527747",0x527743,0x527747,0x527748,kind::timeout_exit,0,0x0,"8ac35b59c3",code114,4},
 }};
 struct region {unsigned lo,hi; const char* hash;};
 inline constexpr std::array<region,45> regions{{

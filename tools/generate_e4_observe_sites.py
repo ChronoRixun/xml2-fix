@@ -52,6 +52,7 @@ for f in (0x525a30,0x525ba0,0x525ce0,0x525700,0x525fa0):
   if r[1]==f and r[3].startswith('RET'):add('writer_exit_'+hex(va),va,'writer_exit',arg=f)
 # Record actual field stores, including a store of an unchanged value.
 fields=[0x34,0x38,0x3c,0x2e4,0x2b5,0x18,0x154,0x17c,0x1c,0x2c0,0x2e8,0x2ec,0x340,0x344,0x350]
+x87_stores={'fst','fstp','fstpt','fist','fistp','fisttp','fbstp','fstenv','fnstenv','fsave','fnsave','fstcw','fnstcw','fstsw','fnstsw'}
 regs={'edi':0,'esi':1,'ebp':2,'ebx':4,'edx':5,'ecx':6,'eax':7}
 for va,r in rows.items():
  if r[1] not in (0x525a30,0x525ba0,0x525ce0,0x525700,0x525fa0,0x508400,0x50b4c0,0x5253e0):continue
@@ -60,7 +61,7 @@ for va,r in rows.items():
  i=decoded[0]
  if not i.operands:continue
  o=i.operands[0]
- if o.type!=capstone.x86.X86_OP_MEM or not (o.access&capstone.CS_AC_WRITE):continue
+ if o.type!=capstone.x86.X86_OP_MEM or not ((o.access&capstone.CS_AC_WRITE)or i.mnemonic.lower()in x87_stores):continue
  mem=o.mem;reg=i.reg_name(mem.base)
  if mem.disp not in fields or reg not in regs or mem.index:continue
  add('field_store_'+hex(va),va,'field_store','after',fields.index(mem.disp)|(regs[reg]<<8))
@@ -101,8 +102,21 @@ for s in S:
     assert op!='jcc' or h[:2] not in ('e0','e1','e2','e3'),s
   s['parts'].append(dict(va=v,hex=h,op=op,target=target,cc=((int(h[:2],16)&15) if len(h)==4 else (int(h[2:4],16)&15)) if op=='jcc' else 0))
  s['hex']=''.join(rows[v][2] for v in ins);s['next']=ins[-1]+len(bytes.fromhex(rows[ins[-1]][2]))
+# Adjacent short instructions can share one detour. Keep each observation
+# point, but compose overlapping displacement spans instead of dropping a store.
 S.sort(key=lambda s:s['va'])
-for x,y in zip(S,S[1:]):assert x['next']<=y['va'],(x,y)
+groups=[]
+for s in S:
+ if groups and s['va']<max(x['next']for x in groups[-1]):groups[-1].append(s)
+ else:groups.append([s])
+for group in groups:
+ lo=min(s['va']for s in group);hi=max(s['next']for s in group)
+ assert len({s['fn']for s in group})==1,group
+ parts={i['va']:i for s in group for i in s['parts']}
+ assert not any(any(src<lo or src>=hi for src in incoming.get(v,set()))for v in sorted(parts)[1:]),group
+ merged=[parts[v]for v in sorted(parts)];h=''.join(i['hex']for i in merged)
+ for s in group:s.update(va=lo,next=hi,parts=merged,hex=h)
+
 functions=[]
 for f in sorted(set(s['fn'] for s in S)):
  own=sorted(v for v,r in rows.items() if r[1]==f);hi=own[-1]+len(bytes.fromhex(rows[own[-1]][2]));raw=e.get_data(f-0x400000,hi-f)
@@ -118,4 +132,4 @@ for f in functions:out.append('{0x%x,0x%x,"%s"},'%(f['lo'],f['hi'],f['sha256']))
 out+=['}};','}'];result='\n'.join(out)+'\n';dest=Path(__file__).resolve().parents[1]/'src/e4_observe_sites.hpp'
 if a.check:assert dest.read_text()==result,'generated header differs'
 else:dest.write_text(result,newline='\n')
-print(f'E4 sites: {len(S)} spans, {len(functions)} function regions, 44 embedded-handler brackets; check={a.check}')
+print(f'E4 sites: {len(S)} observation points in {len(groups)} spans, {len(functions)} function regions, 44 embedded-handler brackets; check={a.check}')

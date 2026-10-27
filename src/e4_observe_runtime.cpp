@@ -44,7 +44,7 @@ std::array<caller_count,64> damage_callers{};
 struct trace {u32 point=0,actor=0,team=0,result=0,step=0;};
 std::array<trace,256> traces{};u32 trace_head=0,next_team=0;
 std::array<u32,max_slots> logical_actors{};
-struct identity {u32 token=0,id=0;};std::array<identity,384> teams{};
+struct identity {u32 token=0,id=0;};std::array<identity,max_slots> teams{};
 struct writer_frame {u32 point=0,team=0;std::array<bool,max_slots> members{};std::array<std::array<u32,field_count>,max_slots> before{};};
 struct context {
     bool inside=false;
@@ -53,12 +53,13 @@ struct context {
     std::array<damage,16> damage_stack{};u32 damage_depth=0,damage_overflow=0;
     std::array<u32,max_depth> init_stack{};u32 init_depth=0;
     std::array<u32,max_depth> factory_stack{};u32 factory_depth=0;
+    e4_unwind::frame* boundary=nullptr;u32 boundary_depth=0;
 };
 constexpr unsigned context_capacity=32;
 struct context_slot {DWORD thread=0;context data;};
 context_slot* context_bank=nullptr;
 __declspec(thread) context* current_context=nullptr;
-u32 contexts_live=0,contexts_peak=0;
+u32 contexts_live=0,contexts_peak=0,next_boundary=0,boundary_unwinds=0;
 bool attach_context(){
     if(current_context)return true;
     AcquireSRWLockExclusive(&mutex);
@@ -71,12 +72,39 @@ bool attach_context(){
     ReleaseSRWLockExclusive(&mutex);return false;
 }
 bool recycle_context(context* c,DWORD thread){
-    if(c->depth||c->borrow_overflow||c->writer_depth||c->writer_overflow||c->damage_depth||c->damage_overflow||c->init_depth||c->factory_depth)return false;
+    if(c->depth||c->borrow_overflow||c->writer_depth||c->writer_overflow||c->damage_depth||c->damage_overflow||c->init_depth||c->factory_depth||c->boundary_depth)return false;
     for(const auto& r:m.records)if(r.open&&r.thread==thread)return false;
     for(unsigned n=0;n<context_capacity;++n)if(&context_bank[n].data==c){
         current_context=nullptr;c->inside=false;context_bank[n].thread=0;--contexts_live;return true;
     }
     return false;
+}
+void boundary_begin(e4_unwind::frame& f,DWORD thread){
+    if(f.signature!=e4_unwind::magic)fatal("E4 invalid unwind frame");
+    f.serial=++next_boundary;if(!f.serial)fatal("E4 unwind identity exhausted");
+    f.previous=static_cast<u32>(reinterpret_cast<std::uintptr_t>(current_context->boundary));
+    f.borrows=current_context->depth;f.borrow_overflow=current_context->borrow_overflow;
+    f.writers=current_context->writer_depth;f.writer_overflow=current_context->writer_overflow;
+    f.damage=current_context->damage_depth;f.damage_overflow=current_context->damage_overflow;
+    f.init=current_context->init_depth;f.factory=current_context->factory_depth;
+    f.boundaries=current_context->boundary_depth;f.resetting=m.resetting;f.thread=thread;f.closed=0;
+    current_context->boundary=&f;++current_context->boundary_depth;
+}
+void boundary_finish(e4_unwind::frame& f,bool abnormal){
+    if(f.signature!=e4_unwind::magic)fatal("E4 corrupt unwind frame");
+    if(!f.serial||f.closed)return;
+    f.closed=1;
+    // An open record owned by a returned/unwound boundary can no longer publish.
+    // Other live/outer constructions are deliberately not marked by this exit.
+    m.unwind_boundary(f.serial,f.thread);if(abnormal)++boundary_unwinds;
+    if(!current_context)fatal("E4 unwind context missing");
+    current_context->depth=f.borrows;current_context->borrow_overflow=f.borrow_overflow;
+    current_context->writer_depth=f.writers;current_context->writer_overflow=f.writer_overflow;
+    current_context->damage_depth=f.damage;current_context->damage_overflow=f.damage_overflow;
+    current_context->init_depth=f.init;current_context->factory_depth=f.factory;
+    current_context->boundary_depth=f.boundaries;
+    current_context->boundary=reinterpret_cast<e4_unwind::frame*>(static_cast<std::uintptr_t>(f.previous));
+    m.resetting=f.resetting!=0;m.depth=current_context->depth;m.borrows=current_context->borrows;
 }
 void observe_borrows(event_kind kind,u32 slot,u32 caller){
     if(slot>=max_slots)return;
@@ -114,9 +142,14 @@ u32 team_token(u32 address) {
 }
 u32 logical_team(u32 token) {
     if(!token)return 0;
-    for(const auto& t:teams)if(t.token==token)return t.id;
-    for(auto& t:teams)if(!t.token){t={token,++next_team};return t.id;}
-    m.emit(event_kind::overflow,max_slots);return 0;
+    const auto& d=actor_ai::installed();const auto i=token&value(d.cai_object+0xce84);
+    // Only live team lifetimes have an identity. Stale tokens normalize to the
+    // same teamless state as the native resolver, without consuming an entry.
+    if(i>=d.team_storage||i>=teams.size()||value(d.cai_object+0xce74+i*4)!=token||
+       !(value(d.team_base+0x9c4+(i>>5)*4)&(1u<<(i&31))))return 0;
+    auto& entry=teams[i];if(entry.token==token)return entry.id;
+    if(next_team==0xffffffffu){m.emit(event_kind::overflow,max_slots);return 0;}
+    entry={token,++next_team};return entry.id;
 }
 void trace_actor(u32 point,u32 slot,u32 result=0){
     const auto owner=slot<max_slots?m.slots[slot].owner:0;
@@ -132,7 +165,7 @@ void take_snapshot(u32 i,u32 point,u32 token,bool after){
 }
 void log_construction(u32 esp,u32 thread) noexcept {
     try {
-        for(const auto& c:m.records)if(c.open&&c.thread==thread&&c.esp&&esp>c.esp)
+        for(const auto& c:m.records)if(c.open&&c.unwound)
             logger::write("E4: construction escaped (phase %u, actor %08x, controller slot %u, exception %08x at %08x, ESP %08x FS0 %08x)",
                 unsigned(c.at),c.actor,c.slot,c.code,c.fault,c.esp,c.seh);
     } catch(...) {}
@@ -143,9 +176,8 @@ void log_construction(u32 esp,u32 thread) noexcept {
     fatal("E4 construction escaped");
 }
 void checkpoint(u32 esp,u32 thread){
-    // Discard borrow frames that an exception unwound past, preserving nested
-    // callbacks that are still below the current stack pointer.
-    while(current_context->depth&&esp>current_context->borrow_sp[current_context->depth-1])--current_context->depth;
+    // Stack depth is diagnostic only. Actual SEH unwind callbacks remove
+    // abandoned brackets and latch escaped constructions before recovery.
     m.depth=current_context->depth;m.borrows=current_context->borrows;
     if(m.checkpoint(esp,thread)) {
         ReleaseSRWLockExclusive(&mutex);current_context->inside=false;
@@ -196,7 +228,14 @@ void __cdecl observe(unsigned encoded,const u32* r) {
     if(!attach_context())fatal("E4 concurrent diagnostic context capacity exhausted");
     if(current_context->inside)return;
     current_context->inside=true;AcquireSRWLockExclusive(&mutex);
-    const auto thread=GetCurrentThreadId();const unsigned id=encoded/2;const bool post=(encoded&1)!=0;
+    const auto thread=GetCurrentThreadId();
+    if(encoded==e4_unwind::begin||encoded==e4_unwind::end){
+        auto& f=*reinterpret_cast<e4_unwind::frame*>(static_cast<std::uintptr_t>(sp(r)));
+        if(encoded==e4_unwind::begin)boundary_begin(f,thread);else {boundary_finish(f,false);checkpoint(sp(r),thread);}
+        auto* completed=current_context;const bool recycled=recycle_context(completed,thread);
+        ReleaseSRWLockExclusive(&mutex);if(!recycled)completed->inside=false;return;
+    }
+    const unsigned id=encoded/2;const bool post=(encoded&1)!=0;
     if(id>=e4_observe_sites::sites.size()){ReleaseSRWLockExclusive(&mutex);current_context->inside=false;return;}
     const auto& s=e4_observe_sites::sites[id];
     u32 return_address=s.point;
@@ -212,7 +251,10 @@ void __cdecl observe(unsigned encoded,const u32* r) {
         break;
     case kind::factory_failed:if(current_context->factory_depth)--current_context->factory_depth;else m.emit(event_kind::transition,max_slots,s.point);break;
     case kind::admitted:{const auto i=r[0];m.admit(i,r[1]+4+i*0x848,thread);
-        if(i<max_slots&&current_context->factory_depth)m.records[i].esp=current_context->factory_stack[current_context->factory_depth-1];
+        if(i<max_slots){
+            if(current_context->factory_depth)m.records[i].esp=current_context->factory_stack[current_context->factory_depth-1];
+            if(current_context->boundary)m.records[i].boundary=current_context->boundary->serial;
+        }
         break;}
     case kind::actor_init:
         if(!post){
@@ -224,7 +266,7 @@ void __cdecl observe(unsigned encoded,const u32* r) {
         }else if(current_context->init_depth){const auto actor=current_context->init_stack[--current_context->init_depth];m.advance(actor,phase::init_returned);if(auto* c=m.find(actor))c->esp=sp(r);}
         else m.emit(event_kind::transition,max_slots,s.point);
         break;
-    case kind::controller_pop:{const auto i=r[7];observe_borrows(event_kind::reuse_borrowed,i,arg(r,0));const auto depth=m.depth;m.depth=0;m.take(i,generation(i),arg(r,0));m.depth=depth;if(auto* c=m.inner(thread))c->slot=i;break;}
+    case kind::controller_pop:{checkpoint(sp(r),thread);const auto i=r[7];observe_borrows(event_kind::reuse_borrowed,i,arg(r,0));const auto depth=m.depth;m.depth=0;m.take(i,generation(i),arg(r,0));m.depth=depth;if(auto* c=m.inner(thread))c->slot=i;break;}
     case kind::controller_token:{const auto i=index(r[7]);m.publish(i,r[1],s.point);m.advance(r[1],phase::controller);
         if(i<max_slots){if(auto* c=m.find(r[1]))logical_actors[i]=c->logical;handler(i);trace_actor(s.point,i);}break;}
     case kind::factory_published:m.advance(r[1],phase::published);if(current_context->factory_depth)--current_context->factory_depth;else m.emit(event_kind::transition,max_slots,s.point);break;
@@ -241,7 +283,7 @@ void __cdecl observe(unsigned encoded,const u32* r) {
             if(dying||stale){m.emit(dying?event_kind::team_resolve_destroy:event_kind::team_stale,0x10000|i,arg(r,1),token);m.events[(m.head-1)%64].generation=current;}
         }break;}
     case kind::reset:checkpoint(sp(r),thread);m.resetting=true;break;
-    case kind::reset_done:m.resetting=false;for(auto& x:m.slots)x={};team_destroying.fill(false);break;
+    case kind::reset_done:m.resetting=false;for(auto& x:m.slots)x={};team_destroying.fill(false);teams.fill({});break;
     case kind::borrow_update:case kind::borrow_handler:case kind::borrow_event:
         if(!post){u32 i=max_slots;
             if(s.type==kind::borrow_update)i=controller(r[6]);
@@ -287,6 +329,7 @@ void __cdecl observe(unsigned encoded,const u32* r) {
     case kind::team_free_done:if(r[0]<actor_ai::installed().team_storage){
         const auto token=team_token(actor_ai::installed().team_base+r[0]*actor_ai::installed().team_stride);
         team_destroying[r[0]]=false;
+        if(teams[r[0]].token==token)teams[r[0]]={};
         for(auto& row:provenance_table)for(auto& f:row)if(f.team&&f.team==token)f.dissolved=true;
     }break;
     case kind::formation_read:{const auto i=controller(r[1]);
@@ -309,6 +352,17 @@ LONG CALLBACK first_chance(EXCEPTION_POINTERS* p) {
     }return EXCEPTION_CONTINUE_SEARCH;
 }
 }
+extern "C" EXCEPTION_DISPOSITION __cdecl e4_unwind_callback(EXCEPTION_RECORD* exception,void* registration,CONTEXT*,void*) {
+    auto& frame=*static_cast<e4_unwind::frame*>(registration);
+    if(installed&&(exception->ExceptionFlags&(EXCEPTION_UNWINDING|EXCEPTION_EXIT_UNWIND))&&!(exception->ExceptionFlags&EXCEPTION_TARGET_UNWIND)&&frame.serial&&!frame.closed){
+        if(!current_context)fatal("E4 exception crossed an untracked boundary");
+        current_context->inside=true;AcquireSRWLockExclusive(&mutex);
+        boundary_finish(*static_cast<e4_unwind::frame*>(registration),true);
+        auto* completed=current_context;const bool recycled=recycle_context(completed,GetCurrentThreadId());
+        ReleaseSRWLockExclusive(&mutex);if(!recycled)completed->inside=false;
+    }
+    return ExceptionContinueSearch;
+}
 #ifdef XML2_E4_TEST
 void test_emit(unsigned point,bool post,const unsigned* registers){
     for(unsigned n=0;n<e4_observe_sites::sites.size();++n)if(e4_observe_sites::sites[n].point==point){observe(n*2+(post?1:0),registers);return;}
@@ -324,7 +378,7 @@ void install(HMODULE game) {
     if(context_bank)for(unsigned n=0;n<context_capacity;++n)::new (context_bank+n) context_slot{};
     const auto release=[&]{if(code)VirtualFree(code,0,MEM_RELEASE);if(context_bank){VirtualFree(context_bank,0,MEM_RELEASE);context_bank=nullptr;}};
     std::string why;if(!code||!context_bank)why="observer code or per-thread storage allocation failed";
-    auto p=code&&context_bank?e4_observe_plan::make(addr(code),addr(reinterpret_cast<const void*>(&observe)),patch_transaction::verified_writes,patch_transaction::verified_originals,&why):std::nullopt;
+    auto p=code&&context_bank?e4_observe_plan::make(addr(code),addr(reinterpret_cast<const void*>(&observe)),patch_transaction::verified_writes,patch_transaction::verified_originals,&why,addr(reinterpret_cast<const void*>(&e4_unwind_handler))):std::nullopt;
     if(!p||p->code.size()>capacity){release();logger::write("E4: preparation refused: %s",why.c_str());game_version::refuse_startup();return;}
     std::memcpy(code,p->code.data(),p->code.size());DWORD old=0;
     if(!VirtualProtect(code,capacity,PAGE_EXECUTE_READ,&old)||!FlushInstructionCache(GetCurrentProcess(),code,p->code.size())){
@@ -344,7 +398,7 @@ std::string json() {
     const shared_lock held;
     std::ostringstream out;const auto a=m.tally();
     out<<"{\"enabled\":"<<(enabled()?"true":"false")<<",\"installed\":"<<(installed?"true":"false")<<",\"spans\":"<<installed_spans<<",\"step\":"<<m.step
-       <<",\"admitted\":"<<m.admitted<<",\"published_total\":"<<m.published<<",\"escaped\":"<<m.escaped
+       <<",\"admitted\":"<<m.admitted<<",\"published_total\":"<<m.published<<",\"boundary_unwinds\":"<<boundary_unwinds<<",\"escaped\":"<<m.escaped
        <<",\"published\":"<<a.published<<",\"constructing\":"<<a.constructing<<",\"destroying\":"<<a.destroying<<",\"orphaned\":"<<a.orphaned
        <<",\"reserved\":"<<a.reserved<<",\"context_bytes\":"<<sizeof(context_slot)*context_capacity<<",\"context_capacity\":"<<context_capacity<<",\"contexts_live\":"<<contexts_live<<",\"contexts_peak\":"<<contexts_peak<<",\"probe_faults\":"<<probe_faults<<",\"counts\":[";
     for(unsigned n=0;n<m.counts.size();++n){if(n)out<<',';out<<m.counts[n];}out<<"],\"events\":[";
@@ -358,7 +412,7 @@ std::string json() {
     out<<"],\"phase_counts\":[";
     for(unsigned n=0;n<m.phases.size();++n){if(n)out<<',';out<<m.phases[n];}
     out<<"],\"open_constructions\":[";bool open_comma=false;
-    for(const auto& c:m.records)if(c.open){if(open_comma)out<<',';open_comma=true;out<<'['<<unsigned(c.at)<<','<<c.actor<<','<<c.slot<<','<<c.esp<<','<<c.seh<<','<<c.code<<','<<c.fault<<','<<c.thread<<']';}
+    for(const auto& c:m.records)if(c.open){if(open_comma)out<<',';open_comma=true;out<<'['<<unsigned(c.at)<<','<<c.actor<<','<<c.slot<<','<<c.esp<<','<<c.seh<<','<<c.code<<','<<c.fault<<','<<c.thread<<','<<c.boundary<<','<<c.unwound<<']';}
     out<<"],\"slots\":[";
     for(unsigned n=0;n<actor_ai::installed().controllers;++n){if(n)out<<',';const auto& slot=m.slots[n];out<<'['<<n<<','<<unsigned(slot.at)<<','<<slot.generation<<','<<slot.owner<<']';}
     out<<"],\"damage_callers\":[";bool comma=false;

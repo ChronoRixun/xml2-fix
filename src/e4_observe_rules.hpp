@@ -12,7 +12,7 @@ enum class event_kind:unsigned {release_borrowed,reuse_borrowed,resolve_destroy,
 struct event {event_kind kind{};u32 slot=0,caller=0,generation=0,step=0,detail=0,borrow_count=0;std::array<u32,max_depth> borrow_returns{};};
 struct caller_events {u32 caller=0;std::array<u32,14> counts{};};
 struct borrow {u32 slot=max_slots,caller=0;};
-struct construction {bool open=false;phase at=phase::admitted;u32 actor=0,slot=max_slots,esp=0,seh=0,code=0,fault=0,thread=0,logical=0;};
+struct construction {bool open=false;phase at=phase::admitted;u32 actor=0,slot=max_slots,esp=0,seh=0,code=0,fault=0,thread=0,logical=0,boundary=0;bool unwound=false,reported=false;};
 struct slot {state at=state::free;u32 generation=0,owner=0;};
 struct accounting {u32 published=0,constructing=0,destroying=0,orphaned=0,reserved=0;};
 struct monitor {
@@ -82,7 +82,7 @@ struct monitor {
         records[i]={true,phase::admitted,actor};records[i].thread=thread;records[i].logical=++admitted;++phases[0];
     }
     construction* find(u32 actor) {for(auto& c:records)if(c.open&&c.actor==actor)return &c;return nullptr;}
-    construction* inner(u32 thread=0) {construction* out=nullptr;for(auto& c:records)if(c.open&&c.thread==thread&&c.esp&&(!out||c.esp<out->esp))out=&c;return out;}
+    construction* inner(u32 thread=0) {construction* out=nullptr;for(auto& c:records)if(c.open&&!c.unwound&&c.thread==thread&&c.esp&&(!out||c.esp<out->esp))out=&c;return out;}
     void enter(u32 actor,u32 esp,u32 seh) {
         if(auto* c=find(actor)){c->at=phase::actor_init;c->esp=esp;c->seh=seh;++phases[1];}
         else emit(event_kind::transition,max_slots,0,actor);
@@ -94,11 +94,15 @@ struct monitor {
         } else emit(event_kind::transition,max_slots,0,actor);
     }
     void exception(u32 code,u32 address,u32 thread=0) {for(unsigned i=0;i<records.size();++i){auto& c=records[i];if(c.open&&c.esp&&c.thread==thread){if(!c.code){c.code=code;c.fault=address;}emit(event_kind::exception,i,address,code);}}}
-    // The caller must terminate before returning to native code on true.
+    // A first-chance exception is not an escape. Only a proven boundary exit
+    // latches abandonment. Checkpoints are independent of current ESP/thread.
+    void unwind_boundary(u32 boundary,u32 thread) {
+        for(auto& c:records)if(c.open&&c.boundary==boundary&&c.thread==thread)c.unwound=true;
+    }
     bool checkpoint(u32 esp,u32 thread=0) {
-        bool stop=false;
-        for(unsigned i=0;i<records.size();++i){auto& c=records[i];if(c.open&&c.esp&&c.thread==thread&&esp>c.esp){
-            emit(event_kind::escape,i,c.fault,static_cast<u32>(c.at));++escaped;
+        (void)esp;(void)thread;bool stop=false;
+        for(unsigned i=0;i<records.size();++i){auto& c=records[i];if(c.open&&c.unwound){
+            if(!c.reported){emit(event_kind::escape,i,c.fault,static_cast<u32>(c.at));++escaped;c.reported=true;}
             if(c.slot<max_slots)slots[c.slot].at=state::orphaned;
             stop=true;
         }}return stop;

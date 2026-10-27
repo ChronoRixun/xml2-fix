@@ -13,12 +13,13 @@
 extern "C" unsigned char fixture_space[0x700000];
 using u32=std::uint32_t;
 namespace {bool startup_refused=false;}
+namespace recovery_contract {u32* actor_live=nullptr;bool enforce=false,recovered=false;u32 expected_actors=1;u32* controller_live=nullptr;}
 namespace ini {bool flag(const wchar_t*,const wchar_t*,bool){return true;}}
 namespace logger {void write(const char* f,...){va_list a;va_start(a,f);std::vprintf(f,a);std::puts("");va_end(a);}}
 namespace game_version {void refuse_startup(){startup_refused=true;}}
 namespace entity_capacity {
     const entity_capacity_layout::descriptor& installed(){return entity_capacity_layout::stock_descriptor;}
-    [[noreturn]] void fail_stop_lifecycle(const char*){ExitProcess(77);}
+    [[noreturn]] void fail_stop_lifecycle(const char*){if(recovery_contract::enforce&&(!recovery_contract::recovered||!recovery_contract::actor_live||*recovery_contract::actor_live!=recovery_contract::expected_actors||(recovery_contract::controller_live&&*recovery_contract::controller_live!=0)))ExitProcess(89);ExitProcess(77);}
 }
 namespace {
 unsigned checks=0,failures=0;
@@ -126,6 +127,27 @@ void stub_tests(unsigned char* code){
         check(callbacks==(mode==2?2u:1u),"before/after observer called exactly once");
     }
 }
+void boundary_cpu_tests(unsigned char* code){
+    using namespace e4_observe_sites;
+    for(unsigned arguments:{0u,16u})for(unsigned flags:{0x202u,0x602u}){
+        const u32 at=address(code+0x6000);
+        instruction args_code[]={{at,"8b442404",0,0,0},{at+4,"33442408",0,0,0},{at+8,"8b54240c",0,0,0},{at+12,"03542410",0,0,0},{at+16,"c21000",0,0,0}};
+        instruction none_code[]={{at,"b812345678",0,0,0},{at+5,"ba23456789",0,0,0},{at+10,"33ca",0,0,0},{at+12,"c3",0,0,0}};
+        site test{"boundary ABI",at,at,at+(arguments?19:13),kind::factory_entry,0,0,"",arguments?args_code:none_code,arguments?5u:4u};
+        auto* raw=code+0x6000;unsigned offset=0;
+        for(unsigned n=0;n<test.count;++n){auto b=patch_transaction::bytes_of(test.code[n].hex);std::memcpy(raw+offset,b.data(),b.size());offset+=static_cast<unsigned>(b.size());}
+        const auto prep=[&]{stack.fill(address(reinterpret_cast<void*>(&captured)));stack_top=address(stack.data()+1024);
+            put(stack_top+4,0x12121212);put(stack_top+8,0x34343434);put(stack_top+12,0x56565656);put(stack_top+16,0x78787878);
+            input={1,2,3,0,4,5,6,7,flags};reset_fx();};
+        prep();entry=at;execute();const auto native=output;const auto fx=fx_output;
+        auto b=e4_observe_plan::boundary_stub(test,address(code),address(reinterpret_cast<void*>(&callback)),0,address(reinterpret_cast<void*>(&e4_unwind_handler)),arguments);
+        check(!b.empty(),"OS unwind boundary emits for both native argument counts");std::memcpy(code,b.data(),b.size());FlushInstructionCache(GetCurrentProcess(),code,b.size());
+        prep();callbacks=0;entry=address(code);execute();
+        check(!std::memcmp(&native,&output,sizeof(cpu)),"boundary retains nonzero arguments, EAX/EDX returns, every GPR/flag and callee stack cleanup");
+        check(same_fx(fx,fx_output),"boundary normal return retains x87/XMM/MXCSR");
+        check(callbacks==3,"boundary begin/native probe/end each executes once");
+    }
+}
 std::vector<unsigned char> mapped(0x700000);
 bool load(const char* file){
     std::ifstream f(file,std::ios::binary);std::vector<unsigned char> raw(std::istreambuf_iterator<char>(f),{});if(raw.size()<1024)return false;
@@ -153,9 +175,12 @@ void plan_tests(unsigned char* code){
     for(const auto& s:e4_observe_sites::sites)check(!e4_observe_plan::stub(s,address(code),address(reinterpret_cast<void*>(&callback)),0).empty(),"every generated span emits with exact labels and instruction lengths");
 }
 unsigned injected_phase=0;bool cpp_fault=false;
-unsigned char* actor_arena=nullptr;
+unsigned char* actor_arena=nullptr;bool recover_nonconstruction=false,exercise_target_unwind=false,nested_escape=false;void* factory_receiver=nullptr;
+bool recovered_frame();
+bool recovered_factory(void*);
+extern "C" EXCEPTION_DISPOSITION __cdecl e4_unwind_callback(EXCEPTION_RECORD*,void*,CONTEXT*,void*);
 void fault(){if(cpp_fault)throw std::runtime_error("native test-vtable construction fault");RaiseException(0xe0420042,0,0,nullptr);}
-u32 __fastcall factory_size(void*,void*){return 0;}
+u32 __fastcall factory_size(void*,void*){if(injected_phase==9)fault();return 0;}
 void* __cdecl factory_allocate(void*,u32){
     using take=void*(__fastcall*)(void*,void*,u32);
     void* actor=reinterpret_cast<take>(0x4615a0)(actor_arena,nullptr,0x844);
@@ -174,6 +199,24 @@ __declspec(naked) void __stdcall publish_fragment(void*,u32){
 }
 void* __fastcall injected_ctor(void* actor,void*,u32,u32,u32,u32,u32){
     if(injected_phase==1)fault();
+    if(nested_escape){
+        nested_escape=false;injected_phase=0;
+        if(!recovered_factory(factory_receiver))ExitProcess(87);
+        recovery_contract::recovered=true;injected_phase=4;
+    }
+    if(recover_nonconstruction){recover_nonconstruction=false;if(!recovered_frame())ExitProcess(87);}
+    if(exercise_target_unwind){
+        exercise_target_unwind=false;u32 head=0;
+        __asm mov eax,fs:[0]
+        __asm mov head,eax
+        unsigned n=0;while(head!=0xffffffffu&&*reinterpret_cast<u32*>(head+4)!=address(reinterpret_cast<void*>(&e4_unwind_handler))&&n++<32)head=*reinterpret_cast<u32*>(head);
+        if(head==0xffffffffu||n>=32)ExitProcess(90);
+        EXCEPTION_RECORD event{};event.ExceptionFlags=EXCEPTION_UNWINDING|EXCEPTION_TARGET_UNWIND;CONTEXT cpu{};
+        if(e4_unwind_callback(&event,reinterpret_cast<void*>(head),&cpu,nullptr)!=ExceptionContinueSearch)ExitProcess(90);
+        // A target unwind does not leave this boundary. A checkpoint inside the
+        // still-live construction must not mistake it for abandonment.
+        reinterpret_cast<void*(__fastcall*)(void*,void*,u32)>(0x4615a0)(actor_arena,nullptr,0x7d0);
+    }
     const auto primary=actor_ai::installed().primary_base;
     const auto i=reinterpret_cast<u32(__fastcall*)(void*,void*)>(0x522a10)(reinterpret_cast<void*>(primary),nullptr);
     publish_fragment(actor,*reinterpret_cast<u32*>(primary+0xc41c+i*4));
@@ -183,6 +226,34 @@ void __fastcall injected_post(void*,void*){if(injected_phase==3)fault();}
 bool recovered_factory(void* receiver){
     using factory=void*(__fastcall*)(void*,void*,u32,u32,u32,u32);
     __try{reinterpret_cast<factory>(0x423a90)(receiver,nullptr,0,0,0,0);return false;}
+    __except(EXCEPTION_EXECUTE_HANDLER){return true;}
+}
+__declspec(noinline) void* deeper_factory(void* receiver){
+    volatile u32 padding[128]{};padding[0]=1;
+    using factory=void*(__fastcall*)(void*,void*,u32,u32,u32,u32);
+    auto* result=reinterpret_cast<factory>(0x423a90)(receiver,nullptr,0,0,0,0);
+    if(padding[0]!=1)ExitProcess(88);return result;
+}
+int retry_factory(void* receiver,bool deeper){
+    using factory=void*(__fastcall*)(void*,void*,u32,u32,u32,u32);
+    for(unsigned attempt=0;attempt<2;++attempt){
+        __try {
+            if(deeper&&attempt)deeper_factory(receiver);
+            else reinterpret_cast<factory>(0x423a90)(receiver,nullptr,0,0,0,0);
+            if(!attempt)return 81;
+        }__except(EXCEPTION_EXECUTE_HANDLER){if(attempt)return 82;recovery_contract::recovered=true;injected_phase=4;}
+    }
+    return 84; // a second allocation occurred instead of fail-stop
+}
+void __cdecl nonconstruction_fault(){
+    std::array<u32,32> args{};std::array<u32,9> r{};
+    r[3]=address(args.data())-4;r[6]=actor_ai::installed().primary_base;
+    e4_observe::test_emit(0x52264f,false,r.data());
+    r[6]=actor_ai::installed().team_base;e4_observe::test_emit(0x525fa0,false,r.data());
+    fault(); // both post-call brackets are deliberately skipped
+}
+bool recovered_frame(){
+    __try {reinterpret_cast<void(__cdecl*)()>(0x401d70)();return false;}
     __except(EXCEPTION_EXECUTE_HANDLER){return true;}
 }
 void recovered_outside(){__try{fault();}__except(EXCEPTION_EXECUTE_HANDLER){}}
@@ -204,6 +275,28 @@ int escape_child(unsigned phase,unsigned boundary){
     *reinterpret_cast<unsigned char*>(0x423953)=0xc3;
     jump(0x4603b0,address(reinterpret_cast<void*>(&injected_post)));
     std::array<u32,4> vt{};vt[1]=address(reinterpret_cast<void*>(&factory_size));u32 receiver=address(vt.data());
+    if(boundary==2||boundary==3){recovery_contract::actor_live=reinterpret_cast<u32*>(actor_arena+0x1099c);recovery_contract::enforce=true;return retry_factory(&receiver,boundary==3);}
+    if(boundary==4){
+        injected_phase=4;recover_nonconstruction=true;
+        jump(0x401d77,address(reinterpret_cast<void*>(&nonconstruction_fault)));
+        if(recovered_factory(&receiver))return 85;
+        const auto state=e4_observe::json();
+        return state.find("\"escaped\":0")!=std::string::npos&&state.find("\"contexts_live\":0")!=std::string::npos&&state.find("\"counts\":[0,0,0,0,")!=std::string::npos?78:85;
+    }
+    if(boundary==5){
+        injected_phase=4;exercise_target_unwind=true;
+        if(recovered_factory(&receiver))return 85;
+        const auto state=e4_observe::json();
+        return state.find("\"escaped\":0")!=std::string::npos&&state.find("\"boundary_unwinds\":0")!=std::string::npos&&state.find("\"contexts_live\":0")!=std::string::npos?78:85;
+    }
+    if(boundary==6){
+        factory_receiver=&receiver;nested_escape=true;injected_phase=4;
+        recovery_contract::actor_live=reinterpret_cast<u32*>(actor_arena+0x1099c);
+        recovery_contract::controller_live=reinterpret_cast<u32*>(primary+0xc418);
+        recovery_contract::expected_actors=2;recovery_contract::enforce=true;
+        if(recovered_factory(&receiver))return 85;
+        return 84; // a controller allocation/publication happened after inner abandonment
+    }
     const auto caught=recovered_factory(&receiver);
     if(caught!=(injected_phase<4))return 81;
     if(injected_phase==4)recovered_outside(); // PUBLISHED is closed and must not trip.
@@ -218,6 +311,18 @@ int escape_child(unsigned phase,unsigned boundary){
     return 78;
 }
 void construction_tests(const char* exe,const char* retail){
+    for(unsigned boundary:{2u,3u,4u,5u,6u})for(unsigned fault_type=0;fault_type<2;++fault_type){
+        if(boundary==5&&fault_type)continue;
+        char command[4096]{};std::snprintf(command,sizeof(command),"\"%s\" \"%s\" escape %u %u",exe,retail,fault_type?5u:0u,boundary);
+        STARTUPINFOA si{};si.cb=sizeof(si);PROCESS_INFORMATION pi{};
+        if(!CreateProcessA(nullptr,command,nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&si,&pi)){check(false,"review child created");continue;}
+        if(WaitForSingleObject(pi.hProcess,15000)!=WAIT_OBJECT_0){TerminateProcess(pi.hProcess,86);WaitForSingleObject(pi.hProcess,5000);}
+        DWORD code=0;GetExitCodeProcess(pi.hProcess,&code);CloseHandle(pi.hThread);CloseHandle(pi.hProcess);
+        const DWORD expected=boundary==4||boundary==5?78:77;
+        if(code!=expected)std::printf("review retry boundary=%u C++=%u exit=%lu wanted=%lu\n",boundary,fault_type,code,expected);
+        check(code==expected,boundary==6?"nested abandoned construction stops before the outer controller pop":boundary==5?"target unwind does not leave the construction boundary or false-stop a live constructor":boundary==4?"recovered non-construction unwind cleans skipped brackets without false stop":"ADMITTED same-depth/deeper retry must stop before another allocation");
+    }
+
     for(unsigned phase=0;phase<9;++phase)for(unsigned boundary=0;boundary<2;++boundary){
         char command[4096]{};std::snprintf(command,sizeof(command),"\"%s\" \"%s\" escape %u %u",exe,retail,phase,boundary);
         STARTUPINFOA si{};si.cb=sizeof(si);PROCESS_INFORMATION pi{};
@@ -268,6 +373,33 @@ void provenance_tests(){
     check(e4_observe::json()==rewritten,"O5 same-value write by next team clears stale provenance");
     *reinterpret_cast<unsigned char*>(next)=original;
     std::ofstream out("e4-host-provenance.json");out<<e4_observe::json();
+}
+void x87_store_fragment(u32 controller,u32 point){
+    u32 first=point==0x50b54a?0x50b544:point,next=point+(point==0x50b53e?6:3);
+    for(const auto& s:e4_observe_sites::sites)if(s.va<=point&&point<s.next){first=s.va;next=s.next;break;}
+    unsigned char saved[5]{};std::memcpy(saved,reinterpret_cast<void*>(next),5);
+    jump(next,address(reinterpret_cast<void*>(&captured)));
+    stack.fill(0);stack_top=address(stack.data()+1024);input={0,controller,0,0,0,0,0,0,0x202};
+    FlushInstructionCache(GetCurrentProcess(),nullptr,0);reset_fx();
+    const float desired=5.0f;
+    __asm fld desired
+    entry=first;execute();
+    std::memcpy(reinterpret_cast<void*>(next),saved,5);
+}
+void x87_provenance_tests(){
+    const auto& d=actor_ai::installed();const u32 c=d.primary_base,team=d.team_base;
+    put(c+0x17c,0);put(c+0x1c,0);put(c+0xc41c,32);put(d.cai_object+0xc4a0,31);put(team+4,32);put(team+0x28,1);
+    std::array<u32,32> args{};std::array<u32,9> r{};r[3]=address(args.data())-4;r[6]=team;
+    const u32 points[]{0x50b53e,0x50b54a};
+    const auto leave=[&](u32 writer){for(const auto& s:e4_observe_sites::sites)if(s.type==e4_observe_sites::kind::writer_exit&&s.arg==writer){e4_observe::test_emit(s.point,false,r.data());break;}};
+    put(d.cai_object+0xce74,4);e4_observe::test_emit(0x525ba0,false,r.data());
+    x87_store_fragment(c,points[0]);x87_store_fragment(c,points[1]);leave(0x525ba0);
+    put(d.cai_object+0xce74,8);e4_observe::test_emit(0x525ce0,false,r.data());
+    x87_store_fragment(c,points[0]);x87_store_fragment(c,points[1]);leave(0x525ce0);
+    const auto state=e4_observe::json();const auto writer=std::to_string(0x525ce0);
+    check(state.find("[380,1084227584,1084227584,"+writer+",8,")!=std::string::npos,"same-value native FST refreshes +17c writer/team provenance");
+    check(state.find("[28,1084437299,1084437299,"+writer+",8,")!=std::string::npos,"same-value native FSTP refreshes +1c writer/team provenance");
+
 }
 void overflow_tests(){
     std::array<u32,32> args{};std::array<u32,9> r{};r[3]=address(args.data())-4;r[6]=actor_ai::installed().primary_base;
@@ -339,6 +471,42 @@ void thread_tests(){
     const auto returned=std::to_string(0x522652);
     check(status.find(",2,["+returned+","+returned+"]]")!=std::string::npos,"O1 both foreign borrowing return addresses survive in the event record");
 }
+std::vector<u32> trace_teams(const std::string& state){
+    std::vector<u32> ids;auto pos=state.find("\"trace\":[");if(pos==std::string::npos)return ids;
+    pos+=9;
+    while((pos=state.find('[',pos))!=std::string::npos){unsigned point=0,actor=0,team=0,result=0,step=0;
+        if(std::sscanf(state.c_str()+pos,"[%u,%u,%u,%u,%u]",&point,&actor,&team,&result,&step)!=5)break;
+        ids.push_back(team);pos=state.find(']',pos)+1;
+    }return ids;
+}
+u32 overflow_counter(const std::string& state){
+    auto pos=state.find("\"counts\":[");if(pos==std::string::npos)return ~0u;pos+=10;
+    for(unsigned n=0;n<8;++n)pos=state.find(',',pos)+1;
+    return std::strtoul(state.c_str()+pos,nullptr,10);
+}
+void identity_churn_tests(){
+    const auto& d=actor_ai::installed();std::array<u32,32> args{};std::array<u32,9> r{};
+    r[3]=address(args.data())-4;put(d.cai_object+0xc4a0,31);put(d.cai_object+0xce84,3);
+    const auto update=[&]{r[6]=d.primary_base;e4_observe::test_emit(0x52264f,false,r.data());e4_observe::test_emit(0x52264f,true,r.data());};
+    const auto reset=[&]{e4_observe::test_emit(0x523660,false,r.data());for(const auto& s:e4_observe_sites::sites)if(s.type==e4_observe_sites::kind::reset_done){e4_observe::test_emit(s.point,false,r.data());break;}};
+    const auto overflow=overflow_counter(e4_observe::json());u32 previous=0;bool unique=true,history=true;
+    for(unsigned n=0;n<600;++n){const u32 token=0x1000+n*4;
+        put(d.cai_object+0xce74,token);put(d.team_base+0x9c4,1);put(d.primary_base+0x538,token);update();
+        auto before=trace_teams(e4_observe::json());const auto id=before.empty()?0:before.back();
+        unique&=id!=0&&(!previous||id==previous+1);previous=id;
+        r[6]=d.team_base;e4_observe::test_emit(0x5251f0,false,r.data());put(d.team_base+0x9c4,0);r[0]=0;e4_observe::test_emit(0x525262,false,r.data());
+        update();auto after=trace_teams(e4_observe::json());
+        if(before.size()>254)before.erase(before.begin(),before.end()-254);before.push_back(0);before.push_back(0);
+        history&=after==before;
+        if(n%97==96)reset();
+    }
+    check(unique,"O4 600 released/reused generations keep distinct nonzero logical ids without exhausting the table");
+    check(history,"O4 retiring a team preserves trace ids already copied and stale references become teamless");
+    put(d.cai_object+0xce74,0x20000);put(d.team_base+0x9c4,1);put(d.primary_base+0x538,0x20000);update();
+    const auto before=trace_teams(e4_observe::json()).back();reset();update();
+    check(trace_teams(e4_observe::json()).back()==before+1,"O4 reset retires a live identity even if a native token is reseeded identically");
+    check(overflow_counter(e4_observe::json())==overflow,"O4 ordinary team churn/reset causes no monitor overflow event");
+}
 void __fastcall schedule(void*,void*,void*,u32){}
 void* __fastcall copy_damage(void* p,void*,void* src){std::memcpy(p,src,0x6c);return p;}
 void* __cdecl payload(void* p){std::memset(p,0,0x6c);return p;}
@@ -379,6 +547,6 @@ int main(int argc,char** argv){
     DWORD old=0;VirtualProtect(fixture_space,sizeof fixture_space,PAGE_EXECUTE_READWRITE,&old);
     if(argc==5)return escape_child(std::strtoul(argv[3],nullptr,10),std::strtoul(argv[4],nullptr,10));
     auto* code=static_cast<unsigned char*>(VirtualAlloc(nullptr,0x10000,MEM_RESERVE|MEM_COMMIT,PAGE_EXECUTE_READWRITE));if(!code)return 2;
-    std::puts("stub tests");stub_tests(code);std::puts("plan tests");plan_tests(code);std::puts("damage tests");damage_tests(code);provenance_tests();overflow_tests();team_resolver_tests();thread_tests();construction_tests(argv[0],argv[1]);
+    std::puts("stub tests");stub_tests(code);boundary_cpu_tests(code);std::puts("plan tests");plan_tests(code);std::puts("damage tests");damage_tests(code);provenance_tests();x87_provenance_tests();overflow_tests();team_resolver_tests();thread_tests();identity_churn_tests();construction_tests(argv[0],argv[1]);
     std::printf("E4 native host: %u checks, %u failures\n",checks,failures);return failures?1:0;
 }

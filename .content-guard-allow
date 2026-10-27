@@ -118,3 +118,5 @@ DISASM  src/tk_guard_bridges.hpp  # Authored rule-46 TK/guard bridges: two resum
 DISASM  test/tk_guard_test.cpp  # Authored fixture stubs (synthetic acquisition and grab tails) and x87 modulus/truncation helpers standing in for the runtime calls of owner-loaded XML1 code; no embedded game code.
 
 DISASM test/e4_observe_host.cpp # Authored synthetic CPU entry/capture and deliberate register/FPU clobber probes; native input is read locally at runtime, no game listing is embedded.
+
+GAME_EXT src/e4_unwind.asm # Authored SafeSEH observer thunk; only forwards to our callback, no game instructions or listing.

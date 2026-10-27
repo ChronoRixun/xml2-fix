@@ -29,7 +29,8 @@ int main(){
     for(unsigned p=0;p<4;++p)for(unsigned boundary=0;boundary<2;++boundary){monitor tracker;
         tracker.admit(0,0x1000);tracker.enter(0x1000,0x2000,0x3000);tracker.records[0].at=phase(p);
         try{tracker.exception(0xe06d7363,0x401234);throw std::runtime_error("native test vtable");}catch(const std::runtime_error&){}
-        if(tracker.checkpoint(0x2100))++stops;
+        tracker.unwind_boundary(0,0);
+        if(tracker.checkpoint(boundary?0x2100:0x1800))++stops;
         check(tracker.escaped==1&&tracker.events[(tracker.head-1)%64].detail==p&&tracker.records[0].fault==0x401234,"T20 phase, exception, address retained after host recovery");
     }check(stops==8,"T20 fail-stop seam invoked for every phase at allocation and boundary");
     monitor closed;closed.admit(0,1);closed.enter(1,0x1000,0);closed.advance(1,phase::published);closed.exception(0xe06d7363,0x401234);check(!closed.checkpoint(0x2000),"T20 exception after PUBLISHED cannot escape an already closed record");
@@ -49,14 +50,15 @@ int main(){
         monitor nested_churn;nested_churn.admit(0,0x3000);nested_churn.enter(0x3000,0x2000,0);
         nested_churn.admit(1,0x4000);nested_churn.enter(0x4000,0x1800,0);nested_churn.take(1,129,0);nested_churn.records[1].slot=1;
         accounting_ok&=nested_churn.account(1,32,0,false);
-        if(run%97==0){nested_churn.exception(0xe06d7363,0x401234);const auto stopped=nested_churn.checkpoint(0x1900);
+        if(run%97==0){nested_churn.exception(0xe06d7363,0x401234);nested_churn.records[0].boundary=1;nested_churn.records[1].boundary=2;nested_churn.unwind_boundary(2,0);const auto stopped=nested_churn.checkpoint(0x1700);
             accounting_ok&=stopped&&nested_churn.tally().orphaned==1&&nested_churn.tally().reserved==1&&nested_churn.account(1,32,0,false);++nested_faults;
         }else{nested_churn.publish(1,0x4000,0);nested_churn.advance(0x4000,phase::published);
             accounting_ok&=nested_churn.account(1,32,1,false);nested_churn.take(0,128,0);nested_churn.records[0].slot=0;
             nested_churn.publish(0,0x3000,0);nested_churn.advance(0x3000,phase::published);accounting_ok&=nested_churn.account(2,32,2,true);}
     }check(accounting_ok&&nested_faults==104,"T23 10,000 randomized allocation/free permutations and nested sequences, including 104 injected escapes");
     monitor escaped;escaped.admit(0,1);escaped.enter(1,0x1000,0);escaped.take(0,128,0);escaped.records[0].slot=0;
-    check(escaped.checkpoint(0x1100)&&escaped.tally().orphaned==1,"T23 escaped construction becomes a separate orphan count");
+    escaped.unwind_boundary(0,0);
+    check(escaped.checkpoint(0x1000)&&escaped.tally().orphaned==1,"T23 escaped construction becomes a separate orphan count");
     monitor transient;transient.take(0,128,0);
     check(transient.account(1,32,0,false)&&!transient.account(1,32,0,true),"T23 constructing is legal only within a non-quiescent interval");
     const auto nan=std::numeric_limits<float>::quiet_NaN();

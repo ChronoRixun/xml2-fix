@@ -19,7 +19,7 @@ and native exceptions are logged synchronously before termination. Fatal paths s
 
 ## Installation and composition
 
-The generated retail ledger has 113 spans and hashes of 45 complete owner functions.
+The generated retail ledger has 115 observation points in 114 spans and hashes of 45 complete owner functions.
 No whole native function body is embedded. The generator pins the owned executable's
 SHA-256 and checks instruction bytes against the read-only instruction database,
 relocates relative instructions, and refuses incoming branches into a displaced span.
@@ -37,8 +37,8 @@ in reverse to a copy of each current function, whose hash must equal the pinned 
 hash. This composes existing intentional edits without accepting unexplained changes.
 Actual write-span overlaps are refused. Rule 16 removes the virtual call at `0x505011`
 (`ADD ESP,4`); that verified replacement is retained and its absent callback bracket is
-elided. The beta-8 profile therefore installs 112 spans / 677 guarded bytes, while the
-stock host installs 113 / 683. All 44 original B1 handler sites are accounted for.
+elided. The beta-8 profile therefore installs 113 spans / 686 guarded bytes, while the
+stock host installs 114 / 692. All 44 original B1 handler sites are accounted for.
 
 ## What is observed
 
@@ -53,9 +53,7 @@ O3 tracks admitted actors, factory entry, constructor entry, controller token st
 constructor return and publication. The admitted phase retains the factory frame so an
 exception between allocation and constructor entry is observable. The constructor stub
 records ESP and FS:[0]; its return updates the saved ESP after native argument cleanup.
-First-chance SEH and C++ exceptions retain their phase, code and fault address. Before
-allocation, actor release, CAI reset and the next client-frame entry, an abandoned open
-construction reaches the existing fatal process path. It never rolls back a half-built
+First-chance SEH and C++ exceptions retain their phase, code and fault address. The factory and client-frame entry detours register authored stack SEH frames through a SafeSEH thunk. Their OS unwind notifications latch abandonment against a unique scope serial and discard only bracket depths below that scope. First-chance exceptions alone never mark abandonment. Normal scope return also detects an unpublished record. A target unwind that stops at a still-live boundary does not mark abandonment. Before actor/controller allocation, actor release, CAI reset, normal boundary return and the next client-frame entry, any latched open construction reaches the existing fatal process path independently of current stack depth or thread. ESP and FS are diagnostic fields, not the escape predicate. It never rolls back a half-built
 native object. An exception after PUBLISHED does not reopen its closed record.
 
 All eleven X1 recovery scopes retain their old data-probe recovery (including SAFE console queue insertion) but protect their
@@ -76,14 +74,14 @@ allocation attempts at occupancy >=32, including full-capacity attempts; it excl
 six-byte virtual calls are counted. No event is rescheduled or accepted by this layer.
 
 O5 brackets the five team writers and the retail timeout, captures all 15 listed field
-values/provenance before and after, and observes 23 direct field stores in those writers
-and their common helpers. A same-value formation store refreshes its provenance. Team
+values/provenance before and after, and observes 25 direct field stores in those writers
+and their common helpers. x87 memory stores are recognized explicitly because Capstone access flags label FST/FSTP as reads. Overlapping short instruction spans compose multiple observation points into one detour. Same-value formation and timer stores refresh provenance. Team
 release marks that provenance dissolved after the native ring push, rather than while cleanup is still running. The two specified consumer probes count only
 paths that actually consume formation direction, honoring the validity/branch predicates.
 Re-registration at `0x512862` is bracketed too. T/S fields are kept; class-table revision
 1 has no D field. Actual tier-1 fold-back snapshots require the later core.
 
-O4 emits bounded normalized actor/team/update-decision traces. Test-only encoding
+O4 emits bounded normalized actor/team/update-decision traces. Team identities occupy one cell per live physical slot; native generation/active checks map stale references to teamless. Release/reset retire cells while the monotonic ID counter and IDs already copied into trace records are retained, including across reset/reseed. Test-only encoding
 parameters provide default, mask-255, offset-generation and reverse-FIFO variants under
 `XML2_E4_TEST`; release code has no alternate-encoding setting or reader. Applying these
 to the raised native pools and running full T21/T14/T15/brain differentials belongs to
@@ -99,7 +97,7 @@ core step 8, as do T22 and T25.
 - `phase_counts`: ADMITTED, ACTOR_INIT, CONTROLLER, INIT_RETURNED, PUBLISHED.
 - `accounting_peaks`: published, constructing, destroying, orphaned, reserved.
 - `open_constructions`: phase, actor address, controller slot, saved ESP, FS head,
-  exception code, fault address, thread ID.
+  exception code, fault address, thread ID, scope serial, abandoned flag.
 - `slots`: slot, state, generation token, owner actor. States are FREE, RESERVED,
   CONSTRUCTING, PUBLISHED, DESTROYING, ORPHANED (indices 0..5).
 - `damage_callers`: caller, accepted, unsuitable, pending, full, would-at-32, unknown.
@@ -119,3 +117,24 @@ The generator supports `--check --exe ... --db ...`.
 Full test/gate commands, hashes, the baseline explanation for the environment's named-pipe
 failures, and the required live measurements are in the work-folder REPORT.md. No live
 measurement or 96-actor behavior is claimed by this instrumentation step.
+
+## Per-probe cost estimate for the live round
+
+These are source-derived operation counts and provisional engineering budgets, not measurements or latency guarantees. No game has been launched for a timing claim.
+
+| Path | Fixed/variable work | Initial live budget to validate |
+|---|---|---|
+| Ordinary scalar lifetime/resolve/borrow probe | FXSAVE + FXRSTOR (512-byte state each direction), 36 bytes GPR/EFLAGS save/restore, exclusive SRW lock, 1,024-byte borrow-state copy, and 96 slot + 96 construction-record accounting iterations. Borrow push/pop adds another 1,024-byte copy. These counts assume an already active frame context; an otherwise idle probe also attaches/recycles a context (another lock and record/bank scan). Native probes add guarded loads. | 1?5 microseconds/probe, uncontended, as a planning estimate |
+| Factory/client-frame boundary | 80 stack bytes, four DWORD argument copies for factory, two additional preserved-state notifications on a normal call, and stack SEH registration/unlink. End notifications additionally scan records for unpublished/abandoned construction. Unwind handling is exceptional. | Two ordinary-notification budgets plus ABI shim work; measure separately |
+| Team writer entry/exit | Up to nine members, 15 fields, before/after provenance snapshots; roughly hundreds of guarded reads at maximum membership. | 5?100 microseconds/notification depending on members; not covered by the scalar estimate |
+| Quiescent frame check | Arena/token scan and handler checks in addition to the ordinary callback scan. | 5?100 microseconds/check; scene-dependent |
+| JSON/log sample | Shared lock covers formatting of bounded rings/tables; file logging runs outside it, at most 1 Hz. | Measure lock-hold and I/O separately; contention/storage stalls have no fixed bound |
+
+At 10,000 scalar probes/second, a 1?5 us budget represents 10?50 ms CPU/second
+(1?5% of one core); at 100,000 it represents 10?50% of a core. This excludes
+writer/quiescent/JSON costs. Validate with paired OFF/ON runs of the same scene,
+matching normalized simulation traces, profiler callback counts/CPU time, frame-time
+p50/p95/p99, writer membership, and JSON polling rate. Profile the observer separately
+from its 1 Hz formatting/I/O; do not infer per-probe time from breakpoint timings.
+Keep the diagnostics opt-in until that live evidence exists. No optimization of
+FPU preservation, lock serialization or accounting frequency is claimed here.
