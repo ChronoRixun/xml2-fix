@@ -680,4 +680,25 @@ namespace online_room_core
 			return "joining a room needs the LC save format ([Save] Format) installed, which checks the host's campaign before the game loads it";
 		return nullptr;
 	}
+	// A native session end queues its quit notices (0x10cc / 0x1106) on the room tunnel and clears the room in the same
+	// retail frame; closing the tunnel without lingering drops what is still queued, so peers saw "lost connection".
+	// The leave therefore waits for the transport tick that follows the arming: that tick's flush has already sent the
+	// notices when the next one starts. arm() while pending neither extends nor repeats it; an explicit leave disarms.
+	class leave_deferral
+	{
+		bool armed_ = false;
+		bool passed_ = false; // one transport tick has already run since arm()
+	public:
+		void arm() { if (!armed_) { armed_ = true; passed_ = false; } }
+		void disarm() { armed_ = passed_ = false; }
+		bool armed() const { return armed_; }
+		// Called once at the start of every transport tick; true exactly once, on the tick after the one that was running.
+		bool step()
+		{
+			if (!armed_) return false;
+			if (!passed_) { passed_ = true; return false; }
+			armed_ = passed_ = false;
+			return true;
+		}
+	};
 }

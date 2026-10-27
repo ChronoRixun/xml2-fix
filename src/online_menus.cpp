@@ -544,7 +544,7 @@ bool offline_fixture = false;
 #if XML2_FIX_GNS
 void production_broker_tick() { online_room::ui_tick(); gns_transport::room_ui_tick(); }
 broker_api broker_calls{online_room::available,online_room::view,production_broker_tick,online_room::list,
-    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due,online_room::host_native,online_room::admission_target,online_room::host_posted,join_in_progress::installed};
+    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due,online_room::host_native,online_room::admission_target,online_room::host_posted,join_in_progress::installed,online_room::leave_after_flush};
 #else
 broker_api broker_calls{};
 #endif

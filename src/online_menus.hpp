@@ -31,6 +31,9 @@ struct broker_api {
     bool (*admission_target)(online_browser_core::ticket,std::uint32_t&)=nullptr;
     bool (*host_posted)(online_browser_core::ticket)=nullptr;
     bool (*drop_in)()=nullptr;
+    // Optional: leave the room after the transport tick that flushes the quit notices a native session end just queued
+    // (absent: the leave runs at once, as a Hub Leave does).
+    void (*leave_deferred)()=nullptr;
 };
 void keyboard(unsigned char* state);
 bool requested();

@@ -1038,6 +1038,18 @@ latch makes repeated teardown harmless. Broker loss in an already activated
 lobby retains native ownership and established tunnels. This adds no readiness
 waiver, immediate mid-area admission, reload-free join or peer wire contract.
 
+Session-end timing and containment (integration): the retail quit notices (0x10cc / 0x1106) are queued on the room
+tunnel just before the terminal clear wrapper runs. The wrapper therefore invalidates native ownership at once but asks
+the room layer to leave through the optional `leave_deferred` seam (`online_room::leave_after_flush`): the leave runs at
+the start of the second transport tick after the request, once the tick that was already running has flushed the notices,
+and the tunnels close with linger so reliable data still in flight is delivered. An explicit Leave, Cancel or a new
+room operation completes or disarms a pending deferred leave; without GNS tunnels it leaves at once. The wrapper's whole
+post-teardown body is exception-contained (it runs inside retail frames 0x6123e0 / 0x612c40 / 0x6133a0 that have no
+unwind tables); a failing room leave is logged and never unwinds into the game. Fixtures: `r6-end-*` assert the leave is
+still pending in the retail frame and happens one tick later; `r6-end-quit-throw-*` / `r6-end-loss-throw-guest` inject a
+C++ exception into the room seams and require that none reaches the retail chain; `online_room_test` covers the
+deferral arithmetic.
+
 ### LC adapter work
 
 Require the additive `lc-online-native/1` probe for this route. Keep intent 19

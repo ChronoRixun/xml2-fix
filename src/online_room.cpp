@@ -640,6 +640,7 @@ namespace online_room
 			}
 		};
 		std::vector<std::unique_ptr<tunnel>> tunnels;
+		core::leave_deferral deferred_leave; // a native session end's room leave, one transport tick later
 		std::deque<received_datagram> arrivals;
 		std::size_t arrivals_bytes = 0;
 		constexpr std::size_t tunnel_game_cap = 1024 * 1024, arrivals_cap = 256 * 1024, waiting_cap = 128 * 1024;
@@ -717,11 +718,11 @@ namespace online_room
 			tunnels.push_back(std::move(t));
 			return *tunnels.back();
 		}
-		void drop(tunnel& t, const char* why)
+		void drop(tunnel& t, const char* why, bool linger = false)
 		{
 			if (t.connection != k_HSteamNetConnection_Invalid)
 			{
-				sockets()->CloseConnection(t.connection, 0, why, false);
+				sockets()->CloseConnection(t.connection, 0, why, linger);
 				logger::write("online: connection to %s closed (%s) - datagrams %llu out / %llu in", t.id.c_str(), why, t.datagrams_out, t.datagrams_in);
 			}
 			t.connection = k_HSteamNetConnection_Invalid;
@@ -1410,8 +1411,8 @@ namespace online_room
             published_request = client.view().generation.request;
             published_room = client.view().generation.room;
         }
-        void clear_room() {
-            for (auto& t : tunnels) drop(*t, "intentional room departure");
+        void clear_room(bool linger = false) {
+            for (auto& t : tunnels) drop(*t, "intentional room departure", linger);
             tunnels.clear(); arrivals.clear(); arrivals_bytes = 0;
             signal_rates.clear(); members.clear(); own_address = 0;
             if (listener != k_HSteamListenSocket_Invalid && sockets()) sockets()->CloseListenSocket(listener);
@@ -1424,6 +1425,7 @@ namespace online_room
             last_menu.clear(); last_menu_object = lobby_handle = 0; lobby_shown = false;
         }
         bool begin_operation(browser::operation action) {
+            if (deferred_leave.armed()) leave(); // a new request must not be refused for the one tick the leave waits
             if (session_bound() || room_ready || client.view().state == browser::phase::room) return false;
             if (!configured || game_version::test_mode_active() || !gns_transport::installed()) {
                 client.refuse(game_version::test_mode_active() ? "test_mode_on" : "online_dependencies_unavailable"); return false;
@@ -1500,14 +1502,26 @@ namespace online_room
     }
     void cancel() {
         if (client.view().state == browser::phase::room) return; // explicit Leave owns a committed room
+        deferred_leave.disarm();
         client.cancel(); publish_ticket(); invalidate_worker(); clear_room();
         wanted = false;
         if (worker_done) client.stopped();
     }
     void leave() {
-        client.cancel(true); publish_ticket(); invalidate_worker(); clear_room();
+        // An explicit leave (or the deferred one itself) completes whatever was waiting for the next tick.
+        const bool after_flush = deferred_leave.armed();
+        deferred_leave.disarm();
+        client.cancel(true); publish_ticket(); invalidate_worker(); clear_room(after_flush);
         wanted = false;
         if (worker_done) client.stopped();
+    }
+    // A native session end: the retail quit notices (0x10cc / 0x1106) were queued on the room tunnel moments ago. Leave
+    // after the transport tick that flushes them, and let the closing connection deliver what is still reliable.
+    void leave_after_flush() {
+        bool linked = false;
+        for (const auto& t : tunnels) linked |= t->connection != k_HSteamNetConnection_Invalid;
+        if (!wanted || !linked || client.view().state != browser::phase::room) { leave(); return; }
+        deferred_leave.arm();
     }
     void ui_tick() {
         if (!wanted && !client.pending() && client.view().state != browser::phase::canceling && client.view().state != browser::phase::leaving) return;
@@ -1582,6 +1596,10 @@ namespace online_room
 
 	void tick()
 	{
+        if (deferred_leave.step()) {
+            try { leave(); } catch (...) { logger::write("online: deferred room leave failed - the room stays until the next explicit leave"); }
+            return;
+        }
         if (!wanted) return;
         if (!broker_started && client.pending()) ui_tick();
         if (!key_loaded || !sockets()) return;
@@ -1908,6 +1926,7 @@ namespace online_room
     bool retry() { return false; }
     void cancel() {}
     void leave() {}
+    void leave_after_flush() {}
 	void install(HMODULE)
 	{
 		const auto host = ini::text(L"Online", L"Host");

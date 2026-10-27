@@ -34,6 +34,8 @@ namespace online_room
 	bool retry();
 	void cancel();
 	void leave();
+	// A native session end: leave after the transport tick that flushes the quit notices retail just queued.
+	void leave_after_flush();
 	std::string version();
 	bool take_preset(online_browser_core::launch_preset& out);
 	bool refresh_due();

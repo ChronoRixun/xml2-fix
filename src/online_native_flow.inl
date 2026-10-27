@@ -222,17 +222,30 @@ void native_flow_error(const char* why) {
     message("lc_notice_admission"); // localized LC adapter node
     if(setup) native_request("lc_host");
 }
+// Leave the broker room after a native session end. The retail quit notices (0x10cc / 0x1106) are queued on the room
+// tunnel only moments before this runs; leaving at once closes the tunnel without lingering and peers saw "lost
+// connection" while joiners waited out the 10 s watchdog. The room layer leaves after the next transport tick.
+void native_session_leave() {
+    if(!broker_live()) return;
+    if(broker_calls.leave_deferred) broker_calls.leave_deferred();
+    else if(broker_calls.leave) broker_calls.leave();
+    resolve_edit=0;resolve_ticket={};
+}
 void __fastcall native_session_cleared(void* session,void*,bool keep_local) {
     const auto serial=native_flow.serial;
     at<void(__thiscall*)(void*,bool)>(0x612070)(session,keep_local);
     // Only terminal full-clear branches in 6123e0/612c40 call this wrapper.
     // Host setup/admission resets, keep-local transfer work, and single remote
     // removal do not. +421 is host authority, not the active-session byte +420.
-    if(ready && session==at<void*>(0xa53058) && native_flow.serial==serial && native_flow.lobby_active &&
-        !keep_local && !*reinterpret_cast<void**>(static_cast<unsigned char*>(session)+0x78)) {
-        native_flow.touched=false; // the native session is already torn down
-        broker_cancel(true);
-    }
+    // Both callers are retail frames: nothing here may throw into them.
+    try {
+        if(ready && session==at<void*>(0xa53058) && native_flow.serial==serial && native_flow.lobby_active &&
+            !keep_local && !*reinterpret_cast<void**>(static_cast<unsigned char*>(session)+0x78)) {
+            native_flow.touched=false; // the native session is already torn down
+            try { native_flow_cancel(); } catch(...) { logger::write("online menus: native session end: ownership cleanup failed"); }
+            try { native_session_leave(); } catch(...) { logger::write("online menus: native session end: room leave failed"); }
+        }
+    } catch(...) { logger::write("online menus: native session end: cleanup failed"); }
 }
 bool native_request(const char* name) {
     __try { at<request_fn>(0x5d5db0)(manager(),name,nullptr);return true; }

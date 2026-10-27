@@ -22,7 +22,12 @@ bool target(bm::ticket ticket,std::uint32_t& result) {
     result=0x0a4d0001;return true;
 }
 bool posted(bm::ticket ticket) { if(ticket!=menu_view().generation || !post_ok) return false;++published;return true; }
-const online_menus::broker_api api{menu_available,menu_view,menu_tick,menu_list,menu_host,menu_resolve,menu_retry,menu_cancel,menu_leave,menu_version,menu_take_preset,menu_refresh_due,host_native,target,posted};
+// The room layer's deferred leave: armed by the session-end wrapper, run by the next transport tick (menu_leave_tick).
+bool leave_armed=false,leave_throws=false;unsigned leave_arms=0;
+void menu_leave_deferred() { ++leave_arms;if(leave_throws) throw std::runtime_error("injected room failure");leave_armed=true; }
+void menu_leave_checked() { if(leave_throws) throw std::runtime_error("injected room failure");menu_leave(); } // immediate leave seam
+void menu_leave_tick() { if(leave_armed) { leave_armed=false;menu_leave(); } }
+const online_menus::broker_api api{menu_available,menu_view,menu_tick,menu_list,menu_host,menu_resolve,menu_retry,menu_cancel,menu_leave_checked,menu_version,menu_take_preset,menu_refresh_due,host_native,target,posted,nullptr,menu_leave_deferred};
 void* __cdecl string_pool() { return pool.data(); }
 bool __fastcall input_ok(void*,void*,unsigned,int) { return true; }
 void __fastcall pop(void*,void*,const char* name,int) {
@@ -518,20 +523,40 @@ void review_run(const script_functions_rules::func_entry* registration) {
             redirect(0x6159c0,end_noop);reinterpret_cast<void(__thiscall*)(void*)>(0x609400)(reinterpret_cast<void*>(0xa3bc40));
             assert(*reinterpret_cast<void**>(0xa53058+0x78) && *reinterpret_cast<unsigned char*>(0xa53058+0x420) && menu_view().state==bm::phase::room && menu_leaves==0);
             mode=original_mode;std::cout<<"retail keep PASS "<<mode<<"; remote prune/keep-local/campaign-start preserve room\n";return;
-        } else if(original_mode.starts_with("r6-end-quit-") || original_mode=="r6-nit-end" || original_mode=="r6-nit-end-guest") {
-            const char* args="main";reinterpret_cast<void(__cdecl*)(const char**)>(0x5f27a0)(&args);
-        } else if(original_mode.starts_with("r6-end-loss-")) {
-            menu_broker.disconnected("broker already unavailable",ticks);
-            put(lobby_people[1].data(),0x1c,2); // actual remote host flag
-            reinterpret_cast<void(__thiscall*)(void*,void*,int,bool)>(0x612c40)(reinterpret_cast<void*>(0xa53058),lobby_people[1].data(),0x1107,false);
-        } else {
-            reinterpret_cast<void(__thiscall*)(void*,void*,int,int,int,bool)>(0x6133a0)(reinterpret_cast<void*>(0xa53058),lobby_people[0].data(),0x10cc,0x10cc,0x1107,false);
         }
+        // Round 6 nits: (a) a C++ exception from the room layer must never unwind through the retail frames (0x6123e0 /
+        // 0x612c40 / 0x6133a0); (b) the room leave waits for the transport tick after the quit notices retail just queued.
+        const bool throws=original_mode.find("-throw-")!=std::string::npos;leave_throws=throws;
+        bool escaped=false;
+        try {
+            if(original_mode.starts_with("r6-end-quit-") || original_mode=="r6-nit-end" || original_mode=="r6-nit-end-guest") {
+                const char* args="main";reinterpret_cast<void(__cdecl*)(const char**)>(0x5f27a0)(&args);
+            } else if(original_mode.starts_with("r6-end-loss-")) {
+                menu_broker.disconnected("broker already unavailable",ticks);
+                put(lobby_people[1].data(),0x1c,2); // actual remote host flag
+                reinterpret_cast<void(__thiscall*)(void*,void*,int,bool)>(0x612c40)(reinterpret_cast<void*>(0xa53058),lobby_people[1].data(),0x1107,false);
+            } else {
+                reinterpret_cast<void(__thiscall*)(void*,void*,int,int,int,bool)>(0x6133a0)(reinterpret_cast<void*>(0xa53058),lobby_people[0].data(),0x10cc,0x10cc,0x1107,false);
+            }
+        } catch(...) { escaped=true; }
+        assert(!escaped);
         assert(!*reinterpret_cast<void**>(0xa53058+0x78));
         if(!direct && !lobby) assert(!*reinterpret_cast<unsigned char*>(0xa53058+0x420));
+        assert(leave_arms==1); // the wrapper asked for exactly one deferred room leave
+        if(throws) {
+            // The injected failure was contained: no leave ran, native ownership is gone, the retail teardown finished.
+            assert(menu_leaves==0 && !leave_armed);
+            leave_throws=false;menu_leave_tick();assert(menu_leaves==0);
+            script(0x49f990,0);
+            std::cout<<"retail end chain PASS "<<original_mode<<"; injected room failure contained, retail frames not unwound\n";
+            mode=original_mode;return;
+        }
+        // The quit notices retail queued are still ahead of the room leave: nothing left the room in the retail frame.
+        assert(menu_leaves==0 && menu_view().state==bm::phase::room && leave_armed);
+        menu_leave_tick();
         assert(menu_view().state==bm::phase::idle && menu_leaves==1);
-        script(0x49f990,0);assert(menu_view().state==bm::phase::idle && menu_leaves==1);
-        std::cout<<"retail end chain PASS "<<original_mode<<"; local removed; broker Leave without Hub navigation\n";
+        menu_leave_tick();script(0x49f990,0);assert(menu_view().state==bm::phase::idle && menu_leaves==1);
+        std::cout<<"retail end chain PASS "<<original_mode<<"; local removed; broker Leave one transport tick after the quit notices, without Hub navigation\n";
     } else if(mode=="r6-nit-script") {
         begin();const auto before=allocations,hosts_before=menu_hosts;
         script(0x49faa0,0);assert(calls.back().starts_with("queue:setuphost"));
