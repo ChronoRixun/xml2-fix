@@ -3,8 +3,10 @@
 void* current() { return *reinterpret_cast<void**>(mgr.data()+0x86090); }
 std::array<std::array<unsigned char,0xc0>,4> lobby_people{};
 std::array<unsigned char,0x90> names_table{},checks_table{},people_table{};
-unsigned people_count=3,local_id=42,iterator_row=0;
-constexpr unsigned participant_ids[]{42,7,99,2};
+std::array<std::array<unsigned char,0x14>,5> people_nodes{};
+bool pending_local=false,hold_native_close=false;
+unsigned people_count=3,local_id=42;
+unsigned participant_ids[]{42,7,99,2};
 std::string focused="text_startgame";
 bool host_role=true,image_present=true,image_success=true,admitted=true;
 int broadcasts=0,transfers=0,starts=0,kicks=0,leaves=0,announces=0,refreshes=0,activations=0,cleanups=0;
@@ -15,21 +17,17 @@ void* participant(unsigned id) {
     return nullptr;
 }
 void* __fastcall participant_stub(void*,void*,unsigned id) { return participant(id); }
-void* __fastcall local_stub(void*,void*) { return admitted ? participant(local_id) : nullptr; }
+void* __fastcall local_stub(void*,void*) { return pending_local ? lobby_people[1].data() : admitted ? participant(local_id) : nullptr; }
 unsigned __fastcall local_index_stub(void*,void*) { return local_id; }
-bool __fastcall host_role_stub(void*,void*) { return host_role; }
-void* __fastcall first_person(void*,void*) { iterator_row=0;return people_count ? lobby_people[0].data() : nullptr; }
-void* __fastcall next_person(void*,void*) { ++iterator_row;return iterator_row<people_count ? lobby_people[iterator_row].data() : nullptr; }
+bool __fastcall host_role_stub(void*,void*) { lobby_fault_at(3);return host_role; }
 void __fastcall no_op(void*,void*) {}
 void __fastcall activated(void*,void*,int) { ++activations; }
-void __fastcall refreshed(void*,void*) { ++refreshes; }
 void* __fastcall participant_list(void*,void*) { return people_table.data(); }
 void* __cdecl cast_list(void* p,int,void*,void*,int) { return p; }
 const char* __fastcall focused_name(void*,void*) { return focused.c_str(); }
 void __fastcall focus_stub(void* menu,void*,const char* name,bool) {
-    focused=name;put(menu,0x324,unsigned(reinterpret_cast<std::uintptr_t>(focused=="text_playername1" ? lobby_names.data() : text_item.data())));
+    lobby_fault_at(2);focused=name;put(menu,0x324,unsigned(reinterpret_cast<std::uintptr_t>(item_stub(menu,nullptr,name))));
 }
-bool __fastcall accept_stub(void*,void*,unsigned value,int n) { assert(n==1);return (value&0x1100110)!=0; }
 void __fastcall sound_stub(void*,void*,int) {}
 void __fastcall description_stub(void*,void*,int,const char*) {}
 void __fastcall join_leave(void*,void*) { ++leaves; }
@@ -40,16 +38,8 @@ void close_join(void* menu) {
     auto deactivate=*reinterpret_cast<void(__fastcall**)(void*,void*)>(0x69f358);
     deactivate(menu,nullptr);
 }
-void __fastcall native_close_stub(void* menu,void*) {
-    calls.push_back("native-close");
-    if(*static_cast<unsigned*>(menu)==0x69f33c) {
-        static_cast<unsigned char*>(menu)[0x196e]=1;
-        close_join(menu);
-    }
-    set_current(nullptr);
-}
 void __fastcall manager_close(void*,void*,const char* name,int) {
-    assert(name && (std::string_view(name)=="host" || std::string_view(name)=="join"));
+    assert(name && (std::string_view(name)=="host" || std::string_view(name)=="join"));if(hold_native_close) return;
     if(current() && std::string_view(name)=="join") close_join(current());
     set_current(nullptr);
 }
@@ -80,7 +70,7 @@ void __cdecl start_local(int value) { assert(value==0);++starts; }
 std::array<unsigned,3> locale_vt{};
 unsigned* locale_object=locale_vt.data();
 void* __cdecl locale_getter() { return &locale_object; }
-const char* __fastcall locale_text(void*,void*,int id) { return id==0xfbd ? "Unready" : "Leave"; }
+const char* __fastcall locale_text(void*,void*,int id) { return id==0xfbd ? "Unready" : id==0xfc4 ? "Host" : id==0xfc0 ? "Ready" : id==0xfa2 ? "Waiting" : "Leave"; }
 std::array<unsigned,4> dialog_vt{};
 unsigned* dialog_object=dialog_vt.data();
 void* __cdecl dialog_getter() { return &dialog_object; }
@@ -91,6 +81,37 @@ bool lobby_fields_stub(online_menus::lobby_fixture& out) {
     out.members[0]={99,112,false};out.members[1]={42,0,true};out.members[2]={7,38,true};return true;
 }
 void ready_person(unsigned row,bool value) { put(lobby_people[row].data(),0x1c,(value ? 4 : 0) | (row==0 ? 2 : 0)); }
+void build_people_chain() {
+    for(unsigned i=0;i<=people_count;++i) {
+        people_nodes[i].fill(0);
+        put(people_nodes[i].data(),8,unsigned(reinterpret_cast<std::uintptr_t>(people_nodes[i<people_count ? i+1 : 0].data())));
+        put(people_nodes[i].data(),0x10,i<people_count ? unsigned(reinterpret_cast<std::uintptr_t>(lobby_people[i].data())) : 0);
+    }
+    put(people_table.data(),0,unsigned(reinterpret_cast<std::uintptr_t>(people_nodes[0].data())));
+    put(people_table.data(),8,unsigned(reinterpret_cast<std::uintptr_t>(people_nodes[0].data())));
+    put(people_table.data(),0xc,people_count);
+}
+void __fastcall native_name_presentation(void*,void*,const char* source,char* output,unsigned size) {
+    auto getter=reinterpret_cast<const char*(__fastcall*)(void*,void*)>(0x6141e0);
+    assert(getter(lobby_people[0].data(),nullptr)==reinterpret_cast<char*>(lobby_people[0].data()+0x40)); // even inside UI scope, other consumers retain native pointers
+    if(lobby_marker) assert(std::string_view(source).find_first_of("^%\\")==std::string_view::npos); // before the real refresh formats or measures it
+    if(std::string_view(source).starts_with("Logan")) ++refreshes;
+    std::strncpy(output,source,size-1);output[size-1]=0;
+}
+int __cdecl native_format(char* output,unsigned size,const char* format,...) {
+    va_list args;va_start(args,format);const auto n=std::vsnprintf(output,size,format,args);va_end(args);return n;
+}
+void __fastcall columns_without_font(void*,void*,const char*,char*,int,char** columns,int count) { for(int i=0;i<count;++i) columns[i]=nullptr; }
+std::array<unsigned,12> peer_ui_vt{};
+unsigned* peer_ui_object=peer_ui_vt.data();
+void* __cdecl peer_ui_getter() { return &peer_ui_object; }
+bool __fastcall peer_is_local(void*,void*,void* record) { return record==participant(local_id); }
+std::array<float,4> ui_color{1,1,1,1};
+unsigned __fastcall color_value(void*,void*,int) { return unsigned(reinterpret_cast<std::uintptr_t>(ui_color.data())); }
+void refresh_now() {
+    auto refresh=*reinterpret_cast<void(__fastcall**)(void*,void*)>(*reinterpret_cast<unsigned*>(child.data())+0xac);
+    refresh(child.data(),nullptr);
+}
 void setup_lobby(bool host) {
     host_role=host;local_id=host ? 42 : 7;
     for(unsigned i=0;i<4;++i) {
@@ -101,36 +122,41 @@ void setup_lobby(bool host) {
     put(lobby_names.data(),0,0x6a062c);put(lobby_checks.data(),0,0x6a062c);
     put(lobby_names.data(),0xbc,unsigned(reinterpret_cast<std::uintptr_t>(names_table.data())));
     put(lobby_checks.data(),0xbc,unsigned(reinterpret_cast<std::uintptr_t>(checks_table.data())));
-    put(names_table.data(),0x84,people_count);put(checks_table.data(),0x84,people_count);
-    put(people_table.data(),0xc,people_count);
-    put(reinterpret_cast<void*>(0x8abe20),0,people_count*2);
-    std::memset(reinterpret_cast<void*>(0x8a83f0+0x3800),0,16);
-    std::memset(reinterpret_cast<void*>(0x8a83f0+0x3a20),0,16);
-    for(unsigned i=0;i<people_count;++i) {
-        names_table[i]=static_cast<unsigned char>(i);checks_table[i]=static_cast<unsigned char>(i+4);
-        auto* row=reinterpret_cast<unsigned char*>(0x8a83f0+i*0x70);
-        std::memset(row,0,0x70);std::strcpy(reinterpret_cast<char*>(row+4),"unsafe^%\\name");put(row,0x5c,participant_ids[i]);
-        for(auto index:{i,i+4}) for(auto offset:{0x3800u,0x3a20u})
-            *reinterpret_cast<unsigned*>(0x8a83f0+offset+4*(index/32))|=1u<<(index&31);
-    }
+    build_people_chain();
+    std::memset(reinterpret_cast<void*>(0x8a83f0),0,0x3a34);
+    reinterpret_cast<void(__fastcall*)(void*,void*)>(0x5bfac0)(reinterpret_cast<void*>(0x8a83f0),nullptr);
     child.fill(0);put(child.data(),0,host ? 0x69f274 : 0x69f33c);child[4]=1;child[0x195c]=1;
     std::strcpy(reinterpret_cast<char*>(child.data()+0xc),host ? "host" : "join");
     put(child.data(),host ? 0x1964 : 0x1960,unsigned(reinterpret_cast<std::uintptr_t>(lobby_names.data())));
     put(child.data(),host ? 0x1968 : 0x1964,unsigned(reinterpret_cast<std::uintptr_t>(lobby_checks.data())));
     put(child.data(),host ? 0x196c : 0x1968,unsigned(reinterpret_cast<std::uintptr_t>(people_table.data())));
     child[0x196f]=1;
+    for(auto* control:{&start_item,&kick_item,&leave_item,&ready_item}) { control->fill(0);put(control->data(),0,0x6a0244);(*control)[0x54]=8; }
+    back_help_item.fill(0);put(back_help_item.data(),0,0x6a0244);back_help_item[0x54]=8;
+    auto* back_rect=reinterpret_cast<short*>(back_help_item.data()+0x70);back_rect[0]=500;back_rect[1]=470;back_rect[2]=100;back_rect[3]=20;
+    unsigned index=0;
+    for(auto* control:{&start_item,&kick_item,&leave_item}) {
+        auto* geometry=reinterpret_cast<short*>(control->data()+0x70);geometry[0]=short(20+140*index++);geometry[1]=430;geometry[2]=100;geometry[3]=20;
+    }
     focus_stub(child.data(),nullptr,host ? "text_startgame" : "text_readygame",true);set_current(child.data());
     lobby_back_callback=*reinterpret_cast<int(__fastcall**)(void*,void*)>(host ? 0x69f2a0 : 0x69f368);
     redirect(0x6110c0,participant_stub);redirect(0x6111f0,local_stub);redirect(0x611250,local_index_stub);redirect(0x610d10,host_role_stub);
-    redirect(0x5ba4a0,first_person);redirect(0x5ba4c0,next_person);
+
     redirect(0x5caff0,activated);redirect(0x610ca0,participant_list);redirect(0x67234e,cast_list);
-    redirect(0x5ba4e0,refreshed);redirect(0x5c8150,refreshed);
+    // The actual Host/Join refreshes, add wrapper, base add, clear, row ctor
+    // and setRowValue all execute. Only font/locale/session presentation is fake.
+    redirect(0x672170,reinterpret_cast<const void*>(&std::strncpy));redirect(0x672161,no_op);
+    redirect(0x610e70,native_name_presentation);redirect(0x5604f0,native_format);redirect(0x5c0be0,columns_without_font);
+    peer_ui_vt[0x28/4]=unsigned(reinterpret_cast<std::uintptr_t>(&peer_is_local));redirect(0x615580,peer_ui_getter);
+    const auto color=*reinterpret_cast<unsigned*>(0x6a236c+0x224);redirect(color,color_value);
+    put(reinterpret_cast<void*>(0x6a062c),0xc4,unsigned(reinterpret_cast<std::uintptr_t>(&no_op)));
+    put(reinterpret_cast<void*>(0x67f230),0,unsigned(reinterpret_cast<std::uintptr_t>(&PtInRect)));
     redirect(0x5ab550,focused_name);redirect(0x5adf40,focus_stub);
     redirect(0x5d4410,sound_stub);redirect(0x5bc6b0,description_stub);redirect(0x5ab030,no_op);
     // Preserve the class vtable addresses while stubbing its presentation and
     // close services; the action ticks and ready-aware Back remain retail.
     put(reinterpret_cast<void*>(host ? 0x69f274 : 0x69f33c),0x68,unsigned(reinterpret_cast<std::uintptr_t>(&no_op)));
-    if(!host) put(reinterpret_cast<void*>(0x69f33c),0x2c,unsigned(reinterpret_cast<std::uintptr_t>(&native_close_stub)));
+
     redirect(0x5db270,manager_close);redirect(0x606f90,has_image);redirect(0x6094f0,transfer_image);
     redirect(0x6097f0,join_leave);redirect(0x5cb120,shared_cleanup);redirect(0x551370,previous_controller);
     redirect(0x550730,no_op);redirect(0x5d71b0,menu_is);
@@ -238,8 +264,159 @@ void pool_tests() {
     }
     std::cout<<"r4 pool PASS 12 actual retail add/clear cycles; 128 shared rows; 83-byte payloads; pool fully released\n";
 }
+void observe_native_render(bool host) {
+    const bool hidden=(lobby_names[0x54]&4)!=0;
+    if(!host) { assert(hidden);return; }
+    const auto count=*reinterpret_cast<unsigned*>(names_table.data()+0x84);
+    auto text=reinterpret_cast<const char*(__fastcall*)(void*,void*,int)>(0x5bfcd0);
+    for(unsigned i=0;i<count;++i) assert(std::string_view(text(lobby_names.data(),nullptr,int(i))).find_first_of("^%\\~")==std::string_view::npos);
+    if(mode=="r4-refresh-paths") std::cout<<"render boundary HOST hidden="<<hidden<<" rows="<<count<<" first="<<(count ? text(lobby_names.data(),nullptr,0) : "")<<"\n";
+}
+void restore_retail(unsigned va) {
+    for(const auto& guard:online_menus_guards::guards) if(guard.va==va) {
+        const auto bytes=patch_transaction::bytes_of(guard.hex);std::memcpy(reinterpret_cast<void*>(va),bytes.data(),bytes.size());FlushInstructionCache(GetCurrentProcess(),reinterpret_cast<void*>(va),bytes.size());return;
+    }
+    assert(false);
+}
+const char* __fastcall row_text_fault(void*,void*,int) { RaiseException(EXCEPTION_ACCESS_VIOLATION,0,0,nullptr);return nullptr; }
+using lobby_mouse_t=bool(__fastcall*)(void*,void*,int,int,int,int,int);
+void mouse_release(unsigned slot,unsigned x) {
+    auto mouse=*reinterpret_cast<lobby_mouse_t*>(slot);
+    put(reinterpret_cast<void*>(0x6f3920),0,0);put(reinterpret_cast<void*>(0xa09f54),0,0);*reinterpret_cast<unsigned char*>(0xa09fa0)=0;
+    assert(mouse(child.data(),nullptr,int(x),420,0,WM_LBUTTONUP,0));
+    assert(*reinterpret_cast<unsigned char*>(0xa09fa0)==1 && *reinterpret_cast<unsigned*>(0xa09f54)==4);
+    // Fake input provider consumes the native mouse event, just as the frame
+    // input pump does. The action itself is the actual retail class tick.
+    put(reinterpret_cast<void*>(0xa09f54),0,0);*reinterpret_cast<unsigned char*>(0xa09fa0)=0;mask=0x10;
+}
+void review_lobby_tests(const script_functions_rules::func_entry* registration,bool host) {
+    auto tick=*reinterpret_cast<lobby_tick_t*>(host ? 0x69f2ac : 0x69f374);
+    auto activate=*reinterpret_cast<lobby_activate_t*>(host ? 0x69f284 : 0x69f350);
+    auto back=*reinterpret_cast<lobby_back_t*>(host ? 0x69f2a0 : 0x69f368);
+    auto post=[&](intent action) { int_value[1]=unsigned(action);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(registration->handler))(nullptr); };
+    if(mode=="r4-refresh-paths") {
+        for(bool hosting:{true,false}) {
+            people_count=4;setup_lobby(hosting);activate=*reinterpret_cast<lobby_activate_t*>(hosting ? 0x69f284 : 0x69f350);activate(child.data(),nullptr,0);
+            tick=*reinterpret_cast<lobby_tick_t*>(hosting ? 0x69f2ac : 0x69f374);
+            auto value=reinterpret_cast<unsigned(__fastcall*)(void*,void*,int)>(0x5bfc20);
+            for(int i=0;i<4;++i) assert(value(lobby_names.data(),nullptr,i)==(hosting ? participant_ids[i] : 0));
+            assert(std::string_view(reinterpret_cast<const char*>(lobby_people[0].data()+0x40))=="Logan^n%"); // native names are never changed
+            for(unsigned slot:{0xacu,0xb4u}) {
+                if(hosting) { put(child.data(),0x1960,1);lobby_names[0x54]|=8; }
+                auto refresh=*reinterpret_cast<lobby_tick_t*>(*reinterpret_cast<unsigned*>(child.data())+slot);
+                refresh(child.data(),nullptr);observe_native_render(hosting);
+                assert(*reinterpret_cast<unsigned*>(0x8abe20)==8);
+            }
+            if(hosting) put(child.data(),0x1960,0);
+            mask=0;tick(child.data(),nullptr);assert(texts["lc_member_count"]=="4");
+            if(!hosting) {
+                put(people_nodes[0].data(),0x10,unsigned(reinterpret_cast<std::uintptr_t>(lobby_people[2].data())));
+                put(people_nodes[1].data(),0x10,unsigned(reinterpret_cast<std::uintptr_t>(lobby_people[0].data())));
+                put(people_nodes[2].data(),0x10,unsigned(reinterpret_cast<std::uintptr_t>(lobby_people[1].data())));
+                refresh_now();tick(child.data(),nullptr);assert(texts["lc_p1_name"]=="Alex" && texts["lc_p2_name"]=="Logan?n?");
+            }
+            people_count=0;build_people_chain();refresh_now();observe_native_render(hosting);
+            assert(*reinterpret_cast<unsigned*>(names_table.data()+0x84)==1 && *reinterpret_cast<unsigned*>(checks_table.data()+0x84)==0);
+            assert(value(lobby_names.data(),nullptr,0)==(hosting ? 0xffffffffu : 0u));
+            if(!hosting) { pending_local=true;put(lobby_people[1].data(),0x1c,0);child[0x196c]=1; }
+            tick(child.data(),nullptr);pending_local=false;assert(texts["lc_member_count"]=="0" && visibility["lc_ready_all"]);
+        }
+        std::cout<<"review refresh PASS REAL Host/Join refresh + add/clear/ctor/value writes; Join values all zero; participant order, 4/empty rosters; render-boundary sanitation\n";return;
+    }
+    if(mode=="r4-join-fallback") {
+        put(checks_table.data(),0x84,2);ready_person(1,false);focus_stub(child.data(),nullptr,"text_readygame",true);mask=0x10;tick(child.data(),nullptr);
+        assert(announces==1 && last_ready && current()==child.data()); // invalid view does not veto Ready
+        assert(visibility["lc_lobby_error"]); // no latched read error
+        mask=0;
+        // Explicit notice while the REAL native Join tick tail-dispatches Back.
+        copy_open_ok=false;import_stub("OpenClipboard",reinterpret_cast<void*>(&copy_open));import_stub("EnumThreadWindows",reinterpret_cast<void*>(&copy_enum));
+        import_stub("GetWindowThreadProcessId",reinterpret_cast<void*>(&copy_window_process));import_stub("GetClassNameA",reinterpret_cast<void*>(&copy_class));
+        post(intent::copy_code);tick(child.data(),nullptr);assert(!visibility["lc_lobby_error"]);
+        mask=0;tick(child.data(),nullptr); // release Copy before a fresh native Accept
+        focus_stub(child.data(),nullptr,"text_leaveroom",true);mask=0x10;tick(child.data(),nullptr);assert(!last_ready && current()==child.data());
+        tick(child.data(),nullptr);assert(current()==nullptr && leaves==1); // notice cannot swallow the native Leave dispatch
+        setup_lobby(false);ready_person(1,false);activate(child.data(),nullptr,0);mask=0;
+        post(intent::copy_code);tick(child.data(),nullptr);assert(!visibility["lc_lobby_error"]);
+        auto mouse=*reinterpret_cast<lobby_mouse_t*>(0x69f3bc);
+        assert(mouse(child.data(),nullptr,510,460,0,WM_LBUTTONUP,0));
+        assert(current()==nullptr && leaves==2); // actual mouse help -> virtual Back, with the notice still showing
+        people_count=0;setup_lobby(false);pending_local=true;put(lobby_people[1].data(),0x1c,0);activate(child.data(),nullptr,0);child[0x196c]=1;mask=0;tick(child.data(),nullptr);
+        assert(texts["lc_member_count"]=="0" && visibility["lc_lobby_error"] && current()==child.data());
+        child[0x196c]=0;const auto pending_announcements=announces;mask=0x1000000;tick(child.data(),nullptr);
+        assert(announces==pending_announcements && current()==child.data());mask=0;
+        back(child.data(),nullptr);assert(current()==nullptr);pending_local=false;
+        people_count=3;participant_ids[0]=0;setup_lobby(false);admitted=false;activate(child.data(),nullptr,0);
+        // No-local is not index zero: the remote zero-index member is not You.
+        assert(visibility["lc_p1_you"] && texts["lc_self_name"].empty());
+        back(child.data(),nullptr);assert(current()==nullptr);participant_ids[0]=42;admitted=true;
+        std::cout<<"review Join fallback PASS zero-valued rows; invalid view Ready/Leave, native tail Back through notice; pending/empty exit; no-local versus index zero\n";return;
+    }
+    if(mode=="r4-host-fallback" || mode=="r4-negative") {
+        // View failures must not latch an error or suppress native Back/Leave.
+        for(int failure=0;failure<6;++failure) {
+            people_count=3;setup_lobby(true);activate(child.data(),nullptr,0);mask=0;
+            if(failure==0) put(checks_table.data(),0x84,2);
+            if(failure==1) put(reinterpret_cast<void*>(0x8a83f0+names_table[1]*0x70),0x5c,42);
+            if(failure==2) names_table[0]=255;
+            if(failure==3) put(reinterpret_cast<void*>(0x8abe20),0,129);
+            if(failure==4) put(people_table.data(),0xc,5);
+            if(failure==5) put(lobby_people[1].data(),0x18,99);
+            tick(child.data(),nullptr);assert(visibility["lc_lobby_error"] && (start_item[0x54]&8));
+            focus_stub(child.data(),nullptr,"text_leaveroom",true);mask=0x10;tick(child.data(),nullptr);
+            tick(child.data(),nullptr);assert(current()==nullptr);
+        }
+        const auto prior=activations;
+        for(bool ready_missing:{false,true}) {
+            people_count=3;setup_lobby(true);missing_list=!ready_missing;missing_ready_list=ready_missing;
+            activate(child.data(),nullptr,0);assert(activations==prior && calls.back()=="request:online");
+            missing_list=missing_ready_list=false;
+        }
+        // A consumed native state 2 cannot authorize a later departure.
+        setup_lobby(true);activate(child.data(),nullptr,0);focus_stub(child.data(),nullptr,"text_leaveroom",true);mask=0x10;tick(child.data(),nullptr);
+        mask=0;post(intent::confirm_leave);tick(child.data(),nullptr);hold_native_close=true;tick(child.data(),nullptr);hold_native_close=false;
+        const auto count=leaves;mask=0x200000;tick(child.data(),nullptr);assert(leaves==count && !visibility["lc_leave_confirm"]);
+        back(child.data(),nullptr);mask=0;tick(child.data(),nullptr);assert(focused=="text_startgame" && visibility["lc_leave_confirm"]);
+        put(child.data(),0x1960,2);tick(child.data(),nullptr);post(intent::confirm_leave);tick(child.data(),nullptr);
+        hold_native_close=true;lobby_fault_stage=3;tick(child.data(),nullptr);hold_native_close=false;assert(!lobby_fault_stage);
+        const auto consumed_with_fault=leaves;put(child.data(),0x1960,2);tick(child.data(),nullptr);
+        assert(leaves==consumed_with_fault && current()==child.data() && !visibility["lc_leave_confirm"]);
+        std::cout<<"review Host fallback PASS invalid snapshots preserve native exit, malformed activation returns online, consumed consent re-confirms, safe restored focus\n";return;
+    }
+    if(mode=="r4-mouse") {
+        ready_person(2,true);refresh_now();mask=0;tick(child.data(),nullptr);focus_stub(child.data(),nullptr,"text_startgame",true);
+        mouse_release(0x69f2f4,30);tick(child.data(),nullptr);assert(transfers==1 && child[0x1970]);child[0x1970]=0;
+        focus_stub(child.data(),nullptr,"text_kickplayer",true);mouse_release(0x69f2f4,170);tick(child.data(),nullptr);
+        assert(*reinterpret_cast<int*>(child.data()+0x1960)==1);observe_native_render(true);
+        mask=0x200000;tick(child.data(),nullptr);
+        focus_stub(child.data(),nullptr,"text_leaveroom",true);mouse_release(0x69f2f4,310);tick(child.data(),nullptr);assert(!leaves && !visibility["lc_leave_confirm"]);
+        mask=0;post(intent::confirm_leave);tick(child.data(),nullptr);tick(child.data(),nullptr);assert(current()==nullptr && leaves==1);
+        std::cout<<"review mouse PASS REAL Host hit-test/release path -> native Start/image, Kick picker, Leave confirmation/native cleanup\n";return;
+    }
+    if(mode=="r4-native-faults") {
+        for(int stage:{1,2,3,4}) {
+            lobby_fault_stage=stage;mask=stage==2 ? 0x1000000 : 0;tick(child.data(),nullptr);
+            assert(!lobby_fault_stage && current()==child.data());mask=0;tick(child.data(),nullptr);assert(visibility["lc_lobby_error"]);
+        }
+        put(child.data(),0x1960,1);lobby_names[0x54]|=8;redirect(0x5bfcd0,row_text_fault);refresh_now();assert(lobby_names[0x54]&4);restore_retail(0x5bfcd0);refresh_now();
+        assert(!(lobby_names[0x54]&4));observe_native_render(true);
+        auto host_tick=*reinterpret_cast<lobby_tick_t*>(0x69f2ac);host_tick(reinterpret_cast<void*>(1),nullptr); // raw menu fields contained
+        mask=0x200000;tick(child.data(),nullptr);assert(*reinterpret_cast<int*>(child.data()+0x1960)==0);
+        mask=0;tick(child.data(),nullptr);mask=0x200000;tick(child.data(),nullptr);assert(!visibility["lc_leave_confirm"]);
+        std::cout<<"review native faults PASS contained mask/focus/session/authority/row-text/raw-menu accesses; native escape retained and picker hidden until safe\n";return;
+    }
+    if(mode=="r4-no-marker") {
+        focus_stub(child.data(),nullptr,"text_leaveroom",true);mask=0x10;tick(child.data(),nullptr);mask=0;assert(!visibility["lc_leave_confirm"]);
+        std::array<unsigned char,0x1a00> cached{};put(cached.data(),0,0x69f274);std::strcpy(reinterpret_cast<char*>(cached.data()+0xc),"host");
+        lobby_marker=false;activate(cached.data(),nullptr,0);lobby_marker=true;tick(child.data(),nullptr);assert(!visibility["lc_leave_confirm"]);
+        auto name=reinterpret_cast<const char*(__fastcall*)(void*,void*)>(0x6141e0);
+        assert(name(lobby_people[0].data(),nullptr)==reinterpret_cast<char*>(lobby_people[0].data()+0x40));
+        back(child.data(),nullptr);tick(child.data(),nullptr);assert(visibility["lc_leave_confirm"]);
+        std::cout<<"review unmarked PASS cached unmarked activation retains current lobby state; native name getter unchanged outside refresh scope\n";return;
+    }
+    assert(false);
+}
 void lobby_tests(const script_functions_rules::func_entry* registration) {
-    const bool host=mode!="r4-join";setup_lobby(host);
+    const bool host=mode.find("join")==std::string::npos;setup_lobby(host);
     auto tick=*reinterpret_cast<lobby_tick_t*>(host ? 0x69f2ac : 0x69f374);
     auto activate=*reinterpret_cast<lobby_activate_t*>(host ? 0x69f284 : 0x69f350);
     auto back=*reinterpret_cast<lobby_back_t*>(host ? 0x69f2a0 : 0x69f368);
@@ -253,9 +430,19 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     assert(texts["lc_waiting_name"]=="Alex" && !visibility["lc_ready_waiting"]);
     assert(!visibility["lc_p3_hero_fallback"] && texts[host ? "lc_p2_ping" : "lc_p1_ping"]==(host ? "38" : "0"));
     const auto pool=*reinterpret_cast<unsigned*>(0x8abe20);
-    assert(std::string_view(reinterpret_cast<char*>(0x8a83f4))=="Logan?n?");
+    auto row_text=reinterpret_cast<const char*(__fastcall*)(void*,void*,int)>(0x5bfcd0);
+    auto row_value=reinterpret_cast<unsigned(__fastcall*)(void*,void*,int)>(0x5bfc20);
+    if(host) assert(std::string_view(row_text(lobby_names.data(),nullptr,0))=="Logan?n?" && row_value(lobby_names.data(),nullptr,0)==42);
+    else {
+        for(int i=0;i<3;++i) assert(row_value(lobby_names.data(),nullptr,i)==0); // real JOIN leaves every value at ctor default
+        assert(std::string_view(row_text(lobby_names.data(),nullptr,0)).find("~")!=std::string_view::npos);
+        assert(std::string_view(row_text(lobby_names.data(),nullptr,0)).find("Logan?n?")!=std::string_view::npos);
+        assert(std::string_view(row_text(lobby_names.data(),nullptr,0)).find("Host")!=std::string_view::npos);
+        assert(visibility["text_playername1"]); // raw native formatting never renders in JOIN
+    }
+    const auto name_backing=names_table,ready_backing=checks_table;
     for(unsigned i=0;i<40;++i) tick(child.data(),nullptr);
-    assert(*reinterpret_cast<unsigned*>(0x8abe20)==pool && names_table[0]==0 && checks_table[0]==4);
+    assert(*reinterpret_cast<unsigned*>(0x8abe20)==pool && names_table==name_backing && checks_table==ready_backing);
     if(mode=="r4-copy") { copy_tests(registration,tick);return; }
     if(mode=="r4-pool") { pool_tests();return; }
     if(mode=="r4-host") {
@@ -264,34 +451,21 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
         assert(!visibility["lc_p1_host"] && visibility["lc_p2_host"]);
         people_count=3;setup_lobby(true);activate(child.data(),nullptr,0);tick(child.data(),nullptr);
     }
-    if(mode=="r4-negative") {
-        missing_list=true;activate(child.data(),nullptr,0);assert(activations==1 && !visibility["lc_lobby_error"]);
-        mask=0x10;tick(child.data(),nullptr);assert(!transfers && !broadcasts && current()==child.data());missing_list=false;
-        missing_ready_list=true;activate(child.data(),nullptr,0);assert(activations==1);missing_ready_list=false;
-        auto reject=[&]() { mask=0x10;tick(child.data(),nullptr);assert(!transfers && !broadcasts && current()==child.data()); };
-        put(names_table.data(),0x84,5);reject();put(names_table.data(),0x84,3);
-        put(checks_table.data(),0x84,2);reject();put(checks_table.data(),0x84,3);
-        put(reinterpret_cast<void*>(0x8a83f0+0x70),0x5c,42);reject();put(reinterpret_cast<void*>(0x8a83f0+0x70),0x5c,7);
-        put(reinterpret_cast<void*>(0x8a83f0+0x70),0x5c,123456);reject();put(reinterpret_cast<void*>(0x8a83f0+0x70),0x5c,7);
-        put(lobby_people[1].data(),0x18,99);reject();put(lobby_people[1].data(),0x18,7);
-        names_table[0]=255;reject();names_table[0]=0;
-        checks_table[0]=0;reject();checks_table[0]=4;
-        put(reinterpret_cast<void*>(0x8abe20),0,129);reject();put(reinterpret_cast<void*>(0x8abe20),0,pool);
-        // Missing skin marker forwards native ticks, no extra card bindings.
-        lobby_marker=false;mask=0;auto writes=text_writes;tick(child.data(),nullptr);assert(text_writes==writes);
-        std::cout<<"r4 negative PASS missing-list activation refused; counts/IDs/duplicate pool slots/invalid pool refused; no close\n";return;
+    if(mode=="r4-negative" || mode=="r4-refresh-paths" || mode=="r4-join-fallback" || mode=="r4-host-fallback" || mode=="r4-mouse" || mode=="r4-native-faults" || mode=="r4-no-marker") {
+        review_lobby_tests(registration,host);return;
     }
     if(mode=="r4-join") {
         ready_person(1,false);mask=0x1000000;tick(child.data(),nullptr);assert(announces==1 && last_ready && current()==child.data());
         tick(child.data(),nullptr);assert(announces==1);mask=0;tick(child.data(),nullptr);
         fixture_throw=true;tick(child.data(),nullptr);fixture_throw=false;
         back_in_base=true;mask=0x200000;tick(child.data(),nullptr);back_in_base=false;mask=0;
-        assert(announces==1 && last_ready && current()==child.data());
+        assert(announces==2 && !last_ready && current()==child.data());
+        ready_person(1,true);refresh_now();tick(child.data(),nullptr);
         assert(!visibility["lc_guest_unready"] && visibility["lc_guest_leave"]);
         // Invoke the original native Back to independently prove Unready then
         // leave ordering, without replacing it with the close-service stub.
         auto native_back=reinterpret_cast<lobby_back_t>(0x5c8c60);
-        put(child.data(),0x324,0);assert(native_back(child.data(),nullptr)==2);assert(!last_ready && announces==2 && current()==child.data());
+        put(child.data(),0x324,0);assert(native_back(child.data(),nullptr)==2);assert(!last_ready && announces==3 && current()==child.data());
         mask=0;tick(child.data(),nullptr);assert(visibility["lc_guest_unready"] && !visibility["lc_guest_leave"]);
         assert(native_back(child.data(),nullptr)==2 && current()==nullptr && child[0x196e]==1 && leaves==1 && cleanups==1);
         set_current(child.data());child[0x196e]=0;focus_stub(child.data(),nullptr,"text_readygame",true);
@@ -307,10 +481,10 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     mask=0x10;image_success=false;tick(child.data(),nullptr);assert(transfers==1 && !child[0x1970]);
     image_success=true;tick(child.data(),nullptr);assert(transfers==2 && child[0x1970]);
     child[0x1970]=0;image_present=false;tick(child.data(),nullptr);assert(broadcasts==1 && starts==1);
-    people_count=1;put(names_table.data(),0x84,1);put(checks_table.data(),0x84,1);put(people_table.data(),0xc,1);
+    people_count=1;build_people_chain();refresh_now();
     mask=0;tick(child.data(),nullptr);assert(enabled_items["text_startgame"] && !visibility["lc_ready_solo"]);
     mask=0x10;tick(child.data(),nullptr);assert(starts==2);people_count=3;
-    put(names_table.data(),0x84,3);put(checks_table.data(),0x84,3);put(people_table.data(),0xc,3);
+    build_people_chain();refresh_now();
     mask=0x1000000;tick(child.data(),nullptr);
     assert(*reinterpret_cast<int*>(child.data()+0x1960)==1 && focused=="text_playername1" && !visibility["text_playername1"]);
     mask=0x10;tick(child.data(),nullptr);assert(kicks==0 && current()==child.data()); // local row 0 refused
@@ -320,7 +494,9 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     assert(!kicks && *reinterpret_cast<int*>(child.data()+0x1960)==1 && !visibility["lc_lobby_error"]);
     *reinterpret_cast<short*>(lobby_names.data()+0xac)=1;tick(child.data(),nullptr);assert(kicks==1 && *reinterpret_cast<int*>(child.data()+0x1960)==0);
     back_in_base=true;mask=0x200000;tick(child.data(),nullptr);back_in_base=false;
-    assert(current()==child.data() && *reinterpret_cast<int*>(child.data()+0x1960)==0); // dismiss error, no Leave
+    assert(current()==child.data() && *reinterpret_cast<int*>(child.data()+0x1960)==0);
+    post(intent::dismiss);mask=0;tick(child.data(),nullptr); // close the host Leave confirmation
+    // A fresh picker can still be opened after a transient target error.
     mask=0x10;
     focus_stub(child.data(),nullptr,"text_kickplayer",true);tick(child.data(),nullptr);
     mask=0x200000;tick(child.data(),nullptr);assert(*reinterpret_cast<int*>(child.data()+0x1960)==0 && current()==child.data());
@@ -329,7 +505,7 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     *reinterpret_cast<int*>(child.data()+0x1960)=2;tick(child.data(),nullptr);
     assert(!leaves && current()==child.data() && !visibility["lc_leave_confirm"] && focused=="lc_leave_cancel");
     post(intent::dismiss);tick(child.data(),nullptr);
-    assert(visibility["lc_leave_confirm"] && !enabled_items["lc_leave_yes"] && focused=="text_leaveroom");
+    assert(visibility["lc_leave_confirm"] && !enabled_items["lc_leave_yes"] && focused=="text_startgame");
     focus_stub(child.data(),nullptr,"text_leaveroom",true);mask=0x10;tick(child.data(),nullptr);assert(current()==child.data() && !leaves);
     mask=0;tick(child.data(),nullptr);assert(!visibility["lc_leave_confirm"]);
     back(child.data(),nullptr);tick(child.data(),nullptr);assert(visibility["lc_leave_confirm"] && current()==child.data());

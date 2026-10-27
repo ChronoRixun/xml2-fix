@@ -449,9 +449,11 @@ Retain native menu names/types `host` / `join`, vtables 0x69f274 / 0x69f33c.
 The invisible marker item `lc_lobby_v1` opts each parsed native skin into the
 adapter. Without it, native activation/tick/Back/deactivation forward unchanged.
 Both parsed `text_playername1` and `text_readycheck1` must be real LISTBOXes
-with backing tables. A marked skin missing either is refused before native
-activation dereferences it; the inline error stays in that menu. This negative
-case is a builder defect, never a substitute for preserving native dependencies.
+with backing tables. A marked skin missing either returns to native online
+before the retail activator can dereference it (guarded named-close fallback
+if requesting online faults). It never leaves an inactive lobby waiting for
+an inline dismissal. Unmarked/cached menus forward without resetting the
+active marked lobby state. Missing lists remain a builder defect.
 
 Actions stay on their native items. Start uses `text_startgame` through retail
 0x5bacd0, including role/readiness, the existing rule-26 minimum, image transfer
@@ -475,24 +477,57 @@ manufactures native Accept. A coincident Copy/Accept suppresses the native
 class action until Copy and Accept have both been released, including a held
 keyboard/pad chord. Base UI input still handles authored inline buttons. The
 manager mask hook filters only returns 0x5bad33 / 0x5c88d2 while this same menu
-and activation generation are ticking. All native menu/mode/wait/transfer flags
-remain untouched. Native ticks run once. Back dismisses inline state before
-native Back can act; otherwise it exits the Kick picker, unreadies a ready guest
-or intentionally leaves according to native state.
+and activation generation are ticking. Native input/wait/transfer flags remain untouched; only the documented Host
+confirmation phase is deferred through native state 0/2. Native ticks run once. Back dismisses inline state before
+native Back can act when the presentation is valid; otherwise it exits the
+Kick picker, unreadies a ready guest or leaves according to native state. The
+actual native Join tick and mouse/help Leave branches dispatching the Back
+slot always retain their native behavior through visible notices. A failed
+DLL view never suppresses native actions/Back/Leave or creates a sticky error.
 
-Roster counts must agree, be 1..4, fit the shared 128-row pool, reference distinct
-live allocated slots, and carry unique native IDs resolving to records with the
-same ID. Picker selection must be in range and not local. Validation repeats
-AFTER base UI input, at the actual native action boundary, because base input
-can refresh/reselect rows. Native Start still repeats its own readiness/count
-checks. Extra fields never clear/add/select roster rows, change native IDs or
-allocate pooled rows. The DLL only replaces each native name-row text payload
-with the <=31-byte round-3 display allowlist, including its NUL, preserving the
-row object/value/index/selection/ownership. The replacement uses at most 31
-bytes of the native 83-byte text payload. Native measurement was done before
-this replacement; LC must keep fixed picker/card clipping and real-game
-verification must check glyph widths and selection/mouse bounds. Every card/self/waiting name
-uses that same allowlist and all dynamic setters pass literal `%s`.
+Roster counts match the native participant count, bounded at four. HOST alone
+owns native row values: use its distinct row IDs and native session lookup.
+JOIN's actual 0x5c8150 refresh never sets row values (they remain constructor
+zero), so map its rows through exactly the participant order at menu+0x1968,
+from 0x610ca0. Read head/+8-next/+0x10-record without changing the native cursor.
+Validate counts/live pool slots/ID agreement where appropriate. Empty/pending
+rosters accept native's disabled name placeholder plus zero ready rows; no
+placeholder becomes an admitted member. Local identity comes from 0x6111f0
+and its actual record ID; NULL is distinct from a valid index-zero participant.
+
+Validation repeats after base input for a known valid Host picker selection;
+self/out-of-range Kick is refused without blocking Back. An unavailable view
+is presentation failure and defers to native policy. It does not veto any native
+action or latch an error every tick. Transient target errors clear on recovery.
+Native Start independently repeats role/readiness/count checks; an invalid view
+also restores only a previous dim applied by this adapter, within native mode
+and transfer gates. No DLL reads of readiness replace native authority.
+
+The adapter hooks native activation, update and both roster-event/refresh slots.
+It hides backing lists before refresh and rewrites HOST picker text before the
+refresh returns. The two exact guarded name-formatting reads at 0x5ba66e and
+0x5c829b receive <=31-byte allowlisted text during marked UI refresh only. This
+also protects native formatting/measurement from user renderer/printf controls.
+All other name getter consumers, including nested consumers in the same UI
+scope, receive their exact native field pointers. Participant names never change.
+
+HOST's completed picker row payload is allowlisted without format controls;
+its original object/value/index/selection/pool ownership remains unchanged.
+Only native-enabled, state-1, successfully sanitized picker rows become visible.
+JOIN has no picker: its native colour codes/Host suffix and zero row values are
+retained, and both lists stay hidden; only its card mirrors are display-filtered.
+The real refresh/add/clear/constructor/value-write paths are host-fixture tested,
+with immediate render-boundary observations before any later UI tick. Font and
+actual rendered geometry still need G/V; no raster acceptance is inferred here.
+
+Native mask/focus/authority/getter/row-text/state access and native adapter calls
+are contained in small POD SEH boundaries, including raw phase/gate/wait reads
+and writes. C++ allocation exceptions cannot bypass that /EHsc protection. A
+native fault skips extra presentation and never causes a second native tick.
+Host leave consent is one-use: it clears when native state-2 dispatch begins,
+even if closure is deferred. Another Back must confirm again. Dismissal returns
+a Host to Start (or its still-active picker) and a Join guest to Ready, never
+implicitly to an unconfirmed guest Leave action.
 
 The optional `install_hooks::lobby_fields` provider exists only for offline host
 fixtures. Production passes no hooks, so room code is a placeholder, Copy is
@@ -553,7 +588,7 @@ The guest state variants also select X Ready/X Unready and B Leave/B Unready.
 Copy and confirmation use the existing card/status region; inline state must
 not use `openmenu`, `closemenu` or a base popup. Author each inline button as a separately named menu item, including safe mouse
 rectangles inside that region. The DLL hides/disables all three buttons outside
-their own panel, focuses Cancel on opening and restores native list/Leave focus
+their own panel, focuses Cancel on opening and restores native picker/Start/Ready focus
 on dismissal. Keep their links in the directional graph while hidden/disabled
 items are skipped; no overlapping invisible ordinary actions. Back ownership is
 in the DLL/native handlers, so do not add a second Back close command. Initially
@@ -568,9 +603,11 @@ budget checks in its builder/selftests.
 `test_online_menus.py` includes every prior mode plus round-4 Host, Join,
 missing/corrupt-list negative, actual shared-pool and Copy modes, plus a negative
 mode for every new retail guard. The tests execute actual mapped class activators,
-Host/Join ticks, Accept predicate, ready setter/getter, Ready-aware Back and Join
-deactivation; presentation/network/participant/cleanup services are invented or
-stubbed. They never execute the game entry point. The pool case exercises real
+Host/Join refresh bodies 0x5ba4e0/0x5c8150, native add/clear/row constructor
+and value writes, class ticks, Accept predicate, ready setter/getter, Ready-aware
+Back, actual Host mouse hit/release and Join mouse-help paths, and Join
+deactivation. Only presentation/font/network/participant/cleanup services are
+invented or stubbed. They never execute the game entry point. The pool case exercises real
 retail base add/clear through twelve 128-row allocation cycles, including 83-byte
 rows and shared exhaustion. It does not claim font measurement/render coverage.
 
@@ -634,11 +671,14 @@ the focused grid cell. Close/navigation invalidates the inbox, including address
 reuse. Existing Back/delete and pad-tool precedence stay intact.
 
 Recent-game persistence uses a heap environment buffer, a same-directory
-CREATE_NEW temporary file, checked complete WriteFile, FlushFileBuffers and
-CloseHandle, then MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH). Only successful
+CREATE_NEW temporary file, checked complete WriteFile and CloseHandle, then
+MoveFileExW(REPLACE_EXISTING). No FlushFileBuffers or write-through flag runs
+on the game thread; this is an atomic best-effort recent-code cache, not a
+power-loss-durable campaign/recovery record. Only successful
 replacement publishes the new in-memory recent record. Failure removes only its
 own temporary file and preserves the previous disk/memory record. Directory,
-read-only, partial-write and flush failures are fixtures; bounded 128/129-byte
+read-only and partial-write failures are fixtures; the retained flush test
+asserts that no UI-thread durability flush occurs; bounded 128/129-byte
 malformed records and CRLF records are refused. The existing on-disk LF-only
 `lc-rejoin/1` schema is unchanged. Rejoin never implies admission.
 
@@ -681,3 +721,25 @@ clipboard NULL/zero/256-character/embedded-NUL behavior under a separately
 authorized clipboard-restoring harness. The clipboard strict-tail check may
 refuse nonzero spare allocation data; that refusal must preserve existing Code
 text and show the localized Paste notice. None of these live checks ran here.
+
+
+## Round-4 review correction on 097f219
+
+B1 is covered by the real retail refreshes: Host writes native participant IDs,
+Join leaves every row value zero; the fixture no longer stubs either refresh
+or preloads Join values. It also covers reordered participants, four/empty/
+pending rows, a real index-zero participant versus missing local record,
+invalid views with working native Ready/Back/Leave, and malformed activation
+returning to online. Native help/tick dispatch to Join Back passes through
+notices; literal user Back can dismiss inline UI. The separate base-input
+boundary distinguishes those paths even when the retail Join tick tail-jumps
+its Back slot. No fictional callback or hidden native row ID is relied upon.
+
+The review adds guarded native update/refresh/mouse/base-input boundaries and
+the two exact roster-name call contexts to the same opt-in transaction. Every
+new guard has a negative fixture. Native-name getter output is unchanged for
+all other call sites. Real Host mouse hit/release -> input -> Start/Kick/Leave,
+Join mouse-help Leave through a notice, renderer-visible Host row safety,
+hidden unchanged Join formatted rows, one-use consent, safe focus restoration
+and fault-contained native access are explicit regression cases. No game or
+desktop input was used. Full LC integration and real peer/render gates remain.

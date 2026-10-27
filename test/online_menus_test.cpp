@@ -25,6 +25,8 @@ int capacity=1024;
 DWORD ticks=10000;
 unsigned asset_generation=1;
 int root_reads=0,asset_throw=0,request_throw=0,tick_throw=0,native_ticks=0;
+int lobby_fault_stage=0;
+void lobby_fault_at(int stage) { if(lobby_fault_stage==stage) { lobby_fault_stage=0;RaiseException(EXCEPTION_ACCESS_VIOLATION,0,0,nullptr); } }
 int manager_reads=0,name_fault_stage=0,name_bad_object=0;
 void name_fault_at(int stage) {
     if(name_fault_stage==stage) { name_fault_stage=0;RaiseException(EXCEPTION_ACCESS_VIOLATION,0,0,nullptr); }
@@ -49,12 +51,14 @@ unsigned text_writes=0,hide_writes=0,enable_writes=0;
 bool hidden=true;
 std::map<std::string,bool> enabled_items;
 std::array<unsigned char,0xb0> start_item{};
+std::array<unsigned char,0xb0> kick_item{},leave_item{},ready_item{};
+std::array<unsigned char,0xb0> back_help_item{};
 void __fastcall enable_stub(void*,void*,const char* name,bool value) {
     ++enable_writes;enabled_items[name]=value;
     if(std::string_view(name)=="text_startgame") start_item[0x54]=value ? 8 : 0;
 }
 unsigned mask=0;
-unsigned __fastcall mask_stub(void*,void*) { return mask; }
+unsigned __fastcall mask_stub(void*,void*) { lobby_fault_at(1);return mask; }
 std::vector<unsigned char> mgr(0xb0000),input(0x100);
 std::array<unsigned char,0x1a00> main_menu{},hub{},child{};
 std::array<unsigned char,0xb0> text_item{};
@@ -65,7 +69,7 @@ void set_current(void* menu) { *reinterpret_cast<void**>(mgr.data()+0x86090)=men
 void* __cdecl manager_stub() { ++manager_reads;return mgr.data(); }
 void* __cdecl seats_stub() { return reinterpret_cast<void*>(0x72c4f0); }
 void* __cdecl network_stub() { return reinterpret_cast<void*>(0xa3df68); }
-void* __cdecl session_stub() { return reinterpret_cast<void*>(0xa53058); }
+void* __cdecl session_stub() { lobby_fault_at(4);return reinterpret_cast<void*>(0xa53058); }
 void* __cdecl campaign_stub() { return reinterpret_cast<void*>(0xa3bc40); }
 void* __cdecl profile_stub() { return reinterpret_cast<void*>(0x72c530); }
 void* __cdecl console_stub() { return reinterpret_cast<void*>(0x7ac290); }
@@ -113,6 +117,10 @@ void* __fastcall item_stub(void*,void*,const char* name) {
         if(std::string_view(name)=="text_playername1") return missing_list ? nullptr : lobby_names.data();
         if(std::string_view(name)=="text_readycheck1") return missing_ready_list ? nullptr : lobby_checks.data();
         if(std::string_view(name)=="text_startgame") return start_item.data();
+        if(std::string_view(name)=="text_kickplayer") return kick_item.data();
+        if(std::string_view(name)=="text_leaveroom") return leave_item.data();
+        if(std::string_view(name)=="text_readygame") return ready_item.data();
+        if(std::string_view(name)=="desctext1") return back_help_item.data();
     }
     return missing_prompt && std::string_view(name)=="lc_online_continue" ? nullptr : text_item.data();
 }

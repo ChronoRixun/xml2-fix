@@ -36,14 +36,14 @@ inline bool enabled(std::optional<std::string_view> value) {
 }
 // Remote/display data uses a small ASCII allowlist, including no renderer
 // controls or escape introducers. The variadic setter still MUST use "%s".
+inline char display_byte(unsigned char c) {
+    const bool safe=(c>='A' && c<='Z') || (c>='a' && c<='z') || (c>='0' && c<='9') ||
+        c==' ' || c=='-' || c=='_' || c=='.' || c=='\'' || c==',';
+    return safe ? char(c) : '?';
+}
 inline std::string display(std::string_view in, std::size_t limit=96) {
     std::string out;
-    for(unsigned char c:in) {
-        if(out.size()==limit) break;
-        const bool safe=(c>='A' && c<='Z') || (c>='a' && c<='z') || (c>='0' && c<='9') ||
-            c==' ' || c=='-' || c=='_' || c=='.' || c=='\'' || c==',';
-        out += safe ? char(c) : '?';
-    }
+    for(unsigned char c:in) { if(out.size()==limit) break;out+=display_byte(c); }
     return out;
 }
 inline bool valid_name(std::string_view s) {

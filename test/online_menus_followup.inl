@@ -24,7 +24,8 @@ BOOL (WINAPI* real_write_file)(HANDLE,LPCVOID,DWORD,LPDWORD,LPOVERLAPPED)=&Write
 BOOL WINAPI partial_recent_write(HANDLE file,LPCVOID data,DWORD size,LPDWORD written,LPOVERLAPPED overlapped) {
     assert(size>1);return real_write_file(file,data,size-1,written,overlapped);
 }
-BOOL WINAPI failed_recent_flush(HANDLE) { SetLastError(ERROR_WRITE_FAULT);return FALSE; }
+unsigned recent_flush_calls=0;
+BOOL WINAPI failed_recent_flush(HANDLE) { ++recent_flush_calls;SetLastError(ERROR_WRITE_FAULT);return FALSE; }
 DWORD WINAPI foreign_keyboard(LPVOID) { std::array<unsigned char,256> keys{};online_menus::keyboard(keys.data());return 0; }
 void follow_tests(const script_functions_rules::func_entry* registration) {
     auto tick=*reinterpret_cast<void(__fastcall**)(void*,void*)>(0x69e454);
@@ -128,7 +129,8 @@ void follow_tests(const script_functions_rules::func_entry* registration) {
         if(mode=="follow-storage-partial") import_stub("WriteFile",reinterpret_cast<void*>(&partial_recent_write));
         if(mode=="follow-storage-flush") import_stub("FlushFileBuffers",reinterpret_cast<void*>(&failed_recent_flush));
         open_code();fill_code();
-        const bool success=mode=="follow-storage-ok";
+        const bool success=mode=="follow-storage-ok" || mode=="follow-storage-flush";
+        if(mode=="follow-storage-flush") assert(recent_flush_calls==0); // no synchronous durability flush on the game thread
         assert(visibility["lc_notice_recent_save"]==success && visibility["lc_notice_fixture"]!=success);
         if(mode=="follow-storage-directory") assert(std::filesystem::is_directory(recent_file()));
         else if(success) assert(decode_recent(disk_recent())->code=="ABCDEFGH");
