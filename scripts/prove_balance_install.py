@@ -209,6 +209,7 @@ if r_on is not None and r_off is not None:
 assert "ReceiveRounding=xml1" in parity["log"] and "DamageCap=xml1" in parity["log"]
 report["parity"] = {"sites": sorted(hex(v) for v in PARITY_SITES), "rules": r_on, "extra_bytes": len(extra)}
 
+LATE_PAD_BRIDGE = 0x61862A
 if REF:
     ref = Path(REF)
     for tag, npc in (("noai", None), ("ai", "xml1")):
@@ -216,6 +217,11 @@ if REF:
         new = run("new-" + tag, MINE, dict(PORT_BALANCE), npc)
         differ = set(old["writes"]) ^ set(new["writes"])
         expected = {va + i for va, n in RULE16_REV12.items() for i in range(n)} if npc else set()
+        # the late-controller fix (no ini key, on in every build since 5c3b920) bridges the Advanced Options handler
+        # 0x618390 at 0x61862A with jmp rel32 + nop; the beta 7 reference has no such site
+        expected |= {LATE_PAD_BRIDGE + i for i in range(6)}
+        bridge = final(new, LATE_PAD_BRIDGE, 6)
+        assert bridge[0] == 0xE9 and bridge[5] == 0x90, (tag, bridge.hex())
         odd = unexplained(old, new, expected)
         assert not odd, (tag, [hex(v) for v in odd[:20]])
         if npc:
