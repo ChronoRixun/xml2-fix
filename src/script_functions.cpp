@@ -4,6 +4,7 @@
 #include "game_version.hpp"
 #include "ini.hpp"
 #include "log.hpp"
+#include "online_menus.hpp"
 #include "script_function_overflow.hpp"
 #include "xml1_hook_memory.hpp"
 #include "xml1_hook_transaction.hpp"
@@ -137,7 +138,7 @@ namespace script_functions
 	{
 		choose_probes();
 		// The fix's own functions are registered with [Game] ForcedTeams (forced_teams.hpp); with them the game's 320 are full.
-		const bool fix_functions = forced_teams_rules::decide(ini::text(L"Game", L"ForcedTeams"), ini::text(L"Game", L"AddHero"), ini::text(L"Game", L"JoinHero")).registered;
+		const bool fix_functions = forced_teams_rules::decide(ini::text(L"Game", L"ForcedTeams"), ini::text(L"Game", L"AddHero"), ini::text(L"Game", L"JoinHero")).registered || online_menus::requested();
 		const auto key = ini::text(L"Limits", L"ScriptFunctions");
 		const auto chosen = decide(key, fix_functions);
 		if (!chosen.note.empty()) logger::write("script functions: %s", chosen.note.c_str());

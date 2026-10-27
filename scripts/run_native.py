@@ -31,7 +31,7 @@ cmds = [[str(b / "xml2_test.exe"), flag] for flag in flags]
 if "--plain" in sys.argv:
     cmds.append([str(b / "xml2_test.exe")])
 with_exe = {
-    "xml2_roll_test", "xml2_dr_reward_test",
+    "xml2_roll_test", "xml2_dr_reward_test", "xml2_online_menus_test",
     "xml2_gns_transport_test", "xml2_confirmation_release_test", "xml2_objective_text_test",
     "xml2_save_limits_test", "xml2_item_capacity_test", "xml2_entity_grid_test", "xml2_entity_world_test", "xml2_entity_frames_test",
     "xml2_entity_query_test", "xml2_entity_transfer_test", "xml2_gameplay_agreement_test",

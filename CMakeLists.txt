@@ -82,6 +82,7 @@ add_library(xml2_fix SHARED
     src/effect_templates.cpp
     src/primitives_per_effect.cpp
 	src/online_tick.cpp
+	src/online_menus.cpp
 	src/npc_power.cpp
 	src/npc_semi_auto.cpp
 	src/stun_rule.cpp
@@ -553,6 +554,11 @@ target_include_directories(xml2_join_in_progress_test PRIVATE src)
 add_executable(xml2_online_room_test test/online_room_test.cpp)
 target_include_directories(xml2_online_room_test PRIVATE src)
 target_compile_options(xml2_online_room_test PRIVATE /utf-8)
+add_executable(xml2_online_menus_test test/online_menus_test.cpp src/online_menus.cpp
+    src/script_function_overflow.cpp src/patch_transaction.cpp tools/union_host/union_space.asm)
+target_include_directories(xml2_online_menus_test PRIVATE src)
+target_compile_options(xml2_online_menus_test PRIVATE /UNDEBUG)
+target_link_options(xml2_online_menus_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
 # The public game browser (contract v1.3/v1.4): room name, metadata from the game's state, presence and its pacing.
 add_executable(xml2_online_browser_test test/online_browser_test.cpp)
 target_include_directories(xml2_online_browser_test PRIVATE src)
