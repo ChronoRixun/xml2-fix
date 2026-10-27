@@ -8,6 +8,7 @@
 #include "entity_query.hpp"
 #include "det_math.hpp"
 #include "log.hpp"
+#include "ini.hpp"
 #include "xml1_hook_memory.hpp"
 #include "lift_rule.hpp"
 #include <array>
@@ -39,6 +40,19 @@ std::array<std::array<void*,8>,5> tables{};
 std::array<void*,5> handlers{};
 constexpr std::array<const char*,5> names{{"ch_fly_guard_decide","ch_air_grab_pickup","ch_air_grab_pickup_idle","ch_air_grab_pickup_throw","ch_air_grab_victim"}};
 std::array<int,8> attachment_ids{};
+bool trace_enabled=false;
+struct trace_stamp {u32 token=0;ULONGLONG ms=0;};
+std::array<std::array<trace_stamp,4>,32> trace_stamps{};
+// Diagnostic reads only. No additional bone, input, eligibility or energy calls.
+void trace(void* actor,void* victim,const char* stage,unsigned kind,void* input=nullptr,bool force=false,const vec* carrier_hand=nullptr,const vec* victim_hand=nullptr,const vec* target=nullptr,unsigned hand_valid=0){
+    if(!trace_enabled||!actor)return;
+    const u32 token=at<u32>(actor,0x1c);const auto now=GetTickCount64();auto& stamp=trace_stamps[token%trace_stamps.size()][kind];
+    if(!force&&stamp.token==token&&now-stamp.ms<250)return;stamp={token,now};
+    const void* move=at<void*>(actor,0x378);const void* vm=victim?at<void*>(victim,0x378):nullptr;
+    logger::write("carry trace %s ms=%llu actor=%08X victim=%08X energy=%.3f max_energy=%.3f pending_energy=%.3f phys=%08X flags=%08X status=%02X ground=%08X owner=%08X selected=%08X move=%p handler=%p enum=%d victim_move=%p victim_enum=%d held=%08X pressed=%08X magnitude=%.3f",
+        stage,now,token,victim?at<u32>(victim,0x1c):0,at<float>(actor,0x288),at<float>(actor,0x314),at<float>(actor,0x6ac),at<u32>(actor,4),at<u32>(actor,0x3d8),at<unsigned char>(actor,0x579),at<u32>(actor,0xbc),at<u32>(actor,0x178),at<u32>(actor,0x76c),move,move?at<void*>(move,0xc8):nullptr,move?at<int>(move,0xbc):-1,vm,vm?at<int>(vm,0xbc):-1,input?at<u32>(input,0):0,input?at<u32>(input,4):0,input?at<float>(input,8):0.f);
+    if(carrier_hand&&victim_hand&&target)logger::write("carry trace hands selectors=6,5 valid_mask=%X animated/world carrier=(%.3f,%.3f,%.3f) victim=(%.3f,%.3f,%.3f) target_root=(%.3f,%.3f,%.3f)",hand_valid,carrier_hand->x,carrier_hand->y,carrier_hand->z,victim_hand->x,victim_hand->y,victim_hand->z,target->x,target->y,target->z);
+}
 // Full generation-bearing handles; one acquisition press lasts until release.
 std::unordered_map<u32,u32> pickup_guard;
 void forget_guard(void* actor){pickup_guard.erase(at<u32>(actor,0x1c));}
@@ -137,17 +151,23 @@ vec hands(void* carrier,void* victim){
     // Source leaves failed bone outputs unspecified. Seed them to each actor's
     // position so a missing pair has a stable position fallback.
     vec c=at<vec>(carrier,0x20),c5=c,v=at<vec>(victim,0x20),v5=v;
-    if(bone(carrier,6,c)&&bone(carrier,5,c5))c=blend(c,c5,0.5f);
-    if(bone(victim,6,v)&&bone(victim,5,v5))v=blend(v,v5,0.5f);
-    const vec offset=subtract(at<vec>(victim,0x20),v);return {c.x+offset.x,c.y+offset.y,c.z+offset.z};
+    const bool c6ok=bone(carrier,6,c),c5ok=c6ok&&bone(carrier,5,c5);if(c5ok)c=blend(c,c5,0.5f);
+    const bool v6ok=bone(victim,6,v),v5ok=v6ok&&bone(victim,5,v5);if(v5ok)v=blend(v,v5,0.5f);
+    const vec offset=subtract(at<vec>(victim,0x20),v),target{c.x+offset.x,c.y+offset.y,c.z+offset.z};
+    trace(carrier,victim,"hand-target",0,nullptr,false,&c,&v,&target,unsigned(c6ok)|(unsigned(c5ok)<<1)|(unsigned(v6ok)<<2)|(unsigned(v5ok)<<3));return target;
+}
+vec attachment_target(void* carrier,void* victim,void* move,bool interpolate){
+    if(!move)return base_position(carrier);
+    const int id=slot<int(__fastcall*)(void*,void*)>(move,0xe8)(move,nullptr);
+    const bool hand=std::find(attachment_ids.begin(),attachment_ids.end(),id)!=attachment_ids.end();
+    vec desired=hand?hands(carrier,victim):base_position(carrier);
+    if(interpolate&&(id==attachment_ids[3]||id==attachment_ids[4]))desired=blend(at<vec>(victim,0x20),desired,0.1f);
+    return desired;
 }
 void attachment(void* carrier,void* victim){
     if(!alive(victim)){idle(carrier);return;}
     void* move=at<void*>(victim,0x378);if(!move)return;
-    const int id=slot<int(__fastcall*)(void*,void*)>(move,0xe8)(move,nullptr);
-    const bool hand=std::find(attachment_ids.begin(),attachment_ids.end(),id)!=attachment_ids.end();
-    vec desired=hand?hands(carrier,victim):base_position(carrier);
-    if(id==attachment_ids[3]||id==attachment_ids[4])desired=blend(at<vec>(victim,0x20),desired,0.1f);
+    const vec desired=attachment_target(carrier,victim,move,true);
     const pose delta{subtract(desired,at<vec>(victim,0x20)),subtract(at<vec>(carrier,0x1f4),at<vec>(victim,0x2c))};
     slot<float(__fastcall*)(void*,void*,const pose*)>(victim,0x130)(victim,nullptr,&delta);
 }
@@ -225,13 +245,15 @@ void __fastcall carry_entry(void*,void*,void* actor,void* input,void*){
     if(!actor)return;det_math::fp_env fp;
     void* victim=character(resolve(actor,0x76c));if(!victim||!alive(victim)){idle(actor);return;}
     if(input&&!(at<u32>(input,0)&0x100))forget_guard(actor);
-    bits(victim,true);const vec position=base_position(actor),angles=at<vec>(actor,0x2c);
+    bits(victim,true);const vec position=attachment_target(actor,victim,at<void*>(victim,0x378),false),angles=at<vec>(actor,0x2c);
     slot<void(__fastcall*)(void*,void*,const vec*,const vec*)>(victim,0x158)(victim,nullptr,&position,&angles);
+    trace(actor,victim,"entry",2,input,true);
 }
 bool __fastcall carry_update(void* self,void*,void* actor,void* input){
     if(!actor||!input)return false;det_math::fp_env fp;
     if(!(at<u32>(input,0)&0x100))forget_guard(actor);
     fn<update>(0x4fce50)(self,nullptr,actor,input);
+    trace(actor,resolve(actor,0x76c),"input",1,input);
     const float speed=fn<float(__fastcall*)(void*,void*,int)>(0x425b70)(actor,nullptr,2)*at<float>(input,8);
     const u32 buttons=at<u32>(input,0);int action;
     if(buttons&(1u<<4))action=1;
@@ -255,7 +277,7 @@ void __fastcall carry_frame(void*,void*,void* actor,void*){
     // Reassert the source pair constraints before movement as well as in the
     // victim callback; actor callback order must not open a physics frame.
     if(character(resolve(victim,0x178))==actor&&flying(actor)&&!grounded(actor))bits(victim,true);
-    attachment(actor,victim);upkeep(actor);
+    attachment(actor,victim);upkeep(actor);trace(actor,victim,"frame",3);
 }
 bool friendly_damage(){if(*reinterpret_cast<const unsigned char*>(0x70b6fd))return true;void* s=fn<getter>(0x48de40)();return slot<boolean>(s,0x5c)(s,nullptr);}
 void __fastcall throw_entry(void*,void*,void* actor,void*,void* context){
@@ -401,6 +423,7 @@ bool prepare(std::vector<xml1_hook_transaction::patch>& writes,bool flying_carry
     if(raised&&(!entity_query::installed_manager()||fn<getter>(0x4ab550)()!=entity_query::installed_manager()))return false;
     if(!raised)for(const auto& g:xml1_rogue_decide_rules::query_guards){std::vector<unsigned char>b(g.hex.size()/2);if(!memory.read(g.va,b.data(),b.size())||!limits_rules::matches(b.data(),g.hex))return false;}
     handlers.fill(nullptr);pickup_guard.clear();
+    trace_enabled=flying_carry&&ini::flag(L"Test",L"CarryTrace",false);trace_stamps={};
     if(flying_carry){
     for(unsigned i=0;i<tables.size();++i){std::memcpy(tables[i].data(),reinterpret_cast<const void*>(0x692f4c),32);tables[i][0]=reinterpret_cast<void*>(&destructor);tables[i][4]=reinterpret_cast<void*>(&frame_noop);handlers[i]=tables[i].data();}
     tables[0][1]=reinterpret_cast<void*>(&decide_entry);tables[0][6]=reinterpret_cast<void*>(&decide_update);
@@ -418,6 +441,9 @@ bool prepare(std::vector<xml1_hook_transaction::patch>& writes,bool flying_carry
     std::vector<unsigned char> filter(5,0xe9);const u32 target=u32(reinterpret_cast<std::uintptr_t>(&flight_powerup_bridge))-parser-5;std::memcpy(filter.data()+1,&target,4);
     writes.push_back({parser,{before,before+5},filter});
     if(!flying_carry)return true; // no carry admission: PC's own flight descent at 0x433e6c
+    // XML1 43312 has no PC shortcut predicate. Keep Guard/no-power tests,
+    // but do not let 61A3A0 bypass both descent and carry admission.
+    writes.push_back({0x433e6a,{0x75,0x39},{0x90,0x90}});
     pointer_patch(0x692378,reinterpret_cast<void*>(&carry_throw_event));
     const u32 descent=0x433e6c;const auto* original=reinterpret_cast<const unsigned char*>(descent);
     std::vector<unsigned char> bridge(6,0x90);bridge[0]=0xe9;const u32 offset=u32(reinterpret_cast<std::uintptr_t>(&descent_bridge))-descent-5;std::memcpy(bridge.data()+1,&offset,4);

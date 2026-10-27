@@ -16,7 +16,7 @@ namespace
 using namespace xml1_grab_carry_rules;
 using u32 = std::uint32_t;
 std::atomic<int> state{-1};
-bool trace = false, logged_lookup = false, carry = true;
+bool trace = false, logged_lookup = false, carry = true, guard_ally_victim = false;
 std::array<void*, 8> attack_slots{};
 void* attack_handler = nullptr;
 template<class T> T at(const void* p, u32 off) { T v{}; std::memcpy(&v, static_cast<const unsigned char*>(p) + off, sizeof v); return v; }
@@ -231,7 +231,16 @@ void __fastcall victim_frame(void*, void*, void* victim, void*)
     {
         void* paired = character(resolve(owner, 0x76c));
         void* move = at<void*>(owner, 0x378);
-        if (paired == victim && move && retaining_prefix(move_name(move))) return;
+        if (paired == victim && move)
+        {
+            const char* name = move_name(move);
+            if (retaining_prefix(name)) return;
+            // The converter adds ch_grab_victim to throwallyvictim; XML1
+            // authors no handler there. Do not drop it before the owner's
+            // automatic victim_throw event. Limit this adaptation to the
+            // opt-in GuardDecideRule path, preserving beta-8 OFF behavior.
+            if (guard_ally_victim && _stricmp(name,"throwally")==0) return;
+        }
         const u32 none = *reinterpret_cast<const u32*>(0x72988c);
         slot<exclusion_t>(owner, 0x104)(owner, nullptr, none, 0.6f);
         slot<exclusion_t>(victim, 0x104)(victim, nullptr, none, 0.6f);
@@ -320,6 +329,7 @@ void install(HMODULE game)
     // [Game] Xml1FlyingCarry=0 (beta 8 080h): no flying carry; everything else in the rule as with it. Read before any
     // refusal so a refused request advertises the mask it asked for.
     carry = ini::flag(L"Game", L"Xml1FlyingCarry", true);
+    guard_ally_victim = _stricmp(ini::text(L"Game",L"GuardDecideRule").value_or("").c_str(),"xml1")==0;
     if (wanted != setting::xml1 || reinterpret_cast<std::uintptr_t>(game) != limits_rules::image_base || !supported())
     {
         logger::write("grab carry: requested but unavailable; requires retail services and Xml1GrabCarry=xml1");
