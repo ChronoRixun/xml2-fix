@@ -61,6 +61,7 @@
 #include "display.hpp"
 #include "forced_teams.hpp"
 #include "script_functions.hpp"
+#include "script_pools.hpp"
 #include "solo_mode.hpp"
 #include "mold_controller.hpp"
 #include "xml1_bosses.hpp"
@@ -74,7 +75,11 @@
 #include "ini.hpp"
 #include "limits.hpp"
 #include "pool_counters.hpp"
+#include "effect_pools.hpp"
 #include "model_pools.hpp"
+#include "particle_scratch.hpp"
+#include "effect_templates.hpp"
+#include "primitives_per_effect.hpp"
 #include "actor_pools.hpp"
 #include "model_pools_rules.hpp"
 #include "online_tick.hpp"
@@ -250,6 +255,7 @@ namespace
 		// [Online] GameVersion: the string the game copies into its network code at start-up and when online
 		// opens - here, before any of its code runs.
 		game_version::install(game);
+		script_pools::require_agreement(game); // a ScriptPools-only opt-in must join the shared startup transaction
 		if (!game_version::startup_allowed()) return;
 
 		// The one startup transaction (docs/entity-capacity-phase-a-plan.md section 7): the shared gameplay
@@ -261,6 +267,8 @@ namespace
 		motion_pool::require_agreement(game);
 		char_sounds::require_agreement(game);
 		anim_enums::contribute(startup, game);
+		particle_scratch::require_agreement(game);
+		effect_pools::require_agreement(game);
 		if (game_version::needs_gameplay_agreement()) gameplay_agreement::contribute(startup, game);
 
 		new_game::install(game);
@@ -349,6 +357,7 @@ namespace
 		// them). Two code sites of the registration and the compile-time lookup, both first run by the same
 		// registration; before forced_teams, whose table carries any [Test] probes.
 		script_functions::install(game);
+		script_pools::install(game);
 		forced_teams::install(game);
 		// The shared XML1 boss dispatcher installs Master Mold ([Game] Xml1MasterMold) and the bosses [Game] Xml1Bosses
 		// lists in one transaction (one brain-dispatch detour); nothing requested writes nothing.
@@ -508,7 +517,8 @@ namespace
 		if (limits::igb_cache_requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::igb_cache_id, 1, limits::igb_cache_values(), limits::igb_cache_installed());
 		// [Engine] ModelPools: the model aggregate (0x7bf6d0) is built at the first getter call, after this.
-		model_pools::install(game);
+		// ModelPools, W3-9, W3-4, W3-7, W3-5, W3-6: installed inside limits::install (limits::install_effect_rows),
+		// after ActorSlots and before the style manager (DESIGN revision 2 section 7).
 		// A raise is rule 28 (ModelPools): a full pool refuses spawns, so co-op peers must share the capacities.
 		// Requested only: absent/off adds no entry (the released record); a requested raise that failed is unverified.
 		if (model_pools::requested())

@@ -69,6 +69,9 @@ add_library(xml2_fix SHARED
 	src/combo_heads.cpp
 	src/model_pools.cpp
 	src/pool_counters.cpp
+	src/particle_scratch.cpp
+    src/effect_templates.cpp
+    src/primitives_per_effect.cpp
 	src/online_tick.cpp
 	src/npc_power.cpp
 	src/npc_semi_auto.cpp
@@ -123,6 +126,7 @@ add_library(xml2_fix SHARED
 	src/personal_item_text.cpp
 	src/xtract.cpp
 	src/forced_teams.cpp
+	src/script_pools.cpp
 	src/script_functions.cpp
 	src/script_function_overflow.cpp
 	src/solo_mode.cpp
@@ -145,6 +149,9 @@ add_library(xml2_fix SHARED
 	src/balance.cpp
 	src/limits.cpp
 	src/address_space.cpp
+	src/effect_pools.cpp
+	src/fight_moves.cpp
+	src/power_pools.cpp
 	src/entity_capacity.cpp
 	src/actor_pools.cpp
 	src/entity_owners.cpp
@@ -599,6 +606,11 @@ target_compile_options(xml2_lockon_effects_install_test PRIVATE /UNDEBUG)
 target_link_options(xml2_lockon_effects_install_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 
 add_executable(xml2_model_pools_test test/model_pools_test.cpp)
+add_executable(xml2_effect_templates_test test/effect_templates_test.cpp src/effect_templates.cpp src/primitives_per_effect.cpp src/patch_transaction.cpp tools/union_host/union_space.asm)
+target_include_directories(xml2_effect_templates_test PRIVATE src)
+target_compile_definitions(xml2_effect_templates_test PRIVATE XML2_EFFECT_TEMPLATES_TEST)
+target_compile_options(xml2_effect_templates_test PRIVATE /UNDEBUG)
+target_link_options(xml2_effect_templates_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
 target_include_directories(xml2_model_pools_test PRIVATE src)
 target_compile_options(xml2_model_pools_test PRIVATE /UNDEBUG)
 # The pools' lifecycle executed: the retail code at its own addresses with the x2/x4 plans applied, on fake items.
@@ -679,6 +691,30 @@ target_compile_options(xml2_actor_pools_host PRIVATE /UNDEBUG)
 target_link_options(xml2_actor_pools_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
 set_target_properties(xml2_actor_pools_host PROPERTIES OUTPUT_NAME actor_pools_host)
 
+# W3-3: retail FightMove/map routines in a native union image; never starts the game.
+add_executable(xml2_fight_moves_host test/fight_moves_host.cpp src/fight_moves.cpp src/patch_transaction.cpp tools/union_host/union_space.asm)
+target_include_directories(xml2_fight_moves_host PRIVATE src)
+target_compile_options(xml2_fight_moves_host PRIVATE /UNDEBUG)
+target_link_options(xml2_fight_moves_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
+
+set(FIGHT_MOVES_BASE_AVAILABLE TRUE)
+foreach(header move_triggers_rules.hpp limits_rules.hpp ini_rules.hpp)
+    execute_process(COMMAND git show "69f5115:src/${header}" WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE FIGHT_MOVES_BASE_HEADER RESULT_VARIABLE FIGHT_MOVES_BASE_RESULT ERROR_QUIET)
+    if(FIGHT_MOVES_BASE_RESULT EQUAL 0)
+        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/baseline/${header}" "${FIGHT_MOVES_BASE_HEADER}")
+    else()
+        set(FIGHT_MOVES_BASE_AVAILABLE FALSE)
+    endif()
+endforeach()
+if(FIGHT_MOVES_BASE_AVAILABLE)
+    add_executable(xml2_fight_moves_off_test test/fight_moves_off_test.cpp)
+    target_include_directories(xml2_fight_moves_off_test PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}")
+    target_compile_options(xml2_fight_moves_off_test PRIVATE /UNDEBUG)
+else()
+    message(STATUS "FightMoves OFF differential unavailable: fetch 69f5115 to run this test (source archives and shallow builds remain supported)")
+endif()
+
 execute_process(COMMAND git show 9677892:src/npc_power_rules.hpp WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     OUTPUT_VARIABLE ACTOR_POOLS_BETA7_POWER RESULT_VARIABLE ACTOR_POOLS_BASE_RESULT)
 if(ACTOR_POOLS_BASE_RESULT EQUAL 0)
@@ -756,3 +792,28 @@ target_link_options(xml2_pool_counters_runtime_test PRIVATE /BASE:0x400000 /DYNA
 add_executable(xml2_pool_counter_observers_test test/pool_counter_observers_test.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/test_mode_fixture.asm")
 target_include_directories(xml2_pool_counter_observers_test PRIVATE src)
 target_link_options(xml2_pool_counter_observers_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+add_executable(xml2_particle_scratch_test test/particle_scratch_test.cpp src/particle_scratch.cpp
+    src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_particle_scratch_test PRIVATE src)
+target_compile_options(xml2_particle_scratch_test PRIVATE /UNDEBUG)
+target_link_options(xml2_particle_scratch_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+add_executable(xml2_effect_pools_test test/effect_pools_test.cpp src/effect_pools.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_effect_pools_test PRIVATE src)
+target_compile_options(xml2_effect_pools_test PRIVATE /UNDEBUG)
+target_link_options(xml2_effect_pools_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+# W3 shared style/event manager: retail instructions, synthetic content only.
+add_executable(xml2_style_manager_host test/style_manager_host.cpp src/patch_transaction.cpp tools/union_host/union_space.asm)
+target_include_directories(xml2_style_manager_host PRIVATE src)
+target_compile_options(xml2_style_manager_host PRIVATE /UNDEBUG)
+target_link_options(xml2_style_manager_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
+# W3-8: production transaction and isolated retail pool lifecycle fixture.
+add_executable(xml2_script_pools_test test/script_pools_test.cpp src/script_pools.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_script_pools_test PRIVATE src)
+target_compile_options(xml2_script_pools_test PRIVATE /UNDEBUG)
+target_link_options(xml2_script_pools_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+
+# W3-10/11: actual retail pool methods on synthetic canaried owners, no game entry.
+add_executable(xml2_power_pools_host test/power_pools_host.cpp src/power_pools.cpp src/patch_transaction.cpp tools/union_host/union_space.asm)
+target_include_directories(xml2_power_pools_host PRIVATE src)
+target_link_options(xml2_power_pools_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
+target_compile_options(xml2_power_pools_host PRIVATE /UNDEBUG)

@@ -34,7 +34,7 @@ with_exe = {
     "xml2_gns_transport_test", "xml2_confirmation_release_test", "xml2_objective_text_test",
     "xml2_entity_grid_test", "xml2_entity_world_test", "xml2_entity_frames_test",
     "xml2_entity_query_test", "xml2_entity_transfer_test", "xml2_gameplay_agreement_test",
-    "xml2_rank_costs_test", "xml2_multipart_install_test", "xml2_script_functions_test",
+    "xml2_rank_costs_test", "xml2_multipart_install_test", "xml2_script_functions_test", "xml2_script_pools_test",
     "xml2_death_switch_test", "xml2_world_impact_test", "xml2_stun_rule_test",
     "xml2_test_mode_test", "xml2_lockon_effects_test", "xml2_box_harm_test",
     "xml2_harm_single_chain_test", "xml2_world_backfaces_test", "xml2_harm_loop_startup_test", "xml2_reliable_receive_test",
@@ -45,7 +45,8 @@ with_exe = {
     "xml2_xml1_cling_test", "xml2_lift_rule_test", "xml2_xml1_controllers_test", "xml2_dopple_xbe_test",
     "xml2_xml1_grab_carry_test", "xml2_xml1_grab_carry_install_test", "xml2_xml1_air_carry_test", "xml2_shared_handlers_c_test", "xml2_tk_guard_test",
     "xml2_anim_enums_test", "xml2_char_sounds_test", "xml2_motion_pool_test", "xml2_resident_stats_test", "xml2_resident_payload_test",
-    "xml2_pool_counter_observers_test",
+    "xml2_pool_counter_observers_test", "xml2_particle_scratch_test", "xml2_effect_templates_test", "xml2_effect_pools_test", "xml2_fight_moves_host",
+    "xml2_power_pools_host",
 }
 # Second argument: the XBE (beta 7: the scheduler suite requires it, the weapon brain compares the original callbacks).
 with_xbe = {"xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test", "xml2_shared_handlers_test", "xml2_shared_handlers_c_test", "xml2_dopple_xbe_test", "xml2_tk_guard_test"}
@@ -60,11 +61,12 @@ for exe in sorted(b.glob("*.exe")):
     if name not in skip:
         cmds.append(([str(exe), EXE] + ([XBE] if name in with_xbe else [])) if name in with_exe else [str(exe)])
 cmds.append([str(b / "lcsave_test.exe"), "--fuzz", "2000"])
+cmds += [[str(b / "xml2_script_pools_test.exe"), EXE, mode] for mode in ("invalid", "owner", "guard", "functions")]
 vectors = Path(_need("XML2_FIX_LEGACY_VECTORS_DIR"))
 for directory in sorted(p for p in vectors.iterdir() if p.is_dir() and (p / "cases.tsv").exists()):
     cmds.append([str(b / "lcsave_durable_parity.exe"), str(directory)])
 cmds += [[str(b / "xml2_danger_room_party_install_test.exe"), mode] for mode in ("on", "off", "invalid", "base", "guard0", "guard1", "guard2", "guard3")]
-cmds += [[str(b / "xml2_lockon_effects_install_test.exe"), EXE, mode] for mode in ("on", "off", "visual", "no-effects", "bad-paths", "empty-effects", "effects-off", "both-off", "invalid", "base", "guard0", "guard1", "guard2", "guard3", "guard4", "dependency")]
+cmds += [[str(b / "xml2_lockon_effects_install_test.exe"), EXE, mode] for mode in ("on", "raised", "off", "visual", "no-effects", "bad-paths", "empty-effects", "effects-off", "both-off", "invalid", "base", "guard0", "guard1", "guard2", "guard3", "guard4", "dependency")]
 cmds += [[str(b / "xml2_danger_room_healthbars_install_test.exe"), mode] for mode in ("on", "off", "xml2", "invalid", "base", "guard0", "guard1")]
 # Install-mode suites that take the retail exe and a mode (each exits non-zero without both).
 cmds += [[str(b / "xml2_speaker_label_install_test.exe"), EXE, mode] for mode in ["rule", "on", "off"] + [f"guard{i}" for i in range(7)]]
@@ -78,6 +80,15 @@ installer_modes = {"xml2_xml1_air_carry_test"}
 cmds.append([str(b / "xml2_xml1_grab_carry_install_test.exe"), EXE, "both"])
 cmds += [[str(b / "xml2_xml1_air_carry_test.exe"), EXE, mode] for mode in ("both", "raised")]
 cmds.append([str(b / "xml2_shared_handlers_c_test.exe"), EXE, XBE, "--off-proof"])
+mode_suites = {"xml2_effect_templates_test": (
+    "primitives", "off", "stock", "invalid", "on", "base", "built", "guard", "foreign-model", "allocation", "protect",
+    "prim-on", "prim-raised", "prim-stock", "prim-invalid", "prim-built", "prim-guard", "prim-allocation", "prim-protect")}
+# Integration (w3/integrated): one set of per-mode tags; the air carry suite stays in it.
+installer_modes |= set(mode_suites)
+for name,modes in mode_suites.items():
+    cmds += [[str(b / (name + ".exe")), EXE, mode] for mode in modes]
+cmds += [[str(b / "xml2_effect_pools_test.exe"), EXE, mode] for mode in ("refuse-vector", "refuse-primitive")]
+installer_modes |= {"xml2_effect_pools_test"}
 
 if LIST_ONLY:
     # The command matrix only: for checking the runner against another gate's matrix. Everything above only reads.
@@ -102,7 +113,7 @@ for cmd in cmds:
         tag += "+xbe"
     if tag.removesuffix("+exe").endswith("_install_test") and cmd[-1] not in (EXE, XBE):
         tag += "-" + cmd[-1]
-    if Path(cmd[0]).stem in installer_modes:
+    if Path(cmd[0]).stem in installer_modes and len(cmd)>2:
         tag += "-" + cmd[-1]
     if len(cmd) == 1 and tag == "xml2_test":
         tag += "-plain"

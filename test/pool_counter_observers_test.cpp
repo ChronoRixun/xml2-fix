@@ -16,6 +16,9 @@ cpu input{},output{},callback_state{};
 __declspec(align(16)) std::array<unsigned char,512> fx_output{};
 u32 host_sp=0,stack_top=0,entry=0,path=0,callbacks=0,mode=0;
 u32 getter_calls=0;
+// A refusal edge that returns (w3/power-pools: the observer sits on the unchanged JNE; its fallthrough is XOR EAX,EAX;
+// RET): the fixture stack's return address is this island, which records path 2.
+u32 return_island=0;
 std::array<u32,4096> stack{};
 __declspec(naked) void captured(){
     __asm {
@@ -140,6 +143,7 @@ void prepare(const pool_counter_sites::observer& s,bool full,unsigned char* bloc
     if(std::string_view(s.name)=="model_component")input.esi=7;
     if(std::string_view(s.name)=="particle_systems"){input.esi=full?0:0x12345678;input.edi=address(block);}
     stack_top=address(stack.data()+2048);stack.fill(0xa5a5a5a5);
+    if(return_island)stack[2048]=return_island;
 }
 bool same(const cpu& a,const cpu& b){
     // Reserved/undefined arithmetic flag bits are not part of the architectural contract.
@@ -160,6 +164,14 @@ int main(int argc,char** argv){
         for(bool full:{false,true}){
             reset_image();prepare(s,full,block);
             destination(s.next,0,address(code+0x1000));if(s.target)destination(s.target,1,address(code+0x1100));
+            // Seeded on the branch itself (next == target): the native fallthrough ends in RET, not at s.next.
+            const auto suffix=patch_transaction::bytes_of(s.suffix);
+            return_island=0;
+            if(s.next==s.target && !suffix.empty() && suffix.back()==0xc3) {
+                auto* q=code+0x1200;q[0]=0xc7;q[1]=0x05;put(address(q)+2,address(&path));put(address(q)+6,2);
+                jump(address(q)+10,address(reinterpret_cast<void*>(&captured)));return_island=address(q);
+            }
+            stack[2048]=return_island?return_island:0xa5a5a5a5u;
             entry=s.va;callbacks=0;execute();const auto native=output;const auto native_path=path;
             const auto before=patch_transaction::bytes_of(s.hex);
             auto generated=pool_counter_observers::stub(s,address(code),address(reinterpret_cast<void*>(&callback)),i);
@@ -172,6 +184,7 @@ int main(int argc,char** argv){
             check(callbacks==(s.condition==0?1u:full?1u:0u),"callback only on refusal edge");
         }
     }
+    return_island=0;
     // Eleven real virtual-count call/suffix spans, including the displaced FLD.
     // Observe 41/300 unchanged: diagnostics must not install a scratch clamp.
     unsigned particle_ops=0;

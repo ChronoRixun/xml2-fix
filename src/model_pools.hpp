@@ -30,6 +30,7 @@ namespace model_pools
 {
     // Installed addresses/capacities, including the relocated particle free count.
     std::array<pool_counter_rules::source,10> diagnostic_sources();
+    std::uint32_t installed_target(std::uint32_t call);
 	// Reads [Engine] ModelPools and raises the pools. From DllMain, before XMen2.exe's own code runs.
 	void install(HMODULE game);
 

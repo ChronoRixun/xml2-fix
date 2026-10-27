@@ -6,6 +6,7 @@
 #include "log.hpp"
 #include "xtract.hpp"
 #include "script_functions.hpp"
+#include "script_pools.hpp"
 #include "solo_mode.hpp"
 
 #include <Windows.h>
@@ -1023,6 +1024,11 @@ namespace forced_teams
 		if (!game || reinterpret_cast<std::uintptr_t>(game) != limits_rules::image_base)
 		{
 			logger::write("forced teams: XMen2.exe isn't loaded at 0x400000 (not the game?) - %s", refused);
+			return;
+		}
+		if (!script_pools::value_makers_match())
+		{
+			logger::write("forced teams: value makers do not match the published ScriptPools layout - %s", refused);
 			return;
 		}
 		for (const auto& g : guards)

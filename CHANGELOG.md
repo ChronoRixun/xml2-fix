@@ -63,6 +63,50 @@ are newest first.
   equivalence rows (`Data/lcsave/zone-prefix.lcm`, format unchanged) and reads such a record exactly as an
   unchanged map's. New offline gate `scripts/zone_records_gate.py` (target `lcsave_zone_records`): per zone, real
   saves apply at least as many records on the candidate as on stable.
+- `[Limits] ParticleScratch=40` clamps all eleven particle operations to the
+  manager's 40 shared scratch records, preventing overruns with larger arrays.
+  Logs once per array address and exposes per-operation peaks and clamp counts
+  through `PARTICLE_SCRATCH`. Rule 60; absent/0/off keeps the released bytes and
+  agreement. [Details](docs/particle-scratch.md).
+- **Effect library capacity and primitives per effect**: `[Limits] EffectTemplates=512`
+  raises both native 220-entry tables together (221..2048); gameplay rule 55
+  `EffectFiles`. `[Limits] PrimitivesPerEffect=32` raises the ten-primitive bound
+  (11..32), retaining the original record and first ten pointers with additional
+  pointers in DLL spill storage; rule 58 `PrimitivesPerEffect`. Lock-on and
+  multipart use the published effect layout. Both shared bitmap helpers remain
+  native for other containers. Missing/stock keys preserve the existing patch
+  and agreement record. See [effect templates](docs/effect-templates.md) and
+  [primitives per effect](docs/primitives-per-effect.md).
+- **More primitive definitions and effect vectors for converted content and graphics
+  mods.** `[Limits] PrimitiveDefs=2048` (817..8192, stock 816) and
+  `EffectVectors=4096` (711..16384, stock 710) enlarge the native pools with generated
+  retail-byte ledgers and independent transactions. Native allocation, refusal,
+  reuse and teardown remain; vectors keep their 84 presets and 16-bit IDs.
+  Rules 56 and 57 advertise the installed capacities; absent/stock keys change no
+  game bytes or agreement entries. Status adds `prim defs` and `vectors` counters.
+  [Primitive definitions](docs/primitive-defs.md), [vectors](docs/effect-vectors.md).
+- **Shared fighting-style and event manager headroom** (`[Limits] FightStyles=64`, `StyleEvents=4096`; [styles](docs/fight-styles.md), [events](docs/style-events.md)). Styles accept 20..127; events accept 1065..8192, with stock 19/1064 when absent. Both keys use one guarded allocation layout and transaction. Four bitmap clear caves make styles above 32 reusable through unload/destruction. Rule 35 stays revision 1 through 32 and becomes revision 2 above 32; new rule 53 covers events. Legacy style-only byte plans through 32 and absent-key behavior are preserved. Retail native lifecycle tests include both bitmap words, full-pool refusals and event generation reuse. Live campaign/multiplayer validation remains pending.
+- **FightMove headroom and clean exhaustion refusal** (`[Limits] FightMoves=1024`,
+  333..2048; [docs](docs/fight-moves.md)). Expands the native 332-record pool using
+  a generated operand ledger, and refuses before allocation when the pool or a
+  style's 150-node map is full. Reports pool/map refusals and aliasing observations.
+  Rule 54 revision 1 records the capacity. MoveTriggers sizes and validates its
+  side arrays through the published descriptor, retaining rule 37 revision 1 and
+  its exact existing patch plan when FightMoves is absent. Native fixtures include
+  a retail allocation-333 corruption control, guarded boundaries, map preservation,
+  recycling, teardown, and high-slot trigger arrays.
+- `[Limits] ScriptPools=x1` expands statements/values/compiled scripts/running
+  contexts to 4096/8192/512/128, preserving the native globals and function tree.
+  A compiler guard refuses null values safely; bounded filename-cache metadata
+  prevents its old 120-name ring from aliasing larger compiled pools. Rule 59 covers the installed
+  profile; counters and verification are documented in [script-pools.md](docs/script-pools.md).
+
+- **Attached powerups and callback nodes:** `[Limits] AttachedPowerups=256` and
+  `VFNodes=256` enlarge the native pools from 128 and 192 to 256. Each key is
+  independent and accepts only 256; absent keys keep retail bytes and agreement.
+  Installed capacities register gameplay rules 61/62. The layout, bitmap clears,
+  free rings and diagnostic readers move together, with private copies of shared
+  helpers. [Implementation and native verification](docs/power-pools.md).
 
 - **The first game's revival price: gameplay rule 10 revision 3** (`[Game] RevivalCost = xml1`; 1.9.0-beta.1 and
   1.8.0, [docs](docs/xtraction-shop.md#revival-price)). A fallen hero costs 200 x G^2 Tech Bits, G = min(5, L / 10 +

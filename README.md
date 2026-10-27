@@ -391,6 +391,8 @@ ItemEnhancements=512 ; 376 to 1024 item enhancement records (the game's own: 375
 FightStyles=32       ; 20 to 32 fighting/power styles and movesets (the game's own: 19)
 EffectCurves=3600    ; 901 to 16384 effect curves (the game's own: 900)
 MoveTriggers=64      ; 20 to 127 triggers per move (the game's own: 19)
+AttachedPowerups=256 ; 256 attached powerups (the game's own: 128); only 256
+VFNodes=256          ; 256 virtual-function nodes (the game's own: 192); only 256
 EntityCapacity=1     ; 32 actor / 768 generic / 1024 World entity handles (the game's own: 32 / 224 / 256); needs [Save] Format=lc
 IGBCache=1024        ; 201 to 2048 IGB (model file) cache records (the game's own: 200); with no ResourceNames: 2048
 ActorPools=124       ; E4 stage 1 (1.9.0-beta.1): path, shadow and delayed-damage pools 32 -> 124 (only 124)
@@ -403,6 +405,8 @@ Nothing changes without the keys. Every slot takes a name, so `ResourceNames` is
 **Fighting and power styles.** A zone, its enemies and the party share a registry of 19 style files, including fighting styles, power styles and secondary movesets. When it fills, a later hero can lose their powers even though the files and talents are present. `FightStyles=32` gives the registry room for 32 distinct styles. The game allocates a larger manager; its tree nodes, free ring, style objects, bitmaps and following fields use the expanded layout. Every affected instruction is checked before any write. Missing or `FightStyles=19` keeps the stock limit; values outside `19..32` are logged and ignored. This limit is independent of the other three keys. The test pipe reports `styles 20/32`. See [the layout and verification notes](docs/fight-styles.md). New in 1.3.1.
 
 **Effect curves.** Every loaded effect keeps its animation curves (a particle's size, transparency, rotation over its life) in one pool of 900. A zone's effects and the effects of a four-hero party can need more, and when the pool is full the game hands out an empty curve without a word: the effects loaded last are drawn without their particles - a fire is only a faint glow that still burns, or a hero's power loses its particles. `EffectCurves=3600` gives the pool room for 3600. It moves into a block of the fix's memory that the game's own code builds and tears down; every instruction that carries the old size or the old address is checked before anything is patched, and on any difference the pool stays at 900. Curves are not written to saves. The test pipe's `status` reports `curves used/capacity`. [docs/effect-curves.md](docs/effect-curves.md) has the layout, the patch list and the measurements.
+
+**Attached powerups and callbacks.** `[Limits] AttachedPowerups=256` and `VFNodes=256` independently enlarge the native 128-attachment and 192-callback-node pools. At capacity the game silently omits a new attachment or callback. Only 256 is accepted; absent keys write nothing. Installed capacities participate in online agreement as rules 61 and 62. [Layout, diagnostics and verification](docs/power-pools.md).
 
 **Actor pools (E4 stage 1).** `[Limits] ActorPools=124` grows the three pools XMen2.exe sizes for 32 actors - the path finder's paths, the blob shadows and the delayed-damage records - to 124, in one checked transaction over 367 audited retail operands with five null-team guards; actor, controller and team counts and the save layout stay the game's own. Only 124 is accepted. Online it is requested-only gameplay rule 44 (ActorAI, `{32,4,124|124<<16,1}`); absent writes nothing. The test pipe's `ACTOR_POOLS` reports each pool's peak and how often the stock 32 would have refused. It has not been played yet; Legends Classic 0.4.1-beta.1 does not write it by default ([details](docs/actor-pools.md)).
 
@@ -772,6 +776,8 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `ItemEnhancements` | *(the game's own, 375)* | `376` to `1024` item enhancement records (`Data/items` stops loading past the pool) |
 | `FightStyles` | *(the game's own, 19)* | `20` to `32` distinct fighting/power styles and movesets |
 | `EffectCurves` | *(the game's own, 900)* | `901` to `16384` animation curves of loaded effects (past the pool, effects lose their particles) |
+| `AttachedPowerups` | *(the game's own, 128)* | `256` attached powerups; only 256 ([details](docs/power-pools.md)) |
+| `VFNodes` | *(the game's own, 192)* | `256` virtual-function nodes; only 256 ([details](docs/power-pools.md)) |
 | `MoveTriggers` | *(the game's own, 19)* | `20` to `127` triggers per move (sounds, flashes and other events of a long attack) |
 | `EntityCapacity` | `0` | `1`: 32 actor / 768 generic / 1024 World entity handles instead of 32 / 224 / 256; needs `[Save] Format=lc` ([details](docs/entity-capacity.md)) |
 | `ScriptFunctions` | *(1024 with `[Game] ForcedTeams`, otherwise the game's own, 320)* | `321` to `4096` script function names; `320` keeps the game's own limit ([details](docs/script-functions.md)) |

@@ -1,11 +1,25 @@
 # Test state API (schema 1)
 
+`PARTICLE_SCRATCH` returns the [particle scratch](particle-scratch.md) counters:
+`installed`, `requested`, `capacity`, `logged_arrays`, and an `operations` array
+with `va`, `peak` (unclamped demand), and `clamps` for each of the eleven methods.
+Counters are session totals and are collected when `ParticleScratch=40` installs.
+
+`script_pools` returns W3-8's installed/requested state and four counter objects
+(`statements`, `values`, `scripts`, `contexts`): `cap`, `live`, `peak_zone`,
+`peak_session`, `refused`, `refused_zone`. `null_values` counts compiler null
+refusals; `refusal_observers=false` means OFF occupancy sampling only.
+`cached_scripts` reports the separate compiled filename-cache counters.
+See [script-pools.md](script-pools.md) for sampling and integration limits.
+
 With `[Test] InputPipe=1`, the existing pipe accepts `state`, `objectives`, and
 `events` (no arguments, case insensitive). Each returns one JSON line, without
 an `ok` prefix. Existing input commands retain their protocol. With InputPipe=0
-no sampling runs, no pipe is opened, and no new engine hooks are installed.
+no keyboard state sampling runs, no pipe is opened, and no new engine hooks are
+installed. ScriptPools' separate read-only sampling uses an existing Present
+hook independently of InputPipe.
 
-Snapshots run on the game's keyboard thread at most ten times per second.
+State/objective/event snapshots run on the game's keyboard thread at most ten times per second.
 `sampled_ms` is Windows monotonic uptime. Clients must detect an unchanged sample
 stamp: a responding pipe does not prove that the game thread is running.
 An unsupported executable returns an explicit JSON error. Unreadable individual

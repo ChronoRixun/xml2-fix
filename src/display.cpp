@@ -1,5 +1,6 @@
 #include "display.hpp"
 #include "pool_counters.hpp"
+#include "script_pools.hpp"
 #include "d3d8_min.hpp"
 #include "display_rules.hpp"
 #include "display_settings.hpp"
@@ -406,6 +407,7 @@ namespace display
 
 		HRESULT STDMETHODCALLTYPE hooked_present(void* self, const RECT* source, const RECT* destination, const HWND override, const void* dirty)
 		{
+			script_pools::sample(); // guarded D0 snapshot on the game's render thread
 			if (frame_hook)
 			{
 				frame_hook(self); // the back buffer holds the finished frame

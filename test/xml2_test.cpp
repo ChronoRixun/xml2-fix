@@ -2284,7 +2284,7 @@ namespace
 			const auto c = decide(std::nullopt, std::nullopt, std::nullopt, text);
 			CHECK(c.fight_styles == *parse_count(text) && c.notes.empty());
 		}
-		for (const auto bad : {"18", "33", "127", "0", "-1", "0x20", "32x", ""})
+		for (const auto bad : {"18", "128", "0", "-1", "0x20", "32x", ""})
 		{
 			const auto c = decide(std::nullopt, std::nullopt, std::nullopt, bad);
 			CHECK(c.fight_styles == 19 && c.notes.size() == 1 && c.notes[0].find("stays at 19") != std::string::npos);
@@ -4211,7 +4211,9 @@ namespace
 		bool guards_ok = true;
 		std::set<DWORD> addresses;
 		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
-		CHECK(guards_ok && guards.size() == 120);
+		// The two value makers are checked through ScriptPools' published
+		// guards; its native fixture tests their retail and relocated bytes.
+		CHECK(guards_ok && guards.size() == 118);
 
 		// Change Team in the Xtraction menus: greyed out only with ForcedTeams=1 and the flag read as set.
 		CHECK(change_team_disabled(true, 1) && !change_team_disabled(true, 0) && !change_team_disabled(true, std::nullopt) && !change_team_disabled(false, 1) &&
@@ -5626,7 +5628,7 @@ namespace
 		CHECK(ok(status));
 		CHECK(status.find("; fps 0.0; frame rate the game's own 60 fps cap") != std::string::npos); // no frames drawn here, no [Display] FrameRate
 		CHECK(status.find("; actors -; names -; motions -; igb -") != std::string::npos);            // not XMen2.exe: no engine tables to count
-		CHECK(status.find("; styles -; curves -") != std::string::npos);
+		CHECK(status.find("; styles -; events -; style_refused -; event_refused -; curves -") != std::string::npos);
 		CHECK(status.find("; balance off") != std::string::npos);                                   // [Balance] is set, but nothing was patched here
 		CHECK(refused(ask(pipe, "frob")));
 		CHECK(refused(ask(pipe, "tap NOSUCHKEY")));

@@ -1,6 +1,7 @@
 # Scoped exceptions for the builder content guard used on this C++ repository.
 # Each entry describes original code/art or invented test data; no game assets are accepted.
 DISASM test/pool_counter_observers_test.cpp # Authored synthetic CPU-state entry/capture probes and invented ABI fixture bodies; retail fragments are read from the owned executable at runtime, with no game listing or decompiled body embedded.
+DISASM test/particle_scratch_test.cpp # Authored synthetic caller allocates an argument area and restores its own stack to test eleven thiscall bridges; no game instructions or disassembly listing is embedded.
 DISASM src/anim_enums.cpp # Authored native-map miss bridge preserves the retail wrapper stack and calls our DLL extension lookup; only the short displaced comparison is replayed, no game listing or decompiled body.
 DISASM test/anim_enums_test.cpp # Authored synthetic caller frames execute owned retail routines read from disk at runtime; inline assembler contains only our ABI probes, no game instruction listing.
 DISASM src/input_worker.cpp # Authored register-preserving lifetime-accounting bridges; only the short guarded entry prologue is replayed, with no game listing or decompiled body.
@@ -53,6 +54,7 @@ LONG_ID  test/xml2_test.cpp  # Public Discord application identifiers and invent
 GAME_TEXT_ATTR  src/save_format_rules.hpp  # Original save-status UI labels concatenated with a description variable, not decoded game text.
 LONG_ID  src/discord_rules.hpp  # Public project Discord application identifiers documented by the integration; not personal ids.
 DISASM  test/save_capture_bridge_test.cpp  # Authored inline assembly that enters the emitted capture bridges and records the landing address; not game disassembly.
+DISASM  test/script_pools_test.cpp  # Authored inline assembly adapter for isolated constructor segments and invented native fixtures; no disassembly listing.
 DISASM  src/entity_transfer.cpp  # Authored C++ inline assembly bridge (the acknowledgement call sequence, described in prose above it); not a game disassembly listing.
 DISASM  src/mold_beam.cpp  # Authored register-preserving x86 callback bridge; its sole replay is a short byte-guarded stack-address instruction. No game listing or decompiled body.
 DISASM  src/xml1_bosses.cpp  # Authored register-preserving dispatcher bridge; replays only two short guarded state-selection instructions, with no copied game listing or decompiled body.
@@ -116,3 +118,4 @@ DISASM  test/resident_stats_test.cpp  # Authored register and stack capture prob
 
 DISASM  src/tk_guard_bridges.hpp  # Authored rule-46 TK/guard bridges: two resume trampolines that repeat only the displaced prologue before jumping back into the owner-loaded routine, and an argument-forwarding filter thunk; no game body or instruction listing.
 DISASM  test/tk_guard_test.cpp  # Authored fixture stubs (synthetic acquisition and grab tails) and x87 modulus/truncation helpers standing in for the runtime calls of owner-loaded XML1 code; no embedded game code.
+DISASM  test/effect_templates_test.cpp  # Authored register/flag capture driver for our generated spill caves; the retail image is read from the owner's executable at runtime, never embedded game content.
