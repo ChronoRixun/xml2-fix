@@ -199,6 +199,9 @@ namespace ini
 namespace iat_hook { void* hook(HMODULE, const char*, const char*, WORD, void*) { assert(false); return nullptr; } }
 namespace frame_rate { void on_present() { ++paced; } void retarget(const frame_rate_rules::cap&, bool) {} bool paces() { return false; } }
 namespace pool_counters { void sample() { ++sampled; } bool enabled() { return false; } }
+// 0.4.2 tree: display.cpp's Present also samples W3's ScriptPools and the opt-in E4 observer; both are off in this host.
+namespace script_pools { void sample() {} }
+namespace e4_observe { void sample() {} bool enabled() { return false; } }
 namespace options_menu { void install(HMODULE) {} bool installed() { return false; } }
 namespace logger
 {

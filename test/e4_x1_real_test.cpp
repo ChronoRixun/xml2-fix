@@ -22,6 +22,10 @@ namespace solo_mode {bool installed(){return false;}void script_request(void*,bo
 namespace join_in_progress {void note_party_change(){}}
 namespace xtract {int set_services(int){return 0;}}
 namespace script_functions {int capacity(){return 320;}std::span<const script_functions_rules::func_entry> probes(){return {};}}
+// 0.4.2 tree: forced_teams.cpp also asks W2's save layout for its guard bytes and W3's ScriptPools for the value makers;
+// neither is installed in this fixture, so both answer as their inactive modules do (retail bytes, stock layout).
+namespace save_limits {std::optional<std::string> expected(unsigned,std::string_view hex){return std::string(hex);}}
+namespace script_pools {bool value_makers_match(){return true;}}
 namespace {
 using u32=std::uint32_t;
 u32 addr(const void* p){return static_cast<u32>(reinterpret_cast<std::uintptr_t>(p));}

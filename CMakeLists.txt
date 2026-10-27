@@ -442,6 +442,10 @@ enable_language(ASM_MASM)
 add_library(e4_unwind_asm OBJECT src/e4_unwind.asm)
 target_compile_options(e4_unwind_asm PRIVATE /safeseh)
 target_sources(xml2_fix PRIVATE $<TARGET_OBJECTS:e4_unwind_asm>)
+# The opt-in startup-fault DLL copied xml2_fix's SOURCES above, before this object was added: it needs it too.
+if(XML2_SAVE_STARTUP_FAULT_TEST)
+ target_sources(xml2_save_startup_faults PRIVATE $<TARGET_OBJECTS:e4_unwind_asm>)
+endif()
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/entity_frames_fixture.asm"
 ".386
 .MODEL FLAT
