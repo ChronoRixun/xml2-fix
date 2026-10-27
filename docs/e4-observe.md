@@ -62,9 +62,28 @@ fail-stops when enabled. No SEH record is propagated using a bare C++ `throw;`.
 
 Accounting keeps published, constructing, destroying, orphaned and reserved/pending
 counts separate, with peaks. Quiescent checks are suppressed during an open factory,
-CAI reset or zone loading. Active arena actors must hold resolving controller tokens;
-ownerless published controllers become orphaned observations. These are diagnostics,
+CAI session reset or zone loading. Actor allocation and AI-controller ownership
+are different counts: controllerless actors with zero controller tokens are
+allowed. A nonzero actor token must resolve to its published controller and
+owner; the controller live count must match the tracked states, and the actor
+bitmap population must match its own native live count (+0x1099c). Unreadable
+probes skip accounting rather than converting failed reads into zero counts.
+Ownerless published controllers become orphaned observations. These are diagnostics,
 not the later core's native reservation/backstop implementation.
+
+The prior `actors != arena_actors` check reported every frame with four
+controllerless actors. `slot=96` is the no-specific-slot sentinel, not a
+96-slot native capacity check. Identical accounting mismatches now emit at most
+once per 120 client steps per source; changed mismatches and recurrence after
+recovery report immediately. `accounting_suppressed` counts omitted repeats.
+
+The six live illegal transitions attributed to `0x523977` are explained by a
+tracking gap: the observer erased controller records when `0x523660` returned.
+That routine resets session/team metadata, without calling the controller-arena
+initializer `0x5238b0` or destroying the live controllers. Later ordinary
+`0x523960` releases (call return `0x523977`) then saw FREE in the observer.
+Session reset now retains controller lifetimes. No caller whitelist was added;
+invalid release state and borrow violations still report.
 
 O2 records caller, entity, descriptor, pre-allocation occupancy, actual return and
 accepted/unsuitable/pending/full classification. Unordered/NaN delay follows the retail

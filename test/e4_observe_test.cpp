@@ -61,6 +61,13 @@ int main(){
     check(escaped.checkpoint(0x1000)&&escaped.tally().orphaned==1,"T23 escaped construction becomes a separate orphan count");
     monitor transient;transient.take(0,128,0);
     check(transient.account(1,32,0,false)&&!transient.account(1,32,0,true),"T23 constructing is legal only within a non-quiescent interval");
+    monitor repeats;
+    for(unsigned n=0;n<6000;++n){repeats.step=n;repeats.account(1,32,0,true);}
+    check(repeats.counts[unsigned(event_kind::accounting)]==50&&repeats.accounting_suppressed==5950,"accounting repeats emit once per 120 steps, not every frame");
+    repeats.account(0,32,0,true);repeats.account(1,32,0,true);
+    check(repeats.counts[unsigned(event_kind::accounting)]==51,"accounting recovery re-arms an immediate mismatch report");
+    repeats.account(2,32,0,true);
+    check(repeats.counts[unsigned(event_kind::accounting)]==52,"changed accounting mismatch reports immediately");
     const auto nan=std::numeric_limits<float>::quiet_NaN();
     check(classify(nan,0,0,0,0,124)==damage_reason::unsuitable,"T24 unordered delay is unsuitable");
     check(classify(nan,0,1,0,0,124)==damage_reason::accepted,"T24 flag bit overrides unordered delay");

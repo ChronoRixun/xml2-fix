@@ -511,6 +511,69 @@ void __fastcall schedule(void*,void*,void*,u32){}
 void* __fastcall copy_damage(void* p,void*,void* src){std::memcpy(p,src,0x6c);return p;}
 void* __cdecl payload(void* p){std::memset(p,0,0x6c);return p;}
 void __cdecl noop(unsigned,unsigned){}
+unsigned count_kind(const std::string& text,unsigned kind){
+ auto pos=text.find("\"counts\":[")+10;
+ for(unsigned n=0;n<kind;++n)pos=text.find(',',pos)+1;
+ return std::strtoul(text.c_str()+pos,nullptr,10);
+}
+void accounting_tests(){
+ seed();e4_observe::configure();e4_observe::install(reinterpret_cast<HMODULE>(0x400000));
+ const auto& d=actor_ai::installed();
+ auto* arena=static_cast<unsigned char*>(VirtualAlloc(nullptr,0x11000,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE));
+ check(arena!=nullptr,"accounting arena allocated");if(!arena)return;
+ put(entity_capacity_layout::allocator_pointer_cell,address(arena));
+ put(d.cai_object+0xc4a0,31);
+ put(address(arena)+0x10998,0xffffffff);put(address(arena)+0x1099c,32);
+ put(d.primary_base+0xc418,28);
+ std::array<u32,32> args{};args[0]=0x523977;
+ std::array<u32,9> r{};r[3]=address(args.data())-4;
+ const auto actor=address(arena)+8;
+ for(unsigned i=0;i<28;++i){
+  const auto owner=actor+i*0x848,token=32+i;
+  put(d.primary_base+0xc41c+4*i,token);put(owner+0x7dc,token);
+  e4_observe::test_emit(0x423a90,false,r.data());
+  r[0]=i;r[1]=address(arena)+4;e4_observe::test_emit(0x461674,false,r.data());
+  r[6]=owner;e4_observe::test_emit(0x423ad0,false,r.data());
+  r[7]=i;e4_observe::test_emit(0x522a1f,false,r.data());
+  r[7]=token;r[1]=owner;e4_observe::test_emit(0x42394d,true,r.data());
+  e4_observe::test_emit(0x423ad0,true,r.data());e4_observe::test_emit(0x423ade,false,r.data());
+ }
+ *reinterpret_cast<unsigned char*>(0x72a798)=0;
+ const auto sample=[&]{e4_observe::test_emit(0x401d70,false,r.data());};
+ const auto before=e4_observe::json();
+ std::vector<unsigned char> native_before(fixture_space,fixture_space+0x700000);
+ std::vector<unsigned char> arena_before(arena,arena+0x11000);
+ for(unsigned n=0;n<6000;++n)sample();
+ check(count_kind(e4_observe::json(),7)==0,"6000 frames: 32 allocated actors, 28 AI controllers and four controllerless actors cause zero accounting events");
+ check(!std::memcmp(native_before.data(),fixture_space,native_before.size())&&!std::memcmp(arena_before.data(),arena,arena_before.size()),"accounting is read-only across the native image and actor arena");
+ // The session reset does not reset the controller pool. Later releases must
+ // retain their earlier publication, regardless of the release caller.
+ e4_observe::test_emit(0x523660,false,r.data());
+ for(const auto& site:e4_observe_sites::sites)if(site.type==e4_observe_sites::kind::reset_done){e4_observe::test_emit(site.point,false,r.data());break;}
+ for(unsigned i=0;i<28;++i){
+  args[1]=i;e4_observe::test_emit(0x522ed0,false,r.data());
+  r[0]=i;r[7]=0xdeadbeef;e4_observe::test_emit(0x522f57,false,r.data());
+  put(actor+i*0x848+0x7dc,0);
+ }
+ check(count_kind(e4_observe::json(),3)==count_kind(before,3),"publication survives session reset; release caller 523977 is valid without a whitelist");
+ // A real pool-count mismatch is still observed, and repeat traffic is bounded.
+ put(d.primary_base+0xc418,1);put(address(arena)+0x10998,0);put(address(arena)+0x1099c,0);
+ const auto previous=count_kind(e4_observe::json(),7);
+ for(unsigned n=0;n<6000;++n)sample();
+ check(count_kind(e4_observe::json(),7)-previous==50,"6000 frames of a real unchanged mismatch emit 50 reports");
+ put(d.primary_base+0xc418,0);sample();
+ const auto clean=count_kind(e4_observe::json(),7);
+ put(d.primary_base+0xc418,1);sample();
+ check(count_kind(e4_observe::json(),7)==clean+1,"recovered pool accounting re-arms immediately");
+ put(d.primary_base+0xc418,0);put(address(arena)+0x10998,1);put(address(arena)+0x1099c,1);put(actor+0x7dc,0x00ffffff);sample();
+ check(count_kind(e4_observe::json(),7)==clean+2,"non-null stale/out-of-range controller tokens remain genuine mismatches");
+ const auto before_fault=count_kind(e4_observe::json(),7);
+ put(entity_capacity_layout::allocator_pointer_cell,1);sample();
+ const auto faulted=e4_observe::json();
+ check(count_kind(faulted,7)==before_fault&&faulted.find("\"probe_faults\":0")==std::string::npos,"unreadable accounting probes skip the frame instead of inventing a mismatch");
+ put(entity_capacity_layout::allocator_pointer_cell,0);
+ VirtualFree(arena,0,MEM_RELEASE);
+}
 void damage_tests(unsigned char* code){
     seed();e4_observe::configure();
     auto* block=static_cast<unsigned char*>(VirtualAlloc(nullptr,0x10000,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE));
@@ -543,10 +606,18 @@ void damage_tests(unsigned char* code){
 }
 int main(int argc,char** argv){
     std::setbuf(stdout,nullptr);SetUnhandledExceptionFilter([](EXCEPTION_POINTERS* p)->LONG{std::printf("HOST EXCEPTION code=%08lx at=%p ESP=%08lx EBP=%08lx\n",p->ExceptionRecord->ExceptionCode,p->ExceptionRecord->ExceptionAddress,p->ContextRecord->Esp,p->ContextRecord->Ebp);return EXCEPTION_EXECUTE_HANDLER;});SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
-    if((argc!=2&&argc!=5)||!load(argv[1]))return 2;
+    if((argc!=2&&argc!=3&&argc!=5)||!load(argv[1]))return 2;
     DWORD old=0;VirtualProtect(fixture_space,sizeof fixture_space,PAGE_EXECUTE_READWRITE,&old);
+    if(argc==3){accounting_tests();std::printf("E4 accounting host: %u checks, %u failures\n",checks,failures);return failures?1:0;}
     if(argc==5)return escape_child(std::strtoul(argv[3],nullptr,10),std::strtoul(argv[4],nullptr,10));
     auto* code=static_cast<unsigned char*>(VirtualAlloc(nullptr,0x10000,MEM_RESERVE|MEM_COMMIT,PAGE_EXECUTE_READWRITE));if(!code)return 2;
     std::puts("stub tests");stub_tests(code);boundary_cpu_tests(code);std::puts("plan tests");plan_tests(code);std::puts("damage tests");damage_tests(code);provenance_tests();x87_provenance_tests();overflow_tests();team_resolver_tests();thread_tests();identity_churn_tests();construction_tests(argv[0],argv[1]);
+    char cmd[4096]{};std::snprintf(cmd,sizeof(cmd),"\"%s\" \"%s\" accounting",argv[0],argv[1]);
+    STARTUPINFOA si{};si.cb=sizeof(si);PROCESS_INFORMATION pi{};
+    if(CreateProcessA(nullptr,cmd,nullptr,nullptr,FALSE,CREATE_NO_WINDOW,nullptr,nullptr,&si,&pi)){
+        const auto wait=WaitForSingleObject(pi.hProcess,30000);if(wait!=WAIT_OBJECT_0)TerminateProcess(pi.hProcess,86);
+        DWORD result=1;GetExitCodeProcess(pi.hProcess,&result);CloseHandle(pi.hThread);CloseHandle(pi.hProcess);
+        check(result==0,"dedicated production accounting/reset host fixtures pass");
+    }else check(false,"accounting child created");
     std::printf("E4 native host: %u checks, %u failures\n",checks,failures);return failures?1:0;
 }

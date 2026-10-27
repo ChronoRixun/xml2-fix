@@ -27,7 +27,7 @@ bool __fastcall digest_affordable(void*,void*,int){return digest_afford;}
 int __fastcall digest_selected_row(void*,void*){return digest_selected;}
 int __fastcall digest_visible_count(void*,void*){return static_cast<int>(digest_visible.size());}
 int __fastcall digest_row_index(void*,void*,int i){return digest_visible.at(i);}
-void* __cdecl digest_find(unsigned,int,unsigned,unsigned,int){return digest_widget;}
+void* __cdecl digest_find(void* focus,int,unsigned,unsigned,int){return focus==digest_widget?digest_widget:nullptr;}
 void __fastcall digest_navigation(void*,void*,unsigned char* directions,void*){std::memset(directions,0,3);}
 void __fastcall digest_switch(void* self,void*,int tab){put(self,0x18d8,tab);}
 bool __fastcall digest_base_open(void*,void*,void*,void*){return true;}
@@ -59,17 +59,17 @@ void digest_checks(){
  jump(0x672161,&cookie);jump(0x5d1fa0,&no_ui);jump(0x5d35d0,&digest_switch);jump(0x5d22f0,&digest_credit);jump(0x5a96a0,&feedback);
  put(at(0x688314),0x24,addr(&digest_money));put(at(0x688314),0x104,addr(&change_state));
  std::array<void*,32> self_vt{};self_vt[0x40/4]=reinterpret_cast<void*>(&bag_ui_refresh);put(price_shop.data(),0,self_vt.data());
- auto unique=allocate(first_economy,3);list_add(unique,3);price_row row;row.item=unique;put(at(0x8a6348),0,row);put(at(0x8a6b1c),0,1u);put(price_shop.data(),0x324,1u);put(price_shop.data(),0x18d8,0);
+ auto unique=allocate(first_economy,3);list_add(unique,3);price_row row;row.item=unique;put(at(0x8a6348),0,row);put(at(0x8a6b1c),0,1u);put(price_shop.data(),0x324,static_cast<void*>(digest_widget));put(price_shop.data(),0x18d8,0);
  auto update=native<void(__fastcall*)(void*,void*)>(0x5d3ba0);
  digest_blocked=true;update(price_shop.data(),nullptr);
  check(digest::pipe("events").find("\"last\":0")!=std::string::npos,"disabled observer forwards real update/gate without evidence or snapshots");
  digest::enable();digest_blocked=false;update(price_shop.data(),nullptr);
  auto lines=digest::pipe("events");
- check(lines.find("econ seq=1 player=1 gate=0 tab=0 list=item0000 row=0:item0160 owner=-1 result=buy money=9863")!=std::string::npos,"native 0x5d4a00 action player, gate, row, debit and successful purchase captured");
+ check(lines.find("econ seq=1 player=1 gate=0 tab=0 list=buy row=0:item0160 owner=-1 result=buy money=9863")!=std::string::npos,"native 0x5d4a00 action player, gate, row, debit and successful purchase captured");
  check(obtained(first_economy)&&read<unsigned char>(instance(unique),0x2e)==2,"observer preserves actual obtained/state bridge");
  check(lines.find("error-")==std::string::npos&&lines.find(" rng=0")!=std::string::npos,"snapshot resolves all high definition indices and reads native draw counter without drawing");
  row.owner=price_hero.data();put(at(0x8a6348),0,row);put(price_shop.data(),0x18d8,1);gear_vt[0x64/4]=reinterpret_cast<void*>(&remove_equipped);put(price_hero.data(),0xc0,gear_object);update(price_shop.data(),nullptr);
- lines=digest::pipe("events 1");check(lines.find("player=1 gate=0 tab=1 list=item0000 row=0:item0160 owner=0 result=sell money=9908")!=std::string::npos,"equipped owner normalized before native removal and credited sale");
+ lines=digest::pipe("events 1");check(lines.find("player=1 gate=0 tab=1 list=sell row=0:item0160 owner=0 result=sell money=9908")!=std::string::npos,"equipped owner normalized before native removal and credited sale");
  check(obtained(first_economy)&&removals==1,"equipped sale retains obtained and removes equipment exactly once");
  row.owner=nullptr;put(at(0x8a6348),0,row);update(price_shop.data(),nullptr);check(!obtained(first_economy),"ordinary unique sale clears obtained under observation");
  put(price_shop.data(),0x18e8,static_cast<unsigned char>(1));update(price_shop.data(),nullptr);
@@ -94,7 +94,7 @@ void digest_checks(){
  bag_cw=cw;bag_mxcsr=_mm_getcsr();
  row={};row.type=1;put(at(0x8a6348),0,row);put(price_shop.data(),0x18d8,0);highest_level=1;
  update(price_shop.data(),nullptr);
- check(digest::pipe("events 6").find("tab=0 list=item0000 row=0:bag owner=-1 result=bag-equipment money=7953")!=std::string::npos&&read<int>(price_shop.data(),0x18d8)==1,"real bag reward emits one outer event after debit, preserving pre-switch row/tab");
+ check(digest::pipe("events 6").find("tab=0 list=buy row=0:bag owner=-1 result=bag-equipment money=7953")!=std::string::npos&&read<int>(price_shop.data(),0x18d8)==1,"real bag reward emits one outer event after debit, preserving pre-switch row/tab");
  highest_level=40;put(price_shop.data(),0x18d8,0);update(price_shop.data(),nullptr);
  check(digest::pipe("events 7").find("result=bag-empty money=-42047")!=std::string::npos,"real empty bag result captured, single native charge and no refund");
  bag_courses.push_back({1,1,0});put(bag_course_memory[0].data(),0,static_cast<unsigned char>(1));put(bag_course_memory[0].data(),0x4c,static_cast<unsigned short>(1));put(bag_course_memory[0].data(),0x44,4u);
@@ -103,20 +103,69 @@ void digest_checks(){
  digest_alternate=true;digest_player=0;digest_afford=false;update(price_shop.data(),nullptr);
  check(digest::pipe("events 9").find("econ seq=10 player=0 gate=0")!=std::string::npos,"alternate native 0x5d4b20 route captures its actual local action player");
  row.type=0;row.item=unique;row.owner=price_game.data();put(at(0x8a6348),0,row);update(price_shop.data(),nullptr);
- check(digest::pipe("events 10").find("result=error-owner-identity")!=std::string::npos,"unresolvable captured owner invalidates evidence instead of hashing a process pointer");
+ check(digest::pipe("events").find("\"last\":10")!=std::string::npos,"unresolvable captured owner skips evidence instead of hashing a process pointer");
  put(price_shop.data(),0x18e8,static_cast<unsigned char>(1));row.owner=nullptr;put(at(0x8a6348),0,row);
  auto second=allocate(first_economy+1,2),third=allocate(first_economy+2,2);
  price_row r1;r1.item=second;price_row r2;r2.item=third;put(at(0x8a6348),20,r1);put(at(0x8a6348),40,r2);put(at(0x8a6b1c),0,3u);
  auto reopen=[&]{native<bool(__fastcall*)(void*,void*,void*,void*)>(0x5d39c0)(price_shop.data(),nullptr,nullptr,nullptr);};
  auto stock_hash_after=[&](unsigned after){auto text=digest::pipe("events "+std::to_string(after));const auto p=text.find(" stock=");return p==std::string::npos?std::string():text.substr(p+7,16);};
- digest_visible={0,1,2};reopen();const auto all=stock_hash_after(11);
- digest_visible={0,2,1};reopen();check(all!=stock_hash_after(12),"nonselected visible row permutation changes stock hash");
- digest_visible={0,1};reopen();check(all!=stock_hash_after(13),"visible count changes stock hash with unchanged global rows and selection");
- r1.item={};put(at(0x8a6348),20,r1);reopen();check(digest::pipe("events 14").find("result=error-row-identity")!=std::string::npos,"null equipment descriptor cannot become accepted type0 identity");
- r1.item=second;r1.item.handle^=0x80000000;put(at(0x8a6348),20,r1);reopen();check(digest::pipe("events 15").find("result=error-row-identity")!=std::string::npos,"invalid equipment handle cannot collapse into a default row identity");
+ digest_visible={0,1,2};reopen();const auto all=stock_hash_after(10);
+ digest_visible={0,2,1};reopen();check(all!=stock_hash_after(11),"nonselected visible row permutation changes stock hash");
+ digest_visible={0,1};reopen();check(all!=stock_hash_after(12),"visible count changes stock hash with unchanged global rows and selection");
+ r1.item={};put(at(0x8a6348),20,r1);reopen();check(digest::pipe("shop").find("row-identity")!=std::string::npos,"null equipment descriptor cannot become accepted type0 identity");
+ r1.item=second;r1.item.handle^=0x80000000;put(at(0x8a6348),20,r1);reopen();check(digest::pipe("shop").find("row-identity")!=std::string::npos,"invalid equipment handle cannot collapse into a default row identity");
  r1.item=second;put(at(0x8a6348),20,r1);
- r1={};r1.type=2;r1.detail=0x11223300;put(at(0x8a6348),20,r1);reopen();const auto course_padding=stock_hash_after(16);
- r1.detail=0x88776600;put(at(0x8a6348),20,r1);reopen();check(course_padding==stock_hash_after(17),"course detail hashes only native byte index, never three stack padding bytes");
+ r1={};r1.type=2;r1.detail=0x11223300;put(at(0x8a6348),20,r1);reopen();const auto course_padding=stock_hash_after(13);
+ r1.detail=0x88776600;put(at(0x8a6348),20,r1);reopen();check(course_padding==stock_hash_after(14),"course detail hashes only native byte index, never three stack padding bytes");
  auto bad=allocate(first_economy+3,3);list_add(bad,3);put(instance(bad),4,static_cast<unsigned char*>(definition(first_economy+3))+1);reopen();
- check(digest::pipe("events 18").find("result=error-stock-identity")!=std::string::npos,"unresolvable stock definition invalidates evidence even outside the visible list");
+ check(digest::pipe("shop").find("stock-identity")!=std::string::npos,"unresolvable stock definition invalidates evidence even outside the visible list");
+ // Reproduce the real first-open shape: sell tab, no inventory, zero money,
+ // and a focused widget POINTER. The old fixture's integer 1 concealed the AV.
+ put(instance(bad),4,definition(first_economy+3));
+ put(at(0x8a6b1c),0,0u);digest_visible.clear();digest_selected=-1;digest_balance=0;
+ put(price_shop.data(),0x18d8,1);put(price_shop.data(),0x18e8,static_cast<unsigned char>(0));
+ put(price_shop.data(),0x324,static_cast<void*>(digest_widget));
+ const auto before_money=digest_balance;const auto before_state=last_state;
+ const auto before_manager=manager;const auto before_draws=read<unsigned>(at(0x7ad8b4));
+ digest::test_observe(price_shop.data());
+ check(digest::pipe("shop").find("\"list\":\"sell\"")!=std::string::npos&&digest::pipe("shop").find("\"rows\":[]")!=std::string::npos,
+       "real focused widget, sell-first empty open and zero money produce a complete snapshot without AV");
+ check(digest::pipe("events").find("result=open money=0")!=std::string::npos,"empty zero-money open remains valid diagnostic evidence");
+ const auto complete=digest::pipe("events");
+ const auto skip=[&](const char* reason){
+  digest::test_observe(price_shop.data());
+  check(digest::pipe("events")==complete&&digest::pipe("shop").find(reason)!=std::string::npos,"malformed snapshot skips frame without publishing partial evidence");
+ };
+ const auto id=read<unsigned>(definition(0),8);
+ put(definition(0),8,0u);skip("definition-name");
+ put(definition(0),8,0x00ffffffu);skip("definition-name");
+ put(definition(0),8,0x2000u);skip("definition-name");put(definition(0),8,id);
+ const auto off=read<unsigned>(names.data(),4+id*4);
+ put(names.data(),4+id*4,0xffffffffu);skip("definition-name");put(names.data(),4+id*4,off);
+ const auto used=read<unsigned>(names.data(),0x8004);
+ put(names.data(),0x8004,1u);skip("definition-name");
+ put(names.data(),0x8004,0x14401u);skip("definition-name");put(names.data(),0x8004,used);
+ const auto tail=names[0x8008+used-1];names[0x8008+used-1]='x';
+ put(names.data(),4+id*4,used-1);skip("definition-name");
+ names[0x8008+used-1]=tail;put(names.data(),4+id*4,off);
+ put(price_shop.data(),0x324,static_cast<void*>(nullptr));skip("no-focus");
+ put(price_shop.data(),0x324,static_cast<void*>(digest_widget));
+ digest::test_observe(nullptr);check(digest::pipe("events")==complete&&digest::pipe("shop").find("null-shop")!=std::string::npos,"null shop is skipped without dereference");
+ digest::test_observe(at(1));check(digest::pipe("events")==complete&&digest::pipe("shop").find("snapshot-fault")!=std::string::npos,"unreadable shop is fault-contained");
+ check(digest::test_fault_cleanup(),"SEH containment unwinds diagnostic C++ owners instead of leaking captured resources");
+ check(manager==before_manager&&digest_balance==before_money&&last_state==before_state&&read<unsigned>(at(0x7ad8b4))==before_draws,
+       "empty/malformed observations preserve every manager byte, currency, state calls and native RNG counter");
+
+ // Exercise the per-action describe/name path as well as full capture. The
+ // native affordability refusal must still run with no diagnostic event.
+ row={};row.item=unique;put(at(0x8a6348),0,row);put(at(0x8a6b1c),0,1u);
+ digest_visible={0};digest_selected=0;digest_afford=false;put(price_shop.data(),0x18d8,0);
+ const auto selected_name=read<unsigned>(definition(first_economy),8);
+ put(definition(first_economy),8,0x00ffffffu);
+ const auto refused_manager=manager;const auto refused_events=digest::pipe("events");
+ update(price_shop.data(),nullptr);
+ check(manager==refused_manager&&digest_balance==0&&digest::pipe("events")==refused_events,
+       "out-of-range id in selected-row annotation is bounded and leaves native refusal/currency/state unchanged");
+ put(definition(first_economy),8,selected_name);
+
 }

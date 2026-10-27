@@ -25,6 +25,16 @@ struct monitor {
     std::array<u32,5> phases{};
     u32 step=0,head=0,depth=0,admitted=0,published=0,escaped=0;
     bool resetting=false;
+    struct accounting_repeat {bool active=false;std::array<u32,8> signature{};u32 at=0;};
+    std::array<accounting_repeat,2> accounting_reports{};
+    u32 accounting_suppressed=0;
+    void account_event(unsigned source,bool ok,const std::array<u32,8>& signature,u32 detail){
+        auto& last=accounting_reports[source];
+        if(ok){last.active=false;return;}
+        if(!last.active||last.signature!=signature||step-last.at>=120){
+            emit(event_kind::accounting,max_slots,0,detail);last={true,signature,step};
+        }else ++accounting_suppressed;
+    }
     void emit(event_kind k,u32 i,u32 caller=0,u32 detail=0) {
         ++counts[static_cast<unsigned>(k)];
         auto* bucket=&callers[0];
@@ -119,7 +129,10 @@ struct monitor {
         const auto c=tally();
         bool ok=live==c.published+c.constructing+c.destroying+c.orphaned&&live+c.reserved<=capacity;
         if(quiescent&&!resetting)ok=ok&&!c.constructing&&!c.destroying&&!c.orphaned&&c.published==actors;
-        if(!ok)emit(event_kind::accounting,max_slots,0,live);
+        // Include all relevant quantities so a changed mismatch is visible immediately.
+        const std::array<u32,8> signature{live,capacity,actors,c.published,
+            c.constructing,c.destroying,c.orphaned,c.reserved};
+        account_event(0,ok,signature,live);
         return ok;
     }
 };

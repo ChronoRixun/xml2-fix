@@ -9,6 +9,7 @@
 #include <charconv>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 
 namespace xml1_economy::digest {
 namespace {
@@ -25,14 +26,37 @@ open_t original_open=nullptr;update_t original_update=nullptr;
 bool applied=false;std::atomic<bool> enabled{false};
 std::mutex mutex;history events;std::uint64_t sequence=0,last_view=0;
 std::string view="{\"error\":\"no shop sample\"}";
-struct context {void* shop=nullptr;event action;bool pressed=false;std::string result;};
+struct context {void* shop=nullptr;event action;bool pressed=false,valid=true;std::string result;};
 thread_local context* current=nullptr;
 
+// Keep SEH in a trivial frame (MSVC C2712); C++ failures are contained too.
+// Only diagnostic work enters this boundary, never the original game call.
+bool seh_call(void(*fn)(void*),void* arg){
+ __try {fn(arg);return true;}__except(GetExceptionCode()==0xe06d7363?EXCEPTION_CONTINUE_SEARCH:EXCEPTION_EXECUTE_HANDLER){return false;}
+}
+template<class F>bool diagnose(F&& fn) noexcept {
+ try {return seh_call([](void* p){(*static_cast<F*>(p))();},&fn);}catch(...){return false;}
+}
 std::string name(unsigned id){
- if(!id)return "-";
+ if(!id)return "invalid-name";
  auto* names=native<unsigned char*(__cdecl*)()>(0x602140)();
- const char* text=reinterpret_cast<const char*>(names+0x8008+read<unsigned>(names,4+(id&0xffffff)*4));
- const auto n=strnlen(text,128);if(n==128)return "invalid-name";return std::string(text,n);
+ // This is a hash-slot table, not a dense string vector. +0 is the
+ // generation, NOT a count (41A320); there are exactly 0x2000 slots.
+ const unsigned index=id&0xffffff;
+ if(!names||index>=name_slots)return "invalid-name";
+ const unsigned used=read<unsigned>(names,0x8004);
+ if(used>name_arena)return "invalid-name";
+ const unsigned offset=read<unsigned>(names,4+index*4);
+ if(!offset||offset>=used)return "invalid-name";
+ const char* text=reinterpret_cast<const char*>(names+0x8008+offset);
+ const auto limit=(std::min)(std::size_t(128),std::size_t(used-offset));
+ const auto n=strnlen(text,limit);if(!n||n==limit)return "invalid-name";return std::string(text,n);
+}
+void action_view(event& out,void* shop){
+ if(!shop)throw std::runtime_error("null shop");
+ out.tab=read<int>(shop,0x18d8);
+ out.list=list_name(out.tab,(read<unsigned char>(shop,0x18e8)&1)!=0);
+ if(out.list=="-")throw std::runtime_error("invalid tab");
 }
 // The captured owner is a hero stats pointer, not a world entity handle. Roster
 // order is synchronized; addresses and descriptor pool pointers are not wire IDs.
@@ -69,10 +93,15 @@ row describe(const native_row& r,void* manager){
 bool invalid(const row& r){return r.owner==-2||r.name.starts_with("invalid-");}
 struct sample {int money=0,tab=-1,selected=-1;std::string list="-",vendor,error;std::uint64_t defs=0,stock=0;unsigned rng=0;std::vector<row> rows;std::vector<unsigned> visible;};
 void capture(sample& out,void* shop,bool hashes){
+ if(!shop){out.error="null-shop";return;}
  auto* manager=native<void*(__cdecl*)()>(0x480a00)();
+ if(!manager){out.error="null-manager";return;}
  const unsigned count=read<unsigned short>(manager,0x2588);
  if(count>1024){out.error="definition-count";return;}
- out.tab=read<int>(shop,0x18d8);const auto focus=read<unsigned>(shop,0x324);out.list=name(focus);
+ event action;action_view(action,shop);out.tab=action.tab;out.list=action.list;
+ // +0x324 is the focused CUIObject* (5AAF80 / 5AAFD0), not a name id.
+ auto* focus=read<void*>(shop,0x324);
+ if(!focus){out.error="no-focus";return;}
  out.vendor=(read<unsigned char>(shop,0x18e8)&1)?"stash":shop::vendor();
  const unsigned n=read<unsigned>(native<void*>(0x8a6b1c));
  if(n>100){out.error="row-count";return;}
@@ -80,8 +109,9 @@ void capture(sample& out,void* shop,bool hashes){
   if(invalid(value)){out.error="row-identity";return;}
   value.price=(read<unsigned char>(shop,0x18e8)&1)?0:native<int(__fastcall*)(void*,void*)>(out.tab==1?0x5a9cc0:0x5a9b00)(&r,nullptr);out.rows.push_back(std::move(value));}
  // Exact native focused-list lookup and visible-index -> row-index mapping.
- auto* widget=native<void*(__cdecl*)(unsigned,int,unsigned,unsigned,int)>(0x67234e)(focus,0,0x6e4b34,0x6e5d60,0);
- if(widget){
+ auto* widget=native<void*(__cdecl*)(void*,int,unsigned,unsigned,int)>(0x67234e)(focus,0,0x6e4b34,0x6e5d60,0);
+ if(!widget){out.error="no-list";return;}
+ {
   const int visible=native<int(__fastcall*)(void*,void*)>(0x5bf750)(widget,nullptr);
   if(visible<0||visible>100){out.error="visible-count";return;}
   for(int i=0;i<visible;++i){const int index=native<int(__fastcall*)(void*,void*,int)>(0x5bfc20)(widget,nullptr,i);
@@ -113,60 +143,79 @@ void capture(sample& out,void* shop,bool hashes){
   const auto base=stock_hash(stock,out.rows);hash h;h.text("shop-v1");h.text(out.vendor);h.text(out.list);h.word(static_cast<unsigned>(base));h.word(static_cast<unsigned>(base>>32));h.word(static_cast<unsigned>(out.visible.size()));for(unsigned index:out.visible)h.word(index);out.stock=h.value();
  }
 }
-bool safe_capture(sample* out,void* shop,bool hashes){
- __try {capture(*out,shop,hashes);return true;}__except(EXCEPTION_EXECUTE_HANDLER){return false;}
-}
+bool safe_capture(sample* out,void* shop,bool hashes){return diagnose([&]{capture(*out,shop,hashes);});}
 std::string row_json(const row& r,unsigned i){return "{\"index\":"+std::to_string(i)+",\"type\":"+std::to_string(r.type)+",\"definition\":"+json_string(r.name)+",\"owner\":"+std::to_string(r.owner)+",\"detail\":"+std::to_string(r.detail)+",\"price\":"+std::to_string(r.price)+"}";}
-void observe(void* shop,event* e){
+void skipped(std::string_view reason){
+ auto json="{\"error\":"+json_string(reason)+"}";
+ std::lock_guard lock(mutex);view=std::move(json);last_view=GetTickCount64();
+}
+void observe_impl(void* shop,event* e){
  sample s;if(!safe_capture(&s,shop,e!=nullptr))s.error="snapshot-fault";
+ // Never publish partially captured identities, rows or hashes.
+ if(!s.error.empty()){
+  skipped(s.error);return;
+ }
  std::string json="{\"vendor\":"+json_string(s.vendor)+",\"tab\":"+std::to_string(s.tab)+",\"list\":"+json_string(s.list)+",\"selected\":"+std::to_string(s.selected)+",\"error\":"+json_string(s.error)+",\"rows\":[";
  for(unsigned i=0;i<s.visible.size();++i){if(i)json+=',';json+=row_json(s.rows[s.visible[i]],s.visible[i]);}json+="]}";
- std::lock_guard lock(mutex);view=std::move(json);last_view=GetTickCount64();
- if(!e)return;
- e->seq=++sequence;e->money=s.money;e->defs=s.defs;e->stock=s.stock;e->rng=s.rng;
- if(e->tab<0){e->tab=s.tab;e->list=s.list;e->row_index=s.selected;if(s.selected>=0&&static_cast<unsigned>(s.selected)<s.rows.size()){const auto& r=s.rows[s.selected];e->definition=r.name;e->owner=r.owner;}}
- if(!s.error.empty())e->result="error-"+s.error;
- if(e->owner==-2)e->result="error-owner-identity";
- if(e->definition.starts_with("invalid-"))e->result="error-captured-row-identity";
- events.append(*e);logger::write("%s",format(*e).c_str());
+ if(e){
+  e->money=s.money;e->defs=s.defs;e->stock=s.stock;e->rng=s.rng;
+  if(e->tab<0){e->tab=s.tab;e->list=s.list;e->row_index=s.selected;if(s.selected>=0&&static_cast<unsigned>(s.selected)<s.rows.size()){const auto& r=s.rows[s.selected];e->definition=r.name;e->owner=r.owner;}}
+ }
+ {
+  std::lock_guard lock(mutex);view=std::move(json);last_view=GetTickCount64();
+  if(e){e->seq=sequence+1;events.append(*e);++sequence;}
+ }
+ // Logger faults must not strand the observer mutex.
+ if(e)logger::write("%s",format(*e).c_str());
 }
+void observe(void* shop,event* e) noexcept {diagnose([&]{observe_impl(shop,e);});}
 bool __fastcall open(void* shop,void*,void* a,void* b){
  const bool result=original_open(shop,nullptr,a,b);
- if(enabled&&xml1_economy::installed()&&result){event e;e.result="open";observe(shop,&e);}return result;
+ if(enabled&&xml1_economy::installed()&&result)diagnose([&]{event e;e.result="open";observe_impl(shop,&e);});return result;
+}
+// A trivial SEH frame restores diagnostic TLS on both C++ and SEH unwind,
+// while leaving the original update's exceptions entirely unhandled here.
+void call_update(void* shop,context* observation){
+ auto* previous=current;current=observation;
+ __try {original_update(shop,nullptr);}__finally {current=previous;}
 }
 void __fastcall update(void* shop,void*){
  if(!enabled||!xml1_economy::installed()){original_update(shop,nullptr);return;}
- context c;c.shop=shop;c.action.tab=read<int>(shop,0x18d8);c.action.list=name(read<unsigned>(shop,0x324));
- auto* previous=current;current=&c;original_update(shop,nullptr);current=previous;
- if(c.pressed){c.action.result=c.result.empty()?"refused":c.result;observe(shop,&c.action);}
- else {bool due=false;{std::lock_guard lock(mutex);due=GetTickCount64()-last_view>=100;}if(due)observe(shop,nullptr);}
+ context c;c.shop=shop;c.valid=diagnose([&]{action_view(c.action,shop);});
+ call_update(shop,&c);
+ if(!c.valid){diagnose([&]{skipped("action-capture");});return;}
+ diagnose([&]{
+  if(c.pressed){c.action.result=c.result.empty()?"refused":c.result;observe(shop,&c.action);}
+  else {bool due=false;{std::lock_guard lock(mutex);due=GetTickCount64()-last_view>=100;}if(due)observe(shop,nullptr);}
+ });
 }
 bool __fastcall gate(void* manager,void*){
  const bool result=method<bool(__fastcall*)(void*,void*)>(manager,0xdc)(manager,nullptr);
- if(current)current->action.gate=result?1:0;return result;
+ if(current)current->valid&=diagnose([&]{current->action.gate=result?1:0;});return result;
 }
 template<unsigned Slot>unsigned __fastcall input(void* manager,void*,int* player){
  const unsigned result=method<unsigned(__fastcall*)(void*,void*,int*)>(manager,Slot)(manager,nullptr,player);
- if(current){current->action.player=*player;current->pressed=(result&16)!=0;}return result;
+ if(current)current->valid&=diagnose([&]{if(!player)throw std::runtime_error("null player");current->action.player=*player;current->pressed=(result&16)!=0;});return result;
 }
 native_row* __cdecl selected_row(int index){
  auto* result=native<native_row*(__cdecl*)(int)>(0x5a9f90)(index);
- if(current){const auto r=describe(*result,native<void*(__cdecl*)()>(0x480a00)());
+ if(current)current->valid&=diagnose([&]{if(!result)throw std::runtime_error("null row");const auto r=describe(*result,native<void*(__cdecl*)()>(0x480a00)());
   current->action.row_index=index;current->action.definition=r.name;current->action.owner=r.owner;
-  current->action.tab=read<int>(current->shop,0x18d8);current->action.list=name(read<unsigned>(current->shop,0x324));
- }return result;
+  action_view(current->action,current->shop);
+  if(invalid(r))current->valid=false;
+ });return result;
 }
 // Completion is before the native UI rebuild (which can switch tab/row for bags).
 // It covers equipment, pack quantities, course purchases and empty bag outcomes.
 void __fastcall completed(void* shop,void*){
- if(current&&current->result.empty()){
+ if(current)current->valid&=diagnose([&]{if(current->result.empty()){
   const bool stash=(read<unsigned char>(shop,0x18e8)&1)!=0;
   const auto& e=current->action;
   current->result=stash?(e.tab==1?"deposit":"withdraw"):(e.tab==1?"sell":"buy");
- }
+ }});
  native<void(__fastcall*)(void*,void*)>(0x5d1fa0)(shop,nullptr);
 }
-void* __cdecl empty_sale(){if(current)current->result="refused-empty";return native<void*(__cdecl*)()>(0x5d8920)();}
+void* __cdecl empty_sale(){if(current)current->valid&=diagnose([&]{current->result="refused-empty";});return native<void*(__cdecl*)()>(0x5d8920)();}
 struct site {unsigned va;const char* bytes;const char* what;};
 constexpr std::array<site,8> sites{{
  {0x5d39c0,"8b44240883ec18","shop open entry, ret 8"},
@@ -181,10 +230,22 @@ constexpr std::array<site,8> sites{{
 struct storage {void* p=VirtualAlloc(nullptr,4096,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE);~storage(){if(p)VirtualFree(p,0,MEM_RELEASE);}};
 std::vector<std::shared_ptr<storage>> retained;
 }
+#ifdef XML2_ECONOMY_DIGEST_TEST
+void test_observe(void* shop){event e;e.result="open";observe(shop,&e);}
+bool test_fault_cleanup(){
+ int cleaned=0;
+ const bool ok=diagnose([&]{
+  struct cleanup {int* count;~cleanup(){++*count;}} owned{&cleaned};
+  RaiseException(EXCEPTION_ACCESS_VIOLATION,0,0,nullptr);
+ });
+ return !ok&&cleaned==1;
+}
+#endif
 bool installed(){return applied;}
 void enable(){enabled=true;}
-void bag_result(const char* result){if(current)current->result=result;}
+void bag_result(const char* result){if(current)current->valid&=diagnose([&]{current->result=result;});}
 std::string pipe(const std::string& command){
+ try {
  if(!xml1_economy::installed())return "error economy is not installed";
  std::lock_guard lock(mutex);
  if(command=="shop")return "{\"active\":"+std::string(last_view&&GetTickCount64()-last_view<1000?"true":"false")+",\"sample\":"+view+"}";
@@ -192,6 +253,7 @@ std::string pipe(const std::string& command){
   std::uint64_t after=0;if(command.size()>6){const char* p=command.data()+7;const auto end=command.data()+command.size();auto r=std::from_chars(p,end,after);if(r.ec!=std::errc{}||r.ptr!=end)return "error events takes an unsigned sequence cursor";}return events.json(after);
  }
  return "error economy takes status, rolls, shop or events [after]";
+ }catch(...){return "error digest unavailable";}
 }
 bool contribute(patch_transaction::transaction& tx,std::string& failure){
  patch_transaction::contribution c;c.owner="Xml1Economy native shop digest observation";

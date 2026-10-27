@@ -30,6 +30,19 @@ std::vector<std::uint8_t> get(const std::string& p)
 
 int main()
 {
+    auto future=fixture(kind_campaign,writer_version(1,5,0,writer_kind_fix));
+    future[10]=lc_format_major;
+    const auto set_word=[&](unsigned at,std::uint32_t value){for(unsigned n=0;n<4;++n)future[at+n]=static_cast<std::uint8_t>(value>>(n*8));};
+    set_word(0x10,8);set_word(0x84,crc32(future.data(),0x84));
+    auto newer=inspect(future.data(),future.size(),kind_campaign);
+    CHECK(newer.status==file_status::needs_newer);
+    CHECK(newer_save_message(newer)=="This save was made by a newer Legends Classic build - update to load it");
+    CHECK(newer.why=="required feature bits 8");
+    const auto player_message=message_with_reason("Unable to load",newer_save_message(newer),256);
+    CHECK(player_message.find("update to load it")!=std::string::npos&&player_message.find("feature bits")==std::string::npos);
+    newer.needs_layout=true;newer.why="enable [Limits] SaveLayout=w2";
+    CHECK(newer_save_message(newer)==newer.why);
+
 	const auto old_writer = writer_version(1,4,0,writer_kind_fix);
 	CHECK(newer_writer(writer_version(1,5,0,writer_kind_fix), old_writer));
 	CHECK(newer_writer(writer_version(1,5,0,writer_kind_import), old_writer));

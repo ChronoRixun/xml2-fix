@@ -2,10 +2,10 @@
 
 Enable `[Test] InputPipe=1` with a different `PipeName` on each peer. With
 `Xml1Economy=1`, successful native shop/stash opens and every routed action-bit-4
-attempt produce one log line after the handler finishes:
+attempt produce one log line after the handler finishes when the snapshot is complete:
 
 ```text
-econ seq=1 player=0 gate=0 tab=0 list=shop_buy row=3:definition_key owner=-1 result=buy money=100 defs=0123456789abcdef stock=0123456789abcdef rng=42
+econ seq=1 player=0 gate=0 tab=0 list=buy row=3:definition_key owner=-1 result=buy money=100 defs=0123456789abcdef stock=0123456789abcdef rng=42
 ```
 
 `economy events [after]` returns a **single JSON reply line** containing `first`,
@@ -37,7 +37,10 @@ action consequently fails for a missing event. Idle updates do not advance seq.
 `tab`, `list`, `row`, and `owner` describe the **pre-mutation action**, even if a
 bag changes the selected tab afterward. Null owner is -1; an equipped owner is
 the matching native roster index (registry slots +0x48/+0x4c/+0x74), captured
-before removal. Unresolvable identities produce `error-*`, never a pointer.
+before removal. Unresolvable identities skip the observation; they never become
+wire pointers or partly valid events. The copied shop view reports the failure.
+`list` is a canonical tab identity: `buy`, `sell`, `training`, or stash
+`withdraw`/`deposit`. It is never derived from a process address.
 
 Results are `open`, `buy`, `sell`, `deposit`, `withdraw`, `refused`,
 `refused-empty`, `refused-training`, `bag-equipment`, `bag-course`, `bag-empty`,
@@ -65,8 +68,28 @@ addresses, allocation handles, or pool pointers:
   `0x560180`. Observation never draws. This counter can reset when native game
   code reseeds; it is compared as recorded, not replaced with a DLL counter.
 
-Descriptor, name, row-count, visible-map and stock-cycle failures invalidate
-the observation. A hash collision is possible; this is a diagnostic gate,
+Descriptor, name, row-count, visible-map and stock-cycle failures skip the
+frame without advancing the event sequence or publishing partial rows/hashes.
+Null shop, null focused widget and failed native probes have the same policy.
+Every diagnostic native-memory path (capture and per-action annotations) has
+SEH and C++ exception containment. The diagnostic translation unit uses `/EHa`
+so strings/vectors unwind even when a native probe faults. Original native calls remain outside that
+boundary and retain their arguments, return values and exception behavior.
+
+The first-open crash was a type error, not unfinished shop initialization:
+`shop+0x324` is a focused `CUIObject*`, assigned at `0x5aafa1` and dereferenced
+at `0x5aafda`. The native shop passes it to `dynamic_cast` at `0x5d3da3`.
+The old digest instead passed it to `name(unsigned)`, indexing an intern table
+with a pointer's low 24 bits. Its test used the integer 1 instead of a widget.
+The corrected observer uses the pointer only for the native list cast.
+Capture used to resolve that list before reading currency or definition hashes,
+so a fault there left the default `money=0 defs=0000000000000000`. Those partial
+values did not establish that the native balance or definition table was empty.
+Definition names still resolve through the real table: index < 8192 hash slots,
+nonempty string and offset within the used arena (maximum 0x14400 bytes), and a terminating
+NUL within that bound and 128 bytes. The word at table+0 is a generation, not a
+dense string count (`0x41a320`); comparing IDs with that word would reject valid
+hashed names. A hash collision is possible; this is a diagnostic gate,
 not a cryptographic proof. Preserve full logs and seeded inputs for review.
 
 All eight guards contribute to the same W2/economy startup transaction and any
