@@ -12,9 +12,22 @@
 #include <fstream>
 #include <iterator>
 #include <vector>
+#include <cstdarg>
+#include <string>
 
-namespace logger { void write(const char*, ...) {} }
+namespace logger
+{
+    std::vector<std::string> lines;
+    void write(const char* format, ...)
+    {
+        char line[2048]{};va_list args;va_start(args,format);
+        std::vsnprintf(line,sizeof(line),format,args);va_end(args);lines.emplace_back(line);
+    }
+}
 namespace game_version { void refuse_startup() { std::abort(); } }
+#ifndef PAD_HOTPLUG_LIVE_FIXTURE
+namespace gamepad_fix { void update_attached(const GUID*, unsigned) {} }
+#endif
 extern "C" unsigned char fixture_space[];
 namespace
 {
@@ -191,14 +204,15 @@ int main(int argc,char** argv)
     pad_table[7]=reinterpret_cast<void*>(&poll); pad_table[9]=reinterpret_cast<void*>(&state);
     pad_table[11]=reinterpret_cast<void*>(&format); pad_table[13]=reinterpret_cast<void*>(&coop); pad_table[25]=reinterpret_cast<void*>(&poll);
     input_table[3]=reinterpret_cast<void*>(&create); input_table[4]=reinterpret_cast<void*>(&enumerate);
-    // Reproduce the owner failure before installing the fix: recurring discovery
-    // works, but the startup loader has already erased player 1's pad actions.
+    // Preserve the separate Advanced Options regression: accepting that panel
+    // with a missing saved pad can erase its actions. This is not startup code;
+    // the real separate-manager startup failure is in pad_hotplug_live_test.
     seed({1,0,0,0},{0,0,0,0});
-    check(binding(0)==0,"stock startup erases absent saved pad binding");
+    check(binding(0)==0,"stock Options remap erases absent saved pad binding");
     reset_manager(); scan(); di.attached={1}; scan();
     check(device(0)==&pads[0] && pads[0].formats==1,"stock late device does get created/configured");
     pads[0].pressed=true; read_frame();
-    check(pads[0].reads==1 && !pressed(0),"stock reads late device but player 1 has no binding");
+    check(pads[0].reads==1 && !pressed(0),"stock reads late device but Options erased player 1's binding");
     pad_hotplug::install(reinterpret_cast<HMODULE>(0x400000));
     check(at(0x61862a)[0]==0xe9,"production installer applied");
     // Present at launch, normal order; repeat scan must reuse the device.
@@ -246,5 +260,6 @@ int main(int argc,char** argv)
             if(src[i]<4 && !(known&(1u<<src[i]))) { check(dst[i]==src[i],"known match preserved"); known|=1u<<src[i]; }
         }
     }
-    std::printf("pad hotplug: %u checks PASS (stock failure reproduced; retail remap/scan/read, 4 players, reconnect, GUID change)\n",checks);
+    std::printf("pad hotplug: %u checks PASS (Advanced Options preservation; native scan/read, 4 players, reconnect, GUID change)\n",checks);
+    return 0;
 }

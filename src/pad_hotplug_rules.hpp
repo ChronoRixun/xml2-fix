@@ -8,7 +8,9 @@ namespace pad_hotplug_rules
     constexpr std::uint32_t image_base = 0x400000;
     constexpr std::uint32_t entry = 0x61862a, next = 0x618630;
     constexpr std::uint32_t mapping = 0x6efa48;
-    // Native GUID matches are 0..3. Other values mean missing, new or empty.
+    constexpr unsigned max_map_actions = 50; // 50 * 4 * 12 bytes, first-pad metadata at +0x964
+    // Advanced Options' accept handler (not startup): native GUID matches are
+    // 0..3. Other values mean missing, new or empty.
     // Reserve every known match first, then give unresolved saved slots distinct
     // remaining ordinals. A newly connected device can therefore use its bindings.
     inline std::array<std::uint32_t, 4> resolve(std::array<std::uint32_t, 4> slots)
@@ -34,5 +36,7 @@ namespace pad_hotplug_rules
         {0x6187b7, "81fb9a0200007508c70100000000eb38"}, // pad 3
         {0x6187d6, "81fe9a0200007508c70100000000eb19"}, // pad 4
         {0x6187f3, "c1e21025ffff00000bd08911"}, // retain control, change only device number
+        {0x628e20, "8a44240483ec185355568bf1884602576a01"}, // complete native input refresh
+        {0x628e49, "8b86e42700008b106a0450ff5210"}, // controller enumeration (validated against retail)
     };
 }
