@@ -1,6 +1,8 @@
 #include "shared_handler_fixture.hpp"
 #include "tk_guard_bridges.hpp"
 #include "shared_handler_c_rules.hpp"
+#include "pad_input_rules.hpp"
+#include "test_input_rules.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -25,6 +27,8 @@ u32 acquired_token=222,auxiliary_token=0;int auxiliary_calls=0,auxiliary_events=
 u32 audit_before[4]{},audit_after[4]{};
 bool base_damage_parsed=false;
 bool stale_resolution=false;
+bool retail_arm=false;float arm_speed=100.f;
+void native_arm(void*,void*,int);
 std::string selected_name,played_name;std::vector<int> order;
 void* self_actor(){return source?source_actor.data():actor.data();}
 void* __fastcall get_type(void*,void*){return type.data();}
@@ -68,11 +72,12 @@ int native_fallback_parameters=0;
 float __fastcall native_movement_parameter(void*,void*,int id){++native_fallback_parameters;check(id==2,"zero-input guard fallback requests only movement scale");return 100.f;}
 bool __fastcall immunity(void*,void*,int id,int){check(id==(source?0x17:0x2c),"def_pickup enum translated by name");return immune;}
 void* __fastcall source_action(void*,void*,int id){action_id=id;return move.data();}
+void* __fastcall entry_action(void*,void*,void* from,int id,void* who){check(from==move.data()&&who==actor.data(),"entry action resolves from the incoming move");source_action(who,nullptr,id);return node.data();}
 void* __fastcall named_lookup(void*,void*,const u32*,void*){return move.data();}
 void* __fastcall get_style(void* p,void*){return p;}
 void* __fastcall make_name(u32* p,void*,const char* name){selected_name=name;*p=1;return p;}
 void* __fastcall source_named(void*,void*,const u32*,int){return move.data();}
-void __fastcall play(void*,void*,void* m,int){check(m==move.data(),"resolved selected move dispatched");++starts;played_name=selected_name;order.push_back(3);}
+void __fastcall play(void*,void*,void* m,int){check(m==move.data()||m==node.data(),"resolved selected move dispatched");++starts;played_name=selected_name;order.push_back(3);}
 void __fastcall lock(void* p,void*,u32 token){check(token==222,"selection locks target token");field<u32>(p,source?0x554:0x76c)=token;}
 void __fastcall velocity(void*,void*,const vec* p){last_velocity=*p;order.push_back(4);}
 void __fastcall set_position(void*,void*,const vec* p){placed=*p;}
@@ -120,7 +125,7 @@ void __fastcall one_shot(void*,void*,u32){}
 void __fastcall stop_sound(void*,void*,u32){++stops;order.push_back(5);}
 void __fastcall physical_mode(void*,void*,int){}
 void __fastcall physical_cleanup(void*,void*,int,int){}
-void __fastcall pc_release(void*,void*,vec v,float heading,std::int16_t level,int mode,int extra){check(!extra,"PC release extra mode is zero");release_velocity=v;release_heading=heading;release_level=level;release_mode=mode;order.push_back(6);}
+void __fastcall pc_release(void*,void*,vec v,float heading,std::int16_t level,int mode,int extra){if(retail_arm){arm_speed=(v.x==0&&v.y==0&&v.z==0)?100.f:std::sqrt(v.x*v.x+v.y*v.y+v.z*v.z);native_arm(target.data(),actor.data(),extra);}else check(extra==(mode?2:0),"TK throw uses its private native arming mode; cancellation stays native zero");release_velocity=v;release_heading=heading;release_level=level;release_mode=mode;order.push_back(6);}
 void __fastcall source_release(void*,void*,vec v,float heading,std::int16_t level,int mode){release_velocity=v;release_heading=heading;release_level=level;release_mode=mode;order.push_back(6);}
 void __fastcall reset_owner(void*,void*){}
 void __fastcall object_tick(void*,void*,float,int){}
@@ -236,7 +241,7 @@ void bind(){
  jump(0x41a220,&team);jump(bias+0x26e60,&team);jump(0x429228,&grabbable_tail);jump(bias+0x391a0,&grab_ok);jump(0x41c540,&yes);jump(0x427e00,&target_allowed);jump(bias+0x38340,&target_allowed);
  jump(bias+0x29080,&yes);jump(bias+0x27410,&script_allowed);jump(0x41a820,&script_allowed);
  jump(0x427f60,&liftable);jump(bias+0x38400,&liftable);jump(0x4fbe80,&fallback);jump(bias+0xe6da0,&fallback);jump(0x54d710,&immunity);jump(bias+0x2b250,&immunity);
- jump(0x427c80,&source_action);jump(bias+0x381f0,&source_action);jump(0x41d0d0,&get_style);jump(0x501a50,&named_lookup);jump(0x41b120,&make_name);jump(bias+0x2e290,&get_style);jump(bias+0xed6e0,&source_named);
+ jump(0x501af0,&entry_action);jump(0x427c80,&source_action);jump(bias+0x381f0,&source_action);jump(0x41d0d0,&get_style);jump(0x501a50,&named_lookup);jump(0x41b120,&make_name);jump(bias+0x2e290,&get_style);jump(bias+0xed6e0,&source_named);
  jump(0x42c340,&play);jump(bias+0x3b100,&play);jump(0x42d8e0,&lock);jump(bias+0x3cdf0,&lock);jump(0x473640,&velocity);jump(bias+0x760d0,&velocity);
  jump(0x560990,&facing);jump(bias+0x1209c0,&facing);jump(0x5607b0,&angles);jump(bias+0x120860,&angles);
  jump(bias+0xe6f40,&input_held);jump(bias+0x129c0,&normalize);jump(bias+0x199ba0,&vector_length);jump(bias+0x1960d0,&vector_sub);jump(bias+0x196100,&vector_add);jump(bias+0x13c60,&vector_difference);jump(bias+0x341916,&modulus);jump(bias+0x1a41f0,&truncate);
@@ -332,6 +337,93 @@ void retail_audio_contract_tests(const image& pc){
  __asm mov after,esp
  check(before==after&&stops==1&&state.sound==0xffffffffu&&release_mode==1,"TK throw/release survives the real retail audio lookup ABI and stops its loop");
 }
+
+// Execute the retail release's descriptor stores, including its new PC-only
+// overwrite flag. Computed L2 must replace the earlier suspend amount.
+u32 arm_site=0x42e914;
+std::array<unsigned char,16> l2_values{};std::array<void*,4> l2_vt{};
+void* __cdecl l2_manager(){return l2_values.data();}
+float __fastcall l2_value(void*,void*,int id,int level){check(id==1&&level==0,"native release evaluates L2 once");return 28.f;}
+void* __cdecl release_thrower(u32 id){return id==111?actor.data():nullptr;}
+float __fastcall l2_scale(void* owner,void*,int id,void* who,int mode){check(owner==stats.data()&&who==actor.data()&&id==0&&mode==0,"native L2 release multiplier evaluates caster stats");return 1.5f;}
+__declspec(naked) void native_arm(void*,void*,int){__asm {
+ push ebx
+ push ebp
+ push esi
+ push edi
+ mov esi,[esp+20]
+ mov ebp,[esp+24]
+ mov eax,[esp+28]
+ sub esp,084h
+ mov [esp+080h],eax
+ mov dword ptr [esp+074h],042280000h
+ mov dword ptr [esp+078h],2
+ fld arm_speed
+ fstp dword ptr [esp+010h]
+ mov ebx,1
+ jmp dword ptr [arm_site]
+}}
+__declspec(naked) void arm_done(){__asm {
+ add esp,084h
+ pop edi
+ pop esi
+ pop ebp
+ pop ebx
+ ret
+}}
+void release_damage_test(const image& pc){
+ source=false;reset();bind();pc.load(0x42e914,0xff);jump(0x42ea13,&arm_done);jump(0x67217c,&truncate);
+ for(u32 a:{0x68012cu,0x680194u,0x683f30u})pc.load(a,4);
+ shared_handler_c_rules::targets gate_targets{};
+ gate_targets.tk_release_arm=&tk_guard_bridges::release_arming_gate;
+ for(const auto& patch:shared_handler_c_rules::patches(shared_handler_c_rules::telekinesis,gate_targets))if(patch.address==0x42e923)std::copy(patch.after.begin(),patch.after.end(),at(patch.address));
+ field<void*>(l2_values.data(),0)=l2_vt.data();l2_vt[3]=reinterpret_cast<void*>(&l2_value);
+ auto bind_release=[&](){jump(0x4c4bb0,&l2_manager);jump(0x41fb10,&release_thrower);jump(0x4b7970,&l2_scale);time_now=10.f;friend_damage=false;};
+ for(bool moving:{false,true})for(bool object:{false,true}){
+  reset();bind();bind_release();target_actor=!object;retail_arm=true;
+  tk_guard_bridges::tk_state state;state.victim=222;state.impact=19;state.damage=2;
+  unsigned before=0,after=0;__asm mov before,esp
+  tk_guard_bridges::release(actor.data(),state,moving?vec{1,0,0}:vec{},true);
+  __asm mov after,esp
+  retail_arm=false;
+  check(before==after&&field<float>(target.data(),0x2b8)==42.f,"real release stores select native XML1 L2 throw damage for still/moving actors/objects");
+  check(field<float>(target.data(),0x2f0)==12.f&&field<u32>(target.data(),0x2b4)==111&&(field<unsigned char>(target.data(),0x2f8)&1),"real release arms deadline, attribution and active bit");
+ }
+ for(int mode:{0,1,2})for(float speed:{0.f,1.f,1.0001f,500.f}){
+  reset();bind();bind_release();field<float>(target.data(),0x2b8)=19.f;field<float>(target.data(),0x2f0)=0.f;arm_speed=speed;
+  unsigned before=0,after=0;__asm mov before,esp
+  native_arm(target.data(),actor.data(),mode);
+  __asm mov after,esp
+  const bool armed=mode==2||speed>1.f;
+  check(before==after&&field<float>(target.data(),0x2f0)==(armed?12.f:0.f),"real speed gate retains modes 0/1 and always admits private TK mode 2");
+  check(field<float>(target.data(),0x2b8)==(armed&&mode!=0?42.f:19.f),"native overwrite selector retains ordinary preserve/replace behavior");
+ }
+}
+void guard_entry_timing_test(){
+ source=false;reset();bind();field<void*>(context.data(),4)=move.data();
+ tk_guard_bridges::guard_entry(nullptr,nullptr,actor.data(),nullptr,context.data());
+ check(query_calls==1&&starts==1&&action_id==3,"Guard admission with no input object still makes its contextual decision");
+ check(field<unsigned char>(context.data(),0x6c)&4,"null-input Guard admission also aborts its parent transition");
+ for(int duration:{300,500,800})for(bool pad:{false,true}){
+  pad_input_rules::synthetic_pad controller;test_input_rules::synthetic_keys keyboard;
+  controller.press(XINPUT_GAMEPAD_X,duration);keyboard.press(0x12,duration); // DirectInput E
+  auto raw_held=[&](int ms){
+   if(pad){xinput_pad::raw_state state{};std::vector<std::string> expired;controller.merge(state,ms,expired);return (state.buttons&XINPUT_GAMEPAD_X)!=0;}
+   std::array<unsigned char,256> state{};std::vector<unsigned char> expired;keyboard.merge(state.data(),ms,expired);return (state[0x12]&0x80)!=0;
+  };
+  source=false;reset();bind();check(raw_held(0),"raw pad-X/keyboard-E hold begins without a wake key");field<u32>(input.data(),0)=field<u32>(input.data(),4)=0x100;
+  field<void*>(context.data(),4)=move.data();
+  tk_guard_bridges::guard_entry(nullptr,nullptr,actor.data(),input.data(),context.data());
+  check(query_calls==1&&starts==1&&action_id==3,"human keyboard/pad Guard entry selects and dispatches the contextual grab before a later input tick");
+  check((field<unsigned char>(context.data(),0x6c)&4)!=0,"entry decision aborts parent transition after exactly one dispatch");
+  // Neither the held-only frames nor the release introduces another entry.
+  for(int ms=16;ms<duration;ms+=16){check(raw_held(ms),"raw injected Guard stays held for the human-length duration");field<u32>(input.data(),4)=0;}
+  check(!raw_held(duration),"raw pad and keyboard Guard release at the requested duration");
+  field<u32>(input.data(),0)=0;
+  check(query_calls==1&&starts==1,"300-800 ms Guard holds cannot loop the entry decision");
+ }
+}
+
 void constructor_tests(const image& pc,const image& x1){
  source=false;reset();bind();pc.load(0x4dc5d0,0x6e);pc.load(0x4f8d30,0x38);load_source(x1,0xe46a0,0x24);
  jump(0x4dccf0,&event_constructor);jump(bias+0xcfbf0,&event_constructor);
@@ -429,8 +521,9 @@ void acquisition_tests(const image& pc,const image& x1){
 }
 void guard_tests(const image& pc){
  source=false;reset();bind();field<unsigned char>(context.data(),0x6c)=0x80;
+ field<void*>(context.data(),4)=move.data();
  tk_guard_bridges::guard_entry(nullptr,nullptr,actor.data(),input.data(),context.data());
- check(field<unsigned char>(context.data(),0x6c)==0x81&&query_calls==0&&starts==0,"guard entry only requests source immediate input; it cannot recursively start a move");
+ check(field<unsigned char>(context.data(),0x6c)==0x84&&query_calls==1&&starts==1,"guard entry makes one contextual decision and aborts the parent transition");
  for(int kind=0;kind<4;++kind)for(bool original:{true,false}){
   source=original;acrobatics=0;might=0;reset();bind();target_actor=kind<2;target_team=kind==1?0x1c:2;can_lift=kind!=3;
   if(original)reinterpret_cast<bool(__thiscall*)(void*,void*,void*)>(bias+0xd99d0)(nullptr,source_actor.data(),input.data());
@@ -544,6 +637,6 @@ int main(int argc,char** argv){
  check(field<u32>(const_cast<unsigned char*>(pc.read(0x69d1ac,0x3c)),0x34)==0x590120&&field<u32>(const_cast<unsigned char*>(pc.read(0x69d1ac,0x3c)),0x38)==0x590bd0,"retail audio table distinguishes boolean from resource lookup");
  pc.load(0x590120,0x66);
  load_source(x1,0xdf640,0xfd);load_source(x1,0xd99d0,0x7c6);load_source(x1,0xdff10,0xc71);load_source(x1,0xdfc80,0x28b);load_source(x1,0x38210,0x15);load_source(x1,0xdf3b0,0xed);
- std::puts("cancel");cancel_tests();std::puts("entry");entry_tests(pc);std::puts("constructors");constructor_tests(pc,x1);std::puts("parser");parser_tests(pc);std::puts("filter");filter_tests();std::puts("acquisition");acquisition_tests(pc,x1);std::puts("guard");guard_tests(pc);std::puts("control");control_tests();std::puts("retail audio ABI");retail_audio_contract_tests(pc);
+ std::puts("cancel");cancel_tests();std::puts("entry");entry_tests(pc);std::puts("constructors");constructor_tests(pc,x1);std::puts("parser");parser_tests(pc);std::puts("filter");filter_tests();std::puts("acquisition");acquisition_tests(pc,x1);std::puts("guard");guard_tests(pc);std::puts("control");control_tests();std::puts("retail audio ABI");retail_audio_contract_tests(pc);release_damage_test(pc);guard_entry_timing_test();
  std::printf("TK/guard native: %d checks, %d failures\n",checks,failures);return failures?1:0;
 }

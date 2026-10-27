@@ -424,7 +424,7 @@ void install(HMODULE game)
         return;
     }
     logger::write("grab carry: XML1 grab/pickup/recovery installed (rule 45 revision %u, feature mask %u); flying carry, fix7 and XML1 upkeep installed",
-                  static_cast<unsigned>(agreement_revision), feature_mask);
+                  static_cast<unsigned>(agreement_revision), xml1_grab_carry_rules::feature_mask);
     // The builder's DLL gate reads this line (beta 8 080e: a carry chain that resolves to itself no longer re-enters).
     logger::write("grab carry: flying carry keeps its established node (no self-chain)");
     // Beta 8 080g (fix3): world impacts reach a thrown body's receiver (0x42C09E), carry pose from animated bones.

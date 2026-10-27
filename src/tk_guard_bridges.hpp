@@ -89,14 +89,21 @@ inline bool wall_lunge(void* actor,void* initial,void* entity){
  method<void(__thiscall*)(void*,const vec*)>(actor,0x1c)(actor,&position);
  if(auto* next=named(actor,"walllunge")){play(actor,next);return true;}return false;
 }
-// XML1 DA3A0 entry requests immediate input. D99D0 is the input policy,
-// not an entry callback: the PC scheduler must consume its pending chain once.
-inline void __fastcall guard_entry(void*,void*,void*,void*,void* context){
- if(context)field<unsigned char>(context,0x6c)|=1;
-}
-inline bool __fastcall guard_input(void* self,void*,void* actor,void* input){
+inline bool guard_policy(void* self,void* actor,void* input,void* incoming=nullptr){
  if(!actor||!input)return false;
  det_math::fp_env fp;
+ auto choose=[&](int id){
+  if(!incoming){chain(actor,id);return;}
+  // Entry runs before 431252 installs the incoming move at actor+378.
+  // Resolve its chains explicitly, using the native 427C80 callee contract.
+  auto* styles=fn<void*(__thiscall*)(void*)>(0x41d0d0)(actor);
+  field<void*>(actor,0x3bc)=fn<void*(__thiscall*)(void*,void*,int,void*)>(0x501af0)(styles,incoming,id,actor);
+ };
+ auto movement=[&](){
+  if(!incoming)return fallback(self,actor,input);
+  auto*& current=field<void*>(actor,0x378);void* previous=current;current=incoming;
+  const bool result=fallback(self,actor,input);current=previous;return result;
+ };
  const u32 held=field<u32>(actor,0x774);
  if(valid(held)&&!manager_flag(0x46dce0,0x1a8)){
   auto* entity=resolve(held);
@@ -104,7 +111,7 @@ inline bool __fastcall guard_input(void* self,void*,void* actor,void* input){
    field<void*>(actor,0x3bc)=named(actor,"use_button");
   }else{
    fn<void(__thiscall*)(void*)>(0x42c120)(actor);
-   if(!fallback(self,actor,input))chain(actor,0);
+   if(!movement())choose(0);
   }return true;
  }
  const bool friendly=!(*reinterpret_cast<unsigned char*>(0x70b6fd))&&!manager_flag(0x48de40,0x5c);
@@ -113,7 +120,7 @@ inline bool __fastcall guard_input(void* self,void*,void* actor,void* input){
  const bool allies=friendly&&(field<unsigned char>(field<void*>(actor,0x35c),0x2ae)&0x20)&&
   fn<unsigned char(__thiscall*)(void*)>(0x427dc0)(static_cast<unsigned char*>(actor)+0x470)>0;
  {
-  query_holder holder(actor);auto* q=holder.q;if(!q){if(!fallback(self,actor,input))chain(actor,0);return true;}
+  query_holder holder(actor);auto* q=holder.q;if(!q){if(!movement())choose(0);return true;}
   method<void(__thiscall*)(void*,int,int)>(q,0x40)(q,1,1);
   if(friendly&&!allies)fn<void(__cdecl*)(void**,void*)>(0x44fe10)(&holder.q,actor);
   const vec box{16,16,16};vec center{};const auto* p=method<const vec*(__thiscall*)(void*,vec*)>(actor,0x24)(actor,&center);center=*p;
@@ -124,28 +131,49 @@ inline bool __fastcall guard_input(void* self,void*,void* actor,void* input){
   // PC input scheduler to dispatch a pending chain on top of it.
   if(wall_lunge(actor,contact,entity))return false;
   if(!entity||(field<u32>(entity,4)&0x40010)||manager_flag(0x484990,0x3c)){
-   if(!fallback(self,actor,input))chain(actor,0);
+   if(!movement())choose(0);
   }else if(auto* victim=character(entity)){
-   if(!fn<bool(__thiscall*)(void*)>(reinterpret_cast<u32>(&source_grabbable))(victim))chain(actor,0);
+   if(!fn<bool(__thiscall*)(void*)>(reinterpret_cast<u32>(&source_grabbable))(victim))choose(0);
    else if(allies&&team(actor)==team(victim)&&!manager_flag(0x48de40,0x5c)){
     if(field<unsigned char>(field<void*>(victim,0x35c),0x2ad)&0x80){play(actor,named(actor,"throwally"));lock(actor,victim);}
-    else if(!fallback(self,actor,input))chain(actor,0);
+    else if(!movement())choose(0);
    }else if(team(victim)!=0x1c){
-    chain(actor,3);
+    choose(3);
     if(field<unsigned char>(victim,0x765)&1){
      if(fn<bool(__thiscall*)(void*,int,int)>(0x54d710)(victim,0x2c,0))notify(actor,"");
      else if(rank(actor,"acrobatics")>2){
       const std::array<vec,2> up{{{0,0,20},{0,0,0}}};method<float(__thiscall*)(void*,const void*)>(actor,0x130)(actor,up.data());
       play(actor,named(actor,"airgrabpickup"));
      }else if(rank(actor,"might")<=0&&!(field<unsigned char>(victim,0x765)&1)){play(actor,named(actor,"grabfailed"));}
-     else chain(actor,25);
+     else choose(25);
     }lock(actor,victim);
    }
   }else if(fn<bool(__thiscall*)(void*,void*)>(0x427f60)(actor,entity)){
-   lock(actor,entity);chain(actor,24);field<unsigned char>(entity,0x30d)|=4;
-  }else{cannot_lift(actor);chain(actor,0);}
+   lock(actor,entity);choose(24);field<unsigned char>(entity,0x30d)|=4;
+  }else{cannot_lift(actor);choose(0);}
  }
  return true;
+}
+
+inline bool __fastcall guard_input(void* self,void*,void* actor,void* input){return guard_policy(self,actor,input);}
+// PC entry is the reliable admission point for both real devices. Do the
+// one-shot decision here instead of waiting for another scheduler/input pass.
+// Clear the incoming pending move first; dispatch only an actual result, once.
+// Context bit2 aborts the parent 430D40 transition at 4310B0 after our dispatch.
+inline void __fastcall guard_entry(void* self,void*,void* actor,void* input,void* context){
+ if(!actor||!context||!field<void*>(context,4))return;
+ std::array<unsigned char,0x30> neutral_input{};
+ if(!input)input=neutral_input.data(); // native/scripted admissions may omit input
+ void* incoming=field<void*>(context,4);void* before=field<void*>(actor,0x378);
+ field<void*>(actor,0x3bc)=nullptr;
+ const bool pending=guard_policy(self,actor,input,incoming);
+ void* next=field<void*>(actor,0x3bc);
+ if(field<void*>(actor,0x378)!=before||!pending){field<unsigned char>(context,0x6c)|=4;return;}
+ if(next&&next!=incoming){
+  field<void*>(actor,0x3bc)=nullptr;
+  field<unsigned char>(context,0x6c)|=4;
+  play(actor,next);
+ }else field<unsigned char>(context,0x6c)|=1;
 }
 
 struct tk_state {
@@ -225,6 +253,20 @@ inline void tk_sound(tk_state& s,void* target,bool initial){
 inline void stop_sound(tk_state& s){auto* manager=fn<getter>(0x592480)();method<void(__thiscall*)(void*,u32)>(manager,0x74)(manager,s.sound);s.sound=0xffffffffu;}
 // PC's release service takes the vector by value and two additional mode
 // arguments. Preserve its physical-mode cleanup while supplying source values.
+inline u32 release_arm_body=0x42e929,release_arm_done=0x42ea13;
+// Mode 2 is private to this bridge. A normalized moving TK direction has
+// speed one: retail 42E923 otherwise skips the entire native arming block.
+// Ordinary PC modes 0/1 replay the displaced condition without alteration.
+__declspec(naked) inline void release_arming_gate(){__asm {
+ cmp dword ptr [esp+080h],2
+ je arm_throw
+ test ah,041h
+ jnz skip_throw
+ arm_throw:
+ jmp dword ptr [release_arm_body]
+ skip_throw:
+ jmp dword ptr [release_arm_done]
+}}
 inline void release(void* actor,tk_state& s,vec v,bool thrown){
  if(valid(s.victim))if(auto* target=cast(resolve(s.victim),0x429110)){
   field<u32>(target,4)&=~4u;publish(target);
@@ -238,7 +280,11 @@ inline void release(void* actor,tk_state& s,vec v,bool thrown){
    method<void(__thiscall*)(void*,u32)>(target,0x8c)(target,sound);
   }
  }
- fn<void(__thiscall*)(void*,vec,float,std::int16_t,int,int)>(0x42e570)(actor,v,s.heading,s.level,thrown?1:0,0);
+ // XML1 3DF3F..3DFAD always evaluates L2 for a throw. PC adds a
+ // final preserve/replace selector: zero preserves the suspend amount. Our
+ // mode 2 also admits the arming block at unit speed, then its nonzero value
+ // stores the native L2 amount at 42E9BA. Cancellation stays ordinary mode 0.
+ fn<void(__thiscall*)(void*,vec,float,std::int16_t,int,int)>(0x42e570)(actor,v,s.heading,s.level,thrown?1:0,thrown?2:0);
  field<unsigned char>(actor,0x259)&=~2;
  stop_sound(s);
 }
