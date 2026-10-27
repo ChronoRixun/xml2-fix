@@ -172,7 +172,14 @@ namespace join_in_progress_rules
 	inline constexpr std::array<unsigned char, 42> admit_controller_original{0xe8,0xd9,0x84,0xf4,0xff,0x8b,0x4c,0x24,0x0c,0x8b,0x10,0x6a,0x00,0x51,
 		0x8b,0xc8,0xff,0x52,0x38,0x50,0x8b,0xce,0xe8,0xa3,0xe8,0xf2,0xff,0xe8,0x6e,0xbb,0x00,0x00,0x8b,0x10,0x6a,0x00,0x56,0x8b,0xc8,0xff,0x52,0x14};
 
-	inline constexpr std::array<guard, 78> guards{{
+	// 0x5d93f0 renders the online ready roster. vt+0x258 supplies the hero label;
+	// 0x6141e0 supplies the separate participant name. The suffix call is cdecl.
+	constexpr std::uint32_t roster_hero_call = 0x5d95bd, roster_format = 0x5604f0;
+	inline constexpr std::array<unsigned char, 5> roster_hero_original{0xe8,0x2e,0x6f,0xf8,0xff};
+	inline constexpr std::array<guard, 81> guards{{
+		{0x5d950c,"e8ffac0300508bceff9758020000", "ready roster: participant index selects held hero display name"},
+		{0x5d95a3,"8d9424bc0000005268f8e069008d8424c4010000688000000050e82e6ff8ff83c410", "ready roster: bounded cdecl hero suffix formatting"},
+		{0x5604f0,"56578b7c240c85ff750d", "native bounded formatter cdecl entry"},
 		{0x559313,"813cc580fb7900840300000f85460100005368cf10000068cf10000068ce10000056e8a6980b008bc8e85fa00b00","slow-player guard: the 900-frame test and the native drop call it replaces"},
 		{0x423ed1,"f681650700000875158a91d8030000b00184d07409","manual switch eligibility: target +0x765 bit 3, +0x3d8 bit 0 (AI)"},
 		{0x46b493,"e85804feff8b3685f68be8","native seat binding: hero registry getter before its vt+0x40 lookup by name"},

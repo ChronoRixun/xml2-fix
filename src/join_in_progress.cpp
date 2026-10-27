@@ -589,6 +589,12 @@ namespace join_in_progress
 				index, local ? " (this PC, the host)" : "");
 		}
 
+		int __cdecl roster_hero_bridge(char* out, int capacity, const char* pattern, const char* hero)
+		{
+			using format_t = int(__cdecl*)(char*, int, const char*, ...);
+			return join_in_progress_core::format_roster_hero(fn<format_t>(roster_format), out, capacity, pattern, hero);
+		}
+
 		// ---- bridges -------------------------------------------------------------------------------------------------
 
 		void __cdecl start_mark()
@@ -1261,6 +1267,7 @@ namespace join_in_progress
 		xml1_hook_transaction::memory memory;
 		bool safe = true;
 		std::vector<xml1_hook_transaction::patch> writes{
+			{roster_hero_call, bytes(roster_hero_original), rel(0xe8, roster_hero_call, reinterpret_cast<const void*>(&roster_hero_bridge), 5)},
 			{teardown_call, bytes(teardown_original), rel(0xe8, teardown_call, reinterpret_cast<const void*>(&start_mark), 5)},
 			{unregister_2c, bytes(branch_original), bytes(branch_patched)},
 			{unregister_18, bytes(branch_original), bytes(branch_patched)},

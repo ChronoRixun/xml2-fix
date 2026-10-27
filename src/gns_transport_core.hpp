@@ -14,6 +14,18 @@
 
 namespace gns_transport_core
 {
+	// 0x611550's original entry stack: return address, participant index,
+	// reason for that participant, reason for everyone else, one-byte flag.
+	// 0x2b carries index / chosen reason / flag, padded to 12 bytes.
+	struct removal_notice
+	{
+		std::uint32_t caller, index, lost, others, flag;
+	};
+	inline removal_notice read_removal_notice(const std::uint32_t* frame)
+	{
+		return {frame[0], frame[1], frame[2], frame[3], frame[4] & 0xffu};
+	}
+
 	inline bool hello_due(bool connector, bool bound, std::uint32_t now, std::uint32_t last)
 	{
 		return connector && !bound && (last == 0 || now - last >= 250);

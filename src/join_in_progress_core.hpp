@@ -15,6 +15,14 @@
 // A seat whose record leaves, or a stage that outlives its limit, is dropped (the host stops holding the barrier).
 namespace join_in_progress_core
 {
+	// The online roster's parentheses name the held hero, not the participant.
+	// A solo-story spectator has no hero; keep the native name when one exists.
+	template<class Format>
+	int format_roster_hero(Format format, char* out, int capacity, const char* pattern, const char* hero)
+	{
+		return format(out, capacity, pattern, hero && hero[0] ? hero : "Spectating");
+	}
+
 	// Solo story segments (rule 26 revision 5): the first game seats one hero alone (Wolverine's opening, Magma's
 	// mansion tours); the other players keep their participant and watch. When the story widens the party again, the
 	// native zone-start seat binding (game vt+0x188) hands the heroes out in slot order, so each player would get
