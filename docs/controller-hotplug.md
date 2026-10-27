@@ -15,6 +15,17 @@ which missed the live startup/discovery split. The bridge remains useful when ac
 Options: an absent saved GUID otherwise becomes sentinel 666 and that panel
 clears the corresponding actions.
 
+## Configuration
+
+`[Input] LatePads=1` (default, including an absent key) enables late controller
+arrival routing and Advanced Options binding preservation. Set `LatePads=0`
+to retain the behavior from before the late-pad fix: no bridge at `0x61862A`,
+no primary-input arrival refresh, binding/state/metadata writes or topology
+updates from this feature. Restart the game after changing the key. The normal
+DirectInput/XInput hooks and the independent `CacheDeviceScan` setting continue
+to work. This uses the usual INI switch syntax (`1`/`0`, `true`/`false`,
+`yes`/`no`, `on`/`off`); empty or invalid values use the default.
+
 ## Arrival routing
 
 `gamepad_fix` calls `pad_hotplug::on_keyboard_read` before its original
@@ -55,8 +66,7 @@ a disconnected XInput index can also be reassigned when a rapid reconnect was
 not visible in a DirectInput snapshot. Before validated gameplay topology is
 available, source selection retains the previous ordinal behavior. Logitech
 Dual Action product/object/state layout and the foreground-only input policy
-are preserved. No new INI key, registry write or gameplay agreement rule is
-added.
+are preserved. No registry write or gameplay agreement rule is added.
 
 ## Diagnostics
 

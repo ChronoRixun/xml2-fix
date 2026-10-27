@@ -83,7 +83,9 @@ _hud = (R / "test/classic_hud_install_test.cpp").read_text(encoding="utf-8")
 _hud_sites = len(re.findall(r"0x[0-9a-fA-F]+", re.search(r"sites\[\]\s*\{(.*?)\};", _hud, re.S)[1]))
 cmds += [[str(b / "xml2_classic_hud_install_test.exe"), EXE, mode] for mode in ["on", "off", "zero", "named-off", "legacy", "invalid", "base", "assets", "alias", "stale"] + [f"guard{i}" for i in range(_hud_sites)]]
 # Suites run once per mode beside the exe: their logs need the mode in the tag (else the second run overwrites the first).
-installer_modes = {"xml2_xml1_air_carry_test"}
+installer_modes = {"xml2_xml1_air_carry_test", "xml2_pad_hotplug_test", "xml2_pad_hotplug_live_test"}
+for fixture in ("xml2_pad_hotplug_test", "xml2_pad_hotplug_live_test"):
+    cmds += [[str(b / (fixture + ".exe")), EXE, mode] for mode in ("1", "0")]
 cmds.append([str(b / "xml2_xml1_grab_carry_install_test.exe"), EXE, "both"])
 cmds += [[str(b / "xml2_xml1_air_carry_test.exe"), EXE, mode] for mode in ("both", "raised")]
 cmds.append([str(b / "xml2_shared_handlers_c_test.exe"), EXE, XBE, "--off-proof"])
