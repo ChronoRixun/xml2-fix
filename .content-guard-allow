@@ -1,5 +1,6 @@
 # Scoped exceptions for the builder content guard used on this C++ repository.
 # Each entry describes original code/art or invented test data; no game assets are accepted.
+DISASM test/pad_hotplug_test.cpp # Authored caller frames for the owned retail mapping/read fixture; game bytes are supplied at runtime, with no retail instruction listing embedded.
 DISASM test/pool_counter_observers_test.cpp # Authored synthetic CPU-state entry/capture probes and invented ABI fixture bodies; retail fragments are read from the owned executable at runtime, with no game listing or decompiled body embedded.
 DISASM test/particle_scratch_test.cpp # Authored synthetic caller allocates an argument area and restores its own stack to test eleven thiscall bridges; no game instructions or disassembly listing is embedded.
 DISASM src/anim_enums.cpp # Authored native-map miss bridge preserves the retail wrapper stack and calls our DLL extension lookup; only the short displaced comparison is replayed, no game listing or decompiled body.

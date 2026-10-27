@@ -5558,6 +5558,24 @@ namespace
 		}
 	}
 
+	// Only the owned pipe child's unique pipe can use this fixture ACL. A
+	// restricted token otherwise denies its own client write access to the
+	// server's default ACL. Production parsing/input code still runs unchanged.
+	std::string fixture_pipe_path;
+	HANDLE WINAPI fixture_create_pipe(const char* name, DWORD access, DWORD mode, DWORD instances,
+	                                DWORD output, DWORD input, DWORD timeout, SECURITY_ATTRIBUTES* security)
+	{
+		if (!security && name && fixture_pipe_path == name)
+		{
+			SECURITY_DESCRIPTOR descriptor{};
+			if (!InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) ||
+			    !SetSecurityDescriptorDacl(&descriptor, TRUE, nullptr, FALSE)) return INVALID_HANDLE_VALUE;
+			SECURITY_ATTRIBUTES local{sizeof(SECURITY_ATTRIBUTES), &descriptor, FALSE};
+			return CreateNamedPipeA(name, access, mode | PIPE_REJECT_REMOTE_CLIENTS, instances, output, input, timeout, &local);
+		}
+		return CreateNamedPipeA(name, access, mode, instances, output, input, timeout, security);
+	}
+
 	// Runs in the child process (run_pipe_child), whose dinput.dll saw [Test] InputPipe=1 with
 	// PipeName=`name`, VirtualPads=2, and [Online] Server=127.0.0.1.
 	void check_pipe(const std::string& name)
@@ -5631,9 +5649,22 @@ namespace
 		}
 
 		HANDLE pipe = INVALID_HANDLE_VALUE;
+		bool fixture_acl = false;
 		for (int attempt = 0; attempt < 50 && pipe == INVALID_HANDLE_VALUE; ++attempt)
 		{
 			pipe = CreateFileA(pipe_path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+			if (pipe == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED && !fixture_acl)
+			{
+				fixture_pipe_path = pipe_path;
+				CHECK(iat_hook::hook(GetModuleHandleW(L"dinput.dll"), "KERNEL32.dll", "CreateNamedPipeA", 0,
+				                     reinterpret_cast<void*>(&fixture_create_pipe)) != nullptr);
+				// Connect read-only to retire the already-created default-ACL
+				// instance. Its next instance uses the test-only local ACL.
+				const HANDLE old = CreateFileA(pipe_path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+				if (old != INVALID_HANDLE_VALUE) CloseHandle(old);
+				fixture_acl = true;
+				std::printf("  info  owned pipe fixture uses an explicit local ACL for the restricted test token\n");
+			}
 			if (pipe == INVALID_HANDLE_VALUE) Sleep(100);
 		}
 		CHECK(pipe != INVALID_HANDLE_VALUE);
@@ -9362,8 +9393,16 @@ namespace
 		fake_discord(const std::wstring& tag, Script script)
 		{
 			pipes = L"\\\\.\\pipe\\xml2_test-discord-" + std::to_wstring(GetCurrentProcessId()) + L"-" + tag + L"-";
-			server_ = CreateNamedPipeW((pipes + L"0").c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1,
-			                           64 * 1024, 64 * 1024, 0, nullptr);
+			// The fixture's client may run with a restricted test token. The
+			// default owner ACL then denies even this process opening its own pipe.
+			// These invented, PID-scoped test pipes allow local clients explicitly;
+			// production Discord pipes and their access policy are untouched.
+			SECURITY_DESCRIPTOR security{};
+			CHECK(InitializeSecurityDescriptor(&security, SECURITY_DESCRIPTOR_REVISION));
+			CHECK(SetSecurityDescriptorDacl(&security, TRUE, nullptr, FALSE));
+			SECURITY_ATTRIBUTES access{sizeof(SECURITY_ATTRIBUTES), &security, FALSE};
+			server_ = CreateNamedPipeW((pipes + L"0").c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1,
+			                           64 * 1024, 64 * 1024, 0, &access);
 			go_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 			thread_ = std::thread([this, script]
 			{
