@@ -516,10 +516,13 @@ int main(int argc, char** argv)
 	for (int k = 1; k + 1 < argc; k += 2) args[argv[k]] = argv[k + 1];
 	if (!args.count("--list") || !args.count("--data") || !args.count("--registry") || !args.count("--out"))
 	{
-		std::printf("usage: lcsave_real_saves --list FILE --data BUILD --registry FILE --out DIR [--w2-only 1]\n");
+		std::printf("usage: lcsave_real_saves --list FILE --data BUILD --registry FILE --out DIR [--w2-only 1] [--economy 1]\n");
 		return 2;
 	}
 	w2_only = args.count("--w2-only") && args["--w2-only"] == "1";
+	// --economy 1: a build with [Game] Xml1Economy=1 (rule 52 verified) migrates the rebuilt Danger Room rewards of old
+	// saves (part 64); the DLL binds this verifier when the economy installs (lcsave_rebuilt_corpus does the same)
+	if (args.count("--economy") && args["--economy"] == "1") { set_xml1_economy_verifier(+[] { return true; }); std::printf("economy: rule 52 verifier bound (rebuilt-reward migration on)\n"); }
 	if (w2_only) std::printf("W2 only: the E10A2 / retail halves are not run (a --save-layout w2 build's tables)\n");
 	Tables tables;
 	std::string error;
