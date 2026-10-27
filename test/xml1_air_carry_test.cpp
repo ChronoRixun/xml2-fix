@@ -121,7 +121,15 @@ __declspec(naked) bool __fastcall descent_probe(void*,void*,void*){
 __declspec(naked) void descent_rejected(){__asm {add esp,4} __asm {xor eax,eax} __asm {ret}}
 __declspec(naked) void descent_accepted(){__asm {mov eax,1} __asm {ret}}
 float __fastcall air_energy(void*,void*){return energy;}
-void __fastcall spend(void*,void*,float cost){++debits;last_debit=cost;}
+bool finite_debit=false;
+void __fastcall energy_set(void* who,void*,float value){energy=value;put(who,0x288,value);}
+__declspec(naked) void __fastcall native_debit(void*,void*,float){
+ __asm {push esi} __asm {sub esp,10h} __asm {mov esi,ecx}
+ __asm {mov eax,[esp+18h]} __asm {mov [esp+4],eax}
+ __asm {mov eax,4319b5h} __asm {jmp eax}
+}
+__declspec(naked) void debit_done(){__asm {add esp,10h} __asm {pop esi} __asm {ret 4}}
+void __fastcall spend(void* who,void*,float cost){++debits;last_debit=cost;if(finite_debit)native_debit(who,nullptr,cost);}
 void air_bind(){
  // Older installers do not guard this table entry. Supply its retail value
  // for the baseline differential without replacing a newly installed hook.
@@ -129,7 +137,9 @@ void air_bind(){
  move_vt[0x30/4]=reinterpret_cast<void*>(&air_move_handler);
  // Keep the real Guard/no-power/native-refusal instructions. Only the
  // vector descent tail is replaced by a return in this invented caller.
- native(0x433e46,0x26);if(get<unsigned char>(ptr(0x433e6c),0)!=0xe9)jump(0x433e6c,&descent_rejected);jump(0x433e72,&descent_rejected);jump(0x433ea5,&descent_accepted);jump(0x61a3a0,&descent_blocked);jump(0x42b6c0,&downward_probe);
+ const auto installed_shortcut=get<std::uint16_t>(ptr(0x433e6a),0);
+ native(0x433e46,0x26);put(ptr(0x433e6a),0,installed_shortcut);
+ if(get<unsigned char>(ptr(0x433e6c),0)!=0xe9)jump(0x433e6c,&descent_rejected);jump(0x433e72,&descent_rejected);jump(0x433ea5,&descent_accepted);jump(0x61a3a0,&descent_blocked);jump(0x42b6c0,&downward_probe);
  jump(0x427ca0,&flight_named);jump(0x431e00,&emergency_drop);jump(0x402b60,&air_cast);jump(0x429110,&air_physical);jump(0x41b120,&intern);jump(0x501a50,&air_named);jump(0x42c340,&air_start);jump(0x45fe40,&air_publish);jump(0x432030,&air_force);jump(0x427c80,&air_action);jump(0x42d8e0,&air_lock);jump(0x42c7c0,&selection);jump(0x43b180,&air_rank);
  jump(0x484990,&manager);jump(0x59ee20,&ui);jump(0x4bdb30,&manager);jump(0x48de40,&session);jump(0x5252e0,&manager);jump(0x41a220,&air_team);jump(0x429210,&target_valid);jump(0x54d710,&immune);jump(0x427f60,&object_lift);jump(0x4c87a0,&ma);jump(0x4c87b0,&mb);jump(0x4c87c0,&mc);jump(0x4c8820,&mv);jump(0x425b70,&air_parameter);jump(0x4fce50,&generic);jump(0x4fbe80,&air_fallback);
  jump(0x4ab740,&free_query);jump(0x4ab6d0,&acquire);jump(0x4ab720,&release);jump(0x4a9590,&contact_entity);jump(0x560990,&air_facing);jump(0x5607b0,&inverse);jump(0x41d620,&air_bone);jump(0x438cb0,&sound_set);jump(0x477310,&manager);jump(0x421080,&feedback);jump(0x41f7d0,&air_flight);jump(0x41d5d0,&air_energy);jump(0x4318d0,&spend);
@@ -342,6 +352,74 @@ void carry_damage_test(){
  actor_vt[0x104/4]=old_exclusion;air_bind();
 }
 
+
+
+void fastball_authored_event_test(){
+ // XML1 shared_nodes.eng authors throwally playspeed=1.25 and victim_throw
+ // time=.5, forwardvelocity=600, upvelocity=100. There is no Attack gate.
+ air_reset();sequence_mode=true;event_mode=true;move_name("throwally");
+ actor_vt[0xf0/4]=reinterpret_cast<void*>(&event_tick);
+ const auto old_exclusion=actor_vt[0x104/4];actor_vt[0x104/4]=reinterpret_cast<void*>(&event_exclusion);
+ put(victim.data(),4,0x87u);put(victim.data(),0x178,0x1111u);
+ for(int frame=0;frame<24;++frame){now=frame/60.f;get<frame_t>(ptr(victim_vtable),16)(nullptr,nullptr,victim.data(),nullptr);check(get<u32>(victim.data(),4)==0x87&&relatives==0&&starts==0,"converted ally victim remains held on every callback before the authored .5 animation-time event");}
+ std::array<unsigned char,0x30> event{};put(event.data(),0x14,100.f);put(event.data(),0x18,600.f);put(event.data(),0x2c,.5f);put(event.data(),0x1c,1u);put(event.data(),0x20,1u);put(event.data(),0x24,1u);
+ now=.4f;reinterpret_cast<void(__thiscall*)(void*,void*,void*)>(0x4db830)(event.data(),actor.data(),nullptr);
+ const auto velocity=get<V>(victim.data(),0x120);
+ check(get<u32>(actor.data(),0x76c)==0&&velocity.x==600.f&&velocity.z==100.f,"actual retail event launches Fastball automatically with authored velocity and releases selection without Attack");
+ actor_vt[0x104/4]=old_exclusion;sequence_mode=event_mode=false;
+}
+
+bool __fastcall infinite_energy(void*,void*,int query){check(query==1,"native player energy getter queries the infinite-energy switch");return false;}
+void finite_energy_hold_test(){
+ auto carry=air_handler("ch_air_grab_pickup_idle");
+ // Keep the native clamp/store calculation. Only descriptor lookup, UI and
+ // the terminal setter are outside this fixture's boundary.
+ native(0x4319b5,0x56);native(0x680030,4);native(0x41d5d0,0x41);put<unsigned char>(ptr(0x70b705),0,0);jump(0x431a0b,&debit_done);
+ put<unsigned char>(ptr(0x70b704),0,0);jump(0x44cce0,&manager);const auto old_switch=manager_vt[2];manager_vt[2]=reinterpret_cast<void*>(&infinite_energy);
+ const auto old_setter=actor_vt[0x1a8/4];actor_vt[0x1a8/4]=reinterpret_cast<void*>(&energy_set);finite_debit=true;
+ for(float initial:{40.f,60.f,200.f}){
+  air_reset();actor_team=0x1d;energy=initial;put(actor.data(),0x288,initial);put(actor.data(),0x314,1000.f);put(actor.data(),0x6a4,1.f);put(air_input.data(),0,0x100u);
+  int landing=-1;
+  for(int frame=0;frame<240;++frame){
+   now=2.f+frame*.016f;callback<frame_t>(carry,4)(carry,nullptr,actor.data(),air_input.data());
+   if(last_flight==0){landing=frame;break;}
+  }
+  if(initial==40.f)check(landing>=63&&landing<=66,"a real 40-energy budget lands about one second after pickup while Guard remains held");
+  if(initial==60.f)check(landing>=126&&landing<=130,"a real 60-energy budget reproduces the two-second held carry break");
+  if(initial==200.f)check(landing==-1&&energy==120.f,"a verified sufficient budget survives four seconds of established held carry");
+ }
+ finite_debit=false;actor_vt[0x1a8/4]=old_setter;manager_vt[2]=old_switch;jump(0x41d5d0,&air_energy);
+}
+
+std::array<unsigned char,0xc700> shortcut_state{};
+std::array<u32,4> shortcut_buttons{};
+bool __fastcall shortcut_enabled(void*,void*){return true;}
+void* __cdecl shortcut_input(){return shortcut_state.data();}
+void native_shortcut_admission_test(){
+ air_reset();native(0x61a3a0,0x32);jump(0x551ed0,&manager);jump(0x55a390,&shortcut_input);
+ for(unsigned i=0;i+4<=0x32;++i)if(get<u32>(ptr(0x61a3a0),i)==0xa6ad58)put(ptr(0x61a3a0),i,u32(reinterpret_cast<std::uintptr_t>(shortcut_buttons.data())));
+ auto saved=manager_vt[0x28/4];manager_vt[0x28/4]=reinterpret_cast<void*>(&shortcut_enabled);
+ shortcut_buttons[0]=0x40u;put(air_input.data(),0,0x100u);
+ check(reinterpret_cast<bool(__cdecl*)(int)>(0x61a3a0)(0),"retail PC shortcut predicate really returns true in this input state");
+ check(descent_probe(actor.data(),nullptr,air_input.data())&&probes==1&&carry_entries==1,"XML1 Guard admission survives the PC-only shortcut refusal that precedes the old hook");
+ air_reset();put(air_input.data(),0,0x180u);descent_probe(actor.data(),nullptr,air_input.data());check(probes==0&&carry_entries==0,"real power modifier still blocks Guard carry admission");
+ manager_vt[0x28/4]=saved;air_bind();
+}
+void native_entry_pose_test(){
+ air_reset();native(0x500640,7);native(0x500840,7);native(0x4f5a30,0x70);
+ const auto old30=move_vt[0x30/4],old_e8=move_vt[0xe8/4];
+ move_vt[0x30/4]=ptr(0x500640);move_vt[0xe8/4]=ptr(0x500840);
+ put(other.data(),0,move_vt.data());put(other.data(),0xc8,air_handler("ch_air_grab_pickup_idle"));put<unsigned char>(other.data(),0x146,0);
+ put(actor.data(),0x378,other.data());put(air_context.data(),4,other.data());put(move.data(),0xbc,anim_enums::extension_id("ea_flyingcarry_idle_a"));
+ unsigned before=0,after=0;__asm mov before,esp
+ reinterpret_cast<void(__thiscall*)(void*,void*,void*,void*)>(0x4f5a30)(other.data(),actor.data(),air_input.data(),air_context.data());
+ __asm mov after,esp
+ // Literal independently derived hand midpoints: carrier(20,40,60),
+ // victim(10,20,30), victim root zero => desired root(10,20,30).
+ check(before==after&&last_position.x==10&&last_position.y==20&&last_position.z==30,"native carry entry aligns the hand socket instead of resetting the victim to pelvis-minus-55");
+ move_vt[0x30/4]=old30;move_vt[0xe8/4]=old_e8;air_bind();
+}
+
 struct Matrix{float f[16];};
 std::array<unsigned char,16> render{},skeleton{},bone_model_data{};
 std::array<void*,32> render_vt{},skeleton_vt{};
@@ -366,6 +444,74 @@ void native_bone_tests(){
  auto h=air_handler("ch_air_grab_pickup_idle");callback<entry_t>(h,1)(h,nullptr,actor.data(),nullptr,air_context.data());
  check(native_bone_reads==1&&last_position.z==30.f,"retail carry bone0 reaches animated skeleton (85-55), not approximate root-30");
  actor_vt[0x188/4]=saved188;air_bind();
+}
+
+std::array<std::array<unsigned char,16>,2> world_models{},world_renders{},world_skeletons{},world_objects{};
+std::array<void*,8> world_render_vt{},world_object_vt{};std::array<void*,32> world_skeleton_vt{};
+void* __fastcall world_model(void* who,void*){return world_models[who==actor.data()?0:1].data();}
+void* __fastcall world_skeleton(void* who,void*){return world_skeletons[who==world_renders[0].data()?0:1].data();}
+void* __fastcall world_object(void* who,void*){return world_objects[who==world_renders[0].data()?0:1].data();}
+void __fastcall world_matrix(void* who,void*,Matrix* out,int zero){
+ check(zero==0,"native renderer requests the world matrix without extra pose flags");
+ const bool carrier=who==world_objects[0].data();void* a=carrier?actor.data():victim.data();
+ const auto position=get<V>(a,0x20);matrix_translation(out,nullptr,&position);
+ // Independently specified animated renderer transforms: carrier +90deg,
+ // victim 180deg. The renderer owns this sampled pose during the callback.
+ out->f[0]=out->f[5]=carrier?0.f:-1.f;out->f[1]=carrier?1.f:0.f;out->f[4]=carrier?-1.f:0.f;
+}
+bool __fastcall world_bone(void* who,void*,int id,Matrix* out){
+ check(id==5||id==6,"real animated path requests LHand/RHand selectors from the common bone table");
+ const bool carrier=who==world_skeletons[0].data();const V mid=carrier?V{20,0,50}:V{5,10,40};
+ const V point{mid.x+(id==5?-2.f:2.f),mid.y,mid.z};matrix_translation(out,nullptr,&point);return true;
+}
+Matrix* __fastcall matrix_product(Matrix* out,void*,const Matrix* a,const Matrix* b){
+ Matrix result{};for(int row=0;row<4;++row)for(int col=0;col<4;++col)for(int k=0;k<4;++k)result.f[row*4+col]+=a->f[row*4+k]*b->f[k*4+col];*out=result;return out;
+}
+V* __fastcall pose_add(V* out,void*,const V* in){out->x+=in->x;out->y+=in->y;out->z+=in->z;return out;}
+float __fastcall pose_component(const V* v,void*,int i){return (&v->x)[i];}
+void* __fastcall no_powerup(void*,void*,void*){return nullptr;}
+void native_world_pose_test(){
+ air_reset();sequence_mode=true;flight_rank=6;
+ const auto saved188=actor_vt[0x188/4],saved30=move_vt[0x30/4],saved28=move_vt[0x28/4],savede8=move_vt[0xe8/4];
+ const auto saved130=actor_vt[0x130/4],saved158=actor_vt[0x158/4],saved34=actor_vt[0x34/4],saved150=actor_vt[0x150/4];
+ actor_vt[0x188/4]=reinterpret_cast<void*>(&world_model);move_vt[0x30/4]=ptr(0x500640);move_vt[0xe8/4]=ptr(0x500840);move_vt[0x28/4]=reinterpret_cast<void*>(&no_powerup);
+ for(int i=0;i<2;++i){put(world_models[i].data(),0,world_renders[i].data());put(world_renders[i].data(),0,world_render_vt.data());put(world_skeletons[i].data(),0,world_skeleton_vt.data());put(world_objects[i].data(),0,world_object_vt.data());}
+ world_render_vt[5]=reinterpret_cast<void*>(&world_skeleton);world_render_vt[2]=reinterpret_cast<void*>(&world_object);world_skeleton_vt[25]=reinterpret_cast<void*>(&world_bone);world_object_vt[4]=reinterpret_cast<void*>(&world_matrix);
+ native(0x41d620,0x5f);native(0x569370,0x4b);native(0x5692e0,0x90);native(0x568e90,0x448);native(0x500640,7);native(0x500840,7);native(0x4f5a30,0x70);native(0x4f5cf0,0x187);
+ // Include all three bytes of each ret8, not only its opcode.
+ native(0x42d450,0xfb);native(0x41c400,0x2b);native(0x41c430,0x33);
+ actor_vt[0x130/4]=ptr(0x42d450);actor_vt[0x158/4]=ptr(0x41c430);actor_vt[0x34/4]=ptr(0x41c400);actor_vt[0x150/4]=reinterpret_cast<void*>(&air_position);
+ put(ptr(0x67fa2c),0,reinterpret_cast<void*>(&event_copy));put(ptr(0x67f9e0),0,reinterpret_cast<void*>(&event_copy));put(ptr(0x67f9f4),0,reinterpret_cast<void*>(&pose_add));put(ptr(0x67f9c4),0,reinterpret_cast<void*>(&event_component));put(ptr(0x67f9d8),0,reinterpret_cast<void*>(&pose_component));
+ put(ptr(0x67fa28),0,reinterpret_cast<void*>(&matrix_identity));put(ptr(0x67fa1c),0,reinterpret_cast<void*>(&vector_construct));put(ptr(0x67fa94),0,reinterpret_cast<void*>(&matrix_translation));put(ptr(0x67fa00),0,reinterpret_cast<void*>(&matrix_position));put(ptr(0x67f8c0),0,reinterpret_cast<void*>(&matrix_product));
+ put(actor.data(),4,0x10080u);put(victim.data(),4,0x10080u);put(actor.data(),0x20,V{100,200,300});put(victim.data(),0x20,V{10,20,30});
+ put(other.data(),0,move_vt.data());put(other.data(),0xc8,air_handler("ch_air_grab_pickup_idle"));put<unsigned char>(other.data(),0x146,0);put(actor.data(),0x378,other.data());put(air_context.data(),4,other.data());put(move.data(),0xbc,anim_enums::extension_id("ea_flyingcarry_idle_a"));
+ reinterpret_cast<void(__thiscall*)(void*,void*,void*,void*)>(0x4f5a30)(other.data(),actor.data(),air_input.data(),air_context.data());
+ auto v=get<V>(victim.data(),0x20);check(v.x==105&&v.y==230&&v.z==310,"real CMove entry plus renderer world transforms aligns hand midpoints at (100,220,350)");
+ for(int frame=0;frame<60;++frame){put(actor.data(),0x20,V{100.f+frame,200.f+2*frame,300.f+frame});reinterpret_cast<void(__thiscall*)(void*,void*,void*)>(0x4f5cf0)(other.data(),actor.data(),air_input.data());v=get<V>(victim.data(),0x20);check(v.x==105.f+frame&&v.y==230.f+2*frame&&v.z==310.f+frame,"real CMove frame and world-space hand path keeps moving attachment aligned each frame");}
+ actor_vt[0x188/4]=saved188;actor_vt[0x130/4]=saved130;actor_vt[0x158/4]=saved158;actor_vt[0x34/4]=saved34;actor_vt[0x150/4]=saved150;move_vt[0x30/4]=saved30;move_vt[0x28/4]=saved28;move_vt[0xe8/4]=savede8;sequence_mode=false;air_bind();
+}
+
+void* __fastcall native_input_chain(void* who,void*,int action){
+ check(who==actor.data(),"native generic input resolves actions on the carrier");
+ if(action==0)return get<void*>(who,0x378);
+ if(action==9||action==11)return other.data();
+ return nullptr;
+}
+__declspec(naked) void cookie_check(){__asm {ret}}
+void native_generic_stick_test(){
+ native(0x4fce50,0x8b0);native(0x6dc35c,0x40);native(0x6f38f8,4);native(0x680030,4);jump(0x672161,&cookie_check);jump(0x427c80,&native_input_chain);
+ auto carry=air_handler("ch_air_grab_pickup_idle");
+ // Human input magnitude is normalized here; PC physics scales it later.
+ // The old fixture used magnitude 50/150 and parameter2=1 instead.
+ for(bool shortcut:{false,true})for(float stick:{0.f,.15f,.5f,1.f}){
+  air_reset();native_descent_blocked=shortcut;parameter2=500.f;parameter8=100.f;parameter9=300.f;put(air_input.data(),0,0x100u);put(air_input.data(),4,0u);put(air_input.data(),8,stick);
+  put(other.data(),0,move_vt.data());
+  const auto old_flags=get<unsigned char>(actor.data(),0x764);
+  const bool changed=callback<update_t>(carry,6)(carry,nullptr,actor.data(),air_input.data());
+  check(changed==(stick>.2f)&&get<void*>(actor.data(),0x3bc)==(stick>.2f?other.data():move.data()),"native generic side effects plus normalized held-Guard stick input preserve the selected carry chain");
+  check(get<unsigned char>(actor.data(),0x764)==old_flags&&drops==0&&air_starts==0,"native generic held/stick path never interrupts or drops the pair");
+ }
+ air_bind();
 }
 
 int expression_parses=0;
@@ -405,7 +551,7 @@ void flight_tests(){
   if(c==3)flight_rank=2;if(c==4)probe_hit=false;if(c==5)contact_exists=false;if(c==6)char_target=nullptr;
   if(c==7)put<unsigned char>(victim_stats.data(),0x2ad,8);if(c==8)put(ptr(0x70b814),0,0x3333u);
   if(c==9)current_flying=false;if(c==10)native_descent_blocked=true;if(c==11)put(actor.data(),0x3d4,-1);if(c==12)move_present=false;
-  const bool handled=descent_probe(actor.data(),nullptr,air_input.data());check(carry_entries==(c==0?1:0),"Guard 0x100 admission; 0x08/power/rank2/miss/noncharacter/large/inactive/move/native refusal negatives");
+  const bool handled=descent_probe(actor.data(),nullptr,air_input.data());check(carry_entries==((c==0||c==10)?1:0),"Guard 0x100 admission; 0x08/power/rank2/miss/noncharacter/large/inactive/move/native refusal negatives");
   if(c==3||c==9)check(handled&&probes==1,"source valid contact suppresses descent even when rank/current move prevents pickup");
   if(c==4||c==7)check(!handled,"miss or large contact retains native descent");
   if(c==12)check(handled&&descent_forces==1&&flight_sets==1,"missing decide node retains source null-force and flight path");
@@ -440,6 +586,6 @@ int main(int argc,char** argv){
  SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
  AddVectoredExceptionHandler(1,[](PEXCEPTION_POINTERS e)->LONG{std::printf("air fixture exception %08lX at %p ESP=%08lX ECX=%08lX ESI=%08lX\n",e->ExceptionRecord->ExceptionCode,e->ExceptionRecord->ExceptionAddress,e->ContextRecord->Esp,e->ContextRecord->Ecx,e->ContextRecord->Esi);for(unsigned i=0;i<12;++i)std::printf(" %08X",reinterpret_cast<u32*>(e->ContextRecord->Esp)[i]);std::puts("");ExitProcess(1);});
  const int lifecycle=lifecycle_main(argc,argv);if(lifecycle&&!xml1_grab_carry::installed())return lifecycle;
- air_bind();std::puts("admission");admission_tests();std::puts("pickup");pickup_tests();std::puts("carry");carry_tests();std::puts("release");release_tests();std::puts("sequence");sequence_tests();std::puts("held acquisition");held_acquisition_test();std::puts("carry damage");carry_damage_test();std::puts("flight");flight_tests();powerup_tests();native_bone_tests();
+ air_bind();std::puts("admission");admission_tests();std::puts("finite energy");finite_energy_hold_test();std::puts("native shortcut");native_shortcut_admission_test();std::puts("native entry pose");native_entry_pose_test();std::puts("pickup");pickup_tests();std::puts("carry");carry_tests();std::puts("release");release_tests();std::puts("sequence");sequence_tests();std::puts("held acquisition");held_acquisition_test();std::puts("carry damage");carry_damage_test();std::puts("fastball authored event");fastball_authored_event_test();std::puts("flight");flight_tests();powerup_tests();native_bone_tests();std::puts("native world pose");native_world_pose_test();std::puts("native generic stick");native_generic_stick_test();
  std::printf("%s flying carry callbacks: %d checks, %d failures\n",failures?"FAIL":"PASS",checks,failures);return failures?1:0;
 }

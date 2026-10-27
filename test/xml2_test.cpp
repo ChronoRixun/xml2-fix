@@ -4577,8 +4577,25 @@ namespace
 		m.put(0x729974, 1);
 		m.put(0xa0a828, 0);
 		m.put(0xa12828, 0x006b7361);
+        m.put(0x910288,0x42340000); // 45 current energy: normal 41D5D0 branch
+        m.put(0x910314,0x42c80000); // 100 maximum energy, never a refill proof
+        m.put(0x9106ac,0x42700000); // 60 pending recovery: 42CB70 writes this
+        m.put(0x910178,77);m.put(0x91076c,88);m.put(0x9103d8,4);m.put(0x9100bc,99);
+        m.put(0x910378,0x950000);m.put(0x950008,1);m.put(0x9500bc,224);m.put(0x9500c8,0x960000);
+        m.put(0xa37c48,1);m.put(0xa2c448,0);
+        const char move_label[]="airpickupidle";
+        std::memcpy(m.bytes.data()+0xa30448-0x400000,move_label,sizeof move_label);
 		auto live = r.read(102);
 		CHECK(live.party[0].id == 17 && live.party[0].health == 10.f && live.party[0].ai == true);
+        const auto carry_json=actor_json(live.party[0]);
+        CHECK(carry_json.find("\"energy\":45")!=std::string::npos);
+        CHECK(carry_json.find("\"max_energy\":100")!=std::string::npos&&carry_json.find("\"pending_energy\":60")!=std::string::npos);
+        CHECK(carry_json.find("\"owner_entity\":77")!=std::string::npos&&carry_json.find("\"selected_entity\":88")!=std::string::npos);
+        CHECK(carry_json.find("\"move_name\":\"airpickupidle\"")!=std::string::npos&&carry_json.find("\"move_animenum\":224")!=std::string::npos);
+        CHECK(carry_json.find("\"ground_contact\":99")!=std::string::npos&&carry_json.find("\"flying\":true")!=std::string::npos);
+        m.put(0x910288,0x7fc00000);
+        CHECK(actor_json(r.read(102).party[0]).find("\"energy\":null")!=std::string::npos);
+
 		m.put(0x910020, 0x7f800000);
 		CHECK(!r.read(103).party[0].pos[0]);
 		m.put(0x91001c, 18);
@@ -4676,7 +4693,7 @@ namespace
 		CHECK(pipe.name == "xml2-join" && pipe.error.empty());
 		CHECK(choose_pipe("; commented out").name == "xml2-fix-input" && choose_pipe("; commented out").error.empty());
 		CHECK(choose_pipe(std::string(64, 'a')).name == std::string(64, 'a'));
-		for (const char* bad : {"has space", "back\\slash", "sl/ash", "dot.name", "colon:", "star*", "quote\"", "tÃ©st"})
+		for (const char* bad : {"has space", "back\\slash", "sl/ash", "dot.name", "colon:", "star*", "quote\"", "tÃƒÂ©st"})
 		{
 			pipe = choose_pipe(bad);
 			if (pipe.name != "xml2-fix-input" || pipe.error.empty())
