@@ -670,9 +670,19 @@ namespace online_restore_core
 		{
 			message m;
 			const int slot = slot_of(from);
-			if (const auto r = parse(d, n, m); r != refusal::none) return refused(slot, r, now);
-			if (std::memcmp(m.code, code_, 8) || m.session != session_) return refused(slot, refusal::foreign, now);
-			if (decision(m.t) || slot < 0) return refused(slot, refusal::unauthorized, now);
+			if (const auto r = parse(d, n, m); r != refusal::none) return refused(slot, r, now, d, n);
+			if (std::memcmp(m.code, code_, 8) || m.session != session_) return refused(slot, refusal::foreign, now, d, n);
+			if (decision(m.t) || slot < 0) return refused(slot, refusal::unauthorized, now, d, n);
+			if (departed_[slot])
+			{
+				// It left past the consistency line: nothing it says counts; answer with its own END (it may have lost it).
+				if (!departed_msg_[slot].empty() && now - last_reply_[slot] >= reply_min_ms)
+				{
+					last_reply_[slot] = now;
+					out_.push_back({std::uint8_t(slot), departed_msg_[slot]});
+				}
+				return refusal::stale;
+			}
 			if (m.op != op_ || terminal(phase_))
 			{
 				// About the finished operation: answer with its outcome (rate-limited) - the member missed it. An END
@@ -685,13 +695,12 @@ namespace online_restore_core
 				}
 				return refusal::stale;
 			}
-			if (departed_[slot]) return refusal::stale; // it left past the consistency line; nothing it says counts
 			auto& last = last_rx_[slot][unsigned(m.t)];
 			const std::vector<std::uint8_t> bytes(d, d + n);
 			if (last == bytes) return refusal::repeat;
 			const auto r = handle(std::uint8_t(slot), m, now);
 			if (r == refusal::none) last = bytes;
-			else return refused(slot, r, now);
+			else return refused(slot, r, now, d, n);
 			return r;
 		}
 
@@ -715,7 +724,7 @@ namespace online_restore_core
 				{
 					// Everyone holds the same world: members not seated in time depart (review fix 6); the host must seat.
 					if (!seated_[0]) { end(reason::seat_timeout, 0, now); return; }
-					for (std::uint8_t s = 1; s < members_.size(); ++s) if (!departed_[s] && !seated_[s]) depart(s, now);
+					for (std::uint8_t s = 1; s < members_.size(); ++s) if (!departed_[s] && !seated_[s]) depart(s, now, reason::seat_timeout);
 					return;
 				}
 				break;
@@ -725,7 +734,7 @@ namespace online_restore_core
 			if (now - resent_ >= resend_ms)
 			{
 				resent_ = now;
-				for (const auto& b : decisions_) out_.push_back({slot_none, b});
+				for (const auto& b : decisions_) broadcast(b);
 			}
 		}
 
@@ -777,6 +786,7 @@ namespace online_restore_core
 		std::vector<std::vector<std::uint8_t>> decisions_;
 		std::vector<std::uint8_t> outcome_msg_, repick_msg_;
 		std::array<std::uint16_t, members_max> pick_seq_{};
+		std::array<std::vector<std::uint8_t>, members_max> departed_msg_{}, last_refused_{};
 		std::vector<outgoing> out_;
 
 		int slot_of(const key& k) const
@@ -803,7 +813,7 @@ namespace online_restore_core
 			outcome_slot_ = slot_none;
 			outcome_msg_.clear();
 			votes_ = {}; staged_ = {}; loaded_ = {}; seated_ = {}; departed_ = {};
-			rollbacks_ = {}; checks_ = {}; progress_ = {}; last_reply_ = {}; last_rx_ = {};
+			rollbacks_ = {}; checks_ = {}; progress_ = {}; last_reply_ = {}; last_rx_ = {}; departed_msg_ = {}; last_refused_ = {};
 			for (auto& g : gates_) g = detail::refusal_gate{};
 			own_rollback_ = {};
 			rollback_ok_ = rollback_op_ = false;
@@ -815,9 +825,14 @@ namespace online_restore_core
 		{
 			auto b = encode(m);
 			if (keep) decisions_.push_back(b);
-			if (members_.size() > 1) out_.push_back({slot_none, std::move(b)});
+			broadcast(b);
 		}
 		void restate(const message& m) { decisions_.clear(); decide(m); }
+		// One copy per member still in the operation: a departed member gets nothing but its own END (re-review Q2/Q3).
+		void broadcast(const std::vector<std::uint8_t>& b)
+		{
+			for (std::uint8_t s = 1; s < members_.size(); ++s) if (!departed_[s]) out_.push_back({s, b});
+		}
 		bool all_yes() const { for (std::size_t s = 0; s < members_.size(); ++s) if (votes_[s] != 1) return false; return true; }
 		bool every(const std::array<bool, members_max>& f) const
 		{
@@ -834,10 +849,15 @@ namespace online_restore_core
 			for (std::uint8_t s = 0; s < members_.size(); ++s) if (!departed_[s] && !loaded_[s]) return s;
 			return slot_none;
 		}
-		refusal refused(int slot, refusal r, std::uint32_t now)
+		refusal refused(int slot, refusal r, std::uint32_t now, const std::uint8_t* d, std::size_t n)
 		{
-			if (slot >= 0 && r != refusal::repeat && r != refusal::stale && gates_[slot].add(now) && precommit(phase_))
-				cancel_op(reason::protocol, std::uint8_t(slot), now);
+			if (slot < 0 || r == refusal::repeat || r == refusal::stale) return r;
+			// A member resends its last message once a second (and on every repeated decision): the same refused bytes
+			// again are not a new refusal (re-review Q1). Only different refused messages fill the gate.
+			std::vector<std::uint8_t> bytes(d, d + n);
+			if (bytes == last_refused_[slot]) return r;
+			last_refused_[slot] = std::move(bytes);
+			if (gates_[slot].add(now) && precommit(phase_)) cancel_op(reason::protocol, std::uint8_t(slot), now);
 			return r;
 		}
 		void finish_op(phase p, reason why, std::uint8_t slot, std::uint32_t now)
@@ -986,11 +1006,18 @@ namespace online_restore_core
 			m.gen = gen_;
 			restate(m);
 		}
-		void depart(std::uint8_t slot, std::uint32_t now)
+		void depart(std::uint8_t slot, std::uint32_t now, reason why = reason::member_left)
 		{
 			if (!slot || departed_[slot]) return;
 			departed_[slot] = true;
-			if (phase_ == phase::repick) { repick_.depart(slot); publish_picks(now); }
+			// Tell it (a member still connected must end its own play, never resume) - targeted, kept for its resends.
+			message e = base(type::end);
+			e.because = why;
+			e.slot = slot;
+			departed_msg_[slot] = encode(e);
+			out_.push_back({slot, departed_msg_[slot]});
+			repick_.depart(slot); // its hero is free: watch in the row from now on
+			if (phase_ == phase::repick) publish_picks(now);
 			else if (phase_ == phase::seating) maybe_resume(now);
 		}
 		refusal pick_for(std::uint8_t slot, std::uint16_t hero, std::uint32_t now)
@@ -1026,7 +1053,9 @@ namespace online_restore_core
 				if (m.bytes > progress_[slot]) { progress_[slot] = m.bytes; last_progress_ = now; }
 				return refusal::none;
 			case type::staged:
-				if (phase_ != phase::distributing) return refusal::out_of_phase;
+				// A receiver may finish before the host's own host_ready: record it (re-review Q1); COMMIT still waits
+				// for distributing and every member.
+				if (phase_ != phase::distributing && phase_ != phase::preparing) return refusal::out_of_phase;
 				if (staged_[slot]) return refusal::conflict;
 				if (m.image_len != proposal_.image_len || m.image != proposal_.image) { cancel_op(reason::digest_mismatch, slot, now); return refusal::none; }
 				staged_[slot] = true;
@@ -1164,6 +1193,7 @@ namespace online_restore_core
 			if (phase_ != phase::repick) return refusal::out_of_phase;
 			if (hero == hero_open || (hero != hero_watch && (std::find(picks_.heroes.begin(), picks_.heroes.end(), hero) == picks_.heroes.end() ||
 				(picks_.story != story_none && hero != picks_.story)))) return refusal::hero;
+			if (pick_seq_ == 0xffff) return refusal::closed; // capped: never wraps to the refused sequence 0
 			message m = base(type::pick);
 			m.gen = gen_;
 			m.seq = ++pick_seq_;

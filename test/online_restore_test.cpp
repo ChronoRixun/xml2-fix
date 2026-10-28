@@ -1085,12 +1085,12 @@ namespace
 			bool cut = false;
 			for (int i = 0; i < 16; ++i)
 			{
-				std::vector<std::uint8_t> junk{16, 1, 2};
+				std::vector<std::uint8_t> junk{16, 1, std::uint8_t(2 + i)}; // 16 different malformed messages
 				r.h.receive(K(2), junk.data(), junk.size(), r.t + std::uint32_t(i) * 100);
 				cut = cut || r.h.now() == P::cancelled;
 			}
 			r.pump();
-			check(cut && r.h.outcome() == R::reason::protocol && r.h.outcome_slot() == 1 && r.guests_are(P::cancelled), "protocol: 16 refusals from one member within 10 s cancel the open operation");
+			check(cut && r.h.outcome() == R::reason::protocol && r.h.outcome_slot() == 1 && r.guests_are(P::cancelled), "protocol: 16 different refusals from one member within 10 s cancel the open operation");
 		}
 	}
 
@@ -1453,6 +1453,117 @@ namespace
 		}
 	}
 
+
+	// Re-review of f9d2436 (probe2.cpp Q1-Q4).
+	std::vector<R::message> sent_to(std::vector<R::outgoing> out, int slot)
+	{
+		std::vector<R::message> v;
+		for (auto& o : out)
+			if (o.slot == R::slot_none || o.slot == slot) { R::message m; if (R::parse(o.bytes.data(), o.bytes.size(), m) == F::none) v.push_back(m); }
+		return v;
+	}
+	void rereview_probes()
+	{
+		{
+			// Q1: a guest stages before the host's own host_ready; its resends must not trip the refusal gate.
+			room r(2);
+			r.propose(); r.vote_all();
+			const auto p = sample_proposal();
+			r.G(1).staged(true, p.image_len, p.image, D(0x77), r.t); r.pump();
+			r.step(20000);
+			check(r.h.now() == P::preparing && r.G(1).now() == P::staged, "Q1: an early STAGED (host still preparing) is not a protocol fault - 20 s later still preparing");
+			r.h.host_ready(true, D(0x77), r.t); r.pump();
+			check(r.h.now() == P::committed && r.G(1).now() == P::committed && r.h.rollback_available(), "Q1: the early STAGED was recorded - host_ready commits at once");
+			room q(3);
+			q.propose();
+			std::vector<std::uint8_t> junk{16, 1, 2};
+			for (int i = 0; i < 40; ++i) q.h.receive(K(2), junk.data(), junk.size(), q.t + std::uint32_t(i) * 100);
+			check(q.h.now() == P::voting, "Q1: one identical malformed message resent 40 times in 4 s does not cancel (resends are not new refusals)");
+		}
+		{
+			// Q2: a guest the host departs at the seat deadline is told (END seat_timeout), never resumes, holds no hero.
+			room r(3);
+			r.to(P::committed);
+			r.load_all();
+			r.h.host_pick(10, r.t); r.G(1).pick(11, r.t); r.G(2).pick(12, r.t); r.pump();
+			r.h.host_seated(r.t); r.G(1).seated(r.t); r.pump();
+			std::vector<R::outgoing> seen;
+			auto keep = [&](int from, int to, const std::vector<std::uint8_t>& b) { if (from == 0 && to == 2 && r.h.departed(2)) seen.push_back({std::uint8_t(to), b}); return false; };
+			r.drop = keep;
+			r.step(R::seat_ms + 200);
+			check(r.h.departed(2) && r.h.now() == P::resuming && r.G(1).now() == P::resuming, "Q2: guest 2 departed at the seat deadline; the rest resume");
+			bool only_end = !seen.empty();
+			bool had_end = false;
+			for (auto& m : sent_to(seen, 2)) { only_end = only_end && m.t == T::end; had_end = had_end || (m.t == T::end && m.because == R::reason::seat_timeout && m.slot == 2); }
+			check(had_end && only_end, "Q2: the departed guest gets a targeted END (seat_timeout) and no RESUME or other broadcast decision");
+			check(r.G(2).now() == P::ended && r.G(2).outcome() == R::reason::seat_timeout && !r.G(2).may_resume_input(), "Q2: it ends and never produces input");
+			check(r.h.picks().assign[2] == R::hero_watch, "Q2: the departed slot holds no hero in the host's final row");
+			r.drop = nullptr;
+			r.G(2).seated(r.t); r.pump(); r.step(2000);
+			check(!r.G(2).may_resume_input(), "Q2: a late SEATED changes nothing");
+		}
+		{
+			// Q2 (immediate): with everything guest 2 sends lost, the host's own targeted END still reaches it at the
+			// departure - it is told, not merely answered when it speaks.
+			room r(3);
+			r.to(P::committed);
+			r.load_all();
+			r.h.host_pick(10, r.t); r.G(1).pick(11, r.t); r.G(2).pick(12, r.t); r.pump();
+			r.h.host_seated(r.t); r.G(1).seated(r.t); r.pump();
+			r.drop = [](int from, int, const std::vector<std::uint8_t>&) { return from == 2; };
+			r.step(R::seat_ms + 200);
+			check(r.h.departed(2) && r.G(2).now() == P::ended && r.G(2).outcome() == R::reason::seat_timeout, "Q2: the departure itself sends the END (guest 2 mute)");
+		}
+		{
+			// Q2b: the END is lost; the departed guest seats late and its resend is answered with the END.
+			room r(3);
+			r.to(P::committed);
+			r.load_all();
+			r.h.host_pick(10, r.t); r.G(1).pick(11, r.t); r.G(2).pick(12, r.t); r.pump();
+			r.h.host_seated(r.t); r.G(1).seated(r.t); r.pump();
+			r.drop = [](int from, int to, const std::vector<std::uint8_t>& b) { return from == 0 && to == 2 && b[2] == std::uint8_t(T::end); };
+			r.step(R::seat_ms + 200);
+			r.drop = nullptr;
+			check(r.G(2).now() == P::seating, "Q2b: guest 2 missed its END");
+			r.G(2).seated(r.t); r.pump(); r.step(2500);
+			check(r.G(2).now() == P::ended && !r.G(2).may_resume_input(), "Q2b: its resent SEATED is answered with the END; it never resumes");
+		}
+		{
+			// Q3: a guest departed for its FAIL during re-pick is told (END member_left) and never resumes as a watcher.
+			room r(3);
+			r.to(P::repick);
+			R::message m = header(T::fail, r.h.op()); m.at = P::repick; m.because = R::reason::load_failed;
+			auto b = R::encode(m);
+			r.deliver(2, 0, b); r.pump();
+			r.h.host_pick(10, r.t); r.G(1).pick(11, r.t); r.pump();
+			r.h.host_seated(r.t); r.G(1).seated(r.t); r.G(2).seated(r.t); r.pump(); r.step(2000);
+			check(r.h.departed(2) && r.G(2).now() == P::ended && r.G(2).outcome() == R::reason::member_left && !r.G(2).may_resume_input(),
+			      "Q3: a guest departed for its FAIL gets END (member_left) and never resumes");
+			check(r.h.now() == P::resuming && r.G(1).now() == P::resuming && r.h.picks().assign[2] == R::hero_watch && r.G(1).picks().assign[2] == R::hero_watch,
+			      "Q3: the rest resume; the departed slot is watch in the final row");
+		}
+		{
+			// Q4 (contract): the integration drains received messages BEFORE tick(); after a 151 s blocked load the
+			// host's queued resend arrives first and the guest does not end itself.
+			room r(2);
+			r.to(P::committed);
+			auto c = header(T::commit, r.h.op()); c.gen = r.h.generation(); auto b = enc(c);
+			r.G(1).receive(K(1), b.data(), b.size(), r.t + 151000);
+			r.G(1).tick(r.t + 151000);
+			check(r.G(1).now() == P::committed, "Q4: received first, then tick: a long blocked load does not end the guest");
+		}
+		{
+			// Nit: the pick sequence is capped, never wraps to the refused 0.
+			room r(2);
+			r.to(P::committed);
+			r.load_all();
+			F last = F::none;
+			int accepted = 0;
+			for (int i = 0; i < 70000; ++i) { last = r.G(1).pick(std::uint16_t(10 + (i & 1)), r.t); if (last == F::none) ++accepted; r.G(1).take(); }
+			check(accepted == 0xffff && last == F::closed, "nit: after 65535 picks a guest's pick is refused locally (no wrap to sequence 0)");
+		}
+	}
+
 	void rule_and_framing()
 	{
 		check(R::rule_id == 63 && R::rule_revision == 1 && R::rule_effective == std::array<std::uint32_t, 4>{1u, 1u, 16u, 0u}, "rule 63 OnlineRestore revision 1 {1, 1, 16, 0}");
@@ -1481,6 +1592,7 @@ int main(int argc, char** argv)
 	commit_failures();
 	repick_tests();
 	review_probes();
+	rereview_probes();
 	rule_and_framing();
 	std::printf("%d PASS / %d FAIL\n", passed, failed);
 	return failed ? 1 : 0;

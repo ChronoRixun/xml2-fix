@@ -217,7 +217,7 @@ the state machines'.
 | 9 | commit | host | `restore_gen u32` | nonzero; 23 B |
 | 10 | loaded | member | `restore_gen u32`, `check u32` | both nonzero; 27 B |
 | 11 | repick | host | `restore_gen u32`, `count u8`, count x `hero u16`, `story u16`, `story_owner u8` | count 1-32, heroes < 0xfffe and distinct; story 0xffff or listed; owner <= 3 or 0xff, 0xff when no story; 91 B max |
-| 12 | pick | member | `restore_gen u32`, `seq u16`, `hero u16` | seq nonzero (newest wins); hero < 0xfffe or 0xfffe (watch); 27 B |
+| 12 | pick | member | `restore_gen u32`, `seq u16`, `hero u16` | seq nonzero (newest wins; capped at 65535 picks, never wraps); hero < 0xfffe or 0xfffe (watch); 27 B |
 | 13 | assign | host | `restore_gen u32`, `final u8`, `count u8`, count x `hero u16` | final 0/1; count 1-4; 0xffff (open) only when not final; 33 B max |
 | 14 | seated | member | `restore_gen u32` | 23 B |
 | 15 | resume | host | `restore_gen u32` | 23 B |
@@ -236,7 +236,9 @@ decision; an END also answers a member still on the operation a rollback replace
 `conflict` (refused), except a vote Yes -> No (the allowed withdrawal) and PICK, which is ordered by its sequence
 number (a lower or equal one is `stale`). A message for an older op or generation is `stale`; for a phase the receiver
 is not in, `out_of_phase`; anything from a member that already departed is `stale`. None of these change state. Sixteen refusals
-from one sender within ten seconds make the host cancel the open precommit operation (`protocol`).
+from one sender within ten seconds make the host cancel the open precommit operation (`protocol`); the same refused
+bytes resent again are not a new refusal (members resend their last message every second). A receiver's STAGED that
+arrives while the host is still `preparing` (before its own `host_ready`) is recorded, not refused.
 
 ## 10. Rule impact
 
@@ -277,7 +279,11 @@ Integration contract (review fix 9), binding for every round below:
 - `first_frame()` means a simulated frame that holds **every** remaining member's fresh input (the native lockstep
   barrier), never a local frame; RESUME stops being resent there.
 - A departure the core reports (`departed(slot)`) must be carried out natively by the agreed departure path; a
-  departed member's messages are ignored from then on.
+  departed member's messages are ignored from then on. The core tells that member itself: a targeted END
+  (`member_left`, or `seat_timeout` at the seat deadline), repeated in answer to anything it still sends; it gets no
+  other decision (every broadcast goes only to members still in the operation) and its slot is watch in the row.
+- **Drain received restore messages before `tick()`** on every PC. After a long blocked native load the host's queued
+  resends must be seen before the guest's silence clock is checked, or a guest could end itself (150 s rule).
 
 - **11 (prepare/transfer):** produce `image_len/image_digest` (canonical payload only) and `source_len/source_digest`
   before PROPOSE; define the safe-point set and the rollback capture (profile normalisation so equal worlds digest
