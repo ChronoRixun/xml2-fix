@@ -20,6 +20,39 @@ unsigned __fastcall next_set(const unsigned* mask,void*,int start,bool value) {
     for(int i=start;i<512;++i) if(bool(mask[i/32]&(1u<<(i%32)))==value) return unsigned(i);
     return 512;
 }
+// ECX is the pointer difference at both retail division sites. Unsigned range
+// checks reject negative addresses too; only exact slot starts may reach retail
+// occupancy/free logic. ESI receives the index expected by each continuation.
+__declspec(naked) void validity_index() {
+    __asm {
+        cmp ecx,0a000h
+        jae invalid
+        test ecx,1fffh
+        jnz invalid
+        mov esi,ecx
+        shr esi,13
+        push 588b41h
+        ret
+    invalid:
+        push 588b6bh
+        ret
+    }
+}
+__declspec(naked) void free_index() {
+    __asm {
+        cmp ecx,0a000h
+        jae invalid
+        test ecx,1fffh
+        jnz invalid
+        mov esi,ecx
+        shr esi,13
+        push 588c3bh
+        ret
+    invalid:
+        push 588c76h
+        ret
+    }
+}
 __declspec(naked) void bounded_push() {
     __asm {
         cmp dword ptr [ecx+840h],512
@@ -114,13 +147,15 @@ patch_transaction::contribution contribution() {
         {0x587e40,5,&bounded_push}, {0x587a27,17,&clear_vector_mask},
         {0x587877,17,&clear_name_mask}, {0x58833a,7,&initialize_stack},
         {0x588857,6,&initialize_tables}, {0x58835a,5,reinterpret_cast<void(*)()>(&scene_walk)},
-        {0x587869,5,reinterpret_cast<void(*)()>(&next_set)}, {0x587a15,5,reinterpret_cast<void(*)()>(&next_set)}
+        {0x587869,5,reinterpret_cast<void(*)()>(&next_set)}, {0x587a15,5,reinterpret_cast<void(*)()>(&next_set)},
+        {0x588b30,17,&validity_index}, {0x588c2a,17,&free_index}
     };
-    for(const auto& h:hooks)
+    for(const auto& h:hooks) {
         c.writes.push_back(patch_transaction::relocation(h.va,"e8",true,
             static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(h.target)),h.size-5,"512 anchor adapter"));
-    // bounded_push is an entry detour, not a returning call.
-    c.writes[std::size(fixups)].bytes[0]=0xe9;
+        // These adapters transfer directly to retail continuations.
+        if(h.va==0x587e40 || h.va==0x588b30 || h.va==0x588c2a) c.writes.back().bytes[0]=0xe9;
+    }
     // Installation precedes engine menu use. Initialize the same empty allocator
     // state also for hosts that don't execute the PE's CRT initializers.
     std::memset(pool,0,sizeof(pool));

@@ -10,7 +10,8 @@ import struct
 def anchor_writes(root):
     source = (root / "src/online_menus_anchors_fixups.inc").read_text()
     writes = {int(va, 16): 4 for va in re.findall(r"\{(0x[0-9a-f]+),", source)}
-    writes.update({0x587e40:5, 0x587a27:17, 0x587877:17, 0x58833a:7, 0x588857:6, 0x58835a:5, 0x587869:5, 0x587a15:5})
+    writes.update({0x587e40:5, 0x587a27:17, 0x587877:17, 0x58833a:7, 0x588857:6, 0x58835a:5, 0x587869:5, 0x587a15:5,
+                   0x588b30:17, 0x588c2a:17})
     return writes
 
 
