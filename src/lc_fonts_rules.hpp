@@ -29,6 +29,15 @@ inline float scale(std::string_view text) {
  const float value=std::strtof(buffer,&end);
  return end==buffer+text.size()&&std::isfinite(value)&&value>=0.0625f&&value<=4?value:1;
 }
+// Text items draw glyphs in back-buffer pixels (classic fonts are the same pixel size at 720p and
+// 1080p), while every menu position is in the 512 x 384 view whose height spans the back buffer at
+// any aspect. Private styles author textscale in view units, so the glyph scale is the style value
+// times screen pixels per view unit. An unreadable or absurd screen size keeps the authored value.
+inline constexpr unsigned view_height=384;
+inline float pixel_factor(int screen_height) {
+ return screen_height>=240&&screen_height<=16384?static_cast<float>(screen_height)/static_cast<float>(view_height):1.0f;
+}
+inline float glyph_scale(float view_scale,int screen_height) {return view_scale*pixel_factor(screen_height);}
 inline unsigned char pad_glyph(std::string_view button) {
  for(unsigned i=0;i<4;++i)if(button==std::array<std::string_view,4>{"A","B","X","Y"}[i])return static_cast<unsigned char>(0x80+i);
  if(button=="Start")return 0x84;if(button=="Back")return 0x85;

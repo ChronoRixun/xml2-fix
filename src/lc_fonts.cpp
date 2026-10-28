@@ -46,8 +46,14 @@ void __fastcall read_style(void* style,void*,void* parser) {
   break;
  }
 }
+// The engine's screen height (0x5fad5c stores it, 0x5fa066 divides by it; both guarded).
+constexpr std::uintptr_t screen_height_va=0xa0a000;
 std::uint32_t __cdecl scale_bits(const void* style) {
- for(const auto& entry:scales)if(entry.style==style)return std::bit_cast<std::uint32_t>(entry.value);
+ for(const auto& entry:scales)if(entry.style==style) {
+  const bool custom=style&&ready(*reinterpret_cast<const short*>(static_cast<const std::uint8_t*>(style)+8));
+  if(!custom)return std::bit_cast<std::uint32_t>(entry.value);
+  return std::bit_cast<std::uint32_t>(glyph_scale(entry.value,*reinterpret_cast<const volatile int*>(screen_height_va)));
+ }
  return 0x3f800000;
 }
 __declspec(naked) void style_stub() {
@@ -103,6 +109,7 @@ void __fastcall render_item(void* item,void* edx) {
 }
 }
 bool prompt_scope() {return installed&&scoped;}
+bool active() {return installed;}
 void install(HMODULE game) {
  if(!enabled(ini::text(L"Game",L"LegendsClassicFonts").value_or("")))return;
  if(reinterpret_cast<std::uintptr_t>(game)!=0x400000)return;
@@ -132,6 +139,6 @@ void install(HMODULE game) {
  c.retain=[] {logger::write("lc fonts: rollback uncertified; stopping before engine startup");TerminateProcess(GetCurrentProcess(),1);};
  patch_transaction::transaction transaction;transaction.add(std::move(c));
  const auto result=transaction.commit();
- logger::write("lc fonts: %s (%s); eight slots, private style names and text scale",patch_transaction::name(result),transaction.report().c_str());
+ logger::write("lc fonts: %s (%s); eight slots, private style names and text scale per screen pixel (lc-fonts-screen/1)",patch_transaction::name(result),transaction.report().c_str());
 }
 }

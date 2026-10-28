@@ -408,6 +408,10 @@ namespace gameplay_agreement
   if(outcome!=patch_transaction::outcome::committed){logger::write("online: late agreement installation %s: %s",patch_transaction::name(outcome),late.report().c_str());contributed_=false;return false;}
   return published;
  }
+ bool host_notice_showing(void* menu)
+ {
+  return menu && notice_line && GetTickCount64()-notice_since<notice_ms && noticed_menu==menu;
+ }
  bool finalize(HMODULE game)
  {
   if(!contributed_ && !prepare(game))return false;

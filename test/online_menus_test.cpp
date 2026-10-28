@@ -6,6 +6,7 @@
 #include "script_function_overflow.hpp"
 #include <Windows.h>
 #include <cassert>
+#include <cmath>
 #include <algorithm>
 #include <cstdarg>
 #include <cstring>
@@ -116,6 +117,12 @@ void __fastcall hide_stub(void*,void*,const char* item,bool value) {
         if(list) list[0x54]=static_cast<unsigned char>((list[0x54]&~4) | (value ? 4 : 0));
     }
 }
+std::array<unsigned char,0x100> model_item{};
+bool model_scene(std::string_view name) {
+    if(name=="lc_host_max_players") return false; // a DATA text field
+    for(const std::string_view prefix:{"lc_host_","lc_broker_","lc_service_ok","lc_row","lc_code_complete"}) if(name.starts_with(prefix)) return true;
+    return false;
+}
 void* __fastcall item_stub(void*,void*,const char* name) {
     if(mode.starts_with("r4-")) {
         if(std::string_view(name)=="lc_lobby_v1" && !lobby_marker) return nullptr;
@@ -127,6 +134,10 @@ void* __fastcall item_stub(void*,void*,const char* name) {
         if(std::string_view(name)=="text_readygame") return ready_item.data();
         if(std::string_view(name)=="desctext1") return back_help_item.data();
     }
+    // Live 060p: the authored scenes are MENU_ITEM_MODEL items (vtable 0x6a0304, setHidden 0x5c4b90), not
+    // text items. Round 5b's views fixture now hands those names a real model-item vtable, so a hide()
+    // that only accepts the text setter fails these assertions instead of passing on a fake.
+    if(mode=="r5b-views" && model_scene(name)) return model_item.data();
     return missing_prompt && std::string_view(name)=="lc_online_continue" ? nullptr : text_item.data();
 }
 std::array<unsigned,2> int_value{0x6905fc,0};
@@ -222,7 +233,7 @@ void fake_services() {
     redirect(0x48f3f0,profile_name_stub);redirect(0x55beb0,command_stub);redirect(0x5d5db0,request_stub);
     redirect(0x5ace30,deactivate_stub);redirect(0x5aaeb0,tick_stub);redirect(0x5af5a0,close_stub);redirect(0x5adcf0,text_stub);
     redirect(0x5ade70,enable_stub);redirect(0x5ade10,hide_stub);redirect(0x4d5830,argument_stub);
-    redirect(0x5adc10,item_stub);put(text_item.data(),0,0x6a0244);
+    redirect(0x5adc10,item_stub);put(text_item.data(),0,0x6a0244);put(model_item.data(),0,0x6a0304);
     put(start_item.data(),0,0x6a0244);
     redirect(0x55c410,queue_stub);
     put(mgr.data(),0,0x6a236c);put(input.data(),0,0x69a134);
@@ -387,6 +398,8 @@ namespace ini { std::optional<std::string> text(const wchar_t*,const wchar_t*) {
     return mode=="off" ? std::nullopt : mode=="zero" ? std::optional<std::string>("0") : std::optional<std::string>("1");
 } }
 namespace script_functions { int capacity() { return ::capacity; } }
+namespace lc_fonts { bool active() { return mode!="fonts-off"; } }
+namespace gameplay_agreement { bool host_notice_showing(void*) { return mode=="r4-advice-notice"; } }
 namespace logger {
 void write(const char* format,...) { if(!mode.starts_with("r6-")) return; char buffer[512]{};va_list args;va_start(args,format);std::vsnprintf(buffer,sizeof(buffer),format,args);va_end(args);std::cout<<buffer<<"\n"; }
 void write_once(std::string_view key,const char* format,...) {
@@ -465,7 +478,7 @@ int main(int argc,char** argv) {
         std::cout<<"online menus "<<mode<<" PASS (production install refuses startup)\n";return 0;
     }
     assert(!fatal);
-    if(mode=="off" || mode=="zero" || mode=="base" || mode=="capacity" || mode.starts_with("guard")) {
+    if(mode=="off" || mode=="zero" || mode=="base" || mode=="capacity" || mode=="fonts-off" || mode.starts_with("guard")) {
         assert(!online_menus::installed() && !overflow.find(function_name));
         assert(std::memcmp(before.data(),reinterpret_cast<void*>(0x401000),before.size())==0);
         std::cout<<"online menus "<<mode<<" PASS (no writes or registrations)\n";return 0;

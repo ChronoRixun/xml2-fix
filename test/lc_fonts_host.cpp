@@ -285,6 +285,25 @@ static void styles() {
   lc_fonts::trampoline=reinterpret_cast<void*>(&fake_render);lc_fonts::render_item(item.data(),nullptr);
   check(observed==(index>=4));check(!lc_fonts::prompt_scope());lc_fonts::trampoline=nullptr;
  }
+ // Live 060p round: private text stayed the same pixel size at 720p and 1080p because the scale was
+ // authored in 512 x 384 view units but the renderer draws glyphs in back-buffer pixels. The scale
+ // the retail draw/clip pushes now follows the engine's screen height; classic styles stay at 1.
+ for(const int height:{720,1080,2160,768,0,100,100000}) {
+  *reinterpret_cast<volatile int*>(0xa0a000)=height;
+  const float factor=height>=240&&height<=16384?height/384.0f:1.0f;
+  for(const auto name:{"lc_row","lc_title","medium","big"}) {
+   font_name=name;scale_value="0.1875";invoke_style(style.data());
+   const bool custom=lc_fonts_rules::font_index(name)>=4;
+   const auto wanted=custom?std::bit_cast<DWORD>(.1875f*factor):0x3f800000;
+   check(invoke_scale(item.data(),false)==wanted);check(invoke_scale(item.data(),true)==wanted);
+  }
+ }
+ font_name="lc_row";scale_value="0.1875";invoke_style(style.data());*reinterpret_cast<volatile int*>(0xa0a000)=720;
+ // 15-unit row text (design grid 640 x 480 -> 12 view units) is 22.5 px at 720p and 33.75 px at 1080p.
+ check(std::abs(std::bit_cast<float>(invoke_scale(item.data(),false))*64-22.5f)<.01f);
+ *reinterpret_cast<volatile int*>(0xa0a000)=1080;
+ check(std::abs(std::bit_cast<float>(invoke_scale(item.data(),false))*64-33.75f)<.01f);
+ *reinterpret_cast<volatile int*>(0xa0a000)=0;
  for(const auto value:{"nan","inf","-1","0","5","0.375garbage"}) {
   font_name="lc_row";scale_value=value;invoke_style(style.data());check(invoke_scale(item.data(),false)==0x3f800000);
  }

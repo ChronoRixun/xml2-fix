@@ -546,6 +546,33 @@ void review_lobby_tests(const script_functions_rules::func_entry* registration,b
     }
     assert(false);
 }
+// Live 060p: the retail lobby update drew ONLINE_ADVICE over the skin's cards. A skinned lobby keeps the
+// 0.25 s list refresh (same clock, timer, interval) and never looks the paragraph up.
+float advice_now=0;unsigned advice_lookups=0,advice_refreshes=0;
+std::array<unsigned,16> advice_clock_vt{};std::array<unsigned,4> advice_clock{};
+float __fastcall advice_time(void*,void*,int) { return advice_now; }
+void* __cdecl advice_clock_get() { return advice_clock.data(); }
+const char* __cdecl advice_lookup(const char*) { ++advice_lookups;return ""; }
+void __fastcall advice_refresh(void*,void*) { ++advice_refreshes; }
+void advice_tests(bool host) {
+    advice_clock_vt[0x28/4]=unsigned(reinterpret_cast<std::uintptr_t>(&advice_time));
+    advice_clock[0]=unsigned(reinterpret_cast<std::uintptr_t>(advice_clock_vt.data()));
+    redirect(0x55b610,reinterpret_cast<const void*>(&advice_clock_get));
+    redirect(0x629bf0,reinterpret_cast<const void*>(&advice_lookup));
+    redirect(host ? 0x5ba4e0 : 0x5c8150,reinterpret_cast<const void*>(&advice_refresh));
+    auto& timer=*reinterpret_cast<float*>(host ? 0x8a8288 : 0x8afd14);timer=0;
+    auto update=*reinterpret_cast<lobby_tick_t*>(host ? 0x69f2a4 : 0x69f36c);
+    if(mode=="r4-advice-notice") {
+        // A current host notice keeps the retail update (its wrapped lookup draws the notice in the paragraph's place).
+        advice_now=1.0f;update(child.data(),nullptr);assert(advice_lookups>=1);
+        std::cout<<"online menus "<<mode<<" PASS (a current host notice keeps the retail paragraph path)\n";return;
+    }
+    for(const float t:{1.0f,1.1f,1.2f,1.26f,1.3f,2.0f}) { advice_now=t;update(child.data(),nullptr); }
+    // refresh at 1.0 (timer 0), then 1.26 (> 1.25), then 2.0 (> 1.51): three, as the retail timer does.
+    assert(advice_refreshes==3 && std::abs(timer-2.25f)<1e-5f);
+    assert(advice_lookups==0);
+    std::cout<<"online menus "<<mode<<" PASS (skinned lobby update refreshes the list every 0.25 s and draws no ONLINE_ADVICE)\n";
+}
 void lobby_tests(const script_functions_rules::func_entry* registration) {
     const bool host=mode.find("join")==std::string::npos;setup_lobby(host);
     auto tick=*reinterpret_cast<lobby_tick_t*>(host ? 0x69f2ac : 0x69f374);
@@ -559,6 +586,7 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     }
     activate(child.data(),nullptr,0);assert(activations==1 && refreshes==1);
     mask=0;tick(child.data(),nullptr);
+    if(mode.starts_with("r4-advice")) { advice_tests(host);return; }
     if(mode.find("r7-bounds")!=std::string::npos) { r7_card_tests(host);return; }
     assert(texts["lc_p1_name"]=="Logan?n?" && texts["lc_p2_name"]=="Kitty?n");
     assert(texts["lc_room_code"]=="ABCD-EFGH" && texts["lc_ready_count"]=="2" && texts["lc_member_count"]=="3");

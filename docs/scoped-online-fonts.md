@@ -21,7 +21,18 @@ a side table keyed by style pointer. Retail case-insensitive comparison is kept:
 `big`/`BIG`/`BiG` stay 1, other retail values stay 0.
 Only ready private slots admit scale; non-finite/out-of-range/trailing text falls
 back to 1. The style record's size and meaning of its other fields are unchanged.
-`0x5c636e` and `0x5c62f5` supply the same scale to drawing and clipping. The
+`0x5c636e` and `0x5c62f5` supply the same scale to drawing and clipping.
+Glyphs are drawn in back-buffer pixels (the classic fonts are the same pixel
+size at 720p and 1080p) while every menu position is in the 512 x 384 view, so a
+private style's `textscale` is in view units and the pushed scale is
+`textscale x screen height / 384`, read from the engine's screen height at
+`0xa0a000` (its store `0x5fad5c` and its reader `0x5fa066` are guarded). The
+log line names this `lc-fonts-screen/1`. Classic styles keep scale 1.
+
+`[Online] Menus=1` needs this capability: when the font transaction did not
+commit (key off or refused), the co-op screens are not installed and Play
+Online stays the game's own menu (`online menus: [Game] LegendsClassicFonts is
+not active ...`). The
 text-item reader at `0x5c6c30` remains unmodified and is region-guarded.
 
 The `0x5c61d0` entry wrapper enables prompt glyph selection only during rendering

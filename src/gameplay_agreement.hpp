@@ -34,4 +34,6 @@ namespace gameplay_agreement
  int receive_reply(void* event);
  int receive_info(void* event);
  int receive_ack(void* event);
+ // True while the host lobby `menu` is showing a host notice in place of its ONLINE_ADVICE paragraph.
+ bool host_notice_showing(void* menu);
 }
