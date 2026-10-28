@@ -50,12 +50,16 @@ void watch_window(HWND) { ++watch; }
 bool console_frame_hook_matches() { return false; }
 }
 namespace test_state { void sample() { ++samples; } }
+// 0.4.2 line (merged into the co-op line): NoActivate gates the same hook; it stays off here so the Menus-only
+// opt-in is what installs it.
+namespace no_activate { bool enabled() { return false; } }
 namespace save_format { void pump() { ++pumps; } }
 // The included TU also defines the automation service. These dependencies are
 // deliberately unreachable here; an accidental install/command/capture fails.
 #define UNUSED_TEXT(ns,fn) namespace ns { std::string fn() { assert(false);return {}; } }
 UNUSED_TEXT(anim_enums,status)
 UNUSED_TEXT(pool_counters,json)
+UNUSED_TEXT(e4_observe,json)
 UNUSED_TEXT(test_mode,status)
 UNUSED_TEXT(balance,status)
 UNUSED_TEXT(frame_rate,describe)
