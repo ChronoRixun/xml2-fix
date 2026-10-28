@@ -544,7 +544,7 @@ bool offline_fixture = false;
 #if XML2_FIX_GNS
 void production_broker_tick() { online_room::ui_tick(); gns_transport::room_ui_tick(); }
 broker_api broker_calls{online_room::available,online_room::view,production_broker_tick,online_room::list,
-    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due,online_room::host_native,online_room::admission_target,online_room::host_posted,join_in_progress::installed,online_room::leave_after_flush};
+    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due,online_room::host_native,online_room::admission_target,online_room::host_posted,join_in_progress::installed,online_room::leave_after_flush,online_room::party,online_room::room_rtt};
 #else
 broker_api broker_calls{};
 #endif
@@ -713,6 +713,14 @@ void bind_broker(void* menu,screen s) {
             // Status word, ping ("--": the broker sends no measurement and no connection is opened per row) and the
             // SAME/CHECK words are drawn by the row scenes, so there are no cells [4]/[5]. [6]: only the other build's token.
             fields[6]=build==build_relation::other ? display(row->version,8) : std::string();
+        }
+        if(broker_calls.room_rtt) {
+            // Round 7: column 5 shows a measured RTT only for the room this PC is in (its host tunnel); no
+            // connection is opened per row, so every other row stays the neutral "--" scene.
+            const int rtt=row ? broker_calls.room_rtt(row->code) : -1;
+            if(rtt>=0 && rtt<=60000) fields[5]=std::to_string(rtt)+" ms";
+            const auto key="room_"+std::to_string(i)+"_5";
+            bind_text(menu,key.c_str(),fields[5].c_str());
         }
         for(const unsigned col:{0u,1u,2u,3u,6u}) {
             const auto key="room_"+std::to_string(i)+"_"+std::to_string(col);
@@ -998,11 +1006,22 @@ void restore_lobby_focus(void* menu) {
     lobby_native_state state{};
     if(lobby_state_read(menu,state)) lobby_focus(menu,state.host ? (state.phase==1 ? "text_playername1" : "text_startgame") : "text_readygame");
 }
-// Snapshot fields supplied by host tests only. The ordinary DLL has no fixture
-// provider, so an unknown room/RTT/build stays unknown until round 5.
+const char* route_text(int route) { return route==1 ? "direct" : route==2 ? "relay" : ""; }
+const char* phase_text(int phase) {
+    static const char* const words[]={"Connecting","Checking build","In lobby","Ready","Waiting for next area","Receiving campaign","Loading","Playing","Watching story",""};
+    return phase>=0 && phase<int(std::size(words)) ? words[phase] : "";
+}
+// Card facts: host fixtures (lobby_fields) or, in production, online_room::party
+// (round 7). Unknown RTT/build/phase stay unknown (Measuring / Checking / empty).
 void bind_lobby(void* menu,const lobby_view& view,bool valid) {
     lobby_fixture extra{};
-    bool fixture=lobby_fields && lobby_fields(extra) && extra.count<=4;
+    bool fixture=lobby_fields && lobby_fields(extra) && extra.count<=4 && extra.pending_count<=3;
+    if(!fixture && broker_live() && broker_calls.party) {
+        // Production card facts (round 7). Rejected whole when out of bounds: the cards fall back to native rows.
+        extra={};
+        fixture=broker_calls.party(extra) && extra.count<=4 && extra.pending_count<=3;
+        if(!fixture) extra={};
+    }
     if(!fixture && broker_live()) {
         const auto& state=broker_view();
         if(state.state==broker::phase::room && state.code.size()==8) {
@@ -1056,12 +1075,37 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
     for(unsigned i=0;i<4;++i) {
         const auto prefix="lc_p"+std::to_string(i+1)+"_";
         const bool member=valid && i<view.count;
-        hide(menu,(prefix+"card").c_str(),!member);
-        for(const auto* field:{"empty","empty_title","empty_help","empty_plus"}) hide(menu,(prefix+field).c_str(),member);
-        for(const auto* field:{"name","slot","hero_fallback"}) hide(menu,(prefix+field).c_str(),!member);
+        // A broker-roster member without a native row yet takes the next free card (never a native row/kick target).
+        const unsigned pending_slot=valid && i>=view.count ? i-view.count : 99;
+        const auto* waiting_member=fixture && pending_slot<extra.pending_count ? &extra.pending[pending_slot] : nullptr;
+        const bool card_shown=member || waiting_member;
+        hide(menu,(prefix+"card").c_str(),!card_shown);
+        for(const auto* field:{"empty","empty_title","empty_help","empty_plus"}) hide(menu,(prefix+field).c_str(),card_shown);
+        for(const auto* field:{"name","slot","hero_fallback"}) hide(menu,(prefix+field).c_str(),!card_shown);
+        hide(menu,(prefix+"pending").c_str(),!waiting_member);
+        if(waiting_member) {
+            const auto* raw=waiting_member->name;
+            const auto shown_name=raw[0] ? display(std::string(raw,strnlen(raw,31)),31) : std::string("Player");
+            bind_text(menu,(prefix+"name").c_str(),shown_name.c_str());
+            bind_text(menu,(prefix+"slot").c_str(),("P"+std::to_string(i+1)).c_str());
+            for(const auto* field:{"ready","not_ready","host","you","selected"}) hide(menu,(prefix+field).c_str(),true);
+            const bool measured=waiting_member->ping_ms>=0 && waiting_member->ping_ms<=60000;
+            bind_text(menu,(prefix+"ping").c_str(),measured ? std::to_string(waiting_member->ping_ms).c_str() : "");
+            hide(menu,(prefix+"ping").c_str(),!measured);hide(menu,(prefix+"ms").c_str(),!measured);hide(menu,(prefix+"measuring").c_str(),measured);
+            hide(menu,(prefix+"to_host").c_str(),!(measured && waiting_member->ping_to_host));
+            bind_text(menu,(prefix+"route").c_str(),measured ? route_text(waiting_member->route) : "");
+            hide(menu,(prefix+"same_build").c_str(),!(waiting_member->build==2 || waiting_member->build==3));
+            hide(menu,(prefix+"other_build").c_str(),waiting_member->build!=1);
+            hide(menu,(prefix+"checking_build").c_str(),waiting_member->build!=0);
+            bind_text(menu,(prefix+"phase").c_str(),phase_text(waiting_member->phase));
+            hide(menu,(prefix+"hero_fallback").c_str(),false);
+            continue;
+        }
         if(!member) {
-            for(const auto* field:{"ready","not_ready","host","you","ping","ms","measuring","same_build","checking_build","selected"})
+            for(const auto* field:{"ready","not_ready","host","you","ping","ms","measuring","same_build","checking_build","selected","to_host","other_build"})
                 hide(menu,(prefix+field).c_str(),true);
+            bind_text(menu,(prefix+"phase").c_str(),"");
+            bind_text(menu,(prefix+"route").c_str(),"");
             continue;
         }
         const auto safe=display(view.names[i],31);
@@ -1076,13 +1120,21 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         if(fixture) for(unsigned j=0;j<extra.count;++j) if(extra.members[j].native_index==view.ids[i]) {
             if(data) { data=nullptr;break; }data=&extra.members[j];
         }
-        const bool measured=data && data->ping_ms>=0 && data->ping_ms<=60000 && (!view.local_known || view.ids[i]!=view.local);
+        const bool self_row=view.local_known && view.ids[i]==view.local;
+        const bool measured=data && data->ping_ms>=0 && data->ping_ms<=60000 && !self_row;
         bind_text(menu,(prefix+"ping").c_str(),measured ? std::to_string(data->ping_ms).c_str() : "");
         hide(menu,(prefix+"ping").c_str(),!measured);
         hide(menu,(prefix+"ms").c_str(),!measured);
-        hide(menu,(prefix+"measuring").c_str(),measured || (view.local_known && view.ids[i]==view.local));
-        hide(menu,(prefix+"same_build").c_str(),!data || !data->same_build);
-        hide(menu,(prefix+"checking_build").c_str(),data && data->same_build);
+        hide(menu,(prefix+"measuring").c_str(),measured || self_row);
+        hide(menu,(prefix+"to_host").c_str(),!(measured && data->ping_to_host));
+        bind_text(menu,(prefix+"route").c_str(),measured ? route_text(data->route) : "");
+        // Build: round-7 stage when supplied (0 checking, 1 other, 2 same, 3 agreed), else round 4's same_build.
+        const int stage=!data ? 0 : data->build>=0 ? data->build : data->same_build ? 2 : 0;
+        hide(menu,(prefix+"same_build").c_str(),!(stage==2 || stage==3));
+        hide(menu,(prefix+"checking_build").c_str(),stage==2 || stage==3 || stage==1);
+        hide(menu,(prefix+"other_build").c_str(),stage!=1);
+        // Phase words from observed facts; native readiness keeps its own READY / NOT READY parts above.
+        bind_text(menu,(prefix+"phase").c_str(),data ? phase_text(data->phase) : "");
         const bool picked=native_valid && host && native.phase==1 && int(i)==view.selected;
         hide(menu,(prefix+"selected").c_str(),!picked);
     }

@@ -6,13 +6,21 @@
 // Guarded UI intents and snapshot bindings. Room operations use online_room;
 // native admission and participant allocation retain their native owners.
 namespace online_menus {
-// Offline host fixture seam. Production obtains code/title/visibility from the
-// room client; these extra member values never confer native admission.
+// Lobby card facts. Host fixtures supply them through install_hooks::lobby_fields;
+// production through broker_api::party (online_room, docs/online-party.md section 8).
+// None of these values confers native admission, readiness, Kick or Start.
 struct lobby_fixture {
     char code[10]{};
-    struct member { unsigned native_index=0; int ping_ms=-1; bool same_build=false; };
+    // Round-7 fields default to "not supplied" so round-4 fixtures keep their meaning:
+    // build<0 -> same_build decides; phase<0 -> no phase text; route 0 unknown, 1 direct, 2 relay.
+    struct member { unsigned native_index=0; int ping_ms=-1; bool same_build=false;
+        bool ping_to_host=false; int route=0; int build=-1; int phase=-1; };
     member members[4]{};
     unsigned count=0;
+    // Broker-roster members without a native row yet (Connecting / Checking build): never kick targets.
+    struct pending_member { char name[32]{}; int phase=0; int build=0; int ping_ms=-1; bool ping_to_host=false; int route=0; };
+    pending_member pending[3]{};
+    unsigned pending_count=0;
 };
 struct broker_api {
     bool (*available)()=nullptr;
@@ -34,6 +42,9 @@ struct broker_api {
     // Optional: leave the room after the transport tick that flushes the quit notices a native session end just queued
     // (absent: the leave runs at once, as a Hub Leave does).
     void (*leave_deferred)()=nullptr;
+    // Optional (round 7): the lobby cards' observed facts, and the measured RTT to a listed room's host.
+    bool (*party)(lobby_fixture&)=nullptr;
+    int (*room_rtt)(const std::string&)=nullptr;
 };
 void keyboard(unsigned char* state);
 bool requested();

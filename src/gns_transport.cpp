@@ -1609,10 +1609,64 @@ namespace gns_transport
 			logger::write("online: [Online] Transport=gns rollback/protection verification failed; startup refused");
 		}
 	}
+
+	namespace
+	{
+		// The guarded half of party_snapshot: fields of the session list, its records and the input rings only.
+		bool party_read(party_facts& out, const void* (&records)[4])
+		{
+			__try
+			{
+				const auto* s = reinterpret_cast<const std::uint8_t*>(session_static);
+				if (*reinterpret_cast<const std::uint32_t*>(s) != session_vtable || !s[session_set_up]) return false;
+				out.session = true;
+				out.hosting = s[session_host] != 0;
+				const auto* zones = reinterpret_cast<const std::uint8_t*>(zones_static);
+				out.loading = *reinterpret_cast<const std::uint32_t*>(zones) == zones_vtable && (zones[zones_loading_at] & 3) != 0;
+				unsigned walked = 0;
+				for (auto* n = *reinterpret_cast<std::uint8_t* const*>(s + session_first); n; n = *reinterpret_cast<std::uint8_t**>(n + node_next_at))
+				{
+					if (++walked > 8) return false; // the engine has four slots; a longer chain is not a session list
+					auto* r = *reinterpret_cast<std::uint8_t**>(n + node_record_at);
+					if (!r) continue;
+					const auto index = *reinterpret_cast<const std::int32_t*>(r + record_index_at);
+					if (index < 0 || index > int(gns_transport_core::lost_index_max) || out.count >= 4) return false;
+					records[out.count] = r;
+					auto& p = out.participants[out.count++];
+					const auto flags = *reinterpret_cast<const std::uint32_t*>(r + record_flags_at);
+					p.index = index;
+					p.local = (flags & 1) != 0;
+					p.ready = ((flags >> 2) & 1) != 0;
+					const auto* name = reinterpret_cast<const char*>(r + 0x40);
+					unsigned k = 0;
+					while (k < 31 && name[k]) { p.name[k] = name[k]; ++k; }
+					p.name[k] = 0;
+					auto* peer = *reinterpret_cast<std::uint8_t**>(r + record_peer_at);
+					if (!p.local && peer)
+						if (auto* l = by_peer(peer); l && l->tunnel && l->bound && !l->closed) p.connection = std::uint32_t(l->connection);
+					const auto ring_now = ring(index);
+					p.ring = ring_now.ok;
+					p.next = ring_now.next;
+				}
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+		}
+	}
+	bool party_snapshot(party_facts& out)
+	{
+		out = {};
+		const void* records[4]{};
+		if (state.load() != 1 || !party_read(out, records)) { out = {}; return false; }
+		// The rule-26 machine compares record identities only (no dereference); asked outside the SEH frame (C++ code).
+		for (unsigned i = 0; i < out.count; ++i) out.participants[i].pending = join_in_progress::pending_player(records[i]);
+		return true;
+	}
 }
 #else
 namespace gns_transport
 {
+	bool party_snapshot(party_facts& out) { out = {}; return false; }
 	void install(HMODULE)
 	{
 		const auto value = ini::text(L"Online", L"Transport");

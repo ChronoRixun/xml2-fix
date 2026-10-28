@@ -124,7 +124,7 @@ namespace logger {
 void write(const char*,...) {} void write_once(std::string_view,const char*,...) {} void write_capped(std::string_view,const char*,...) {}
 }
 namespace online_menus { bool installed() { return true; } }
-namespace gns_transport { bool installed() { return true; } bool room_can_start() { return !fake::transport_busy; } }
+namespace gns_transport { bool installed() { return true; } bool room_can_start() { return !fake::transport_busy; } bool party_snapshot(party_facts& out) { out = {}; return false; } }
 namespace receive_validation { bool installed() { return true; } }
 namespace save_format { bool campaign_load_checked() { return true; } }
 namespace join_in_progress { bool installed() { return false; } }
@@ -135,6 +135,7 @@ void set(online_status_core::state,const std::string&,int,online_status_core::er
 void error(online_status_core::error,const std::string&) {} void players(int) {} void room(bool,const std::string&) {}
 online_status_core::state current() { return online_status_core::state::connecting; }
 void end() {} bool remove_launch_keys(const std::wstring&) { return true; } std::wstring game_ini() { return {}; }
+void attempt() {} void party(const std::string&,int,const std::vector<online_status_core::roster_row>&) {} void tick() {}
 }
 
 namespace {

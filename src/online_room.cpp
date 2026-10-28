@@ -6,6 +6,7 @@
 #include "receive_validation.hpp"
 #include "save_format.hpp"
 #include "online_room_core.hpp"
+#include "online_party_core.hpp"
 #include "online_browser_core.hpp"
 #include "discord_rules.hpp"
 #include "join_in_progress.hpp"
@@ -632,6 +633,11 @@ namespace online_room
 			std::deque<SteamNetworkingMessage_t*> game;
 			core::token_bucket datagram_packets{200, 200}, datagram_bytes{65536, 65536};
 			std::uint64_t datagrams_out = 0, datagrams_in = 0, bytes_out = 0, bytes_in = 0, dropped = 0;
+			// Online Party (docs/online-party.md): this PC's own RTT/route to the member, sampled once a second.
+			int party_rtt = -1;
+			online_party_core::route party_route = online_party_core::route::unknown;
+			DWORD party_sampled = 0;
+			HSteamNetConnection party_connection = k_HSteamNetConnection_Invalid; // the connection the party model last saw
 			// The first few tunnel messages refused on this connection are logged with the reason (the 10 s report only counts).
 			void refused(const char* why, int kind, std::size_t length)
 			{
@@ -640,6 +646,7 @@ namespace online_room
 			}
 		};
 		std::vector<std::unique_ptr<tunnel>> tunnels;
+		void party_receive(tunnel& t, const std::uint8_t* data, std::size_t size); // kinds 7/8 (below)
 		core::leave_deferral deferred_leave; // a native session end's room leave, one transport tick later
 		std::deque<received_datagram> arrivals;
 		std::size_t arrivals_bytes = 0;
@@ -727,6 +734,8 @@ namespace online_room
 			}
 			t.connection = k_HSteamNetConnection_Invalid;
 			t.connected = t.transport_bound = false;
+			t.party_rtt = -1;
+			t.party_route = online_party_core::route::unknown;
 			for (auto* m : t.game) m->Release();
 			t.game.clear();
 			t.game_bytes = 0;
@@ -1073,6 +1082,12 @@ namespace online_room
 				for (int i = 0; i < n; ++i)
 				{
 					const auto* data = static_cast<const std::uint8_t*>(batch[i]->m_pData);
+					if (batch[i]->m_cbSize >= 1 && (data[0] == online_party_core::kind_report || data[0] == online_party_core::kind_table))
+					{
+						party_receive(*t, data, std::size_t(batch[i]->m_cbSize));
+						batch[i]->Release();
+						continue;
+					}
 					const auto p = gns_transport_core::parse(data, std::size_t(batch[i]->m_cbSize));
 					// The member's keepalive can overtake its hello at the start (seen once per session on the host): it carries
 					// nothing, so it is ignored rather than counted as a refused message.
@@ -1398,6 +1413,172 @@ namespace online_room
 		}
 	}
 
+    // ---- Online Party (docs/online-party.md): member reports, the host table, local measurements, cards ----
+    namespace {
+        namespace party_core = online_party_core;
+        party_core::model party_model;
+        party_core::pacer report_pacer{party_core::report_min_ms, party_core::refresh_ms}, table_pacer{party_core::table_min_ms, party_core::refresh_ms};
+        std::uint32_t report_sequence = 0, table_sequence = 0; // per process: monotonic on every connection
+        std::uint16_t table_generation = 0;
+        std::uint64_t table_membership = 0;
+        party_core::input_flow input_flow;
+        gns_transport::party_facts party_facts;
+        bool party_facts_ok = false;
+        std::vector<party_core::card> party_cards;
+        unsigned party_muted_logged = 0;
+        void party_reset() {
+            party_model.close(); report_pacer.reset(); table_pacer.reset(); input_flow.reset();
+            party_cards.clear(); party_facts = {}; party_facts_ok = false; table_membership = 0;
+        }
+        const gns_transport::party_participant* participant_on(HSteamNetConnection c) {
+            if (!party_facts_ok || c == k_HSteamNetConnection_Invalid) return nullptr;
+            for (unsigned i = 0; i < party_facts.count; ++i) if (party_facts.participants[i].connection == std::uint32_t(c)) return &party_facts.participants[i];
+            return nullptr;
+        }
+        const gns_transport::party_participant* local_participant() {
+            if (!party_facts_ok) return nullptr;
+            for (unsigned i = 0; i < party_facts.count; ++i) if (party_facts.participants[i].local) return &party_facts.participants[i];
+            return nullptr;
+        }
+        void party_send(const std::vector<std::uint8_t>& bytes) {
+            for (auto& t : tunnels)
+                if (t->connected && t->connection != k_HSteamNetConnection_Invalid)
+                    sockets()->SendMessageToConnection(t->connection, bytes.data(), std::uint32_t(bytes.size()), k_nSteamNetworkingSend_UnreliableNoNagle, nullptr);
+        }
+    }
+    namespace {
+        void party_receive(tunnel& t, const std::uint8_t* data, std::size_t size) {
+            party_core::key from{};
+            if (!party_model.is_open() || !party_core::key_from_identity(t.id, from)) return;
+            const auto now = room_clock();
+            const auto* p = participant_on(t.connection);
+            const auto why = data[0] == party_core::kind_report ? party_model.on_report(from, data, size, now) : party_model.on_table(from, p ? p->index : -1, data, size, now);
+            if (why == party_core::refusal::none) return;
+            if (why == party_core::refusal::muted) {
+                if (party_muted_logged < 8) { ++party_muted_logged; logger::write("online: party: %s sent too many refused party messages - ignored for this connection", t.id.c_str()); }
+                return;
+            }
+            logger::write_capped("online-party-refused", "online: party: refused a %s from %s (%s, %zu bytes)", data[0] == party_core::kind_report ? "report" : "host table",
+                                 t.id.c_str(), party_core::name(why), size);
+        }
+        void party_tick() {
+            const auto now = room_clock();
+            party_core::key self{}, host{};
+            if (!room_ready || room_code.size() != party_core::code_size || !party_core::key_from_identity(own_id, self) || !party_core::key_from_identity(host_id, host)) {
+                if (party_model.is_open()) party_reset();
+                online_status::tick();
+                return;
+            }
+            if (!party_model.is_open() || std::memcmp(party_model.code(), room_code.data(), party_core::code_size) != 0 || party_model.self() != self || party_model.host() != host) {
+                party_reset();
+                party_model.open(room_code.c_str(), self, host);
+                logger::write("online: party: tracking room %s (%s)", online_security::redact_join_code(room_code).c_str(), hosting ? "hosting" : "joined");
+            }
+            std::vector<party_core::key> active;
+            for (const auto& id : members.active_ids()) { party_core::key k{}; if (party_core::key_from_identity(id, k)) active.push_back(k); }
+            party_model.roster(active);
+            party_facts_ok = gns_transport::party_snapshot(party_facts);
+            const auto* local = local_participant();
+            // Shared input: the lockstep ring of every participant inside the lockstep (a JIP-pending one is outside).
+            int lockstep[4]{};
+            std::size_t in_lockstep = 0;
+            if (!party_facts_ok) input_flow.reset();
+            else
+                for (unsigned i = 0; i < party_facts.count; ++i) {
+                    const auto& q = party_facts.participants[i];
+                    input_flow.sample(q.index, q.ring, q.next, now);
+                    if (!q.pending && in_lockstep < 4) lockstep[in_lockstep++] = q.index;
+                }
+            bool host_connected = false;
+            for (auto& t : tunnels) {
+                party_core::key k{};
+                if (!party_core::key_from_identity(t->id, k)) continue;
+                if (t->connection != t->party_connection) {
+                    t->party_connection = t->connection;
+                    if (t->connection != k_HSteamNetConnection_Invalid) party_model.reconnected(k);
+                }
+                if (t->connected && now - t->party_sampled >= 1000) {
+                    t->party_sampled = now;
+                    SteamNetConnectionRealTimeStatus_t st{};
+                    const bool ok = sockets()->GetConnectionRealTimeStatus(t->connection, &st, 0, nullptr) == k_EResultOK;
+                    t->party_rtt = ok && st.m_nPing >= 0 && st.m_nPing <= int(party_core::rtt_ceiling) ? st.m_nPing : -1;
+                    const auto* how = route(t->connection);
+                    t->party_route = std::strcmp(how, "relay") == 0 ? party_core::route::relay : how[0] == 'd' ? party_core::route::direct : party_core::route::unknown;
+                }
+                party_core::member_facts f;
+                f.tunnel = t->connected;
+                f.bound = t->transport_bound;
+                f.rtt = t->connected ? t->party_rtt : -1;
+                f.how = t->connected ? t->party_route : party_core::route::unknown;
+                if (const auto* q = participant_on(t->connection)) {
+                    f.index = q->index;
+                    f.ready = q->ready;
+                    f.ready_known = true;
+                    f.native_name = q->name;
+                }
+                if (t->id == host_id && t->connected) host_connected = true;
+                party_model.observe(k, f);
+            }
+            party_model.settle_indices();
+            party_core::phase_inputs in;
+            in.hosting = hosting;
+            in.host_connected = host_connected;
+            in.participant = local != nullptr;
+            in.native_ready = local && local->ready;
+            in.jip_pending = local && local->pending;
+            in.loading = party_facts_ok && party_facts.loading;
+            in.inputs_flowing = local && input_flow.flowing(lockstep, in_lockstep, now);
+            const auto self_phase = party_core::local_phase(in);
+            const int self_index = local ? local->index : -1;
+            const std::string self_name = local ? std::string(local->name) : screen_name();
+            party_cards = party_model.cards(self_phase, self_index, self_name, local && local->ready, local != nullptr, own_version_token, now);
+            // This PC's report to every connected member, on change (<= 1/s) and every 5 s.
+            auto own = party_model.own_report(self_phase, self_index, local != nullptr, own_version_token, self_name);
+            own.seq = 0;
+            const auto content = party_core::encode(own);
+            if (report_pacer.due(content, now)) {
+                own.seq = ++report_sequence;
+                party_send(party_core::encode(own));
+                report_pacer.sent(content, now);
+            }
+            if (hosting) {
+                const auto membership = party_core::model::membership(party_cards);
+                if (membership != table_membership) { table_membership = membership; ++table_generation; }
+                auto table = party_model.own_table(party_cards, table_generation);
+                table.seq = 0;
+                const auto table_content = party_core::encode(table);
+                if (table_pacer.due(table_content, now)) {
+                    table.seq = ++table_sequence;
+                    party_send(party_core::encode(table));
+                    table_pacer.sent(table_content, now);
+                }
+            }
+            if (party_model.note_cards(party_cards)) {
+                std::vector<online_status_core::roster_row> rows;
+                std::string line;
+                for (const auto& c : party_cards) {
+                    if (rows.size() >= 4) break;
+                    online_status_core::roster_row r;
+                    r.slot = int(rows.size()) + 1;
+                    for (const char ch : c.name.substr(0, party_core::name_max)) r.name += static_cast<unsigned char>(ch) < 0x20 || ch == 0x7f ? ' ' : ch;
+                    if (r.name.empty()) r.name = "Player";
+                    r.host = c.host;
+                    r.you = c.self;
+                    r.phase = party_core::name(c.now);
+                    r.ready = c.ready_known && !c.host ? (c.ready ? 1 : 0) : -1;
+                    r.build = party_core::name(c.stage);
+                    if (const auto* how = party_core::name(c.how)) r.route = how;
+                    rows.push_back(r);
+                    line += " [P" + std::to_string(r.slot) + (c.self ? " you" : "") + (c.host ? " host" : "") + " index " + std::to_string(c.index) + " " + r.phase + " " + r.build +
+                            (c.from == party_core::rtt_source::local ? " rtt local" : c.from == party_core::rtt_source::to_host ? " rtt to host" : " rtt unknown") + "]";
+                }
+                online_status::party(party_core::name(self_phase), party_model.has_table() ? int(party_model.table_generation()) : -1, rows);
+                logger::write_capped("online-party-roster", "online: party: roster%s", line.c_str());
+            }
+            online_status::tick();
+        }
+    }
+
     namespace {
         void invalidate_worker() {
             cancel_worker();
@@ -1415,6 +1596,7 @@ namespace online_room
             for (auto& t : tunnels) drop(*t, "intentional room departure", linger);
             tunnels.clear(); arrivals.clear(); arrivals_bytes = 0;
             signal_rates.clear(); members.clear(); own_address = 0;
+            party_reset();
             if (listener != k_HSteamListenSocket_Invalid && sockets()) sockets()->CloseListenSocket(listener);
             listener = k_HSteamListenSocket_Invalid;
             room_ready = ice_ready = cert_ready = false; cert_identity.clear(); cert_expires = 0;
@@ -1442,6 +1624,7 @@ namespace online_room
                 // Status v1 keeps its process-final error meaning. Local retry
                 // state is carried only in client_view, never reset via begin().
                 if (!online_status::active()) online_status::begin(action == browser::operation::host ? st::role::host : st::role::join);
+                online_status::attempt();
                 online_status::set(st::state::connecting, configured_code, 0);
             }
             return true;
@@ -1655,6 +1838,7 @@ namespace online_room
 		}
 		poll();
 		report();
+		party_tick();
 	}
 
 	bool on_status(SteamNetConnectionStatusChangedCallback_t* info)
@@ -1748,6 +1932,44 @@ namespace online_room
 		t->game.clear();
 		t->game_bytes = 0;
 	}
+	bool party(online_menus::lobby_fixture& out)
+	{
+		out = {};
+		if (!room_ready || !party_model.is_open() || party_cards.empty() || room_code.size() != 8) return false;
+		std::memcpy(out.code, room_code.c_str(), 9);
+		for (const auto& c : party_cards)
+		{
+			const bool native_row = c.admitted || (c.self && c.index >= 0);
+			if (native_row && out.count < 4)
+			{
+				auto& m = out.members[out.count++];
+				m.native_index = unsigned(c.index);
+				m.ping_ms = c.self ? -1 : c.rtt;
+				m.ping_to_host = c.from == party_core::rtt_source::to_host;
+				m.route = int(c.how);
+				m.build = int(c.stage);
+				m.same_build = c.stage == party_core::build::same || c.stage == party_core::build::agreed;
+				m.phase = int(c.now);
+			}
+			else if (!native_row && !c.self && out.pending_count < 3)
+			{
+				auto& m = out.pending[out.pending_count++];
+				std::memcpy(m.name, c.name.c_str(), std::min<std::size_t>(c.name.size(), 31));
+				m.phase = int(c.now);
+				m.build = int(c.stage);
+				m.ping_ms = c.rtt;
+				m.ping_to_host = c.from == party_core::rtt_source::to_host;
+				m.route = int(c.how);
+			}
+		}
+		return true;
+	}
+	int room_rtt(const std::string& code)
+	{
+		if (hosting || code.empty() || code != room_code) return -1;
+		for (const auto& t : tunnels) if (t->id == host_id && t->connected) return t->party_rtt;
+		return -1;
+	}
 	int fetch(HSteamNetConnection c, SteamNetworkingMessage_t** out, int max)
 	{
 		poll();
@@ -1798,7 +2020,7 @@ namespace online_room
         if (!hosting && configured_code.empty() && !menu_client) return;
 		if (hosting && !configured_code.empty()) { logger::write("online: [Online] JoinCode set - this PC joins room %s instead of hosting one", online_security::redact_join_code(configured_code).c_str()); hosting = false; }
         preset = hosting ? browser::operation::host : !configured_code.empty() ? browser::operation::resolve : browser::operation::none;
-        if (!menu_client && preset != browser::operation::none) online_status::begin(hosting ? st::role::host : st::role::join);
+        if (!menu_client && preset != browser::operation::none) { online_status::begin(hosting ? st::role::host : st::role::join); online_status::attempt(); }
         if (game_version::test_mode_active())
 		{
 			// [TestMode] blocks online play (game_version refuses the game's sockets): no room, no broker sign-in.

@@ -7,10 +7,12 @@
 #include <Windows.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -198,6 +200,126 @@ int main()
 		online_status::set(core::state::room, "K7QN2X9M", 1);
 		check(slurp(file).find("\"public\":false,\"room_name\":null") != std::string::npos, "status file: a private room says public false, room_name null");
 		DeleteFileW((ini.substr(0, ini.size() - std::wstring(L"xml2-fix.ini").size()) + L"online-status.json").c_str());
+	}
+
+	// ---- contract v1.6 proposal (docs/online-party.md section 9): the additive party/process block ----
+	{
+		core::status v1;
+		v1.who = core::role::host;
+		v1.now = core::state::room;
+		v1.code = "K7QN2X9M";
+		v1.players = 2;
+		const auto legacy = core::json(v1, when);
+		auto both = v1;
+		both.party.known = true;
+		both.party.generation = 7;
+		both.party.now = core::state::room;
+		both.party.phase = "in_lobby";
+		both.party.table = 3;
+		core::roster_row a;
+		a.slot = 1; a.name = "Logan"; a.host = true; a.you = true; a.phase = "in_lobby"; a.build = "same";
+		core::roster_row b;
+		b.slot = 2; b.name = "Ki\"t\x01y"; b.phase = "ready"; b.ready = 1; b.build = "agreed"; b.route = "relay";
+		both.party.roster = {a, b};
+		both.process.pid = 4242;
+		both.process.started = {2026, 10, 27, 23, 5, 9};
+		const auto text = core::json(both, when);
+		check(text.compare(0, legacy.size() - 2, legacy, 0, legacy.size() - 2) == 0, "v1.6: every v1 byte up to `updated` is unchanged (keys appended after it)");
+		check(text == legacy.substr(0, legacy.size() - 2) +
+		          ",\"party\":{\"generation\":7,\"state\":\"room\",\"error\":null,\"phase\":\"in_lobby\",\"table\":3,\"roster\":["
+		          "{\"slot\":1,\"name\":\"Logan\",\"host\":true,\"you\":true,\"phase\":\"in_lobby\",\"ready\":null,\"build\":\"same\",\"route\":null},"
+		          "{\"slot\":2,\"name\":\"Ki\\\"t\\u0001y\",\"host\":false,\"you\":false,\"phase\":\"ready\",\"ready\":true,\"build\":\"agreed\",\"route\":\"relay\"}]},"
+		          "\"process\":{\"pid\":4242,\"started\":\"2026-10-27T23:05:09Z\"}}\n",
+		      "v1.6: the party block and process key, exactly, names escaped");
+		check(text.find("ping") == std::string::npos && text.find("10.77") == std::string::npos, "v1.6: no ping and no address in the file");
+		auto failed_attempt = both;
+		failed_attempt.party.now = core::state::error;
+		failed_attempt.party.why = core::error::none;
+		check(core::json(failed_attempt, when).find("\"party\":{\"generation\":7,\"state\":\"error\",\"error\":\"internal\"") != std::string::npos, "v1.6: an attempt error without an id says internal");
+		auto five = both;
+		five.party.roster.assign(5, a);
+		const auto many = core::json(five, when);
+		std::size_t rows = 0;
+		for (std::size_t at = many.find("\"slot\""); at != std::string::npos; at = many.find("\"slot\"", at + 1)) ++rows;
+		check(rows == 4, "v1.6: at most four roster rows are written");
+		auto long_name = both;
+		long_name.party.roster = {a};
+		long_name.party.roster[0].name = std::string(40, 'n');
+		check(core::json(long_name, when).find(std::string(31, 'n') + "\"") != std::string::npos && core::json(long_name, when).find(std::string(32, 'n')) == std::string::npos,
+		      "v1.6: roster names are clipped to 31 bytes");
+		if (const auto* out = std::getenv("XML2_STATUS_SAMPLES"))
+		{
+			std::ofstream f(out, std::ios::binary);
+			auto v2 = legacy;
+			v2.replace(v2.find("\"v\":1"), 5, "\"v\":2");
+			f << legacy << text << core::json(failed_attempt, when) << v2;
+		}
+	}
+
+	// The stateful writer with the party block: attempt, coalesced roster, retry after an error, exit.
+	{
+		static DWORD fake_now = 100000;
+		online_status::set_clock_for_test([]() -> DWORD { return fake_now; });
+		const auto ini = online_status::game_ini();
+		const auto file = ini.substr(0, ini.size() - std::wstring(L"xml2-fix.ini").size()) + L"online-status.json";
+		// A previous run's file (crashed: never wrote `ended`) is replaced by this run's first write.
+		online_status::write_atomic(file, "{\"v\":1,\"role\":\"host\",\"state\":\"in_game\",\"code\":\"ABCD2345\",\"players\":3,\"process\":{\"pid\":1,\"started\":\"2020-01-01T00:00:00Z\"}}\n");
+		online_status::begin(core::role::host);
+		online_status::attempt();
+		online_status::set(core::state::connecting, "", 0);
+		auto now = slurp(file);
+		const auto pid = "\"process\":{\"pid\":" + std::to_string(GetCurrentProcessId()) + ",";
+		check(now.find("\"state\":\"connecting\"") != std::string::npos && now.find(pid) != std::string::npos && now.find("ABCD2345") == std::string::npos,
+		      "stale file: the previous run's status is replaced; process names this process");
+		check(now.find("\"party\":{\"generation\":") != std::string::npos && now.find("\"state\":\"connecting\",\"error\":null,\"phase\":\"connecting\"") != std::string::npos,
+		      "attempt: the party block starts with the first write of an in-game attempt");
+		const auto g0 = online_status::snapshot().party.generation;
+		online_status::set(core::state::room, "K7QN2X9M", 1);
+		std::vector<core::roster_row> rows(1);
+		rows[0].name = "Logan"; rows[0].host = rows[0].you = true; rows[0].phase = "in_lobby"; rows[0].build = "same";
+		fake_now += 2000;
+		online_status::party("in_lobby", -1, rows);
+		now = slurp(file);
+		check(now.find("\"roster\":[{\"slot\":1,\"name\":\"Logan\"") != std::string::npos && online_status::snapshot().party.generation > g0,
+		      "party: a roster change is written (generation moves)");
+		rows.push_back(rows[0]);
+		rows[1].slot = 2; rows[1].name = "Kitty"; rows[1].host = rows[1].you = false; rows[1].ready = 0;
+		fake_now += 200;
+		online_status::party("in_lobby", 1, rows);
+		check(slurp(file) == now, "party: a second roster change within 1 s is coalesced (file unchanged)");
+		online_status::tick();
+		check(slurp(file) == now, "party: tick before 1 s writes nothing");
+		fake_now += 800;
+		online_status::tick();
+		check(slurp(file).find("\"name\":\"Kitty\"") != std::string::npos && slurp(file).find("\"table\":1") != std::string::npos, "party: tick after 1 s writes the coalesced roster");
+		now = slurp(file);
+		fake_now += 5000;
+		online_status::party("in_lobby", 1, rows);
+		online_status::tick();
+		check(slurp(file) == now, "party: an unchanged roster writes nothing");
+		// v1's first error stays final; a retry is the party block's news.
+		online_status::error(core::error::code_not_found, "no such room");
+		const auto errored = slurp(file);
+		const auto g1 = online_status::snapshot().party.generation;
+		online_status::attempt();
+		online_status::set(core::state::connecting, "K7QN2X9M", 0);
+		const auto retry = slurp(file);
+		check(errored.find("\"state\":\"error\",\"code\"") != std::string::npos && retry.find("\"state\":\"error\",\"code\"") != std::string::npos &&
+		          retry.find("\"error\":\"code_not_found\"") != std::string::npos,
+		      "retry: v1's top-level state and error stay the run's first error");
+		check(retry.find("\"party\":{\"generation\":") != std::string::npos && retry.find("\"state\":\"connecting\",\"error\":null") != std::string::npos &&
+		          online_status::snapshot().party.generation > g1 && online_status::snapshot().party.roster.empty(),
+		      "retry: the party block shows the new attempt (connecting, no error, roster cleared, generation moved)");
+		online_status::set(core::state::room, "K7QN2X9M", 1);
+		check(slurp(file).find("\"party\":{\"generation\":") != std::string::npos && slurp(file).find("\"state\":\"room\",\"error\":null") != std::string::npos,
+		      "retry: later attempt states reach the party block");
+		online_status::end();
+		const auto ended = slurp(file);
+		check(ended.find("\"state\":\"ended\"") != std::string::npos && ended.find("\"error\":\"code_not_found\"") != std::string::npos &&
+		          ended.find("\"state\":\"ended\",\"error\":null,\"phase\":\"left\",\"table\":null,\"roster\":[]") != std::string::npos,
+		      "exit: ended keeps v1's error; the party block says ended / left with no roster");
+		online_status::set_clock_for_test(nullptr);
+		DeleteFileW(file.c_str());
 	}
 
 	std::printf("%d PASS / %d FAIL\n", passed, failed);

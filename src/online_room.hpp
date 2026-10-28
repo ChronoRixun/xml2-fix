@@ -13,6 +13,7 @@
 // datagrams to and from a member through it, so the stock lobby, handshake and admission run unchanged against the
 // member's virtual address 10.77.x.y. After admission the GNS transport (gns_transport, rule 25) carries the game's
 // messages on the same connection. Neither key set: nothing is hooked or written.
+namespace online_menus { struct lobby_fixture; }
 namespace online_room
 {
 	void install(HMODULE game);
@@ -55,5 +56,10 @@ namespace online_room
 	void set_transport_bound(HSteamNetConnection connection, bool bound);
 	int fetch(HSteamNetConnection connection, SteamNetworkingMessage_t** out, int max);
 	std::uint32_t own_virtual(); // host byte order, 0 before the room roster is resolved
+	// Online Party (docs/online-party.md section 8): the lobby cards' observed facts and accepted claims for the menus
+	// (game/UI thread; false outside a room). Never admission: native rows and readiness stay the menu's native reads.
+	bool party(online_menus::lobby_fixture& out);
+	// The measured RTT (ms) to the host of the room with this code when this PC is in it as a joiner, else -1.
+	int room_rtt(const std::string& code);
 #endif
 }

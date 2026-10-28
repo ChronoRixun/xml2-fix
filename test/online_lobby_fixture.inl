@@ -82,7 +82,54 @@ void __fastcall show_dialog(void*,void*,const char*,float,int) { calls.push_back
 bool lobby_fields_stub(online_menus::lobby_fixture& out) {
     if(fixture_throw) throw std::bad_alloc();
     std::strcpy(out.code,fixture_bad_code ? "BAD" : "ABCD-EFGH");out.count=3;
-    out.members[0]={99,112,false};out.members[1]={42,0,true};out.members[2]={7,38,true};return true;
+    out.members[0]={99,112,false};out.members[1]={42,0,true};out.members[2]={7,38,true};
+    if(mode.find("r7-")!=std::string::npos) {
+        // Round 7 card facts (docs/online-party.md section 8): RTT provenance/route, build stage, phase, one pending member.
+        out.members[0].ping_to_host=true;out.members[0].route=2;out.members[0].build=1;out.members[0].phase=6;
+        out.members[1].build=3;out.members[1].phase=3;
+        out.members[2].route=1;out.members[2].build=2;out.members[2].phase=2;
+        std::strcpy(out.pending[0].name,"Remy\x01x");out.pending[0].phase=1;out.pending[0].build=0;out.pending[0].ping_ms=55;out.pending[0].route=1;
+        out.pending_count=mode.find("r7-bounds")!=std::string::npos ? 4 : 1;
+    }
+    return true;
+}
+// Round 7: the cards show observed phase/route/provenance/build and a pending (broker-only) member, never as a native
+// row, kick target or ready count; an out-of-bounds fact set is dropped whole (native rows only).
+void r7_card_tests(bool host) {
+    if(mode.find("r7-bounds")!=std::string::npos) {
+        assert(texts["lc_room_code"]=="---- ----" && visibility["lc_p4_card"] && !visibility["lc_p4_empty"]);
+        for(int p=1;p<=3;++p) {
+            const auto k="lc_p"+std::to_string(p)+"_";
+            assert(!visibility[k+"card"] && visibility[k+"ping"] && visibility[k+"same_build"] && texts[k+"phase"].empty());
+        }
+        std::cout<<"r7 bounds PASS a fact set with 4 pending members is dropped whole; native rows stay, nothing measured is shown\n";return;
+    }
+    assert(!visibility["lc_p4_card"] && !visibility["lc_p4_pending"] && visibility["lc_p4_empty"] && texts["lc_p4_name"]=="Remy?x");
+    assert(texts["lc_p4_phase"]=="Checking build" && texts["lc_p4_ping"]=="55" && texts["lc_p4_route"]=="direct" && visibility["lc_p4_to_host"]);
+    assert(visibility["lc_p4_ready"] && visibility["lc_p4_not_ready"] && visibility["lc_p4_host"] && visibility["lc_p4_you"] && visibility["lc_p4_selected"]);
+    assert(!visibility["lc_p4_checking_build"] && visibility["lc_p4_same_build"] && visibility["lc_p4_other_build"] && !visibility["lc_p4_hero_fallback"]);
+    assert(texts["lc_member_count"]=="3" && texts["lc_ready_count"]=="2");
+    unsigned loading=0,ready=0,lobby=0;
+    for(int p=1;p<=3;++p) {
+        const auto k="lc_p"+std::to_string(p)+"_";
+        assert(visibility[k+"pending"] && !visibility[k+"card"] && !visibility[k+"hero_fallback"]);
+        const auto& phase=texts[k+"phase"];
+        if(phase=="Loading") {
+            ++loading;
+            assert(!visibility[k+"other_build"] && visibility[k+"same_build"] && visibility[k+"checking_build"]);
+            if(!visibility[k+"ping"]) assert(texts[k+"ping"]=="112" && !visibility[k+"to_host"] && texts[k+"route"]=="relay");
+            else assert(visibility[k+"to_host"] && texts[k+"route"].empty());
+        } else if(phase=="Ready") {
+            ++ready;
+            assert(!visibility[k+"same_build"] && visibility[k+"other_build"] && visibility[k+"checking_build"]);
+        } else if(phase=="In lobby") {
+            ++lobby;
+            assert(!visibility[k+"same_build"] && visibility[k+"other_build"]);
+            if(!visibility[k+"ping"]) assert(texts[k+"ping"]=="38" && visibility[k+"to_host"] && texts[k+"route"]=="direct");
+        } else assert(false);
+    }
+    assert(loading==1 && ready==1 && lobby==1);
+    std::cout<<"r7 cards "<<(host ? "HOST" : "JOIN")<<" PASS phase/route/to-host/build facts bound per native index; pending card shown without ready/host/kick; counts stay native\n";
 }
 void ready_person(unsigned row,bool value) {
     put(lobby_people[row].data(),0x1c,(value ? 4 : 0) | (row==0 ? 2 : 0) | (admitted && participant_ids[row]==local_id ? 1 : 0));
@@ -512,6 +559,7 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     }
     activate(child.data(),nullptr,0);assert(activations==1 && refreshes==1);
     mask=0;tick(child.data(),nullptr);
+    if(mode.find("r7-bounds")!=std::string::npos) { r7_card_tests(host);return; }
     assert(texts["lc_p1_name"]=="Logan?n?" && texts["lc_p2_name"]=="Kitty?n");
     assert(texts["lc_room_code"]=="ABCD-EFGH" && texts["lc_ready_count"]=="2" && texts["lc_member_count"]=="3");
     assert(texts["lc_waiting_name"]=="Alex" && !visibility["lc_ready_waiting"]);
@@ -530,6 +578,7 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     const auto name_backing=names_table,ready_backing=checks_table;
     for(unsigned i=0;i<40;++i) tick(child.data(),nullptr);
     assert(*reinterpret_cast<unsigned*>(0x8abe20)==pool && names_table==name_backing && checks_table==ready_backing);
+    if(mode.find("r7-")!=std::string::npos) { r7_card_tests(host);return; }
     if(mode=="r4-copy") { copy_tests(registration,tick);return; }
     if(mode=="r4-pool") { pool_tests();return; }
     if(mode=="r4-host") {

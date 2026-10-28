@@ -953,6 +953,19 @@ live residual to check, not proven by the queued-request fixture. No live game,
 raster capture or desktop input was executed for this correction.
 
 
+## Round 7: lobby card facts (party reports, measurements)
+
+The four 05 cards now get observed facts in production (`broker_api::party` -> `online_room::party`; host fixtures
+still use `lobby_fields`). New D-bindings LC must author on each card `lc_pN_` (N = 1..4), all optional (an absent item
+is a no-op): `phase` (text: Connecting / Checking build / In lobby / Ready / Waiting for next area / Receiving campaign /
+Loading / Playing / Watching story; empty = unknown), `route` (text `direct` / `relay`, empty unknown), `to_host`
+(hidden unless the shown RTT is the host's measurement, label "to host"), `other_build` (OTHER BUILD badge, beside the
+existing `same_build` / `checking_build`), `pending` (marker scene for a broker-only member's card: Connecting /
+Checking build, no ready diamond, never focusable). Browse: optional text `room_<row>_5` per row (measured RTT of the
+room this PC is in, else empty -> keep the `--` scene underneath). Unchanged: `hero_fallback` ("Hero assigned at
+start"), native READY/NOT READY, `lc_ready_count` / `lc_member_count` (native rows only), Kick picker (native rows
+only). Host fixtures: `r4-r7-cards`, `r4-r7-cards-join`, `r4-r7-bounds`. Contract: [online-party.md](online-party.md).
+
 ## Native Host setup and automatic admission (round 6)
 
 The bridge is `src/online_native_flow.inl`, included by the existing dispatcher;

@@ -46,6 +46,12 @@ the native fixed-length rule (length 0 with a body = the opcode's entry at 0xa3e
 
 The legacy fragment opcodes 0x12/0x13 are never sent over GNS and are dropped when received from it.
 
+Link kinds (first payload byte): 0 game, 1 hello, 2 hello_ack, 3 keepalive, 4 datagram (room tunnel, framing 2),
+5 lost_inputs, 6 lost_ready (framing 3); 7 party_report and 8 party_table (0.6 round 7, room tunnels only, unreliable;
+[online-party.md](online-party.md)). Kinds 7/8 are handled by the room module before the tunnel policy and never reach
+this adapter's game lane; a build without them drops them as malformed/refused tunnel messages and keeps the link.
+Rule impact: **needs coordinator revision** (proposed revision 5 / framing 4, `{1, 1000, 4, 0}`; not applied here).
+
 ## A participant lost abruptly (three or more players)
 
 The lockstep keeps every participant's inputs in the synchronizer's input ring (0x79fbb0, getter 0x55a390; one block

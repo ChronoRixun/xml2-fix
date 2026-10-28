@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace online_status_core
 {
@@ -107,6 +108,35 @@ namespace online_status_core
 		return text;
 	}
 
+	// Contract v1.6 proposal (docs/online-party.md section 9): additive keys after `updated`; `v` stays 1.
+	struct roster_row
+	{
+		int slot = 1;
+		std::string name; // <= 31 bytes, escaped
+		bool host = false, you = false;
+		std::string phase; // online_party_core::name(phase)
+		int ready = -1;    // -1 null (unknown / pending), 0 false, 1 true
+		std::string build; // checking | other | same | agreed
+		std::string route; // direct | relay | empty -> null
+		bool operator==(const roster_row&) const = default;
+	};
+	struct party_block
+	{
+		bool known = false;
+		std::uint32_t generation = 0;
+		state now = state::connecting; // this attempt's state (v1's top-level `state` stays process-final)
+		error why = error::none;
+		std::string phase; // this PC's phase name; empty -> null
+		int table = -1;    // last accepted host-table generation; -1 -> null
+		std::vector<roster_row> roster;
+		bool operator==(const party_block&) const = default;
+	};
+	struct process_info
+	{
+		std::uint32_t pid = 0; // 0 -> no `process` key (as every v1 writer)
+		utc started;
+	};
+
 	struct status
 	{
 		role who = role::host;
@@ -118,6 +148,8 @@ namespace online_status_core
 		std::string room_name;    // its name in the browser; empty -> null
 		error why = error::none;
 		std::string message; // empty -> null
+		party_block party;
+		process_info process;
 	};
 
 	// One object, keys in the contract's order, then a newline. `error` is non-null in the `error` state (an error
@@ -140,7 +172,33 @@ namespace online_status_core
 		out += error_id ? "\"" + std::string(error_id) + "\"" : std::string("null");
 		out += ",\"message\":";
 		out += s.message.empty() ? std::string("null") : "\"" + escaped(s.message) + "\"";
-		out += ",\"updated\":\"" + iso8601(when) + "\"}\n";
+		out += ",\"updated\":\"" + iso8601(when) + "\"";
+		if (s.party.known)
+		{
+			const auto& p = s.party;
+			const char* attempt_error = p.now == state::error ? (p.why == error::none ? "internal" : name(p.why)) : nullptr;
+			out += ",\"party\":{\"generation\":" + std::to_string(p.generation) + ",\"state\":\"" + name(p.now) + "\",\"error\":";
+			out += attempt_error ? "\"" + std::string(attempt_error) + "\"" : std::string("null");
+			out += ",\"phase\":";
+			out += p.phase.empty() ? std::string("null") : "\"" + escaped(p.phase) + "\"";
+			out += ",\"table\":" + (p.table < 0 ? std::string("null") : std::to_string(p.table));
+			out += ",\"roster\":[";
+			for (std::size_t i = 0; i < p.roster.size() && i < 4; ++i)
+			{
+				const auto& r = p.roster[i];
+				if (i) out += ",";
+				out += "{\"slot\":" + std::to_string(r.slot) + ",\"name\":\"" + escaped(r.name.substr(0, 31)) + "\"";
+				out += std::string(",\"host\":") + (r.host ? "true" : "false") + ",\"you\":" + (r.you ? "true" : "false");
+				out += ",\"phase\":\"" + escaped(r.phase) + "\",\"ready\":" + (r.ready < 0 ? "null" : r.ready ? "true" : "false");
+				out += ",\"build\":\"" + escaped(r.build) + "\",\"route\":";
+				out += r.route.empty() ? std::string("null") : "\"" + escaped(r.route) + "\"";
+				out += "}";
+			}
+			out += "]}";
+		}
+		if (s.process.pid)
+			out += ",\"process\":{\"pid\":" + std::to_string(s.process.pid) + ",\"started\":\"" + iso8601(s.process.started) + "\"}";
+		out += "}\n";
 		return out;
 	}
 
