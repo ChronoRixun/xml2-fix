@@ -603,12 +603,19 @@ void review_run(const script_functions_rules::func_entry* registration) {
         // removed PC as the removal notice 0x2b; its transport-bound host connection ends too, so the room layer's host-loss
         // latch IS set (nothing on this PC told it otherwise). Only the native notice tells the kick apart: the END path must show
         // the plain "removed" notice, never the host-left panel. Nothing calls removed_by_host() here.
-        const bool kicked=original_mode=="r6-end-kicked-guest" || original_mode=="r6-end-partykick-guest" || original_mode=="r6-end-kicked-twice-guest";
+        const bool kicked=original_mode=="r6-end-kicked-guest" || original_mode=="r6-end-partykick-guest" || original_mode=="r6-end-partykick-zone-guest" || original_mode=="r6-end-kicked-twice-guest";
         // Fix F (rule 64): the in-session Party Kick. The room layer accepted the host's removal notice (latched; the tracker is
         // told the coming host-connection end is not a host loss) and the transport hands the session the native removal
         // notice 0x2b of this PC's own index built by online_removal_core::native_body. -seam-: the notice was accepted but the
         // session ends another way (the host's connection drop at the resend bound): still the removal, never the panel.
-        const bool partykick=original_mode=="r6-end-partykick-guest",partyseam=original_mode=="r6-end-partykick-seam-guest";
+        // 0.6 preview fix J: -zone-: the same Party Kick in a running zone (session +0x44c, set by the campaign start 0x5f3be0):
+        // never the takeover offer ("lostconnectdialog"), the main menu through mainmenuexit 1 instead (060r failure 3).
+        const bool partyzone=original_mode=="r6-end-partykick-zone-guest";
+        const bool partykick=original_mode=="r6-end-partykick-guest" || partyzone,partyseam=original_mode=="r6-end-partykick-seam-guest";
+        // Fix J (060r failure 4, gG / gH): the HOST's own Leave / Quit notice - the 0x2b removal of the host's record (index 0)
+        // with 0x1106, flag 0 - while the host connection is still up (host_lost false): the host-left panel, never the
+        // native "The host has left the game." dialog.
+        const bool hostleft=original_mode=="r6-end-hostleft-guest";
         // Review E finding 6: a second session end in the same kick: right after the kick's clear, the native script route
         // 0x49f990 runs the REAL 0x6123e0 again before the room leave; it must change nothing.
         const bool twice=original_mode=="r6-end-kicked-twice-guest";
@@ -626,7 +633,13 @@ void review_run(const script_functions_rules::func_entry* registration) {
         try {
             if(original_mode.starts_with("r6-end-quit-") || original_mode=="r6-nit-end" || original_mode=="r6-nit-end-guest") {
                 const char* args="main";reinterpret_cast<void(__cdecl*)(const char**)>(0x5f27a0)(&args);
+            } else if(hostleft) {
+                put(lobby_people[1].data(),0x1c,2); // actual remote host flag
+                std::array<unsigned char,12> body{};put(body.data(),0,0u);put(body.data(),4,0x1106);body[8]=0;
+                std::array<unsigned,4> event{0,unsigned(reinterpret_cast<std::uintptr_t>(body.data())),0,0xa53058};
+                reinterpret_cast<void(__cdecl*)(void*)>(0x612f60)(event.data());
             } else if(kicked || slowdrop) {
+                if(partyzone) *reinterpret_cast<unsigned char*>(0xa53058+0x44c)=1; // a campaign runs
                 menu_broker.disconnected("broker already unavailable",ticks);
                 put(lobby_people[1].data(),0x1c,2); // actual remote host flag
                 // The removal notice as the network layer hands it to the retail 0x2b handler 0x612f60: the event's body
@@ -672,6 +685,19 @@ void review_run(const script_functions_rules::func_entry* registration) {
             if(twice) assert(online_menus::session_clear_count()-clears_at_start==1);
         }
         if(!direct && !lobby) assert(!*reinterpret_cast<unsigned char*>(0xa53058+0x420));
+        if(partyzone || hostleft) {
+            // Fix J: the in-zone removal and the host's departure end without the native screens: +0x44c cleared before
+            // 0x612c40's lostconnectdialog test, its reason argument cleared before 0x612e2b reloads it; in a zone the stock
+            // "No" (mainmenuexit 1) is queued.
+            assert(!*reinterpret_cast<unsigned char*>(0xa53058+0x44c));
+            const char* want=hostleft ? "the host left the game; the Hub shows the host-left panel - native dialog suppressed" :
+                "removed in a running game - native dialog suppressed; no takeover offer, back to the main menu (mainmenuexit 1)";
+            unsigned lines=0;
+            for(auto i=clears_before;i<r6_log.size();++i) lines+=r6_log[i].find(want)!=std::string::npos;
+            const bool queued=std::any_of(calls.begin(),calls.end(),[](const auto& line){return line=="queue:mainmenuexit 1";});
+            std::cout<<"end fixture: quiet end lines "<<lines<<", mainmenuexit queued "<<queued<<"\n";
+            assert(lines==1 && queued==partyzone);
+        }
         assert(leave_arms==1); // the wrapper asked for exactly one deferred room leave
         if(throws) {
             // The injected failure was contained: no leave ran, native ownership is gone, the retail teardown finished.
@@ -694,7 +720,7 @@ void review_run(const script_functions_rules::func_entry* registration) {
             // F5: assets that do not author the panel (an older LC) must never leave the Hub rows disabled behind nothing.
             if(noassets) absent_items={"lc_hub_host_left","lc_hub_host_left_veil","lc_hostleft_again","lc_hostleft_back"};
             screen("lc_online");tick(child.data(),nullptr);
-            const bool lost=host_lost_flag && !noassets;
+            const bool lost=(host_lost_flag || hostleft) && !noassets;
             if(noassets) {
                 assert(enabled_items["host"] && enabled_items["code"] && enabled_items["browse"] && enabled_items["other"] && enabled_items["desctext3"] && enabled_items["desctext4"]);
                 const auto before=calls.size();post(intent::browse);tick(child.data(),nullptr);assert(calls.back()=="request:lc_browse" && calls.size()==before+1);

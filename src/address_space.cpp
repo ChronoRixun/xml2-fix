@@ -229,6 +229,51 @@ namespace address_space
 			return previous_filter ? previous_filter(info) : EXCEPTION_CONTINUE_SEARCH;
 		}
 
+		// 0.6 preview fix J: a pure virtual call (VC runtime R6025) never reaches the exception filter - MSVCR71's _purecall
+		// calls its handler, then _amsg_exit(25) shows the box and exits. XMen2.exe and the Alchemy DLLs import _purecall
+		// from MSVCR71.dll, whose _set_purecall_handler (exported since VC7.1) takes this one: the crash line and context
+		// (the caller of the dead virtual is on the stack), then the runtime goes on exactly as before (the box, exit 255).
+		using purecall_handler = void(__cdecl*)();
+		purecall_handler previous_purecall = nullptr;
+		std::atomic<bool> in_purecall{false};
+		void write_purecall()
+		{
+			CONTEXT c{};
+			RtlCaptureContext(&c);
+			const auto u = measure();
+			logger::write("crash: pure virtual function call (VC runtime R6025) on thread %lu; laa %s; above 2 GB %s; private %s; highest %s; 2 GB guard %s",
+			              GetCurrentThreadId(), laa_state, megabytes(u.committed_high).c_str(), megabytes(u.committed_private).c_str(),
+			              hex32(u.highest_committed).c_str(), guard_state);
+			write_crash_context(&c);
+		}
+
+		void __cdecl on_purecall()
+		{
+			if (!in_purecall.exchange(true))
+			{
+				__try
+				{
+					write_purecall();
+				}
+				__except (EXCEPTION_EXECUTE_HANDLER)
+				{
+				}
+			}
+			if (previous_purecall) previous_purecall();
+		}
+
+		const char* install_purecall()
+		{
+			const HMODULE runtime = GetModuleHandleA("msvcr71.dll");
+			if (!runtime) return "unavailable (no msvcr71.dll)";
+			using setter = purecall_handler(__cdecl*)(purecall_handler);
+			const auto set = reinterpret_cast<setter>(GetProcAddress(runtime, "_set_purecall_handler"));
+			if (!set) return "unavailable (no _set_purecall_handler)";
+			previous_purecall = set(on_purecall);
+			_set_purecall_handler(on_purecall); // this DLL's own runtime too
+			return "on";
+		}
+
 		std::string high_address_test(const std::uint32_t keep_mb)
 		{
 			if (std::string(laa_state) != "on") return "error the exe is not large-address-aware: nothing above 2 GB to test";
@@ -275,6 +320,7 @@ namespace address_space
 		logger::write("address space: laa %s; 2 GB guard %s; top %s; %s free below 2 GB%s", laa_state, guard_state, hex32(top_address()).c_str(),
 		              megabytes(u.free_low).c_str(), u.straddling ? "; a block crosses 2 GB" : "");
 		previous_filter = SetUnhandledExceptionFilter(on_crash);
+		logger::write("address space: pure virtual call trace %s", install_purecall());
 		char trace[4]{};
 		if (GetEnvironmentVariableA("XML2FIX_CRASHTRACE", trace, sizeof(trace)) == 1 && trace[0] == '1')
 		{
