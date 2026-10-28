@@ -8,6 +8,7 @@
 #include "online_menus_rules.hpp"
 #include "online_menus_guards.hpp"
 #include "online_menus_hits_rules.hpp"
+#include "online_menus_models_rules.hpp"
 #include "game_version.hpp"
 #include "ini.hpp"
 #include "log.hpp"
@@ -547,15 +548,72 @@ void bind_text(void* menu,const char* item,const char* text) {
 // the model for ui/models/m_invis.igb. Live 060p: accepting only 0x5bcdb0 left every authored model
 // scene (Host visibility pair, campaign / drop-in variants, lobby cards, badges, Leave panel,
 // error scenes) at its XMLB start state, so PRIVATE stayed lit while the room posted public.
+// ---- Authored-hidden model scenes (online_menus_models_rules.hpp; 060q live failures 5 / 6) ---------------------------
+// The builder's Data/lc_online_models.txt, read once per mod generation on the first show of a scene whose name the engine
+// dropped. Absent or malformed: such scenes stay invisible (as before) and the log says so once.
+namespace models = online_menus_models;
+models::table model_table;
+unsigned model_generation=0;
+bool models_ready() {
+    try {
+        const auto generation=mod_loader::generation();
+        if(!generation) return false;
+        if(generation!=model_generation) {
+            model_generation=generation; model_table.entries.clear();
+            const auto path=std::filesystem::path(mod_loader::game_root())/L"Data/lc_online_models.txt";
+            std::ifstream file(mod_loader::resolve_file(path.wstring()),std::ios::binary);
+            if(!file) { logger::write_once("online:models-absent","online menus: no Data/lc_online_models.txt; hidden-authored scenes cannot be shown"); return false; }
+            std::string text(512*1024+1,'\0');
+            file.read(text.data(),std::streamsize(text.size()));
+            text.resize(std::size_t(file.gcount()));
+            std::string why;
+            if(text.size()>512*1024 || !models::parse(text,model_table,why)) {
+                model_table.entries.clear();
+                logger::write_once("online:models-refused","online menus: Data/lc_online_models.txt refused (%s); hidden-authored scenes cannot be shown",why.empty() ? "too large" : why.c_str());
+                return false;
+            }
+            logger::write_once("online:models","online menus: hidden-authored scenes restored from %s (%u entries)",models::contract,unsigned(model_table.entries.size()));
+        }
+        return !model_table.entries.empty();
+    } catch(...) { model_table.entries.clear(); return false; }
+}
+void menu_name(void* menu,char (&name)[64]);
+// True when `found` (a model item) is hidden now and 0x5c4b90 holds no saved model name for it (+0x94): the XMLB hid it
+// before its model was read, so showing it natively leaves m_invis.
+bool model_name_lost(void* found) {
+    __try {
+        const auto* p=static_cast<const unsigned char*>(found);
+        return (p[0x54]&4) && !*reinterpret_cast<void* const*>(p+0x94);
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool model_load(void* found,const char* model) {
+    // vt+0x38 = 0x5bbdd0(name, save slot): interns the name and calls vt+0x3c (0x5c4c50), which, the item being shown now,
+    // loads it through 0x5bc3f0 exactly as the XMLB read 0x5c5080 does for a visible item.
+    __try {
+        const auto load=(*static_cast<const std::uintptr_t**>(found))[0x38/4];
+        at<void(__thiscall*)(void*,const char*,void*)>(load)(found,model,nullptr);return true;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void model_restore(void* menu,void* found,const char* item) {
+    try {
+        char name[64]{}; menu_name(menu,name);
+        const auto* e=name[0] && models_ready() ? models::find(model_table,name,item) : nullptr;
+        if(!e) { logger::write_once(std::string("online:models-miss:")+name+":"+item,"online menus: %s.%s was authored hidden and has no listed model; it stays invisible",name,item); return; }
+        if(!model_load(found,e->model.c_str())) logger::write_once(std::string("online:models-fault:")+name+":"+item,"online menus: %s.%s model load faulted; it stays invisible",name,item);
+    } catch(...) { }
+}
 bool hide_native(void* menu,const char* item,bool hidden) {
+    void* restore=nullptr;
     __try {
         auto* found=at<void*(__thiscall*)(void*,const char*)>(0x5adc10)(menu,item);
         const auto setter=found ? (*static_cast<const std::uint32_t**>(found))[8/4] : 0u;
         if(found && (setter==0x5bcdb0 || setter==0x5c4b90)) {
-            at<hide_fn>(0x5ade10)(menu,item,hidden);return true;
-        }
-    } __except(EXCEPTION_EXECUTE_HANDLER) { }
-    return false;
+            if(setter==0x5c4b90 && !hidden && model_name_lost(found)) restore=found;
+            at<hide_fn>(0x5ade10)(menu,item,hidden);
+        } else return false;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+    if(restore) model_restore(menu,restore,item);
+    return true;
 }
 bool hide(void* menu,const char* item,bool hidden) {
     bindings.scope(menu);
@@ -689,7 +747,9 @@ void bind_broker(void* menu,screen s) {
     hide(menu,"lc_service_ok",!connected_plain);
     bind_text(menu,"service",connected_plain ? "" : service);
     bind_text(menu,"self_state",connected_plain ? "" : waiting ? "Please wait" : v.state==broker::phase::room ? "Room connected" : service);
-    bind_text(menu,"browse_hint",v.list_known ? std::to_string(v.rows.size()).append(v.stale ? " last known games" : " public games").c_str() : "Browse public games");
+    const auto browse_hint=v.list_known ? std::to_string(v.rows.size()).append(v.stale ? " last known games" : " public games") : std::string("Browse public games");
+    bind_text(menu,"browse_hint",browse_hint.c_str());
+    bind_text(menu,"browse_hint_on",browse_hint.c_str()); // the focused row's navy twin (hub_focus_follow)
     // LC localizes these mutually exclusive variants at the approved status/error anchors.
     const bool native_tunnel=native_flow.phase==native_phase::tunnel,native_discovery=native_flow.phase==native_phase::discovery,
         native_admission=native_flow.phase==native_phase::admitting,native_posting=native_flow.phase==native_phase::host && !native_flow.lobby_active;
@@ -738,7 +798,8 @@ void bind_broker(void* menu,screen s) {
         // Drop all round-1 fixture prose; LC composes localized labels from
         // these variants and the numeric maximum at the same approved anchors.
         for(const auto* field:{"campaign","save","preview_save","preview_slots","drop_in","preview_drop"}) bind_text(menu,field,"");
-        bind_text(menu,"lc_host_max_players",settings ? std::to_string(native_flow.maximum).c_str() : "");
+        // 060q live: an empty value read as missing. Unknown until native Game Options produced it: the honest "--".
+        bind_text(menu,"lc_host_max_players",settings ? std::to_string(native_flow.maximum).c_str() : "--");
         const std::pair<const char*,bool> choices[]{
             {"lc_host_settings_unknown",!settings},{"lc_host_new",settings && !native_flow.loaded},
             {"lc_host_load",settings && native_flow.loaded},{"lc_host_campaign",settings && !native_flow.danger_room},
@@ -1025,7 +1086,13 @@ bool lobby_focus(void* menu,const char* target) {
     __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 bool lobby_original(void* menu,unsigned original) {
-    __try { at<tick_fn>(original)(menu);return true; }
+    __try {
+        // The host lobby's only native Leave: its tick (0x5bacd0) entered with phase +0x1960 == 2 (set by Back / LEAVE on
+        // the previous tick) tears the session down (0x607c40(0)) and closes the menu. Latch it for the deactivation that
+        // follows (native_lobby_departing); a Start Game deactivation never passes here with phase 2.
+        if(original==0x5bacd0 && *reinterpret_cast<const int*>(static_cast<const char*>(menu)+0x1960)==2) native_flow.host_leave=true;
+        at<tick_fn>(original)(menu);return true;
+    }
     __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 int lobby_native_back(void* menu,unsigned original) {
@@ -1499,6 +1566,26 @@ bool item_box_of(void* it,hits::item_box& box) {
         std::int16_t f[6]; std::memcpy(f,p+0x70,sizeof f);
         box=hits::engine_box(f[0],f[1],f[2],f[3],f[5]); return true;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void* focus_of(void* menu);
+// 060q live (failure 11): the Hub's row hints stayed light blue on the focused amber bar and the help box always read
+// HOST A GAME. LC authors, per row, a navy twin of the hint (<row>_hint_on) and the row's help lines (lc_help_<row>_title /
+// _1 / _2, all hidden but the Host row's); the DLL shows the focused row's. Focus elsewhere (Change name, Rejoin, a prompt)
+// keeps the last row's help. Assets without the twins (an older LC) keep the plain hint and the authored help.
+constexpr const char* hub_rows[]{"host","code","browse","party","other"};
+std::string hub_help_row="host";
+void hub_focus_follow(void* menu) {
+    void* const focused=focus_of(menu);
+    std::string row;
+    for(const auto* r:hub_rows) if(focused && item_try(menu,r)==focused) row=r;
+    if(!row.empty()) hub_help_row=row;
+    for(const auto* r:hub_rows) {
+        const std::string key(r);
+        const bool on=row==key;
+        if(hide(menu,(key+"_hint_on").c_str(),!on)) hide(menu,(key+"_hint").c_str(),on);
+        const bool help=hub_help_row==key;
+        for(const auto* part:{"_title","_1","_2"}) hide(menu,("lc_help_"+key+part).c_str(),!help);
+    }
 }
 void* focus_of(void* menu) {
     // CMenu's focused item (+0x324: 0x5ae0a0 compares the hit item with it before setFocus).
@@ -2070,6 +2157,7 @@ void tick_impl(void* menu,bool& native_called) {
         for(const auto* button:{"lc_hostleft_again","lc_hostleft_back"}) enable(menu,button,panel);
         // Focus follows the modal: onto Host again when it opens, back onto the Hub's Host row when it closes.
         if(panel!=hub_panel_shown) { hub_panel_shown=panel;lobby_focus(menu,panel ? "lc_hostleft_again" : "host"); }
+        hub_focus_follow(menu);
     }
     if(s==screen::code) {
         bind_text(menu,"code_value",code.shown().c_str());

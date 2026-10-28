@@ -365,6 +365,14 @@ void lobby_run(const script_functions_rules::func_entry* registration,bool loade
     activate(child.data(),nullptr,0);assert(published==1 && menu_view().state==bm::phase::room);
     const auto healthy=menu_broker;menu_broker.disconnected("invented service loss",ticks);
     activate(child.data(),nullptr,0);assert(published==1 && menu_view().state==bm::phase::room);menu_broker=healthy;
+    {   // 060q live (fix H): Start Game deactivates the host lobby with phase 0 and the retail flags +0x1972 / +0x1973 clear
+        // (nothing in XMen2.exe ever sets them). The room stays: JIP admission, the Party screen's code and roster.
+        const auto leaves=menu_leaves;auto* const lobby=current();
+        assert(*reinterpret_cast<int*>(child.data()+0x1960)==0 && !child[0x1972] && !child[0x1973]);
+        (*reinterpret_cast<tick_t*>(0x69f290))(child.data(),nullptr);
+        assert(menu_view().state==bm::phase::room && menu_leaves==leaves);
+        set_current(lobby);activate(child.data(),nullptr,0);assert(published==1 && menu_view().state==bm::phase::room);
+    }
     auto host_tick=*reinterpret_cast<tick_t*>(0x69f2ac);
     ready_person(2,false);refresh_now();mask=0x10;host_tick(child.data(),nullptr);assert(!transfers && !starts && !broadcasts);
     focus_stub(child.data(),nullptr,"text_leaveroom",true);mask=0x10;host_tick(child.data(),nullptr);
@@ -455,7 +463,15 @@ void generation_run(const script_functions_rules::func_entry* registration) {
     assert(calls.back()=="request:host" && menu_view().generation==host_generation && *reinterpret_cast<void**>(0xa53058+0x78));
     mode="r4-r6";setup_lobby(true);retail_restore(0x607c40);retail_restore(0x6097f0);redirect(0x5db270,lobby_pop);
     (*reinterpret_cast<lobby_activate_t*>(0x69f284))(child.data(),nullptr,0);assert(menu_view().state==bm::phase::room);
-    (*reinterpret_cast<tick_t*>(0x69f290))(child.data(),nullptr);set_current(nullptr);assert(menu_view().state==bm::phase::idle);
+    // 060q live (fix H): a bare host lobby deactivation (phase 0, the retail flags clear) is what Start Game does - the room
+    // stays. Only the host lobby's native Leave (phase 2 consumed by its tick, here through the skin's confirmation)
+    // releases it.
+    (*reinterpret_cast<tick_t*>(0x69f290))(child.data(),nullptr);assert(menu_view().state==bm::phase::room);
+    set_current(child.data());(*reinterpret_cast<lobby_activate_t*>(0x69f284))(child.data(),nullptr,0);assert(menu_view().state==bm::phase::room);
+    {   const auto host_tick=*reinterpret_cast<tick_t*>(0x69f2ac);
+        put(child.data(),0x1960,2);mask=0;host_tick(child.data(),nullptr);
+        post(intent::confirm_leave);host_tick(child.data(),nullptr);host_tick(child.data(),nullptr); }
+    set_current(nullptr);assert(menu_view().state==bm::phase::idle);
     mode=original_mode;restore_services();hub_screen();
     // Loss before first activation is a pending-flow failure, not the already-
     // active survival policy exercised above.

@@ -12,6 +12,7 @@ struct native_flow_state {
     int maximum=0,difficulty=-1;
     bool loaded=false,danger_room=false;
     bool callback=false,touched=false,accepted=false,refused=false,lobby_active=false,seeded=false,host_queued=false;
+    bool host_leave=false; // the host lobby's native Leave ran (lobby_original); consumed by native_lobby_departing
 } native_flow;
 struct native_open_token {
     native_phase role=native_phase::idle;
@@ -681,12 +682,18 @@ bool native_lobby_entered(void* menu) {
         (host && !native_flow.lobby_active && (!broker_calls.host_posted || !broker_calls.host_posted(native_flow.ticket)))) {
         native_flow_error("native_lobby_generation");return false;
     }
-    native_flow.lobby_active=true;return true;
+    native_flow.lobby_active=true;native_flow.host_leave=false;return true;
 }
 bool native_lobby_departing(void* menu) {
     __try {
         const auto* bytes=static_cast<unsigned char*>(menu);
-        if(native_flow.phase==native_phase::host && which(menu)==screen::lobby_host) return !bytes[0x1972] && !bytes[0x1973];
+        if(native_flow.phase==native_phase::host && which(menu)==screen::lobby_host) {
+            // 060q live: the retail flags +0x1972 / +0x1973 are only ever zeroed (0x5b7f8e, 0x5ba919), so "both clear" was
+            // true for EVERY host lobby deactivation - Start Game included: the solo start left the room silently (no JIP
+            // admission, the Party screen "Room details pending", no invite code, no host row). Only a native Leave departs.
+            const bool leave=native_flow.host_leave;native_flow.host_leave=false;
+            return leave && !bytes[0x1972] && !bytes[0x1973];
+        }
         if(native_flow.phase==native_phase::guest && which(menu)==screen::lobby_join) return bytes[0x196e]!=0;
     } __except(EXCEPTION_EXECUTE_HANDLER) { }
     return false;
