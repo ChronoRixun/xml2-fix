@@ -7,7 +7,10 @@ std::uint32_t menu_refusal_serial() { return refusal_count; }
 bool host_lost_flag=false;
 std::uint32_t menu_retry_in() { return menu_broker.retry_in(ticks); }
 const char* menu_refusal() { return refusal_text.c_str(); }
-bool menu_host_lost() { return host_lost_flag; }
+// The kicked-guest END mode drives the room layer's real tracker (online_room's host_loss: the host removed this PC, then the
+// game session's connection ended) instead of the flag.
+bool host_loss_real=false;online_room_core::host_loss_tracker fixture_host_loss;
+bool menu_host_lost() { return host_loss_real ? fixture_host_loss.lost() : host_lost_flag; }
 const online_menus::broker_api menu_api15{menu_available,menu_view,menu_tick,menu_list,menu_host,menu_resolve,menu_retry,menu_cancel,menu_leave,menu_version,
     menu_take_preset,menu_refresh_due,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,menu_retry_in,menu_refusal,menu_host_lost,menu_refusal_serial};
 

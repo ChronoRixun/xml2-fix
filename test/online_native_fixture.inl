@@ -567,11 +567,16 @@ void review_run(const script_functions_rules::func_entry* registration) {
         const bool throws=original_mode.find("-throw-")!=std::string::npos;leave_throws=throws;
         // Round 15: the room layer reports that this guest's connection to the host ended (never set for a local leave).
         host_lost_flag=original_mode=="r6-end-loss-guest" || original_mode=="r6-end-disconnect-guest" || original_mode=="r6-end-loss-preset-guest" || original_mode=="r6-end-loss-noassets-guest";
+        // Round 15 review: a KICKED guest (round 8's Kick ends this PC's link through the host's agreed departure) loses the same
+        // transport-bound host connection, but the room layer was told the host removed it: the END path must not raise the panel.
+        const bool kicked=original_mode=="r6-end-kicked-guest";
+        host_loss_real=kicked;fixture_host_loss.reset();
+        if(kicked) { fixture_host_loss.connected();fixture_host_loss.removed_by_host();fixture_host_loss.ended(true);assert(!fixture_host_loss.lost()); }
         bool escaped=false;
         try {
             if(original_mode.starts_with("r6-end-quit-") || original_mode=="r6-nit-end" || original_mode=="r6-nit-end-guest") {
                 const char* args="main";reinterpret_cast<void(__cdecl*)(const char**)>(0x5f27a0)(&args);
-            } else if(original_mode.starts_with("r6-end-loss-")) {
+            } else if(original_mode.starts_with("r6-end-loss-") || kicked) {
                 menu_broker.disconnected("broker already unavailable",ticks);
                 put(lobby_people[1].data(),0x1c,2); // actual remote host flag
                 reinterpret_cast<void(__thiscall*)(void*,void*,int,bool)>(0x612c40)(reinterpret_cast<void*>(0xa53058),lobby_people[1].data(),0x1107,false);
@@ -609,7 +614,15 @@ void review_run(const script_functions_rules::func_entry* registration) {
                 assert(enabled_items["host"] && enabled_items["code"] && enabled_items["browse"] && enabled_items["other"] && enabled_items["desctext3"] && enabled_items["desctext4"]);
                 const auto before=calls.size();post(intent::browse);tick(child.data(),nullptr);assert(calls.back()=="request:lc_browse" && calls.size()==before+1);
                 absent_items.clear();
-            } else if(!lost) assert(hid("lc_hub_host_left") && hid("lc_hostleft_again") && !enabled_items["lc_hostleft_again"] && enabled_items["host"]);
+            } else if(!lost) {
+                assert(hid("lc_hub_host_left") && hid("lc_hostleft_again") && !enabled_items["lc_hostleft_again"] && enabled_items["host"]);
+                if(kicked) {
+                    // The kicked guest's Hub is fully usable: no veil, every row and prompt enabled, actions act (no modal swallowing them).
+                    assert(hid("lc_hub_host_left_veil") && hid("lc_hostleft_back") && enabled_items["code"] && enabled_items["browse"] && enabled_items["other"] && enabled_items["desctext3"] && enabled_items["desctext4"]);
+                    const auto before=calls.size();post(intent::browse);tick(child.data(),nullptr);assert(calls.size()==before+1 && calls.back()=="request:lc_browse");
+                    screen("lc_online");tick(child.data(),nullptr);assert(hid("lc_hub_host_left")); // and it stays down at the next Hub entry
+                }
+            }
             else {
                 assert(vis("lc_hub_host_left") && vis("lc_hostleft_again") && vis("lc_hostleft_back") && enabled_items["lc_hostleft_again"] && enabled_items["lc_hostleft_back"]);
                 assert(!enabled_items["host"] && !enabled_items["code"] && !enabled_items["browse"] && !enabled_items["other"] && !enabled_items["change_name"] && !enabled_items["rejoin"]);
@@ -629,7 +642,7 @@ void review_run(const script_functions_rules::func_entry* registration) {
                 }
                 tick(child.data(),nullptr);assert(hid("lc_hub_host_left"));
             }
-            host_lost_flag=false;
+            host_lost_flag=false;host_loss_real=false;
         }
         std::cout<<"retail end chain PASS "<<original_mode<<"; local removed; broker Leave one transport tick after the quit notices, without Hub navigation\n";
     } else if(mode=="r6-nit-script") {

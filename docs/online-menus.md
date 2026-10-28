@@ -1278,5 +1278,7 @@ true scene (pin_mismatch -> refused, code_expired -> code_not_found, the rest ->
 Tests: `xml2_online_menus_test r15-errors` (table-driven id -> cause -> scene/next action/Retry for every row on four
 screens, redacted diagnostics with hostile ids, limiter countdown, retry without restart, duplicate/late errors, build pair,
 native failure registry, clipboard tri-state, toast/roster/host-left models), the native fixture's refusal/timeout/discovery
-notices and the `r6-end-*` guest modes (host-left panel only for a lost host, modal, once), `xml2_online_browser_test`
+notices and the `r6-end-*` guest modes (host-left panel only for a lost host, modal, once; `r6-end-kicked-guest`: the
+real `host_loss_tracker` told `removed_by_host()` before the bound host connection ends -> the END path raises no panel
+and the Hub stays usable), `xml2_online_browser_test`
 (limiter arithmetic, one failure per generation, detail), and LC `test_online_errors.py`.
