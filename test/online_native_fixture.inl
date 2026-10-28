@@ -562,6 +562,14 @@ void review_run(const script_functions_rules::func_entry* registration) {
         (*reinterpret_cast<lobby_activate_t*>(hosting ? 0x69f284 : 0x69f350))(child.data(),nullptr,0);
         assert(menu_view().state==bm::phase::room && menu_leaves==0);
         std::cout<<"end fixture: activated native lobby\n";session_end_services(hosting);std::cout<<"end fixture: services ready\n";
+        if(original_mode=="r6-end-quit-start-host") {
+            // Fix H follow-up (review finding 1): Start Game first - the host lobby deactivates with phase 0, the room stays
+            // (JIP, Party) - then the player quits to the main menu from the game: the retail session end must release it.
+            assert(*reinterpret_cast<int*>(child.data()+0x1960)==0);
+            allow_keep_session=true;(*reinterpret_cast<tick_t*>(0x69f290))(child.data(),nullptr);allow_keep_session=false;
+            assert(keep_sessions==1 && menu_view().state==bm::phase::room && menu_leaves==0); // retail ran 0x607c40(1) only
+            set_current(child.data());
+        }
         const bool direct=original_mode=="r6-end-direct-guest",lobby=original_mode=="r6-end-lobby-guest";
         if(direct) put(reinterpret_cast<void*>(0xa53058),0x424,0);
         if(lobby) *reinterpret_cast<unsigned char*>(0xa3bc40)=1;

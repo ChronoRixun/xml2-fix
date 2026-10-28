@@ -52,7 +52,8 @@ void __fastcall manager_close(void*,void*,const char* name,int) {
 bool __fastcall has_image(void*,void*) { return image_present; }
 bool __fastcall transfer_image(void*,void*) { ++transfers;return image_success; }
 void __fastcall waiting_image(void* menu,void*) { static_cast<unsigned char*>(menu)[0x1970]=1; }
-void __fastcall host_leave(void*,void*,bool closing) { assert(!closing);++leaves; }
+bool allow_keep_session=false;int keep_sessions=0; // fix H: the host lobby deactivation's 0x607c40(1) at Start Game
+void __fastcall host_leave(void*,void*,bool closing) { if(closing) { assert(allow_keep_session);++keep_sessions;return; } ++leaves; }
 void __fastcall announce_ready(void*,void*,bool value) { ++announces;last_ready=value; }
 void __fastcall kick_person(void*,void*,void* p,int a,int b,int c,bool option) {
     assert(p && p!=participant(local_id) && a==0x10ce && b==0x10cf && c==0x10cf && option);++kicks;

@@ -1324,32 +1324,16 @@ MENU_NEXT (Copy), and `pad_prompt_scope()` draws `$MENU_OTHER` / `$MENU_NEXT` as
 unskinned native lobby and Prompts=off are unchanged. Host modes `r4-pad-host`, `r4-pad-join` (the real native Host / Join
 ticks with masks built from the retail code -> action table).
 
-## 0.6 preview fix H: hidden-authored model scenes, the Hub's focused row (probe `lc-online-models/1`)
-060q live failures 5 / 6 (Host setup values, YOUR ROOM badge in PUBLIC, the lobby cards, HOST / READY / ping / SAME BUILD,
-the Leave panel) and, with the same cause, the Browse STATUS / PING / BUILD scenes, the round-15 error scenes, the
-service-lost strip and the guest-left toast.
+## 0.6 preview fix H: the Hub's focused row, MAX PLAYERS, the host's room after Start Game
+060q live failures 5 / 8 / 11. (The hidden-authored model scenes of failures 5 / 6 are fix G's model-load adapter on
+0x6a0348; fix H's first draft of a builder table + restore was dropped in favour of it.)
 
-- **Cause (retail, rea + the PE).** A MENU_ITEM_MODEL (vtable 0x6a0304) whose XMLB carries `hide` (any value) can never be
-  shown: the base item read 0x5bc7a0 sets +0x54 bit 2 (0x5bcb96) before the model read 0x5c5080 calls vt+0x38 (0x5bbdd0) with
-  the authored model; vt+0x3c (0x5c4c50) of a hidden item loads `ui/models/m_invis.igb` and releases the authored name. The
-  model setHidden 0x5c4b90 restores on show only the name it saved itself at +0x94 when it hid a *visible* item; for an
-  item hidden from the start +0x94 is null and 0x5bc3f0 returns at once. Text items (setter 0x5bcdb0, the bit only) were
-  unaffected, which is why the lobby's names and "Waiting for a player" showed and every model scene did not.
-- **Fix.** The builder writes `Data/lc_online_models.txt` (`lc-online-models/1`, then `menu item model` per line: every
-  hidden-authored MENU_ITEM_MODEL of the built LC trees with its model; whole file or nothing). When `hide()` shows a model
-  item whose +0x94 is null, the DLL loads the listed model through the item's own vt+0x38 (name, no save slot) - the call the
-  XMLB read makes for a visible item - after the native show; from then on 0x5c4b90's own save / restore carries it. No hook,
-  no patched byte; six guards (the two vtable slots, 0x5c4b90, 0x5bbdd0, 0x5c4c50's hidden branch, the base read's `hide`
-  bit). Missing / refused table: the old behaviour, logged once (`online:models-absent` / `-refused`); an unlisted item is
-  logged once and left as the engine leaves it.
-- **Log.** `online menus: hidden-authored scenes restored from lc-online-models/1 (N entries)`.
 - **Hub focus.** LC authors a navy twin `<row>_hint_on` of each focusable row's hint and one hidden help set per row
   (`lc_help_<row>_title` / `_1` / `_2`, the Host row's shown); the Hub tick shows the focused row's twin and help, focus on
   another item keeps the last row's help. `browse_hint_on` is bound with `browse_hint`.
 - **Host MAX PLAYERS** reads `--` until native Game Options produced the number.
-- **Tests.** r17-models (real model item code of the mapped image: XMLB read with `hide` -> m_invis; the engine's own show
-  restores nothing; the Host tick with the table draws SET IN GAME OPTIONS / `--` / the PUBLIC pair, three PUBLIC / PRIVATE
-  round trips through 0x5c4b90's save), r17-models-absent / -refused (the 060q picture, logged), r17-hub-focus.
+- **Tests.** r17-hub-focus (real text items, the CMenu focus over four rows, Change name and the Party row keep the last
+  help, a new visit starts on the Host help).
 - **The host's room survives Start Game.** `native_lobby_departing` treated "+0x1972 and +0x1973 both clear" as the host
   leaving, but XMen2.exe only ever zeroes those flags (0x5b7f8e, 0x5ba919), so every host lobby deactivation - Start Game
   included - left the room silently (060q dh: right after the solo start `online: GNS listening on ...` = no room

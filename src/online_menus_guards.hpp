@@ -81,14 +81,6 @@ inline constexpr script_functions_rules::guard guards[]{
     {0x005bc1b0, "83ec100fbf417a992bc20fbf517255560fbf717657d1f88bfa2bfe8d7407ff03d00fbf4174897424100fbf7170895424", "item hit test rectangle"},
     {0x005c6490, "83ec10568bf10fbf467a0fbf4e72992bc20fbf5676d1f8578bf92bfa8d5407ff03c80fbf46748954240c0fbf5670894c", "text item hit test rectangle"},
     {0x005bd8f0, "8a4154c0e8022401c3", "item shown test +54 bit 2"},
-    // Hidden-authored model scenes (online_menus_models_rules.hpp): the model item's setHidden and load slots, the setHidden
-    // body (its +0x94 saved name), the load (name, save) thiscall and its hidden-aware vt+0x3c, the base read's `hide` bit.
-    {0x006a030c, "904b5c00", "model item setHidden slot +8"},
-    {0x006a033c, "d0bd5b00", "model item load slot +38"},
-    {0x005c4b90, "568bf18b06ff50048a4c24088a5654c0e10232ca80e10432d184c08856548bce75228b16ff520484c0743a8b15085a6e008b068d8e9400000051528bceff50385ec204008b06ff500484c075188b16576a008dbe94000000578bceff523cc707000000005f5ec2", "model setHidden +0x94 saved name"},
-    {0x005bbdd0, "51568bf1e847cb01008b4c240c8b106a0d518d4c240c518bc8ff92600200008b4424108b16508d4c2408518bceff523c5e59c20800", "model load (name, save) thiscall"},
-    {0x005c4c50, "51568bf18b06ff500484c074605357e8bc3c01008b0d085a6e00", "model load while hidden = m_invis"},
-    {0x005bcb7e, "8a465424fb68e0ff69008bcb884654e82e7efaff85c07404804e5404", "base read: hide attribute sets +54 bit 2"},
     // The host lobby's native Leave (native_lobby_departing): its tick consumes phase +0x1960 == 2 (set by Back) with the
     // session teardown 0x607c40(0); the deactivation's retail flags test +0x1972 / +0x1973 before 0x607c40(1).
     {0x005bacd6, "83bf6019000002752f6a00c7876019000000000000e8c0ea04008bc8e8", "host lobby tick: phase 2 = native Leave"},

@@ -8,7 +8,6 @@
 #include "online_menus_rules.hpp"
 #include "online_menus_guards.hpp"
 #include "online_menus_hits_rules.hpp"
-#include "online_menus_models_rules.hpp"
 #include "game_version.hpp"
 #include "ini.hpp"
 #include "log.hpp"
@@ -548,72 +547,15 @@ void bind_text(void* menu,const char* item,const char* text) {
 // the model for ui/models/m_invis.igb. Live 060p: accepting only 0x5bcdb0 left every authored model
 // scene (Host visibility pair, campaign / drop-in variants, lobby cards, badges, Leave panel,
 // error scenes) at its XMLB start state, so PRIVATE stayed lit while the room posted public.
-// ---- Authored-hidden model scenes (online_menus_models_rules.hpp; 060q live failures 5 / 6) ---------------------------
-// The builder's Data/lc_online_models.txt, read once per mod generation on the first show of a scene whose name the engine
-// dropped. Absent or malformed: such scenes stay invisible (as before) and the log says so once.
-namespace models = online_menus_models;
-models::table model_table;
-unsigned model_generation=0;
-bool models_ready() {
-    try {
-        const auto generation=mod_loader::generation();
-        if(!generation) return false;
-        if(generation!=model_generation) {
-            model_generation=generation; model_table.entries.clear();
-            const auto path=std::filesystem::path(mod_loader::game_root())/L"Data/lc_online_models.txt";
-            std::ifstream file(mod_loader::resolve_file(path.wstring()),std::ios::binary);
-            if(!file) { logger::write_once("online:models-absent","online menus: no Data/lc_online_models.txt; hidden-authored scenes cannot be shown"); return false; }
-            std::string text(512*1024+1,'\0');
-            file.read(text.data(),std::streamsize(text.size()));
-            text.resize(std::size_t(file.gcount()));
-            std::string why;
-            if(text.size()>512*1024 || !models::parse(text,model_table,why)) {
-                model_table.entries.clear();
-                logger::write_once("online:models-refused","online menus: Data/lc_online_models.txt refused (%s); hidden-authored scenes cannot be shown",why.empty() ? "too large" : why.c_str());
-                return false;
-            }
-            logger::write_once("online:models","online menus: hidden-authored scenes restored from %s (%u entries)",models::contract,unsigned(model_table.entries.size()));
-        }
-        return !model_table.entries.empty();
-    } catch(...) { model_table.entries.clear(); return false; }
-}
-void menu_name(void* menu,char (&name)[64]);
-// True when `found` (a model item) is hidden now and 0x5c4b90 holds no saved model name for it (+0x94): the XMLB hid it
-// before its model was read, so showing it natively leaves m_invis.
-bool model_name_lost(void* found) {
-    __try {
-        const auto* p=static_cast<const unsigned char*>(found);
-        return (p[0x54]&4) && !*reinterpret_cast<void* const*>(p+0x94);
-    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
-}
-bool model_load(void* found,const char* model) {
-    // vt+0x38 = 0x5bbdd0(name, save slot): interns the name and calls vt+0x3c (0x5c4c50), which, the item being shown now,
-    // loads it through 0x5bc3f0 exactly as the XMLB read 0x5c5080 does for a visible item.
-    __try {
-        const auto load=(*static_cast<const std::uintptr_t**>(found))[0x38/4];
-        at<void(__thiscall*)(void*,const char*,void*)>(load)(found,model,nullptr);return true;
-    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
-}
-void model_restore(void* menu,void* found,const char* item) {
-    try {
-        char name[64]{}; menu_name(menu,name);
-        const auto* e=name[0] && models_ready() ? models::find(model_table,name,item) : nullptr;
-        if(!e) { logger::write_once(std::string("online:models-miss:")+name+":"+item,"online menus: %s.%s was authored hidden and has no listed model; it stays invisible",name,item); return; }
-        if(!model_load(found,e->model.c_str())) logger::write_once(std::string("online:models-fault:")+name+":"+item,"online menus: %s.%s model load faulted; it stays invisible",name,item);
-    } catch(...) { }
-}
 bool hide_native(void* menu,const char* item,bool hidden) {
-    void* restore=nullptr;
     __try {
         auto* found=at<void*(__thiscall*)(void*,const char*)>(0x5adc10)(menu,item);
         const auto setter=found ? (*static_cast<const std::uint32_t**>(found))[8/4] : 0u;
         if(found && (setter==0x5bcdb0 || setter==0x5c4b90)) {
-            if(setter==0x5c4b90 && !hidden && model_name_lost(found)) restore=found;
-            at<hide_fn>(0x5ade10)(menu,item,hidden);
-        } else return false;
-    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
-    if(restore) model_restore(menu,restore,item);
-    return true;
+            at<hide_fn>(0x5ade10)(menu,item,hidden);return true;
+        }
+    } __except(EXCEPTION_EXECUTE_HANDLER) { }
+    return false;
 }
 bool hide(void* menu,const char* item,bool hidden) {
     bindings.scope(menu);
@@ -1575,10 +1517,15 @@ void* focus_of(void* menu);
 constexpr const char* hub_rows[]{"host","code","browse","party","other"};
 std::string hub_help_row="host";
 void hub_focus_follow(void* menu) {
+    // A new Hub visit (the binding cache is cleared on every departure and scoped to the menu) starts on the Host row's
+    // help, as authored - never on the previous visit's row while the CMenu focus is still unset.
+    bindings.scope(menu);
+    if(!bindings.visibility.count("host_hint_on")) hub_help_row="host";
     void* const focused=focus_of(menu);
     std::string row;
     for(const auto* r:hub_rows) if(focused && item_try(menu,r)==focused) row=r;
-    if(!row.empty()) hub_help_row=row;
+    // A row without its own help set (the Party row is not authored one) keeps the last row's help.
+    if(!row.empty() && item_try(menu,("lc_help_"+row+"_title").c_str())) hub_help_row=row;
     for(const auto* r:hub_rows) {
         const std::string key(r);
         const bool on=row==key;

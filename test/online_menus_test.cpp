@@ -4,7 +4,6 @@
 #include "online_menus_rules.hpp"
 #include "online_menus_guards.hpp"
 #include "online_menus_hits_rules.hpp"
-#include "online_menus_models_rules.hpp"
 #include "pad_prompts_rules.hpp"
 #include "script_function_overflow.hpp"
 #include <Windows.h>
@@ -136,7 +135,7 @@ void __cdecl text_stub(void*,const char* item,const char* format,...) {
     va_list args;va_start(args,format);texts[item]=va_arg(args,const char*);va_end(args);
 }
 std::map<std::string,bool> visibility;
-void* (*scene_lookup)(const char*)=nullptr; // r17: real model items; 0x5ade10 = find the item, call its vt+8 setHidden
+void* (*scene_lookup)(const char*)=nullptr; // r17-hub-focus: real text items; 0x5ade10 = find the item, call its vt+8 setHidden
 void __fastcall hide_stub(void*,void*,const char* item,bool value) {
     ++hide_writes;visibility[item]=value;if(std::string_view(item)=="lc_inline_error")hidden=value;
     if(scene_lookup) if(auto* it=scene_lookup(item)) reinterpret_cast<void(__thiscall*)(void*,bool)>((*static_cast<std::uintptr_t**>(it))[8/4])(it,value);
@@ -442,7 +441,7 @@ void rules() {
 #include "online_native_fixture.inl"
 #include "online_party_menu_fixture.inl"
 #include "online_menus_hits.inl"
-#include "online_menus_models.inl"
+#include "online_menus_hub.inl"
 }
 namespace ini { std::optional<std::string> text(const wchar_t*,const wchar_t*) {
     return mode=="off" ? std::nullopt : mode=="zero" ? std::optional<std::string>("0") : std::optional<std::string>("1");
@@ -511,7 +510,7 @@ int main(int argc,char** argv) {
     install_hooks.clock=clock_stub;install_hooks.wall_clock=wall_stub;install_hooks.before_request=request_fault_stub;install_hooks.before_tick=tick_fault_stub;
     if(mode.starts_with("r4-")) install_hooks.lobby_fields=lobby_fields_stub;
     if(mode.starts_with("r8-party")) { party_api.remove_member=party_remove_stub;install_hooks.broker=&party_api;install_hooks.lobby_fields=party_fields_stub; }
-    if(mode=="r5-broker" || mode=="r5-retail-lobby" || mode=="r5b-views" || mode.starts_with("r17-")) install_hooks.broker=&menu_api;
+    if(mode=="r5-broker" || mode=="r5-retail-lobby" || mode=="r5b-views" || mode=="r17-hub-focus") install_hooks.broker=&menu_api;
     if(mode=="r15-errors") install_hooks.broker=&menu_api15;
     if(mode.starts_with("r6-")) install_hooks.broker=&native_fixture::api;
     patch_transaction::hooks transaction_hooks;
@@ -636,8 +635,8 @@ int main(int argc,char** argv) {
     set_current(hub.data());tick(hub.data(),nullptr);
     assert(texts["local_name"]==(mode=="name31" ? std::string(31,'a') : mode=="blank-name" ? "Player" : "100??????openmenu bad"));
     if(mode.starts_with("r16-hits")) { hits_fixture::run(mode);return 0; }
-    if(mode.starts_with("r17-models")) { models_fixture::run(entry,mode);return 0; }
-    if(mode=="r17-hub-focus") { models_fixture::hub_focus_run(entry);return 0; }
+    if(mode=="r17-hub-focus") { hub_fixture::run(entry);return 0; }
+    if(mode=="r17-codex-route") { codex_fixture::run();return 0; }
     if(mode=="r5b-views") { broker_presentation_tests(entry);return 0; }
     if(mode=="r15-errors") { error_table_tests(entry);return 0; }
     if(mode.starts_with("r6-nit-") || mode.starts_with("r6-end-")) { native_fixture::review_run(entry);return 0; }
