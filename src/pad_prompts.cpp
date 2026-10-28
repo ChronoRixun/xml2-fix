@@ -5,6 +5,7 @@
 #include "pad_prompts_rules.hpp"
 #include "lc_fonts.hpp"
 #include "lc_fonts_rules.hpp"
+#include "online_menus_rules.hpp"
 
 #include <Windows.h>
 
@@ -128,9 +129,21 @@ namespace pad_prompts
 			return label;
 		}
 
+		bool (*menu_scope)() = nullptr; // online_menus::pad_prompt_scope: a co-op screen is the current menu
+
 		const char* __cdecl prompt_label(const int code)
 		{
-			return label_for_target(prompt_target(code), code);
+			auto t = prompt_target(code);
+			if (menu_scope && !t.play_row && (t.code == 0x16 || t.code == 0x18) && menu_scope())
+			{
+				// On the co-op screens a pad's X and Y are the screens' "other" and "next" buttons: name them.
+				if (const auto* play_map = binding_map(0, t.player);
+				    play_map && choose(chosen_mode, has_keyboard(play_map), pad_of(play_map), seen) == shown::pad)
+				{
+					t.code = online_menus_rules::pad_prompt_code(t.code);
+				}
+			}
+			return label_for_target(t, code);
 		}
 
 		// In place of the call to the per-frame poll (0x6285c0, __thiscall, no arguments): the poll, then what it read.
@@ -239,6 +252,18 @@ namespace pad_prompts
 		if (!binding_map(0, player)) return nullptr;
 		constexpr int codes[]{4, 5, 8, 6};
 		return label_for_target({codes[slot], player, true}, codes[slot]);
+	}
+
+	bool pad_shown(const int player)
+	{
+		if (!installed || player < 0 || player >= players) return false;
+		const auto* play_map = binding_map(0, player);
+		return play_map && choose(chosen_mode, has_keyboard(play_map), pad_of(play_map), seen) == shown::pad;
+	}
+
+	void set_menu_scope(bool (*scope)())
+	{
+		menu_scope = scope;
 	}
 
 	void install(const HMODULE game)

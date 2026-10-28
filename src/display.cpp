@@ -867,6 +867,7 @@ namespace display
 		// focus filter, turned into the pointer message it names on the window's thread.
 		bool test_pointer_enabled = false;
 		UINT test_pointer_message = 0;
+		UINT test_char_message = 0; // the pipe's `chars`: a WM_CHAR delivered to the engine on the window's thread
 		POINT last_test_engine_point{};
 
 		LRESULT CALLBACK filtered_window_procedure(const HWND handle, const UINT message, const WPARAM wparam, const LPARAM lparam)
@@ -885,6 +886,13 @@ namespace display
 				const LPARAM converted = to_engine_point(handle, lparam);
 				last_test_engine_point = {static_cast<short>(LOWORD(converted)), static_cast<short>(HIWORD(converted))};
 				engine(what, what == WM_LBUTTONDOWN ? MK_LBUTTON : 0, converted);
+				return 1;
+			}
+			if (test_pointer_enabled && test_char_message && message == test_char_message)
+			{
+				// The engine's own handler (0x5faa20) keeps a WM_CHAR's low byte for the text entry; a real keyboard's
+				// characters come through the same message.
+				engine(WM_CHAR, wparam & 0xff, 1);
 				return 1;
 			}
 			// A window being dragged across monitors asks first what size it should have at the new DPI.
@@ -1271,7 +1279,35 @@ namespace display
 	void enable_test_pointer()
 	{
 		test_pointer_message = RegisterWindowMessageA("xml2-fix test pointer");
+		test_char_message = RegisterWindowMessageA("xml2-fix test char");
 		test_pointer_enabled = test_pointer_message != 0;
+	}
+
+	std::string test_char(const unsigned character)
+	{
+		if (!test_pointer_enabled || !test_char_message)
+		{
+			return "error the test pointer is off";
+		}
+		if (character == 0 || character > 0xff)
+		{
+			return "error not a character the game's text entry reads";
+		}
+		HWND handle = nullptr;
+		{
+			std::lock_guard lock(mutex);
+			handle = window;
+		}
+		if (!handle || !engine_window_procedure)
+		{
+			return "error no game window of the fix's (the test characters need Mode = windowed or borderless)";
+		}
+		DWORD_PTR handled = 0;
+		if (!SendMessageTimeoutA(handle, test_char_message, character, 0, SMTO_BLOCK | SMTO_ABORTIFHUNG, 3000, &handled) || !handled)
+		{
+			return "error the game's window didn't take the message (error " + std::to_string(GetLastError()) + ")";
+		}
+		return "ok";
 	}
 
 	std::string test_pointer(const UINT message, const int x, const int y)

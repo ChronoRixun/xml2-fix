@@ -3,6 +3,7 @@
 #include "online_menus.hpp"
 #include "online_menus_rules.hpp"
 #include "online_menus_guards.hpp"
+#include "pad_prompts_rules.hpp"
 #include "script_function_overflow.hpp"
 #include <Windows.h>
 #include <cassert>
@@ -21,6 +22,27 @@
 
 namespace {
 using namespace online_menus_rules;
+// ---- The pad's real menu bits (the 060p live round, failure 8) -------------------------------------------------
+// Built from the retail tables, not typed in: the game raises mask bit `code` when the player's binding of that code's action
+// is pressed (0x619c40 = pad_prompts_rules::actions), and the fix's console pad layout (src/pad_bindings.cpp) binds Guard to
+// X, Jump to Y, Power to RT, LowAttack to A and HighAttack to B. The live round showed it: pad Y opened Change name and emptied
+// the code box (MENU_OTHER), the prompts read "Y Change name" and "[RT] Rejoin", pad X did nothing.
+enum class pad_key { a, b, x, y, rt };
+constexpr int action_of_pad_key(pad_key k) {
+    using namespace pad_prompts_rules;
+    // action numbers: pad_prompts_rules::actions values of the codes ATTACK 4, SMASH 5, MOVE 6, GUARD 8, POWER 7
+    return k==pad_key::a ? actions[4] : k==pad_key::b ? actions[5] : k==pad_key::y ? actions[6] : k==pad_key::rt ? actions[7] : actions[8];
+}
+constexpr unsigned raw_menu_mask(pad_key k) {
+    unsigned mask=0;
+    for(int code=0;code<0x1c;++code) if(pad_prompts_rules::actions[std::size_t(code)]==action_of_pad_key(k)) mask|=1u<<code;
+    return mask;
+}
+static_assert(raw_menu_mask(pad_key::x)==0x100, "pad X raises MENU_SUBTRACT only");
+static_assert(raw_menu_mask(pad_key::y)==(0x1000000|0x40), "pad Y raises MENU_OTHER (and MOVE)");
+static_assert(raw_menu_mask(pad_key::rt)==(0x400000|0x80), "RT raises MENU_NEXT (and POWER)");
+bool pad_probe_yes(int player) { return player>=0; }
+bool pad_probe_no(int) { return false; }
 std::string mode="on",fail;
 bool fatal=false,assets=true,close_during_tick=false;
 int capacity=1024;
@@ -327,6 +349,23 @@ void input_rules() {
     for(unsigned bytes:{1,3,4098}) { bad_clip=clip("ABCDEFGH");bad_clip.byte_size=bytes;assert(!read_clipboard(bad_clip) && bad_clip.closed==1 && !bad_clip.locked); }
     for(auto text:{"ABCDEFGHjunk","ABCD0FGH"," ","ABCD-EFGH\nextra"}) { bad_clip=clip(text);assert(!read_clipboard(bad_clip) && bad_clip.unlocked==1 && bad_clip.closed==1); }
     bad_clip=clip(std::string(257,'A'));assert(!read_clipboard(bad_clip) && bad_clip.unlocked==1);
+    // Real clipboards: the text, its terminator, then whatever the allocator left (GlobalAlloc without GMEM_ZEROINIT). The 060p live
+    // round refused a valid abcd-efgh on a strict-tail check the zero-padded fixtures above never exercised.
+    { auto spare=clip("abcd-efgh");spare.data.push_back('J');spare.data.push_back(0x4141);spare.data.push_back(0xfeed);
+      assert(read_clipboard(spare)=="ABCDEFGH" && spare.closed==1 && spare.locked==1 && spare.unlocked==1);
+      auto spare_bad=clip("ABCD0FGH");spare_bad.data.push_back('J');assert(!read_clipboard(spare_bad)); }
+    // The mask a custom screen reads on a pad (online_menus_rules.hpp): X -> other, Y and RT -> next, the rest untouched.
+    assert(pad_menu_mask(0)==0 && pad_menu_mask(0x100)==mask_other && pad_menu_mask(mask_other)==mask_next && pad_menu_mask(mask_next)==mask_next);
+    assert(pad_menu_mask(0x200000|0x100000|0x10)==(0x200000|0x100000|0x10) && pad_menu_mask(0x100|mask_other)==(mask_other|mask_next));
+    assert(pad_prompt_code(0x18)==8 && pad_prompt_code(0x16)==0x18 && pad_prompt_code(0x15)==0x15 && pad_prompt_code(8)==8);
+    { // The prompts the live round drew ("Y Change name", "[RT] Rejoin") and what the scope now draws: the fix's pad layout binds
+      // Guard to X (control 21), Jump to Y (24) and Power to RT (28); a token's label is its action's pad binding.
+      using namespace pad_prompts_rules;
+      const auto label=[](int code) { const int action=action_of(code);const std::uint32_t control=action==7 ? 21 : action==6 ? 24 : action==8 ? 28 : 0;return pad_label(control,true); };
+      assert(label(0x18)=="Y" && label(0x16)=="[RT]");                              // MENU_OTHER / MENU_NEXT as the game draws them
+      assert(label(pad_prompt_code(0x18))=="X" && label(pad_prompt_code(0x16))=="Y"); // inside the scope: Change name / Clear are X, Rejoin / Paste are Y
+      assert(label(0x15)=="[???]" && label(pad_prompt_code(0x15))==label(0x15));      // Back and every other token are left alone
+    }
     bad_clip.data.assign(8,'A');assert(!read_clipboard(bad_clip)); // no terminator
     for(unsigned ch:{0xd800,0xdc00,0xfffd,0x100}) { bad_clip=clip("ABCDEFGH");bad_clip.data[0]=std::uint16_t(ch);assert(!read_clipboard(bad_clip) && bad_clip.unlocked==1); }
     code_model c;c.open();for(char ch:std::string("ABCDEFGH")) assert(c.append(ch));
@@ -714,6 +753,61 @@ int main(int argc,char** argv) {
         post(int(intent::clear));tick(child.data(),nullptr);assert(texts["code_value"]=="____-____");
         set_current(hub.data());mask=0x1000000;tick(hub.data(),nullptr);mask=0;assert(calls.back()=="request:text_entry");native_ready=false;deactivate(hub.data(),nullptr);set_current(hub.data());tick(hub.data(),nullptr);
         mask=0x400000;tick(hub.data(),nullptr);mask=0;assert(calls.back()=="request:lc_code");
+        // ---- Pad X / Y (060p live round, failure 8). The bits come from the retail tables (raw_menu_mask), the device from the
+        // prompts' tracker (pad_probe_*): with the pad shown X is the screens' "other" button and Y the "next" one; with the
+        // keyboard shown the engine's own Del (MENU_OTHER) and KP5 (MENU_NEXT) keep their jobs.
+        {
+            const unsigned X=raw_menu_mask(pad_key::x),Y=raw_menu_mask(pad_key::y),RT=raw_menu_mask(pad_key::rt);
+            { // the fixture tables agree with the shipped pad layout: the binding rows this test stands on
+                const auto source=std::filesystem::path(__FILE__).parent_path().parent_path()/"src"/"pad_bindings.cpp";
+                std::ifstream layout(source);std::string text((std::istreambuf_iterator<char>(layout)),{});
+                assert(!text.empty());
+                for(const char* row:{"{\"Guard\", button(pad_x)}","{\"Jump\", button(pad_y)}","{\"Power\", button(pad_rt)}","{\"LowAttack\", button(pad_a)}","{\"HighAttack\", button(pad_b)}"})
+                    assert(text.find(row)!=std::string::npos);
+            }
+            assert(pad_menu_mask(X)==mask_other && (pad_menu_mask(Y)&mask_next) && !(pad_menu_mask(Y)&mask_other) && (pad_menu_mask(RT)&mask_next));
+            online_menus::set_pad_probe(pad_probe_yes);
+            // Hub: X changes the name, Y rejoins (the last game), a pad's RT keeps rejoining.
+            set_current(hub.data());tick(hub.data(),nullptr);calls.clear();
+            mask=X;tick(hub.data(),nullptr);mask=0;assert(calls.back()=="request:text_entry");
+            native_ready=false;deactivate(hub.data(),nullptr);set_current(hub.data());tick(hub.data(),nullptr);
+            calls.clear();mask=Y;tick(hub.data(),nullptr);mask=0;assert(calls.back()=="request:lc_code");
+            set_current(hub.data());tick(hub.data(),nullptr);calls.clear();
+            mask=RT;tick(hub.data(),nullptr);mask=0;assert(calls.back()=="request:lc_code");
+            // Join by code: Y pastes the whole validated clipboard value, X clears, RT pastes as before.
+            set_current(child.data());tick(child.data(),nullptr);post(int(intent::clear));tick(child.data(),nullptr);assert(texts["code_value"]=="____-____");
+            clipboard_text("abcd-efgh");mask=Y;tick(child.data(),nullptr);mask=0;assert(texts["code_value"]=="ABCD-EFGH");
+            mask=X;tick(child.data(),nullptr);mask=0;assert(texts["code_value"]=="____-____");
+            clipboard_text("23456789");mask=RT;tick(child.data(),nullptr);mask=0;assert(texts["code_value"]=="2345-6789");
+            mask=X;tick(child.data(),nullptr);mask=0;assert(texts["code_value"]=="____-____");
+            // The 060p clipboard: valid text, a terminator, then spare allocation bytes (GlobalAlloc without GMEM_ZEROINIT).
+            clipboard_text("abcd-efgh");clip_data.push_back('J');clip_data.push_back(0x4141);clip_data.push_back('x');
+            mask=Y;tick(child.data(),nullptr);mask=0;assert(texts["code_value"]=="ABCD-EFGH");
+            post(int(intent::clear));tick(child.data(),nullptr);
+            // Pad Y must never clear: the box keeps its characters (the live failure emptied it).
+            post(32);tick(child.data(),nullptr);assert(texts["code_value"]=="A___-____");
+            clipboard_text("zzzz");mask=Y;tick(child.data(),nullptr);mask=0;assert(texts["code_value"]=="A___-____"); // refused paste keeps the box
+            // Keyboard shown: the old bits, and X's bit is nothing (the Guard key).
+            online_menus::set_pad_probe(pad_probe_no);
+            mask=X;tick(child.data(),nullptr);mask=0;assert(texts["code_value"]=="A___-____");
+            mask=0x1000000;tick(child.data(),nullptr);mask=0;assert(texts["code_value"]=="____-____");
+            set_current(hub.data());tick(hub.data(),nullptr);calls.clear();
+            mask=X;tick(hub.data(),nullptr);mask=0;assert(calls.empty());
+            mask=0x1000000;tick(hub.data(),nullptr);mask=0;assert(calls.back()=="request:text_entry");
+            native_ready=false;deactivate(hub.data(),nullptr);set_current(hub.data());tick(hub.data(),nullptr);
+            calls.clear();mask=0x400000;tick(hub.data(),nullptr);mask=0;assert(calls.back()=="request:lc_code");
+            online_menus::set_pad_probe(nullptr);
+            // The retail text-entry input path `chars` stands on (the live round's pipe keys never reached the name entry): the
+            // engine's window callback keeps a WM_CHAR's byte at 0xa0a061 and the text entry's tick reads it, one byte per frame,
+            // stopping when the length equals the maximum the Hub set (31).
+            for(const auto& [va,hex]:{std::pair{0x5fab24u,"81fe02010000"},std::pair{0x5fab2fu,"881d61a0a000"},std::pair{0x5e72f9u,"a061a0a000"},
+                std::pair{0x5e73aeu,"8b8e101d0000"},std::pair{0x5e73b6u,"3bd15d74"}}) {
+                const auto want=patch_transaction::bytes_of(hex);
+                assert(std::memcmp(reinterpret_cast<const void*>(va),want.data(),want.size())==0);
+            }
+            // Prompt scope: custom screens only, never a native lobby.
+            assert(online_menus::pad_prompt_scope());
+        }
         std::cout<<"round3 PASS name ownership/drain/31/32/initialized buffers/cancel/foreign tag; direct keys/repeat/tools/held Back; stale fixture/auto resolve/retry/local record/Rejoin\n";
     }
     std::cout<<"online menus "<<mode<<" PASS (guards, hooks, ABI, order, single init, no-controller wait, closed binding, escaping, fallback, reentry)\n";

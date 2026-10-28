@@ -360,10 +360,25 @@ keys do not leak and the first fresh typed key is not discarded. Failed device
 reads re-prime without generating an input edge.
 
 The native controller mask is rising edges (`0x550b70`, current +0x2f8 against
-previous +0x374). Scoped handlers implement `$MENU_NEXT` (Y) Paste and
-`$MENU_OTHER` (X) Clear in Code, `$MENU_OK` (Start) Done; in Hub, MENU_OTHER
+previous +0x374). Scoped handlers implement `$MENU_NEXT` Paste and
+`$MENU_OTHER` Clear in Code, `$MENU_OK` (Start) Done; in Hub, MENU_OTHER
 changes name and MENU_NEXT Rejoins. Direct keyboard text wins over coincident
-native X/Y bindings. Every route uses the same one-slot, menu-bound mailbox.
+native X/Y bindings.
+
+**Pad buttons (060p live-round fix).** The mask has one bit per UI code and the
+engine raises a code when its action's binding is pressed (`0x619c40`: code ->
+action). On the fix's console pad layout that makes pad X = Guard = MENU_SUBTRACT
+(bit 8), pad Y = Jump = MENU_OTHER (bit 0x18) and RT = Power = MENU_NEXT (bit
+0x16), so rounds 2-8, which read MENU_OTHER as "X", did the wrong job on a real pad
+(X nothing, Y Change name / Clear, prompts `Y Change name`, `[RT] Rejoin`; their
+host fixtures fed the bits directly). On the Hub, Host, Code, Browse and Party
+screens, while the player's prompts show the pad (`pad_prompts::pad_shown`, the
+same device tracker that draws the labels), `pad_menu_mask` reads X as the
+screen's "other" button, Y and RT as its "next" button, and the prompt hook draws
+`$MENU_OTHER` / `$MENU_NEXT` as the pad's X / Y (`pad_prompt_code`). The keyboard
+keeps the engine's keys (Del = other, KP5 = next); the native Host/Join lobbies
+are unchanged (they read the raw bits and draw the engine's own labels). Without
+the prompts patch (`Prompts=off`) nothing is translated. Every route uses the same one-slot, menu-bound mailbox.
 Back (pad/keyboard/clickable prompt) bypasses default base close: nonempty Code
 deletes one symbol; empty Code returns to Hub. One held press cannot delete
 and close together. The native handler is forwarded for unrelated base menus.
@@ -856,8 +871,11 @@ asserts that no UI-thread durability flush occurs; bounded 128/129-byte
 malformed records and CRLF records are refused. The existing on-disk LF-only
 `lc-rejoin/1` schema is unchanged. Rejoin never implies admission.
 
-Clipboard Paste additionally rejects nonzero data after the Unicode terminator
-(embedded-NUL/hidden-suffix input); zero allocation padding is permitted. Logical
+Clipboard Paste reads the text up to its first Unicode terminator, as every
+clipboard reader does; the spare allocation bytes after it are unspecified
+(`GlobalAlloc` without `GMEM_ZEROINIT`) and are ignored (the strict-tail check of
+rounds 3-4 refused a valid `abcd-efgh` on a real clipboard in the 060p live round).
+No terminator in the first 257 characters is refused. Logical
 text remains bounded at 256 characters, including outer whitespace. NULL handle,
 GlobalSize zero, lock failure and all success/refusal paths balance only acquired
 resources. No system clipboard is used by the fixtures.
@@ -892,9 +910,9 @@ name then Host/Back; native editor failure without ownership/result leakage;
 keyboard/tick thread IDs; rapid two-key and text+Enter input, Alt/numpad and device
 transitions; unavailable/read-only recent storage without false Rejoin; and real
 clipboard NULL/zero/256-character/embedded-NUL behavior under a separately
-authorized clipboard-restoring harness. The clipboard strict-tail check may
-refuse nonzero spare allocation data; that refusal must preserve existing Code
-text and show the localized Paste notice. None of these live checks ran here.
+authorized clipboard-restoring harness. (The strict-tail check named here refused
+real clipboards and was removed; see the Clipboard Paste paragraph.) None of these
+live checks ran here.
 
 
 ## Round-4 review correction on 097f219

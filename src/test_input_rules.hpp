@@ -352,6 +352,8 @@ namespace test_input_rules
 	//   script STATEMENT    queue "runscript STATEMENT" in the game's console (spaces outside quotes dropped)
 	//   console COMMAND     queue COMMAND in the game's console, as it is
 	//   pad, padhold, paddown, padup, padrelease, stick, trigger   a pad's buttons, sticks and triggers (pad_input_rules.hpp)
+	//   chars TEXT          WM_CHAR messages to the game's window, one per character (decode_chars): what the game's own text entry
+	//                       (screen name, game name) takes - the DirectInput keys above never reach it
 	//   status | ping
 	// Every screen reads these keys, the Advanced Options panel included: its per-frame input
 	// function (0x619070) turns released DirectInput keys (Esc, Enter, the arrows) and pad buttons
@@ -389,6 +391,7 @@ namespace test_input_rules
 			memory, // address_space's commands (status, high <MB>): `text` is the rest of the line
 			economy, // read-only economy status and recent roll diagnostics
 			mouse, // `mouse X Y [move|down|up|click]`: `pointer` says which, at client point x,y
+			chars, // `chars TEXT`: `text` is the decoded characters, sent as WM_CHAR to the game's window
 			unknown
 		};
 
@@ -402,6 +405,70 @@ namespace test_input_rules
 		int x = 0, y = 0;  // mouse: a point in the window's client area, in its pixels
 		std::string error; // unknown: what was wrong
 	};
+
+	// The characters the game's text entry (TEXT_ENTRY_MENU tick 0x5e72f0) takes: it reads one byte per frame from the engine's
+	// WM_CHAR handler (0x5faa20 stores a WM_CHAR's wparam at 0xa0a061), so a real keyboard types through the window's
+	// character messages and the DirectInput keys the pipe's `tap` sends never reach it. `chars` decodes TEXT as printable
+	// ASCII plus the escapes \e (Esc, cancels), \r or \n (Enter, accepts), \b (Backspace), \s (a space; the line is trimmed),
+	// a doubled backslash and \xHH. At most max_chars bytes; false with `why` for anything else.
+	constexpr std::size_t max_chars = 128;
+	constexpr DWORD char_gap_ms = 60; // the text entry takes one character per frame; this leaves several frames between
+
+	inline bool decode_chars(const std::string_view in, std::string& out, std::string& why)
+	{
+		out.clear();
+		const auto hex = [](const char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; };
+		for (std::size_t i = 0; i < in.size(); ++i)
+		{
+			unsigned char c = static_cast<unsigned char>(in[i]);
+			if (c == '\\')
+			{
+				if (++i == in.size())
+				{
+					why = "a trailing backslash";
+					return false;
+				}
+				const char e = in[i];
+				if (e == 'e') c = 0x1b;
+				else if (e == 'r' || e == 'n') c = 0x0d;
+				else if (e == 'b') c = 0x08;
+				else if (e == 's') c = 0x20;
+				else if (e == '\\') c = '\\';
+				else if (e == 'x' && i + 2 < in.size() && hex(in[i + 1]) >= 0 && hex(in[i + 2]) >= 0)
+				{
+					c = static_cast<unsigned char>(hex(in[i + 1]) * 16 + hex(in[i + 2]));
+					i += 2;
+					if (c == 0)
+					{
+						why = "\\x00 (the game reads 0 as no character)";
+						return false;
+					}
+				}
+				else
+				{
+					why = std::string("the escape \\") + e;
+					return false;
+				}
+			}
+			else if (c < 0x20 || c > 0x7e)
+			{
+				why = "a byte outside printable ASCII";
+				return false;
+			}
+			if (out.size() == max_chars)
+			{
+				why = "more than " + std::to_string(max_chars) + " characters";
+				return false;
+			}
+			out.push_back(static_cast<char>(c));
+		}
+		if (out.empty())
+		{
+			why = "no characters";
+			return false;
+		}
+		return true;
+	}
 
 	inline command parse_command(const std::string_view line)
 	{
@@ -497,6 +564,16 @@ namespace test_input_rules
 			result.what = command::kind::mouse;
 			return result;
 		}
+		if (verb == "CHARS")
+		{
+			std::string why;
+			if (!decode_chars(rest, result.text, why))
+			{
+				return fail("chars needs printable text (escapes \\e \\r \\b \\s \\\\ \\xHH): " + why);
+			}
+			result.what = command::kind::chars;
+			return result;
+		}
 		if (verb == "PING") result.what = command::kind::ping;
 		else if (verb == "STATUS") result.what = command::kind::status;
 		else if (verb == "RELEASE") result.what = command::kind::release;
@@ -509,7 +586,7 @@ namespace test_input_rules
 		else if (verb == "CONSOLE") result.what = command::kind::console;
 		else if (verb == "WM") return fail("wm is gone: the Advanced Options panel reads the DirectInput keyboard like every other screen - use tap (tap DOWN, tap ENTER, tap LEFT)");
 		else return fail("unknown command '" + std::string(text.substr(0, space)) +
-		                 "' (down, up, tap, hold, release, screenshot, script, console, mouse, pad, padhold, paddown, padup, padrelease, stick, trigger, status, ping, save, entity, memory)");
+		                 "' (down, up, tap, hold, release, screenshot, script, console, mouse, chars, pad, padhold, paddown, padup, padrelease, stick, trigger, status, ping, save, entity, memory)");
 
 		if (result.what == command::kind::script || result.what == command::kind::console)
 		{

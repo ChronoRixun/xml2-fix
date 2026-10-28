@@ -320,6 +320,35 @@ static void prompts() {
  pad_prompts::seen.pads[0]=4;check(label()=="X");
  lc_fonts::scoped=true;lc_fonts::installed=false;check(label()=="X");
  lc_fonts::scoped=false;lc_fonts::installed=true;
+ // The co-op screens (060p live round, failure 8): the game draws $MENU_OTHER as the binding of Jump (the pad's Y) and
+ // $MENU_NEXT as the binding of Power (RT); inside the scope of the Hub/Host/Code/Browse/Party screens the pad shows X and Y,
+ // the buttons the screens read (online_menus_rules.hpp pad_menu_mask). Real label chain, fake maps for row 1 (the menus).
+ {
+  lc_fonts::scoped=false;lc_fonts::installed=true;
+  *reinterpret_cast<DWORD*>(row_global)=1;reinterpret_cast<void**>(maps_global)[4]=configuration.data();
+  const auto bind=[&](int code,DWORD device,DWORD control,int slot){
+   auto* r=map+map_records+action_of(code)*slot_count*record_size+slot*record_size;put(r,device);put(r+4,control);};
+  bind(8,first_pad_device,21,0);   // Guard = pad X
+  bind(0x18,first_pad_device,24,0); // Jump = pad Y
+  bind(0x18,keyboard_device,0xd3,2); // the menus' third slot: Delete
+  bind(0x16,first_pad_device,28,0); // Power = RT
+  bind(0x16,keyboard_device,0x4c,2); // KP5
+  bound_key="Del";
+  pad_prompts::seen.pads_present=1;pad_prompts::seen.pads[0]=9;pad_prompts::seen.keyboard=1; // the pad was last used
+  const auto token=[](int code){return std::string(pad_prompts::prompt_label(code));};
+  pad_prompts::menu_scope=nullptr;
+  check(token(0x18)=="Y" && token(0x16)=="[RT]");                   // the live round's prompts, no scope hook
+  pad_prompts::menu_scope=[]{return false;};
+  check(token(0x18)=="Y" && token(0x16)=="[RT]");                   // a scope that says no: the same
+  check(!pad_prompts::pad_shown(0));                                 // pad_shown is false until the patch is installed
+  pad_prompts::menu_scope=[]{return true;};
+  check(token(0x18)=="X" && token(0x16)=="Y" && token(0x15)!="X");  // the scope: Change name / Clear = X, Rejoin / Paste = Y
+  check(token(4)==std::string(pad_prompts::label_for_target({4,0,false},4)));                                           // every other token is the game's
+  pad_prompts::seen.keyboard=20;                                     // the keyboard was last used: the engine's own keys
+  check(token(0x18)=="[Del]");                                       // not remapped: Guard has no keyboard binding here
+  pad_prompts::menu_scope=nullptr;pad_prompts::seen.keyboard=1;
+  *reinterpret_cast<DWORD*>(row_global)=0;
+ }
 }
 int main(int argc,char** argv) {
  std::setvbuf(stdout,nullptr,_IONBF,0);

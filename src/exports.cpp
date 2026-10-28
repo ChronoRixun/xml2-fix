@@ -246,6 +246,10 @@ namespace
 		pad_hotplug::install(game);
 		// The button prompts: the pad's names for a player on a pad, the power wheel's buttons of play. Code and
 		// data the game runs from its first menu on; none of the sites is another module's.
+		// On the co-op screens a pad's X and Y are the screens' own buttons (online_menus_rules.hpp): the prompts name them
+		// and the screens read them, both from the same device tracker.
+		pad_prompts::set_menu_scope(&online_menus::pad_prompt_scope);
+		online_menus::set_pad_probe(&pad_prompts::pad_shown);
 		pad_prompts::install(game);
 		lc_fonts::install(game);
 		real_get_proc_address = reinterpret_cast<get_proc_address_t>(
