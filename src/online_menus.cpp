@@ -1,6 +1,7 @@
 #include "online_menus.hpp"
 #include "online_room.hpp"
 #include "gns_transport.hpp"
+#include "gameplay_agreement.hpp"
 #include "join_in_progress.hpp"
 #include "online_menus_rules.hpp"
 #include "online_menus_guards.hpp"
@@ -161,6 +162,10 @@ bool remember_game(const std::string& value,const std::string& title) {
     recent=std::move(next);return true;
 }
 bool remember_fixture() { return remember_game(code.text,"Offline fixture"); }
+host_left host_left_state;
+bool hub_panel_shown=false; // the Hub last drew the host-left panel (focus moves only on a change)
+toast guest_toast;
+roster_watch roster;
 void message(const char* text) { feedback=text; error_visible=true; }
 
 
@@ -565,7 +570,7 @@ bool offline_fixture = false;
 #if XML2_FIX_GNS
 void production_broker_tick() { online_room::ui_tick(); gns_transport::room_ui_tick(); }
 broker_api broker_calls{online_room::available,online_room::view,production_broker_tick,online_room::list,
-    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due,online_room::host_native,online_room::admission_target,online_room::host_posted,join_in_progress::installed,online_room::leave_after_flush,online_room::party,online_room::room_rtt,gns_transport::remove_member};
+    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due,online_room::host_native,online_room::admission_target,online_room::host_posted,join_in_progress::installed,online_room::leave_after_flush,online_room::party,online_room::room_rtt,gns_transport::remove_member,online_room::retry_in_ms,gameplay_agreement::refusal_rules,online_room::host_lost,gameplay_agreement::refusal_serial};
 #else
 broker_api broker_calls{};
 #endif
@@ -577,9 +582,28 @@ const broker::client_view& broker_view() {
 screen broker_screen = screen::none;
 unsigned browse_offset = 0, browse_selected = 0;
 std::string browse_code, host_room_name;
-// Every per-cause error scene the DLL may select (LC authors the localized copy per screen; absent nodes are skipped).
-const char* const error_scene_keys[]{"lc_broker_err_code_not_found","lc_broker_err_room_full","lc_broker_err_version_mismatch",
-    "lc_broker_err_rate_limited","lc_broker_err_timeout","lc_broker_err_offline","lc_broker_err_refused","lc_broker_err_generic"};
+// Every per-cause error scene the DLL may select is lc_broker_err_<error_cause_key[i]> (LC authors the localized copy per
+// screen; absent nodes are skipped).
+// A cause the assets do not author (broker/2-only LC) falls back to the nearest scene that is true of it.
+int fallback_cause(int i) {
+    switch(error_cause(i)) {
+    case error_cause::pin_mismatch: return int(error_cause::refused);
+    case error_cause::code_expired: return int(error_cause::code_not_found);
+    case error_cause::room_closed: case error_cause::test_mode: case error_cause::unsupported:
+    case error_cause::busy: case error_cause::invalid_name: return int(error_cause::generic);
+    default: return -1;
+    }
+}
+void hide_error_scenes(void* menu,int shown=-1) {
+    bool authored=true;
+    for(unsigned i=0;i<std::size(error_cause_key);++i) {
+        const bool usable=hide(menu,(std::string("lc_broker_err_")+error_cause_key[i]).c_str(),int(i)!=shown);
+        if(int(i)==shown) authored=usable;
+    }
+    const int fb=shown>=0 && !authored ? fallback_cause(shown) : -1;
+    if(fb>=0) hide(menu,(std::string("lc_broker_err_")+error_cause_key[fb]).c_str(),false);
+}
+std::uint32_t retry_wait_ms() { return broker_calls.retry_in ? broker_calls.retry_in() : 0; }
 bool host_public = false;
 std::uint64_t resolve_edit = 0;
 broker::ticket completed_list_ticket{};
@@ -629,7 +653,7 @@ void bind_broker(void* menu,screen s) {
             // No service: nothing connected, no error scene for a service that was never asked, and a host card whose
             // visibility pair is consistent from the first frame (private is the default).
             hide(menu,"lc_service_ok",true);
-            for(const auto* key:error_scene_keys) hide(menu,key,true);
+            hide_error_scenes(menu);bind_text(menu,"broker_error","");
             hide(menu,"retry",true);enable(menu,"retry",false);
             if(s==screen::host) { hide(menu,"lc_host_public",!host_public);hide(menu,"lc_host_private",host_public); }
         }
@@ -662,15 +686,27 @@ void bind_broker(void* menu,screen s) {
     for(const auto& variant:variants) hide(menu,variant.first,!variant.second);
     // Exactly one cause scene while failed. The raw id stays a bounded diagnostic and is never a command.
     const auto cause=classify_error(v.error);
-    for(unsigned i=0;i<std::size(error_cause_key);++i)
-        hide(menu,(std::string("lc_broker_err_")+error_cause_key[i]).c_str(),!(failed && unsigned(cause)==i));
-    bind_text(menu,"broker_error",display(v.error,64).c_str());
+    hide_error_scenes(menu,failed ? int(cause) : -1);
+    // Retry: hidden where it cannot help and in the client's refused phase (online_room::retry() only accepts retry_wait/error;
+    // the screen's own Done/Open/Refresh starts the next attempt there). Visible but disabled during the shared limiter/backoff,
+    // and the diagnostic field counts down meanwhile - only where Retry is allowed (Refresh cannot bypass the limiter either).
+    const bool retry_ok=(v.state==broker::phase::retry_wait || v.state==broker::phase::error) && cause_retryable(cause);
+    const auto wait=failed && retry_ok ? retry_wait_ms() : 0;
+    // Redacted diagnostic: the operation and a known id only (never broker text, codes or addresses). Native notices name
+    // their step in the copy itself and log the fixed internal reason.
+    // Another build: the diagnostic field names both tokens instead (<= 8 allowlisted characters each; the host's token only
+    // exists for this failure).
+    std::string diag=!failed ? std::string() : wait ? "Retry in "+std::to_string(wait_seconds(wait))+" s" : diagnostic(operation_name(int(v.action)),v.error);
+    if(failed && cause==error_cause::version_mismatch && !v.error_detail.empty()) {
+        const auto own=broker_calls.version ? broker_calls.version() : std::string();
+        if(!own.empty()) diag=display(v.error_detail,8)+" vs your "+display(own,8);
+    }
+    bind_text(menu,"broker_error",diag.c_str());
     hide(menu,"lc_broker_offline_room",v.state!=broker::phase::room || v.authenticated);
     // Retry is hidden, not merely disabled, where trying again cannot help (wrong code, full room, other build,
     // refused service); the client's refused phase never retries either.
-    const bool retry_ok=(v.state==broker::phase::retry_wait || v.state==broker::phase::error) && cause_retryable(cause);
     hide(menu,"retry",!retry_ok);
-    enable(menu,"retry",retry_ok);
+    enable(menu,"retry",retry_ok && wait==0);
     if(s==screen::code) {
         const bool status=waiting || failed || v.state==broker::phase::room || error_visible;
         hide(menu,"code_status",status || code.text.size()==8);
@@ -772,7 +808,7 @@ void bind_broker(void* menu,screen s) {
     const bool join=selected && !waiting && !v.stale && selected->joinable && !selected->password && selected->players<selected->max_players &&
         (selected->version.empty() || selected->version==version);
     enable(menu,"prompt_join",join);
-    enable(menu,"prompt_refresh",!waiting);
+    enable(menu,"prompt_refresh",!waiting && retry_wait_ms()==0);
 }
 
 // Native lobbies retain their complete controller/vtable and campaign callback.
@@ -1152,7 +1188,22 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
     hide(menu,"lc_ready_all",!valid || waiting!=view.count || view.count<2);
     hide(menu,"lc_ready_solo",!valid || view.count!=1 || waiting!=view.count);
     hide(menu,"lc_leave_confirm",!lobby_state.confirm);
-    hide(menu,"lc_lobby_error",!lobby_state.error);
+    {   // The inline lobby messages never close Host/Join. The error names its cause (Kick target or Copy) when LC authors that scene.
+        const bool err=lobby_state.error,target=lobby_state.target_error;
+        const bool a=hide(menu,"lc_lobby_error_target",!(err && target)),b=hide(menu,"lc_lobby_error_copy",!(err && !target));
+        hide(menu,"lc_lobby_error",!err || (target ? a : b));
+        // A guest who left (or was lost) before the game started: a six-second named toast; the party continues.
+        if(valid) {
+            const auto gone=roster.observe(view.ids,view.names,view.count,view.local,view.local_known);
+            if(!gone.empty()) guest_toast.show(display(gone,31),now_ms());
+        } else roster.clear();
+        const bool toast_on=guest_toast.visible(now_ms());
+        hide(menu,"lc_lobby_guest_left",!toast_on);
+        bind_text(menu,"lc_toast_name",toast_on ? guest_toast.name.c_str() : "");
+        // The service went away while the room stays: healthy P2P continues, only new players cannot join.
+        const bool service_lost=broker_live() && broker_view().state==broker::phase::room && !broker_view().authenticated;
+        hide(menu,"lc_lobby_service_lost",!service_lost);
+    }
     hide(menu,"lc_code_copied",!lobby_state.copied);
     for(const auto* button:{"lc_leave_yes","lc_leave_cancel","lc_lobby_dismiss"}) {
         const bool visible=std::strcmp(button,"lc_lobby_dismiss")==0 ?
@@ -1199,7 +1250,7 @@ bool lobby_current_mask(unsigned& mask) {
 }
 void lobby_tick(void* menu,unsigned original,bool& called) {
     if(!lobby_live(menu) || current_peek()!=menu) { called=true;lobby_original(menu,original);return; }
-    if(lobby_state.owner!=menu) { lobby_state.reset(menu);bindings.clear();pending.clear(); }
+    if(lobby_state.owner!=menu) { lobby_state.reset(menu);bindings.clear();pending.clear();roster.clear();guest_toast.clear(); }
     lobby_view before{};const bool valid=read_lobby(menu,before);
     lobby_native_state state{};const bool state_valid=lobby_state_read(menu,state);
     const bool host=which(menu)==screen::lobby_host;
@@ -1299,7 +1350,7 @@ void lobby_activate(void* menu,int argument,unsigned original) {
         } else if(native_flow.phase!=native_phase::idle) native_flow_error("native_lobby_activation");
         return;
     }
-    lobby_state.reset(menu);bindings.clear();pending.clear();
+    lobby_state.reset(menu);bindings.clear();pending.clear();roster.clear();guest_toast.clear();
     if(!lobby_lists(menu)) {
         logger::write("online menus: malformed lobby skin; returning to native online");
         if(native_flow.phase!=native_phase::idle) native_flow_error("native_lobby_skin");
@@ -1359,7 +1410,9 @@ void show_notice(void* menu) {
     // Builder-owned localized text. Only visibility, never English replacement.
     constexpr const char* notices[]{"lc_notice_unavailable","lc_notice_resolving","lc_notice_fixture",
         "lc_notice_paste_invalid","lc_notice_code_invalid","lc_notice_name_invalid",
-        "lc_notice_profile_save","lc_notice_name_open","lc_notice_recent_save","lc_notice_admission"};
+        "lc_notice_profile_save","lc_notice_name_open","lc_notice_recent_save","lc_notice_admission",
+        // Round 15: native discovery / admission refusal (with and without rule names) / service loss / timeout, clipboard.
+        "lc_notice_discovery","lc_notice_refused","lc_notice_refusal_rules","lc_notice_service_lost","lc_notice_timeout","lc_notice_clipboard"};
     bool found=false;
     for(const auto* item:notices) {
         const bool selected=error_visible && feedback==item;
@@ -1367,6 +1420,7 @@ void show_notice(void* menu) {
         if(selected && usable) found=true;
     }
     hide(menu,"lc_inline_error",!error_visible || found);
+    bind_text(menu,"lc_refusal_rules",error_visible && feedback=="lc_notice_refusal_rules" ? native_rules.c_str() : "");
 }
 bool begin_name() {
     if(!name_edit.begin(local_name)) return false;
@@ -1429,9 +1483,10 @@ void schedule_fixture(bool retry=false) {
 void code_input(int value) {
     switch(static_cast<intent>(value)) {
     case intent::paste: {
-        clipboard_api api;const auto text=read_clipboard(api);
-        if(text) { code.replace(*text);error_visible=false; }
-        else message("lc_notice_paste_invalid");
+        clipboard_api api;std::string text;
+        const auto result=read_clipboard_result(api,text);
+        if(result==clip_result::ok) { code.replace(text);error_visible=false; }
+        else message(result==clip_result::unavailable ? "lc_notice_clipboard" : "lc_notice_paste_invalid");
     } break;
     case intent::erase: code.erase();error_visible=false;break;
     case intent::clear: code.replace("");error_visible=false;break;
@@ -1710,19 +1765,23 @@ void tick_impl(void* menu,bool& native_called) {
             else if(preset.action==broker::operation::resolve) { rejoin_seed=preset.code;destination="lc_code"; }
         }
     }
+    // The host-left panel is modal over the Hub: only Host again (the Host intent) and Back/Dismiss act; every other posted
+    // action is ignored (a stale or doubled report changes nothing).
+    const bool modal=s==screen::hub && host_left_state.active;
     switch(action) {
-    case intent::host: if(s==screen::hub) destination="lc_host"; break;
-    case intent::code: if(s==screen::hub) destination="lc_code"; break;
-    case intent::browse: if(s==screen::hub) destination="lc_browse"; break;
-    case intent::other: if(s==screen::hub) destination="online"; break;
+    case intent::host: if(s==screen::hub) { host_left_state.dismiss();destination="lc_host"; } break;
+    case intent::code: if(s==screen::hub && !modal) destination="lc_code"; break;
+    case intent::browse: if(s==screen::hub && !modal) destination="lc_browse"; break;
+    case intent::other: if(s==screen::hub && !modal) destination="online"; break;
     case intent::back:
-        if(s==screen::code && !code.text.empty()) { code.erase(); error_visible=false; }
+        if(s==screen::hub && host_left_state.active) host_left_state.dismiss();
+        else if(s==screen::code && !code.text.empty()) { code.erase(); error_visible=false; }
         else destination=s==screen::hub ? "main" : "lc_online";
         break;
-    case intent::edit_name: if(s==screen::hub && begin_name()) return; break;
+    case intent::edit_name: if(s==screen::hub && !modal && begin_name()) return; break;
     case intent::paste: case intent::erase: case intent::clear: case intent::done: case intent::invalid_key:
         if(s==screen::code) code_input(int(action));break;
-    case intent::rejoin: if(s==screen::hub && recent) {
+    case intent::rejoin: if(s==screen::hub && recent && !modal) {
         rejoin_seed=recent->code;destination="lc_code";
     } break;
     case intent::refresh:
@@ -1745,7 +1804,7 @@ void tick_impl(void* menu,bool& native_called) {
         }
     } break;
     case intent::unavailable: message("lc_notice_unavailable"); break;
-    case intent::dismiss: error_visible=false; break;
+    case intent::dismiss: error_visible=false;if(s==screen::hub) host_left_state.dismiss();break;
     default:
         if(s==screen::browse && int(action)>=24 && int(action)<=30) {
             const auto selected=browse_offset+unsigned(int(action)-24);
@@ -1774,6 +1833,7 @@ void tick_impl(void* menu,bool& native_called) {
     }
     if(!destination && native_flow_tick(s)) return;
     if(destination) {
+        if(s==screen::hub) host_left_state.dismiss(); // leaving the Hub by any route (a launcher preset included) ends the panel
         if(s==screen::code) { code.close(); fixture_ticket=0; }
         pending.clear();keyboard_input.clear();error_visible=false;accepted=-1;
         if(!abandon_name()) { show_notice(menu);return; }
@@ -1797,7 +1857,25 @@ void tick_impl(void* menu,bool& native_called) {
     }
     for(const auto* item:{"last_name","last_code","last_time"}) hide(menu,item,!recent);
     hide(menu,"lc_recent_empty",bool(recent));
-    if(s==screen::hub) enable(menu,"rejoin",bool(recent));
+    if(s==screen::hub) {
+        bool panel=host_left_state.active;
+        // The 0.6 host-left panel (07-host-left, with only the section 5 body/button variants): modal, Host again / Back to Online.
+        const bool veil=hide(menu,"lc_hub_host_left_veil",!panel),card=hide(menu,"lc_hub_host_left",!panel),
+            again=hide(menu,"lc_hostleft_again",!panel),back=hide(menu,"lc_hostleft_back",!panel);
+        if(panel && !(veil && card && again && back)) {
+            // Assets without the panel (an older LC): never disable the rows behind a panel nobody can see.
+            logger::write_once("online-host-left-assets","online menus: the host-left panel is not authored in these assets; the Hub stays usable");
+            host_left_state.dismiss();panel=false;
+            for(const auto* node:{"lc_hub_host_left_veil","lc_hub_host_left","lc_hostleft_again","lc_hostleft_back"}) hide(menu,node,true);
+        }
+        enable(menu,"rejoin",bool(recent) && !panel);
+        // The rows (and the prompt items that repeat them: desctext3 Change name, desctext4 Rejoin) cannot be activated or
+        // focused behind the veil.
+        for(const auto* row:{"host","code","browse","other","change_name","desctext3","desctext4"}) enable(menu,row,!panel);
+        for(const auto* button:{"lc_hostleft_again","lc_hostleft_back"}) enable(menu,button,panel);
+        // Focus follows the modal: onto Host again when it opens, back onto the Hub's Host row when it closes.
+        if(panel!=hub_panel_shown) { hub_panel_shown=panel;lobby_focus(menu,panel ? "lc_hostleft_again" : "host"); }
+    }
     if(s==screen::code) {
         bind_text(menu,"code_value",code.shown().c_str());
         for(unsigned i=0;i<8;++i) {
@@ -2002,6 +2080,6 @@ void install(HMODULE game,const install_hooks* hooks) {
         game_version::refuse_startup(); return;
     }
     ready=true;
-    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 40 hooks committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability);
+    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 40 hooks committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability);
 }
 }

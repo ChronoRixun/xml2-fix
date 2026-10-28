@@ -501,6 +501,7 @@ namespace online_room
 
 		// ---- room state (the game's thread) ----
 		std::string room_code, host_id, own_version_token;
+		core::host_loss_tracker host_loss; // presentation only: see online_room_core.hpp
 		core::room_roster members;
 		namespace st = online_status_core;
 		std::string status_code() { return !room_code.empty() ? room_code : configured_code; }
@@ -951,6 +952,7 @@ namespace online_room
 				if (!theirs.empty() && !own_version_token.empty() && theirs != own_version_token)
 				{
                     client.fail(client.view().generation, "version_mismatch", room_clock());
+                    client.detail(client.view().generation, theirs);
                     room_ready = false;
                     members.deactivate_all();
                     host_id.clear();
@@ -1606,7 +1608,7 @@ namespace online_room
             if (listener != k_HSteamListenSocket_Invalid && sockets()) sockets()->CloseListenSocket(listener);
             listener = k_HSteamListenSocket_Invalid;
             room_ready = ice_ready = cert_ready = false; cert_identity.clear(); cert_expires = 0;
-            room_code.clear(); host_id.clear(); configured_code.clear();
+            room_code.clear(); host_id.clear(); configured_code.clear(); host_loss.reset();
             code_text[0] = short_code_text[0] = 0;
             room_progress = {}; pacer = {}; listed = {}; looked = 0; native_posting = false; native_mode = 0;
             turn_from_cache = turn_refreshed = false;
@@ -1640,6 +1642,9 @@ namespace online_room
     const browser::client_view& view() { return client.view(); }
     std::string version() { return own_version_token; }
     bool refresh_due() { return client.refresh_due(room_clock()); }
+    std::uint32_t retry_in_ms() { return client.retry_in(room_clock()); }
+    bool host_lost() { return host_loss.lost(); }
+    void suppress_host_lost() { host_loss.removed_by_host(); }
     bool take_preset(browser::launch_preset& out) {
         if (!menu_client || preset == browser::operation::none) return false;
         out = {preset, launch_code, configured_room_name, metadata.public_room};
@@ -1707,6 +1712,7 @@ namespace online_room
     // A native session end: the retail quit notices (0x10cc / 0x1106) were queued on the room tunnel moments ago. Leave
     // after the transport tick that flushes them, and let the closing connection deliver what is still reliable.
     void leave_after_flush() {
+        host_loss.local_departure(); // a local Leave/Quit: whatever the host's side does next is not a host loss
         bool linked = false;
         for (const auto& t : tunnels) linked |= t->connection != k_HSteamNetConnection_Invalid;
         if (!wanted || !linked || client.view().state != browser::phase::room) { leave(); return; }
@@ -1895,6 +1901,7 @@ namespace online_room
 			logger::write("online: connected to %s (%s) in %lu ms - route %s, ping %d ms; the game reaches it at %s", t->id.c_str(), t->outgoing ? "outgoing" : "incoming",
 			              unsigned long(t->connected_at - t->started), route(c), st.m_nPing, core::dotted(t->address).c_str());
 			// A joiner reaching the host: the host's game now answers the games list's search through this connection.
+			if (!hosting && t->id == host_id) host_loss.connected();
 			if (!hosting && t->id == host_id && online_status::current() == online_status_core::state::connecting)
 				online_status::set(online_status_core::state::joined, status_code(), status_players());
 			return true;
@@ -1903,6 +1910,7 @@ namespace online_room
 		{
 			logger::write("online: connection to %s ended (%s, reason %d: %s)", t->id.c_str(), state == k_ESteamNetworkingConnectionState_ClosedByPeer ? "closed by the peer" : "problem detected locally",
 			              info->m_info.m_eEndReason, info->m_info.m_szEndDebug);
+			if (!hosting && t->id == host_id && t->connected) host_loss.ended(t->transport_bound); // before drop() clears the bound flag
 			const bool retry = t->outgoing && !t->connected;
 			// A connection that never came up while cached TURN credentials were in use: the relay may have refused them
 			// (GNS's ICE client fails a refused allocation silently). Forget them and ask the broker for new ones once;
@@ -2158,6 +2166,9 @@ namespace online_room
     const online_browser_core::client_view& view() { return client.view(); }
     std::string version() { return {}; }
     bool refresh_due() { return false; }
+    std::uint32_t retry_in_ms() { return 0; }
+    bool host_lost() { return false; }
+    void suppress_host_lost() {}
     bool take_preset(online_browser_core::launch_preset&) { return false; }
     void ui_tick() {}
     bool list() { return false; }

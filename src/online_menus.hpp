@@ -54,6 +54,13 @@ struct broker_api {
     // departure (never a pre-game leave). Refused (false) unless this PC hosts a running session and the index is a
     // remote participant it has a bound link to; a repeated call for the same loss is a no-op.
     bool (*remove_member)(unsigned native_index)=nullptr;
+    // Optional (round 15, presentation only): ms until the shared limiter/backoff allows a new request (0 = now); the rule
+    // names the latest settings refusal gave ("" none); whether this joiner's connection to its room's host ended after it
+    // was up. Absent seams mean "unknown": no countdown, no rule names, no host-left panel.
+    std::uint32_t (*retry_in)()=nullptr;
+    const char* (*refusal_rules)()=nullptr;
+    bool (*host_lost)()=nullptr;
+    std::uint32_t (*refusal_serial)()=nullptr; // with refusal_rules: names are shown only for a refusal that happened during this attempt
 };
 void keyboard(unsigned char* state);
 bool requested();

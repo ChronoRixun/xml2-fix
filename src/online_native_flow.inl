@@ -70,6 +70,20 @@ struct native_command_queue {
 std::uint64_t next_setup_command=0;
 std::array<std::uintptr_t,2> rejected_lobbies{}; // opaque identities only; never dereferenced
 void native_flow_error(const char* why);
+std::uint32_t attempt_refusal_serial=0; // the agreement layer's refusal counter when this attempt began
+std::string native_rules; // the rule names a refusal gave, shown beside lc_notice_refusal_rules (allowlisted text)
+const char* native_phase_word(native_phase p) {
+    switch(p) {
+    case native_phase::setup: return "setup";
+    case native_phase::posting: return "opening";
+    case native_phase::host: return "host";
+    case native_phase::tunnel: return "connecting";
+    case native_phase::discovery: return "discovery";
+    case native_phase::admitting: return "admission";
+    case native_phase::guest: return "guest";
+    default: return "native";
+    }
+}
 std::uintptr_t options_owner=0;
 bool native_request(const char* name);
 bool native_options_seed(const char* name);
@@ -218,8 +232,21 @@ void native_flow_cancel() {
 void native_flow_error(const char* why) {
     const bool setup=native_flow.phase==native_phase::setup;
     logger::write("online menus: native flow refused: %s",why);
+    const auto phase=native_phase_word(native_flow.phase);
     broker_cancel(broker_view().state==broker::phase::room);
-    message("lc_notice_admission"); // localized LC adapter node
+    // One localized inline notice per failure kind (online_menus_rules::native_failure_table); the phase and the fixed
+    // internal reason are the only diagnostic text. A refusal names the rules the PCs possibly differ on when known.
+    const char* notice=native_notice(why);
+    std::string rules;
+    if(std::strcmp(notice,"lc_notice_refused")==0 && broker_calls.refusal_rules) {
+        const char* given=broker_calls.refusal_rules();
+        // Only a refusal that happened during THIS attempt: stale text, or another host's refusal while browsing the LAN, is not ours.
+        if(given && broker_calls.refusal_serial && broker_calls.refusal_serial()!=attempt_refusal_serial) rules=refusal_rules_text(std::string_view(given,strnlen(given,127))); // a bounded read of the agreement layer's text
+    }
+    if(!rules.empty()) notice="lc_notice_refusal_rules";
+    message(notice); // localized LC adapter node
+    native_rules=rules;
+    logger::write("online menus: native flow notice %s (%s: %s)",notice,phase,find_native_failure(why) ? why : "other");
     if(setup) native_request("lc_host");
 }
 // Leave the broker room after a native session end. The retail quit notices (0x10cc / 0x1106) are queued on the room
@@ -241,6 +268,11 @@ void __fastcall native_session_cleared(void* session,void*,bool keep_local) {
     try {
         if(ready && session==at<void*>(0xa53058) && native_flow.serial==serial && native_flow.lobby_active &&
             !keep_local && !*reinterpret_cast<void**>(static_cast<unsigned char*>(session)+0x78)) {
+            // A guest whose connection to the host ended: the 0.6 host-left panel waits for the Hub (never a takeover). The
+            // room layer's latch is read BEFORE the room is left below, which resets it.
+            if(native_flow.phase==native_phase::guest && broker_calls.host_lost) {
+                try { if(broker_calls.host_lost()) host_left_state.raise(); } catch(...) { }
+            }
             native_flow.touched=false; // the native session is already torn down
             try { native_flow_cancel(); } catch(...) { logger::write("online menus: native session end: ownership cleanup failed"); }
             try { native_session_leave(); } catch(...) { logger::write("online menus: native session end: room leave failed"); }
@@ -557,6 +589,7 @@ bool native_flow_tick(screen s) {
     if(native_flow.phase==native_phase::idle && (s==screen::code || s==screen::browse) &&
         view.state==broker::phase::room && view.action==broker::operation::resolve && broker_calls.admission_target) {
         ++native_flow.serial;native_flow.phase=native_phase::tunnel;
+        attempt_refusal_serial=broker_calls.refusal_serial ? broker_calls.refusal_serial() : 0;
         native_flow.ticket=view.generation;native_flow.started=now_ms();
     }
     const auto phase=native_flow.phase;

@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <set>
 #include <vector>
 #include <deque>
 #include <stdexcept>
@@ -37,6 +38,7 @@ bool back_in_base=false;
 void (*base_mutation)()=nullptr;
 int (__fastcall* lobby_back_callback)(void*,void*)=nullptr;
 bool missing_prompt=false,null_argument=false;
+std::set<std::string> absent_items; // R15: nodes the assets do not author (item lookup fails)
 DWORD clock_stub() { return ticks; }
 std::uint64_t wall_now=123+7300; // the Hub's "N hours ago" is computed against this (stored time 123 => 2 hours)
 std::uint64_t wall_stub() { return wall_now; }
@@ -117,6 +119,7 @@ void __fastcall hide_stub(void*,void*,const char* item,bool value) {
     }
 }
 void* __fastcall item_stub(void*,void*,const char* name) {
+    if(absent_items.count(name)) return nullptr;
     if(mode.starts_with("r4-")) {
         if(std::string_view(name)=="lc_lobby_v1" && !lobby_marker) return nullptr;
         if(std::string_view(name)=="text_playername1") return missing_list ? nullptr : lobby_names.data();
@@ -380,6 +383,7 @@ void rules() {
 #include "online_lobby_fixture.inl"
 #include "online_menus_followup.inl"
 #include "online_menus_broker.inl"
+#include "online_menus_errors.inl"
 #include "online_native_fixture.inl"
 #include "online_party_menu_fixture.inl"
 }
@@ -449,6 +453,7 @@ int main(int argc,char** argv) {
     if(mode.starts_with("r4-")) install_hooks.lobby_fields=lobby_fields_stub;
     if(mode.starts_with("r8-party")) { party_api.remove_member=party_remove_stub;install_hooks.broker=&party_api;install_hooks.lobby_fields=party_fields_stub; }
     if(mode=="r5-broker" || mode=="r5-retail-lobby" || mode=="r5b-views") install_hooks.broker=&menu_api;
+    if(mode=="r15-errors") install_hooks.broker=&menu_api15;
     if(mode.starts_with("r6-")) install_hooks.broker=&native_fixture::api;
     patch_transaction::hooks transaction_hooks;
     if(mode=="install-retain") {
@@ -572,6 +577,7 @@ int main(int argc,char** argv) {
     set_current(hub.data());tick(hub.data(),nullptr);
     assert(texts["local_name"]==(mode=="name31" ? std::string(31,'a') : mode=="blank-name" ? "Player" : "100??????openmenu bad"));
     if(mode=="r5b-views") { broker_presentation_tests(entry);return 0; }
+    if(mode=="r15-errors") { error_table_tests(entry);return 0; }
     if(mode.starts_with("r6-nit-") || mode.starts_with("r6-end-")) { native_fixture::review_run(entry);return 0; }
     if(mode=="r6-native") { native_fixture::run(entry);return 0; }
     if(mode=="r6-generations") { native_fixture::generation_run(entry);return 0; }

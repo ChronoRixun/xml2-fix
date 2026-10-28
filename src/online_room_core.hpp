@@ -701,4 +701,18 @@ namespace online_room_core
 			return true;
 		}
 	};
+	// Presentation only (the menus' host-left panel). A joiner's host is "lost" only when the connection the game session ran over
+	// (transport bound) ended after it was up; a fresh connection to the host clears it; a local Leave/Quit or a removal decided by
+	// the host (a kick) blocks it for the rest of the room. It never ends or starts anything.
+	class host_loss_tracker
+	{
+		bool lost_ = false, blocked_ = false;
+	public:
+		void connected() { lost_ = false; }
+		void ended(bool transport_bound) { if (transport_bound && !blocked_) lost_ = true; }
+		void local_departure() { blocked_ = true; lost_ = false; }
+		void removed_by_host() { local_departure(); }
+		bool lost() const { return lost_; }
+		void reset() { lost_ = blocked_ = false; }
+	};
 }

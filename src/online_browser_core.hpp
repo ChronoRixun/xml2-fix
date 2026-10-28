@@ -40,6 +40,7 @@ namespace online_browser_core
 		ticket generation;
 		std::vector<public_room> rows;
 		std::string error, code, room_name;
+		std::string error_detail; // presentation only: the other side's build token of a version_mismatch failure (printable, <= 32)
 		bool stale = false, authenticated = false, list_known = false;
 		bool public_room = false, room_metadata_known = false;
 	};
@@ -111,11 +112,18 @@ namespace online_browser_core
 		bool may_lookup(std::uint32_t now) const {
 			return (!sent_once_ || std::uint32_t(now - sent_) >= lookup_interval_ms) && (!backoff_ || std::uint32_t(now - failed_) >= backoff_);
 		}
+		// Milliseconds until the shared limiter/backoff lets a new request start (0: now). The same arithmetic as may_lookup.
+		std::uint32_t retry_in(std::uint32_t now) const {
+			std::uint32_t wait = 0;
+			if (sent_once_ && std::uint32_t(now - sent_) < lookup_interval_ms) wait = lookup_interval_ms - std::uint32_t(now - sent_);
+			if (backoff_ && std::uint32_t(now - failed_) < backoff_) { const auto b = backoff_ - std::uint32_t(now - failed_); if (b > wait) wait = b; }
+			return wait;
+		}
 		bool begin(operation op, std::uint32_t now, bool authenticated = false) {
 			if (op == operation::none || pending() || view_.state == phase::room || !may_lookup(now)) return false;
 			++view_.generation.request;
 			if (op != operation::list) { ++view_.generation.room; view_.room_name.clear(); view_.room_metadata_known = false; }
-			view_.action = op; view_.error.clear(); view_.code.clear(); issued_ = false;
+			view_.action = op; view_.error.clear(); view_.error_detail.clear(); view_.code.clear(); issued_ = false;
 			view_.authenticated = authenticated;
 			view_.state = authenticated ? active_phase() : phase::authenticating;
 			started_ = now;
@@ -144,11 +152,15 @@ namespace online_browser_core
 		void fail(ticket t, const std::string& error, std::uint32_t now) {
 			if (t != view_.generation) return;
 			if (view_.state == phase::room) { disconnected(error, now); return; }
+			// One failure per generation: a duplicate or late report of the same request neither replaces the cause nor grows the backoff.
+			if (view_.state == phase::retry_wait || view_.state == phase::error || view_.state == phase::refused) return;
 			view_.error = error; view_.stale = listed_once_; view_.authenticated = false;
 			failed_ = now; backoff_ = backoff_ ? (backoff_ >= 30000 ? 60000 : backoff_ * 2) : 2000;
 			if (error == "rate_limited" && backoff_ < 10000) backoff_ = 10000;
 			view_.state = phase::retry_wait;
 		}
+		// Presentation detail for the failure just recorded (ignored for a stale ticket or outside a failure).
+		void detail(ticket t, const std::string& text) { if (t == view_.generation && view_.state == phase::retry_wait) view_.error_detail = text; }
 		void refuse(const std::string& error) {
 			if (view_.state == phase::room) { disconnected(error, 0); return; }
 			view_.error = error; view_.state = phase::refused;
@@ -164,7 +176,7 @@ namespace online_browser_core
 			if (view_.state == phase::room && !leave) return; // only intentional Leave releases a committed room
 			++view_.generation.request; ++view_.generation.room;
 			view_.state = leave ? phase::leaving : phase::canceling;
-			view_.authenticated = false; view_.code.clear(); view_.error.clear(); view_.stale = listed_once_;
+			view_.authenticated = false; view_.code.clear(); view_.error.clear(); view_.error_detail.clear(); view_.stale = listed_once_;
 			view_.room_name.clear(); view_.room_metadata_known = false;
 		}
 		void stopped() { if (view_.state == phase::canceling || view_.state == phase::leaving) view_.state = phase::idle; }

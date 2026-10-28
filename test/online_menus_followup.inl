@@ -112,6 +112,11 @@ void follow_tests(const script_functions_rules::func_entry* registration) {
     if(mode=="follow-clipboard") {
         open_code();fake_clipboard_imports();
         clipboard_text("ABCDEFGH");clip_missing=true;post(intent::paste);tick(child.data(),nullptr);assert(clip_closed==1 && !clip_locked && texts["code_value"]=="____-____");
+        // Round 15: a clipboard that cannot be read says so (and keeps the typed text); content that is no code says that instead.
+        assert(visibility["lc_notice_clipboard"] && !visibility["lc_notice_paste_invalid"]); // no text (an image, empty): no code on it, not "unreadable"
+        clip_available=false;post(intent::paste);tick(child.data(),nullptr);
+        assert(!visibility["lc_notice_clipboard"] && visibility["lc_notice_paste_invalid"] && texts["code_value"]=="____-____"); // cannot open it: unreadable
+        clip_available=true;
         clipboard_text("ABCDEFGH");clip_zero_size=true;post(intent::paste);tick(child.data(),nullptr);assert(clip_closed==1 && !clip_locked);
         clipboard_text(std::string(248,' ')+"ABCDEFGH");post(intent::paste);tick(child.data(),nullptr);assert(texts["code_value"]=="ABCD-EFGH" && clip_unlocked==1);
         post(intent::erase);tick(child.data(),nullptr);

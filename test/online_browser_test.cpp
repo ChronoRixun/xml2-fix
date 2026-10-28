@@ -155,6 +155,24 @@ int main()
 	check(!committed.begin(b::operation::host,99999) && !committed.begin(b::operation::resolve,99999),"room: no retry/replacement before explicit Leave");
 	committed.cancel(true);committed.stopped();
 	check(committed.view().state==b::phase::idle && committed.view().generation.room>room_ticket.room && committed.begin(b::operation::resolve,99999),"room: explicit Leave releases ownership for next attempt");
+	// Round 15 (presentation): the shared limiter's remaining wait, one failure per generation, the other build's token.
+	b::client_state limiter;
+	check(limiter.retry_in(0)==0,"limiter: nothing sent yet, nothing to wait for");
+	check(limiter.begin(b::operation::list,1000) && limiter.retry_in(1000)==b::lookup_interval_ms && limiter.retry_in(2500)==500 && limiter.retry_in(3000)==0,"limiter: the two-second spacing counts down and ends");
+	limiter.authenticated(limiter.view().generation);limiter.issue();
+	const auto limited=limiter.view().generation;limiter.fail(limited,"rate_limited",3000);
+	check(limiter.view().state==b::phase::retry_wait && limiter.retry_in(3000)==10000 && limiter.retry_in(3001)==9999 && limiter.retry_in(12999)==1 && limiter.retry_in(13000)==0,"limiter: a rate-limit failure waits the service's 10 seconds");
+	check(!limiter.begin(b::operation::list,12999) && limiter.begin(b::operation::list,13000),"limiter: retry_in agrees with may_lookup/begin");
+	b::client_state wrap;wrap.begin(b::operation::list,0xfffffff0u,true);wrap.issue();
+	check(wrap.retry_in(0xfffffff0u)==b::lookup_interval_ms && wrap.retry_in(0x7f0u)==0 && wrap.retry_in(0x20u)==b::lookup_interval_ms-0x30u,"limiter: retry_in survives the 32-bit clock wrap");
+	b::client_state once;once.begin(b::operation::resolve,100000,true);once.issue();const auto id=once.view().generation;
+	once.fail(id,"room_full",100001);once.detail(id,"LC36");
+	const auto wait=once.retry_in(100001);
+	once.fail(id,"timeout",100002);once.fail(id,"timeout",100003);once.disconnected("timeout",100004);
+	check(once.view().error=="room_full" && once.view().state==b::phase::retry_wait && once.retry_in(100001)==wait && once.view().error_detail=="LC36","client: a duplicate or late failure changes neither the cause nor the backoff");
+	once.detail({id.request+7,id.room},"WRONG");check(once.view().error_detail=="LC36","client: a stale ticket cannot set the detail");
+	once.cancel();once.stopped();check(once.view().error_detail.empty() && once.view().error.empty(),"client: cancel clears the failure and its detail");
+	b::client_state fresh;fresh.begin(b::operation::list,1,true);fresh.issue();fresh.detail(fresh.view().generation,"LC1");check(fresh.view().error_detail.empty(),"client: detail needs a recorded failure");
 	std::printf("%d PASS / %d FAIL\n", passed, failed);
 	return failed ? 1 : 0;
 }

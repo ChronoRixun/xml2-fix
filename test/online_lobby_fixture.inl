@@ -1,6 +1,8 @@
 // Included in online_menus_test.cpp's fixture namespace. All retail routines
 // below execute in the mapped owned PE; engine services/participants are fake.
 void* current() { return *reinterpret_cast<void**>(mgr.data()+0x86090); }
+// An inline lobby error shows as the cause-specific scene (Copy / Kick target) or, with neither authored, the general one.
+bool lobby_error_shown() { return !visibility["lc_lobby_error"] || !visibility["lc_lobby_error_copy"] || !visibility["lc_lobby_error_target"]; }
 std::array<std::array<unsigned char,0xc0>,4> lobby_people{};
 std::array<unsigned char,0x90> names_table{},checks_table{};
 auto& people_table=*reinterpret_cast<std::array<unsigned char,0x90>*>(0xa53058+0x26c);
@@ -298,9 +300,9 @@ void copy_tests(const script_functions_rules::func_entry* registration,lobby_tic
     copy_has_window=false;post(intent::copy_code);tick(child.data(),nullptr);assert(copy_opens==opens);copy_has_window=true;
     copy_own_process=false;post(intent::copy_code);tick(child.data(),nullptr);assert(copy_opens==opens);copy_own_process=true;
     copy_engine_class=false;post(intent::copy_code);tick(child.data(),nullptr);assert(copy_opens==opens);copy_engine_class=true;
-    mask=0;tick(child.data(),nullptr);assert(!visibility["lc_lobby_error"] && texts["lc_room_code"]=="ABCD-EFGH" && current()==child.data());
+    mask=0;tick(child.data(),nullptr);assert(lobby_error_shown() && texts["lc_room_code"]=="ABCD-EFGH" && current()==child.data());
     auto back=*reinterpret_cast<lobby_back_t*>(0x69f2a0);back(child.data(),nullptr);tick(child.data(),nullptr);
-    assert(visibility["lc_lobby_error"] && current()==child.data());
+    assert(!lobby_error_shown() && current()==child.data());
     fixture_bad_code=true;copy_set_ok=true;post(intent::copy_code);tick(child.data(),nullptr);assert(copies==3 && !enabled_items["lc_copy_code"]);
     fixture_bad_code=false;fixture_throw=true;auto native_before=native_ticks;tick(child.data(),nullptr);
     assert(native_ticks==native_before+1 && current()==child.data());fixture_throw=false;
@@ -412,9 +414,9 @@ void retail_list_review_tests(const script_functions_rules::func_entry* registra
     if(mode=="r4-dismiss-invalid") {
         setup_lobby(false);activate=*reinterpret_cast<lobby_activate_t*>(0x69f350);activate(child.data(),nullptr,0);
         tick=*reinterpret_cast<lobby_tick_t*>(0x69f374);back=*reinterpret_cast<lobby_back_t*>(0x69f368);
-        ready_person(1,false);install_copy_failure();mask=0;post(intent::copy_code);tick(child.data(),nullptr);assert(!visibility["lc_lobby_error"]);
+        ready_person(1,false);install_copy_failure();mask=0;post(intent::copy_code);tick(child.data(),nullptr);assert(lobby_error_shown() && !visibility["lc_lobby_error_copy"] && visibility["lc_lobby_error_target"] && visibility["lc_lobby_error"]);
         put(checks_table.data(),0x84,2);assert(back(child.data(),nullptr)==2 && current()==child.data() && !leaves);
-        tick(child.data(),nullptr);assert(visibility["lc_lobby_error"] && focused=="text_readygame");
+        tick(child.data(),nullptr);assert(!lobby_error_shown() && focused=="text_readygame");
         refresh_now();back(child.data(),nullptr);assert(current()==nullptr && leaves==1);
         std::cout<<"notice regression PASS invalid roster cannot prevent dismissal; first Back dismisses, later native Back leaves\n";return;
     }
@@ -457,22 +459,22 @@ void review_lobby_tests(const script_functions_rules::func_entry* registration,b
     if(mode=="r4-join-fallback") {
         put(checks_table.data(),0x84,2);ready_person(1,false);focus_stub(child.data(),nullptr,"text_readygame",true);mask=0x10;tick(child.data(),nullptr);
         assert(announces==1 && last_ready && current()==child.data()); // invalid view does not veto Ready
-        assert(visibility["lc_lobby_error"]); // no latched read error
+        assert(!lobby_error_shown()); // no latched read error
         mask=0;
         // Explicit notice while the REAL native Join tick tail-dispatches Back.
         copy_open_ok=false;import_stub("OpenClipboard",reinterpret_cast<void*>(&copy_open));import_stub("EnumThreadWindows",reinterpret_cast<void*>(&copy_enum));
         import_stub("GetWindowThreadProcessId",reinterpret_cast<void*>(&copy_window_process));import_stub("GetClassNameA",reinterpret_cast<void*>(&copy_class));
-        post(intent::copy_code);tick(child.data(),nullptr);assert(!visibility["lc_lobby_error"]);
+        post(intent::copy_code);tick(child.data(),nullptr);assert(lobby_error_shown());
         mask=0;tick(child.data(),nullptr); // release Copy before a fresh native Accept
         focus_stub(child.data(),nullptr,"text_leaveroom",true);mask=0x10;tick(child.data(),nullptr);assert(!last_ready && current()==child.data());
         tick(child.data(),nullptr);assert(current()==nullptr && leaves==1); // notice cannot swallow the native Leave dispatch
         setup_lobby(false);ready_person(1,false);activate(child.data(),nullptr,0);mask=0;
-        post(intent::copy_code);tick(child.data(),nullptr);assert(!visibility["lc_lobby_error"]);
+        post(intent::copy_code);tick(child.data(),nullptr);assert(lobby_error_shown());
         auto mouse=*reinterpret_cast<lobby_mouse_t*>(0x69f3bc);
         assert(mouse(child.data(),nullptr,510,460,0,WM_LBUTTONUP,0));
         assert(current()==nullptr && leaves==2); // actual mouse help -> virtual Back, with the notice still showing
         people_count=0;setup_lobby(false);set_pending_local(true);put(lobby_people[1].data(),0x1c,0);activate(child.data(),nullptr,0);child[0x196c]=1;mask=0;tick(child.data(),nullptr);
-        assert(texts["lc_member_count"]=="0" && visibility["lc_lobby_error"] && current()==child.data());
+        assert(texts["lc_member_count"]=="0" && !lobby_error_shown() && current()==child.data());
         child[0x196c]=0;const auto pending_announcements=announces;mask=0x1000000;tick(child.data(),nullptr);
         assert(announces==pending_announcements && current()==child.data());mask=0;
         back(child.data(),nullptr);assert(current()==nullptr);set_pending_local(false);
@@ -492,7 +494,7 @@ void review_lobby_tests(const script_functions_rules::func_entry* registration,b
             if(failure==3) put(reinterpret_cast<void*>(0x8abe20),0,129);
             if(failure==4) put(people_table.data(),0xc,5);
             if(failure==5) put(lobby_people[1].data(),0x18,99);
-            tick(child.data(),nullptr);assert(visibility["lc_lobby_error"] && (start_item[0x54]&8));
+            tick(child.data(),nullptr);assert(!lobby_error_shown() && (start_item[0x54]&8));
             focus_stub(child.data(),nullptr,"text_leaveroom",true);mask=0x10;tick(child.data(),nullptr);
             tick(child.data(),nullptr);assert(current()==nullptr);
         }
@@ -526,7 +528,7 @@ void review_lobby_tests(const script_functions_rules::func_entry* registration,b
     if(mode=="r4-native-faults") {
         for(int stage:{1,2,3,4}) {
             lobby_fault_stage=stage;mask=stage==2 ? 0x1000000 : 0;tick(child.data(),nullptr);
-            assert(!lobby_fault_stage && current()==child.data());mask=0;tick(child.data(),nullptr);assert(visibility["lc_lobby_error"]);
+            assert(!lobby_fault_stage && current()==child.data());mask=0;tick(child.data(),nullptr);assert(!lobby_error_shown());
         }
         put(child.data(),0x1960,1);lobby_names[0x54]|=8;redirect(0x5bfcd0,row_text_fault);refresh_now();assert(lobby_names[0x54]&4);restore_retail(0x5bfcd0);refresh_now();
         assert(!(lobby_names[0x54]&4));observe_native_render(true);
@@ -627,7 +629,7 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     *reinterpret_cast<short*>(lobby_names.data()+0xac)=-1;tick(child.data(),nullptr);assert(!kicks);
     *reinterpret_cast<short*>(lobby_names.data()+0xac)=3;tick(child.data(),nullptr);assert(!kicks);
     *reinterpret_cast<short*>(lobby_names.data()+0xac)=1;base_mutation=invalidate_selection;tick(child.data(),nullptr);base_mutation=nullptr;
-    assert(!kicks && *reinterpret_cast<int*>(child.data()+0x1960)==1 && !visibility["lc_lobby_error"]);
+    assert(!kicks && *reinterpret_cast<int*>(child.data()+0x1960)==1 && lobby_error_shown() && !visibility["lc_lobby_error_target"] && visibility["lc_lobby_error_copy"] && visibility["lc_lobby_error"]);
     *reinterpret_cast<short*>(lobby_names.data()+0xac)=1;tick(child.data(),nullptr);assert(kicks==1 && *reinterpret_cast<int*>(child.data()+0x1960)==0);
     back_in_base=true;mask=0x200000;tick(child.data(),nullptr);back_in_base=false;
     assert(current()==child.data() && *reinterpret_cast<int*>(child.data()+0x1960)==0);
