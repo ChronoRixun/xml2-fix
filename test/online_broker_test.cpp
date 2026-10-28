@@ -124,7 +124,7 @@ namespace logger {
 void write(const char*,...) {} void write_once(std::string_view,const char*,...) {} void write_capped(std::string_view,const char*,...) {}
 }
 namespace online_menus { bool installed() { return true; } }
-namespace gns_transport { bool installed() { return true; } bool room_can_start() { return !fake::transport_busy; } bool party_snapshot(party_facts& out) { out = {}; return false; } }
+namespace gns_transport { bool installed() { return true; } bool room_can_start() { return !fake::transport_busy; } bool party_snapshot(party_facts& out) { out = {}; return false; } bool deliver_removal(unsigned) { return false; } }
 namespace receive_validation { bool installed() { return true; } }
 namespace save_format { bool campaign_load_checked() { return true; } }
 namespace join_in_progress { bool installed() { return false; } }

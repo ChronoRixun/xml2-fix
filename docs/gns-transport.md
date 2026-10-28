@@ -51,6 +51,9 @@ Link kinds (first payload byte): 0 game, 1 hello, 2 hello_ack, 3 keepalive, 4 da
 [online-party.md](online-party.md)). Kinds 7/8 are handled by the room module before the tunnel policy and never reach
 this adapter's game lane; a build without them drops them as malformed/refused tunnel messages and keeps the link.
 Rule 25 is revision 6 / framing 4 for them (`{1, 1000, 4, 0}`); revision-4 builds are refused by name.
+Kind 9 removal_notice (0.6 preview fix F, rule 64 OnlineRemovalNotice, [online-party-menu.md](online-party-menu.md)
+section 4) is the same kind of room-module message: host to the removed member only, before the tunnel policy. Kind 16 is
+rule 63's restore transaction (not sent yet); kinds 10-15 are free.
 
 ## A participant lost abruptly (three or more players)
 

@@ -12,6 +12,10 @@ struct native_flow_state {
     int maximum=0,difficulty=-1;
     bool loaded=false,danger_room=false;
     bool callback=false,touched=false,accepted=false,refused=false,lobby_active=false,seeded=false,host_queued=false;
+    // This PC's own participant record (0x6111f0, admitted: 0x614290) while the session is live (review E finding 1): the kick
+    // classification compares the removed record with it, because by the 0x612070 call 0x611f50 -> 0x611c10 has already run
+    // the record slot's destructor and the record's own fields may be gone.
+    std::uintptr_t local_record=0;
 } native_flow;
 struct native_open_token {
     native_phase role=native_phase::idle;
@@ -267,19 +271,22 @@ void native_session_leave() {
 }
 // EBP at the patched 0x612070 call (0x612c40's frame when the clear comes from a removal; online_menus_rules kicked_by_host).
 std::uintptr_t cleared_frame=0;
-bool removal_was_kick(std::uintptr_t frame) {
+unsigned session_clears=0; // wrapper entries (one kick can clear twice: 0x6123e0 inside 0x612c40, review E finding 6)
+bool removal_was_kick(std::uintptr_t frame,std::uintptr_t local_record) {
     __try {
         if(!frame) return false;
         std::uint32_t f[5];std::memcpy(f,reinterpret_cast<const void*>(frame),sizeof f);
-        // 0x614290: the record is this PC's own participant (+0x1c bit 0); 0x612c40 has already cleared the session's +0x78.
-        const bool local=f[2] && (*reinterpret_cast<const std::uint32_t*>(std::uintptr_t(f[2])+0x1c)&1u);
+        // The removed record is this PC's own participant: the pointer cached while the session was live (review E finding 1;
+        // the record slot is already destroyed here). Fallback only: the record's own flag 0x614290 (+0x1c bit 0).
+        const bool local=f[2] && (f[2]==local_record || (*reinterpret_cast<const std::uint32_t*>(std::uintptr_t(f[2])+0x1c)&1u));
         return kicked_by_host(f,local);
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 void __fastcall native_session_cleared(void* session,void*,bool keep_local) {
     const auto serial=native_flow.serial;
     const auto frame=cleared_frame;cleared_frame=0;
-    const bool kicked=removal_was_kick(frame); // read before 0x612070 releases the records
+    const bool kicked=removal_was_kick(frame,native_flow.local_record); // read before 0x612070 releases the records
+    ++session_clears;
     at<void(__thiscall*)(void*,bool)>(0x612070)(session,keep_local);
     // Only terminal full-clear branches in 6123e0/612c40 call this wrapper.
     // Host setup/admission resets, keep-local transfer work, and single remote
@@ -291,9 +298,13 @@ void __fastcall native_session_cleared(void* session,void*,bool keep_local) {
             // A guest whose connection to the host ended: the 0.6 host-left panel waits for the Hub (never a takeover). The
             // room layer's latch is read BEFORE the room is left below, which resets it.
             // A guest the host removed (its native Kick) gets a plain notice at the Hub instead (0.6 preview fix E).
-            if(native_flow.phase==native_phase::guest && kicked) {
+            // 0.6 preview fix F: the in-session Party Kick tells the removed PC first (rule 64); its session end is the removal too.
+            bool notified=false;
+            if(native_flow.phase==native_phase::guest && !kicked && broker_calls.removed_by_host) { try { notified=broker_calls.removed_by_host(); } catch(...) { } }
+            if(native_flow.phase==native_phase::guest && (kicked || notified)) {
                 removed_notice=true;host_left_state.dismiss();
-                logger::write("online menus: the host removed this PC from the game (native removal notice 0x%04X); the Hub shows lc_notice_removed",kick_reason);
+                if(kicked) logger::write("online menus: the host removed this PC from the game (native removal notice 0x%04X); the Hub shows lc_notice_removed",kick_reason);
+                else logger::write("online menus: the host removed this PC from the game (its in-session removal notice, rule 64); the Hub shows lc_notice_removed");
             } else if(native_flow.phase==native_phase::guest && broker_calls.host_lost) {
                 try { if(broker_calls.host_lost()) host_left_state.raise(); } catch(...) { }
             }
@@ -317,6 +328,7 @@ bool native_request(const char* name) {
 bool native_host_begin() {
     if(native_flow.phase==native_phase::setup && native_flow.departure==screen::none) broker_cancel();
     if(native_flow.phase!=native_phase::idle || broker_view().state==broker::phase::room) return false;
+    removed_notice=false; // review E finding 5: a new session never shows an older removal
     int controller=-1;
     __try { controller=at<int(__thiscall*)(void*)>(0x5d8570)(manager()); }
     __except(EXCEPTION_EXECUTE_HANDLER) { }
@@ -511,8 +523,14 @@ int __fastcall options_back(void* menu,void*) {
 bool native_local_admitted() {
     __try {
         auto* local=at<void*(__thiscall*)(void*)>(0x6111f0)(at<getter>(0x612be0)());
-        return local && at<bool(__thiscall*)(void*)>(0x614290)(local);
+        const bool admitted=local && at<bool(__thiscall*)(void*)>(0x614290)(local);
+        if(admitted) native_flow.local_record=reinterpret_cast<std::uintptr_t>(local);
+        return admitted;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+// Refreshes native_flow.local_record from the live session (a guest's lobby and Party ticks; no native state is changed).
+void native_note_local_record() {
+    if(native_flow.phase==native_phase::guest || native_flow.phase==native_phase::host) native_local_admitted();
 }
 int __cdecl native_admission_event(int event,void* generation,void*) {
     if(reinterpret_cast<std::uintptr_t>(generation)!=native_flow.serial || native_flow.phase!=native_phase::admitting) return 0;
@@ -620,6 +638,7 @@ bool native_flow_tick(screen s) {
     if(native_flow.phase==native_phase::idle && (s==screen::code || s==screen::browse) &&
         view.state==broker::phase::room && view.action==broker::operation::resolve && broker_calls.admission_target) {
         ++native_flow.serial;native_flow.phase=native_phase::tunnel;
+        removed_notice=false; // review E finding 5: a new join never shows an older removal
         attempt_refusal_serial=broker_calls.refusal_serial ? broker_calls.refusal_serial() : 0;
         native_flow.ticket=view.generation;native_flow.started=now_ms();
     }

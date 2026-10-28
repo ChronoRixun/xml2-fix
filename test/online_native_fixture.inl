@@ -27,7 +27,10 @@ bool leave_armed=false,leave_throws=false;unsigned leave_arms=0;
 void menu_leave_deferred() { ++leave_arms;if(leave_throws) throw std::runtime_error("injected room failure");leave_armed=true; }
 void menu_leave_checked() { if(leave_throws) throw std::runtime_error("injected room failure");menu_leave(); } // immediate leave seam
 void menu_leave_tick() { if(leave_armed) { leave_armed=false;menu_leave(); } }
-const online_menus::broker_api api{menu_available,menu_view,menu_tick,menu_list,menu_host,menu_resolve,menu_retry,menu_cancel,menu_leave_checked,menu_version,menu_take_preset,menu_refresh_due,host_native,target,posted,nullptr,menu_leave_deferred,nullptr,nullptr,nullptr,menu_retry_in,menu_refusal,menu_host_lost,menu_refusal_serial};
+// Fix F (rule 64): the room layer's latch "this joiner accepted its host's in-session removal notice".
+bool removed_flag=false;
+bool menu_removed() { return removed_flag; }
+const online_menus::broker_api api{menu_available,menu_view,menu_tick,menu_list,menu_host,menu_resolve,menu_retry,menu_cancel,menu_leave_checked,menu_version,menu_take_preset,menu_refresh_due,host_native,target,posted,nullptr,menu_leave_deferred,nullptr,nullptr,nullptr,menu_retry_in,menu_refusal,menu_host_lost,menu_refusal_serial,menu_removed};
 void* __cdecl string_pool() { return pool.data(); }
 bool __fastcall input_ok(void*,void*,unsigned,int) { return true; }
 void __fastcall pop(void*,void*,const char* name,int) {
@@ -474,7 +477,12 @@ void __fastcall remove_record(void* session,void*,void* record,bool) {
     if(*reinterpret_cast<void**>(bytes+0x7c)==record) put(session,0x7c,0);
     for(auto* node=*reinterpret_cast<unsigned char**>(bytes+0x26c);node;node=*reinterpret_cast<unsigned char**>(node+8)) {
         if(*reinterpret_cast<void**>(node+0x10)==record) {
-            reinterpret_cast<bool(__thiscall*)(void*,void*)>(0x611e90)(bytes+0x26c,node);return;
+            reinterpret_cast<bool(__thiscall*)(void*,void*)>(0x611e90)(bytes+0x26c,node);
+            // Review E finding 1: the retail 0x611f50 -> 0x611e90 / 0x611c10 runs the record slot's virtual destructor and
+            // returns the slot to the free list BEFORE 0x612c40 reaches its 0x612070 call. The invented record is destroyed
+            // here in the same order (its flags word cleared: the "local participant" bit 0x614290 reads is gone).
+            put(record,0x1c,0);
+            return;
         }
     }
 }
@@ -571,13 +579,25 @@ void review_run(const script_functions_rules::func_entry* registration) {
         // removed PC as the removal notice 0x2b; its transport-bound host connection ends too, so the room layer's host-loss
         // latch IS set (nothing on this PC told it otherwise). Only the native notice tells the kick apart: the END path must show
         // the plain "removed" notice, never the host-left panel. Nothing calls removed_by_host() here.
-        const bool kicked=original_mode=="r6-end-kicked-guest";
+        const bool kicked=original_mode=="r6-end-kicked-guest" || original_mode=="r6-end-partykick-guest" || original_mode=="r6-end-kicked-twice-guest";
+        // Fix F (rule 64): the in-session Party Kick. The room layer accepted the host's removal notice (latched; the tracker is
+        // told the coming host-connection end is not a host loss) and the transport hands the session the native removal
+        // notice 0x2b of this PC's own index built by online_removal_core::native_body. -seam-: the notice was accepted but the
+        // session ends another way (the host's connection drop at the resend bound): still the removal, never the panel.
+        const bool partykick=original_mode=="r6-end-partykick-guest",partyseam=original_mode=="r6-end-partykick-seam-guest";
+        // Review E finding 6: a second session end in the same kick: right after the kick's clear, the native script route
+        // 0x49f990 runs the REAL 0x6123e0 again before the room leave; it must change nothing.
+        const bool twice=original_mode=="r6-end-kicked-twice-guest";
+        removed_flag=partykick || partyseam;
+        const auto clears_at_start=online_menus::session_clear_count();
+        const auto clears_before=r6_log.size();
         // Negative control: the native slow-player drop sends the same reason 0x10ce with flag 0. It is not a Kick: no "removed"
         // notice, and the lost host connection keeps the host-left panel.
         const bool slowdrop=original_mode=="r6-end-slowdrop-guest";
-        host_loss_real=kicked || slowdrop;fixture_host_loss.reset();
+        host_loss_real=kicked || slowdrop || partyseam;fixture_host_loss.reset();
         if(slowdrop) host_lost_flag=true;
-        if(kicked || slowdrop) { fixture_host_loss.connected();fixture_host_loss.ended(true);assert(fixture_host_loss.lost()); }
+        if(partykick || partyseam) { fixture_host_loss.connected();fixture_host_loss.removed_by_host();fixture_host_loss.ended(true);assert(!fixture_host_loss.lost()); }
+        else if(kicked || slowdrop) { fixture_host_loss.connected();fixture_host_loss.ended(true);assert(fixture_host_loss.lost()); }
         bool escaped=false;
         try {
             if(original_mode.starts_with("r6-end-quit-") || original_mode=="r6-nit-end" || original_mode=="r6-nit-end-guest") {
@@ -588,8 +608,22 @@ void review_run(const script_functions_rules::func_entry* registration) {
                 // The removal notice as the network layer hands it to the retail 0x2b handler 0x612f60: the event's body
                 // (+4) is the 12-byte notice (this PC's index, its reason 0x10ce, flag 1), +0xc the session.
                 std::array<unsigned char,12> body{};put(body.data(),0,unsigned(local_id));put(body.data(),4,0x10ce);body[8]=slowdrop ? 0 : 1;
+                if(partykick) {
+                    const auto built=online_removal_core::native_body(std::uint8_t(local_id));
+                    assert(std::memcmp(built.data(),body.data(),body.size())==0); // rule 64 delivers exactly the native Kick's notice
+                    std::memcpy(body.data(),built.data(),body.size());
+                }
                 std::array<unsigned,4> event{0,unsigned(reinterpret_cast<std::uintptr_t>(body.data())),0,0xa53058};
                 reinterpret_cast<void(__cdecl*)(void*)>(0x612f60)(event.data());
+                if(twice) {
+                    const auto first=online_menus::session_clear_count()-clears_at_start;
+                    script(0x49f990,0);
+                    std::cout<<"end fixture: twice: wrapper entries after the kick "<<first<<", after the real 0x6123e0 again "<<online_menus::session_clear_count()-clears_at_start<<"\n";
+                }
+            } else if(partyseam) {
+                menu_broker.disconnected("broker already unavailable",ticks);
+                put(lobby_people[1].data(),0x1c,2); // actual remote host flag
+                reinterpret_cast<void(__thiscall*)(void*,void*,int,bool)>(0x612c40)(reinterpret_cast<void*>(0xa53058),lobby_people[1].data(),0x1107,false);
             } else if(original_mode.starts_with("r6-end-loss-")) {
                 menu_broker.disconnected("broker already unavailable",ticks);
                 put(lobby_people[1].data(),0x1c,2); // actual remote host flag
@@ -600,6 +634,19 @@ void review_run(const script_functions_rules::func_entry* registration) {
         } catch(...) { escaped=true; }
         assert(!escaped);
         assert(!*reinterpret_cast<void**>(0xa53058+0x78));
+        std::cout<<"end fixture: wrapper entries "<<online_menus::session_clear_count()-clears_at_start<<"\n";
+        if(kicked || partyseam || twice) {
+            // Exactly one classification per removal, however often the wrapper ran (finding 6), and the removed-record check
+            // does not depend on the destroyed record (finding 1).
+            unsigned removed_lines=0;
+            for(auto i=clears_before;i<r6_log.size();++i) removed_lines+=r6_log[i].find("the host removed this PC from the game")!=std::string::npos;
+            std::cout<<"end fixture: "<<removed_lines<<" removal classification line(s), wrapper entries "<<online_menus::session_clear_count()<<"\n";
+            assert(removed_lines==1);
+            // The kick's 0x612c40 runs the REAL 0x6123e0 (0x612dd0; the trace shows its 0x6127a9..0x61290f services) and the wrapper
+            // once; the second real 0x6123e0 run (0x49f990) returns before its 0x6128ab site on the torn-down session. Either way:
+            // one entry that decides, one classification line, one deferred leave (asserted below), the notice at the Hub.
+            if(twice) assert(online_menus::session_clear_count()-clears_at_start==1);
+        }
         if(!direct && !lobby) assert(!*reinterpret_cast<unsigned char*>(0xa53058+0x420));
         assert(leave_arms==1); // the wrapper asked for exactly one deferred room leave
         if(throws) {
@@ -630,7 +677,7 @@ void review_run(const script_functions_rules::func_entry* registration) {
                 absent_items.clear();
             } else if(!lost) {
                 assert(hid("lc_hub_host_left") && hid("lc_hostleft_again") && !enabled_items["lc_hostleft_again"] && enabled_items["host"]);
-                if(kicked) {
+                if(kicked || partyseam || twice) {
                     // The kicked guest's Hub: the plain notice "The host removed you from the game." (lc_notice_removed), not the
                     // generic inline error; and the Hub is fully usable: no veil, every row and prompt enabled, actions act.
                     assert(vis("lc_notice_removed") && hid("lc_inline_error"));
@@ -659,7 +706,7 @@ void review_run(const script_functions_rules::func_entry* registration) {
                 }
                 tick(child.data(),nullptr);assert(hid("lc_hub_host_left"));
             }
-            host_lost_flag=false;host_loss_real=false;
+            host_lost_flag=false;host_loss_real=false;removed_flag=false;
         }
         std::cout<<"retail end chain PASS "<<original_mode<<"; local removed; broker Leave one transport tick after the quit notices, without Hub navigation\n";
     } else if(mode=="r6-nit-script") {

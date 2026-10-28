@@ -37,4 +37,9 @@ namespace gns_transport
 	bool party_snapshot(party_facts& out);
 	// The host removes a remote participant in session (docs/online-party-menu.md): the agreed-departure path, never a pre-game leave.
 	bool remove_member(unsigned native_index);
+	// Rule 64 (online_removal_core.hpp): a joiner whose room host's removal notice was accepted hands the session the retail
+	// removal notice 0x2b for its own index (reason 0x10ce, flag 1 - what the host's native Kick sends) through its bound link
+	// to the host, so the native removal and the 0.6 Kick end path run unchanged. False: no running guest session at that
+	// index or no bound live link to the host (the caller retries).
+	bool deliver_removal(unsigned own_index);
 }

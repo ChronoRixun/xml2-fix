@@ -1313,9 +1313,21 @@ The three call sites now land on a stub that keeps EBP; `native_session_cleared`
 `lc_notice_removed` ("The host removed you from the game.") at the next Hub tick instead of the host-left panel. The slow-player
 drop's `0x10ce` with flag 0 and every host loss keep their behaviour. The host's GNS close reason "removed by the host" is not
 used: on a room tunnel `declare_gone` only unbinds the transport (`gns_transport.cpp close`: `set_transport_bound(false)`), so
-the guest never receives it; the in-session Party Kick (round 8, `remove_member`) therefore still reaches the removed PC as a
-silent host (no distinguishing signal on that PC). Host modes `r6-end-kicked-guest` (the notice through the retail 0x2b
-handler, with the room layer's host-loss latch SET), `r6-end-slowdrop-guest` (flag 0: the panel, no removal notice).
+the guest never receives it. The in-session Party Kick (round 8, `remove_member`) now tells the removed PC with rule 64's
+removal notice (fix F, [online-party-menu.md](online-party-menu.md) section 4), which reaches this same path as the native
+0x2b of the PC's own index; a session end after an accepted notice that comes another way is classified by the room layer's
+latch (`broker_api::removed_by_host`). Host modes `r6-end-kicked-guest` (the notice through the retail 0x2b
+handler, with the room layer's host-loss latch SET), `r6-end-slowdrop-guest` (flag 0: the panel, no removal notice),
+`r6-end-partykick-guest` (fix F: rule 64's native body through the retail handler), `r6-end-partykick-seam-guest` (fix F: the
+notice accepted, the session ended by a host-connection loss: still the notice, never the panel), `r6-end-kicked-twice-guest`.
+
+Review E follow-ups (fix F). (1) The removed record is compared with this PC's own participant record cached while the
+session was live (`native_flow.local_record`, from `0x6111f0` / `0x614290` at admission, in the lobby tick and the Party
+frame): by the `0x612070` call `0x611f50` -> `0x611e90` / `0x611c10` has already run the record slot's destructor, so the
+record's own flag (+0x1c) is only a fallback. The fixture's record removal now destroys the record in the same order (clears
+its flags) before the classification runs, so a classification that reads the record fails the kick modes. (5) A new Host or
+Join attempt clears a removal notice that never reached a Hub. (6) `r6-end-kicked-twice-guest`: after the kick the native quit
+route runs the real `0x6123e0` again (wrapper entered twice); exactly one classification line, one deferred leave, the notice.
 
 **The skinned lobbies' pad buttons.** The custom screens' scheme (`pad_menu_mask` / `pad_prompt_code`, fix C) now covers the
 skinned Host / Join lobbies (`lc_lobby_v1`): while the lobby's player (the manager's controller `0x5d8570`) is shown the pad, the

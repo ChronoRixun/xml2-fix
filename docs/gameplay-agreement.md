@@ -68,6 +68,12 @@ IDs 1-4 date from 1.4.0 and 5-16 from 1.5.x (the 0.2.2 wave); 17 is ObjectWorldI
 
 The export startup contributes the refusal and transport sites to the startup transaction, lets installers register effective state, then freezes the record at the very end. Add future installers before that finalization point. Registration after finalization is rejected and closes the gate; it never changes an advertised frozen record. No controller or capacity module edits transport code.
 
+Rule 64 (OnlineRemovalNotice, 0.6 preview fix F, [online-party-menu.md](online-party-menu.md) section 4) registers with rule 25
+whenever `[Online] Transport=gns` (or rooms) installs: revision 1, `{1 on, 1 wire, 9 link kind, 0}`. It is the contract of the
+in-session Party Kick's notice to the removed PC (link kind 9 on room tunnels). A rule-25 PC of a build without it (060q and
+earlier) is refused at admission naming `64 OnlineRemovalNotice` on this build's PC (the older one says "a rule this PC does
+not have"), so a session never mixes a host that sends the notice with a member that would drop it.
+
 Rules 61 and 62 are the requested-only power-pool raises ([details](power-pools.md)):
 `AttachedPowerups` and `VFNodes`, revision 1, `{effective capacity,0,0,0}`. Each
 accepts only 256. Successful installation advertises `{256,0,0,0}`; a requested

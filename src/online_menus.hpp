@@ -61,10 +61,15 @@ struct broker_api {
     const char* (*refusal_rules)()=nullptr;
     bool (*host_lost)()=nullptr;
     std::uint32_t (*refusal_serial)()=nullptr; // with refusal_rules: names are shown only for a refusal that happened during this attempt
+    // Optional (0.6 preview fix F, rule 64): this joiner accepted its room host's in-session removal notice (the Party Kick). A
+    // session end after it is the removal (the Hub's "The host removed you from the game."), never a host loss.
+    bool (*removed_by_host)()=nullptr;
 };
 void keyboard(unsigned char* state);
 bool requested();
 bool installed();
+// Diagnostics: how often the native session-end wrapper ran (one kick may clear twice; review E finding 6).
+unsigned session_clear_count();
 // Pad buttons on the co-op screens (online_menus_rules.hpp pad_menu_mask): `probe(player)` says whether that player's
 // prompts show the pad (pad_prompts::pad_shown, wired by exports.cpp; null reads the raw menu mask). pad_prompt_scope() is
 // true while one of the custom screens (Hub, Host, Code, Browse, Party) or a skinned lobby (lc_lobby_v1; fix E) is the

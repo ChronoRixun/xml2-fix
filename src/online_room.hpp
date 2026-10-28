@@ -46,6 +46,9 @@ namespace online_room
 	bool host_lost();
 	// For the code that learns the host removed THIS PC on purpose (a kick): the connection ending after it is not a host loss.
 	void suppress_host_lost();
+	// Rule 64 OnlineRemovalNotice (online_removal_core.hpp): this joiner accepted its room host's notice that the host removed it
+	// in session (latched until the room is left; the Hub then shows "The host removed you from the game.").
+	bool removed_by_host();
 #if XML2_FIX_GNS
 	// The identity GNS starts with (str:legends:<hex16> of this install's key); false when rooms are off or the key
 	// could not be loaded (then the PC stays without rooms, logged).
@@ -67,5 +70,8 @@ namespace online_room
 	bool party(online_menus::lobby_fixture& out);
 	// The measured RTT (ms) to the host of the room with this code when this PC is in it as a joiner, else -1.
 	int room_rtt(const std::string& code);
+	// The host starts rule 64's removal notice to the member on this room connection (native index 1-3) and sends the first
+	// one now; false when this PC does not host a ready room, the connection is not a connected member, or one is pending.
+	bool removal_start(HSteamNetConnection connection, unsigned native_index);
 #endif
 }
