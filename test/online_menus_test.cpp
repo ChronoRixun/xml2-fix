@@ -459,6 +459,7 @@ std::vector<std::string> r6_log; // every r6-* log line (fix F: the session-end 
 #include "online_menus_broker.inl"
 #include "online_menus_errors.inl"
 #include "online_native_fixture.inl"
+#include "online_anchor_fixture.inl"
 #include "online_party_menu_fixture.inl"
 #include "online_menus_hits.inl"
 #include "online_menus_model.inl"
@@ -508,6 +509,7 @@ int main(int argc,char** argv) {
         const auto bytes=patch_transaction::bytes_of(g.hex);
         assert(std::memcmp(reinterpret_cast<void*>(g.va),bytes.data(),bytes.size())==0);
     }
+    if(mode=="r9-anchor-capacity") { native_fixture::anchor_capacity_run(nullptr);return 0; }
     std::vector<unsigned char> before(reinterpret_cast<unsigned char*>(0x401000),reinterpret_cast<unsigned char*>(0xb01000));
     if(mode=="rollback" || mode=="protect" || mode=="flush" || mode=="retain") {
         auto c=online_menus::contribution();const auto site=c.writes.front().va;
@@ -555,7 +557,9 @@ int main(int argc,char** argv) {
         assert(std::memcmp(before.data(),reinterpret_cast<void*>(0x401000),before.size())==0);
         std::cout<<"online menus "<<mode<<" PASS (no writes or registrations)\n";return 0;
     }
-    assert(online_menus::installed());const auto* entry=overflow.find(function_name);assert(entry && std::string_view(entry->args)=="i");
+    assert(online_menus::installed());
+    if(mode=="r10-anchor-512") { anchor_fixture::run();return 0; }
+    const auto* entry=overflow.find(function_name);assert(entry && std::string_view(entry->args)=="i");
     assert(script_function_overflow::script_overflow_find(function_name)==entry);
     const auto installed_image=std::vector<unsigned char>(reinterpret_cast<unsigned char*>(0x401000),reinterpret_cast<unsigned char*>(0xb01000));
     online_menus::install(reinterpret_cast<HMODULE>(0x400000));
