@@ -102,9 +102,15 @@ u32 __fastcall registration(void* ai,void*,u32 token){
     return field(p,team_generations+4*i);
 }
 void release_prepared(){if(retained)return;if(backing)VirtualFree(backing,0,MEM_RELEASE);if(caves)VirtualFree(caves,0,MEM_RELEASE);backing=caves=nullptr;cai=0;prepared=false;}
-// Stage 2 itself writes nothing on any refusal; features without a Stage 2
-// prerequisite still commit their own contributions.
+// Key-level refusals (configure/prepare: Stage 2 never contributes) write
+// nothing for Stage 2, and features without a Stage 2 prerequisite still commit
+// in the startup transaction.
 void fail(const std::string& why){failure=why;eligible=false;logger::write("Actors: %s; stage 2 writes nothing (other features keep their own transactions); ActorAI unverified",why.c_str());}
+// Refusals inside contribute() (an unprepared or unverified prerequisite
+// contribution, ledger preparation, cave protection, mandatory instrumentation)
+// add a veto to the shared startup transaction: nothing in it installs.
+void refuse_transaction(const std::string& why){failure=why;eligible=false;logger::write("Actors: %s; the whole startup transaction is refused (no feature in it installs this start); ActorAI unverified",why.c_str());}
+void veto(patch_transaction::transaction& tx,const char* owner,const std::string& why){refuse_transaction(why);patch_transaction::contribution c;c.owner=owner;c.requires_written.push_back({0xffffffff,failure});tx.add(std::move(c));}
 void snapshot(u32* out){out[0]=reservations.reserved;for(unsigned i=0;i<3;++i)out[i+1]=reservations.pending[i];out[4]=folds.load(std::memory_order_relaxed);out[5]=stale_retired.load(std::memory_order_relaxed);}
 }
 void configure(){
@@ -136,20 +142,20 @@ void contribute(patch_transaction::transaction& tx,HMODULE game){
         const auto it=std::find_if(pending.begin(),pending.end(),[&](const auto& c){return c.owner==name;});
         if(it==pending.end()||!patch_transaction::verify_expectations(*it,why)){why="prerequisite "+std::string(name)+(it==pending.end()?" not prepared":" not verified: "+why);prerequisites=false;break;}
     }return true;});
-    if(!p||!prerequisites){fail(why.empty()?"core ledger preparation failed":why);patch_transaction::contribution veto;veto.owner="Actors prerequisite refusal";veto.requires_written.push_back({0xffffffff,failure});tx.add(std::move(veto));return;}
+    if(!p||!prerequisites){veto(tx,"Actors prerequisite refusal",why.empty()?"core ledger preparation failed":why);return;}
     std::memcpy(caves,p->code.data(),p->code.size());DWORD old=0;
-    if(!VirtualProtect(caves,8192,PAGE_EXECUTE_READ,&old)||!FlushInstructionCache(GetCurrentProcess(),caves,p->code.size())){fail("core cave protection failed");patch_transaction::contribution veto;veto.owner="Actors protection refusal";veto.requires_written.push_back({0xffffffff,failure});tx.add(std::move(veto));return;}
+    if(!VirtualProtect(caves,8192,PAGE_EXECUTE_READ,&old)||!FlushInstructionCache(GetCurrentProcess(),caves,p->code.size())){veto(tx,"Actors protection refusal","core cave protection failed");return;}
     p->contribution.publish=[] {
         retained=true;e4_core_state::installed=true;reservations={};teams.reset();fold_pending=false;folds=0;stale_retired=0;
         actor_ai::published={2,cai,cai+4,0x61c,96,cai+team_offset,0x268,96,2,0x24db0,0x525302};
         save_format::enable_actor_capacity96();
         logger::write("Actors: 96 installed; actor/controller arena 96, team storage96 P2; rule 1 revision4; rule44 revision2 {96,131168,8126588,15}; actor save feature0x4");
     };
-    p->contribution.abandon=[] {fail("core startup transaction refused");release_prepared();};
-    p->contribution.retain=[] {retained=true;fail("uncertified core rollback");game_version::refuse_startup();};
+    p->contribution.abandon=[] {if(failure.empty())refuse_transaction("core startup transaction refused");release_prepared();};
+    p->contribution.retain=[] {retained=true;failure="uncertified core rollback";eligible=false;logger::write("Actors: uncertified core rollback; backing retained and startup refused; ActorAI unverified");game_version::refuse_startup();};
     tx.add(std::move(p->contribution));
     if(!e4_observe::contribute_core(tx,game,why)){
-        fail("mandatory instrumentation: "+why);patch_transaction::contribution veto;veto.owner="Actors instrumentation refusal";veto.requires_written.push_back({0xffffffff,failure});tx.add(std::move(veto));
+        veto(tx,"Actors instrumentation refusal","mandatory instrumentation: "+why);
     }
 }
 void after_commit(bool committed){

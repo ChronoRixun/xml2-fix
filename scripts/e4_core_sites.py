@@ -101,8 +101,10 @@ def generate(exe, database):
     specials.append(dict(va=0x523060,hi=0x523066,kind='backstop',head=b.hex(),hash=hashlib.sha256(b).hexdigest(),owner=0x523060))
     b=bytes.fromhex(rows[0x461669][2])
     specials.append(dict(va=0x461669,hi=0x46166e,kind='actor-pop',head=b.hex(),hash=hashlib.sha256(b).hexdigest(),owner=0x461630))
-    # Save classification follows these existing read-only factory queries.
-    # Pin their ABI oracle and actor-size getter without copying their bodies.
+    # Read-only factory queries (definition / class lookups and the actor-size
+    # getter). The save-time demand probe that called them was removed in
+    # 739cc0f (conservative 0x4 marking); they stay pinned as owner regions so
+    # the 46-owner hash ledger and its retail checks are unchanged.
     owners.update((0x4612e0,0x4611a0,0x4625c0,0x41d310))
     regions=[]
     for fn in sorted(owners):
