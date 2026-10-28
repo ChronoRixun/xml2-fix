@@ -515,6 +515,13 @@ int main(int argc,char** argv){
    const auto expected=mode.starts_with("missing")?"missing prerequisite [Limits] "+name+"="+values[i]:"wrong prerequisite [Limits] "+name+"=wrong (needs "+std::string(values[i])+")";
    check(status.find(expected)!=std::string::npos,"T25 refusal names the exact missing or wrong prerequisite");
   }
+  if(mode.starts_with("unverified")){
+   // An unprepared prerequisite contribution is a veto inside the shared
+   // startup transaction: nothing in it installs, and the log says so.
+   const auto i=std::stoul(mode.substr(10));
+   check(result!=patch_transaction::outcome::committed,"T25 an unprepared prerequisite refuses the whole startup transaction");
+   check(e4_core::status().find("prerequisite "+std::string(owners[i])+" not prepared")!=std::string::npos,"T25 the transaction refusal names the unprepared prerequisite");
+  }
   if(mode=="off"){gameplay_capabilities::record released;released.finalize();agreement.finalize();check(std::equal(agreement.bytes().begin(),agreement.bytes().end(),released.bytes().begin()),"OFF agreement unchanged");}
   else check(!agreement.finalize(),"T25 rule44 unverified");
  }else {

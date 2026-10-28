@@ -32,8 +32,26 @@ would without `Actors`. The log line names the prerequisite, for example
 (other features keep their own transactions); ActorAI unverified`, or
 `wrong prerequisite [Limits] <key>=<value> (needs <required>)`.
 
+That wording applies only to the key checks (and to the image-base, consumer
+registration and backing-allocation refusals in preparation), where Stage 2
+never contributes to the startup transaction. A refusal inside the
+transaction is different: when every key is right but a prerequisite's
+contribution is not in the transaction or does not verify (`prerequisite <owner>
+not prepared` / `not verified: ...`), or the core ledger, cave protection or
+mandatory instrumentation fails, Stage 2 adds a veto and the **whole startup
+transaction is refused**: no feature in it installs this start. The log says
+so: `Actors: prerequisite ActorPools not prepared; the whole startup
+transaction is refused (no feature in it installs this start); ActorAI
+unverified`. An uncertified rollback retains the backing and refuses startup
+(`Actors: uncertified core rollback; backing retained and startup refused`).
+
 Rule 1 revision 4: `{96,768,1024,10}`.
-Rule 44 revision 2: `{96,0x00020060,0x007c007c,15}`.
+Rule 44 revision 2: `{96,0x00020060,0x007c007c,15}`. Revision 2 means the
+fold-back policy of xml2-fix 739cc0f (stale memberships retired through the
+native leave, below; the class table revision 1). The never-released fe3f621
+also registered revision 2 but fail-stopped on a dead stale listing and
+cleared a living moved member's current +0x538; a peer on fe3f621 is not
+distinguished by the revision.
 
 Teams retain eight members and the native acceptance rule. Tier zero uses
 its own four-slot FIFO; tier one uses lowest free slot. The P2 team cap is
@@ -54,6 +72,30 @@ keeps that current membership and every byte. Only a member whose +0x538
 names the dissolving team has it cleared. Retired stale listings are counted
 in the E4 JSON as `stale_fold_retirements`. Reset class
 table revision 1 has T fields +0x2e8 / +0x350 and no D field.
+
+Fidelity against `T_ref` (the retail one-member team timeout, design 2.8).
+After fold-back each controller's bytes equal those `T_ref` produces from the
+same pre-state except for these differences, each a retail-reachable state:
+(a) teams of any size dissolve (`T_ref`: at most one member, after five
+seconds); (b) hero members get +0x538 = 0 (`T_ref`: a stale token every lookup
+refuses); (c) members leave through the stock leave, so the last leave frees
+the team through the normal free path; (d) **a living stale member keeps its
+current +0x538 where a retail timeout would zero it (0x5276b3)**: a member
+re-registered into another team (tier 0) by reactivation still appears in the
+dissolving extended team's list; fold-back leaves that listing but keeps the
+member's current team, while the retail timeout path stores 0 into +0x538 of
+the member it times out regardless of which team it currently names.
+
+T22 compares the complete controller bytes after fold-back with the actual
+retail timeout run on a stock-layout clone of the same pre-state (50,048
+bytes), allowing only the hero +0x538 difference (b). Its stale cases
+(`stalefold` / `stalelive`, reactivate-then-destroy while shrinking 34 to 32)
+pass the same comparison, with this caveat: the reference forces the retail
+timeout only for controllers whose current team is extended, so the living
+stale member (its current +0x538 names a tier-0 team) is not timed out in the
+reference. For that member T22 shows that it keeps its tier-0 +0x538 and every
+other byte - the documented exception (d) - not byte equality with a retail
+timeout of the dissolving team, which would zero it.
 
 Instrumentation is compulsory with the raise. The pre-core observation
 contract and diagnostic meanings remain in [e4-observe.md](e4-observe.md).
