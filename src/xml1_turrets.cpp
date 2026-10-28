@@ -1,3 +1,4 @@
+#include "actor_ai_layout.hpp"
 #include "xml1_turrets.hpp"
 #include "turret_rules.hpp"
 #include "mold_query.hpp"
@@ -24,6 +25,7 @@
 // authored placement, as the original's constructor does. Shots use the native projectile service
 // with the turret physent as the source.
 namespace xml1_turrets {
+void register_ai_layout(){actor_ai::register_consumer(actor_ai::consumer::turrets);}
 namespace {
 using u32=std::uint32_t;
 using turret_rules::vec;
@@ -497,6 +499,7 @@ xml1_capability_rules::registration capability(){
     return xml1_capability_rules::turrets(was_requested,installed,static_cast<std::uint32_t>(turrets.size()),fnv(lines));
 }
 void install(HMODULE game){
+    actor_ai::register_consumer(actor_ai::consumer::turrets);
     was_requested=ini::flag(L"Game",L"Xml1Turrets",false);installed=false;
     if(!was_requested)return;
     trace=ini::flag(L"Test",L"TurretTrace",false);
@@ -547,7 +550,7 @@ void install(HMODULE game){
         {0x69d1f8,"f0175900","sound system loop slot"},
         {0x69d220,"80075900","sound system stop slot"},
         {0x5917f0,"5356578bf98a87aed000","sound loop"}}};
-    for(const auto& g:guards)if(!limits_rules::matches(reinterpret_cast<const unsigned char*>(g.va),g.hex)){
+    for(const auto& g:guards)if(!limits_rules::matches(reinterpret_cast<const unsigned char*>(g.va),actor_ai::guard(g.va,g.hex,actor_ai::installed()))){
         logger::write("xml1 turrets: guard failed %08X (%s); turrets stay inert",g.va,g.what);turrets.clear();lines.clear();return;}
     if(at<u32>(reinterpret_cast<const void*>(process_slot),0)!=native_process||at<u32>(reinterpret_cast<const void*>(0x4b2fe8),0)!=scheduler_vtable){
         logger::write("xml1 turrets: scheduler dispatch slot differs; turrets stay inert");turrets.clear();lines.clear();return;}

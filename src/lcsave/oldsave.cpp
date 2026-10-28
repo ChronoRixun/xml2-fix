@@ -73,11 +73,16 @@ namespace lcsave::detail
 			}
 		};
 
-		OldInstance read_instance(Reader& r)
+		OldInstance read_instance(Reader& r, const NativeLayout& native)
 		{
 			static const char* const names[3] = {"prefixes", "own", "suffixes"};
 			OldInstance inst;
-			r.get(inst.head);
+			if (native.definition_index_bytes == 2) inst.head.definition = r.get<u16>();
+			else inst.head.definition = r.get<u8>();
+			r.get(inst.head.name_a);
+			r.get(inst.head.name_b);
+			r.get(inst.head.special);
+			r.get(inst.head.location);
 			for (int k = 0; k < 3; ++k)
 			{
 				const auto n = r.get<u32>();
@@ -100,9 +105,18 @@ namespace lcsave::detail
 			out.insert(out.end(), p, p + sizeof(T));
 		}
 
-		void write_instance(std::vector<std::uint8_t>& out, const OldInstance& inst)
+		void write_instance(std::vector<std::uint8_t>& out, const OldInstance& inst, const NativeLayout& native)
 		{
-			put(out, inst.head);
+			if (native.definition_index_bytes == 2) put(out, inst.head.definition);
+			else
+			{
+				if (inst.head.definition > 0xff) fail("item definition index " + std::to_string(inst.head.definition) + " does not fit the native layout " + native.id + " (byte)");
+				put(out, static_cast<u8>(inst.head.definition));
+			}
+			put(out, inst.head.name_a);
+			put(out, inst.head.name_b);
+			put(out, inst.head.special);
+			put(out, inst.head.location);
 			for (const auto& lst : inst.lists)
 			{
 				put(out, static_cast<u32>(lst.size()));
@@ -139,7 +153,7 @@ namespace lcsave::detail
 			put(out, a.tail);
 		}
 
-		OldEquipment read_equipment(Reader& r)
+		OldEquipment read_equipment(Reader& r, const NativeLayout& native)
 		{
 			const auto n = r.get<u8>();
 			if (n > ceil_equipped)
@@ -149,13 +163,13 @@ namespace lcsave::detail
 			OldEquipment eq;
 			for (u32 k = 0; k < n; ++k)
 			{
-				eq.equipped.push_back(read_instance(r));
+				eq.equipped.push_back(read_instance(r, native));
 			}
 			r.get(eq.tail);
 			return eq;
 		}
 
-		void write_equipment(std::vector<std::uint8_t>& out, const OldEquipment& eq)
+		void write_equipment(std::vector<std::uint8_t>& out, const OldEquipment& eq, const NativeLayout& native)
 		{
 			if (eq.equipped.size() > 255)
 			{
@@ -164,7 +178,7 @@ namespace lcsave::detail
 			put(out, static_cast<u8>(eq.equipped.size()));
 			for (const auto& i : eq.equipped)
 			{
-				write_instance(out, i);
+				write_instance(out, i, native);
 			}
 			put(out, eq.tail);
 		}
@@ -191,6 +205,126 @@ namespace lcsave::detail
 			{
 				check_cstr(n, "seat_name");
 			}
+		}
+
+		// the mission snapshot of the layout (old 1.9; W2 section 3.4)
+		void read_snapshot(Reader& r, OldSnapshot& s, const NativeLayout& native)
+		{
+			s = OldSnapshot{};
+			r.get(s.zone);
+			r.get(s.seat_pose);
+			r.get(s.pad_a0);
+			r.get(s.seat_name);
+			r.get(s.pad_124);
+			if (r.p + native.snapshot_objectives > r.size) fail("snapshot needs " + std::to_string(native.snapshot_objectives) + " objective bytes at " + fmt_hex(r.p));
+			std::memcpy(s.objectives, r.b + r.p, native.snapshot_objectives);
+			r.p += native.snapshot_objectives;
+			if (native.snapshot_objectives == old_snapshot_objectives)
+			{
+				r.get(s.objective_301);
+				r.get(s.pad_252);
+			}
+			else r.get(s.pad_525);
+			r.get(s.anchor_pos);
+			r.get(s.anchor_orient);
+		}
+
+		void write_snapshot(std::vector<std::uint8_t>& out, const OldSnapshot& s, const NativeLayout& native)
+		{
+			const std::size_t start = out.size();
+			put(out, s.zone);
+			put(out, s.seat_pose);
+			put(out, s.pad_a0);
+			put(out, s.seat_name);
+			put(out, s.pad_124);
+			for (u32 k = native.snapshot_objectives; k < max_snapshot_objectives; ++k)
+			{
+				if (s.objectives[k]) fail("objective index " + std::to_string(k) + " does not fit the native layout " + native.id + " (" + std::to_string(native.snapshot_objectives) + " objectives)");
+			}
+			out.insert(out.end(), s.objectives, s.objectives + native.snapshot_objectives);
+			if (native.snapshot_objectives == old_snapshot_objectives)
+			{
+				put(out, s.objective_301);
+				put(out, s.pad_252);
+			}
+			else put(out, s.pad_525);
+			put(out, s.anchor_pos);
+			put(out, s.anchor_orient);
+			if (out.size() - start != native.snapshot_size) fail("snapshot size");
+		}
+
+		// one entity state record of the layout (old 1.13; W2 section 3.5)
+		void read_state(Reader& r, OldStateRecord& s, const NativeLayout& native)
+		{
+			r.get(s.def_name);
+			r.get(s.inst_name);
+			r.get(s.payload);
+			r.get(s.flags_a);
+			r.get(s.flags_b);
+			if (native.float_positions)
+			{
+				r.get(s.world_slot);
+				r.get(s.position);
+			}
+			else
+			{
+				i16 p[3];
+				r.get(p);
+				for (int k = 0; k < 3; ++k) s.position[k] = static_cast<f32>(p[k]);
+				s.world_slot = world_slot_none;
+			}
+		}
+
+		void write_state(std::vector<std::uint8_t>& out, const OldStateRecord& s, const NativeLayout& native)
+		{
+			put(out, s.def_name);
+			put(out, s.inst_name);
+			put(out, s.payload);
+			put(out, s.flags_a);
+			put(out, s.flags_b);
+			if (native.float_positions)
+			{
+				put(out, s.world_slot);
+				put(out, s.position);
+			}
+			else
+			{
+				if (s.world_slot != world_slot_none) fail(std::string("state record world-item slot field does not exist in the native layout ") + native.id);
+				for (int k = 0; k < 3; ++k)
+				{
+					const f32 x = s.position[k];
+					if (!(x >= -32768.0f && x <= 32767.0f) || x != static_cast<f32>(static_cast<i16>(x)))
+					{
+						fail(std::string("state position does not fit the native layout ") + native.id + " (i16)");
+					}
+					put(out, static_cast<i16>(x));
+				}
+			}
+		}
+
+		void read_zone_strings(Reader& r, OldZoneStrings& t, const NativeLayout& native)
+		{
+			t = OldZoneStrings(native.zone_string_slots, native.zone_arena);
+			if (r.p + native.zone_strings_size > r.size) fail("zone string table needs " + std::to_string(native.zone_strings_size) + " bytes at " + fmt_hex(r.p));
+			r.get(t.generation);
+			std::memcpy(t.offsets.data(), r.b + r.p, 4u * native.zone_string_slots);
+			r.p += 4u * native.zone_string_slots;
+			r.get(t.used);
+			std::memcpy(t.arena.data(), r.b + r.p, native.zone_arena);
+			r.p += native.zone_arena;
+		}
+
+		void write_zone_strings(std::vector<std::uint8_t>& out, const OldZoneStrings& t, const NativeLayout& native)
+		{
+			if (t.offsets.size() != native.zone_string_slots || t.arena.size() != native.zone_arena)
+			{
+				fail(std::string("zone string table does not match the native layout ") + native.id);
+			}
+			put(out, t.generation);
+			const auto* o = reinterpret_cast<const std::uint8_t*>(t.offsets.data());
+			out.insert(out.end(), o, o + 4u * native.zone_string_slots);
+			put(out, t.used);
+			out.insert(out.end(), t.arena.begin(), t.arena.end());
 		}
 
 		void tag_bytes(std::vector<std::uint8_t>& out, const std::string& text)
@@ -285,22 +419,23 @@ namespace lcsave::detail
 			return {};
 		}
 		const u32 slot = handle & 0xffffff;
-		if (slot >= old_zone_string_slots)
+		const u32 arena = static_cast<u32>(table.arena.size());
+		if (slot >= table.offsets.size())
 		{
 			fail("zone string handle " + fmt_hex(handle) + ": slot beyond the table");
 		}
 		const u32 off = table.offsets[slot];
-		if (off == 0 || off >= old_zone_arena)
+		if (off == 0 || off >= arena)
 		{
 			fail("zone string handle " + fmt_hex(handle) + ": slot " + std::to_string(slot) + " is free or its offset " + fmt_hex(off) +
 				" is outside the arena");
 		}
-		const void* end = std::memchr(table.arena + off, 0, old_zone_arena - off);
+		const void* end = std::memchr(table.arena.data() + off, 0, arena - off);
 		if (!end)
 		{
 			fail("zone string at " + fmt_hex(off) + " is not terminated");
 		}
-		return std::string(reinterpret_cast<const char*>(table.arena + off), static_cast<const u8*>(end) - (table.arena + off));
+		return std::string(reinterpret_cast<const char*>(table.arena.data() + off), static_cast<const u8*>(end) - (table.arena.data() + off));
 	}
 
 	u32 script_var_value(const OldScriptVar& v)
@@ -337,7 +472,7 @@ namespace lcsave::detail
 			const std::size_t start = r.p;
 			OldZone z(native);
 			z.name_handle = r.get<u32>();
-			for (auto& s : z.states) r.get(s);
+			for (auto& s : z.states) read_state(r, s, native);
 			auto& t = z.tail;
 			r.get(t.pad_4804);
 			r.get(t.state_count);
@@ -367,7 +502,7 @@ namespace lcsave::detail
 			if (!z.matches(native)) fail(std::string("zone record does not match the native layout ") + native.id);
 			const std::size_t start = out.size();
 			put(out, z.name_handle);
-			for (const auto& s : z.states) put(out, s);
+			for (const auto& s : z.states) write_state(out, s, native);
 			const auto& t = z.tail;
 			put(out, t.pad_4804);
 			put(out, t.state_count);
@@ -448,8 +583,16 @@ namespace lcsave::detail
 		std::memcpy(m.description_raw, data, 0x80);
 		Reader r{data, size, old_envelope};
 		m.begin_tag = r.tag("[SAVEGAMEBEGIN");
-		// ---- items (old 1.4)
-		r.get(m.items);
+		// ---- items (old 1.4; W2 section 3.2)
+		if (native.def_count_bytes == 2) m.items.def_count = r.get<u16>();
+		else m.items.def_count = r.get<u8>();
+		if (r.p + 2 * native.definitions > size) fail("item head needs " + std::to_string(2 * native.definitions) + " bytes at " + fmt_hex(r.p));
+		std::memcpy(m.items.def_state, data + r.p, 2 * native.definitions);
+		r.p += 2 * native.definitions;
+		r.get(m.items.tech_bits);
+		r.get(m.items.health_items);
+		r.get(m.items.energy_items);
+		r.get(m.items.key_counts);
 		const auto n1 = r.get<u32>();
 		if (n1 > ceil_instances)
 		{
@@ -457,22 +600,22 @@ namespace lcsave::detail
 		}
 		for (u32 k = 0; k < n1; ++k)
 		{
-			m.carried.push_back(read_instance(r));
+			m.carried.push_back(read_instance(r, native));
 		}
 		const auto n2 = r.get<u32>();
-		if (n2 > ceil_world_slot)
+		if (n2 > native.world_slots)
 		{
-			fail("world item count " + std::to_string(n2) + " > " + std::to_string(ceil_world_slot));
+			fail("world item count " + std::to_string(n2) + " > " + std::to_string(native.world_slots));
 		}
 		for (u32 k = 0; k < n2; ++k)
 		{
 			OldWorld w;
 			w.slot = r.get<u32>();
-			if (w.slot >= ceil_world_slot)
+			if (w.slot >= native.world_slots)
 			{
-				fail("world item slot " + std::to_string(w.slot) + " >= " + std::to_string(ceil_world_slot));
+				fail("world item slot " + std::to_string(w.slot) + " >= " + std::to_string(native.world_slots));
 			}
-			w.instance = read_instance(r);
+			w.instance = read_instance(r, native);
 			m.world.push_back(std::move(w));
 		}
 		// ---- hero blocks (old 1.6): no count; until the next tag
@@ -484,7 +627,7 @@ namespace lcsave::detail
 			}
 			OldHero h;
 			h.attributes = read_attributes(r);
-			h.equipment = read_equipment(r);
+			h.equipment = read_equipment(r, native);
 			r.get(h.powers);
 			r.get(h.costume);
 			m.heroes.push_back(std::move(h));
@@ -506,7 +649,7 @@ namespace lcsave::detail
 		{
 			OldRestore rr;
 			rr.attributes = read_attributes(r);
-			rr.equipment = read_equipment(r);
+			rr.equipment = read_equipment(r, native);
 			m.restore.push_back(std::move(rr));
 		}
 		// ---- game block (old 1.8)
@@ -514,7 +657,7 @@ namespace lcsave::detail
 		// ---- side-mission stack (old 1.9)
 		for (auto& f : m.side_frames)
 		{
-			r.get(f);
+			read_snapshot(r, f, native);
 		}
 		r.get(m.side);
 		if (m.side.count > old_side_frames)
@@ -555,19 +698,19 @@ namespace lcsave::detail
 		r.get(m.review);
 		// ---- map (old 1.12-1.14)
 		r.tag("[MAP: ZONESTRINGS]");
-		r.get(*m.zone_strings);
+		read_zone_strings(r, *m.zone_strings, native);
 		r.tag("[MAP: ZONES]");
 		const auto nz = r.get<u32>();
-		if (nz > ceil_zone_records || nz > native.record_count)
+		if (nz > native.record_count)
 		{
-			fail("zone record count " + std::to_string(nz) + " > " + std::to_string(ceil_zone_records));
+			fail("zone record count " + std::to_string(nz) + " > " + std::to_string(native.record_count));
 		}
 		for (u32 k = 0; k < nz; ++k)
 		{
 			m.zones.push_back(read_zone_record(r, native));
 		}
 		r.tag("[MAP: MISSION STATE]");
-		r.get(m.mission);
+		read_snapshot(r, m.mission, native);
 		// ---- profile, script variables, town centres (old 1.15-1.17)
 		m.profile = read_profile(r);
 		for (auto& v : m.zone_vars)
@@ -603,27 +746,46 @@ namespace lcsave::detail
 		{
 			fail("zone record count " + std::to_string(m.zones.size()) + " > " + std::to_string(native.record_count));
 		}
+		if (m.world.size() > native.world_slots)
+		{
+			fail("world item count " + std::to_string(m.world.size()) + " > " + std::to_string(native.world_slots));
+		}
 		std::vector<std::uint8_t> out;
 		out.reserve(native.slot_size);
 		out.insert(out.end(), m.description_raw, m.description_raw + 0x80);
 		put(out, native.payload);
 		tag_bytes(out, m.begin_tag);
-		put(out, m.items);
+		// ---- the item head of the layout (W2 section 3.2): the count, the layout's pairs (a pair beyond them refuses)
+		if (native.def_count_bytes == 2) put(out, m.items.def_count);
+		else
+		{
+			if (m.items.def_count > 0xff) fail("definition count " + std::to_string(m.items.def_count) + " does not fit the native layout " + native.id + " (byte)");
+			put(out, static_cast<u8>(m.items.def_count));
+		}
+		for (u32 k = 2 * native.definitions; k < 2 * max_definitions; ++k)
+		{
+			if (m.items.def_state[k]) fail("definition state pair " + std::to_string(k / 2) + " does not fit the native layout " + native.id + " (" + std::to_string(native.definitions) + " definitions)");
+		}
+		out.insert(out.end(), m.items.def_state, m.items.def_state + 2 * native.definitions);
+		put(out, m.items.tech_bits);
+		put(out, m.items.health_items);
+		put(out, m.items.energy_items);
+		put(out, m.items.key_counts);
 		put(out, static_cast<u32>(m.carried.size()));
 		for (const auto& i : m.carried)
 		{
-			write_instance(out, i);
+			write_instance(out, i, native);
 		}
 		put(out, static_cast<u32>(m.world.size()));
 		for (const auto& w : m.world)
 		{
 			put(out, w.slot);
-			write_instance(out, w.instance);
+			write_instance(out, w.instance, native);
 		}
 		for (const auto& h : m.heroes)
 		{
 			write_attributes(out, h.attributes);
-			write_equipment(out, h.equipment);
+			write_equipment(out, h.equipment, native);
 			put(out, h.powers);
 			put(out, h.costume);
 		}
@@ -635,7 +797,7 @@ namespace lcsave::detail
 		for (const auto& rr : m.restore)
 		{
 			write_attributes(out, rr.attributes);
-			write_equipment(out, rr.equipment);
+			write_equipment(out, rr.equipment, native);
 		}
 		check_cstr(m.game.timer_script, "timer_script");
 		check_cstr(m.game.loading_name, "loading_name");
@@ -644,7 +806,7 @@ namespace lcsave::detail
 		for (const auto& f : m.side_frames)
 		{
 			check_snapshot(f);
-			put(out, f);
+			write_snapshot(out, f, native);
 		}
 		put(out, m.side);
 		tag_bytes(out, "[DANGERROOM: COURSES]");
@@ -658,7 +820,7 @@ namespace lcsave::detail
 		tag_bytes(out, "[DANGERROOM: END]");
 		put(out, m.review);
 		tag_bytes(out, "[MAP: ZONESTRINGS]");
-		put(out, *m.zone_strings);
+		write_zone_strings(out, *m.zone_strings, native);
 		tag_bytes(out, "[MAP: ZONES]");
 		put(out, static_cast<u32>(m.zones.size()));
 		for (const auto& z : m.zones)
@@ -667,7 +829,7 @@ namespace lcsave::detail
 		}
 		tag_bytes(out, "[MAP: MISSION STATE]");
 		check_snapshot(m.mission);
-		put(out, m.mission);
+		write_snapshot(out, m.mission, native);
 		check_cstr(m.profile.head.player_name, "player_name");
 		put(out, m.profile.head);
 		for (const auto& s : m.profile.high_scores)
@@ -740,5 +902,48 @@ namespace lcsave::detail
 			fail("profile size");
 		}
 		return out;
+	}
+
+	u32 talent_engine_id(u32 code, const NativeLayout& native)
+	{
+		const u32 owner = talent_code_owner(code), position = talent_code_position(code);
+		const u32 m = native.talent_multiplier;
+		if (owner == 0 ? position >= m - 1 : position >= m)
+		{
+			fail(std::string(owner == 0 ? "shared talent position " : "talent position ") + std::to_string(position) + " does not fit the native layout " +
+				native.id + " (talent multiplier " + std::to_string(m) + ")");
+		}
+		const u32 id = native.talent_id(owner, position);
+		if (id > 0xffff) fail("talent id " + std::to_string(id) + " does not fit the saved u16");
+		return id;
+	}
+
+	NativeLoadDemand model_demand(const OldSlot& m)
+	{
+		NativeLoadDemand out;
+		auto count = [&](const OldInstance& instance)
+		{
+			++out.instances;
+			for (const auto& list : instance.lists) out.attached_enhancements += static_cast<std::uint32_t>(list.size());
+		};
+		for (const auto& instance : m.carried) count(instance);
+		for (const auto& world : m.world) count(world.instance);
+		for (const auto& hero : m.heroes) for (const auto& instance : hero.equipment.equipped) count(instance);
+		// Every restore block is serialized and read even when its valid flag is clear. Include it conservatively.
+		for (const auto& restore : m.restore) for (const auto& instance : restore.equipment.equipped) count(instance);
+		out.world_items = static_cast<std::uint32_t>(m.world.size());
+		return out;
+	}
+
+	std::string demand_refusal(const NativeLoadDemand& d, const NativeLayout& native)
+	{
+		if (d.instances <= native.instances && d.attached_enhancements <= native.attached_enhancements && d.world_items <= native.world_slots) return {};
+		std::string text = "native instance/enhancement/world pool exhausted";
+		if (native.w2())
+		{
+			text += " (" + std::to_string(d.instances) + "/" + std::to_string(native.instances) + " instances, " + std::to_string(d.attached_enhancements) +
+				"/" + std::to_string(native.attached_enhancements) + " attached, " + std::to_string(d.world_items) + "/" + std::to_string(native.world_slots) + " world items)";
+		}
+		return text;
 	}
 }

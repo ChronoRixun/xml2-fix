@@ -1,4 +1,5 @@
 #pragma once
+#include "stats_layout.hpp"
 
 // [Game] XPCurve: X-Men Legends 1's hero levels and kill XP in XMen2.exe, for a mod that carries XML1's XP amounts
 // (the X-Men Legends 1 port: its objectives, scripts and npcstat are XML1's), kept apart from the patching so
@@ -422,7 +423,8 @@ namespace xp_curve_rules
 	{
 		for (const auto& g : guards)
 		{
-			if (!limits_rules::matches(image + (g.va - image_base), g.hex))
+			const auto expected=stats_layout::expected(g.va,g.hex);
+			if (!expected || !limits_rules::matches(image + (g.va - image_base), expected->c_str()))
 			{
 				return &g;
 			}

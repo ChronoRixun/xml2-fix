@@ -50,7 +50,7 @@ inline constexpr std::array<limits_rules::guard,17> guards{{
     {0x407750,"64a1000000008a0de08e6f006aff","effect manager getter"},
     {0x4079a0,"8b4424088b4c24045051e821ffffff","effect loader"},
     {0x4078d0,"a13c3c6f0085c075","effect resource pool getter"},
-    {0x405100,"8b442404568bf18b969c41000023d081fadc000000","generation-checked effect handle"},
+    {0x405100,"8b442404568bf1","generation-checked effect handle entry; layout checked through descriptor"},
     {0x40b2b0,"83ec6855568be957896c240c8d742450","native effect emission"},
     {0x40b4a4,"6a00e8e54c1500","effect count uses the cosmetic random stream"},
     {0x560190,"8a44240484c07405e9f3feffffe93eff","separate cosmetic/gameplay random dispatch"},

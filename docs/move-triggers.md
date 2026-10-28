@@ -15,10 +15,19 @@ The parser uses only nineteen. Simply raising the comparison would overwrite the
 The move manager pointer is `0x789e1c`. Its fixed pool has 332 records of stride `0x148` (allocation,
 free and teardown at `0x500df8`, `0x5003c8`, `0x4f62d2`; bitmap at pool `+0x1a960`).
 The raise leaves all records, count offsets, masks, pool metadata and event ownership native.
-Before patching, the DLL reserves a zero-filled side array for each slot: `332 * capacity * 4` bytes
-(84,992 at 64). The sole constructor call at `0x500afd` still executes the native constructor,
+Before patching, the DLL reads FightMoves' published descriptor (current pool base and slot count N)
+and reserves a zero-filled side array for each slot: `N * capacity * 4` bytes. N is 332 when
+FightMoves is absent (84,992 bytes at 64), or the installed FightMoves value (262,144 at 1024/64).
+FightMoves publishes before MoveTriggers prepares in the startup transaction. Aligned slot validation
+and the out-of-pool fail-fast use the same descriptor. The sole constructor call at `0x500afd` still executes the native constructor,
 then stores that slot's side-array pointer at `+0xcc`. Reuse clears that side array. No runtime
 allocation is needed. The arrays live until process teardown, like the DLL's other relocated pools.
+
+With FightMoves installed, it owns the getter-size and bitmap-displacement operands; MoveTriggers
+checks their unchanged instruction prefixes and retains its constructor/stride checks. Without
+FightMoves every original guard and emitted patch byte remains as in 69f5115. Rule 37 stays
+revision 1 with the same values; the capacity raise and exhaustion guards use separate
+[rule 54 FightMoves](fight-moves.md).
 
 All ten direct array accesses are redirected, guarded by their complete retail instructions:
 

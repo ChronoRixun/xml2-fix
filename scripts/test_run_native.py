@@ -29,7 +29,8 @@ class ListModeTests(unittest.TestCase):
             bins = root / 'native' / 'bin' / 'Release'
             bins.mkdir(parents=True)
             for name in ('xml2_npc_query_scheduler_test.exe', 'xml2_npc_semi_auto_test.exe', 'xml2_log_test.exe',
-                         'xml2_speaker_label_install_test.exe'):
+                         'xml2_speaker_label_install_test.exe', 'xml2_pool_counter_observers_test.exe',
+                         'xml2_pad_hotplug_test.exe', 'xml2_pad_hotplug_live_test.exe'):
                 (bins / name).write_bytes(b'MZ')
             (bins / 'xml2-fix.ini').write_bytes(b'[Game]\r\nKeep=1\r\n')
             vectors = Path(td) / 'vectors'
@@ -46,8 +47,13 @@ class ListModeTests(unittest.TestCase):
             lines = done.stdout.splitlines()
             self.assertTrue(any(l.endswith('xml2_npc_query_scheduler_test.exe X:/game/XMen2.exe X:/xbox/default.xbe') for l in lines))
             self.assertTrue(any(l.endswith('xml2_npc_semi_auto_test.exe X:/game/XMen2.exe X:/xbox/default.xbe') for l in lines))
+            self.assertTrue(any(l.endswith('xml2_pool_counter_observers_test.exe X:/game/XMen2.exe') for l in lines))
             self.assertTrue(any(l.endswith('xml2_speaker_label_install_test.exe X:/game/XMen2.exe guard6') for l in lines))
             self.assertTrue(any('lcsave_durable_parity.exe' in l and l.endswith('case1') for l in lines))
+            for fixture in ('xml2_pad_hotplug_test', 'xml2_pad_hotplug_live_test'):
+                for mode in ('', ' 1', ' 0'):
+                    expected = fixture + '.exe X:/game/XMen2.exe' + mode
+                    self.assertEqual(sum(l.endswith(expected) for l in lines), 1, expected)
             self.assertFalse(any('deleted a stale' in l for l in lines))
 
 

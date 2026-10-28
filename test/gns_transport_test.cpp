@@ -55,6 +55,19 @@ namespace
 
 int main(int argc, char** argv)
 {
+	{
+		// Retail 0x612449 emits a teardown notice for the local participant;
+		// 0x6133c9 emits the same wire opcode for several other removal causes.
+		const std::uint32_t teardown[]{0x61244e, 0, 0x10cc, 0x1106, 0xabcd0001};
+		const auto a = read_removal_notice(teardown);
+		check(a.caller == 0x61244e && a.index == 0 && a.lost == 0x10cc && a.others == 0x1106 && a.flag == 1,
+		      "B1 diagnostic records native teardown caller and both reason codes (flag is a byte)");
+		const std::uint32_t other[]{0x6133ce, 1, 0x10ce, 0x10cf, 0};
+		const auto b = read_removal_notice(other);
+		check(b.caller == 0x6133ce && b.index == 1 && b.lost == 0x10ce && b.others == 0x10cf && b.flag == 0,
+		      "same 0x2b opcode preserves a different removal source and reasons");
+	}
+
 	check(hello_due(true, false, 1000, 0), "hello: connector starts the handshake");
 	check(!hello_due(true, false, 1249, 1000), "hello: no busy retry before 250 ms");
 	check(hello_due(true, false, 1250, 1000), "hello: retry when the listener was not yet admitted at the first hello");

@@ -1,5 +1,10 @@
 # Shared effective gameplay agreement
 
+Rule **60 ParticleScratch**, revision 1, registers `{40,0,0,0}` only after
+`[Limits] ParticleScratch=40` installs all eleven scratch clamps. Absent/0/off adds
+no rule. Refused installs register unverified with zero effective capacity.
+See [particle scratch](particle-scratch.md) for the bounded behavior and counters.
+
 The release token (`[Online] GameVersion`, LC26 for builder 0.2.0, LC27 for 0.2.2) remains separate. LC builds and explicit ExplosiveFirstHit or DeathSwitchClear opt-ins require this protocol. Ordinary no-key XML2 without participating installers remains native. Compatibility uses actual installed values, never requested INI values alone.
 
 Protocol **4** adds the [native fresh-tail transfer contract](native-fresh-tail.md).
@@ -8,6 +13,12 @@ older before admission because those readers lose fresh appended residents.
 No new gameplay rule ID is assigned for this transport change.
 
 ## Registration API
+
+Rule **59 ScriptPools**, revision 1, participates only with an installed
+`[Limits] ScriptPools=x1` profile: `{4096,0,0,0}`. The profile also sets 8,192
+values, 512 compiled scripts and 128 running contexts. A failed request
+registers unverified `{0,0,0,0}` and closes admission; absent/stock adds no rule.
+See [script-pools.md](script-pools.md).
 
 Include `gameplay_agreement.hpp`. Call each registration once, after its installer has checked guards, written/read back its changes and established its effective state. Disabled hooks register their native/off value with `verified=true`; a requested but failed hook registers `verified=false`. Registration automatically enlists socket exclusion and native refusal handling, including for a non-LC capacity/controller mod with no ExplosiveFirstHit key. A failed registration poisons the record and closes online admission. Do not silently omit failed participating rules. Requested-only rules 17..22 omit their entry when absent, empty or explicitly native, preserving the released OFF digest.
 
@@ -47,12 +58,21 @@ IDs:
 | 13 | XML1 pack amount (`[Game] PackAmount=xml1`) | revision 1, `{installed ? 1 : 0,0,0,0}`; not requested (no key, or `xml2`): verified off; requested but not installed (guards, protection, readback, an unknown value): unverified ([details](pack-amount.md)) |
 | 14 | Script function limit (`[Limits] ScriptFunctions`) | revision 1, `{installed capacity,0,0,0}`: `{0,0,0,0}` with no key and no `[Game] ForcedTeams` (plain XML2 peers match), `{320,0,0,0}` for the game's own limit, `{N,0,0,0}` for an installed raise; a requested raise that didn't install is unverified and closes host/join ([details](script-functions.md#online-and-saves)) |
 | 15 | Death hand-over clears the successor's AI move intent (`[Game] DeathSwitchClear`) | revision 1, `{installed ? 1 : 0,0,0,0}`; absent/off is verified `{0,0,0,0}`; requested but not installed is unverified and closes host/join ([details](death-switch.md)) |
-| 16 | XML1 power use, melee combos, hit reactions, AI visibility and the opt-in weapon brain (`[Game] NpcPowerRule=xml1`, optional `[Game] NpcSemiAuto=xml1` + `[NpcSemiAuto]` rows) | revision 11 when requested, `{installed ? 1 : 0, installed ? 1 : 0, weapon brain installed ? 1 : 0, weapon source fingerprint}` (words 2-3 zero without `NpcSemiAuto`; with it, word 3 is the first four bytes of the weapon table's SHA-256 and the whole digest is rule 16's detail, see "Rule details"); revision 4 added combo press/completion timing, revision 10 (1.8.0-beta.6, released) spends the combo steps, power re-checks and attack decisions that come due while a hit reaction holds the NPC and carries the officer weapon brain, revision 11 (1.8.0-beta.7) also runs the brain through locked moves (no attack-state input-lock exit), blocks only counted melee misses as XML1 (power attacks never rolled, no `block_chance` roll) and carries the schema 3 weapon brain (every gun family); revision 10 is refused like 3 and 4; revisions 5-9 were unreleased candidates (5 withdrawn role experiment / first reaction build, 6-9 officer weapon candidates) and are refused like 3 and 4; word 1 advertises XML1's visibility geometry and query scheduling; registered in an LC installation or when requested; absent/`xml2` retains released revision 3 with verified `{0,0,0,0}`; requested but not installed (guards, protection, readback, an unknown value, `NpcSemiAuto` without the power rule or valid rows) is unverified and closes host/join ([details](npc-power-rule.md), [weapon brain](npc-semi-auto.md)) |
+| 16 | XML1 power use, melee combos, hit reactions, AI visibility and the opt-in weapon brain (`[Game] NpcPowerRule=xml1`, optional `[Game] NpcSemiAuto=xml1` + `[NpcSemiAuto]` rows) | revision 14 when requested, `{installed ? 1 : 0, installed ? 1 : 0, weapon brain installed ? 1 : 0, weapon source fingerprint}` (words 2-3 zero without `NpcSemiAuto`; with it, word 3 is the first four bytes of the weapon table's SHA-256 and the whole digest is rule 16's detail, see "Rule details"); revision 4 added combo press/completion timing, revision 10 (1.8.0-beta.6, released) spends the combo steps, power re-checks and attack decisions that come due while a hit reaction holds the NPC and carries the officer weapon brain, revision 11 (1.8.0-beta.7) also runs the brain through locked moves (no attack-state input-lock exit), blocks only counted melee misses as XML1 (power attacks never rolled, no `block_chance` roll) and carries the schema 3 weapon brain (every gun family); revision 14 (beta 8) adds the picker / power-decision lock tests for every caller, XML1's Advanced Sentinel and Juggernaut classes, no Danger Room reaction gate (items 19-22) and the schema 4 trace contract with the XML1 character bullet ray; revision 11 (1.8.0-beta.7) and the unreleased candidates 12 (items 19-22 alone) and 13 (the bullet ray alone) are refused along with revision 10; revisions 5-9 were unreleased candidates (5 withdrawn role experiment / first reaction build, 6-9 officer weapon candidates) and are refused like 3 and 4; word 1 advertises XML1's visibility geometry and query scheduling; registered in an LC installation or when requested; absent/`xml2` retains released revision 3 with verified `{0,0,0,0}`; requested but not installed (guards, protection, readback, an unknown value, `NpcSemiAuto` without the power rule or valid rows) is unverified and closes host/join ([details](npc-power-rule.md), [weapon brain](npc-semi-auto.md)) |
 | 18 | Original party-hero stun timing, reaction ownership and per-hit dispatch (`[Game] StunRule=xml1`) | revision 3, `{installed ? 1 : 0,0,0,0}`; registered only when requested; absent/`xml2` omits the entry to preserve the released OFF digest; requested but not installed is unverified ([details](stun-rule.md)) |
+| 40 | XML1 boss brains (`[Game] Xml1Bosses=<list>`, [details](xml1-controllers.md#shared-boss-dispatcher)) | revision 1, `{installed boss bits (1 dopples, 2 avalanche, 4 pyro, 8 mystique, 16 shadowking, 32 native marrow, 64 magneto, 128 blob), FNV-1a-32 of "name:revision;" over the installed bosses, option bits (1 = the dopples' bossfull flag is written, `[Game] Xml1BossFull`, default 1), 0}`; Avalanche revision 2, others revision 1; registered only when the list names a boss (absent: no entry, the released OFF digest); a listed boss that is unknown or did not install is unverified and closes host/join |
+| 55 | EffectFiles (`[Limits] EffectTemplates`, both file and definition tables) | revision 1, `{N,0,0,0}` after verified installation; absent/220 adds no entry; failed/invalid request is unverified ([effect-templates.md](effect-templates.md)) |
+| 58 | PrimitivesPerEffect (`[Limits] PrimitivesPerEffect`) | revision 1, `{capacity,0,0,0}` after verified spill installation; absent/10 adds no entry; failed/invalid request is unverified ([primitives-per-effect.md](primitives-per-effect.md)) |
 
-IDs 1-4 date from 1.4.0 and 5-16 from 1.5.x (the 0.2.2 wave); 17 is ObjectWorldImpact; 18 is StunRule (both register only when requested). IDs 19 (DangerRoomParty) and 20 (Xml1LockOnAim) register only when requested, revision 1, values `{installed ? 1 : 0,0,0,0}`. Failed requests are unverified. IDs 21 (BoxHarmOrigin) and 22 (DangerRoomHealthBars) also register only when requested, revision 1, with verified installed values. The HUD rule covers unproved dirty-stat refresh/clamp timing parity. ID 23 (HarmSingleChain) registers only when requested, revision 1, verified installed values. Rule 24 (FastTransfer, `[Online] FastTransfer=1`, revision 1, values `{1,32,300,64}`: installed, window, record size, zero-run minimum) registers only when requested with verified installed values; the builder default is on. A mismatch is refused naming FastTransfer in both directions. IDs 25 and 26 are assigned to the 0.3.0 online work and are not registered by 1.7. Rule 27 (OnlineConversations, `[Game] OnlineConversations=lockstep`, revision 1, values `{1, AutoAdvance installed, ReplyVoices installed, 0}`) registers only when requested (an invalid value registers unverified); online, a marked conversation line advances after |timeDelay| s of game time on every peer and a chosen reply's voice is cut, because a line change draws from the shared random generator; the builder default is on. Rule 28 (ModelPools, `[Engine] ModelPools=x4` or `x2`, revision 1, values `{installed ? 1 : 0, model handles, IGB models, actors}` as installed, e.g. `{1,4096,2048,128}` for `x4`) registers only when a raise is requested; absent/`off` adds no entry (the released record); a requested raise that did not install, or an unknown value, registers unverified and closes host/join. A full model pool refuses spawns, so the pools are lockstep state; XML2 Fix 1.8.0-beta.1 (no rule 28) and an `x4` beta.2 peer refuse each other naming `28 ModelPools` on the beta.2 PC (beta.1 says "a rule this PC does not have"). Legends Classic 0.3.0-beta.2 writes `x4` ([model-pools.md](model-pools.md#co-op)). `[Game] ComboPopupGuard` (on by default since 1.8.0-beta.2) is display only - it hides a team-combo popup that lacks a head, the combo's XP and count unchanged - and registers no rule. Rule 29 (TickRate, `[Online] TickRate=60` or `30`, revision 1, values `{rate in effect,0,0,0}`) registers whenever the key is present; absent = the game's own 30 and no entry (the released record). Lockstep runs every participant's frames together (one simulation step, one input record per player, a checksum every 30 frames), so a 60 and a 30 PC refuse each other naming `29 TickRate` on both PCs; a PC without the key says `29 TickRate (disabled on this PC)`, and an XML2 Fix 1.8.0-beta.2 PC "a rule this PC does not have". A 60 request whose patch did not install advertises 30 (it plays with 30 PCs). Legends Classic 0.3.0-beta.3 writes `60` ([online-tick-rate.md](online-tick-rate.md)). Rule 30 (WorldBackfaces, `[Game] WorldBackfaces=xml1` with its required `[WorldBackfaces]` zone list, revision 2, values `{installed ? 1 : 0, 1 (scoped), zones listed, 0}` and the list's SHA-256 as the rule's detail, see "Rule details") registers only when requested; absent, empty, `xml2` or `off` adds no entry (the released record); an unknown value, a missing or malformed list or a failed install registers unverified and closes host/join. With it actor and entity movement sweeps meet only the level hull's front faces in the listed zones, as X-Men Legends I does, so where actors stop is lockstep state: an `xml1` PC and a PC without the key, or with another zone list, refuse each other naming `30 WorldBackfaces`; revision 1 (the unscoped private candidate 0.7.0a) is refused by revision ([world-backfaces.md](world-backfaces.md)). **Older DLLs name only the rules they know:** the refusal carries rule-summary bucket bits, never names, so a 1.8.0-beta.6 PC refused by a beta 7 PC over rule 30 says "a rule this PC does not have" (its log: `30 a rule this PC does not have`) while the beta 7 PC names `30 WorldBackfaces`; nothing a newer DLL sends can teach an older one a name (acceptable: the refusal itself is right, and the log shows the ID). The one-byte summary can also collide and omit a name while the digest still refuses. IDs 31..65535 require coordination; 0 and duplicate IDs are refused. Entity layout revision describes token representation/sentinel/allocator semantics as well as capacities. Increment it whenever equal capacities/bit width can still encode or interpret tokens differently. A capacity raise must call the layout API with its successfully installed capacities and token width. Actor+generic must not exceed world (`<=`: the World keeps registrations beyond the two arenas; uint64 checked), and world must fit the token width. Entity-capacity layouts: revision 1 `{32,224,256,8}` (stock, also the verified capacity-off value), revision 3 `{32,768,1024,10}` (Phase A, contiguous tokens). Keep failed layouts unverified, even if the fallback is retail. The default is retail only when no entity-layout installer participates.
+IDs 1-4 date from 1.4.0 and 5-16 from 1.5.x (the 0.2.2 wave); 17 is ObjectWorldImpact; 18 is StunRule (both register only when requested). IDs 19 (DangerRoomParty) and 20 (Xml1LockOnAim) register only when requested, revision 1, values `{installed ? 1 : 0,0,0,0}`. Failed requests are unverified. IDs 21 (BoxHarmOrigin) and 22 (DangerRoomHealthBars) also register only when requested, revision 1, with verified installed values. The HUD rule covers unproved dirty-stat refresh/clamp timing parity. ID 23 (HarmSingleChain) registers only when requested, revision 1, verified installed values. Rule 24 (FastTransfer, `[Online] FastTransfer=1`, revision 1, values `{1,32,300,64}`: installed, window, record size, zero-run minimum) registers only when requested with verified installed values; the builder default is on. A mismatch is refused naming FastTransfer in both directions. IDs 25 and 26 are assigned to the 0.3.0 online work and are not registered by 1.7. Rule 27 (OnlineConversations, `[Game] OnlineConversations=lockstep`, revision 1, values `{1, AutoAdvance installed, ReplyVoices installed, 0}`) registers only when requested (an invalid value registers unverified); online, a marked conversation line advances after |timeDelay| s of game time on every peer and a chosen reply's voice is cut, because a line change draws from the shared random generator; the builder default is on. Rule 28 (ModelPools, `[Engine] ModelPools=x4` or `x2`, revision 1, values `{installed ? 1 : 0, model handles, IGB models, actors}` as installed, e.g. `{1,4096,2048,128}` for `x4`) registers only when a raise is requested; absent/`off` adds no entry (the released record); a requested raise that did not install, or an unknown value, registers unverified and closes host/join. A full model pool refuses spawns, so the pools are lockstep state; XML2 Fix 1.8.0-beta.1 (no rule 28) and an `x4` beta.2 peer refuse each other naming `28 ModelPools` on the beta.2 PC (beta.1 says "a rule this PC does not have"). Legends Classic 0.3.0-beta.2 writes `x4` ([model-pools.md](model-pools.md#co-op)). `[Game] ComboPopupGuard` (on by default since 1.8.0-beta.2) is display only - it hides a team-combo popup that lacks a head, the combo's XP and count unchanged - and registers no rule. Rule 29 (TickRate, `[Online] TickRate=60` or `30`, revision 1, values `{rate in effect,0,0,0}`) registers whenever the key is present; absent = the game's own 30 and no entry (the released record). Lockstep runs every participant's frames together (one simulation step, one input record per player, a checksum every 30 frames), so a 60 and a 30 PC refuse each other naming `29 TickRate` on both PCs; a PC without the key says `29 TickRate (disabled on this PC)`, and an XML2 Fix 1.8.0-beta.2 PC "a rule this PC does not have". A 60 request whose patch did not install advertises 30 (it plays with 30 PCs). Legends Classic 0.3.0-beta.3 writes `60` ([online-tick-rate.md](online-tick-rate.md)). Rule 30 (WorldBackfaces, `[Game] WorldBackfaces=xml1` with its required `[WorldBackfaces]` zone list, revision 2, values `{installed ? 1 : 0, 1 (scoped), zones listed, 0}` and the list's SHA-256 as the rule's detail, see "Rule details") registers only when requested; absent, empty, `xml2` or `off` adds no entry (the released record); an unknown value, a missing or malformed list or a failed install registers unverified and closes host/join. With it actor and entity movement sweeps meet only the level hull's front faces in the listed zones, as X-Men Legends I does, so where actors stop is lockstep state: an `xml1` PC and a PC without the key, or with another zone list, refuse each other naming `30 WorldBackfaces`; revision 1 (the unscoped private candidate 0.7.0a) is refused by revision ([world-backfaces.md](world-backfaces.md)). **Older DLLs name only the rules they know:** the refusal carries rule-summary bucket bits, never names, so a 1.8.0-beta.6 PC refused by a beta 7 PC over rule 30 says "a rule this PC does not have" (its log: `30 a rule this PC does not have`) while the beta 7 PC names `30 WorldBackfaces`; nothing a newer DLL sends can teach an older one a name (acceptable: the refusal itself is right, and the log shows the ID). The one-byte summary can also collide and omit a name while the digest still refuses. Rule 31 (IGBCache, `[Limits] IGBCache` 201..2048, revision 1, values `{installed ? 1 : 0, IGB records, resource names, 0}` as installed, e.g. `{1,1024,2048,0}`) registers only when a raise is requested; absent, `200` or an invalid value adds no entry (the released record); a requested raise that did not install registers unverified and closes host/join. A full cache refuses a zone's map IGB (the game reloads the previous zone) and every model past it, so the cache is lockstep state: a raised PC and a PC without the key refuse each other naming `31 IGBCache` ([igb-cache.md](igb-cache.md#online)). IDs 32..37 cover the independent resource limits described below; Rule 41 (ReceiveRounding/DamageCap, `[Balance] ReceiveRounding=xml1` / `DamageCap=xml1`, revision 1, values `{receive stages installed ? 1 : 0, cap installed ? 32000 : 0, 0, 0}`) registers only when either key is requested; absent/`xml2` adds no entry (the released record); an unknown value or a failed install registers unverified and closes host/join. Every peer computes every hit, so XML1's integer receive stages and 32,000 cap are lockstep state ([balance.md](balance.md#the-receive-side-and-the-cap-receiverounding-damagecap-gameplay-rule-41)). Rule 42 (shared handlers: `[Game] SkatingRule`, `TeleportLandingRule`, `PopupRule`, `PopupLandRule`, `ChargeRule`, `NightcrawlerRule`, `GambitRule` = `xml1`) is the requested XML1 shared-handler selection, revision 1, values `{installed_mask,0,0,0}` ([keys and tests](shared-handler-rules.md)); absence/native omits it and invalid/failed requests are unverified. Rule 38 (LiftRule, `[Game] LiftRule=xml1`, revision 2, values `{installed ? 1 : 0,0,0,0}`, candidate) registers only when requested; absent, empty, `xml2` or `off` adds no entry; an unknown value or a failed install registers unverified and closes host/join. With it, objects that carry `xml1heaviness` are lifted by X-Men Legends I's rule (Might rank 3 lifts the first game's heaviness 4), and revision 2 restores thrown impact, carried throw damage and telekinesis limits. Revision 2 refuses revision 1 in both directions, naming LiftRule; these decisions are lockstep state ([lift-rule.md](lift-rule.md)). Rule 39 (Xml1WallCling, `[Game] Xml1WallCling=xml1`, revision 1, values `{installed ? 1 : 0,0,0,0}`, candidate, not in a release yet) registers only when requested; absent, empty, `xml2` or `off` adds no entry (the released record); an unknown value or a failed install registers unverified and closes host/join. It gives the acrobat moveset's two wall-cling moves their X-Men Legends I handlers, so where a hero goes after a jump is lockstep state ([xml1-cling.md](xml1-cling.md)). ID 44 is ActorAI (`[Limits] ActorPools=124`, [actor-pools.md](actor-pools.md)), 45 Xml1GrabCarry and 46 SharedHandlersC (below); all three register only when requested. Other IDs require coordination; 0 and duplicate IDs are refused. Entity layout revision describes token representation/sentinel/allocator semantics as well as capacities. Increment it whenever equal capacities/bit width can still encode or interpret tokens differently. A capacity raise must call the layout API with its successfully installed capacities and token width. Actor+generic must not exceed world (`<=`: the World keeps registrations beyond the two arenas; uint64 checked), and world must fit the token width. Entity-capacity layouts: revision 1 `{32,224,256,8}` (stock, also the verified capacity-off value), revision 3 `{32,768,1024,10}` (Phase A, contiguous tokens). Keep failed layouts unverified, even if the fallback is retail. The default is retail only when no entity-layout installer participates.
 
 The export startup contributes the refusal and transport sites to the startup transaction, lets installers register effective state, then freezes the record at the very end. Add future installers before that finalization point. Registration after finalization is rejected and closes the gate; it never changes an advertised frozen record. No controller or capacity module edits transport code.
+
+Rules 61 and 62 are the requested-only power-pool raises ([details](power-pools.md)):
+`AttachedPowerups` and `VFNodes`, revision 1, `{effective capacity,0,0,0}`. Each
+accepts only 256. Successful installation advertises `{256,0,0,0}`; a requested
+invalid or failed installation registers unverified and closes admission. An absent
+key adds no rule and writes no pool bytes.
 
 ## Record and transport
 
@@ -116,7 +136,7 @@ settings: DeathRule. ...").
 
 | Opcode | Receiver | Native registration / setup | Refusal |
 |---|---|---|---|
-| 0x18 | Querying PC (Connect by IP, games list) | 0x6096a3 in 0x609660; the host answers this PC's direct or LAN query with it; 0x6090d0 files it in the games table (0x608c20/0x608d60, status 6) | Not filed; native dialog on this PC; reasoned 0x1d to the host; no join cleanup (none is pending) |
+| 0x18 | Querying PC (Connect by IP, room-code join, games list) | 0x6096a3 in 0x609660; the host answers this PC's direct or LAN query with it; 0x6090d0 files it in the games table (0x608c20/0x608d60, status 6) | Not filed; the games list's row says why and its own update raises the native dialog (games-list notice below; without it, the dialog at once as before); reasoned 0x1d to the host; no join cleanup (none is pending) |
 | 0x1a | Host | 0x609cc3 in host setup 0x609f50 -> 0x609c80; joiner responds to 0x16 via 0x607770 | Reasoned 0x1d, disconnect refused peer, non-modal host notice; preserve session |
 | 0x1b | Joiner | 0x609dec in joiner setup 0x60a0a0 -> 0x609d80; host responds from 0x609970 | Reasoned 0x1d, native failure/cleanup and dialog |
 | 0x1f | Joiner/receiving participant | 0x609ee2 in 0x609d80; host sender 0x608350 | Reasoned 0x1d, native failure/cleanup and dialog |
@@ -132,6 +152,35 @@ Host admission refusal never invokes shared-session cleanup, even if a timer exi
 Patch acquisition records each distinct code page once; readback/cache verification and restoration preserve its original protection. Startup/socket exclusion remains closed until the entire record, transport and participating installer states verify.
 
 Refusal immediately sends native incompatibility opcode 0x1d through the direct transport, with a reason body (`GREF`, reason, three zero bytes; reason relative to the sender: 1 gameplay settings, 2 the sender's own installation is unverified, 3 the peer's record is missing or foreign). Protocol 3 appends eight bytes: the differing rule-summary buckets (bit b = bucket b) of a settings refusal, zero otherwise; older readers check only the first eight bytes, and the receiving PC names those rules from its own list. Native 0x609ad0 ignores the body; a bodiless or foreign 0x1d reads as unspecified. Joining endpoints execute native failure handler 0x609ad0 and cleanup 0x6097f0, then the native dialog/menu path; a querying PC (0x18) shows the native dialog only. The early join entry rejects unverified local installation through the same native failure path, before setting up another attempt. A closed socket also presents the actionable native installation message. No generic timeout is used as the refusal mechanism. Native UI uses original authored text in this DLL; no localized game strings are shipped.
+
+## Games-list refusal notice (the querying PC)
+
+A PC that refuses a host's 0x18 files nothing, so its games list shows the native empty row. The 082f live round
+(A2/A3: Actors=96 on one PC only) found the joiner's native dialog, raised from inside that network receive, set in
+the popup manager (test state `popup` 1) but never drawn: the list showed only "No Games Found" while the host's
+lobby named the difference. The popup attaches its panels to the menu current at that moment (0x5ea1b0 -> 0x5e91c0,
+menu manager vt+0x108); the 0x18 answer to a Connect by IP / room-code query arrives within a second of Enter.
+
+The optional `gameplay_agreement.games_list_notice` contribution (5 `browser_guards`: the CMenuGamesList vtable's
+locator and update slot, the update's timed refresh, the two empty-row lookups) makes the querying PC say it on the
+list itself, from what the refused 0x18 already carried (the rule-summary difference; no new message or field):
+
+- **The row.** CMenuGamesList (vtable 0x69f8b4) vt+0x30 = 0x5b9f00 refreshes the list on a timer (0x5b9900); an
+  empty table writes string 0xfc5 for its first five refreshes, then string 0xfe4 "No Games Found" (0x5b9a1f, and
+  0x5b9b9b once every listed game went away), sprintf'd into a 256-byte stack row. Both 5-byte
+  `mov ecx,eax; call [edx+8]` lookups CALL a thunk that returns the refusal row while one is current (120 s, or until
+  a compatible host answers or admits this PC), else the native string: "Host's gameplay settings differ: DeathRule"
+  ("Settings differ: entity layout, ActorAI (disabled on this PC)" when only the shorter lead fits one 64-character
+  row, else "Host's gameplay settings differ - match xml2-fix.ini, restart"), "Host found, but it runs another build or its fix did not load", "Host found, but the fix did not load
+  correctly on this PC".
+- **The dialog.** The update slot is wrapped: after the native update, a pending refusal's dialog is raised on the
+  list's own update, once, only while that list is the current menu, so its panels attach to the list. A settings
+  refusal says "The host uses different gameplay settings: <names>. Both players need the same build and the same
+  gameplay settings in xml2-fix.ini; match them, restart the game and join again." (the joining PC's 0x1b / 0x1f /
+  0x1d refusals use the same words).
+
+Without the part (a guard mismatch: one log line), the dialog is raised at once as before. The fixture runs the real
+0x18 receiver and the retail refresh 0x5b9900 (stand-ins for the list widget, string table and sprintf only).
 
 ## Host refusal notice
 
@@ -156,7 +205,7 @@ with the reasoning and the residual risk); the agreement is enforced at admissio
 
 ### 1.6 integration
 
-Rule 17 is ObjectWorldImpact, revision 1, effective `{installed ? 1 : 0, 0, 0, 0}`; rule 18 is StunRule, revision 3. Both register only when requested. Rule 16 uses revision 11 when requested and released revision 3 when OFF. A failed request remains unverified. `[TestMode]` registers no gameplay rule and refuses online independently. The 108-byte record remains unchanged; protocol 4 adds the native fresh-tail contract above.
+Rule 17 is ObjectWorldImpact, revision 1, effective `{installed ? 1 : 0, 0, 0, 0}`; rule 18 is StunRule, revision 3. Both register only when requested. Rule 16 uses revision 14 when requested and released revision 3 when OFF. A failed request remains unverified. `[TestMode]` registers no gameplay rule and refuses online independently. The 108-byte record remains unchanged; protocol 4 adds the native fresh-tail contract above.
 
 
 ### Danger Room party and Sentinel aiming
@@ -183,3 +232,97 @@ refusal messages. Protocol 4, 108-byte framing and durable saves are unchanged.
 Absent, empty, off or xml2 omits a rule. Invalid or failed requested installs remain unverified. Both peers must match. HUD dirty-stat refresh/clamp timing parity remains unproved. Versions and content identity remain unchanged from 0.2.3c.
 
 `[Online] GameVersion` (the LC release token, `LC29`) is lobby metadata, not gameplay state: since candidate 0.2.3g it is also written into the game-info answer's first version field (0x61571c), which changes no gameplay-agreement rule, protocol or record byte.
+
+
+Resource-loading limits also participate independently of ModelPools and IGBCache. Requested/effective
+non-stock `[Limits] ResourceNames`, `ActorSlots`, `ItemEnhancements`, `FightStyles`, `EffectCurves`, and
+`MoveTriggers` use named rules 32 through 37 respectively (`{effective capacity,0,0,0}`; revision 1 except FightStyles above 32, which uses revision 2).
+A requested capacity that failed to install invalidates admission. Stock/absent limits contribute no
+rule, preserving the released bytes. In particular ResourceNames=450 versus 2048 refuses by name even
+when IGBCache is absent or 200 on both PCs. Rules 31 and 28 retain their existing encodings.
+
+| Resource key | Rule | Values on verified installation | Accepted raise |
+| --- | --- | --- | --- |
+| `[Limits] PrimitiveDefs` | 56, revision 1 | `{N,0,0,0}` | 817..8192 (stock 816) |
+| `[Limits] EffectVectors` | 57, revision 1 | `{N,0,0,0}` | 711..16384 (stock 710) |
+
+These independent effect pools register only for a requested raise. Absent or
+stock keys preserve the released digest. A failed requested installation is
+unverified and closes admission; differing capacities refuse both ways naming
+`PrimitiveDefs` or `EffectVectors`. See [primitive definitions](primitive-defs.md)
+and [effect vectors](effect-vectors.md).
+
+`[Limits] FightMoves` uses rule **54 FightMoves**, revision **1**, `{N,0,0,0}`.
+Absent/332 contributes no rule. Supported raises are 333..2048; failed or invalid
+requests mark the rule unverified. Its pool and per-style exhaustion guards affect
+which moves exist, so differing capacities or an absent rule refuse in both
+directions. MoveTriggers consumes its descriptor but retains rule 37 revision 1
+and its existing values. See [fight moves](fight-moves.md).
+
+Rule 45 (`Xml1GrabCarry`, `[Game] Xml1GrabCarry=xml1`, candidate) is requested-only, revision 2, values
+`{installed ? 1 : 0,7,0,0}`. Feature mask 7 includes ground grab (1), the pickup/recovery lifecycle (2), and
+flying-charge collision (4). Carry/upkeep and flight admission remain deferred. The earlier ground-only
+candidate (revision 1, mask 1) refuses this contract in both directions. OFF adds no entry; invalid settings and refused installs
+are unverified. Both peers name rule 45 when the request differs. See [xml1-grab-carry.md](xml1-grab-carry.md).
+
+Rule 43 (`Xml1RogueDecide`, `[Game] Xml1RogueDecide=xml1`, candidate) is requested-only, revision 1, values
+`{installed ? 1 : 0,0,0,0}`. OFF adds no entry and preserves the released record; invalid or failed requests
+are unverified and close host/join. Both enabled and disabled peers name the key in refusals. It restores
+Rogue's victim/no-target power decision and source tag-1 energy dispatch; the companion builder must emit
+the decide and drain nodes together ([xml1-rogue-decide.md](xml1-rogue-decide.md)).
+
+Rule 44 (`ActorAI`, `[Limits] ActorPools=124`, E4 stage 1) is requested-only, revision 1, values
+`{32,4,124 | 124<<16,1}` (actors/controllers 32, teams 4, path/shadow and delayed-damage pools 124, stage 1).
+Absent adds no entry and writes nothing; any other value, or a refused install, is unverified and closes
+host/join. Outside the game image (not at 0x400000) the key is ignored and adds no entry, as the `[Limits]`
+capacities. See [actor-pools.md](actor-pools.md).
+
+Rule 46 (SharedHandlersC), revision 1, is the independently selected wave-C mask `{installed_mask,0,0,0}`. It registers only when requested; missing/native keys preserve the OFF record, and invalid or failed requests are unverified. See [handler C keys and verification](shared-handler-c-rules.md). ID 46 is coordinator-assigned and does not replace rule 42 or rule 18.
+
+
+Rule 45 carry extension: revision 3, values `{installed ? 1 : 0, 15, 0, 0}`,
+requested only. Bit 8 adds flying carry, XML1 flight admission and upkeep to
+revision 2's mask 7. Installation requires published AnimEnums and XML1 LiftRule;
+a refusal is unverified and closes host/join. OFF still has no rule45 entry.
+Revision 2 and revision 3 refuse each other. See `xml1-grab-carry.md` for the
+required companion content switch (`XML1_FLIGHT_UPKEEP=True`).
+
+Rule46 additionally assigns bit512 to `TelekinesisRule` and bit1024 to `GuardDecideRule`, each requested-only and dependent on installed rule45. Existing mask bits and revision1 are unchanged; new selections refuse older/native selections through their installed-mask values. See [TK/guard](tk-guard.md).
+
+Rule 49 (`CharSounds`, `[Limits] CharSounds=127`) is revision 1, values `{127,0,0,0}` after its atomic install.
+Absent or 16 adds no entry and writes nothing; other values and failed installs close host/join with an
+unverified request. A mismatched peer is refused by name in both directions. See [char-sounds.md](char-sounds.md).
+
+Rule 51 (`MotionPool`, `[Limits] MotionPool=22528`) is revision 1, `{22528,0,0,0}` after verified installation.
+Absent/500 contributes no entry; invalid or refused requests close admission. It includes bounded owner clip
+append/read behavior and retains native handle masking. See [motion-pool.md](motion-pool.md).
+
+Rule 50 (`ResidentStats`, `[Limits] ResidentStats=320`) revision 1 advertises `{320,22,320,1}` after verified installation. Outer and NPC residency rise together; hero payloads stay22. Absent/31 leaves the agreement unchanged; a failed requested install closes online admission.
+
+### Shared style manager (rules 35 and 53)
+
+`[Limits] FightStyles` (20..127; stock 19) contributes rule 35 with values `{N,0,0,0}`: revision 1 through 32, revision 2 above 32 for multiword bitmap clears. `[Limits] StyleEvents` (1065..8192; stock 1064) contributes assigned rule 53, revision 1, values `{E,0,0,0}`. Each successful key is requested-only. Both absent/stock add neither rule. Because both capacities occupy one allocation, an invalid key or failed transaction leaves both unchanged and registers both rules unverified, including the otherwise absent partner. Mismatches refuse both directions and name FightStyles or StyleEvents, also when locally disabled. See [fight-styles.md](fight-styles.md) and [style-events.md](style-events.md).
+
+Rule52 Xml1Economy is requested only by `[Game] Xml1Economy=1`, revision1.
+Its four values are `{parts, sidecar format revision, digest prefix, entry count}`.
+Construction and drops install parts **33** for zero-draw plan A (**1** for the
+accepted native one-roll fallback), format **1**, the first four body SHA-256
+bytes packed little endian, and the resolved sidecar count. Mask1 covers the
+roller, category, treasure, DR/regeneration dispositions and census; mask32
+selects plan A. Masks2/4/8/16 remain clear for the later economy steps.
+It requires verified rule47. The shared record remains unfrozen and online closed
+until the item table loads and every sidecar name resolves in PC definition-index
+order. Any refusal registers the requested rule unverified and closes host/join;
+an absent/false key adds no entry and preserves the released OFF digest. A peer
+differing in any value is refused naming **52 Xml1Economy**. See
+[XML1 economy](xml1-economy.md) for sites, sidecar contract and tests.
+
+Rule47 NativeSaveLayout is assigned to W2, revision1. It registers only for
+verified `[Save] Format=lc`, `[Limits] EntityCapacity=1`, `SaveLayout=w2`; failed
+requests poison admission. Effective values are
+`{ordinal | zone_records<<8 | structural_revision<<16,
+definitions | enhancement_records<<16, instances | world_slots<<16,
+objectives | talent_multiplier<<16}`. W2 currently uses
+`{0x10802,0x10000400,0x4000400,0xc80400}`. The absent SaveLayout key adds no
+entry and preserves the released digest. Rule1 alone cannot distinguish these
+native streams. See [limits-wave2.md](limits-wave2.md#step-8-dll-selection-admission-and-builder-contract).

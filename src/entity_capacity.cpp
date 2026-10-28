@@ -1,4 +1,5 @@
 #include "entity_capacity.hpp"
+#include "e4_core_state.hpp"
 #include "entity_capacity_layout.hpp"
 #include "entity_capacity_rules.hpp"
 #include "entity_capacity_sites.hpp"
@@ -12,11 +13,19 @@
 #include "log.hpp"
 #include "patch_transaction.hpp"
 #include "save_format.hpp"
+#include "save_manager.hpp"
+#include "item_capacity.hpp"
+#include "save_limits.hpp"
+#include "objective_text.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <map>
+#ifdef XML2_SAVE_STARTUP_FAULT_TEST
+#include "../test/w2_startup_faults.hpp"
+#define VirtualAlloc w2_startup_faults::allocate
+#endif
 
 namespace entity_capacity
 {
@@ -27,29 +36,47 @@ namespace entity_capacity
 	{
 		descriptor published = stock_descriptor;
 		descriptor prepared_descriptor = stock_descriptor;
+		save_format_rules::native_profile prepared_profile = save_format_rules::e10a2_profile;
 		bool requested = false, prepared = false, install_published = false, fatal = false;
+		bool preparing96=false;
 		// [Online] FastTransfer: requested-only; both peers must agree (gameplay agreement, docs/online-campaign-transfer.md).
 		bool fast_requested = false, fast_installed = false;
 		std::string failure;
 		fallback_cause failure_cause = fallback_cause::internal; // picks the advice in the fallback warning
 		entity_owners::set owners;
 		std::uint8_t* allocator_backing = nullptr;  // 0x189218 bytes, zero-filled before every construction
-		std::uint8_t* save_backing = nullptr;       // 0x80c24 bytes, the prepared CMap save-manager claim
+		std::uint8_t* save_backing = nullptr;       // prepared_profile.manager_size bytes, CMap save-manager claim
 		claim_state claim = claim_state::unprepared;
 		std::atomic<unsigned> claim_rejections{0}, factory_failures{0}, transfer_refusals{0};
 
 		std::uint32_t address_of(const void* p) { return static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(p)); }
 		bool read_dword(std::uint32_t va, std::uint32_t& out) { return patch_transaction::read_memory(va, &out, 4); }
 
-		[[noreturn]] void fail_stop(const char* what)
+        [[noreturn]] void fatal_exit()
+        {
+            RaiseFailFastException(nullptr,nullptr,0);
+            TerminateProcess(GetCurrentProcess(),3);
+            for(;;){}
+        }
+        void lifecycle_log(const char* what) noexcept
+        {
+            try { logger::write("E4: FATAL: %s; simulation cannot continue after a lifecycle exception",what); }
+            catch(...) {} // diagnostic failure cannot cancel the mandatory exit
+        }
+        [[noreturn]] void lifecycle_stop(const char* what)
+        {
+            __try { lifecycle_log(what); }
+            __except(EXCEPTION_EXECUTE_HANDLER) {}
+            fatal_exit();
+        }
+		[[noreturn]] void fail_stop(const char* what, bool lifecycle = false)
 		{
+            if(lifecycle)lifecycle_stop(what);
 			logger::write("entity capacity: FATAL: %s; the process stops rather than run a half-initialised save manager", what);
 			MessageBoxA(nullptr, (std::string("X-Men Legends II could not initialise its save manager under the entity-capacity install:\n") + what +
 			                      "\n\nThe game stops here instead of continuing with an invalid layout. See xml2-fix.log.").c_str(),
 			            "XML2 Fix: entity capacity", MB_OK | MB_ICONERROR);
-			RaiseFailFastException(nullptr, nullptr, 0);
-			TerminateProcess(GetCurrentProcess(), 3);
-			for (;;) {}
+            fatal_exit();
 		}
 
 		// ---- allocator (retail 0x461910 / 0x4613e0 and the two full-bitmap-clear helpers) ----------------------
@@ -68,7 +95,8 @@ namespace entity_capacity
 			inline std::uint32_t* allocator_cell = reinterpret_cast<std::uint32_t*>(allocator_pointer_cell);
 		}
 
-		std::uint8_t* generic_subobject(std::uint8_t* allocator) { return allocator + allocator_layout::generic_base; }
+		std::uint32_t allocator_size(){return e4_core_state::prepared?e4_core_state::allocator_size:allocator_layout::object_size;}
+		std::uint8_t* generic_subobject(std::uint8_t* allocator) { return allocator + (e4_core_state::installed?e4_core_state::actor_generic_base:allocator_layout::generic_base); }
 
 		// The whole-bitmap clear plus ring rebuild the native constructor (0x46155c) and empty reset (0x4618d6) jump
 		// to in place of their 224-slot ring rebuild 0x461480: every bitmap word of the 768-slot arena, the active
@@ -88,7 +116,7 @@ namespace entity_capacity
 		{
 			if (*natives::allocator_cell) return reinterpret_cast<void*>(static_cast<std::uintptr_t>(*natives::allocator_cell));
 			if (!allocator_backing) fail_stop("allocator backing missing at first use");
-			std::memset(allocator_backing, 0, allocator_layout::object_size); // game_allocator zero-fills (0x560627)
+			std::memset(allocator_backing, 0, allocator_size()); // game_allocator zero-fills (0x560627)
 			natives::allocator_ctor(allocator_backing, nullptr);
 			*natives::allocator_cell = address_of(allocator_backing);
 			auto** vt = *reinterpret_cast<void***>(allocator_backing);
@@ -116,14 +144,14 @@ namespace entity_capacity
 		void* __cdecl AllocatePreparedSaveManager(std::uint32_t size, std::uint32_t pool, std::uint32_t tag)
 		{
 			(void)pool; (void)tag;
-			const auto decision = claim_allocate(claim, size, prepared_descriptor.raised ? e10a2_manager_size : 0);
+			const auto decision = claim_allocate(claim, size, prepared_descriptor.raised ? prepared_profile.manager_size : 0);
 			if (decision != claim_state::claimed)
 			{
 				claim_rejections.fetch_add(1);
 				fail_stop(claim == claim_state::poisoned ? "the save-manager claim is poisoned" : "the save-manager claim was requested in an unexpected state or size");
 			}
 			claim = claim_state::claimed;
-			std::memset(save_backing, 0, e10a2_manager_size);
+			std::memset(save_backing, 0, prepared_profile.manager_size);
 			return save_backing;
 		}
 
@@ -235,7 +263,7 @@ namespace entity_capacity
 		{
 			if (!allocator_backing || !*natives::allocator_cell) return 0;
 			std::uint32_t v = 0;
-			std::memcpy(&v, actor ? allocator_backing + allocator_layout::actor_base + 0x10998 : generic_subobject(allocator_backing) + allocator_layout::sub_active, 4);
+			std::memcpy(&v, actor ? allocator_backing + (e4_core_state::installed?0x31ca4:0x1099c) : generic_subobject(allocator_backing) + allocator_layout::sub_active, 4);
 			return v;
 		}
 		void log_world_refusal(const entity_world::refusal& r)
@@ -318,6 +346,9 @@ namespace entity_capacity
 				c.guards.push_back({s.va, patch_transaction::bytes_of(s.old_hex), std::string("extra literal: ") + s.role});
 				c.writes.push_back({s.va, patch_transaction::bytes_of(s.new_hex), s.role});
 			}
+			if(e4_core_state::prepared)for(auto& w:c.writes)if(w.va==0x461588||w.va==0x4615db||w.va==0x46176d){
+				const std::uint32_t live=0x1aa51c;std::memcpy(w.bytes.data()+2,&live,4);
+			}
 			std::string unresolved;
 			std::size_t descoped = 0;
 			for (const auto& s : relocation_sites)
@@ -372,7 +403,7 @@ namespace entity_capacity
 				entity_transfer::observe_backpressure(&transfer_backpressure);
 				entity_transfer::observe_failure(&transport_failed);
 				logger::write("entity capacity: shared message pools reserve receive capacity; sends preflight fragments; pressure stalls end safely after 30 seconds");
-				gameplay_agreement::register_entity_layout(layout_revision_raised, raised_actors, raised_generic, raised_world, raised_index_bits, true);
+				gameplay_agreement::register_entity_layout(published.layout_revision, published.actors, published.generic, published.world, published.tokens.index_bits, true);
 				if (fast_requested)
 				{
 					fast_installed = true;
@@ -387,7 +418,7 @@ namespace entity_capacity
 					              unsigned(fast_window), unsigned(fast_peer_budget));
 				}
 				logger::write("entity capacity: installed - actor %u / generic %u / world %u, %zu literal edits, %zu relocations, GCAP layout rule 1 revision %u",
-				              published.actors, published.generic, published.world, literal_sites.size(), relocation_sites.size(), unsigned(layout_revision_raised));
+				              published.actors, published.generic, published.world, literal_sites.size(), relocation_sites.size(), unsigned(published.layout_revision));
 			};
 			c.abandon = []
 			{
@@ -398,12 +429,25 @@ namespace entity_capacity
 				failure = "the startup transaction could not be rolled back; prepared owners and backing retained";
 				fatal = true;
 			};
+			if (std::string_view(prepared_profile.layout_id) == "W2" && (!save_manager::contribute_w2(c, failure) || !item_capacity::contribute_w2(c, failure) || !save_limits::contribute_w2(c, failure))) return false;
 			return true;
 		}
 	}
 
-	void prepare(patch_transaction::transaction&, HMODULE game)
+	[[noreturn]] void fail_stop_lifecycle(const char* site)
 	{
+		fail_stop(site, true);
+	}
+
+	void prepare(patch_transaction::transaction& transaction, HMODULE game)
+	{
+		prepare(transaction, game, save_format_rules::e10a2_profile);
+	}
+
+	void prepare(patch_transaction::transaction&, HMODULE game, const save_format_rules::native_profile& profile)
+	{
+		prepared_profile = profile;
+		preparing96=e4_core_state::prepared;
 		requested = ini::flag(L"Limits", L"EntityCapacity", false);
 		fast_requested = requested && ini::flag(L"Online", L"FastTransfer", false);
 		if (!requested)
@@ -421,8 +465,8 @@ namespace entity_capacity
 			logger::write("entity capacity: requested but refused before preparation: %s", why.c_str());
 			return;
 		}
-		allocator_backing = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, allocator_layout::object_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
-		save_backing = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, e10a2_manager_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+		allocator_backing = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, allocator_size(), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+		save_backing = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, prepared_profile.manager_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
 		if (!allocator_backing || !save_backing)
 		{
 			failure = "cannot reserve the allocator/save-manager backing";
@@ -430,7 +474,9 @@ namespace entity_capacity
 			return;
 		}
 		logger::write("entity capacity: preparing owners (allocator backing %p, save manager backing %p)", allocator_backing, save_backing);
-		if (!entity_owners::create(raised_descriptor_for(0, 0, 0, address_of(allocator_backing)), owners, why))
+		auto owner_layout=raised_descriptor_for(0,0,0,address_of(allocator_backing));
+		if(preparing96){owner_layout.actors=96;owner_layout.layout_revision=4;}
+		if (!entity_owners::create(owner_layout, owners, why))
 		{
 			failure = why;
 			logger::write("entity capacity: requested but the owners could not be prepared: %s", why.c_str());
@@ -438,6 +484,7 @@ namespace entity_capacity
 			return;
 		}
 		prepared_descriptor = raised_descriptor_for(address_of(owners.world), address_of(owners.grid), address_of(owners.query_manager), address_of(allocator_backing));
+		if(e4_core_state::prepared){prepared_descriptor.actors=96;prepared_descriptor.layout_revision=4;}
 		entity_world::set_refusal_logger(&log_world_refusal);
 		claim = claim_state::prepared;
 		prepared = true;
@@ -459,22 +506,31 @@ namespace entity_capacity
 			return;
 		}
 		built_ok = true;
-		save_format::use_native_profile(save_format_rules::e10a2_profile);
+		save_format::use_native_profile(prepared_profile);
 		logger::write("entity capacity: prepared actor %u / generic %u / world %u (ten-bit indices, generations 1..0x%X); allocator %lu bytes, World %p, Grid %p, query manager %p, save manager %lu bytes",
-		              prepared_descriptor.actors, prepared_descriptor.generic, prepared_descriptor.world, generation_max, static_cast<unsigned long>(allocator_layout::object_size),
-		              owners.world, owners.grid, owners.query_manager, static_cast<unsigned long>(e10a2_manager_size));
+		              prepared_descriptor.actors, prepared_descriptor.generic, prepared_descriptor.world, generation_max, static_cast<unsigned long>(allocator_size()),
+		              owners.world, owners.grid, owners.query_manager, static_cast<unsigned long>(prepared_profile.manager_size));
 	}
 
 	bool owns_arena_teardown() { return prepared; }
+	bool prepared_for_w2() { return prepared && built_ok && !fatal && std::string_view(prepared_profile.layout_id)=="W2"; }
+	unsigned zone_record_count() {
+		unsigned count=0;
+		if(install_published&&save_backing&&claim==claim_state::in_use)
+			patch_transaction::read_memory(address_of(save_backing)+prepared_profile.record_count*prepared_profile.record_size+4,&count,4);
+		return count;
+	}
 	bool fast_transfer_active() { return fast_installed; }
 
-	void contribute(patch_transaction::transaction& transaction, HMODULE)
+	void contribute(patch_transaction::transaction& transaction, HMODULE game)
 	{
 		if (!prepared || !built_ok) return;
 		built_ok = false;
 		// save_format already chose the E10A2 profile at preparation: failing to join the transaction now would leave a
 		// mixed layout, so it is fatal (startup refused), never a silent stock fallback.
 		if (!transaction.add(std::move(built))) { failure = "the startup transaction was sealed before the capacity install joined it"; fatal = true; }
+		if (std::string_view(prepared_profile.layout_id) == "W2" && ini::flag(L"Game", L"ObjectiveDescriptions", false) && !objective_text::contribute(transaction, game, true))
+		{ failure = "W2 objective descriptions could not join startup"; fatal = true; patch_transaction::contribution refuse; refuse.owner = failure; refuse.requires_written.push_back({0xffffffff, failure}); transaction.add(std::move(refuse)); }
 	}
 
 	void after_commit(const bool committed, const bool rollback_failed)
@@ -484,7 +540,7 @@ namespace entity_capacity
 		if (requested && !install_published)
 		{
 			// Requested but not installed: online is poisoned even though the engine is physically stock (plan section 7).
-			gameplay_agreement::register_entity_layout(layout_revision_raised, raised_actors, raised_generic, raised_world, raised_index_bits, false);
+			gameplay_agreement::register_entity_layout(preparing96?4:layout_revision_raised, preparing96?96:raised_actors, raised_generic, raised_world, raised_index_bits, false);
 			logger::write("entity capacity: requested but not installed (%s); online admission poisoned, stock capacities", failure.c_str());
 			if (!rollback_failed) release_prepared(); // an uncertified rollback may still reference the prepared owners
 		}
@@ -507,7 +563,7 @@ namespace entity_capacity
 		if (allocator_backing)
 		{
 			std::uint32_t actors = 0, generic = 0;
-			std::memcpy(&actors, allocator_backing + allocator_layout::actor_base + 0x10998, 4);            // the actor arena's active count (sub-object +0x10998)
+			std::memcpy(&actors, allocator_backing + (e4_core_state::installed?0x31ca4:0x1099c), 4);
 			std::memcpy(&generic, generic_subobject(allocator_backing) + allocator_layout::sub_active, 4);   // the generic arena's active count
 			out += "; arenas actor " + std::to_string(*natives::allocator_cell ? actors : 0) + "/" + std::to_string(published.actors) + " generic " + std::to_string(*natives::allocator_cell ? generic : 0) + "/" + std::to_string(published.generic);
 		}

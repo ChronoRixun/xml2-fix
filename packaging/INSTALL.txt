@@ -16,6 +16,7 @@ SETTINGS
   https://github.com/ChronoRixun/xml2-fix#%EF%B8%8F-settings-xml2-fixini
 
 ON BY DEFAULT, AND HOW TO SWITCH EACH OFF
+  Controller scan cache      [Input]   CacheDeviceScan=0 (restore the previous controller scanning paths)
   Pad button prompts         [Input]   Prompts=off      (or keyboard; PromptColors=0 for plain [A] text)
   Discord Rich Presence      [Discord] Enabled=0        (or ShowZone=0 / ShowParty=0 to share less)
   OpenSpy online redirect    [Online]  Domain=off
@@ -72,6 +73,7 @@ BIGGER ZONES (for mods that need it)
     [Limits]
     ActorSlots=127          (41-127; the game's own is 40)
     ResourceNames=1024      (451-4096; the game's own is 450)
+    IGBCache=1024           (201-2048; the game's own is 200; ResourceNames 2048 comes along)
 
 TROUBLESHOOTING
   The fix writes xml2-fix.log next to itself each time the game starts. If something is wrong,

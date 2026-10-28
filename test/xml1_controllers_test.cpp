@@ -9,6 +9,16 @@
 #include "mold_query_rules.hpp"
 #include "turret_rules.hpp"
 #include "gameplay_capabilities.hpp"
+#include "dopple_rules.hpp"
+#include "avalanche_rules.hpp"
+#include "boss_dopple_sites.hpp"
+#include "boss_runtime.hpp"
+#include "boss_native_sites.hpp"
+#include "pyro_rules.hpp"
+#include "mystique_rules.hpp"
+#include "shadowking_rules.hpp"
+#include <fstream>
+#include <iterator>
 #include <iostream>
 #include <map>
 
@@ -62,8 +72,18 @@ struct fake_memory {
     bool flush(){return !(++flush_calls==1&&fail_flush)&&!persistent_flush_failure;}
 };
 void turret_checks();
-int main(){
+void dopple_checks();
+void boss_rule_checks();
+void avalanche_checks();
+void wave2_checks();
+void exe_checks(const char* path);
+int main(int argc,char** argv){
     turret_checks();
+    dopple_checks();
+    boss_rule_checks();
+    avalanche_checks();
+    wave2_checks();
+    if(argc>1)exe_checks(argv[1]);else std::cout<<"  skip  retail byte checks (supply XMen2.exe)\n";
     using namespace mold_combat_rules;
     const auto binding=parse_binding("fictional_stage:2:5");
     CHECK(binding&&binding->flag=="fictional_stage"&&binding->first==2&&binding->width==5);
@@ -387,4 +407,234 @@ void turret_checks(){
     CHECK(xml1_capability_rules::turret_revision_for(false)==1&&xml1_capability_rules::turret_revision_for(true)==2);
     CHECK(!xml1_capability_rules::turrets(true,false,3,7).verified);
     const auto on=xml1_capability_rules::turrets(true,true,3,7);CHECK(on.verified&&on.values==(std::array<std::uint32_t,4>{1,3,7,0}));
+}
+
+// The colosseum dopples (dopple_rules.hpp). Every expectation follows the original handlers in default.xbe
+// (docs/xml1-controllers.md, "Doppelgangers"): tick 0x110470, Wolverine 0x1136f0, Colossus 0x1138a0, Jean 0x113c50,
+// Cyclops 0x113b70.
+void dopple_checks(){
+    using namespace dopple_rules;
+    {   // shared tick: once per distinct time, re-arm after 5 s, both alive and closer than 400
+        shared s;
+        CHECK(tick(s,1.f,true,399.f));CHECK(s.wolverine==1&&s.colossus==1&&s.rearm_at==6.f);
+        CHECK(!tick(s,1.f,true,10.f));                          // same game time: no second tick
+        s.wolverine=s.colossus=0;CHECK(!tick(s,5.f,true,10.f)); // re-arm not passed
+        CHECK(!tick(s,6.f,true,10.f));                          // equal is not past (fcomp: deadline < now)
+        CHECK(tick(s,6.5f,true,10.f));
+        shared t;CHECK(!tick(t,1.f,true,400.f));CHECK(!tick(t,2.f,false,10.f));CHECK(t.wolverine==0);
+        shared u;u.colossus=2;CHECK(!tick(u,1.f,true,10.f));     // a fastball is running
+        shared z;CHECK(!tick(z,0.f,true,10.f));                 // re-arm 0 at the start: 0 < 0 is false
+    }
+    view v;v.partner_valid=true;v.now=2.f;
+    {   // Wolverine: approach, hand-off below 55, then hold (1 s waits) until Colossus throws
+        shared s;s.wolverine=1;s.fastball_started=1.f;v.partner_distance=100.f;
+        auto a=update(s,who::wolverine,v);CHECK(a.handled&&a.move_to_partner&&!a.stop&&s.wolverine==1);
+        v.partner_distance=55.f;a=update(s,who::wolverine,v);CHECK(a.handled&&!a.stop&&s.wolverine==1);
+        v.partner_distance=54.9f;a=update(s,who::wolverine,v);
+        CHECK(a.handled&&a.move_to_partner&&a.stop&&a.face_partner&&a.face_immediate&&s.wolverine==2&&a.wait==0);
+        a=update(s,who::wolverine,v);CHECK(a.handled&&a.wait==1.f&&!a.move_to_partner&&s.wolverine==2);
+        s.wolverine=0;a=update(s,who::wolverine,v);CHECK(!a.handled&&s.wolverine==0);
+        s.wolverine=3;a=update(s,who::wolverine,v);CHECK(!a.handled&&s.wolverine==3); // other values: native, kept
+        s.wolverine=2;view dead=v;dead.partner_valid=false;a=update(s,who::wolverine,dead);CHECK(!a.handled&&s.wolverine==0);
+    }
+    {   // Colossus: approach, hand-off, then face Wolverine and throw (alternate slot 3, 0x100) at the hero
+        shared s;s.wolverine=s.colossus=1;s.fastball_started=1.f;v.partner_distance=30.f;
+        auto a=update(s,who::colossus,v);
+        CHECK(a.handled&&a.move_to_partner&&a.stop&&a.face_partner&&!a.face_immediate&&s.colossus==2);
+        CHECK(slot_for(s,who::colossus).slot==3&&slot_for(s,who::colossus).alternate);
+        v.slot_available=false;a=update(s,who::colossus,v);CHECK(a.handled&&a.face_partner&&!a.buttons&&s.colossus==2);
+        v.slot_available=true;v.hero=true;s.wolverine=2;a=update(s,who::colossus,v);
+        CHECK(a.handled&&a.target_hero&&a.buttons==0x100&&a.wait==1.f&&s.colossus==0&&s.wolverine==0);
+        s.colossus=2;s.wolverine=2;v.hero=false;a=update(s,who::colossus,v);CHECK(!a.target_hero&&a.buttons==0x100);
+        v.slot_available=false;
+    }
+    {   // not in the original: an unthrown fastball is abandoned 10 s after it started (live check D2)
+        shared s;s.wolverine=2;s.colossus=2;s.fastball_started=1.f;view late=v;late.now=11.f;
+        CHECK(update(s,who::wolverine,late).handled);          // exactly 10 s: still held
+        late.now=11.5f;CHECK(!update(s,who::colossus,late).handled);CHECK(s.wolverine==0&&s.colossus==0);
+    }
+    {   // Jean: every 7 s the nearest hazard near the hero; states 1/2 as in the original (nothing enters 2)
+        shared s;view j=v;j.now=1.f;
+        auto a=update(s,who::jean,j);CHECK(a.handled&&s.jean==3&&s.hazard_at==8.f&&!a.activate_hazard);
+        j.hero=false;a=update(s,who::jean,j);CHECK(a.handled&&s.jean==3&&!a.activate_hazard&&a.wait==0);
+        j.hero=true;a=update(s,who::jean,j);CHECK(a.handled&&a.brain_target_hero&&a.activate_hazard&&a.wait==1.f&&s.jean==0);
+        j.now=8.f;a=update(s,who::jean,j);CHECK(!a.handled&&s.jean==0);   // 8 is not past 8
+        j.now=8.5f;a=update(s,who::jean,j);CHECK(a.handled&&s.jean==3&&s.hazard_at==15.5f);
+        s.jean=2;CHECK(slot_for(s,who::jean).slot==5&&!slot_for(s,who::jean).alternate);
+        j.slot_available=false;a=update(s,who::jean,j);CHECK(a.handled&&!a.buttons&&s.jean==2);
+        j.slot_available=true;a=update(s,who::jean,j);CHECK(a.handled&&a.buttons==0x90&&a.wait==1.f&&s.jean==1);
+        a=update(s,who::jean,j);CHECK(a.handled&&s.jean==0&&s.cyclops==1);
+        s.jean=4;a=update(s,who::jean,j);CHECK(!a.handled&&s.jean==4);
+        j.partner_valid=false;a=update(s,who::jean,j);CHECK(!a.handled&&s.jean==0);
+    }
+    {   // Cyclops: power attack (0x90, 0.4 s) only after Jean's state 1; state 2 holds; otherwise native
+        shared s;view c=v;
+        CHECK(!update(s,who::cyclops,c).handled);
+        s.cyclops=1;c.slot_available=false;auto a=update(s,who::cyclops,c);CHECK(a.handled&&!a.buttons&&s.cyclops==1);
+        c.slot_available=true;a=update(s,who::cyclops,c);CHECK(a.handled&&a.buttons==0x90&&a.wait==.4f&&s.cyclops==0);
+        s.cyclops=2;CHECK(update(s,who::cyclops,c).handled);
+        c.partner_valid=false;CHECK(!update(s,who::cyclops,c).handled);CHECK(s.cyclops==0);
+    }
+    {   // a fight: Wolverine and Colossus 200 apart close at 3 units per update each; fastballs arm >= 5 s apart
+        // and every armed fastball is thrown (slot 3 free every other update)
+        shared s;float w=0,c=200,last=-100;int throws=0,armed=0;bool gap_ok=true;
+        for(int step=1;step<6000;++step){
+            const float t=step*0.0333f;
+            if(tick(s,t,true,c-w)){if(t-last<5.f)gap_ok=false;last=t;++armed;}
+            view vw;vw.now=t;vw.partner_valid=true;vw.partner_distance=c-w;
+            auto aw=update(s,who::wolverine,vw);if(aw.move_to_partner&&!aw.stop)w+=3;
+            view vc=vw;vc.slot_available=step%2==0;vc.hero=true;vc.partner_distance=c-w;
+            auto ac=update(s,who::colossus,vc);if(ac.move_to_partner&&!ac.stop)c-=3;
+            if(ac.buttons==0x100){++throws;w=0;c=200;}
+        }
+        CHECK(throws>=30&&gap_ok&&armed-throws<=1);
+    }
+}
+// Avalanche (avalanche_rules.hpp), every expectation from default.xbe 0x111ab0 (docs/xml1-controllers.md, "Avalanche").
+void avalanche_checks(){
+    using namespace avalanche_rules;
+    // The band: trunc(6 - trunc(health%) x 0.06f); steps at 83, 66, 50 (6 - 2.99999993 = 3.00000007), 33, 16 and 0.
+    CHECK(band(100,100)==0&&band(84,100)==0&&band(83,100)==1&&band(67,100)==1&&band(66,100)==2&&band(51,100)==2);
+    CHECK(band(50,100)==3&&band(34,100)==3&&band(33,100)==4&&band(17,100)==4&&band(16,100)==5&&band(1,100)==5&&band(0,100)==6);
+    CHECK(band(500,500)==0&&band(10,0)==0);
+    CHECK(band(83.99f,100)==1&&band(66.99f,100)==2&&band(50.99f,100)==3); // percent truncation precedes band math
+    for(int p=0;p<=100;++p){const double x=6.0-double(0.06f)*p;CHECK(band(float(p),100.f)==int(x));}
+    state s;view v;v.health=100;v.health_max=100;v.now=1.f;
+    {   // full health, no hero: nothing, no band write
+        auto a=update(s,v);CHECK(!a.band_changed&&!a.buttons&&!a.face&&!a.face_last);
+    }
+    {   // close: power smash when the 4 s deadline passed and slot 6 is free, then smash/attack rolls until it passes again
+        v.nearest=99.f;v.slot_available=true;auto a=update(s,v);
+        CHECK(a.face&&a.buttons==0xa0&&a.taunt_always&&s.close_at==5.f);
+        v.now=5.f;a=update(s,v);CHECK(a.face&&!a.buttons&&a.roll_smash);           // 5 is not past 5
+        v.now=5.5f;v.slot_available=false;a=update(s,v);CHECK(a.face&&!a.buttons&&!a.roll_smash&&s.close_at==5.f);
+        v.nearest=100.f;v.slot_available=true;a=update(s,v);CHECK(!a.face&&a.face_last&&a.buttons==0x90&&a.taunt_half&&s.mid_at==9.5f);
+        v.now=9.f;a=update(s,v);CHECK(!a.face_last&&!a.buttons);                    // mid deadline not passed: nothing
+        v.now=10.f;v.nearest=399.f;v.slot_available=false;a=update(s,v);CHECK(a.face_last&&!a.buttons);
+        v.nearest=400.f;v.slot_available=true;a=update(s,v);CHECK(!a.face_last&&!a.buttons);
+    }
+    {   // the band flips the brain's bit 3: odd bands set it, even bands clear it, once per change
+        state t;view w;w.health_max=100;w.health=83;auto a=update(t,w);CHECK(a.band_changed&&a.mode_bit&&t.band==1&&t.mode==1);
+        a=update(t,w);CHECK(!a.band_changed);
+        w.health=60;a=update(t,w);CHECK(a.band_changed&&!a.mode_bit&&t.mode==0);
+        w.health=40;a=update(t,w);CHECK(a.band_changed&&a.mode_bit);
+    }
+}
+void boss_rule_checks(){
+    using namespace xml1_capability_rules;
+    CHECK(gameplay_capabilities::xml1_bosses_id==40);
+    CHECK(std::string(gameplay_capabilities::rule_name(40))=="Xml1Bosses");
+    CHECK(boss_bit("dopples")==1&&boss_bit("avalanche")==2&&boss_bit("pyro")==4&&boss_bit("")==0);
+    CHECK(bosses(true,3,3,1).values[1]==flag_hash("dopples:1;avalanche:2;")&&bosses(true,3,3,1).values[0]==3);
+    CHECK(boss_bit("mystique")==8&&boss_bit("shadowking")==16&&boss_bit("marrow")==32&&boss_bit("magneto")==64);
+    CHECK(bosses(true,63,63,1).values[1]==flag_hash("dopples:1;avalanche:2;pyro:1;mystique:1;shadowking:1;marrow:1;"));
+    CHECK(!bosses(true,63,31,1).verified); // native Marrow requested but its parser/dispatch guard failed
+    CHECK(bosses(true,32,32,0).verified&&bosses(true,32,32,0).values[0]==32);
+    CHECK(!bosses(true,3,1,1).verified);    // avalanche requested, only the dopples installed
+    const auto on=bosses(true,1,1,1);
+    CHECK(on.verified&&on.values[0]==1&&on.values[1]==flag_hash("dopples:1;")&&on.values[2]==1&&on.values[3]==0);
+    CHECK(bosses(true,1,1,0).values[2]==0&&bosses(true,1,1,0).verified);
+    CHECK(!bosses(false,1,1,1).verified);   // an unknown name in the list
+    CHECK(!bosses(true,1,0,1).verified);    // requested, not installed
+    CHECK(!bosses(true,0,0,0).verified);
+    CHECK(bosses_revision==1);
+}
+void wave2_checks(){
+    {
+        using namespace boss_target_rules;
+        std::array<hero,5> party{{{10,40,0,true,true},{11,80,36,true,false},{12,1,0,false,true},{13,90,-35,true,false},{14,50,0,true,true}}};
+        auto a=avalanche(party);CHECK(a.nearest==10&&a.distance==40&&a.controlled==13);
+        CHECK(pyro(party).handle==10&&mystique(party)==10);
+        party[0].living=false;CHECK(mystique(party)==14&&pyro(party).handle==14);
+        party[4].living=false;CHECK(mystique(party)==11&&pyro(party).handle==13);
+        party[1].living=false;party[3].living=false;
+        CHECK(avalanche(party).nearest==0&&mystique(party)==0&&pyro(party).handle==0);
+        std::uint32_t output[8]{1,2,3,4,5,6,7,8};boss_runtime::buttons(output,0x180);
+        CHECK(output[0]==0x181&&output[1]==0x182&&output[2]==3&&output[7]==8);
+    }
+    {   // Pyro: strict height boundary, one shared cooldown across fire states, and no availability fallback.
+        using namespace pyro_rules;
+        CHECK(height_ok(35.999f)&&height_ok(-35.999f)&&!height_ok(36)&&!height_ok(-36));
+        CHECK(none_team==28&&enemy_team==30);
+        state s;
+        CHECK(update(s,0,10,true,true).buttons==0);
+        auto a=update(s,1,299,true,true);CHECK(a.buttons==0xc0&&a.taunt==1&&s.deadline==4);
+        s.fire_up=false;CHECK(update(s,4,10,true,true).buttons==0);
+        a=update(s,4.01f,199,true,true);CHECK(a.buttons==0x90&&a.taunt==.5f&&s.deadline==9.01f);
+        s.deadline=0;a=update(s,1,200,true,true);CHECK(a.buttons==0xc0&&s.deadline==6);
+        s.deadline=0;CHECK(update(s,1,199,false,true).buttons==0);CHECK(s.deadline==0);
+        CHECK(update(s,1,300,true,true).buttons==0);
+        s.fire_up=true;CHECK(update(s,1,299,true,false).buttons==0);
+        state other;CHECK(other.deadline==0&&other.fire_up); // independent spawn state
+    }
+    {   // Mystique: request ordering, grenade scheduling, successful-copy timer and target-loss restoration.
+        using namespace mystique_rules;state s;s.active=false;
+        CHECK(request(s,"myst1",4)&&!s.active&&s.mode==0);
+        CHECK(!request(s,"mag2",4)&&!s.active); // shared asteroid zone never grants another boss ownership
+        CHECK(request(s,"myst2",4)&&s.mode==1&&s.active&&s.grenade_at==6&&!s.copied);
+        CHECK(!grenade_due(s,6)&&grenade_due(s,6.001f));s.grenade_at=10;
+        CHECK(!grenade_due(s,9.999f)&&grenade_due(s,10.01f));
+        CHECK(request(s,"myst3",10)&&s.mode==2&&!s.active);
+        CHECK(request(s,"gopattern",11)&&s.active&&s.mode==0);
+        CHECK(close_buttons(false,0,0)==0x180&&close_buttons(true,.98f,0)==0);
+        CHECK(close_buttons(true,.981f,.49f)==0x10&&close_buttons(true,1,.5f)==0x20);
+        for(float duration:{10.f,15.f,22.f}){
+            copy(s,20,duration,71);CHECK(s.copied&&s.target==71&&s.restore_at==20+duration);
+            CHECK(!restore_due(s,20+duration-.01f,true)&&restore_due(s,20+duration,true));
+            CHECK(restore_due(s,20,false));
+        }
+        copy(s,40,10,72);CHECK(s.restore_at==50&&s.target==72); // repeated copy replaces the owner timer
+        request(s,"myst2",41);CHECK(restore_due(s,50,true)); // copied-mode reset must not strand a changed skin
+        request(s,"mystique",52);CHECK(!s.copied&&s.restore_at==50&&s.target==0&&s.copy_target==72);
+        CHECK(restore_due(s,52,true)); // native timed effect would survive the initializer too
+    }
+    {   // Shadow King: overlapping request/attack branches and fractional clock truncation matter.
+        using namespace shadowking_rules;state s;
+        s=initial(20.9f,0);CHECK(s.spear_at==26&&s.smash_at==26&&!s.boost&&!s.xtreme&&!s.chasing);
+        auto warmup=update(s,26,110,true,true,true,true);CHECK(!warmup.buttons);
+        warmup=update(s,26.001f,110,true,true,true,true);CHECK(warmup.buttons==0x90);
+        s={};
+        auto a=update(s,1.9f,200,true,true,true,true);
+        CHECK(a.buttons==0x90&&a.wait==.6f&&a.taunt&&s.spear_at==7);
+        a=update(s,7,200,true,true,true,true);CHECK(!a.buttons&&a.close);
+        a=update(s,7.01f,200,true,true,true,true);CHECK(a.buttons==0x90&&s.spear_at==13);
+        s={};a=update(s,1.9f,100,true,true,true,true);CHECK(a.buttons==0xa0&&s.smash_at==8);
+        s={};a=update(s,1,120,false,true,true,true);CHECK(a.buttons==0); // strict smash boundary
+        s={};s.boost=true;a=update(s,1,200,false,false,true,true);
+        CHECK(a.buttons==0x180&&a.preferred90&&a.wait==.6f&&!s.boost);
+        s={};s.boost=true;a=update(s,1,300,false,false,true,true);CHECK(!a.buttons&&s.boost);
+        s={};s.xtreme=true;a=update(s,1,110,true,true,true,true);
+        CHECK(a.buttons==(0xc0|0xa0)&&a.wait==.6f&&!s.xtreme&&s.spear_at==0); // sk4 continues to close attack
+        s={};s.xtreme=true;s.boost=true;a=update(s,1,200,true,true,true,true);
+        CHECK(a.buttons==(0xc0|0x180)&&a.preferred90&&!s.boost&&!s.xtreme);
+        s={};s.xtreme=true;a=update(s,1,200,true,true,true,false);CHECK(!a.buttons&&s.xtreme&&s.spear_at==0);
+        s={};a=update(s,1,301,false,false,false,false);CHECK(a.follow&&s.chasing);
+        a=update(s,1,181,false,false,false,false);CHECK(a.follow&&s.chasing);
+        a=update(s,1,180,false,false,false,false);CHECK(a.close&&!s.chasing);
+        s={};s.mode=1;a=update(s,1.9f,169,true,true,true,true);CHECK(a.buttons==0x90&&s.spear_at==6);
+        s={};s.mode=1;a=update(s,1,170,true,true,true,true);CHECK(!a.buttons&&a.follow);
+        a=update(s,1,99,true,true,true,true);CHECK(a.close&&!a.follow);
+    }
+}
+// Retail bytes: every dopple guard, the shared brain-dispatch site and Master Mold's script entries, read from the exe.
+void exe_checks(const char* path){
+    std::ifstream f(path,std::ios::binary);std::vector<unsigned char> d((std::istreambuf_iterator<char>(f)),std::istreambuf_iterator<char>());
+    CHECK(d.size()>0x400);if(d.size()<=0x400)return;
+    auto u32le=[&](std::size_t o){std::uint32_t v=0;std::memcpy(&v,d.data()+o,4);return v;};
+    const auto pe=u32le(0x3c);const unsigned sections=d[pe+6]|(d[pe+7]<<8),optional=d[pe+20]|(d[pe+21]<<8);
+    auto file=[&](std::uint32_t va)->const unsigned char*{
+        for(unsigned i=0;i<sections;++i){const auto o=pe+24+optional+i*40;const auto v=u32le(o+12)+0x400000,raw=u32le(o+16),at=u32le(o+20);
+            if(va>=v&&va-v<raw&&at+(va-v)+16<=d.size())return d.data()+at+(va-v);}
+        return nullptr;};
+    int checked=0;
+    for(const auto& g:boss_dopple_sites::guards){const auto* p=file(g.va);CHECK(p&&limits_rules::matches(p,g.hex));++checked;}
+    CHECK(checked==30);
+    for(const auto& g:boss_runtime::guards){const auto* p=file(g.va);CHECK(p&&limits_rules::matches(p,g.hex));}
+    for(const auto& g:boss_native_sites::marrow){const auto* p=file(g.va);CHECK(p&&limits_rules::matches(p,g.hex));}
+    for(const auto& site:std::array<std::pair<std::uint32_t,const char*>,3>{{{0x4dff50,"6aff68204a6700"},{0x4e01a9,"ff9378010000"},{0x4dc05f,"8d4e04e809edffff"}}}){
+        const auto* p=file(site.first);CHECK(p&&limits_rules::matches(p,site.second));}
+    const std::pair<std::uint32_t,const char*> shared_sites[]{{0x5173f3,"8b460883f840"},{0x49fe31,"08a96800"},{0x68adb8,"30484a00"},{0x68ae58,"a0514a00"},{0x68ae88,"204e4a00"},
+        {0x513146,"f686b702000008"},{0x514613,"f683b702000008"}};  // Avalanche: the two readers of brain +0x2b7 bit 3
+    for(const auto& site:shared_sites){const auto* p=file(site.first);CHECK(p&&limits_rules::matches(p,site.second));}
+    std::cout<<"  retail byte checks: "<<checked<<" dopple + 20 wave-two + 6 native Marrow + 3 copy + 7 shared guards\n";
 }

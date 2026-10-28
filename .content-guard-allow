@@ -1,7 +1,20 @@
 # Scoped exceptions for the builder content guard used on this C++ repository.
 # Each entry describes original code/art or invented test data; no game assets are accepted.
+DISASM test/e4_core_host.cpp # Authored synthetic caller/return frames, CPU and FX state probes, and ABI shims; native actor/controller/team/brain instructions are read from the owned executable at runtime, with no game listing or decompiled body embedded.
+DISASM test/pad_hotplug_test.cpp # Authored caller frames for the owned retail mapping/read fixture; game bytes are supplied at runtime, with no retail instruction listing embedded.
+DISASM test/pool_counter_observers_test.cpp # Authored synthetic CPU-state entry/capture probes and invented ABI fixture bodies; retail fragments are read from the owned executable at runtime, with no game listing or decompiled body embedded.
+DISASM test/particle_scratch_test.cpp # Authored synthetic caller allocates an argument area and restores its own stack to test eleven thiscall bridges; no game instructions or disassembly listing is embedded.
+DISASM src/anim_enums.cpp # Authored native-map miss bridge preserves the retail wrapper stack and calls our DLL extension lookup; only the short displaced comparison is replayed, no game listing or decompiled body.
+DISASM test/anim_enums_test.cpp # Authored synthetic caller frames execute owned retail routines read from disk at runtime; inline assembler contains only our ABI probes, no game instruction listing.
+DISASM test/xml1_grab_bag_checks.hpp # Authored synthetic caller frame and stack cleanup for mapped native buy dispatch; owned instructions are loaded at runtime, no extracted listing or game body is stored.
+DISASM src/xml1_roll.cpp # Authored register-preserving callbacks and nested-frame bridges; only the guarded two-instruction SEH restore is replayed. No extracted listing or decompiled game body.
+DISASM test/xml1_roll_test.cpp # Authored synthetic stack/register probes and matching ABI continuations; retail instructions are supplied locally and executed in the fixture, never stored here.
 DISASM src/input_worker.cpp # Authored register-preserving lifetime-accounting bridges; only the short guarded entry prologue is replayed, with no game listing or decompiled body.
 DISASM test/input_worker_test.cpp # Authored synthetic ABI probe seeds invented register values and measures our bridges; no game instruction listing or decompiled body.
+DISASM src/lift_rule.cpp # Authored naked bridges: the game's own four-instruction heaviness clamp replayed before our callback, and a heaviness compare replayed on the game-rule path; no game listing or decompiled body.
+DISASM src/xml1_cling.cpp # Authored naked lookup bridge: our call, then the two displaced entry instructions (push esi; mov esi,[esp+8]) and a jump back; no game listing or decompiled body.
+DISASM src/xml1_grab_carry.cpp # Authored register-preserving acquisition/reset/timeout/collision bridges replay only short guarded loads, stores or status checks and call our callbacks; no game listing or decompiled body.
+DISASM test/xml1_grab_carry_install_test.cpp # Authored synthetic caller establishes a private register/stack frame to execute the accepted acquisition branch; game bytes are read from owned inputs at runtime, no game listing is embedded.
 GAME_EXT tools/union_host/union_space.asm # Authored MASM zero-filled address-space reservation (DB DUP(0)) for the synthetic DLL host; no game bytes, instructions or disassembly. Retail image supplied locally at runtime.
 DISASM  test/resistance_display_install_test.cpp  # Authored inline assembler recreates a synthetic HUD caller frame and executes our emitted bridge; no game instruction listing.
 MEDIA  docs/discord-art/badge-cutscene.png  # Original project vector art (SVG sources), Roman numeral or generic status icon; no game/publisher imagery.
@@ -46,9 +59,10 @@ LONG_ID  test/xml2_test.cpp  # Public Discord application identifiers and invent
 GAME_TEXT_ATTR  src/save_format_rules.hpp  # Original save-status UI labels concatenated with a description variable, not decoded game text.
 LONG_ID  src/discord_rules.hpp  # Public project Discord application identifiers documented by the integration; not personal ids.
 DISASM  test/save_capture_bridge_test.cpp  # Authored inline assembly that enters the emitted capture bridges and records the landing address; not game disassembly.
+DISASM  test/script_pools_test.cpp  # Authored inline assembly adapter for isolated constructor segments and invented native fixtures; no disassembly listing.
 DISASM  src/entity_transfer.cpp  # Authored C++ inline assembly bridge (the acknowledgement call sequence, described in prose above it); not a game disassembly listing.
 DISASM  src/mold_beam.cpp  # Authored register-preserving x86 callback bridge; its sole replay is a short byte-guarded stack-address instruction. No game listing or decompiled body.
-DISASM  src/mold_controller.cpp  # Authored register-preserving dispatcher bridge; replays only two short guarded state-selection instructions, with no copied game listing or decompiled body.
+DISASM  src/xml1_bosses.cpp  # Authored register-preserving dispatcher bridge; replays only two short guarded state-selection instructions, with no copied game listing or decompiled body.
 DISASM  test/entity_transfer_test.cpp  # Authored inline assembly that calls a receiver with ESP measured around it; not game disassembly.
 DISASM  src/placement_crush.cpp  # Authored register-preserving touch bridge; replays only the one guarded stack-reserve instruction it displaces. No game listing or decompiled body.
 DISASM  src/script_function_overflow.cpp  # Authored register-preserving bridges for the script function overflow; replays only the lookup's three-register epilogue, described in prose above it. No game listing or decompiled body.
@@ -82,3 +96,55 @@ DISASM  test/npc_combo_timing_test.cpp  # Authored naked call thunks (lock_run, 
 DISASM  src/world_backfaces.cpp  # Authored naked x86 bridge for the trace helper site 0x4a96c0 (described in prose above it); replays only the one guarded float store it displaces. No game listing or decompiled body.
 DISASM  src/npc_bullet_trace.hpp  # Authored register/FP-preserving trace-gate bridges; only the short guarded event prologue and displaced CMP/LEA/PUSH are replayed. No game listing or decompiled body.
 DISASM  test/npc_bullet_trace_test.hpp  # Authored synthetic stack/register callers verify our trace bridges; retail beam bytes are supplied by the owner's executable at runtime, never embedded.
+DISASM  test/balance_parity_test.cpp  # Authored naked call thunks build a synthetic caller frame (esi record, stack defense/scale) and execute runs read from the owner's files at run time; no game instruction listing or decompiled body.
+DISASM  src/shared_handler_bridges.hpp  # Authored register/FX-state-preserving bridges and x87 probe arithmetic for XML1 shared-handler choices; no game instruction listing or embedded callback bodies.
+DISASM  test/shared_handlers_test.cpp  # Authored synthetic ABI drivers execute owner-supplied callback slices loaded at runtime; no embedded game code or instruction listing.
+DISASM  src/boss_mystique.cpp  # Authored native-copy observation bridges preserve registers, replay only the seven-byte guarded entry and six-byte virtual call, and resume the engine. No game body or disassembly listing.
+DISASM  test/boss_mystique_bridge_test.cpp  # Authored synthetic entry, virtual-call and continuation fixtures exercise our production bridges' stack and register contract. Contains no game code.
+
+DISASM  src/boss_magneto.cpp  # Authored hurt observation bridge preserves registers and replays its six-byte guarded prologue; no game body or listing.
+DISASM  src/boss_blob.cpp  # Authored metadata observation bridge preserves registers and replays a guarded reader load and literal argument; no game body or listing.
+DISASM  test/boss_wave3_bridge_test.cpp  # Invented callers and continuations test our production observation bridges, stack, registers and FPU; no game instructions copied into the fixture.
+DISASM  test/lift_rule_test.cpp  # Authored naked callers build the synthetic register/stack frames that drive our LiftRule bridges (revision 2: throw impact, carry, telekinesis); the retail bytes come from the owner's executable at run time. No game listing or decompiled body.
+DISASM  test/npc_bullet_ray_test.hpp  # Authored synthetic callers (stack/register setup and a jump into a fragment loaded from the owner's files at run time) verify the character bullet-ray adapter; no game instruction listing or decompiled body.
+DISASM  src/classic_objectives.cpp  # Authored register-preserving bridges into our C++ predicate and page chooser; no game instruction listing or decompiled body.
+
+DISASM  src/shared_handler_c_bridges.hpp  # Authored x87 and register-preserving rule-46 bridges; no copied game body or instruction listing.
+DISASM  test/shared_handlers_c_test.cpp  # Synthetic ABI drivers execute owner-loaded original callbacks, never embedded game code.
+DISASM  test/actor_pools_host.cpp  # Authored naked frame/capture thunks (register snapshot, synthetic caller frame) drive the retail pool and null-team code loaded from the owner's executable at run time; no game instruction listing or decompiled body.
+
+DISASM  src/xml1_air_carry.cpp  # Authored flight-debit parsing bridge preserves registers and skips only the flight_pwr drain; no game body or disassembly listing.
+DISASM  test/xml1_air_carry_test.cpp  # Authored synthetic parser/stack drivers test the production bridge and callback ABI; game instruction slices are read only from the owner's executable at runtime.
+
+DISASM  src/motion_pool.cpp  # Authored owner/reader bounds and register-preserving telemetry bridges; no game routine body or disassembly listing.
+DISASM  test/motion_pool_test.cpp  # Authored synthetic ESI/EBX and stack/FS callers drive production bridges and owner-loaded retail routines; no embedded game code.
+
+DISASM  test/resident_stats_test.cpp  # Authored register and stack capture probes drive production R2 caves and owner-loaded functions; no copied game instruction body.
+
+DISASM  src/tk_guard_bridges.hpp  # Authored rule-46 TK/guard bridges: two resume trampolines that repeat only the displaced prologue before jumping back into the owner-loaded routine, and an argument-forwarding filter thunk; no game body or instruction listing.
+DISASM  test/tk_guard_test.cpp  # Authored fixture stubs (synthetic acquisition and grab tails) and x87 modulus/truncation helpers standing in for the runtime calls of owner-loaded XML1 code; no embedded game code.
+DISASM  test/effect_templates_test.cpp  # Authored register/flag capture driver for our generated spill caves; the retail image is read from the owner's executable at runtime, never embedded game content.
+
+DISASM  src/smart_entities.cpp  # Authored x87 replacement and ABI adapters; source code, not an extracted instruction listing.
+DISASM  src/zone_strings.cpp  # Authored register-preserving adapters for our bounded interning implementation.
+DISASM  test/state_records_test.cpp  # Synthetic register/stack callers and recording fakes execute guarded code from the owner-supplied exe.
+DISASM  test/zone_strings_test.cpp  # Synthetic ABI measurement callers for our replacement; retail bytes are read at runtime.
+DISASM  src/save_manager.cpp  # Authored XML-loader preflight bridge with native ABI preservation and failure cleanup.
+DISASM  test/save_manager_test.cpp  # Synthetic loader caller and continuations execute our preflight without launching the game.
+
+DISASM  test/item_capacity_test.cpp  # Authored ABI callers and synthetic header/reward continuations execute retail code from the owner-supplied PE; no extracted instruction listing.
+
+DISASM  src/save_limits.cpp  # Authored M/cap/generation ABI bridges; implementation source, not an extracted instruction listing.
+DISASM  test/save_limits_test.cpp  # Synthetic register/stack callers and recording fakes execute the guarded owner-supplied PE; no extracted bodies.
+
+DISASM  src/xml1_economy_prices.cpp  # Authored register/stack adapters for price arithmetic, owner capture and sell-list replacement; no extracted listing.
+DISASM  test/xml1_economy_prices_checks.hpp  # Authored synthetic transaction caller/end thunk; native buy/sale/deserialization/list bodies are read from the owner's executable at runtime.
+DISASM  test/xml1_economy_test.cpp  # Authored x87 truncation veneer for the mapped-retail fixture; control word is saved/restored and native code is loaded from the owned PE at runtime.
+DISASM  src/xml1_economy_shop.cpp  # Authored ABI adapters for vendor text, buy rows, tabs and pre-debit refusal; owned retail code is never extracted into this file.
+DISASM  test/xml1_economy_shop_checks.hpp  # Authored isolated tab-loop and stale-purchase callers for mapped-retail tests; no extracted game instruction listing.
+
+DISASM test/e4_observe_host.cpp # Authored synthetic CPU entry/capture and deliberate register/FPU clobber probes; native input is read locally at runtime, no game listing is embedded.
+
+GAME_EXT src/e4_unwind.asm # Authored SafeSEH observer thunk; only forwards to our callback, no game instructions or listing.
+
+DISASM test/coop_lifecycle_probe.hpp # Authored synthetic stack probes and return tail exercise the production DLL against the locally owned PE; no extracted game body.

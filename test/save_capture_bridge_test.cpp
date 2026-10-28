@@ -90,8 +90,8 @@ namespace
 		auto full = [&](const outcome& o, std::uint32_t where) { return o.landed == where && o.hooks == 1 && o.hook_arg == rec; };
 
 		check(block.jumps.size() == 6, t + "six capture jumps (five bounds and the ordinal writer)");
-		// 0x41a427: the zone string arena keeps its retail 0x3800 bound
-		check(pass(run(entry(0x41a427), record, 0, 0x37ff, 0), 0x41a42f) && full(run(entry(0x41a427), record, 0, 0x3800, 0), 0x41a44c), t + "0x41a427 string arena: 0x37ff continues, 0x3800 overflows to 0x41a44c");
+		// 0x41a427: the zone string arena follows the installed profile
+		check(pass(run(entry(0x41a427), record, 0, p.zone_arena - 1, 0), 0x41a42f) && full(run(entry(0x41a427), record, 0, p.zone_arena, 0), 0x41a44c), t + "0x41a427 string arena: arena-1 continues, arena overflows to 0x41a44c");
 		// 0x466659: ECX = state count against the profile's state bound
 		check(pass(run(entry(0x466659), record, 0, p.states - 1, 0), 0x466661) && full(run(entry(0x466659), record, 0, p.states, 0), 0x4666bc),
 		      t + "0x466659 state count: states-1 continues at 0x466661, states (" + std::to_string(p.states) + ") overflows to 0x4666bc");
@@ -142,6 +142,7 @@ int main()
 	for (const std::uint32_t va : {0x41a42fu, 0x41a44cu, 0x466661u, 0x4666bcu, 0x466691u, 0x4666a6u, 0x4666f3u, 0x4667a3u, 0x466703u, 0x466682u}) pad(va);
 	profile_run(save_format_rules::retail_profile, "retail");
 	profile_run(save_format_rules::e10a2_profile, "E10A2");
+	profile_run(save_format_rules::w2_profile, "W2");
 	// the bytes the bridges replay are the retail instructions under the retail profile (the guard stays retail)
 	bool retail_bytes = true;
 	for (const auto& site : save_core_rules::capture_bounds)

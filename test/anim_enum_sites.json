@@ -1,0 +1,1027 @@
+[
+  {
+    "row": "C1",
+    "va": 4331885,
+    "kind": "bound",
+    "old": "83f9107d11",
+    "edits": []
+  },
+  {
+    "row": "C1",
+    "va": 4331890,
+    "kind": "operand",
+    "old": "69c984030000",
+    "edits": [
+      [
+        2,
+        "stride"
+      ]
+    ]
+  },
+  {
+    "row": "C1",
+    "va": 4331896,
+    "kind": "operand",
+    "old": "81c158ba7000",
+    "edits": [
+      [
+        2,
+        "cache"
+      ]
+    ]
+  },
+  {
+    "row": "C2",
+    "va": 4349700,
+    "kind": "bound",
+    "old": "83f8107d1c",
+    "edits": []
+  },
+  {
+    "row": "C2",
+    "va": 4349705,
+    "kind": "operand",
+    "old": "69c084030000",
+    "edits": [
+      [
+        2,
+        "stride"
+      ]
+    ]
+  },
+  {
+    "row": "C2",
+    "va": 4349711,
+    "kind": "operand",
+    "old": "0558ba7000",
+    "edits": [
+      [
+        1,
+        "cache"
+      ]
+    ]
+  },
+  {
+    "row": "C3",
+    "va": 4349755,
+    "kind": "operand",
+    "old": "b85cba7000",
+    "edits": [
+      [
+        1,
+        "cache+4"
+      ]
+    ]
+  },
+  {
+    "row": "C3",
+    "va": 4349838,
+    "kind": "operand",
+    "old": "0584030000",
+    "edits": [
+      [
+        1,
+        "stride"
+      ]
+    ]
+  },
+  {
+    "row": "C3",
+    "va": 4349844,
+    "kind": "operand",
+    "old": "3d9cf27000",
+    "edits": [
+      [
+        1,
+        "cache+4+records*stride"
+      ]
+    ]
+  },
+  {
+    "row": "C4",
+    "va": 4349912,
+    "kind": "operand",
+    "old": "69ed84030000",
+    "edits": [
+      [
+        2,
+        "stride"
+      ]
+    ]
+  },
+  {
+    "row": "C4",
+    "va": 4349918,
+    "kind": "operand",
+    "old": "81c558ba7000",
+    "edits": [
+      [
+        2,
+        "cache"
+      ]
+    ]
+  },
+  {
+    "row": "C4",
+    "va": 4349956,
+    "kind": "operand",
+    "old": "69ff84030000",
+    "edits": [
+      [
+        2,
+        "stride"
+      ]
+    ]
+  },
+  {
+    "row": "C4",
+    "va": 4349962,
+    "kind": "operand",
+    "old": "81c758ba7000",
+    "edits": [
+      [
+        2,
+        "cache"
+      ]
+    ]
+  },
+  {
+    "row": "C5",
+    "va": 4350251,
+    "kind": "operand",
+    "old": "3dd2000000",
+    "edits": [
+      [
+        1,
+        "enums"
+      ]
+    ]
+  },
+  {
+    "row": "C6",
+    "va": 4350274,
+    "kind": "operand",
+    "old": "69c084030000",
+    "edits": [
+      [
+        2,
+        "stride"
+      ]
+    ]
+  },
+  {
+    "row": "C6",
+    "va": 4350280,
+    "kind": "operand",
+    "old": "8ba87cba7000",
+    "edits": [
+      [
+        2,
+        "cache+36"
+      ]
+    ]
+  },
+  {
+    "row": "C6",
+    "va": 4350323,
+    "kind": "operand",
+    "old": "69c084030000",
+    "edits": [
+      [
+        2,
+        "stride"
+      ]
+    ]
+  },
+  {
+    "row": "C6",
+    "va": 4350329,
+    "kind": "operand",
+    "old": "8ba880ba7000",
+    "edits": [
+      [
+        2,
+        "cache+40"
+      ]
+    ]
+  },
+  {
+    "row": "C6",
+    "va": 4350372,
+    "kind": "operand",
+    "old": "69c084030000",
+    "edits": [
+      [
+        2,
+        "stride"
+      ]
+    ]
+  },
+  {
+    "row": "C6",
+    "va": 4350378,
+    "kind": "operand",
+    "old": "8ba884ba7000",
+    "edits": [
+      [
+        2,
+        "cache+44"
+      ]
+    ]
+  },
+  {
+    "row": "C6",
+    "va": 4350421,
+    "kind": "operand",
+    "old": "69c084030000",
+    "edits": [
+      [
+        2,
+        "stride"
+      ]
+    ]
+  },
+  {
+    "row": "C6",
+    "va": 4350427,
+    "kind": "operand",
+    "old": "8ba888ba7000",
+    "edits": [
+      [
+        2,
+        "cache+48"
+      ]
+    ]
+  },
+  {
+    "row": "C6",
+    "va": 4350470,
+    "kind": "operand",
+    "old": "69c084030000",
+    "edits": [
+      [
+        2,
+        "stride"
+      ]
+    ]
+  },
+  {
+    "row": "C6",
+    "va": 4350476,
+    "kind": "operand",
+    "old": "8ba8c0ba7000",
+    "edits": [
+      [
+        2,
+        "cache+104"
+      ]
+    ]
+  },
+  {
+    "row": "C6",
+    "va": 4350519,
+    "kind": "operand",
+    "old": "69c084030000",
+    "edits": [
+      [
+        2,
+        "stride"
+      ]
+    ]
+  },
+  {
+    "row": "C6",
+    "va": 4350525,
+    "kind": "operand",
+    "old": "8ba8c4ba7000",
+    "edits": [
+      [
+        2,
+        "cache+108"
+      ]
+    ]
+  },
+  {
+    "row": "C6",
+    "va": 4350568,
+    "kind": "operand",
+    "old": "69c084030000",
+    "edits": [
+      [
+        2,
+        "stride"
+      ]
+    ]
+  },
+  {
+    "row": "C6",
+    "va": 4350574,
+    "kind": "operand",
+    "old": "8ba8c8ba7000",
+    "edits": [
+      [
+        2,
+        "cache+112"
+      ]
+    ]
+  },
+  {
+    "row": "C6",
+    "va": 4350617,
+    "kind": "operand",
+    "old": "69c084030000",
+    "edits": [
+      [
+        2,
+        "stride"
+      ]
+    ]
+  },
+  {
+    "row": "C6",
+    "va": 4350623,
+    "kind": "operand",
+    "old": "8ba8ccba7000",
+    "edits": [
+      [
+        2,
+        "cache+116"
+      ]
+    ]
+  },
+  {
+    "row": "C7",
+    "va": 4350309,
+    "kind": "operand",
+    "old": "d99f58030000",
+    "edits": [
+      [
+        2,
+        "floats+0"
+      ]
+    ]
+  },
+  {
+    "row": "C7",
+    "va": 4350358,
+    "kind": "operand",
+    "old": "d99f5c030000",
+    "edits": [
+      [
+        2,
+        "floats+4"
+      ]
+    ]
+  },
+  {
+    "row": "C7",
+    "va": 4350407,
+    "kind": "operand",
+    "old": "d99f60030000",
+    "edits": [
+      [
+        2,
+        "floats+8"
+      ]
+    ]
+  },
+  {
+    "row": "C7",
+    "va": 4350456,
+    "kind": "operand",
+    "old": "d99f64030000",
+    "edits": [
+      [
+        2,
+        "floats+12"
+      ]
+    ]
+  },
+  {
+    "row": "C7",
+    "va": 4350505,
+    "kind": "operand",
+    "old": "d99f68030000",
+    "edits": [
+      [
+        2,
+        "floats+16"
+      ]
+    ]
+  },
+  {
+    "row": "C7",
+    "va": 4350554,
+    "kind": "operand",
+    "old": "d99f6c030000",
+    "edits": [
+      [
+        2,
+        "floats+20"
+      ]
+    ]
+  },
+  {
+    "row": "C7",
+    "va": 4350603,
+    "kind": "operand",
+    "old": "d99f70030000",
+    "edits": [
+      [
+        2,
+        "floats+24"
+      ]
+    ]
+  },
+  {
+    "row": "C7",
+    "va": 4350652,
+    "kind": "operand",
+    "old": "d99f74030000",
+    "edits": [
+      [
+        2,
+        "floats+28"
+      ]
+    ]
+  },
+  {
+    "row": "C7",
+    "va": 4350658,
+    "kind": "operand",
+    "old": "d9875c030000",
+    "edits": [
+      [
+        2,
+        "floats+4"
+      ]
+    ]
+  },
+  {
+    "row": "C7",
+    "va": 4350664,
+    "kind": "operand",
+    "old": "d88758030000",
+    "edits": [
+      [
+        2,
+        "floats+0"
+      ]
+    ]
+  },
+  {
+    "row": "C7",
+    "va": 4350676,
+    "kind": "operand",
+    "old": "d99f78030000",
+    "edits": [
+      [
+        2,
+        "floats+32"
+      ]
+    ]
+  },
+  {
+    "row": "C7",
+    "va": 4350682,
+    "kind": "operand",
+    "old": "d9875c030000",
+    "edits": [
+      [
+        2,
+        "floats+4"
+      ]
+    ]
+  },
+  {
+    "row": "C7",
+    "va": 4350688,
+    "kind": "operand",
+    "old": "d88760030000",
+    "edits": [
+      [
+        2,
+        "floats+8"
+      ]
+    ]
+  },
+  {
+    "row": "C7",
+    "va": 4350700,
+    "kind": "operand",
+    "old": "d99f7c030000",
+    "edits": [
+      [
+        2,
+        "floats+36"
+      ]
+    ]
+  },
+  {
+    "row": "C7",
+    "va": 4350706,
+    "kind": "operand",
+    "old": "d98764030000",
+    "edits": [
+      [
+        2,
+        "floats+12"
+      ]
+    ]
+  },
+  {
+    "row": "C7",
+    "va": 4350712,
+    "kind": "operand",
+    "old": "d88760030000",
+    "edits": [
+      [
+        2,
+        "floats+8"
+      ]
+    ]
+  },
+  {
+    "row": "C7",
+    "va": 4350724,
+    "kind": "operand",
+    "old": "d99f80030000",
+    "edits": [
+      [
+        2,
+        "floats+40"
+      ]
+    ]
+  },
+  {
+    "row": "C8",
+    "va": 4349531,
+    "kind": "operand",
+    "old": "81fad2000000",
+    "edits": [
+      [
+        2,
+        "enums"
+      ]
+    ]
+  },
+  {
+    "row": "C8",
+    "va": 4349550,
+    "kind": "operand",
+    "old": "05d1000000",
+    "edits": [
+      [
+        1,
+        "enums-1"
+      ]
+    ]
+  },
+  {
+    "row": "C8",
+    "va": 4349540,
+    "kind": "operand",
+    "old": "898154030000",
+    "edits": [
+      [
+        2,
+        "count"
+      ]
+    ]
+  },
+  {
+    "row": "C8",
+    "va": 4349555,
+    "kind": "operand",
+    "old": "898154030000",
+    "edits": [
+      [
+        2,
+        "count"
+      ]
+    ]
+  },
+  {
+    "row": "C8",
+    "va": 4349561,
+    "kind": "operand",
+    "old": "8d8158030000",
+    "edits": [
+      [
+        2,
+        "floats"
+      ]
+    ]
+  },
+  {
+    "row": "C8",
+    "va": 4349567,
+    "kind": "operand",
+    "old": "c78154030000d2000000",
+    "edits": [
+      [
+        2,
+        "count"
+      ],
+      [
+        6,
+        "enums"
+      ]
+    ]
+  },
+  {
+    "row": "C9",
+    "va": 4348978,
+    "kind": "operand",
+    "old": "c7804c03000000000000",
+    "edits": [
+      [
+        2,
+        "count-8"
+      ]
+    ]
+  },
+  {
+    "row": "C10",
+    "va": 4348794,
+    "kind": "operand",
+    "old": "69c0e1000000",
+    "edits": [
+      [
+        2,
+        "stride/4"
+      ]
+    ]
+  },
+  {
+    "row": "C10",
+    "va": 4348802,
+    "kind": "operand",
+    "old": "d90485b0bd7000",
+    "edits": [
+      [
+        3,
+        "cache+floats"
+      ]
+    ]
+  },
+  {
+    "row": "C11",
+    "va": 4385488,
+    "kind": "operand",
+    "old": "3b8154030000",
+    "edits": [
+      [
+        2,
+        "count"
+      ]
+    ]
+  },
+  {
+    "row": "C12",
+    "va": 4386986,
+    "kind": "bound",
+    "old": "83f8107d35",
+    "edits": []
+  },
+  {
+    "row": "C12",
+    "va": 4386991,
+    "kind": "operand",
+    "old": "69c084030000",
+    "edits": [
+      [
+        2,
+        "stride"
+      ]
+    ]
+  },
+  {
+    "row": "C12",
+    "va": 4386997,
+    "kind": "operand",
+    "old": "f68059ba700001",
+    "edits": [
+      [
+        2,
+        "cache+1"
+      ]
+    ]
+  },
+  {
+    "row": "C12",
+    "va": 4387022,
+    "kind": "operand",
+    "old": "3b88acbd7000",
+    "edits": [
+      [
+        2,
+        "cache+count"
+      ]
+    ]
+  },
+  {
+    "row": "C12",
+    "va": 4387030,
+    "kind": "operand",
+    "old": "8b848860ba7000",
+    "edits": [
+      [
+        3,
+        "cache+8"
+      ]
+    ]
+  },
+  {
+    "row": "C13",
+    "va": 4394203,
+    "kind": "bound",
+    "old": "83f8107d52",
+    "edits": []
+  },
+  {
+    "row": "C13",
+    "va": 4394208,
+    "kind": "operand",
+    "old": "69c084030000",
+    "edits": [
+      [
+        2,
+        "stride"
+      ]
+    ]
+  },
+  {
+    "row": "C13",
+    "va": 4394214,
+    "kind": "operand",
+    "old": "f68059ba700001",
+    "edits": [
+      [
+        2,
+        "cache+1"
+      ]
+    ]
+  },
+  {
+    "row": "C13",
+    "va": 4394238,
+    "kind": "operand",
+    "old": "3b90acbd7000",
+    "edits": [
+      [
+        2,
+        "cache+count"
+      ]
+    ]
+  },
+  {
+    "row": "C13",
+    "va": 4394246,
+    "kind": "operand",
+    "old": "8b849060ba7000",
+    "edits": [
+      [
+        3,
+        "cache+8"
+      ]
+    ]
+  },
+  {
+    "row": "C14",
+    "va": 4395263,
+    "kind": "bound",
+    "old": "83f8107d28",
+    "edits": []
+  },
+  {
+    "row": "C14",
+    "va": 4395268,
+    "kind": "operand",
+    "old": "69c084030000",
+    "edits": [
+      [
+        2,
+        "stride"
+      ]
+    ]
+  },
+  {
+    "row": "C14",
+    "va": 4395274,
+    "kind": "operand",
+    "old": "f68059ba700001",
+    "edits": [
+      [
+        2,
+        "cache+1"
+      ]
+    ]
+  },
+  {
+    "row": "C14",
+    "va": 4395293,
+    "kind": "operand",
+    "old": "8d8858ba7000",
+    "edits": [
+      [
+        2,
+        "cache"
+      ]
+    ]
+  },
+  {
+    "row": "T1",
+    "va": 4348822,
+    "kind": "operand",
+    "old": "bed2000000",
+    "edits": [
+      [
+        1,
+        "enums"
+      ]
+    ]
+  },
+  {
+    "row": "T1",
+    "va": 4348844,
+    "kind": "operand",
+    "old": "c7809406000000000000",
+    "edits": [
+      [
+        2,
+        "table_count"
+      ]
+    ]
+  },
+  {
+    "row": "T2",
+    "va": 4350783,
+    "kind": "operand",
+    "old": "8b8194060000",
+    "edits": [
+      [
+        2,
+        "table_count"
+      ]
+    ]
+  },
+  {
+    "row": "T2",
+    "va": 4350900,
+    "kind": "operand",
+    "old": "8b8194060000",
+    "edits": [
+      [
+        2,
+        "table_count"
+      ]
+    ]
+  },
+  {
+    "row": "T2",
+    "va": 4350922,
+    "kind": "operand",
+    "old": "8bb994060000",
+    "edits": [
+      [
+        2,
+        "table_count"
+      ]
+    ]
+  },
+  {
+    "row": "T3",
+    "va": 4351838,
+    "kind": "operand",
+    "old": "8b8794060000",
+    "edits": [
+      [
+        2,
+        "table_count"
+      ]
+    ]
+  },
+  {
+    "row": "T3",
+    "va": 4351854,
+    "kind": "operand",
+    "old": "898f94060000",
+    "edits": [
+      [
+        2,
+        "table_count"
+      ]
+    ]
+  },
+  {
+    "row": "T3",
+    "va": 4351883,
+    "kind": "operand",
+    "old": "ff8f94060000",
+    "edits": [
+      [
+        2,
+        "table_count"
+      ]
+    ]
+  },
+  {
+    "row": "T3",
+    "va": 4351844,
+    "kind": "operand",
+    "old": "3dd2000000",
+    "edits": [
+      [
+        1,
+        "enums"
+      ]
+    ]
+  },
+  {
+    "row": "T4",
+    "va": 4350048,
+    "kind": "operand",
+    "old": "8b0d34f97000",
+    "edits": [
+      [
+        2,
+        "table+table_count"
+      ]
+    ]
+  },
+  {
+    "row": "T4",
+    "va": 4350105,
+    "kind": "operand",
+    "old": "3b0534f97000",
+    "edits": [
+      [
+        2,
+        "table+table_count"
+      ]
+    ]
+  },
+  {
+    "row": "T4",
+    "va": 4350072,
+    "kind": "operand",
+    "old": "8b14c5a0f27000",
+    "edits": [
+      [
+        3,
+        "table"
+      ]
+    ]
+  },
+  {
+    "row": "T4",
+    "va": 4350113,
+    "kind": "operand",
+    "old": "8b2cc5a4f27000",
+    "edits": [
+      [
+        3,
+        "table+4"
+      ]
+    ]
+  },
+  {
+    "row": "T5",
+    "va": 4357178,
+    "kind": "operand",
+    "old": "68a0f27000",
+    "edits": [
+      [
+        1,
+        "table"
+      ]
+    ]
+  },
+  {
+    "row": "T5",
+    "va": 4357191,
+    "kind": "operand",
+    "old": "b9a0f27000",
+    "edits": [
+      [
+        1,
+        "table"
+      ]
+    ]
+  },
+  {
+    "row": "M1",
+    "va": 4357168,
+    "kind": "hook",
+    "old": "e81beeffff",
+    "edits": []
+  },
+  {
+    "row": "M2",
+    "va": 4351424,
+    "kind": "hook",
+    "old": "3dffffff3f750f",
+    "edits": []
+  }
+]

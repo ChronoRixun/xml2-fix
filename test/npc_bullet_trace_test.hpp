@@ -11,6 +11,14 @@ float __cdecl trace_random(bool simulation)
        "spread draws use the simulation stream inside the game FP environment");
  trace_calls += "r"; return .5f;
 }
+void __cdecl trace_frame(void*, void*, npc_semi_auto::bullet_frame* out)
+{ *out = {{10, 20, 30}, {1, 0, 0}}; }
+npc_semi_auto::bullet_contact trace_contact(void*, const npc_semi_auto::bullet_segment& segment)
+{
+ check(segment.from.x == -26 && segment.to.x == 560 && segment.extent.x == 0,
+       "admitted bullet uses the zero-extent -36/+550 segment");
+ ++trace_queries; trace_calls += "q"; return {};
+}
 void __cdecl trace_tracer(u32 effect, const npc_semi_auto::point* origin, const npc_semi_auto::point* ray,
                           u32 token, float parameter, u32 flags)
 {
@@ -39,7 +47,7 @@ bool __fastcall trace_native_event(void*, void*, void* context)
  const bool scoped = current_bullet && current_bullet->row;
  if (scoped) check(field<u32>(frame.data(), 0x228) == 0, "only this beam's duplicate tracer argument is cleared");
  else check(field<u32>(frame.data(), 0x228) == 77, "unmarked beam frame is untouched");
- check(skip_bullet_collision(actor) == skip, "muzzle and main collision bypasses agree");
+ check(skip_bullet_collision(actor, frame.data()) == skip, "marked shots replace both stock collision queries");
  if (!skip) { ++trace_queries; trace_calls += "q"; }
  return true;
 }
@@ -49,10 +57,12 @@ void bullet_trace_cases()
  const auto saved_weapons = weapons; const bool saved_applied = applied;
  const auto saved_event = event_function; const auto saved_clock = clock_function;
  const auto saved_random = random_function; const auto saved_tracer = tracer_function;
+ const auto saved_frame = bullet_frame_function; const auto saved_contact = bullet_contact_function;
  std::array<std::byte, 0x800> actor{}; std::array<std::byte, 0x500> stats{};
  std::array<std::byte, 0x50> event{}, unmarked{}; std::array<void*, 6> context{};
  std::memcpy(stats.data() + 0x150, "traceguard", 11);
  field<void*>(actor.data(), 0x35c) = stats.data(); field<u32>(actor.data(), 0x1c) = 0x123;
+ field<point>(actor.data(), 0x3ac) = {560, 20, 66};
  context[0] = actor.data(); trace_context = context.data(); trace_nested_event = unmarked.data();
  field<void*>(event.data(), 0x14) = reinterpret_cast<void*>(1);
  field<u32>(event.data(), 0x3c) = bullet_marker;
@@ -60,6 +70,7 @@ void bullet_trace_cases()
  weapons = {*parse("traceguard|3e23d70a|44098000|3fc00000|00000000|00000000|00000020|3f000000|00000000")};
  applied = true; event_function = reinterpret_cast<event_t>(&trace_native_event);
  clock_function = &trace_clock; random_function = &trace_random; tracer_function = &trace_tracer;
+ bullet_frame_function = &trace_frame; bullet_contact_function = &trace_contact;
  trace_states = {}; trace_queries = trace_tracers = 0;
  for (const auto [time, expected] : {std::pair<float, bool>{.49f, false}, {.5f, true}, {.66f, false}, {1.f, true}}) {
   fixture_time = time; trace_calls.clear();
@@ -84,6 +95,7 @@ void bullet_trace_cases()
  }
  weapons = saved_weapons; applied = saved_applied; event_function = saved_event; clock_function = saved_clock;
  random_function = saved_random; tracer_function = saved_tracer;
+ bullet_frame_function = saved_frame; bullet_contact_function = saved_contact;
 }
 
 void* trace_expected_frame = nullptr;
@@ -95,9 +107,9 @@ bool __cdecl trace_noisy_begin(void* actor, void* frame)
  __asm { xorps xmm0, xmm0 }
  return forced_result != 0;
 }
-bool __cdecl trace_noisy_skip(void* actor)
+bool __cdecl trace_noisy_skip(void* actor, void* frame)
 {
- check(actor == fixture_ai, "collision bridge forwards actor");
+ check(actor == fixture_ai && frame == trace_expected_frame, "collision bridge forwards actor and exact native stack frame");
  __asm { fninit }
  __asm { fld1 }
  __asm { xorps xmm0, xmm0 }
@@ -314,9 +326,14 @@ void native_rejected_trace(const char* path)
  muzzle_resume = address(0x45222c); muzzle_skipped = address(0x45230b);
  collision_resume = address(0x452355); collision_skipped = address(0x4528a9);
  const auto clock_saved = clock_function; const auto random_saved = random_function; const auto tracer_saved = tracer_function;
+ const auto frame_saved = bullet_frame_function;
+ const auto contact_saved = bullet_contact_function;
  clock_function = &trace_clock; random_function = &trace_random; tracer_function = &trace_tracer;
+ bullet_frame_function = &trace_frame;
+ bullet_contact_function = &trace_contact;
  std::array<std::byte, 0x800> actor{}; std::array<std::byte, 0x80> native_move{};
  field<u32>(actor.data(), 0x1c) = 0x123;
+ field<point>(actor.data(), 0x3ac) = {560, 20, 66};
  const auto row = *parse("traceguard|3e23d70a|44098000|3fc00000|00000000|00000000|00000020|3f000000|00000000");
  std::array<std::byte, 0x270> frame{};
  field<void*>(frame.data(), 0x20c) = native_move.data();
@@ -324,14 +341,21 @@ void native_rejected_trace(const char* path)
  field<point>(frame.data(), 0x50) = {1, 0, 0}; field<point>(frame.data(), 0x98) = {-99, -99, -99};
  field<float>(frame.data(), 0x214) = 550; field<float>(frame.data(), 0x234) = 1;
  field<u32>(frame.data(), 0x228) = 77;
- bullet_scope scope{actor.data(), &row}; auto* previous = current_bullet; current_bullet = &scope;
- trace_states = {}; fixture_time = .49f; trace_calls.clear(); trace_fragment = code;
- check(safe_trace_fragment(actor.data(), frame.data()), "native fragment executes without exception");
- check(scope.skip && !scope.pending && trace_calls == "rrrtc", "executed native rejection emits presentation and bypasses every collision call");
- const auto endpoint = field<point>(native_move.data(), 0x40);
- check(endpoint.x == 560 && endpoint.y == 20 && endpoint.z == 30, "executed native endpoint math agrees with the early tracer's stack fields");
- check(field<u32>(frame.data(), 0x228) == 0, "executed native tail receives no duplicate tracer");
+ auto* previous = current_bullet;
+ trace_states = {}; trace_fragment = code;
+ for (const auto [time, admitted] : {std::pair<float, bool>{.49f, false}, {.5f, true}, {.66f, false}}) {
+  bullet_scope scope{actor.data(), &row}; current_bullet = &scope;
+  fixture_time = time; trace_calls.clear(); field<u32>(frame.data(), 0x228) = 77;
+  check(safe_trace_fragment(actor.data(), frame.data()), "native fragment executes without exception");
+  check(scope.skip == !admitted && !scope.pending && trace_calls == (admitted ? "rrrtcq" : "rrrtc"),
+        "executed native beam emits presentation then invokes only the admitted character ray");
+  const auto endpoint = field<point>(native_move.data(), 0x40);
+  check(endpoint.x == 560 && endpoint.y == 20 && endpoint.z == 30, "executed native endpoint math agrees with the early tracer's stack fields");
+  check(field<u32>(frame.data(), 0x228) == 0, "executed native tail receives no duplicate tracer");
+ }
  current_bullet = previous; clock_function = clock_saved; random_function = random_saved; tracer_function = tracer_saved;
+ bullet_frame_function = frame_saved;
+ bullet_contact_function = contact_saved;
  muzzle_resume = mr; muzzle_skipped = ms; collision_resume = cr; collision_skipped = cs;
  VirtualFree(code, 0, MEM_RELEASE);
 }

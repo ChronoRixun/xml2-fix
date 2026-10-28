@@ -12,6 +12,9 @@
 #include "world_impact_rules.hpp"
 #include "xml1_capability_rules.hpp"
 #include "script_functions_rules.hpp"
+#include "limits_agreement_rules.hpp"
+#include "lift_rule_rules.hpp"
+#include "native_save_layout_rules.hpp"
 #include <cstdio>
 #include <string>
 #include <cstdarg>
@@ -74,6 +77,27 @@ bool rx(std::uint32_t page){MEMORY_BASIC_INFORMATION info{};return VirtualQuery(
 void make_rx(){for(auto page:{0x607000u,0x608000u,0x609000u}){DWORD old;VirtualProtect(at(page),4096,PAGE_EXECUTE_READ,&old);}}
 record peer(bool on,bool verified=true){record r;r.add(2,1,{on ? 1u : 0u,0,0,0},verified);r.finalize();return r;}
 void records(){
+ {
+  namespace w2=native_save_layout_rules;
+  check(w2::agreement_values()==std::array<std::uint32_t,4>{0x10802,0x10000400,0x4000400,0xc80400},"T13 rule47 carries ordinal2/zones8/structure1 and all frozen layout capacities");
+  record old,current,other,failed;
+  old.layout(3,{32,768,1024,10},true);current.layout(3,{32,768,1024,10},true);other.layout(3,{32,768,1024,10},true);
+  current.add(47,1,w2::agreement_values(),true);other.add(47,1,w2::agreement_values(),true);failed.add(47,1,w2::agreement_values(),false);
+  old.finalize();current.finalize();other.finalize();
+  check(current.compare(other.bytes())==result::match,"T13 two verified W2 peers match");
+  gameplay_capabilities::difference forward{},backward{};
+  check(current.compare(old.bytes(),&forward)!=result::match&&old.compare(current.bytes(),&backward)!=result::match,"T13 equal actor layout E10A2/W2 peers refuse in both directions");
+  char a[256]{},b[256]{};current.describe(forward.buckets,forward.local_only,true,a,sizeof a);old.describe(backward.buckets,backward.local_only,true,b,sizeof b);
+  check(std::string(a).find("47 NativeSaveLayout")!=std::string::npos&&std::string(b).find("47 NativeSaveLayout")!=std::string::npos,"T13 both sides name47 NativeSaveLayout despite equal entity capacities");
+  check(!failed.finalize()&&failed.compare(current.bytes())==result::unavailable,"T12 unverified rule47 closes agreement");
+  auto changed=w2::agreement_values();changed[0]^=0x10000;record revision;revision.layout(3,{32,768,1024,10},true);revision.add(47,1,changed,true);revision.finalize();
+  check(current.compare(revision.bytes())!=result::match,"T13 structural revision difference refuses even when capacities match");
+  check(w2::status({1023,4096,4095,1024,1023,127,256,8})=="layout W2; defs 1023/1024; enh 4096/4096; att 4095/4096; inst 1024/1024; world 1023/1024; obj 127/1024; talents 256/256; zones 8/8","W2 status protocol has exact fields/order and descriptor ceilings");
+  check(!w2::choose("lc",true,std::nullopt,std::nullopt).requested&&!w2::choose("",true,"w2",std::nullopt).requested,"selector absent and non-LC combinations keep released behavior");
+  check(w2::choose("LC",true," W2 ","4096").refusal.empty()&&w2::choose("lc",true,"w2",std::nullopt).requested,"W2 selection accepts canonical and trimmed case-insensitive key with implicit4096");
+  check(w2::choose("lc",false,"w2",std::nullopt).refusal.find("needs EntityCapacity=1")!=std::string::npos,"W2 missing prerequisite refuses by name");
+  check(!w2::choose("lc",true,"w2","512").refusal.empty()&&!w2::choose("lc",true,"other",std::nullopt).refusal.empty(),"conflicting item cap and unknown layout refuse instead of downgrade");
+ }
  auto on=peer(true),off=peer(false),host_failure=peer(false,false),client_failure=peer(true,false);
  check(on.compare(off.bytes())!=result::match,"host on/client off refuses");
  check(off.compare(on.bytes())!=result::match,"host off/client on refuses");
@@ -159,8 +183,8 @@ void records(){
  check(future.compare(stun(true,true,stun_rule::revision,true).bytes())==result::match,"later rule 17 registration agrees in either order");
  check(stun(true).compare(future.bytes())==result::entries,"missing future rule 17 is refused, not silently ignored");
  // New requested-only rules preserve the pre-integration OFF bytes and name both mismatch directions.
- for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id,gameplay_capabilities::box_harm_origin_id,gameplay_capabilities::danger_room_healthbars_id,gameplay_capabilities::harm_single_chain_id,gameplay_capabilities::online_conversations_id,gameplay_capabilities::model_pools_id,gameplay_capabilities::tick_rate_id,gameplay_capabilities::world_backfaces_id}) {
-  auto optional=[&](bool wanted,bool verified=true){record r;if(wanted)r.add(id,1,{1,0,0,0},verified);r.finalize();return r;};
+ for(const auto id:{gameplay_capabilities::danger_room_party_id,gameplay_capabilities::lockon_aim_id,gameplay_capabilities::box_harm_origin_id,gameplay_capabilities::danger_room_healthbars_id,gameplay_capabilities::harm_single_chain_id,gameplay_capabilities::online_conversations_id,gameplay_capabilities::model_pools_id,gameplay_capabilities::tick_rate_id,gameplay_capabilities::world_backfaces_id,gameplay_capabilities::igb_cache_id,gameplay_capabilities::balance_parity_id,gameplay_capabilities::lift_rule_id,gameplay_capabilities::wall_cling_id,gameplay_capabilities::rogue_decide_id}) {
+  auto optional=[&](bool wanted,bool verified=true){record r;if(wanted)r.add(id,id==gameplay_capabilities::lift_rule_id ? lift_rule_rules::agreement_revision : 1,{1,0,0,0},verified);r.finalize();return r;};
   const auto yes=optional(true),no=optional(false),failed=optional(true,false);
   check(yes.compare(optional(true).bytes())==result::match,"matching new requested-only rule accepts");
   check(std::equal(no.bytes().begin(),no.bytes().end(),native.bytes().begin(),native.bytes().end()),"new rule OFF record is byte-identical to base");
@@ -171,6 +195,15 @@ void records(){
   no.describe(d.buckets,0,false,name,sizeof(name));
   check(std::string(name)==std::string(gameplay_capabilities::rule_name(id))+" (disabled on this PC)","disabled peer names known new rule");
   check(!failed.ready() && failed.compare(yes.bytes())==result::unavailable && yes.compare(failed.bytes())!=result::match,"failed new request closes host/join");
+ }
+ {
+  record old_lift,new_lift;
+  old_lift.add(gameplay_capabilities::lift_rule_id,1,{1,0,0,0},true);old_lift.finalize();
+  new_lift.add(gameplay_capabilities::lift_rule_id,lift_rule_rules::agreement_revision,{1,0,0,0},true);new_lift.finalize();
+  gameplay_capabilities::difference d;char name[160];
+  check(new_lift.compare(old_lift.bytes(),&d)==result::value && old_lift.compare(new_lift.bytes())==result::value,"LiftRule revision 2 refuses revision 1 both ways");
+  new_lift.describe(d.buckets,d.local_only,false,name,sizeof(name));
+  check(std::string(name).find("LiftRule")!=std::string::npos,"LiftRule revision mismatch names the rule");
  }
  // [Online] FastTransfer is rule 24: an unassigned (0) ID is refused by add(); the assigned rule is checked in both mismatch
  // directions and for its record values.
@@ -223,6 +256,38 @@ void records(){
   x4.compare(x2.bytes(),&d);x4.describe(d.buckets,d.local_only,true,name,sizeof(name));
   check(std::string(name)=="28 ModelPools","x4 against x2 names rule 28: "+std::string(name));
  }
+ // ResourceNames must participate even when IGBCache is absent or explicitly stock.
+ {
+  using namespace limits_agreement_rules;
+  auto limits_record = [](capacities wanted, capacities effective, bool explicit_stock_igb) {
+   record r;
+   // IGBCache absent and 200 both leave rule 31 absent, just as exports.cpp does.
+   const auto chosen = limits_rules::decide(std::nullopt, std::to_string(wanted[0]),
+    std::nullopt, std::nullopt, std::nullopt,
+    explicit_stock_igb ? std::optional<std::string_view>("200") : std::nullopt);
+   check(chosen.igb_records == 200, "standalone names keep stock IGB cache");
+   register_rules(wanted, effective, [&](auto id, auto rev, auto values, bool verified) { r.add(id, rev, values, verified); });
+   r.finalize(); return r;
+  };
+  record released; released.finalize();
+  for (bool explicit_igb : {false, true}) {
+   const auto off = limits_record(stock, stock, explicit_igb);
+   check(std::ranges::equal(off.bytes(), released.bytes()), "absent/stock limits preserve released bytes");
+   for (std::size_t i = 0; i < stock.size(); ++i) {
+    auto raised = stock; raised[i] = i == 0 ? 2048 : stock[i] + 1;
+    const auto on = limits_record(raised, raised, explicit_igb);
+    check(on.compare(off.bytes()) == result::entries && off.compare(on.bytes()) == result::entries,
+     "non-stock resource capacity refuses stock both ways");
+    check(on.compare(limits_record(raised, raised, explicit_igb).bytes()) == result::match, "equal capacities agree");
+    check(!limits_record(raised, stock, explicit_igb).ready(), "failed requested capacity closes admission");
+    gameplay_capabilities::difference d; char name[160];
+    on.compare(off.bytes(), &d); on.describe(d.buckets, d.local_only, true, name, sizeof(name));
+    check(std::string(name).find(gameplay_capabilities::rule_name(ids[i])) != std::string::npos, "raised peer names capacity");
+    off.compare(on.bytes(), &d); off.describe(d.buckets, d.local_only, true, name, sizeof(name));
+    check(std::string(name).find(gameplay_capabilities::rule_name(ids[i])) != std::string::npos, "stock peer names capacity");
+   }
+  }
+ }
  // Rule 29, [Online] TickRate: {rate in effect, 0, 0, 0} whenever the key is there, revision 1. A 60 and a 30 PC refuse
  // by name both ways; a PC without the key (the game's 30, no entry) and a 60 PC too; absent keeps the released bytes.
  {
@@ -248,7 +313,7 @@ void records(){
  // Rule 16, the NPC power rule ([Game] NpcPowerRule): enemies that pay for powers and decide every 2 s never share a
  // lockstep game with enemies that don't; revision 3 adds the visibility word; absent is {0,0,0,0}, a failed install unverified.
  auto npc=[](bool on,bool verified=true){record r;r.add(2,1,{1,0,0,0},true);r.add(gameplay_capabilities::npc_power_rule_id,npc_power::revision_for(on || !verified),{on ? 1u : 0u,on ? 1u : 0u,0,0},verified);r.finalize();return r;};
- check(gameplay_capabilities::npc_power_rule_id==16 && npc_power::revision==11 && npc(true).compare(npc(false).bytes())==result::value && npc(false).compare(npc(true).bytes())==result::value,"NPC power rule on/off refuses both directions");
+ check(gameplay_capabilities::npc_power_rule_id==16 && npc_power::revision==14 && npc(true).compare(npc(false).bytes())==result::value && npc(false).compare(npc(true).bytes())==result::value,"NPC power rule on/off refuses both directions");
  check(npc(true).compare(npc(true).bytes())==result::match && npc(false).compare(npc(false).bytes())==result::match,"same NPC power rule accepts");
  record npc_previous; npc_previous.add(2,1,{1,0,0,0},true);npc_previous.add(gameplay_capabilities::npc_power_rule_id,2,{1,0,0,0},true);npc_previous.finalize();
  check(npc(true).compare(npc_previous.bytes())!=result::match && npc_previous.compare(npc(true).bytes())!=result::match,"NPC visibility policy rejects the previous power/combo-only revision both ways");
@@ -260,13 +325,26 @@ void records(){
  // officer weapon candidates, 9 with words 2-3 set). Revisions 10 and 11 carry both and refuse every one of them.
  for(const std::uint16_t candidate:{5,6,7,8,9})for(const auto words:{std::array<std::uint32_t,4>{1,1,0,0},std::array<std::uint32_t,4>{1,1,1,0x6BED0A4Cu}}){
   record peer;peer.add(2,1,{1,0,0,0},true);peer.add(gameplay_capabilities::npc_power_rule_id,candidate,words,true);peer.finalize();
-  check(npc(true).compare(peer.bytes())!=result::match && peer.compare(npc(true).bytes())!=result::match,"revision 11 refuses candidate revisions 5-9 both ways");
+  check(npc(true).compare(peer.bytes())!=result::match && peer.compare(npc(true).bytes())!=result::match,"revision 14 refuses candidate revisions 5-9 both ways");
  }
  // Revision 10 is XML2 Fix 1.8.0-beta.6 (released): its enemies do not spend the call-gap re-checks/decisions and
  // still roll power attacks, so a beta 7 peer refuses it both ways, with and without the weapon brain words.
  for(const auto words:{std::array<std::uint32_t,4>{1,1,0,0},std::array<std::uint32_t,4>{1,1,1,0x6BED0A4Cu}}){
   record beta6;beta6.add(2,1,{1,0,0,0},true);beta6.add(gameplay_capabilities::npc_power_rule_id,10,words,true);beta6.finalize();
-  check(npc(true).compare(beta6.bytes())!=result::match && beta6.compare(npc(true).bytes())!=result::match,"revision 11 refuses the released revision 10 (1.8.0-beta.6) both ways");
+  check(npc(true).compare(beta6.bytes())!=result::match && beta6.compare(npc(true).bytes())!=result::match,"revision 14 refuses the released revision 10 (1.8.0-beta.6) both ways");
+ }
+ // Revision 11 is XML2 Fix 1.8.0-beta.7: its picker callers other than the melee gate and its officer weapon brain still
+ // refuse a locked body, its Advanced Sentinel / Juggernaut classes are XMen2.exe's and its Danger Room gate stays, so a
+ // revision 14 peer refuses it both ways, with and without the weapon brain words.
+ for(const auto words:{std::array<std::uint32_t,4>{1,1,0,0},std::array<std::uint32_t,4>{1,1,1,0x6BED0A4Cu},std::array<std::uint32_t,4>{1,1,1,0x559D0BA1u}}){
+  record beta7;beta7.add(2,1,{1,0,0,0},true);beta7.add(gameplay_capabilities::npc_power_rule_id,11,words,true);beta7.finalize();
+  check(npc(true).compare(beta7.bytes())!=result::match && beta7.compare(npc(true).bytes())!=result::match,"revision 14 refuses revision 11 (1.8.0-beta.7) both ways");
+ }
+ // Revision 11 (released) and the unreleased candidates 12 (parity A alone) and 13 (the bullet ray alone) differ.
+ for (const auto revision : {11, 12, 13}) {
+  record previous;previous.add(2,1,{1,0,0,0},true);previous.add(16,std::uint16_t(revision),{1,1,0,0},true);previous.finalize();
+  check(npc(true).compare(previous.bytes())==result::value && previous.compare(npc(true).bytes())==result::value,
+        "revision 14 refuses revisions 11, 12 and 13 both ways");
  }
  // The officer weapon brain (words 2-3) under the same revision: with and without it refuse each other by value.
  record officer;officer.add(2,1,{1,0,0,0},true);officer.add(gameplay_capabilities::npc_power_rule_id,npc_power::revision,{1,1,1,0x6BED0A4Cu},true);officer.finalize();
@@ -430,6 +508,45 @@ void boundary_standins(){
  for(auto va:{native_request,native_reply,native_info,native_ack})jump(va,&admitted);
  jump(join_resume,&join_continuation);
 }
+// The querying PC's games list (CMenuGamesList, browser_guards). Its update's native body is a stand-in; the list
+// refresh 0x5b9900 is retail code run on a fake list widget / string table / sprintf.
+std::array<std::uint8_t,0x1970> games_list{};std::array<std::uint8_t,0x20> game_table{};int list_updates=0;
+void __fastcall list_update_fake(void*,void*){++list_updates;}
+std::vector<std::string> rows;
+int __fastcall list_add(void*,void*,const char* text,int){rows.emplace_back(text);return 0x77;}
+void __fastcall list_set(void*,void*,int,int){}
+void __fastcall list_clear(void*,void*){rows.clear();}
+void* list_vt[0x40]{};void** list_object=list_vt;
+const char* __fastcall strings_lookup(void*,void*,int id){return id==0xfe4 ? "No Games Found" : id==0xfc5 ? "Searching for games" : "other text";}
+void* strings_vt[4]{};void** strings_object=strings_vt;void* __cdecl strings_get(){return &strings_object;}
+int __cdecl sprintf_fake(char* out,const char*,const char* text){std::strcpy(out,text);return int(std::strlen(text));}
+void games_list_object(int refreshes)
+{
+ games_list.fill(0);const std::uint32_t vt=games_list_vtable;std::memcpy(games_list.data(),&vt,4);
+ const auto list=std::uint32_t(reinterpret_cast<std::uintptr_t>(&list_object)),table=std::uint32_t(reinterpret_cast<std::uintptr_t>(game_table.data()));
+ std::memcpy(games_list.data()+0x1960,&list,4);std::memcpy(games_list.data()+0x1964,&table,4);std::memcpy(games_list.data()+0x196c,&refreshes,4);
+ game_table.fill(0);list_vt[0xc0/4]=reinterpret_cast<void*>(&list_clear);list_vt[0x84/4]=reinterpret_cast<void*>(&list_add);list_vt[0x8c/4]=reinterpret_cast<void*>(&list_set);
+ strings_vt[2]=reinterpret_cast<void*>(&strings_lookup);
+}
+std::uint32_t menu_now(){std::uint32_t m;std::memcpy(&m,manager_space.data()+menu_current,4);return m;}
+// One update of the games list through its (patched) vtable slot, with the list current or another menu current.
+bool games_list_update_once(bool list_current)
+{
+ jump(games_list_update,&list_update_fake);games_list_object(0);
+ const auto saved=menu_now();current_menu(list_current ? games_list.data() : join_menu.data());
+ const auto slot=*reinterpret_cast<std::uint32_t*>(at(games_list_update_slot));const auto before=list_updates;
+ reinterpret_cast<void(__thiscall*)(void*)>(slot)(games_list.data());
+ std::memcpy(manager_space.data()+menu_current,&saved,4);
+ return slot!=games_list_update && list_updates==before+1;
+}
+// The retail refresh 0x5b9900 on an empty table: the row it adds (refreshes < 5: still searching).
+std::string games_list_row(int refreshes)
+{
+ jump(0x4bdb30,&strings_get);jump(0x6720ec,&sprintf_fake);jump(0x6155e0,&noop);
+ games_list_object(refreshes);rows.clear();
+ reinterpret_cast<void(__thiscall*)(void*)>(0x5b9900)(games_list.data());
+ return rows.size()==1 ? rows[0] : "rows: "+std::to_string(rows.size());
+}
 record runtime_peer(bool on){record r;r.add(2,1,{on ? 1u : 0u,0,0,0},true);r.add(3,7,{1,3,0,0},true);r.add(17,1,{1,0,0,0},true);r.add(18,1,{1,0,0,0},true);r.finalize();return r;}
 void separate_host_joiner()
 {
@@ -484,6 +601,17 @@ void notice_rules(){
  std::vector<std::string> details;bool paragraphs=true;
  for(bool remote:{false,true})for(auto why:{refusal::unspecified,refusal::settings,refusal::sender_install,refusal::foreign_record}){details.emplace_back(host_notice_detail(why,remote));paragraphs&=details.back().size()<400 && details.back().rfind("A player could not join: ",0)==0;}
  check(paragraphs,"every lobby notice fits the 500-byte advice buffer and starts with what happened");
+ // The joining PC's words (082f A2: ActorAI on one PC only).
+ const char* a2="entity layout, ActorAI (disabled on this PC)";
+ check(joiner_settings_text(a2)=="The host uses different gameplay settings: entity layout, ActorAI (disabled on this PC). Both players need the same build and the same gameplay settings in xml2-fix.ini; match them, restart the game and join again.",
+       "the joiner's dialog names the differing settings and what to do");
+ check(joiner_settings_text(nullptr)=="The host uses different gameplay settings. Both players need the same build and the same gameplay settings in xml2-fix.ini; match them, restart the game and join again." && joiner_settings_text(nullptr).size()<512,
+       "without names the dialog still says the host's settings differ and what to do");
+ check(games_row_text(refusal::settings,"DeathRule")=="Host's gameplay settings differ: DeathRule" && games_row_text(refusal::settings,a2)=="Settings differ: entity layout, ActorAI (disabled on this PC)" &&
+       games_row_text(refusal::settings,"entity layout, ActorAI (disabled on this PC), DeathRule (not on the other PC)")=="Host's gameplay settings differ - match xml2-fix.ini, restart" && games_row_text(refusal::settings,nullptr)=="Host's gameplay settings differ - match xml2-fix.ini, restart",
+       "the games-list row names the settings (082f A2: entity layout, ActorAI) and falls back to what to do when the names do not fit one row");
+ bool row_lines=true;for(auto why:{refusal::unspecified,refusal::settings,refusal::sender_install,refusal::foreign_record})row_lines&=games_row_text(why,a2).size()<=games_row_limit && games_row_text(why,nullptr).size()<=games_row_limit;
+ check(row_lines,"every games-list row fits one row (64 characters; the native row buffer is 256 bytes)");
  check(std::string(host_notice_detail(refusal::settings,false)).find("gameplay settings")!=std::string::npos && std::string(host_notice_detail(refusal::sender_install,true)).find("their PC")!=std::string::npos && std::string(host_notice_detail(refusal::sender_install,false)).find("this PC")!=std::string::npos,
        "lobby notices name the reason and which PC");
 }
@@ -603,11 +731,42 @@ int run_fragment(int& value){
  __try { value=reinterpret_cast<int(__cdecl*)(void*)>(0x6101b0)(&e);return 1; }
  __except(EXCEPTION_EXECUTE_HANDLER){return 2;}
 }
+// The joiner's own screen after a refused host (082f A2/A3): the retail games-list refresh shows the reason in place of
+// "No Games Found", the dialog follows on the list, and a compatible host ends it. Drives the real 0x18 receiver.
+void games_list_notice(){
+ const auto rel_target=[](std::uint32_t site){std::int32_t d;std::memcpy(&d,static_cast<const std::uint8_t*>(at(site))+1,4);return site+5+d;};
+ check(*static_cast<std::uint8_t*>(at(games_empty_lookup_first))==0xe8 && *static_cast<std::uint8_t*>(at(games_empty_lookup_emptied))==0xe8 &&
+       rel_target(games_empty_lookup_first)==rel_target(games_empty_lookup_emptied) && *reinterpret_cast<std::uint32_t*>(at(games_list_update_slot))!=games_list_update,
+       "both empty-row lookups call the notice thunk and the update slot is wrapped");
+ // Before any refusal (and after the loop's refusal expired or cleared) the list is native.
+ auto receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(request_registration+1)));
+ auto local=runtime_peer(true);input.fill(0);std::memcpy(input.data()+request_size,local.bytes().data(),local.bytes().size());
+ context.fill(0);put(4,0x12345678);sender[0x19]=1;event e{0x18,input.data(),std::uint16_t(request_size+local.bytes().size()),0,context.data(),sender.data()};
+ forwarded=0;check(receiver(&e)==73 && forwarded==1,"a compatible host's 0x18 is filed natively");
+ check(games_list_row(5)=="No Games Found" && games_list_row(0)=="Searching for games","with no refusal current the retail refresh adds its native rows (the thunk forwards the string lookup)");
+ // A host whose gameplay settings differ (rule 2 here): not filed; the joiner's list says why, then the dialog.
+ auto off=runtime_peer(false);std::memcpy(input.data()+request_size,off.bytes().data(),off.bytes().size());
+ const auto shown=popups;logger::logged.clear();visible.clear();sender[0x19]=1;forwarded=0;
+ check(receiver(&e)==0 && forwarded==0 && popups==shown,"the refused 0x18 files nothing and opens no popup from the network receive");
+ check(games_list_row(0)=="Searching for games","the first five refreshes keep the native searching row");
+ check(games_list_row(5)=="Host's gameplay settings differ: ExplosiveFirstHit" && has_log("in place of its empty row"),
+       "the retail refresh shows the host's differing setting in place of No Games Found");
+ check(games_list_update_once(true) && popups==shown+1 && visible=="The host uses different gameplay settings: ExplosiveFirstHit. Both players need the same build and the same gameplay settings in xml2-fix.ini; match them, restart the game and join again.",
+       "the games list raises the dialog: the host's settings differ, the setting by name, what to do");
+ check(games_list_row(5)=="Host's gameplay settings differ: ExplosiveFirstHit","the row stays while the refusal is current");
+ // An older host (no record): another build.
+ e.length=std::uint16_t(request_size);sender[0x19]=1;check(receiver(&e)==0 && games_list_row(5)=="Host found, but it runs another build or its fix did not load","an older host's refusal names another build on the list");
+ // A compatible host answering later ends the notice: the list is native again.
+ std::memcpy(input.data()+request_size,local.bytes().data(),local.bytes().size());e.length=std::uint16_t(request_size+local.bytes().size());forwarded=0;sender[0x19]=1;
+ check(receiver(&e)==73 && forwarded==1 && games_list_row(5)=="No Games Found","a compatible host's 0x18 ends the refusal row");
+ const auto after=popups;check(games_list_update_once(true) && popups==after,"no dialog after the notice ended");
+}
 void runtime(){
  notice_rules();
  guards(failure_guards);guards(transport_guards);guards(receiver_guards);guards(presentation_guards);guards(game_version_rules::guards);
  native_bytes(0x609c80,0x100);native_bytes(0x6074b0,0x75);
  native_bytes(0x6101b0,0x110);guards(fragment_guards);
+ native_bytes(0x5b9900,0x3b0);guards(browser_guards); // the games list's refresh (retail) and its notice guards
  {int value=-1;check(run_fragment(value)==2,"negative control: retail's fragment receiver faults on a 0x13 fragment of a stream it never opened");}
  native_bytes(native_failure,0xa7);native_bytes(native_cleanup,0x10c);native_bytes(native_peer_disconnect,10);
  const auto original=*static_cast<std::uint8_t*>(at(native_join));const auto original_send=*static_cast<std::uint8_t*>(at(reply_send));
@@ -644,6 +803,8 @@ void runtime(){
  check(!game_version::needs_gameplay_agreement(),"no participating installer leaves native protocol unenlisted");
  check(gameplay_agreement::register_entity_layout(1,32,224,256,8,true),"public capacity API registers verified explicit retail layout");
  check(game_version::needs_gameplay_agreement() && !game_version::gameplay_online_allowed() && iat_hook::captured,"capacity registration automatically enlists socket exclusion before finalization");
+ gameplay_agreement::defer_finalization();gameplay_agreement::defer_finalization();
+ check(!gameplay_agreement::commit_verified()&&!game_version::gameplay_online_allowed(),"table-dependent holds keep agreement unfrozen and the online gate closed");
  check(gameplay_agreement::register_rule(2,1,{explosive_first_hit::installed() ? 1u : 0u,0,0,0},explosive_first_hit::verified()),"installed explosion registers its actual effective installer snapshot");
  check(gameplay_agreement::register_rule(3,7,{1,3,0,0},true),"synthetic controller registers revision/values through public API without transport changes");
  check(gameplay_agreement::register_rule(gameplay_capabilities::object_world_impact_id,1,{world_impact::installed() ? 1u : 0u,0,0,0},world_impact::verified()),"actual installed ObjectWorldImpact registers rule 17 without poisoning online");
@@ -660,6 +821,10 @@ void runtime(){
  check(begin(context.data(),sender.data(),123)==0 && cleaned() && popups==shown+1 && statuses>0 && freed>0 && timers>0 && unregistered>0,"failed local transport executes actual native join failure/cleanup immediately");
  check(visible.find("Incompatible gameplay")!=std::string::npos && visible.find("unverified installation")!=std::string::npos,"native popup vtable receives incompatibility/install-failure explanation");
  // The record freezes after every registration; no further bytes are written at finalization.
+ gameplay_agreement::resume_finalization();
+ check(!gameplay_agreement::commit_verified()&&!game_version::gameplay_online_allowed(),"one remaining table hold prevents early finalization after late registration");
+ gameplay_agreement::resume_finalization();
+ check(game_version::gameplay_online_allowed(),"last table hold resumes requested finalization and binds the verified gate");
  make_rx();check(gameplay_agreement::finalize(reinterpret_cast<HMODULE>(0x400000)),"final shared record verifies with the installed transport");
  check(rx(0x607000) && rx(0x608000) && rx(0x609000),"finalization writes nothing and every shared page stays RX");
  boundary_standins();
@@ -689,7 +854,13 @@ void runtime(){
    // PC shows the native dialog and tells the host why. No join is pending, so nothing is cleaned up.
    context.fill(0);put(4,0x12345678);put(0x2250,0x22222222);put(0x22bc,0x33333333);sender[0x19]=1;const auto snapshot=context;
    const auto shown=popups,closed=menus,huds=hud_messages,status_before=statuses,free_before=freed,timer_before=timers;const auto lobby_before=lobby();send_count=0;forwarded=0;
-   check(receiver(&e)==0 && forwarded==0 && popups==shown+1 && menus==closed && hud_messages==huds && lobby()==lobby_before,"incompatible 0x18 game info is not filed; the querying PC sees the native dialog");
+   logger::logged.clear();visible.clear();
+   check(receiver(&e)==0 && forwarded==0 && popups==shown && menus==closed && hud_messages==huds && lobby()==lobby_before && has_log("the games list shows why: \"Host's gameplay settings differ: ExplosiveFirstHit\""),
+         "incompatible 0x18 game info is not filed; no popup from inside the network receive (082f A2: shown but never drawn), the games list is told why");
+   check(games_list_update_once(false) && popups==shown,"the deferred dialog waits while another menu is current");
+   check(games_list_update_once(true) && popups==shown+1 && menus==closed && visible==joiner_settings_text("ExplosiveFirstHit") && has_log("the games list shows the refusal's dialog"),
+         "the games list's own update raises the dialog naming the setting and what to do");
+   check(games_list_update_once(true) && popups==shown+1,"the dialog is raised once per refusal");
    check(send_count==1 && output_type==0x1d && output_size==refusal_detail_size && read_refusal(output.data(),output_size)==refusal::settings && sender[0x19]==0,"querying PC tells the host why with a reasoned 0x1d");
    check(statuses==status_before && freed==free_before && timers==timer_before && context==snapshot,"0x18 refusal runs no join failure cleanup on the querying PC");
    e.length=std::uint16_t(base);forwarded=0;send_count=0;check(receiver(&e)==0 && forwarded==0 && send_count==1 && read_refusal(output.data(),output_size)==refusal::foreign_record,"0x18 game info without a record (older host) is refused as another build");
@@ -699,11 +870,11 @@ void runtime(){
   sender[0x19]=1;const auto shown_before=popups;const auto lobby_before=lobby();send_count=0;logger::logged.clear();const auto response=receiver(&e);
   check(response==(joining ? 2 : 0) && forwarded==1 && (joining ? popups==shown_before+1 && lobby()==lobby_before : popups==shown_before && lobby()==host_notice_detail(refusal::settings,false)) && send_count==1 && output_type==0x1d && output_size==refusal_detail_size && read_refusal(output.data(),output_size)==refusal::settings,
         joining ? "joiner mismatch sends reasoned rejection and shows its native failure without admission" : "host mismatch sends reasoned rejection and shows the non-modal lobby notice without admission");
-  check(read_refusal_buckets(output.data(),output_size)==(std::uint64_t(1)<<gameplay_capabilities::bucket_of(2)) && has_log("differs: 2 ExplosiveFirstHit") && (!joining || visible.find("Incompatible gameplay settings: ExplosiveFirstHit.")!=std::string::npos),
+  check(read_refusal_buckets(output.data(),output_size)==(std::uint64_t(1)<<gameplay_capabilities::bucket_of(2)) && has_log("differs: 2 ExplosiveFirstHit") && (!joining || visible.find("The host uses different gameplay settings: ExplosiveFirstHit. Both players need the same build and the same gameplay settings in xml2-fix.ini; match them, restart the game and join again.")!=std::string::npos),
         "the refusal names the differing rule: its 0x1d summary buckets, the log line and the joining PC's dialog");
   check(sender[0x19]==0 && (joining ? cleaned() : get(0x2250)==0x22222222 && get(0x22bc)==0x33333333),"retail peer flag clears; joining state cleans while active host preserves existing participants");
   if(!joining){pending_context();if(opcode==0x1a)put(0x22bc,0);const auto remote_body=output;event remote{output_type,const_cast<std::uint8_t*>(remote_body.data()),output_size,0,context.data(),sender.data()};auto remote_receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(rejection_registration+1)));const auto visible_before=popups;logger::logged.clear();check(remote_receiver(&remote)==2 && cleaned() && popups==visible_before+1,"remote native incompatibility reception ends pending join through actual failure cleanup");
-   check(has_log("the other PC refused this join (reason=1; differs: 2 ExplosiveFirstHit)") && visible.find("Incompatible gameplay settings: ExplosiveFirstHit.")!=std::string::npos,"the joining PC names the setting the host found different (log and dialog)");}
+   check(has_log("the other PC refused this join (reason=1; differs: 2 ExplosiveFirstHit)") && visible.find("The host uses different gameplay settings: ExplosiveFirstHit. Both players need the same build and the same gameplay settings in xml2-fix.ini; match them, restart the game and join again.")!=std::string::npos,"the joining PC names the setting the host found different (log and dialog)");}
   e.length=std::uint16_t(base);put(0x22bc,0);const auto legacy_before=forwarded;check(receiver(&e)==(joining ? 2 : 0) && forwarded==legacy_before,"legacy body without full record refuses before native admission");
   // A protocol-2 peer (1.4.0, the 1.5 pre-release) appends its full 312-byte list: read far enough to see it is another
   // protocol, refused as another build, never forwarded; a body longer than any record is malformed, never forwarded.
@@ -723,8 +894,9 @@ void runtime(){
   event e{0x18,input.data(),std::uint16_t(request_size+other.bytes().size()),0,context.data(),sender.data()};
   auto receiver=reinterpret_cast<int(__cdecl*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(request_registration+1)));
   const auto shown=popups;logger::logged.clear();forwarded=0;
-  check(receiver(&e)==0 && forwarded==0 && popups==shown+1 && visible.find(gameplay_capabilities::rule_name(static_cast<std::uint16_t>(omitted)))!=std::string::npos,"actual native admission refuses and names missing ObjectWorldImpact/StunRule");
+  check(receiver(&e)==0 && forwarded==0 && popups==shown && games_list_update_once(true) && popups==shown+1 && visible.find(gameplay_capabilities::rule_name(static_cast<std::uint16_t>(omitted)))!=std::string::npos,"actual native admission refuses and names missing ObjectWorldImpact/StunRule (dialog on the games list)");
  }
+ games_list_notice();
  ini::lc=false;ini::requested=false;game_version::install(reinterpret_cast<HMODULE>(0x400000));check(game_version::needs_gameplay_agreement() && !game_version::gameplay_online_allowed(),"explicit non-LC off configuration still requires verified shared agreement");
  game_version::bind_gameplay_agreement(true);check(socket(AF_INET,SOCK_DGRAM,0)==73,"verified non-LC off gate retains native socket forwarding");
  ini::key=false;iat_hook::captured=nullptr;game_version::install(reinterpret_cast<HMODULE>(0x400000));check(!game_version::needs_gameplay_agreement() && !iat_hook::captured,"unopted vanilla leaves native socket untouched");

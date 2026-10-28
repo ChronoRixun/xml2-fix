@@ -22,6 +22,10 @@ namespace npc_power {
 }
 namespace logger { void write(const char*, ...) {} }
 namespace game_version { void refuse_startup() {} }
+namespace mold_query {
+ bool pools_ready() { return false; }
+ bool is_a(void*, std::uint32_t) { return false; }
+}
 
 namespace {
  using u32 = std::uint32_t;
@@ -142,6 +146,7 @@ namespace {
  #include "npc_weapon_bridges_test.hpp"
  #include "npc_trace_gate_test.hpp"
  #include "npc_bullet_trace_test.hpp"
+ #include "npc_bullet_ray_test.hpp"
  std::string requested_name;
  std::array<std::byte, 0x148> idle_move{};
  unsigned requests = 0;
@@ -678,6 +683,8 @@ namespace {
 }
 int main(int argc, char** argv)
 {
+ std::setvbuf(stdout, nullptr, _IONBF, 0);
+ SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
  using namespace npc_semi_auto_rules;
  if (argc >= 4) source_trace_rows(argv[3]);
  trace_gate_cases();
@@ -1006,7 +1013,7 @@ int main(int argc, char** argv)
  auto changed = vals; changed[3] ^= 1; altered.add(16, npc_power::revision, changed, true);
  old.add(16, 8, vals, true); candidate9.add(16, 9, vals, true); failed.add(16, npc_power::revision, vals, false);
  for (auto* r : {&local, &equal, &off, &altered, &old, &failed, &power_only, &candidate9, &released4, &released10}) r->finalize();
- check(npc_power::revision == 11, "schema 4 weapon brain ships under rule 16 revision 11 (10 = 1.8.0-beta.6)");
+ check(npc_power::revision == 14, "schema 4 weapon brain and the character bullet ray ship under rule 16 revision 14 (10 = 1.8.0-beta.6, 11 = 1.8.0-beta.7, 12/13 unreleased candidates)");
  check(local.compare(equal.bytes()) == gameplay_capabilities::result::match, "equal peers agree");
  for (const auto* peer : {&off, &altered, &old, &power_only, &candidate9, &released4, &released10})
   check(local.compare(peer->bytes()) != gameplay_capabilities::result::match, "incompatible peer refused");
@@ -1015,7 +1022,11 @@ int main(int argc, char** argv)
  weapon_bridge_cases();
  guards_clear_of_rule16();
  if (argc >= 2) { retail_guards(argv[1]); native_rejected_trace(argv[1]); } else check(false, "retail executable path required");
- if (argc >= 3) original_entry_comparison(argv[2]);
+ if (argc >= 3) {
+  original_entry_comparison(argv[2]); owned_bullet_direction(argv[2], argv[1]); owned_bullet_endpoints(argv[2]); owned_bullet_filters(argv[2]);
+  owned_bullet_first_hit(argv[2]);
+  owned_bullet_muzzle(argv[2]);
+ }
  else std::printf("Original callback comparison not requested (supply owned XBE as second path)\n");
  std::printf("NPC semi-auto: %d checks, %d failures\n", checks, failures);
  return failures ? 1 : 0;

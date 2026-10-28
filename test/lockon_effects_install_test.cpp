@@ -1,4 +1,5 @@
 #include "lockon_effects.hpp"
+#include "effect_templates_rules.hpp"
 #include "lockon_effects_rules.hpp"
 #include "gameplay_capabilities.hpp"
 #include "entity_capacity.hpp"
@@ -41,6 +42,7 @@ int main(int argc,char** argv) {
   assert(false);
  };
  for(const auto& g:lockon_effects_rules::guards)seed(g.va,g.hex.size()/2);
+ seed(0x405100,21);
  for(const auto& s:lockon_effects_rules::sites)seed(s.address,s.before.size()/2);
  for(auto va:{0x4a95f0u,0x4a9600u,0x4a9590u})seed(va,6);
  seed(0x4eefb1,1);
@@ -60,23 +62,30 @@ int main(int argc,char** argv) {
   *reinterpret_cast<unsigned char*>(va)^=1;
  }
  if(mode=="dependency")*reinterpret_cast<unsigned char*>(0x4a95f0)^=1;
+ if(mode=="raised"){
+  const auto d=effect_templates_rules::descriptor_for(effect_templates_rules::layout_for(512));
+  effect_templates::published_layout=d;
+  const auto validator=effect_templates::validator_bytes(d);
+  std::memcpy(reinterpret_cast<void*>(0x405100),validator.data(),validator.size());
+ }
  std::vector<std::vector<unsigned char>> before;
  for(const auto& s:lockon_effects_rules::sites)
   before.emplace_back(reinterpret_cast<unsigned char*>(s.address),reinterpret_cast<unsigned char*>(s.address+s.before.size()/2));
  const auto head=*reinterpret_cast<unsigned char*>(0x4eefb1);
  lockon_effects::install(reinterpret_cast<HMODULE>(mode=="base" ? 0x500000 : 0x400000));
- const bool wanted=mode!="off" && mode!="visual" && mode!="both-off",success=mode=="on" || mode=="visual";
+ const bool on=mode=="on"||mode=="raised";
+ const bool wanted=mode!="off" && mode!="visual" && mode!="both-off",success=on || mode=="visual";
  assert(!fatal && lockon_effects::requested()==wanted);
- assert(lockon_effects::installed()==(mode=="on"));
- assert(lockon_effects::verified()==(!wanted || mode=="on"));
+ assert(lockon_effects::installed()==on);
+ assert(lockon_effects::verified()==(!wanted || on));
  for(std::size_t i=0;i<before.size();++i) {
   const auto va=lockon_effects_rules::sites[i].address;
   assert(success ? *reinterpret_cast<unsigned char*>(va)==0xe9 : std::memcmp(reinterpret_cast<void*>(va),before[i].data(),before[i].size())==0);
  }
- assert(*reinterpret_cast<unsigned char*>(0x4eefb1)==(mode=="on" ? 0 : head));
+ assert(*reinterpret_cast<unsigned char*>(0x4eefb1)==(on ? 0 : head));
  gameplay_capabilities::record actual;
  if(wanted)actual.add(gameplay_capabilities::lockon_aim_id,1,{lockon_effects::installed() ? 1u : 0u,0,0,0},lockon_effects::verified());
- assert(actual.finalize()==(!wanted || mode=="on"));
+ assert(actual.finalize()==(!wanted || on));
  if(!wanted) {
   gameplay_capabilities::record stock;stock.finalize();
   assert(std::equal(actual.bytes().begin(),actual.bytes().end(),stock.bytes().begin(),stock.bytes().end()));

@@ -1,7 +1,9 @@
 #include "gamepad_fix.hpp"
+#include "controller_scan_cache.hpp"
 #include "log.hpp"
 #include "pad_input.hpp"
 #include "pad_profile.hpp"
+#include "pad_hotplug.hpp"
 #include "virtual_pad.hpp"
 #include "virtual_pad_rules.hpp"
 #include "xinput_pad.hpp"
@@ -30,6 +32,7 @@ namespace gamepad_fix
 		constexpr std::uint16_t microsoft_vid = 0x045E;
 
 		const pad_profile::profile* active = &pad_profile::logitech_dual_action;
+		bool cache_scans = true;
 
 		// COM vtable slots. Every IDirectInput version shares the first ones, as do the device interfaces.
 		constexpr int slot_create_device = 3;
@@ -49,7 +52,9 @@ namespace gamepad_fix
 		struct device_record
 		{
 			bool spoofed = false;
-			int ordinal = -1; // n-th spoofed device -> n-th connected XInput pad
+			int ordinal = -1; // initial discovery order / pipe ordinal; the source index is retained separately
+			std::string instance_key;
+			int focus_state = -1;
 			bool axes_loaded = false;
 			pad_profile::axis_ranges axes{};
 			std::array<bool, pad_profile::axis_count> set_by_game{};
@@ -79,6 +84,9 @@ namespace gamepad_fix
 		std::mutex devices_mutex;
 		std::unordered_map<void*, device_record> device_records;
 		int spoofed_count = 0;
+		std::unordered_map<std::string, int> source_slots;
+		std::set<std::string> attached_instances;
+		bool topology_known = false;
 
 		std::uint16_t vid_of(const GUID& product) { return static_cast<std::uint16_t>(product.Data1 & 0xFFFF); }
 		std::uint16_t pid_of(const GUID& product) { return static_cast<std::uint16_t>(product.Data1 >> 16); }
@@ -250,6 +258,7 @@ namespace gamepad_fix
 				if (real_device_info(device, info) && should_spoof(info.guidProduct))
 				{
 					const std::string key(reinterpret_cast<const char*>(&info.guidInstance), sizeof(GUID));
+					it->second.instance_key = key;
 					const auto [ordinal, first_time] = ordinals.try_emplace(key, spoofed_count);
 					if (first_time)
 					{
@@ -268,6 +277,33 @@ namespace gamepad_fix
 		{
 			std::lock_guard lock(devices_mutex);
 			device_records.erase(device); // a new device may reuse a released one's address
+		}
+
+		int source_for(const device_record& record, const std::vector<int>& connected)
+		{
+			std::lock_guard lock(devices_mutex);
+			if (!topology_known)
+				return record.ordinal >= 0 && record.ordinal < static_cast<int>(connected.size()) ? connected[record.ordinal] : -1;
+			if (record.instance_key.empty() || !attached_instances.contains(record.instance_key)) return -1;
+			// A quick reconnect can change the XInput user index without a sampled
+			// DirectInput GUID removal. Release disconnected indices, while keeping
+			// another still-connected pad's lease intact.
+			for (auto& [key, slot] : source_slots)
+				if (slot >= 0 && std::ranges::find(connected,slot) == connected.end()) slot = -1;
+			auto& source = source_slots.try_emplace(record.instance_key, -1).first->second;
+			if (source >= 0) return source; // never compress a still-attached pad's XInput slot
+			const auto used = [&](int slot)
+			{
+				for (const auto& [key, value] : source_slots) if (key != record.instance_key && value == slot) return true;
+				return false;
+			};
+			// Preserve the old discovery order for the initial assignment. Subsequent
+			// reads retain that actual slot, even if another connected pad disappears.
+			if (record.ordinal >= 0 && record.ordinal < static_cast<int>(connected.size()) && !used(connected[record.ordinal]))
+				source = connected[record.ordinal];
+			else for (const int slot : connected) if (!used(slot)) { source = slot; break; }
+			if (source >= 0) logger::write("dinput: physical ordinal %d assigned stable XInput index %d", record.ordinal, source);
+			return source;
 		}
 
 		// Reads the ranges and deadzones the game configured on the real device, for the axes it
@@ -496,6 +532,7 @@ namespace gamepad_fix
 
 		HRESULT STDMETHODCALLTYPE get_device_state(void* self, const DWORD size, LPVOID data)
 		{
+			pad_hotplug::on_keyboard_read(self, size);
 			const auto result = reinterpret_cast<get_device_state_t>(original(self, slot_get_device_state))(self, size, data);
 			if (!data || (size != sizeof(DIJOYSTATE) && size != sizeof(DIJOYSTATE2)))
 			{
@@ -531,18 +568,26 @@ namespace gamepad_fix
 			// Another window has the focus: an idle pad, as with the game's own foreground-only device.
 			if (!game_in_foreground())
 			{
+				if (record.focus_state != 0) logger::write("dinput: pad device %p ordinal %d idle because the game lacks focus", self, record.ordinal);
+				record.focus_state = 0;
+				active->fill_state(*static_cast<DIJOYSTATE*>(data), xinput_pad::raw_state{}, record.axes);
+				return DI_OK;
+			}
+			if (record.focus_state == 0) logger::write("dinput: pad device %p ordinal %d focus returned; reading XInput", self, record.ordinal);
+			record.focus_state = 1;
+
+			const auto connected = xinput_pad::connected_indices();
+			xinput_pad::raw_state pad{};
+			const int source = source_for(record, connected);
+			if (source < 0 || !xinput_pad::read_raw(source, pad))
+			{
 				active->fill_state(*static_cast<DIJOYSTATE*>(data), xinput_pad::raw_state{}, record.axes);
 				return DI_OK;
 			}
 
-			const auto connected = xinput_pad::connected_indices();
-			xinput_pad::raw_state pad{};
-			if (record.ordinal < 0 || record.ordinal >= static_cast<int>(connected.size()) || !xinput_pad::read_raw(connected[record.ordinal], pad))
-			{
-				return result;
-			}
-
 			pad_input::on_read(record.ordinal, pad, false); // the test pipe's "pad N" is the N-th pad presented
+			logger::write_once("pad-state:" + std::to_string(reinterpret_cast<std::uintptr_t>(self)),
+			                   "dinput: pad device %p ordinal %d reads XInput index %d successfully", self, record.ordinal, source);
 			active->fill_state(*static_cast<DIJOYSTATE*>(data), pad, record.axes);
 			return DI_OK;
 		}
@@ -707,8 +752,32 @@ namespace gamepad_fix
 				return real(self, type, callback, user, flags);
 			}
 
-			enum_context context{callback, user, is_di8(self)};
-			const HRESULT result = real(self, type, &enum_callback, &context, flags);
+			int version = 0;
+			{
+				std::lock_guard lock(mutex);
+				version = vtables[*static_cast<void***>(self)].version;
+			}
+			enum_context context{callback, user, version == 8};
+			const DWORD main_type = GET_DIDEVICE_TYPE(type);
+			const bool controllers = type == 0 || (context.di8 ? type == DI8DEVCLASS_GAMECTRL ||
+				(main_type >= DI8DEVTYPE_JOYSTICK && main_type <= DI8DEVTYPE_SUPPLEMENTAL) : main_type == 4);
+			HRESULT result = DI_OK;
+			if (cache_scans && controllers && controller_scan_cache::start())
+			{
+				const auto list = controller_scan_cache::request({self, version, is_wide(self), type, flags}, real);
+				if (list)
+				{
+					result = list->result;
+					for (const auto& item : list->devices)
+						if (enum_callback(reinterpret_cast<LPCDIDEVICEINSTANCEW>(item.bytes.data()), &context) == DIENUM_STOP) break;
+				}
+			}
+			else
+			{
+				if (cache_scans && controllers)
+					logger::write_once("scan-worker-failed", "dinput: controller scan worker unavailable - original enumeration retained");
+				result = real(self, type, &enum_callback, &context, flags);
+			}
 			// The virtual pads after the real devices, so each is always the same pad in the game's list.
 			if (SUCCEEDED(result) && !context.stopped && virtual_pad::count() > 0 && virtual_pad_rules::lists_pads(context.di8, type, flags))
 			{
@@ -741,6 +810,25 @@ namespace gamepad_fix
 			{&IID_IDirectInput2A, false, false, 5}, {&IID_IDirectInput2W, true, false, 5},
 			{&IID_IDirectInputA, false, false, 3}, {&IID_IDirectInputW, true, false, 3},
 		}};
+	}
+
+	void update_attached(const GUID* instances, const unsigned count)
+	{
+		std::lock_guard lock(devices_mutex);
+		attached_instances.clear();
+		const GUID zero{};
+		for (unsigned i=0; instances && i<count; ++i)
+			if (std::memcmp(&instances[i], &zero, sizeof(GUID)) != 0)
+				attached_instances.emplace(reinterpret_cast<const char*>(&instances[i]), sizeof(GUID));
+		for (auto it=source_slots.begin();it!=source_slots.end();)
+			if (!attached_instances.contains(it->first)) it=source_slots.erase(it); else ++it;
+		topology_known = true;
+	}
+
+	void cache_device_scan(const bool enabled)
+	{
+		cache_scans = enabled;
+		logger::write("input: CacheDeviceScan=%d (DirectInput scans and XInput connection discovery)", enabled ? 1 : 0);
 	}
 
 	void use_profile(const pad_profile::profile& profile)

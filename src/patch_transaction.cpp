@@ -9,6 +9,9 @@
 
 #ifdef XML2_SAVE_STARTUP_FAULT_TEST
 #include "../test/save_startup_faults.hpp" // the owned fault DLL wraps the transaction's Windows calls
+#include "../test/w2_startup_faults.hpp"
+#undef VirtualProtect
+#define VirtualProtect w2_startup_faults::protect
 #endif
 
 namespace patch_transaction
@@ -198,7 +201,18 @@ namespace patch_transaction
 		if (!unresolved.empty()) return finish(outcome::refused_unresolved, "unwritten composed sites: " + unresolved);
 		written_ = writes.size();
 
-		// 4. The page ledger: each distinct touched page once, original protection remembered.
+		// Allocate optional diagnostic history before acquiring pages or writing.
+        std::vector<write> originals, pending_writes;
+        if (record_verified_writes) {
+            for (const auto& c : contributions_) for (const auto& w : c.writes) {
+                write old{w.va, {}, w.what};old.bytes.reserve(w.bytes.size());
+                for (std::size_t j=0;j<w.bytes.size();++j)old.bytes.push_back(expected.at(w.va+j));
+                originals.push_back(std::move(old));pending_writes.push_back(w);
+            }
+            verified_originals.reserve(verified_originals.size()+originals.size());
+            verified_writes.reserve(verified_writes.size()+originals.size());
+        }
+        // 4. The page ledger: each distinct touched page once, original protection remembered.
 		SYSTEM_INFO system{};
 		GetSystemInfo(&system);
 		const std::uintptr_t page_size = system.dwPageSize;
@@ -260,6 +274,10 @@ namespace patch_transaction
 			result_ = outcome::committed;
 			report_ = std::to_string(contributions_.size()) + " contributions, " + std::to_string(writes.size()) + " bytes at " + std::to_string(pages.size()) + " page(s), " +
 			          std::to_string(expected.size()) + " guarded bytes";
+			if (record_verified_writes) {
+                verified_originals.insert(verified_originals.end(),std::make_move_iterator(originals.begin()),std::make_move_iterator(originals.end()));
+                verified_writes.insert(verified_writes.end(),std::make_move_iterator(pending_writes.begin()),std::make_move_iterator(pending_writes.end()));
+            }
 			for (auto& c : contributions_) if (c.publish) c.publish();
 			return result_;
 		}

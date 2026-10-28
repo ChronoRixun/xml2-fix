@@ -96,6 +96,34 @@ namespace model_pools_rules
 		return {std::nullopt, false, "off"};
 	}
 
+	// [Engine] ModelHandles (one-pass limits wave 1, E1): the IModel handles and their transforms - one pair per model
+	// node of every resident IGB, about 3.5 per IGB record (igb-cache.md 8.2) - beyond the profile's, for a raised IGB
+	// cache: 1024 records fill about 88 % of x4's 4096, so the Legends Classic build asks for 8192. The two pools
+	// share bitset<692>::findNext (0x56fcc0) and move together. Only with a raise (x2 / x4): the profile's count up to
+	// max_model_handles; anything else is a note and the profile's count stays.
+	constexpr int max_model_handles = 16384;
+	inline setting with_handles(setting s, const std::optional<std::string>& text, std::string* note = nullptr)
+	{
+		if (!text) return s;
+		const auto shown = limits_rules::value_text(*text);
+		if (shown.empty()) return s;
+		if (!s.raise)
+		{
+			if (note) *note = "ModelHandles needs ModelPools = x2 or x4 - ignored";
+			return s;
+		}
+		const int profile = (*s.raise)[index(kind::model)];
+		const auto value = limits_rules::parse_count(*text);
+		if (!value || *value < profile || *value > max_model_handles)
+		{
+			if (note) *note = "ModelHandles=" + std::string(shown) + " isn't a number from " + std::to_string(profile) + " to " + std::to_string(max_model_handles) + " - handles and transforms stay at " + std::to_string(profile);
+			return s;
+		}
+		(*s.raise)[index(kind::model)] = *value;
+		(*s.raise)[index(kind::transform)] = *value;
+		return s;
+	}
+
 	// ---- Co-op: gameplay-agreement rule 28 (ModelPools) -----------------------------------------------------
 	// A full pool refuses the model and with it the spawn (the negative control in docs/model-pools.md: 45 spawns on
 	// full stock pools made no enemy), so peers with other capacities can simulate different games under load. The

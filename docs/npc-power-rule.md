@@ -200,7 +200,7 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    decision would still refuse every locked frame and the re-check would still wait. The jne becomes a jump to a
    22-byte bridge: unlocked goes on at 0x5187ca as before; locked goes on for the melee brain's call (return address
    0x5193e7 at [esp+0x24]) and takes the native exit for every other caller - the officer weapon brain (0x519fe4)
-   keeps the path measured with the six officer cells. The decision then runs XML1's way in a locked move: due
+   keeps the path measured with the six officer cells (revision 11; revision 14 lifts that exception, item 20). The decision then runs XML1's way in a locked move: due
    timer, its visibility query (a deferral leaves it due, as 0xee30e does), the re-arm (+2.0 s / +0.5 s, item 2), the
    energy gate (item 3) and the picker.
 18. **The gate of item 3 (revision 11).** The picker 0x50fe50 also refuses a locked body at its entry
@@ -208,7 +208,43 @@ one execute-read page; a separate read-write page holds the 32 per-brain press d
    move refuses only through the per-slot chain test (move vt+0x3c, 0x1083a8..0x1083f4; XMen2.exe's vt+0x44 at the
    same place, 0x50ff2c..), so a power whose action the current move chains (an attack's chain window) can be picked.
    The gate now enters the picker with its first 12 bytes (`sub esp,0xac; push esi; mov esi,ecx; mov eax,[esi+0x10]`,
-   guarded) and jumps to 0x50fe69, after the test; the picker's seven other callers keep it.
+   guarded) and jumps to 0x50fe69, after the test; the picker's seven other callers keep it (until revision 14).
+19. **0x50fe63 (6 bytes, revision 14).** Item 18 for every caller: the picker's own `jne 0x50ffeb` becomes `jmp
+   0x50fe69` (`eb 04` + four nops). The seven other callers all reach XML1's lock-free picker 0x1081f0 in the first
+   game, and none of their own bodies tests the lock bit instead: the fight-state self-buff pick 0x5133f3 (XML1
+   0x10b062, mask 0x200; 25 `buffself` declarations in the port's data), the shared ranged / party-target helper
+   0x518e23 (0xee94a, mask 0x10), the Sentinel ranged probe 0x51abc3 (0xf08cd, 0x10), FlyNoNav 0x51b18a (0xf0e93, 4),
+   HitAndRun / ShadesNoWing 0x51b4f3 (0xf11fc, 4; the four wingless Shades), the Sentinel attack 0x51c30a (0xf1c99,
+   0x10 or 4 by range) and the flying-creature power choice 0x51dd89 (0xf2797; the Shade family). The per-slot chain
+   test (move vt+0x44) still refuses a power the current move doesn't chain. The melee gate's entry past the test
+   (item 18) is kept; it is now the same path.
+20. **0x5187c4 (6 bytes, revision 14).** Item 17 for every caller: the power decision's `jne 0x518ac9` becomes `jmp
+   0x5187ca` (`eb 04` + four nops) in place of revision 11's caller-scoped bridge (which is no longer jumped to). The
+   officer weapon brain's call (0x519fe4 -> vt+0xc; XML1 0xef5d2 -> 0xee260) - the HAARP Leader and every restored
+   weapon brain - now makes its decision in a locked move too: XML1's 0xee260 has no lock test for any caller.
+21. **0x694f1e (11 bytes) and 0x511fb8 (4 bytes), revision 14.** Class selection by name. For an AI whose type is
+   "auto" (XMen2.exe `cmp [esi+0x14],0xc` at 0x511f99; XML1 0xb at 0x109f02) both games walk 26 thirty-byte name
+   fragments with `strstr` on the stats name (XMen2.exe table 0x694d20, loop 0x511fe0..0x512011; XML1 a stack copy,
+   0x109f11..0x109f3c) and take the category of the first that matches from a stack array (XMen2.exe
+   0x511eb7..0x511fc4, XML1 0x109d6e..0x109e20). Two entries differ: fragment 17 is XML1's "dvanced" (category 0,
+   0x109da9 `mov [esp+0x88],edx`, edx 0 from 0x109586), which comes before fragment 18 "entinel" (category 4), but "xxxdvanced" here, so SentinelAdvanced and
+   SentinelAdvanced_b fell through to the Sentinel category 4; and fragment 22 "uggernau" is category 4 in XML1
+   (0x109e08 `mov [esp+0x9c],edi`, edi 4 from 0x109d92) and 0 here (0x511fb8 `mov [esp+0x68],ebp`, ebp 0 from 0x511d7d). The
+   fragment becomes "dvanced" (NUL-padded; the table's only reader is 0x511fd0) and the store becomes `mov
+   [esp+0x68],edi` (edi is 4 from 0x511e92). Neither npcstat entry sets an explicit type, so both reach the walk
+   (JuggernautAct3 / JuggernautFlashback / JuggernautScripted, SentinelAdvanced / SentinelAdvanced_b). The
+   Juggernaut fight's scripts don't supersede it: they call only `setPatternSequence` (`attackobjects`,
+   `ignoreattacks`) and `setallaiactive`; `setPatternSequence` (0x4a4830 -> the AI manager's vt+0x24c, 0x5226f0) sets
+   the AI's pattern (+0x53c..+0x544), never its category (+0x14).
+22. **0x435b09 (5 bytes, revision 14).** The pain decision's Danger Room gate. Between the checks of XML1's 0x44579
+   (the move's power check) and 0x44595, XMen2.exe added 0x435b09..0x435b4b: when the game mode byte 0x782728 is 0xfd
+   (getter 0x4c87c0; set at 0x4d1aac on the Danger Room menu paths) and the victim's previous pain (+0x5f4) is
+   positive and under 2.0 s old, the hit's reaction bit (+0xac bit 3) is cleared - a victim hit again within 2 s
+   does not react, in the Danger Room only. XML1 has no such gate. The call (the mode getter, no side effects)
+   becomes `jmp 0x435b52`, the check after the gate. Its other addition, 0x435a2b..0x435b02 (a combo-text hit whose
+   attacker's current move has `energypersecond` and is the victim's remembered pain move, inside 1 s, or 3 s when
+   both teams are 0x1d), stays: the port's data has 67 combo-text moves and 4 `energypersecond` moves and none with
+   both, so it is noted here and not restored.
 
 Measured shape this restores (beta6-ai-rest REPORT 2a, quiet-measure gate table): XML1's power-decision calls per
 second in attack / power moves 23-29 / 35-39, XMen2.exe's 0.3-2.8; port power lateness on the still bench 2.5 s
@@ -216,6 +252,19 @@ median against 0.02-0.19 s. Items 16-18 change only simulation inside the opted-
 was released in 1.8.0-beta.6, so they ship as **revision 11** (1.8.0-beta.7, with the block rule and the schema 3
 weapon brain): a beta 6 peer advertises revision 10 and is refused by revision, never admitted to desync. OFF
 (`NpcPowerRule` absent / `xml2`) patches nothing, as before.
+
+Items 19-22 (revision 14 - drafted as 12 on beta8/parity-a and folded with the bullet ray's 13 at the beta 8 integration; the Astra parity audit of 2026-10-25, sections 5-7) are code-checked only:
+`xml2_npc_combo_timing_test` runs the retail picker entry, the power decision's lock run, the category stores, the
+name walk over the retail fragments and the Danger Room gate natively, retail and with the rule's bytes, and the
+union-host proof (`scripts/prove_balance_install.py`) shows a revision 11 and a revision 12 (parity A) DLL write the same
+addresses but these five sites. Live acceptance still needed: the officer's six cells of round 6 (haarp2_1, 120 /
+300 / 520 units x EP 0 / full energy: shots, gaps, melee entries, the held grenade) - item 20 lets its power
+decision run in locked moves, so the shot cadence during recoil and the full-energy grenade hold must be
+remeasured, together with the round 7/8 weapon families on the same brain; a Shade / wingless Shade, a Sentinel and
+a flying enemy for item 19 (power decisions per second during attacks, powers per minute against the original);
+Advanced Sentinel's fight (charge moveset, category 0) and the Juggernaut boss (category 4, every pattern stage) for
+item 21; and a Danger Room course with repeated hits inside 2 s for item 22 (pain reactions per hit against the
+original).
 
 XML1's second combo table (brain mode 1) has no XMen2.exe brain. The earlier target-loss cancellation branch and
 the PC's press notification remain unchanged. No claim of complete AI equivalence is made.
@@ -253,19 +302,22 @@ its AI time is set.
 ## Gameplay agreement
 
 Online play is lockstep and the rule changes AI decisions and energy, so it is shared gameplay rule **16**
-(`gameplay_capabilities::npc_power_rule_id`, [gameplay-agreement.md](gameplay-agreement.md)): revision 11,
+(`gameplay_capabilities::npc_power_rule_id`, [gameplay-agreement.md](gameplay-agreement.md)): revision 14,
 `{installed ? 1 : 0, installed ? 1 : 0, weapon brain installed ? 1 : 0, its source fingerprint}`. Word 1
 advertises XML1 visibility geometry and query scheduling; words 2 and 3 are zero unless the separate opt-in
 `[Game] NpcSemiAuto=xml1` with its `[NpcSemiAuto]` rows is present ([npc-semi-auto.md](npc-semi-auto.md)).
 Revision 2 had only the power/combo word, revision 3 lacked the press/completion timers, revision 4 lacked the
 reaction-spent combo steps, power re-checks and attack decisions (items 11-13), revision 10 (released in
 1.8.0-beta.6) lacked the brain running through locked moves (items 16-18), the block rule (items 14-15) and the
-schema 3 weapon brain (every gun family, [npc-semi-auto.md](npc-semi-auto.md)). Revisions 5-9 were unreleased
+schema 3 weapon brain (every gun family, [npc-semi-auto.md](npc-semi-auto.md)), revision 11 (1.8.0-beta.7) the lock
+tests for every caller, XML1's Advanced Sentinel / Juggernaut classes and the Danger Room gate's removal (items
+19-22). Revisions 5-9 were unreleased
 candidates and are not reused: 5 a withdrawn role experiment and the first reaction-spent test build, 6-9 the officer
 weapon candidates (9 = the held-fire brain, words 2-3 of revisions 10 and 11). Registered in an LC installation or when
 requested; absent or `xml2` retains **revision 3** with verified `{0,0,0,0}`, matching the released OFF record. Only
-requested configurations use revision 11; every other enabled revision (3, 4, 5-9, 10) is refused both ways, and a
-revision 11 PC with the weapon brain and one without refuse each other by value, all naming rule 16 (NpcPowerRule).
+requested configurations use revision 14 (beta 8: parity wave A's items 19-22 and the character bullet ray with the schema 4
+trace contract, folded into one revision); every other enabled revision (3, 4, 5-13) is refused both ways, and a
+revision 14 PC with the weapon brain and one without refuse each other by value, all naming rule 16 (NpcPowerRule).
 Requested but not installed (a guard mismatch, protection, readback, an unknown value, `NpcSemiAuto=xml1` without
 `NpcPowerRule=xml1` or without valid rows) is unverified and closes host/join.
 

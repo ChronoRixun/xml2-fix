@@ -27,6 +27,11 @@ namespace patch_transaction
 	struct region { std::string name; address lo = 0, hi_exclusive = 0; std::array<std::uint8_t, 32> sha256{}; };
 	struct write { address va; std::vector<std::uint8_t> bytes; std::string what; };
 
+	// Optional diagnostic ledger, enabled before startup; OFF collects nothing.
+	inline bool record_verified_writes = false;
+	inline std::vector<write> verified_writes;
+    inline std::vector<write> verified_originals;
+
 	struct contribution
 	{
 		std::string owner;
@@ -82,6 +87,12 @@ namespace patch_transaction
 		std::size_t pages() const { return pages_; }
 		std::size_t written_bytes() const { return written_; }
 		std::size_t guarded_bytes() const { return guarded_; }
+		// Preparation-only composition: a semantic owner may move an already
+		// guarded operand into an authored trampoline before the union is sealed.
+		// The ordinary guard/conflict/readback/rollback checks still cover the
+		// resulting union. No game byte is read or written by this operation.
+		bool compose(const std::function<bool(std::vector<contribution>&)>& prepare)
+		{ return !sealed_ && prepare(contributions_); }
 
 	private:
 		std::vector<contribution> contributions_;
