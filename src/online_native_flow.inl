@@ -283,10 +283,43 @@ bool removal_was_kick(std::uintptr_t frame,std::uintptr_t local_record) {
         return kicked_by_host(f,local);
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
+// 0.6 preview fix J (060r failures 3 / 4): what 0x612c40 does AFTER the terminal clear (online_menus_rules host_left_by_notice):
+// it reloads the removal reason from its own argument ([ebp+0xc], 0x612e2b) and, with session +0x44c (a campaign runs, set by
+// 0x5f3be0, cleared by mainmenuexit) and this PC's record removed or the host's, runs "lostconnectdialog" (the takeover
+// offer: Yes = keep playing alone, No = mainMenuExit()); otherwise it shows the reason text as a native dialog. For a
+// guest the host removed (Party Kick in a running zone) or left (Leave / Quit), the 0.6 screens are the Hub notice / the
+// host-left panel instead: the reason argument is cleared (no native text dialog), +0x44c is cleared (no takeover offer)
+// and, in a running zone, "mainmenuexit 1" is queued (the stock No: resetgame + main menu, no dialog of its own).
+bool native_console_queue(void* console,const char* line);
+struct removal_frame { bool notice=false,local=false; std::uint32_t reason=0; };
+removal_frame removal_frame_read(std::uintptr_t frame,std::uintptr_t local_record) {
+    removal_frame r;
+    __try {
+        if(!frame) return r;
+        const auto* f=reinterpret_cast<const std::uint32_t*>(frame);
+        r.notice=f[1]==removal_notice_return && f[2]!=0;
+        r.local=r.notice && (f[2]==local_record || (*reinterpret_cast<const std::uint32_t*>(std::uintptr_t(f[2])+0x1c)&1u));
+        r.reason=f[3];
+    } __except(EXCEPTION_EXECUTE_HANDLER) { r={}; }
+    return r;
+}
+void native_end_quietly(void* session,std::uintptr_t frame,const char* why) {
+    bool in_zone=false,quieted=false;
+    __try {
+        auto* bytes=static_cast<unsigned char*>(session);
+        in_zone=bytes[0x44c]!=0;bytes[0x44c]=0;
+        if(frame && reinterpret_cast<const std::uint32_t*>(frame)[1]==removal_notice_return) { reinterpret_cast<std::uint32_t*>(frame)[3]=0;quieted=true; }
+    } __except(EXCEPTION_EXECUTE_HANDLER) { }
+    bool queued=false;
+    if(in_zone) { __try { queued=native_console_queue(at<getter>(0x55c890)(),"mainmenuexit 1"); } __except(EXCEPTION_EXECUTE_HANDLER) { queued=false; } }
+    logger::write("online menus: %s - native %s%s",why,quieted ? "dialog suppressed" : "dialog left as is",
+        in_zone ? (queued ? "; no takeover offer, back to the main menu (mainmenuexit 1)" : "; no takeover offer; main menu request refused") : "");
+}
 void __fastcall native_session_cleared(void* session,void*,bool keep_local) {
     const auto serial=native_flow.serial;
     const auto frame=cleared_frame;cleared_frame=0;
     const bool kicked=removal_was_kick(frame,native_flow.local_record); // read before 0x612070 releases the records
+    const auto removal=removal_frame_read(frame,native_flow.local_record);
     ++session_clears;
     at<void(__thiscall*)(void*,bool)>(0x612070)(session,keep_local);
     // Only terminal full-clear branches in 6123e0/612c40 call this wrapper.
@@ -306,6 +339,14 @@ void __fastcall native_session_cleared(void* session,void*,bool keep_local) {
                 removed_notice=true;host_left_state.dismiss();
                 if(kicked) logger::write("online menus: the host removed this PC from the game (native removal notice 0x%04X); the Hub shows lc_notice_removed",kick_reason);
                 else logger::write("online menus: the host removed this PC from the game (its in-session removal notice, rule 64); the Hub shows lc_notice_removed");
+                // The lobby Kick keeps its native "dropped" text (060r 3a); a running zone's removal never offers the takeover.
+                if(*(static_cast<unsigned char*>(session)+0x44c)) native_end_quietly(session,frame,"removed in a running game");
+            } else if(native_flow.phase==native_phase::guest && host_left_by_notice(removal.notice,removal.local,removal.reason)) {
+                // The host's own Leave / Quit notice (0x2b with the host's record, 0x1106 / 0x1107 / 0x10cc): the 0.6 host-left
+                // panel at the Hub, never the native "The host has left the game." or the takeover offer.
+                if(broker_calls.suppress_host_lost) { try { broker_calls.suppress_host_lost(); } catch(...) { } }
+                host_left_state.raise();
+                native_end_quietly(session,frame,"the host left the game; the Hub shows the host-left panel");
             } else if(native_flow.phase==native_phase::guest && broker_calls.host_lost) {
                 try { if(broker_calls.host_lost()) host_left_state.raise(); } catch(...) { }
             }
@@ -322,6 +363,34 @@ __declspec(naked) void native_session_cleared_stub() {
         jmp native_session_cleared
     }
 }
+// 0.6 preview fix J (060r failure 2): a host's Start Game -> Quit Game (pause or Party rail) tears the native session
+// and its transport down through the stock front-end exit without the terminal 0x612070 clear the wrapper above sees
+// (the host keeps its local record), so the room was never left ("no room-leave line") and the native flow stayed
+// "host, lobby active" over a dead engine. Each frame (online_menus::keyboard) a live lobby whose engine is gone ends
+// here exactly as a session end does: ownership dropped (no native cleanup - it already ran) and the room left.
+// The room is the broker's (state room), not only the native flow's: after Start Game the host's flow ownership is already
+// released (fix J live 08:28: lobby_active was clear at the quit), the room is not.
+void native_session_watch() {
+    const bool lobby=native_flow.lobby_active && (native_flow.phase==native_phase::host || native_flow.phase==native_phase::guest);
+    const bool room=broker_live() && broker_view().state==broker::phase::room;
+    if(!lobby && !room) return;
+    if(!native_transport_gone() && !native_session_transport_cleared()) return;
+    // Once per room (fix J live 08:53: the deferred leave waits for a transport tick that no longer comes, so the watch
+    // must leave at once and only once).
+    static std::uintptr_t left_for=0;
+    const auto generation=std::uintptr_t(broker_view().generation.room)+1;
+    if(!lobby && left_for==generation) return;
+    left_for=generation;
+    const bool guest=native_flow.phase==native_phase::guest;
+    logger::write("online menus: the native session ended (%s; its transport was torn down without a session-end clear) - the room is left",
+        guest ? "guest" : lobby ? "host" : "room member");
+    if(guest && !removed_notice && broker_calls.host_lost) { try { if(broker_calls.host_lost()) host_left_state.raise(); } catch(...) { } }
+    native_flow.touched=false;
+    try { native_flow_cancel(); } catch(...) { logger::write("online menus: native session end: ownership cleanup failed"); }
+    // The transport is gone: no tick will run a deferred leave, so the room is left now (the quit notices already went out).
+    try { if(broker_live() && broker_calls.leave) broker_calls.leave();resolve_edit=0;resolve_ticket={}; }
+    catch(...) { logger::write("online menus: native session end: room leave failed"); }
+}
 bool native_request(const char* name) {
     __try { at<request_fn>(0x5d5db0)(manager(),name,nullptr);return true; }
     __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -334,6 +403,7 @@ bool native_host_begin() {
     __try { controller=at<int(__thiscall*)(void*)>(0x5d8570)(manager()); }
     __except(EXCEPTION_EXECUTE_HANDLER) { }
     if(!controller_valid(controller)) { message("lc_notice_admission");return false; }
+    if(!native_engine_rearm("host setup")) { message("lc_notice_admission");return false; }
     error_visible=false;feedback.clear();
     // Native game names are 31 bytes, narrower than broker room-name metadata.
     // An overlong preset gets an explicit native choice, never silent truncation.
@@ -567,30 +637,37 @@ bool native_search_query(std::uint32_t address) {
 // Zero host records waits. Only the proven host's source address participates;
 // another room member's game-info response cannot make this host ambiguous.
 // Do not retain this pointer across a frame, callback, table clear or generation.
+// 0.6 preview fix J: which check refused the discovery table (logged once per join attempt by the caller).
+int discovery_why=0; std::uint32_t discovery_detail=0;
 int native_discovery_record(std::uint32_t address,void*& out) {
-    out=nullptr;
+    out=nullptr;discovery_why=0;discovery_detail=0;
     __try {
         auto* campaign=static_cast<unsigned char*>(at<getter>(0x6097b0)());
         auto* table=campaign+0x2208;
         const auto count=*reinterpret_cast<unsigned*>(table+0xc);
         if(!count) return 0;
-        if(count>100) return -1;
+        if(count>100) { discovery_why=1;discovery_detail=count;return -1; }
         auto* node=*reinterpret_cast<unsigned char**>(table);
         int matched=0;
         for(unsigned i=0;i<count;++i) {
-            if(!node) return -1;
+            if(!node) { discovery_why=2;discovery_detail=i;return -1; }
             auto* record=*reinterpret_cast<unsigned char**>(node+0x10);
             const auto offset=reinterpret_cast<std::uintptr_t>(record)-reinterpret_cast<std::uintptr_t>(campaign+0x5b4);
-            if(offset>=100*0x44 || offset%0x44) return -1;
+            if(offset>=100*0x44 || offset%0x44) { discovery_why=3;discovery_detail=std::uint32_t(offset);return -1; }
             const auto ip=(std::uint32_t(record[8])<<24)|(std::uint32_t(record[9])<<16)|(std::uint32_t(record[10])<<8)|record[11];
             if(ip==address) {
-                if(matched || !record[0x11] || record[0xf]!=1 || *reinterpret_cast<unsigned short*>(record+0xc)!=5165) return -1;
+                discovery_detail=(std::uint32_t(record[0xf])<<24)|(std::uint32_t(record[0x11])<<16)|*reinterpret_cast<unsigned short*>(record+0xc);
+                if(matched) { discovery_why=4;return -1; }
+                if(!record[0x11] || record[0xf]!=1 || *reinterpret_cast<unsigned short*>(record+0xc)!=5165) { discovery_why=5;return -1; }
                 const auto* version=at<const unsigned char*>(0xa53058+0x410);
-                if(!std::memchr(record+0x3e,0,6) || !std::memchr(version,0,6) || std::strcmp(reinterpret_cast<const char*>(record+0x3e),reinterpret_cast<const char*>(version))) return -1;
+                if(!std::memchr(record+0x3e,0,6) || !std::memchr(version,0,6) || std::strcmp(reinterpret_cast<const char*>(record+0x3e),reinterpret_cast<const char*>(version))) {
+                    discovery_why=6;std::memcpy(&discovery_detail,record+0x3e,4);return -1;
+                }
                 out=record;++matched;
             }
             node=*reinterpret_cast<unsigned char**>(node+8);
         }
+        if(node) discovery_why=7;
         return node ? -1 : matched;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return -1; }
 }
@@ -637,6 +714,24 @@ bool native_post_host() {
         return native_flow.host_queued && native_local_admitted() && at<bool(__thiscall*)(void*)>(0x610d10)(session);
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
+// 0.6 preview fix J: the native message dispatcher's state at each session step (060r failures 2 / 3: a PC whose host /
+// guest message handlers are missing hears discovery and never answers). Dispatcher = campaign+4; its handler pool
+// (0x60e1d0 / 0x60e5f0) keeps the used count at +0x12b38 (capacity 100, 0x60edb0 refuses at 100); the per-opcode lists
+// are 16 bytes from +0x12b3c (count at +0xc). Campaign +0x22c4 / +0x22c8 / +0x22cc / +0x22d8 = the host set's handles
+// (0x14 / 0x1a / 0x1e / 0x19, 0x609c80 registers each only while its field is 0; 0x6074b0 releases and zeroes them).
+void native_dispatcher_line(const char* when) {
+    __try {
+        auto* campaign=static_cast<unsigned char*>(at<getter>(0x6097b0)());
+        auto* d=*reinterpret_cast<unsigned char**>(campaign+4);
+        if(!d) return;
+        const auto n=[d](unsigned op) { return *reinterpret_cast<int*>(d+0x12b3c+op*0x10+0xc); };
+        const auto h=[campaign](unsigned off) { return *reinterpret_cast<unsigned*>(campaign+off); };
+        logger::write("online menus: native dispatcher at %s: %d of 100 handler slots used; handlers 0x14 %d, 0x18 %d, 0x19 %d, 0x1a %d, 0x1d %d, "
+            "0x1e %d, 0x1f %d, 0x2b %d; campaign active %u, host handles %08x %08x %08x %08x, joiner 0x18 %08x",when,
+            *reinterpret_cast<int*>(d+0x12b38),n(0x14),n(0x18),n(0x19),n(0x1a),n(0x1d),n(0x1e),n(0x1f),n(0x2b),unsigned(campaign[0]),
+            h(0x22c4),h(0x22c8),h(0x22cc),h(0x22d8),h(0x2300));
+    } __except(EXCEPTION_EXECUTE_HANDLER) { }
+}
 bool native_flow_tick(screen s) {
     if(!broker_live()) return false;
     const auto& view=broker_view();
@@ -646,6 +741,9 @@ bool native_flow_tick(screen s) {
         removed_notice=false; // review E finding 5: a new join never shows an older removal
         attempt_refusal_serial=broker_calls.refusal_serial ? broker_calls.refusal_serial() : 0;
         native_flow.ticket=view.generation;native_flow.started=now_ms();
+        if(!native_engine_rearm("join start")) { native_flow_error("native_engine_down");return false; }
+        native_handles_refresh("join start",true);
+        native_dispatcher_line("join start");
     }
     const auto phase=native_flow.phase;
     if(phase==native_phase::setup && s==screen::host && native_flow.departure==screen::none) { broker_cancel();return false; }
@@ -672,6 +770,8 @@ bool native_flow_tick(screen s) {
     if(phase==native_phase::posting) {
         if(view.state!=broker::phase::room) return false;
         native_flow.phase=native_phase::host;native_flow.touched=true;native_flow.started=now_ms();
+        native_handles_refresh("host post",false);
+        native_dispatcher_line("host post");
         if(!native_post_host()) { native_flow_error("native_host_refused");return false; }
         return true; // retail setuphost queued Host; never bind an outgoing menu
     }
@@ -685,7 +785,11 @@ bool native_flow_tick(screen s) {
     } else if(address!=native_flow.address) { native_flow_error("host_changed");return false; }
     if(native_flow.phase==native_phase::discovery) {
         void* record=nullptr;const auto count=native_discovery_record(address,record);
-        if(count<0) { native_flow_error("discovery_ambiguous_or_wrong");return false; }
+        if(count<0) {
+            logger::write("online menus: discovery table refused: check %d (1 count, 2 short chain, 3 slot, 4 two answers from the host, 5 flags/port, 6 version, 7 long chain), detail %08x",
+                discovery_why,discovery_detail);
+            native_flow_error("discovery_ambiguous_or_wrong");return false;
+        }
         if(count==1) {
             native_flow.phase=native_phase::admitting;native_flow.started=now_ms();
             if(!native_admit(record)) native_flow_error("admission_call_refused");
@@ -717,7 +821,9 @@ bool native_lobby_entered(void* menu) {
         (host && !native_flow.lobby_active && (!broker_calls.host_posted || !broker_calls.host_posted(native_flow.ticket)))) {
         native_flow_error("native_lobby_generation");return false;
     }
-    native_flow.lobby_active=true;native_flow.host_leave=false;return true;
+    native_flow.lobby_active=true;native_flow.host_leave=false;
+    native_dispatcher_line(host ? "host lobby" : "join lobby");
+    return true;
 }
 bool native_lobby_departing(void* menu) {
     __try {

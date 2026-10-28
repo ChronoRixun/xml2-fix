@@ -1607,11 +1607,18 @@ namespace online_room
         namespace removal_core = online_removal_core;
         removal_core::receiver removal_in; // a joiner: the room host's notice that it removed THIS PC (latched for the room)
         removal_core::sender removal_out;  // the host: one pending notice per member it removed in session
+        // 0.6 preview fix J (060r failure 3): the removed member's identity, kept by key for the host's closing line - its
+        // tunnel is usually gone by then (060r: "the removed member ? left").
+        std::vector<std::pair<party_core::key, std::string>> removal_names;
+        std::string removal_name(const party_core::key& k) {
+            for (const auto& n : removal_names) if (n.first == k) return n.second;
+            return "?";
+        }
         int removal_deliver = -1;          // accepted, not yet handed to the session: this PC's native index
         std::uint32_t removal_deliver_since = 0;
         bool removal_deliver_slow_logged = false, removal_repeat_logged = false;
         void removal_reset() {
-            removal_in.reset(); removal_out.reset(); removal_deliver = -1; removal_deliver_since = 0;
+            removal_in.reset(); removal_out.reset(); removal_names.clear(); removal_deliver = -1; removal_deliver_since = 0;
             removal_deliver_slow_logged = removal_repeat_logged = false;
         }
         // This PC's own facts for a notice that arrived on tunnel t (the authenticated tunnel identity decides the sender).
@@ -1694,7 +1701,7 @@ namespace online_room
                 const auto step = removal_out.tick(target.who, current, party_model.heard_within(target.who, now, removal_core::responsive_ms), now);
                 if (step == removal_core::sender::step::wait) continue;
                 if (step == removal_core::sender::step::finish) {
-                    logger::write("online: removal notice: the removed member %s left (%s; %u notice(s) sent)", t ? t->id.c_str() : "?",
+                    logger::write("online: removal notice: the removed member %s left (%s; %u notice(s) sent)", t ? t->id.c_str() : removal_name(target.who).c_str(),
                                   current ? "its room connection was replaced - the old Kick ends with the old connection" : "its room connection closed", target.sends);
                     removal_out.finish(target.who);
                     continue;
@@ -1800,6 +1807,7 @@ namespace online_room
         const auto r = removal_out.start(k, std::uint8_t(index), std::uint32_t(c), room_clock());
         if (r == removal_core::sender::start_result::pending) return removal_start_result::pending;
         if (r != removal_core::sender::start_result::started) return removal_start_result::refused;
+        if (removal_names.size() < 8) removal_names.emplace_back(k, t->id);
         removal_send_tick(); // the first notice goes out now, before the transport unbinds the member's link
         return removal_start_result::started;
     }

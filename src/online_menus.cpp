@@ -333,6 +333,127 @@ struct native_engine {
     }
 };
 
+// 0.6 preview fix J (060r failure 1): the native online engine can be torn down under the Hub. Other ways > native Join
+// Game and Back to the Hub runs the stock online-menu exit: the session shutdown destroys the transport (session +0x41c
+// cleared, +0x420 = 0; the static transport object at 0xa53f38 keeps only its base vtable 0x6a4788, all _purecall) and the
+// campaign goes inactive (+0) while campaign +4 still names that dead transport. The next LC join's discovery send
+// (0x608f10 -> 0x60d9c0 -> transport vt+0xc) was the R6025 "pure virtual function call" 14 ms after "status joined" (3/3
+// live; fix J reproduced it with the purecall trace: return 0x60da82). A Hub / Join / Host step re-arms the engine with
+// the entry's own idempotent initializers when it is not live, so no LC flow ever runs on a dead transport.
+// The transport itself is gone (the session or the campaign still names a transport left with the base vtable): only a
+// session shutdown does that. Start Game's own restart flips session +0x420 / campaign +0 for a few frames (fix J live,
+// 08:17: the first watch on native_engine_state left the room at Start), so the session watch reads only this.
+bool native_transport_gone() {
+    __try {
+        auto* session=static_cast<unsigned char*>(at<getter>(0x612be0)());
+        auto* campaign=static_cast<unsigned char*>(at<getter>(0x6097b0)());
+        if(session!=at<unsigned char*>(0xa53058) || *reinterpret_cast<std::uint32_t*>(session)!=0x6a481c || campaign!=at<unsigned char*>(0xa3bc40)) return false;
+        auto* transport=*reinterpret_cast<unsigned char**>(session+0x41c);
+        auto* used=*reinterpret_cast<unsigned char**>(campaign+4);
+        return (transport && *reinterpret_cast<std::uint32_t*>(transport)==0x6a4788) || (used && *reinterpret_cast<std::uint32_t*>(used)==0x6a4788);
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+// The session watch's wider test (fix J live 11:05: after a pause Quit the session's transport pointer is cleared while the
+// campaign may no longer name the dead object): a cleared session transport counts too - only for a broker room or an
+// owned lobby, never for the join / host re-arm (host fixtures run with no transport at all).
+bool native_session_transport_cleared() {
+    __try {
+        auto* session=static_cast<unsigned char*>(at<getter>(0x612be0)());
+        if(session!=at<unsigned char*>(0xa53058) || *reinterpret_cast<std::uint32_t*>(session)!=0x6a481c) return false;
+        return !*reinterpret_cast<void**>(session+0x41c) && !session[0x420];
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+enum class engine_state { live, down, unknown };
+engine_state native_engine_state() {
+    __try {
+        auto* session=static_cast<unsigned char*>(at<getter>(0x612be0)());
+        auto* campaign=static_cast<unsigned char*>(at<getter>(0x6097b0)());
+        if(session!=at<unsigned char*>(0xa53058) || *reinterpret_cast<std::uint32_t*>(session)!=0x6a481c || campaign!=at<unsigned char*>(0xa3bc40)) return engine_state::unknown;
+        // Down = a destroyed transport is still referenced (its base vtable 0x6a4788, every slot _purecall): exactly the
+        // state the native online exit and the quit leave (live 08:01 / 08:09). Never inferred from flags alone - those
+        // flip during Start Game's restart, and the host fixtures run without a transport at all.
+        return native_transport_gone() ? engine_state::down : engine_state::live;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return engine_state::unknown; }
+}
+// 0.6 preview fix J (060r failures 2 / 3): the campaign's message-handler handles (+0x22c4..+0x230c) are registered only
+// while their field is 0 (0x609c80 host set, 0x609d80 joiner set, 0x609660 at campaign init: 0x2c / 0x18 game info) and
+// zeroed only by their own releases. JoinInProgress keeps the host set and 0x2c / 0x18 registered past Start Game
+// (join_in_progress_rules 0x60940e / 0x609424 / 0x60943f), and no teardown releases them before the transport (the
+// dispatcher that owns them) is destroyed - the fields then name handlers of a dead dispatcher, every later registration
+// is skipped, and this PC's next session has no game-info handler (a guest never takes the host's 0x18 answer: native
+// timeout, "cannot join again until restart") / no 0x19 answer (a re-host nobody can find). A handle the current
+// dispatcher does not list is cleared here, exactly the state a release leaves; nothing is unregistered or freed.
+struct campaign_handle { std::uint16_t offset; std::uint8_t opcode; };
+inline constexpr campaign_handle campaign_handles[] = {
+    {0x22c4,0x14},{0x22c8,0x1a},{0x22cc,0x1e},{0x22d0,0x49},{0x22d4,0x4a},{0x22d8,0x19},{0x22dc,0x16},{0x22e0,0x17},{0x22e4,0x1b},
+    {0x22e8,0x1c},{0x22ec,0x1d},{0x22f0,0x6e},{0x22f4,0x47},{0x22f8,0x48},{0x22fc,0x1f},{0x2300,0x18},{0x2304,0x60},{0x2308,0x65},{0x230c,0x2c}};
+bool dispatcher_lists(unsigned char* d,std::uint8_t opcode,std::uint32_t handle) {
+    auto* node=*reinterpret_cast<unsigned char**>(d+0x12b3c+opcode*0x10);
+    for(int i=0;node && i<128;++i,node=*reinterpret_cast<unsigned char**>(node+8))
+        if(*reinterpret_cast<std::uint32_t*>(node+0x10)==handle) return true;
+    return false;
+}
+// Returns the number of fields cleared (-1: unreadable); `game_info` reports whether the 0x18 handle was one of them.
+int native_scrub_handles(bool& game_info) {
+    game_info=false;
+    __try {
+        auto* campaign=static_cast<unsigned char*>(at<getter>(0x6097b0)());
+        if(campaign!=at<unsigned char*>(0xa3bc40)) return -1;
+        auto* d=*reinterpret_cast<unsigned char**>(campaign+4);
+        const bool dead=!d || *reinterpret_cast<std::uint32_t*>(d)==0x6a4788;
+        int cleared=0;
+        for(const auto& h:campaign_handles) {
+            auto& field=*reinterpret_cast<std::uint32_t*>(campaign+h.offset);
+            if(!field || (!dead && dispatcher_lists(d,h.opcode,field))) continue;
+            field=0;++cleared;if(h.opcode==0x18) game_info=true;
+        }
+        return cleared;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return -1; }
+}
+bool native_game_info_register() {
+    __try { at<tick_fn>(0x609660)(at<getter>(0x6097b0)());return true; } // campaign init's own 0x2c / 0x18 registration
+    __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+// 0.6 preview fix J (060r failures 2 / 3, live 08:46): a session shutdown / removal clears the session's game info
+// (0x615740 on session +0x3a4 at 0x612933 / 0x612d55 / 0x612e10: 0x44 bytes, then +0xf / +0x3b / +0x3c = 1) - its version
+// field +0x3e included, which only the struct constructor 0x6156d0 ever writes (its literal at 0x61571c: the build's
+// version, game_version's token at 0x6a49b0). The next host answers discovery with an empty version and every joiner's
+// 0x6090d0 marks the game incompatible (record +0x11 = 0: "discovery table refused: check 5", the guest stays out); a
+// joiner's own copy goes out empty the same way. Restored here from the constructor's source before any native host / join.
+void native_game_info_version(const char* when) {
+    bool restored=false;
+    __try {
+        auto* info=static_cast<unsigned char*>(at<getter>(0x612be0)())+0x3a4;
+        const auto* version=reinterpret_cast<const unsigned char*>(0x6a49b0);
+        if(!info[0x3e] && version[0] && std::memchr(version,0,5)) { std::memcpy(info+0x3e,version,5);restored=true; }
+    } __except(EXCEPTION_EXECUTE_HANDLER) { }
+    if(restored) logger::write("online menus: the session's game-info version was cleared by an earlier session end; restored at %s",when);
+}
+void native_handles_refresh(const char* when,bool game_info_needed) {
+    native_game_info_version(when);
+    bool game_info=false;
+    const int cleared=native_scrub_handles(game_info);
+    if(cleared>0) logger::write("online menus: %d stale native message handle(s) cleared at %s (their dispatcher was torn down)%s",cleared,when,
+        game_info && game_info_needed ? "; game info 0x2c / 0x18 registered again" : "");
+    if(cleared>0 && game_info && game_info_needed && !native_game_info_register())
+        logger::write("online menus: game info registration unavailable at %s",when);
+}
+// Returns false only when the engine is down and could not be re-armed (the caller then refuses its native step).
+bool native_engine_rearm(const char* when) {
+    const auto state=native_engine_state();
+    if(state==engine_state::live) return true;
+    if(state==engine_state::unknown) { logger::write_once("online-engine-unknown","online menus: native engine state unreadable at %s; not re-armed",when);return false; }
+    native_handles_refresh(when,false); // before campaign init (0x60a4f0 -> 0x609660 registers 0x2c / 0x18 only into zeroed fields)
+    native_engine engine;
+    int p=menu_player;
+    __try { p=at<int(__thiscall*)(void*)>(0x5d8570)(manager()); } __except(EXCEPTION_EXECUTE_HANDLER) { }
+    const bool ok=controller_valid(p) && engine.preflight(p) && engine.bind(p) && engine.network() && engine.name() && engine.session() &&
+        engine.campaign() && engine.mode() && native_engine_state()==engine_state::live;
+    logger::write(ok ? "online menus: native engine was down at %s (transport torn down by a native online exit); re-armed for controller %d"
+                     : "online menus: native engine was down at %s and could not be re-armed (controller %d); the native step is refused",when,p);
+    return ok;
+}
+
 enum class name_operation { abandon, begin, poll, apply };
 struct name_io {
     int tag=4;
@@ -449,6 +570,7 @@ void request_impl(void* m,const char* name,const char* args) {
         accept_hint(source,true);
         const int p=accepted; accepted=-1;
         native_engine engine;
+        native_handles_refresh("the online entry",false); // before campaign init (0x609660 registers only into zeroed fields)
         if(initialize(engine,p)) {
             entry.start(source_id,now_ms());error_visible=false;menu_player=p;
             logger::write("online menus: entry initialized once, controller=%d; Hub requested; no broker operation",p);
@@ -627,7 +749,7 @@ bool offline_fixture = false;
 #if XML2_FIX_GNS
 void production_broker_tick() { online_room::ui_tick(); gns_transport::room_ui_tick(); }
 broker_api broker_calls{online_room::available,online_room::view,production_broker_tick,online_room::list,
-    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due,online_room::host_native,online_room::admission_target,online_room::host_posted,join_in_progress::installed,online_room::leave_after_flush,online_room::party,online_room::room_rtt,gns_transport::remove_member,online_room::retry_in_ms,gameplay_agreement::refusal_rules,online_room::host_lost,gameplay_agreement::refusal_serial,online_room::removed_by_host};
+    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due,online_room::host_native,online_room::admission_target,online_room::host_posted,join_in_progress::installed,online_room::leave_after_flush,online_room::party,online_room::room_rtt,gns_transport::remove_member,online_room::retry_in_ms,gameplay_agreement::refusal_rules,online_room::host_lost,gameplay_agreement::refusal_serial,online_room::removed_by_host,online_room::suppress_host_lost};
 #else
 broker_api broker_calls{};
 #endif
@@ -1484,7 +1606,9 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         hide(menu,"lc_lobby_guest_left",!toast_on);
         bind_text(menu,"lc_toast_name",toast_on ? guest_toast.name.c_str() : "");
         // The service went away while the room stays: healthy P2P continues, only new players cannot join.
-        const bool service_lost=broker_live() && broker_view().state==broker::phase::room && !broker_view().authenticated;
+        // 0.6 preview fix J (060r failure 4): the broker's room_closed (the host left / dropped) is not a service loss.
+        const bool service_lost=broker_live() && broker_view().state==broker::phase::room && !broker_view().authenticated &&
+            broker_view().error!="room_closed";
         hide(menu,"lc_lobby_service_lost",!service_lost);
     }
     hide(menu,"lc_code_copied",!lobby_state.copied);
@@ -2482,6 +2606,7 @@ void tick_impl(void* menu,bool& native_called) {
         removed_notice=false;host_left_state.dismiss();message("lc_notice_removed");
     }
     if(s==screen::hub) {
+        if(native_flow.phase==native_phase::idle) native_engine_rearm("the Hub");
         bool panel=host_left_state.active;
         // The 0.6 host-left panel (07-host-left, with only the section 5 body/button variants): modal, Host again / Back to Online.
         const bool veil=hide(menu,"lc_hub_host_left_veil",!panel),card=hide(menu,"lc_hub_host_left",!panel),
@@ -2557,6 +2682,7 @@ std::uint32_t __fastcall close(void* menu,void*) {
 void keyboard(unsigned char* state) {
     if(!ready || !input_thread("keyboard",true)) return;
     if(!game_thread.load()) return; // no frontend/input model work before the first game tick
+    try { native_session_watch(); } catch(...) { }
     if(!state) { keyboard_edges.reset();keyboard_input.clear();lobby_state.copy_keyboard=false;return; }
     const auto edges=keyboard_edges.sample(state);
     // DirectInput can poll before frontend creation. Never invoke the lazy

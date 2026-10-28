@@ -64,6 +64,9 @@ struct broker_api {
     // Optional (0.6 preview fix F, rule 64): this joiner accepted its room host's in-session removal notice (the Party Kick). A
     // session end after it is the removal (the Hub's "The host removed you from the game."), never a host loss.
     bool (*removed_by_host)()=nullptr;
+    // Optional (0.6 preview fix J): the host's own departure notice ended this guest's session - its connection closing
+    // afterwards is that departure, not a second loss.
+    void (*suppress_host_lost)()=nullptr;
 };
 void keyboard(unsigned char* state);
 bool requested();
