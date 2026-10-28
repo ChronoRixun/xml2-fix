@@ -24,7 +24,10 @@ void* __cdecl transform(void* p) { auto* n=static_cast<node*>(p);return n && n->
 int __fastcall size(void*,void*) { return 0; }
 void* __fastcall child(void* p,void*,int) { return static_cast<node*>(p)->child; }
 int __fastcall children(void*,void*) { return int(live_count); }
-void* __fastcall at_child(void*,void*,int i) { return &nodes[2*i]; }
+void* __fastcall at_child(void*,void*,int i) {
+    assert(i>=0 && unsigned(i)<live_count && 2*size_t(i)+1<nodes.size());
+    return &nodes[2*size_t(i)];
+}
 void* __cdecl property(void* p,const char*) { return p; }
 void* __cdecl identity(void* p) { return p; }
 void* __fastcall identity_this(void* p,void*) { return p; }
@@ -178,7 +181,7 @@ void run() {
     // Exercise the relocated manager itself, including both pointer/stride
     // division sites and generation handles, with all five slots occupied.
     reinterpret_cast<void*(__fastcall*)(void*,void*)>(0x588b80)(backing,nullptr);
-    make_nodes(512);intern_count=0;strings.fill(0);interned.clear();ownership.clear();
+    make_nodes(513);intern_count=0;strings.fill(0);interned.clear();ownership.clear();
     std::array<unsigned,5> slots{},old_handles{};
     const unsigned simultaneous[]{512,1,175,337,513};
     for(unsigned round=0;round<2;++round) {
@@ -203,6 +206,20 @@ void run() {
             assert(reinterpret_cast<bool(__fastcall*)(void*,void*,void*)>(0x588b20)(backing,nullptr,field));
         }
         assert(*reinterpret_cast<unsigned*>(backing+0xa024)==0 && *reinterpret_cast<unsigned*>(backing+0xa02c)==5);
+        // Invalid addresses must neither alias an occupied slot nor mutate the
+        // allocator. Use integer addresses to avoid out-of-object C++ arithmetic.
+        const std::vector<unsigned char> before(backing,backing+0xa04c);
+        const int invalid_offsets[]{-0x4000,-0x2001,-0x2000,-0x1fff,-1,1,
+                                    0x1fff,0x2001,0x9fff,0xa000,0xa001,0xc000};
+        for(const int offset:invalid_offsets) {
+            auto* invalid=reinterpret_cast<void*>(manager+unsigned(offset));
+            assert(!reinterpret_cast<bool(__fastcall*)(void*,void*,void*)>(0x588b20)(backing,nullptr,invalid));
+            reinterpret_cast<void(__fastcall*)(void*,void*,void*)>(0x588c20)(backing,nullptr,invalid);
+            assert(std::memcmp(backing,before.data(),before.size())==0);
+        }
+        assert(!reinterpret_cast<bool(__fastcall*)(void*,void*,void*)>(0x588b20)(backing,nullptr,nullptr));
+        reinterpret_cast<void(__fastcall*)(void*,void*,void*)>(0x588c20)(backing,nullptr,nullptr);
+        assert(std::memcmp(backing,before.data(),before.size())==0);
         for(const auto slot:slots) {
             auto* field=backing+slot*0x2000;
             reinterpret_cast<void(__fastcall*)(void*,void*,void*)>(0x588c20)(backing,nullptr,field);
@@ -211,6 +228,6 @@ void run() {
         assert(*reinterpret_cast<unsigned*>(backing+0xa024)==5 && *reinterpret_cast<unsigned*>(backing+0xa02c)==0);
         for(const auto& [object,balance]:ownership) { (void)object;assert(balance==0); }
     }
-    std::cout<<"512 anchors PASS: real constructor/loader/walk/push/name insertion/lookups/unload; 513 refused; five sequential and simultaneous slots, reuse/handle generations; padding/refcounts intact\n";
+    std::cout<<"512 anchors PASS: real constructor/loader/walk/push/name insertion/lookups/unload; 513 refused; five sequential and simultaneous slots, reuse/handle generations; negative/past-end/misaligned pointers refused without mutation; padding/refcounts intact\n";
 }
 }
