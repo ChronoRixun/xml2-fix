@@ -4,6 +4,7 @@ DISASM test/e4_core_host.cpp # Authored synthetic caller/return frames, CPU and 
 DISASM test/pad_hotplug_test.cpp # Authored caller frames for the owned retail mapping/read fixture; game bytes are supplied at runtime, with no retail instruction listing embedded.
 DISASM src/online_menus.cpp # Authored register adapter forwards captured MAIN_MENU controller and input mask to our C++ handler; no extracted game instruction listing.
 DISASM test/online_menus_test.cpp # Authored synthetic stack/register caller checks our adapter ABI; owned retail bytes are read locally at runtime, never embedded as a listing.
+DISASM test/online_lobby_fixture.inl # Authored native-ABI caller (call_slot_balance, fix G) pushes zero dwords, calls an installed vtable slot and measures the stack the callee cleaned; our own probe, no game instruction listing.
 DISASM test/pool_counter_observers_test.cpp # Authored synthetic CPU-state entry/capture probes and invented ABI fixture bodies; retail fragments are read from the owned executable at runtime, with no game listing or decompiled body embedded.
 DISASM test/particle_scratch_test.cpp # Authored synthetic caller allocates an argument area and restores its own stack to test eleven thiscall bridges; no game instructions or disassembly listing is embedded.
 DISASM src/anim_enums.cpp # Authored native-map miss bridge preserves the retail wrapper stack and calls our DLL extension lookup; only the short displaced comparison is replayed, no game listing or decompiled body.
