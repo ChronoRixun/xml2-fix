@@ -181,6 +181,19 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
     auto shown=[&](const std::string& key) { return visibility.count(key) && !visibility[key]; };
     auto gone=[&](const std::string& key) { return visibility.count(key) && visibility[key]; };
     // Pure selectors first: boundaries, wraparound and hostile ids.
+    {   // 060q live: a screen name that does not fit its field ends in "..." (never clipped silently, never empty, never longer).
+        assert(fit_name("Player",112,1.0)=="Player" && fit_name("Logan",64*.8,.69)=="Logan" && fit_name("",112,1.0).empty());
+        assert(fit_name("abcdefghijklmn",112,1.0)=="abcdefghijklmn"); // 14 lowercase letters fit the 140-unit title field
+        for(const std::string full:{std::string(31,'W'),std::string(31,'a'),std::string("The Long Named Player Of Doom"),std::string(31,'i'),std::string("Wolverine Wolverine Wolverine!!")}) {
+            for(const auto [limit,scale]:{std::pair{112.0,1.0},std::pair{51.2,.69},std::pair{144.0,.69}}) {
+                const auto cut=fit_name(full,limit,scale);
+                if(name_units(full)*scale<=limit) { assert(cut==full);continue; }
+                assert(cut.size()>=4 && cut.ends_with("...") && full.starts_with(cut.substr(0,cut.size()-3)) && cut.size()<full.size()+3);
+                assert((name_units(cut)*scale)<=limit || cut.size()==4); // fits, or is the single leading character the field can hold
+            }
+        }
+        assert(fit_name(std::string(31,'i'),112,1.0).ends_with("...")==(name_units(std::string(31,'i'))>112));
+    }
     assert(age_text(0)=="Updated 0 s ago" && age_text(119999)=="Updated 119 s ago" && age_text(120000)=="Updated 2 min ago");
     assert(age_text(5999999)=="Updated 99 min ago" && age_text(6000000)=="Updated long ago");
     assert(age_text(std::uint32_t(5u-0xfffffffcu))=="Updated 0 s ago"); // 9 ms across a 32-bit wrap

@@ -131,13 +131,16 @@ void error_clipboard_causes() {
     auto closed=clip("ABCDEFGH");closed.available=false;assert(read_clipboard_result(closed,out)==clip_result::unavailable && out.empty() && !closed.locked);
     auto locked=clip("ABCDEFGH");locked.lockable=false;assert(read_clipboard_result(locked,out)==clip_result::unavailable && locked.closed==1);
     fake_clipboard empty;assert(read_clipboard_result(empty,out)==clip_result::invalid && empty.closed==1 && !empty.locked); // no text on the clipboard: "no code", not "could not read"
-    for(auto text:{"ABCD0FGH","hello world","ABCDEFGHjunk"}) { auto bad=clip(text);assert(read_clipboard_result(bad,out)==clip_result::invalid && bad.closed==1 && bad.unlocked==1); }
+    for(auto text:{"hello world","ABCDEFGHjunk","ABCDEFG"}) { auto bad=clip(text);assert(read_clipboard_result(bad,out)==clip_result::invalid && bad.closed==1 && bad.unlocked==1); }
+    // 060q live: a code-sized text with symbols no code has (0, O, 1, I, L, punctuation) says so - the wrong-symbols wording, not "no code".
+    for(auto text:{"ABCD0FGH","AB0O1IL!","ABCD-EF!H"," ab0o1il! "}) { auto bad=clip(text);assert(read_clipboard_result(bad,out)==clip_result::bad_symbols && out.empty() && bad.closed==1 && bad.unlocked==1); }
+    for(auto text:{"ABCD EFG","ABCDXEFGH","ABCD-EFG\x01"}) { auto bad=clip(text);assert(read_clipboard_result(bad,out)==clip_result::invalid); } // not code-shaped
     auto odd=clip("ABCDEFGH");odd.byte_size=3;assert(read_clipboard_result(odd,out)==clip_result::invalid);
     auto big=clip("ABCDEFGH");big.byte_size=4098;assert(read_clipboard_result(big,out)==clip_result::invalid);
     // Unicode / missing terminator are not codes; words after the first terminator are ignored (060p fix C).
     auto wide=clip("ABCDEFGH");wide.data[0]=0x100;assert(read_clipboard_result(wide,out)==clip_result::invalid);
     auto hidden=clip("ABCDEFGH");hidden.data.insert(hidden.data.end(),{'x',0});assert(read_clipboard_result(hidden,out)==clip_result::ok && out=="ABCDEFGH"); // 060p fix C: the text ends at its first terminator (unspecified spare words)
-    auto hidden_bad=clip("ABCD0FGH");hidden_bad.data.insert(hidden_bad.data.end(),{'J',0});assert(read_clipboard_result(hidden_bad,out)==clip_result::invalid);
+    auto hidden_bad=clip("ABCD0FGH");hidden_bad.data.insert(hidden_bad.data.end(),{'J',0});assert(read_clipboard_result(hidden_bad,out)==clip_result::bad_symbols);
 }
 
 void error_table_tests(const script_functions_rules::func_entry* registration) {
