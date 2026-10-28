@@ -1323,3 +1323,53 @@ lobby tick and the native lobby tick it wraps read pad X as MENU_OTHER (guest Re
 MENU_NEXT (Copy), and `pad_prompt_scope()` draws `$MENU_OTHER` / `$MENU_NEXT` as X / Y there. The keyboard (Del / KP5), an
 unskinned native lobby and Prompts=off are unchanged. Host modes `r4-pad-host`, `r4-pad-join` (the real native Host / Join
 ticks with masks built from the retail code -> action table).
+
+
+## 0.6 preview fix E2: the hit table, hardened (review findings 2, 3, 4, 7 and the mouse half of 8)
+
+**The engine's mouse walk, as read from XMen2.exe (`0x5ae0a0`).** It is NOT "start after the focused item and wrap". Pass 1
+(hover) asks only `desctext1..5` (names at `0x69e36c` .. `0x69e33c`) with the UNSHIFTED box (`left = +0x70`, `top = +0x72 -
++0x76 - 1`, `right = +0x70 + +0x74 - 1`, `bottom = +0x72`; focusable and shown), sets the hover index `[0x6e4b18]` (drawn by
+the vt+0x68 refresh `0x5ae6b0` with the `~~` style) and plays the hover sound unless the index is unchanged. Pass 2 walks the
+menu's item tree IN ORDER - the container at `menu+0x824` (nodes at `+0xc + 16 n` = parent, left, right, key; root index at
+`+4`; item pointers at `+0xde8`), leftmost node `0x585be0`, then successors `0x585c10`, ordered by the item NAME'S KEY, not by
+anything we control - asking each shown, focusable item's vt+0x74 (shifted box, `+0x7a / 2`); the first to answer wins and
+takes focus. The lobbies' `0x5ba2b0` / `0x5c8da0` add their own first pass over their buttons and over `text_playername1` (the
+Kick picker: asked whatever its shown / focus state) with the unshifted box, then fall into `0x5ae0a0`. For Legends Classic
+items `+0x7a` (the box top relative to the anchor, `0x5bc530`: the MAX corner's z) is 0 on rows and prompts, so both boxes are
+the same there; it is nonzero only for items authored with a `hit_rect` (the lobby buttons, 4.8 -> a 2-unit shift).
+
+**Hover = click (finding 2).** The remapped point is now chosen inside the target's boxes of BOTH passes (their
+intersection), so the hover index, the hover sound and the click all name the target; if the two boxes do not intersect the
+shifted box alone is used (the click wins; the engine itself could not hover such an item from the same spot). A point in a
+listed item's first-pass box but outside every bar goes nowhere (no hover).
+
+**Every focusable item counts (finding 3).** `scoped_point` walks the menu's real item tree (`engine_items`, the same two
+retail functions) and treats every focusable item - listed or not, shown or not (shown only if no point is otherwise free) -
+plus `text_playername1` as a blocker: the chosen point is held by no other item in either pass, whatever order the engine
+walks them. A point outside every bar that an UNLISTED item holds is passed on unchanged (the Kick picker's rows keep
+working); only a listed item's own dead strip becomes "nowhere". The builder refuses a table in which a bar reaches the
+picker's rectangle (`hit_table`).
+
+**Parser and builder (finding 4).** `online_menus_hits::parse` reads numbers with `std::from_chars` (strtod follows the C
+locale), names the line and reason (`line 7: bad entry`) and additionally refuses a BOM, CR, lines over 256 bytes and a
+duplicate (menu, item). A refused table is logged once and LOUDLY (`online menus: ERROR: Data/lc_online_hits.txt REFUSED
+(...); the mouse hit boxes of the co-op screens are OFF ...`). The builder checks the same rules (`hit_table_problems`,
+raised at build time by `hit_table`, repeated by the `v_online_menus` validator on the written file) and its output is fed
+through the DLL's own parser (`xml2_online_hits_parse_test`) by the legends-classic tests, comparing accept / refuse verdicts.
+
+**Tests (finding 7).** `r16-hits` / `r16-hits-orders` run the RETAIL `0x5ae0a0` and `0x5ba2b0` (and `0x585be0`, `0x585c10`,
+`0x5ab7d0`, the item hit tests) in the mapped image over a real item tree (right-leaning chain or balanced tree, 12 key
+orders); only the name -> key function, set focus, the hover refresh, the hover string, the sound call and the lobby
+navigation `0x5bb150` are replaced, and each item's vt+0x74 is a recorder that forwards to the retail test. They assert the
+answer, the walk order (the asked prefix equals the key order), the hover index and hover sound, an unlisted focusable item
+inside a bar and away from bars, and a synthetic prompt whose boxes differ. `r16-hits-parse`: CRLF, BOM, long lines,
+duplicates, malformed fields, locale-independent numbers, refused-table logging. `r16-hits-unit`: no pixel, a wheel
+message, a stale pixel. legends-classic `test_hit_table_matches_the_focus_bars_as_built` compares the table with the focus
+models' vertices placed at the built scene anchors (not `focus_placement` again). Finding: a wide solid focus bar LEANS (its
+top edge is 4 view units right of the bottom edge: `FOCUS_LEAN`); the table lists the bottom-edge rectangle, so up to 4 units
+(7.5 px at 1080p) at the top-left and top-right of a bar are wrong in opposite directions.
+
+**Fallback logging (finding 8).** The half-view-unit fallback logs once per reason: `no window procedure pixel (display Mode
+unset)`, `a mouse message without a window procedure pixel (wheel, or no client point)`, and `the window procedure pixel
+does not match the engine's point`.

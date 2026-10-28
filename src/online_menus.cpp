@@ -1471,14 +1471,14 @@ bool hits_ready() {
             hit_generation=generation; hit_table.entries.clear();
             const auto path=std::filesystem::path(mod_loader::game_root())/L"Data/lc_online_hits.txt";
             std::ifstream file(mod_loader::resolve_file(path.wstring()),std::ios::binary);
-            if(!file) { logger::write_once("online:hits-absent","online menus: no Data/lc_online_hits.txt; the co-op screens keep the engine's hit test"); return false; }
-            std::string text(256*1024+1,'\0');
+            if(!file) { logger::write_once("online:hits-absent","online menus: no Data/lc_online_hits.txt (a package from before the table); the mouse hit boxes of the co-op screens are OFF and the engine's hit test stays"); return false; }
+            std::string text(hits::max_file+1,'\0');
             file.read(text.data(),std::streamsize(text.size()));
             text.resize(std::size_t(file.gcount()));
             std::string why;
-            if(text.size()>256*1024 || !hits::parse(text,hit_table,why)) {
+            if(text.size()>hits::max_file || !hits::parse(text,hit_table,why)) {
                 hit_table.entries.clear();
-                logger::write_once("online:hits-refused","online menus: Data/lc_online_hits.txt refused (%s); the co-op screens keep the engine's hit test",why.empty() ? "too large" : why.c_str());
+                logger::write_once("online:hits-refused","online menus: ERROR: Data/lc_online_hits.txt REFUSED (%s); the mouse hit boxes of the co-op screens are OFF - the engine's own hit test (dead strips above and beside the bars) stays; rebuild the package",why.empty() ? "larger than 256 KiB" : why.c_str());
                 return false;
             }
             logger::write_once("online:hits","online menus: mouse hit boxes = drawn focus bars (%s, %u entries)",hits::contract,unsigned(hit_table.entries.size()));
@@ -1489,15 +1489,40 @@ bool hits_ready() {
 void* item_try(void* menu,const char* name) {
     __try { return item(menu,name); } __except(EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
 }
-// The engine's own tests on an item: shown (vt+4 = +0x54 bit 2 clear for text/model items) and focusable (+0x54 bit 3),
-// then its rectangle fields (0x5bc530).
-bool item_box_of(void* it,hits::item_box& box) {
+// The engine's own tests on an item: focusable (+0x54 bit 3) and shown (vt+4 = +0x54 bit 2 clear for text/model items), then
+// its rectangle fields (0x5bc530): both boxes the engine's passes ask (hits::item_rects).
+struct focusable { void* item=nullptr; hits::item_rects box; bool shown=false; };
+bool focusable_of(void* it,focusable& out) {
     __try {
         auto* p=static_cast<unsigned char*>(it);
-        if(at<bool(__thiscall*)(void*)>((*reinterpret_cast<std::uintptr_t**>(it))[1])(it)) return false;
         if(!(p[0x54]&8)) return false;
+        out.item=it; out.shown=!at<bool(__thiscall*)(void*)>((*reinterpret_cast<std::uintptr_t**>(it))[1])(it);
         std::int16_t f[6]; std::memcpy(f,p+0x70,sizeof f);
-        box=hits::engine_box(f[0],f[1],f[2],f[3],f[5]); return true;
+        out.box=hits::engine_rects(f[0],f[1],f[2],f[3],f[5]); return true;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+// An item's boxes whatever its focus / shown state (text_playername1: the lobbies' mouse asks its first-pass box regardless).
+bool boxes_of(void* it,focusable& out) {
+    __try {
+        std::int16_t f[6]; std::memcpy(f,static_cast<unsigned char*>(it)+0x70,sizeof f);
+        out.item=it; out.shown=true; out.box=hits::engine_rects(f[0],f[1],f[2],f[3],f[5]); return true;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+// EVERY item the engine's mouse walk reaches: 0x5ae0a0 walks the menu's item tree (container at menu+0x824: nodes ordered by
+// the item name's key, node n at +0xc + 16 n, root index at +4, item pointers at +0xde8) in order - leftmost node (0x585be0),
+// then successors (0x585c10) - and the first item whose vt+0x74 answers wins. Its order is the name keys' order, not ours.
+bool engine_items(void* menu,std::vector<void*>& out) {
+    __try {
+        auto* list=static_cast<char*>(menu)+0x824;
+        constexpr int end=0x3fffffff;
+        int node=*reinterpret_cast<int*>(list+4);
+        if(node==end) return true;
+        if(const int left=*reinterpret_cast<int*>(list+16*(node+1));left!=end) node=at<int(__thiscall*)(void*,int)>(0x585be0)(list,left);
+        for(int guard=0;node!=end && guard<1024;++guard) {
+            if(auto* it=*reinterpret_cast<void**>(list+0xde8+4*node)) out.push_back(it);
+            node=at<int(__thiscall*)(void*,int)>(0x585c10)(list,node);
+        }
+        return true;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 void* focus_of(void* menu) {
@@ -1508,6 +1533,7 @@ void menu_name(void* menu,char (&name)[64]) {
     __try { std::memcpy(name,static_cast<char*>(menu)+0xc,63); name[63]=0; } __except(EXCEPTION_EXECUTE_HANDLER) { name[0]=0; }
 }
 // (x, y): the engine's view point. True with (rx, ry) the point to hand the engine instead; false: pass it on unchanged.
+// The point is a half-view-unit estimate unless the window procedure's pixel is known (logged once per reason).
 bool scoped_point(void* menu,int x,int y,int& rx,int& ry) {
     try {
         if(!hits_ready()) return false;
@@ -1515,29 +1541,59 @@ bool scoped_point(void* menu,int x,int y,int& rx,int& ry) {
         if(!name[0]) return false;
         hits::view_point p=hits::from_engine(x,y);
         int px=0,py=0,sw=0,sh=0,ex=0,ey=0;
-        if(pointer_probe && pointer_probe(px,py,sw,sh) && hits::engine_point_of_pixel(px,py,sw,sh,ex,ey) && ex==x && ey==y)
-            p=hits::from_pixel(px,py,sw,sh);
-        struct candidate { void* item; hits::item_box box; const hits::bar* rect; };
-        std::vector<candidate> active;
+        if(!pointer_probe) logger::write_once("online:hits-half-noprobe","online menus: mouse hit boxes: no window procedure pixel (display Mode unset); the point is known to half a view unit only");
+        else if(!pointer_probe(px,py,sw,sh)) logger::write_once("online:hits-half-nomsg","online menus: mouse hit boxes: a mouse message without a window procedure pixel (wheel, or no client point); half a view unit");
+        else if(!hits::engine_point_of_pixel(px,py,sw,sh,ex,ey) || ex!=x || ey!=y) logger::write_once("online:hits-half-mismatch","online menus: mouse hit boxes: the window procedure pixel does not match the engine's point (%d,%d vs %d,%d); half a view unit",ex,ey,x,y);
+        else p=hits::from_pixel(px,py,sw,sh);
+        // Everything the engine's walk asks, listed or not.
+        std::vector<void*> walked;
+        if(!engine_items(menu,walked)) return false;
+        std::vector<focusable> all;
+        for(void* it:walked) { focusable f; if(focusable_of(it,f)) all.push_back(f); }
+        // The listed items (the table's rows for this menu) that can be a target now: shown and focusable.
+        struct target { focusable f; const hits::bar* rect; };
+        std::vector<target> active;
+        std::vector<void*> listed;
         for(const auto& e:hit_table.entries) {
             if(e.menu!=name) continue;
             void* it=item_try(menu,e.item.c_str());
-            hits::item_box box;
-            if(it && item_box_of(it,box)) active.push_back({it,box,&e.rect});
+            if(!it) continue;
+            listed.push_back(it);
+            focusable f;
+            if(focusable_of(it,f) && f.shown) active.push_back({f,&e.rect});
+        }
+        auto in=[](const std::vector<void*>& v,void* it) { return std::find(v.begin(),v.end(),it)!=v.end(); };
+        // Focusable items the table does not list (the Kick picker's rows, anything else the walk reaches), plus the lobbies'
+        // text_playername1, whose first-pass box 0x5ba2b0 / 0x5c8da0 ask whatever its shown / focus state.
+        std::vector<focusable> unlisted;
+        for(const auto& f:all) if(!in(listed,f.item)) unlisted.push_back(f);
+        if(void* picker=item_try(menu,"text_playername1"); picker && !in(listed,picker) &&
+           std::none_of(unlisted.begin(),unlisted.end(),[&](const focusable& u) { return u.item==picker; })) {
+            focusable f; if(boxes_of(picker,f)) unlisted.push_back(f);
         }
         // Bars can overlap (the prompt row's bars reach 12 units into their neighbours), but only the focused item's bar
         // is drawn: it wins inside its bar; elsewhere the bar whose own text box is nearest the point (hits::choose).
         void* const focused=focus_of(menu);
         std::vector<hits::candidate> held;
-        for(std::size_t i=0;i<active.size();++i) if(hits::inside(*active[i].rect,p)) held.push_back({active[i].item==focused,active[i].box});
+        for(const auto& a:active) if(hits::inside(*a.rect,p)) held.push_back({a.f.item==focused,a.f.box.shifted});
         if(const auto pick=hits::choose(held,p);pick>=0) {
-            std::size_t seen=0;const candidate* c=nullptr;
+            std::size_t seen=0;const target* c=nullptr;
             for(const auto& a:active) if(hits::inside(*a.rect,p) && seen++==std::size_t(pick)) { c=&a;break; }
-            std::vector<hits::item_box> others;
-            for(const auto& o:active) if(o.item!=c->item) others.push_back(o.box);
-            return hits::free_point(c->box,others,rx,ry);
+            // No other focusable item - walked or not, shown or not - may answer for the point we hand over; if every point
+            // is taken, only the shown ones count (the base walk skips a hidden item).
+            for(const bool shown_only:{false,true}) {
+                std::vector<hits::item_rects> others;
+                for(const auto& o:all) if(o.item!=c->f.item && (o.shown || !shown_only)) others.push_back(o.box);
+                for(const auto& o:unlisted) if(o.item!=c->f.item && (o.shown || !shown_only) &&
+                    std::none_of(all.begin(),all.end(),[&](const focusable& a) { return a.item==o.item; })) others.push_back(o.box);
+                if(hits::free_point(c->f.box,others,rx,ry)) return true;
+            }
+            return false;
         }
-        for(const auto& c:active) if(hits::holds(c.box,x,y)) { rx=hits::nowhere_x; ry=hits::nowhere_y; return true; }
+        // Outside every bar. An item the table does not list keeps the point; a listed item's own box or first-pass box (a dead
+        // strip the bar does not cover) gets nothing: no hover, no click.
+        for(const auto& u:unlisted) if(hits::holds_any(u.box,x,y)) return false;
+        for(const auto& a:active) if(hits::holds_any(a.f.box,x,y)) { rx=hits::nowhere_x; ry=hits::nowhere_y; return true; }
         return false;
     } catch(...) { return false; }
 }
