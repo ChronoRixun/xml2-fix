@@ -20,6 +20,9 @@ inline contribution make(const targets& t) {
  c.guards.push_back({0x69d620,bytes_of("68756400"),"hud name"});
  c.guards.push_back({0x69d618,bytes_of("6469676974616c00"),"digital name"});
  c.guards.push_back({0x672562,bytes_of("ff2580f16700"),"retail case-insensitive comparison thunk"});
+ // The glyph scale reads the engine's screen height at 0xa0a000: its store and its reader.
+ c.guards.push_back({0x5fad5c,bytes_of("a300a0a000"),"screen height store"});
+ c.guards.push_back({0x5fa066,bytes_of("f73d00a0a000"),"screen height reader"});
  for(const auto& s:sites) {
   auto original=bytes_of(s.hex);c.guards.push_back({s.va,original,"font site"});
   address value=0;bool jump=false;

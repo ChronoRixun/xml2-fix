@@ -62,6 +62,8 @@ inline constexpr script_functions_rules::guard guards[]{
     {0x006a02bc, "50685c00", "text virtual setter +78"},
     {0x006a024c, "b0cd5b00", "text virtual hide +8"},
     {0x005bcdb0, "8a4424048a5154c0e00232c2240432d0885154c20400cccccccccccccccccccc538a5c2408568bf18a46", "native hide bit setter"},
+    {0x006a030c, "904b5c00", "MENU_ITEM_MODEL vtable +8 is the model setHidden override"},
+    {0x005c4b90, "568bf18b06ff50048a4c24088a5654c0e10232ca80e10432d184c08856548bce75228b16ff520484c0743a8b15085a6e008b068d8e9400000051528bceff50385ec20400", "MENU_ITEM_MODEL setHidden: hide bit, then m_invis swap; thiscall ret4"},
     {0x005c6850, "8b54240485d2568bf1745a8b86a000000085c07444578bc883e11fbf01000000d3e78bc8", "text storage ownership ABI"},
     {0x005ab2f0, "81ec0c080000a1f8386f00898424080800008b84241408000085c0578bf9745e", "text application thiscall frame"},
     {0x005add9a, "e851d5ffff5f5e8b8c2404040000e8b4430c0081c408040000", "cdecl text setter return and cleanup"},
@@ -185,5 +187,7 @@ inline constexpr script_functions_rules::guard guards[]{
     {0x00612070, "558be98b857802000085c0744c538a5c240c568bb56c02000089b5740200008b4608578985740200008da4240000000084db8b7e08740c8b4e10e8e121000084c0750d8b4e106a00518bcde890feffff85ff8bf775da5f5e5b5dc20400", "native participant clear keeps local only when requested"},
     {0x0055b670, "56578b7c240c33f685ff8d813c060000c60000744b8b175385d2740b8a1a84db740580fb207e05803a3b750442ebe9908a1a80fb207e1480fb3b740f81fe000200007d0d881c30464275e581fe000200005b750233f6c6840e3c0600000089175f5ec20400", "native console tokenizer consumes pointer to argument cursor"},
     {0x0055bf28, "8d4c241051ff948628040000", "console dispatcher passes pointer to argument cursor cdecl"},
+    {0x005babda, "8bf1e82f0afaff8b106a008bc8ff5228d95c240cd90588828a00d85c240cdfe0f6c4057a178bcee8daf8ffffd944240cd805a0196800d91d88828a0033c0b97d0000008d7c242068f0fe6900", "Host update: clock, 0.25 s list refresh timer, then the ONLINE_ADVICE paragraph"},
+    {0x005c849a, "8bf1e86f31f9ff8b106a008bc8ff5228d95c240cd90514fd8a00d85c240cdfe0f6c4057a178bcee88afcffffd944240cd805a0196800d91d14fd8a0033c0b97d0000008d7c242068f0fe6900", "Join update: clock, 0.25 s list refresh timer, then the ONLINE_ADVICE paragraph"},
 };
 }

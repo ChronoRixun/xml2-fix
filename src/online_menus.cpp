@@ -1,4 +1,6 @@
 #include "online_menus.hpp"
+#include "lc_fonts.hpp"
+#include "gameplay_agreement.hpp"
 #include "online_room.hpp"
 #include "gns_transport.hpp"
 #include "gameplay_agreement.hpp"
@@ -536,10 +538,16 @@ void bind_text(void* menu,const char* item,const char* text) {
     if(old!=bindings.text.end() && old->second==text) return;
     if(bind_text_native(menu,item,text)) bindings.text.insert_or_assign(item,text);
 }
+// 0x5ade10 calls the found item's vt+8 setHidden. Text items inherit the base bit setter 0x5bcdb0;
+// MENU_ITEM_MODEL (vtable 0x6a0304) overrides it with 0x5c4b90, which sets the same bit and swaps
+// the model for ui/models/m_invis.igb. Live 060p: accepting only 0x5bcdb0 left every authored model
+// scene (Host visibility pair, campaign / drop-in variants, lobby cards, badges, Leave panel,
+// error scenes) at its XMLB start state, so PRIVATE stayed lit while the room posted public.
 bool hide_native(void* menu,const char* item,bool hidden) {
     __try {
         auto* found=at<void*(__thiscall*)(void*,const char*)>(0x5adc10)(menu,item);
-        if(found && (*static_cast<const std::uint32_t**>(found))[8/4]==0x5bcdb0) {
+        const auto setter=found ? (*static_cast<const std::uint32_t**>(found))[8/4] : 0u;
+        if(found && (setter==0x5bcdb0 || setter==0x5c4b90)) {
             at<hide_fn>(0x5ade10)(menu,item,hidden);return true;
         }
     } __except(EXCEPTION_EXECUTE_HANDLER) { }
@@ -1336,12 +1344,39 @@ void __fastcall lobby_base_tick(void* menu,void*) {
     const bool previous=base_ui_dispatch;base_ui_dispatch=true;
     lobby_original(menu,0x5aaeb0);base_ui_dispatch=previous;
 }
+// The retail Host/Join per-frame updates (0x5babc0 / 0x5c8480) do two things: every 0.25 s they
+// refresh the player list (0x5ba4e0 / 0x5c8150), then they draw the localized ONLINE_ADVICE
+// paragraph ("To add additional players ...") in the classic font at 20,100 - over the skin's
+// player cards (live 060p, shots/fr720-lobby-native-b.png). A skinned lobby keeps the list
+// refresh with the same clock, timer and interval, and leaves the paragraph out. Both prologues
+// are guarded byte for byte (online_menus_guards.hpp), so the replicated part is the retail one.
+struct advice_free_update { unsigned original,timer,refresh; };
+constexpr advice_free_update advice_free_updates[]{{0x5babc0,0x8a8288,0x5ba4e0},{0x5c8480,0x8afd14,0x5c8150}};
+bool skinned_lobby_update(void* menu,unsigned original) {
+    // A host notice (gameplay agreement: a joiner refused) replaces the paragraph for 60 s through the same
+    // lookup; while one is showing, the retail update runs so the notice still reaches the host.
+    if(gameplay_agreement::host_notice_showing(menu)) return lobby_original(menu,original);
+    for(const auto& u:advice_free_updates) if(u.original==original) {
+        __try {
+            void* clock=at<void*(__cdecl*)()>(0x55b610)();
+            const float now=(*reinterpret_cast<float(__thiscall* const*)(void*,int)>(*static_cast<std::uintptr_t*>(clock)+0x28))(clock,0);
+            auto& next=*reinterpret_cast<volatile float*>(u.timer);
+            if(next<now) {
+                at<void(__thiscall*)(void*)>(u.refresh)(menu);
+                next=now+*reinterpret_cast<const float*>(0x6819a0);
+            }
+            return true;
+        }
+        __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+    }
+    return lobby_original(menu,original);
+}
 void lobby_refresh(void* menu,unsigned original) {
     if(native_lobby_rejected(menu)) return;
     const bool marked=lobby_live(menu);
     if(marked) { if(lobby_state.owner==menu) lobby_state.picker_safe=false;picker_visibility(menu,false); }
     if(marked) ++refreshing_names;
-    lobby_original(menu,original);
+    if(marked) skinned_lobby_update(menu,original); else lobby_original(menu,original);
     if(marked) --refreshing_names;
     if(marked) lobby_after_refresh(menu);
 }
@@ -2088,6 +2123,12 @@ patch_transaction::contribution contribution() {
 }
 void install(HMODULE game,const install_hooks* hooks) {
     if(ready || !requested()) return;
+    // The co-op screens are authored for the private Barlow family only (live 060p f03: with
+    // LegendsClassicFonts=0 the hub opened in the classic font with overlapping rows). Without the
+    // committed font capability, Play Online stays the game's own menu.
+    if(!lc_fonts::active()) {
+        logger::write("online menus: [Game] LegendsClassicFonts is not active (off or refused); native online entry retained"); return;
+    }
     if(reinterpret_cast<std::uintptr_t>(game)!=0x400000 ||
         !registration_fits(script_function_overflow::table(),script_functions::capacity())) {
         logger::write("online menus: registration/capacity refused; native online entry retained"); return;
