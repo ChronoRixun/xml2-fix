@@ -31,7 +31,10 @@ namespace online_restore_core
 	// Host clock budgets (ms). JIP's 45/90/120 s stage budgets are the reference; round 11 measures real loads.
 	constexpr std::uint32_t vote_ms = 60000, prepare_ms = 30000, stall_ms = 30000, distribute_ms = 180000,
 		load_ms = 120000, repick_ms = 90000, seat_ms = 30000, resume_ms = 30000, resend_ms = 1000,
-		guest_silence_ms = 10000, progress_min_ms = 250, refusal_window_ms = 10000, reply_min_ms = 1000;
+		guest_silence_ms = 10000, progress_min_ms = 250, refusal_window_ms = 10000, reply_min_ms = 1000,
+		// A bound guest (STAGED or later) that hears nothing from the host for this long ends itself (never resumes).
+		// Longer than the native load budget: the host's integration must keep pumping, a load may be slow.
+		bound_silence_ms = 150000, unconfirmed_resend_ms = 60000;
 	constexpr unsigned refusal_limit = 16;
 
 	using key = online_party_core::key;
@@ -76,13 +79,13 @@ namespace online_restore_core
 
 	enum class refusal : std::uint8_t {
 		none, size, kind, wire, type, code, session, op, purpose, count, key, index, length, digest, text, answer, unsafe, reason, slot, flag, bytes,
-		phase, gen, check, hero, story, previous, duplicate,
+		phase, gen, check, hero, story, previous, sequence, duplicate,
 		// model-level
 		foreign, unauthorized, stale, out_of_phase, repeat, conflict, busy, membership, taken, closed, invalid_request, count_ };
 	inline const char* name(refusal r)
 	{
 		static const char* const n[] = {"none", "size", "kind", "wire", "type", "code", "session", "op", "purpose", "count", "key", "index", "length",
-			"digest", "text", "answer", "unsafe", "reason", "slot", "flag", "bytes", "phase", "gen", "check", "hero", "story", "previous", "duplicate",
+			"digest", "text", "answer", "unsafe", "reason", "slot", "flag", "bytes", "phase", "gen", "check", "hero", "story", "previous", "sequence", "duplicate",
 			"foreign", "unauthorized", "stale", "out_of_phase", "repeat", "conflict", "busy", "membership", "taken", "closed", "invalid_request"};
 		return r < refusal::count_ ? n[unsigned(r)] : "?";
 	}
@@ -119,6 +122,7 @@ namespace online_restore_core
 		std::uint32_t gen = 0, check = 0, previous_op = 0;
 		std::vector<std::uint16_t> heroes; // repick roster / assign per slot
 		std::uint16_t story = story_none, hero = hero_open;
+		std::uint16_t seq = 0; // pick: the member's own pick counter (newest wins on the unreliable lane)
 		std::uint8_t story_owner = slot_none;
 	};
 
@@ -141,7 +145,7 @@ namespace online_restore_core
 			case type::progress: case type::commit: case type::seated: case type::resume: return 4;
 			case type::staged: return 4 + 2 * digest_size;
 			case type::loaded: return 8;
-			case type::pick: return 6;
+			case type::pick: return 8;
 			case type::freeze: return 6;
 			case type::rollback: return 8 + digest_size;
 			default: return 0;
@@ -191,7 +195,7 @@ namespace online_restore_core
 			put16(o, m.story);
 			o.push_back(m.story_owner);
 			break;
-		case type::pick: put32(o, m.gen); put16(o, m.hero); break;
+		case type::pick: put32(o, m.gen); put16(o, m.seq); put16(o, m.hero); break;
 		case type::assign:
 			put32(o, m.gen);
 			o.push_back(m.flag);
@@ -334,8 +338,10 @@ namespace online_restore_core
 		}
 		case type::pick:
 			out.gen = get32(b);
-			out.hero = get16(b + 4);
+			out.seq = get16(b + 4);
+			out.hero = get16(b + 6);
 			if (!out.gen) return refusal::gen;
+			if (!out.seq) return refusal::sequence;
 			return out.hero == hero_open ? refusal::hero : refusal::none;
 		case type::assign:
 		{
@@ -483,6 +489,10 @@ namespace online_restore_core
 				assign[s] = hero_watch;
 				for (auto h : heroes) if (holder(h) < 0) { assign[s] = h; break; }
 			}
+			// Somebody must play: if every member chose to watch, the host takes the first roster hero (review fix 7).
+			bool played = false;
+			for (std::uint8_t s = 0; s < count; ++s) if (present[s] && assign[s] < hero_watch) played = true;
+			if (!played && present[0] && !heroes.empty()) assign[0] = heroes[0];
 		}
 		std::vector<std::uint16_t> row() const { return std::vector<std::uint16_t>(assign.begin(), assign.begin() + count); }
 	};
@@ -548,8 +558,10 @@ namespace online_restore_core
 				else if (newcomer) cancel_op(reason::roster_changed, slot_none, now);
 				break;
 			case phase::queued:
+				// Coordinator decision 3: only a change of ACTIVE members drops a queued Load; a PC arriving to wait
+				// (or leaving the wait) does not - it stays held outside, as while voting.
 				if (missing >= 0) cancel_op(reason::member_left, std::uint8_t(missing), now);
-				else if (newcomer || !detail::same_keys(pending, queued_pending_)) cancel_op(reason::roster_changed, slot_none, now);
+				else if (newcomer) cancel_op(reason::roster_changed, slot_none, now);
 				break;
 			case phase::committed:
 				if (missing >= 0) freeze(reason::member_left, std::uint8_t(missing), now);
@@ -623,9 +635,12 @@ namespace online_restore_core
 			last_progress_ = now;
 			maybe_commit(now);
 		}
-		void host_loaded(bool ok, std::uint32_t check_value, const roster_info& r, std::uint32_t now)
+		// started_gen: the restore generation the native load was started under (generation() at COMMIT / ROLLBACK); a
+		// late completion of an older load (e.g. the commit load finishing during a rollback) is ignored.
+		void host_loaded(std::uint32_t started_gen, bool ok, std::uint32_t check_value, const roster_info& r, std::uint32_t now)
 		{
 			if (phase_ != phase::committed && phase_ != phase::rolling_back) return;
+			if (started_gen != gen_) return;
 			if (loaded_[0]) return;
 			if (!ok || !check_value || (phase_ == phase::committed && !valid(r)))
 			{
@@ -660,14 +675,17 @@ namespace online_restore_core
 			if (decision(m.t) || slot < 0) return refused(slot, refusal::unauthorized, now);
 			if (m.op != op_ || terminal(phase_))
 			{
-				// About the finished operation: answer with its outcome (rate-limited) - the member missed it.
-				if (m.op == op_ && !outcome_msg_.empty() && now - last_reply_[slot] >= reply_min_ms)
+				// About the finished operation: answer with its outcome (rate-limited) - the member missed it. An END
+				// also answers a member still on the operation a rollback replaced (op < op_).
+				const bool about = m.op == op_ || (phase_ == phase::ended && m.op < op_);
+				if (about && !outcome_msg_.empty() && now - last_reply_[slot] >= reply_min_ms)
 				{
 					last_reply_[slot] = now;
 					out_.push_back({std::uint8_t(slot), outcome_msg_});
 				}
 				return refusal::stale;
 			}
+			if (departed_[slot]) return refusal::stale; // it left past the consistency line; nothing it says counts
 			auto& last = last_rx_[slot][unsigned(m.t)];
 			const std::vector<std::uint8_t> bytes(d, d + n);
 			if (last == bytes) return refusal::repeat;
@@ -692,7 +710,15 @@ namespace online_restore_core
 			case phase::committed: if (in >= load_ms) { freeze(reason::load_timeout, unloaded(), now); return; } break;
 			case phase::rolling_back: if (in >= load_ms) { end(reason::load_timeout, unloaded(), now); return; } break;
 			case phase::repick: if (in >= repick_ms) { finalize(now); return; } break;
-			case phase::seating: if (in >= seat_ms) { end(reason::seat_timeout, slot_none, now); return; } break;
+			case phase::seating:
+				if (in >= seat_ms)
+				{
+					// Everyone holds the same world: members not seated in time depart (review fix 6); the host must seat.
+					if (!seated_[0]) { end(reason::seat_timeout, 0, now); return; }
+					for (std::uint8_t s = 1; s < members_.size(); ++s) if (!departed_[s] && !seated_[s]) depart(s, now);
+					return;
+				}
+				break;
 			case phase::resuming: if (in >= resume_ms) { end(reason::resume_timeout, slot_none, now); return; } break;
 			default: return;
 			}
@@ -728,7 +754,7 @@ namespace online_restore_core
 		std::uint32_t session_ = 0;
 		key self_{};
 		std::vector<member> active_, members_;
-		std::vector<key> pending_, queued_pending_;
+		std::vector<key> pending_;
 		bool safe_ = false;
 		unsafe why_ = unsafe::menu;
 		std::uint32_t freeze_frame_ = 0, frozen_at_ = 0;
@@ -749,7 +775,8 @@ namespace online_restore_core
 		repick_state repick_;
 		std::uint32_t since_ = 0, resent_ = 0, last_progress_ = 0;
 		std::vector<std::vector<std::uint8_t>> decisions_;
-		std::vector<std::uint8_t> outcome_msg_;
+		std::vector<std::uint8_t> outcome_msg_, repick_msg_;
+		std::array<std::uint16_t, members_max> pick_seq_{};
 		std::vector<outgoing> out_;
 
 		int slot_of(const key& k) const
@@ -842,7 +869,6 @@ namespace online_restore_core
 		{
 			if (safe_) { prepare(now); return; }
 			set_phase(phase::queued, now);
-			queued_pending_ = pending_;
 			message q = base(type::queued);
 			q.why = why_;
 			decide(q);
@@ -923,7 +949,9 @@ namespace online_restore_core
 			m.heroes = loaded_roster_.heroes;
 			m.story = loaded_roster_.story;
 			m.story_owner = repick_.owner;
+			pick_seq_ = {};
 			restate(m);
+			repick_msg_ = decisions_.front();
 			publish_picks(now);
 		}
 		void publish_picks(std::uint32_t now)
@@ -945,6 +973,8 @@ namespace online_restore_core
 			a.flag = 1;
 			a.heroes = repick_.row();
 			restate(a);
+			// A member that missed REPICK refuses the final ASSIGN until it has REPICK: keep resending both (fix 3).
+			decisions_.insert(decisions_.begin(), repick_msg_);
 			for (std::size_t s = 0; s < members_.size(); ++s) if (departed_[s]) seated_[s] = true;
 			maybe_resume(now);
 		}
@@ -977,8 +1007,13 @@ namespace online_restore_core
 			switch (m.t)
 			{
 			case type::vote:
+				// A withdrawal sent while queued can arrive after the first safe tick: still precommit, so it cancels.
+				if (m.answer == 2 && (phase_ == phase::voting || phase_ == phase::queued || phase_ == phase::preparing || phase_ == phase::distributing))
+				{
+					cancel_op(reason::declined, slot, now);
+					return refusal::none;
+				}
 				if (phase_ != phase::voting && phase_ != phase::queued) return refusal::out_of_phase;
-				if (m.answer == 2) { cancel_op(reason::declined, slot, now); return refusal::none; }
 				if (phase_ == phase::queued) return refusal::conflict; // already Yes; only a withdrawal is new
 				votes_[slot] = 1;
 				decisions_.pop_back();
@@ -1004,6 +1039,7 @@ namespace online_restore_core
 				const reason why = m.because == reason::none ? reason::guest_abort : m.because;
 				if (precommit(phase_)) cancel_op(why, slot, now);
 				else if (phase_ == phase::committed) freeze(why, slot, now);
+				else if (phase_ == phase::repick || phase_ == phase::seating || phase_ == phase::resuming) depart(slot, now); // fix 6
 				else end(why, slot, now);
 				return refusal::none;
 			}
@@ -1017,6 +1053,9 @@ namespace online_restore_core
 				return refusal::none;
 			case type::pick:
 				if (m.gen != gen_) return refusal::stale;
+				if (phase_ != phase::repick) return refusal::out_of_phase;
+				if (m.seq <= pick_seq_[slot]) return refusal::stale; // reordered: an older choice never overrides a newer one
+				pick_seq_[slot] = m.seq;
 				return pick_for(slot, m.hero, now);
 			case type::seated:
 				if (phase_ != phase::seating) return refusal::out_of_phase;
@@ -1075,7 +1114,7 @@ namespace online_restore_core
 			if (phase_ == phase::voting || phase_ == phase::queued) return answer(2, now);
 			if (phase_ != phase::preparing) return refusal::closed;
 			fail(reason::guest_abort, now);
-			local_cancel(reason::guest_abort);
+			local_cancel(reason::guest_abort, now);
 			return refusal::none;
 		}
 		void progress(std::uint32_t bytes, std::uint32_t now)
@@ -1091,8 +1130,8 @@ namespace online_restore_core
 		void staged(bool ok, std::uint32_t len, const digest& image, const digest& rollback, std::uint32_t now)
 		{
 			if (phase_ != phase::preparing) return;
-			if (!ok) { fail(reason::stage_failed, now); local_cancel(reason::stage_failed); return; }
-			if (len != proposal_.image_len || image != proposal_.image) { fail(reason::digest_mismatch, now); local_cancel(reason::digest_mismatch); return; }
+			if (!ok) { fail(reason::stage_failed, now); local_cancel(reason::stage_failed, now); return; }
+			if (len != proposal_.image_len || image != proposal_.image) { fail(reason::digest_mismatch, now); local_cancel(reason::digest_mismatch, now); return; }
 			message m = base(type::staged);
 			m.image_len = len;
 			m.image = image;
@@ -1101,9 +1140,11 @@ namespace online_restore_core
 			reply(m);
 			phase_ = phase::staged;
 		}
-		void loaded(bool ok, std::uint32_t check_value, const roster_info& r, std::uint32_t now)
+		// started_gen: generation() when the native load was started (see host::host_loaded).
+		void loaded(std::uint32_t started_gen, bool ok, std::uint32_t check_value, const roster_info& r, std::uint32_t now)
 		{
 			if (phase_ != phase::committed && phase_ != phase::rolling_back) return;
+			if (started_gen != gen_) return;
 			if (!ok || !check_value || (phase_ == phase::committed && !valid(r)))
 			{
 				fail(phase_ == phase::committed ? reason::load_failed : reason::rollback_failed, now);
@@ -1125,6 +1166,7 @@ namespace online_restore_core
 				(picks_.story != story_none && hero != picks_.story)))) return refusal::hero;
 			message m = base(type::pick);
 			m.gen = gen_;
+			m.seq = ++pick_seq_;
 			m.hero = hero;
 			reply(m);
 			return refusal::none;
@@ -1155,7 +1197,23 @@ namespace online_restore_core
 			if ((phase_ == phase::voting || phase_ == phase::queued || phase_ == phase::preparing) && now - last_host_ >= guest_silence_ms)
 			{
 				fail(reason::host_silent, now);
-				local_cancel(reason::host_silent);
+				local_cancel(reason::host_silent, now);
+			}
+			// A bound PC never leaves on its own - except after a long total silence, when it ends (never resumes).
+			if (bound(phase_) && now - last_host_ >= bound_silence_ms)
+			{
+				phase_ = phase::ended;
+				outcome_ = reason::host_silent;
+				outcome_slot_ = 0;
+				return;
+			}
+			// Resend the last answer once a second while the operation is open (and for a while after a local cancel
+			// the host has not confirmed): CANCEL / END / FREEZE are sent once, the host answers a resend with them.
+			const bool open = !terminal(phase_) || (phase_ == phase::cancelled && unconfirmed_ && now - cancelled_at_ < unconfirmed_resend_ms);
+			if (open && !last_sent_.empty() && now - resent_at_ >= resend_ms)
+			{
+				resent_at_ = now;
+				out_.push_back({0, last_sent_});
 			}
 		}
 
@@ -1197,7 +1255,15 @@ namespace online_restore_core
 		std::array<std::vector<std::uint8_t>, unsigned(type::count)> last_rx_{};
 		std::vector<std::uint8_t> last_sent_;
 		std::vector<outgoing> out_;
+		std::uint32_t resent_at_ = 0, cancelled_at_ = 0;
+		std::uint16_t pick_seq_ = 0;
+		bool unconfirmed_ = false;
 
+		static bool bound(phase p)
+		{
+			return p == phase::staged || p == phase::committed || p == phase::loaded || p == phase::frozen || p == phase::rolling_back || p == phase::repick ||
+				p == phase::seating || p == phase::seated || p == phase::resuming;
+		}
 		message base(type t) const
 		{
 			message m;
@@ -1220,11 +1286,13 @@ namespace online_restore_core
 			m.because = why;
 			reply(m);
 		}
-		void local_cancel(reason why)
+		void local_cancel(reason why, std::uint32_t now)
 		{
 			phase_ = phase::cancelled;
 			outcome_ = why;
 			outcome_slot_ = self_slot_;
+			unconfirmed_ = true; // until the host's CANCEL / END arrives
+			cancelled_at_ = now;
 		}
 		refusal answer(std::uint8_t a, std::uint32_t now)
 		{
@@ -1233,7 +1301,7 @@ namespace online_restore_core
 			message m = base(type::vote);
 			m.answer = a;
 			reply(m);
-			if (a == 2) local_cancel(reason::declined);
+			if (a == 2) local_cancel(reason::declined, now);
 			return refusal::none;
 		}
 		refusal accept_proposal(const message& m, std::uint32_t now)
@@ -1254,6 +1322,7 @@ namespace online_restore_core
 			my_rollback_ = {};
 			sent_progress_ = 0;
 			progress_at_ = 0;
+			unconfirmed_ = false;
 			proposed_at_ = now;
 			outcome_ = reason::none;
 			outcome_slot_ = slot_none;
@@ -1265,7 +1334,7 @@ namespace online_restore_core
 			if (members_[0].k != host_ || self_slot_ == slot_none || !detail::same_members(members_, active_))
 			{
 				fail(reason::membership, now);
-				local_cancel(reason::membership);
+				local_cancel(reason::membership, now);
 			}
 			return refusal::none;
 		}
@@ -1290,6 +1359,7 @@ namespace online_restore_core
 			case type::cancel:
 				if (!precommit(phase_) && phase_ != phase::cancelled) return refusal::out_of_phase;
 				phase_ = phase::cancelled;
+				unconfirmed_ = false;
 				outcome_ = m.because;
 				outcome_slot_ = m.slot;
 				return refusal::none;
@@ -1321,6 +1391,11 @@ namespace online_restore_core
 					(phase_ != phase::frozen && phase_ != phase::staged && phase_ != phase::committed && phase_ != phase::loaded)) return refusal::out_of_phase;
 				if (zero(my_rollback_) || my_rollback_ != m.rollback)
 				{
+					// Refuse under the rollback's own op so the host hears it at once (fix 5); stay frozen.
+					op_ = m.op;
+					gen_ = m.gen;
+					last_rx_ = {};
+					phase_ = phase::frozen;
 					fail(reason::rollback_failed, now);
 					return refusal::digest;
 				}
@@ -1335,9 +1410,12 @@ namespace online_restore_core
 				if (m.gen != gen_) return refusal::stale;
 				if (m.heroes != roster_.heroes || m.story != roster_.story)
 				{
-					// This PC loaded a different roster: the worlds differ.
+					// This PC loaded a different roster: its world differs. It leaves (the host takes the FAIL as its
+					// departure, fix 6); the others hold the same world and continue.
 					fail(reason::check_mismatch, now);
-					phase_ = phase::frozen;
+					phase_ = phase::ended;
+					outcome_ = reason::check_mismatch;
+					outcome_slot_ = self_slot_;
 					return refusal::check;
 				}
 				{
@@ -1345,6 +1423,7 @@ namespace online_restore_core
 					for (std::size_t s = 0; s < members_.size(); ++s) here[s] = true;
 					picks_.start(std::uint8_t(members_.size()), here, m.heroes, m.story, m.story_owner);
 				}
+				pick_seq_ = 0;
 				phase_ = phase::repick;
 				return refusal::none;
 			case type::assign:
@@ -1367,6 +1446,7 @@ namespace online_restore_core
 				return refusal::none;
 			case type::end:
 				world_replaced_ = world_replaced_ || !(precommit(phase_) || phase_ == phase::idle || phase_ == phase::cancelled);
+				unconfirmed_ = false;
 				phase_ = phase::ended;
 				outcome_ = m.because;
 				outcome_slot_ = m.slot;

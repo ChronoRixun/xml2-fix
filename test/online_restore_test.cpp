@@ -160,8 +160,8 @@ namespace
 		}
 		void load_all(const R::roster_info& r = sample_roster(), int skip = -1, std::uint32_t check_value = 77)
 		{
-			h.host_loaded(true, check_value, r, t);
-			for (int s = 1; s < n; ++s) if (s != skip && !gone[s]) G(s).loaded(true, check_value, r, t);
+			h.host_loaded(h.generation(), true, check_value, r, t);
+			for (int s = 1; s < n; ++s) if (s != skip && !gone[s]) G(s).loaded(G(s).generation(), true, check_value, r, t);
 			pump();
 		}
 		void seat_all(int skip = -1)
@@ -217,8 +217,8 @@ namespace
 		m = header(T::loaded, 5); m.gen = 1; m.check = 0xdeadbeef; v.push_back(m);
 		m = header(T::repick, 5); m.gen = 1; m.heroes = {1, 2, 3}; m.story = 2; m.story_owner = 1; v.push_back(m);
 		m = header(T::repick, 5); m.gen = 1; for (std::uint16_t i = 0; i < 32; ++i) m.heroes.push_back(std::uint16_t(100 + i)); v.push_back(m);
-		m = header(T::pick, 5); m.gen = 1; m.hero = 3; v.push_back(m);
-		m = header(T::pick, 5); m.gen = 1; m.hero = R::hero_watch; v.push_back(m);
+		m = header(T::pick, 5); m.gen = 1; m.seq = 1; m.hero = 3; v.push_back(m);
+		m = header(T::pick, 5); m.gen = 1; m.seq = 0xffff; m.hero = R::hero_watch; v.push_back(m);
 		m = header(T::assign, 5); m.gen = 1; m.flag = 0; m.heroes = {1, R::hero_open, R::hero_watch, R::hero_watch}; v.push_back(m);
 		m = header(T::assign, 5); m.gen = 1; m.flag = 1; m.heroes = {1, 2}; v.push_back(m);
 		m = header(T::seated, 5); m.gen = 2; v.push_back(m);
@@ -314,6 +314,7 @@ namespace
 		check(mutated(base[15], [](R::message& m) { m.story = R::story_none; }) == F::slot, "repick: a story owner without a story hero is refused");
 		check(mutated(base[15], [](R::message& m) { m.story_owner = 4; }) == F::slot, "repick: story owner slot 4 is refused");
 		check(mutated(base[17], [](R::message& m) { m.hero = R::hero_open; }) == F::hero, "pick: 'open' is not a pick");
+		check(mutated(base[17], [](R::message& m) { m.seq = 0; }) == F::sequence, "pick: sequence 0 is refused (fix 8)");
 		check(mutated(base[19], [](R::message& m) { m.flag = 2; }) == F::flag, "assign: final is 0 or 1");
 		check(mutated(base[19], [](R::message& m) { m.flag = 1; }) == F::hero, "assign: a final assignment has no open slot");
 		check(mutated(base[20], [](R::message& m) { m.heroes = {2, 2}; }) == F::duplicate, "assign: one hero for two slots is refused");
@@ -427,7 +428,7 @@ namespace
 			check(n == 1 || !r.G(1).may_resume_input(), tag + "a committed guest may not resume input");
 			r.load_all(sample_roster(), n - 1);
 			check(n == 1 ? r.h.now() == P::repick : r.h.now() == P::committed, tag + "one member not loaded: no re-pick, nobody resumes");
-			if (n > 1) { r.G(n - 1).loaded(true, 77, sample_roster(), r.t); r.pump(); }
+			if (n > 1) { r.G(n - 1).loaded(r.G(n - 1).generation(), true, 77, sample_roster(), r.t); r.pump(); }
 			check(r.h.now() == P::repick && r.guests_are(P::repick), tag + "every member loaded with the same check: re-pick");
 			for (int s = 1; s < n; ++s) check(r.G(s).pick(std::uint16_t(10 + s), r.t) == F::none, tag + "guest " + std::to_string(s) + " picks a hero");
 			r.pump();
@@ -605,7 +606,10 @@ namespace
 			r.vote_all();
 			r.pending = {K(7)};
 			r.sync();
-			check(r.h.now() == P::cancelled && r.h.outcome() == R::reason::roster_changed && r.guests_are(P::cancelled), "queue: a PC arriving in the room while queued drops the request for everyone");
+			check(r.h.now() == P::queued && r.guests_are(P::queued), "queue (decision 3): a PC arriving to WAIT does not drop the queued Load");
+			r.active.push_back({K(7), 3});
+			r.sync();
+			check(r.h.now() == P::cancelled && r.h.outcome() == R::reason::roster_changed && r.guests_are(P::cancelled), "queue: a PC becoming ACTIVE while queued drops the request for everyone");
 			check(r.h.propose(sample_proposal(), r.t) == F::none && r.h.op() == 2, "queue: the host must propose again (new op), everyone confirms again");
 		}
 		{
@@ -617,7 +621,7 @@ namespace
 			r.vote_all();
 			r.pending.clear();
 			r.sync();
-			check(r.h.now() == P::cancelled && r.h.outcome() == R::reason::roster_changed, "queue: a pending PC leaving while queued drops it too");
+			check(r.h.now() == P::queued, "queue (decision 3): a waiting PC leaving does not drop it either");
 		}
 		{
 			room r(3);
@@ -822,7 +826,8 @@ namespace
 			r.to(P::seating);
 			r.seat_all(2);
 			r.step(R::seat_ms + 100);
-			check(r.h.now() == P::ended && r.h.outcome() == R::reason::seat_timeout && r.guests_are(P::ended), "timeout: a member never seated ends the session at 30 s (no subset resume)");
+			check(r.h.now() == P::resuming && r.h.departed(2) && r.G(1).now() == P::resuming && !r.G(2).may_resume_input(),
+			      "timeout (fix 6): a member not seated by 30 s departs; the rest resume (everyone holds the same world)");
 		}
 		{
 			room r(2);
@@ -898,6 +903,80 @@ namespace
 		}
 	}
 
+
+	struct lossy_result { bool reached = false, consistent = true; std::string host, guests; };
+	lossy_result lossy(unsigned seed, int mode)
+	{
+		room r(mode == 0 ? 1 + int(seed % 4) : 2 + int(seed % 3));
+		std::mt19937 rng(seed * 7919u + unsigned(mode));
+		r.drop = [&rng](int, int, const std::vector<std::uint8_t>&) { return rng() % 3 == 0; };
+		r.twice = seed % 5 == 0;
+		// Story rosters every other run: saved owner present (a guest), departed (K(9)) or unknown.
+		R::roster_info roster = sample_roster();
+		if (mode == 0 && seed % 2 == 0)
+		{
+			const unsigned v = (seed / 2) % 3;
+			roster = sample_roster(12, v == 0 ? K(std::uint8_t(r.n)) : v == 1 ? K(9) : R::key{});
+		}
+		const R::digest cap = mode == 2 ? R::digest{} : D(0x77);
+		const auto p = sample_proposal();
+		const unsigned cancel_at = 5 + rng() % 30;
+		bool failed_once = false, cancelled = false;
+		std::vector<bool> picked(std::size_t(r.n), false);
+		r.propose();
+		for (int i = 0; i < 1200; ++i)
+		{
+			bool all_resumed = true;
+			for (int s = 1; s < r.n; ++s)
+			{
+				auto& g = r.G(s);
+				switch (g.now())
+				{
+				case P::voting: g.vote(true, r.t); break;
+				case P::preparing: if (mode != 1) g.staged(true, p.image_len, p.image, cap, r.t); break;
+				case P::committed:
+					if (mode >= 2 && s == 1 && !failed_once) { failed_once = true; g.loaded(g.generation(), false, 0, roster, r.t); }
+					else g.loaded(g.generation(), true, 77, roster, r.t);
+					break;
+				case P::rolling_back: g.loaded(g.generation(), true, 55, roster, r.t); break;
+				case P::repick: if (!picked[std::size_t(s)]) { picked[std::size_t(s)] = true; g.pick(roster.story != R::story_none ? roster.story : std::uint16_t(10 + s), r.t); } break;
+				case P::seating: g.seated(r.t); break;
+				case P::resuming: g.first_frame(r.t); break;
+				default: break;
+				}
+				all_resumed = all_resumed && (g.now() == P::resuming || g.now() == P::playing);
+			}
+			switch (r.h.now())
+			{
+			case P::distributing: if (mode == 1 && !cancelled && unsigned(i) >= cancel_at) { cancelled = true; r.h.cancel(r.t); } break;
+			case P::preparing: r.h.host_ready(true, cap, r.t); break;
+			case P::committed: r.h.host_loaded(r.h.generation(), true, 77, roster, r.t); break;
+			case P::rolling_back: r.h.host_loaded(r.h.generation(), true, 55, roster, r.t); break;
+			case P::repick: if (!picked[0]) { picked[0] = true; r.h.host_pick(roster.story != R::story_none ? roster.story : 10, r.t); } break;
+			case P::seating: r.h.host_seated(r.t); break;
+			case P::resuming: if (all_resumed) r.h.first_frame(r.t); break; // the native barrier needs everyone's input
+			default: break;
+			}
+			r.step(100);
+			if (mode == 1 && r.h.now() == P::voting && r.t > 70000) break;
+		}
+		const P want = mode == 1 ? P::cancelled : mode == 2 ? P::ended : P::playing;
+		lossy_result x;
+		const P hp = r.h.now();
+		x.host = S(hp);
+		x.reached = hp == want;
+		for (int s = 1; s < r.n; ++s)
+		{
+			const P gp = r.G(s).now();
+			x.guests += S(gp) + " ";
+			if (gp != want) x.reached = false;
+			if (hp == P::cancelled && !(R::precommit(gp) || gp == P::cancelled)) x.consistent = false;
+			if ((gp == P::resuming || gp == P::playing) && !(hp == P::resuming || hp == P::playing)) x.consistent = false;
+		}
+		if (mode == 3 && !r.h.rolled_back()) x.reached = false;
+		return x;
+	}
+
 	void delays_and_duplicates()
 	{
 		{
@@ -941,61 +1020,23 @@ namespace
 		}
 		{
 			// Seeded loss/duplication across full runs: the room completes or fails consistently, never mixed.
-			int complete = 0, consistent = 0, runs = 0;
-			for (unsigned seed = 1; seed <= 200; ++seed)
+			// mode 0 complete (normal / story rosters), 1 host Cancel precommit, 2 load failure without rollback (END),
+			// 3 load failure with a verified rollback. Every run must reach its outcome on EVERY PC.
+			const char* names[] = {"complete", "cancel", "end", "rollback"};
+			for (int mode = 0; mode < 4; ++mode)
 			{
-				++runs;
-				room r(1 + int(seed % 4));
-				std::mt19937 rng(seed);
-				r.drop = [&rng](int, int, const std::vector<std::uint8_t>&) { return rng() % 3 == 0; };
-				r.twice = seed % 5 == 0;
-				r.propose();
-				const auto p = sample_proposal();
-				for (int i = 0; i < 300 && r.h.now() != P::playing; ++i)
+				int reached = 0, consistent = 0, runs = 0;
+				for (unsigned seed = 1; seed <= 200; ++seed)
 				{
-					// Each PC acts on whatever phase it is in (the native facts arrive when they arrive).
-					bool all_resumed = true;
-					for (int s = 1; s < r.n; ++s)
-					{
-						auto& x = r.G(s);
-						switch (x.now())
-						{
-						case P::voting: x.vote(true, r.t); break;
-						case P::preparing: x.staged(true, p.image_len, p.image, D(0x77), r.t); break;
-						case P::committed: x.loaded(true, 77, sample_roster(), r.t); break;
-						case P::repick: x.pick(std::uint16_t(10 + s), r.t); break;
-						case P::seating: x.seated(r.t); break;
-						case P::resuming: x.first_frame(r.t); break;
-						default: break;
-						}
-						all_resumed = all_resumed && (x.now() == P::resuming || x.now() == P::playing);
-					}
-					switch (r.h.now())
-					{
-					case P::preparing: r.h.host_ready(true, D(0x77), r.t); break;
-					case P::committed: r.h.host_loaded(true, 77, sample_roster(), r.t); break;
-					case P::repick: r.h.host_pick(10, r.t); break;
-					case P::seating: r.h.host_seated(r.t); break;
-					case P::resuming: if (all_resumed) r.h.first_frame(r.t); break; // the native barrier needs everyone's input
-					default: break;
-					}
-					r.step(100);
+					++runs;
+					const lossy_result x = lossy(seed, mode);
+					reached += x.reached;
+					consistent += x.consistent;
+					if (!x.reached || !x.consistent) std::printf("  lossy %s seed %u: host %s guests %s\n", names[mode], seed, x.host.c_str(), x.guests.c_str());
 				}
-				const P hp = r.h.now();
-				bool ok = true;
-				for (int s = 1; s < r.n; ++s)
-				{
-					const P gp = r.G(s).now();
-					// Never: a guest past COMMIT while the host cancelled; a guest resuming while the host did not resume.
-					if (hp == P::cancelled && !(R::precommit(gp) || gp == P::cancelled)) ok = false;
-					if ((gp == P::resuming || gp == P::playing) && !(hp == P::resuming || hp == P::playing)) ok = false;
-					if (hp == P::playing && gp != P::playing && gp != P::resuming) ok = false;
-				}
-				if (ok) ++consistent;
-				if (hp == P::playing) ++complete;
+				std::printf("  lossy %s: %d of %d reached, %d consistent\n", names[mode], reached, runs, consistent);
+				check(reached == runs && consistent == runs, std::string("loss (fix 10): 200 seeded runs, a third of all messages lost (CANCEL/END/FREEZE too), some duplicated - every run reaches '") + names[mode] + "' on every PC, none mixed");
 			}
-			std::printf("  lossy runs: %d of %d completed, %d consistent\n", complete, runs, consistent);
-			check(consistent == runs && complete >= runs / 2, "loss: 200 seeded runs with a third of all messages lost (some duplicated) - resends complete most, none ends mixed");
 		}
 		{
 			// The host answers a message about a finished op with its outcome (the guest missed the CANCEL).
@@ -1058,9 +1099,9 @@ namespace
 		{
 			room r(3);
 			r.to(P::committed);
-			r.h.host_loaded(true, 77, sample_roster(), r.t);
-			r.G(1).loaded(true, 77, sample_roster(), r.t);
-			r.G(2).loaded(false, 0, sample_roster(), r.t);
+			r.h.host_loaded(r.h.generation(), true, 77, sample_roster(), r.t);
+			r.G(1).loaded(r.G(1).generation(), true, 77, sample_roster(), r.t);
+			r.G(2).loaded(r.G(2).generation(), false, 0, sample_roster(), r.t);
 			r.pump();
 			check(r.h.now() == P::rolling_back && r.h.outcome() == R::reason::load_failed && r.h.outcome_slot() == 2 && r.h.op() == 2 && r.h.generation() == 2,
 			      "partial commit: one load fails - freeze, then a rollback operation (op 2, generation 2), no vote");
@@ -1081,7 +1122,7 @@ namespace
 			r.G(2).staged(true, p.image_len, p.image, D(0x76), r.t);
 			r.pump();
 			check(r.h.now() == P::committed && !r.h.rollback_available(), "rollback: differing captures are not a verified rollback");
-			r.G(2).loaded(false, 0, sample_roster(), r.t);
+			r.G(2).loaded(r.G(2).generation(), false, 0, sample_roster(), r.t);
 			r.pump();
 			check(r.h.now() == P::ended && r.h.outcome() == R::reason::load_failed && r.guests_are(P::ended) && r.G(1).world_replaced(), "partial commit without a verified rollback: the session ends for everyone");
 		}
@@ -1098,14 +1139,14 @@ namespace
 		{
 			room r(3);
 			r.to(P::committed);
-			r.h.host_loaded(true, 77, sample_roster(), r.t);
-			r.G(1).loaded(true, 77, sample_roster(), r.t);
-			r.G(2).loaded(true, 78, sample_roster(), r.t);
+			r.h.host_loaded(r.h.generation(), true, 77, sample_roster(), r.t);
+			r.G(1).loaded(r.G(1).generation(), true, 77, sample_roster(), r.t);
+			r.G(2).loaded(r.G(2).generation(), true, 78, sample_roster(), r.t);
 			r.pump();
 			check(r.h.now() == P::rolling_back && r.h.outcome() == R::reason::check_mismatch && r.h.outcome_slot() == 2, "check: a different loaded-state check freezes (then rollback)");
-			r.h.host_loaded(true, 55, sample_roster(), r.t);
-			r.G(1).loaded(true, 55, sample_roster(), r.t);
-			r.G(2).loaded(false, 0, sample_roster(), r.t);
+			r.h.host_loaded(r.h.generation(), true, 55, sample_roster(), r.t);
+			r.G(1).loaded(r.G(1).generation(), true, 55, sample_roster(), r.t);
+			r.G(2).loaded(r.G(2).generation(), false, 0, sample_roster(), r.t);
 			r.pump();
 			check(r.h.now() == P::ended && r.h.outcome() == R::reason::rollback_failed && r.guests_are(P::ended), "rollback: a failure during the rollback ends the session");
 		}
@@ -1116,7 +1157,7 @@ namespace
 			r.drop = [](int from, int to, const std::vector<std::uint8_t>& b) { return from == 0 && to == 2 && (b[2] == std::uint8_t(T::commit) || b[2] == std::uint8_t(T::freeze)); };
 			r.stage_all();
 			check(r.G(2).now() == P::staged && r.h.now() == P::committed, "missed: guest 2 never saw COMMIT");
-			r.G(1).loaded(false, 0, sample_roster(), r.t);
+			r.G(1).loaded(r.G(1).generation(), false, 0, sample_roster(), r.t);
 			r.pump();
 			check(r.h.now() == P::rolling_back && r.G(2).now() == P::rolling_back && !r.G(2).world_replaced(), "missed: guest 2 takes the ROLLBACK straight from staged");
 		}
@@ -1137,7 +1178,7 @@ namespace
 		{
 			room r(2);
 			r.to(P::committed);
-			r.G(1).loaded(true, 77, sample_roster(), r.t);
+			r.G(1).loaded(r.G(1).generation(), true, 77, sample_roster(), r.t);
 			r.pump();
 			auto c = header(T::commit, 1); c.gen = 1; auto b = enc(c);
 			check(r.G(1).receive(K(1), b.data(), b.size(), r.t) == F::repeat, "commit: the host's resent COMMIT is a repeat after loading");
@@ -1241,19 +1282,174 @@ namespace
 			room r(3);
 			r.to(P::committed);
 			R::roster_info other = sample_roster(); other.heroes.pop_back();
-			r.h.host_loaded(true, 77, sample_roster(), r.t);
-			r.G(1).loaded(true, 77, sample_roster(), r.t);
-			r.G(2).loaded(true, 77, other, r.t);
+			r.h.host_loaded(r.h.generation(), true, 77, sample_roster(), r.t);
+			r.G(1).loaded(r.G(1).generation(), true, 77, sample_roster(), r.t);
+			r.G(2).loaded(r.G(2).generation(), true, 77, other, r.t);
 			r.pump();
-			check(r.h.now() == P::ended && r.h.outcome() == R::reason::check_mismatch && r.h.outcome_slot() == 2 && r.guests_are(P::ended), "re-pick: a guest with a different loaded roster ends the session (never a mixed resume)");
+			check(r.h.now() == P::repick && r.h.departed(2) && r.G(2).now() == P::ended && r.G(2).outcome() == R::reason::check_mismatch && r.G(1).now() == P::repick,
+			      "re-pick (fix 6): a guest with a different loaded roster leaves (ended on that PC); the others continue the same world");
 		}
 		{
 			room r(2);
 			r.to(P::committed);
 			R::roster_info bad; bad.heroes = {1, 1};
-			r.h.host_loaded(true, 77, bad, r.t);
+			r.h.host_loaded(r.h.generation(), true, 77, bad, r.t);
 			r.pump();
 			check(r.h.now() == P::rolling_back && r.h.outcome() == R::reason::load_failed, "re-pick: an invalid roster from the host's own load is a load failure");
+		}
+	}
+
+
+	void review_probes()
+	{
+		{
+			// P1 (fix 3): story owner present -> immediate final ASSIGN; the REPICK is lost to guest 1.
+			room r(3);
+			r.to(P::committed);
+			r.drop = [](int from, int to, const std::vector<std::uint8_t>& b) { return from == 0 && to == 1 && b[2] == std::uint8_t(T::repick); };
+			r.load_all(sample_roster(12, K(3)));
+			r.drop = nullptr;
+			for (int i = 0; i < 100; ++i)
+			{
+				for (int s = 1; s < 3; ++s) if (r.G(s).now() == P::seating) r.G(s).seated(r.t);
+				if (r.h.now() == P::seating) r.h.host_seated(r.t);
+				r.step(100);
+			}
+			check(r.h.now() == P::resuming && r.guests_are(P::resuming), "P1 (fix 3): a lost REPICK is resent with the final ASSIGN; everyone seats and resumes");
+		}
+		{
+			// P2 (fix 4): a withdrawal sent while queued arrives after the first safe tick.
+			room r(3);
+			r.to(P::queued);
+			std::vector<std::uint8_t> no;
+			r.G(1).vote(false, r.t);
+			for (auto& o : r.G(1).take()) no = o.bytes;
+			r.h.safety(true, R::unsafe::none, 900);
+			r.h.tick(r.t);
+			r.pump();
+			check(r.h.now() == P::preparing, "P2: the host prepared before the No arrived");
+			r.h.receive(K(2), no.data(), no.size(), r.t);
+			r.pump();
+			check(r.h.now() == P::cancelled && r.h.outcome() == R::reason::declined && r.h.outcome_slot() == 1 && r.G(2).now() == P::cancelled,
+			      "P2 (fix 4): a late No in preparing cancels at once (declined), nobody waits for a stall timeout");
+			room q(3);
+			q.to(P::distributing);
+			auto v = header(T::vote, 1); v.answer = 2; auto b = enc(v);
+			q.h.receive(K(3), b.data(), b.size(), q.t);
+			check(q.h.now() == P::cancelled && q.h.outcome() == R::reason::declined && q.h.outcome_slot() == 2, "P2 (fix 4): a No while distributing cancels too");
+		}
+		{
+			// P3 (fix 2): a staged guest loses the one CANCEL.
+			room r(3);
+			r.to(P::preparing); r.ready();
+			const auto p = sample_proposal();
+			r.G(1).staged(true, p.image_len, p.image, D(0x77), r.t); r.pump();
+			r.drop = [](int from, int to, const std::vector<std::uint8_t>& b) { return from == 0 && to == 1 && b[2] == std::uint8_t(T::cancel); };
+			r.h.cancel(r.t); r.pump();
+			r.drop = nullptr;
+			r.step(2500);
+			check(r.G(1).now() == P::cancelled && r.G(1).outcome() == R::reason::host_cancel && !r.G(1).world_replaced(), "P3 (fix 2): a staged guest resends once a second and learns the lost CANCEL within 2.5 s");
+		}
+		{
+			// P3b (fix 2): a loaded guest loses the one END.
+			room r(3);
+			r.to(P::preparing);
+			r.h.host_ready(true, R::digest{}, r.t); r.pump();
+			r.stage_all(R::digest{});
+			r.G(1).loaded(r.G(1).generation(), true, 77, sample_roster(), r.t); r.pump();
+			r.drop = [](int from, int to, const std::vector<std::uint8_t>& b) { return from == 0 && to == 1 && (b[2] == std::uint8_t(T::end) || b[2] == std::uint8_t(T::freeze)); };
+			r.G(2).loaded(r.G(2).generation(), false, 0, sample_roster(), r.t); r.pump();
+			check(r.h.now() == P::ended && r.G(1).now() == P::loaded, "P3b: the host ended; guest 1 missed FREEZE and END");
+			r.drop = nullptr;
+			r.step(2500);
+			check(r.G(1).now() == P::ended && r.G(1).outcome() == R::reason::load_failed && !r.G(1).may_resume_input(), "P3b (fix 2): it learns the END from the host's reply to its resend");
+		}
+		{
+			// P3c (fix 2): the host goes completely silent after a guest staged - the guest ends itself, never resumes.
+			room r(3);
+			r.to(P::distributing);
+			r.stage_all(D(0x77), 2);
+			r.drop = [](int from, int, const std::vector<std::uint8_t>&) { return from == 0; };
+			r.step(R::bound_silence_ms - 1000);
+			check(r.G(1).now() == P::staged, "P3c: still staged just before the long-silence fallback");
+			r.step(2000);
+			check(r.G(1).now() == P::ended && r.G(1).outcome() == R::reason::host_silent && !r.G(1).world_replaced() && !r.G(1).may_resume_input(),
+			      "P3c (fix 2): after the long-silence fallback a bound guest ends (world unchanged, never resumes)");
+		}
+		{
+			// P4 (fix 7): every member picks watch outside a story segment.
+			room r(2);
+			r.to(P::committed);
+			r.load_all();
+			r.h.host_pick(R::hero_watch, r.t); r.G(1).pick(R::hero_watch, r.t); r.pump();
+			check(r.h.now() == P::seating && r.h.picks().assign[0] == 10 && r.G(1).picks().assign[0] == 10, "P4 (fix 7): nobody may leave the party without a hero - the host gets the first free hero");
+		}
+		{
+			// P5 (fix 8): a delayed older PICK must not override the newer choice.
+			room r(3);
+			r.to(P::committed);
+			r.load_all();
+			std::vector<std::vector<std::uint8_t>> late;
+			r.G(1).pick(11, r.t); for (auto& o : r.G(1).take()) late.push_back(o.bytes);
+			r.G(1).pick(12, r.t); r.pump();
+			if (late.empty()) late.emplace_back(); // the guest was not re-picking (a broken core): the check below fails
+			const auto res = r.h.receive(K(2), late[0].data(), late[0].size(), r.t); r.pump();
+			check(res == F::stale && r.h.picks().assign[1] == 12, "P5 (fix 8): a reordered older PICK is stale; the newer choice stands");
+		}
+		{
+			// P6 (fix 6): one guest's FAIL after everyone loaded the same world is that guest's departure.
+			room r(3);
+			r.to(P::repick);
+			R::message m = header(T::fail, r.h.op()); m.at = P::repick; m.because = R::reason::seat_timeout;
+			auto b = R::encode(m);
+			r.h.receive(K(3), b.data(), b.size(), r.t); r.pump();
+			check(r.h.now() == P::repick && r.h.departed(2) && r.G(1).now() == P::repick, "P6 (fix 6): a FAIL during re-pick removes only that member");
+			r.h.host_pick(10, r.t); r.G(1).pick(11, r.t); r.pump();
+			r.seat_all(2);
+			check(r.h.now() == P::resuming && r.G(1).now() == P::resuming, "P6: the rest seat and resume without it");
+			room q(3);
+			q.to(P::resuming);
+			m = header(T::fail, q.h.op()); m.at = P::resuming; m.because = R::reason::guest_abort; b = R::encode(m);
+			q.h.receive(K(2), b.data(), b.size(), q.t);
+			check(q.h.now() == P::resuming && q.h.departed(1), "P6: a FAIL while resuming is a departure too");
+		}
+		{
+			// P7 (fix 5): the guest's refusal of a rollback reaches the host under the rollback's op.
+			room r(3);
+			r.to(P::preparing); r.ready();
+			const auto p = sample_proposal();
+			r.G(1).staged(true, p.image_len, p.image, D(0x77), r.t);
+			r.G(2).staged(true, p.image_len, p.image, D(0x77), r.t);
+			r.pump();
+			r.drop = [](int from, int to, const std::vector<std::uint8_t>& x) { return from == 0 && to == 1 && x[2] == std::uint8_t(T::rollback); };
+			r.h.host_loaded(r.h.generation(), false, 0, sample_roster(), r.t);
+			r.pump();
+			check(r.h.now() == P::rolling_back, "P7: the host's own load failed -> rolling back");
+			R::message m = header(T::rollback, r.h.op()); m.previous_op = r.h.op() - 1; m.gen = r.h.generation(); m.rollback = D(0x55);
+			auto b = R::encode(m);
+			r.G(1).receive(K(1), b.data(), b.size(), r.t);
+			r.drop = nullptr;
+			r.pump();
+			check(r.h.now() == P::ended && r.h.outcome() == R::reason::rollback_failed && r.h.outcome_slot() == 1 && r.guests_are(P::ended),
+			      "P7 (fix 5): a guest refusing the rollback digest is heard at once - the host ends for everyone (no 120 s wait)");
+		}
+		{
+			// Fix 9: a load completion carries the generation it started under; a late commit-load completion during
+			// the rollback is not the rollback load.
+			room r(3);
+			r.to(P::committed);
+			r.G(1).loaded(r.G(1).generation(), false, 0, sample_roster(), r.t);
+			r.pump();
+			check(r.h.now() == P::rolling_back && r.h.generation() == 2 && r.G(2).generation() == 2, "fix 9: rolling back under generation 2");
+			r.h.host_loaded(1, true, 77, sample_roster(), r.t);
+			r.G(2).loaded(1, true, 77, sample_roster(), r.t);
+			r.G(1).loaded(2, true, 55, sample_roster(), r.t);
+			r.pump();
+			check(r.h.now() == P::rolling_back && r.G(2).now() == P::rolling_back, "fix 9: the generation-1 completions on the host and guest 2 are ignored");
+			r.h.host_loaded(2, true, 55, sample_roster(), r.t);
+			r.G(2).loaded(2, true, 55, sample_roster(), r.t);
+			r.pump();
+			check(r.h.now() == P::resuming && r.guests_are(P::resuming), "fix 9: the generation-2 loads complete the rollback");
 		}
 	}
 
@@ -1284,6 +1480,7 @@ int main(int argc, char** argv)
 	delays_and_duplicates();
 	commit_failures();
 	repick_tests();
+	review_probes();
 	rule_and_framing();
 	std::printf("%d PASS / %d FAIL\n", passed, failed);
 	return failed ? 1 : 0;

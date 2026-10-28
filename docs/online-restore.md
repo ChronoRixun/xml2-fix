@@ -96,19 +96,26 @@ all-LOADED any departure, failure, mismatch or timeout freezes everyone.
 
 - The host's proposal is the host's Yes. Every other member must answer **Yes** explicitly; silence is not consent.
 - Any **No** cancels (`declined`). No answer from everyone within **60 s** cancels (`vote_timeout`).
-- A Yes can be withdrawn (a later No) until the operation reaches `preparing`; a No is final (the operation is already
-  cancelled). Changing a No to Yes is impossible.
+- A Yes can be withdrawn (a later No) while voting or queued; a No is final (the operation is already cancelled).
+  Changing a No to Yes is impossible. A withdrawal sent while queued may arrive after the first safe tick: a No that
+  reaches the host in `preparing` or `distributing` still cancels at once (`declined`; review fix 4).
 - The host may Cancel in `voting`, `queued`, `preparing` and `distributing` (`host_cancel`).
 - A guest may abort in `preparing` / `distributing` before its STAGED (`guest_abort`), e.g. its player backs out or
   its staging fails (`stage_failed`, `digest_mismatch`, `membership`). The host turns it into a CANCEL for everyone.
 - Timeouts (host clock): own preparation 30 s; distribution **progress-aware**: cancel when no un-staged member made
   progress for 30 s (`transfer_stalled`) or after 180 s in total (`transfer_timeout`); load 120 s from COMMIT
-  (`load_timeout`, a freeze); re-pick 90 s, then deterministic auto-assignment (section 7); seating 30 s and first
-  shared frame 30 s (`resume_timeout`, end). The queue has no timeout: it waits for a safe point, a roster change, a
+  (`load_timeout`, a freeze); re-pick 90 s, then deterministic auto-assignment (section 7); seating 30 s (members not
+  seated by then **depart**; the host must be seated or the session ends, `seat_timeout`); first shared frame 30 s
+  after RESUME (`resume_timeout`, end: a missing shared frame cannot be pinned on one member). The queue has no timeout: it waits for a safe point, a roster change, a
   withdrawal or the host's Cancel. JIP's 45/90/120 s stage budgets are the reference; round 11 measures real loads.
 - A guest that hears nothing from the host for 10 s while `voting`, `queued` or `preparing` (before its STAGED) backs
   out locally (FAIL `host_silent`); the host's once-a-second resend keeps a live host from ever looking silent. After
-  STAGED a guest never leaves on its own.
+  STAGED a guest never leaves on its own, with one exception: after **150 s** of total host silence (longer than the
+  120 s native load budget) a bound guest ends itself (`host_silent`); it never resumes. The host's integration must
+  keep pumping restore messages during its own load.
+- Every guest **resends its last answer once a second** while the operation is open (and for up to 60 s after a local
+  cancel the host has not confirmed). CANCEL, END and FREEZE are sent once; the host answers a resend about a finished
+  operation with its outcome, so a guest that lost one learns it within about a second (review fix 2).
 - A cancelled operation always says why (reason + responsible slot) so every PC can show the same text.
 
 ## 5. Safe point and the queue (owner answer 9.1, binding)
@@ -119,10 +126,12 @@ all-LOADED any departure, failure, mismatch or timeout freezes everyone.
 - If the vote completes while unsafe, the operation becomes `queued`: QUEUED (with the unsafe reason: combat,
   cutscene, conversation, joining, loading, travel, menu) goes to everyone, who shows **"Load pending - waiting for a
   safe point"**; the host has Cancel; any member may withdraw. It runs at the first safe host tick, without a re-vote.
-- The queued request is **dropped** (`roster_changed`) when the room roster changes while it waits: an active member
-  leaves, a PC is admitted, a pending PC arrives or leaves. The host must propose again and everyone confirms again.
-- While `voting`, a pending arrival does not cancel (pending PCs wait outside the vote, as DESIGN.md section 4); an
-  active-set change does (`member_left` / `roster_changed`).
+- The queued request is **dropped** when the **active** members change while it waits: an active member leaves
+  (`member_left`) or a PC becomes active (`roster_changed`). The host must propose again and everyone confirms again.
+  A PC arriving to wait (pending) or leaving the wait does **not** drop it (coordinator decision 3, 10-27): it stays
+  held outside, exactly as while voting.
+- While `voting`, a pending arrival does not cancel either (pending PCs wait outside the vote, as DESIGN.md section 4);
+  an active-set change does (`member_left` / `roster_changed`).
 - From `preparing` on, pending PCs are held outside (`admission_hold()` is true from PROPOSE until the operation ends):
   no native admission or JIP bring-in starts; they join through normal next-area JIP after `playing`. An active-set
   change is a cancel (precommit) or a freeze (committed) or an ordinary departure (after all-LOADED).
@@ -158,7 +167,11 @@ story hero (when the save is in a solo story segment) with its saved owner's slo
   owner **departed** (or is unknown), the host or any remaining player may take control of it so the story can
   continue: the first claim wins.
 - After 90 s, unpicked members get the lowest free roster heroes in roster order (story: the host takes an unclaimed
-  story hero); no player can hold the room hostage. Final ASSIGN: one hero (or watch) per slot.
+  story hero); no player can hold the room hostage. Final ASSIGN: one hero (or watch) per slot. Somebody always plays:
+  if every member chose to watch outside a story segment, the host takes the first roster hero (review fix 7).
+- PICK carries the member's own sequence number (1, 2, ... per re-pick); the host accepts only a higher one, so a
+  delayed older PICK on the unreliable lane never overrides a newer choice (review fix 8). The final ASSIGN is resent
+  together with REPICK, so a member that lost REPICK still gets both (review fix 3).
 - A member departing during re-pick frees its hero (and, in a story segment, its story hero for the host / a remaining
   player); the re-pick completes with the rest.
 
@@ -171,16 +184,17 @@ story hero (when the save is in a solo story segment) with its saved owner's slo
 | preparing / distributing | host Cancel, guest abort/FAIL, digest mismatch, stall/timeout, departure, own staging failure | `cancelled`: every PC unfreezes the unchanged original world at the freeze frame |
 | committed (before all LOADED) | departure, FAIL, load timeout, check mismatch, conflicting generation | `frozen`; then `rolling_back` if rollback is verified on the host and every remaining member, otherwise `ended` |
 | rolling_back | any failure | `ended` (never a second rollback) |
-| repick / seating | departure | ordinary departure; continue with the rest |
-| repick | a member's loaded roster differs from REPICK (FAIL `check_mismatch`) | `ended` |
-| seating / resuming | timeout, FAIL | `ended` |
+| repick / seating / resuming | departure, or a member's FAIL (e.g. its loaded roster differs from REPICK: that PC ends itself, `check_mismatch`) | that member's departure (review fix 6); the rest continue the same world |
+| seating | a member not seated in 30 s | that member departs; the host not seated -> `ended` |
+| resuming | no first shared frame within 30 s | `ended` |
 | any | host loss (native `0x612c40 -> 0x6123e0`) | the session ends; before COMMIT every PC still holds its unchanged original world; manual rehost (0.6). An uncommitted image never becomes a recovery source. |
 
 Rollback is a new operation (op + 1, restore generation + 1) on the remaining members with no vote: it restores the
 world they all agreed to leave only moments before, from each PC's own identical verified capture. It skips re-pick:
 the original seats are restored. A member that staged but missed COMMIT and FREEZE (unreliable lane) takes the ROLLBACK
 straight from `staged`: its world never changed, and it reloads its own capture with the others. A member whose
-capture digest differs from the ROLLBACK's refuses it (FAIL `rollback_failed`) and the host ends. `ended` means the integration ends native play for everyone and offers the 0.6 manual
+capture digest differs from the ROLLBACK's refuses it with FAIL `rollback_failed` **under the rollback's op** (so the
+host hears it at once, review fix 5) and the host ends. `ended` means the integration ends native play for everyone and offers the 0.6 manual
 rehost from a local save; personal save slots are never written by this transaction.
 
 ## 9. Wire format (link kind 16, wire 1)
@@ -203,7 +217,7 @@ the state machines'.
 | 9 | commit | host | `restore_gen u32` | nonzero; 23 B |
 | 10 | loaded | member | `restore_gen u32`, `check u32` | both nonzero; 27 B |
 | 11 | repick | host | `restore_gen u32`, `count u8`, count x `hero u16`, `story u16`, `story_owner u8` | count 1-32, heroes < 0xfffe and distinct; story 0xffff or listed; owner <= 3 or 0xff, 0xff when no story; 91 B max |
-| 12 | pick | member | `restore_gen u32`, `hero u16` | hero < 0xfffe or 0xfffe (watch); 25 B |
+| 12 | pick | member | `restore_gen u32`, `seq u16`, `hero u16` | seq nonzero (newest wins); hero < 0xfffe or 0xfffe (watch); 27 B |
 | 13 | assign | host | `restore_gen u32`, `final u8`, `count u8`, count x `hero u16` | final 0/1; count 1-4; 0xffff (open) only when not final; 33 B max |
 | 14 | seated | member | `restore_gen u32` | 23 B |
 | 15 | resume | host | `restore_gen u32` | 23 B |
@@ -217,9 +231,11 @@ the state machines'.
 native accounting). Loss is covered by **idempotent resend**: the host repeats its current decision for the open
 operation every second; a member that already answered repeats its last answer when it sees a repeated decision; the
 host answers any message about a finished operation with that operation's outcome (CANCEL / END / the current
-decision). Exact duplicates are ignored (`duplicate`, counted, no state change); a different message of the same type
-for the same op from the same sender is `conflict` (votes: Yes -> No is the allowed withdrawal). A message for an older
-op or generation is `stale`; for a phase the receiver is not in, `phase`. None of these change state. Sixteen refusals
+decision; an END also answers a member still on the operation a rollback replaced). Exact duplicates are ignored
+(`repeat`, no state change). A different message of the same type for the same op from the same sender is a
+`conflict` (refused), except a vote Yes -> No (the allowed withdrawal) and PICK, which is ordered by its sequence
+number (a lower or equal one is `stale`). A message for an older op or generation is `stale`; for a phase the receiver
+is not in, `out_of_phase`; anything from a member that already departed is `stale`. None of these change state. Sixteen refusals
 from one sender within ten seconds make the host cancel the open precommit operation (`protocol`).
 
 ## 10. Rule impact
@@ -242,12 +258,26 @@ from one sender within ten seconds make the host cancel the open precommit opera
 `xml2_online_restore_test` (H only): parser bounds/round trip for every type plus seeded fuzzing (also built with
 AddressSanitizer outside the repository build), exhaustive vote permutations for 1-4 members, silence / No / stale /
 duplicate / conflict / unauthorized / foreign messages, membership and generation changes at every phase, digest
-mismatch, delayed COMMIT and LOADED, timeout and host loss at every phase, queue-until-safe (roster change while
-queued, host Cancel, withdrawal, never prepares while unsafe), resend/replay, and the re-pick rules (conflicts,
-departures, story owner present/departed/unknown, auto-assignment). No G or V evidence exists for this round: there is
+mismatch, delayed COMMIT and LOADED, timeout and host loss at every phase, queue-until-safe (active change while
+queued, pending arrival kept, host Cancel, withdrawal, never prepares while unsafe), resend/replay, the re-pick rules
+(conflicts, departures, story owner present/departed/unknown, auto-assignment, nobody-plays, reordered picks), the
+review a2f6b3c probe scenarios P1-P7, and 4 x 200 lossy runs (a third of all messages lost, CANCEL / END / FREEZE
+included, story rosters) that must reach their outcome - complete, cancel, end, rollback - on every PC, every time. No G or V evidence exists for this round: there is
 no runtime path yet.
 
 ## 12. What rounds 11-14 build on
+
+Integration contract (review fix 9), binding for every round below:
+
+- `safety(safe, why, freeze_frame)` is fed on **every** host tick before `tick()`; the queue fires only on a tick
+  whose observation is safe, and `freeze_frame` must be the frame every PC would pause at from that tick.
+- `host_loaded(started_gen, ...)` / `loaded(started_gen, ...)` pass `generation()` as it was when that native load was
+  **started** (at COMMIT, or at ROLLBACK). A late completion of an older load (the commit load finishing while a
+  rollback is under way) is ignored; it is never counted as the rollback load.
+- `first_frame()` means a simulated frame that holds **every** remaining member's fresh input (the native lockstep
+  barrier), never a local frame; RESUME stops being resent there.
+- A departure the core reports (`departed(slot)`) must be carried out natively by the agreed departure path; a
+  departed member's messages are ignored from then on.
 
 - **11 (prepare/transfer):** produce `image_len/image_digest` (canonical payload only) and `source_len/source_digest`
   before PROPOSE; define the safe-point set and the rollback capture (profile normalisation so equal worlds digest
