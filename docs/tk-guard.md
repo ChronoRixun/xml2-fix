@@ -78,6 +78,17 @@ reproduces128 misses with a different first LOS contact, and acquires when
 that obstruction clears. That is a preserved XML1 rule, not evidence that
 the historical misses were all obstructed.
 
+082e follow-up: a selected, owned, controlled target that has not moved for 15
+control frames is logged once per hold as `tk blocked` with its contact byte
+(+30C), height and the receiver's last-impact age (+2F4, written by `499100`).
+Trace only; no decision changes. 082e's one such hold was a soldier placed by
+`setPos` 18.6 units from Beast's centre: he took the armed TK amount at 0.1 s
+without moving. XML1's entry `DFC80` sets the same victim flags and no
+collision exclusion, so no behaviour was changed. Target choice was compared
+with XML1 `DF740` and is unchanged: locked target first, then query order; an
+enemy at once, an object at once only within 100 units in front, else the
+object is the fallback (PC `4F2ED0` has the same branches and constants).
+
 The `psycarry` victim uses `ch_grab_victim`. Its normal prefix policy retained
 an owner named `tele...`, but the converted Phoenix start is `power1`.
 Installed rule46 now supplies a complete-token ownership predicate to rule45,

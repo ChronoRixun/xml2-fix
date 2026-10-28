@@ -235,6 +235,8 @@ struct tk_state {
  bool auxiliary_done=false;
  u32 attempts=0;
  u32 control_frames=0;
+ // Trace-only: frames without any target displacement while held (082e tkA).
+ vec watch{};u32 stalled=0;bool blocked_logged=false;
 };
 inline u32 suspend_parse_resume=0x4e39f6;
 __declspec(naked) inline void suspend_parse_native(){__asm {
@@ -443,6 +445,17 @@ inline void __fastcall tk_update(void* self,void*,void* actor,void* input){
  }
  const float time=simulation_time(),dt=time-s.time;
  if(trace_acquisition&&((s.control_frames++&15)==0)){const auto* victim=character(target);logger::write("tk control actor=%08X victim=%08X dt=%.5f owner=%08X phys=%08X actor_flags=%08X contact=%02X offset_z=%.3f z=%.3f",field<u32>(actor,0x1c),s.victim,dt,field<u32>(target,0x178),field<u32>(target,4),victim?field<u32>(target,0x3d8):0,field<unsigned char>(target,0x30c),s.offset.z,field<vec>(target,0x20).z);}
+ // 082e tkA: selected, owned and controlled for a whole hold, yet z never left the floor.
+ // Report a held target that has not moved for 15 control frames, once per hold, with its
+ // contact byte and the receiver's last-impact age (+2F4, written by 499100 at a contact).
+ if(trace_acquisition){
+  const vec position=field<vec>(target,0x20);
+  if(length(sub(position,s.watch))<.01f){
+   if(++s.stalled==15&&!s.blocked_logged){s.blocked_logged=true;const float impact=field<float>(target,0x2f4);
+    logger::write("tk blocked actor=%08X victim=%08X frames=%u owner=%08X phys=%08X contact=%02X offset_z=%.3f z=%.3f impact_age=%.3f",field<u32>(actor,0x1c),s.victim,s.stalled,field<u32>(target,0x178),field<u32>(target,4),field<unsigned char>(target,0x30c),s.offset.z,position.z,impact>0.f?time-impact:-1.f);}
+  }else s.stalled=0;
+  s.watch=position;
+ }
  bool exhausted=false;
  // The original divisor is a binary32 0.2 widened to binary64 (3D6610).
  const double period=static_cast<double>(.2f);
