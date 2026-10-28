@@ -647,6 +647,7 @@ namespace online_room
 		};
 		std::vector<std::unique_ptr<tunnel>> tunnels;
 		void party_receive(tunnel& t, const std::uint8_t* data, std::size_t size); // kinds 7/8 (below)
+		void party_connected(tunnel& t); // a new connection: the member's sequences start again (below)
 		core::leave_deferral deferred_leave; // a native session end's room leave, one transport tick later
 		std::deque<received_datagram> arrivals;
 		std::size_t arrivals_bytes = 0;
@@ -1447,6 +1448,11 @@ namespace online_room
         }
     }
     namespace {
+        void party_connected(tunnel& t) {
+            party_core::key k{};
+            t.party_connection = t.connection;
+            if (party_model.is_open() && party_core::key_from_identity(t.id, k)) party_model.reconnected(k);
+        }
         void party_receive(tunnel& t, const std::uint8_t* data, std::size_t size) {
             party_core::key from{};
             if (!party_model.is_open() || !party_core::key_from_identity(t.id, from)) return;
@@ -1560,7 +1566,7 @@ namespace online_room
                     if (rows.size() >= 4) break;
                     online_status_core::roster_row r;
                     r.slot = int(rows.size()) + 1;
-                    for (const char ch : c.name.substr(0, party_core::name_max)) r.name += static_cast<unsigned char>(ch) < 0x20 || ch == 0x7f ? ' ' : ch;
+                    r.name = online_status_core::utf8_clean(c.name, party_core::name_max);
                     if (r.name.empty()) r.name = "Player";
                     r.host = c.host;
                     r.you = c.self;
@@ -1883,6 +1889,7 @@ namespace online_room
 			}
 			t->connected = true;
 			t->connected_at = room_clock();
+			party_connected(*t); // before poll() hands this connection's first party message to the model
 			SteamNetConnectionRealTimeStatus_t st{};
 			sockets()->GetConnectionRealTimeStatus(c, &st, 0, nullptr);
 			logger::write("online: connected to %s (%s) in %lu ms - route %s, ping %d ms; the game reaches it at %s", t->id.c_str(), t->outgoing ? "outgoing" : "incoming",
@@ -1937,10 +1944,11 @@ namespace online_room
 		out = {};
 		if (!room_ready || !party_model.is_open() || party_cards.empty() || room_code.size() != 8) return false;
 		std::memcpy(out.code, room_code.c_str(), 9);
-		for (const auto& c : party_cards)
+		const auto split = party_core::lobby_split(party_cards, party_facts_ok ? party_facts.count : 0, party_model.roster_size());
+		for (const auto* card : split.rows)
 		{
-			const bool native_row = c.admitted || (c.self && c.index >= 0);
-			if (native_row && out.count < 4)
+			const auto& c = *card;
+			if (out.count < 4)
 			{
 				auto& m = out.members[out.count++];
 				m.native_index = unsigned(c.index);
@@ -1951,10 +1959,15 @@ namespace online_room
 				m.same_build = c.stage == party_core::build::same || c.stage == party_core::build::agreed;
 				m.phase = int(c.now);
 			}
-			else if (!native_row && !c.self && out.pending_count < 3)
+		}
+		for (const auto* card : split.pending)
+		{
+			const auto& c = *card;
+			if (out.pending_count < 3)
 			{
 				auto& m = out.pending[out.pending_count++];
-				std::memcpy(m.name, c.name.c_str(), std::min<std::size_t>(c.name.size(), 31));
+				const auto name = online_status_core::utf8_clean(c.name, party_core::name_max);
+				std::memcpy(m.name, name.c_str(), name.size());
 				m.phase = int(c.now);
 				m.build = int(c.stage);
 				m.ping_ms = c.rtt;

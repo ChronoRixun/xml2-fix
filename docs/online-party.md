@@ -33,23 +33,21 @@ How each build treats them:
 - This build: `online_room::poll` hands kinds 7/8 to the party receiver **before** the tunnel policy; they never reach
   the game's receive queue or `gns_transport::received`. Accepted pre-admission (a Connecting/Checking member can say
   so) and after the transport is bound.
-- A rule-25 revision-4 build (f90bc91 and every released one): `parse` says invalid; on a room tunnel `poll` counts it
-  as a refused tunnel message (first four logged, then counted) and drops it; on a GNS link `received` logs
-  "malformed - dropped" once. The link stays up and nothing reaches the game. So the new kinds are harmless to old
-  peers; they just show no reported data.
+- A rule-25 revision-4 build (f90bc91 and every released one) is refused at admission by the agreement (section 2).
+  Before that refusal, on a pre-admission tunnel, it treats kinds 7/8 as invalid: `poll` counts a refused tunnel
+  message (first four logged) and drops it; the link stays up and nothing reaches the game.
 
 ## 2. Rule impact
 
-**needs coordinator revision (rule 25 GnsTransport).** The framing gains two kinds, so the owning contract changes.
-Proposal (not applied - `gns_transport_rules.hpp` still registers revision 4 / framing 3 / `{1, 1000, 3, 0}`):
+**Applied (coordinator decision, review 1607424): rule 25 GnsTransport revision 6, framing 4**, effective values
+`{1, 1000, 4, 0}` while `[Online] Transport=gns` is installed (`gns_transport_rules.hpp`); OFF unchanged (rule not
+registered, stock transport byte-identical). This is the one rule-25 bump for all of 0.6's framing changes (rounds 8/9
+add no further bump). Revision 5 was skipped (never shipped): rule 25 is alone in its rule-summary bucket and
+`{25, rev 5, 1,1000,4,0}` folds to the same advisory summary byte (0x23) as the released `{25, rev 4, 1,1000,3,0}`, so
+a revision-5 refusal could not have named the rule; revision 6 folds to 0xf1.
 
-- revision **5**, framing **4**, effective values `{1, 1000, 4, 0}` while `[Online] Transport=gns` is installed;
-  unchanged OFF (rule not registered, stock transport byte-identical).
-- Old-peer refusal: revision 4 and 5 refuse each other through the existing agreement (record digest differs) and the
-  refusal names `GnsTransport`, as the revision 3/4 split did. Without the bump a mixed party still works: the old
-  member's card shows only native/local facts (no reported name/phase/build, ping measured locally), so the bump is
-  for reciprocity, not safety. Coordinator chooses whether to bump at integration; switching is the two constants in
-  `gns_transport_rules.hpp` (`agreement_revision`, `framing_revision`) - nothing else reads them.
+- Old-peer refusal: revision 4 and 6 refuse each other through the existing agreement (the record's digest differs)
+  and both sides name `25 GnsTransport` (`test/gns_transport_test.cpp`); two revision-6 PCs agree.
 - GCAP stays 108 bytes: the party contract adds nothing to the agreement record.
 - The party wire version (`party_wire = 1`, byte 1 of both kinds) is internal to rule 25 framing 4. A **distinct**
   party contract (e.g. reports that ever influence gameplay, a hero chooser, consent) **needs a rule id** (63+ free;
@@ -66,9 +64,9 @@ Proposal (not applied - `gns_transport_rules.hpp` still registers revision 4 / f
   its peer -> participant record -> index (`gns_transport::party_snapshot`). Its own index is the record flagged local
   (flags bit 0). Nothing is cached across a native session change, so an index reused by a new participant maps to the
   new tunnel's key only.
-- A report's or table's claimed index is a cross-check only: a claim that disagrees with the local mapping is ignored
-  for that row (counted), and a host-table index is used only for a member this PC has no local mapping for
-  (presentation, marked "host-reported"). Two members can never share an index in the model; the later claim loses.
+- A report's claimed index is carried for diagnostics only and is **ignored** by receivers (never used, never
+  counted). A host-table index is used only for a member this PC has no local mapping for, only when no local mapping
+  holds that index, and only to attach facts to that native row (presentation; never an admission or a pending card). Two members can never share an index in the model; the later claim loses.
 - Display names: an admitted member's card uses the **native** participant name (the native list row). A reported name
   is shown only on a pending (broker-only, Connecting/Checking) card and is display-sanitized (`display_byte`).
 - No address (real or virtual 10.77.x.y), port, broker id text or code fragment is ever shown on a card or written to
@@ -100,18 +98,19 @@ Little-endian; all lengths exact (no trailing bytes); total 23..119 bytes (cap `
 | 10 | 4 | sequence | >= 1, > last accepted from this tunnel |
 | 14 | 1 | phase | enum below, 0..9; 10+ dropped |
 | 15 | 1 | percent | 0..100 only with phase `receiving_campaign`, else 0xff |
-| 16 | 1 | claimed native index | 0..3 or 0xff (unknown); cross-check only |
+| 16 | 1 | claimed native index | 0..3 or 0xff (unknown); range-checked, otherwise ignored by receivers |
 | 17 | 1 | flags | bit0 host-agreement observed (sender admitted by the host's native/GCAP checks); other bits must be 0 |
 | 18 | 1 | token length T | 0..32 |
 | 19 | T | version token | printable ASCII 0x21..0x7e (the build's `[Online] GameVersion`) |
 | 19+T | 1 | name length N | 0..31 |
-| 20+T | N | screen name | bytes 0x20..0x7e and 0x80..0xff, no NUL; native <= 31 game bytes |
+| 20+T | N | screen name | **valid UTF-8** (no overlongs, surrogates, > U+10FFFF or cut-off sequence) without control characters (C0, DEL, C1); senders clean their own name to this and cut it at a character boundary within 31 bytes |
 | 20+T+N | 1 | RTT count R | 0..3 |
 | .. | 11*R | RTT rows | key (8), rtt ms u16 (0..60000, 0xffff = not measured), route u8 (0 unknown, 1 direct, 2 relay) |
 | .. | 2 | hero | must be 0xffff (reserved: no proven seat/hero bridge in 0.6; anything else dropped) |
 
-RTT rows: distinct keys, never the sender's own key or the receiver-unknown member's (a key not in the active broker
-roster drops the whole message). They are the sender's own measurements, shown to others only as "<sender> to X".
+RTT rows: distinct keys, never the sender's own key (that drops the message). A row about a member this PC's broker
+roster does not have yet (rosters can be a moment apart around a join/leave) is skipped; the rest of the report is
+kept. They are the sender's own measurements, shown to others only as "<sender> to X".
 
 Phases (u8): 0 connecting, 1 checking_build, 2 in_lobby, 3 ready, 4 waiting_next_area, 5 receiving_campaign,
 6 loading, 7 playing, 8 watching_story, 9 left. A sender derives its own phase from facts only
@@ -138,8 +137,9 @@ Readiness shown on cards is always the native column; a reported `ready` never l
 | 17 | 15*C | rows | key (8), native index u8 (0..3 / 0xff), phase u8, percent u8, rtt-to-host ms u16 (0xffff none), route u8, build u8 |
 
 Total 32..77 bytes (cap `table_max` = 80). Build (u8): 0 unknown/checking, 1 token differs, 2 token same, 3 agreement
-observed. Rows: distinct keys, all in the receiver's active roster; distinct non-0xff indices; exactly one row is the
-host's own (its key = the sender) and its index is 0 or 0xff; every other index is 1..3 or 0xff.
+observed. Rows: distinct keys; distinct non-0xff indices; exactly one row is the host's own (its key = the sender) and its index
+is 0 or 0xff; every other index is 1..3 or 0xff. Rows about members not (yet) in the receiver's roster are skipped
+after these checks.
 
 Sender permission: accepted only from the tunnel whose authenticated key is the broker's `host_id` for this room
 **and**, once a native session maps that tunnel, whose native index is 0. Anything else (a guest sending a table, a
@@ -152,8 +152,11 @@ spoofed "host" row, a host claiming index 2) is dropped whole and counted.
 - Send: a report when its content changes, at most 1/s, and a refresh every 5 s; a table on change at most 2/s and a
   refresh every 5 s. Worst case per tunnel ~ 1.2 x 128 + 2.2 x 77 B/s < 0.4 KiB/s.
 - Receive (per tunnel, token buckets): reports 2/s burst 4, tables 4/s burst 6, party bytes 1 KiB/s burst 2 KiB. Over
-  the limit: dropped and counted, the link stays. After 16 refused party messages on one tunnel the receiver ignores
-  that tunnel's party messages for the rest of the connection (logged once); its card falls back to local/native facts.
+  the limit: dropped and counted, the link stays. 16 refused party messages on one tunnel **within 10 s** make the
+  receiver ignore that tunnel's party messages for the rest of the connection (logged); an older count starts over,
+  and an out-of-order/replayed sequence (normal on an unreliable lane) never counts. Its card then falls back to
+  local/native facts. A new connection to the member (reset on the GNS connected event, before its first message is
+  read) starts with a fresh gate.
 - No saves, lockstep input, scripts or campaign bytes in either message.
 
 ## 8. Lobby cards (05) and Browse
@@ -171,7 +174,9 @@ Per native lobby row (existing D-bindings `lc_pN_*`, round 4/5b):
   campaign, Loading, Playing, Watching story - from the member's report, overridden by local facts (own card: local
   phase; a native row is at least In lobby). Unknown: empty.
 - `hero_fallback`: always "Hero assigned at start" (no proven seat/hero bridge).
-- Pending members (broker-roster members not yet native rows) fill the next free cards: `lc_pN_card` shown, native
+- Pending members (broker-roster members with no native index known to this PC, own or host-reported) fill the next
+  free cards, at most the broker roster's size minus the native rows (a member the native list already shows is never
+  drawn twice, e.g. while a guest-guest link is still binding): `lc_pN_card` shown, native
   ready/host/Kick parts hidden, name = sanitized reported name or "Player", phase Connecting / Checking build. They are
   never native rows, never kick targets, and are never counted in "n of m ready".
 - Browse `room_<i>_5` (**new D text**): the measured RTT to that room's host when this PC currently has a tunnel to it
@@ -189,18 +194,22 @@ The v1 keys keep their bytes and meaning (process-final `error`, `ended` on exit
 `"updated"` the DLL appends, in this order:
 
 ```
-,"party":{"generation":7,"state":"in_game","error":null,"phase":"in_lobby","table":3,"roster":[
+,"party":{"generation":7,"attempt":2,"state":"in_game","error":null,"phase":"in_lobby","table":3,"roster":[
   {"slot":1,"name":"Logan","host":true,"you":true,"phase":"in_lobby","ready":null,"build":"same","route":null},
   {"slot":2,"name":"Kitty","host":false,"you":false,"phase":"ready","ready":true,"build":"agreed","route":"direct"}]},
 "process":{"pid":4242,"started":"2026-10-27T23:05:09Z"}
 ```
 
-- `party.generation`: the local model generation (section 4). It also increments on every new in-game room operation
-  (Host / Join / Retry after an error), so a launcher can tell a new attempt from the old one inside one process.
+- `party.generation`: moves on **every** change of the block (roster, phase, table, attempt). For "something to
+  redraw" only.
+- `party.attempt`: moves **only** on a new in-game room operation (Host / Join / Retry after an error), so a launcher
+  can tell a new attempt from the old one inside one process; roster writes never move it.
 - `party.state` / `party.error`: the **current attempt's** state and error id (same names as v1). v1's top-level
   `state:"error"` stays final for the run (legacy meaning); `party.state` returns to `connecting` on a retry.
 - `party.phase`: this PC's phase name; `table`: the last accepted host-table generation (null none).
-- `party.roster`: <= 4 rows in slot order, `name` <= 31 bytes escaped, `ready` the native flag (null unknown /
+- `party.roster`: <= 4 rows in slot order, `name` valid UTF-8 <= 31 bytes (an invalid byte or control character
+  becomes `?`, a character that would not fit whole is dropped; the whole file is valid UTF-8, so the released
+  launchers' ASCII-target rapidjson writer never stops on it - `test/online_status_launcher_test.cpp`), escaped, `ready` the native flag (null unknown /
   pending), `build` one of `checking|other|same|agreed`, `route` `direct|relay|null`. **No ping** (it changes every
   second and every write changes `updated`; the released launchers' dismissed-session check compares the whole object,
   so volatile fields would re-open a dismissed session) and no address.
@@ -213,14 +222,14 @@ The v1 keys keep their bytes and meaning (process-final `error`, `ended` on exit
 
 ### What the launcher must change (round 9)
 
-1. `readStatus`: keep the v1 checks; additionally read `party` when it is an object: `generation` (non-negative
-   integer), `state` (v1 state names), `error`, `phase` (section 5 names), `roster` (array <= 4 of objects; clip names
+1. `readStatus`: keep the v1 checks; additionally read `party` when it is an object: `generation` and `attempt`
+   (non-negative integers), `state` (v1 state names), `error`, `phase` (section 5 names), `roster` (array <= 4 of objects; clip names
    to 31, strip control characters, accept only the listed enum strings; ignore unknown keys), `process` (`pid` integer,
    `started` ISO). Malformed block -> ignore the block, keep v1 fields (never reject the file for it).
-2. Session follow: when `party.generation` increases, treat it as a new attempt (clear the previous outcome only when
+2. Session follow: when `party.attempt` increases, treat it as a new attempt (clear the previous outcome only when
    `party.state` is not `error`/`ended`); keep using v1 `state` when there is no block.
-3. Dismissed-session comparison: compare `{role, state, code, party.generation}` instead of the whole object, so
-   `updated`/roster writes do not re-open a dismissed session.
+3. Dismissed-session comparison: compare `{role, state, code, party.attempt}` instead of the whole object, so
+   `updated`/roster writes (which move `generation`, never `attempt`) do not re-open a dismissed session.
 4. Stale file: before adopting a running-game status, check `process.pid` + `started` against the running game process;
    mismatch -> stale (show nothing, do not adopt). No `process` key -> v1 behaviour.
 5. Room card: show roster names/phases/build badges; never show ping or addresses from the file.
@@ -246,11 +255,10 @@ registry export/compare).
 5. **Next area / load / watcher.** Start with three; D joins late: D's phase Waiting for next area on all PCs, then
    Loading at the zone load, then Playing **only after** its pad moves its hero (inputs flowing); A/B/C go
    Loading -> Playing around each transition. Status `party.phase` matches. A solo segment shows no fabricated hero.
-6. **Old peer refused.** With the rule-25 bump applied by the coordinator: a revision-4 build joining is refused and
-   the refusal names `GnsTransport`. Without the bump: it joins; its card shows native name, local ping, no reported
-   phase/build; its log counts refused kind-7/8 tunnel messages and nothing else changes.
+6. **Old peer refused.** A rule-25 revision-4 build (any released one) joining is refused at admission on both PCs,
+   and the dialog/log on each names `GnsTransport`.
 7. **Leave / index reuse.** C leaves, E joins and gets index 2: E's card never shows C's name, phase or ping; status
-   generation increments; table generation increments on A.
+   generation increments (attempt does not); table generation increments on A.
 8. **Launcher reader.** With launcher 0.4.0 and 0.5.0-beta.2 open during 1-7: the Online panel keeps showing the room
    and player count; a dismissed finished session is not re-opened by roster writes beyond what v1 writes already did.
 

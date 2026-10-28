@@ -228,13 +228,13 @@ checks are development evidence, not real-network acceptance of this release.
 
 ## Wire / agreement
 
-Rule 25 GnsTransport revision 4, values `{1, 1000, framing revision 3, 0}`. Framing 2 introduced the room datagram
-kind 4; framing 3 adds agreed lost-player input/cut messages (kinds 5/6). Survivors agree the lost guest's cut frame
-before removal; earlier revisions are refused by name. See [gns-transport.md](gns-transport.md).
+Rule 25 GnsTransport revision 6, values `{1, 1000, framing revision 4, 0}`. Framing 2 introduced the room datagram
+kind 4; framing 3 adds agreed lost-player input/cut messages (kinds 5/6); framing 4 (0.6) the party kinds 7/8. Survivors
+agree the lost guest's cut frame before removal; earlier revisions are refused by name (revision 5 was skipped: [online-party.md](online-party.md) section 2). See [gns-transport.md](gns-transport.md).
 
 0.6 round 7 adds presentation-only member reports (kind 7) and host tables (kind 8) on room tunnels, plus per-tunnel
 RTT/route sampling for the lobby cards: [online-party.md](online-party.md). They never admit, ready, kick or start;
-the proposed rule-25 revision (5 / framing 4) needs the coordinator.
+they are why rule 25 is revision 6 / framing 4.
 
 
 ## Native menu bridge

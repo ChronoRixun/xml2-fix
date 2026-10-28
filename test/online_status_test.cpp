@@ -226,16 +226,16 @@ int main()
 		const auto text = core::json(both, when);
 		check(text.compare(0, legacy.size() - 2, legacy, 0, legacy.size() - 2) == 0, "v1.6: every v1 byte up to `updated` is unchanged (keys appended after it)");
 		check(text == legacy.substr(0, legacy.size() - 2) +
-		          ",\"party\":{\"generation\":7,\"state\":\"room\",\"error\":null,\"phase\":\"in_lobby\",\"table\":3,\"roster\":["
+		          ",\"party\":{\"generation\":7,\"attempt\":0,\"state\":\"room\",\"error\":null,\"phase\":\"in_lobby\",\"table\":3,\"roster\":["
 		          "{\"slot\":1,\"name\":\"Logan\",\"host\":true,\"you\":true,\"phase\":\"in_lobby\",\"ready\":null,\"build\":\"same\",\"route\":null},"
-		          "{\"slot\":2,\"name\":\"Ki\\\"t\\u0001y\",\"host\":false,\"you\":false,\"phase\":\"ready\",\"ready\":true,\"build\":\"agreed\",\"route\":\"relay\"}]},"
+		          "{\"slot\":2,\"name\":\"Ki\\\"t?y\",\"host\":false,\"you\":false,\"phase\":\"ready\",\"ready\":true,\"build\":\"agreed\",\"route\":\"relay\"}]},"
 		          "\"process\":{\"pid\":4242,\"started\":\"2026-10-27T23:05:09Z\"}}\n",
 		      "v1.6: the party block and process key, exactly, names escaped");
 		check(text.find("ping") == std::string::npos && text.find("10.77") == std::string::npos, "v1.6: no ping and no address in the file");
 		auto failed_attempt = both;
 		failed_attempt.party.now = core::state::error;
 		failed_attempt.party.why = core::error::none;
-		check(core::json(failed_attempt, when).find("\"party\":{\"generation\":7,\"state\":\"error\",\"error\":\"internal\"") != std::string::npos, "v1.6: an attempt error without an id says internal");
+		check(core::json(failed_attempt, when).find("\"party\":{\"generation\":7,\"attempt\":0,\"state\":\"error\",\"error\":\"internal\"") != std::string::npos, "v1.6: an attempt error without an id says internal");
 		auto five = both;
 		five.party.roster.assign(5, a);
 		const auto many = core::json(five, when);
@@ -254,6 +254,47 @@ int main()
 			v2.replace(v2.find("\"v\":1"), 5, "\"v\":2");
 			f << legacy << text << core::json(failed_attempt, when) << v2;
 		}
+	}
+
+	// ---- review 1607424 B1 / S2 ----
+	{
+		auto bytes_ok = [](const std::string& s) {
+			for (std::size_t i = 0; i < s.size();) {
+				const auto c = static_cast<unsigned char>(s[i]);
+				if (c < 0x80) { ++i; continue; }
+				const std::size_t n = c >= 0xc2 && c <= 0xdf ? 2 : c >= 0xe0 && c <= 0xef ? 3 : c >= 0xf0 && c <= 0xf4 ? 4 : 0;
+				if (!n || i + n > s.size()) return false;
+				for (std::size_t k = 1; k < n; ++k) if ((static_cast<unsigned char>(s[i + k]) & 0xc0) != 0x80) return false;
+				if (n == 3 && c == 0xe0 && static_cast<unsigned char>(s[i + 1]) < 0xa0) return false;
+				if (n == 3 && c == 0xed && static_cast<unsigned char>(s[i + 1]) >= 0xa0) return false;
+				if (n == 4 && c == 0xf0 && static_cast<unsigned char>(s[i + 1]) < 0x90) return false;
+				if (n == 4 && c == 0xf4 && static_cast<unsigned char>(s[i + 1]) >= 0x90) return false;
+				i += n;
+			}
+			return true;
+		};
+		core::status s;
+		s.now = core::state::room;
+		s.party.known = true;
+		core::roster_row r;
+		r.name = "Ren\xe9" "e";
+		r.phase = "in_lobby";
+		r.build = "same";
+		std::string cut;
+		for (int i = 0; i < 20; ++i) cut += "\xc3\xa9";
+		core::roster_row c = r;
+		c.slot = 2;
+		c.name = cut;
+		s.party.roster = {r, c};
+		s.room_name = "bad\xff";
+		const auto text = core::json(s, when);
+		check(bytes_ok(text), "B1 status: invalid bytes and a 31-byte cut inside a character never reach the file (valid UTF-8 only)");
+		check(text.find("\"name\":\"Ren?e\"") != std::string::npos, "B1 status: an invalid byte becomes ?");
+		check(text.find("\"name\":\"" + cut.substr(0, 30) + "\"") != std::string::npos, "B1 status: a long UTF-8 name is cut at the last whole character within 31 bytes");
+		check(core::escaped("caf\xc3\xa9 \xf0\x9f\x8e\xae") == "caf\xc3\xa9 \xf0\x9f\x8e\xae", "B1 status: valid multi-byte UTF-8 is kept as it was");
+		s.party.attempt = 3;
+		s.party.generation = 9;
+		check(core::json(s, when).find("\"party\":{\"generation\":9,\"attempt\":3,") != std::string::npos, "S2 status: the attempt counter is its own key beside generation");
 	}
 
 	// The stateful writer with the party block: attempt, coalesced roster, retry after an error, exit.
@@ -307,8 +348,15 @@ int main()
 		check(errored.find("\"state\":\"error\",\"code\"") != std::string::npos && retry.find("\"state\":\"error\",\"code\"") != std::string::npos &&
 		          retry.find("\"error\":\"code_not_found\"") != std::string::npos,
 		      "retry: v1's top-level state and error stay the run's first error");
+		const auto attempts = online_status::snapshot().party.attempt;
+		const bool cleared_after_retry = online_status::snapshot().party.roster.empty();
+		rows[0].phase = "ready";
+		fake_now += 5000;
+		online_status::party("ready", -1, rows);
+		check(online_status::snapshot().party.attempt == attempts, "S2 writer: a roster change moves generation only, never attempt");
+		check(attempts == 2, "S2 writer: two in-game attempts so far (first Host, then the retry)");
 		check(retry.find("\"party\":{\"generation\":") != std::string::npos && retry.find("\"state\":\"connecting\",\"error\":null") != std::string::npos &&
-		          online_status::snapshot().party.generation > g1 && online_status::snapshot().party.roster.empty(),
+		          online_status::snapshot().party.generation > g1 && cleared_after_retry,
 		      "retry: the party block shows the new attempt (connecting, no error, roster cleared, generation moved)");
 		online_status::set(core::state::room, "K7QN2X9M", 1);
 		check(slurp(file).find("\"party\":{\"generation\":") != std::string::npos && slurp(file).find("\"state\":\"room\",\"error\":null") != std::string::npos,

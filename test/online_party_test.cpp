@@ -63,6 +63,27 @@ namespace
 		for (const auto& c : cards) if (c.who == k) return &c;
 		return nullptr;
 	}
+	// Well-formed UTF-8 (no overlongs, surrogates or > U+10FFFF), as rapidjson's ASCII writer needs it.
+	bool utf8_ok(const std::string& s)
+	{
+		for (std::size_t i = 0; i < s.size();)
+		{
+			const auto c = static_cast<unsigned char>(s[i]);
+			if (c < 0x80) { ++i; continue; }
+			const std::size_t n = c >= 0xc2 && c <= 0xdf ? 2 : c >= 0xe0 && c <= 0xef ? 3 : c >= 0xf0 && c <= 0xf4 ? 4 : 0;
+			if (!n || i + n > s.size()) return false;
+			std::uint32_t cp = c & (n == 2 ? 0x1f : n == 3 ? 0x0f : 0x07);
+			for (std::size_t k = 1; k < n; ++k)
+			{
+				const auto d = static_cast<unsigned char>(s[i + k]);
+				if ((d & 0xc0) != 0x80) return false;
+				cp = (cp << 6) | (d & 0x3f);
+			}
+			if ((n == 3 && cp < 0x800) || (n == 4 && (cp < 0x10000 || cp > 0x10ffff)) || (cp >= 0xd800 && cp <= 0xdfff)) return false;
+			i += n;
+		}
+		return true;
+	}
 	std::vector<P::card> cards(const P::model& m, std::uint32_t now, int self_index = 0)
 	{
 		return m.cards(P::phase::in_lobby, self_index, "Logan", false, false, "LC33", now);
@@ -130,7 +151,7 @@ int main()
 		check(mutate(18, 33) == P::refusal::token, "report length: token over 32");
 		check(mutate(19, ' ') == P::refusal::token && mutate(19, 0x7f) == P::refusal::token, "report encoding: token bytes 0x21..0x7e");
 		check(mutate(23, 32) == P::refusal::name, "report length: name over 31");
-		check(mutate(24, 0) == P::refusal::name && mutate(24, 0x1f) == P::refusal::name && mutate(24, 0xe9) == P::refusal::none, "report encoding: no control bytes in the name, high bytes kept");
+		check(mutate(24, 0) == P::refusal::name && mutate(24, 0x1f) == P::refusal::name && mutate(24, 0xe9) == P::refusal::name, "report encoding: no control bytes in the name, and no byte outside valid UTF-8");
 		check(mutate(29, 4) == P::refusal::rtt, "report length: more than three RTT rows");
 		check(mutate(base.size() - 1, 0xfe) == P::refusal::hero, "report: the reserved hero field must say unknown");
 		auto r = sample_report(5);
@@ -240,9 +261,11 @@ int main()
 		check(report_to(m, c3, r, 6000) == P::refusal::room, "model: a report for another room (old generation) is refused");
 		r = sample_report(10);
 		r.rtt = {{outsider, 10, P::route::direct}};
-		check(report_to(m, c3, r, 8000) == P::refusal::unknown_member, "model: RTT about a non-member refused");
+		check(report_to(m, c3, r, 8000) == P::refusal::none, "model: RTT about a non-member is skipped (the roster may lag), the report kept");
+		r.seq = 11;
 		r.rtt = {{c3, 10, P::route::direct}};
 		check(report_to(m, c3, r, 10000) == P::refusal::unknown_member, "model: RTT about the sender itself refused");
+		r.seq = 12;
 		r.rtt = {{self, 10, P::route::direct}, {host, 30, P::route::relay}};
 		check(report_to(m, c3, r, 12000) == P::refusal::none, "model: RTT to this PC and to the host accepted");
 
@@ -260,10 +283,10 @@ int main()
 		t.rows[0].who = c3;
 		check(table_to(m, host, 0, t, 0) == P::refusal::host_row, "spoofed host: a table without the sender's own row refused");
 		P::table_row o; o.who = outsider; o.index = 3;
-		check(table_to(m, host, 0, sample_table(1, host, {o}), 0) == P::refusal::unknown_member, "table: a row naming a non-member refused");
+		check(table_to(m, host, 0, sample_table(1, host, {o}), 0) == P::refusal::none, "table: a row naming a non-member is skipped (the roster may lag)");
 		g.index = 1;
-		check(table_to(m, host, -1, sample_table(2, host, {g}), 0) == P::refusal::none, "table: the host's table before any native mapping is accepted");
-		check(table_to(m, host, 0, sample_table(2, host, {g}), 600) == P::refusal::sequence, "table: replayed sequence refused");
+		check(table_to(m, host, -1, sample_table(2, host, {g}), 600) == P::refusal::none, "table: the host's table before any native mapping is accepted");
+		check(table_to(m, host, 0, sample_table(2, host, {g}), 1200) == P::refusal::sequence, "table: replayed sequence refused");
 		check(m.refused(P::refusal::permission) == 2 && m.refused(P::refusal::host_row) == 3, "model: refusals are counted by reason");
 		m.reconnected(c3);
 		check(report_to(m, c3, sample_report(1), 30000) == P::refusal::none, "reconnect: a new connection (restarted peer) starts its sequence again");
@@ -526,6 +549,89 @@ int main()
 		P::report back;
 		const auto bb = P::encode(bad);
 		check(P::parse(bb.data(), bb.size(), back) == P::refusal::none && back.token.size() == 32 && back.name.size() == 31, "own report: clipped and sanitized so peers never refuse it");
+	}
+
+	// ---- review 1607424 B1: names are valid UTF-8 on the wire and in what this PC sends ----
+	{
+		auto with_name = [](const std::string& name) { auto r = sample_report(3); r.name = name; auto b = P::encode(r); b[23] = std::uint8_t(name.size()); return b; };
+		P::report out;
+		auto b = with_name("Ren\xc3\xa9" "e");
+		check(P::parse(b.data(), b.size(), out) == P::refusal::none && out.name == "Ren\xc3\xa9" "e", "B1 wire: a valid UTF-8 name (Renee with e-acute) is accepted");
+		for (const char* bad : {"Ren\xe9" "e", "\xc3", "a\xc0\xaf" "b", "\xed\xa0\x80", "\xf4\x90\x80\x80", "x\xc2\x85y", "\xff\xfe"})
+		{
+			b = with_name(bad);
+			check(P::parse(b.data(), b.size(), out) == P::refusal::name, std::string("B1 wire: an invalid/overlong/surrogate/C1 name is refused (") + std::to_string(std::strlen(bad)) + " bytes)");
+		}
+		P::model m;
+		m.open(CODE, self, host);
+		m.roster({host, self});
+		auto own = m.own_report(P::phase::in_lobby, 1, false, "LC33", "Ren\xe9" "e");
+		check(utf8_ok(own.name) && own.name.size() == 5, "B1 own report: an invalid byte in this PC's own name is replaced, the name stays valid UTF-8");
+		std::string long_name;
+		for (int i = 0; i < 20; ++i) long_name += "\xc3\xa9"; // 40 bytes of e-acute
+		own = m.own_report(P::phase::in_lobby, 1, false, "LC33", long_name);
+		check(utf8_ok(own.name) && own.name.size() == 30, "B1 own report: a long UTF-8 name is cut at a character boundary (30 of 31 bytes)");
+		own.seq = 1;
+		const auto enc = P::encode(own);
+		check(P::parse(enc.data(), enc.size(), out) == P::refusal::none, "B1 own report: peers accept what this PC sends");
+	}
+
+	// ---- review S1: no member on two cards ----
+	{
+		// Guest view: host 0, self 1, C natively listed but this PC's guest-guest link is not bound yet (no local index).
+		P::model m;
+		m.open(CODE, self, host);
+		m.roster({host, self, c3});
+		P::member_facts fh; fh.tunnel = fh.bound = true; fh.index = 0;
+		m.observe(host, fh);
+		P::member_facts f3; f3.tunnel = true; // tunnel up, link not bound
+		m.observe(c3, f3);
+		auto cs = cards(m, 0, 1);
+		auto split = P::lobby_split(cs, 3, m.roster_size());
+		check(split.rows.size() == 2 && split.pending.empty(), "S1: a natively listed member whose link is not bound yet is not also a pending card (3 native rows, roster 3)");
+		// A host-table index for a member this PC has no tunnel to: its facts go to the native row, never a pending card.
+		P::member_facts none{};
+		m.observe(c3, none);
+		P::table_row t3; t3.who = c3; t3.index = 2;
+		check(table_to(m, host, 0, sample_table(1, host, {t3}), 0) == P::refusal::none, "S1: host table accepted");
+		cs = cards(m, 10, 1);
+		split = P::lobby_split(cs, 3, m.roster_size());
+		bool c3_row = false;
+		for (const auto* c : split.rows) c3_row = c3_row || (c->who == c3 && c->index == 2);
+		check(c3_row && split.pending.empty(), "S1: a host-reported index makes it a row's facts, not a pending card");
+		// Genuinely pending (broker roster ahead of the native list): shown, capped at roster minus native rows.
+		P::model h;
+		h.open(CODE, host, host);
+		h.roster({host, c3, c4});
+		auto hc = h.cards(P::phase::in_lobby, 0, "Logan", false, false, "LC33", 0);
+		split = P::lobby_split(hc, 1, h.roster_size());
+		check(split.rows.size() == 1 && split.pending.size() == 2, "S1: two broker-only members with one native row -> two pending cards");
+		split = P::lobby_split(hc, 2, h.roster_size());
+		check(split.pending.size() == 1, "S1: pending cards capped at roster size minus native rows");
+	}
+
+	// ---- review N1: transient roster skew is not a refusal; the mute counter decays ----
+	{
+		P::model m;
+		m.open(CODE, self, host);
+		m.roster({host, self, c3});
+		auto r = sample_report(1);
+		r.rtt = {{K(7), 10, P::route::direct}, {host, 20, P::route::relay}}; // K(7) joined the sender's roster first
+		check(report_to(m, c3, r, 0) == P::refusal::none, "N1: an RTT row about a member this PC does not know yet is skipped, the report kept");
+		P::table_row late; late.who = K(7); late.index = 3;
+		check(table_to(m, host, 0, sample_table(1, host, {late}), 0) == P::refusal::none, "N1: a host-table row for a member this PC does not know yet is skipped");
+		P::model w;
+		w.open(CODE, self, host);
+		w.roster({host, self, c3});
+		std::uint32_t t = 1000;
+		for (int i = 0; i < 40; ++i, t += 2000) { report_to(w, c3, sample_report(5), t); } // replays spread over 80 s
+		check(report_to(w, c3, sample_report(6), t) == P::refusal::none, "N1: out-of-order/replayed sequences over a long session never mute a peer");
+		auto bad = P::encode(sample_report(7));
+		bad[1] = 9;
+		for (int i = 0; i < 12; ++i, t += 3000) w.on_report(c3, bad.data(), bad.size(), t); // 12 malformed, one per 3 s
+		check(report_to(w, c3, sample_report(8), t) == P::refusal::none, "N1: refusals spread out (not 16 within 10 s) decay instead of muting");
+		for (int i = 0; i < 16; ++i) w.on_report(c3, bad.data(), bad.size(), t + std::uint32_t(i) * 600); // a 9.6 s burst
+		check(report_to(w, c3, sample_report(9), t + 200000) == P::refusal::muted, "N1: 16 refusals within 10 s still mute the tunnel");
 	}
 
 	std::printf("%d PASS / %d FAIL\n", passed, failed);

@@ -455,7 +455,31 @@ int main(int argc, char** argv)
 		check(lost_decision(327, two, 2, 100) == lost_step::wait && lost_decision(327, two, 2, lost_agree_timeout_ms) == lost_step::remove_timeout,
 		      "decision: a different frame waits (a later announcement replaces it), then times out");
 		check(lost_decision(-1, two, 0, 0) == lost_step::wait && lost_decision(40, two, 0, 0) == lost_step::remove_agreed, "decision: alone it removes once announced");
-		check(gns_transport_rules::agreement_revision == 4 && gns_transport_rules::framing_revision == 3, "rule 25 revision 4 / framing 3: every loss takes the agreed cut frame");
+		check(gns_transport_rules::agreement_revision == 6 && gns_transport_rules::framing_revision == 4, "rule 25 revision 6 / framing 4: every loss takes the agreed cut frame; party kinds 7/8 (0.6)");
+		{
+			// Old-peer refusal by name: this build's rule 25 record against a released revision-4 / framing-3 one.
+			using namespace gameplay_capabilities;
+			record now, old, same;
+			for (auto* r : {&now, &old, &same}) r->layout(3, {32, 768, 1024, 10}, true);
+			now.add(gns_transport_id, gns_transport_rules::agreement_revision, {1u, gns_transport_rules::gns_port_offset, gns_transport_rules::framing_revision, 0u}, true);
+			same.add(gns_transport_id, gns_transport_rules::agreement_revision, {1u, gns_transport_rules::gns_port_offset, gns_transport_rules::framing_revision, 0u}, true);
+			old.add(gns_transport_id, 4, {1u, 1000u, 3u, 0u}, true);
+			check(now.finalize() && old.finalize() && same.finalize() && now.bytes().size() == 108, "rule 25 records finalize; GCAP stays 108 bytes");
+			difference diff;
+			const auto against_old = now.compare(old.bytes(), &diff);
+			char names[128]{};
+			now.describe(diff.buckets, diff.local_only, true, names, sizeof names);
+			// The refusal is the digest's; the rule NAME comes from the advisory 8-bit summary, so the tuple must not
+			// collide with the released one (revision 5 did: both 0x23).
+			check(against_old == result::value && std::string(names) == "25 GnsTransport",
+			      (std::string("a revision-4 / framing-3 peer is refused and this side names 25 GnsTransport (") + names + ")").c_str());
+			difference back{};
+			char back_names[128]{};
+			check(old.compare(now.bytes(), &back) == result::value, "and the revision-4 side refuses this one too");
+			old.describe(back.buckets, back.local_only, true, back_names, sizeof back_names);
+			check(std::string(back_names) == "25 GnsTransport", (std::string("the revision-4 side names 25 GnsTransport (") + back_names + ")").c_str());
+			check(now.compare(same.bytes()) == result::match, "two revision-6 / framing-4 PCs agree");
+		}
 		auto hex6 = [](const std::array<unsigned char, 6>& b) { char out[13]{}; for (int i = 0; i < 6; ++i) std::snprintf(out + i * 2, 3, "%02x", b[i]); return std::string(out); };
 		bool notice_guarded = false, lost_guarded = false;
 		for (const auto& g : gns_transport_rules::guards)

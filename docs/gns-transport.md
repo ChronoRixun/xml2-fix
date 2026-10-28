@@ -2,7 +2,7 @@
 
 Requested-only (`[Online] Transport = gns`; absent, empty or any other value = the stock transport, byte for byte, and
 the released capability digest). Every PC of a session must use it: it is gameplay-agreement **rule 25 GnsTransport**,
-revision 4, values `{1, port offset 1000, framing revision 3, 0}` (revision 2: the datagram kind 4 of rooms, docs/online-rooms.md; revision 3: kinds 5/6; revision 4: every participant loss uses the agreed cut frame below); a PC with it refuses a PC without it (and the other
+revision 6, values `{1, port offset 1000, framing revision 4, 0}` (revision 2: the datagram kind 4 of rooms, docs/online-rooms.md; revision 3: kinds 5/6; revision 4: every participant loss uses the agreed cut frame below; revision 6 / framing 4: the 0.6 party kinds 7/8, docs/online-party.md; revision 5 was skipped - its rule summary collided with revision 4's); a PC with it refuses a PC without it (and the other
 way round) and names `25 GnsTransport` in the refusal.
 
 The LAN / direct-IP mode is described below. [Online rooms](online-rooms.md) imply this transport and add
@@ -50,7 +50,7 @@ Link kinds (first payload byte): 0 game, 1 hello, 2 hello_ack, 3 keepalive, 4 da
 5 lost_inputs, 6 lost_ready (framing 3); 7 party_report and 8 party_table (0.6 round 7, room tunnels only, unreliable;
 [online-party.md](online-party.md)). Kinds 7/8 are handled by the room module before the tunnel policy and never reach
 this adapter's game lane; a build without them drops them as malformed/refused tunnel messages and keeps the link.
-Rule impact: **needs coordinator revision** (proposed revision 5 / framing 4, `{1, 1000, 4, 0}`; not applied here).
+Rule 25 is revision 6 / framing 4 for them (`{1, 1000, 4, 0}`); revision-4 builds are refused by name.
 
 ## A participant lost abruptly (three or more players)
 

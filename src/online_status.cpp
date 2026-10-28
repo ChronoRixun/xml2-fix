@@ -237,6 +237,7 @@ namespace online_status
 		last.party.table = -1;
 		last.party.roster.clear();
 		++last.party.generation;
+		++last.party.attempt;
 		flush(); // rare (one per Host / Join / Retry); the set() that follows writes only what then differs
 		logger::write("online: status attempt %u (party block)", unsigned(last.party.generation));
 	}

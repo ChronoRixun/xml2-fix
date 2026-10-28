@@ -7,6 +7,7 @@
 // simulate: native readiness/admission stay native facts and are inputs only.
 
 #include "online_room_core.hpp"
+#include "online_status_core.hpp"
 
 #include <algorithm>
 #include <array>
@@ -74,7 +75,8 @@ namespace online_party_core
 		return true;
 	}
 	inline bool token_byte(std::uint8_t c) { return c >= 0x21 && c <= 0x7e; }
-	inline bool name_byte(std::uint8_t c) { return (c >= 0x20 && c <= 0x7e) || c >= 0x80; }
+	// A screen name: valid UTF-8 without control characters (online_status_core::valid_utf8_name; review 1607424 B1).
+	inline bool valid_name(const std::uint8_t* p, std::size_t n) { return online_status_core::valid_utf8_name(std::string(reinterpret_cast<const char*>(p), n)); }
 
 	struct rtt_row { key who{}; std::uint16_t ms = rtt_none; route how = route::unknown; };
 	struct report
@@ -208,7 +210,7 @@ namespace online_party_core
 		at += token;
 		const std::size_t name = d[at++];
 		if (name > name_max || at + name + 1 > n) return name > name_max ? refusal::name : refusal::size;
-		for (std::size_t i = 0; i < name; ++i) if (!name_byte(d[at + i])) return refusal::name;
+		if (!valid_name(d + at, name)) return refusal::name;
 		out.name.assign(reinterpret_cast<const char*>(d + at), name);
 		at += name;
 		const std::size_t rows = d[at++];
@@ -327,19 +329,25 @@ namespace online_party_core
 		online_room_core::token_bucket reports{2, 4}, tables{4, 6}, bytes{1024, 2048};
 		std::uint32_t last_report = 0, last_table = 0;
 		unsigned refused = 0;
-		bool muted = false;
+		std::uint32_t window_at = 0;
+		bool muted = false, window_open = false;
 		static constexpr unsigned mute_after = 16;
+		static constexpr std::uint32_t window_ms = 10000;
 		// Rate and byte budget before parsing; a muted tunnel's party messages are ignored for the connection's life.
 		refusal admit(std::uint8_t kind, std::size_t size, std::uint32_t now)
 		{
 			if (muted) return refusal::muted;
 			auto& bucket = kind == kind_table ? tables : reports;
-			if (!bucket.allow(now) || !bytes.allow(now, size)) return refuse(refusal::rate);
+			if (!bucket.allow(now) || !bytes.allow(now, size)) return refuse(refusal::rate, now);
 			return refusal::none;
 		}
-		refusal refuse(refusal why)
+		// 16 refusals within 10 s mute the tunnel; an older count starts over (review N1). An out-of-order sequence is
+		// expected on an unreliable lane and never counts.
+		refusal refuse(refusal why, std::uint32_t now)
 		{
-			if (why != refusal::none && why != refusal::muted && ++refused >= mute_after) muted = true;
+			if (why == refusal::none || why == refusal::muted || why == refusal::sequence) return why;
+			if (!window_open || now - window_at > window_ms) { window_open = true; window_at = now; refused = 0; }
+			if (++refused >= mute_after) muted = true;
 			return why;
 		}
 	};
@@ -370,6 +378,11 @@ namespace online_party_core
 		if (m.size() >= 14) std::memset(m.data() + 10, 0, 4);
 		return m;
 	}
+
+	// ---- the lobby's card split (online_room::party): facts for native rows, and broker-only pending cards ----
+	struct card;
+	struct lobby_split_result { std::vector<const card*> rows, pending; };
+	inline lobby_split_result lobby_split(const std::vector<card>& cards, std::size_t native_count, std::size_t roster_size);
 
 	// ---- the model ----
 	// What this PC observes itself about one other broker-roster member (game thread, every tick).
@@ -406,7 +419,7 @@ namespace online_party_core
 		{
 			key who{};
 			member_facts facts;
-			bool has_report = false, has_index_claim = false;
+			bool has_report = false;
 			report last;
 			std::uint32_t report_at = 0;
 			receive_gate gate;
@@ -496,11 +509,12 @@ namespace online_party_core
 			if (!open_ || !m) return count(refusal::unknown_member);
 			if (const auto r = m->gate.admit(kind_report, size, now); r != refusal::none) return count(r);
 			report r;
-			if (const auto why = parse(data, size, r); why != refusal::none) return count(m->gate.refuse(why));
-			if (std::memcmp(r.code, code_, code_size) != 0) return count(m->gate.refuse(refusal::room));
-			if (r.seq <= m->gate.last_report) return count(m->gate.refuse(refusal::sequence));
+			if (const auto why = parse(data, size, r); why != refusal::none) return count(m->gate.refuse(why, now));
+			if (std::memcmp(r.code, code_, code_size) != 0) return count(m->gate.refuse(refusal::room, now));
+			if (r.seq <= m->gate.last_report) return count(m->gate.refuse(refusal::sequence, now));
 			for (const auto& row : r.rtt)
-				if (row.who == from || (row.who != self_ && !find(row.who))) return count(m->gate.refuse(refusal::unknown_member));
+				if (row.who == from) return count(m->gate.refuse(refusal::unknown_member, now));
+			r.rtt.erase(std::remove_if(r.rtt.begin(), r.rtt.end(), [&](const rtt_row& row) { return row.who != self_ && !find(row.who); }), r.rtt.end());
 			m->gate.last_report = r.seq;
 			m->last = std::move(r);
 			m->has_report = true;
@@ -514,19 +528,20 @@ namespace online_party_core
 			if (!open_ || !m) return count(refusal::unknown_member);
 			if (const auto r = m->gate.admit(kind_table, size, now); r != refusal::none) return count(r);
 			// Only the broker's host for this room, and only while no native session says it is anyone but index 0.
-			if (from != host_ || (from_index >= 0 && from_index != 0)) return count(m->gate.refuse(refusal::permission));
+			if (from != host_ || (from_index >= 0 && from_index != 0)) return count(m->gate.refuse(refusal::permission, now));
 			table t;
-			if (const auto why = parse(data, size, t); why != refusal::none) return count(m->gate.refuse(why));
-			if (std::memcmp(t.code, code_, code_size) != 0) return count(m->gate.refuse(refusal::room));
-			if (t.seq <= m->gate.last_table) return count(m->gate.refuse(refusal::sequence));
+			if (const auto why = parse(data, size, t); why != refusal::none) return count(m->gate.refuse(why, now));
+			if (std::memcmp(t.code, code_, code_size) != 0) return count(m->gate.refuse(refusal::room, now));
+			if (t.seq <= m->gate.last_table) return count(m->gate.refuse(refusal::sequence, now));
 			unsigned host_rows = 0;
 			for (const auto& w : t.rows)
 			{
-				if (w.who != self_ && !find(w.who)) return count(m->gate.refuse(refusal::unknown_member));
-				if (w.who == from) { ++host_rows; if (w.index != 0 && w.index != index_unknown) return count(m->gate.refuse(refusal::host_row)); }
-				else if (w.index == 0) return count(m->gate.refuse(refusal::host_row));
+				if (w.who != self_ && w.who != from && !find(w.who)) continue; // checked, then dropped below
+				if (w.who == from) { ++host_rows; if (w.index != 0 && w.index != index_unknown) return count(m->gate.refuse(refusal::host_row, now)); }
+				else if (w.index == 0) return count(m->gate.refuse(refusal::host_row, now));
 			}
-			if (host_rows != 1) return count(m->gate.refuse(refusal::host_row));
+			if (host_rows != 1) return count(m->gate.refuse(refusal::host_row, now));
+			t.rows.erase(std::remove_if(t.rows.begin(), t.rows.end(), [&](const table_row& w) { return w.who != self_ && w.who != from && !find(w.who); }), t.rows.end());
 			m->gate.last_table = t.seq;
 			table_ = std::move(t);
 			has_table_ = true;
@@ -600,6 +615,7 @@ namespace online_party_core
 			});
 			return out;
 		}
+		std::size_t roster_size() const { return open_ ? members_.size() + 1 : 0; }
 		// A digest of what the status roster shows (no RTT); the generation moves when it changes.
 		bool note_cards(const std::vector<card>& cards)
 		{
@@ -628,8 +644,7 @@ namespace online_party_core
 			r.agreed = agreed;
 			r.token = token.substr(0, token_max);
 			for (auto& c : r.token) if (!token_byte(std::uint8_t(c))) c = '?';
-			r.name = name.substr(0, name_max);
-			for (auto& c : r.name) if (!name_byte(std::uint8_t(c))) c = '?';
+			r.name = online_status_core::utf8_clean(name, name_max);
 			for (const auto& m : members_)
 			{
 				if (r.rtt.size() >= rtt_rows_max) break;
@@ -666,4 +681,19 @@ namespace online_party_core
 			return h;
 		}
 	};
+
+	// Cards with a native index (this PC's own mapping, or a host-reported one) only lend their facts to that native row
+	// (the menu matches by index); a member without one is a pending card - at most the broker roster's size minus the
+	// native rows, so a member the native list already shows is never drawn twice (review S1).
+	inline lobby_split_result lobby_split(const std::vector<card>& cards, std::size_t native_count, std::size_t roster_size)
+	{
+		lobby_split_result out;
+		const std::size_t room = std::min<std::size_t>(3, roster_size > native_count ? roster_size - native_count : 0);
+		for (const auto& c : cards)
+		{
+			if (c.index >= 0) { if (out.rows.size() < 4) out.rows.push_back(&c); }
+			else if (!c.self && out.pending.size() < room) out.pending.push_back(&c);
+		}
+		return out;
+	}
 }
