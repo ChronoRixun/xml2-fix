@@ -579,6 +579,11 @@ target_compile_options(xml2_online_status_test PRIVATE /utf-8)
 add_executable(xml2_online_party_test test/online_party_test.cpp)
 target_include_directories(xml2_online_party_test PRIVATE src)
 target_compile_options(xml2_online_party_test PRIVATE /utf-8 /UNDEBUG)
+# Online restore (src/online_restore_core.hpp, rule 63, docs/online-restore.md): the shared Load transaction's wire
+# format, host/guest state machines and re-pick decision, with seeded fuzzing (pure; no native state).
+add_executable(xml2_online_restore_test test/online_restore_test.cpp)
+target_include_directories(xml2_online_restore_test PRIVATE src)
+target_compile_options(xml2_online_restore_test PRIVATE /utf-8 /UNDEBUG)
 # The released launcher's backend round trip (review 1607424 B1): its vendored rapidjson, read-only, when named.
 set(XML2_FIX_LAUNCHER_RAPIDJSON "" CACHE PATH "include folder of the launcher's vendored rapidjson (optional host fixture)")
 if(XML2_FIX_LAUNCHER_RAPIDJSON)
