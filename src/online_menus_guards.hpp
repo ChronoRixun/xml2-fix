@@ -87,6 +87,11 @@ inline constexpr script_functions_rules::guard guards[]{
     {0x005ae1d5, "8b7cac2c85ff745b8bcf8b11ff520484c07550f6475408744a8bc70fbf48760fbf50722bd14a895424200fbf4870894c241c0fbf5072895424280fbf48740fbf50708d4411ff8b4c24488b5424445189442428528d44242450ffd385c00f8596", "base mouse first pass: desctext boxes unshifted"},
     {0x005ae249, "8b46043dffffff3f8b8f24030000894c241474198d5001c1e2048b0c3281f9ffffff3f7408518bcee86a79fdff8b5c24548be881fdffffff3f75083bf60f84d20000008bbc", "base mouse second pass start: root index +4, left child, focus +0x324"},
     {0x005ae28c, "8bbcaee80d00008b078bcfff500484c07526f647540874208b4424508b4c244c8b1753508b", "base mouse second pass: item pointers +0xde8 and vt+4 shown / +0x54 bit 3"},
+    // The host lobby's native Leave (native_lobby_departing): its tick consumes phase +0x1960 == 2 (set by Back) with the
+    // session teardown 0x607c40(0); the deactivation's retail flags test +0x1972 / +0x1973 before 0x607c40(1).
+    {0x005bacd6, "83bf6019000002752f6a00c7876019000000000000e8c0ea04008bc8e8", "host lobby tick: phase 2 = native Leave"},
+    {0x005bb136, "c7876019000002000000", "host lobby Back sets phase 2"},
+    {0x005ba280, "568bf18a867219000084c075188a867319000084c0750e6a01e812f504008bc8e89bd904008bce5ee9730e0100", "host lobby deactivate flags"},
     // The kicked guest (online_menus_rules kicked_by_host): the 0x2b removal handler (index / reason / flag body, its 0x612c40
     // call returning to 0x612f8e) and 0x612c40's EBP frame ([ebp+8] record).
     {0x00612f60, "8b442404568b7004578b780c8b06508bcfe84ae1ffff33c985c074158b560433c98a4e085152508bcfe8b2fcffff5f5ec35f8bc15ec3", "0x2b removal notice handler"},

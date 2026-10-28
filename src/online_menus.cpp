@@ -782,7 +782,9 @@ void bind_broker(void* menu,screen s) {
     hide(menu,"lc_service_ok",!connected_plain);
     bind_text(menu,"service",connected_plain ? "" : service);
     bind_text(menu,"self_state",connected_plain ? "" : waiting ? "Please wait" : v.state==broker::phase::room ? "Room connected" : service);
-    bind_text(menu,"browse_hint",v.list_known ? std::to_string(v.rows.size()).append(v.stale ? " last known games" : " public games").c_str() : "Browse public games");
+    const auto browse_hint=v.list_known ? std::to_string(v.rows.size()).append(v.stale ? " last known games" : " public games") : std::string("Browse public games");
+    bind_text(menu,"browse_hint",browse_hint.c_str());
+    bind_text(menu,"browse_hint_on",browse_hint.c_str()); // the focused row's navy twin (hub_focus_follow)
     // LC localizes these mutually exclusive variants at the approved status/error anchors.
     const bool native_tunnel=native_flow.phase==native_phase::tunnel,native_discovery=native_flow.phase==native_phase::discovery,
         native_admission=native_flow.phase==native_phase::admitting,native_posting=native_flow.phase==native_phase::host && !native_flow.lobby_active;
@@ -831,7 +833,8 @@ void bind_broker(void* menu,screen s) {
         // Drop all round-1 fixture prose; LC composes localized labels from
         // these variants and the numeric maximum at the same approved anchors.
         for(const auto* field:{"campaign","save","preview_save","preview_slots","drop_in","preview_drop"}) bind_text(menu,field,"");
-        bind_text(menu,"lc_host_max_players",settings ? std::to_string(native_flow.maximum).c_str() : "");
+        // 060q live: an empty value read as missing. Unknown until native Game Options produced it: the honest "--".
+        bind_text(menu,"lc_host_max_players",settings ? std::to_string(native_flow.maximum).c_str() : "--");
         const std::pair<const char*,bool> choices[]{
             {"lc_host_settings_unknown",!settings},{"lc_host_new",settings && !native_flow.loaded},
             {"lc_host_load",settings && native_flow.loaded},{"lc_host_campaign",settings && !native_flow.danger_room},
@@ -1122,7 +1125,13 @@ bool lobby_focus(void* menu,const char* target) {
     __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 bool lobby_original(void* menu,unsigned original) {
-    __try { at<tick_fn>(original)(menu);return true; }
+    __try {
+        // The host lobby's only native Leave: its tick (0x5bacd0) entered with phase +0x1960 == 2 (set by Back / LEAVE on
+        // the previous tick) tears the session down (0x607c40(0)) and closes the menu. Latch it for the deactivation that
+        // follows (native_lobby_departing); a Start Game deactivation never passes here with phase 2.
+        if(original==0x5bacd0 && *reinterpret_cast<const int*>(static_cast<const char*>(menu)+0x1960)==2) native_flow.host_leave=true;
+        at<tick_fn>(original)(menu);return true;
+    }
     __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 int lobby_native_back(void* menu,unsigned original) {
@@ -1652,6 +1661,31 @@ bool engine_items(void* menu,std::vector<void*>& out) {
         }
         return true;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void* focus_of(void* menu);
+// 060q live (failure 11): the Hub's row hints stayed light blue on the focused amber bar and the help box always read
+// HOST A GAME. LC authors, per row, a navy twin of the hint (<row>_hint_on) and the row's help lines (lc_help_<row>_title /
+// _1 / _2, all hidden but the Host row's); the DLL shows the focused row's. Focus elsewhere (Change name, Rejoin, a prompt)
+// keeps the last row's help. Assets without the twins (an older LC) keep the plain hint and the authored help.
+constexpr const char* hub_rows[]{"host","code","browse","party","other"};
+std::string hub_help_row="host";
+void hub_focus_follow(void* menu) {
+    // A new Hub visit (the binding cache is cleared on every departure and scoped to the menu) starts on the Host row's
+    // help, as authored - never on the previous visit's row while the CMenu focus is still unset.
+    bindings.scope(menu);
+    if(!bindings.visibility.count("host_hint_on")) hub_help_row="host";
+    void* const focused=focus_of(menu);
+    std::string row;
+    for(const auto* r:hub_rows) if(focused && item_try(menu,r)==focused) row=r;
+    // A row without its own help set (the Party row is not authored one) keeps the last row's help.
+    if(!row.empty() && item_try(menu,("lc_help_"+row+"_title").c_str())) hub_help_row=row;
+    for(const auto* r:hub_rows) {
+        const std::string key(r);
+        const bool on=row==key;
+        if(hide(menu,(key+"_hint_on").c_str(),!on)) hide(menu,(key+"_hint").c_str(),on);
+        const bool help=hub_help_row==key;
+        for(const auto* part:{"_title","_1","_2"}) hide(menu,("lc_help_"+key+part).c_str(),!help);
+    }
 }
 void* focus_of(void* menu) {
     // CMenu's focused item (+0x324: 0x5ae0a0 compares the hit item with it before setFocus).
@@ -2266,6 +2300,7 @@ void tick_impl(void* menu,bool& native_called) {
         for(const auto* button:{"lc_hostleft_again","lc_hostleft_back"}) enable(menu,button,panel);
         // Focus follows the modal: onto Host again when it opens, back onto the Hub's Host row when it closes.
         if(panel!=hub_panel_shown) { hub_panel_shown=panel;lobby_focus(menu,panel ? "lc_hostleft_again" : "host"); }
+        hub_focus_follow(menu);
     }
     if(s==screen::code) {
         bind_text(menu,"code_value",code.shown().c_str());

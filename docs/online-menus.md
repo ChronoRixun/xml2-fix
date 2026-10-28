@@ -1459,3 +1459,22 @@ the model; the installed slot keeps it; retail and shown models are byte-for-byt
 the bytes around EIP, the EBP chain and up to 40 return addresses found on the stack (a value in a module whose preceding
 bytes are a call). With `XML2FIX_CRASHTRACE=1` in the environment (agent live repro only; no ini key) every first-chance
 access violation / privileged / illegal instruction gets a line (60 at most, the first 8 with the full context).
+
+## 0.6 preview fix H: the Hub's focused row, MAX PLAYERS, the host's room after Start Game
+060q live failures 5 / 8 / 11. (The hidden-authored model scenes of failures 5 / 6 are fix G's model-load adapter on
+0x6a0348; fix H's first draft of a builder table + restore was dropped in favour of it.)
+
+- **Hub focus.** LC authors a navy twin `<row>_hint_on` of each focusable row's hint and one hidden help set per row
+  (`lc_help_<row>_title` / `_1` / `_2`, the Host row's shown); the Hub tick shows the focused row's twin and help, focus on
+  another item keeps the last row's help. `browse_hint_on` is bound with `browse_hint`.
+- **Host MAX PLAYERS** reads `--` until native Game Options produced the number.
+- **Tests.** r17-hub-focus (real text items, the CMenu focus over four rows, Change name and the Party row keep the last
+  help, a new visit starts on the Host help).
+- **The host's room survives Start Game.** `native_lobby_departing` treated "+0x1972 and +0x1973 both clear" as the host
+  leaving, but XMen2.exe only ever zeroes those flags (0x5b7f8e, 0x5ba919), so every host lobby deactivation - Start Game
+  included - left the room silently (060q dh: right after the solo start `online: GNS listening on ...` = no room
+  requested; the Party screen then had no room name, invite code or host row and nobody could drop in). The host lobby's
+  only native Leave is its tick entered with phase +0x1960 == 2 (set by Back, 0x5bb136; consumed at 0x5bacd6 with the
+  session teardown 0x607c40(0)); `lobby_original` latches exactly that and the deactivation departs only after it. Guards
+  for the three retail spots. Test: r6-lobby-new / -load deactivate the real host lobby with phase 0 (room kept) before
+  the native Leave (room left once).
