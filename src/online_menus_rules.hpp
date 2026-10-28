@@ -430,6 +430,19 @@ struct roster_watch {
         primed=true;return gone;
     }
 };
+// The removed PC's side of the host's native Kick (0.6 preview fix E). The host's Kick (0x6133a0(session, record, 0x10ce,
+// 0x10cf, 0x10cf, 1)) sends the removed participant the 12-byte removal notice 0x2b (0x611550: its index, its own reason
+// 0x10ce, flag 1; everyone else 0x10cf, flag 0). The guest's handler 0x612f60 removes the named record through 0x612c40
+// (record, reason, flag), whose terminal clear calls our patched 0x612070 sites with EBP = 0x612c40's frame. So the kicked
+// guest is told apart from a lost host by what it already received: 0x612c40 entered from the 0x2b handler (return address
+// 0x612f8e), for THIS PC's own record, with the Kick's reason and flag. The native slow-player drop sends 0x10ce with flag 0
+// and a host loss / the watchdog other reasons: neither matches. No peer message, protocol field or rule id is involved.
+inline constexpr std::uint32_t removal_notice_return=0x612f8e, kick_reason=0x10ce, kick_flag=1;
+// frame: 0x612c40's [ebp+0 .. ebp+0x10] (saved EBP, return address, record, reason, flag); local: that record is this PC's
+// own participant (0x614290, record +0x1c bit 0).
+inline bool kicked_by_host(const std::uint32_t (&frame)[5],bool local) {
+    return local && frame[2]!=0 && frame[1]==removal_notice_return && frame[3]==kick_reason && (frame[4]&0xffu)==kick_flag;
+}
 struct host_left {
     bool active=false;
     std::uint64_t generation=0;

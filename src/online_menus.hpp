@@ -67,9 +67,14 @@ bool requested();
 bool installed();
 // Pad buttons on the co-op screens (online_menus_rules.hpp pad_menu_mask): `probe(player)` says whether that player's
 // prompts show the pad (pad_prompts::pad_shown, wired by exports.cpp; null reads the raw menu mask). pad_prompt_scope() is
-// true while one of the custom screens (Hub, Host, Code, Browse, Party; not the native lobbies) is the current menu.
+// true while one of the custom screens (Hub, Host, Code, Browse, Party) or a skinned lobby (lc_lobby_v1; fix E) is the
+// current menu; an unskinned native lobby keeps the engine's labels and bits.
 void set_pad_probe(bool (*probe)(int player));
 bool pad_prompt_scope();
+// Mouse hit boxes (online_menus_hits_rules.hpp): `probe` gives the engine-screen pixel (and that screen's size) of the
+// pointer message the window procedure is handing the engine right now (display::pointer_pixel, wired by exports.cpp;
+// null or false: the hit test works from the engine's view-unit point, to half a view unit).
+void set_pointer_probe(bool (*probe)(int& x,int& y,int& screen_width,int& screen_height));
 // Optional host seams; production uses nullptr. Callback pointers are copied,
 // not retained through this options object. No game/menu pointers cross threads.
 struct install_hooks {

@@ -90,4 +90,8 @@ namespace display
 	// The pipe's `chars`: one WM_CHAR (1-255) to the engine's window procedure on the window's thread, the way a real
 	// keyboard's character reaches the game's text entry. Same switch and window as test_pointer; "ok" or "error ...".
 	std::string test_char(unsigned character);
+	// While the fix's window procedure is handing the engine a client-point mouse message (a real one or the test
+	// pointer's), on that thread: the point in the engine's screen pixels (after the conversion above) and the engine's
+	// screen size it divides by. False at any other time. The co-op menus' hit boxes use it for pixel-exact bar edges.
+	bool pointer_pixel(int& x, int& y, int& screen_width, int& screen_height);
 }

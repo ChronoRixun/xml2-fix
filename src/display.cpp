@@ -869,6 +869,16 @@ namespace display
 		UINT test_pointer_message = 0;
 		UINT test_char_message = 0; // the pipe's `chars`: a WM_CHAR delivered to the engine on the window's thread
 		POINT last_test_engine_point{};
+		// The client-point mouse message being handed to the engine right now (pointer_pixel), on the window's thread.
+		struct in_flight_pointer { DWORD thread = 0; POINT point{}; size screen{}; int depth = 0; } in_flight;
+		LRESULT engine_pointer(const HWND handle, const UINT what, const WPARAM w, const LPARAM converted)
+		{
+			const in_flight_pointer saved = in_flight;
+			in_flight = {GetCurrentThreadId(), {static_cast<short>(LOWORD(converted)), static_cast<short>(HIWORD(converted))}, engine_screen(), saved.depth + 1};
+			const LRESULT result = engine_window_procedure ? CallWindowProcA(engine_window_procedure, handle, what, w, converted) : DefWindowProcA(handle, what, w, converted);
+			in_flight = saved;
+			return result;
+		}
 
 		LRESULT CALLBACK filtered_window_procedure(const HWND handle, const UINT message, const WPARAM wparam, const LPARAM lparam)
 		{
@@ -885,7 +895,7 @@ namespace display
 				}
 				const LPARAM converted = to_engine_point(handle, lparam);
 				last_test_engine_point = {static_cast<short>(LOWORD(converted)), static_cast<short>(HIWORD(converted))};
-				engine(what, what == WM_LBUTTONDOWN ? MK_LBUTTON : 0, converted);
+				engine_pointer(handle, what, what == WM_LBUTTONDOWN ? MK_LBUTTON : 0, converted);
 				return 1;
 			}
 			if (test_pointer_enabled && test_char_message && message == test_char_message)
@@ -940,7 +950,11 @@ namespace display
 				}
 				return 0;
 			}
-			return engine(message, wparam, has_client_point(message) ? to_engine_point(handle, lparam) : lparam);
+			if (has_client_point(message))
+			{
+				return engine_pointer(handle, message, wparam, to_engine_point(handle, lparam));
+			}
+			return engine(message, wparam, lparam);
 		}
 
 		// Puts filtered_window_procedure in front of the engine's (an ANSI window: igWin32Window
@@ -1308,6 +1322,19 @@ namespace display
 			return "error the game's window didn't take the message (error " + std::to_string(GetLastError()) + ")";
 		}
 		return "ok";
+	}
+
+	bool pointer_pixel(int& x, int& y, int& screen_width, int& screen_height)
+	{
+		if (!in_flight.depth || in_flight.thread != GetCurrentThreadId() || !in_flight.screen.width || !in_flight.screen.height)
+		{
+			return false;
+		}
+		x = in_flight.point.x;
+		y = in_flight.point.y;
+		screen_width = static_cast<int>(in_flight.screen.width);
+		screen_height = static_cast<int>(in_flight.screen.height);
+		return true;
 	}
 
 	std::string test_pointer(const UINT message, const int x, const int y)

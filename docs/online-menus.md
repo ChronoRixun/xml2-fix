@@ -1282,3 +1282,44 @@ notices and the `r6-end-*` guest modes (host-left panel only for a lost host, mo
 real `host_loss_tracker` told `removed_by_host()` before the bound host connection ends -> the END path raises no panel
 and the Hub stays usable), `xml2_online_browser_test`
 (limiter arithmetic, one failure per generation, detail), and LC `test_online_errors.py`.
+
+## 0.6 preview fix E: mouse hit boxes, the kicked guest, the lobbies' pad buttons (probe `lc-online-hits/1`)
+
+**Mouse hit boxes = the drawn focus bars.** XMen2.exe's menu mouse (base CMenu vt+0x80 `0x5ae0a0`; the lobbies' `0x5ba2b0` /
+`0x5c8da0` fall through to it) receives the point in view units (`0x5f9eb0`: `x = left + px * width / [0xa09ffc]`,
+`y = 384 - py * 384 / [0xa0a000]`, integers) and asks each shown, focusable item (`+0x54` bit 3) with its own vt+0x74 (text
+`0x5c6490` -> `0x5bc1b0`). The item answers with the rectangle its text is laid out in (`0x5bc530`: `+0x70/+0x72` anchor +
+box, `+0x74/+0x76` size, `+0x7a` the box top relative to its anchor, halved into the test), which cannot be widened without
+moving the text. LC's bars are larger (an ordinary row: 12 view units left and right, 5 above, 2 below), so the top and both
+ends of every bar were dead (live 060p: Join by code responded x 249-594 under a bar x 225-630 at 1280x720). The builder now
+writes `Data/lc_online_hits.txt` (`lc-online-hits/1`, one line per focusable item: `menu item left bottom right top`, absolute
+view units, y up; the Kick picker LISTBOX is not listed - it hit-tests its own rows). On our screens only (the base mouse slot
+`0x69e49c` for the custom screens, the existing lobby mouse adapters for the skinned lobbies) the DLL picks the item whose bar
+holds the point - the focused item's bar when bars overlap (only that bar is drawn), else the bar whose text box is nearest -
+and hands the engine a point inside that item's own rectangle that no other listed item holds (the engine's focus, hover sound
+and click code stay retail); a point in a listed item's rectangle but outside every bar becomes a point no item holds; anything
+else, and every other menu, is passed on unchanged. With the screen pixel of the message in flight (`display::pointer_pixel`,
+set by the fix's window procedure around the engine call) the test is pixel-exact against the drawn bar (Direct3D's top-left
+fill rule: the pixel centre inside, top and left edges included); without it, to half a view unit. A missing or malformed table
+(any bad line refuses all of it) keeps the engine's hit test. Host modes `r16-hits` (5 resolutions x hub + host lobby, every
+edge pixel and the pixel past it, a whole-screen scan, clicks raise Accept / the prompt's token code through the retail item
+code), `r16-hits-unit`, `r16-hits-absent` (the 060p dead edges reproduced), `r16-hits-refused`.
+
+**The kicked guest.** The host's native Kick (`0x6133a0(record, 0x10ce, 0x10cf, 0x10cf, 1)`) sends the removed participant the
+removal notice 0x2b (`0x611550`: its index, reason `0x10ce`, flag 1); the guest's handler `0x612f60` removes the named record
+through `0x612c40(record, reason, flag)`, whose terminal clear calls the patched `0x612070` sites with EBP = `0x612c40`'s frame.
+The three call sites now land on a stub that keeps EBP; `native_session_cleared` recognises "entered from the 0x2b handler
+(return address `0x612f8e`), for this PC's own record (`0x614290`), reason `0x10ce`, flag 1" (`kicked_by_host`) and shows
+`lc_notice_removed` ("The host removed you from the game.") at the next Hub tick instead of the host-left panel. The slow-player
+drop's `0x10ce` with flag 0 and every host loss keep their behaviour. The host's GNS close reason "removed by the host" is not
+used: on a room tunnel `declare_gone` only unbinds the transport (`gns_transport.cpp close`: `set_transport_bound(false)`), so
+the guest never receives it; the in-session Party Kick (round 8, `remove_member`) therefore still reaches the removed PC as a
+silent host (no distinguishing signal on that PC). Host modes `r6-end-kicked-guest` (the notice through the retail 0x2b
+handler, with the room layer's host-loss latch SET), `r6-end-slowdrop-guest` (flag 0: the panel, no removal notice).
+
+**The skinned lobbies' pad buttons.** The custom screens' scheme (`pad_menu_mask` / `pad_prompt_code`, fix C) now covers the
+skinned Host / Join lobbies (`lc_lobby_v1`): while the lobby's player (the manager's controller `0x5d8570`) is shown the pad, the
+lobby tick and the native lobby tick it wraps read pad X as MENU_OTHER (guest Ready / Unready, host Kick player) and Y / RT as
+MENU_NEXT (Copy), and `pad_prompt_scope()` draws `$MENU_OTHER` / `$MENU_NEXT` as X / Y there. The keyboard (Del / KP5), an
+unskinned native lobby and Prompts=off are unchanged. Host modes `r4-pad-host`, `r4-pad-join` (the real native Host / Join
+ticks with masks built from the retail code -> action table).

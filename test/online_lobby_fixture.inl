@@ -315,6 +315,56 @@ void copy_tests(const script_functions_rules::func_entry* registration,lobby_tic
     tick(child.data(),nullptr);assert(copies==3 && current()==child.data());
     std::cout<<"r4 Copy PASS keyboard/pad/usecmd once; coincident Accept suppressed; failure preserves code/lobby; exception exactly-once tick; stale deactivation\n";
 }
+// 0.6 preview fix E, item 3: the skinned lobbies' pad buttons (the custom screens' scheme). The REAL native Host / Join tick
+// (0x5bacd0 / 0x5c8840, through the installed adapter) reads the mask the pad really raises (raw_menu_mask: built from the
+// retail code->action table and the fix's console layout): pad X does Ready (guest) / Kick (host), pad Y (and RT) Copy; the
+// keyboard keeps Del / KP5; an unskinned native lobby keeps the engine's labels (pad_prompt_scope, the prompts' real scope).
+void pad_lobby_tests(const script_functions_rules::func_entry* registration,lobby_tick_t tick,bool host) {
+    import_stub("OpenClipboard",reinterpret_cast<void*>(&copy_open));import_stub("CloseClipboard",reinterpret_cast<void*>(&copy_close));
+    import_stub("EmptyClipboard",reinterpret_cast<void*>(&copy_empty));import_stub("SetClipboardData",reinterpret_cast<void*>(&copy_set));
+    import_stub("EnumThreadWindows",reinterpret_cast<void*>(&copy_enum));
+    import_stub("GetWindowThreadProcessId",reinterpret_cast<void*>(&copy_window_process));import_stub("GetClassNameA",reinterpret_cast<void*>(&copy_class));
+    auto post=[&](intent action) {
+        int_value[1]=unsigned(action);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(registration->handler))(reinterpret_cast<void*>(1));
+    };
+    auto press=[&](unsigned bits) { mask=bits;tick(child.data(),nullptr);mask=0;tick(child.data(),nullptr); };
+
+    online_menus::set_pad_probe(pad_probe_yes);
+    assert(online_menus::pad_prompt_scope()); // the skinned lobby draws $MENU_OTHER / $MENU_NEXT as X / Y
+    lobby_marker=false;assert(!online_menus::pad_prompt_scope());lobby_marker=true; // an unskinned native lobby keeps its labels
+    const auto copies0=copies;
+    if(host) {
+        assert(*reinterpret_cast<int*>(child.data()+0x1960)==0);
+        press(raw_menu_mask(pad_key::y));             // Y: Copy, never Kick
+        assert(copies==copies0+1 && *reinterpret_cast<int*>(child.data()+0x1960)==0);
+        post(intent::dismiss);tick(child.data(),nullptr);
+        press(raw_menu_mask(pad_key::rt));            // RT: still Copy (the old button)
+        assert(copies==copies0+2 && *reinterpret_cast<int*>(child.data()+0x1960)==0);
+        post(intent::dismiss);tick(child.data(),nullptr);
+        mask=raw_menu_mask(pad_key::x);tick(child.data(),nullptr); // X: Kick player opens the native picker
+        assert(*reinterpret_cast<int*>(child.data()+0x1960)==1 && focused=="text_playername1" && copies==copies0+2);
+        mask=0;tick(child.data(),nullptr);
+        std::cout<<"r4 pad host PASS skinned lobby: pad X = Kick (native picker), pad Y / RT = Copy; unskinned lobby keeps the engine labels\n";
+    } else {
+        ready_person(1,false);refresh_now();tick(child.data(),nullptr);
+        const auto announced=announces;
+        press(raw_menu_mask(pad_key::y));             // Y: Copy, never Ready
+        assert(copies==copies0+1 && announces==announced && !last_ready);
+        post(intent::dismiss);tick(child.data(),nullptr);
+        press(raw_menu_mask(pad_key::x));             // X: Ready
+        assert(announces==announced+1 && last_ready && copies==copies0+1);
+        press(raw_menu_mask(pad_key::rt));            // RT: Copy
+        assert(copies==copies0+2 && announces==announced+1);
+        post(intent::dismiss);tick(child.data(),nullptr);
+        // The keyboard keeps the engine's keys: Del (MENU_OTHER) is the role button (Unready now), the pad X bit alone is not.
+        online_menus::set_pad_probe(pad_probe_no);
+        ready_person(1,true);refresh_now();tick(child.data(),nullptr);
+        press(0x100);assert(announces==announced+1);
+        press(0x1000000);assert(announces==announced+2 && !last_ready);
+        std::cout<<"r4 pad join PASS skinned lobby: pad X = Ready, pad Y / RT = Copy; keyboard Del / KP5 unchanged; unskinned lobby keeps the engine labels\n";
+    }
+    online_menus::set_pad_probe(nullptr);
+}
 void pool_tests() {
     // Exercise actual retail shared allocator/base add/clear (the measuring
     // wrapper is unnecessary for a fixture with no font renderer).
@@ -610,6 +660,7 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     assert(*reinterpret_cast<unsigned*>(0x8abe20)==pool && names_table==name_backing && checks_table==ready_backing);
     if(mode.find("r7-")!=std::string::npos) { r7_card_tests(host);return; }
     if(mode=="r4-copy") { copy_tests(registration,tick);return; }
+    if(mode.starts_with("r4-pad")) { pad_lobby_tests(registration,tick,host);return; }
     if(mode=="r4-pool") { pool_tests();return; }
     if(mode=="r4-host") {
         people_count=4;setup_lobby(true);activate(child.data(),nullptr,0);tick(child.data(),nullptr);

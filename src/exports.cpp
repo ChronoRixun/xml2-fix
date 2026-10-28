@@ -250,6 +250,7 @@ namespace
 		// and the screens read them, both from the same device tracker.
 		pad_prompts::set_menu_scope(&online_menus::pad_prompt_scope);
 		online_menus::set_pad_probe(&pad_prompts::pad_shown);
+		online_menus::set_pointer_probe(&display::pointer_pixel);
 		pad_prompts::install(game);
 		lc_fonts::install(game);
 		real_get_proc_address = reinterpret_cast<get_proc_address_t>(

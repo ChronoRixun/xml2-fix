@@ -72,6 +72,20 @@ inline constexpr script_functions_rules::guard guards[]{
     {0x0055c43d, "110083c40c8d4c2404518d8e00050000c684248700000000e8a6fcffffb0015e81c480000000c2040032c05e81c480000000c20400cccccccccccccccccccccccccccc568bf1578d7e0c8bcfe812f6ff", "native queue bounded copy and bool return"},
     {0x005bc350, "5156578bf98b772485f67507b868196800eb16e8985e040081e6ffffff008b4cb0048d8401081000008d50018d6424008a084084c975f92bc289442408744e53", "usecmd frame, saved registers and command lookup"},
     {0x0069e440, "c0d75a00", "base Back slot +24"},
+    // Mouse hit boxes (online_menus_hits_rules.hpp): the base menu mouse slot, its thiscall ABI (5 arguments), the item
+    // rectangle the engine hit-tests (vt+0x64 0x5bc530 field stores), the two item hit tests and the shown test.
+    {0x0069e49c, "a0e05a00", "base mouse slot +80"},
+    {0x005ae0a0, "83ec30a1184b6e00535556578bf1686c", "base menu mouse frame"},
+    {0x005ae35b, "c21400", "base menu mouse ret 14"},
+    {0x005bc5c4, "d907d820e8af5b0b006a028d4c241466894674ff15c4f967006a028d4c24208bf8ff15c4f96700d907d820e8885b0b006a008d4c242066894676ff15c4f96700d900e8715b0b006a028d4c241466894678ff15c4f96700d900e85a5b0b006a008d4c242c6689467aff15c4f96700d900e8435b0b00660346786a028d4c242c66894670ff15c4f96700d900e8285b0b006603467a6a018d4c242c66894672", "item rectangle fields +70..+7a"},
+    {0x005bc1b0, "83ec100fbf417a992bc20fbf517255560fbf717657d1f88bfa2bfe8d7407ff03d00fbf4174897424100fbf7170895424", "item hit test rectangle"},
+    {0x005c6490, "83ec10568bf10fbf467a0fbf4e72992bc20fbf5676d1f8578bf92bfa8d5407ff03c80fbf46748954240c0fbf5670894c", "text item hit test rectangle"},
+    {0x005bd8f0, "8a4154c0e8022401c3", "item shown test +54 bit 2"},
+    // The kicked guest (online_menus_rules kicked_by_host): the 0x2b removal handler (index / reason / flag body, its 0x612c40
+    // call returning to 0x612f8e) and 0x612c40's EBP frame ([ebp+8] record).
+    {0x00612f60, "8b442404568b7004578b780c8b06508bcfe84ae1ffff33c985c074158b560433c98a4e085152508bcfe8b2fcffff5f5ec35f8bc15ec3", "0x2b removal notice handler"},
+    {0x00612c52, "8b5d08", "0x612c40 record at [ebp+8]"},
+    {0x00614290, "8b411c83e001c3", "participant is local: +0x1c bit 0"},
     {0x005ad7c0, "55568be98b85280800003dffffff3f8db5240800005774198d4801c1e1048b0c3181f9ffffff3f7408518bcee8ef83fdff8bf881ffffffff3f75043bf674218b8cbee80d00008a415484c079098b11ff524085c07515578bcee8f283fdffebd18b45005f5e8bcd5dff602c5f5e5dc3", "base Back thiscall ABI"},
     {0x0060c7e0, "8a0d80e4a300b80100000084c875258b1580e4a3000bd0b968e1a300891580e4a300e839feffff6810e76700e80d59060083c404b868e1a300c3cccccccc", "text request singleton getter"},
     {0x0060b960, "8a8100030000c3", "text result ready byte"},

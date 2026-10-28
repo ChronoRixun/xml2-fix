@@ -265,8 +265,21 @@ void native_session_leave() {
     else if(broker_calls.leave) broker_calls.leave();
     resolve_edit=0;resolve_ticket={};
 }
+// EBP at the patched 0x612070 call (0x612c40's frame when the clear comes from a removal; online_menus_rules kicked_by_host).
+std::uintptr_t cleared_frame=0;
+bool removal_was_kick(std::uintptr_t frame) {
+    __try {
+        if(!frame) return false;
+        std::uint32_t f[5];std::memcpy(f,reinterpret_cast<const void*>(frame),sizeof f);
+        // 0x614290: the record is this PC's own participant (+0x1c bit 0); 0x612c40 has already cleared the session's +0x78.
+        const bool local=f[2] && (*reinterpret_cast<const std::uint32_t*>(std::uintptr_t(f[2])+0x1c)&1u);
+        return kicked_by_host(f,local);
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
 void __fastcall native_session_cleared(void* session,void*,bool keep_local) {
     const auto serial=native_flow.serial;
+    const auto frame=cleared_frame;cleared_frame=0;
+    const bool kicked=removal_was_kick(frame); // read before 0x612070 releases the records
     at<void(__thiscall*)(void*,bool)>(0x612070)(session,keep_local);
     // Only terminal full-clear branches in 6123e0/612c40 call this wrapper.
     // Host setup/admission resets, keep-local transfer work, and single remote
@@ -277,7 +290,11 @@ void __fastcall native_session_cleared(void* session,void*,bool keep_local) {
             !keep_local && !*reinterpret_cast<void**>(static_cast<unsigned char*>(session)+0x78)) {
             // A guest whose connection to the host ended: the 0.6 host-left panel waits for the Hub (never a takeover). The
             // room layer's latch is read BEFORE the room is left below, which resets it.
-            if(native_flow.phase==native_phase::guest && broker_calls.host_lost) {
+            // A guest the host removed (its native Kick) gets a plain notice at the Hub instead (0.6 preview fix E).
+            if(native_flow.phase==native_phase::guest && kicked) {
+                removed_notice=true;host_left_state.dismiss();
+                logger::write("online menus: the host removed this PC from the game (native removal notice 0x%04X); the Hub shows lc_notice_removed",kick_reason);
+            } else if(native_flow.phase==native_phase::guest && broker_calls.host_lost) {
                 try { if(broker_calls.host_lost()) host_left_state.raise(); } catch(...) { }
             }
             native_flow.touched=false; // the native session is already torn down
@@ -285,6 +302,13 @@ void __fastcall native_session_cleared(void* session,void*,bool keep_local) {
             try { native_session_leave(); } catch(...) { logger::write("online menus: native session end: room leave failed"); }
         }
     } catch(...) { logger::write("online menus: native session end: cleanup failed"); }
+}
+// The three patched 0x612070 calls land here first: keep the caller's EBP for removal_was_kick, then the wrapper.
+__declspec(naked) void native_session_cleared_stub() {
+    __asm {
+        mov dword ptr [cleared_frame], ebp
+        jmp native_session_cleared
+    }
 }
 bool native_request(const char* name) {
     __try { at<request_fn>(0x5d5db0)(manager(),name,nullptr);return true; }

@@ -567,16 +567,30 @@ void review_run(const script_functions_rules::func_entry* registration) {
         const bool throws=original_mode.find("-throw-")!=std::string::npos;leave_throws=throws;
         // Round 15: the room layer reports that this guest's connection to the host ended (never set for a local leave).
         host_lost_flag=original_mode=="r6-end-loss-guest" || original_mode=="r6-end-disconnect-guest" || original_mode=="r6-end-loss-preset-guest" || original_mode=="r6-end-loss-noassets-guest";
-        // Round 15 review: a KICKED guest (round 8's Kick ends this PC's link through the host's agreed departure) loses the same
-        // transport-bound host connection, but the room layer was told the host removed it: the END path must not raise the panel.
+        // 0.6 preview fix E: a KICKED guest. The host's native Kick (0x6133a0(record, 0x10ce, 0x10cf, 0x10cf, 1)) reaches the
+        // removed PC as the removal notice 0x2b; its transport-bound host connection ends too, so the room layer's host-loss
+        // latch IS set (nothing on this PC told it otherwise). Only the native notice tells the kick apart: the END path must show
+        // the plain "removed" notice, never the host-left panel. Nothing calls removed_by_host() here.
         const bool kicked=original_mode=="r6-end-kicked-guest";
-        host_loss_real=kicked;fixture_host_loss.reset();
-        if(kicked) { fixture_host_loss.connected();fixture_host_loss.removed_by_host();fixture_host_loss.ended(true);assert(!fixture_host_loss.lost()); }
+        // Negative control: the native slow-player drop sends the same reason 0x10ce with flag 0. It is not a Kick: no "removed"
+        // notice, and the lost host connection keeps the host-left panel.
+        const bool slowdrop=original_mode=="r6-end-slowdrop-guest";
+        host_loss_real=kicked || slowdrop;fixture_host_loss.reset();
+        if(slowdrop) host_lost_flag=true;
+        if(kicked || slowdrop) { fixture_host_loss.connected();fixture_host_loss.ended(true);assert(fixture_host_loss.lost()); }
         bool escaped=false;
         try {
             if(original_mode.starts_with("r6-end-quit-") || original_mode=="r6-nit-end" || original_mode=="r6-nit-end-guest") {
                 const char* args="main";reinterpret_cast<void(__cdecl*)(const char**)>(0x5f27a0)(&args);
-            } else if(original_mode.starts_with("r6-end-loss-") || kicked) {
+            } else if(kicked || slowdrop) {
+                menu_broker.disconnected("broker already unavailable",ticks);
+                put(lobby_people[1].data(),0x1c,2); // actual remote host flag
+                // The removal notice as the network layer hands it to the retail 0x2b handler 0x612f60: the event's body
+                // (+4) is the 12-byte notice (this PC's index, its reason 0x10ce, flag 1), +0xc the session.
+                std::array<unsigned char,12> body{};put(body.data(),0,unsigned(local_id));put(body.data(),4,0x10ce);body[8]=slowdrop ? 0 : 1;
+                std::array<unsigned,4> event{0,unsigned(reinterpret_cast<std::uintptr_t>(body.data())),0,0xa53058};
+                reinterpret_cast<void(__cdecl*)(void*)>(0x612f60)(event.data());
+            } else if(original_mode.starts_with("r6-end-loss-")) {
                 menu_broker.disconnected("broker already unavailable",ticks);
                 put(lobby_people[1].data(),0x1c,2); // actual remote host flag
                 reinterpret_cast<void(__thiscall*)(void*,void*,int,bool)>(0x612c40)(reinterpret_cast<void*>(0xa53058),lobby_people[1].data(),0x1107,false);
@@ -617,14 +631,17 @@ void review_run(const script_functions_rules::func_entry* registration) {
             } else if(!lost) {
                 assert(hid("lc_hub_host_left") && hid("lc_hostleft_again") && !enabled_items["lc_hostleft_again"] && enabled_items["host"]);
                 if(kicked) {
-                    // The kicked guest's Hub is fully usable: no veil, every row and prompt enabled, actions act (no modal swallowing them).
+                    // The kicked guest's Hub: the plain notice "The host removed you from the game." (lc_notice_removed), not the
+                    // generic inline error; and the Hub is fully usable: no veil, every row and prompt enabled, actions act.
+                    assert(vis("lc_notice_removed") && hid("lc_inline_error"));
                     assert(hid("lc_hub_host_left_veil") && hid("lc_hostleft_back") && enabled_items["code"] && enabled_items["browse"] && enabled_items["other"] && enabled_items["desctext3"] && enabled_items["desctext4"]);
                     const auto before=calls.size();post(intent::browse);tick(child.data(),nullptr);assert(calls.size()==before+1 && calls.back()=="request:lc_browse");
-                    screen("lc_online");tick(child.data(),nullptr);assert(hid("lc_hub_host_left")); // and it stays down at the next Hub entry
+                    screen("lc_online");tick(child.data(),nullptr);assert(hid("lc_hub_host_left") && hid("lc_notice_removed")); // both stay down at the next Hub entry
                 }
             }
             else {
                 assert(vis("lc_hub_host_left") && vis("lc_hostleft_again") && vis("lc_hostleft_back") && enabled_items["lc_hostleft_again"] && enabled_items["lc_hostleft_back"]);
+                assert(!vis("lc_notice_removed")); // a host loss (or the slow-player drop) is never shown as a removal
                 assert(!enabled_items["host"] && !enabled_items["code"] && !enabled_items["browse"] && !enabled_items["other"] && !enabled_items["change_name"] && !enabled_items["rejoin"]);
                 assert(!enabled_items["desctext3"] && !enabled_items["desctext4"]); // the prompt items that repeat Change name / Rejoin cannot take focus behind the veil
                 const auto before=calls.size();

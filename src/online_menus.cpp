@@ -7,6 +7,7 @@
 #include "join_in_progress.hpp"
 #include "online_menus_rules.hpp"
 #include "online_menus_guards.hpp"
+#include "online_menus_hits_rules.hpp"
 #include "game_version.hpp"
 #include "ini.hpp"
 #include "log.hpp"
@@ -170,6 +171,7 @@ bool remember_game(const std::string& value,const std::string& title) {
 }
 bool remember_fixture() { return remember_game(code.text,"Offline fixture"); }
 host_left host_left_state;
+bool removed_notice=false; // the host removed this guest (native Kick): lc_notice_removed at the next Hub tick
 bool hub_panel_shown=false; // the Hub last drew the host-left panel (focus moves only on a change)
 toast guest_toast;
 roster_watch roster;
@@ -870,10 +872,18 @@ bool lobby_mask(void* mgr,unsigned& mask) {
     __try { mask=at<unsigned(__thiscall*)(void*)>(0x5d4b00)(mgr);return true; }
     __except(EXCEPTION_EXECUTE_HANDLER) { mask=0;return false; }
 }
+// Pad buttons on the SKINNED lobbies (0.6 preview fix E; the custom screens' scheme, online_menus_rules pad_menu_mask): the
+// designs put Ready (guest) / Kick (host) on X and Copy on Y, the engine's pad bits put them on Y (MENU_OTHER) and RT
+// (MENU_NEXT). While the lobby's player is shown the pad, the lobby tick and the native lobby tick it wraps read X as
+// MENU_OTHER and Y / RT as MENU_NEXT, and the prompts draw $MENU_OTHER / $MENU_NEXT as X / Y (pad_prompt_scope). The keyboard,
+// an unskinned native lobby (no lc_lobby_v1) and Prompts=off (no device tracker) read the raw bits as before.
+bool lobby_pad_shown(void* menu);
+unsigned lobby_screen_mask(void* menu,unsigned raw) { return lobby_pad_shown(menu) ? pad_menu_mask(raw) : raw; }
 unsigned __fastcall lobby_input(void* mgr,void*) {
     unsigned mask=0;lobby_mask(mgr,mask);
     const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
     if(lobby_ticking && input_generation==lobby_state.generation && current()==lobby_state.owner && (caller==0x5bad33 || caller==0x5c88d2)) {
+        mask=lobby_screen_mask(lobby_state.owner,mask);
         if(mask&0x200000) {
             if(back_consumed) return 0;
             // Back must remain available, but may not smuggle a coincident
@@ -897,6 +907,15 @@ bool lobby_live(void* menu) {
     __try { return lobby(which(menu)) && item(menu,"lc_lobby_v1"); }
     __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
+// The lobby's player: the controller the menu manager follows (0x5d8570; the lobby may have opened from Other ways to play,
+// not from the Hub), else the Hub's.
+int lobby_player() {
+    int controller=-1;
+    __try { controller=at<int(__thiscall*)(void*)>(0x5d8570)(manager()); }
+    __except(EXCEPTION_EXECUTE_HANDLER) { controller=-1; }
+    return controller_valid(controller) ? controller : menu_player;
+}
+bool lobby_pad_shown(void* menu) { return pad_probe && lobby_live(menu) && pad_probe(lobby_player()); }
 bool lobby_lists(void* menu) {
     __try {
         auto* a=item(menu,"text_playername1");auto* b=item(menu,"text_readycheck1");
@@ -1286,7 +1305,7 @@ void lobby_tick(void* menu,unsigned original,bool& called) {
     // Consent permits only this next native dispatch, even if our state read
     // faults or native code already consumed/reset phase 2 between callbacks.
     const bool consuming_leave=host && lobby_state.leave_authorized;
-    unsigned input=0;lobby_current_mask(input);
+    unsigned input=0;lobby_current_mask(input);input=lobby_screen_mask(menu,input); // pad X = Ready / Kick, Y (and RT) = Copy
     if(!(input&0x400010) && !lobby_state.copy_keyboard) lobby_state.copy_block=false;
     if(input&0x400000) {
         if(!lobby_state.copy_held) pending.post(int(intent::copy_code),reinterpret_cast<std::uintptr_t>(menu),which(menu));
@@ -1437,12 +1456,105 @@ void lobby_deactivate(void* menu,unsigned original) {
 }
 void __fastcall host_deactivate(void* menu,void*) { lobby_deactivate(menu,0x5ba280); }
 void __fastcall join_deactivate(void* menu,void*) { lobby_deactivate(menu,0x5c8070); }
+// ---- Mouse hit boxes = the drawn focus bars (online_menus_hits_rules.hpp; 060p live item 7) -------------------------------
+// The builder's Data/lc_online_hits.txt, read once per mod generation on the first scoped mouse message. Absent or
+// malformed: every screen keeps the engine's own hit test (a build that predates the table, or a refused file).
+namespace hits = online_menus_hits;
+hits::table hit_table;
+unsigned hit_generation=0;
+bool (*pointer_probe)(int&,int&,int&,int&)=nullptr; // display: the pointer message's engine-screen pixel (exports.cpp)
+bool hits_ready() {
+    try {
+        const auto generation=mod_loader::generation();
+        if(!generation) return false;
+        if(generation!=hit_generation) {
+            hit_generation=generation; hit_table.entries.clear();
+            const auto path=std::filesystem::path(mod_loader::game_root())/L"Data/lc_online_hits.txt";
+            std::ifstream file(mod_loader::resolve_file(path.wstring()),std::ios::binary);
+            if(!file) { logger::write_once("online:hits-absent","online menus: no Data/lc_online_hits.txt; the co-op screens keep the engine's hit test"); return false; }
+            std::string text(256*1024+1,'\0');
+            file.read(text.data(),std::streamsize(text.size()));
+            text.resize(std::size_t(file.gcount()));
+            std::string why;
+            if(text.size()>256*1024 || !hits::parse(text,hit_table,why)) {
+                hit_table.entries.clear();
+                logger::write_once("online:hits-refused","online menus: Data/lc_online_hits.txt refused (%s); the co-op screens keep the engine's hit test",why.empty() ? "too large" : why.c_str());
+                return false;
+            }
+            logger::write_once("online:hits","online menus: mouse hit boxes = drawn focus bars (%s, %u entries)",hits::contract,unsigned(hit_table.entries.size()));
+        }
+        return !hit_table.entries.empty();
+    } catch(...) { hit_table.entries.clear(); return false; }
+}
+void* item_try(void* menu,const char* name) {
+    __try { return item(menu,name); } __except(EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+// The engine's own tests on an item: shown (vt+4 = +0x54 bit 2 clear for text/model items) and focusable (+0x54 bit 3),
+// then its rectangle fields (0x5bc530).
+bool item_box_of(void* it,hits::item_box& box) {
+    __try {
+        auto* p=static_cast<unsigned char*>(it);
+        if(at<bool(__thiscall*)(void*)>((*reinterpret_cast<std::uintptr_t**>(it))[1])(it)) return false;
+        if(!(p[0x54]&8)) return false;
+        std::int16_t f[6]; std::memcpy(f,p+0x70,sizeof f);
+        box=hits::engine_box(f[0],f[1],f[2],f[3],f[5]); return true;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void* focus_of(void* menu) {
+    // CMenu's focused item (+0x324: 0x5ae0a0 compares the hit item with it before setFocus).
+    __try { return *reinterpret_cast<void**>(static_cast<char*>(menu)+0x324); } __except(EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+void menu_name(void* menu,char (&name)[64]) {
+    __try { std::memcpy(name,static_cast<char*>(menu)+0xc,63); name[63]=0; } __except(EXCEPTION_EXECUTE_HANDLER) { name[0]=0; }
+}
+// (x, y): the engine's view point. True with (rx, ry) the point to hand the engine instead; false: pass it on unchanged.
+bool scoped_point(void* menu,int x,int y,int& rx,int& ry) {
+    try {
+        if(!hits_ready()) return false;
+        char name[64]{}; menu_name(menu,name);
+        if(!name[0]) return false;
+        hits::view_point p=hits::from_engine(x,y);
+        int px=0,py=0,sw=0,sh=0,ex=0,ey=0;
+        if(pointer_probe && pointer_probe(px,py,sw,sh) && hits::engine_point_of_pixel(px,py,sw,sh,ex,ey) && ex==x && ey==y)
+            p=hits::from_pixel(px,py,sw,sh);
+        struct candidate { void* item; hits::item_box box; const hits::bar* rect; };
+        std::vector<candidate> active;
+        for(const auto& e:hit_table.entries) {
+            if(e.menu!=name) continue;
+            void* it=item_try(menu,e.item.c_str());
+            hits::item_box box;
+            if(it && item_box_of(it,box)) active.push_back({it,box,&e.rect});
+        }
+        // Bars can overlap (the prompt row's bars reach 12 units into their neighbours), but only the focused item's bar
+        // is drawn: it wins inside its bar; elsewhere the bar whose own text box is nearest the point (hits::choose).
+        void* const focused=focus_of(menu);
+        std::vector<hits::candidate> held;
+        for(std::size_t i=0;i<active.size();++i) if(hits::inside(*active[i].rect,p)) held.push_back({active[i].item==focused,active[i].box});
+        if(const auto pick=hits::choose(held,p);pick>=0) {
+            std::size_t seen=0;const candidate* c=nullptr;
+            for(const auto& a:active) if(hits::inside(*a.rect,p) && seen++==std::size_t(pick)) { c=&a;break; }
+            std::vector<hits::item_box> others;
+            for(const auto& o:active) if(o.item!=c->item) others.push_back(o.box);
+            return hits::free_point(c->box,others,rx,ry);
+        }
+        for(const auto& c:active) if(hits::holds(c.box,x,y)) { rx=hits::nowhere_x; ry=hits::nowhere_y; return true; }
+        return false;
+    } catch(...) { return false; }
+}
+using mouse_fn=std::uint32_t(__thiscall*)(void*,int,int,int,int,int);
+std::uint32_t __fastcall menu_mouse(void* menu,void*,int x,int y,int flags,int message,int extra) {
+    int rx=x,ry=y;
+    if(ready && custom(which(menu)) && !scoped_point(menu,x,y,rx,ry)) { rx=x; ry=y; }
+    return at<mouse_fn>(0x5ae0a0)(menu,rx,ry,flags,message,extra);
+}
 bool lobby_mouse_native(void* menu,unsigned original,int x,int y,int flags,int message,int extra) {
     __try { return at<bool(__thiscall*)(void*,int,int,int,int,int)>(original)(menu,x,y,flags,message,extra); }
     __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 bool lobby_mouse(void* menu,unsigned original,int x,int y,int flags,int message,int extra) {
     if(native_lobby_rejected(menu)) return true;
+    // The skinned lobbies' rows and prompts hit-test against their drawn bars too (an unskinned lobby has no table rows).
+    if(int rx=x,ry=y;lobby_live(menu) && scoped_point(menu,x,y,rx,ry)) { x=rx; y=ry; }
     const bool previous=native_mouse;native_mouse=true;
     const bool result=lobby_mouse_native(menu,original,x,y,flags,message,extra);
     native_mouse=previous;
@@ -1457,7 +1569,9 @@ void show_notice(void* menu) {
         "lc_notice_paste_invalid","lc_notice_code_invalid","lc_notice_name_invalid",
         "lc_notice_profile_save","lc_notice_name_open","lc_notice_recent_save","lc_notice_admission",
         // Round 15: native discovery / admission refusal (with and without rule names) / service loss / timeout, clipboard.
-        "lc_notice_discovery","lc_notice_refused","lc_notice_refusal_rules","lc_notice_service_lost","lc_notice_timeout","lc_notice_clipboard"};
+        "lc_notice_discovery","lc_notice_refused","lc_notice_refusal_rules","lc_notice_service_lost","lc_notice_timeout","lc_notice_clipboard",
+        // 0.6 preview fix E: the host removed this guest (its native Kick).
+        "lc_notice_removed"};
     bool found=false;
     for(const auto* item:notices) {
         const bool selected=error_visible && feedback==item;
@@ -1934,6 +2048,10 @@ void tick_impl(void* menu,bool& native_called) {
     }
     for(const auto* item:{"last_name","last_code","last_time"}) hide(menu,item,!recent);
     hide(menu,"lc_recent_empty",bool(recent));
+    if(s==screen::hub && removed_notice) {
+        // The kicked guest's Hub: a plain notice (lc_notice_removed), no host-left panel; the Hub stays fully usable.
+        removed_notice=false;host_left_state.dismiss();message("lc_notice_removed");
+    }
     if(s==screen::hub) {
         bool panel=host_left_state.active;
         // The 0.6 host-left panel (07-host-left, with only the section 5 body/button variants): modal, Host again / Back to Online.
@@ -2063,10 +2181,12 @@ void keyboard(unsigned char* state) {
 bool requested() { return enabled(ini::text(L"Online",L"Menus")); }
 bool installed() { return ready; }
 void set_pad_probe(bool (*probe)(int player)) { pad_probe=probe; }
+void set_pointer_probe(bool (*probe)(int& x,int& y,int& screen_width,int& screen_height)) { pointer_probe=probe; }
 bool pad_prompt_scope() {
     if(!ready) return false;
     auto* menu=current_peek();
-    return menu && custom(which(menu));
+    // The custom screens, and the skinned lobbies (fix E: the same pad scheme; an unskinned native lobby keeps its labels).
+    return menu && (custom(which(menu)) || lobby_live(menu));
 }
 patch_transaction::contribution contribution() {
     patch_transaction::contribution c;
@@ -2085,6 +2205,8 @@ patch_transaction::contribution contribution() {
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&deactivate)),0,"base menu deactivation"));
     c.writes.push_back(patch_transaction::relocation(0x69e440,"",false,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&on_back)),0,"scoped base Back"));
+    c.writes.push_back(patch_transaction::relocation(0x69e49c,"",false,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&menu_mouse)),0,"scoped base mouse hit boxes"));
     c.writes.push_back(patch_transaction::relocation(0x5bc3d0,"e8",true,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&queue_stub)),0,"authored usecmd intent boundary"));
     const std::pair<unsigned,const void*> lobby_hooks[]{
@@ -2118,7 +2240,7 @@ patch_transaction::contribution contribution() {
     c.writes.push_back(patch_transaction::relocation(0x49faac,"e8",true,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&setuphost_script_queue_stub)),0,"native setupHost script command generation"));
     for(const auto site:{0x6128abu,0x612d1fu,0x612ddau}) c.writes.push_back(patch_transaction::relocation(site,"e8",true,
-        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&native_session_cleared)),0,"native terminal session clear ends room"));
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&native_session_cleared_stub)),0,"native terminal session clear ends room"));
     c.writes.push_back(patch_transaction::relocation(0x5b9609,"e8",true,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&setuphost_queue_stub)),0,"native Host posting boundary"));
     c.writes.push_back({0x5b960e,{0x90,0x90},"native Post call padding"});
@@ -2169,6 +2291,6 @@ void install(HMODULE game,const install_hooks* hooks) {
         game_version::refuse_startup(); return;
     }
     ready=true;
-    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 40 hooks committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability);
+    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 41 hooks committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability);
 }
 }
