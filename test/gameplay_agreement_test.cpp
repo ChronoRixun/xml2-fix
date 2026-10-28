@@ -761,11 +761,11 @@ void games_list_notice(){
  // names that row instead; another host's row, and every row once the notice has ended, stay as they were.
  {
   std::memcpy(input.data()+request_size,off.bytes().data(),off.bytes().size());e.length=std::uint16_t(request_size+off.bytes().size());
-  sender[0xc]=10;sender[0xd]=0;sender[0xe]=0;sender[0xf]=9;sender[0x19]=1;forwarded=0;
-  check(receiver(&e)==0 && forwarded==0,"the refused 0x18 again (sender 10.0.0.9)");
+  sender[0xc]=192;sender[0xd]=0;sender[0xe]=2;sender[0xf]=9;sender[0x19]=1;forwarded=0;
+  check(receiver(&e)==0 && forwarded==0,"the refused 0x18 again (sender 192.0.2.9)");
   static std::array<std::uint8_t,0x44> refused_row{},other_row{};static std::array<std::uint8_t,0x14> nodes[2]{};
   refused_row.fill(0);other_row.fill(0);
-  const std::uint8_t refused_ip_bytes[4]{10,0,0,9},other_ip_bytes[4]{10,0,0,8};
+  const std::uint8_t refused_ip_bytes[4]{192,0,2,9},other_ip_bytes[4]{192,0,2,8};
   std::memcpy(refused_row.data()+8,refused_ip_bytes,4);std::memcpy(other_row.data()+8,other_ip_bytes,4);
   refused_row[0x11]=other_row[0x11]=1;std::strcpy(reinterpret_cast<char*>(refused_row.data()+0x12),"Player's game");std::strcpy(reinterpret_cast<char*>(other_row.data()+0x12),"Other game");
   const auto link=[](std::array<std::uint8_t,0x14>& node,std::array<std::uint8_t,0x14>* next,std::array<std::uint8_t,0x44>& record){
