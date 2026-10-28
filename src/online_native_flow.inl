@@ -188,15 +188,22 @@ void native_lobby_recover() {
     if(native_flow.phase!=native_phase::idle) native_flow_error("stale_native_activation");
     native_request("lc_online");
 }
+// The console "openmenu" handler (0x5f1d80, registered at 0x5f4a73) ends in manager +0x6c = our `request` slot.
+// Its call at 0x5f1f8b is the only place a queued "openmenu host" (0x60a095) reaches the menu manager, so console
+// provenance is decided here, then the request continues through the same `request` path (with routing done).
+// Round 6 hooked 0x5f1c2e instead: that is "closemenu" (0x5f1c10, registered at 0x5f4a47), so the owned Host's
+// queued "openmenu host" arrived as a plain request and native_route_request refused it (0/4 live, native_timeout).
 bool native_console_open(void* manager,const char* name,const char* args) {
-    __try { at<request_fn>(0x5db270)(manager,name,args);return true; }
-    __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+    console_routed=true;
+    request(manager,nullptr,name,args); // contains its own exceptions (and keeps the native request on a throw)
+    console_routed=false;
+    return true;
 }
 void __fastcall console_open(void* manager,void*,const char* name,const char* args) {
     try {
         if(ready && !native_route_request(name,true)) return;
         if(!native_console_open(manager,name,args) && native_flow.phase!=native_phase::idle) native_flow_error("native_open_request");
-    } catch(...) { if(native_flow.phase!=native_phase::idle) native_flow_error("native_open_exception"); }
+    } catch(...) { console_routed=false;if(native_flow.phase!=native_phase::idle) native_flow_error("native_open_exception"); }
 }
 __declspec(naked) void console_open_stub() {
     __asm { mov ecx,eax

@@ -94,7 +94,12 @@ bool __fastcall console_queue(void*,void*,const char* line) {
     return true;
 }
 void custom_close() { (*reinterpret_cast<tick_t*>(0x69e438))(child.data(),nullptr); }
-void console_request(const char* name) { reinterpret_cast<void(__cdecl*)(const char**)>(0x5f1c10)(&name); }
+// Drive the actual retail "openmenu" console handler 0x5f1d80 (registered at 0x5f4a73), the one a queued
+// "openmenu host" (0x60a095) runs; it ends in manager +0x6c. Round 6 drove 0x5f1c10 = "closemenu" here.
+std::array<unsigned,0x40> idle_vt{};unsigned* idle_object=idle_vt.data();
+void* __cdecl idle_get() { return &idle_object; }
+const char* __fastcall idle_text(void*,void*,int,int,int) { return ""; }
+void console_request(const char* name) { reinterpret_cast<void(__cdecl*)(const char**)>(0x5f1d80)(&name); }
 void host_request() { console_request("host"); }
 void setup_unmarked() { const char* args="";reinterpret_cast<void(__cdecl*)(const char**)>(0x5f1bb0)(&args); }
 void setup_request() {
@@ -121,6 +126,10 @@ void restore_services() {
     redirect(*reinterpret_cast<unsigned*>(0x6a236c+0x160),input_ok);
     redirect(*reinterpret_cast<unsigned*>(0x6a236c+0xe8),sound_stub);
     redirect(0x5db270,pop);
+    // openmenu prologue services: save idle (+0x10), 0x59ee20 +0x6c and 0x55e9a0 +0x74 (the dialog checks see no dialog).
+    saves[0x10/4]=unsigned(reinterpret_cast<std::uintptr_t>(&one_int));
+    idle_vt.fill(unsigned(reinterpret_cast<std::uintptr_t>(&no_op)));idle_vt[0x74/4]=unsigned(reinterpret_cast<std::uintptr_t>(&idle_text));
+    redirect(0x59ee20,idle_get);redirect(0x55e9a0,idle_get);
     dialogs.fill(0);dialogs[0x14/4]=unsigned(reinterpret_cast<std::uintptr_t>(&dialog_flag));
     dialogs[0x18/4]=unsigned(reinterpret_cast<std::uintptr_t>(&dialog_title));
     dialogs[0x1c/4]=unsigned(reinterpret_cast<std::uintptr_t>(&dialog_add));
@@ -452,7 +461,7 @@ void generation_run(const script_functions_rules::func_entry* registration) {
     // active survival policy exercised above.
     join();menu_broker.disconnected("before activation",ticks);custom_close();denied(false,true);
     assert(menu_view().state==bm::phase::idle && !*reinterpret_cast<void**>(0xa53058+0x78));
-    std::cout<<"round6 generations PASS actual console +74 handler FIFO; delayed Host command after replacement Host; old Host/Join activation across opposite new roles; denied tick/deactivation; first-activation auth loss versus active-lobby survival\n";
+    std::cout<<"round6 generations PASS actual console openmenu (0x5f1d80 -> +6c) handler FIFO; delayed Host command after replacement Host; old Host/Join activation across opposite new roles; denied tick/deactivation; first-activation auth loss versus active-lobby survival\n";
     mode=original_mode;
 }
 
@@ -708,4 +717,70 @@ void review_run(const script_functions_rules::func_entry* registration) {
     std::cout<<"round6 review PASS "<<mode<<" (retail path; invented external services)\n";
 }
 
+// Item 1 (060p Browse crash at 0x587654): drive the actual retail anchor-vector push 0x587e40 (-> 0x587620, the
+// faulting copy) that the playfield build 0x5882e0 / walk 0x587f90 uses for every ItemName anchor of a menu scene.
+// 175 pushes stay inside the vector; the 182nd lands on the count and replaces it with the anchor pointer, so the
+// 183rd would write to vector + pointer*4 (the live "writing <heap address>"). LC caps every scene at 175.
+unsigned anchor_refs=0;
+void __cdecl anchor_ref(void*) { ++anchor_refs; }
+void anchor_capacity_run(const script_functions_rules::func_entry*) {
+    const auto old_ref=*reinterpret_cast<unsigned*>(0x67f65c); // Alchemy igObject::ref import slot
+    put(reinterpret_cast<void*>(0x67f65c),0,unsigned(reinterpret_cast<std::uintptr_t>(&anchor_ref)));
+    std::vector<unsigned char> block(0x2d8+64,0xcc);
+    std::memset(block.data(),0,0x2d8);
+    auto* vec=block.data();
+    std::array<std::array<unsigned,4>,200> anchors{};
+    auto push=[&](unsigned i) { void* object=anchors[i].data();reinterpret_cast<void(__fastcall*)(void*,void*,void*)>(0x587e40)(vec,nullptr,&object); };
+    auto count=[&] { return *reinterpret_cast<unsigned*>(vec+0x2d4); };
+    for(unsigned i=0;i<175;++i) push(i);
+    assert(count()==175 && anchor_refs==175);
+    for(unsigned i=0;i<175;++i) assert(*reinterpret_cast<void**>(vec+i*4)==anchors[i].data());
+    for(unsigned b=0;b<5;++b) assert(*reinterpret_cast<unsigned*>(vec+0x2bc+b*4)==0xffffffffu);
+    assert(*reinterpret_cast<unsigned*>(vec+0x2bc+5*4)==0x7fffu);
+    for(unsigned i=0;i<64;++i) assert(block[0x2d8+i]==0xcc); // nothing past the vector yet
+    for(unsigned i=175;i<182;++i) push(i);                      // no bound check: anchors 176..182
+    const auto anchor181=unsigned(reinterpret_cast<std::uintptr_t>(anchors[181].data()));
+    if(count()!=anchor181+1) { std::cerr<<"retail anchor vector changed: count "<<std::hex<<count()<<"\n";assert(false); }
+    put(reinterpret_cast<void*>(0x67f65c),0,old_ref);
+    std::cout<<"round9 anchor capacity PASS actual retail push 0x587e40/0x587620: 175 anchors fit; the 182nd overwrites the count with its pointer (next push = wild write, 060p 0x587654)\n";
+}
+// Item 3 (060p x4): after a failed hub Host, Change name -> Enter landed in Game Options. Drive the actual retail
+// history push 0x5d74d0 (manager opens a menu: the outgoing one is stacked unless already stacked) and pop 0x5d7080
+// (a menu closes without a deferred next, e.g. text_entry Enter) on the fixture manager, in the live order.
+void history_run(const script_functions_rules::func_entry*) {
+    restore_services();
+    redirect(0x672562,reinterpret_cast<const void*>(static_cast<int(*)(const char*,const char*)>(&std::strcmp))); // CRT strcmp import thunk
+    auto tick=*reinterpret_cast<tick_t*>(0x69e454);
+    std::array<std::array<unsigned char,0x400>,8> menus{};unsigned used=0;
+    auto menu=[&](const char* name) {
+        auto& m=menus[used++%menus.size()];m.fill(0);put(m.data(),0,0x69e41c);m[4]=1;std::strcpy(reinterpret_cast<char*>(m.data()+0xc),name);return m.data();
+    };
+    auto push=[&](const char* outgoing) { reinterpret_cast<void(__fastcall*)(void*,void*,void*)>(0x5d74d0)(mgr.data(),nullptr,menu(outgoing)); };
+    auto pop=[&](const char* closing) {
+        std::array<char,0x8c> out{};reinterpret_cast<void*(__fastcall*)(void*,void*,void*,void*)>(0x5d7080)(mgr.data(),nullptr,out.data(),menu(closing));
+        return std::string(out.data());
+    };
+    auto& depth=*reinterpret_cast<int*>(mgr.data()+0x86610);
+    // Retail baseline: forward requests only, no trim -> the stale Game Options entry wins.
+    depth=0;push("main");push("lc_online");push("lc_host");push("game_options"); // ... Post: request lc_host
+    push("lc_host");push("lc_online");                                          // Back to the Hub, then Change name
+    if(pop("text_entry")!="game_options") { std::cerr<<"retail history baseline changed\n";assert(false); }
+    // With the dispatcher: the LC screen that becomes current trims its own stacked entry and everything above it.
+    depth=0;push("main");push("lc_online");push("lc_host");push("game_options");
+    screen("lc_host");tick(child.data(),nullptr);assert(depth==2);
+    push("lc_host");screen("lc_online");tick(child.data(),nullptr);assert(depth==1);
+    push("lc_online");                                                          // Change name opens text_entry
+    const auto back=pop("text_entry");
+    if(back!="lc_online") { std::cerr<<"text_entry closed to "<<back<<" instead of the Hub\n";assert(false); }
+    // A native menu above a current-free stack is untouched (Other ways -> native online keeps its own Back).
+    depth=0;push("main");push("lc_online");screen("lc_online");tick(child.data(),nullptr);assert(depth==1);
+    push("lc_online");assert(depth==2);assert(pop("online")=="lc_online");
+    // Hub Back -> main stacked lc_online above main; the next request from main trims it, so Options Back -> main.
+    depth=0;push("main");push("lc_online");assert(depth==2);
+    std::strcpy(reinterpret_cast<char*>(main_menu.data()+0xc),"main");set_current(main_menu.data());
+    (*reinterpret_cast<void(__fastcall**)(void*,void*,const char*,const char*)>(0x6a23d8))(mgr.data(),nullptr,"options",nullptr);
+    assert(depth==0 && calls.back()=="request:options");
+    push("main");assert(pop("options")=="main");
+    std::cout<<"round9 history PASS actual retail push 0x5d74d0 / pop 0x5d7080: failed Host -> Hub -> Change name -> Enter returns to the Hub; main -> Options -> Back returns to main\n";
+}
 }

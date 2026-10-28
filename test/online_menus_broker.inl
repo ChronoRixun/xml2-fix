@@ -59,9 +59,13 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     assert(menu_view().rows.size()==9 && texts["room_0_0"]=="Remote ? ? ? name" && texts["room_0_6"].empty() && !visibility["lc_row0_build_same"] && visibility["lc_row0_build_other"]);
     for(unsigned i=0;i<20;++i) { post(intent::refresh);tick(child.data(),nullptr); }
     assert(menu_lists==1);
-    post(intent::next);tick(child.data(),nullptr);assert(!visibility["lc_row6_selected"]);
-    post(intent::row_last);tick(child.data(),nullptr);ticks+=2000;
-    post(intent::join_selected);tick(child.data(),nullptr);assert(menu_resolves==1 && menu_last_code=="AAAAAAAH");
+    // One page = browse_rows rows (060p: seven rows overflowed the engine's 175 scene anchors). Next selects row 5, the
+    // page scrolls by one, the last row of the page is the selected one; row commands past the page are refused.
+    const auto selected_shown=[&](unsigned r) { const auto k="lc_row"+std::to_string(r)+"_selected";return visibility.count(k) && !visibility[k]; };
+    post(intent::next);tick(child.data(),nullptr);assert(selected_shown(browse_rows-1));
+    post(intent::row_last);tick(child.data(),nullptr);assert(selected_shown(browse_rows-1));
+    post(static_cast<intent>(int(intent::row_first)+int(browse_rows)-1));tick(child.data(),nullptr);ticks+=2000;
+    post(intent::join_selected);tick(child.data(),nullptr);assert(menu_resolves==1 && menu_last_code=="AAAAAAAF");
     const auto old=menu_view().generation;menu_complete=true;post(intent::back);tick(child.data(),nullptr);
     assert(calls.back()=="request:lc_online" && menu_view().generation!=old && menu_view().state==bm::phase::idle && menu_cancels);
     set_current(hub.data());tick(hub.data(),nullptr);ticks+=2000;
@@ -214,7 +218,7 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
     const int pips[]{2,3,4,1,0,1,1};
     const char* builds[]{"same","same","same","other","check","same","same"};
     const bool dims[]{false,false,true,true,false,true,true};
-    for(unsigned r=0;r<7;++r) {
+    for(unsigned r=0;r<browse_rows;++r) {
         const auto id="lc_row"+std::to_string(r);
         for(const char* k:row_status_key) assert((std::string(k)==kinds[r] ? shown(id+"_st_"+k) : gone(id+"_st_"+k)));
         for(int k=0;k<=4;++k) assert((k==pips[r] ? shown(id+"_pips_"+std::to_string(k)) : gone(id+"_pips_"+std::to_string(k))));
@@ -233,13 +237,17 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
     assert(texts["details"]=="Friends join at the next area - Build not checked");
     // Hostile / maximal row, on the page that shows it: every bound field is bounded, ASCII-allowlisted and `%` free.
     post(intent::next);tick(child.data(),nullptr);
+    unsigned hostile=browse_rows;
+    for(unsigned r=0;r<browse_rows;++r) if(texts["room_"+std::to_string(r)+"_0"]==std::string(24,'A')) hostile=r;
+    assert(hostile<browse_rows);
+    const auto hostile_key=[&](unsigned c) { return "room_"+std::to_string(hostile)+"_"+std::to_string(c); };
     for(unsigned c=0;c<7;++c) {
-        const auto& t=texts["room_6_"+std::to_string(c)];
+        const auto& t=texts[hostile_key(c)];
         static const unsigned limits[]{24,12,17,5,13,9,8};
         assert(t.size()<=limits[c]);
         if(c!=3) for(unsigned char ch:t) assert(display_byte(ch)==char(ch)); // [3] is the DLL's own "n/4"
     }
-    assert(texts["room_6_0"]==std::string(24,'A') && texts["room_6_6"]=="ABCDEFGH" && texts["details"].find('%')==std::string::npos);
+    assert(texts[hostile_key(0)]==std::string(24,'A') && texts[hostile_key(6)]=="ABCDEFGH" && texts["details"].find('%')==std::string::npos);
     // Oversized body (one name byte over the broker's 192): the whole list is refused, the old rows stay labelled stale.
     menu_rows_json="{"+code(0)+",\"name\":\""+std::string(193,'N')+"\"}";
     ticks+=70000;tick(child.data(),nullptr);assert(menu_broker.pending());
@@ -286,7 +294,7 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
     assert(menu_view().rows.empty() && menu_view().list_known && !menu_view().stale);
     assert(texts["list_count"]=="- 0" && shown("lc_broker_empty") && texts["details"].empty() && texts["details_name"].empty());
     for(const char* kind:row_status_key) assert(gone(std::string("lc_row0_st_")+kind));
-    for(unsigned r=0;r<7;++r) assert(gone("lc_row"+std::to_string(r)+"_dim") && gone("lc_row"+std::to_string(r)+"_build_check") && gone("lc_row"+std::to_string(r)+"_pips_0"));
+    for(unsigned r=0;r<browse_rows;++r) assert(gone("lc_row"+std::to_string(r)+"_dim") && gone("lc_row"+std::to_string(r)+"_build_check") && gone("lc_row"+std::to_string(r)+"_pips_0"));
 
     // A committed room whose broker went away: the offline-room line shows, the stale label never beside it.
     menu_broker.cancel();menu_broker.stopped();ticks+=70000;
