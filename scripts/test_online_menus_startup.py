@@ -20,20 +20,27 @@ HOOKS = {0x49FAAC: 5, 0x5F1BB0: 5, 0x6128AB: 5, 0x612D1F: 5, 0x612DDA: 5, 0x5F1F
          0x69F284: 4, 0x69F350: 4, 0x69F290: 4, 0x69F358: 4,
          0x69F2A0: 4, 0x69F368: 4, 0x69F2AC: 4, 0x69F374: 4, 0x6A24AC: 4, 0x69F2A4: 4, 0x69F320: 4, 0x69F328: 4, 0x69F3E8: 4, 0x69F3F0: 4, 0x69F2F4: 4, 0x69F3BC: 4, 0x5BAD1F: 5, 0x5C88BE: 5, 0x6141E0: 5, 0x69F36C: 4, 0x69F314: 4, 0x69F3DC: 4}
 REGISTRY = r"HKCU\Software\Activision\X-Men Legends 2"
+# The online menus install only over a committed LegendsClassicFonts transaction (060p fix B): every mode that sets
+# Menus also turns the fonts on with the owned private font family copied in (--fonts), except fonts-absent.
+FONT_ASSETS = ("UI/fonts/lc_fonts_pc.XMLB", "UI/fonts/lc_fonts_hd.XMLB", *(f"UI/fonts/lc_online_{r}.XMLB" for r in ("title", "row", "body", "label")),
+               *(f"Textures/fonts/lc_online_{r}.IGB" for r in ("title", "row", "body", "label")))
 
 
 def main():
     parser = argparse.ArgumentParser(__doc__)
     for name in ("dll", "host", "retail", "engine", "out"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--fonts", type=Path, required=True, help="owned build folder holding the private font family (UI/fonts, Textures/fonts)")
     args = parser.parse_args()
+    fonts = args.fonts.resolve()
+    assert all((fonts / name).is_file() for name in FONT_ASSETS), "--fonts lacks the private font family"
     dll, host, retail, engine, out = (getattr(args, n).resolve() for n in
                                      ("dll", "host", "retail", "engine", "out"))
     assert host.name.lower() == "union_host.exe", "only the synthetic union host may run"
     assert hashlib.sha256(retail.read_bytes()).hexdigest() == "146cd9c316edb57a267cd73753a7ce9af647e52aab750d449c6b278fb4a1669b"
     out.mkdir(parents=True, exist_ok=False)
     rows = []
-    for mode in ("off", "zero", "invalid", "on", "capacity", "lookup-refused", "ui-guard", "native-guard", "post-guard", "seed-guard", "queue-guard", "handler-guard", "teardown-guard", "script-guard", "end-lobby-guard", "end-running-guard", "tokenizer-guard", "dispatch-guard", "preset-code", "preset-host-name-invalid", "name-only-invalid"):
+    for mode in ("off", "zero", "invalid", "on", "capacity", "lookup-refused", "ui-guard", "native-guard", "post-guard", "seed-guard", "queue-guard", "handler-guard", "teardown-guard", "script-guard", "end-lobby-guard", "end-running-guard", "tokenizer-guard", "dispatch-guard", "preset-code", "preset-host-name-invalid", "name-only-invalid", "fonts-absent"):
         folder = out / mode
         folder.mkdir()
         shutil.copyfile(dll, folder / "dinput.dll")
@@ -41,6 +48,11 @@ def main():
         if mode != "off":
             value = "0" if mode == "zero" else "invalid" if mode == "invalid" else "1"
             ini += "[Online]\nMenus=" + value + "\n"
+            if mode != "fonts-absent":
+                ini = ini.replace("[Online]\n", "[Game]\nLegendsClassicFonts=1\n[Online]\n")
+                for name in FONT_ASSETS:
+                    (folder / name).parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(fonts / name, folder / name)
         if mode == "capacity":
             ini += "[Limits]\nScriptFunctions=320\n"
         if mode in ("preset-code", "preset-host-name-invalid", "name-only-invalid"):
@@ -85,6 +97,11 @@ def main():
             assert f"dispatcher lcOnlineIntent n(i) registered; {len(HOOKS)} hooks committed atomically" in log
         else:
             assert "dispatcher lcOnlineIntent" not in log
+        if mode == "fonts-absent":
+            assert "online menus: [Game] LegendsClassicFonts is not active (off or refused); native online entry retained" in log
+            assert "lc fonts: committed" not in log
+        elif mode != "off":
+            assert "lc fonts: committed" in log, (mode, log)
         if mode in ("on", "ui-guard"):
             # Menus alone (no ForcedTeams/explicit limit/LC assets) must enlist
             # rule 14 through the actual exports.cpp + script_functions.cpp path.

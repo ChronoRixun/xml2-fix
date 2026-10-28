@@ -499,7 +499,7 @@ DLL startup against the repo's `xml2_union_host` target, testing the actual
 ScriptFunctions/exports gates with no ForcedTeams or LC assets:
 
 ```powershell
-python scripts/test_online_menus_startup.py --dll <dinput.dll> --host <union_host.exe> --retail <owned-XMen2.exe> --engine <owned-engine-dir> --out <new-workspace-output>
+python scripts/test_online_menus_startup.py --dll <dinput.dll> --host <union_host.exe> --retail <owned-XMen2.exe> --engine <owned-engine-dir> --out <new-workspace-output> --fonts <owned-build-with-the-private-font-family>
 ```
 
 It runs on a private never displayed desktop, maps the PE without calling its
