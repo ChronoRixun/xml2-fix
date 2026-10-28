@@ -756,6 +756,35 @@ void games_list_notice(){
  check(games_list_row(5)=="Host's gameplay settings differ: ExplosiveFirstHit","the row stays while the refusal is current");
  // An older host (no record): another build.
  e.length=std::uint16_t(request_size);sender[0x19]=1;check(receiver(&e)==0 && games_list_row(5)=="Host found, but it runs another build or its fix did not load","an older host's refusal names another build on the list");
+ // 0.6 preview fix L (060r live failure 10): the refused host's row also arrives by a second route that no guard sees (the master list files
+ // a row with no agreement check), so the list showed it as an ordinary game and the reason only ever replaced an EMPTY list. The reason
+ // names that row instead; another host's row, and every row once the notice has ended, stay as they were.
+ {
+  std::memcpy(input.data()+request_size,off.bytes().data(),off.bytes().size());e.length=std::uint16_t(request_size+off.bytes().size());
+  sender[0xc]=10;sender[0xd]=0;sender[0xe]=0;sender[0xf]=9;sender[0x19]=1;forwarded=0;
+  check(receiver(&e)==0 && forwarded==0,"the refused 0x18 again (sender 10.0.0.9)");
+  static std::array<std::uint8_t,0x44> refused_row{},other_row{};static std::array<std::uint8_t,0x14> nodes[2]{};
+  refused_row.fill(0);other_row.fill(0);
+  const std::uint8_t refused_ip_bytes[4]{10,0,0,9},other_ip_bytes[4]{10,0,0,8};
+  std::memcpy(refused_row.data()+8,refused_ip_bytes,4);std::memcpy(other_row.data()+8,other_ip_bytes,4);
+  refused_row[0x11]=other_row[0x11]=1;std::strcpy(reinterpret_cast<char*>(refused_row.data()+0x12),"Player's game");std::strcpy(reinterpret_cast<char*>(other_row.data()+0x12),"Other game");
+  const auto link=[](std::array<std::uint8_t,0x14>& node,std::array<std::uint8_t,0x14>* next,std::array<std::uint8_t,0x44>& record){
+   node.fill(0);const auto r=std::uint32_t(reinterpret_cast<std::uintptr_t>(record.data()));std::memcpy(node.data()+0x10,&r,4);
+   const auto n=next ? std::uint32_t(reinterpret_cast<std::uintptr_t>(next->data())) : 0u;std::memcpy(node.data()+8,&n,4);};
+  link(nodes[0],&nodes[1],other_row);link(nodes[1],nullptr,refused_row);
+  const auto run_update=[&]{
+   jump(games_list_update,&list_update_fake);games_list_object(0);
+   const auto head=std::uint32_t(reinterpret_cast<std::uintptr_t>(nodes[0].data()));const std::uint32_t two=2;
+   std::memcpy(game_table.data(),&head,4);std::memcpy(game_table.data()+0xc,&two,4);
+   const auto saved=menu_now();current_menu(games_list.data());
+   reinterpret_cast<void(__thiscall*)(void*)>(*reinterpret_cast<std::uint32_t*>(at(games_list_update_slot)))(games_list.data());
+   std::memcpy(manager_space.data()+menu_current,&saved,4);};
+  logger::logged.clear();run_update();
+  const std::string reason=std::string("Host's gameplay settings differ: ExplosiveFirstHit").substr(0,37);
+  check(std::string(reinterpret_cast<char*>(refused_row.data()+0x12))==reason && std::string(reinterpret_cast<char*>(other_row.data()+0x12))=="Other game" && has_log("the refused host's row in the games list is named"),
+        "the refused host's row is named by the reason (fitted to the record's name field); another host's row is untouched");
+  check(refused_row[0x38]==0 && refused_row[0x11]==1,"nothing past the name field changed");
+ }
  // A compatible host answering later ends the notice: the list is native again.
  std::memcpy(input.data()+request_size,local.bytes().data(),local.bytes().size());e.length=std::uint16_t(request_size+local.bytes().size());forwarded=0;sender[0x19]=1;
  check(receiver(&e)==73 && forwarded==1 && games_list_row(5)=="No Games Found","a compatible host's 0x18 ends the refusal row");

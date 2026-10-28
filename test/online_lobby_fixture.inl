@@ -104,6 +104,7 @@ void r7_card_tests(bool host) {
         for(int p=1;p<=3;++p) {
             const auto k="lc_p"+std::to_string(p)+"_";
             assert(!visibility[k+"card"] && visibility[k+"ping"] && visibility[k+"same_build"] && texts[k+"phase"]=="In lobby"); // no party facts: the member is still observed in this native lobby
+            assert(visibility[k+"checking_build"] && visibility[k+"other_build"]); // 060r live: no room, no build facts: never a permanent CHECKING BUILD... (fix L)
         }
         std::cout<<"r7 bounds PASS a fact set with 4 pending members is dropped whole; native rows stay, nothing measured is shown\n";return;
     }
@@ -894,6 +895,14 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     if(mode=="r4-join") {
         ready_person(1,false);mask=0x1000000;tick(child.data(),nullptr);assert(announces==1 && last_ready && current()==child.data());
         tick(child.data(),nullptr);assert(announces==1);mask=0;tick(child.data(),nullptr);
+        // 060r live (failure 7): the retail Join tick writes "Unready" / "Leave" into text_leaveroom when the ready state flips - the
+        // same rectangle the lc_guest_leave / lc_guest_unready overlay owns - so the third bar drew two or three labels on top of each
+        // other. The earlier tests passed because they only checked which overlay was shown. The native text is blanked again in the
+        // tick that flipped it and again on the ticks the accept is still held (a bind cache would never notice the engine's write).
+        assert(leave_label_native_writes>=1 && texts["text_leaveroom"].empty());
+        // 060r live (failure 6): the guest header read "Room details pending" for the whole visit (no broker name to bind). The room is
+        // the host's game: its name comes from the host's native row (the browser's default naming); the campaign line is authored text.
+        assert(!texts["lc_room_name"].empty() && texts["lc_room_name"]==texts["lc_p1_name"]+"'s game");
         fixture_throw=true;tick(child.data(),nullptr);fixture_throw=false;
         back_in_base=true;mask=0x200000;tick(child.data(),nullptr);back_in_base=false;mask=0;
         assert(announces==2 && !last_ready && current()==child.data());

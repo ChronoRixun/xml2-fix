@@ -342,7 +342,7 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
     assert(menu_view().state==bm::phase::room && shown("lc_broker_room") && gone("lc_broker_offline_room") && gone("lc_broker_stale"));
     menu_broker.disconnected("broker_unreachable",ticks);tick(child.data(),nullptr);
     assert(menu_view().stale && shown("lc_broker_offline_room") && gone("lc_broker_stale") && shown("lc_broker_room") && gone("lc_broker_err_offline"));
-    assert(texts["self_state"]=="Room connected" && gone("lc_service_ok"));
+    assert(texts["self_state"]=="In a room" && gone("lc_service_ok"));
 
     // Hub: a service never asked shows neutral text, the connected scene hidden.
     menu_broker.cancel();menu_broker.stopped();set_current(hub.data());tick(hub.data(),nullptr);
@@ -351,6 +351,18 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
     menu_up=false;screen("lc_host");tick(child.data(),nullptr);
     assert(shown("lc_host_private") && gone("lc_host_public") && gone("retry") && gone("lc_service_ok") && texts["service"]=="Unavailable");
     for(const char* k:error_cause_key) assert(gone(std::string("lc_broker_err_")+k));
+    // 0.6 preview fix L (060r live failure 7): the amber side marker was baked beside CAMPAIGN and stayed there while the focus bar moved
+    // to VISIBILITY (the earlier tests never moved the focus on the Host screen). It is one scene per focusable settings row now and
+    // follows the focused row; none while the focus is on the Open bar / a prompt (or nowhere yet).
+    {
+        const char* markers[]{"lc_host_marker_visibility","lc_host_marker_room_name","lc_host_marker_campaign"};
+        const std::pair<const char*,const char*> rows[]{{"visibility",markers[0]},{"room_name",markers[1]},{"edit_room",markers[1]},{"campaign",markers[2]}};
+        for(const auto& row:rows) {
+            put(child.data(),0x324,static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(item_stub(nullptr,nullptr,row.first))));tick(child.data(),nullptr);
+            for(const char* m:markers) assert(std::string_view(m)==row.second ? shown(m) : gone(m));
+        }
+        put(child.data(),0x324,0);tick(child.data(),nullptr);for(const char* m:markers) assert(gone(m));
+    }
     menu_up=true;
     std::cout<<"round5b views PASS row status/pips/build/dim selectors, list count + age (wrap/stale), every error cause + Retry visibility, empty list, service scene, host pair without broker, hostile/oversized bodies\n";
 }

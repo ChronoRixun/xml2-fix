@@ -44,7 +44,13 @@ namespace gameplay_agreement
   unsigned long long browser_since=0;
   bool browser_dialog_pending=false,browser_row_logged=false;
   bool browser_notice_current(){return browser_row[0] && GetTickCount64()-browser_since<browser_notice_ms;}
-  void clear_browser_notice(){browser_row[0]=0;browser_dialog_pending=false;}
+  // 0.6 preview fix L (060r live failure 10): the refused host can also reach the games list by a second route that files its row without
+  // any agreement check (the master list; only the direct / LAN 0x18 is guarded), so the list showed it as a normal "Player's game(Normal)
+  // Campaign [1/4]" row and the "Settings differ" text only ever replaced an EMPTY list. The refused sender's address bytes (the games
+  // table record's +8, copied from the same field) identify its row; while the refusal is current the row's name is the reason.
+  std::uint8_t refused_ip[4]{};bool refused_ip_known=false,refused_row_logged=false;
+  void clear_browser_notice(){browser_row[0]=0;browser_dialog_pending=false;refused_ip_known=false;}
+  constexpr std::size_t games_row_name_room=37; // the record's name field: +0x12 up to the player counts at +0x38
   // The rules behind a settings refusal, from the rule-summary buckets that differ: "9 DeathRule, 15 DeathSwitchClear"
   // for logs, "DeathRule, DeathSwitchClear" for the dialog. Empty when none is known.
   struct differing_rules { char log[384]{},dialog[384]{}; };
@@ -125,9 +131,33 @@ namespace gameplay_agreement
   {
    __asm { mov ecx,eax } __asm { jmp games_empty_text }
   }
+  // The refused host's row in the list's own table (menu+0x1964: count at +0xc, first node at +0, node +8 next / +0x10 the record), named
+  // by the reason instead of the host's game name. A row of another host, or any row once the refusal expired, is never touched.
+  void relabel_refused_rows(void* menu)
+  {
+   if(!refused_ip_known || !browser_notice_current() || !menu)return;
+   __try {
+    auto* table=*reinterpret_cast<std::uint8_t**>(static_cast<std::uint8_t*>(menu)+0x1964);
+    if(!table)return;
+    const auto count=*reinterpret_cast<unsigned*>(table+0xc);if(!count || count>100)return;
+    auto* node=*reinterpret_cast<std::uint8_t**>(table);
+    for(unsigned i=0;i<count && node;++i){
+     auto* record=*reinterpret_cast<std::uint8_t**>(node+0x10);
+     if(record && record[0x11] && !std::memcmp(record+8,refused_ip,4)){
+      auto* name=reinterpret_cast<char*>(record+0x12);
+      if(std::strncmp(name,browser_row,games_row_name_room)){
+       std::snprintf(name,games_row_name_room+1,"%s",browser_row);
+       if(!refused_row_logged){refused_row_logged=true;logger::write("online: the refused host's row in the games list is named \"%s\"",name);}
+      }
+     }
+     node=*reinterpret_cast<std::uint8_t**>(node+8);
+    }
+   }__except(EXCEPTION_EXECUTE_HANDLER){}
+  }
   // CMenuGamesList vt+0x30: the native update, then - on the list itself - the dialog a refusal left pending.
   void __fastcall games_list_updated(void* menu,void*)
   {
+   relabel_refused_rows(menu);
    reinterpret_cast<void(__thiscall*)(void*)>(games_list_update)(menu);
    if(!browser_dialog_pending)return;
    if(!browser_notice_current()){browser_dialog_pending=false;return;}
@@ -149,6 +179,15 @@ namespace gameplay_agreement
    if(joining && failure_ready && e.context){e.type=rejection_opcode;return reinterpret_cast<callback>(native_failure)(&e);}
    if(joining){dialog(false);return 0;}
    host_notice(why,false);return 0; // a host has not admitted this peer; preserve its session, menus and players
+  }
+  void remember_refused_sender(const event& e)
+  {
+   refused_ip_known=false;refused_row_logged=false;
+   if(!e.sender)return;
+   using address=const std::uint8_t*(__thiscall*)(void*);
+   __try {
+    if(const auto* ip=reinterpret_cast<address>(native_address)(e.sender)){std::memcpy(refused_ip,ip,4);refused_ip_known=true;}
+   }__except(EXCEPTION_EXECUTE_HANDLER){refused_ip_known=false;}
   }
   void notify_remote(const event& e,refusal why,std::uint64_t differing)
   {
@@ -193,7 +232,7 @@ namespace gameplay_agreement
    dialog_text(why,rules.dialog);
    if(role==endpoint::browser){
     logger::write("online: game info 0x%02x from an incompatible host refused (reason=%u%s%s); not listed or joined",unsigned(opcode),unsigned(match),*rules.log ? "; differs: " : "",rules.log);
-    event e{};if(event_fields(raw,e)){notify_remote(e,why,diff.buckets);disconnect_peer(e.sender);}
+    event e{};if(event_fields(raw,e)){notify_remote(e,why,diff.buckets);remember_refused_sender(e);disconnect_peer(e.sender);}
     if(!browser_ready){dialog(false);return 0;}
     // The games list says it in place of its empty row, and raises the dialog on its own update (browser_guards).
     std::snprintf(browser_row,sizeof(browser_row),"%s",games_row_text(why,rules.dialog).c_str());

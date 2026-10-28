@@ -129,10 +129,13 @@ void __fastcall tick_stub(void* menu,void*) {
     if(close_during_tick) set_current(nullptr);
 }
 std::uint32_t __fastcall close_stub(void*,void*) { set_current(nullptr);return 0x12345678; }
+unsigned leave_label_native_writes=0;
 void __cdecl text_stub(void*,const char* item,const char* format,...) {
     ++text_writes;
     if(mode.starts_with("r4-") && std::string_view(format)!="%s") {
-        assert(std::string_view(format)=="Unready" || std::string_view(format)=="Leave");texts[item]=format;return;
+        assert(std::string_view(format)=="Unready" || std::string_view(format)=="Leave");texts[item]=format;
+        if(std::string_view(item)=="text_leaveroom") ++leave_label_native_writes; // the retail Join tick's own label (fix L)
+        return;
     }
     if(mode.starts_with("r6-") && std::string_view(item)=="data_gamename" && std::string_view(format)!="%s") { texts[item]=format;return; }
     assert(std::string_view(format)=="%s");
@@ -174,6 +177,12 @@ void* __fastcall item_stub(void*,void*,const char* name) {
     if(mode.starts_with("r4-focus") && std::string_view(name).starts_with("lc_") && std::string_view(name)!="lc_lobby_v1") {
         static std::map<std::string,std::array<unsigned char,0xb0>,std::less<>> own;
         auto& item=own[name];if(!*reinterpret_cast<unsigned*>(item.data())) item=text_item;
+        return item.data();
+    }
+    // 0.6 preview fix L: the Host setup rows are distinct objects, so the side marker can follow the focused one.
+    if(mode=="r5b-views" && (std::string_view(name)=="visibility" || std::string_view(name)=="room_name" || std::string_view(name)=="edit_room" || std::string_view(name)=="campaign")) {
+        static std::map<std::string,std::array<unsigned char,0xb0>,std::less<>> rows;
+        auto& item=rows[name];if(!*reinterpret_cast<unsigned*>(item.data())) item=text_item;
         return item.data();
     }
     if(scene_lookup) if(auto* it=scene_lookup(name)) return it;

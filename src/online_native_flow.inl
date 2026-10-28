@@ -653,7 +653,19 @@ bool native_flow_tick(screen s) {
     if((phase==native_phase::host || phase==native_phase::guest) && native_flow.lobby_active) return false;
     if(view.generation!=native_flow.ticket || view.state==broker::phase::retry_wait || view.state==broker::phase::error ||
         view.state==broker::phase::refused || (view.state==broker::phase::room && !view.authenticated)) {
-        native_flow_error("room_generation_or_service_lost");return false;
+        // A host that never got its room (the broker failed the open while this PC was posting) lost nothing: the service did not
+        // answer. Only a room that existed - or a changed generation - is a lost service.
+        const bool failed_open=phase==native_phase::posting && view.generation==native_flow.ticket &&
+            (view.state==broker::phase::retry_wait || view.state==broker::phase::error || view.state==broker::phase::refused);
+        if(failed_open) native_flow_error("service_silent"); else native_flow_error("room_generation_or_service_lost");
+        return false;
+    }
+    // 060r live (failure 5): a host's game info refused this PC's settings during the attempt (reason=6, "differs: 29 TickRate"), but
+    // the flow only ever read that at the 15 s timeout ("Took too long to connect"). The refusal is its own failure: the notice names
+    // the rules when the refusal gave them (native_flow_error), the generic "refused, check build and settings" line otherwise.
+    if((phase==native_phase::tunnel || phase==native_phase::discovery || phase==native_phase::admitting) &&
+       broker_calls.refusal_serial && broker_calls.refusal_serial()!=attempt_refusal_serial) {
+        native_flow_error("settings_refused");return false;
     }
     const DWORD deadline=phase==native_phase::tunnel ? 45000 : 15000;
     if(now_ms()-native_flow.started>=deadline) { native_flow_error("native_timeout");return false; }

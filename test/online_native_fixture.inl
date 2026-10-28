@@ -268,6 +268,16 @@ void run(const script_functions_rules::func_entry* registration) {
     host_refuse=true;action("text_inviteslots");host_refuse=false;
     assert(menu_view().state==bm::phase::idle && !*reinterpret_cast<void**>(0xa3bc40+0x2250));
     const auto refused_hosts=menu_hosts;action("text_inviteslots");assert(menu_hosts==refused_hosts && std::none_of(calls.begin(),calls.end(),[](const auto& line){return line.starts_with("queue:setuphost");}));cancel();
+    // 0.6 preview fix L (060r live failure 5): Host > OPEN while the service does not answer. The earlier tests passed because they only
+    // drove the room that DID open (menu_complete) or a cancelled / refused native step - none failed the broker op itself while the
+    // flow was posting, which is what a service that is down does (status error broker_unreachable). Nothing was lost then: the
+    // notice says the service did not answer, never that it was lost during setup. A room that existed and then lost its service
+    // (state room, not authenticated) keeps the lost wording (the generation / room checks below).
+    begin();script(0x49f9b0,4);action("text_inviteslots");screen("lc_host");tick(child.data(),nullptr);
+    assert(menu_view().state!=bm::phase::room && menu_broker.pending());
+    menu_broker.fail(menu_view().generation,"broker_unreachable",ticks);tick(child.data(),nullptr);
+    assert(menu_view().state==bm::phase::idle && vis("lc_notice_service_silent") && !vis("lc_notice_service_lost") && !vis("lc_notice_timeout"));
+    cancel();
     auto resolve=[&] {
         screen("lc_code");tick(child.data(),nullptr);
         for(int i=32;i<40;++i) { post(static_cast<intent>(i));tick(child.data(),nullptr); }
@@ -318,6 +328,17 @@ void run(const script_functions_rules::func_entry* registration) {
     resolve();tick(child.data(),nullptr);reply();tick(child.data(),nullptr);
     allocate_ok=false;event(8);allocate_ok=true;tick(child.data(),nullptr);
     assert(menu_view().state==bm::phase::idle && vis("lc_notice_refused") && notice_count()==1);cancel();
+    // 0.6 preview fix L (060r live failure 5): a guest refused for different settings (reason=6, "differs: 29 TickRate") saw "Took
+    // too long to connect" 15 s later - the flow only read the refusal when the admission reply came back, and a refused game info
+    // never produces one. The refusal that happens DURING this attempt ends it at once, with the rules it named.
+    resolve();tick(child.data(),nullptr);
+    set_refusal("TickRate");tick(child.data(),nullptr);
+    assert(menu_view().state==bm::phase::idle && vis("lc_notice_refusal_rules") && texts["lc_refusal_rules"]=="TickRate" && !vis("lc_notice_timeout") && notice_count()==1);
+    cancel();refusal_text.clear();
+    resolve();tick(child.data(),nullptr);reply();tick(child.data(),nullptr);
+    set_refusal("");tick(child.data(),nullptr);
+    assert(menu_view().state==bm::phase::idle && vis("lc_notice_refused") && !vis("lc_notice_refusal_rules") && !vis("lc_notice_timeout") && notice_count()==1);
+    cancel();
     // A console queue refusal must clean the native participant immediately.
     begin();script(0x49f9b0,4);(*reinterpret_cast<tick_t*>(0x69f694))(child.data(),nullptr);
     queue_ok=false;action("text_inviteslots");screen("lc_host");menu_complete=true;tick(child.data(),nullptr);queue_ok=true;
