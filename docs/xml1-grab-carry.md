@@ -356,5 +356,15 @@ damage failure, not a claim that that event contains an omitted L2 write.
 The fixture executes the complete native event including both return paths,
 Attack/Smash velocities, eligibility negatives and the arming stores.
 
+082e follow-up. The armed amount is consumed only by a contact impact: in 082e
+only a throw that reached a wall cost HP (4), open-floor landings and the
+velocity-less Smash cost 0. XML1's thrown/landing handlers (`E0E20`..`E10C0`)
+and `CEA90` contain no damage of their own. The victim callback keeps XML1
+`DC720`'s carrier-only release rule (carrier ground handle or +4 bit 2); the
+carried one's own contacts never end the pair, now pinned by the fixture. Every
+082e moving-carry separation was the carrier landing on a prop or raised floor.
+With CarryTrace, a release logs `carry trace release reason=...` with both roots
+and ground handles.
+
 [Live acceptance and input driver](beta9-moves-live.md) cover the outstanding
 hardware, HP/defense and visible-pose checks.

@@ -144,3 +144,67 @@ followed by a native post-filter miss differs from an eligibility rejection.
 For hover, retain `flight-input`, `flight-rank-N` and `descent-*` lines.
 No descent line plus a flight-input line distinguishes an earlier input gate
 from `descent-rank`, `descent-solid-block` or a probe miss.
+
+## After the 082e live round (round 4 corrections)
+
+**10.1c heavy container.** The ice tunnel's big green (tarp-covered) container is
+`crate_tarp_ha`: XML1 `icetunnel1.eng` heaviness **2**, written as byte 1. XML1's
+lift rule (`0x38400`, `docs/lift-rule.md`) is might rank + 1 >= heaviness, never 5;
+its Might levels read Heavy / Massive / Gigantic Objects (classes 2 / 3 / 4).
+XML1 Colossus (and Beast, Rogue) start at Might 1, so he lifts it at every rank, in
+the first game as here. No liftable object in `icetunnel1` is heavier than 2. The
+too-heavy check belongs to a hero **without** Might (Wolverine, Phoenix, Storm):
+rank 0 lifts only class 1 (barrels, wooden boxes), so the green container and the
+metal crates answer "Too heavy". The port's byte rule (might_heaviness >= byte)
+gives the same answer for classes 0..3 at every rank.
+
+**10.4 throw damage.** The carry throw arms the victim (`+2B8` = trunc(9 x caster
+multiplier), window now+2) and only a **contact impact** consumes it (`499100`).
+In 082e only the pad Attack throw reached a wall (the tunnel's end wall, x 334):
+100 -> 96 on a Physical Resistant Revolutionary: consistent with 9 through the
+receive stages (for example defense 3-4 and `physical_resistant`'s 20% reduction;
+the soldier's defense value was not captured). The keyboard Attack
+landed on open floor, and the authored Smash has no velocity (both parsers ignore
+`velocityup`): 0. TK is the same: every TK HP loss in 082e happened during the
+hold, at the ceiling (z 107) or against a teammate, never at the floor landing.
+XML1 adds no landing damage either: `ch_thrown` (`E0E20/E0E50/E0EC0`),
+`ch_thrown_land` (`E0EE0/E0F20/E0FE0/E1090`) and `ch_thrown_hit_wall` apply none,
+and its `victim_throw` (`CEA90`) arms none. Whether XML1's receiver counts a floor
+landing as an impact is not provable statically. Test throws **into a wall or
+crate**; record open-floor landings separately. The device is not the variable.
+
+**TK "picked, never raised" (tkA).** 082e's case is not 082d's: selection, owner,
+flags and contact byte match the lifted holds, but the soldier had been placed
+18.6 units from Beast's centre (inside his body) by `setPos`. He took the armed
+TK amount at 0.1 s with no displacement (a contact impact) and never moved; no
+other selected hold had a character within 60 units. XML1's TK entry (`DFC80`)
+sets the same flags (+4 bit 4, psy bit) and no collision exclusion. Place TK
+targets at least 60 units from every other character and verify it in `state`.
+`TKTrace` now logs `tk blocked ... frames=15 contact=.. z=.. impact_age=..` once
+per hold when a held target has not moved for 15 control frames.
+
+**TK target choice** is XML1's: `DF740` and PC `4F2ED0` take the locked target
+first, then the first candidate in query order (300 range, |dz| <= 120); an
+enemy is taken at once, a physical object at once only within 100 units in front,
+otherwise kept as the fallback. A prop next to a soldier 150 away wins only when
+the soldier failed the filters; that is original behaviour, not a bug.
+
+**Moving carry bumps.** Every 082e separation was the **carrier** landing: her
+move went to `idle`/`run` on top of a crate or on a raised floor (z -59 in
+haarp2_1), then the carried one dropped. XML1 `DC720` releases the pair exactly
+on the carrier's ground handle or +4 bit 2, never on the carried one's contacts;
+the host fixture now pins that. Carry at height (Jump) past props. CarryTrace
+adds `carry trace release reason=...` (no-carrier / not-selected / not-flying /
+carrier-ground / carrier-bit2) with both roots and ground handles.
+
+**Stun sources.** Every stun in the converted content - the hero stun combo
+(`fightstyle_hero` `attackstun3`, `dmgmod_stun`), Rogue's ability drain and
+Xtreme, Storm's Xtreme, and the XML2-only power triggers `shared_tag=
+shared_stunned` - applies the engine's built-in `shared_stunned` powerup
+(`0x436171`/`0x54F060`), whose entry sets `+765` bit 0 before the reaction
+(`0x54A0F7`) and whose expiry clears it with the attachment (`0x54A215`). On an
+enemy GuardTrace therefore shows `reaction=01` with a nonzero attachment; the
+attachment-only path is reachable only where StunRule clears a party hero's
+flag, which Guard excludes. Do not wait for it on enemies. 50 npcstat types are
+stun-immune through `def_stun` scale 0 (bosses, Sentinels, Danger Room robots);
+every Brotherhood and HAARP soldier type is stunnable.

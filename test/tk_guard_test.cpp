@@ -787,6 +787,34 @@ void control_tests(){
  }
 }
 }
+// 082e tkA (live-082e m32 18:00:48.968): attempt 1 selected 2CD7, owner Phoenix, 11 control
+// lines at z 6.000 with offset_z 123.440, never raised. The old trace gave no reason. A held
+// target that does not move for 15 control frames while the hold asks for motion must be
+// reported once per hold with its contact byte and receiver impact age (+0x2F4, set by 499100).
+// No decision changes: the line is trace-only.
+void blocked_trace_test(){
+ for(bool moving:{false,true}){
+  source=false;reset();bind();time_now=10.f;energy=100;target_actor=true;
+  tk_guard_bridges::trace_acquisition=true;logger::captured.clear();
+  field<vec>(target.data(),0x20)={20,0,6};field<vec>(target.data(),0x100)=field<vec>(target.data(),0x120)={0,0,0};
+  field<unsigned char>(target.data(),0x30c)=0x84;field<float>(target.data(),0x2f4)=9.95f;
+  field<u32>(input.data(),0)=16;field<u32>(actor.data(),0x76c)=222;field<unsigned char>(actor.data(),0x259)=2;
+  tk_guard_bridges::tk_state s;s.victim=222;s.time=9.9f;s.distance=20;s.offset={20,0,123.44f};s.last={20,0,6};s.heading=1.25f;s.sound=88;s.impact=19;s.level=11;s.damage=17;tk_guard_bridges::tk_states[111]=s;
+  for(int frame=0;frame<40;++frame){
+   time_now+=1.f/60.f;
+   if(moving){auto& p=field<vec>(target.data(),0x20);p.z+=2.f;}
+   tk_guard_bridges::tk_update(nullptr,nullptr,actor.data(),input.data());
+   if(tk_guard_bridges::tk_states.empty())break;
+  }
+  const auto blocked=std::count_if(logger::captured.begin(),logger::captured.end(),[](const std::string& line){return line.find("tk blocked")!=std::string::npos;});
+  if(moving)check(blocked==0,"a rising TK target is never reported blocked");
+  else{
+   check(blocked==1,"a held TK target that never moves is reported blocked exactly once per hold");
+   check(std::any_of(logger::captured.begin(),logger::captured.end(),[](const std::string& line){return line.find("tk blocked")!=std::string::npos&&line.find("contact=84")!=std::string::npos&&line.find("impact_age=")!=std::string::npos&&line.find("z=6.000")!=std::string::npos;}),"blocked TK trace names the contact byte, impact age and the unchanged height");
+  }
+  tk_guard_bridges::tk_states.clear();tk_guard_bridges::trace_acquisition=false;
+ }
+}
 int main(int argc,char** argv){
  std::setvbuf(stdout,nullptr,_IONBF,0);SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
  AddVectoredExceptionHandler(1,[](PEXCEPTION_POINTERS e)->LONG{std::printf("exception %08lX at %p EAX=%08lX ECX=%08lX ESI=%08lX ESP=%08lX return=%08X EDX=%08lX EDI=%08lX\n",e->ExceptionRecord->ExceptionCode,e->ExceptionRecord->ExceptionAddress,e->ContextRecord->Eax,e->ContextRecord->Ecx,e->ContextRecord->Esi,e->ContextRecord->Esp,*reinterpret_cast<u32*>(e->ContextRecord->Esp),e->ContextRecord->Edx,e->ContextRecord->Edi);ExitProcess(1);});
@@ -798,5 +826,6 @@ int main(int argc,char** argv){
  load_source(x1,0xdf640,0xfd);load_source(x1,0xd99d0,0x7c6);load_source(x1,0xdff10,0xc71);load_source(x1,0xdfc80,0x28b);load_source(x1,0x38210,0x15);load_source(x1,0xdf3b0,0xed);
  std::puts("cancel");cancel_tests();std::puts("entry");entry_tests(pc);std::puts("constructors");constructor_tests(pc,x1);std::puts("parser");parser_tests(pc);std::puts("filter");filter_tests();std::puts("acquisition");acquisition_tests(pc,x1);std::puts("guard");guard_tests(pc);std::puts("control");control_tests();std::puts("retail audio ABI");retail_audio_contract_tests(pc);release_damage_test(pc);guard_entry_timing_test();round3_guard_and_tk_test();
  live_stun_guard_tests(pc);live_tk_zero_selection_test(pc);source_throw_value_test(pc,x1);
+ std::puts("blocked trace");blocked_trace_test();
  std::printf("TK/guard native: %d checks, %d failures\n",checks,failures);return failures?1:0;
 }

@@ -8,6 +8,7 @@
 #undef main
 #include "xml1_air_carry.hpp"
 #include "det_math.hpp"
+#include "balance_parity_rules.hpp"
 #include <cmath>
 namespace {
 struct V{float x,y,z;};struct P{V position,angles;};
@@ -195,6 +196,9 @@ void release_tests(){
  for(int slot:{2,3}){air_reset();put(actor.data(),4,0x87u);callback<cleanup_t>(h,slot)(h,nullptr,actor.data());check(air_published==std::vector<u32>{0x83},"both throw cleanup slots clear/publish actor bit2 only");}
  h=air_handler("ch_air_grab_victim");auto frame=callback<frame_t>(h,4);
  for(int c=0;c<6;++c){air_reset();if(c==1)put(actor.data(),0x76c,0x3333u);if(c==2)put<unsigned char>(actor.data(),0x3d8,0);if(c==3)put(actor.data(),0xbc,0x1234u);if(c==4)put(actor.data(),4,0x84u);if(c==5)put(victim.data(),0x178,0x9999u);frame(h,nullptr,victim.data(),ptr(0x456));if(c==0)check(air_published==std::vector<u32>{0x82,0x86,0x87}&&air_starts==0&&exclusions==0,"reciprocal airborne flying pair reasserts constraints");else check(air_published==std::vector<u32>{0x80,0x80,0x80}&&exclusions==(c==5?0:2)&&relatives==1&&idle_actors==(c==5?std::vector<void*>{victim.data()}:std::vector<void*>{actor.data(),victim.data()}),"mismatch/flight loss/landing/owner loss detaches and idles pair in source order");}
+ // XML1 DC720 (0xDC7B7..0xDC7D6) keeps the pair on the carrier's state alone: the carried
+ // one's own ground handle or contacts (082e moving-carry bumps) never release it.
+ for(u32 ground:{0x4444u,0x1u}){air_reset();put(victim.data(),0xbc,ground);put<unsigned char>(victim.data(),0x30c,0x84);frame(h,nullptr,victim.data(),ptr(0x456));check(air_published==std::vector<u32>{0x82,0x86,0x87}&&air_starts==0&&exclusions==0&&relatives==0,"victim ground/contact alone keeps the reciprocal airborne pair (carrier-only release rule)");put(victim.data(),0xbc,0u);put<unsigned char>(victim.data(),0x30c,0);}
  for(int c=0;c<2;++c){air_reset();put(victim.data(),4,0x87u);put<unsigned char>(victim.data(),0x3db,c?4:0);callback<cleanup_t>(h,3)(h,nullptr,victim.data());check(air_published==std::vector<u32>{0x85,0x81,0x80}&&aux==(c?2:0)&&relatives==1&&air_starts==0,"victim interrupt clears bits and conditionally both auxiliary states");}
  for(const char* n:{"ch_fly_guard_decide","ch_air_grab_pickup_throw"}){h=air_handler(n);air_reset();unsigned before=0,after=0;__asm mov before,esp
  callback<frame_t>(h,4)(h,nullptr,actor.data(),ptr(0x123));
@@ -346,6 +350,31 @@ void carry_damage_test(){
   if(damaging)check(get<float>(victim.data(),0x2f0)==now+2.f&&get<u32>(victim.data(),0x2b4)==0x1111&&(get<unsigned char>(victim.data(),0x2f8)&1),"carry throw arms source-length deadline and caster attribution");
   const auto v=get<V>(victim.data(),0x120);check(smash?v.z==0.f:v.x==600.f,"carry damage adaptation preserves parsed source motion (Smash velocityup is ignored in both binaries)");
   sequence_mode=event_mode=false;
+ }
+ // 082e 10.4 (live-082e evidence/throws.json): one throw armed by this event reached the
+ // tunnel's end wall (x 334) and cost a "Physical Resistant" Brotherhood Revolutionary 4 HP;
+ // the open-floor Attack and both Smashes cost 0. The armed amount is consumed only by a
+ // contact impact (499100); the authored Smash has no velocity (above). Downstream, the
+ // receive stages (ReceiveRounding=xml1, default.xbe 0x45517..0x45558) take that amount
+ // through defense then the def_damage scale (physical_resistant: a 20% reduction here;
+ // the live soldier's defense was not captured, so 3-4 is an example, not a measurement).
+ // The amount and the stages are device independent: pad and keyboard reach this handler
+ // as the same input bits (Attack bit4 -> action 1, Smash bit5 -> action 2).
+ for(float multiplier:{1.f,1.5f}){
+  const std::int32_t armed=static_cast<std::int16_t>(static_cast<int>(9.f*multiplier));
+  for(float defense:{0.f,3.f,4.f}){
+   const auto resistant=balance_parity_rules::receive_xml1(armed,defense,0.8f),plain=balance_parity_rules::receive_xml1(armed,defense,1.f);
+   check(resistant<=plain&&plain==static_cast<std::int32_t>(armed-defense),"resistant target never loses more than an unresisted one from the same armed throw");
+   if(multiplier==1.f&&defense>=3.f)check(resistant==4,"9 x 1.0 through defense 3-4 and a 0.8 resistance scale is consistent with the live wall hit (100 -> 96)");
+  }
+ }
+ {
+  void* idle_handler=air_handler("ch_air_grab_pickup_idle");auto update=callback<update_t>(idle_handler,6);
+  for(u32 bits:{1u<<4,1u<<5}){
+   int chosen[2]{};
+   for(int device=0;device<2;++device){air_reset();put(air_input.data(),0,bits);put(air_input.data(),8,device?1.f:.73f);update(idle_handler,nullptr,actor.data(),air_input.data());chosen[device]=action_chosen;}
+   check(chosen[0]==chosen[1]&&chosen[0]==(bits==(1u<<4)?1:2),"carry Attack/Smash select the same throw action from pad and keyboard input");
+  }
  }
  for(int negative:{0,1,2}){
   air_reset();sequence_mode=event_mode=true;sequence_handler_now=air_handler(negative==0?"ch_air_grab_pickup_idle":"ch_air_grab_pickup_throw");

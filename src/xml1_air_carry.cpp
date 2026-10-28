@@ -357,6 +357,13 @@ void __fastcall victim_frame(void*,void*,void* victim,void*){
     if(!victim)return;
     void* carrier=character(resolve(victim,0x178));
     if(carrier&&character(resolve(carrier,0x76c))==victim&&flying(carrier)&&!grounded(carrier)){bits(victim,true);return;}
+    // XML1 DC720 tests only the carrier (+0xC0 ground, +4 bit2); the carried one's own
+    // contacts never end the pair. 082e's moving-carry separations had no reason line.
+    if(trace_enabled){
+        const char* reason=!carrier?"no-carrier":character(resolve(carrier,0x76c))!=victim?"not-selected":!flying(carrier)?"not-flying":at<u32>(carrier,0xbc)?"carrier-ground":"carrier-bit2";
+        const vec v=at<vec>(victim,0x20),c=carrier?at<vec>(carrier,0x20):vec{};
+        logger::write("carry trace release reason=%s carrier=%08X victim=%08X carrier_ground=%08X carrier_phys=%08X carrier_flags=%08X victim_ground=%08X carrier_root=(%.3f,%.3f,%.3f) victim_root=(%.3f,%.3f,%.3f)",reason,carrier?at<u32>(carrier,0x1c):0,at<u32>(victim,0x1c),carrier?at<u32>(carrier,0xbc):0,carrier?at<u32>(carrier,4):0,carrier?at<u32>(carrier,0x3d8):0,at<u32>(victim,0xbc),c.x,c.y,c.z,v.x,v.y,v.z);
+    }
     pickup_guard.erase(at<u32>(victim,0x178));
     if(carrier){const u32 none=*reinterpret_cast<const u32*>(0x72988c);for(void* p:{carrier,victim})slot<void(__fastcall*)(void*,void*,u32,float)>(p,0x104)(p,nullptr,none,0.6f);}
     detach(victim);if(carrier)idle(carrier);idle(victim);
