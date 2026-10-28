@@ -91,7 +91,7 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     post(intent::next);tick(child.data(),nullptr);assert(selected_shown(browse_rows-1));
     post(intent::row_last);tick(child.data(),nullptr);assert(selected_shown(browse_rows-1));
     post(static_cast<intent>(int(intent::row_first)+int(browse_rows)-1));tick(child.data(),nullptr);ticks+=2000;
-    post(intent::join_selected);tick(child.data(),nullptr);assert(menu_resolves==1 && menu_last_code=="AAAAAAAF");
+    post(intent::join_selected);tick(child.data(),nullptr);assert(menu_resolves==1 && menu_last_code=="AAAAAAAH");
     const auto old=menu_view().generation;menu_complete=true;post(intent::back);tick(child.data(),nullptr);
     assert(calls.back()=="request:lc_online" && menu_view().generation!=old && menu_view().state==bm::phase::idle && menu_cancels);
     set_current(hub.data());tick(hub.data(),nullptr);ticks+=2000;

@@ -1,4 +1,5 @@
 #include "online_menus.hpp"
+#include "online_menus_anchors.hpp"
 #include "lc_fonts.hpp"
 #include "gameplay_agreement.hpp"
 #include "online_room.hpp"
@@ -2514,6 +2515,7 @@ void install(HMODULE game,const install_hooks* hooks) {
         lobby_fields=hooks->lobby_fields;
     }
     patch_transaction::transaction tx;
+    tx.add(online_menus_anchors::contribution());
     tx.add(contribution());
     const auto result=tx.commit(hooks ? hooks->transaction : nullptr);
     if(result==patch_transaction::outcome::rollback_failed) game_version::refuse_startup();
@@ -2528,6 +2530,6 @@ void install(HMODULE game,const install_hooks* hooks) {
         game_version::refuse_startup(); return;
     }
     ready=true;
-    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 42 hooks committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability);
+    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 42 hooks and menu-anchors/512 committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability);
 }
 }

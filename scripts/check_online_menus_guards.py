@@ -7,6 +7,17 @@ import re
 import struct
 
 
+def anchor_writes(root):
+    source = (root / "src/online_menus_anchors_fixups.inc").read_text()
+    writes = {int(va, 16): 4 for va in re.findall(r"\{(0x[0-9a-f]+),", source)}
+    writes.update({0x587e40:5, 0x587a27:17, 0x587877:17, 0x58833a:7, 0x588857:6, 0x58835a:5, 0x587869:5, 0x587a15:5})
+    return writes
+
+
+def guard_source(root):
+    return (root / "src/online_menus_guards.hpp").read_text() + (root / "src/online_menus_anchors_guards.inc").read_text()
+
+
 def main():
     parser = argparse.ArgumentParser(__doc__)
     parser.add_argument("exe", type=Path)
@@ -24,7 +35,7 @@ def main():
         row = sections + i * 40
         image[u32(row + 12):u32(row + 12) + u32(row + 16)] = data[u32(row + 20):u32(row + 20) + u32(row + 16)]
     root = Path(__file__).resolve().parent.parent
-    source = (root / "src/online_menus_guards.hpp").read_text()
+    source = guard_source(root)
     guards = [(int(va, 16), bytes.fromhex(body), what) for va, body, what in
               re.findall(r'\{(0x[0-9a-f]+), "([0-9a-f]+)", "([^"]+)"\}', source)]
     assert guards
@@ -33,6 +44,9 @@ def main():
         assert image[va - 0x400000:va - 0x400000 + len(body)] == body, (hex(va), what)
         covered.update(range(va, va + len(body)))
     writes = {0x49FAAC: 5, 0x5F1BB0: 5, 0x6128AB: 5, 0x612D1F: 5, 0x612DDA: 5, 0x5F1F8B: 5, 0x60A095: 5, 0x5B9609: 7, 0x69F688: 4, 0x69F694: 4, 0x69F66C: 4, 0x5C971B: 6, 0x6A23D8: 4, 0x69E454: 4, 0x69E464: 4, 0x5BC3D0: 5, 0x69E440: 4, 0x69E438: 4, 0x69F284: 4, 0x69F34C: 4, 0x6A0348: 4, 0x69F290: 4, 0x69F358: 4, 0x69F2A0: 4, 0x69F368: 4, 0x69F2AC: 4, 0x69F374: 4, 0x6A24AC: 4, 0x69F2A4: 4, 0x69F320: 4, 0x69F328: 4, 0x69F3E8: 4, 0x69F3F0: 4, 0x69F2F4: 4, 0x69F3BC: 4, 0x5BAD1F: 5, 0x5C88BE: 5, 0x6141E0: 5, 0x69F36C: 4, 0x69F314: 4, 0x69F3DC: 4, 0x69E49C: 4}
+    writes.update(anchor_writes(root))
+    spans = sorted((va, va+size) for va,size in writes.items())
+    assert all(a[1]<=b[0] for a,b in zip(spans,spans[1:])), "overlapping writes"
     touched = {va + i for va, size in writes.items() for i in range(size)}
     assert touched <= covered
     # No other feature writes/guards our mutated bytes, except MAIN_MENU's

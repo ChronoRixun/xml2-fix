@@ -150,7 +150,7 @@ retryable (rate_limited, timeout, offline, generic); a `refused` client phase ne
 carries no host/own token (the reply path does not keep them), so its scene cannot name the builds; the Browse detail
 line does for the selected row.
 
-**Browse rows** (`online_menus_rules::browse_rows` = 5 rows per page, R=0..4, shared relative art; the approved seven rows need 241 scene anchors and XMen2.exe holds 175 per menu scene - playfield build `0x5882e0`, see below): `lc_rowR_st_{lobby,progress,closed,full}` (status kind),
+**Browse rows** (`online_menus_rules::browse_rows` = 7 rows per page, R=0..6, shared relative art; the co-op installer requires the `menu-anchors/512` capability, see below): `lc_rowR_st_{lobby,progress,closed,full}` (status kind),
 `lc_rowR_pips_{0..4}` (players, unknown = 0), `lc_rowR_build_{same,other,check}`, `lc_rowR_dim` (shown for full,
 closed, other-build and password rows) and the existing `lc_rowR_selected`. Status: players >= max -> full; started ->
 progress; not joinable -> closed; else lobby. **There is no `loading` kind**: the broker has no such field, so none is
@@ -159,7 +159,11 @@ Cells `room_R_4`/`room_R_5` no longer exist as DATA: the status word, the ping `
 connection is opened per row) and SAME/CHECK are drawn by the row scenes; `room_R_6` holds only the other build's
 token (<= 8 characters). The hit/focus cells are columns 0,1,2,3,6; the five cells of a row share one focus anchor `room_R_focus`.
 
-**Scene anchor capacity.** The playfield build `0x5882e0` walks the menu scene (`0x587f90`) and pushes every `ItemName` anchor's transform into a 175-entry stack vector and its user info into the playfield's own 175-entry vector (`0x587e40` -> `0x587620`, no bound check; count at +0x2d4, bit mask at +0x2bc); the name table (+0x3c) add `0x588120` refuses past 0xaf. Playfields live in a static 5-slot pool at `0x7ec72c` (stride 0x8b0). Anchors 176-181 overwrite the bit masks, the 182nd overwrites the count with a pointer and the 183rd push writes to a wild address: the 060p Browse crash `0xc0000005 at 0x00587654` (241 anchors). LC's builder refuses a scene over 175 (`online_menus.ENGINE_SCENE_ANCHORS`, `anchor_count`). Raising it means relocating that pool with larger inline tables (or replacing the build/lookup routines `0x587990`..`0x588950`). Area shows `--` when the
+**Scene anchor capacity.** Retail `0x5882e0` / `0x587f90` / `0x587e40` use 175-entry fixed vectors; the 182nd anchor overwrites the count and the next push writes through that pointer (the 060p Browse crash). With Menus enabled, `online_menus_anchors` relocates the five-slot playfield manager into DLL storage, using stride 0x2000, 512 name/value pairs and 512 permanent scene-object pointers per slot. The temporary stack vector, sixteen-word masks, allocator metadata, pointer division, CRT constructor/destructor references and exception cleanup offsets all follow the expanded layout. The push refuses entries after 512 and the scene walk discards the entire overflowing binding set. Capacity and dispatcher writes share one guarded transaction; a failure retains native Play Online, and Menus off prepares neither contribution.
+
+The shared retail mask helper `0x5874a0` also serves a caller at `0x5c6467`, so its 175 bound remains original: only the two playfield callers use the 512 helper. LC probes the supplied DLL for `menu-anchors/512`, uses 175 without it or 512 with it, and refuses seven-row authoring without the probe. `anchor_count`, `scene_problems` and `output_problems` still enforce the effective bound. The `r10-anchor-512` host fixture runs the real loader, recursive walk, push, insert, lookup, unload and allocator code, checks 512/513, five slots, reference balance, canaries and handle reuse. `r9-anchor-capacity` retains the unpatched overwrite control. A real-game smoke of every native and co-op menu remains required because playfields are shared by all menus.
+
+Area shows `--` when the
 broker row has no zone. The detail line is `Friends join at the next area - Same build as you (TOKEN)` /
 `- Other build (THEIRS vs your TOKEN)` / `- Build not checked`; it is empty for an empty list so `lc_broker_empty` is the
 only empty-state message (it still says `Refresh to update games` for a stale list without selection).

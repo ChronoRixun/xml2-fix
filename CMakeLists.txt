@@ -92,7 +92,7 @@ add_library(xml2_fix SHARED
     src/effect_templates.cpp
     src/primitives_per_effect.cpp
 	src/online_tick.cpp
-	src/online_menus.cpp
+	src/online_menus.cpp src/online_menus_anchors.cpp
 	src/npc_power.cpp
 	src/npc_semi_auto.cpp
 	src/stun_rule.cpp
@@ -578,7 +578,7 @@ target_include_directories(xml2_join_in_progress_test PRIVATE src)
 add_executable(xml2_online_room_test test/online_room_test.cpp)
 target_include_directories(xml2_online_room_test PRIVATE src)
 target_compile_options(xml2_online_room_test PRIVATE /utf-8)
-add_executable(xml2_online_menus_test test/online_menus_test.cpp src/online_menus.cpp
+add_executable(xml2_online_menus_test test/online_menus_test.cpp src/online_menus.cpp src/online_menus_anchors.cpp
     src/script_function_overflow.cpp src/patch_transaction.cpp tools/union_host/union_space.asm)
 target_include_directories(xml2_online_menus_test PRIVATE src)
 target_link_libraries(xml2_online_menus_test PRIVATE user32)

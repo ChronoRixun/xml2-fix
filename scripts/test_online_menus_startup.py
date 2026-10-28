@@ -19,6 +19,8 @@ HOOKS = {0x49FAAC: 5, 0x5F1BB0: 5, 0x6128AB: 5, 0x612D1F: 5, 0x612DDA: 5, 0x5F1F
          0x69E438: 4, 0x69E440: 4, 0x5BC3D0: 5,
          0x69F284: 4, 0x69F34C: 4, 0x6A0348: 4, 0x69F290: 4, 0x69F358: 4,
          0x69F2A0: 4, 0x69F368: 4, 0x69F2AC: 4, 0x69F374: 4, 0x6A24AC: 4, 0x69F2A4: 4, 0x69F320: 4, 0x69F328: 4, 0x69F3E8: 4, 0x69F3F0: 4, 0x69F2F4: 4, 0x69F3BC: 4, 0x5BAD1F: 5, 0x5C88BE: 5, 0x6141E0: 5, 0x69F36C: 4, 0x69F314: 4, 0x69F3DC: 4, 0x69E49C: 4}
+from check_online_menus_guards import anchor_writes
+HOOKS.update(anchor_writes(Path(__file__).resolve().parent.parent))
 REGISTRY = r"HKCU\Software\Activision\X-Men Legends 2"
 # The online menus install only over a committed LegendsClassicFonts transaction (060p fix B): every mode that sets
 # Menus also turns the fonts on with the owned private font family copied in (--fonts), except fonts-absent.
@@ -40,11 +42,11 @@ def main():
     assert hashlib.sha256(retail.read_bytes()).hexdigest() == "146cd9c316edb57a267cd73753a7ce9af647e52aab750d449c6b278fb4a1669b"
     out.mkdir(parents=True, exist_ok=False)
     rows = []
-    for mode in ("off", "zero", "invalid", "on", "capacity", "lookup-refused", "ui-guard", "native-guard", "post-guard", "seed-guard", "queue-guard", "handler-guard", "teardown-guard", "script-guard", "end-lobby-guard", "end-running-guard", "tokenizer-guard", "dispatch-guard", "preset-code", "preset-host-name-invalid", "name-only-invalid", "fonts-absent"):
+    for mode in ("off", "zero", "invalid", "on", "capacity", "lookup-refused", "ui-guard", "native-guard", "post-guard", "seed-guard", "queue-guard", "handler-guard", "teardown-guard", "script-guard", "end-lobby-guard", "end-running-guard", "tokenizer-guard", "dispatch-guard", "preset-code", "preset-host-name-invalid", "name-only-invalid", "fonts-absent", "anchor-guard", "anchor-busy"):
         folder = out / mode
         folder.mkdir()
         shutil.copyfile(dll, folder / "dinput.dll")
-        ini = "[Discord]\nEnabled=0\n"
+        ini = "[Discord]\nEnabled=0\n[Test]\nNoActivate=1\n"
         if mode != "off":
             value = "0" if mode == "zero" else "invalid" if mode == "invalid" else "1"
             ini += "[Online]\nMenus=" + value + "\n"
@@ -74,6 +76,8 @@ def main():
             env["UNION_MUTATE_VA"] = "0x5d8570"
         if mode in ("native-guard", "post-guard", "seed-guard", "queue-guard", "handler-guard", "teardown-guard", "script-guard", "end-lobby-guard", "end-running-guard", "tokenizer-guard", "dispatch-guard"):
             env["UNION_MUTATE_VA"] = {"native-guard":"0x614290", "post-guard":"0x5b9609", "seed-guard":"0x610dc0", "queue-guard":"0x60a095", "handler-guard":"0x5f1bb0", "teardown-guard":"0x6128ab", "end-lobby-guard":"0x612d1f", "end-running-guard":"0x612dda", "tokenizer-guard":"0x55b670", "dispatch-guard":"0x55bf2d", "script-guard":"0x49faac"}[mode]
+        if mode in ("anchor-guard", "anchor-busy"):
+            env["UNION_MUTATE_VA"] = "0x587e40" if mode=="anchor-guard" else "0x7ef2c8"
         try:
             done = subprocess.run([str(host), str(folder / "dinput.dll"), str(retail), str(engine),
                                    str(folder / "writes.tsv")], cwd=folder, env=env, capture_output=True,
@@ -94,7 +98,7 @@ def main():
             assert bool(changed.intersection(range(site, site + size))) == installed, (mode, hex(site))
         if installed:
             assert "script functions: 1024 names" in log
-            assert f"dispatcher lcOnlineIntent n(i) registered; {len(HOOKS)} hooks committed atomically" in log
+            assert "dispatcher lcOnlineIntent n(i) registered; 42 hooks and menu-anchors/512 committed atomically" in log
         else:
             assert "dispatcher lcOnlineIntent" not in log
         if mode == "fonts-absent":

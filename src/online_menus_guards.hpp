@@ -4,6 +4,7 @@
 // ABI/site guards, independently checked by scripts/check_online_menus_guards.py.
 namespace online_menus_guards {
 inline constexpr script_functions_rules::guard guards[]{
+#include "online_menus_anchors_guards.inc"
     {0x005c9706, "837c2410ff7414e80ef200008b4c24108b10518bc8ff92340200008bcde8481cffff", "MAIN_MENU records the supplying controller before item commands; EBX=input mask"},
     {0x006a23d8, "b05d5d00", "manager request slot +6c"},
     {0x0069e454, "b0ae5a00", "base tick slot +38"},
