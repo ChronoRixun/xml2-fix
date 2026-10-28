@@ -22,10 +22,11 @@ class ListModeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / 'repo'
             (root / 'scripts').mkdir(parents=True)
-            for script in ('run_native.py','test_online_menus.py'):
+            for script in ('run_native.py','test_online_menus.py','check_online_menus_guards.py'):
                 shutil.copyfile(HERE / script, root / 'scripts' / script)
             (root / 'src').mkdir()
-            shutil.copyfile(REPO / 'src/online_menus_guards.hpp',root / 'src/online_menus_guards.hpp')
+            for name in ('online_menus_guards.hpp','online_menus_anchors_guards.inc'):   # host_modes counts guard_source()
+                shutil.copyfile(REPO / 'src' / name,root / 'src' / name)
             (root / 'test').mkdir()
             for name in ('xml2_test.cpp', 'classic_hud_install_test.cpp'):
                 shutil.copyfile(REPO / 'test' / name, root / 'test' / name)
