@@ -848,7 +848,8 @@ struct lobby_ui {
     bool confirm=false,error=false,copied=false,copy_held=false,role_held=false,focus_confirm=false,leave_authorized=false,copy_keyboard=false,copy_block=false;
     bool target_error=false,picker_safe=false;
     bool start_dimmed=false,start_was_enabled=false;
-    void reset(void* menu=nullptr) { ++generation;owner=menu;confirm=error=copied=copy_held=role_held=focus_confirm=leave_authorized=copy_keyboard=copy_block=target_error=picker_safe=start_dimmed=start_was_enabled=false; }
+    DWORD copied_at=0; // when "Code copied" was raised: it expires (copied_ms) so it can never sit unseen in front of Back
+    void reset(void* menu=nullptr) { ++generation;owner=menu;copied_at=0;confirm=error=copied=copy_held=role_held=focus_confirm=leave_authorized=copy_keyboard=copy_block=target_error=picker_safe=start_dimmed=start_was_enabled=false; }
 } lobby_state;
 thread_local bool lobby_ticking=false,base_ui_dispatch=false,native_mouse=false,back_consumed=false;
 thread_local unsigned refreshing_names=0;
@@ -1100,6 +1101,23 @@ void restore_lobby_focus(void* menu) {
     lobby_native_state state{};
     if(lobby_state_read(menu,state)) lobby_focus(menu,state.host ? (state.phase==1 ? "text_playername1" : "text_startgame") : "text_readygame");
 }
+void* focus_of(void* menu);
+void* item_try(void* menu,const char* name);
+// 060q live (sl1): after Copy / a service loss the bar sat on Copy code or KICK PLAYER while the Leave confirm's Leave / Cancel
+// stayed drawn (Up / Down leave the confirm's two buttons - they share the lobby's focus ring), and after Esc the focus could rest
+// on a hidden item (no bar drawn at all). Every lobby tick, after the visibility is bound: while the confirm is up the focus is
+// one of its two buttons; while it is not - or the Dismiss notice is not showing - the focus is never on one of those items.
+void lobby_focus_guard(void* menu) {
+    void* const focused=focus_of(menu);
+    if(!focused) return;
+    void* const yes=item_try(menu,"lc_leave_yes");
+    void* const cancel=item_try(menu,"lc_leave_cancel");
+    void* const dismiss=item_try(menu,"lc_lobby_dismiss");
+    const bool on_confirm=focused==yes || focused==cancel;
+    const bool dismiss_shown=(lobby_state.error || lobby_state.copied) && !lobby_state.confirm;
+    if(lobby_state.confirm) { if(!on_confirm && cancel) lobby_focus(menu,"lc_leave_cancel"); }
+    else if(on_confirm || (focused==dismiss && !dismiss_shown)) restore_lobby_focus(menu);
+}
 const char* route_text(int route) { return route==1 ? "direct" : route==2 ? "relay" : ""; }
 const char* phase_text(int phase) {
     static const char* const words[]={"Connecting","Checking build","In lobby","Ready","Waiting for next area","Receiving campaign","Loading","Playing","Watching story",""};
@@ -1147,8 +1165,9 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         if(!lobby_phase(menu,2)) lobby_state.leave_authorized=false;
     } else if(action==intent::copy_code && code_value) {
         const bool copied=clipboard_copy(shown);
-        lobby_state.copied=copied;lobby_state.error=!copied;
+        lobby_state.copied=copied;lobby_state.error=!copied;lobby_state.copied_at=now_ms();
     }
+    if(lobby_state.copied && now_ms()-lobby_state.copied_at>=lobby_copied_ms) lobby_state.copied=false;
     bind_text(menu,"lc_room_code",shown.c_str());
     enable(menu,"lc_copy_code",bool(code_value));
     for(unsigned i=0;i<4;++i) {
@@ -1213,28 +1232,35 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         hide(menu,(prefix+"checking_build").c_str(),stage==2 || stage==3 || stage==1);
         hide(menu,(prefix+"other_build").c_str(),stage!=1);
         // Phase words from observed facts; native readiness keeps its own READY / NOT READY parts above.
-        bind_text(menu,(prefix+"phase").c_str(),data ? phase_text(data->phase) : "");
+        // Without party facts (the service went away, or the room layer has none) the member is still in this native lobby:
+        // that is observed, so the card keeps "In lobby" instead of losing its phase (060q live: service loss emptied it).
+        bind_text(menu,(prefix+"phase").c_str(),data ? phase_text(data->phase) : phase_text(2));
         const bool picked=native_valid && host && native.phase==1 && int(i)==view.selected;
         hide(menu,(prefix+"selected").c_str(),!picked);
     }
-    bind_text(menu,"lc_ready_count",std::to_string(valid ? view.ready_count : 0).c_str());
-    bind_text(menu,"lc_member_count",std::to_string(valid ? view.count : 0).c_str());
+    // A guest who left (or was lost) before the game started: a six-second named toast; the party continues.
+    if(valid) {
+        const auto gone=roster.observe(view.ids,view.names,view.count,view.local,view.local_known);
+        if(!gone.empty()) guest_toast.show(display(gone,31),now_ms());
+    } else roster.clear();
+    const bool toast_on=guest_toast.visible(now_ms());
+    // 060q live: the inline messages (toast, Copy / Kick notice, Leave confirm) draw on the row the ready line owns, and the
+    // departed guest's bare name sat over "1 of 1 ready.". While one shows, the ready line is not drawn (the message names
+    // what matters; the line returns with the message).
+    const bool row_busy=toast_on || lobby_state.error || lobby_state.copied || lobby_state.confirm;
+    bind_text(menu,"lc_ready_count",row_busy ? "" : std::to_string(valid ? view.ready_count : 0).c_str());
+    bind_text(menu,"lc_member_count",row_busy ? "" : std::to_string(valid ? view.count : 0).c_str());
     unsigned waiting=0;while(waiting<view.count && view.ready[waiting]) ++waiting;
-    bind_text(menu,"lc_waiting_name",valid && waiting<view.count ? display(view.names[waiting],31).c_str() : "");
-    hide(menu,"lc_ready_waiting",!valid || waiting==view.count);
-    hide(menu,"lc_ready_all",!valid || waiting!=view.count || view.count<2);
-    hide(menu,"lc_ready_solo",!valid || view.count!=1 || waiting!=view.count);
+    bind_text(menu,"lc_waiting_name",valid && !row_busy && waiting<view.count ? display(view.names[waiting],31).c_str() : "");
+    hide(menu,"lc_ready_summary",row_busy);
+    hide(menu,"lc_ready_waiting",row_busy || !valid || waiting==view.count);
+    hide(menu,"lc_ready_all",row_busy || !valid || waiting!=view.count || view.count<2);
+    hide(menu,"lc_ready_solo",row_busy || !valid || view.count!=1 || waiting!=view.count);
     hide(menu,"lc_leave_confirm",!lobby_state.confirm);
     {   // The inline lobby messages never close Host/Join. The error names its cause (Kick target or Copy) when LC authors that scene.
         const bool err=lobby_state.error,target=lobby_state.target_error;
         const bool a=hide(menu,"lc_lobby_error_target",!(err && target)),b=hide(menu,"lc_lobby_error_copy",!(err && !target));
         hide(menu,"lc_lobby_error",!err || (target ? a : b));
-        // A guest who left (or was lost) before the game started: a six-second named toast; the party continues.
-        if(valid) {
-            const auto gone=roster.observe(view.ids,view.names,view.count,view.local,view.local_known);
-            if(!gone.empty()) guest_toast.show(display(gone,31),now_ms());
-        } else roster.clear();
-        const bool toast_on=guest_toast.visible(now_ms());
         hide(menu,"lc_lobby_guest_left",!toast_on);
         bind_text(menu,"lc_toast_name",toast_on ? guest_toast.name.c_str() : "");
         // The service went away while the room stays: healthy P2P continues, only new players cannot join.
@@ -1251,6 +1277,7 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         lobby_state.focus_confirm=false;
         lobby_focus(menu,"lc_leave_cancel");
     }
+    lobby_focus_guard(menu);
     const bool picker=native_valid && host && native.phase==1;
     picker_visibility(menu,picker && valid && lobby_state.picker_safe);
     if(host && valid && native_valid && !picker && !native.transfer) {
@@ -1308,6 +1335,7 @@ void lobby_tick(void* menu,unsigned original,bool& called) {
     const bool consuming_leave=host && lobby_state.leave_authorized;
     unsigned input=0;lobby_current_mask(input);input=lobby_screen_mask(menu,input); // pad X = Ready / Kick, Y (and RT) = Copy
     if(!(input&0x400010) && !lobby_state.copy_keyboard) lobby_state.copy_block=false;
+    if((input&0x200000) && lobby_state.copied) lobby_state.copied=false; // Back (Esc / pad B) ends the informational "Code copied"
     if(input&0x400000) {
         if(!lobby_state.copy_held) pending.post(int(intent::copy_code),reinterpret_cast<std::uintptr_t>(menu),which(menu));
         lobby_state.copy_held=true;
@@ -1438,12 +1466,15 @@ int lobby_back(void* menu,unsigned original) {
     // retain native Unready/Leave behavior even while Copy/error text is visible.
     const bool native_dispatch=(lobby_ticking && !base_ui_dispatch) || native_mouse;
     if(!native_dispatch && lobby_live(menu) && lobby_state.owner==menu &&
-        (lobby_state.confirm || lobby_state.error || lobby_state.copied)) {
+        (lobby_state.confirm || lobby_state.error)) {
         lobby_state.confirm=lobby_state.error=lobby_state.copied=lobby_state.target_error=false;pending.clear();
         restore_lobby_focus(menu);
         if(lobby_ticking) suppress_lobby_action=back_consumed=true;
         return 2;
     }
+    // "Code copied" is informational (060q live: with its panel unseen the first Esc seemed to do nothing): Back clears it
+    // and goes on to the native Back (the host's Leave confirm / the guest's Unready / Leave).
+    if(!native_dispatch && lobby_live(menu) && lobby_state.owner==menu && lobby_state.copied) { lobby_state.copied=false;pending.clear(); }
     return lobby_native_back(menu,original);
 }
 int __fastcall host_back(void* menu,void*) { return lobby_back(menu,0x5aaff0); }
@@ -1707,7 +1738,7 @@ void code_input(int value) {
         clipboard_api api;std::string text;
         const auto result=read_clipboard_result(api,text);
         if(result==clip_result::ok) { code.replace(text);error_visible=false; }
-        else message(result==clip_result::unavailable ? "lc_notice_clipboard" : "lc_notice_paste_invalid");
+        else message(result==clip_result::unavailable ? "lc_notice_clipboard" : result==clip_result::bad_symbols ? "lc_notice_code_invalid" : "lc_notice_paste_invalid");
     } break;
     case intent::erase: code.erase();error_visible=false;break;
     case intent::clear: code.replace("");error_visible=false;break;
@@ -2092,13 +2123,14 @@ void tick_impl(void* menu,bool& native_called) {
         return; // never bind after requesting a transition
     }
     const auto name=display(local_name,31);
-    bind_text(menu,s==screen::hub ? "local_name" : "self_name",name.c_str());
+    // The hub's large name field is 140 view units wide (title size); the other screens' header name 64 (row size).
+    bind_text(menu,s==screen::hub ? "local_name" : "self_name",(s==screen::hub ? fit_name(name,140*.8,1.0) : fit_name(name,64*.8,.69)).c_str());
     {   // The header avatar's initial: the screen name's first allowlisted character, upper case ("?" never shown).
         char initial[2]{name.empty() || name[0]=='?' ? 'P' : char(std::toupper(static_cast<unsigned char>(name[0]))),0};
         bind_text(menu,"self_initial",initial);
     }
     if(recent) {
-        bind_text(menu,"last_name",display(recent->name,31).c_str());
+        bind_text(menu,"last_name",fit_name(display(recent->name,31),180*.8,.69).c_str());
         // "Code K7QN-2X9M, 2 hours ago": the code in its display form and the age of the stored record (never invented).
         const auto age=relative_age(wall_seconds(),recent->time);
         bind_text(menu,"last_code",("Code "+recent->code.substr(0,4)+"-"+recent->code.substr(4)+(age.empty() ? "" : ", "+age)).c_str());
@@ -2106,6 +2138,15 @@ void tick_impl(void* menu,bool& native_called) {
     }
     for(const auto* item:{"last_name","last_code","last_time"}) hide(menu,item,!recent);
     hide(menu,"lc_recent_empty",bool(recent));
+    if(s==screen::code) {
+        // Join by code's Paste / Clear prompts follow the device (060q live: they stayed "Ctrl+V / Y Paste", "Shift+Del / X Clear").
+        // The engine rewrites the five description slots on every focus change, so the cached bindings are dropped then.
+        static void* prompt_focus=nullptr;
+        if(void* const focus=focus_of(menu); focus!=prompt_focus) { prompt_focus=focus;bindings.text.erase("desctext3");bindings.text.erase("desctext4"); }
+        const bool pad=pad_probe && pad_probe(menu_player);
+        bind_text(menu,"desctext3",pad ? "Y Paste" : "Ctrl+V Paste");
+        bind_text(menu,"desctext4",pad ? "X Clear" : "Shift+Del Clear");
+    }
     if(s==screen::hub && removed_notice) {
         // The kicked guest's Hub: a plain notice (lc_notice_removed), no host-left panel; the Hub stays fully usable.
         removed_notice=false;host_left_state.dismiss();message("lc_notice_removed");

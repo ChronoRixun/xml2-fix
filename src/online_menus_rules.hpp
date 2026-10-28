@@ -102,6 +102,27 @@ inline std::string display(std::string_view in, std::size_t limit=96) {
     for(unsigned char c:in) { if(out.size()==limit) break;out+=display_byte(c); }
     return out;
 }
+// A screen name / room name that does not fit its field ends in "..." (060q live: the hub cut a long name at ~12 characters with
+// nothing to say it was cut). The field text is the engine's, so the width is estimated from Barlow Condensed's advances in
+// view units at the "title" size (lowercase ~7.2, capitals ~8.2, narrow letters ~3.6, m / w / M / W ~11); `scale` is the style's
+// size relative to title (row 0.69). Estimate errs wide: a name is shortened rather than clipped.
+inline double name_units(std::string_view s) {
+    double total=0;
+    for(unsigned char c:s) {
+        if(c=='i' || c=='j' || c=='l' || c=='.' || c==',' || c=='\'' || c==' ' || c=='-' || c=='_' || c=='I' || c=='t' || c=='f' || c=='r') total+=c=='I' ? 4.2 : 3.8;
+        else if(c=='m' || c=='w' || c=='M' || c=='W') total+=12.2;
+        else if(c>='A' && c<='Z') total+=8.6;
+        else total+=7.6;
+    }
+    return total;
+}
+inline std::string fit_name(std::string_view s,double limit_units,double scale) {
+    if(name_units(s)*scale<=limit_units) return std::string(s);
+    std::size_t keep=s.size();
+    while(keep>1 && (name_units(s.substr(0,keep))+3*3.8)*scale>limit_units) --keep;
+    while(keep>1 && s[keep-1]==' ') --keep;
+    return std::string(s.substr(0,keep))+"...";
+}
 inline bool valid_name(std::string_view s) {
     if(s.empty() || s.size()>31 || s.find_first_not_of(' ')==std::string_view::npos) return false;
     for(unsigned char c:s) if(c<32 || c>126) return false;
@@ -127,8 +148,21 @@ inline std::optional<std::string> parse_code(std::string_view in) {
     return out;
 }
 // Adapter is also driven by host lock/open/size failures. Never retries/waits.
-// unavailable: the clipboard could not be opened or locked; invalid: it was read (or holds no text at all) and has no code.
-enum class clip_result { ok, unavailable, invalid };
+// unavailable: the clipboard could not be opened or locked; invalid: it was read (or holds no text at all) and has no code;
+// bad_symbols: it holds text the size of a code (8 symbols, or 4-4 with the dash) with a symbol no code has (060q live: AB0O1IL!).
+enum class clip_result { ok, unavailable, invalid, bad_symbols };
+// The size of a code written with symbols outside the alphabet: the player meant a code, so the wrong-symbols wording applies.
+inline bool code_sized_attempt(std::string_view in) {
+    while(!in.empty() && space(in.front())) in.remove_prefix(1);
+    while(!in.empty() && space(in.back())) in.remove_suffix(1);
+    if(in.size()!=8 && in.size()!=9) return false;
+    for(std::size_t i=0;i<in.size();++i) {
+        const auto c=static_cast<unsigned char>(in[i]);
+        if(in.size()==9 && i==4) { if(c!='-') return false;continue; }
+        if(c<0x21 || c>0x7e) return false;
+    }
+    return true;
+}
 template<class Clipboard> clip_result read_clipboard_result(Clipboard& api, std::string& out) {
     out.clear();
     if(!api.open()) return clip_result::unavailable;
@@ -146,7 +180,7 @@ template<class Clipboard> clip_result read_clipboard_result(Clipboard& api, std:
             // leaves the spare bytes after it unspecified, and real clipboards do carry them (the 060p live round
             // refused a valid abcd-efgh on a tail check); only what precedes the terminator can become a code.
             auto code=parse_code(text);
-            if(!code) return clip_result::invalid;
+            if(!code) return code_sized_attempt(text) ? clip_result::bad_symbols : clip_result::invalid;
             out=*code;return clip_result::ok;
         }
         if(c>127) return clip_result::invalid;
@@ -399,6 +433,7 @@ inline std::string refusal_rules_text(std::string_view names) {
 // Lobby inline presentation state, pure so the fixture can drive it: the departed-guest toast (named, six seconds,
 // duplicate/late departures ignored) and the Hub's host-left panel latch.
 inline constexpr std::uint32_t toast_ms=6000;
+inline constexpr std::uint32_t lobby_copied_ms=6000; // "Code copied" stays six seconds, like the departed-guest toast
 struct toast {
     std::string name;
     std::uint32_t since=0;

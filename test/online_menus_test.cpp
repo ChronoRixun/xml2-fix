@@ -27,6 +27,8 @@
 
 namespace {
 using namespace online_menus_rules;
+// The hub shows a screen name that does not fit its field ended with "..." (fit_name; 060q live).
+std::string field_name(std::string_view full) { return fit_name(full,140*.8,1.0); }
 // ---- The pad's real menu bits (the 060p live round, failure 8) -------------------------------------------------
 // Built from the retail tables, not typed in: the game raises mask bit `code` when the player's binding of that code's action
 // is pressed (0x619c40 = pad_prompts_rules::actions), and the fix's console pad layout (src/pad_bindings.cpp) binds Guard to
@@ -166,6 +168,12 @@ void* __fastcall item_stub(void*,void*,const char* name) {
     // text items. Round 5b's views fixture now hands those names a real model-item vtable, so a hide()
     // that only accepts the text setter fails these assertions instead of passing on a fake.
     if(mode=="r5b-views" && model_scene(name)) return model_item.data();
+    // The focus tests (r4-focus-*) compare the focused item with the lobby's own buttons: every authored node is its own object.
+    if(mode.starts_with("r4-focus") && std::string_view(name).starts_with("lc_") && std::string_view(name)!="lc_lobby_v1") {
+        static std::map<std::string,std::array<unsigned char,0xb0>,std::less<>> own;
+        auto& item=own[name];if(!*reinterpret_cast<unsigned*>(item.data())) item=text_item;
+        return item.data();
+    }
     return missing_prompt && std::string_view(name)=="lc_online_continue" ? nullptr : text_item.data();
 }
 std::array<unsigned,2> int_value{0x6905fc,0};
@@ -441,6 +449,7 @@ std::vector<std::string> r6_log; // every r6-* log line (fix F: the session-end 
 #include "online_native_fixture.inl"
 #include "online_party_menu_fixture.inl"
 #include "online_menus_hits.inl"
+#include "online_menus_model.inl"
 }
 namespace ini { std::optional<std::string> text(const wchar_t*,const wchar_t*) {
     return mode=="off" ? std::nullopt : mode=="zero" ? std::optional<std::string>("0") : std::optional<std::string>("1");
@@ -608,7 +617,7 @@ int main(int argc,char** argv) {
         invoke_capture(capture,mgr.data(),2,0x10);request(mgr.data(),nullptr,"online",nullptr);assert(calls.size()==11);
         set_current(hub.data());
         for(int kind:{1,2}) { const auto n=native_ticks;tick_throw=kind;tick(hub.data(),nullptr);assert(native_ticks==n+1); }
-        tick_throw=0;tick(hub.data(),nullptr);assert(texts["local_name"]=="100??????openmenu bad");
+        tick_throw=0;tick(hub.data(),nullptr);assert(texts["local_name"]==field_name("100??????openmenu bad"));
         set_current(child.data());tick(child.data(),nullptr);
         for(int i=32;i<40;++i) { const auto command="runscript lcOnlineIntent("+std::to_string(i)+")";queue(nullptr,nullptr,command.c_str());tick(child.data(),nullptr); }
         tick_throw=1;tick(child.data(),nullptr);tick_throw=0;tick(child.data(),nullptr);
@@ -633,8 +642,9 @@ int main(int argc,char** argv) {
     assert(calls==expected);
     request(mgr.data(),nullptr,"online",nullptr);assert(calls==expected); // duplicate entry cannot reinitialize
     set_current(hub.data());tick(hub.data(),nullptr);
-    assert(texts["local_name"]==(mode=="name31" ? std::string(31,'a') : mode=="blank-name" ? "Player" : "100??????openmenu bad"));
+    assert(texts["local_name"]==(mode=="name31" ? field_name(std::string(31,'a')) : mode=="blank-name" ? std::string("Player") : field_name("100??????openmenu bad")));
     if(mode.starts_with("r16-hits")) { hits_fixture::run(mode);return 0; }
+    if(mode=="r16-model-start") { model_fixture::run();return 0; }
     if(mode=="r5b-views") { broker_presentation_tests(entry);return 0; }
     if(mode=="r15-errors") { error_table_tests(entry);return 0; }
     if(mode.starts_with("r6-nit-") || mode.starts_with("r6-end-")) { native_fixture::review_run(entry);return 0; }
@@ -718,14 +728,14 @@ int main(int argc,char** argv) {
         assert(calls==std::vector<std::string>{"request:text_entry"});
         tick(hub.data(),nullptr);assert(native_tag==0 && calls.size()==1); // queued, not yet closed
         deactivate(hub.data(),nullptr);set_current(hub.data());result(std::string(31,'N'));tick(hub.data(),nullptr);
-        assert(texts["local_name"]==std::string(31,'N'));
+        assert(texts["local_name"]==field_name(std::string(31,'N')));
         assert(calls==std::vector<std::string>({"request:text_entry","name","profile","persist"}));
         auto edit=[&]() { calls.clear();post(int(intent::edit_name));tick(hub.data(),nullptr);assert(calls.size()==1);deactivate(hub.data(),nullptr);set_current(hub.data()); };
-        edit();result(std::string(32,'x'));tick(hub.data(),nullptr);assert(calls.size()==1 && texts["local_name"]==std::string(31,'N'));
+        edit();result(std::string(32,'x'));tick(hub.data(),nullptr);assert(calls.size()==1 && texts["local_name"]==field_name(std::string(31,'N')));
         edit();result(std::string(31,'N'));tick(hub.data(),nullptr);assert(calls.size()==1); // Esc seed
         edit();native_ready=false;tick(hub.data(),nullptr);assert(calls.size()==1); // closure no result
         edit();result("Other",3);const auto count=consumes;tick(hub.data(),nullptr);assert(consumes==count && calls.size()==1); // foreign tag
-        edit();result("CancelLate");request(mgr.data(),nullptr,"main",nullptr);tick(hub.data(),nullptr);assert(texts["local_name"]==std::string(31,'N'));
+        edit();result("CancelLate");request(mgr.data(),nullptr,"main",nullptr);tick(hub.data(),nullptr);assert(texts["local_name"]==field_name(std::string(31,'N')));
         std::array<unsigned char,256> keys{};online_menus::keyboard(keys.data());
         keys[0x30]=128;online_menus::keyboard(keys.data());assert(keys[0x30]==128); // outside Code: unchanged
         post(int(intent::code));tick(hub.data(),nullptr);set_current(child.data());tick(child.data(),nullptr);
@@ -744,9 +754,11 @@ int main(int argc,char** argv) {
         assert(texts["code_value"]=="ABCD-EFGH" && clip_closed==1 && clip_locked==1 && clip_unlocked==1);
         // Avoid completing that pending fixture; invalid paste must preserve text.
         post(int(intent::erase));tick(child.data(),nullptr);
-        for(auto bad:{"ABCDEFGHjunk","ABCD0FGH","ABCD-EFGH\nextra"}) {
+        for(auto bad:{"ABCDEFGHjunk","ABCD0FGH","ABCD-EFGH\nextra","AB0O1IL!"}) {
             clipboard_text(bad);post(int(intent::paste));tick(child.data(),nullptr);
-            assert(texts["code_value"]=="ABCD-EFG_" && clip_closed==1 && clip_unlocked==1 && !visibility["lc_notice_paste_invalid"]);
+            // 060q live: code-sized text with symbols no code has names the symbols; any other text says no code
+            const bool symbols=std::string_view(bad)=="ABCD0FGH" || std::string_view(bad)=="AB0O1IL!";
+            assert(texts["code_value"]=="ABCD-EFG_" && clip_closed==1 && clip_unlocked==1 && !visibility[symbols ? "lc_notice_code_invalid" : "lc_notice_paste_invalid"] && visibility[symbols ? "lc_notice_paste_invalid" : "lc_notice_code_invalid"]);
         }
         clipboard_text(std::string(257,'A'));post(int(intent::paste));tick(child.data(),nullptr);assert(texts["code_value"]=="ABCD-EFG_" && clip_unlocked==1);
         clipboard_text("ABCDEFGH");clip_data[0]=0xd800;post(int(intent::paste));tick(child.data(),nullptr);assert(texts["code_value"]=="ABCD-EFG_" && clip_unlocked==1);

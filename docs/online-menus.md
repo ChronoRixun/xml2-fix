@@ -1385,3 +1385,38 @@ top edge is 4 view units right of the bottom edge: `FOCUS_LEAN`); the table list
 **Fallback logging (finding 8).** The half-view-unit fallback logs once per reason: `no window procedure pixel (display Mode
 unset)`, `a mouse message without a window procedure pixel (wheel, or no client point)`, and `the window procedure pixel
 does not match the engine's point`.
+
+## 0.6 preview fix I: messages, lobby focus, small items (060q live failures 3, 4, 7, 9, 13)
+
+**Why the messages were blank (failures 3, 4, 9).** Every per-cause error scene, the lobby's service-lost strip and its
+guest-left panel were `MENU_ITEM_MODEL` scenes authored `hide="true"`. The engine's model item (vtable `0x6a0304`) parses the
+`hide` bit first and installs the model second (`0x5c5080` -> `0x5bbdd0` -> `0x5c4c50`); with the bit set `0x5c4c50` loads
+`ui/models/m_invis.igb` and releases the requested model, so a model that starts hidden keeps only the invisible stand-in, and the
+DLL's later `setHidden(false)` (`0x5c4b90`) finds the stash at item+0x94 empty and restores nothing. A model that starts visible
+and is hidden by the DLL stashes the real one and gets it back (the Host visibility pair: PRIVATE came back, PUBLIC never drew).
+Plain text items un-hide correctly. So, in the LC assets: each `lc_broker_err_<cause>` is ONE hidden text item with the cause's copy
+in its warn colour (the DLL's `hide_error_scenes` is unchanged: it hides / shows them by name through the text setter), `retry` is
+a default-colour label (it was authored dark for a baked bar), and `lc_lobby_service_lost` / `lc_lobby_guest_left` are text items
+(the departed guest's NAME stays the DLL's data node `lc_toast_name`, the copy sits on the line below it).
+
+**Lobby message row.** The toast, the Copy / Kick notice and the Leave confirm draw on the row the ready line owns (the old
+panels covered it): while any shows (`row_busy`), `lc_ready_summary` / `lc_ready_waiting` / `lc_ready_all` / `lc_ready_solo` are
+hidden and `lc_ready_count` / `lc_member_count` / `lc_waiting_name` are empty. A card keeps its phase word "In lobby" when the
+party facts are unavailable (a member observed in the native lobby roster is in the lobby: service loss emptied it).
+
+**Lobby focus (failure 7).** `lobby_focus_guard` (every lobby tick after the visibility is bound): while the Leave confirm is up the
+focus is `lc_leave_yes` / `lc_leave_cancel` (Up / Down shared the lobby's ring and carried the bar to Copy code or KICK PLAYER
+while the confirm stayed drawn); while it is not up the focus is never on either button, and never on `lc_lobby_dismiss` unless
+that notice shows (a bar on a hidden item draws nothing). "Code copied" is informational: it expires after 6 s
+(`lobby_copied_ms`), Back / Esc / pad B ends it AND reaches the native Back (before, the first Esc was eaten by a notice the
+player could not see); the Kick-target / Copy-failure notice keeps the "first Back dismisses" rule. Host modes `r4-focus-host`,
+`r4-focus-join` (the real native Host / Join ticks and Back slots; every `lc_*` node is its own item so the compares are real).
+
+**Small items (failure 13).** A clipboard text of the size of a code (8, or 4-4 with the dash) with a symbol no code has
+(`AB0O1IL!`) is `clip_result::bad_symbols` and shows `lc_notice_code_invalid`; any other text / no text keeps
+`lc_notice_paste_invalid`. A screen name that does not fit its field ends in "..." (`fit_name`: hub name 140 units at title size,
+header name 64 / recent game 180 at row size; Barlow advance estimates, errs toward shortening). Join by code's Paste / Clear
+prompts are the keyboard form in the asset (`Ctrl+V Paste`, `Shift+Del Clear`) and the DLL sets `desctext3` / `desctext4` every tick
+to `Y Paste` / `X Clear` while the pad is shown (the engine rewrites the slots on every focus change). Pad B in the name entry:
+the entry is the engine's own `TEXT_ENTRY_MENU` (vtable `0x69f06c`, opened through the name request `0x60c7e0`); our code never
+sees its input and the hub does not tick behind it, so B stays the engine's - see the report's open items.

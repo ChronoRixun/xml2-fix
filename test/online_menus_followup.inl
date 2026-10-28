@@ -47,7 +47,7 @@ void follow_tests(const script_functions_rules::func_entry* registration) {
             post(action);tick(hub.data(),nullptr);
             assert(native_tag==4 && consumes==consumed+(action==intent::host ? 1 : 0));
             assert(calls.back()==(action==intent::host ? "request:lc_host" : "request:main"));
-            set_current(hub.data());result("LateName");tick(hub.data(),nullptr);assert(texts["local_name"]=="100??????openmenu bad");native_ready=false;native_tag=4;
+            set_current(hub.data());result("LateName");tick(hub.data(),nullptr);assert(texts["local_name"]==field_name("100??????openmenu bad"));native_ready=false;native_tag=4;
         }
         std::cout<<"follow lifecycle PASS Rejoin survives two queued Hub ticks; Host/Back drain queued name; late name cannot commit\n";return;
     }
@@ -65,7 +65,7 @@ void follow_tests(const script_functions_rules::func_entry* registration) {
         for(int stage:{1,2,7,8,9,10,11,13}) {
             post(intent::edit_name);tick(hub.data(),nullptr);deactivate(hub.data(),nullptr);set_current(hub.data());result("ChangedName");
             name_fault_stage=stage;tick(hub.data(),nullptr);
-            assert(!name_fault_stage && !visibility["lc_notice_name_open"] && texts["local_name"]=="100??????openmenu bad");
+            assert(!name_fault_stage && !visibility["lc_notice_name_open"] && texts["local_name"]==field_name("100??????openmenu bad"));
         }
         post(intent::edit_name);tick(hub.data(),nullptr);name_fault_stage=2;post(intent::host);tick(hub.data(),nullptr);
         set_current(hub.data());tick(hub.data(),nullptr);assert(!visibility["lc_notice_name_open"]);
@@ -111,6 +111,13 @@ void follow_tests(const script_functions_rules::func_entry* registration) {
     }
     if(mode=="follow-clipboard") {
         open_code();fake_clipboard_imports();
+        // 060q live: Join by code's Paste / Clear prompts follow the device instead of reading "Ctrl+V / Y Paste" on both.
+        online_menus::set_pad_probe(pad_probe_yes);tick(child.data(),nullptr);assert(texts["desctext3"]=="Y Paste" && texts["desctext4"]=="X Clear");
+        online_menus::set_pad_probe(pad_probe_no);tick(child.data(),nullptr);assert(texts["desctext3"]=="Ctrl+V Paste" && texts["desctext4"]=="Shift+Del Clear");
+        const auto writes=text_writes;tick(child.data(),nullptr);assert(text_writes==writes); // an unchanged tick writes nothing
+        texts["desctext3"]="engine refresh";put(child.data(),0x324,0x4242);tick(child.data(),nullptr);assert(texts["desctext3"]=="Ctrl+V Paste"); // the engine rewrites the slots on a focus change: set again then
+        put(child.data(),0x324,0);
+        online_menus::set_pad_probe(nullptr);
         clipboard_text("ABCDEFGH");clip_missing=true;post(intent::paste);tick(child.data(),nullptr);assert(clip_closed==1 && !clip_locked && texts["code_value"]=="____-____");
         // Round 15: a clipboard that cannot be read says so (and keeps the typed text); content that is no code says that instead.
         assert(visibility["lc_notice_clipboard"] && !visibility["lc_notice_paste_invalid"]); // no text (an image, empty): no code on it, not "unreadable"

@@ -102,7 +102,7 @@ void r7_card_tests(bool host) {
         assert(texts["lc_room_code"]=="---- ----" && visibility["lc_p4_card"] && !visibility["lc_p4_empty"]);
         for(int p=1;p<=3;++p) {
             const auto k="lc_p"+std::to_string(p)+"_";
-            assert(!visibility[k+"card"] && visibility[k+"ping"] && visibility[k+"same_build"] && texts[k+"phase"].empty());
+            assert(!visibility[k+"card"] && visibility[k+"ping"] && visibility[k+"same_build"] && texts[k+"phase"]=="In lobby"); // no party facts: the member is still observed in this native lobby
         }
         std::cout<<"r7 bounds PASS a fact set with 4 pending members is dropped whole; native rows stay, nothing measured is shown\n";return;
     }
@@ -365,6 +365,58 @@ void pad_lobby_tests(const script_functions_rules::func_entry* registration,lobb
     }
     online_menus::set_pad_probe(nullptr);
 }
+// 060q live (sl1): after Copy / a service loss the lobby's focus and its inline notices fell apart. Drives the REAL host / guest
+// ticks and Back slots over the fixture's focus stub (focus_stub writes the menu's +0x324 focused item exactly as the engine's
+// setFocus does): Copy never eats the first Back, the Leave confirm and the Dismiss notice keep the focus consistent with what
+// is drawn, the ready line yields the row to a message, a card keeps "In lobby" without party facts.
+void focus_lobby_tests(const script_functions_rules::func_entry* registration,lobby_tick_t tick,lobby_back_t back,bool host) {
+    import_stub("OpenClipboard",reinterpret_cast<void*>(&copy_open));import_stub("CloseClipboard",reinterpret_cast<void*>(&copy_close));
+    import_stub("EmptyClipboard",reinterpret_cast<void*>(&copy_empty));import_stub("SetClipboardData",reinterpret_cast<void*>(&copy_set));
+    import_stub("EnumThreadWindows",reinterpret_cast<void*>(&copy_enum));
+    import_stub("GetWindowThreadProcessId",reinterpret_cast<void*>(&copy_window_process));import_stub("GetClassNameA",reinterpret_cast<void*>(&copy_class));
+    auto post=[&](intent action) {
+        int_value[1]=unsigned(action);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(registration->handler))(reinterpret_cast<void*>(1));
+    };
+    auto shown=[&](const char* key) { return visibility.count(key) && !visibility[key]; };
+    auto gone=[&](const char* key) { return visibility.count(key) && visibility[key]; };
+    const char* const home=host ? "text_startgame" : "text_readygame";
+    ready_person(1,false);refresh_now();focus_stub(child.data(),nullptr,home,true);mask=0;tick(child.data(),nullptr);
+    std::cout<<"focus test start host="<<host<<" focused="<<focused<<"\n";
+    // 1. Copy: the notice and its Dismiss show, the ready line yields the row, the focus stays where it was.
+    post(intent::copy_code);tick(child.data(),nullptr);
+    assert(shown("lc_code_copied") && shown("lc_lobby_dismiss") && gone("lc_ready_summary") && gone("lc_ready_solo") && gone("lc_ready_waiting") && gone("lc_ready_all"));
+    assert(texts["lc_ready_count"].empty() && texts["lc_member_count"].empty() && focused==home);
+    // 2. The notice is informational: the first Back is not eaten by it (live: Esc seemed to do nothing) - it clears the notice and
+    //    reaches the native Back (host: the Leave confirm; guest: Unready / Leave).
+    mask=0x200000;tick(child.data(),nullptr);mask=0;tick(child.data(),nullptr);
+    assert(gone("lc_code_copied") && gone("lc_lobby_dismiss"));
+    if(host) {
+        assert(shown("lc_leave_confirm") && shown("lc_leave_yes") && shown("lc_leave_cancel") && focused=="lc_leave_cancel");
+        // 3. While the confirm is up, Up / Down / Left / Right cannot take the bar out of its two buttons.
+        for(const char* away:{"text_startgame","text_kickplayer","text_leaveroom","lc_copy_code"}) {
+            focus_stub(child.data(),nullptr,away,true);tick(child.data(),nullptr);
+            assert(focused=="lc_leave_cancel" && shown("lc_leave_confirm"));
+        }
+        focus_stub(child.data(),nullptr,"lc_leave_yes",true);tick(child.data(),nullptr);assert(focused=="lc_leave_yes"); // its own two buttons move freely
+        // 4. Back closes the confirm; the bar goes home; the lobby is left by the NEXT Back (the keyboard can always leave).
+        assert(back(child.data(),nullptr)==2);tick(child.data(),nullptr);
+        assert(gone("lc_leave_confirm") && gone("lc_leave_yes") && gone("lc_leave_cancel") && focused==home);
+        // 5. A focus left on a button that is no longer shown (no bar drawn at all) is brought home.
+        for(const char* hidden:{"lc_leave_cancel","lc_leave_yes","lc_lobby_dismiss"}) {
+            focus_stub(child.data(),nullptr,hidden,true);tick(child.data(),nullptr);assert(focused==home);
+        }
+        mask=0x200000;tick(child.data(),nullptr);mask=0;tick(child.data(),nullptr);
+        assert(shown("lc_leave_confirm") && focused=="lc_leave_cancel");
+        assert(back(child.data(),nullptr)==2);tick(child.data(),nullptr);assert(gone("lc_leave_confirm") && focused==home && current()==child.data());
+        const auto leaves0=leaves;
+        mask=0x200000;tick(child.data(),nullptr);mask=0;tick(child.data(),nullptr);assert(shown("lc_leave_confirm")); // the second Back path opens it again
+        assert(leaves==leaves0 && current()==child.data());
+    } else {
+        // The guest has no confirm: Back reaches the native Unready / Leave (here: not ready, so it leaves the lobby).
+        assert(gone("lc_leave_confirm") && (current()==nullptr || leaves>0 || !last_ready));
+    }
+    std::cout<<"r4 focus "<<(host ? "HOST" : "JOIN")<<" PASS Copy keeps the first Back; the Leave confirm holds the focus; a hidden notice button never keeps it; the ready line yields to a message\n";
+}
 void pool_tests() {
     // Exercise actual retail shared allocator/base add/clear (the measuring
     // wrapper is unnecessary for a fixture with no font renderer).
@@ -502,7 +554,8 @@ void review_lobby_tests(const script_functions_rules::func_entry* registration,b
             assert(*reinterpret_cast<unsigned*>(names_table.data()+0x84)==1 && *reinterpret_cast<unsigned*>(checks_table.data()+0x84)==0);
             assert(value(lobby_names.data(),nullptr,0)==(hosting ? 0xffffffffu : 0u));
             if(!hosting) { set_pending_local(true);put(lobby_people[1].data(),0x1c,0);child[0x196c]=1; }
-            tick(child.data(),nullptr);set_pending_local(false);assert(texts["lc_member_count"]=="0" && visibility["lc_ready_all"]);
+            tick(child.data(),nullptr);set_pending_local(false);for(int pass=0;pass<2;++pass) { ticks+=toast_ms;tick(child.data(),nullptr); } // the departed members' toast (six seconds) owns the ready row first
+            assert((texts["lc_member_count"]=="0" || !visibility["lc_lobby_guest_left"]) && visibility["lc_ready_all"]); // zero members, or the departures' toast owns the row
         }
         std::cout<<"review refresh PASS REAL Host/Join refresh + add/clear/ctor/value writes; Join values all zero; participant order, 4/empty rosters; render-boundary sanitation\n";return;
     }
@@ -661,6 +714,7 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     if(mode.find("r7-")!=std::string::npos) { r7_card_tests(host);return; }
     if(mode=="r4-copy") { copy_tests(registration,tick);return; }
     if(mode.starts_with("r4-pad")) { pad_lobby_tests(registration,tick,host);return; }
+    if(mode.starts_with("r4-focus")) { focus_lobby_tests(registration,tick,back,host);return; }
     if(mode=="r4-pool") { pool_tests();return; }
     if(mode=="r4-host") {
         people_count=4;setup_lobby(true);activate(child.data(),nullptr,0);tick(child.data(),nullptr);
@@ -699,7 +753,9 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     image_success=true;tick(child.data(),nullptr);assert(transfers==2 && child[0x1970]);
     child[0x1970]=0;image_present=false;tick(child.data(),nullptr);assert(broadcasts==1 && starts==1);
     people_count=1;build_people_chain();refresh_now();
-    mask=0;tick(child.data(),nullptr);assert(enabled_items["text_startgame"] && !visibility["lc_ready_solo"]);
+    // The departed guest's toast takes the ready line's row for six seconds (060q live: the bare name sat over it); then the line returns.
+    mask=0;tick(child.data(),nullptr);assert(enabled_items["text_startgame"] && !visibility["lc_lobby_guest_left"] && visibility["lc_ready_solo"] && visibility["lc_ready_summary"]);
+    ticks+=toast_ms;tick(child.data(),nullptr);assert(visibility["lc_lobby_guest_left"] && !visibility["lc_ready_solo"] && !visibility["lc_ready_summary"] && texts["lc_member_count"]=="1");
     mask=0x10;tick(child.data(),nullptr);assert(starts==2);people_count=3;
     build_people_chain();refresh_now();
     mask=0x1000000;tick(child.data(),nullptr);
