@@ -188,4 +188,95 @@ inline int choose(const std::vector<candidate>& held,const view_point& p) {
 }
 // The point no item holds: far outside the view (shorts in the engine's fields; PtInRect compares ints).
 inline constexpr int nowhere_x=-30000, nowhere_y=-30000;
+
+// ---- Fix K (060r live failure 8): which items really ANSWER ---------------------------------------------------------------
+// Fix E2 counted every item with +0x54 bit 3 as one that could answer the engine's walk. That bit is ENABLED (the item parser
+// 0x5bc981 sets it for every item, enabled="false" clears it; neverfocus is bit 5, hidden bit 2), so every model and label
+// counted too - and on the co-op screens each row's focus model (<row>_focus, MENU_ITEM_MODEL, shown, laid out at the row's
+// own anchor and box: online_menus.py scene_layout) covered the row's whole box. No point was free, the remap gave up, and
+// the engine got the raw point: live, the Hub rows hit exactly the retail text boxes (060r mh / scan probes = 060q).
+// The engine's own answer (vt+0x74, base 0x5ae0a0 second pass; lobbies 0x5ba2b0 / 0x5c8da0 fall through to it):
+//   CMenuItem / Model / ActorModel / Effect: 0x5bc1b0 - not hidden (+0x54 bit 2), the text (+0x24) not empty, PtInRect of the
+//     shifted box. A model has no text: it never answers.
+//   CMenuItemText / TextBox / Bar / Binary / List / ListItems / ListChars / CharSummary: 0x5c6490 - PtInRect of the shifted
+//     box, then a button release (0x202) whose token text (+0x9c) names a menu code answers with that code, else 0x5bc1b0.
+//   Any other class (ListBox 0x5c0e10, ListCycle 0x5c40a0, ...): its box, conservatively.
+// The walk asks the shown (vt+4 false) and enabled (bit 3) items in the item tree's order and stops at the first that answers;
+// a neverfocus item (bit 5) that answers ends the walk without taking the focus. The first pass (0x5ae0a0 over desctext1..5)
+// tests the UNSHIFTED box of each shown, enabled prompt (no text test) and sets the hover index of the first that holds it.
+struct engine_item {
+    item_rects box;
+    bool shown=false, enabled=false;
+    bool text_test=false;   // 0x5bc1b0 / 0x5c6490 (needs text); false: answers wherever its box holds the point
+    bool has_text=false;    // +0x24 text not empty (or, for 0x5c6490, a +0x9c token text)
+};
+inline bool answers(const engine_item& e,int x,int y) {
+    return e.shown && e.enabled && holds(e.box.shifted,x,y) && (!e.text_test || e.has_text);
+}
+struct engine_menu {
+    std::vector<engine_item> walk;          // the item tree in the engine's walk order
+    std::array<int,5> prompts{-1,-1,-1,-1,-1}; // walk index of desctext1..5 (-1: none)
+    std::vector<int> lobby_buttons;         // the lobby's own first pass (host: start / kick / leave; join: ready / leave)
+    int picker=-1;                          // text_playername1: the lobbies ask its unshifted box whatever its state
+    int focused=-1;                         // walk index of the focused item (CMenu +0x324), -1 none / not in the walk
+};
+// The walk index of the item the engine's second pass answers with, -1 for none.
+inline int second_pass(const engine_menu& m,int x,int y) {
+    for(std::size_t i=0;i<m.walk.size();++i) if(answers(m.walk[i],x,y)) return int(i);
+    return -1;
+}
+// The hover index the first pass sets (desctextN -> N-1), -1 for none.
+inline int first_pass(const engine_menu& m,int x,int y) {
+    for(int n=0;n<5;++n) {
+        const int i=m.prompts[std::size_t(n)];
+        if(i<0) continue;
+        const auto& e=m.walk[std::size_t(i)];
+        if(e.shown && e.enabled && holds(e.box.first,x,y)) return n;
+    }
+    return -1;
+}
+// The lobbies' own pass would act on the point before the base walk could give it to `target` (the picker's box, or another of
+// the lobby's buttons when the focus is on one of them - 0x5ba2b0 navigates to the hit button, and a click on the focused
+// button is its Accept).
+inline bool lobby_takes(const engine_menu& m,int target,int x,int y) {
+    if(m.picker>=0 && m.picker!=target && holds(m.walk[std::size_t(m.picker)].box.first,x,y)) return true;
+    bool focus_on_button=false;
+    for(const int b:m.lobby_buttons) if(b==m.focused && m.walk[std::size_t(b)].enabled) focus_on_button=true;
+    if(!focus_on_button) return false;
+    for(const int b:m.lobby_buttons) if(b!=target && m.walk[std::size_t(b)].enabled && holds(m.walk[std::size_t(b)].box.first,x,y)) return true;
+    return false;
+}
+inline int prompt_of(const engine_menu& m,int item) {
+    for(int n=0;n<5;++n) if(m.prompts[std::size_t(n)]==item) return n;
+    return -1;
+}
+// The engine, handed (x, y), focuses / clicks `target` and hovers its prompt (or no prompt when it is not one).
+inline bool engine_picks(const engine_menu& m,int target,int x,int y) {
+    return second_pass(m,x,y)==target && first_pass(m,x,y)==prompt_of(m,target) && !lobby_takes(m,target,x,y);
+}
+// A point the engine gives to `target`: inside both of its boxes if there is one (hover and click), else inside the box its
+// own test asks; centre first, then the rows nearest the centre. False: the engine cannot be made to pick it anywhere.
+inline bool picked_point_in(const engine_menu& m,int target,const item_box& region,int& x,int& y) {
+    if(region.right<=region.left || region.bottom<=region.top) return false;
+    const int cx=(region.left+region.right-1)/2, cy=(region.top+region.bottom-1)/2;
+    if(engine_picks(m,target,cx,cy)) { x=cx; y=cy; return true; }
+    const int height=region.bottom-region.top;
+    for(int d=0;d<height;++d) for(const int py:{cy-d,cy+d}) {
+        if(py<region.top || py>=region.bottom || (d==0 && py!=cy)) continue;
+        for(int px=region.left;px<region.right;++px) if(engine_picks(m,target,px,py)) { x=px; y=py; return true; }
+    }
+    return false;
+}
+inline bool picked_point(const engine_menu& m,int target,int& x,int& y) {
+    const auto& box=m.walk[std::size_t(target)].box;
+    return picked_point_in(m,target,intersection(box.shifted,box.first),x,y) || picked_point_in(m,target,box.shifted,x,y);
+}
+// The first item (walk index) other than `target` whose answer covers the centre of the target's box - named in the diagnostic
+// when no point can be given to the target.
+inline int blocker_of(const engine_menu& m,int target) {
+    const auto& b=m.walk[std::size_t(target)].box.shifted;
+    const int cx=(b.left+b.right-1)/2, cy=(b.top+b.bottom-1)/2;
+    for(std::size_t i=0;i<m.walk.size();++i) if(int(i)!=target && answers(m.walk[i],cx,cy)) return int(i);
+    return -1;
+}
 }

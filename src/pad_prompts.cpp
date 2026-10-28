@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -147,9 +148,15 @@ namespace pad_prompts
 		}
 
 		// In place of the call to the per-frame poll (0x6285c0, __thiscall, no arguments): the poll, then what it read.
+		std::atomic<bool> keyboard_note{false}; // note_keyboard, taken by the next poll
+
 		void __fastcall poll_input(void* input, void* edx)
 		{
 			at<void(__fastcall*)(void*, void*)>(poll_function)(input, edx);
+			if (keyboard_note.exchange(false))
+			{
+				seen.keyboard_noted = true;
+			}
 			if (input)
 			{
 				seen.sample(static_cast<const std::uint8_t*>(input));
@@ -259,6 +266,11 @@ namespace pad_prompts
 		if (!installed || player < 0 || player >= players) return false;
 		const auto* play_map = binding_map(0, player);
 		return play_map && choose(chosen_mode, has_keyboard(play_map), pad_of(play_map), seen) == shown::pad;
+	}
+
+	void note_keyboard()
+	{
+		keyboard_note.store(true);
 	}
 
 	void set_menu_scope(bool (*scope)())

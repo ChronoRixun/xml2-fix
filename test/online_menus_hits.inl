@@ -39,18 +39,49 @@ constexpr authored layout[]{
     {"host","lc_lobby_dismiss",425.6f,97.6f,0,-19.2f,52,0,425.6f,78.4f,477.6f,97.6f},
 };
 // Items of the same menus that the table does not list. flags: the +0x54 byte (8 focusable, 4 hidden).
-struct extra { const char* menu; const char* name; float ax,az,l,b,r,t; unsigned char flags; };
+// kind: 0 a text item with the recorder (its text is its name), 1 a MENU_ITEM_MODEL (CMenuItemModel's vtable: the retail
+// 0x5bc1b0 hit test, no text - it never answers), 2 a text item whose text is empty (the recorder; 0x5bc1b0 refuses it).
+struct extra { const char* menu; const char* name; float ax,az,l,b,r,t; unsigned char flags; int kind=0; };
 constexpr extra extras[]{
     {"lc_online","stray",100.4f,241.6f,0,-17.6f,64,0,8},       // focusable, unlisted, over the middle of the "code" bar's box
     {"lc_online","stray2",300,120,0,-20,60,0,8},               // focusable, unlisted, away from every bar
     {"host","text_playername1",43.2f,204.8f,0,-96,424,0,4},    // the Kick picker (hidden, not focusable): 0x5ba2b0 asks its box anyway
     {"host","lc_lobby_v1",0,0,0,-1,1,0,0},                     // the skin marker
+    // Fix K - the real screens' population (060r built lc_online / host, online_menus.py scene_layout): every focusable row
+    // has a <row>_focus MENU_ITEM_MODEL at the row's own anchor and box, shown (it swaps model_hide for the bar on focus) and
+    // enabled (+0x54 bit 3 is "enabled": the parser sets it on every item) - fix E2 counted these as answering, so no point of
+    // any row was free and every row kept its retail text box live. Labels (neverfocus, bit 5) with text DO answer in the
+    // retail walk; models and empty texts never do.
+    {"lc_online","host_focus",46.4f,272.8f,0,-17.6f,188.8f,0,0x28,1},
+    {"lc_online","code_focus",46.4f,241.6f,0,-17.6f,188.8f,0,0x28,1},
+    {"lc_online","browse_focus",46.4f,210.4f,0,-17.6f,188.8f,0,0x28,1},
+    {"lc_online","party_focus",46.4f,179.2f,0,-17.6f,188.8f,0,0x28,1},
+    {"lc_online","other_focus",46.4f,148,0,-17.6f,188.8f,0,0x28,1},
+    {"lc_online","change_name_focus",428,236,0,-14.4f,47.2f,0,0x28,1},
+    {"lc_online","rejoin_focus",431.2f,143.2f,0,-13.6f,44,0,0x28,1},
+    {"lc_online","desctext1_focus",34.4f,20.8f,0,-13.6f,47.2f,0,0x28,1},
+    {"lc_online","desctext2_focus",84.8f,20.8f,0,-13.6f,44.8f,0,0x28,1},
+    {"lc_online","desctext3_focus",131.2f,20.8f,0,-13.6f,73.6f,0,0x28,1},
+    {"lc_online","desctext4_focus",207.2f,20.8f,0,-13.6f,51.2f,0,0x28,1},
+    {"lc_online","retry_focus",432,44,-10.4f,-11.2f,39.2f,1.6f,0x28,1},
+    {"lc_online","lc_hub_host_left_veil",0,384,0,-385,511,0,0x2c,1},  // the host-left veil: hidden, the whole view
+    {"lc_online","host_hint",144,270,0,-13,89,0,0x28,0},              // "Private or public": a label inside the host row (answers)
+    {"lc_online","browse_blank",46.4f,210.4f,0,-17.6f,188.8f,0,0x28,2}, // an empty label over the whole browse row (never answers)
+    // The host lobby's inline rows: the Leave confirm's panel model (shown while it is up) and the Code copied model (hidden)
+    // cover the Leave / Cancel / Dismiss buttons; the shared focus model (lc_focus, one per plane) sits at its origin.
+    {"host","lc_leave_confirm",34.4f,99.2f,0,-23.2f,442.4f,0,0x28,1},
+    {"host","lc_code_copied",34.4f,99.2f,0,-23.2f,442.4f,0,0x2c,1},
+    {"host","lc_focus",0,384,0,-1,1,0,0x28,1},
+    // Every LC screen's first two items: the backdrop and field models (shown). Their box is the anchor's or, once the model is
+    // attached, the art's - the whole view; either way a model never answers.
+    {"lc_online","lc_o_backdrop",-200,384,0,-385,912,0,0x28,1},
+    {"host","lc_o_backdrop",-200,384,0,-385,912,0,0x28,1},
 };
-struct fitem { std::string menu,name; float ax,az,l,b,r,t; unsigned char flags; const authored* bar=nullptr; std::array<unsigned char,0xb0> mem{}; };
+struct fitem { std::string menu,name; float ax,az,l,b,r,t; unsigned char flags; const authored* bar=nullptr; std::array<unsigned char,0xb0> mem{}; int kind=0; };
 std::vector<fitem> items;
 std::array<unsigned char,0x1a00> retail_menu{},lobby_menu{};
 std::vector<char> strings(0x4000);
-std::array<unsigned,0x23> item_vtable{};
+std::array<unsigned,0x23> item_vtable{},model_vtable{};
 bool marker_present=true;
 unsigned key_seed=1;
 bool balanced_tree=false;
@@ -146,7 +177,7 @@ void build_menu(unsigned char* menu,const char* name) {
 }
 std::vector<fitem*> expected_walk(const char* menu) { // shown, focusable items in key order
     std::vector<fitem*> out; (void)menu;
-    for(auto* i:walk_order) if(!(i->flags&4) && (i->flags&8) && i->menu==menu) out.push_back(i);
+    for(auto* i:walk_order) if(!(i->flags&4) && (i->flags&8) && i->menu==menu && i->kind!=1) out.push_back(i);
     return out;
 }
 void build_all() {
@@ -212,7 +243,7 @@ std::string expected(void* menu,int px,int py,int w,int h) {
     }
     if(best) return best->name;
     int ex,ey;engine_point(px,py,w,h,ex,ey);
-    for(const auto& i:items) if(!bar_of(i) && i.menu==screen && (i.flags&8) && !(i.flags&4) && (box_holds(i,ex,ey,true) || box_holds(i,ex,ey,false))) return i.name;
+    for(const auto& i:items) if(!bar_of(i) && i.menu==screen && i.kind==0 && (i.flags&8) && !(i.flags&4) && (box_holds(i,ex,ey,true) || box_holds(i,ex,ey,false))) return i.name;
     return "";
 }
 std::string hover_name(const std::string& answered) { return answered.starts_with("desctext") ? answered : ""; }
@@ -281,6 +312,9 @@ void install_recorders() {
     // The retail mouse code runs; these are the only replaced functions (see the file header).
     std::memcpy(item_vtable.data(),reinterpret_cast<void*>(0x6a0244),sizeof item_vtable);
     item_vtable[0x74/4]=unsigned(reinterpret_cast<std::uintptr_t>(&rec_hit));
+    std::memcpy(model_vtable.data(),reinterpret_cast<void*>(0x6a0304),sizeof model_vtable); // CMenuItemModel: vt+0x74 = 0x5bc1b0
+    assert(model_vtable[0x74/4]==0x5bc1b0 && model_vtable[1]==0x5bd8f0);
+    online_menus::set_hits_text_alias(reinterpret_cast<std::uintptr_t>(&rec_hit)); // the recorder forwards to 0x5c6490
     redirect(0x5ab780,reinterpret_cast<const void*>(&key_stub));
     redirect(0x602200,reinterpret_cast<const void*>(&string_table));redirect(0x5adc10,reinterpret_cast<const void*>(&item_lookup));
     redirect(*reinterpret_cast<unsigned*>(0x69e41c+4),reinterpret_cast<const void*>(&set_focus_rec));   // menu vt+4: set focus
@@ -297,8 +331,13 @@ void install_recorders() {
 void make_items() {
     items.clear();items.reserve(std::size(layout)+std::size(extras)+4);
     for(const auto& a:layout) { fitem i;i.menu=a.menu;i.name=a.name;i.ax=a.ax;i.az=a.az;i.l=a.l;i.b=a.b;i.r=a.r;i.t=a.t;i.flags=8;i.bar=&a;items.push_back(std::move(i)); }
-    for(const auto& e:extras) { fitem i;i.menu=e.menu;i.name=e.name;i.ax=e.ax;i.az=e.az;i.l=e.l;i.b=e.b;i.r=e.r;i.t=e.t;i.flags=e.flags;items.push_back(std::move(i)); }
-    for(std::size_t n=0;n<items.size();++n) { lay_out(items[n],int(n)+1);text_of(int(n)+1,items[n].name.c_str()); }
+    for(const auto& e:extras) { fitem i;i.menu=e.menu;i.name=e.name;i.ax=e.ax;i.az=e.az;i.l=e.l;i.b=e.b;i.r=e.r;i.t=e.t;i.flags=e.flags;i.kind=e.kind;items.push_back(std::move(i)); }
+    for(std::size_t n=0;n<items.size();++n) {
+        auto& i=items[n];lay_out(i,int(n)+1);text_of(int(n)+1,i.kind==2 ? "" : i.name.c_str());
+        put(i.mem.data(),8,unsigned(n)+1);            // +8: the item's name (the diagnostic names items by it)
+        if(i.kind==1) { put(i.mem.data(),0,unsigned(reinterpret_cast<std::uintptr_t>(model_vtable.data())));put(i.mem.data(),0x24,0u);put(i.mem.data(),0x9c,0u); }
+        if(i.kind==2) put(i.mem.data(),0x9c,0u);
+    }
     text_of(10,"$MENU_OTHER Change name"); // desctext3's prompt: a click raises the token's code, not Accept
     lobby_pass.clear();
     for(const char* n:{"text_startgame","text_kickplayer","text_leaveroom"}) for(auto& i:items) if(i.name==n) lobby_pass.push_back(&i);
@@ -368,12 +407,71 @@ void refused_through_dll(mouse_t mouse,unsigned& checks) {
         checks+=3;
     }
 }
+// Fix K: the 060r live round's own probes (live-060r/evidence/mh-hub720.json, mh-hub1080.json, mh-lobby1080.json - pipe
+// `mouse X Y move`, the row's amber read from the frame; every one of these was dead live) and the Leave confirm (er2: a hover
+// on Leave left the bar on Cancel and a click on Leave acted as Cancel).
+unsigned live_060r(mouse_t mouse,mouse_t host_mouse) {
+    unsigned n=0;
+    auto*& hub_focus=*reinterpret_cast<void**>(hub.data()+0x324);
+    struct probe { const char* row; int x,y,w,h; } hub_probes[]{
+        {"host",427,201,1280,720},{"host",230,222,1280,720},{"host",620,222,1280,720},{"host",232,201,1280,720},
+        {"code",427,259,1280,720},{"browse",427,319,1280,720},{"other",427,436,1280,720},{"change_name",1010,271,1280,720},
+        {"host",640,301,1920,1080},{"host",344,333,1920,1080},{"code",640,388,1920,1080},{"browse",640,478,1920,1080}};
+    for(const auto& p:hub_probes) {
+        hub_focus=item_named("lc_online","code").mem.data(); // mh.py parked the pointer on another row first
+        if(std::string_view(p.row)=="code") hub_focus=item_named("lc_online","host").mem.data();
+        const auto got=ask(mouse,hub.data(),p.x,p.y,p.w,p.h);
+        if(got.answered!=p.row || got.focus_set!=p.row) std::cout<<"060r probe "<<p.row<<" "<<p.x<<","<<p.y<<" "<<p.w<<"x"<<p.h<<": answered '"<<got.answered<<"' focus '"<<got.focus_set<<"'\n";
+        assert(got.answered==p.row && got.focus_set==p.row);++n;
+    }
+    hub_focus=nullptr;
+    // The host lobby's START / KICK / LEAVE top strips at 1080p (focus on START GAME: the lobby's own first pass navigates).
+    auto*& lobby_focus=*reinterpret_cast<void**>(lobby_menu.data()+0x324);
+    struct probe lobby_probes[]{{"text_startgame",547,882,1920,1080},{"text_kickplayer",903,882,1920,1080},{"text_leaveroom",1165,882,1920,1080}};
+    for(const auto& p:lobby_probes) {
+        lobby_focus=item_named("host","text_startgame").mem.data();
+        const auto got=ask(host_mouse,lobby_menu.data(),p.x,p.y,p.w,p.h);
+        if(got.answered!=p.row && !(std::string_view(p.row)=="text_startgame" && !got.saw)) std::cout<<"060r lobby probe "<<p.row<<": answered '"<<got.answered<<"'\n";
+        assert(got.answered==p.row || (std::string_view(p.row)=="text_startgame" && !got.saw)); // the focused button's own strip: the lobby pass keeps it
+        ++n;
+    }
+    // The Leave confirm up, the bar on Cancel: a hover on Leave's text (er2: pixel 776,549 at 720p) moves the focus to Leave, a
+    // click there is Leave's Accept (code 4 raised by Leave's own test) - never Cancel's.
+    lobby_focus=item_named("host","lc_leave_cancel").mem.data();
+    { const auto hover=ask(host_mouse,lobby_menu.data(),776,549,1280,720);
+      if(hover.answered!="lc_leave_yes") std::cout<<"Leave confirm hover: answered '"<<hover.answered<<"' focus '"<<hover.focus_set<<"'\n";
+      assert(hover.answered=="lc_leave_yes" && hover.focus_set=="lc_leave_yes");++n;
+      const int player=*reinterpret_cast<int*>(0x6f3920);
+      auto* code=reinterpret_cast<int*>(0xa09f54+player*4);auto* raised=reinterpret_cast<unsigned char*>(0xa09fa0+player);
+      lobby_focus=item_named("host","lc_leave_cancel").mem.data();*code=0;*raised=0;
+      const auto click=ask(host_mouse,lobby_menu.data(),776,549,1280,720,0x202);
+      assert(click.answered=="lc_leave_yes" && click.focus_set=="lc_leave_yes" && *code==4 && *raised==1);++n;
+      // ... and the panel's own strip around the buttons (inside the panel model, outside every button bar) is nobody's.
+      lobby_focus=item_named("host","lc_leave_cancel").mem.data();
+      const auto strip=ask(host_mouse,lobby_menu.data(),300,549,1280,720);
+      assert(strip.answered!="lc_leave_yes" && strip.answered!="lc_leave_cancel");++n; }
+    lobby_focus=nullptr;
+    // The diagnostic (only with [Test] InputPipe=1): one line per message naming the bar, the handed point, the model's answer and
+    // the engine's focus after its walk; a repeat of the same line is not written again.
+    online_menus::set_hits_trace(true);r6_log.clear();
+    hub_focus=item_named("lc_online","code").mem.data();
+    ask(mouse,hub.data(),427,201,1280,720);ask(mouse,hub.data(),427,201,1280,720);
+    online_menus::set_hits_trace(false);hub_focus=nullptr;
+    if(r6_log.size()!=1) for(const auto& l:r6_log) std::cout<<"trace: "<<l<<"\n";
+    assert(r6_log.size()==1);
+    const auto& line=r6_log.front();
+    for(const char* part:{"online menus: mouse lc_online 0x200 pixel 427,201 of 1280x720 (exact)","bar host;","remapped;","model answers host;","after: focus code, hover -1"}) // (the fixture's set-focus recorder records the item; +0x324 stays)
+        if(line.find(part)==std::string::npos) { std::cout<<"trace line: "<<line<<"\n(missing '"<<part<<"')\n";assert(false); }
+    ++n;
+    return n;
+}
 void run(const std::string& variant) {
     const auto mouse=*reinterpret_cast<mouse_t*>(0x69e49c);
     const auto host_mouse=*reinterpret_cast<mouse_t*>(0x69f2f4);
     assert(reinterpret_cast<std::uintptr_t>(mouse)!=0x5ae0a0); // the installed hook, not the retail slot
     install_recorders();make_items();set_menus();build_all();
     online_menus::set_pointer_probe(&probe);
+    online_menus::set_hits_trace(false); // the fixture's [Test] InputPipe reads "1"; the diagnostic is checked on its own (live_060r)
     unsigned checks=0;
     const std::pair<int,int> screens[]{{1280,720},{1920,1080},{960,720},{1440,1080},{1024,768}};
     if(variant=="r16-hits-parse") {
@@ -495,7 +593,9 @@ void run(const std::string& variant) {
       const auto got=ask(host_mouse,lobby_menu.data(),c.first,r.first,1280,720);
       assert(!got.saw || (got.seen_x==x && got.seen_y==y));
       marker_present=true;build_all(); }
+    checks+=live_060r(mouse,host_mouse);
     std::cout<<"online menus "<<variant<<" PASS (hit boxes = drawn bars through the retail walk at 1280x720, 1920x1080, 960x720, 1440x1080, 1024x768; hub + host lobby; "
-        <<checks<<" checks; first-pass hover and sound; unlisted items; retail menus and unskinned lobbies unchanged)\n";
+        <<checks<<" checks; first-pass hover and sound; unlisted items; retail menus and unskinned lobbies unchanged; fix K: focus models, "
+        "labels, empty texts and the Leave confirm's panel in the walk, the 060r live probe pixels, the Leave confirm click, the diagnostic line)\n";
 }
 }

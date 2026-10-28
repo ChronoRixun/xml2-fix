@@ -215,5 +215,14 @@ inline constexpr script_functions_rules::guard guards[]{
     {0x0055bf28, "8d4c241051ff948628040000", "console dispatcher passes pointer to argument cursor cdecl"},
     {0x005babda, "8bf1e82f0afaff8b106a008bc8ff5228d95c240cd90588828a00d85c240cdfe0f6c4057a178bcee8daf8ffffd944240cd805a0196800d91d88828a0033c0b97d0000008d7c242068f0fe6900", "Host update: clock, 0.25 s list refresh timer, then the ONLINE_ADVICE paragraph"},
     {0x005c849a, "8bf1e86f31f9ff8b106a008bc8ff5228d95c240cd90514fd8a00d85c240cdfe0f6c4057a178bcee88afcffffd944240cd805a0196800d91d14fd8a0033c0b97d0000008d7c242068f0fe6900", "Join update: clock, 0.25 s list refresh timer, then the ONLINE_ADVICE paragraph"},
+    {0x00602200, "a11ca8a00085c07567", "string table getter cdecl (item text and name ids; fix K)"},
+    {0x005bc1b0, "83ec100fbf417a992bc20fbf517255560fbf717657d1f88bfa2bfe8d7407ff03d00fbf4174897424100fbf7170895424188d5430fff64154048974240c89542414757b8b712485f68b7c24", "base item hit test 0x5bc1b0: hidden bit 2, text +0x24 must not be empty, PtInRect of the shifted box (fix K)"},
+    {0x005c6490, "83ec10568bf10fbf467a0fbf4e72992bc20fbf5676d1f8578bf92bfa8d5407ff03c80fbf46748954240c0fbf5670894c24148d4c10fff64654048b44242889542408894c24100f8518020000", "text item hit test 0x5c6490: shifted box, then on 0x202 the +0x9c token (fix K)"},
+    {0x006a0378, "b0c15b00", "CMenuItemModel vt+0x74 = 0x5bc1b0: a model answers only with text (fix K)"},
+    {0x006a1140, "90645c00", "CMenuItemText vt+0x74 = 0x5c6490 (fix K)"},
+    {0x006a1128, "d0cc5b00", "CMenuItemText vt+0x5c = 0x5bccd0 neighbour search (fix K)"},
+    {0x005bccd0, "81ec880000005355568be9578d4c24108bf5e8b9f9ffff32db85ed74768bbc24a00000008b94249c0000008b8c249400000083f9207c02b30133c085c97e0c9039748410745c403bc17cf584db755389748c108b8c24940000004185d2898c24940000007d058b765ceb157e058b7660eb0e85ff7d058b7664eb057e038b76683bf5740f85f6740b8a4654a81475a3a808749f5f8b", "item neighbour search 0x5bccd0: follows its links, skips hidden / neverfocus (0x14) and disabled (bit 3) items (fix K)"},
+    {0x005aafd0, "8b812403000085c0740df640540874078bc88b01ff605833c0c20400", "CMenu navigation 0x5aafd0: nothing from a focused item that is not enabled (fix K)"},
+    {0x005bc981, "8a46540c08682c", "item parser: every item starts enabled (+0x54 |= 8) (fix K)"},
 };
 }

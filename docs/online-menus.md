@@ -1478,3 +1478,46 @@ access violation / privileged / illegal instruction gets a line (60 at most, the
   session teardown 0x607c40(0)); `lobby_original` latches exactly that and the deactivation departs only after it. Guards
   for the three retail spots. Test: r6-lobby-new / -load deactivate the real host lobby with phase 0 (room kept) before
   the native Leave (room left once).
+
+## 0.6 preview fix K: mouse hit boxes that reach the engine, lobby focus and prompts (060r live failures 8, 9)
+
+### Mouse: why fix E / E2 had no effect live
+The 060r probes (live-060r/evidence/mh-*.json, scan-host720.json: 12 px / 3 px steps) put the Hub HOST row's live hit box at
+exactly the retail text box (x 246..596, y 212..245 at 1280x720 = item box x[46,233) y[254,272) view units), as in 060q: the
+remap never happened on an ordinary row. Cause: fix E2 counted every item with +0x54 bit 3 as one that can answer the walk, but
+bit 3 is ENABLED, not focusable (the item parser sets it on every item at 0x5bc981; `enabled="false"` clears it; neverfocus is
+bit 5, hidden bit 2). Every focusable LC item has a `<item>_focus` MENU_ITEM_MODEL laid out at the item's own anchor and box
+(online_menus.py scene_layout), shown and enabled, so it covered the whole box: `free_point` found no point, `scoped_point`
+returned false and the engine got the raw point. A model never answers (CMenuItemModel vt+0x74 = 0x5bc1b0 needs a non-empty
+text); neither does an empty text. The Join by code prompt and Browse Refresh's lower half "worked" in 060r only because their
+retail boxes moved with fix H's footer layout. The fixtures passed because they had no focus models, labels or panels.
+Fix (src/online_menus_hits_rules.hpp engine_item / engine_menu / engine_picks / picked_point; online_menus.cpp
+engine_item_of / scoped_point): the DLL models the engine's own passes - the first pass over desctext1..5 (unshifted box,
+shown + enabled, no text test: the hover index), the lobbies' pass (0x5ba2b0: start / kick / leave, 0x5c8da0: ready / leave,
+then the picker's box whatever its state), and the second pass in the item tree's own walk order, where an item answers only
+as its class does (0x5bc1b0 / 0x5c6490: shown, enabled, not hidden, text not empty, PtInRect of the shifted box; any other
+class: its box, conservatively). The point handed over is one where that model gives the target the focus, the hover and the
+click. Outside every bar the engine's own answer for the raw point decides: an unlisted item keeps it, a listed item's strip
+outside its bar is nobody's. When no point exists (a label with text covering a whole item) the bar keeps the engine's test and
+a once-line names the item that covers it.
+The Leave confirm (er2: hover on Leave left the bar on Cancel, a click on Leave acted as Cancel): its panel model
+(lc_leave_confirm, x 34..476) covers Leave / Cancel / Dismiss; with E2 the remap gave up there too. Now a click on Leave is
+Leave's own Accept (r16-hits live_060r).
+Diagnostic (agent live checks only; `[Test] InputPipe=1`): one line per mouse message on a co-op screen or skinned lobby,
+`online menus: mouse <menu> 0x<msg> pixel X,Y of WxH (exact|half a unit) engine x,y view vx,vy; bar <item|->; <remapped |
+nowhere (...) | passed | no point the engine gives to it (blocked by <item>); unchanged>; handed x,y; model answers <item>;
+after: focus <item>, hover <n>` - the last two are read after the engine's walk. A line equal to the previous is not repeated.
+New guards (9): 0x602200, 0x5bc1b0, 0x5c6490, the model / text vt+0x74, text vt+0x5c, 0x5bccd0, 0x5aafd0, 0x5bc981.
+
+### Lobby pad / keyboard (failure 9)
+- START GAME stuck: bind_lobby dims START (clears bit 3) while a guest is not ready and the focus may sit on it; CMenu's
+  navigation (vt+0x40 = 0x5aafd0) does nothing from a focused item that is not enabled, so every key and pad direction was
+  dead. `lobby_focus_enabled`: the focus never rests on a disabled native lobby button - the item's own neighbour search
+  (vt+0x5c = 0x5bccd0, which skips hidden, neverfocus and disabled items) moves it to the next control; when START is enabled
+  again and the focus is still where it was moved, it goes back (r4-focus-host: the lobby fixture's own START dim).
+- No lobby prompt was drawn: the native desctext items kept `animtext_scene="help"` (the native help bar's fade-in, absent from
+  the authored scene). LC drops it on every LC-laid native item (legends-classic online_menus.py lobby_tree), as its codex /
+  options / pause reskins do. Copy follows the device: `Y Copy code` / `Ctrl+C Copy code` (LC authors the keyboard form).
+- F5 on Browse did not switch the prompts back to the keyboard: online_menus::keyboard zeroes the keys it consumes (F5, Page
+  Up / Down, Ctrl+C / Ctrl+V) before the game's poll, which is where the device tracker samples. Any new key on a co-op screen
+  now calls pad_prompts::note_keyboard (wired by exports.cpp), counted as typed at the next poll.

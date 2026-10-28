@@ -282,7 +282,12 @@ void copy_tests(const script_functions_rules::func_entry* registration,lobby_tic
     };
     std::array<unsigned char,256> keys{};online_menus::keyboard(keys.data());
     ready_person(2,true);focus_stub(child.data(),nullptr,"text_startgame",true);
+    static unsigned keyboard_notes=0;keyboard_notes=0;
+    online_menus::set_keyboard_note(+[] { ++keyboard_notes; });
     keys[0x1d]=keys[0x2e]=0x80;online_menus::keyboard(keys.data());assert(!keys[0x2e]);
+    assert(keyboard_notes==1); // fix K: Ctrl+C never reaches the game's poll - the prompts' device tracker is told instead
+    keys[0x2e]=0x80;online_menus::keyboard(keys.data());assert(keyboard_notes==1 && !keys[0x2e]); // held: no new key, no new note
+    online_menus::set_keyboard_note(nullptr);
     // Coincident Accept on Start must not start/transfer while Copy owns input.
     mask=0x10;tick(child.data(),nullptr);assert(copies==1 && !transfers && !broadcasts && copied_code==L"ABCD-EFGH");
     keys[0x2e]=0x80;online_menus::keyboard(keys.data());mask=0x10;tick(child.data(),nullptr);assert(copies==1 && !transfers && !broadcasts);
@@ -416,7 +421,33 @@ void focus_lobby_tests(const script_functions_rules::func_entry* registration,lo
         // The guest has no confirm: Back reaches the native Unready / Leave (here: not ready, so it leaves the lobby).
         assert(gone("lc_leave_confirm") && (current()==nullptr || leaves>0 || !last_ready));
     }
-    std::cout<<"r4 focus "<<(host ? "HOST" : "JOIN")<<" PASS Copy keeps the first Back; the Leave confirm holds the focus; a hidden notice button never keeps it; the ready line yields to a message\n";
+    if(host) {
+        assert(back(child.data(),nullptr)==2);tick(child.data(),nullptr);assert(gone("lc_leave_confirm")); // (5. left it open)
+        // 6. Fix K (060r live failure 9): a guest not ready dims START GAME (its enabled bit cleared) while the focus is on it, and
+        //    the menu's navigation (CMenu vt+0x40 = retail 0x5aafd0) does nothing from a focused item that is not enabled - every
+        //    arrow was dead. The focus moves to the next control by the item's own neighbour search (retail 0x5bccd0 through
+        //    START's vt+0x5c: its link to KICK PLAYER), and comes back to START once everyone is ready.
+        put(kick_item.data(),0,0x6a0244);kick_item[0x54]=8;
+        put(start_item.data(),0x68,unsigned(reinterpret_cast<std::uintptr_t>(kick_item.data())));
+        ready_person(1,false);refresh_now();focus_stub(child.data(),nullptr,"text_startgame",true);mask=0;tick(child.data(),nullptr);
+        if(start_item[0x54]&8) std::cout<<"START not dimmed with a guest not ready (enabled "<<enabled_items["text_startgame"]<<")\n";
+        assert(!(start_item[0x54]&8)); // dimmed by bind_lobby
+        // The retail navigation from a dimmed focus is nothing (what left every key dead): CMenu vt+0x40 with the focus forced back.
+        { void* const moved=*reinterpret_cast<void**>(child.data()+0x324);
+          put(child.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(start_item.data())));
+          unsigned char request[4]{0,1,0,0};
+          assert(reinterpret_cast<void*(__fastcall*)(void*,void*,void*)>(0x5aafd0)(child.data(),nullptr,request)==nullptr);
+          put(child.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(moved))); }
+        if(focused!="text_kickplayer") std::cout<<"focus after the dim: "<<focused<<"\n";
+        assert(focused=="text_kickplayer" && *reinterpret_cast<void**>(child.data()+0x324)==kick_item.data());
+        for(unsigned row=0;row<4;++row) ready_person(row,true);
+        refresh_now();tick(child.data(),nullptr);tick(child.data(),nullptr);
+        if(focused!="text_startgame") std::cout<<"focus after everyone is ready: "<<focused<<" (START enabled "<<int(start_item[0x54]&8)<<")\n";
+        assert((start_item[0x54]&8) && focused=="text_startgame");
+        put(start_item.data(),0x68,0u);kick_item.fill(0);
+    }
+    std::cout<<"r4 focus "<<(host ? "HOST" : "JOIN")<<" PASS Copy keeps the first Back; the Leave confirm holds the focus; a hidden notice button never keeps it; the ready line yields to a message"
+        <<(host ? "; a dimmed START GAME never keeps the focus (fix K)" : "")<<"\n";
 }
 void pool_tests() {
     // Exercise actual retail shared allocator/base add/clear (the measuring

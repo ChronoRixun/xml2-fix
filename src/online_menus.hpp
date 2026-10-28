@@ -80,6 +80,15 @@ bool pad_prompt_scope();
 // pointer message the window procedure is handing the engine right now (display::pointer_pixel, wired by exports.cpp;
 // null or false: the hit test works from the engine's view-unit point, to half a view unit).
 void set_pointer_probe(bool (*probe)(int& x,int& y,int& screen_width,int& screen_height));
+// The mouse diagnostic (fix K): with [Test] InputPipe=1 (read at install) every mouse message on a co-op screen writes one
+// log line (raw point, bar, handed point, the model's answer, the engine's focus / hover after its walk). Host fixtures switch
+// it with set_hits_trace and register their item-test recorder as a text item's hit test with set_hits_text_alias.
+void set_hits_trace(bool on);
+void set_hits_text_alias(std::uintptr_t test_function);
+// The prompts follow the device (pad_prompts): the co-op screens consume some keys before the game's poll sees them (Browse F5 /
+// Page Up / Page Down, Ctrl+C / Ctrl+V); `note` tells the device tracker the keyboard was used (pad_prompts::note_keyboard,
+// wired by exports.cpp; null: nothing).
+void set_keyboard_note(void (*note)());
 // Optional host seams; production uses nullptr. Callback pointers are copied,
 // not retained through this options object. No game/menu pointers cross threads.
 struct install_hooks {

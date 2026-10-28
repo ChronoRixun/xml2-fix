@@ -30,4 +30,7 @@ namespace pad_prompts
 	// screens' own buttons (online_menus_rules.hpp pad_menu_mask), so the tokens $MENU_OTHER and $MENU_NEXT are drawn as the
 	// bindings of X and Y when the pad is shown. Set before install(); null: the game's labels everywhere.
 	void set_menu_scope(bool (*scope)());
+	// A key the co-op screens consumed before the game's poll (online_menus::keyboard zeroes it): the device tracker counts the
+	// keyboard as used at the next poll, so the prompts switch back to it (060r live: F5 on Browse; fix K).
+	void note_keyboard();
 }
