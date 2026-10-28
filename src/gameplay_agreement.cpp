@@ -12,26 +12,36 @@ namespace gameplay_agreement
  {
   using namespace gameplay_agreement_rules;
   gameplay_capabilities::record capabilities;
+  unsigned deferred=0;
+  bool finalization_requested=false;
   // Published only by the transaction's verified commit: the native refusal sites and the transport sites are
   // written together (plan section 7); before publication the adapters are not reachable through native code.
   // The host notice's receiver and presentation are optional contributions of their own in the same transaction.
-  bool failure_ready=false,transport_ready=false,contributed_=false,published=false,frozen=false,receiver_ready=false,notice_ready=false,fragment_ready=false;
+  bool failure_ready=false,transport_ready=false,contributed_=false,published=false,frozen=false,receiver_ready=false,notice_ready=false,fragment_ready=false,browser_ready=false;
   void* noticed_menu=nullptr;        // the host lobby that shows our notice in place of its advice,
   const char* notice_line=nullptr;   // what it says, until a join is admitted, the host closes
   unsigned long long notice_since=0; // or notice_ms pass
   // The native failure dialog's text (failure_text points here for good): the general explanation, or - when this PC
-  // refused a peer's different settings, or the host said which settings differ - the same advice naming them.
+  // refused the host's different settings, or the host said settings differ - that the host's gameplay settings
+  // differ, naming them when the refusal carried them, and what to do (joiner_settings_text).
   #define XML2_FIX_INCOMPATIBILITY_ADVICE "Both players must use the same build and effective gameplay settings. Restart after fixing the installation."
   constexpr char incompatibility_general[]="Incompatible gameplay or an unverified installation. " XML2_FIX_INCOMPATIBILITY_ADVICE;
   char incompatibility[512]="Incompatible gameplay or an unverified installation. " XML2_FIX_INCOMPATIBILITY_ADVICE;
-  void dialog_text(const char* differing)
+  void dialog_text(refusal why,const char* differing)
   {
    if(game_version::test_mode_active()){
     std::snprintf(incompatibility,sizeof(incompatibility),"%s",game_version::test_mode_reason());return;
    }
-   if(differing && *differing)std::snprintf(incompatibility,sizeof(incompatibility),"Incompatible gameplay settings: %s. " XML2_FIX_INCOMPATIBILITY_ADVICE,differing);
+   if(why==refusal::settings)std::snprintf(incompatibility,sizeof(incompatibility),"%s",joiner_settings_text(differing).c_str());
    else std::memcpy(incompatibility,incompatibility_general,sizeof(incompatibility_general));
   }
+  // The querying PC's games-list notice (browser_guards): the row shown in place of "No Games Found" while current,
+  // and the dialog, raised on the games list's own update so that its panels attach to the list.
+  char browser_row[games_row_limit+1]{};
+  unsigned long long browser_since=0;
+  bool browser_dialog_pending=false,browser_row_logged=false;
+  bool browser_notice_current(){return browser_row[0] && GetTickCount64()-browser_since<browser_notice_ms;}
+  void clear_browser_notice(){browser_row[0]=0;browser_dialog_pending=false;}
   // The rules behind a settings refusal, from the rule-summary buckets that differ: "9 DeathRule, 15 DeathSwitchClear"
   // for logs, "DeathRule, DeathSwitchClear" for the dialog. Empty when none is known.
   struct differing_rules { char log[384]{},dialog[384]{}; };
@@ -61,15 +71,16 @@ namespace gameplay_agreement
   }
   // The host's notice: never a popup, never a menu change. In the lobby its advice paragraph says it; in play
   // the HUD's own timed message does. Anything else: the log line only.
-  void* current_host_menu()
+  void* current_menu_of(std::uint32_t vtable)
   {
    using getter=void*(__cdecl*)();
    __try {
     auto* manager=static_cast<std::uint8_t*>(reinterpret_cast<getter>(native_menu)());
     auto* menu=manager ? *reinterpret_cast<std::uint8_t**>(manager+menu_current) : nullptr;
-    return menu && *reinterpret_cast<const std::uint32_t*>(menu)==host_menu_vtable ? menu : nullptr;
+    return menu && *reinterpret_cast<const std::uint32_t*>(menu)==vtable ? menu : nullptr;
    }__except(EXCEPTION_EXECUTE_HANDLER){return nullptr;}
   }
+  void* current_host_menu(){return current_menu_of(host_menu_vtable);}
   bool hud_text(const char* text)
   {
    using getter=void*(__cdecl*)();using message=int(__thiscall*)(void*,const char*,float,float,float,float,float,int);
@@ -95,6 +106,30 @@ namespace gameplay_agreement
   {
    if(notice_line && GetTickCount64()-notice_since<notice_ms && current_host_menu()==noticed_menu)return notice_line;
    return reinterpret_cast<const char*(__cdecl*)(const char*)>(native_text_lookup)(key);
+  }
+  // The games list's empty-row lookup (both sites): the refusal row while it is current, else the native string.
+  const char* __fastcall games_empty_text(void* strings,void*,int id)
+  {
+   if(static_cast<std::uint32_t>(id)==games_empty_string && browser_notice_current()){
+    if(!browser_row_logged){browser_row_logged=true;logger::write("online: the games list shows \"%s\" in place of its empty row",browser_row);}
+    return browser_row;
+   }
+   using lookup=const char*(__thiscall*)(void*,int);
+   return reinterpret_cast<lookup>((*reinterpret_cast<void***>(strings))[2])(strings,id);
+  }
+  // At the two sites `mov ecx,eax; call [edx+8]` (thiscall(id), id pushed) becomes CALL here.
+  __declspec(naked) void games_empty_thunk()
+  {
+   __asm { mov ecx,eax } __asm { jmp games_empty_text }
+  }
+  // CMenuGamesList vt+0x30: the native update, then - on the list itself - the dialog a refusal left pending.
+  void __fastcall games_list_updated(void* menu,void*)
+  {
+   reinterpret_cast<void(__thiscall*)(void*)>(games_list_update)(menu);
+   if(!browser_dialog_pending)return;
+   if(!browser_notice_current()){browser_dialog_pending=false;return;}
+   if(current_menu_of(games_list_vtable)!=menu)return;
+   browser_dialog_pending=false;logger::write("online: the games list shows the refusal's dialog");dialog(false);
   }
   bool event_fields(void* raw,event& e)
   {
@@ -142,6 +177,7 @@ namespace gameplay_agreement
    std::array<std::uint8_t,receive_room> bytes{};std::size_t size=0;gameplay_capabilities::difference diff{};
    const auto match=extract(raw,base,bytes,size) ? capabilities.compare({bytes.data(),size},&diff) : gameplay_capabilities::result::malformed;
    if(transport_ready && match==gameplay_capabilities::result::match){
+    if(role!=endpoint::host)clear_browser_notice(); // a compatible host answered or admitted this PC: the refusal row ends
     // A matching record is not yet an admission: retail 0x609970 can still refuse a full session (0x615910 ->
     // 0x609a95, sends 0x1c) or fail to take a participant (0x6099b2). The notice clears when the 0x1b follow-up
     // leaves (send_single), which retail sends only once the participant is taken.
@@ -151,11 +187,16 @@ namespace gameplay_agreement
    // a different record all end here.
    const auto why=classify(transport_ready,match);
    const auto rules=why==refusal::settings ? name_rules(diff.buckets,diff.local_only) : differing_rules{};
-   dialog_text(rules.dialog);
+   dialog_text(why,rules.dialog);
    if(role==endpoint::browser){
     logger::write("online: game info 0x%02x from an incompatible host refused (reason=%u%s%s); not listed or joined",unsigned(opcode),unsigned(match),*rules.log ? "; differs: " : "",rules.log);
     event e{};if(event_fields(raw,e)){notify_remote(e,why,diff.buckets);disconnect_peer(e.sender);}
-    dialog(false);return 0;
+    if(!browser_ready){dialog(false);return 0;}
+    // The games list says it in place of its empty row, and raises the dialog on its own update (browser_guards).
+    std::snprintf(browser_row,sizeof(browser_row),"%s",games_row_text(why,rules.dialog).c_str());
+    browser_since=GetTickCount64();browser_dialog_pending=true;browser_row_logged=false;
+    logger::write("online: the games list shows why: \"%s\"; the dialog follows on the list's next update",browser_row);
+    return 0;
    }
    logger::write("online: gameplay capabilities 0x%02x refused (reason=%u%s%s); no native admission",unsigned(opcode),unsigned(match),*rules.log ? "; differs: " : "",rules.log);
    const bool joining=role==endpoint::joiner;
@@ -207,7 +248,7 @@ namespace gameplay_agreement
   {
    std::uint64_t buckets=0;const auto why=remote_refusal(raw,buckets);const auto rules=name_rules(buckets,0);
    logger::write("online: the other PC refused this join (reason=%u%s%s)",unsigned(why),*rules.log ? "; differs: " : "",rules.log);
-   dialog_text(rules.dialog);
+   dialog_text(why,rules.dialog);
    event e{};if(!event_fields(raw,e)){dialog(false);return 0;}
    return fail_local(e,true,refusal::unspecified); // opcode 0x1d is registered by joiner setup; no response loop
   }
@@ -247,7 +288,7 @@ namespace gameplay_agreement
   int __fastcall begin_join(void* context,void*,const void* address,int port)
   {
    if(!transport_ready || !capabilities.ready() || !game_version::gameplay_online_allowed()){
-    dialog_text(nullptr);event e{rejection_opcode,nullptr,0,0,context,nullptr};fail_local(e,true,refusal::sender_install);return 0;
+    dialog_text(refusal::unspecified,nullptr);event e{rejection_opcode,nullptr,0,0,context,nullptr};fail_local(e,true,refusal::sender_install);return 0;
    }
    using join=int(__thiscall*)(void*,const void*,int);return reinterpret_cast<join>(&original_join)(context,address,port);
   }
@@ -304,6 +345,20 @@ namespace gameplay_agreement
    if(!writes_inside_own_guards(c))return;
    if(!transaction.add(std::move(c)))logger::write("online: fragment guard could not join the startup transaction");
   }
+  void contribute_browser(patch_transaction::transaction& transaction,HMODULE game)
+  {
+   if(!retail(game,browser_guards)){logger::write("online: games-list notice guard failed; a refused host's reason is in the native dialog only");return;}
+   patch_transaction::contribution c;c.owner="gameplay_agreement.games_list_notice";expect(c,browser_guards);
+   using patch_transaction::relocation;
+   c.writes.push_back(relocation(games_empty_lookup_first,"e8",true,address_of(reinterpret_cast<const void*>(&games_empty_thunk)),0,"games list empty row (first search)"));
+   c.writes.push_back(relocation(games_empty_lookup_emptied,"e8",true,address_of(reinterpret_cast<const void*>(&games_empty_thunk)),0,"games list empty row (emptied list)"));
+   c.writes.push_back(relocation(games_list_update_slot,"",false,address_of(reinterpret_cast<const void*>(&games_list_updated)),0,"games list update slot"));
+   c.publish=[]{browser_ready=true;};
+   c.abandon=[]{logger::write("online: games-list notice could not be installed; a refused host's reason is in the native dialog only");};
+   c.retain=c.abandon;
+   if(!writes_inside_own_guards(c))return;
+   if(!transaction.add(std::move(c)))logger::write("online: games-list notice could not join the startup transaction");
+  }
   void contribute_notice(patch_transaction::transaction& transaction,HMODULE game)
   {
    if(!retail(game,presentation_guards)){logger::write("online: host refusal notice guard failed; refusals are logged only");return;}
@@ -324,7 +379,7 @@ namespace gameplay_agreement
  { enlist();capabilities.invalidate();game_version::bind_gameplay_agreement(false);logger::write("online: %s has no assigned gameplay rule ID; online remains blocked",name); }
  bool register_entity_layout(std::uint16_t revision,std::uint32_t actors,std::uint32_t generic,std::uint32_t world,std::uint32_t token_bits,bool verified)
  { const bool enabled=enlist();const bool ok=capabilities.layout(revision,{actors,generic,world,token_bits},verified && enabled);if(!ok)game_version::bind_gameplay_agreement(false);return ok; }
- void show_install_failure(){dialog_text(nullptr);dialog(true);}
+ void show_install_failure(){dialog_text(refusal::unspecified,nullptr);dialog(true);}
  // Endpoint roles follow native registration and packet direction (live wire order), never timer presence.
  int receive_request(void* e){return receive(e,request_size,native_request,endpoint::browser,0x18);}
  int receive_reply(void* e){return receive(e,reply_size,native_reply,endpoint::joiner,0x1f);}
@@ -361,11 +416,13 @@ namespace gameplay_agreement
   // inside them, so a mismatch in either part leaves that part out instead of refusing startup. Once joined, a part
   // is an ordinary contributor: a conflict with another contribution's bytes, a page that cannot be made writable or
   // a failed readback refuses or rolls back the WHOLE transaction (and with it the LC startup), as for any other part.
-  if(contributed_){contribute_receiver(transaction,game);contribute_notice(transaction,game);contribute_fragment_guard(transaction,game);}
+  if(contributed_){contribute_receiver(transaction,game);contribute_notice(transaction,game);contribute_fragment_guard(transaction,game);contribute_browser(transaction,game);}
   return contributed_;
  }
  bool commit_verified()
  {
+  finalization_requested=true;
+  if(deferred)return false;
   if(frozen)return capabilities.ready();
   frozen=true;
   if(!published || !capabilities.finalize()){logger::write("online: capabilities/failure/transport installation unverified; online remains blocked");return false;}
@@ -377,16 +434,23 @@ namespace gameplay_agreement
     logger::write("online: rule %u detail sha256 %s",unsigned(r.id),hex);}}
   return true;
  }
+ void defer_finalization(){++deferred;game_version::bind_gameplay_agreement(false);}
+ void resume_finalization(){
+  if(!deferred)return;
+  --deferred;
+  if(!deferred&&finalization_requested)game_version::bind_gameplay_agreement(commit_verified());
+ }
  bool prepare(HMODULE game)
  {
   if(contributed_){
    // A host-notice part whose guards did not read back as retail when the agreement committed may join a later
    // transaction of its own (the late path only; production contributes once, to the startup transaction).
-   if(published && (!receiver_ready || !notice_ready || !fragment_ready)){
+   if(published && (!receiver_ready || !notice_ready || !fragment_ready || !browser_ready)){
     patch_transaction::transaction late;
     if(!receiver_ready)contribute_receiver(late,game);
     if(!notice_ready)contribute_notice(late,game);
     if(!fragment_ready)contribute_fragment_guard(late,game);
+    if(!browser_ready)contribute_browser(late,game);
     if(late.contributions()){const auto outcome=late.commit();
      if(outcome!=patch_transaction::outcome::committed)logger::write("online: late host notice installation %s: %s",patch_transaction::name(outcome),late.report().c_str());}
    }

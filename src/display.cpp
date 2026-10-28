@@ -1,5 +1,8 @@
 #include "display.hpp"
+#include "no_activate.hpp"
 #include "pool_counters.hpp"
+#include "script_pools.hpp"
+#include "e4_observe.hpp"
 #include "d3d8_min.hpp"
 #include "display_rules.hpp"
 #include "display_settings.hpp"
@@ -406,6 +409,7 @@ namespace display
 
 		HRESULT STDMETHODCALLTYPE hooked_present(void* self, const RECT* source, const RECT* destination, const HWND override, const void* dirty)
 		{
+			script_pools::sample(); // guarded D0 snapshot on the game's render thread
 			if (frame_hook)
 			{
 				frame_hook(self); // the back buffer holds the finished frame
@@ -432,6 +436,7 @@ namespace display
 			if (SUCCEEDED(result))
 			{
 				pool_counters::sample(); // fixed-storage reads, between simulation steps
+                e4_observe::sample();
 				frame_rate::on_present(); // paces the frame (FrameRate) and counts it (the pipe's "status")
 			}
 			return result;
@@ -453,6 +458,7 @@ namespace display
 
 		HRESULT STDMETHODCALLTYPE hooked_reset(void* self, d3d8::present_parameters* pp)
 		{
+			if (pp) no_activate::presentation(*pp, "D3D8 Reset exclusive parameters");
 			if (!pp || stock_fallback)
 			{
 				return real_reset(self, pp);
@@ -482,7 +488,7 @@ namespace display
 			}
 			const d3d8::present_parameters guaranteed =
 			    opts.window_mode == mode::fullscreen && !requested.windowed && d3d ? desktop_mode_fallback(d3d, requested) : requested;
-			const HRESULT result = apply_with_fallbacks([&](d3d8::present_parameters& pp_to_use) { return real_reset(self, &pp_to_use); }, wanted, requested,
+			const HRESULT result = apply_with_fallbacks([&](d3d8::present_parameters& pp_to_use) { no_activate::presentation(pp_to_use, "D3D8 Reset fallback"); return real_reset(self, &pp_to_use); }, wanted, requested,
 			                                            opts.window_mode == mode::fullscreen && !requested.windowed && d3d ? &guaranteed : nullptr, "reset", true);
 			if (SUCCEEDED(result))
 			{
@@ -500,6 +506,7 @@ namespace display
 		HRESULT STDMETHODCALLTYPE hooked_create_device(void* self, const UINT which, const DWORD type, const HWND focus, const DWORD engine_behaviour,
 		                                               d3d8::present_parameters* pp, void** out)
 		{
+			if (pp) no_activate::presentation(*pp, "D3D8 CreateDevice exclusive parameters");
 			// The simulation's x87 word is XMen2.exe's 53-bit one only while Direct3D preserves it: the engine asks for
 			// D3DCREATE_FPU_PRESERVE (alchemy.ini preserveFPU, true unless edited), and the fix keeps it set, because the
 			// lockstep weapon brain runs the game's routines under exactly that word (det_math::game_x87_cw).
@@ -535,7 +542,7 @@ namespace display
 			const bool fullscreen = opts.window_mode == mode::fullscreen && !requested.windowed;
 			const auto guaranteed = fullscreen ? desktop_mode_fallback(self, requested) : requested;
 			const HRESULT result = apply_with_fallbacks(
-				[&](d3d8::present_parameters& pp_to_use) { return real_create_device(self, which, type, focus, behaviour, &pp_to_use, out); },
+				[&](d3d8::present_parameters& pp_to_use) { no_activate::presentation(pp_to_use, "D3D8 CreateDevice fallback"); return real_create_device(self, which, type, focus, behaviour, &pp_to_use, out); },
 				wanted, requested, fullscreen ? &guaranteed : nullptr, "device creation", false);
 			if (FAILED(result) || !*out)
 			{
@@ -566,9 +573,9 @@ namespace display
 				hook_slot(device, d3d8::device_slot::test_cooperative_level, &hooked_test_cooperative_level, real_test_cooperative_level);
 			}
 			present_hooked = present_hooked && d3d8::method<void*>(device, d3d8::device_slot::present) == reinterpret_cast<void*>(&hooked_present);
-			if (can_pause || frame_hook || frame_rate::paces() || pool_counters::enabled())
+			if (can_pause || frame_hook || frame_rate::paces() || pool_counters::enabled() || e4_observe::enabled())
 			{
-				hook_present(can_pause ? "the window's pause without the focus" : frame_hook ? "the test pipe's screenshots" : pool_counters::enabled() ? "read-only pool sampling" : "the frame limiter");
+				hook_present(can_pause ? "the window's pause without the focus" : frame_hook ? "the test pipe's screenshots" : pool_counters::enabled() ? "read-only pool sampling" : e4_observe::enabled() ? "E4 observation sampling" : "the frame limiter");
 			}
 			logger::write("display: device created - %s", describe(wanted).c_str());
 			return result;
@@ -1355,6 +1362,12 @@ namespace display
 	void install(const HMODULE game)
 	{
 		opts = read_options();
+		if (no_activate::enabled())
+		{
+			opts.window_mode = mode::windowed;
+			opts.topmost = false;
+			logger::write("test: NoActivate keeps the D3D device windowed and Topmost off; RunInBackground=%u", opts.run_in_background);
+		}
 		const bool caps_frames = frame_rate_rules::disables_stock_cap(opts.frame_rate);
 
 		desktop = current_desktop();
@@ -1373,7 +1386,7 @@ namespace display
 			// the device to start the frame limiter live, but every hook passes the engine's calls
 			// through unchanged until a value is set (Present itself waits for that: hook_present).
 			std::string why;
-			for (const auto& [wanted, reason] : {std::pair{frame_hook != nullptr, "the test pipe's screenshots"}, std::pair{caps_frames, "the frame rate cap"},
+			for (const auto& [wanted, reason] : {std::pair{frame_hook != nullptr, "the test pipe's screenshots"}, std::pair{e4_observe::enabled(), "E4 observation sampling"}, std::pair{caps_frames, "the frame rate cap"},
 			                                     std::pair{opts.vsync.has_value(), "VSync"}, std::pair{options_menu::installed(), "the in-game options"},
 			                                     std::pair{list_hooked, "the Video options list (ResolutionList)"}})
 			{

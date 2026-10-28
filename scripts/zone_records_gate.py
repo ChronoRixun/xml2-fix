@@ -15,6 +15,9 @@ Fails (exit 1) when, for either native layout (retail, E10A2):
   - a zone record the candidate's load applies is gone after the candidate's save of that load and a reload;
   - a save that loads on the baseline does not load on the candidate;
   - a --require-zone zone has no saved record that the candidate applies on either layout.
+--candidate-layout w2 (limits wave 2) compares the candidate's W2 load with each baseline layout instead: a build made
+with --save-layout w2 (the 0.4.2 economy's 185 item definitions exceed the retail / E10A2 budget of 160) loads saves only
+through W2, and must keep every zone record the stable baseline applies on either of its layouts.
 Generate the candidate's ledger first (legends-classic tools/lcsave/README.md: `python -m lcsave.zonecompat
 generate --previous STABLE [--previous PREVIOUS_BETA] CANDIDATE --ledger-out ...`). Never launches the game.
 """
@@ -44,14 +47,14 @@ def index(rows):
     return {r['id']: r for r in rows if 'saved' in r or r.get('problem')}
 
 
-def compare(base_rows, cand_rows, required=()):
+def compare(base_rows, cand_rows, required=(), candidate_layout=None):
     base, cand = index(base_rows), index(cand_rows)
     failures, zones = [], {}
     for layout in LAYOUTS:
         saved, applied_b, applied_c, resave_c = Counter(), Counter(), Counter(), Counter()
         for fid in sorted(set(base) | set(cand)):
             b, c = base.get(fid, {}), cand.get(fid, {})
-            lb, lc = b.get(layout) or {}, c.get(layout) or {}
+            lb, lc = b.get(layout) or {}, c.get(candidate_layout or layout) or {}
             if lb.get('load') and not lc.get('load'):
                 failures.append(f'{layout} {fid}: loads on the baseline, not on the candidate: {lc.get("error") or c.get("problem")}')
             for z in c.get('saved', b.get('saved', [])):
@@ -103,18 +106,19 @@ def main(argv=None):
     ap.add_argument('--baseline-registry'); ap.add_argument('--candidate-registry')
     ap.add_argument('--out', required=True, help='output folder (created)')
     ap.add_argument('--require-zone', action='append', default=[], help='a zone the saves must exercise: at least one of its records applies on the candidate')
+    ap.add_argument('--candidate-layout', choices=('w2',), help='read the candidate through this layout against every baseline layout (a --save-layout w2 build)')
     args = ap.parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     reg = lambda build, given: Path(given) if given else Path(build) / 'Data/lcsave/typed-entity-ids.txt'
     base = run_tool(args.tool, args.list, args.baseline, reg(args.baseline, args.baseline_registry), out / 'baseline.jsonl')
     cand = run_tool(args.tool, args.list, args.candidate, reg(args.candidate, args.candidate_registry), out / 'candidate.jsonl')
-    zones, failures = compare(base, cand, args.require_zone)
+    zones, failures = compare(base, cand, args.require_zone, args.candidate_layout)
     tsv, md = table(zones)
     (out / 'zone-gate.tsv').write_text(tsv, encoding='utf-8', newline='\n')
     (out / 'zone-gate.md').write_text(md, encoding='utf-8', newline='\n')
     problems = sorted({f'{r["id"]}: {r["problem"]}' for r in base + cand if r.get('problem')})
-    summary = dict(baseline=str(args.baseline), candidate=str(args.candidate), campaigns=len(index(cand)),
+    summary = dict(baseline=str(args.baseline), candidate=str(args.candidate), candidate_layout=args.candidate_layout or 'same', campaigns=len(index(cand)),
                    zones=zones, failures=failures, file_problems=problems, passed=not failures)
     (out / 'zone-gate.json').write_text(json.dumps(summary, indent=1) + '\n', encoding='utf-8', newline='\n')
     print(md)

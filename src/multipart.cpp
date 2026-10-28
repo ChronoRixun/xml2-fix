@@ -1,4 +1,5 @@
 #include "multipart.hpp"
+#include "effect_template_layout.hpp"
 #include "multipart_rules.hpp"
 #include "game_version.hpp"
 #include "ini.hpp"
@@ -102,12 +103,13 @@ u32 spawn_effect(void* actor,const std::string& effect,const std::string& bone){
 float now(){return fn<float(__cdecl*)()>(0x45fe60)();}
 // The XBE's effect length (effect manager vt+0x24 = 0x184f0 -> 0x25ee0): LoopTime + random * RandLoopTime of the
 // loaded effect, 0.3 for a handle that is gone. XMen2.exe keeps the same root record (0x44 bytes from the effect
-// store at manager 0x4078d0 + 0x4874; LoopTime +0x34, RandLoopTime +0x38, PersistLoop +0x3c - parser 0x4182c0,
+// The effect layout descriptor locates the store; LoopTime +0x34, RandLoopTime +0x38, PersistLoop +0x3c - parser 0x4182c0,
 // reader 0x418d50), handle checked by 0x405100.
 float loop_time(u32 effect){
-    auto* store=reinterpret_cast<unsigned char*>(fn<void*(__cdecl*)()>(0x4078d0)())+0x4874;
+    auto* owner=fn<void*(__cdecl*)()>(0x4078d0)();
+    auto* store=effect_templates::definitions(owner);
     if(!effect||(fn<u32(__fastcall*)(void*,void*,u32)>(0x405100)(store,nullptr,effect)&0xff)==0)return .3f;   // 0x25ee0: no draw
-    const auto* rec=store+(at<u32>(store,0x419c)&effect)*0x44;
+    const auto* rec=effect_templates::definition(owner,effect);
     // 0x25f30 draws from the shared generator (0x123330, the break roll's too) whatever the spread: keep the draw so
     // the stream advances as in the first game (PC: 0x560190(1) and 0x5601e0(..,1) both reach 0x560090).
     const float random=fn<float(__cdecl*)(unsigned char)>(0x560190)(1);
@@ -350,11 +352,14 @@ void install(HMODULE game){
         {0x4d5830,"8b511c33c085d2740d568b74","script argument getter"},
         {0x45fe60,"8b0d348471008b01ffa060010000","game clock"},
         {0x4078d0,"a13c3c6f0085c07562566a0b","effect store getter"},
-        {0x405100,"8b442404568bf18b969c4100","effect handle check"},
+        {0x405100,"8b442404568bf1","effect handle entry; layout checked through descriptor"},
         {0x560190,"8a44240484c07405e9f3feffffe93eff","native random stream"}}};
     for(const auto& g:guards)
         if(!limits_rules::matches(reinterpret_cast<const unsigned char*>(g.va),g.hex)){
             logger::write("multipart: guard failed at %08X (%s); native parts retained",g.va,g.what);return;}
+    const auto validator=effect_templates::validator_bytes();
+    if(std::memcmp(reinterpret_cast<const void*>(0x405100),validator.data(),validator.size())!=0){
+        logger::write("multipart: effect descriptor validation failed; native parts retained");return;}
     real_parse=fn<parse_t>(0x48cec0);real_remove=fn<remove_t>(0x48d190);real_apply=fn<apply_t>(0x48cbc0);
     real_clone=fn<clone_t>(0x48cde0);real_damage=fn<damage_t>(0x435440);
     using xml1_hook_transaction::pointer_bytes;

@@ -3,7 +3,17 @@
 #include <array>
 namespace xml1_air_carry_rules {
 // Short retail service guards and complete handler tables, read before writing.
-inline constexpr std::array<limits_rules::guard,53> guards{{
+inline constexpr std::array<limits_rules::guard,62> guards{{
+    {0x42b6f3, "8a44245084c08b4c240cc744244000000000740b8b116a076a02ff5240eb098b016a086a02ff5040", "probe flag selects property7/8, not an actor exclusion"},
+    {0x42b795, "8b8e780100008bc48964246489088b561c518bc4896424688910e83c000800", "probe passes physical owner and self as excluded handles"},
+    {0x692378, "30b84d00", "victim_throw execute registration"},
+    {0x4db830, "83ec34538b5c243c8b836c0700005556578bf98d4c244889442448e8609cf8ff", "native victim_throw event entry"},
+    {0x4db9df, "8b6e0483e5fb8bce896e04e85144f8ff", "native victim_throw clears only physical bit2"},
+    {0x4c4bb0, "8a0dc48a7700b80100000084c875100905c48a7700c705c08a7700d4f26800b8c08a7700c3", "native level damage values manager"},
+    {0x68f2e0, "f0494c00", "level damage evaluator slot0c"},
+    {0x4c49f0, "8b44240885c07406c700000000008b4c2404", "native L2 level value evaluator"},
+    {0x4b7970, "8b4424088b5424046a0050526a03e8fdfdffff0fbfc089442408db442408d80d2c2a6800d8052c016800c20c00", "native caster damage multiplier"},
+
     {0x500640, "8b81c8000000c3", "FightMove handler identity getter vt30 for carry-owned descent"},
     {0x433e46, "8b068bc8c1e908f6c1017453c1e807a801754c8b97d403000052e83b651e0083c40484c07539", "flight descent Guard bit8, no power bit7 and native controller gate"},
     {0x433e6c, "6a028d4c241c", "flight descent carry admission seam"},

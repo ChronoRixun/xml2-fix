@@ -13,6 +13,10 @@
 // (0x4a1ac0); health +0x27c, max +0x284 (0x4a36f0/0x4a3660); stats ptr +0x35c,
 // stats identifier +0x150 (0x46c590). AI branch: +0x3d8 bit 0 OR +0x768 < -0.5
 // OR +0x768 > game clock (0x434540). This is control routing, not a promise of motion.
+// Energy: normal getter 0x41d5d0 reads +0x288; maximum +0x314 (special/infinite
+// branch returns this instead); pickup restore 0x42cb70 queues recovery at +0x6ac.
+// CMove current ptr +0x378, handler +0xc8 (0x500640), enum +0xbc (0x500840),
+// CName key +8; common-name pool 0xa2c440 (0x602280), string data +0x4008.
 // Conversation singleton [0x717aac]: +0x21b24 bit 1 active; signed short +0x21b28
 // responses; signed short +0x21b26 selected response; +0x4bc line id; +0x2399c talk-animation entity handle (0x45bddd).
 // Speaker: 0x4573f0 resolves the current file via the tree subobject CS+4:
@@ -34,6 +38,7 @@
 // Events are bounded sampled transitions at keyboard polls (100ms), not hooks:
 // short transitions between samples may be missed. Script errors are unavailable.
 #include "frame_rate_rules.hpp"
+#include "save_layout_view.hpp"
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -113,6 +118,11 @@ namespace test_state_rules
 		address id = 0;
 		std::array<std::optional<float>, 3> pos;
 		std::optional<float> health, max_health, vz;
+		std::optional<float> energy, max_energy, pending_energy;
+		std::optional<address> owner_entity, selected_entity, ground_contact, physical_flags, actor_flags, move_pointer, move_handler;
+		std::optional<unsigned> move_animenum, status_byte;
+		std::optional<std::string> move_name;
+		std::optional<bool> flying;
 		std::optional<bool> ai;
 		std::optional<bool> party_member;
 		std::string binding = "unresolved";
@@ -486,6 +496,29 @@ namespace test_state_rules
 					}
 					a.health = get<float>(*e + 0x27c);
 					a.max_health = get<float>(*e + 0x284);
+					a.energy = get<float>(*e + 0x288);
+					a.max_energy = get<float>(*e + 0x314);
+					a.pending_energy = get<float>(*e + 0x6ac);
+					a.owner_entity = get<address>(*e + 0x178);
+					a.selected_entity = get<address>(*e + 0x76c);
+					a.ground_contact = get<address>(*e + 0xbc);
+					a.physical_flags = get<address>(*e + 4);
+					a.actor_flags = get<address>(*e + 0x3d8);
+					a.status_byte = get<unsigned char>(*e + 0x579);
+					if (a.actor_flags) a.flying = bool(*a.actor_flags & 4);
+					a.move_pointer = get<address>(*e + 0x378);
+					if (a.move_pointer && *a.move_pointer && *a.move_pointer <= 0xfffffe00u)
+					{
+						a.move_handler = get<address>(*a.move_pointer + 0xc8);
+						a.move_animenum = get<unsigned>(*a.move_pointer + 0xbc);
+						auto key = get<unsigned>(*a.move_pointer + 8);
+						auto initialized = get<unsigned>(0xa37c48);
+						if (key && initialized && (*initialized & 1) && (*key & 0xffffffu) < 4096)
+						{
+							auto offset = get<unsigned>(0xa2c444 + 4 * (*key & 0xffffffu));
+							if (offset && *offset < 0x7800) a.move_name = text(0xa30448 + *offset, 128);
+						}
+					}
 					auto af = bit(*e + 0x3d8, 1);
 					auto until = get<float>(*e + 0x768);
 					if (af && until && clock)
@@ -499,18 +532,22 @@ namespace test_state_rules
 			auto mission = get<address>(0x72b108);
 			if (mission && *mission && get<address>(*mission) == 0x6892d4u)
 			{
-				auto n = get<unsigned>(*mission + 0x7d78);
-				if (n && *n <= 75)
+				const auto& layout = save_layout_view::objectives();   // the installed layout's pool, index and state array (W2-L-12)
+				auto n = get<unsigned>(*mission + layout.count_offset);
+				if (n && *n <= layout.objectives_per_act)
 				{
 					std::vector<objective> out;
 					bool valid = true;
 					for (unsigned i = 0; i < *n; ++i)
 					{
-						address rec = *mission + 8 + i * 0x1ac;
+						const address pool = layout.pool_address ? layout.pool_address : *mission + layout.pool_offset;
+						address rec = pool + i * layout.record_size;
 						auto nm = text(rec, 32);
-						auto ix = get<unsigned char>(rec + 0x1a9);
+						std::optional<unsigned> ix;
+						if (layout.wide_index) { if (layout.wide_index[i] != 0xffff) ix = layout.wide_index[i]; }
+						else if (auto byte = get<unsigned char>(rec + layout.index_offset)) ix = *byte;
 						auto goal = get<unsigned char>(rec + 0x1aa);
-						auto b = ix ? get<unsigned char>(0x72b118 + *ix) : std::nullopt;
+						auto b = ix && *ix < layout.objectives ? get<unsigned char>(layout.state_bytes + *ix) : std::nullopt;
 						if (!nm || !b || !goal)
 						{
 							valid = false;
@@ -532,7 +569,12 @@ namespace test_state_rules
 		return "{\"name\":" + json(a.name) + ",\"entity_id\":" + std::to_string(a.id) + ",\"binding\":" + quote(a.binding) +
 			   ",\"party_member\":" + json(a.party_member) + ",\"x\":" + json(a.pos[0]) + ",\"y\":" + json(a.pos[1]) + ",\"z\":" + json(a.pos[2]) +
 			   ",\"health\":" + json(a.health) + ",\"max_health\":" + json(a.max_health) + ",\"alive\":" + json(a.alive()) +
-			   ",\"ai_controlled\":" + json(a.ai) + ",\"z_velocity\":" + json(a.vz) + ",\"on_floor\":null,\"airborne_ms\":null}";
+			   ",\"ai_controlled\":" + json(a.ai) + ",\"z_velocity\":" + json(a.vz) + ",\"energy\":" + json(a.energy) +
+			   ",\"max_energy\":" + json(a.max_energy) + ",\"pending_energy\":" + json(a.pending_energy) + ",\"owner_entity\":" + json(a.owner_entity) + ",\"selected_entity\":" + json(a.selected_entity) +
+			   ",\"ground_contact\":" + json(a.ground_contact) + ",\"physical_flags\":" + json(a.physical_flags) + ",\"actor_flags\":" + json(a.actor_flags) +
+			   ",\"status_byte\":" + json(a.status_byte) + ",\"flying\":" + json(a.flying) + ",\"move_pointer\":" + json(a.move_pointer) +
+			   ",\"move_handler\":" + json(a.move_handler) + ",\"move_animenum\":" + json(a.move_animenum) + ",\"move_name\":" + json(a.move_name) +
+			   ",\"on_floor\":null,\"airborne_ms\":null}";
 	}
 	inline std::string objectives_json(const snapshot& s)
 	{

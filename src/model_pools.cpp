@@ -23,6 +23,7 @@ namespace model_pools
 		DWORD aggregate_va = retail_aggregate; // where the live counts are read
 		DWORD particle_manager_va = retail_particle_manager;
 		bool readable = false;                 // the exe is the retail build (status reads its counts)
+        std::uint32_t procedural_find_next=0;
 		agreement rule{};                      // rule 28 as installed (install sets it once)
 
 		bool read_dword(const DWORD address, DWORD& value)
@@ -95,6 +96,7 @@ namespace model_pools
 	}
 
 	bool requested() { return rule.requested; }
+    std::uint32_t installed_target(std::uint32_t call) {return call==0x571724 ? procedural_find_next : 0;}
 	bool verified() { return rule.verified; }
 	std::array<std::uint32_t, 4> agreement_values() { return rule.values; }
 
@@ -187,6 +189,9 @@ namespace model_pools
 			return;
 		}
 		layout = wanted;
+        for(const auto& w:p->writes)if(w.va==0x571724) {
+            std::uint32_t delta=0;std::memcpy(&delta,w.bytes.data()+1,4);procedural_find_next=w.va+5+delta;
+        }
 		rule = agreement_for(set, *set.raise);
 		aggregate_va = address_of(block);
 		particle_manager_va = address_of(systems);

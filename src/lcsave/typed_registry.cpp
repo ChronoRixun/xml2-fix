@@ -57,10 +57,44 @@ namespace lcsave
 	const char* const downgrade_refused = "this save requires ENTITY_LAYOUT_CONTIGUOUS10 (required feature bit 0): it needs the "
 		"entity-capacity build and cannot be loaded by a retail-layout build";
 
+	const char* const w2_refused = "this save requires NATIVE_W2 (required feature bit 1): it needs the W2 save layout "
+		"([Limits] SaveLayout=w2; Legends Classic 0.4.2 / XML2 Fix 1.9 or newer); enable it or use the build that wrote it";
+
+	const char* required_feature_name(const std::uint32_t bit)
+	{
+		switch (bit)
+		{
+		case feature_entity_layout_contiguous10: return "ENTITY_LAYOUT_CONTIGUOUS10";
+		case feature_native_w2: return "NATIVE_W2";
+#ifdef XML2_E4_CORE
+		case feature_actor_capacity96:return "ACTOR_CAPACITY_96";
+#endif
+		default: return nullptr;
+		}
+	}
+
+	const char* required_feature_needs(const std::uint32_t bit)
+	{
+		switch (bit)
+		{
+		case feature_entity_layout_contiguous10: return "the entity-capacity build";
+		case feature_native_w2: return "Legends Classic 0.4.2 (XML2 Fix 1.9) or newer with [Limits] SaveLayout=w2";
+#ifdef XML2_E4_CORE
+		case feature_actor_capacity96:return "the actor-capacity build ([Limits] Actors=96)";
+#endif
+		default: return nullptr;
+		}
+	}
+
 	FeatureDecision decide_features(const std::uint32_t required_features, const NativeLayout& native)
 	{
 		FeatureDecision d;
 		d.required_features = required_features;
+		if((required_features&feature_actor_capacity96)&&!(native.feature_bits&feature_actor_capacity96))
+		{
+			d.reason="required feature bits 0x4 not implemented (needs a newer version)";
+			return d;
+		}
 		if (required_features & ~known_required_features)
 		{
 			char b[32];
@@ -69,6 +103,23 @@ namespace lcsave
 			return d;
 		}
 		const bool contiguous = (required_features & feature_entity_layout_contiguous10) != 0;
+		// bit 1 (W2 section 7): known by name to this code; applicable only by the W2 layout. A W2 file is always
+		// contiguous (W2 tokens are ten-bit); bit 1 without bit 0 is no file a writer makes.
+		if (required_features & feature_native_w2)
+		{
+			if (!contiguous)
+			{
+				char b[32];
+				std::snprintf(b, sizeof b, "0x%x", static_cast<unsigned>(required_features));
+				d.reason = std::string("required feature bits ") + b + ": NATIVE_W2 without ENTITY_LAYOUT_CONTIGUOUS10 (damaged marker)";
+				return d;
+			}
+			if (!native.w2())
+			{
+				d.reason = native.contiguous() ? w2_refused : downgrade_refused;
+				return d;
+			}
+		}
 		if (contiguous && !native.contiguous())
 		{
 			d.reason = downgrade_refused;

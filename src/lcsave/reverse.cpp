@@ -5,18 +5,42 @@
 #include "internal.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <set>
 
+namespace
+{
+	std::atomic<bool (*)()> economy_verifier{nullptr};
+}
+
+namespace lcsave
+{
+	bool item_own_rebuilt_enabled()
+	{
+		const auto verify = economy_verifier.load(std::memory_order_acquire);
+		return verify != nullptr && verify();
+	}
+
+	void set_xml1_economy_verifier(bool (*verified)())
+	{
+		economy_verifier.store(verified, std::memory_order_release);
+	}
+}
+
 namespace lcsave::detail
 {
 	// Installed engine budgets are shared by both runtime saver directions and native loaders.
-	void validate_native_tables(const TablesData& tables)
+	void validate_native_tables(const TablesData& tables, const NativeLayout& native)
 	{
 		if (!tables.build) fail("native translation needs build tables");
 		const auto& b = *tables.build;
-		if (b.item.size() > 160 || b.T.ITEM.size() > 160) fail("native item definition budget exceeded (160)");
+		// the layout's definition table (RETAIL / E10A2 160, W2 1024; the message names the layout's limit)
+		if (b.item.size() > native.definitions || b.T.ITEM.size() > native.definitions)
+		{
+			fail("native item definition budget exceeded (" + std::to_string(native.definitions) + ")");
+		}
 		if (b.hero_count > 21 || b.T.hero_count > 21) fail("native hero record budget exceeded (21)");
 		// Conservatively 297 total slots, including reserved index 0, until the registry boundary is proven.
 		if (b.stat.size() > 297 || b.T.STAT.size() > 297) fail("native stats table budget exceeded (297 slots including reserved zero)");
@@ -82,7 +106,7 @@ namespace lcsave::detail
 			const auto& item = f.data("ITEM");
 			unique(item["world"], "handle"); unique(item["def_state"], "item");
 			std::set<u32> handles;
-			for (const auto& w : item["world"].as_list()) { const auto h = U(w["handle"]); if (h >= 150) fail("world handle outside native pool"); handles.insert(h); }
+			for (const auto& w : item["world"].as_list()) { const auto h = U(w["handle"]); if (h >= native.world_slots) fail("world handle outside native pool"); handles.insert(h); }
 			unique(f.data("HERO")["heroes"], "hero"); unique(f.data("REST")["records"], "owner"); unique(f.data("ZONE")["records"], "zone");
 			for (const auto& snap : f.data("MISS")["snapshots"].as_list()) { unique(snap["seats"], "seat"); unique(snap["objectives"], "objective"); }
 			for (const auto& z : f.data("ZONE")["records"].as_list())
@@ -97,7 +121,12 @@ namespace lcsave::detail
 					const auto list = state["list"].as_int(); if (list < 1 || list > 3) fail("unknown native state list");
 					if (list == 1 && (!ordinals.insert(U(state["ordinal"])).second || U(state["ordinal"]) < 1 || U(state["ordinal"]) > native.ordinals)) fail("duplicate or invalid ordinal");
 					if (list == 1 && !placements.insert(U(state["placement_index"])).second) fail("duplicate destination placement");
-					for (const auto& value : state["position"].as_list()) { const auto x = value.as_real(); if (!std::isfinite(x) || x < -32768 || x > 32767 || x != std::nearbyint(x)) fail("state position not representable"); }
+					// RETAIL / E10A2: integral i16 positions (round half to even); W2: any finite f32 (stored as is)
+					for (const auto& value : state["position"].as_list())
+					{
+						const auto x = value.as_real();
+						if (!std::isfinite(x) || (!native.float_positions && (x < -32768 || x > 32767 || x != std::nearbyint(x)))) fail("state position not representable");
+					}
 					B(state["flags_a"]); B(state["flags_b"]);
 					const auto& payload = state["payload"].as_bytes();
 					if (state["payload_kind"].as_int() == 2)
@@ -111,15 +140,20 @@ namespace lcsave::detail
 		{
 			const TablesData& t;
 			const Build& b;
+			const NativeLayout& native;
+			const bool rebuild_own;               // snapshot of the live verified rule-52 predicate
+			const bool probe;                     // the representability probe: definition indices are per build
+			const u32 definitions;                // the definition table the indices address
 
 			// Installed native arrays, independent of the LC reader's future-facing ceilings (SPEC 2.16).
-			Pos(const TablesData& tables, const Build& build) : t(tables), b(build)
+			Pos(const TablesData& tables, const Build& build, const NativeLayout& layout = retail_layout, bool probe_pass = false)
+				: t(tables), b(build), native(layout), rebuild_own(item_own_rebuilt_enabled()), probe(probe_pass), definitions(probe_pass ? max_definitions : layout.definitions)
 			{
-				validate_native_tables(tables);
+				validate_native_tables(tables, probe ? w2_layout : native);
 			}
 
 			u32 stat(std::int64_t v) const { return narrow<u32>(get(t.p_stat, v, "character"), 1, 296, "native stats index"); }
-			u32 item(std::int64_t v) const { return narrow<u32>(get(t.p_item, v, "item"), 0, 159, "native item definition"); }
+			u32 item(std::int64_t v) const { return narrow<u32>(get(t.p_item, v, "item"), 0, definitions - 1, "native item definition"); }
 			u32 course(std::int64_t v) const { return get(t.p_course, v, "course"); }
 			u32 grade(std::int64_t v) const { return get(t.p_grade, v, "grade"); }
 			u32 xpoint(std::int64_t v) const { return get(t.p_xp, v, "town centre"); }
@@ -130,14 +164,17 @@ namespace lcsave::detail
 			OldInstance instance(const Value& r) const
 			{
 				OldInstance inst;
-				inst.head.definition = narrow<u8>(item(r["definition"].as_int()), 0, 255, "B");
+				inst.head.definition = narrow<u16>(item(r["definition"].as_int()), 0, definitions - 1, "native item definition");
 				inst.head.name_a = r["name_a"].truthy() ? narrow<u8>(get(t.p_nama, r["name_a"].as_int(), "item name"), 0, 31, "native flat name index") : 0xff;
 				inst.head.name_b = r["name_b"].truthy() ? narrow<u8>(get(t.p_namb, r["name_b"].as_int(), "item name"), 0, 3, "native category name index") : 0xff;
 				inst.head.special = r["special"].truthy() ? narrow<u8>(get(t.p_trit, r["special"].as_int(), "special item"), 0, 127, "native special item index") : 0xff;
 				inst.head.location = B(r["location"]);
+				const auto* entry = rebuild_own ? t.catalogue.entry_of(U(r["definition"])) : nullptr;
+				const bool rebuilt = entry && (entry->attributes & ITEM_OWN_REBUILT);
 				const char* const lists[3] = {"prefixes", "own", "suffixes"};
 				for (int k = 0; k < 3; ++k)
 				{
+					if (k == 1 && rebuilt) continue; // discarded saved own records may no longer have native mappings
 					for (const auto& e : r[lists[k]].as_list())
 					{
 						OldEnhElement el{};
@@ -147,6 +184,17 @@ namespace lcsave::detail
 					}
 				}
 				const auto& era = b.T;
+				if (rebuilt)
+				{
+					if (inst.head.definition >= era.ITEM_own.size()) fail("rebuilt definition has no own-record table");
+					const auto& own = era.ITEM_own[inst.head.definition];
+					if (own.size() > 8) fail("rebuilt definition exceeds 8 own records");
+					// ITEM_own is in native definition-slot order. Replace only the own list, even for
+					// special-name items; records are single-valued, so interpolation is the bits of 0.0f.
+					inst.lists[1].clear();
+					for (const auto id : own)
+						inst.lists[1].push_back({narrow<u16>(get(t.p_enh, id, "enhancement"), 0, 65535, "H"), 0});
+				}
 				if (r["name_b"].truthy())
 				{
 					const auto category = inst.head.definition < era.ITEM_cat.size() ? era.ITEM_cat[inst.head.definition] : 0;
@@ -160,6 +208,31 @@ namespace lcsave::detail
 				if (inst.head.special != 0xff && inst.head.special < era.TRIT_own.size()) allowed.insert(era.TRIT_own[inst.head.special].begin(), era.TRIT_own[inst.head.special].end());
 				for (const auto& e : inst.lists[1]) if (e.record >= era.ENHC.size() || !allowed.count(era.ENHC[e.record])) fail("own enhancement does not belong to definition");
 				return inst;
+			}
+
+			void relocate_equipment(OldEquipment& eq, std::vector<OldInstance>& carried, const EraTables& saved,
+				const std::string& owner, std::vector<std::string>& notes) const
+			{
+				// Equipped lists carry membership, not a slot number. In a legacy save the historical
+				// definition class identifies that slot. Preserve each displaced instance before native equip.
+				for (auto it = eq.equipped.begin(); it != eq.equipped.end();)
+				{
+					const auto d = it->head.definition;
+					const auto* entry = d < b.T.ITEM.size() ? t.catalogue.entry_of(b.T.ITEM[d]) : nullptr;
+					const auto old = entry ? std::find(saved.ITEM.begin(), saved.ITEM.end(), entry->id) : saved.ITEM.end();
+					const auto index = old == saved.ITEM.end() ? saved.ITEM_cat.size() : static_cast<std::size_t>(old - saved.ITEM.begin());
+					const auto old_class = index < saved.ITEM_cat.size() ? saved.ITEM_cat[index] : 0;
+					const auto current_class = d < b.T.ITEM_cat.size() ? b.T.ITEM_cat[d] : 0;
+					if (rebuild_own && entry && (entry->attributes & ITEM_OWN_REBUILT) && old != saved.ITEM.end() &&
+						old_class >= 1 && old_class <= 3 && current_class >= 1 && current_class <= 3 && old_class != current_class)
+					{
+						auto moved = *it; moved.head.location = 2; // carried, independently of the gameplay's pickup limit
+						carried.push_back(std::move(moved)); it = eq.equipped.erase(it);
+						static const char* const slots[] = {"", "belt", "gloves", "armor"};
+						notes.push_back("rebuilt reward " + b.item[d] + " moved to carried from " + owner + " " + slots[old_class] + " slot (class changed)");
+					}
+					else ++it;
+				}
 			}
 
 			void hero_block(const Value& h, OldAttributes& a, OldEquipment& eq) const
@@ -186,8 +259,10 @@ namespace lcsave::detail
 				for (const auto& tv : h["talents"].as_list())
 				{
 					OldTalentEntry e{};
-					e.id = narrow<u16>(get(t.p_tal, tv["talent"].as_int(), "talent"), 0, 65535, "H");
-					if (e.id >= 100 && static_cast<u32>(e.id / 100) != owner + 1) fail("talent does not belong to hero");
+					// the layout's id space (M = native.talent_multiplier; the build's tables hold owner and position)
+					const u32 code = get(t.p_tal, tv["talent"].as_int(), "talent");
+					if (talent_code_owner(code) != 0 && talent_code_owner(code) != owner + 1) fail("talent does not belong to hero");
+					e.id = static_cast<u16>(talent_engine_id(code, native));
 					e.rank_bits = static_cast<u8>(narrow<u8>(tv["rank"].as_int(), 0, 63, "talent rank"));
 					e.pending_cap_bits = static_cast<u8>((narrow<u8>(tv["pending"].as_int(), 0, 63, "talent pending")) | ((narrow<u8>(tv["cap"].as_int(), 0, 3, "talent cap")) << 6));
 					e.base_bits = static_cast<u8>(narrow<u8>(tv["base"].as_int(), 0, 3, "talent base"));
@@ -241,7 +316,7 @@ namespace lcsave::detail
 				for (const auto& o : s["objectives"].as_list())
 				{
 					const auto i = get(t.p_obj, o["objective"].as_int(), "objective");
-					if (i >= 300) fail("IndexError: list assignment index out of range");
+					if (i >= native.snapshot_objectives) fail("IndexError: list assignment index out of range");
 					out.objectives[i] = static_cast<u8>((narrow<u8>(o["counter"].as_int(), 0, 63, "objective counter")) | ((narrow<u8>(o["flags"].as_int(), 0, 3, "objective flags")) << 6));
 				}
 				const auto& ap = s["anchor_pos"].as_list();
@@ -286,7 +361,7 @@ namespace lcsave::detail
 			};
 			for (const auto& record : recs.as_list()) dependencies(record, owned);
 			auto& strings = *m.zone_strings;
-			std::memset(&strings, 0, sizeof strings);
+			strings = OldZoneStrings(native.zone_string_slots, native.zone_arena);
 			strings.used = 2;
 			strings.offsets[0] = 1;
 			std::vector<std::pair<std::string, u32>> interned;
@@ -307,7 +382,7 @@ namespace lcsave::detail
 				}
 				const u32 off = strings.used;
 				if (off + text.size() + 1 > native.zone_arena) fail("zone string arena full");
-				std::memcpy(strings.arena + off, text.data(), text.size());
+				std::memcpy(strings.arena.data() + off, text.data(), text.size());
 				strings.arena[off + text.size()] = 0;
 				strings.offsets[slot] = off;
 				strings.used = off + static_cast<u32>(text.size()) + 1;
@@ -431,8 +506,10 @@ namespace lcsave::detail
 						i32 qty = 0;
 						std::memcpy(&slot, payload.data(), 4);
 						std::memcpy(&qty, payload.data() + 4, 4);
-						if (slot > 0xff || qty < -32768 || qty > 32767) fail("world item handle / quantity do not fit the engine record");
-						st.payload[0] = static_cast<u8>(slot);
+						// RETAIL / E10A2: the slot is payload byte 0; W2: its own u16 field at +0x12 (payload byte 0 stays 0)
+						if (slot > (native.world_slot_bytes == 2 ? 0xfffeu : 0xffu) || qty < -32768 || qty > 32767) fail("world item handle / quantity do not fit the engine record");
+						if (native.world_slot_bytes == 2) st.world_slot = static_cast<u16>(slot);
+						else st.payload[0] = static_cast<u8>(slot);
 						const i16 q = static_cast<i16>(qty);
 						std::memcpy(st.payload + 1, &q, 2);
 						const std::string rest = payload.substr(8, 5);
@@ -448,8 +525,14 @@ namespace lcsave::detail
 					for (int k = 0; k < 3; ++k)
 					{
 						const double x = pp.at(static_cast<std::size_t>(k)).as_real();
+						if (native.float_positions)
+						{
+							if (!std::isfinite(x)) fail("state position not representable");
+							st.position[k] = static_cast<f32>(x);                   // W2: the float as is (bit-exact)
+							continue;
+						}
 						if (!std::isfinite(x) || x < -32768 || x > 32767 || x != std::nearbyint(x)) fail("state position not representable");   // round half to even
-						st.position[k] = narrow<i16>(static_cast<std::int64_t>(x), -32768, 32767, "state position");
+						st.position[k] = static_cast<f32>(narrow<i16>(static_cast<std::int64_t>(x), -32768, 32767, "state position"));
 					}
 					const auto& dn = name(s["def_name"]);
 					st.def_name = intern(dn.as_text(), dn.enc);
@@ -502,12 +585,12 @@ namespace lcsave::detail
 				z.tail.time_stamp = static_cast<float>(r["time_stamp"].as_real());
 				z.tail.flag = B(r["flag"]);
 				for (std::size_t i = 1; i < n; ++i) if (z.states[i].flags_a & 1)
-					applied.insert(z.states[i].payload[0]);
+					applied.insert(native.world_slot_bytes == 2 ? z.states[i].world_slot : z.states[i].payload[0]);
 				m.zones.push_back(std::move(z));
 			}
 			m.world.erase(std::remove_if(m.world.begin(), m.world.end(), [&](const OldWorld& item)
 			{ return owned.count(item.slot) && !applied.count(item.slot); }), m.world.end());
-			if (m.zones.size() > ceil_zone_records) fail("more zone records than the container holds");
+			if (m.zones.size() > native.record_count) fail("more zone records than the container holds");
 		}
 
 		void copy_if_same(char* field, const char* original, std::size_t size)
@@ -568,6 +651,7 @@ namespace lcsave::detail
 				ms[k]->pad_124 = ts[k]->pad_124;
 				ms[k]->objective_301 = ts[k]->objective_301;
 				ms[k]->pad_252 = ts[k]->pad_252;
+				std::memcpy(ms[k]->pad_525, ts[k]->pad_525, sizeof ms[k]->pad_525);
 				copy_if_same(ms[k]->zone, ts[k]->zone);
 				for (int j = 0; j < 4; ++j) copy_if_same(ms[k]->seat_name[j], ts[k]->seat_name[j]);
 			}
@@ -653,17 +737,19 @@ namespace lcsave::detail
 	}
 
 	OldSlot reverse_slot(const std::vector<std::uint8_t>& new_bytes, const TablesData& t, const OldSlot* tmpl, std::vector<std::string>& notes,
-		const NativeLayout& native, const TypedRegistry* registry, MigrationReport* report)
+		const NativeLayout& native, const TypedRegistry* registry, MigrationReport* report, const bool probe)
 	{
 		const auto f = read_file(new_bytes.data(), new_bytes.size(), kind_campaign);
 		// the file's required-feature marker against the layout (never stripped: a feature-1 file refuses on retail)
-		const auto decision = decide_features(f.header.required_features, native);
+		// (the probe judges a file by its content: a bit 1 it already carries is not a reason)
+		const auto decision = decide_features(probe ? f.header.required_features & ~feature_native_w2 : f.header.required_features, native);
 		if (!decision.ok) fail(decision.reason);
 		if (!t.build) fail("the reverse reader needs the build (--build)");
 		preflight(f, native);
-		const Pos pos{t, *t.build};
+		const Pos pos{t, *t.build, native, probe};
 		const auto& b = *t.build;
 		OldSlot m;
+		*m.zone_strings = OldZoneStrings(native.zone_string_slots, native.zone_arena);
 		// the typed entity-id adapter (PHASE-A-PLAN section 4): the only translation of saved integers, at this boundary
 		Value zone_vars = f.data("SVAR")["zone_vars"];
 		Value game_vars = f.data("SVAR")["game_vars"];
@@ -673,6 +759,12 @@ namespace lcsave::detail
 		const auto note = migration_note(migration);
 		if (!note.empty()) notes.push_back(note);
 		const auto& meta = f.data("META");
+		// The ordinary saver stamps catalogue8+ and native origin. A retail import still describes
+		// historical equipment even when imported against today's catalogue; no importer inference changes.
+		const bool old_equipment = pos.rebuild_own &&
+			(f.header.catalogue_revision < item_own_rebuilt_catalogue_revision || meta["origin"].as_int() == 1);
+		const auto* equipment_era = t.by_cv(static_cast<int>(f.header.content_version));
+		if (!equipment_era) equipment_era = &t.reference;
 		const auto description = meta["description"].as_text();
 		set_cstr(reinterpret_cast<char*>(m.description_raw), 0x80, description, meta["description"].enc);
 		m.begin_tag = "[SAVEGAMEBEGIN: " + description + "]";
@@ -717,7 +809,7 @@ namespace lcsave::detail
 		for (const auto& e : IT["def_state"].as_list())
 		{
 			const auto i = pos.item(e["item"].as_int());
-			if (i >= old_def_state_pairs) fail("IndexError: list assignment index out of range");
+			if (i >= pos.definitions) fail("IndexError: list assignment index out of range");
 			m.items.def_state[2 * i] = static_cast<u8>(narrow<u8>(e["quantity"].as_int(), 0, 255, "quantity"));
 			m.items.def_state[2 * i + 1] = B(e["flag"]);
 		}
@@ -739,7 +831,7 @@ namespace lcsave::detail
 			}
 			if (!found) fail("key counter definition is not a native key item");
 		}
-		m.items.def_count = narrow<u8>(static_cast<std::int64_t>(b.item.size()), 0, 160, "native definition count");
+		m.items.def_count = narrow<u16>(static_cast<std::int64_t>(b.item.size()), 0, pos.definitions, "native definition count");
 		m.items.tech_bits = U(IT["tech_bits"]);
 		m.items.health_items = U(IT["health_items"]);
 		m.items.energy_items = U(IT["energy_items"]);
@@ -763,6 +855,7 @@ namespace lcsave::detail
 			if (!costume_ok) fail("costume does not belong to hero");
 			OldHero hb;
 			pos.hero_block(h, hb.attributes, hb.equipment);
+			if (old_equipment) pos.relocate_equipment(hb.equipment, m.carried, *equipment_era, "HERO " + b.stat[owner], notes);
 			// convert.power_slots: a slot the file does not list is empty and usable (flag byte 1). Each listed slot carries
 			// its whole flag byte (bit 0 = usable: get 0x4b83b0; the power handler 0x4fd4de refuses a slot without it). A
 			// PWR record of a HERO 1.0 file (SPEC revision 2.2, written only by the 0.2.0 candidates) has no flag byte: it
@@ -814,6 +907,7 @@ namespace lcsave::detail
 			const auto n = pos.stat(r["owner"].as_int());
 			if (n >= old_restore_records) fail("IndexError: list assignment index out of range");
 			pos.hero_block(r, m.restore[n].attributes, m.restore[n].equipment);
+			if (old_equipment) pos.relocate_equipment(m.restore[n].equipment, m.carried, *equipment_era, "REST " + b.stat[n], notes);
 		}
 		// ---- MISS
 		const auto& MISS = f.data("MISS");
@@ -908,23 +1002,81 @@ namespace lcsave::detail
 			mask |= 1u << i;
 		}
 		m.town_centres = mask;
-		NativeLoadDemand demand;
-		std::string demand_error;
-		if (!native_load_demand(write_slot(m, native), demand, demand_error, native)) fail(demand_error);
-		if (demand.instances > 256 || demand.attached_enhancements > 375 || demand.world_items > 150) fail("native instance/enhancement/world pool exhausted");
+		// every width of the layout (the writer refuses what does not fit), then the layout's pools; the probe's target
+		// pass skips the write (definition indices are per build) and keeps the pools
+		if (!probe) write_slot(m, native);
+		const auto refusal = demand_refusal(model_demand(m), native);
+		if (!refusal.empty()) fail(refusal);
 		if (tmpl) apply_template(m, *tmpl);
 		return m;
 	}
 
-	std::vector<std::uint8_t> reverse_profile(const std::vector<std::uint8_t>& new_bytes, const TablesData& t)
+	std::vector<std::uint8_t> reverse_profile(const std::vector<std::uint8_t>& new_bytes, const TablesData& t, const NativeLayout& native)
 	{
 		const auto f = read_file(new_bytes.data(), new_bytes.size(), kind_profile);
 		if (!t.build) fail("the reverse reader needs the build (--build)");
 		preflight(f, retail_layout);          // a profile has no native zone layout
-		const Pos pos{t, *t.build};
+		const Pos pos{t, *t.build, native};      // the stats table; the installed layout's budgets
 		OldProfile profile;
 		profile_from_sections(pos, f, profile);
 		const auto& meta = f.data("META");
 		return write_profile_file(meta["description"].as_text(), profile);
+	}
+
+	// limits-wave2.md section 7: the target's translation (its mappings and checks), then the engine constraints that
+	// translation does not check, then the feature gates (an optional bit never marks). The first failing rule, named.
+	std::string representable(const std::vector<std::uint8_t>& file, const TablesData& t, const NativeLayout& target, const TypedRegistry* registry)
+	{
+		const auto f = read_file(file.data(), file.size(), kind_campaign);
+		// 3. feature gates: the target implements its own bits only (bit 1 is the mark itself)
+		if (f.header.required_features & ~target.feature_bits & ~feature_native_w2) return "required feature bits beyond the target layout";
+		std::vector<std::string> notes;
+		OldSlot m;
+		try
+		{
+			// 1. the target's reverse translation with the target's mappings (talent ids with its multiplier, its pools,
+			// world handles, positions, zone-record count, snapshot objectives); definition indices are per build
+			m = reverse_slot(file, t, nullptr, notes, target, registry, nullptr, true);
+		}
+		catch (const Error& e)
+		{
+			return std::string("the ") + target.id + " translation refuses: " + e.message;
+		}
+		// a record the target would not apply (dropped) marks the file
+		std::size_t applicable = 0;
+		for (const auto& r : f.data("ZONE")["records"].as_list()) if (!(r["capture_flags"].as_int() & 1)) ++applicable;
+		if (m.zones.size() < applicable)
+		{
+			return std::string("the ") + target.id + " translation would not apply " + std::to_string(applicable - m.zones.size()) + " zone record(s)";
+		}
+		// 2. engine constraints the old translation does not check
+		const auto& snaps = f.data("MISS")["snapshots"].as_list();
+		for (const auto& s : snaps)
+		{
+			for (const auto& o : s["objectives"].as_list())
+			{
+				const auto found = t.p_obj.find(static_cast<u32>(o["objective"].as_int()));
+				if (found != t.p_obj.end() && found->second > 255)
+				{
+					return "objective index " + std::to_string(found->second) + " > 255 (the pre-W2 engine keeps a loaded objective's index in a byte)";
+				}
+			}
+		}
+		const u32 records = 512;   // the pre-W2 release default of [Limits] ItemEnhancements: the contract (the target's INI is unknowable)
+		auto check_instance = [&](const OldInstance& inst) -> std::string
+		{
+			for (const auto& list : inst.lists) for (const auto& e : list)
+			{
+				if (e.record >= records) return "enhancement record " + std::to_string(e.record) + " >= " + std::to_string(records) + " (the pre-W2 release's enhancement table)";
+			}
+			return {};
+		};
+		std::string why;
+		for (const auto& i : m.carried) if (why.empty()) why = check_instance(i);
+		for (const auto& w : m.world) if (why.empty()) why = check_instance(w.instance);
+		for (const auto& h : m.heroes) for (const auto& i : h.equipment.equipped) if (why.empty()) why = check_instance(i);
+		for (const auto& r : m.restore) for (const auto& i : r.equipment.equipped) if (why.empty()) why = check_instance(i);
+		if (!why.empty()) return why;
+		return {};
 	}
 }

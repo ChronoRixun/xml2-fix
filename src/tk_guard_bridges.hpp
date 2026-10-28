@@ -3,6 +3,8 @@
 #include "xml1_cling_rules.hpp"
 #include "det_math.hpp"
 #include "lift_rule.hpp"
+#include "stun_rules.hpp"
+#include "log.hpp"
 #include <cmath>
 #include <algorithm>
 #include <unordered_map>
@@ -11,6 +13,7 @@
 // anchors and field translations are recorded in docs/tk-guard.md.
 namespace tk_guard_bridges {
 using namespace shared_handler_bridges;
+inline bool trace_guard=false;
 struct vec {float x=0,y=0,z=0;};
 inline vec add(vec a,vec b){return {a.x+b.x,a.y+b.y,a.z+b.z};}
 inline vec sub(vec a,vec b){return {a.x-b.x,a.y-b.y,a.z-b.z};}
@@ -70,6 +73,23 @@ __declspec(naked) inline bool source_grabbable(void*){__asm {
  mov esi,ecx
  jmp dword ptr [grabbable_body]
 }}
+inline u32 grabbable_precheck=0x42b840,grabbable_after_stun=0x42925e;
+// A native timed stun has the same grab eligibility as reaction bit0: keep
+// the status precheck and every native suffix gate, bypass only its clock.
+__declspec(naked) inline bool stunned_grabbable(void*){__asm {
+ push ecx
+ push esi
+ mov esi,ecx
+ call dword ptr [grabbable_precheck]
+ test al,al
+ jnz denied
+ jmp dword ptr [grabbable_after_stun]
+ denied:
+ xor al,al
+ pop esi
+ pop ecx
+ ret
+}}
 inline bool wall_lunge(void* actor,void* initial,void* entity){
  if(rank(actor,"acrobatics")<=2)return false;
  auto level=fn<bool(__thiscall*)(void**)>(0x4a95c0);
@@ -89,14 +109,45 @@ inline bool wall_lunge(void* actor,void* initial,void* entity){
  method<void(__thiscall*)(void*,const vec*)>(actor,0x1c)(actor,&position);
  if(auto* next=named(actor,"walllunge")){play(actor,next);return true;}return false;
 }
-// XML1 DA3A0 entry requests immediate input. D99D0 is the input policy,
-// not an entry callback: the PC scheduler must consume its pending chain once.
-inline void __fastcall guard_entry(void*,void*,void*,void*,void* context){
- if(context)field<unsigned char>(context,0x6c)|=1;
+struct power_ref {u32 handle=0;void* pool=nullptr;};
+inline bool enemy_stunned(void* victim){
+ if(field<unsigned char>(victim,0x765)&1)return true;
+ // Rule18 deliberately clears a party hero's reaction flag after a refused
+ // or interrupted stun. Its still-pending PC powerup must not undo that.
+ if(stun_rules::party_hero(field<u32>(victim,4),field<int>(victim,0x3d4)))return false;
+ // Native54EE0F traverses the entity's attachment references at21C/220.
+ // The timed shared_stunned attachment and the reaction flag have separate
+ // lifetimes; do not infer the former from the current animation or flag.
+ power_ref cursor=field<power_ref>(victim,0x21c);if(!cursor.pool)return false;
+ auto* factory=fn<getter>(0x543f80)();power_ref stun;
+ method<power_ref*(__thiscall*)(void*,power_ref*,const char*)>(factory,0x58)(factory,&stun,"shared_stunned");
+ if(!stun.pool)return false;
+ for(unsigned n=0;n<256&&cursor.pool;++n){ // maximum supported AttachedPowerups
+  if(!method<bool(__thiscall*)(void*,u32)>(cursor.pool,0)(cursor.pool,cursor.handle))return false;
+  auto* attached=method<void*(__thiscall*)(void*,u32)>(cursor.pool,8)(cursor.pool,cursor.handle);if(!attached)return false;
+  power_ref definition;
+  method<power_ref*(__thiscall*)(void*,power_ref*)>(attached,0x64)(attached,&definition);
+  if(definition.handle==stun.handle&&definition.pool==stun.pool)return true;
+  power_ref next;method<power_ref*(__thiscall*)(void*,power_ref*)>(attached,0x4c)(attached,&next);
+  if(next.handle==cursor.handle&&next.pool==cursor.pool)return false;cursor=next;
+ }
+ return false;
 }
-inline bool __fastcall guard_input(void* self,void*,void* actor,void* input){
+inline bool guard_policy(void* self,void* actor,void* input,void* incoming=nullptr){
  if(!actor||!input)return false;
  det_math::fp_env fp;
+ auto choose=[&](int id){
+  if(!incoming){chain(actor,id);return;}
+  // Entry runs before 431252 installs the incoming move at actor+378.
+  // Resolve its chains explicitly, using the native 427C80 callee contract.
+  auto* styles=fn<void*(__thiscall*)(void*)>(0x41d0d0)(actor);
+  field<void*>(actor,0x3bc)=fn<void*(__thiscall*)(void*,void*,int,void*)>(0x501af0)(styles,incoming,id,actor);
+ };
+ auto movement=[&](){
+  if(!incoming)return fallback(self,actor,input);
+  auto*& current=field<void*>(actor,0x378);void* previous=current;current=incoming;
+  const bool result=fallback(self,actor,input);current=previous;return result;
+ };
  const u32 held=field<u32>(actor,0x774);
  if(valid(held)&&!manager_flag(0x46dce0,0x1a8)){
   auto* entity=resolve(held);
@@ -104,7 +155,7 @@ inline bool __fastcall guard_input(void* self,void*,void* actor,void* input){
    field<void*>(actor,0x3bc)=named(actor,"use_button");
   }else{
    fn<void(__thiscall*)(void*)>(0x42c120)(actor);
-   if(!fallback(self,actor,input))chain(actor,0);
+   if(!movement())choose(0);
   }return true;
  }
  const bool friendly=!(*reinterpret_cast<unsigned char*>(0x70b6fd))&&!manager_flag(0x48de40,0x5c);
@@ -113,7 +164,7 @@ inline bool __fastcall guard_input(void* self,void*,void* actor,void* input){
  const bool allies=friendly&&(field<unsigned char>(field<void*>(actor,0x35c),0x2ae)&0x20)&&
   fn<unsigned char(__thiscall*)(void*)>(0x427dc0)(static_cast<unsigned char*>(actor)+0x470)>0;
  {
-  query_holder holder(actor);auto* q=holder.q;if(!q){if(!fallback(self,actor,input))chain(actor,0);return true;}
+  query_holder holder(actor);auto* q=holder.q;if(!q){if(!movement())choose(0);return true;}
   method<void(__thiscall*)(void*,int,int)>(q,0x40)(q,1,1);
   if(friendly&&!allies)fn<void(__cdecl*)(void**,void*)>(0x44fe10)(&holder.q,actor);
   const vec box{16,16,16};vec center{};const auto* p=method<const vec*(__thiscall*)(void*,vec*)>(actor,0x24)(actor,&center);center=*p;
@@ -124,34 +175,68 @@ inline bool __fastcall guard_input(void* self,void*,void* actor,void* input){
   // PC input scheduler to dispatch a pending chain on top of it.
   if(wall_lunge(actor,contact,entity))return false;
   if(!entity||(field<u32>(entity,4)&0x40010)||manager_flag(0x484990,0x3c)){
-   if(!fallback(self,actor,input))chain(actor,0);
+   if(!movement())choose(0);
   }else if(auto* victim=character(entity)){
-   if(!fn<bool(__thiscall*)(void*)>(reinterpret_cast<u32>(&source_grabbable))(victim))chain(actor,0);
+   const bool stunned=enemy_stunned(victim);
+   const auto admission=stunned&&!(field<unsigned char>(victim,0x765)&1)?&stunned_grabbable:&source_grabbable;
+   if(!fn<bool(__thiscall*)(void*)>(reinterpret_cast<u32>(admission))(victim)){if(trace_guard)logger::write("guard eligibility actor=%08X victim=%08X native_grab=0 reaction=%02X attachment=%08X stunned=%d status=%02X deadline=%.3f",field<u32>(actor,0x1c),field<u32>(victim,0x1c),field<unsigned char>(victim,0x765),field<u32>(victim,0x21c),int(stunned),field<unsigned char>(victim,0x579),field<float>(victim,0x2f0));choose(0);}
    else if(allies&&team(actor)==team(victim)&&!manager_flag(0x48de40,0x5c)){
     if(field<unsigned char>(field<void*>(victim,0x35c),0x2ad)&0x80){play(actor,named(actor,"throwally"));lock(actor,victim);}
-    else if(!fallback(self,actor,input))chain(actor,0);
+    else if(!movement())choose(0);
    }else if(team(victim)!=0x1c){
-    chain(actor,3);
-    if(field<unsigned char>(victim,0x765)&1){
+    // 429228 is general target admission (XML1 391A0), not a stun
+    // test. The incoming guard chain's action 3 is grabstart. Since the
+    // entry bridge dispatches it immediately, gate enemy grabs here;
+    // ally Fastball and physical-object pickup keep their own branches.
+    if(trace_guard)logger::write("guard eligibility actor=%08X victim=%08X native_grab=1 reaction=%02X attachment=%08X stunned=%d",field<u32>(actor,0x1c),field<u32>(victim,0x1c),field<unsigned char>(victim,0x765),field<u32>(victim,0x21c),int(stunned));
+    if(!stunned){if(!movement())choose(0);return true;}
+    choose(3);
+    if(stunned){
      if(fn<bool(__thiscall*)(void*,int,int)>(0x54d710)(victim,0x2c,0))notify(actor,"");
      else if(rank(actor,"acrobatics")>2){
       const std::array<vec,2> up{{{0,0,20},{0,0,0}}};method<float(__thiscall*)(void*,const void*)>(actor,0x130)(actor,up.data());
       play(actor,named(actor,"airgrabpickup"));
-     }else if(rank(actor,"might")<=0&&!(field<unsigned char>(victim,0x765)&1)){play(actor,named(actor,"grabfailed"));}
-     else chain(actor,25);
+     }else if(rank(actor,"might")<=0&&!stunned){play(actor,named(actor,"grabfailed"));}
+     else choose(25);
     }lock(actor,victim);
    }
   }else if(fn<bool(__thiscall*)(void*,void*)>(0x427f60)(actor,entity)){
-   lock(actor,entity);chain(actor,24);field<unsigned char>(entity,0x30d)|=4;
-  }else{cannot_lift(actor);chain(actor,0);}
+   lock(actor,entity);choose(24);field<unsigned char>(entity,0x30d)|=4;
+  }else{cannot_lift(actor);choose(0);}
  }
  return true;
+}
+
+inline bool __fastcall guard_input(void* self,void*,void* actor,void* input){return guard_policy(self,actor,input);}
+// PC entry is the reliable admission point for both real devices. Do the
+// one-shot decision here instead of waiting for another scheduler/input pass.
+// Clear the incoming pending move first; dispatch only an actual result, once.
+// Context bit2 aborts the parent 430D40 transition at 4310B0 after our dispatch.
+inline void __fastcall guard_entry(void* self,void*,void* actor,void* input,void* context){
+ if(!actor||!context||!field<void*>(context,4))return;
+ std::array<unsigned char,0x30> neutral_input{};
+ if(!input)input=neutral_input.data(); // native/scripted admissions may omit input
+ void* incoming=field<void*>(context,4);void* before=field<void*>(actor,0x378);
+ field<void*>(actor,0x3bc)=nullptr;
+ const bool pending=guard_policy(self,actor,input,incoming);
+ void* next=field<void*>(actor,0x3bc);
+ if(field<void*>(actor,0x378)!=before||!pending){field<unsigned char>(context,0x6c)|=4;return;}
+ if(next&&next!=incoming){
+  field<void*>(actor,0x3bc)=nullptr;
+  field<unsigned char>(context,0x6c)|=4;
+  play(actor,next);
+ }else field<unsigned char>(context,0x6c)|=1;
 }
 
 struct tk_state {
  u32 victim=0,sound=0xffffffffu;std::int16_t impact=5;
  std::int8_t damage=1,heaviness=0,level=1;
  float distance=0,time=0,heading=0;vec offset{},last{};
+ bool auxiliary_done=false;
+ u32 attempts=0;
+ u32 control_frames=0;
+ // Trace-only: frames without any target displacement while held (082e tkA).
+ vec watch{};u32 stalled=0;bool blocked_logged=false;
 };
 inline u32 suspend_parse_resume=0x4e39f6;
 __declspec(naked) inline void suspend_parse_native(){__asm {
@@ -168,15 +253,31 @@ inline bool __fastcall tk_parse(void* event,void*,const char* key,const char* va
  return reinterpret_cast<bool(__thiscall*)(void*,const char*,const char*)>(&suspend_parse_native)(event,key,value);
 }
 inline std::unordered_map<u32,tk_state> tk_states;
+inline bool __cdecl owns_tk_pair(u32 owner,u32 victim){const auto found=tk_states.find(owner);return found!=tk_states.end()&&found->second.victim==victim;}
+inline bool trace_acquisition=false;
+struct tk_attempt {tk_state state;void* node;};
+inline std::unordered_map<u32,tk_attempt> tk_attempts;
+enum class tk_rejection:unsigned {object_claim,nonphysical,pickup_claim,physical_lock,dead,heavy,grab_gate,tk_gate,tile,friendly,count};
+struct tk_scan {u32 candidates=0,accepted=0,last=0,physical=0;std::array<u32,unsigned(tk_rejection::count)> rejected{};};
+inline tk_scan* scanning=nullptr;
+inline bool tk_reject(tk_rejection reason){if(scanning)++scanning->rejected[unsigned(reason)];return false;}
+inline bool tk_accept(){if(scanning)++scanning->accepted;return true;}
 inline bool __cdecl tk_eligible(void* actor,void* entity,void* parameters){
- if(!entity||!parameters||(field<unsigned char>(entity,0xc5)&0x40))return false;
- if((field<u32>(entity,4)&0x40000)&&fn<bool(__thiscall*)(void*,int)>(0x41a820)(entity,0))return true;
- auto* target=cast(entity,0x429110);if(!target)return false;
- if((field<unsigned char>(target,0x30d)&4)||(field<u32>(target,4)&0x18)||!fn<bool(__thiscall*)(void*)>(0x41c540)(target))return false;
- if(lift_rule::heaviness(target)>field<std::int8_t>(parameters,0xa))return false;
- if(auto* victim=character(target))if(!fn<bool(__thiscall*)(void*)>(reinterpret_cast<u32>(&source_grabbable))(victim)||!fn<bool(__thiscall*)(void*)>(0x427e00)(victim))return false;
- if(cast(target,0x41e4d0))return false;
- return manager_flag(0x48de40,0x5c)||team(target)!=team(actor);
+ if(scanning){++scanning->candidates;scanning->last=entity?field<u32>(entity,0x1c):0;scanning->physical=entity?field<u32>(entity,4):0;}
+ if(!entity||!parameters||(field<unsigned char>(entity,0xc5)&0x40))return tk_reject(tk_rejection::object_claim);
+ if((field<u32>(entity,4)&0x40000)&&fn<bool(__thiscall*)(void*,int)>(0x41a820)(entity,0))return tk_accept();
+ auto* target=cast(entity,0x429110);if(!target)return tk_reject(tk_rejection::nonphysical);
+ if(field<unsigned char>(target,0x30d)&4)return tk_reject(tk_rejection::pickup_claim);
+ if(field<u32>(target,4)&0x18)return tk_reject(tk_rejection::physical_lock);
+ if(!fn<bool(__thiscall*)(void*)>(0x41c540)(target))return tk_reject(tk_rejection::dead);
+ if(lift_rule::heaviness(target)>field<std::int8_t>(parameters,0xa))return tk_reject(tk_rejection::heavy);
+ if(auto* victim=character(target)){
+  if(!fn<bool(__thiscall*)(void*)>(reinterpret_cast<u32>(&source_grabbable))(victim))return tk_reject(tk_rejection::grab_gate);
+  if(!fn<bool(__thiscall*)(void*)>(0x427e00)(victim))return tk_reject(tk_rejection::tk_gate);
+ }
+ if(cast(target,0x41e4d0))return tk_reject(tk_rejection::tile);
+ if(manager_flag(0x48de40,0x5c)||team(target)!=team(actor))return tk_accept();
+ return tk_reject(tk_rejection::friendly);
 }
 __declspec(naked) inline void tk_filter(){__asm {
  push edi
@@ -225,6 +326,20 @@ inline void tk_sound(tk_state& s,void* target,bool initial){
 inline void stop_sound(tk_state& s){auto* manager=fn<getter>(0x592480)();method<void(__thiscall*)(void*,u32)>(manager,0x74)(manager,s.sound);s.sound=0xffffffffu;}
 // PC's release service takes the vector by value and two additional mode
 // arguments. Preserve its physical-mode cleanup while supplying source values.
+inline u32 release_arm_body=0x42e929,release_arm_done=0x42ea13;
+// Mode 2 is private to this bridge. A normalized moving TK direction has
+// speed one: retail 42E923 otherwise skips the entire native arming block.
+// Ordinary PC modes 0/1 replay the displaced condition without alteration.
+__declspec(naked) inline void release_arming_gate(){__asm {
+ cmp dword ptr [esp+080h],2
+ je arm_throw
+ test ah,041h
+ jnz skip_throw
+ arm_throw:
+ jmp dword ptr [release_arm_body]
+ skip_throw:
+ jmp dword ptr [release_arm_done]
+}}
 inline void release(void* actor,tk_state& s,vec v,bool thrown){
  if(valid(s.victim))if(auto* target=cast(resolve(s.victim),0x429110)){
   field<u32>(target,4)&=~4u;publish(target);
@@ -238,51 +353,47 @@ inline void release(void* actor,tk_state& s,vec v,bool thrown){
    method<void(__thiscall*)(void*,u32)>(target,0x8c)(target,sound);
   }
  }
- fn<void(__thiscall*)(void*,vec,float,std::int16_t,int,int)>(0x42e570)(actor,v,s.heading,s.level,thrown?1:0,0);
+ // XML1 3DF3F..3DFAD always evaluates L2 for a throw. PC adds a
+ // final preserve/replace selector: zero preserves the suspend amount. Our
+ // mode 2 also admits the arming block at unit speed, then its nonzero value
+ // stores the native L2 amount at 42E9BA. Cancellation stays ordinary mode 0.
+ fn<void(__thiscall*)(void*,vec,float,std::int16_t,int,int)>(0x42e570)(actor,v,s.heading,s.level,thrown?1:0,thrown?2:0);
  field<unsigned char>(actor,0x259)&=~2;
  stop_sound(s);
 }
 inline void __fastcall tk_cancel(void*,void*,void* actor){
  const u32 token=field<u32>(actor,0x1c);auto it=tk_states.find(token);
+ tk_attempts.erase(token);
  if(it==tk_states.end())return;
  auto& s=it->second;s.victim=field<u32>(actor,0x76c);vec v{};
  if(valid(s.victim))if(auto* target=cast(resolve(s.victim),0x429110))v=field<vec>(target,0x120);
  release(actor,s,v,false);tk_states.erase(token);
 }
-inline void __fastcall tk_entry(void*,void*,void* actor,void*,void* context){
- det_math::fp_env fp;
+inline bool tk_acquire(void* actor,void* node,tk_state& s){
  const u32 token=field<u32>(actor,0x1c);
- if((field<unsigned char>(actor,0x259)&2)&&tk_states.count(token))return;
- tk_states.erase(token);
- if(!context||!field<void*>(context,4))return;
- // The native pre-entry executes suspend/tag dispatch and initial energy once.
- fn<void(__stdcall*)(void*,void*)>(0x4f2b00)(actor,context);
- auto* node=field<void*>(context,4);
- auto* event=method<void*(__thiscall*)(void*,int)>(node,0x1c)(node,1);
- event=fn<void*(__cdecl*)(void*,int,void*,void*,int)>(0x67234e)(event,0,reinterpret_cast<void*>(0x6db300),reinterpret_cast<void*>(0x6db700),0);
- if(!event)return;
- auto* stats=method<void*(__thiscall*)(void*,void*)>(node,0x28)(node,actor);if(!stats)return;
- tk_state s;
- s.impact=fn<std::int16_t(__thiscall*)(void*,void*)>(0x4dad20)(static_cast<unsigned char*>(event)+0x18,stats);
- s.heaviness=fn<std::int8_t(__thiscall*)(void*,void*)>(0x4abf70)(static_cast<unsigned char*>(event)+0x1a,stats);
- s.level=fn<std::int8_t(__thiscall*)(void*,void*)>(0x4abf70)(static_cast<unsigned char*>(event)+0x1c,stats);
- s.damage=field<std::int8_t>(field<void*>(event,0x14),0x1c);
  // Native acquisition retains engine world enumeration, scripts, class tests
  // and the installed LiftRule heaviness predicate. Its compact state is local;
  // it never aliases the source's distance/time/sound sidecar.
  std::array<unsigned char,0x2c> parameters{};
  field<std::int16_t>(parameters.data(),8)=s.impact;field<std::int8_t>(parameters.data(),0xa)=s.heaviness;field<std::int8_t>(parameters.data(),0xb)=s.level;
  u32 auxiliary=0,selected=0;
- acquire(actor,&selected,&auxiliary,parameters.data());
- if(valid(auxiliary))if(auto* object=fn<void*(__cdecl*)(u32)>(0x4297b0)(auxiliary)){
+ tk_scan scan;
+ {struct scope{tk_scan* previous;scope(tk_scan* current):previous(scanning){scanning=current;}~scope(){scanning=previous;}} capture(trace_acquisition?&scan:nullptr);
+ acquire(actor,&selected,&auxiliary,parameters.data());}
+ ++s.attempts;
+ if(trace_acquisition&&(s.attempts&(s.attempts-1))==0)
+ {logger::write("tk acquisition actor=%08X attempt=%u selected=%08X auxiliary=%08X energy=%.3f level=%d heaviness=%d candidates=%u accepted=%u post_filter_miss=%u last=%08X phys=%08X",token,s.attempts,selected,auxiliary,field<float>(actor,0x288),int(s.level),int(s.heaviness),scan.candidates,scan.accepted,unsigned(!selected&&scan.accepted),scan.last,scan.physical);
+  constexpr const char* reasons[]{"object-claim","nonphysical","pickup-claim","physical-lock","dead","heavy","grab-gate","tk-gate","tile","friendly"};
+  for(unsigned i=0;i<scan.rejected.size();++i)if(scan.rejected[i])logger::write("tk reject actor=%08X reason=%s count=%u",token,reasons[i],scan.rejected[i]);}
+ if(!s.auxiliary_done&&valid(auxiliary))if(auto* object=fn<void*(__cdecl*)(u32)>(0x4297b0)(auxiliary)){
   if(auto* e=method<void*(__thiscall*)(void*,int)>(node,0x1c)(node,1)){
-   auxiliary_effects(actor,object,1);method<void(__thiscall*)(void*,void*,void*)>(e,8)(e,object,actor);
+   auxiliary_effects(actor,object,1);method<void(__thiscall*)(void*,void*,void*)>(e,8)(e,object,actor);s.auxiliary_done=true;
   }
  }
- if(!valid(selected))return;
- auto* target=resolve(selected);if(!target)return;
+ if(!valid(selected))return false;
+ auto* target=resolve(selected);if(!target)return false;
  if(auto* scripted=cast(target,0x41b0e0);scripted&&(field<u32>(scripted,4)&0x40000)&&fn<bool(__thiscall*)(void*,int)>(0x41a820)(scripted,0)){
-  method<void(__thiscall*)(void*,void*)>(scripted,0x9c)(scripted,actor);field<float>(actor,0x460)=simulation_time();return;
+  method<void(__thiscall*)(void*,void*)>(scripted,0x9c)(scripted,actor);field<float>(actor,0x460)=simulation_time();return true;
  }
  s.victim=selected;s.time=simulation_time();field<float>(actor,0x460)=s.time;field<float>(actor,0x5e8)=now();
  if(auto* victim=character(target)){play(victim,named(victim,"psycarry"));field<unsigned char>(victim,0x3d8)|=8;}
@@ -295,8 +406,35 @@ inline void __fastcall tk_entry(void*,void*,void* actor,void*,void* context){
  s.distance=length(difference);s.offset=difference;s.offset.z+=120.f;s.last=field<vec>(target,0x20);
  field<u32>(target,4)|=4;publish(target);field<unsigned char>(actor,0x259)|=2;
  tk_states[token]=s;
+ return true;
+}
+inline void __fastcall tk_entry(void*,void*,void* actor,void*,void* context){
+ det_math::fp_env fp;
+ const u32 token=field<u32>(actor,0x1c);
+ if((field<unsigned char>(actor,0x259)&2)&&tk_states.count(token))return;
+ tk_states.erase(token);tk_attempts.erase(token);
+ if(!context||!field<void*>(context,4))return;
+ // Pre-entry/tag events run once. A missed query may be retried while the
+ // acquisition input stays held, without another suspend event or debit.
+ fn<void(__stdcall*)(void*,void*)>(0x4f2b00)(actor,context);
+ auto* node=field<void*>(context,4);
+ auto* event=method<void*(__thiscall*)(void*,int)>(node,0x1c)(node,1);
+ event=fn<void*(__cdecl*)(void*,int,void*,void*,int)>(0x67234e)(event,0,reinterpret_cast<void*>(0x6db300),reinterpret_cast<void*>(0x6db700),0);
+ if(!event)return;
+ auto* stats=method<void*(__thiscall*)(void*,void*)>(node,0x28)(node,actor);if(!stats)return;
+ tk_state s;
+ s.impact=fn<std::int16_t(__thiscall*)(void*,void*)>(0x4dad20)(static_cast<unsigned char*>(event)+0x18,stats);
+ s.heaviness=fn<std::int8_t(__thiscall*)(void*,void*)>(0x4abf70)(static_cast<unsigned char*>(event)+0x1a,stats);
+ s.level=fn<std::int8_t(__thiscall*)(void*,void*)>(0x4abf70)(static_cast<unsigned char*>(event)+0x1c,stats);
+ s.damage=field<std::int8_t>(field<void*>(event,0x14),0x1c);
+ if(!tk_acquire(actor,node,s))tk_attempts[token]={s,node};
 }
 inline bool held(void* input,int bit){return input&&(field<u32>(input,0)&(1u<<bit));}
+inline bool tk_held(void* actor,void* input){
+ const u32 name=field<u32>(actor,0x18);bool rogue=false;
+ if(name){auto* table=fn<unsigned char*(__cdecl*)()>(0x602280)();const u32 index=name&0xffffff;const char* text=reinterpret_cast<const char*>(table+field<u32>(table,4+index*4)+0x4008);rogue=*text=='r'||*text=='R';}
+ return held(input,rogue?5:4);
+}
 inline void __fastcall tk_update(void* self,void*,void* actor,void* input){
  det_math::fp_env fp;
  if(!(field<unsigned char>(actor,0x259)&2))return;
@@ -306,6 +444,18 @@ inline void __fastcall tk_update(void* self,void*,void* actor,void* input){
   tk_cancel(self,nullptr,actor);field<void*>(actor,0x3bc)=named(actor,"idle");return;
  }
  const float time=simulation_time(),dt=time-s.time;
+ if(trace_acquisition&&((s.control_frames++&15)==0)){const auto* victim=character(target);logger::write("tk control actor=%08X victim=%08X dt=%.5f owner=%08X phys=%08X actor_flags=%08X contact=%02X offset_z=%.3f z=%.3f",field<u32>(actor,0x1c),s.victim,dt,field<u32>(target,0x178),field<u32>(target,4),victim?field<u32>(target,0x3d8):0,field<unsigned char>(target,0x30c),s.offset.z,field<vec>(target,0x20).z);}
+ // 082e tkA: selected, owned and controlled for a whole hold, yet z never left the floor.
+ // Report a held target that has not moved for 15 control frames, once per hold, with its
+ // contact byte and the receiver's last-impact age (+2F4, written by 499100 at a contact).
+ if(trace_acquisition){
+  const vec position=field<vec>(target,0x20);
+  if(length(sub(position,s.watch))<.01f){
+   if(++s.stalled==15&&!s.blocked_logged){s.blocked_logged=true;const float impact=field<float>(target,0x2f4);
+    logger::write("tk blocked actor=%08X victim=%08X frames=%u owner=%08X phys=%08X contact=%02X offset_z=%.3f z=%.3f impact_age=%.3f",field<u32>(actor,0x1c),s.victim,s.stalled,field<u32>(target,0x178),field<u32>(target,4),field<unsigned char>(target,0x30c),s.offset.z,position.z,impact>0.f?time-impact:-1.f);}
+  }else s.stalled=0;
+  s.watch=position;
+ }
  bool exhausted=false;
  // The original divisor is a binary32 0.2 widened to binary64 (3D6610).
  const double period=static_cast<double>(.2f);
@@ -315,9 +465,7 @@ inline void __fastcall tk_update(void* self,void*,void* actor,void* input){
   exhausted=fn<float(__thiscall*)(void*)>(0x41d5d0)(actor)<cost;
   fn<void(__thiscall*)(void*,float)>(0x4318d0)(actor,cost);
  }
- const u32 name=field<u32>(actor,0x18);bool rogue=false;
- if(name){auto* table=fn<unsigned char*(__cdecl*)()>(0x602280)();const u32 index=name&0xffffff;const char* text=reinterpret_cast<const char*>(table+field<u32>(table,4+index*4)+0x4008);rogue=*text=='r'||*text=='R';}
- if(exhausted||!held(input,rogue?5:4)){
+ if(exhausted||!tk_held(actor,input)){
   vec v=field<vec>(target,0x120);const float horizontal=std::sqrt(v.x*v.x+v.y*v.y);
   if(horizontal>=5.f){v=sub(field<vec>(target,0x20),field<vec>(actor,0x20));v.z=0;v=mul(unit(v),5.f);}
   // XML1 3DCA9/3DD0B and PC 42E6DE/42E752 use the victim's facing
@@ -370,8 +518,17 @@ inline void __fastcall tk_update(void* self,void*,void* actor,void* input){
  if(auto* victim=character(target))field<u32>(victim,0x770)=field<u32>(actor,0x1c);
  else fn<void(__thiscall*)(void*,float,int)>(0x475d10)(target,-1.f,0);
 }
-inline bool __fastcall tk_input(void*,void*,void* actor,void*){
+inline bool __fastcall tk_input(void*,void*,void* actor,void* input){
+ det_math::fp_env fp;
  if(!(field<unsigned char>(actor,0x259)&2)){
+  const u32 token=field<u32>(actor,0x1c);auto pending=tk_attempts.find(token);
+  if(pending!=tk_attempts.end()){
+   if(tk_held(actor,input)){
+    if(!tk_acquire(actor,pending->second.node,pending->second.state))return false;
+    tk_attempts.erase(pending);
+    if(field<unsigned char>(actor,0x259)&2)return false;
+   }else tk_attempts.erase(pending);
+  }
   if(!field<void*>(actor,0x3bc))chain(actor,0);
   return field<void*>(actor,0x3bc)!=nullptr;
  }

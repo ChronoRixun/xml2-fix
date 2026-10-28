@@ -24,7 +24,7 @@ namespace entity_capacity {
  u32 installed_target(u32 site){for(const auto& owner:owners)if(owner.site==site)return owner.target;return 0;}
 }
 namespace game_version {bool refused=false;void refuse_startup(){refused=true;}}
-namespace xml1_grab_carry {bool available=true;bool installed(){return available;}}
+namespace xml1_grab_carry {bool available=true;bool installed(){return available;}void set_telekinesis_pair_test(bool(__cdecl*)(u32,u32)) {}}
 namespace lift_rule {int heaviness(void* object){return handler_fixture::field<unsigned char>(object,0x31d);}}
 namespace {
 using shared_handler_bridges::entry;using shared_handler_bridges::input;
@@ -561,7 +561,7 @@ int main(int argc,char** argv) {
  shared_handlers_c::install(GetModuleHandleW(nullptr));check(shared_handlers_c::installed()&&shared_handlers_c::verified()&&shared_handlers_c::values()[0]==mask,"exact selected rule-46 mask installed");
  using namespace shared_handler_c_bridges;
  const shared_handler_c_rules::targets targets{&jump_damage_bridge,&fly_damage_bridge,&colossus_input,&colossus_contact,&bounce_contact,&fastball_bridge,
-  &tk_guard_bridges::tk_entry,&tk_guard_bridges::tk_update,&tk_guard_bridges::tk_cancel,&tk_guard_bridges::tk_input,&tk_guard_bridges::tk_filter,&tk_guard_bridges::guard_entry,&tk_guard_bridges::tk_parse,&tk_guard_bridges::guard_input};
+  &tk_guard_bridges::tk_entry,&tk_guard_bridges::tk_update,&tk_guard_bridges::tk_cancel,&tk_guard_bridges::tk_input,&tk_guard_bridges::tk_filter,&tk_guard_bridges::guard_entry,&tk_guard_bridges::tk_parse,&tk_guard_bridges::guard_input,&tk_guard_bridges::release_arming_gate};
  auto expected=installation_baseline;auto writes=shared_handler_c_rules::patches(mask,targets);
  for(const auto& p:writes){check(p.before.size()==p.after.size()&&std::equal(p.before.begin(),p.before.end(),pc.read(p.address,p.before.size())),"every written byte is guarded");std::copy(p.after.begin(),p.after.end(),expected.begin()+p.address-0x401000);}
  check(std::equal(expected.begin(),expected.end(),at(0x401000)),"production installer exact footprint preserves other owners' collision/cancel hooks");

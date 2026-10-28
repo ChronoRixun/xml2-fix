@@ -1,5 +1,111 @@
 # Changelog
 
+## 1.10.0 - <date TBD>
+
+1.10.0-beta.1 is the engine half of Legends Classic 0.5.0-beta.1 (the 0.4.2 line released as 0.5: content 29 /
+`LC38`). The 0.5.0-beta.1 builder writes the keys below for every build: `[Limits] SaveLayout=w2` with its companions,
+`[Game] Xml1Economy=1`, the wave 3 limits, `TelekinesisRule = xml1` and the flying carry (no `Xml1FlyingCarry = 0`);
+`GuardDecideRule` (the XML1 guard decide below), `[Limits] Actors` (E4 stage 2) and `ActorPools` stay opt-in and
+unwritten, so Guard is XML2's own Block / Grab, as in 1.9.0 (Owen's real-pad check of 082f: the decide refused the grabs
+the native Guard makes, and a refused press showed no block). A 1.10.0 PC and
+a 1.9.0 PC refuse each other at join (different builds and agreed rules), and a campaign saved with the W2 layout
+carries a save requirement bit that 1.9.0 refuses without touching the file. The entries below are newest first.
+
+- **Readable refusals for opt-in settings** (082g, from the 082f live round). A save made with `[Limits] Actors=96`
+  (required bit 0x4) on a start where Actors=96 is off now says "This save was made with 96 actors turned on. Turn
+  on Actors=96 ([Limits] in xml2-fix.ini) and restart to load it." (slot list `(needs Actors=96)`), or why Actors=96
+  did not start when it is set; unknown bits keep the newer-build text; the file is untouched. A co-op joiner whose
+  host uses different gameplay settings now sees it on his own games list: the row in place of "No Games Found"
+  names the settings, and the dialog ("The host uses different gameplay settings: ... match them, restart the game
+  and join again.") is raised on the list's own update, where it is drawn (the dialog raised from the network receive
+  was set but not drawn). New optional agreement part `gameplay_agreement.games_list_notice`; no new message, field
+  or gameplay rule; the agreement record is unchanged.
+- **[Test] NoActivate** (`1` = test windows never activate or come to the foreground; test mode only,
+  [docs](docs/test-mode.md)). For automated test copies on a shared desktop.
+- **E4 stage 2, opt-in** (`[Limits] Actors=96`, needs `[Limits] ActorPools=124` in the same ini;
+  [docs](docs/e4-core.md)). 96 live actor controllers with every consumer rebound through the published descriptor in
+  one startup transaction (rule 1 revision 4, rule 44 revision 2 `{96,131168,8126588,15}`); every save written with it
+  installed carries requirement bit `0x4` (older readers refuse it). A missing or refused prerequisite writes nothing
+  of stage 2 and names the prerequisite; in-transaction refusals refuse the whole startup transaction. Off unless the
+  key is present; the 0.5.0-beta.1 builder never writes it. `[Test] E4Observe=1` adds the stage 2 observation
+  instrumentation and the X1 exception barriers ([docs](docs/e4-observe.md)).
+- **Moves for beta 9 (rules 45 / 46)** ([telekinesis and guard](docs/tk-guard.md), [grab and carry](docs/xml1-grab-carry.md),
+  [live checks](docs/beta9-moves-live.md)). The guard decide is taken at entry (`0x693004`) from the incoming context, so a
+  real Guard press works; a stunned enemy (the reaction flag or the timed `shared_stunned`) is picked up, an untouched one
+  is not (opt-in `GuardDecideRule = xml1`; the 0.5.0-beta.1 builder does not write it). Telekinesis keeps ownership through power 1's victim cleanup, retries a held acquisition, and its throws and
+  the carry's throws are armed through the native L2 path (damage on impact, as in X-Men Legends: walls, props, bodies;
+  a floor landing spends nothing). The flying carry comes down onto the target on a fresh hold (descent and pickup for
+  an ally or an enemy), releases at contact, attaches at the hands and excludes its own victim from the carrier's
+  collision; it ends when the carrier lands. New diagnostics: `tk blocked`, `carry trace release reason=`, guard
+  eligibility lines (`[Test] TKTrace` / `GuardTrace` / `CarryTrace`).
+- **Controllers connected after startup** (`[Input] LatePads`, default `1`; [docs](docs/controller-hotplug.md)). A
+  controller that arrives after startup is installed in gameplay's primary input (the discovery worker scans a
+  different `CInput` than gameplay), and a saved pad that is absent at startup keeps its bindings (the remapper's
+  sentinel `666` at `0x6185CE` used to erase them; the bridge at `0x61862A` resolves saved to current devices first).
+  `LatePads = 0` restores the retail bytes at `0x61862A`.
+- **Co-op: `(Spectating)`** for a joiner who has not picked a hero yet (was a blank `Player ()`), and native drop
+  causes in the log ([docs](docs/join-in-progress.md)).
+- **A player-readable refusal for a newer save:** a save that needs a capability this DLL lacks now says "This save
+  was made by a newer Legends Classic build - update to load it"; the requirement bits go to the log and the file is not
+  touched (1.9.0 shows "this save needs a newer version of XML2 Fix (required feature bits ...)").
+- **The first game's economy: gameplay rule 52** (`[Game] Xml1Economy=1`; needs verified rule 47;
+  [docs](docs/xml1-economy.md), [digest](docs/xml1-economy-digest.md)). Reads the builder's `Data/x1economy.txt`
+  sidecar (strict parser, SHA-256) and constructs, drops, prices and sells the first game's 116 equipment pieces: plan A
+  zero-draw construction in native slot order, the XML1 drop roller, Forge and Healer catalogues and prices by tier,
+  selling, the Grab Bag charged once per course, and migration of old saves' rebuilt Danger Room rewards. Shop snapshot
+  faults are contained (the 082c Forge crash); `[Test] InputPipe` exposes `economy events` for scripted checks.
+- **Limits wave 2: the native save layout W2, gameplay rule 47** (`[Limits] SaveLayout=w2` with
+  `ItemEnhancements=4096`, `EntityCapacity=1` and `[Save] Format=lc`; [design](docs/limits-wave2.md),
+  [decisions](docs/DECISIONS.md)). One save-layout change for every save-bound capacity: 1024 item definitions, 4096
+  enhancement and attached records, 1024 objectives, larger talent, mission, zone-placement, world-item and zone-string
+  capacities. Old saves load and convert; a W2 save carries requirement bit `0x2` (`NATIVE_W2`), which older DLLs refuse
+  readably. The shared ring / pool helpers stay retail (W2 owners call private copies: the 082a boot crash), and the
+  restore map no longer overruns the save-format statics.
+- `[Limits] ParticleScratch=40` clamps all eleven particle operations to the
+  manager's 40 shared scratch records, preventing overruns with larger arrays.
+  Logs once per array address and exposes per-operation peaks and clamp counts
+  through `PARTICLE_SCRATCH`. Rule 60; absent/0/off keeps the released bytes and
+  agreement. [Details](docs/particle-scratch.md).
+- **Effect library capacity and primitives per effect**: `[Limits] EffectTemplates=512`
+  raises both native 220-entry tables together (221..2048); gameplay rule 55
+  `EffectFiles`. `[Limits] PrimitivesPerEffect=32` raises the ten-primitive bound
+  (11..32), retaining the original record and first ten pointers with additional
+  pointers in DLL spill storage; rule 58 `PrimitivesPerEffect`. Lock-on and
+  multipart use the published effect layout. Both shared bitmap helpers remain
+  native for other containers. Missing/stock keys preserve the existing patch
+  and agreement record. See [effect templates](docs/effect-templates.md) and
+  [primitives per effect](docs/primitives-per-effect.md).
+- **More primitive definitions and effect vectors for converted content and graphics
+  mods.** `[Limits] PrimitiveDefs=2048` (817..8192, stock 816) and
+  `EffectVectors=4096` (711..16384, stock 710) enlarge the native pools with generated
+  retail-byte ledgers and independent transactions. Native allocation, refusal,
+  reuse and teardown remain; vectors keep their 84 presets and 16-bit IDs.
+  Rules 56 and 57 advertise the installed capacities; absent/stock keys change no
+  game bytes or agreement entries. Status adds `prim defs` and `vectors` counters.
+  [Primitive definitions](docs/primitive-defs.md), [vectors](docs/effect-vectors.md).
+- **Shared fighting-style and event manager headroom** (`[Limits] FightStyles=64`, `StyleEvents=4096`; [styles](docs/fight-styles.md), [events](docs/style-events.md)). Styles accept 20..127; events accept 1065..8192, with stock 19/1064 when absent. Both keys use one guarded allocation layout and transaction. Four bitmap clear caves make styles above 32 reusable through unload/destruction. Rule 35 stays revision 1 through 32 and becomes revision 2 above 32; new rule 53 covers events. Legacy style-only byte plans through 32 and absent-key behavior are preserved. Retail native lifecycle tests include both bitmap words, full-pool refusals and event generation reuse. Live campaign/multiplayer validation remains pending.
+- **FightMove headroom and clean exhaustion refusal** (`[Limits] FightMoves=1024`,
+  333..2048; [docs](docs/fight-moves.md)). Expands the native 332-record pool using
+  a generated operand ledger, and refuses before allocation when the pool or a
+  style's 150-node map is full. Reports pool/map refusals and aliasing observations.
+  Rule 54 revision 1 records the capacity. MoveTriggers sizes and validates its
+  side arrays through the published descriptor, retaining rule 37 revision 1 and
+  its exact existing patch plan when FightMoves is absent. Native fixtures include
+  a retail allocation-333 corruption control, guarded boundaries, map preservation,
+  recycling, teardown, and high-slot trigger arrays.
+- `[Limits] ScriptPools=x1` expands statements/values/compiled scripts/running
+  contexts to 4096/8192/512/128, preserving the native globals and function tree.
+  A compiler guard refuses null values safely; bounded filename-cache metadata
+  prevents its old 120-name ring from aliasing larger compiled pools. Rule 59 covers the installed
+  profile; counters and verification are documented in [script-pools.md](docs/script-pools.md).
+
+- **Attached powerups and callback nodes:** `[Limits] AttachedPowerups=256` and
+  `VFNodes=256` enlarge the native pools from 128 and 192 to 256. Each key is
+  independent and accepts only 256; absent keys keep retail bytes and agreement.
+  Installed capacities register gameplay rules 61/62. The layout, bitmap clears,
+  free rings and diagnostic readers move together, with private copies of shared
+  helpers. [Implementation and native verification](docs/power-pools.md).
+
 ## 1.9.0 - <date TBD>
 
 1.9.0-beta.1 is the port's beta 8 (Legends Classic 0.4.1-beta.1, content 28 / `LC37`): the first game's bosses, moves,

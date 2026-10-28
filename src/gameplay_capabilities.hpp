@@ -17,7 +17,7 @@ namespace gameplay_capabilities
   gns_transport_id=25, join_in_progress_id=26, online_conversations_id=27, model_pools_id=28, tick_rate_id=29,
   world_backfaces_id=30, igb_cache_id=31, resource_names_id=32, actor_slots_id=33, item_enhancements_id=34,
   fight_styles_id=35, effect_curves_id=36, move_triggers_id=37, lift_rule_id=38, wall_cling_id=39,
-  xml1_bosses_id=40, balance_parity_id=41, shared_handlers_id=42, rogue_decide_id=43, actor_ai_id=44, grab_carry_id=45, shared_handlers_c_id=46, anim_enums_id=48, char_sounds_id=49, resident_stats_id=50, motion_pool_id=51;
+  xml1_bosses_id=40, balance_parity_id=41, shared_handlers_id=42, rogue_decide_id=43, actor_ai_id=44, grab_carry_id=45, shared_handlers_c_id=46, native_save_layout_id=47, anim_enums_id=48, char_sounds_id=49, resident_stats_id=50, motion_pool_id=51, xml1_economy_id=52, effect_files_id=55, style_events_id=53, fight_moves_id=54, primitive_defs_id=56, effect_vectors_id=57, primitives_per_effect_id=58, script_pools_id=59, particle_scratch_id=60, attached_powerups_id=61, vf_nodes_id=62;
  // Rules 17..29 (24 = [Online] FastTransfer, docs/online-campaign-transfer.md; 25 = [Online] Transport=gns, docs/gns-transport.md;
  // 26 = [Online] JoinInProgress, docs/join-in-progress.md; 27 = [Game] OnlineConversations=lockstep, docs/gameplay-agreement.md;
  // 28 = [Engine] ModelPools, docs/model-pools.md; 29 = [Online] TickRate, docs/online-tick-rate.md;
@@ -86,6 +86,8 @@ namespace gameplay_capabilities
   case join_in_progress_id: return "JoinInProgress";
   case online_conversations_id: return "OnlineConversations";
   case model_pools_id: return "ModelPools";
+  case effect_files_id: return "EffectFiles";
+  case primitives_per_effect_id: return "PrimitivesPerEffect";
   case tick_rate_id: return "TickRate";
   case world_backfaces_id: return "WorldBackfaces";
   case igb_cache_id: return "IGBCache";
@@ -93,8 +95,10 @@ namespace gameplay_capabilities
   case actor_slots_id: return "ActorSlots";
   case item_enhancements_id: return "ItemEnhancements";
   case fight_styles_id: return "FightStyles";
+  case style_events_id: return "StyleEvents";
   case effect_curves_id: return "EffectCurves";
   case move_triggers_id: return "MoveTriggers";
+  case fight_moves_id: return "FightMoves";
   case balance_parity_id: return "ReceiveRounding/DamageCap";
   case shared_handlers_id: return "Shared handler rules";
   case lift_rule_id: return "LiftRule";
@@ -108,6 +112,14 @@ namespace gameplay_capabilities
   case char_sounds_id: return "CharSounds";
   case resident_stats_id: return "ResidentStats";
   case motion_pool_id: return "MotionPool";
+  case particle_scratch_id: return "ParticleScratch";
+  case primitive_defs_id: return "PrimitiveDefs";
+  case effect_vectors_id: return "EffectVectors";
+  case script_pools_id: return "ScriptPools";
+  case attached_powerups_id: return "AttachedPowerups";
+  case vf_nodes_id: return "VFNodes";
+  case native_save_layout_id: return "NativeSaveLayout";
+  case xml1_economy_id: return "Xml1Economy";
   default: return "a newer rule";
   }
  }
@@ -231,7 +243,7 @@ namespace gameplay_capabilities
      if(used)add(", ");if(ids){number(unsigned(b+1));add(" ");}
      // These requested-only rules are absent when OFF, but this DLL still knows
      // their names. The bucket summary remains advisory; the digest admits peers.
-     if(b+1==object_world_impact_id || b+1==stun_rule_id || b+1==danger_room_party_id || b+1==lockon_aim_id || b+1==box_harm_origin_id || b+1==danger_room_healthbars_id || b+1==harm_single_chain_id || b+1==fast_transfer_id || b+1==gns_transport_id || b+1==join_in_progress_id || b+1==online_conversations_id || b+1==model_pools_id || b+1==tick_rate_id || b+1==world_backfaces_id || b+1==igb_cache_id || (b+1>=resource_names_id && b+1<=move_triggers_id) || b+1==lift_rule_id || b+1==wall_cling_id || b+1==balance_parity_id || b+1==shared_handlers_id || b+1==rogue_decide_id || b+1==xml1_bosses_id || b+1==actor_ai_id || b+1==grab_carry_id || b+1==shared_handlers_c_id || b+1==anim_enums_id || b+1==char_sounds_id || b+1==resident_stats_id || b+1==motion_pool_id){add(rule_name(static_cast<std::uint16_t>(b+1)));add(" (disabled on this PC)");}
+     if(b+1==xml1_economy_id || b+1==native_save_layout_id || b+1==style_events_id || b+1==fight_moves_id || b+1==script_pools_id || b+1==effect_files_id || b+1==primitive_defs_id || b+1==effect_vectors_id || b+1==primitives_per_effect_id || b+1==object_world_impact_id || b+1==stun_rule_id || b+1==danger_room_party_id || b+1==lockon_aim_id || b+1==box_harm_origin_id || b+1==danger_room_healthbars_id || b+1==harm_single_chain_id || b+1==fast_transfer_id || b+1==gns_transport_id || b+1==join_in_progress_id || b+1==online_conversations_id || b+1==model_pools_id || b+1==tick_rate_id || b+1==world_backfaces_id || b+1==igb_cache_id || (b+1>=resource_names_id && b+1<=move_triggers_id) || b+1==lift_rule_id || b+1==wall_cling_id || b+1==balance_parity_id || b+1==shared_handlers_id || b+1==rogue_decide_id || b+1==xml1_bosses_id || b+1==actor_ai_id || b+1==grab_carry_id || b+1==shared_handlers_c_id || b+1==anim_enums_id || b+1==char_sounds_id || b+1==resident_stats_id || b+1==motion_pool_id || b+1==particle_scratch_id || b+1==attached_powerups_id || b+1==vf_nodes_id){add(rule_name(static_cast<std::uint16_t>(b+1)));add(" (disabled on this PC)");}
      else add("a rule this PC does not have");
     }
    }

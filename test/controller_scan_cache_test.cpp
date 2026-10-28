@@ -22,6 +22,7 @@ namespace xinput_pad
     std::vector<int> connected_indices() { return {}; }
 }
 namespace pad_input { void on_read(int, xinput_pad::raw_state&, bool) {} }
+namespace pad_hotplug { void on_keyboard_read(void*, DWORD) {} } // independent native-input integration has its own fixture
 namespace virtual_pad
 {
     int virtual_count = 0;

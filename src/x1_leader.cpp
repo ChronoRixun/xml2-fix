@@ -12,7 +12,6 @@
 #include <cstring>
 #include <optional>
 #include <string>
-#include <initializer_list>
 #include <vector>
 
 namespace x1_leader
@@ -192,7 +191,14 @@ namespace x1_leader
 			return;
 		}
 
-		// The four bridges go in one block of the fix's own, made executable once it is written.
+		// Economy owns the drop count and selection. Keep Rule 7's pain/classifier
+		// semantics while leaving its old count/pick sites retail for the economy
+		// transaction to verify. Startup installs these two bridges before economy:
+		// the guards above include the retail selection at 0x46e760 and deliberately
+		// reject a pre-existing legacy count/pick install.
+		const bool economy = ini::flag(L"Game", L"Xml1Economy", false);
+
+		// The selected bridges go in one block of the fix's own, made executable once it is written.
 		auto* block = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, 256, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
 		if (!block)
 		{
@@ -211,7 +217,12 @@ namespace x1_leader
 		const auto pick_va = count_va + static_cast<address>(count.size());
 		const auto pick = pick_bridge(pick_va, address_of(reinterpret_cast<const void*>(&forced_pick)));
 		std::size_t used = 0;
-		for (const auto* part : std::initializer_list<const std::vector<std::uint8_t>*>{&pain, &classify, &count, &pick})
+		std::vector<const std::vector<std::uint8_t>*> parts{&pain, &classify};
+		if (!economy)
+		{
+			parts.insert(parts.end(), {&count, &pick});
+		}
+		for (const auto* part : parts)
 		{
 			std::memcpy(block + used, part->data(), part->size());
 			used += part->size();
@@ -225,19 +236,22 @@ namespace x1_leader
 		}
 		FlushInstructionCache(GetCurrentProcess(), block, used);
 
-		// All four sites or none, through the shared transaction (retail bytes re-read, every page made
+		// All selected sites or none, through the shared transaction (retail bytes re-read, every page made
 		// writable first, written, read back, rolled back on any failure).
 		const auto retail_bytes = [](const address va, const std::size_t n) {
 			std::vector<std::uint8_t> bytes(n);
 			std::memcpy(bytes.data(), in_game(va), bytes.size());
 			return bytes;
 		};
-		const std::vector<xml1_hook_transaction::patch> writes{
+		std::vector<xml1_hook_transaction::patch> writes{
 		    {pain_site_va, retail_bytes(pain_site_va, 7), jmp_bridge(pain_site_va, pain_va)},
 		    {drop_site_va, retail_bytes(drop_site_va, 7), jmp_to(drop_site_va, classify_va, 7)},
-		    {count_site_va, retail_bytes(count_site_va, 6), jmp_to(count_site_va, count_va, 6)},
-		    {pick_site_va, retail_bytes(pick_site_va, 8), jmp_to(pick_site_va, pick_va, 8)},
 		};
+		if (!economy)
+		{
+			writes.push_back({count_site_va, retail_bytes(count_site_va, 6), jmp_to(count_site_va, count_va, 6)});
+			writes.push_back({pick_site_va, retail_bytes(pick_site_va, 8), jmp_to(pick_site_va, pick_va, 8)});
+		}
 		xml1_hook_transaction::memory memory;
 		bool safe = true;
 		if (!xml1_hook_transaction::apply(memory, writes, &safe))
@@ -248,11 +262,19 @@ namespace x1_leader
 				logger::write("x1 leader: ERROR: rollback/protection verification failed; process startup refused");
 				return; // the bridges stay allocated: a site may still jump into them
 			}
-			logger::write("x1 leader: ERROR: the four sites could not be written and read back - %s", as_before);
+			logger::write("x1 leader: ERROR: the selected sites could not be written and read back - %s", as_before);
 			VirtualFree(block, 0, MEM_RELEASE);
 			return;
 		}
 		applied = true;
+		if (economy)
+		{
+			logger::write("x1 leader: on - %llu sidecar name(s): pain gate 0x%08lX and leader classifier 0x%08lX; "
+			              "Xml1Economy owns drop count and selection (legacy count/pick bridges omitted)",
+			              static_cast<unsigned long long>(names.size()), static_cast<unsigned long>(pain_site_va),
+			              static_cast<unsigned long>(drop_site_va));
+			return;
+		}
 		logger::write("x1 leader: on - %llu sidecar name(s): heroes don't flinch vs their projectiles (pain gate 0x%08lX); "
 		              "their deaths follow X-Men Legends 1's drop rule (no probability roll, 4 drops, from the second on "
 		              "HEALTH_ITEM / ENERGY_ITEM / XTREME_PIP; roller 0x%08lX/0x%08lX/0x%08lX); XML2's x3 variants keep "

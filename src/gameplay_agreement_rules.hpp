@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <string>
 namespace gameplay_agreement_rules
 {
  constexpr std::size_t request_size=0x74,reply_size=0x50,info_size=0x30,ack_size=8;
@@ -128,6 +129,32 @@ namespace gameplay_agreement_rules
   {native_text_lookup,"8b0d74b1a60085c974","native localized text lookup"},
  }};
 
+ // ---- Games-list refusal notice (the querying PC; optional) ----
+ // A PC that refuses a host's 0x18 game info (Connect by IP, room-code join, games-list search) files nothing, so the
+ // games list shows its native empty row. The native popup raised from inside that network receive was found shown
+ // in the popup manager but not drawn on the list (082f A2/A3: state popup=1, the frame "No Games Found" only): the
+ // popup attaches its panels to whatever menu is current at that moment (0x5ea1b0 -> 0x5e91c0, menu vt+0x108).
+ // CMenuGamesList (vtable 0x69f8b4, RTTI .?AVCMenuGamesList@@): vt+0x30 = 0x5b9f00 runs while it is the current menu
+ // and, on its timer, refreshes the list (0x5b9f27: CALL 0x5b9900). An empty table makes that refresh write one row:
+ // string 0xfc5 for the first five refreshes, then string 0xfe4 ("No Games Found"; 0x5b9a1f, and 0x5b9b9b once every
+ // listed game went away): `call 0x4bdb30; mov edx,[eax]; push 0xfe4; mov ecx,eax; call [edx+8]` -> sprintf "%s" into a
+ // 256-byte stack row -> the list's add-row (vt+0x84). Two writes: the two 5-byte `mov ecx,eax; call [edx+8]` become
+ // a CALL to a thunk that returns the refusal row while it is current (else the native lookup), and the update slot
+ // raises the deferred dialog on the list's own update, so it is attached to the games list. No new message, no
+ // field: the row and the dialog use what the refused 0x18 already carried (the rule-summary difference).
+ constexpr std::uint32_t games_list_vtable=0x69f8b4,games_list_update_slot=games_list_vtable+0x30,games_list_update=0x5b9f00;
+ constexpr std::uint32_t games_empty_lookup_first=0x5b9a2b,games_empty_lookup_emptied=0x5b9ba7; // `mov ecx,eax; call [edx+8]`
+ constexpr std::uint32_t games_empty_string=0xfe4;
+ constexpr std::size_t games_row_limit=64;       // one list row (the row buffer itself is 256 bytes)
+ constexpr unsigned long long browser_notice_ms=120000;
+ inline constexpr std::array<limits_rules::guard,5> browser_guards{{
+  {games_list_vtable-4,"e0916b00","CMenuGamesList vtable (complete object locator of .?AVCMenuGamesList@@)"},
+  {games_list_update_slot,"009f5b00","CMenuGamesList update slot holds 0x5b9f00"},
+  {games_list_update,"51568bf1e80717faff8b106a008bc8ff5228d95c2404d9056c828a00d85c2404dfe0f6c4057a178bcee8d2f9ffff","the games-list update refreshes the list on its timer (0x5b9f27: CALL 0x5b9900)"},
+  {games_empty_lookup_first-0xc,"e80c41f0ff8b1068e40f00008bc8ff520850","the empty list looks up its No Games Found row (0x5b9a1f)"},
+  {games_empty_lookup_emptied-0xc,"e8903ff0ff8b1068e40f00008bc8ff520850","the emptied list looks up its No Games Found row (0x5b9b9b)"},
+ }};
+
  // Why a join was refused. Sent as the 8-byte body of 0x1d, relative to the SENDER; an absent or foreign body
  // (older builds, the native version refusal) reads as unspecified. Native 0x609ad0 ignores the body.
  enum class refusal : std::uint8_t { unspecified=0, settings=1, sender_install=2, foreign_record=3 };
@@ -182,6 +209,28 @@ namespace gameplay_agreement_rules
   case refusal::foreign_record: return remote ? "A player could not join: their game reports another build, or the fix did not load correctly on this PC. Both players need the same build."
                                               : "A player could not join: they use another build, or the fix did not load correctly on their PC. Both players need the same build.";
   default: return "A player could not join: their game setup is incompatible with yours. Both players need the same build and the same gameplay settings.";
+  }
+ }
+
+ // The joining / querying PC's dialog for a settings refusal: that the host's gameplay settings differ, which ones
+ // when the refusal carried them ("entity layout, ActorAI (disabled on this PC)"), then what to do.
+ inline std::string joiner_settings_text(const char* names)
+ {
+  std::string words("The host uses different gameplay settings");
+  if(names && *names){words+=": ";words+=names;}
+  return words+". Both players need the same build and the same gameplay settings in xml2-fix.ini; match them, restart the game and join again.";
+ }
+ // The games list's row in place of "No Games Found" while a refusal is current: one line (games_row_limit).
+ inline std::string games_row_text(refusal why,const char* names)
+ {
+  switch(why){
+  case refusal::settings:{
+   if(names && *names)for(const char* lead:{"Host's gameplay settings differ: ","Settings differ: "}){
+    const std::string named=std::string(lead)+names;if(named.size()<=games_row_limit)return named;}
+   return "Host's gameplay settings differ - match xml2-fix.ini, restart";}
+  case refusal::sender_install: return "Host found, but the fix did not load correctly on this PC";
+  case refusal::foreign_record: return "Host found, but it runs another build or its fix did not load";
+  default: return "Host found, but its game setup is incompatible with yours";
   }
  }
 

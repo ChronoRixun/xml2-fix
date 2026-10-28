@@ -112,8 +112,14 @@ check(w(log_off, 'address space - LAA') and w(log_w1, 'address space - LAA'), 'L
 # OFF limits/model-pools lines equal to beta 7's (bar the new LAA line and the 200-IGB wording)
 def norm(log):
     keep = [l.split(' ', 2)[-1] for l in log.splitlines() if ('limits:' in l or 'model pools' in l) and 'address space' not in l]
-    return [k.replace(', 200 IGB records', '') for k in keep]
-strip = lambda xs: [re.sub(r'0x[0-9A-F]{8}', 'ADDR', x) for x in xs]
+    keep = [k.replace(', 200 IGB records', '') for k in keep]
+    # Limits wave 3 (w3/integrated), by design: W3-1 reports the style registry as the shared style manager
+    # ("style manager styles N; events E ...") and DESIGN rev 2 section 7 raises the style manager, curves and items
+    # after the actor cache and model pools. Same raises, same values: compare the style count and the set of lines.
+    keep = [re.sub(r'^(?:fighting style registry raised from 19 to (\d+) entries|style manager styles (\d+); events 1064)\b.*$',
+                   lambda m: 'STYLES ' + (m[1] or m[2]), k) for k in keep]
+    return sorted(keep)
+strip = lambda xs: sorted(re.sub(r'0x[0-9A-F]{8}', 'ADDR', x) for x in xs)
 check(strip(norm(log_off)) == strip(norm(log_ref)), 'OFF: limits and model-pools log lines as beta 7')
 cap_w1 = w(log_w1, 'capability') + w(log_w1, 'protocol 4')
 cap_off = w(log_off, 'protocol 4')

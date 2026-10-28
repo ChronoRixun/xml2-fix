@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 #include <string>
 #include <vector>
 
@@ -13,7 +14,11 @@
 namespace ini
 {
 	bool requested = false;
-	bool flag(const wchar_t*, const wchar_t*, bool) { return requested; }
+	bool economy = false;
+	bool flag(const wchar_t*, const wchar_t* key, bool)
+	{
+		return std::wcscmp(key, L"Xml1Economy") == 0 ? economy : requested;
+	}
 }
 namespace game_version
 {
@@ -194,8 +199,9 @@ namespace
 	}
 }
 
-int main()
+int main(int argc, char** argv)
 {
+	ini::economy = argc > 1 && std::strcmp(argv[1], "economy") == 0;
 	std::setbuf(stdout, nullptr);
 	AddVectoredExceptionHandler(1, &report_crash);
 	const auto game = reinterpret_cast<HMODULE>(0x400000);
@@ -250,6 +256,19 @@ int main()
 	check(*reinterpret_cast<std::uint32_t*>(pain_site) == before && !x1_leader::installed(),
 	      "guard mismatch leaves the code unchanged");
 
+	// A previous X1Leader install must never coexist with the economy roller. The
+	// count/pick guards remain required even when this install will not write them.
+	for (const auto site : {x1_leader_rules::count_site_va, x1_leader_rules::pick_site_va})
+	{
+		place_native();
+		*reinterpret_cast<std::uint8_t*>(site) = 0xe9;
+		x1_leader::install(game);
+		check(!x1_leader::installed() && *reinterpret_cast<std::uint8_t*>(pain_site) == 0xf6 &&
+		          *reinterpret_cast<std::uint8_t*>(drop_site) == 0xf6 &&
+		          *reinterpret_cast<std::uint8_t*>(site) == 0xe9,
+		      "existing count/pick bridge refuses installation without changing any site");
+	}
+
 	// 3. Wrong image base refuses too.
 	place_native();
 	x1_leader::install(reinterpret_cast<HMODULE>(0x400001));
@@ -300,6 +319,16 @@ int main()
 	check(drop_once(listed_actor, 0) != 0, "a listed corpse is a leader roll even at drop kind 0 (XBE 0x7100f has no kind test)");
 	check(drop_once(native_actor, 0) == 0, "an x3-flagged corpse at drop kind 0 keeps XML2's kind test");
 
+	if (ini::economy)
+	{
+		check(limits_rules::matches(reinterpret_cast<const std::uint8_t*>(x1_leader_rules::count_site_va),
+		                           "6a016a056a02"),
+		      "economy keeps the retail leader count bytes");
+		check(limits_rules::matches(reinterpret_cast<const std::uint8_t*>(x1_leader_rules::pick_site_va),
+		                           "8b176aff8bcfb301"),
+		      "economy keeps the retail forced pick bytes");
+	}
+	else
 	// The count: a listed corpse's roll takes 4 drops (XBE 0x711a5); any other keeps XML2's 2-5 call.
 	{
 		auto* c = reinterpret_cast<std::uint8_t*>(x1_leader_rules::count_call_va);

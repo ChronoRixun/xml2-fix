@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 #include "multipart.cpp"
+#include "effect_templates_rules.hpp"
 
 namespace ini { bool flag(const wchar_t*, const wchar_t* key, bool fallback) { return wcscmp(key, L"Xml1Multipart") == 0 ? true : fallback; } }
 namespace logger {
@@ -66,8 +67,8 @@ void attempt() {
 	__except (EXCEPTION_EXECUTE_HANDLER) { faulted = true; }
 }
 int draws = 0;
-unsigned char store[0x8a18]{};
-void* __cdecl stub_store() { return store; }
+std::vector<unsigned char> store(0x14104+64);
+void* __cdecl stub_store() { return store.data(); }
 std::uint32_t __fastcall stub_valid(void*, void*, std::uint32_t) { return 1; }
 float __cdecl stub_random(unsigned char) { ++draws; return .5f; }
 
@@ -92,15 +93,21 @@ int run_case(const std::string& mode) {
 	} else if (mode == "relocated-table") {
 		check(u32_at(0x438b10) != 0xffffc92c && u32_at(0x68b828) == 0x4a5bd0, "relocated table: installed, the retail table left alone");
 		check(c.verified && c.values[0] == 1, "relocated table: verified");
-	} else if (mode == "loop-random") {
+} else if (mode == "loop-random" || mode == "loop-raised") {
 		jump(0x4078d0, reinterpret_cast<const void*>(&stub_store)); jump(0x405100, reinterpret_cast<const void*>(&stub_valid));
 		jump(0x560190, reinterpret_cast<const void*>(&stub_random));
 		float time = .6f, spread = 0;
-		std::memcpy(store + 0x4874 + 0x34, &time, 4); std::memcpy(store + 0x4874 + 0x38, &spread, 4);
-		const float zero = multipart::loop_time(1);
+		const auto n=mode=="loop-raised" ? 512u : 220u;
+        const auto a=effect_templates_rules::layout_for(n);
+        effect_templates::published_layout=effect_templates_rules::descriptor_for(a);
+        const auto slot=n-1,mask=n==220?255u:511u,handle=slot|(n==220?256u:512u);
+        put_u32(static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(store.data()))+a.base+a.defs.mask,mask);
+        auto* rec=store.data()+a.base+slot*68;
+		std::memcpy(rec + 0x34, &time, 4); std::memcpy(rec + 0x38, &spread, 4);
+		const float zero = multipart::loop_time(handle);
 		check(zero > .599f && zero < .601f && draws == 1, "loop length: zero spread still draws once (XBE 0x25f30), 0.6 s");
-		spread = .2f; std::memcpy(store + 0x4874 + 0x38, &spread, 4);
-		const float wide = multipart::loop_time(1);
+		spread = .2f; std::memcpy(rec + 0x38, &spread, 4);
+		const float wide = multipart::loop_time(handle);
 		check(wide > .699f && wide < .701f && draws == 2, "loop length: 0.6 + 0.5 x 0.2 with one more draw");
 		check(multipart::loop_time(0) > .299f && draws == 2, "loop length: a stale handle is 0.3 s without a draw (0x25ee0)");
 	} else {
@@ -119,7 +126,7 @@ int main(int argc, char** argv) {
 	if (!exe) { std::puts("SKIPPED: no retail executable given (argument or XML2_FIX_TEST_EXE)"); return 0; }
 	char self[MAX_PATH]{}; GetModuleFileNameA(nullptr, self, MAX_PATH);
 	int failed = 0;
-	for (const char* mode : {"retail", "relocated-table", "invalid-table", "bridge-changed", "guard-changed", "loop-random"}) {
+	for (const char* mode : {"retail", "relocated-table", "invalid-table", "bridge-changed", "guard-changed", "loop-random", "loop-raised"}) {
 		std::string cmd = std::string("\"") + self + "\" \"" + exe + "\" " + mode;
 		STARTUPINFOA si{sizeof si}; PROCESS_INFORMATION pi{};
 		if (!CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) { ++failed; continue; }

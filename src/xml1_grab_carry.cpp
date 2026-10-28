@@ -16,7 +16,8 @@ namespace
 using namespace xml1_grab_carry_rules;
 using u32 = std::uint32_t;
 std::atomic<int> state{-1};
-bool trace = false, logged_lookup = false, carry = true;
+bool trace = false, logged_lookup = false, carry = true, guard_ally_victim = false;
+telekinesis_pair_test tk_pair=nullptr;
 std::array<void*, 8> attack_slots{};
 void* attack_handler = nullptr;
 template<class T> T at(const void* p, u32 off) { T v{}; std::memcpy(&v, static_cast<const unsigned char*>(p) + off, sizeof v); return v; }
@@ -231,7 +232,17 @@ void __fastcall victim_frame(void*, void*, void* victim, void*)
     {
         void* paired = character(resolve(owner, 0x76c));
         void* move = at<void*>(owner, 0x378);
-        if (paired == victim && move && retaining_prefix(move_name(move))) return;
+        if (paired == victim && move)
+        {
+            if(tk_pair&&tk_pair(at<u32>(owner,0x1c),at<u32>(victim,0x1c)))return;
+            const char* name = move_name(move);
+            if (retaining_prefix(name)) return;
+            // The converter adds ch_grab_victim to throwallyvictim; XML1
+            // authors no handler there. Do not drop it before the owner's
+            // automatic victim_throw event. Limit this adaptation to the
+            // opt-in GuardDecideRule path, preserving beta-8 OFF behavior.
+            if (guard_ally_victim && _stricmp(name,"throwally")==0) return;
+        }
         const u32 none = *reinterpret_cast<const u32*>(0x72988c);
         slot<exclusion_t>(owner, 0x104)(owner, nullptr, none, 0.6f);
         slot<exclusion_t>(victim, 0x104)(victim, nullptr, none, 0.6f);
@@ -320,6 +331,7 @@ void install(HMODULE game)
     // [Game] Xml1FlyingCarry=0 (beta 8 080h): no flying carry; everything else in the rule as with it. Read before any
     // refusal so a refused request advertises the mask it asked for.
     carry = ini::flag(L"Game", L"Xml1FlyingCarry", true);
+    guard_ally_victim = _stricmp(ini::text(L"Game",L"GuardDecideRule").value_or("").c_str(),"xml1")==0;
     if (wanted != setting::xml1 || reinterpret_cast<std::uintptr_t>(game) != limits_rules::image_base || !supported())
     {
         logger::write("grab carry: requested but unavailable; requires retail services and Xml1GrabCarry=xml1");
@@ -424,7 +436,7 @@ void install(HMODULE game)
         return;
     }
     logger::write("grab carry: XML1 grab/pickup/recovery installed (rule 45 revision %u, feature mask %u); flying carry, fix7 and XML1 upkeep installed",
-                  static_cast<unsigned>(agreement_revision), feature_mask);
+                  static_cast<unsigned>(agreement_revision), xml1_grab_carry_rules::feature_mask);
     // The builder's DLL gate reads this line (beta 8 080e: a carry chain that resolves to itself no longer re-enters).
     logger::write("grab carry: flying carry keeps its established node (no self-chain)");
     // Beta 8 080g (fix3): world impacts reach a thrown body's receiver (0x42C09E), carry pose from animated bones.
@@ -432,6 +444,7 @@ void install(HMODULE game)
 }
 std::string status() { const int s = state.load(); return std::string("grab carry ") + (s == 1 ? (carry ? "xml1 grab + flying carry + flight upkeep" : "xml1 grab + flight upkeep (flying carry off)") : s == -1 ? "game's own" : "unavailable"); }
 std::uint32_t feature_mask() { return mask_for(carry); }
+void set_telekinesis_pair_test(telekinesis_pair_test predicate){tk_pair=predicate;}
 bool flying_carry() { return carry; }
 bool requested() { return state.load() != -1; }
 bool installed() { return state.load() == 1; }

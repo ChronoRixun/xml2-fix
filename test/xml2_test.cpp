@@ -2284,7 +2284,7 @@ namespace
 			const auto c = decide(std::nullopt, std::nullopt, std::nullopt, text);
 			CHECK(c.fight_styles == *parse_count(text) && c.notes.empty());
 		}
-		for (const auto bad : {"18", "33", "127", "0", "-1", "0x20", "32x", ""})
+		for (const auto bad : {"18", "128", "0", "-1", "0x20", "32x", ""})
 		{
 			const auto c = decide(std::nullopt, std::nullopt, std::nullopt, bad);
 			CHECK(c.fight_styles == 19 && c.notes.size() == 1 && c.notes[0].find("stays at 19") != std::string::npos);
@@ -4211,7 +4211,9 @@ namespace
 		bool guards_ok = true;
 		std::set<DWORD> addresses;
 		for (const auto& g : guards) guards_ok &= limits_rules::valid_hex(g.hex) && addresses.insert(g.va).second && g.what && *g.what;
-		CHECK(guards_ok && guards.size() == 120);
+		// The two value makers are checked through ScriptPools' published
+		// guards; its native fixture tests their retail and relocated bytes.
+		CHECK(guards_ok && guards.size() == 118);
 
 		// Change Team in the Xtraction menus: greyed out only with ForcedTeams=1 and the flag read as set.
 		CHECK(change_team_disabled(true, 1) && !change_team_disabled(true, 0) && !change_team_disabled(true, std::nullopt) && !change_team_disabled(false, 1) &&
@@ -4575,8 +4577,25 @@ namespace
 		m.put(0x729974, 1);
 		m.put(0xa0a828, 0);
 		m.put(0xa12828, 0x006b7361);
+        m.put(0x910288,0x42340000); // 45 current energy: normal 41D5D0 branch
+        m.put(0x910314,0x42c80000); // 100 maximum energy, never a refill proof
+        m.put(0x9106ac,0x42700000); // 60 pending recovery: 42CB70 writes this
+        m.put(0x910178,77);m.put(0x91076c,88);m.put(0x9103d8,4);m.put(0x9100bc,99);
+        m.put(0x910378,0x950000);m.put(0x950008,1);m.put(0x9500bc,224);m.put(0x9500c8,0x960000);
+        m.put(0xa37c48,1);m.put(0xa2c448,0);
+        const char move_label[]="airpickupidle";
+        std::memcpy(m.bytes.data()+0xa30448-0x400000,move_label,sizeof move_label);
 		auto live = r.read(102);
 		CHECK(live.party[0].id == 17 && live.party[0].health == 10.f && live.party[0].ai == true);
+        const auto carry_json=actor_json(live.party[0]);
+        CHECK(carry_json.find("\"energy\":45")!=std::string::npos);
+        CHECK(carry_json.find("\"max_energy\":100")!=std::string::npos&&carry_json.find("\"pending_energy\":60")!=std::string::npos);
+        CHECK(carry_json.find("\"owner_entity\":77")!=std::string::npos&&carry_json.find("\"selected_entity\":88")!=std::string::npos);
+        CHECK(carry_json.find("\"move_name\":\"airpickupidle\"")!=std::string::npos&&carry_json.find("\"move_animenum\":224")!=std::string::npos);
+        CHECK(carry_json.find("\"ground_contact\":99")!=std::string::npos&&carry_json.find("\"flying\":true")!=std::string::npos);
+        m.put(0x910288,0x7fc00000);
+        CHECK(actor_json(r.read(102).party[0]).find("\"energy\":null")!=std::string::npos);
+
 		m.put(0x910020, 0x7f800000);
 		CHECK(!r.read(103).party[0].pos[0]);
 		m.put(0x91001c, 18);
@@ -4674,7 +4693,7 @@ namespace
 		CHECK(pipe.name == "xml2-join" && pipe.error.empty());
 		CHECK(choose_pipe("; commented out").name == "xml2-fix-input" && choose_pipe("; commented out").error.empty());
 		CHECK(choose_pipe(std::string(64, 'a')).name == std::string(64, 'a'));
-		for (const char* bad : {"has space", "back\\slash", "sl/ash", "dot.name", "colon:", "star*", "quote\"", "tÃ©st"})
+		for (const char* bad : {"has space", "back\\slash", "sl/ash", "dot.name", "colon:", "star*", "quote\"", "tÃƒÂ©st"})
 		{
 			pipe = choose_pipe(bad);
 			if (pipe.name != "xml2-fix-input" || pipe.error.empty())
@@ -5539,6 +5558,24 @@ namespace
 		}
 	}
 
+	// Only the owned pipe child's unique pipe can use this fixture ACL. A
+	// restricted token otherwise denies its own client write access to the
+	// server's default ACL. Production parsing/input code still runs unchanged.
+	std::string fixture_pipe_path;
+	HANDLE WINAPI fixture_create_pipe(const char* name, DWORD access, DWORD mode, DWORD instances,
+	                                DWORD output, DWORD input, DWORD timeout, SECURITY_ATTRIBUTES* security)
+	{
+		if (!security && name && fixture_pipe_path == name)
+		{
+			SECURITY_DESCRIPTOR descriptor{};
+			if (!InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) ||
+			    !SetSecurityDescriptorDacl(&descriptor, TRUE, nullptr, FALSE)) return INVALID_HANDLE_VALUE;
+			SECURITY_ATTRIBUTES local{sizeof(SECURITY_ATTRIBUTES), &descriptor, FALSE};
+			return CreateNamedPipeA(name, access, mode | PIPE_REJECT_REMOTE_CLIENTS, instances, output, input, timeout, &local);
+		}
+		return CreateNamedPipeA(name, access, mode, instances, output, input, timeout, security);
+	}
+
 	// Runs in the child process (run_pipe_child), whose dinput.dll saw [Test] InputPipe=1 with
 	// PipeName=`name`, VirtualPads=2, and [Online] Server=127.0.0.1.
 	void check_pipe(const std::string& name)
@@ -5612,9 +5649,22 @@ namespace
 		}
 
 		HANDLE pipe = INVALID_HANDLE_VALUE;
+		bool fixture_acl = false;
 		for (int attempt = 0; attempt < 50 && pipe == INVALID_HANDLE_VALUE; ++attempt)
 		{
 			pipe = CreateFileA(pipe_path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+			if (pipe == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED && !fixture_acl)
+			{
+				fixture_pipe_path = pipe_path;
+				CHECK(iat_hook::hook(GetModuleHandleW(L"dinput.dll"), "KERNEL32.dll", "CreateNamedPipeA", 0,
+				                     reinterpret_cast<void*>(&fixture_create_pipe)) != nullptr);
+				// Connect read-only to retire the already-created default-ACL
+				// instance. Its next instance uses the test-only local ACL.
+				const HANDLE old = CreateFileA(pipe_path.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+				if (old != INVALID_HANDLE_VALUE) CloseHandle(old);
+				fixture_acl = true;
+				std::printf("  info  owned pipe fixture uses an explicit local ACL for the restricted test token\n");
+			}
 			if (pipe == INVALID_HANDLE_VALUE) Sleep(100);
 		}
 		CHECK(pipe != INVALID_HANDLE_VALUE);
@@ -5626,7 +5676,7 @@ namespace
 		CHECK(ok(status));
 		CHECK(status.find("; fps 0.0; frame rate the game's own 60 fps cap") != std::string::npos); // no frames drawn here, no [Display] FrameRate
 		CHECK(status.find("; actors -; names -; motions -; igb -") != std::string::npos);            // not XMen2.exe: no engine tables to count
-		CHECK(status.find("; styles -; curves -") != std::string::npos);
+		CHECK(status.find("; styles -; events -; style_refused -; event_refused -; curves -") != std::string::npos);
 		CHECK(status.find("; balance off") != std::string::npos);                                   // [Balance] is set, but nothing was patched here
 		CHECK(refused(ask(pipe, "frob")));
 		CHECK(refused(ask(pipe, "tap NOSUCHKEY")));
@@ -9343,8 +9393,16 @@ namespace
 		fake_discord(const std::wstring& tag, Script script)
 		{
 			pipes = L"\\\\.\\pipe\\xml2_test-discord-" + std::to_wstring(GetCurrentProcessId()) + L"-" + tag + L"-";
-			server_ = CreateNamedPipeW((pipes + L"0").c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1,
-			                           64 * 1024, 64 * 1024, 0, nullptr);
+			// The fixture's client may run with a restricted test token. The
+			// default owner ACL then denies even this process opening its own pipe.
+			// These invented, PID-scoped test pipes allow local clients explicitly;
+			// production Discord pipes and their access policy are untouched.
+			SECURITY_DESCRIPTOR security{};
+			CHECK(InitializeSecurityDescriptor(&security, SECURITY_DESCRIPTOR_REVISION));
+			CHECK(SetSecurityDescriptorDacl(&security, TRUE, nullptr, FALSE));
+			SECURITY_ATTRIBUTES access{sizeof(SECURITY_ATTRIBUTES), &security, FALSE};
+			server_ = CreateNamedPipeW((pipes + L"0").c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1,
+			                           64 * 1024, 64 * 1024, 0, &access);
 			go_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 			thread_ = std::thread([this, script]
 			{

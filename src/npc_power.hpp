@@ -28,6 +28,7 @@
 // brain takes schema 3 rows (every gun family). Nothing a save reads changes.
 namespace npc_power
 {
+    void register_ai_layout();
 	// Reads [Game] NpcPowerRule and patches XMen2.exe for it, every site in one transaction. From DllMain.
 	void install(HMODULE game);
 

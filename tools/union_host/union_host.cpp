@@ -18,12 +18,44 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+#include "../../src/gameplay_capabilities.hpp"
+#include "../../test/w2_boot_probe.hpp"
+#include "../../test/coop_lifecycle_probe.hpp"
 
 extern "C" unsigned char union_space[]; // union_space.asm: the code-class block right after the headers (.text$a)
 namespace
 {
 	constexpr std::uintptr_t image_base = 0x400000;
 	constexpr std::size_t space_size = 0x700000; // keep in step with union_space.asm
+	HDESK private_desktop=nullptr;
+	void* __fastcall empty_xml(void*,void*,const char*,void*){return nullptr;}
+	void seed_w2_usage(std::uintptr_t dll){
+		auto allocate=[](unsigned size){return static_cast<unsigned char*>(VirtualAlloc(nullptr,size,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE));};
+		auto put=[](void* p,unsigned at,unsigned value){std::memcpy(static_cast<unsigned char*>(p)+at,&value,4);};
+		auto* items=allocate(0x41480);auto* instances=allocate(0x10000);auto* attached=allocate(0x20000);auto* talents=allocate(0x7a8c);
+		if(!items||!instances||!attached||!talents)ExitProcess(7);
+		put(reinterpret_cast<void*>(0x72a514),0,unsigned(reinterpret_cast<std::uintptr_t>(items)));
+		put(reinterpret_cast<void*>(0x72a524),0,unsigned(reinterpret_cast<std::uintptr_t>(instances)));
+		put(reinterpret_cast<void*>(0x717b30),0,unsigned(reinterpret_cast<std::uintptr_t>(attached)));
+		put(reinterpret_cast<void*>(0x77339c),0,unsigned(reinterpret_cast<std::uintptr_t>(talents)));
+		put(items,0x2588,1023);put(items,0x605c,2000);put(items,0x6060,2096);
+		for(unsigned i=0;i<32;++i)put(items,0x41400+4*i,i==31?0x7fffffff:0xffffffff);
+		put(instances,0xe114,1024);put(attached,0x18414,4095);
+		put(talents,0x33c0,255);put(talents,0x5e18,256);put(talents,0x7684,128);
+		// A real registrar return after an empty content dependency: the base
+		// count is preserved, so status must report1024 registered objectives.
+		unsigned char saved[5]{};auto* code=reinterpret_cast<unsigned char*>(0x564cb0);std::memcpy(saved,code,5);code[0]=0xe9;
+		const auto displacement=unsigned(reinterpret_cast<std::uintptr_t>(&empty_xml))-0x564cb5;std::memcpy(code+1,&displacement,4);
+		using registrar_t=unsigned(__fastcall*)(void*,void*,void*,unsigned);
+		const auto count=reinterpret_cast<registrar_t>(0x488590)(nullptr,nullptr,nullptr,1024);
+		std::memcpy(code,saved,5);FlushInstructionCache(GetCurrentProcess(),code,5);
+		std::printf("union registrar count: %u\n",count);
+		wchar_t backing[32]{},claim[32]{};
+		if(GetEnvironmentVariableW(L"UNION_SAVE_BACKING_RVA",backing,32)&&GetEnvironmentVariableW(L"UNION_SAVE_CLAIM_RVA",claim,32)){
+			auto* storage=*reinterpret_cast<unsigned char**>(dll+std::wcstoul(backing,nullptr,16));put(storage,0x121c44,8);
+			*reinterpret_cast<unsigned*>(dll+std::wcstoul(claim,nullptr,16))=4;
+		}
+	}
 
 	std::vector<unsigned char> read_file(const wchar_t* path)
 	{
@@ -88,6 +120,7 @@ namespace
 	}
 	DWORD WINAPI answer_dialogs(void* started)
 	{
+		if(private_desktop&&!SetThreadDesktop(private_desktop))return 1;
 		SetEvent(static_cast<HANDLE>(started)); // running: past its own thread attach, so DllMain's loader lock is no wait
 		for (;;) { EnumWindows(answer_dialog, 0); Sleep(200); }
 	}
@@ -108,6 +141,11 @@ int wmain(int argc, wchar_t** argv)
 		return 2;
 	}
 	SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+	if(GetEnvironmentVariableW(L"UNION_PRIVATE_DESKTOP",nullptr,0)) {
+		wchar_t name[64]{};swprintf_s(name,L"w2-union-%lu",GetCurrentProcessId());
+		private_desktop=CreateDesktopW(name,nullptr,nullptr,0,GENERIC_ALL,nullptr);
+		if(!private_desktop||!SetThreadDesktop(private_desktop)){std::fprintf(stderr,"private desktop unavailable (%lu)\n",GetLastError());return 3;}
+	}
 	if (reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr)) != image_base || reinterpret_cast<std::uintptr_t>(union_space) != image_base + 0x1000)
 	{
 		std::fwprintf(stderr, L"the host is not laid out at 0x400000 with its block at 0x401000\n");
@@ -179,6 +217,17 @@ int wmain(int argc, wchar_t** argv)
 	}
 
 	// ---- Before: the retail image and every loaded engine module -----------------------------------------------
+	wchar_t mutate[32]{};
+	if(GetEnvironmentVariableW(L"UNION_MUTATE_VA",mutate,32)) {
+		const auto va=std::wcstoul(mutate,nullptr,16);
+		if(va<0x401000||va>=image_base+size)return 3;
+		*reinterpret_cast<unsigned char*>(va)^=1;
+	}
+	wchar_t readonly[32]{};unsigned readonly_va=0;
+	if(GetEnvironmentVariableW(L"UNION_READONLY_VA",readonly,32)){
+		readonly_va=std::wcstoul(readonly,nullptr,16);DWORD previous=0;
+		if(readonly_va<0x401000||readonly_va+4096>image_base+size||!VirtualProtect(reinterpret_cast<void*>(readonly_va),4096,PAGE_EXECUTE_READ,&previous))return 3;
+	}
 	std::vector<module_copy> before;
 	before.push_back({"XMen2.exe", image_base});
 	snapshot(before.back(), size);
@@ -198,8 +247,57 @@ int wmain(int argc, wchar_t** argv)
 	CloseHandle(CreateThread(nullptr, 0, answer_dialogs, started, 0, nullptr));
 	WaitForSingleObject(started, 10000);
 	const HMODULE fix = LoadLibraryW(argv[1]);
-	if (!fix) { std::fwprintf(stderr, L"cannot load %s (%lu)\n", argv[1], GetLastError()); return 5; }
+	const DWORD load_error=fix?0:GetLastError();
+	if (!fix) { std::fwprintf(stderr, L"cannot load %s (%lu)\n", argv[1], load_error);if(!GetEnvironmentVariableW(L"UNION_ALLOW_REFUSAL",nullptr,0))return 5; }
+	// Optional co-op regression: only synthetic calls, no game/session startup.
+	wchar_t coop[16]{};
+	if (fix && GetEnvironmentVariableW(L"UNION_COOP_PROBE", coop, 16)) {
+		std::setvbuf(stdout, nullptr, _IONBF, 0);
+		const int result = coop_lifecycle_probe::run(std::wcscmp(coop, L"on") == 0);
+		std::fflush(stdout); TerminateProcess(GetCurrentProcess(), result);
+	}
+	// Optional native boot regression; its XMLB is an owned read-only input.
+	wchar_t boot_xml[MAX_PATH]{};
+	if (fix && GetEnvironmentVariableW(L"UNION_W2_BOOT_PROBE",boot_xml,MAX_PATH)) {
+		std::setvbuf(stdout,nullptr,_IONBF,0);SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
+		DWORD old;VirtualProtect(union_space,space_size,PAGE_EXECUTE_READWRITE,&old);
+		const auto core=GetModuleHandleW(L"libIGCore.dll");
+		reinterpret_cast<void(__cdecl*)()>(GetProcAddress(core,"?igInitBootstrap@Core@Gap@@YAXXZ"))();
+		reinterpret_cast<void(__cdecl*)()>(GetProcAddress(core,"?_libIGCore_Init@Gap@@YAXXZ"))();
+		char path[MAX_PATH]{};WideCharToMultiByte(CP_ACP,0,boot_xml,-1,path,MAX_PATH,nullptr,nullptr);
+		int result=9;try {result=w2_boot_probe::run(path);} catch(const std::exception& e){std::printf("W2 boot probe: %s\n",e.what());}
+		std::fflush(stdout);TerminateProcess(GetCurrentProcess(),result);
+	}
 	Sleep(1000);
+	if(readonly_va){MEMORY_BASIC_INFORMATION page{};VirtualQuery(reinterpret_cast<void*>(readonly_va),&page,sizeof page);
+		if(page.Protect!=PAGE_EXECUTE_READ){std::fprintf(stderr,"readonly page protection changed\n");return 7;}
+		std::puts("union readonly page retained");
+	}
+	if(fix&&argc>=7) {
+		const auto base=reinterpret_cast<std::uintptr_t>(fix);
+		const auto record_rva=std::wcstoul(argv[5],nullptr,16);
+		wchar_t status_rva[32]{};
+		if(GetEnvironmentVariableW(L"UNION_STATUS_RVA",status_rva,32)){
+			if(GetEnvironmentVariableW(L"UNION_SEED_W2_USAGE",nullptr,0))seed_w2_usage(base);
+			using status_t=std::string(__cdecl*)();
+			auto* status=new std::string(reinterpret_cast<status_t>(base+std::wcstoul(status_rva,nullptr,16))());
+			std::printf("union status: %s\n",status->c_str());
+			wchar_t pipe_rva[32]{};
+			if(GetEnvironmentVariableW(L"UNION_PIPE_RVA",pipe_rva,32)){
+				using pipe_t=std::string(__cdecl*)(const std::string&);
+				auto* response=new std::string(reinterpret_cast<pipe_t>(base+std::wcstoul(pipe_rva,nullptr,16))(std::string("layout")));
+				std::printf("union pipe: %s\n",response->c_str());
+			}
+		}
+		wchar_t peer_path[MAX_PATH]{},describe_rva[32]{};
+		if(GetEnvironmentVariableW(L"UNION_PEER_WIRE",peer_path,MAX_PATH)&&GetEnvironmentVariableW(L"UNION_DESCRIBE_RVA",describe_rva,32)) {
+			const auto bytes=read_file(peer_path);const auto* record=reinterpret_cast<const gameplay_capabilities::record*>(base+record_rva);
+			gameplay_capabilities::difference diff{};const auto result=record->compare(bytes,&diff);char text[1024]{};
+			using describe_t=void(__thiscall*)(const void*,std::uint64_t,std::uint64_t,bool,char*,unsigned);
+			reinterpret_cast<describe_t>(base+std::wcstoul(describe_rva,nullptr,16))(record,diff.buckets,diff.local_only,true,text,sizeof text);
+			std::printf("union agreement: result=%u rules=%s\n",unsigned(result),text);
+		}
+	}
 
     // Optional diagnostics gate: invoke the production DLL's read-only sampler
     // at a point where no simulation runs, then compare the complete laid-out
@@ -222,6 +320,50 @@ int wmain(int argc, wchar_t** argv)
     }
 
 	// ---- After ----------------------------------------------------------------------------------------------------
+	// Optional OFF-proof evidence: executable private allocations contain the
+	// generated bridges. Capture them so a rebuilt DLL's relocated targets can
+	// be compared by allocation contents instead of ignored as address noise.
+	wchar_t code_out[MAX_PATH]{};
+	if (GetEnvironmentVariableW(L"UNION_CODE_OUT", code_out, MAX_PATH))
+	{
+		SYSTEM_INFO system{}; GetSystemInfo(&system);
+		auto cursor = reinterpret_cast<std::uintptr_t>(system.lpMinimumApplicationAddress);
+		const auto end = reinterpret_cast<std::uintptr_t>(system.lpMaximumApplicationAddress);
+		while (cursor < end)
+		{
+			MEMORY_BASIC_INFORMATION info{};
+			if (!VirtualQuery(reinterpret_cast<void*>(cursor), &info, sizeof info) || !info.RegionSize) break;
+			const auto next = reinterpret_cast<std::uintptr_t>(info.BaseAddress) + info.RegionSize;
+			const auto protection = info.Protect & 0xff;
+			// W2's data arrays live in private RW regions beside PAGE_NOACCESS
+			// guards. Keep their initial bytes as well, so OFF proofs can name
+			// data operands by reference and compare the backing instead of
+			// accepting an opaque heap-address difference.
+			bool guarded_data=false;
+			if(info.State==MEM_COMMIT && info.Type==MEM_PRIVATE && protection==PAGE_READWRITE){
+				MEMORY_BASIC_INFORMATION before_guard{},after_guard{};
+				const bool has_before_guard=VirtualQuery(info.AllocationBase,&before_guard,sizeof before_guard)!=0;
+				const bool has_after_guard=VirtualQuery(reinterpret_cast<void*>(next),&after_guard,sizeof after_guard)!=0 && after_guard.AllocationBase==info.AllocationBase;
+				if(has_before_guard && (before_guard.Protect&0xff)==PAGE_NOACCESS)guarded_data=true;
+				if(has_after_guard && (after_guard.Protect&0xff)==PAGE_NOACCESS)guarded_data=true;
+				// save_limits leaves both guard pages reserved, not committed.
+				if(has_before_guard && has_after_guard && info.AllocationBase!=info.BaseAddress && before_guard.State==MEM_RESERVE && after_guard.State==MEM_RESERVE && before_guard.RegionSize==4096 && after_guard.RegionSize==4096)guarded_data=true;
+			}
+			if (info.State == MEM_COMMIT && info.Type == MEM_PRIVATE && !(info.Protect & PAGE_GUARD) &&
+			    (protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_READ || guarded_data))
+			{
+				wchar_t path[MAX_PATH]{};
+				swprintf_s(path, guarded_data?L"%s/data-%08x.bin":L"%s/%08x.bin", code_out, unsigned(reinterpret_cast<std::uintptr_t>(info.BaseAddress)));
+				if (FILE* f = _wfopen(path, L"wb"))
+				{
+					std::fwrite(info.BaseAddress, 1, info.RegionSize, f); std::fclose(f);
+				}
+			}
+			if (next <= cursor) break;
+			cursor = next;
+		}
+	}
+
 	FILE* tsv = _wfopen(argv[4], L"wb");
 	if (!tsv) return 6;
 	std::size_t changed = 0;
@@ -247,13 +389,20 @@ int wmain(int argc, wchar_t** argv)
 			}
 	}
 	std::fclose(tsv);
-	if (argc >= 7)
+	if (argc >= 7 && fix)
 	{
 		const auto rva = std::wcstoul(argv[5], nullptr, 16);
 		const std::size_t bytes = argc == 8 ? std::wcstoul(argv[7], nullptr, 10) : 108;
 		// <rva> names the gameplay capability record object (dinput.map); its wire bytes ("GCAP", protocol, ...) sit
 		// after the entry table inside it, so the dump starts at the first "GCAP" within 64 KiB of the object.
 		const auto* at = reinterpret_cast<const unsigned char*>(fix) + rva;
+		// Optional model capture for rule-value inspection. The ordinary dump
+		// below continues to resolve the actual wire array by its GCAP magic.
+		wchar_t raw_record[MAX_PATH]{};
+		if(GetEnvironmentVariableW(L"UNION_RAW_RECORD_OUT",raw_record,MAX_PATH)){
+			FILE* raw=_wfopen(raw_record,L"wb");if(!raw)return 6;
+			std::fwrite(at,sizeof(gameplay_capabilities::entry),gameplay_capabilities::max_entries,raw);std::fclose(raw);
+		}
 		for (std::size_t i = 0; i + 4 <= 0x10000; ++i)
 			if (std::memcmp(at + i, "GCAP", 4) == 0) { at += i; break; }
 		FILE* bin = _wfopen(argv[6], L"wb");

@@ -1,4 +1,5 @@
 #include "lockon_effects.hpp"
+#include "effect_template_layout.hpp"
 #include "lockon_effects_rules.hpp"
 #include "lockon_effects_hooks.hpp"
 #include "xml1_hook_memory.hpp"
@@ -28,7 +29,7 @@ using point_t=const float*(__fastcall*)(const void*,void*);
 struct effect_resources {
     void* manager;
     bool valid(u32 handle) {
-        auto* pool=static_cast<unsigned char*>(fn<getter_t>(0x4078d0)())+0x4874;
+        auto* pool=effect_templates::definitions(fn<getter_t>(0x4078d0)());
         return fn<unsigned char(__fastcall*)(void*,void*,u32)>(0x405100)(pool,nullptr,handle)!=0;
     }
     u32 load(const std::string& name){return fn<load_t>(0x4079a0)(manager,nullptr,name.c_str(),11);}
@@ -63,6 +64,9 @@ void __cdecl observe(void* actor,const void* frame,unsigned phase,void* target) 
     else if(phase==3)emit(2,actor,vector(target,0x20),vector(frame,8));
 }
 bool dependencies(xml1_hook_transaction::memory& memory) {
+    const auto expected=effect_templates::validator_bytes();
+    std::array<unsigned char,21> validator{};
+    if(!memory.read(0x405100,validator.data(),validator.size())||validator!=expected)return false;
     for(const auto& g:lockon_effects_rules::guards) {
         std::vector<unsigned char> b(g.hex.size()/2);
         if(!memory.read(g.va,b.data(),b.size())||!limits_rules::matches(b.data(),g.hex))return false;

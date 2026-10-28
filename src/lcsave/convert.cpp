@@ -58,6 +58,7 @@ namespace lcsave::detail
 			const TablesData& t;
 			ConvertState& res;
 			const EraTables& ref;          // the era model's reference (the build's own tables in the saver's direction)
+			const NativeLayout& native = retail_layout;   // the stream's layout (talent multiplier, definitions, objectives)
 
 			u32 id_of(unsigned dom, const Hash& h) const { return t.catalogue.lookup(dom, h); }
 
@@ -217,7 +218,8 @@ namespace lcsave::detail
 					const auto& e = a.talents[k];
 					const std::int64_t tid = e.id;
 					u32 h = 0;
-					if (tid < 100)
+					const std::int64_t M = native.talent_multiplier;   // the layout's id space (RETAIL / E10A2 100, W2 200)
+					if (tid < M)
 					{
 						const auto& tb = era.TALN_shared;
 						if (tid >= static_cast<std::int64_t>(tb.size()))
@@ -231,8 +233,8 @@ namespace lcsave::detail
 					}
 					else
 					{
-						const std::int64_t owner = tid / 100 - 1;
-						const std::int64_t pos = tid % 100;
+						const std::int64_t owner = tid / M - 1;
+						const std::int64_t pos = tid % M;
 						if (owner != stats_index)
 						{
 							++res.dropped.talents;
@@ -359,7 +361,7 @@ namespace lcsave::detail
 				}
 				rec.set("seats", std::move(seats));
 				Value objs = L();
-				for (std::size_t k = 0; k < 300; ++k)
+				for (std::size_t k = 0; k < native.snapshot_objectives; ++k)
 				{
 					const u8 st = s.objectives[k];
 					if (k < era.OBJV.size())
@@ -510,7 +512,8 @@ namespace lcsave::detail
 				rec.set("position", reals(s.position, 3));
 				if (s.flags_a & 1)
 				{
-					const u32 slot = s.payload[0];
+					// RETAIL / E10A2: payload byte 0; W2: the record's own u16 slot field (limits-wave2.md 3.5)
+					const u32 slot = c.native.world_slot_bytes == 2 ? s.world_slot : s.payload[0];
 					i16 qty = 0;
 					std::memcpy(&qty, s.payload + 1, 2);
 					if (!world_handles.count(slot))
@@ -1081,7 +1084,7 @@ namespace lcsave::detail
 			// ---- ITEM
 			const auto& it = old.items;
 			Value def_state = L();
-			for (u32 i = 0; i < old_def_state_pairs; ++i)
+			for (u32 i = 0; i < c.native.definitions; ++i)
 			{
 				const u32 q = it.def_state[2 * i], f = it.def_state[2 * i + 1];
 				if (q || f)
@@ -1389,7 +1392,7 @@ namespace lcsave::detail
 	std::vector<std::uint8_t> stream_to_new(const std::vector<std::uint8_t>& stream, const TablesData& t, const NewFileContext& context,
 		ConvertState& state, const NativeLayout& native)
 	{
-		validate_native_tables(t);
+		validate_native_tables(t, native);
 		// the whole slot image or the payload alone, of the layout the caller selected (never inferred from the size)
 		std::vector<std::uint8_t> image;
 		if (stream.size() == native.payload)
@@ -1408,7 +1411,7 @@ namespace lcsave::detail
 		if (context.origin > 2) fail("unsupported saver origin");
 		const auto old = read_slot(image.data(), image.size(), native);
 		const auto& T = t.build->T;
-		Conv c{t, state, T};
+		Conv c{t, state, T, native};
 		Plan plan;
 		plan.converter = false;
 		plan.context = &context;
@@ -1423,7 +1426,9 @@ namespace lcsave::detail
 		add_keys_section(sections, t);
 		retain_sections(sections, context.retained_file, kind_campaign, native);
 		HeaderIn h;
-		h.required_features = native.feature_bits;          // the Phase A marker: the writer's layout decides (E10A2: bit 0)
+		// the Phase A marker: the writer's layout decides (E10A2: bit 0). W2 sets bit 0 always and bit 1 NATIVE_W2 only
+		// when the representability probe finds the file cannot be applied by a pre-W2 build (limits-wave2.md section 7)
+		h.required_features = native.feature_bits & ~(feature_native_w2|feature_actor_capacity96);
 		h.optional_features = context.optional_features;
 		h.writer_version = context.writer_version;
 		h.content_version = t.catalogue.content_version;
@@ -1432,6 +1437,27 @@ namespace lcsave::detail
 		h.save_sequence = context.save_sequence;
 		auto file = write_file(kind_campaign, sections, h);
 		read_file(file.data(), file.size(), kind_campaign);
+		if (native.w2())
+		{
+			const auto why = representable(file, t, e10a2_layout);
+			if (!why.empty())
+			{
+				state.notes.push_back("NATIVE_W2 (required feature bit 1) set: " + why);
+				h.required_features |= feature_native_w2;
+				file = write_file(kind_campaign, sections, h);
+				read_file(file.data(), file.size(), kind_campaign);
+			}
+		}
+		// E4 section 7 (amended 10-27: conservative marking after review - demand
+		// counting missed remembered zones). Every campaign written by a layout
+		// carrying the actor-capacity feature - only a build whose Stage 2 core
+		// was installed and verified - requires bit 0x4. Older builds refuse it
+		// with the readable newer-save message; files without it load unchanged.
+		if(native.feature_bits&feature_actor_capacity96)
+		{
+			state.notes.push_back("ACTOR_CAPACITY_96 (required feature bit 2) set: written by the actor-capacity build");
+			h.required_features|=feature_actor_capacity96;file=write_file(kind_campaign,sections,h);read_file(file.data(),file.size(),kind_campaign);
+		}
 		return file;
 	}
 
@@ -1480,9 +1506,9 @@ namespace lcsave::detail
 	}
 
 	std::vector<std::uint8_t> profile_to_new(const std::vector<std::uint8_t>& old_stream, const TablesData& t, const NewFileContext& context,
-		ConvertState& state)
+		ConvertState& state, const NativeLayout& native)
 	{
-		validate_native_tables(t);
+		validate_native_tables(t, native);      // the installed layout's budgets (the profile itself holds no definition index)
 		if (!t.build) fail("the saver's direction needs the build");
 		std::vector<std::uint8_t> image;
 		if (old_stream.size() == old_profile_payload)

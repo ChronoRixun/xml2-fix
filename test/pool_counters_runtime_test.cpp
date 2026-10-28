@@ -40,6 +40,17 @@ std::array<pool_counter_rules::source,10> diagnostic_sources(){
     out[9]={0x7dad78,a.psys.count,40,0x7dc868,false,true};return out;
 }
 }
+// Limits wave 3 owners at stock (their rows absent): D0 must read exactly the generated retail readers.
+namespace script_pools {const std::array<pool_layout,4>& descriptor(){return stock;}}
+namespace fight_moves {fight_moves_layout::pool_descriptor descriptor(){return {};}}
+namespace effect_pools {
+namespace {const effect_pools_rules::descriptor stock_defs=effect_pools_rules::describe(pool::primitive_defs,816),stock_vectors=effect_pools_rules::describe(pool::vectors,710);}
+const descriptor& layout(pool p){return p==pool::vectors?stock_vectors:stock_defs;}
+std::uint32_t object_address(pool p){return p==pool::vectors?0x706680:0;}
+}
+namespace primitives_per_effect {unsigned capacity(){return 10;}}
+namespace effect_pools {bool installed(pool){return false;}}
+namespace particle_scratch {bool clamp_installed(){return false;}}
 static void put(unsigned a,unsigned v){std::memcpy(reinterpret_cast<void*>(a),&v,4);}
 int main(){
     unsigned checks=0,failures=0;
@@ -52,6 +63,14 @@ int main(){
     check(!std::memcmp(image.data(),fixture_space,image.size()),"default-off observer install changes zero image bytes");
     using namespace pool_counters;
     check(counters.state.size==63,"44 shared counters and all 19 retail style move lists published");
+    for(const auto& r:pool_counter_sites::readers) {
+        const auto i=find(r.name);const auto& s=sources[i];
+        check(i<counters.state.size && s.root==r.root && s.offset==r.offset && s.cap==r.cap && s.indirect==r.indirect && counters.state.pools[i].cap==r.cap,
+              "stock W3 owner layouts equal the generated reader");
+    }
+    check(move_free.root==0x789e1c && move_free.offset==0x1aec8 && move_free.cap==332,"stock FightMoves free count");
+    check(effect_primitives.root==0x6f3c3c && effect_primitives.records==0x4874 && effect_primitives.bitmap==0x4874+0x3e0c && effect_primitives.stride==0x44 &&
+          effect_primitives.field==0x30 && effect_primitives.cap==220 && counters.state.pools[primitive_max].cap==10,"stock effect definition range");
     sampling=true;
     auto* script=static_cast<unsigned char*>(VirtualAlloc(nullptr,0x40000,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE));
     check(script!=nullptr,"script fixture");put(0x787740,address(script));

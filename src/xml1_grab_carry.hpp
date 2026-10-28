@@ -19,4 +19,7 @@ bool verified();
 std::uint32_t feature_mask();
 // false only for [Game] Xml1FlyingCarry=0 (default on).
 bool flying_carry();
+using telekinesis_pair_test=bool(__cdecl*)(std::uint32_t,std::uint32_t);
+// Installed rule46 publishes its generation-bearing TK ownership predicate.
+void set_telekinesis_pair_test(telekinesis_pair_test predicate);
 }

@@ -5,6 +5,8 @@
 #include "log.hpp"
 #include "lcsave/internal.hpp"
 #include "lcsave/xmlb.hpp"
+#include "save_layout_view.hpp"
+#include "save_limits_sites.hpp"
 #include <algorithm>
 #include <cctype>
 #include <set>
@@ -43,12 +45,19 @@ namespace save_content_guards
 		// Rechecked against the retail image: this shared return is reached on a new registration at cap 100,
 		// or an invalid registration index. Existing-name lookup bypasses it.
 		constexpr const char* refusal_bytes = "5f5d5b33c0";
+		bool w2_registry() { return save_layout_view::objectives().objectives == 1024; }
+		unsigned registry_capacity() { return w2_registry() ? 256u : 100u; }
 
 		bool matches_runtime(const HMODULE game)
 		{
 			__try
 			{
 				const auto* b = reinterpret_cast<const std::uint8_t*>(game);
+				if (w2_registry())
+					return game && reinterpret_cast<std::uintptr_t>(game) == save_format_rules::image_base &&
+						limits_rules::matches(b + (refusal_va-save_format_rules::image_base), refusal_bytes) &&
+						limits_rules::matches(b + (0x4c0115-save_format_rules::image_base), "b8000100003bc8") &&
+						limits_rules::matches(b + (file_guard_va-save_format_rules::image_base), "83bb5803000009745d");
 				return game && reinterpret_cast<std::uintptr_t>(game) == save_format_rules::image_base &&
 					   limits_rules::matches(b + (refusal_va-save_format_rules::image_base), refusal_bytes) &&
 					   limits_rules::matches(b + (0x4c010f-save_format_rules::image_base), "8b8e54160000b8640000003bc8") &&
@@ -66,13 +75,14 @@ namespace save_content_guards
 			__try
 			{
 				const auto* p = static_cast<const std::uint8_t*>(registry);
-				std::memcpy(&counts[0],p+0x1654,4);
-				std::memcpy(&counts[1],p+0x26f4,4);
-				std::memcpy(&counts[2],p+0x3090,4);
+				using namespace save_limits_sites;
+				std::memcpy(&counts[0],p+(w2_registry()?talent_a+a_live:0x1654),4);
+				std::memcpy(&counts[1],p+(w2_registry()?talent_b+b_live:0x26f4),4);
+				std::memcpy(&counts[2],p+(w2_registry()?talent_c+c_live:0x3090),4);
 				if (talent) for (std::size_t i=0; i<sizeof(name)-1 && talent[i]; ++i) name[i] = talent[i];
 			}
 			__except(EXCEPTION_EXECUTE_HANDLER) {}
-			if (!save_guard_rules::registry_full(counts[0],counts[1],counts[2])) return;
+			if (!save_guard_rules::registry_full(counts[0],counts[1],counts[2],registry_capacity())) return;
 			// String construction is kept out of the SEH function by the helper below (MSVC C2712).
 			set_registration_failure(counts, name);
 		}
@@ -139,7 +149,7 @@ namespace save_content_guards
 			{
 				runtime_error = "TalentRegistry refused " + std::string(name) + " (names " + std::to_string(counts[0]) +
 								", objects " + std::to_string(counts[1]) + ", handles " + std::to_string(counts[2]) +
-								", capacity 100); LC save/load refused for this session";
+								", capacity " + std::to_string(registry_capacity()) + "); LC save/load refused for this session";
 				logger::write("save guard: %s", runtime_error.c_str());
 			}
 		}
@@ -251,6 +261,6 @@ namespace save_content_guards
 			VirtualProtect(at,target.second,protection,&ignored);
 			FlushInstructionCache(GetCurrentProcess(),at,target.second);
 		}
-		logger::write("save guard: TalentRegistry refusal observed at 0x%08lX (100 talents) and 0x%08lX (9 files)",refusal_va,file_guard_va);
+		logger::write("save guard: TalentRegistry refusal observed at 0x%08lX (%u talents) and 0x%08lX (9 files)",refusal_va,registry_capacity(),file_guard_va);
 	}
 }

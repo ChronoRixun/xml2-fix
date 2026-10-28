@@ -15,6 +15,7 @@
 
 namespace npc_semi_auto
 {
+ void register_ai_layout(){actor_ai::register_consumer(actor_ai::consumer::semi_auto);actor_ai::register_consumer(actor_ai::consumer::weapon);}
  namespace
  {
   using namespace npc_semi_auto_rules;

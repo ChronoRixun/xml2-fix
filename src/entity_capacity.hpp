@@ -13,15 +13,22 @@
 
 namespace patch_transaction { class transaction; }
 namespace entity_capacity_layout { struct descriptor; }
+namespace save_format_rules { struct native_profile; }
 
 namespace entity_capacity
 {
+    [[noreturn]] void fail_stop_lifecycle(const char* site);
 	// Reads the INI, decides, and prepares every owner object and backing before anything is contributed (the
 	// save seam needs the chosen native profile first). Nothing is written to the game.
 	void prepare(patch_transaction::transaction& transaction, HMODULE game);
+	// Explicit profile selected by native_save_layout. The default overload
+	// preserves E10A2 when the W2 key is absent.
+	void prepare(patch_transaction::transaction& transaction, HMODULE game, const save_format_rules::native_profile& profile);
 	// True when the raise is requested and prepared: the actor-arena teardown at 0x4613e0 is then this module's
 	// (AllocatorShutdown), which calls limits::retire_move_trigger_times() after the native teardown.
 	bool owns_arena_teardown();
+	bool prepared_for_w2();
+	unsigned zone_record_count();
 	// True only when the FastTransfer replacement was installed; receive validation uses its record format then.
 	bool fast_transfer_active();
 	// Adds the ledger's guards, region hashes and writes bound to this DLL's symbols.

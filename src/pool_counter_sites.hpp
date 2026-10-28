@@ -5,7 +5,7 @@
 #include <string_view>
 namespace pool_counter_sites {
 struct reader { const char* name; std::uint32_t root, offset, cap; bool indirect; };
-inline constexpr std::array<reader,29> readers{{
+inline std::array<reader,29> readers{{
     {"fxA",0x6f3c50,0x17e0,374,false},
     {"fxA_128",0x6f3c50,0x401c,128,false},
     {"fxA_64",0x6f3c50,0x4584,64,false},
@@ -36,6 +36,9 @@ inline constexpr std::array<reader,29> readers{{
     {"prim_defs",0x70b64c,0x38a20,816,true},
     {"vectors",0x706680,0x4e70,710,false},
 }};
+inline void install_power_layout(std::uint32_t root, std::uint32_t live, std::uint32_t cap) {
+    for(auto& r:readers)if(r.root==root && (root==0x7988d4 || root==0x79ba3c)){r.offset=live;r.cap=cap;}
+}
 struct observer { const char* name; std::uint32_t va; std::string_view hex, prefix, suffix; unsigned condition; std::uint32_t target, next; const char* owner; };
 inline constexpr std::array<observer,61> observers{{
     {"fx_entries",0x4073ab,"81bfe0170000760100000f8484000000","81bfe017000076010000","",4,0x40743f,0x4073bb,"edi"},
@@ -45,14 +48,14 @@ inline constexpr std::array<observer,61> observers{{
     {"prims",0x406a8c,"3d500100007465","3d50010000","",4,0x406af8,0x406a93,""},
     {"prims",0x406b0c,"3d50010000746d","3d50010000","",4,0x406b80,0x406b13,""},
     {"affecters",0x535ed0,"81b9743c0000800100007503","81b9743c000080010000","",5,0x535edf,0x535edc,""},
-    {"powerups",0x5386a0,"81b934360000800000007503","81b93436000080000000","",5,0x5386af,0x5386ac,""},
+    {"powerups",0x5386aa,"750333c0c3","","33c0c3",5,0x5386af,0x5386af,""},
     {"primary_fx",0x539560,"81b934120000800000007503","81b93412000080000000","",5,0x53956f,0x53956c,""},
     {"primary_data",0x539940,"83b92c1b0000607503","83b92c1b000060","",5,0x53994c,0x539949,""},
     {"fx_core",0x53d370,"81b934160000800000007503","81b93416000080000000","",5,0x53d37f,0x53d37c,""},
     {"scopes",0x544830,"81b934100000800000007503","81b93410000080000000","",5,0x54483f,0x54483c,""},
     {"boltons",0x540630,"83b91c030000207503","83b91c03000020","",5,0x54063c,0x540639,""},
     {"attached_boltons",0x540a60,"83b924080000407503","83b92408000040","",5,0x540a6c,0x540a69,""},
-    {"vf_nodes",0x54c390,"81b944120000c00000007503","81b944120000c0000000","",5,0x54c39f,0x54c39c,""},
+    {"vf_nodes",0x54c39a,"750333c0c3","","33c0c3",5,0x54c39f,0x54c39f,""},
     {"statements",0x4d7e6e,"81f96c020000746e","81f96c020000","",4,0x4d7ee4,0x4d7e76,""},
     {"values",0x4d6518,"81fa140600007447","81fa14060000","",4,0x4d6567,0x4d6520,""},
     {"values",0x4d657e,"7447568db1b85d0000","","568db1b85d0000",4,0x4d65c7,0x4d6587,""},

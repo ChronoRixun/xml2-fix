@@ -168,7 +168,10 @@ capacity owner's published entry bridges and virtual methods.
 
 Pickup moves XY one percent per callback toward bone 6, preserves Z and adds
 3.14 to carrier yaw. The default attachment uses bone 0 minus 55 Z (missing bone:
-position plus 38 minus 55). Enemy poses align bone-5/6 hand midpoints. Bone
+position plus 38 minus 55). Known enemy and ally carry poses align bone-5/6
+hand midpoints in beta 9. Extending hand alignment to allies is the requested
+visual adaptation: XML1 `30300` uses hands for enemy enums and root offset for
+allies. Unknown poses retain the root fallback. Bone
 lookup requests real animated skeletons with PC's added flags `(false,false)`.
 `(true,true)` selects fixed approximations in `568E90`: bone0 becomes root+25
 and the source -55 offset incorrectly puts an ally at root-30. XML1 `12CAD0`
@@ -181,6 +184,13 @@ source bone-failure results. Deltas use PC movement slot +0x130. All frame
 callbacks, including empty ones, use PC `ret 8`. Victim release requires
 reciprocal pairing, flying and airborne carrier; mismatch recovery excludes
 both existing pair members for 0.6 seconds, detaches and Idles both.
+
+082c's live carrier and victim enums were `-1` (`m31c`, 07:13:16 onward),
+which bypassed that enum list and selected the root-minus-55 fallback. For
+our victim handler, 082d also maps the eight authored pickup/idle/walk/run
+victim/ally move names to the same attachment IDs. Break and unknown nodes
+retain the fallback. This repairs attachment selection; the reason the live
+enum getter was `-1` and the rendered asset pose still need live observation.
 
 Fix7 replaces the entries of `ch_flying` (table 0x6931f8) and `ch_fly_move`
 (0x6932d0). Map restriction reads manager **+0x8c / 0x483de0**, not +0x44.
@@ -199,10 +209,37 @@ continues on a probe miss, a non-character/large contact or an inactive carrier.
 As in XML1, a valid contact
 suppresses descent even when rank/current move prevents pickup. There is no
 airborne-Guard shortcut in `ch_flying`.
-The decide handler's second sweep remains first-contact-only, including its
+082d retains the downward contact's complete handle for the decide callback,
+instead of losing a directly-below target in the separate forward/down sweep.
+Before starting pickup it lowers the carrier to the authored pickup height
+(target root +40), using the native movement probe with character stopping
+disabled. Solid-world blockage prevents pickup; the target is not pulled up
+to compensate. Completion/interruption discards the saved contact.
+The 082d follow-up corrects the probe contract: flag0 intersects property8,
+which can include the contacted character. It temporarily supplies that
+victim as the native owner exclusion at actor+178 for this one probe, then
+restores the actual owner before applying movement. The complete native
+42B6C0 fixture runs with owned libIGMath operations and separate character
+and solid-ledge intersections. It checks stack balance and owner restoration.
+The original 082d CarryTrace began only after pickup; its absence cannot
+prove which earlier gate blocked a historical hover. With CarryTrace=1,
+flight-input, effective `flight-rank-N`, pre-pickup gate results and position/
+control flags are now logged before carry entry. No extra pickup predicate
+or bone call is made for these diagnostics.
+The decide handler's sweep for other entry paths remains first-contact-only, including its
 normal LiftRule service for objects (Might + 1 >= XML1 heaviness, heaviness 5
 refused, native refusal flags retained). An isolated prop cannot satisfy the
 outer character-contact gate.
+
+Carry Attack and Smash use XML1's generic throw amount: `L2` minimum **9**,
+times the caster multiplier, truncated to the source signed damage word.
+XML1 `3DF3F..3DFAD` calls `B7E60("L2", nullptr)`: max **11** is only returned
+through the optional range output. PC numeric selector **1** (`4C49F0`) is
+**DMG3**, not L2 (`6DA240`); the 082c values file gives DMG3 min3/max5. The
+earlier fixture substituted 12 for that lookup and missed the wrong table.
+The native throw event still executes once and owns motion, target release
+and attribution. Damage after defenses and the visible landing remain live
+checks.
 
 The UI owner notification maps XML1 slot +0x2c to PC **+0x40** (0x48cbb0,
 `ret 8`). Both original slots are no-ops in the inspected binaries. The call is
@@ -287,8 +324,11 @@ reset instructions also run after carrier entry and before frame movement.
 Carrier frame restores constraints for a reciprocal flying airborne pair before
 attachment, closing that callback-order gap. While pickup owns the pair,
 the general PC Guard-descent tail is consumed without another contact probe.
-Established carry retains XML1's probe policy: contacts consume descent, while
-Guard through empty air still descends and preserves the carried pair.
+Beta 9 retains the acquisition Guard press through established carry with a
+full-handle sidecar, even when the PC's 20-unit probe misses. Release during
+pickup or carry clears it. A fresh Guard press retains the probe/descent policy:
+contacts consume descent, while empty air permits descent. Movement transitions
+retain the latch; interruption, pair loss, a new acquisition and throw clear it.
 Landing and flight loss still release the pair. The retail bone path executes
 down to a synthetic renderer matrix; actual animation/collision remains live.
 
@@ -301,3 +341,30 @@ debit is added. The fixture executes that receiver and its native descriptor
 constructor/copies with amounts 5/19/42, attribution, expired/stationary contacts
 and repeated-contact cooldown. Its terminal damage sink is synthetic, so live
 health and defense behavior still require verification.
+
+Beta 9 wraps native `victim_throw` registration `692378` only when flying carry
+is enabled. Unrelated events execute the same retail `4DB830` once. Successful
+events on our carry-throw handler also restore XML1 `CEC34..CEC74`'s complete
+constraint release/detach (PC `4DB9DF` clears only bit2), then arm enemies with
+the same evaluated `L2` and caster multiplier as the XML1 generic throw service,
+a two-second window and native descriptor/attribution fields. Native authored
+motion, ownership exclusions, impact receiver, defenses and cooldown remain.
+Friendly-damage-off allies and neutral NPCs do not receive this amount.
+The source carry event `CEA90` itself does not arm a separate amount: applying
+the generic throw damage policy here is an adaptation to the reported carry
+damage failure, not a claim that that event contains an omitted L2 write.
+The fixture executes the complete native event including both return paths,
+Attack/Smash velocities, eligibility negatives and the arming stores.
+
+082e follow-up. The armed amount is consumed only by a contact impact: in 082e
+only a throw that reached a wall cost HP (4), open-floor landings and the
+velocity-less Smash cost 0. XML1's thrown/landing handlers (`E0E20`..`E10C0`)
+and `CEA90` contain no damage of their own. The victim callback keeps XML1
+`DC720`'s carrier-only release rule (carrier ground handle or +4 bit 2); the
+carried one's own contacts never end the pair, now pinned by the fixture. Every
+082e moving-carry separation was the carrier landing on a prop or raised floor.
+With CarryTrace, a release logs `carry trace release reason=...` with both roots
+and ground handles.
+
+[Live acceptance and input driver](beta9-moves-live.md) cover the outstanding
+hardware, HP/defense and visible-pose checks.

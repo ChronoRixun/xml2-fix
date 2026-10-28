@@ -1,4 +1,5 @@
 #include <winsock2.h>
+#include "e4_observe.hpp"
 #include "gns_transport.hpp"
 #include "gns_transport_core.hpp"
 #include "network_validation.hpp"
@@ -802,12 +803,12 @@ namespace gns_transport
 					as_host = s[session_host] != 0;
 					if (as_host)
 					{
-						reinterpret_cast<notice_t>(native_drop_notice)(s, index, 0x10cc, 0x1107, 0);
-						reinterpret_cast<lost_t>(native_lost)(s, r, 0x10cd, 0);
+						e4_observe::native_call("gns:drop notice", [&] { reinterpret_cast<notice_t>(native_drop_notice)(s, index, 0x10cc, 0x1107, 0); });
+						e4_observe::native_call("gns:host removal", [&] { reinterpret_cast<lost_t>(native_lost)(s, r, 0x10cd, 0); });
 						return true;
 					}
 					if (index == 0) return false; // the host: the native watchdog and its "lost connection to the host" dialog
-					reinterpret_cast<lost_t>(native_lost)(s, r, 0x1107, 0);
+					e4_observe::native_call("gns:peer removal", [&] { reinterpret_cast<lost_t>(native_lost)(s, r, 0x1107, 0); });
 					return true;
 				}
 				return false;
@@ -1369,16 +1370,41 @@ namespace gns_transport
 		return int(l->out.count(std::uint8_t(opcode)) + l->in.count(std::uint8_t(opcode)) + native_queued(static_cast<std::uint8_t*>(peer), std::uint8_t(opcode)));
 	}
 
+	namespace
+	{
+		void log_removal_stack()
+		{
+			// Best-effort extra context: engine x86 frame omission can truncate this.
+			// The explicit entry caller above remains authoritative in that case.
+			void* frames[12]{};
+			const auto count = CaptureStackBackTrace(0, 12, frames, nullptr);
+			for (unsigned short i = 0; i < count; ++i)
+				logger::write("online: native drop stack[%u]=0x%08X", unsigned(i), unsigned(reinterpret_cast<std::uintptr_t>(frames[i])));
+		}
+	}
+
 	// 0x611550 drop notice (ecx session; index, lost code, others' code, flag) / 0x612c40 removal (ecx session; record,
 	// reason, flag): 1 = deferred to the agreed cut frame (the native call is skipped), 0 = the native code runs.
-	int __stdcall notice_filter(void* session, std::int32_t index, std::uint32_t lost_code)
+	int __stdcall notice_filter(void* session, const std::uint32_t* frame)
 	{
+		const auto notice = gns_transport_core::read_removal_notice(frame);
+		const auto index = static_cast<std::int32_t>(notice.index);
+		const auto lost_code = notice.lost;
+		// Rare lifecycle event, outside the capped per-packet trace. A healthy GNS
+		// link alone cannot distinguish a checksum vote from voluntary teardown.
+		logger::write("online: native drop notice caller=0x%08X index=%d lost=0x%04X others=0x%04X flag=%u own=%u",
+			unsigned(notice.caller), int(index), unsigned(lost_code), unsigned(notice.others), unsigned(notice.flag), unsigned(own_removal));
+		log_removal_stack();
 		if (own_removal || !ready || lost_code != 0x10cc || index <= 0) return 0;
 		auto* record = record_of_index(session, index);
 		return record && defer_native_removal(session, record, "drop notice") ? 1 : 0;
 	}
-	int __stdcall lost_filter(void* session, std::uint8_t* record, std::uint32_t reason)
+	int __stdcall lost_filter(void* session, const std::uint32_t* frame)
 	{
+		auto* record = reinterpret_cast<std::uint8_t*>(frame[1]);
+		const auto reason = frame[2];
+		logger::write("online: native removal caller=0x%08X record=0x%08X reason=0x%04X flag=%u own=%u",
+			unsigned(frame[0]), unsigned(frame[1]), unsigned(reason), unsigned(frame[3] & 0xffu), unsigned(own_removal));
 		if (own_removal || !ready || (reason != 0x10cc && reason != 0x10cd)) return 0;
 		return defer_native_removal(session, record, "removal") ? 1 : 0;
 	}
@@ -1390,8 +1416,8 @@ namespace gns_transport
 		{
 			__asm {
 				push ecx
-				push dword ptr [esp + 0xc]
-				push dword ptr [esp + 0xc]
+				lea eax, [esp + 4] // original native return address and arguments
+				push eax
 				push ecx
 				call notice_filter
 				pop ecx
@@ -1409,8 +1435,8 @@ namespace gns_transport
 		{
 			__asm {
 				push ecx
-				push dword ptr [esp + 0xc]
-				push dword ptr [esp + 0xc]
+				lea eax, [esp + 4] // original native return address and arguments
+				push eax
 				push ecx
 				call lost_filter
 				pop ecx

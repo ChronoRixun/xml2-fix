@@ -38,9 +38,11 @@ Legends launcher 0.4.0. Update the launcher first, then update both parts,
 Rebuild, then Play. 1.8.1 is 1.8.0 without the once-a-second pause with a controller connected
 ([1.8.1 release notes](packaging/release-notes/v1.8.1.md)); it plays with 1.8.0 and needs no Rebuild.
 
-**Beta: XML2 Fix 1.9.0-beta.2** (the port's beta 8 with the controller-pause hotfix, the launcher's Beta channel),
-paired with Legends Classic builder 0.4.1-beta.1 (content 28 / LC37). A 1.9.0 game and a 1.8.0 game refuse each other
-at join. See the
+**Beta: XML2 Fix 1.10.0-beta.1** (the launcher's Beta channel), paired with Legends Classic builder 0.5.0-beta.1
+(content 29 / LC38): the first game's economy (rule 52), the W2 save layout (rule 47), limits wave 3 (rules 53-62),
+Phoenix's telekinesis and the flying carry (Guard stays XML2's Block / Grab), and controllers connected after startup.
+A 1.10.0 game refuses 1.9.0 and 1.8.x games at join, and 1.9.0 cannot load a W2 save. See the
+[1.10.0 release notes](packaging/release-notes/v1.10.0.md). Beta 8 (1.9.0-beta.2 with builder 0.4.1-beta.1):
 [1.9.0 release notes](packaging/release-notes/v1.9.0.md).
 
 Maintainers: [stable and beta release instructions](RELEASING.md).
@@ -391,6 +393,8 @@ ItemEnhancements=512 ; 376 to 1024 item enhancement records (the game's own: 375
 FightStyles=32       ; 20 to 32 fighting/power styles and movesets (the game's own: 19)
 EffectCurves=3600    ; 901 to 16384 effect curves (the game's own: 900)
 MoveTriggers=64      ; 20 to 127 triggers per move (the game's own: 19)
+AttachedPowerups=256 ; 256 attached powerups (the game's own: 128); only 256
+VFNodes=256          ; 256 virtual-function nodes (the game's own: 192); only 256
 EntityCapacity=1     ; 32 actor / 768 generic / 1024 World entity handles (the game's own: 32 / 224 / 256); needs [Save] Format=lc
 IGBCache=1024        ; 201 to 2048 IGB (model file) cache records (the game's own: 200); with no ResourceNames: 2048
 ActorPools=124       ; E4 stage 1 (1.9.0-beta.1): path, shadow and delayed-damage pools 32 -> 124 (only 124)
@@ -403,6 +407,8 @@ Nothing changes without the keys. Every slot takes a name, so `ResourceNames` is
 **Fighting and power styles.** A zone, its enemies and the party share a registry of 19 style files, including fighting styles, power styles and secondary movesets. When it fills, a later hero can lose their powers even though the files and talents are present. `FightStyles=32` gives the registry room for 32 distinct styles. The game allocates a larger manager; its tree nodes, free ring, style objects, bitmaps and following fields use the expanded layout. Every affected instruction is checked before any write. Missing or `FightStyles=19` keeps the stock limit; values outside `19..32` are logged and ignored. This limit is independent of the other three keys. The test pipe reports `styles 20/32`. See [the layout and verification notes](docs/fight-styles.md). New in 1.3.1.
 
 **Effect curves.** Every loaded effect keeps its animation curves (a particle's size, transparency, rotation over its life) in one pool of 900. A zone's effects and the effects of a four-hero party can need more, and when the pool is full the game hands out an empty curve without a word: the effects loaded last are drawn without their particles - a fire is only a faint glow that still burns, or a hero's power loses its particles. `EffectCurves=3600` gives the pool room for 3600. It moves into a block of the fix's memory that the game's own code builds and tears down; every instruction that carries the old size or the old address is checked before anything is patched, and on any difference the pool stays at 900. Curves are not written to saves. The test pipe's `status` reports `curves used/capacity`. [docs/effect-curves.md](docs/effect-curves.md) has the layout, the patch list and the measurements.
+
+**Attached powerups and callbacks.** `[Limits] AttachedPowerups=256` and `VFNodes=256` independently enlarge the native 128-attachment and 192-callback-node pools. At capacity the game silently omits a new attachment or callback. Only 256 is accepted; absent keys write nothing. Installed capacities participate in online agreement as rules 61 and 62. [Layout, diagnostics and verification](docs/power-pools.md).
 
 **Actor pools (E4 stage 1).** `[Limits] ActorPools=124` grows the three pools XMen2.exe sizes for 32 actors - the path finder's paths, the blob shadows and the delayed-damage records - to 124, in one checked transaction over 367 audited retail operands with five null-team guards; actor, controller and team counts and the save layout stay the game's own. Only 124 is accepted. Online it is requested-only gameplay rule 44 (ActorAI, `{32,4,124|124<<16,1}`); absent writes nothing. The test pipe's `ACTOR_POOLS` reports each pool's peak and how often the stock 32 would have refused. It has not been played yet; Legends Classic 0.4.1-beta.1 does not write it by default ([details](docs/actor-pools.md)).
 
@@ -634,6 +640,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `Prompts` | `auto` | `auto`: each player's prompts follow the device they last used; `pad`; `keyboard`; `off`: the game's own prompts |
 | `PromptColors` | `1` | `0`: every pad button as plain `[A]`-style text |
 | `CacheDeviceScan` | `1` | background controller scans and XInput slot discovery; `0` restores the previous paths ([details](docs/controller-scan-cache.md)) |
+| `LatePads` | `1` | binds controllers connected after startup and preserves absent-pad bindings in Advanced Options; `0` restores the behavior before this fix. Restart after changing it ([details](docs/controller-hotplug.md)) |
 | `CutsceneMouse` | `1` | `0`: the game's own rule, where only a locked-controls cutscene stops the mouse (a mod's cinematic without `lockControls` lets it outline characters and click to move) |
 
 **[Online]** ([details](#-online))
@@ -710,7 +717,7 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `Xml1WallCling` | `xml2` | `xml1`: the acrobat moveset's wall cling and back-flip (`ch_clingwalldecide` / `ch_clingwallbackflip`, acrobatics 2) get X-Men Legends I's handlers; XML2 carried the moves with none. Requested-only gameplay rule 39 ([details](docs/xml1-cling.md)). |
 | `Xml1RogueDecide` | `xml2` | `xml1`: Rogue's power decision `ch_roguedecide` (drain a victim in front of her, else `drain_notarget`), with the matching Legends Classic heroes output only. Requested-only gameplay rule 43 ([details](docs/xml1-rogue-decide.md)). |
 | `Xml1GrabCarry` | `xml2` | `xml1`: X-Men Legends I's grab lifecycle (1.9.0-beta.1): Juggernaut's grab-and-hit (`ch_grab_attack`), the shared grab victim, pickup and thrown-landing recovery, the ally throw and the flying charge picking up the character it hits. Revision 3 adds the flying carry and XML1's flight upkeep; `[Game] Xml1FlyingCarry = 0` (what the beta 8 builder writes) keeps the rule without the flying carry. Requested-only gameplay rule 45 revision 3, values `{1,15,0,0}`, or `{1,23,0,0}` without the carry ([details](docs/xml1-grab-carry.md)). |
-| `JumpAttackDamageRule`, `FlyChargeDamageRule`, `ColossusChargeRule`, `BeastBounceRule`, `FastballRule`, `IdleBoredRule`, `LocomotionScaleRule`, `AnimationPhaseRule`, `TeleportVisibilityRule`, `TelekinesisRule`, `GuardDecideRule` | `xml2` | Independently opt into `xml1` (1.9.0-beta.1): the jump attack's and flying charge's damage from `values.xmlb`'s L3 row, Colossus's charge, Beast's bounce, the fastball contact, the idle/bored choice, the animation rate's scale and phase and Nightcrawler's teleport visibility as in X-Men Legends I. Phoenix telekinesis and guard interaction policy additionally require installed rule 45 and are in progress (the beta 8 builder does not write them; [contracts and live checks](docs/tk-guard.md)). One requested-only gameplay rule 46 mask `{installed_mask,0,0,0}` ([details](docs/shared-handler-c-rules.md)). |
+| `JumpAttackDamageRule`, `FlyChargeDamageRule`, `ColossusChargeRule`, `BeastBounceRule`, `FastballRule`, `IdleBoredRule`, `LocomotionScaleRule`, `AnimationPhaseRule`, `TeleportVisibilityRule`, `TelekinesisRule`, `GuardDecideRule` | `xml2` | Independently opt into `xml1` (1.9.0-beta.1): the jump attack's and flying charge's damage from `values.xmlb`'s L3 row, Colossus's charge, Beast's bounce, the fastball contact, the idle/bored choice, the animation rate's scale and phase and Nightcrawler's teleport visibility as in X-Men Legends I. Phoenix telekinesis and guard interaction policy additionally require installed rule 45 (the 0.5.0-beta.1 builder writes `TelekinesisRule = xml1` and leaves `GuardDecideRule` out, so Guard is XML2's own; [contracts and live checks](docs/tk-guard.md)). One requested-only gameplay rule 46 mask `{installed_mask,0,0,0}` ([details](docs/shared-handler-c-rules.md)). |
 | `Xml1Bosses` | *(none)* | A comma list of X-Men Legends I boss brains XMen2.exe lacks (`dopples`, `avalanche`, `pyro`, `mystique`, `shadowking`, `marrow`, `magneto`, `blob`), run by one shared dispatcher beside Master Mold; the builder lists only the bosses a build carries. Gameplay rule 40 ([details](docs/xml1-controllers.md)). |
 | `PackAmount` | `xml2` | `xml1`: a health or energy pack restores a quarter of the maximum, as in X-Men Legends I, instead of a third ([details](docs/pack-amount.md)) |
 | `DeathRule` | `xml2` | `xml1`: an entity dies on the hit that leaves it below 1 health, as in X-Men Legends I, instead of only at 0 ([details](docs/death-threshold.md)) |
@@ -772,6 +779,8 @@ The game drops a call to a function it doesn't know when the script compiles, an
 | `ItemEnhancements` | *(the game's own, 375)* | `376` to `1024` item enhancement records (`Data/items` stops loading past the pool) |
 | `FightStyles` | *(the game's own, 19)* | `20` to `32` distinct fighting/power styles and movesets |
 | `EffectCurves` | *(the game's own, 900)* | `901` to `16384` animation curves of loaded effects (past the pool, effects lose their particles) |
+| `AttachedPowerups` | *(the game's own, 128)* | `256` attached powerups; only 256 ([details](docs/power-pools.md)) |
+| `VFNodes` | *(the game's own, 192)* | `256` virtual-function nodes; only 256 ([details](docs/power-pools.md)) |
 | `MoveTriggers` | *(the game's own, 19)* | `20` to `127` triggers per move (sounds, flashes and other events of a long attack) |
 | `EntityCapacity` | `0` | `1`: 32 actor / 768 generic / 1024 World entity handles instead of 32 / 224 / 256; needs `[Save] Format=lc` ([details](docs/entity-capacity.md)) |
 | `ScriptFunctions` | *(1024 with `[Game] ForcedTeams`, otherwise the game's own, 320)* | `321` to `4096` script function names; `320` keeps the game's own limit ([details](docs/script-functions.md)) |

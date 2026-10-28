@@ -376,14 +376,18 @@ namespace test_input_rules
 			state,
 			objectives,
 			actor_pools,
+            e4_observe,
 			char_sounds,
 			resident_stats, resident_census, motion_pool,
 			pools,
+			particle_scratch,
+			script_pools,
 			events,
 			ping,
 			save, // save_format's commands: `text` is the rest of the line
 			entity, // entity_capacity's commands (status, retire N): `text` is the rest of the line
 			memory, // address_space's commands (status, high <MB>): `text` is the rest of the line
+			economy, // read-only economy status and recent roll diagnostics
 			mouse, // `mouse X Y [move|down|up|click]`: `pointer` says which, at client point x,y
 			unknown
 		};
@@ -429,10 +433,16 @@ namespace test_input_rules
 			return result;
 		}
 
-		if (verb == "STATE" || verb == "OBJECTIVES" || verb == "EVENTS" || verb == "ACTOR_POOLS" || verb == "CHAR_SOUNDS" || verb == "RESIDENT_STATS" || verb == "RESIDENT_CENSUS" || verb == "MOTION_POOL" || verb == "POOLS")
+		if (verb == "PARTICLE_SCRATCH")
 		{
 			if (!rest.empty()) return fail("observation commands take no arguments");
-			result.what = verb == "STATE" ? command::kind::state : verb == "OBJECTIVES" ? command::kind::objectives : verb == "RESIDENT_STATS" ? command::kind::resident_stats : verb == "RESIDENT_CENSUS" ? command::kind::resident_census : verb == "MOTION_POOL" ? command::kind::motion_pool : verb == "CHAR_SOUNDS" ? command::kind::char_sounds : verb == "ACTOR_POOLS" ? command::kind::actor_pools : verb == "POOLS" ? command::kind::pools : command::kind::events;
+			result.what = command::kind::particle_scratch;
+			return result;
+		}
+		if (verb == "STATE" || verb == "OBJECTIVES" || verb == "EVENTS" || verb == "E4_OBSERVE" || verb == "ACTOR_POOLS" || verb == "CHAR_SOUNDS" || verb == "RESIDENT_STATS" || verb == "RESIDENT_CENSUS" || verb == "MOTION_POOL" || verb == "POOLS" || verb == "SCRIPT_POOLS")
+		{
+			if (!rest.empty()) return fail("observation commands take no arguments");
+			result.what = verb == "E4_OBSERVE" ? command::kind::e4_observe : verb == "STATE" ? command::kind::state : verb == "OBJECTIVES" ? command::kind::objectives : verb == "RESIDENT_STATS" ? command::kind::resident_stats : verb == "RESIDENT_CENSUS" ? command::kind::resident_census : verb == "MOTION_POOL" ? command::kind::motion_pool : verb == "CHAR_SOUNDS" ? command::kind::char_sounds : verb == "ACTOR_POOLS" ? command::kind::actor_pools : verb == "POOLS" ? command::kind::pools : verb == "SCRIPT_POOLS" ? command::kind::script_pools : command::kind::events;
 			return result;
 		}
 		if (verb == "SAVE")
@@ -450,6 +460,12 @@ namespace test_input_rules
 		if (verb == "MEMORY")
 		{
 			result.what = command::kind::memory;
+			result.text = std::string(rest);
+			return result;
+		}
+		if (verb == "ECONOMY")
+		{
+			result.what = command::kind::economy;
 			result.text = std::string(rest);
 			return result;
 		}

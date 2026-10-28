@@ -1,11 +1,14 @@
+#include "e4_observe.hpp"
 #include "stats_layout.hpp"
 #include "forced_teams.hpp"
 #include "forced_teams_rules.hpp"
+#include "save_limits.hpp"
 #include "join_in_progress.hpp"
 #include "ini.hpp"
 #include "log.hpp"
 #include "xtract.hpp"
 #include "script_functions.hpp"
+#include "script_pools.hpp"
 #include "solo_mode.hpp"
 
 #include <Windows.h>
@@ -99,7 +102,9 @@ namespace forced_teams
 				return false;
 			}
 		}
-		bool bytes_match(const guard& g) { const auto expected=stats_layout::expected(g.va,g.hex);return expected&&bytes_match_raw(g,expected->c_str()); }
+		// The published ResidentStats / MotionPool operands, then the W2 save layout's rewritten bytes (limits wave 2: the
+		// mission getter, the side-mission stack's address and the 0x4dc / 0x26c operands it raises to 0xa84 / 0x540).
+		bool bytes_match(const guard& g) { const auto stats=stats_layout::expected(g.va,g.hex);if(!stats)return false;const auto expected=save_limits::expected(g.va,*stats);return expected&&bytes_match_raw(g,expected->c_str()); }
 
 
 		// A game object from its getter, when it is the class the guards were read for.
@@ -190,7 +195,8 @@ namespace forced_teams
 				{
 					return false;
 				}
-				seated = method<add_hero_t>(game, game_add_hero_slot)(game, nullptr, name);
+				const auto add = method<add_hero_t>(game, game_add_hero_slot);
+				seated = e4_observe::native_call("forced_teams:addHero", [&] { return add(game, nullptr, name); });
 				return true;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
@@ -321,7 +327,7 @@ namespace forced_teams
 				{
 					return false;
 				}
-				std::memcpy(&count, stack + side_count_offset, sizeof(count));
+				std::memcpy(&count, stack + save_layout_view::objectives().side_count_offset, sizeof(count));   // the installed layout's (W2-L-11)
 				return true;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
@@ -339,7 +345,8 @@ namespace forced_teams
 				{
 					return false;
 				}
-				const std::uint8_t* record = stack + i * side_record_size;
+				const auto& layout = save_layout_view::objectives();
+				const std::uint8_t* record = stack + i * layout.snapshot_size;
 				for (std::size_t c = 0; c < side_zone_size; ++c)
 				{
 					zone[c] = static_cast<char>(record[c]);
@@ -349,7 +356,7 @@ namespace forced_teams
 				{
 					for (std::size_t c = 0; c < side_name_size; ++c)
 					{
-						names[n][c] = static_cast<char>(record[side_names_offset + n * side_name_size + c]);
+						names[n][c] = static_cast<char>(record[layout.side_names_offset + n * side_name_size + c]);
 					}
 					names[n][side_name_size] = 0;
 				}
@@ -372,7 +379,8 @@ namespace forced_teams
 				{
 					return false;
 				}
-				std::uint8_t* field = stack + i * side_record_size + side_names_offset + slot * side_name_size;
+				const auto& layout = save_layout_view::objectives();
+				std::uint8_t* field = stack + i * layout.snapshot_size + layout.side_names_offset + slot * side_name_size;
 				std::memset(field, 0, side_name_size);
 				for (std::size_t c = 0; name[c] && c + 1 < side_name_size; ++c)
 				{
@@ -425,7 +433,10 @@ namespace forced_teams
 				{
 					return false;
 				}
-				accepted = method<console_line_t>(console, slot)(console, nullptr, line);
+				const auto execute = method<console_line_t>(console, slot);
+				// Queue insertion does not execute script actions (X1 SAFE).
+                accepted = slot == console_queue_slot ? execute(console, nullptr, line)
+                    : e4_observe::native_call("forced_teams:console", [&] { return execute(console, nullptr, line); });
 				return true;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
@@ -515,7 +526,8 @@ namespace forced_teams
 				{
 					return false;
 				}
-				method<hud_leave_t>(hud, hud_leave_slot)(hud, nullptr);
+				const auto leave = method<hud_leave_t>(hud, hud_leave_slot);
+				e4_observe::native_call("forced_teams:leaveHud", [&] { leave(hud, nullptr); });
 				return true;
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
@@ -886,6 +898,7 @@ namespace forced_teams
 			}
 			catch (...)
 			{
+				if (e4_observe::enabled()) e4_observe::fatal("forced_teams:script handler C++ exception");
 				logger::write("forced teams: ERROR: an exception in a script function - no change");
 			}
 			return ret == 'i' ? e.make_int(0) : ret == 's' ? e.make_string("") : nullptr;
@@ -1023,6 +1036,11 @@ namespace forced_teams
 		if (!game || reinterpret_cast<std::uintptr_t>(game) != limits_rules::image_base)
 		{
 			logger::write("forced teams: XMen2.exe isn't loaded at 0x400000 (not the game?) - %s", refused);
+			return;
+		}
+		if (!script_pools::value_makers_match())
+		{
+			logger::write("forced teams: value makers do not match the published ScriptPools layout - %s", refused);
 			return;
 		}
 		for (const auto& g : guards)

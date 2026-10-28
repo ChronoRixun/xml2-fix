@@ -53,9 +53,12 @@ namespace limits_rules
 	constexpr int max_resource_names = 4096;
 	constexpr int default_resource_names = 1024; // what ActorSlots brings along when ResourceNames is absent
 	constexpr int stock_item_enhancements = 375;  // the item manager's enhancement record pool
-	constexpr int max_item_enhancements = 1024;
+	constexpr int max_item_enhancements = 4096; // W2 descriptor, installed only as part of the complete save layout
+	constexpr int max_legacy_item_enhancements = 1024; // existing ini contract until W2 becomes selectable
 	constexpr int stock_fight_styles = 19;
-	constexpr int max_fight_styles = 32; // both pool bitmaps remain one dword
+	constexpr int max_fight_styles = 127; // signed imm8 compares
+	constexpr int stock_style_events = 1064;
+	constexpr int max_style_events = 8192;
 	constexpr int stock_effect_curves = 900; // the effect curve pool (every loaded effect's animation curves)
 	constexpr int max_effect_curves = 16384; // the ini's ceiling; the ids are 16-bit (65536 by their width, see curve_layout)
 	constexpr int stock_igb_records = 200;   // CIGBInfoCache2 (the IGB info cache): every precached model, motion path, effect and HUD head
@@ -164,13 +167,13 @@ namespace limits_rules
 			}
 			else
 			{
-				result.notes.push_back("FightStyles=" + std::string(value_text(*fight_styles)) + " isn't a number from 20 to 32 (19 is the game's own) - the fighting style registry stays at 19 entries");
+				result.notes.push_back("FightStyles=" + std::string(value_text(*fight_styles)) + " isn't a number from 20 to 127 (19 is the game's own) - the fighting style registry stays at 19 entries");
 			}
 		}
 		if (item_enhancements)
 		{
 			const auto value = parse_count(*item_enhancements);
-			if (value && *value >= stock_item_enhancements && *value <= max_item_enhancements)
+			if (value && *value >= stock_item_enhancements && *value <= max_legacy_item_enhancements)
 			{
 				result.item_enhancements = *value;
 			}
@@ -1313,8 +1316,8 @@ namespace limits_rules
 	// CCombatStyles (0x78a800), allocated by 0x4ffdf0, owns a map at +4 and its node pool at +0x10.
 	// Keep the tree's initial offsets (also used by generic tree routines), expand its 16-byte nodes
 	// and free-index ring, then move the style objects, bitmap, iterator and following embedded manager.
-	// No style object's contents or stride changes. 20..32 keeps BOTH bitmaps at one dword; the game's
-	// clear paths only zero one dword. A larger cap needs a separate audit and cannot be configured.
+	// No style object's contents or stride changes. Above 32, four clear caves zero every bitmap word.
+	// The following embedded manager is the event pool; both keys share this allocation.
 	// The ring helpers use signed disp8 offsets which cannot reach the 32-entry metadata. Redirect
 	// their two callers to our equivalents instead of truncating an operand or rewriting shared code.
 	// See docs/fight-styles.md for the layout, audited callers and runtime evidence.
@@ -1324,32 +1327,85 @@ namespace limits_rules
 	constexpr DWORD style_ring_construct_call = 0x4ff7c2;
 	constexpr DWORD style_ring_push_call = 0x4ffa52;
 
+	struct event_layout
+	{
+		int capacity;
+		DWORD built, ring, write, read, free, used, live, ids, mask, shift, size, words;
+	};
+	constexpr event_layout event_layout_for(const int capacity)
+	{
+		event_layout l{};
+		l.capacity = capacity;
+		const auto n = static_cast<DWORD>(capacity);
+		l.words = (n + 31) / 32;
+		l.built = n * 0x54;
+		l.ring = l.built + l.words * 4;
+		l.write = l.ring + (n + 1) * 4;
+		l.read = l.write + 4; l.free = l.read + 4;
+		l.used = l.free + 4; l.live = l.used + l.words * 4;
+		l.ids = l.live + 4; l.mask = l.ids + n * 4;
+		l.shift = l.mask + 4; l.size = l.shift + 4;
+		return l;
+	}
+
 	struct style_layout
 	{
 		int capacity;
 		DWORD node_ring, node_ring_write, node_ring_read, node_ring_count, node_bitmap, node_count; // pool-relative
 		DWORD count, styles, bitmap, iterator_index, iterator_owner, auxiliary, manager_size; // manager-relative
+		DWORD bitmap_words;
+		event_layout events;
 	};
 
-	constexpr style_layout style_layout_for(const int capacity)
+	constexpr style_layout manager_layout(const int capacity, const int event_capacity)
 	{
 		style_layout l{};
 		l.capacity = capacity;
+		l.bitmap_words = (capacity + 31) / 32;
+		l.events = event_layout_for(event_capacity);
 		const auto n = static_cast<DWORD>(capacity);
 		l.node_ring = n * 0x10 + 4;
 		l.node_ring_write = l.node_ring + (n + 1) * 4;
 		l.node_ring_read = l.node_ring_write + 4;
 		l.node_ring_count = l.node_ring_read + 4;
 		l.node_bitmap = l.node_ring_count + 4;
-		l.node_count = l.node_bitmap + 4;
+		l.node_count = l.node_bitmap + l.bitmap_words * 4;
 		l.count = style_pool_offset + l.node_count;
 		l.styles = l.count + 4;
 		l.bitmap = l.styles + n * style_record_size;
-		l.iterator_index = l.bitmap + 4;
+		l.iterator_index = l.bitmap + l.bitmap_words * 4;
 		l.iterator_owner = l.iterator_index + 4;
 		l.auxiliary = l.iterator_owner + 4;
-		l.manager_size = l.auxiliary + (0x29a18 - 0x11a8c);
+		l.manager_size = l.auxiliary + l.events.size;
 		return l;
+	}
+
+	constexpr style_layout style_layout_for(const int capacity)
+	{
+		return manager_layout(capacity, stock_style_events);
+	}
+	enum class event_field { capacity, last_index, words, built, ring, write, read, free, used, live, ids, mask, shift, parser_size };
+	constexpr DWORD value_of(const event_field field, const event_layout& l)
+	{
+		switch (field)
+		{
+		case event_field::capacity: return l.capacity;
+		case event_field::last_index: return l.capacity - 1;
+		case event_field::words: return l.words;
+		case event_field::built: return l.built;
+		case event_field::ring: return l.ring;
+		case event_field::write: return l.write;
+		case event_field::read: return l.read;
+		case event_field::free: return l.free;
+		case event_field::used: return l.used;
+		case event_field::live: return l.live;
+		case event_field::ids: return l.ids;
+		case event_field::mask: return l.mask;
+		case event_field::shift: return l.shift;
+		// Both temporary parser owners end with this same shared event template.
+		case event_field::parser_size: return 0x2904 + l.size;
+		}
+		return 0;
 	}
 
 	// Ring storage has N+1 words, but the retail ring wraps at N and keeps an explicit count.
@@ -1403,80 +1459,7 @@ namespace limits_rules
 		return 0;
 	}
 
-	inline constexpr std::array<site<style_field>, 72> style_sites{{
-		{0x4fe9c3, "8b83d8180100", 2, 4, 0x118d8, style_field::bitmap_via_styles},
-		{0x4fe9ca, "8dbbd8180100", 2, 4, 0x118d8, style_field::bitmap_via_styles},
-		{0x4fe9dc, "83f913", 2, 1, 0x13, style_field::capacity},
-		{0x4fea1d, "83f913", 2, 1, 0x13, style_field::capacity},
-		{0x4fea44, "83f813", 2, 1, 0x13, style_field::capacity},
-		{0x4fea66, "83f813", 2, 1, 0x13, style_field::capacity},
-		{0x4feaa8, "83f813", 2, 1, 0x13, style_field::capacity},
-		{0x4feb12, "8b8288010000", 2, 4, 0x188, style_field::node_ring_read},
-		{0x4feb18, "8b848234010000", 3, 4, 0x134, style_field::node_ring},
-		{0x4feb25, "8db48a90010000", 3, 4, 0x190, style_field::node_bitmap},
-		{0x4feb3b, "8bb288010000", 2, 4, 0x188, style_field::node_ring_read},
-		{0x4feb44, "83f913", 2, 1, 0x13, style_field::capacity},
-		{0x4feb47, "89b288010000", 2, 4, 0x188, style_field::node_ring_read},
-		{0x4feb4f, "c7828801000000000000", 2, 4, 0x188, style_field::node_ring_read},
-		{0x4feb59, "ff8a8c010000", 2, 4, 0x18c, style_field::node_ring_count},
-		{0x4feb5f, "8b8a94010000", 2, 4, 0x194, style_field::node_count},
-		{0x4feb67, "898a94010000", 2, 4, 0x194, style_field::node_count},
-		{0x4ff744, "89b184010000", 2, 4, 0x184, style_field::node_ring_write},
-		{0x4ff74a, "89b188010000", 2, 4, 0x188, style_field::node_ring_read},
-		{0x4ff750, "89b18c010000", 2, 4, 0x18c, style_field::node_ring_count},
-		{0x4ff760, "8b8184010000", 2, 4, 0x184, style_field::node_ring_write},
-		{0x4ff766, "8bb98c010000", 2, 4, 0x18c, style_field::node_ring_count},
-		{0x4ff76e, "83f813", 2, 1, 0x13, style_field::capacity},
-		{0x4ff771, "898184010000", 2, 4, 0x184, style_field::node_ring_write},
-		{0x4ff777, "89b98c010000", 2, 4, 0x18c, style_field::node_ring_count},
-		{0x4ff77f, "89b184010000", 2, 4, 0x184, style_field::node_ring_write},
-		{0x4ff785, "b812000000", 1, 4, 0x12, style_field::last_index},
-		{0x4ff78d, "89948134010000", 3, 4, 0x134, style_field::node_ring},
-		{0x4ff795, "83fa13", 2, 1, 0x13, style_field::capacity},
-		{0x4ff7a6, "b913000000", 1, 4, 0x13, style_field::capacity},
-		{0x4ff7bc, "8d8e34010000", 2, 4, 0x134, style_field::node_ring},
-		{0x4ff7c7, "c7869001000000000000", 2, 4, 0x190, style_field::node_bitmap},
-		{0x4ff7d3, "c7869401000000000000", 2, 4, 0x194, style_field::node_count},
-		{0x4ff81e, "8b843aa4010000", 3, 4, 0x1a4, style_field::count_or_styles_via_map},
-		{0x4ff825, "8d8c3aa4010000", 3, 4, 0x1a4, style_field::count_or_styles_via_map},
-		{0x4ff835, "8d848f7c1a0100", 3, 4, 0x11a7c, style_field::bitmap_via_map},
-		{0x4ff8b8, "8b843aa4010000", 3, 4, 0x1a4, style_field::count_or_styles_via_map},
-		{0x4ff8bf, "8d8c3aa4010000", 3, 4, 0x1a4, style_field::count_or_styles_via_map},
-		{0x4ff8cf, "8d848f7c1a0100", 3, 4, 0x11a7c, style_field::bitmap_via_map},
-		{0x4ffa0e, "8d8430a4010000", 3, 4, 0x1a4, style_field::count_or_styles_via_map},
-		{0x4ffa38, "8d8e90010000", 2, 4, 0x190, style_field::node_bitmap},
-		{0x4ffa4c, "8d8e34010000", 2, 4, 0x134, style_field::node_ring},
-		{0x4ffa57, "ff8e94010000", 2, 4, 0x194, style_field::node_count},
-		{0x4ffae8, "8d8437a4010000", 3, 4, 0x1a4, style_field::count_or_styles_via_map},
-		{0x4ffafa, "8d848e7c1a0100", 3, 4, 0x11a7c, style_field::bitmap_via_map},
-		{0x4ffb16, "8d8437a4010000", 3, 4, 0x1a4, style_field::count_or_styles_via_map},
-		{0x4ffb8a, "83bea401000013", 2, 4, 0x1a4, style_field::count_or_styles_via_map},
-		{0x4ffb8a, "83bea401000013", 6, 1, 0x13, style_field::capacity},
-		{0x4ffbb1, "8db438a4010000", 3, 4, 0x1a4, style_field::count_or_styles_via_map},
-		{0x4ffc2f, "898194010000", 2, 4, 0x194, style_field::node_count},
-		{0x4ffc35, "898190010000", 2, 4, 0x190, style_field::node_bitmap},
-		{0x4ffc40, "8d8ea8010000", 2, 4, 0x1a8, style_field::styles},
-		{0x4ffc50, "81c1a4010000", 2, 4, 0x1a4, style_field::count_or_styles_via_map},
-		{0x4ffc7d, "8d8e8c1a0100", 2, 4, 0x11a8c, style_field::auxiliary},
-		{0x4ffc90, "8d8ea8010000", 2, 4, 0x1a8, style_field::styles},
-		{0x4ffce8, "8986801a0100", 2, 4, 0x11a80, style_field::bitmap},
-		{0x4ffcf5, "8d8e8c1a0100", 2, 4, 0x11a8c, style_field::auxiliary},
-		{0x4ffcfb, "c786841a0100ffffff3f", 2, 4, 0x11a84, style_field::iterator_index},
-		{0x4ffd05, "8986881a0100", 2, 4, 0x11a88, style_field::iterator_owner},
-		{0x4ffd20, "8d818c1a0100", 2, 4, 0x11a8c, style_field::auxiliary},
-		{0x4ffd5f, "89b7881a0100", 2, 4, 0x11a88, style_field::iterator_owner},
-		{0x4ffd65, "8987841a0100", 2, 4, 0x11a84, style_field::iterator_index},
-		{0x4ffd73, "8b97841a0100", 2, 4, 0x11a84, style_field::iterator_index},
-		{0x4ffd79, "8b87881a0100", 2, 4, 0x11a88, style_field::iterator_owner},
-		{0x4ffd86, "8d8402a4010000", 3, 4, 0x1a4, style_field::count_or_styles_via_map},
-		{0x4ffda4, "8b86841a0100", 2, 4, 0x11a84, style_field::iterator_index},
-		{0x4ffdab, "8bbe881a0100", 2, 4, 0x11a88, style_field::iterator_owner},
-		{0x4ffdc1, "8986841a0100", 2, 4, 0x11a84, style_field::iterator_index},
-		{0x4ffdcd, "8b8e841a0100", 2, 4, 0x11a84, style_field::iterator_index},
-		{0x4ffdd3, "8b96881a0100", 2, 4, 0x11a88, style_field::iterator_owner},
-		{0x4ffde1, "8d8411a4010000", 3, 4, 0x1a4, style_field::count_or_styles_via_map},
-		{0x4ffdf4, "68189a0200", 1, 4, 0x29a18, style_field::manager_size},
-	}};
+	#include "w3_style_manager_sites.hpp"
 
 	inline constexpr std::array<guard, 17> style_guards{{
 		{0x4ff7c2, "e8a9f3ffff", "node-pool constructor calls ring constructor"},

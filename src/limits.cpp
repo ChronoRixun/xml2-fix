@@ -1,14 +1,25 @@
 #include "resident_stats.hpp"
 #include "limits.hpp"
 #include "motion_pool.hpp"
+#include "effect_templates.hpp"
+#include "primitives_per_effect.hpp"
+#include "script_pools.hpp"
+#include "power_pools.hpp"
+#include "item_capacity.hpp"
 #include "limits_agreement_rules.hpp"
 #include "gameplay_agreement.hpp"
+#include "game_version.hpp"
 #include "limits_rules.hpp"
+#include "style_manager_plan.hpp"
 #include "move_triggers_rules.hpp"
 #include "move_triggers_runtime.hpp"
+#include "fight_moves.hpp"
 #include "ini.hpp"
 #include "log.hpp"
 #include "patch_transaction.hpp"
+#include "effect_pools.hpp"
+#include "model_pools.hpp"
+#include "particle_scratch.hpp"
 
 #include <Windows.h>
 
@@ -42,7 +53,11 @@ namespace limits
 		int item_cap = stock_item_enhancements;
 		bool items_readable = false;
 		int style_cap = stock_fight_styles;
-		DWORD style_count_offset = 0;
+		int event_cap = stock_style_events;
+		int wanted_events = stock_style_events;
+		bool manager_verified = true;
+		std::optional<style_layout> published_manager;
+		DWORD style_refusals = 0, event_refusals = 0;
 		int curve_cap = stock_effect_curves;
 		DWORD curve_live_va = 0;
 		int move_trigger_cap = move_triggers_rules::stock_capacity;
@@ -529,38 +544,45 @@ namespace limits
 			return style_ring_push(self, *value, style_cap);
 		}
 
-		bool raise_styles(const int capacity)
+		bool raise_styles(const int capacity, const int events)
 		{
-			constexpr const char* stays = "the fighting style registry stays at 19 entries";
-			if (!base)
-			{
-				logger::write("limits: XMen2.exe isn't loaded at 0x400000 (not the game?) - %s", stays);
-				return false;
-			}
-			if (const DWORD va = styles_mismatch())
-			{
-				logger::write("limits: XMen2.exe doesn't have the expected code at 0x%08lX (not the retail build?) - %s", va, stays);
-				return false;
-			}
+			if (!base || styles_mismatch()) return false;
 			DWORD existing = 0;
 			if (!read_dword(style_manager_pointer, existing) || existing)
 			{
-				logger::write("limits: the game has built its fighting style manager already (0x%08lX) - %s", existing, stays);
+				logger::write("limits: style manager already exists; FightStyles and StyleEvents refused");
 				return false;
 			}
-			const auto layout = style_layout_for(capacity);
-			const auto writes = style_writes(layout, address_of(reinterpret_cast<const void*>(&construct_style_ring)), address_of(reinterpret_cast<const void*>(&push_style_ring)));
-			style_cap = capacity; // the helpers must see the new size before any patched caller can run
-			if (!patch(writes, stays))
-			{
-				style_cap = stock_fight_styles;
-				return false;
+			const auto layout = manager_layout(capacity, events);
+			const bool needs_caves = capacity > 32 || events != stock_style_events;
+			auto* storage = needs_caves ? static_cast<std::uint8_t*>(VirtualAlloc(nullptr, 6*128, MEM_RESERVE|MEM_COMMIT, PAGE_EXECUTE_READWRITE)) : nullptr;
+			if (needs_caves && !storage) return false;
+			auto plan = style_manager_plan::make(layout, address_of(reinterpret_cast<const void*>(&construct_style_ring)),
+				address_of(reinterpret_cast<const void*>(&push_style_ring)), address_of(storage),
+				address_of(&style_refusals), address_of(&event_refusals));
+			for (unsigned i=0;i<plan.code.size();++i)
+				if (!plan.code[i].empty()) std::memcpy(storage+i*128,plan.code[i].data(),plan.code[i].size());
+			if (storage) {
+				FlushInstructionCache(GetCurrentProcess(),storage,6*128);
+				DWORD protection = 0;
+				if (!VirtualProtect(storage,6*128,PAGE_EXECUTE_READ,&protection)) { VirtualFree(storage,0,MEM_RELEASE); return false; }
 			}
-			style_count_offset = layout.count;
-			logger::write("limits: fighting style registry raised from 19 to %d entries - manager allocated by the game at first use grows from 0x29a18 to 0x%lX bytes; "
-			              "tree nodes and free ring expanded, styles at +0x%lX, bitmap at +0x%lX, auxiliary manager at +0x%lX; %zu fields and 2 ring calls patched; count at +0x%lX",
-			              capacity, layout.manager_size, layout.styles, layout.bitmap, layout.auxiliary, style_sites.size(), layout.count);
-			return true;
+			// Guard the singleton in the transaction itself, immediately before the first write.
+			plan.transaction.guards.push_back({style_manager_pointer,{0,0,0,0},"style manager must not exist"});
+			plan.transaction.publish = [layout]() {
+				style_cap=layout.capacity; event_cap=layout.events.capacity;
+				published_manager=layout;
+			};
+			plan.transaction.abandon = [storage]() { if (storage) VirtualFree(storage,0,MEM_RELEASE); };
+			patch_transaction::transaction transaction;
+			transaction.add(std::move(plan.transaction));
+			const auto result=transaction.commit();
+			logger::write("limits: style manager styles %d; events %d; size 0x%lX; %s: %s",
+				capacity,events,layout.manager_size,patch_transaction::name(result),transaction.report().c_str());
+			if (result==patch_transaction::outcome::rollback_failed) {
+				published_manager.reset(); game_version::refuse_startup();
+			}
+			return result==patch_transaction::outcome::committed;
 		}
 
 		// The effect curve pool: its code patched for `capacity`, the getter (and the preset loader's
@@ -611,7 +633,7 @@ namespace limits
 		{
 			using namespace move_triggers_rules;
 			// The only native constructor caller operates on this pool; checked before patching.
-			const auto index = slot(*reinterpret_cast<const DWORD*>(pool_pointer), address_of(self));
+			const auto index = move_triggers_rules::slot(fight_moves::descriptor(), address_of(self));
 			if (!index)
 			{
 				logger::write("limits: MoveTriggers: unexpected move address 0x%08lX - refusing unsafe storage", address_of(self));
@@ -668,7 +690,7 @@ namespace limits
 			using namespace move_triggers_rules;
 			constexpr const char* stays = "moves stay at 19 triggers";
 			if (!base) return false;
-			const DWORD mismatch = move_triggers_rules::mismatch(bytes_match);
+			const DWORD mismatch = move_triggers_rules::mismatch(bytes_match, fight_moves::installed());
 			if (mismatch)
 			{
 				logger::write("limits: MoveTriggers: unexpected code at 0x%08lX - %s", mismatch, stays);
@@ -680,7 +702,8 @@ namespace limits
 				logger::write("limits: MoveTriggers: move pool already exists - %s", stays);
 				return false;
 			}
-			const std::size_t bytes = record_count * static_cast<std::size_t>(capacity) * sizeof(DWORD);
+			const DWORD slots = fight_moves::descriptor().count;
+			const std::size_t bytes = slots * static_cast<std::size_t>(capacity) * sizeof(DWORD);
 			auto* arrays = static_cast<DWORD*>(VirtualAlloc(nullptr, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
 			auto* timers = static_cast<actor_times*>(VirtualAlloc(nullptr, timer_slots * sizeof(actor_times), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
 			auto* code = static_cast<std::uint8_t*>(VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
@@ -726,17 +749,18 @@ namespace limits
 			patch_transaction::contribution c;
 			c.owner = "limits.MoveTriggers";
 			for (const auto& a : accesses) c.guards.push_back({a.va, patch_transaction::bytes_of(a.retail), "MoveTriggers handle access"});
-			for (const auto& g : guards) c.guards.push_back({g.va, patch_transaction::bytes_of(g.hex), g.what ? g.what : "MoveTriggers guard"});
+			for (const auto& original : guards) { const auto g = descriptor_guard(original, fight_moves::installed()); c.guards.push_back({g.va, patch_transaction::bytes_of(g.hex), g.what ? g.what : "MoveTriggers guard"}); }
+			c.guards.push_back({pool_pointer, {0, 0, 0, 0}, "MoveTriggers pool must still be null"});
 			for (const auto& w : plan.writes)
 			{
 				patch_transaction::write out{w.va, {}, "MoveTriggers"};
 				for (unsigned i = 0; i < w.size; ++i) out.bytes.push_back(static_cast<std::uint8_t>(w.value >> (8 * i)));
 				c.writes.push_back(std::move(out));
 			}
-			c.publish = [capacity, bytes, teardown_owned_elsewhere]
+			c.publish = [capacity, bytes, slots, teardown_owned_elsewhere]
 			{
 				logger::write("limits: MoveTriggers raised from 19 to %d; %lu native move slots, %zu side-array bytes; all 10 handle accesses redirected; actor timing initialization, pause, dispatch and clear expanded with native arithmetic; native count, tags and event ownership preserved%s",
-				              capacity, record_count, bytes, teardown_owned_elsewhere ? "; timer retirement runs from the entity-capacity arena teardown" : "");
+				              capacity, slots, bytes, teardown_owned_elsewhere ? "; timer retirement runs from the entity-capacity arena teardown" : "");
 			};
 			// Uncertified rollback: the redirected accesses may still point into the side arrays and thunks, so nothing is
 			// released and the published state stays unset (startup is refused by the transaction's owner).
@@ -811,6 +835,8 @@ namespace limits
 
 	bool contribute(patch_transaction::transaction& transaction, const HMODULE game, const bool teardown_owned_elsewhere)
 	{
+		// FightMoves publishes its verified layout before side arrays are sized.
+		fight_moves::install(game);
 		base = reinterpret_cast<std::uintptr_t>(game) == image_base ? reinterpret_cast<std::uint8_t*>(game) : nullptr;
 		const auto move_triggers = ini_value(L"MoveTriggers");
 		const int triggers = move_triggers_rules::capacity(move_triggers);
@@ -825,10 +851,25 @@ namespace limits
 		retire_times_only();
 	}
 
+	// ModelPools, then the rows that read its published layout (W3-9 particle scratch, W3-4 effect templates, W3-7
+	// primitives per effect), then the independent W3-5/W3-6 effect pools. Each reads its own key and is one
+	// transaction; absent keys write nothing. Integration (w3/integrated): one order for both install paths.
+	void install_effect_rows(const HMODULE game)
+	{
+		model_pools::install(game);
+		particle_scratch::install(game);
+		effect_templates::install(game);
+		primitives_per_effect::install(game);
+		effect_pools::install(game);
+	}
+
 	void install(const HMODULE game)
 	{
+		power_pools::install(game);
 		base = reinterpret_cast<std::uintptr_t>(game) == image_base ? reinterpret_cast<std::uint8_t*>(game) : nullptr;
 		if (game) log_address_space(game);
+		const auto w2_items = item_capacity::installed_capacity();
+		if (w2_items) item_cap = wanted_caps[2] = static_cast<int>(w2_items);
 		if (base)
 		{
 			// The counters status() reports, where the code that uses them is the retail build's.
@@ -843,8 +884,10 @@ namespace limits
 			motions_readable = !first_mismatch(motion_counter_guards(motion_pool::counter_guard_hex()));
 			igb_readable = !first_mismatch(igb_counter_guards);
 			if (igb_readable) igb_live_va = igb_live_retail;
-			items_readable = !items_mismatch();
-			if (!styles_mismatch()) style_count_offset = style_layout_for(stock_fight_styles).count;
+			items_readable = w2_items || !items_mismatch();
+			if (!styles_mismatch() && !first_mismatch(event_sites)) {
+				published_manager=manager_layout(stock_fight_styles,stock_style_events);
+			}
 			if (!curves_mismatch()) curve_live_va = curve_object_retail + curve_layout_for(stock_effect_curves).live;
 		}
 
@@ -852,41 +895,31 @@ namespace limits
 		const auto resource_names = ini_value(L"ResourceNames");
 		const auto item_enhancements = ini_value(L"ItemEnhancements");
 		const auto fight_styles = ini_value(L"FightStyles");
+		const auto style_events = ini_value(L"StyleEvents");
 		const auto effect_curves = ini_value(L"EffectCurves");
 		const auto igb_records = ini_value(L"IGBCache");
 		const auto move_triggers = ini_value(L"MoveTriggers"); // contributed to the startup transaction earlier (contribute())
-		if (!actor_slots && !resource_names && !item_enhancements && !fight_styles && !effect_curves && !move_triggers && !igb_records)
+		const auto fight_moves = ini_value(L"FightMoves"); // already installed before MoveTriggers prepared
+		if (!actor_slots && !resource_names && !item_enhancements && !fight_styles && !style_events && !effect_curves && !move_triggers && !igb_records && !fight_moves)
 		{
-			logger::write("limits: the game's own caps - 40 actor slots, 450 resource names, 375 item enhancements (no [Limits] in xml2-fix.ini)");
+			install_effect_rows(game);
+			if(w2_items)logger::write("limits: W2 owns the 4096-record item enhancement pool");
+			else logger::write("limits: the game's own caps - 40 actor slots, 450 resource names, 375 item enhancements (no [Limits] in xml2-fix.ini)");
 			return;
 		}
 		const auto chosen = decide(actor_slots ? std::optional<std::string_view>(*actor_slots) : std::nullopt,
 		                           resource_names ? std::optional<std::string_view>(*resource_names) : std::nullopt,
-		                           item_enhancements ? std::optional<std::string_view>(*item_enhancements) : std::nullopt,
+		                           item_enhancements && !w2_items ? std::optional<std::string_view>(*item_enhancements) : std::nullopt,
 		                           fight_styles ? std::optional<std::string_view>(*fight_styles) : std::nullopt,
 		                           effect_curves ? std::optional<std::string_view>(*effect_curves) : std::nullopt,
 		                           igb_records ? std::optional<std::string_view>(*igb_records) : std::nullopt);
 		igb_requested = chosen.igb_records > stock_igb_records;
 		wanted_caps = {chosen.resource_names, chosen.actor_slots, chosen.item_enhancements,
 		               chosen.fight_styles, chosen.effect_curves, move_triggers_rules::capacity(move_triggers)};
+		if (w2_items) wanted_caps[2] = static_cast<int>(w2_items);
 		for (const auto& note : chosen.notes)
 		{
 			logger::write("limits: %s", note.c_str());
-		}
-		if (chosen.fight_styles > stock_fight_styles) raise_styles(chosen.fight_styles);
-		// The effect curve pool: on its own, before the game's first effect (the getter builds the pool
-		// at its first call, in the game's start-up, after DllMain).
-		if (chosen.effect_curves > stock_effect_curves) raise_curves(chosen.effect_curves);
-		// The item enhancement pool: on its own, before the game's first item load (the manager is built
-		// at its first use, long after DllMain).
-		if (chosen.item_enhancements > stock_item_enhancements && base)
-		{
-			raise_items(chosen.item_enhancements);
-		}
-		if (chosen.actor_slots == stock_actor_slots && chosen.resource_names == stock_resource_names && chosen.igb_records == stock_igb_records)
-		{
-			logger::write("limits: the game's own caps - 40 actor slots, 450 resource names, 200 IGB records");
-			return;
 		}
 
 		// The name table first: the actor table needs it.
@@ -918,10 +951,24 @@ namespace limits
 				              names_needed(chosen.actor_slots));
 			}
 		}
+		// DESIGN revision 2 section 7: actor cache, model pools, W3-9, W3-4/W3-7, effect pools, then styles.
+		install_effect_rows(game);
+		const auto manager_request=style_manager_plan::choose(
+			fight_styles?std::optional<std::string_view>(*fight_styles):std::nullopt,
+			style_events?std::optional<std::string_view>(*style_events):std::nullopt);
+		wanted_events=manager_request.events;
+		if (manager_request.requested) {
+			manager_verified=manager_request.valid && raise_styles(manager_request.styles,manager_request.events);
+			if (!manager_verified) logger::write("limits: FightStyles and StyleEvents unverified; shared manager unchanged (FightStyles 20..127, StyleEvents 1065..8192; stock 19/1064)");
+		}
+		if (chosen.effect_curves > stock_effect_curves) raise_curves(chosen.effect_curves);
+		// W2 owns the item enhancement pool when its layout is installed (item_capacity); the stock raise stays out.
+		if (!w2_items && chosen.item_enhancements > stock_item_enhancements && base) raise_items(chosen.item_enhancements);
 	}
 
 	void register_resource_agreement()
 	{
+		power_pools::register_agreement();
 		// Not the game (XMen2.exe isn't at 0x400000): nothing was raised and nothing can be patched, like every other
 		// module that returns before registering there - a "requested but not installed" entry would make the
 		// agreement demand its network exclusion hook in a process that has none and refuse that process's startup
@@ -932,6 +979,10 @@ namespace limits
 			{name_cap, actor_cap, item_cap, style_cap, curve_cap, move_trigger_cap},
 			[](auto id, auto revision, auto values, bool verified) {
 				gameplay_agreement::register_rule(id, revision, values, verified);
+			}, manager_verified);
+		limits_agreement_rules::register_events(wanted_events,event_cap,manager_verified,
+			[](auto id, auto revision, auto values, bool verified) {
+				gameplay_agreement::register_rule(id,static_cast<std::uint16_t>(revision),values,verified);
 			});
 	}
 
@@ -954,13 +1005,14 @@ namespace limits
 
     pool_diagnostics diagnostic_sources()
     {
-        const auto l=style_layout_for(style_cap);
-        const bool styles=style_count_offset!=0;
+        // The published style manager (W3-1/W3-2): retail when stock, the raised layout after its transaction.
+        const bool styles=published_manager.has_value();
+        const auto l=styles?*published_manager:manager_layout(stock_fight_styles,stock_style_events);
         return {
-            {styles?style_manager_pointer:0,style_count_offset,static_cast<DWORD>(style_cap),0,true,false},
-            {styles?style_manager_pointer:0,l.auxiliary+0x16ee0,1064,0,true,false},
+            {styles?style_manager_pointer:0,l.count,static_cast<DWORD>(l.capacity),0,true,false},
+            {styles?style_manager_pointer:0,l.auxiliary+l.events.live,static_cast<DWORD>(l.events.capacity),0,true,false},
             {curve_live_va,0,static_cast<DWORD>(curve_cap),curve_init_guard,false,false},
-            {styles?style_manager_pointer:0,l.styles,l.bitmap,style_record_size,0xc60,static_cast<DWORD>(style_cap)}
+            {styles?style_manager_pointer:0,l.styles,l.bitmap,style_record_size,0xc60,static_cast<DWORD>(l.capacity)}
         };
     }
 	std::string status()
@@ -989,14 +1041,18 @@ namespace limits
 				items = read(*manager + item_count_offset);
 			}
 		}
-		std::optional<DWORD> styles;
-		if (style_count_offset)
+		std::optional<DWORD> styles, events;
+		if (published_manager)
 		{
-			if (const auto manager = read(style_manager_pointer); manager && *manager) styles = read(*manager + style_count_offset);
+			if (const auto manager = read(style_manager_pointer); manager && *manager) {
+				styles = read(*manager + published_manager->count);
+				events = read(*manager + published_manager->auxiliary + published_manager->events.live);
+			}
 		}
 		const auto residency=resident_stats::status();
+		const bool observing_refusals=published_manager && (published_manager->capacity>32 || published_manager->events.capacity!=stock_style_events);
         return (residency.empty()?std::string{}:residency+"; ")+"actors " + counter(read(actor_live_va), actor_cap) + "; names " + counter(names, name_cap) + "; motions " + counter(motions, static_cast<int>(motion_pool::layout().capacity)) + "; igb " +
-		       counter(read(igb_live_va), igb_cap) + "; items " + counter(items, item_cap) + "; styles " + counter(styles, style_cap) + "; curves " +
-		       counter(read(curve_live_va), curve_cap) + "; move_triggers " + std::to_string(move_trigger_cap);
+		       counter(read(igb_live_va), igb_cap) + "; items " + counter(items, item_cap) + "; styles " + counter(styles, style_cap) + "; events " + counter(events,event_cap) + "; style_refused " + (observing_refusals?std::to_string(style_refusals):"-") + "; event_refused " + (observing_refusals?std::to_string(event_refusals):"-") + "; curves " +
+		       counter(read(curve_live_va), curve_cap) + "; " + fight_moves::status() + "; move_triggers " + std::to_string(move_trigger_cap) + "; " + effect_templates::status() + "; " + primitives_per_effect::status() + "; " + effect_pools::status() + "; " + script_pools::status() + power_pools::status();
 	}
 }

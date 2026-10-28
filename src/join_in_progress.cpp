@@ -1,3 +1,4 @@
+#include "e4_observe.hpp"
 #include "join_in_progress.hpp"
 #include "join_in_progress_core.hpp"
 #include "join_in_progress_rules.hpp"
@@ -126,14 +127,16 @@ namespace join_in_progress
 		bool send(const void* record, std::uint8_t opcode, std::uint8_t* body, std::uint16_t length)
 		{
 			alignas(4) std::uint8_t message[0x20]{};
-			fn<init_t>(message_init)(message);
+			e4_observe::native_call("jip:message init", [&] { fn<init_t>(message_init)(message); });
 			at<std::uint8_t*>(message, 0) = body;
 			at<std::uint16_t>(message, 8) = length;
 			at<std::uint8_t>(message, 0xe) = 1;
 			at<std::uint8_t>(message, 0x10) = opcode;
 			void* peer = at<void*>(record, record_peer);
 			if (!peer) return false;
-			return fn<send_t>(send_to)(session(), fn<connection_t>(peer_connection)(peer), message, 0) != 0;
+			void* s = session();
+            void* connection = e4_observe::native_call("jip:peer connection", [&] { return fn<connection_t>(peer_connection)(peer); });
+            return e4_observe::native_call("jip:send", [&] { return fn<send_t>(send_to)(s, connection, message, 0); }) != 0;
 		}
 		void clear_frontend_callback(void* m)
 		{
@@ -162,8 +165,10 @@ namespace join_in_progress
 			}
 			join_in_progress_core::rewind_campaign(buffer, profile.payload);
 			void* game = fn<getter_t>(game_getter)();
-			const auto mode = fn<mode_t>(at<std::uint32_t>(at<void*>(game, 0), mode_slot))(game);
-			fn<set_mode_t>(at<std::uint32_t>(at<void*>(game, 0), 0x26c))(game, join_in_progress_core::campaign_transfer_mode(mode));
+			const auto get_mode = fn<mode_t>(at<std::uint32_t>(at<void*>(game, 0), mode_slot));
+            const auto mode = e4_observe::native_call("jip:mode", [&] { return get_mode(game); });
+			const auto set_mode = fn<set_mode_t>(at<std::uint32_t>(at<void*>(game, 0), 0x26c));
+            e4_observe::native_call("jip:set mode", [&] { set_mode(game, join_in_progress_core::campaign_transfer_mode(mode)); });
 			void* previous = at<void*>(m, manager_image);
 			at<void*>(m, manager_image) = buffer;
 			if (previous) fn<free_t>(game_free)(previous);
@@ -172,7 +177,7 @@ namespace join_in_progress
 			at<std::uint8_t>(m, 0) = 1; // native start cleanup must own/remove this transfer's sender task
 			// Ownership passes to the native campaign manager, exactly as for Load Saved Campaign. Its sender,
 			// J completion and 0x26 broadcast restart every participant from this one canonical image.
-			if (!fn<campaign_start_t>(native_campaign_start)(m))
+			if (!e4_observe::native_call("jip:campaign start", [&] { return fn<campaign_start_t>(native_campaign_start)(m); }))
 			{
 				at<void*>(m, manager_image) = nullptr;
 				fn<free_t>(game_free)(buffer);
@@ -355,16 +360,26 @@ namespace join_in_progress
 						// Record creation normally does this before admission even returns. A late record kept
 						// its AI hero untouched; replay those native side effects only at the shared area boundary.
 						void* controllers = fn<getter_t>(controllers_getter)();
-						const auto slot = fn<assign_t>(at<std::uint32_t>(at<void*>(controllers, 0), controller_assign_slot))(controllers, seat.index, 0);
-						fn<set_controller_t>(record_controller)(const_cast<void*>(seat.record), slot);
-						void* seats = fn<getter_t>(seats_getter)();
-						fn<set_controller_t>(at<std::uint32_t>(at<void*>(seats, 0), seats_activate_slot))(seats, seat.index);
-						fn<init_t>(at<std::uint32_t>(at<void*>(seats, 0), seats_update_slot))(seats);
-						void* players = fn<getter_t>(players_getter)();
-						fn<player_added_t>(at<std::uint32_t>(at<void*>(players, 0), player_added_slot))(players, const_cast<void*>(seat.record), 0);
+						const auto assign = fn<assign_t>(at<std::uint32_t>(at<void*>(controllers, 0), controller_assign_slot));
+                        const int index = seat.index;
+                        void* record = const_cast<void*>(seat.record);
+                        const auto slot = e4_observe::native_call("jip:assign", [&] { return assign(controllers, index, 0); });
+                        e4_observe::native_call("jip:record controller", [&] { fn<set_controller_t>(record_controller)(record, slot); });
+                        void* seats = fn<getter_t>(seats_getter)();
+                        const auto activate = fn<set_controller_t>(at<std::uint32_t>(at<void*>(seats, 0), seats_activate_slot));
+                        e4_observe::native_call("jip:activate", [&] { activate(seats, index); });
+                        const auto update = fn<init_t>(at<std::uint32_t>(at<void*>(seats, 0), seats_update_slot));
+                        e4_observe::native_call("jip:update", [&] { update(seats); });
+                        void* players = fn<getter_t>(players_getter)();
+                        const auto added = fn<player_added_t>(at<std::uint32_t>(at<void*>(players, 0), player_added_slot));
+                        e4_observe::native_call("jip:player added", [&] { added(players, record, 0); });
 						logger::write("join in progress: player %d gets controller slot %d and is announced to the game", seat.index, int(slot));
 					}
-					fn<add_t>(add_entry)(manager(), const_cast<void*>(seat.record));
+					{
+                        void* m = manager();
+                        void* record = const_cast<void*>(seat.record);
+                        e4_observe::native_call("jip:add entry", [&] { fn<add_t>(add_entry)(m, record); });
+                    }
 					break;
 				case action::send_image:
 					if (!start_image(s, seat)) { give_up(s, before); seat = {}; }
@@ -574,6 +589,12 @@ namespace join_in_progress
 				index, local ? " (this PC, the host)" : "");
 		}
 
+		int __cdecl roster_hero_bridge(char* out, int capacity, const char* pattern, const char* hero)
+		{
+			using format_t = int(__cdecl*)(char*, int, const char*, ...);
+			return join_in_progress_core::format_roster_hero(fn<format_t>(roster_format), out, capacity, pattern, hero);
+		}
+
 		// ---- bridges -------------------------------------------------------------------------------------------------
 
 		void __cdecl start_mark()
@@ -696,7 +717,7 @@ namespace join_in_progress
 				}
 				const int index = index_of(record);
 				at<std::int32_t>(m, manager_adding) = index;
-				void* done = fn<natneg_t>(natneg_done)(m, address, port);
+				void* done = e4_observe::native_call("jip:mesh completion", [&] { return fn<natneg_t>(natneg_done)(m, address, port); });
 				logger::write("join in progress: mesh peer %d connected through the session transport (natneg completion %s)", index, done ? "ran" : "found no record");
 				// 0x607210 sends the host's 0x23 topology update. Its stock caller then sends 0x25 to the completed
 				// peer (0x6051bb..0x6051dc); without that reply the newcomer cannot complete its half of the mesh.
@@ -1246,6 +1267,7 @@ namespace join_in_progress
 		xml1_hook_transaction::memory memory;
 		bool safe = true;
 		std::vector<xml1_hook_transaction::patch> writes{
+			{roster_hero_call, bytes(roster_hero_original), rel(0xe8, roster_hero_call, reinterpret_cast<const void*>(&roster_hero_bridge), 5)},
 			{teardown_call, bytes(teardown_original), rel(0xe8, teardown_call, reinterpret_cast<const void*>(&start_mark), 5)},
 			{unregister_2c, bytes(branch_original), bytes(branch_patched)},
 			{unregister_18, bytes(branch_original), bytes(branch_patched)},

@@ -104,7 +104,7 @@ void schedule_jump(void* actor,float deadline){
 struct game {
     void* b;void* a;void* hero;u32* output;
     // -1 means short-circuited, so tracing never calls a gameplay predicate twice.
-    int arrival=-1,prop_facing=-1,alternate3=-1;
+    int arrival=-1,prop_facing=-1,alternate3=-1,navigation_state=-1;
     bool available(int n,bool alt){const bool result=alt?alternate(b,a,n):boss_runtime::available(b,a,n);if(alt&&n==3)alternate3=result;return result;}
     void buttons(u32 n){boss_runtime::buttons(output,n);}
     void taunt(float p){boss_runtime::taunt(b,p);}
@@ -117,12 +117,20 @@ struct game {
     float random(){return boss_runtime::random();}
     u32 query(){return query_prop(a);}
     bool valid(u32 h){return mold_query::is_a(resolve(h),0x753f64);}
-    void approach(u32 h){auto* prop=resolve(h);if(!prop)return;move_to(a,prop);fn<unsigned char(__fastcall*)(void*,void*,u32)>(0x4a7da0)(a,nullptr,h);}
+    void approach(u32 h){auto* prop=resolve(h);if(!prop)return;
+        fn<void(__fastcall*)(void*,void*,u32)>(0x42c7c0)(a,nullptr,0);
+        // 424A90 is void: retain EAX only as a raw diagnostic register, never
+        // interpret it as success. 4A7DA0 does return a meaningful bool.
+        const auto raw=virt<u32(__fastcall*)(void*,void*,const float*,u32,float)>(a,0x160)(a,nullptr,reinterpret_cast<const float*>(static_cast<unsigned char*>(prop)+0x20),0,3.f);
+        const bool accepted=fn<unsigned char(__fastcall*)(void*,void*,u32)>(0x4a7da0)(a,nullptr,h)!=0;
+        if(trace)logger::write("blob approach owner %08X prop %08X setter_424A90_eax=%08X target_4A7DA0_ok=%d destination=(%.3f,%.3f,%.3f)",owner,h,raw,accepted,at<float>(a,0x1d0),at<float>(a,0x1d4),at<float>(a,0x1d8));
+    }
     bool arrived(u32 h){const bool result=arrived_impl(h);arrival=result;return result;}
     bool arrived_impl(u32 h){
         auto* prop=resolve(h);if(!prop)return false;
         auto* nav=at<void*>(a,0x3e8);
-        if((nav&&virt<int(__fastcall*)(void*,void*)>(nav,8)(nav,nullptr)==3)||
+        navigation_state=nav?virt<int(__fastcall*)(void*,void*)>(nav,8)(nav,nullptr):-1;
+        if(navigation_state==3||
             fn<unsigned char(__fastcall*)(void*,void*)>(0x5025b0)(b,nullptr)||at<int>(b,0x1c0)>0)return true;
         // Bounds getter returns min/max vectors. Ignore Z for the approach radius.
         const auto* bounds=virt<const float*(__fastcall*)(void*,void*)>(prop,0x38)(prop,nullptr);
@@ -189,7 +197,9 @@ bool brain(void* b,u32* output){
     game g{b,a,hero,output};const auto pc=s.pc,op=blob_rules::opcode(s,zone("astral/ast3/astral3_5"));blob_rules::update(s,op,now(),g);
     if(trace){
         logger::write("blob trace owner %08X pc %u opcode %u next %u prop %08X until %.3f wait_until %.3f now %.3f",owner,pc,op,s.pc,s.prop,s.until,s.wait_until,now());
-        if(op==12)logger::write("blob pickup owner %08X prop %08X arrival=%d facing=%d alternate_action_slot_3=%d carried=%08X (-1=not_evaluated)",owner,s.prop,g.arrival,g.prop_facing,g.alternate3,g.carried());
+        if(op==12){auto* prop=resolve(s.prop);
+            logger::write("blob pickup owner %08X prop %08X arrival=%d facing=%d alternate_action_slot_3=%d carried=%08X nav=%p nav_state=%d brain4=%08X brain1C0=%d destination=(%.3f,%.3f,%.3f) prop_distance=%.3f (-1=not_evaluated)",owner,s.prop,g.arrival,g.prop_facing,g.alternate3,g.carried(),at<void*>(a,0x3e8),g.navigation_state,at<u32>(b,4),at<int>(b,0x1c0),at<float>(a,0x1d0),at<float>(a,0x1d4),at<float>(a,0x1d8),prop?distance(a,prop):-1.f);
+        }
     }
     return true;
 }

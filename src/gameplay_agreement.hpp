@@ -10,6 +10,10 @@ namespace gameplay_agreement
  // A rule whose effective state does not fit four words also binds the SHA-256 of its complete canonical data
  // (docs/gameplay-agreement.md, "Rule details"); null = none (the record then hashes as before).
  bool register_rule(std::uint16_t id,std::uint16_t revision,std::array<std::uint32_t,4> effective,bool verified,const std::array<std::uint8_t,32>* detail);
+ // A table-dependent installer may settle after DLL startup. Until all holds
+ // resolve, commit_verified() leaves the record unfrozen and online closed.
+ void defer_finalization();
+ void resume_finalization();
  // Experimental gameplay awaiting an assigned ID must never negotiate as stock.
  void reject_unregistered_rule(const char* name);
  bool register_entity_layout(std::uint16_t revision,std::uint32_t actors,std::uint32_t generic,std::uint32_t world,std::uint32_t token_bits,bool verified);

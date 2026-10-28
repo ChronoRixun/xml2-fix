@@ -14,6 +14,28 @@ namespace save_guard_rules
 		return (kind != writer_kind_fix && kind != writer_kind_import) || (source >> 8) > (current >> 8);
 	}
 
+	// A save that needs only opt-in settings this build has (Actors=96, with or without the W2 layout), switched off on
+	// this start: name the setting and what to do. When Actors=96 is set but did not install, say why instead.
+	inline std::string settings_save_message(const std::uint32_t needs)
+	{
+		const bool w2 = (needs & lc_feature_native_w2) != 0;
+		std::string text = w2 ? "This save was made with 96 actors and the W2 save layout turned on. "
+		                      : "This save was made with 96 actors turned on. ";
+		if (!lc_actor_capacity96_requested)
+			return text + (w2 ? "Turn on Actors=96 and SaveLayout=w2" : "Turn on Actors=96") + " ([Limits] in xml2-fix.ini) and restart to load it.";
+		text += "Actors=96 is in xml2-fix.ini but did not start";
+		if (!lc_actor_capacity96_failure.empty()) text += " (" + lc_actor_capacity96_failure + ")";
+		return text + (w2 ? "; fix that, turn on SaveLayout=w2 ([Limits] in xml2-fix.ini) and restart to load it."
+		                  : "; fix that and restart to load it.");
+	}
+
+	inline std::string newer_save_message(const inspection& source)
+	{
+		if (source.needs_settings & lc_feature_actor_capacity96) return settings_save_message(source.needs_settings);
+		if (source.needs_layout) return source.why; // retain the named, actionable W2 refusal
+		return "This save was made by a newer Legends Classic build - update to load it";
+	}
+
 	inline bool protected_source(const inspection& source, const inspection& replacement)
 	{
 		return source.status == file_status::needs_newer ||
@@ -39,8 +61,8 @@ namespace save_guard_rules
 	inline bool startup_allowed(bool lc, bool exclusion_installed) { return !lc || exclusion_installed; }
 	inline bool online_allowed(bool lc, bool version_verified, bool gameplay_required = false, bool gameplay_verified = false)
 	{ return (!lc || version_verified) && (!gameplay_required || gameplay_verified); }
-	inline bool registry_full(unsigned names, unsigned objects, unsigned handles)
-	{ return names >= 100 || objects >= 100 || handles >= 100; }
+	inline bool registry_full(unsigned names, unsigned objects, unsigned handles, unsigned capacity = 100)
+	{ return names >= capacity || objects >= capacity || handles >= capacity; }
 
 	enum class failure_point { none, create, write, flush, verify, newer_publish, backup_publish, replace };
 

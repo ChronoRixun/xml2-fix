@@ -60,6 +60,43 @@ sound, offset, last position and saved heading/time. It never overlays PC's
 compact token cache. An active same-handler hold entry retains the sidecar and
 does not execute another suspend trigger.
 
+After an entry acquisition miss, 082d retains the evaluated parameters and
+retries the native acquisition while the original TK button stays held.
+Release or interruption discards the attempt. Target filters, range, ordering,
+heaviness and team checks still belong to the same native acquisition path.
+Pre-entry and auxiliary events run once per attempt, including a two-second
+miss; retry never repeats their energy/event work. `[Test] TKTrace=1` logs
+attempts 1/2/4/8/... with selected/auxiliary handles, current energy and limits.
+The historical 4/10 misses have no acquisition telemetry, so their individual
+causes cannot be recovered from the live report.
+
+082d follow-up: TKTrace now reports candidate/accepted counts, rejection
+categories and `post_filter_miss`, plus periodic control owner/flags/dt. The
+082d trace's selected=0 through128 proves repeated native misses; it does not
+identify eligibility versus height/team/LOS rejection. The native fixture
+reproduces128 misses with a different first LOS contact, and acquires when
+that obstruction clears. That is a preserved XML1 rule, not evidence that
+the historical misses were all obstructed.
+
+082e follow-up: a selected, owned, controlled target that has not moved for 15
+control frames is logged once per hold as `tk blocked` with its contact byte
+(+30C), height and the receiver's last-impact age (+2F4, written by `499100`).
+Trace only; no decision changes. 082e's one such hold was a soldier placed by
+`setPos` 18.6 units from Beast's centre: he took the armed TK amount at 0.1 s
+without moving. XML1's entry `DFC80` sets the same victim flags and no
+collision exclusion, so no behaviour was changed. Target choice was compared
+with XML1 `DF740` and is unchanged: locked target first, then query order; an
+enemy at once, an object at once only within 100 units in front, else the
+object is the fallback (PC `4F2ED0` has the same branches and constants).
+
+The `psycarry` victim uses `ch_grab_victim`. Its normal prefix policy retained
+an owner named `tele...`, but the converted Phoenix start is `power1`.
+Installed rule46 now supplies a complete-token ownership predicate to rule45,
+so the victim callback can run before the start-to-hold transition without
+dropping the pair. No blanket retention of arbitrary `power...` moves is
+added. Missing ownership, a different generation, or cancellation still
+allows normal cleanup.
+
 The moving-hit flag also uses LiftRule's decoded source heaviness. Testing the
 native byte would miss source heaviness 2, which the conversion encodes as byte
 1. Control and cancellation reread the actor's current held token, and invalid
@@ -83,6 +120,18 @@ state, stop the held sound and discard the sidecar. Rule 45's shared victim
 retention recognizes the `tele` move family and its pickup entry accepts the
 source's already-marked objects.
 
+For a voluntary TK throw the final PC-only argument to `42E570` is private
+mode **2**. The guarded bridge at `42E923` admits the native arming block even
+when the normalized moving direction has speed exactly one. Retail skips that
+whole block at speed <=1; setting its ordinary overwrite flag alone therefore
+does not fix moving throws. The subsequent nonzero selector at
+`42E99B..42E9BA` writes computed native `L2` damage, matching XML1's generic
+throw policy `3DF3F..3DFAD`. Ordinary PC modes 0/1 replay their original speed
+condition; cancellation passes zero. The regression executes `42E914..42EA13`,
+including the real speed comparison, native L2/caster evaluation calls,
+deadline and complete descriptor stores, for speeds 0/1/1.0001/500 and modes
+0/1/2. It covers actor/object and moving/still TK releases.
+
 Stationary/vertical-only releases retain a zero horizontal direction through
 normalization. XML1's release service `3DCA9/3DD0B` and PC `42E6DE/42E752` then
 use the **victim's facing**, including the native upward impulse. XML1's higher
@@ -94,12 +143,47 @@ to the native thrown-body impact receiver; see [grab/carry](xml1-grab-carry.md).
 
 ## Guard policy and the wall paths
 
-XML1 entry `DA3A0` sets context bit0; input `D99D0..DA193` runs in PC input slot
-`693018`. The replacement keeps the interaction policy in that input callback,
-leaves pending decisions for the PC scheduler, and never recursively dispatches
-them from entry `693004`. An empty released tap reaches native movement fallback
-`4FBE80`, selects Idle, and exits. Immediate wall-lunge dispatch returns **false**
-as at XML1 `D9E73`, so the scheduler does not dispatch another chain afterward.
+XML1 entry `DA3A0` sets context bit0; input `D99D0..DA193` corresponds to PC slot
+`693018`. Beta 9 performs the one-shot interaction policy at entry `693004`,
+so admission no longer depends on a later input tick while Guard is held. This
+is a candidate fix for the hardware-input symptom; no live hardware run was
+performed. The incoming context's move is used for chain resolution (`501AF0`):
+PC installs it at actor+378 only later, at `431252`. The incoming pending move
+is cleared first. An actual result is dispatched once, and context bit2 aborts
+the parent transition at `4310B0`; no unconditional pending dispatcher runs.
+The slot-6 policy remains available if an authored chain cannot be resolved.
+An empty decision selects Idle. Immediate wall-lunge dispatch still returns
+**false**, matching XML1 `D9E73`, preventing an extra dispatch.
+
+082d requires the native stun flag (`victim+765 & 1`) before an enemy ground
+grab. General admission at `429228` is not a stun test. Round two made its
+ordinary action-3 chain (`guarddecide -> grabstart`) execute immediately at
+entry, exposing untouched-enemy grabs. Ally Fastball and object pickup retain
+their separate branches; TK and flying carry retain their own eligibility.
+This implements the brief's untouched-enemy negative. The inspected generic
+XML1 callback itself also selects action 3 for an admitted nonstunned enemy
+(`D9F5A..D9F70`), so that callback alone does not establish the narrower live
+XML1 expectation. The host test records this deliberate policy difference.
+
+The 082d follow-up also recognizes a native active `shared_stunned`
+attachment when reaction bit0 is clear. Native traversal starts at entity
+`+21C/+220`; attachment slot64 supplies its definition and slot4C its next
+reference. All dereferences use the pool's generation-validating virtual
+methods, including raised AttachedPowerups. For an active timed stun, a
+private call bridge retains native `42B840` and `42925E` onward, bypassing
+only the reaction-or-recent-hit clock gate just as reaction bit0 does.
+Other native status/ownership restrictions remain. This treatment applies
+to nonparty stunned allies too. Party heroes retain rule18's reaction-owned
+eligibility: a refused/interrupted reaction cannot be reinstated merely by
+the pending PC powerup; a genuine flagged stun retains Fastball admission.
+
+`[Test] GuardTrace=1` (or TKTrace with both rules enabled) records reaction,
+attachment handle, computed stun eligibility and native admission. The old
+082d JSON records idle/visible stars, not those raw fields; do not present
+the attachment/reaction-clear fixture as a captured historical state.
+
+Use [the human-length pad/keyboard acceptance procedure](beta9-moves-live.md).
+Direct handler fixtures establish scheduling behavior, not hardware routing.
 
 The policy includes an existing held interaction (`use_button`), repeated
 movement fallback, the 48-unit probe and 16-unit box, actor and neutral targets,

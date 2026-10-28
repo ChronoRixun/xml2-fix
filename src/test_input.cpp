@@ -1,6 +1,8 @@
 #include "anim_enums.hpp"
 #include "test_input.hpp"
+#include "no_activate.hpp"
 #include "pool_counters.hpp"
+#include "e4_observe.hpp"
 #include "test_state.hpp"
 #include "test_mode.hpp"
 #include "xml1_hook_memory.hpp"
@@ -30,6 +32,10 @@
 #include "save_format.hpp"
 #include "entity_capacity.hpp"
 #include "address_space.hpp"
+#include "native_save_layout.hpp"
+#include "xml1_economy.hpp"
+#include "xml1_economy_digest.hpp"
+#include "xml1_roll.hpp"
 #include "test_input_rules.hpp"
 
 #define DIRECTINPUT_VERSION 0x0800
@@ -291,7 +297,7 @@ namespace test_input
 
 		HRESULT STDMETHODCALLTYPE hooked_set_cooperative_level(void* self, const HWND window, const DWORD flags)
 		{
-			if (!enabled || !is_keyboard(self))
+			if ((!enabled && !no_activate::enabled()) || !is_keyboard(self))
 			{
 				const HRESULT result = real_set_cooperative_level(self, window, flags);
 				if (SUCCEEDED(result) && is_keyboard(self)) test_mode::watch_window(window);
@@ -303,6 +309,7 @@ namespace test_input
 			logger::write("test: keyboard cooperative level %lX -> %lX (background, non-exclusive): %s", flags, ours, SUCCEEDED(result) ? "ok" : "refused");
 			if (FAILED(result))
 			{
+				if (no_activate::enabled()) return result; // never restore foreground-only cooperation in isolation mode
 				return real_set_cooperative_level(self, window, flags); // the game's own, as if we weren't here
 			}
 			return result;
@@ -533,9 +540,11 @@ namespace test_input
 			}
 			// fps: Presents counted over the last full second (0 until then), so a frame cap can be
 			// checked from a script. Then the engine tables' use, live/cap ([Limits], limits.hpp).
+			const auto layout = native_save_layout::status();
+			const auto economy = xml1_economy::status();
 			return "ok XML2 Fix " FIX_VERSION "; keyboard devices " + std::to_string(devices) + "; reads " + std::to_string(reads.load()) + "; keys held " +
 			       std::to_string(held) + "; " + pad_input::status() + "; game " + (game_in_foreground() ? "has" : "doesn't have") + " the focus; fps " +
-			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + anim_enums::status() + "; " + limits::status() + "; " + model_pools::status() + "; " + geometry_sharing::status() + "; " + ladder_paths::status() + "; " + break_rule::status() + "; " + placement_crush::status() + "; " + world_impact::status() + "; " + double_heal::status() + "; " + world_backfaces::status() + "; " + xml1_cling::status() + "; " + xml1_rogue_decide::status() + "; " + xml1_grab_carry::status() + "; " + lift_rule::status() + "; " + combo_heads::status() + "; " + pack_amount::status() + "; " + save_format::status() + "; " + balance::status() + "; " + entity_capacity::status() + "; memory " + address_space::status() + "; " + test_mode::status();
+			       frame_rate_rules::fps_text(frame_rate::measured_fps_x10()) + "; frame rate " + frame_rate::describe() + "; " + anim_enums::status() + "; " + limits::status() + "; " + model_pools::status() + "; " + geometry_sharing::status() + "; " + ladder_paths::status() + "; " + break_rule::status() + "; " + placement_crush::status() + "; " + world_impact::status() + "; " + double_heal::status() + "; " + world_backfaces::status() + "; " + xml1_cling::status() + "; " + xml1_rogue_decide::status() + "; " + xml1_grab_carry::status() + "; " + lift_rule::status() + "; " + combo_heads::status() + "; " + pack_amount::status() + "; " + save_format::status() + "; " + balance::status() + "; " + entity_capacity::status() + (layout.empty() ? "" : "; " + layout) + (economy.empty() ? "" : "; " + economy) + "; memory " + address_space::status() + "; " + test_mode::status();
 		}
 
 		std::string handle(const std::string& line)
@@ -584,7 +593,10 @@ namespace test_input
             case command::kind::motion_pool: return test_state::reply("motion_pool");
 			case command::kind::char_sounds: return test_state::reply("char_sounds");
 			case command::kind::actor_pools: return test_state::reply("actor_pools");
+			case command::kind::e4_observe: return e4_observe::json();
 			case command::kind::pools: return pool_counters::json();
+			case command::kind::particle_scratch: return test_state::reply("particle_scratch");
+			case command::kind::script_pools: return test_state::reply("script_pools");
 			case command::kind::pad:
 				return pad_input::handle(cmd.pad);
 			case command::kind::save:
@@ -597,6 +609,10 @@ namespace test_input
 				if (cmd.text.find("high") != std::string::npos) logger::write("test: memory%s -> %s", cmd.text.c_str(), reply.c_str());
 				return reply;
 			}
+			case command::kind::economy:
+				if(cmd.text.empty()||cmd.text=="status")return xml1_economy::status();
+				if(cmd.text=="rolls")return xml1_economy::roller::recent_rolls();
+				return xml1_economy::digest::pipe(cmd.text);
 			case command::kind::mouse:
 			{
 				using action = command::pointer_action;
@@ -705,6 +721,7 @@ namespace test_input
 			logger::write("test: [Test] %s - using %s", pipe.error.c_str(), pipe.name.c_str());
 		}
 		pipe_path = pipe.path;
+		xml1_economy::digest::enable();
 
 		read_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 		capture_done = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -728,7 +745,7 @@ namespace test_input
 
 	void hook_direct_input8(void* direct_input)
 	{
-		if ((!enabled && !test_mode::hotkeys_enabled()) || !direct_input)
+		if ((!enabled && !no_activate::enabled() && !test_mode::hotkeys_enabled()) || !direct_input)
 		{
 			return;
 		}

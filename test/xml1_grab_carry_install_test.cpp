@@ -28,6 +28,7 @@ using namespace xml1_grab_carry_rules;
 using u32=std::uint32_t;
 int checks=0,failures=0;
 std::string key,cling_key,rogue_key;
+std::string guard_key="xml1";
 std::optional<bool> flying_carry_key; // [Game] Xml1FlyingCarry (absent = default on)
 bool refused=false,target_present=true,is_character=true,reciprocal=true,move_present=true;
 int forced=0,lookup_count=0,publishes=0,relatives=0,starts=0,exclusions=0,aux=0,actions=0,last_action=-1,times=0;
@@ -198,6 +199,16 @@ void callbacks(void* handler){
     reset();put<unsigned char>(victim.data(),0x3db,4);cleanup(nullptr,nullptr,victim.data());check(aux==2,"victim interrupt clears both auxiliary states when marked");
     check(get<void*>(ptr(victim_vtable),4)==ptr(0x4fbdd0)&&get<void*>(ptr(victim_vtable),8)==ptr(0x59eb10),"XML1 default entry and no normal cleanup retained");
 }
+
+void fastball_victim_hold_test(){
+ reset();move_name("throwally");put(victim.data(),4,0x87u);put(victim.data(),0x27c,100.f);
+ // Source throwallyvictim has no handler; its converted ch_grab_victim must
+ // not run the generic prefix-based drop before the authored throw trigger.
+ get<frame_t>(ptr(victim_vtable),16)(nullptr,nullptr,victim.data(),nullptr);
+ if(guard_key=="xml1")check(get<u32>(victim.data(),4)==0x87&&starts==0&&relatives==0,"converted fastball victim stays constrained until its owner's authored throw event");
+ else check(get<u32>(victim.data(),4)==0x80&&starts==1&&relatives==1,"Guard OFF retains the prior generic victim cleanup for throwally");
+}
+
 void hold_branches(){
     auto update=reinterpret_cast<update_t>(0x4eda40);std::array<unsigned char,0x40> input{};selected=move.data();
     // Zero axes take native action15, not the deadline block. Preserve that
@@ -339,14 +350,14 @@ void lifecycle_boundaries(){
     }
 }
 }
-namespace lift_rule { bool fixture_installed=true;bool installed(){return fixture_installed;} }
+namespace lift_rule { bool fixture_installed=true;bool installed(){return fixture_installed;} int heaviness(void* p){return reinterpret_cast<unsigned char*>(p)[0x31d];} }
 namespace anim_enums {
 bool fixture_available=true;
 const anim_enum_layout::descriptor* layout(){return fixture_available?&anim_enum_layout::raised:nullptr;}
 int extension_id(const char* name){for(unsigned i=0;i<anim_enum_registry::builtin_names.size();++i)if(anim_enum_registry::builtin_names[i]==name)return int(anim_enum_layout::raised.builtin_first+i);return -1;}
 }
 namespace ini {
-std::optional<std::string> text(const wchar_t*,const wchar_t* name){if(std::wstring(name)==L"Xml1GrabCarry")return key;if(std::wstring(name)==L"Xml1RogueDecide")return rogue_key;return cling_key;}
+std::optional<std::string> text(const wchar_t*,const wchar_t* name){if(std::wstring(name)==L"GuardDecideRule")return guard_key;if(std::wstring(name)==L"Xml1GrabCarry")return key;if(std::wstring(name)==L"Xml1RogueDecide")return rogue_key;return cling_key;}
 bool flag(const wchar_t*,const wchar_t* name,bool fallback){return std::wstring(name)==L"Xml1FlyingCarry"&&flying_carry_key?*flying_carry_key:fallback;}
 }
 namespace logger {void write(const char*,...){} }
@@ -388,6 +399,7 @@ int main(int argc,char** argv){
     put<unsigned char>(ptr(0x4fd860),0,0xcc);xml1_grab_carry::install(game);check(!xml1_grab_carry::installed()&&!refused,"foreign lookup refuses and rolls back ground patches");put<unsigned char>(ptr(0x4fd860),0,before[0x4fd860-0x401000]);check(std::memcmp(before.data(),ptr(0x401000),before.size())==0,"lookup failure whole image restored");
     for(const auto& g:xml1_air_carry_rules::guards){const auto saved=get<unsigned char>(ptr(g.va),0);put<unsigned char>(ptr(g.va),0,saved^0xff);xml1_grab_carry::install(game);check(!xml1_grab_carry::installed(),"each flight/carry service guard refusal");put<unsigned char>(ptr(g.va),0,saved);check(std::memcmp(before.data(),ptr(0x401000),before.size())==0,"flight/carry refusal writes nothing");}
     const bool both=argc>2&&std::string(argv[2])=="both";
+    if(argc>2&&std::string(argv[2])=="guard-off")guard_key="xml2";
     if(both){cling_key=rogue_key="xml1";xml1_cling::install(game);xml1_rogue_decide::install(game);check(xml1_cling::installed()&&xml1_rogue_decide::installed(),"cling and Rogue installed before grab");}
     const bool raised=argc>2&&std::string(argv[2])=="raised";
     if(raised){
@@ -414,7 +426,7 @@ int main(int argc,char** argv){
     check((lookup("ch_roguedecide")!=nullptr)==both&&(lookup("ch_clingwalldecide")!=nullptr)==both,"all enabled lookup resolvers coexist");
     for(const char* name:{"ch_fly_guard_decide","ch_air_grab_pickup","ch_air_grab_pickup_idle","ch_air_grab_pickup_throw","ch_air_grab_victim"})check((lookup(name)!=nullptr)==!nocarry,"the five carry handlers registered only with the flying carry");
     check(lookup("unknown")==nullptr,"unknown names fall through");
-    bind();callbacks(handler);hold_branches();lifecycle();flying_collision();lifecycle_boundaries();
+    bind();callbacks(handler);fastball_victim_hold_test();hold_branches();lifecycle();flying_collision();lifecycle_boundaries();
     thrown_body_fixture::run([](u32 a,std::size_t n){native(a,n);},[](bool b,const char* s){check(b,s);});
     std::printf("%s real grab installer/callbacks (%s): %d checks, %d failures\n",failures?"FAIL":"PASS",both?"cling+Rogue+grab":nocarry?"grab only, Xml1FlyingCarry=0":"grab only",checks,failures);return failures?1:0;
 }

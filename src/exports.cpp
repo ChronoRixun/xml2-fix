@@ -59,8 +59,10 @@
 #include "objective_text.hpp"
 #include "discord_presence.hpp"
 #include "display.hpp"
+#include "no_activate.hpp"
 #include "forced_teams.hpp"
 #include "script_functions.hpp"
+#include "script_pools.hpp"
 #include "solo_mode.hpp"
 #include "mold_controller.hpp"
 #include "xml1_bosses.hpp"
@@ -69,13 +71,20 @@
 #include "xml1_turrets.hpp"
 #include "game_version.hpp"
 #include "gamepad_fix.hpp"
+#include "pad_hotplug.hpp"
 #include "input_worker.hpp"
 #include "iat_hook.hpp"
 #include "ini.hpp"
 #include "limits.hpp"
 #include "pool_counters.hpp"
+#include "effect_pools.hpp"
 #include "model_pools.hpp"
+#include "particle_scratch.hpp"
+#include "effect_templates.hpp"
+#include "primitives_per_effect.hpp"
 #include "actor_pools.hpp"
+#include "e4_core.hpp"
+#include "e4_core_state.hpp"
 #include "model_pools_rules.hpp"
 #include "online_tick.hpp"
 #include "frame_rate_rules.hpp"
@@ -113,6 +122,10 @@
 #include "resident_stats.hpp"
 #include "patch_transaction.hpp"
 #include "entity_capacity.hpp"
+#include "save_limits.hpp"
+#include "native_save_layout.hpp"
+#include "xml1_economy.hpp"
+#include "e4_observe.hpp"
 #include "postgame.hpp"
 #include "review_menu.hpp"
 #include "cutscene_mouse.hpp"
@@ -220,11 +233,15 @@ namespace
 		virtual_pad::install();
 		xml2_pad_bindings::install();
 
+		e4_core::configure();
+		e4_observe::configure();
 		const HMODULE game = GetModuleHandleW(nullptr);
 		// E12: XMen2.exe's address space - the 2 GB guard when the build's exe is large-address-aware, and the crash
 		// line in this log. First, before anything here allocates: refuses nothing, changes no game behaviour.
 		address_space::install(game);
+		no_activate::install(game); // also protects startup notices; before display/title save their imports
 		input_worker::install(game);
+		pad_hotplug::install(game);
 		// The button prompts: the pad's names for a player on a pad, the power wheel's buttons of play. Code and
 		// data the game runs from its first menu on; none of the sites is another module's.
 		pad_prompts::install(game);
@@ -250,17 +267,26 @@ namespace
 		// [Online] GameVersion: the string the game copies into its network code at start-up and when online
 		// opens - here, before any of its code runs.
 		game_version::install(game);
+		script_pools::require_agreement(game); // a ScriptPools-only opt-in must join the shared startup transaction
 		if (!game_version::startup_allowed()) return;
+		// Economy owns the roller loop. Install X1Leader's pain/classification
+		// bridges while their full retail guards still precede the union writes.
+		if (ini::flag(L"Game",L"Xml1Economy",false)) x1_leader::install(game);
 
 		// The one startup transaction (docs/entity-capacity-phase-a-plan.md section 7): the shared gameplay
 		// agreement's refusal and transport sites, the LC save seam, [Limits] MoveTriggers and the entity-capacity
 		// install contribute their guards and writes; every expectation is unioned and checked once, every touched
 		// page acquired once, and nothing is published unless the whole set verified. A refusal leaves stock bytes.
 		patch_transaction::transaction startup;
+		e4_core::require_agreement(game);
+		if(e4_core_state::eligible){npc_power::register_ai_layout();npc_semi_auto::register_ai_layout();mold_controller::register_ai_layout();xml1_turrets::register_ai_layout();}
+		e4_core::prepare(game);
 		resident_stats::require_agreement(game);
 		motion_pool::require_agreement(game);
 		char_sounds::require_agreement(game);
 		anim_enums::contribute(startup, game);
+		particle_scratch::require_agreement(game);
+		effect_pools::require_agreement(game);
 		if (game_version::needs_gameplay_agreement()) gameplay_agreement::contribute(startup, game);
 
 		new_game::install(game);
@@ -268,9 +294,10 @@ namespace
 		// skip branches, the zone placement file's bytes), used from the first save menu on. After new_game, whose
 		// [Game] SaveFolder re-points the folder the card builds at start-up and this reads at its first file
 		// operation. The entity-capacity install chooses the native save layout before the seam is contributed.
-		entity_capacity::prepare(startup, game);
+		native_save_layout::prepare(startup, game);
 		save_format::contribute(startup, game);
 		limits::contribute(startup, game, entity_capacity::owns_arena_teardown());
+		xml1_economy::prepare(startup, game);
 		entity_capacity::contribute(startup, game);
 		// [Online] ReceiveValidation: the stock dispatch guard. Optional and independent: a guard mismatch skips it
 		// (one log line), it shares no bytes with any other contribution, and OFF contributes nothing.
@@ -278,13 +305,22 @@ namespace
         discord_presence::register_stats_layout(); forced_teams::register_stats_layout();
         revival_cost::register_stats_layout(); xp_curve::register_stats_layout();
         resident_stats::contribute(startup,game);
+		if(e4_core_state::prepared){
+			actor_pools::contribute(startup,game);
+			char_sounds::contribute(startup,game);
+			motion_pool::contribute(startup,game);
+			e4_core::contribute(startup,game);
+		}
 		const auto committed = startup.commit();
+		e4_core::after_commit(committed==patch_transaction::outcome::committed);
 		logger::write("startup transaction: %s (%s)", patch_transaction::name(committed), startup.report().c_str());
 		entity_capacity::after_commit(committed == patch_transaction::outcome::committed, committed == patch_transaction::outcome::rollback_failed);
-		if (!save_format::startup_allowed() || !entity_capacity::startup_allowed()) return;
+		native_save_layout::after_commit(committed);
+		xml1_economy::after_commit(committed);
+		if (!native_save_layout::startup_allowed() || !save_format::startup_allowed() || !entity_capacity::startup_allowed()) return;
 		// R1 uses the published entity layout for its strict actor-capacity check.
 		patch_transaction::transaction sounds;
-		char_sounds::contribute(sounds, game);
+		if(!e4_core::installed())char_sounds::contribute(sounds, game);
 		const auto sound_result = sounds.commit();
 		if (sounds.contributions()) logger::write("CharSounds transaction: %s (%s)", patch_transaction::name(sound_result), sounds.report().c_str());
 		if (!game_version::startup_allowed()) return;
@@ -349,6 +385,7 @@ namespace
 		// them). Two code sites of the registration and the compile-time lookup, both first run by the same
 		// registration; before forced_teams, whose table carries any [Test] probes.
 		script_functions::install(game);
+		script_pools::install(game);
 		forced_teams::install(game);
 		// The shared XML1 boss dispatcher installs Master Mold ([Game] Xml1MasterMold) and the bosses [Game] Xml1Bosses
 		// lists in one transaction (one brain-dispatch detour); nothing requested writes nothing.
@@ -487,7 +524,7 @@ namespace
 			const auto handover = death_switch::capability();
 			gameplay_agreement::register_rule(gameplay_capabilities::death_switch_clear_id, death_switch_rules::revision, handover.values, handover.verified);
 		}
-		objective_text::install(game);
+		if (!save_limits::installed()) objective_text::install(game);
 		// Before any of XMen2.exe's own code runs, as the engine limit adjuster must be: this DLL is a
 		// static import of libIGDisplay.dll, which XMen2.exe imports statically, so Windows runs this
 		// DllMain while it loads the process - before the exe's entry point (0x6725f4, the CRT start-up
@@ -498,7 +535,7 @@ namespace
 		limits::register_resource_agreement();
 		// R3 uses the published ActorSlots bound before the lazy motion pool exists.
 		patch_transaction::transaction motions;
-		motion_pool::contribute(motions, game);
+		if(!e4_core::installed())motion_pool::contribute(motions, game);
 		const auto motion_result = motions.commit();
 		if (motions.contributions()) logger::write("MotionPool transaction: %s (%s)", patch_transaction::name(motion_result), motions.report().c_str());
 		if (!game_version::startup_allowed()) return;
@@ -508,7 +545,8 @@ namespace
 		if (limits::igb_cache_requested())
 			gameplay_agreement::register_rule(gameplay_capabilities::igb_cache_id, 1, limits::igb_cache_values(), limits::igb_cache_installed());
 		// [Engine] ModelPools: the model aggregate (0x7bf6d0) is built at the first getter call, after this.
-		model_pools::install(game);
+		// ModelPools, W3-9, W3-4, W3-7, W3-5, W3-6: installed inside limits::install (limits::install_effect_rows),
+		// after ActorSlots and before the style manager (DESIGN revision 2 section 7).
 		// A raise is rule 28 (ModelPools): a full pool refuses spawns, so co-op peers must share the capacities.
 		// Requested only: absent/off adds no entry (the released record); a requested raise that failed is unverified.
 		if (model_pools::requested())
@@ -623,6 +661,9 @@ namespace
 		// transport, which it requires.
 		join_in_progress::install(game);
 
+		e4_core::verify_consumers();
+		if(!game_version::startup_allowed())return;
+		e4_observe::install(game);
 		pool_counters::install(game); // D0 has no image writes; D1 is explicit [Test] only
 		test_mode::install(game);
 		test_input::install(); // first: its screenshots need the display fix's device hook
@@ -660,9 +701,9 @@ BOOL WINAPI DllMain(HINSTANCE instance, const DWORD reason, LPVOID)
 	{
 		DisableThreadLibraryCalls(instance);
 		install();
-		if (!game_version::startup_allowed() || !save_format::startup_allowed() || !entity_capacity::startup_allowed())
+		if (!native_save_layout::startup_allowed() || !game_version::startup_allowed() || !save_format::startup_allowed() || !entity_capacity::startup_allowed())
 		{
-			const std::string startup_reason = !game_version::startup_allowed()
+			const std::string startup_reason = !native_save_layout::startup_allowed() ? "The requested W2 native save layout could not be installed.\n" + native_save_layout::startup_error() : !game_version::startup_allowed()
 				? std::string(game_version::startup_error())
 				: !save_format::startup_allowed() ? "The required LC save/trivia hooks could not be installed.\n" + save_format::startup_error()
 				: "The entity-capacity install could not be certified.\n" + entity_capacity::startup_error();
