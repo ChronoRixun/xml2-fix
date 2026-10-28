@@ -26,8 +26,10 @@ namespace gameplay_agreement
   #define XML2_FIX_INCOMPATIBILITY_ADVICE "Both players must use the same build and effective gameplay settings. Restart after fixing the installation."
   constexpr char incompatibility_general[]="Incompatible gameplay or an unverified installation. " XML2_FIX_INCOMPATIBILITY_ADVICE;
   char incompatibility[512]="Incompatible gameplay or an unverified installation. " XML2_FIX_INCOMPATIBILITY_ADVICE;
+  char last_rules[128]{}; // the rules the latest refusal named (empty: none known); presentation only
   void dialog_text(const char* differing)
   {
+   std::snprintf(last_rules,sizeof(last_rules),"%s",differing ? differing : "");
    if(game_version::test_mode_active()){
     std::snprintf(incompatibility,sizeof(incompatibility),"%s",game_version::test_mode_reason());return;
    }
@@ -333,6 +335,7 @@ namespace gameplay_agreement
  int receive_info(void* e){return receive(e,info_size,native_info,endpoint::host,0x1a);}
  int receive_ack(void* e){return receive(e,ack_size,native_ack,endpoint::joiner,0x1b);}
  bool contributed(){return contributed_;}
+ const char* refusal_rules(){return last_rules;}
  bool contribute(patch_transaction::transaction& transaction,HMODULE game)
  {
   if(contributed_)return published;

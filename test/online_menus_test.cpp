@@ -380,6 +380,7 @@ void rules() {
 #include "online_lobby_fixture.inl"
 #include "online_menus_followup.inl"
 #include "online_menus_broker.inl"
+#include "online_menus_errors.inl"
 #include "online_native_fixture.inl"
 }
 namespace ini { std::optional<std::string> text(const wchar_t*,const wchar_t*) {
@@ -447,6 +448,7 @@ int main(int argc,char** argv) {
     install_hooks.clock=clock_stub;install_hooks.wall_clock=wall_stub;install_hooks.before_request=request_fault_stub;install_hooks.before_tick=tick_fault_stub;
     if(mode.starts_with("r4-")) install_hooks.lobby_fields=lobby_fields_stub;
     if(mode=="r5-broker" || mode=="r5-retail-lobby" || mode=="r5b-views") install_hooks.broker=&menu_api;
+    if(mode=="r15-errors") install_hooks.broker=&menu_api15;
     if(mode.starts_with("r6-")) install_hooks.broker=&native_fixture::api;
     patch_transaction::hooks transaction_hooks;
     if(mode=="install-retain") {
@@ -569,6 +571,7 @@ int main(int argc,char** argv) {
     set_current(hub.data());tick(hub.data(),nullptr);
     assert(texts["local_name"]==(mode=="name31" ? std::string(31,'a') : mode=="blank-name" ? "Player" : "100??????openmenu bad"));
     if(mode=="r5b-views") { broker_presentation_tests(entry);return 0; }
+    if(mode=="r15-errors") { error_table_tests(entry);return 0; }
     if(mode.starts_with("r6-nit-") || mode.starts_with("r6-end-")) { native_fixture::review_run(entry);return 0; }
     if(mode=="r6-native") { native_fixture::run(entry);return 0; }
     if(mode=="r6-generations") { native_fixture::generation_run(entry);return 0; }

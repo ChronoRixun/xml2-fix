@@ -1162,3 +1162,77 @@ input is part of this round. After LC integration and review:
 6. Stop all owned helpers, verify registry/input hashes, and remove only created
    copies/profiles with checked absolute Python paths. Record missing proof as
    pending; host fixtures do not establish G/V or WAN acceptance.
+
+## Round 15: the complete error table (probe `lc-online-errors/1`)
+
+Presentation and already reviewed lifecycle calls only: no new network behaviour, no rule or wire change. The DLL still
+shows/hides named nodes and binds DATA text; LC authors every sentence (docs `ONLINE.md` "In-game messages").
+
+**Causes (`error_cause`, `lc_broker_err_<key>`; one scene per failure).** The first eight keep their `lc-online-broker/2`
+meaning. `online_menus_rules::cause_table` is the one table: key, the next action the copy names, and whether Retry shows.
+
+| Key | Ids that select it | Next action | Retry |
+|---|---|---|---|
+| `code_not_found` | `no_such_room`, `code_not_found` | edit code | no |
+| `code_expired` | `room_closed`, `code_expired` | edit code | no |
+| `room_full` | `room_full` | browse | no |
+| `room_closed` | `room_not_joinable` | retry | yes (bounded by the shared limiter) |
+| `version_mismatch` | `version_mismatch` | back | no |
+| `rate_limited` | `rate_limited` | retry | yes, after the service's wait |
+| `timeout` | `timeout` | retry | yes |
+| `offline` | `broker_unreachable`, `worker_unavailable`, `send_queue_full`, `inbox_overflow` | retry (LAN/IP still work) | yes |
+| `refused` | `broker_rejected`, `bad_auth`, `auth_failed`, `unsupported_version` | back | no |
+| `pin_mismatch` | `tls_pin_mismatch`, `invalid_certificate` | back (no bypass) | no |
+| `test_mode` | `test_mode_on` | back | no |
+| `unsupported` | `online_dependencies_unavailable`, `native_discovery_guard`, the two room-guard sentences | other ways | no |
+| `busy` | `transport_identity_busy` | retry | yes, also from the client's refused phase |
+| `invalid_name` | `invalid_room_name` | back | no |
+| `generic` | everything else, including `malformed_reply`, `internal` and hostile ids | retry | yes |
+
+Retry is **hidden** where it cannot help, and **disabled** (but visible) while the shared 2 s limiter / escalating backoff
+runs; `broker_error` then counts down (`Retry in 7 s`) and returns to the diagnostic. Browse's Refresh is disabled for the
+same wait (`broker_api::retry_in`; absent seam = no countdown, as before). The limiter is the client's own
+(`client_state::retry_in` is the arithmetic of `may_lookup`); Refresh cannot bypass it.
+
+**One failure per generation.** `client_state::fail` now ignores a second report for a request that already failed (a
+duplicate or late reply neither replaces the cause nor grows the backoff). Refusals (`refuse`, a new attempt's guard) and a
+committed room's `disconnected` are unchanged. The room's service loss never ends healthy P2P.
+
+**Redacted diagnostic.** `broker_error` is `<operation>: <known id>` (`join: room_full`), `join: other` for any id that is not
+in `known_id()`, `join: install_guard` for the guard sentences. It never carries broker text, codes or addresses. For
+`version_mismatch` it names both builds instead (`LC36 vs your LC37`; the host's token is `client_view::error_detail`, set
+from the already validated resolve reply and cleared with the failure; tokens <= 8 allowlisted characters each).
+
+**Native step failures** (`native_flow_error(why)`, every id registered in `native_failure_table`; a test scans
+`online_native_flow.inl` so none escapes): inline notices `lc_notice_discovery` (host not found / ambiguous / changed),
+`lc_notice_refused` (admission refused; `lc_notice_refusal_rules` + DATA `lc_refusal_rules` when the agreement layer named
+the rules - `gameplay_agreement::refusal_rules()`, read-only, "possibly" because rule-summary buckets collide, <= 44
+characters), `lc_notice_timeout`, `lc_notice_service_lost` (room generation or service lost mid-setup) and the general
+`lc_notice_admission`. The reason and phase go to the log (`native flow notice ... (phase: reason)`), never to the screen.
+The existing cleanup (leave the room, request `lc_host` from setup) is unchanged; Retry is the screen's own Done/Open.
+
+**Clipboard.** Paste distinguishes `lc_notice_clipboard` (could not read it: open/size/lock failed) from
+`lc_notice_paste_invalid` (it holds no code); valid typed text is never erased. `read_clipboard_result` is the tri-state;
+`read_clipboard` keeps its optional form.
+
+**Lobby inline (the lobby is never closed).** `lc_lobby_error_copy` / `lc_lobby_error_target` name the cause of the old
+`lc_lobby_error` (which remains the fallback when LC authors neither); `lc_lobby_guest_left` + DATA `lc_toast_name`: a guest
+who disappears from the native roster (matched by native id AND name; the local member never) is named for six seconds,
+duplicates ignored, "the party continues; they can rejoin with the code"; `lc_lobby_service_lost`: a room is committed and
+the service is gone (persistent strip, P2P continues, only new players cannot join).
+
+**Host loss (0.6).** The session ends (native play ends as before); there is **no takeover and no recovery claim**.
+`broker_api::host_lost` (online_room: this joiner's connection to the room's host ended after it was up; latched until the
+room is left) is read in `native_session_cleared` for a guest session, before the room leave resets it, and raises the
+Hub's modal panel: `lc_hub_host_left_veil` + `lc_hub_host_left` + buttons `lc_hostleft_again` (intent Host: Host setup,
+where a new or saved campaign is chosen) and `lc_hostleft_back` (dismiss/Back). While it is up the Hub's rows are disabled
+and every other posted action is ignored; a second report of the same loss changes nothing; a deliberate local leave never
+raises it. The panel shows **no save claim**: 0.6 has no accessor for local saves, so the capsule says to choose a saved
+campaign in Host setup. It appears at the next Hub entry (no automatic menu is opened from the session-end frames).
+Mid-session Load is not in this release: nothing offers it.
+
+Tests: `xml2_online_menus_test r15-errors` (table-driven id -> cause -> scene/next action/Retry for every row on four
+screens, redacted diagnostics with hostile ids, limiter countdown, retry without restart, duplicate/late errors, build pair,
+native failure registry, clipboard tri-state, toast/roster/host-left models), the native fixture's refusal/timeout/discovery
+notices and the `r6-end-*` guest modes (host-left panel only for a lost host, modal, once), `xml2_online_browser_test`
+(limiter arithmetic, one failure per generation, detail), and LC `test_online_errors.py`.

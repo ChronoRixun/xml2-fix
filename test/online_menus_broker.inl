@@ -12,7 +12,7 @@ unsigned menu_resolve_attempts=0;
 bool menu_has_preset=false;
 bm::launch_preset menu_launch;
 bool menu_up=true;
-std::string menu_rows_json,menu_error; // R5b: invented list body / failure id for the next completion
+std::string menu_rows_json,menu_error,menu_error_detail; // R5b: invented list body / failure id for the next completion (R15: the other build's token)
 bool menu_available() { return menu_up; }
 const bm::client_view& menu_view() { return menu_broker.view(); }
 bool menu_begin(bm::operation op) {
@@ -32,7 +32,7 @@ void menu_tick() {
     if(menu_auth && menu_broker.pending()) { menu_broker.authenticated(menu_reply);menu_broker.issue(); }
     if(!menu_complete) return;
     menu_complete=false;
-    if(!menu_error.empty()) { menu_broker.fail(menu_reply,menu_error,ticks);menu_error.clear();return; }
+    if(!menu_error.empty()) { menu_broker.fail(menu_reply,menu_error,ticks);if(!menu_error_detail.empty()) menu_broker.detail(menu_reply,menu_error_detail);menu_error.clear();return; }
     if(menu_reply_op==bm::operation::list && !menu_rows_json.empty()) {
         menu_broker.listed(menu_reply,online_room_core::parse("{\"op\":\"list_rooms_ok\",\"rooms\":["+(menu_rows_json=="-" ? std::string() : menu_rows_json)+"]}"),ticks);
     } else if(menu_reply_op==bm::operation::list) {
@@ -96,7 +96,7 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     for(int i=32;i<40;++i) { post(static_cast<intent>(i));tick(child.data(),nullptr); }
     const auto attempts=menu_resolve_attempts;
     for(unsigned i=0;i<20;++i) tick(child.data(),nullptr);
-    assert(menu_view().state==bm::phase::refused && menu_resolve_attempts==attempts && visibility["lc_code_complete"] && !visibility["lc_broker_err_generic"] && visibility["retry"]);
+    assert(menu_view().state==bm::phase::refused && menu_resolve_attempts==attempts && visibility["lc_code_complete"] && !visibility["lc_broker_err_test_mode"] && visibility["retry"]);
     post(intent::done);tick(child.data(),nullptr);assert(menu_resolve_attempts==attempts+1);
     std::cout<<"round5 menus PASS Hub no host; row allowlist/RTT/build; bounded page/select; refresh limiter; host visibility; Back/edit before late completion; confirmed Rejoin storage\n";
 }
@@ -153,6 +153,16 @@ void broker_retail_lobby_tests(const script_functions_rules::func_entry* registr
     auto tick=*reinterpret_cast<lobby_tick_t*>(0x69f374);put(checks_table.data(),0x84,2);
     tick(child.data(),nullptr);assert(texts["lc_member_count"]=="0" && texts["lc_room_code"]=="AAAA-AAAB");
     refresh_now();tick(child.data(),nullptr);assert(texts["lc_member_count"]=="3");
+    // Round 15 inline lobby scenes: a member leaving the native roster is named for six seconds (reported once, a join is
+    // not a departure); losing the service while the room stays shows the strip. The lobby is never closed.
+    tick(child.data(),nullptr);assert(visibility["lc_lobby_guest_left"] && texts["lc_toast_name"].empty() && visibility["lc_lobby_service_lost"]);
+    people_count=2;build_people_chain();refresh_now();tick(child.data(),nullptr);
+    assert(!visibility["lc_lobby_guest_left"] && texts["lc_toast_name"]=="Alex" && current()==child.data());
+    ticks+=5999;tick(child.data(),nullptr);assert(!visibility["lc_lobby_guest_left"] && texts["lc_toast_name"]=="Alex");
+    ticks+=1;tick(child.data(),nullptr);assert(visibility["lc_lobby_guest_left"] && texts["lc_toast_name"].empty());
+    people_count=3;build_people_chain();refresh_now();tick(child.data(),nullptr);assert(visibility["lc_lobby_guest_left"]);
+    menu_broker.disconnected("broker_unreachable",ticks);tick(child.data(),nullptr);
+    assert(!visibility["lc_lobby_service_lost"] && menu_view().state==bm::phase::room && current()==child.data());
     mode=saved_mode;
     std::cout<<"round5 combined PASS Browse resolve -> broker code/title/visibility + retail NULL list, Host/Join 0..4, real refresh aliases, cursor preservation, Copy and malformed-list recovery\n";
 }
@@ -241,9 +251,9 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
 
     // Every cause selects exactly one scene; Retry is shown only where trying again can help.
     struct cause_case { const char* id; const char* node; bool retry; };
-    const cause_case causes[]{{"no_such_room","code_not_found",false},{"room_closed","code_not_found",false},{"room_full","room_full",false},
-        {"room_not_joinable","room_full",false},{"version_mismatch","version_mismatch",false},{"rate_limited","rate_limited",true},
-        {"timeout","timeout",true},{"broker_unreachable","offline",true},{"worker_unavailable","offline",true},{"tls_pin_mismatch","refused",false},
+    const cause_case causes[]{{"no_such_room","code_not_found",false},{"room_closed","code_expired",false},{"room_full","room_full",false},
+        {"room_not_joinable","room_closed",true},{"version_mismatch","version_mismatch",false},{"rate_limited","rate_limited",true},
+        {"timeout","timeout",true},{"broker_unreachable","offline",true},{"worker_unavailable","offline",true},{"tls_pin_mismatch","pin_mismatch",false},
         {"broker_rejected","refused",false},{"malformed_reply","generic",true},{"weird%s\\^id","generic",true}};
     menu_rows_json.clear();
     for(const auto& c:causes) {
@@ -261,13 +271,13 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
         assert(visible==1 && shown(std::string("lc_broker_err_")+c.node));
         assert(c.retry ? (shown("retry") && enabled_items["retry"]) : (gone("retry") && !enabled_items["retry"]));
         assert(gone("lc_service_ok") && texts["service"]=="Unavailable"); // not connected during a failure
-        for(unsigned char ch:texts["broker_error"]) assert(display_byte(ch)==char(ch));
+        for(unsigned char ch:texts["broker_error"]) assert(display_byte(ch)==char(ch) || ch==':'); // the diagnostic is "<operation>: <known id>"
         assert(texts["broker_error"].size()<=64);
     }
     // The client's refused phase (guards, test mode) never offers Retry whatever the id.
     ticks+=70000;post(intent::retry);tick(child.data(),nullptr);menu_broker.cancel();menu_broker.stopped();
     menu_broker.refuse("test_mode_on");tick(child.data(),nullptr);
-    assert(menu_view().state==bm::phase::refused && shown("lc_broker_err_generic") && gone("retry") && !enabled_items["retry"]);
+    assert(menu_view().state==bm::phase::refused && shown("lc_broker_err_test_mode") && gone("retry") && !enabled_items["retry"]);
     // Empty list: the table frame's message belongs to lc_broker_empty alone (the detail line stays empty).
     menu_broker.cancel();menu_broker.stopped();menu_rows_json="-";
     ticks+=70000;tick(child.data(),nullptr);assert(menu_broker.pending());

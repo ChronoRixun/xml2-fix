@@ -45,6 +45,12 @@ struct broker_api {
     // Optional (round 7): the lobby cards' observed facts, and the measured RTT to a listed room's host.
     bool (*party)(lobby_fixture&)=nullptr;
     int (*room_rtt)(const std::string&)=nullptr;
+    // Optional (round 15, presentation only): ms until the shared limiter/backoff allows a new request (0 = now); the rule
+    // names the latest settings refusal gave ("" none); whether this joiner's connection to its room's host ended after it
+    // was up. Absent seams mean "unknown": no countdown, no rule names, no host-left panel.
+    std::uint32_t (*retry_in)()=nullptr;
+    const char* (*refusal_rules)()=nullptr;
+    bool (*host_lost)()=nullptr;
 };
 void keyboard(unsigned char* state);
 bool requested();

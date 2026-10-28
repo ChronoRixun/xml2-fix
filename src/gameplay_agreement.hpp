@@ -29,6 +29,8 @@ namespace gameplay_agreement
  bool prepare(HMODULE game);
  bool finalize(HMODULE game);
  bool contributed();
+ // The rule names the most recent settings refusal gave (e.g. "DeathRule, GnsTransport"), or "" when none was known. Read-only.
+ const char* refusal_rules();
  void show_install_failure();
  int receive_request(void* event);
  int receive_reply(void* event);

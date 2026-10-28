@@ -40,6 +40,10 @@ namespace online_room
 	std::string version();
 	bool take_preset(online_browser_core::launch_preset& out);
 	bool refresh_due();
+	// Round 15 (presentation): milliseconds until the shared limiter/backoff lets a new request start (0 = now), and whether this
+	// joiner's connection to the host of its room has ended since it connected (latched until the room is left).
+	std::uint32_t retry_in_ms();
+	bool host_lost();
 #if XML2_FIX_GNS
 	// The identity GNS starts with (str:legends:<hex16> of this install's key); false when rooms are off or the key
 	// could not be loaded (then the PC stays without rooms, logged).

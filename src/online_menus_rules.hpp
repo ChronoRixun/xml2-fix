@@ -2,6 +2,7 @@
 #include "ini_rules.hpp"
 #include "script_functions_rules.hpp"
 #include <cstdint>
+#include <cstring>
 #include <initializer_list>
 #include <array>
 #include <algorithm>
@@ -18,6 +19,9 @@ inline constexpr char lobby_capability[] = "lc-online-lobby/1";
 // /2: per-row status/pip/build/dim scenes, list count + age, per-cause error scenes, service scene (docs/online-menus.md).
 inline constexpr char broker_capability[] = "lc-online-broker/2";
 inline constexpr char native_capability[] = "lc-online-native/1";
+// Round 15: the complete error table (docs/online-menus.md "Round 15"): per-cause scenes beyond broker/2's eight, native
+// failure notices, the lobby's inline service/toast scenes and the Hub's host-left panel.
+inline constexpr char errors_capability[] = "lc-online-errors/1";
 inline constexpr char function_name[] = "lcOnlineIntent";
 enum class intent : int { enter=1, host, code, browse, other, back, unavailable, dismiss, edit_name, paste, erase, clear, done, rejoin, invalid_key,
     copy_code=16, confirm_leave=17, refresh=18, open_room=19, retry=20, visibility=21,
@@ -76,12 +80,16 @@ inline std::optional<std::string> parse_code(std::string_view in) {
     return out;
 }
 // Adapter is also driven by host lock/open/size failures. Never retries/waits.
-template<class Clipboard> std::optional<std::string> read_clipboard(Clipboard& api) {
-    if(!api.open()) return {};
+// unavailable: the clipboard could not be read at all (open/size/lock failed); invalid: it was read and holds no code.
+enum class clip_result { ok, unavailable, invalid };
+template<class Clipboard> clip_result read_clipboard_result(Clipboard& api, std::string& out) {
+    out.clear();
+    if(!api.open()) return clip_result::unavailable;
     struct closer { Clipboard& api; ~closer() { api.close(); } } close{api};
     const auto bytes=api.size();
-    if(bytes<2 || bytes>4096 || bytes%2) return {};
-    const auto* data=api.lock(); if(!data) return {};
+    if(!bytes) return clip_result::unavailable;
+    if(bytes<2 || bytes>4096 || bytes%2) return clip_result::invalid;
+    const auto* data=api.lock(); if(!data) return clip_result::unavailable;
     struct unlocker { Clipboard& api; ~unlocker() { api.unlock(); } } unlock{api};
     std::string text;
     const auto count=std::min<std::size_t>(bytes/2,257);
@@ -89,12 +97,19 @@ template<class Clipboard> std::optional<std::string> read_clipboard(Clipboard& a
         const auto c=data[i];
         if(!c) {
             // Zero padding is fine; a hidden second string is not a code.
-            for(std::size_t tail=i+1;tail<bytes/2;++tail) if(data[tail]) return {};
-            return parse_code(text);
+            for(std::size_t tail=i+1;tail<bytes/2;++tail) if(data[tail]) return clip_result::invalid;
+            auto code=parse_code(text);
+            if(!code) return clip_result::invalid;
+            out=*code;return clip_result::ok;
         }
-        if(c>127) return {};
+        if(c>127) return clip_result::invalid;
         text+=char(c);
     }
+    return clip_result::invalid;
+}
+template<class Clipboard> std::optional<std::string> read_clipboard(Clipboard& api) {
+    std::string out;
+    if(read_clipboard_result(api,out)==clip_result::ok) return out;
     return {};
 }
 struct code_model {
@@ -230,25 +245,150 @@ inline std::string relative_age(std::uint64_t now,std::uint64_t then) {
     if(d<86400ull*60) return unit(d/86400,"day");
     return "a long time ago";
 }
-// Error cause selectors. The DLL shows exactly one lc_broker_err_<key> per failure; the id stays a diagnostic.
-enum class error_cause { code_not_found, room_full, version_mismatch, rate_limited, timeout, offline, refused, generic };
-inline constexpr const char* error_cause_key[] = {"code_not_found","room_full","version_mismatch","rate_limited","timeout","offline","refused","generic"};
+// Error cause selectors (round 15 completes INGAME-DESIGN section 3.3). The DLL shows exactly one lc_broker_err_<key>
+// per failure; the id stays a redacted diagnostic. The first eight keep their broker/2 meaning.
+enum class error_cause { code_not_found, room_full, version_mismatch, rate_limited, timeout, offline, refused, generic,
+    pin_mismatch, code_expired, room_closed, test_mode, unsupported, busy, invalid_name, count };
+inline constexpr const char* error_cause_key[] = {"code_not_found","room_full","version_mismatch","rate_limited","timeout","offline","refused","generic",
+    "pin_mismatch","code_expired","room_closed","test_mode","unsupported","busy","invalid_name"};
+static_assert(std::size(error_cause_key)==std::size_t(error_cause::count));
+// What the failure's copy tells the player to do next. LC's copy names it; retry is the only one that is a control.
+enum class next_action { retry, edit_code, browse, other_ways, back };
+inline constexpr const char* next_action_key[] = {"retry","edit_code","browse","other_ways","back"};
+struct cause_row { error_cause cause; next_action next; bool retry; };
+// One row per cause, in enum order.
+inline constexpr cause_row cause_table[] = {
+    {error_cause::code_not_found,  next_action::edit_code,  false},
+    {error_cause::room_full,       next_action::browse,     false},
+    {error_cause::version_mismatch,next_action::back,       false},
+    {error_cause::rate_limited,    next_action::retry,      true},
+    {error_cause::timeout,         next_action::retry,      true},
+    {error_cause::offline,         next_action::retry,      true},   // the copy also names Other ways (LAN / IP still work)
+    {error_cause::refused,         next_action::back,       false},
+    {error_cause::generic,         next_action::retry,      true},
+    {error_cause::pin_mismatch,    next_action::back,       false},  // never an insecure bypass
+    {error_cause::code_expired,    next_action::edit_code,  false},
+    {error_cause::room_closed,     next_action::retry,      true},   // bounded: the client's shared limiter paces every retry
+    {error_cause::test_mode,       next_action::back,       false},
+    {error_cause::unsupported,     next_action::other_ways, false},
+    {error_cause::busy,            next_action::retry,      true},
+    {error_cause::invalid_name,    next_action::back,       false}};
+static_assert(std::size(cause_table)==std::size_t(error_cause::count));
+inline constexpr const cause_row& row_of(error_cause c) { return cause_table[std::size_t(c)]; }
 inline error_cause classify_error(std::string_view id) {
     auto is=[&](std::initializer_list<std::string_view> list) { for(auto v:list) if(id==v) return true; return false; };
-    if(is({"no_such_room","code_not_found","room_closed","code_expired"})) return error_cause::code_not_found;
-    if(is({"room_full","room_not_joinable"})) return error_cause::room_full;
+    if(is({"no_such_room","code_not_found"})) return error_cause::code_not_found;
+    if(is({"room_closed","code_expired"})) return error_cause::code_expired;
+    if(id=="room_full") return error_cause::room_full;
+    if(id=="room_not_joinable") return error_cause::room_closed;
     if(id=="version_mismatch") return error_cause::version_mismatch;
     if(id=="rate_limited") return error_cause::rate_limited;
     if(id=="timeout") return error_cause::timeout;
     if(is({"broker_unreachable","worker_unavailable","send_queue_full","inbox_overflow"})) return error_cause::offline;
-    if(is({"tls_pin_mismatch","broker_rejected","invalid_certificate","bad_auth","auth_failed","unsupported_version"})) return error_cause::refused;
+    if(is({"tls_pin_mismatch","invalid_certificate"})) return error_cause::pin_mismatch;
+    if(is({"broker_rejected","bad_auth","auth_failed","unsupported_version"})) return error_cause::refused;
+    if(id=="test_mode_on") return error_cause::test_mode;
+    // Install guards: the room layer's own refusal ids and its two guard sentences (online_room_core::room_guard_refusal).
+    if(is({"online_dependencies_unavailable","native_discovery_guard"}) || id.substr(0,17)=="online rooms need" || id.substr(0,20)=="joining a room needs") return error_cause::unsupported;
+    if(id=="transport_identity_busy") return error_cause::busy;
+    if(id=="invalid_room_name") return error_cause::invalid_name;
     return error_cause::generic;
 }
-// Retry exists only where trying the same thing again can help: never for a wrong code, a full room, another build or
-// a refused/unverified service, and never once the client is in its non-retryable (refused) phase.
-inline bool cause_retryable(error_cause c) {
-    return c!=error_cause::code_not_found && c!=error_cause::room_full && c!=error_cause::version_mismatch && c!=error_cause::refused;
+// Retry exists only where trying the same thing again can help: never for a wrong or expired code, a full room, another
+// build, a refused/unverified service, a TestMode/guard refusal or an invalid name; and never once the client is in its
+// non-retryable (refused) phase.
+inline bool cause_retryable(error_cause c) { return row_of(c).retry; }
+inline next_action cause_next(error_cause c) { return row_of(c).next; }
+// Ids the client may legitimately carry. Anything else is broker-controlled text and is never echoed.
+inline bool known_id(std::string_view id) {
+    for(std::string_view v:{"no_such_room","code_not_found","room_closed","code_expired","room_full","room_not_joinable","version_mismatch","rate_limited",
+        "timeout","broker_unreachable","worker_unavailable","send_queue_full","inbox_overflow","tls_pin_mismatch","invalid_certificate","broker_rejected",
+        "bad_auth","auth_failed","unsupported_version","test_mode_on","online_dependencies_unavailable","native_discovery_guard","transport_identity_busy",
+        "invalid_room_name","malformed_reply","internal"}) if(id==v) return true;
+    return false;
 }
+// "join: room_full": the operation and a known id; a guard sentence reads install_guard and any unknown text "other".
+// No code, address, name or secret can reach the screen through it, whatever the broker sent.
+inline std::string diagnostic(std::string_view operation,std::string_view id) {
+    const bool guard=classify_error(id)==error_cause::unsupported && !known_id(id);
+    return std::string(operation)+": "+(known_id(id) ? std::string(id) : guard ? std::string("install_guard") : std::string(id.empty() ? "none" : "other"));
+}
+inline const char* operation_name(int op) { return op==1 ? "list" : op==2 ? "host" : op==3 ? "join" : "request"; }
+// Whole seconds still to wait (rounded up) for the shared limiter/backoff; 0 = a new request may start.
+inline unsigned wait_seconds(std::uint32_t remaining_ms) { return (remaining_ms+999)/1000; }
+
+// Native Host setup / admission failures (online_native_flow.inl native_flow_error). Every id the flow can raise is
+// registered; each selects one inline notice. An unregistered id shows the general setup notice.
+enum class native_failure { setup, discovery, refused, service, timeout };
+inline constexpr const char* native_failure_notice[] = {"lc_notice_admission","lc_notice_discovery","lc_notice_refused","lc_notice_service_lost","lc_notice_timeout"};
+struct native_failure_row { const char* why; native_failure kind; };
+inline constexpr native_failure_row native_failure_table[] = {
+    {"native_open_queue_full",native_failure::setup},{"stale_native_activation",native_failure::setup},{"native_open_request",native_failure::setup},
+    {"native_open_exception",native_failure::setup},{"native_options_seed",native_failure::setup},{"native_options_unavailable",native_failure::setup},
+    {"native_options_activation",native_failure::setup},{"native_options_initialization",native_failure::setup},{"native_options_frame",native_failure::setup},
+    {"native_options_exception",native_failure::setup},{"invalid_native_settings",native_failure::setup},{"host_post_refused",native_failure::setup},
+    {"native_setup_return_unavailable",native_failure::setup},{"host_post_exception",native_failure::setup},{"native_lobby_activation",native_failure::setup},
+    {"native_lobby_skin",native_failure::setup},{"native_lobby_generation",native_failure::setup},{"native_host_refused",native_failure::setup},
+    {"native_join_unavailable",native_failure::setup},
+    {"room_generation_or_service_lost",native_failure::service},{"native_timeout",native_failure::timeout},
+    {"native_search_refused",native_failure::discovery},{"discovery_ambiguous_or_wrong",native_failure::discovery},{"discovery_query_refused",native_failure::discovery},
+    {"host_changed",native_failure::discovery},
+    {"admission_call_refused",native_failure::refused},{"admission_refused",native_failure::refused},{"admission_callback_cleanup",native_failure::refused}};
+inline const native_failure_row* find_native_failure(std::string_view why) {
+    for(const auto& row:native_failure_table) if(why==row.why) return &row;
+    return nullptr;
+}
+inline const char* native_notice(std::string_view why) {
+    const auto* row=find_native_failure(why);
+    return native_failure_notice[std::size_t(row ? row->kind : native_failure::setup)];
+}
+// A refusal's rule names: only the settings the two PCs possibly disagree on (rule-summary buckets collide), allowlisted.
+inline std::string refusal_rules_text(std::string_view names) {
+    std::string out;
+    for(unsigned char c:names) { if(out.size()==44) break;out+=display_byte(c); }
+    return out;
+}
+
+// Lobby inline presentation state, pure so the fixture can drive it: the departed-guest toast (named, six seconds,
+// duplicate/late departures ignored) and the Hub's host-left panel latch.
+inline constexpr std::uint32_t toast_ms=6000;
+struct toast {
+    std::string name;
+    std::uint32_t since=0;
+    bool active=false;
+    void show(std::string_view who,std::uint32_t now) {
+        if(who.empty()) return;
+        if(active && name==who && now-since<toast_ms) return; // a repeated report is the same departure
+        name.assign(who);since=now;active=true;
+    }
+    bool visible(std::uint32_t now) { if(active && now-since>=toast_ms) active=false;return active; }
+    void clear() { active=false;name.clear(); }
+};
+struct roster_watch {
+    unsigned count=0;bool primed=false;
+    unsigned ids[4]{};char names[4][32]{};
+    void clear() { count=0;primed=false; }
+    // The first (lowest row) member of the previous snapshot that is no longer present; "" on the first sight, when
+    // nobody left, or for the local member. Rows are matched by native id AND name so a reused id is not a match.
+    std::string observe(const unsigned* now_ids,const char (*now_names)[32],unsigned n,unsigned local,bool local_known) {
+        std::string gone;
+        if(primed) for(unsigned i=0;i<count && gone.empty();++i) {
+            if(local_known && ids[i]==local) continue;
+            bool present=false;
+            for(unsigned j=0;j<n;++j) if(now_ids[j]==ids[i] && std::strncmp(now_names[j],names[i],31)==0) { present=true;break; }
+            if(!present) gone.assign(names[i],strnlen(names[i],31));
+        }
+        count=n>4 ? 4 : n;
+        for(unsigned i=0;i<count;++i) { ids[i]=now_ids[i];std::strncpy(names[i],now_names[i],31);names[i][31]=0; }
+        primed=true;return gone;
+    }
+};
+struct host_left {
+    bool active=false;
+    std::uint64_t generation=0;
+    void raise() { if(!active) { active=true;++generation; } } // a second report of the same loss changes nothing
+    void dismiss() { active=false; }
+};
 
 inline bool accept_fresh(int p,std::uint32_t captured,std::uint32_t now) {
     return controller_valid(p) && now-captured<=1000;
