@@ -22,7 +22,8 @@ bool menu_begin(bm::operation op) {
 bool menu_list() { if(!menu_begin(bm::operation::list)) return false;++menu_lists;return true; }
 bool menu_host(const std::string& name,bool public_room) { if(!menu_begin(bm::operation::host)) return false;++menu_hosts;menu_last_name=name;menu_last_public=public_room;return true; }
 bool menu_resolve(const std::string& code) { ++menu_resolve_attempts;if(menu_refuse) { menu_broker.refuse("test_mode_on");return false; }if(!menu_begin(bm::operation::resolve)) return false;++menu_resolves;menu_last_code=code;return true; }
-bool menu_retry() { return menu_begin(menu_view().action); }
+// Mirrors online_room::retry(): only a retry_wait/error failure can be retried (the refused phase cannot).
+bool menu_retry() { const auto s=menu_view().state;if(s!=bm::phase::retry_wait && s!=bm::phase::error) return false;return menu_begin(menu_view().action); }
 void menu_cancel() { ++menu_cancels;menu_broker.cancel();menu_broker.stopped(); }
 void menu_leave() { ++menu_leaves;menu_broker.cancel(true);menu_broker.stopped(); }
 std::string menu_version() { return "FIXTURE"; }

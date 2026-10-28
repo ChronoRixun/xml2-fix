@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <set>
 #include <vector>
 #include <deque>
 #include <stdexcept>
@@ -37,6 +38,7 @@ bool back_in_base=false;
 void (*base_mutation)()=nullptr;
 int (__fastcall* lobby_back_callback)(void*,void*)=nullptr;
 bool missing_prompt=false,null_argument=false;
+std::set<std::string> absent_items; // R15: nodes the assets do not author (item lookup fails)
 DWORD clock_stub() { return ticks; }
 std::uint64_t wall_now=123+7300; // the Hub's "N hours ago" is computed against this (stored time 123 => 2 hours)
 std::uint64_t wall_stub() { return wall_now; }
@@ -117,6 +119,7 @@ void __fastcall hide_stub(void*,void*,const char* item,bool value) {
     }
 }
 void* __fastcall item_stub(void*,void*,const char* name) {
+    if(absent_items.count(name)) return nullptr;
     if(mode.starts_with("r4-")) {
         if(std::string_view(name)=="lc_lobby_v1" && !lobby_marker) return nullptr;
         if(std::string_view(name)=="text_playername1") return missing_list ? nullptr : lobby_names.data();

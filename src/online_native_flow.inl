@@ -70,6 +70,7 @@ struct native_command_queue {
 std::uint64_t next_setup_command=0;
 std::array<std::uintptr_t,2> rejected_lobbies{}; // opaque identities only; never dereferenced
 void native_flow_error(const char* why);
+std::uint32_t attempt_refusal_serial=0; // the agreement layer's refusal counter when this attempt began
 std::string native_rules; // the rule names a refusal gave, shown beside lc_notice_refusal_rules (allowlisted text)
 const char* native_phase_word(native_phase p) {
     switch(p) {
@@ -239,7 +240,8 @@ void native_flow_error(const char* why) {
     std::string rules;
     if(std::strcmp(notice,"lc_notice_refused")==0 && broker_calls.refusal_rules) {
         const char* given=broker_calls.refusal_rules();
-        if(given) rules=refusal_rules_text(std::string_view(given,strnlen(given,127))); // a bounded read of the agreement layer's text
+        // Only a refusal that happened during THIS attempt: stale text, or another host's refusal while browsing the LAN, is not ours.
+        if(given && broker_calls.refusal_serial && broker_calls.refusal_serial()!=attempt_refusal_serial) rules=refusal_rules_text(std::string_view(given,strnlen(given,127))); // a bounded read of the agreement layer's text
     }
     if(!rules.empty()) notice="lc_notice_refusal_rules";
     message(notice); // localized LC adapter node
@@ -587,6 +589,7 @@ bool native_flow_tick(screen s) {
     if(native_flow.phase==native_phase::idle && (s==screen::code || s==screen::browse) &&
         view.state==broker::phase::room && view.action==broker::operation::resolve && broker_calls.admission_target) {
         ++native_flow.serial;native_flow.phase=native_phase::tunnel;
+        attempt_refusal_serial=broker_calls.refusal_serial ? broker_calls.refusal_serial() : 0;
         native_flow.ticket=view.generation;native_flow.started=now_ms();
     }
     const auto phase=native_flow.phase;

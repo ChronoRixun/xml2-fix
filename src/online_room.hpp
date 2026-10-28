@@ -44,6 +44,8 @@ namespace online_room
 	// joiner's connection to the host of its room has ended since it connected (latched until the room is left).
 	std::uint32_t retry_in_ms();
 	bool host_lost();
+	// For the code that learns the host removed THIS PC on purpose (a kick): the connection ending after it is not a host loss.
+	void suppress_host_lost();
 #if XML2_FIX_GNS
 	// The identity GNS starts with (str:legends:<hex16> of this install's key); false when rooms are off or the key
 	// could not be loaded (then the PC stays without rooms, logged).

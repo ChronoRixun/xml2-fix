@@ -1185,12 +1185,13 @@ meaning. `online_menus_rules::cause_table` is the one table: key, the next actio
 | `pin_mismatch` | `tls_pin_mismatch`, `invalid_certificate` | back (no bypass) | no |
 | `test_mode` | `test_mode_on` | back | no |
 | `unsupported` | `online_dependencies_unavailable`, `native_discovery_guard`, the two room-guard sentences | other ways | no |
-| `busy` | `transport_identity_busy` | retry | yes, also from the client's refused phase |
+| `busy` | `transport_identity_busy` | wait, then repeat the screen's own action | no (the client's refused phase has no Retry: `online_room::retry()` accepts only retry_wait/error) |
 | `invalid_name` | `invalid_room_name` | back | no |
 | `generic` | everything else, including `malformed_reply`, `internal` and hostile ids | retry | yes |
 
-Retry is **hidden** where it cannot help, and **disabled** (but visible) while the shared 2 s limiter / escalating backoff
-runs; `broker_error` then counts down (`Retry in 7 s`) and returns to the diagnostic. Browse's Refresh is disabled for the
+Retry is **hidden** where it cannot help (and in the refused phase), and **disabled** (but visible) while the shared 2 s limiter /
+escalating backoff runs; `broker_error` then counts down (`Retry in 7 s`) - only for a failure Retry can help - and returns to the
+diagnostic. Browse's Refresh is disabled for the
 same wait (`broker_api::retry_in`; absent seam = no countdown, as before). The limiter is the client's own
 (`client_state::retry_in` is the arithmetic of `may_lookup`); Refresh cannot bypass it.
 
@@ -1211,8 +1212,8 @@ characters), `lc_notice_timeout`, `lc_notice_service_lost` (room generation or s
 `lc_notice_admission`. The reason and phase go to the log (`native flow notice ... (phase: reason)`), never to the screen.
 The existing cleanup (leave the room, request `lc_host` from setup) is unchanged; Retry is the screen's own Done/Open.
 
-**Clipboard.** Paste distinguishes `lc_notice_clipboard` (could not read it: open/size/lock failed) from
-`lc_notice_paste_invalid` (it holds no code); valid typed text is never erased. `read_clipboard_result` is the tri-state;
+**Clipboard.** Paste distinguishes `lc_notice_clipboard` (could not open or lock it) from `lc_notice_paste_invalid` (it holds no
+text, e.g. empty or an image, or no code); valid typed text is never erased. `read_clipboard_result` is the tri-state;
 `read_clipboard` keeps its optional form.
 
 **Lobby inline (the lobby is never closed).** `lc_lobby_error_copy` / `lc_lobby_error_target` name the cause of the old
@@ -1222,14 +1223,27 @@ duplicates ignored, "the party continues; they can rejoin with the code"; `lc_lo
 the service is gone (persistent strip, P2P continues, only new players cannot join).
 
 **Host loss (0.6).** The session ends (native play ends as before); there is **no takeover and no recovery claim**.
-`broker_api::host_lost` (online_room: this joiner's connection to the room's host ended after it was up; latched until the
-room is left) is read in `native_session_cleared` for a guest session, before the room leave resets it, and raises the
+`broker_api::host_lost` (online_room `host_loss_tracker`: this joiner's connection to the room's host ended AFTER the game
+session ran over it (transport bound); a fresh connection to the host clears it; a local Leave/Quit (`leave_after_flush`) or
+`online_room::suppress_host_lost()` - for the code that learns the host removed this PC on purpose, a kick - blocks it for the
+rest of the room; reset on leave) is read in `native_session_cleared` for a guest session, before the room leave resets it, and raises the
 Hub's modal panel: `lc_hub_host_left_veil` + `lc_hub_host_left` + buttons `lc_hostleft_again` (intent Host: Host setup,
 where a new or saved campaign is chosen) and `lc_hostleft_back` (dismiss/Back). While it is up the Hub's rows are disabled
 and every other posted action is ignored; a second report of the same loss changes nothing; a deliberate local leave never
 raises it. The panel shows **no save claim**: 0.6 has no accessor for local saves, so the capsule says to choose a saved
 campaign in Host setup. It appears at the next Hub entry (no automatic menu is opened from the session-end frames).
-Mid-session Load is not in this release: nothing offers it.
+Not detected (and so never claimed): a normal host quit whose notice clears the session before the connection closes, and a kick
+(round 8 must call `suppress_host_lost()` from the path that learns it). The retail terminal clear is the same code for a local
+quit, a host-quit notice and a loss, so it cannot tell them apart; only the connection state can. Live proof of the ordering stays
+pending. Rule names of a refusal are shown only when `refusal_serial` moved during this attempt (the counter the agreement layer
+bumps on every refusal dialog, LAN browsing included).
+
+**Deviation from 07-host-left (coordinator decision).** 0.6 keeps Host again always available (Host setup lets the host choose a
+new or saved campaign) and the capsule makes no claim about a local save (0.6 has no accessor for one); the frame's
+"AVAILABLE LOCAL SAVE / No local save available" and the disabled Host again are not implemented. The panel ends with any route out
+of the Hub (a launcher preset included), is dismissed when its nodes are not authored (assets of an older LC keep the Hub usable),
+and disables the Hub's prompt items (desctext3/4) as well as its rows. A cause the assets do not author falls back to the nearest
+true scene (pin_mismatch -> refused, code_expired -> code_not_found, the rest -> generic). Mid-session Load is not in this release: nothing offers it.
 
 Tests: `xml2_online_menus_test r15-errors` (table-driven id -> cause -> scene/next action/Retry for every row on four
 screens, redacted diagnostics with hostile ids, limiter countdown, retry without restart, duplicate/late errors, build pair,

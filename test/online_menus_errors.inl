@@ -1,13 +1,15 @@
 // Round 15: the complete error table (INGAME-DESIGN section 3.3) - table-driven cause -> scene / next action for every row,
 // redacted diagnostics, every button valid under busy/cancel, duplicate and late errors ignored, native failure notices,
 // the clipboard's two causes, the departed-guest toast, the host-left latch. Invented broker bodies only; no network.
-std::string refusal_text;
+std::string refusal_text;std::uint32_t refusal_count=0;
+void set_refusal(const char* text) { refusal_text=text;++refusal_count; } // a refusal dialog moved the agreement layer's counter
+std::uint32_t menu_refusal_serial() { return refusal_count; }
 bool host_lost_flag=false;
 std::uint32_t menu_retry_in() { return menu_broker.retry_in(ticks); }
 const char* menu_refusal() { return refusal_text.c_str(); }
 bool menu_host_lost() { return host_lost_flag; }
 const online_menus::broker_api menu_api15{menu_available,menu_view,menu_tick,menu_list,menu_host,menu_resolve,menu_retry,menu_cancel,menu_leave,menu_version,
-    menu_take_preset,menu_refresh_due,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,menu_retry_in,menu_refusal,menu_host_lost};
+    menu_take_preset,menu_refresh_due,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,nullptr,menu_retry_in,menu_refusal,menu_host_lost,menu_refusal_serial};
 
 // The table: every id the client can carry, the cause it selects, what the copy tells the player to do, whether Retry shows.
 struct error_row { const char* id; error_cause cause; next_action next; bool retry; };
@@ -26,7 +28,7 @@ const error_row error_rows[]{
     {"online_dependencies_unavailable",error_cause::unsupported,next_action::other_ways,false},{"native_discovery_guard",error_cause::unsupported,next_action::other_ways,false},
     {"online rooms need the receive validation installed ([Online] ReceiveValidation on and the retail network code)",error_cause::unsupported,next_action::other_ways,false},
     {"joining a room needs the LC save format ([Save] Format) installed, which checks the host's campaign before the game loads it",error_cause::unsupported,next_action::other_ways,false},
-    {"transport_identity_busy",error_cause::busy,next_action::retry,true},{"invalid_room_name",error_cause::invalid_name,next_action::back,false},
+    {"transport_identity_busy",error_cause::busy,next_action::wait,false},{"invalid_room_name",error_cause::invalid_name,next_action::back,false},
     {"malformed_reply",error_cause::generic,next_action::retry,true},{"internal",error_cause::generic,next_action::retry,true},
     {"",error_cause::generic,next_action::retry,true},{"weird%s\\^id",error_cause::generic,next_action::retry,true}};
 
@@ -40,7 +42,7 @@ void error_table_pure() {
     assert(std::size(cause_table)==std::size(error_cause_key));
     for(unsigned i=0;i<std::size(cause_table);++i) assert(int(cause_table[i].cause)==int(i));
     // The retry set is exactly the transient causes; nothing else may offer it.
-    unsigned retryable=0;for(const auto& row:cause_table) retryable+=row.retry;assert(retryable==6);
+    unsigned retryable=0;for(const auto& row:cause_table) retryable+=row.retry;assert(retryable==5);
     // Hostile / long / near-miss ids never select a specific cause.
     for(auto id:{"room_full ","TIMEOUT","Room_Full","timeout\n","no_such_room\0x"}) assert(classify_error(std::string_view(id,std::strlen(id)))==error_cause::generic || std::string_view(id)=="no_such_room");
     assert(classify_error(std::string(4000,'x'))==error_cause::generic && classify_error(std::string(4000,'o'))==error_cause::generic);
@@ -48,7 +50,7 @@ void error_table_pure() {
     // Diagnostics: the operation and a known id; anything else is "other" and cannot carry a code, address or secret.
     assert(diagnostic("join","room_full")=="join: room_full" && diagnostic("list","timeout")=="list: timeout" && diagnostic("host","internal")=="host: internal");
     assert(diagnostic("join","")=="join: none");
-    for(auto hostile:{"ABCD-EFGH","K7QN2X9M","10.77.1.2:27015","token=Bearer abc123","weird%s%n","\x01\x02\x7f","ABCD EFGH 192.168.0.1"}) {
+    for(auto hostile:{"ABCD-EFGH","K7QN2X9M","192.0.2.7:27015","token=Bearer abc123","weird%s%n","\x01\x02\x7f","ABCD EFGH 198.51.100.2"}) {
         const auto text=diagnostic("join",hostile);assert(text=="join: other");
     }
     for(const auto& row:error_rows) if(std::strncmp(row.id,"online rooms need",17)==0 || std::strncmp(row.id,"joining a room needs",20)==0) assert(diagnostic("join",row.id)=="join: install_guard");
@@ -107,6 +109,15 @@ void error_models() {
     // Reused native id with a different name: the old name is reported gone.
     roster_watch reuse;assert(reuse.observe(ids,names,3,1,true).empty());char swapped[4][32]{};std::strcpy(swapped[0],"Logan");std::strcpy(swapped[1],"Mallory");std::strcpy(swapped[2],"Alex");
     assert(reuse.observe(ids,swapped,3,1,true)=="Kitty");
+    // The room layer's host-loss tracker: only a connection the game session ran over counts; a fresh connection clears it; a local
+    // Leave/Quit or a removal by the host blocks it for the rest of the room.
+    { online_room_core::host_loss_tracker h;
+      assert(!h.lost());h.ended(false);assert(!h.lost());                                  // never carried the game session
+      h.ended(true);assert(h.lost());h.connected();assert(!h.lost());                      // reconnected: clean slate
+      h.ended(true);h.connected();h.local_departure();h.ended(true);assert(!h.lost());     // reconnect, then a deliberate quit
+      h.reset();h.ended(true);assert(h.lost());h.local_departure();assert(!h.lost());h.ended(true);assert(!h.lost()); // quit after the loss: nothing more
+      h.reset();h.removed_by_host();h.ended(true);assert(!h.lost());h.connected();h.ended(true);assert(!h.lost());      // kicked: not a host loss
+      h.reset();h.ended(true);assert(h.lost());h.reset();assert(!h.lost()); }
     // Host-left latch: one raise per loss; dismiss clears; a second report while up changes nothing.
     host_left h;assert(!h.active);h.raise();assert(h.active && h.generation==1);h.raise();assert(h.generation==1);h.dismiss();assert(!h.active);h.raise();assert(h.generation==2);
 }
@@ -116,7 +127,7 @@ void error_clipboard_causes() {
     std::string out;auto ok=clip("abcd-efgh");assert(read_clipboard_result(ok,out)==clip_result::ok && out=="ABCDEFGH");
     auto closed=clip("ABCDEFGH");closed.available=false;assert(read_clipboard_result(closed,out)==clip_result::unavailable && out.empty() && !closed.locked);
     auto locked=clip("ABCDEFGH");locked.lockable=false;assert(read_clipboard_result(locked,out)==clip_result::unavailable && locked.closed==1);
-    fake_clipboard empty;assert(read_clipboard_result(empty,out)==clip_result::unavailable && empty.closed==1);
+    fake_clipboard empty;assert(read_clipboard_result(empty,out)==clip_result::invalid && empty.closed==1 && !empty.locked); // no text on the clipboard: "no code", not "could not read"
     for(auto text:{"ABCD0FGH","hello world","ABCDEFGHjunk"}) { auto bad=clip(text);assert(read_clipboard_result(bad,out)==clip_result::invalid && bad.closed==1 && bad.unlocked==1); }
     auto odd=clip("ABCDEFGH");odd.byte_size=3;assert(read_clipboard_result(odd,out)==clip_result::invalid);
     auto big=clip("ABCDEFGH");big.byte_size=4098;assert(read_clipboard_result(big,out)==clip_result::invalid);
@@ -139,6 +150,7 @@ void error_table_tests(const script_functions_rules::func_entry* registration) {
     const char* screens[]{"lc_code","lc_browse","lc_host","lc_online"};
     for(const char* name:screens) {
         screen(name);menu_broker.cancel();menu_broker.stopped();ticks+=70000;tick(child.data(),nullptr);
+        if(std::string(name)=="lc_code") { for(int n=32;n<40;++n) { post(static_cast<intent>(n));tick(child.data(),nullptr); } } // a complete code, so Retry resolves it again
         for(const auto& row:error_rows) {
             if(row.cause==error_cause::invalid_name && std::string(name)!="lc_host") continue;
             if(!*row.id) continue;
@@ -162,14 +174,26 @@ void error_table_tests(const script_functions_rules::func_entry* registration) {
             assert(visible==1);
             // Retry: shown for the transient causes (a refused phase shows it only for the busy link), never otherwise;
             // enabled only when the limiter allows a new request.
-            const bool retry_visible=row.retry && (menu_view().state==bm::phase::retry_wait || row.cause==error_cause::busy);
+            const bool retry_visible=row.retry && menu_view().state==bm::phase::retry_wait; // never in the refused phase: online_room::retry() refuses it
             assert(retry_visible ? shown("retry") : gone("retry"));
+            if(row.cause==error_cause::busy) assert(!row.retry && !retry_visible); // F1: no dead Retry in the refused phase
             if(retry_visible) assert(enabled_items["retry"]==(menu_retry_in()==0));
             else assert(!enabled_items["retry"]);
             const auto& diag=texts["broker_error"];
             assert(diag.size()<=64);for(unsigned char c:diag) assert(display_byte(c)==char(c) || c==':');
             assert(diag.find("ABCD")==std::string::npos && diag.find('%')==std::string::npos);
+            // The countdown belongs to Retry: a failure Retry cannot help never counts down.
+            if(!retry_visible) assert(diag.rfind("Retry in",0)!=0);
+            if(row.cause==error_cause::busy) assert(menu_view().state==bm::phase::refused && gone("retry") && !enabled_items["retry"]);
             assert(gone("lc_service_ok") && texts["service"]=="Unavailable");
+            // Press the REAL button: it starts a request exactly when it is visible and the limiter allows it.
+            if(retry_visible) {
+                assert(!enabled_items["retry"] || menu_retry_in()==0);
+                post(intent::retry);tick(child.data(),nullptr);
+                if(menu_retry_in()==0 && enabled_items["retry"]) assert(menu_broker.pending());
+                ticks+=menu_retry_in()+1;tick(child.data(),nullptr);
+                if(!menu_broker.pending()) { assert(enabled_items["retry"]);post(intent::retry);tick(child.data(),nullptr);assert(menu_broker.pending() && gone("retry")); }
+            }
         }
     }
     // The shared limiter counts down on the diagnostic field; Retry waits for it; Refresh cannot bypass it.
@@ -227,6 +251,16 @@ void error_table_tests(const script_functions_rules::func_entry* registration) {
     // Late second disconnect report while the room is open changes nothing.
     menu_broker.disconnected("timeout",ticks);tick(child.data(),nullptr);assert(menu_view().state==bm::phase::room && shown("lc_broker_offline_room"));
     menu_broker.cancel(true);menu_broker.stopped();ticks+=70000;
+    // Assets that lack a new cause's scene (broker/2-only LC) fall back to the nearest true one; assets that author it never show two.
+    screen("lc_code");tick(child.data(),nullptr);
+    for(auto [id,fallback]:{std::pair<const char*,const char*>{"tls_pin_mismatch","refused"},{"room_closed","code_not_found"},{"room_not_joinable","generic"},
+        {"test_mode_on","generic"},{"online_dependencies_unavailable","generic"}}) {
+        const auto cause=classify_error(id);const auto own=std::string("lc_broker_err_")+error_cause_key[int(cause)];
+        absent_items.insert(own);settle();assert(menu_begin(bm::operation::resolve));menu_auth=true;menu_error=id;menu_complete=true;tick(child.data(),nullptr);tick(child.data(),nullptr);
+        assert(shown(std::string("lc_broker_err_")+fallback));
+        absent_items.erase(own);
+    }
+    absent_items.clear();
     // No service at all: no scene, no diagnostic, no Retry.
     menu_up=false;screen("lc_browse");tick(child.data(),nullptr);
     for(unsigned i=0;i<std::size(error_cause_key);++i) assert(gone(std::string("lc_broker_err_")+error_cause_key[i]));

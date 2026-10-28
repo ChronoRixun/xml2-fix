@@ -31,6 +31,8 @@ namespace gameplay_agreement
  bool contributed();
  // The rule names the most recent settings refusal gave (e.g. "DeathRule, GnsTransport"), or "" when none was known. Read-only.
  const char* refusal_rules();
+ // Moves on every refusal dialog (LAN browsing of other hosts included): rules are trusted only when it moved during the caller's attempt.
+ std::uint32_t refusal_serial();
  void show_install_failure();
  int receive_request(void* event);
  int receive_reply(void* event);

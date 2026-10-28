@@ -51,6 +51,7 @@ struct broker_api {
     std::uint32_t (*retry_in)()=nullptr;
     const char* (*refusal_rules)()=nullptr;
     bool (*host_lost)()=nullptr;
+    std::uint32_t (*refusal_serial)()=nullptr; // with refusal_rules: names are shown only for a refusal that happened during this attempt
 };
 void keyboard(unsigned char* state);
 bool requested();

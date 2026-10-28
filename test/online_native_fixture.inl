@@ -27,7 +27,7 @@ bool leave_armed=false,leave_throws=false;unsigned leave_arms=0;
 void menu_leave_deferred() { ++leave_arms;if(leave_throws) throw std::runtime_error("injected room failure");leave_armed=true; }
 void menu_leave_checked() { if(leave_throws) throw std::runtime_error("injected room failure");menu_leave(); } // immediate leave seam
 void menu_leave_tick() { if(leave_armed) { leave_armed=false;menu_leave(); } }
-const online_menus::broker_api api{menu_available,menu_view,menu_tick,menu_list,menu_host,menu_resolve,menu_retry,menu_cancel,menu_leave_checked,menu_version,menu_take_preset,menu_refresh_due,host_native,target,posted,nullptr,menu_leave_deferred,nullptr,nullptr,menu_retry_in,menu_refusal,menu_host_lost};
+const online_menus::broker_api api{menu_available,menu_view,menu_tick,menu_list,menu_host,menu_resolve,menu_retry,menu_cancel,menu_leave_checked,menu_version,menu_take_preset,menu_refresh_due,host_native,target,posted,nullptr,menu_leave_deferred,nullptr,nullptr,menu_retry_in,menu_refusal,menu_host_lost,menu_refusal_serial};
 void* __cdecl string_pool() { return pool.data(); }
 bool __fastcall input_ok(void*,void*,unsigned,int) { return true; }
 void __fastcall pop(void*,void*,const char* name,int) {
@@ -283,12 +283,17 @@ void run(const script_functions_rules::func_entry* registration) {
     event(9);tick(child.data(),nullptr);assert(menu_view().state==bm::phase::idle && vis("lc_notice_refused") && notice_count()==1 && texts["lc_refusal_rules"].empty());
     cancel();
     resolve();tick(child.data(),nullptr);reply();tick(child.data(),nullptr);
-    refusal_text="DeathRule, GnsTransport";event(9);tick(child.data(),nullptr);
+    set_refusal("DeathRule, GnsTransport");event(9);tick(child.data(),nullptr);
     assert(menu_view().state==bm::phase::idle && vis("lc_notice_refusal_rules") && notice_count()==1 && texts["lc_refusal_rules"]=="DeathRule, GnsTransport");
     cancel();tick(child.data(),nullptr);assert(texts["lc_refusal_rules"].empty());
     refusal_text.clear();
+    // F4: rules left by an EARLIER refusal (or another host's, seen while browsing the LAN) are not this attempt's: they are never shown.
+    set_refusal("Stale, Other host");
     resolve();tick(child.data(),nullptr);reply();tick(child.data(),nullptr);
-    refusal_text="Bad%s\n\"names ABCD-EFGH 10.0.0.1 and more and more and more words";event(9);tick(child.data(),nullptr);
+    event(9);tick(child.data(),nullptr);assert(vis("lc_notice_refused") && !vis("lc_notice_refusal_rules") && notice_count()==1 && texts["lc_refusal_rules"].empty());
+    cancel();
+    resolve();tick(child.data(),nullptr);reply();tick(child.data(),nullptr);
+    set_refusal("Bad%s\n\"names ABCD-EFGH 10.0.0.1 and more and more and more words");event(9);tick(child.data(),nullptr);
     assert(vis("lc_notice_refusal_rules") && texts["lc_refusal_rules"].size()==44);
     for(unsigned char c:texts["lc_refusal_rules"]) assert(display_byte(c)==char(c));
     refusal_text.clear();cancel();
@@ -552,7 +557,7 @@ void review_run(const script_functions_rules::func_entry* registration) {
         // 0x612c40 / 0x6133a0); (b) the room leave waits for the transport tick after the quit notices retail just queued.
         const bool throws=original_mode.find("-throw-")!=std::string::npos;leave_throws=throws;
         // Round 15: the room layer reports that this guest's connection to the host ended (never set for a local leave).
-        host_lost_flag=original_mode=="r6-end-loss-guest" || original_mode=="r6-end-disconnect-guest";
+        host_lost_flag=original_mode=="r6-end-loss-guest" || original_mode=="r6-end-disconnect-guest" || original_mode=="r6-end-loss-preset-guest" || original_mode=="r6-end-loss-noassets-guest";
         bool escaped=false;
         try {
             if(original_mode.starts_with("r6-end-quit-") || original_mode=="r6-nit-end" || original_mode=="r6-nit-end-guest") {
@@ -586,16 +591,29 @@ void review_run(const script_functions_rules::func_entry* registration) {
             // The 0.6 host-left panel: shown at the next Hub only when the host connection was lost, modal while up (Host again
             // and Back act, everything else is ignored), never for a deliberate local leave, and raised once per loss.
             restore_services();redirect(0x5d8920,manager_stub);redirect(0x48de40,seats_stub); // the end chain redirected the manager/seat getters; the Hub ticks on the harness manager again
+            const bool noassets=original_mode=="r6-end-loss-noassets-guest";
+            // F5: assets that do not author the panel (an older LC) must never leave the Hub rows disabled behind nothing.
+            if(noassets) absent_items={"lc_hub_host_left","lc_hub_host_left_veil","lc_hostleft_again","lc_hostleft_back"};
             screen("lc_online");tick(child.data(),nullptr);
-            const bool lost=host_lost_flag;
-            if(!lost) assert(hid("lc_hub_host_left") && hid("lc_hostleft_again") && !enabled_items["lc_hostleft_again"] && enabled_items["host"]);
+            const bool lost=host_lost_flag && !noassets;
+            if(noassets) {
+                assert(enabled_items["host"] && enabled_items["code"] && enabled_items["browse"] && enabled_items["other"] && enabled_items["desctext3"] && enabled_items["desctext4"]);
+                const auto before=calls.size();post(intent::browse);tick(child.data(),nullptr);assert(calls.back()=="request:lc_browse" && calls.size()==before+1);
+                absent_items.clear();
+            } else if(!lost) assert(hid("lc_hub_host_left") && hid("lc_hostleft_again") && !enabled_items["lc_hostleft_again"] && enabled_items["host"]);
             else {
                 assert(vis("lc_hub_host_left") && vis("lc_hostleft_again") && vis("lc_hostleft_back") && enabled_items["lc_hostleft_again"] && enabled_items["lc_hostleft_back"]);
                 assert(!enabled_items["host"] && !enabled_items["code"] && !enabled_items["browse"] && !enabled_items["other"] && !enabled_items["change_name"] && !enabled_items["rejoin"]);
+                assert(!enabled_items["desctext3"] && !enabled_items["desctext4"]); // the prompt items that repeat Change name / Rejoin cannot take focus behind the veil
                 const auto before=calls.size();
                 for(auto ignored:{intent::browse,intent::code,intent::other,intent::edit_name,intent::rejoin,intent::unavailable}) { post(ignored);tick(child.data(),nullptr); }
                 assert(calls.size()==before && vis("lc_hub_host_left"));
-                if(original_mode=="r6-end-loss-guest") {
+                if(original_mode=="r6-end-loss-preset-guest") {
+                    // F5: a launcher preset leaves the Hub: the panel ends with it (it must not wait for the next Hub entry).
+                    menu_launch={bm::operation::host,{},"Preset room",true};menu_has_preset=true;
+                    tick(child.data(),nullptr);assert(calls.back()=="request:lc_host");
+                    screen("lc_online");tick(child.data(),nullptr);assert(hid("lc_hub_host_left") && enabled_items["host"] && enabled_items["desctext3"]);
+                } else if(original_mode=="r6-end-loss-guest") {
                     post(intent::host);tick(child.data(),nullptr);assert(calls.back()=="request:lc_host");
                 } else {
                     post(intent::back);tick(child.data(),nullptr);assert(calls.size()==before && hid("lc_hub_host_left") && enabled_items["host"] && !enabled_items["lc_hostleft_again"]);

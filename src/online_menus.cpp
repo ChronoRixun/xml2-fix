@@ -549,7 +549,7 @@ bool offline_fixture = false;
 #if XML2_FIX_GNS
 void production_broker_tick() { online_room::ui_tick(); gns_transport::room_ui_tick(); }
 broker_api broker_calls{online_room::available,online_room::view,production_broker_tick,online_room::list,
-    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due,online_room::host_native,online_room::admission_target,online_room::host_posted,join_in_progress::installed,online_room::leave_after_flush,online_room::party,online_room::room_rtt,online_room::retry_in_ms,gameplay_agreement::refusal_rules,online_room::host_lost};
+    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due,online_room::host_native,online_room::admission_target,online_room::host_posted,join_in_progress::installed,online_room::leave_after_flush,online_room::party,online_room::room_rtt,online_room::retry_in_ms,gameplay_agreement::refusal_rules,online_room::host_lost,gameplay_agreement::refusal_serial};
 #else
 broker_api broker_calls{};
 #endif
@@ -563,8 +563,24 @@ unsigned browse_offset = 0, browse_selected = 0;
 std::string browse_code, host_room_name;
 // Every per-cause error scene the DLL may select is lc_broker_err_<error_cause_key[i]> (LC authors the localized copy per
 // screen; absent nodes are skipped).
+// A cause the assets do not author (broker/2-only LC) falls back to the nearest scene that is true of it.
+int fallback_cause(int i) {
+    switch(error_cause(i)) {
+    case error_cause::pin_mismatch: return int(error_cause::refused);
+    case error_cause::code_expired: return int(error_cause::code_not_found);
+    case error_cause::room_closed: case error_cause::test_mode: case error_cause::unsupported:
+    case error_cause::busy: case error_cause::invalid_name: return int(error_cause::generic);
+    default: return -1;
+    }
+}
 void hide_error_scenes(void* menu,int shown=-1) {
-    for(unsigned i=0;i<std::size(error_cause_key);++i) hide(menu,(std::string("lc_broker_err_")+error_cause_key[i]).c_str(),int(i)!=shown);
+    bool authored=true;
+    for(unsigned i=0;i<std::size(error_cause_key);++i) {
+        const bool usable=hide(menu,(std::string("lc_broker_err_")+error_cause_key[i]).c_str(),int(i)!=shown);
+        if(int(i)==shown) authored=usable;
+    }
+    const int fb=shown>=0 && !authored ? fallback_cause(shown) : -1;
+    if(fb>=0) hide(menu,(std::string("lc_broker_err_")+error_cause_key[fb]).c_str(),false);
 }
 std::uint32_t retry_wait_ms() { return broker_calls.retry_in ? broker_calls.retry_in() : 0; }
 bool host_public = false;
@@ -650,9 +666,11 @@ void bind_broker(void* menu,screen s) {
     // Exactly one cause scene while failed. The raw id stays a bounded diagnostic and is never a command.
     const auto cause=classify_error(v.error);
     hide_error_scenes(menu,failed ? int(cause) : -1);
-    // The shared limiter/backoff countdown: Retry stays visible but cannot be used until a new request may start, and the
-    // diagnostic field counts down meanwhile (Refresh cannot bypass the limiter either).
-    const auto wait=failed ? retry_wait_ms() : 0;
+    // Retry: hidden where it cannot help and in the client's refused phase (online_room::retry() only accepts retry_wait/error;
+    // the screen's own Done/Open/Refresh starts the next attempt there). Visible but disabled during the shared limiter/backoff,
+    // and the diagnostic field counts down meanwhile - only where Retry is allowed (Refresh cannot bypass the limiter either).
+    const bool retry_ok=(v.state==broker::phase::retry_wait || v.state==broker::phase::error) && cause_retryable(cause);
+    const auto wait=failed && retry_ok ? retry_wait_ms() : 0;
     // Redacted diagnostic: the operation and a known id only (never broker text, codes or addresses). Native notices name
     // their step in the copy itself and log the fixed internal reason.
     // Another build: the diagnostic field names both tokens instead (<= 8 allowlisted characters each; the host's token only
@@ -666,8 +684,6 @@ void bind_broker(void* menu,screen s) {
     hide(menu,"lc_broker_offline_room",v.state!=broker::phase::room || v.authenticated);
     // Retry is hidden, not merely disabled, where trying again cannot help (wrong code, full room, other build,
     // refused service); the client's refused phase never retries either.
-    // The busy native link is a refusal of the moment (the room layer re-checks it on every attempt), so it keeps Retry.
-    const bool retry_ok=(v.state==broker::phase::retry_wait || v.state==broker::phase::error || (v.state==broker::phase::refused && cause==error_cause::busy)) && cause_retryable(cause);
     hide(menu,"retry",!retry_ok);
     enable(menu,"retry",retry_ok && wait==0);
     if(s==screen::code) {
@@ -1595,6 +1611,7 @@ void tick_impl(void* menu,bool& native_called) {
     }
     if(!destination && native_flow_tick(s)) return;
     if(destination) {
+        if(s==screen::hub) host_left_state.dismiss(); // leaving the Hub by any route (a launcher preset included) ends the panel
         if(s==screen::code) { code.close(); fixture_ticket=0; }
         pending.clear();keyboard_input.clear();error_visible=false;accepted=-1;
         if(!abandon_name()) { show_notice(menu);return; }
@@ -1619,13 +1636,21 @@ void tick_impl(void* menu,bool& native_called) {
     for(const auto* item:{"last_name","last_code","last_time"}) hide(menu,item,!recent);
     hide(menu,"lc_recent_empty",bool(recent));
     if(s==screen::hub) {
-        const bool panel=host_left_state.active;
-        enable(menu,"rejoin",bool(recent) && !panel);
+        bool panel=host_left_state.active;
         // The 0.6 host-left panel (07-host-left, with only the section 5 body/button variants): modal, Host again / Back to Online.
-        // The rows beneath cannot be activated while it is up.
-        for(const auto* row:{"host","code","browse","other","change_name"}) enable(menu,row,!panel);
-        hide(menu,"lc_hub_host_left_veil",!panel);hide(menu,"lc_hub_host_left",!panel);
-        for(const auto* button:{"lc_hostleft_again","lc_hostleft_back"}) { hide(menu,button,!panel);enable(menu,button,panel); }
+        const bool veil=hide(menu,"lc_hub_host_left_veil",!panel),card=hide(menu,"lc_hub_host_left",!panel),
+            again=hide(menu,"lc_hostleft_again",!panel),back=hide(menu,"lc_hostleft_back",!panel);
+        if(panel && !(veil && card && again && back)) {
+            // Assets without the panel (an older LC): never disable the rows behind a panel nobody can see.
+            logger::write_once("online-host-left-assets","online menus: the host-left panel is not authored in these assets; the Hub stays usable");
+            host_left_state.dismiss();panel=false;
+            for(const auto* node:{"lc_hub_host_left_veil","lc_hub_host_left","lc_hostleft_again","lc_hostleft_back"}) hide(menu,node,true);
+        }
+        enable(menu,"rejoin",bool(recent) && !panel);
+        // The rows (and the prompt items that repeat them: desctext3 Change name, desctext4 Rejoin) cannot be activated or
+        // focused behind the veil.
+        for(const auto* row:{"host","code","browse","other","change_name","desctext3","desctext4"}) enable(menu,row,!panel);
+        for(const auto* button:{"lc_hostleft_again","lc_hostleft_back"}) enable(menu,button,panel);
         // Focus follows the modal: onto Host again when it opens, back onto the Hub's Host row when it closes.
         if(panel!=hub_panel_shown) { hub_panel_shown=panel;lobby_focus(menu,panel ? "lc_hostleft_again" : "host"); }
     }

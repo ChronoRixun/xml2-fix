@@ -80,14 +80,13 @@ inline std::optional<std::string> parse_code(std::string_view in) {
     return out;
 }
 // Adapter is also driven by host lock/open/size failures. Never retries/waits.
-// unavailable: the clipboard could not be read at all (open/size/lock failed); invalid: it was read and holds no code.
+// unavailable: the clipboard could not be opened or locked; invalid: it was read (or holds no text at all) and has no code.
 enum class clip_result { ok, unavailable, invalid };
 template<class Clipboard> clip_result read_clipboard_result(Clipboard& api, std::string& out) {
     out.clear();
     if(!api.open()) return clip_result::unavailable;
     struct closer { Clipboard& api; ~closer() { api.close(); } } close{api};
     const auto bytes=api.size();
-    if(!bytes) return clip_result::unavailable;
     if(bytes<2 || bytes>4096 || bytes%2) return clip_result::invalid;
     const auto* data=api.lock(); if(!data) return clip_result::unavailable;
     struct unlocker { Clipboard& api; ~unlocker() { api.unlock(); } } unlock{api};
@@ -253,8 +252,8 @@ inline constexpr const char* error_cause_key[] = {"code_not_found","room_full","
     "pin_mismatch","code_expired","room_closed","test_mode","unsupported","busy","invalid_name"};
 static_assert(std::size(error_cause_key)==std::size_t(error_cause::count));
 // What the failure's copy tells the player to do next. LC's copy names it; retry is the only one that is a control.
-enum class next_action { retry, edit_code, browse, other_ways, back };
-inline constexpr const char* next_action_key[] = {"retry","edit_code","browse","other_ways","back"};
+enum class next_action { retry, edit_code, browse, other_ways, back, wait };
+inline constexpr const char* next_action_key[] = {"retry","edit_code","browse","other_ways","back","wait"};
 struct cause_row { error_cause cause; next_action next; bool retry; };
 // One row per cause, in enum order.
 inline constexpr cause_row cause_table[] = {
@@ -271,7 +270,7 @@ inline constexpr cause_row cause_table[] = {
     {error_cause::room_closed,     next_action::retry,      true},   // bounded: the client's shared limiter paces every retry
     {error_cause::test_mode,       next_action::back,       false},
     {error_cause::unsupported,     next_action::other_ways, false},
-    {error_cause::busy,            next_action::retry,      true},
+    {error_cause::busy,            next_action::wait,       false},  // a refusal of the moment: no Retry control (the screen's own action repeats it)
     {error_cause::invalid_name,    next_action::back,       false}};
 static_assert(std::size(cause_table)==std::size_t(error_cause::count));
 inline constexpr const cause_row& row_of(error_cause c) { return cause_table[std::size_t(c)]; }
