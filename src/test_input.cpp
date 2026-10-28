@@ -636,6 +636,28 @@ namespace test_input
 				logger::write("test: %s -> %s", line.c_str(), reply.c_str());
 				return reply;
 			}
+			case command::kind::chars:
+			{
+				// One WM_CHAR per character with a gap: the game's text entry keeps a single byte per frame.
+				std::string reply = "ok";
+				std::size_t sent = 0;
+				for (const char c : cmd.text)
+				{
+					reply = display::test_char(static_cast<unsigned char>(c));
+					if (reply.rfind("error", 0) == 0)
+					{
+						break;
+					}
+					++sent;
+					Sleep(test_input_rules::char_gap_ms);
+				}
+				if (reply.rfind("error", 0) != 0)
+				{
+					reply = "ok " + std::to_string(sent) + " characters";
+				}
+				logger::write("test: chars (%zu of %zu) -> %s", sent, cmd.text.size(), reply.c_str());
+				return reply;
+			}
 			default:
 				logger::write("test: rejected '%s': %s", line.c_str(), cmd.error.c_str());
 				return "error " + cmd.error;

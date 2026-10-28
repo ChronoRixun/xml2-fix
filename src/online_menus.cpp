@@ -77,6 +77,8 @@ input_inbox keyboard_input;
 std::optional<std::string> rejoin_seed;
 std::atomic<DWORD> game_thread{0},keyboard_thread{0};
 bool back_held=false;
+bool (*pad_probe)(int)=nullptr; // see screen_mask
+int menu_player=0;               // the controller that opened the Hub (its Accept press)
 std::optional<recent_game> recent;
 bool recent_loaded=false;
 std::uint64_t fixture_ticket=0;
@@ -445,7 +447,7 @@ void request_impl(void* m,const char* name,const char* args) {
         const int p=accepted; accepted=-1;
         native_engine engine;
         if(initialize(engine,p)) {
-            entry.start(source_id,now_ms());error_visible=false;
+            entry.start(source_id,now_ms());error_visible=false;menu_player=p;
             logger::write("online menus: entry initialized once, controller=%d; Hub requested; no broker operation",p);
             at<request_fn>(0x5d5db0)(m,"lc_online",nullptr);return;
         }
@@ -1506,6 +1508,11 @@ void __fastcall on_back(void* menu,void*) {
 unsigned input_mask() {
     unsigned mask=0;lobby_current_mask(mask);return mask;
 }
+// Whether the hub's player is shown the pad (pad_prompts' device tracker; wired by exports.cpp). Without it - Prompts=off,
+// the prompts patch refused, a host fixture - the raw bits are read as they were.
+unsigned screen_mask(unsigned raw) {
+    return pad_probe && pad_probe(menu_player) ? pad_menu_mask(raw) : raw;
+}
 void schedule_fixture(bool retry=false) {
     if(broker_live()) {
         if(resolve_edit && (resolve_edit!=code.generation || code.text.size()!=8)) broker_cancel(broker_view().state==broker::phase::room);
@@ -1784,14 +1791,14 @@ void tick_impl(void* menu,bool& native_called) {
     if(ready && live(menu)) {
         // The native mask is rising-edge input (controller +2f8 XOR +374).
         // Keyboard text already posted by DirectInput wins over X/Y bindings.
-        const auto mask=input_mask();
+        const auto mask=screen_mask(input_mask());
         if(!(mask&0x200000)) back_held=false;
         const auto s=which(menu);
         if(!pending.action && !keyboard_input.count) {
             int shortcut=0;
             if(s==screen::code) {
-                if(mask&0x400000) shortcut=int(intent::paste); // MENU_NEXT (Y)
-                else if(mask&0x1000000) shortcut=int(intent::clear); // MENU_OTHER (X)
+                if(mask&0x400000) shortcut=int(intent::paste); // MENU_NEXT: pad Y (screen_mask), RT, keyboard KP5
+                else if(mask&0x1000000) shortcut=int(intent::clear); // MENU_OTHER: pad X (screen_mask), keyboard Del
                 else if(mask&0x100000) shortcut=int(intent::done); // MENU_OK (Start)
             } else if(s==screen::hub) {
                 if(mask&0x1000000) shortcut=int(intent::edit_name);
@@ -2055,6 +2062,12 @@ void keyboard(unsigned char* state) {
 
 bool requested() { return enabled(ini::text(L"Online",L"Menus")); }
 bool installed() { return ready; }
+void set_pad_probe(bool (*probe)(int player)) { pad_probe=probe; }
+bool pad_prompt_scope() {
+    if(!ready) return false;
+    auto* menu=current_peek();
+    return menu && custom(which(menu));
+}
 patch_transaction::contribution contribution() {
     patch_transaction::contribution c;
     c.owner="online menus";

@@ -103,6 +103,7 @@ void disable_multisampling(const char*) { assert(false); }
 void show_without_focus(const char*) { assert(false); }
 void enable_test_pointer() { assert(false); }
 std::string test_pointer(UINT,int,int) { assert(false);return {}; }
+std::string test_char(unsigned) { assert(false);return {}; }
 }
 namespace frame_capture {
 std::string read_back_buffer(void*,frame&) { assert(false);return {}; }

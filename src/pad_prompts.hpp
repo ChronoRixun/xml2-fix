@@ -24,4 +24,10 @@ namespace pad_prompts
 	// Current play binding for one HUD power slot (attack, smash, boost, Xtreme).
 	// Uses the existing device tracker; null when prompts were not installed.
 	const char* gameplay_power_label(int player, int slot);
+	// Whether the prompts of this player (0-3) show the pad right now (false: the keyboard, or prompts not installed).
+	bool pad_shown(int player);
+	// `scope()` is true while the co-op screens (Hub, Host, Code, Browse, Party) are current: on them a pad's X and Y are the
+	// screens' own buttons (online_menus_rules.hpp pad_menu_mask), so the tokens $MENU_OTHER and $MENU_NEXT are drawn as the
+	// bindings of X and Y when the pad is shown. Set before install(); null: the game's labels everywhere.
+	void set_menu_scope(bool (*scope)());
 }

@@ -87,4 +87,7 @@ namespace display
 	// (X,Y: the point the engine got) or "error ...". The real cursor is never read or moved.
 	void enable_test_pointer();
 	std::string test_pointer(unsigned message, int x, int y);
+	// The pipe's `chars`: one WM_CHAR (1-255) to the engine's window procedure on the window's thread, the way a real
+	// keyboard's character reaches the game's text entry. Same switch and window as test_pointer; "ok" or "error ...".
+	std::string test_char(unsigned character);
 }

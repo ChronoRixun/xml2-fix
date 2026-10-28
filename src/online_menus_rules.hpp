@@ -60,6 +60,32 @@ inline bool party_intent(int value) {
 }
 inline bool party_accepts(int value) { return value==int(intent::back) || value==int(intent::dismiss) || party_intent(value); }
 inline bool lobby(screen s) { return s==screen::lobby_host || s==screen::lobby_join; }
+
+// ---- Pad buttons on the co-op screens (the 060p live round, failure 8) ----------------------------------------------
+// The menu input mask (controller vtable +0x13c, 0x5d4b00) has one bit per UI code, and the engine raises a code when the
+// player's binding of the code's action (0x619c40: code -> action) is pressed. The fix's console pad layout binds Guard to
+// X, Jump to Y and Power to RT, so on a pad:
+//   X  = action 7 Guard = code 8 MENU_SUBTRACT (mask 0x100)
+//   Y  = action 6 Jump  = code 0x18 MENU_OTHER (mask 0x1000000) (and code 6)
+//   RT = action 8 Power = code 0x16 MENU_NEXT  (mask 0x400000)  (and code 7)
+// The approved designs (INGAME-DESIGN, claude-design 01-04) put Change name / Clear / Kick / Ready on X and Rejoin / Paste /
+// Refresh / Copy on Y. Rounds 2-8 had taken MENU_OTHER for X and MENU_NEXT for Y (the comments said so, the host fixtures
+// fed the bits directly), so on a real pad X did nothing and Y did X's job. The keyboard keeps the engine's own keys
+// (MENU_OTHER = Del, MENU_NEXT = KP5 in the menus' third binding slot), so the swap is for a pad only.
+inline constexpr unsigned mask_subtract = 1u<<8;   // MENU_SUBTRACT: a pad's X
+inline constexpr unsigned mask_next = 1u<<0x16;    // MENU_NEXT: RT on a pad, KP5 on the keyboard
+inline constexpr unsigned mask_other = 1u<<0x18;   // MENU_OTHER: Y on a pad, Del on the keyboard
+// What a custom co-op screen reads from the raw mask when the player's prompts show the pad: X is the screen's "other"
+// button, Y its "next" button, RT stays an alias of next (it was the old Rejoin / Paste button). Every other bit is kept.
+inline constexpr unsigned pad_menu_mask(unsigned raw) {
+    unsigned out=raw & ~(mask_subtract|mask_next|mask_other);
+    if(raw & mask_subtract) out|=mask_other;
+    if(raw & (mask_other|mask_next)) out|=mask_next;
+    return out;
+}
+// The UI code a pad prompt must name on those screens, so the label is the button that now does the job: the token
+// $MENU_OTHER (code 0x18) is drawn as the binding of code 8 (X), $MENU_NEXT (0x16) as the binding of code 0x18 (Y).
+inline constexpr int pad_prompt_code(int code) { return code==0x18 ? 8 : code==0x16 ? 0x18 : code; }
 inline bool controller_valid(int p) { return p>=0 && p<4; }
 inline bool enabled(std::optional<std::string_view> value) {
     return value && ini_rules::value_text(*value)=="1";
@@ -116,8 +142,9 @@ template<class Clipboard> clip_result read_clipboard_result(Clipboard& api, std:
     for(std::size_t i=0;i<count;++i) {
         const auto c=data[i];
         if(!c) {
-            // Zero padding is fine; a hidden second string is not a code.
-            for(std::size_t tail=i+1;tail<bytes/2;++tail) if(data[tail]) return clip_result::invalid;
+            // The text ends at its first terminator, as for every clipboard reader. GlobalAlloc without GMEM_ZEROINIT
+            // leaves the spare bytes after it unspecified, and real clipboards do carry them (the 060p live round
+            // refused a valid abcd-efgh on a tail check); only what precedes the terminator can become a code.
             auto code=parse_code(text);
             if(!code) return clip_result::invalid;
             out=*code;return clip_result::ok;

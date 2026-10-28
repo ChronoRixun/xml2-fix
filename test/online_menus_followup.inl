@@ -121,9 +121,12 @@ void follow_tests(const script_functions_rules::func_entry* registration) {
         clipboard_text(std::string(248,' ')+"ABCDEFGH");post(intent::paste);tick(child.data(),nullptr);assert(texts["code_value"]=="ABCD-EFGH" && clip_unlocked==1);
         post(intent::erase);tick(child.data(),nullptr);
         clipboard_text(std::string("ABCDEFGH\0junk",13));post(intent::paste);tick(child.data(),nullptr);
-        assert(texts["code_value"]=="ABCD-EFG_" && clip_unlocked==1 && !visibility["lc_notice_paste_invalid"]);
-        clipboard_text(std::string("ABC\0DEFGH",9));post(intent::paste);tick(child.data(),nullptr);assert(texts["code_value"]=="ABCD-EFG_");
-        std::cout<<"follow clipboard PASS NULL handle/zero size, exactly 256 characters with whitespace, embedded NUL suffix rejection, balanced release\n";return;
+        // 060p live round: the text ends at its first terminator; the words after it are the allocation's unspecified spare bytes
+        // (a strict-tail check refused a valid abcd-efgh). Only what precedes the terminator can become a code.
+        assert(texts["code_value"]=="ABCD-EFGH" && clip_unlocked==1);
+        post(intent::erase);tick(child.data(),nullptr);
+        clipboard_text(std::string("ABC\0DEFGH",9));post(intent::paste);tick(child.data(),nullptr);assert(texts["code_value"]=="ABCD-EFG_"); // "ABC" is not a code
+        std::cout<<"follow clipboard PASS NULL handle/zero size, exactly 256 characters with whitespace, text up to the terminator (spare bytes after it ignored), balanced release\n";return;
     }
     if(mode.starts_with("follow-storage-")) {
         if(mode=="follow-storage-128" || mode=="follow-storage-129" || mode=="follow-storage-crlf") {

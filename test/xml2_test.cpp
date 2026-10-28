@@ -4740,6 +4740,24 @@ namespace
 		      parse_command("mouse - 2").what == command::kind::unknown && parse_command("mouse 1 2 click 3").what == command::kind::unknown);
 		CHECK(parse_command("frob").error.find("mouse") != std::string::npos);
 
+		// `chars`: WM_CHAR text for the game's own text entry (the 060p live round could not type a name: the DirectInput
+		// keys never reach it; the engine keeps a WM_CHAR's byte at 0xa0a061, read by the text entry's tick 0x5e72f0).
+		cmd = parse_command("chars Wolverine-99");
+		CHECK(cmd.what == command::kind::chars && cmd.text == "Wolverine-99");
+		cmd = parse_command("chars \\bX\\s\\r");
+		CHECK(cmd.what == command::kind::chars && cmd.text == std::string("\x08" "X \x0d"));
+		cmd = parse_command("CHARS \\e");
+		CHECK(cmd.what == command::kind::chars && cmd.text == "\x1b");
+		cmd = parse_command("chars a\\x41\\\\");
+		CHECK(cmd.what == command::kind::chars && cmd.text == "aA\\");
+		cmd = parse_command("chars " + std::string(128, 'a'));
+		CHECK(cmd.what == command::kind::chars && cmd.text.size() == 128);
+		for (const auto* bad : {"chars", "chars \\", "chars \\q", "chars \\x00", "chars \\x4", "chars caf\xc3\xa9"})
+		{
+			CHECK(parse_command(bad).what == command::kind::unknown && !parse_command(bad).error.empty());
+		}
+		CHECK(parse_command("chars " + std::string(129, 'a')).what == command::kind::unknown);
+
 		// "wm" (posted key messages) is gone: the Advanced Options panel reads the DirectInput
 		// keyboard, so a stale client is told to use tap.
 		cmd = parse_command("wm DOWN");

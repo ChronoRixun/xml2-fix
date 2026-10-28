@@ -65,6 +65,11 @@ struct broker_api {
 void keyboard(unsigned char* state);
 bool requested();
 bool installed();
+// Pad buttons on the co-op screens (online_menus_rules.hpp pad_menu_mask): `probe(player)` says whether that player's
+// prompts show the pad (pad_prompts::pad_shown, wired by exports.cpp; null reads the raw menu mask). pad_prompt_scope() is
+// true while one of the custom screens (Hub, Host, Code, Browse, Party; not the native lobbies) is the current menu.
+void set_pad_probe(bool (*probe)(int player));
+bool pad_prompt_scope();
 // Optional host seams; production uses nullptr. Callback pointers are copied,
 // not retained through this options object. No game/menu pointers cross threads.
 struct install_hooks {
