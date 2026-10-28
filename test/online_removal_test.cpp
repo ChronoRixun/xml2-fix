@@ -2,7 +2,8 @@
 // seeded fuzzing, and the in-session Party Kick between simulated machines (the host, the removed member B, a third member
 // C) over a lossy room wire: the host's sender with the real Party report sequence it heard (online_party_core::model), the
 // members' receivers with their own report sequences and connection floors, the room layer's host-loss tracker, and the
-// GNS framing's view of kind 9 (gns_transport_core::parse). Pure: no Windows, GNS or game calls. Optional argument: fuzz rounds.
+// GNS framing's view of kind 9 (gns_transport_core::parse), and the transport's delivery decisions. Pure: no Windows, GNS or
+// game calls (the room glue runs for real in xml2_online_broker_test). Optional argument: fuzz rounds.
 #include "online_removal_core.hpp"
 #include "online_party_core.hpp"
 #include "online_room_core.hpp"
@@ -93,6 +94,8 @@ namespace
 		bool leaving() const { return !session && rx.removed(); }
 		// The host connection ends (the host dropped it at the resend bound, or the host quit).
 		void host_ended() { loss.ended(true); host_connected = false; session = false; }
+		// online_room on_status: the host closed this PC's host connection with rule 64's close text.
+		bool close_from_host() { const bool r = rx.closed_by_host(); if (r) loss.removed_by_host(); return r; }
 	};
 
 	// The host: the real Party model hears the members' reports (kind 7), the sender repeats the notice.
@@ -133,45 +136,75 @@ namespace
 		}
 	};
 
-	// One Party Kick of B, run on the host's tick (every 50 ms) until B leaves or the window closes. Returns the host's sends.
-	struct outcome { bool accepted = false, host_dropped = false, b_panel = false, c_touched = false; unsigned sends = 0, deliveries = 0; std::uint32_t ms = 0; };
-	outcome kick(wire w, bool b_has_reports = true, unsigned host_ticks_before_report = 0)
+	// One Party Kick of B, run on the host's tick (every 50 ms) for up to 100 s, the members reporting every second while
+	// they run (this is the MODEL level: the room / transport glue itself is driven in xml2_online_broker_test).
+	struct plan
+	{
+		unsigned drop_first = 0;
+		double loss = 0;
+		std::uint32_t seed = 1;
+		bool reports_before = true;      // B reported on this connection before the Kick
+		unsigned late_report_tick = 0;   // reports_before false: B's first report on this connection at this tick
+		std::uint32_t stall_at = 0xffffffffu, stall_ms = 0; // B stalled (zone load): no reports, nothing read
+		bool stall_forever = false;
+		std::uint32_t host_stall_at = 0xffffffffu, host_stall_ms = 0; // the HOST stalled (no tick)
+	};
+	struct outcome { bool accepted = false, by_close = false, host_dropped = false, b_panel = false, notice = false, c_touched = false; unsigned sends = 0, deliveries = 0; std::uint32_t ms = 0; };
+	outcome kick(const plan& p)
 	{
 		host_pc h;
 		member b, c;
 		b.self = B; b.index = 1; c.self = C; c.index = 2;
 		b.connect(); c.connect();
-		if (b_has_reports) for (int i = 0; i < 3; ++i) { h.hear(b); h.now += 1000; }
+		if (p.reports_before) for (int i = 0; i < 3; ++i) { h.hear(b); h.now += 1000; }
 		for (int i = 0; i < 3; ++i) h.hear(c);
 		outcome o;
 		const auto start = h.now;
+		constexpr std::uint32_t connection = 7;
 		++kicks;
-		if (!h.out.start(B, 1, h.now)) ++start_failures;
+		if (h.out.start(B, 1, connection, h.now) != X::sender::start_result::started) ++start_failures;
+		wire w; w.rng.seed(p.seed); w.drop_first = p.drop_first; w.loss = p.loss;
 		std::deque<std::vector<std::uint8_t>> to_b;
 		bool b_left = false;
-		for (unsigned tick = 0; tick < 400; ++tick, h.now += 50)
+		std::uint32_t last_report = h.now;
+		for (unsigned tick = 0; tick < 2000; ++tick, h.now += 50)
 		{
-			if (!b_has_reports && tick == host_ticks_before_report) h.hear(b); // a report arrives late (after a reconnect)
-			const auto* t = h.out.find(B);
-			if (!t) break;
-			if (b_left) { h.out.finish(B); break; }
-			const auto step = h.out.due(*t, h.now);
-			if (step == X::sender::step::expire) { o.host_dropped = true; b.host_ended(); h.out.finish(B); break; }
+			const auto rel = h.now - start;
+			const bool stalled = rel >= p.stall_at && (p.stall_forever || rel < p.stall_at + p.stall_ms);
+			const bool host_stalled = rel >= p.host_stall_at && rel < p.host_stall_at + p.host_stall_ms;
+			if (!b_left && !stalled)
+			{
+				if (!p.reports_before && tick == p.late_report_tick) { h.hear(b); last_report = h.now; }
+				else if ((p.reports_before || tick > p.late_report_tick) && h.now - last_report >= 1000) { h.hear(b); last_report = h.now; }
+			}
+			if (!stalled) { while (!to_b.empty()) { b.receive(to_b.front(), true); to_b.pop_front(); } }
+			if (b.leaving()) b_left = true; // its room leave closes the connection; the host sees it on a later tick
+			if (host_stalled) continue;
+			const auto step = h.out.tick(B, b_left ? 0 : connection, h.party.heard_within(B, h.now, X::responsive_ms), h.now);
+			if (step == X::sender::step::finish) { h.out.finish(B); break; }
+			if (step == X::sender::step::expire)
+			{
+				o.host_dropped = true;
+				if (!stalled) o.by_close = b.close_from_host(); // the removed PC reads the host's close text
+				b.host_ended();
+				h.out.finish(B);
+				break;
+			}
 			if (step == X::sender::step::send)
 			{
+				const auto* t = h.out.find(B);
 				const auto heard = h.party.heard(B);
-				if (!heard) continue;
+				if (!t || !heard) continue;
 				const auto bytes = X::encode(h.out.make(*t, CODE, HOST, heard));
 				h.out.sent(B, h.now);
 				++o.sends;
 				if (w.deliver()) to_b.push_back(bytes);
 			}
-			while (!to_b.empty()) { b.receive(to_b.front(), true); to_b.pop_front(); }
-			if (b.leaving()) b_left = true; // its room leave closes the tunnel; the host sees it on a later tick
 		}
-		o.accepted = b.rx.removed();
+		o.accepted = b.delivered.size() > 0;
 		o.deliveries = unsigned(b.delivered.size());
 		o.b_panel = b.loss.lost();
+		o.notice = b.rx.removed(); // the Hub's lc_notice_removed (native Kick classification or the latch)
 		o.c_touched = c.rx.removed() || !c.session || !c.delivered.empty();
 		o.ms = h.now - start;
 		return o;
@@ -303,56 +336,139 @@ namespace
 
 	void sender_rules()
 	{
-		X::sender s;
-		check(!s.start(P::key{}, 1, 0) && !s.start(B, 0, 0) && !s.start(B, 4, 0), "sender: a zero key, the host index and index 4 are refused");
-		check(s.start(B, 1, 1000) && !s.start(B, 1, 1000), "sender: one pending notice per member (a second Kick of B does nothing)");
-		check(s.start(C, 2, 1000) && s.start(K(0x44), 3, 1000) && !s.start(K(0x55), 3, 1000), "sender: at most three pending (the remote members)");
-		const auto* t = s.find(B);
-		check(t && s.due(*t, 1000) == X::sender::step::send, "sender: the first notice goes at once");
+		using S = X::sender;
+		using SR = S::start_result;
+		S s;
+		check(s.start(P::key{}, 1, 7, 0) == SR::refused && s.start(B, 0, 7, 0) == SR::refused && s.start(B, 4, 7, 0) == SR::refused && s.start(B, 1, 0, 0) == SR::refused,
+		      "sender: a zero key, the host index, index 4 and no connection are refused");
+		check(s.start(B, 1, 7, 1000) == SR::started && s.start(B, 1, 7, 1000) == SR::pending, "sender: one pending notice per member (a second Kick of B: pending)");
+		check(s.start(C, 2, 8, 1000) == SR::started && s.start(K(0x44), 3, 9, 1000) == SR::started && s.start(K(0x55), 3, 10, 1000) == SR::refused,
+		      "sender: at most three pending (the remote members)");
+		check(s.tick(B, 7, true, 1000) == S::step::send, "sender: the first notice goes at once");
 		s.sent(B, 1000);
-		t = s.find(B);
-		check(s.due(*t, 1249) == X::sender::step::wait && s.due(*t, 1250) == X::sender::step::send, "sender: repeated every 250 ms");
-		check(s.due(*t, 10999) != X::sender::step::expire && s.due(*t, 11000) == X::sender::step::expire, "sender: the window ends after 10 s");
-		const auto serial = t->serial;
+		check(s.tick(B, 7, true, 1200) == S::step::wait && s.tick(B, 7, true, 1250) == S::step::send, "sender: repeated every 250 ms");
+		s.sent(B, 1250);
+		// Responsive time counts at most tick_cap_ms per tick: at 50 ms ticks the window ends after 10 s of a responsive member.
+		{
+			S e;
+			e.start(B, 1, 7, 0);
+			std::uint32_t at = 0;
+			S::step got = S::step::wait;
+			for (; at <= 20000; at += 50) { got = e.tick(B, 7, true, at); if (got == S::step::expire) break; if (got == S::step::send) e.sent(B, at); }
+			check(got == S::step::expire && at >= 10000 && at <= 10100, "sender: expires after 10 s of a responsive member (" + std::to_string(at) + " ms)");
+		}
+		// A stalled member's time does not count; the hard bound does.
+		S h;
+		h.start(B, 1, 7, 0);
+		S::step st = S::step::wait;
+		std::uint32_t t2 = 0;
+		for (; t2 < 59950; t2 += 50) { st = h.tick(B, 7, false, t2); if (st == S::step::expire) break; if (st == S::step::send) h.sent(B, t2); }
+		check(st != S::step::expire && h.tick(B, 7, false, 60000) == S::step::expire, "sender: a stalled member is closed only at the 60 s hard bound");
+		// A host stall (no tick for 15 s) counts at most one tick.
+		S g;
+		g.start(B, 1, 7, 0);
+		g.tick(B, 7, true, 0); g.sent(B, 0);
+		check(g.tick(B, 7, true, 15000) == S::step::send && g.find(B)->responsive == X::tick_cap_ms, "sender: a 15 s host stall counts as one capped tick (100 ms)");
+		// Review F finding 2: the pending notice belongs to the connection the member was removed on.
+		check(s.tick(B, 70, true, 1400) == S::step::finish && s.tick(B, 0, true, 1400) == S::step::finish && s.tick(K(0x66), 7, true, 0) == S::step::finish,
+		      "sender: a replaced or closed connection (or no pending notice) finishes - nothing more is sent");
+		const auto serial = s.find(B)->serial;
 		s.finish(B);
-		check(!s.find(B) && s.start(B, 1, 20000) && s.find(B)->serial != serial, "sender: a later Kick of the same member is a new serial");
+		check(!s.find(B) && s.start(B, 1, 70, 20000) == SR::started && s.find(B)->serial != serial, "sender: a later Kick of the same member is a new serial on its new connection");
+	}
+
+	// Review F finding 2 (the reviewer's reproduction, scratchpad/reviewF/repro1.cpp, through the sender): B is kicked on
+	// connection 7 and never reads it; its process restarts and re-joins at the same index on connection 8 before the host
+	// saw 7 closed. The host must not send the old Kick on 8 - had it re-stamped the notice with connection 8's heard, the
+	// new B would accept it.
+	void rejoin_case()
+	{
+		host_pc h;
+		member b;
+		b.self = B; b.index = 1; b.connect();
+		h.hear(b); h.hear(b);
+		check(h.out.start(B, 1, 7, h.now) == X::sender::start_result::started, "re-join: the Kick of B starts on connection 7");
+		member b2; // B's new process: report sequence restarted, floor 0, guest at index 1 again
+		b2.self = B; b2.index = 1; b2.connect();
+		h.party.reconnected(B);
+		h.hear(b2);
+		const auto step = h.out.tick(B, 8, true, h.now + 50);
+		check(step == X::sender::step::finish, "re-join: on the replaced connection the pending Kick finishes, nothing is sent");
+		// What 429c0ee did (looked up by key, re-stamped with the new heard): the new B accepts the old Kick.
+		X::sender::target old;
+		old.who = B; old.index = 1; old.connection = 7; old.serial = 1;
+		const auto bytes = X::encode(h.out.make(old, CODE, HOST, h.party.heard(B)));
+		check(b2.rx.on_message(b2.view(true), bytes.data(), bytes.size()) == F::none, "re-join: the old Kick re-stamped with the new heard WOULD be accepted (why the binding is needed)");
+	}
+
+	void transport_rules()
+	{
+		using PF = X::participant_fact;
+		using LF = X::link_fact;
+		const PF guest[2] = {{0, false}, {1, true}};
+		check(X::may_deliver(false, guest, 2, 1) && !X::may_deliver(true, guest, 2, 1) && !X::may_deliver(false, guest, 2, 2) && !X::may_deliver(false, guest, 2, 0) &&
+		      !X::may_deliver(false, guest, 0, 1), "delivery: only a guest whose own record has that index (never the host, another index, index 0, no session)");
+		const PF other_local[2] = {{0, false}, {1, false}};
+		check(!X::may_deliver(false, other_local, 2, 1), "delivery: index 1 that is not this PC's own record is refused");
+		LF links[4] = {{true, true, false, false, true, 2}, {true, false, false, false, true, 0}, {true, true, false, false, true, 0}, {true, true, false, false, true, 0}};
+		check(X::host_link(links, 4) == 2, "delivery: the first bound live room link of participant 0 (skipping another participant and an unbound host link)");
+		LF bad[5] = {{false, true, false, false, true, 0}, {true, true, true, false, true, 0}, {true, true, false, true, true, 0}, {true, true, false, false, false, 0}, {true, true, false, false, true, -1}};
+		check(X::host_link(bad, 5) == -1 && X::host_link(nullptr, 0) == -1, "delivery: no host link among direct / closed / vanished / peerless / unmapped links");
 	}
 
 	void machines()
 	{
 		{
-			const auto o = kick(wire{});
-			check(o.accepted && o.deliveries == 1 && !o.b_panel && !o.host_dropped && !o.c_touched && o.sends == 1,
-			      "two machines: Party Kick -> B accepts the first notice, its session ends as a native Kick (one 0x2b), no panel; C untouched");
+			const auto o = kick(plan{});
+			check(o.accepted && o.deliveries == 1 && o.notice && !o.b_panel && !o.host_dropped && !o.c_touched && o.sends == 1,
+			      "model: Party Kick -> B accepts the first notice, its session ends as a native Kick (one 0x2b), no panel; C untouched");
 		}
 		bool all = true;
 		unsigned worst = 0;
 		for (unsigned n = 1; n <= 39; ++n)
 		{
-			wire w; w.drop_first = n;
-			const auto o = kick(w);
-			all = all && o.accepted && o.deliveries == 1 && !o.b_panel && !o.host_dropped && o.sends == n + 1;
+			plan p; p.drop_first = n;
+			const auto o = kick(p);
+			all = all && o.accepted && o.deliveries == 1 && o.notice && !o.b_panel && !o.host_dropped && o.sends == n + 1;
 			worst = std::max(worst, o.ms);
 		}
-		check(all, "lost notices: with the first 1..39 notices dropped B still ends once with the notice (last after " + std::to_string(worst) + " ms)");
+		check(all, "model: with the first 1..39 notices dropped B still ends once with the notice (last after " + std::to_string(worst) + " ms)");
 		{
-			wire w; w.drop_first = 1000;
-			const auto o = kick(w);
-			check(!o.accepted && o.host_dropped && o.b_panel && o.sends == 40, "lost notices: all 40 lost -> the host closes B's room connection at 10 s; B gets the host-left panel, never limbo");
+			plan p; p.drop_first = 100000;
+			const auto o = kick(p);
+			check(!o.accepted && o.host_dropped && o.by_close && o.notice && !o.b_panel && o.ms >= 10000 && o.ms < 11000,
+			      "model: every notice lost, B responsive -> the host closes at 10 s responsive with its close text; B shows the removal, no panel (" + std::to_string(o.ms) + " ms)");
 		}
 		{
 			unsigned ok = 0;
 			for (unsigned seed = 1; seed <= 200; ++seed)
 			{
-				wire w; w.rng.seed(seed); w.loss = 0.5;
-				const auto o = kick(w);
-				ok += o.accepted && o.deliveries == 1 && !o.b_panel;
+				plan p; p.seed = seed; p.loss = 0.5;
+				const auto o = kick(p);
+				ok += o.accepted && o.deliveries == 1 && o.notice && !o.b_panel;
 			}
-			check(ok == 200, "lossy wire: 200 Kicks at 50% loss, every one ends B once with the notice (" + std::to_string(ok) + "/200)");
+			check(ok == 200, "model: 200 Kicks at 50% loss, every one ends B once with the notice (" + std::to_string(ok) + "/200)");
 		}
 		{
-			const auto o = kick(wire{}, false, 20);
-			check(o.accepted && o.deliveries == 1 && !o.b_panel, "no report heard yet on this connection: the notice waits for one, then B ends with it");
+			plan p; p.reports_before = false; p.late_report_tick = 20;
+			const auto o = kick(p);
+			check(o.accepted && o.deliveries == 1 && !o.b_panel, "model: no report heard yet on this connection: the notice waits for one, then B ends with it");
+		}
+		{
+			// Review F finding 3: B stalls in a 20 s zone load right at the Kick (reads nothing, reports nothing).
+			plan p; p.stall_at = 0; p.stall_ms = 20000;
+			const auto o = kick(p);
+			check(o.accepted && o.deliveries == 1 && o.notice && !o.host_dropped && !o.b_panel && o.ms >= 20000 && o.ms < 21000,
+			      "model: a 20 s zone-load stall of B -> no host drop; B takes the queued notice when the load ends (" + std::to_string(o.ms) + " ms)");
+			plan q; q.stall_at = 3000; q.stall_ms = 20000; q.drop_first = 12; // the first 12 lost before the stall, B stalls at 3 s
+			const auto o2 = kick(q);
+			check(o2.accepted && !o2.host_dropped && o2.notice, "model: lost notices, then a 20 s stall -> still no host drop, the notice after the load");
+			plan f; f.stall_at = 0; f.stall_forever = true;
+			const auto o3 = kick(f);
+			check(o3.host_dropped && !o3.accepted && o3.ms >= 60000 && o3.ms < 61000, "model: a member frozen for good is closed at the 60 s hard bound (" + std::to_string(o3.ms) + " ms)");
+			plan hs; hs.host_stall_at = 0; hs.host_stall_ms = 15000; hs.drop_first = 1000000;
+			const auto o4 = kick(hs);
+			check(o4.host_dropped && o4.by_close && o4.ms >= 24000, "model: a 15 s HOST stall does not count (the drop comes after 10 s of ticking, " + std::to_string(o4.ms) + " ms)");
 		}
 		{
 			// Host loss (the host quits / vanishes): no notice, the connection that carried the session ends -> the 07 panel.
@@ -361,8 +477,13 @@ namespace
 			check(b.loss.lost() && !b.rx.removed() && b.delivered.empty(), "host loss: without a notice the host-left panel stays (the 07 panel)");
 			member q; q.self = B; q.connect(); q.loss.local_departure(); q.host_ended();
 			check(!q.loss.lost(), "guest Leave / Quit: a local departure is never a host loss (unchanged)");
+			member r; r.self = B; r.connect();
+			const bool closed = r.close_from_host();
+			r.host_ended();
+			member a; a.self = B; a.connect(); a.report(); a.receive(X::encode(sample(1)), true);
+			check(closed && r.rx.removed() && !r.loss.lost() && !a.close_from_host(), "host close text: the removal without a notice (no panel); after an accepted notice it changes nothing");
 		}
-		check(start_failures == 0 && kicks == 242, "host: each of the " + std::to_string(kicks) + " simulated Party Kicks started exactly one notice");
+		check(start_failures == 0 && kicks == 246, "host: each of the " + std::to_string(kicks) + " simulated Party Kicks started exactly one notice");
 	}
 }
 
@@ -373,6 +494,8 @@ int main(int argc, char** argv)
 	fuzz(rounds);
 	receiver_rules();
 	sender_rules();
+	rejoin_case();
+	transport_rules();
 	machines();
 	std::printf("online removal notice: %d passed, %d failed\n", passed, failed);
 	return failed ? 1 : 0;

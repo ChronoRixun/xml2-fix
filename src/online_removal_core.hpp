@@ -29,9 +29,14 @@ namespace online_removal_core
 	constexpr std::size_t code_size = online_party_core::code_size, key_size = online_party_core::key_size;
 	// kind u8, wire u8, code[8], host key[8], target key[8], index u8, heard u32, serial u32 (little endian).
 	constexpr std::size_t message_size = 1 + 1 + code_size + key_size + key_size + 1 + 4 + 4; // 35
-	// The host repeats the notice every resend_ms until the removed member's tunnel closes (it left the room after its
-	// session ended), at most resend_window_ms; then it closes that tunnel itself ("removed by the host").
-	constexpr std::uint32_t resend_ms = 250, resend_window_ms = 10000;
+	// The host repeats the notice every resend_ms on the room connection it removed the member from, until that connection
+	// closes or is replaced (it left the room after its session ended). It gives up after resend_window_ms of the member
+	// being RESPONSIVE (a Party report heard within responsive_ms; a member stalled in a zone load sends none and its time
+	// does not count; one host tick counts at most tick_cap_ms, so a host stall does not count either), or after
+	// hard_window_ms in all; then it closes that connection itself with close_text, which the removed PC reads as the
+	// removal too (review F findings 2 and 3).
+	constexpr std::uint32_t resend_ms = 250, resend_window_ms = 10000, hard_window_ms = 60000, responsive_ms = 6000, tick_cap_ms = 100;
+	constexpr const char* close_text = "removed by the host";
 	// The retail removal notice the removed PC's own native Kick handling runs on (0x2b, 12 bytes: index u32, reason u32,
 	// flag u8 + padding; online_menus_rules kicked_by_host).
 	constexpr std::uint8_t native_opcode = 0x2b;
@@ -119,6 +124,29 @@ namespace online_removal_core
 		return b;
 	}
 
+	// ---- the transport side of the delivery (gns_transport::deliver_removal; review F finding 1: the decisions are here) ----
+	// One native participant of this PC's session and one transport link, as the transport reads them.
+	struct participant_fact { int index = -1; bool local = false; };
+	struct link_fact { bool tunnel = false, bound = false, closed = false, vanished = false, peer = false; int index = -1; };
+	// The session may take the removal of this PC at own_index: a guest (not the host) whose own record has that index.
+	inline bool may_deliver(bool hosting, const participant_fact* participants, std::size_t count, unsigned own_index)
+	{
+		if (hosting || own_index < index_min || own_index > index_max) return false;
+		for (std::size_t i = 0; i < count; ++i) if (participants[i].local && participants[i].index == int(own_index)) return true;
+		return false;
+	}
+	// The link that carries the host's messages into this PC's session: a bound, live room link of participant 0 (the
+	// host). -1: none (the caller retries next tick).
+	inline int host_link(const link_fact* links, std::size_t count)
+	{
+		for (std::size_t i = 0; i < count; ++i)
+		{
+			const auto& l = links[i];
+			if (l.tunnel && l.bound && !l.closed && !l.vanished && l.peer && l.index == 0) return int(i);
+		}
+		return -1;
+	}
+
 	// ---- the removed PC (a joiner) ----
 	// What the receiver needs to know, all of it this PC's own facts at the moment the message arrives.
 	struct guest_view
@@ -143,6 +171,14 @@ namespace online_removal_core
 		// A new room (or none): the latch and the counters start again.
 		void reset() { *this = {}; }
 		bool removed() const { return removed_; }
+		// The room's host closed this PC's authenticated host connection with close_text (the resend window ended before a
+		// notice was accepted, review F finding 3): the same removal. False when one was already accepted.
+		bool closed_by_host()
+		{
+			if (removed_) return false;
+			removed_ = true;
+			return true;
+		}
 		std::uint32_t serial() const { return serial_; }
 		unsigned refused(refusal r) const { return r < refusal::count ? refused_[unsigned(r)] : 0; }
 		// none: accepted - the first removal of this PC in this room; the caller ends the session (native_body) once.
@@ -167,7 +203,8 @@ namespace online_removal_core
 	};
 
 	// ---- the host ----
-	// One pending notice per removed member (at most three remote members); every resend repeats the same serial.
+	// One pending notice per removed member (at most three remote members), bound to the room connection it was removed
+	// from; every resend repeats the same serial.
 	class sender
 	{
 	public:
@@ -175,37 +212,52 @@ namespace online_removal_core
 		{
 			key who{};
 			std::uint8_t index = 0;
-			std::uint32_t serial = 0, started = 0, last = 0;
+			std::uint32_t connection = 0; // the member's room connection at the Kick (never 0)
+			std::uint32_t serial = 0, started = 0, last = 0, ticked = 0, responsive = 0;
 			unsigned sends = 0;
 		};
-		enum class step { wait, send, expire };
+		// finish: the connection the member was removed on closed or was replaced (its session ended with it - a re-joined
+		// member on a new connection is never sent the old Kick); expire: the window ended; send / wait: the cadence.
+		enum class step { wait, send, expire, finish };
 	private:
 		std::vector<target> targets_;
 		std::uint32_t next_serial_ = 0;
+		target* find_(const key& who) { for (auto& t : targets_) if (t.who == who) return &t; return nullptr; }
 	public:
 		void reset() { targets_.clear(); }
 		const std::vector<target>& targets() const { return targets_; }
 		const target* find(const key& who) const { for (const auto& t : targets_) if (t.who == who) return &t; return nullptr; }
-		// False: not a remote index, a zero key, already pending for this member, or three pending.
-		bool start(const key& who, std::uint8_t index, std::uint32_t now)
+		enum class start_result { started, pending, refused };
+		// refused: not a remote index, a zero key or connection, or three pending; pending: one runs for this member.
+		start_result start(const key& who, std::uint8_t index, std::uint32_t connection, std::uint32_t now)
 		{
-			if (detail::zero(who) || index < index_min || index > index_max || find(who) || targets_.size() >= index_max) return false;
+			if (detail::zero(who) || !connection || index < index_min || index > index_max) return start_result::refused;
+			if (find(who)) return start_result::pending;
+			if (targets_.size() >= index_max) return start_result::refused;
 			if (++next_serial_ == 0) next_serial_ = 1;
-			targets_.push_back({who, index, next_serial_, now, 0, 0});
-			return true;
+			target t;
+			t.who = who; t.index = index; t.connection = connection; t.serial = next_serial_; t.started = t.ticked = now;
+			targets_.push_back(t);
+			return start_result::started;
 		}
-		// What to do for this member now: send (first at once, then every resend_ms), expire (the window passed), wait.
-		step due(const target& t, std::uint32_t now) const
+		// One host tick for this member: its CURRENT room connection (0: none / not connected) and whether it is responsive
+		// (a Party report heard within responsive_ms).
+		step tick(const key& who, std::uint32_t connection, bool member_responsive, std::uint32_t now)
 		{
-			if (now - t.started >= resend_window_ms) return step::expire;
-			if (!t.sends || now - t.last >= resend_ms) return step::send;
+			auto* t = find_(who);
+			if (!t || connection != t->connection) return step::finish;
+			const auto elapsed = now - t->ticked;
+			t->ticked = now;
+			if (member_responsive) t->responsive += elapsed < tick_cap_ms ? elapsed : tick_cap_ms;
+			if (t->responsive >= resend_window_ms || now - t->started >= hard_window_ms) return step::expire;
+			if (!t->sends || now - t->last >= resend_ms) return step::send;
 			return step::wait;
 		}
 		void sent(const key& who, std::uint32_t now)
 		{
-			for (auto& t : targets_) if (t.who == who) { t.last = now; ++t.sends; }
+			if (auto* t = find_(who)) { t->last = now; ++t->sends; }
 		}
-		// Its tunnel closed / it left the roster / the window passed: no more notices.
+		// No more notices for this member.
 		void finish(const key& who)
 		{
 			for (std::size_t i = 0; i < targets_.size(); ++i) if (targets_[i].who == who) { targets_.erase(targets_.begin() + std::ptrdiff_t(i)); return; }

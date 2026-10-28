@@ -499,6 +499,9 @@ namespace online_party_core
 		// The newest report sequence accepted from this member on its current connection (0: none yet). Rule 64's removal
 		// notice echoes it, so the removed PC can tell a notice of this connection from an earlier one (online_removal_core).
 		std::uint32_t heard(const key& k) const { const auto* m = find(k); return m && m->has_report ? m->gate.last_report : 0; }
+		// A report from this member was accepted on its current connection within `ms` (rule 64: the removed member is
+		// responsive, not stalled in a zone load).
+		bool heard_within(const key& k, std::uint32_t now, std::uint32_t ms) const { const auto* m = find(k); return m && m->has_report && now - m->report_at < ms; }
 		// A new connection to this member (its process may have restarted, its sequences start again at 1): its
 		// sequence memory, rate state and claims are dropped. Messages of the old connection cannot arrive on the new one.
 		void reconnected(const key& k)

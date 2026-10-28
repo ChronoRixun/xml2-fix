@@ -1710,9 +1710,8 @@ namespace gns_transport
 			auto& l = *item;
 			if (!survivor(l) || participant_index(l) != int(index)) continue;
 			// Rule 64: the removed PC is told first, on its room connection (repeated until it leaves), then its link ends here.
-			const bool told = l.tunnel && online_room::removal_start(l.connection, index);
-			logger::write("online: participant %u (%s) removed by the host from the Party screen - %s; ending its link; the cut frame is agreed", index, text(l.address, l.port).c_str(),
-			              told ? "removal notice sent (rule 64)" : "no room connection for a removal notice");
+			const char* told = l.tunnel ? online_room::name(online_room::removal_start(l.connection, index)) : "no removal notice (a direct link, not a room connection)";
+			logger::write("online: participant %u (%s) removed by the host from the Party screen - %s; ending its link; the cut frame is agreed", index, text(l.address, l.port).c_str(), told);
 			declare_gone(l, "removed by the host");
 			return l.closed || l.gone_at || l.gone_why;
 		}
@@ -1720,31 +1719,34 @@ namespace gns_transport
 	}
 	bool deliver_removal(unsigned own_index)
 	{
-		if (state.load() != 1 || !ready || own_index < online_removal_core::index_min || own_index > online_removal_core::index_max || session_hosted_here()) return false;
+		namespace X = online_removal_core;
+		if (state.load() != 1 || !ready) return false;
 		party_facts facts;
 		const void* records[4]{};
 		if (!party_read(facts, records)) return false;
-		bool mine = false;
-		for (unsigned i = 0; i < facts.count; ++i) mine = mine || (facts.participants[i].local && facts.participants[i].index == int(own_index));
-		if (!mine) return false;
-		const auto body = online_removal_core::native_body(std::uint8_t(own_index));
+		X::participant_fact who[4];
+		for (unsigned i = 0; i < facts.count && i < 4; ++i) who[i] = {facts.participants[i].index, facts.participants[i].local};
+		if (!X::may_deliver(facts.hosting || session_hosted_here(), who, facts.count, own_index)) return false;
+		const auto body = X::native_body(std::uint8_t(own_index));
 		const network_validation::context validation{entity_capacity::fast_transfer_active()};
-		if (!gns_transport_core::validate_opcode_length(online_removal_core::native_opcode, body.size()) ||
-		    !network_validation::valid_message(online_removal_core::native_opcode, body.data(), body.size(), validation))
+		if (!gns_transport_core::validate_opcode_length(X::native_opcode, body.size()) || !network_validation::valid_message(X::native_opcode, body.data(), body.size(), validation))
 			return false;
+		std::vector<X::link_fact> view;
 		for (auto& item : links)
 		{
-			auto& l = *item;
-			if (!l.tunnel || !l.bound || l.closed || l.vanished || !l.peer || participant_index(l) != 0) continue;
-			gns_transport_core::message m;
-			m.opcode = online_removal_core::native_opcode;
-			m.reliable = true;
-			m.body.assign(body.begin(), body.end());
-			if (!l.in.push(std::move(m))) return false;
-			logger::write("online: the host's removal of this PC (rule 64) reaches the session from %s as the native removal notice 0x2b", text(l.address, l.port).c_str());
-			return true;
+			const auto& l = *item;
+			view.push_back({l.tunnel, l.bound, l.closed, l.vanished, l.peer != nullptr, participant_index(l)});
 		}
-		return false;
+		const int chosen = X::host_link(view.data(), view.size());
+		if (chosen < 0) return false;
+		auto& l = *links[std::size_t(chosen)];
+		gns_transport_core::message m;
+		m.opcode = X::native_opcode;
+		m.reliable = true;
+		m.body.assign(body.begin(), body.end());
+		if (!l.in.push(std::move(m))) return false;
+		logger::write("online: the host's removal of this PC (rule 64) reaches the session from %s as the native removal notice 0x2b", text(l.address, l.port).c_str());
+		return true;
 	}
 	bool party_snapshot(party_facts& out)
 	{

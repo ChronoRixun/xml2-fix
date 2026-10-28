@@ -1324,7 +1324,7 @@ notice accepted, the session ended by a host-connection loss: still the notice, 
 Review E follow-ups (fix F). (1) The removed record is compared with this PC's own participant record cached while the
 session was live (`native_flow.local_record`, from `0x6111f0` / `0x614290` at admission, in the lobby tick and the Party
 frame): by the `0x612070` call `0x611f50` -> `0x611e90` / `0x611c10` has already run the record slot's destructor, so the
-record's own flag (+0x1c) is only a fallback. The fixture's record removal now destroys the record in the same order (clears
+record's own flag (+0x1c) is only a fallback. The cache matters for the LOBBY kick (0x612daa removes the local record through 0x611f50 before 0x612dda); in a running zone the record is not destroyed first. Refreshing it calls 0x6111f0, which writes session+0x78 / +0x274 while +0x78 is still 0 (the engine's own first-call writes; the menu tick runs outside any engine iteration). A pointer gone stale during play only falls back to the flag read, and a Party Kick has the rule 64 latch. The fixture's record removal now destroys the record in the same order (clears
 its flags) before the classification runs, so a classification that reads the record fails the kick modes. (5) A new Host or
 Join attempt clears a removal notice that never reached a Hub. (6) `r6-end-kicked-twice-guest`: after the kick the native quit
 route runs the real `0x6123e0` again (wrapper entered twice); exactly one classification line, one deferred leave, the notice.

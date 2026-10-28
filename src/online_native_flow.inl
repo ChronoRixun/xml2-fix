@@ -528,7 +528,11 @@ bool native_local_admitted() {
         return admitted;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
-// Refreshes native_flow.local_record from the live session (a guest's lobby and Party ticks; no native state is changed).
+// Refreshes native_flow.local_record from the live session (the lobby tick and the Party frame). The cache matters for the
+// LOBBY kick: there 0x612c40 removes the local record through 0x611f50 before its 0x612070 call; in a running zone the record
+// is not destroyed first (review F finding 4). Not side-effect free: 0x6111f0 writes session+0x78 (its cache of the local
+// record) and +0x274 (an iteration cursor) while +0x78 is still 0 - the same writes the engine's own first call makes; the
+// menu tick runs outside any engine iteration.
 void native_note_local_record() {
     if(native_flow.phase==native_phase::guest || native_flow.phase==native_phase::host) native_local_admitted();
 }

@@ -72,6 +72,8 @@ namespace online_room
 	int room_rtt(const std::string& code);
 	// The host starts rule 64's removal notice to the member on this room connection (native index 1-3) and sends the first
 	// one now; false when this PC does not host a ready room, the connection is not a connected member, or one is pending.
-	bool removal_start(HSteamNetConnection connection, unsigned native_index);
+	enum class removal_start_result { started, pending, bad_index, no_room, no_connection, refused };
+	removal_start_result removal_start(HSteamNetConnection connection, unsigned native_index);
+	const char* name(removal_start_result r);
 #endif
 }
