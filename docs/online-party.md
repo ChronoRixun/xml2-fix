@@ -53,6 +53,9 @@ a revision-5 refusal could not have named the rule; revision 6 folds to 0xf1.
   party contract (e.g. reports that ever influence gameplay, a hero chooser, consent) **needs a rule id** (63+ free;
   not picked here).
 - Rules 26 JoinInProgress, 14, 10, 27: unchanged. Reports cannot open, close or bypass a seat.
+- Round 8 (in-session Party screen, [online-party-menu.md](online-party-menu.md)) adds **no wire message**: a host Kick is a
+  host-local request to the transport's agreed departure and nothing a peer sends can trigger one. A notice to the removed
+  PC, a vote or any peer-visible removal contract would be a new party contract and **needs a rule id** (not picked here).
 
 ## 3. Identities and the native-index mapping
 

@@ -381,6 +381,7 @@ void rules() {
 #include "online_menus_followup.inl"
 #include "online_menus_broker.inl"
 #include "online_native_fixture.inl"
+#include "online_party_menu_fixture.inl"
 }
 namespace ini { std::optional<std::string> text(const wchar_t*,const wchar_t*) {
     return mode=="off" ? std::nullopt : mode=="zero" ? std::optional<std::string>("0") : std::optional<std::string>("1");
@@ -446,6 +447,7 @@ int main(int argc,char** argv) {
     online_menus::install_hooks install_hooks;
     install_hooks.clock=clock_stub;install_hooks.wall_clock=wall_stub;install_hooks.before_request=request_fault_stub;install_hooks.before_tick=tick_fault_stub;
     if(mode.starts_with("r4-")) install_hooks.lobby_fields=lobby_fields_stub;
+    if(mode.starts_with("r8-party")) { party_api.remove_member=party_remove_stub;install_hooks.broker=&party_api;install_hooks.lobby_fields=party_fields_stub; }
     if(mode=="r5-broker" || mode=="r5-retail-lobby" || mode=="r5b-views") install_hooks.broker=&menu_api;
     if(mode.starts_with("r6-")) install_hooks.broker=&native_fixture::api;
     patch_transaction::hooks transaction_hooks;
@@ -475,6 +477,7 @@ int main(int argc,char** argv) {
     assert(overflow.count()==1 && std::memcmp(installed_image.data(),reinterpret_cast<void*>(0x401000),installed_image.size())==0);
     asset_files();fake_services();
     if(mode.starts_with("r4-")) { lobby_tests(entry);return 0; }
+    if(mode.starts_with("r8-party")) { party_tests(entry);return 0; }
     SetEnvironmentVariableW(L"LOCALAPPDATA",(root/L"local").c_str());
     if(mode.starts_with("follow-")) follow_prepare();
     if(mode=="r3-load" || mode=="r3-load-invalid") {

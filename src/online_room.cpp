@@ -1958,8 +1958,16 @@ namespace online_room
 				m.build = int(c.stage);
 				m.same_build = c.stage == party_core::build::same || c.stage == party_core::build::agreed;
 				m.phase = int(c.now);
+				// Round 8: the in-session Party screen's row (native name, role, transfer percentage).
+				const auto shown = online_status_core::utf8_clean(c.name, party_core::name_max);
+				std::memcpy(m.name, shown.c_str(), std::min<std::size_t>(shown.size(), sizeof(m.name) - 1));
+				m.self = c.self;
+				m.host = c.host;
+				m.percent = c.percent == party_core::percent_none ? -1 : int(c.percent);
 			}
 		}
+		out.hosting = hosting;
+		out.session = party_facts_ok && party_facts.session;
 		for (const auto* card : split.pending)
 		{
 			const auto& c = *card;

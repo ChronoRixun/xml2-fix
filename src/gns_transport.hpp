@@ -35,4 +35,6 @@ namespace gns_transport
 		party_participant participants[4];
 	};
 	bool party_snapshot(party_facts& out);
+	// The host removes a remote participant in session (docs/online-party-menu.md): the agreed-departure path, never a pre-game leave.
+	bool remove_member(unsigned native_index);
 }

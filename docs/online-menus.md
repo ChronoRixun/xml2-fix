@@ -1162,3 +1162,10 @@ input is part of this round. After LC integration and review:
 6. Stop all owned helpers, verify registry/input hashes, and remove only created
    copies/profiles with checked absolute Python paths. Record missing proof as
    pending; host fixtures do not establish G/V or WAN acceptance.
+
+## Round 8: in-session Party screen (probe `lc-online-party/1`)
+
+The pause menu's renamed Players row opens the base screen `lc_party`; Invite/Copy, the host's Kick and Leave, the
+Propose-load placeholder and the rail's native routes are specified in [online-party-menu.md](online-party-menu.md)
+(intents 63..74, authority, agreed departure, live procedure). The DLL needs no change for the rename itself; LC authors
+the rename and the screen only when the DLL carries the probe.

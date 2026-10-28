@@ -104,6 +104,26 @@ HWND clipboard_owner() {
     EnumThreadWindows(GetCurrentThreadId(),clipboard_owner_window,reinterpret_cast<LPARAM>(&owner));
     return owner; // read only; no activation/focus or foreign-process window
 }
+// Bounded Unicode payload for the lobby Copy and the Party Invite. SetClipboardData takes ownership on success; the owner
+// is this process's own existing game window (never created, activated or focused).
+bool clipboard_copy(const std::string& shown) {
+    bool copied=false;
+    const auto owner=clipboard_owner();
+    if(owner && OpenClipboard(owner)) {
+        auto memory=GlobalAlloc(GMEM_MOVEABLE,(shown.size()+1)*sizeof(wchar_t));
+        if(memory) {
+            auto* target=static_cast<wchar_t*>(GlobalLock(memory));
+            if(target) {
+                for(unsigned i=0;i<=shown.size();++i) target[i]=i<shown.size() ? wchar_t(shown[i]) : 0;
+                GlobalUnlock(memory);
+                copied=EmptyClipboard() && SetClipboardData(CF_UNICODETEXT,memory);
+            }
+            if(!copied) GlobalFree(memory);
+        }
+        CloseClipboard();
+    }
+    return copied;
+}
 // LocalAppData is deliberately outside game/mod folders and all shared state.
 // Reject network drives. No identity, credential or address is written here.
 std::filesystem::path recent_path() {
@@ -458,8 +478,9 @@ const script_functions_rules::func_entry registration{reinterpret_cast<const voi
 bool __fastcall queue(void* console,void*,const char* line) {
     // Only exact canonical integer commands are accepted at this boundary.
     // Model/name/clipboard text can never become a script or console command.
-    if(ready && line) for(int value=2;value<=62;++value) {
+    if(ready && line) for(int value=2;value<=int(intent::last);++value) {
         if(value==int(intent::invalid_key)) continue; // internal keyboard feedback, never a published command
+        if(value>62 && !party_intent(value)) continue; // 68 and 70 are reserved
 
         char command[48]{};
         std::snprintf(command,sizeof(command),"runscript lcOnlineIntent(%d)",value);
@@ -544,7 +565,7 @@ bool offline_fixture = false;
 #if XML2_FIX_GNS
 void production_broker_tick() { online_room::ui_tick(); gns_transport::room_ui_tick(); }
 broker_api broker_calls{online_room::available,online_room::view,production_broker_tick,online_room::list,
-    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due,online_room::host_native,online_room::admission_target,online_room::host_posted,join_in_progress::installed,online_room::leave_after_flush,online_room::party,online_room::room_rtt};
+    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due,online_room::host_native,online_room::admission_target,online_room::host_posted,join_in_progress::installed,online_room::leave_after_flush,online_room::party,online_room::room_rtt,gns_transport::remove_member};
 #else
 broker_api broker_calls{};
 #endif
@@ -1052,22 +1073,7 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         restore_lobby_focus(menu);
         if(!lobby_phase(menu,2)) lobby_state.leave_authorized=false;
     } else if(action==intent::copy_code && code_value) {
-        // Bounded Unicode payload. SetClipboardData takes ownership on success.
-        bool copied=false;
-        const auto owner=clipboard_owner();
-        if(owner && OpenClipboard(owner)) {
-            auto memory=GlobalAlloc(GMEM_MOVEABLE,(shown.size()+1)*sizeof(wchar_t));
-            if(memory) {
-                auto* target=static_cast<wchar_t*>(GlobalLock(memory));
-                if(target) {
-                    for(unsigned i=0;i<=shown.size();++i) target[i]=i<shown.size() ? wchar_t(shown[i]) : 0;
-                    GlobalUnlock(memory);
-                    copied=EmptyClipboard() && SetClipboardData(CF_UNICODETEXT,memory);
-                }
-                if(!copied) GlobalFree(memory);
-            }
-            CloseClipboard();
-        }
+        const bool copied=clipboard_copy(shown);
         lobby_state.copied=copied;lobby_state.error=!copied;
     }
     bind_text(menu,"lc_room_code",shown.c_str());
@@ -1436,6 +1442,191 @@ void code_input(int value) {
         break;
     }
 }
+
+// ---- Round 8: the in-session Party screen (lc_party, a base CMenu opened from the pause menu's lc_party_link) -------------
+// Presentation + intents only. The room, readiness, admission, the transport and the native session stay the owners of
+// their facts; Resume/Team/Codex/Options/Quit are native routes (the rail's own usecmds, or the base Back); Leave hands
+// the native quit command to the console once; Kick asks the transport for the agreed departure once. Nothing a peer sends
+// authorizes any of it: there is no party wire message for removal (a new peer contract would need a rule id).
+party_model party_ui;
+std::uintptr_t party_owner=0;
+std::string party_origin;      // the item to focus again when a confirmation closes
+int party_feedback=0;          // 1 copied, 2 copy failed
+DWORD party_feedback_at=0;
+constexpr DWORD party_feedback_ms=6000;
+struct party_card { party_row row; int ping=-1; bool to_host=false; int route=0; int build=0; int phase=-1; int percent=-1; };
+struct party_snapshot_view { std::vector<party_card> cards; party_roster roster; std::string code; };
+party_snapshot_view party_collect() {
+    party_snapshot_view out;
+    lobby_fixture extra{};bool facts=false;
+    if(lobby_fields) facts=lobby_fields(extra) && extra.count<=4 && extra.pending_count<=3;
+    else if(broker_live() && broker_calls.party) { facts=broker_calls.party(extra) && extra.count<=4 && extra.pending_count<=3; if(!facts) extra={}; }
+    if(!facts) {
+        if(broker_live() && broker_view().state==broker::phase::room && broker_view().code.size()==8) out.code=broker_view().code;
+        return out;
+    }
+    const auto end=std::find(std::begin(extra.code),std::end(extra.code),char(0));
+    if(end!=std::end(extra.code)) if(auto parsed=parse_code({extra.code,std::size_t(end-extra.code)})) out.code=*parsed;
+    out.roster.hosting=extra.hosting;out.roster.session=extra.session;
+    std::vector<const lobby_fixture::member*> natives;
+    for(unsigned i=0;i<extra.count;++i) natives.push_back(&extra.members[i]);
+    std::sort(natives.begin(),natives.end(),[](const auto* a,const auto* b) { return a->native_index<b->native_index; });
+    for(const auto* m:natives) {
+        if(out.cards.size()==4) break;
+        party_card c;
+        c.row.index=int(m->native_index);c.row.self=m->self;c.row.host=m->host;
+        c.row.name=display(std::string(m->name,strnlen(m->name,31)),31);
+        if(c.row.name.empty()) c.row.name="Player";
+        c.ping=m->self ? -1 : m->ping_ms;c.to_host=m->ping_to_host;c.route=m->route;
+        c.build=m->build>=0 ? m->build : m->same_build ? 2 : 0;c.phase=m->phase;c.percent=m->percent;
+        out.cards.push_back(c);
+    }
+    for(unsigned i=0;i<extra.pending_count && out.cards.size()<4;++i) {
+        const auto& m=extra.pending[i];
+        party_card c;
+        c.row.pending=true;
+        c.row.name=m.name[0] ? display(std::string(m.name,strnlen(m.name,31)),31) : std::string("Player");
+        c.ping=m.ping_ms;c.to_host=m.ping_to_host;c.route=m.route;c.build=m.build;c.phase=m.phase;
+        out.cards.push_back(c);
+    }
+    for(const auto& c:out.cards) out.roster.rows.push_back(c.row);
+    return out;
+}
+bool party_native_back(void* menu) {
+    __try { at<tick_fn>(0x5ad7c0)(menu);return true; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+// The native quit route the pause menu's own Quit uses (its usecmd, queued through the console). Called once per Leave.
+bool party_native_leave() {
+    __try {
+        auto* console=at<getter>(0x55c890)();
+        if(!console || *static_cast<std::uint32_t*>(console)!=0x69a81c) return false;
+        return at<command_fn>(0x55c410)(console,"mainmenuexit");
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+int party_tone(int phase) {
+    switch(phase) { case 2: case 3: case 7: return 0; case 0: case 1: case 4: case 5: case 6: return 1; default: return 2; }
+}
+void party_focus(void* menu,const std::string& item) { if(!item.empty()) lobby_focus(menu,item.c_str()); }
+void party_frame(void* menu) {
+    const auto id=reinterpret_cast<std::uintptr_t>(menu);
+    if(party_owner!=id) { party_ui.reset();party_owner=id;party_origin.clear();party_feedback=0;bindings.clear();pending.clear();keyboard_input.clear(); }
+    if(broker_live() && broker_calls.tick) broker_calls.tick();
+    const auto view=party_collect();
+    const auto& roster=view.roster;
+    const bool open_before=party_ui.confirm!=party_confirm::none;
+    party_ui.refresh(roster);
+    if(open_before && party_ui.confirm==party_confirm::none && !party_origin.empty() && !party_ui.departed) { party_focus(menu,party_origin);party_origin.clear(); }
+    const int action=pending.take(id,screen::party);
+    if(action) {
+        const auto result=party_ui.apply(action,roster);
+        switch(result.act) {
+        case party_act::native_back: {
+            const bool ok=party_native_back(menu);
+            party_ui.reset();pending.clear();
+            if(!ok) logger::write("online menus: party Back faulted; the pause menu is retained");
+            return; // never bind after requesting a close
+        }
+        case party_act::copy: {
+            const bool copied=!view.code.empty() && clipboard_copy(view.code.substr(0,4)+"-"+view.code.substr(4));
+            party_feedback=copied ? 1 : 2;party_feedback_at=now_ms();
+        } break;
+        case party_act::opened_leave: party_origin="lc_party_leave";party_focus(menu,"lc_party_cancel");break;
+        case party_act::opened_kick:
+            party_origin="lc_p"+std::to_string(action-int(intent::party_kick_first)+1)+"_kick";party_focus(menu,"lc_party_cancel");break;
+        case party_act::dismissed: party_focus(menu,party_origin);party_origin.clear();break;
+        case party_act::leave_run: {
+            const bool ok=party_native_leave();
+            logger::write("online menus: party Leave -> native quit route %s",ok ? "queued once" : "refused");
+            if(!ok) party_ui.departed=false; // nothing was handed over; the player may try again
+            party_origin.clear();
+        } break;
+        case party_act::kick_run: {
+            const bool ok=broker_calls.remove_member && broker_calls.remove_member(unsigned(result.kick_index));
+            logger::write("online menus: party Kick of native index %d -> agreed departure %s",result.kick_index,ok ? "started once" : "refused");
+            if(!ok) party_ui.kicked&=~(1u<<result.kick_index);
+            party_origin.clear();
+        } break;
+        default: break;
+        }
+    }
+    const bool confirm_leave=party_ui.confirm==party_confirm::leave,confirm_kick=party_ui.confirm==party_confirm::kick;
+    const bool open=confirm_leave || confirm_kick;
+    // Room header, invite code.
+    if(broker_live() && broker_view().state==broker::phase::room) {
+        const auto& state=broker_view();
+        if(!state.room_name.empty()) bind_text(menu,"lc_room_name",display(state.room_name,32).c_str());
+        if(state.room_metadata_known) bind_text(menu,"lc_room_visibility",state.public_room ? "Public" : "Private");
+    }
+    const std::string shown=view.code.size()==8 ? view.code.substr(0,4)+"-"+view.code.substr(4) : std::string("---- ----");
+    bind_text(menu,"lc_room_code",shown.c_str());
+    // Cards.
+    std::string notice_name;int notice_phase=-1,notice_percent=-1;
+    for(unsigned i=0;i<4;++i) {
+        const auto prefix="lc_p"+std::to_string(i+1)+"_";
+        const bool present=i<view.cards.size();
+        for(const auto* field:{"empty","empty_title","empty_help","empty_plus"}) hide(menu,(prefix+field).c_str(),present);
+        for(const auto* field:{"card","name","slot"}) hide(menu,(prefix+field).c_str(),!present);
+        if(!present) {
+            for(const auto* field:{"host","you","hero_fallback","hero_next","ms","measuring","ping","to_host","same_build","checking_build","other_build",
+                    "pending","selected","tone_good","tone_warn","tone_idle","kick"}) hide(menu,(prefix+field).c_str(),true);
+            enable(menu,(prefix+"kick").c_str(),false);
+            bind_text(menu,(prefix+"phase").c_str(),"");bind_text(menu,(prefix+"route").c_str(),"");
+            continue;
+        }
+        const auto& c=view.cards[i];
+        bind_text(menu,(prefix+"name").c_str(),c.row.name.c_str());
+        bind_text(menu,(prefix+"slot").c_str(),("P"+std::to_string(i+1)).c_str());
+        hide(menu,(prefix+"host").c_str(),!c.row.host);
+        hide(menu,(prefix+"you").c_str(),!c.row.self);
+        hide(menu,(prefix+"pending").c_str(),!c.row.pending);
+        const bool next=c.phase==4 || c.phase==5;
+        hide(menu,(prefix+"hero_next").c_str(),!next);hide(menu,(prefix+"hero_fallback").c_str(),next);
+        const bool measured=c.ping>=0 && c.ping<=60000 && !c.row.self;
+        bind_text(menu,(prefix+"ping").c_str(),measured ? std::to_string(c.ping).c_str() : "");
+        hide(menu,(prefix+"ping").c_str(),!measured);hide(menu,(prefix+"ms").c_str(),!measured);
+        hide(menu,(prefix+"measuring").c_str(),measured || c.row.self);
+        hide(menu,(prefix+"to_host").c_str(),!(measured && c.to_host));
+        bind_text(menu,(prefix+"route").c_str(),measured ? route_text(c.route) : "");
+        const int stage=c.row.self ? 2 : c.build;
+        hide(menu,(prefix+"same_build").c_str(),!(stage==2 || stage==3));
+        hide(menu,(prefix+"checking_build").c_str(),stage==2 || stage==3 || stage==1);
+        hide(menu,(prefix+"other_build").c_str(),stage!=1);
+        bind_text(menu,(prefix+"phase").c_str(),phase_text(c.phase));
+        const int tone=party_tone(c.phase);
+        hide(menu,(prefix+"tone_good").c_str(),tone!=0);hide(menu,(prefix+"tone_warn").c_str(),tone!=1);hide(menu,(prefix+"tone_idle").c_str(),tone!=2);
+        const bool kick=!open && !party_ui.departed && roster.kickable(i);
+        hide(menu,(prefix+"kick").c_str(),!kick);enable(menu,(prefix+"kick").c_str(),kick);
+        hide(menu,(prefix+"selected").c_str(),!(confirm_kick && !c.row.pending && c.row.index==party_ui.kick_index));
+        if(notice_name.empty() && !c.row.self && (c.phase==4 || c.phase==5)) { notice_name=c.row.name;notice_phase=c.phase;notice_percent=c.percent; }
+    }
+    // Notice bar: one pending member at a time; its text nodes are hidden with the scene.
+    const bool waiting=!notice_name.empty() && notice_phase==4,receiving=!notice_name.empty() && notice_phase==5;
+    hide(menu,"lc_party_waiting",!waiting);hide(menu,"lc_party_receiving",!receiving);
+    hide(menu,"lc_notice_name",notice_name.empty());
+    bind_text(menu,"lc_notice_name",notice_name.c_str());
+    const bool percent_ok=receiving && notice_percent>=0 && notice_percent<=100;
+    hide(menu,"lc_notice_percent",!percent_ok);
+    bind_text(menu,"lc_notice_percent",percent_ok ? (std::to_string(notice_percent)+"%").c_str() : "");
+    // Propose load: visibly unavailable until round 14; the item itself is authored disabled and never enabled here.
+    enable(menu,"lc_party_propose",false);
+    hide(menu,"lc_party_propose_soon",!roster.hosting);hide(menu,"lc_party_propose_host_only",roster.hosting);
+    // Feedback (six seconds).
+    if(party_feedback && now_ms()-party_feedback_at>=party_feedback_ms) party_feedback=0;
+    hide(menu,"lc_party_copied",party_feedback!=1);hide(menu,"lc_party_copy_failed",party_feedback!=2);
+    // Confirmations: one scene, its own buttons; everything else is disabled while one is open so navigation cannot leave it.
+    hide(menu,"lc_party_confirm_leave_host",!(confirm_leave && roster.hosting));
+    hide(menu,"lc_party_confirm_leave_guest",!(confirm_leave && !roster.hosting));
+    hide(menu,"lc_party_confirm_kick",!confirm_kick);
+    bind_text(menu,"lc_kick_name",confirm_kick ? display(party_ui.kick_name,31).c_str() : "");
+    hide(menu,"lc_kick_name",!confirm_kick);
+    hide(menu,"lc_party_leave_yes",!confirm_leave);enable(menu,"lc_party_leave_yes",confirm_leave);
+    hide(menu,"lc_party_kick_yes",!confirm_kick);enable(menu,"lc_party_kick_yes",confirm_kick);
+    hide(menu,"lc_party_cancel",!open);enable(menu,"lc_party_cancel",open);
+    const bool idle=!open && !party_ui.departed;
+    for(const auto* item:{"lc_rail_resume","lc_rail_team","lc_rail_party","lc_rail_codex","lc_rail_options","lc_rail_quit","lc_party_leave"}) enable(menu,item,idle);
+    enable(menu,"lc_party_invite",idle && view.code.size()==8);
+}
 void tick_impl(void* menu,bool& native_called) {
     if(ready && live(menu)) {
         // The native mask is rising-edge input (controller +2f8 XOR +374).
@@ -1452,6 +1643,7 @@ void tick_impl(void* menu,bool& native_called) {
             } else if(s==screen::hub) {
                 if(mask&0x1000000) shortcut=int(intent::edit_name);
                 else if(mask&0x400000) shortcut=int(intent::rejoin);
+            } else if(s==screen::party) { if(mask&0x400000) shortcut=int(intent::party_invite); // MENU_NEXT (Y)
             } else if(s==screen::browse && (mask&0x400000)) shortcut=int(intent::refresh);
             else if(s==screen::host && (mask&0x100000)) shortcut=int(intent::open_room);
             if(shortcut) pending.post(shortcut,reinterpret_cast<std::uintptr_t>(menu),s);
@@ -1462,6 +1654,7 @@ void tick_impl(void* menu,bool& native_called) {
     if(tick_fault) tick_fault();
     if(!ready || !live(menu)) { pending.clear();keyboard_input.clear();if(broker_live() && broker_view().state!=broker::phase::room) broker_cancel();return; }
     const auto s=which(menu);
+    if(s==screen::party) { party_frame(menu);return; }
     broker_scope(s);
     if(s==screen::hub) entry.clear();
     load_recent();
@@ -1609,6 +1802,7 @@ void __fastcall tick(void* menu,void*) {
 void deactivate_state(void* menu,bool departure) {
     if(bindings.menu==reinterpret_cast<std::uintptr_t>(menu)) bindings.clear();
     pending.clear();keyboard_input.clear();
+    if(party_owner==reinterpret_cast<std::uintptr_t>(menu)) { party_ui.reset();party_owner=0;party_origin.clear();party_feedback=0; }
     const auto s=which(menu);
     // +48 is resource cleanup and may run while constructing a noncurrent
     // cached menu. Only real +1c deactivation owns a requested Hub departure.
@@ -1642,6 +1836,11 @@ void keyboard(unsigned char* state) {
     const auto address=reinterpret_cast<std::uintptr_t>(menu);
     const bool control=(state[0x1d]|state[0x9d])&0x80;
     const bool alt=(state[0x38]|state[0xb8])&0x80;
+    if(s==screen::party) {
+        if(!alt && control && edges[0x2e]) pending.post(int(intent::party_invite),address,s);
+        if(!alt && control) state[0x2e]=0;
+        return;
+    }
     if(lobby(s)) {
         lobby_state.copy_keyboard=!alt && control && (state[0x2e]&0x80);
         if(!alt && control && edges[0x2e]) pending.post(int(intent::copy_code),address,s);
@@ -1774,6 +1973,6 @@ void install(HMODULE game,const install_hooks* hooks) {
         game_version::refuse_startup(); return;
     }
     ready=true;
-    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 40 hooks committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability);
+    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 40 hooks committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability);
 }
 }

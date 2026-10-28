@@ -6,6 +6,7 @@
 #include <array>
 #include <algorithm>
 #include <optional>
+#include <vector>
 #include <string>
 #include <string_view>
 
@@ -18,11 +19,17 @@ inline constexpr char lobby_capability[] = "lc-online-lobby/1";
 // /2: per-row status/pip/build/dim scenes, list count + age, per-cause error scenes, service scene (docs/online-menus.md).
 inline constexpr char broker_capability[] = "lc-online-broker/2";
 inline constexpr char native_capability[] = "lc-online-native/1";
+// Round 8: base lc_party scene + the pause menu's lc_party_link rename. LC authors both only when the DLL carries this.
+inline constexpr char party_capability[] = "lc-online-party/1";
 inline constexpr char function_name[] = "lcOnlineIntent";
 enum class intent : int { enter=1, host, code, browse, other, back, unavailable, dismiss, edit_name, paste, erase, clear, done, rejoin, invalid_key,
     copy_code=16, confirm_leave=17, refresh=18, open_room=19, retry=20, visibility=21,
-    previous=22, next=23, row_first=24, row_last=30, join_selected=31, symbol_first=32, symbol_last=62 };
-enum class screen { none, main, hub, host, code, browse, lobby_host, lobby_join };
+    previous=22, next=23, row_first=24, row_last=30, join_selected=31, symbol_first=32, symbol_last=62,
+    // Round 8 (lc_party only; 68 and 70 are reserved and never accepted): the pause rail's Resume, Invite/Copy, the host's
+    // Propose load placeholder, Leave, its confirmation, the host's Kick confirmation and Kick on card 1..4.
+    party_resume=63, party_invite=64, party_propose=65, party_leave=66, party_leave_yes=67, party_kick_yes=69,
+    party_kick_first=71, party_kick_last=74, last=74 };
+enum class screen { none, main, hub, host, code, browse, lobby_host, lobby_join, party };
 inline screen identify(std::string_view name) {
     if(name=="main") return screen::main;
     if(name=="lc_online") return screen::hub;
@@ -31,9 +38,16 @@ inline screen identify(std::string_view name) {
     if(name=="lc_browse") return screen::browse;
     if(name=="host") return screen::lobby_host;
     if(name=="join") return screen::lobby_join;
+    if(name=="lc_party") return screen::party;
     return screen::none;
 }
-inline bool custom(screen s) { return s>=screen::hub && s<=screen::browse; }
+inline bool custom(screen s) { return (s>=screen::hub && s<=screen::browse) || s==screen::party; }
+// The intents only lc_party owns. Everything else is refused there, and these are refused everywhere else.
+inline bool party_intent(int value) {
+    return (value>=int(intent::party_resume) && value<=int(intent::party_leave_yes)) || value==int(intent::party_kick_yes) ||
+        (value>=int(intent::party_kick_first) && value<=int(intent::party_kick_last));
+}
+inline bool party_accepts(int value) { return value==int(intent::back) || value==int(intent::dismiss) || party_intent(value); }
 inline bool lobby(screen s) { return s==screen::lobby_host || s==screen::lobby_join; }
 inline bool controller_valid(int p) { return p>=0 && p<4; }
 inline bool enabled(std::optional<std::string_view> value) {
@@ -273,7 +287,12 @@ struct mailbox {
     int action=0;
     void clear() { source=0; from=screen::none; action=0; }
     bool post(int value, std::uintptr_t menu, screen s) {
-        if(action || !menu || value<int(intent::enter) || value>62) return false;
+        if(action || !menu || value<int(intent::enter) || value>int(intent::last)) return false;
+        if(s==screen::party) {
+            if(!party_accepts(value)) return false;
+            source=menu; from=s; action=value; return true;
+        }
+        if(value>62) return false;
         // Entry is a native queued openmenu request with captured real input;
         // scripts cannot manufacture it. Value 1 remains reserved.
         if(lobby(s)) {
@@ -304,4 +323,74 @@ template<class Engine> bool initialize(Engine& e, int p) {
 inline bool registration_fits(const script_functions_rules::overflow_table& table, int capacity) {
     return capacity>script_functions_rules::stock_capacity && table.count()<table.capacity() && !table.find(function_name);
 }
+
+// ---- Round 8: the in-session Party screen's pure model (docs/online-party-menu.md) --------------------------------------
+// One row per displayed card, in card order: the native participants by index (the host is 0), then broker-only pending
+// members. Facts only; nothing here is read from a peer's claim except what online_room already filtered.
+struct party_row { int index=-1; std::string name; bool self=false,host=false,pending=false; };
+struct party_roster {
+    std::vector<party_row> rows;
+    bool hosting=false,session=false; // this PC hosts the native session / a native session is running
+    // A row a Kick can name: a remote, admitted participant (never the host index 0, never this PC, never pending).
+    bool kickable(std::size_t card) const {
+        if(card>=rows.size() || !hosting || !session) return false;
+        const auto& r=rows[card];
+        return !r.pending && !r.self && !r.host && r.index>0 && r.index<4;
+    }
+    const party_row* find(int index,const std::string& name) const {
+        for(const auto& r:rows) if(!r.pending && r.index==index && r.name==name) return &r;
+        return nullptr;
+    }
+};
+enum class party_confirm { none, leave, kick };
+enum class party_act { none, native_back, copy, dismissed, opened_leave, leave_run, opened_kick, kick_run, stale, refused };
+struct party_result { party_act act=party_act::none; int kick_index=-1; };
+// A Leave or Kick is handed to the native lifecycle exactly once: `departed` stops every later action of this menu, and a
+// Kick's index stays marked until the roster stops listing it (a repeated or replayed Kick never reaches the transport twice).
+struct party_model {
+    party_confirm confirm=party_confirm::none;
+    int kick_index=-1; std::string kick_name;
+    bool departed=false;
+    unsigned kicked=0; // bit n: a Kick of native index n was handed over and the roster still lists it
+    void reset() { *this=party_model{}; }
+    // The roster moved: drop a Kick confirmation whose target is gone or is now somebody else, and forget the marks of
+    // indices that left. True when a confirmation was dropped.
+    bool refresh(const party_roster& r) {
+        for(int i=0;i<4;++i) if((kicked>>i)&1) { bool listed=false; for(const auto& row:r.rows) listed=listed || (!row.pending && row.index==i); if(!listed) kicked&=~(1u<<i); }
+        if(confirm!=party_confirm::kick) return false;
+        if(r.hosting && r.session && r.find(kick_index,kick_name)) return false;
+        confirm=party_confirm::none; kick_index=-1; kick_name.clear(); return true;
+    }
+    party_result apply(int value,const party_roster& r) {
+        party_result out;
+        if(departed) return out;
+        const bool open=confirm!=party_confirm::none;
+        auto close=[&] { confirm=party_confirm::none; kick_index=-1; kick_name.clear(); };
+        switch(value) {
+        case int(intent::back): if(open) { close(); out.act=party_act::dismissed; } else out.act=party_act::native_back; return out;
+        case int(intent::dismiss): if(open) { close(); out.act=party_act::dismissed; } return out;
+        case int(intent::party_resume): out.act=open ? party_act::refused : party_act::native_back; return out;
+        case int(intent::party_invite): out.act=open ? party_act::refused : party_act::copy; return out;
+        case int(intent::party_leave):
+            if(open) { out.act=party_act::refused; return out; }
+            confirm=party_confirm::leave; out.act=party_act::opened_leave; return out;
+        case int(intent::party_leave_yes):
+            if(confirm!=party_confirm::leave) { out.act=party_act::refused; return out; }
+            close(); departed=true; out.act=party_act::leave_run; return out;
+        case int(intent::party_kick_yes): {
+            if(confirm!=party_confirm::kick) { out.act=party_act::refused; return out; }
+            const int index=kick_index; const auto name=kick_name; close();
+            if(!r.hosting || !r.session || !r.find(index,name) || ((kicked>>index)&1)) { out.act=party_act::stale; return out; }
+            kicked|=1u<<index; out.act=party_act::kick_run; out.kick_index=index; return out;
+        }
+        default: break;
+        }
+        if(value>=int(intent::party_kick_first) && value<=int(intent::party_kick_last)) {
+            const auto card=std::size_t(value-int(intent::party_kick_first));
+            if(open || !r.kickable(card) || ((kicked>>r.rows[card].index)&1)) { out.act=party_act::refused; return out; }
+            confirm=party_confirm::kick; kick_index=r.rows[card].index; kick_name=r.rows[card].name; out.act=party_act::opened_kick; return out;
+        }
+        out.act=party_act::refused; return out; // Propose load (65) and every reserved value
+    }
+};
 }
