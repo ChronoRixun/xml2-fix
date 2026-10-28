@@ -363,7 +363,8 @@ struct party_model {
     }
     party_result apply(int value,const party_roster& r) {
         party_result out;
-        if(departed) return out;
+        // After a Leave was handed over, Back/Resume still reach the native Back (the queued quit may never run); nothing else does.
+        if(departed) { if(value==int(intent::back) || value==int(intent::party_resume)) out.act=party_act::native_back; return out; }
         const bool open=confirm!=party_confirm::none;
         auto close=[&] { confirm=party_confirm::none; kick_index=-1; kick_name.clear(); };
         switch(value) {
@@ -373,11 +374,13 @@ struct party_model {
         case int(intent::party_invite): out.act=open ? party_act::refused : party_act::copy; return out;
         case int(intent::party_leave):
             if(open) { out.act=party_act::refused; return out; }
+            // Outside a native session there is nothing to end for anyone: the native quit runs as the pause menu's own Quit does.
+            if(!r.session) { departed=true; out.act=party_act::leave_run; return out; }
             confirm=party_confirm::leave; out.act=party_act::opened_leave; return out;
         case int(intent::party_leave_yes):
-            if(confirm!=party_confirm::leave) { out.act=party_act::refused; return out; }
-            close(); departed=true; out.act=party_act::leave_run; return out;
         case int(intent::party_kick_yes): {
+            // ONE shared Yes item (67) completes whichever confirmation is open; 69 stays accepted for the kick.
+            if(confirm==party_confirm::leave && value==int(intent::party_leave_yes)) { close(); departed=true; out.act=party_act::leave_run; return out; }
             if(confirm!=party_confirm::kick) { out.act=party_act::refused; return out; }
             const int index=kick_index; const auto name=kick_name; close();
             if(!r.hosting || !r.session || !r.find(index,name) || ((kicked>>index)&1)) { out.act=party_act::stale; return out; }

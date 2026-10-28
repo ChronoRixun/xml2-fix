@@ -80,7 +80,12 @@ void party_tests(const script_functions_rules::func_entry* registration) {
         assert(leave.apply(8,r).act==party_act::dismissed && leave.apply(67,r).act==party_act::refused);
         assert(leave.apply(66,r).act==party_act::opened_leave && leave.apply(6,r).act==party_act::dismissed);
         assert(leave.apply(66,r).act==party_act::opened_leave && leave.apply(67,r).act==party_act::leave_run && leave.departed);
-        for(int value:{6,8,63,64,66,67,69,71,72}) assert(leave.apply(value,r).act==party_act::none);
+        for(int value:{8,64,66,67,69,71,72}) assert(leave.apply(value,r).act==party_act::none);
+        assert(leave.apply(6,r).act==party_act::native_back && leave.apply(63,r).act==party_act::native_back); // the queued quit may never run
+        // The shared Yes (67) completes a Kick; 69 still does; a Leave outside a session is the native quit at once.
+        { party_model k;assert(k.apply(72,r).act==party_act::opened_kick);const auto y=k.apply(67,r);assert(y.act==party_act::kick_run && y.kick_index==1 && !k.departed); }
+        { party_model k;auto none=r;none.session=false;assert(k.apply(66,none).act==party_act::leave_run && k.departed && k.confirm==party_confirm::none); }
+        { party_model k;assert(k.apply(66,r).act==party_act::opened_leave && k.apply(69,r).act==party_act::refused && k.confirm==party_confirm::leave); }
         // Propose load (65) and reserved values never act; Back and Resume are the native Back; Invite copies.
         party_model idle;
         for(int value:{65,68,70,75}) assert(idle.apply(value,r).act==party_act::refused);
@@ -118,12 +123,19 @@ void party_tests(const script_functions_rules::func_entry* registration) {
         assert(queued("runscript lcOnlineIntent(68)")==1 && queued("runscript lcOnlineIntent(70)")==1 && queued("runscript lcOnlineIntent(75)")==1);
         calls.clear();
         queue_command("runscript lcOnlineIntent(72)");tick(child.data(),nullptr);
-        assert(queued("runscript lcOnlineIntent(72)")==0 && shown("lc_party_confirm_kick") && texts["lc_kick_name"]=="Kitty" && shown("lc_party_kick_yes") && shown("lc_p2_selected"));
+        assert(queued("runscript lcOnlineIntent(72)")==0 && shown("lc_party_confirm_kick") && texts["lc_kick_name"]=="Kitty" && shown("lc_party_leave_yes") && shown("lc_party_cancel") && shown("lc_p2_selected") && party_focused.back()=="lc_party_cancel");
         assert(off("lc_rail_quit") && off("lc_party_leave") && off("lc_p3_kick") && hidden("lc_p3_kick") && party_removed.empty());
         // Kick Yes: the transport seam is asked exactly once for index 1; a replay and a re-kick do nothing.
-        post(69);tick(child.data(),nullptr);assert(party_removed==std::vector<unsigned>{1} && hidden("lc_party_confirm_kick"));
+        post(67);tick(child.data(),nullptr);assert(party_removed==std::vector<unsigned>{1} && hidden("lc_party_confirm_kick"));
+        // Review B: the closed confirmation leaves focus on a usable item (the Yes/Cancel buttons are hidden now).
+        assert(party_focused.back()=="lc_party_invite" && hidden("lc_party_leave_yes") && hidden("lc_party_cancel"));
         post(69);tick(child.data(),nullptr);post(72);tick(child.data(),nullptr);post(69);tick(child.data(),nullptr);
         assert(party_removed==std::vector<unsigned>{1} && hidden("lc_party_confirm_kick"));
+        // A stale Yes (no confirmation open) and a Yes whose target was replaced also end on a usable focus.
+        party_focused.clear();post(67);tick(child.data(),nullptr);assert(party_removed==std::vector<unsigned>{1} && party_focused.empty());
+        post(73);tick(child.data(),nullptr);party_rows[2].name="Zed";post(67);tick(child.data(),nullptr);
+        assert(party_removed==std::vector<unsigned>{1} && hidden("lc_party_confirm_kick") && party_focused.back()=="lc_p3_kick"); // origin is still a usable Kick button
+        party_rows[2].name="Alex";tick(child.data(),nullptr);
         // The roster stops listing it: the mark clears; a new member reusing index 1 can be kicked again.
         party_rows.erase(party_rows.begin()+1);tick(child.data(),nullptr);
         party_rows.insert(party_rows.begin()+1,{1,"Remy",false,false,2,30,2});tick(child.data(),nullptr);
@@ -179,5 +191,26 @@ std::cout<<"\n";    assert(shown("lc_party_copied")!=shown("lc_party_copy_failed
     post(63);tick(hub.data(),nullptr);assert(party_native_backs==2 && queued("mainmenuexit")==1);
     // The base Back slot posts only for a live party menu; otherwise the native Back runs unchanged (once) and nothing is queued.
     set_current(nullptr);on_back(hub.data(),nullptr);set_current(hub.data());tick(hub.data(),nullptr);assert(party_native_backs==3);
+    // Review D/C/B: the Leave latch never freezes the screen; outside a session Leave is the native quit at once; focus is
+    // moved only after the bindings (a hidden button cannot hold it).
+    {
+        calls.clear();party_native_backs=0;party_focused.clear();
+        deactivate(hub.data(),nullptr);
+        std::strcpy(reinterpret_cast<char*>(child.data()+0xc),"lc_party");set_current(child.data());party_default_rows(host);
+        tick(child.data(),nullptr);
+        post(66);tick(child.data(),nullptr);post(67);tick(child.data(),nullptr);
+        assert(queued("mainmenuexit")==1);
+        post(64);tick(child.data(),nullptr);post(66);tick(child.data(),nullptr);assert(queued("mainmenuexit")==1 && hidden("lc_party_confirm_leave_host") && hidden("lc_party_confirm_leave_guest")); // latched
+        post(6);tick(child.data(),nullptr);assert(party_native_backs==1); // Back still reaches the native Back after the latch
+        deactivate(child.data(),nullptr);set_current(child.data());tick(child.data(),nullptr);
+        post(66);tick(child.data(),nullptr);post(67);tick(child.data(),nullptr);assert(queued("mainmenuexit")==2);
+        ticks+=4001;tick(child.data(),nullptr);post(66);tick(child.data(),nullptr);
+        assert(shown(host ? "lc_party_confirm_leave_host" : "lc_party_confirm_leave_guest")); // the timeout cleared the latch
+        post(8);tick(child.data(),nullptr);assert(party_focused.back()=="lc_party_leave" && hidden("lc_party_cancel"));
+        party_session=false;tick(child.data(),nullptr);
+        post(66);tick(child.data(),nullptr);
+        assert(queued("mainmenuexit")==3 && hidden("lc_party_confirm_leave_host") && hidden("lc_party_confirm_leave_guest"));
+        party_session=true;
+    }
     std::cout<<"r8 party "<<(host ? "HOST" : "GUEST")<<" PASS cards/roles/tones/kick buttons; confirmation disables the rest; one native quit; Back/Resume native; stale menu generation\n";
 }

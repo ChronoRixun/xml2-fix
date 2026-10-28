@@ -21,8 +21,11 @@ builder: `lc-online-party/1` (`online_menus_rules::party_capability`, logged at 
   open Back only closes the confirmation. **Resume** (intent 63) is the same native Back. Open (live, unverified): whether
   the manager's return state lands on the PDA (one more Back resumes the game) or on the game; the procedure in section 7
   settles it.
-- **Team / Options / Quit** are the rail items' own `usecmd`s, copied by the builder from the native PDA halves
-  (`openmenu team`, `options`, `mainmenuexit`), so their authorization and confirmations are the native ones; **Codex**
+- **Team / Options** are the rail items' own `usecmd`s, copied by the builder from the native PDA halves
+  (`openmenu team`, `options`), so their authorization is the native one. **QUIT GAME** is NOT the native `mainmenuexit`
+  (the native row has no confirmation of its own; the PDA does not intercept it): it is intent 66, the Leave confirmation,
+  so a host always sees "End for everyone". Outside a native session (nothing to end for anyone) 66 runs the native quit at
+  once, exactly what the pause menu's own Quit does. **Codex**
   is `runscript codexMenu(0)` (the script function XML1's console uses, opens the native codex menu; unverified from the pause).
   The Party row itself (current page) has no command. None of these reaches the DLL.
 
@@ -33,15 +36,19 @@ builder: `lc-online-party/1` (`online_menus_rules::party_capability`, logged at 
 | 63 | Resume | native Back |
 | 64 | Invite / Copy code | clipboard copy of the room code (Y, Ctrl+C post the same); scene `lc_party_copied` / `lc_party_copy_failed` for 6 s |
 | 65 | Propose load | refused (placeholder until round 14): the item is authored disabled and never enabled; `lc_party_propose_soon` (host) / `lc_party_propose_host_only` |
-| 66 | Leave | opens a confirmation (`..._leave_host` says "End for everyone", `..._leave_guest`) |
-| 67 | Leave Yes | only with the Leave confirmation open: queues the native `mainmenuexit` through the console once (`0x55c410`, the route Quit uses) |
-| 69 | Kick Yes | only with the Kick confirmation open: `gns_transport::remove_member(index)` once |
+| 66 | Leave / rail Quit | opens a confirmation (none outside a session: the native quit runs at once) (`..._leave_host` says "End for everyone", `..._leave_guest`) |
+| 67 | the one shared Yes | completes whichever confirmation is open (the single Yes item is reachable by pad/keyboard from Cancel in both). Leave: queues the native `mainmenuexit` through the console once (`0x55c410`, the route Quit uses); after it Back/Resume still reach the native Back and a 4 s timeout clears the latch with a log line, so the screen never freezes if the quit does not run. Kick: asks the transport once (same as 69) |
+| 69 | Kick Yes | accepted but no longer authored (67 is the shared Yes); only with the Kick confirmation open |
 | 71..74 | Kick card 1..4 | opens the Kick confirmation (host only, remote admitted card only) |
 | 68, 70, >74 | reserved | refused everywhere (the authored-command queue boundary leaves them as plain native text) |
 | 6 / 8 | Back / dismiss | close an open confirmation, else (6) native Back |
 
 The mailbox takes exactly one action per tick, bound to the menu object that posted it (a stale entry never reaches a
 re-opened menu), and the Party intents are refused on every other screen while the other screens' intents are refused here.
+
+Focus: it is moved only after the frame's bindings (a hidden/disabled item cannot hold it). Opening a confirmation focuses
+Cancel; every close (Cancel, Back, Yes, a stale or refused Yes, a dropped target, a refused Leave) returns to the item that
+opened it when it is still usable, else Invite, else the current page.
 
 ## 3. Roster, hero, notices (data from `online_room::party`, nothing invented)
 
@@ -88,13 +95,15 @@ Three PCs (host A, guests B, C), candidate with this DLL and LC build with the p
 
 1. Pause in a running campaign on each PC, open Party from the pause menu with pad, keyboard and mouse. The Players row
    reads "Party", the native Players page never appears, one click = one action. Rail: Team opens the native team menu and
-   Back returns; Options and Quit behave as from the pause menu (Quit keeps its native confirmation); Codex opens the codex.
+   Back returns; Options behaves as from the pause menu; QUIT GAME shows the Leave confirmation (host: "End for everyone") and
+   only then runs the native quit; Codex opens the codex. Both confirmations (Leave and Kick) are completed by pad and by keyboard
+   (Cancel -> left -> Confirm).
 2. Back / Resume from Party: record whether the game resumes or the pause menu returns (then one more Back); neither may
    double-fire, lose focus or leave a menu without input.
 3. While A sits in Party the match continues for B and C (footer text is true). Roster, phases, ping, invite code stay live.
 4. Invite (button, Y, Ctrl+C) copies `XXXX-XXXX` (paste it elsewhere); clipboard failure shows the failed scene only.
 5. Host Kick of B from Party: confirmation names B; Yes: on every PC B leaves at the same frame, no desync, no stuck wait;
-   A's roster drops B once, C's too. A second Yes, or Kick again before B vanishes, does nothing. B sees its native lost-host
+   A's roster drops B once, C's too. Expect B to stay on A's roster as a pending "Connecting" card for about 10 s (until its watchdog) after the removal. Check the logs on all three PCs: each says "removed by the host" (A) / the agreed loss, then "agreed" and never "NOT AGREED", and there is no desync for at least 2 minutes. Repeat with a Kick issued just before an area exit. A second Yes, or Kick again before B vanishes, does nothing. B sees its native lost-host
    dialog and can join again with the code.
 6. Guest Leave from C: confirmation, then the native quit; A and B continue, the roster agrees. Host Leave from A: the
    "End for everyone" confirmation; B and C get the native host-lost dialog; no room is left advertised.
@@ -106,3 +115,6 @@ Three PCs (host A, guests B, C), candidate with this DLL and LC build with the p
 
 Resume return target (above); the Codex route; no AREA line; Party row offline shows an empty roster; the removed PC gets
 no dedicated notice (needs a peer contract and a rule id).
+
+## Notes for the first co-op beta
+A removed player gets no dedicated notice (no new peer contract, no new rule id): they see the native lost-connection dialog after about 10 s. Kick is not a ban.

@@ -1453,6 +1453,8 @@ std::uintptr_t party_owner=0;
 std::string party_origin;      // the item to focus again when a confirmation closes
 int party_feedback=0;          // 1 copied, 2 copy failed
 DWORD party_feedback_at=0;
+DWORD party_departed_at=0;     // a Leave was handed to the native quit; cleared by Back or after party_departed_ms
+constexpr DWORD party_departed_ms=4000;
 constexpr DWORD party_feedback_ms=6000;
 struct party_card { party_row row; int ping=-1; bool to_host=false; int route=0; int build=0; int phase=-1; int percent=-1; };
 struct party_snapshot_view { std::vector<party_card> cards; party_roster roster; std::string code; };
@@ -1514,9 +1516,15 @@ void party_frame(void* menu) {
     if(broker_live() && broker_calls.tick) broker_calls.tick();
     const auto view=party_collect();
     const auto& roster=view.roster;
+    // The queued native quit may never run (refused/blocked): the screen must not stay frozen. A short timeout clears the latch.
+    if(party_ui.departed && now_ms()-party_departed_at>=party_departed_ms) {
+        party_ui.departed=false;
+        logger::write("online menus: party Leave: the native quit did not take effect in %lu ms; the screen is usable again",(unsigned long)party_departed_ms);
+    }
+    std::string want_focus; // applied AFTER the bindings below: a hidden/disabled item cannot take focus
     const bool open_before=party_ui.confirm!=party_confirm::none;
     party_ui.refresh(roster);
-    if(open_before && party_ui.confirm==party_confirm::none && !party_origin.empty() && !party_ui.departed) { party_focus(menu,party_origin);party_origin.clear(); }
+    if(open_before && party_ui.confirm==party_confirm::none && !party_ui.departed) want_focus="*origin";
     const int action=pending.take(id,screen::party);
     if(action) {
         const auto result=party_ui.apply(action,roster);
@@ -1531,22 +1539,27 @@ void party_frame(void* menu) {
             const bool copied=!view.code.empty() && clipboard_copy(view.code.substr(0,4)+"-"+view.code.substr(4));
             party_feedback=copied ? 1 : 2;party_feedback_at=now_ms();
         } break;
-        case party_act::opened_leave: party_origin="lc_party_leave";party_focus(menu,"lc_party_cancel");break;
+        case party_act::opened_leave: party_origin="lc_party_leave";want_focus="lc_party_cancel";break;
         case party_act::opened_kick:
-            party_origin="lc_p"+std::to_string(action-int(intent::party_kick_first)+1)+"_kick";party_focus(menu,"lc_party_cancel");break;
-        case party_act::dismissed: party_focus(menu,party_origin);party_origin.clear();break;
+            party_origin="lc_p"+std::to_string(action-int(intent::party_kick_first)+1)+"_kick";want_focus="lc_party_cancel";break;
+        case party_act::dismissed: want_focus="*origin";break;
         case party_act::leave_run: {
             const bool ok=party_native_leave();
             logger::write("online menus: party Leave -> native quit route %s",ok ? "queued once" : "refused");
-            if(!ok) party_ui.departed=false; // nothing was handed over; the player may try again
-            party_origin.clear();
+            if(!ok) { party_ui.departed=false;want_focus="*origin"; } // nothing was handed over; the player may try again
+            else party_departed_at=now_ms();
+            if(party_origin.empty()) party_origin="lc_party_leave";
         } break;
         case party_act::kick_run: {
             const bool ok=broker_calls.remove_member && broker_calls.remove_member(unsigned(result.kick_index));
             logger::write("online menus: party Kick of native index %d -> agreed departure %s",result.kick_index,ok ? "started once" : "refused");
             if(!ok) party_ui.kicked&=~(1u<<result.kick_index);
-            party_origin.clear();
+            want_focus="*origin";
         } break;
+        case party_act::stale: case party_act::refused:
+            // A stale/refused Yes closed (or never had) its confirmation: focus must not stay on a button that just got hidden.
+            if(open_before && party_ui.confirm==party_confirm::none) want_focus="*origin";
+            break;
         default: break;
         }
     }
@@ -1620,12 +1633,28 @@ void party_frame(void* menu) {
     hide(menu,"lc_party_confirm_kick",!confirm_kick);
     bind_text(menu,"lc_kick_name",confirm_kick ? display(party_ui.kick_name,31).c_str() : "");
     hide(menu,"lc_kick_name",!confirm_kick);
-    hide(menu,"lc_party_leave_yes",!confirm_leave);enable(menu,"lc_party_leave_yes",confirm_leave);
-    hide(menu,"lc_party_kick_yes",!confirm_kick);enable(menu,"lc_party_kick_yes",confirm_kick);
+    // ONE shared Yes (intent 67) for both confirmations; lc_party_kick_yes (69) is no longer authored (absent item = no-op).
+    hide(menu,"lc_party_leave_yes",!open);enable(menu,"lc_party_leave_yes",open);
     hide(menu,"lc_party_cancel",!open);enable(menu,"lc_party_cancel",open);
     const bool idle=!open && !party_ui.departed;
     for(const auto* item:{"lc_rail_resume","lc_rail_team","lc_rail_party","lc_rail_codex","lc_rail_options","lc_rail_quit","lc_party_leave"}) enable(menu,item,idle);
     enable(menu,"lc_party_invite",idle && view.code.size()==8);
+    if(!want_focus.empty()) {
+        // Back to the item that opened the confirmation when it is usable now, else the invite button, else the current page.
+        std::string target=want_focus;
+        if(target=="*origin") {
+            target=party_origin;
+            const bool kick_origin=target.size()>3 && target.compare(0,4,"lc_p")==0 && target.back()=='k';
+            if(kick_origin) {
+                const auto card=std::size_t(target[4]-'1');
+                if(card>=roster.rows.size() || !roster.kickable(card) || ((party_ui.kicked>>roster.rows[card].index)&1)) target.clear();
+            } else if(target!="lc_party_leave") target.clear();
+            if(target.empty()) target=view.code.size()==8 ? "lc_party_invite" : "lc_rail_party";
+            if(party_ui.departed) target.clear();
+            party_origin.clear();
+        }
+        party_focus(menu,target);
+    }
 }
 void tick_impl(void* menu,bool& native_called) {
     if(ready && live(menu)) {
