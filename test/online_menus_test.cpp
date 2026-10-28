@@ -9,6 +9,7 @@
 #include <Windows.h>
 #include <cassert>
 #include <cmath>
+#include <clocale>
 #include <algorithm>
 #include <cstdarg>
 #include <cstring>

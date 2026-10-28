@@ -81,6 +81,12 @@ inline constexpr script_functions_rules::guard guards[]{
     {0x005bc1b0, "83ec100fbf417a992bc20fbf517255560fbf717657d1f88bfa2bfe8d7407ff03d00fbf4174897424100fbf7170895424", "item hit test rectangle"},
     {0x005c6490, "83ec10568bf10fbf467a0fbf4e72992bc20fbf5676d1f8578bf92bfa8d5407ff03c80fbf46748954240c0fbf5670894c", "text item hit test rectangle"},
     {0x005bd8f0, "8a4154c0e8022401c3", "item shown test +54 bit 2"},
+    // The engine mouse walk the hit boxes mirror (online_menus engine_items): the item tree's in-order walk and the first pass.
+    {0x00585be0, "8b4424043dffffff3f741feb038d49008d5001c1e2048b140a81faffffff3f74098bc23dffffff3f75e6", "item tree leftmost node (thiscall list, node; ret 4)"},
+    {0x00585c10, "568b7424088bc6c1e0048b54081403c181faffffff3f740a5e89542404e9aeffffff8b400c25ffffffbf3dffffff3f7422578bd0c1e2048b7c0a1403d13bf775118bf08b420c25ffffffbf3dffffff3f75e05f5ec20400", "item tree successor (thiscall list, node; ret 4)"},
+    {0x005ae1d5, "8b7cac2c85ff745b8bcf8b11ff520484c07550f6475408744a8bc70fbf48760fbf50722bd14a895424200fbf4870894c241c0fbf5072895424280fbf48740fbf50708d4411ff8b4c24488b5424445189442428528d44242450ffd385c00f8596", "base mouse first pass: desctext boxes unshifted"},
+    {0x005ae249, "8b46043dffffff3f8b8f24030000894c241474198d5001c1e2048b0c3281f9ffffff3f7408518bcee86a79fdff8b5c24548be881fdffffff3f75083bf60f84d20000008bbc", "base mouse second pass start: root index +4, left child, focus +0x324"},
+    {0x005ae28c, "8bbcaee80d00008b078bcfff500484c07526f647540874208b4424508b4c244c8b1753508b", "base mouse second pass: item pointers +0xde8 and vt+4 shown / +0x54 bit 3"},
     // The kicked guest (online_menus_rules kicked_by_host): the 0x2b removal handler (index / reason / flag body, its 0x612c40
     // call returning to 0x612f8e) and 0x612c40's EBP frame ([ebp+8] record).
     {0x00612f60, "8b442404568b7004578b780c8b06508bcfe84ae1ffff33c985c074158b560433c98a4e085152508bcfe8b2fcffff5f5ec35f8bc15ec3", "0x2b removal notice handler"},

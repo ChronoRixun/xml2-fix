@@ -14,12 +14,17 @@
 // screens only, the DLL then answers "which item holds this point" with the bars, and hands the engine a point inside the
 // winning item's own rectangle (so the engine's focus, hover sound and click code stay the retail ones), or a point no item
 // holds when the point lies outside every bar. A point outside every bar AND every listed item's rectangle is passed on
-// unchanged (prompt hover, unlisted items), as is every point on every other menu.
+// unchanged (prompt hover, unlisted items), as is every point on every other menu. Fix E2: the handed-over point lies in both
+// of the item's engine boxes (first pass: hover; second pass: click) and in no other focusable item's, walked in whatever
+// order the engine's item tree gives; the parser is strict and locale-independent (see parse).
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
+#include <charconv>
+#include <set>
+#include <system_error>
+#include <utility>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -27,6 +32,8 @@
 namespace online_menus_hits {
 inline constexpr char contract[] = "lc-online-hits/1";
 inline constexpr std::size_t max_entries = 1024;
+inline constexpr std::size_t max_line = 256;          // bytes before the LF
+inline constexpr std::size_t max_file = 256 * 1024;
 inline constexpr float view_height = 384.0f;
 inline constexpr float view_limit = 4096.0f;
 
@@ -40,39 +47,60 @@ inline bool name_ok(std::string_view s) {
     for(const char c:s) if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_')) return false;
     return true;
 }
+// Locale-independent (std::from_chars; strtod follows the C locale's decimal separator): optional '-', digits, optional
+// '.' and digits, within +/-view_limit.
 inline bool number(std::string_view s,float& out) {
     if(s.empty() || s.size()>24) return false;
-    char text[32]{}; for(std::size_t i=0;i<s.size();++i) { const char c=s[i]; if(!((c>='0'&&c<='9')||c=='-'||c=='.')) return false; text[i]=c; }
-    char* end=nullptr; const double v=std::strtod(text,&end);
-    if(end!=text+s.size() || !std::isfinite(v) || v<-view_limit || v>view_limit) return false;
+    std::size_t digits=0,dots=0;
+    for(std::size_t i=0;i<s.size();++i) {
+        const char c=s[i];
+        if(c>='0'&&c<='9') ++digits;
+        else if(c=='.') ++dots;
+        else if(!(c=='-' && i==0)) return false;
+    }
+    if(!digits || dots>1) return false;
+    double v=0;
+    const auto r=std::from_chars(s.data(),s.data()+s.size(),v,std::chars_format::fixed);
+    if(r.ec!=std::errc() || r.ptr!=s.data()+s.size() || !std::isfinite(v) || v<-view_limit || v>view_limit) return false;
     out=static_cast<float>(v); return true;
 }
-// The whole file or nothing: any malformed line refuses the table (the screens then keep the engine's own hit test).
+// The whole file or nothing: any malformed line refuses the table (the screens then keep the engine's own hit test) and
+// `why` says which line and what ("line 7: bad entry"). Strict by design: LF only (no CR), no byte order mark, no blank
+// line, single spaces, lines of at most max_line bytes, every (menu, item) pair once.
 inline bool parse(std::string_view text,table& out,std::string& why) {
     out.entries.clear();
+    std::size_t number_of_line=0;
+    auto fail=[&](const char* what)->bool { why="line "+std::to_string(number_of_line)+": "+what; out.entries.clear(); return false; };
     auto next_line=[&](std::string_view& line)->bool {
         if(text.empty()) return false;
-        const auto n=text.find('\n'); if(n==std::string_view::npos) { why="last line not terminated"; return false; }
+        ++number_of_line;
+        const auto n=text.find('\n'); if(n==std::string_view::npos) { fail("last line not terminated"); return false; }
         line=text.substr(0,n); text.remove_prefix(n+1); return true;
     };
     std::string_view line;
-    if(!next_line(line) || line!=contract) { if(why.empty()) why="not "+std::string(contract); return false; }
+    if(text.size()>=3 && text.substr(0,3)=="﻿") { number_of_line=1; return fail("byte order mark"); }
+    if(!next_line(line)) { if(why.empty()) fail("empty file"); return false; }
+    if(line!=contract) return fail(line.find('\r')!=std::string_view::npos ? "carriage return (CRLF)" : "bad header (not lc-online-hits/1)");
+    std::set<std::pair<std::string,std::string>> seen;
     while(next_line(line)) {
+        if(line.size()>max_line) return fail("line too long");
+        if(line.find('\r')!=std::string_view::npos) return fail("carriage return (CRLF)");
         std::array<std::string_view,6> f{}; std::size_t n=0;
         while(!line.empty()) {
             const auto sp=line.find(' ');
             const auto token=line.substr(0,sp);
-            if(token.empty() || n==f.size()) { why="bad fields"; out.entries.clear(); return false; }
+            if(token.empty() || n==f.size()) return fail("bad fields");
             f[n++]=token; if(sp==std::string_view::npos) break; line.remove_prefix(sp+1);
-            if(line.empty()) { why="bad fields"; out.entries.clear(); return false; }
+            if(line.empty()) return fail("bad fields");
         }
         entry e;
         if(n!=6 || !name_ok(f[0]) || !name_ok(f[1]) || !number(f[2],e.rect.left) || !number(f[3],e.rect.bottom) ||
-           !number(f[4],e.rect.right) || !number(f[5],e.rect.top) || !(e.rect.left<e.rect.right) || !(e.rect.bottom<e.rect.top)) {
-            why="bad entry"; out.entries.clear(); return false;
-        }
-        if(out.entries.size()==max_entries) { why="too many entries"; out.entries.clear(); return false; }
-        e.menu=std::string(f[0]); e.item=std::string(f[1]); out.entries.push_back(std::move(e));
+           !number(f[4],e.rect.right) || !number(f[5],e.rect.top) || !(e.rect.left<e.rect.right) || !(e.rect.bottom<e.rect.top))
+            return fail("bad entry");
+        if(out.entries.size()==max_entries) return fail("too many entries");
+        e.menu=std::string(f[0]); e.item=std::string(f[1]);
+        if(!seen.insert({e.menu,e.item}).second) return fail("duplicate entry");
+        out.entries.push_back(std::move(e));
     }
     if(!why.empty()) { out.entries.clear(); return false; }
     if(out.entries.empty()) { why="no entries"; return false; }
@@ -99,28 +127,50 @@ inline view_point from_engine(int x,int y) { return {x>=0 ? float(x)+0.5f : floa
 // Direct3D's fill rule for the bar's quad: a pixel is drawn when its centre is inside, the top and left edges included.
 inline bool inside(const bar& b,const view_point& p) { return p.x>=b.left && p.x<b.right && p.y>b.bottom && p.y<=b.top; }
 
-// The engine's own rectangle of an item (0x5bc1b0 / 0x5c6490, PtInRect: right and bottom excluded), from its fields.
+// The engine's own rectangles of an item, from its fields (+0x70 x, +0x72 y, +0x74 w, +0x76 h, +0x7a box top; PtInRect: right
+// and bottom excluded). `shifted` is the box the item's own hit test (vt+0x74: 0x5c6490 -> 0x5bc1b0) asks, moved by +0x7a / 2;
+// `first` is the UNSHIFTED box the menu's first pass asks (0x5ae0a0 over desctext1..5: hover highlight and hover sound; the
+// lobbies' 0x5ba2b0 / 0x5c8da0 over their buttons and text_playername1: focus and hover). For an ordinary row +0x7a is 0 and
+// the two are the same box; for a prompt the shifted box sits about 7 units off the first-pass box.
 struct item_box { int left=0,top=0,right=0,bottom=0; };
-inline item_box engine_box(std::int16_t x70,std::int16_t y72,std::int16_t w74,std::int16_t h76,std::int16_t top7a) {
-    const int shift=int(top7a)/2;
+struct item_rects { item_box shifted, first; };
+inline item_box engine_box(std::int16_t x70,std::int16_t y72,std::int16_t w74,std::int16_t h76,std::int16_t top7a,bool shifted=true) {
+    const int shift=shifted ? int(top7a)/2 : 0;
     return {int(x70), int(y72)-int(h76)-1+shift, int(w74)-1+int(x70), int(y72)+shift};
 }
+inline item_rects engine_rects(std::int16_t x70,std::int16_t y72,std::int16_t w74,std::int16_t h76,std::int16_t top7a) {
+    return {engine_box(x70,y72,w74,h76,top7a,true),engine_box(x70,y72,w74,h76,top7a,false)};
+}
 inline bool holds(const item_box& r,int x,int y) { return x>=r.left && x<r.right && y>=r.top && y<r.bottom; }
+// Some engine pass of this item answers for the point (either box).
+inline bool holds_any(const item_rects& r,int x,int y) { return holds(r.shifted,x,y) || holds(r.first,x,y); }
+inline item_box intersection(const item_box& a,const item_box& b) {
+    return {std::max(a.left,b.left),std::max(a.top,b.top),std::min(a.right,b.right),std::min(a.bottom,b.bottom)};
+}
 
-// A point inside `target` that none of `others` holds (the engine asks items in its own order; the winner must be the
-// target whatever that order is). Centre first, then every point, nearest rows to the centre first. False: none exists.
+// A point that is inside `target` (both of its passes, so the hover highlight, the hover sound and the click all name the
+// target) and that no OTHER focusable item of the menu answers for in either of its passes - whatever order the engine walks
+// them in (the walk is an in-order walk of the name-keyed item tree, not the table's order). Centre first, then every point,
+// nearest rows to the centre first. When the target's two boxes share no point (the first-pass box is then irrelevant to the
+// shifted box's click), the shifted box alone. False: no such point exists.
 template<class Others>
-inline bool free_point(const item_box& target,const Others& others,int& x,int& y) {
-    if(target.right<=target.left || target.bottom<=target.top) return false;
-    auto free_at=[&](int px,int py) { for(const auto& o:others) if(holds(o,px,py)) return false; return true; };
-    const int cx=(target.left+target.right-1)/2, cy=(target.top+target.bottom-1)/2;
+inline bool free_point_in(const item_box& region,const Others& others,int& x,int& y) {
+    if(region.right<=region.left || region.bottom<=region.top) return false;
+    auto free_at=[&](int px,int py) { for(const auto& o:others) if(holds_any(o,px,py)) return false; return true; };
+    const int cx=(region.left+region.right-1)/2, cy=(region.top+region.bottom-1)/2;
     if(free_at(cx,cy)) { x=cx; y=cy; return true; }
-    const int height=target.bottom-target.top;
+    const int height=region.bottom-region.top;
     for(int d=0;d<height;++d) for(const int py:{cy-d,cy+d}) {
-        if(py<target.top || py>=target.bottom) continue;
-        for(int px=target.left;px<target.right;++px) if(free_at(px,py)) { x=px; y=py; return true; }
+        if(py<region.top || py>=region.bottom) continue;
+        for(int px=region.left;px<region.right;++px) if(free_at(px,py)) { x=px; y=py; return true; }
     }
     return false;
+}
+template<class Others>
+inline bool free_point(const item_rects& target,const Others& others,int& x,int& y) {
+    const item_box both=intersection(target.shifted,target.first);
+    if(free_point_in(both,others,x,y)) return true;
+    return free_point_in(target.shifted,others,x,y);
 }
 // Several bars hold the point: the focused item's (the one bar on screen) if it is among them, else the one whose own box
 // is nearest the point (first listed on a tie). Index into `held`, -1 for none.
