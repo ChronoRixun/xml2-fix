@@ -115,6 +115,103 @@ namespace address_space
 			              hex32(u.highest_committed).c_str(), guard_state);
 		}
 
+		// "module+offset" for an address (a fault outside every module reads "?+address").
+		void where_of(const std::uint32_t at, char (&out)[96])
+		{
+			char name[64];
+			std::uint32_t base = 0;
+			module_of(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(at)), name, sizeof(name), base);
+			wsprintfA(out, "%s+%#lx", name[0] ? name : "?", static_cast<unsigned long>(at - base));
+		}
+
+		bool readable(const std::uint32_t at, const std::uint32_t size)
+		{
+			MEMORY_BASIC_INFORMATION info{};
+			if (VirtualQuery(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(at)), &info, sizeof(info)) != sizeof(info)) return false;
+			if (info.State != MEM_COMMIT || (info.Protect & (PAGE_NOACCESS | PAGE_GUARD))) return false;
+			return static_cast<std::uint64_t>(at) + size <= static_cast<std::uint64_t>(address_of(info.BaseAddress)) + info.RegionSize;
+		}
+
+		// A stack value is a return address when it lands in a module and the bytes before it are a call.
+		bool return_address(const std::uint32_t value)
+		{
+			char name[64];
+			std::uint32_t base = 0;
+			module_of(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(value)), name, sizeof(name), base);
+			if (!base || value < base + 0x1000 || !readable(value - 7, 7)) return false;
+			const auto* b = reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(value));
+			return b[-5] == 0xe8 || (b[-2] == 0xff && (b[-1] & 0x38) == 0x10) || (b[-3] == 0xff && (b[-2] & 0x38) == 0x10) ||
+			       (b[-6] == 0xff && (b[-5] & 0x38) == 0x10) || (b[-7] == 0xff && (b[-6] & 0x38) == 0x10);
+		}
+
+		// The crash context (0.6 preview fix G): registers, the faulting region, the EBP chain and the return addresses on
+		// the stack, so a fault outside every module (a call through a stale pointer) still names its caller chain.
+		void write_crash_context(const CONTEXT* c)
+		{
+			if (!c) return;
+			char w[96];
+			logger::write("crash: registers eax %08lx ebx %08lx ecx %08lx edx %08lx esi %08lx edi %08lx ebp %08lx esp %08lx eip %08lx",
+			              c->Eax, c->Ebx, c->Ecx, c->Edx, c->Esi, c->Edi, c->Ebp, c->Esp, c->Eip);
+			MEMORY_BASIC_INFORMATION info{};
+			if (VirtualQuery(reinterpret_cast<const void*>(static_cast<std::uintptr_t>(c->Eip)), &info, sizeof(info)) == sizeof(info))
+				logger::write("crash: eip region base %08lx allocation %08lx size %#lx state %#lx protect %#lx type %#lx", address_of(info.BaseAddress),
+				              address_of(info.AllocationBase), static_cast<unsigned long>(info.RegionSize), info.State, info.Protect, info.Type);
+			if (readable(c->Eip - 16, 32))
+			{
+				const auto* b = reinterpret_cast<const std::uint8_t*>(static_cast<std::uintptr_t>(c->Eip - 16));
+				char hex[100]{};
+				for (int i = 0; i < 32; ++i) wsprintfA(hex + 2 * i + (i >= 16 ? 1 : 0), i == 16 ? " %02x" : "%02x", b[i]);
+				logger::write("crash: bytes eip-16..eip+16 %s", hex);
+			}
+			std::uint32_t frame = c->Ebp;
+			for (int depth = 0; depth < 16 && frame && readable(frame, 8); ++depth)
+			{
+				const auto* f = reinterpret_cast<const std::uint32_t*>(static_cast<std::uintptr_t>(frame));
+				where_of(f[1], w);
+				logger::write("crash: ebp frame %d %08lx return %08lx (%s)", depth, frame, f[1], w);
+				if (f[0] <= frame) break;
+				frame = f[0];
+			}
+			int found = 0;
+			for (std::uint32_t at = c->Esp & ~3u; found < 40 && at < c->Esp + 0x2000 && readable(at, 4); at += 4)
+			{
+				const auto value = *reinterpret_cast<const std::uint32_t*>(static_cast<std::uintptr_t>(at));
+				if (!return_address(value)) continue;
+				where_of(value, w);
+				logger::write("crash: stack esp+%#lx %08lx (%s)", static_cast<unsigned long>(at - c->Esp), value, w);
+				++found;
+			}
+		}
+
+		// XML2FIX_CRASHTRACE=1 in the environment (agent live repro only; no ini key): every first-chance access violation /
+		// privileged / illegal instruction gets one line with its caller, also the ones a __try block swallows.
+		std::atomic<int> traced{0};
+		LONG WINAPI first_chance(EXCEPTION_POINTERS* info)
+		{
+			if (!info || !info->ExceptionRecord || !info->ContextRecord) return EXCEPTION_CONTINUE_SEARCH;
+			const auto code = info->ExceptionRecord->ExceptionCode;
+			if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_PRIV_INSTRUCTION && code != EXCEPTION_ILLEGAL_INSTRUCTION)
+				return EXCEPTION_CONTINUE_SEARCH;
+			if (traced.fetch_add(1) >= 60) return EXCEPTION_CONTINUE_SEARCH;
+			__try
+			{
+				char w[96], r[96];
+				const auto* c = info->ContextRecord;
+				where_of(c->Eip, w);
+				std::uint32_t ret = 0;
+				if (readable(c->Esp, 4)) ret = *reinterpret_cast<const std::uint32_t*>(static_cast<std::uintptr_t>(c->Esp));
+				where_of(ret, r);
+				const auto target = info->ExceptionRecord->NumberParameters >= 2 ? static_cast<std::uint32_t>(info->ExceptionRecord->ExceptionInformation[1]) : 0u;
+				logger::write("first chance: %#010lx at %08lx (%s) address %08lx; [esp] %08lx (%s); ecx %08lx esi %08lx thread %lu", code, c->Eip, w,
+				              target, ret, r, c->Ecx, c->Esi, GetCurrentThreadId());
+				if (traced.load() <= 8) write_crash_context(c);
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+			}
+			return EXCEPTION_CONTINUE_SEARCH;
+		}
+
 		// Then the crash goes on as it always did (the previous filter, else Windows' error reporting).
 		LONG WINAPI on_crash(EXCEPTION_POINTERS* info)
 		{
@@ -123,6 +220,7 @@ namespace address_space
 				__try
 				{
 					write_crash_line(info->ExceptionRecord);
+					write_crash_context(info->ContextRecord);
 				}
 				__except (EXCEPTION_EXECUTE_HANDLER)
 				{
@@ -177,6 +275,12 @@ namespace address_space
 		logger::write("address space: laa %s; 2 GB guard %s; top %s; %s free below 2 GB%s", laa_state, guard_state, hex32(top_address()).c_str(),
 		              megabytes(u.free_low).c_str(), u.straddling ? "; a block crosses 2 GB" : "");
 		previous_filter = SetUnhandledExceptionFilter(on_crash);
+		char trace[4]{};
+		if (GetEnvironmentVariableA("XML2FIX_CRASHTRACE", trace, sizeof(trace)) == 1 && trace[0] == '1')
+		{
+			AddVectoredExceptionHandler(1, first_chance);
+			logger::write("address space: first-chance fault trace on (XML2FIX_CRASHTRACE=1)");
+		}
 	}
 
 	const char* laa()

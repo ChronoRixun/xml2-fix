@@ -57,6 +57,32 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     menu_auth=true;tick(child.data(),nullptr);assert(!visibility["lc_broker_list"]);
     menu_complete=true;tick(child.data(),nullptr);
     assert(menu_view().rows.size()==9 && texts["room_0_0"]=="Remote ? ? ? name" && texts["room_0_6"].empty() && !visibility["lc_row0_build_same"] && visibility["lc_row0_build_other"]);
+    if(mode=="r5-browse-join") {
+        // 060q live failure 2: Join right after a list, as a player does (the shared 2 s lookup limiter still closed), and
+        // with the auto refresh's list in flight. The old fixtures advanced the clock 2 s before every Join; the real
+        // Browse never waits, so the single resolve call was refused and nothing happened.
+        const auto before=menu_resolves;
+        post(intent::join_selected);tick(child.data(),nullptr);
+        assert(menu_resolves==before && menu_resolve_attempts>0 && menu_view().state==bm::phase::idle); // held, not dropped
+        for(unsigned i=0;i<3;++i) { ticks+=500;tick(child.data(),nullptr);assert(menu_lists==1); }   // no refresh meanwhile
+        ticks+=600;tick(child.data(),nullptr);
+        assert(menu_resolves==before+1 && menu_last_code=="AAAAAAAA" && menu_view().state==bm::phase::resolving);
+        menu_complete=true;post(intent::back);tick(child.data(),nullptr);assert(menu_view().state==bm::phase::idle);
+        // Back on Browse, a list in flight (the 10 s auto refresh): the selected row's own command (Enter / pad A / click
+        // on the focused row) joins; the refresh is cancelled, the limiter's wait passes, the room resolves.
+        screen("lc_browse");ticks+=11000;tick(child.data(),nullptr);menu_complete=true;tick(child.data(),nullptr);
+        assert(menu_view().rows.size()==9);
+        post(static_cast<intent>(int(intent::row_first)+1));tick(child.data(),nullptr);       // selects row 1
+        ticks+=11000;tick(child.data(),nullptr);assert(menu_broker.pending() && menu_view().action==bm::operation::list);
+        const auto cancels=menu_cancels;
+        post(static_cast<intent>(int(intent::row_first)+1));tick(child.data(),nullptr);       // the selected row again: Join
+        assert(menu_cancels==cancels+1 && menu_resolves==before+1);                            // refresh cancelled, limiter closed
+        ticks+=2100;tick(child.data(),nullptr);
+        assert(menu_resolves==before+2 && menu_last_code=="AAAAAAAB" && menu_view().state==bm::phase::resolving);
+        std::cout<<"round5 menus r5-browse-join PASS (a Join right after a list is held until the 2 s limiter opens; a Join over "
+            "an in-flight refresh cancels it; the selected row's command joins; no refresh starts while a Join waits)\n";
+        return;
+    }
     for(unsigned i=0;i<20;++i) { post(intent::refresh);tick(child.data(),nullptr); }
     assert(menu_lists==1);
     // One page = browse_rows rows (060p: seven rows overflowed the engine's 175 scene anchors). Next selects row 5, the
@@ -128,7 +154,7 @@ void broker_retail_lobby_tests(const script_functions_rules::func_entry* registr
     import_stub("GetWindowThreadProcessId",reinterpret_cast<void*>(&copy_window_process));import_stub("GetClassNameA",reinterpret_cast<void*>(&copy_class));
     for(bool host:{true,false}) for(unsigned count=0;count<=4;++count) {
         people_count=count;setup_lobby(host);mask=0;
-        const auto activate=*reinterpret_cast<lobby_activate_t*>(host ? 0x69f284 : 0x69f350);
+        const auto activate=*reinterpret_cast<lobby_activate_t*>(host ? 0x69f284 : 0x69f34c);
         const auto tick=*reinterpret_cast<lobby_tick_t*>(host ? 0x69f2ac : 0x69f374);
         activate(child.data(),nullptr,0);tick(child.data(),nullptr);
         assert(texts["lc_room_code"]=="AAAA-AAAB" && texts["lc_room_name"]=="Broker ? ? title" && texts["lc_room_visibility"]=="Public");
@@ -154,7 +180,7 @@ void broker_retail_lobby_tests(const script_functions_rules::func_entry* registr
     }
     // An invalid native row count fails closed without losing broker code or
     // suppressing the native escape path; recovery restores the real cards.
-    people_count=3;setup_lobby(false);auto activate=*reinterpret_cast<lobby_activate_t*>(0x69f350);activate(child.data(),nullptr,0);
+    people_count=3;setup_lobby(false);auto activate=*reinterpret_cast<lobby_activate_t*>(0x69f34c);activate(child.data(),nullptr,0);
     auto tick=*reinterpret_cast<lobby_tick_t*>(0x69f374);put(checks_table.data(),0x84,2);
     tick(child.data(),nullptr);assert(texts["lc_member_count"]=="0" && texts["lc_room_code"]=="AAAA-AAAB");
     refresh_now();tick(child.data(),nullptr);assert(texts["lc_member_count"]=="3");

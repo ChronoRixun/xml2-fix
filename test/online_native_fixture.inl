@@ -380,7 +380,7 @@ void lobby_run(const script_functions_rules::func_entry* registration,bool loade
     tunnel_ready=true;menu_complete=true;tick(child.data(),nullptr);reply();tick(child.data(),nullptr);event(8);tick(child.data(),nullptr);
     assert(calls.back()=="request:join");custom_close();assert(menu_view().state==bm::phase::room);mode="r4-r6";setup_lobby(false);retail_restore(0x6097f0);redirect(0x6133a0,kick_local);redirect(0x5db270,lobby_pop);
     { const auto bytes=patch_transaction::bytes_of("8b442404c1");std::memcpy(reinterpret_cast<void*>(0x5d4d60),bytes.data(),bytes.size()); }
-    activate=*reinterpret_cast<lobby_activate_t*>(0x69f350);activate(child.data(),nullptr,0);
+    activate=*reinterpret_cast<lobby_activate_t*>(0x69f34c);activate(child.data(),nullptr,0);
     auto join_tick=*reinterpret_cast<tick_t*>(0x69f374);
     ready_person(1,false);refresh_now();mask=0;join_tick(child.data(),nullptr);
     mask=0x1000000;join_tick(child.data(),nullptr);assert(announces==1 && last_ready && menu_view().state==bm::phase::room);
@@ -421,7 +421,7 @@ void generation_run(const script_functions_rules::func_entry* registration) {
         hub.fill(0);put(hub.data(),0,old_host ? 0x69f274 : 0x69f33c);hub[4]=1;
         std::strcpy(reinterpret_cast<char*>(hub.data()+0xc),old_host ? "host" : "join");set_current(hub.data());
         const auto before=activations;const auto leaves_before=departures;
-        (*reinterpret_cast<lobby_activate_t*>(old_host ? 0x69f284 : 0x69f350))(hub.data(),nullptr,0);
+        (*reinterpret_cast<lobby_activate_t*>(old_host ? 0x69f284 : 0x69f34c))(hub.data(),nullptr,0);
         assert(activations==before);
         const auto before_ticks=native_ticks;const auto before_announces=announces;
         auto* local=*reinterpret_cast<unsigned char**>(0xa53058+0x78);const auto flags=local ? *reinterpret_cast<unsigned*>(local+0x1c) : 0;
@@ -447,10 +447,10 @@ void generation_run(const script_functions_rules::func_entry* registration) {
     assert(calls.back()=="request:join" && menu_view().generation==guest_generation && menu_view().state==bm::phase::room);
     mode="r4-r6";setup_lobby(false);retail_restore(0x6097f0);redirect(0x6133a0,kick_local);redirect(0x5db270,lobby_pop);
     { const auto bytes=patch_transaction::bytes_of("8b442404c1");std::memcpy(reinterpret_cast<void*>(0x5d4d60),bytes.data(),bytes.size()); }
-    (*reinterpret_cast<lobby_activate_t*>(0x69f350))(child.data(),nullptr,0);assert(menu_view().state==bm::phase::room);
+    (*reinterpret_cast<lobby_activate_t*>(0x69f34c))(child.data(),nullptr,0);assert(menu_view().state==bm::phase::room);
     // Once active, losing the broker must not revoke a healthy native lobby.
     const auto healthy=menu_broker;menu_broker.disconnected("after activation",ticks);
-    (*reinterpret_cast<lobby_activate_t*>(0x69f350))(child.data(),nullptr,0);assert(menu_view().state==bm::phase::room);menu_broker=healthy;
+    (*reinterpret_cast<lobby_activate_t*>(0x69f34c))(child.data(),nullptr,0);assert(menu_view().state==bm::phase::room);menu_broker=healthy;
     ready_person(1,false);refresh_now();(*reinterpret_cast<lobby_back_t*>(0x69f368))(child.data(),nullptr);assert(menu_view().state==bm::phase::idle);
     mode=original_mode;restore_services();hub_screen();
     // Reverse roles: an old guest activation cannot close or mutate a new host.
@@ -551,7 +551,7 @@ void review_run(const script_functions_rules::func_entry* registration) {
         if(original_mode=="r6-end-prune-host") people_count=2;setup_lobby(hosting);
         local_id=hosting ? 0 : 1;put(lobby_people[0].data(),0x1c,hosting ? 3 : 1);put(lobby_people[1].data(),0x1c,hosting ? 0 : 2);
         put(reinterpret_cast<void*>(0xa53058),0x78,unsigned(reinterpret_cast<std::uintptr_t>(lobby_people[0].data())));
-        (*reinterpret_cast<lobby_activate_t*>(hosting ? 0x69f284 : 0x69f350))(child.data(),nullptr,0);
+        (*reinterpret_cast<lobby_activate_t*>(hosting ? 0x69f284 : 0x69f34c))(child.data(),nullptr,0);
         assert(menu_view().state==bm::phase::room && menu_leaves==0);
         std::cout<<"end fixture: activated native lobby\n";session_end_services(hosting);std::cout<<"end fixture: services ready\n";
         const bool direct=original_mode=="r6-end-direct-guest",lobby=original_mode=="r6-end-lobby-guest";
@@ -754,7 +754,7 @@ void review_run(const script_functions_rules::func_entry* registration) {
         mode="r4-r6";setup_lobby(hosting);
         hub.fill(0);put(hub.data(),0,hosting ? 0x69f274 : 0x69f33c);hub[4]=1;
         std::strcpy(reinterpret_cast<char*>(hub.data()+0xc),hosting ? "host" : "join");set_current(hub.data());
-        auto activate=*reinterpret_cast<lobby_activate_t*>(hosting ? 0x69f284 : 0x69f350);
+        auto activate=*reinterpret_cast<lobby_activate_t*>(hosting ? 0x69f284 : 0x69f34c);
         const auto before=activations;activate(hub.data(),nullptr,0);assert(activations==before && menu_view().generation==generation);
         set_current(child.data());activate(child.data(),nullptr,0);assert(activations==before+1 && menu_view().state==bm::phase::room);
     } else if(mode=="r6-nit-setup-mixed") {
