@@ -13,14 +13,19 @@ struct lobby_fixture {
     char code[10]{};
     // Round-7 fields default to "not supplied" so round-4 fixtures keep their meaning:
     // build<0 -> same_build decides; phase<0 -> no phase text; route 0 unknown, 1 direct, 2 relay.
+    // Round 8 (the in-session Party screen): the native participant's name, whether it is this PC / the host, and the
+    // reported campaign-transfer percentage (-1 none). The lobby cards ignore these (they read the native rows).
     struct member { unsigned native_index=0; int ping_ms=-1; bool same_build=false;
-        bool ping_to_host=false; int route=0; int build=-1; int phase=-1; };
+        bool ping_to_host=false; int route=0; int build=-1; int phase=-1;
+        char name[32]{}; bool self=false, host=false; int percent=-1; };
     member members[4]{};
     unsigned count=0;
     // Broker-roster members without a native row yet (Connecting / Checking build): never kick targets.
     struct pending_member { char name[32]{}; int phase=0; int build=0; int ping_ms=-1; bool ping_to_host=false; int route=0; };
     pending_member pending[3]{};
     unsigned pending_count=0;
+    // Round 8: this PC hosts the native session / a native session is set up (online_room::party).
+    bool hosting=false, session=false;
 };
 struct broker_api {
     bool (*available)()=nullptr;
@@ -45,6 +50,10 @@ struct broker_api {
     // Optional (round 7): the lobby cards' observed facts, and the measured RTT to a listed room's host.
     bool (*party)(lobby_fixture&)=nullptr;
     int (*room_rtt)(const std::string&)=nullptr;
+    // Optional (round 8): the host removes the remote participant with this native index through the transport's agreed
+    // departure (never a pre-game leave). Refused (false) unless this PC hosts a running session and the index is a
+    // remote participant it has a bound link to; a repeated call for the same loss is a no-op.
+    bool (*remove_member)(unsigned native_index)=nullptr;
 };
 void keyboard(unsigned char* state);
 bool requested();

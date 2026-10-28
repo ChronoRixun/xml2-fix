@@ -1679,6 +1679,38 @@ namespace gns_transport
 			__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 		}
 	}
+	namespace
+	{
+		// The native session is set up and this PC is its host (guarded field reads only; no native call).
+		bool session_hosted_here()
+		{
+			__try
+			{
+				const auto* s = reinterpret_cast<const std::uint8_t*>(session_static);
+				return *reinterpret_cast<const std::uint32_t*>(s) == session_vtable && s[session_set_up] && s[session_host] != 0;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+		}
+	}
+	// The host removes a remote participant IN SESSION (the Party screen's Kick). Not the native pre-game removal (0x6133a0)
+	// mid-frame: the participant's link is declared gone through the one loss path every vanished participant takes, so the
+	// removal is agreed at a cut frame on every PC (vanished_links), the others are told by the host's lost-inputs/lost-ready
+	// messages, and the removed PC's session ends as if its connection had been lost. Refused unless this PC hosts a running
+	// zone and the index names a remote participant with a bound, live link (never the host index 0, never this PC). A repeat
+	// for the same loss finds no surviving link and is a no-op.
+	bool remove_member(unsigned index)
+	{
+		if (state.load() != 1 || index == 0 || index > 3 || !ready || !session_hosted_here() || !zone_running()) return false;
+		for (auto& item : links)
+		{
+			auto& l = *item;
+			if (!survivor(l) || participant_index(l) != int(index)) continue;
+			logger::write("online: participant %u (%s) removed by the host from the Party screen - ending its link; the cut frame is agreed", index, text(l.address, l.port).c_str());
+			declare_gone(l, "removed by the host");
+			return l.closed || l.gone_at || l.gone_why;
+		}
+		return false;
+	}
 	bool party_snapshot(party_facts& out)
 	{
 		out = {};
@@ -1693,6 +1725,7 @@ namespace gns_transport
 namespace gns_transport
 {
 	bool party_snapshot(party_facts& out) { out = {}; return false; }
+	bool remove_member(unsigned) { return false; }
 	void install(HMODULE)
 	{
 		const auto value = ini::text(L"Online", L"Transport");
