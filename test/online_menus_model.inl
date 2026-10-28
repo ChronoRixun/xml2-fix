@@ -37,7 +37,9 @@ void run() {
     redirect(0x5bc3f0,reinterpret_cast<const void*>(&assign_stub));
     redirect(0x575980,reinterpret_cast<const void*>(&release_stub));
     const auto vt=reinterpret_cast<const unsigned*>(0x6a0304);
-    assert(vt[1]==0x5bd8f0 && vt[2]==0x5c4b90 && vt[0xe]==0x5bbdd0 && vt[0xf]==0x5c4c50 && vt[0x11]==0x5c5080);
+    // vt+0x44 (0x6a0348, retail 0x5c5080) is not used here: once the online menus are installed it is fix G's load adapter
+    // (its retail value is an install guard; r5b-model-hidden tests the adapter). This test calls vt+0x38 / +0x3c directly.
+    assert(vt[1]==0x5bd8f0 && vt[2]==0x5c4b90 && vt[0xe]==0x5bbdd0 && vt[0xf]==0x5c4c50);
     const auto install=reinterpret_cast<install_t>(vt[0xf]);
     const auto by_name=reinterpret_cast<by_name_t>(vt[0xe]);
     const auto set_hidden=reinterpret_cast<set_hidden_t>(vt[2]);
