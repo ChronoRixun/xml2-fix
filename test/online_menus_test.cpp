@@ -575,6 +575,8 @@ int main(int argc,char** argv) {
     if(mode.starts_with("r6-nit-") || mode.starts_with("r6-end-")) { native_fixture::review_run(entry);return 0; }
     if(mode=="r6-native") { native_fixture::run(entry);return 0; }
     if(mode=="r6-generations") { native_fixture::generation_run(entry);return 0; }
+    if(mode=="r9-history") { native_fixture::history_run(entry);return 0; }
+    if(mode=="r9-anchor-capacity") { native_fixture::anchor_capacity_run(entry);return 0; }
     if(mode=="r6-lobby-new" || mode=="r6-lobby-load") { native_fixture::lobby_run(entry,mode=="r6-lobby-load");return 0; }
     if(mode=="r5-broker" || mode=="r5-retail-lobby") {
         broker_menu_tests(entry);

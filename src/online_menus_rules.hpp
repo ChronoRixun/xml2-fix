@@ -29,6 +29,13 @@ enum class intent : int { enter=1, host, code, browse, other, back, unavailable,
     // Propose load placeholder, Leave, its confirmation, the host's Kick confirmation and Kick on card 1..4.
     party_resume=63, party_invite=64, party_propose=65, party_leave=66, party_leave_yes=67, party_kick_yes=69,
     party_kick_first=71, party_kick_last=74, last=74 };
+// Browse rows per page. XMen2.exe holds at most 175 named anchors per menu scene (playfield 0x5882e0: two inline
+// 175-entry vectors, count at +0x2d4, and the 175-entry name table whose add 0x588120 checks 0xaf); a 176th anchor
+// overwrites the vectors' bit masks and counts and the next push writes to a wild address (060p Browse crash at
+// 0x587654). Seven rows of the approved Browse need 241 anchors; five rows (LC tools/xml1build/online_menus.py
+// BROWSE_ROWS, the same number) fit with the shared per-row focus anchor. Intents 24..30 stay reserved.
+inline constexpr unsigned browse_rows = 5;
+static_assert(browse_rows>=1 && browse_rows<=7);
 enum class screen { none, main, hub, host, code, browse, lobby_host, lobby_join, party };
 inline screen identify(std::string_view name) {
     if(name=="main") return screen::main;

@@ -81,6 +81,9 @@ std::string fixture_code;
 bool (*lobby_fields)(lobby_fixture&)=nullptr;
 bool lobby_live(void* menu);
 bool native_route_request(const char* name,bool console=false);
+bool console_routed=false; // set by console_open (openmenu) for exactly one nested request_impl
+void __fastcall request(void* m,void*,const char* name,const char* args);
+void native_history_trim(void* menu);
 
 struct clipboard_api {
     HANDLE handle=nullptr;
@@ -403,11 +406,16 @@ __declspec(naked) void capture_stub() {
 }
 
 void request_impl(void* m,const char* name,const char* args) {
-    if(ready && !native_route_request(name)) return;
+    // console_open (openmenu) has already routed this request with console provenance; never route it twice.
+    const bool routed=console_routed;console_routed=false;
+    if(ready && !routed && !native_route_request(name)) return;
     pending.clear();keyboard_input.clear();
     if(name_edit.owned && name && std::strcmp(name,"text_entry") && std::strcmp(name,"lc_online") && !abandon_name()) return;
     auto* source=current();
     const auto source_id=reinterpret_cast<std::uintptr_t>(source);
+    // The main menu is the root: leaving it with itself still stacked (Hub Back -> main pushed lc_online) would let a
+    // later native close (Options Back) pop to the Hub. Same invariant as the custom screens' tick trim.
+    if(ready && which(source)==screen::main) native_history_trim(source);
     if(name && std::strcmp(name,"lc_code")) rejoin_seed.reset();
     if(ready && name && std::strcmp(name,"online")==0 && which(source)==screen::main) {
         // Availability precedes the capture gate: missing/wrong assets always
@@ -708,7 +716,7 @@ void bind_broker(void* menu,screen s) {
     if(browse_selected>=v.rows.size()) browse_selected=0;
     if(!v.rows.empty()) browse_code=v.rows[browse_selected].code;
     if(browse_offset>browse_selected) browse_offset=browse_selected;
-    if(browse_selected>=browse_offset+7) browse_offset=browse_selected-6;
+    if(browse_selected>=browse_offset+browse_rows) browse_offset=browse_selected-(browse_rows-1);
     const auto version=broker_calls.version ? broker_calls.version() : std::string();
     // List header: count and age. The age is DLL-ticked from the completion of the last good list.
     bind_text(menu,"list_count",v.list_known ? (std::string("- ")+std::to_string(v.rows.size())).c_str() : "");
@@ -716,7 +724,7 @@ void bind_broker(void* menu,screen s) {
     const std::uint32_t age=aged ? std::uint32_t(now_ms()-list_done_at) : 0;
     bind_text(menu,"list_age",aged ? age_text(age).c_str() : "");
     for(int k=1;k<=5;++k) hide(menu,("lc_age_fill"+std::to_string(k)).c_str(),!(aged && age_segments(age)>=k));
-    for(unsigned i=0;i<7;++i) {
+    for(unsigned i=0;i<browse_rows;++i) {
         const auto index=browse_offset+i;
         const bool present=index<v.rows.size();
         const auto* row=present ? &v.rows[index] : nullptr;
@@ -1656,6 +1664,32 @@ void party_frame(void* menu) {
         party_focus(menu,target);
     }
 }
+// Native menu history: manager +0x86094, ten 0x8c-byte entries (name at +0), depth at +0x86610. Opening a menu
+// pushes the outgoing one unless that name is already stacked (0x5d74d0); closing one without a deferred next pops
+// to the newest entry whose name differs (0x5d7080, e.g. text_entry Enter / native Back). The LC screens move by
+// forward requests, so a screen we come back to can still be stacked under the native menus opened above it: after a
+// failed hub Host the stack was [main, lc_online, lc_host, game_options] while the Hub was current, and Change name ->
+// Enter popped to game_options (live 060p x4). While a custom screen is current its own entry and everything above it
+// are stale - exactly what a native Back to it would have removed - so trim the depth to that entry.
+int native_history_trim_impl(void* menu) {
+    __try {
+        auto* m=static_cast<unsigned char*>(manager());
+        if(!m || *reinterpret_cast<std::uint32_t*>(m)!=0x6a236c || !menu) return -1;
+        auto& depth=*reinterpret_cast<int*>(m+0x86610);
+        if(depth<=0 || depth>10) return -1;
+        const auto* name=static_cast<const char*>(menu)+0xc;
+        for(int i=0;i<depth;++i) {
+            const auto* entry=reinterpret_cast<const char*>(m+0x86094+i*0x8c);
+            if(!std::strncmp(entry,name,63)) { const int dropped=depth-i;depth=i;return dropped; }
+        }
+    } __except(EXCEPTION_EXECUTE_HANDLER) { }
+    return 0;
+}
+void native_history_trim(void* menu) {
+    const int dropped=native_history_trim_impl(menu);
+    if(dropped>0) logger::write("online menus: native menu history trimmed at %s (%d stale entr%s)",
+        static_cast<const char*>(menu)+0xc,dropped,dropped==1 ? "y" : "ies");
+}
 void tick_impl(void* menu,bool& native_called) {
     if(ready && live(menu)) {
         // The native mask is rising-edge input (controller +2f8 XOR +374).
@@ -1684,6 +1718,7 @@ void tick_impl(void* menu,bool& native_called) {
     if(!ready || !live(menu)) { pending.clear();keyboard_input.clear();if(broker_live() && broker_view().state!=broker::phase::room) broker_cancel();return; }
     const auto s=which(menu);
     if(s==screen::party) { party_frame(menu);return; }
+    native_history_trim(menu);
     broker_scope(s);
     if(s==screen::hub) entry.clear();
     load_recent();
@@ -1734,8 +1769,8 @@ void tick_impl(void* menu,bool& native_called) {
         if(broker_live() && broker_calls.retry && broker_calls.retry() && s==screen::code) {
             resolve_ticket=broker_view().generation;resolve_edit=code.generation;code.submitted=code.generation;
         } break;
-    case intent::previous: if(s==screen::browse) { browse_selected=browse_selected>=7 ? browse_selected-7 : 0; browse_code.clear(); } break;
-    case intent::next: if(s==screen::browse && !broker_view().rows.empty()) { browse_selected=std::min<unsigned>(browse_selected+7,unsigned(broker_view().rows.size()-1));browse_code.clear(); } break;
+    case intent::previous: if(s==screen::browse) { browse_selected=browse_selected>=browse_rows ? browse_selected-browse_rows : 0; browse_code.clear(); } break;
+    case intent::next: if(s==screen::browse && !broker_view().rows.empty()) { browse_selected=std::min<unsigned>(browse_selected+browse_rows,unsigned(broker_view().rows.size()-1));browse_code.clear(); } break;
     case intent::join_selected: if(s==screen::browse && broker_live()) {
         const auto& v=broker_view();const auto version=broker_calls.version ? broker_calls.version() : std::string();
         if(!v.stale && browse_selected<v.rows.size()) {
@@ -1747,7 +1782,7 @@ void tick_impl(void* menu,bool& native_called) {
     case intent::unavailable: message("lc_notice_unavailable"); break;
     case intent::dismiss: error_visible=false; break;
     default:
-        if(s==screen::browse && int(action)>=24 && int(action)<=30) {
+        if(s==screen::browse && int(action)>=int(intent::row_first) && int(action)<int(intent::row_first)+int(browse_rows)) {
             const auto selected=browse_offset+unsigned(int(action)-24);
             if(selected<broker_view().rows.size()) { browse_selected=selected; browse_code=broker_view().rows[selected].code; }
         }
@@ -1961,8 +1996,8 @@ patch_transaction::contribution contribution() {
     c.writes.push_back(patch_transaction::relocation(0x5b9609,"e8",true,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&setuphost_queue_stub)),0,"native Host posting boundary"));
     c.writes.push_back({0x5b960e,{0x90,0x90},"native Post call padding"});
-    c.writes.push_back(patch_transaction::relocation(0x5f1c2e,"e8",true,
-        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&console_open_stub)),0,"native console menu request ownership"));
+    c.writes.push_back(patch_transaction::relocation(0x5f1f8b,"e8",true,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&console_open_stub)),0,"native console openmenu request ownership"));
     c.writes.push_back(patch_transaction::relocation(0x60a095,"e8",true,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&native_host_queue_stub)),0,"native Host queued request ownership"));
     c.writes.push_back(patch_transaction::relocation(0x69f66c,"",false,

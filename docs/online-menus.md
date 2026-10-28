@@ -150,14 +150,16 @@ retryable (rate_limited, timeout, offline, generic); a `refused` client phase ne
 carries no host/own token (the reply path does not keep them), so its scene cannot name the builds; the Browse detail
 line does for the selected row.
 
-**Browse rows** (seven rows R=0..6, shared relative art): `lc_rowR_st_{lobby,progress,closed,full}` (status kind),
+**Browse rows** (`online_menus_rules::browse_rows` = 5 rows per page, R=0..4, shared relative art; the approved seven rows need 241 scene anchors and XMen2.exe holds 175 per menu scene - playfield build `0x5882e0`, see below): `lc_rowR_st_{lobby,progress,closed,full}` (status kind),
 `lc_rowR_pips_{0..4}` (players, unknown = 0), `lc_rowR_build_{same,other,check}`, `lc_rowR_dim` (shown for full,
 closed, other-build and password rows) and the existing `lc_rowR_selected`. Status: players >= max -> full; started ->
 progress; not joinable -> closed; else lobby. **There is no `loading` kind**: the broker has no such field, so none is
 invented. Build: SAME only for a known equal token, OTHER only when both tokens are known and differ, otherwise CHECK.
 Cells `room_R_4`/`room_R_5` no longer exist as DATA: the status word, the ping `--` (no measurement exists and no
 connection is opened per row) and SAME/CHECK are drawn by the row scenes; `room_R_6` holds only the other build's
-token (<= 8 characters). The hit/focus cells are columns 0,1,2,3,6 (a menu's authored scene anchors are capped at 256). Area shows `--` when the
+token (<= 8 characters). The hit/focus cells are columns 0,1,2,3,6; the five cells of a row share one focus anchor `room_R_focus`.
+
+**Scene anchor capacity.** The playfield build `0x5882e0` walks the menu scene (`0x587f90`) and pushes every `ItemName` anchor's transform into a 175-entry stack vector and its user info into the playfield's own 175-entry vector (`0x587e40` -> `0x587620`, no bound check; count at +0x2d4, bit mask at +0x2bc); the name table (+0x3c) add `0x588120` refuses past 0xaf. Playfields live in a static 5-slot pool at `0x7ec72c` (stride 0x8b0). Anchors 176-181 overwrite the bit masks, the 182nd overwrites the count with a pointer and the 183rd push writes to a wild address: the 060p Browse crash `0xc0000005 at 0x00587654` (241 anchors). LC's builder refuses a scene over 175 (`online_menus.ENGINE_SCENE_ANCHORS`, `anchor_count`). Raising it means relocating that pool with larger inline tables (or replacing the build/lookup routines `0x587990`..`0x588950`). Area shows `--` when the
 broker row has no zone. The detail line is `Friends join at the next area - Same build as you (TOKEN)` /
 `- Other build (THEIRS vs your TOKEN)` / `- Build not checked`; it is empty for an empty list so `lc_broker_empty` is the
 only empty-state message (it still says `Refresh to update games` for a stale list without selection).
@@ -973,8 +975,11 @@ it adds no thread, transport, broker operation or script function. Its guarded
 sites are Game Options activation `0x69f66c`, tick `0x69f694`, Back
 `0x69f688`, accepted Post queue
 `0x5b9609`, the native Host open queue at `0x60a095`, and console `openmenu` dispatch at
-`0x5f1c2e` (the retail handler calls manager +0x74, separately from the +0x6c
-request slot). Difficulty shares the
+`0x5f1f8b` (the retail `openmenu` handler `0x5f1d80`, registered at `0x5f4a73`, ends in manager +0x6c; the
+hook decides console provenance there and then continues through the same +0x6c request path without routing it a
+second time). Round 6 hooked `0x5f1c2e`, which is inside `closemenu` (`0x5f1c10`, manager +0x74): the owned Host's
+queued `openmenu host` then reached the +0x6c hook as a plain request and was refused (live 060p: hub Host 0/4,
+`native_timeout`); the fixture now drives the real `0x5f1d80`. Difficulty shares the
 Post call site, so commands other than the exact `setuphost` still go through
 the stock queue. Native Host posting runs the actual `0x5f1bb0` handler,
 including `0x606e90` and `0x609f50`. The console handler entry `0x5f1bb0`
