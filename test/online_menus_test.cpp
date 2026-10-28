@@ -506,7 +506,7 @@ int main(int argc,char** argv) {
     install_hooks.clock=clock_stub;install_hooks.wall_clock=wall_stub;install_hooks.before_request=request_fault_stub;install_hooks.before_tick=tick_fault_stub;
     if(mode.starts_with("r4-")) install_hooks.lobby_fields=lobby_fields_stub;
     if(mode.starts_with("r8-party")) { party_api.remove_member=party_remove_stub;install_hooks.broker=&party_api;install_hooks.lobby_fields=party_fields_stub; }
-    if(mode=="r5-broker" || mode=="r5-retail-lobby" || mode=="r5b-views") install_hooks.broker=&menu_api;
+    if(mode=="r5-broker" || mode=="r5-retail-lobby" || mode=="r5b-views" || mode=="r5-browse-join") install_hooks.broker=&menu_api;
     if(mode=="r15-errors") install_hooks.broker=&menu_api15;
     if(mode.starts_with("r6-")) install_hooks.broker=&native_fixture::api;
     patch_transaction::hooks transaction_hooks;
@@ -535,6 +535,7 @@ int main(int argc,char** argv) {
     online_menus::install(reinterpret_cast<HMODULE>(0x400000));
     assert(overflow.count()==1 && std::memcmp(installed_image.data(),reinterpret_cast<void*>(0x401000),installed_image.size())==0);
     asset_files();fake_services();
+    if(mode=="r5b-model-hidden") { model_scene_fixture::tests();return 0; }
     if(mode.starts_with("r4-")) { lobby_tests(entry);return 0; }
     if(mode.starts_with("r8-party")) { party_tests(entry);return 0; }
     SetEnvironmentVariableW(L"LOCALAPPDATA",(root/L"local").c_str());
@@ -639,7 +640,7 @@ int main(int argc,char** argv) {
     if(mode=="r9-history") { native_fixture::history_run(entry);return 0; }
     if(mode=="r9-anchor-capacity") { native_fixture::anchor_capacity_run(entry);return 0; }
     if(mode=="r6-lobby-new" || mode=="r6-lobby-load") { native_fixture::lobby_run(entry,mode=="r6-lobby-load");return 0; }
-    if(mode=="r5-broker" || mode=="r5-retail-lobby") {
+    if(mode=="r5-broker" || mode=="r5-retail-lobby" || mode=="r5-browse-join") {
         broker_menu_tests(entry);
         if(mode=="r5-retail-lobby") broker_retail_lobby_tests(entry);
         return 0;

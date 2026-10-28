@@ -426,7 +426,7 @@ void retail_list_review_tests(const script_functions_rules::func_entry* registra
         auto lookup=reinterpret_cast<void*(__fastcall*)(void*,void*,unsigned)>(0x6110c0);
         auto local=reinterpret_cast<void*(__fastcall*)(void*,void*)>(0x6111f0);
         for(bool host:{true,false}) for(unsigned count=1;count<=4;++count) {
-            people_count=count;setup_lobby(host);activate=*reinterpret_cast<lobby_activate_t*>(host ? 0x69f284 : 0x69f350);
+            people_count=count;setup_lobby(host);activate=*reinterpret_cast<lobby_activate_t*>(host ? 0x69f284 : 0x69f34c);
             activate(child.data(),nullptr,0);
             assert(texts["lc_member_count"]==std::to_string(count)); // fails on 2454786's terminal-sentinel predicate
             assert(*reinterpret_cast<void**>(people_table.data()+8)==nullptr); // adapter restores native refresh's iterator cursor
@@ -462,7 +462,7 @@ void retail_list_review_tests(const script_functions_rules::func_entry* registra
         std::cout<<"Kick regression PASS invalid view/selection cannot alias remote zero; unknown local cannot authorize Kick; Back exits\n";return;
     }
     if(mode=="r4-dismiss-invalid") {
-        setup_lobby(false);activate=*reinterpret_cast<lobby_activate_t*>(0x69f350);activate(child.data(),nullptr,0);
+        setup_lobby(false);activate=*reinterpret_cast<lobby_activate_t*>(0x69f34c);activate(child.data(),nullptr,0);
         tick=*reinterpret_cast<lobby_tick_t*>(0x69f374);back=*reinterpret_cast<lobby_back_t*>(0x69f368);
         ready_person(1,false);install_copy_failure();mask=0;post(intent::copy_code);tick(child.data(),nullptr);assert(lobby_error_shown() && !visibility["lc_lobby_error_copy"] && visibility["lc_lobby_error_target"] && visibility["lc_lobby_error"]);
         put(checks_table.data(),0x84,2);assert(back(child.data(),nullptr)==2 && current()==child.data() && !leaves);
@@ -474,12 +474,12 @@ void retail_list_review_tests(const script_functions_rules::func_entry* registra
 }
 void review_lobby_tests(const script_functions_rules::func_entry* registration,bool host) {
     auto tick=*reinterpret_cast<lobby_tick_t*>(host ? 0x69f2ac : 0x69f374);
-    auto activate=*reinterpret_cast<lobby_activate_t*>(host ? 0x69f284 : 0x69f350);
+    auto activate=*reinterpret_cast<lobby_activate_t*>(host ? 0x69f284 : 0x69f34c);
     auto back=*reinterpret_cast<lobby_back_t*>(host ? 0x69f2a0 : 0x69f368);
     auto post=[&](intent action) { int_value[1]=unsigned(action);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(registration->handler))(nullptr); };
     if(mode=="r4-refresh-paths") {
         for(bool hosting:{true,false}) {
-            people_count=4;setup_lobby(hosting);activate=*reinterpret_cast<lobby_activate_t*>(hosting ? 0x69f284 : 0x69f350);activate(child.data(),nullptr,0);
+            people_count=4;setup_lobby(hosting);activate=*reinterpret_cast<lobby_activate_t*>(hosting ? 0x69f284 : 0x69f34c);activate(child.data(),nullptr,0);
             tick=*reinterpret_cast<lobby_tick_t*>(hosting ? 0x69f2ac : 0x69f374);
             auto value=reinterpret_cast<unsigned(__fastcall*)(void*,void*,int)>(0x5bfc20);
             for(int i=0;i<4;++i) assert(value(lobby_names.data(),nullptr,i)==(hosting ? participant_ids[i] : 0));
@@ -625,14 +625,148 @@ void advice_tests(bool host) {
     assert(advice_lookups==0);
     std::cout<<"online menus "<<mode<<" PASS (skinned lobby update refreshes the list every 0.25 s and draws no ONLINE_ADVICE)\n";
 }
+// 060q live failure 1 (every Menus=1 guest crashed ~1 s after the GNS link): the join activation adapter sat in the
+// join class's vt+0x14 (0x69f350, the base CMenu enter callback 0x5af410, no arguments) instead of vt+0x10 (0x69f34c,
+// 0x5c8590, ret 4). The menu manager's transition 0x5d4c70 calls vt+0x14 with no argument; the adapter's `ret 4` took
+// one dword more, so 0x5d4c70's own `ret 4` returned into the menu object (heap): 0xc0000005 / 0xc0000096 at 0x156xxxxx.
+// The fixture modes called the patched slot directly with an argument, so they passed. This mode drives the slots the
+// way the ENGINE does: the retail 0x5d4c70 for vt+0x14 and a native-ABI caller (callee-cleaned pushes) for the rest.
+// Calls `menu`'s vtable slot `offset` as the engine does (ecx = menu, `args` zero dwords pushed, callee cleans) and
+// returns how far ESP moved (0 = the installed function cleaned exactly the retail argument bytes).
+__declspec(naked) int __cdecl call_slot_balance(void* /*menu*/,unsigned /*offset*/,unsigned /*args*/) {
+    __asm {
+        push ebx
+        push esi
+        push edi
+        mov esi,esp
+        mov ecx,[esp+16]
+        mov edx,[esp+20]
+        mov edi,[esp+24]
+    push_args:
+        test edi,edi
+        jz do_call
+        push 0
+        dec edi
+        jmp push_args
+    do_call:
+        mov eax,[ecx]
+        call dword ptr [eax+edx]
+        mov eax,esp
+        sub eax,esi
+        mov esp,esi
+        pop edi
+        pop esi
+        pop ebx
+        ret
+    }
+}
+int enters=0;void* entered_menu=nullptr;
+void __fastcall enter_stub(void* menu,void*) { ++enters;entered_menu=menu; } // stands in for 0x5af410 (no stack arguments)
+void native_slot_tests(bool host) {
+    const unsigned vt=host ? 0x69f274 : 0x69f33c;
+    const auto slot=[&](unsigned offset) { return *reinterpret_cast<unsigned*>(vt+offset); };
+    const auto in_image=[](unsigned value) { return value>=0x401000 && value<0x67f000; };
+    // vt+0x10 = the class activation (host 0x5ba870 / join 0x5c8590, both ret 4) carries the adapter; vt+0x14 = the base
+    // CMenu enter callback 0x5af410 (shared with the base vtable 0x69e41c) stays retail on BOTH classes.
+    assert(!in_image(slot(0x10)));
+    assert(slot(0x14)==0x5af410 && *reinterpret_cast<unsigned*>(0x69e41c+0x14)==0x5af410);
+    // The same role sits at the same offset on both lobby classes (host and join vtables share the CMenu layout).
+    for(const unsigned offset:{0x10u,0x1cu,0x2cu,0x30u,0x38u,0x80u,0xa0u,0xacu,0xb4u}) {
+        assert(!in_image(*reinterpret_cast<unsigned*>(0x69f274+offset)) || offset==0x2cu);
+        assert(!in_image(*reinterpret_cast<unsigned*>(0x69f33c+offset)));
+    }
+    // Retail caller of vt+0x14: the manager's transition 0x5d4c70(manager, menu) -> [vt+0x14]() -> ret 4. Before the fix
+    // this returned into the menu object; now it returns here with the enter callback run once.
+    redirect(0x5af410,reinterpret_cast<const void*>(&enter_stub));
+    const auto before=activations;
+    reinterpret_cast<void(__fastcall*)(void*,void*,void*)>(0x5d4c70)(mgr.data(),nullptr,child.data());
+    assert(enters==1 && entered_menu==child.data() && activations==before);
+    // Native-ABI callers of the hooked slots: activation (1 argument), tick / refreshes (none; the update
+    // slot 0x30 needs the frame clock and is driven with it by r4-advice*).
+    assert(call_slot_balance(child.data(),0x10,1)==0 && activations==before+1);
+    for(const unsigned offset:{0x38u,0xa0u,0xacu,0xb4u}) { mask=0;assert(call_slot_balance(child.data(),offset,0)==0); }
+    assert(call_slot_balance(child.data(),0x14,0)==0 && enters==2);
+    std::cout<<"online menus "<<mode<<" PASS (engine-ABI calls of every lobby slot balance the stack; the manager's 0x5d4c70 enter "
+        "transition reaches the retail 0x5af410 and the "<<(host ? "host" : "join")<<" activation adapter sits on vt+0x10)\n";
+}
+// 060q live failures 10 / 5 / 6 (Browse STATUS / PING / BUILD, Host PUBLIC + campaign / drop-in, lobby card frames empty):
+// a MENU_ITEM_MODEL authored hide="true" could never be shown. The RETAIL setHidden 0x5c4b90, setModel 0x5c4c50 and
+// load-model 0x5bbdd0 run here in the mapped image; the model manager, the menu's model table write (0x5bc3f0), the release
+// (0x575980) and the XML reads (base parse 0x5bc7a0 = hide attribute -> the retail setHidden, attribute getter 0x5649c0) are
+// fakes that record handles. Without the adapter (the retail load 0x5c5080) the authored model is released and a show draws
+// nothing; through the installed load slot 0x6a0348 an LC model survives for the show; retail models load unchanged.
+namespace model_scene_fixture {
+struct node { const char* model; bool hidden; };
+std::vector<std::string> names;
+unsigned releases=0,released=0;
+std::array<unsigned,0x100> mgr_vt{};std::array<unsigned,4> fake_mgr{};
+unsigned handle_of(const char* name) {
+    const std::string n=name ? name : "(invis)";
+    for(unsigned i=0;i<names.size();++i) if(names[i]==n) return 0x1000+i;
+    names.push_back(n);return 0x1000+unsigned(names.size()-1);
+}
+void __fastcall load(void*,void*,unsigned* out,const char* name,int) { *out=handle_of(name); }
+float __fastcall frame_time(void*,void*) { return 0.0f; }
+void* __cdecl manager_get() { return fake_mgr.data(); }
+bool __fastcall set_model(void* it,void*,unsigned* handle,unsigned* save) {
+    auto* model=reinterpret_cast<unsigned*>(static_cast<unsigned char*>(it)+0x58);
+    if(save) *save=*model;
+    *model=*handle;return true;
+}
+void __cdecl release(unsigned* handle) { ++releases;released=*handle; }
+const char* __fastcall attribute(void* n,void*,const char* key) { return std::string_view(key)=="model" ? static_cast<node*>(n)->model : nullptr; }
+void __fastcall base_parse(void* it,void*,void* n) {
+    if(static_cast<node*>(n)->hidden) reinterpret_cast<void(__fastcall*)(void*,void*,bool)>(0x5c4b90)(it,nullptr,true);
+}
+void __fastcall owner_note(void*,void*,const char*,int) {}
+std::array<unsigned,0x40> owner_vt{};std::array<unsigned,4> owner{};
+using load_t=void(__fastcall*)(void*,void*,void*);
+struct item_state { unsigned model,saved;bool hidden; };
+item_state run(load_t loader,const char* model,bool hidden,bool show_after) {
+    std::array<unsigned char,0x200> it{};put(it.data(),0,0x6a0304);
+    owner_vt[0x74/4]=unsigned(reinterpret_cast<std::uintptr_t>(&owner_note));owner[0]=unsigned(reinterpret_cast<std::uintptr_t>(owner_vt.data()));
+    put(it.data(),4,unsigned(reinterpret_cast<std::uintptr_t>(owner.data()))); // the owning menu (0x5c5080 reports the model to it)
+    node n{model,hidden};loader(it.data(),nullptr,&n);
+    if(show_after) reinterpret_cast<void(__fastcall*)(void*,void*,bool)>(0x5c4b90)(it.data(),nullptr,false);
+    return {*reinterpret_cast<unsigned*>(it.data()+0x58),*reinterpret_cast<unsigned*>(it.data()+0x94),(it[0x54]&4)!=0};
+}
+void tests() {
+    mgr_vt[0x260/4]=unsigned(reinterpret_cast<std::uintptr_t>(&load));mgr_vt[0x24/4]=unsigned(reinterpret_cast<std::uintptr_t>(&frame_time));
+    fake_mgr[0]=unsigned(reinterpret_cast<std::uintptr_t>(mgr_vt.data()));
+    redirect(0x5d8920,reinterpret_cast<const void*>(&manager_get));redirect(0x5bc3f0,reinterpret_cast<const void*>(&set_model));
+    redirect(0x575980,reinterpret_cast<const void*>(&release));redirect(0x5649c0,reinterpret_cast<const void*>(&attribute));
+    redirect(0x5bc7a0,reinterpret_cast<const void*>(&base_parse));
+    const auto installed=*reinterpret_cast<load_t*>(0x6a0348);
+    const auto retail=reinterpret_cast<load_t>(0x5c5080);
+    assert(reinterpret_cast<std::uintptr_t>(installed)!=0x5c5080); // the adapter owns MENU_ITEM_MODEL's load slot
+    const char* lc="ui/models/lc_o_lc_browse_row_st_lobby";const auto lc_handle=handle_of(lc);
+    // The engine bug, reproduced with the retail load: hidden at load -> the authored model is released; a show draws nothing.
+    releases=0;auto r=run(retail,lc,true,false);
+    assert(r.hidden && r.saved==0 && releases>=1 && released==lc_handle && r.model!=lc_handle);
+    r=run(retail,lc,true,true);assert(!r.hidden && r.model!=lc_handle);
+    // Through the installed slot: hidden, m_invis drawn, the LC model kept for the show; hide / show cycles keep it.
+    releases=0;r=run(installed,lc,true,false);
+    assert(r.hidden && r.saved==lc_handle && r.model!=lc_handle && !(releases && released==lc_handle));
+    r=run(installed,lc,true,true);assert(!r.hidden && r.model==lc_handle);
+    // Retail models and shown LC models load exactly as the retail load does.
+    const char* stock="ui/models/m_retail_button";
+    const auto a=run(retail,stock,true,false),b=run(installed,stock,true,false);
+    assert(a.model==b.model && a.saved==b.saved && a.hidden==b.hidden && b.saved==0);
+    const auto c=run(retail,lc,false,false),d=run(installed,lc,false,false);
+    assert(c.model==d.model && d.model==lc_handle && c.saved==d.saved && !d.hidden);
+    std::cout<<"online menus "<<mode<<" PASS (retail setHidden / setModel / load-model: an LC model authored hidden survives for its show; "
+        "the retail load releases it; retail models and shown LC models load unchanged)\n";
+}
+}
 void lobby_tests(const script_functions_rules::func_entry* registration) {
     const bool host=mode.find("join")==std::string::npos;setup_lobby(host);
     auto tick=*reinterpret_cast<lobby_tick_t*>(host ? 0x69f2ac : 0x69f374);
-    auto activate=*reinterpret_cast<lobby_activate_t*>(host ? 0x69f284 : 0x69f350);
+    auto activate=*reinterpret_cast<lobby_activate_t*>(host ? 0x69f284 : 0x69f34c);
     auto back=*reinterpret_cast<lobby_back_t*>(host ? 0x69f2a0 : 0x69f368);
     auto post=[&](intent action) {
         int_value[1]=unsigned(action);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(registration->handler))(reinterpret_cast<void*>(1));
     };
+    if(mode.starts_with("r4-native-slots")) { native_slot_tests(host);return; }
     if(mode=="r4-retail-list" || mode=="r4-back-combos" || mode=="r4-unknown-kick" || mode=="r4-dismiss-invalid") {
         retail_list_review_tests(registration);return;
     }

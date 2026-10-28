@@ -547,15 +547,48 @@ void bind_text(void* menu,const char* item,const char* text) {
 // the model for ui/models/m_invis.igb. Live 060p: accepting only 0x5bcdb0 left every authored model
 // scene (Host visibility pair, campaign / drop-in variants, lobby cards, badges, Leave panel,
 // error scenes) at its XMLB start state, so PRIVATE stayed lit while the room posted public.
+void hide_refused(const char* item,std::uint32_t vtable,std::uint32_t setter) {
+    logger::write_once(std::string("online menus hide refused ")+item,"online menus: visibility of '%s' not set (item vtable %#x, setter %#x)",item,vtable,setter);
+}
 bool hide_native(void* menu,const char* item,bool hidden) {
+    std::uint32_t setter=0,vtable=0;bool found_item=false;
     __try {
         auto* found=at<void*(__thiscall*)(void*,const char*)>(0x5adc10)(menu,item);
-        const auto setter=found ? (*static_cast<const std::uint32_t**>(found))[8/4] : 0u;
+        found_item=found!=nullptr;
+        vtable=found ? *static_cast<const std::uint32_t*>(found) : 0u;
+        setter=found ? (*static_cast<const std::uint32_t**>(found))[8/4] : 0u;
         if(found && (setter==0x5bcdb0 || setter==0x5c4b90)) {
             at<hide_fn>(0x5ade10)(menu,item,hidden);return true;
         }
     } __except(EXCEPTION_EXECUTE_HANDLER) { }
+    if(found_item) hide_refused(item,vtable,setter);
     return false;
+}
+// ---- Model scenes authored hidden (0.6 preview fix G; 060q live failures 10, 5, 6) ---------------------------------------
+// MENU_ITEM_MODEL's load (vt+0x44 = 0x5c5080) runs the base parse first (0x5bc7a0: hide="true" sets the hidden bit through
+// setHidden 0x5c4b90 while the item has no model yet), then sets the authored model (vt+0x38 0x5bbdd0 -> 0x5c4c50). On a
+// hidden item 0x5c4c50 draws ui/models/m_invis and RELEASES the requested model (0x575980) instead of keeping it in the
+// saved slot +0x94 that a later setHidden(false) restores - so an item authored hidden can never be shown: the shown call
+// succeeds and draws nothing (live 060q/G: Browse STATUS / PING / BUILD and the row selection, the Host PUBLIC label and
+// campaign / drop-in variants, the lobby card frames and badges). For the Legends Classic online-menu models only (model
+// path ui/models/lc_o_*; every retail model loads unchanged) the adapter finishes the load the way the engine supports:
+// the authored model set while shown, then hidden through setHidden, which moves it to +0x94 for the next show.
+unsigned kept_hidden_models=0;
+void keep_hidden_model(void* it,void* node) {
+    __try {
+        auto* bytes=static_cast<unsigned char*>(it);
+        if(*static_cast<const std::uint32_t*>(it)!=0x6a0304 || !(bytes[0x54]&4) || *reinterpret_cast<void* const*>(bytes+0x94)) return;
+        const char* name=at<const char*(__thiscall*)(void*,const char*)>(0x5649c0)(node,reinterpret_cast<const char*>(0x6853fc)); // "model"
+        if(!name || std::strncmp(name,"ui/models/lc_o_",15)) return;
+        bytes[0x54]&=~4u;                                                                  // shown: 0x5c4c50 keeps the model
+        at<void(__thiscall*)(void*,const char*,void*)>(0x5bbdd0)(it,name,nullptr);          // vt+0x38: the authored model
+        at<void(__thiscall*)(void*,bool)>(0x5c4b90)(it,true);                               // hidden: model -> +0x94, m_invis drawn
+        ++kept_hidden_models;
+    } __except(EXCEPTION_EXECUTE_HANDLER) {}
+}
+void __fastcall model_item_load(void* it,void*,void* node) {
+    at<void(__thiscall*)(void*,void*)>(0x5c5080)(it,node);
+    keep_hidden_model(it,node);
 }
 bool hide(void* menu,const char* item,bool hidden) {
     bindings.scope(menu);
@@ -625,6 +658,7 @@ void hide_error_scenes(void* menu,int shown=-1) {
 }
 std::uint32_t retry_wait_ms() { return broker_calls.retry_in ? broker_calls.retry_in() : 0; }
 bool host_public = false;
+std::string browse_join_code; // a Browse join waiting for the broker client (browse_join_tick)
 std::uint64_t resolve_edit = 0;
 broker::ticket completed_list_ticket{};
 DWORD last_list_at=0,list_done_at=0;
@@ -658,12 +692,71 @@ void broker_pump(screen s) {
         completed_list_ticket=state.generation;last_list_at=now_ms();listed_started=true;
         list_done_at=last_list_at;list_done=true; // the list's age counts from its completion, not its request
     }
-    if(s==screen::browse && state.state!=broker::phase::refused && state.state!=broker::phase::retry_wait &&
+    if(s==screen::browse && browse_join_code.empty() && state.state!=broker::phase::refused && state.state!=broker::phase::retry_wait &&
         state.state!=broker::phase::room && broker_calls.list &&
         (state.state==broker::phase::idle) && broker_calls.view &&
         // 10-second idle refresh, including an empty successful list.
         (broker_calls.refresh_due ? broker_calls.refresh_due() : !listed_started || now_ms()-last_list_at>=broker::list_refresh_ms)) {
         if(broker_calls.list()) { last_list_at=now_ms();listed_started=true; }
+    }
+}
+// ---- Browse Join (0.6 preview fix G; 060q live failure 2) -------------------------------------------------------------
+// Live 060q: Enter / pad A / a click on a listed row and the Join prompt started nothing. Two causes: the row's command
+// (24+R) only selected the row, and the Join prompt's single resolve call was refused without a word whenever the shared
+// 2-second lookup limiter was still closed or a list request was in flight - which the 10-second auto refresh and every
+// F5 make the normal case on Browse (the fixtures advanced their clock 2 s before every Join, so they passed). Now focus
+// moving over the rows moves the selection, the selected row's command joins it, the prompt joins the selected one, and
+// the join is held (no new list starts meanwhile) until the broker
+// client takes it: an in-flight list is cancelled, the limiter's wait (<= 2 s) is waited out, then the code resolves and
+// joins exactly like Join by code. Every outcome is logged once.
+void* item(void* menu,const char* name);
+DWORD browse_join_since=0;const char* browse_join_via="";
+int focused_browse_row(void* menu) {
+    __try {
+        auto* focused=*reinterpret_cast<void**>(static_cast<char*>(menu)+0x324); // CMenu's focused item (setFocus writes it)
+        if(!focused) return -1;
+        static const char* const cells[]{"0","1","2","3","6"};
+        char key[16];
+        for(unsigned r=0;r<browse_rows;++r) for(const char* c:cells) {
+            std::snprintf(key,sizeof(key),"room_%u_%s",r,c);
+            if(item(menu,key)==focused) return int(r);
+        }
+    } __except(EXCEPTION_EXECUTE_HANDLER) {}
+    return -1;
+}
+const char* browse_join_refusal(const broker::client_view& v,const broker::public_room* row,const std::string& version) {
+    if(!row) return "no listed room is selected";
+    if(v.stale) return "the list is out of date - Refresh first";
+    if(!row->joinable) return "the room does not take players";
+    if(row->password) return "the room has a password";
+    if(row->players>=row->max_players) return "the room is full";
+    if(!row->version.empty() && row->version!=version) return "the room runs another build";
+    if(!broker_calls.resolve) return "no online service client";
+    return nullptr;
+}
+void browse_join(const char* via) {
+    if(!broker_live()) { logger::write("online menus: Browse join (%s): the online service is not available",via);return; }
+    const auto& v=broker_view();const auto version=broker_calls.version ? broker_calls.version() : std::string();
+    const auto* row=browse_selected<v.rows.size() ? &v.rows[browse_selected] : nullptr;
+    if(const auto* why=browse_join_refusal(v,row,version)) { logger::write("online menus: Browse join (%s) not started: %s",via,why);return; }
+    browse_join_code=row->code;browse_join_since=now_ms();browse_join_via=via;
+}
+// Each Browse tick, before the auto refresh: hand a held join to the broker client.
+void browse_join_tick(screen s) {
+    if(browse_join_code.empty()) return;
+    if(s!=screen::browse || !broker_live()) { browse_join_code.clear();return; }
+    const auto& v=broker_view();
+    const bool refreshing=v.action==broker::operation::list && (v.state==broker::phase::listing || v.state==broker::phase::authenticating);
+    if(refreshing && broker_calls.cancel) broker_calls.cancel(); // the join wins over a refresh in flight
+    if(broker_calls.resolve && broker_calls.resolve(browse_join_code)) {
+        logger::write("online menus: Browse join (%s): room lookup started after %u ms; the native join follows as for Join by code",
+                      browse_join_via,unsigned(now_ms()-browse_join_since));
+        browse_join_code.clear();return;
+    }
+    if(now_ms()-browse_join_since>5000) {
+        logger::write("online menus: Browse join (%s) not started: the online service client did not take the lookup within 5 s (state %d)",
+                      browse_join_via,int(v.state));
+        browse_join_code.clear();
     }
 }
 void bind_broker(void* menu,screen s) {
@@ -757,6 +850,9 @@ void bind_broker(void* menu,screen s) {
         enable(menu,"prompt_open",!waiting && v.state!=broker::phase::room);
     }
     if(s!=screen::browse) return;
+    if(const int focused_row=focused_browse_row(menu);focused_row>=0 && browse_offset+unsigned(focused_row)<v.rows.size()) {
+        browse_selected=browse_offset+unsigned(focused_row);browse_code=v.rows[browse_selected].code; // the selection follows focus
+    }
     if(!browse_code.empty()) {
         auto found=std::find_if(v.rows.begin(),v.rows.end(),[](const broker::public_room& r) { return r.code==browse_code; });
         if(found!=v.rows.end()) browse_selected=unsigned(found-v.rows.begin()); else browse_code.clear();
@@ -1976,6 +2072,7 @@ void tick_impl(void* menu,bool& native_called) {
         rejoin_seed=recent->code;destination="lc_code";
     } break;
     case intent::refresh:
+        browse_join_code.clear(); // a Refresh drops a join still waiting for the lookup limiter
         if(s==screen::browse && broker_live() && broker_calls.list && broker_calls.list()) { last_list_at=now_ms();listed_started=true; } break;
     case intent::open_room:
         if(s==screen::host && broker_live()) { native_host_begin(); return; } break;
@@ -1986,20 +2083,20 @@ void tick_impl(void* menu,bool& native_called) {
         } break;
     case intent::previous: if(s==screen::browse) { browse_selected=browse_selected>=browse_rows ? browse_selected-browse_rows : 0; browse_code.clear(); } break;
     case intent::next: if(s==screen::browse && !broker_view().rows.empty()) { browse_selected=std::min<unsigned>(browse_selected+browse_rows,unsigned(broker_view().rows.size()-1));browse_code.clear(); } break;
-    case intent::join_selected: if(s==screen::browse && broker_live()) {
-        const auto& v=broker_view();const auto version=broker_calls.version ? broker_calls.version() : std::string();
-        if(!v.stale && browse_selected<v.rows.size()) {
-            const auto& row=v.rows[browse_selected];
-            if(row.code==browse_code && row.joinable && !row.password && row.players<row.max_players &&
-                (row.version.empty() || row.version==version) && broker_calls.resolve) broker_calls.resolve(row.code);
-        }
-    } break;
+    case intent::join_selected: if(s==screen::browse) browse_join("Join prompt"); break;
     case intent::unavailable: message("lc_notice_unavailable"); break;
     case intent::dismiss: error_visible=false;if(s==screen::hub) host_left_state.dismiss();break;
     default:
         if(s==screen::browse && int(action)>=int(intent::row_first) && int(action)<int(intent::row_first)+int(browse_rows)) {
             const auto selected=browse_offset+unsigned(int(action)-24);
-            if(selected<broker_view().rows.size()) { browse_selected=selected; browse_code=broker_view().rows[selected].code; }
+            if(selected<broker_view().rows.size()) {
+                // Enter / pad A / a click on the selected room joins it ("[Enter] Join"); the selection follows focus (keys,
+                // pad and mouse hover move focus first), so the room under the focus bar is the one joined. A command for
+                // another row (no focus over it, e.g. a script) selects that row first.
+                const bool again=selected==browse_selected && browse_code==broker_view().rows[selected].code;
+                browse_selected=selected; browse_code=broker_view().rows[selected].code;
+                if(again) browse_join("row");
+            }
         }
         if(s==screen::code && int(action)>=32 && int(action)<=62) {
             code.append(alphabet[int(action)-32]); error_visible=false;
@@ -2012,7 +2109,7 @@ void tick_impl(void* menu,bool& native_called) {
     }
     if(s==screen::code) schedule_fixture(); // invalidate edits before draining worker completions
     if(destination && broker_live()) broker_cancel(broker_view().state==broker::phase::room);
-    if(!destination) broker_pump(s);
+    if(!destination) { browse_join_tick(s); broker_pump(s); }
     else if(broker_live() && broker_calls.tick) broker_calls.tick();
     if(s==screen::code && broker_live() && broker_view().state==broker::phase::room && resolve_ticket==broker_view().generation && code.complete(resolve_edit) && remembered_ticket!=resolve_ticket) {
         remembered_ticket=resolve_ticket;
@@ -2211,7 +2308,7 @@ patch_transaction::contribution contribution() {
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&queue_stub)),0,"authored usecmd intent boundary"));
     const std::pair<unsigned,const void*> lobby_hooks[]{
         {0x69f284,reinterpret_cast<const void*>(&host_activate)},
-        {0x69f350,reinterpret_cast<const void*>(&join_activate)},
+        {0x69f34c,reinterpret_cast<const void*>(&join_activate)},
         {0x69f290,reinterpret_cast<const void*>(&host_deactivate)},
         {0x69f358,reinterpret_cast<const void*>(&join_deactivate)},
         {0x69f2a0,reinterpret_cast<const void*>(&host_back)},
@@ -2248,6 +2345,8 @@ patch_transaction::contribution contribution() {
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&console_open_stub)),0,"native console openmenu request ownership"));
     c.writes.push_back(patch_transaction::relocation(0x60a095,"e8",true,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&native_host_queue_stub)),0,"native Host queued request ownership"));
+    c.writes.push_back(patch_transaction::relocation(0x6a0348,"",false,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&model_item_load)),0,"LC model scenes authored hidden"));
     c.writes.push_back(patch_transaction::relocation(0x69f66c,"",false,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&options_activate)),0,"native Host settings activation"));
     c.writes.push_back(patch_transaction::relocation(0x69f694,"",false,
@@ -2291,6 +2390,6 @@ void install(HMODULE game,const install_hooks* hooks) {
         game_version::refuse_startup(); return;
     }
     ready=true;
-    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 41 hooks committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability);
+    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 42 hooks committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability);
 }
 }

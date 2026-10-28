@@ -1323,3 +1323,42 @@ lobby tick and the native lobby tick it wraps read pad X as MENU_OTHER (guest Re
 MENU_NEXT (Copy), and `pad_prompt_scope()` draws `$MENU_OTHER` / `$MENU_NEXT` as X / Y there. The keyboard (Del / KP5), an
 unskinned native lobby and Prompts=off are unchanged. Host modes `r4-pad-host`, `r4-pad-join` (the real native Host / Join
 ticks with masks built from the retail code -> action table).
+
+## 0.6 preview fix G: the joining crash, Browse Join, model scenes authored hidden
+
+**The joining crash (060q: every Menus=1 guest, 3/3, ~1 s after the GNS link).** The join lobby's activation adapter was
+written into `0x69f350` = the join class's vt+0x14 (the base CMenu enter callback `0x5af410`, no stack argument) instead of
+`0x69f34c` = vt+0x10 (the class activation `0x5c8590`, `ret 4`; the host's `0x69f284` was right). The menu manager's transition
+`0x5d4c70(manager, menu)` calls vt+0x14 with no argument; the adapter's `ret 4` took one dword more, so `0x5d4c70`'s own
+`ret 4` returned into the menu object (private heap): the three different faults of 060q (writing 0x42, reading 0xFFFFFFFC,
+privileged instruction) are three menus' bytes executed. The guard bytes had been taken from the wrong slot (`10f45a00` =
+`0x5af410`), so the transaction verified it, and the fixtures called the patched slot directly WITH an argument. Now the
+adapter sits on `0x69f34c` (guard `90855c00`); the guest's join activation is wrapped for the first time (room line, code,
+cards). Host modes `r4-native-slots` / `r4-native-slots-join` drive the slots the way the engine does: the retail
+`0x5d4c70` for vt+0x14 (it must reach the retail `0x5af410` and return), and a native-ABI caller (callee-cleaned pushes,
+ESP compared) for activation, tick and the three refresh slots; vt+0x14 must stay `0x5af410` on both lobby classes.
+
+**Browse Join (060q: Enter / pad A / click / the Join prompt did nothing).** The row command (24+R) only selected the row, and
+the Join prompt's single resolve call was refused without a word while the shared 2-second lookup limiter was closed or a
+list was in flight - after every list, i.e. the normal case (the fixtures advanced their clock 2 s before every Join). Now
+the selection follows the focus over the rows (CMenu's focused item `menu+0x324` is one of `room_R_C`), the command of the
+selected row joins it (a row command for another row selects it first), the prompt joins the selected row, and a Join is
+held - no refresh starts meanwhile, an in-flight list is cancelled - until the broker client takes the lookup (<= 2 s; 5 s
+timeout, logged). The resolve then joins exactly like Join by code. Log: `online menus: Browse join (row|Join prompt): room
+lookup started after N ms ...` or `... not started: <reason>`. Host mode `r5-browse-join`.
+
+**Model scenes authored hidden (060q: Browse STATUS / PING / BUILD empty; Host PUBLIC label, campaign / drop-in and the YOUR
+ROOM badge; lobby card frames / badges; the Leave panel).** MENU_ITEM_MODEL's load (vt+0x44 `0x5c5080`, slot `0x6a0348`)
+runs the base parse (hide="true" -> setHidden `0x5c4b90` while there is no model yet) before it sets the authored model
+(vt+0x38 `0x5bbdd0` -> `0x5c4c50`); on a hidden item `0x5c4c50` draws m_invis and releases the requested model instead of
+keeping it in the saved slot +0x94 that the next setHidden(false) restores - the show succeeds and draws nothing (no hide call
+was refused: `hide_native` now logs once per item if one ever is). The adapter on `0x6a0348` runs the retail load, then, for
+LC online-menu models only (model path `ui/models/lc_o_*`, item still hidden, +0x94 empty), sets the authored model while
+shown and hides it again through the retail setHidden, which keeps it in +0x94. Retail models load unchanged. Host mode
+`r5b-model-hidden` (the retail setHidden / setModel / load-model code with a fake model manager: the retail load releases
+the model; the installed slot keeps it; retail and shown models are byte-for-byte the retail result).
+
+**Crash context.** The crash line is followed by the registers, the faulting region (base / allocation / protect / type),
+the bytes around EIP, the EBP chain and up to 40 return addresses found on the stack (a value in a module whose preceding
+bytes are a call). With `XML2FIX_CRASHTRACE=1` in the environment (agent live repro only; no ini key) every first-chance
+access violation / privileged / illegal instruction gets a line (60 at most, the first 8 with the full context).
