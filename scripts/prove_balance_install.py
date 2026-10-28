@@ -210,6 +210,7 @@ assert "ReceiveRounding=xml1" in parity["log"] and "DamageCap=xml1" in parity["l
 report["parity"] = {"sites": sorted(hex(v) for v in PARITY_SITES), "rules": r_on, "extra_bytes": len(extra)}
 
 LATE_PAD_BRIDGE = 0x61862A
+GAMES_LIST_NOTICE = {0x5b9a2b: 5, 0x5b9ba7: 5, 0x69f8e4: 4}
 if REF:
     ref = Path(REF)
     for tag, npc in (("noai", None), ("ai", "xml1")):
@@ -220,6 +221,11 @@ if REF:
         # the late-controller fix (no ini key, on in every build since 5c3b920) bridges the Advanced Options handler
         # 0x618390 at 0x61862A with jmp rel32 + nop; the beta 7 reference has no such site
         expected |= {LATE_PAD_BRIDGE + i for i in range(6)}
+        # the games-list refusal notice (082g; an optional part of the online agreement, no ini key): the two empty-row
+        # string lookups of CMenuGamesList's refresh CALL its thunk and its update slot (vt+0x30) points at its wrapper;
+        # the beta 7 reference has none of them
+        expected |= {va + i for va, n in GAMES_LIST_NOTICE.items() for i in range(n)}
+        assert final(new, 0x5b9a2b, 1)[0] == 0xE8 and final(new, 0x5b9ba7, 1)[0] == 0xE8, (tag, "games-list notice CALLs")
         bridge = final(new, LATE_PAD_BRIDGE, 6)
         assert bridge[0] == 0xE9 and bridge[5] == 0x90, (tag, bridge.hex())
         odd = unexplained(old, new, expected)

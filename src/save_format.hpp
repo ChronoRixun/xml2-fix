@@ -26,6 +26,8 @@ namespace save_format
 	void publish_zone_strings(std::uint32_t address);
 	void use_native_profile(const save_format_rules::native_profile& chosen);
 	void enable_actor_capacity96();
+	// [Limits] Actors=96 was requested but did not install this start: a 0x4 save's refusal names why.
+	void actor_capacity96_refused(const std::string& why);
 	const save_format_rules::native_profile& installed_profile();
 
 	// A requested LC installation must finish before the executable may start.

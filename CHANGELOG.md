@@ -13,6 +13,16 @@ controller scan cache below (the once-a-second pause with a controller connected
 byte changes, so beta.2 and beta.1 PCs play together and the 0.4.1-beta.1 build needs no Rebuild. The entries below
 are newest first.
 
+- **Readable refusals for opt-in settings** (082g, from the 082f live round). A save made with `[Limits] Actors=96`
+  (required bit 0x4) on a start where Actors=96 is off now says "This save was made with 96 actors turned on. Turn
+  on Actors=96 ([Limits] in xml2-fix.ini) and restart to load it." (slot list `(needs Actors=96)`), or why Actors=96
+  did not start when it is set; unknown bits keep the newer-build text; the file is untouched. A co-op joiner whose
+  host uses different gameplay settings now sees it on his own games list: the row in place of "No Games Found"
+  names the settings, and the dialog ("The host uses different gameplay settings: ... match them, restart the game
+  and join again.") is raised on the list's own update, where it is drawn (the dialog raised from the network receive
+  was set but not drawn). New optional agreement part `gameplay_agreement.games_list_notice`; no new message, field
+  or gameplay rule; the agreement record is unchanged.
+
 - **Controller scan cache** (`[Input] CacheDeviceScan`, default `1`; 1.9.0-beta.2 and 1.8.1,
   [docs](docs/controller-scan-cache.md)). The retail zone timer (`0x6256E0`) asks for a DirectInput controller scan
   about once a second (worker `0x618C90` -> `0x628E20`, EnumDevices at `0x628E54`); the enumeration measured

@@ -2105,8 +2105,13 @@ namespace save_format
 		layout_profile = chosen;
 		native_layout = layout;
 		lc_known_required_features = layout->feature_bits;   // RETAIL 0, E10A2 1, W2 3
+#ifdef XML2_E4_CORE
+		static_assert(lcsave::feature_actor_capacity96 == lc_feature_actor_capacity96);
+		lc_setting_required_features = lc_feature_actor_capacity96; // this fix carries [Limits] Actors=96 (E4 core)
+#endif
 	}
 
+	void actor_capacity96_refused(const std::string& why){lc_actor_capacity96_requested=true;lc_actor_capacity96_failure=why;}
 	void enable_actor_capacity96(){actor_native_layout=*native_layout;actor_native_layout.feature_bits|=lcsave::feature_actor_capacity96;native_layout=&actor_native_layout;lc_known_required_features=native_layout->feature_bits;}
 	const native_profile& installed_profile() { return published_profile; }
 

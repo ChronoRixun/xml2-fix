@@ -17,7 +17,15 @@ actor-class dynamic records) missed placed actors in remembered zones and
 mixed dynamic-plus-hero demand. Saves without `0x4`, which is every existing
 save and every save written with `Actors` absent, load unchanged. A save
 carrying `0x4` is refused by older builds with their readable newer-save
-message. `[Limits] Actors=96` is an opt-in candidate setting; no native save
+message. This build (it carries the core) refuses it naming the setting when
+`0x4` is the only bit it is missing (with or without the W2 bit 1): Load Game
+says "This save was made with 96 actors turned on. Turn on Actors=96 ([Limits]
+in xml2-fix.ini) and restart to load it." and the slot list shows `(needs
+Actors=96)`; when `Actors=96` is in the ini but did not install this start,
+the text names the startup refusal instead ("Actors=96 is in xml2-fix.ini but
+did not start (missing prerequisite [Limits] ActorPools=124); fix that and
+restart to load it."). An unknown bit keeps the newer-build text, and the file
+is never touched (an overwrite keeps it as `.newer`). `[Limits] Actors=96` is an opt-in candidate setting; no native save
 structure or content identity changes, and no engine query runs at save time.
 
 Required prerequisites in the same protected startup transaction:
