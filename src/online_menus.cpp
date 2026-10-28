@@ -588,7 +588,10 @@ void keep_hidden_model(void* it,void* node) {
 }
 void __fastcall model_item_load(void* it,void*,void* node) {
     at<void(__thiscall*)(void*,void*)>(0x5c5080)(it,node);
+    const unsigned before=kept_hidden_models;
     keep_hidden_model(it,node);
+    // One line for the live check (060r): the adapter has kept the first LC model scene authored hidden.
+    if(!before && kept_hidden_models) logger::write_once("online:models-kept","online menus: LC model scenes authored hidden keep their model for the first show (MENU_ITEM_MODEL load slot 0x6a0348)");
 }
 bool hide(void* menu,const char* item,bool hidden) {
     bindings.scope(menu);
