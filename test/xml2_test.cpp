@@ -8624,6 +8624,21 @@ namespace
 		input[pad_at(3, true) + pad_buttons] = 0x80; // pad 3 pressed but not read this frame: not counted
 		seen.sample(input.data());
 		CHECK(seen.pads[3] == 0);
+		// Fix K (060r live): a key a co-op screen consumed before the poll (F5 on Browse is zeroed by online_menus::keyboard) is
+		// not in the input object - the note counts it as typed, once.
+		settle();
+		input[pad_at(0, true) + pad_buttons + 2] = 0x80; // X: the pad is shown
+		seen.sample(input.data());
+		CHECK(choose(mode::automatic, true, 0, seen) == shown::pad);
+		settle();
+		seen.sample(input.data()); // F5, zeroed before the poll: nothing in the object
+		CHECK(choose(mode::automatic, true, 0, seen) == shown::pad);
+		seen.keyboard_noted = true; // pad_prompts::note_keyboard, taken by the next poll
+		seen.sample(input.data());
+		CHECK(!seen.keyboard_noted && seen.keyboard == seen.frame && choose(mode::automatic, true, 0, seen) == shown::keyboard);
+		const auto noted_at = seen.keyboard;
+		seen.sample(input.data());
+		CHECK(seen.keyboard == noted_at);
 		put(pads_read, 0); // pad 0 unplugged
 		seen.sample(input.data());
 		CHECK(seen.pads_present == 0 && choose(mode::automatic, true, 0, seen) == shown::keyboard);

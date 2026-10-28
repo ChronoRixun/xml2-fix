@@ -79,6 +79,7 @@ std::optional<std::string> rejoin_seed;
 std::atomic<DWORD> game_thread{0},keyboard_thread{0};
 bool back_held=false;
 bool (*pad_probe)(int)=nullptr; // see screen_mask
+void (*keyboard_note)()=nullptr; // pad_prompts::note_keyboard: a key the co-op screens consumed (fix K)
 int menu_player=0;               // the controller that opened the Hub (its Accept press)
 std::optional<recent_game> recent;
 bool recent_loaded=false;
@@ -950,8 +951,9 @@ struct lobby_ui {
     bool confirm=false,error=false,copied=false,copy_held=false,role_held=false,focus_confirm=false,leave_authorized=false,copy_keyboard=false,copy_block=false;
     bool target_error=false,picker_safe=false;
     bool start_dimmed=false,start_was_enabled=false;
+    void* refocus_from=nullptr; void* refocus_to=nullptr; // fix K: the focus moved off a dimmed native button, and where to
     DWORD copied_at=0; // when "Code copied" was raised: it expires (copied_ms) so it can never sit unseen in front of Back
-    void reset(void* menu=nullptr) { ++generation;owner=menu;copied_at=0;confirm=error=copied=copy_held=role_held=focus_confirm=leave_authorized=copy_keyboard=copy_block=target_error=picker_safe=start_dimmed=start_was_enabled=false; }
+    void reset(void* menu=nullptr) { ++generation;owner=menu;copied_at=0;confirm=error=copied=copy_held=role_held=focus_confirm=leave_authorized=copy_keyboard=copy_block=target_error=picker_safe=start_dimmed=start_was_enabled=false;refocus_from=refocus_to=nullptr; }
 } lobby_state;
 thread_local bool lobby_ticking=false,base_ui_dispatch=false,native_mouse=false,back_consumed=false;
 thread_local unsigned refreshing_names=0;
@@ -1205,6 +1207,52 @@ bool lobby_action_valid(void* menu,unsigned mask) {
     }
     return true;
 }
+std::string engine_name(void* it);
+// 060r live (failure 9): with a guest not ready the host's START GAME is dimmed (bind_lobby clears its enabled bit, +0x54
+// bit 3) while the focus may sit on it, and the menu's navigation (CMenu vt+0x40 = 0x5aafd0) does nothing from a focused item
+// that is not enabled - every arrow and pad direction was dead (2/2). The focus never rests on a disabled native lobby button:
+// the item's own neighbour search (vt+0x5c, 0x5bccd0: follows its links, skipping hidden, neverfocus and disabled items) moves
+// it to the next control; when that button is enabled again and the focus is still where it was moved, it goes back.
+void* lobby_neighbour(void* it,int a,int b) {
+    __try { return at<void*(__thiscall*)(void*,int,int)>((*reinterpret_cast<std::uintptr_t**>(it))[0x5c/4])(it,a,b); }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+bool item_flags(void* it,unsigned char& flags) {
+    __try { flags=static_cast<unsigned char*>(it)[0x54];return true; } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+void* focus_of(void* menu);
+void* item_try(void* menu,const char* name);
+// The lobby's own controls by name (the focus is set by name, 0x5adf40); anything else by the item's own name.
+std::string lobby_item_name(void* menu,void* it) {
+    for(const char* n:{"text_startgame","text_kickplayer","text_leaveroom","text_readygame","lc_copy_code"}) if(item_try(menu,n)==it) return n;
+    return engine_name(it);
+}
+void lobby_focus_enabled(void* menu) {
+    void* const focused=focus_of(menu);
+    if(!focused || lobby_state.confirm) return;
+    unsigned char flags=0;
+    bool native_button=false;
+    for(const char* b:{"text_startgame","text_kickplayer","text_leaveroom","text_readygame"}) if(item_try(menu,b)==focused) native_button=true;
+    if(native_button && item_flags(focused,flags) && !(flags&8)) {
+        for(const auto [a,b]:{std::pair{0,1},std::pair{0,-1},std::pair{1,0},std::pair{-1,0}}) {
+            void* const next=lobby_neighbour(focused,a,b);
+            unsigned char nf=0;
+            if(!next || next==focused || !item_flags(next,nf) || !(nf&8) || (nf&0x14)) continue;
+            const auto name=lobby_item_name(menu,next);
+            if(name.empty() || name=="?" || !lobby_focus(menu,name.c_str())) continue;
+            logger::write_once("online:lobby-refocus","online menus: the lobby's focus left the dimmed %s for %s (a disabled focus takes no navigation)",lobby_item_name(menu,focused).c_str(),name.c_str());
+            lobby_state.refocus_from=focused;lobby_state.refocus_to=next;return;
+        }
+        return;
+    }
+    if(!lobby_state.refocus_from) return;
+    if(focused!=lobby_state.refocus_to) { lobby_state.refocus_from=lobby_state.refocus_to=nullptr;return; }
+    if(item_flags(lobby_state.refocus_from,flags) && (flags&8) && !(flags&0x14)) {
+        const auto name=lobby_item_name(menu,lobby_state.refocus_from);
+        if(name!="?") lobby_focus(menu,name.c_str());
+        lobby_state.refocus_from=lobby_state.refocus_to=nullptr;
+    }
+}
 void restore_lobby_focus(void* menu) {
     lobby_native_state state{};
     if(lobby_state_read(menu,state)) lobby_focus(menu,state.host ? (state.phase==1 ? "text_playername1" : "text_startgame") : "text_readygame");
@@ -1402,6 +1450,14 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         // Native Start still enforces role, admission, readiness and minimum.
         enable_native(menu,"text_startgame",lobby_state.start_was_enabled);
         lobby_state.start_dimmed=false;
+    }
+    lobby_focus_enabled(menu);
+    {   // 060r live (failure 9): the lobby prompts (drawn now - LC no longer ties them to the native help animation) follow the
+        // device like Join by code's: Copy is pad Y (lobby_screen_mask) or Ctrl+C. The engine rewrites the description slots
+        // on a focus change (0x5bb150 on its own navigation), so the cached binding is dropped then.
+        static void* prompt_focus=nullptr;
+        if(void* const focus=focus_of(menu); focus!=prompt_focus) { prompt_focus=focus;bindings.text.erase("desctext3"); }
+        bind_text(menu,"desctext3",lobby_pad_shown(menu) ? "Y Copy code" : "Ctrl+C Copy code");
     }
     const auto local=std::find(std::begin(view.ids),std::begin(view.ids)+view.count,view.local);
     const auto local_row=unsigned(local-std::begin(view.ids));
@@ -1629,25 +1685,42 @@ bool hits_ready() {
 void* item_try(void* menu,const char* name) {
     __try { return item(menu,name); } __except(EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
 }
-// The engine's own tests on an item: focusable (+0x54 bit 3) and shown (vt+4 = +0x54 bit 2 clear for text/model items), then
-// its rectangle fields (0x5bc530): both boxes the engine's passes ask (hits::item_rects).
-struct focusable { void* item=nullptr; hits::item_rects box; bool shown=false; };
-bool focusable_of(void* it,focusable& out) {
+// An item as the engine's mouse passes see it (online_menus_hits_rules.hpp engine_item; fix K): shown (vt+4 false), enabled
+// (+0x54 bit 3), which hit test its class has (vt+0x74), whether it has text, its two boxes (fields 0x70.. as 0x5bc530 lays
+// them). The host fixture's recorder (forwarding to 0x5c6490) is registered as a text test too (set_hits_text_alias).
+std::uintptr_t hits_text_alias=0;
+const char* engine_string(std::uint32_t id) {
+    // 0x5bc1b0's lookup: id 0 is the empty string 0x681968, else the string table (0x602200) entry id & 0xffffff.
+    if(!id) return "";
+    auto* table=at<char*(__cdecl*)()>(0x602200)();
+    if(!table) return "";
+    return table+*reinterpret_cast<int*>(table+(id&0xffffff)*4+4)+0x1008;
+}
+bool engine_item_of(void* it,hits::engine_item& out) {
     __try {
         auto* p=static_cast<unsigned char*>(it);
-        if(!(p[0x54]&8)) return false;
-        out.item=it; out.shown=!at<bool(__thiscall*)(void*)>((*reinterpret_cast<std::uintptr_t**>(it))[1])(it);
+        const auto* vt=*reinterpret_cast<std::uintptr_t**>(it);
+        out.shown=!at<bool(__thiscall*)(void*)>(vt[1])(it);
+        out.enabled=(p[0x54]&8)!=0;
+        const auto test=vt[0x74/4];
+        out.text_test=test==0x5bc1b0 || test==0x5c6490 || (hits_text_alias && test==hits_text_alias);
+        const char* text=engine_string(*reinterpret_cast<std::uint32_t*>(p+0x24));
+        out.has_text=text && text[0];
+        if(!out.has_text && test!=0x5bc1b0) { const char* token=engine_string(*reinterpret_cast<std::uint32_t*>(p+0x9c)); out.has_text=token && token[0]; }
         std::int16_t f[6]; std::memcpy(f,p+0x70,sizeof f);
         out.box=hits::engine_rects(f[0],f[1],f[2],f[3],f[5]); return true;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
-// An item's boxes whatever its focus / shown state (text_playername1: the lobbies' mouse asks its first-pass box regardless).
-bool boxes_of(void* it,focusable& out) {
+// The item's name (+8, a string table id - the name 0x5bc4b0 lays the item out by), for the diagnostic.
+void engine_name_raw(void* it,char (&name)[64]) {
     __try {
-        std::int16_t f[6]; std::memcpy(f,static_cast<unsigned char*>(it)+0x70,sizeof f);
-        out.item=it; out.shown=true; out.box=hits::engine_rects(f[0],f[1],f[2],f[3],f[5]); return true;
-    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+        const char* n=engine_string(*reinterpret_cast<std::uint32_t*>(static_cast<char*>(it)+8));
+        std::size_t i=0;
+        if(n) for(;i<63 && n[i];++i) name[i]=n[i];
+        name[i]=0;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { name[0]=0; }
 }
+std::string engine_name(void* it) { char name[64]{}; engine_name_raw(it,name); return name[0] ? name : "?"; }
 // EVERY item the engine's mouse walk reaches: 0x5ae0a0 walks the menu's item tree (container at menu+0x824: nodes ordered by
 // the item name's key, node n at +0xc + 16 n, root index at +4, item pointers at +0xde8) in order - leftmost node (0x585be0),
 // then successors (0x585c10) - and the first item whose vt+0x74 answers wins. Its order is the name keys' order, not ours.
@@ -1697,9 +1770,41 @@ void* focus_of(void* menu) {
 void menu_name(void* menu,char (&name)[64]) {
     __try { std::memcpy(name,static_cast<char*>(menu)+0xc,63); name[63]=0; } __except(EXCEPTION_EXECUTE_HANDLER) { name[0]=0; }
 }
+// The mouse diagnostic (fix K; [Test] InputPipe=1 only - the agents' live checks): one line per mouse message on a co-op
+// screen - the raw pixel and engine point, the bar holding it, the point handed to the engine and why, the item the model says
+// the engine answers with, and what the engine then did (its focus and hover index after its walk). A line equal to the one
+// before is not repeated.
+bool hits_trace=false;
+struct hit_trace {
+    bool on=false; char menu[64]{}; unsigned message=0; int px=-1,py=-1,sw=0,sh=0; bool exact=false; int x=0,y=0;
+    float vx=0,vy=0; std::string bar="-",how="passed",model="-";
+};
+hit_trace trace;
+std::string last_trace;
+bool hover_index(int& out) { __try { out=*reinterpret_cast<int*>(0x6e4b18); return true; } __except(EXCEPTION_EXECUTE_HANDLER) { return false; } }
+void trace_begin(void* menu,int x,int y,unsigned message) {
+    trace=hit_trace();
+    if(!hits_trace) return;
+    trace.on=true; menu_name(menu,trace.menu); trace.message=message; trace.x=x; trace.y=y;
+    const auto p=hits::from_engine(x,y); trace.vx=p.x; trace.vy=p.y;
+}
+void trace_end(void* menu,int rx,int ry) {
+    if(!trace.on) return;
+    trace.on=false;
+    void* const focus=focus_of(menu);
+    int hover=-1; hover_index(hover);
+    char line[640];
+    std::snprintf(line,sizeof line,"online menus: mouse %s 0x%x pixel %d,%d of %dx%d (%s) engine %d,%d view %.2f,%.2f; bar %s; %s; handed %d,%d; model answers %s; after: focus %s, hover %d",
+        trace.menu,trace.message,trace.px,trace.py,trace.sw,trace.sh,trace.exact ? "exact" : "half a unit",trace.x,trace.y,trace.vx,trace.vy,
+        trace.bar.c_str(),trace.how.c_str(),rx,ry,trace.model.c_str(),focus ? engine_name(focus).c_str() : "none",hover);
+    if(last_trace==line) return;
+    last_trace=line;
+    logger::write("%s",line);
+}
 // (x, y): the engine's view point. True with (rx, ry) the point to hand the engine instead; false: pass it on unchanged.
-// The point is a half-view-unit estimate unless the window procedure's pixel is known (logged once per reason).
-bool scoped_point(void* menu,int x,int y,int& rx,int& ry) {
+// The point is a half-view-unit estimate unless the window procedure's pixel is known (logged once per reason). `lobby`: the
+// skinned lobbies' mouse (0x5ba2b0 / 0x5c8da0), whose own first pass runs before the base walk.
+bool scoped_point(void* menu,int x,int y,int& rx,int& ry,bool lobby) {
     try {
         if(!hits_ready()) return false;
         char name[64]{}; menu_name(menu,name);
@@ -1709,64 +1814,80 @@ bool scoped_point(void* menu,int x,int y,int& rx,int& ry) {
         if(!pointer_probe) logger::write_once("online:hits-half-noprobe","online menus: mouse hit boxes: no window procedure pixel (display Mode unset); the point is known to half a view unit only");
         else if(!pointer_probe(px,py,sw,sh)) logger::write_once("online:hits-half-nomsg","online menus: mouse hit boxes: a mouse message without a window procedure pixel (wheel, or no client point); half a view unit");
         else if(!hits::engine_point_of_pixel(px,py,sw,sh,ex,ey) || ex!=x || ey!=y) logger::write_once("online:hits-half-mismatch","online menus: mouse hit boxes: the window procedure pixel does not match the engine's point (%d,%d vs %d,%d); half a view unit",ex,ey,x,y);
-        else p=hits::from_pixel(px,py,sw,sh);
-        // Everything the engine's walk asks, listed or not.
+        else { p=hits::from_pixel(px,py,sw,sh); trace.exact=true; }
+        if(trace.on) { trace.px=px; trace.py=py; trace.sw=sw; trace.sh=sh; trace.vx=p.x; trace.vy=p.y; }
+        // The engine's walk, item by item, as its passes see them (online_menus_hits_rules.hpp engine_menu).
         std::vector<void*> walked;
         if(!engine_items(menu,walked)) return false;
-        std::vector<focusable> all;
-        for(void* it:walked) { focusable f; if(focusable_of(it,f)) all.push_back(f); }
-        // The listed items (the table's rows for this menu) that can be a target now: shown and focusable.
-        struct target { focusable f; const hits::bar* rect; };
+        hits::engine_menu m;
+        std::vector<void*> at_index;
+        for(void* it:walked) { hits::engine_item e; if(engine_item_of(it,e)) { m.walk.push_back(e); at_index.push_back(it); } }
+        auto index_of=[&](void* it) { for(std::size_t i=0;i<at_index.size();++i) if(at_index[i]==it) return int(i); return -1; };
+        auto name_of=[&](int i) { return i>=0 ? engine_name(at_index[std::size_t(i)]) : std::string("nothing"); };
+        static constexpr const char* prompt_names[]{"desctext1","desctext2","desctext3","desctext4","desctext5"};
+        for(std::size_t n=0;n<5;++n) if(void* it=item_try(menu,prompt_names[n])) m.prompts[n]=index_of(it);
+        void* const focused=focus_of(menu);
+        m.focused=focused ? index_of(focused) : -1;
+        if(lobby) {
+            // 0x5ba2b0 asks start / kick / leave, 0x5c8da0 ready / leave, then both the picker (text_playername1).
+            static constexpr const char* host_buttons[]{"text_startgame","text_kickplayer","text_leaveroom",nullptr};
+            static constexpr const char* join_buttons[]{"text_readygame","text_leaveroom",nullptr};
+            for(const char* const* b=which(menu)==screen::lobby_host ? host_buttons : join_buttons;*b;++b)
+                if(void* it=item_try(menu,*b)) if(const int i=index_of(it);i>=0) m.lobby_buttons.push_back(i);
+            if(void* it=item_try(menu,"text_playername1")) m.picker=index_of(it);
+        }
+        // The listed items (the table's rows for this menu) that can be a target now: shown and enabled.
+        struct target { int index; const hits::bar* rect; };
         std::vector<target> active;
-        std::vector<void*> listed;
+        std::vector<int> listed;
         for(const auto& e:hit_table.entries) {
             if(e.menu!=name) continue;
             void* it=item_try(menu,e.item.c_str());
-            if(!it) continue;
-            listed.push_back(it);
-            focusable f;
-            if(focusable_of(it,f) && f.shown) active.push_back({f,&e.rect});
-        }
-        auto in=[](const std::vector<void*>& v,void* it) { return std::find(v.begin(),v.end(),it)!=v.end(); };
-        // Focusable items the table does not list (the Kick picker's rows, anything else the walk reaches), plus the lobbies'
-        // text_playername1, whose first-pass box 0x5ba2b0 / 0x5c8da0 ask whatever its shown / focus state.
-        std::vector<focusable> unlisted;
-        for(const auto& f:all) if(!in(listed,f.item)) unlisted.push_back(f);
-        if(void* picker=item_try(menu,"text_playername1"); picker && !in(listed,picker) &&
-           std::none_of(unlisted.begin(),unlisted.end(),[&](const focusable& u) { return u.item==picker; })) {
-            focusable f; if(boxes_of(picker,f)) unlisted.push_back(f);
+            const int i=it ? index_of(it) : -1;
+            if(i<0) continue;
+            listed.push_back(i);
+            if(m.walk[std::size_t(i)].shown && m.walk[std::size_t(i)].enabled) active.push_back({i,&e.rect});
         }
         // Bars can overlap (the prompt row's bars reach 12 units into their neighbours), but only the focused item's bar
         // is drawn: it wins inside its bar; elsewhere the bar whose own text box is nearest the point (hits::choose).
-        void* const focused=focus_of(menu);
         std::vector<hits::candidate> held;
-        for(const auto& a:active) if(hits::inside(*a.rect,p)) held.push_back({a.f.item==focused,a.f.box.shifted});
+        std::vector<const target*> holding;
+        for(const auto& a:active) if(hits::inside(*a.rect,p)) { held.push_back({a.index==m.focused,m.walk[std::size_t(a.index)].box.shifted}); holding.push_back(&a); }
         if(const auto pick=hits::choose(held,p);pick>=0) {
-            std::size_t seen=0;const target* c=nullptr;
-            for(const auto& a:active) if(hits::inside(*a.rect,p) && seen++==std::size_t(pick)) { c=&a;break; }
-            // No other focusable item - walked or not, shown or not - may answer for the point we hand over; if every point
-            // is taken, only the shown ones count (the base walk skips a hidden item).
-            for(const bool shown_only:{false,true}) {
-                std::vector<hits::item_rects> others;
-                for(const auto& o:all) if(o.item!=c->f.item && (o.shown || !shown_only)) others.push_back(o.box);
-                for(const auto& o:unlisted) if(o.item!=c->f.item && (o.shown || !shown_only) &&
-                    std::none_of(all.begin(),all.end(),[&](const focusable& a) { return a.item==o.item; })) others.push_back(o.box);
-                if(hits::free_point(c->f.box,others,rx,ry)) return true;
-            }
+            const int t=holding[std::size_t(pick)]->index;
+            if(trace.on) trace.bar=name_of(t);
+            // A point the engine itself gives to the target - its walk in its own order, its first pass, the lobby's pass -
+            // so the focus, the hover highlight and sound and the click are the engine's for that item.
+            if(hits::picked_point(m,t,rx,ry)) { if(trace.on) { trace.how="remapped"; trace.model=name_of(t); } return true; }
+            const auto blocker=name_of(hits::blocker_of(m,t));
+            if(trace.on) { trace.how="no point the engine gives to it (blocked by "+blocker+"); unchanged"; trace.model=name_of(hits::second_pass(m,x,y)); }
+            logger::write_once("online:hits-blocked-"+std::string(name)+"-"+name_of(t),"online menus: mouse hit boxes: no point of %s's own box in %s is answered by it (covered by %s); its bar keeps the engine's hit test",
+                name_of(t).c_str(),name,blocker.c_str());
             return false;
         }
-        // Outside every bar. An item the table does not list keeps the point; a listed item's own box or first-pass box (a dead
-        // strip the bar does not cover) gets nothing: no hover, no click.
-        for(const auto& u:unlisted) if(hits::holds_any(u.box,x,y)) return false;
-        for(const auto& a:active) if(hits::holds_any(a.f.box,x,y)) { rx=hits::nowhere_x; ry=hits::nowhere_y; return true; }
+        // Outside every bar: the engine's own answer for the raw point decides. An item the table does not list keeps the point
+        // (prompt hovers elsewhere, the Kick picker's rows); a listed item - a strip its bar does not cover - or a listed
+        // prompt's hover gets nothing: no hover, no click.
+        const int answer=hits::second_pass(m,x,y), hover=hits::first_pass(m,x,y);
+        auto is_listed=[&](int i) { return i>=0 && std::find(listed.begin(),listed.end(),i)!=listed.end(); };
+        if(is_listed(answer) || (hover>=0 && is_listed(m.prompts[std::size_t(hover)]))) {
+            rx=hits::nowhere_x; ry=hits::nowhere_y;
+            if(trace.on) trace.how="nowhere (a listed item's strip outside its bar)";
+            return true;
+        }
+        if(trace.on) trace.model=name_of(answer);
         return false;
     } catch(...) { return false; }
 }
 using mouse_fn=std::uint32_t(__thiscall*)(void*,int,int,int,int,int);
 std::uint32_t __fastcall menu_mouse(void* menu,void*,int x,int y,int flags,int message,int extra) {
     int rx=x,ry=y;
-    if(ready && custom(which(menu)) && !scoped_point(menu,x,y,rx,ry)) { rx=x; ry=y; }
-    return at<mouse_fn>(0x5ae0a0)(menu,rx,ry,flags,message,extra);
+    const bool scoped=ready && custom(which(menu));
+    if(scoped) trace_begin(menu,x,y,unsigned(message));
+    if(scoped && !scoped_point(menu,x,y,rx,ry,false)) { rx=x; ry=y; }
+    const auto result=at<mouse_fn>(0x5ae0a0)(menu,rx,ry,flags,message,extra);
+    if(scoped) trace_end(menu,rx,ry);
+    return result;
 }
 bool lobby_mouse_native(void* menu,unsigned original,int x,int y,int flags,int message,int extra) {
     __try { return at<bool(__thiscall*)(void*,int,int,int,int,int)>(original)(menu,x,y,flags,message,extra); }
@@ -1775,10 +1896,13 @@ bool lobby_mouse_native(void* menu,unsigned original,int x,int y,int flags,int m
 bool lobby_mouse(void* menu,unsigned original,int x,int y,int flags,int message,int extra) {
     if(native_lobby_rejected(menu)) return true;
     // The skinned lobbies' rows and prompts hit-test against their drawn bars too (an unskinned lobby has no table rows).
-    if(int rx=x,ry=y;lobby_live(menu) && scoped_point(menu,x,y,rx,ry)) { x=rx; y=ry; }
+    const bool live_lobby=lobby_live(menu);
+    if(live_lobby) trace_begin(menu,x,y,unsigned(message));
+    if(int rx=x,ry=y;live_lobby && scoped_point(menu,x,y,rx,ry,true)) { x=rx; y=ry; }
     const bool previous=native_mouse;native_mouse=true;
     const bool result=lobby_mouse_native(menu,original,x,y,flags,message,extra);
     native_mouse=previous;
+    if(live_lobby) trace_end(menu,x,y);
     if(game_thread.load()==GetCurrentThreadId() && lobby_live(menu) && current_peek()==menu) lobby_after_refresh(menu);
     return result;
 }
@@ -2369,6 +2493,9 @@ void keyboard(unsigned char* state) {
     if(!menu) return;
     const auto s=which(menu);
     if(!custom(s) && !lobby_live(menu)) return;
+    // Keys these screens consume below never reach the game's poll, so the prompts' device tracker would not see them (060r
+    // live: F5 on Browse left the pad prompts up). Any new key here is the keyboard in use.
+    if(keyboard_note) for(unsigned scan=0;scan<256;++scan) if(edges[scan]) { keyboard_note();break; }
     const auto address=reinterpret_cast<std::uintptr_t>(menu);
     const bool control=(state[0x1d]|state[0x9d])&0x80;
     const bool alt=(state[0x38]|state[0xb8])&0x80;
@@ -2417,6 +2544,9 @@ bool installed() { return ready; }
 unsigned session_clear_count() { return session_clears; }
 void set_pad_probe(bool (*probe)(int player)) { pad_probe=probe; }
 void set_pointer_probe(bool (*probe)(int& x,int& y,int& screen_width,int& screen_height)) { pointer_probe=probe; }
+void set_hits_trace(bool on) { hits_trace=on; }
+void set_hits_text_alias(std::uintptr_t test_function) { hits_text_alias=test_function; }
+void set_keyboard_note(void (*note)()) { keyboard_note=note; }
 bool pad_prompt_scope() {
     if(!ready) return false;
     auto* menu=current_peek();
@@ -2512,6 +2642,10 @@ void install(HMODULE game,const install_hooks* hooks) {
         if(hooks->wall_clock) wall_source=hooks->wall_clock;
         request_fault=hooks->before_request;tick_fault=hooks->before_tick;
         lobby_fields=hooks->lobby_fields;
+    }
+    { // The agent-only mouse diagnostic (fix K): [Test] InputPipe, read as the fix reads every switch (ini_rules::flag).
+        const auto pipe=ini::text(L"Test",L"InputPipe");
+        hits_trace=pipe && ini_rules::flag(std::string_view(*pipe)).value_or(false);
     }
     patch_transaction::transaction tx;
     tx.add(contribution());

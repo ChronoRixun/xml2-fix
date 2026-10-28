@@ -462,7 +462,7 @@ namespace script_functions { int capacity() { return ::capacity; } }
 namespace lc_fonts { bool active() { return mode!="fonts-off"; } }
 namespace gameplay_agreement { bool host_notice_showing(void*) { return mode=="r4-advice-notice"; } }
 namespace logger {
-void write(const char* format,...) { if(!mode.starts_with("r6-") && mode!="r4-r6") return; // r6 fixtures run the native lobby as "r4-r6"
+void write(const char* format,...) { if(!mode.starts_with("r6-") && mode!="r4-r6" && !mode.starts_with("r16-hits")) return; // r6 fixtures run the native lobby as "r4-r6"; r16-hits: the mouse diagnostic (fix K)
     char buffer[512]{};va_list args;va_start(args,format);std::vsnprintf(buffer,sizeof(buffer),format,args);va_end(args);std::cout<<buffer<<"\n";r6_log.push_back(buffer); }
 void write_once(std::string_view key,const char* format,...) {
     if(once_logs.contains(std::string(key))) return;
