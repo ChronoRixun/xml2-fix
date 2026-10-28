@@ -3,6 +3,8 @@
 #include "ini.hpp"
 #include "log.hpp"
 #include "pad_prompts_rules.hpp"
+#include "lc_fonts.hpp"
+#include "lc_fonts_rules.hpp"
 
 #include <Windows.h>
 
@@ -105,6 +107,10 @@ namespace pad_prompts
 			char* label = next_buffer();
 			if (pad_device(b.device))
 			{
+				if (lc_fonts::prompt_scope())
+					if (const auto glyph=lc_fonts_rules::pad_glyph(name_of(button_of(b.control)))) {
+						label[0]=static_cast<char>(glyph);label[1]=0;return label;
+					}
 				strncpy_s(label, sizeof(labels[0]), pad_label(b.control, colours).c_str(), _TRUNCATE);
 				return label;
 			}
@@ -114,6 +120,10 @@ namespace pad_prompts
 			{
 				return at<const char*>(no_name_label);
 			}
+			if (lc_fonts::prompt_scope())
+				if (const auto glyph=lc_fonts_rules::key_glyph(name)) {
+					label[0]=static_cast<char>(glyph);label[1]=0;return label;
+				}
 			_snprintf_s(label, sizeof(labels[0]), _TRUNCATE, "[%s]", name);
 			return label;
 		}

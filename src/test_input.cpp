@@ -1,6 +1,7 @@
 #include "anim_enums.hpp"
 #include "test_input.hpp"
 #include "no_activate.hpp"
+#include "online_menus.hpp"
 #include "pool_counters.hpp"
 #include "e4_observe.hpp"
 #include "test_state.hpp"
@@ -264,6 +265,7 @@ namespace test_input
 			if (FAILED(result))
 			{
 				test_mode::input_lost();
+				online_menus::keyboard(nullptr);
 				logger::write_once("test:read-failed", "test: a keyboard read failed (%08lX) - the game re-acquires; pipe keys wait for that", result);
 				return result;
 			}
@@ -274,6 +276,7 @@ namespace test_input
 				std::memset(state, 0, 256); // typing in another window stays there, as with the game's own foreground-only device
 			}
 			if (!enabled) {
+				online_menus::keyboard(state);
 				return result;
 			}
 
@@ -292,6 +295,7 @@ namespace test_input
 			}
 			SetEvent(read_event);
 			test_mode::keyboard(state);
+			online_menus::keyboard(state);
 			return result;
 		}
 
@@ -745,7 +749,7 @@ namespace test_input
 
 	void hook_direct_input8(void* direct_input)
 	{
-		if ((!enabled && !no_activate::enabled() && !test_mode::hotkeys_enabled()) || !direct_input)
+		if ((!enabled && !no_activate::enabled() && !test_mode::hotkeys_enabled() && !online_menus::installed()) || !direct_input)
 		{
 			return;
 		}

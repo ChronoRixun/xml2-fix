@@ -3,6 +3,8 @@ from pathlib import Path
 import subprocess, json, re, os, sys
 
 import os as _os
+sys.dont_write_bytecode = True
+from test_online_menus import host_modes
 
 def _need(name):
     """Machine-specific inputs come from the environment (see scripts/README-gates.md); nothing local is hardcoded."""
@@ -31,7 +33,8 @@ cmds = [[str(b / "xml2_test.exe"), flag] for flag in flags]
 if "--plain" in sys.argv:
     cmds.append([str(b / "xml2_test.exe")])
 with_exe = {
-    "xml2_roll_test", "xml2_dr_reward_test",
+    "xml2_lc_fonts_host",
+    "xml2_roll_test", "xml2_dr_reward_test", "xml2_online_menus_test",
     "xml2_gns_transport_test", "xml2_confirmation_release_test", "xml2_objective_text_test",
     "xml2_save_limits_test", "xml2_item_capacity_test", "xml2_entity_grid_test", "xml2_entity_world_test", "xml2_entity_frames_test",
     "xml2_entity_query_test", "xml2_entity_transfer_test", "xml2_gameplay_agreement_test",
@@ -107,6 +110,8 @@ installer_modes |= {"xml2_economy_test"}
 
 if (b / "xml2_e4_core_host.exe").exists():
     cmds.append([sys.executable,"-B",str(R / "scripts/test_e4_core.py"),"--host",str(b / "xml2_e4_core_host.exe"),"--exe",EXE,"--out",str(out / "e4-core")])
+cmds += [[str(b / "xml2_online_menus_test.exe"), EXE, mode] for mode in host_modes(R) if mode != "on"]
+installer_modes |= {"xml2_online_menus_test"}
 
 if LIST_ONLY:
     # The command matrix only: for checking the runner against another gate's matrix. Everything above only reads.

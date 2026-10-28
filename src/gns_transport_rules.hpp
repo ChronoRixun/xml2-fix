@@ -115,6 +115,11 @@ namespace gns_transport_rules
 	// Revision 4 (framing 3): every loss takes that path - the host's native timeout/lag-report removal of a remote
 	// participant is deferred to the agreed frame and another participant's lost message ends this PC's link too; a
 	// revision-3 host would still remove natively without the agreement (swap-030 F01), so the two refuse each other.
-	constexpr std::uint16_t agreement_revision = 4;
-	constexpr std::uint32_t framing_revision = 3;
+	// Revision 6 / framing 4 (0.6, docs/online-party.md): the link framing gains the presentation-only party kinds 7
+	// (member report) and 8 (host table) on room tunnels. A revision-4 PC would drop them silently; the bump makes the
+	// two refuse each other by name instead. One bump for all of 0.6's framing changes. Revision 6, not 5: rule 25 is
+	// alone in its rule-summary bucket and {25, 5, 1,1000,4,0} folds to the same summary byte (0x23) as the released
+	// {25, 4, 1,1000,3,0}, so a revision-5 refusal could not be named; revision 6 folds to 0xf1. Revision 5 never shipped.
+	constexpr std::uint16_t agreement_revision = 6;
+	constexpr std::uint32_t framing_revision = 4;
 }

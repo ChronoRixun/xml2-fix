@@ -2,6 +2,8 @@
 # Each entry describes original code/art or invented test data; no game assets are accepted.
 DISASM test/e4_core_host.cpp # Authored synthetic caller/return frames, CPU and FX state probes, and ABI shims; native actor/controller/team/brain instructions are read from the owned executable at runtime, with no game listing or decompiled body embedded.
 DISASM test/pad_hotplug_test.cpp # Authored caller frames for the owned retail mapping/read fixture; game bytes are supplied at runtime, with no retail instruction listing embedded.
+DISASM src/online_menus.cpp # Authored register adapter forwards captured MAIN_MENU controller and input mask to our C++ handler; no extracted game instruction listing.
+DISASM test/online_menus_test.cpp # Authored synthetic stack/register caller checks our adapter ABI; owned retail bytes are read locally at runtime, never embedded as a listing.
 DISASM test/pool_counter_observers_test.cpp # Authored synthetic CPU-state entry/capture probes and invented ABI fixture bodies; retail fragments are read from the owned executable at runtime, with no game listing or decompiled body embedded.
 DISASM test/particle_scratch_test.cpp # Authored synthetic caller allocates an argument area and restores its own stack to test eleven thiscall bridges; no game instructions or disassembly listing is embedded.
 DISASM src/anim_enums.cpp # Authored native-map miss bridge preserves the retail wrapper stack and calls our DLL extension lookup; only the short displaced comparison is replayed, no game listing or decompiled body.
@@ -148,3 +150,6 @@ DISASM test/e4_observe_host.cpp # Authored synthetic CPU entry/capture and delib
 GAME_EXT src/e4_unwind.asm # Authored SafeSEH observer thunk; only forwards to our callback, no game instructions or listing.
 
 DISASM test/coop_lifecycle_probe.hpp # Authored synthetic stack probes and return tail exercise the production DLL against the locally owned PE; no extracted game body.
+DISASM  src/lc_fonts.cpp  # Authored register/flag-preserving style and scale adapters; implementation source, not a copied game instruction body.
+DISASM  test/lc_fonts_host.cpp  # Synthetic x87 conversion and ABI callers exercise our font hooks; retail routines are loaded from the owned PE at runtime, not embedded here.
+PRIVATE_IP test/online_native_fixture.inl # Invented native-discovery fixtures use the protocol virtual host address; no personal or device IP.

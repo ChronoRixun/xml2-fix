@@ -1,6 +1,7 @@
 #pragma once
 #include <Windows.h>
 #include <cstdint>
+#include "online_browser_core.hpp"
 
 #if XML2_FIX_GNS
 #include <steam/steamnetworkingsockets.h>
@@ -12,12 +13,33 @@
 // datagrams to and from a member through it, so the stock lobby, handshake and admission run unchanged against the
 // member's virtual address 10.77.x.y. After admission the GNS transport (gns_transport, rule 25) carries the game's
 // messages on the same connection. Neither key set: nothing is hooked or written.
+namespace online_menus { struct lobby_fixture; }
 namespace online_room
 {
 	void install(HMODULE game);
 	bool requested();
 	// Process exit: online-status.json says `ended` (loader-lock safe).
 	void shutdown();
+	// Game/UI thread only. Network/key I/O runs on one worker; one outstanding operation.
+	// Browsing/authentication never creates a room. Native admission is separate.
+	bool available();
+	const online_browser_core::client_view& view();
+	void ui_tick();
+	bool list();
+	bool host(const std::string& name, bool public_room);
+	bool host_native(const std::string& name, bool public_room, int max_players, bool danger_room);
+	bool host_posted(online_browser_core::ticket generation);
+	// Game-thread admission target, only for the current authenticated room and proven host tunnel.
+	bool admission_target(online_browser_core::ticket generation, std::uint32_t& address);
+	bool resolve(const std::string& code);
+	bool retry();
+	void cancel();
+	void leave();
+	// A native session end: leave after the transport tick that flushes the quit notices retail just queued.
+	void leave_after_flush();
+	std::string version();
+	bool take_preset(online_browser_core::launch_preset& out);
+	bool refresh_due();
 #if XML2_FIX_GNS
 	// The identity GNS starts with (str:legends:<hex16> of this install's key); false when rooms are off or the key
 	// could not be loaded (then the PC stays without rooms, logged).
@@ -34,5 +56,10 @@ namespace online_room
 	void set_transport_bound(HSteamNetConnection connection, bool bound);
 	int fetch(HSteamNetConnection connection, SteamNetworkingMessage_t** out, int max);
 	std::uint32_t own_virtual(); // host byte order, 0 before the room roster is resolved
+	// Online Party (docs/online-party.md section 8): the lobby cards' observed facts and accepted claims for the menus
+	// (game/UI thread; false outside a room). Never admission: native rows and readiness stay the menu's native reads.
+	bool party(online_menus::lobby_fixture& out);
+	// The measured RTT (ms) to the host of the room with this code when this PC is in it as a joiner, else -1.
+	int room_rtt(const std::string& code);
 #endif
 }

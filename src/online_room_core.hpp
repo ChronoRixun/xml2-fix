@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -125,6 +126,20 @@ namespace online_room_core
 			{
 				const char c = s[i++];
 				if (c == '"') return true;
+				if (static_cast<unsigned char>(c) < 0x20) return false;
+				if (static_cast<unsigned char>(c) >= 0x80) {
+					const auto first = static_cast<unsigned char>(c);
+					const unsigned count = first >= 0xc2 && first <= 0xdf ? 2 : first >= 0xe0 && first <= 0xef ? 3 : first >= 0xf0 && first <= 0xf4 ? 4 : 0;
+					if (!count || i + count - 1 > s.size()) return false;
+					std::uint32_t cp = first & (count == 2 ? 31 : count == 3 ? 15 : 7);
+					for (unsigned n = 1; n < count; ++n) {
+						const auto next = static_cast<unsigned char>(s[i++]);
+						if ((next & 0xc0) != 0x80) return false;
+						cp = (cp << 6) | (next & 63);
+					}
+					if (cp < (count == 2 ? 0x80u : count == 3 ? 0x800u : 0x10000u) || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return false;
+					out.append(s, i - count, count); continue;
+				}
 				if (c != '\\') { out += c; continue; }
 				if (i >= s.size()) return false;
 				const char e = s[i++];
@@ -148,6 +163,7 @@ namespace online_room_core
 						std::uint32_t c2;
 						if (hex4(s, i + 2, c2) && c2 >= 0xdc00 && c2 < 0xe000) { c1 = 0x10000 + ((c1 - 0xd800) << 10) + (c2 - 0xdc00); i += 6; }
 					}
+					if (c1 >= 0xd800 && c1 < 0xe000) return false;
 					utf8(out, c1);
 					break;
 				}
@@ -173,10 +189,68 @@ namespace online_room_core
 			return false;
 		}
 	}
+	// Validate the complete grammar before extracting fields. In particular,
+	// duplicate keys, trailing data, broken nested values and numeric prefixes
+	// must never become a valid authentication or room response.
+	inline bool json_value(const std::string& s, std::size_t& i, unsigned depth = 0)
+	{
+		using namespace detail;
+		space(s, i);
+		if (depth > 16 || i == s.size()) return false;
+		if (s[i] == '"') { std::string text; return string(s, i, text); }
+		if (s[i] == '{' || s[i] == '[')
+		{
+			const bool object = s[i++] == '{';
+			const char end = object ? '}' : ']';
+			std::set<std::string> keys;
+			space(s, i);
+			if (i < s.size() && s[i] == end) { ++i; return true; }
+			for (;;)
+			{
+				if (object) {
+					std::string key;
+					space(s, i);
+					if (!string(s, i, key) || !keys.insert(key).second) return false;
+					space(s, i);
+					if (i == s.size() || s[i++] != ':') return false;
+				}
+				if (!json_value(s, i, depth + 1)) return false;
+				space(s, i);
+				if (i == s.size()) return false;
+				if (s[i] == end) { ++i; return true; }
+				if (s[i++] != ',') return false;
+			}
+		}
+		for (const auto* literal : {"true", "false", "null"}) {
+			const std::string word(literal);
+			if (s.compare(i, word.size(), word) == 0) { i += word.size(); return true; }
+		}
+		if (s[i] == '-') ++i;
+		if (i == s.size() || s[i] < '0' || s[i] > '9') return false;
+		if (s[i] == '0') ++i;
+		else while (i < s.size() && s[i] >= '0' && s[i] <= '9') ++i;
+		if (i < s.size() && s[i] == '.') {
+			const auto first = ++i;
+			while (i < s.size() && s[i] >= '0' && s[i] <= '9') ++i;
+			if (first == i) return false;
+		}
+		if (i < s.size() && (s[i] == 'e' || s[i] == 'E')) {
+			++i;
+			if (i < s.size() && (s[i] == '+' || s[i] == '-')) ++i;
+			const auto first = i;
+			while (i < s.size() && s[i] >= '0' && s[i] <= '9') ++i;
+			if (first == i) return false;
+		}
+		return true;
+	}
 	inline line parse(const std::string& s)
 	{
 		using namespace detail;
 		line out;
+		std::size_t checked = 0;
+		if (s.size() > 16384 || !json_value(s, checked)) return out;
+		space(s, checked);
+		if (checked != s.size()) return out;
 		std::size_t i = 0;
 		space(s, i);
 		if (i >= s.size() || s[i] != '{') return out;
@@ -220,7 +294,7 @@ namespace online_room_core
 						if (i < s.size() && s[i] == ']') { ++i; break; }
 						return out;
 					}
-				if (!strings) { i = start; if (!skip(s, i)) return out; v = value{}; v.t = value::type::other; }
+				if (!strings) { i = start; if (!skip(s, i)) return out; v = value{}; v.t = value::type::other; v.text = s.substr(start, i - start); }
 			}
 			else if (c == '{') { const std::size_t start = i; if (!skip(s, i)) return out; v.t = value::type::other; v.text = s.substr(start, i - start); } // raw object text (parse() it again for its fields)
 			else
@@ -606,4 +680,25 @@ namespace online_room_core
 			return "joining a room needs the LC save format ([Save] Format) installed, which checks the host's campaign before the game loads it";
 		return nullptr;
 	}
+	// A native session end queues its quit notices (0x10cc / 0x1106) on the room tunnel and clears the room in the same
+	// retail frame; closing the tunnel without lingering drops what is still queued, so peers saw "lost connection".
+	// The leave therefore waits for the transport tick that follows the arming: that tick's flush has already sent the
+	// notices when the next one starts. arm() while pending neither extends nor repeats it; an explicit leave disarms.
+	class leave_deferral
+	{
+		bool armed_ = false;
+		bool passed_ = false; // one transport tick has already run since arm()
+	public:
+		void arm() { if (!armed_) { armed_ = true; passed_ = false; } }
+		void disarm() { armed_ = passed_ = false; }
+		bool armed() const { return armed_; }
+		// Called once at the start of every transport tick; true exactly once, on the tick after the one that was running.
+		bool step()
+		{
+			if (!armed_) return false;
+			if (!passed_) { passed_ = true; return false; }
+			armed_ = passed_ = false;
+			return true;
+		}
+	};
 }

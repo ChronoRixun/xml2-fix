@@ -50,6 +50,16 @@ or until the screen name is known). A joiner's come from the room it resolved.
 | `tls_pin_mismatch` | the broker's TLS certificate fails `BrokerPin` (or, without a pin, the system's trust), or the broker's CA is not the one this build pins. |
 | `internal` | anything else (no retail executable, imports missing, an invalid broker answer, a build without GNS). |
 
+## Party block (contract v1.6 proposal, 0.6 round 7)
+
+`v` stays 1. After `updated` the fix appends `party` (change `generation`, separate `attempt` counter, attempt
+state/error, this PC's phase, the last host-table generation, a <= 4-row roster of valid-UTF-8 names without ping or
+address) and `process` (pid + creation time, so a
+reader can tell a crashed earlier run's file). The v1 keys keep their bytes and meaning; the released launchers
+(0.4.0-rc.1 .. 0.5.0-beta.2, main) read the new line exactly like the v1 line (`scripts/test_status_readers.mjs`).
+In-game Host/Join/Retry write the file too (role from the first operation). Format, write rules and what the
+launcher must change: [online-party.md](online-party.md#9-online-statusjson-additive-block-contract-v16-proposal).
+
 ## In the menus
 
 Host: Play Online -> Host -> New Campaign / Load Saved Campaign. The room opens when the game's network layer starts

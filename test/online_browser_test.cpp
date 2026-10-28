@@ -105,6 +105,56 @@ int main()
 	check(b::lobby_menu("campaign_lobby") && b::lobby_menu("host") && !b::lobby_menu("main") && !b::lobby_menu("online") && !b::lobby_menu(""), "lobby menus repeat the code");
 	check(b::lobby_slot("host") == 1 && b::lobby_slot("campaign_lobby") == 0 && b::lobby_slot("team") == -1, "lobby help-bar slots: host desctext2, Host/Join desctext1");
 
+	using online_room_core::parse;
+	std::vector<b::public_room> rows;
+	check(b::public_rooms(parse(R"({"op":"list_rooms_ok","rooms":[{"code":"ABCDEFGH"}]})"),rows) && rows.size()==1 && rows[0].name.empty(), "list: absent optional metadata stays unknown");
+	check(!b::public_rooms(parse(R"({"op":"list_rooms_ok","rooms":[{"code":"ABCDEFGH"},{"code":"ABCDEFGH"}]})"),rows) && rows.size()==1, "list: duplicate codes reject whole reply, retain prior snapshot");
+	for(const auto* json : {R"({"op":"list_rooms_ok","rooms":[{"code":"ABCDEFGH-extra"}]})",
+		R"({"op":"list_rooms_ok","rooms":[{"code":"abcdefgh"}]})",R"({"op":"list_rooms_ok","rooms":[{"code":"ABCDEFGH","players":1.2}]})",
+		R"({"op":"list_rooms_ok","rooms":[{"code":"ABCDEFGH","joinable":"true"}]})",R"({"op":"list_rooms_ok","rooms":[{"code":"ABCDEFGH","players":4,"max_players":2}]})"})
+		check(!b::public_rooms(parse(json),rows), "list: invalid identity/type/seat count refused");
+	std::string many="{\"op\":\"list_rooms_ok\",\"rooms\":[";
+	for(unsigned i=0;i<51;++i) {
+		if(i) many+=',';
+		many+="{\"code\":\"AAAAAA";many+=char('A'+i/8);many+=char('A'+i%8);many+="\"}";
+		if(i==49) check(b::public_rooms(parse(many+"]}"),rows) && rows.size()==50,"list: 50 complete identities fit");
+	}
+	check(!b::public_rooms(parse(many+"]}"),rows) && rows.size()==50,"list: 51 rows refused, no partial publication");
+	for(const auto* json:{"{} trailing","{\"x\":1garbage}","{\"x\":01}","{\"x\":true,\"x\":false}","{\"x\":[{]}","{\"x\":[1,]}","{\"x\":\"raw\ncontrol\"}","{\"x\":\"\\ud800\"}"})
+		check(!parse(json).valid,"broker JSON: complete strict grammar");
+	check(b::valid_room_name("  Friday  ") && b::valid_room_name(std::string(32,'x')) && !b::valid_room_name(std::string(33,'x')) &&
+		!b::valid_room_name("a;b") && !b::valid_room_name("a\"b") && !b::valid_room_name("a\nb"),"in-game room name: validate rather than silently clip/drop");
+	b::client_state state;
+	check(state.view().state==b::phase::idle,"client: Hub idle has no host or resolve side effect");
+	check(state.begin(b::operation::list,1000),"client: authenticate for list");auto first=state.view().generation;
+	check(!state.issue() && !state.begin(b::operation::resolve,3000),"client: one pending request and no request before auth");
+	check(state.authenticated(first) && state.issue() && !state.issue(),"client: issue once after auth");
+	check(state.listed(first,parse(R"({"op":"list_rooms_ok","rooms":[]})"),1001) && !state.refresh_due(11000) && state.refresh_due(11001),"client: empty list refreshes after 10 seconds idle");
+	check(!state.begin(b::operation::resolve,2999) && state.begin(b::operation::resolve,3000,true),"client: list and resolve share limiter, manual Refresh cannot bypass");
+	auto second=state.view().generation;check(second.request>first.request && second.room>first.room && state.issue(),"client: request and room generations advance");
+	state.cancel();state.stopped();
+	check(!state.joined(second,b::operation::resolve,"ABCDEFGH") && !state.begin(b::operation::list,4999),"client: Back/cancel drops stale completion and retains limiter");
+	check(state.begin(b::operation::list,5000,true) && state.issue(),"client: room reentry allowed after limiter");
+	state.fail(state.view().generation,"rate_limited",5001);
+	check(state.view().stale && !state.begin(b::operation::resolve,15000) && state.begin(b::operation::resolve,15001),"client: broker rate limit backs off for 10 seconds across operations");
+	auto late=state.view().generation;
+	check(!state.expired(25000) && state.expired(25001),"client: request/auth timeout boundary");
+	state.fail(late,"timeout",25001);state.cancel(true);state.stopped();
+	check(!state.begin(b::operation::list,35001) && state.begin(b::operation::list,45001),"client: leave/retry cannot reset escalating backoff");
+	b::client_state wrapped;
+	check(wrapped.begin(b::operation::list,0xfffffff0u,true) && wrapped.issue(),"client: wrapping clock starts");
+	wrapped.listed(wrapped.view().generation,parse(R"({"op":"list_rooms_ok","rooms":[]})"),0xfffffff0u);
+	check(!wrapped.may_lookup(0x20u) && wrapped.may_lookup(0x800u),"client: limiter survives DWORD wrap");
+	b::client_state committed;
+	check(committed.begin(b::operation::host,100,true) && committed.issue() && committed.joined(committed.view().generation,b::operation::host,"ABCDEFGH"),"room: committed setup");
+	const auto room_ticket=committed.view().generation;
+	committed.fail(room_ticket,"inbox_overflow",200);
+	check(committed.view().state==b::phase::room && committed.view().generation==room_ticket && committed.view().code=="ABCDEFGH" && !committed.view().authenticated,"room: fail degrades service, preserves phase/identity");
+	committed.refuse("transport_identity_busy");committed.cancel();
+	check(committed.view().state==b::phase::room && committed.view().generation==room_ticket,"room: refuse/cancel cannot release committed ownership");
+	check(!committed.begin(b::operation::host,99999) && !committed.begin(b::operation::resolve,99999),"room: no retry/replacement before explicit Leave");
+	committed.cancel(true);committed.stopped();
+	check(committed.view().state==b::phase::idle && committed.view().generation.room>room_ticket.room && committed.begin(b::operation::resolve,99999),"room: explicit Leave releases ownership for next attempt");
 	std::printf("%d PASS / %d FAIL\n", passed, failed);
 	return failed ? 1 : 0;
 }

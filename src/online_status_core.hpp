@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace online_status_core
 {
@@ -72,14 +73,62 @@ namespace online_status_core
 		return error::internal;
 	}
 
-	// JSON string body: quotes, backslash and control characters escaped; bytes >= 0x80 are copied (UTF-8 in, UTF-8 out).
+	// The length (2..4) of the well-formed UTF-8 sequence starting at text[at] (a byte >= 0x80), or 0: no overlongs,
+	// surrogates or code points above U+10FFFF, no cut-off sequence. `cp` gets the code point.
+	inline std::size_t utf8_sequence(const std::string& text, std::size_t at, std::uint32_t& cp)
+	{
+		const auto c = static_cast<unsigned char>(text[at]);
+		const std::size_t n = c >= 0xc2 && c <= 0xdf ? 2 : c >= 0xe0 && c <= 0xef ? 3 : c >= 0xf0 && c <= 0xf4 ? 4 : 0;
+		if (!n || at + n > text.size()) return 0;
+		cp = c & (n == 2 ? 0x1f : n == 3 ? 0x0f : 0x07);
+		for (std::size_t k = 1; k < n; ++k)
+		{
+			const auto d = static_cast<unsigned char>(text[at + k]);
+			if ((d & 0xc0) != 0x80) return 0;
+			cp = (cp << 6) | (d & 0x3f);
+		}
+		if ((n == 3 && cp < 0x800) || (n == 4 && (cp < 0x10000 || cp > 0x10ffff)) || (cp >= 0xd800 && cp <= 0xdfff)) return 0;
+		return n;
+	}
+	// A display name as valid UTF-8 within max_bytes: an invalid byte or a control character (C0, DEL, C1) becomes '?',
+	// and the text ends before a character that would not fit whole (review 1607424 B1: the released launchers'
+	// backend re-serialises the file with an ASCII-target rapidjson writer that stops at invalid UTF-8).
+	inline std::string utf8_clean(const std::string& text, std::size_t max_bytes)
+	{
+		std::string out;
+		for (std::size_t i = 0; i < text.size();)
+		{
+			const auto c = static_cast<unsigned char>(text[i]);
+			std::uint32_t cp = c;
+			std::size_t n = c < 0x80 ? 1 : utf8_sequence(text, i, cp);
+			const bool keep = n && cp >= 0x20 && cp != 0x7f && !(cp >= 0x80 && cp <= 0x9f);
+			const std::size_t width = keep ? n : 1;
+			if (out.size() + width > max_bytes) break;
+			if (keep) out.append(text, i, n); else out += '?';
+			i += n ? n : 1;
+		}
+		return out;
+	}
+	inline bool valid_utf8_name(const std::string& text) { return utf8_clean(text, text.size()) == text; }
+
+	// JSON string body: quotes, backslash and control characters escaped; valid UTF-8 copied; any byte that is not part
+	// of a well-formed UTF-8 sequence becomes '?' (the file is always valid UTF-8).
 	inline std::string escaped(const std::string& text)
 	{
 		std::string out;
 		out.reserve(text.size() + 2);
-		for (const char ch : text)
+		for (std::size_t i = 0; i < text.size(); ++i)
 		{
+			const char ch = text[i];
 			const auto c = static_cast<unsigned char>(ch);
+			if (c >= 0x80)
+			{
+				std::uint32_t cp = 0;
+				const auto n = utf8_sequence(text, i, cp);
+				if (n) { out.append(text, i, n); i += n - 1; }
+				else out += '?';
+				continue;
+			}
 			if (c == '"') out += "\\\"";
 			else if (c == '\\') out += "\\\\";
 			else if (c == '\n') out += "\\n";
@@ -107,6 +156,36 @@ namespace online_status_core
 		return text;
 	}
 
+	// Contract v1.6 proposal (docs/online-party.md section 9): additive keys after `updated`; `v` stays 1.
+	struct roster_row
+	{
+		int slot = 1;
+		std::string name; // <= 31 bytes, escaped
+		bool host = false, you = false;
+		std::string phase; // online_party_core::name(phase)
+		int ready = -1;    // -1 null (unknown / pending), 0 false, 1 true
+		std::string build; // checking | other | same | agreed
+		std::string route; // direct | relay | empty -> null
+		bool operator==(const roster_row&) const = default;
+	};
+	struct party_block
+	{
+		bool known = false;
+		std::uint32_t generation = 0; // moves on every change of the block
+		std::uint32_t attempt = 0;    // moves only on a new in-game room operation (Host / Join / Retry)
+		state now = state::connecting; // this attempt's state (v1's top-level `state` stays process-final)
+		error why = error::none;
+		std::string phase; // this PC's phase name; empty -> null
+		int table = -1;    // last accepted host-table generation; -1 -> null
+		std::vector<roster_row> roster;
+		bool operator==(const party_block&) const = default;
+	};
+	struct process_info
+	{
+		std::uint32_t pid = 0; // 0 -> no `process` key (as every v1 writer)
+		utc started;
+	};
+
 	struct status
 	{
 		role who = role::host;
@@ -118,6 +197,8 @@ namespace online_status_core
 		std::string room_name;    // its name in the browser; empty -> null
 		error why = error::none;
 		std::string message; // empty -> null
+		party_block party;
+		process_info process;
 	};
 
 	// One object, keys in the contract's order, then a newline. `error` is non-null in the `error` state (an error
@@ -140,7 +221,33 @@ namespace online_status_core
 		out += error_id ? "\"" + std::string(error_id) + "\"" : std::string("null");
 		out += ",\"message\":";
 		out += s.message.empty() ? std::string("null") : "\"" + escaped(s.message) + "\"";
-		out += ",\"updated\":\"" + iso8601(when) + "\"}\n";
+		out += ",\"updated\":\"" + iso8601(when) + "\"";
+		if (s.party.known)
+		{
+			const auto& p = s.party;
+			const char* attempt_error = p.now == state::error ? (p.why == error::none ? "internal" : name(p.why)) : nullptr;
+			out += ",\"party\":{\"generation\":" + std::to_string(p.generation) + ",\"attempt\":" + std::to_string(p.attempt) + ",\"state\":\"" + name(p.now) + "\",\"error\":";
+			out += attempt_error ? "\"" + std::string(attempt_error) + "\"" : std::string("null");
+			out += ",\"phase\":";
+			out += p.phase.empty() ? std::string("null") : "\"" + escaped(p.phase) + "\"";
+			out += ",\"table\":" + (p.table < 0 ? std::string("null") : std::to_string(p.table));
+			out += ",\"roster\":[";
+			for (std::size_t i = 0; i < p.roster.size() && i < 4; ++i)
+			{
+				const auto& r = p.roster[i];
+				if (i) out += ",";
+				out += "{\"slot\":" + std::to_string(r.slot) + ",\"name\":\"" + escaped(utf8_clean(r.name, 31)) + "\"";
+				out += std::string(",\"host\":") + (r.host ? "true" : "false") + ",\"you\":" + (r.you ? "true" : "false");
+				out += ",\"phase\":\"" + escaped(r.phase) + "\",\"ready\":" + (r.ready < 0 ? "null" : r.ready ? "true" : "false");
+				out += ",\"build\":\"" + escaped(r.build) + "\",\"route\":";
+				out += r.route.empty() ? std::string("null") : "\"" + escaped(r.route) + "\"";
+				out += "}";
+			}
+			out += "]}";
+		}
+		if (s.process.pid)
+			out += ",\"process\":{\"pid\":" + std::to_string(s.process.pid) + ",\"started\":\"" + iso8601(s.process.started) + "\"}";
+		out += "}\n";
 		return out;
 	}
 

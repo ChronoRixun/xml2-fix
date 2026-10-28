@@ -92,6 +92,7 @@ add_library(xml2_fix SHARED
     src/effect_templates.cpp
     src/primitives_per_effect.cpp
 	src/online_tick.cpp
+	src/online_menus.cpp
 	src/npc_power.cpp
 	src/npc_semi_auto.cpp
 	src/stun_rule.cpp
@@ -113,6 +114,7 @@ add_library(xml2_fix SHARED
 	src/pad_profile.cpp
 	src/pad_bindings.cpp
 	src/pad_prompts.cpp
+	src/lc_fonts.cpp
 	src/pad_input.cpp
 	src/virtual_pad.cpp
 	src/xinput_pad.cpp
@@ -576,6 +578,18 @@ target_include_directories(xml2_join_in_progress_test PRIVATE src)
 add_executable(xml2_online_room_test test/online_room_test.cpp)
 target_include_directories(xml2_online_room_test PRIVATE src)
 target_compile_options(xml2_online_room_test PRIVATE /utf-8)
+add_executable(xml2_online_menus_test test/online_menus_test.cpp src/online_menus.cpp
+    src/script_function_overflow.cpp src/patch_transaction.cpp tools/union_host/union_space.asm)
+target_include_directories(xml2_online_menus_test PRIVATE src)
+target_link_libraries(xml2_online_menus_test PRIVATE user32)
+target_compile_options(xml2_online_menus_test PRIVATE /UNDEBUG)
+target_link_options(xml2_online_menus_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
+add_executable(xml2_online_input_wiring_test test/online_input_wiring_test.cpp)
+target_include_directories(xml2_online_input_wiring_test PRIVATE src)
+target_compile_options(xml2_online_input_wiring_test PRIVATE /UNDEBUG /Gy)
+target_compile_definitions(xml2_online_input_wiring_test PRIVATE FIX_VERSION="${PROJECT_VERSION}")
+target_link_options(xml2_online_input_wiring_test PRIVATE /OPT:REF)
+target_link_libraries(xml2_online_input_wiring_test PRIVATE user32 dxguid)
 # The public game browser (contract v1.3/v1.4): room name, metadata from the game's state, presence and its pacing.
 add_executable(xml2_online_browser_test test/online_browser_test.cpp)
 target_include_directories(xml2_online_browser_test PRIVATE src)
@@ -585,6 +599,16 @@ add_executable(xml2_online_status_test test/online_status_test.cpp src/online_st
 target_include_directories(xml2_online_status_test PRIVATE src)
 target_compile_definitions(xml2_online_status_test PRIVATE FIX_LOG_FILE=L"online-status-test.log")
 target_compile_options(xml2_online_status_test PRIVATE /utf-8)
+add_executable(xml2_online_party_test test/online_party_test.cpp)
+target_include_directories(xml2_online_party_test PRIVATE src)
+target_compile_options(xml2_online_party_test PRIVATE /utf-8 /UNDEBUG)
+# The released launcher's backend round trip (review 1607424 B1): its vendored rapidjson, read-only, when named.
+set(XML2_FIX_LAUNCHER_RAPIDJSON "" CACHE PATH "include folder of the launcher's vendored rapidjson (optional host fixture)")
+if(XML2_FIX_LAUNCHER_RAPIDJSON)
+	add_executable(xml2_online_status_launcher_test test/online_status_launcher_test.cpp)
+	target_include_directories(xml2_online_status_launcher_test PRIVATE src "${XML2_FIX_LAUNCHER_RAPIDJSON}")
+	target_compile_options(xml2_online_status_launcher_test PRIVATE /utf-8 /UNDEBUG)
+endif()
 add_executable(xml2_online_security_test test/online_security_test.cpp)
 target_include_directories(xml2_online_security_test PRIVATE src)
 add_executable(xml2_log_test test/log_test.cpp src/log.cpp)
@@ -593,6 +617,12 @@ target_compile_definitions(xml2_log_test PRIVATE FIX_LOG_FILE=L"log-test.log")
 if(XML2_FIX_GNS_ROOT)
 	target_compile_definitions(xml2_online_room_test PRIVATE XML2_FIX_GNS=1)
 	target_link_libraries(xml2_online_room_test PRIVATE ${XML2_FIX_GNS_LIBS})
+	add_executable(xml2_online_broker_test test/online_broker_test.cpp)
+	target_include_directories(xml2_online_broker_test PRIVATE src "${XML2_FIX_GNS_ROOT}/include")
+	target_compile_definitions(xml2_online_broker_test PRIVATE XML2_FIX_GNS=1 XML2_FIX_GNS_CA_PIN="fixture-ca" STEAMNETWORKINGSOCKETS_OPENSOURCE STEAMNETWORKINGSOCKETS_STATIC_LINK)
+	target_compile_options(xml2_online_broker_test PRIVATE /UNDEBUG /Gy)
+	target_link_options(xml2_online_broker_test PRIVATE /OPT:REF)
+	target_link_libraries(xml2_online_broker_test PRIVATE ${XML2_FIX_GNS_LIBS} ws2_32)
 endif()
 add_executable(xml2_broker_tls_test test/broker_tls_test.cpp src/broker_tls.cpp)
 target_include_directories(xml2_broker_tls_test PRIVATE src)
@@ -871,6 +901,10 @@ add_executable(xml2_style_manager_host test/style_manager_host.cpp src/patch_tra
 target_include_directories(xml2_style_manager_host PRIVATE src)
 target_compile_options(xml2_style_manager_host PRIVATE /UNDEBUG)
 target_link_options(xml2_style_manager_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
+add_executable(xml2_lc_fonts_host test/lc_fonts_host.cpp src/patch_transaction.cpp tools/union_host/union_space.asm)
+target_include_directories(xml2_lc_fonts_host PRIVATE src)
+target_compile_options(xml2_lc_fonts_host PRIVATE /UNDEBUG)
+target_link_options(xml2_lc_fonts_host PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /FIXED /SAFESEH:NO)
 # W3-8: production transaction and isolated retail pool lifecycle fixture.
 add_executable(xml2_script_pools_test test/script_pools_test.cpp src/script_pools.cpp src/patch_transaction.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
 target_include_directories(xml2_script_pools_test PRIVATE src)

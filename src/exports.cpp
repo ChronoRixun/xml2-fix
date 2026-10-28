@@ -92,6 +92,7 @@
 #include "ladder_paths.hpp"
 #include "log.hpp"
 #include "main_menu.hpp"
+#include "online_menus.hpp"
 #include "classic_main_backdrop.hpp"
 #include "classic_main_panels.hpp"
 #include "danger_room_gate.hpp"
@@ -116,6 +117,7 @@
 #include "pad_profile.hpp"
 #include "pad_bindings.hpp"
 #include "pad_prompts.hpp"
+#include "lc_fonts.hpp"
 #include "anim_enums.hpp"
 #include "char_sounds.hpp"
 #include "motion_pool.hpp"
@@ -245,6 +247,7 @@ namespace
 		// The button prompts: the pad's names for a player on a pad, the power wheel's buttons of play. Code and
 		// data the game runs from its first menu on; none of the sites is another module's.
 		pad_prompts::install(game);
+		lc_fonts::install(game);
 		real_get_proc_address = reinterpret_cast<get_proc_address_t>(
 			iat_hook::hook(game, "KERNEL32.dll", "GetProcAddress", 0, reinterpret_cast<void*>(&game_get_proc_address)));
 		if (!real_get_proc_address)
@@ -387,6 +390,7 @@ namespace
 		script_functions::install(game);
 		script_pools::install(game);
 		forced_teams::install(game);
+		online_menus::install(game);
 		// The shared XML1 boss dispatcher installs Master Mold ([Game] Xml1MasterMold) and the bosses [Game] Xml1Bosses
 		// lists in one transaction (one brain-dispatch detour); nothing requested writes nothing.
 		xml1_bosses::install(game);
@@ -411,7 +415,7 @@ namespace
 		// install is unverified and closes host/join. Plain XML2 (no key, no ForcedTeams) advertises {0,0,0,0}. Only an
 		// explicit [Limits] ScriptFunctions enlists the agreement by itself (script_functions.hpp).
 		if (game_version::needs_gameplay_agreement() || mold_controller::requested() || xml1_turrets::requested() ||
-		    script_functions::requested_by_key())
+		    script_functions::requested_by_key() || online_menus::requested())
 		{
 			const auto mold = mold_controller::capability();
 			gameplay_agreement::register_rule(gameplay_capabilities::master_mold_id, xml1_capability_rules::master_mold_revision, mold.values, mold.verified);

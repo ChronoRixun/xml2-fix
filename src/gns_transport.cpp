@@ -311,16 +311,34 @@ namespace gns_transport
 			logger::write_capped("gns-debug", "online: GNS: %s", text);
 		}
 
+        gns_transport_core::room_identity_lifecycle<SteamNetworkingIdentity> identity_lifecycle;
+        struct identity_io {
+            bool get_identity(SteamNetworkingIdentity& out) { return sockets()->GetIdentity(&out); }
+            void reset_identity(const SteamNetworkingIdentity& value) { sockets()->ResetIdentity(&value); }
+            void close_listener() {
+                if (listener != k_HSteamListenSocket_Invalid) sockets()->CloseListenSocket(listener);
+                listener = k_HSteamListenSocket_Invalid; listen_failed = listener_disabled = false;
+            }
+        };
+        bool transport_idle() {
+            // Leave already closed these room connections. Retire their native
+            // wrappers before checking for genuinely live links/strays.
+            if (!online_room::requested())
+                for (auto& l : links) if (l->tunnel && !l->closed && !online_room::owns(l->connection)) close(*l, "room left", false);
+            for (const auto& l : links) if (!l->closed) return false; // pending native links also own their context
+            return strays.empty();
+        }
 		bool ensure(void* manager)
 		{
 			if (failed) return false;
 			if (!ready)
 			{
 				SteamNetworkingErrMsg error{};
-				// Rooms ([Online] Host/JoinCode): GNS starts as this install's identity, so the broker's certificate fits.
+				// Capture GNS's native identity before adopting the room identity.
 				SteamNetworkingIdentity identity;
 				const bool room = online_room::identity(identity);
-				if (!GameNetworkingSockets_Init(room ? &identity : nullptr, error))
+				if (online_room::requested() && !room) return false; // worker still loading identity
+				if (!GameNetworkingSockets_Init(nullptr, error))
 				{
 					failed = true;
 					logger::write("online: GNS initialisation failed (%s) - the stock transport stays in use", error);
@@ -353,6 +371,19 @@ namespace gns_transport
 				ready = true;
 				logger::write("online: GNS initialised on the game's thread (fake loss %d %%, fake lag %d ms)", fake_loss, fake_lag);
 			}
+            identity_io identity_adapter;
+            if (!identity_lifecycle.remember_native(identity_adapter)) return false;
+            SteamNetworkingIdentity room_identity;
+            const bool requested_room = online_room::requested();
+            const bool have_room_identity = requested_room && online_room::identity(room_identity);
+            const bool committed_room = online_room::view().state == online_browser_core::phase::room;
+            if (!identity_lifecycle.synchronize(requested_room, have_room_identity ? &room_identity : nullptr,
+                    transport_idle(), committed_room, identity_adapter)) {
+                // A live room's tick degrades the broker. Keep its established
+                // transport queues running; do not reset identity or listener.
+                return committed_room && requested_room;
+            }
+			if (!manager) return true; // menus have no native transport manager yet
 			if (manager != manager_)
 			{
 				close_all("the session's transport changed");
@@ -1175,6 +1206,7 @@ namespace gns_transport
 
 		void tick(void* manager)
 		{
+			online_room::ui_tick();
 			const bool listening = ensure(manager);
 			if (!ready) return;
 			sockets()->RunCallbacks();
@@ -1603,10 +1635,64 @@ namespace gns_transport
 			logger::write("online: [Online] Transport=gns rollback/protection verification failed; startup refused");
 		}
 	}
+
+	namespace
+	{
+		// The guarded half of party_snapshot: fields of the session list, its records and the input rings only.
+		bool party_read(party_facts& out, const void* (&records)[4])
+		{
+			__try
+			{
+				const auto* s = reinterpret_cast<const std::uint8_t*>(session_static);
+				if (*reinterpret_cast<const std::uint32_t*>(s) != session_vtable || !s[session_set_up]) return false;
+				out.session = true;
+				out.hosting = s[session_host] != 0;
+				const auto* zones = reinterpret_cast<const std::uint8_t*>(zones_static);
+				out.loading = *reinterpret_cast<const std::uint32_t*>(zones) == zones_vtable && (zones[zones_loading_at] & 3) != 0;
+				unsigned walked = 0;
+				for (auto* n = *reinterpret_cast<std::uint8_t* const*>(s + session_first); n; n = *reinterpret_cast<std::uint8_t**>(n + node_next_at))
+				{
+					if (++walked > 8) return false; // the engine has four slots; a longer chain is not a session list
+					auto* r = *reinterpret_cast<std::uint8_t**>(n + node_record_at);
+					if (!r) continue;
+					const auto index = *reinterpret_cast<const std::int32_t*>(r + record_index_at);
+					if (index < 0 || index > int(gns_transport_core::lost_index_max) || out.count >= 4) return false;
+					records[out.count] = r;
+					auto& p = out.participants[out.count++];
+					const auto flags = *reinterpret_cast<const std::uint32_t*>(r + record_flags_at);
+					p.index = index;
+					p.local = (flags & 1) != 0;
+					p.ready = ((flags >> 2) & 1) != 0;
+					const auto* name = reinterpret_cast<const char*>(r + 0x40);
+					unsigned k = 0;
+					while (k < 31 && name[k]) { p.name[k] = name[k]; ++k; }
+					p.name[k] = 0;
+					auto* peer = *reinterpret_cast<std::uint8_t**>(r + record_peer_at);
+					if (!p.local && peer)
+						if (auto* l = by_peer(peer); l && l->tunnel && l->bound && !l->closed) p.connection = std::uint32_t(l->connection);
+					const auto ring_now = ring(index);
+					p.ring = ring_now.ok;
+					p.next = ring_now.next;
+				}
+				return true;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+		}
+	}
+	bool party_snapshot(party_facts& out)
+	{
+		out = {};
+		const void* records[4]{};
+		if (state.load() != 1 || !party_read(out, records)) { out = {}; return false; }
+		// The rule-26 machine compares record identities only (no dereference); asked outside the SEH frame (C++ code).
+		for (unsigned i = 0; i < out.count; ++i) out.participants[i].pending = join_in_progress::pending_player(records[i]);
+		return true;
+	}
 }
 #else
 namespace gns_transport
 {
+	bool party_snapshot(party_facts& out) { out = {}; return false; }
 	void install(HMODULE)
 	{
 		const auto value = ini::text(L"Online", L"Transport");
@@ -1621,4 +1707,19 @@ namespace gns_transport
 {
 	bool requested() { return state.load() != -1; }
 	bool installed() { return state.load() == 1; }
+	bool room_can_start() {
+#if XML2_FIX_GNS
+		if (!installed()) return false;
+        return transport_idle();
+#else
+		return false;
+#endif
+	}
+	void room_ui_tick() {
+#if XML2_FIX_GNS
+        if (!installed() || !gns_transport_core::room_ui_pump_needed(ready, online_room::requested())) return;
+        ensure(nullptr);
+        if (ready) { sockets()->RunCallbacks(); online_room::tick(); }
+#endif
+	}
 }

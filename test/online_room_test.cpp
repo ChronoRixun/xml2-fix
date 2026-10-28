@@ -226,6 +226,19 @@ int main()
 		check(room_guard_refusal(false, true, false) != nullptr && std::strstr(room_guard_refusal(false, true, false), "[Save] Format") != nullptr,
 		      "rooms: a joiner without the checked campaign load is refused, naming [Save] Format");
 	}
+	{
+		// Round 6 nit: a native session end queues the quit notices first; the room leave waits one whole transport tick.
+		online_room_core::leave_deferral leave;
+		check(!leave.armed() && !leave.step(), "deferred leave: nothing armed, nothing due");
+		leave.arm();
+		check(leave.armed() && !leave.step(), "deferred leave: the tick that was already running does not complete it");
+		check(leave.armed() && leave.step() && !leave.armed(), "deferred leave: it falls due on the next tick, once");
+		check(!leave.step(), "deferred leave: a second step after completion is idle");
+		leave.arm(); leave.arm();
+		check(!leave.step() && leave.step() && !leave.step(), "deferred leave: re-arming while pending does not extend or repeat it");
+		leave.arm(); leave.disarm();
+		check(!leave.armed() && !leave.step() && !leave.step(), "deferred leave: an explicit leave/cancel disarms it");
+	}
 	std::printf("%d PASS / %d FAIL\n", passes, failures);
 	return failures ? 1 : 0;
 }

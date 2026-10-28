@@ -26,6 +26,33 @@ namespace gns_transport_core
 		return {frame[0], frame[1], frame[2], frame[3], frame[4] & 0xffu};
 	}
 
+	inline bool room_ui_pump_needed(bool initialized, bool requested) { return initialized || requested; }
+	// Identity/certificate handoff is local to an idle GNS context. IO provides
+	// get_identity, reset_identity and close_listener; no native/game state here.
+	template<class Identity> class room_identity_lifecycle {
+		Identity native_{};
+		bool saved_ = false, room_mode_ = false, owns_identity_ = false;
+	public:
+		template<class IO> bool remember_native(IO& io) {
+			if (!saved_) saved_ = io.get_identity(native_);
+			return saved_;
+		}
+		template<class IO> bool synchronize(bool requested, const Identity* room, bool idle, bool committed_room, IO& io) {
+			if (!saved_ || (requested && !room)) return false;
+			Identity current{};
+			if (!io.get_identity(current)) return false;
+			const bool identity_change = requested ? current != *room : owns_identity_;
+			if (identity_change || room_mode_ != requested) {
+				// Recheck immediately before touching listener/cert/identity. A
+				// successful can_start() in an earlier frame is not authority.
+				if (!idle || committed_room) return false;
+				io.close_listener();
+				if (identity_change) io.reset_identity(requested ? *room : native_);
+				owns_identity_ = requested; room_mode_ = requested;
+			}
+			return true;
+		}
+	};
 	inline bool hello_due(bool connector, bool bound, std::uint32_t now, std::uint32_t last)
 	{
 		return connector && !bound && (last == 0 || now - last >= 250);

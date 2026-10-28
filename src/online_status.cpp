@@ -16,6 +16,17 @@ namespace online_status
 		bool started = false;
 		core::status last;
 		std::wstring file_path;
+		// Roster-only changes coalesce to one write per second (docs/online-party.md section 9).
+		bool party_dirty = false;
+		DWORD party_written = 0;
+		DWORD (WINAPI *clock)() = &GetTickCount;
+		core::utc process_start()
+		{
+			FILETIME created{}, exited{}, kernel{}, user{};
+			SYSTEMTIME t{};
+			if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user) || !FileTimeToSystemTime(&created, &t)) return {};
+			return {int(t.wYear), int(t.wMonth), int(t.wDay), int(t.wHour), int(t.wMinute), int(t.wSecond)};
+		}
 
 		std::wstring status_path()
 		{
@@ -35,6 +46,8 @@ namespace online_status
 		// Caller holds `lock`.
 		void flush()
 		{
+			party_dirty = false;
+			party_written = clock();
 			if (file_path.empty()) return;
 			if (!write_atomic(file_path, core::json(last, now_utc())))
 				logger::write_once("online-status-write", "online: online-status.json could not be written (error %lu)", GetLastError());
@@ -95,6 +108,9 @@ namespace online_status
 		file_path = status_path();
 		last = {};
 		last.who = who;
+		last.process.pid = GetCurrentProcessId();
+		last.process.started = process_start();
+		party_dirty = false;
 	}
 	bool active()
 	{
@@ -120,16 +136,36 @@ namespace online_status
 		// (only the process exit writes `ended`).
 		// The first error is the run's answer: later events (a room closing after a refusal, the broker going away)
 		// do not replace it. Only the process exit adds `ended`.
-		if (last.now == core::state::error || last.now == core::state::ended) return;
+		if (last.now == core::state::ended) return;
+		if (last.now == core::state::error)
+		{
+			// v1 keeps its first error for the run; a later in-game attempt is the party block's news only.
+			if (!last.party.known) return;
+			auto attempt = last.party;
+			attempt.now = now;
+			attempt.why = now == core::state::error ? (why == core::error::none ? core::error::internal : why) : core::error::none;
+			if (attempt == last.party) return;
+			++attempt.generation;
+			last.party = attempt;
+			flush();
+			return;
+		}
 		core::status next = last;
+		if (next.party.known)
+		{
+			next.party.now = now;
+			next.party.why = now == core::state::error ? (why == core::error::none ? core::error::internal : why) : core::error::none;
+		}
 		next.now = now;
 		next.code = code;
 		next.players = players;
 		next.why = now == core::state::error ? (why == core::error::none ? core::error::internal : why) : core::error::none;
 		next.message = message;
 		static bool written = false;
-		if (written && next.now == last.now && next.code == last.code && next.players == last.players && next.why == last.why && next.message == last.message)
+		if (written && next.now == last.now && next.code == last.code && next.players == last.players && next.why == last.why && next.message == last.message &&
+		    next.party == last.party)
 			return;
+		if (!(next.party == last.party)) ++next.party.generation;
 		written = true;
 		last = next;
 		flush();
@@ -180,6 +216,54 @@ namespace online_status
 			last.message = "the game closed";
 		}
 		last.now = core::state::ended;
+		if (last.party.known)
+		{
+			last.party.now = core::state::ended;
+			last.party.phase = "left";
+			last.party.roster.clear();
+			++last.party.generation;
+		}
 		flush();
 	}
+
+	void attempt()
+	{
+		std::lock_guard g(lock);
+		if (!started || last.now == core::state::ended) return;
+		last.party.known = true;
+		last.party.now = core::state::connecting;
+		last.party.why = core::error::none;
+		last.party.phase = "connecting";
+		last.party.table = -1;
+		last.party.roster.clear();
+		++last.party.generation;
+		++last.party.attempt;
+		flush(); // rare (one per Host / Join / Retry); the set() that follows writes only what then differs
+		logger::write("online: status attempt %u (party block)", unsigned(last.party.generation));
+	}
+
+	void party(const std::string& phase, int table, const std::vector<core::roster_row>& roster)
+	{
+		std::lock_guard g(lock);
+		if (!started || !last.party.known || last.now == core::state::ended) return;
+		if (last.party.phase == phase && last.party.table == table && last.party.roster == roster) return;
+		last.party.phase = phase;
+		last.party.table = table;
+		last.party.roster = roster;
+		++last.party.generation;
+		party_dirty = true;
+		if (clock() - party_written >= 1000) flush();
+	}
+
+	void tick()
+	{
+		std::unique_lock g(lock, std::try_to_lock);
+		if (!g.owns_lock() || !started || !party_dirty || clock() - party_written < 1000) return;
+		flush();
+	}
+
+	void set_clock_for_test(DWORD (WINAPI *c)()) { std::lock_guard g(lock); clock = c ? c : &GetTickCount; }
+	void restart_for_test() { std::lock_guard g(lock); started = false; last = {}; file_path.clear(); party_dirty = false; party_written = 0; }
+	void path_for_test(const std::wstring& path) { std::lock_guard g(lock); file_path = path; }
+	core::status snapshot() { std::lock_guard g(lock); return last; }
 }
