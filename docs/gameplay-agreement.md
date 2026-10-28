@@ -142,7 +142,7 @@ settings: DeathRule. ...").
 
 | Opcode | Receiver | Native registration / setup | Refusal |
 |---|---|---|---|
-| 0x18 | Querying PC (Connect by IP, games list) | 0x6096a3 in 0x609660; the host answers this PC's direct or LAN query with it; 0x6090d0 files it in the games table (0x608c20/0x608d60, status 6) | Not filed; native dialog on this PC; reasoned 0x1d to the host; no join cleanup (none is pending) |
+| 0x18 | Querying PC (Connect by IP, room-code join, games list) | 0x6096a3 in 0x609660; the host answers this PC's direct or LAN query with it; 0x6090d0 files it in the games table (0x608c20/0x608d60, status 6) | Not filed; the games list's row says why and its own update raises the native dialog (games-list notice below; without it, the dialog at once as before); reasoned 0x1d to the host; no join cleanup (none is pending) |
 | 0x1a | Host | 0x609cc3 in host setup 0x609f50 -> 0x609c80; joiner responds to 0x16 via 0x607770 | Reasoned 0x1d, disconnect refused peer, non-modal host notice; preserve session |
 | 0x1b | Joiner | 0x609dec in joiner setup 0x60a0a0 -> 0x609d80; host responds from 0x609970 | Reasoned 0x1d, native failure/cleanup and dialog |
 | 0x1f | Joiner/receiving participant | 0x609ee2 in 0x609d80; host sender 0x608350 | Reasoned 0x1d, native failure/cleanup and dialog |
@@ -158,6 +158,35 @@ Host admission refusal never invokes shared-session cleanup, even if a timer exi
 Patch acquisition records each distinct code page once; readback/cache verification and restoration preserve its original protection. Startup/socket exclusion remains closed until the entire record, transport and participating installer states verify.
 
 Refusal immediately sends native incompatibility opcode 0x1d through the direct transport, with a reason body (`GREF`, reason, three zero bytes; reason relative to the sender: 1 gameplay settings, 2 the sender's own installation is unverified, 3 the peer's record is missing or foreign). Protocol 3 appends eight bytes: the differing rule-summary buckets (bit b = bucket b) of a settings refusal, zero otherwise; older readers check only the first eight bytes, and the receiving PC names those rules from its own list. Native 0x609ad0 ignores the body; a bodiless or foreign 0x1d reads as unspecified. Joining endpoints execute native failure handler 0x609ad0 and cleanup 0x6097f0, then the native dialog/menu path; a querying PC (0x18) shows the native dialog only. The early join entry rejects unverified local installation through the same native failure path, before setting up another attempt. A closed socket also presents the actionable native installation message. No generic timeout is used as the refusal mechanism. Native UI uses original authored text in this DLL; no localized game strings are shipped.
+
+## Games-list refusal notice (the querying PC)
+
+A PC that refuses a host's 0x18 files nothing, so its games list shows the native empty row. The 082f live round
+(A2/A3: Actors=96 on one PC only) found the joiner's native dialog, raised from inside that network receive, set in
+the popup manager (test state `popup` 1) but never drawn: the list showed only "No Games Found" while the host's
+lobby named the difference. The popup attaches its panels to the menu current at that moment (0x5ea1b0 -> 0x5e91c0,
+menu manager vt+0x108); the 0x18 answer to a Connect by IP / room-code query arrives within a second of Enter.
+
+The optional `gameplay_agreement.games_list_notice` contribution (5 `browser_guards`: the CMenuGamesList vtable's
+locator and update slot, the update's timed refresh, the two empty-row lookups) makes the querying PC say it on the
+list itself, from what the refused 0x18 already carried (the rule-summary difference; no new message or field):
+
+- **The row.** CMenuGamesList (vtable 0x69f8b4) vt+0x30 = 0x5b9f00 refreshes the list on a timer (0x5b9900); an
+  empty table writes string 0xfc5 for its first five refreshes, then string 0xfe4 "No Games Found" (0x5b9a1f, and
+  0x5b9b9b once every listed game went away), sprintf'd into a 256-byte stack row. Both 5-byte
+  `mov ecx,eax; call [edx+8]` lookups CALL a thunk that returns the refusal row while one is current (120 s, or until
+  a compatible host answers or admits this PC), else the native string: "Host's gameplay settings differ: DeathRule"
+  ("Settings differ: entity layout, ActorAI (disabled on this PC)" when only the shorter lead fits one 64-character
+  row, else "Host's gameplay settings differ - match xml2-fix.ini, restart"), "Host found, but it runs another build or its fix did not load", "Host found, but the fix did not load
+  correctly on this PC".
+- **The dialog.** The update slot is wrapped: after the native update, a pending refusal's dialog is raised on the
+  list's own update, once, only while that list is the current menu, so its panels attach to the list. A settings
+  refusal says "The host uses different gameplay settings: <names>. Both players need the same build and the same
+  gameplay settings in xml2-fix.ini; match them, restart the game and join again." (the joining PC's 0x1b / 0x1f /
+  0x1d refusals use the same words).
+
+Without the part (a guard mismatch: one log line), the dialog is raised at once as before. The fixture runs the real
+0x18 receiver and the retail refresh 0x5b9900 (stand-ins for the list widget, string table and sprintf only).
 
 ## Host refusal notice
 

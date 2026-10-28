@@ -67,7 +67,8 @@ namespace entity_capacity {
 const entity_capacity_layout::descriptor& installed(){static auto d=entity_capacity_layout::raised_descriptor_for(0,0,0,0);d.actors=e4_core_state::installed?96:32;d.layout_revision=e4_core_state::installed?4:3;return d;}
 [[noreturn]] void fail_stop_lifecycle(const char*){ExitProcess(77);}
 }
-namespace save_format {void enable_actor_capacity96(){save_enabled=true;}}
+std::string save_refusal;bool save_refused=false;
+namespace save_format {void enable_actor_capacity96(){save_enabled=true;}void actor_capacity96_refused(const std::string& why){save_refused=true;save_refusal=why;}}
 namespace {
 using method=void(__fastcall*)(void*,void*);
 u32 allocator=0,cai=0;float clock_value=0;bool throw_brain=false,nested=false,resolve_in_dtor=false,bad_handler=false;void* nested_result=nullptr;int injected_phase=-1;
@@ -514,6 +515,7 @@ int main(int argc,char** argv){
    std::string name;for(auto p=names[i];*p;++p)name+=char(*p);const auto status=e4_core::status();
    const auto expected=mode.starts_with("missing")?"missing prerequisite [Limits] "+name+"="+values[i]:"wrong prerequisite [Limits] "+name+"=wrong (needs "+std::string(values[i])+")";
    check(status.find(expected)!=std::string::npos,"T25 refusal names the exact missing or wrong prerequisite");
+   check(save_refused&&save_refusal==expected,"T25 the save format is told why Actors=96 did not install (an actor save's refusal names it)");
   }
   if(mode.starts_with("unverified")){
    // An unprepared prerequisite contribution is a veto inside the shared
@@ -521,11 +523,12 @@ int main(int argc,char** argv){
    const auto i=std::stoul(mode.substr(10));
    check(result!=patch_transaction::outcome::committed,"T25 an unprepared prerequisite refuses the whole startup transaction");
    check(e4_core::status().find("prerequisite "+std::string(owners[i])+" not prepared")!=std::string::npos,"T25 the transaction refusal names the unprepared prerequisite");
+   check(save_refused&&save_refusal.find("prerequisite "+std::string(owners[i])+" not prepared")!=std::string::npos,"T25 the save format is told the transaction refusal");
   }
   if(mode=="off"){gameplay_capabilities::record released;released.finalize();agreement.finalize();check(std::equal(agreement.bytes().begin(),agreement.bytes().end(),released.bytes().begin()),"OFF agreement unchanged");}
   else check(!agreement.finalize(),"T25 rule44 unverified");
  }else {
-  if(!stock){check(e4_core::installed()&&save_enabled&&!refused,"complete core and save capability publication");if(!e4_core::installed())return 1;}
+  if(!stock){check(e4_core::installed()&&save_enabled&&!refused&&!save_refused,"complete core and save capability publication");if(!e4_core::installed())return 1;}
   std::puts("dependencies");dependencies();std::puts("CAI getter");cai=address(reinterpret_cast<void*(__cdecl*)()>(0x5252e0)());if(!stock)check(cai==e4_core_state::cai,"A3 native getter and retained init guard");std::puts("allocator constructor");
   allocator=address(VirtualAlloc(nullptr,0x1aa520+64,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE));if(!allocator)return 4;std::memset(ptr(allocator+0x1aa520),0xa5,64);
   reinterpret_cast<void*(__fastcall*)(void*,void*)>(0x4614f0)(ptr(allocator),nullptr);word(0x718fbc)=allocator;

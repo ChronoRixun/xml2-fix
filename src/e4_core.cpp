@@ -161,7 +161,7 @@ void contribute(patch_transaction::transaction& tx,HMODULE game){
 void after_commit(bool committed){
     if(!e4_core_state::requested||address(image)!=0x400000)return;
     gameplay_agreement::register_rule(gameplay_capabilities::actor_ai_id,2,e4_core_rules::agreement,committed&&e4_core_state::installed);
-    if(!e4_core_state::installed)release_prepared();
+    if(!e4_core_state::installed){save_format::actor_capacity96_refused(failure.empty()?std::string("startup transaction not committed"):failure);release_prepared();}
 }
 bool installed(){return e4_core_state::installed;}
 void verify_consumers(){

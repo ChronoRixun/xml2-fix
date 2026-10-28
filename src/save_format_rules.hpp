@@ -492,6 +492,15 @@ namespace save_format_rules
 	constexpr std::uint32_t lc_feature_native_w2 = 2;   // limits-wave2.md section 7: a W2 save a pre-W2 build cannot apply
 	// set once by save_format::use_native_profile: the installed lcsave descriptor's feature_bits (RETAIL 0, E10A2 1, W2 3)
 	inline std::uint32_t lc_known_required_features = 0;
+	constexpr std::uint32_t lc_feature_actor_capacity96 = 4; // E4 stage 2 ([Limits] Actors=96): written with 96 live actors
+	// Required bits this build implements behind an opt-in [Limits] setting (set once by save_format::use_native_profile:
+	// ACTOR_CAPACITY_96 when the fix carries the E4 core). A save that needs only such bits, switched off on this start,
+	// is refused naming the setting instead of "a newer build". W2 (bit 1) keeps its own rule in inspect.
+	inline std::uint32_t lc_setting_required_features = 0;
+	// [Limits] Actors=96 is in xml2-fix.ini but did not install this start (save_format::actor_capacity96_refused):
+	// the refusal then says why instead of "turn it on".
+	inline bool lc_actor_capacity96_requested = false;
+	inline std::string lc_actor_capacity96_failure;
 	constexpr std::uint8_t kind_campaign = 1;
 	constexpr std::uint8_t kind_profile = 2;
 	constexpr std::uint16_t section_required = 1;
@@ -529,6 +538,7 @@ namespace save_format_rules
 		std::uint32_t writer_version = 0;
 		std::uint32_t optional_features = 0;   // header 0x14 (bit 0 KEYS; bits 1 / 2 the fifth-level catch-up)
 		bool needs_layout = false;             // needs_newer because of a known required bit whose layout is not installed (W2 bit 1)
+		std::uint32_t needs_settings = 0;      // needs_newer and every missing required bit is an opt-in setting this build has, off here
 		std::uint64_t campaign_serial = 0;
 		std::uint32_t save_sequence = 0;
 		std::uint64_t saved_at = 0;
@@ -636,11 +646,23 @@ namespace save_format_rules
 		{
 			out.status = file_status::needs_newer;
 			out.why = "required feature bits " + std::to_string(required);
+			const std::uint32_t missing = required & ~lc_known_required_features;
 			// a bit this build knows by name but whose layout is not installed (W2 section 7, "Named refusal")
-			if ((required & ~lc_known_required_features) == lc_feature_native_w2 && (lc_known_required_features & lc_feature_entity_layout_contiguous10))
+			if (missing == lc_feature_native_w2 && (lc_known_required_features & lc_feature_entity_layout_contiguous10))
 			{
 				out.needs_layout = true;
+				out.needs_settings = missing;
 				out.why = "this save needs the W2 save layout ([Limits] SaveLayout=w2); enable it or use the build that wrote it";
+			}
+			// only opt-in settings this build has and that are off on this start (Actors=96, with or without W2): both
+			// need the contiguous layout (EntityCapacity=1), so a build without it keeps the generic refusal
+			else if ((lc_known_required_features & lc_feature_entity_layout_contiguous10) &&
+			         (missing & ~(lc_setting_required_features | lc_feature_native_w2)) == 0 && (missing & lc_setting_required_features))
+			{
+				out.needs_settings = missing;
+				out.why += lc_actor_capacity96_requested ? " (Actors=96 did not install on this start" + (lc_actor_capacity96_failure.empty() ? std::string() : ": " + lc_actor_capacity96_failure) + ")"
+				                                         : std::string(" (Actors=96 is off on this start)");
+				if (missing & lc_feature_native_w2) out.why += " (SaveLayout=w2 is off on this start)";
 			}
 			return out;
 		}
@@ -951,7 +973,8 @@ namespace save_format_rules
 			text = (from_backup ? "(restored from backup) " : "") + i.description;
 			break;
 		case file_status::needs_newer:
-			text = (i.needs_layout ? "(needs the W2 save layout) " : "(needs a newer version) ") + i.description;
+			text = ((i.needs_settings & lc_feature_actor_capacity96) ? ((i.needs_settings & lc_feature_native_w2) ? "(needs Actors=96 + the W2 save layout) " : "(needs Actors=96) ")
+			        : i.needs_layout ? "(needs the W2 save layout) " : "(needs a newer version) ") + i.description;
 			break;
 		case file_status::wrong_kind:
 			text = "(not a campaign) " + i.description;
