@@ -14,6 +14,7 @@
 #include "net_impair.hpp"
 #include "online_room.hpp"
 #include "online_room_core.hpp"
+#include "online_removal_core.hpp"
 #include "online_tick.hpp"
 #include "join_in_progress.hpp"
 #include "xml1_hook_memory.hpp"
@@ -1624,6 +1625,9 @@ namespace gns_transport
 		{
 			state = 1;
 			gameplay_agreement::register_rule(gameplay_capabilities::gns_transport_id, agreement_revision, {1u, gns_port_offset, framing_revision, 0u}, true);
+			// Rule 64 OnlineRemovalNotice: link kind 9 on room tunnels (the Party Kick's notice to the removed PC). Every rule-25
+			// peer of this build carries it, so a peer without it is refused at admission like any other rule mismatch.
+			gameplay_agreement::register_rule(online_removal_core::rule_id, online_removal_core::rule_revision, online_removal_core::rule_effective, true);
 			logger::write("online: Transport=gns installed - participants' game messages go whole over GameNetworkingSockets on the stock port + %u (rule 25); admission and lobby stay stock; every PC must use it",
 			              unsigned(gns_port_offset));
 		}
@@ -1705,11 +1709,44 @@ namespace gns_transport
 		{
 			auto& l = *item;
 			if (!survivor(l) || participant_index(l) != int(index)) continue;
-			logger::write("online: participant %u (%s) removed by the host from the Party screen - ending its link; the cut frame is agreed", index, text(l.address, l.port).c_str());
+			// Rule 64: the removed PC is told first, on its room connection (repeated until it leaves), then its link ends here.
+			const char* told = l.tunnel ? online_room::name(online_room::removal_start(l.connection, index)) : "no removal notice (a direct link, not a room connection)";
+			logger::write("online: participant %u (%s) removed by the host from the Party screen - %s; ending its link; the cut frame is agreed", index, text(l.address, l.port).c_str(), told);
 			declare_gone(l, "removed by the host");
 			return l.closed || l.gone_at || l.gone_why;
 		}
 		return false;
+	}
+	bool deliver_removal(unsigned own_index)
+	{
+		namespace X = online_removal_core;
+		if (state.load() != 1 || !ready) return false;
+		party_facts facts;
+		const void* records[4]{};
+		if (!party_read(facts, records)) return false;
+		X::participant_fact who[4];
+		for (unsigned i = 0; i < facts.count && i < 4; ++i) who[i] = {facts.participants[i].index, facts.participants[i].local};
+		if (!X::may_deliver(facts.hosting || session_hosted_here(), who, facts.count, own_index)) return false;
+		const auto body = X::native_body(std::uint8_t(own_index));
+		const network_validation::context validation{entity_capacity::fast_transfer_active()};
+		if (!gns_transport_core::validate_opcode_length(X::native_opcode, body.size()) || !network_validation::valid_message(X::native_opcode, body.data(), body.size(), validation))
+			return false;
+		std::vector<X::link_fact> view;
+		for (auto& item : links)
+		{
+			const auto& l = *item;
+			view.push_back({l.tunnel, l.bound, l.closed, l.vanished, l.peer != nullptr, participant_index(l)});
+		}
+		const int chosen = X::host_link(view.data(), view.size());
+		if (chosen < 0) return false;
+		auto& l = *links[std::size_t(chosen)];
+		gns_transport_core::message m;
+		m.opcode = X::native_opcode;
+		m.reliable = true;
+		m.body.assign(body.begin(), body.end());
+		if (!l.in.push(std::move(m))) return false;
+		logger::write("online: the host's removal of this PC (rule 64) reaches the session from %s as the native removal notice 0x2b", text(l.address, l.port).c_str());
+		return true;
 	}
 	bool party_snapshot(party_facts& out)
 	{
@@ -1726,6 +1763,7 @@ namespace gns_transport
 {
 	bool party_snapshot(party_facts& out) { out = {}; return false; }
 	bool remove_member(unsigned) { return false; }
+	bool deliver_removal(unsigned) { return false; }
 	void install(HMODULE)
 	{
 		const auto value = ini::text(L"Online", L"Transport");

@@ -7,6 +7,7 @@
 #include "save_format.hpp"
 #include "online_room_core.hpp"
 #include "online_party_core.hpp"
+#include "online_removal_core.hpp"
 #include "online_browser_core.hpp"
 #include "discord_rules.hpp"
 #include "join_in_progress.hpp"
@@ -639,6 +640,10 @@ namespace online_room
 			online_party_core::route party_route = online_party_core::route::unknown;
 			DWORD party_sampled = 0;
 			HSteamNetConnection party_connection = k_HSteamNetConnection_Invalid; // the connection the party model last saw
+			// Rule 64 (online_removal_core): this PC's report sequence when this connection came up (the floor a removal notice
+			// must be above), and the kind-9 receive budget of this connection.
+			std::uint32_t removal_floor = 0;
+			core::token_bucket removal_rate{8, 16};
 			// The first few tunnel messages refused on this connection are logged with the reason (the 10 s report only counts).
 			void refused(const char* why, int kind, std::size_t length)
 			{
@@ -648,6 +653,7 @@ namespace online_room
 		};
 		std::vector<std::unique_ptr<tunnel>> tunnels;
 		void party_receive(tunnel& t, const std::uint8_t* data, std::size_t size); // kinds 7/8 (below)
+		void removal_receive(tunnel& t, const std::uint8_t* data, std::size_t size); // kind 9, rule 64 (below)
 		void party_connected(tunnel& t); // a new connection: the member's sequences start again (below)
 		core::leave_deferral deferred_leave; // a native session end's room leave, one transport tick later
 		std::deque<received_datagram> arrivals;
@@ -1091,6 +1097,12 @@ namespace online_room
 						batch[i]->Release();
 						continue;
 					}
+					if (batch[i]->m_cbSize >= 1 && data[0] == online_removal_core::link_kind)
+					{
+						removal_receive(*t, data, std::size_t(batch[i]->m_cbSize));
+						batch[i]->Release();
+						continue;
+					}
 					const auto p = gns_transport_core::parse(data, std::size_t(batch[i]->m_cbSize));
 					// The member's keepalive can overtake its hello at the start (seen once per session on the host): it carries
 					// nothing, so it is ignored rather than counted as a refused message.
@@ -1453,6 +1465,7 @@ namespace online_room
         void party_connected(tunnel& t) {
             party_core::key k{};
             t.party_connection = t.connection;
+            t.removal_floor = report_sequence; // every report this PC sends on this connection is above it
             if (party_model.is_open() && party_core::key_from_identity(t.id, k)) party_model.reconnected(k);
         }
         void party_receive(tunnel& t, const std::uint8_t* data, std::size_t size) {
@@ -1503,6 +1516,7 @@ namespace online_room
                 if (!party_core::key_from_identity(t->id, k)) continue;
                 if (t->connection != t->party_connection) {
                     t->party_connection = t->connection;
+                    t->removal_floor = report_sequence;
                     if (t->connection != k_HSteamNetConnection_Invalid) party_model.reconnected(k);
                 }
                 if (t->connected && now - t->party_sampled >= 1000) {
@@ -1587,6 +1601,126 @@ namespace online_room
         }
     }
 
+    // ---- Rule 64 OnlineRemovalNotice (online_removal_core.hpp, docs/online-party-menu.md section 4): the host tells the member
+    // it removes in session; the removed PC ends its session as a native Kick and its Hub says so ----
+    namespace {
+        namespace removal_core = online_removal_core;
+        removal_core::receiver removal_in; // a joiner: the room host's notice that it removed THIS PC (latched for the room)
+        removal_core::sender removal_out;  // the host: one pending notice per member it removed in session
+        int removal_deliver = -1;          // accepted, not yet handed to the session: this PC's native index
+        std::uint32_t removal_deliver_since = 0;
+        bool removal_deliver_slow_logged = false, removal_repeat_logged = false;
+        void removal_reset() {
+            removal_in.reset(); removal_out.reset(); removal_deliver = -1; removal_deliver_since = 0;
+            removal_deliver_slow_logged = removal_repeat_logged = false;
+        }
+        // This PC's own facts for a notice that arrived on tunnel t (the authenticated tunnel identity decides the sender).
+        removal_core::guest_view removal_view(const tunnel& t) {
+            removal_core::guest_view v;
+            v.room = room_ready && room_code.size() == removal_core::code_size;
+            v.hosting = hosting;
+            v.code = room_code.c_str();
+            party_core::key_from_identity(own_id, v.self);
+            party_core::key_from_identity(host_id, v.host);
+            // The tunnel's identity is the one GNS authenticated with the project CA's certificate (on_status checks it again).
+            v.from_host_tunnel = !host_id.empty() && t.id == host_id && t.connected;
+            v.floor = t.removal_floor;  // this PC's report sequence when THIS connection to the host came up
+            v.sent = report_sequence;   // this PC's newest report (the sequence is per process, on every connection)
+            gns_transport::party_facts facts;
+            if (!hosting && gns_transport::party_snapshot(facts) && facts.session && !facts.hosting)
+                for (unsigned i = 0; i < facts.count; ++i)
+                    if (facts.participants[i].local) { v.session = true; v.own_index = facts.participants[i].index; }
+            return v;
+        }
+        void removal_receive(tunnel& t, const std::uint8_t* data, std::size_t size) {
+            const auto now = room_clock();
+            if (!t.removal_rate.allow(now)) { t.refused("removal notice rate", int(removal_core::link_kind), size); return; }
+            const auto v = removal_view(t);
+            removal_core::notice n;
+            const auto why = removal_in.on_message(v, data, size, &n);
+            if (why == removal_core::refusal::none) {
+                host_loss.removed_by_host(); // the host connection ending after this is not a host loss
+                removal_deliver = v.own_index;
+                removal_deliver_since = now ? now : 1;
+                logger::write("online: removal notice from the host %s accepted (rule 64, serial %u): the host removed this PC (native index %d) from the game; its session ends as a native Kick",
+                              t.id.c_str(), unsigned(n.serial), v.own_index);
+                return;
+            }
+            if (why == removal_core::refusal::repeat) {
+                // The host repeats its notice until this PC leaves the room; the first one decided, the delivery below retries.
+                if (!removal_repeat_logged) { removal_repeat_logged = true; logger::write("online: removal notice: the host's repeats are ignored (already accepted%s)", removal_deliver >= 0 ? "; delivery to the session still pending" : ""); }
+                return;
+            }
+            if (why == removal_core::refusal::not_host)
+                logger::write_capped("online-removal-refused", "online: refused a removal notice from %s - not this room's host (%zu bytes)", t.id.c_str(), size);
+            else
+                logger::write_capped("online-removal-refused", "online: refused a removal notice from %s (%s, %zu bytes)", t.id.c_str(), removal_core::name(why), size);
+        }
+        // After poll(): the accepted notice reaches the session as the retail removal notice for this PC's own index (the GNS
+        // transport puts it in the host link's receive queue). Retried every tick while this PC is still a guest of a native
+        // session (review F finding 6); a session that ended first needs nothing more (the latch tells the Hub).
+        void removal_deliver_tick() {
+            if (removal_deliver < 0) return;
+            const auto now = room_clock();
+            if (gns_transport::deliver_removal(unsigned(removal_deliver))) {
+                logger::write("online: removal notice handed to the session as the native removal notice 0x2b (index %d, reason 0x10CE, flag 1)", removal_deliver);
+                removal_deliver = -1;
+                return;
+            }
+            gns_transport::party_facts facts;
+            const bool guest = gns_transport::party_snapshot(facts) && facts.session && !facts.hosting;
+            if (!guest) {
+                logger::write("online: removal notice: the session ended before the native removal notice was handed over; the Hub shows the removal");
+                removal_deliver = -1;
+                return;
+            }
+            if (!removal_deliver_slow_logged && now - removal_deliver_since >= 5000) {
+                removal_deliver_slow_logged = true;
+                logger::write("online: removal notice: no bound link to the host takes the native removal notice yet (5 s); still trying every tick");
+            }
+        }
+        // The host, every tick: the first notice at once, then every resend_ms, on the connection the member was removed from,
+        // until it closes or is replaced; after the responsive / hard window the host closes it with close_text.
+        void removal_send_tick() {
+            if (removal_out.targets().empty()) return;
+            const auto now = room_clock();
+            party_core::key self{};
+            const bool ok = hosting && room_ready && room_code.size() == removal_core::code_size && party_core::key_from_identity(own_id, self);
+            const auto pending = removal_out.targets(); // a copy: finish() edits the list
+            for (const auto& target : pending) {
+                tunnel* t = nullptr;
+                for (auto& item : tunnels) { party_core::key k{}; if (party_core::key_from_identity(item->id, k) && k == target.who) t = item.get(); }
+                const std::uint32_t current = ok && t && t->connected && t->connection != k_HSteamNetConnection_Invalid ? std::uint32_t(t->connection) : 0u;
+                const auto step = removal_out.tick(target.who, current, party_model.heard_within(target.who, now, removal_core::responsive_ms), now);
+                if (step == removal_core::sender::step::wait) continue;
+                if (step == removal_core::sender::step::finish) {
+                    logger::write("online: removal notice: the removed member %s left (%s; %u notice(s) sent)", t ? t->id.c_str() : "?",
+                                  current ? "its room connection was replaced - the old Kick ends with the old connection" : "its room connection closed", target.sends);
+                    removal_out.finish(target.who);
+                    continue;
+                }
+                if (step == removal_core::sender::step::expire) {
+                    logger::write("online: removal notice: %s did not leave (%u notice(s) sent, %u ms responsive, %u ms in all) - its room connection is closed (%s)", t->id.c_str(),
+                                  target.sends, unsigned(target.responsive), unsigned(now - target.started), removal_core::close_text);
+                    drop(*t, removal_core::close_text);
+                    removal_out.finish(target.who);
+                    continue;
+                }
+                const auto heard = party_model.heard(target.who);
+                if (!heard) {
+                    logger::write_once("online-removal-heard", "online: removal notice: no report from the removed member on this connection yet - the notice waits for one");
+                    continue;
+                }
+                const auto bytes = removal_core::encode(removal_out.make(target, room_code.c_str(), self, heard));
+                sockets()->SendMessageToConnection(t->connection, bytes.data(), std::uint32_t(bytes.size()), k_nSteamNetworkingSend_UnreliableNoNagle, nullptr);
+                removal_out.sent(target.who, now);
+                if (!target.sends)
+                    logger::write("online: removal notice sent to %s (rule 64, native index %u, serial %u); repeated every %u ms until it leaves", t->id.c_str(),
+                                  unsigned(target.index), unsigned(target.serial), unsigned(removal_core::resend_ms));
+            }
+        }
+    }
+
     namespace {
         void invalidate_worker() {
             cancel_worker();
@@ -1605,6 +1739,7 @@ namespace online_room
             tunnels.clear(); arrivals.clear(); arrivals_bytes = 0;
             signal_rates.clear(); members.clear(); own_address = 0;
             party_reset();
+            removal_reset();
             if (listener != k_HSteamListenSocket_Invalid && sockets()) sockets()->CloseListenSocket(listener);
             listener = k_HSteamListenSocket_Invalid;
             room_ready = ice_ready = cert_ready = false; cert_identity.clear(); cert_expires = 0;
@@ -1645,6 +1780,29 @@ namespace online_room
     std::uint32_t retry_in_ms() { return client.retry_in(room_clock()); }
     bool host_lost() { return host_loss.lost(); }
     void suppress_host_lost() { host_loss.removed_by_host(); }
+    bool removed_by_host() { return removal_in.removed(); }
+    const char* name(removal_start_result r) {
+        switch (r) {
+        case removal_start_result::started: return "removal notice sent (rule 64)";
+        case removal_start_result::pending: return "a removal notice to it is already pending";
+        case removal_start_result::bad_index: return "no removal notice (not a remote index)";
+        case removal_start_result::no_room: return "no removal notice (this PC hosts no ready room)";
+        case removal_start_result::no_connection: return "no removal notice (no connected room connection to it)";
+        default: return "no removal notice (three already pending)";
+        }
+    }
+    removal_start_result removal_start(HSteamNetConnection c, unsigned index) {
+        if (index < removal_core::index_min || index > removal_core::index_max) return removal_start_result::bad_index;
+        if (!hosting || !room_ready) return removal_start_result::no_room;
+        auto* t = by_connection(c);
+        party_core::key k{};
+        if (!t || !t->connected || !party_core::key_from_identity(t->id, k)) return removal_start_result::no_connection;
+        const auto r = removal_out.start(k, std::uint8_t(index), std::uint32_t(c), room_clock());
+        if (r == removal_core::sender::start_result::pending) return removal_start_result::pending;
+        if (r != removal_core::sender::start_result::started) return removal_start_result::refused;
+        removal_send_tick(); // the first notice goes out now, before the transport unbinds the member's link
+        return removal_start_result::started;
+    }
     bool take_preset(browser::launch_preset& out) {
         if (!menu_client || preset == browser::operation::none) return false;
         out = {preset, launch_code, configured_room_name, metadata.public_room};
@@ -1851,6 +2009,8 @@ namespace online_room
 		poll();
 		report();
 		party_tick();
+		removal_send_tick();
+		removal_deliver_tick();
 	}
 
 	bool on_status(SteamNetConnectionStatusChangedCallback_t* info)
@@ -1910,6 +2070,14 @@ namespace online_room
 		{
 			logger::write("online: connection to %s ended (%s, reason %d: %s)", t->id.c_str(), state == k_ESteamNetworkingConnectionState_ClosedByPeer ? "closed by the peer" : "problem detected locally",
 			              info->m_info.m_eEndReason, info->m_info.m_szEndDebug);
+			// Rule 64: the host closed this connection because its removal notices were not taken in time (review F finding 3):
+			// the authenticated host connection's own close text, so it is the same removal, never a host loss.
+			if (!hosting && t->id == host_id && t->connected && state == k_ESteamNetworkingConnectionState_ClosedByPeer &&
+			    std::strcmp(info->m_info.m_szEndDebug, removal_core::close_text) == 0 && removal_in.closed_by_host())
+			{
+				host_loss.removed_by_host();
+				logger::write("online: the host closed this PC's connection as %s (rule 64): the host removed this PC from the game", removal_core::close_text);
+			}
 			if (!hosting && t->id == host_id && t->connected) host_loss.ended(t->transport_bound); // before drop() clears the bound flag
 			const bool retry = t->outgoing && !t->connected;
 			// A connection that never came up while cached TURN credentials were in use: the relay may have refused them
@@ -2169,6 +2337,7 @@ namespace online_room
     std::uint32_t retry_in_ms() { return 0; }
     bool host_lost() { return false; }
     void suppress_host_lost() {}
+    bool removed_by_host() { return false; }
     bool take_preset(online_browser_core::launch_preset&) { return false; }
     void ui_tick() {}
     bool list() { return false; }

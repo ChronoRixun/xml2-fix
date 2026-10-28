@@ -65,13 +65,46 @@ is no AREA data (no source is wired); LC does not author an area line.
 `gns_transport::remove_member(index)` (host only, a running zone, a remote participant with a bound live link; never index
 0 or this PC) declares the participant's link gone through `declare_gone`, the one loss path every vanished participant
 takes: the cut frame is then agreed on every PC (`vanished_links`, the lost-inputs/lost-ready exchange, the other guests end
-their own link to it), and the removed PC's session ends as if its connection had been lost. It never calls the native
+their own link to it), and the removed PC ends its own session as a native Kick on the host's removal notice (below). It never calls the native
 pre-game removal `0x6133a0` mid-frame. Departure once: the model marks the index until the roster stops listing it, the
 transport finds no surviving link on a repeat, a refused request clears the mark so the host may retry.
 
-What is not here (a new peer contract **needs a rule id**, none chosen): a "removed by the host" notice to the removed PC
-(it sees a lost host connection and its native dialog), a Kick ban or in-session consent, a guest-side vote. Kick does
-not prevent a re-join with the code (public admission stays open, 0.6).
+**The removed PC is told (0.6 preview fix F, gameplay rule 64 OnlineRemovalNotice, `src/online_removal_core.hpp`).**
+Before `declare_gone`, `remove_member` asks the room layer (`online_room::removal_start`) to send the member the removal
+notice, link kind 9 on its room tunnel (unreliable, like kinds 7/8; handled by `online_room::poll` before the tunnel
+policy). 35 bytes: `kind u8 = 9`, `wire u8 = 1`, `code[8]` (the room code), `host key[8]`, `target key[8]` (the removed
+member), `index u8` (its native index, 1-3), `heard u32` (the newest Party report sequence, kind 7, the host accepted from
+that member on this connection: `online_party_core::model::heard`), `serial u32` (the host's removal serial; resends repeat
+it). The host sends the first one at once and repeats it every 250 ms **on the room connection it removed the member from**
+until that connection closes (the member left the room after its session ended) or is replaced (a re-joined member on a new
+connection is never sent the old Kick: review F finding 2). It gives up after 10 s of the member being responsive (a Party
+report heard within 6 s; a member stalled in a zone load sends none, so its stall does not count; one host tick counts at
+most 100 ms, so a host stall does not count either), or after 60 s in all, and then closes that connection itself with the
+close text `removed by the host`. The removed PC reads that close text on its authenticated host connection as the same
+removal (latch set, never a host loss), so even a member that heard no notice ends with "The host removed you from the
+game.", never a silent solo session. A notice waits while the host has no report from the member on this connection (after
+a reconnect). `remove_member` logs which of these applied (sent, already pending, no room, no connection, direct link).
+
+The member accepts a notice only when all of these hold (`online_removal_core::receiver`, every refusal counted and logged,
+none changes state): it arrived on the tunnel whose authenticated identity (the GNS certificate the project CA signed) is
+the room's host, this PC does not host, and the host key is the room's (`not the host`); the room code is this PC's room
+(`room`); the target is this PC (`target`); `heard` is above this PC's report sequence at the moment this connection to the
+host came up and not above the newest report this PC sent (on any connection - the sequence is per process) (`stale` / `future`: an earlier connection's, an earlier session's or a
+replayed notice, or one the host of this connection cannot have produced); this PC has not accepted one in this room yet
+(`repeat`, the resends); this PC is a guest of a native session at that index (`session`). Accepted (once per room): the room
+layer's host-loss tracker is told the coming connection end is not a host loss, the latch `online_room::removed_by_host()`
+is set, and the next transport tick hands the session the retail removal notice **0x2b for this PC's own index, reason
+0x10ce, flag 1** - exactly what the host's native lobby Kick sends - through the bound link to the host
+(`gns_transport::deliver_removal`, after the receive validation of 0x2b; retried every tick while this PC is a guest of a
+native session, a slow delivery logged once after 5 s; the host's repeats meanwhile are ignored, logged once). The retail handler 0x612f60 removes this PC as a
+native Kick does and the 0.6 end path (fix E) shows the Hub notice **"The host removed you from the game."** instead of the
+host-left panel; the session-end wrapper also accepts the latch (`broker_api::removed_by_host`) when the session ends
+another way after the notice. The others keep playing on the agreed cut (unchanged). A peer without rule 64 is refused at
+admission (rule agreement), so no session mixes the two behaviours.
+
+Still not here: a Kick ban or in-session consent, a guest-side vote. Kick does not prevent a re-join with the code (public
+admission stays open, 0.6). A re-joined PC's new connection has a new floor, so a notice of the old connection still on the
+wire is `stale`, and the host never sends the old Kick on the new connection (it ends with the old one).
 
 ## 5. Leave
 
@@ -103,8 +136,10 @@ Three PCs (host A, guests B, C), candidate with this DLL and LC build with the p
 3. While A sits in Party the match continues for B and C (footer text is true). Roster, phases, ping, invite code stay live.
 4. Invite (button, Y, Ctrl+C) copies `XXXX-XXXX` (paste it elsewhere); clipboard failure shows the failed scene only.
 5. Host Kick of B from Party: confirmation names B; Yes: on every PC B leaves at the same frame, no desync, no stuck wait;
-   A's roster drops B once, C's too. Expect B to stay on A's roster as a pending "Connecting" card for about 10 s (until its watchdog) after the removal. Check the logs on all three PCs: each says "removed by the host" (A) / the agreed loss, then "agreed" and never "NOT AGREED", and there is no desync for at least 2 minutes. Repeat with a Kick issued just before an area exit. A second Yes, or Kick again before B vanishes, does nothing. B sees its native lost-host
-   dialog and can join again with the code.
+   A's roster drops B once, C's too. Expect B to leave A's roster within about a second (it ends its own session on the notice and leaves the room; it no longer waits out a watchdog). Check the logs on all three PCs: each says "removed by the host" (A) / the agreed loss, then "agreed" and never "NOT AGREED", and there is no desync for at least 2 minutes. Repeat with a Kick issued just before an area exit. Repeat with C on a slow or lossy link to A (B now leaves C within a round trip, possibly before the host's cut messages for B reach C: C must still say "agreed" for B and never desync), and with B in a zone load at the Kick (B ends with the notice after the load; A must not log "did not leave"). A second Yes, or Kick again before B vanishes, does nothing. B (fix F, rule 64) sees the native kick dialog within about
+   a second, then the Hub with the red line "The host removed you from the game." and NO "THE HOST LEFT" panel; its log says
+   "removal notice from the host ... accepted (rule 64" then "the host removed this PC from the game"; A's log "removal
+   notice sent to ..." then "the removed member ... left". B can join again with the code.
 6. Guest Leave from C: confirmation, then the native quit; A and B continue, the roster agrees. Host Leave from A: the
    "End for everyone" confirmation; B and C get the native host-lost dialog; no room is left advertised.
 7. A pending joiner D (Waiting for the next area) shows the notice bar and "Hero at the next area"; Kick is not offered
@@ -113,8 +148,7 @@ Three PCs (host A, guests B, C), candidate with this DLL and LC build with the p
 
 ## 8. Open
 
-Resume return target (above); the Codex route; no AREA line; Party row offline shows an empty roster; the removed PC gets
-no dedicated notice (needs a peer contract and a rule id).
+Resume return target (above); the Codex route; no AREA line; Party row offline shows an empty roster.
 
 ## Notes for the first co-op beta
-A removed player gets no dedicated notice (no new peer contract, no new rule id): they see the native lost-connection dialog after about 10 s. Kick is not a ban.
+A removed player sees the native kick dialog and then "The host removed you from the game." on the Hub (rule 64; every PC of the session needs this build). Kick is not a ban.

@@ -4,6 +4,7 @@
 #include "online_menus_rules.hpp"
 #include "online_menus_guards.hpp"
 #include "online_menus_hits_rules.hpp"
+#include "online_removal_core.hpp"
 #include "pad_prompts_rules.hpp"
 #include "script_function_overflow.hpp"
 #include <Windows.h>
@@ -432,6 +433,7 @@ void rules() {
     assert(table.add(&entry)==script_functions_rules::added::added && table.find(function_name)==&entry);
     assert(!registration_fits(table,321));
 }
+std::vector<std::string> r6_log; // every r6-* log line (fix F: the session-end wrapper's classification is counted)
 #include "online_lobby_fixture.inl"
 #include "online_menus_followup.inl"
 #include "online_menus_broker.inl"
@@ -447,7 +449,8 @@ namespace script_functions { int capacity() { return ::capacity; } }
 namespace lc_fonts { bool active() { return mode!="fonts-off"; } }
 namespace gameplay_agreement { bool host_notice_showing(void*) { return mode=="r4-advice-notice"; } }
 namespace logger {
-void write(const char* format,...) { if(!mode.starts_with("r6-")) return; char buffer[512]{};va_list args;va_start(args,format);std::vsnprintf(buffer,sizeof(buffer),format,args);va_end(args);std::cout<<buffer<<"\n"; }
+void write(const char* format,...) { if(!mode.starts_with("r6-") && mode!="r4-r6") return; // r6 fixtures run the native lobby as "r4-r6"
+    char buffer[512]{};va_list args;va_start(args,format);std::vsnprintf(buffer,sizeof(buffer),format,args);va_end(args);std::cout<<buffer<<"\n";r6_log.push_back(buffer); }
 void write_once(std::string_view key,const char* format,...) {
     if(once_logs.contains(std::string(key))) return;
     char value[512]{};va_list args;va_start(args,format);std::vsnprintf(value,sizeof(value),format,args);va_end(args);

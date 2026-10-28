@@ -590,7 +590,7 @@ bool offline_fixture = false;
 #if XML2_FIX_GNS
 void production_broker_tick() { online_room::ui_tick(); gns_transport::room_ui_tick(); }
 broker_api broker_calls{online_room::available,online_room::view,production_broker_tick,online_room::list,
-    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due,online_room::host_native,online_room::admission_target,online_room::host_posted,join_in_progress::installed,online_room::leave_after_flush,online_room::party,online_room::room_rtt,gns_transport::remove_member,online_room::retry_in_ms,gameplay_agreement::refusal_rules,online_room::host_lost,gameplay_agreement::refusal_serial};
+    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due,online_room::host_native,online_room::admission_target,online_room::host_posted,join_in_progress::installed,online_room::leave_after_flush,online_room::party,online_room::room_rtt,gns_transport::remove_member,online_room::retry_in_ms,gameplay_agreement::refusal_rules,online_room::host_lost,gameplay_agreement::refusal_serial,online_room::removed_by_host};
 #else
 broker_api broker_calls{};
 #endif
@@ -1287,6 +1287,7 @@ bool lobby_current_mask(unsigned& mask) {
 }
 void lobby_tick(void* menu,unsigned original,bool& called) {
     if(!lobby_live(menu) || current_peek()!=menu) { called=true;lobby_original(menu,original);return; }
+    native_note_local_record();
     if(lobby_state.owner!=menu) { lobby_state.reset(menu);bindings.clear();pending.clear();roster.clear();guest_toast.clear(); }
     lobby_view before{};const bool valid=read_lobby(menu,before);
     lobby_native_state state{};const bool state_valid=lobby_state_read(menu,state);
@@ -1789,6 +1790,7 @@ void party_frame(void* menu) {
     const auto id=reinterpret_cast<std::uintptr_t>(menu);
     if(party_owner!=id) { party_ui.reset();party_owner=id;party_origin.clear();party_feedback=0;bindings.clear();pending.clear();keyboard_input.clear(); }
     if(broker_live() && broker_calls.tick) broker_calls.tick();
+    native_note_local_record();
     const auto view=party_collect();
     const auto& roster=view.roster;
     // The queued native quit may never run (refused/blocked): the screen must not stay frozen. A short timeout clears the latch.
@@ -2236,6 +2238,7 @@ void keyboard(unsigned char* state) {
 
 bool requested() { return enabled(ini::text(L"Online",L"Menus")); }
 bool installed() { return ready; }
+unsigned session_clear_count() { return session_clears; }
 void set_pad_probe(bool (*probe)(int player)) { pad_probe=probe; }
 void set_pointer_probe(bool (*probe)(int& x,int& y,int& screen_width,int& screen_height)) { pointer_probe=probe; }
 bool pad_prompt_scope() {

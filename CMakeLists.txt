@@ -611,6 +611,11 @@ target_compile_options(xml2_online_party_test PRIVATE /utf-8 /UNDEBUG)
 add_executable(xml2_online_restore_test test/online_restore_test.cpp)
 target_include_directories(xml2_online_restore_test PRIVATE src)
 target_compile_options(xml2_online_restore_test PRIVATE /utf-8 /UNDEBUG)
+# Online removal notice (src/online_removal_core.hpp, rule 64): the Party Kick's link kind 9, its parser and the
+# host / removed-member machines over a lossy room wire (pure; no native state).
+add_executable(xml2_online_removal_test test/online_removal_test.cpp)
+target_include_directories(xml2_online_removal_test PRIVATE src)
+target_compile_options(xml2_online_removal_test PRIVATE /utf-8 /UNDEBUG)
 # The released launcher's backend round trip (review 1607424 B1): its vendored rapidjson, read-only, when named.
 set(XML2_FIX_LAUNCHER_RAPIDJSON "" CACHE PATH "include folder of the launcher's vendored rapidjson (optional host fixture)")
 if(XML2_FIX_LAUNCHER_RAPIDJSON)

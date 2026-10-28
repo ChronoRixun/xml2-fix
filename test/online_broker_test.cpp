@@ -124,7 +124,11 @@ namespace logger {
 void write(const char*,...) {} void write_once(std::string_view,const char*,...) {} void write_capped(std::string_view,const char*,...) {}
 }
 namespace online_menus { bool installed() { return true; } }
-namespace gns_transport { bool installed() { return true; } bool room_can_start() { return !fake::transport_busy; } bool party_snapshot(party_facts& out) { out = {}; return false; } }
+// The game-side reads of the transport (rule 64 glue tests set them): the native session facts and the delivery call.
+namespace fake { gns_transport::party_facts party{}; bool party_ok=false,deliver_ok=true; std::vector<unsigned> delivered; }
+namespace gns_transport { bool installed() { return true; } bool room_can_start() { return !fake::transport_busy; }
+    bool party_snapshot(party_facts& out) { out = fake::party_ok ? fake::party : party_facts{}; return fake::party_ok; }
+    bool deliver_removal(unsigned index) { fake::delivered.push_back(index); return fake::deliver_ok; } }
 namespace receive_validation { bool installed() { return true; } }
 namespace save_format { bool campaign_load_checked() { return true; } }
 namespace join_in_progress { bool installed() { return false; } }
@@ -382,6 +386,165 @@ void native_target_test() {
 }
 }
 
+// ---- Rule 64 (review F finding 1): the room glue itself - removal_receive through the real poll(), removal_view's facts,
+// the connection-up floor, removal_deliver_tick's retries, removal_start / removal_send_tick on real GNS socket pairs, the
+// connection binding (finding 2), the responsive window and its close text (finding 3), the host's close text on the
+// removed PC. Only gns_transport (the game reads) is the fixture's: fake::party and the recording deliver_removal.
+namespace rx = online_removal_core;
+void removal_wait(HSteamNetConnection c) { for(int i=0;i<200;++i) { SteamNetConnectionRealTimeStatus_t st{};room::sockets()->GetConnectionRealTimeStatus(c,&st,0,nullptr);if(!st.m_cbPendingUnreliable && !st.m_cbPendingReliable) break;std::this_thread::sleep_for(std::chrono::milliseconds(1)); } }
+std::vector<std::vector<std::uint8_t>> removal_read(HSteamNetConnection c,std::uint8_t kind) {
+    std::vector<std::vector<std::uint8_t>> out;
+    for(int round=0;round<20;++round) {
+        SteamNetworkingMessage_t* m[32];const int n=room::sockets()->ReceiveMessagesOnConnection(c,m,32);
+        for(int i=0;i<n;++i) { const auto* d=static_cast<const std::uint8_t*>(m[i]->m_pData);if(m[i]->m_cbSize>=1 && d[0]==kind) out.emplace_back(d,d+m[i]->m_cbSize);m[i]->Release(); }
+        if(n==0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return out;
+}
+void removal_send(HSteamNetConnection from,const std::vector<std::uint8_t>& bytes) {
+    assert(room::sockets()->SendMessageToConnection(from,bytes.data(),std::uint32_t(bytes.size()),k_nSteamNetworkingSend_Reliable,nullptr)==k_EResultOK);
+    removal_wait(from);
+    for(int i=0;i<40;++i) { std::this_thread::sleep_for(std::chrono::milliseconds(5));room::poll(); } // the pair delivers on GNS's own thread
+}
+void removal_connect(room::tunnel& t,HSteamNetConnection local,const std::string& id) {
+    t.connection=local;t.connected=false;
+    SteamNetConnectionStatusChangedCallback_t status{};status.m_hConn=local;status.m_info.m_eState=k_ESteamNetworkingConnectionState_Connected;
+    status.m_info.m_identityRemote.ParseString(online_room_core::gns_identity(id).c_str());
+    assert(room::on_status(&status) && t.connected);
+}
+void removal_guest_test() {
+    reset("success");assert(room::resolve("ABCDEFGH"));pump_until([] { return room::view().state==b::phase::room && room::cert_ready; });
+    assert(room::room_ready && !room::hosting && room::host_id=="legends:1111111111111111");
+    fake::party={};fake::party.session=true;fake::party.count=2;fake::party.participants[0].index=0;fake::party.participants[1].index=1;fake::party.participants[1].local=true;
+    fake::party_ok=true;fake::delivered.clear();fake::deliver_ok=true;
+    room::own_id="legends:4444444444444444"; // the fixture's own key is all zero, which no notice may name
+    HSteamNetConnection local,peer;assert(room::sockets()->CreateSocketPair(&local,&peer,false,nullptr,nullptr));
+    room::report_sequence=40;
+    auto& host=room::ensure_tunnel(room::host_id);removal_connect(host,local,room::host_id);
+    assert(host.removal_floor==40); // the floor is taken when the connection comes up (party_connected)
+    room::report_sequence=45;
+    // a second member's tunnel (not the host)
+    const std::string other="legends:2222222222222222";assert(room::members.join(other));
+    HSteamNetConnection local2,peer2;assert(room::sockets()->CreateSocketPair(&local2,&peer2,false,nullptr,nullptr));
+    auto& member=room::ensure_tunnel(other);removal_connect(member,local2,other);
+    rx::notice n;std::memcpy(n.code,room::room_code.c_str(),8);
+    assert(online_party_core::key_from_identity(room::host_id,n.host) && online_party_core::key_from_identity(room::own_id,n.target));
+    n.index=1;n.heard=44;n.serial=9;
+    auto variant=[&](auto edit) { auto m=n;edit(m);return rx::encode(m); };
+    // The removal view is built from the room's real state.
+    {
+        const auto v=room::removal_view(host);
+        assert(v.room && !v.hosting && v.from_host_tunnel && v.floor==40 && v.sent==45 && v.session && v.own_index==1 && std::memcmp(v.code,"ABCDEFGH",8)==0);
+        assert(!room::removal_view(member).from_host_tunnel);
+    }
+    removal_send(peer2,rx::encode(n));                                  // the same notice on another member's tunnel
+    assert(!room::removal_in.removed() && room::removal_in.refused(rx::refusal::not_host)==1);
+    removal_send(peer,variant([](rx::notice& m) { m.heard=40; }));      // the floor itself: an earlier connection's
+    removal_send(peer,variant([](rx::notice& m) { m.heard=46; }));      // above anything this PC sent
+    removal_send(peer,variant([](rx::notice& m) { m.index=2; }));       // not this PC's index
+    removal_send(peer,variant([](rx::notice& m) { std::memcpy(m.code,"ABCDEFGJ",8); }));
+    assert(!room::removal_in.removed() && room::removal_in.refused(rx::refusal::stale)==1 && room::removal_in.refused(rx::refusal::future)==1 &&
+           room::removal_in.refused(rx::refusal::session)==1 && room::removal_in.refused(rx::refusal::room)==1 && room::removal_deliver<0);
+    room::hosting=true;removal_send(peer,rx::encode(n));room::hosting=false; // a hosting PC is never removed
+    assert(room::removal_in.refused(rx::refusal::not_host)==2 && !room::removal_in.removed());
+    // Delivery retries while the native session lasts (finding 6).
+    fake::deliver_ok=false;
+    removal_send(peer,rx::encode(n));
+    assert(room::removal_in.removed() && room::removed_by_host() && room::removal_deliver==1 && fake::delivered.empty() && !room::host_lost());
+    room::removal_deliver_tick();assert(room::removal_deliver==1 && fake::delivered.size()==1 && fake::delivered[0]==1);
+    for(int i=0;i<3;++i) { fake::clock+=3000;room::removal_deliver_tick(); }
+    assert(room::removal_deliver==1 && fake::delivered.size()==4 && room::removal_deliver_slow_logged);
+    removal_send(peer,rx::encode(n));                                   // a resend: repeat, nothing new
+    assert(room::removal_in.refused(rx::refusal::repeat)==1 && room::removal_repeat_logged && fake::delivered.size()==4);
+    fake::deliver_ok=true;room::removal_deliver_tick();
+    assert(room::removal_deliver<0 && fake::delivered.size()==5 && fake::delivered.back()==1);
+    // The host connection ends now: no host loss (the panel stays down).
+    SteamNetConnectionStatusChangedCallback_t closed{};closed.m_hConn=local;closed.m_info.m_eState=k_ESteamNetworkingConnectionState_ClosedByPeer;
+    std::strcpy(closed.m_info.m_szEndDebug,"closed");host.transport_bound=true;
+    room::on_status(&closed);assert(!room::host_lost() && room::removed_by_host());
+    room::sockets()->CloseConnection(peer,0,nullptr,false);room::sockets()->CloseConnection(peer2,0,nullptr,false);room::sockets()->CloseConnection(local2,0,nullptr,false);
+    room::leave();pump_until([] { return room::worker_done.load(); });assert(!room::removed_by_host() && room::removal_deliver<0);
+    // A session that ends before the delivery: the pending delivery is dropped (the latch already tells the Hub).
+    reset("success");assert(room::resolve("ABCDEFGH"));pump_until([] { return room::view().state==b::phase::room && room::cert_ready; });
+    assert(room::sockets()->CreateSocketPair(&local,&peer,false,nullptr,nullptr));
+    room::own_id="legends:4444444444444444";room::report_sequence=50;auto& host2=room::ensure_tunnel(room::host_id);removal_connect(host2,local,room::host_id);room::report_sequence=51;
+    fake::deliver_ok=false;fake::delivered.clear();n.heard=51;removal_send(peer,rx::encode(n));assert(room::removal_deliver==1);
+    fake::party_ok=false;room::removal_deliver_tick();assert(room::removal_deliver<0 && room::removed_by_host());
+    // The host's close text on the authenticated host connection is the removal too (finding 3): no notice taken before.
+    room::leave();pump_until([] { return room::worker_done.load(); });
+    reset("success");assert(room::resolve("ABCDEFGH"));pump_until([] { return room::view().state==b::phase::room && room::cert_ready; });
+    room::sockets()->CloseConnection(peer,0,nullptr,false);
+    assert(room::sockets()->CreateSocketPair(&local,&peer,false,nullptr,nullptr));
+    auto& host3=room::ensure_tunnel(room::host_id);removal_connect(host3,local,room::host_id);host3.transport_bound=true;
+    closed.m_hConn=local;std::strcpy(closed.m_info.m_szEndDebug,rx::close_text);
+    room::on_status(&closed);assert(room::removed_by_host() && !room::host_lost());
+    // ...and another close text is the host loss it always was.
+    room::leave();pump_until([] { return room::worker_done.load(); });
+    reset("success");assert(room::resolve("ABCDEFGH"));pump_until([] { return room::view().state==b::phase::room && room::cert_ready; });
+    room::sockets()->CloseConnection(peer,0,nullptr,false);
+    assert(room::sockets()->CreateSocketPair(&local,&peer,false,nullptr,nullptr));
+    auto& host4=room::ensure_tunnel(room::host_id);removal_connect(host4,local,room::host_id);host4.transport_bound=true;
+    closed.m_hConn=local;std::strcpy(closed.m_info.m_szEndDebug,"closed by the application");
+    room::on_status(&closed);assert(!room::removed_by_host() && room::host_lost());
+    room::sockets()->CloseConnection(peer,0,nullptr,false);
+    room::leave();pump_until([] { return room::worker_done.load(); });fake::party_ok=false;
+    std::cout<<"PASS rule 64 guest glue: real poll() routing, removal_view facts (floor at connection-up, sent, session, host tunnel), not-host / stale / future / session / room / hosting refusals, accept latch, delivery retried every tick and dropped when the session ends, repeats silent, host close text = removal, other close = host loss\n";
+}
+void removal_host_test() {
+    reset("success");assert(room::host("Game",false));pump_until([] { return room::view().state==b::phase::room && room::cert_ready; });
+    assert(room::hosting && room::room_ready);
+    room::own_id=room::host_id="legends:5555555555555555"; // the fixture's own key is all zero, which no notice may carry
+    fake::party={};fake::party.session=true;fake::party.hosting=true;fake::party_ok=true;
+    const std::string id="legends:3333333333333333";assert(room::members.join(id));
+    HSteamNetConnection local,peer;assert(room::sockets()->CreateSocketPair(&local,&peer,false,nullptr,nullptr));
+    auto& t=room::ensure_tunnel(id);removal_connect(t,local,id);
+    room::party_tick(); // opens the party model with this roster
+    online_party_core::key who{};assert(online_party_core::key_from_identity(id,who));
+    HSteamNetConnection cur=peer; // the member end the reports come from
+    auto report=[&](std::uint32_t seq) {
+        online_party_core::report r;std::memcpy(r.code,room::room_code.c_str(),8);r.seq=seq;r.now=online_party_core::phase::playing;r.index=1;r.token="FIXTURE";r.name="B";
+        removal_send(cur,online_party_core::encode(r));
+    };
+    using R=online_room::removal_start_result;
+    assert(room::removal_start(local,0)==R::bad_index && room::removal_start(local,4)==R::bad_index);
+    report(5);assert(room::party_model.heard(who)==5);
+    assert(room::removal_start(local,1)==R::started && room::removal_start(local,1)==R::pending);
+    auto got=removal_read(peer,rx::link_kind);
+    assert(got.size()==1);rx::notice n;assert(rx::parse(got[0].data(),got[0].size(),n)==rx::refusal::none);
+    assert(n.index==1 && n.heard==5 && n.target==who && std::memcmp(n.code,room::room_code.c_str(),8)==0);
+    const auto serial=n.serial;
+    fake::clock+=100;room::removal_send_tick();assert(removal_read(peer,rx::link_kind).empty());
+    fake::clock+=200;room::removal_send_tick();got=removal_read(peer,rx::link_kind);
+    assert(got.size()==1 && rx::parse(got[0].data(),got[0].size(),n)==rx::refusal::none && n.serial==serial);
+    // Finding 2: the member's connection is replaced (same tunnel object, new handle, connected): the old Kick ends there.
+    HSteamNetConnection local2,peer2;assert(room::sockets()->CreateSocketPair(&local2,&peer2,false,nullptr,nullptr));
+    room::sockets()->CloseConnection(local,0,nullptr,false);
+    t.connection=local2;t.connected=true;room::party_model.reconnected(who);cur=peer2;report(1);
+    fake::clock+=300;room::removal_send_tick();
+    assert(room::removal_out.targets().empty() && removal_read(peer2,rx::link_kind).empty());
+    // Finding 3: a new Kick on the new connection; the member stalls (no report): no drop at 10 s, closed at the 60 s bound.
+    assert(room::removal_start(local2,1)==R::started);
+    for(int i=0;i<200;++i) { fake::clock+=50;room::removal_send_tick(); } // 10 s, member stalled after its last report
+    assert(!room::removal_out.targets().empty() && t.connected);
+    for(int i=0;i<1100 && !room::removal_out.targets().empty();++i) { fake::clock+=50;room::removal_send_tick(); }
+    assert(room::removal_out.targets().empty() && !t.connected && t.connection==k_HSteamNetConnection_Invalid);
+    SteamNetConnectionInfo_t info{};
+    for(int i=0;i<500;++i) { assert(room::sockets()->GetConnectionInfo(peer2,&info));if(info.m_eState!=k_ESteamNetworkingConnectionState_Connected) break;std::this_thread::sleep_for(std::chrono::milliseconds(2)); }
+    assert(info.m_eState==k_ESteamNetworkingConnectionState_ClosedByPeer && std::strcmp(info.m_szEndDebug,rx::close_text)==0);
+    removal_read(peer2,rx::link_kind);room::sockets()->CloseConnection(peer2,0,nullptr,false);room::sockets()->CloseConnection(peer,0,nullptr,false);
+    // A responsive member that never takes the notice: closed after 10 s of responsive time.
+    HSteamNetConnection local3,peer3;assert(room::sockets()->CreateSocketPair(&local3,&peer3,false,nullptr,nullptr));
+    removal_connect(t,local3,id);room::party_model.reconnected(who);
+    cur=peer3;report(1);
+    assert(room::removal_start(local3,1)==R::started);
+    const auto started=fake::clock.load();std::uint32_t seq=1;
+    for(int i=0;i<400 && !room::removal_out.targets().empty();++i) { fake::clock+=50;if(i%20==0) report(++seq);room::removal_send_tick(); }
+    const auto took=fake::clock.load()-started;
+    assert(room::removal_out.targets().empty() && !t.connected && took>=10000 && took<11000);
+    room::sockets()->CloseConnection(peer3,0,nullptr,false);
+    room::leave();pump_until([] { return room::worker_done.load(); });fake::party_ok=false;
+    std::cout<<"PASS rule 64 host glue: removal_start results, first notice at once on the member's connection (index, heard, code, target), 250 ms cadence with the same serial, a replaced connection ends the old Kick (nothing sent on the new one), a stalled member closed only at the 60 s bound, a responsive one after 10 s, close text on the wire\n";
+}
 int main() {
     std::cout<<std::unitbuf;
     SteamNetworkingIdentity id;id.Clear();id.ParseString("str:legends:0000000000000000");SteamNetworkingErrMsg error{};
@@ -448,6 +611,7 @@ int main() {
     for(const char* fault:{"rate_limited","no_such_room","room_full","version_mismatch","timeout","idle_disconnect"}) for(const char* next:{"retry","refresh","done"})
         if(!(std::string(fault)=="idle_disconnect" && std::string(next)=="retry")) certificate_after_failure_test(fault,next);
     native_host_metadata_test();native_target_test();
+    removal_guest_test();removal_host_test();
     certificate_identity_outside_room_test();certificate_renewal_test();certificate_repeat_in_room_test();
     reset("success");assert(room::list());pump_until([] { return room::view().state==b::phase::listing; });
     room::worker_generation=room::connection_generation.load();room::worker_ticket=room::view().generation;
