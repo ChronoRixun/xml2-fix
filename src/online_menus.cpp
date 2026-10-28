@@ -762,6 +762,21 @@ void browse_join_tick(screen s) {
         browse_join_code.clear();
     }
 }
+void* focus_of(void* menu);
+void* item_try(void* menu,const char* name);
+// 060r live (failure 7): the Host setup's amber side marker was baked beside CAMPAIGN and stayed there when the focus bar moved to
+// VISIBILITY. LC authors one hidden marker scene per settings row (lc_host_marker_<row>); the one beside the focused row shows, none
+// while the focus is on the Open bar or a prompt. Assets without the scenes (an older LC) keep their baked marker.
+struct host_marker_row { const char* item; const char* marker; };
+constexpr host_marker_row host_marker_rows[]{{"visibility","lc_host_marker_visibility"},{"room_name","lc_host_marker_room_name"},
+    {"edit_room","lc_host_marker_room_name"},{"campaign","lc_host_marker_campaign"}}; // DROP-IN is read-only: never focused, no marker
+void host_marker_follow(void* menu) {
+    void* const focused=focus_of(menu);
+    const char* shown=nullptr;
+    for(const auto& row:host_marker_rows) if(focused && item_try(menu,row.item)==focused) shown=row.marker;
+    for(const char* marker:{"lc_host_marker_visibility","lc_host_marker_room_name","lc_host_marker_campaign"})
+        hide(menu,marker,!(shown && std::strcmp(shown,marker)==0));
+}
 void bind_broker(void* menu,screen s) {
     if(!broker_live()) {
         if(!offline_fixture) {
@@ -771,7 +786,7 @@ void bind_broker(void* menu,screen s) {
             hide(menu,"lc_service_ok",true);
             hide_error_scenes(menu);bind_text(menu,"broker_error","");
             hide(menu,"retry",true);enable(menu,"retry",false);
-            if(s==screen::host) { hide(menu,"lc_host_public",!host_public);hide(menu,"lc_host_private",host_public); }
+            if(s==screen::host) { hide(menu,"lc_host_public",!host_public);hide(menu,"lc_host_private",host_public);host_marker_follow(menu); }
         }
         return;
     }
@@ -784,7 +799,7 @@ void bind_broker(void* menu,screen s) {
     const bool connected_plain=v.authenticated && !waiting && !failed && v.state!=broker::phase::room;
     hide(menu,"lc_service_ok",!connected_plain);
     bind_text(menu,"service",connected_plain ? "" : service);
-    bind_text(menu,"self_state",connected_plain ? "" : waiting ? "Please wait" : v.state==broker::phase::room ? "Room connected" : service);
+    bind_text(menu,"self_state",connected_plain ? "" : waiting ? "Please wait" : v.state==broker::phase::room ? "In a room" : service);
     const auto browse_hint=v.list_known ? std::to_string(v.rows.size()).append(v.stale ? " last known games" : " public games") : std::string("Browse public games");
     bind_text(menu,"browse_hint",browse_hint.c_str());
     bind_text(menu,"browse_hint_on",browse_hint.c_str()); // the focused row's navy twin (hub_focus_follow)
@@ -825,6 +840,12 @@ void bind_broker(void* menu,screen s) {
     // refused service); the client's refused phase never retries either.
     hide(menu,"retry",!retry_ok);
     enable(menu,"retry",retry_ok && wait==0);
+    {   // 0.6 preview fix L (060r live failure 5): RETRY never highlighted and a click did nothing - was it enabled at all? One line per change
+        // (shown / enabled / waiting seconds) so the next live check reads the state the probes ran in instead of guessing.
+        static int last_retry_state=-1;
+        const int state=!retry_ok ? 0 : wait ? 1 : 2;
+        if(state!=last_retry_state) { last_retry_state=state;logger::write("online menus: Retry %s (screen %d, cause %d, wait %u s)",state==0 ? "hidden" : state==1 ? "shown, disabled (waiting)" : "shown, enabled",int(s),int(cause),wait_seconds(wait)); }
+    }
     if(s==screen::code) {
         const bool status=waiting || failed || v.state==broker::phase::room || error_visible;
         hide(menu,"code_status",status || code.text.size()==8);
@@ -852,6 +873,7 @@ void bind_broker(void* menu,screen s) {
         bind_text(menu,"preview_name",display(host_room_name,24).c_str());
         bind_text(menu,"room_code",v.code.empty() ? "---- ----" : v.code.c_str());
         hide(menu,"lc_host_public",!host_public);hide(menu,"lc_host_private",host_public);
+        host_marker_follow(menu);
         enable(menu,"open",!waiting && v.state!=broker::phase::room);
         enable(menu,"prompt_open",!waiting && v.state!=broker::phase::room);
     }
@@ -1231,6 +1253,13 @@ const char* phase_text(int phase) {
     static const char* const words[]={"Connecting","Checking build","In lobby","Ready","Waiting for next area","Receiving campaign","Loading","Playing","Watching story",""};
     return phase>=0 && phase<int(std::size(words)) ? words[phase] : "";
 }
+// Blank a native text item the LC overlay replaces (fix L). Not cached: the engine writes the item itself, behind any bind cache.
+bool blank_native_label(void* menu,const char* item) {
+    __try {
+        if(!at<void*(__thiscall*)(void*,const char*)>(0x5adc10)(menu,item)) return false;
+        at<set_text_fn>(0x5adcf0)(menu,item,"%s","");return true;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
 // Card facts: host fixtures (lobby_fields) or, in production, online_room::party
 // (round 7). Unknown RTT/build/phase stay unknown (Measuring / Checking / empty).
 void bind_lobby(void* menu,const lobby_view& view,bool valid) {
@@ -1253,12 +1282,32 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         if(!state.room_name.empty()) bind_text(menu,"lc_room_name",display(state.room_name,32).c_str());
         if(state.room_metadata_known) bind_text(menu,"lc_room_visibility",state.public_room ? "Public" : "Private");
     }
+    {   // 060r live (failure 6): a guest's header read "Room details pending" for the whole visit - the broker's resolve reply gave no
+        // name (or there is no broker room: an Other ways join). The room is the host's game: name it by the host's native row, the
+        // way the browser names a room by default ("<screen name>'s game"), else plainly "Online game". A name the broker did give wins.
+        const bool named=broker_live() && broker_view().state==broker::phase::room && !broker_view().room_name.empty();
+        if(!named) {
+            std::string title="Online game";
+            if(valid) for(unsigned i=0;i<view.count;++i) if(view.host[i] && view.names[i][0]) { title=display(view.names[i],23)+"'s game";break; }
+            bind_text(menu,"lc_room_name",title.c_str());
+        }
+        // The host knows its own campaign: say what the native Game Options chose. The guest's line is authored text (the host's choice).
+        if(which(menu)==screen::lobby_host && native_flow.maximum!=0) {
+            static const char* const levels[]{"Easy","Normal","Hard"};
+            std::string line=native_flow.danger_room ? "Danger Room" : native_flow.loaded ? "Saved campaign" : "New campaign";
+            if(!native_flow.danger_room && native_flow.difficulty>=0 && native_flow.difficulty<3) line+=std::string(" - ")+levels[native_flow.difficulty];
+            const bool drop_known=broker_calls.drop_in!=nullptr;
+            line+=drop_known && !broker_calls.drop_in() ? ". No joining once the game starts." : ". Friends join at the next area.";
+            bind_text(menu,"lc_campaign_summary",line.c_str());
+        }
+    }
     std::optional<std::string> code_value;
     if(fixture) {
         const auto end=std::find(std::begin(extra.code),std::end(extra.code),char(0));
         if(end!=std::end(extra.code)) code_value=parse_code({extra.code,std::size_t(end-extra.code)});
     }
     std::string shown=code_value ? code_value->substr(0,4)+"-"+code_value->substr(4) : "---- ----";
+    const bool room_card_facts=broker_live() && broker_view().state==broker::phase::room; // a room whose members' build facts can arrive
     const bool host=which(menu)==screen::lobby_host;
     lobby_native_state native{};const bool native_valid=lobby_state_read(menu,native);
     // Extra Copy never manufactures an Accept or invokes a native action.
@@ -1335,9 +1384,12 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         hide(menu,(prefix+"to_host").c_str(),!(measured && data->ping_to_host));
         bind_text(menu,(prefix+"route").c_str(),measured ? route_text(data->route) : "");
         // Build: round-7 stage when supplied (0 checking, 1 other, 2 same, 3 agreed), else round 4's same_build.
-        const int stage=!data ? 0 : data->build>=0 ? data->build : data->same_build ? 2 : 0;
+        // 060r live (failure 6): a guest that joined through Other ways has no broker room and so no build facts at all; its cards read
+        // CHECKING BUILD... for good. Without a room the build is not being checked - no badge (-1). In a room a member without facts yet
+        // is still being checked (0).
+        const int stage=!data ? (room_card_facts ? 0 : -1) : data->build>=0 ? data->build : data->same_build ? 2 : 0;
         hide(menu,(prefix+"same_build").c_str(),!(stage==2 || stage==3));
-        hide(menu,(prefix+"checking_build").c_str(),stage==2 || stage==3 || stage==1);
+        hide(menu,(prefix+"checking_build").c_str(),stage!=0);
         hide(menu,(prefix+"other_build").c_str(),stage!=1);
         // Phase words from observed facts; native readiness keeps its own READY / NOT READY parts above.
         // Without party facts (the service went away, or the room layer has none) the member is still in this native lobby:
@@ -1345,6 +1397,18 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         bind_text(menu,(prefix+"phase").c_str(),data ? phase_text(data->phase) : phase_text(2));
         const bool picked=native_valid && host && native.phase==1 && int(i)==view.selected;
         hide(menu,(prefix+"selected").c_str(),!picked);
+    }
+    {   // 0.6 preview fix L (060r live failure 6): the host card alternated between {HOST} and {READY, You, SAME BUILD} and never showed them
+        // together, with no log line to say which facts the DLL had bound. One line per change of the bound card facts (bounded) names, per
+        // card, the native row's flags and the stage the badges were chosen from, so the next live check reads the cause off the log.
+        static std::string last_cards;static unsigned cards_logged=0;
+        std::string facts=std::string(host ? "host" : "guest")+(valid ? "" : " (native rows unreadable)");
+        if(valid) for(unsigned i=0;i<view.count;++i) {
+            const bool self_row=view.local_known && view.ids[i]==view.local;
+            facts+=" | P"+std::to_string(i+1)+" id "+std::to_string(view.ids[i])+(view.host[i] ? " HOST" : "")+(view.ready[i] ? " READY" : " NOT-READY")+(self_row ? " YOU" : "");
+        }
+        facts+=std::string(" | local ")+(valid && view.local_known ? std::to_string(view.local) : "unknown")+" | confirm "+(lobby_state.confirm ? "open" : "closed")+" | room facts "+(room_card_facts ? "yes" : "no");
+        if(facts!=last_cards && cards_logged<60) { last_cards=facts;++cards_logged;logger::write("online menus: lobby cards: %s",facts.c_str()); }
     }
     // A guest who left (or was lost) before the game started: a six-second named toast; the party continues.
     if(valid) {
@@ -1414,7 +1478,15 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
     hide(menu,"lc_self_ready",host || !local_ready);
     hide(menu,"lc_guest_unready",host || !local_ready);
     hide(menu,"lc_guest_leave",host || local_ready);
-
+    if(!host) {
+        // 060r live (failure 7): the retail Join tick writes "Leave" / "Unready" into the third action bar (text_leaveroom, 0x5c8840:
+        // menu_item_text_setter) on every accepted Ready / Unready - and again on each tick the accept is still held - over the
+        // localized lc_guest_* overlay in the same rectangle: two or three labels drawn on top of each other. The overlay owns the
+        // label. The engine's write goes behind any bind cache, so the native text is blanked again on every guest lobby tick (an
+        // empty string; the Host lobby keeps its authored LEAVE).
+        if(!blank_native_label(menu,"text_leaveroom"))
+            logger::write_once("online:guest-label-blank","online menus: the guest lobby's native Leave text could not be blanked; the overlay may draw over it");
+    }
 }
 bool lobby_current_mask(unsigned& mask) {
     __try { return lobby_mask(manager(),mask); }
@@ -1792,7 +1864,7 @@ void show_notice(void* menu) {
         // Round 15: native discovery / admission refusal (with and without rule names) / service loss / timeout, clipboard.
         "lc_notice_discovery","lc_notice_refused","lc_notice_refusal_rules","lc_notice_service_lost","lc_notice_timeout","lc_notice_clipboard",
         // 0.6 preview fix E: the host removed this guest (its native Kick).
-        "lc_notice_removed"};
+        "lc_notice_removed","lc_notice_service_silent"};
     bool found=false;
     for(const auto* item:notices) {
         const bool selected=error_visible && feedback==item;

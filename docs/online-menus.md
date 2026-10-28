@@ -1478,3 +1478,62 @@ access violation / privileged / illegal instruction gets a line (60 at most, the
   session teardown 0x607c40(0)); `lobby_original` latches exactly that and the deactivation departs only after it. Guards
   for the three retail spots. Test: r6-lobby-new / -load deactivate the real host lobby with phase 0 (room kept) before
   the native Leave (room left once).
+
+## 0.6 preview fix L: messages, lobby cards, presentation (060r live failures 5, 6, 7, 10)
+Items 7, 8, 9 and 10 of the 060r fix brief (agent L; no launches - the live questions are listed at the end).
+
+- **Host with the service down (failure 5).** `native_flow_tick` read every broker failure while the host flow was posting as
+  `room_generation_or_service_lost` ("Lost the online service during setup"). Nothing was lost: no room existed yet. A failed
+  open of THIS attempt (same generation, state retry_wait / error / refused, phase posting) is now `service_silent` ->
+  `lc_notice_service_silent` "The online service did not answer. Try again."; a room that existed and lost its service, or a
+  changed generation, keeps the lost wording. The earlier tests passed because they only drove the room that did open or a
+  cancelled / refused native step; r6-native now fails the broker op itself (`menu_broker.fail`) while posting.
+- **Guest refused for different settings (failure 5).** The refusal (`game info 0x18 ... refused (reason=6; differs: 29 TickRate)`)
+  was only read when an admission reply came back, which a refused game info never produces: the flow ran into its 15 s
+  timeout ("Took too long to connect"). A refusal that moves the agreement layer's serial DURING the attempt (tunnel /
+  discovery / admission phases) is now `settings_refused` -> `lc_notice_refusal_rules` with the rule names, or
+  `lc_notice_refused` when the refusal named none. Stale rules (an earlier or another host's refusal) are still never shown.
+  r6-native: a refusal raised after the attempt started ends it at once with the rules, one without rules reads the generic
+  refused line, neither reads the timeout.
+- **Retry (failure 5).** The state the live probes ran in was never logged. `online menus: Retry hidden / shown, disabled
+  (waiting) / shown, enabled (screen N, cause N, wait N s)` is logged on every change; the hit / hover half is fix K's (the
+  RETRY item has no code of its own beyond its authored bar: label style, colour 4, hit rectangle = the bar).
+- **Guest lobby header / campaign line (failure 6).** `lc_room_name` was only bound from the broker's room name, which a guest's
+  resolve reply may not carry (and an Other ways join has no room at all), so it read "Room details pending" for the whole
+  visit. It is bound from the host's native row now ("<host name>'s game", the browser's default naming) else "Online game";
+  a name the broker gave still wins. The host's `lc_campaign_summary` names what native Game Options chose ("New campaign -
+  Normal. Friends join at the next area."); the guest's and the LAN host's authored line no longer says "pending".
+- **CHECKING BUILD... forever (failure 6).** An Other ways guest has no broker room, so no card ever got build facts and
+  stage 0 (checking) stayed on every card. Without a room the build is not being checked: no badge (stage -1). In a room a
+  member without facts yet is still checking. `r7-bounds` pins the no-room case.
+- **Host card badges (failure 6, diagnostic only).** The live frames show the host card alternating between {HOST} and {READY,
+  You, SAME BUILD} and never all together, with P2 correct. The cause is not established from code or frames, so no guess
+  is shipped: `online menus: lobby cards: <role> | P1 id N [HOST] [READY|NOT-READY] [YOU] | ... | local N | confirm open /
+  closed | room facts yes / no` is logged on every change of the bound facts (60 lines at most). See the live questions.
+- **Third guest bar (failure 7).** The retail Join tick (0x5c8840) writes "Unready" / "Leave" into `text_leaveroom` when the
+  ready state flips, and again on each tick the accept is held, over the `lc_guest_leave` / `lc_guest_unready` overlay in the
+  same rectangle (2-3 labels on top of each other). A bind cache never notices the engine's write, so the guest lobby blanks
+  the native text uncached after every tick. r4-join counts the native writes (cause) and asserts the text is empty.
+- **Host setup side marker (failure 7).** The amber slash was baked beside CAMPAIGN. LC authors one hidden marker scene per
+  focusable settings row (`lc_host_marker_visibility` / `_room_name` / `_campaign`; DROP-IN is read-only and never focused);
+  `host_marker_follow` shows the focused row's and none while the focus is on the Open bar or a prompt. r5b-views moves the
+  focus over four distinct row items.
+- **Pale text on amber (failure 7).** Two causes. (1) The body and label styles carried green / blue as their highlight, the
+  colour a FOCUSED body / label item blends toward (Cancel, F5 / Y Refresh read green): all three styles a focus bar can sit
+  under now blend navy -> navy, and the two never-focused alias styles keep green and blue allocated. (2) A focusable item's
+  inline `~NN` colour beats the style's focus colour: Next page / Previous page (label, colour 3) carried a prefix although 3
+  is the label's own resting colour; no prefix now for a focusable label at 3 or 4. The unselected visibility chip is a navy chip
+  (fill + the same pale outline / text), so it reads on the amber bar and on the dark panel.
+- **Join by code badge (failure 7).** "Room connected" did not fit the 67-unit badge field ("Room connecte"): the badge reads
+  "In a room" (`LC online_menus.ROOM_BADGE_TEXT`; r5b-views pins the DLL's word).
+- **Games list row (failure 10).** The refused host also reaches the list by a second route that files its row with no
+  agreement check (only the direct / LAN 0x18 is guarded), so the reason only ever replaced an EMPTY list. The refused sender's
+  address bytes (`native_address(sender)`, the bytes the games table copies into the record at +8) are remembered; while the
+  refusal is current the games list's update names that record's row by the reason (fitted to the record's 37-character name
+  field) before the retail refresh builds it. Another host's row is never touched. The live round must confirm that the
+  record's +8 bytes equal the sender's (the log line `the refused host's row in the games list is named "..."` appears only
+  when they do; otherwise the list is exactly what it was).
+
+Live questions for the next check: (1) the `lobby cards:` lines of a host with a guest, with and without the Leave confirm
+open (which facts alternate: HOST flag, ready flag, local id?); (2) the `Retry ... enabled` line before the RETRY probes (enabled
+and not waiting?); (3) does the refused host's row on the Games List read "Settings differ: ..." (the log line above)?

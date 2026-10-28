@@ -82,6 +82,10 @@ void native_failure_table_checks() {
     assert(std::string(native_notice("native_timeout"))=="lc_notice_timeout" && std::string(native_notice("discovery_ambiguous_or_wrong"))=="lc_notice_discovery");
     assert(std::string(native_notice("native_search_refused"))=="lc_notice_discovery" && std::string(native_notice("room_generation_or_service_lost"))=="lc_notice_service_lost");
     assert(std::string(native_notice("host_post_refused"))=="lc_notice_admission" && std::string(native_notice("never_heard_of_it"))=="lc_notice_admission");
+    // 0.6 preview fix L (060r live failure 5): the service that never answered while the room was opened is not a lost service, and a
+    // host's settings refusal seen during the attempt is a refusal (it was read as the 15 s timeout).
+    assert(std::string(native_notice("service_silent"))=="lc_notice_service_silent" && std::string(native_notice("settings_refused"))=="lc_notice_refused");
+    assert(std::string(native_notice("service_silent"))!=std::string(native_notice("room_generation_or_service_lost")));
     assert(refusal_rules_text("DeathRule, GnsTransport")=="DeathRule, GnsTransport" && refusal_rules_text("a%s\n\"b")=="a?s??b");
     assert(refusal_rules_text(std::string(300,'x')).size()==44);
 }

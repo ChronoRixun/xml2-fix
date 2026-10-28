@@ -400,8 +400,8 @@ inline unsigned wait_seconds(std::uint32_t remaining_ms) { return (remaining_ms+
 
 // Native Host setup / admission failures (online_native_flow.inl native_flow_error). Every id the flow can raise is
 // registered; each selects one inline notice. An unregistered id shows the general setup notice.
-enum class native_failure { setup, discovery, refused, service, timeout };
-inline constexpr const char* native_failure_notice[] = {"lc_notice_admission","lc_notice_discovery","lc_notice_refused","lc_notice_service_lost","lc_notice_timeout"};
+enum class native_failure { setup, discovery, refused, service, timeout, silent };
+inline constexpr const char* native_failure_notice[] = {"lc_notice_admission","lc_notice_discovery","lc_notice_refused","lc_notice_service_lost","lc_notice_timeout","lc_notice_service_silent"};
 struct native_failure_row { const char* why; native_failure kind; };
 inline constexpr native_failure_row native_failure_table[] = {
     {"native_open_queue_full",native_failure::setup},{"stale_native_activation",native_failure::setup},{"native_open_request",native_failure::setup},
@@ -412,6 +412,9 @@ inline constexpr native_failure_row native_failure_table[] = {
     {"native_lobby_skin",native_failure::setup},{"native_lobby_generation",native_failure::setup},{"native_host_refused",native_failure::setup},
     {"native_join_unavailable",native_failure::setup},
     {"room_generation_or_service_lost",native_failure::service},{"native_timeout",native_failure::timeout},
+    // 0.6 preview fix L (060r live failure 5): the service never answered while the room was being opened (nothing was lost - no room
+    // existed yet), and a host that refused this PC's settings answered during the attempt (it used to surface as the 15 s timeout).
+    {"service_silent",native_failure::silent},{"settings_refused",native_failure::refused},
     {"native_search_refused",native_failure::discovery},{"discovery_ambiguous_or_wrong",native_failure::discovery},{"discovery_query_refused",native_failure::discovery},
     {"host_changed",native_failure::discovery},
     {"admission_call_refused",native_failure::refused},{"admission_refused",native_failure::refused},{"admission_callback_cleanup",native_failure::refused}};
