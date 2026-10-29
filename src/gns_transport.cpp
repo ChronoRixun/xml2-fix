@@ -730,7 +730,7 @@ namespace gns_transport
 		void flush_link(link& l)
 		{
 			if (!l.bound || l.closed || l.connection == k_HSteamNetConnection_Invalid) return;
-			if (GetTickCount() - l.keepalive_at >= 100)
+			if (GetTickCount() - l.keepalive_at >= gns_transport_core::keepalive_ms)
 			{
 				l.keepalive_at = GetTickCount();
 				const std::vector<std::uint8_t> ping{std::uint8_t(gns_transport_core::kind::keepalive)};

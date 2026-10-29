@@ -71,6 +71,7 @@ namespace gns_transport_core
 
 	// GNS payload framing: one kind byte, then for a game message the opcode and the body.
 	enum class kind : std::uint8_t { game = 0, hello = 1, hello_ack = 2, keepalive = 3, datagram = 4, lost_inputs = 5, lost_ready = 6 };
+	constexpr std::uint32_t keepalive_ms = 100; // flush_link and unbound room tunnels use the same heartbeat
 	constexpr std::uint32_t hello_magic = 0x31534e47; // "GNS1"
 	constexpr std::size_t hello_size = 1 + 4 + 4 + 2;
 	// A stock 0x50a datagram carries at most a 0x505 reliable body (opcode, length and sequence excluded).

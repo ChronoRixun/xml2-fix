@@ -629,7 +629,7 @@ namespace online_room
 			HSteamNetConnection connection = k_HSteamNetConnection_Invalid;
 			bool outgoing = false, connected = false, transport_bound = false;
 			int attempts = 0;
-			DWORD started = 0, connected_at = 0, retry_at = 0, reported = 0;
+			DWORD started = 0, connected_at = 0, retry_at = 0, reported = 0, keepalive_at = 0;
 			std::deque<datagram> waiting;
 			std::size_t waiting_bytes = 0, game_bytes = 0;
 			std::deque<SteamNetworkingMessage_t*> game;
@@ -669,6 +669,35 @@ namespace online_room
 #else
 		bool (*const set_certificate)(const void*, int, SteamNetworkingErrMsg&) = &real_set_certificate;
 #endif
+        // Fixture-only receive seam; production always uses the authenticated GNS connection.
+        int real_receive_messages(HSteamNetConnection c, SteamNetworkingMessage_t** out, int max) {
+            return sockets()->ReceiveMessagesOnConnection(c, out, max);
+        }
+#ifdef XML2_ONLINE_ROOM_TEST_SEAMS
+        auto receive_messages = &real_receive_messages;
+#else
+        int receive_messages(HSteamNetConnection c, SteamNetworkingMessage_t** out, int max) {
+            return real_receive_messages(c, out, max);
+        }
+#endif
+        EResult real_send_keepalive(HSteamNetConnection c) {
+            const std::uint8_t ping=std::uint8_t(gns_transport_core::kind::keepalive);
+            return sockets()->SendMessageToConnection(c, &ping, 1, k_nSteamNetworkingSend_UnreliableNoNagle, nullptr);
+        }
+#ifdef XML2_ONLINE_ROOM_TEST_SEAMS
+        auto send_keepalive = &real_send_keepalive;
+#else
+        EResult send_keepalive(HSteamNetConnection c) { return real_send_keepalive(c); }
+#endif
+        // A waiting late joiner has no bound game link yet. Keep its authenticated
+        // room tunnel observable at the same cadence as a running transport.
+        void unbound_keepalive_tick() {
+            const auto now=room_clock();
+            for (auto& t:tunnels) if (t->connected && !t->transport_bound && now-t->keepalive_at>=gns_transport_core::keepalive_ms) {
+                t->keepalive_at=now;send_keepalive(t->connection);
+            }
+        }
+        constexpr std::uint32_t host_silence_ms=30*gns_transport_core::keepalive_ms;
 		tunnel* by_id(const std::string& id) { for (auto& t : tunnels) if (t->id == id) return t.get(); return nullptr; }
 		tunnel* by_address(std::uint32_t a) { for (auto& t : tunnels) if (t->address == a) return t.get(); return nullptr; }
 		tunnel* by_connection(HSteamNetConnection c) { for (auto& t : tunnels) if (t->connection == c && c != k_HSteamNetConnection_Invalid) return t.get(); return nullptr; }
@@ -733,11 +762,19 @@ namespace online_room
 			tunnels.push_back(std::move(t));
 			return *tunnels.back();
 		}
+        bool real_close_connection(HSteamNetConnection c, const char* why, bool linger) {
+            return sockets()->CloseConnection(c, 0, why, linger);
+        }
+#ifdef XML2_ONLINE_ROOM_TEST_SEAMS
+        auto close_connection = &real_close_connection;
+#else
+        bool close_connection(HSteamNetConnection c, const char* why, bool linger) { return real_close_connection(c, why, linger); }
+#endif
 		void drop(tunnel& t, const char* why, bool linger = false)
 		{
 			if (t.connection != k_HSteamNetConnection_Invalid)
 			{
-				sockets()->CloseConnection(t.connection, 0, why, linger);
+				close_connection(t.connection, why, linger);
 				logger::write("online: connection to %s closed (%s) - datagrams %llu out / %llu in", t.id.c_str(), why, t.datagrams_out, t.datagrams_in);
 			}
 			t.connection = k_HSteamNetConnection_Invalid;
@@ -998,21 +1035,18 @@ namespace online_room
 			}
 			else if (op == "room_closed")
 			{
-                // A current authenticated broker room closure is authoritative host departure.
-                // Admission distinguishes a playing/waiting guest from an unfinished resolve;
-                // the tracker's local Leave and authenticated Kick suppression still win.
+                // The broker also closes rooms on TCP loss and expiry while P2P
+                // remains healthy. This hint never ends a native session by itself.
                 if (room_ready && client.view().state == browser::phase::room && client.view().authenticated &&
-                    !hosting && core::valid_identity(host_id) && host_id != own_id && members.contains(host_id)) {
-                    host_loss.ended(false);
-                    if (host_loss.lost()) logger::write("online: authenticated room closure marks host departure for this admitted guest; native cleanup follows on the game thread");
-                }
+                    !hosting && core::valid_identity(host_id) && host_id != own_id && members.contains(host_id))
+                    host_loss.room_closed(room_clock());
 				logger::write("online: room %s closed (%s); established P2P connections stay up, new admission stops", online_security::redact_join_code(room_code).c_str(), online_security::sanitize_log_text(msg.text("reason")).c_str());
                 client.disconnected("room_closed", room_clock());
                 if (client.view().state != browser::phase::room) members.deactivate_all();
                 signal_rates.clear();
                 room_ready = false;
 				// Before the session started the room is gone for good (a joiner can no longer get in).
-				if (online_status::current() != st::state::in_game) online_status::error(st::error::code_expired, "the room closed (" + online_security::sanitize_log_text(msg.text("reason")) + ")");
+				if (online_status::current() != st::state::in_game && !host_loss.admitted_session()) online_status::error(st::error::code_expired, "the room closed (" + online_security::sanitize_log_text(msg.text("reason")) + ")");
 			}
 			else if (op == "signal")
 			{
@@ -1088,16 +1122,26 @@ namespace online_room
 
 		// Datagrams and messages arriving on room connections: datagrams for the game socket's reader, everything else
 		// (the GNS transport's lane) kept for fetch(). One bounded batch per tunnel leaves GNS backpressure engaged.
-		void poll()
+        // Normal pumps retain one-batch backpressure. A terminal host callback
+        // drains its finite receive queue before GNS discards unread messages.
+        void poll(HSteamNetConnection drain = k_HSteamNetConnection_Invalid)
 		{
-			SteamNetworkingMessage_t* batch[64];
+            SteamNetworkingMessage_t* batch[64];
+            bool host_batch_full=false;
 			for (auto& t : tunnels)
 			{
-				if (!t->connected) continue;
-				const int n = sockets()->ReceiveMessagesOnConnection(t->connection, batch, 64);
-				const auto now = room_clock();
+                if (!t->connected || (drain != k_HSteamNetConnection_Invalid && t->connection != drain)) continue;
+                int n=0;
+                do {
+                n = receive_messages(t->connection, batch, 64);
+                const auto now = room_clock();
+                if (t->id==host_id && n==64) host_batch_full=true;
 				for (int i = 0; i < n; ++i)
 				{
+                    // Identity was authenticated when this connected tunnel was
+                    // accepted. Any host payload proves P2P activity, even if its
+                    // application body is later refused by the protocol parser.
+                    if (t->id==host_id && batch[i]->m_cbSize>0) host_loss.received(now);
 					const auto* data = static_cast<const std::uint8_t*>(batch[i]->m_pData);
 					if (batch[i]->m_cbSize >= 1 && (data[0] == online_party_core::kind_report || data[0] == online_party_core::kind_table))
 					{
@@ -1161,7 +1205,15 @@ namespace online_room
 					t->game.push_back(batch[i]);
 					t->game_bytes += size;
 				}
+                } while (drain != k_HSteamNetConnection_Invalid && n == 64 && t->connected);
 			}
+            // Polling/removal acceptance wins over the closure hint. A full host
+            // batch may still hide a queued Kick: drain it on the next pump first.
+            if (!host_batch_full) {
+                const bool lost=host_loss.lost();
+                host_loss.closure_tick(room_clock(),host_silence_ms);
+                if (!lost && host_loss.lost()) logger::write("online: room closure plus %u ms of host P2P silence marks host departure (30 missed heartbeats); queued removal checked first", unsigned(host_silence_ms));
+            }
 		}
 
 		// The game writes its own address into some datagrams (the game info 0x18 answering a search: the address
@@ -1632,7 +1684,9 @@ namespace online_room
         // This PC's own facts for a notice that arrived on tunnel t (the authenticated tunnel identity decides the sender).
         removal_core::guest_view removal_view(const tunnel& t) {
             removal_core::guest_view v;
-            v.room = room_ready && room_code.size() == removal_core::code_size;
+            // Admission can close while the authenticated session still owns its
+            // room identity. Keep rule-64 validation valid until explicit Leave.
+            v.room = client.view().state == browser::phase::room && room_code.size() == removal_core::code_size;
             v.hosting = hosting;
             v.code = room_code.c_str();
             party_core::key_from_identity(own_id, v.self);
@@ -2023,6 +2077,7 @@ namespace online_room
 				break;
 			}
 		}
+        unbound_keepalive_tick();
 		poll();
 		report();
 		party_tick();
@@ -2087,20 +2142,23 @@ namespace online_room
 		{
 			logger::write("online: connection to %s ended (%s, reason %d: %s)", t->id.c_str(), state == k_ESteamNetworkingConnectionState_ClosedByPeer ? "closed by the peer" : "problem detected locally",
 			              info->m_info.m_eEndReason, info->m_info.m_szEndDebug);
+            const bool was_connected=t->connected, was_bound=t->transport_bound;
+            const bool host_ended=!hosting && t->id==host_id && was_connected;
+            if (host_ended) poll(c); // RunCallbacks precedes tick; accept queued Kick before closing this handle.
 			// Rule 64: the host closed this connection because its removal notices were not taken in time (review F finding 3):
 			// the authenticated host connection's own close text, so it is the same removal, never a host loss.
-			if (!hosting && t->id == host_id && t->connected && state == k_ESteamNetworkingConnectionState_ClosedByPeer &&
+			if (host_ended && state == k_ESteamNetworkingConnectionState_ClosedByPeer &&
 			    std::strcmp(info->m_info.m_szEndDebug, removal_core::close_text) == 0 && removal_in.closed_by_host())
 			{
 				host_loss.removed_by_host();
 				logger::write("online: the host closed this PC's connection as %s (rule 64): the host removed this PC from the game", removal_core::close_text);
 			}
-			if (!hosting && t->id == host_id && t->connected) host_loss.ended(t->transport_bound); // before drop() clears the bound flag
-			const bool retry = t->outgoing && !t->connected;
+			if (host_ended) host_loss.ended(was_bound); // before drop() clears the bound flag
+			const bool retry = t->outgoing && !was_connected;
 			// A connection that never came up while cached TURN credentials were in use: the relay may have refused them
 			// (GNS's ICE client fails a refused allocation silently). Forget them and ask the broker for new ones once;
 			// connections started after the reply use those.
-			if (!t->connected && turn_from_cache && !turn_refreshed)
+			if (!was_connected && turn_from_cache && !turn_refreshed)
 			{
 				turn_refreshed = true;
 				turn_from_cache = false;

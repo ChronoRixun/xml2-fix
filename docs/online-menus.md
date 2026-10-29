@@ -1703,10 +1703,20 @@ misrouting, and confirm settled Accept commits and settled Cancel discards chang
 
 ### Host departure while playing or waiting to join
 
-An admitted guest treats a current authenticated broker `room_closed` notice as host departure immediately,
-including a late guest whose host has no native participant record yet. This uses the existing host-loss latch;
-local Leave/Quit and an authenticated removal continue to suppress it. A broker service disconnect by itself
-keeps the established game running. Transport timeouts and native slow-drop classification remain unchanged.
+A current authenticated broker `room_closed` notice is a service-loss hint, including `host_left`
+(the host's broker TCP session can drop independently of healthy P2P) and room expiry. For an admitted
+guest it hastens departure classification only after three seconds both since the notice and since the
+last authenticated host P2P payload. This is 30 missed 100 ms transport heartbeats. Unbound waiting-room
+tunnels send the same existing keepalive at that cadence; bound game links retain their own heartbeat.
+Healthy P2P traffic keeps the native session running after broker room loss. Native/GNS definitive
+connection-end handling remains unchanged.
+
+The P2P receive batch is processed before checking this deadline. A full host batch defers the check to
+allow another pump to drain a queued Kick. A terminal GNS host callback drains all its queued receive
+batches before `CloseConnection` discards unread data; callbacks run before the normal room tick.
+The owned room identity remains available to rule-64 validation
+until Leave even when new admission is closed. Accepted removal and deliberate local Leave/Quit suppress
+host loss, so closure-then-removal and removal-then-closure both show the removal.
 
 Pause or Party Quit can finish through asynchronous `mainmenuexit 1`. When the main menu becomes current,
 the game-thread keyboard poll requests the Hub once so its pending THE HOST LEFT panel appears without a
@@ -1714,5 +1724,7 @@ Play Online selection. The existing panel, modal controls and missing-assets fal
 
 The native end-chain matrix checks main-menu routing for host notices/connection loss and its absence for
 Kick and local departures. `xml2_online_broker_test --room-closed-offline` exercises the production inbox
-and room handler without initializing GNS or opening sockets; it covers authenticated departure, local Leave,
-removal, pre-admission, host, service loss and stale connection events.
+and P2P receive/removal handler without initializing GNS or opening sockets. Optional subcases cover healthy
+host-only broker loss, room expiry, both closure/removal orders, silent/recent host traffic, clock wraparound,
+a removal behind a full receive batch, queued removal at terminal host close (including a second batch), local
+Leave, pre-admission, host, service loss and stale/foreign events.

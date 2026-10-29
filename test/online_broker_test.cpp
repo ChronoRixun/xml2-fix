@@ -548,30 +548,114 @@ void removal_host_test() {
     room::leave();pump_until([] { return room::worker_done.load(); });fake::party_ok=false;
     std::cout<<"PASS rule 64 host glue: removal_start results, first notice at once on the member's connection (index, heard, code, target), 250 ms cadence with the same serial, a replaced connection ends the old Kick (nothing sent on the new one), a stalled member closed only at the 60 s bound, a responsive one after 10 s, close text on the wire\n";
 }
-void room_closed_offline() {
-    for(const char* outcome:{"departed","local","removed","unadmitted","hosting","service","stale","unauthenticated","foreign-host"}) {
-        room::client={};room::host_loss.reset();room::hosting=std::string(outcome)=="hosting";
-        room::own_id="legends:1111111111111111";room::host_id="legends:0000000000000000";
-        room::room_code="ABCDEFGH";room::room_ready=true;
-        assert(room::members.reset({room::host_id,room::own_id}));
-        assert(room::client.begin(b::operation::resolve,0,true) && room::client.issue());
-        assert(room::client.joined(room::client.view().generation,b::operation::resolve,"ABCDEFGH"));
-        if(std::string(outcome)!="unadmitted") room::guest_admitted();
-        if(std::string(outcome)=="local") room::host_loss.local_departure();
-        if(std::string(outcome)=="removed") room::host_loss.removed_by_host();
-        if(std::string(outcome)=="unauthenticated") room::client.disconnected("broker unavailable",0);
-        if(std::string(outcome)=="foreign-host") room::host_id="legends:2222222222222222";
-        const auto connection=room::connection_generation.load();
-        room::inbox.push_back({room::view().generation,connection-(std::string(outcome)=="stale"),
-            std::string(outcome)=="service" ? R"({"op":"_closed","kind":"broker_unreachable"})" : R"({"op":"room_closed","reason":"host_left"})"});
-        room::process_inbox();
-        assert(room::host_lost()==(std::string(outcome)=="departed"));
-        assert(room::tunnels.empty()); // no GNS initialized, socket created, or network work
+namespace closure_fixture {
+struct packet : SteamNetworkingMessage_t {
+    std::vector<std::uint8_t> bytes;
+    explicit packet(std::vector<std::uint8_t> b):SteamNetworkingMessage_t{},bytes(std::move(b)) {
+        m_pData=bytes.data();m_cbSize=int(bytes.size());
+        m_pfnRelease=[](SteamNetworkingMessage_t* m) { delete static_cast<packet*>(m); };
     }
-    std::cout<<"PASS authenticated room_closed production inbox: immediate admitted guest loss; local/Kick/unadmitted/host/service/stale/unauthenticated/foreign-host excluded; no GNS or sockets\n";
+};
+std::deque<SteamNetworkingMessage_t*> queued;
+unsigned heartbeats=0,closed=0;
+bool close(HSteamNetConnection c,const char*,bool) {
+    assert(c==123);++closed;
+    while(!queued.empty()) { queued.front()->Release();queued.pop_front(); }
+    return true;
+}
+EResult heartbeat(HSteamNetConnection c) { assert(c==123);++heartbeats;return k_EResultOK; }
+int receive(HSteamNetConnection,SteamNetworkingMessage_t** out,int max) {
+    int n=0;while(n<max && !queued.empty()) { out[n++]=queued.front();queued.pop_front(); }return n;
+}
+void send(std::vector<std::uint8_t> bytes) { queued.push_back(new packet(std::move(bytes))); }
+room::tunnel& setup() {
+    assert(queued.empty());room::tunnels.clear();room::client={};room::host_loss.reset();room::removal_reset();
+    room::hosting=false;fake::clock=10000;room::room_clock=&fake::now;room::room_ready=true;room::room_code="ABCDEFGH";
+    room::own_id="legends:1111111111111111";room::host_id="legends:2222222222222222";
+    assert(room::members.reset({room::host_id,room::own_id}));
+    assert(room::client.begin(b::operation::resolve,fake::clock,true) && room::client.issue());
+    assert(room::client.joined(room::view().generation,b::operation::resolve,"ABCDEFGH"));
+    room::guest_admitted();room::host_loss.connected();room::receive_messages=receive;room::send_keepalive=heartbeat;room::close_connection=static_cast<bool(*)(HSteamNetConnection,const char*,bool)>(close);heartbeats=closed=0;
+    auto host=std::make_unique<room::tunnel>();host->id=room::host_id;host->connection=123;host->connected=true;host->removal_floor=40;
+    room::tunnels.push_back(std::move(host));room::report_sequence=45;
+    fake::party={};fake::party.session=true;fake::party.count=1;fake::party.participants[0].local=true;fake::party.participants[0].index=1;
+    fake::party_ok=true;fake::delivered.clear();fake::deliver_ok=true;
+    return *room::tunnels.back();
+}
+void close(const char* reason="host_left",bool stale=false) {
+    room::inbox.push_back({room::view().generation,room::connection_generation.load()-unsigned(stale),
+        "{\"op\":\"room_closed\",\"reason\":"+online_room_core::quote(reason)+"}"});
+    room::process_inbox();
+}
+void removal() {
+    rx::notice n;std::memcpy(n.code,room::room_code.c_str(),8);
+    assert(online_party_core::key_from_identity(room::host_id,n.host) && online_party_core::key_from_identity(room::own_id,n.target));
+    n.index=1;n.heard=44;n.serial=9;send(rx::encode(n));
+}
+void run(const std::string& name) {
+    auto& host=setup();
+    if(name=="healthy" || name=="expiry") {
+        close(name=="expiry" ? "expired" : "host_left");assert(!room::host_lost());
+        for(int i=0;i<120;++i) { fake::clock+=100;room::unbound_keepalive_tick();send({3});room::poll();assert(!room::host_lost() && fake::delivered.empty()); }
+        assert(fake::party.session && host.connected && room::view().state==b::phase::room && heartbeats==120);
+        room::unbound_keepalive_tick();assert(heartbeats==120); // no duplicate at the same tick
+        host.transport_bound=true;fake::clock+=100;room::unbound_keepalive_tick();assert(heartbeats==120);
+    } else if(name=="closure-removal" || name=="removal-closure") {
+        if(name=="removal-closure") { removal();room::poll();assert(room::removed_by_host()); }
+        close();fake::clock+=2950;
+        if(name=="closure-removal") { removal();room::poll(); }
+        assert(room::removed_by_host() && !room::host_lost());
+        assert(room::removal_view(host).room); // admission closed, authenticated removal context still owned
+        fake::clock+=10000;room::poll();room::removal_deliver_tick();
+        assert(room::removed_by_host() && !room::host_lost() && fake::delivered==std::vector<unsigned>{1});
+        removal();room::poll();assert(room::removal_in.refused(rx::refusal::repeat)==1);
+    } else if(name=="silent" || name=="wrap" || name=="recent") {
+        if(name=="wrap") fake::clock=0xfffffff0u;
+        close();assert(!room::host_lost());fake::clock+=2999;room::poll();assert(!room::host_lost());
+        if(name=="recent") { send({3});room::poll();++fake::clock;room::poll();assert(!room::host_lost());fake::clock+=2998;room::poll();assert(!room::host_lost()); }
+        ++fake::clock;room::poll();assert(room::host_lost() && !room::removed_by_host());
+    } else if(name=="queued-removal") {
+        close();fake::clock+=3000;
+        for(int i=0;i<64;++i) send({});
+        removal();room::poll();assert(!room::host_lost() && !room::removed_by_host());
+        room::poll();assert(room::removed_by_host() && !room::host_lost());
+    } else if(name=="closed-removal" || name=="closed-batch-removal") {
+        close("host_left");
+        if(name=="closed-batch-removal") for(int i=0;i<64;++i) send({});
+        removal();room::wanted=true;
+        SteamNetConnectionStatusChangedCallback_t event{};event.m_hConn=123;
+        event.m_info.m_eState=k_ESteamNetworkingConnectionState_ClosedByPeer;
+        std::strcpy(event.m_info.m_szEndDebug,"host quit");
+        room::on_status(&event);
+        assert(closed==1 && room::removed_by_host() && !room::host_lost());
+        room::wanted=false;
+    } else if(name=="guards") {
+        for(const char* guard:{"local","removed","unadmitted","hosting","stale","unauthenticated","foreign-host","service"}) {
+            setup();const std::string g=guard;
+            if(g=="local") room::host_loss.local_departure();
+            if(g=="removed") room::host_loss.removed_by_host();
+            if(g=="unadmitted") room::host_loss.reset();
+            if(g=="hosting") room::hosting=true;
+            if(g=="unauthenticated") room::client.disconnected("broker unavailable",fake::clock);
+            if(g=="foreign-host") room::host_id="legends:3333333333333333";
+            if(g=="service") { room::inbox.push_back({room::view().generation,room::connection_generation.load(),R"({"op":"_closed","kind":"broker_unreachable"})"});room::process_inbox(); }
+            else close("host_left",g=="stale");
+            fake::clock+=20000;room::poll();assert(!room::host_lost());
+        }
+    } else assert(false && "unknown closure case");
+    assert(queued.empty());room::tunnels.clear();fake::party_ok=false;
+    std::cout<<"PASS offline closure "<<name<<": production broker inbox + P2P poll + rule-64 receiver; no GNS initialization or sockets\n";
+}
+}
+void room_closed_offline(const std::string& only={}) {
+    bool ran=false;
+    for(const char* name:{"healthy","expiry","closure-removal","removal-closure","silent","recent","wrap","queued-removal","closed-removal","closed-batch-removal","guards"})
+        if(only.empty() || only==name) { closure_fixture::run(name);ran=true; }
+    if(!ran) { std::cerr<<"unknown offline closure case\n";std::exit(2); }
 }
 int main(int argc,char** argv) {
-    if(argc==2 && std::string(argv[1])=="--room-closed-offline") { room_closed_offline();return 0; }
+    if(argc>=2 && std::string(argv[1])=="--room-closed-offline") { std::cout<<std::unitbuf;room_closed_offline(argc>2 ? argv[2] : "");return 0; }
+    if(argc!=1) { std::cerr<<"unknown broker fixture argument\n";return 2; }
     std::cout<<std::unitbuf;
     SteamNetworkingIdentity id;id.Clear();id.ParseString("str:legends:0000000000000000");SteamNetworkingErrMsg error{};
     assert(GameNetworkingSockets_Init(nullptr,error));
