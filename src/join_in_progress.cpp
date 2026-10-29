@@ -36,6 +36,7 @@ namespace join_in_progress
 		std::uint32_t deferred_start_task = 0;
 		join_in_progress_core::machine machine; // the game's thread only (bridges, receive pump, load tick)
 		join_in_progress_core::cohort epoch;
+        bool watching_players[4]{}; // stable gameplay sample, never newly classified inside Team
 
 		const std::uint32_t original_teardown = gamespy_thunk, add_resume_at = add_resume, frame_resume_at = frame_walk_resume,
 			frame_exit_at = frame_walk_exit, stream_resume_at = stream_walk_resume, stream_exit_at = stream_walk_exit,
@@ -637,6 +638,7 @@ namespace join_in_progress
         // flag 0x10 on every record. Pending players never enter Team to clear it.
         bool loaded_spectator(void* pause, int index)
         {
+            if(!watching_players[index]) return false;
             const auto* game = reinterpret_cast<const std::uint8_t*>(game_static);
             const auto* zones = reinterpret_cast<const std::uint8_t*>(zones_static);
             if (*reinterpret_cast<const std::uint32_t*>(game) != game_vtable ||
@@ -1444,9 +1446,11 @@ namespace join_in_progress
 				if (!local || *reinterpret_cast<const std::uint32_t*>(zones) != zones_vtable || *reinterpret_cast<const std::uint32_t*>(game) != game_vtable)
 				{
 					spectator = {};
+                    std::memset(watching_players,0,sizeof watching_players);
 					return;
 				}
-				if (zones[zones_loading_at] & 3) return; // a zone load is pending (the CMap's +0x220 bits, as vt+0x24 reads them)
+                if(!machine.started) { std::memset(watching_players,0,sizeof watching_players);return; }
+				if (zones[zones_loading_at] & 3) { std::memset(watching_players,0,sizeof watching_players);return; } // a zone load is pending (the CMap's +0x220 bits, as vt+0x24 reads them)
 				char zone[zone_name_size + 1]{};
 				std::memcpy(zone, zones + zones_name_at, zone_name_size);
 				if (!zone[0] || std::strncmp(zone, "menu/", 5) == 0) return;
@@ -1458,6 +1462,23 @@ namespace join_in_progress
 				for (int k = 0; k < 4; ++k)
 					has_hero |= *reinterpret_cast<const std::uint32_t*>(game + game_party + 4 * k) != 0 && game[game_slot_human + k] != 0 &&
 						*reinterpret_cast<const std::int32_t*>(game + game_slot_controller + 4 * k) == controller;
+                // Team temporarily unseats heroes during a swap. Keep the
+                // prior gameplay cohort while paused; an empty picker slot is
+                // not evidence that its participant is watching a solo segment.
+                void* const pause=fn<getter_t>(pause_getter)();
+                if(!pause || at<std::uint8_t>(pause,0x6c)) return;
+                {
+                    std::memset(watching_players,0,sizeof watching_players);
+                    for(void* n=first(s);n;n=at<void*>(n,node_next)) {
+                        const void* record=at<void*>(n,node_record);const int index=index_of(record);
+                        if(index<0 || index>3 || machine.pending(record)) continue;
+                        bool playing=false,has_seat=false;
+                        for(int k=0;k<4;++k) if(at<std::uint32_t>(game,game_party+4*k) && game[game_slot_human+k]) {
+                            playing=true;has_seat|=at<std::int32_t>(game,game_slot_controller+4*k)==index;
+                        }
+                        watching_players[index]=playing && !has_seat;
+                    }
+                }
 				const DWORD now = GetTickCount();
 				if (has_hero)
 				{

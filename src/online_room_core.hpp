@@ -706,18 +706,9 @@ namespace online_room_core
 	// Local Leave/Quit and an authenticated removal block loss for this room.
 	class host_loss_tracker
 	{
-        bool lost_ = false, blocked_ = false, admitted_ = false, closure_ = false;
-        std::uint32_t closure_at_ = 0, received_at_ = 0;
+        bool lost_ = false, blocked_ = false, admitted_ = false;
     public:
-        void connected() { lost_ = false; closure_ = false; received_at_ = 0; }
-        // Broker loss/expiry is only a hint. A full grace window lets queued Kick
-        // traffic arrive before a silent P2P host can be classified as departed.
-        void room_closed(std::uint32_t now) { if (!closure_) { closure_ = true; closure_at_ = received_at_ = now; } }
-        void received(std::uint32_t now) { received_at_ = now; }
-        void closure_tick(std::uint32_t now, std::uint32_t silence_ms) {
-            if (closure_ && admitted_ && !blocked_ && now - closure_at_ >= silence_ms && now - received_at_ >= silence_ms)
-                lost_ = true;
-        }
+        void connected() { lost_ = false; }
         bool admitted_session() const { return admitted_; }
 		// A late joiner has its local participant before a native host record/link
 		// exists. Its authenticated host tunnel still owns the admitted session.
@@ -726,6 +717,6 @@ namespace online_room_core
 		void local_departure() { blocked_ = true; lost_ = false; }
 		void removed_by_host() { local_departure(); }
 		bool lost() const { return lost_; }
-		void reset() { lost_ = blocked_ = admitted_ = closure_ = false; closure_at_ = received_at_ = 0; }
+		void reset() { lost_ = blocked_ = admitted_ = false; }
 	};
 }

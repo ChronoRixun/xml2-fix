@@ -697,7 +697,6 @@ namespace online_room
                 t->keepalive_at=now;send_keepalive(t->connection);
             }
         }
-        constexpr std::uint32_t host_silence_ms=30*gns_transport_core::keepalive_ms;
 		tunnel* by_id(const std::string& id) { for (auto& t : tunnels) if (t->id == id) return t.get(); return nullptr; }
 		tunnel* by_address(std::uint32_t a) { for (auto& t : tunnels) if (t->address == a) return t.get(); return nullptr; }
 		tunnel* by_connection(HSteamNetConnection c) { for (auto& t : tunnels) if (t->connection == c && c != k_HSteamNetConnection_Invalid) return t.get(); return nullptr; }
@@ -1037,9 +1036,9 @@ namespace online_room
 			{
                 // The broker also closes rooms on TCP loss and expiry while P2P
                 // remains healthy. This hint never ends a native session by itself.
-                if (room_ready && client.view().state == browser::phase::room && client.view().authenticated &&
-                    !hosting && core::valid_identity(host_id) && host_id != own_id && members.contains(host_id))
-                    host_loss.room_closed(room_clock());
+                // Zone loading can stall either game thread beyond the old
+                // three-second limit. Let GNS/native disconnects own liveness;
+                // no amount of silence after this broker hint ends a session.
 				logger::write("online: room %s closed (%s); established P2P connections stay up, new admission stops", online_security::redact_join_code(room_code).c_str(), online_security::sanitize_log_text(msg.text("reason")).c_str());
                 client.disconnected("room_closed", room_clock());
                 if (client.view().state != browser::phase::room) members.deactivate_all();
@@ -1127,7 +1126,6 @@ namespace online_room
         void poll(HSteamNetConnection drain = k_HSteamNetConnection_Invalid)
 		{
             SteamNetworkingMessage_t* batch[64];
-            bool host_batch_full=false;
 			for (auto& t : tunnels)
 			{
                 if (!t->connected || (drain != k_HSteamNetConnection_Invalid && t->connection != drain)) continue;
@@ -1135,13 +1133,8 @@ namespace online_room
                 do {
                 n = receive_messages(t->connection, batch, 64);
                 const auto now = room_clock();
-                if (t->id==host_id && n==64) host_batch_full=true;
 				for (int i = 0; i < n; ++i)
 				{
-                    // Identity was authenticated when this connected tunnel was
-                    // accepted. Any host payload proves P2P activity, even if its
-                    // application body is later refused by the protocol parser.
-                    if (t->id==host_id && batch[i]->m_cbSize>0) host_loss.received(now);
 					const auto* data = static_cast<const std::uint8_t*>(batch[i]->m_pData);
 					if (batch[i]->m_cbSize >= 1 && (data[0] == online_party_core::kind_report || data[0] == online_party_core::kind_table))
 					{
@@ -1207,13 +1200,6 @@ namespace online_room
 				}
                 } while (drain != k_HSteamNetConnection_Invalid && n == 64 && t->connected);
 			}
-            // Polling/removal acceptance wins over the closure hint. A full host
-            // batch may still hide a queued Kick: drain it on the next pump first.
-            if (!host_batch_full) {
-                const bool lost=host_loss.lost();
-                host_loss.closure_tick(room_clock(),host_silence_ms);
-                if (!lost && host_loss.lost()) logger::write("online: room closure plus %u ms of host P2P silence marks host departure (30 missed heartbeats); queued removal checked first", unsigned(host_silence_ms));
-            }
 		}
 
 		// The game writes its own address into some datagrams (the game info 0x18 answering a search: the address

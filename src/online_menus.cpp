@@ -124,8 +124,23 @@ const char* __fastcall owned_text_getter(void* item,void*) {
     return at<const char*(__thiscall*)(void*)>(0x5c67f0)(item);
 }
 void forget_text_owner(void* owner) {
+    if(bindings.menu==reinterpret_cast<std::uintptr_t>(owner)) bindings.clear();
     for(auto it=owned_texts.begin();it!=owned_texts.end();)
         if(it->second.owner==owner) it=owned_texts.erase(it);else ++it;
+}
+const unsigned text_close_resume=0x5af5a6;
+__declspec(naked) std::uint32_t __fastcall native_text_close(void*,void*) {
+    __asm {
+        push esi
+        mov esi,ecx
+        mov dl,byte ptr [esi+4]
+        jmp dword ptr [text_close_resume]
+    }
+}
+std::uint32_t __fastcall resource_text_close(void* menu,void*) {
+    const auto result=native_text_close(menu,nullptr);
+    forget_text_owner(menu);
+    return result;
 }
 bool assign_owned_text(void* owner,void* item,const char* text) {
     auto* p=static_cast<unsigned char*>(item);
@@ -1863,11 +1878,9 @@ bool lobby_current_mask(unsigned& mask) {
     __except(EXCEPTION_EXECUTE_HANDLER) { mask=0;return false; }
 }
 void lobby_tick(void* menu,unsigned original,bool& called) {
-    if(native_guest_end_pending && which(menu)==screen::lobby_join) {
-        // requestMenu completes later. Retire this cleared Join until the Hub
-        // becomes current, without submitting another request each frame.
-        called=true;native_guest_return();
-        return;
+    if(native_guest_end_pending && which(menu)==screen::lobby_join && native_guest_return()) {
+        // Retire the cleared Join while a bounded, rate-limited Hub retry runs.
+        called=true;return;
     }
     if(!lobby_live(menu) || current_peek()!=menu) { called=true;lobby_original(menu,original);return; }
     native_note_local_record();
@@ -2158,7 +2171,7 @@ bool authored_text(void* menu,const char* name,char (&out)[128]) {
     __try {
         auto* source=item_try(menu,name);
         if(!source) return false;
-        const char* value=engine_string(*reinterpret_cast<std::uint32_t*>(static_cast<char*>(source)+0x9c));
+        const char* value=owned_text_getter(source,nullptr);
         if(!value) return false;
         unsigned n=0;for(;n<127 && value[n];++n) out[n]=value[n];out[n]=0;
         return n && !value[n];
@@ -2760,10 +2773,10 @@ void native_history_trim(void* menu) {
 }
 void tick_impl(void* menu,bool& native_called) {
     if(ready && live(menu)) {
-        if(native_guest_end_pending && which(menu)!=screen::hub) {
-            // A native fallback may already have reached Browse. Complete the
-            // removal's Hub destination before any old screen actions run.
-            native_called=true;native_guest_return();return;
+        if(native_guest_end_pending && which(menu)!=screen::hub && native_guest_return()) {
+            // Retail may reach Browse after losing the first Hub request.
+            // Retry briefly, then release this screen so its input stays usable.
+            native_called=true;return;
         }
         // The native mask is rising-edge input (controller +2f8 XOR +374).
         // Keyboard text already posted by DirectInput wins over X/Y bindings.
@@ -2793,7 +2806,7 @@ void tick_impl(void* menu,bool& native_called) {
     if(s==screen::party) { party_frame(menu);return; }
     native_history_trim(menu);
     broker_scope(s);
-    if(s==screen::hub) { entry.clear();native_guest_end_pending=native_guest_end_requested=false; }
+    if(s==screen::hub) { entry.clear();native_guest_end_pending=false;hub_return.clear(); }
     load_recent();
     if(s==screen::hub) poll_name();
     else abandon_name();
@@ -3053,12 +3066,8 @@ void keyboard(unsigned char* state) {
     if(s==screen::main && native_guest_end_pending) native_guest_return();
     // mainmenuexit 1 completes asynchronously. Show the pending panel as soon
     // as main is current, without requiring the guest to select Play Online.
-    static bool host_left_main_requested=false;
-    if(s!=screen::main || !host_left_state.active) host_left_main_requested=false;
-    else if(!host_left_main_requested && !native_guest_end_pending) {
-        host_left_main_requested=native_request("lc_online");
-        if(host_left_main_requested) logger::write("online menus: main menu reached after host departure; opening the host-left panel");
-    }
+    if(s==screen::main && host_left_state.active) hub_return.request();
+    else if(!native_guest_end_pending) hub_return.clear();
     if(!lobby(s)) lobby_state.role_keyboard=lobby_state.role_key_pending=false;
     if(!custom(s) && !lobby_live(menu)) return;
     // Keys these screens consume below never reach the game's poll, so the prompts' device tracker would not see them (060r
@@ -3129,6 +3138,8 @@ patch_transaction::contribution contribution() {
     c.owner="online menus";
     for(const auto& g:online_menus_guards::guards)
         c.guards.push_back({g.va,patch_transaction::bytes_of(g.hex),g.what});
+    c.writes.push_back(patch_transaction::relocation(0x5af5a0,"e9",true,
+        static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&resource_text_close)),1,"all menu DATA resource lifetimes"));
     for(const auto va:{0x6a02c0u,0x6a1148u})
         c.writes.push_back(patch_transaction::relocation(va,"",false,
             static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&owned_text_getter)),0,"owned DATA text getter"));

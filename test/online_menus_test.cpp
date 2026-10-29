@@ -139,6 +139,7 @@ void __fastcall tick_stub(void* menu,void*) {
     if(close_during_tick) set_current(nullptr);
 }
 std::uint32_t __fastcall close_stub(void*,void*) { set_current(nullptr);return 0x12345678; }
+__declspec(naked) void close_tail_stub() { __asm { pop esi } __asm { jmp close_stub } }
 unsigned leave_label_native_writes=0;
 void* __fastcall item_stub(void*,void*,const char*);
 void __cdecl text_stub(void* menu,const char* item,const char* format,...) {
@@ -309,7 +310,7 @@ void fake_services() {
     redirect(0x48d5e0,bind_stub);redirect(0x615dc0,network_init);redirect(0x610d80,name_stub);
     redirect(0x613ba0,session_init);redirect(0x60a4f0,campaign_init);redirect(0x60a770,mode_stub);
     redirect(0x48f3f0,profile_name_stub);redirect(0x55beb0,command_stub);redirect(0x5d5db0,request_stub);
-    redirect(0x5ace30,deactivate_stub);redirect(0x5aaeb0,tick_stub);redirect(0x5af5a0,close_stub);redirect(0x5adcf0,text_stub);
+    redirect(0x5ace30,deactivate_stub);redirect(0x5aaeb0,tick_stub);redirect(0x5af5a6,close_tail_stub);redirect(0x5adcf0,text_stub);
     redirect(0x5ade70,enable_stub);redirect(0x5ade10,hide_stub);redirect(0x4d5830,argument_stub);
     redirect(0x5adc10,item_stub);put(text_item.data(),0,0x6a0244);put(model_item.data(),0,0x6a0304);
     put(start_item.data(),0,0x6a0244);

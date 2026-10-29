@@ -594,7 +594,19 @@ void removal() {
 }
 void run(const std::string& name) {
     auto& host=setup();
-    if(name=="healthy" || name=="expiry") {
+    if(name=="load-stall") {
+        close();
+        // Production inbox + receive poll: no traffic during a synchronous
+        // five-second zone load, then a payload. Closure must not kill play.
+        fake::party.loading=true;fake::clock+=5000;room::poll();assert(!room::host_lost());
+        fake::party.loading=false;send({3});room::poll();assert(!room::host_lost());
+        // Nor does a later stall, including an indefinitely slow host, create
+        // an authenticated disconnect. Only the real transport event does.
+        fake::clock+=60000;room::poll();assert(!room::host_lost() && host.connected);
+        room::wanted=true;SteamNetConnectionStatusChangedCallback_t event{};event.m_hConn=123;
+        event.m_info.m_eState=k_ESteamNetworkingConnectionState_ProblemDetectedLocally;
+        room::on_status(&event);assert(room::host_lost() && closed==1);room::wanted=false;
+    } else if(name=="healthy" || name=="expiry") {
         close(name=="expiry" ? "expired" : "host_left");assert(!room::host_lost());
         for(int i=0;i<120;++i) { fake::clock+=100;room::unbound_keepalive_tick();send({3});room::poll();assert(!room::host_lost() && fake::delivered.empty()); }
         assert(fake::party.session && host.connected && room::view().state==b::phase::room && heartbeats==120);
@@ -613,7 +625,8 @@ void run(const std::string& name) {
         if(name=="wrap") fake::clock=0xfffffff0u;
         close();assert(!room::host_lost());fake::clock+=2999;room::poll();assert(!room::host_lost());
         if(name=="recent") { send({3});room::poll();++fake::clock;room::poll();assert(!room::host_lost());fake::clock+=2998;room::poll();assert(!room::host_lost()); }
-        ++fake::clock;room::poll();assert(room::host_lost() && !room::removed_by_host());
+        ++fake::clock;room::poll();assert(!room::host_lost() && !room::removed_by_host());
+        fake::clock+=50000;room::poll();assert(!room::host_lost());
     } else if(name=="queued-removal") {
         close();fake::clock+=3000;
         for(int i=0;i<64;++i) send({});
@@ -649,7 +662,7 @@ void run(const std::string& name) {
 }
 void room_closed_offline(const std::string& only={}) {
     bool ran=false;
-    for(const char* name:{"healthy","expiry","closure-removal","removal-closure","silent","recent","wrap","queued-removal","closed-removal","closed-batch-removal","guards"})
+    for(const char* name:{"load-stall","healthy","expiry","closure-removal","removal-closure","silent","recent","wrap","queued-removal","closed-removal","closed-batch-removal","guards"})
         if(only.empty() || only==name) { closure_fixture::run(name);ran=true; }
     if(!ran) { std::cerr<<"unknown offline closure case\n";std::exit(2); }
 }

@@ -122,10 +122,21 @@ int main(int argc,char** argv) {
     std::memcpy(static_cast<char*>(zone)+zones_name_at,"synthetic/solo",15);
     put(zone,zones_loading_at,static_cast<unsigned char>(0));
     put(game,game_party,1u);put(game,game_slot_human,static_cast<unsigned char>(1));put(game,game_slot_controller,0);
+    put(pause,0x6c,static_cast<unsigned char>(0));join_in_progress::spectate();
+    put(pause,0x6c,static_cast<unsigned char>(1));
     assert(join_in_progress::ready_bridge(pause,nullptr)==0); // hero 0 ready; watcher 2 cannot Ready
     scheduler_resume();assert(resumes==2 && machine.pending(remote));
     put(game,game_slot_controller,2);scheduler_resume();assert(resumes==2);assert(join_in_progress::ready_bridge(pause,nullptr)==1); // player 2 now has a hero
-    put(game,game_slot_controller,0);put(pause,pause_loaded+8,0u);
+    put(game,game_slot_controller,0);
+    // A player who HAD a hero outside Team must keep the Ready barrier while
+    // their seat is temporarily empty in its picker. Use the actual retail
+    // scheduler chain, not only the bridge return value.
+    put(pause,0x6c,static_cast<unsigned char>(0));
+    put(game,game_party+4,2u);put(game,game_slot_human+1,static_cast<unsigned char>(1));put(game,game_slot_controller+4,2);
+    join_in_progress::spectate();
+    put(pause,0x6c,static_cast<unsigned char>(1));put(game,game_party+4,0u);
+    scheduler_resume();assert(resumes==2);assert(join_in_progress::ready_bridge(pause,nullptr)==1);
+    put(pause,pause_loaded+8,0u);
     assert(join_in_progress::ready_bridge(pause,nullptr)==1); // an unloaded peer is never a spectator exception
     put(pause,pause_loaded+8,1u);join_in_progress::area_load=true;
     assert(join_in_progress::ready_bridge(pause,nullptr)==1); // zone-boundary barrier stays native
