@@ -291,3 +291,20 @@ through the native word evaluator. Registry/pool definition access, final HP/EP
 setters and periodic unrelated payloads are fixture services; no gameplay
 damage/energy formula is reimplemented. These tests certify these native paths,
 not a real controller or renderer.
+
+The raw-input regressions use the production pad profile to turn XInput X/A/Y
+and stick state into DirectInput state; keyboard cases use E/J/Space/W bytes.
+Retail binding evaluation and action mapping `6276D0/61A810`, frame-history
+stores `550FB0`, and pressed-edge getter `550B70` generate the input masks.
+The block fixture runs each frame through `4F56E0`, with original generic
+input `4FCE50` and chain collector `4FC500` intact: press, held-only frames
+for three seconds, release, immediate repress, Attack/Jump selection and
+movement cleanup. Both device paths must keep one block/effect per hold.
+Device polling, binding/style registration and the outer entry/cancel dispatcher
+are synthetic; the controller commit stops before its force-feedback tail.
+
+For negative controls, set the native host's test-only environment variable
+`XML2_GUARD_INPUT_MUTATION` to `raw-map`, `edges`, or `generic`, then run
+`xml2_guard_block_native_test.exe <XMen2.exe> <guardblocking.xmlb>`.
+Each must return nonzero: respectively wrong Guard action mapping, repeated
+held presses, or suppressed native action selection. Unset it for normal gates.
