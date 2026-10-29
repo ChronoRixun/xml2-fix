@@ -45,6 +45,7 @@ def main():
         assert image[va - 0x400000:va - 0x400000 + len(body)] == body, (hex(va), what)
         covered.update(range(va, va + len(body)))
     writes = {0x49FAAC: 5, 0x5F1BB0: 5, 0x6128AB: 5, 0x612D1F: 5, 0x612DDA: 5, 0x5F1F8B: 5, 0x60A095: 5, 0x5B9609: 7, 0x69F688: 4, 0x69F694: 4, 0x69F66C: 4, 0x5C971B: 6, 0x6A23D8: 4, 0x69E454: 4, 0x69E464: 4, 0x5BC3D0: 5, 0x69E440: 4, 0x69E438: 4, 0x69F284: 4, 0x69F34C: 4, 0x6A0348: 4, 0x6A1F80: 4, 0x6A1FAC: 4, 0x6A1FE0: 4, 0x69F290: 4, 0x69F358: 4, 0x69F2A0: 4, 0x69F368: 4, 0x69F2AC: 4, 0x69F374: 4, 0x6A24AC: 4, 0x69F2A4: 4, 0x69F320: 4, 0x69F328: 4, 0x69F3E8: 4, 0x69F3F0: 4, 0x69F2F4: 4, 0x69F3BC: 4, 0x5BAD1F: 5, 0x5C88BE: 5, 0x6141E0: 5, 0x69F36C: 4, 0x69F314: 4, 0x69F3DC: 4, 0x69E49C: 4, 0x69EDEC: 4}
+    writes.update({0x41A460: 5, 0x60220E: 4})
     writes.update(anchor_writes(root))
     spans = sorted((va, va+size) for va,size in writes.items())
     assert all(a[1]<=b[0] for a,b in zip(spans,spans[1:])), "overlapping writes"

@@ -20,6 +20,7 @@ HOOKS = {0x49FAAC: 5, 0x5F1BB0: 5, 0x6128AB: 5, 0x612D1F: 5, 0x612DDA: 5, 0x5F1F
          0x69F284: 4, 0x69F34C: 4, 0x6A0348: 4, 0x6A1F80: 4, 0x6A1FAC: 4, 0x6A1FE0: 4, 0x69F290: 4, 0x69F358: 4,
          0x69F2A0: 4, 0x69F368: 4, 0x69F2AC: 4, 0x69F374: 4, 0x6A24AC: 4, 0x69F2A4: 4, 0x69F320: 4, 0x69F328: 4, 0x69F3E8: 4, 0x69F3F0: 4, 0x69F2F4: 4, 0x69F3BC: 4, 0x5BAD1F: 5, 0x5C88BE: 5, 0x6141E0: 5, 0x69F36C: 4, 0x69F314: 4, 0x69F3DC: 4, 0x69E49C: 4, 0x69EDEC: 4}
 from check_online_menus_guards import anchor_writes
+HOOKS.update({0x41A460: 5, 0x60220E: 4})
 HOOKS.update(anchor_writes(Path(__file__).resolve().parent.parent))
 REGISTRY = r"HKCU\Software\Activision\X-Men Legends 2"
 # The online menus install only over a committed LegendsClassicFonts transaction (060p fix B): every mode that sets
@@ -42,7 +43,7 @@ def main():
     assert hashlib.sha256(retail.read_bytes()).hexdigest() == "146cd9c316edb57a267cd73753a7ce9af647e52aab750d449c6b278fb4a1669b"
     out.mkdir(parents=True, exist_ok=False)
     rows = []
-    for mode in ("off", "zero", "invalid", "on", "capacity", "lookup-refused", "ui-guard", "native-guard", "post-guard", "seed-guard", "queue-guard", "handler-guard", "teardown-guard", "script-guard", "end-lobby-guard", "end-running-guard", "tokenizer-guard", "dispatch-guard", "preset-code", "preset-host-name-invalid", "name-only-invalid", "fonts-absent", "anchor-guard", "anchor-busy", "pda-mouse-guard", "advanced-back-guard", "advanced-slot-guard", "advanced-close-guard", "advanced-teardown-guard"):
+    for mode in ("frontend-intern-guard", "frontend-allocation-guard", "off", "zero", "invalid", "on", "capacity", "lookup-refused", "ui-guard", "native-guard", "post-guard", "seed-guard", "queue-guard", "handler-guard", "teardown-guard", "script-guard", "end-lobby-guard", "end-running-guard", "tokenizer-guard", "dispatch-guard", "preset-code", "preset-host-name-invalid", "name-only-invalid", "fonts-absent", "anchor-guard", "anchor-busy", "pda-mouse-guard", "advanced-back-guard", "advanced-slot-guard", "advanced-close-guard", "advanced-teardown-guard"):
         folder = out / mode
         folder.mkdir()
         shutil.copyfile(dll, folder / "dinput.dll")
@@ -81,6 +82,8 @@ def main():
         if mode=="pda-mouse-guard": env["UNION_MUTATE_VA"]="0x69edec"
         if mode.startswith("advanced-"):
             env["UNION_MUTATE_VA"] = {"advanced-back-guard":"0x6a1fe0", "advanced-slot-guard":"0x6a1f80", "advanced-close-guard":"0x6a1fac", "advanced-teardown-guard":"0x6192e0"}[mode]
+        if mode.startswith("frontend-"):
+            env["UNION_MUTATE_VA"] = "0x41a460" if mode=="frontend-intern-guard" else "0x60220e"
         try:
             done = subprocess.run([str(host), str(folder / "dinput.dll"), str(retail), str(engine),
                                    str(folder / "writes.tsv")], cwd=folder, env=env, capture_output=True,
@@ -101,7 +104,7 @@ def main():
             assert bool(changed.intersection(range(site, site + size))) == installed, (mode, hex(site))
         if installed:
             assert "script functions: 1024 names" in log
-            assert "dispatcher lcOnlineIntent n(i) registered; 47 patch writes and menu-anchors/512 committed atomically" in log
+            assert "dispatcher lcOnlineIntent n(i) registered; 49 patch writes and menu-anchors/512 committed atomically" in log
         else:
             assert "dispatcher lcOnlineIntent" not in log
         if mode == "fonts-absent":

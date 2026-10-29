@@ -1778,3 +1778,35 @@ regressions. `r19-pause-party-native` is an intentional failing negative control
 that restores the stock PDA mouse slot. Offline fixtures execute retail menu leaves
 in mapped memory; they do not launch the game or establish live rendering/input
 acceptance.
+## Frontend strings and compact focus lifecycle (060u follow-up)
+
+Code/Browse retain 40/41 gain records, below the retail 75-record focus pool.
+The shared Code origin needs a distinct model resource name for each grid cell.
+Those names share the frontend string table with menu names and native text:
+`0x5ab780 -> 0x41a460 -> 0x419da0`, getter `0x602200`. This is separate from
+W2's zone-string table. Retail has 1,024 slots and a 7 KiB arena at `+0x1008`;
+it publishes a slot before checking arena capacity and its probe never stops
+when every slot is occupied. An arena overflow therefore aliases unwritten
+strings, and repeated lookups can fill the table and spin at `0x419db4..0x419de0`.
+
+The Menus transaction now pairs a 64 KiB arena allocation with a bounded
+frontend interner. Slot indices, generation bits, hash, arena offset and native
+allocation/free ownership stay native-compatible. Both full-table and full-arena
+refusals return the empty handle and publish nothing. Menus off installs neither
+write. The native fixture compares handles and complete original backing with
+retail, reproduces the original Code-name spin offline, and repeats Code editing
+and open/close without starting the game.
+
+Gain-only focus records also need an explicit final loss: when Code/Browse has
+no shown, enabled, actually focused action, the UI tick replaces `lc_focus` with
+the invisible model. It does not setHidden, which would retain an obsolete bar
+in the model's saved slot. Repeated unfocused frames do not reload the resource.
+If showing/enabling Retry retains focus without a new gain, the native
+`0x5aaf80` loss/gain pair restores the authored model without running usecmd.
+Browse's visible `list_count` owns the whole fresh/stale count (including the
+singular forms); matching LC authoring reserves that header cell and clears the
+old static header. Regenerate menus/models and the hit table with this DLL.
+
+With InputPipe diagnostics enabled, the Advanced Options Esc edge is observed
+before the first-online-tick guard. It reads only already-published manager and
+window pointers; it neither creates a menu nor changes Esc handling.
