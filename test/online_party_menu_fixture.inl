@@ -176,22 +176,22 @@ std::cout<<"\n";    assert(shown("lc_party_copied")!=shown("lc_party_copy_failed
     assert(shown(host ? "lc_party_confirm_leave_host" : "lc_party_confirm_leave_guest") && hidden(host ? "lc_party_confirm_leave_guest" : "lc_party_confirm_leave_host"));
     assert(shown("lc_party_leave_yes") && shown("lc_party_cancel") && off("lc_rail_resume") && off("lc_party_invite") && off("lc_party_leave") && off("lc_p2_kick"));
     post(67);tick(child.data(),nullptr);
-    assert(queued("mainmenuexit")==1 && off("lc_rail_resume"));
+    assert(queued("mainmenuexit 1")==1 && off("lc_rail_resume"));
     post(67);tick(child.data(),nullptr);post(66);tick(child.data(),nullptr);post(67);tick(child.data(),nullptr);
-    assert(queued("mainmenuexit")==1 && party_native_backs==0);
+    assert(queued("mainmenuexit 1")==1 && party_native_backs==0);
     // ---- return / menu generation: a new menu object starts clean and a stale mailbox entry never reaches it ----
     deactivate(child.data(),nullptr);
     std::strcpy(reinterpret_cast<char*>(hub.data()+0xc),"lc_party");set_current(child.data());
     post(66);set_current(hub.data());tick(hub.data(),nullptr);
-    assert(hidden("lc_party_confirm_leave_host") && hidden("lc_party_confirm_leave_guest") && queued("mainmenuexit")==1);
-    post(67);tick(hub.data(),nullptr);assert(queued("mainmenuexit")==1); // Yes without its own confirmation
+    assert(hidden("lc_party_confirm_leave_host") && hidden("lc_party_confirm_leave_guest") && queued("mainmenuexit 1")==1);
+    post(67);tick(hub.data(),nullptr);assert(queued("mainmenuexit 1")==1); // Yes without its own confirmation
     post(66);tick(hub.data(),nullptr);assert(shown(host ? "lc_party_confirm_leave_host" : "lc_party_confirm_leave_guest"));
     post(6);tick(hub.data(),nullptr);
     assert(party_focused.back()=="lc_party_leave"); // the confirmation closes onto the button that opened it
     assert(hidden("lc_party_confirm_leave_host") && hidden("lc_party_confirm_leave_guest") && party_native_backs==0); // Back closes the confirmation first
     // Back and Resume are the native Back, once each, and nothing else.
     post(6);tick(hub.data(),nullptr);assert(party_native_backs==1);
-    post(63);tick(hub.data(),nullptr);assert(party_native_backs==2 && queued("mainmenuexit")==1);
+    post(63);tick(hub.data(),nullptr);assert(party_native_backs==2 && queued("mainmenuexit 1")==1);
     // The base Back slot posts only for a live party menu; otherwise the native Back runs unchanged (once) and nothing is queued.
     set_current(nullptr);on_back(hub.data(),nullptr);set_current(hub.data());tick(hub.data(),nullptr);assert(party_native_backs==3);
     // Review D/C/B: the Leave latch never freezes the screen; outside a session Leave is the native quit at once; focus is
@@ -202,17 +202,17 @@ std::cout<<"\n";    assert(shown("lc_party_copied")!=shown("lc_party_copy_failed
         std::strcpy(reinterpret_cast<char*>(child.data()+0xc),"lc_party");set_current(child.data());party_default_rows(host);
         tick(child.data(),nullptr);
         post(66);tick(child.data(),nullptr);post(67);tick(child.data(),nullptr);
-        assert(queued("mainmenuexit")==1);
-        post(64);tick(child.data(),nullptr);post(66);tick(child.data(),nullptr);assert(queued("mainmenuexit")==1 && hidden("lc_party_confirm_leave_host") && hidden("lc_party_confirm_leave_guest")); // latched
+        assert(queued("mainmenuexit 1")==1);
+        post(64);tick(child.data(),nullptr);post(66);tick(child.data(),nullptr);assert(queued("mainmenuexit 1")==1 && hidden("lc_party_confirm_leave_host") && hidden("lc_party_confirm_leave_guest")); // latched
         post(6);tick(child.data(),nullptr);assert(party_native_backs==1); // Back still reaches the native Back after the latch
         deactivate(child.data(),nullptr);set_current(child.data());tick(child.data(),nullptr);
-        post(66);tick(child.data(),nullptr);post(67);tick(child.data(),nullptr);assert(queued("mainmenuexit")==2);
+        post(66);tick(child.data(),nullptr);post(67);tick(child.data(),nullptr);assert(queued("mainmenuexit 1")==2);
         ticks+=4001;tick(child.data(),nullptr);post(66);tick(child.data(),nullptr);
         assert(shown(host ? "lc_party_confirm_leave_host" : "lc_party_confirm_leave_guest")); // the timeout cleared the latch
         post(8);tick(child.data(),nullptr);assert(party_focused.back()=="lc_party_leave" && hidden("lc_party_cancel"));
         party_session=false;tick(child.data(),nullptr);
         post(66);tick(child.data(),nullptr);
-        assert(queued("mainmenuexit")==3 && hidden("lc_party_confirm_leave_host") && hidden("lc_party_confirm_leave_guest"));
+        assert(queued("mainmenuexit 1")==2 && queued("mainmenuexit")==1 && hidden("lc_party_confirm_leave_host") && hidden("lc_party_confirm_leave_guest")); // no Party consent: preserve the stock question
         party_session=true;
     }
     std::cout<<"r8 party "<<(host ? "HOST" : "GUEST")<<" PASS cards/roles/tones/kick buttons; confirmation disables the rest; one native quit; Back/Resume native; stale menu generation\n";

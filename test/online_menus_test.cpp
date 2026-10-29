@@ -2,6 +2,7 @@
 // Actual production installer, hooks, mailbox, ABI adapters and transaction.
 #include "online_menus.hpp"
 #include "options_menu.hpp"
+#include "options_menu_rules.hpp"
 #include "display.hpp"
 #include "online_menus_rules.hpp"
 #include "online_menus_guards.hpp"
@@ -159,7 +160,7 @@ void __fastcall hide_stub(void*,void*,const char* item,bool value) {
 }
 std::array<unsigned char,0x100> model_item{};
 bool model_scene(std::string_view name) {
-    if(name=="lc_host_max_players") return false; // a DATA text field
+    if(name=="lc_host_max_players" || name=="lc_broker_empty") return false; // DATA / empty-state nodes are plain text in the authored menus
     for(const std::string_view prefix:{"lc_host_","lc_broker_","lc_service_ok","lc_row","lc_code_complete"}) if(name.starts_with(prefix)) return true;
     return false;
 }
@@ -496,6 +497,7 @@ unsigned desktop_refresh_rate() { return 60; }
 void set_frame_rate(const frame_rate_rules::cap&) {}
 bool set_vsync(std::optional<bool>) { return true; }
 void set_run_in_background(bool) {}
+void set_resolution(unsigned width,unsigned height) { test_options.width=int(width);test_options.height=int(height); }
 }
 namespace logger {
 const std::filesystem::path& module_dir() { return root; }
@@ -588,6 +590,7 @@ int main(int argc,char** argv) {
     assert(online_menus::installed());
     if(mode=="r18-options-opening-back") { options_close_fixture::opening_back();return 0; }
     if(mode.starts_with("r18-options-orphan")) { options_close_fixture::orphan();return 0; }
+    if(mode=="r19-options-resolution") { asset_files();options_resolution_fixture::run();return 0; }
     if(mode=="r18-options-close") { options_close_fixture::run();return 0; }
     if(mode=="r18-model-cycles") { anchor_fixture::model_cycles();return 0; }
     if(mode=="r18-close-cycles") { anchor_fixture::close_cycles();return 0; }
@@ -695,6 +698,10 @@ int main(int argc,char** argv) {
     set_current(hub.data());tick(hub.data(),nullptr);
     assert(texts["local_name"]==(mode=="name31" ? field_name(std::string(31,'a')) : mode=="blank-name" ? std::string("Player") : field_name("100??????openmenu bad")));
     if(mode=="r16-hits-live") { live_input_fixture::run();return 0; }
+    if(mode=="r19-pause-party" || mode=="r19-pause-party-native") {
+        if(mode.ends_with("-native")) *reinterpret_cast<unsigned*>(0x69edec)=0x5cc1f0;
+        live_input_fixture::pause_party();return 0;
+    }
     if(mode=="r16-hits-shapes") { live_input_fixture::shape_run();return 0; }
     if(mode.starts_with("r16-hits")) { hits_fixture::run(mode);return 0; }
     if(mode=="r16-model-start") { model_fixture::run();return 0; }

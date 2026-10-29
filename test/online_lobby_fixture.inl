@@ -870,9 +870,10 @@ void tests() {
         "the retail load releases it; retail models and shown LC models load unchanged)\n";
 }
 }
+int __fastcall guest_footer_controller(void*,void*) { return 1; }
 void lobby_tests(const script_functions_rules::func_entry* registration) {
     if(mode=="r4-r7-host-waiting-join") people_count=1;
-    const bool host=mode.find("join")==std::string::npos;setup_lobby(host);
+    const bool host=mode.find("join")==std::string::npos && mode!="r4-guest-footer";setup_lobby(host);
     auto tick=*reinterpret_cast<lobby_tick_t*>(host ? 0x69f2ac : 0x69f374);
     auto activate=*reinterpret_cast<lobby_activate_t*>(host ? 0x69f284 : 0x69f34c);
     auto back=*reinterpret_cast<lobby_back_t*>(host ? 0x69f2a0 : 0x69f368);
@@ -884,6 +885,16 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
         retail_list_review_tests(registration);return;
     }
     activate(child.data(),nullptr,0);assert(activations==1 && refreshes==1);
+    if(mode=="r4-guest-footer") {
+        redirect(0x5d8570,guest_footer_controller);
+        online_menus::set_pad_probe([](int player) { return player==1; });
+        mask=0;tick(child.data(),nullptr);
+        std::cout<<"guest keyboard footer: "<<texts["desctext3"]<<"\n";
+        assert(texts["desctext3"]=="Ctrl+C Copy code");
+        online_menus::set_pad_probe([](int) { return true; });tick(child.data(),nullptr);
+        assert(texts["desctext3"]=="Y Copy code");
+        std::cout<<"guest footer PASS physical controller 0 keyboard then pad; native guest slot 1\n";return;
+    }
     mask=0;tick(child.data(),nullptr);
     if(mode=="r4-r7-host-waiting-join") {
         assert(!visibility["lc_p2_card"] && !visibility["lc_p2_host"] && visibility["lc_p2_pending"]);

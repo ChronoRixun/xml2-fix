@@ -525,6 +525,7 @@ void __cdecl capture(void* m,int p,unsigned mask) {
     at<select_fn>(0x5d8560)(m,p);
     accepted=controller_valid(p) && (mask&0x10) && which(current())==screen::main ? p : -1;
     if(which(current())==screen::main && (mask&0x10)) accept_hint(current(),true);
+    if(accepted>=0) menu_player=accepted; // physical controller, before a guest lobby selects its network slot
     accepted_at=now_ms();
 }
 __declspec(naked) void capture_stub() {
@@ -996,10 +997,12 @@ void bind_broker(void* menu,screen s) {
         {"lc_native_admission",native_admission},{"lc_native_posting",native_posting},
         {"lc_broker_auth",v.state==broker::phase::authenticating},{"lc_broker_list",v.state==broker::phase::listing},
         {"lc_broker_host",v.state==broker::phase::hosting},{"lc_broker_resolve",v.state==broker::phase::resolving},
-        {"lc_broker_empty",s==screen::browse && v.list_known && !waiting && !failed && v.rows.empty()},
+        {"lc_broker_empty",s==screen::browse && v.list_known && !waiting && v.rows.empty()},
         {"lc_broker_stale",v.stale && v.state!=broker::phase::room},{"lc_broker_room",v.state==broker::phase::room && !native_step},
         {"lc_broker_cancel",v.state==broker::phase::canceling || v.state==broker::phase::leaving}};
     for(const auto& variant:variants) hide(menu,variant.first,!variant.second);
+    if(s==screen::browse && v.list_known && v.rows.empty())
+        bind_text(menu,"lc_broker_empty",v.stale ? "No games in the last list" : "No public games right now. Host a game or go Back.");
     // Exactly one cause scene while failed. The raw id stays a bounded diagnostic and is never a command.
     const auto cause=classify_error(v.error);
     hide_error_scenes(menu,failed ? int(cause) : -1);
@@ -1245,7 +1248,8 @@ int lobby_player() {
     __except(EXCEPTION_EXECUTE_HANDLER) { controller=-1; }
     return controller_valid(controller) ? controller : menu_player;
 }
-bool lobby_pad_shown(void* menu) { return pad_probe && lobby_live(menu) && pad_probe(lobby_player()); }
+// Join can select a network guest slot; prompt devices follow the captured physical controller.
+bool lobby_pad_shown(void* menu) { return pad_probe && lobby_live(menu) && pad_probe(menu_player); }
 bool lobby_lists(void* menu) {
     __try {
         auto* a=item(menu,"text_playername1");auto* b=item(menu,"text_readycheck1");
@@ -2193,6 +2197,34 @@ bool scoped_point(void* menu,int x,int y,int& rx,int& ry,bool lobby,void** chose
     } catch(...) { return false; }
 }
 using mouse_fn=std::uint32_t(__thiscall*)(void*,int,int,int,int,int);
+// The renamed PDA Party row falls through the native stock-name pass to the
+// shifted text hit test. The always-drawn button anchor supplies the complete bar
+// even while its focus model is model_hide (which has no bounds of its own).
+bool pause_party_point(void* menu,int x,int y,int& rx,int& ry) {
+    __try {
+        if(!ready || !menu || *static_cast<unsigned*>(menu)!=0x69ed6c ||
+            *reinterpret_cast<int*>(static_cast<char*>(menu)+0x18d8)!=0) return false;
+        auto* link=item_try(menu,"lc_party_link");
+        auto* anchor=item_try(menu,"option07");
+        hits::engine_item info,bar;
+        if(!link || !anchor || !engine_item_of(link,info) || !engine_item_of(anchor,bar) || !info.shown || !info.enabled ||
+            !hits::holds(bar.box.first,x,y)) return false;
+        const auto& target=info.box.shifted;
+        rx=(target.left+target.right)/2;ry=(target.top+target.bottom)/2;
+        return true;
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+std::uint32_t __fastcall pause_mouse(void* menu,void*,int x,int y,int flags,int message,int extra) {
+    int rx=x,ry=y;const bool party=pause_party_point(menu,x,y,rx,ry);
+    void* const before=party ? focus_of(menu) : nullptr;
+    const auto result=at<mouse_fn>(0x5cc1f0)(menu,rx,ry,flags,message,extra);
+    if(party && current_peek()==menu && (message==WM_MOUSEMOVE || message==WM_LBUTTONUP)) {
+        lobby_focus(menu,"lc_party_link");
+        if(hits_trace && focus_of(menu)!=before)
+            logger::write("online menus: PDA Party mouse %d,%d -> %d,%d; stored focus lc_party_link",x,y,rx,ry);
+    }
+    return result;
+}
 std::uint32_t __fastcall menu_mouse(void* menu,void*,int x,int y,int flags,int message,int extra) {
     int rx=x,ry=y;
     const bool scoped=ready && custom(which(menu));
@@ -2384,12 +2416,13 @@ bool party_native_back(void* menu) {
     __try { at<tick_fn>(0x5ad7c0)(menu);return true; }
     __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
-// The native quit route the pause menu's own Quit uses (its usecmd, queued through the console). Called once per Leave.
-bool party_native_leave() {
+// Skip the stock question only after Party's own Leave confirmation. Outside a
+// session Party delegates immediately, so the stock quit keeps its one question.
+bool party_native_leave(bool confirmed) {
     __try {
         auto* console=at<getter>(0x55c890)();
         if(!console || *static_cast<std::uint32_t*>(console)!=0x69a81c) return false;
-        return at<command_fn>(0x55c410)(console,"mainmenuexit");
+        return at<command_fn>(0x55c410)(console,confirmed ? "mainmenuexit 1" : "mainmenuexit");
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 int party_tone(int phase) {
@@ -2416,6 +2449,7 @@ void party_frame(void* menu) {
     if(open_before && party_ui.confirm==party_confirm::none && !party_ui.departed) want_focus="*origin";
     const int action=pending.take(id,screen::party);
     if(action) {
+        const bool leave_confirmed=party_ui.confirm==party_confirm::leave && action==int(intent::party_leave_yes);
         const auto result=party_ui.apply(action,roster);
         switch(result.act) {
         case party_act::native_back: {
@@ -2433,7 +2467,7 @@ void party_frame(void* menu) {
             party_origin="lc_p"+std::to_string(action-int(intent::party_kick_first)+1)+"_kick";want_focus="lc_party_cancel";break;
         case party_act::dismissed: want_focus="*origin";break;
         case party_act::leave_run: {
-            const bool ok=party_native_leave();
+            const bool ok=party_native_leave(leave_confirmed);
             logger::write("online menus: party Leave -> native quit route %s",ok ? "queued once" : "refused");
             if(!ok) { party_ui.departed=false;want_focus="*origin"; } // nothing was handed over; the player may try again
             else party_departed_at=now_ms();
@@ -2911,6 +2945,8 @@ patch_transaction::contribution contribution() {
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&deactivate)),0,"base menu deactivation"));
     c.writes.push_back(patch_transaction::relocation(0x69e440,"",false,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&on_back)),0,"scoped base Back"));
+    c.writes.push_back(patch_transaction::relocation(0x69edec,"",false,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&pause_mouse)),0,"native PDA Party mouse focus"));
     c.writes.push_back(patch_transaction::relocation(0x69e49c,"",false,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&menu_mouse)),0,"scoped base mouse hit boxes"));
     c.writes.push_back(patch_transaction::relocation(0x5bc3d0,"e8",true,
@@ -2996,7 +3032,9 @@ void install(HMODULE game,const install_hooks* hooks) {
     }
     patch_transaction::transaction tx;
     tx.add(online_menus_anchors::contribution());
-    tx.add(contribution());
+    auto menu_hooks=contribution();
+    const auto menu_hook_count=menu_hooks.writes.size();
+    tx.add(std::move(menu_hooks));
     const auto result=tx.commit(hooks ? hooks->transaction : nullptr);
     if(result==patch_transaction::outcome::rollback_failed) game_version::refuse_startup();
     if(result!=patch_transaction::outcome::committed) {
@@ -3010,6 +3048,6 @@ void install(HMODULE game,const install_hooks* hooks) {
         game_version::refuse_startup(); return;
     }
     ready=true;
-    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 45 hooks and menu-anchors/512 committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability);
+    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; %zu patch writes and menu-anchors/512 committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s",menu_hook_count,script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability);
 }
 }

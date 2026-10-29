@@ -65,6 +65,8 @@ namespace display
 	void set_frame_rate(const frame_rate_rules::cap& setting);
 	bool set_vsync(std::optional<bool> on);
 	void set_run_in_background(bool on);
+	// Accept synchronizes the restart override and subsequent native settings reads; no device reset.
+	void set_resolution(unsigned width, unsigned height);
 
 	// For the test pipe's screenshots: `hook` runs on the game's render thread with its
 	// IDirect3DDevice8 just before every Present. Set before install().

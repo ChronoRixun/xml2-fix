@@ -180,3 +180,78 @@ void orphan() {
 }
 
 }
+
+namespace options_resolution_fixture {
+using namespace options_menu_rules;
+std::map<int,void*> controls;
+std::vector<std::unique_ptr<unsigned char[]>> allocations;
+std::array<unsigned,64> vt{};
+std::array<unsigned char,0x220> fsaa{},accept{},slider{},bindings_control{};
+std::string native_saved;
+void* __cdecl allocate(std::size_t size) {
+    auto p=std::make_unique<unsigned char[]>(size);auto* result=p.get();allocations.push_back(std::move(p));return result;
+}
+void* __fastcall cycle(void* self,void*,void*,int id,const char*) { put(self,0,unsigned(reinterpret_cast<std::uintptr_t>(vt.data())));controls[id]=self;return self; }
+void* __fastcall label(void* self,void*,void*,int id) { return cycle(self,nullptr,nullptr,id,nullptr); }
+void __fastcall rect(void*,void*,int,int,int,int) {}
+void __fastcall text(void*,void*,const char*) {}
+void __fastcall number(void*,void*,int) {}
+void __fastcall option(void*,void*,int,const char*) {}
+void __fastcall value_rect(void*,void*,int,int,int,int,int) {}
+void __fastcall selection(void* self,void*,int index) { put(self,game::cycle_selected,index); }
+void __fastcall nav(void*,void*,nav_record*) {}
+void* __fastcall find(void*,void*,int id) { const auto it=controls.find(id);return it==controls.end() ? nullptr : it->second; }
+void __fastcall anim(void*,void*,int) {}
+void __cdecl save() { ++options_close_fixture::saves;native_saved=reinterpret_cast<char*>(0xa68d9c); }
+void __cdecl reload() { ++options_close_fixture::reloads;std::strcpy(reinterpret_cast<char*>(0xa68d9c),native_saved.empty() ? "1280x720" : native_saved.c_str()); }
+template<class T> T target(unsigned call) { return reinterpret_cast<T>(call+5+*reinterpret_cast<int*>(call+1)); }
+void run() {
+    namespace F=options_close_fixture;
+    options_menu::install(reinterpret_cast<HMODULE>(0x400000));assert(options_menu::installed());
+    vt[game::vtable_set_text/4]=unsigned(reinterpret_cast<std::uintptr_t>(text));
+    for(unsigned off:{game::vtable_set_visible,game::vtable_set_colour,game::vtable_set_style}) vt[off/4]=unsigned(reinterpret_cast<std::uintptr_t>(number));
+    controls={{6,fsaa.data()},{1,accept.data()},{7,slider.data()},{0xe,bindings_control.data()}};
+    for(auto& [id,it]:controls) put(it,0,unsigned(reinterpret_cast<std::uintptr_t>(vt.data())));
+    redirect(0x671fc2,allocate);redirect(0x623e10,cycle);redirect(0x6229a0,label);redirect(0x61fe20,rect);
+    redirect(0x6216a0,option);redirect(0x621750,value_rect);redirect(0x621730,selection);redirect(0x621e00,nav);redirect(0x621d60,find);redirect(0x6222b0,anim);
+    redirect(0x619440,save);redirect(0x619770,reload);redirect(0x620d10,F::slider_selection);redirect(0x625420,F::pad_name);redirect(0x6263b0,F::save_bindings);
+    redirect(0x67217c,F::float_to_int);redirect(0x672161,anchor_fixture::noop);redirect(0x617870,F::destroy);redirect(0x6721f2,F::release);
+    F::clock_vt[0x28/4]=unsigned(reinterpret_cast<std::uintptr_t>(F::clock_now));
+    F::clock_vt[0x24/4]=unsigned(reinterpret_cast<std::uintptr_t>(anchor_fixture::model_time));
+    F::clock_vt[4/4]=unsigned(reinterpret_cast<std::uintptr_t>(anchor_fixture::noop));
+    F::clock_object[0]=unsigned(reinterpret_cast<std::uintptr_t>(F::clock_vt.data()));
+    redirect(0x55b610,F::clock_get);redirect(0x551ed0,F::clock_get);redirect(0x5d8920,F::clock_get);
+    std::ofstream(root/"xml2-fix.ini")<<"[Display]\nWidth=1280\nHeight=720\n[Unrelated]\nKeep=yes\n";
+    const auto path=(root/"xml2-fix.ini").wstring();
+    auto read=[&](const wchar_t* key) { wchar_t out[64]{};GetPrivateProfileStringW(L"Display",key,L"",out,64,path.c_str());return std::wstring(out); };
+    auto open=[&] {
+        F::panel.fill(0);*reinterpret_cast<void**>(0xa6ad34)=F::panel.data();
+        for(unsigned a=0xa6ad38;a<=0xa6ad44;a+=4) *reinterpret_cast<unsigned*>(a)=0;
+        *reinterpret_cast<unsigned char*>(0xa6ad48)=*reinterpret_cast<unsigned char*>(0x6f3a2d)=0;
+        std::strcpy(reinterpret_cast<char*>(0xa68d9c),native_saved.empty() ? "1280x720" : native_saved.c_str());
+        target<void(__fastcall*)(void*,void*,int)>(0x61f356)(F::panel.data(),nullptr,0);
+        put(fsaa.data(),0x1e0,3);*reinterpret_cast<unsigned*>(0xa68da8)=2;
+        *reinterpret_cast<unsigned*>(0xa6ac00)=0;
+    };
+    auto close=[&](int result,const char* resolution) {
+        std::strcpy(reinterpret_cast<char*>(0x6e9800),resolution);put(F::panel.data(),0x48,result);
+        assert(!reinterpret_cast<bool(__cdecl*)()>(0x61f380)());
+    };
+    auto bytes=[&] { std::ifstream file(root/"xml2-fix.ini",std::ios::binary);return std::string(std::istreambuf_iterator<char>(file),{}); };
+    const auto initial=bytes();
+    open();close(2,"1920x1080");assert(bytes()==initial);assert(read(L"Width")==L"1280" && read(L"Height")==L"720" && F::reloads==1 && !F::saves);
+    open();close(1,"1600x900");
+    std::cout<<"accepted resolution: native="<<native_saved<<", INI width="<<std::filesystem::path(read(L"Width")).string()<<"\n";
+    assert(native_saved=="1600x900" && F::saves==1 && read(L"Width")==L"1600" && read(L"Height")==L"900");
+    wchar_t keep[16]{};GetPrivateProfileStringW(L"Unrelated",L"Keep",L"",keep,16,path.c_str());assert(std::wstring(keep)==L"yes");
+    assert(display::current_options().width==1600 && display::current_options().height==900);
+    const auto accepted=bytes();
+    open();close(1,"1600x900");assert(bytes()==accepted && F::saves==2);
+    open();close(2,"1920x1080");assert(bytes()==accepted && F::reloads==2 && display::current_options().width==1600);
+    assert(WritePrivateProfileStringW(L"Display",L"Width",nullptr,path.c_str()));
+    assert(WritePrivateProfileStringW(L"Display",L"Height",nullptr,path.c_str()));
+    const auto bare=bytes();open();close(1,"1600x900");
+    assert(bytes()==bare && read(L"Width").empty() && read(L"Height").empty() && F::saves==3);
+    std::cout<<"resolution PASS real retail Accept copies selected size before production save hook; Cancel keeps INI; native save once; unrelated key preserved\n";
+}
+}
