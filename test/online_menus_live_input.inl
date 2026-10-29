@@ -112,6 +112,20 @@ void pause_party() {
     keys[0xc8]=0;keys[0x1c]=0x80;online_menus::keyboard(keys);
     assert(!*reinterpret_cast<void**>(hub.data()+0x324));
     online_menus::set_keyboard_note(nullptr);
+    // A pad direction uses the same retail neighbour/focus services as the
+    // PDA's 0x5ceb96 -> 0x5aaeb0 -> 0x5aaf12 path. No keyboard arrow edge occurs.
+    keys[0x1c]=0;online_menus::keyboard(keys);ask_unit(mouse,hub.data(),250,102);
+    auto& other=item_named("pda","code");
+    for(unsigned off:{0x5cu,0x60u,0x64u,0x68u})
+        put(link.mem.data(),off,unsigned(reinterpret_cast<std::uintptr_t>(other.mem.data())));
+    navigate(hub.data(),0,1);
+    assert(*reinterpret_cast<void**>(hub.data()+0x324)==other.mem.data());
+    const auto queued_before_pad_enter=std::count(calls.begin(),calls.end(),"queue:openmenu lc_party");
+    keys[0x1c]=0x80;online_menus::keyboard(keys);
+    assert(*reinterpret_cast<void**>(hub.data()+0x324)==other.mem.data());
+    assert(keys[0x1c]==0x80 && std::count(calls.begin(),calls.end(),"queue:openmenu lc_party")==queued_before_pad_enter);
+    text_of(113,"openmenu options");put(other.mem.data(),0x24,113);accept_focused(hub.data());
+    assert(calls.back()=="queue:openmenu options");
     keys[0x1c]=0;online_menus::keyboard(keys);ask_unit(mouse,hub.data(),250,102);
     put(hub.data(),0x324,0);link.mem[0x54]&=~8u;keys[0x1c]=0x80;online_menus::keyboard(keys);
     assert(!*reinterpret_cast<void**>(hub.data()+0x324));link.mem[0x54]|=8;

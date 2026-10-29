@@ -5,6 +5,8 @@ enum class ending { send_failure, receive_eof, context_failure, no_context, quer
 constexpr const char* pin="5accba244809bb6c9a2c2f5bdb4e5d30fb5ec737d59bf87a8fc9031d81cf8a5a";
 ending how=ending::send_failure;
 unsigned made=0,deleted=0,acquired=0,released=0,initializes=0,receives=0;
+unsigned decrypt_calls=0;
+SECURITY_STATUS decrypt_result=SEC_I_RENEGOTIATE;
 std::vector<HANDLE> outstanding;
 unsigned char token=0x16;
 SECURITY_STATUS SEC_ENTRY acquire(SEC_CHAR*,SEC_CHAR*,unsigned long,void*,void*,SEC_GET_KEY_FN,void*,PCredHandle out,PTimeStamp) {
@@ -31,6 +33,11 @@ SECURITY_STATUS SEC_ENTRY destroy(PCtxtHandle context) {
     assert(CloseHandle(event));outstanding.erase(it);++deleted;return SEC_E_OK;
 }
 SECURITY_STATUS SEC_ENTRY free_buffer(void* p) { assert(p==&token);return SEC_E_OK; }
+SECURITY_STATUS SEC_ENTRY decrypt_message(PCtxtHandle context,PSecBufferDesc input,unsigned long,unsigned long*) {
+    assert(outstanding.size()==1 && context->dwLower==reinterpret_cast<ULONG_PTR>(outstanding.front()));
+    assert(input->cBuffers==4 && input->pBuffers[0].cbBuffer==1);
+    ++decrypt_calls;return decrypt_result;
+}
 SECURITY_STATUS SEC_ENTRY query(PCtxtHandle,unsigned long attribute,void* out) {
     if(how!=ending::success) return SEC_E_INTERNAL_ERROR;
     if(attribute==SECPKG_ATTR_REMOTE_CERT_CONTEXT) {
@@ -84,6 +91,7 @@ int run() {
     replace_import("DeleteSecurityContext",reinterpret_cast<const void*>(&destroy));
     replace_import("FreeContextBuffer",reinterpret_cast<const void*>(&free_buffer));
     replace_import("QueryContextAttributesA",reinterpret_cast<const void*>(&query));
+    replace_import("DecryptMessage",reinterpret_cast<const void*>(&decrypt_message));
     replace_import("send",reinterpret_cast<const void*>(&send_bytes));
     replace_import("recv",reinterpret_cast<const void*>(&receive_bytes));
     replace_import("ioctlsocket",reinterpret_cast<const void*>(&ioctl_socket));
@@ -113,10 +121,22 @@ int run() {
         }
         }
         assert(outstanding.empty() && made==deleted && acquired==released);
+        for(const auto status:{SEC_I_RENEGOTIATE,SEC_I_CONTEXT_EXPIRED}) {
+            broker_tls::client client;how=ending::success;initializes=receives=0;std::string error;
+            assert(client.handshake(SOCKET(42),"broker.invalid",pin,error));
+            decrypt_result=status;std::string plain="retained";const std::uint8_t record=0x16;
+            const auto calls_before=decrypt_calls;
+            assert(!client.decrypt(&record,1,plain,error));
+            assert(plain=="retained" && decrypt_calls==calls_before+1);
+            assert(error.find(status==SEC_I_RENEGOTIATE ? "DecryptMessage failed" : "closed the TLS session")!=std::string::npos);
+            assert(outstanding.empty() && made==deleted && acquired==released);
+            assert(!client.decrypt(nullptr,0,plain,error));
+            assert(error=="TLS is not established" && decrypt_calls==calls_before+1);
+        }
     }
     assert(GetProcessHandleCount(GetCurrentProcess(),&after));
-    std::printf("TLS context ownership: contexts %u deleted %u credentials %u released %u handles %lu -> %lu\n",made,deleted,acquired,released,before,after);
+    std::printf("TLS context ownership: contexts %u deleted %u credentials %u released %u terminal decrypts %u handles %lu -> %lu\n",made,deleted,acquired,released,decrypt_calls,before,after);
     assert(before==after);
-    std::puts("PASS 750 socket-free handshakes, 600 contexts released once, success/reuse/destruction, no handle growth");return 0;
+    std::puts("PASS 950 socket-free handshakes, 800 contexts released once, 200 renegotiation/close-notify exits, no handle growth");return 0;
 }
 }

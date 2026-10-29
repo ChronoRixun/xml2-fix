@@ -2906,7 +2906,9 @@ void keyboard(unsigned char* state) {
     // the Enter sample too, while that same Party bar still owns the pointer.
     if(pause_hover_menu) {
         int rx=0,ry=0;
+        void* const focused=menu==pause_hover_menu ? focus_of(menu) : nullptr;
         if(menu!=pause_hover_menu || !pause_party_point(menu,pause_hover_x,pause_hover_y,rx,ry) ||
+            (focused && focused!=item_try(menu,"lc_party_link")) ||
             edges[0xc8] || edges[0xd0] || edges[0xcb] || edges[0xcd] || edges[0x01]) pause_hover_menu=nullptr;
         else if((edges[0x1c] || edges[0x9c]) && !((state[0x1d]|state[0x9d]|state[0x38]|state[0xb8])&0x80)) {
             lobby_focus(menu,"lc_party_link");
