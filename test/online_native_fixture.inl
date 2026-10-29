@@ -659,7 +659,7 @@ void review_run(const script_functions_rules::func_entry* registration) {
         // with 0x1106, flag 0 - while the host connection is still up (host_lost false): the host-left panel, never the
         // native "The host has left the game." dialog.
         const bool watchdog=original_mode=="r6-end-hostleft-watchdog-guest";
-        const bool hostleft=original_mode=="r6-end-hostleft-guest" || original_mode=="r6-end-hostleft-lobby-guest" || original_mode=="r6-end-hostleft-slow-guest" || watchdog;
+        const bool hostleft=original_mode=="r6-end-hostleft-guest" || original_mode=="r6-end-hostleft-lobby-guest" || original_mode=="r6-end-hostleft-slow-guest" || watchdog || original_mode.starts_with("r6-end-hostleft-buttons-");
         const bool hostleft_lobby=original_mode=="r6-end-hostleft-lobby-guest";
         if(hostleft_lobby) { *reinterpret_cast<unsigned char*>(0xa3bc40)=1;*reinterpret_cast<unsigned char*>(0x70b70d)=0; }
         // Review E finding 6: a second session end in the same kick: right after the kick's clear, the native script route
@@ -777,6 +777,7 @@ void review_run(const script_functions_rules::func_entry* registration) {
             if(noassets) absent_items={"lc_hub_host_left","lc_hub_host_left_veil","lc_hostleft_again","lc_hostleft_back"};
             screen("lc_online");tick(child.data(),nullptr);
             const bool lost=(host_lost_flag || hostleft || slowdrop) && !noassets;
+            if(original_mode.starts_with("r6-end-hostleft-buttons-")) { assert(lost);live_hostleft_buttons();return; }
             if(noassets) {
                 assert(enabled_items["host"] && enabled_items["code"] && enabled_items["browse"] && enabled_items["other"] && enabled_items["desctext3"] && enabled_items["desctext4"]);
                 const auto before=calls.size();post(intent::browse);tick(child.data(),nullptr);assert(calls.back()=="request:lc_browse" && calls.size()==before+1);

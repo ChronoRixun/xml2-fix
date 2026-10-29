@@ -369,7 +369,7 @@ void parse_cases(unsigned& checks) {
     refused("","empty file");
     refused(std::string(H::contract)+"\n","no entries");
     refused(std::string(H::contract)+"\n"+body.substr(0,body.size()-1),"last line not terminated");
-    refused(std::string("lc-online-hits/2\n")+body,"bad header");
+    refused(std::string("lc-online-hits/3\n")+body,"bad header");
     refused(std::string(H::contract)+"\n\n"+body,"bad entry");
     refused(std::string(H::contract)+"\nlc_online  host 1 2 3 4\n","bad fields");
     refused(std::string(H::contract)+"\nlc_online host 1 2 3 4 \n","bad fields");

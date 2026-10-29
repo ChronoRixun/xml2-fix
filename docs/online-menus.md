@@ -1652,3 +1652,26 @@ Regression coverage: r4-pad-join (including stale pad indication and press/relea
 readiness, overwritten footer), r4-join (native header settings), r5-browse-join, r5-browse-empty, r16-hits-browse (retail mouse
 walk followed by actual focus/mailbox/lookup), and r8-party-host/guest. LC's test_online_contract covers the corresponding
 native-text/depth, dedicated Refresh bar, navigation and navy hint contracts.
+
+### 060s mouse and modal actions (Q)
+
+The retail item parser adds `neverfocus` (+0x54 bit 0x20) when `enabled="false"`, even when the authored item says
+`neverfocus="false"` (0x5bc94e..0x5bc9c8). Its later enabled setter (0x5ade70) changes only bit 3. The runtime action
+bindings now clear the parser-added flag when enabling an authored action; native Start/readiness controls retain their
+original setter. This restores Leave/Cancel, Retry, and Host Left actions that the mouse walk answered without moving
+focus (0x5ae331), so the old control received Accept. The hit-test predictor also refuses to certify a neverfocus target.
+
+`lc-online-hits/2` adds a seventh field, the horizontal shear from the bottom to the top of the drawn bar. At height `y`,
+both x edges move by `shear * (y-bottom)/(top-bottom)`. This covers the right end and top-right corner while excluding
+the undrawn top-left triangle. The reader still accepts rectangular `/1` tables with zero shear. The companion builder
+requires `/2` support before emitting the new table, and validates all four corners against the actual built model vertices.
+No geometry, hook site, release identity, or wire protocol changes are required. Rebuild the LC menu output to get `/2`.
+
+Host Left's two authored actions form a closed directional ring. While the panel is active, a native refresh that restores
+the Hub's startactive row moves focus back onto Host Again. Back to Online still dismisses the panel; Host Again opens
+the existing Host screen.
+
+Regression fixtures execute the retail flag parser block, enabled setter, stored-focus setter, item navigation, mouse
+walk and native usecmd boundary. The old r16 fixtures started every action at flags=8 and replaced setFocus with a recorder,
+so they never reproduced a disabled-at-load action retaining bit 0x20. The shape fixture also checks real slanted corners
+and the live right-end pixel, rather than checking the rectangular table against itself.

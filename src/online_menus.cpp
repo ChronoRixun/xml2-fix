@@ -759,17 +759,24 @@ bool accept_hint(void* menu,bool hidden) {
     }
     bindings.visibility.insert_or_assign("lc_online_continue",hidden);return true;
 }
-bool enable_native(void* menu,const char* item,bool enabled) {
+bool enable_native(void* menu,const char* item,bool enabled,bool focusable=false) {
     __try {
-        if(!at<void*(__thiscall*)(void*,const char*)>(0x5adc10)(menu,item)) return false;
-        at<hide_fn>(0x5ade70)(menu,item,enabled);return true;
+        auto* found=static_cast<unsigned char*>(at<void*(__thiscall*)(void*,const char*)>(0x5adc10)(menu,item));
+        if(!found) return false;
+        at<hide_fn>(0x5ade70)(menu,item,enabled);
+        // The retail parser (0x5bc9c3) also sets neverfocus (0x20) for enabled="false", even when the XML says
+        // neverfocus="false". Its enabled setter changes only bit 3. Our runtime buttons start disabled: enabling
+        // them must undo that parser side effect as well. Only enable()'s authored action targets opt in; native
+        // Start/readiness policy and decorative labels keep their own flags.
+        if(enabled && focusable) found[0x54]&=~0x20u;
+        return true;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 void enable(void* menu,const char* item,bool enabled) {
     bindings.scope(menu);
     const auto old=bindings.enabled.find(item);
     if(old!=bindings.enabled.end() && old->second==enabled) return;
-    if(enable_native(menu,item,enabled)) bindings.enabled.insert_or_assign(item,enabled);
+    if(enable_native(menu,item,enabled,true)) bindings.enabled.insert_or_assign(item,enabled);
 }
 namespace broker = online_browser_core;
 bool offline_fixture = false;
@@ -1957,7 +1964,8 @@ bool hits_ready() {
                 logger::write_once("online:hits-refused","online menus: ERROR: Data/lc_online_hits.txt REFUSED (%s); the mouse hit boxes of the co-op screens are OFF - the engine's own hit test (dead strips above and beside the bars) stays; rebuild the package",why.empty() ? "larger than 256 KiB" : why.c_str());
                 return false;
             }
-            logger::write_once("online:hits","online menus: mouse hit boxes = drawn focus bars (%s, %u entries)",hits::contract,unsigned(hit_table.entries.size()));
+            const auto* contract=text.compare(0,sizeof(hits::shape_contract)-1,hits::shape_contract)==0 ? hits::shape_contract : hits::contract;
+            logger::write_once("online:hits","online menus: mouse hit boxes = drawn focus bars (%s, %u entries)",contract,unsigned(hit_table.entries.size()));
         }
         return !hit_table.entries.empty();
     } catch(...) { hit_table.entries.clear(); return false; }
@@ -1982,6 +1990,7 @@ bool engine_item_of(void* it,hits::engine_item& out) {
         const auto* vt=*reinterpret_cast<std::uintptr_t**>(it);
         out.shown=!at<bool(__thiscall*)(void*)>(vt[1])(it);
         out.enabled=(p[0x54]&8)!=0;
+        out.neverfocus=(p[0x54]&0x20)!=0;
         const auto test=vt[0x74/4];
         out.text_test=test==0x5bc1b0 || test==0x5c6490 || (hits_text_alias && test==hits_text_alias);
         const char* text=engine_string(*reinterpret_cast<std::uint32_t*>(p+0x24));
@@ -2718,6 +2727,10 @@ void tick_impl(void* menu,bool& native_called) {
         for(const auto* button:{"lc_hostleft_again","lc_hostleft_back"}) enable(menu,button,panel);
         // Focus follows the modal: onto Host again when it opens, back onto the Hub's Host row when it closes.
         if(panel!=hub_panel_shown) { hub_panel_shown=panel;lobby_focus(menu,panel ? "lc_hostleft_again" : "host"); }
+        // A native refresh can restore the Hub's startactive row after the panel opened. Keep the modal's focus on
+        // its two enabled actions (and retry a failed initial focus), just as the lobby Leave confirm does.
+        if(panel && focus_of(menu)!=item_try(menu,"lc_hostleft_again") && focus_of(menu)!=item_try(menu,"lc_hostleft_back"))
+            lobby_focus(menu,"lc_hostleft_again");
         hub_focus_follow(menu);
     }
     if(s==screen::code) {
