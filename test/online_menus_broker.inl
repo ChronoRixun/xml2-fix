@@ -358,6 +358,7 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
     menu_error="broker_unreachable";menu_complete=true;tick(child.data(),nullptr);
     assert(menu_view().stale && menu_view().rows.empty());
     assert(texts["browse_hint"]=="No games in the last list");
+    assert(shown("lc_broker_empty") && texts["lc_broker_empty"]=="No games in the last list");
     ticks+=70000;menu_rows_json="{"+code(0)+",\"name\":\"Only room\"}";
     post(intent::refresh);tick(child.data(),nullptr);menu_complete=true;tick(child.data(),nullptr);
     assert(texts["browse_hint"]=="1 public game");

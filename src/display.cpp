@@ -1423,6 +1423,14 @@ namespace display
 		return false; // rewrite_present applies it when the device is next created or reset
 	}
 
+	void set_resolution(const unsigned width, const unsigned height)
+	{
+		std::lock_guard lock(mutex);
+		opts.width = static_cast<int>(width);
+		opts.height = static_cast<int>(height);
+		modes_adapter = no_adapter;
+	}
+
 	void set_run_in_background(const bool on)
 	{
 		std::lock_guard lock(mutex);

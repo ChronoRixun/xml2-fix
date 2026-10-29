@@ -466,6 +466,7 @@ namespace options_menu_rules
 		constexpr DWORD load_settings = 0x219770;    // cdecl (): the original at site C
 		constexpr DWORD load_defaults = 0x2196c0;    // cdecl (): the original at site D
 		constexpr DWORD sound_system = 0x1d8920;     // cdecl object*(); vtable +0xe8 = thiscall play(this, int): 6 click, 0 hover
+		constexpr DWORD resolution_setting = 0x668d9c; // native Accept copies its selected WxH here before save
 		constexpr DWORD panel_pointer = 0x66ad34;    // XML2IGConfig* DAT_00a6ad34: the open panel, 0 when closed
 		constexpr DWORD toggle_png_string = 0x2a5350; // "texs\\toggle.png" in .rdata (ours is passed instead; same text)
 
@@ -492,7 +493,8 @@ namespace options_menu_rules
 		constexpr int event_blur = 4;
 	}
 
-	inline constexpr std::array<game_function, 9> game_functions{{
+	inline constexpr std::array<game_function, 10> game_functions{{
+		{"native accepted resolution setting copy (0x61f843)", 0x21f843, {0x8D, 0x04, 0x85, 0x00, 0x98, 0x6E, 0x00, 0xBA, 0x9C, 0x8D, 0xA6, 0x00, 0x2B, 0xD0, 0x8A, 0x08}},
 		{"operator new (0x671fc2)", game::operator_new, {0x56, 0x8B, 0x74, 0x24, 0x08, 0xEB, 0x10, 0x56, 0xE8, 0x99, 0x08, 0x00, 0x00, 0x85, 0xC0, 0x59}},
 		{"BXIGCycle constructor (0x623e10)", game::cycle_ctor, {0x6A, 0xFF, 0x68, 0xB8, 0x99, 0x67, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x50, 0x64, 0x89}},
 		{"BXIGLabel constructor (0x6229a0)", game::label_ctor, {0x8B, 0x44, 0x24, 0x08, 0x56, 0x8B, 0xF1, 0x8B, 0x4C, 0x24, 0x08, 0x50, 0x51, 0x8B, 0xCE, 0xE8}},

@@ -75,6 +75,8 @@ inline constexpr script_functions_rules::guard guards[]{
     {0x0069e440, "c0d75a00", "base Back slot +24"},
     // Mouse hit boxes (online_menus_hits_rules.hpp): the base menu mouse slot, its thiscall ABI (5 arguments), the item
     // rectangle the engine hit-tests (vt+0x64 0x5bc530 field stores), the two item hit tests and the shown test.
+    {0x0069edec, "f0c15c00", "native PDA mouse slot +80"},
+    {0x005cc1f0, "83ec505355568bf18b86d818000085c057c6864519000000", "native PDA mouse mode and frame"},
     {0x0069e49c, "a0e05a00", "base mouse slot +80"},
     {0x005ae0a0, "83ec30a1184b6e00535556578bf1686c", "base menu mouse frame"},
     {0x005ae35b, "c21400", "base menu mouse ret 14"},

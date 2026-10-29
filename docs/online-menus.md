@@ -1700,3 +1700,46 @@ an Advanced Options Esc keyboard edge logs the transition state before manager i
 Pending live acceptance: Options > Space > Esc during opening (within about 0.5 seconds), x3, and after settling, x3,
 at both resolutions. Capture the transition-state diagnostic for each Esc; check for no surviving panel or later input
 misrouting, and confirm settled Accept commits and settled Cancel discards changes.
+
+
+### 060t presentation and accepted resolution follow-up
+
+Advanced Options snapshots the native resolution at panel construction. Retail Accept
+copies its selected resolution into `0xa68d9c` at `0x61f843` before the save call at
+`0x61f8a4`. The existing save hook still calls the native settings writer once, then
+persists changed dimensions as Display Width/Height and synchronizes the display
+query override for later opens. Cancel reloads native settings and leaves the INI
+and override intact. A no-change Accept does not introduce dimension keys.
+
+Code and Browse must fit retail's **75 onfocus records** (`0x5af147`; records at
+`0x8a72b0`, 52 bytes each). The former 80/82 records silently dropped late actions,
+including Retry. The companion author now uses one shared focus model and one gain
+record per action on these two single-plane screens. The outgoing gain is stopped
+by retail focus loss (`0x5bbd74` -> `0x5ae580`); the incoming gain replaces the shared
+model. Other screens keep their paired gain/loss records. The authoring validator
+rejects a menu with more than 75 records.
+
+A known empty Browse cache remains visible after a failed refresh, with "No games
+in the last list"; a fresh empty result keeps its public-games message. Singular
+counts retain "1 public game" and "1 last known game". Browse paging occupies its
+own footer cells, leaving a full diagnostic cell in the error row. All footer focus
+bars use the same shear, including narrow prompts, so their upper edges cannot
+cross a neighbouring flat bar. The host-left panel bakes neutral action backgrounds;
+only the focused action supplies amber, sized to its authored hit rectangle.
+
+Lobby tool prompts follow the physical controller captured on entry, before native
+Join selects the guest's network slot. The Party confirmation queues the stock
+already-confirmed command `mainmenuexit 1` once. Outside a native session, where
+Party delegates without its own question, bare `mainmenuexit` preserves the stock
+confirmation. The PDA mouse slot `0x69edec`
+(retail `0x5cc1f0`) has an atomic, byte-guarded adapter: only a mode-0 PDA carrying
+`lc_party_link` and `option07` uses that always-visible bar's bounds, remaps to the
+link's native text hit box, and commits its stored focus for keyboard Accept.
+Other pages and assets retain their native mouse route.
+
+Regression coverage: `r19-options-resolution`, `r19-pause-party`,
+`r4-guest-footer`, both Party role fixtures, `r5b-views`, and the LC 060t authoring
+regressions. `r19-pause-party-native` is an intentional failing negative control
+that restores the stock PDA mouse slot. Offline fixtures execute retail menu leaves
+in mapped memory; they do not launch the game or establish live rendering/input
+acceptance.

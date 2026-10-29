@@ -59,6 +59,40 @@ void navigate(void* menu,int x,int y) {
     auto* next=reinterpret_cast<void*(__thiscall*)(void*,const void*)>(0x5aafd0)(menu,step);assert(next);
     reinterpret_cast<void*(__thiscall*)(void*,void*)>(0x5aaf80)(menu,next);
 }
+void pause_party() {
+    setup("pda");
+    auto& link=item_named("pda","host");link.name="lc_party_link";
+    // Positive-top text box, like the classic pause scene: the native hit is shifted up 8 units.
+    link.ax=204;link.az=105;link.l=0;link.b=-1;link.r=101;link.t=17;lay_out(link,1);
+    fitem fill;fill.menu="pda";fill.name="option07";fill.ax=254;fill.az=114;
+    fill.l=-55;fill.b=-14;fill.r=55;fill.t=13;fill.flags=0x28;fill.kind=1;
+    items.push_back(fill);auto& bar=items.back();lay_out(bar,111);
+    put(bar.mem.data(),0,unsigned(reinterpret_cast<std::uintptr_t>(model_vtable.data())));
+    put(bar.mem.data(),8,111);put(bar.mem.data(),0x24,0);put(bar.mem.data(),0x9c,0);text_of(111,"option07");
+    // An inactive highlight may have no usable geometry. Its always-visible background is authoritative.
+    fitem idle=bar;idle.name="option07_focus";idle.l=0;idle.b=-1;idle.r=1;idle.t=0;
+    items.push_back(idle);auto& inactive=items.back();lay_out(inactive,112);
+    put(inactive.mem.data(),0,unsigned(reinterpret_cast<std::uintptr_t>(model_vtable.data())));
+    put(inactive.mem.data(),8,112);put(inactive.mem.data(),0x24,0);put(inactive.mem.data(),0x9c,0);text_of(112,"option07_focus");
+    text_of(int(*reinterpret_cast<unsigned*>(link.mem.data()+8)),"lc_party_link");
+    put(hub.data(),0,0x69ed6c);put(hub.data(),0x18d8,0);
+    // Retain the real stored-focus service, with only PDA description refresh stubbed.
+    put(reinterpret_cast<void*>(0x69ed6c),4,0x5aaf80);
+    put(reinterpret_cast<void*>(0x69ed6c),0x68,unsigned(reinterpret_cast<std::uintptr_t>(hover_refresh_rec)));
+    build_menu(hub.data(),"pda");
+    *reinterpret_cast<void**>(hub.data()+0x324)=nullptr;
+    const auto mouse=*reinterpret_cast<mouse_t*>(0x69edec);
+    const auto got=ask_unit(mouse,hub.data(),250,102);
+    std::cout<<"PDA Party hover: focus="<<name_of(*reinterpret_cast<void**>(hub.data()+0x324))<<"\n";
+    assert(*reinterpret_cast<void**>(hub.data()+0x324)==link.mem.data());
+    text_of(110,"openmenu lc_party");put(link.mem.data(),0x24,110);
+    calls.clear();accept_focused(hub.data());
+    assert(std::count(calls.begin(),calls.end(),"queue:openmenu lc_party")==1);
+    // The missing renamed item and other PDA pages still pass to the retail handler.
+    link.name="foreign";build_menu(hub.data(),"pda");put(hub.data(),0x324,0);ask_unit(mouse,hub.data(),250,102);
+    assert(!*reinterpret_cast<void**>(hub.data()+0x324));
+    std::cout<<"PDA Party PASS mouse hover -> native stored focus -> keyboard Accept queues openmenu lc_party once; absent link keeps native mouse\n";
+}
 void run() {
     const auto tick=*reinterpret_cast<tick_t*>(0x69e454);
     const auto mouse=*reinterpret_cast<mouse_t*>(0x69e49c);
