@@ -225,5 +225,12 @@ inline constexpr script_functions_rules::guard guards[]{
     {0x005bccd0, "81ec880000005355568be9578d4c24108bf5e8b9f9ffff32db85ed74768bbc24a00000008b94249c0000008b8c249400000083f9207c02b30133c085c97e0c9039748410745c403bc17cf584db755389748c108b8c24940000004185d2898c24940000007d058b765ceb157e058b7660eb0e85ff7d058b7664eb057e038b76683bf5740f85f6740b8a4654a81475a3a808749f5f8b", "item neighbour search 0x5bccd0: follows its links, skips hidden / neverfocus (0x14) and disabled (bit 3) items (fix K)"},
     {0x005aafd0, "8b812403000085c0740df640540874078bc88b01ff605833c0c20400", "CMenu navigation 0x5aafd0: nothing from a focused item that is not enabled (fix K)"},
     {0x005bc981, "8a46540c08682c", "item parser: every item starts enabled (+0x54 |= 8) (fix K)"},
+    {0x006a1fac, "a0f55a00", "Advanced Options resource close slot"},
+    {0x006a1f80, "501e5d00", "Advanced Options deactivation slot"},
+    {0x005d1e50, "f681d8180000027405e8d2affdffe8bd6a00008b108bc8ff92d4000000e85e00f8ff8b0de86e6e008b10518bc8ff5268c3", "Advanced Options native deactivation"},
+    {0x005d1eb0, "568bf1e8d8a9f8ff8b1068e8bb68008bc8ff521c808ed818000002c605e4fd8a00005ec3", "Advanced Options normal terminal close flags"},
+    {0x006192e0, "8b0d40ada6005633f63bce5774168bf9e87be5ffff57e8f78e050083c404893540ada6008b0d3cada6003bce74168bf9e85be5ffff57e8d78e050083c40489353cada6008b0d38ada6003bce74168bf9e83be5ffff57e8b78e050083c404893538ada6008b0d34ada6003bce74168bf9e81be5ffff57e8978e050083c404893534ada6008b0d44ada6003bce74168bf9e8fbe4ffff57e8778e050083c404893544ada6005f5ec3", "Advanced Options native five-window teardown"},
+    {0x00619770, "558bec83e4f881ec94010000a1f8386f00535657", "Advanced Options native Cancel settings reload"},
+    {0x00619390, "8b0d34ada60085c97405e8019000008b0d38ada60085c97405e8f28f00008b0d3cada60085c97405e8e38f00008b0d40ada60085c97405e8d48f00008b0d44ada60085c97405e8c58f000032c0c3", "Advanced Options renderer walks outstanding windows"},
 };
 }

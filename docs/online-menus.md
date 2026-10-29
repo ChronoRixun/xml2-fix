@@ -1584,3 +1584,36 @@ Items 7, 8, 9 and 10 of the 060r fix brief (agent L; no launches - the live ques
 Live questions for the next check: (1) the `lobby cards:` lines of a host with a guest, with and without the Leave confirm
 open (which facts alternate: HOST flag, ready flag, local id?); (2) the `Retry ... enabled` line before the RETRY probes (enabled
 and not waiting?); (3) does the refused host's row on the Games List read "Settings differ: ..." (the log line above)?
+
+
+## 060s Advanced Options window ownership
+
+With Menus enabled, the Advanced Options menu's deactivation slot `0x6a1f80`
+wraps the retail `0x5d1e50`; its resource-close slot `0x6a1fac`
+also performs the same idempotent cleanup before retail `0x5af5a0`. Retail restores input and sound but assumes the
+normal terminal close already destroyed the independent BXIG windows. Live
+060s no-change Esc departed without the Cancel callback, leaving the window
+family at `0xa6ad34..0xa6ad44` drawing over subsequent screens.
+
+If any owned window remains at deactivation, the wrapper uses native Cancel's
+settings reload `0x619770` and the complete native five-window teardown
+`0x6192e0`, applies the terminal-close flags from `0x5d1eb0`, then runs original
+deactivation. A completed normal close leaves no pointers and takes the same
+deactivation path as before. The hook and helper signatures join the existing
+guarded Menus transaction; absent/disabled Menus installs no new hook.
+
+`r18-options-orphan` and `r18-options-orphan-popups` drive native deactivation,
+window teardown and subsequent native draw enumeration; all outstanding
+windows must disappear exactly once. `r18-options-orphan-native` retains the
+unpatched negative control, which still draws the abandoned panel.
+`r18-options-orphan-close` covers resource unload without prior deactivation.
+`r18-options-close` drives the ordinary native close and production Cancel hook.
+`r18-close-cycles` and `r18-model-cycles` exercise the retail resource-close chain
+and model adapter/assignment/destruction with balanced fixture ownership.
+
+The owner cleanup is independently tested. The precise 060r-to-060s change
+that first lets the owner depart before the normal close remains unproven;
+this does not claim that a specific anchor operand or input adapter caused it.
+Integration must repeat no-change Esc at both 4:3 and widescreen, verify the
+panel is gone and the next main-menu input works, and also check changed
+settings with Accept and Cancel.

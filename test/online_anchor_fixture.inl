@@ -230,4 +230,102 @@ void run() {
     }
     std::cout<<"512 anchors PASS: real constructor/loader/walk/push/name insertion/lookups/unload; 513 refused; five sequential and simultaneous slots, reuse/handle generations; negative/past-end/misaligned pointers refused without mutation; padding/refcounts intact\n";
 }
+// Runs the menu manager's release call, rather than invoking the pool directly.
+std::array<unsigned char,0x87000> close_manager{};
+std::array<unsigned,0x100> close_vt{};
+void* __cdecl close_manager_get() { return close_manager.data(); }
+void __fastcall erase_resource(void* table,void*,unsigned index) {
+    assert(table==close_manager.data()+4 && index==0);
+    put(close_manager.data(),8,0x3fffffff);
+}
+void close_cycles() {
+    install_services();
+    redirect(0x5d8920,close_manager_get);
+    redirect(0x601e50,erase_resource);
+    close_vt[0x168/4]=0x5d78b0;
+    const auto manager=*reinterpret_cast<unsigned*>(0x5889a3);
+    auto* backing=reinterpret_cast<unsigned char*>(manager);
+    reinterpret_cast<void*(__fastcall*)(void*,void*)>(0x588b80)(backing,nullptr);
+    for(unsigned cycle=0;cycle<40;++cycle) {
+        // Live scenes span small code/hub pages through the 214-anchor Browse.
+        for(const unsigned count:{32u,64u,214u,337u,512u}) {
+            make_nodes(count);intern_count=0;strings.fill(0);interned.clear();ownership.clear();
+            const auto slot=reinterpret_cast<unsigned(__fastcall*)(void*,void*)>(0x587e90)(backing,nullptr);
+            *reinterpret_cast<unsigned*>(backing+0xa000)|=1u<<slot;
+            auto* field=backing+slot*0x2000;construct(field);
+            reinterpret_cast<void(__fastcall*)(void*,void*,const char*)>(0x5882e0)(field,nullptr,"synthetic");
+            close_manager.fill(0);
+            put(close_manager.data(),0,unsigned(reinterpret_cast<std::uintptr_t>(close_vt.data())));
+            put(close_manager.data(),8,0);
+            put(close_manager.data(),0x14,0x3fffffff);
+            put(close_manager.data(),0xcc,unsigned(reinterpret_cast<std::uintptr_t>(field)));
+            put(close_manager.data(),0xd0,1);
+            std::array<unsigned char,0x1a00> menu{};
+            put(menu.data(),0,0x69e41c);put(menu.data(),0x828,0x3fffffff);
+            put(menu.data(),0xd4,unsigned(reinterpret_cast<std::uintptr_t>(field)));put(menu.data(),0xe0,1);
+            put(menu.data(),0xe4,*reinterpret_cast<unsigned*>(0x69d058));
+            put(menu.data(),0xe8,*reinterpret_cast<unsigned*>(0x69d058));
+            // Retail CMenu::close -> manager vt+168 -> 588d00 -> pool free -> real destructor.
+            reinterpret_cast<void(__fastcall*)(void*,void*)>(0x5af5a0)(menu.data(),nullptr);
+            assert(*reinterpret_cast<unsigned*>(backing+0xa024)==5);
+            assert(*reinterpret_cast<unsigned*>(backing+0xa02c)==0);
+            assert(*reinterpret_cast<unsigned*>(close_manager.data()+0xcc)==0);
+            assert(*reinterpret_cast<unsigned*>(menu.data()+0xe0)==0);
+            for(const auto& [object,balance]:ownership) { (void)object;assert(balance==0); }
+        }
+    }
+    std::cout<<"menu close cycles PASS 200 opens/closes: retail 5af5a0 -> 5d78b0 -> 588d00 -> 588c20 -> 588640; pool free=5 used=0; references=0 after every close\n";
+}
+
+std::array<unsigned,0x100> model_manager_vt{};
+std::array<unsigned,4> model_manager{};
+resource replacement{},invisible{};
+node replacement_node{},invisible_node{};
+void* __cdecl model_manager_get() { return model_manager.data(); }
+void __fastcall model_load(void*,void*,void** out,const char* name,int) {
+    *out=std::string_view(name).find("m_invis")!=std::string_view::npos ? &invisible : &replacement;
+    ref(*out);
+}
+float __fastcall model_time(void*,void*) { return 0; }
+struct model_xml { const char* path;bool hidden; };
+const char* __fastcall model_attribute(void* value,void*,const char*) { return static_cast<model_xml*>(value)->path; }
+void __fastcall model_parse(void* value,void*,void* xml) {
+    if(static_cast<model_xml*>(xml)->hidden) reinterpret_cast<void(__fastcall*)(void*,void*,bool)>(0x5c4b90)(value,nullptr,true);
+}
+void __fastcall model_note(void*,void*,const char*,int) {}
+void model_cycles() {
+    install_services();
+    model_manager_vt[0x260/4]=unsigned(reinterpret_cast<std::uintptr_t>(model_load));
+    model_manager_vt[0x24/4]=unsigned(reinterpret_cast<std::uintptr_t>(model_time));
+    model_manager[0]=unsigned(reinterpret_cast<std::uintptr_t>(model_manager_vt.data()));
+    redirect(0x5d8920,model_manager_get);redirect(0x5bc530,noop);redirect(0x5bc170,noop);
+    redirect(0x5649c0,model_attribute);redirect(0x5bc7a0,model_parse);redirect(0x517c20,model_note);
+    replacement_node.vt=invisible_node.vt=vt.data();replacement_node.kind=invisible_node.kind=2;
+    replacement={resource_vt.data(),&replacement_node};invisible={resource_vt.data(),&invisible_node};
+    const auto manager=*reinterpret_cast<unsigned*>(0x5889a3);
+    auto* backing=reinterpret_cast<unsigned char*>(manager);
+    for(unsigned cycle=0;cycle<100;++cycle) {
+        make_nodes(1);intern_count=0;strings.fill(0);interned.clear();ownership.clear();
+        construct(backing);
+        reinterpret_cast<void(__fastcall*)(void*,void*,const char*)>(0x5882e0)(backing,nullptr,"synthetic");
+        std::array<unsigned char,0x1a00> owner{};put(owner.data(),0,0x69e41c);put(owner.data(),0xd4,manager);put(owner.data(),0xe0,1);
+        std::array<unsigned char,0x200> item{};
+        put(item.data(),0,0x6a0304);put(item.data(),4,unsigned(reinterpret_cast<std::uintptr_t>(owner.data())));
+        put(item.data(),8,intern(nullptr,nullptr,"synthetic_000",0,0));
+        model_xml xml{"ui/models/lc_o_synthetic",cycle%2==0};
+        (*reinterpret_cast<void(__fastcall**)(void*,void*,void*)>(0x6a0348))(item.data(),nullptr,&xml);
+        for(unsigned i=0;i<20;++i) {
+            reinterpret_cast<void(__fastcall*)(void*,void*,bool)>(0x5c4b90)(item.data(),nullptr,true);
+            reinterpret_cast<void(__fastcall*)(void*,void*,bool)>(0x5c4b90)(item.data(),nullptr,false);
+        }
+        reinterpret_cast<void(__fastcall*)(void*,void*)>(0x5bea50)(item.data(),nullptr);
+        reinterpret_cast<void(__fastcall*)(void*,void*)>(0x588640)(backing,nullptr);
+        for(const auto& [object,balance]:ownership) {
+            if(balance) std::cerr<<"unbalanced model cycle "<<cycle<<" object "<<object<<" balance "<<balance<<"\n";
+            assert(balance==0);
+        }
+    }
+    std::cout<<"model cycles PASS real 5bbdd0 / 5c4b90 / 5c4c50 / 5bc3f0 / 5ab720 / 587ba0 / 5bea50 / 588640: references=0 after 100 load-close cycles, 20 hide/show cycles each\n";
+}
+
 }
