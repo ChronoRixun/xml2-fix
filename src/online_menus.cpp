@@ -924,7 +924,10 @@ void bind_broker(void* menu,screen s) {
     hide(menu,"lc_service_ok",!connected_plain);
     bind_text(menu,"service",connected_plain ? "" : service);
     bind_text(menu,"self_state",connected_plain ? "" : waiting ? "Please wait" : v.state==broker::phase::room ? "In a room" : service);
-    const auto browse_hint=v.list_known ? std::to_string(v.rows.size()).append(v.stale ? " last known games" : " public games") : std::string("Browse public games");
+    const auto browse_hint=!v.list_known ? std::string("Browse public games") : v.rows.empty()
+        ? std::string(v.stale ? "No games in the last list" : "No public games")
+        : std::to_string(v.rows.size())+(v.stale ? (v.rows.size()==1 ? " last known game" : " last known games")
+                                               : (v.rows.size()==1 ? " public game" : " public games"));
     bind_text(menu,"browse_hint",browse_hint.c_str());
     bind_text(menu,"browse_hint_on",browse_hint.c_str()); // the focused row's navy twin (hub_focus_follow)
     // LC localizes these mutually exclusive variants at the approved status/error anchors.
