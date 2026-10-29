@@ -1786,6 +1786,7 @@ namespace online_room
     bool refresh_due() { return client.refresh_due(room_clock()); }
     std::uint32_t retry_in_ms() { return client.retry_in(room_clock()); }
     bool host_lost() { return host_loss.lost(); }
+    void guest_admitted() { if (!hosting && !host_id.empty()) host_loss.admitted(); }
     void suppress_host_lost() { host_loss.removed_by_host(); }
     bool removed_by_host() { return removal_in.removed(); }
     const char* name(removal_start_result r) {
@@ -2128,7 +2129,9 @@ namespace online_room
 		out = {};
 		if (!room_ready || !party_model.is_open() || party_cards.empty() || room_code.size() != 8) return false;
 		std::memcpy(out.code, room_code.c_str(), 9);
-		const auto split = party_core::lobby_split(party_cards, party_facts_ok ? party_facts.count : 0, party_model.roster_size());
+		std::vector<int> native_indices;
+		if (party_facts_ok) for (unsigned i = 0; i < party_facts.count && i < 4; ++i) native_indices.push_back(party_facts.participants[i].index);
+		const auto split = party_core::lobby_split(party_cards, native_indices.size(), party_model.roster_size(), &native_indices);
 		for (const auto* card : split.rows)
 		{
 			const auto& c = *card;
@@ -2158,6 +2161,7 @@ namespace online_room
 			if (out.pending_count < 3)
 			{
 				auto& m = out.pending[out.pending_count++];
+				m.host = c.host;
 				const auto name = online_status_core::utf8_clean(c.name, party_core::name_max);
 				std::memcpy(m.name, name.c_str(), name.size());
 				m.phase = int(c.now);
@@ -2344,6 +2348,7 @@ namespace online_room
     bool refresh_due() { return false; }
     std::uint32_t retry_in_ms() { return 0; }
     bool host_lost() { return false; }
+    void guest_admitted() {}
     void suppress_host_lost() {}
     bool removed_by_host() { return false; }
     bool take_preset(online_browser_core::launch_preset&) { return false; }

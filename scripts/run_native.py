@@ -42,7 +42,7 @@ with_exe = {
     "xml2_death_switch_test", "xml2_world_impact_test", "xml2_stun_rule_test",
     "xml2_test_mode_test", "xml2_lockon_effects_test", "xml2_box_harm_test",
     "xml2_harm_single_chain_test", "xml2_world_backfaces_test", "xml2_harm_loop_startup_test", "xml2_reliable_receive_test",
-    "xml2_campaign_sender_test", "xml2_receive_validation_test", "xml2_join_in_progress_test",
+    "xml2_campaign_sender_test", "xml2_receive_validation_test", "xml2_join_in_progress_test", "xml2_join_in_progress_boundary_test",
     "xml2_combo_heads_test", "xml2_input_worker_test", "xml2_model_pools_test", "xml2_model_pools_lifecycle_test",
     "xml2_npc_combo_timing_test", "xml2_x1_leader_test", "xml2_solo_mode_test", "xml2_resistance_display_install_test",
     "xml2_npc_semi_auto_test", "xml2_npc_query_scheduler_test", "xml2_shared_handlers_test",

@@ -1617,3 +1617,10 @@ this does not claim that a specific anchor operand or input adapter caused it.
 Integration must repeat no-change Esc at both 4:3 and widescreen, verify the
 panel is gone and the next main-menu input works, and also check changed
 settings with Accept and Cancel.
+
+Session lifecycle (060s follow-up): successful native guest admission arms host-loss tracking even when a late joiner
+has only its own participant and no bound native host link. Closing that authenticated host tunnel ends the admitted
+guest and shows THE HOST LEFT. Discovery-only tunnels, local departures and authenticated rule-64 removals keep their
+existing meanings. The terminal removal handler returns before the lobby is routed to the Hub; that route runs before
+the Join tick can create its separate session-unavailable popup. A host present only in the room roster keeps its HOST
+badge and observed phase; no native participant or readiness is invented for that card.

@@ -472,6 +472,7 @@ struct roster_watch {
 // 0x612f8e), for THIS PC's own record, with the Kick's reason and flag. The native slow-player drop sends 0x10ce with flag 0
 // and a host loss / the watchdog other reasons: neither matches. No peer message, protocol field or rule id is involved.
 inline constexpr std::uint32_t removal_notice_return=0x612f8e, kick_reason=0x10ce, kick_flag=1;
+inline constexpr std::uint32_t removal_drop_return=0x6133dd;
 // frame: 0x612c40's [ebp+0 .. ebp+0x10] (saved EBP, return address, record, reason, flag); local: that record is this PC's
 // own participant (0x614290, record +0x1c bit 0).
 // 0.6 preview fix J: the room host's own departure as this guest's session sees it - a 0x2b removal notice (0x612f8e) of a
@@ -481,8 +482,11 @@ inline constexpr std::uint32_t removal_notice_return=0x612f8e, kick_reason=0x10c
 // offer. The wrapper only runs for a TERMINAL clear, so on a guest a notice that removed another record (the host's) and
 // ended the session is always the host's departure, whatever its reason.
 inline bool host_left_by_notice(bool notice,bool local,std::uint32_t reason) {
-    (void)reason;
-    return notice && !local;
+    // Called only after the authenticated Kick/removal classifier, and only on
+    // a terminal clear. A slow drop of THIS guest (flag 0) ends its session too,
+    // even if the host tunnel's close callback has not arrived yet.
+    (void)local;(void)reason;
+    return notice;
 }
 inline bool kicked_by_host(const std::uint32_t (&frame)[5],bool local) {
     return local && frame[2]!=0 && frame[1]==removal_notice_return && frame[3]==kick_reason && (frame[4]&0xffu)==kick_flag;

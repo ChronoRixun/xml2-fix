@@ -30,7 +30,8 @@ void menu_leave_tick() { if(leave_armed) { leave_armed=false;menu_leave(); } }
 // Fix F (rule 64): the room layer's latch "this joiner accepted its host's in-session removal notice".
 bool removed_flag=false;
 bool menu_removed() { return removed_flag; }
-const online_menus::broker_api api{menu_available,menu_view,menu_tick,menu_list,menu_host,menu_resolve,menu_retry,menu_cancel,menu_leave_checked,menu_version,menu_take_preset,menu_refresh_due,host_native,target,posted,nullptr,menu_leave_deferred,nullptr,nullptr,nullptr,menu_retry_in,menu_refusal,menu_host_lost,menu_refusal_serial,menu_removed};
+void menu_admitted() { fixture_host_loss.admitted(); }
+const online_menus::broker_api api{menu_available,menu_view,menu_tick,menu_list,menu_host,menu_resolve,menu_retry,menu_cancel,menu_leave_checked,menu_version,menu_take_preset,menu_refresh_due,host_native,target,posted,nullptr,menu_leave_deferred,nullptr,nullptr,nullptr,menu_retry_in,menu_refusal,menu_host_lost,menu_refusal_serial,menu_removed,nullptr,menu_admitted};
 void* __cdecl string_pool() { return pool.data(); }
 bool __fastcall input_ok(void*,void*,unsigned,int) { return true; }
 void __fastcall pop(void*,void*,const char* name,int) {
@@ -525,6 +526,8 @@ void __fastcall remove_record(void* session,void*,void* record,bool) {
 }
 void __fastcall end_one(void*,void*,int value) { std::cout<<"end int "<<value<<" return "<<_ReturnAddress()<<"\n"; }
 void __fastcall end_noop(void*,void*) { std::cout<<"end service return "<<_ReturnAddress()<<"\n"; }
+unsigned end_dialogs=0;
+void __fastcall end_dialog(void*,void*,const char*,float,int) { std::cout<<"end native dialog "<<++end_dialogs<<"\n"; }
 void session_end_services(bool hosting) {
     // Keep the real 612070/612c40/6123e0/6133a0 caller chain. Only destruction
     // of invented participants and UI/network/scheduler services are supplied.
@@ -537,6 +540,7 @@ void session_end_services(bool hosting) {
     fake_game_vt[0x44/4]=unsigned(reinterpret_cast<std::uintptr_t>(&end_noop));
     for(unsigned getter:{0x5d8920u,0x551ed0u,0x48de40u,0x401b00u}) redirect(getter,game_getter);
     redirect(0x5eb300,dialog_get);dialogs[0x10/4]=unsigned(reinterpret_cast<std::uintptr_t>(&end_one));
+    dialogs[0xc/4]=unsigned(reinterpret_cast<std::uintptr_t>(&end_dialog));
     dialogs[0x50/4]=unsigned(reinterpret_cast<std::uintptr_t>(&empty_text));dialogs[0x6c/4]=unsigned(reinterpret_cast<std::uintptr_t>(&end_noop));
     peer_ui_vt[8/4]=unsigned(reinterpret_cast<std::uintptr_t>(&end_noop));
     clock_vt[0xc/4]=unsigned(reinterpret_cast<std::uintptr_t>(&end_noop));
@@ -591,6 +595,24 @@ void review_run(const script_functions_rules::func_entry* registration) {
         (*reinterpret_cast<lobby_activate_t*>(hosting ? 0x69f284 : 0x69f34c))(child.data(),nullptr,0);
         assert(menu_view().state==bm::phase::room && menu_leaves==0);
         std::cout<<"end fixture: activated native lobby\n";session_end_services(hosting);std::cout<<"end fixture: services ready\n";
+        if(original_mode=="r6-end-hostloss-pending-guest") {
+            // 060s g4 18:23:08: only the local record, no native host link.
+            // The host tunnel later ends with 5003 while the session/transport stay alive.
+            remove_record(reinterpret_cast<void*>(0xa53058),nullptr,lobby_people[1].data(),false);
+            remove_record(reinterpret_cast<void*>(0xa53058),nullptr,lobby_people[2].data(),false);
+            remove_record(reinterpret_cast<void*>(0xa53058),nullptr,lobby_people[3].data(),false);
+            put(reinterpret_cast<void*>(0xa53058),0x7c,0);
+            *reinterpret_cast<unsigned char*>(0xa3bc40)=1;
+            host_loss_real=true;fixture_host_loss.reset();menu_admitted();fixture_host_loss.ended(false);
+            assert(fixture_host_loss.lost());
+            *reinterpret_cast<unsigned char*>(0x70b70d)=0;
+            (*reinterpret_cast<tick_t*>(0x69f374))(child.data(),nullptr);
+            assert(end_dialogs==0 && calls.back()=="request:lc_online" && leave_arms==1);
+            menu_leave_tick();restore_services();redirect(0x5d8920,manager_stub);redirect(0x48de40,seats_stub);
+            screen("lc_online");tick(child.data(),nullptr);assert(vis("lc_hub_host_left") && !vis("lc_notice_removed"));
+            std::cout<<"late guest host loss PASS: unbound tunnel, only local record, one leave, no native popup, Hub panel\n";
+            return;
+        }
         if(original_mode=="r6-end-quit-start-host") {
             // Fix H follow-up (review finding 1): Start Game first - the host lobby deactivates with phase 0, the room stays
             // (JIP, Party) - then the player quits to the main menu from the game: the retail session end must release it.
@@ -636,7 +658,10 @@ void review_run(const script_functions_rules::func_entry* registration) {
         // Fix J (060r failure 4, gG / gH): the HOST's own Leave / Quit notice - the 0x2b removal of the host's record (index 0)
         // with 0x1106, flag 0 - while the host connection is still up (host_lost false): the host-left panel, never the
         // native "The host has left the game." dialog.
-        const bool hostleft=original_mode=="r6-end-hostleft-guest";
+        const bool watchdog=original_mode=="r6-end-hostleft-watchdog-guest";
+        const bool hostleft=original_mode=="r6-end-hostleft-guest" || original_mode=="r6-end-hostleft-lobby-guest" || original_mode=="r6-end-hostleft-slow-guest" || watchdog;
+        const bool hostleft_lobby=original_mode=="r6-end-hostleft-lobby-guest";
+        if(hostleft_lobby) { *reinterpret_cast<unsigned char*>(0xa3bc40)=1;*reinterpret_cast<unsigned char*>(0x70b70d)=0; }
         // Review E finding 6: a second session end in the same kick: right after the kick's clear, the native script route
         // 0x49f990 runs the REAL 0x6123e0 again before the room leave; it must change nothing.
         const bool twice=original_mode=="r6-end-kicked-twice-guest";
@@ -646,19 +671,24 @@ void review_run(const script_functions_rules::func_entry* registration) {
         // Negative control: the native slow-player drop sends the same reason 0x10ce with flag 0. It is not a Kick: no "removed"
         // notice, and the lost host connection keeps the host-left panel.
         const bool slowdrop=original_mode=="r6-end-slowdrop-guest";
-        host_loss_real=kicked || slowdrop || partyseam;fixture_host_loss.reset();
-        if(slowdrop) host_lost_flag=true;
+        host_loss_real=kicked || partyseam;fixture_host_loss.reset();
+        if(slowdrop) { host_lost_flag=false;*reinterpret_cast<unsigned char*>(0x70b70d)=0; }
         if(partykick || partyseam) { fixture_host_loss.connected();fixture_host_loss.removed_by_host();fixture_host_loss.ended(true);assert(!fixture_host_loss.lost()); }
-        else if(kicked || slowdrop) { fixture_host_loss.connected();fixture_host_loss.ended(true);assert(fixture_host_loss.lost()); }
+        else if(kicked) { fixture_host_loss.connected();fixture_host_loss.ended(true);assert(fixture_host_loss.lost()); }
         bool escaped=false;
         try {
             if(original_mode.starts_with("r6-end-quit-") || original_mode=="r6-nit-end" || original_mode=="r6-nit-end-guest") {
                 const char* args="main";reinterpret_cast<void(__cdecl*)(const char**)>(0x5f27a0)(&args);
             } else if(hostleft) {
                 put(lobby_people[1].data(),0x1c,2); // actual remote host flag
-                std::array<unsigned char,12> body{};put(body.data(),0,0u);put(body.data(),4,0x1106);body[8]=0;
+                if(watchdog) {
+                    *reinterpret_cast<unsigned char*>(0x70b70d)=0;
+                    reinterpret_cast<void(__thiscall*)(void*,void*,int,int,int,bool)>(0x6133a0)(reinterpret_cast<void*>(0xa53058),lobby_people[1].data(),0x1107,0x1107,0x1107,false);
+                } else {
+                std::array<unsigned char,12> body{};put(body.data(),0,0u);put(body.data(),4,original_mode=="r6-end-hostleft-slow-guest" ? 0x10cd : 0x1106);body[8]=0;
                 std::array<unsigned,4> event{0,unsigned(reinterpret_cast<std::uintptr_t>(body.data())),0,0xa53058};
                 reinterpret_cast<void(__cdecl*)(void*)>(0x612f60)(event.data());
+                }
             } else if(kicked || slowdrop) {
                 if(partyzone) *reinterpret_cast<unsigned char*>(0xa53058+0x44c)=1; // a campaign runs
                 menu_broker.disconnected("broker already unavailable",ticks);
@@ -691,6 +721,11 @@ void review_run(const script_functions_rules::func_entry* registration) {
             }
         } catch(...) { escaped=true; }
         assert(!escaped);
+        assert(end_dialogs==0);
+        if(hostleft_lobby) {
+            (*reinterpret_cast<tick_t*>(0x69f374))(child.data(),nullptr);
+            assert(calls.back()=="request:lc_online" && end_dialogs==0);
+        }
         assert(!*reinterpret_cast<void**>(0xa53058+0x78));
         std::cout<<"end fixture: wrapper entries "<<online_menus::session_clear_count()-clears_at_start<<"\n";
         if(kicked || partyseam || twice) {
@@ -705,7 +740,7 @@ void review_run(const script_functions_rules::func_entry* registration) {
             // one entry that decides, one classification line, one deferred leave (asserted below), the notice at the Hub.
             if(twice) assert(online_menus::session_clear_count()-clears_at_start==1);
         }
-        if(!direct && !lobby) assert(!*reinterpret_cast<unsigned char*>(0xa53058+0x420));
+        if(!direct && !lobby && !hostleft_lobby) assert(!*reinterpret_cast<unsigned char*>(0xa53058+0x420));
         if(partyzone || hostleft) {
             // Fix J: the in-zone removal and the host's departure end without the native screens: +0x44c cleared before
             // 0x612c40's lostconnectdialog test, its reason argument cleared before 0x612e2b reloads it; in a zone the stock
@@ -741,7 +776,7 @@ void review_run(const script_functions_rules::func_entry* registration) {
             // F5: assets that do not author the panel (an older LC) must never leave the Hub rows disabled behind nothing.
             if(noassets) absent_items={"lc_hub_host_left","lc_hub_host_left_veil","lc_hostleft_again","lc_hostleft_back"};
             screen("lc_online");tick(child.data(),nullptr);
-            const bool lost=(host_lost_flag || hostleft) && !noassets;
+            const bool lost=(host_lost_flag || hostleft || slowdrop) && !noassets;
             if(noassets) {
                 assert(enabled_items["host"] && enabled_items["code"] && enabled_items["browse"] && enabled_items["other"] && enabled_items["desctext3"] && enabled_items["desctext4"]);
                 const auto before=calls.size();post(intent::browse);tick(child.data(),nullptr);assert(calls.back()=="request:lc_browse" && calls.size()==before+1);

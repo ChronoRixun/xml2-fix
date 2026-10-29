@@ -125,6 +125,12 @@ void error_models() {
       h.reset();h.ended(true);assert(h.lost());h.local_departure();assert(!h.lost());h.ended(true);assert(!h.lost()); // quit after the loss: nothing more
       h.reset();h.removed_by_host();h.ended(true);assert(!h.lost());h.connected();h.ended(true);assert(!h.lost());      // kicked: not a host loss
       h.reset();h.ended(true);assert(h.lost());h.reset();assert(!h.lost()); }
+    { online_room_core::host_loss_tracker h;
+      h.connected();h.ended(false);assert(!h.lost()); // discovery alone is not admission
+      h.admitted();h.ended(false);assert(h.lost()); // late join: no host native record/link
+      h.local_departure();h.ended(false);assert(!h.lost());
+      h.reset();h.admitted();h.removed_by_host();h.ended(false);assert(!h.lost());
+      h.reset();h.ended(false);assert(!h.lost()); }
     // Host-left latch: one raise per loss; dismiss clears; a second report while up changes nothing.
     host_left h;assert(!h.active);h.raise();assert(h.active && h.generation==1);h.raise();assert(h.generation==1);h.dismiss();assert(!h.active);h.raise();assert(h.generation==2);
 }

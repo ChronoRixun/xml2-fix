@@ -93,5 +93,14 @@ check(bool(pure) and iat == pure[0][2], f'the transport base vtable 0x6a4788 slo
 if len(sys.argv) > 2:
     crt = Path(sys.argv[2]).read_bytes()
     check(b'_set_purecall_handler\0' in crt, 'msvcr71.dll exports _set_purecall_handler')
+# 060s follow-up N: the loaded query is shared with Team Management, and the
+# Join tick owns a second popup independently of 0x612c40's reason argument.
+check(call_target(0x5e68d9) == 0x60c350, 'shared Team/start loaded query calls 0x60c350')
+check(call_target(0x60c369) == 0x614210, 'retail loaded query walks participant indices without a pending filter')
+check(b(0x60c36e, 7) == bytes.fromhex('8b8c8794000000'), 'retail loaded query tests pause +0x94 +4*index')
+check(call_target(0x5c8865) == 0x6111f0, 'Join tick checks its local participant at 0x5c8865')
+check(b(0x5c8893, 5) == bytes.fromhex('6805110000'), 'Join missing-participant path selects separate dialog 0x1105')
+check(b(0x5c88a0, 3) == bytes.fromhex('ff550c'), 'Join missing-participant path invokes the dialog vtable independently')
+check(call_target(0x6133d8) == 0x612c40, 'native drop enters removal with return 0x6133dd (watchdog before tunnel-close callback)')
 print('FAILED' if fails else 'ALL PASS', len(fails))
 raise SystemExit(1 if fails else 0)

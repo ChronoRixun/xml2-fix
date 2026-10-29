@@ -483,7 +483,10 @@ void removal_guest_test() {
     reset("success");assert(room::resolve("ABCDEFGH"));pump_until([] { return room::view().state==b::phase::room && room::cert_ready; });
     room::sockets()->CloseConnection(peer,0,nullptr,false);
     assert(room::sockets()->CreateSocketPair(&local,&peer,false,nullptr,nullptr));
-    auto& host4=room::ensure_tunnel(room::host_id);removal_connect(host4,local,room::host_id);host4.transport_bound=true;
+    auto& host4=room::ensure_tunnel(room::host_id);removal_connect(host4,local,room::host_id);host4.transport_bound=false;
+    room::guest_admitted(); // late guest: accepted local participant, no host native link yet
+    closed.m_info.m_eState=k_ESteamNetworkingConnectionState_ProblemDetectedLocally;
+    closed.m_info.m_eEndReason=5003; // 060s g4: unbound admitted host tunnel, Connection dropped
     closed.m_hConn=local;std::strcpy(closed.m_info.m_szEndDebug,"closed by the application");
     room::on_status(&closed);assert(!room::removed_by_host() && room::host_lost());
     room::sockets()->CloseConnection(peer,0,nullptr,false);

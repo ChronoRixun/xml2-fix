@@ -93,6 +93,10 @@ bool lobby_fields_stub(online_menus::lobby_fixture& out) {
         out.members[2].route=1;out.members[2].build=2;out.members[2].phase=2;
         std::strcpy(out.pending[0].name,"Remy\x01x");out.pending[0].phase=1;out.pending[0].build=0;out.pending[0].ping_ms=55;out.pending[0].route=1;
         out.pending_count=mode.find("r7-bounds")!=std::string::npos ? 4 : 1;
+        if(mode=="r4-r7-host-waiting-join") {
+            std::strcpy(out.pending[0].name,"Host player");out.pending[0].host=true;
+            out.pending[0].phase=7;out.pending[0].build=2;
+        }
     }
     return true;
 }
@@ -845,6 +849,7 @@ void tests() {
 }
 }
 void lobby_tests(const script_functions_rules::func_entry* registration) {
+    if(mode=="r4-r7-host-waiting-join") people_count=1;
     const bool host=mode.find("join")==std::string::npos;setup_lobby(host);
     auto tick=*reinterpret_cast<lobby_tick_t*>(host ? 0x69f2ac : 0x69f374);
     auto activate=*reinterpret_cast<lobby_activate_t*>(host ? 0x69f284 : 0x69f34c);
@@ -858,6 +863,13 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     }
     activate(child.data(),nullptr,0);assert(activations==1 && refreshes==1);
     mask=0;tick(child.data(),nullptr);
+    if(mode=="r4-r7-host-waiting-join") {
+        assert(!visibility["lc_p2_card"] && !visibility["lc_p2_host"] && visibility["lc_p2_pending"]);
+        assert(texts["lc_p2_name"]=="Host player" && texts["lc_p2_phase"]=="Playing");
+        assert(visibility["lc_p2_ready"] && visibility["lc_p2_not_ready"]);
+        assert(*reinterpret_cast<unsigned*>(0xa53058+0x278)==1);
+        std::cout<<"PASS late guest host card: authenticated room host shown, Playing, no fabricated ready/native record\n";return;
+    }
     if(mode.starts_with("r4-advice")) { advice_tests(host);return; }
     if(mode.find("r7-bounds")!=std::string::npos) { r7_card_tests(host);return; }
     assert(texts["lc_p1_name"]=="Logan?n?" && texts["lc_p2_name"]=="Kitty?n");

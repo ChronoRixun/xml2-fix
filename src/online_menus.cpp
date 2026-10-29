@@ -776,7 +776,7 @@ bool offline_fixture = false;
 #if XML2_FIX_GNS
 void production_broker_tick() { online_room::ui_tick(); gns_transport::room_ui_tick(); }
 broker_api broker_calls{online_room::available,online_room::view,production_broker_tick,online_room::list,
-    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due,online_room::host_native,online_room::admission_target,online_room::host_posted,join_in_progress::installed,online_room::leave_after_flush,online_room::party,online_room::room_rtt,gns_transport::remove_member,online_room::retry_in_ms,gameplay_agreement::refusal_rules,online_room::host_lost,gameplay_agreement::refusal_serial,online_room::removed_by_host,online_room::suppress_host_lost};
+    online_room::host,online_room::resolve,online_room::retry,online_room::cancel,online_room::leave,online_room::version,online_room::take_preset,online_room::refresh_due,online_room::host_native,online_room::admission_target,online_room::host_posted,join_in_progress::installed,online_room::leave_after_flush,online_room::party,online_room::room_rtt,gns_transport::remove_member,online_room::retry_in_ms,gameplay_agreement::refusal_rules,online_room::host_lost,gameplay_agreement::refusal_serial,online_room::removed_by_host,online_room::suppress_host_lost,online_room::guest_admitted};
 #else
 broker_api broker_calls{};
 #endif
@@ -1537,10 +1537,12 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         hide(menu,(prefix+"pending").c_str(),!waiting_member);
         if(waiting_member) {
             const auto* raw=waiting_member->name;
-            const auto shown_name=raw[0] ? display(std::string(raw,strnlen(raw,31)),31) : std::string("Player");
+            const auto shown_name=raw[0] ? display(std::string(raw,strnlen(raw,31)),31) : std::string(waiting_member->host ? "Host" : "Player");
             bind_text(menu,(prefix+"name").c_str(),shown_name.c_str());
             bind_text(menu,(prefix+"slot").c_str(),("P"+std::to_string(i+1)).c_str());
-            for(const auto* field:{"ready","not_ready","host","you","selected"}) hide(menu,(prefix+field).c_str(),true);
+            for(const auto* field:{"ready","not_ready","you","selected"}) hide(menu,(prefix+field).c_str(),true);
+            hide(menu,(prefix+"host").c_str(),!waiting_member->host);
+            hide(menu,(prefix+"pending").c_str(),waiting_member->host);
             const bool measured=waiting_member->ping_ms>=0 && waiting_member->ping_ms<=60000;
             bind_text(menu,(prefix+"ping").c_str(),measured ? std::to_string(waiting_member->ping_ms).c_str() : "");
             hide(menu,(prefix+"ping").c_str(),!measured);hide(menu,(prefix+"ms").c_str(),!measured);hide(menu,(prefix+"measuring").c_str(),measured);
@@ -1604,6 +1606,8 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
             const bool self_row=view.local_known && view.ids[i]==view.local;
             facts+=" | P"+std::to_string(i+1)+" id "+std::to_string(view.ids[i])+(view.host[i] ? " HOST" : "")+(view.ready[i] ? " READY" : " NOT-READY")+(self_row ? " YOU" : "");
         }
+        if(fixture) for(unsigned i=0;i<extra.pending_count && view.count+i<4;++i)
+            facts+=" | room-only P"+std::to_string(view.count+i+1)+(extra.pending[i].host ? " HOST" : "")+" "+phase_text(extra.pending[i].phase);
         facts+=std::string(" | local ")+(valid && view.local_known ? std::to_string(view.local) : "unknown")+" | confirm "+(lobby_state.confirm ? "open" : "closed")+" | room facts "+(room_card_facts ? "yes" : "no");
         if(facts!=last_cards && cards_logged<60) { last_cards=facts;++cards_logged;logger::write("online menus: lobby cards: %s",facts.c_str()); }
     }
@@ -1700,6 +1704,11 @@ bool lobby_current_mask(unsigned& mask) {
     __except(EXCEPTION_EXECUTE_HANDLER) { mask=0;return false; }
 }
 void lobby_tick(void* menu,unsigned original,bool& called) {
+    if(native_guest_end_pending && which(menu)==screen::lobby_join) {
+        called=true;native_guest_end_pending=false;
+        if(!native_request("lc_online")) native_guest_end_pending=true;
+        return;
+    }
     if(!lobby_live(menu) || current_peek()!=menu) { called=true;lobby_original(menu,original);return; }
     native_note_local_record();
     if(lobby_state.owner!=menu) { lobby_state.reset(menu);bindings.clear();pending.clear();roster.clear();guest_toast.clear(); }
@@ -1767,7 +1776,11 @@ void lobby_frame(void* menu,unsigned original) noexcept {
     bool called=false;
     if(native_lobby_rejected(menu)) return;
     if(!input_thread("lobby tick",false)) { lobby_original(menu,original);return; }
-    try { if(broker_live() && broker_calls.tick) broker_calls.tick(); lobby_tick(menu,original,called); }
+    try {
+        if(broker_live() && broker_calls.tick) broker_calls.tick();
+        if(native_flow.lobby_active && native_flow.phase==native_phase::guest && broker_calls.host_lost && broker_calls.host_lost()) native_session_watch();
+        lobby_tick(menu,original,called);
+    }
     catch(...) {
         pending.clear();bindings.clear();
         logger::write("online menus: lobby fields unavailable; native controls retained");
@@ -2500,7 +2513,7 @@ void tick_impl(void* menu,bool& native_called) {
     if(s==screen::party) { party_frame(menu);return; }
     native_history_trim(menu);
     broker_scope(s);
-    if(s==screen::hub) entry.clear();
+    if(s==screen::hub) { entry.clear();native_guest_end_pending=false; }
     load_recent();
     if(s==screen::hub) poll_name();
     else abandon_name();
