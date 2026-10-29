@@ -175,6 +175,15 @@ void* __fastcall item_stub(void*,void*,const char* name) {
     // text items. Round 5b's views fixture now hands those names a real model-item vtable, so a hide()
     // that only accepts the text setter fails these assertions instead of passing on a fake.
     if(mode=="r5b-views" && model_scene(name)) return model_item.data();
+    if((mode=="r5-broker" || mode.starts_with("r5-browse-") || mode=="r5-retail-lobby" || mode=="r5b-views") &&
+        (std::string_view(name).starts_with("room_") || std::string_view(name).starts_with("prompt_"))) {
+        static std::map<std::string,std::array<unsigned char,0xb0>> rows;
+        auto& it=rows[name];if(!*reinterpret_cast<unsigned*>(it.data())) it=text_item;
+        return it.data();
+    }
+    if(mode.starts_with("r8-party") && std::string_view(name)=="lc_party_invite") {
+        static std::array<unsigned char,0xb0> invite=text_item;return invite.data();
+    }
     // The focus tests (r4-focus-*) compare the focused item with the lobby's own buttons: every authored node is its own object.
     if(mode.starts_with("r4-focus") && std::string_view(name).starts_with("lc_") && std::string_view(name)!="lc_lobby_v1") {
         static std::map<std::string,std::array<unsigned char,0xb0>,std::less<>> own;
@@ -547,7 +556,7 @@ int main(int argc,char** argv) {
     install_hooks.clock=clock_stub;install_hooks.wall_clock=wall_stub;install_hooks.before_request=request_fault_stub;install_hooks.before_tick=tick_fault_stub;
     if(mode.starts_with("r4-")) install_hooks.lobby_fields=lobby_fields_stub;
     if(mode.starts_with("r8-party")) { party_api.remove_member=party_remove_stub;install_hooks.broker=&party_api;install_hooks.lobby_fields=party_fields_stub; }
-    if(mode=="r5-broker" || mode=="r5-retail-lobby" || mode=="r5b-views" || mode=="r5-browse-join" || mode=="r17-hub-focus") install_hooks.broker=&menu_api;
+    if(mode=="r5-broker" || mode=="r5-retail-lobby" || mode=="r5b-views" || mode.starts_with("r5-browse-") || mode=="r17-hub-focus" || mode=="r16-hits-browse") install_hooks.broker=&menu_api;
     if(mode=="r15-errors") install_hooks.broker=&menu_api15;
     if(mode.starts_with("r6-")) install_hooks.broker=&native_fixture::api;
     patch_transaction::hooks transaction_hooks;
@@ -690,7 +699,7 @@ int main(int argc,char** argv) {
     if(mode=="r9-history") { native_fixture::history_run(entry);return 0; }
     if(mode=="r9-anchor-capacity") { native_fixture::anchor_capacity_run(entry);return 0; }
     if(mode=="r6-lobby-new" || mode=="r6-lobby-load") { native_fixture::lobby_run(entry,mode=="r6-lobby-load");return 0; }
-    if(mode=="r5-broker" || mode=="r5-retail-lobby" || mode=="r5-browse-join") {
+    if(mode=="r5-broker" || mode=="r5-retail-lobby" || mode.starts_with("r5-browse-")) {
         broker_menu_tests(entry);
         if(mode=="r5-retail-lobby") broker_retail_lobby_tests(entry);
         return 0;

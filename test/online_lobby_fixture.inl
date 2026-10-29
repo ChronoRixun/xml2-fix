@@ -367,11 +367,25 @@ void pad_lobby_tests(const script_functions_rules::func_entry* registration,lobb
         press(raw_menu_mask(pad_key::rt));            // RT: Copy
         assert(copies==copies0+2 && announces==announced+1);
         post(intent::dismiss);tick(child.data(),nullptr);
+        // 060s failure 4: DirectInput Delete can arrive while the prompt device still says pad.
+        // Feed the real scan first, then the same raw code the engine would publish; the native Join tick must Unready.
+        const auto announced_delete=announces,copied_delete=copies;
+        std::array<unsigned char,256> keys{};keys[0xd3]=0x80;
+        online_menus::keyboard(keys.data());
+        mask=0x1000000;tick(child.data(),nullptr);tick(child.data(),nullptr);
+        assert(announces==announced_delete+1 && !last_ready && copies==copied_delete);
+        keys.fill(0);online_menus::keyboard(keys.data());mask=0;tick(child.data(),nullptr);
+        // Repeat Ready with the stale pad indication; no clipboard calls, held Delete still acts only once.
+        keys[0xd3]=0x80;online_menus::keyboard(keys.data());
+        keys.fill(0);online_menus::keyboard(keys.data()); // a quick tap is released before the game-thread lobby tick
+        mask=0;tick(child.data(),nullptr);
+        assert(last_ready && announces==announced_delete+2 && copies==copied_delete);
+        keys.fill(0);online_menus::keyboard(keys.data());mask=0;tick(child.data(),nullptr);
         // The keyboard keeps the engine's keys: Del (MENU_OTHER) is the role button (Unready now), the pad X bit alone is not.
         online_menus::set_pad_probe(pad_probe_no);
         ready_person(1,true);refresh_now();tick(child.data(),nullptr);
-        press(0x100);assert(announces==announced+1);
-        press(0x1000000);assert(announces==announced+2 && !last_ready);
+        press(0x100);assert(announces==announced+3);
+        press(0x1000000);assert(announces==announced+4 && !last_ready);
         std::cout<<"r4 pad join PASS skinned lobby: pad X = Ready, pad Y / RT = Copy; keyboard Del / KP5 unchanged; unskinned lobby keeps the engine labels\n";
     }
     online_menus::set_pad_probe(nullptr);
@@ -445,6 +459,14 @@ void focus_lobby_tests(const script_functions_rules::func_entry* registration,lo
           put(child.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(moved))); }
         if(focused!="text_kickplayer") std::cout<<"focus after the dim: "<<focused<<"\n";
         assert(focused=="text_kickplayer" && *reinterpret_cast<void**>(child.data()+0x324)==kick_item.data());
+        // Real play navigated away and back while waiting (060s: 0/4 returns). This retires K's refocus pointer.
+        focus_stub(child.data(),nullptr,"text_leaveroom",true);tick(child.data(),nullptr);
+        focus_stub(child.data(),nullptr,"text_kickplayer",true);tick(child.data(),nullptr);
+        // Native description writes can happen without a change of focused pointer: no bind cache may hide them.
+        texts["desctext2"]="";texts["desctext3"]="Room code";texts["desctext5"]="Kick Player";
+        tick(child.data(),nullptr);
+        if(mode!="r4-focus-host-ready")
+            assert(texts["desctext2"]=="$MENU_OTHER Kick player" && texts["desctext3"]=="Ctrl+C Copy code" && texts["desctext5"]=="$MENU_ACCEPT Select");
         for(unsigned row=0;row<4;++row) ready_person(row,true);
         refresh_now();tick(child.data(),nullptr);tick(child.data(),nullptr);
         if(focused!="text_startgame") std::cout<<"focus after everyone is ready: "<<focused<<" (START enabled "<<int(start_item[0x54]&8)<<")\n";
@@ -904,7 +926,7 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     if(mode=="r4-negative" || mode=="r4-refresh-paths" || mode=="r4-join-fallback" || mode=="r4-host-fallback" || mode=="r4-mouse" || mode=="r4-native-faults" || mode=="r4-no-marker") {
         review_lobby_tests(registration,host);return;
     }
-    if(mode=="r4-join") {
+    if(mode=="r4-join" || mode=="r4-join-campaign") {
         ready_person(1,false);mask=0x1000000;tick(child.data(),nullptr);assert(announces==1 && last_ready && current()==child.data());
         tick(child.data(),nullptr);assert(announces==1);mask=0;tick(child.data(),nullptr);
         // 060r live (failure 7): the retail Join tick writes "Unready" / "Leave" into text_leaveroom when the ready state flips - the
@@ -914,7 +936,11 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
         assert(leave_label_native_writes>=1 && texts["text_leaveroom"].empty());
         // 060r live (failure 6): the guest header read "Room details pending" for the whole visit (no broker name to bind). The room is
         // the host's game: its name comes from the host's native row (the browser's default naming); the campaign line is authored text.
-        assert(!texts["lc_room_name"].empty() && texts["lc_room_name"]==texts["lc_p1_name"]+"'s game");
+        if(mode!="r4-join-campaign") assert(texts["lc_room_name"]=="Online game"); // Other ways has no broker room.
+        auto* session=reinterpret_cast<unsigned char*>(0xa53058);
+        std::strcpy(reinterpret_cast<char*>(session+0x3b6),"Synthetic host room");session[0x3dd]=4;session[0x3df]=2;session[0x3e0]=1;
+        tick(child.data(),nullptr);assert(texts["lc_campaign_summary"]=="Campaign - Hard. Friends join at the next area.");
+        session[0x3e0]=2;tick(child.data(),nullptr);assert(texts["lc_campaign_summary"]=="Danger Room. Friends join at the next area.");
         fixture_throw=true;tick(child.data(),nullptr);fixture_throw=false;
         back_in_base=true;mask=0x200000;tick(child.data(),nullptr);back_in_base=false;mask=0;
         assert(announces==2 && !last_ready && current()==child.data());

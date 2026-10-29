@@ -1624,3 +1624,31 @@ guest and shows THE HOST LEFT. Discovery-only tunnels, local departures and auth
 existing meanings. The terminal removal handler returns before the lobby is routed to the Hub; that route runs before
 the Join tick can create its separate session-unavailable popup. A host present only in the room roster keeps its HOST
 badge and observed phase; no native participant or readiness is invented for that card.
+
+### 060s lobby and Browse regressions (fix P)
+
+The displayed prompt device is presentation state, so it cannot identify a raw keyboard Delete press. On a skinned lobby,
+DirectInput consumes scan D3 and keeps a role-action edge until the native Host/Join tick has read it. This also preserves a
+quick tap released before that tick. Pad X still performs Ready/Kick, pad Y/RT still copies, and Ctrl+C remains Copy.
+
+Browse gives the selected enabled row focus when its first populated list completes. An empty replacement list moves a
+row's obsolete focus back to Refresh. Page actions move selection and focus together. Every row command is activation:
+it joins that row on the first command, including when a mouse release precedes the binding tick. The Browse mouse
+adapter commits the drawn row target after the retail walk and posts its row command through the existing mailbox.
+Refresh has device-specific text and, in the companion LC layout, a dedicated focus model. Fresh listed rows and Join
+remain enabled during a refresh so real native Accept can reach the held-join path; stale rows still refuse a lookup.
+
+The native lobby refresh can replace all five description slots without changing the focused pointer. The DLL restores
+all owned footer slots after the native tick. A newly allowed START returns focus from Kick/Leave even if navigation
+retired the earlier disabled-focus restoration pointer. Other ways uses Online game; a guest header reports the accepted
+native mode and difficulty. It does not infer the host's new/save choice from this PC's selected-save pointer.
+
+The companion LC change draws card words as native text in front of the card model. Overlapping coplanar raster badge
+surfaces are no longer responsible for HOST/READY/build labels. Party's Copy code hint has a navy twin selected with the
+Invite focus. These rendering changes require rebuilding LC assets together with this DLL; exact in-game appearance still
+requires a rendered acceptance check.
+
+Regression coverage: r4-pad-join (including stale pad indication and press/release before a tick), r4-focus-host (navigation,
+readiness, overwritten footer), r4-join (native header settings), r5-browse-join, r5-browse-empty, r16-hits-browse (retail mouse
+walk followed by actual focus/mailbox/lookup), and r8-party-host/guest. LC's test_online_contract covers the corresponding
+native-text/depth, dedicated Refresh bar, navigation and navy hint contracts.

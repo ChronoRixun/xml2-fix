@@ -465,6 +465,31 @@ unsigned live_060r(mouse_t mouse,mouse_t host_mouse) {
     ++n;
     return n;
 }
+void __fastcall browse_focus_by_name(void* menu,void*,const char* name,bool) {
+    auto* it=item_lookup(menu,nullptr,name);assert(it);put(menu,0x324,unsigned(reinterpret_cast<std::uintptr_t>(it)));
+}
+void browse_live_test(mouse_t mouse) {
+    // 060s mouse trace: the walk answers room_0_2, but +324 remains prompt_refresh.
+    // Keep that actual focus state through the retail mouse recorder, then run the production tick/mailbox/resolve.
+    std::vector<fitem> browse;
+    for(const char* source:{"code","desctext1"}) {
+        auto i=item_named("lc_online",source);i.menu="lc_browse";i.name=std::string_view(source)=="code" ? "room_0_2" : "prompt_refresh";
+        i.bar=nullptr;browse.push_back(i);
+    }
+    items=std::move(browse);
+    for(unsigned n=0;n<items.size();++n) { text_of(int(n)+1,items[n].name.c_str());lay_out(items[n],int(n)+1);put(items[n].mem.data(),8,n+1); }
+    std::strcpy(reinterpret_cast<char*>(hub.data()+0xc),"lc_browse");set_current(hub.data());build_menu(hub.data(),"lc_browse");
+    std::string table=std::string(H::contract)+"\nlc_browse room_0_2 34.4 222 247.2 246.6\nlc_browse prompt_refresh 22.4 5.2 93.6 25.8\n";
+    write_table_text(table);redirect(0x5adf40,browse_focus_by_name);
+    auto* row=items[0].mem.data();auto* refresh=items[1].mem.data();put(hub.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(refresh)));
+    const int px=px_of_view(100,1280,720),py=py_of_view(234,720);
+    assert(menu_list());menu_auth=true;menu_complete=true;menu_tick();ticks+=2100;
+    const auto hit=ask(mouse,hub.data(),px,py,1280,720,WM_LBUTTONUP);
+    assert(hit.answered=="room_0_2" && *reinterpret_cast<void**>(hub.data()+0x324)==row);
+    (*reinterpret_cast<void(__fastcall**)(void*,void*)>(0x69e454))(hub.data(),nullptr);
+    assert(menu_resolves==1 && menu_last_code=="AAAAAAAA");
+    std::cout<<"060s Browse mouse PASS retail walk answers row, actual focus leaves Refresh, one release reaches production resolve\n";
+}
 void run(const std::string& variant) {
     const auto mouse=*reinterpret_cast<mouse_t*>(0x69e49c);
     const auto host_mouse=*reinterpret_cast<mouse_t*>(0x69f2f4);
@@ -472,6 +497,7 @@ void run(const std::string& variant) {
     install_recorders();make_items();set_menus();build_all();
     online_menus::set_pointer_probe(&probe);
     online_menus::set_hits_trace(false); // the fixture's [Test] InputPipe reads "1"; the diagnostic is checked on its own (live_060r)
+    if(variant=="r16-hits-browse") { browse_live_test(mouse);return; }
     unsigned checks=0;
     const std::pair<int,int> screens[]{{1280,720},{1920,1080},{960,720},{1440,1080},{1024,768}};
     if(variant=="r16-hits-parse") {

@@ -48,6 +48,7 @@ void menu_tick() {
 const online_menus::broker_api menu_api{menu_available,menu_view,menu_tick,menu_list,menu_host,menu_resolve,menu_retry,menu_cancel,menu_leave,menu_version,menu_take_preset,menu_refresh_due};
 
 void broker_menu_tests(const script_functions_rules::func_entry* registration) {
+    redirect(0x5adf40,focus_stub);
     using tick_t=void(__fastcall*)(void*,void*);
     const auto tick=*reinterpret_cast<tick_t*>(0x69e454);
     auto post=[&](intent value) { int_value[1]=unsigned(value);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(registration->handler))(nullptr); };
@@ -57,7 +58,19 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     menu_auth=true;tick(child.data(),nullptr);assert(!visibility["lc_broker_list"]);
     menu_complete=true;tick(child.data(),nullptr);
     assert(menu_view().rows.size()==9 && texts["room_0_0"]=="Remote ? ? ? name" && texts["room_0_6"].empty() && !visibility["lc_row0_build_same"] && visibility["lc_row0_build_other"]);
-    if(mode=="r5-browse-join") {
+    if(mode=="r5-browse-empty") {
+        assert(focused=="room_0_0");
+        menu_rows_json="-";ticks+=2100;post(intent::refresh);tick(child.data(),nullptr);
+        menu_complete=true;tick(child.data(),nullptr);
+        assert(menu_view().rows.empty() && focused=="prompt_refresh" && enabled_items["prompt_refresh"] && texts["prompt_refresh"]=="F5 Refresh");
+        menu_rows_json.clear();ticks+=2100;post(intent::refresh);tick(child.data(),nullptr);
+        menu_complete=true;tick(child.data(),nullptr);assert(menu_view().rows.size()==9 && focused=="room_0_0");
+        std::cout<<"060s Browse focus PASS populated -> empty -> populated keeps an enabled visible target\n";return;
+    }
+    if(mode=="r5-browse-join" || mode=="r5-browse-command") {
+        if(mode=="r5-browse-join") {
+            assert(focused=="room_0_0");assert(texts["prompt_refresh"]=="F5 Refresh");
+        }
         // 060q live failure 2: Join right after a list, as a player does (the shared 2 s lookup limiter still closed), and
         // with the auto refresh's list in flight. The old fixtures advanced the clock 2 s before every Join; the real
         // Browse never waits, so the single resolve call was refused and nothing happened.
@@ -72,9 +85,11 @@ void broker_menu_tests(const script_functions_rules::func_entry* registration) {
         // on the focused row) joins; the refresh is cancelled, the limiter's wait passes, the room resolves.
         screen("lc_browse");ticks+=11000;tick(child.data(),nullptr);menu_complete=true;tick(child.data(),nullptr);
         assert(menu_view().rows.size()==9);
-        post(static_cast<intent>(int(intent::row_first)+1));tick(child.data(),nullptr);       // selects row 1
+        // 060s row mouse-down/up may activate a row before an intervening binding tick updates browse_selected.
+        // One activation on a DIFFERENT row must join, including while a list is in flight.
         ticks+=11000;tick(child.data(),nullptr);assert(menu_broker.pending() && menu_view().action==bm::operation::list);
         const auto cancels=menu_cancels;
+        assert(enabled_items["room_0_0"] && enabled_items["prompt_join"]); // real Enter/click must reach the command while Refresh is in flight
         post(static_cast<intent>(int(intent::row_first)+1));tick(child.data(),nullptr);       // the selected row again: Join
         assert(menu_cancels==cancels+1 && menu_resolves==before+1);                            // refresh cancelled, limiter closed
         ticks+=2100;tick(child.data(),nullptr);
@@ -200,6 +215,7 @@ void broker_retail_lobby_tests(const script_functions_rules::func_entry* registr
 
 // Round 5b: every row/list/error/service selector the DLL publishes, with invented broker bodies only.
 void broker_presentation_tests(const script_functions_rules::func_entry* registration) {
+    redirect(0x5adf40,focus_stub);
     using tick_t=void(__fastcall*)(void*,void*);
     const auto tick=*reinterpret_cast<tick_t*>(0x69e454);
     auto post=[&](intent value) { int_value[1]=unsigned(value);reinterpret_cast<void*(__cdecl*)(void*)>(const_cast<void*>(registration->handler))(nullptr); };
@@ -270,9 +286,9 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
     assert(texts["room_3_6"]=="LC36" && texts["room_0_6"].empty() && texts["room_4_6"].empty()); // only the other build's token
     assert(texts["details"]=="Friends join at the next area - Same build as you (FIXTURE)" && gone("lc_broker_empty"));
     // Selecting the other-build row (row 3): the line names both tokens; its Join stays off.
-    post(static_cast<intent>(int(intent::row_first)+3));tick(child.data(),nullptr);
+    focus_stub(child.data(),nullptr,"room_3_0",true);tick(child.data(),nullptr);
     assert(texts["details"]=="Friends join at the next area - Other build (LC36 vs your FIXTURE)" && !enabled_items["prompt_join"]);
-    post(static_cast<intent>(int(intent::row_first)+4));tick(child.data(),nullptr);
+    focus_stub(child.data(),nullptr,"room_4_0",true);tick(child.data(),nullptr);
     assert(texts["details"]=="Friends join at the next area - Build not checked");
     // Hostile / maximal row, on the page that shows it: every bound field is bounded, ASCII-allowlisted and `%` free.
     post(intent::next);tick(child.data(),nullptr);
