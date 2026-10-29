@@ -252,7 +252,12 @@ namespace test_input
 
 		HRESULT STDMETHODCALLTYPE hooked_get_device_state(void* self, const DWORD size, LPVOID data)
 		{
-			const HRESULT result = real_get_device_state(self, size, data);
+			// NoActivate agent copies are pipe-only, even if focused. The player kit also
+			// enables InputPipe: retain its physical keys while focused, but synthesize
+			// unfocused reads so no background access/acquisition is needed for the pipe.
+			const bool synthetic = (no_activate::enabled() || (enabled && !game_in_foreground())) &&
+				size == 256 && data && is_keyboard(self);
+			const HRESULT result = synthetic ? S_OK : real_get_device_state(self, size, data);
 			if (size != 256 || !data || !is_keyboard(self))
 			{
 				return result;
@@ -271,9 +276,9 @@ namespace test_input
 			}
 
 			auto* state = static_cast<unsigned char*>(data);
-			if (!game_in_foreground())
+			if (synthetic || !game_in_foreground())
 			{
-				std::memset(state, 0, 256); // typing in another window stays there, as with the game's own foreground-only device
+				std::memset(state, 0, 256); // agent state starts empty; only the pipe can add keys
 			}
 			if (!enabled) {
 				online_menus::keyboard(state);
@@ -301,21 +306,10 @@ namespace test_input
 
 		HRESULT STDMETHODCALLTYPE hooked_set_cooperative_level(void* self, const HWND window, const DWORD flags)
 		{
-			if ((!enabled && !no_activate::enabled()) || !is_keyboard(self))
-			{
-				const HRESULT result = real_set_cooperative_level(self, window, flags);
-				if (SUCCEEDED(result) && is_keyboard(self)) test_mode::watch_window(window);
-				return result;
-			}
-
-			constexpr DWORD ours = DISCL_BACKGROUND | DISCL_NONEXCLUSIVE;
-			const HRESULT result = real_set_cooperative_level(self, window, ours);
-			logger::write("test: keyboard cooperative level %lX -> %lX (background, non-exclusive): %s", flags, ours, SUCCEEDED(result) ? "ok" : "refused");
-			if (FAILED(result))
-			{
-				if (no_activate::enabled()) return result; // never restore foreground-only cooperation in isolation mode
-				return real_set_cooperative_level(self, window, flags); // the game's own, as if we weren't here
-			}
+			// Keep the game's foreground-only cooperation. Agent reads are synthesized above,
+			// so no background access to the owner's physical keyboard is needed.
+			const HRESULT result = real_set_cooperative_level(self, window, flags);
+			if (SUCCEEDED(result) && is_keyboard(self) && !enabled && !no_activate::enabled()) test_mode::watch_window(window);
 			return result;
 		}
 
@@ -766,7 +760,7 @@ namespace test_input
 		display::disable_multisampling("the test pipe copies the back buffer");
 		display::show_without_focus("the test pipe drives the game in the background");
 		display::enable_test_pointer();
-		logger::write("test: input pipe %s ([Test] InputPipe=1, PipeName %s) - keys from it reach the game without the focus; the keyboard only with it", pipe_path.c_str(), pipe.name.c_str());
+		logger::write("test: input pipe %s ([Test] InputPipe=1, PipeName %s) - pipe keys reach the game without focus; NoActivate copies use only pipe keys", pipe_path.c_str(), pipe.name.c_str());
 	}
 
 	void hook_direct_input8(void* direct_input)

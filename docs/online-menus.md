@@ -904,8 +904,14 @@ identity, gameplay rule or command is needed.
 production online_menus.cpp. `xml2_online_input_wiring_test` includes the actual
 production test_input.cpp translation unit and runs its COM CreateDevice,
 GetDeviceState and SetCooperativeLevel hook chain. It tests Menus-only opt-in,
-pipe OFF/ON delivery, background filtering, failed-read reset and unrelated
-size/device/null pass-through. Only OS foreground answers and the UI consumer
+pipe OFF/ON and NoActivate OFF/ON delivery in both focus states, failed-read
+reset on the player path, and unrelated size/device/null pass-through. Agent
+reads with NoActivate never call the native keyboard device; they start empty
+and merge only pipe keys. The player kit also enables InputPipe: focused physical
+keys remain available there, while unfocused pipe reads are synthesized even if
+the foreground device is unacquired. Cooperative flags
+stay unchanged, so no background physical keyboard access is requested.
+Only OS foreground answers and the UI consumer
 are faked; `install()`/pipe service/capture dependencies are unreachable and
 assert if invoked. The enabled branch uses an owned event and synthetic state,
 with no named pipe, worker, actual keyboard/device or desktop input.
