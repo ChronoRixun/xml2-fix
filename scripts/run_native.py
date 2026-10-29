@@ -115,6 +115,8 @@ installer_modes |= {"xml2_economy_test"}
 if (b / "xml2_e4_core_host.exe").exists():
     cmds.append([sys.executable,"-B",str(R / "scripts/test_e4_core.py"),"--host",str(b / "xml2_e4_core_host.exe"),"--exe",EXE,"--out",str(out / "e4-core")])
 cmds += [[str(b / "xml2_online_menus_test.exe"), EXE, mode] for mode in host_modes(R) if mode != "on"]
+cmds.append([str(b / "xml2_broker_tls_test.exe"), "--lifetime-offline"])
+cmds.append([str(b / "xml2_broker_tls_test.exe"), "--pin-offline"])
 installer_modes |= {"xml2_online_menus_test"}
 
 if LIST_ONLY:
