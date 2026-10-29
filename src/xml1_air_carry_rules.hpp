@@ -3,7 +3,10 @@
 #include <array>
 namespace xml1_air_carry_rules {
 // Short retail service guards and complete handler tables, read before writing.
-inline constexpr std::array<limits_rules::guard,62> guards{{
+inline constexpr std::array<limits_rules::guard,65> guards{{
+    {0x692318, "00af4d00", "victim execute registration"},
+    {0x4daf00, "83ec50538b5c24588b836c0700005556578bf9", "native victim event before pickup hand reconciliation"},
+    {0x4db30d, "f647202074128b461c8985780100008b6d1c89ae78010000", "victim event writes reciprocal owners after pose and placement"},
     {0x42b6f3, "8a44245084c08b4c240cc744244000000000740b8b116a076a02ff5240eb098b016a086a02ff5040", "probe flag selects property7/8, not an actor exclusion"},
     {0x42b795, "8b8e780100008bc48964246489088b561c518bc4896424688910e83c000800", "probe passes physical owner and self as excluded handles"},
     {0x692378, "30b84d00", "victim_throw execute registration"},

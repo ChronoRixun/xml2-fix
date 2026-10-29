@@ -368,3 +368,37 @@ and ground handles.
 
 [Live acceptance and input driver](beta9-moves-live.md) cover the outstanding
 hardware, HP/defense and visible-pose checks.
+
+### Pickup attachment from the first frame (060 follow-up)
+
+The PC pickup now establishes the reciprocal generation-bearing owner handles
+before forcing the victim pose. Native `CCEAtkVictim` starts that pose at
+`4DB019`, then writes the owners only at `4DB313..4DB31F`. A victim callback
+between those operations previously released the pair as `no-carrier`.
+A rejected or missing victim transition leaves the prior owners and constraints
+intact.
+
+Pickup uses the animated hand constraint immediately, including Z. The old
+pickup callback moved XY by 1% and preserved the victim's ground Z until carry
+entry. Its time-zero `victim` event also applies `targetdistance=1` and
+`verticaloffset=-40`, which can overwrite a correction made in entry alone.
+The guarded `692318` event registration therefore executes native `4DAF00`
+once, then reconciles the hands only for our pickup handler and reciprocal
+pair. Ground, TK and established-carry events keep native behavior.
+
+The victim's facing is committed through `vt158` (`41C430`) before sampling
+bones. The ordinary `vt2c` angle setter (`41C3A0`) can blend rendered facing
+through actor+`1F4`; using its old world transform to compute an offset and then
+committing a different facing would misplace the first frame. Both pickup
+callbacks restore the marked physical constraints after a native reset and
+keep the hand midpoints aligned. Visibility/alpha controls are not changed.
+This immediate alignment deliberately replaces XML1's pickup interpolation for
+the PC port's first-frame attachment requirement.
+
+`test/carry_pickup_visual_fixture.hpp` uses the 082f roots (carrier Z44,
+victim Z4), empty owners, both team branches and actor callback orders. It runs
+the real native victim event with the authored distance/height, actor placement,
+pose displacement, bone wrappers, and owned `libIGMath` transforms. Its renderer
+boundary supplies sampled skeleton matrices and the committed world facing;
+turning/moving pickup, native reset and unrelated events are checked. No game
+or rendered frame is started, so real-pad visual acceptance remains a live check.

@@ -19,7 +19,7 @@ std::string requested_name;
 std::vector<std::string> air_events;
 int flight_rank=3,actor_team=1,victim_team=2,first_reads=0,releases=0,queries=0,preparations=0,notifications=0,ui_errors=0,feedbacks=0,debits=0,flight_sets=0,air_starts=0,bone_mask=0x61,anim_id=-1,generic_calls=0,selects=0,air_forces=0,sounds_played=0,displacements=0,air_placements=0;
 int drops=0;
-bool sequence_mode=false,event_mode=false;
+bool sequence_mode=false,event_mode=false,air_force_accept=true;
 bool round3_pose=false;
 bool clearance_blocked=false;
 bool live_character_clearance=false;
@@ -60,7 +60,7 @@ void* __fastcall air_named(void*,void*,const u32*,void* optional){check(optional
 void* __fastcall flight_named(void*,void*,const u32* token){check(token==ptr(0x78a8c8),"native landing resolves named Idle");return idle.data();}
 void __fastcall air_start(void* who,void*,void* chosen,int reset){++air_starts;check(reset==1&&(chosen==idle.data()||(event_mode&&chosen==move.data())),"source recovery starts named Idle reset1");idle_actors.push_back(who);air_events.push_back("idle");if(sequence_mode)put(who,0x378,chosen);}
 void __fastcall air_publish(void* who,void*){air_published.push_back(get<u32>(who,4));air_events.push_back("publish");}
-void __fastcall air_force(void* who,void*,void* chosen,int priority,float timing,u32 a,u32 b,u32 c){if(who==actor.data()){++descent_forces;if(chosen)++carry_entries;check(priority==-1&&timing==-1.f&&a==0&&b==0&&c==0&&requested_name=="flyguarddecide","descent enters named decide with source forced ABI");return;}++air_forces;check(who==victim.data()&&priority==-1&&timing==0.375f&&a==0&&b==1&&c==0,"carry forced transition six-argument ABI/timing");air_events.push_back("force");if(sequence_mode){reinterpret_cast<void(__thiscall*)(void*)>(0x42c270)(who);put(who,0x378,chosen);}}
+void __fastcall air_force(void* who,void*,void* chosen,int priority,float timing,u32 a,u32 b,u32 c){if(who==actor.data()){++descent_forces;if(chosen)++carry_entries;check(priority==-1&&timing==-1.f&&a==0&&b==0&&c==0&&requested_name=="flyguarddecide","descent enters named decide with source forced ABI");return;}++air_forces;check(who==victim.data()&&priority==-1&&timing==0.375f&&a==0&&b==1&&c==0,"carry forced transition six-argument ABI/timing");air_events.push_back("force");if(sequence_mode&&air_force_accept){reinterpret_cast<void(__thiscall*)(void*)>(0x42c270)(who);put(who,0x378,chosen);}}
 void* __fastcall air_action(void*,void*,int a){action_chosen=a;air_events.push_back("action");if(sequence_mode&&sequence_states&&(a==0||a==9||a==11))return sequence_nodes[a==0?0:a==9?1:2];return selected;}
 void __fastcall air_lock(void* who,void*,u32 handle){++locks;check(who==actor.data()&&(handle==0x2222||(sequence_mode&&handle==0)),"carry locks selected handle");air_events.push_back("lock");if(sequence_mode)put(who,0x76c,handle);}
 void __fastcall selection(void* who,void*,u32 h){++selects;check(who==actor.data()&&h==0x2222,"selection uses attacker target handle");air_events.push_back("select");}
@@ -171,10 +171,17 @@ void admission_tests(){
 void pickup_tests(){
  void* h=air_handler("ch_air_grab_pickup");auto enter=callback<entry_t>(h,1);auto frame=callback<frame_t>(h,4);
  air_reset();victim_team=actor_team;enter(h,nullptr,actor.data(),nullptr,air_context.data());check(requested_name=="airgrabpickupally"&&air_forces==1,"ally pickup entry selects the authored ally pose before its time-zero event");
- air_reset();enter(h,nullptr,actor.data(),nullptr,air_context.data());check(get<unsigned char>(victim.data(),0x764)==0x90&&air_published==std::vector<u32>{0x84}&&air_forces==1&&selects==1&&sounds_played==1&&requested_name=="airgrabpickupvictim","pickup marker/bit2/named victim/selection/force/sound");check(air_events==std::vector<std::string>{"publish","select","angles","force"},"pickup ordering before sound");
+ air_reset();enter(h,nullptr,actor.data(),nullptr,air_context.data());check(get<unsigned char>(victim.data(),0x764)==0x90&&air_published==std::vector<u32>{0x84,0x86,0x86,0x87}&&air_forces==1&&selects==1&&sounds_played==1&&requested_name=="airgrabpickupvictim","pickup marker/bit2/named victim/selection/force/sound");check(air_events==std::vector<std::string>{"publish","select","angles","force","publish","publish","publish"},"pickup ordering restores constraints and hand pose after force before sound");
  for(int c=0;c<2;++c){air_reset();if(c==0)target_present=false;else char_target=nullptr;enter(h,nullptr,actor.data(),nullptr,air_context.data());check(air_starts==1&&air_forces==0,"pickup missing or noncharacter target Idles");}
+ for(bool missing:{false,true}){
+  air_reset();sequence_mode=true;air_force_accept=false;move_present=!missing;
+  put(victim.data(),0x378,other.data());put(actor.data(),0x178,0x3333u);put(victim.data(),0x178,0x9999u);
+  enter(h,nullptr,actor.data(),air_input.data(),air_context.data());
+  check(get<u32>(actor.data(),0x178)==0x3333&&get<u32>(victim.data(),0x178)==0x9999&&get<u32>(victim.data(),4)==0x80&&get<unsigned char>(victim.data(),0x764)==0x80&&air_placements==0&&air_starts==1,"missing/refused victim pose leaves previous ownership and physical flags intact");
+  sequence_mode=false;air_force_accept=true;
+ }
  for(int c=0;c<2;++c){air_reset();sound_valid=c==0;sound_empty=c==0;enter(h,nullptr,actor.data(),nullptr,air_context.data());check(sounds_played==0,"missing or invalid sound not played");}
- for(int c=0;c<2;++c){air_reset();put(victim.data(),0x20,V{2,4,99});if(c)bone_mask=0;frame(h,nullptr,actor.data(),ptr(0x123));check(close_float(last_position.x,c?2.08f:2.28f)&&close_float(last_position.y,c?4.16f:4.46f)&&last_position.z==99&&close_float(last_angles.z,4.14f),"pickup per-callback XY 1% interpolation, fixed Z, yaw+3.14");}
+ for(int c=0;c<2;++c){air_reset();put(victim.data(),0x20,V{2,4,99});if(c)bone_mask=0;frame(h,nullptr,actor.data(),ptr(0x123));check(close_float(last_position.x,c?10.f:12.f)&&close_float(last_position.y,c?20.f:24.f)&&last_position.z==(c?30.f:129.f)&&close_float(last_angles.z,4.14f),"pickup aligns animated hands in XYZ with root fallback and yaw+3.14");}
 }
 void carry_tests(){
  void* h=air_handler("ch_air_grab_pickup_idle");auto enter=callback<entry_t>(h,1);auto tick=callback<update_t>(h,6);auto frame=callback<frame_t>(h,4);
@@ -634,6 +641,7 @@ void live_tk_victim_order_test(){
  }
 }
 #include "carry_native_probe_fixture.hpp"
+#include "carry_pickup_visual_fixture.hpp"
 void flight_tests(){
  const auto enter=get<entry_t>(ptr(0x6931f8),4),move_enter=get<entry_t>(ptr(0x6932d0),4);
  const auto tick=get<update_t>(ptr(0x6931f8),24);
@@ -669,7 +677,7 @@ void flight_tests(){
   unsigned saved=0,ignored=0;_controlfp_s(&saved,0,0);_controlfp_s(&ignored,pc|rc,_MCW_PC|_MCW_RC);const unsigned csr=_mm_getcsr();_mm_setcsr((csr&~0x6000u)|0x6000u|0x8000u);const unsigned entered=_mm_getcsr();unsigned short before_cw=0,after_cw=0;__asm fnstcw before_cw
   air_reset();now=2;upkeep(actor.data());__asm fnstcw after_cw
   check(debits==1&&last_debit==20&&before_cw==after_cw&&_mm_getcsr()==entered,"upkeep preserves x87/MXCSR across caller precision/rounding");
-  air_reset();callback<frame_t>(air_handler("ch_air_grab_pickup"),4)(nullptr,nullptr,actor.data(),nullptr);check(close_float(last_position.x,0.3f)&&close_float(last_position.y,0.5f)&&_mm_getcsr()==entered,"pickup FP bits stable under caller rounding/FTZ");
+  air_reset();callback<frame_t>(air_handler("ch_air_grab_pickup"),4)(nullptr,nullptr,actor.data(),nullptr);check(close_float(last_position.x,10.f)&&close_float(last_position.y,20.f)&&_mm_getcsr()==entered,"pickup FP bits stable under caller rounding/FTZ");
   const std::array<u32,3> actual_bits{std::bit_cast<u32>(last_position.x),std::bit_cast<u32>(last_position.y),std::bit_cast<u32>(last_angles.z)};if(first_fp){pickup_bits=actual_bits;first_fp=false;}check(actual_bits==pickup_bits,"pickup coordinates/yaw bit-identical across caller FP environments");
   _mm_setcsr(csr);_controlfp_s(&ignored,saved,_MCW_PC|_MCW_RC);
  }
@@ -681,6 +689,6 @@ int main(int argc,char** argv){
  SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
  AddVectoredExceptionHandler(1,[](PEXCEPTION_POINTERS e)->LONG{std::printf("air fixture exception %08lX at %p ESP=%08lX ECX=%08lX ESI=%08lX\n",e->ExceptionRecord->ExceptionCode,e->ExceptionRecord->ExceptionAddress,e->ContextRecord->Esp,e->ContextRecord->Ecx,e->ContextRecord->Esi);for(unsigned i=0;i<12;++i)std::printf(" %08X",reinterpret_cast<u32*>(e->ContextRecord->Esp)[i]);std::puts("");ExitProcess(1);});
  const int lifecycle=lifecycle_main(argc,argv);if(lifecycle&&!xml1_grab_carry::installed())return lifecycle;
- air_bind();complete_native_clearance_test();live_character_clearance_test();live_tk_victim_order_test();round3_contact_pose_tests();std::puts("admission");admission_tests();std::puts("finite energy");finite_energy_hold_test();std::puts("native shortcut");native_shortcut_admission_test();std::puts("native entry pose");native_entry_pose_test();std::puts("pickup");pickup_tests();std::puts("carry");carry_tests();std::puts("release");release_tests();std::puts("sequence");sequence_tests();std::puts("held acquisition");held_acquisition_test();std::puts("carry damage");carry_damage_test();std::puts("fastball authored event");fastball_authored_event_test();std::puts("flight");flight_tests();powerup_tests();native_bone_tests();std::puts("native world pose");native_world_pose_test();std::puts("native generic stick");native_generic_stick_test();
+ air_bind();complete_native_clearance_test();live_character_clearance_test();live_tk_victim_order_test();round3_contact_pose_tests();std::puts("admission");admission_tests();std::puts("finite energy");finite_energy_hold_test();std::puts("native shortcut");native_shortcut_admission_test();std::puts("native entry pose");native_entry_pose_test();std::puts("pickup");pickup_tests();std::puts("carry");carry_tests();std::puts("release");release_tests();std::puts("sequence");sequence_tests();std::puts("held acquisition");held_acquisition_test();std::puts("carry damage");carry_damage_test();std::puts("fastball authored event");fastball_authored_event_test();std::puts("flight");flight_tests();powerup_tests();native_bone_tests();std::puts("native world pose");native_world_pose_test();std::puts("pickup first frame");pickup_visual_test();std::puts("native generic stick");native_generic_stick_test();
  std::printf("%s flying carry callbacks: %d checks, %d failures\n",failures?"FAIL":"PASS",checks,failures);return failures?1:0;
 }

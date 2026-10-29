@@ -419,6 +419,7 @@ int main(int argc,char** argv){
     check(xml1_grab_carry::flying_carry()==!nocarry&&xml1_grab_carry::feature_mask()==(nocarry?23u:15u),"Xml1FlyingCarry selects mask 15 (carry) or 23 (no carry)");
     check(xml1_grab_carry::status().find(nocarry?"flying carry off":"flying carry + flight upkeep")!=std::string::npos,"status names the flying carry state");
     check(changed(0x433e6c,6)!=nocarry,"descent admission 0x433e6c written only with the flying carry");
+    check(changed(0x692318,4)!=nocarry,"pickup victim event reconciliation installed only with flying carry");
     check(changed(0x6931f8+4,4)&&changed(0x6932d0+4,4)&&changed(0x4ec7a0,5)&&changed(0x4f74b2,5),"fix7 entries, upkeep and %flight_pwr filter written either way");
     check(changed(timeout_va,5)&&changed(0x4f49e9,7)&&changed(0x4ee8b3,10)&&changed(0x4de896,8)&&changed(0x42c32f,6)&&changed(world_hit_gate,2)&&changed(hold_vtable+8,8)&&changed(victim_vtable+4,16),"ground grab, recovery, charge collision and world impact written either way");
     auto lookup=reinterpret_cast<void*(__cdecl*)(const char*)>(0x4fd860);void* handler=lookup("CH_GRAB_ATTACK");check(handler!=nullptr,"case-insensitive attack lookup");
