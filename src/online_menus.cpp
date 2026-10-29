@@ -44,6 +44,40 @@ using command_fn=bool(__thiscall*)(void*,const char*);
 using set_text_fn=void(__cdecl*)(void*,const char*,const char*,...);
 using hide_fn=void(__thiscall*)(void*,const char*,bool);
 bool ready=false;
+// The frontend table (602200), separate from W2's zone strings, keeps the
+// retail 1024-slot handle layout and +1008 arena offset. Shared Code focus
+// adds 32 distinct resource names. Retail's 7 KiB arena ran out, published
+// aliases to unwritten strings, then filled the table on repeated lookups.
+// Its probe at 419db4..419de0 has no full-cycle exit. Reserve 64 KiB and
+// check BOTH capacities before publishing; every refusal is the empty id.
+constexpr unsigned frontend_arena=0x10000;
+unsigned __fastcall frontend_intern(unsigned char* table,void*,const char* text,unsigned length,unsigned) {
+    if(!table || !text || !length || length>=frontend_arena) return 0;
+    unsigned hash=0;
+    for(unsigned i=0;i<length;++i) hash^=unsigned(static_cast<unsigned char>(text[i]))*(i+0x77u);
+    unsigned slot=(hash^(hash>>10))&0x3ff;
+    auto* offsets=reinterpret_cast<unsigned*>(table+4);
+    auto& used=*reinterpret_cast<unsigned*>(table+0x1004);
+    const auto refuse=[](const char* why) {
+        logger::write_once(std::string("online:frontend-strings-")+why,
+            "online menus: frontend string refused (%s); no slot or arena bytes published",why);
+        return 0u;
+    };
+    if(used<2 || used>=frontend_arena) return refuse("arena full");
+    for(unsigned tries=0;tries<1024;++tries,slot=(slot+1)&0x3ff) {
+        const auto offset=offsets[slot];
+        if(offset) {
+            if(offset<used && length<=used-offset && std::memcmp(table+0x1008+offset,text,length)==0)
+                return (*reinterpret_cast<unsigned*>(table)<<24)|slot;
+            continue;
+        }
+        if(length>=frontend_arena-used) return refuse("arena full");
+        std::memcpy(table+0x1008+used,text,length);
+        offsets[slot]=used;used+=length;
+        return (*reinterpret_cast<unsigned*>(table)<<24)|slot;
+    }
+    return refuse("table full");
+}
 entry_latch entry;
 DWORD default_clock() { return GetTickCount(); }
 DWORD (*clock_source)()=&default_clock;
@@ -65,6 +99,45 @@ struct binding_cache {
         if(menu!=id) { clear();menu=id; }
     }
 } bindings;
+// DATA text belongs to the widget, not the process-wide intern table. A fixed
+// buffer keeps returned pointers stable across updates and cached menu visits.
+// Release on resource close, including the two native lobby menu families.
+struct owned_text {
+    void* owner=nullptr;
+    unsigned name=0;
+    std::array<char,1024> value{};
+};
+std::map<void*,owned_text> owned_texts;
+bool text_identity(void* item,const owned_text& value) {
+    __try {
+        auto* p=static_cast<unsigned char*>(item);
+        return *reinterpret_cast<void**>(p+4)==value.owner &&
+            *reinterpret_cast<unsigned*>(p+8)==value.name && !*reinterpret_cast<unsigned*>(p+0xa0);
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+const char* owned_value(void* item) {
+    const auto found=owned_texts.find(item);
+    return found!=owned_texts.end() && text_identity(item,found->second) ? found->second.value.data() : nullptr;
+}
+const char* __fastcall owned_text_getter(void* item,void*) {
+    if(const char* value=owned_value(item)) return value;
+    return at<const char*(__thiscall*)(void*)>(0x5c67f0)(item);
+}
+void forget_text_owner(void* owner) {
+    for(auto it=owned_texts.begin();it!=owned_texts.end();)
+        if(it->second.owner==owner) it=owned_texts.erase(it);else ++it;
+}
+bool assign_owned_text(void* owner,void* item,const char* text) {
+    auto* p=static_cast<unsigned char*>(item);
+    const auto name=*reinterpret_cast<unsigned*>(p+8);
+    // A real parsed widget has both its owner and interned name. Fixture
+    // recorders lacking this identity retain the original binding path.
+    if(!name || *reinterpret_cast<void**>(p+4)!=owner) return false;
+    auto& value=owned_texts[item];value.owner=owner;value.name=name;
+    unsigned n=0;while(n<value.value.size()-1 && text[n]) ++n;
+    std::memcpy(value.value.data(),text,n);value.value[n]=0;
+    return true;
+}
 int accepted=-1;
 DWORD accepted_at=0;
 mailbox pending;
@@ -658,6 +731,15 @@ bool bind_text_native(void* menu,const char* item,const char* text) {
         if(!found) return false;
         const auto* vt=*static_cast<const std::uint32_t**>(found);
         if(vt[0x78/4]!=0x5c6850 || *reinterpret_cast<const std::uint32_t*>(static_cast<char*>(found)+0xa0)) return false;
+        // Native CText mouse handling reads $MENU prompts directly from +9c.
+        // They have a finite authored vocabulary and must keep that token.
+        if(!std::strstr(text,"$MENU") && vt[0x7c/4]==reinterpret_cast<std::uintptr_t>(&owned_text_getter) && assign_owned_text(menu,found,text)) {
+            // The native setter still establishes its normal nonempty token
+            // for hit testing, but reuses the already-interned widget name.
+            // Empty DATA keeps the original zero-token hit behavior.
+            at<set_text_fn>(0x5adcf0)(menu,item,"%s",text[0] ? item : "");return true;
+        }
+        owned_texts.erase(found);
         at<set_text_fn>(0x5adcf0)(menu,item,"%s",text);return true;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
@@ -1082,7 +1164,7 @@ void bind_broker(void* menu,screen s) {
     if(browse_selected>=browse_offset+browse_rows) browse_offset=browse_selected-(browse_rows-1);
     const auto version=broker_calls.version ? broker_calls.version() : std::string();
     // List header: count and age. The age is DLL-ticked from the completion of the last good list.
-    bind_text(menu,"list_count",v.list_known ? (std::string("- ")+std::to_string(v.rows.size())).c_str() : "");
+    bind_text(menu,"list_count",v.list_known ? browse_hint.c_str() : "");
     const bool aged=v.list_known && list_done;
     const std::uint32_t age=aged ? std::uint32_t(now_ms()-list_done_at) : 0;
     bind_text(menu,"list_age",aged ? age_text(age).c_str() : "");
@@ -2020,9 +2102,12 @@ bool engine_item_of(void* it,hits::engine_item& out) {
         out.neverfocus=(p[0x54]&0x20)!=0;
         const auto test=vt[0x74/4];
         out.text_test=test==0x5bc1b0 || test==0x5c6490 || (hits_text_alias && test==hits_text_alias);
-        const char* text=engine_string(*reinterpret_cast<std::uint32_t*>(p+0x24));
-        out.has_text=text && text[0];
-        if(!out.has_text && test!=0x5bc1b0) { const char* token=engine_string(*reinterpret_cast<std::uint32_t*>(p+0x9c)); out.has_text=token && token[0]; }
+        if(const char* value=owned_value(it)) out.has_text=value[0]!=0;
+        else {
+            const char* text=engine_string(*reinterpret_cast<std::uint32_t*>(p+0x24));
+            out.has_text=text && text[0];
+            if(!out.has_text && test!=0x5bc1b0) { const char* token=engine_string(*reinterpret_cast<std::uint32_t*>(p+0x9c)); out.has_text=token && token[0]; }
+        }
         std::int16_t f[6]; std::memcpy(f,p+0x70,sizeof f);
         out.box=hits::engine_rects(f[0],f[1],f[2],f[3],f[5]); return true;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -2082,6 +2167,35 @@ void hub_focus_follow(void* menu) {
 void* focus_of(void* menu) {
     // CMenu's focused item (+0x324: 0x5ae0a0 compares the hit item with it before setFocus).
     __try { return *reinterpret_cast<void**>(static_cast<char*>(menu)+0x324); } __except(EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+void compact_focus_follow(void* menu,screen s) {
+    __try {
+    if(s!=screen::code && s!=screen::browse) return;
+    // Gain-only records fit retail's 75-event pool. A gain replaces lc_focus,
+    // but native loss / hiding Retry can leave that model without a new gain.
+    // Replace it directly: setHidden would retain an obsolete saved model.
+    static void* last_target=nullptr;
+    static unsigned last_hidden=0;
+    auto* focused=static_cast<unsigned char*>(focus_of(menu));
+    if(focused && (focused[0x54]&0x2d)==9) { // shown, enabled, focus bit set, focusable
+        // Enabling/showing an item can retain native focus without emitting a
+        // gain. If our invisible model is still installed, replay the native
+        // loss/gain pair to restore its authored model (never its usecmd).
+        if(last_target && last_target==item_try(menu,"lc_focus") &&
+            *reinterpret_cast<unsigned*>(static_cast<unsigned char*>(last_target)+0x58)==last_hidden) {
+            const auto select=at<void(__thiscall*)(void*,void*)>(0x5aaf80);
+            select(menu,nullptr);select(menu,focused);
+        }
+        last_target=nullptr;return;
+    }
+    if(auto* target=item_try(menu,"lc_focus"))
+        if(*static_cast<unsigned*>(target)==0x6a0304) {
+            const auto resource=[&] { return *reinterpret_cast<unsigned*>(static_cast<unsigned char*>(target)+0x58); };
+            if(last_target==target && last_hidden==resource()) return;
+            at<void(__thiscall*)(void*,const char*,void*)>(0x5bbdd0)(target,"ui/models/model_hide",nullptr);
+            last_target=target;last_hidden=resource();
+        }
+    } __except(EXCEPTION_EXECUTE_HANDLER) { }
 }
 void menu_name(void* menu,char (&name)[64]) {
     __try { std::memcpy(name,static_cast<char*>(menu)+0xc,63); name[63]=0; } __except(EXCEPTION_EXECUTE_HANDLER) { name[0]=0; }
@@ -2805,6 +2919,7 @@ void tick_impl(void* menu,bool& native_called) {
     }
     show_notice(menu);
     bind_broker(menu,s);
+    compact_focus_follow(menu,s);
 }
 void __fastcall tick(void* menu,void*) {
     bool native_called=false;
@@ -2839,17 +2954,31 @@ void __fastcall deactivate(void* menu,void*) {
 }
 std::uint32_t __fastcall close(void* menu,void*) {
     deactivate_state(menu,false);
-    return at<close_fn>(0x5af5a0)(menu);
+    const auto result=at<close_fn>(0x5af5a0)(menu);
+    forget_text_owner(menu);return result;
+}
+std::uint32_t __fastcall host_text_close(void* menu,void*) {
+    const auto result=at<close_fn>(0x5ba270)(menu);
+    forget_text_owner(menu);return result;
+}
+std::uint32_t __fastcall join_text_close(void* menu,void*) {
+    const auto result=at<close_fn>(0x5c8020)(menu);
+    forget_text_owner(menu);return result;
 }
 }
 
 void keyboard(unsigned char* state) {
     if(!ready || !input_thread("keyboard",true)) return;
+    // Diagnostics must also work before the first custom-menu tick. This
+    // observes published manager/window cells only; it never creates a menu.
+    static bool escape_down=false;
+    const bool down=state && (state[1]&0x80)!=0;
+    if(hits_trace && down && !escape_down) advanced_escape_trace();
+    escape_down=down;
     if(!game_thread.load()) return; // no frontend/input model work before the first game tick
     try { native_session_watch(); } catch(...) { }
     if(!state) { keyboard_edges.reset();keyboard_input.clear();lobby_state.copy_keyboard=lobby_state.role_keyboard=lobby_state.role_key_pending=false;return; }
     const auto edges=keyboard_edges.sample(state);
-    if(hits_trace && edges[0x01]) advanced_escape_trace();
     // DirectInput can poll before frontend creation. Never invoke the lazy
     // 0x5d8920 getter here; even validation must use the already-published cell.
     auto* menu=current_peek();
@@ -2933,6 +3062,16 @@ patch_transaction::contribution contribution() {
     c.owner="online menus";
     for(const auto& g:online_menus_guards::guards)
         c.guards.push_back({g.va,patch_transaction::bytes_of(g.hex),g.what});
+    for(const auto va:{0x6a02c0u,0x6a1148u})
+        c.writes.push_back(patch_transaction::relocation(va,"",false,
+            static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&owned_text_getter)),0,"owned DATA text getter"));
+    c.writes.push_back(patch_transaction::relocation(0x69f2bc,"",false,
+        static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&host_text_close)),0,"host DATA lifetime"));
+    c.writes.push_back(patch_transaction::relocation(0x69f384,"",false,
+        static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&join_text_close)),0,"join DATA lifetime"));
+    c.writes.push_back({0x60220e,patch_transaction::bytes_of("08100100"),"frontend string arena allocation"});
+    c.writes.push_back(patch_transaction::relocation(0x41a460,"e9",true,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&frontend_intern)),0,"bounded frontend string interner"));
     c.writes.push_back(patch_transaction::relocation(0x5c971b,"e8",true,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&capture_stub)),1,"accept controller"));
     c.writes.push_back(patch_transaction::relocation(0x6a23d8,"",false,

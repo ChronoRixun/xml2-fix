@@ -15,7 +15,9 @@
 #include <cmath>
 #include <clocale>
 #include <algorithm>
+#include <atomic>
 #include <cstdarg>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -137,7 +139,8 @@ void __fastcall tick_stub(void* menu,void*) {
 }
 std::uint32_t __fastcall close_stub(void*,void*) { set_current(nullptr);return 0x12345678; }
 unsigned leave_label_native_writes=0;
-void __cdecl text_stub(void*,const char* item,const char* format,...) {
+void* __fastcall item_stub(void*,void*,const char*);
+void __cdecl text_stub(void* menu,const char* item,const char* format,...) {
     ++text_writes;
     if(mode.starts_with("r4-") && std::string_view(format)!="%s") {
         assert(std::string_view(format)=="Unready" || std::string_view(format)=="Leave");texts[item]=format;
@@ -147,6 +150,16 @@ void __cdecl text_stub(void*,const char* item,const char* format,...) {
     if(mode.starts_with("r6-") && std::string_view(item)=="data_gamename" && std::string_view(format)!="%s") { texts[item]=format;return; }
     assert(std::string_view(format)=="%s");
     va_list args;va_start(args,format);texts[item]=va_arg(args,const char*);va_end(args);
+    // Production DATA retains a native name token and supplies its displayed
+    // value through the getter. Keep this recorder faithful to that contract.
+    if(texts[item]==item || texts[item].empty()) if(auto* found=item_stub(menu,nullptr,item)) {
+        auto* p=static_cast<unsigned char*>(found);const auto* vt=*reinterpret_cast<unsigned**>(p);
+        const auto getter=*reinterpret_cast<unsigned*>(0x6a02c0);
+        if(*reinterpret_cast<void**>(p+4)==menu && *reinterpret_cast<unsigned*>(p+8) && getter!=0x5c67f0 && vt[0x7c/4]==getter) {
+            const char* value=reinterpret_cast<const char*(__thiscall*)(void*)>(vt[0x7c/4])(found);
+            texts[item]=value;*reinterpret_cast<unsigned*>(p+0x9c)=value[0] ? *reinterpret_cast<unsigned*>(p+8) : 0;
+        }
+    }
 }
 std::map<std::string,bool> visibility;
 void* (*scene_lookup)(const char*)=nullptr; // r17-hub-focus: real text items; 0x5ade10 = find the item, call its vt+8 setHidden
@@ -179,8 +192,8 @@ void* __fastcall item_stub(void*,void*,const char* name) {
     // Live 060p: the authored scenes are MENU_ITEM_MODEL items (vtable 0x6a0304, setHidden 0x5c4b90), not
     // text items. Round 5b's views fixture now hands those names a real model-item vtable, so a hide()
     // that only accepts the text setter fails these assertions instead of passing on a fake.
-    if(mode=="r5b-views" && model_scene(name)) return model_item.data();
-    if((mode=="r5-broker" || mode.starts_with("r5-browse-") || mode=="r5-retail-lobby" || mode=="r5b-views") &&
+    if((mode=="r5b-views" || mode=="r20-browse-one") && model_scene(name)) return model_item.data();
+    if((mode=="r5-broker" || mode.starts_with("r5-browse-") || mode=="r5-retail-lobby" || (mode=="r5b-views" || mode=="r20-browse-one")) &&
         (std::string_view(name).starts_with("room_") || std::string_view(name).starts_with("prompt_"))) {
         static std::map<std::string,std::array<unsigned char,0xb0>> rows;
         auto& it=rows[name];if(!*reinterpret_cast<unsigned*>(it.data())) it=text_item;
@@ -196,7 +209,7 @@ void* __fastcall item_stub(void*,void*,const char* name) {
         return item.data();
     }
     // 0.6 preview fix L: the Host setup rows are distinct objects, so the side marker can follow the focused one.
-    if(mode=="r5b-views" && (std::string_view(name)=="visibility" || std::string_view(name)=="room_name" || std::string_view(name)=="edit_room" || std::string_view(name)=="campaign")) {
+    if((mode=="r5b-views" || mode=="r20-browse-one") && (std::string_view(name)=="visibility" || std::string_view(name)=="room_name" || std::string_view(name)=="edit_room" || std::string_view(name)=="campaign")) {
         static std::map<std::string,std::array<unsigned char,0xb0>,std::less<>> rows;
         auto& item=rows[name];if(!*reinterpret_cast<unsigned*>(item.data())) item=text_item;
         return item.data();
@@ -482,6 +495,8 @@ std::vector<std::string> r6_log; // every r6-* log line (fix F: the session-end 
 #include "online_menus_live_input.inl"
 #include "online_menus_model.inl"
 #include "online_menus_hub.inl"
+#include "online_menus_strings.inl"
+#include "online_menus_data.inl"
 }
 namespace ini { std::optional<std::string> text(const wchar_t*,const wchar_t*) {
     return mode=="off" ? std::nullopt : mode=="zero" ? std::optional<std::string>("0") : std::optional<std::string>("1");
@@ -501,7 +516,7 @@ void set_resolution(unsigned width,unsigned height) { test_options.width=int(wid
 }
 namespace logger {
 const std::filesystem::path& module_dir() { return root; }
-void write(const char* format,...) { if(!mode.starts_with("r6-") && mode!="r4-r6" && !mode.starts_with("r16-hits")) return; // r6 fixtures run the native lobby as "r4-r6"; r16-hits: the mouse diagnostic (fix K)
+void write(const char* format,...) { if(!mode.starts_with("r21-") && !mode.starts_with("r20-") && !mode.starts_with("r6-") && mode!="r4-r6" && !mode.starts_with("r16-hits")) return; // r6 fixtures run the native lobby as "r4-r6"; r16-hits: the mouse diagnostic (fix K)
     char buffer[512]{};va_list args;va_start(args,format);std::vsnprintf(buffer,sizeof(buffer),format,args);va_end(args);std::cout<<buffer<<"\n";r6_log.push_back(buffer); }
 void write_once(std::string_view key,const char* format,...) {
     if(once_logs.contains(std::string(key))) return;
@@ -541,6 +556,7 @@ int main(int argc,char** argv) {
     if(mode=="r9-anchor-capacity") { native_fixture::anchor_capacity_run(nullptr);return 0; }
     std::vector<unsigned char> before(reinterpret_cast<unsigned char*>(0x401000),reinterpret_cast<unsigned char*>(0xb01000));
     retail_original=before;
+    if(mode=="r20-string-parity") frontend_strings_fixture::parity_before();
     if(mode=="rollback" || mode=="protect" || mode=="flush" || mode=="retain") {
         auto c=online_menus::contribution();const auto site=c.writes.front().va;
         patch_transaction::transaction tx;tx.add(std::move(c));patch_transaction::hooks hooks;
@@ -561,10 +577,11 @@ int main(int argc,char** argv) {
     auto& overflow=script_function_overflow::table();overflow.reset(704);
     if(mode=="capacity") { ::capacity=320;overflow.reset(0); }
     online_menus::install_hooks install_hooks;
+    if(mode=="r21-data-churn") { data_text_fixture::prepare();install_hooks.broker=&data_text_fixture::api; }
     install_hooks.clock=clock_stub;install_hooks.wall_clock=wall_stub;install_hooks.before_request=request_fault_stub;install_hooks.before_tick=tick_fault_stub;
     if(mode.starts_with("r4-")) install_hooks.lobby_fields=lobby_fields_stub;
     if(mode.starts_with("r8-party")) { party_api.remove_member=party_remove_stub;install_hooks.broker=&party_api;install_hooks.lobby_fields=party_fields_stub; }
-    if(mode=="r5-broker" || mode=="r5-retail-lobby" || mode=="r5b-views" || mode.starts_with("r5-browse-") || mode=="r17-hub-focus" || mode=="r16-hits-browse") install_hooks.broker=&menu_api;
+    if(mode=="r5-broker" || mode=="r5-retail-lobby" || (mode=="r5b-views" || mode=="r20-browse-one") || mode.starts_with("r5-browse-") || mode=="r17-hub-focus" || mode=="r16-hits-browse") install_hooks.broker=&menu_api;
     if(mode=="r15-errors" || mode=="r16-hits-live") install_hooks.broker=&menu_api15;
     if(mode.starts_with("r6-")) install_hooks.broker=&native_fixture::api;
     patch_transaction::hooks transaction_hooks;
@@ -588,6 +605,12 @@ int main(int argc,char** argv) {
         std::cout<<"online menus "<<mode<<" PASS (no writes or registrations)\n";return 0;
     }
     assert(online_menus::installed());
+    if(mode=="r20-string-parity") { frontend_strings_fixture::parity_after();return 0; }
+    if(mode=="r20-string-allocation") { frontend_strings_fixture::allocation();return 0; }
+    if(mode=="r20-string-arena") { frontend_strings_fixture::arena_full();return 0; }
+    if(mode=="r20-code-strings") { frontend_strings_fixture::run();return 0; }
+    if(mode=="r20-code-spin") { frontend_strings_fixture::code_spin();return 0; }
+    if(mode=="r20-string-full") { frontend_strings_fixture::full();return 0; }
     if(mode=="r18-options-opening-back") { options_close_fixture::opening_back();return 0; }
     if(mode.starts_with("r18-options-orphan")) { options_close_fixture::orphan();return 0; }
     if(mode=="r19-options-resolution") { asset_files();options_resolution_fixture::run();return 0; }
@@ -601,6 +624,17 @@ int main(int argc,char** argv) {
     online_menus::install(reinterpret_cast<HMODULE>(0x400000));
     assert(overflow.count()==1 && std::memcmp(installed_image.data(),reinterpret_cast<void*>(0x401000),installed_image.size())==0);
     asset_files();fake_services();
+    if(mode=="r21-data-churn") { data_text_fixture::run(entry);return 0; }
+    if(mode=="r20-code-open-close") { frontend_strings_fixture::open_close();return 0; }
+    if(mode=="r20-retry-code" || mode=="r20-retry-browse") { frontend_strings_fixture::retry();return 0; }
+    if(mode=="r20-options-trace") {
+        std::array<unsigned char,256> keys{};
+        put(child.data(),0,0x6a1f64);set_current(child.data());
+        put(mgr.data(),0x866a0,1);*reinterpret_cast<void**>(0xa6ad34)=child.data();
+        online_menus::keyboard(keys.data());keys[1]=128;online_menus::keyboard(keys.data());online_menus::keyboard(keys.data());
+        assert(std::count_if(r6_log.begin(),r6_log.end(),[](const auto& s) { return s.find("Advanced Options Esc transition=1 windows=1")!=s.npos; })==1);
+        std::cout<<"Advanced Options pre-online Esc diagnostic PASS: one line per edge, no online tick required\n";return 0;
+    }
     if(mode=="r5b-model-hidden") { model_scene_fixture::tests();return 0; }
     if(mode.starts_with("r4-")) { lobby_tests(entry);return 0; }
     if(mode.starts_with("r8-party")) { party_tests(entry);return 0; }
@@ -707,7 +741,7 @@ int main(int argc,char** argv) {
     if(mode=="r16-model-start") { model_fixture::run();return 0; }
     if(mode=="r17-hub-focus") { hub_fixture::run(entry);return 0; }
     if(mode=="r17-codex-route") { codex_fixture::run();return 0; }
-    if(mode=="r5b-views") { broker_presentation_tests(entry);return 0; }
+    if((mode=="r5b-views" || mode=="r20-browse-one")) { broker_presentation_tests(entry);return 0; }
     if(mode=="r15-errors") { error_table_tests(entry);return 0; }
     if(mode.starts_with("r6-nit-") || mode.starts_with("r6-end-")) { native_fixture::review_run(entry);return 0; }
     if(mode=="r6-native") { native_fixture::run(entry);return 0; }

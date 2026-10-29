@@ -222,6 +222,17 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
     auto screen=[&](const char* name) { std::strcpy(reinterpret_cast<char*>(child.data()+0xc),name);child[4]=1;set_current(child.data()); };
     auto shown=[&](const std::string& key) { return visibility.count(key) && !visibility[key]; };
     auto gone=[&](const std::string& key) { return visibility.count(key) && visibility[key]; };
+    if(mode=="r20-browse-one") {
+        menu_rows_json="{\"code\":\"AAAAAAAB\",\"name\":\"Only room\",\"players\":1,\"max_players\":4}";
+        screen("lc_browse");tick(child.data(),nullptr);menu_auth=true;tick(child.data(),nullptr);
+        menu_complete=true;tick(child.data(),nullptr);
+        assert(menu_view().rows.size()==1 && !menu_view().stale);
+        assert(texts["list_count"]=="1 public game" && texts["room_0_0"]=="Only room");
+        ticks+=70000;post(intent::refresh);tick(child.data(),nullptr);
+        menu_error="broker_unreachable";menu_complete=true;tick(child.data(),nullptr);
+        assert(menu_view().stale && texts["list_count"]=="1 last known game" && texts["room_0_0"]=="Only room");
+        std::cout<<"One-room Browse PASS: visible fresh/stale singular header and ROOM cell\n";return;
+    }
     // Pure selectors first: boundaries, wraparound and hostile ids.
     {   // 060q live: a screen name that does not fit its field ends in "..." (never clipped silently, never empty, never longer).
         assert(fit_name("Player",112,1.0)=="Player" && fit_name("Logan",64*.8,.69)=="Logan" && fit_name("",112,1.0).empty());
@@ -263,7 +274,7 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
     menu_complete=true;tick(child.data(),nullptr);
     const auto done_at=ticks;
     assert(menu_view().rows.size()==8 && menu_view().list_known && !menu_view().stale);
-    assert(texts["list_count"]=="- 8" && texts["list_age"]=="Updated 0 s ago" && gone("lc_age_fill1"));
+    assert(texts["list_count"]=="8 public games" && texts["list_age"]=="Updated 0 s ago" && gone("lc_age_fill1"));
     assert(texts["self_initial"].size()==1 && texts["self_initial"]==std::string(1,char(std::toupper(texts["self_name"][0]))));
     ticks+=4000;tick(child.data(),nullptr);
     assert(texts["list_age"]=="Updated 4 s ago" && shown("lc_age_fill1") && shown("lc_age_fill2") && gone("lc_age_fill3") && gone("lc_age_fill5"));
@@ -309,7 +320,7 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
     menu_auth=true;menu_complete=true;tick(child.data(),nullptr);
     assert(menu_view().state==bm::phase::retry_wait && menu_view().error=="malformed_reply" && menu_view().stale && menu_view().rows.size()==8);
     assert(shown("lc_broker_stale") && shown("lc_broker_err_generic") && shown("retry") && enabled_items["retry"] && !enabled_items["prompt_join"]);
-    assert(texts["list_age"]==age_text(ticks-done_at) && texts["list_count"]=="- 8"); // the age keeps counting from the last good list
+    assert(texts["list_age"]==age_text(ticks-done_at) && texts["list_count"]=="8 last known games"); // the age keeps counting from the last good list
     // A stale list far in the past reads in minutes.
     ticks=done_at+125000;tick(child.data(),nullptr);assert(texts["list_age"]=="Updated 2 min ago" && shown("lc_age_fill5"));
 
@@ -347,7 +358,7 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
     ticks+=70000;tick(child.data(),nullptr);assert(menu_broker.pending());
     menu_auth=true;menu_complete=true;tick(child.data(),nullptr);
     assert(menu_view().rows.empty() && menu_view().list_known && !menu_view().stale);
-    assert(texts["list_count"]=="- 0" && shown("lc_broker_empty") && texts["details"].empty() && texts["details_name"].empty());
+    assert(texts["list_count"]=="No public games" && shown("lc_broker_empty") && texts["details"].empty() && texts["details_name"].empty());
     for(const char* kind:row_status_key) assert(gone(std::string("lc_row0_st_")+kind));
     for(unsigned r=0;r<browse_rows;++r) assert(gone("lc_row"+std::to_string(r)+"_dim") && gone("lc_row"+std::to_string(r)+"_build_check") && gone("lc_row"+std::to_string(r)+"_pips_0"));
 
@@ -362,9 +373,11 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
     ticks+=70000;menu_rows_json="{"+code(0)+",\"name\":\"Only room\"}";
     post(intent::refresh);tick(child.data(),nullptr);menu_complete=true;tick(child.data(),nullptr);
     assert(texts["browse_hint"]=="1 public game");
+    assert(texts["list_count"]=="1 public game" && texts["room_0_0"]=="Only room");
     ticks+=70000;post(intent::refresh);tick(child.data(),nullptr);
     menu_error="broker_unreachable";menu_complete=true;tick(child.data(),nullptr);
     assert(texts["browse_hint"]=="1 last known game");
+    assert(texts["list_count"]=="1 last known game" && texts["room_0_0"]=="Only room");
 
     // A committed room whose broker went away: the offline-room line shows, the stale label never beside it.
     menu_broker.cancel();menu_broker.stopped();ticks+=70000;
