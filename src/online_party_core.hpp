@@ -382,7 +382,8 @@ namespace online_party_core
 	// ---- the lobby's card split (online_room::party): facts for native rows, and broker-only pending cards ----
 	struct card;
 	struct lobby_split_result { std::vector<const card*> rows, pending; };
-	inline lobby_split_result lobby_split(const std::vector<card>& cards, std::size_t native_count, std::size_t roster_size);
+	inline lobby_split_result lobby_split(const std::vector<card>& cards, std::size_t native_count, std::size_t roster_size,
+	                                     const std::vector<int>* native_indices = nullptr);
 
 	// ---- the model ----
 	// What this PC observes itself about one other broker-roster member (game thread, every tick).
@@ -688,16 +689,20 @@ namespace online_party_core
 		}
 	};
 
-	// Cards with a native index (this PC's own mapping, or a host-reported one) only lend their facts to that native row
-	// (the menu matches by index); a member without one is a pending card - at most the broker roster's size minus the
-	// native rows, so a member the native list already shows is never drawn twice (review S1).
-	inline lobby_split_result lobby_split(const std::vector<card>& cards, std::size_t native_count, std::size_t roster_size)
+	// Match facts to this PC's native rows by index. Remaining room members have
+	// presentation-only cards, capped at roster size minus native rows, so nobody
+	// is drawn twice. A remote index alone cannot hide a late guest's host.
+	inline lobby_split_result lobby_split(const std::vector<card>& cards, std::size_t native_count, std::size_t roster_size,
+	                                     const std::vector<int>* native_indices)
 	{
 		lobby_split_result out;
 		const std::size_t room = std::min<std::size_t>(3, roster_size > native_count ? roster_size - native_count : 0);
 		for (const auto& c : cards)
 		{
-			if (c.index >= 0) { if (out.rows.size() < 4) out.rows.push_back(&c); }
+			// A host-table index does not create that participant on a waiting guest.
+			// Match this PC's real native rows when supplied, not just a remote index.
+			const bool listed = c.index >= 0 && (!native_indices || std::find(native_indices->begin(), native_indices->end(), c.index) != native_indices->end());
+			if (listed) { if (out.rows.size() < 4) out.rows.push_back(&c); }
 			else if (!c.self && out.pending.size() < room) out.pending.push_back(&c);
 		}
 		return out;

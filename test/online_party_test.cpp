@@ -608,6 +608,18 @@ int main()
 		check(split.rows.size() == 1 && split.pending.size() == 2, "S1: two broker-only members with one native row -> two pending cards");
 		split = P::lobby_split(hc, 2, h.roster_size());
 		check(split.pending.size() == 1, "S1: pending cards capped at roster size minus native rows");
+		// 060s: a rejoined guest has only local index 1. Even a host table
+		// advertising index 0 cannot turn that host into a native row here.
+		std::vector<P::card> waiting(2);
+		waiting[0].self=true;waiting[0].index=1;
+		waiting[1].host=true;waiting[1].index=0;waiting[1].now=P::phase::playing;
+		const std::vector<int> local_rows{1};
+		split=P::lobby_split(waiting,1,2,&local_rows);
+		check(split.rows.size()==1 && split.pending.size()==1 && split.pending[0]->host,
+		      "late guest: host with remote index but no local native record remains a visible room-only host card");
+		waiting[1].index=-1;split=P::lobby_split(waiting,1,2,&local_rows);
+		check(split.rows.size()==1 && split.pending.size()==1 && split.pending[0]->host,
+		      "late guest: host without any native index is shown too");
 	}
 
 	// ---- review N1: transient roster skew is not a refusal; the mute counter decays ----

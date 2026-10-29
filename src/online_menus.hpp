@@ -21,7 +21,7 @@ struct lobby_fixture {
     member members[4]{};
     unsigned count=0;
     // Broker-roster members without a native row yet (Connecting / Checking build): never kick targets.
-    struct pending_member { char name[32]{}; int phase=0; int build=0; int ping_ms=-1; bool ping_to_host=false; int route=0; };
+    struct pending_member { char name[32]{}; int phase=0; int build=0; int ping_ms=-1; bool ping_to_host=false; int route=0; bool host=false; };
     pending_member pending[3]{};
     unsigned pending_count=0;
     // Round 8: this PC hosts the native session / a native session is set up (online_room::party).
@@ -67,6 +67,7 @@ struct broker_api {
     // Optional (0.6 preview fix J): the host's own departure notice ended this guest's session - its connection closing
     // afterwards is that departure, not a second loss.
     void (*suppress_host_lost)()=nullptr;
+    void (*guest_admitted)()=nullptr;
 };
 void keyboard(unsigned char* state);
 bool requested();

@@ -332,7 +332,9 @@ namespace join_in_progress
 		void advance(void* s, bool loading, void* pause)
 		{
 			const auto now = GetTickCount();
-			const bool pending_load = loading || zone_load_pending();
+			// Only the synchronous area boundary may admit a waiting player. The same
+			// all-loaded query also runs when Team Management opens (060s failure 3).
+			const bool pending_load = area_load;
 			for (auto& seat : machine.seats)
 			{
 				if (seat.at == stage::free) continue;
@@ -631,6 +633,26 @@ namespace join_in_progress
 				logger::write("join in progress: player %d admitted while the session plays - pending (outside the lockstep) until the next zone load", index);
 		}
 
+		char loaded_without_pending(void* pause, char native)
+		{
+			if (native || !pause) return native;
+			__try
+			{
+				void* s = session();
+				if (!s || !host(s)) return native;
+				bool skipped = false;
+				for (void* n = first(s); n; n = at<void*>(n, node_next))
+				{
+					const void* record = at<void*>(n, node_record);
+					if (machine.pending(record)) { skipped = true; continue; }
+					const int index = index_of(record);
+					if (index < 0 || index > 3) return native;
+					if (!at<std::uint32_t>(pause, pause_loaded + index * 4)) return 0;
+				}
+				return skipped ? 1 : native;
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER) { return native; }
+		}
 		char __fastcall all_loaded_bridge(void* pause, void*)
 		{
 			const char native = fn<loaded_t>(all_loaded)(pause);
@@ -638,6 +660,9 @@ namespace join_in_progress
 			// load (nonzero grid entries), before the later zone-loaded phase (2); do not hold that first phase.
 			if (epoch.active && epoch.started) return native;
 			if (!machine.any()) return native;
+			// 0x60c350 walks every record's +0x94 grid, including a late player
+			// that cannot report loaded yet. Team waits only for its current cohort.
+			if (!area_load) return loaded_without_pending(pause, native);
 			return guarded_advance(true, pause) ? 0 : native;
 		}
 

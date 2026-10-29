@@ -272,6 +272,7 @@ void native_session_leave() {
 }
 // EBP at the patched 0x612070 call (0x612c40's frame when the clear comes from a removal; online_menus_rules kicked_by_host).
 std::uintptr_t cleared_frame=0;
+bool native_guest_end_pending=false; // drain after the retail removal returns, before the Join tick can show its own dialog
 unsigned session_clears=0; // wrapper entries (one kick can clear twice: 0x6123e0 inside 0x612c40, review E finding 6)
 bool removal_was_kick(std::uintptr_t frame,std::uintptr_t local_record) {
     __try {
@@ -291,14 +292,15 @@ bool removal_was_kick(std::uintptr_t frame,std::uintptr_t local_record) {
 // host-left panel instead: the reason argument is cleared (no native text dialog), +0x44c is cleared (no takeover offer)
 // and, in a running zone, "mainmenuexit 1" is queued (the stock No: resetgame + main menu, no dialog of its own).
 bool native_console_queue(void* console,const char* line);
-struct removal_frame { bool notice=false,local=false; std::uint32_t reason=0; };
+struct removal_frame { bool notice=false,local=false,removal=false; std::uint32_t reason=0; };
 removal_frame removal_frame_read(std::uintptr_t frame,std::uintptr_t local_record) {
     removal_frame r;
     __try {
         if(!frame) return r;
         const auto* f=reinterpret_cast<const std::uint32_t*>(frame);
         r.notice=f[1]==removal_notice_return && f[2]!=0;
-        r.local=r.notice && (f[2]==local_record || (*reinterpret_cast<const std::uint32_t*>(std::uintptr_t(f[2])+0x1c)&1u));
+        r.removal=(r.notice || f[1]==removal_drop_return) && f[2]!=0;
+        r.local=r.removal && (f[2]==local_record || (*reinterpret_cast<const std::uint32_t*>(std::uintptr_t(f[2])+0x1c)&1u));
         r.reason=f[3];
     } __except(EXCEPTION_EXECUTE_HANDLER) { r={}; }
     return r;
@@ -308,10 +310,12 @@ void native_end_quietly(void* session,std::uintptr_t frame,const char* why) {
     __try {
         auto* bytes=static_cast<unsigned char*>(session);
         in_zone=bytes[0x44c]!=0;bytes[0x44c]=0;
-        if(frame && reinterpret_cast<const std::uint32_t*>(frame)[1]==removal_notice_return) { reinterpret_cast<std::uint32_t*>(frame)[3]=0;quieted=true; }
+        if(frame && (reinterpret_cast<const std::uint32_t*>(frame)[1]==removal_notice_return ||
+                     reinterpret_cast<const std::uint32_t*>(frame)[1]==removal_drop_return)) { reinterpret_cast<std::uint32_t*>(frame)[3]=0;quieted=true; }
     } __except(EXCEPTION_EXECUTE_HANDLER) { }
     bool queued=false;
     if(in_zone) { __try { queued=native_console_queue(at<getter>(0x55c890)(),"mainmenuexit 1"); } __except(EXCEPTION_EXECUTE_HANDLER) { queued=false; } }
+    else native_guest_end_pending=true;
     logger::write("online menus: %s - native %s%s",why,quieted ? "dialog suppressed" : "dialog left as is",
         in_zone ? (queued ? "; no takeover offer, back to the main menu (mainmenuexit 1)" : "; no takeover offer; main menu request refused") : "");
 }
@@ -341,14 +345,17 @@ void __fastcall native_session_cleared(void* session,void*,bool keep_local) {
                 else logger::write("online menus: the host removed this PC from the game (its in-session removal notice, rule 64); the Hub shows lc_notice_removed");
                 // The lobby Kick keeps its native "dropped" text (060r 3a); a running zone's removal never offers the takeover.
                 if(*(static_cast<unsigned char*>(session)+0x44c)) native_end_quietly(session,frame,"removed in a running game");
-            } else if(native_flow.phase==native_phase::guest && host_left_by_notice(removal.notice,removal.local,removal.reason)) {
+            } else if(native_flow.phase==native_phase::guest && host_left_by_notice(removal.notice || (removal.removal && !removal.local),removal.local,removal.reason)) {
                 // The host's own Leave / Quit notice (0x2b with the host's record, 0x1106 / 0x1107 / 0x10cc): the 0.6 host-left
                 // panel at the Hub, never the native "The host has left the game." or the takeover offer.
                 if(broker_calls.suppress_host_lost) { try { broker_calls.suppress_host_lost(); } catch(...) { } }
                 host_left_state.raise();
                 native_end_quietly(session,frame,"the host left the game; the Hub shows the host-left panel");
             } else if(native_flow.phase==native_phase::guest && broker_calls.host_lost) {
-                try { if(broker_calls.host_lost()) host_left_state.raise(); } catch(...) { }
+                try { if(broker_calls.host_lost()) {
+                    host_left_state.raise();
+                    native_end_quietly(session,frame,"the host connection ended; the Hub shows the host-left panel");
+                } } catch(...) { }
             }
             native_flow.touched=false; // the native session is already torn down
             try { native_flow_cancel(); } catch(...) { logger::write("online menus: native session end: ownership cleanup failed"); }
@@ -374,6 +381,20 @@ void native_session_watch() {
     const bool lobby=native_flow.lobby_active && (native_flow.phase==native_phase::host || native_flow.phase==native_phase::guest);
     const bool room=broker_live() && broker_view().state==broker::phase::room;
     if(!lobby && !room) return;
+    // 060s failure 5: a late joiner has only its own native record. There is no
+    // host record for the retail watchdog to remove, and the transport remains
+    // alive after the authenticated host tunnel closes. End this admitted guest
+    // from that close, including the unbound-tunnel case marked at admission.
+    if(lobby && native_flow.phase==native_phase::guest && broker_calls.host_lost && broker_calls.host_lost()) {
+        const bool removed=broker_calls.removed_by_host && broker_calls.removed_by_host();
+        if(!removed && !removed_notice) {
+            host_left_state.raise();
+            native_end_quietly(at<void*>(0xa53058),0,"the admitted guest lost its host; the Hub shows the host-left panel");
+            native_flow_cancel();
+            native_session_leave();
+            return;
+        }
+    }
     if(!native_transport_gone() && !native_session_transport_cleared()) return;
     // Once per room (fix J live 08:53: the deferred leave waits for a transport tick that no longer comes, so the watch
     // must leave at once and only once).
@@ -822,6 +843,7 @@ bool native_lobby_entered(void* menu) {
         native_flow_error("native_lobby_generation");return false;
     }
     native_flow.lobby_active=true;native_flow.host_leave=false;
+    if(guest && broker_calls.guest_admitted) broker_calls.guest_admitted();
     native_dispatcher_line(host ? "host lobby" : "join lobby");
     return true;
 }

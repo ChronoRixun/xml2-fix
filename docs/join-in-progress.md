@@ -40,6 +40,10 @@ the other PC)" / "(disabled on this PC)".
 * **Bring-in at the next zone load.** The synchronous area boundary at `0x484def` latches the transition and runs
   the native add before loading. Pump polling alone misses this interval. Controller allocation and the native
   player-added notice run at this boundary. Mesh completion preserves both native topology and `0x25` replies.
+  The shared all-loaded query also runs in Team Management. It must preserve pending players unless the actual
+  synchronous area boundary has latched; opening Team Management is not a bring-in boundary.
+  Its loaded query excludes pending records from the barrier without writing their grid entries; every existing
+  participant must still report loaded before Team Management can proceed.
   Once the host has loaded, its serializer (`save_format::serialize_wrapper`) supplies one canonical live image to
   the native campaign sender, which streams `G/H` to every remote participant. The consumed serializer cursor is
   rewound before the host replays its own wrapper; receivers initialize that cursor separately. New Game mode 1 is normalized to full

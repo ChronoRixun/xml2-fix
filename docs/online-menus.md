@@ -1584,3 +1584,10 @@ Items 7, 8, 9 and 10 of the 060r fix brief (agent L; no launches - the live ques
 Live questions for the next check: (1) the `lobby cards:` lines of a host with a guest, with and without the Leave confirm
 open (which facts alternate: HOST flag, ready flag, local id?); (2) the `Retry ... enabled` line before the RETRY probes (enabled
 and not waiting?); (3) does the refused host's row on the Games List read "Settings differ: ..." (the log line above)?
+
+Session lifecycle (060s follow-up): successful native guest admission arms host-loss tracking even when a late joiner
+has only its own participant and no bound native host link. Closing that authenticated host tunnel ends the admitted
+guest and shows THE HOST LEFT. Discovery-only tunnels, local departures and authenticated rule-64 removals keep their
+existing meanings. The terminal removal handler returns before the lobby is routed to the Hub; that route runs before
+the Join tick can create its separate session-unavailable popup. A host present only in the room roster keeps its HOST
+badge and observed phase; no native participant or readiness is invented for that card.

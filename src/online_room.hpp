@@ -44,6 +44,7 @@ namespace online_room
 	// joiner's connection to the host of its room has ended since it connected (latched until the room is left).
 	std::uint32_t retry_in_ms();
 	bool host_lost();
+	void guest_admitted(); // native admission, including a guest waiting for the next area
 	// For the code that learns the host removed THIS PC on purpose (a kick): the connection ending after it is not a host loss.
 	void suppress_host_lost();
 	// Rule 64 OnlineRemovalNotice (online_removal_core.hpp): this joiner accepted its room host's notice that the host removed it
