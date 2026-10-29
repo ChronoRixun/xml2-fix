@@ -1,6 +1,8 @@
 // Owned retail PE mapped in reserved fixture memory. Never starts XMen2.exe.
 // Actual production installer, hooks, mailbox, ABI adapters and transaction.
 #include "online_menus.hpp"
+#include "options_menu.hpp"
+#include "display.hpp"
 #include "online_menus_rules.hpp"
 #include "online_menus_guards.hpp"
 #include "online_menus_hits_rules.hpp"
@@ -435,10 +437,10 @@ void rules() {
         assert(e.sequence==std::vector<std::string>(expected.begin(),expected.begin()+i+1));
     }
     assert(valid_name(std::string(31,'a')) && !valid_name(std::string(32,'a')) && !valid_name("   "));
-    assert(display("100%~$#|\n")=="100??????" && display(std::string(1000,'a')).size()==96);
-    assert(display("Alpha-9 _.' ,")=="Alpha-9 _.' ,");
-    assert(display("^n")=="?n" && display("\\n")=="?n" && display("$~#|%:;")=="???????");
-    assert(display("caret^slash\\n")=="caret?slash?n");
+    assert(online_menus_rules::display("100%~$#|\n")=="100??????" && online_menus_rules::display(std::string(1000,'a')).size()==96);
+    assert(online_menus_rules::display("Alpha-9 _.' ,")=="Alpha-9 _.' ,");
+    assert(online_menus_rules::display("^n")=="?n" && online_menus_rules::display("\\n")=="?n" && online_menus_rules::display("$~#|%:;")=="???????");
+    assert(online_menus_rules::display("caret^slash\\n")=="caret?slash?n");
     assert(accept_fresh(2,10,1010) && !accept_fresh(2,10,1011) && !accept_fresh(-1,0,0));
     assert(accept_fresh(0,0xfffffff0u,4));
     entry_latch lease;lease.start(123,0xfffffff0u);assert(lease.waiting(123,0xfffffff0u+2499));
@@ -460,6 +462,7 @@ std::vector<std::string> r6_log; // every r6-* log line (fix F: the session-end 
 #include "online_menus_errors.inl"
 #include "online_native_fixture.inl"
 #include "online_anchor_fixture.inl"
+#include "options_close_fixture.inl"
 #include "online_party_menu_fixture.inl"
 #include "online_menus_hits.inl"
 #include "online_menus_model.inl"
@@ -471,7 +474,17 @@ namespace ini { std::optional<std::string> text(const wchar_t*,const wchar_t*) {
 namespace script_functions { int capacity() { return ::capacity; } }
 namespace lc_fonts { bool active() { return mode!="fonts-off"; } }
 namespace gameplay_agreement { bool host_notice_showing(void*) { return mode=="r4-advice-notice"; } }
+namespace display {
+display_rules::options test_options;
+display_rules::options read_ini_options() { return test_options; }
+const display_rules::options& current_options() { return test_options; }
+unsigned desktop_refresh_rate() { return 60; }
+void set_frame_rate(const frame_rate_rules::cap&) {}
+bool set_vsync(std::optional<bool>) { return true; }
+void set_run_in_background(bool) {}
+}
 namespace logger {
+const std::filesystem::path& module_dir() { return root; }
 void write(const char* format,...) { if(!mode.starts_with("r6-") && mode!="r4-r6" && !mode.starts_with("r16-hits")) return; // r6 fixtures run the native lobby as "r4-r6"; r16-hits: the mouse diagnostic (fix K)
     char buffer[512]{};va_list args;va_start(args,format);std::vsnprintf(buffer,sizeof(buffer),format,args);va_end(args);std::cout<<buffer<<"\n";r6_log.push_back(buffer); }
 void write_once(std::string_view key,const char* format,...) {
@@ -558,6 +571,10 @@ int main(int argc,char** argv) {
         std::cout<<"online menus "<<mode<<" PASS (no writes or registrations)\n";return 0;
     }
     assert(online_menus::installed());
+    if(mode.starts_with("r18-options-orphan")) { options_close_fixture::orphan();return 0; }
+    if(mode=="r18-options-close") { options_close_fixture::run();return 0; }
+    if(mode=="r18-model-cycles") { anchor_fixture::model_cycles();return 0; }
+    if(mode=="r18-close-cycles") { anchor_fixture::close_cycles();return 0; }
     if(mode=="r10-anchor-512") { anchor_fixture::run();return 0; }
     const auto* entry=overflow.find(function_name);assert(entry && std::string_view(entry->args)=="i");
     assert(script_function_overflow::script_overflow_find(function_name)==entry);

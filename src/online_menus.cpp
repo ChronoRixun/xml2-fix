@@ -688,6 +688,32 @@ bool hide_native(void* menu,const char* item,bool hidden) {
     if(found_item) hide_refused(item,vtable,setter);
     return false;
 }
+// Advanced Options owns the separate BXIG window family at 0xa6ad34..44.
+// Its normal terminal close destroys these before 0x5d1e50 deactivates the menu.
+// If the owner leaves first (060s: no-change Esc, no Cancel callback), retail
+// deactivation restores input but leaves the windows registered and drawing.
+// Cancel an outstanding edit and use the engine's own complete window teardown;
+// a normal Accept/Cancel already cleared every pointer, so it needs no fallback.
+void advanced_abandon(void* menu) {
+    bool orphan=false;
+    for(unsigned va=0xa6ad34;va<=0xa6ad44;va+=4)
+        orphan=orphan || *at<void**>(va)!=nullptr;
+    if(orphan) {
+        at<void(__cdecl*)()>(0x619770)(); // same native settings reload as Cancel
+        at<void(__cdecl*)()>(0x6192e0)(); // native teardown of all five BXIG windows
+        static_cast<unsigned char*>(menu)[0x18d8]|=2;
+        *at<unsigned char*>(0x8afde4)=0; // normal terminal close 0x5d1eb0 does both
+        logger::write("online menus: Advanced Options owner left with an open panel; native Cancel and window teardown completed");
+    }
+}
+void __fastcall advanced_deactivate(void* menu,void*) {
+    advanced_abandon(menu);
+    at<tick_fn>(0x5d1e50)(menu);
+}
+std::uint32_t __fastcall advanced_close(void* menu,void*) {
+    advanced_abandon(menu);
+    return at<close_fn>(0x5af5a0)(menu);
+}
 // ---- Model scenes authored hidden (0.6 preview fix G; 060q live failures 10, 5, 6) ---------------------------------------
 // MENU_ITEM_MODEL's load (vt+0x44 = 0x5c5080) runs the base parse first (0x5bc7a0: hide="true" sets the hidden bit through
 // setHidden 0x5c4b90 while the item has no model yet), then sets the authored model (vt+0x38 0x5bbdd0 -> 0x5c4c50). On a
@@ -2812,6 +2838,10 @@ patch_transaction::contribution contribution() {
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&console_open_stub)),0,"native console openmenu request ownership"));
     c.writes.push_back(patch_transaction::relocation(0x60a095,"e8",true,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&native_host_queue_stub)),0,"native Host queued request ownership"));
+    c.writes.push_back(patch_transaction::relocation(0x6a1f80,"",false,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&advanced_deactivate)),0,"Advanced Options owned window teardown"));
+    c.writes.push_back(patch_transaction::relocation(0x6a1fac,"",false,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&advanced_close)),0,"Advanced Options window teardown at resource close"));
     c.writes.push_back(patch_transaction::relocation(0x6a0348,"",false,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&model_item_load)),0,"LC model scenes authored hidden"));
     c.writes.push_back(patch_transaction::relocation(0x69f66c,"",false,
@@ -2862,6 +2892,6 @@ void install(HMODULE game,const install_hooks* hooks) {
         game_version::refuse_startup(); return;
     }
     ready=true;
-    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 42 hooks and menu-anchors/512 committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability);
+    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 44 hooks and menu-anchors/512 committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability);
 }
 }
