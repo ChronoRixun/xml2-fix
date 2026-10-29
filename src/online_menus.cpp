@@ -99,6 +99,45 @@ struct binding_cache {
         if(menu!=id) { clear();menu=id; }
     }
 } bindings;
+// DATA text belongs to the widget, not the process-wide intern table. A fixed
+// buffer keeps returned pointers stable across updates and cached menu visits.
+// Release on resource close, including the two native lobby menu families.
+struct owned_text {
+    void* owner=nullptr;
+    unsigned name=0;
+    std::array<char,1024> value{};
+};
+std::map<void*,owned_text> owned_texts;
+bool text_identity(void* item,const owned_text& value) {
+    __try {
+        auto* p=static_cast<unsigned char*>(item);
+        return *reinterpret_cast<void**>(p+4)==value.owner &&
+            *reinterpret_cast<unsigned*>(p+8)==value.name && !*reinterpret_cast<unsigned*>(p+0xa0);
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+const char* owned_value(void* item) {
+    const auto found=owned_texts.find(item);
+    return found!=owned_texts.end() && text_identity(item,found->second) ? found->second.value.data() : nullptr;
+}
+const char* __fastcall owned_text_getter(void* item,void*) {
+    if(const char* value=owned_value(item)) return value;
+    return at<const char*(__thiscall*)(void*)>(0x5c67f0)(item);
+}
+void forget_text_owner(void* owner) {
+    for(auto it=owned_texts.begin();it!=owned_texts.end();)
+        if(it->second.owner==owner) it=owned_texts.erase(it);else ++it;
+}
+bool assign_owned_text(void* owner,void* item,const char* text) {
+    auto* p=static_cast<unsigned char*>(item);
+    const auto name=*reinterpret_cast<unsigned*>(p+8);
+    // A real parsed widget has both its owner and interned name. Fixture
+    // recorders lacking this identity retain the original binding path.
+    if(!name || *reinterpret_cast<void**>(p+4)!=owner) return false;
+    auto& value=owned_texts[item];value.owner=owner;value.name=name;
+    unsigned n=0;while(n<value.value.size()-1 && text[n]) ++n;
+    std::memcpy(value.value.data(),text,n);value.value[n]=0;
+    return true;
+}
 int accepted=-1;
 DWORD accepted_at=0;
 mailbox pending;
@@ -692,6 +731,15 @@ bool bind_text_native(void* menu,const char* item,const char* text) {
         if(!found) return false;
         const auto* vt=*static_cast<const std::uint32_t**>(found);
         if(vt[0x78/4]!=0x5c6850 || *reinterpret_cast<const std::uint32_t*>(static_cast<char*>(found)+0xa0)) return false;
+        // Native CText mouse handling reads $MENU prompts directly from +9c.
+        // They have a finite authored vocabulary and must keep that token.
+        if(!std::strstr(text,"$MENU") && vt[0x7c/4]==reinterpret_cast<std::uintptr_t>(&owned_text_getter) && assign_owned_text(menu,found,text)) {
+            // The native setter still establishes its normal nonempty token
+            // for hit testing, but reuses the already-interned widget name.
+            // Empty DATA keeps the original zero-token hit behavior.
+            at<set_text_fn>(0x5adcf0)(menu,item,"%s",text[0] ? item : "");return true;
+        }
+        owned_texts.erase(found);
         at<set_text_fn>(0x5adcf0)(menu,item,"%s",text);return true;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
@@ -2054,9 +2102,12 @@ bool engine_item_of(void* it,hits::engine_item& out) {
         out.neverfocus=(p[0x54]&0x20)!=0;
         const auto test=vt[0x74/4];
         out.text_test=test==0x5bc1b0 || test==0x5c6490 || (hits_text_alias && test==hits_text_alias);
-        const char* text=engine_string(*reinterpret_cast<std::uint32_t*>(p+0x24));
-        out.has_text=text && text[0];
-        if(!out.has_text && test!=0x5bc1b0) { const char* token=engine_string(*reinterpret_cast<std::uint32_t*>(p+0x9c)); out.has_text=token && token[0]; }
+        if(const char* value=owned_value(it)) out.has_text=value[0]!=0;
+        else {
+            const char* text=engine_string(*reinterpret_cast<std::uint32_t*>(p+0x24));
+            out.has_text=text && text[0];
+            if(!out.has_text && test!=0x5bc1b0) { const char* token=engine_string(*reinterpret_cast<std::uint32_t*>(p+0x9c)); out.has_text=token && token[0]; }
+        }
         std::int16_t f[6]; std::memcpy(f,p+0x70,sizeof f);
         out.box=hits::engine_rects(f[0],f[1],f[2],f[3],f[5]); return true;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
@@ -2131,7 +2182,7 @@ void compact_focus_follow(void* menu,screen s) {
         // gain. If our invisible model is still installed, replay the native
         // loss/gain pair to restore its authored model (never its usecmd).
         if(last_target && last_target==item_try(menu,"lc_focus") &&
-            *reinterpret_cast<unsigned*>(static_cast<unsigned char*>(last_target)+0x98)==last_hidden) {
+            *reinterpret_cast<unsigned*>(static_cast<unsigned char*>(last_target)+0x58)==last_hidden) {
             const auto select=at<void(__thiscall*)(void*,void*)>(0x5aaf80);
             select(menu,nullptr);select(menu,focused);
         }
@@ -2139,7 +2190,7 @@ void compact_focus_follow(void* menu,screen s) {
     }
     if(auto* target=item_try(menu,"lc_focus"))
         if(*static_cast<unsigned*>(target)==0x6a0304) {
-            const auto resource=[&] { return *reinterpret_cast<unsigned*>(static_cast<unsigned char*>(target)+0x98); };
+            const auto resource=[&] { return *reinterpret_cast<unsigned*>(static_cast<unsigned char*>(target)+0x58); };
             if(last_target==target && last_hidden==resource()) return;
             at<void(__thiscall*)(void*,const char*,void*)>(0x5bbdd0)(target,"ui/models/model_hide",nullptr);
             last_target=target;last_hidden=resource();
@@ -2903,7 +2954,16 @@ void __fastcall deactivate(void* menu,void*) {
 }
 std::uint32_t __fastcall close(void* menu,void*) {
     deactivate_state(menu,false);
-    return at<close_fn>(0x5af5a0)(menu);
+    const auto result=at<close_fn>(0x5af5a0)(menu);
+    forget_text_owner(menu);return result;
+}
+std::uint32_t __fastcall host_text_close(void* menu,void*) {
+    const auto result=at<close_fn>(0x5ba270)(menu);
+    forget_text_owner(menu);return result;
+}
+std::uint32_t __fastcall join_text_close(void* menu,void*) {
+    const auto result=at<close_fn>(0x5c8020)(menu);
+    forget_text_owner(menu);return result;
 }
 }
 
@@ -3002,6 +3062,13 @@ patch_transaction::contribution contribution() {
     c.owner="online menus";
     for(const auto& g:online_menus_guards::guards)
         c.guards.push_back({g.va,patch_transaction::bytes_of(g.hex),g.what});
+    for(const auto va:{0x6a02c0u,0x6a1148u})
+        c.writes.push_back(patch_transaction::relocation(va,"",false,
+            static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&owned_text_getter)),0,"owned DATA text getter"));
+    c.writes.push_back(patch_transaction::relocation(0x69f2bc,"",false,
+        static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&host_text_close)),0,"host DATA lifetime"));
+    c.writes.push_back(patch_transaction::relocation(0x69f384,"",false,
+        static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(&join_text_close)),0,"join DATA lifetime"));
     c.writes.push_back({0x60220e,patch_transaction::bytes_of("08100100"),"frontend string arena allocation"});
     c.writes.push_back(patch_transaction::relocation(0x41a460,"e9",true,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&frontend_intern)),0,"bounded frontend string interner"));

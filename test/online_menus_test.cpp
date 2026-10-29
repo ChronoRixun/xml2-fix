@@ -15,6 +15,7 @@
 #include <cmath>
 #include <clocale>
 #include <algorithm>
+#include <atomic>
 #include <cstdarg>
 #include <cstdlib>
 #include <cstring>
@@ -138,7 +139,8 @@ void __fastcall tick_stub(void* menu,void*) {
 }
 std::uint32_t __fastcall close_stub(void*,void*) { set_current(nullptr);return 0x12345678; }
 unsigned leave_label_native_writes=0;
-void __cdecl text_stub(void*,const char* item,const char* format,...) {
+void* __fastcall item_stub(void*,void*,const char*);
+void __cdecl text_stub(void* menu,const char* item,const char* format,...) {
     ++text_writes;
     if(mode.starts_with("r4-") && std::string_view(format)!="%s") {
         assert(std::string_view(format)=="Unready" || std::string_view(format)=="Leave");texts[item]=format;
@@ -148,6 +150,16 @@ void __cdecl text_stub(void*,const char* item,const char* format,...) {
     if(mode.starts_with("r6-") && std::string_view(item)=="data_gamename" && std::string_view(format)!="%s") { texts[item]=format;return; }
     assert(std::string_view(format)=="%s");
     va_list args;va_start(args,format);texts[item]=va_arg(args,const char*);va_end(args);
+    // Production DATA retains a native name token and supplies its displayed
+    // value through the getter. Keep this recorder faithful to that contract.
+    if(texts[item]==item || texts[item].empty()) if(auto* found=item_stub(menu,nullptr,item)) {
+        auto* p=static_cast<unsigned char*>(found);const auto* vt=*reinterpret_cast<unsigned**>(p);
+        const auto getter=*reinterpret_cast<unsigned*>(0x6a02c0);
+        if(*reinterpret_cast<void**>(p+4)==menu && *reinterpret_cast<unsigned*>(p+8) && getter!=0x5c67f0 && vt[0x7c/4]==getter) {
+            const char* value=reinterpret_cast<const char*(__thiscall*)(void*)>(vt[0x7c/4])(found);
+            texts[item]=value;*reinterpret_cast<unsigned*>(p+0x9c)=value[0] ? *reinterpret_cast<unsigned*>(p+8) : 0;
+        }
+    }
 }
 std::map<std::string,bool> visibility;
 void* (*scene_lookup)(const char*)=nullptr; // r17-hub-focus: real text items; 0x5ade10 = find the item, call its vt+8 setHidden
@@ -484,6 +496,7 @@ std::vector<std::string> r6_log; // every r6-* log line (fix F: the session-end 
 #include "online_menus_model.inl"
 #include "online_menus_hub.inl"
 #include "online_menus_strings.inl"
+#include "online_menus_data.inl"
 }
 namespace ini { std::optional<std::string> text(const wchar_t*,const wchar_t*) {
     return mode=="off" ? std::nullopt : mode=="zero" ? std::optional<std::string>("0") : std::optional<std::string>("1");
@@ -503,7 +516,7 @@ void set_resolution(unsigned width,unsigned height) { test_options.width=int(wid
 }
 namespace logger {
 const std::filesystem::path& module_dir() { return root; }
-void write(const char* format,...) { if(!mode.starts_with("r20-") && !mode.starts_with("r6-") && mode!="r4-r6" && !mode.starts_with("r16-hits")) return; // r6 fixtures run the native lobby as "r4-r6"; r16-hits: the mouse diagnostic (fix K)
+void write(const char* format,...) { if(!mode.starts_with("r21-") && !mode.starts_with("r20-") && !mode.starts_with("r6-") && mode!="r4-r6" && !mode.starts_with("r16-hits")) return; // r6 fixtures run the native lobby as "r4-r6"; r16-hits: the mouse diagnostic (fix K)
     char buffer[512]{};va_list args;va_start(args,format);std::vsnprintf(buffer,sizeof(buffer),format,args);va_end(args);std::cout<<buffer<<"\n";r6_log.push_back(buffer); }
 void write_once(std::string_view key,const char* format,...) {
     if(once_logs.contains(std::string(key))) return;
@@ -564,6 +577,7 @@ int main(int argc,char** argv) {
     auto& overflow=script_function_overflow::table();overflow.reset(704);
     if(mode=="capacity") { ::capacity=320;overflow.reset(0); }
     online_menus::install_hooks install_hooks;
+    if(mode=="r21-data-churn") { data_text_fixture::prepare();install_hooks.broker=&data_text_fixture::api; }
     install_hooks.clock=clock_stub;install_hooks.wall_clock=wall_stub;install_hooks.before_request=request_fault_stub;install_hooks.before_tick=tick_fault_stub;
     if(mode.starts_with("r4-")) install_hooks.lobby_fields=lobby_fields_stub;
     if(mode.starts_with("r8-party")) { party_api.remove_member=party_remove_stub;install_hooks.broker=&party_api;install_hooks.lobby_fields=party_fields_stub; }
@@ -610,6 +624,7 @@ int main(int argc,char** argv) {
     online_menus::install(reinterpret_cast<HMODULE>(0x400000));
     assert(overflow.count()==1 && std::memcmp(installed_image.data(),reinterpret_cast<void*>(0x401000),installed_image.size())==0);
     asset_files();fake_services();
+    if(mode=="r21-data-churn") { data_text_fixture::run(entry);return 0; }
     if(mode=="r20-code-open-close") { frontend_strings_fixture::open_close();return 0; }
     if(mode=="r20-retry-code" || mode=="r20-retry-browse") { frontend_strings_fixture::retry();return 0; }
     if(mode=="r20-options-trace") {

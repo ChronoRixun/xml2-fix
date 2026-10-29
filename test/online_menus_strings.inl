@@ -119,51 +119,73 @@ void code_spin() {
     std::cout<<"Code authored-name probe lifecycle PASS, 80 visits without spin\n";
 }
 std::array<unsigned char,0xb0> action{},focus_model{};
-unsigned clears=0;
-unsigned gains=0;
+std::array<unsigned,64> action_vt{};
+std::array<unsigned,2> amber_model{},hidden_model{};
+unsigned clears=0,gains=0;
 void* find(const char* name) {
     if(std::strcmp(name,"lc_focus")==0) return focus_model.data();
     if(std::strcmp(name,"retry")==0) return action.data();
     return nullptr;
 }
-void __fastcall set_model(void* item,void*,const char* model,void*) {
-    assert(item==focus_model.data() && std::strcmp(model,"ui/models/model_hide")==0);
-    ++clears;put(focus_model.data(),0x98,2);
+float __fastcall fixed_model_clock(void*,void*) { return 42.125f; }
+void __fastcall load_focus_model(void*,void*,void** out,const char* name,int) {
+    const bool hidden=std::strstr(name,"model_hide") || std::strstr(name,"m_invis");
+    *out=hidden ? hidden_model.data() : amber_model.data();if(hidden) ++clears;
 }
-void __fastcall select(void* menu,void*,void* target) {
-    assert(menu==child.data());
-    put(menu,0x324,unsigned(reinterpret_cast<std::uintptr_t>(target)));
-    if(target) {
-        assert(target==action.data());action[0x54]|=1;
-        put(focus_model.data(),0x98,1);++gains;
-    } else action[0x54]&=~1;
+bool __fastcall attach_focus_model(void* owner,void*,const char*,void*,void** old) {
+    assert(owner==child.data());*old=*reinterpret_cast<void**>(focus_model.data()+0x58);return true;
 }
+void __cdecl release_focus_model(void**) {}
+void by_name(const char* name) {
+    reinterpret_cast<void(__fastcall*)(void*,void*,const char*,void*)>(0x5bbdd0)(focus_model.data(),nullptr,name,nullptr);
+}
+void __fastcall focus_event(void* item,void*,bool gain) {
+    assert(item==action.data());
+    if(gain) { action[0x54]|=1;++gains;by_name("ui/models/lc_o_fixture_amber"); }
+    else action[0x54]&=~1;
+}
+void select(void* target) { reinterpret_cast<void(__fastcall*)(void*,void*,void*)>(0x5aaf80)(child.data(),nullptr,target); }
 void retry() {
     const auto tick=*reinterpret_cast<void(__fastcall**)(void*,void*)>(0x69e454);
     std::strcpy(reinterpret_cast<char*>(child.data()+0xc),mode=="r20-retry-code" ? "lc_code" : "lc_browse");
     set_current(child.data());scene_lookup=find;
-    put(action.data(),0,0x6a0244);put(focus_model.data(),0,0x6a0304);
-    redirect(0x5bbdd0,set_model);
-    redirect(0x5aaf80,select);
+    std::copy_n(reinterpret_cast<unsigned*>(0x6a10cc),action_vt.size(),action_vt.begin());
+    action_vt[0x4c/4]=unsigned(reinterpret_cast<std::uintptr_t>(focus_event));
+    put(action.data(),0,unsigned(reinterpret_cast<std::uintptr_t>(action_vt.data())));
+    put(focus_model.data(),0,0x6a0304);put(focus_model.data(),4,unsigned(reinterpret_cast<std::uintptr_t>(child.data())));
+    // Only external resource/clock/layout services are invented. Execute the
+    // retail 5bbdd0 -> 5c4c50 -> 5bc3f0 setters and 5aaf80 focus transitions.
+    put(reinterpret_cast<void*>(0x6a236c),0x24,unsigned(reinterpret_cast<std::uintptr_t>(fixed_model_clock)));
+    put(reinterpret_cast<void*>(0x6a236c),0x260,unsigned(reinterpret_cast<std::uintptr_t>(load_focus_model)));
+    redirect(0x5ab720,attach_focus_model);redirect(0x575980,release_focus_model);
+    redirect(0x5bc530,anchor_fixture::noop);
+    redirect(*reinterpret_cast<unsigned*>(0x69e41c+0x68),anchor_fixture::noop);
+    const auto model=[] { return *reinterpret_cast<void**>(focus_model.data()+0x58); };
+    const auto time=[] { return *reinterpret_cast<float*>(focus_model.data()+0x98); };
     for(unsigned reason=0;reason<4;++reason) {
-        action[0x54]=9;put(child.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(action.data())));
-        put(focus_model.data(),0x98,1);const auto start=clears;
-        tick(child.data(),nullptr);assert(clears==start); // focused Retry retains amber
-        if(reason==0) put(child.data(),0x324,0);        // native mouse-out
-        if(reason==1) action[0x54]=8;                   // RIGHT removes native focus
-        if(reason==2) action[0x54]=13;                  // broker hides the Retry item
-        if(reason==3) action[0x54]=1;                   // disabled during backoff
+        action[0x54]=8;select(action.data());const auto start=clears;
+        tick(child.data(),nullptr);assert(clears==start && model()==amber_model.data());
+        if(reason<2) select(nullptr);
+        if(reason==2) action[0x54]=13;
+        if(reason==3) action[0x54]=1;
+        tick(child.data(),nullptr);assert(clears==start+1 && model()==hidden_model.data());
         tick(child.data(),nullptr);assert(clears==start+1);
-        tick(child.data(),nullptr);assert(clears==start+1); // no per-frame resource reload
+        // A real gain AND loss between cleanup ticks changes +58, while the
+        // retail timestamp at +98 stays exactly the same under this clock.
+        action[0x54]=8;select(nullptr);select(action.data());select(nullptr);
+        assert(model()==amber_model.data() && time()==42.125f);
+        tick(child.data(),nullptr);
+        assert(model()==hidden_model.data() && clears==start+2 && time()==42.125f);
         if(reason>=2) {
-            action[0x54]=9; // shown/enabled again, same focus, no native gain
-            const auto before=gains;
-            tick(child.data(),nullptr);assert(gains==before+1 && *reinterpret_cast<unsigned*>(focus_model.data()+0x98)==1);
-            tick(child.data(),nullptr);assert(gains==before+1); // no repeated focus refresh
+            action[0x54]=9;put(child.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(action.data())));
+            const auto before=gains;tick(child.data(),nullptr);
+            assert(gains==before+1 && model()==amber_model.data());
+            tick(child.data(),nullptr);assert(gains==before+1);
         }
+        select(nullptr);
     }
     scene_lookup=nullptr;
-    std::cout<<"Retry focus lifecycle PASS mouse-out / RIGHT / hidden / disabled / shown or enabled again; only focused actions retain amber\n";
+    std::cout<<"Retry retail lifecycle PASS: fixed clock, +58 model identity, gain/loss between ticks, hidden/disabled recovery\n";
 }
 void open_close() {
     const auto tick=*reinterpret_cast<void(__fastcall**)(void*,void*)>(0x69e454);

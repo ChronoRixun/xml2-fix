@@ -1810,3 +1810,26 @@ old static header. Regenerate menus/models and the hit table with this DLL.
 With InputPipe diagnostics enabled, the Advanced Options Esc edge is observed
 before the first-online-tick guard. It reads only already-published manager and
 window pointers; it neither creates a menu nor changes Esc handling.
+
+### Y1 review follow-up: model identity and changing DATA
+
+The model identity used by compact focus cleanup is `CMenuItemModel+0x58`.
+Retail `0x5c4cc9` writes floating-point time to `+0x98`; it cannot identify a
+model. The native regression executes `0x5bbdd0`, `0x5c4c50`, `0x5bc3f0` and
+`0x5aaf80` at a fixed clock, including a focus gain and loss between ticks.
+
+The frontend table still has 1024 slots. Changing DATA now uses a stable
+1024-byte buffer per bound widget, read through the base-text and MENU_ITEM_TEXT
+getter slots (`0x6a02c0`, `0x6a1148`). The native formatted setter reuses the
+widget's existing name handle for nonempty DATA and retains zero for empty
+DATA. No new handle is needed per value. Hit-test inspection uses the displayed
+buffer; native `$MENU` prompts keep their original interned text because native
+mouse handling reads those tokens directly. Ordinary native text and gamevar
+widgets keep the stock `0x5c67f0` getter and `0x5c6850` setter behavior.
+
+Buffers survive deactivation and cached menu visits, and are released after
+resource close. The native Host and Join close adapters delegate to their
+original `0x5ba270` and `0x5c8020` methods. The DATA regression fills all native
+slots through the real setter, binds a fresh room successfully, then changes
+2200 room names and 1200 codes without increasing slot usage. The general
+interner still logs a bounded refusal for unrelated native strings at capacity.
