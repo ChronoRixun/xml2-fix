@@ -1000,3 +1000,8 @@ add_executable(xml2_e4_x1_real_test test/e4_x1_real_test.cpp src/e4_observe.cpp 
 target_include_directories(xml2_e4_x1_real_test PRIVATE src)
 target_compile_options(xml2_e4_x1_real_test PRIVATE /Gy)
 target_link_options(xml2_e4_x1_real_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO /OPT:REF)
+
+# Offline regression for the active-resolution entry evicted by a capped list.
+add_executable(xml2_resolution_active_test test/resolution_active_test.cpp)
+target_include_directories(xml2_resolution_active_test PRIVATE src)
+target_compile_options(xml2_resolution_active_test PRIVATE /UNDEBUG)

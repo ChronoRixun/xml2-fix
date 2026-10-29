@@ -307,6 +307,10 @@ namespace display
 
 		void remember_applied(const d3d8::present_parameters& pp)
 		{
+			if (!have_applied || applied.back_buffer_width != pp.back_buffer_width || applied.back_buffer_height != pp.back_buffer_height)
+			{
+				modes_adapter = no_adapter; // rebuild around the new active size on the next panel open
+			}
 			applied = pp;
 			have_applied = true;
 			if (pp.back_buffer_width && pp.back_buffer_height)
@@ -596,7 +600,12 @@ namespace display
 				}
 			}
 
-			modes = resolution_rules::video_list(adapter_modes, desktop_size(), desktop.refresh_rate, resolution_override(opts, desktop_size()), opts.window_mode,
+			// Once the device exists its size is what the panel must be able to find,
+			// including windowed mode with Width/Height absent (the registry's size).
+			const auto selected = have_applied && applied.back_buffer_width && applied.back_buffer_height
+			    ? std::optional<size>(size{applied.back_buffer_width, applied.back_buffer_height})
+			    : resolution_override(opts, desktop_size());
+			modes = resolution_rules::video_list(adapter_modes, desktop_size(), desktop.refresh_rate, selected, opts.window_mode,
 			                                     opts.resolutions, mode_slots);
 			modes_adapter = which;
 

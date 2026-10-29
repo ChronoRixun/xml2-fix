@@ -351,6 +351,20 @@ void broker_presentation_tests(const script_functions_rules::func_entry* registr
     for(const char* kind:row_status_key) assert(gone(std::string("lc_row0_st_")+kind));
     for(unsigned r=0;r<browse_rows;++r) assert(gone("lc_row"+std::to_string(r)+"_dim") && gone("lc_row"+std::to_string(r)+"_build_check") && gone("lc_row"+std::to_string(r)+"_pips_0"));
 
+    // 060s live: an empty cached list read "0 last known games". Exercise the
+    // production tick/binder after a failed refresh, preserving the real empty list.
+    assert(texts["browse_hint"]=="No public games");
+    ticks+=70000;post(intent::refresh);tick(child.data(),nullptr);
+    menu_error="broker_unreachable";menu_complete=true;tick(child.data(),nullptr);
+    assert(menu_view().stale && menu_view().rows.empty());
+    assert(texts["browse_hint"]=="No games in the last list");
+    ticks+=70000;menu_rows_json="{"+code(0)+",\"name\":\"Only room\"}";
+    post(intent::refresh);tick(child.data(),nullptr);menu_complete=true;tick(child.data(),nullptr);
+    assert(texts["browse_hint"]=="1 public game");
+    ticks+=70000;post(intent::refresh);tick(child.data(),nullptr);
+    menu_error="broker_unreachable";menu_complete=true;tick(child.data(),nullptr);
+    assert(texts["browse_hint"]=="1 last known game");
+
     // A committed room whose broker went away: the offline-room line shows, the stale label never beside it.
     menu_broker.cancel();menu_broker.stopped();ticks+=70000;
     assert(menu_resolve("AAAAAAAB") && menu_broker.pending());
