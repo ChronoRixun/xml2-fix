@@ -192,6 +192,36 @@ void attachment(void* carrier,void* victim){
     const pose delta{subtract(desired,at<vec>(victim,0x20)),subtract(at<vec>(carrier,0x1f4),at<vec>(victim,0x2c))};
     slot<float(__fastcall*)(void*,void*,const pose*)>(victim,0x130)(victim,nullptr,&delta);
 }
+// Pickup must use the same animated world-space hand constraint as carry.
+// The authored PC victim event places the root at distance1/height-40, and
+// the old pickup callback preserved that Z for the entire clip. In particular,
+// that is not the root required by the animated victim skeleton at time zero.
+void pickup_attachment(void* carrier,void* victim){
+    mark(victim);bits(victim,true);
+    vec angles=at<vec>(carrier,0x2c);angles.z+=3.14f;
+    // vt2c (41C3A0) can blend rendered facing through +1F4. vt158 commits
+    // both live and rendered angles, then updates the model's world matrix.
+    // Sample hands only after that commit, so the offset uses the orientation
+    // that will actually be drawn, including a victim turning toward pickup.
+    const vec original=at<vec>(victim,0x20);
+    const auto place=slot<void(__fastcall*)(void*,void*,const vec*,const vec*)>(victim,0x158);
+    place(victim,nullptr,&original,&angles);
+    const vec position=hands(carrier,victim);
+    place(victim,nullptr,&position,&angles);
+}
+// CCEAtkVictim writes ownership only AFTER starting the victim and applying
+// its authored root placement (4DB019 -> 4DB313). Reconcile after the native
+// event too, otherwise it overwrites pickup entry's first-frame hand pose.
+void __fastcall pickup_victim_event(void* event,void*,void* actor,void* sponsor){
+    void* move=actor?at<void*>(actor,0x378):nullptr;
+    const bool ours=move&&slot<pointer>(move,0x30)(move,nullptr)==&handlers[1];
+    fn<void(__fastcall*)(void*,void*,void*,void*)>(0x4daf00)(event,nullptr,actor,sponsor);
+    if(!ours||at<void*>(actor,0x378)!=move)return;
+    void* victim=character(resolve(actor,0x76c));
+    if(!victim||!alive(victim)||character(resolve(victim,0x178))!=actor||character(resolve(actor,0x178))!=victim)return;
+    det_math::fp_env fp;
+    pickup_attachment(actor,victim);
+}
 void __fastcall decide_entry(void*,void*,void*,void*,void* context){if(context)put<unsigned char>(context,0x6c,at<unsigned char>(context,0x6c)|1);}
 void __fastcall decide_cleanup(void*,void*,void* actor){if(actor)descent_target.erase(at<u32>(actor,0x1c));}
 bool __fastcall decide_update(void* self,void*,void* actor,void* input){
@@ -250,13 +280,29 @@ bool __fastcall decide_update(void* self,void*,void* actor,void* input){
 void __fastcall pickup_entry(void*,void*,void* actor,void* input,void* context){
     if(!actor)return;det_math::fp_env fp;
     forget_guard(actor);
-    void* victim=character(resolve(actor,0x76c));if(!victim){idle(actor);return;}
-    if(input&&(at<u32>(input,0)&0x100))pickup_guard[at<u32>(actor,0x1c)]=at<u32>(victim,0x1c);
-    mark(victim);put(victim,4,at<u32>(victim,4)|4u);publish(victim);
+    void* victim=character(resolve(actor,0x76c));if(!victim||!alive(victim)){idle(actor);return;}
     void* move=named(victim,team(actor)==team(victim)?"airgrabpickupally":"airgrabpickupvictim");
+    if(!move){idle(actor);return;}
+    if(input&&(at<u32>(input,0)&0x100))pickup_guard[at<u32>(actor,0x1c)]=at<u32>(victim,0x1c);
+    const u32 previous_flags=at<u32>(victim,4);const auto previous_marker=at<unsigned char>(victim,0x764);
+    mark(victim);put(victim,4,previous_flags|4u);publish(victim);
     fn<handle_set>(0x42c7c0)(actor,nullptr,at<u32>(actor,0x76c));face(actor,victim);
+    // The forced pose can run a victim callback before CCEAtkVictim's owner
+    // stores. Establish the native reciprocal handles before that transition.
+    const u32 previous_owner=at<u32>(actor,0x178),previous_victim_owner=at<u32>(victim,0x178);
+    put(actor,0x178,at<u32>(victim,0x1c));put(victim,0x178,at<u32>(actor,0x1c));
     fn<forced>(0x432030)(victim,nullptr,move,-1,context?at<float>(context,0x64):-1.f,0,1,0);
-    mark(victim);pickup_sound(actor);
+    if(at<void*>(victim,0x378)!=move){
+        put(actor,0x178,previous_owner);put(victim,0x178,previous_victim_owner);
+        put(victim,4,previous_flags);put(victim,0x764,previous_marker);publish(victim);
+        forget_guard(actor);idle(actor);return;
+    }
+    // Native reset clears the marker and physical constraints. Restore them
+    // after forcing, before either actor can run physics or render this pose.
+    put(actor,0x178,at<u32>(victim,0x1c));put(victim,0x178,at<u32>(actor,0x1c));
+    pickup_attachment(actor,victim);pickup_sound(actor);
+    trace(actor,victim,"pickup-entry",2,input,true);
+    if(trace_enabled){const vec p=at<vec>(victim,0x20);logger::write("carry trace pickup attached victim=%08X owner=%08X phys=%08X root=(%.3f,%.3f,%.3f)",at<u32>(victim,0x1c),at<u32>(victim,0x178),at<u32>(victim,4),p.x,p.y,p.z);}
 }
 bool __fastcall pickup_update(void* self,void*,void* actor,void* input){
     if(actor&&input&&!(at<u32>(input,0)&0x100))forget_guard(actor);
@@ -265,9 +311,9 @@ bool __fastcall pickup_update(void* self,void*,void* actor,void* input){
 void __fastcall pickup_frame(void*,void*,void* actor,void*){
     if(!actor)return;det_math::fp_env fp;
     void* victim=character(resolve(actor,0x76c));if(!victim)return;
-    const vec original=at<vec>(victim,0x20);vec target{};if(!bone(actor,6,target))target=at<vec>(actor,0x20);
-    vec position=blend(original,target,0.01f);position.z=original.z;slot<vector_set>(victim,0x1c)(victim,nullptr,&position);
-    vec angles=at<vec>(actor,0x2c);angles.z+=3.14f;slot<vector_set>(victim,0x2c)(victim,nullptr,&angles);
+    if(!alive(victim)||character(resolve(victim,0x178))!=actor)return;
+    pickup_attachment(actor,victim);
+    trace(actor,victim,"pickup-frame",3);
 }
 void __fastcall carry_entry(void*,void*,void* actor,void* input,void*){
     if(!actor)return;det_math::fp_env fp;
@@ -356,7 +402,13 @@ void __fastcall carry_throw_event(void* event,void*,void* actor,void* sponsor){
 void __fastcall victim_frame(void*,void*,void* victim,void*){
     if(!victim)return;
     void* carrier=character(resolve(victim,0x178));
-    if(carrier&&character(resolve(carrier,0x76c))==victim&&flying(carrier)&&!grounded(carrier)){bits(victim,true);return;}
+    if(carrier&&character(resolve(carrier,0x76c))==victim&&flying(carrier)&&!grounded(carrier)){
+        void* move=at<void*>(carrier,0x378);
+        if(move&&slot<pointer>(move,0x30)(move,nullptr)==&handlers[1]){
+            det_math::fp_env fp;pickup_attachment(carrier,victim);
+        }else bits(victim,true);
+        return;
+    }
     // XML1 DC720 tests only the carrier (+0xC0 ground, +4 bit2); the carried one's own
     // contacts never end the pair. 082e's moving-carry separations had no reason line.
     if(trace_enabled){
@@ -506,6 +558,7 @@ bool prepare(std::vector<xml1_hook_transaction::patch>& writes,bool flying_carry
     // but do not let 61A3A0 bypass both descent and carry admission.
     writes.push_back({0x433e6a,{0x75,0x39},{0x90,0x90}});
     pointer_patch(0x692378,reinterpret_cast<void*>(&carry_throw_event));
+    pointer_patch(0x692318,reinterpret_cast<void*>(&pickup_victim_event));
     const u32 descent=0x433e6c;const auto* original=reinterpret_cast<const unsigned char*>(descent);
     std::vector<unsigned char> bridge(6,0x90);bridge[0]=0xe9;const u32 offset=u32(reinterpret_cast<std::uintptr_t>(&descent_bridge))-descent-5;std::memcpy(bridge.data()+1,&offset,4);
     writes.push_back({descent,{original,original+6},bridge});
