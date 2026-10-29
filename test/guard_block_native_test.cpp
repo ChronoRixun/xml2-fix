@@ -4,6 +4,7 @@
 #include "shared_handler_fixture.hpp"
 #include "tk_guard_bridges.hpp"
 #include "lcsave/xmlb.hpp"
+#include "guard_input_fixture.hpp"
 #include <cstdarg>
 #include <cstdlib>
 using namespace handler_fixture;
@@ -24,6 +25,12 @@ int entries=0,allocations=0,removals=0,generic_inputs=0,dispatches=0;
 int contact_case=0,queries=0;
 bool remove_at_end=false,lookup_missing=false;
 bool generic_pending=false;
+bool native_input=false,action_chains=false;
+std::array<unsigned char,0x1000> attack_move{},jump_move{};
+std::array<void*,160> guard_vt{},idle_vt{},action_vt{};
+std::array<void*,8> idle_handler{},guard_handler{};
+void* idle_handler_object=nullptr;void* guard_handler_object=nullptr;
+u32 chain_key=0;int guard_entries=0;
 std::string requested;
 u32 empty_name=0;
 ref empty_ref{};
@@ -75,12 +82,14 @@ void __fastcall free_attachment(void*,void*,u32 token,void* p){
 }
 bool __fastcall admit_effect(void*,void*,u32,void*,u32){return true;}
 bool __fastcall existing_effect(void*,void*,ref* out,u32,void*,u32,int){*out={};return false;}
-void* __fastcall move_event(void*,void*,int index){return index==0?usage.data():index==1?event.data():nullptr;}
+void* __fastcall move_event(void* p,void*,int index){if(native_input&&p!=move.data())return nullptr;return index==0?usage.data():index==1?event.data():nullptr;}
 u32* __fastcall node_power(void*,void*){return &empty_name;}
 void* __fastcall handler(void* p,void*){return p==move.data()?&tk_guard_bridges::guard_block_handler:nullptr;}
 void* __fastcall get_style(void* p,void*){return p;}
-void* __fastcall intern(u32* p,void*,const char* name){requested=name;*p=1;return p;}
-void* __fastcall lookup(void*,void*,const u32*,void*){return lookup_missing?nullptr:requested=="guardblocking"?move.data():idle.data();}
+void* __fastcall intern(u32* p,void*,const char* name){requested=name;*p=native_input?4:1;return p;}
+void* __fastcall lookup(void*,void*,const u32* key,void*){
+ if(native_input){switch(*key){case 1:return guard.data();case 2:return attack_move.data();case 3:return jump_move.data();case 4:return move.data();default:return nullptr;}}
+ return lookup_missing?nullptr:requested=="guardblocking"?move.data():idle.data();}
 void* __cdecl get_manager(){return manager.data();}
 void* __cdecl contact_character(void* p){return p==victim.data()&&contact_case!=5?p:nullptr;}
 void* __cdecl physical(void* p){return p;}
@@ -94,7 +103,8 @@ void* __fastcall contact_entity(void** p,void*){return *p;}
 bool __fastcall no_lift(void*,void*,void*){return false;}
 const char* __fastcall error_text(void*,void*,int){return "cannot lift";}
 u32 __fastcall error_message(void*,void*,u32,const char*,float,std::array<float,4>,int){return 1;}
-void* __fastcall action(void*,void*,u32 id){check(id==0x18||id==0,"release resolves Special-to-Idle");return idle.data();}
+void* __fastcall action(void*,void*,u32 id){if(native_input)return id==0x18?idle.data():nullptr;check(id==0x18||id==0,"release resolves Special-to-Idle");return idle.data();}
+// Legacy isolated lifecycle controls; native_input_tests executes unmodified 4FCE50.
 bool __fastcall generic(void*,void*,void*,void* input){
  ++generic_inputs;check(!(field<u32>(input,0)&0x100)&&!(field<u32>(input,4)&0x100),"held block never reacquires Guard");
  if(generic_pending)field<void*>(actor.data(),0x3bc)=idle.data();return generic_pending;
@@ -144,6 +154,10 @@ void transition(void* next){
  ++dispatches;
  if(field<void*>(actor.data(),0x378)==move.data())reinterpret_cast<void(__thiscall*)(void*)>(0x42c270)(actor.data());
  reinterpret_cast<void(__thiscall*)(void*,void*)>(0x41d890)(actor.data(),next);
+ if(native_input&&next==guard.data()){
+  std::array<unsigned char,0x80> incoming{};field<void*>(incoming.data(),4)=next;++guard_entries;
+  tk_guard_bridges::guard_entry(nullptr,nullptr,actor.data(),buttons.data(),incoming.data());
+ }
  if(next==move.data()){
   std::array<unsigned char,0x80> incoming{};field<void*>(incoming.data(),4)=next;
   ++entries;tk_guard_bridges::guard_block_entry(&tk_guard_bridges::guard_block_handler,nullptr,actor.data(),buttons.data(),incoming.data());
@@ -155,7 +169,8 @@ void __fastcall dispatch(void*,void*,void* next,int){transition(next);}
 void refresh(){reinterpret_cast<void(__thiscall*)(void*)>(0x53bf20)(actor.data()+0x470);}
 void attachment_tick(){if(attached.live)reinterpret_cast<void(__thiscall*)(void*,u32,void*)>(0x537470)(attachment.data(),attached.token,&attached);}
 void input_tick(){
- const bool pending=reinterpret_cast<bool(__thiscall*)(void*,void*,void*)>(0x4f56e0)(move.data(),actor.data(),buttons.data());
+ void* current=native_input?field<void*>(actor.data(),0x378):move.data();
+ const bool pending=reinterpret_cast<bool(__thiscall*)(void*,void*,void*)>(0x4f56e0)(current,actor.data(),buttons.data());
  if(pending){void* next=field<void*>(actor.data(),0x3bc);field<void*>(actor.data(),0x3bc)=nullptr;transition(next);}
  attachment_tick();refresh();
 }
@@ -176,7 +191,7 @@ void bind(const image& pc){
  // this test; node ownership, list insertion/removal and cache work stay native.
  at(0x54e650)[0]=0xc2;at(0x54e650)[1]=8;at(0x54e650)[2]=0;
  jump(0x41d0d0,&get_style);jump(0x41b120,&intern);jump(0x501a50,&lookup);jump(0x427c80,&action);jump(0x42c340,&dispatch);
- jump(0x4fce50,&generic);jump(0x4c87a0,&no);jump(0x4318d0,&finite_debit);jump(0x437d6a,&receive_done);jump(0x4983c5,&health_done);
+ if(!native_input)jump(0x4fce50,&generic);jump(0x4c87a0,&no);jump(0x4318d0,&finite_debit);jump(0x437d6a,&receive_done);jump(0x4983c5,&health_done);
  jump(0x423f00,&noop);
  jump(0x46dce0,&get_manager);jump(0x48de40,&get_manager);jump(0x484990,&get_manager);jump(0x4c05b0,&get_manager);
  jump(0x4ab6d0,&query_ctor);jump(0x4ab720,&noop);jump(0x44fe10,&query_team);jump(0x4a9590,&contact_entity);
@@ -305,13 +320,70 @@ void run(const image& pc,const XNode& node){
  reset();transition(move.data());refresh();const auto generation=attached.token;attached.token+=0x10000;transition(idle.data());refresh();
  check(removals==0&&field<float>(actor.data(),0x4ec)==0&&!(field<unsigned char>(actor.data(),0x765)&2),"stale attachment generation authorizes no removal or aliased effect access");attached.token=generation;
 }
+bool __fastcall chain_available(void*,void*,void*,int){return true;}
+bool __fastcall input_available(void*,void*,void*){return true;}
+bool __fastcall no_power(void*,void*,int){return false;}
+u32* __fastcall chain_name(void* node,void*,int id){
+ // Native action ids: Attack=1, Guard=3, Jump=4 (distinct from input bits).
+ chain_key=node==idle.data()&&id==3?1u:node==move.data()&&action_chains&&id==1?2u:node==move.data()&&action_chains&&id==4?3u:0u;
+ return &chain_key;
+}
+const char* __fastcall chain_text(void*,void*){return "";}
+bool __fastcall style_has_node(void*,void*,void*){return true;}
+void native_input_tests(const image& pc){
+ const char* mutation=std::getenv("XML2_GUARD_INPUT_MUTATION");
+ native_input=true;contact_case=0;bind(pc);guard_input_fixture::bind(pc);tk_guard_bridges::prepare_guard_block();
+ if(mutation&&!std::strcmp(mutation,"raw-map"))at(0x61a8a3)[0]=7;
+ if(mutation&&!std::strcmp(mutation,"edges"))jump(0x550b70,at(0x550a90));
+ // Keep both native 4FCE50 and its native chain collector 4FC500 intact.
+ jump(0x41aa80,&chain_text);jump(0x501a10,&style_has_node);
+ move_vt[8/4]=reinterpret_cast<void*>(&chain_available);move_vt[0xb8/4]=reinterpret_cast<void*>(&no_power);move_vt[0xe0/4]=reinterpret_cast<void*>(&zero);
+ move_vt[0x118/4]=reinterpret_cast<void*>(&chain_name);
+ idle_vt=guard_vt=action_vt=move_vt;
+ idle_vt[0xc/4]=guard_vt[0xc/4]=action_vt[0xc/4]=reinterpret_cast<void*>(&input_available);
+ idle_handler=tk_guard_bridges::guard_block_slots;idle_handler[6]=reinterpret_cast<void*>(0x4fce50);
+ guard_handler=idle_handler;guard_handler[6]=reinterpret_cast<void*>(&tk_guard_bridges::guard_input);
+ idle_handler_object=idle_handler.data();guard_handler_object=guard_handler.data();
+ for(bool pad:{false,true}){
+  pc.load(0x4fd51f,5);reset();guard_input_fixture::reset();guard_entries=0;action_chains=false;
+  field<void*>(idle.data(),0)=idle_vt.data();field<void*>(idle.data(),0xc8)=&idle_handler_object;
+  field<void*>(guard.data(),0)=guard_vt.data();field<void*>(guard.data(),0xc8)=&guard_handler_object;
+  field<void*>(attack_move.data(),0)=field<void*>(jump_move.data(),0)=action_vt.data();
+  auto frame=[&](bool held,bool attack=false,bool jump=false,bool moving=false){guard_input_fixture::frame(buttons.data(),pad,held,attack,jump,moving);clock_now+=1.f/60.f;input_tick();};
+  frame(false);check(entries==0&&field<void*>(actor.data(),0x378)==idle.data(),"raw neutral frame never enters Guard");
+  frame(true);check(entries==1&&guard_entries==1&&allocations==1&&attached.live&&field<void*>(actor.data(),0x378)==move.data(),"raw press uses native generic selection and scheduler to decide Guard and enter one block");
+  check(field<u32>(buttons.data(),0)==0x100&&field<u32>(buttons.data(),4)==0x100,"scheduler preserves caller held and pressed Guard masks");
+  for(int tick=0;tick<180;++tick){
+   frame(true);
+   check(field<u32>(buttons.data(),0)==0x100&&field<u32>(buttons.data(),4)==0,"native raw held-only frame has no new press");
+   check(entries==1&&guard_entries==1&&allocations==1&&attached.live&&field<void*>(actor.data(),0x378)==move.data(),"three-second native scheduler hold cannot reacquire Guard or stack effects");
+  }
+  frame(false);check(!attached.live&&removals==1&&field<void*>(actor.data(),0x378)==idle.data(),"raw release ends block on its next scheduled frame");
+  frame(true);check(entries==2&&guard_entries==2&&allocations==2&&attached.live,"immediate next-frame raw repress creates exactly one fresh block");
+  if(mutation&&!std::strcmp(mutation,"generic"))jump(0x4fd51f,at(0x4fd5f7));
+  for(int cause=0;cause<3;++cause){
+   action_chains=cause!=2;
+   frame(true,cause==0,cause==1,cause==2);
+   void* expected=cause==0?attack_move.data():cause==1?jump_move.data():idle.data();
+   check(field<void*>(actor.data(),0x378)==expected&&!attached.live&&!(field<unsigned char>(actor.data(),0x765)&2)&&field<float>(actor.data(),0x4ec)==0,"native generic action/movement decision selects exact destination and cleans block ownership");
+   check(guard_entries==2+cause&&entries==2+cause,"native interruption does not re-enter Guard");
+   // Return to Idle through the fixture's external dispatcher, then release
+   // and press again through raw input before the next independent interrupt.
+   transition(idle.data());frame(false);frame(true);
+  }
+ }
+ check(std::memcmp(at(0x4fce50),pc.read(0x4fce50,0x8b1),0x8b1)==0,"native generic interruption owner remains byte-identical to retail");
+ native_input=false;
+}
+
 }
 int main(int argc,char** argv){
  std::setvbuf(stdout,nullptr,_IONBF,0);SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
  AddVectoredExceptionHandler(1,[](PEXCEPTION_POINTERS e)->LONG{std::printf("exception %08lX at %p ecx=%08lX eax=%08lX esi=%08lX edi=%08lX ebp=%08lX esp=%08lX return=%08X\n",e->ExceptionRecord->ExceptionCode,e->ExceptionRecord->ExceptionAddress,e->ContextRecord->Ecx,e->ContextRecord->Eax,e->ContextRecord->Esi,e->ContextRecord->Edi,e->ContextRecord->Ebp,e->ContextRecord->Esp,*reinterpret_cast<u32*>(e->ContextRecord->Esp));ExitProcess(1);});
+ check(GetPriorityClass(GetCurrentProcess())==IDLE_PRIORITY_CLASS,"native Guard fixture process runs at Idle priority");
  if(argc!=3)return 2;DWORD old=0;if(!VirtualProtect(at(0x401000),0x400000,PAGE_EXECUTE_READWRITE,&old))return 2;
  image pc(argv[1],pc_hash);if(failures)return 1;
  std::ifstream f(argv[2],std::ios::binary);std::vector<unsigned char> bytes{std::istreambuf_iterator<char>(f),{}};
- const auto root=lcsave::detail::decode_xmlb(bytes.data(),bytes.size());run(pc,root);
+ const auto root=lcsave::detail::decode_xmlb(bytes.data(),bytes.size());run(pc,root);native_input_tests(pc);
  std::printf("Guard block native: %d checks, %d failures\n",checks,failures);return failures?1:0;
 }

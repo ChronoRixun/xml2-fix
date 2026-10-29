@@ -1,8 +1,7 @@
 #include "shared_handler_fixture.hpp"
 #include "tk_guard_bridges.hpp"
 #include "shared_handler_c_rules.hpp"
-#include "pad_input_rules.hpp"
-#include "test_input_rules.hpp"
+#include "guard_input_fixture.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -418,24 +417,7 @@ void guard_entry_timing_test(){
  tk_guard_bridges::guard_entry(nullptr,nullptr,actor.data(),nullptr,context.data());
  check(query_calls==1&&starts==1&&action_id==25,"Guard admission with no input object still makes its contextual stunned-target decision");
  check(field<unsigned char>(context.data(),0x6c)&4,"null-input Guard admission also aborts its parent transition");
- for(int duration:{300,500,800})for(bool pad:{false,true}){
-  pad_input_rules::synthetic_pad controller;test_input_rules::synthetic_keys keyboard;
-  controller.press(XINPUT_GAMEPAD_X,duration);keyboard.press(0x12,duration); // DirectInput E
-  auto raw_held=[&](int ms){
-   if(pad){xinput_pad::raw_state state{};std::vector<std::string> expired;controller.merge(state,ms,expired);return (state.buttons&XINPUT_GAMEPAD_X)!=0;}
-   std::array<unsigned char,256> state{};std::vector<unsigned char> expired;keyboard.merge(state.data(),ms,expired);return (state[0x12]&0x80)!=0;
-  };
-  source=false;reset();bind();field<unsigned char>(target.data(),0x765)=1;check(raw_held(0),"raw pad-X/keyboard-E hold begins without a wake key");field<u32>(input.data(),0)=field<u32>(input.data(),4)=0x100;
-  field<void*>(context.data(),4)=move.data();
-  tk_guard_bridges::guard_entry(nullptr,nullptr,actor.data(),input.data(),context.data());
-  check(query_calls==1&&starts==1&&action_id==25,"human keyboard/pad Guard entry selects and dispatches the contextual stunned grab before a later input tick");
-  check((field<unsigned char>(context.data(),0x6c)&4)!=0,"entry decision aborts parent transition after exactly one dispatch");
-  // Neither the held-only frames nor the release introduces another entry.
-  for(int ms=16;ms<duration;ms+=16){check(raw_held(ms),"raw injected Guard stays held for the human-length duration");field<u32>(input.data(),4)=0;}
-  check(!raw_held(duration),"raw pad and keyboard Guard release at the requested duration");
-  field<u32>(input.data(),0)=0;
-  check(query_calls==1&&starts==1,"300-800 ms Guard holds cannot loop the entry decision");
- }
+
 }
 void guard_fallback_contract_test(){
  for(bool ai:{false,true})for(bool held:{false,true})for(bool admitted:{false,true}){
@@ -909,6 +891,19 @@ void blocked_trace_test(){
   tk_guard_bridges::tk_states.clear();tk_guard_bridges::trace_acquisition=false;
  }
 }
+void raw_guard_normalization_test(const image& pc){
+ guard_input_fixture::bind(pc);
+ for(bool pad:{false,true}){
+  guard_input_fixture::reset();
+  for(int frame=0;frame<184;++frame){
+   const bool down=frame!=0&&frame!=182;
+   guard_input_fixture::frame(input.data(),pad,down);
+   check(field<u32>(input.data(),0)==(down?0x100u:0u),"raw pad-X/keyboard-E maps through native bindings to Guard alone");
+   check(field<u32>(input.data(),4)==((frame==1||frame==183)?0x100u:0u),"native edge history distinguishes press, three-second hold, release and immediate repress");
+  }
+ }
+}
+
 int main(int argc,char** argv){
  std::setvbuf(stdout,nullptr,_IONBF,0);SetErrorMode(SEM_FAILCRITICALERRORS|SEM_NOGPFAULTERRORBOX);
  AddVectoredExceptionHandler(1,[](PEXCEPTION_POINTERS e)->LONG{std::printf("exception %08lX at %p EAX=%08lX ECX=%08lX ESI=%08lX ESP=%08lX return=%08X EDX=%08lX EDI=%08lX\n",e->ExceptionRecord->ExceptionCode,e->ExceptionRecord->ExceptionAddress,e->ContextRecord->Eax,e->ContextRecord->Ecx,e->ContextRecord->Esi,e->ContextRecord->Esp,*reinterpret_cast<u32*>(e->ContextRecord->Esp),e->ContextRecord->Edx,e->ContextRecord->Edi);ExitProcess(1);});
@@ -921,5 +916,6 @@ int main(int argc,char** argv){
  std::puts("cancel");cancel_tests();std::puts("entry");entry_tests(pc);std::puts("constructors");constructor_tests(pc,x1);std::puts("parser");parser_tests(pc);std::puts("filter");filter_tests();std::puts("acquisition");acquisition_tests(pc,x1);std::puts("guard");guard_tests(pc);std::puts("native guard probe");guard_probe_tests(pc,x1);std::puts("control");control_tests();std::puts("retail audio ABI");retail_audio_contract_tests(pc);release_damage_test(pc);guard_entry_timing_test();round3_guard_and_tk_test();
  native_admission_tests(pc,x1);source_hit_deadline_tests(pc,x1);live_tk_zero_selection_test(pc);source_throw_value_test(pc,x1);
  std::puts("guard fallback contract");guard_fallback_contract_test();std::puts("blocked trace");blocked_trace_test();
+ raw_guard_normalization_test(pc);
  std::printf("TK/guard native: %d checks, %d failures\n",checks,failures);return failures?1:0;
 }
