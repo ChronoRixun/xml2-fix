@@ -73,6 +73,8 @@ for exe in sorted(b.glob("*.exe")):
         cmds.append(([str(exe), EXE] + ([_need("XML2_FIX_GUARD_NODE")] if name == "xml2_guard_block_native_test"
                                      else [XBE] if name in with_xbe else [])) if name in with_exe else [str(exe)])
 cmds.append([str(b / "lcsave_test.exe"), "--fuzz", "2000"])
+if (b / "xml2_online_broker_test.exe").is_file():
+    cmds.append([str(b / "xml2_online_broker_test.exe"), "--room-closed-offline"])
 cmds += [[str(b / "xml2_script_pools_test.exe"), EXE, mode] for mode in ("invalid", "owner", "guard", "functions")]
 cmds.append([str(b / "xml2_x1_leader_test.exe"), "economy"])
 vectors = Path(_need("XML2_FIX_LEGACY_VECTORS_DIR"))

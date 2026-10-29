@@ -1700,3 +1700,19 @@ an Advanced Options Esc keyboard edge logs the transition state before manager i
 Pending live acceptance: Options > Space > Esc during opening (within about 0.5 seconds), x3, and after settling, x3,
 at both resolutions. Capture the transition-state diagnostic for each Esc; check for no surviving panel or later input
 misrouting, and confirm settled Accept commits and settled Cancel discards changes.
+
+### Host departure while playing or waiting to join
+
+An admitted guest treats a current authenticated broker `room_closed` notice as host departure immediately,
+including a late guest whose host has no native participant record yet. This uses the existing host-loss latch;
+local Leave/Quit and an authenticated removal continue to suppress it. A broker service disconnect by itself
+keeps the established game running. Transport timeouts and native slow-drop classification remain unchanged.
+
+Pause or Party Quit can finish through asynchronous `mainmenuexit 1`. When the main menu becomes current,
+the game-thread keyboard poll requests the Hub once so its pending THE HOST LEFT panel appears without a
+Play Online selection. The existing panel, modal controls and missing-assets fallback are retained.
+
+The native end-chain matrix checks main-menu routing for host notices/connection loss and its absence for
+Kick and local departures. `xml2_online_broker_test --room-closed-offline` exercises the production inbox
+and room handler without initializing GNS or opening sockets; it covers authenticated departure, local Leave,
+removal, pre-admission, host, service loss and stale connection events.

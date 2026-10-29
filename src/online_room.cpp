@@ -998,6 +998,14 @@ namespace online_room
 			}
 			else if (op == "room_closed")
 			{
+                // A current authenticated broker room closure is authoritative host departure.
+                // Admission distinguishes a playing/waiting guest from an unfinished resolve;
+                // the tracker's local Leave and authenticated Kick suppression still win.
+                if (room_ready && client.view().state == browser::phase::room && client.view().authenticated &&
+                    !hosting && core::valid_identity(host_id) && host_id != own_id && members.contains(host_id)) {
+                    host_loss.ended(false);
+                    if (host_loss.lost()) logger::write("online: authenticated room closure marks host departure for this admitted guest; native cleanup follows on the game thread");
+                }
 				logger::write("online: room %s closed (%s); established P2P connections stay up, new admission stops", online_security::redact_join_code(room_code).c_str(), online_security::sanitize_log_text(msg.text("reason")).c_str());
                 client.disconnected("room_closed", room_clock());
                 if (client.view().state != browser::phase::room) members.deactivate_all();

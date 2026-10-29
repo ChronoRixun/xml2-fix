@@ -548,7 +548,30 @@ void removal_host_test() {
     room::leave();pump_until([] { return room::worker_done.load(); });fake::party_ok=false;
     std::cout<<"PASS rule 64 host glue: removal_start results, first notice at once on the member's connection (index, heard, code, target), 250 ms cadence with the same serial, a replaced connection ends the old Kick (nothing sent on the new one), a stalled member closed only at the 60 s bound, a responsive one after 10 s, close text on the wire\n";
 }
-int main() {
+void room_closed_offline() {
+    for(const char* outcome:{"departed","local","removed","unadmitted","hosting","service","stale","unauthenticated","foreign-host"}) {
+        room::client={};room::host_loss.reset();room::hosting=std::string(outcome)=="hosting";
+        room::own_id="legends:1111111111111111";room::host_id="legends:0000000000000000";
+        room::room_code="ABCDEFGH";room::room_ready=true;
+        assert(room::members.reset({room::host_id,room::own_id}));
+        assert(room::client.begin(b::operation::resolve,0,true) && room::client.issue());
+        assert(room::client.joined(room::client.view().generation,b::operation::resolve,"ABCDEFGH"));
+        if(std::string(outcome)!="unadmitted") room::guest_admitted();
+        if(std::string(outcome)=="local") room::host_loss.local_departure();
+        if(std::string(outcome)=="removed") room::host_loss.removed_by_host();
+        if(std::string(outcome)=="unauthenticated") room::client.disconnected("broker unavailable",0);
+        if(std::string(outcome)=="foreign-host") room::host_id="legends:2222222222222222";
+        const auto connection=room::connection_generation.load();
+        room::inbox.push_back({room::view().generation,connection-(std::string(outcome)=="stale"),
+            std::string(outcome)=="service" ? R"({"op":"_closed","kind":"broker_unreachable"})" : R"({"op":"room_closed","reason":"host_left"})"});
+        room::process_inbox();
+        assert(room::host_lost()==(std::string(outcome)=="departed"));
+        assert(room::tunnels.empty()); // no GNS initialized, socket created, or network work
+    }
+    std::cout<<"PASS authenticated room_closed production inbox: immediate admitted guest loss; local/Kick/unadmitted/host/service/stale/unauthenticated/foreign-host excluded; no GNS or sockets\n";
+}
+int main(int argc,char** argv) {
+    if(argc==2 && std::string(argv[1])=="--room-closed-offline") { room_closed_offline();return 0; }
     std::cout<<std::unitbuf;
     SteamNetworkingIdentity id;id.Clear();id.ParseString("str:legends:0000000000000000");SteamNetworkingErrMsg error{};
     assert(GameNetworkingSockets_Init(nullptr,error));

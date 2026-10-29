@@ -300,6 +300,13 @@ int main(int argc, char** argv)
 			}
 			using namespace join_in_progress_rules;
 			auto same = [&](std::uint32_t va, const auto& bytes) { return std::memcmp(mapped.data() + va - limits_rules::image_base, bytes.data(), bytes.size()) == 0; };
+            for (std::size_t i = 0; i < ready_calls.size(); ++i) {
+                check(same(ready_calls[i], ready_originals[i]), "Team readiness replacement matches the retail CALL bytes");
+                auto changed = mapped;
+                changed[ready_calls[i] - limits_rules::image_base] ^= 1;
+                const auto* bad_ready = join_in_progress_rules::first_mismatch(changed.data());
+                check(bad_ready && bad_ready->va == ready_calls[i], "changed Team readiness CALL refuses the JIP transaction");
+            }
 			check(same(roster_hero_call, roster_hero_original) && same(teardown_call, teardown_original) && same(gamespy_call, gamespy_original) && same(add_entry, add_original) &&
 			      same(record_seats, record_seats_original) &&
 			      same(area_barrier_call, area_barrier_original) &&

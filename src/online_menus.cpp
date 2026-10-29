@@ -2821,6 +2821,14 @@ void keyboard(unsigned char* state) {
     auto* menu=current_peek();
     if(!menu) return;
     const auto s=which(menu);
+    // mainmenuexit 1 completes asynchronously. Show the pending panel as soon
+    // as main is current, without requiring the guest to select Play Online.
+    static bool host_left_main_requested=false;
+    if(s!=screen::main || !host_left_state.active) host_left_main_requested=false;
+    else if(!host_left_main_requested) {
+        host_left_main_requested=native_request("lc_online");
+        if(host_left_main_requested) logger::write("online menus: main menu reached after host departure; opening the host-left panel");
+    }
     if(!lobby(s)) lobby_state.role_keyboard=lobby_state.role_key_pending=false;
     if(!custom(s) && !lobby_live(menu)) return;
     // Keys these screens consume below never reach the game's poll, so the prompts' device tracker would not see them (060r

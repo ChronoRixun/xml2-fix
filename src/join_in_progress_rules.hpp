@@ -68,6 +68,11 @@ namespace join_in_progress_rules
 	constexpr std::uint32_t frame_walk = 0x559200, frame_walk_resume = 0x559205, frame_walk_exit = 0x5594f8;
 	constexpr std::uint32_t stream_walk = 0x55a2f0, stream_walk_resume = 0x55a2f6, stream_walk_exit = 0x55a32d;
 	constexpr std::uint32_t loaded_call = 0x5e68d9, all_loaded = 0x60c350;
+    constexpr std::uint32_t any_unready = 0x60c200;
+    // Team's two action checks and the host pause scheduler's final resume gate.
+    constexpr std::array<std::uint32_t, 3> ready_calls{0x5e4b4e, 0x5e4c21, 0x60aaec};
+    inline constexpr std::array<std::array<unsigned char, 5>, 3> ready_originals{{
+        {0xe8,0xad,0x76,0x02,0x00}, {0xe8,0xda,0x75,0x02,0x00}, {0xe8,0x0f,0x17,0x00,0x00}}};
 	constexpr std::uint32_t area_barrier_call = 0x484def, area_barrier = 0x611910;
 	constexpr std::uint32_t campaign_unregister_call = 0x609757;
 	constexpr std::uint32_t checksum_send = 0x614a40, checksum_send_resume = 0x614a46,
@@ -176,7 +181,11 @@ namespace join_in_progress_rules
 	// 0x6141e0 supplies the separate participant name. The suffix call is cdecl.
 	constexpr std::uint32_t roster_hero_call = 0x5d95bd, roster_format = 0x5604f0;
 	inline constexpr std::array<unsigned char, 5> roster_hero_original{0xe8,0x2e,0x6f,0xf8,0xff};
-	inline constexpr std::array<guard, 81> guards{{
+	inline constexpr std::array<guard, 85> guards{{
+        {0x5e4b4e,"e8ad76020084c0", "Team action checks the current cohort not-ready flags"},
+        {0x5e4c21,"e8da75020084c0", "Team alternate action checks the current cohort not-ready flags"},
+        {0x60aaec,"e80f17000084c0750d", "host pause scheduler resumes when the current cohort is ready"},
+        {0x60c200,"56e8da6900008bc8e8534f00008bf085f674148b4e10e865800000f60010", "native any-unready walks participant flags 0x10"},
 		{0x5d950c,"e8ffac0300508bceff9758020000", "ready roster: participant index selects held hero display name"},
 		{0x5d95a3,"8d9424bc0000005268f8e069008d8424c4010000688000000050e82e6ff8ff83c410", "ready roster: bounded cdecl hero suffix formatting"},
 		{0x5604f0,"56578b7c240c85ff750d", "native bounded formatter cdecl entry"},

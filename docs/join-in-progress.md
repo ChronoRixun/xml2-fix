@@ -44,6 +44,11 @@ the other PC)" / "(disabled on this PC)".
   synchronous area boundary has latched; opening Team Management is not a bring-in boundary.
   Its loaded query excludes pending records from the barrier without writing their grid entries; every existing
   participant must still report loaded before Team Management can proceed.
+  Closing Team uses a separate not-ready check (`0x60c200`): pause entry sets flag `0x10` on every record,
+  including pending players who never enter Team. The host's pause scheduler (`0x60aaec`) and Team's two action
+  checks (`0x5e4b4e`, `0x5e4c21`) exclude pending records. Loaded solo-story spectators with no human hero
+  also cannot hold this Ready barrier; active heroes still must Ready. This changes no participant flags or
+  loaded grid entries. Area loading, cohort restoration and pre-start checks retain their native barriers.
   Once the host has loaded, its serializer (`save_format::serialize_wrapper`) supplies one canonical live image to
   the native campaign sender, which streams `G/H` to every remote participant. The consumed serializer cursor is
   rewound before the host replays its own wrapper; receivers initialize that cursor separately. New Game mode 1 is normalized to full
