@@ -1039,13 +1039,20 @@ an actual 0x44-byte native discovery record.
 The tunnel/certificate/ICE wait is bounded to 45 seconds to allow relay/TURN
 negotiation over a hotspot. Discovery, admission and menu activation each keep
 their 15-second deadline; the broker retains its own 10-second deadline and shared limiter. The UI never
-waits synchronously for the broker or a tunnel. Missing, duplicate, wrong-port,
+waits synchronously for the broker or a tunnel. Missing, duplicate, zero-port,
 wrong-address, disabled or incompatible records never select master/plain-IP
 fallback. Native discovery is reset before searching, queries only the proven
 host virtual address, and never keeps a record pointer across frames. Records
 from another room member are ignored; only records sourced from the proven
 host tunnel count toward uniqueness. A duplicate or invalid host record still
 fails closed; zero host records waits until the discovery deadline.
+A host whose local port 5165 is occupied may bind an ephemeral stock port.
+Discovery accepts that nonzero port from the proven tunnel peer; native
+admission preserves it. The port is the tunneled stock socket endpoint, not a
+public NAT mapping or relay port. Host-local contention can affect two-PC play
+as well as two copies on one PC. The native regression executes the retail
+reply parser and admission with ports 50123, 65535 and 1, and rejects zero.
+
 
 The native admission callback contains a generation, not a menu pointer.
 Success event 8 is insufficient without a native local participant; the retail

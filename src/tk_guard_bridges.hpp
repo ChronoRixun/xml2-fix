@@ -102,7 +102,10 @@ inline void guard_block_trace(const char* event,void* actor){
  logger::write("guard block %s actor=%08X move=%p blockbit=%u effect_head=%08X pool=%p effects=native-node-owned",event,field<u32>(actor,0x1c),field<void*>(actor,0x378),unsigned(field<unsigned char>(actor,0x765)&2),ref.handle,ref.pool);
 }
 inline void __fastcall guard_block_entry(void* self,void*,void* actor,void* input,void* context){
- if(!actor||!context||!field<void*>(context,4)||!valid(field<u32>(actor,0x1c)))return;
+ if(!actor||!context||!field<void*>(context,4)||!valid(field<u32>(actor,0x1c))){
+  if(trace_guard)logger::write("guard block entry refused actor=%p context=%p",actor,context);
+  return;
+ }
  guard_blocks[field<u32>(actor,0x1c)]=field<void*>(context,4);
  fn<entry>(0x4ebd60)(self,actor,input,context);guard_block_trace("entry",actor);
 }
@@ -134,7 +137,11 @@ inline void __fastcall guard_block_cancel(void* self,void*,void* actor){
  guard_block_trace("cancel",actor);fn<void(__thiscall*)(void*,void*)>(0x4ebd90)(self,actor);
 }
 inline bool __fastcall guard_block_input(void* self,void*,void* actor,void* input){
- if(!actor||guard_blocks.find(field<u32>(actor,0x1c))==guard_blocks.end())return false;
+ if(!actor||!valid(field<u32>(actor,0x1c)))return false;
+ // Retail animation timeout (430C1A -> node+38) calls normal exit without
+ // replacing actor+378. Ownership has ended, but this node still receives
+ // input (4341E1). Refusing all input here strands it permanently.
+ const bool owned=guard_blocks.find(field<u32>(actor,0x1c))!=guard_blocks.end();
  // Native move availability owns powerusage/exhaustion. The Guard mask replaces
  // only ch_block's purchased-power held check; generic input owns interruptions.
  void* move=field<void*>(actor,0x378);
@@ -143,13 +150,14 @@ inline bool __fastcall guard_block_input(void* self,void*,void* actor,void* inpu
  // Native normalized input ends with the frame value at +20 (nine dwords).
  std::array<unsigned char,0x24> buttons{};if(input)std::memcpy(buttons.data(),input,buttons.size());
  field<u32>(buttons.data(),0)&=~0x100u;field<u32>(buttons.data(),4)&=~0x100u;
- if(held&&interrupted&&move&&field<float>(actor,0x27c)>0.f){
+ if(owned&&held&&interrupted&&move&&field<float>(actor,0x27c)>0.f){
   // Let the native action/movement decision consume the interruption. If the
   // authored node has no matching chain, finish via its Special-to-Idle exit.
   if(fn<shared_handler_bridges::input>(0x4fce50)(self,actor,buttons.data()))return true;
   if(guard_blocks.find(field<u32>(actor,0x1c))==guard_blocks.end())return false;
  }
- if(!held||interrupted||!move||field<float>(actor,0x27c)<=0.f||!method<bool(__thiscall*)(void*,void*)>(move,0xc)(move,actor)){
+ if(!owned||!held||interrupted||!move||field<float>(actor,0x27c)<=0.f||!method<bool(__thiscall*)(void*,void*)>(move,0xc)(move,actor)){
+  if(!owned)guard_block_trace("expired-release",actor);
   field<void*>(actor,0x3bc)=action(actor,0x18); // authored Special -> Idle
   if(!field<void*>(actor,0x3bc)){
    logger::write("guard block release chain lookup failed actor=%08X",field<u32>(actor,0x1c));

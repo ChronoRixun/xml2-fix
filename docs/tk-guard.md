@@ -308,3 +308,21 @@ For negative controls, set the native host's test-only environment variable
 `xml2_guard_block_native_test.exe <XMen2.exe> <guardblocking.xmlb>`.
 Each must return nonzero: respectively wrong Guard action mapping, repeated
 held presses, or suppressed native action selection. Unset it for normal gates.
+
+Normal animation completion is distinct from replacing a move: the retail
+`430BD7..430C21` timeout calls node slot `+38` (normal exit), but leaves
+`actor+378` pointing at that node. Cleanup ends the private block's effect
+ownership. Subsequent input at `4341E1` must still resolve Special-to-Idle even
+without an ownership entry; returning false would strand the actor in the
+block pose, with release/movement/attack all ignored. The trace names this
+escape `guard block expired-release`. A valid held block continues to use the
+existing native availability and interruption decisions; an expired one never
+reacquires effects. The native regression executes that timeout tail followed
+by the production input callback for release, held, movement and attack.
+
+For a live recheck, first tap keyboard E, wait, then hold pad X for 0.5 seconds
+and release. Check that the earlier E cycle actually returned to Idle before
+attributing any later pose to X. Record entry/exit/expired-release and the
+actor's current node. Repeat without keyboard input on a real pad, with an
+empty probe and a refused target, then move or attack during a hold. Hardware
+bindings and visible timing still require this live check.

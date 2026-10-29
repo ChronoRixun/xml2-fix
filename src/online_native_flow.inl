@@ -679,7 +679,11 @@ int native_discovery_record(std::uint32_t address,void*& out) {
             if(ip==address) {
                 discovery_detail=(std::uint32_t(record[0xf])<<24)|(std::uint32_t(record[0x11])<<16)|*reinterpret_cast<unsigned short*>(record+0xc);
                 if(matched) { discovery_why=4;return -1; }
-                if(!record[0x11] || record[0xf]!=1 || *reinterpret_cast<unsigned short*>(record+0xc)!=5165) { discovery_why=5;return -1; }
+                // The native bind can fall back when 5165 is busy. The reply
+                // parser obtains this port from the proven tunnel peer; it is
+                // not the public NAT/relay endpoint. Keep flags and zero-port
+                // refusal, but do not impose the LAN search's default port.
+                if(!record[0x11] || record[0xf]!=1 || !*reinterpret_cast<unsigned short*>(record+0xc)) { discovery_why=5;return -1; }
                 const auto* version=at<const unsigned char*>(0xa53058+0x410);
                 if(!std::memchr(record+0x3e,0,6) || !std::memchr(version,0,6) || std::strcmp(reinterpret_cast<const char*>(record+0x3e),reinterpret_cast<const char*>(version))) {
                     discovery_why=6;std::memcpy(&discovery_detail,record+0x3e,4);return -1;
