@@ -307,7 +307,7 @@ int main(int argc, char** argv)
                 const auto* bad_ready = join_in_progress_rules::first_mismatch(changed.data());
                 check(bad_ready && bad_ready->va == ready_calls[i], "changed Team readiness CALL refuses the JIP transaction");
             }
-			check(same(roster_hero_call, roster_hero_original) && same(teardown_call, teardown_original) && same(gamespy_call, gamespy_original) && same(add_entry, add_original) &&
+			check(same(roster_hero_call, roster_hero_original) && same(teardown_call, teardown_original) && same(gamespy_call, gamespy_original) && same(gamespy_think, gamespy_think_original) && same(add_entry, add_original) &&
 			      same(record_seats, record_seats_original) &&
 			      same(area_barrier_call, area_barrier_original) &&
 			      same(campaign_unregister_call, campaign_unregister_original) &&

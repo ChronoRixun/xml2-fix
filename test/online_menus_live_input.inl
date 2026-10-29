@@ -134,6 +134,11 @@ void pause_party() {
     assert(!*reinterpret_cast<void**>(hub.data()+0x324));
     std::cout<<"PDA Party PASS mouse hover -> native stored focus -> keyboard Accept queues openmenu lc_party once; absent link keeps native mouse\n";
 }
+std::map<void*,bool> footer_fills;
+void __fastcall footer_events(void* menu,void*,void* item,int type,int play,unsigned) {
+    assert(menu==hub.data());
+    if(play) footer_fills[item]=type==0;
+}
 void hub_select() {
     setup();
     for(const auto& pair:{std::pair{"normal","~84$MENU_ACCEPT Select"},std::pair{"hover","~80$MENU_ACCEPT Select"}}) {
@@ -145,26 +150,58 @@ void hub_select() {
     }
     build_menu(hub.data(),"lc_online");
     auto& select=item_named("lc_online","desctext1");
+    auto& back=item_named("lc_online","desctext2");
     text_of(122,"~84$MENU_ACCEPT Select");put(select.mem.data(),0x9c,122);
-    auto* row=item_named("lc_online","browse").mem.data();put(hub.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(row)));
+    auto* row=item_named("lc_online","browse").mem.data();put(hub.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(row)));row[0x54]|=1;
+    if(mode=="r22-hub-footer") { footer_fills.clear();redirect(0x5ae580,footer_events); }
     const auto mouse=*reinterpret_cast<mouse_t*>(0x69e49c);
     const auto tick=*reinterpret_cast<tick_t*>(0x69e454);
     write_table_text(table_text());
     ask_unit(mouse,hub.data(),60,15);
+    if(mode=="r22-hub-footer") {
+        assert(*reinterpret_cast<void**>(hub.data()+0x324)==row && (row[0x54]&1));
+        assert(footer_fills[select.mem.data()] && !footer_fills[back.mem.data()]);
+    }
     assert(*reinterpret_cast<int*>(0x6e4b18)==0);
     auto* native_focus=*reinterpret_cast<void**>(hub.data()+0x324);
     tick(hub.data(),nullptr);
     std::cout<<"Hub Select hover text: "<<texts["desctext1"]<<"\n";
     assert(texts["desctext1"]=="~80$MENU_ACCEPT Select" && *reinterpret_cast<void**>(hub.data()+0x324)==native_focus);
     text_of(122,"~80$MENU_ACCEPT Select"); // the engine setter stored the previous tick's string
-    ask_unit(mouse,hub.data(),300,100);tick(hub.data(),nullptr);
+    ask_unit(mouse,hub.data(),10,100);tick(hub.data(),nullptr);
     assert(texts["desctext1"]=="~84$MENU_ACCEPT Select");
+    if(mode=="r22-hub-footer") {
+        assert(*reinterpret_cast<void**>(hub.data()+0x324)==row);
+        assert((select.mem[0x54]&0x21)==0x20 && (back.mem[0x54]&0x21)==0x20);
+        assert(!footer_fills[select.mem.data()] && !footer_fills[back.mem.data()]);
+        text_of(123,"~84$MENU_BACK Back");put(back.mem.data(),0x9c,123);
+        ask_unit(mouse,hub.data(),100,15);assert(*reinterpret_cast<void**>(hub.data()+0x324)==row);
+        assert(footer_fills[back.mem.data()] && !footer_fills[select.mem.data()]);
+        assert(texts["desctext2"]=="~80$MENU_BACK Back");
+        *reinterpret_cast<unsigned char*>(0xa09fa0)=0;
+        ask_unit(mouse,hub.data(),100,15,0x202);
+        assert(*reinterpret_cast<unsigned char*>(0xa09fa0)==1 && *reinterpret_cast<void**>(hub.data()+0x324)==row);
+        text_of(123,"~80$MENU_BACK Back");ask_unit(mouse,hub.data(),10,100);
+        assert(!footer_fills[back.mem.data()] && texts["desctext2"]=="~84$MENU_BACK Back");
+        auto* next=item_named("lc_online","host").mem.data();
+        for(unsigned off:{0x5cu,0x60u,0x64u,0x68u}) {
+            put(row,off,unsigned(reinterpret_cast<std::uintptr_t>(select.mem.data())));
+            put(select.mem.data(),off,unsigned(reinterpret_cast<std::uintptr_t>(back.mem.data())));
+            put(back.mem.data(),off,unsigned(reinterpret_cast<std::uintptr_t>(next)));
+            put(next,off,unsigned(reinterpret_cast<std::uintptr_t>(row)));
+        }
+        navigate(hub.data(),0,1);assert(*reinterpret_cast<void**>(hub.data()+0x324)==next);
+    }
     std::cout<<"PASS Hub Select native hover: localized navy on amber, normal restored, native focus unchanged by color binding\n";
 }
 void run() {
     const auto tick=*reinterpret_cast<tick_t*>(0x69e454);
     const auto mouse=*reinterpret_cast<mouse_t*>(0x69e49c);
     for(const char* screen:{"lc_code","lc_browse"}) {
+        // The Browse regression runs independently; Code parity uses the
+        // original fixture order because these forced scene swaps do not
+        // execute the real deactivation/entry lifecycle between clients.
+        if(mode.starts_with("r22-retry") && std::string_view(screen)=="lc_code") continue;
         setup(screen);tick(hub.data(),nullptr); // establish broker scope before injecting its live timeout
         auto& retry=item_named(screen,"retry");
         if(std::string_view(screen)=="lc_code") {
@@ -178,7 +215,11 @@ void run() {
         menu_broker.cancel();menu_broker.stopped();ticks+=70000;
         assert(menu_begin(std::string_view(screen)=="lc_code" ? bm::operation::resolve : bm::operation::list));
         menu_broker.fail(menu_reply,"timeout",ticks);
+        if(mode=="r22-retry-wait") { *reinterpret_cast<void**>(hub.data()+0x324)=retry.mem.data();retry.mem[0x54]|=1; }
         ++asset_generation;tick(hub.data(),nullptr);assert(!(retry.mem[0x54]&8));
+        if(mode=="r22-retry-wait") {
+            assert(*reinterpret_cast<void**>(hub.data()+0x324)!=retry.mem.data() && !(retry.mem[0x54]&1));
+        }
         ticks+=70000;tick(hub.data(),nullptr);
         assert((retry.mem[0x54]&0x2c)==8); // enabled, visible AND no parser-imposed neverfocus
         std::string table="lc-online-hits/1\n"+std::string(screen)+" retry 421.6 32.8 471.2 45.6\n";
@@ -191,6 +232,19 @@ void run() {
         const auto generation=menu_view().generation.request;
         accept_focused(hub.data());tick(hub.data(),nullptr);
         assert(menu_broker.pending() && menu_view().generation.request!=generation);
+        if(mode=="r22-retry-focus") {
+            auto* focus=*reinterpret_cast<unsigned char**>(hub.data()+0x324);
+            assert(focus && focus!=retry.mem.data() && (focus[0x54]&0x2c)==8);
+            assert(!(retry.mem[0x54]&1));
+            // Native keyboard and pad direction handling uses this same
+            // neighbour/focus dispatch. It must work without a mouse event.
+            for(unsigned off:{0x5cu,0x60u,0x64u,0x68u}) {
+                put(focus,off,unsigned(reinterpret_cast<std::uintptr_t>(old.mem.data())));
+                put(old.mem.data(),off,unsigned(reinterpret_cast<std::uintptr_t>(focus)));
+            }
+            navigate(hub.data(),0,1);assert(*reinterpret_cast<void**>(hub.data()+0x324)==old.mem.data());
+            navigate(hub.data(),0,-1);assert(*reinterpret_cast<void**>(hub.data()+0x324)==focus);
+        }
         menu_broker.cancel();menu_broker.stopped();
     }
     // Same retail parser + enabled transition for the host lobby's Leave and Cancel actions; mouse starts on Cancel.
@@ -222,6 +276,14 @@ void shape_run() {
             if(std::string_view(a.menu)!="lc_online") continue;
             void* menu=std::string_view(a.menu)=="host" ? lobby_menu.data() : hub.data();
             const auto fn=menu==lobby_menu.data() ? host_mouse : mouse;
+            auto prepare=[&] {
+                if(std::string_view(a.name)=="desctext1" || std::string_view(a.name)=="desctext2") {
+                    // These prompts now hover independently of list selection.
+                    // Start inside their bar before testing its drawn edges.
+                    put(menu,0x324,unsigned(reinterpret_cast<std::uintptr_t>(item_named(a.menu,"host").mem.data())));
+                    ask_unit(fn,menu,int((a.L+a.R)/2),int((a.B+a.T)/2));
+                } else put(menu,0x324,unsigned(reinterpret_cast<std::uintptr_t>(item_named(a.menu,a.name).mem.data())));
+            };
             *reinterpret_cast<void**>(static_cast<char*>(menu)+0x324)=item_named(a.menu,a.name).mem.data();
             const float lean=a.R-a.L<50 ? 0.0f : 4.0f;
             const auto range=rows(a,h);
@@ -232,13 +294,13 @@ void shape_run() {
                 for(int px=0;px<w;++px) if(view_x(px,w,h)>=a.L+shift && view_x(px,w,h)<a.R+shift) { if(first<0) first=px;last=px; }
                 assert(first>0 && last<w-1);
                 for(int px:{first,last}) {
-                    *reinterpret_cast<void**>(static_cast<char*>(menu)+0x324)=item_named(a.menu,a.name).mem.data();
+                    prepare();
                     const auto got=ask(fn,menu,px,py,w,h);
-                    if(got.answered!=a.name) std::cout<<"shape "<<a.name<<" "<<px<<","<<py<<" "<<w<<"x"<<h<<" answered "<<got.answered<<"\n";
+                    if(got.answered!=a.name) std::cout<<"shape "<<a.name<<" "<<px<<","<<py<<" "<<w<<"x"<<h<<" answered "<<got.answered<<" rect "<<a.L<<","<<a.R<<" span "<<first<<","<<last<<"\n";
                     assert(got.answered==a.name);++checks;
                 }
                 for(int px:{first-1,last+1}) {
-                    *reinterpret_cast<void**>(static_cast<char*>(menu)+0x324)=item_named(a.menu,a.name).mem.data();
+                    prepare();
                     assert(ask(fn,menu,px,py,w,h).answered!=a.name);++checks;
                 }
             }
@@ -282,10 +344,12 @@ void live_start_buttons() {
     auto& start=item_named("host","text_startgame");
     auto& copy=item_named("host","lc_copy_code");
     const bool pad=mode=="r4-start-pad";
+    const bool keyboard=mode=="r4-start-keyboard";
     online_menus::set_pad_probe(pad ? pad_probe_yes : pad_probe_no);
     auto press=[&](bool expect_release) {
-        *reinterpret_cast<void**>(child.data()+0x324)=copy.mem.data();
-        if(pad) mask=0x100000;
+        *reinterpret_cast<void**>(child.data()+0x324)=keyboard ? start.mem.data() : copy.mem.data();
+        if(keyboard) mask=0x10;
+        else if(pad) mask=0x100000;
         else {
             *reinterpret_cast<unsigned char*>(0xa09fa0)=0;
             const auto mouse=*reinterpret_cast<mouse_t*>(0x69f2f4);

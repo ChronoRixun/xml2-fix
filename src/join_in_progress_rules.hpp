@@ -58,6 +58,8 @@ namespace join_in_progress_rules
 {
 	using limits_rules::guard;
 	constexpr std::uint32_t gamespy_thunk = 0x6159c0;
+	constexpr std::uint32_t gamespy_think = 0x604da0;
+	inline constexpr std::array<unsigned char,6> gamespy_think_original{0x8b,0x44,0x24,0x04,0x8b,0x08};
 	constexpr std::uint32_t teardown_call = 0x60940e, unregister_2c = 0x609424, unregister_18 = 0x60943f, gamespy_call = 0x609471,
 		lobby_tick = 0x60947e, keep_1f = 0x6075e0;
 	constexpr std::uint32_t add_entry = 0x608350, add_resume = 0x608358;
@@ -181,7 +183,7 @@ namespace join_in_progress_rules
 	// 0x6141e0 supplies the separate participant name. The suffix call is cdecl.
 	constexpr std::uint32_t roster_hero_call = 0x5d95bd, roster_format = 0x5604f0;
 	inline constexpr std::array<unsigned char, 5> roster_hero_original{0xe8,0x2e,0x6f,0xf8,0xff};
-	inline constexpr std::array<guard, 85> guards{{
+	inline constexpr std::array<guard, 88> guards{{
         {0x5e4b4e,"e8ad76020084c0", "Team action checks the current cohort not-ready flags"},
         {0x5e4c21,"e8da75020084c0", "Team alternate action checks the current cohort not-ready flags"},
         {0x60aaec,"e80f17000084c0750d", "host pause scheduler resumes when the current cohort is ready"},
@@ -230,6 +232,9 @@ namespace join_in_progress_rules
 		{0x6074b0,"568bf18b86c422000057","admission teardown entry"},
 		{0x609467,"c7861c220000ffffffffe84ac50000","GameSpy session teardown call"},
 		{0x6159c0,"e85bfafeff8bc8e9b4fafeff","GameSpy session teardown thunk"},
+		{0x604da0,"8b4424048b0851e894a2020083c404e9dc710300","GameSpy task peer lookup, peerThink and natneg pump"},
+		{0x6055a6,"8b0e51e8d299020083c404e81a6a0300891e","GameSpy shutdown clears the peer after removing its task"},
+		{0x60aab0,"8b70088b40108b500452ff1083c40485f68bc675eb","ordinary scheduler saves next before dispatch"},
 		{0x60542f,"8b0d247ea3000bc833c0890d247ea300a3807da300","online manager static at 0xa37d80"},
 		{0x609476,"8b86ac2200003bc7741350","lobby tick task removal"},
 		{0x6075db,"2200003bc774118b4e04506a1fe8f3","opcode 0x1f unregister on a started joiner"},
