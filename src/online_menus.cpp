@@ -692,13 +692,33 @@ bool hide_native(void* menu,const char* item,bool hidden) {
 // Its normal terminal close destroys these before 0x5d1e50 deactivates the menu.
 // If the owner leaves first (060s: no-change Esc, no Cancel callback), retail
 // deactivation restores input but leaves the windows registered and drawing.
-// Cancel an outstanding edit and use the engine's own complete window teardown;
-// a normal Accept/Cancel already cleared every pointer, so it needs no fallback.
-void advanced_abandon(void* menu) {
-    bool orphan=false;
+bool advanced_windows_live() {
     for(unsigned va=0xa6ad34;va<=0xa6ad44;va+=4)
-        orphan=orphan || *at<void**>(va)!=nullptr;
-    if(orphan) {
+        if(*at<void**>(va)) return true;
+    return false;
+}
+bool __fastcall advanced_generic_back(void*,void*) {
+    // During opening the manager asks vt+0x7c before ticking widget input.
+    // Reversing that transition bypasses widget Cancel and strands its windows.
+    // Once settled, widget Accept/Cancel owns teardown; the empty family keeps
+    // the retail true permission. Only Advanced Options has this slot replaced.
+    return !advanced_windows_live();
+}
+void advanced_escape_trace() {
+    __try {
+        auto* m=*at<unsigned char**>(0x8aff18); // published manager, never lazy-created
+        if(!m || *reinterpret_cast<unsigned*>(m)!=0x6a236c) return;
+        auto* menu=*reinterpret_cast<unsigned**>(m+0x86090);
+        // Opening need not have the ordinary active-menu flag set yet.
+        if(menu && *menu==0x6a1f64)
+            logger::write("online menus: Advanced Options Esc transition=%u windows=%u (keyboard edge before manager input)",
+                *reinterpret_cast<unsigned*>(m+0x866a0),unsigned(advanced_windows_live()));
+    } __except(EXCEPTION_EXECUTE_HANDLER) {}
+}
+void advanced_abandon(void* menu) {
+    // Cancel an outstanding edit and use the engine's own complete teardown;
+    // a normal Accept/Cancel already cleared every pointer, so needs no fallback.
+    if(advanced_windows_live()) {
         at<void(__cdecl*)()>(0x619770)(); // same native settings reload as Cancel
         at<void(__cdecl*)()>(0x6192e0)(); // native teardown of all five BXIG windows
         static_cast<unsigned char*>(menu)[0x18d8]|=2;
@@ -2795,6 +2815,7 @@ void keyboard(unsigned char* state) {
     try { native_session_watch(); } catch(...) { }
     if(!state) { keyboard_edges.reset();keyboard_input.clear();lobby_state.copy_keyboard=lobby_state.role_keyboard=lobby_state.role_key_pending=false;return; }
     const auto edges=keyboard_edges.sample(state);
+    if(hits_trace && edges[0x01]) advanced_escape_trace();
     // DirectInput can poll before frontend creation. Never invoke the lazy
     // 0x5d8920 getter here; even validation must use the already-published cell.
     auto* menu=current_peek();
@@ -2929,6 +2950,8 @@ patch_transaction::contribution contribution() {
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&advanced_deactivate)),0,"Advanced Options owned window teardown"));
     c.writes.push_back(patch_transaction::relocation(0x6a1fac,"",false,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&advanced_close)),0,"Advanced Options window teardown at resource close"));
+    c.writes.push_back(patch_transaction::relocation(0x6a1fe0,"",false,
+        static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&advanced_generic_back)),0,"Advanced Options widget owns Back while its windows exist"));
     c.writes.push_back(patch_transaction::relocation(0x6a0348,"",false,
         static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(&model_item_load)),0,"LC model scenes authored hidden"));
     c.writes.push_back(patch_transaction::relocation(0x69f66c,"",false,
@@ -2979,6 +3002,6 @@ void install(HMODULE game,const install_hooks* hooks) {
         game_version::refuse_startup(); return;
     }
     ready=true;
-    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 44 hooks and menu-anchors/512 committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability);
+    logger::write("online menus: dispatcher lcOnlineIntent n(i) registered; 45 hooks and menu-anchors/512 committed atomically; effective script capacity=%d; requires lc-online-menus/1 assets; input API=%s; lobby API=%s; broker API=%s; native API=%s; party API=%s; errors API=%s",script_functions::capacity(),input_capability,lobby_capability,broker_capability,native_capability,party_capability,errors_capability);
 }
 }

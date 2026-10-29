@@ -78,6 +78,67 @@ void run() {
 }
 std::array<unsigned,8> panel_vt{};
 void __fastcall draw(void*,void*) { ++draws; }
+std::array<unsigned,0x154/4> transition_vt{};
+bool __fastcall yes(void*,void*) { return true; }
+bool __fastcall no(void*,void*) { return false; }
+unsigned __fastcall back_mask(void*,void*) { return 1u<<21; }
+int __fastcall depth(void*,void*) { return 1; }
+void __fastcall token(void*,void*,unsigned) {}
+unsigned __fastcall lookup(void*,void*,void*,int) { return 0; }
+unsigned exit_animations=0;
+void __fastcall exit_animation(void* window,void*,int slot) { assert(window==panel.data() && slot==1);++exit_animations; }
+void __fastcall ui_sound(void*,void*,int) {}
+void opening_back() {
+    // Execute retail transition-input and manager Back, with only external
+    // services replaced. A clean, live panel has not selected Accept or Cancel.
+    redirect(0x5d8920,manager_stub);redirect(0x612be0,manager_stub);
+    redirect(0x610d20,no);redirect(0x5ab780,token);redirect(0x5ab670,lookup);
+    transition_vt[0xc0/4]=unsigned(reinterpret_cast<std::uintptr_t>(yes));
+    transition_vt[0x150/4]=unsigned(reinterpret_cast<std::uintptr_t>(yes));
+    transition_vt[0x54/4]=unsigned(reinterpret_cast<std::uintptr_t>(depth));
+    transition_vt[0x140/4]=unsigned(reinterpret_cast<std::uintptr_t>(back_mask));
+    transition_vt[0xd0/4]=0x5da030;
+    put(mgr.data(),0,unsigned(reinterpret_cast<std::uintptr_t>(transition_vt.data())));
+    std::array<unsigned char,0x1a00> owner{};
+    put(owner.data(),0,0x6a1f64);owner[4]=0x80;
+    set_current(owner.data());
+    panel.fill(0);*reinterpret_cast<void**>(0xa6ad34)=panel.data();
+    for(unsigned a=0xa6ad38;a<=0xa6ad44;a+=4) *reinterpret_cast<void**>(a)=nullptr;
+    *reinterpret_cast<unsigned char*>(0x8afde4)=1;
+    put(mgr.data(),0x866a0,1);
+    const auto shortcut=reinterpret_cast<bool(__fastcall*)(void*,void*)>(0x5abd80);
+    const bool closing=shortcut(owner.data(),nullptr);
+    const auto state=*reinterpret_cast<unsigned*>(mgr.data()+0x866a0);
+    std::cout<<"Advanced Options early Back: shortcut="<<closing<<", transition="<<state<<" (expected 1)\n";
+    assert(!closing && state==1);
+    assert(*reinterpret_cast<void**>(0xa6ad34)==panel.data() && !*reinterpret_cast<unsigned*>(panel.data()+0x48));
+    assert(*reinterpret_cast<unsigned char*>(0x8afde4)==1 && !destroys && !frees && !reloads);
+    // Each independently owned popup also blocks generic Back; an empty family
+    // retains the retail permission. Other menus keep their own retail slot.
+    const auto permit=*reinterpret_cast<bool(__fastcall**)(void*,void*)>(0x6a1fe0);
+    for(unsigned a=0xa6ad34;a<=0xa6ad44;a+=4) {
+        *reinterpret_cast<void**>(0xa6ad34)=nullptr;
+        *reinterpret_cast<void**>(a)=panel.data();assert(!permit(owner.data(),nullptr));
+        *reinterpret_cast<void**>(a)=nullptr;
+    }
+    assert(permit(owner.data(),nullptr));
+    // Once settled, native widget Back still reaches its Cancel callback even
+    // though generic Back permission stays false until widget teardown.
+    *reinterpret_cast<void**>(0xa6ad34)=panel.data();
+    put(mgr.data(),0x866a0,0);
+    transition_vt[0xe8/4]=unsigned(reinterpret_cast<std::uintptr_t>(ui_sound));
+    redirect(0x6222b0,exit_animation);
+    assert(!permit(owner.data(),nullptr));
+    reinterpret_cast<void(__cdecl*)(void*,int,void*)>(0x617d10)(panel.data(),5,nullptr);
+    assert(*reinterpret_cast<unsigned*>(panel.data()+0x48)==2 && exit_animations==1);
+    assert(*reinterpret_cast<unsigned*>(mgr.data()+0x866a0)==0);
+    std::cout<<"Settled widget Back PASS: retail 617d10 -> 617bb0, Cancel result=2, exit animation requested\n";
+    // Restore a different native menu's original vtable, including vt+0x7c.
+    // Keep the Advanced Options window present to prove this is per-vtable.
+    put(owner.data(),0,0x69e41c);put(mgr.data(),0x866a0,1);
+    assert(shortcut(owner.data(),nullptr) && *reinterpret_cast<unsigned*>(mgr.data()+0x866a0)==2);
+    std::cout<<"Advanced Options opening Back PASS: clean panel preserved; all five windows gate; empty family and other menu early Back unchanged\n";
+}
 void orphan() {
     options_menu::install(reinterpret_cast<HMODULE>(0x400000));assert(options_menu::installed());
     clock_vt[0xd4/4]=unsigned(reinterpret_cast<std::uintptr_t>(native_deactivate));
