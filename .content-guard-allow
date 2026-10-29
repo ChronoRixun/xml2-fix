@@ -1,6 +1,7 @@
 # Scoped exceptions for the builder content guard used on this C++ repository.
 # Each entry describes original code/art or invented test data; no game assets are accepted.
 DISASM test/e4_core_host.cpp # Authored synthetic caller/return frames, CPU and FX state probes, and ABI shims; native actor/controller/team/brain instructions are read from the owned executable at runtime, with no game listing or decompiled body embedded.
+DISASM test/guard_block_native_test.cpp # Authored native fixture stack frames and return adapters for block damage/energy slices; retail owners are read from the owned executable at runtime, with no extracted listing embedded.
 DISASM test/pad_hotplug_test.cpp # Authored caller frames for the owned retail mapping/read fixture; game bytes are supplied at runtime, with no retail instruction listing embedded.
 DISASM src/online_menus.cpp # Authored register adapter forwards captured MAIN_MENU controller and input mask to our C++ handler; no extracted game instruction listing.
 DISASM test/online_menus_test.cpp # Authored synthetic stack/register caller checks our adapter ABI; owned retail bytes are read locally at runtime, never embedded as a listing.
