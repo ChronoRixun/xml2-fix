@@ -787,6 +787,13 @@ void review_run(const script_functions_rules::func_entry* registration) {
             const bool noassets=original_mode=="r6-end-loss-noassets-guest";
             // F5: assets that do not author the panel (an older LC) must never leave the Hub rows disabled behind nothing.
             if(noassets) absent_items={"lc_hub_host_left","lc_hub_host_left_veil","lc_hostleft_again","lc_hostleft_back"};
+            // Pause/Party Quit lands on main. A pending host-left panel must route there without Play Online input.
+            screen("main");
+            const auto requests_before=calls.size();
+            unsigned char keys[256]{};online_menus::keyboard(keys);
+            const bool expect_route=(host_lost_flag || hostleft || slowdrop);
+            assert((calls.size()==requests_before+1 && calls.back()=="request:lc_online")==expect_route);
+            online_menus::keyboard(keys);assert(calls.size()==requests_before+unsigned(expect_route));
             screen("lc_online");tick(child.data(),nullptr);
             const bool lost=(host_lost_flag || hostleft || slowdrop) && !noassets;
             if(original_mode.starts_with("r6-end-hostleft-buttons-")) { assert(lost);live_hostleft_buttons();return; }

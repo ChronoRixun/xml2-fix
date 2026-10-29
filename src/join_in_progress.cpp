@@ -633,6 +633,43 @@ namespace join_in_progress
 				logger::write("join in progress: player %d admitted while the session plays - pending (outside the lockstep) until the next zone load", index);
 		}
 
+        // Team's close gate is independent of the loaded grid: pause entry sets
+        // flag 0x10 on every record. Pending players never enter Team to clear it.
+        bool loaded_spectator(void* pause, int index)
+        {
+            const auto* game = reinterpret_cast<const std::uint8_t*>(game_static);
+            const auto* zones = reinterpret_cast<const std::uint8_t*>(zones_static);
+            if (*reinterpret_cast<const std::uint32_t*>(game) != game_vtable ||
+                *reinterpret_cast<const std::uint32_t*>(zones) != zones_vtable ||
+                (zones[zones_loading_at] & 3) || !zones[zones_name_at] ||
+                std::strncmp(reinterpret_cast<const char*>(zones + zones_name_at), "menu/", 5) == 0 ||
+                !at<std::uint32_t>(pause, pause_loaded + index * 4)) return false;
+            bool playing = false;
+            for (int k = 0; k < 4; ++k) {
+                if (!at<std::uint32_t>(game, game_party + 4 * k) || !game[game_slot_human + k]) continue;
+                playing = true;
+                if (at<std::int32_t>(game, game_slot_controller + 4 * k) == index) return false;
+            }
+            return playing; // a loaded watcher has no hero on which to press Ready
+        }
+        char __fastcall ready_bridge(void* pause, void*)
+        {
+            const char native = fn<loaded_t>(any_unready)(pause);
+            if (!native || !pause || !machine.started || area_load || epoch.active) return native;
+            __try {
+                void* s = session();
+                if (!s || !host(s)) return native;
+                for (void* n = first(s); n; n = at<void*>(n, node_next)) {
+                    const void* record = at<void*>(n, node_record);
+                    if (machine.pending(record)) continue;
+                    const int index = index_of(record);
+                    if (index < 0 || index > 3) return native;
+                    if ((at<std::uint32_t>(record, record_flags) & 0x10) && !loaded_spectator(pause, index)) return 1;
+                }
+                return 0;
+            } __except (EXCEPTION_EXECUTE_HANDLER) { return native; }
+        }
+
 		char loaded_without_pending(void* pause, char native)
 		{
 			if (native || !pause) return native;
@@ -1331,6 +1368,8 @@ namespace join_in_progress
 			{keep_hosting, bytes(keep_hosting_original), bytes(keep_hosting_patched)},
 			{seat_rebinding_call, bytes(seat_rebinding_original), rel(0xe8, seat_rebinding_call, reinterpret_cast<const void*>(&seat_rebinding_bridge), seat_rebinding_original.size())},
 			{slow_drop_call, bytes(slow_drop_original), rel(0xe8, slow_drop_call, reinterpret_cast<const void*>(&slow_drop_bridge), slow_drop_original.size())}};
+        for (std::size_t i = 0; i < ready_calls.size(); ++i)
+            writes.push_back({ready_calls[i], bytes(ready_originals[i]), rel(0xe8, ready_calls[i], reinterpret_cast<const void*>(&ready_bridge), 5)});
 		if (!composed_receiver) writes.push_back({campaign_receive, bytes(campaign_receive_original), rel(0xe9, campaign_receive, reinterpret_cast<const void*>(&campaign_receive_bridge), campaign_receive_original.size())});
 		if (xml1_hook_transaction::apply(memory, writes, &safe))
 		{

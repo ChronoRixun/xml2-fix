@@ -30,7 +30,7 @@ int number(const wchar_t*,const wchar_t*,int n) { return n; }
 bool flag(const wchar_t*,const wchar_t*,bool n) { return n; }
 }
 namespace {
-unsigned adds=0,barriers=0;
+unsigned adds=0,barriers=0,resumes=0;
 alignas(8) unsigned char s[0x500]{},m[0x2400]{},pause[0xb0]{},local[0xc0]{},remote[0xc0]{},existing[0xc0]{},nodes[3][0x20]{};
 unsigned controller_vt[32]{},seat_vt[32]{},player_vt[32]{};
 unsigned* controllers=controller_vt;unsigned* seats=seat_vt;unsigned* players=player_vt;
@@ -41,6 +41,16 @@ void redirect(unsigned va,const void* to) {
 void* __cdecl session() { return s; }
 void* __cdecl manager() { return m; }
 void* __cdecl zones() { return nullptr; }
+void* __cdecl pause_get() { return pause; }
+void __fastcall resume(void*,void*) { ++resumes; }
+// Enter the retail scheduler after its task walks; preserve its saved ESI ABI.
+__declspec(naked) void scheduler_resume() {
+    __asm {
+        push esi
+        mov eax,60aac5h
+        jmp eax
+    }
+}
 void* __cdecl controllers_get() { return &controllers; }
 void* __cdecl seats_get() { return &seats; }
 void* __cdecl players_get() { return &players; }
@@ -90,9 +100,43 @@ int main(int argc,char** argv) {
     assert(join_in_progress::all_loaded_bridge(pause,nullptr)==0);
     put(pause,pause_loaded+8,1u);assert(join_in_progress::all_loaded_bridge(pause,nullptr)==1);
     put(nodes[1],node_next,static_cast<void*>(nullptr));put(s,0x278,2u);
+    // Closing Team uses the independent not-ready flag gate, even after loaded succeeds.
+    put(local,record_flags,1u);put(remote,record_flags,0x10u);
+    assert(reinterpret_cast<char(__thiscall*)(void*)>(0x60c200)(pause)==1);
+    assert(join_in_progress::ready_bridge(pause,nullptr)==0);
+    put(local,record_flags,0x11u);assert(join_in_progress::ready_bridge(pause,nullptr)==1);
+    put(local,record_flags,1u);
+    // Execute the actual host scheduler resume chain: original call stays paused,
+    // the production replacement resumes, and an unready current hero still blocks.
+    put(s,0x421,static_cast<unsigned char>(1));put(pause,0x6c,static_cast<unsigned char>(1));
+    redirect(pause_getter,pause_get);redirect(0x60c390,resume);
+    scheduler_resume();assert(resumes==0);
+    const auto patched=join_in_progress::rel(0xe8,ready_calls[2],reinterpret_cast<const void*>(&join_in_progress::ready_bridge),5);
+    std::memcpy(reinterpret_cast<void*>(ready_calls[2]),patched.data(),patched.size());
+    scheduler_resume();assert(resumes==1 && machine.pending(remote) && adds==0);
+    put(local,record_flags,0x11u);scheduler_resume();assert(resumes==1);put(local,record_flags,1u);
+    // Existing loaded spectators in a solo zone have no hero Ready action.
+    put(nodes[1],node_next,nodes[2]);put(s,0x278,3u);put(existing,record_flags,0x10u);
+    auto* game=reinterpret_cast<void*>(game_static);auto* zone=reinterpret_cast<void*>(zones_static);
+    put(game,0,game_vtable);put(zone,0,zones_vtable);
+    std::memcpy(static_cast<char*>(zone)+zones_name_at,"synthetic/solo",15);
+    put(zone,zones_loading_at,static_cast<unsigned char>(0));
+    put(game,game_party,1u);put(game,game_slot_human,static_cast<unsigned char>(1));put(game,game_slot_controller,0);
+    assert(join_in_progress::ready_bridge(pause,nullptr)==0); // hero 0 ready; watcher 2 cannot Ready
+    scheduler_resume();assert(resumes==2 && machine.pending(remote));
+    put(game,game_slot_controller,2);scheduler_resume();assert(resumes==2);assert(join_in_progress::ready_bridge(pause,nullptr)==1); // player 2 now has a hero
+    put(game,game_slot_controller,0);put(pause,pause_loaded+8,0u);
+    assert(join_in_progress::ready_bridge(pause,nullptr)==1); // an unloaded peer is never a spectator exception
+    put(pause,pause_loaded+8,1u);join_in_progress::area_load=true;
+    assert(join_in_progress::ready_bridge(pause,nullptr)==1); // zone-boundary barrier stays native
+    join_in_progress::area_load=false;join_in_progress::epoch.active=true;
+    assert(join_in_progress::ready_bridge(pause,nullptr)==1);join_in_progress::epoch={};
+    machine.started=false;assert(join_in_progress::ready_bridge(pause,nullptr)==1);machine.started=true;
+    put(nodes[1],node_next,static_cast<void*>(nullptr));put(s,0x278,2u);
     // A real synchronous area boundary still activates exactly once.
+    put(pause,0x6c,static_cast<unsigned char>(0));
     join_in_progress::area_barrier_bridge(s,nullptr,5.f);
     assert(adds==1 && barriers==1 && !machine.pending(remote) && machine.holding());
     join_in_progress::area_barrier_bridge(s,nullptr,5.f);assert(adds==1 && barriers==2);
-    std::cout<<"PASS production JIP bridge + retail loaded query: 100 Team queries skip only pending seat; real cohort still waits; actual area boundary adds once\n";
+    std::cout<<"PASS production JIP bridge + retail loaded query: 100 loaded queries; ready close excludes pending and loaded solo watchers, active heroes still wait; retail scheduler resumes pending/solo cohorts; native area/restart/startup gates; boundary adds once\n";
 }
