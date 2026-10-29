@@ -658,7 +658,7 @@ void review_run(const script_functions_rules::func_entry* registration) {
         // removed PC as the removal notice 0x2b; its transport-bound host connection ends too, so the room layer's host-loss
         // latch IS set (nothing on this PC told it otherwise). Only the native notice tells the kick apart: the END path must show
         // the plain "removed" notice, never the host-left panel. Nothing calls removed_by_host() here.
-        const bool kicked=original_mode=="r6-end-kicked-guest" || original_mode=="r6-end-partykick-guest" || original_mode=="r6-end-partykick-zone-guest" || original_mode=="r6-end-kicked-twice-guest";
+        const bool kicked=original_mode=="r6-end-kicked-guest" || original_mode=="r6-end-kicked-browse-guest" || original_mode=="r6-end-partykick-guest" || original_mode=="r6-end-partykick-zone-guest" || original_mode=="r6-end-kicked-twice-guest";
         // Fix F (rule 64): the in-session Party Kick. The room layer accepted the host's removal notice (latched; the tracker is
         // told the coming host-connection end is not a host loss) and the transport hands the session the native removal
         // notice 0x2b of this PC's own index built by online_removal_core::native_body. -seam-: the notice was accepted but the
@@ -672,7 +672,7 @@ void review_run(const script_functions_rules::func_entry* registration) {
         // native "The host has left the game." dialog.
         const bool watchdog=original_mode=="r6-end-hostleft-watchdog-guest";
         const bool hostleft=original_mode=="r6-end-hostleft-guest" || original_mode=="r6-end-hostleft-lobby-guest" || original_mode=="r6-end-hostleft-slow-guest" || watchdog || original_mode.starts_with("r6-end-hostleft-buttons-");
-        const bool hostleft_lobby=original_mode=="r6-end-hostleft-lobby-guest";
+        const bool hostleft_lobby=original_mode=="r6-end-hostleft-lobby-guest" || (kicked && !partyzone);
         if(hostleft_lobby) { *reinterpret_cast<unsigned char*>(0xa3bc40)=1;*reinterpret_cast<unsigned char*>(0x70b70d)=0; }
         // Review E finding 6: a second session end in the same kick: right after the kick's clear, the native script route
         // 0x49f990 runs the REAL 0x6123e0 again before the room leave; it must change nothing.
@@ -735,8 +735,17 @@ void review_run(const script_functions_rules::func_entry* registration) {
         assert(!escaped);
         assert(end_dialogs==0);
         if(hostleft_lobby) {
-            (*reinterpret_cast<tick_t*>(0x69f374))(child.data(),nullptr);
+            const bool browse_return=original_mode=="r6-end-kicked-browse-guest";
+            if(browse_return) { redirect(0x5d8920,manager_stub);screen("lc_browse"); }
+            const auto ending_tick=browse_return ? tick : *reinterpret_cast<tick_t*>(0x69f374);
+            ending_tick(child.data(),nullptr);
             assert(calls.back()=="request:lc_online" && end_dialogs==0);
+            const auto requests=calls.size();
+            // Native requestMenu is asynchronous. Keep Join current for two
+            // more frames: its cleared-session error branch must stay retired.
+            ending_tick(child.data(),nullptr);
+            ending_tick(child.data(),nullptr);
+            assert(calls.size()==requests && end_dialogs==0);
         }
         assert(!*reinterpret_cast<void**>(0xa53058+0x78));
         std::cout<<"end fixture: wrapper entries "<<online_menus::session_clear_count()-clears_at_start<<"\n";
@@ -750,7 +759,7 @@ void review_run(const script_functions_rules::func_entry* registration) {
             // The kick's 0x612c40 runs the REAL 0x6123e0 (0x612dd0; the trace shows its 0x6127a9..0x61290f services) and the wrapper
             // once; the second real 0x6123e0 run (0x49f990) returns before its 0x6128ab site on the torn-down session. Either way:
             // one entry that decides, one classification line, one deferred leave (asserted below), the notice at the Hub.
-            if(twice) assert(online_menus::session_clear_count()-clears_at_start==1);
+            if(twice) assert(online_menus::session_clear_count()-clears_at_start==(hostleft_lobby ? 2u : 1u));
         }
         if(!direct && !lobby && !hostleft_lobby) assert(!*reinterpret_cast<unsigned char*>(0xa53058+0x420));
         if(partyzone || hostleft) {
@@ -767,6 +776,10 @@ void review_run(const script_functions_rules::func_entry* registration) {
             assert(lines==1 && queued==partyzone);
         }
         assert(leave_arms==1); // the wrapper asked for exactly one deferred room leave
+        if(kicked && !partyzone) {
+            unsigned quiet=0;for(const auto& line:r6_log) quiet+=line.find("removed from the lobby - native dialog suppressed")!=std::string::npos;
+            assert(quiet==1);
+        }
         if(throws) {
             // The injected failure was contained: no leave ran, native ownership is gone, the retail teardown finished.
             assert(menu_leaves==0 && !leave_armed);
@@ -791,7 +804,9 @@ void review_run(const script_functions_rules::func_entry* registration) {
             screen("main");
             const auto requests_before=calls.size();
             unsigned char keys[256]{};online_menus::keyboard(keys);
-            const bool expect_route=(host_lost_flag || hostleft || slowdrop);
+            // The seam fixture has no running-zone flag: its accepted removal
+            // also completes at the Hub. The explicit zone case keeps main-menu teardown.
+            const bool expect_route=(host_lost_flag || hostleft || slowdrop || partyseam) && !hostleft_lobby;
             assert((calls.size()==requests_before+1 && calls.back()=="request:lc_online")==expect_route);
             online_menus::keyboard(keys);assert(calls.size()==requests_before+unsigned(expect_route));
             screen("lc_online");tick(child.data(),nullptr);

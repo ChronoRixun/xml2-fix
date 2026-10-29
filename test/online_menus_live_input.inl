@@ -59,6 +59,11 @@ void navigate(void* menu,int x,int y) {
     auto* next=reinterpret_cast<void*(__thiscall*)(void*,const void*)>(0x5aafd0)(menu,step);assert(next);
     reinterpret_cast<void*(__thiscall*)(void*,void*)>(0x5aaf80)(menu,next);
 }
+bool __fastcall pause_queue(void*,void*,const char* line) {
+    calls.push_back(std::string("queue:")+line);return true;
+}
+unsigned pause_keyboard_notes=0;
+void pause_keyboard_note() { ++pause_keyboard_notes; }
 void pause_party() {
     setup("pda");
     auto& link=item_named("pda","host");link.name="lc_party_link";
@@ -86,12 +91,75 @@ void pause_party() {
     std::cout<<"PDA Party hover: focus="<<name_of(*reinterpret_cast<void**>(hub.data()+0x324))<<"\n";
     assert(*reinterpret_cast<void**>(hub.data()+0x324)==link.mem.data());
     text_of(110,"openmenu lc_party");put(link.mem.data(),0x24,110);
-    calls.clear();accept_focused(hub.data());
+    // A native refresh can restore a different focus after the last mouse event.
+    // Enter is sampled later: the bar still under the pointer must own this accept.
+    put(hub.data(),0x324,0);
+    unsigned char keys[256]{};online_menus::keyboard(keys);
+    redirect(0x55c410,pause_queue);calls.clear();
+    pause_keyboard_notes=0;online_menus::set_keyboard_note(pause_keyboard_note);
+    keys[0x1c]=0x80;online_menus::keyboard(keys);
+    assert(*reinterpret_cast<void**>(hub.data()+0x324)==link.mem.data());
+    assert(keys[0x1c]==0);
+    assert(pause_keyboard_notes==1); // consumed input must still switch Party's footer to keyboard
     assert(std::count(calls.begin(),calls.end(),"queue:openmenu lc_party")==1);
+    put(hub.data(),0x324,0);keys[0x1c]=0x80;online_menus::keyboard(keys);
+    assert(keys[0x1c]==0 && std::count(calls.begin(),calls.end(),"queue:openmenu lc_party")==1);
+    assert(pause_keyboard_notes==1);
+    // Explicit keyboard navigation takes ownership; an old mouse hover cannot
+    // steal the next Enter. A disabled Party row cannot be restored either.
+    keys[0x1c]=0;online_menus::keyboard(keys);ask_unit(mouse,hub.data(),250,102);
+    put(hub.data(),0x324,0);keys[0xc8]=0x80;online_menus::keyboard(keys);
+    keys[0xc8]=0;keys[0x1c]=0x80;online_menus::keyboard(keys);
+    assert(!*reinterpret_cast<void**>(hub.data()+0x324));
+    online_menus::set_keyboard_note(nullptr);
+    // A pad direction uses the same retail neighbour/focus services as the
+    // PDA's 0x5ceb96 -> 0x5aaeb0 -> 0x5aaf12 path. No keyboard arrow edge occurs.
+    keys[0x1c]=0;online_menus::keyboard(keys);ask_unit(mouse,hub.data(),250,102);
+    auto& other=item_named("pda","code");
+    for(unsigned off:{0x5cu,0x60u,0x64u,0x68u})
+        put(link.mem.data(),off,unsigned(reinterpret_cast<std::uintptr_t>(other.mem.data())));
+    navigate(hub.data(),0,1);
+    assert(*reinterpret_cast<void**>(hub.data()+0x324)==other.mem.data());
+    const auto queued_before_pad_enter=std::count(calls.begin(),calls.end(),"queue:openmenu lc_party");
+    keys[0x1c]=0x80;online_menus::keyboard(keys);
+    assert(*reinterpret_cast<void**>(hub.data()+0x324)==other.mem.data());
+    assert(keys[0x1c]==0x80 && std::count(calls.begin(),calls.end(),"queue:openmenu lc_party")==queued_before_pad_enter);
+    text_of(113,"openmenu options");put(other.mem.data(),0x24,113);accept_focused(hub.data());
+    assert(calls.back()=="queue:openmenu options");
+    keys[0x1c]=0;online_menus::keyboard(keys);ask_unit(mouse,hub.data(),250,102);
+    put(hub.data(),0x324,0);link.mem[0x54]&=~8u;keys[0x1c]=0x80;online_menus::keyboard(keys);
+    assert(!*reinterpret_cast<void**>(hub.data()+0x324));link.mem[0x54]|=8;
     // The missing renamed item and other PDA pages still pass to the retail handler.
     link.name="foreign";build_menu(hub.data(),"pda");put(hub.data(),0x324,0);ask_unit(mouse,hub.data(),250,102);
     assert(!*reinterpret_cast<void**>(hub.data()+0x324));
     std::cout<<"PDA Party PASS mouse hover -> native stored focus -> keyboard Accept queues openmenu lc_party once; absent link keeps native mouse\n";
+}
+void hub_select() {
+    setup();
+    for(const auto& pair:{std::pair{"normal","~84$MENU_ACCEPT Select"},std::pair{"hover","~80$MENU_ACCEPT Select"}}) {
+        fitem source;source.menu="lc_online";source.name=std::string("lc_hub_select_")+pair.first;source.flags=0x24;
+        items.push_back(std::move(source));auto& added=items.back();const int id=int(items.size());
+        lay_out(added,id);text_of(id,added.name.c_str());put(added.mem.data(),8,unsigned(id));
+        const int text_id=pair.first==std::string_view("normal") ? 120 : 121;
+        text_of(text_id,pair.second);put(added.mem.data(),0x9c,unsigned(text_id));
+    }
+    build_menu(hub.data(),"lc_online");
+    auto& select=item_named("lc_online","desctext1");
+    text_of(122,"~84$MENU_ACCEPT Select");put(select.mem.data(),0x9c,122);
+    auto* row=item_named("lc_online","browse").mem.data();put(hub.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(row)));
+    const auto mouse=*reinterpret_cast<mouse_t*>(0x69e49c);
+    const auto tick=*reinterpret_cast<tick_t*>(0x69e454);
+    write_table_text(table_text());
+    ask_unit(mouse,hub.data(),60,15);
+    assert(*reinterpret_cast<int*>(0x6e4b18)==0);
+    auto* native_focus=*reinterpret_cast<void**>(hub.data()+0x324);
+    tick(hub.data(),nullptr);
+    std::cout<<"Hub Select hover text: "<<texts["desctext1"]<<"\n";
+    assert(texts["desctext1"]=="~80$MENU_ACCEPT Select" && *reinterpret_cast<void**>(hub.data()+0x324)==native_focus);
+    text_of(122,"~80$MENU_ACCEPT Select"); // the engine setter stored the previous tick's string
+    ask_unit(mouse,hub.data(),300,100);tick(hub.data(),nullptr);
+    assert(texts["desctext1"]=="~84$MENU_ACCEPT Select");
+    std::cout<<"PASS Hub Select native hover: localized navy on amber, normal restored, native focus unchanged by color binding\n";
 }
 void run() {
     const auto tick=*reinterpret_cast<tick_t*>(0x69e454);
@@ -193,6 +261,66 @@ void* __fastcall leave_item_lookup(void* menu,void* unused,const char* name) {
     if(std::string_view(name)=="text_playername1") return lobby_names.data();
     if(std::string_view(name)=="text_readycheck1") return lobby_checks.data();
     return hits_fixture::item_lookup(menu,unused,name);
+}
+void live_start_buttons() {
+    using namespace live_input_fixture;
+    ready_person(2,true);refresh_now();
+    setup();restore_retail(0x5adf40,5);restore_retail(0x5ab550,5);
+    for(auto& i:items) if(i.menu=="host" && i.kind==1)
+        put(i.mem.data(),0,unsigned(reinterpret_cast<std::uintptr_t>(item_vtable.data())));
+    redirect(0x5adc10,leave_item_lookup);
+    scene_lookup=[](const char* name)->void* {
+        for(auto& i:items) if(i.menu=="host" && i.name==name) return i.mem.data();return nullptr;
+    };
+    std::array<unsigned char,0x1a00-0x1954> state{};
+    std::memcpy(state.data(),child.data()+0x1954,state.size());
+    build_menu(child.data(),"host");std::memcpy(child.data()+0x1954,state.data(),state.size());
+    set_current(child.data());mask=0;
+    const auto tick=*reinterpret_cast<lobby_tick_t*>(0x69f2ac);
+    tick(child.data(),nullptr);
+    write_table_text(table_text());
+    auto& start=item_named("host","text_startgame");
+    auto& copy=item_named("host","lc_copy_code");
+    const bool pad=mode=="r4-start-pad";
+    online_menus::set_pad_probe(pad ? pad_probe_yes : pad_probe_no);
+    auto press=[&](bool expect_release) {
+        *reinterpret_cast<void**>(child.data()+0x324)=copy.mem.data();
+        if(pad) mask=0x100000;
+        else {
+            *reinterpret_cast<unsigned char*>(0xa09fa0)=0;
+            const auto mouse=*reinterpret_cast<mouse_t*>(0x69f2f4);
+            ask(mouse,child.data(),340,630,1280,720,0x202);
+            const bool released=*reinterpret_cast<unsigned char*>(0xa09fa0)==1;
+            if(expect_release) assert(released && *reinterpret_cast<unsigned*>(0xa09f54)==4);
+            put(reinterpret_cast<void*>(0xa09f54),0,0);*reinterpret_cast<unsigned char*>(0xa09fa0)=0;mask=released ? 0x10 : 0;
+        }
+        tick(child.data(),nullptr);
+    };
+    for(int deny=0;deny<5;++deny) {
+        host_role=true;ready_person(2,true);*reinterpret_cast<unsigned char*>(0x5bae37)=1;
+        child[0x195c]=1;child[0x1970]=0;mask=0;tick(child.data(),nullptr);
+        if(deny==0) host_role=false;
+        if(deny==1) ready_person(2,false);
+        if(deny==2) *reinterpret_cast<unsigned char*>(0x5bae37)=4;
+        if(deny==3) child[0x195c]=0;
+        if(deny==4) child[0x1970]=1;
+        // A stale enabled bit must never bypass the retail policy checks.
+        start.mem[0x54]|=8;
+        press(false);assert(!transfers && !broadcasts && !starts);
+    }
+    host_role=true;ready_person(2,true);*reinterpret_cast<unsigned char*>(0x5bae37)=1;
+    child[0x195c]=1;child[0x1970]=0;mask=0;tick(child.data(),nullptr);
+    press(true);
+    std::cout<<"Start from Copy: focus "<<name_of(*reinterpret_cast<void**>(child.data()+0x324))<<", transfers "<<transfers<<"\n";
+    assert(*reinterpret_cast<void**>(child.data()+0x324)==start.mem.data());
+    assert(transfers==1 && child[0x1970]);
+    mask=pad ? 0x100000 : 0;tick(child.data(),nullptr);assert(transfers==1);
+    // The live trigger: both guests departed, native refresh leaves the host's
+    // one ready row and the effective solo minimum is still the native byte.
+    child[0x1970]=0;people_count=1;build_people_chain();refresh_now();
+    mask=0;tick(child.data(),nullptr);press(true);
+    assert(transfers==2 && child[0x1970] && *reinterpret_cast<unsigned*>(people_table.data()+0xc)==1);
+    std::cout<<"PASS native START from Copy by mouse/pad, including guests departed; denied authority, readiness, minimum, admission, transfer; held Start does not repeat\n";
 }
 void live_leave_buttons() {
     using namespace live_input_fixture;

@@ -124,7 +124,7 @@ namespace broker_tls
 		if (context_valid_) DeleteSecurityContext(&context_);
 		if (credentials_valid_) FreeCredentialsHandle(&credentials_);
 		context_valid_ = credentials_valid_ = ready_ = false;
-		context_ = CtxtHandle{};
+		SecInvalidateHandle(&context_);
 		credentials_ = CredHandle{};
 		sizes_ = SecPkgContext_StreamSizes{};
 		encrypted_.clear();
@@ -171,6 +171,9 @@ namespace broker_tls
 			DWORD attributes = 0;
 			status = InitializeSecurityContextA(&credentials_, first ? nullptr : &context_, const_cast<char*>(hostname.c_str()), flags, 0, 0,
 			                                    first ? nullptr : &input_desc, 0, &context_, &output_desc, &attributes, nullptr);
+			// SSPI can create a context before the handshake completes. Own it
+			// before send/receive/status checks can take any early return.
+			context_valid_ = SecIsValidHandle(&context_);
 			const bool sent = !out[0].pvBuffer || !out[0].cbBuffer || send_all(socket, out[0].pvBuffer, out[0].cbBuffer);
 			if (out[0].pvBuffer) FreeContextBuffer(out[0].pvBuffer);
 			if (!sent) { error = "the broker TLS handshake could not be sent"; reset(); return false; }

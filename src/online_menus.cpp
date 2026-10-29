@@ -1253,13 +1253,13 @@ struct lobby_view {
 struct lobby_ui {
     void* owner=nullptr;
     std::uint64_t generation=0;
-    bool role_keyboard=false,role_key_pending=false,start_allowed=false;
+    bool role_keyboard=false,role_key_pending=false,start_allowed=false,start_held=false;
     bool confirm=false,error=false,copied=false,copy_held=false,role_held=false,focus_confirm=false,leave_authorized=false,copy_keyboard=false,copy_block=false;
     bool target_error=false,picker_safe=false;
     bool start_dimmed=false,start_was_enabled=false;
     void* refocus_from=nullptr; void* refocus_to=nullptr; // fix K: the focus moved off a dimmed native button, and where to
     DWORD copied_at=0; // when "Code copied" was raised: it expires (copied_ms) so it can never sit unseen in front of Back
-    void reset(void* menu=nullptr) { ++generation;owner=menu;copied_at=0;role_keyboard=role_key_pending=start_allowed=false;confirm=error=copied=copy_held=role_held=focus_confirm=leave_authorized=copy_keyboard=copy_block=target_error=picker_safe=start_dimmed=start_was_enabled=false;refocus_from=refocus_to=nullptr; }
+    void reset(void* menu=nullptr) { ++generation;owner=menu;copied_at=0;role_keyboard=role_key_pending=start_allowed=start_held=false;confirm=error=copied=copy_held=role_held=focus_confirm=leave_authorized=copy_keyboard=copy_block=target_error=picker_safe=start_dimmed=start_was_enabled=false;refocus_from=refocus_to=nullptr; }
 } lobby_state;
 thread_local bool lobby_ticking=false,base_ui_dispatch=false,native_mouse=false,back_consumed=false;
 thread_local unsigned refreshing_names=0;
@@ -1864,8 +1864,9 @@ bool lobby_current_mask(unsigned& mask) {
 }
 void lobby_tick(void* menu,unsigned original,bool& called) {
     if(native_guest_end_pending && which(menu)==screen::lobby_join) {
-        called=true;native_guest_end_pending=false;
-        if(!native_request("lc_online")) native_guest_end_pending=true;
+        // requestMenu completes later. Retire this cleared Join until the Hub
+        // becomes current, without submitting another request each frame.
+        called=true;native_guest_return();
         return;
     }
     if(!lobby_live(menu) || current_peek()!=menu) { called=true;lobby_original(menu,original);return; }
@@ -1896,8 +1897,14 @@ void lobby_tick(void* menu,unsigned original,bool& called) {
         lobby_state.copy_held=true;
     } else lobby_state.copy_held=false;
     const bool tool=pending.action!=0;
-    if(pending.action==int(intent::copy_code) || lobby_state.copy_held || lobby_state.copy_keyboard) lobby_state.copy_block=true;
     role_accept=false;
+    // MENU_OK is the host's Start shortcut, including when Copy code has focus.
+    // Select only the native Start control; 0x5bacd0 still owns every start gate.
+    const bool start_key=host && lobby_pad_shown(menu) && (input&0x100000);
+    if(start_key && !lobby_state.start_held && state_valid && !picker && !panel && !tool && state.gate && !state.transfer)
+        role_accept=lobby_focus(menu,"text_startgame");
+    lobby_state.start_held=start_key;
+    if(pending.action==int(intent::copy_code) || lobby_state.copy_held || lobby_state.copy_keyboard) lobby_state.copy_block=true;
     if(input&0x1000000) {
         const bool local_member=valid && before.local_known &&
             std::find(std::begin(before.ids),std::begin(before.ids)+before.count,before.local)!=std::begin(before.ids)+before.count;
@@ -2146,6 +2153,17 @@ void* focus_of(void* menu);
 // keeps the last row's help. Assets without the twins (an older LC) keep the plain hint and the authored help.
 constexpr const char* hub_rows[]{"host","code","browse","party","other"};
 std::string hub_help_row="host";
+bool hover_index(int& out);
+bool authored_text(void* menu,const char* name,char (&out)[128]) {
+    __try {
+        auto* source=item_try(menu,name);
+        if(!source) return false;
+        const char* value=engine_string(*reinterpret_cast<std::uint32_t*>(static_cast<char*>(source)+0x9c));
+        if(!value) return false;
+        unsigned n=0;for(;n<127 && value[n];++n) out[n]=value[n];out[n]=0;
+        return n && !value[n];
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
 void hub_focus_follow(void* menu) {
     // A new Hub visit (the binding cache is cleared on every departure and scoped to the menu) starts on the Host row's
     // help, as authored - never on the previous visit's row while the CMenu focus is still unset.
@@ -2162,6 +2180,14 @@ void hub_focus_follow(void* menu) {
         if(hide(menu,(key+"_hint_on").c_str(),!on)) hide(menu,(key+"_hint").c_str(),on);
         const bool help=hub_help_row==key;
         for(const auto* part:{"_title","_1","_2"}) hide(menu,("lc_help_"+key+part).c_str(),!help);
+    }
+    int hover=-1;hover_index(hover);
+    char label[128]{},current[128]{};
+    if(authored_text(menu,hover==0 ? "lc_hub_select_hover" : "lc_hub_select_normal",label) &&
+        (!authored_text(menu,"desctext1",current) || std::strcmp(label,current)!=0)) {
+        // Refresh writes behind the binding cache. Keep native prompt hit/input
+        // behavior and focus, replacing only the localized label.
+        bindings.text.erase("desctext1");bind_text(menu,"desctext1",label);
     }
 }
 void* focus_of(void* menu) {
@@ -2311,6 +2337,9 @@ bool scoped_point(void* menu,int x,int y,int& rx,int& ry,bool lobby,void** chose
     } catch(...) { return false; }
 }
 using mouse_fn=std::uint32_t(__thiscall*)(void*,int,int,int,int,int);
+void* pause_hover_menu=nullptr;
+int pause_hover_x=0,pause_hover_y=0;
+bool pause_accept_held=false;
 // The renamed PDA Party row falls through the native stock-name pass to the
 // shifted text hit test. The always-drawn button anchor supplies the complete bar
 // even while its focus model is model_hide (which has no bounds of its own).
@@ -2330,6 +2359,8 @@ bool pause_party_point(void* menu,int x,int y,int& rx,int& ry) {
 }
 std::uint32_t __fastcall pause_mouse(void* menu,void*,int x,int y,int flags,int message,int extra) {
     int rx=x,ry=y;const bool party=pause_party_point(menu,x,y,rx,ry);
+    pause_hover_menu=party ? menu : nullptr;
+    if(party) { pause_hover_x=x;pause_hover_y=y; }
     void* const before=party ? focus_of(menu) : nullptr;
     const auto result=at<mouse_fn>(0x5cc1f0)(menu,rx,ry,flags,message,extra);
     if(party && current_peek()==menu && (message==WM_MOUSEMOVE || message==WM_LBUTTONUP)) {
@@ -2366,7 +2397,15 @@ bool lobby_mouse(void* menu,unsigned original,int x,int y,int flags,int message,
     // The skinned lobbies' rows and prompts hit-test against their drawn bars too (an unskinned lobby has no table rows).
     const bool live_lobby=lobby_live(menu);
     if(live_lobby) trace_begin(menu,x,y,unsigned(message));
-    if(int rx=x,ry=y;live_lobby && scoped_point(menu,x,y,rx,ry,true)) { x=rx; y=ry; }
+    void* chosen=nullptr;
+    bool mapped=false;
+    if(int rx=x,ry=y;live_lobby && scoped_point(menu,x,y,rx,ry,true,&chosen)) { x=rx; y=ry;mapped=true; }
+    // The retail lobby's first pass only navigates from its own native buttons.
+    // Commit the drawn button before that pass so a single release from Copy works.
+    if(mapped && chosen && current_peek()==menu && (message==WM_MOUSEMOVE || message==WM_LBUTTONDOWN || message==WM_LBUTTONUP)) {
+        for(const char* name:{"text_startgame","text_kickplayer","text_leaveroom","text_readygame"})
+            if(chosen==item_try(menu,name)) { lobby_focus(menu,name);break; }
+    }
     const bool previous=native_mouse;native_mouse=true;
     const bool result=lobby_mouse_native(menu,original,x,y,flags,message,extra);
     native_mouse=previous;
@@ -2721,6 +2760,11 @@ void native_history_trim(void* menu) {
 }
 void tick_impl(void* menu,bool& native_called) {
     if(ready && live(menu)) {
+        if(native_guest_end_pending && which(menu)!=screen::hub) {
+            // A native fallback may already have reached Browse. Complete the
+            // removal's Hub destination before any old screen actions run.
+            native_called=true;native_guest_return();return;
+        }
         // The native mask is rising-edge input (controller +2f8 XOR +374).
         // Keyboard text already posted by DirectInput wins over X/Y bindings.
         const auto mask=screen_mask(input_mask());
@@ -2749,7 +2793,7 @@ void tick_impl(void* menu,bool& native_called) {
     if(s==screen::party) { party_frame(menu);return; }
     native_history_trim(menu);
     broker_scope(s);
-    if(s==screen::hub) { entry.clear();native_guest_end_pending=false; }
+    if(s==screen::hub) { entry.clear();native_guest_end_pending=native_guest_end_requested=false; }
     load_recent();
     if(s==screen::hub) poll_name();
     else abandon_name();
@@ -2977,18 +3021,41 @@ void keyboard(unsigned char* state) {
     escape_down=down;
     if(!game_thread.load()) return; // no frontend/input model work before the first game tick
     try { native_session_watch(); } catch(...) { }
-    if(!state) { keyboard_edges.reset();keyboard_input.clear();lobby_state.copy_keyboard=lobby_state.role_keyboard=lobby_state.role_key_pending=false;return; }
+    if(!state) { keyboard_edges.reset();keyboard_input.clear();pause_hover_menu=nullptr;pause_accept_held=false;lobby_state.copy_keyboard=lobby_state.role_keyboard=lobby_state.role_key_pending=false;return; }
     const auto edges=keyboard_edges.sample(state);
+    if(pause_accept_held) {
+        if(!((state[0x1c]|state[0x9c])&0x80)) pause_accept_held=false;
+        state[0x1c]=state[0x9c]=0;
+    }
     // DirectInput can poll before frontend creation. Never invoke the lazy
     // 0x5d8920 getter here; even validation must use the already-published cell.
     auto* menu=current_peek();
-    if(!menu) return;
+    if(!menu) { pause_hover_menu=nullptr;return; }
+    // The native PDA can refresh its focus after mouse dispatch. Synchronize at
+    // the Enter sample too, while that same Party bar still owns the pointer.
+    if(pause_hover_menu) {
+        int rx=0,ry=0;
+        void* const focused=menu==pause_hover_menu ? focus_of(menu) : nullptr;
+        if(menu!=pause_hover_menu || !pause_party_point(menu,pause_hover_x,pause_hover_y,rx,ry) ||
+            (focused && focused!=item_try(menu,"lc_party_link")) ||
+            edges[0xc8] || edges[0xd0] || edges[0xcb] || edges[0xcd] || edges[0x01]) pause_hover_menu=nullptr;
+        else if((edges[0x1c] || edges[0x9c]) && !((state[0x1d]|state[0x9d]|state[0x38]|state[0xb8])&0x80)) {
+            lobby_focus(menu,"lc_party_link");
+            // Queue the bar's constant action once, rather than leave Enter
+            // exposed to another PDA refresh before its native Accept pass.
+            if(native_console_queue(at<getter>(0x55c890)(),"openmenu lc_party")) {
+                if(keyboard_note) keyboard_note();
+                pause_accept_held=true;state[0x1c]=state[0x9c]=0;
+            }
+        }
+    }
     const auto s=which(menu);
+    if(s==screen::main && native_guest_end_pending) native_guest_return();
     // mainmenuexit 1 completes asynchronously. Show the pending panel as soon
     // as main is current, without requiring the guest to select Play Online.
     static bool host_left_main_requested=false;
     if(s!=screen::main || !host_left_state.active) host_left_main_requested=false;
-    else if(!host_left_main_requested) {
+    else if(!host_left_main_requested && !native_guest_end_pending) {
         host_left_main_requested=native_request("lc_online");
         if(host_left_main_requested) logger::write("online menus: main menu reached after host departure; opening the host-left panel");
     }

@@ -87,6 +87,7 @@ std::vector<unsigned char> retail_original;
 void restore_retail(unsigned va,unsigned size) { std::memcpy(reinterpret_cast<void*>(va),retail_original.data()+va-0x401000,size); }
 void live_hostleft_buttons();
 void live_leave_buttons();
+void live_start_buttons();
 std::vector<std::string> calls;
 std::map<std::string,std::string> texts;
 std::map<std::string,std::string> once_logs;
@@ -732,6 +733,7 @@ int main(int argc,char** argv) {
     set_current(hub.data());tick(hub.data(),nullptr);
     assert(texts["local_name"]==(mode=="name31" ? field_name(std::string(31,'a')) : mode=="blank-name" ? std::string("Player") : field_name("100??????openmenu bad")));
     if(mode=="r16-hits-live") { live_input_fixture::run();return 0; }
+    if(mode=="r20-hub-select") { live_input_fixture::hub_select();return 0; }
     if(mode=="r19-pause-party" || mode=="r19-pause-party-native") {
         if(mode.ends_with("-native")) *reinterpret_cast<unsigned*>(0x69edec)=0x5cc1f0;
         live_input_fixture::pause_party();return 0;

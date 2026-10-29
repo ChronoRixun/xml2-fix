@@ -2,6 +2,8 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <algorithm>
+#include <cassert>
 
 #if __has_include("broker_tls.hpp")
 #include "broker_tls.hpp"
@@ -26,6 +28,7 @@ namespace
 }
 
 #if HAVE_BROKER_TLS
+#include "broker_tls_lifetime.inl"
 namespace
 {
 	bool live_exchange(const char* host, const char* port, const std::string& pin, bool read_challenge)
@@ -66,6 +69,8 @@ namespace
 int main(int argc, char** argv)
 {
 #if HAVE_BROKER_TLS
+	if (argc == 2 && std::string(argv[1]) == "--lifetime-offline") return tls_lifetime::run();
+	const bool pin_only = argc == 2 && std::string(argv[1]) == "--pin-offline";
 	if (argc == 5 && std::string(argv[1]) == "--live")
 	{
 		check(live_exchange(argv[2], argv[3], argv[4], true), "live broker TLS: the pinned protocol-2 challenge arrives");
@@ -89,8 +94,8 @@ int main(int argc, char** argv)
 		      "broker certificate: the matching SPKI pin authenticates a self-signed leaf");
 		check(!broker_tls::verify_certificate(certificate, L"broker.test", std::string(64, '0'), error),
 		      "broker certificate: a wrong SPKI pin fails closed");
-		check(!broker_tls::verify_certificate(certificate, L"broker.test", "", error),
-		      "broker certificate: an untrusted self-signed leaf cannot use the public-CA path");
+		if (!pin_only) check(!broker_tls::verify_certificate(certificate, L"broker.test", "", error),
+		                     "broker certificate: an untrusted self-signed leaf cannot use the public-CA path");
 		CertFreeCertificateContext(certificate);
 	}
 	const auto protocols = broker_tls::enabled_protocols();

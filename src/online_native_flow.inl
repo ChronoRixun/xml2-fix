@@ -273,6 +273,11 @@ void native_session_leave() {
 // EBP at the patched 0x612070 call (0x612c40's frame when the clear comes from a removal; online_menus_rules kicked_by_host).
 std::uintptr_t cleared_frame=0;
 bool native_guest_end_pending=false; // drain after the retail removal returns, before the Join tick can show its own dialog
+bool native_guest_end_requested=false;
+void native_guest_return() {
+    if(native_guest_end_pending && !native_guest_end_requested)
+        native_guest_end_requested=native_request("lc_online");
+}
 unsigned session_clears=0; // wrapper entries (one kick can clear twice: 0x6123e0 inside 0x612c40, review E finding 6)
 bool removal_was_kick(std::uintptr_t frame,std::uintptr_t local_record) {
     __try {
@@ -315,7 +320,10 @@ void native_end_quietly(void* session,std::uintptr_t frame,const char* why) {
     } __except(EXCEPTION_EXECUTE_HANDLER) { }
     bool queued=false;
     if(in_zone) { __try { queued=native_console_queue(at<getter>(0x55c890)(),"mainmenuexit 1"); } __except(EXCEPTION_EXECUTE_HANDLER) { queued=false; } }
-    else native_guest_end_pending=true;
+    else {
+        if(!native_guest_end_pending) native_guest_end_requested=false;
+        native_guest_end_pending=true;
+    }
     logger::write("online menus: %s - native %s%s",why,quieted ? "dialog suppressed" : "dialog left as is",
         in_zone ? (queued ? "; no takeover offer, back to the main menu (mainmenuexit 1)" : "; no takeover offer; main menu request refused") : "");
 }
@@ -343,8 +351,8 @@ void __fastcall native_session_cleared(void* session,void*,bool keep_local) {
                 removed_notice=true;host_left_state.dismiss();
                 if(kicked) logger::write("online menus: the host removed this PC from the game (native removal notice 0x%04X); the Hub shows lc_notice_removed",kick_reason);
                 else logger::write("online menus: the host removed this PC from the game (its in-session removal notice, rule 64); the Hub shows lc_notice_removed");
-                // The lobby Kick keeps its native "dropped" text (060r 3a); a running zone's removal never offers the takeover.
-                if(*(static_cast<unsigned char*>(session)+0x44c)) native_end_quietly(session,frame,"removed in a running game");
+                const bool in_zone=*(static_cast<unsigned char*>(session)+0x44c)!=0;
+                native_end_quietly(session,frame,in_zone ? "removed in a running game" : "removed from the lobby");
             } else if(native_flow.phase==native_phase::guest && host_left_by_notice(removal.notice || (removal.removal && !removal.local),removal.local,removal.reason)) {
                 // The host's own Leave / Quit notice (0x2b with the host's record, 0x1106 / 0x1107 / 0x10cc): the 0.6 host-left
                 // panel at the Hub, never the native "The host has left the game." or the takeover offer.
@@ -764,6 +772,7 @@ bool native_flow_tick(screen s) {
         view.state==broker::phase::room && view.action==broker::operation::resolve && broker_calls.admission_target) {
         ++native_flow.serial;native_flow.phase=native_phase::tunnel;
         removed_notice=false; // review E finding 5: a new join never shows an older removal
+        native_guest_end_pending=native_guest_end_requested=false;
         attempt_refusal_serial=broker_calls.refusal_serial ? broker_calls.refusal_serial() : 0;
         native_flow.ticket=view.generation;native_flow.started=now_ms();
         if(!native_engine_rearm("join start")) { native_flow_error("native_engine_down");return false; }

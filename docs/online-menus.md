@@ -1833,3 +1833,41 @@ original `0x5ba270` and `0x5c8020` methods. The DATA regression fills all native
 slots through the real setter, binds a fresh room successfully, then changes
 2200 room names and 1200 codes without increasing slot usage. The general
 interner still logs a bounded refusal for unrelated native strings at capacity.
+
+
+## 060u follow-up: lobby activation and removal ownership
+
+The skinned lobby's scoped mouse adapter commits a native action button before
+the retail mouse pass. That pass only navigates among Start, Kick and Leave
+when its previous focus is already a native button; Copy code is outside that
+group. Host pad MENU_OK selects Start and offers one native Accept edge. The
+retail host tick still owns authority, readiness, admission, transfer and its
+effective minimum-player byte. `r4-start-mouse` and `r4-start-pad` cover those
+denials, held Start, and a roster reduced to the ready host after guests leave.
+
+Lobby removal suppresses the stock reason dialog and retires Join until the
+asynchronous Hub request completes. A fallback already on Browse also finishes
+at the Hub. Only one request is submitted; repeated session clears retain one
+removal notice and one broker leave. In-zone removal retains its existing
+native main-menu teardown. The kicked/host-left lobby fixtures deliberately
+keep the old screen current for extra frames.
+
+PDA Party hover is revalidated when Enter is sampled. A valid plain Enter queues
+the authored constant Party command once and consumes that key until release,
+so a later native focus refresh cannot redirect it to another row. Navigation,
+mouse-out, page/menu departure and disabled or absent links cancel the hover.
+Other native inputs and a refused queue keep their existing route.
+
+Hub assets author hidden `lc_hub_select_normal` and `lc_hub_select_hover` text
+sources. They carry localized token text with explicit palette-correct colors;
+the Hub binder follows the native footer hover index after description refresh.
+It changes no focus or hit geometry. Assets without the sources retain their
+previous presentation.
+
+The broker TLS client owns a valid SSPI context as soon as
+`InitializeSecurityContextA` produces it, before any send, receive or error
+return. Reset deletes that context before freeing credentials. The native TLS
+fixture's `--lifetime-offline` mode exercises partial and successful handshakes,
+reuse and destruction with synthetic socket/SSPI imports and real event handles.
+`--pin-offline` checks real SPKI hashing/pin rejection and protocol selection
+without entering the system certificate-chain path. Neither mode opens sockets.
