@@ -15,7 +15,8 @@ DWORD WINAPI fixture_window_process(HWND,LPDWORD);
 #undef GetWindowThreadProcessId
 
 namespace {
-bool menus=false,foreground=true;
+bool menus=false,foreground=true,isolated=false;
+int physical_reads=0; DWORD cooperative_flags=0;
 int delivered=0,resets=0,mode_keys=0,samples=0,pumps=0,lost=0,watch=0;
 HRESULT read_result=DI_OK;
 std::array<unsigned char,256> physical{},observed{};
@@ -24,10 +25,11 @@ void** di_object=di_vt.data();
 void** keyboard_object=keyboard_vt.data();
 void** other_object=keyboard_vt.data();
 HRESULT STDMETHODCALLTYPE native_state(void*,DWORD size,LPVOID data) {
+    ++physical_reads;
     if(data) std::memcpy(data,physical.data(),std::min<DWORD>(size,DWORD(physical.size())));
     return read_result;
 }
-HRESULT STDMETHODCALLTYPE native_level(void*,HWND,DWORD) { return DI_OK; }
+HRESULT STDMETHODCALLTYPE native_level(void*,HWND,DWORD flags) { cooperative_flags=flags;return DI_OK; }
 HRESULT STDMETHODCALLTYPE native_create(void*,REFGUID guid,void** device,LPUNKNOWN) {
     *device=IsEqualGUID(guid,GUID_SysKeyboard) ? &keyboard_object : &other_object;return DI_OK;
 }
@@ -50,9 +52,8 @@ void watch_window(HWND) { ++watch; }
 bool console_frame_hook_matches() { return false; }
 }
 namespace test_state { void sample() { ++samples; } }
-// 0.4.2 line (merged into the co-op line): NoActivate gates the same hook; it stays off here so the Menus-only
-// opt-in is what installs it.
-namespace no_activate { bool enabled() { return false; } }
+// NoActivate starts off so Menus-only installation is tested, then varies in the agent matrix.
+namespace no_activate { bool enabled() { return isolated; } }
 namespace save_format { void pump() { ++pumps; } }
 // The included TU also defines the automation service. These dependencies are
 // deliberately unreachable here; an accidental install/command/capture fails.
@@ -131,12 +132,30 @@ int main() {
     read_result=DIERR_INPUTLOST;read(keyboard,256,state.data());assert(resets==1 && lost==1 && delivered==2);read_result=DI_OK;
     read(keyboard,128,state.data());read(&other_object,256,state.data());read(keyboard,256,nullptr);assert(delivered==2 && resets==1);
     auto level=reinterpret_cast<test_input::set_cooperative_level_t>(keyboard_vt[13]);level(keyboard,reinterpret_cast<HWND>(1),DISCL_FOREGROUND);assert(watch==1);
-    // Exercise the actual enabled branch after merged synthetic keys, without
-    // install(), CreateThread(), any named pipe or desktop input.
+    // Actual COM hooks: NoActivate agent copies deliver only pipe keys, with no physical read,
+    // whether foreground or background, even when the native device is unacquired.
     test_input::read_event=CreateEventW(nullptr,FALSE,FALSE,nullptr);assert(test_input::read_event);
-    test_input::enabled=true;test_input::keys.press(0x30,GetTickCount64()+10000);
-    read(keyboard,256,state.data());assert(delivered==3 && observed[0x30]==128 && observed[0x1e]==0 && mode_keys==1 && samples==1 && pumps==1);
-    read_result=DIERR_INPUTLOST;read(keyboard,256,state.data());assert(resets==2 && lost==2 && delivered==3 && samples==2 && pumps==2);
-    test_input::enabled=false;test_input::keys.release_all();CloseHandle(test_input::read_event);test_input::read_event=nullptr;
-    std::puts("DirectInput production wiring PASS Menus-only opt-in, real COM hook chain, pipe OFF/ON delivery, foreground filter, loss reset, nonkeyboard/size/null pass-through; no worker or desktop input");
+    for (const bool pipe : {false,true}) for (const bool noactivate : {false,true}) for (const bool focus : {false,true}) {
+        test_input::enabled=pipe;isolated=noactivate;foreground=focus;
+        test_input::keys.release_all();test_input::keys.press(0x30,GetTickCount64()+10000);
+        const bool synthetic=noactivate || (pipe&&!focus);
+        physical_reads=0;read_result=synthetic ? DIERR_NOTACQUIRED : DI_OK;
+        assert(SUCCEEDED(read(keyboard,256,state.data())));
+        assert(physical_reads==(synthetic?0:1));
+        assert(observed[0x1e]==((!noactivate&&focus)?128:0));
+        assert(observed[0x30]==(pipe?128:0));
+        if(pipe) assert(WaitForSingleObject(test_input::read_event,0)==WAIT_OBJECT_0);
+        constexpr DWORD flags=DISCL_FOREGROUND|DISCL_NONEXCLUSIVE|DISCL_NOWINKEY;
+        level(keyboard,reinterpret_cast<HWND>(1),flags);
+        assert(cooperative_flags==flags && !(cooperative_flags&DISCL_BACKGROUND));
+        // Unrelated device, size and null calls still chain to the native device.
+        read(keyboard,128,state.data());read(&other_object,256,state.data());read(keyboard,256,nullptr);
+        assert(physical_reads==(synthetic?3:4));
+    }
+    // Focused player kit + pipe retains native failure/reacquisition behavior too.
+    test_input::enabled=true;isolated=false;foreground=true;read_result=DIERR_INPUTLOST;
+    physical_reads=0;const auto previous_lost=lost;
+    assert(read(keyboard,256,state.data())==DIERR_INPUTLOST && physical_reads==1 && lost==previous_lost+1);
+    test_input::enabled=false;isolated=false;test_input::keys.release_all();CloseHandle(test_input::read_event);test_input::read_event=nullptr;
+    std::puts("DirectInput production wiring PASS: real COM chain; 8 pipe/noactivate/focus cases; no NoActivate physical reads; original flags; unfocused pipe survives unacquired device; player keyboard including focused pipe and unrelated reads preserved");
 }
