@@ -100,6 +100,9 @@ void party_tests(const script_functions_rules::func_entry* registration) {
     party_default_rows(host);
     tick(child.data(),nullptr);
     assert(texts["lc_room_code"]=="ABCD-EFGH");
+    put(child.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(item_stub(child.data(),nullptr,"lc_party_invite"))));
+    tick(child.data(),nullptr);assert(shown("lc_party_invite_hint_on") && hidden("lc_party_invite_hint"));
+    put(child.data(),0x324,0);tick(child.data(),nullptr);assert(hidden("lc_party_invite_hint_on") && shown("lc_party_invite_hint"));
     assert(shown("lc_p1_card") && shown("lc_p2_card") && shown("lc_p3_card") && hidden("lc_p4_card") && shown("lc_p4_empty") && hidden("lc_p3_empty"));
     assert(texts["lc_p1_name"]=="Logan" && texts["lc_p2_name"]=="Kitty" && texts["lc_p3_name"]=="Alex" && texts["lc_p1_slot"]=="P1" && texts["lc_p3_slot"]=="P3");
     assert(shown("lc_p1_host") && hidden("lc_p2_host") && texts["lc_p1_phase"]=="Playing" && texts["lc_p3_phase"]=="Waiting for next area");

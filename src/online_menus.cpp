@@ -761,6 +761,8 @@ const broker::client_view& broker_view() {
 }
 screen broker_screen = screen::none;
 unsigned browse_offset = 0, browse_selected = 0;
+bool browse_had_rows=false,browse_focus_selection=false;
+bool lobby_focus(void* menu,const char* target);
 std::string browse_code, host_room_name;
 // Every per-cause error scene the DLL may select is lc_broker_err_<error_cause_key[i]> (LC authors the localized copy per
 // screen; absent nodes are skipped).
@@ -808,6 +810,7 @@ void broker_scope(screen s) {
             if(state!=broker::phase::room) broker_cancel();
         }
         broker_screen=s;
+        if(s==screen::browse) browse_had_rows=browse_focus_selection=false;
         if(s==screen::host && host_room_name.empty()) host_room_name=online_browser_core::room_name(std::string(local_name)+"'s game");
     }
 }
@@ -1001,8 +1004,13 @@ void bind_broker(void* menu,screen s) {
         enable(menu,"open",!waiting && v.state!=broker::phase::room);
         enable(menu,"prompt_open",!waiting && v.state!=broker::phase::room);
     }
-    if(s!=screen::browse) return;
-    if(const int focused_row=focused_browse_row(menu);focused_row>=0 && browse_offset+unsigned(focused_row)<v.rows.size()) {
+    if(s!=screen::browse) { browse_had_rows=false;return; }
+    // A displayed fresh row remains activatable during list refresh: activation cancels that list and holds its lookup.
+    // Disabling it here would prevent the real CText Accept from ever reaching the held-join path tested below.
+    const bool refreshing=v.action==broker::operation::list &&
+        (v.state==broker::phase::authenticating || v.state==broker::phase::listing);
+    const bool rows_enabled=!waiting || refreshing;
+    if(const int focused_row=focused_browse_row(menu);!browse_focus_selection && focused_row>=0 && browse_offset+unsigned(focused_row)<v.rows.size()) {
         browse_selected=browse_offset+unsigned(focused_row);browse_code=v.rows[browse_selected].code; // the selection follows focus
     }
     if(!browse_code.empty()) {
@@ -1049,7 +1057,7 @@ void bind_broker(void* menu,screen s) {
         }
         for(const unsigned col:{0u,1u,2u,3u,6u}) {
             const auto key="room_"+std::to_string(i)+"_"+std::to_string(col);
-            bind_text(menu,key.c_str(),fields[col].c_str());enable(menu,key.c_str(),present && !waiting);
+            bind_text(menu,key.c_str(),fields[col].c_str());enable(menu,key.c_str(),present && rows_enabled);
         }
         const auto id=std::to_string(i);
         for(unsigned k=0;k<std::size(row_status_key);++k) hide(menu,("lc_row"+id+"_st_"+row_status_key[k]).c_str(),!(present && unsigned(status)==k));
@@ -1073,10 +1081,21 @@ void bind_broker(void* menu,screen s) {
         } else if(v.stale) line="Refresh to update games";
         bind_text(menu,"details",line.c_str());
     }
-    const bool join=selected && !waiting && !v.stale && selected->joinable && !selected->password && selected->players<selected->max_players &&
+    const bool join=selected && rows_enabled && !v.stale && selected->joinable && !selected->password && selected->players<selected->max_players &&
         (selected->version.empty() || selected->version==version);
     enable(menu,"prompt_join",join);
     enable(menu,"prompt_refresh",!waiting && retry_wait_ms()==0);
+    bindings.text.erase("prompt_refresh");
+    bind_text(menu,"prompt_refresh",pad_probe && pad_probe(menu_player) ? "Y Refresh" : "F5 Refresh");
+    if(!waiting && !v.rows.empty() && (!browse_had_rows || browse_focus_selection)) {
+        const auto target="room_"+std::to_string(browse_selected-browse_offset)+"_0";
+        lobby_focus(menu,target.c_str());browse_had_rows=true;browse_focus_selection=false;
+    }
+    if(v.rows.empty()) {
+        browse_had_rows=false;browse_focus_selection=false;
+        if(!waiting && focused_browse_row(menu)>=0)
+            lobby_focus(menu,retry_wait_ms()==0 ? "prompt_refresh" : "desctext3");
+    }
 }
 
 // Native lobbies retain their complete controller/vtable and campaign callback.
@@ -1093,12 +1112,13 @@ struct lobby_view {
 struct lobby_ui {
     void* owner=nullptr;
     std::uint64_t generation=0;
+    bool role_keyboard=false,role_key_pending=false,start_allowed=false;
     bool confirm=false,error=false,copied=false,copy_held=false,role_held=false,focus_confirm=false,leave_authorized=false,copy_keyboard=false,copy_block=false;
     bool target_error=false,picker_safe=false;
     bool start_dimmed=false,start_was_enabled=false;
     void* refocus_from=nullptr; void* refocus_to=nullptr; // fix K: the focus moved off a dimmed native button, and where to
     DWORD copied_at=0; // when "Code copied" was raised: it expires (copied_ms) so it can never sit unseen in front of Back
-    void reset(void* menu=nullptr) { ++generation;owner=menu;copied_at=0;confirm=error=copied=copy_held=role_held=focus_confirm=leave_authorized=copy_keyboard=copy_block=target_error=picker_safe=start_dimmed=start_was_enabled=false;refocus_from=refocus_to=nullptr; }
+    void reset(void* menu=nullptr) { ++generation;owner=menu;copied_at=0;role_keyboard=role_key_pending=start_allowed=false;confirm=error=copied=copy_held=role_held=focus_confirm=leave_authorized=copy_keyboard=copy_block=target_error=picker_safe=start_dimmed=start_was_enabled=false;refocus_from=refocus_to=nullptr; }
 } lobby_state;
 thread_local bool lobby_ticking=false,base_ui_dispatch=false,native_mouse=false,back_consumed=false;
 thread_local unsigned refreshing_names=0;
@@ -1128,7 +1148,11 @@ bool lobby_mask(void* mgr,unsigned& mask) {
 // MENU_OTHER and Y / RT as MENU_NEXT, and the prompts draw $MENU_OTHER / $MENU_NEXT as X / Y (pad_prompt_scope). The keyboard,
 // an unskinned native lobby (no lc_lobby_v1) and Prompts=off (no device tracker) read the raw bits as before.
 bool lobby_pad_shown(void* menu);
-unsigned lobby_screen_mask(void* menu,unsigned raw) { return lobby_pad_shown(menu) ? pad_menu_mask(raw) : raw; }
+unsigned lobby_screen_mask(void* menu,unsigned raw) {
+    // DirectInput identifies Delete before the prompt tracker changes devices. Never reinterpret that keyboard press as pad Y.
+    const unsigned mapped=lobby_pad_shown(menu) ? pad_menu_mask(raw) : raw;
+    return (lobby_state.role_keyboard || lobby_state.role_key_pending) ? (mapped & ~mask_next) | mask_other : mapped;
+}
 unsigned __fastcall lobby_input(void* mgr,void*) {
     unsigned mask=0;lobby_mask(mgr,mask);
     const auto caller=reinterpret_cast<std::uintptr_t>(_ReturnAddress());
@@ -1459,7 +1483,7 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         const bool named=broker_live() && broker_view().state==broker::phase::room && !broker_view().room_name.empty();
         if(!named) {
             std::string title="Online game";
-            if(valid) for(unsigned i=0;i<view.count;++i) if(view.host[i] && view.names[i][0]) { title=display(view.names[i],23)+"'s game";break; }
+            if(broker_live() && broker_view().state==broker::phase::room && valid) for(unsigned i=0;i<view.count;++i) if(view.host[i] && view.names[i][0]) { title=display(view.names[i],23)+"'s game";break; }
             bind_text(menu,"lc_room_name",title.c_str());
         }
         // The host knows its own campaign: say what the native Game Options chose. The guest's line is authored text (the host's choice).
@@ -1470,6 +1494,17 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
             const bool drop_known=broker_calls.drop_in!=nullptr;
             line+=drop_known && !broker_calls.drop_in() ? ". No joining once the game starts." : ". Friends join at the next area.";
             bind_text(menu,"lc_campaign_summary",line.c_str());
+        } else if(which(menu)==screen::lobby_join) {
+            // Native discovery copies the accepted game-info record into the session, including mode and difficulty.
+            // A guest's local selected-save pointer does not prove whether the host loaded a save.
+            native_host_settings settings;
+            if(native_host_read(settings)) {
+                static const char* const levels[]{"Easy","Normal","Hard"};
+                std::string line=settings.danger_room ? "Danger Room" : "Campaign";
+                if(!settings.danger_room && settings.difficulty>=0) line+=std::string(" - ")+levels[settings.difficulty];
+                line+=". Friends join at the next area.";
+                bind_text(menu,"lc_campaign_summary",line.c_str());
+            }
         }
     }
     std::optional<std::string> code_value;
@@ -1633,6 +1668,12 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
             if(!allowed && enabled) { lobby_state.start_dimmed=true;lobby_state.start_was_enabled=enabled; }
             if(enabled!=allowed) enable_native(menu,"text_startgame",allowed);
             if(allowed) lobby_state.start_dimmed=false;
+            // Navigation can retire refocus_from before readiness arrives (060s: 0/4 returns to START).
+            // On the readiness gate reopening, return from the role/leave bar, but leave tools and modals alone.
+            if(allowed && !lobby_state.start_allowed &&
+                (focus_of(menu)==item(menu,"text_kickplayer") || focus_of(menu)==item(menu,"text_leaveroom")))
+                lobby_focus(menu,"text_startgame");
+            lobby_state.start_allowed=allowed;
         }
     } else if(host && !valid && native_valid && native.phase==0 && native.gate && !native.transfer && lobby_state.start_dimmed) {
         // Undo only our own prior dim when the presentation snapshot fails.
@@ -1641,12 +1682,14 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
         lobby_state.start_dimmed=false;
     }
     lobby_focus_enabled(menu);
-    {   // 060r live (failure 9): the lobby prompts (drawn now - LC no longer ties them to the native help animation) follow the
-        // device like Join by code's: Copy is pad Y (lobby_screen_mask) or Ctrl+C. The engine rewrites the description slots
-        // on a focus change (0x5bb150 on its own navigation), so the cached binding is dropped then.
-        static void* prompt_focus=nullptr;
-        if(void* const focus=focus_of(menu); focus!=prompt_focus) { prompt_focus=focus;bindings.text.erase("desctext3"); }
-        bind_text(menu,"desctext3",lobby_pad_shown(menu) ? "Y Copy code" : "Ctrl+C Copy code");
+    {   // Native focus/description refreshes write behind the bind cache. Restore every owned footer slot after the native tick.
+        const char* const prompts[]{host ? "$MENU_BACK Leave" : "",host ? "$MENU_OTHER Kick player" : "$MENU_OTHER Ready / Unready",
+            lobby_pad_shown(menu) ? "Y Copy code" : "Ctrl+C Copy code","","$MENU_ACCEPT Select"};
+        for(unsigned i=0;i<5;++i) {
+            const auto key="desctext"+std::to_string(i+1);
+            bindings.text.erase(key);
+            bind_text(menu,key.c_str(),prompts[i]);
+        }
     }
     const auto local=std::find(std::begin(view.ids),std::begin(view.ids)+view.count,view.local);
     const auto local_row=unsigned(local-std::begin(view.ids));
@@ -1727,6 +1770,7 @@ void lobby_tick(void* menu,unsigned original,bool& called) {
     if(consuming_leave) lobby_state.leave_authorized=false; // one native dispatch, never a reusable permission
     lobby_original(menu,original);
     lobby_ticking=false;
+    lobby_state.role_key_pending=false; // the edge survived a release before this tick and was offered once to the native role action
     if(lobby_state.generation!=restore.generation) return;
     if(current_peek()!=menu) { lobby_state.reset();bindings.clear();pending.clear();return; }
     lobby_native_state after_state{};const bool state_after=lobby_state_read(menu,after_state);
@@ -2001,7 +2045,7 @@ void trace_end(void* menu,int rx,int ry) {
 // (x, y): the engine's view point. True with (rx, ry) the point to hand the engine instead; false: pass it on unchanged.
 // The point is a half-view-unit estimate unless the window procedure's pixel is known (logged once per reason). `lobby`: the
 // skinned lobbies' mouse (0x5ba2b0 / 0x5c8da0), whose own first pass runs before the base walk.
-bool scoped_point(void* menu,int x,int y,int& rx,int& ry,bool lobby) {
+bool scoped_point(void* menu,int x,int y,int& rx,int& ry,bool lobby,void** chosen=nullptr) {
     try {
         if(!hits_ready()) return false;
         char name[64]{}; menu_name(menu,name);
@@ -2052,6 +2096,7 @@ bool scoped_point(void* menu,int x,int y,int& rx,int& ry,bool lobby) {
         for(const auto& a:active) if(hits::inside(*a.rect,p)) { held.push_back({a.index==m.focused,m.walk[std::size_t(a.index)].box.shifted}); holding.push_back(&a); }
         if(const auto pick=hits::choose(held,p);pick>=0) {
             const int t=holding[std::size_t(pick)]->index;
+            if(chosen) *chosen=at_index[std::size_t(t)];
             if(trace.on) trace.bar=name_of(t);
             // A point the engine itself gives to the target - its walk in its own order, its first pass, the lobby's pass -
             // so the focus, the hover highlight and sound and the click are the engine's for that item.
@@ -2081,8 +2126,17 @@ std::uint32_t __fastcall menu_mouse(void* menu,void*,int x,int y,int flags,int m
     int rx=x,ry=y;
     const bool scoped=ready && custom(which(menu));
     if(scoped) trace_begin(menu,x,y,unsigned(message));
-    if(scoped && !scoped_point(menu,x,y,rx,ry,false)) { rx=x; ry=y; }
+    void* chosen=nullptr;
+    if(scoped && !scoped_point(menu,x,y,rx,ry,false,&chosen)) { rx=x; ry=y; }
     const auto result=at<mouse_fn>(0x5ae0a0)(menu,rx,ry,flags,message,extra);
+    if(chosen && which(menu)==screen::browse && current_peek()==menu) {
+        const auto name=engine_name(chosen);
+        if(name.size()==8 && name.starts_with("room_") && name[5]>='0' && name[5]<'0'+int(browse_rows) && name[6]=='_') {
+            // 060s's retail mouse walk answered the row but kept prompt_refresh focused. Commit the drawn target before Accept.
+            lobby_focus(menu,name.c_str());
+            if(message==WM_LBUTTONUP) pending.post(int(intent::row_first)+name[5]-'0',reinterpret_cast<std::uintptr_t>(menu),screen::browse);
+        }
+    }
     if(scoped) trace_end(menu,rx,ry);
     return result;
 }
@@ -2278,6 +2332,8 @@ void party_frame(void* menu) {
     native_note_local_record();
     const auto view=party_collect();
     const auto& roster=view.roster;
+    const bool invite_focused=focus_of(menu)==item_try(menu,"lc_party_invite");
+    if(hide(menu,"lc_party_invite_hint_on",!invite_focused)) hide(menu,"lc_party_invite_hint",invite_focused);
     // The queued native quit may never run (refused/blocked): the screen must not stay frozen. A short timeout clears the latch.
     if(party_ui.departed && now_ms()-party_departed_at>=party_departed_ms) {
         party_ui.departed=false;
@@ -2528,8 +2584,8 @@ void tick_impl(void* menu,bool& native_called) {
         if(broker_live() && broker_calls.retry && broker_calls.retry() && s==screen::code) {
             resolve_ticket=broker_view().generation;resolve_edit=code.generation;code.submitted=code.generation;
         } break;
-    case intent::previous: if(s==screen::browse) { browse_selected=browse_selected>=browse_rows ? browse_selected-browse_rows : 0; browse_code.clear(); } break;
-    case intent::next: if(s==screen::browse && !broker_view().rows.empty()) { browse_selected=std::min<unsigned>(browse_selected+browse_rows,unsigned(broker_view().rows.size()-1));browse_code.clear(); } break;
+    case intent::previous: if(s==screen::browse) { browse_selected=browse_selected>=browse_rows ? browse_selected-browse_rows : 0; browse_code.clear();browse_focus_selection=true; } break;
+    case intent::next: if(s==screen::browse && !broker_view().rows.empty()) { browse_selected=std::min<unsigned>(browse_selected+browse_rows,unsigned(broker_view().rows.size()-1));browse_code.clear();browse_focus_selection=true; } break;
     case intent::join_selected: if(s==screen::browse) browse_join("Join prompt"); break;
     case intent::unavailable: message("lc_notice_unavailable"); break;
     case intent::dismiss: error_visible=false;if(s==screen::hub) host_left_state.dismiss();break;
@@ -2537,12 +2593,10 @@ void tick_impl(void* menu,bool& native_called) {
         if(s==screen::browse && int(action)>=int(intent::row_first) && int(action)<int(intent::row_first)+int(browse_rows)) {
             const auto selected=browse_offset+unsigned(int(action)-24);
             if(selected<broker_view().rows.size()) {
-                // Enter / pad A / a click on the selected room joins it ("[Enter] Join"); the selection follows focus (keys,
-                // pad and mouse hover move focus first), so the room under the focus bar is the one joined. A command for
-                // another row (no focus over it, e.g. a script) selects that row first.
-                const bool again=selected==browse_selected && browse_code==broker_view().rows[selected].code;
-                browse_selected=selected; browse_code=broker_view().rows[selected].code;
-                if(again) browse_join("row");
+                // A row command is activation, whether focus/hover has already selected it or not.
+                // A mouse release can precede the next binding tick (060s); it must join on that first release.
+                browse_selected=selected; browse_code=broker_view().rows[selected].code;browse_focus_selection=true;
+                browse_join("row");
             }
         }
         if(s==screen::code && int(action)>=32 && int(action)<=62) {
@@ -2684,13 +2738,14 @@ void keyboard(unsigned char* state) {
     if(!ready || !input_thread("keyboard",true)) return;
     if(!game_thread.load()) return; // no frontend/input model work before the first game tick
     try { native_session_watch(); } catch(...) { }
-    if(!state) { keyboard_edges.reset();keyboard_input.clear();lobby_state.copy_keyboard=false;return; }
+    if(!state) { keyboard_edges.reset();keyboard_input.clear();lobby_state.copy_keyboard=lobby_state.role_keyboard=lobby_state.role_key_pending=false;return; }
     const auto edges=keyboard_edges.sample(state);
     // DirectInput can poll before frontend creation. Never invoke the lazy
     // 0x5d8920 getter here; even validation must use the already-published cell.
     auto* menu=current_peek();
     if(!menu) return;
     const auto s=which(menu);
+    if(!lobby(s)) lobby_state.role_keyboard=lobby_state.role_key_pending=false;
     if(!custom(s) && !lobby_live(menu)) return;
     // Keys these screens consume below never reach the game's poll, so the prompts' device tracker would not see them (060r
     // live: F5 on Browse left the pad prompts up). Any new key here is the keyboard in use.
@@ -2704,6 +2759,9 @@ void keyboard(unsigned char* state) {
         return;
     }
     if(lobby(s)) {
+        lobby_state.role_keyboard=!alt && !control && (state[0xd3]&0x80);
+        if(lobby_state.role_keyboard && edges[0xd3]) { lobby_state.role_key_pending=true;lobby_state.role_held=false; }
+        state[0xd3]=0; // Ready/Kick is injected above, independently of the currently displayed prompt device.
         lobby_state.copy_keyboard=!alt && control && (state[0x2e]&0x80);
         if(!alt && control && edges[0x2e]) pending.post(int(intent::copy_code),address,s);
         if(!alt && control) state[0x2e]=0;
