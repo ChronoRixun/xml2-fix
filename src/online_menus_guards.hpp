@@ -227,6 +227,7 @@ inline constexpr script_functions_rules::guard guards[]{
     {0x005bc981, "8a46540c08682c", "item parser: every item starts enabled (+0x54 |= 8) (fix K)"},
     {0x006a1fac, "a0f55a00", "Advanced Options resource close slot"},
     {0x006a1f80, "501e5d00", "Advanced Options deactivation slot"},
+    {0x006a1fe0, "80b54700", "Advanced Options generic Back permission slot vt+0x7c"},
     {0x005d1e50, "f681d8180000027405e8d2affdffe8bd6a00008b108bc8ff92d4000000e85e00f8ff8b0de86e6e008b10518bc8ff5268c3", "Advanced Options native deactivation"},
     {0x005d1eb0, "568bf1e8d8a9f8ff8b1068e8bb68008bc8ff521c808ed818000002c605e4fd8a00005ec3", "Advanced Options normal terminal close flags"},
     {0x006192e0, "8b0d40ada6005633f63bce5774168bf9e87be5ffff57e8f78e050083c404893540ada6008b0d3cada6003bce74168bf9e85be5ffff57e8d78e050083c40489353cada6008b0d38ada6003bce74168bf9e83be5ffff57e8b78e050083c404893538ada6008b0d34ada6003bce74168bf9e81be5ffff57e8978e050083c404893534ada6008b0d44ada6003bce74168bf9e8fbe4ffff57e8778e050083c404893544ada6005f5ec3", "Advanced Options native five-window teardown"},

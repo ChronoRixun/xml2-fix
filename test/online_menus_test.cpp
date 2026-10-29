@@ -586,6 +586,7 @@ int main(int argc,char** argv) {
         std::cout<<"online menus "<<mode<<" PASS (no writes or registrations)\n";return 0;
     }
     assert(online_menus::installed());
+    if(mode=="r18-options-opening-back") { options_close_fixture::opening_back();return 0; }
     if(mode.starts_with("r18-options-orphan")) { options_close_fixture::orphan();return 0; }
     if(mode=="r18-options-close") { options_close_fixture::run();return 0; }
     if(mode=="r18-model-cycles") { anchor_fixture::model_cycles();return 0; }

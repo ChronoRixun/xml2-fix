@@ -1681,3 +1681,22 @@ Regression fixtures execute the retail flag parser block, enabled setter, stored
 walk and native usecmd boundary. The old r16 fixtures started every action at flags=8 and replaced setFocus with a recorder,
 so they never reproduced a disabled-at-load action retaining bit 0x20. The shape fixture also checks real slanted corners
 and the live right-end pixel, rather than checking the rectangular table against itself.
+
+### Advanced Options Back during opening
+
+The manager processes generic Back before the widget input tick during the opening animation. Advanced Options' retail
+permission slot (`0x6a1fe0`, vtable `+0x7c`, originally `0x47b580`) permits the manager to reverse transition state 1 to 2.
+That skips the widget's Cancel path, leaving its independent window family and `0x8afde4` latch alive after deactivation.
+The existing guarded menu transaction now replaces this slot with a permission check that returns false while any window
+at `0xa6ad34..44` exists. Early Esc is ignored until opening completes; settled widget Accept/Cancel retains normal behavior.
+An empty family retains retail permission. The owner-deactivation and resource-close cleanup remains as a fallback.
+
+`r18-options-opening-back` executes retail `0x5abd80` and manager Back `0x5da030` with transition state 1 and a live clean
+panel. It requires the transition to remain 1 and verifies each family pointer, empty-family permission, settled native
+widget Cancel, and another menu's unchanged early Back. `r18-options-close` covers actual native Accept/Cancel teardown.
+Startup `advanced-back-guard` corrupts the new slot and requires the whole menu transaction to refuse without installing its hooks. With InputPipe on,
+an Advanced Options Esc keyboard edge logs the transition state before manager input for the live timing check.
+
+Pending live acceptance: Options > Space > Esc during opening (within about 0.5 seconds), x3, and after settling, x3,
+at both resolutions. Capture the transition-state diagnostic for each Esc; check for no surviving panel or later input
+misrouting, and confirm settled Accept commits and settled Cancel discards changes.
