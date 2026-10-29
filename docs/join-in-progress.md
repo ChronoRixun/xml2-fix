@@ -47,7 +47,11 @@ the other PC)" / "(disabled on this PC)".
   Closing Team uses a separate not-ready check (`0x60c200`): pause entry sets flag `0x10` on every record,
   including pending players who never enter Team. The host's pause scheduler (`0x60aaec`) and Team's two action
   checks (`0x5e4b4e`, `0x5e4c21`) exclude pending records. Loaded solo-story spectators with no human hero
-  also cannot hold this Ready barrier; active heroes still must Ready. This changes no participant flags or
+  also cannot hold this Ready barrier. Watching participants are sampled during
+  stable gameplay for each participant index, and that cohort is frozen while
+  paused. A temporarily empty seat in Team's hero picker cannot create a new
+  spectator exemption; active participants still must Ready. A watcher who has
+  a hero again is no longer exempt. This changes no participant flags or
   loaded grid entries. Area loading, cohort restoration and pre-start checks retain their native barriers.
   Once the host has loaded, its serializer (`save_format::serialize_wrapper`) supplies one canonical live image to
   the native campaign sender, which streams `G/H` to every remote participant. The consumed serializer cursor is

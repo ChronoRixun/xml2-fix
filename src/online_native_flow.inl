@@ -273,10 +273,29 @@ void native_session_leave() {
 // EBP at the patched 0x612070 call (0x612c40's frame when the clear comes from a removal; online_menus_rules kicked_by_host).
 std::uintptr_t cleared_frame=0;
 bool native_guest_end_pending=false; // drain after the retail removal returns, before the Join tick can show its own dialog
-bool native_guest_end_requested=false;
-void native_guest_return() {
-    if(native_guest_end_pending && !native_guest_end_requested)
-        native_guest_end_requested=native_request("lc_online");
+DWORD native_guest_end_since=0;
+struct hub_request_retry {
+    DWORD last=0;
+    bool attempted=false;
+    void clear() { last=0;attempted=false; }
+    void request() {
+        const auto now=now_ms();
+        // Revisit a changed current menu, but keep a global 500 ms limit even
+        // when retail rapidly replaces it or requestMenu rejects the request.
+        if(attempted && now-last<500) return;
+        attempted=true;last=now;
+        native_request("lc_online");
+    }
+} hub_return;
+bool native_guest_return() {
+    if(!native_guest_end_pending) return false;
+    if(now_ms()-native_guest_end_since>=3000) {
+        native_guest_end_pending=false;
+        logger::write("online menus: removal Hub request did not complete within 3 s; current screen input resumed");
+        return false;
+    }
+    hub_return.request();
+    return true;
 }
 unsigned session_clears=0; // wrapper entries (one kick can clear twice: 0x6123e0 inside 0x612c40, review E finding 6)
 bool removal_was_kick(std::uintptr_t frame,std::uintptr_t local_record) {
@@ -321,7 +340,7 @@ void native_end_quietly(void* session,std::uintptr_t frame,const char* why) {
     bool queued=false;
     if(in_zone) { __try { queued=native_console_queue(at<getter>(0x55c890)(),"mainmenuexit 1"); } __except(EXCEPTION_EXECUTE_HANDLER) { queued=false; } }
     else {
-        if(!native_guest_end_pending) native_guest_end_requested=false;
+        if(!native_guest_end_pending) { native_guest_end_since=now_ms();hub_return.clear(); }
         native_guest_end_pending=true;
     }
     logger::write("online menus: %s - native %s%s",why,quieted ? "dialog suppressed" : "dialog left as is",
@@ -772,7 +791,7 @@ bool native_flow_tick(screen s) {
         view.state==broker::phase::room && view.action==broker::operation::resolve && broker_calls.admission_target) {
         ++native_flow.serial;native_flow.phase=native_phase::tunnel;
         removed_notice=false; // review E finding 5: a new join never shows an older removal
-        native_guest_end_pending=native_guest_end_requested=false;
+        native_guest_end_pending=false;hub_return.clear();
         attempt_refusal_serial=broker_calls.refusal_serial ? broker_calls.refusal_serial() : 0;
         native_flow.ticket=view.generation;native_flow.started=now_ms();
         if(!native_engine_rearm("join start")) { native_flow_error("native_engine_down");return false; }

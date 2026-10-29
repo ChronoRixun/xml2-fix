@@ -735,9 +735,7 @@ void review_run(const script_functions_rules::func_entry* registration) {
         assert(!escaped);
         assert(end_dialogs==0);
         if(hostleft_lobby) {
-            const bool browse_return=original_mode=="r6-end-kicked-browse-guest";
-            if(browse_return) { redirect(0x5d8920,manager_stub);screen("lc_browse"); }
-            const auto ending_tick=browse_return ? tick : *reinterpret_cast<tick_t*>(0x69f374);
+            const auto ending_tick=*reinterpret_cast<tick_t*>(0x69f374);
             ending_tick(child.data(),nullptr);
             assert(calls.back()=="request:lc_online" && end_dialogs==0);
             const auto requests=calls.size();
@@ -745,7 +743,8 @@ void review_run(const script_functions_rules::func_entry* registration) {
             // more frames: its cleared-session error branch must stay retired.
             ending_tick(child.data(),nullptr);
             ending_tick(child.data(),nullptr);
-            assert(calls.size()==requests && end_dialogs==0);
+            assert(calls.size()==requests && end_dialogs==0); // rate limited at the same clock
+
         }
         assert(!*reinterpret_cast<void**>(0xa53058+0x78));
         std::cout<<"end fixture: wrapper entries "<<online_menus::session_clear_count()-clears_at_start<<"\n";
@@ -793,6 +792,22 @@ void review_run(const script_functions_rules::func_entry* registration) {
         menu_leave_tick();
         assert(menu_view().state==bm::phase::idle && menu_leaves==1);
         menu_leave_tick();script(0x49f990,0);assert(menu_view().state==bm::phase::idle && menu_leaves==1);
+        if(original_mode=="r6-end-kicked-browse-guest") {
+                const auto requests=calls.size();
+                // The REAL retail removal above requested Hub from Join. Lose
+                // that asynchronous request, then let retail land on Browse.
+                redirect(0x5d8920,manager_stub);screen("lc_browse");
+                ticks+=500;tick(child.data(),nullptr);
+                assert(calls.size()==requests+1 && calls.back()=="request:lc_online");
+                tick(child.data(),nullptr);assert(calls.size()==requests+1);
+                ticks+=500;tick(child.data(),nullptr);
+                assert(calls.size()==requests+2 && calls.back()=="request:lc_online");
+                // Hub never arrives: expire the latch and resume real input.
+                ticks+=2500;tick(child.data(),nullptr);
+                const auto released=calls.size();post(intent::back);tick(child.data(),nullptr);
+                assert(calls.size()>released && calls.back()=="request:lc_online");
+                assert(end_dialogs==0);
+            }
         if(!hosting && !direct && !lobby) {
             // The 0.6 host-left panel: shown at the next Hub only when the host connection was lost, modal while up (Host again
             // and Back act, everything else is ignored), never for a deliberate local leave, and raised once per loss.
@@ -809,6 +824,11 @@ void review_run(const script_functions_rules::func_entry* registration) {
             const bool expect_route=(host_lost_flag || hostleft || slowdrop || partyseam) && !hostleft_lobby;
             assert((calls.size()==requests_before+1 && calls.back()=="request:lc_online")==expect_route);
             online_menus::keyboard(keys);assert(calls.size()==requests_before+unsigned(expect_route));
+            if(expect_route) {
+                ticks+=500;online_menus::keyboard(keys);
+                assert(calls.size()==requests_before+2 && calls.back()=="request:lc_online");
+                online_menus::keyboard(keys);assert(calls.size()==requests_before+2);
+            }
             screen("lc_online");tick(child.data(),nullptr);
             const bool lost=(host_lost_flag || hostleft || slowdrop) && !noassets;
             if(original_mode.starts_with("r6-end-hostleft-buttons-")) { assert(lost);live_hostleft_buttons();return; }

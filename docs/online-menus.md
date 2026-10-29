@@ -1710,24 +1710,30 @@ misrouting, and confirm settled Accept commits and settled Cancel discards chang
 
 ### Host departure while playing or waiting to join
 
-A current authenticated broker `room_closed` notice is a service-loss hint, including `host_left`
-(the host's broker TCP session can drop independently of healthy P2P) and room expiry. For an admitted
-guest it hastens departure classification only after three seconds both since the notice and since the
-last authenticated host P2P payload. This is 30 missed 100 ms transport heartbeats. Unbound waiting-room
-tunnels send the same existing keepalive at that cadence; bound game links retain their own heartbeat.
-Healthy P2P traffic keeps the native session running after broker room loss. Native/GNS definitive
-connection-end handling remains unchanged.
+A broker `room_closed` notice is service loss, including `host_left` (the host's
+broker TCP session can drop independently of healthy P2P) and room expiry.
+It stops new admission but never establishes host departure from payload silence.
+Healthy zone loading already produces four-second gaps, and a closure can remain
+in effect for hours. Native/GNS connection-end handling therefore owns liveness
+with its existing timeouts, including loading tolerance. There is no second,
+shorter closure deadline. Unbound waiting-room tunnels retain the existing
+100 ms keepalive so their GNS connections remain observable too.
 
-The P2P receive batch is processed before checking this deadline. A full host batch defers the check to
-allow another pump to drain a queued Kick. A terminal GNS host callback drains all its queued receive
-batches before `CloseConnection` discards unread data; callbacks run before the normal room tick.
+An authenticated GNS host-end callback still classifies departure immediately,
+including admitted late guests without a native host record. The game-thread
+watch consumes that event on the next frame; native host Leave/Quit notices
+keep their direct route. A process crash can take GNS's own detection interval;
+there is no promise of detecting a crash from three seconds of silence.
+A terminal GNS host callback drains queued receive batches before
+`CloseConnection` discards unread data; callbacks run before the normal room tick.
 The owned room identity remains available to rule-64 validation
 until Leave even when new admission is closed. Accepted removal and deliberate local Leave/Quit suppress
 host loss, so closure-then-removal and removal-then-closure both show the removal.
 
 Pause or Party Quit can finish through asynchronous `mainmenuexit 1`. When the main menu becomes current,
-the game-thread keyboard poll requests the Hub once so its pending THE HOST LEFT panel appears without a
-Play Online selection. The existing panel, modal controls and missing-assets fallback are retained.
+the game-thread keyboard poll retries the Hub every 500 ms so its pending THE HOST LEFT panel appears without a
+Play Online selection. The removal-to-Hub request uses the same rate limiter and
+cannot suppress this host-left route. The existing panel, modal controls and missing-assets fallback are retained.
 
 The native end-chain matrix checks main-menu routing for host notices/connection loss and its absence for
 Kick and local departures. `xml2_online_broker_test --room-closed-offline` exercises the production inbox
@@ -1829,7 +1835,13 @@ widgets keep the stock `0x5c67f0` getter and `0x5c6850` setter behavior.
 
 Buffers survive deactivation and cached menu visits, and are released after
 resource close. The native Host and Join close adapters delegate to their
-original `0x5ba270` and `0x5c8020` methods. The DATA regression fills all native
+original `0x5ba270` and `0x5c8020` methods. A guarded entry detour at the common
+resource closer `0x5af5a0` also covers Advanced Options, other derived vtables,
+and direct calls. It replays the six-byte prologue and preserves the native
+cleanup result before erasing that owner's buffers and binding cache. Recreated owner/widget/name
+addresses therefore cannot retrieve an earlier resource's DATA. `authored_text`
+compares the owned display value before using the native getter, including plain
+localized labels without `$MENU`. The DATA regression fills all native
 slots through the real setter, binds a fresh room successfully, then changes
 2200 room names and 1200 codes without increasing slot usage. The general
 interner still logs a bounded refusal for unrelated native strings at capacity.
@@ -1846,9 +1858,11 @@ effective minimum-player byte. `r4-start-mouse` and `r4-start-pad` cover those
 denials, held Start, and a roster reduced to the ready host after guests leave.
 
 Lobby removal suppresses the stock reason dialog and retires Join until the
-asynchronous Hub request completes. A fallback already on Browse also finishes
-at the Hub. Only one request is submitted; repeated session clears retain one
-removal notice and one broker leave. In-zone removal retains its existing
+asynchronous Hub request completes, with retries every 500 ms across current-menu
+changes. A fallback already on Browse is retried too. After three seconds without
+the Hub, the latch is released and the current screen resumes normal input;
+the removal notice still waits for the next Hub visit. Repeated session clears
+retain one deadline, one removal notice and one broker leave. In-zone removal retains its existing
 native main-menu teardown. The kicked/host-left lobby fixtures deliberately
 keep the old screen current for extra frames.
 
@@ -1871,3 +1885,24 @@ fixture's `--lifetime-offline` mode exercises partial and successful handshakes,
 reuse and destruction with synthetic socket/SSPI imports and real event handles.
 `--pin-offline` checks real SPKI hashing/pin rejection and protocol selection
 without entering the system certificate-chain path. Neither mode opens sockets.
+
+
+### Independent-review follow-up limits
+
+The socket-free broker regression now covers closure, five seconds of zone-load
+silence, resumed traffic, a later sixty-second stall, and then the authenticated
+transport-end callback. The native end-chain fixture loses the first Hub request,
+changes Join to Browse, checks 500 ms retries, and verifies Back works after the
+three-second release. The main-menu host-left fixture also loses a request and
+requires a retry. The DATA fixture executes a retail derived close directly,
+reuses the same addresses/value without deactivation, repeats Advanced Options
+close/recreate 200 times, and checks a plain localized Hub label without
+rebinding it each frame.
+
+`removal_start` already calls `removal_send_tick` synchronously before the member
+link unbinds, so Quit before the *next* transport tick does not omit its first
+notice. A first notice can still wait for an authenticated member report. The
+terminal drain also retains its existing 8192-message / 1 MiB gameplay-queue
+bounds: an extreme backlog can still discard a later removal and show host-left.
+Those forced orderings remain live re-checks; this follow-up does not claim to
+eliminate every Kick/quit race or prove delivery of an unreliable notice.
