@@ -155,3 +155,4 @@ DISASM  src/lc_fonts.cpp  # Authored register/flag-preserving style and scale ad
 DISASM  test/lc_fonts_host.cpp  # Synthetic x87 conversion and ABI callers exercise our font hooks; retail routines are loaded from the owned PE at runtime, not embedded here.
 PRIVATE_IP test/online_native_fixture.inl # Invented native-discovery fixtures use the protocol virtual host address; no personal or device IP.
 DISASM src/online_menus_anchors.cpp # Authored 512-anchor bounds and register-preserving mask/initialization adapters; only the short guarded entry is replayed, with no extracted game listing or decompiled body.
+DISASM test/online_menus_live_input.inl # Original fixture thunk sets the parser register ABI and returns to our caller; the owned retail parser executes from the local PE, with no game instruction body embedded.

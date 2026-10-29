@@ -225,5 +225,8 @@ inline constexpr script_functions_rules::guard guards[]{
     {0x005bccd0, "81ec880000005355568be9578d4c24108bf5e8b9f9ffff32db85ed74768bbc24a00000008b94249c0000008b8c249400000083f9207c02b30133c085c97e0c9039748410745c403bc17cf584db755389748c108b8c24940000004185d2898c24940000007d058b765ceb157e058b7660eb0e85ff7d058b7664eb057e038b76683bf5740f85f6740b8a4654a81475a3a808749f5f8b", "item neighbour search 0x5bccd0: follows its links, skips hidden / neverfocus (0x14) and disabled (bit 3) items (fix K)"},
     {0x005aafd0, "8b812403000085c0740df640540874078bc88b01ff605833c0c20400", "CMenu navigation 0x5aafd0: nothing from a focused item that is not enabled (fix K)"},
     {0x005bc981, "8a46540c08682c", "item parser: every item starts enabled (+0x54 |= 8) (fix K)"},
+    {0x005bc94e, "680c006a008bcbe86680faff3bc5742368bc53680050e8f95b0b008a4e5483c408f7d81ac0fec0c0e00532c1242032c8884e548a46540c08682c9268008bcb884654e82b80faff3bc5742f68bc53680050e8be5b0b008a4e5483c4083bc50f94c0c0e00332c124088ad132d08ac2a80888565475050c20884654", "item parser: enabled=false forces neverfocus bit 0x20 (060s Q)"},
+    {0x005ae32b, "3b7c24147421f6475420751b8b4c24108b1157ff5204", "mouse answer sets focus only without neverfocus bit 0x20 (060s Q)"},
+    {0x005aaf80, "568bf18b8e24030000578b7c240c3bcf741885c974078b016a00ff504c8b168bce89be24030000ff52688b8e2403000085c974078b016a01ff504c8b86240300005f5ec20400", "native setFocus stores the selected item before gain (060s Q)"},
 };
 }

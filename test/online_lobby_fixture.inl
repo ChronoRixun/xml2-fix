@@ -858,6 +858,7 @@ void lobby_tests(const script_functions_rules::func_entry* registration) {
     }
     activate(child.data(),nullptr,0);assert(activations==1 && refreshes==1);
     mask=0;tick(child.data(),nullptr);
+    if(mode=="r4-live-buttons") { live_leave_buttons();return; }
     if(mode.starts_with("r4-advice")) { advice_tests(host);return; }
     if(mode.find("r7-bounds")!=std::string::npos) { r7_card_tests(host);return; }
     assert(texts["lc_p1_name"]=="Logan?n?" && texts["lc_p2_name"]=="Kitty?n");

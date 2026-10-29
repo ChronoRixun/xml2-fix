@@ -31,6 +31,7 @@
 
 namespace online_menus_hits {
 inline constexpr char contract[] = "lc-online-hits/1";
+inline constexpr char shape_contract[] = "lc-online-hits/2";
 inline constexpr std::size_t max_entries = 1024;
 inline constexpr std::size_t max_line = 256;          // bytes before the LF
 inline constexpr std::size_t max_file = 256 * 1024;
@@ -38,7 +39,7 @@ inline constexpr float view_height = 384.0f;
 inline constexpr float view_limit = 4096.0f;
 
 // A drawn focus bar: view units, x to the right, y UP (the engine's menu space). Left/right/bottom/top.
-struct bar { float left=0,bottom=0,right=0,top=0; };
+struct bar { float left=0,bottom=0,right=0,top=0,lean=0; };
 struct entry { std::string menu, item; bar rect; };
 struct table { std::vector<entry> entries; };
 
@@ -80,23 +81,26 @@ inline bool parse(std::string_view text,table& out,std::string& why) {
     std::string_view line;
     if(text.size()>=3 && text.substr(0,3)=="﻿") { number_of_line=1; return fail("byte order mark"); }
     if(!next_line(line)) { if(why.empty()) fail("empty file"); return false; }
-    if(line!=contract) return fail(line.find('\r')!=std::string_view::npos ? "carriage return (CRLF)" : "bad header (not lc-online-hits/1)");
+    const bool shaped=line==shape_contract;
+    if(line!=contract && !shaped) return fail(line.find('\r')!=std::string_view::npos ? "carriage return (CRLF)" : "bad header (not lc-online-hits/1 or /2)");
     std::set<std::pair<std::string,std::string>> seen;
     while(next_line(line)) {
         if(line.size()>max_line) return fail("line too long");
         if(line.find('\r')!=std::string_view::npos) return fail("carriage return (CRLF)");
-        std::array<std::string_view,6> f{}; std::size_t n=0;
+        std::array<std::string_view,7> f{}; std::size_t n=0;
         while(!line.empty()) {
             const auto sp=line.find(' ');
             const auto token=line.substr(0,sp);
-            if(token.empty() || n==f.size()) return fail("bad fields");
+            if(token.empty() || n==(shaped ? 7u : 6u)) return fail("bad fields");
             f[n++]=token; if(sp==std::string_view::npos) break; line.remove_prefix(sp+1);
             if(line.empty()) return fail("bad fields");
         }
         entry e;
-        if(n!=6 || !name_ok(f[0]) || !name_ok(f[1]) || !number(f[2],e.rect.left) || !number(f[3],e.rect.bottom) ||
+        if(n!=(shaped ? 7u : 6u) || !name_ok(f[0]) || !name_ok(f[1]) || !number(f[2],e.rect.left) || !number(f[3],e.rect.bottom) ||
            !number(f[4],e.rect.right) || !number(f[5],e.rect.top) || !(e.rect.left<e.rect.right) || !(e.rect.bottom<e.rect.top))
             return fail("bad entry");
+        if(shaped && (!number(f[6],e.rect.lean) || std::abs(e.rect.lean)>64 ||
+            std::abs(e.rect.left+e.rect.lean)>view_limit || std::abs(e.rect.right+e.rect.lean)>view_limit)) return fail("bad lean");
         if(out.entries.size()==max_entries) return fail("too many entries");
         e.menu=std::string(f[0]); e.item=std::string(f[1]);
         if(!seen.insert({e.menu,e.item}).second) return fail("duplicate entry");
@@ -125,7 +129,11 @@ inline view_point from_pixel(int px,int py,int screen_w,int screen_h) {
 }
 inline view_point from_engine(int x,int y) { return {x>=0 ? float(x)+0.5f : float(x)-0.5f, float(y)-0.5f, false}; }
 // Direct3D's fill rule for the bar's quad: a pixel is drawn when its centre is inside, the top and left edges included.
-inline bool inside(const bar& b,const view_point& p) { return p.x>=b.left && p.x<b.right && p.y>b.bottom && p.y<=b.top; }
+inline bool inside(const bar& b,const view_point& p) {
+    if(!(p.y>b.bottom && p.y<=b.top)) return false;
+    const float shift=b.lean*(p.y-b.bottom)/(b.top-b.bottom);
+    return p.x>=b.left+shift && p.x<b.right+shift;
+}
 
 // The engine's own rectangles of an item, from its fields (+0x70 x, +0x72 y, +0x74 w, +0x76 h, +0x7a box top; PtInRect: right
 // and bottom excluded). `shifted` is the box the item's own hit test (vt+0x74: 0x5c6490 -> 0x5bc1b0) asks, moved by +0x7a / 2;
@@ -209,6 +217,7 @@ struct engine_item {
     bool shown=false, enabled=false;
     bool text_test=false;   // 0x5bc1b0 / 0x5c6490 (needs text); false: answers wherever its box holds the point
     bool has_text=false;    // +0x24 text not empty (or, for 0x5c6490, a +0x9c token text)
+    bool neverfocus=false; // the mouse walk can answer but cannot select this item (0x5ae331)
 };
 inline bool answers(const engine_item& e,int x,int y) {
     return e.shown && e.enabled && holds(e.box.shifted,x,y) && (!e.text_test || e.has_text);
@@ -252,7 +261,8 @@ inline int prompt_of(const engine_menu& m,int item) {
 }
 // The engine, handed (x, y), focuses / clicks `target` and hovers its prompt (or no prompt when it is not one).
 inline bool engine_picks(const engine_menu& m,int target,int x,int y) {
-    return second_pass(m,x,y)==target && first_pass(m,x,y)==prompt_of(m,target) && !lobby_takes(m,target,x,y);
+    return !m.walk[std::size_t(target)].neverfocus && second_pass(m,x,y)==target &&
+        first_pass(m,x,y)==prompt_of(m,target) && !lobby_takes(m,target,x,y);
 }
 // A point the engine gives to `target`: inside both of its boxes if there is one (hover and click), else inside the box its
 // own test asks; centre first, then the rows nearest the centre. False: the engine cannot be made to pick it anywhere.

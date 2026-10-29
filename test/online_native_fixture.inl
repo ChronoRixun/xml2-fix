@@ -636,7 +636,7 @@ void review_run(const script_functions_rules::func_entry* registration) {
         // Fix J (060r failure 4, gG / gH): the HOST's own Leave / Quit notice - the 0x2b removal of the host's record (index 0)
         // with 0x1106, flag 0 - while the host connection is still up (host_lost false): the host-left panel, never the
         // native "The host has left the game." dialog.
-        const bool hostleft=original_mode=="r6-end-hostleft-guest";
+        const bool hostleft=original_mode=="r6-end-hostleft-guest" || original_mode.starts_with("r6-end-hostleft-buttons-");
         // Review E finding 6: a second session end in the same kick: right after the kick's clear, the native script route
         // 0x49f990 runs the REAL 0x6123e0 again before the room leave; it must change nothing.
         const bool twice=original_mode=="r6-end-kicked-twice-guest";
@@ -742,6 +742,7 @@ void review_run(const script_functions_rules::func_entry* registration) {
             if(noassets) absent_items={"lc_hub_host_left","lc_hub_host_left_veil","lc_hostleft_again","lc_hostleft_back"};
             screen("lc_online");tick(child.data(),nullptr);
             const bool lost=(host_lost_flag || hostleft) && !noassets;
+            if(original_mode.starts_with("r6-end-hostleft-buttons-")) { assert(lost);live_hostleft_buttons();return; }
             if(noassets) {
                 assert(enabled_items["host"] && enabled_items["code"] && enabled_items["browse"] && enabled_items["other"] && enabled_items["desctext3"] && enabled_items["desctext4"]);
                 const auto before=calls.size();post(intent::browse);tick(child.data(),nullptr);assert(calls.back()=="request:lc_browse" && calls.size()==before+1);

@@ -78,6 +78,10 @@ void request_fault_stub() { throw_fault(request_throw); }
 void tick_fault_stub() { throw_fault(tick_throw); }
 void fail_registration() { script_function_overflow::table().reset(0); }
 std::filesystem::path root;
+std::vector<unsigned char> retail_original;
+void restore_retail(unsigned va,unsigned size) { std::memcpy(reinterpret_cast<void*>(va),retail_original.data()+va-0x401000,size); }
+void live_hostleft_buttons();
+void live_leave_buttons();
 std::vector<std::string> calls;
 std::map<std::string,std::string> texts;
 std::map<std::string,std::string> once_logs;
@@ -462,6 +466,7 @@ std::vector<std::string> r6_log; // every r6-* log line (fix F: the session-end 
 #include "online_anchor_fixture.inl"
 #include "online_party_menu_fixture.inl"
 #include "online_menus_hits.inl"
+#include "online_menus_live_input.inl"
 #include "online_menus_model.inl"
 #include "online_menus_hub.inl"
 }
@@ -511,6 +516,7 @@ int main(int argc,char** argv) {
     }
     if(mode=="r9-anchor-capacity") { native_fixture::anchor_capacity_run(nullptr);return 0; }
     std::vector<unsigned char> before(reinterpret_cast<unsigned char*>(0x401000),reinterpret_cast<unsigned char*>(0xb01000));
+    retail_original=before;
     if(mode=="rollback" || mode=="protect" || mode=="flush" || mode=="retain") {
         auto c=online_menus::contribution();const auto site=c.writes.front().va;
         patch_transaction::transaction tx;tx.add(std::move(c));patch_transaction::hooks hooks;
@@ -535,7 +541,7 @@ int main(int argc,char** argv) {
     if(mode.starts_with("r4-")) install_hooks.lobby_fields=lobby_fields_stub;
     if(mode.starts_with("r8-party")) { party_api.remove_member=party_remove_stub;install_hooks.broker=&party_api;install_hooks.lobby_fields=party_fields_stub; }
     if(mode=="r5-broker" || mode=="r5-retail-lobby" || mode=="r5b-views" || mode=="r5-browse-join" || mode=="r17-hub-focus") install_hooks.broker=&menu_api;
-    if(mode=="r15-errors") install_hooks.broker=&menu_api15;
+    if(mode=="r15-errors" || mode=="r16-hits-live") install_hooks.broker=&menu_api15;
     if(mode.starts_with("r6-")) install_hooks.broker=&native_fixture::api;
     patch_transaction::hooks transaction_hooks;
     if(mode=="install-retain") {
@@ -661,6 +667,8 @@ int main(int argc,char** argv) {
     request(mgr.data(),nullptr,"online",nullptr);assert(calls==expected); // duplicate entry cannot reinitialize
     set_current(hub.data());tick(hub.data(),nullptr);
     assert(texts["local_name"]==(mode=="name31" ? field_name(std::string(31,'a')) : mode=="blank-name" ? std::string("Player") : field_name("100??????openmenu bad")));
+    if(mode=="r16-hits-live") { live_input_fixture::run();return 0; }
+    if(mode=="r16-hits-shapes") { live_input_fixture::shape_run();return 0; }
     if(mode.starts_with("r16-hits")) { hits_fixture::run(mode);return 0; }
     if(mode=="r16-model-start") { model_fixture::run();return 0; }
     if(mode=="r17-hub-focus") { hub_fixture::run(entry);return 0; }
