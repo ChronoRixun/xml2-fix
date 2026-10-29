@@ -32,6 +32,8 @@ const error_row error_rows[]{
     {"online rooms need the receive validation installed ([Online] ReceiveValidation on and the retail network code)",error_cause::unsupported,next_action::other_ways,false},
     {"joining a room needs the LC save format ([Save] Format) installed, which checks the host's campaign before the game loads it",error_cause::unsupported,next_action::other_ways,false},
     {"transport_identity_busy",error_cause::busy,next_action::wait,false},{"invalid_room_name",error_cause::invalid_name,next_action::back,false},
+    {"too_many_public_rooms",error_cause::too_many_public_rooms,next_action::close_room,false},
+    {"too_many_joins",error_cause::too_many_joins,next_action::leave_game,false},
     {"malformed_reply",error_cause::generic,next_action::retry,true},{"internal",error_cause::generic,next_action::retry,true},
     {"",error_cause::generic,next_action::retry,true},{"weird%s\\^id",error_cause::generic,next_action::retry,true}};
 

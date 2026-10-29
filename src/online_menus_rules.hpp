@@ -325,13 +325,13 @@ inline std::string relative_age(std::uint64_t now,std::uint64_t then) {
 // Error cause selectors (round 15 completes INGAME-DESIGN section 3.3). The DLL shows exactly one lc_broker_err_<key>
 // per failure; the id stays a redacted diagnostic. The first eight keep their broker/2 meaning.
 enum class error_cause { code_not_found, room_full, version_mismatch, rate_limited, timeout, offline, refused, generic,
-    pin_mismatch, code_expired, room_closed, test_mode, unsupported, busy, invalid_name, count };
+    pin_mismatch, code_expired, room_closed, test_mode, unsupported, busy, invalid_name, too_many_public_rooms, too_many_joins, count };
 inline constexpr const char* error_cause_key[] = {"code_not_found","room_full","version_mismatch","rate_limited","timeout","offline","refused","generic",
-    "pin_mismatch","code_expired","room_closed","test_mode","unsupported","busy","invalid_name"};
+    "pin_mismatch","code_expired","room_closed","test_mode","unsupported","busy","invalid_name","too_many_public_rooms","too_many_joins"};
 static_assert(std::size(error_cause_key)==std::size_t(error_cause::count));
 // What the failure's copy tells the player to do next. LC's copy names it; retry is the only one that is a control.
-enum class next_action { retry, edit_code, browse, other_ways, back, wait };
-inline constexpr const char* next_action_key[] = {"retry","edit_code","browse","other_ways","back","wait"};
+enum class next_action { retry, edit_code, browse, other_ways, back, wait, close_room, leave_game };
+inline constexpr const char* next_action_key[] = {"retry","edit_code","browse","other_ways","back","wait","close_room","leave_game"};
 struct cause_row { error_cause cause; next_action next; bool retry; };
 // One row per cause, in enum order.
 inline constexpr cause_row cause_table[] = {
@@ -349,7 +349,9 @@ inline constexpr cause_row cause_table[] = {
     {error_cause::test_mode,       next_action::back,       false},
     {error_cause::unsupported,     next_action::other_ways, false},
     {error_cause::busy,            next_action::wait,       false},  // a refusal of the moment: no Retry control (the screen's own action repeats it)
-    {error_cause::invalid_name,    next_action::back,       false}};
+    {error_cause::invalid_name,    next_action::back,       false},
+    {error_cause::too_many_public_rooms,next_action::close_room,false},
+    {error_cause::too_many_joins,  next_action::leave_game, false}};
 static_assert(std::size(cause_table)==std::size_t(error_cause::count));
 inline constexpr const cause_row& row_of(error_cause c) { return cause_table[std::size_t(c)]; }
 inline error_cause classify_error(std::string_view id) {
@@ -369,6 +371,8 @@ inline error_cause classify_error(std::string_view id) {
     if(is({"online_dependencies_unavailable","native_discovery_guard"}) || id.substr(0,17)=="online rooms need" || id.substr(0,20)=="joining a room needs") return error_cause::unsupported;
     if(id=="transport_identity_busy") return error_cause::busy;
     if(id=="invalid_room_name") return error_cause::invalid_name;
+    if(id=="too_many_public_rooms") return error_cause::too_many_public_rooms;
+    if(id=="too_many_joins") return error_cause::too_many_joins;
     return error_cause::generic;
 }
 // Retry exists only where trying the same thing again can help: never for a wrong or expired code, a full room, another
@@ -381,7 +385,7 @@ inline bool known_id(std::string_view id) {
     for(std::string_view v:{"no_such_room","code_not_found","room_closed","code_expired","room_full","room_not_joinable","version_mismatch","rate_limited",
         "timeout","broker_unreachable","worker_unavailable","send_queue_full","inbox_overflow","tls_pin_mismatch","invalid_certificate","broker_rejected",
         "bad_auth","auth_failed","unsupported_version","test_mode_on","online_dependencies_unavailable","native_discovery_guard","transport_identity_busy",
-        "invalid_room_name","malformed_reply","internal"}) if(id==v) return true;
+        "invalid_room_name","too_many_public_rooms","too_many_joins","malformed_reply","internal"}) if(id==v) return true;
     return false;
 }
 // "join: room_full": the operation and a known id; a guard sentence reads install_guard and any unknown text "other".
