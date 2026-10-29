@@ -3,6 +3,7 @@
 #include "shared_handler_c_rules.hpp"
 #include "shared_handler_c_bridges.hpp"
 #include "tk_guard_bridges.hpp"
+#include "xml1_cling.hpp"
 #include "colossus_context_fixture.hpp"
 #include "gameplay_capabilities.hpp"
 #include <optional>
@@ -26,6 +27,10 @@ namespace entity_capacity {
 namespace game_version {bool refused=false;void refuse_startup(){refused=true;}}
 namespace xml1_grab_carry {bool available=true;bool installed(){return available;}void set_telekinesis_pair_test(bool(__cdecl*)(u32,u32)) {}}
 namespace lift_rule {int heaviness(void* object){return handler_fixture::field<unsigned char>(object,0x31d);}}
+namespace xml1_cling {
+ bool lookup_available=true;unsigned registrations=0;
+ bool register_lookup(HMODULE,handler_resolver resolver){++registrations;return lookup_available&&resolver;}
+}
 namespace {
 using shared_handler_bridges::entry;using shared_handler_bridges::input;
 using shared_handler_c_bridges::contact_callback;
@@ -503,6 +508,7 @@ int main(int argc,char** argv) {
    check(actual.finalize()&&actual.bytes().size()==reference.bytes().size()&&std::equal(actual.bytes().begin(),actual.bytes().end(),reference.bytes().begin()),"OFF agreement bytes identical to rule46 absent");
   }
   keys(0);shared_handlers_c::install(nullptr);check(!shared_handlers_c::requested()&&shared_handlers_c::verified(),"missing keys preserve OFF");
+  check(xml1_cling::registrations==0&&!tk_guard_bridges::guard_block_handler,"OFF never registers or publishes the private block handler");
   std::printf("OFF proof: %d checks, %d failures; 4194304 image bytes and agreement bytes identical\n",checks,failures);return failures?1:0;
  }
  const u32 mask=argc>3?static_cast<u32>(std::stoul(argv[3],nullptr,0)):2047;
@@ -529,6 +535,13 @@ int main(int argc,char** argv) {
   const auto before=std::vector<unsigned char>(at(0x401000),at(0x801000));shared_handlers_c::install(GetModuleHandleW(nullptr));
   check(!shared_handlers_c::installed()&&!shared_handlers_c::verified()&&std::equal(before.begin(),before.end(),at(0x401000)),"TK/guard query service accepts only its exact published capacity target");
   entity_capacity::owners[0]={};
+ }
+ if(mask&shared_handler_c_rules::guard){
+  seed(pc);xml1_cling::lookup_available=false;
+  const auto before=std::vector<unsigned char>(at(0x401000),at(0x801000));
+  shared_handlers_c::install(GetModuleHandleW(nullptr));
+  check(!shared_handlers_c::installed()&&!shared_handlers_c::verified()&&!tk_guard_bridges::guard_block_handler&&std::equal(before.begin(),before.end(),at(0x401000)),"private block lookup failure rolls back every selected rule46 write");
+  xml1_cling::lookup_available=true;
  }
  seed(pc);
  // Other owners may replace fly-charge collision and pickup cancellation.
@@ -559,6 +572,8 @@ int main(int argc,char** argv) {
   jump(site,reinterpret_cast<void*>(destination));std::copy_n(at(site),5,installation_baseline.begin()+site-0x401000);
  }}
  shared_handlers_c::install(GetModuleHandleW(nullptr));check(shared_handlers_c::installed()&&shared_handlers_c::verified()&&shared_handlers_c::values()[0]==mask,"exact selected rule-46 mask installed");
+ check(bool(tk_guard_bridges::guard_block_lookup("ch_guard_block"))==bool(mask&shared_handler_c_rules::guard),"only Guard publishes its private block handler");
+ check(shared_handlers_c::values()[1]==((mask&shared_handler_c_rules::guard)?1u:0u),"Guard policy agreement distinguishes old peers while unrelated masks retain their bytes");
  using namespace shared_handler_c_bridges;
  const shared_handler_c_rules::targets targets{&jump_damage_bridge,&fly_damage_bridge,&colossus_input,&colossus_contact,&bounce_contact,&fastball_bridge,
   &tk_guard_bridges::tk_entry,&tk_guard_bridges::tk_update,&tk_guard_bridges::tk_cancel,&tk_guard_bridges::tk_input,&tk_guard_bridges::tk_filter,&tk_guard_bridges::guard_entry,&tk_guard_bridges::tk_parse,&tk_guard_bridges::guard_input,&tk_guard_bridges::release_arming_gate};

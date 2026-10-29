@@ -30,6 +30,7 @@ u32 audit_before[4]{},audit_after[4]{};
 bool base_damage_parsed=false;
 bool stale_resolution=false;
 bool retail_arm=false;float arm_speed=100.f;
+bool guard_node_missing=false;
 void native_arm(void*,void*,int);
 std::string selected_name,played_name;std::vector<int> order;
 void* self_actor(){return source?source_actor.data():actor.data();}
@@ -75,7 +76,7 @@ float __fastcall native_movement_parameter(void*,void*,int id){++native_fallback
 bool __fastcall immunity(void*,void*,int id,int){check(id==(source?0x17:0x2c),"def_pickup enum translated by name");return immune;}
 void* __fastcall source_action(void*,void*,int id){action_id=id;return move.data();}
 void* __fastcall entry_action(void*,void*,void* from,int id,void* who){check(from==move.data()&&who==actor.data(),"entry action resolves from the incoming move");source_action(who,nullptr,id);return node.data();}
-void* __fastcall named_lookup(void*,void*,const u32*,void*){return move.data();}
+void* __fastcall named_lookup(void*,void*,const u32*,void*){return guard_node_missing&&selected_name=="guardblocking"?nullptr:move.data();}
 void* __fastcall get_style(void* p,void*){return p;}
 void* __fastcall make_name(u32* p,void*,const char* name){selected_name=name;*p=1;return p;}
 void* __fastcall source_named(void*,void*,const u32*,int){return move.data();}
@@ -178,8 +179,8 @@ void __fastcall query_filter(void*,void*,int,int){}
 void __cdecl query_team(void**,void*){}
 void __fastcall query_pc(void*,void*,const vec*,const void*,float d,const vec* box){check(d==48&&box->x==16&&box->y==16&&box->z==16,"guard native 48/16 probe");++query_calls;}
 void __fastcall query_source(void* a,void*,const vec* p,const void* f,float d,const vec* box,int flag,int axes){check(flag==1&&axes==7,"source query flag and axes");query_pc(a,nullptr,p,f,d,box);}
-void** __fastcall query_contact(void*,void*,void** p){*p=target.data();return p;}
-void* __fastcall contact_entity(void* ref,void*){return field<void*>(ref,0)==node.data()?node.data():target.data();}
+void** __fastcall query_contact(void*,void*,void** p){*p=field<void*>(query.data(),0x300);return p;}
+void* __fastcall contact_entity(void* ref,void*){if(!field<void*>(ref,0))return nullptr;return field<void*>(ref,0)==node.data()?node.data():target.data();}
 bool __fastcall contact_level(void*,void*){return wall;}
 vec normal{-1,0,0};
 const vec* __fastcall contact_normal(void*,void*){return &normal;}
@@ -209,6 +210,7 @@ u32 __fastcall source_talent_index(void*,void*,const void*,u32){return 0;}
 void* __fastcall source_talent_stats(void*,void*){return stats.data();}
 unsigned char __fastcall source_might(void*,void*,int,void* context_actor,void*){return context_actor?effective_might(nullptr,nullptr):static_cast<unsigned char>(might);}
 void reset(){
+ guard_node_missing=false;
  lift_rule::source_override=-1;
  stale_resolution=false;
  actor.fill(0);source_actor.fill(0);target.fill(0);stats.fill(0);input.fill(0);context.fill(0);node.fill(0);event.fill(0);attack.fill(0);type.fill(0);move.fill(0);query.fill(0);audio.fill(0);manager.fill(0);field<unsigned char>(audio.data(),0xd0ae)=1;
@@ -216,6 +218,7 @@ void reset(){
  for(auto* a:{actor.data(),source_actor.data()}){field<void*>(a,0)=actor_vt.data();field<u32>(a,0x1c)=111;field<void*>(a,0x35c)=field<void*>(a,0x2d8)=stats.data();field<void*>(a,0x378)=field<void*>(a,0x2f4)=move.data();field<void*>(a,0x3c0)=field<void*>(a,0x328)=node.data();}
  field<void*>(target.data(),0)=target_vt.data();field<u32>(target.data(),0x1c)=222;field<float>(target.data(),0x240)=field<float>(target.data(),0x27c)=100;field<void*>(target.data(),0x35c)=field<void*>(target.data(),0x2d8)=stats.data();
  field<void*>(node.data(),0)=node_vt.data();field<void*>(node.data(),8)=node.data();field<void*>(move.data(),0)=move_vt.data();field<void*>(query.data(),0)=query_vt.data();field<void*>(audio.data(),0)=audio_vt.data();field<void*>(manager.data(),0)=manager_vt.data();field<void*>(context.data(),4)=node.data();
+ field<void*>(query.data(),0x300)=target.data();
  field<void*>(event.data(),0)=event_vt.data();event_vt[8/4]=reinterpret_cast<void*>(&auxiliary_event);
  actor_vt[0]=target_vt[0]=reinterpret_cast<void*>(&get_type);actor_vt[0x24/4]=target_vt[0x24/4]=reinterpret_cast<void*>(&position);actor_vt[0x1c/4]=reinterpret_cast<void*>(&set_position);actor_vt[0x2c/4]=target_vt[0x2c/4]=reinterpret_cast<void*>(&set_angles);
  actor_vt[0x124/4]=actor_vt[0x130/4]=reinterpret_cast<void*>(&pose);
@@ -261,7 +264,7 @@ void bind(){
 void load_source(const image& x1,u32 va,std::size_t size){
  x1.load(va,size,bias);
  // Only absolute data references from the executed source callbacks.
- const u32 data[]{0x4c0a60,0x48338c,0x485878,0x498d90,0x485840,0x3c6de4,0x3c6e40,0x3c6de0,0x3d6610,0x3c97d0,0x3d65c0,0x3d65d0,0x3c7084,0x3cdaec,0x3cb240,0x3cb69c,0x3c8310,0x3c832c,0x3c93c0,0x3c8c88,0x5bc9d0,0x5bc9d4,0x5bc9d8,0x3c8c30,0x3c9784,0x4f314c,0x3d63c4,0x3d63b8,0x3cd144};
+ const u32 data[]{0x4c0a60,0x48338c,0x485878,0x498d90,0x485840,0x3c6de4,0x3c6e40,0x3c6de0,0x3d6610,0x3c97d0,0x3d65c0,0x3d65d0,0x3c7084,0x3cdaec,0x3cb240,0x3cb69c,0x3c8310,0x3c832c,0x3c93c0,0x3c8c88,0x5bc9d0,0x5bc9d4,0x5bc9d8,0x3c8c30,0x3c9784,0x4f314c,0x3d63c4,0x3d63b8,0x3cd144,0x3ca81c};
  for(std::size_t i=0;i+4<=size;++i){u32 v=field<u32>(at(va+bias),static_cast<unsigned>(i));if(std::find(std::begin(data),std::end(data),v)!=std::end(data)){field<u32>(at(va+bias),static_cast<unsigned>(i))=v+bias;i+=3;}}
  for(u32 v:data)if(x1.read(v,8))x1.load(v,(v==0x3d63c4||v==0x3d63b8)?16:8,bias);
 }
@@ -403,6 +406,14 @@ void release_damage_test(const image& pc){
  }
 }
 void guard_entry_timing_test(){
+ for(bool ally:{false,true}){
+  source=false;acrobatics=ally?0:3;might=1;owner_team=1;target_team=ally?1:2;reset();bind();
+  field<unsigned char>(target.data(),0x765)=1;field<void*>(context.data(),4)=move.data();field<unsigned char>(context.data(),0x6c)=0x80;
+  if(ally){field<unsigned char>(stats.data(),0x2ae)=0x20;field<unsigned char>(stats.data(),0x2ad)=0x80;}
+  tk_guard_bridges::guard_entry(nullptr,nullptr,actor.data(),input.data(),context.data());
+  check(starts==1&&field<void*>(actor.data(),0x3bc)==nullptr&&field<unsigned char>(context.data(),0x6c)==0x84,"immediate air pickup/Fastball dispatch once without a stale ordinary grab chain or parent overwrite");
+ }
+ acrobatics=0;might=0;owner_team=1;target_team=2;
  source=false;reset();bind();field<void*>(context.data(),4)=move.data();field<unsigned char>(target.data(),0x765)=1;
  tk_guard_bridges::guard_entry(nullptr,nullptr,actor.data(),nullptr,context.data());
  check(query_calls==1&&starts==1&&action_id==25,"Guard admission with no input object still makes its contextual stunned-target decision");
@@ -426,6 +437,24 @@ void guard_entry_timing_test(){
   check(query_calls==1&&starts==1,"300-800 ms Guard holds cannot loop the entry decision");
  }
 }
+void guard_fallback_contract_test(){
+ for(bool ai:{false,true})for(bool held:{false,true})for(bool admitted:{false,true}){
+  source=false;acrobatics=0;might=0;reset();bind();can_grab=admitted;
+  field<u32>(actor.data(),4)=1u<<20;field<int>(actor.data(),0x3d4)=0;field<unsigned char>(actor.data(),0x3d8)=ai?1:0;
+  field<u32>(input.data(),0)=held?0x100:0;field<u32>(input.data(),4)=held?0x100:0;
+  tk_guard_bridges::guard_input(nullptr,nullptr,actor.data(),input.data());
+  if(admitted)check(action_id==3&&field<u32>(actor.data(),0x76c)==222&&selected_name!="guardblocking","successful ordinary interaction precedes held block for player and AI");
+  else check((selected_name=="guardblocking")==(!ai&&held),"only a real player held refusal selects the private block node");
+ }
+ source=false;reset();bind();can_grab=false;guard_node_missing=true;field<u32>(actor.data(),4)=1u<<20;field<u32>(input.data(),0)=0x100;
+ logger::captured.clear();tk_guard_bridges::guard_input(nullptr,nullptr,actor.data(),input.data());
+ check(action_id==0&&std::any_of(logger::captured.begin(),logger::captured.end(),[](const std::string& line){return line.find("guard block lookup failed")!=std::string::npos;}),"actual missing block lookup logs failure and safely selects released Idle");
+ reset();bind();can_grab=false;field<u32>(actor.data(),4)=1u<<20;field<void*>(context.data(),4)=move.data();
+ tk_guard_bridges::guard_entry(nullptr,nullptr,actor.data(),nullptr,context.data());
+ check(action_id==0&&selected_name!="guardblocking","script admission's neutral input cannot create indefinite block");
+ const int previous=query_calls;
+ check(!tk_guard_bridges::guard_input(nullptr,nullptr,nullptr,input.data())&&query_calls==previous,"invalid actor is not a block request");
+}
 
 void round3_guard_and_tk_test(){
  // 082c admitted the ordinary Guard chain for a target which was merely
@@ -435,8 +464,8 @@ void round3_guard_and_tk_test(){
   field<void*>(context.data(),4)=move.data();
   if(entry)tk_guard_bridges::guard_entry(nullptr,nullptr,actor.data(),input.data(),context.data());
   else tk_guard_bridges::guard_input(nullptr,nullptr,actor.data(),input.data());
-  check(action_id==(stunned?25:0),"round3 untouched enemy never selects grab; stunned enemy retains pickup");
-  if(!stunned)check(field<u32>(actor.data(),0x76c)==0,"round3 untouched enemy never becomes held target");
+  check(action_id==(stunned?25:3),"XML1 ordinary unstunned grab and raw-flagged alternate branch");
+  check(field<u32>(actor.data(),0x76c)==222,"admitted enemy locks the complete target token regardless of stun");
  }
  // A two-second hold must survive a transient acquisition miss at entry.
  // Native admission policies stay in acquire/filter; no extra tag/debit.
@@ -469,50 +498,90 @@ void round3_guard_and_tk_test(){
  }
 }
 
-struct live_ref {u32 handle;void* pool;};
-std::array<unsigned char,0x80> live_stun_factory{},live_attach_pool{},live_definition_pool{},live_attachment{};
-std::array<void*,32> live_factory_vt{},live_attach_pool_vt{},live_attached_vt{};
-bool __fastcall live_attach_valid(void*,void*,u32 token){return token==0x1234;}
-void* __fastcall live_attach_get(void*,void*,u32 token){return token==0x1234?live_attachment.data():nullptr;}
-live_ref* __fastcall live_stun_named(void*,void*,live_ref* out,const char* name){check(std::strcmp(name,"shared_stunned")==0,"guard queries the actual shared_stunned definition");*out={0x50,live_definition_pool.data()};return out;}
-void* __cdecl live_stun_manager(){return live_stun_factory.data();}
-bool __fastcall live_status(void*,void*,int tag){check(tag==4,"native grab gate keeps its unrelated status exclusion");return false;}
-void live_stun_guard_tests(const image& pc){
- // live-082d records idle+visible stars, but not raw reaction/attachment state.
- // Pin the native-supported active-timed-stun/reaction-clear combination.
- pc.load(0x538140,0x12);pc.load(0x5381c0,0x12);
- field<void*>(live_stun_factory.data(),0)=live_factory_vt.data();live_factory_vt[0x58/4]=reinterpret_cast<void*>(&live_stun_named);
- field<void*>(live_attach_pool.data(),0)=live_attach_pool_vt.data();live_attach_pool_vt[0]=reinterpret_cast<void*>(&live_attach_valid);live_attach_pool_vt[2]=reinterpret_cast<void*>(&live_attach_get);
- live_attached_vt[0x4c/4]=at(0x538140);live_attached_vt[0x64/4]=at(0x5381c0);
- for(int state:{0,1,2,3,4})for(bool entry:{false,true}){
-  source=false;acrobatics=0;might=0;owner_team=1;target_team=2;reset();bind();jump(0x543f80,&live_stun_manager);live_attachment.fill(0);field<void*>(live_attachment.data(),0)=live_attached_vt.data();
-  field<live_ref>(target.data(),0x21c)={state==3?0x2234u:0x1234u,state==0?nullptr:live_attach_pool.data()};
-  field<live_ref>(live_attachment.data(),0x20)={state==2?0x51u:0x50u,live_definition_pool.data()};
-  if(state==1||state==4){pc.load(0x429210,0x109);pc.load(0x42b840,0x25);pc.load(0x427de0,0x1e);jump(0x41a160,&live_status);if(state==4)field<float>(target.data(),0x2f0)=time_now+1.f;}
-  field<void*>(context.data(),4)=move.data();
-  if(entry)tk_guard_bridges::guard_entry(nullptr,nullptr,actor.data(),input.data(),context.data());else tk_guard_bridges::guard_input(nullptr,nullptr,actor.data(),input.data());
-  check(action_id==((state==1||state==4)?25:0),"active timed stun admits pickup, including native recent-hit deadline; fresh, unrelated and stale attachments do not");
- }
- for(bool blocked:{false,true}){
-  source=false;acrobatics=0;might=1;owner_team=target_team=1;effective_might_override=1;reset();bind();jump(0x543f80,&live_stun_manager);
-  field<unsigned char>(stats.data(),0x2ae)=0x20;field<unsigned char>(stats.data(),0x2ad)=0x80;
-  field<live_ref>(target.data(),0x21c)={0x1234,live_attach_pool.data()};field<live_ref>(live_attachment.data(),0x20)={0x50,live_definition_pool.data()};
-  pc.load(0x429210,0x109);pc.load(0x42b840,0x25);pc.load(0x427de0,0x1e);jump(0x41a160,&live_status);field<float>(target.data(),0x2f0)=time_now+1.f;
-  field<unsigned char>(target.data(),0x579)=blocked?0x40:0;
+bool predicate_status=false,predicate_grab_immune=false;
+bool __fastcall native_status(void*,void*,int tag){check(tag==4,"native admission checks entity status4");return predicate_status;}
+bool __fastcall source_gate_immunity(void* who,void*,int id,int mode){return id==0x18?predicate_grab_immune:immunity(who,nullptr,id,mode);}
+float __fastcall source_health(void* who,void*){return field<float>(who,0x240);}
+u32 getup_key=1;
+u32* __fastcall getup_move_name(void*,void*){return &getup_key;}
+const char* __fastcall getup_name_text(void*,void*){return "getup_fixture";}
+const char* __cdecl getup_find(const char* haystack,const char* needle){return std::strstr(haystack,needle);}
+void native_grab_bind(const image& pc,const image& x1){
+ pc.load(0x429210,0x109);pc.load(0x42b840,0x25);pc.load(0x427de0,0x1e);pc.load(0x683efc,6);
+ load_source(x1,0x391a0,0xf3);load_source(x1,0x3a260,0x18);
+ jump(bias+0x38270,&source_health);jump(0x41a160,&native_status);jump(bias+0x26da0,&native_status);
+ jump(bias+0x2b250,&source_gate_immunity);
+ jump(0x41aa80,&getup_name_text);jump(bias+0x27b00,&getup_name_text);jump(0x67220a,&getup_find);jump(bias+0x3416b0,&getup_find);
+}
+void native_admission_tests(const image& pc,const image& x1){
+ // Neither predicate is stubbed. Execute source x87 instructions and every
+ // suffix in the PC predicate through the production bridge, then decide.
+ for(bool stun:{false,true})for(float deadline:{0.f,9.999f,10.f,10.001f,11.5f})for(int veto=0;veto<10;++veto){
+  source=false;acrobatics=0;might=0;owner_team=1;target_team=2;reset();bind();native_grab_bind(pc,x1);
+  predicate_status=veto==6;predicate_grab_immune=veto==8;
+  field<unsigned char>(target.data(),0x765)=field<unsigned char>(target.data(),0x54d)=stun?1:0;
+  field<float>(target.data(),0x2f0)=field<float>(target.data(),0x28c)=deadline;time_now=10.f;
+  if(veto==1){field<unsigned char>(target.data(),0x579)|=0x40;field<float>(target.data(),0x240)=0;}
+  if(veto==2)field<unsigned char>(target.data(),0x764)=field<unsigned char>(target.data(),0x54c)=0x10;
+  if(veto==3){field<unsigned char>(target.data(),0x3db)=4;field<unsigned char>(target.data(),0x337)=0x10;}
+  if(veto==4)field<u32>(target.data(),0x76c)=field<u32>(target.data(),0x554)=0x100de;
+  if(veto==5){field<unsigned char>(stats.data(),0x2ad)=8;field<unsigned char>(stats.data(),0x3a1)=0x10;}
+  if(veto==7)field<unsigned char>(target.data(),0x764)=field<unsigned char>(target.data(),0x54c)=0x40;
+  if(veto==8)field<unsigned char>(target.data(),0x578)=4; // native def_grab cache
+  if(veto==9){friend_damage=true;field<void*>(target.data(),0x378)=field<void*>(target.data(),0x2f4)=move.data();move_vt[0xd0/4]=move_vt[0xb0/4]=reinterpret_cast<void*>(&getup_move_name);}
+  const bool expected=veto==0&&(stun||time_now>=deadline);
+  const bool original=reinterpret_cast<bool(__thiscall*)(void*)>(bias+0x391a0)(target.data());
+  const bool replacement=reinterpret_cast<bool(__thiscall*)(void*)>(&tk_guard_bridges::source_grabbable)(target.data());
+  check(original==expected&&replacement==original,"real XML1/PC admission: deadline0, before/equal/after, raw stun and independent suffix vetoes");
   tk_guard_bridges::guard_input(nullptr,nullptr,actor.data(),input.data());
-  check(blocked?played_name.empty():played_name=="throwally","timed-stun ally follows flagged-stun Fastball eligibility and still honors native status exclusion");
+  check(action_id==(expected?(stun?25:3):0),"fresh soldier native_grab=1 stunned=0 chooses ordinary grab; refusal chooses Idle when released");
+  check(field<u32>(actor.data(),0x76c)==(expected?222u:0u),"only admitted source interactions lock a target");
  }
- effective_might_override=-1;owner_team=1;target_team=2;
- for(bool reaction:{false,true}){
-  source=false;acrobatics=0;might=1;owner_team=target_team=1;effective_might_override=1;reset();bind();jump(0x543f80,&live_stun_manager);
-  field<unsigned char>(stats.data(),0x2ae)=0x20;field<unsigned char>(stats.data(),0x2ad)=0x80;
-  field<u32>(target.data(),4)=1u<<20;field<int>(target.data(),0x3d4)=0;field<unsigned char>(target.data(),0x765)=reaction?1:0;
-  field<live_ref>(target.data(),0x21c)={0x1234,live_attach_pool.data()};field<live_ref>(live_attachment.data(),0x20)={0x50,live_definition_pool.data()};
-  pc.load(0x429210,0x109);pc.load(0x42b840,0x25);pc.load(0x427de0,0x1e);jump(0x41a160,&live_status);field<float>(target.data(),0x2f0)=time_now+1.f;
-  tk_guard_bridges::guard_input(nullptr,nullptr,actor.data(),input.data());
-  check(reaction?played_name=="throwally":played_name.empty(),"party pending timed stun cannot undo rule18 reaction ownership; actual flagged stun retains Fastball");
+ predicate_status=predicate_grab_immune=false;
+ // A timed PC attachment never replaces XML1's reaction bit or its deadline.
+ source=false;reset();bind();native_grab_bind(pc,x1);field<float>(target.data(),0x2f0)=11.5f;
+ field<u32>(target.data(),0x21c)=0x1234;field<void*>(target.data(),0x220)=reinterpret_cast<void*>(1);
+ tk_guard_bridges::guard_input(nullptr,nullptr,actor.data(),input.data());
+ check(action_id==0,"pending timed attachment cannot bypass the source clock or rule18 reaction ownership");
+}
+u32 source_hit_site=bias+0x44d52;
+__declspec(naked) void drive_source_hit(void*){__asm {
+ sub esp,0x3c
+ push ebx
+ push ebp
+ push esi
+ push edi
+ mov esi,[esp+0x50]
+ jmp dword ptr [source_hit_site]
+}}
+short __fastcall source_impulse_level(void*,void*,u32,float){return 7;}
+void __fastcall source_impulse_mode(void*,void*,u32){}
+void source_hit_deadline_tests(const image& pc,const image& x1){
+ for(bool descriptor_disabled:{false,true})for(int hit_level:{0,1,20})for(bool excluded:{false,true})for(bool eligible:{false,true}){
+  source=false;reset();bind();native_grab_bind(pc,x1);source=true;
+  load_source(x1,0x39a30,0x2c5);load_source(x1,0x44d52,0xfa);
+  for(u32 data:{0x3ca7f8u,0x3c8240u,0x3ca848u,0x3ca844u}){
+   x1.load(data,4,bias);
+   for(u32 range:{0x39a30u,0x44d52u}){
+    const unsigned n=range==0x39a30?0x2c5:0xfa;
+    for(unsigned i=0;i+4<=n;++i)if(field<u32>(at(bias+range),i)==data){field<u32>(at(bias+range),i)=data+bias;i+=3;}
+   }
+  }
+  jump(bias+0x398d0,&source_impulse_level);jump(bias+0x27260,&source_impulse_mode);target_ok=eligible;time_now=10.f;
+  field<void*>(attack.data(),0)=target.data();field<short>(attack.data(),0x9c)=static_cast<short>(hit_level);field<unsigned char>(attack.data(),0xa4)=excluded?4:0;
+  field<vec>(attack.data(),0x7c)={1,0,0};field<u32>(attack.data(),0xc)=111;
+  field<vec>(target.data(),0x100)={1,0,0};field<unsigned char>(target.data(),0x334)=descriptor_disabled?8:0;
+  drive_source_hit(attack.data());
+  const bool written=!descriptor_disabled&&hit_level>0&&!excluded&&eligible;
+  check(field<float>(target.data(),0x28c)==(written?11.5f:0.f),"real source 44E3F ->39A30 hit impulse writes +1.5 only under native conditions");
+  if(written){
+   field<float>(target.data(),0x2f0)=field<float>(target.data(),0x28c);
+   check(!reinterpret_cast<bool(__thiscall*)(void*)>(&tk_guard_bridges::source_grabbable)(target.data()),"actual hit deadline excludes unstunned target immediately");
+   time_now=11.5f;
+   check(reinterpret_cast<bool(__thiscall*)(void*)>(&tk_guard_bridges::source_grabbable)(target.data()),"actual hit deadline admits unstunned target at equality");
+  }
  }
- effective_might_override=-1;owner_team=1;target_team=2;
+ source=false;predicate_status=predicate_grab_immune=false;time_now=10.f;
 }
 void* __fastcall source_value_name(u32* key,void*,const char* text){check(std::strcmp(text,"L2")==0,"source throw requests the literal L2 value");*key=1;return key;}
 int __cdecl source_value_digit(int c){return c>='0'&&c<='9';}
@@ -673,6 +742,31 @@ void acquisition_tests(const image& pc,const image& x1){
   }
  }
 }
+int probe_case=0;vec probe_end{};
+void probe_physics(void* q,const vec* origin,const vec* end,const vec* box){
+ ++query_calls;probe_end=*end;
+ check(origin->x==0&&origin->y==0&&origin->z==0&&end->x==48&&end->y==0&&end->z==0&&box->x==16&&box->y==16&&box->z==16,"real source/PC query wrappers preserve the forward48 endpoint and all-axis16 box");
+ // Synthetic physics contacts, outside the guard/query wrapper under test.
+ // The native wrappers supply these bounds; no acquisition range is duplicated
+ // in the bridge. The first occluding object is the selected contact.
+ const float contact=probe_case==0?40.f:probe_case==1?100.f:probe_case==2?-40.f:20.f;
+ field<void*>(q,0x300)=contact>=origin->x-box->x&&contact<=end->x+box->x?target.data():nullptr;
+}
+void __fastcall pc_probe_sweep(void* q,void*,const vec* origin,const vec* end,const vec* box){probe_physics(q,origin,end,box);}
+void __fastcall source_probe_sweep(void* q,void*,const vec* origin,const vec* end,const vec* box,int flag){check(flag==1,"source Guard query forwards flag1");probe_physics(q,origin,end,box);}
+void guard_probe_tests(const image& pc,const image& x1){
+ pc.load(0x4aa1e0,0x6b);load_source(x1,0xa17c0,0x98);
+ for(probe_case=0;probe_case<4;++probe_case)for(bool original:{true,false}){
+  std::printf("probe row %d source %d\n",probe_case,int(original));
+  source=original;acrobatics=0;might=0;owner_team=1;target_team=2;reset();bind();target_actor=probe_case!=3;
+  query_vt[0x70/4]=original?at(bias+0xa17c0):at(0x4aa1e0);
+  query_vt[0x74/4]=original?reinterpret_cast<void*>(&source_probe_sweep):reinterpret_cast<void*>(&pc_probe_sweep);
+  if(original)reinterpret_cast<bool(__thiscall*)(void*,void*,void*)>(bias+0xd99d0)(nullptr,source_actor.data(),input.data());
+  else tk_guard_bridges::guard_input(nullptr,nullptr,actor.data(),input.data());
+  check(action_id==(probe_case==0?3:probe_case==3?24:0),"front/far/behind/occluding-object contacts retain source query selection order");
+  check(query_calls==1&&destructs==1,"native probe selects one contact and releases its query once");
+ }
+}
 void guard_tests(const image& pc){
  source=false;reset();bind();field<unsigned char>(context.data(),0x6c)=0x80;
  field<void*>(context.data(),4)=move.data();
@@ -683,7 +777,7 @@ void guard_tests(const image& pc){
   if(original)reinterpret_cast<bool(__thiscall*)(void*,void*,void*)>(bias+0xd99d0)(nullptr,source_actor.data(),input.data());
   else tk_guard_bridges::guard_input(nullptr,nullptr,actor.data(),input.data());
   if(kind!=3){check(query_calls==1&&destructs==1,"guard query acquires/releases once");
-   if(kind==0)check(action_id==(original?3:0),"source generic admission is broader; requested ground policy rejects untouched enemies");
+   if(kind==0)check(action_id==3,"replacement matches XML1 ordinary unstunned admission");
    if(kind==2)check(action_id==24&&field<unsigned char>(target.data(),original?0x2b9:0x30d)&4,"object guard retains pickup claim");
   }
   else check(action_id==0&&std::find(order.begin(),order.end(),8)!=order.end(),"cannot lift reports source feedback and takes idle");
@@ -701,10 +795,10 @@ void guard_tests(const image& pc){
    }
   }
  }
- for(int r:{0,2,3})for(bool is_immune:{false,true}){
+ for(int r:{0,2,3})for(int strength:{0,1,3})for(bool is_immune:{false,true}){
   int a_action=0,a_starts=0,a_notices=0;
   for(bool original:{true,false}){
-   source=original;acrobatics=r;might=0;reset();bind();immune=is_immune;field<unsigned char>(target.data(),0x54d)=field<unsigned char>(target.data(),0x765)=1;
+   source=original;acrobatics=r;might=strength;reset();bind();immune=is_immune;field<unsigned char>(target.data(),0x54d)=field<unsigned char>(target.data(),0x765)=1;
    if(original)reinterpret_cast<bool(__thiscall*)(void*,void*,void*)>(bias+0xd99d0)(nullptr,source_actor.data(),input.data());
    else tk_guard_bridges::guard_input(nullptr,nullptr,actor.data(),input.data());
    const int notices=static_cast<int>(std::count(order.begin(),order.end(),7));
@@ -824,8 +918,8 @@ int main(int argc,char** argv){
  check(field<u32>(const_cast<unsigned char*>(pc.read(0x69d1ac,0x3c)),0x34)==0x590120&&field<u32>(const_cast<unsigned char*>(pc.read(0x69d1ac,0x3c)),0x38)==0x590bd0,"retail audio table distinguishes boolean from resource lookup");
  pc.load(0x590120,0x66);
  load_source(x1,0xdf640,0xfd);load_source(x1,0xd99d0,0x7c6);load_source(x1,0xdff10,0xc71);load_source(x1,0xdfc80,0x28b);load_source(x1,0x38210,0x15);load_source(x1,0xdf3b0,0xed);
- std::puts("cancel");cancel_tests();std::puts("entry");entry_tests(pc);std::puts("constructors");constructor_tests(pc,x1);std::puts("parser");parser_tests(pc);std::puts("filter");filter_tests();std::puts("acquisition");acquisition_tests(pc,x1);std::puts("guard");guard_tests(pc);std::puts("control");control_tests();std::puts("retail audio ABI");retail_audio_contract_tests(pc);release_damage_test(pc);guard_entry_timing_test();round3_guard_and_tk_test();
- live_stun_guard_tests(pc);live_tk_zero_selection_test(pc);source_throw_value_test(pc,x1);
- std::puts("blocked trace");blocked_trace_test();
+ std::puts("cancel");cancel_tests();std::puts("entry");entry_tests(pc);std::puts("constructors");constructor_tests(pc,x1);std::puts("parser");parser_tests(pc);std::puts("filter");filter_tests();std::puts("acquisition");acquisition_tests(pc,x1);std::puts("guard");guard_tests(pc);std::puts("native guard probe");guard_probe_tests(pc,x1);std::puts("control");control_tests();std::puts("retail audio ABI");retail_audio_contract_tests(pc);release_damage_test(pc);guard_entry_timing_test();round3_guard_and_tk_test();
+ native_admission_tests(pc,x1);source_hit_deadline_tests(pc,x1);live_tk_zero_selection_test(pc);source_throw_value_test(pc,x1);
+ std::puts("guard fallback contract");guard_fallback_contract_test();std::puts("blocked trace");blocked_trace_test();
  std::printf("TK/guard native: %d checks, %d failures\n",checks,failures);return failures?1:0;
 }

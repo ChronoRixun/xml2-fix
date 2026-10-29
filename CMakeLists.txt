@@ -783,6 +783,10 @@ target_link_options(xml2_shared_handlers_c_test PRIVATE /BASE:0x400000 /DYNAMICB
 add_executable(xml2_tk_guard_test test/tk_guard_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
 target_include_directories(xml2_tk_guard_test PRIVATE src)
 target_link_options(xml2_tk_guard_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
+add_executable(xml2_guard_block_native_test test/guard_block_native_test.cpp "${CMAKE_CURRENT_BINARY_DIR}/image_fixture.asm")
+target_include_directories(xml2_guard_block_native_test PRIVATE src)
+target_link_libraries(xml2_guard_block_native_test PRIVATE lcsave)
+target_link_options(xml2_guard_block_native_test PRIVATE /BASE:0x400000 /DYNAMICBASE:NO)
 # E4 stage 1: the production transaction plus retail pool/guard instructions inside
 # (the descriptor test compares against 9677892 = release-1.9.0-beta1 before E4: NpcPowerRule revision 14)
 # a union image. These are ordinary native tests; neither game nor engine starts.

@@ -52,6 +52,7 @@ inputs come from environment variables; the scripts stop with a message when a r
 |---|---|---|
 | `XML2_FIX_TEST_EXE` | run_native, prove_off_wire, prove_combined_install | a retail XML2 PC `XMen2.exe`, read only |
 | `XML2_FIX_TEST_XBE` | run_native shared handler and NPC differential tests | the owner's XML1 `default.xbe`, read only |
+| `XML2_FIX_GUARD_NODE` | run_native private Guard block fixture | `guardblocking.xmlb` generated from the companion builder by `scripts/run_guard_block.py` (see `docs/tk-guard.md`) |
 | `XML2_FIX_TEST_BIN_DIR` | run_native | optional native binary directory; defaults to `native/bin/Release` |
 | `XML2_FIX_TEST_GAME_DIR` | run_native | an XML2 PC install folder, read only |
 | `XML2_FIX_TEST_XBE` | run_native | the owner's original-Xbox X-Men Legends `default.xbe`, read only (the weapon brain and AI query scheduler suites execute XML1's routines from it) |

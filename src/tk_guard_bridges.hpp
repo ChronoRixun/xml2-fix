@@ -73,23 +73,6 @@ __declspec(naked) inline bool source_grabbable(void*){__asm {
  mov esi,ecx
  jmp dword ptr [grabbable_body]
 }}
-inline u32 grabbable_precheck=0x42b840,grabbable_after_stun=0x42925e;
-// A native timed stun has the same grab eligibility as reaction bit0: keep
-// the status precheck and every native suffix gate, bypass only its clock.
-__declspec(naked) inline bool stunned_grabbable(void*){__asm {
- push ecx
- push esi
- mov esi,ecx
- call dword ptr [grabbable_precheck]
- test al,al
- jnz denied
- jmp dword ptr [grabbable_after_stun]
- denied:
- xor al,al
- pop esi
- pop ecx
- ret
-}}
 inline bool wall_lunge(void* actor,void* initial,void* entity){
  if(rank(actor,"acrobatics")<=2)return false;
  auto level=fn<bool(__thiscall*)(void**)>(0x4a95c0);
@@ -110,33 +93,102 @@ inline bool wall_lunge(void* actor,void* initial,void* entity){
  if(auto* next=named(actor,"walllunge")){play(actor,next);return true;}return false;
 }
 struct power_ref {u32 handle=0;void* pool=nullptr;};
-inline bool enemy_stunned(void* victim){
- if(field<unsigned char>(victim,0x765)&1)return true;
- // Rule18 deliberately clears a party hero's reaction flag after a refused
- // or interrupted stun. Its still-pending PC powerup must not undo that.
- if(stun_rules::party_hero(field<u32>(victim,4),field<int>(victim,0x3d4)))return false;
- // Native54EE0F traverses the entity's attachment references at21C/220.
- // The timed shared_stunned attachment and the reaction flag have separate
- // lifetimes; do not infer the former from the current animation or flag.
- power_ref cursor=field<power_ref>(victim,0x21c);if(!cursor.pool)return false;
- auto* factory=fn<getter>(0x543f80)();power_ref stun;
- method<power_ref*(__thiscall*)(void*,power_ref*,const char*)>(factory,0x58)(factory,&stun,"shared_stunned");
- if(!stun.pool)return false;
- for(unsigned n=0;n<256&&cursor.pool;++n){ // maximum supported AttachedPowerups
-  if(!method<bool(__thiscall*)(void*,u32)>(cursor.pool,0)(cursor.pool,cursor.handle))return false;
-  auto* attached=method<void*(__thiscall*)(void*,u32)>(cursor.pool,8)(cursor.pool,cursor.handle);if(!attached)return false;
-  power_ref definition;
-  method<power_ref*(__thiscall*)(void*,power_ref*)>(attached,0x64)(attached,&definition);
-  if(definition.handle==stun.handle&&definition.pool==stun.pool)return true;
-  power_ref next;method<power_ref*(__thiscall*)(void*,power_ref*)>(attached,0x4c)(attached,&next);
-  if(next.handle==cursor.handle&&next.pool==cursor.pool)return false;cursor=next;
- }
- return false;
+// The entry context owns the incoming node. Keep that owner by complete actor
+// token: a late cancel must never remove the new move's effects at actor+378.
+inline std::unordered_map<u32,void*> guard_blocks;
+inline void guard_block_trace(const char* event,void* actor){
+ if(!trace_guard||!actor)return;
+ const auto ref=field<power_ref>(actor,0x21c);
+ logger::write("guard block %s actor=%08X move=%p blockbit=%u effect_head=%08X pool=%p effects=native-node-owned",event,field<u32>(actor,0x1c),field<void*>(actor,0x378),unsigned(field<unsigned char>(actor,0x765)&2),ref.handle,ref.pool);
 }
-inline bool guard_policy(void* self,void* actor,void* input,void* incoming=nullptr){
+inline void __fastcall guard_block_entry(void* self,void*,void* actor,void* input,void* context){
+ if(!actor||!context||!field<void*>(context,4)||!valid(field<u32>(actor,0x1c)))return;
+ guard_blocks[field<u32>(actor,0x1c)]=field<void*>(context,4);
+ fn<entry>(0x4ebd60)(self,actor,input,context);guard_block_trace("entry",actor);
+}
+inline void __fastcall guard_block_exit(void* self,void*,void* actor){
+ if(!actor)return;
+ const auto owner=guard_blocks.find(field<u32>(actor,0x1c));
+ if(owner==guard_blocks.end()){guard_block_trace("exit-unowned",actor);return;}
+ void* node=owner->second;guard_blocks.erase(owner);
+ fn<void(__thiscall*)(void*,void*)>(0x4ebd80)(self,actor);
+ // Native timed attachment maintenance stops at its dead-owner branch before
+ // checking remove_on_node_end. Finish this private node's effects here too,
+ // using native unlink/invalidation, never another node's or actor's effects.
+ if(actor){
+  power_ref cursor=field<power_ref>(actor,0x21c);
+  for(unsigned n=0;node&&cursor.pool&&n<65536;++n){
+   if(!method<bool(__thiscall*)(void*,u32)>(cursor.pool,0)(cursor.pool,cursor.handle))break;
+   auto* attached=method<void*(__thiscall*)(void*,u32)>(cursor.pool,8)(cursor.pool,cursor.handle);if(!attached)break;
+   power_ref next;method<power_ref*(__thiscall*)(void*,power_ref*)>(attached,0x4c)(attached,&next);
+   if(field<void*>(attached,0x60)==node){
+    const bool removed=fn<bool(__thiscall*)(void*,u32,void*)>(0x54dad0)(actor,cursor.handle,cursor.pool);
+    if(trace_guard)logger::write("guard block effect actor=%08X attachment=%08X pool=%p node=%p native_unlink=%d",field<u32>(actor,0x1c),cursor.handle,cursor.pool,node,int(removed));
+   }
+   if(next.handle==cursor.handle&&next.pool==cursor.pool)break;cursor=next;
+  }
+ }
+ guard_block_trace("exit",actor);
+}
+inline void __fastcall guard_block_cancel(void* self,void*,void* actor){
+ guard_block_trace("cancel",actor);fn<void(__thiscall*)(void*,void*)>(0x4ebd90)(self,actor);
+}
+inline bool __fastcall guard_block_input(void* self,void*,void* actor,void* input){
+ if(!actor||guard_blocks.find(field<u32>(actor,0x1c))==guard_blocks.end())return false;
+ // Native move availability owns powerusage/exhaustion. The Guard mask replaces
+ // only ch_block's purchased-power held check; generic input owns interruptions.
+ void* move=field<void*>(actor,0x378);
+ const bool held=input&&(field<u32>(input,0)&0x100);
+ const bool interrupted=input&&((field<u32>(input,4)&~0x100u)||field<float>(input,8)>0.f);
+ // Native normalized input ends with the frame value at +20 (nine dwords).
+ std::array<unsigned char,0x24> buttons{};if(input)std::memcpy(buttons.data(),input,buttons.size());
+ field<u32>(buttons.data(),0)&=~0x100u;field<u32>(buttons.data(),4)&=~0x100u;
+ if(held&&interrupted&&move&&field<float>(actor,0x27c)>0.f){
+  // Let the native action/movement decision consume the interruption. If the
+  // authored node has no matching chain, finish via its Special-to-Idle exit.
+  if(fn<shared_handler_bridges::input>(0x4fce50)(self,actor,buttons.data()))return true;
+  if(guard_blocks.find(field<u32>(actor,0x1c))==guard_blocks.end())return false;
+ }
+ if(!held||interrupted||!move||field<float>(actor,0x27c)<=0.f||!method<bool(__thiscall*)(void*,void*)>(move,0xc)(move,actor)){
+  field<void*>(actor,0x3bc)=action(actor,0x18); // authored Special -> Idle
+  if(!field<void*>(actor,0x3bc)){
+   logger::write("guard block release chain lookup failed actor=%08X",field<u32>(actor,0x1c));
+   field<void*>(actor,0x3bc)=named(actor,"idle");
+  }
+  return field<void*>(actor,0x3bc)!=nullptr;
+ }
+ // The incoming press must not resolve Guard again from the block node.
+ field<unsigned char>(actor,0x765)|=2; // same maintenance as native ch_block
+ guard_block_trace("hold",actor);
+ return fn<shared_handler_bridges::input>(0x4fce50)(self,actor,buttons.data());
+}
+inline void* __fastcall guard_block_destructor(void* self,void*,unsigned){return self;}
+inline std::array<void*,8> guard_block_slots{};
+inline void* guard_block_handler=nullptr;
+inline void prepare_guard_block(){
+ guard_block_slots={reinterpret_cast<void*>(&guard_block_destructor),reinterpret_cast<void*>(&guard_block_entry),reinterpret_cast<void*>(&guard_block_exit),reinterpret_cast<void*>(&guard_block_cancel),reinterpret_cast<void*>(0x48cbb0),reinterpret_cast<void*>(0x4fc500),reinterpret_cast<void*>(&guard_block_input),reinterpret_cast<void*>(0x4fc860)};
+ guard_block_handler=guard_block_slots.data();
+}
+inline void* __cdecl guard_block_lookup(const char* name){return guard_block_handler&&name&&!_stricmp(name,"ch_guard_block")?&guard_block_handler:nullptr;}
+inline const char* guard_refusal(void* victim){
+ // Admission has already refreshed the native status/defense caches.
+ if(field<unsigned char>(victim,0x579)&0x40)return "death-status";
+ if(!(field<unsigned char>(victim,0x765)&1)&&now()<field<float>(victim,0x2f0))return "deadline";
+ if(field<unsigned char>(victim,0x764)&0x10)return "actor-flag10";
+ if(field<unsigned char>(victim,0x3db)&4)return "actor-flag3db";
+ if(valid(field<u32>(victim,0x76c)))return "owned";
+ auto* stats=field<void*>(victim,0x35c);
+ if(stats&&(field<unsigned char>(stats,0x2ad)&8))return "large";
+ if(fn<bool(__thiscall*)(void*,int)>(0x41a160)(victim,4))return "status4";
+ if(field<unsigned char>(victim,0x764)&0x40)return "reaction-state40";
+ if(field<unsigned char>(victim,0x578)&4)return "def_grab";
+ return "getup";
+}
+inline bool guard_policy(void* self,void* actor,void* input,void* incoming=nullptr,bool* dispatched=nullptr){
  if(!actor||!input)return false;
  det_math::fp_env fp;
  auto choose=[&](int id){
+  if(trace_guard)logger::write("guard choose actor=%08X action=%d incoming=%p",field<u32>(actor,0x1c),id,incoming);
   if(!incoming){chain(actor,id);return;}
   // Entry runs before 431252 installs the incoming move at actor+378.
   // Resolve its chains explicitly, using the native 427C80 callee contract.
@@ -147,6 +199,22 @@ inline bool guard_policy(void* self,void* actor,void* input,void* incoming=nullp
   if(!incoming)return fallback(self,actor,input);
   auto*& current=field<void*>(actor,0x378);void* previous=current;current=incoming;
   const bool result=fallback(self,actor,input);current=previous;return result;
+ };
+ auto refused=[&](bool idle_only=false){
+  if(stun_rules::party_hero(field<u32>(actor,4),field<int>(actor,0x3d4))&&!(field<unsigned char>(actor,0x3d8)&1)&&(field<u32>(input,0)&0x100)&&valid(field<u32>(actor,0x1c))){
+   void* block=named(actor,"guardblocking");
+   if(block){field<void*>(actor,0x3bc)=block;if(trace_guard)logger::write("guard choose actor=%08X move=guardblocking resolved=%p",field<u32>(actor,0x1c),block);return;}
+   logger::write("guard block lookup failed actor=%08X held=%08X pressed=%08X",field<u32>(actor,0x1c),field<u32>(input,0),field<u32>(input,4));
+  }
+  if(idle_only||!movement())choose(0);
+ };
+ auto dispatch_named=[&](const char* name){
+  auto* next=named(actor,name);if(!next)return false;
+  // Remove only this decision's old pending chain before entering the child.
+  // The child may publish its own chain; never clear that after play returns.
+  field<void*>(actor,0x3bc)=nullptr;
+  if(trace_guard)logger::write("guard dispatch actor=%08X move=%s chosen=%p",field<u32>(actor,0x1c),name,next);
+  play(actor,next);if(dispatched)*dispatched=true;return true;
  };
  const u32 held=field<u32>(actor,0x774);
  if(valid(held)&&!manager_flag(0x46dce0,0x1a8)){
@@ -164,7 +232,7 @@ inline bool guard_policy(void* self,void* actor,void* input,void* incoming=nullp
  const bool allies=friendly&&(field<unsigned char>(field<void*>(actor,0x35c),0x2ae)&0x20)&&
   fn<unsigned char(__thiscall*)(void*)>(0x427dc0)(static_cast<unsigned char*>(actor)+0x470)>0;
  {
-  query_holder holder(actor);auto* q=holder.q;if(!q){if(!movement())choose(0);return true;}
+  query_holder holder(actor);auto* q=holder.q;if(!q){refused();return true;}
   method<void(__thiscall*)(void*,int,int)>(q,0x40)(q,1,1);
   if(friendly&&!allies)fn<void(__cdecl*)(void**,void*)>(0x44fe10)(&holder.q,actor);
   const vec box{16,16,16};vec center{};const auto* p=method<const vec*(__thiscall*)(void*,vec*)>(actor,0x24)(actor,&center);center=*p;
@@ -175,34 +243,29 @@ inline bool guard_policy(void* self,void* actor,void* input,void* incoming=nullp
   // PC input scheduler to dispatch a pending chain on top of it.
   if(wall_lunge(actor,contact,entity))return false;
   if(!entity||(field<u32>(entity,4)&0x40010)||manager_flag(0x484990,0x3c)){
-   if(!movement())choose(0);
+   refused();
   }else if(auto* victim=character(entity)){
-   const bool stunned=enemy_stunned(victim);
-   const auto admission=stunned&&!(field<unsigned char>(victim,0x765)&1)?&stunned_grabbable:&source_grabbable;
-   if(!fn<bool(__thiscall*)(void*)>(reinterpret_cast<u32>(admission))(victim)){if(trace_guard)logger::write("guard eligibility actor=%08X victim=%08X native_grab=0 reaction=%02X attachment=%08X stunned=%d status=%02X deadline=%.3f",field<u32>(actor,0x1c),field<u32>(victim,0x1c),field<unsigned char>(victim,0x765),field<u32>(victim,0x21c),int(stunned),field<unsigned char>(victim,0x579),field<float>(victim,0x2f0));choose(0);}
+   const bool stunned=(field<unsigned char>(victim,0x765)&1)!=0;
+   const bool admitted=fn<bool(__thiscall*)(void*)>(reinterpret_cast<u32>(&source_grabbable))(victim);
+   if(trace_guard)logger::write("guard eligibility actor=%08X victim=%08X native_grab=%d reaction=%02X stunned=%d now=%.3f deadline=%.3f delta=%.3f flags=%02X/%02X large=%d status=%02X owner=%08X held=%08X pressed=%08X refusal=%s",field<u32>(actor,0x1c),field<u32>(victim,0x1c),int(admitted),field<unsigned char>(victim,0x765),int(stunned),now(),field<float>(victim,0x2f0),now()-field<float>(victim,0x2f0),field<unsigned char>(victim,0x764),field<unsigned char>(victim,0x3db),int(field<void*>(victim,0x35c)&&(field<unsigned char>(field<void*>(victim,0x35c),0x2ad)&8)),field<unsigned char>(victim,0x579),field<u32>(victim,0x76c),field<u32>(input,0),field<u32>(input,4),admitted?"none":guard_refusal(victim));
+   if(!admitted){refused(true);}
    else if(allies&&team(actor)==team(victim)&&!manager_flag(0x48de40,0x5c)){
-    if(field<unsigned char>(field<void*>(victim,0x35c),0x2ad)&0x80){play(actor,named(actor,"throwally"));lock(actor,victim);}
-    else if(!movement())choose(0);
+    if(field<unsigned char>(field<void*>(victim,0x35c),0x2ad)&0x80){if(dispatch_named("throwally"))lock(actor,victim);else refused();}
+    else refused();
    }else if(team(victim)!=0x1c){
-    // 429228 is general target admission (XML1 391A0), not a stun
-    // test. The incoming guard chain's action 3 is grabstart. Since the
-    // entry bridge dispatches it immediately, gate enemy grabs here;
-    // ally Fastball and physical-object pickup keep their own branches.
-    if(trace_guard)logger::write("guard eligibility actor=%08X victim=%08X native_grab=1 reaction=%02X attachment=%08X stunned=%d",field<u32>(actor,0x1c),field<u32>(victim,0x1c),field<unsigned char>(victim,0x765),field<u32>(victim,0x21c),int(stunned));
-    if(!stunned){if(!movement())choose(0);return true;}
+    // XML1 D9F5A: admission selects ordinary grab even with reaction clear.
     choose(3);
     if(stunned){
      if(fn<bool(__thiscall*)(void*,int,int)>(0x54d710)(victim,0x2c,0))notify(actor,"");
      else if(rank(actor,"acrobatics")>2){
       const std::array<vec,2> up{{{0,0,20},{0,0,0}}};method<float(__thiscall*)(void*,const void*)>(actor,0x130)(actor,up.data());
-      play(actor,named(actor,"airgrabpickup"));
-     }else if(rank(actor,"might")<=0&&!stunned){play(actor,named(actor,"grabfailed"));}
-     else choose(25);
+      dispatch_named("airgrabpickup");
+     }else choose(25);
     }lock(actor,victim);
-   }
+   }else refused();
   }else if(fn<bool(__thiscall*)(void*,void*)>(0x427f60)(actor,entity)){
    lock(actor,entity);choose(24);field<unsigned char>(entity,0x30d)|=4;
-  }else{cannot_lift(actor);choose(0);}
+  }else{cannot_lift(actor);refused(true);}
  }
  return true;
 }
@@ -217,13 +280,16 @@ inline void __fastcall guard_entry(void* self,void*,void* actor,void* input,void
  std::array<unsigned char,0x30> neutral_input{};
  if(!input)input=neutral_input.data(); // native/scripted admissions may omit input
  void* incoming=field<void*>(context,4);void* before=field<void*>(actor,0x378);
+ if(trace_guard)logger::write("guard request actor=%08X flags=%08X ai=%u controller=%d held=%08X pressed=%08X incoming=%p previous=%p",field<u32>(actor,0x1c),field<u32>(actor,4),unsigned(field<unsigned char>(actor,0x3d8)&1),field<int>(actor,0x3d4),field<u32>(input,0),field<u32>(input,4),incoming,before);
  field<void*>(actor,0x3bc)=nullptr;
- const bool pending=guard_policy(self,actor,input,incoming);
+ bool dispatched=false;
+ const bool pending=guard_policy(self,actor,input,incoming,&dispatched);
  void* next=field<void*>(actor,0x3bc);
- if(field<void*>(actor,0x378)!=before||!pending){field<unsigned char>(context,0x6c)|=4;return;}
+ if(dispatched||field<void*>(actor,0x378)!=before||!pending){field<unsigned char>(context,0x6c)|=4;return;}
  if(next&&next!=incoming){
   field<void*>(actor,0x3bc)=nullptr;
   field<unsigned char>(context,0x6c)|=4;
+  if(trace_guard)logger::write("guard dispatch actor=%08X incoming=%p chosen=%p held=%08X pressed=%08X",field<u32>(actor,0x1c),incoming,next,field<u32>(input,0),field<u32>(input,4));
   play(actor,next);
  }else field<unsigned char>(context,0x6c)|=1;
 }

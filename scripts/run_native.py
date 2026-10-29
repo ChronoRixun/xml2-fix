@@ -33,6 +33,7 @@ cmds = [[str(b / "xml2_test.exe"), flag] for flag in flags]
 if "--plain" in sys.argv:
     cmds.append([str(b / "xml2_test.exe")])
 with_exe = {
+    "xml2_guard_block_native_test",
     "xml2_lc_fonts_host",
     "xml2_roll_test", "xml2_dr_reward_test", "xml2_online_menus_test",
     "xml2_gns_transport_test", "xml2_confirmation_release_test", "xml2_objective_text_test",
@@ -69,7 +70,8 @@ skip = {
 for exe in sorted(b.glob("*.exe")):
     name = exe.stem
     if name not in skip:
-        cmds.append(([str(exe), EXE] + ([XBE] if name in with_xbe else [])) if name in with_exe else [str(exe)])
+        cmds.append(([str(exe), EXE] + ([_need("XML2_FIX_GUARD_NODE")] if name == "xml2_guard_block_native_test"
+                                     else [XBE] if name in with_xbe else [])) if name in with_exe else [str(exe)])
 cmds.append([str(b / "lcsave_test.exe"), "--fuzz", "2000"])
 cmds += [[str(b / "xml2_script_pools_test.exe"), EXE, mode] for mode in ("invalid", "owner", "guard", "functions")]
 cmds.append([str(b / "xml2_x1_leader_test.exe"), "economy"])

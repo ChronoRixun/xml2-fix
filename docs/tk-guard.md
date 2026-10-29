@@ -155,32 +155,48 @@ The slot-6 policy remains available if an authored chain cannot be resolved.
 An empty decision selects Idle. Immediate wall-lunge dispatch still returns
 **false**, matching XML1 `D9E73`, preventing an extra dispatch.
 
-082d requires the native stun flag (`victim+765 & 1`) before an enemy ground
-grab. General admission at `429228` is not a stun test. Round two made its
-ordinary action-3 chain (`guarddecide -> grabstart`) execute immediately at
-entry, exposing untouched-enemy grabs. Ally Fastball and object pickup retain
-their separate branches; TK and flying carry retain their own eligibility.
-This implements the brief's untouched-enemy negative. The inspected generic
-XML1 callback itself also selects action 3 for an admitted nonstunned enemy
-(`D9F5A..D9F70`), so that callback alone does not establish the narrower live
-XML1 expectation. The host test records this deliberate policy difference.
+The XML1 target gate is **not stun-only**. Source `391A0` and the private PC
+bridge at `429228` admit an unstunned nonlarge enemy when **now >= target's
+physical deadline**. An ordinary hit impulse writes now + 1.5; before it expires,
+only raw `victim+765 & 1` bypasses that clock. Death/status, owner, large,
+`def_grab` and getup suffix gates remain native. Ordinary action 3 locks the
+target without a Might check. Flagged stun can select action25 or acrobatics>2
+`airgrabpickup`; `def_pickup` keeps action3. Both action3 and action25 map to
+`grabstart` in the shared graph. The discarded active-attachment extension no
+longer bypasses the clock or reinstates a party hero's cleared reaction bit.
 
-The 082d follow-up also recognizes a native active `shared_stunned`
-attachment when reaction bit0 is clear. Native traversal starts at entity
-`+21C/+220`; attachment slot64 supplies its definition and slot4C its next
-reference. All dereferences use the pool's generation-validating virtual
-methods, including raised AttachedPowerups. For an active timed stun, a
-private call bridge retains native `42B840` and `42925E` onward, bypassing
-only the reaction-or-recent-hit clock gate just as reaction bit0 does.
-Other native status/ownership restrictions remain. This treatment applies
-to nonparty stunned allies too. Party heroes retain rule18's reaction-owned
-eligibility: a refused/interrupted reaction cannot be reinstated merely by
-the pending PC powerup; a genuine flagged stun retains Fastball admission.
+A **player-held refused press** enters the private `guardblocking` node. This is
+an explicit PC port policy: XML1's shared refused path itself uses movement or
+Idle, and its `block` is a ch_pain hit reaction. Eligible interactions retain
+precedence; AI/script and released input retain the source decision. Invalid
+actor/context never requests blocking. The real normalized held mask is 0x100;
+there is no tap/long-press threshold.
 
-`[Test] GuardTrace=1` (or TKTrace with both rules enabled) records reaction,
-attachment handle, computed stun eligibility and native admission. The old
-082d JSON records idle/visible stars, not those raw fields; do not present
-the attachment/reaction-clear fixture as a captured historical state.
+The companion builder emits `guardblocking` into both shared-node variants,
+using `ea_blocking`, no saved-skill requirement, native powerusage=1 upkeep and
+a time-zero/remove-on-node-end `damage_to_energy` scale affecter at literal 1
+(PC rank1 policy). Rule46 registers only its private `ch_guard_block` through
+rule45's shared lookup owner. Entry/exit/cancel call original `4EBD60/80/90`;
+the input bridge replaces only the purchased-power hold test with the Guard
+mask, uses native availability/exhaustion and resolves Special-to-Idle on
+release, movement, another action or death. Guard is stripped from the generic
+input copy to prevent reacquisition. Normal native transitions own block-bit
+and attachment cleanup. The private exit also unlinks its own node attachments
+through native `54DAD0`: dead-owner maintenance returns before its normal
+node-end check for an indefinite effect. Unrelated nodes and stale generations
+never authorize removal. A missing node logs its actual lookup failure and
+falls back safely. Retail `blocking`, native ch_block and ch_pain stay intact.
+
+Guard policy value1=1 in rule46's agreement refuses old-policy peers. Other
+rule46 selections retain their existing agreement. No release/content identity
+is assigned here. The installer guards the exact block callback bodies/table,
+registers only with Guard enabled and rolls back all selected writes if the
+shared lookup cannot publish the private handler.
+
+`[Test] GuardTrace=1` logs full actor/target tokens, raw reaction, native
+admission, now/deadline/delta, suffix reason, held/pressed masks, selection and
+actual dispatch. Block entry/exit/cancel records native node effect ownership.
+`native_grab=1 stunned=0` is a valid ordinary grab.
 
 Use [the human-length pad/keyboard acceptance procedure](beta9-moves-live.md).
 Direct handler fixtures establish scheduling behavior, not hardware routing.
@@ -218,9 +234,12 @@ owner token or installs another pickup lifecycle.
 
 ## Code-only verification
 
-Build Win32 Release below normal priority with MSBuild `/nr:false`. Run:
+Build Win32 Release at Idle priority with MSBuild `/m:1 /nr:false`. Generate
+the native fixture from the companion builder, then run:
 
 ```text
+python -B scripts/run_guard_block.py --lc-root <legends-classic> --host <xml2_guard_block_native_test.exe> --exe <XMen2.exe> --out <workspace-output>
+# Set XML2_FIX_GUARD_NODE to that output guardblocking.xmlb for run_native.py.
 build/native/bin/Release/xml2_tk_guard_test.exe <XMen2.exe> <default.xbe>
 build/native/bin/Release/xml2_shared_handlers_c_test.exe <XMen2.exe> <default.xbe>
 build/native/bin/Release/xml2_shared_handlers_c_test.exe <XMen2.exe> <default.xbe> --off-proof
@@ -261,3 +280,14 @@ stack. The TK fixture now executes the retail disabled-audio lookup and return
 instructions through entry and release, with the real incompatible +0x34
 callee present as a regression trap. The installer guards the lookup table,
 callee ABI and loop/validity/position/stop slots before enabling TK.
+
+The Guard native block fixture consumes the companion builder's generated XMLB.
+It executes native CCEPowerup application `4E8360 -> 4E7B50 -> 54F060`, attached
+initialization `537BA0`, effect refresh `53BF20/53A1A0`, node-end maintenance and
+owned unlink `54DAD0`. Native damage conversion `437CED..437D6A`, HP subtraction
+`4983A8..4983C5`, energy clamp/debit `4319B5` and native availability `4F5FB0`
+execute on the same actor. The powerusage event `4DAA30` evaluates literal1
+through the native word evaluator. Registry/pool definition access, final HP/EP
+setters and periodic unrelated payloads are fixture services; no gameplay
+damage/energy formula is reimplemented. These tests certify these native paths,
+not a real controller or renderer.
