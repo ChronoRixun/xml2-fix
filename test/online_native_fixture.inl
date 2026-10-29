@@ -85,7 +85,8 @@ void __fastcall search_send(void*,void*,const unsigned char* destination,int,voi
 }
 void* __fastcall peer_address(void*,void*) { return address.data(); }
 bool __fastcall same_guid(void*,void*,void*,void*) { return true; }
-unsigned short __fastcall peer_port(void*,void*) { return 5165; }
+unsigned short discovered_port=5165;
+unsigned short __fastcall peer_port(void*,void*) { return discovered_port; }
 bool __fastcall selected_image(void*,void*) { return *reinterpret_cast<void**>(0xa3bc40+0x2250)!=nullptr; }
 void __fastcall option_seed(void*,void*,const char* value) { native_seed.fill(0);std::strncpy(native_seed.data(),value,31); }
 void __fastcall option_title(void*,void*,const char* value) { native_title.fill(0);std::strncpy(native_title.data(),value,63); }
@@ -299,6 +300,17 @@ void run(const script_functions_rules::func_entry* registration) {
     const auto old_generation=*reinterpret_cast<void**>(0xa3bc40+0x229c);
     event(8);tick(child.data(),nullptr);assert(calls.back()=="request:join");
     cancel();assert(!*reinterpret_cast<void**>(0xa3bc40+0x2298));
+    // A host's native bind can fall back to an ephemeral port. The retail
+    // reply parser copies that authenticated peer port into its discovery row.
+    for(unsigned short port:{50123,65535,1}) {
+        discovered_port=port;resolve();tick(child.data(),nullptr);reply();tick(child.data(),nullptr);
+        native_status("lc_native_admission");
+        assert(*reinterpret_cast<unsigned short*>(0xa53058+0x3a4+0xc)==port);
+        event(8);tick(child.data(),nullptr);assert(calls.back()=="request:join");cancel();
+    }
+    discovered_port=0;resolve();tick(child.data(),nullptr);reply();tick(child.data(),nullptr);
+    assert(menu_view().state==bm::phase::idle && vis("lc_notice_discovery"));cancel();
+    discovered_port=5165;
     resolve();tick(child.data(),nullptr);reply();tick(child.data(),nullptr);
     callback(8,old_generation,nullptr);const auto requests=calls.size();tick(child.data(),nullptr);assert(calls.size()==requests);
     // Round 15: a refusal selects its own notice; with the rules the PCs possibly differ on (allowlisted, bounded) it names them.

@@ -140,6 +140,16 @@ __declspec(naked) void receive_health(void*,float){__asm {
 __declspec(naked) void health_done(){__asm {add esp,0x14} __asm {pop esi} __asm {ret}}
 // Native scheduler/dispatcher slices preserve the selected node, invoke the
 // block handler input once, then use native move cancel and node installation.
+// Actual animation deadline tail: normal exit does not replace actor+378.
+u32 animation_timeout_body=0x430bd7;
+__declspec(naked) void __stdcall animation_timeout(void*){__asm {
+ push ebx
+ push ebp
+ push esi
+ push edi
+ mov esi,[esp+20]
+ jmp dword ptr [animation_timeout_body]
+}}
 void transition(void* next){
  ++dispatches;
  if(field<void*>(actor.data(),0x378)==move.data())reinterpret_cast<void(__thiscall*)(void*)>(0x42c270)(actor.data());
@@ -273,6 +283,22 @@ void run(const image& pc,const XNode& node){
  reset();transition(move.data());refresh();
  reinterpret_cast<void(__thiscall*)(void*,void*)>(0x4f5670)(move.data(),actor.data());refresh();
  check(!attached.live&&tk_guard_bridges::guard_blocks.empty()&&!(field<unsigned char>(actor.data(),0x765)&2)&&field<float>(actor.data(),0x4ec)==0,"native normal exit and cancellation both finish bit and effect ownership");
+ // 060t: a normal animation timeout cleans ownership but leaves the current
+ // node installed. Subsequent input must still escape, including a held pad.
+ for(int cause=0;cause<4;++cause){
+  reset();transition(move.data());refresh();
+  field<float>(actor.data(),0x698)=clock_now-1.f;
+  animation_timeout(actor.data());refresh();
+  check(field<void*>(actor.data(),0x378)==move.data()&&tk_guard_bridges::guard_blocks.empty()&&!attached.live,
+        "retail animation timeout cleans ownership without replacing current block node");
+  field<u32>(buttons.data(),4)=0;
+  if(cause==0)field<u32>(buttons.data(),0)=0;
+  if(cause==2)field<float>(buttons.data(),8)=1.f;
+  if(cause==3)field<u32>(buttons.data(),4)=0x10;
+  input_tick();
+  check(field<void*>(actor.data(),0x378)==idle.data()&&entries==1&&!attached.live,
+        "expired block escapes on release/held/movement/attack without reacquisition");
+ }
  for(int cause=0;cause<5;++cause){
   reset();transition(move.data());refresh();field<u32>(buttons.data(),4)=0;
   if(cause==0)field<float>(buttons.data(),8)=1; // movement
