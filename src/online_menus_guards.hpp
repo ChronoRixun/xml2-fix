@@ -14,6 +14,7 @@ inline constexpr script_functions_rules::guard guards[]{
     {0x005d8570, "0fbf812e5d0800c3", "controller getter signed 0..3"},
     {0x005d5db0, "81eccc000000a1f8386f00535657898424d40000008b8424", "menu request thiscall frame"},
     {0x005d5e56, "8b8c24f800000083c4245f885e7f5e5be8f6c2090081c4cc000000c20800", "menu request ret8"},
+    {0x005d5e2a, "8dbeb05d0800", "menu request publishes pending destination at manager +85db0"},
     {0x005aaeb0, "518a54240280e2fc568bf1c644240400c64424050088542406e852da02008b10", "base tick thiscall frame"},
     {0x005aaf6d, "8b068bceff50205e59c3", "base tick return"},
     {0x005af5a0, "568bf18a560480e2fe578dbe24080000c7862403000000000000885604", "base close frame and active bit"},
@@ -248,6 +249,8 @@ inline constexpr script_functions_rules::guard guards[]{
 
     {0x005bc94e, "680c006a008bcbe86680faff3bc5742368bc53680050e8f95b0b008a4e5483c408f7d81ac0fec0c0e00532c1242032c8884e548a46540c08682c9268008bcb884654e82b80faff3bc5742f68bc53680050e8be5b0b008a4e5483c4083bc50f94c0c0e00332c124088ad132d08ac2a80888565475050c20884654", "item parser: enabled=false forces neverfocus bit 0x20 (060s Q)"},
     {0x005ae32b, "3b7c24147421f6475420751b8b4c24108b1157ff5204", "mouse answer sets focus only without neverfocus bit 0x20 (060s Q)"},
+    {0x005bbd40, "538a5c2408568bf18a465424013ac37459", "native item visual focus edge and owner; does not write menu selection"},
+    {0x005bbd9a, "8a56548a465432d380e20132c28846545e5bc20400", "native visual focus changes bit 1 and returns thiscall ret4"},
     {0x005aaf80, "568bf18b8e24030000578b7c240c3bcf741885c974078b016a00ff504c8b168bce89be24030000ff52688b8e2403000085c974078b016a01ff504c8b86240300005f5ec20400", "native setFocus stores the selected item before gain (060s Q)"},
 };
 }

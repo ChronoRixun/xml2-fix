@@ -308,7 +308,9 @@ unsigned edge_checks(mouse_t mouse,void* menu,const char* name,int w,int h,bool 
     focus=nullptr;
     return n;
 }
+void __fastcall visual_events_stub(void*,void*,void*,int,int,unsigned) {}
 void install_recorders() {
+    redirect(0x5ae580,reinterpret_cast<const void*>(&visual_events_stub));
     // The retail mouse code runs; these are the only replaced functions (see the file header).
     std::memcpy(item_vtable.data(),reinterpret_cast<void*>(0x6a0244),sizeof item_vtable);
     item_vtable[0x74/4]=unsigned(reinterpret_cast<std::uintptr_t>(&rec_hit));

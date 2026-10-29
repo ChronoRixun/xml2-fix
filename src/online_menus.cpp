@@ -793,7 +793,9 @@ void advanced_escape_trace() {
         if(!m || *reinterpret_cast<unsigned*>(m)!=0x6a236c) return;
         auto* menu=*reinterpret_cast<unsigned**>(m+0x86090);
         // Opening need not have the ordinary active-menu flag set yet.
-        if(menu && *menu==0x6a1f64)
+        // requestMenu publishes the destination before it creates/activates
+        // the menu or its rows. Observe that bounded name during the fade too.
+        if((menu && *menu==0x6a1f64) || std::memcmp(m+0x85db0,"advanced",9)==0)
             logger::write("online menus: Advanced Options Esc transition=%u windows=%u (keyboard edge before manager input)",
                 *reinterpret_cast<unsigned*>(m+0x866a0),unsigned(advanced_windows_live()));
     } __except(EXCEPTION_EXECUTE_HANDLER) {}
@@ -2153,6 +2155,20 @@ void* focus_of(void* menu);
 // keeps the last row's help. Assets without the twins (an older LC) keep the plain hint and the authored help.
 constexpr const char* hub_rows[]{"host","code","browse","party","other"};
 std::string hub_help_row="host";
+void hub_footer_guard(void* menu) {
+    __try {
+        bool footer_focus=false;
+        for(const char* name:{"desctext1","desctext2"}) if(auto* prompt=static_cast<unsigned char*>(item_try(menu,name));
+            prompt && *reinterpret_cast<void**>(prompt+4)==menu && *reinterpret_cast<unsigned*>(prompt+8)) {
+            // Native prompt clicks still synthesize MENU_ACCEPT/BACK. Their
+            // mouse hit must not move the list's selection onto the footer.
+            // Directional search skips 0x10; mouse selection skips 0x20.
+            prompt[0x54]|=0x30;
+            footer_focus|=focus_of(menu)==prompt;
+        }
+        if(footer_focus) lobby_focus(menu,host_left_state.active ? "lc_hostleft_again" : hub_help_row.c_str());
+    } __except(EXCEPTION_EXECUTE_HANDLER) { }
+}
 bool hover_index(int& out);
 bool authored_text(void* menu,const char* name,char (&out)[128]) {
     __try {
@@ -2164,7 +2180,43 @@ bool authored_text(void* menu,const char* name,char (&out)[128]) {
         return n && !value[n];
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
+// CMenuItem's visual gain/loss runs the authored fill events but does not
+// write CMenu's selected-item pointer. Footer hover is independent of selection.
+void hub_footer_visual(void* menu,int hover) {
+    __try {
+        const char* const names[]{"desctext1","desctext2"};
+        for(int i=0;i<2;++i) if(auto* prompt=static_cast<unsigned char*>(item_try(menu,names[i]));
+            prompt && *reinterpret_cast<void**>(prompt+4)==menu && *reinterpret_cast<unsigned*>(prompt+8))
+            at<void(__thiscall*)(void*,bool)>(0x5bbd40)(prompt,hover==i && (prompt[0x54]&0xc)==8);
+    } __except(EXCEPTION_EXECUTE_HANDLER) { }
+}
+void hub_footer_follow(void* menu) {
+    int hover=-1;hover_index(hover);
+    hub_footer_visual(menu,hover);
+    char label[128]{},current[128]{};
+    if(authored_text(menu,hover==0 ? "lc_hub_select_hover" : "lc_hub_select_normal",label) &&
+        (!authored_text(menu,"desctext1",current) || std::strcmp(label,current)!=0)) {
+        bindings.text.erase("desctext1");bind_text(menu,"desctext1",label);
+    }
+    // Reuse the authored localized palette prefix for Back, retaining its
+    // own translated label and MENU_BACK token (including native dim prefixes).
+    if(authored_text(menu,hover==1 ? "lc_hub_select_hover" : "lc_hub_select_normal",label) &&
+        authored_text(menu,"desctext2",current) && std::strstr(current,"$MENU_BACK")) {
+        unsigned prefix=0;
+        if(label[0]=='~') { prefix=1;while(label[prefix]>='0' && label[prefix]<='9') ++prefix; }
+        const char* body=current;
+        while(body[0]=='~' && body[1]>='0' && body[1]<='9') {
+            ++body;while(*body>='0' && *body<='9') ++body;
+        }
+        const auto length=std::strlen(body);
+        if(prefix>1 && prefix+length<sizeof label) {
+            std::memcpy(label+prefix,body,length+1);
+            if(std::strcmp(label,current)!=0) { bindings.text.erase("desctext2");bind_text(menu,"desctext2",label); }
+        }
+    }
+}
 void hub_focus_follow(void* menu) {
+    hub_footer_guard(menu);
     // A new Hub visit (the binding cache is cleared on every departure and scoped to the menu) starts on the Host row's
     // help, as authored - never on the previous visit's row while the CMenu focus is still unset.
     bindings.scope(menu);
@@ -2181,14 +2233,7 @@ void hub_focus_follow(void* menu) {
         const bool help=hub_help_row==key;
         for(const auto* part:{"_title","_1","_2"}) hide(menu,("lc_help_"+key+part).c_str(),!help);
     }
-    int hover=-1;hover_index(hover);
-    char label[128]{},current[128]{};
-    if(authored_text(menu,hover==0 ? "lc_hub_select_hover" : "lc_hub_select_normal",label) &&
-        (!authored_text(menu,"desctext1",current) || std::strcmp(label,current)!=0)) {
-        // Refresh writes behind the binding cache. Keep native prompt hit/input
-        // behavior and focus, replacing only the localized label.
-        bindings.text.erase("desctext1");bind_text(menu,"desctext1",label);
-    }
+    hub_footer_follow(menu);
 }
 void* focus_of(void* menu) {
     // CMenu's focused item (+0x324: 0x5ae0a0 compares the hit item with it before setFocus).
@@ -2203,6 +2248,18 @@ void compact_focus_follow(void* menu,screen s) {
     static void* last_target=nullptr;
     static unsigned last_hidden=0;
     auto* focused=static_cast<unsigned char*>(focus_of(menu));
+    if(focused && focused==item_try(menu,"retry") && (focused[0x54]&0x2c)!=8) {
+        // A hidden/disabled focus cannot navigate. End its native focus state
+        // as soon as Retry becomes unavailable, before clearing any old fill.
+        const char* const browse_targets[]{"prompt_refresh","desctext3",nullptr};
+        const char* const code_targets[]{"desctext2","done",nullptr};
+        for(auto p=s==screen::browse ? browse_targets : code_targets;*p;++p) {
+            auto* next=static_cast<unsigned char*>(item_try(menu,*p));
+            if(!next || next==focused || (next[0x54]&0x2c)!=8) continue;
+            at<void(__thiscall*)(void*,void*)>(0x5aaf80)(menu,next);
+            focused=static_cast<unsigned char*>(focus_of(menu));break;
+        }
+    }
     if(focused && (focused[0x54]&0x2d)==9) { // shown, enabled, focus bit set, focusable
         // Enabling/showing an item can retain native focus without emitting a
         // gain. If our invisible model is still installed, replay the native
@@ -2304,15 +2361,26 @@ bool scoped_point(void* menu,int x,int y,int& rx,int& ry,bool lobby,void** chose
             listed.push_back(i);
             if(m.walk[std::size_t(i)].shown && m.walk[std::size_t(i)].enabled) active.push_back({i,&e.rect});
         }
-        // Bars can overlap (the prompt row's bars reach 12 units into their neighbours), but only the focused item's bar
-        // is drawn: it wins inside its bar; elsewhere the bar whose own text box is nearest the point (hits::choose).
+        // The visible fill wins at overlapping edges. Hub footer hover owns
+        // its fill independently of the list's stored selection.
+        int highlight=m.focused;
+        if(!lobby && which(menu)==screen::hub) {
+            for(int prompt=0;prompt<2;++prompt) {
+                unsigned char flags=0;const int i=m.prompts[prompt];
+                if(i>=0 && item_flags(at_index[std::size_t(i)],flags) && (flags&0xd)==9) { highlight=i;break; }
+            }
+        }
         std::vector<hits::candidate> held;
         std::vector<const target*> holding;
-        for(const auto& a:active) if(hits::inside(*a.rect,p)) { held.push_back({a.index==m.focused,m.walk[std::size_t(a.index)].box.shifted}); holding.push_back(&a); }
+        for(const auto& a:active) if(hits::inside(*a.rect,p)) { held.push_back({a.index==highlight,m.walk[std::size_t(a.index)].box.shifted}); holding.push_back(&a); }
         if(const auto pick=hits::choose(held,p);pick>=0) {
             const int t=holding[std::size_t(pick)]->index;
             if(chosen) *chosen=at_index[std::size_t(t)];
             if(trace.on) trace.bar=name_of(t);
+            // These two native MENU prompts answer clicks without selecting
+            // themselves. Permit the point search for that action; the actual
+            // widget keeps its neverfocus flag and the list keeps selection.
+            if(!lobby && which(menu)==screen::hub && (t==m.prompts[0] || t==m.prompts[1])) m.walk[std::size_t(t)].neverfocus=false;
             // A point the engine itself gives to the target - its walk in its own order, its first pass, the lobby's pass -
             // so the focus, the hover highlight and sound and the click are the engine's for that item.
             if(hits::picked_point(m,t,rx,ry)) { if(trace.on) { trace.how="remapped"; trace.model=name_of(t); } return true; }
@@ -2373,6 +2441,7 @@ std::uint32_t __fastcall pause_mouse(void* menu,void*,int x,int y,int flags,int 
 std::uint32_t __fastcall menu_mouse(void* menu,void*,int x,int y,int flags,int message,int extra) {
     int rx=x,ry=y;
     const bool scoped=ready && custom(which(menu));
+    if(scoped && which(menu)==screen::hub) hub_footer_guard(menu);
     if(scoped) trace_begin(menu,x,y,unsigned(message));
     void* chosen=nullptr;
     if(scoped && !scoped_point(menu,x,y,rx,ry,false,&chosen)) { rx=x; ry=y; }
@@ -2384,6 +2453,9 @@ std::uint32_t __fastcall menu_mouse(void* menu,void*,int x,int y,int flags,int m
             lobby_focus(menu,name.c_str());
             if(message==WM_LBUTTONUP) pending.post(int(intent::row_first)+name[5]-'0',reinterpret_cast<std::uintptr_t>(menu),screen::browse);
         }
+    }
+    if(scoped && which(menu)==screen::hub && current_peek()==menu) {
+        try { hub_footer_follow(menu); } catch(...) { }
     }
     if(scoped) trace_end(menu,rx,ry);
     return result;
@@ -2984,6 +3056,7 @@ void deactivate_state(void* menu,bool departure) {
     pending.clear();keyboard_input.clear();
     if(party_owner==reinterpret_cast<std::uintptr_t>(menu)) { party_ui.reset();party_owner=0;party_origin.clear();party_feedback=0; }
     const auto s=which(menu);
+    if(s==screen::hub) hub_footer_visual(menu,-1);
     // +48 is resource cleanup and may run while constructing a noncurrent
     // cached menu. Only real +1c deactivation owns a requested Hub departure.
     const bool active_departure=departure && current()==menu;

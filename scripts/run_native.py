@@ -117,6 +117,7 @@ if (b / "xml2_e4_core_host.exe").exists():
 cmds += [[str(b / "xml2_online_menus_test.exe"), EXE, mode] for mode in host_modes(R) if mode != "on"]
 cmds.append([str(b / "xml2_broker_tls_test.exe"), "--lifetime-offline"])
 cmds.append([str(b / "xml2_broker_tls_test.exe"), "--pin-offline"])
+cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "gamespy"])
 installer_modes |= {"xml2_online_menus_test"}
 
 if LIST_ONLY:

@@ -60,9 +60,10 @@ void __fastcall noop(void*,void*) {}
 char __fastcall player_add(void*,void*,void*,int) { return 1; }
 void __fastcall add(void*,void*,void* record) { assert(join_in_progress::area_load && record==remote);++adds; }
 void __fastcall barrier(void*,void*,float) { ++barriers; }
+#include "join_in_progress_gamespy.inl"
 }
 int main(int argc,char** argv) {
-    assert(argc==2);
+    assert(argc==2 || argc==3);
     std::ifstream f(argv[1],std::ios::binary);std::vector<unsigned char> image((std::istreambuf_iterator<char>(f)),{});
     assert(image.size()>0x1000);
     auto word=[&](unsigned at) { unsigned short n;std::memcpy(&n,image.data()+at,2);return n; };
@@ -71,6 +72,10 @@ int main(int argc,char** argv) {
     const auto pe=dword(0x3c),sections=pe+24+word(pe+20);
     for(unsigned i=0;i<word(pe+6);++i) { const auto at=sections+40*i;std::memcpy(reinterpret_cast<void*>(0x400000+dword(at+12)),image.data()+dword(at+20),dword(at+16)); }
     using namespace join_in_progress_rules;
+    if(argc==3) {
+        assert(std::string_view(argv[2])=="gamespy" || std::string_view(argv[2])=="gamespy-stock");
+        gamespy_fixture::run(std::string_view(argv[2])=="gamespy");return 0;
+    }
     redirect(session_getter,session);redirect(manager_getter,manager);redirect(zones_getter,zones);
     redirect(add_entry,add);redirect(area_barrier,barrier);
     redirect(controllers_getter,controllers_get);redirect(seats_getter,seats_get);redirect(players_getter,players_get);

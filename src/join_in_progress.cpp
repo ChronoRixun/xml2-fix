@@ -999,6 +999,28 @@ namespace join_in_progress
 				ret
 			}
 		}
+		const std::uint32_t gamespy_think_resume = 0x604da6;
+		void note_retired_gamespy() {
+			logger::write_once("online:retired-gamespy-think", "join in progress: retired GameSpy think skipped (peer already cleared)");
+		}
+		// The ordinary scheduler saves the next node before calling a task
+		// (60aab0). A guest's Start teardown can unlink that next GameSpy task
+		// and clear its peer at 6055b6; the saved node still runs this frame.
+		// Preserve both native SDK pumps when live, neither after shutdown.
+		__declspec(naked) void gamespy_think_bridge() {
+			__asm {
+				mov eax, [esp + 4]
+				mov ecx, [eax]
+				test ecx, ecx
+				jz retired
+				jmp dword ptr [gamespy_think_resume]
+			retired:
+				pushad
+				call note_retired_gamespy
+				popad
+				ret
+			}
+		}
 		__declspec(naked) void checksum_send_bridge()
 		{
 			__asm {
@@ -1334,6 +1356,7 @@ namespace join_in_progress
 			{unregister_2c, bytes(branch_original), bytes(branch_patched)},
 			{unregister_18, bytes(branch_original), bytes(branch_patched)},
 			{gamespy_call, bytes(gamespy_original), rel(0xe8, gamespy_call, reinterpret_cast<const void*>(&gamespy_teardown_bridge), 5)},
+			{gamespy_think, bytes(gamespy_think_original), rel(0xe9, gamespy_think, reinterpret_cast<const void*>(&gamespy_think_bridge), gamespy_think_original.size())},
 			{lobby_tick, bytes(branch_original), bytes(branch_patched)},
 			{keep_1f, bytes(branch_original), bytes(branch_patched)},
 			{add_entry, bytes(add_original), rel(0xe9, add_entry, reinterpret_cast<const void*>(&add_bridge), add_original.size())},
