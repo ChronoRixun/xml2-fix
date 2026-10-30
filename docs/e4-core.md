@@ -32,6 +32,18 @@ Required prerequisites in the same protected startup transaction:
 EntityCapacity=1, ActorPools=124, AnimEnums=512 (128 cache records),
 CharSounds=127, ResidentStats=320 (22 hero / 320 NPC payloads and residency
 guard), MotionPool=22528. Requested failure poisons ActorAI agreement.
+
+Configuration reads settings only, and plan generation builds patch metadata
+only. Neither may call the retail lazy AI getter (`0x5252e0`) or inspect a
+controller. The startup transaction requires the AI init flag (`0x79889c`)
+to be **clear**: the native constructor must consume the rebased operands
+after the transaction installs. The getter sets bit 0 before calling its
+constructors, so that bit alone does not prove construction has completed.
+The E4 host driver checks OFF and Actors=96 configuration from a real C++
+dynamic initializer before `main`, with the flag clear and the getter and
+controller pages inaccessible. These checks protect the existing ordering;
+they do not establish the cause of a live boot crash.
+
 When a prerequisite is missing or wrong, stage 2 writes nothing: no core
 backing, caves, operand edits, descriptor or save capability. Features that
 do not depend on Stage 2 keep their own contributions and commit as they
