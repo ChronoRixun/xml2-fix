@@ -366,6 +366,84 @@ int main(int argc, char** argv)
 			return g.va <= join_in_progress_rules::loaded_flag_call && g.va + g.hex.size() / 2 >= join_in_progress_rules::loaded_flag_call + 5;
 		}), "the 0x25 completion call and the 0x5b flag call are guarded retail bytes");
 	}
+	{
+		// AE: the canonical cohort restart decisions (join_in_progress_core::restart_reset).
+		restart_reset r;
+		check(!r.should_restore(true) && !r.should_restore(false), "AE: no pristine camera image - no restore, whatever the epoch");
+		r.snapshot = true;
+		check(r.should_restore(true) && !r.should_restore(false), "AE: the camera is restored only for a cohort restart");
+		check(!r.should_reseed(0), "AE: an unarmed first frame never reseeds (ordinary play, lobby START)");
+		r.arm();
+		check(!r.should_reseed(5) && r.armed, "AE: armed but not frame 0 (the old world still ticking): no reseed, stays armed");
+		check(r.should_reseed(0) && !r.armed && r.reseeds == 1, "AE: frame 0 of the restarted epoch reseeds exactly once");
+		check(!r.should_reseed(0), "AE: a repeated frame 0 (arbitration retry) cannot reseed twice");
+		r.arm(); r.disarm();
+		check(!r.should_reseed(0), "AE: a session that ends before its first frame disarms");
+		check(snapshot_wanted(false) && !snapshot_wanted(true), "AE: the pristine image is taken only when the camera is not yet constructed");
+		// The 0x47 prepare marker: a lobby START (host outside the epoch) must never make the guests restore/reseed alone.
+		std::uint8_t body[8]{2,0,0,0, 0, 0, 0,0};
+		check(prepare_stamp(false) == 0 && prepare_stamp(true) == late_restart_marker, "AE: the host stamps the marker only for a late-join restart");
+		check(!prepare_is_late_restart(body, 8), "AE: a lobby START prepare (zero tail bytes) is not a late restart");
+		std::memcpy(body + prepare_marker_at, &late_restart_marker, 2);
+		check(prepare_is_late_restart(body, 8), "AE: the stamped prepare is a late restart");
+		check(!prepare_is_late_restart(body, 6) && !prepare_is_late_restart(nullptr, 8), "AE: a short or missing body is never a late restart");
+		body[6] ^= 1; check(!prepare_is_late_restart(body, 8), "AE: residue one bit off the marker is not a late restart");
+	}
+	{
+		// AE failing-first evidence: live-060y run 1 (E1, one PC) and run 4 (E1, two PCs) first periods, as logged by
+		// AC's producer observer. The old restart must be reported as disagreeing on exactly the camera and RNG terms,
+		// with every hero transform equal; run 4 frame 30 has EQUAL hashes and must still disagree.
+		auto sample = [](std::uint16_t frame, std::uint32_t hero_sum, std::uint32_t camera, std::uint32_t rng, std::uint32_t hash,
+		                 std::array<std::array<std::uint32_t, 6>, 4> t) {
+			component_sample s; s.frame = frame; s.heroes = 4; s.hero_sum = hero_sum; s.camera = camera; s.rng_draws = rng; s.hash = hash; s.produced = true;
+			for (unsigned i = 0; i < 4; ++i) { s.transform[i] = t[i]; s.have[i] = true; }
+			return s;
+		};
+		const std::array<std::array<std::uint32_t, 6>, 4> e1{{{0x44FA6DA5,0x44CF125B,0x3F8117A5,0,0,0x4096CBE4},{0x44FA6DA5,0x44D9ADA5,0x3F8117A5,0,0,0x4096CBE4},
+			{0x44EFD25B,0x44D9ADA5,0x3F8117A5,0,0,0x4096CBE4},{0x44EFD25B,0x44CF125B,0x3F8117A5,0,0,0x4096CBE4}}};
+		const auto run1_host = sample(30, 0x08BD60DC, 0x1FA6, 195, 0x08BD8145, e1), run1_guest = sample(30, 0x08BD60DC, 0x1F60, 272, 0x08BD814C, e1);
+		check(reconciles(run1_host) && reconciles(run1_guest), "AE: live-060y run 1 samples reconcile (hash = hero_sum + camera + rng)");
+		check(compare_components(run1_host, run1_guest) == (camera_differs | rng_differs), "AE: run 1 frame 30 disagrees on camera and RNG only (heroes equal)");
+		const auto run4_host = sample(30, 0x08BD60DC, 0x1FA6, 194, 0x08BD8144, e1), run4_guest = sample(30, 0x08BD60DC, 0x1F60, 264, 0x08BD8144, e1);
+		check(run4_host.hash == run4_guest.hash && compare_components(run4_host, run4_guest) == (camera_differs | rng_differs),
+		      "AE: run 4 frame 30 (two PCs): equal hashes by cancellation still disagree on camera and RNG");
+		const auto run4_host60 = sample(60, 0x08BD60DC, 0x1FA7, 256, 0x08BD8183, e1), run4_guest60 = sample(60, 0x08BD60DC, 0x1F60, 341, 0x08BD8191, e1);
+		check(reconciles(run4_host60) && reconciles(run4_guest60) && compare_components(run4_host60, run4_guest60) == (camera_differs | rng_differs),
+		      "AE: run 4 frame 60 disagrees on the same two terms (the hashes break)");
+		std::array<std::array<std::uint32_t, 6>, 4> e2h = e1, e2g = e1;
+		e2h[3] = {0x44EF325B,0x44BF525B,0x3F811165,0,0,0x4096CBE4}; e2g[3] = {0x44F0C5F6,0x44BFF47D,0x3F782773,0,0,0x4096CBE4};
+		const auto run2_host = sample(30, 0x086D6C14, 0x1E8E, 202, 0x086D8B6C, e2h), run2_guest = sample(30, 0x08701D26, 0x1E9A, 206, 0x08703C8E, e2g);
+		check(compare_components(run2_host, run2_guest) == (hero_differs | camera_differs | rng_differs), "AE: run 2 (E2) also disagrees on the AI hero in slot 3");
+		auto canonical_guest = run1_host; // what the canonical restart must produce: every term equal
+		check(compare_components(run1_host, canonical_guest) == agree, "AE: identical producer inputs agree");
+		component_sample missing; check(compare_components(run1_host, missing) & incomplete, "AE: a missing sample is reported, not treated as agreement");
+		auto other_frame = run1_host; other_frame.frame = 60;
+		check(compare_components(run1_host, other_frame) & frame_differs, "AE: samples pair by native frame");
+	}
+	{
+		// AE: the restart sites are guarded retail bytes.
+		using namespace join_in_progress_rules;
+		auto covered = [](std::uint32_t va, std::size_t n) {
+			return std::any_of(guards.begin(), guards.end(), [&](const auto& g) { return g.va <= va && g.va + g.hex.size() / 2 >= va + n; });
+		};
+		check(covered(camera_construct_call, 5) && covered(frame_gate_run_call, 5) && covered(camera_constructor, 8) && covered(seed_setter, 8),
+		      "AE: camera construction call, frame-gate input run, constructor and seed setter are guarded");
+		check(camera_object + camera_bytes == camera_guard_byte, "AE: the pristine image spans exactly the singleton (up to its construction guard byte)");
+	}
+	{
+		// AE state-machine edges: a second joiner during a bring-in, a joiner leaving mid-transfer.
+		machine m; m.started = true;
+		check(m.defer_add(&r1, 1, false, 0), "edge: first newcomer pending");
+		auto& s = *m.find(&r1);
+		m.step(s, seen(true, false, false, false, false), 10); m.step(s, seen(true, false, false, false, true), 20);
+		check(s.at == stage::streaming && m.holding(), "edge: the first newcomer's image is streaming");
+		check(m.defer_add(&r2, 2, false, 30) && m.pending(&r2), "edge: a second joiner arriving mid-transfer is pending, not added");
+		auto& t = *m.find(&r2);
+		check(m.step(t, seen(false, false, false, false, true), 40) == action::none && t.at == stage::pending, "edge: the second joiner waits for the NEXT zone load");
+		m.gone(&r1);
+		check(!m.find(&r1) && !m.holding() && m.pending(&r2), "edge: the streaming joiner left - its seat is free, nothing held, the second still waits");
+		check(m.defer_add(&r3, 3, false, 50), "edge: a replacement can take the freed seat");
+	}
 	std::printf("%d PASS / %d FAIL\n", passes, failures);
 	return failures ? 1 : 0;
 }

@@ -1485,7 +1485,7 @@ namespace online_room
 			looked = now;
 			const auto g = read_game();
 			room_progress.observe(g);
-			auto desired = browser::current(listed, configured_room_name, g, room_progress, join_in_progress::installed(), status_players());
+			auto desired = browser::current(listed, configured_room_name, g, room_progress, join_in_progress::late_join_enabled(), status_players());
             if (native_posting) desired.joinable = false;
             if (native_mode) desired.game_mode = native_mode == 2 ? "danger_room" : "campaign";
 			online_status::room(metadata.public_room, desired.name);
@@ -1930,7 +1930,7 @@ namespace online_room
         hosting = true; configured_code.clear(); configured_room_name = browser::trim(name);
         metadata.public_room = public_room; metadata.max_players = 4; native_posting = false; native_mode = 0;
         room_progress = {}; pacer = {};
-        listed = browser::current(metadata, configured_room_name, read_game(), room_progress, join_in_progress::installed(), 1);
+        listed = browser::current(metadata, configured_room_name, read_game(), room_progress, join_in_progress::late_join_enabled(), 1);
         return true;
     }
     bool host_native(const std::string& name, bool public_room, int max_players, bool danger_room) {
@@ -2011,7 +2011,7 @@ namespace online_room
             client.begin(preset, room_clock()); preset = browser::operation::none;
             if (hosting) {
                 const auto game = read_game(); room_progress.observe(game);
-                listed = browser::current(metadata, configured_room_name, game, room_progress, join_in_progress::installed(), 1);
+                listed = browser::current(metadata, configured_room_name, game, room_progress, join_in_progress::late_join_enabled(), 1);
             }
         }
         if (inbox_overflow) {
@@ -2479,7 +2479,7 @@ namespace online_room
         launch_code = configured_code;
         if (menu_client) configured_code.clear(); // a preset cannot filter native discovery before selection
         if (wanted) {
-            listed = browser::current(metadata, configured_room_name, read_game(), room_progress, join_in_progress::installed(), 1);
+            listed = browser::current(metadata, configured_room_name, read_game(), room_progress, join_in_progress::late_join_enabled(), 1);
         }
         if (!menu_client) online_status::set(st::state::connecting, hosting ? std::string() : configured_code, 0);
 		if (menu_client) logger::write("online: menu broker client prepared; room creation waits for an explicit intent");

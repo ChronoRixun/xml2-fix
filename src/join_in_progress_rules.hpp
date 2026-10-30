@@ -189,7 +189,42 @@ namespace join_in_progress_rules
 	// 0x6141e0 supplies the separate participant name. The suffix call is cdecl.
 	constexpr std::uint32_t roster_hero_call = 0x5d95bd, roster_format = 0x5604f0;
 	inline constexpr std::array<unsigned char, 5> roster_hero_original{0xe8,0x2e,0x6f,0xf8,0xff};
-	inline constexpr std::array<guard, 98> guards{{
+	// Canonical cohort restart (p060fix/AE). The retail frame checksum (0x614a40) is hero_sum + camera + synchronized RNG
+	// draw count. live-060y: at the first period after a late admission every hero transform matched (E1) but the camera
+	// term differed by -70 in 4/4 runs (host eye-target yaw 22.6 deg, joiner 0.0) and the draw count by +70..+85. The
+	// camera is a process-lifetime singleton (0x7171d0, constructed once in the getter 0x4457e0 at 0x445819, never
+	// rebuilt by resetgame or the soft reset): its zone-start init (vt+0x74 0x4458a0) keeps the CURRENT yaw +0x74 unless
+	// snapped (0x445958..0x44596f) and the full reset (vt+0x68 0x440c70) copies the yaw history +0x2f0 -> +0x2f4, so a
+	// host that played carries its view into the restart while a cold joiner starts from the constructor's zeros.
+	// The fix keeps a pristine image of the singleton right after its construction and returns every peer's camera to
+	// it before the native campaign start of a cohort restart (deferred_campaign_start), so the restored zone's camera
+	// init runs from identical inputs on every PC. The synchronized RNG is then reseeded by every peer at the first
+	// shared simulation frame (the input-manager run after the frame gate passes, 0x606b98) with the native constant,
+	// so the warm/cold zone-load draws before frame 0 cannot carry into the checksum.
+	constexpr std::uint32_t camera_getter = 0x4457e0, camera_object = 0x7171d0, camera_guard_byte = 0x7176ac, camera_bytes = 0x4dc,
+		camera_construct_call = 0x445819, camera_constructor = 0x4449e0, camera_vtable_value = 0x684cc4,
+		camera_yaw_at = 0x74, camera_mode_at = 0x84, camera_yaw_history_at = 0x2f0, camera_flags_at = 0x4d8;
+	inline constexpr std::array<unsigned char, 5> camera_construct_original{0xe8,0xc2,0xf1,0xff,0xff};
+	constexpr std::uint32_t frame_gate_run_call = 0x606b98, input_manager_run = 0x5587c0, native_frame = 0xa3bbf4,
+		seed_setter = 0x560150, native_seed = 0x845fed, rng_seed = 0x6e0874, rng_count = 0x7ad8b4;
+	inline constexpr std::array<unsigned char, 5> frame_gate_run_original{0xe8,0x23,0x1c,0xf5,0xff};
+	// A lobby START of a saved campaign sends the same 0x47 "prepare" (mode 2) as a late-join restart, and only the
+	// guests enter the cohort epoch there (the host does not receive its own 0x47). The 8-byte body (mode u32,
+	// saved-stats byte, session-kind byte, two unused bytes that are stack residue in retail) is built at
+	// 0x6095a5..0x6095b5 inside Start Game 0x6094f0. The fix writes the two unused bytes on every host: the
+	// late-restart marker while the host restarts a running session for a late joiner, zero at a lobby START.
+	// Receivers gate the canonical restart on that marker; one side alone never restores or reseeds.
+	constexpr std::uint32_t prepare_opcode_site = 0x6095a5, prepare_opcode_resume = 0x6095aa;
+	inline constexpr std::array<unsigned char, 5> prepare_opcode_original{0xc6,0x44,0x24,0x30,0x47};
+	inline constexpr std::array<guard, 106> guards{{
+		{0x60959a,"8d4c24188d4424106aff51c6442430478944242066c74424280800c644242e01", "0x47 prepare body (8 bytes, two unused tail bytes at body+6) and its opcode write at [esp+0x30]"},
+		{0x445804,"0905ac7671006a00b9d0717100c744240c00000000e8c2f1ffff", "camera singleton: guard bit 0x7176ac, this = 0x7171d0, the one-time constructor call"},
+		{0x4449e0,"83ec1053568bf1578d4e04c706c44c68", "camera constructor entry installs vtable 0x684cc4"},
+		{0x444e21,"5e5b83c410c20400", "camera constructor is thiscall with one stack argument"},
+		{0x4458a0,"8b44240483ec5c85c05356578bf10f84", "zone-start camera init from the hero's facing and the party target"},
+		{0x445958,"84c0bb010000007408849eda04000074098b86f4020000894674", "zone-start camera init keeps the current yaw +0x74 unless snapped"},
+		{0x440c70,"8b4424085355568bf18b08898e880000008b", "camera reset entry (target, eye); copies yaw history +0x2f0 -> +0x2f4"},
+		{0x606b8f,"6a01e8fa37f5ff8bc8e8231cf5ff", "frame gate passed: the input manager runs this frame's inputs"},
 		{0x6106f0,"8a442404884119c20400", "native refusal marks the pending peer disconnected"},
 		{0x609970,"83ec1c5357", "late-admission policy before participant allocation"},
 		{0x614b05,"d940208b4828", "checksum raw actor transform observer"},

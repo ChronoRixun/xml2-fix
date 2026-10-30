@@ -277,6 +277,73 @@ namespace join_in_progress_core
 		}
 	};
 
+	// Canonical cohort restart (p060fix/AE, join_in_progress_rules.hpp "Canonical cohort restart"): the camera singleton
+	// goes back to its constructed image on every peer before the native campaign start, and the synchronized RNG is
+	// reseeded by every peer at the first shared simulation frame (frame 0 of the restarted network epoch).
+	struct restart_reset
+	{
+		bool snapshot = false;  // the pristine camera image exists (taken when the game constructed the singleton)
+		bool armed = false;     // a cohort restart's load ran: the next frame-0 input run reseeds
+		bool reseeded = false;
+		unsigned restores = 0, reseeds = 0;
+		void arm() { armed = true; reseeded = false; }
+		void disarm() { armed = false; }
+		// At the input-manager run of a frame (the gate passed: every participant's input for this frame is here).
+		bool should_reseed(std::uint16_t frame)
+		{
+			if (!armed || reseeded || frame != 0) return false;
+			reseeded = true; armed = false; ++reseeds; return true;
+		}
+		// Before the native campaign start of a cohort restart: restore only with an image, only for a restart.
+		bool should_restore(bool cohort_restart) const { return snapshot && cohort_restart; }
+	};
+	// The pristine image is only meaningful when taken right after construction: never from a running camera.
+	inline bool snapshot_wanted(bool constructed_before_the_fix) { return !constructed_before_the_fix; }
+	// The 0x47 prepare body's two unused tail bytes (body+6): "LJ" while the host restarts a running session for a
+	// late joiner, 0 at a lobby START. Every host with the fix writes them, so a receiver never sees stack residue.
+	constexpr std::uint16_t late_restart_marker = 0x4a4c;
+	constexpr std::size_t prepare_body_size = 8, prepare_marker_at = 6;
+	inline std::uint16_t prepare_stamp(bool late_restart) { return late_restart ? late_restart_marker : 0; }
+	inline bool prepare_is_late_restart(const void* body, std::size_t size)
+	{
+		if (!body || size < prepare_body_size) return false;
+		std::uint16_t marker = 0;
+		std::memcpy(&marker, static_cast<const std::uint8_t*>(body) + prepare_marker_at, sizeof marker);
+		return marker == late_restart_marker;
+	}
+
+	// First-shared-frame agreement across roles (the live-060y evidence and the offline tool scripts/jip_components.py):
+	// the producer's inputs as the fix logs them ("jip checksum hero" / "jip checksum produced" lines).
+	struct component_sample
+	{
+		std::uint16_t frame = 0;
+		unsigned heroes = 0;
+		std::array<std::array<std::uint32_t, 6>, 8> transform{};
+		std::array<bool, 8> have{};
+		std::uint32_t hero_sum = 0, camera = 0, rng_draws = 0, hash = 0;
+		bool produced = false;
+	};
+	enum disagreement : unsigned { agree = 0, hero_differs = 1, camera_differs = 2, rng_differs = 4, frame_differs = 8, incomplete = 16 };
+	inline unsigned compare_components(const component_sample& a, const component_sample& b)
+	{
+		unsigned d = agree;
+		if (!a.produced || !b.produced) d |= incomplete;
+		if (a.frame != b.frame) d |= frame_differs;
+		if (a.heroes != b.heroes || a.hero_sum != b.hero_sum) d |= hero_differs;
+		for (unsigned i = 0; i < 8; ++i)
+		{
+			if (a.have[i] != b.have[i]) { d |= hero_differs; continue; }
+			if (a.have[i] && a.transform[i] != b.transform[i]) d |= hero_differs;
+		}
+		if (a.camera != b.camera) d |= camera_differs;
+		if (a.rng_draws != b.rng_draws) d |= rng_differs;
+		// The retail hash is the modulo-32 sum; equal hashes with unequal terms (live-060y run 4 frame 30) are still a
+		// disagreement: the next period breaks.
+		return d;
+	}
+	// The additive identity the retail producer uses; a sample must reconcile or its parse is wrong.
+	inline bool reconciles(const component_sample& s) { return s.produced && (s.hero_sum + s.camera + s.rng_draws) == s.hash; }
+
 	// A 0x25 mesh reply (stock 0x604e93 -> 0x607210) binds the record of the participant being added (manager+0x221c)
 	// to the reply's sender. The fix completes every mesh at once (one 0x1f each), so the "participant being added" is
 	// only the last one completed and a reply from ANOTHER participant would rebind that record to the wrong peer and

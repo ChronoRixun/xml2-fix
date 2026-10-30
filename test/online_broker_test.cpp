@@ -132,7 +132,7 @@ namespace gns_transport { bool installed() { return true; } bool room_can_start(
     bool deliver_removal(unsigned index) { fake::delivered.push_back(index); return fake::deliver_ok; } }
 namespace receive_validation { bool installed() { return true; } }
 namespace save_format { bool campaign_load_checked() { return true; } }
-namespace join_in_progress { bool installed() { return false; } }
+namespace join_in_progress { bool installed() { return false; } bool late_join_enabled() { return false; } }
 namespace game_version { bool test_mode_active() { return fake::test_mode; } const char* test_mode_reason() { return "fixture"; } void refuse_startup() {} }
 namespace online_status {
 void begin(online_status_core::role) {} bool active() { return true; }

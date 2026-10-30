@@ -1255,7 +1255,9 @@ void bind_broker(void* menu,screen s) {
         // One honest line about the selected row. The empty-list message belongs to the lc_broker_empty scene alone.
         std::string line;
         if(selected) {
-            line="Friends join at the next area";
+            // A started room takes late joiners only while its host admits them (the listing's joinable flag follows
+            // the host's DROP-IN choice); a lobby room takes them at its START.
+            line=selected->in_progress && !selected->joinable ? "No joining once the game starts" : "Friends join at the next area";
             switch(relate_build(selected->version,version)) {
             case build_relation::same: line+=" - Same build as you ("+display(version,8)+")";break;
             case build_relation::other: line+=" - Other build ("+display(selected->version,8)+" vs your "+display(version,8)+")";break;

@@ -266,3 +266,78 @@ GNS handoff, not that every native game packet was absent. New reports include
 bound/switched/native-send-pending; four-period owner snapshots include active,
 pending and native-send backlog. The earlier same-frame checksum variant still
 requires live component comparison; LateJoin=0 remains the release recommendation.
+
+## Canonical cohort restart (0.6.0, p060fix/AE)
+
+The late admission already reloads EVERY peer from one campaign image: the host
+serialises the live campaign at the zone-load boundary (`start_image`, the same
+`save_format::serialize_wrapper` a save uses), hands it to the native campaign
+manager exactly as Load Saved Campaign does, and the native sender / `J`
+completion / `0x26` broadcast restart every participant through the retail
+campaign start `0x5f3c20` (`resetgame`, mode-2 restore, zone load). What the
+060y component logs showed is that this restart is not identical on a warm host
+and a cold joiner: the retail checksum is `hero_sum + camera + synchronized RNG
+draw count`, and at the first period every hero transform matched (E1) while the
+camera term differed by -70 in 4/4 runs and the draw count by +70..+85
+(`O:/Projects/agent-work/live-060y/evidence/latejoin`, run 4 frame 30 even
+cancelled to equal hashes and broke at frame 60).
+
+The camera is a process-lifetime singleton (`0x7171d0`, vtable `0x684cc4`),
+constructed once inside its getter (`0x4457e0`, the call at `0x445819`) and
+never rebuilt by `resetgame` or the network soft reset. The zone-start camera
+init (`vt+0x74 = 0x4458a0`) keeps the CURRENT yaw `+0x74` unless the seat
+manager asks for a snap (`0x445958..0x44596f`), and the full reset (`vt+0x68 =
+0x440c70`) copies the yaw history `+0x2f0 -> +0x2f4`. The constructor zeroes
+`+0x74`; that is the joiner's observed yaw 0.0, while the host carried the 22.6
+degrees it had turned during play (decoded from the logged eye/target vectors:
+same distance 374.8 and pitch on both, only the yaw differs).
+
+The fix:
+
+1. **Pristine camera image.** The construction call is bridged; right after the
+   retail constructor returns, the singleton's `0x4dc` bytes (up to its
+   construction guard byte `0x7176ac`) are copied. If the singleton was already
+   constructed when the fix installed, no image is kept and the restart logs
+   that it keeps the running camera.
+2. **Every peer restores it before the native campaign start of a cohort
+   restart** (`deferred_campaign_start`, the scheduler task outside packet
+   delivery, after the existing member's soft reset). Warm host and cold joiner
+   then run the restored zone's camera init from identical inputs. A foreign
+   vtable refuses the restore. `[Dev] LateJoinRestartReset=0` keeps the 060y
+   behaviour as an A/B control.
+3. **Synchronized RNG epoch at the first shared frame.** The native setup
+   reseeds both streams after the mode-2 load (`0x606fb0 -> 0x613df0(2)`), but
+   the zone loads afterwards and the warm/cold paths draw differently while it
+   does. `campaign_load_bridge` arms the epoch; the input-manager run after the
+   frame gate (`0x606b98 -> 0x5587c0`, every participant's input for the frame
+   present) reseeds the synchronized stream once with the native constant when
+   the native frame `0xa3bbf4` is 0, on every peer at the same lockstep point.
+   Ordinary play and lobby START are never armed.
+
+4. **Only for a late-join restart, on every peer alike.** A lobby START of a
+   saved campaign sends the same 0x47 prepare (mode 2) and only the guests
+   enter the cohort epoch there (the host never receives its own 0x47), so an
+   unconditional restore/reseed would run on the guests alone and break the
+   proven lobby START. The host therefore stamps the 0x47 body's two unused
+   tail bytes (`0x6095a5`, body+6; stack residue in retail) with `"LJ"` while
+   `start_image` runs `native_campaign_start` for a late joiner and with 0 at a
+   lobby START; receivers gate the restore and the epoch arming on the marker,
+   the host on its own `start_image`. `campaign_notice` logs which kind it saw.
+
+Logs: `the game constructed its camera; pristine image kept`, `canonical
+restart - synchronized RNG epoch armed`, `canonical restart (<role>) - the
+camera is back at its constructed state ... (was yaw ... mode ...)`, `first
+shared frame 0 - synchronized RNG epoch reset`. `scripts/jip_components.py
+HOST.log GUEST.log` pairs the `jip checksum produced/hero` samples by epoch and
+frame and reports every term; `xml2_join_in_progress_boundary_test <retail exe>
+restart` runs the bridges and the real retail seed setter on the mapped image.
+Room listings now advertise a started room as joinable exactly when the host
+admits late joiners (`late_join_enabled()`), so Browse and the broker's
+`room_not_joinable` agree with the host's DROP-IN choice; a code join to a
+started room with DROP-IN off gets the broker's "Not taking players right now"
+before the tunnel instead of the tagged native notice after it.
+
+What only a live round can prove: that the restored camera init and the frame-0
+epoch leave the first four checksum periods equal on both PCs with movement,
+and that the E2 AI-hero displacement (run 2 slot 3) was downstream of the same
+two terms.

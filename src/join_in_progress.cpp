@@ -33,6 +33,12 @@ namespace join_in_progress
 		std::atomic<int> state{-1};
 		bool trace = false; // [Dev] JoinInProgressTrace=1
 		bool allow_late_join = false; // [Online] LateJoin=0 is the release fallback
+		bool restart_reset_enabled = true; // [Dev] LateJoinRestartReset=0: the warm/cold restart of 060y (A/B control only)
+		join_in_progress_core::restart_reset restart; // the canonical cohort restart (camera image, first-frame RNG epoch)
+		bool late_restart = false;         // this epoch restarts a running session for a late joiner (host: its own image; guests: the 0x47 marker)
+		bool late_restart_sending = false; // the host is inside native_campaign_start for a late joiner: the 0x47 carries the marker
+		alignas(16) std::uint8_t camera_pristine[join_in_progress_rules::camera_bytes]{};
+		std::uint32_t camera_construct_return = 0;
 		bool area_load = false; // latched at the synchronous zone-loader boundary, consumed by the pump afterwards
 		bool composed_receiver = false;
 		bool deferred_start_running = false;
@@ -182,11 +188,18 @@ namespace join_in_progress
 			at<std::uint8_t>(m, manager_difficulty) = 0; // this native byte selects saved-stats-only, not difficulty
 			at<std::uint8_t>(m, 0) = 1; // native start cleanup must own/remove this transfer's sender task
 			// Ownership passes to the native campaign manager, exactly as for Load Saved Campaign. Its sender,
-			// J completion and 0x26 broadcast restart every participant from this one canonical image.
-			if (!e4_observe::native_call("jip:campaign start", [&] { return fn<campaign_start_t>(native_campaign_start)(m); }))
+			// J completion and 0x26 broadcast restart every participant from this one canonical image. The 0x47 this
+			// start broadcasts carries the late-restart marker (prepare_opcode_bridge), so every receiver knows this
+			// is a restart of a running session, not a lobby START.
+			late_restart = true;
+			late_restart_sending = true;
+			const bool started = e4_observe::native_call("jip:campaign start", [&] { return fn<campaign_start_t>(native_campaign_start)(m); }) != 0;
+			late_restart_sending = false;
+			if (!started)
 			{
 				at<void*>(m, manager_image) = nullptr;
 				fn<free_t>(game_free)(buffer);
+				late_restart = false;
 				return false;
 			}
 			logger::write("join in progress: player %d - live campaign image (%u bytes), native full-campaign transfer to the cohort", seat.index, unsigned(profile.payload));
@@ -213,13 +226,16 @@ namespace join_in_progress
 			if (!body || at<std::uint32_t>(body, 0) != 2) return;
 			epoch.begin();
 			existing_cohort_member = machine.started;
+			late_restart = join_in_progress_core::prepare_is_late_restart(body, join_in_progress_core::prepare_body_size);
 			void* m = manager();
 			at<std::uint8_t>(m, 0) = 1;
 			if (machine.started) clear_frontend_callback(m);
-			logger::write("join in progress: full campaign image received; cohort checksum hold active");
+			logger::write("join in progress: full campaign image received; cohort checksum hold active (%s)",
+				late_restart ? "late-join restart of a running session: canonical restart on every peer" : "lobby START: the native start as it is");
 		}
 
 		void __cdecl deferred_campaign_start(void*);
+		void restore_camera(const char* role); // the canonical cohort restart, defined after campaign_load_bridge
 		bool __cdecl campaign_start_notice()
 		{
 			if (epoch.active)
@@ -280,6 +296,9 @@ namespace join_in_progress
 				at<std::uint32_t>(session(), 0x424) &= ~0x14u; // fresh campaign phases, without the soft-reset marker
 				at<std::uint8_t>(pause, 0x64) = 0;
 			}
+			// Every peer, warm or cold, enters the native campaign start with the same camera (the one process-lifetime
+			// object the restart would otherwise carry over: live-060y checksum term -70 at the first period).
+			restore_camera(existing_cohort_member ? "existing participant" : "newcomer");
 			fn<actual_start_t>(campaign_begin)(0);
 			deferred_start_running = false;
 		}
@@ -289,8 +308,139 @@ namespace join_in_progress
 			if (full != mode) logger::write("join in progress: cohort host restore mode %d -> %d", mode, full);
 			// A warm newcomer may complete its native load between pump ticks. Observe the actual load call
 			// rather than requiring a later poll to catch its transient loading flags.
-			if (epoch.active && epoch.started) epoch.observe(true, true);
+			if (epoch.active && epoch.started)
+			{
+				epoch.observe(true, true);
+				if (restart_reset_enabled && late_restart)
+				{
+					// The native setup reseeds both RNG streams right after this load (0x606fb0 -> 0x613df0(2)), but the
+					// zone itself loads afterwards and a warm host and a cold joiner draw differently while it does
+					// (live-060y: +70..+85 draws at frame 30). Every peer reseeds again at its first shared frame.
+					restart.arm();
+					logger::write("join in progress: canonical restart - synchronized RNG epoch armed for the first shared frame");
+				}
+			}
 			fn<native_load_t>(at<std::uint32_t>(at<void*>(game, 0), 0x20c))(game, buffer, full);
+		}
+
+		// ---- canonical cohort restart (join_in_progress_rules.hpp "Canonical cohort restart") ---------------------------
+		void __cdecl camera_snapshot_take()
+		{
+			__try
+			{
+				std::memcpy(camera_pristine, reinterpret_cast<const void*>(camera_object), camera_bytes);
+				restart.snapshot = at<std::uint32_t>(camera_pristine, 0) == camera_vtable_value;
+				logger::write("join in progress: the game constructed its camera; pristine image %s (%u bytes) for cohort restarts",
+					restart.snapshot ? "kept" : "NOT kept (unexpected vtable)", unsigned(camera_bytes));
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				restart.snapshot = false;
+				logger::write_once("jip:camera-snapshot", "join in progress: the camera image could not be read at construction - cohort restarts keep the running camera");
+			}
+		}
+		// Mutable only so the owned native fixture (test/join_in_progress_restart.inl) can stand in for the retail
+		// constructor (which needs the settings and console singletons) and the input-manager run.
+		std::uint32_t camera_constructor_at = camera_constructor, input_manager_run_at = input_manager_run;
+		// In place of `call 0x4449e0` at 0x445819 (thiscall, one stack argument, ret 4): the constructor, then the image.
+		__declspec(naked) void camera_construct_bridge()
+		{
+			__asm {
+				pop eax
+				mov dword ptr [camera_construct_return], eax
+				call dword ptr [camera_constructor_at]
+				pushfd
+				pushad
+				call camera_snapshot_take
+				popad
+				popfd
+				jmp dword ptr [camera_construct_return]
+			}
+		}
+		// Before the native campaign start of a cohort restart, on every peer (the scheduler task, outside packet
+		// delivery and outside any native camera call).
+		void restore_camera(const char* role)
+		{
+			if (!epoch.active || !late_restart) { logger::write("join in progress: campaign start from the lobby (%s) - the native start as it is", role); return; }
+			if (!restart_reset_enabled) { logger::write("join in progress: [Dev] LateJoinRestartReset=0 - the running camera stays (%s)", role); return; }
+			if (!restart.should_restore(true))
+			{
+				logger::write_once("jip:camera-unavailable", "join in progress: no pristine camera image - the cohort restart keeps the running camera (%s)", role);
+				return;
+			}
+			__try
+			{
+				auto* camera = reinterpret_cast<std::uint8_t*>(camera_object);
+				if (at<std::uint32_t>(camera, 0) != camera_vtable_value)
+				{
+					logger::write("join in progress: the camera singleton has an unexpected vtable %08x - not restored (%s)", at<std::uint32_t>(camera, 0), role);
+					return;
+				}
+				const auto yaw = at<std::uint32_t>(camera, camera_yaw_at), mode = at<std::uint32_t>(camera, camera_mode_at),
+					history = at<std::uint32_t>(camera, camera_yaw_history_at), flags = at<std::uint32_t>(camera, camera_flags_at);
+				std::memcpy(camera, camera_pristine, camera_bytes);
+				++restart.restores;
+				logger::write("join in progress: canonical restart (%s) - the camera is back at its constructed state before the native campaign start (was yaw %08x mode %u yaw-history %08x flags %08x; restore %u)",
+					role, yaw, mode, history, flags, restart.restores);
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				logger::write_once("jip:camera-restore-fault", "join in progress: the camera restore faulted - the cohort restart keeps the running camera");
+			}
+		}
+		void __cdecl frame_gate_reseed()
+		{
+			if (!restart.armed) return;
+			__try
+			{
+				const auto frame = *reinterpret_cast<const std::uint16_t*>(native_frame);
+				if (!restart.should_reseed(frame)) return;
+				const auto count = *reinterpret_cast<const std::uint32_t*>(rng_count), seed = *reinterpret_cast<const std::uint32_t*>(rng_seed);
+				fn<void(__cdecl*)(std::uint32_t, int)>(seed_setter)(native_seed, 1); // the synchronized stream: seed, count 0
+				logger::write("join in progress: first shared frame %u - synchronized RNG epoch reset (this PC had drawn %u since the native setup, seed %08x); every peer continues from the native seed %06x with count 0",
+					unsigned(frame), count, seed, native_seed);
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				restart.disarm();
+				logger::write_once("jip:reseed-fault", "join in progress: the first-frame RNG reset faulted - disarmed");
+			}
+		}
+		// In place of `mov byte ptr [esp+0x30], 0x47` at 0x6095a5 inside Start Game (0x6094f0): the displaced write (one
+		// return address deeper), then the body's two unused tail bytes ([esp+0x1e] at the site) become the marker
+		// while the host restarts a running session for a late joiner, 0 otherwise. EAX is live (the body pointer).
+		std::uint32_t prepare_opcode_resume_at = prepare_opcode_resume; // mutable for the owned native fixture only
+		__declspec(naked) void prepare_opcode_bridge()
+		{
+			__asm {
+				mov byte ptr [esp+34h], 47h
+				push eax
+				movzx eax, byte ptr [late_restart_sending]
+				neg eax
+				and eax, 4a4ch
+				mov word ptr [esp+26h], ax
+				pop eax
+				jmp dword ptr [prepare_opcode_resume_at]
+			}
+		}
+		// The getter's one-time construction guard (bit 0 of 0x7176ac): true when the camera already exists.
+		bool camera_constructed()
+		{
+			__try { return (*reinterpret_cast<const std::uint8_t*>(camera_guard_byte) & 1) != 0; }
+			__except (EXCEPTION_EXECUTE_HANDLER) { return true; }
+		}
+		// In place of `call 0x5587c0` at 0x606b98 (the frame gate passed: every participant's input for this frame is
+		// present; thiscall, no stack arguments): the reseed check, then the native input-manager run.
+		__declspec(naked) void frame_gate_run_bridge()
+		{
+			__asm {
+				pushfd
+				pushad
+				call frame_gate_reseed
+				popad
+				popfd
+				jmp dword ptr [input_manager_run_at]
+			}
 		}
 
 		void __cdecl broadcast_notice(const void* message)
@@ -325,6 +475,7 @@ namespace join_in_progress
 			}
 			if (epoch.observe(loading, machine.holding()))
 			{
+				late_restart = false; // the reseed, if any, is already armed for this epoch's frame 0
 				logger::write("join in progress: cohort synchronized; checksum protection resumed");
 				// The native slow-player guard (0x559190: per participant index, count/phase pairs at 0x79fb80, a drop at
 				// 900 slow input frames in phase 2) never resets them before it drops someone. A host that played alone,
@@ -408,7 +559,7 @@ namespace join_in_progress
 			__try
 			{
 				void* s = session();
-				if (!s || !first(s)) { if (machine.started || machine.any()) machine.reset(); return false; }
+				if (!s || !first(s)) { if (machine.started || machine.any()) { machine.reset(); restart.disarm(); late_restart = false; } return false; }
 				static DWORD last = 0;
 				if (trace && machine.any() && GetTickCount() - last >= 2000)
 				{
@@ -1390,6 +1541,8 @@ namespace join_in_progress
 		state = 0;
 		trace = ini::flag(L"Dev", L"JoinInProgressTrace", false);
 		allow_late_join = ini::flag(L"Online", L"LateJoin", false);
+		restart_reset_enabled = ini::flag(L"Dev", L"LateJoinRestartReset", true);
+		if (!restart_reset_enabled) logger::write("join in progress: [Dev] LateJoinRestartReset=0 - cohort restarts keep the running camera and the zone-load RNG draws (060y behaviour; A/B control only)");
 #ifndef NDEBUG
 		mesh_defer_ms = DWORD(ini::number(L"Dev", L"MeshDeferMs", 0));
 		mesh_reply_legacy = ini::number(L"Dev", L"MeshReplyLegacy", 0) == 1;
@@ -1468,12 +1621,23 @@ namespace join_in_progress
         for (std::size_t i = 0; i < ready_calls.size(); ++i)
             writes.push_back({ready_calls[i], bytes(ready_originals[i]), rel(0xe8, ready_calls[i], reinterpret_cast<const void*>(&ready_bridge), 5)});
 		if (!composed_receiver) writes.push_back({campaign_receive, bytes(campaign_receive_original), rel(0xe9, campaign_receive, reinterpret_cast<const void*>(&campaign_receive_bridge), campaign_receive_original.size())});
+		// The canonical cohort restart: the pristine camera image can only be taken at the singleton's construction.
+		{
+			if (join_in_progress_core::snapshot_wanted(camera_constructed()))
+				writes.push_back({camera_construct_call, bytes(camera_construct_original), rel(0xe8, camera_construct_call, reinterpret_cast<const void*>(&camera_construct_bridge), 5)});
+			else
+				logger::write("join in progress: the camera singleton was constructed before the fix installed - cohort restarts keep the running camera");
+			writes.push_back({frame_gate_run_call, bytes(frame_gate_run_original), rel(0xe8, frame_gate_run_call, reinterpret_cast<const void*>(&frame_gate_run_bridge), 5)});
+			writes.push_back({prepare_opcode_site, bytes(prepare_opcode_original), rel(0xe9, prepare_opcode_site, reinterpret_cast<const void*>(&prepare_opcode_bridge), 5)});
+		}
 		if (xml1_hook_transaction::apply(memory, writes, &safe))
 		{
 			if (composed_receiver) entity_transfer::observe_prepare(&campaign_notice);
 			state = 1;
 			gameplay_agreement::register_rule(gameplay_capabilities::join_in_progress_id, agreement_revision, join_in_progress_core::agreement_parameters, true);
-			logger::write("online: JoinInProgress installed (rule 26 revision 7); LateJoinPolicyV1 LateJoin=%u (%s); solo spectators, host lifecycle and slow-player protection retained; host setup can change this admission policy", unsigned(allow_late_join), allow_late_join ? "experimental restore at next zone" : "lobby START admission only");
+			logger::write("online: JoinInProgress installed (rule 26 revision 7); LateJoinPolicyV1 LateJoin=%u (%s); canonical cohort restart %s; solo spectators, host lifecycle and slow-player protection retained; host setup can change this admission policy",
+				unsigned(allow_late_join), allow_late_join ? "everyone reloads from the host's image at the next zone load" : "lobby START admission only",
+				restart_reset_enabled ? "on (pristine camera + first-frame RNG epoch)" : "OFF ([Dev] LateJoinRestartReset=0)");
 		}
 		else if (safe)
 			logger::write("online: [Online] JoinInProgress=1 transaction refused - Start Game stays stock; rule 26 not offered");
