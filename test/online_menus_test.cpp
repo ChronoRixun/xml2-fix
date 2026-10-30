@@ -586,6 +586,7 @@ int main(int argc,char** argv) {
     if(mode=="r24-visibility" || mode=="r5-broker" || mode=="r5-retail-lobby" || (mode=="r5b-views" || mode=="r20-browse-one") || mode.starts_with("r5-browse-") || mode=="r17-hub-focus" || mode=="r16-hits-browse") install_hooks.broker=&menu_api;
     if(mode=="r15-errors" || mode=="r16-hits-live" || mode.starts_with("r22-retry") || mode=="r23-empty-paging") install_hooks.broker=&menu_api15;
     if(mode.starts_with("r6-")) install_hooks.broker=&native_fixture::api;
+    if(mode=="r25-drop-in") install_hooks.broker=&drop_api;
     patch_transaction::hooks transaction_hooks;
     if(mode=="install-retain") {
         const auto site=online_menus::contribution().writes.front().va;
@@ -750,6 +751,7 @@ int main(int argc,char** argv) {
     assert(texts["local_name"]==(mode=="name31" ? field_name(std::string(31,'a')) : mode=="blank-name" ? std::string("Player") : field_name("100??????openmenu bad")));
     if(mode=="r16-hits-live" || mode.starts_with("r22-retry")) { live_input_fixture::run();return 0; }
     if(mode=="r20-hub-select" || mode=="r22-hub-footer" || mode=="r23-footer-expanded") { live_input_fixture::hub_select();return 0; }
+    if(mode=="r25-drop-in") { live_input_fixture::ac_drop_controls();return 0; }
     if(mode=="r24-party-native" || mode=="r24-visibility") { live_input_fixture::ab_native_controls(mode=="r24-visibility");return 0; }
     if(mode=="r23-empty-paging") { live_input_fixture::empty_paging();return 0; }
     if(mode=="r23-compact-footer") { live_input_fixture::compact_footer();return 0; }

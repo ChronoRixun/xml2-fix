@@ -311,6 +311,27 @@ void run(const script_functions_rules::func_entry* registration) {
     discovered_port=0;resolve();tick(child.data(),nullptr);reply();tick(child.data(),nullptr);
     assert(menu_view().state==bm::phase::idle && vis("lc_notice_discovery"));cancel();
     discovered_port=5165;
+    // AC: execute the production refusal entry with a host marker. It must
+    // select the player-facing started notice without allocating a participant.
+    // Wrong source, size and marker retain the ordinary native refusal.
+    for(int kind:{0,1,2,3}) {
+        resolve();tick(child.data(),nullptr);reply();tick(child.data(),nullptr);
+        std::array<unsigned char,8> refusal{{'L','C','L','J',1,0,0,0}};
+        std::array<unsigned char,0x1c> packet{};packet[0]=0x1c;
+        if(kind==3) refusal[0]='?';
+        put(packet.data(),4,unsigned(reinterpret_cast<std::uintptr_t>(refusal.data())));put(packet.data(),8,static_cast<unsigned short>(kind==2 ? 7 : 8));
+        put(packet.data(),0xc,0xa3bc40);put(packet.data(),0x10,unsigned(reinterpret_cast<std::uintptr_t>(peer.data())));
+        put(peer.data(),0x14,kind==1 ? 0x02004d0au : 0x01004d0au);
+        const auto allocated=allocations;
+        const auto joins_before=std::count(calls.begin(),calls.end(),"request:join");
+        reinterpret_cast<int(__cdecl*)(void*)>(0x609ad0)(packet.data());
+        tick(child.data(),nullptr);
+        assert(allocations==allocated && menu_view().state==bm::phase::idle);
+        assert(std::count(calls.begin(),calls.end(),"request:join")==joins_before); // no waiting Join screen after refusal
+        assert(vis(kind==0 ? "lc_notice_started" : "lc_notice_refused"));
+        assert(kind==0 || !vis("lc_notice_started"));
+        cancel();
+    }
     resolve();tick(child.data(),nullptr);reply();tick(child.data(),nullptr);
     callback(8,old_generation,nullptr);const auto requests=calls.size();tick(child.data(),nullptr);assert(calls.size()==requests);
     // Round 15: a refusal selects its own notice; with the rules the PCs possibly differ on (allowlisted, bounded) it names them.

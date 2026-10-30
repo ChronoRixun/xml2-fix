@@ -47,6 +47,15 @@ void menu_tick() {
 }
 const online_menus::broker_api menu_api{menu_available,menu_view,menu_tick,menu_list,menu_host,menu_resolve,menu_retry,menu_cancel,menu_leave,menu_version,menu_take_preset,menu_refresh_due};
 
+bool menu_drop_policy=false,menu_drop_locked=false;
+unsigned menu_drop_changes=0;
+bool menu_drop_get() { return menu_drop_policy; }
+bool menu_drop_editable() { return !menu_drop_locked; }
+bool menu_drop_set(bool value) { if(menu_drop_locked) return false;menu_drop_policy=value;++menu_drop_changes;return true; }
+const online_menus::broker_api drop_api=[] {
+    auto api=menu_api;api.drop_in=menu_drop_get;api.set_drop_in=menu_drop_set;api.drop_in_editable=menu_drop_editable;return api;
+}();
+
 void broker_menu_tests(const script_functions_rules::func_entry* registration) {
     redirect(0x5adf40,focus_stub);
     using tick_t=void(__fastcall*)(void*,void*);

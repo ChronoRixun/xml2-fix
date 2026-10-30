@@ -146,7 +146,7 @@ teardown. The diagnostics do not suppress a reset, removal or checksum decision.
 
 ### Host self-drop diagnostic
 
-For a native host notice naming its own index zero through the common helper,
+For a native notice on either host or guest naming any participant index 0-3 through the common helper,
 the diagnostic records the
 caller above the common `0x6133a0` helper. That helper omits a frame pointer, so a
 normal stack capture may stop inside the adapter. Its guarded entry stack puts
@@ -176,3 +176,15 @@ nonzero hashes tied one-to-one can select index zero. Capture the per-index
 frames/hashes on both PCs to investigate actual divergence versus stale or
 misaligned samples/arbitration; the log does not declare the host at fault or
 change native selection/removal. Neither candidate call is a broker timeout.
+
+
+Late-admission handoff stages new output as soon as a link binds. It does not
+continue adding packets to the native queue while waiting for that queue to
+empty. Existing native reliable messages must ACK before staged GNS output can
+flush; the native receive/transmit/fragment queues and held adapter output all
+contribute to opcode backlog. Reports expose bound/switched/native-send-pending.
+The lost-input relay's recipient count excludes the departed peer and counts
+other survivors, so zero is normal in a two-player session. GNS game counters
+exclude native datagrams carried through the room connection.
+
+Transport-service opcodes0x0a/0x0f/0x10/0x11 stay live over a bound GNS link while gameplay is held. In particular0x0f is a native transport ACK, not an input record. Holding ACKs could deadlock both old reliable queues. The two-way regression verifies both drains and input-family0x02 delivery; one-way synthetic ACK progress alone is insufficient.

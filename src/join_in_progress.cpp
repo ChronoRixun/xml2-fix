@@ -6,6 +6,9 @@
 #include "gameplay_agreement.hpp"
 #include "gameplay_capabilities.hpp"
 #include "gns_transport.hpp"
+#include "gns_transport_core.hpp"
+#include "gns_transport_rules.hpp"
+#include "join_in_progress_diagnostics.hpp"
 #include "entity_capacity.hpp"
 #include "entity_transfer.hpp"
 #include "ini.hpp"
@@ -29,6 +32,7 @@ namespace join_in_progress
 
 		std::atomic<int> state{-1};
 		bool trace = false; // [Dev] JoinInProgressTrace=1
+		bool allow_late_join = false; // [Online] LateJoin=0 is the release fallback
 		bool area_load = false; // latched at the synchronous zone-loader boundary, consumed by the pump afterwards
 		bool composed_receiver = false;
 		bool deferred_start_running = false;
@@ -117,6 +121,7 @@ namespace join_in_progress
 			return false;
 		}
 		bool host(void* s) { const void* local = local_record(s); return local && index_of(local) == 0; }
+#include "join_in_progress_diagnostics.inl"
 		bool zone_load_pending()
 		{
 			void* zones = fn<getter_t>(zones_getter)();
@@ -230,6 +235,7 @@ namespace join_in_progress
 					return false;
 				}
 				if (!epoch.start()) return false;
+				arm_checksums();
 				void* s = session();
 				if (host(s))
 				{
@@ -602,8 +608,55 @@ namespace join_in_progress
 
 		void __cdecl start_mark()
 		{
-			if (!machine.started) logger::write("join in progress: the session started; admission stays open while a seat is free");
+			if (!machine.started) logger::write("join in progress: the session started; late admission %s", allow_late_join ? "experimental, at next zone load" : "closed (lobby START only)");
 			machine.started = true;
+		}
+
+		bool __cdecl refuse_started_admission(const void* event)
+		{
+			if (join_in_progress_core::admission_allowed(machine.started, allow_late_join)) return false;
+			// Before 0x612a40 allocates any participant or activates an AI hero.
+			// The native refusal opcode already allows a body; retail ignores it.
+			// Current menus recognize this fixed marker only from their proven host.
+			__try {
+				void* peer = at<void*>(event, 0x10);
+				if (!peer) return true;
+				alignas(4) std::uint8_t message[0x20]{};
+				fn<init_t>(message_init)(message);
+				at<const void*>(message, 0) = join_in_progress_core::started_refusal.data();
+				at<std::uint16_t>(message, 8) = std::uint16_t(join_in_progress_core::started_refusal.size());
+				at<std::uint8_t>(message, 0xe) = 1;
+				at<std::uint8_t>(message, 0x10) = 0x1c;
+				const bool sent = fn<send_t>(send_to)(session(), fn<connection_t>(peer_connection)(peer), message, 0) != 0;
+				// Same as retail's refusal tail: mark this pending peer disconnected.
+				// The transport retains/drains the already queued reliable reply.
+				fn<void(__thiscall*)(void*, int)>(0x6106f0)(peer, 0);
+				logger::write("online: LateJoinPolicyV1 refused after START before participant allocation; native 0x1c sent=%u", unsigned(sent));
+			} __except (EXCEPTION_EXECUTE_HANDLER) {
+				logger::write("online: late admission closed; refusal delivery unavailable");
+			}
+			return true;
+		}
+		const std::uint32_t admission_resume_at = 0x609975;
+		__declspec(naked) void admission_bridge()
+		{
+			__asm {
+				pushad
+				push dword ptr [esp+24h]
+				call refuse_started_admission
+				add esp, 4
+				test al, al
+				jz run
+				popad
+				xor eax, eax
+				ret
+			run:
+				popad
+				sub esp, 1ch
+				push ebx
+				push edi
+				jmp dword ptr [admission_resume_at]
+			}
 		}
 
 		bool __cdecl defer_add(const void* record)
@@ -1053,6 +1106,19 @@ namespace join_in_progress
 				ret
 			run:
 				popad
+				pushfd
+				pushad
+				mov ebp, esp
+				sub esp, 528
+				and esp, -16
+				fxsave [esp]
+				push ecx
+				call checksum_heads_observe
+				add esp, 4
+				fxrstor [esp]
+				mov esp, ebp
+				popad
+				popfd
 				sub esp, 0x20
 				push ebx
 				push ebp
@@ -1323,6 +1389,7 @@ namespace join_in_progress
 		if (!ini::flag(L"Online", L"JoinInProgress", false)) return;
 		state = 0;
 		trace = ini::flag(L"Dev", L"JoinInProgressTrace", false);
+		allow_late_join = ini::flag(L"Online", L"LateJoin", false);
 #ifndef NDEBUG
 		mesh_defer_ms = DWORD(ini::number(L"Dev", L"MeshDeferMs", 0));
 		mesh_reply_legacy = ini::number(L"Dev", L"MeshReplyLegacy", 0) == 1;
@@ -1353,6 +1420,11 @@ namespace join_in_progress
 		xml1_hook_transaction::memory memory;
 		bool safe = true;
 		std::vector<xml1_hook_transaction::patch> writes{
+			{admission_entry, bytes(admission_original), rel(0xe9, admission_entry, reinterpret_cast<const void*>(&admission_bridge), admission_original.size())},
+			{0x614b05, bytes(checksum_actor_original), rel(0xe9, 0x614b05, reinterpret_cast<const void*>(&checksum_actor_bridge), checksum_actor_original.size())},
+			{0x614b77, bytes(checksum_hero_original), rel(0xe9, 0x614b77, reinterpret_cast<const void*>(&checksum_hero_bridge), checksum_hero_original.size())},
+			{0x614bad, bytes(checksum_camera_original), rel(0xe9, 0x614bad, reinterpret_cast<const void*>(&checksum_camera_bridge), checksum_camera_original.size())},
+			{0x614bd4, bytes(checksum_produced_original), rel(0xe9, 0x614bd4, reinterpret_cast<const void*>(&checksum_produced_bridge), checksum_produced_original.size())},
 			{roster_hero_call, bytes(roster_hero_original), rel(0xe8, roster_hero_call, reinterpret_cast<const void*>(&roster_hero_bridge), 5)},
 			{teardown_call, bytes(teardown_original), rel(0xe8, teardown_call, reinterpret_cast<const void*>(&start_mark), 5)},
 			{unregister_2c, bytes(branch_original), bytes(branch_patched)},
@@ -1400,8 +1472,8 @@ namespace join_in_progress
 		{
 			if (composed_receiver) entity_transfer::observe_prepare(&campaign_notice);
 			state = 1;
-			gameplay_agreement::register_rule(gameplay_capabilities::join_in_progress_id, agreement_revision, {1u, 4u, 0u, 0u}, true);
-			logger::write("online: JoinInProgress installed (rule 26 revision 6, experimental) - late players wait for a shared campaign restore at the next zone; the host may start alone and keeps hosting when the last player leaves; players without a hero in a solo story segment stay and watch, and get their own heroes back when the party widens; a slow player is not dropped; failed restores or abrupt disconnections may require rehosting; every PC must use it");
+			gameplay_agreement::register_rule(gameplay_capabilities::join_in_progress_id, agreement_revision, join_in_progress_core::agreement_parameters, true);
+			logger::write("online: JoinInProgress installed (rule 26 revision 7); LateJoinPolicyV1 LateJoin=%u (%s); solo spectators, host lifecycle and slow-player protection retained; host setup can change this admission policy", unsigned(allow_late_join), allow_late_join ? "experimental restore at next zone" : "lobby START admission only");
 		}
 		else if (safe)
 			logger::write("online: [Online] JoinInProgress=1 transaction refused - Start Game stays stock; rule 26 not offered");
@@ -1537,7 +1609,7 @@ namespace join_in_progress
 		if (deferred_start_running) return;
 		// Also clears started on a return to the front end, before another session can be admitted.
 		guarded_advance(false, nullptr);
-		if (!first(session())) { epoch = {}; area_load = false; return; }
+		if (!first(session())) { epoch = {}; area_load = false; checksum_window.armed = false; return; }
 		observe_epoch();
 		if (!machine.any()) { area_load = false; return; }
 		// A mid-game zone load runs synchronously between pump ticks and never opens the initial Start Game menu.
@@ -1548,6 +1620,14 @@ namespace join_in_progress
 	}
 	bool requested() { return state.load() != -1; }
 	bool installed() { return state.load() == 1; }
+	bool late_join_enabled() { return installed() && allow_late_join; }
+	bool late_join_configurable() { return installed() && !machine.started && !machine.any(); }
+	bool set_late_join_enabled(bool enabled) {
+		if (!late_join_configurable()) return false;
+		allow_late_join=enabled;
+		logger::write("online: host setup LateJoin=%u (current process; startup default unchanged)",unsigned(enabled));
+		return true;
+	}
 	bool bringing_in() { return installed() && (machine.holding() || epoch.active); }
 	bool can_service() { return bringing_in() && !deferred_start_running && !zone_load_pending(); }
 	bool pending_player(const void* record) { return installed() && machine.pending(record); }

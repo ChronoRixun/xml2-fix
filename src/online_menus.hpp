@@ -68,6 +68,8 @@ struct broker_api {
     // afterwards is that departure, not a second loss.
     void (*suppress_host_lost)()=nullptr;
     void (*guest_admitted)()=nullptr;
+    bool (*set_drop_in)(bool)=nullptr;
+    bool (*drop_in_editable)()=nullptr;
 };
 void keyboard(unsigned char* state);
 bool requested();

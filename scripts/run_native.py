@@ -118,6 +118,9 @@ cmds += [[str(b / "xml2_online_menus_test.exe"), EXE, mode] for mode in host_mod
 cmds.append([str(b / "xml2_broker_tls_test.exe"), "--lifetime-offline"])
 cmds.append([str(b / "xml2_broker_tls_test.exe"), "--pin-offline"])
 cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "gamespy"])
+cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "checksum"])
+cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "admission"])
+cmds.append([str(b / "xml2_join_in_progress_boundary_test.exe"), EXE, "send-set"])
 installer_modes |= {"xml2_online_menus_test"}
 
 if LIST_ONLY:

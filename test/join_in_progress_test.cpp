@@ -1,5 +1,6 @@
 #include "join_in_progress_core.hpp"
 #include "join_in_progress_rules.hpp"
+#include "join_in_progress_diagnostics.hpp"
 #include "gameplay_capabilities.hpp"
 #include <algorithm>
 #include <cstdio>
@@ -48,6 +49,33 @@ namespace
 
 int main(int argc, char** argv)
 {
+	check(admission_allowed(false), "AC: default allows lobby admission before START");
+	check(!admission_allowed(true), "AC: default refuses admission after START");
+	check(admission_allowed(true, true), "AC: explicit LateJoin=1 retains experimental restore");
+	check(!admission_allowed(true, false), "AC: explicit LateJoin=0 refuses after START");
+	check(is_started_refusal(started_refusal.data(), started_refusal.size()), "AC: exact started refusal marker recognized");
+	check(!is_started_refusal(nullptr, 8) && !is_started_refusal(started_refusal.data(), 7), "AC: truncated or absent refusal cannot invent a started reason");
+	{
+		gameplay_capabilities::record lobby, late, old;
+		lobby.add(gameplay_capabilities::join_in_progress_id, 7, {1,4,0,0}, true);
+		late.add(gameplay_capabilities::join_in_progress_id, 7, agreement_parameters, true);
+		old.add(gameplay_capabilities::join_in_progress_id, 6, {1,4,0,0}, true);
+		lobby.finalize(); late.finalize(); old.finalize();
+		check(lobby.compare(late.bytes()) == gameplay_capabilities::result::match, "AC: host admission choice does not alter the frozen gameplay record");
+		check(lobby.compare(old.bytes()) != gameplay_capabilities::result::match, "AC: old revision cannot agree with the safe default");
+	}
+	{
+		join_in_progress_diagnostics::window w;
+		check(!w.capture(0), "AC: ordinary periods have no diagnostic budget");
+		w.begin(0xfffffff0u);
+		check(w.capture(10), "AC: admission observation survives clock wrap");
+		check(!w.compare(10, false, 30), "AC: wait for all same-frame checksum heads");
+		check(w.compare(10, true, 30) && !w.compare(10, true, 30), "AC: arbitration retries do not duplicate a period");
+		for (unsigned i=1; i<4; ++i) check(w.compare(10, true, std::uint16_t(30*(i+1))), "AC: next checksum period is observed");
+		check(!w.compare(10, true, 150), "AC: comparison log stops after four periods");
+		w.produced=4; check(!w.capture(10), "AC: producer log stops after four periods");
+		w.begin(20); check(w.capture(21) && !w.capture(180020), "AC: new admission rearms with a hard time bound");
+	}
 	{
 		char out[128]{};
 		auto format = [](char* dst, int size, const char* pattern, const char* hero) {

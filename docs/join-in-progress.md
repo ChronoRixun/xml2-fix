@@ -1,5 +1,34 @@
 # Join in progress (`[Online] JoinInProgress=1`, gameplay rule 26)
 
+The current release fallback keeps `JoinInProgress=1` and defaults **`LateJoin=0`**.
+Before START the native lobby admits normally. After START the host refuses a
+new request before allocating a participant, controller or hero seat. Legends
+Classic shows: "This session has started; ask the host to return to the lobby".
+Solo spectators, hero ownership restoration, slow-player protection and host
+lifecycle remain enabled. `LateJoin=1` explicitly enables the experimental
+next-area restore described below. Every peer needs implementation revision7;
+older revisions are refused. LateJoin is the HOST's admission choice, not a
+simulation parameter: guests do not need to mirror it. The Host setup DROP-IN
+row changes this choice with keyboard/pad Accept or a mouse click before posting.
+It updates the current process, leaves the INI startup default unchanged, and
+never rewrites the frozen gameplay agreement. JoinInProgress=0 keeps the module
+off; enabling that module still requires configuration and relaunch.
+
+The 060x saved X-Mansion late-join round failed twice at the first checksum
+after restore, despite earlier three-instance coverage. No complete restoration
+fix is certified. Recommend `LateJoin=0` for 0.6.0-beta.1. The builder writes that
+default and refuses a companion DLL missing `LateJoinPolicyV1`. Rebuild the LC
+Code/Browse notice resources together with the DLL.
+
+Room discovery remains available for the explicit native refusal. It does not
+grant admission; the host checks its current START state at request delivery,
+including a request racing START or stale room metadata. The tagged native
+`0x1c` refusal uses the existing variable body. Menus accept its exact marker
+only from the current attempt's proven host; ordinary/foreign refusals retain
+the native path. Cleanup runs on the next UI tick, outside packet delivery.
+
+Earlier coverage (historical, with late joining enabled):
+
 **ON by default in Legends Classic 0.3.0** (the builder writes `JoinInProgress=1`). The generic DLL remains
 requested-only: absent or `0` writes nothing and retains the capability record of a build without it.
 Local three-instance tests have exercised New Game and a copied saved campaign: the late player waits, the next
@@ -15,6 +44,8 @@ Host migration and automatic reconnection are not provided. Native LAG warnings 
 [Online]
 Transport = gns        ; required (rule 25); rooms (Host=broker / JoinCode) imply it
 JoinInProgress = 1     ; every PC of the session must set it (rule 26 JoinInProgress)
+LateJoin = 0           ; safe default: admission only before lobby START
+; LateJoin = 1         ; experimental shared restore; host setting / Host setup DROP-IN row
 ```
 
 Without `Transport=gns` the key is refused by name in the log ("needs [Online] Transport=gns (rule 25 GnsTransport)")
@@ -66,7 +97,7 @@ the other PC)" / "(disabled on this PC)".
   restart and resume only after observed native loading and the first fresh shared input frame (the native frame
   gate requires every participant). Stage limits are add
   45 s, image 90 s, load 120 s. A stage timeout is logged; recovery of a failed cohort is not live-verified.
-  Rule 26 uses revision 6 (0.3.0d: seat owners only at solo segments) so this path cannot agree with earlier bring-in,
+  Revision 6 introduced the 0.3.0d seat-owner behavior below; current revision 7 also provides the host admission gate and control, so this path cannot agree with earlier bring-in,
   clock, pending-seat or seat-owner behavior; a 0.3.0c peer (revision 5) is refused by name (`differs: 26`).
 * **Seats.** A pending player who leaves frees the seat at once (the slot is the native one). The newcomer's hero:
   the native zone-start seat binding decides (standby when the party has no free hero). With Wolverine/Cyclops/Storm,
@@ -76,6 +107,33 @@ the other PC)" / "(disabled on this PC)".
 
 See `src/join_in_progress_rules.hpp` for every site and guard and `src/join_in_progress_core.hpp` for the state
 machine (`xml2_join_in_progress_test`).
+
+## Bounded checksum observations
+
+Every full-campaign cohort start arms four native checksum periods, with a
+180-second expiry. Initial saved-campaign START can also produce this control
+sample. `jip checksum hero/produced/owner/head` logs report the inputs used by
+retail `0x614a40`: each hero's six transform floats at `+0x20..0x34` as raw hex
+bits and its native subtotal; both camera vectors and their subtotal; the RNG
+draw count at `0x7ad8b4`; final hash and frame. The synchronized seed `0x6e0874`,
+separate visual seed, controller/AI fields and input ring cursors are context.
+Complete same-frame heads are observed before native arbitration clears them.
+
+The seed is not directly hashed. Native network setup resets both seeds to
+`0x845fed` and clears the synchronized count, so later divergent draws remain
+distinct from a missing initial seed. The observer calls no world/camera
+getter and consumes no random value. It preserves integer registers/flags,
+x87 stack/control, XMM and MXCSR, and changes no native simulation state,
+checksum, hold or arbitration decision. The self-drop caller probe covers
+host and guest PCs, including target indices 1-3; target index alone does not
+identify which PC is local.
+
+Offline verification: `xml2_join_in_progress_boundary_test <retail-exe> checksum`
+executes the native producer under invented services, compares its wire before
+and after the observer bridges, and verifies floating-point/world/RNG
+preservation and the four-period limit. Mode `admission` executes the actual
+native handler with an int9 control and the production policy gate. Neither
+mode starts the game or a socket. Live first-period cause remains unproven.
 
 ## One peer per participant (four players, 0.3.0c)
 
@@ -181,3 +239,30 @@ for the guard-refusal case (`UNION_MUTATE_VA=5604f0`). Outputs should show zero
 fixture failures, and the ON log should include the synthetic notice reasons
 `0x10ce/0x10cf`, flag 1 and the removal reason `0x10ce`. As with other union runs,
 use a private desktop and compare registry snapshots.
+
+## Two-PC follow-up: outbound handoff
+
+The supplied two-PC host retained and bound the joiner's native record but never
+logged its GNS send switch. The old adapter let every new packet refill the native
+reliable queue while requiring that queue to become empty before switching.
+Continuous campaign/input production can prevent that observation indefinitely.
+Bound links now stage NEW queued and direct game messages in the adapter, drain
+only the finite old native reliable queue, then send the staged messages in order. Transport ACK/sequence receipt and ping/reply
+service (0x0a/0x0f/0x10/0x11) bypasses the held gameplay lane so two peers
+can drain each other; it does not advance simulation state.
+Native receive, transmit and fragment backlogs all remain counted during the
+transition. No reliable message is discarded and no premature switch is forced.
+
+A failing-first continuous-production test starved the old GNS stream; the fixed
+model delivers all90 staged input frames, beginning at0, only after old native
+ACKs. A separate actual retail broadcast test sends60/60 input records to the
+admitted peer after cohort synchronization/seat cleanup. It confirms the expected
+native send set without inserting duplicate records or guessing active flags.
+
+The late-drop line saying records were sent to0 participants is the LOST-INPUT
+relay to other survivors after a peer leaves. Zero is expected with two players.
+GNS counters also exclude tunneled native datagrams. They establish the missing
+GNS handoff, not that every native game packet was absent. New reports include
+bound/switched/native-send-pending; four-period owner snapshots include active,
+pending and native-send backlog. The earlier same-frame checksum variant still
+requires live component comparison; LateJoin=0 remains the release recommendation.

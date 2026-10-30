@@ -1963,3 +1963,13 @@ on the selected segment leaves the setting unchanged. Keyboard and pad activatio
 of the visibility row retain their existing toggle behavior. No new asset intent
 or capability is required. Native fixture modes are `r24-party-native` and
 `r24-visibility`; live keyboard/pad/mouse timing still needs a two-PC check.
+
+
+Host setup DROP-IN is an editable admission choice (intent75, additive capability
+lc-online-drop-in/1). Keyboard/pad focus links include it and a mouse release posts
+that same bounded mailbox action. The row has its own focus marker. It changes
+LateJoin only before a host session is posted and does not mutate the INI or
+frozen gameplay record. The startup default remains0. The complete JIP module
+must already be installed; JoinInProgress=0 remains disabled until relaunch.
+Guests show campaign/difficulty without claiming this PC's future host policy
+is the remote host's setting. The host's lobby summary reflects its own choice.

@@ -5,9 +5,16 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <cstdarg>
+
+std::vector<std::string> observed_jip_logs;
 
 namespace logger {
-void write(const char*,...) {}
+void write(const char* format,...) {
+    char text[2048]{};va_list args;va_start(args,format);
+    std::vsnprintf(text,sizeof text,format,args);va_end(args);
+    observed_jip_logs.emplace_back(text);
+}
 void write_once(std::string_view,const char*,...) {}
 }
 namespace e4_observe {
@@ -61,8 +68,13 @@ char __fastcall player_add(void*,void*,void*,int) { return 1; }
 void __fastcall add(void*,void*,void* record) { assert(join_in_progress::area_load && record==remote);++adds; }
 void __fastcall barrier(void*,void*,float) { ++barriers; }
 #include "join_in_progress_gamespy.inl"
+#include "join_in_progress_checksum.inl"
 }
 int main(int argc,char** argv) {
+    SetUnhandledExceptionFilter([](EXCEPTION_POINTERS* error)->LONG {
+        std::cerr<<"JIP fixture fault eip="<<std::hex<<error->ContextRecord->Eip<<" code="<<error->ExceptionRecord->ExceptionCode<<" address="<<error->ExceptionRecord->ExceptionInformation[1]<<"\n";
+        ExitProcess(error->ExceptionRecord->ExceptionCode);
+    });
     assert(argc==2 || argc==3);
     std::ifstream f(argv[1],std::ios::binary);std::vector<unsigned char> image((std::istreambuf_iterator<char>(f)),{});
     assert(image.size()>0x1000);
@@ -73,6 +85,9 @@ int main(int argc,char** argv) {
     for(unsigned i=0;i<word(pe+6);++i) { const auto at=sections+40*i;std::memcpy(reinterpret_cast<void*>(0x400000+dword(at+12)),image.data()+dword(at+20),dword(at+16)); }
     using namespace join_in_progress_rules;
     if(argc==3) {
+        if(std::string_view(argv[2])=="checksum") { checksum_fixture::run();return 0; }
+        if(std::string_view(argv[2])=="send-set") { checksum_fixture::send_set_run();return 0; }
+        if(std::string_view(argv[2])=="admission") { checksum_fixture::admission_run();return 0; }
         assert(std::string_view(argv[2])=="gamespy" || std::string_view(argv[2])=="gamespy-stock");
         gamespy_fixture::run(std::string_view(argv[2])=="gamespy");return 0;
     }

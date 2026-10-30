@@ -56,6 +56,51 @@ namespace
 int main(int argc, char** argv)
 {
 	{
+		// Both peers bind with old reliable output. Native 0x0f ACKs must
+		// bypass held gameplay or neither peer can make the other drain.
+		unsigned old[2]{2,2},delivered[2]{};bool switched[2]{};
+		outbox staged[2];
+		for(unsigned tick=0;tick<8;++tick) {
+			for(unsigned side=0;side<2;++side) {
+				const std::uint8_t body[]{std::uint8_t(tick),0};
+				staged[side].enqueue(0x02,true,false,body,2);
+				const auto ack=handoff_lane(true,switched[side],0x0f);
+				if(old[1-side] && ack!=outbound_lane::held) --old[1-side];
+			}
+			for(unsigned side=0;side<2;++side) {
+				if(!old[side]) switched[side]=true;
+				if(switched[side])staged[side].flush([&](const message&,const std::vector<std::uint8_t>&) { ++delivered[side];return true; });
+			}
+		}
+		check(switched[0] && switched[1] && delivered[0]==8 && delivered[1]==8,"AC: bidirectional old queues drain through live ACKs before all input records deliver");
+	}
+	{
+		// Reproduce the late-admission host: hello has bound while campaign
+		// traffic remains native, then one input record is generated each tick.
+		// Keep producing during ACKs: a drain-only switch must not starve GNS.
+		outbox staged;
+		unsigned native_pending=32,native_new=0;
+		bool switched=false,early=false;
+		std::vector<unsigned> received_frames;
+		for(unsigned frame=0;frame<90;++frame) {
+			const std::uint8_t body[]{std::uint8_t(frame),0};
+			const auto lane=handoff_lane(true,switched);
+			if(lane==outbound_lane::native) { ++native_pending; ++native_new; }
+			else check(staged.enqueue(0x02,true,false,body,sizeof body),"AC: post-bind input accepted without refilling native queue");
+			if(native_pending) --native_pending; // one old reliable ACK per tick
+			if(!native_pending) switched=true;
+			if(switched) staged.flush([&](const message&,const std::vector<std::uint8_t>& wire) {
+				const auto p=parse(wire.data(),wire.size());
+				early|=native_pending!=0;
+				received_frames.push_back(p.body[0]);return true;
+			});
+		}
+		check(switched && native_new==0 && received_frames.size()==90,"AC: host GNS stream feeds all90 post-bind input frames despite continuous production");
+		check(!early && std::is_sorted(received_frames.begin(),received_frames.end()),"AC: first GNS input follows all old native reliable traffic in order");
+		check(!received_frames.empty() && received_frames.front()==0 && received_frames.back()==89,"AC: late joiner GNS stream receives frame0 through89, no transition hole");
+		check(handoff_lane(false,false)==outbound_lane::native && handoff_lane(true,true)==outbound_lane::game,"AC: unbound/native and completed/GNS paths retained");
+	}
+	{
 		// Retail 0x612449 emits a teardown notice for the local participant;
 		// 0x6133c9 emits the same wire opcode for several other removal causes.
 		const std::uint32_t teardown[]{0x61244e, 0, 0x10cc, 0x1106, 0xabcd0001};
@@ -508,7 +553,9 @@ int main(int argc, char** argv)
         check(self_drop_parent(frame,8)==0x6149a7,"AB: host self-drop upper return survives FPO (frame/checksum arbitration caller)");
         check(self_drop_parent(frame,7)==0 && self_drop_parent(nullptr,8)==0,"AB: short/unreadable self-drop stack has no invented parent");
         auto other=std::vector<std::uint32_t>(std::begin(frame),std::end(frame));other[1]=1;
-        check(self_drop_parent(other.data(),other.size())==0,"AB: remote removal is not a host self-drop");
+        check(self_drop_parent(other.data(),other.size())==0x6149a7,"AC: guest-index arbitration keeps its upper caller too");
+        other[1]=3;
+        check(self_drop_parent(other.data(),other.size())==0x6149a7,"AC: fourth participant arbitration is observed too");
         other[1]=0;other[7]=0x5f2867;
         check(self_drop_parent(other.data(),other.size())==0x5f2867,"AB: host self-drop names front-end exit return");
         other[0]=0x6129f5;

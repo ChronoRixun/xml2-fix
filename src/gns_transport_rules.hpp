@@ -64,7 +64,9 @@ namespace gns_transport_rules
 	inline constexpr std::array<unsigned char, 5> flush_original{0xe9,0x8c,0x55,0x00,0x00};
 	inline constexpr std::array<unsigned char, 5> drain_original{0xe9,0x88,0x5e,0x00,0x00};
 	inline constexpr std::array<unsigned char, 5> peer_flush_original{0x83,0xec,0x28,0x53,0x55};
-	inline constexpr std::array<guard, 26> guards{{
+	inline constexpr std::array<guard, 28> guards{{
+		{0x6107ca,"8b91ac30000085d27428","native transmit backlog walk during bound handoff"},
+		{0x6107fc,"8b91bc30000085d27428","native fragment backlog walk during bound handoff"},
 		{0x61514a,"b9d836a500c744240800000000e8c4fdffff","checksum manager static address (diagnostic only)"},
 		{0x614848,"396e0474358b4ef8890e8b510889168b49108b5104","checksum list count/head/node/sample layout (diagnostic only)"},
 		{0x61499b,"e840e2ffff8bc8e8f9e9ffff895f108d771481c7f0000000bb040000008bcfe85143ffff","arbitration clears lists only after the notice/removal helper (diagnostic only)"},

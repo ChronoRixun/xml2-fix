@@ -22,6 +22,7 @@ HOOKS = {0x49FAAC: 5, 0x5F1BB0: 5, 0x6128AB: 5, 0x612D1F: 5, 0x612DDA: 5, 0x5F1F
 from check_online_menus_guards import anchor_writes
 HOOKS.update({0x6A02C0: 4, 0x6A1148: 4, 0x69F2BC: 4, 0x69F384: 4})
 HOOKS.update({0x41A460: 5, 0x60220E: 4, 0x5AF5A0: 6})
+HOOKS.update({0x609AD9: 6})
 HOOKS.update(anchor_writes(Path(__file__).resolve().parent.parent))
 REGISTRY = r"HKCU\Software\Activision\X-Men Legends 2"
 # The online menus install only over a committed LegendsClassicFonts transaction (060p fix B): every mode that sets
@@ -107,7 +108,7 @@ def main():
             assert bool(changed.intersection(range(site, site + size))) == installed, (mode, hex(site))
         if installed:
             assert "script functions: 1024 names" in log
-            assert "dispatcher lcOnlineIntent n(i) registered; 54 patch writes and menu-anchors/512 committed atomically" in log
+            assert "dispatcher lcOnlineIntent n(i) registered; 55 patch writes and menu-anchors/512 committed atomically" in log
         else:
             assert "dispatcher lcOnlineIntent" not in log
         if mode == "fonts-absent":
