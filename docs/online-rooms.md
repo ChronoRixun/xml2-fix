@@ -260,3 +260,23 @@ own membership and play. Intentional Leave drops queued datagrams, callbacks,
 room listener/roster and old-generation worker results before later attempts.
 Rules 25/26, their revisions/values, framing and release identities are unchanged.
 Any distinct future peer-visible contract still **needs a rule id**.
+
+### Relay-only route verification
+
+The candidate mask alone is insufficient with the native ICE implementation:
+its candidate-pair and triggered-check paths can still choose a direct pair.
+With `Route=relay`, the room adapter checks the route flag before accepting a
+Connected callback and before each room tick drains/sends tunnel traffic. A
+non-relayed (or unreadable) route is closed, retries on that tunnel stop, and a
+clear relay-only refusal is written to the log and online status. Established
+routes are checked again so a later direct route is refused too. A refused member
+does not disconnect an established room from its broker or stop healthy members
+and Party processing; only an unadmitted guest aborts its pending join. Ordinary
+`Route=any` behavior is unchanged. This is refusal of an unsupported selected
+route, not proof of successful TURN allocation.
+
+A UDP send error such as WSAENETUNREACH does not identify the failing local
+interface. Native ICE uses an individually bound socket per local interface and
+matches TURN server and socket address families before allocation. Diagnosing a
+remaining allocation failure requires live transport evidence; the room must not
+silently present a direct connection as a successful relay-only session.

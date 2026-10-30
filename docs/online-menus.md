@@ -1948,3 +1948,18 @@ Native fixture modes: `r6-end-deadquit-host`, `r6-end-hostloss-zone-guest`,
 `r23-options-staged`, `r23-footer-expanded`, `r23-compact-footer`, and
 `r23-empty-paging`. The latter also preserves navigation when a nine-room list
 has another page. Live two-PC timing/draw checks remain necessary.
+
+### Two-PC follow-up: Party input and Host visibility
+
+After an inline Party Kick closes, delayed Confirm/Dismiss commands from that
+old panel are discarded before the next Party action enters the single mailbox.
+A valid rail Quit hit posts the existing Leave intent in the same frame. Party
+handles the DirectInput Esc edge and the pad Back mask through that mailbox;
+the first Back dismisses an open confirmation, the next reaches native Back.
+No additional removal or native quit is sent by these input repairs.
+
+Host visibility mouse clicks select the authored Private/Public segment. A click
+on the selected segment leaves the setting unchanged. Keyboard and pad activation
+of the visibility row retain their existing toggle behavior. No new asset intent
+or capability is required. Native fixture modes are `r24-party-native` and
+`r24-visibility`; live keyboard/pad/mouse timing still needs a two-PC check.

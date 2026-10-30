@@ -707,6 +707,8 @@ const script_functions_rules::func_entry registration{reinterpret_cast<const voi
 // constants at that boundary, while the accepting source menu still exists;
 // otherwise Back/closure before the script executes could retarget an intent
 // to a different menu. No display/model text is accepted as command source.
+bool party_expired_confirmation(int action);
+void party_mouse_action(void* menu,void* chosen,int message);
 bool __fastcall queue(void* console,void*,const char* line) {
     // Only exact canonical integer commands are accepted at this boundary.
     // Model/name/clipboard text can never become a script or console command.
@@ -719,6 +721,7 @@ bool __fastcall queue(void* console,void*,const char* line) {
         if(std::strcmp(command,line)) continue;
         auto* menu=current();
         if(live(menu)) {
+            if(which(menu)==screen::party && party_expired_confirmation(pending.action)) pending.clear();
             if(pending.action || pending.post(value,reinterpret_cast<std::uintptr_t>(menu),which(menu))) return true;
             if(value>=18 && value<=31) return true; // wrong-scope broker intent is discarded, never delayed
         }
@@ -943,6 +946,7 @@ void hide_error_scenes(void* menu,int shown=-1) {
 }
 std::uint32_t retry_wait_ms() { return broker_calls.retry_in ? broker_calls.retry_in() : 0; }
 bool host_public = false;
+std::optional<std::pair<std::uintptr_t,bool>> host_visibility_click;
 std::string browse_join_code; // a Browse join waiting for the broker client (browse_join_tick)
 std::uint64_t resolve_edit = 0;
 broker::ticket completed_list_ticket{};
@@ -2355,7 +2359,7 @@ void trace_end(void* menu,int rx,int ry) {
 // (x, y): the engine's view point. True with (rx, ry) the point to hand the engine instead; false: pass it on unchanged.
 // The point is a half-view-unit estimate unless the window procedure's pixel is known (logged once per reason). `lobby`: the
 // skinned lobbies' mouse (0x5ba2b0 / 0x5c8da0), whose own first pass runs before the base walk.
-bool scoped_point(void* menu,int x,int y,int& rx,int& ry,bool lobby,void** chosen=nullptr) {
+bool scoped_point(void* menu,int x,int y,int& rx,int& ry,bool lobby,void** chosen=nullptr,hits::view_point* hit_point=nullptr) {
     try {
         if(!hits_ready()) return false;
         char name[64]{}; menu_name(menu,name);
@@ -2366,6 +2370,7 @@ bool scoped_point(void* menu,int x,int y,int& rx,int& ry,bool lobby,void** chose
         else if(!pointer_probe(px,py,sw,sh)) logger::write_once("online:hits-half-nomsg","online menus: mouse hit boxes: a mouse message without a window procedure pixel (wheel, or no client point); half a view unit");
         else if(!hits::engine_point_of_pixel(px,py,sw,sh,ex,ey) || ex!=x || ey!=y) logger::write_once("online:hits-half-mismatch","online menus: mouse hit boxes: the window procedure pixel does not match the engine's point (%d,%d vs %d,%d); half a view unit",ex,ey,x,y);
         else { p=hits::from_pixel(px,py,sw,sh); trace.exact=true; }
+        if(hit_point) *hit_point=p;
         if(trace.on) { trace.px=px; trace.py=py; trace.sw=sw; trace.sh=sh; trace.vx=p.x; trace.vy=p.y; }
         // The engine's walk, item by item, as its passes see them (online_menus_hits_rules.hpp engine_menu).
         std::vector<void*> walked;
@@ -2481,9 +2486,20 @@ std::uint32_t __fastcall menu_mouse(void* menu,void*,int x,int y,int flags,int m
     const bool scoped=ready && custom(which(menu));
     if(scoped && which(menu)==screen::hub) hub_footer_guard(menu);
     if(scoped) trace_begin(menu,x,y,unsigned(message));
-    void* chosen=nullptr;
-    if(scoped && !scoped_point(menu,x,y,rx,ry,false,&chosen)) { rx=x; ry=y; }
+    void* chosen=nullptr;hits::view_point hit_point=hits::from_engine(x,y);
+    if(scoped && !scoped_point(menu,x,y,rx,ry,false,&chosen,&hit_point)) { rx=x; ry=y; }
     const auto result=at<mouse_fn>(0x5ae0a0)(menu,rx,ry,flags,message,extra);
+    if(chosen && which(menu)==screen::party && current_peek()==menu) party_mouse_action(menu,chosen,message);
+    if(chosen && which(menu)==screen::host && current_peek()==menu && chosen==item_try(menu,"visibility") &&
+        message==WM_LBUTTONUP && native_flow.phase==native_phase::idle && (!pending.action || pending.action==int(intent::visibility))) {
+        // Fixed chip positions in the authored scene: Private starts at 148,
+        // Public at 218 layout units. Mouse selects; keyboard/pad still toggle.
+        lobby_focus(menu,"visibility");
+        const bool private_chip=hit_point.x>=148.0f*0.8f && hit_point.x<(148.0f+65.0f)*0.8f;
+        const bool public_chip=hit_point.x>=218.0f*0.8f && hit_point.x<(218.0f+59.0f)*0.8f;
+        if(private_chip || public_chip) host_visibility_click=std::pair{reinterpret_cast<std::uintptr_t>(menu),public_chip};
+        pending.post(int(intent::visibility),reinterpret_cast<std::uintptr_t>(menu),screen::host);
+    }
     if(chosen && which(menu)==screen::browse && current_peek()==menu) {
         const auto name=engine_name(chosen);
         if(name.size()==8 && name.starts_with("room_") && name[5]>='0' && name[5]<'0'+int(browse_rows) && name[6]=='_') {
@@ -2578,6 +2594,7 @@ void __fastcall on_back(void* menu,void*) {
     if(ready && live(menu)) {
         if(!back_held) {
             back_held=true;
+            if(which(menu)==screen::party && party_expired_confirmation(pending.action)) pending.clear();
             pending.post(int(intent::back),reinterpret_cast<std::uintptr_t>(menu),which(menu));
         }
         return;
@@ -2633,6 +2650,17 @@ void code_input(int value) {
 // the native quit command to the console once; Kick asks the transport for the agreed departure once. Nothing a peer sends
 // authorizes any of it: there is no party wire message for removal (a new peer contract would need a rule id).
 party_model party_ui;
+bool party_expired_confirmation(int action) {
+    return party_ui.confirm==party_confirm::none &&
+        (action==int(intent::party_leave_yes) || action==int(intent::party_kick_yes) || action==int(intent::dismiss));
+}
+void party_mouse_action(void* menu,void* chosen,int message) {
+    if(message!=WM_LBUTTONUP || party_ui.confirm!=party_confirm::none || party_ui.departed || chosen!=item_try(menu,"lc_rail_quit")) return;
+    if(party_expired_confirmation(pending.action)) pending.clear();
+    // The authored hit target is authoritative for this same-frame click,
+    // including after the inline Kick changed/disabled the old focused item.
+    pending.post(int(intent::party_leave),reinterpret_cast<std::uintptr_t>(menu),screen::party);
+}
 std::uintptr_t party_owner=0;
 std::string party_origin;      // the item to focus again when a confirmation closes
 int party_feedback=0;          // 1 copied, 2 copy failed
@@ -2892,7 +2920,9 @@ void tick_impl(void* menu,bool& native_called) {
             } else if(s==screen::hub) {
                 if(mask&0x1000000) shortcut=int(intent::edit_name);
                 else if(mask&0x400000) shortcut=int(intent::rejoin);
-            } else if(s==screen::party) { if(mask&0x400000) shortcut=int(intent::party_invite); // MENU_NEXT (Y)
+            } else if(s==screen::party) {
+                if(mask&0x200000) shortcut=int(intent::back);
+                else if(mask&0x400000) shortcut=int(intent::party_invite); // MENU_NEXT (Y)
             } else if(s==screen::browse && (mask&0x400000)) shortcut=int(intent::refresh);
             else if(s==screen::host && (mask&0x100000)) shortcut=int(intent::open_room);
             if(shortcut) pending.post(shortcut,reinterpret_cast<std::uintptr_t>(menu),s);
@@ -2919,6 +2949,7 @@ void tick_impl(void* menu,bool& native_called) {
     const auto completed_code=fixture_code;
     fixture_ticket=0;
     const auto action=static_cast<intent>(pending.take(reinterpret_cast<std::uintptr_t>(menu),s));
+    const auto visibility_click=host_visibility_click;host_visibility_click.reset();
     if(s==screen::hub && int(action) && action!=intent::rejoin) rejoin_seed.reset();
     if(s==screen::code && action!=intent::back && keyboard_input.source==reinterpret_cast<std::uintptr_t>(menu))
         for(unsigned i=0;i<keyboard_input.count;++i) code_input(keyboard_input.values[i]);
@@ -2957,7 +2988,10 @@ void tick_impl(void* menu,bool& native_called) {
         if(s==screen::browse && broker_live() && broker_calls.list && broker_calls.list()) { last_list_at=now_ms();listed_started=true; } break;
     case intent::open_room:
         if(s==screen::host && broker_live()) { native_host_begin(); return; } break;
-    case intent::visibility: if(s==screen::host && native_flow.phase==native_phase::idle) host_public=!host_public; break;
+    case intent::visibility:
+        if(s==screen::host && native_flow.phase==native_phase::idle)
+            host_public=visibility_click && visibility_click->first==reinterpret_cast<std::uintptr_t>(menu) ? visibility_click->second : !host_public;
+        break;
     case intent::retry:
         if(broker_live() && broker_calls.retry && broker_calls.retry() && s==screen::code) {
             resolve_ticket=broker_view().generation;resolve_edit=code.generation;code.submitted=code.generation;
@@ -3096,6 +3130,7 @@ void __fastcall tick(void* menu,void*) {
     }
 }
 void deactivate_state(void* menu,bool departure) {
+    if(host_visibility_click && host_visibility_click->first==reinterpret_cast<std::uintptr_t>(menu)) host_visibility_click.reset();
     if(bindings.menu==reinterpret_cast<std::uintptr_t>(menu)) bindings.clear();
     pending.clear();keyboard_input.clear();
     if(party_owner==reinterpret_cast<std::uintptr_t>(menu)) { party_ui.reset();party_owner=0;party_origin.clear();party_feedback=0; }
@@ -3181,6 +3216,11 @@ void keyboard(unsigned char* state) {
     const bool control=(state[0x1d]|state[0x9d])&0x80;
     const bool alt=(state[0x38]|state[0xb8])&0x80;
     if(s==screen::party) {
+        if(!alt && !control && edges[1]) {
+            if(party_expired_confirmation(pending.action)) pending.clear();
+            pending.post(int(intent::back),address,s);
+        }
+        if(!alt && !control) state[1]=0; // one scoped Back, no stale stock focus/cancel dispatch
         if(!alt && control && edges[0x2e]) pending.post(int(intent::party_invite),address,s);
         if(!alt && control) state[0x2e]=0;
         return;

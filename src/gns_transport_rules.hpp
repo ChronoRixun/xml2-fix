@@ -31,7 +31,7 @@ namespace gns_transport_rules
 	constexpr unsigned long stall_service_ms = 250;
 	constexpr std::uint32_t zones_static = 0x72a578, zones_vtable = 0x68878c, zones_loading_at = 0x220;
 	constexpr std::uint32_t session_static = 0xa53058, session_vtable = 0x6a481c, session_set_up = 0x420, session_host = 0x421,
-		session_first = 0x26c, session_count = 0x278, node_next_at = 0x8, node_record_at = 0x10, record_peer_at = 0x8,
+		session_campaign_at = 0x44c, session_first = 0x26c, session_count = 0x278, node_next_at = 0x8, node_record_at = 0x10, record_peer_at = 0x8,
 		record_flags_at = 0x1c, record_index_at = 0x18;
 	// Abrupt disconnects: the session's drop notice (0x611550) and lost-participant path (0x612c40), as the watchdog uses them.
 	constexpr std::uint32_t native_drop_notice = 0x611550, native_lost = 0x612c40;
@@ -64,8 +64,13 @@ namespace gns_transport_rules
 	inline constexpr std::array<unsigned char, 5> flush_original{0xe9,0x8c,0x55,0x00,0x00};
 	inline constexpr std::array<unsigned char, 5> drain_original{0xe9,0x88,0x5e,0x00,0x00};
 	inline constexpr std::array<unsigned char, 5> peer_flush_original{0x83,0xec,0x28,0x53,0x55};
-	inline constexpr std::array<guard, 21> guards{{
+	inline constexpr std::array<guard, 26> guards{{
+		{0x61514a,"b9d836a500c744240800000000e8c4fdffff","checksum manager static address (diagnostic only)"},
+		{0x614848,"396e0474358b4ef8890e8b510889168b49108b5104","checksum list count/head/node/sample layout (diagnostic only)"},
+		{0x61499b,"e840e2ffff8bc8e8f9e9ffff895f108d771481c7f0000000bb040000008bcfe85143ffff","arbitration clears lists only after the notice/removal helper (diagnostic only)"},
 		{0x611550,"83ec20558be98b851c040000","the session's drop notice 0x611550 (index, lost code, others' code, flag)"},
+		{0x5f3c42,"e899ef0100c6804c04000001","native campaign-running flag setter at session +0x44c"},
+		{0x6133a0,"568b74240885f6578bf974318bcee85d0e00008b4c241085c97c138b54241c528b54241c5251508bcfe882e1ffff8b4424146a0050568bcfe863f8ffff5f5ec21400","host self-drop helper stack layout (diagnostic only)"},
 		{0x612c40,"558bec83e4f881ec14010000","the session's lost-participant path 0x612c40 (record, reason, flag)"},
 		{0x613adc,"6a00680711000068cc100000508bcfe860daffff6a0068cd100000568bcfe841f1ffff","the host's watchdog: notice 0x10cc/0x1107, then 0x612c40 with 0x10cd"},
 		{0x60f940,"83ec2853558b6c24348d451c","flush-one-peer entry (mode 2)"},

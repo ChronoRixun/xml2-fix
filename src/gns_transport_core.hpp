@@ -26,6 +26,34 @@ namespace gns_transport_core
 		return {frame[0], frame[1], frame[2], frame[3], frame[4] & 0xffu};
 	}
 
+    // 0x6133a0 saves ESI/EDI, then pushes four arguments for 0x611550.
+    // At the latter entry its own caller return is word 7, even with FPO.
+    inline std::uint32_t self_drop_parent(const std::uint32_t* frame,std::size_t words) {
+        return frame && words>=8 && frame[0]==0x6133ce && frame[1]==0 ? frame[7] : 0;
+    }
+
+	// Observation only: native checksum lists are indexed by the 0x2e sender's
+	// participant index. Read the first sample without advancing the list iterator.
+	struct checksum_head {
+		std::uint32_t count = 0, hash = 0;
+		std::uint16_t frame = 0;
+		bool readable = false, present = false;
+	};
+	template<class Reader> checksum_head read_checksum_head(Reader& read, std::uintptr_t manager, unsigned index) {
+		checksum_head out;
+		if (index >= 4) return out;
+		const auto list = manager + 0xf0 + 0x10 * index;
+		if (!read(list + 0xc, &out.count, sizeof out.count)) return out;
+		if (!out.count) { out.readable = true; return out; }
+		std::uint32_t node = 0, sample = 0;
+		if (!read(list, &node, sizeof node) || !node ||
+		    !read(node + 0x10, &sample, sizeof sample) || !sample ||
+		    !read(sample, &out.frame, sizeof out.frame) ||
+		    !read(sample + 4, &out.hash, sizeof out.hash)) return out;
+		out.readable = out.present = true; // A zero hash is a real sample, though arbitration ignores it.
+		return out;
+	}
+
 	inline bool room_ui_pump_needed(bool initialized, bool requested) { return initialized || requested; }
 	// Identity/certificate handoff is local to an idle GNS context. IO provides
 	// get_identity, reset_identity and close_listener; no native/game state here.

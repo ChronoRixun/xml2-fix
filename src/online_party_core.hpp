@@ -277,6 +277,7 @@ namespace online_party_core
 		bool jip_pending = false;  // admitted but outside the lockstep until the next area (rule 26)
 		bool loading = false;      // a zone load runs
 		bool inputs_flowing = false; // input_flow::flowing: real shared input, not `in_game`
+        bool campaign_running = false; // native session +0x44c; remains true while in-zone input is paused
 	};
 	inline phase local_phase(const phase_inputs& f)
 	{
@@ -285,7 +286,7 @@ namespace online_party_core
 		{
 			if (f.jip_pending) return f.loading ? phase::loading : phase::waiting_next_area;
 			if (f.loading) return phase::loading;
-			if (f.inputs_flowing) return phase::playing;
+			if (f.campaign_running || f.inputs_flowing) return phase::playing;
 			return f.native_ready && !f.hosting ? phase::ready : phase::in_lobby;
 		}
 		if (f.hosting) return phase::connecting; // the room is open, the native host session not set up yet
@@ -586,7 +587,7 @@ namespace online_party_core
 					for (const auto& w : table_.rows) if (w.who == m.who) row = &w;
 				c.index = m.facts.index;
 				// A host-reported index only for a member this PC cannot map itself, and only when free locally.
-				if (c.index < 0 && row && row->index != index_unknown && m.facts.tunnel == false)
+				if (c.index < 0 && row && row->index != index_unknown)
 				{
 					bool used = self_index == int(row->index);
 					for (const auto& o : members_) used = used || (&o != &m && o.facts.index == int(row->index));
@@ -601,8 +602,10 @@ namespace online_party_core
 				else { c.now = phase::connecting; c.phase_known = true; }
 				if (c.admitted && (c.now == phase::connecting || c.now == phase::checking_build || c.now == phase::left)) c.now = phase::in_lobby;
 				if (!c.admitted && m.facts.tunnel && c.now == phase::connecting) c.now = phase::checking_build;
-				// Readiness is the native column's: a claimed `ready` never shows without it, and it shows with it.
-				if (c.now == phase::ready && !(m.facts.ready_known && m.facts.ready)) c.now = c.admitted ? phase::in_lobby : m.facts.tunnel ? phase::checking_build : phase::connecting;
+				// Local native readiness wins whenever it is known. A waiting guest
+                // lacks those native rows: a fresh host-table Ready can be
+                // displayed there without setting ready/ready_known/admitted.
+				if (c.now == phase::ready && !(m.facts.ready_known ? m.facts.ready : row && row->now == phase::ready && row->index != index_unknown)) c.now = c.admitted ? phase::in_lobby : m.facts.tunnel ? phase::checking_build : phase::connecting;
 				if (c.admitted && m.facts.ready_known && m.facts.ready && c.now == phase::in_lobby) c.now = phase::ready;
 				// RTT: own measurement, else the host's measurement to that member (never for the host itself).
 				if (m.facts.rtt >= 0) { c.rtt = m.facts.rtt; c.from = rtt_source::local; c.how = m.facts.how; }

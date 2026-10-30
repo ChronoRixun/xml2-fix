@@ -572,3 +572,77 @@ void live_hostleft_buttons() {
     std::cout<<"online menus host-left buttons PASS (real host-end latch, real parser flags, enabled setter, setFocus, "
         "navigation, mouse at the 060s 730,458 probe, native Back to Online usecmd)\n";
 }
+namespace live_input_fixture {
+// Actual retail item flags/usecmd/mouse paths: the old Party fixture used
+// one shared text object and recorded focus without changing native +0x324.
+void ab_native_controls(bool visibility_case) {
+    setup(visibility_case ? "lc_host" : "lc_party");
+    items.clear();items.reserve(64);
+    auto add=[&](const char* name,int action,float x,float y) {
+        fitem i;i.menu=visibility_case ? "lc_host" : "lc_party";i.name=name;
+        i.ax=x;i.az=y;i.l=0;i.b=-18;i.r=100;i.t=0;i.flags=8;
+        items.push_back(std::move(i));auto& a=items.back();const int id=int(items.size());
+        lay_out(a,id);text_of(id,name);put(a.mem.data(),8,unsigned(id));
+        put(a.mem.data(),4,unsigned(reinterpret_cast<std::uintptr_t>(hub.data())));
+        if(action) command_on(a,unsigned(100+id),action);
+    };
+    const auto tick=*reinterpret_cast<tick_t*>(0x69e454);
+    const auto mouse=*reinterpret_cast<mouse_t*>(0x69e49c);
+    if(visibility_case) {
+        add("visibility",21,118,250);
+        add("lc_host_private",0,-500,-500);items.back().mem[0x54]|=0x20;
+        add("lc_host_public",0,-500,-500);items.back().mem[0x54]|=0x20;
+        build_menu(hub.data(),"lc_host");
+        write_table_text("lc-online-hits/1\nlc_host visibility 118 230 222 255\n");
+        tick(hub.data(),nullptr);
+        for(bool want:{true,true,false,false,true}) {
+            ask_unit(mouse,hub.data(),want ? 196 : 140,240,0x202);tick(hub.data(),nullptr);
+            assert(visibility.count("lc_host_private") && visibility.count("lc_host_public"));
+            assert(*reinterpret_cast<void**>(hub.data()+0x324)==item_named("lc_host","visibility").mem.data());
+            std::cout<<"visibility selection "<<want<<" hidden public "<<visibility["lc_host_public"]<<" private "<<visibility["lc_host_private"]<<"\n";
+            assert(visibility["lc_host_public"]!=want && visibility["lc_host_private"]==want);
+        }
+        std::cout<<"PASS selected visibility chip no-op; other chip selects; retail mouse/usecmd\n";return;
+    }
+    for(const auto& [name,action,x,y]:std::initializer_list<std::tuple<const char*,int,float,float>>{
+        {"lc_party_invite",64,240,280},{"lc_rail_quit",66,44,195},{"lc_rail_resume",63,44,300},
+        {"lc_party_leave",66,420,80},{"lc_party_leave_yes",67,360,130},{"lc_party_cancel",8,440,130},
+        {"lc_p2_kick",72,440,220}}) add(name,action,x,y);
+    for(const char* scene:{"lc_party_confirm_leave_host","lc_party_confirm_leave_guest","lc_party_confirm_kick"}) { add(scene,0,-500,-500);items.back().mem[0x54]|=0x20; }
+    build_menu(hub.data(),"lc_party");party_default_rows(true);
+    redirect(0x5b9fe0,party_back_stub);redirect(0x55c410,party_queue_stub);
+    write_table_text("lc-online-hits/1\nlc_party lc_rail_quit 34 177 144 204\n");
+    tick(hub.data(),nullptr);
+    auto& kick=item_named("lc_party","lc_p2_kick");
+    reinterpret_cast<void*(__thiscall*)(void*,void*)>(0x5aaf80)(hub.data(),kick.mem.data());
+    accept_focused(hub.data());tick(hub.data(),nullptr);
+    auto& yes=item_named("lc_party","lc_party_leave_yes");
+    reinterpret_cast<void*(__thiscall*)(void*,void*)>(0x5aaf80)(hub.data(),yes.mem.data());
+    accept_focused(hub.data());tick(hub.data(),nullptr);
+    assert(party_removed==std::vector<unsigned>{1});
+    assert(visibility.count("lc_party_confirm_leave_host") && visibility["lc_party_confirm_leave_host"]);
+    // A delayed native replay of the shared Confirm must not swallow the
+    // next real rail Quit click after Kick closed the inline confirmation.
+    const auto queue_target=reinterpret_cast<void*>(0x5bc3d5+*reinterpret_cast<unsigned*>(0x5bc3d1));
+    invoke_usecmd(queue_target,hub.data(),"runscript lcOnlineIntent(67)");
+    // Immediate rail Quit must open Leave, using the real retail mouse path.
+    ask_unit(mouse,hub.data(),80,190,0x202);tick(hub.data(),nullptr);
+    assert(!visibility["lc_party_confirm_leave_host"]);
+    std::array<unsigned char,256> keys{};online_menus::keyboard(keys.data());
+    keys[1]=128;online_menus::keyboard(keys.data());tick(hub.data(),nullptr);
+    assert(visibility["lc_party_confirm_leave_host"]);
+    keys[1]=128;online_menus::keyboard(keys.data());tick(hub.data(),nullptr);
+    assert(party_native_backs==0); // held Esc cannot close twice
+    ask_unit(mouse,hub.data(),80,190,0x202);tick(hub.data(),nullptr);
+    assert(!visibility["lc_party_confirm_leave_host"]);
+    reinterpret_cast<void*(__thiscall*)(void*,void*)>(0x5aaf80)(hub.data(),yes.mem.data());
+    accept_focused(hub.data());tick(hub.data(),nullptr);
+    assert(std::count(calls.begin(),calls.end(),"queue:mainmenuexit 1")==1);
+    // Back remains usable while the native Quit is queued.
+    keys.fill(0);online_menus::keyboard(keys.data());
+    keys[1]=128;online_menus::keyboard(keys.data());tick(hub.data(),nullptr);
+    assert(party_native_backs==1);
+    std::cout<<"PASS Party kick -> immediate rail Quit -> Esc dismiss -> Esc Back\n";
+}
+
+}

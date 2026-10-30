@@ -31,6 +31,7 @@ std::atomic<DWORD> clock{10000};
 std::atomic<bool> closed{false}, hold{false};
 std::atomic<bool> handshake_entered{false}, hold_handshake{false};
 bool test_mode=false,transport_busy=false;
+std::string status_error;
 int pins=0,connections=0,cert_replies=0,installs=0;
 std::string cert_identity;
 int native_sends=0,native_receives=0;
@@ -136,7 +137,7 @@ namespace game_version { bool test_mode_active() { return fake::test_mode; } con
 namespace online_status {
 void begin(online_status_core::role) {} bool active() { return true; }
 void set(online_status_core::state,const std::string&,int,online_status_core::error,const std::string&) {}
-void error(online_status_core::error,const std::string&) {} void players(int) {} void room(bool,const std::string&) {}
+void error(online_status_core::error,const std::string& text) { fake::status_error=text; } void players(int) {} void room(bool,const std::string&) {}
 online_status_core::state current() { return online_status_core::state::connecting; }
 void end() {} bool remove_launch_keys(const std::wstring&) { return true; } std::wstring game_ini() { return {}; }
 void attempt() {} void party(const std::string&,int,const std::vector<online_status_core::roster_row>&) {} void tick() {}
@@ -558,6 +559,10 @@ struct packet : SteamNetworkingMessage_t {
 };
 std::deque<SteamNetworkingMessage_t*> queued;
 unsigned heartbeats=0,closed=0;
+int route_flags=0;
+bool info(HSteamNetConnection c,SteamNetConnectionInfo_t* out) { *out={};out->m_nFlags=c==124 ? k_nSteamNetworkConnectionInfoFlags_Relayed : route_flags;return true; }
+EResult status(HSteamNetConnection,SteamNetConnectionRealTimeStatus_t* out,int,SteamNetConnectionRealTimeLaneStatus_t*) { *out={};return k_EResultOK; }
+
 bool close(HSteamNetConnection c,const char*,bool) {
     assert(c==123);++closed;
     while(!queued.empty()) { queued.front()->Release();queued.pop_front(); }
@@ -569,8 +574,8 @@ int receive(HSteamNetConnection,SteamNetworkingMessage_t** out,int max) {
 }
 void send(std::vector<std::uint8_t> bytes) { queued.push_back(new packet(std::move(bytes))); }
 room::tunnel& setup() {
-    assert(queued.empty());room::tunnels.clear();room::client={};room::host_loss.reset();room::removal_reset();
-    room::hosting=false;fake::clock=10000;room::room_clock=&fake::now;room::room_ready=true;room::room_code="ABCDEFGH";
+    assert(queued.empty());room::tunnels.clear();room::client={};room::host_loss.reset();room::removal_reset();room::party_reset();
+    fake::status_error.clear();room::relay_only=false;room::connection_info=info;room::connection_status=status;room::hosting=false;fake::clock=10000;room::room_clock=&fake::now;room::room_ready=true;room::room_code="ABCDEFGH";
     room::own_id="legends:1111111111111111";room::host_id="legends:2222222222222222";
     assert(room::members.reset({room::host_id,room::own_id}));
     assert(room::client.begin(b::operation::resolve,fake::clock,true) && room::client.issue());
@@ -594,7 +599,63 @@ void removal() {
 }
 void run(const std::string& name) {
     auto& host=setup();
-    if(name=="native-host-departure") {
+    if(name=="relay-direct" || name=="relay-accepted") {
+        room::wanted=true;room::relay_only=true;host.connected=false;
+        if(name=="relay-direct") room::host_loss.reset(); // unadmitted join should fail promptly
+        route_flags=name=="relay-accepted" ? k_nSteamNetworkConnectionInfoFlags_Relayed : k_nSteamNetworkConnectionInfoFlags_Fast;
+        SteamNetConnectionStatusChangedCallback_t event{};event.m_hConn=123;
+        event.m_info.m_eState=k_ESteamNetworkingConnectionState_Connected;
+        event.m_info.m_nFlags=route_flags;
+        event.m_info.m_identityRemote.ParseString(online_room_core::gns_identity(room::host_id).c_str());
+        room::on_status(&event);
+        if(name=="relay-direct") assert(!host.connected && closed==1 && !room::host_lost() && host.attempts==3 && !room::view().authenticated && fake::status_error.find("Relay-only")!=std::string::npos);
+        else assert(host.connected && closed==0);
+        room::wanted=room::relay_only=false;
+    } else if(name=="relay-migration") {
+        room::wanted=true;room::relay_only=true;route_flags=k_nSteamNetworkConnectionInfoFlags_Relayed;
+        room::relay_route_tick();assert(host.connected && closed==0);
+        send({3});route_flags=k_nSteamNetworkConnectionInfoFlags_Fast;
+        room::relay_route_tick();assert(!host.connected && closed==1 && queued.empty() && host.game.empty());
+        assert(room::view().authenticated && room::room_ready); // admitted guest retains its established room
+        room::relay_route_tick();assert(closed==1); // no duplicate close/retry or delivered direct payload
+        room::wanted=room::relay_only=false;
+    } else if(name=="relay-keep-host-room" || name=="relay-keep-bound") {
+        room::wanted=true;room::relay_only=true;route_flags=k_nSteamNetworkConnectionInfoFlags_Fast;
+        assert(room::view().authenticated && room::room_ready);
+        if(name=="relay-keep-host-room") {
+            room::hosting=true;room::host_id=room::own_id;
+            auto healthy=std::make_unique<room::tunnel>();healthy->id="legends:3333333333333333";
+            healthy->connection=124;healthy->connected=healthy->transport_bound=true;
+            room::tunnels.push_back(std::move(healthy));
+        } else {
+            room::host_loss.reset();host.transport_bound=true; // binding can precede the menu's admission observation
+        }
+        room::relay_route_tick();
+        assert(!host.connected && closed==1 && host.attempts==3);
+        assert(room::view().state==b::phase::room && room::view().authenticated && room::room_ready);
+        if(name=="relay-keep-host-room") assert(room::tunnels[1]->connected && room::tunnels[1]->transport_bound);
+        room::wanted=room::relay_only=false;
+    } else if(name=="party-unbound-authority") {
+        using P=online_party_core::model;
+        online_party_core::key self{},guest{};
+        assert(online_party_core::key_from_identity(room::own_id,self));
+        assert(online_party_core::key_from_identity(host.id,guest));
+        room::hosting=true;room::host_id=room::own_id;
+        room::party_model.open(room::room_code.c_str(),self,self);room::party_model.roster({self,guest});
+        online_party_core::member_facts f;f.index=1;f.tunnel=true;f.ready_known=f.ready=true;f.native_name="Guest";
+        room::party_model.observe(guest,f);
+        room::party_cards=room::party_model.cards(online_party_core::phase::playing,0,"Host",false,true,"TOKEN",fake::clock);
+        room::party_facts={};room::party_facts_ok=true;room::party_facts.session=room::party_facts.hosting=room::party_facts.campaign_running=true;
+        room::party_facts.count=2;room::party_facts.participants[0].local=true;room::party_facts.participants[0].index=0;
+        room::party_facts.participants[1].index=1;room::party_facts.participants[1].connection=123;
+        online_menus::lobby_fixture out;
+        assert(room::party(out) && out.count==1 && out.pending_count==1); // in-session Kick requires a bound game link
+        host.transport_bound=true;
+        assert(room::party(out) && out.count==2 && out.pending_count==0);
+        host.transport_bound=false;room::party_facts.campaign_running=false;
+        assert(room::party(out) && out.count==2 && out.pending_count==0); // native lobby Ready remains visible
+        room::party_reset();
+    } else if(name=="native-host-departure") {
         const std::array<std::uint8_t,12> body{0,0,0,0,6,0x11,0,0,1,0,0,0};
         room::wanted=false;assert(!room::host_departure(123,true,0x2b,body.data(),body.size()));
         room::wanted=true;close();assert(!room::host_lost()); // broker-only remains healthy
@@ -675,7 +736,7 @@ void run(const std::string& name) {
 }
 void room_closed_offline(const std::string& only={}) {
     bool ran=false;
-    for(const char* name:{"native-host-departure","load-stall","healthy","expiry","closure-removal","removal-closure","silent","recent","wrap","queued-removal","closed-removal","closed-batch-removal","guards"})
+    for(const char* name:{"relay-keep-host-room","relay-keep-bound","party-unbound-authority","relay-direct","relay-accepted","relay-migration","native-host-departure","load-stall","healthy","expiry","closure-removal","removal-closure","silent","recent","wrap","queued-removal","closed-removal","closed-batch-removal","guards"})
         if(only.empty() || only==name) { closure_fixture::run(name);ran=true; }
     if(!ran) { std::cerr<<"unknown offline closure case\n";std::exit(2); }
 }

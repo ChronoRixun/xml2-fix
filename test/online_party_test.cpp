@@ -646,6 +646,31 @@ int main()
 		check(report_to(w, c3, sample_report(9), t + 200000) == P::refusal::muted, "N1: 16 refusals within 10 s still mute the tunnel");
 	}
 
+    {
+        const auto self=K(1), host=K(2), other=K(3);
+        P::model m;m.open(CODE,self,host);m.roster({self,host,other});
+        P::member_facts f;f.tunnel=true;m.observe(host,f);m.observe(other,f);
+        P::table_row guest;guest.who=other;guest.index=1;guest.now=P::phase::ready;guest.stage=P::build::agreed;
+        auto t=sample_table(1,host,{guest});t.rows[0].now=P::phase::playing;
+        check(table_to(m,host,-1,t,1000)==P::refusal::none,"AB: waiting guest accepts authenticated host presentation table");
+        const auto cards=m.cards(P::phase::waiting_next_area,2,"Self",false,false,"TOKEN",1001);
+        const auto* host_card=card_of(cards,host);
+        check(host_card && host_card->index==0 && host_card->now==P::phase::playing && !host_card->admitted,"AB: waiting roster host presentation index and live phase without native admission");
+        const auto* other_card=card_of(cards,other);
+        check(other_card && other_card->index==1 && other_card->now==P::phase::ready && !other_card->admitted && !other_card->ready_known,"AB: host table ready is display only without local ready authority");
+    }
+
+    {
+        P::phase_inputs f;f.participant=true;f.hosting=true;f.campaign_running=true;
+        check(P::local_phase(f)==P::phase::playing,"AB: native campaign remains Playing when the in-zone input ring pauses");
+        f.hosting=false;f.native_ready=true;
+        check(P::local_phase(f)==P::phase::playing,"AB: active guest remains Playing instead of its retained lobby Ready flag");
+        f.hosting=true;f.native_ready=false;
+        f.loading=true;check(P::local_phase(f)==P::phase::loading,"AB: native zone load still overrides campaign Playing");
+        f.loading=false;f.jip_pending=true;check(P::local_phase(f)==P::phase::waiting_next_area,"AB: a waiting late guest remains waiting inside a running campaign");
+        f.jip_pending=false;f.campaign_running=false;check(P::local_phase(f)==P::phase::in_lobby,"AB: native setup without campaign or flowing inputs remains lobby");
+    }
+
 	std::printf("%d PASS / %d FAIL\n", passed, failed);
 	return failed ? 1 : 0;
 }

@@ -518,7 +518,7 @@ void set_resolution(unsigned width,unsigned height) { test_options.width=int(wid
 }
 namespace logger {
 const std::filesystem::path& module_dir() { return root; }
-void write(const char* format,...) { if(!mode.starts_with("r23-") && !mode.starts_with("r22-") && !mode.starts_with("r21-") && !mode.starts_with("r20-") && !mode.starts_with("r6-") && mode!="r4-r6" && !mode.starts_with("r16-hits")) return; // r6 fixtures run the native lobby as "r4-r6"; r16-hits: the mouse diagnostic (fix K)
+void write(const char* format,...) { if(!mode.starts_with("r24-") && !mode.starts_with("r23-") && !mode.starts_with("r22-") && !mode.starts_with("r21-") && !mode.starts_with("r20-") && !mode.starts_with("r6-") && mode!="r4-r6" && !mode.starts_with("r16-hits")) return; // r6 fixtures run the native lobby as "r4-r6"; r16-hits: the mouse diagnostic (fix K)
     char buffer[512]{};va_list args;va_start(args,format);std::vsnprintf(buffer,sizeof(buffer),format,args);va_end(args);std::cout<<buffer<<"\n";r6_log.push_back(buffer); }
 void write_once(std::string_view key,const char* format,...) {
     if(once_logs.contains(std::string(key))) return;
@@ -582,8 +582,8 @@ int main(int argc,char** argv) {
     if(mode=="r21-data-churn") { data_text_fixture::prepare();install_hooks.broker=&data_text_fixture::api; }
     install_hooks.clock=clock_stub;install_hooks.wall_clock=wall_stub;install_hooks.before_request=request_fault_stub;install_hooks.before_tick=tick_fault_stub;
     if(mode.starts_with("r4-")) install_hooks.lobby_fields=lobby_fields_stub;
-    if(mode.starts_with("r8-party")) { party_api.remove_member=party_remove_stub;install_hooks.broker=&party_api;install_hooks.lobby_fields=party_fields_stub; }
-    if(mode=="r5-broker" || mode=="r5-retail-lobby" || (mode=="r5b-views" || mode=="r20-browse-one") || mode.starts_with("r5-browse-") || mode=="r17-hub-focus" || mode=="r16-hits-browse") install_hooks.broker=&menu_api;
+    if(mode.starts_with("r8-party") || mode=="r24-party-native") { party_api.remove_member=party_remove_stub;install_hooks.broker=&party_api;install_hooks.lobby_fields=party_fields_stub; }
+    if(mode=="r24-visibility" || mode=="r5-broker" || mode=="r5-retail-lobby" || (mode=="r5b-views" || mode=="r20-browse-one") || mode.starts_with("r5-browse-") || mode=="r17-hub-focus" || mode=="r16-hits-browse") install_hooks.broker=&menu_api;
     if(mode=="r15-errors" || mode=="r16-hits-live" || mode.starts_with("r22-retry") || mode=="r23-empty-paging") install_hooks.broker=&menu_api15;
     if(mode.starts_with("r6-")) install_hooks.broker=&native_fixture::api;
     patch_transaction::hooks transaction_hooks;
@@ -750,6 +750,7 @@ int main(int argc,char** argv) {
     assert(texts["local_name"]==(mode=="name31" ? field_name(std::string(31,'a')) : mode=="blank-name" ? std::string("Player") : field_name("100??????openmenu bad")));
     if(mode=="r16-hits-live" || mode.starts_with("r22-retry")) { live_input_fixture::run();return 0; }
     if(mode=="r20-hub-select" || mode=="r22-hub-footer" || mode=="r23-footer-expanded") { live_input_fixture::hub_select();return 0; }
+    if(mode=="r24-party-native" || mode=="r24-visibility") { live_input_fixture::ab_native_controls(mode=="r24-visibility");return 0; }
     if(mode=="r23-empty-paging") { live_input_fixture::empty_paging();return 0; }
     if(mode=="r23-compact-footer") { live_input_fixture::compact_footer();return 0; }
     if(mode=="r19-pause-party" || mode=="r19-pause-party-native") {
@@ -769,7 +770,7 @@ int main(int argc,char** argv) {
     if(mode=="r9-history") { native_fixture::history_run(entry);return 0; }
     if(mode=="r9-anchor-capacity") { native_fixture::anchor_capacity_run(entry);return 0; }
     if(mode=="r6-lobby-new" || mode=="r6-lobby-load") { native_fixture::lobby_run(entry,mode=="r6-lobby-load");return 0; }
-    if(mode=="r5-broker" || mode=="r5-retail-lobby" || mode.starts_with("r5-browse-")) {
+    if(mode=="r24-visibility" || mode=="r5-broker" || mode=="r5-retail-lobby" || mode.starts_with("r5-browse-")) {
         broker_menu_tests(entry);
         if(mode=="r5-retail-lobby") broker_retail_lobby_tests(entry);
         return 0;
