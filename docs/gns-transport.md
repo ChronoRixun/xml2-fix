@@ -188,3 +188,30 @@ other survivors, so zero is normal in a two-player session. GNS game counters
 exclude native datagrams carried through the room connection.
 
 Transport-service opcodes0x0a/0x0f/0x10/0x11 stay live over a bound GNS link while gameplay is held. In particular0x0f is a native transport ACK, not an input record. Holding ACKs could deadlock both old reliable queues. The two-way regression verifies both drains and input-family0x02 delivery; one-way synthetic ACK progress alone is insufficient.
+
+These service frames bypass the output FIFO with UnreliableNoNagle before and
+after the switch, including the direct-send hook. A bound link that closes before
+switching logs `handoff-link-closed`, `handoff-outbound-overflow`, or
+`handoff-inbound-overflow`, with held/inbound counts and bytes before clearing
+them. It ends through the existing native loss handling. Native fallback cannot
+preserve the ordered stream after the adapter captured gameplay. The offline
+`scripts/test_transport_review.py --out <scratch>` regression executes the
+production send/close hooks against an invented socket sink and checks diagnostic
+cap wiring; the existing logger test verifies the capped helper's rate limit.
+
+An unadmitted peer's tagged native refusal stays on the native datagram lane of
+its unbound room tunnel. Enqueue success at `0x610f30` is not transmission:
+disconnecting the peer lets maintenance `0x60f0a0` retire its reliable queue before
+the next flush. The refusal now calls the guarded session peer-flush wrapper
+`0x610fe0` before clearing the peer's connected flag. The native fixture exercises
+both game port 5165 and a high local port, including the 23-byte refusal packet;
+the race depends on flush/retirement ordering rather than port equality.
+
+The host's reliable waiting-tunnel Quit notice uses ReliableNoNagle. Teardown
+drains those queued notices before destroying the P2P listener: closing that
+listener also destroys accepted children, including lingered connections. The
+shared wait is bounded at 1000 ms across all waiting peers; it checks pending and
+unacknowledged reliable bytes while GNS's backend progresses independently. A
+deadline or unavailable status is logged and teardown still completes. Deferred
+leave preserves linger explicitly after its scheduling arm is consumed. Ordinary
+unarmed Leave keeps its immediate close behavior.

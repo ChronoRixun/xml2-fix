@@ -111,7 +111,7 @@ namespace join_in_progress_rules
 
 	// Game functions and fields the bring-in uses (retail; verified by the guards below).
 	constexpr std::uint32_t session_getter = 0x612be0, first_node = 0x611160, record_index = 0x614210, manager_getter = 0x6097b0,
-		message_init = 0x615810, send_to = 0x610f30, peer_connection = 0x55d7e0, game_getter = 0x46dce0, pause_getter = 0x60c7e0,
+		message_init = 0x615810, send_to = 0x610f30, flush_peer = 0x610fe0, peer_connection = 0x55d7e0, game_getter = 0x46dce0, pause_getter = 0x60c7e0,
 		zone_type = 0x60b9d0, scheduler_getter = 0x60b210, task_add = 0x60af70, task_remove = 0x60afe0, image_sender = 0x607fb0,
 		set_image_done = 0x614420, game_alloc = 0x5606e0, game_free = 0x560700, zones_getter = 0x484990, zones_vtable = 0x68878c;
 	constexpr std::uint32_t mode_slot = 0x268, zones_loading_slot = 0x24;
@@ -189,7 +189,8 @@ namespace join_in_progress_rules
 	// 0x6141e0 supplies the separate participant name. The suffix call is cdecl.
 	constexpr std::uint32_t roster_hero_call = 0x5d95bd, roster_format = 0x5604f0;
 	inline constexpr std::array<unsigned char, 5> roster_hero_original{0xe8,0x2e,0x6f,0xf8,0xff};
-	inline constexpr std::array<guard, 98> guards{{
+	inline constexpr std::array<guard, 99> guards{{
+        {0x610fe0,"8b891c04000085c97405e951e9ffffc20400","session flush-one-peer wrapper; refusal output before peer retirement"},
 		{0x6106f0,"8a442404884119c20400", "native refusal marks the pending peer disconnected"},
 		{0x609970,"83ec1c5357", "late-admission policy before participant allocation"},
 		{0x614b05,"d940208b4828", "checksum raw actor transform observer"},

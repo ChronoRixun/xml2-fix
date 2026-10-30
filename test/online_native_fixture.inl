@@ -261,7 +261,10 @@ void run(const script_functions_rules::func_entry* registration) {
     auto back=*reinterpret_cast<int(__fastcall**)(void*,void*)>(0x69f688);back(child.data(),nullptr);
     assert(freed==freed_before+1 && !*reinterpret_cast<void**>(0xa3bc40+0x2250) && menu_hosts==host_count+1);
     screen("lc_online");tick(child.data(),nullptr);ticks+=2000;
-    begin();(*reinterpret_cast<tick_t*>(0x69f694))(child.data(),nullptr);std::strcpy(reinterpret_cast<char*>(0xa53058+0x3b6),"Loaded campaign");
+    assert(*reinterpret_cast<unsigned char*>(0xa53058+0x3e1)==1); // native release frees the save without clearing game-info
+    begin();script(0x49f8f0,1); // real SetGameType cannot clear it after cleanup released the image
+    assert(*reinterpret_cast<unsigned char*>(0xa53058+0x3e1)==0);
+    (*reinterpret_cast<tick_t*>(0x69f694))(child.data(),nullptr);std::strcpy(reinterpret_cast<char*>(0xa53058+0x3b6),"Loaded campaign");
     put(reinterpret_cast<void*>(0xa3bc40),0x2250,0x123400);script(0x49f9b0,4);action("text_inviteslots");
     screen("lc_host");allocate_ok=false;menu_complete=true;tick(child.data(),nullptr);allocate_ok=true;
     assert(menu_view().state==bm::phase::idle && !*reinterpret_cast<void**>(0xa3bc40+0x2250));
@@ -428,6 +431,7 @@ void lobby_run(const script_functions_rules::func_entry* registration,bool loade
     { const auto bytes=patch_transaction::bytes_of("8b442404c1");std::memcpy(reinterpret_cast<void*>(0x5d4d60),bytes.data(),bytes.size()); }
     auto activate=*reinterpret_cast<lobby_activate_t*>(0x69f284);activate(child.data(),nullptr,0);
     assert(published==1 && menu_view().state==bm::phase::room);
+    if(loaded) assert(texts["lc_campaign_summary"].starts_with("Saved campaign"));
     activate(child.data(),nullptr,0);assert(published==1 && menu_view().state==bm::phase::room);
     const auto healthy=menu_broker;menu_broker.disconnected("invented service loss",ticks);
     activate(child.data(),nullptr,0);assert(published==1 && menu_view().state==bm::phase::room);menu_broker=healthy;
@@ -444,6 +448,26 @@ void lobby_run(const script_functions_rules::func_entry* registration,bool loade
     focus_stub(child.data(),nullptr,"text_leaveroom",true);mask=0x10;host_tick(child.data(),nullptr);
     mask=0;post(intent::confirm_leave);host_tick(child.data(),nullptr);host_tick(child.data(),nullptr);
     assert(!current() && menu_view().state==bm::phase::idle && menu_leaves==1 && !*reinterpret_cast<void**>(0xa53058+0x78));
+    if(loaded) {
+        // Saved host -> native Leave -> fresh New host, in the same process.
+        // The selected image is gone, but retail release kept game-info +3d.
+        assert(*reinterpret_cast<unsigned char*>(0xa53058+0x3e1)==1);
+        mode=original_mode;restore_services();ticks+=2000;screen("lc_host");tick(child.data(),nullptr);post(intent::open_room);tick(child.data(),nullptr);
+        custom_close();screen("game_options");(*reinterpret_cast<lobby_activate_t*>(0x69f66c))(child.data(),nullptr,0);
+        script(0x49f8f0,1);script(0x49f9b0,3);
+        assert(*reinterpret_cast<unsigned char*>(0xa53058+0x3e1)==0);
+        (*reinterpret_cast<tick_t*>(0x69f694))(child.data(),nullptr);action("text_inviteslots");
+        screen("lc_host");menu_auth=menu_complete=true;tick(child.data(),nullptr);host_request();custom_close();
+        mode="r4-r6";setup_lobby(true);retail_restore(0x607c40);retail_restore(0x6097f0);redirect(0x5db270,lobby_pop);
+        { const auto bytes=patch_transaction::bytes_of("8b442404c1");std::memcpy(reinterpret_cast<void*>(0x5d4d60),bytes.data(),bytes.size()); }
+        activate=*reinterpret_cast<lobby_activate_t*>(0x69f284);activate(child.data(),nullptr,0);
+        host_tick=*reinterpret_cast<tick_t*>(0x69f2ac);mask=0;host_tick(child.data(),nullptr);
+        assert(published==2 && texts["lc_campaign_summary"].starts_with("New campaign"));
+        focus_stub(child.data(),nullptr,"text_leaveroom",true);mask=0x10;host_tick(child.data(),nullptr);
+        mask=0;post(intent::confirm_leave);host_tick(child.data(),nullptr);host_tick(child.data(),nullptr);
+        assert(!current() && menu_view().state==bm::phase::idle && menu_leaves==2);
+        std::cout<<"PASS Saved host -> Leave -> New host: fresh game-info and New campaign lobby summary\n";
+    }
     // Complete a fresh resolve through real discovery / native admission and
     // activate the real Join; Ready remains its native role-aware action.
     mode=original_mode;restore_services();screen("lc_online");tick(child.data(),nullptr);ticks+=2000;
@@ -464,7 +488,7 @@ void lobby_run(const script_functions_rules::func_entry* registration,bool loade
         child[0x196c]=1;mask=0x10;const auto before=announces;join_tick(child.data(),nullptr);
         assert(announces==before && current() && menu_view().state==bm::phase::room);mask=0;
     }
-    back(child.data(),nullptr);assert(!current() && menu_view().state==bm::phase::idle && menu_leaves==2);
+    back(child.data(),nullptr);assert(!current() && menu_view().state==bm::phase::idle && menu_leaves==(loaded ? 3u : 2u));
     std::cout<<"round6 lobby PASS "<<(loaded ? "load" : "new")<<" -> actual Host activation/publication/unready gate/native Leave -> actual discovery/admission/Join activation/Ready duplicate/Unready/Leave; broker and native cleanup\n";
     mode=original_mode;
 }

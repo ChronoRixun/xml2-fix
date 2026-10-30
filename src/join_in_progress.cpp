@@ -627,13 +627,15 @@ namespace join_in_progress
 				at<std::uint16_t>(message, 8) = std::uint16_t(join_in_progress_core::started_refusal.size());
 				at<std::uint8_t>(message, 0xe) = 1;
 				at<std::uint8_t>(message, 0x10) = 0x1c;
-				const bool sent = fn<send_t>(send_to)(session(), fn<connection_t>(peer_connection)(peer), message, 0) != 0;
-				// Same as retail's refusal tail: mark this pending peer disconnected.
-				// The transport retains/drains the already queued reliable reply.
+				void* const native_session=session();
+				const bool queued = fn<send_t>(send_to)(native_session, fn<connection_t>(peer_connection)(peer), message, 0) != 0;
+				// Enqueue success alone is not transmission. Native maintenance
+				// can retire this peer (and its reliable queue) after +0x19 clears.
+				if(queued) fn<void(__thiscall*)(void*,void*)>(flush_peer)(native_session,peer);
 				fn<void(__thiscall*)(void*, int)>(0x6106f0)(peer, 0);
-				logger::write("online: LateJoinPolicyV1 refused after START before participant allocation; native 0x1c sent=%u", unsigned(sent));
+				logger::write_capped("late-refusal", "online: LateJoinPolicyV1 refused after START before participant allocation; native 0x1c queued=%u flush_requested=%u before disconnect", unsigned(queued),unsigned(queued));
 			} __except (EXCEPTION_EXECUTE_HANDLER) {
-				logger::write("online: late admission closed; refusal delivery unavailable");
+				logger::write_capped("late-refusal", "online: late admission closed; refusal delivery unavailable");
 			}
 			return true;
 		}

@@ -15,6 +15,12 @@ void write(const char* format,...) {
     std::vsnprintf(text,sizeof text,format,args);va_end(args);
     observed_jip_logs.emplace_back(text);
 }
+void write_capped(std::string_view,const char* format,...) {
+    // Capture the capped API too; log_test exercises its production rate gate.
+    char text[2048]{};va_list args;va_start(args,format);
+    std::vsnprintf(text,sizeof text,format,args);va_end(args);
+    observed_jip_logs.emplace_back(text);
+}
 void write_once(std::string_view,const char*,...) {}
 }
 namespace e4_observe {
@@ -69,6 +75,7 @@ void __fastcall add(void*,void*,void* record) { assert(join_in_progress::area_lo
 void __fastcall barrier(void*,void*,float) { ++barriers; }
 #include "join_in_progress_gamespy.inl"
 #include "join_in_progress_checksum.inl"
+#include "join_in_progress_refusal_transport.inl"
 }
 int main(int argc,char** argv) {
     SetUnhandledExceptionFilter([](EXCEPTION_POINTERS* error)->LONG {
@@ -85,6 +92,7 @@ int main(int argc,char** argv) {
     for(unsigned i=0;i<word(pe+6);++i) { const auto at=sections+40*i;std::memcpy(reinterpret_cast<void*>(0x400000+dword(at+12)),image.data()+dword(at+20),dword(at+16)); }
     using namespace join_in_progress_rules;
     if(argc==3) {
+        if(std::string_view(argv[2])=="refusal-transport") { refusal_transport_fixture::run();return 0; }
         if(std::string_view(argv[2])=="checksum") { checksum_fixture::run();return 0; }
         if(std::string_view(argv[2])=="send-set") { checksum_fixture::send_set_run();return 0; }
         if(std::string_view(argv[2])=="admission") { checksum_fixture::admission_run();return 0; }

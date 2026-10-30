@@ -202,8 +202,16 @@ namespace gns_transport
 				if (at<std::uint8_t*>(node, node_object) == peer) return true;
 			return false;
 		}
-		void close(link& l, const char* why, bool linger)
+		void close(link& l, const char* why, bool linger, const char* failure = "handoff-link-closed")
 		{
+			if (!l.closed && l.bound && !l.switched)
+			{
+				// New gameplay has already been captured here. Reopening native
+				// output would lose those frames or reorder it around the held FIFO.
+				l.gone_why = failure;
+				logger::write("online: GNS handoff failed [%s] for %s (%s): held=%zu / %zu bytes, inbound=%zu / %zu bytes; link ended, native loss handling retained; no native fallback",
+				              failure, text(l.address, l.port).c_str(), why, l.out.pending(), l.out.pending_bytes(), l.in.size(), l.in.bytes());
+			}
 			if (l.connection != k_HSteamNetConnection_Invalid)
 			{
 				if (l.tunnel) online_room::set_transport_bound(l.connection, false);
@@ -227,10 +235,10 @@ namespace gns_transport
 			if (listener != k_HSteamListenSocket_Invalid) sockets()->CloseListenSocket(listener);
 			listener = k_HSteamListenSocket_Invalid;
 		}
-		bool send_now(link& l, const std::vector<std::uint8_t>& payload, bool reliable)
+		bool send_now(link& l, const std::vector<std::uint8_t>& payload, bool reliable, bool no_nagle = false)
 		{
 			const auto r = sockets()->SendMessageToConnection(l.connection, payload.data(), std::uint32_t(payload.size()),
-			                                                  reliable ? k_nSteamNetworkingSend_Reliable : k_nSteamNetworkingSend_Unreliable, nullptr);
+			                                                  reliable ? k_nSteamNetworkingSend_Reliable : no_nagle ? k_nSteamNetworkingSend_UnreliableNoNagle : k_nSteamNetworkingSend_Unreliable, nullptr);
 			if (r == k_EResultOK) { ++l.sent; l.sent_bytes += payload.size(); return true; }
 			if (r != k_EResultLimitExceeded) logger::write_once("gns-send-failed", "online: GNS send to %s failed (EResult %d)", text(l.address, l.port).c_str(), int(r));
 			return false;
@@ -600,7 +608,7 @@ namespace gns_transport
 			if (!l.in.push(std::move(msg)) && !l.overflow)
 			{
 				l.overflow = true;
-				close(l, "its receive queue is full (a handler deferred for too long)", false);
+				close(l, "its receive queue is full (a handler deferred for too long)", false, "handoff-inbound-overflow");
 			}
 		}
 
@@ -1378,7 +1386,7 @@ namespace gns_transport
 		if (!header[0xe] && gns_transport_core::handoff_lane(l->bound,l->switched,opcode)==gns_transport_core::outbound_lane::service) {
 			message control;control.opcode=opcode;
 			if(length)control.body.assign(at<const std::uint8_t*>(header,0),at<const std::uint8_t*>(header,0)+length);
-			send(*l,gns_transport_core::frame(control),false);
+			send_now(*l,gns_transport_core::frame(control),false,true);
 			return 1;
 		}
 		if (!l->switched && !l->handoff_logged) {
@@ -1387,7 +1395,7 @@ namespace gns_transport
 		}
 		if (rare(opcode)) logger::write_capped("gns-trace", "online: GNS trace: queued 0x%02x in the %s task", unsigned(opcode), context);
 		if (!l->out.enqueue(opcode,header[0xe]!=0,header[0xf]!=0,at<const std::uint8_t*>(header,0),length))
-			close(*l,"its outbound queue exceeded 2 MiB",false);
+			close(*l,"its outbound queue limit was exceeded",false,"handoff-outbound-overflow");
 		return 1;
 	}
 	int __stdcall direct(void* manager, const std::uint8_t* address, std::uint32_t port, std::uint8_t* header)
@@ -1404,8 +1412,10 @@ namespace gns_transport
 			const auto length = body_length(header);
 			if (length) m.body.assign(at<const std::uint8_t*>(header, 0), at<const std::uint8_t*>(header, 0) + length);
 			if (gns_transport_core::handoff_lane(l->bound,l->switched,m.opcode)==gns_transport_core::outbound_lane::held) {
-				if (!l->out.enqueue(m.opcode,false,false,m.body.data(),m.body.size())) close(*l,"its handoff queue exceeded 2 MiB",false);
-			} else send(*l, gns_transport_core::frame(m), false);
+				if (!l->out.enqueue(m.opcode,false,false,m.body.data(),m.body.size())) close(*l,"its handoff queue limit was exceeded",false,"handoff-outbound-overflow");
+			} else if (gns_transport_core::handoff_lane(l->bound,l->switched,m.opcode)==gns_transport_core::outbound_lane::service)
+				send_now(*l, gns_transport_core::frame(m), false, true);
+			else send(*l, gns_transport_core::frame(m), false);
 			return 1;
 		}
 		return -1;
@@ -1445,7 +1455,7 @@ namespace gns_transport
 				diagnostic_read(manager + 0xa, &period, sizeof period) &&
 				diagnostic_read(manager + 0x10, &checksum_state, sizeof checksum_state) &&
 				diagnostic_read(lockstep_frame, &current, sizeof current);
-			logger::write("online: native self-drop checksum context: manager=0x%08X readable=%u state=%u next=%u period=%u current=%u; arbitration may follow checksum OR input-frame mismatch",
+			logger::write_capped("gns-drop-context", "online: native self-drop checksum context: manager=0x%08X readable=%u state=%u next=%u period=%u current=%u; arbitration may follow checksum OR input-frame mismatch",
 				unsigned(manager), unsigned(valid), unsigned(checksum_state), unsigned(next), unsigned(period), unsigned(current));
 			// Bounded participant lookup, independent of the lists' iterator fields.
 			std::uint32_t records[4]{}, flags[4]{}; char names[4][32]{};
@@ -1463,7 +1473,7 @@ namespace gns_transport
 			}
 			for (unsigned index = 0; index < 4; ++index) {
 				const auto head = gns_transport_core::read_checksum_head(diagnostic_read, manager, index);
-				logger::write("online: native self-drop checksum head: index=%u record=0x%08X flags=0x%08X name=%s count=%u readable=%u present=%u frame=%u hash=0x%08X",
+				logger::write_capped("gns-drop-head", "online: native self-drop checksum head: index=%u record=0x%08X flags=0x%08X name=%s count=%u readable=%u present=%u frame=%u hash=0x%08X",
 					index, unsigned(records[index]), unsigned(flags[index]), names[index], unsigned(head.count), unsigned(head.readable), unsigned(head.present), unsigned(head.frame), unsigned(head.hash));
 			}
 		}
@@ -1472,7 +1482,7 @@ namespace gns_transport
             __try { parent=gns_transport_core::self_drop_parent(frame,8); }
             __except(EXCEPTION_EXECUTE_HANDLER) { }
             const char* name=parent==0x5f2867 ? "front-end exit" : parent==0x6149a7 ? "frame/checksum arbitration" : "other/unknown";
-            logger::write("online: native self-drop chain: role=%s target_index=%u upper return=0x%08X (%s) -> 0x6133a0 -> 0x611550; observation only",session_hosted_here() ? "host" : "guest",unsigned(frame[1]),unsigned(parent),name);
+            logger::write_capped("gns-drop-chain", "online: native self-drop chain: role=%s target_index=%u upper return=0x%08X (%s) -> 0x6133a0 -> 0x611550; observation only",session_hosted_here() ? "host" : "guest",unsigned(frame[1]),unsigned(parent),name);
 			if (parent == 0x6149a7) log_self_drop_checksums(session);
         }
 		void log_removal_stack()
@@ -1482,7 +1492,7 @@ namespace gns_transport
 			void* frames[12]{};
 			const auto count = CaptureStackBackTrace(0, 12, frames, nullptr);
 			for (unsigned short i = 0; i < count; ++i)
-				logger::write("online: native drop stack[%u]=0x%08X", unsigned(i), unsigned(reinterpret_cast<std::uintptr_t>(frames[i])));
+				logger::write_capped("gns-drop-stack", "online: native drop stack[%u]=0x%08X", unsigned(i), unsigned(reinterpret_cast<std::uintptr_t>(frames[i])));
 		}
 	}
 
@@ -1493,9 +1503,9 @@ namespace gns_transport
 		const auto notice = gns_transport_core::read_removal_notice(frame);
 		const auto index = static_cast<std::int32_t>(notice.index);
 		const auto lost_code = notice.lost;
-		// Rare lifecycle event, outside the capped per-packet trace. A healthy GNS
+		// Independent cap from the per-packet trace. A healthy GNS
 		// link alone cannot distinguish frame/checksum arbitration from voluntary teardown.
-		logger::write("online: native drop notice caller=0x%08X index=%d lost=0x%04X others=0x%04X flag=%u own=%u",
+		logger::write_capped("gns-drop-notice", "online: native drop notice caller=0x%08X index=%d lost=0x%04X others=0x%04X flag=%u own=%u",
 			unsigned(notice.caller), int(index), unsigned(lost_code), unsigned(notice.others), unsigned(notice.flag), unsigned(own_removal));
 		log_removal_stack();
         if (!own_removal && index>=0 && index<4 && notice.caller==0x6133ce) log_self_drop_parent(session,frame);
