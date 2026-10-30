@@ -267,3 +267,19 @@ registry export/compare).
 
 Captures stay outside the repositories; V compares 05-lobby with the approved PNG (badges, long names, missing values,
 relay variant).
+
+### Waiting-roster refresh
+
+A new room connection resets the report/table send pacers so the new member gets
+current facts on the next room tick. Native participant facts can map to their
+authenticated virtual-address tunnel before the game link binds; this preserves
+native Ready facts for late joiners. A fresh host table may supply display indices
+and Ready phase for rows absent from a waiting guest's native session. These
+presentation indices never set native admission, ready authority, or Kick rights;
+a known local native Ready flag still overrides remote claims.
+
+The native campaign-running flag at session `+0x44c` keeps Playing stable while
+in-zone shared input pauses. Loading and a late joiner's waiting state take
+precedence; lobby setup by itself still cannot claim Playing. In-session Party
+cards for unbound remote participants remain pending, retaining the existing
+bound-link requirement for Kick even though their native Ready facts are known.

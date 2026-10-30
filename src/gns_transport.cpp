@@ -584,6 +584,11 @@ namespace gns_transport
 			message msg;
 			msg.opcode = p.opcode;
 			msg.reliable = (m->m_nFlags & k_nSteamNetworkingSend_Reliable) != 0;
+            // 060w: the dead-hero guest accepted 0x2b into the native reliable
+            // parser without a removal callback. Classify the host's explicit
+            // departure on its authenticated room tunnel before that queue.
+            if (l.tunnel && p.opcode==0x2b)
+                online_room::host_departure(l.connection,msg.reliable,p.opcode,p.body,p.length);
 			if (p.length) msg.body.assign(p.body, p.body + p.length);
 			++l.received;
 			if (rare(msg.opcode)) logger::write_capped("gns-trace", "online: GNS trace: received 0x%02x in the %s task", unsigned(msg.opcode), context);
@@ -1149,8 +1154,8 @@ namespace gns_transport
 			}
 		}
 
-		// The native removals of a participant that went quiet (the host's watchdog 0x613790 at 0x613adc, its lag-report
-		// vote 0x614810 via 0x6133a0; lost codes 0x10cc/0x10cd) are filtered at the entries of the notice 0x611550 and
+		// Native participant removals (the host's watchdog 0x613790 at 0x613adc, or frame/checksum
+		// arbitration 0x614810 via 0x6133a0; lost codes 0x10cc/0x10cd) are filtered at the entries of the notice 0x611550 and
 		// the removal 0x612c40: for a remote participant (never the host, index 0) with a bound link, in a running zone,
 		// the link is ended here and vanished_links removes it at the agreed frame (hand_over calls the same two
 		// functions with own_removal set). Not deferred: other reasons (leave, session teardown), loads, unbound links,
@@ -1405,6 +1410,51 @@ namespace gns_transport
 
 	namespace
 	{
+        bool session_hosted_here();
+		bool diagnostic_read(std::uintptr_t address, void* out, std::size_t size) {
+			__try { std::memcpy(out, reinterpret_cast<const void*>(address), size); return true; }
+			__except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+		}
+		void log_self_drop_checksums(void* session) {
+			// 0x614810 clears these lists AFTER 0x6133a0 returns, so the notice
+			// hook still sees the heads used for arbitration. No iterator writes.
+			constexpr std::uintptr_t manager = 0xa536d8;
+			std::uint16_t next = 0, period = 0, current = 0;
+			std::uint32_t checksum_state = 0;
+			const bool valid = diagnostic_read(manager + 8, &next, sizeof next) &&
+				diagnostic_read(manager + 0xa, &period, sizeof period) &&
+				diagnostic_read(manager + 0x10, &checksum_state, sizeof checksum_state) &&
+				diagnostic_read(lockstep_frame, &current, sizeof current);
+			logger::write("online: native self-drop checksum context: manager=0x%08X readable=%u state=%u next=%u period=%u current=%u; arbitration may follow checksum OR input-frame mismatch",
+				unsigned(manager), unsigned(valid), unsigned(checksum_state), unsigned(next), unsigned(period), unsigned(current));
+			// Bounded participant lookup, independent of the lists' iterator fields.
+			std::uint32_t records[4]{}, flags[4]{}; char names[4][32]{};
+			std::uint32_t node = 0;
+			diagnostic_read(reinterpret_cast<std::uintptr_t>(session) + session_first, &node, sizeof node);
+			for (unsigned n = 0; n < 4 && node; ++n) {
+				std::uint32_t record = 0, index = 4;
+				if (!diagnostic_read(node + node_record_at, &record, sizeof record) || !record) break;
+				if (diagnostic_read(record + record_index_at, &index, sizeof index) && index < 4) {
+					records[index] = record;
+					diagnostic_read(record + record_flags_at, &flags[index], sizeof flags[index]);
+					diagnostic_read(record + 0x40, names[index], sizeof names[index] - 1);
+				}
+				if (!diagnostic_read(node + node_next_at, &node, sizeof node)) break;
+			}
+			for (unsigned index = 0; index < 4; ++index) {
+				const auto head = gns_transport_core::read_checksum_head(diagnostic_read, manager, index);
+				logger::write("online: native self-drop checksum head: index=%u record=0x%08X flags=0x%08X name=%s count=%u readable=%u present=%u frame=%u hash=0x%08X",
+					index, unsigned(records[index]), unsigned(flags[index]), names[index], unsigned(head.count), unsigned(head.readable), unsigned(head.present), unsigned(head.frame), unsigned(head.hash));
+			}
+		}
+        void log_host_self_drop_parent(void* session, const std::uint32_t* frame) {
+            std::uint32_t parent=0;
+            __try { parent=gns_transport_core::self_drop_parent(frame,8); }
+            __except(EXCEPTION_EXECUTE_HANDLER) { }
+            const char* name=parent==0x5f2867 ? "front-end exit" : parent==0x6149a7 ? "frame/checksum arbitration" : "other/unknown";
+            logger::write("online: native host self-drop chain: upper return=0x%08X (%s) -> 0x6133a0 -> 0x611550; observation only",unsigned(parent),name);
+			if (parent == 0x6149a7) log_self_drop_checksums(session);
+        }
 		void log_removal_stack()
 		{
 			// Best-effort extra context: engine x86 frame omission can truncate this.
@@ -1424,10 +1474,11 @@ namespace gns_transport
 		const auto index = static_cast<std::int32_t>(notice.index);
 		const auto lost_code = notice.lost;
 		// Rare lifecycle event, outside the capped per-packet trace. A healthy GNS
-		// link alone cannot distinguish a checksum vote from voluntary teardown.
+		// link alone cannot distinguish frame/checksum arbitration from voluntary teardown.
 		logger::write("online: native drop notice caller=0x%08X index=%d lost=0x%04X others=0x%04X flag=%u own=%u",
 			unsigned(notice.caller), int(index), unsigned(lost_code), unsigned(notice.others), unsigned(notice.flag), unsigned(own_removal));
 		log_removal_stack();
+        if (!own_removal && index==0 && notice.caller==0x6133ce && session_hosted_here()) log_host_self_drop_parent(session,frame);
 		if (own_removal || !ready || lost_code != 0x10cc || index <= 0) return 0;
 		auto* record = record_of_index(session, index);
 		return record && defer_native_removal(session, record, "drop notice") ? 1 : 0;
@@ -1651,6 +1702,7 @@ namespace gns_transport
 				if (*reinterpret_cast<const std::uint32_t*>(s) != session_vtable || !s[session_set_up]) return false;
 				out.session = true;
 				out.hosting = s[session_host] != 0;
+                out.campaign_running = s[session_campaign_at] != 0;
 				const auto* zones = reinterpret_cast<const std::uint8_t*>(zones_static);
 				out.loading = *reinterpret_cast<const std::uint32_t*>(zones) == zones_vtable && (zones[zones_loading_at] & 3) != 0;
 				unsigned walked = 0;
@@ -1672,8 +1724,13 @@ namespace gns_transport
 					while (k < 31 && name[k]) { p.name[k] = name[k]; ++k; }
 					p.name[k] = 0;
 					auto* peer = *reinterpret_cast<std::uint8_t**>(r + record_peer_at);
-					if (!p.local && peer)
-						if (auto* l = by_peer(peer); l && l->tunnel && l->bound && !l->closed) p.connection = std::uint32_t(l->connection);
+                    if (!p.local && peer) {
+                        if (auto* l = by_peer(peer); l && l->tunnel && !l->closed) p.connection = std::uint32_t(l->connection);
+                        else {
+                            const auto address=ntohl(at<std::uint32_t>(peer,peer_address));
+                            if (online_room_core::is_virtual(address)) p.connection=std::uint32_t(online_room::connection_for(address));
+                        }
+                    }
 					const auto ring_now = ring(index);
 					p.ring = ring_now.ok;
 					p.next = ring_now.next;

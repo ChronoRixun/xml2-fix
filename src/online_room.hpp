@@ -41,7 +41,7 @@ namespace online_room
 	bool take_preset(online_browser_core::launch_preset& out);
 	bool refresh_due();
 	// Round 15 (presentation): milliseconds until the shared limiter/backoff lets a new request start (0 = now), and whether this
-	// joiner's connection to the host of its room has ended since it connected (latched until the room is left).
+	// joiner's host connection ended or sent its explicit native departure (latched until the room is left).
 	std::uint32_t retry_in_ms();
 	bool host_lost();
 	void guest_admitted(); // native admission, including a guest waiting for the next area
@@ -61,6 +61,9 @@ namespace online_room
 	// The connected P2P connection to the member at this virtual address (host byte order), or invalid.
 	HSteamNetConnection connection_for(std::uint32_t virtual_address);
 	bool owns(HSteamNetConnection connection);
+    // Called for a validated native message on a bound room tunnel, before
+    // native reliable queueing. Only the authenticated current host may signal.
+    bool host_departure(HSteamNetConnection connection, bool reliable, std::uint8_t opcode, const std::uint8_t* body, std::size_t size);
 	// The non-datagram messages that arrived on a room connection (the GNS transport's), oldest first; the caller
 	// releases them. Before the first true, only hello/hello_ack are retained.
 	void set_transport_bound(HSteamNetConnection connection, bool bound);

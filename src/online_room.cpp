@@ -661,6 +661,17 @@ namespace online_room
 		constexpr std::size_t tunnel_game_cap = 1024 * 1024, arrivals_cap = 256 * 1024, waiting_cap = 128 * 1024;
 
 		ISteamNetworkingSockets* sockets() { return SteamNetworkingSockets(); }
+        bool real_connection_info(HSteamNetConnection c, SteamNetConnectionInfo_t* out) { return sockets()->GetConnectionInfo(c,out); }
+        EResult real_connection_status(HSteamNetConnection c, SteamNetConnectionRealTimeStatus_t* out, int lanes, SteamNetConnectionRealTimeLaneStatus_t* lane) {
+            return sockets()->GetConnectionRealTimeStatus(c,out,lanes,lane);
+        }
+#ifdef XML2_ONLINE_ROOM_TEST_SEAMS
+        auto connection_info=&real_connection_info;
+        auto connection_status=&real_connection_status;
+#else
+        bool connection_info(HSteamNetConnection c, SteamNetConnectionInfo_t* out) { return real_connection_info(c,out); }
+        EResult connection_status(HSteamNetConnection c, SteamNetConnectionRealTimeStatus_t* out,int lanes,SteamNetConnectionRealTimeLaneStatus_t* lane) { return real_connection_status(c,out,lanes,lane); }
+#endif
 		bool real_set_certificate(const void* data, int size, SteamNetworkingErrMsg& error) { return sockets()->SetCertificate(data, size, error); }
 		// The one place a certificate reaches GNS. Production cannot reassign it; only the broker fixture, which defines
 		// XML2_ONLINE_ROOM_TEST_SEAMS before including this file, swaps it (real GNS refuses anything the project CA did not sign).
@@ -703,7 +714,7 @@ namespace online_room
 		const char* route(HSteamNetConnection c)
 		{
 			SteamNetConnectionInfo_t info{};
-			if (!sockets()->GetConnectionInfo(c, &info)) return "?";
+			if (!connection_info(c, &info)) return "?";
 			if (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) return "relay";
 			if (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Fast) return "direct (local)";
 			return "direct";
@@ -792,6 +803,29 @@ namespace online_room
 				arrivals.erase(arrivals.begin() + i);
 			}
 		}
+        bool session_bound();
+        bool relay_route_ok(tunnel& t, int flags) {
+            if (!relay_only || (flags & k_nSteamNetworkConnectionInfoFlags_Relayed)) return true;
+            // Native ICE may select a host/triggered pair even with the Relay
+            // candidate mask. Never expose that connection to the game.
+            logger::write("online: relay-only refused a non-TURN route to %s; direct fallback is disabled (check TURN allocation/client interfaces)",t.id.c_str());
+            online_status::error(st::error::internal,"Relay-only connection refused: TURN relay unavailable; direct fallback is disabled.");
+            // Refuse a new join promptly, but never tear down an established
+            // room/broker because one member (or a migrated route) was refused.
+            // Capture binding BEFORE drop() clears the offending tunnel's flag.
+            const bool pending_join=!hosting && !host_loss.admitted_session() && !session_bound();
+            drop(t,"relay-only requires TURN");t.attempts=3;
+            if (pending_join) client.refuse("relay_unavailable");
+
+            return false;
+        }
+        void relay_route_tick() {
+            if (!relay_only) return;
+            for (auto& t:tunnels) if (t->connected) {
+                SteamNetConnectionInfo_t info{};
+                relay_route_ok(*t,connection_info(t->connection,&info) ? info.m_nFlags : 0);
+            }
+        }
 		void forget(const std::string& id, const char* why)
 		{
 			for (std::size_t i = 0; i < tunnels.size(); ++i)
@@ -1397,7 +1431,7 @@ namespace online_room
 				if (!t->connected || now - t->reported < 10000) continue;
 				t->reported = now;
 				SteamNetConnectionRealTimeStatus_t st{};
-				sockets()->GetConnectionRealTimeStatus(t->connection, &st, 0, nullptr);
+				connection_status(t->connection, &st, 0, nullptr);
 				logger::write("online: connection to %s: route %s, ping %d ms, quality %.2f/%.2f, datagrams %llu out (%llu bytes) / %llu in (%llu bytes), %zu transport messages waiting, %llu dropped",
 				              t->id.c_str(), route(t->connection), st.m_nPing, st.m_flConnectionQualityLocal, st.m_flConnectionQualityRemote, t->datagrams_out, t->bytes_out,
 				              t->datagrams_in, t->bytes_in, t->game.size(), t->dropped);
@@ -1509,6 +1543,7 @@ namespace online_room
     }
     namespace {
         void party_connected(tunnel& t) {
+            report_pacer.reset();table_pacer.reset();
             party_core::key k{};
             t.party_connection = t.connection;
             t.removal_floor = report_sequence; // every report this PC sends on this connection is above it
@@ -1568,7 +1603,7 @@ namespace online_room
                 if (t->connected && now - t->party_sampled >= 1000) {
                     t->party_sampled = now;
                     SteamNetConnectionRealTimeStatus_t st{};
-                    const bool ok = sockets()->GetConnectionRealTimeStatus(t->connection, &st, 0, nullptr) == k_EResultOK;
+                    const bool ok = connection_status(t->connection, &st, 0, nullptr) == k_EResultOK;
                     t->party_rtt = ok && st.m_nPing >= 0 && st.m_nPing <= int(party_core::rtt_ceiling) ? st.m_nPing : -1;
                     const auto* how = route(t->connection);
                     t->party_route = std::strcmp(how, "relay") == 0 ? party_core::route::relay : how[0] == 'd' ? party_core::route::direct : party_core::route::unknown;
@@ -1595,6 +1630,7 @@ namespace online_room
             in.native_ready = local && local->ready;
             in.jip_pending = local && local->pending;
             in.loading = party_facts_ok && party_facts.loading;
+            in.campaign_running = party_facts_ok && party_facts.campaign_running;
             in.inputs_flowing = local && input_flow.flowing(lockstep, in_lockstep, now);
             const auto self_phase = party_core::local_phase(in);
             const int self_index = local ? local->index : -1;
@@ -2049,6 +2085,7 @@ namespace online_room
 				connect(t);
 			}
 		}
+        relay_route_tick();
 		for (auto& t : tunnels)
 		{
 			if (!t->connected) continue;
@@ -2111,11 +2148,12 @@ namespace online_room
 				drop(*t, "identity mismatch");
 				return true;
 			}
+            if (!relay_route_ok(*t,info->m_info.m_nFlags)) return true;
 			t->connected = true;
 			t->connected_at = room_clock();
 			party_connected(*t); // before poll() hands this connection's first party message to the model
 			SteamNetConnectionRealTimeStatus_t st{};
-			sockets()->GetConnectionRealTimeStatus(c, &st, 0, nullptr);
+			connection_status(c, &st, 0, nullptr);
 			logger::write("online: connected to %s (%s) in %lu ms - route %s, ping %d ms; the game reaches it at %s", t->id.c_str(), t->outgoing ? "outgoing" : "incoming",
 			              unsigned long(t->connected_at - t->started), route(c), st.m_nPing, core::dotted(t->address).c_str());
 			// A joiner reaching the host: the host's game now answers the games list's search through this connection.
@@ -2165,6 +2203,16 @@ namespace online_room
 		return t && t->connected ? t->connection : k_HSteamNetConnection_Invalid;
 	}
 	bool owns(HSteamNetConnection c) { return wanted && by_connection(c) != nullptr; }
+    bool host_departure(HSteamNetConnection c, bool reliable, std::uint8_t opcode, const std::uint8_t* body, std::size_t size) {
+        auto* t=by_connection(c);
+        // Keep the pinned host identity after broker-only closure, but never
+        // accept another member, a replaced connection, or a local host.
+        if (!wanted || hosting || client.view().state!=browser::phase::room || room_code.size()!=8 ||
+            !t || !t->connected || host_id.empty() || t->id!=host_id) return false;
+        if (!host_loss.departure_notice(true,t->transport_bound,reliable,opcode,body,size)) return false;
+        logger::write("online: authenticated host departure (native 0x2b) accepted before native queue; host-left feedback ready");
+        return true;
+    }
 	void set_transport_bound(HSteamNetConnection c, bool bound)
 	{
 		auto* t = by_connection(c);
@@ -2182,7 +2230,13 @@ namespace online_room
 		if (!room_ready || !party_model.is_open() || party_cards.empty() || room_code.size() != 8) return false;
 		std::memcpy(out.code, room_code.c_str(), 9);
 		std::vector<int> native_indices;
-		if (party_facts_ok) for (unsigned i = 0; i < party_facts.count && i < 4; ++i) native_indices.push_back(party_facts.participants[i].index);
+		if (party_facts_ok) for (unsigned i = 0; i < party_facts.count && i < 4; ++i) {
+            const auto& q=party_facts.participants[i];
+            const auto* t=by_connection(q.connection);
+            // In-zone Kick still requires a bound game link. Earlier native
+            // Ready mapping only improves presentation; it cannot enable Kick.
+            if (!party_facts.campaign_running || q.local || (t && t->connected && t->transport_bound)) native_indices.push_back(q.index);
+        }
 		const auto split = party_core::lobby_split(party_cards, native_indices.size(), party_model.roster_size(), &native_indices);
 		for (const auto* card : split.rows)
 		{

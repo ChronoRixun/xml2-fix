@@ -503,6 +503,58 @@ int main(int argc, char** argv)
 		check(notice_guarded && lost_guarded && gns_transport_rules::notice_resume == gns_transport_rules::native_drop_notice + 6 && gns_transport_rules::lost_resume == gns_transport_rules::native_lost + 6,
 		      "the removal filters' six entry bytes are the guarded retail bytes; each bridge resumes right after them");
 	}
+    {
+        const std::uint32_t frame[]{0x6133ce,0,0x10cc,0x1106,1,0,0,0x6149a7};
+        check(self_drop_parent(frame,8)==0x6149a7,"AB: host self-drop upper return survives FPO (frame/checksum arbitration caller)");
+        check(self_drop_parent(frame,7)==0 && self_drop_parent(nullptr,8)==0,"AB: short/unreadable self-drop stack has no invented parent");
+        auto other=std::vector<std::uint32_t>(std::begin(frame),std::end(frame));other[1]=1;
+        check(self_drop_parent(other.data(),other.size())==0,"AB: remote removal is not a host self-drop");
+        other[1]=0;other[7]=0x5f2867;
+        check(self_drop_parent(other.data(),other.size())==0x5f2867,"AB: host self-drop names front-end exit return");
+        other[0]=0x6129f5;
+        check(self_drop_parent(other.data(),other.size())==0,"AB: a direct notice caller is not attributed to the FPO helper");
+    }
+
+    {
+        // Invented native memory: four index-addressed lists with POD samples.
+        // The reader cannot write the image and faults are reported explicitly.
+        std::vector<std::uint8_t> memory(0x400);
+        auto put=[&](std::uint32_t address, const void* value, std::size_t size) {
+            std::memcpy(memory.data()+address-0x1000,value,size);
+        };
+        for (unsigned index=0; index<4; ++index) {
+            const std::uint32_t list=0x10f0+0x10*index, node=0x1200+0x20*index, sample=0x1300+0x10*index, count=1;
+            const std::uint16_t frame=321;
+            const std::uint32_t hash=index==0 ? 0x12345678u : 0x87654321u;
+            put(list,&node,4);put(list+0xc,&count,4);put(node+0x10,&sample,4);
+            put(sample,&frame,2);put(sample+4,&hash,4);
+        }
+        auto read=[&](std::uintptr_t address, void* value, std::size_t size) {
+            if (address<0x1000 || address>0x1400 || size>0x1400-address) return false;
+            std::memcpy(value,memory.data()+address-0x1000,size);return true;
+        };
+        const auto before=memory;
+        const auto local=read_checksum_head(read,0x1000,0), remote=read_checksum_head(read,0x1000,1);
+        check(local.present && remote.present && local.frame==321 && remote.frame==321 && local.hash==0x12345678 && remote.hash==0x87654321,
+              "AB follow-up: capture both differing same-frame hashes by sender index");
+        check(read_checksum_head(read,0x1000,2).hash==remote.hash && read_checksum_head(read,0x1000,3).hash==remote.hash,
+              "AB follow-up: all four checksum sender slots observed");
+        check(memory==before,"AB follow-up: observation does not advance or mutate native lists/samples");
+        const std::uint32_t zero=0;
+        put(0x1304,&zero,4);
+        const auto zero_hash=read_checksum_head(read,0x1000,0);
+        check(zero_hash.present && zero_hash.hash==0,"AB follow-up: zero hash is present, not an absent sample");
+        put(0x10fc,&zero,4);
+        const auto empty=read_checksum_head(read,0x1000,0);
+        check(empty.readable && !empty.present && !empty.count,"AB follow-up: empty list reads no stale head");
+        put(0x1100,&zero,4);
+        const auto broken=read_checksum_head(read,0x1000,1);
+        check(!broken.readable && !broken.present && broken.count==1,"AB follow-up: corrupt nonempty list is explicitly unreadable");
+        check(!read_checksum_head(read,0x1400,0).readable,"AB follow-up: unreadable manager is contained");
+        check(!read_checksum_head(read,0x1000,4).readable,"AB follow-up: invalid participant index never reads memory");
+        check(read_checksum_head(read,0x1000,2).present,"AB follow-up: a bad peer slot does not hide other peers");
+    }
+
 	std::printf("%d PASS / %d FAIL\n", passes, failures);
 	return failures ? 1 : 0;
 }

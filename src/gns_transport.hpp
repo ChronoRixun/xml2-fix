@@ -23,14 +23,14 @@ namespace gns_transport
 		bool local = false;           // record flags bit 0: this PC
 		bool ready = false;           // record flags bit 2 (0x614240)
 		bool pending = false;         // join_in_progress::pending_player: outside the lockstep until the next area
-		std::uint32_t connection = 0; // its bound room link
+		std::uint32_t connection = 0; // authenticated room tunnel; its game link may still be unbound
 		bool ring = false;            // its lockstep input ring was readable
 		std::uint16_t next = 0;       // the ring's next expected frame
 		char name[32]{};              // the native participant name (record +0x40, <= 31 bytes)
 	};
 	struct party_facts
 	{
-		bool session = false, hosting = false, loading = false;
+		bool session = false, hosting = false, loading = false, campaign_running = false;
 		unsigned count = 0;
 		party_participant participants[4];
 	};

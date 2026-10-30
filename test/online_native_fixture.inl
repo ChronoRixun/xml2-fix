@@ -607,7 +607,17 @@ void review_run(const script_functions_rules::func_entry* registration) {
         (*reinterpret_cast<lobby_activate_t*>(hosting ? 0x69f284 : 0x69f34c))(child.data(),nullptr,0);
         assert(menu_view().state==bm::phase::room && menu_leaves==0);
         std::cout<<"end fixture: activated native lobby\n";session_end_services(hosting);std::cout<<"end fixture: services ready\n";
-        if(original_mode=="r6-end-hostloss-pending-guest") {
+        if(original_mode=="r6-end-deadquit-host") {
+            // Native quit already sent 0x2b, then destroyed its transport;
+            // keyboard observes teardown without the terminal-clear wrapper.
+            put(reinterpret_cast<void*>(0xa53058),0x41c,0);
+            *reinterpret_cast<unsigned char*>(0xa53058+0x420)=0;
+            unsigned char keys[256]{};online_menus::keyboard(keys);
+            assert(leave_arms==1 && menu_leaves==1);
+            online_menus::keyboard(keys);assert(leave_arms==1 && menu_leaves==1);
+            std::cout<<"PASS terminal watcher preserves reliable quit notice with one arm/leave\n";return;
+        }
+        if(original_mode=="r6-end-hostloss-pending-guest" || original_mode=="r6-end-hostloss-zone-guest") {
             // 060s g4 18:23:08: only the local record, no native host link.
             // The host tunnel later ends with 5003 while the session/transport stay alive.
             remove_record(reinterpret_cast<void*>(0xa53058),nullptr,lobby_people[1].data(),false);
@@ -615,13 +625,36 @@ void review_run(const script_functions_rules::func_entry* registration) {
             remove_record(reinterpret_cast<void*>(0xa53058),nullptr,lobby_people[3].data(),false);
             put(reinterpret_cast<void*>(0xa53058),0x7c,0);
             *reinterpret_cast<unsigned char*>(0xa3bc40)=1;
+            if(original_mode=="r6-end-hostloss-zone-guest") {
+                *reinterpret_cast<unsigned char*>(0xa3bc40)=0;
+                *reinterpret_cast<unsigned char*>(0xa53058+0x44c)=1;
+            }
             host_loss_real=true;fixture_host_loss.reset();menu_admitted();fixture_host_loss.ended(false);
             assert(fixture_host_loss.lost());
             *reinterpret_cast<unsigned char*>(0x70b70d)=0;
-            (*reinterpret_cast<tick_t*>(0x69f374))(child.data(),nullptr);
+            if(original_mode=="r6-end-hostloss-zone-guest") {
+                unsigned char keys[256]{};online_menus::keyboard(keys);
+            } else (*reinterpret_cast<tick_t*>(0x69f374))(child.data(),nullptr);
             assert(end_dialogs==0 && calls.back()=="request:lc_online" && leave_arms==1);
+            if(original_mode=="r6-end-hostloss-zone-guest") {
+                // The normal watchdog finishes after the early panel request.
+                // Its late native local removal must stay behind that panel.
+                reinterpret_cast<void(__thiscall*)(void*,void*,int,int,int,bool)>(0x6133a0)(
+                    reinterpret_cast<void*>(0xa53058),lobby_people[0].data(),0x10cc,0x10cc,0x1107,false);
+                assert(end_dialogs==0);
+            }
             menu_leave_tick();restore_services();redirect(0x5d8920,manager_stub);redirect(0x48de40,seats_stub);
             screen("lc_online");tick(child.data(),nullptr);assert(vis("lc_hub_host_left") && !vis("lc_notice_removed"));
+            if(original_mode=="r6-end-hostloss-zone-guest") {
+                assert(!enabled_items["lc_hostleft_again"] && !enabled_items["lc_hostleft_back"]);
+                const auto before=calls.size();post(intent::host);tick(child.data(),nullptr);
+                post(intent::back);tick(child.data(),nullptr);
+                assert(calls.size()==before && vis("lc_hub_host_left"));
+                put(reinterpret_cast<void*>(0xa53058),0x41c,0);
+                *reinterpret_cast<unsigned char*>(0xa53058+0x420)=0;
+                unsigned char keys[256]{};online_menus::keyboard(keys);tick(child.data(),nullptr);
+                assert(enabled_items["lc_hostleft_again"] && enabled_items["lc_hostleft_back"]);
+            }
             std::cout<<"late guest host loss PASS: unbound tunnel, only local record, one leave, no native popup, Hub panel\n";
             return;
         }

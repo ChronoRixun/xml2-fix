@@ -714,6 +714,22 @@ namespace online_room_core
 		// exists. Its authenticated host tunnel still owns the admitted session.
 		void admitted() { admitted_ = true; }
 		void ended(bool transport_bound) { if ((transport_bound || admitted_) && !blocked_) lost_ = true; }
+        // The host's existing native 0x2b notice can arrive while its native
+        // reliable handler is delayed or no native host record exists. This
+        // explicit, authenticated signal is sufficient before that handler.
+        // A broker room notice alone never calls this method.
+        bool departure_notice(bool authenticated_host, bool transport_bound, bool reliable, std::uint8_t opcode,
+                              const std::uint8_t* body, std::size_t size) {
+            if (!authenticated_host || !reliable || opcode!=0x2b || !body || size!=12 ||
+                blocked_ || lost_ || (!transport_bound && !admitted_) || body[8]>1) return false;
+            const auto u32=[&](unsigned at) {
+                return std::uint32_t(body[at]) | (std::uint32_t(body[at+1])<<8) |
+                    (std::uint32_t(body[at+2])<<16) | (std::uint32_t(body[at+3])<<24);
+            };
+            const auto reason=u32(4);
+            if (u32(0)!=0 || (reason!=0x1106 && reason!=0x1107 && reason!=0x10cc)) return false;
+            lost_=true;return true;
+        }
 		void local_departure() { blocked_ = true; lost_ = false; }
 		void removed_by_host() { local_departure(); }
 		bool lost() const { return lost_; }

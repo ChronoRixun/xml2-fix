@@ -80,7 +80,7 @@ soon as this PC waits at its frame. A vanished host is left to the native watchd
 Every loss takes this path (rule 25 revision 4): a link ends here when GNS closes it, when another survivor's lost
 message names that participant while this PC still hears it (never the host, index 0), and - on the host - when
 the native session times it out. The native removals of a remote participant with a bound link in a running zone
-(lost codes 0x10cc/0x10cd: the watchdog 0x613790 at 0x613adc and the lag-report vote 0x614810 via 0x6133a0) are
+(lost codes 0x10cc/0x10cd: the watchdog 0x613790 at 0x613adc and frame/checksum arbitration 0x614810 via 0x6133a0) are
 filtered at the entries of the notice 0x611550 and the removal 0x612c40: the link is ended and `vanished_links`
 removes the player at the agreed frame (its own `hand_over` calls pass). Loads, other reasons (leave, session
 teardown), the host's record and a loss not handed over 20 s after it began keep the native path. Before (030c/030d,
@@ -141,5 +141,38 @@ removal logs its caller, record and reason. The best-effort stack can be truncat
 by the engine's x86 frame omission; the explicitly captured entry caller is still
 available. These rare lifecycle lines are outside the capped packet trace.
 Opcode `0x2b` is the native 12-byte participant-removal notice (`0x611550`), so its
-presence alone does not distinguish a network failure, checksum vote or session
+presence alone does not distinguish a network failure, frame/checksum arbitration or session
 teardown. The diagnostics do not suppress a reset, removal or checksum decision.
+
+### Host self-drop diagnostic
+
+For a native host notice naming its own index zero through the common helper,
+the diagnostic records the
+caller above the common `0x6133a0` helper. That helper omits a frame pointer, so a
+normal stack capture may stop inside the adapter. Its guarded entry stack puts
+the upper return at word seven of the `0x611550` entry frame. The diagnostic labels
+returns `0x5f2867` (front-end exit) and `0x6149a7` (frame/checksum arbitration), and retains
+an unknown return numerically. The read is exception-contained and changes no
+removal/filter decision. The next live reproduction must establish which path
+caused the unexplained self-drop.
+
+
+For return `0x6149a7`, the same notice hook also reads the native checksum
+manager `0xa536d8`: state, next frame, period and current simulation frame, then
+all four sender-indexed lists' counts and first sample frame/hash. Each line
+includes the native participant index, record, flags and name; `0x2e` queues by
+that sender index, including the local sample. `readable` and `present` distinguish
+a failed read, an empty list and a real zero hash. Reads are exception-contained;
+participant traversal and output are bounded to four slots. No iterator advances.
+The guarded `0x61499b..0x6149be` sequence proves that list clearing happens after
+the helper returns, so the notice precedes removal and retains the arbitration
+inputs. This uses the existing notice bridge, including when JoinInProgress is
+disabled; its checksum hold hooks are unchanged.
+
+Arbitration is reached after a same-frame checksum disagreement OR an input-frame
+mismatch (the latter tail-jumps from `0x606caa`). `0x6149a7` alone does not
+distinguish those triggers or valid selection from fallback. Two different
+nonzero hashes tied one-to-one can select index zero. Capture the per-index
+frames/hashes on both PCs to investigate actual divergence versus stale or
+misaligned samples/arbitration; the log does not declare the host at fault or
+change native selection/removal. Neither candidate call is a broker timeout.
