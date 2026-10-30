@@ -153,6 +153,46 @@ void __cdecl zone_start_entry_notice()
 	segment_reseed("the zone start (before the players are placed)");
 	if (late_restart && restart.armed) snapshot("zone start epoch");
 }
+// ---- follow-up 3: the camera anchor of the zone-loaded finish ------------------------------------------------------
+alignas(16) std::uint32_t camera_anchor_handles[8]{};
+std::uint32_t camera_anchor_table_at = hero_table; // what the loop at 0x4868f4 walks: retail, or the party copy
+void __cdecl select_camera_anchor_table()
+{
+	camera_anchor_table_at = hero_table;
+	if (!join_in_progress_core::camera_anchor_from_party(restart_reset_enabled, late_restart, restart.armed)) return;
+	__try
+	{
+		void* game = fn<getter_t>(game_getter)();
+		alignas(16) std::uint32_t list[16]{};
+		fn<void(__thiscall*)(void*, void*)>(at<std::uint32_t>(at<void*>(game, 0), game_party_list_slot))(game, list);
+		const auto count = list[party_list_count_at / 4];
+		std::memset(camera_anchor_handles, 0, sizeof camera_anchor_handles);
+		for (std::uint32_t i = 0; i < count && i < 4; ++i) camera_anchor_handles[i] = list[i];
+		if (!count || !camera_anchor_handles[0]) { logger::write("join in progress: canonical restart - the party list is empty at the zone start; the camera anchors as retail does"); return; }
+		camera_anchor_table_at = reinterpret_cast<std::uint32_t>(camera_anchor_handles);
+		logger::write("join in progress: canonical restart - the zone-start camera anchors on party slot 0 (handle %08x of %u) on every peer instead of this PC's controller 0",
+			camera_anchor_handles[0], count);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		camera_anchor_table_at = hero_table;
+		logger::write_once("jip:anchor-fault", "join in progress: the party list could not be read at the zone start - the camera anchors as retail does");
+	}
+}
+// In place of `mov ebx, 0x70b814` at 0x4868f4 (a CALL replacement of a 5-byte mov; EBX is the loop's table cursor):
+// the selection, then EBX = the chosen table. Every other register and the flags are preserved.
+__declspec(naked) void camera_anchor_table_bridge()
+{
+	__asm {
+		pushfd
+		pushad
+		call select_camera_anchor_table
+		popad
+		popfd
+		mov ebx, dword ptr [camera_anchor_table_at]
+		ret
+	}
+}
 std::uint32_t zone_load_entry_target_at = zone_load_entry_target, zone_start_entry_target_at = zone_start_entry_target; // mutable for the fixture only
 __declspec(naked) void zone_load_entry_bridge()
 {

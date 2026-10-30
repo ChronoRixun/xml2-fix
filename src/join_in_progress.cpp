@@ -1673,6 +1673,8 @@ namespace join_in_progress
 			writes.push_back({zone_load_entry_call, bytes(zone_load_entry_original), rel(0xe8, zone_load_entry_call, reinterpret_cast<const void*>(&zone_load_entry_bridge), 5)});
 			writes.push_back({zone_start_entry_call, bytes(zone_start_entry_original), rel(0xe8, zone_start_entry_call, reinterpret_cast<const void*>(&zone_start_entry_bridge), 5)});
 			if (probe_enabled) writes.push_back({draw_entry, bytes(draw_entry_original), rel(0xe9, draw_entry, reinterpret_cast<const void*>(&draw_trace_bridge), draw_entry_original.size())});
+			// Follow-up 3: the zone-start camera anchor (CALL replacement of the 5-byte table load).
+			writes.push_back({camera_anchor_table_load, bytes(camera_anchor_table_original), rel(0xe8, camera_anchor_table_load, reinterpret_cast<const void*>(&camera_anchor_table_bridge), 5)});
 		}
 		if (xml1_hook_transaction::apply(memory, writes, &safe))
 		{
@@ -1681,7 +1683,7 @@ namespace join_in_progress
 			gameplay_agreement::register_rule(gameplay_capabilities::join_in_progress_id, agreement_revision, join_in_progress_core::agreement_parameters, true);
 			logger::write("online: JoinInProgress installed (rule 26 revision 7); LateJoinPolicyV1 LateJoin=%u (%s); canonical cohort restart %s; solo spectators, host lifecycle and slow-player protection retained; host setup can change this admission policy",
 				unsigned(allow_late_join), allow_late_join ? "everyone reloads from the host's image at the next zone load" : "lobby START admission only",
-				restart_reset_enabled ? "on (pristine camera, zone-load and first-frame RNG epochs, AI brain ring)" : "OFF ([Dev] LateJoinRestartReset=0)");
+				restart_reset_enabled ? "on (pristine camera, zone-load and first-frame RNG epochs, AI brain ring, party-anchored zone-start camera)" : "OFF ([Dev] LateJoinRestartReset=0)");
 		}
 		else if (safe)
 			logger::write("online: [Online] JoinInProgress=1 transaction refused - Start Game stays stock; rule 26 not offered");

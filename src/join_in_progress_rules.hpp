@@ -238,7 +238,18 @@ namespace join_in_progress_rules
 		draw_wrapper_int_return_a = 0x5601fb, draw_wrapper_int_return_b = 0x56023f;
 	inline constexpr std::array<unsigned char, 6> draw_entry_original{0xff,0x05,0xb4,0xd8,0x7a,0x00};
 	constexpr std::uint32_t world_static = 0x778b70, world_ring_write = 0x808, world_ring_read = 0x80c, world_ring_free = 0x810, world_live = 0x834;
-	inline constexpr std::array<guard, 112> guards{{
+	// Follow-up 3 (live-060y-ae rerun): the zone-loaded finish anchors the camera init (vt+0x74 0x4458a0) on the FIRST
+	// resolved hero of the controller table 0x70b814 (0x4868f4..0x486924), and controller numbers are local to each PC:
+	// the host's controller 0 is its own hero, the joiner's controller 0 is the joiner's. At a lobby START every hero
+	// is stacked at the start point so the choice is moot; at a late restart the heroes stand at their image positions,
+	// so the magnet search (0x446030) and the eye run from different anchors (host yaw 22.6 deg, joiner 0.0, with the
+	// host's +0x74 already 0 before the restore). During a late restart the table base becomes a fix-owned copy of the
+	// party list (game vt+0x11c, lockstep order) on every peer; otherwise the retail table.
+	constexpr std::uint32_t camera_anchor_table_load = 0x4868f4, game_party_list_slot = 0x11c, party_list_count_at = 0x14;
+	inline constexpr std::array<unsigned char, 5> camera_anchor_table_original{0xbb,0x14,0xb8,0x70,0x00};
+	inline constexpr std::array<guard, 114> guards{{
+		{0x4868f4,"bb14b8700033f6eb038d490083fefc7e0783fe10", "zone-loaded finish: the camera anchor walks the controller hero table from slot 0"},
+		{0x486968,"e873eefbff8b10578bc8ff5274", "zone-loaded finish: camera vt+0x74 init with the first resolved hero"},
 		{0x484101,"808e2002000003e8d316fcff8b108bc8ff5204e8f7740d00", "CMap::LoadMap: loading bits, camera getter call, camera vt+4, clock getter"},
 		{0x4867f8,"535556578be9e88d0011008b106a018bc8ff5224e8cf74fe", "zone-loaded finish: prologue and its first call (CAutoMap getter) before players are placed"},
 		{0x522f70,"5633f65789b108c4000089b10cc4000089b110c4000033d2", "AI system free-ring init: write/read/free reset then 0..31 pushed"},

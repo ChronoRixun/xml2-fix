@@ -466,6 +466,13 @@ int main(int argc, char** argv)
 		auto guarded = [](std::uint32_t va) { return std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [&](const auto& g) { return g.va == va; }); };
 		check(guarded(0x484101) && guarded(0x4867f8) && guarded(0x522f70) && guarded(0x560090), "P1-P3: the zone-load sites, the ring init and the draw entry are guarded");
 	}
+	{
+		check(camera_anchor_from_party(true, true, true) && !camera_anchor_from_party(true, false, true) && !camera_anchor_from_party(true, true, false) && !camera_anchor_from_party(false, true, true),
+		      "follow-up 3: the zone-start camera anchors on the party list only during an armed late restart with the reset on");
+		check(std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [](const auto& g) { return g.va == 0x4868f4; }) &&
+		      std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [](const auto& g) { return g.va == 0x486968; }),
+		      "follow-up 3: the anchor table load and the camera vt+0x74 call are guarded");
+	}
 	std::printf("%d PASS / %d FAIL\n", passes, failures);
 	return failures ? 1 : 0;
 }

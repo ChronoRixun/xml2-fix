@@ -38,6 +38,22 @@ const void* draw_bridge_target=reinterpret_cast<const void*>(&join_in_progress::
 // `call dword ptr [draw_bridge_target]` is 6 bytes: the bridge's [esp] (the caller's return) is this function + 6.
 __declspec(naked) void draw_probe() { __asm { call dword ptr [draw_bridge_target]
                                              ret } }
+unsigned anchor_vtable[0x130/4]{};unsigned* anchor_game=anchor_vtable;unsigned party_calls=0;
+void* __cdecl anchor_game_get() { return &anchor_game; }
+void __fastcall anchor_party(void*,void*,void* list) { ++party_calls;put(list,0,0x3803u);put(list,4,0x3801u);put(list,8,0x3804u);put(list,0xc,0x3802u);put(list,0x14,4u); }
+const void* anchor_bridge_target=reinterpret_cast<const void*>(&join_in_progress::camera_anchor_table_bridge);
+unsigned anchor_ebx=0;
+// The site is `mov ebx, 0x70b814` replaced by a CALL: the bridge returns with EBX set; the thunk keeps the C++ caller's EBX.
+__declspec(naked) void anchor_probe() {
+    __asm {
+        push ebx
+        mov ebx, 0deadbeefh
+        call dword ptr [anchor_bridge_target]
+        mov dword ptr [anchor_ebx], ebx
+        pop ebx
+        ret
+    }
+}
 const void* stamp_bridge_target=reinterpret_cast<const void*>(&join_in_progress::prepare_opcode_bridge);
 std::uint32_t stamp_return=0;
 unsigned char stamp_frame[0x40]{};unsigned stamp_eax=0;
@@ -196,6 +212,17 @@ void run() {
     join_in_progress::flush_draws("fixture");
     assert(fixture_trace.pending()==0);
     join_in_progress::probe_enabled=false;join_in_progress::draws=nullptr;
+    // Follow-up 3: the camera anchor table. Not a late restart: the retail controller table. Armed late restart: a copy
+    // of the party list (game vt+0x11c, lockstep order) on every peer; the fake game's list is read through the bridge.
+    redirect(game_getter,anchor_game_get);anchor_vtable[game_party_list_slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&anchor_party));
+    join_in_progress::late_restart=false;join_in_progress::restart.disarm();
+    anchor_probe();assert(anchor_ebx==hero_table && party_calls==0);
+    join_in_progress::late_restart=true;join_in_progress::restart.arm();
+    anchor_probe();
+    assert(party_calls==1 && anchor_ebx==unsigned(reinterpret_cast<std::uintptr_t>(join_in_progress::camera_anchor_handles)));
+    assert(join_in_progress::camera_anchor_handles[0]==0x3803u && join_in_progress::camera_anchor_handles[1]==0x3801u && join_in_progress::camera_anchor_handles[3]==0x3802u && join_in_progress::camera_anchor_handles[4]==0);
+    join_in_progress::late_restart=false;join_in_progress::restart.disarm();
+    anchor_probe();assert(anchor_ebx==hero_table && party_calls==1);
     std::cout<<"PASS canonical restart: construction image taken through the bridge, restored only for a late-join cohort restart (lobby START epoch and foreign vtable refused), retail 0x560150 reseeds the synchronized stream once at frame 0 through the frame-gate bridge, 0x47 stamp bridge entered by JUMP writes opcode 0x47 and tail 0/marker with no other byte touched, a given-up added seat is dropped natively (codes 0x10ce/0x10cf) and a pending one is not\n";
 }
 }

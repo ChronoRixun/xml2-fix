@@ -301,6 +301,8 @@ namespace join_in_progress_core
 		unsigned segment_reseeds = 0;
 		bool should_reseed_segment() { if (!armed || reseeded) return false; ++segment_reseeds; return true; }
 	};
+	// Follow-up 3: the zone-start camera anchor comes from the party list only during an armed late restart.
+	inline bool camera_anchor_from_party(bool enabled, bool late_restart, bool armed) { return enabled && late_restart && armed; }
 	// P2: the AI brain free ring goes back to identity only on the stock pool (stage 0) and only when every brain is free.
 	inline bool brain_ring_reset_wanted(std::uint32_t stage, std::int32_t free_count, std::uint32_t controllers)
 	{
