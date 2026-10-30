@@ -380,4 +380,55 @@ void run() {
     }
     std::cout<<"PASS canonical restart: construction image taken through the bridge, restored only for a late-join cohort restart (lobby START epoch and foreign vtable refused), retail 0x560150 reseeds the synchronized stream once at frame 0 through the frame-gate bridge, 0x47 stamp bridge entered by JUMP writes opcode 0x47 and tail 0/marker with no other byte touched, a given-up added seat is dropped natively (codes 0x10ce/0x10cf) and a pending one is not\n";
 }
+// Follow-up 8 (live round 5): xml1_turrets installs its scheduler dispatch hook at the timed-event manager's pump slot
+// (vt+0xc, 0x68de20) BEFORE join_in_progress; a 16-byte vtable guard refused the whole install. This mode installs a
+// stand-in of that hook first (the mapped vtable slot := a dispatcher that counts and tail-calls retail 0x4b2d60, the
+// module's accessor reporting it), asserts the install check accepts it (and refuses a foreign pointer), rebuilds a
+// queue canonically and drains it THROUGH THE HOOKED PUMP (the retail pump fires, frees and pops every record).
+unsigned fixture_hook_pumps=0;
+void __fastcall fixture_pump(void* self,void* edx,float time) { ++fixture_hook_pumps;reinterpret_cast<void(__fastcall*)(void*,void*,float)>(static_cast<std::uintptr_t>(join_in_progress_rules::event_manager_pump))(self,edx,time); }
+void* __fastcall null_resolver(const unsigned*,void*) { return nullptr; }
+void run_turrets() {
+    using namespace join_in_progress_rules;
+    auto* slot=reinterpret_cast<unsigned*>(static_cast<std::uintptr_t>(event_manager_pump_slot));
+    assert(*slot==event_manager_pump && join_in_progress_rules::first_mismatch(reinterpret_cast<const std::uint8_t*>(0x400000))==nullptr);
+    // retail slot, no module hook: accepted
+    xml1_turrets::fixture_hook=0;assert(join_in_progress::event_pump_slot_ok());
+    // the turrets hook installed first (its install writes the slot and reports the pointer): accepted; the guards still match
+    const unsigned hook=unsigned(reinterpret_cast<std::uintptr_t>(&fixture_pump));
+    *slot=hook;xml1_turrets::fixture_hook=hook;
+    assert(join_in_progress::event_pump_slot_ok() && join_in_progress_rules::first_mismatch(reinterpret_cast<const std::uint8_t*>(0x400000))==nullptr);
+    // a foreign pointer in the slot (or the module reporting nothing while the slot is hooked): refused
+    xml1_turrets::fixture_hook=0;assert(!join_in_progress::event_pump_slot_ok());
+    *slot=0x12345678u;xml1_turrets::fixture_hook=hook;assert(!join_in_progress::event_pump_slot_ok());
+    *slot=hook;assert(join_in_progress::event_pump_slot_ok());
+    // a queue rebuilt canonically, then drained through the hooked pump: the dispatcher runs once, retail fires
+    // (owner resolver redirected to "gone": no-op fires), frees and pops everything.
+    std::memset(event_manager_image,0,sizeof event_manager_image);put(event_manager_image,0,event_manager_vtable);
+    unsigned char* body=event_manager_image+event_body_at;
+    reinterpret_cast<void(__thiscall*)(void*)>(static_cast<std::uintptr_t>(event_pool_init))(body);
+    join_in_progress::event_manager_at=unsigned(reinterpret_cast<std::uintptr_t>(event_manager_image));
+    join_in_progress::entity_of_handle_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_entity_of));
+    const auto add=[&](float time,unsigned handle,unsigned event) {
+        const auto index=reinterpret_cast<unsigned(__thiscall*)(void*)>(static_cast<std::uintptr_t>(event_record_alloc))(body);
+        unsigned char record[event_record_bytes]{};std::memcpy(record,&handle,4);std::memcpy(record+4,&event,4);
+        reinterpret_cast<void(__thiscall*)(void*,unsigned,const void*)>(static_cast<std::uintptr_t>(event_record_store))(body,index,record);
+        struct { float time;unsigned index; } pair{time,index};
+        reinterpret_cast<void(__thiscall*)(void*,const void*)>(static_cast<std::uintptr_t>(event_heap_push))(body+event_heap_at,&pair);
+    };
+    const unsigned e1=unsigned(reinterpret_cast<std::uintptr_t>(fake_entities[1]));
+    add(2.0f,0x1801,e1+0x320);add(2.0f,0x35ce,0x12345678);add(1.5f,0x1801,e1+0x328);add(2.0f,0x3802,unsigned(reinterpret_cast<std::uintptr_t>(fake_entities[2]))+0x320);
+    join_in_progress::late_restart=true;join_in_progress::restart.arm();join_in_progress::event_rebuilds=0;
+    join_in_progress::canonical_event_queue("fixture: turrets");
+    assert(join_in_progress::event_rebuilds==1 && *reinterpret_cast<unsigned*>(body+event_heap_count_at)==3 && *reinterpret_cast<unsigned*>(body+event_record_count_at)==3);
+    redirect(entity_of_handle,null_resolver); // retail 0x4199f0 resolves the owner through 0x4654b0: every fire is a no-op here
+    const auto pump=reinterpret_cast<void(__fastcall*)(void*,void*,float)>(static_cast<std::uintptr_t>(*slot));
+    pump(event_manager_image,nullptr,100.0f);
+    assert(fixture_hook_pumps==1 && *reinterpret_cast<unsigned*>(body+event_heap_count_at)==0 && *reinterpret_cast<unsigned*>(body+event_record_count_at)==0);
+    assert(*reinterpret_cast<unsigned*>(body+event_ring_count_at)==event_records && *reinterpret_cast<unsigned*>(body+event_used_bitmap_at)==0);
+    pump(event_manager_image,nullptr,100.0f);assert(fixture_hook_pumps==2 && *reinterpret_cast<unsigned*>(body+event_heap_count_at)==0); // empty: nothing to pop
+    *slot=event_manager_pump;xml1_turrets::fixture_hook=0;join_in_progress::late_restart=false;join_in_progress::restart.disarm();
+    join_in_progress::event_manager_at=event_manager_object;join_in_progress::entity_of_handle_at=entity_of_handle;
+    std::cout<<"PASS turrets composition: the xml1 turrets dispatch hook at the timed-event manager's pump slot is accepted by the JoinInProgress install check (retail accepted, a foreign pointer and an unreported hook refused), the retail guards still match, and a canonically rebuilt queue drains through the hooked pump (dispatcher ran, retail fired/freed/popped every record)\n";
+}
 }

@@ -16,6 +16,7 @@
 #include "log.hpp"
 #include "save_format.hpp"
 #include "xml1_hook_memory.hpp"
+#include "xml1_turrets.hpp"
 #include "xml1_hook_transaction.hpp"
 #include <algorithm>
 #include <atomic>
@@ -249,6 +250,7 @@ namespace join_in_progress
 		void release_smart_hold(const char* why); // follow-up 5 (join_in_progress_residue.inl): the dormant-entity respawn resumes
 		void probe_frame_camera(); void camera_lines(bool arm); void probe_think(unsigned frame); // follow-up 6 (residue): the probe's per-frame camera / think lines 1..60
 		void canonical_event_queue(const char* where); void fpu_canonical(const char* where); void probe_events(const char* where); void probe_camera_dump(unsigned frame); std::uint16_t x87_control_word(); // follow-up 7 (residue)
+		bool event_pump_slot_ok(); // follow-up 8 (residue): the pump slot is retail or the xml1 turrets hook
 		bool __cdecl campaign_start_notice()
 		{
 			if (epoch.active)
@@ -1629,6 +1631,14 @@ namespace join_in_progress
 			logger::write("online: [Online] JoinInProgress=1 refused - retail guard at 0x%06X (%s) differs; Start Game stays stock", unsigned(g->va), g->what);
 			return;
 		}
+		if (!event_pump_slot_ok())
+		{
+			logger::write("online: [Online] JoinInProgress=1 refused - the timed-event manager's pump slot 0x%06X holds %08x (neither retail 0x%06X nor the xml1 turrets dispatch hook %08x); Start Game stays stock",
+				unsigned(event_manager_pump_slot), probe_at<std::uint32_t>(event_manager_pump_slot), unsigned(event_manager_pump), xml1_turrets::installed_process_hook());
+			return;
+		}
+		if (const auto hook = xml1_turrets::installed_process_hook())
+			logger::write("online: JoinInProgress composes with the xml1 turrets scheduler dispatch hook at the timed-event manager's pump slot (%08x); the canonical queue rebuild never calls the pump (retail alloc/store/push only)", hook);
 		xml1_hook_transaction::memory memory;
 		bool safe = true;
 		std::vector<xml1_hook_transaction::patch> writes{

@@ -351,6 +351,9 @@ namespace join_in_progress_core
 	inline bool event_entry_dropped(const event_entry& e) { return e.token && !e.live; }
 	inline bool positive_entity_token(std::uint32_t handle) { return handle != 0 && (handle >> 31) == 0; }
 	inline bool event_queue_rebuild_wanted(bool enabled, bool late_restart, bool armed) { return enabled && late_restart && armed; }
+	// Follow-up 8: the manager's pump slot composes with the one module that hooks it (xml1_turrets): retail, or that
+	// module's installed hook (never 0, never anything else).
+	inline bool event_pump_slot_accepted(std::uint32_t slot, std::uint32_t native, std::uint32_t module_hook) { return slot == native || (module_hook != 0 && slot == module_hook); }
 	// P3: the synchronized-draw caller trace. The wrappers 0x560190 (tail jump), 0x5601b0 (call, returns 0x5601bd) and
 	// 0x5601e0 (call after push esi/edi, returns 0x5601fb or 0x56023f) are normalised to the code that asked for
 	// randomness: [sp] is the return address at 0x560090 entry, sp[1] / sp[3] the outer frames.

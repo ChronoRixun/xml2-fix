@@ -468,6 +468,13 @@ __declspec(naked) void spawn_entry_bridge()
 // the retail pool init and the records and heap pairs are re-added through the retail alloc / store / push, so both
 // peers hold byte-identical queues for the same live set.
 std::uint32_t event_manager_at = event_manager_object, entity_of_handle_at = entity_of_handle; // mutable for the owned native fixture only
+// Follow-up 8: the pump slot (vt+0xc) is accepted when it holds retail 0x4b2d60 or the dispatch hook xml1_turrets
+// installed there before this module. The rebuild and the probe never call the pump (alloc / store / push / reads).
+bool event_pump_slot_ok()
+{
+	__try { return join_in_progress_core::event_pump_slot_accepted(at<std::uint32_t>(reinterpret_cast<const void*>(event_manager_pump_slot), 0), event_manager_pump, xml1_turrets::installed_process_hook()); }
+	__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
 unsigned event_rebuilds = 0, event_last_live = 0, event_last_dead = 0;
 std::uint32_t event_index_mask()
 {

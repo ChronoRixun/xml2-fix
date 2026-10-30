@@ -141,6 +141,10 @@ namespace join_in_progress_rules
 	constexpr std::uint32_t event_body_at = 4, event_record_bytes = 24, event_records = 0x465, event_used_bitmap_at = 0x6978, event_ring_at = 0x6a08,
 		event_ring_write_at = 0x7ba0, event_ring_read_at = 0x7ba4, event_ring_count_at = 0x7ba8, event_alloc_bitmap_at = 0x7bac, event_record_count_at = 0x7c3c,
 		event_heap_at = 0x7c40, event_heap_count_at = 0x9f6c, event_body_bytes = 0x9f70;
+	// vt+0xc is the pump 0x4b2d60; src/xml1_turrets.cpp installs its scheduler dispatch hook THERE before this module
+	// (exports.cpp order), so the slot is accepted when it holds retail or that module's installed hook (follow-up 8;
+	// round 5: the 16-byte vtable guard refused the whole install on every boot with Game.Xml1Turrets on).
+	constexpr std::uint32_t event_manager_pump = 0x4b2d60, event_manager_pump_slot = event_manager_vtable + 0xc;
 	constexpr std::uint16_t game_x87_control_word = 0x027f; // the CRT's _PC_53 at 0x6729f6; the D3D8 device is created with FPU_PRESERVE (det_math.hpp)
 	constexpr std::uint32_t game_mxcsr = 0x1f80;            // Windows' default; nothing in XMen2.exe or the Alchemy DLLs loads MXCSR (scripts/fpu_sites.py)
 	// Host alone: the host menu's Start Game (0x5bacd0) refuses a room list of one; with rule 26 the host starts alone
@@ -408,7 +412,7 @@ namespace join_in_progress_rules
 		{0x5bae2e,"8b876c19000083780c027d48","host menu Start Game: refused with fewer than two players in the room list (dialog 0xffc)"},
 		{0x46dd0a,"b960997200","the game object is the static 0x729960 (party +0x14, seat binding +0x514/+0x524)"},
 		{0x4b2fc0,"8a0db4727600b80100000084c8752f8b","timed-event manager getter (static 0x75d340)"},
-		{0x68de14,"a02f4b00d02a4b00202b4b00602d4b00","timed-event manager vtable: dtor, reset 0x4b2ad0, add 0x4b2b20, pump 0x4b2d60"},
+		{0x68de14,"a02f4b00d02a4b00202b4b00","timed-event manager vtable: dtor, reset 0x4b2ad0, add 0x4b2b20 (vt+0xc, the pump, is checked at install: retail 0x4b2d60 or the xml1_turrets dispatch hook)"},
 		{0x4b2d70,"83ec08578bf98b876c9f000085c0744e538d9f407c000056eb06","timed-event pump: heap count body+0x9f6c, heap body+0x7c40"},
 		{0x4b2c10,"53568bf18b8ea47b00008d86086a0000578b3c888b","timed-event record alloc: ring read body+0x7ba4, ring body+0x6a08"},
 		{0x4b2b80,"8b442408568b742408578bf98d0c76508d14cf52","timed-event record store: 24-byte records at body+0"},

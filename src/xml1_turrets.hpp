@@ -8,6 +8,9 @@ namespace xml1_turrets {
 void register_ai_layout();
 void install(HMODULE game);
 bool requested();
+// The scheduler dispatch pointer this module installed at the timed-event manager vtable slot vt+0xc (0 when not
+// installed): a later module whose retail guard covers that slot composes with it (join_in_progress follow-up 8).
+std::uint32_t installed_process_hook();
 // Effective installed state for shared gameplay rule 4 (after install()).
 xml1_capability_rules::registration capability();
 }

@@ -431,3 +431,14 @@ frame-0 epoch and frames 1 and 2. Tool modes `--mode events` and
 `--mode camdump`; `--mode rng` now compares the actor's dense index, controller,
 think time and distance as well as the caller; `--mode cam` accepts the `t=`
 field.
+
+Follow-up 8 (live round 5): `xml1_turrets` installs its scheduler dispatch hook
+at the timed-event manager's pump slot (vt+0xc, `0x68de20`) before this module,
+so the vtable guard covers only slots 0..2 and the install checks the pump slot
+separately: retail `0x4b2d60` or `xml1_turrets::installed_process_hook()` are
+accepted (logged `JoinInProgress composes with the xml1 turrets scheduler
+dispatch hook ...`), anything else refuses the install. The rebuild and the
+probe never call the pump (retail pool init / alloc / store / push and reads
+only). `test/module_hook_sites.json` lists such slots for the guard scan's
+cross-module table; the native fixture mode `turrets` installs a stand-in of
+the hook first and drains a canonically rebuilt queue through it.

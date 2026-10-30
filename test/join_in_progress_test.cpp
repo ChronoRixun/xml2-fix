@@ -525,6 +525,10 @@ int main(int argc, char** argv)
 		for (const auto va : {0x4b2fc0u, 0x68de14u, 0x4b2d70u, 0x4b2c10u, 0x4b2b80u, 0x4b2c90u, 0x4b2a10u, 0x41a76bu, 0x41e440u, 0x4b2de0u})
 			check(std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [va](const auto& g) { return g.va == va; }), "follow-up 7: every timed-event site is guarded");
 		check(join_in_progress_rules::game_x87_control_word == 0x027f && join_in_progress_rules::game_mxcsr == 0x1f80, "follow-up 7: the canonical FPU control state is the game's (CRT _PC_53, Windows MXCSR)");
+		check(event_pump_slot_accepted(0x4b2d60, 0x4b2d60, 0) && event_pump_slot_accepted(0x4b2d60, 0x4b2d60, 0x50001000) && event_pump_slot_accepted(0x50001000, 0x4b2d60, 0x50001000)
+		      && !event_pump_slot_accepted(0x50001000, 0x4b2d60, 0) && !event_pump_slot_accepted(0x12345678, 0x4b2d60, 0x50001000) && !event_pump_slot_accepted(0, 0x4b2d60, 0),
+		      "follow-up 8: the pump slot composes with the xml1 turrets hook only (retail, or the module's reported hook)");
+		check(std::none_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [](const auto& g) { return g.va <= 0x68de20 && 0x68de20 < g.va + g.hex.size() / 2; }), "follow-up 8: no retail guard covers the hooked pump slot 0x68de20");
 	}
 	std::printf("%d PASS / %d FAIL\n", passes, failures);
 	return failures ? 1 : 0;
