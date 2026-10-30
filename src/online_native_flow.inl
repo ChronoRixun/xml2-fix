@@ -329,7 +329,7 @@ removal_frame removal_frame_read(std::uintptr_t frame,std::uintptr_t local_recor
     } __except(EXCEPTION_EXECUTE_HANDLER) { r={}; }
     return r;
 }
-void native_end_quietly(void* session,std::uintptr_t frame,const char* why) {
+bool native_end_quietly(void* session,std::uintptr_t frame,const char* why) {
     bool in_zone=false,quieted=false;
     __try {
         auto* bytes=static_cast<unsigned char*>(session);
@@ -345,7 +345,9 @@ void native_end_quietly(void* session,std::uintptr_t frame,const char* why) {
     }
     logger::write("online menus: %s - native %s%s",why,quieted ? "dialog suppressed" : "dialog left as is",
         in_zone ? (queued ? "; no takeover offer, back to the main menu (mainmenuexit 1)" : "; no takeover offer; main menu request refused") : "");
+    return in_zone;
 }
+bool host_left_teardown=false;
 void __fastcall native_session_cleared(void* session,void*,bool keep_local) {
     const auto serial=native_flow.serial;
     const auto frame=cleared_frame;cleared_frame=0;
@@ -358,6 +360,11 @@ void __fastcall native_session_cleared(void* session,void*,bool keep_local) {
     // removal do not. +421 is host authority, not the active-session byte +420.
     // Both callers are retail frames: nothing here may throw into them.
     try {
+        // Host loss can present the Hub before the watchdog reaches this
+        // terminal clear. Its later stock reason dialog stays behind the modal,
+        // even though native-flow ownership was already released at detection.
+        if(ready && session==at<void*>(0xa53058) && host_left_teardown && host_left_state.active && !keep_local && removal.removal)
+            native_end_quietly(session,frame,"late native host-loss teardown; the host-left panel stays visible");
         if(ready && session==at<void*>(0xa53058) && native_flow.serial==serial && native_flow.lobby_active &&
             !keep_local && !*reinterpret_cast<void**>(static_cast<unsigned char*>(session)+0x78)) {
             // A guest whose connection to the host ended: the 0.6 host-left panel waits for the Hub (never a takeover). The
@@ -405,6 +412,7 @@ __declspec(naked) void native_session_cleared_stub() {
 // The room is the broker's (state room), not only the native flow's: after Start Game the host's flow ownership is already
 // released (fix J live 08:28: lobby_active was clear at the quit), the room is not.
 void native_session_watch() {
+    if(host_left_teardown && (native_transport_gone() || native_session_transport_cleared())) host_left_teardown=false;
     const bool lobby=native_flow.lobby_active && (native_flow.phase==native_phase::host || native_flow.phase==native_phase::guest);
     const bool room=broker_live() && broker_view().state==broker::phase::room;
     if(!lobby && !room) return;
@@ -416,7 +424,11 @@ void native_session_watch() {
         const bool removed=broker_calls.removed_by_host && broker_calls.removed_by_host();
         if(!removed && !removed_notice) {
             host_left_state.raise();
-            native_end_quietly(at<void*>(0xa53058),0,"the admitted guest lost its host; the Hub shows the host-left panel");
+            host_left_teardown=native_end_quietly(at<void*>(0xa53058),0,"the admitted guest lost its host; the Hub shows the host-left panel");
+            // The native watchdog/console exit can take seconds after GNS
+            // already authenticated this loss. Present the existing modal now;
+            // native teardown continues, and its main-menu return reopens it.
+            if(host_left_teardown) hub_return.request();
             native_flow_cancel();
             native_session_leave();
             return;
@@ -435,8 +447,14 @@ void native_session_watch() {
     if(guest && !removed_notice && broker_calls.host_lost) { try { if(broker_calls.host_lost()) host_left_state.raise(); } catch(...) { } }
     native_flow.touched=false;
     try { native_flow_cancel(); } catch(...) { logger::write("online menus: native session end: ownership cleanup failed"); }
-    // The transport is gone: no tick will run a deferred leave, so the room is left now (the quit notices already went out).
-    try { if(broker_live() && broker_calls.leave) broker_calls.leave();resolve_edit=0;resolve_ticket={}; }
+    // No native tick remains to flush, but the last tick already handed its
+    // quit notice to GNS. Arm reliable linger, then finish immediately: an
+    // unarmed leave discards that notice (060w dead-hero Pause Quit).
+    try {
+        native_session_leave();
+        if(broker_live() && broker_calls.leave) broker_calls.leave();
+        resolve_edit=0;resolve_ticket={};
+    }
     catch(...) { logger::write("online menus: native session end: room leave failed"); }
 }
 bool native_request(const char* name) {

@@ -584,6 +584,11 @@ namespace gns_transport
 			message msg;
 			msg.opcode = p.opcode;
 			msg.reliable = (m->m_nFlags & k_nSteamNetworkingSend_Reliable) != 0;
+            // 060w: the dead-hero guest accepted 0x2b into the native reliable
+            // parser without a removal callback. Classify the host's explicit
+            // departure on its authenticated room tunnel before that queue.
+            if (l.tunnel && p.opcode==0x2b)
+                online_room::host_departure(l.connection,msg.reliable,p.opcode,p.body,p.length);
 			if (p.length) msg.body.assign(p.body, p.body + p.length);
 			++l.received;
 			if (rare(msg.opcode)) logger::write_capped("gns-trace", "online: GNS trace: received 0x%02x in the %s task", unsigned(msg.opcode), context);

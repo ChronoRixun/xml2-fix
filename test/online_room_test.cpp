@@ -33,6 +33,44 @@ namespace
 
 int main()
 {
+    {
+        // 060w dead-hero quit: 0x2b reached the native reliable queue, but
+        // its removal handler did not run while the death panel owned input.
+        // Observe the authenticated explicit signal before native dispatch.
+        host_loss_tracker loss;loss.connected();loss.admitted();
+        gns_transport_core::message quit;quit.opcode=0x2b;quit.reliable=true;
+        quit.body=hex("000000000611000001000000"); // host index 0, 0x1106, flag 1
+        check(!loss.lost(), "host departure: broker room closure alone never raises host-left");
+        const bool told=loss.departure_notice(true,true,quit.reliable,quit.opcode,quit.body.data(),quit.body.size());
+        gns_transport_core::inbox inbound;check(inbound.push(quit),"host departure: native notice queued normally");
+        std::vector<gns_transport_core::message> native_pending;
+        inbound.drain([&](const auto& message){native_pending.push_back(message);return 0;});
+        check(told && loss.lost() && native_pending.size()==1,
+              "host departure: classified while native reliable notice still awaits its handler");
+        check(!loss.departure_notice(true,true,true,0x2b,quit.body.data(),quit.body.size()),"host departure: duplicate explicit notice is idempotent");
+        for(unsigned variant=0;variant<10;++variant) {
+            loss.reset();loss.admitted();auto body=quit.body;
+            bool host=true,bound=true,reliable=true;std::uint8_t opcode=0x2b;std::size_t size=body.size();
+            if(variant==0) host=false; // another member, direct peer, stale connection, or local hosting
+            if(variant==1) reliable=false;
+            if(variant==2) opcode=0x2c;
+            if(variant==3) body[0]=1; // this guest's native Kick is not the host's departure
+            if(variant==4) { body[4]=0xce;body[5]=0x10; } // Kick is not the host's departure
+            if(variant==5) --size;
+            if(variant==6) body.push_back(0),++size;
+            if(variant==7) body[8]=2;
+            if(variant==8) loss.local_departure();
+            if(variant==9) loss.removed_by_host(); // Kick then immediate host Quit
+            check(!loss.departure_notice(host,bound,reliable,opcode,body.data(),size) && !loss.lost(),
+                  "host departure: invalid/untrusted/blocked signal cannot classify host-left");
+        }
+        loss.reset();
+        check(!loss.departure_notice(true,false,true,0x2b,quit.body.data(),quit.body.size()) && !loss.lost(),"host departure: discovery without admission/binding stays outside");
+        loss.admitted();
+        check(loss.departure_notice(true,false,true,0x2b,quit.body.data(),quit.body.size()) && loss.lost(),"host departure: admitted late guest needs no native host record");
+        loss.reset();loss.admitted();
+        check(!loss.departure_notice(true,true,true,0x2b,nullptr,12) && !loss.lost(),"host departure: null body refused");
+    }
 	{
 		const std::string text = "foobar";
 		check(base64(reinterpret_cast<const std::uint8_t*>(text.data()), 6) == "Zm9vYmFy" && base64(reinterpret_cast<const std::uint8_t*>(text.data()), 4) == "Zm9vYg==" &&

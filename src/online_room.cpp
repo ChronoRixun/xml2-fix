@@ -2165,6 +2165,16 @@ namespace online_room
 		return t && t->connected ? t->connection : k_HSteamNetConnection_Invalid;
 	}
 	bool owns(HSteamNetConnection c) { return wanted && by_connection(c) != nullptr; }
+    bool host_departure(HSteamNetConnection c, bool reliable, std::uint8_t opcode, const std::uint8_t* body, std::size_t size) {
+        auto* t=by_connection(c);
+        // Keep the pinned host identity after broker-only closure, but never
+        // accept another member, a replaced connection, or a local host.
+        if (!wanted || hosting || client.view().state!=browser::phase::room || room_code.size()!=8 ||
+            !t || !t->connected || host_id.empty() || t->id!=host_id) return false;
+        if (!host_loss.departure_notice(true,t->transport_bound,reliable,opcode,body,size)) return false;
+        logger::write("online: authenticated host departure (native 0x2b) accepted before native queue; host-left feedback ready");
+        return true;
+    }
 	void set_transport_bound(HSteamNetConnection c, bool bound)
 	{
 		auto* t = by_connection(c);

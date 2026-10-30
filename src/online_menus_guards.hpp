@@ -15,6 +15,7 @@ inline constexpr script_functions_rules::guard guards[]{
     {0x005d5db0, "81eccc000000a1f8386f00535657898424d40000008b8424", "menu request thiscall frame"},
     {0x005d5e56, "8b8c24f800000083c4245f885e7f5e5be8f6c2090081c4cc000000c20800", "menu request ret8"},
     {0x005d5e2a, "8dbeb05d0800", "menu request publishes pending destination at manager +85db0"},
+    {0x005da985, "8b55008dbda8660800b9200000008d74240cf3a5", "menu transition stages destination at manager +866a8"},
     {0x005aaeb0, "518a54240280e2fc568bf1c644240400c64424050088542406e852da02008b10", "base tick thiscall frame"},
     {0x005aaf6d, "8b068bceff50205e59c3", "base tick return"},
     {0x005af5a0, "568bf18a560480e2fe578dbe24080000c7862403000000000000885604", "base close frame and active bit"},

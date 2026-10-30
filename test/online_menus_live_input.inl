@@ -141,6 +141,8 @@ void __fastcall footer_events(void* menu,void*,void* item,int type,int play,unsi
 }
 void hub_select() {
     setup();
+    const bool expanded=mode=="r23-footer-expanded";
+    if(expanded) mode="r22-hub-footer";
     for(const auto& pair:{std::pair{"normal","~84$MENU_ACCEPT Select"},std::pair{"hover","~80$MENU_ACCEPT Select"}}) {
         fitem source;source.menu="lc_online";source.name=std::string("lc_hub_select_")+pair.first;source.flags=0x24;
         items.push_back(std::move(source));auto& added=items.back();const int id=int(items.size());
@@ -151,6 +153,9 @@ void hub_select() {
     build_menu(hub.data(),"lc_online");
     auto& select=item_named("lc_online","desctext1");
     auto& back=item_named("lc_online","desctext2");
+    // Real authored Back already has its localized label before the first
+    // native refresh; do not seed the synthetic widget name as displayed text.
+    text_of(123,expanded ? "~84[Esc] Back" : "~84$MENU_BACK Back");put(back.mem.data(),0x9c,123);
     text_of(122,"~84$MENU_ACCEPT Select");put(select.mem.data(),0x9c,122);
     auto* row=item_named("lc_online","browse").mem.data();put(hub.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(row)));row[0x54]|=1;
     if(mode=="r22-hub-footer") { footer_fills.clear();redirect(0x5ae580,footer_events); }
@@ -174,15 +179,17 @@ void hub_select() {
         assert(*reinterpret_cast<void**>(hub.data()+0x324)==row);
         assert((select.mem[0x54]&0x21)==0x20 && (back.mem[0x54]&0x21)==0x20);
         assert(!footer_fills[select.mem.data()] && !footer_fills[back.mem.data()]);
-        text_of(123,"~84$MENU_BACK Back");put(back.mem.data(),0x9c,123);
+        const char* normal=expanded ? "~84[Esc] Back" : "~84$MENU_BACK Back";
+        const char* navy=expanded ? "~80[Esc] Back" : "~80$MENU_BACK Back";
+        text_of(123,normal);put(back.mem.data(),0x9c,123);
         ask_unit(mouse,hub.data(),100,15);assert(*reinterpret_cast<void**>(hub.data()+0x324)==row);
         assert(footer_fills[back.mem.data()] && !footer_fills[select.mem.data()]);
-        assert(texts["desctext2"]=="~80$MENU_BACK Back");
+        assert(texts["desctext2"]==navy);
         *reinterpret_cast<unsigned char*>(0xa09fa0)=0;
         ask_unit(mouse,hub.data(),100,15,0x202);
         assert(*reinterpret_cast<unsigned char*>(0xa09fa0)==1 && *reinterpret_cast<void**>(hub.data()+0x324)==row);
-        text_of(123,"~80$MENU_BACK Back");ask_unit(mouse,hub.data(),10,100);
-        assert(!footer_fills[back.mem.data()] && texts["desctext2"]=="~84$MENU_BACK Back");
+        text_of(123,navy);ask_unit(mouse,hub.data(),10,100);
+        assert(!footer_fills[back.mem.data()] && texts["desctext2"]==normal);
         auto* next=item_named("lc_online","host").mem.data();
         for(unsigned off:{0x5cu,0x60u,0x64u,0x68u}) {
             put(row,off,unsigned(reinterpret_cast<std::uintptr_t>(select.mem.data())));
@@ -193,6 +200,84 @@ void hub_select() {
         navigate(hub.data(),0,1);assert(*reinterpret_cast<void**>(hub.data()+0x324)==next);
     }
     std::cout<<"PASS Hub Select native hover: localized navy on amber, normal restored, native focus unchanged by color binding\n";
+}
+void empty_paging() {
+    setup("lc_browse");
+    item_named("lc_browse","code").name="prompt_refresh";
+    for(const char* name:{"scroll_up","scroll"}) {
+        auto copy=item_named("lc_browse","host");copy.name=name;copy.flags=8;
+        items.push_back(std::move(copy));
+    }
+    build_menu(hub.data(),"lc_browse");
+    const auto tick=*reinterpret_cast<tick_t*>(0x69e454);
+    auto* refresh=item_named("lc_browse","prompt_refresh").mem.data();
+    auto* back=item_named("lc_browse","desctext3").mem.data();
+    auto* up=item_named("lc_browse","scroll_up").mem.data();
+    auto* down=item_named("lc_browse","scroll").mem.data();
+    tick(hub.data(),nullptr);
+    menu_rows_json="-";menu_auth=menu_complete=true;tick(hub.data(),nullptr);
+    ticks+=2100;tick(hub.data(),nullptr); // Refresh's real lookup limiter has elapsed
+    // Feed the same native neighbour search used by keyboard and pad, with
+    // an invisible paging control between two drawn footer actions.
+    for(unsigned off:{0x5cu,0x60u,0x64u,0x68u}) {
+        put(refresh,off,unsigned(reinterpret_cast<std::uintptr_t>(up)));
+        put(up,off,unsigned(reinterpret_cast<std::uintptr_t>(down)));
+        put(down,off,unsigned(reinterpret_cast<std::uintptr_t>(back)));
+        put(back,off,unsigned(reinterpret_cast<std::uintptr_t>(refresh)));
+    }
+    for(auto step:{std::pair{-1,0},std::pair{0,1}}) {
+        *reinterpret_cast<void**>(hub.data()+0x324)=refresh;
+        navigate(hub.data(),step.first,step.second);
+        assert(*reinterpret_cast<void**>(hub.data()+0x324)==back);
+    }
+    *reinterpret_cast<void**>(hub.data()+0x324)=up;up[0x54]|=1;
+    tick(hub.data(),nullptr);
+    assert(*reinterpret_cast<void**>(hub.data()+0x324)==refresh && !(up[0x54]&1));
+    assert(menu_list());menu_rows_json.clear();menu_auth=menu_complete=true;tick(hub.data(),nullptr);
+    assert(menu_view().rows.size()==9 && (down[0x54]&8) && !(up[0x54]&8));
+    command_on(item_named("lc_browse","scroll"),124,23);
+    *reinterpret_cast<void**>(hub.data()+0x324)=down;accept_focused(hub.data());tick(hub.data(),nullptr);
+    assert(up[0x54]&8);
+    if(down[0x54]&8) { *reinterpret_cast<void**>(hub.data()+0x324)=down;accept_focused(hub.data());tick(hub.data(),nullptr); }
+    assert((up[0x54]&8) && !(down[0x54]&8));
+    std::cout<<"PASS empty Browse keyboard/pad skips invisible paging and repairs retained focus\n";
+}
+void compact_footer() {
+    for(const char* screen:{"lc_browse","lc_code"}) {
+        setup(screen);
+        const char* target=std::strcmp(screen,"lc_code")==0 ? "desctext2" : "desctext3";
+        for(auto pair:{std::pair{"normal","~84[Esc] Translated"},std::pair{"hover","~80[Esc] Translated"}}) {
+            auto source=item_named(screen,"host");source.name=std::string("lc_footer_back_")+pair.first;
+            source.flags=0x24;items.push_back(std::move(source));
+            auto& added=items.back();const int id=int(items.size());lay_out(added,id);
+            text_of(id,added.name.c_str());put(added.mem.data(),8,unsigned(id));
+            const int text_id=pair.first==std::string_view("normal") ? 120 : 121;
+            text_of(text_id,pair.second);put(added.mem.data(),0x9c,unsigned(text_id));
+        }
+        build_menu(hub.data(),screen);
+        auto& back=item_named(screen,target);
+        text_of(122,"~84[Esc] Translated");put(back.mem.data(),0x9c,122);
+        const auto tick=*reinterpret_cast<tick_t*>(0x69e454);
+        auto* other=item_named(screen,"host").mem.data();
+        const auto displayed=[&] { return std::string(reinterpret_cast<const char*(__thiscall*)(void*)>(item_vtable[0x7c/4])(back.mem.data())); };
+        put(hub.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(other)));
+        tick(hub.data(),nullptr);assert(displayed()=="~84[Esc] Translated");
+        put(hub.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(back.mem.data())));back.mem[0x54]|=1;
+        tick(hub.data(),nullptr);assert(displayed()=="~80[Esc] Translated");
+        put(hub.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(other)));back.mem[0x54]&=~1;
+        tick(hub.data(),nullptr);assert(displayed()=="~84[Esc] Translated");
+        const auto mouse=*reinterpret_cast<mouse_t*>(0x69e49c);
+        write_table_text(std::string("lc-online-hits/1\n")+screen+" "+target+" 84.8 5.2 129.6 25.8\n");
+        ask_unit(mouse,hub.data(),100,15);tick(hub.data(),nullptr);
+        assert(displayed()=="~80[Esc] Translated");
+        ask_unit(mouse,hub.data(),10,100);tick(hub.data(),nullptr);
+        // Compact footer hover commits native focus, which stays after mouse-out.
+        assert(displayed()=="~80[Esc] Translated");
+        put(hub.data(),0x324,unsigned(reinterpret_cast<std::uintptr_t>(other)));back.mem[0x54]&=~1;
+        tick(hub.data(),nullptr);
+        assert(displayed()=="~84[Esc] Translated");
+    }
+    std::cout<<"PASS Code Delete / Browse Back navy for native focus and hover; localized label retained\n";
 }
 void run() {
     const auto tick=*reinterpret_cast<tick_t*>(0x69e454);

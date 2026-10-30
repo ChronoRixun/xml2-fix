@@ -594,7 +594,20 @@ void removal() {
 }
 void run(const std::string& name) {
     auto& host=setup();
-    if(name=="load-stall") {
+    if(name=="native-host-departure") {
+        const std::array<std::uint8_t,12> body{0,0,0,0,6,0x11,0,0,1,0,0,0};
+        room::wanted=false;assert(!room::host_departure(123,true,0x2b,body.data(),body.size()));
+        room::wanted=true;close();assert(!room::host_lost()); // broker-only remains healthy
+        assert(!room::host_departure(999,true,0x2b,body.data(),body.size())); // stale or foreign connection
+        room::hosting=true;assert(!room::host_departure(123,true,0x2b,body.data(),body.size()));room::hosting=false;
+        host.connected=false;assert(!room::host_departure(123,true,0x2b,body.data(),body.size()));host.connected=true;
+        host.id="legends:3333333333333333";assert(!room::host_departure(123,true,0x2b,body.data(),body.size()));host.id=room::host_id;
+        assert(!room::host_lost());
+        assert(room::host_departure(123,true,0x2b,body.data(),body.size()) && room::host_lost());
+        assert(fake::delivered.empty() && host.connected); // no native removal/close required
+        assert(!room::host_departure(123,true,0x2b,body.data(),body.size()));
+        room::wanted=false;
+    } else if(name=="load-stall") {
         close();
         // Production inbox + receive poll: no traffic during a synchronous
         // five-second zone load, then a payload. Closure must not kill play.
@@ -662,7 +675,7 @@ void run(const std::string& name) {
 }
 void room_closed_offline(const std::string& only={}) {
     bool ran=false;
-    for(const char* name:{"load-stall","healthy","expiry","closure-removal","removal-closure","silent","recent","wrap","queued-removal","closed-removal","closed-batch-removal","guards"})
+    for(const char* name:{"native-host-departure","load-stall","healthy","expiry","closure-removal","removal-closure","silent","recent","wrap","queued-removal","closed-removal","closed-batch-removal","guards"})
         if(only.empty() || only==name) { closure_fixture::run(name);ran=true; }
     if(!ran) { std::cerr<<"unknown offline closure case\n";std::exit(2); }
 }

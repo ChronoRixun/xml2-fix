@@ -1906,3 +1906,45 @@ terminal drain also retains its existing 8192-message / 1 MiB gameplay-queue
 bounds: an extreme backlog can still discard a later removal and show host-left.
 Those forced orderings remain live re-checks; this follow-up does not claim to
 eliminate every Kick/quit race or prove delivery of an unreliable notice.
+# 060w follow-up: departure delivery and presentation
+
+Pause Quit with a dead host hero still queued and sent native opcode `0x2b`.
+The guest received it into the native reliable parser, but no native removal
+callback followed. The room now classifies that existing explicit native host
+departure before native queueing, only on its current authenticated host tunnel,
+for a bound/admitted guest. Broker closure alone cannot classify host-left;
+another member, stale connection, unreliable notice, Kick, and local departure
+are rejected. The exact downstream native queue/record condition remains a live
+investigation; classification no longer depends on that native callback.
+
+The session watcher also left the room immediately, without reliable linger,
+because the native transport was already destroyed. It now arms the existing
+flush/linger path and completes the leave immediately. This preserves GNS's
+already queued reliable notice without waiting for a native tick that cannot run.
+No wire format or broker-only host-loss inference changes.
+
+An admitted guest's authenticated host loss requests the existing Hub panel at
+classification time, while `mainmenuexit 1` finishes asynchronously. The panel's
+actions and engine rearm wait for the old native transport to end; the normal
+main-menu return still routes back to the panel. A late terminal native clear
+suppresses its stock reason dialog while the early panel owns that session end.
+A room-closed broker notice
+alone continues to leave established P2P play running.
+
+The early Advanced Options Esc diagnostic also observes the destination staged
+at manager `+0x866a8` while a transition is active. Retail `0x5dac00` consumes and
+clears the pending request before `0x5da8a0` stages that destination, leaving the
+old menu current during fade-out. A stale staged name with no transition does
+not produce a diagnostic.
+
+Footer recolouring accepts an already expanded Back token. Browse Back and Code
+Delete use hidden localized normal/hover sources from the companion LC builder,
+because native description refresh adds an explicit light palette prefix that
+overrides the focused text style. Empty Browse paging controls are disabled when
+no page exists and retained focus moves to a usable footer action. The native
+neighbour search itself does not use label content to determine availability.
+
+Native fixture modes: `r6-end-deadquit-host`, `r6-end-hostloss-zone-guest`,
+`r23-options-staged`, `r23-footer-expanded`, `r23-compact-footer`, and
+`r23-empty-paging`. The latter also preserves navigation when a nine-room list
+has another page. Live two-PC timing/draw checks remain necessary.
