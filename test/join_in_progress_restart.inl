@@ -1,8 +1,10 @@
 // AE: the canonical cohort restart against the mapped retail image (no launch): the pristine camera image is
-// taken by the construction bridge, restored before the native campaign start, and the real retail seed setter
-// (0x560150) runs at the first shared frame through the frame-gate bridge.
+// taken by the construction bridge, restored before the native campaign start, the real retail seed setter
+// (0x560150) runs at the first shared frame through the frame-gate bridge, the 0x47 stamp bridge is entered BY JUMP
+// exactly as installed, and a given-up seat is released through the native participant drop.
 namespace restart_fixture {
-unsigned constructor_calls=0,input_runs=0;void* input_run_this=nullptr;
+unsigned constructor_calls=0,input_runs=0,drops=0;void* input_run_this=nullptr;
+void* drop_session=nullptr;void* drop_record=nullptr;unsigned drop_codes[4]{};
 void __fastcall fake_constructor(void* self,void*,int) {
     ++constructor_calls;
     put(self,0,join_in_progress_rules::camera_vtable_value);
@@ -11,6 +13,9 @@ void __fastcall fake_constructor(void* self,void*,int) {
     put(self,0x2f8,0x3f490fdbu); // pitch 45 deg as the constructor stores it
 }
 void __fastcall fake_input_run(void* self,void*) { ++input_runs;input_run_this=self; }
+void __fastcall fake_drop(void* self,void*,void* record,unsigned a,unsigned b,unsigned c,unsigned d) {
+    ++drops;drop_session=self;drop_record=record;drop_codes[0]=a;drop_codes[1]=b;drop_codes[2]=c;drop_codes[3]=d;
+}
 // The getter's call site shape: `push 0; mov ecx,0x7171d0; call ctor` with a return into the getter.
 const void* construct_bridge_target=reinterpret_cast<const void*>(&join_in_progress::camera_construct_bridge);
 __declspec(naked) void call_through_bridge() {
@@ -21,25 +26,51 @@ __declspec(naked) void call_through_bridge() {
         ret
     }
 }
-__declspec(naked) void resume_stub() { __asm { ret } }
-unsigned char probe_opcode=0;unsigned short probe_marker=0;unsigned probe_eax=0;
+// The stamp bridge is installed as a JMP at 0x6095a5: it sees Start Game's ESP with no return address. The probe
+// builds that frame (0x40 bytes filled with 0xee), enters the bridge through a thunk that pops its own return
+// address (so the bridge sees exactly a JMP entry), and the bridge's resume (0x6095aa in retail) is redirected to a
+// stub that jumps back behind the thunk call.
 const void* stamp_bridge_target=reinterpret_cast<const void*>(&join_in_progress::prepare_opcode_bridge);
-// Start Game's frame at 0x6095a5: the body at [esp+0x18] (its tail bytes at +0x1e), the opcode byte at [esp+0x30].
+std::uint32_t stamp_return=0;
+unsigned char stamp_frame[0x40]{};unsigned stamp_eax=0;
+__declspec(naked) void resume_stub() { __asm { jmp dword ptr [stamp_return] } }
+__declspec(naked) void jump_thunk() {
+    __asm {
+        pop eax
+        mov dword ptr [stamp_return], eax
+        mov eax, 5a5aa5a5h
+        jmp dword ptr [stamp_bridge_target]
+    }
+}
 __declspec(naked) void stamp_probe() {
     __asm {
+        push esi
+        push edi
         sub esp, 40h
-        mov byte ptr [esp+30h], 0
-        mov word ptr [esp+1eh], 0eeeeh
-        mov eax, 5a5aa5a5h
-        call dword ptr [stamp_bridge_target]
-        mov dword ptr [probe_eax], eax
-        mov al, byte ptr [esp+30h]
-        mov byte ptr [probe_opcode], al
-        mov ax, word ptr [esp+1eh]
-        mov word ptr [probe_marker], ax
+        mov edi, esp
+        mov ecx, 10h
+        mov eax, 0eeeeeeeeh
+        rep stosd
+        call jump_thunk
+        mov dword ptr [stamp_eax], eax
+        mov esi, esp
+        lea edi, stamp_frame
+        mov ecx, 10h
+        rep movsd
         add esp, 40h
+        pop edi
+        pop esi
         ret
     }
+}
+void check_stamp(bool late) {
+    join_in_progress::late_restart_sending=late;
+    stamp_probe();
+    assert(stamp_eax==0x5a5aa5a5u); // EAX (the body pointer at the site) survives
+    assert(stamp_frame[0x30]==0x47); // the displaced opcode write, at the site's [esp+0x30]
+    unsigned short tail=0;std::memcpy(&tail,stamp_frame+0x1e,2);
+    assert(tail==(late ? join_in_progress_core::late_restart_marker : 0)); // the body's tail bytes [esp+0x1e..0x1f]
+    for(unsigned i=0;i<0x40;++i) if(i!=0x30 && i!=0x1e && i!=0x1f) assert(stamp_frame[i]==0xee); // nothing else touched
 }
 void run() {
     using namespace join_in_progress_rules;
@@ -68,7 +99,7 @@ void run() {
     join_in_progress::restore_camera("fixture: foreign vtable");
     assert(*reinterpret_cast<unsigned*>(camera)==0x12345678u && join_in_progress::restart.restores==1);
     put(camera,0,camera_vtable_value);
-    join_in_progress::epoch.active=false;
+    join_in_progress::epoch.active=false;join_in_progress::late_restart=false;
     // The first shared frame: the real retail 0x560150 runs from the mapped image. Not armed: nothing. Armed at a
     // nonzero frame (the old world still ticking): nothing. Armed at frame 0: seed 0x845fed, count 0, once.
     auto* seed=reinterpret_cast<unsigned*>(rng_seed);auto* count=reinterpret_cast<unsigned*>(rng_count);auto* frame=reinterpret_cast<unsigned short*>(native_frame);
@@ -82,7 +113,8 @@ void run() {
     assert(*seed==native_seed && *count==0 && !join_in_progress::restart.armed && join_in_progress::restart.reseeds==1);
     *seed=0x11111111u;*count=9;join_in_progress::frame_gate_reseed();
     assert(*seed==0x11111111u && *count==9); // once per epoch
-    // The frame-gate bridge itself: the native input-manager run is replaced by a counter; the thiscall this survives.
+    // The frame-gate bridge itself (installed as a CALL): the native input-manager run is replaced by a counter; the
+    // thiscall this survives and the bridge returns to its caller through the replaced run.
     join_in_progress::input_manager_run_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_input_run));
     join_in_progress::restart.arm();*frame=0;*seed=0x22222222u;*count=5;
     const auto bridge=reinterpret_cast<void(__fastcall*)(void*,void*)>(&join_in_progress::frame_gate_run_bridge);
@@ -90,14 +122,30 @@ void run() {
     assert(input_runs==1 && input_run_this==reinterpret_cast<void*>(0x1234) && *seed==native_seed && *count==0);
     bridge(reinterpret_cast<void*>(0x1234),nullptr);
     assert(input_runs==2 && *seed==native_seed);
-    // The 0x47 stamp bridge on a synthetic Start Game frame: the displaced opcode write lands at [esp+0x30], the two
-    // unused body bytes at [esp+0x1e] become 0 (lobby START) or the marker (late restart); EAX survives.
+    // The 0x47 stamp bridge, entered by JUMP exactly as installed, on Start Game's frame: opcode 0x47 at [esp+0x30],
+    // the tail bytes [esp+0x1e] 0 (lobby START) or the marker (late restart), every other byte untouched, EAX kept.
     join_in_progress::prepare_opcode_resume_at=unsigned(reinterpret_cast<std::uintptr_t>(&resume_stub));
-    join_in_progress::late_restart_sending=false;stamp_probe();
-    assert(probe_opcode==0x47 && probe_marker==0 && probe_eax==0x5a5aa5a5u);
-    join_in_progress::late_restart_sending=true;stamp_probe();
-    assert(probe_opcode==0x47 && probe_marker==join_in_progress_core::late_restart_marker && probe_eax==0x5a5aa5a5u);
+    check_stamp(false);check_stamp(true);check_stamp(false);
     join_in_progress::late_restart_sending=false;
-    std::cout<<"PASS canonical restart: construction image taken through the bridge, restored only for a late-join cohort restart (lobby START epoch and foreign vtable refused), 0x47 stamp 0/marker on a synthetic Start Game frame, retail 0x560150 reseeds the synchronized stream once at frame 0 through the frame-gate bridge\n";
+    // A seat given up after its native add is released through the native participant drop (redirected here): the
+    // add's wait outlives its limit while the record is still in the session; a pending seat (never added) is not.
+    redirect(session_getter,session);redirect(manager_getter,manager);redirect(participant_drop,fake_drop);
+    put(local,record_flags,1u);put(local,0x18,0);put(remote,0x18,1);put(remote,record_flags,0u);
+    put(s,0x26c,nodes[0]);put(s,0x278,2u);put(nodes[0],node_record,local);put(nodes[0],node_next,nodes[1]);put(nodes[1],node_record,remote);put(nodes[1],node_next,static_cast<void*>(nullptr));
+    auto& machine=join_in_progress::machine;machine.reset();machine.started=true;
+    assert(machine.defer_add(remote,1,false,GetTickCount()));
+    auto* seat=machine.find(remote);assert(seat && seat->at==join_in_progress_core::stage::pending);
+    seat->at=join_in_progress_core::stage::adding;seat->since=GetTickCount()-join_in_progress_core::add_limit_ms-1;
+    put(m,join_in_progress_rules::manager_wait,static_cast<unsigned char>(1)); // the add's wait is still on: give up
+    join_in_progress::area_load=false;
+    join_in_progress::advance(s,true,nullptr);
+    assert(!machine.find(remote) && drops==1 && drop_session==s && drop_record==remote);
+    assert(drop_codes[0]==drop_notice_code && drop_codes[1]==drop_removal_code && drop_codes[2]==drop_removal_code && drop_codes[3]==0);
+    // A pending seat whose record left is freed without a drop (nothing was added natively).
+    assert(machine.defer_add(remote,1,false,GetTickCount()));put(nodes[0],node_next,static_cast<void*>(nullptr));put(s,0x278,1u);
+    join_in_progress::advance(s,true,nullptr);
+    assert(!machine.find(remote) && drops==1);
+    machine.reset();
+    std::cout<<"PASS canonical restart: construction image taken through the bridge, restored only for a late-join cohort restart (lobby START epoch and foreign vtable refused), retail 0x560150 reseeds the synchronized stream once at frame 0 through the frame-gate bridge, 0x47 stamp bridge entered by JUMP writes opcode 0x47 and tail 0/marker with no other byte touched, a given-up added seat is dropped natively (codes 0x10ce/0x10cf) and a pending one is not\n";
 }
 }

@@ -92,6 +92,7 @@ namespace join_in_progress
 		using seat_binding_t = void(__thiscall*)(void*, std::int32_t, std::int32_t);
 		using name_text_t = const char*(__thiscall*)(const std::uint32_t*);
 		using seat_active_t = char(__thiscall*)(void*, std::int32_t);
+		using participant_drop_t = void(__thiscall*)(void*, void*, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t);
 
 		const join_in_progress_rules::guard* mismatch()
 		{
@@ -406,19 +407,21 @@ namespace join_in_progress
 				logger::write_once("jip:reseed-fault", "join in progress: the first-frame RNG reset faulted - disarmed");
 			}
 		}
-		// In place of `mov byte ptr [esp+0x30], 0x47` at 0x6095a5 inside Start Game (0x6094f0): the displaced write (one
-		// return address deeper), then the body's two unused tail bytes ([esp+0x1e] at the site) become the marker
-		// while the host restarts a running session for a late joiner, 0 otherwise. EAX is live (the body pointer).
+		// In place of `mov byte ptr [esp+0x30], 0x47` at 0x6095a5 inside Start Game (0x6094f0), entered by JMP (no return
+		// address: ESP is exactly the site's): the displaced opcode write, then the body's two unused tail bytes
+		// ([esp+0x1e] at the site, [esp+0x22] under the pushed EAX) become the marker while the host restarts a running
+		// session for a late joiner, 0 otherwise. EAX is live (the body pointer) and is preserved. live-060y-ae: the first
+		// build used CALL offsets here and sent opcode 0xa4 (stack residue), breaking every saved-campaign start.
 		std::uint32_t prepare_opcode_resume_at = prepare_opcode_resume; // mutable for the owned native fixture only
 		__declspec(naked) void prepare_opcode_bridge()
 		{
 			__asm {
-				mov byte ptr [esp+34h], 47h
+				mov byte ptr [esp+30h], 47h
 				push eax
 				movzx eax, byte ptr [late_restart_sending]
 				neg eax
 				and eax, 4a4ch
-				mov word ptr [esp+26h], ax
+				mov word ptr [esp+22h], ax
 				pop eax
 				jmp dword ptr [prepare_opcode_resume_at]
 			}
@@ -493,6 +496,13 @@ namespace join_in_progress
 			// Only the synchronous area boundary may admit a waiting player. The same
 			// all-loaded query also runs when Team Management opens (060s failure 3).
 			const bool pending_load = area_load;
+			// A seat given up after its native add (the add's wait, the image or the load outlived its limit) still has
+			// a participant with a controller slot and an activated hero; dropping it natively (the call the retail
+			// slow-player guard makes) frees the hero back to AI and tells the joiner (live-060y-ae: Wolverine stayed
+			// player-controlled for minutes after "did not complete the cohort restart at streaming").
+			struct release { const void* record; int index; };
+			std::array<release, 4> releases{};
+			std::size_t released = 0;
 			for (auto& seat : machine.seats)
 			{
 				if (seat.at == stage::free) continue;
@@ -542,15 +552,26 @@ namespace join_in_progress
                     }
 					break;
 				case action::send_image:
-					if (!start_image(s, seat)) { give_up(s, before); seat = {}; }
+					if (!start_image(s, seat)) { give_up(s, before); seat = {}; releases[released++] = {before.record, before.index}; }
 					break;
 				case action::send_start: finish_image(s, seat); break;
 				case action::finish:
 					logger::write("join in progress: player %d reached the shared start (%u ms after image completion)", seat.index, unsigned(now - before.since));
 					break;
-				case action::give_up: give_up(s, before); break;
+				case action::give_up:
+					give_up(s, before);
+					if (before.at != stage::pending) releases[released++] = {before.record, before.index};
+					break;
 				default: break;
 				}
+			}
+			for (std::size_t i = 0; i < released; ++i)
+			{
+				const auto& r = releases[i];
+				if (!listed(s, r.record) || (at<std::uint32_t>(r.record, record_flags) & flag_local)) continue;
+				e4_observe::native_call("jip:release seat", [&] {
+					fn<participant_drop_t>(participant_drop)(s, const_cast<void*>(r.record), drop_notice_code, drop_removal_code, drop_removal_code, 0); });
+				logger::write("join in progress: player %d's seat is free again - dropped from the session (native drop notice 0x%x, removal 0x%x) so its hero returns to AI; it can join again by code", r.index, unsigned(drop_notice_code), unsigned(drop_removal_code));
 			}
 		}
 

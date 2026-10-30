@@ -216,7 +216,11 @@ namespace join_in_progress_rules
 	// Receivers gate the canonical restart on that marker; one side alone never restores or reseeds.
 	constexpr std::uint32_t prepare_opcode_site = 0x6095a5, prepare_opcode_resume = 0x6095aa;
 	inline constexpr std::array<unsigned char, 5> prepare_opcode_original{0xc6,0x44,0x24,0x30,0x47};
-	inline constexpr std::array<guard, 106> guards{{
+	// The host's native participant drop (thiscall session; record, notice code, removal reason, code, 0): the retail
+	// slow-player guard's call (0x55933c) with the same codes. A seat given up after its native add is released with it.
+	constexpr std::uint32_t participant_drop = 0x6133a0, drop_notice_code = 0x10ce, drop_removal_code = 0x10cf;
+	inline constexpr std::array<guard, 107> guards{{
+		{0x6133a0,"568b74240885f6578bf974318bcee85d", "native participant drop: notice (index, codes) then the lost-participant removal"},
 		{0x60959a,"8d4c24188d4424106aff51c6442430478944242066c74424280800c644242e01", "0x47 prepare body (8 bytes, two unused tail bytes at body+6) and its opcode write at [esp+0x30]"},
 		{0x445804,"0905ac7671006a00b9d0717100c744240c00000000e8c2f1ffff", "camera singleton: guard bit 0x7176ac, this = 0x7171d0, the one-time constructor call"},
 		{0x4449e0,"83ec1053568bf1578d4e04c706c44c68", "camera constructor entry installs vtable 0x684cc4"},

@@ -324,6 +324,18 @@ The fix:
    lobby START; receivers gate the restore and the epoch arming on the marker,
    the host on its own `start_image`. `campaign_notice` logs which kind it saw.
 
+   The stamp bridge is entered by JUMP (no return address): the opcode write is at the
+   site's `[esp+0x30]` and the tail bytes at `[esp+0x1e]` (`[esp+0x22]` under the pushed
+   EAX). The first AE build used CALL offsets there and sent opcode 0xa4 for every
+   saved-campaign prepare (live-060y-ae); the fixture now enters the bridge by jump on a
+   patterned Start Game frame. The construction bridge (0x445819) and the frame-gate
+   bridge (0x606b98) are installed as CALLs and handle their return address.
+5. **A given-up seat is released.** When the add's wait, the image or the load outlives
+   its limit after the native add, the host drops that participant natively (0x6133a0
+   with the retail slow-player codes 0x10ce/0x10cf), so the hero returns to AI and the
+   joiner gets the stock drop notice and can join again; a never-added pending seat is
+   simply freed.
+
 Logs: `the game constructed its camera; pristine image kept`, `canonical
 restart - synchronized RNG epoch armed`, `canonical restart (<role>) - the
 camera is back at its constructed state ... (was yaw ... mode ...)`, `first
