@@ -280,3 +280,8 @@ interface. Native ICE uses an individually bound socket per local interface and
 matches TURN server and socket address families before allocation. Diagnosing a
 remaining allocation failure requires live transport evidence; the room must not
 silently present a direct connection as a successful relay-only session.
+
+
+Waiting admitted guests receive the host's existing reliable native departure (`0x2b`) on their authenticated, unbound room tunnel when the host ends its native session. Only the pinned host connection and the already validated host-left notice may classify that departure; other unbound game messages remain refused. Broker-only room closure still does not mean the host departed. Room connections use a 10,000 ms GNS connected receive timeout, matching the active session's native receive watchdog for a waiting guest with no bound host record.
+
+An authenticated host close with `relay-only requires TURN` before native admission stops connection retries and records `relay_unavailable`, whether or not GNS briefly reported Connected. The menu shows the builder's `lc_notice_relay` rather than waiting for the native discovery timeout. Regenerate LC menu assets together with this DLL to include that notice and the Party campaign summary.

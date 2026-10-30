@@ -270,11 +270,16 @@ void message(const char* text) { feedback=text; error_visible=true; }
 
 
 void* manager() { return at<getter>(0x5d8920)(); }
-void* current_peek() {
+void* current_published() {
     __try {
         auto* m=*reinterpret_cast<void**>(0x8aff18);
         if(!m || *static_cast<unsigned*>(m)!=0x6a236c) return nullptr;
-        auto* menu=*reinterpret_cast<void**>(static_cast<char*>(m)+0x86090);
+        return *reinterpret_cast<void**>(static_cast<char*>(m)+0x86090);
+    } __except(EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+}
+void* current_peek() {
+    __try {
+        auto* menu=current_published();
         return menu && (static_cast<unsigned char*>(menu)[4]&1) ? menu : nullptr;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
 }
@@ -694,11 +699,12 @@ int argument(void* args) {
         return at<int(__thiscall*)(void*)>(0x55d7e0)(value);
     } __except(EXCEPTION_EXECUTE_HANDLER) { return 0; }
 }
+bool party_expired_confirmation(int action);
 void* __cdecl handler(void* args) {
     if(ready) {
         auto* menu=current();
         const auto value=argument(args);
-        if(value!=int(intent::invalid_key) && live(menu)) pending.post(value,reinterpret_cast<std::uintptr_t>(menu),which(menu));
+        if(value!=int(intent::invalid_key) && live(menu) && !(which(menu)==screen::party && party_expired_confirmation(value))) pending.post(value,reinterpret_cast<std::uintptr_t>(menu),which(menu));
     }
     return nullptr;
 }
@@ -709,7 +715,7 @@ const script_functions_rules::func_entry registration{reinterpret_cast<const voi
 // otherwise Back/closure before the script executes could retarget an intent
 // to a different menu. No display/model text is accepted as command source.
 bool party_expired_confirmation(int action);
-void party_mouse_action(void* menu,void* chosen,int message);
+bool party_mouse_action(void* menu,void* chosen,int message);
 bool __fastcall queue(void* console,void*,const char* line) {
     // Only exact canonical integer commands are accepted at this boundary.
     // Model/name/clipboard text can never become a script or console command.
@@ -722,7 +728,10 @@ bool __fastcall queue(void* console,void*,const char* line) {
         if(std::strcmp(command,line)) continue;
         auto* menu=current();
         if(live(menu)) {
-            if(which(menu)==screen::party && party_expired_confirmation(pending.action)) pending.clear();
+            if(which(menu)==screen::party) {
+                if(!party_expired_confirmation(value)) pending.post(value,reinterpret_cast<std::uintptr_t>(menu),screen::party);
+                return true; // captured or stale: never replay a Party command in a later frame
+            }
             if(pending.action || pending.post(value,reinterpret_cast<std::uintptr_t>(menu),which(menu))) return true;
             if(value>=18 && value<=31) return true; // wrong-scope broker intent is discarded, never delayed
         }
@@ -947,7 +956,6 @@ void hide_error_scenes(void* menu,int shown=-1) {
 }
 std::uint32_t retry_wait_ms() { return broker_calls.retry_in ? broker_calls.retry_in() : 0; }
 bool host_public = false;
-std::optional<std::pair<std::uintptr_t,bool>> host_visibility_click;
 std::string browse_join_code; // a Browse join waiting for the broker client (browse_join_tick)
 std::uint64_t resolve_edit = 0;
 broker::ticket completed_list_ticket{};
@@ -1675,11 +1683,8 @@ void bind_lobby(void* menu,const lobby_view& view,bool valid) {
             // A guest's local selected-save pointer does not prove whether the host loaded a save.
             native_host_settings settings;
             if(native_host_read(settings)) {
-                static const char* const levels[]{"Easy","Normal","Hard"};
-                std::string line=settings.danger_room ? "Danger Room" : "Campaign";
-                if(!settings.danger_room && settings.difficulty>=0) line+=std::string(" - ")+levels[settings.difficulty];
-                // The host admission choice is not part of native discovered game info.
-                // Do not report this PC's future host policy as the remote host's.
+                std::string line=native_campaign_description(settings);
+                // Remote host policy is not present in discovered game info.
                 bind_text(menu,"lc_campaign_summary",line.c_str());
             }
         }
@@ -2491,23 +2496,30 @@ std::uint32_t __fastcall menu_mouse(void* menu,void*,int x,int y,int flags,int m
     if(scoped) trace_begin(menu,x,y,unsigned(message));
     void* chosen=nullptr;hits::view_point hit_point=hits::from_engine(x,y);
     if(scoped && !scoped_point(menu,x,y,rx,ry,false,&chosen,&hit_point)) { rx=x; ry=y; }
-    const auto result=at<mouse_fn>(0x5ae0a0)(menu,rx,ry,flags,message,extra);
-    if(chosen && which(menu)==screen::party && current_peek()==menu) party_mouse_action(menu,chosen,message);
-    if(chosen && which(menu)==screen::host && current_peek()==menu && chosen==item_try(menu,"visibility") &&
-        message==WM_LBUTTONUP && native_flow.phase==native_phase::idle && (!pending.action || pending.action==int(intent::visibility))) {
-        // Fixed chip positions in the authored scene: Private starts at 148,
-        // Public at 218 layout units. Mouse selects; keyboard/pad still toggle.
-        lobby_focus(menu,"visibility");
+    bool owned_click=false;
+    if(chosen && current_published()==menu && which(menu)==screen::party)
+        owned_click=party_mouse_action(menu,chosen,message);
+    if(chosen && current_published()==menu && which(menu)==screen::host && chosen==item_try(menu,"visibility") &&
+        native_flow.phase==native_phase::idle) {
         const bool private_chip=hit_point.x>=148.0f*0.8f && hit_point.x<(148.0f+65.0f)*0.8f;
         const bool public_chip=hit_point.x>=218.0f*0.8f && hit_point.x<(218.0f+59.0f)*0.8f;
-        if(private_chip || public_chip) host_visibility_click=std::pair{reinterpret_cast<std::uintptr_t>(menu),public_chip};
-        pending.post(int(intent::visibility),reinterpret_cast<std::uintptr_t>(menu),screen::host);
+        if(private_chip || public_chip) {
+            owned_click=message==WM_LBUTTONDOWN || message==WM_LBUTTONUP;
+            if(message==WM_LBUTTONUP) {
+                lobby_focus(menu,"visibility");
+                host_public=public_chip; // a chip selects immediately; keyboard/pad intent 21 toggles
+                if(hits_trace) logger::write("online menus: mouse selected host visibility %s",host_public ? "Public" : "Private");
+            }
+        }
     }
     if(chosen && which(menu)==screen::host && current_peek()==menu && chosen==item_try(menu,"drop_in") &&
         message==WM_LBUTTONUP && native_flow.phase==native_phase::idle && (!pending.action || pending.action==int(intent::drop_in))) {
         lobby_focus(menu,"drop_in");
         pending.post(int(intent::drop_in),reinterpret_cast<std::uintptr_t>(menu),screen::host);
     }
+    // Only one owner activates these authored controls. The native walk still
+    // updates hover/focus, but cannot enqueue another usecmd for this click.
+    const auto result=at<mouse_fn>(0x5ae0a0)(menu,rx,ry,flags,owned_click ? WM_MOUSEMOVE : message,extra);
     if(chosen && which(menu)==screen::browse && current_peek()==menu) {
         const auto name=engine_name(chosen);
         if(name.size()==8 && name.starts_with("room_") && name[5]>='0' && name[5]<'0'+int(browse_rows) && name[6]=='_') {
@@ -2560,7 +2572,7 @@ void show_notice(void* menu) {
         // Round 15: native discovery / admission refusal (with and without rule names) / service loss / timeout, clipboard.
         "lc_notice_discovery","lc_notice_refused","lc_notice_refusal_rules","lc_notice_service_lost","lc_notice_timeout","lc_notice_clipboard",
         // 0.6 preview fix E: the host removed this guest (its native Kick).
-        "lc_notice_removed","lc_notice_service_silent","lc_notice_started"};
+        "lc_notice_removed","lc_notice_service_silent","lc_notice_started","lc_notice_relay"};
     bool found=false;
     for(const auto* item:notices) {
         const bool selected=error_visible && feedback==item;
@@ -2602,7 +2614,6 @@ void __fastcall on_back(void* menu,void*) {
     if(ready && live(menu)) {
         if(!back_held) {
             back_held=true;
-            if(which(menu)==screen::party && party_expired_confirmation(pending.action)) pending.clear();
             pending.post(int(intent::back),reinterpret_cast<std::uintptr_t>(menu),which(menu));
         }
         return;
@@ -2662,12 +2673,19 @@ bool party_expired_confirmation(int action) {
     return party_ui.confirm==party_confirm::none &&
         (action==int(intent::party_leave_yes) || action==int(intent::party_kick_yes) || action==int(intent::dismiss));
 }
-void party_mouse_action(void* menu,void* chosen,int message) {
-    if(message!=WM_LBUTTONUP || party_ui.confirm!=party_confirm::none || party_ui.departed || chosen!=item_try(menu,"lc_rail_quit")) return;
-    if(party_expired_confirmation(pending.action)) pending.clear();
-    // The authored hit target is authoritative for this same-frame click,
-    // including after the inline Kick changed/disabled the old focused item.
-    pending.post(int(intent::party_leave),reinterpret_cast<std::uintptr_t>(menu),screen::party);
+bool party_mouse_action(void* menu,void* chosen,int message) {
+    int action=0;
+    for(const auto& [name,value]:std::initializer_list<std::pair<const char*,int>>{
+        {"lc_rail_resume",63},{"lc_party_invite",64},{"lc_rail_quit",66},{"lc_party_leave",66},
+        {"lc_party_leave_yes",67},{"lc_party_cancel",8},
+        {"lc_p1_kick",71},{"lc_p2_kick",72},{"lc_p3_kick",73},{"lc_p4_kick",74}})
+        if(chosen==item_try(menu,name)) { action=value;break; }
+    if(!action) return false;
+    if(message==WM_LBUTTONUP && !party_expired_confirmation(action)) {
+        lobby_focus(menu,engine_name(chosen).c_str());
+        pending.post(action,reinterpret_cast<std::uintptr_t>(menu),screen::party);
+    }
+    return message==WM_LBUTTONDOWN || message==WM_LBUTTONUP;
 }
 std::uintptr_t party_owner=0;
 std::string party_origin;      // the item to focus again when a confirmation closes
@@ -2749,8 +2767,7 @@ void party_frame(void* menu) {
     const bool open_before=party_ui.confirm!=party_confirm::none;
     party_ui.refresh(roster);
     if(open_before && party_ui.confirm==party_confirm::none && !party_ui.departed) want_focus="*origin";
-    const int action=pending.take(id,screen::party);
-    if(action) {
+    for(int action=pending.take(id,screen::party);action;action=pending.take(id,screen::party)) {
         const bool leave_confirmed=party_ui.confirm==party_confirm::leave && action==int(intent::party_leave_yes);
         const auto result=party_ui.apply(action,roster);
         switch(result.act) {
@@ -2796,6 +2813,8 @@ void party_frame(void* menu) {
         if(!state.room_name.empty()) bind_text(menu,"lc_room_name",display(state.room_name,32).c_str());
         if(state.room_metadata_known) bind_text(menu,"lc_room_visibility",state.public_room ? "Public" : "Private");
     }
+    native_host_settings campaign;
+    if(native_host_read(campaign)) bind_text(menu,"lc_campaign_summary",native_campaign_description(campaign).c_str());
     const std::string shown=view.code.size()==8 ? view.code.substr(0,4)+"-"+view.code.substr(4) : std::string("---- ----");
     bind_text(menu,"lc_room_code",shown.c_str());
     // Cards.
@@ -2933,7 +2952,10 @@ void tick_impl(void* menu,bool& native_called) {
                 else if(mask&0x400000) shortcut=int(intent::party_invite); // MENU_NEXT (Y)
             } else if(s==screen::browse && (mask&0x400000)) shortcut=int(intent::refresh);
             else if(s==screen::host && (mask&0x100000)) shortcut=int(intent::open_room);
-            if(shortcut) pending.post(shortcut,reinterpret_cast<std::uintptr_t>(menu),s);
+            if(shortcut) {
+                pending.post(shortcut,reinterpret_cast<std::uintptr_t>(menu),s);
+                if(s==screen::party && shortcut==int(intent::back)) back_held=true;
+            }
         }
     }
     native_called=true;
@@ -2941,7 +2963,7 @@ void tick_impl(void* menu,bool& native_called) {
     if(tick_fault) tick_fault();
     if(!ready || !live(menu)) { pending.clear();keyboard_input.clear();if(broker_live() && broker_view().state!=broker::phase::room) broker_cancel();return; }
     const auto s=which(menu);
-    if(s==screen::party) { party_frame(menu);return; }
+    if(s==screen::party) { native_history_trim(menu);party_frame(menu);return; }
     native_history_trim(menu);
     broker_scope(s);
     if(s==screen::hub) { entry.clear();native_guest_end_pending=false;hub_return.clear(); }
@@ -2957,7 +2979,6 @@ void tick_impl(void* menu,bool& native_called) {
     const auto completed_code=fixture_code;
     fixture_ticket=0;
     const auto action=static_cast<intent>(pending.take(reinterpret_cast<std::uintptr_t>(menu),s));
-    const auto visibility_click=host_visibility_click;host_visibility_click.reset();
     if(s==screen::hub && int(action) && action!=intent::rejoin) rejoin_seed.reset();
     if(s==screen::code && action!=intent::back && keyboard_input.source==reinterpret_cast<std::uintptr_t>(menu))
         for(unsigned i=0;i<keyboard_input.count;++i) code_input(keyboard_input.values[i]);
@@ -3003,7 +3024,7 @@ void tick_impl(void* menu,bool& native_called) {
         break;
     case intent::visibility:
         if(s==screen::host && native_flow.phase==native_phase::idle)
-            host_public=visibility_click && visibility_click->first==reinterpret_cast<std::uintptr_t>(menu) ? visibility_click->second : !host_public;
+            host_public=!host_public;
         break;
     case intent::retry:
         if(broker_live() && broker_calls.retry && broker_calls.retry() && s==screen::code) {
@@ -3143,7 +3164,6 @@ void __fastcall tick(void* menu,void*) {
     }
 }
 void deactivate_state(void* menu,bool departure) {
-    if(host_visibility_click && host_visibility_click->first==reinterpret_cast<std::uintptr_t>(menu)) host_visibility_click.reset();
     if(bindings.menu==reinterpret_cast<std::uintptr_t>(menu)) bindings.clear();
     pending.clear();keyboard_input.clear();
     if(party_owner==reinterpret_cast<std::uintptr_t>(menu)) { party_ui.reset();party_owner=0;party_origin.clear();party_feedback=0; }
@@ -3195,6 +3215,13 @@ void keyboard(unsigned char* state) {
     // DirectInput can poll before frontend creation. Never invoke the lazy
     // 0x5d8920 getter here; even validation must use the already-published cell.
     auto* menu=current_peek();
+    if(!menu) {
+        // A Kick can leave the current Party inactive for a transition frame.
+        // Retain its Back edge until its tick resumes, scoped to the same owner;
+        // a cached/replaced menu never receives it and no lazy getter runs.
+        auto* transitioning=current_published();
+        if(which(transitioning)==screen::party && party_owner==reinterpret_cast<std::uintptr_t>(transitioning)) menu=transitioning;
+    }
     if(!menu) { pause_hover_menu=nullptr;return; }
     // The native PDA can refresh its focus after mouse dispatch. Synchronize at
     // the Enter sample too, while that same Party bar still owns the pointer.
@@ -3230,7 +3257,6 @@ void keyboard(unsigned char* state) {
     const bool alt=(state[0x38]|state[0xb8])&0x80;
     if(s==screen::party) {
         if(!alt && !control && edges[1]) {
-            if(party_expired_confirmation(pending.action)) pending.clear();
             pending.post(int(intent::back),address,s);
         }
         if(!alt && !control) state[1]=0; // one scoped Back, no stale stock focus/cancel dispatch

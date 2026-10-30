@@ -47,6 +47,10 @@ void party_tests(const script_functions_rules::func_entry* registration) {
         for(int value:{63,64,65,66,67,69,71,72,73,74,6,8}) { assert(box.post(value,1,screen::party));assert(box.take(1,screen::party)==value); }
         for(int value:{68,70,75,2,3,5,9,16,17,18,31,32,62,0,1,7}) assert(!box.post(value,1,screen::party));
         for(int value:{63,64,66,67,69,71,74}) for(auto s:{screen::hub,screen::host,screen::code,screen::browse,screen::lobby_host,screen::lobby_join}) assert(!box.post(value,1,s));
+        assert(box.post(67,1,screen::party));assert(box.post(6,1,screen::party));
+        assert(box.take(1,screen::party)==67 && box.take(1,screen::party)==6 && box.take(1,screen::party)==0);
+        assert(box.post(66,1,screen::party));assert(!box.post(6,2,screen::party));
+        assert(box.take(2,screen::party)==0 && box.take(1,screen::party)==0); // stale owner discarded
         assert(identify("lc_party")==screen::party && custom(screen::party) && !lobby(screen::party));
     }
     

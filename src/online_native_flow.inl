@@ -493,9 +493,17 @@ bool native_host_read(native_host_settings& settings) {
         settings.maximum=bytes[0x3dd];
         settings.difficulty=bytes[0x3df]<3 ? bytes[0x3df] : -1;
         settings.danger_room=bytes[0x3e0]==2;
-        settings.loaded=*reinterpret_cast<void**>(0xa3bc40+0x2250)!=nullptr;
+        // Native game-info +0x3d is copied with the host record into session +0x3e1.
+        // 0x6082e6 sets it when loading a campaign; guest local save pointers are unrelated.
+        settings.loaded=bytes[0x3e1]!=0;
         return settings.name[31]==0 && settings.maximum>=2 && settings.maximum<=4;
     } __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+std::string native_campaign_description(const native_host_settings& settings) {
+    static const char* const levels[]{"Easy","Normal","Hard"};
+    std::string line=settings.danger_room ? "Danger Room" : settings.loaded ? "Saved campaign" : "New campaign";
+    if(!settings.danger_room && settings.difficulty>=0 && settings.difficulty<3) line+=std::string(" - ")+levels[settings.difficulty];
+    return line;
 }
 bool native_options_seed(const char* name) {
     __try {
@@ -864,6 +872,10 @@ bool native_flow_tick(screen s) {
     if(phase==native_phase::setup && s==screen::host && native_flow.departure==screen::none) { broker_cancel();return false; }
     if(phase==native_phase::idle || phase==native_phase::setup) return false;
     if((phase==native_phase::host || phase==native_phase::guest) && native_flow.lobby_active) return false;
+    if(view.generation==native_flow.ticket && view.error=="relay_unavailable" &&
+       (phase==native_phase::tunnel || phase==native_phase::discovery || phase==native_phase::admitting)) {
+        native_flow_error("relay_unavailable");return false;
+    }
     if(view.generation!=native_flow.ticket || view.state==broker::phase::retry_wait || view.state==broker::phase::error ||
         view.state==broker::phase::refused || (view.state==broker::phase::room && !view.authenticated)) {
         // A host that never got its room (the broker failed the open while this PC was posting) lost nothing: the service did not

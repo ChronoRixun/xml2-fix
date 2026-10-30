@@ -700,6 +700,20 @@ namespace online_room
 #else
         EResult send_keepalive(HSteamNetConnection c) { return real_send_keepalive(c); }
 #endif
+        // Injectable only in the socket-free room fixture.
+        bool real_connected_timeout(HSteamNetConnection c, int ms) {
+            return SteamNetworkingUtils()->SetConnectionConfigValueInt32(c,k_ESteamNetworkingConfig_TimeoutConnected,ms);
+        }
+        EResult real_send_departure(HSteamNetConnection c,const void* bytes,std::uint32_t size) {
+            return sockets()->SendMessageToConnection(c,bytes,size,k_nSteamNetworkingSend_Reliable,nullptr);
+        }
+#ifdef XML2_ONLINE_ROOM_TEST_SEAMS
+        auto connected_timeout=&real_connected_timeout;
+        auto send_departure=&real_send_departure;
+#else
+        bool connected_timeout(HSteamNetConnection c,int ms) { return real_connected_timeout(c,ms); }
+        EResult send_departure(HSteamNetConnection c,const void* bytes,std::uint32_t size) { return real_send_departure(c,bytes,size); }
+#endif
         // A waiting late joiner has no bound game link yet. Keep its authenticated
         // room tunnel observable at the same cadence as a running transport.
         void unbound_keepalive_tick() {
@@ -1183,6 +1197,13 @@ namespace online_room
 						continue;
 					}
 					const auto p = gns_transport_core::parse(data, std::size_t(batch[i]->m_cbSize));
+                    // A waiting admitted guest has no native host link. Classify
+                    // only the pinned host's valid reliable departure here; all
+                    // other unbound game traffic keeps the normal refusal path.
+                    if (!t->transport_bound && p.valid && p.k==gns_transport_core::kind::game && p.opcode==0x2b &&
+                        host_departure(t->connection,(batch[i]->m_nFlags & k_nSteamNetworkingSend_Reliable)!=0,p.opcode,p.body,p.length)) {
+                        batch[i]->Release();continue;
+                    }
 					// The member's keepalive can overtake its hello at the start (seen once per session on the host): it carries
 					// nothing, so it is ignored rather than counted as a refused message.
 					if (!t->transport_bound && p.valid && p.k == gns_transport_core::kind::keepalive) { batch[i]->Release(); continue; }
@@ -1967,6 +1988,19 @@ namespace online_room
         bool linked = false;
         for (const auto& t : tunnels) linked |= t->connection != k_HSteamNetConnection_Invalid;
         if (!wanted || !linked || client.view().state != browser::phase::room) { leave(); return; }
+        if (hosting && !deferred_leave.armed()) {
+            // Reuse the native host-left notice on authenticated waiting
+            // tunnels too. They have no native endpoint to receive its broadcast.
+            gns_transport_core::message notice;notice.opcode=0x2b;notice.reliable=true;
+            notice.body={0,0,0,0,6,0x11,0,0,1,0,0,0};
+            const auto bytes=gns_transport_core::frame(notice);
+            unsigned queued=0,refused=0;
+            for (const auto& t:tunnels) if(t->connected && !t->transport_bound) {
+                if(send_departure(t->connection,bytes.data(),std::uint32_t(bytes.size()))==k_EResultOK) ++queued;
+                else ++refused;
+            }
+            if(queued || refused) logger::write("online: host departure notice to waiting room tunnels: %u queued, %u refused",queued,refused);
+        }
         deferred_leave.arm();
     }
     void ui_tick() {
@@ -2149,6 +2183,10 @@ namespace online_room
 				return true;
 			}
             if (!relay_route_ok(*t,info->m_info.m_nFlags)) return true;
+            // The native active-session receive watchdog is ten seconds. A
+            // waiting guest has no such watchdog; give its GNS tunnel that same
+            // receive timeout rather than the library's longer default.
+            if(!connected_timeout(c,10000)) logger::write("online: could not set the room tunnel receive timeout to 10000 ms");
 			t->connected = true;
 			t->connected_at = room_clock();
 			party_connected(*t); // before poll() hands this connection's first party message to the model
@@ -2178,7 +2216,11 @@ namespace online_room
 				logger::write("online: the host closed this PC's connection as %s (rule 64): the host removed this PC from the game", removal_core::close_text);
 			}
 			if (host_ended) host_loss.ended(was_bound); // before drop() clears the bound flag
-			const bool retry = t->outgoing && !was_connected;
+            const bool relay_refusal=!hosting && t->id==host_id && !host_loss.admitted_session() &&
+                !session_bound() && state==k_ESteamNetworkingConnectionState_ClosedByPeer &&
+                std::strcmp(info->m_info.m_szEndDebug,"relay-only requires TURN")==0;
+            if(relay_refusal) { client.refuse("relay_unavailable");t->attempts=3; }
+			const bool retry = t->outgoing && !was_connected && !relay_refusal;
 			// A connection that never came up while cached TURN credentials were in use: the relay may have refused them
 			// (GNS's ICE client fails a refused allocation silently). Forget them and ask the broker for new ones once;
 			// connections started after the reply use those.
