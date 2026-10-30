@@ -159,3 +159,4 @@ DISASM src/online_menus_anchors.cpp # Authored 512-anchor bounds and register-pr
 DISASM test/online_menus_live_input.inl # Original fixture thunk sets the parser register ABI and returns to our caller; the owned retail parser executes from the local PE, with no game instruction body embedded.
 DISASM test/join_in_progress_gamespy.inl # Authored synthetic ESI/stack callers and peer-pump recorder exercise the production bridge against the locally owned PE; no extracted game body or instruction listing.
 DISASM src/join_in_progress_diagnostics.inl # Authored register/flags/x87/XMM-preserving observer bridges; only short guarded instructions are replayed, while the retail checksum producer executes from the locally owned PE. No extracted game body or listing.
+DISASM src/online_native_flow.inl # Authored native-refusal, session-clear and console ABI adapters replay only short guarded entries; no extracted retail function body or instruction listing.
