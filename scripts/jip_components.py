@@ -147,9 +147,42 @@ def rng_mode(host, guest):
     return 1 if first else 0
 
 
+SPAWN = re.compile(r'jip spawn: phase=(?P<phase>\d+) frame=(?P<frame>\d+) n=(?P<n>\d+) caller=(?P<caller>[0-9a-f]{8}) def=(?P<definition>\S*) inst=(?P<instance>\S*) at=(?P<at>\S+) draws=(?P<draws>\d+)')
+
+
+def parse_spawns(path):
+    out = {}
+    for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
+        m = SPAWN.search(line)
+        if m:
+            out.setdefault(int(m['phase']), []).append((m['caller'], m['definition'], m['instance'], m['at'], int(m['frame']), int(m['draws'])))
+    return out
+
+
+def spawn_mode(host, guest):
+    """Follow-up 5: every entity the zone spawned (0x4612e0), paired per phase in order; the extras are named."""
+    h, g = parse_spawns(host), parse_spawns(guest)
+    bad = 0
+    for ph in sorted(set(h) | set(g)):
+        a, b = h.get(ph, []), g.get(ph, [])
+        print(f'phase {ph}: host {len(a)} spawn(s), guest {len(b)} spawn(s)')
+        for i, (x, y) in enumerate(zip(a, b)):
+            if x[:4] != y[:4]:
+                print(f'  first difference at index {i}: host {x} guest {y}')
+                bad += 1
+                break
+        for who, extra in (('host', a[len(b):]), ('guest', b[len(a):])):
+            for e in extra:
+                print(f'  only on the {who}: caller {e[0]} def {e[1]} inst {e[2]} at {e[3]} (frame {e[4]}, draws {e[5]})')
+                bad += 1
+    if not bad:
+        print('every spawn agrees (phase, order, caller, names, position)')
+    return 1 if bad else 0
+
+
 if __name__ == '__main__' and '--mode' in sys.argv:
     mode = sys.argv[sys.argv.index('--mode') + 1]
-    sys.exit(snapshot_mode(sys.argv[1], sys.argv[2]) if mode == 'snapshot' else rng_mode(sys.argv[1], sys.argv[2]))
+    sys.exit({'snapshot': snapshot_mode, 'rng': rng_mode, 'spawn': spawn_mode}[mode](sys.argv[1], sys.argv[2]))
 
 if __name__ == '__main__':
     sys.exit(main(sys.argv))

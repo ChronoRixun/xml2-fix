@@ -38,6 +38,15 @@ const void* draw_bridge_target=reinterpret_cast<const void*>(&join_in_progress::
 // `call dword ptr [draw_bridge_target]` is 6 bytes: the bridge's [esp] (the caller's return) is this function + 6.
 __declspec(naked) void draw_probe() { __asm { call dword ptr [draw_bridge_target]
                                              ret } }
+// Follow-up 5: a fake CSmartEntMgr (count 3 through vt+0x14, cursor at +4) behind the redirected getter.
+unsigned smart_vtable[8]{};unsigned char smart_object[0x20]{};unsigned smart_getter_calls=0;
+int __fastcall fake_smart_count(void*,void*) { return 3; }
+void* __cdecl fake_smart_getter() { ++smart_getter_calls;return smart_object; }
+__declspec(naked) void spawn_resume_stub() { __asm { pop esi
+                                                     pop ebp
+                                                     pop ebx
+                                                     pop ecx
+                                                     ret } }
 unsigned anchor_vtable[0x130/4]{};unsigned* anchor_game=anchor_vtable;unsigned party_calls=0;
 void* __cdecl anchor_game_get() { return &anchor_game; }
 void __fastcall anchor_party(void*,void*,void* list) { ++party_calls;put(list,0,0x3803u);put(list,4,0x3801u);put(list,8,0x3804u);put(list,0xc,0x3802u);put(list,0x14,4u); }
@@ -170,6 +179,11 @@ void run() {
     join_in_progress::advance(s,true,nullptr);
     assert(!machine.find(remote) && drops==1);
     machine.reset();
+    // Follow-up 5: the zone-load notices below also hold the dormant-entity respawn, and the frame-0 reseed releases it
+    // through the manager getter: a fake manager (count 3 through vt+0x14, cursor at +4) stands behind it from here on.
+    *reinterpret_cast<unsigned**>(smart_object)=smart_vtable;smart_vtable[smart_count_slot/4]=unsigned(reinterpret_cast<std::uintptr_t>(&fake_smart_count));
+    join_in_progress::smart_manager_getter_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_smart_getter));
+    join_in_progress::smart_getter_at=join_in_progress::smart_manager_getter_at;
     // latejoin-residue P1: the two zone-load bridges, entered by CALL exactly as installed (their getters redirected
     // to counters that return a fake object), take an epoch only while a late restart is armed, through the real
     // retail 0x560150; the frame-0 epoch then ends the segment epochs.
@@ -233,6 +247,54 @@ void run() {
     assert(join_in_progress::camera_anchor_handles[0]==0x3803u && join_in_progress::camera_anchor_handles[1]==0x3801u && join_in_progress::camera_anchor_handles[3]==0x3802u && join_in_progress::camera_anchor_handles[4]==0);
     join_in_progress::late_restart=false;join_in_progress::restart.disarm();
     anchor_probe();assert(anchor_ebx==hero_table && party_calls==1);
+    // Follow-up 5: the dormant-entity respawn hold. The site bridge replaces `call 0x4b76f0` (entered by CALL exactly as
+    // installed, the getter redirected): outside a late restart it reaches the getter; held, it returns the stand-in
+    // whose vt+4 update does nothing and whose other slots are retail's (the mapped image's vtable); the frame-0 epoch
+    // releases it and puts the real manager's cursor at 0; the session's end releases it too.
+    // (The P1/LoadZone checks above armed holds through the zone-load notices: the frame-0 reseed released the first,
+    // the LoadZone bridge's is still on - a session's end releases it; the counts start again from there.)
+    assert(join_in_progress::smart_hold);
+    join_in_progress::release_smart_hold("fixture: session end after the LoadZone epoch");
+    assert(!join_in_progress::smart_hold && *reinterpret_cast<unsigned*>(smart_object+smart_cursor_at)==0);
+    smart_getter_calls=0;
+    const auto smart_bridge=reinterpret_cast<void*(__cdecl*)()>(&join_in_progress::smart_update_getter_bridge);
+    join_in_progress::late_restart=false;join_in_progress::restart.disarm();
+    join_in_progress::hold_smart_update();
+    assert(!join_in_progress::smart_hold && smart_bridge()==smart_object && smart_getter_calls==1); // not a late restart: the real getter
+    join_in_progress::late_restart=true;join_in_progress::restart.arm();
+    join_in_progress::hold_smart_update();
+    assert(join_in_progress::smart_hold);
+    void* held=smart_bridge();
+    assert(held==&join_in_progress::smart_stand_in && smart_getter_calls==1 && join_in_progress::smart_holds==1);
+    const unsigned* held_vtable=*reinterpret_cast<unsigned**>(held);
+    assert(held_vtable[1]==unsigned(reinterpret_cast<std::uintptr_t>(&join_in_progress::smart_update_held)));
+    assert(held_vtable[0]==0x4b76d0u && held_vtable[2]==0x4b7000u && held_vtable[3]==0x4b70e0u && held_vtable[5]==0x4b6fb0u && held_vtable[7]==0x4b75c0u);
+    reinterpret_cast<void(__thiscall*)(void*,unsigned)>(held_vtable[1])(held,1); // the site's call: nothing happens
+    put(smart_object,smart_cursor_at,7u);
+    join_in_progress::late_restart_epoch_for_camera=false; // the anchor check above armed a re-anchor; not under test here
+    *frame=0;join_in_progress::frame_gate_reseed(); // the frame-0 epoch releases the hold
+    assert(!join_in_progress::smart_hold && *reinterpret_cast<unsigned*>(smart_object+smart_cursor_at)==0 && smart_getter_calls==2);
+    assert(smart_bridge()==smart_object && smart_getter_calls==3);
+    join_in_progress::hold_smart_update();assert(!join_in_progress::smart_hold); // disarmed by the reseed: no second hold this epoch
+    join_in_progress::restart.arm();join_in_progress::hold_smart_update();assert(join_in_progress::smart_hold);
+    join_in_progress::release_smart_hold("fixture: session end");
+    assert(!join_in_progress::smart_hold && smart_bridge()==smart_object);
+    join_in_progress::late_restart=false;join_in_progress::restart.disarm();
+    // The spawn-entry probe bridge, entered through a CALL from C++ (the same frame as the JMP at 0x4612e0: [esp] = the
+    // caller's return, the five cdecl arguments above it); the displaced prologue is undone by the resume stub, so the
+    // caller's ecx/ebx/ebp/esi come back as they were. Noted only with the probe on inside a late epoch.
+    join_in_progress::spawn_resume_at=unsigned(reinterpret_cast<std::uintptr_t>(&spawn_resume_stub));
+    const auto spawn=reinterpret_cast<void(__cdecl*)(const char*,const char*,const float*,const float*,unsigned)>(&join_in_progress::spawn_entry_bridge);
+    const float where[3]={1.5f,2.5f,-3.5f};
+    join_in_progress::probe_enabled=false;join_in_progress::probe_epoch_late=false;join_in_progress::spawn_notes=0;
+    spawn("def_off","inst_off",where,nullptr,0);
+    assert(join_in_progress::spawn_notes==0);
+    join_in_progress::probe_enabled=true;join_in_progress::probe_epoch_late=true;
+    spawn("def_a","inst_b",where,nullptr,0);
+    assert(join_in_progress::spawn_notes==1 && join_in_progress::last_spawn.caller!=0);
+    assert(std::strcmp(join_in_progress::last_spawn.definition,"def_a")==0 && std::strcmp(join_in_progress::last_spawn.instance,"inst_b")==0);
+    assert(join_in_progress::last_spawn.position[0]==1.5f && join_in_progress::last_spawn.position[1]==2.5f && join_in_progress::last_spawn.position[2]==-3.5f);
+    join_in_progress::probe_enabled=false;join_in_progress::probe_epoch_late=false;
     std::cout<<"PASS canonical restart: construction image taken through the bridge, restored only for a late-join cohort restart (lobby START epoch and foreign vtable refused), retail 0x560150 reseeds the synchronized stream once at frame 0 through the frame-gate bridge, 0x47 stamp bridge entered by JUMP writes opcode 0x47 and tail 0/marker with no other byte touched, a given-up added seat is dropped natively (codes 0x10ce/0x10cf) and a pending one is not\n";
 }
 }

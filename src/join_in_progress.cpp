@@ -243,6 +243,7 @@ namespace join_in_progress
 
 		void __cdecl deferred_campaign_start(void*);
 		void restore_camera(const char* role); // the canonical cohort restart, defined after campaign_load_bridge
+		void release_smart_hold(const char* why); // follow-up 5 (join_in_progress_residue.inl): the dormant-entity respawn resumes
 		bool __cdecl campaign_start_notice()
 		{
 			if (epoch.active)
@@ -411,11 +412,13 @@ namespace join_in_progress
 				logger::write("join in progress: first shared frame %u - synchronized RNG epoch reset (this PC had drawn %u since the last epoch, seed %08x); every peer continues from the native seed %06x with count 0",
 					unsigned(frame), count, seed, native_seed);
 				reanchor_camera_at_frame0();
+				release_smart_hold("the first shared frame");
 				snapshot("frame 0 epoch");
 			}
 			__except (EXCEPTION_EXECUTE_HANDLER)
 			{
 				restart.disarm();
+				release_smart_hold("a first-frame reset fault");
 				logger::write_once("jip:reseed-fault", "join in progress: the first-frame RNG reset faulted - disarmed");
 			}
 		}
@@ -594,7 +597,7 @@ namespace join_in_progress
 			__try
 			{
 				void* s = session();
-				if (!s || !first(s)) { if (machine.started || machine.any()) { machine.reset(); restart.disarm(); late_restart = false; probe_epoch_late = false; } return false; }
+				if (!s || !first(s)) { if (machine.started || machine.any()) { machine.reset(); restart.disarm(); release_smart_hold("the session's end"); late_restart = false; probe_epoch_late = false; } return false; }
 				static DWORD last = 0;
 				if (trace && machine.any() && GetTickCount() - last >= 2000)
 				{
@@ -1678,6 +1681,10 @@ namespace join_in_progress
 			if (probe_enabled) writes.push_back({draw_entry, bytes(draw_entry_original), rel(0xe9, draw_entry, reinterpret_cast<const void*>(&draw_trace_bridge), draw_entry_original.size())});
 			// Follow-up 3: the zone-start camera anchor (CALL replacement of the 5-byte table load).
 			writes.push_back({camera_anchor_table_load, bytes(camera_anchor_table_original), rel(0xe8, camera_anchor_table_load, reinterpret_cast<const void*>(&camera_anchor_table_bridge), 5)});
+			// Follow-up 5: the game update's CSmartEntMgr getter call (CALL replacement; the site's return address stays) and,
+			// with the probe only, the spawn-by-names entry (JMP, six bytes displaced).
+			writes.push_back({smart_update_call, bytes(smart_update_original), rel(0xe8, smart_update_call, reinterpret_cast<const void*>(&smart_update_getter_bridge), 5)});
+			if (probe_enabled) writes.push_back({spawn_entry, bytes(spawn_entry_original), rel(0xe9, spawn_entry, reinterpret_cast<const void*>(&spawn_entry_bridge), spawn_entry_original.size())});
 		}
 		if (xml1_hook_transaction::apply(memory, writes, &safe))
 		{
@@ -1686,7 +1693,7 @@ namespace join_in_progress
 			gameplay_agreement::register_rule(gameplay_capabilities::join_in_progress_id, agreement_revision, join_in_progress_core::agreement_parameters, true);
 			logger::write("online: JoinInProgress installed (rule 26 revision 7); LateJoinPolicyV1 LateJoin=%u (%s); canonical cohort restart %s; solo spectators, host lifecycle and slow-player protection retained; host setup can change this admission policy",
 				unsigned(allow_late_join), allow_late_join ? "everyone reloads from the host's image at the next zone load" : "lobby START admission only",
-				restart_reset_enabled ? "on (pristine camera, zone-load and first-frame RNG epochs, AI brain ring, party-anchored zone-start camera)" : "OFF ([Dev] LateJoinRestartReset=0)");
+				restart_reset_enabled ? "on (pristine camera, zone-load and first-frame RNG epochs, AI brain ring, party-anchored zone-start camera, dormant-entity respawn held to frame 0)" : "OFF ([Dev] LateJoinRestartReset=0)");
 		}
 		else if (safe)
 			logger::write("online: [Online] JoinInProgress=1 transaction refused - Start Game stays stock; rule 26 not offered");

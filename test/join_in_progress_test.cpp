@@ -474,6 +474,20 @@ int main(int argc, char** argv)
 		      "follow-up 3: the anchor table load and the camera vt+0x74 call are guarded");
 	}
 	{
+		// follow-up 5: the dormant-entity respawn hold (CSmartEntMgr update) and the spawn-entry probe.
+		using namespace join_in_progress_rules;
+		check(smart_hold_wanted(true, true, true) && !smart_hold_wanted(true, false, true) && !smart_hold_wanted(true, true, false) && !smart_hold_wanted(false, true, true),
+		      "follow-up 5: the respawn is held only during an armed late restart with the reset on (a lobby START never arms)");
+		auto guarded_span = [](std::uint32_t va, std::size_t n) {
+			return std::any_of(guards.begin(), guards.end(), [&](const auto& g) { return g.va <= va && g.va + g.hex.size() / 2 >= va + n; });
+		};
+		check(guarded_span(smart_update_call, 5) && guarded_span(spawn_entry, spawn_entry_original.size()) && guarded_span(smart_manager_vtable, 32),
+		      "follow-up 5: the game update's getter call, the spawn entry prologue and the manager vtable are guarded retail bytes");
+		check(smart_update_call + 5 + 0x0004840c == smart_manager_getter, "follow-up 5: the replaced call's rel32 reaches the CSmartEntMgr getter");
+		check(spawn_resume == spawn_entry + spawn_entry_original.size() && spawn_entry_original[4] == 0x33 && spawn_entry_original[5] == 0xf6,
+		      "follow-up 5: the displaced prologue ends on an instruction boundary (xor esi,esi) and resumes right after it");
+	}
+	{
 		std::array<std::uint32_t, 32> ring{}; std::int32_t w = 7, r = 11, f = 28;
 		check(rebuild_brain_ring(0x80000007u, ring, w, r, f) == 4 && w == 28 && r == 0 && f == 28 && ring[0] == 3 && ring[27] == 30 && ring[28] == 0,
 		      "follow-up 4: the brain ring is rebuilt over the free slots in ascending order (held slots kept out)");

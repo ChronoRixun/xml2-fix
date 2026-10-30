@@ -303,6 +303,9 @@ namespace join_in_progress_core
 	};
 	// Follow-up 3: the zone-start camera anchor comes from the party list only during an armed late restart.
 	inline bool camera_anchor_from_party(bool enabled, bool late_restart, bool armed) { return enabled && late_restart && armed; }
+	// Follow-up 5: the dormant-entity respawn (CSmartEntMgr update) is held from an armed late restart's zone load to
+	// its frame-0 epoch on every peer; a lobby START (never armed) and [Dev] LateJoinRestartReset=0 keep retail.
+	inline bool smart_hold_wanted(bool enabled, bool late_restart, bool armed) { return enabled && late_restart && armed; }
 	// P2 (follow-up 4): the AI brain free ring is rebuilt over the FREE slots in ascending order (read 0, write = free
 	// count, free count = the slots not held in the bitmap), so every peer allocates the same next slots even when a
 	// warm host still holds one (probe round: slot 31 held, bits 0x80000007). Returns the number of held slots.

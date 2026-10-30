@@ -51,6 +51,11 @@ void canonical_brain_ring()
 // ---- P3: the probe ([Dev] LateJoinProbe=1): milestone snapshots and the synchronized-draw caller trace -------------
 bool probe_enabled = false;
 join_in_progress_core::draw_trace* draws = nullptr; // allocated once when the probe is on
+// follow-up 5 state (the functions follow the zone-load bridges below)
+bool smart_hold = false;
+unsigned smart_holds = 0; // updates handed to the stand-in while held
+std::uint32_t smart_manager_getter_at = smart_manager_getter; // mutable for the owned native fixture only
+unsigned spawn_notes = 0, spawn_notes_dropped = 0; // the spawn probe's lines per late epoch (reset at the zone load)
 bool probe_read(std::uintptr_t address, void* out, std::size_t size)
 {
 	__try { std::memcpy(out, reinterpret_cast<const void*>(address), size); return true; }
@@ -70,7 +75,14 @@ void snapshot(const char* where)
 		const auto pool = d.primary_base ? std::uintptr_t(d.primary_base) : std::uintptr_t(brain_pool_stock);
 		char zone[zone_name_size + 1]{};
 		probe_read(zones_static + zones_name_at, zone, zone_name_size);
-		logger::write("jip snapshot: where=%s frame=%u session=phases:%08x/%08x/%02x clock=step:%08x%08x now:%08x%08x pause:%08x%08x paused:%u game=t:%08x dt:%08x mode:%u rng=%08x/%u/%08x world=w:%d r:%d f:%d live:%d brains=w:%d r:%d f:%d bits:%08x cam=yaw:%08x mode:%u hist:%08x/%08x flags:%08x pause=%u/%u zone=%s/%02x ai=%08x/%08x/%08x/%08x",
+		// follow-up 5: the dormant-entity manager (count through its vt+0x14, cursor +4) and whether its update is held
+		std::int32_t smart_count = -1; std::uint32_t smart_cursor = 0;
+		if (auto* manager = static_cast<std::uint8_t*>(fn<getter_t>(smart_manager_getter_at)()))
+		{
+			smart_cursor = probe_at<std::uint32_t>(reinterpret_cast<std::uintptr_t>(manager) + smart_cursor_at);
+			smart_count = fn<std::int32_t(__thiscall*)(void*)>(at<std::uint32_t>(at<void*>(manager, 0), smart_count_slot))(manager);
+		}
+		logger::write("jip snapshot: where=%s frame=%u session=phases:%08x/%08x/%02x clock=step:%08x%08x now:%08x%08x pause:%08x%08x paused:%u game=t:%08x dt:%08x mode:%u rng=%08x/%u/%08x world=w:%d r:%d f:%d live:%d brains=w:%d r:%d f:%d bits:%08x cam=yaw:%08x mode:%u hist:%08x/%08x flags:%08x pause=%u/%u zone=%s/%02x ai=%08x/%08x/%08x/%08x smart=n:%d cursor:%u held:%u",
 			where, unsigned(frame), sess ? probe_at<std::uint32_t>(sess + 0x424) : 0, sess ? probe_at<std::uint32_t>(sess + 0x438) : 0, sess ? probe_at<std::uint8_t>(sess + 0x445) : 0,
 			probe_at<std::uint32_t>(clock + 0x34), probe_at<std::uint32_t>(clock + 0x30), probe_at<std::uint32_t>(clock + 0x3c), probe_at<std::uint32_t>(clock + 0x38),
 			probe_at<std::uint32_t>(clock + 0x14), probe_at<std::uint32_t>(clock + 0x10), probe_at<std::uint8_t>(clock + 0x20),
@@ -80,7 +92,8 @@ void snapshot(const char* where)
 			probe_at<std::int32_t>(pool + brain_ring_write), probe_at<std::int32_t>(pool + brain_ring_read), probe_at<std::int32_t>(pool + brain_ring_free), probe_at<std::uint32_t>(pool + brain_ring_bitmap),
 			probe_at<std::uint32_t>(camera_object + camera_yaw_at), probe_at<std::uint32_t>(camera_object + camera_mode_at), probe_at<std::uint32_t>(camera_object + camera_yaw_history_at), probe_at<std::uint32_t>(camera_object + camera_yaw_history_at + 4), probe_at<std::uint32_t>(camera_object + camera_flags_at),
 			pause ? probe_at<std::uint8_t>(pause + 0x64) : 0, pause ? probe_at<std::uint8_t>(pause + 0x6c) : 0, zone, probe_at<std::uint8_t>(zones_static + zones_loading_at),
-			probe_at<std::uint32_t>(0x78a9e4), probe_at<std::uint32_t>(0x78a9f8), probe_at<std::uint32_t>(0x78aa04), probe_at<std::uint32_t>(0x78a9e8));
+			probe_at<std::uint32_t>(0x78a9e4), probe_at<std::uint32_t>(0x78a9f8), probe_at<std::uint32_t>(0x78aa04), probe_at<std::uint32_t>(0x78a9e8),
+			smart_count, smart_cursor, unsigned(smart_hold));
 		for (int k = 0; k < 4; ++k)
 		{
 			const std::uint32_t handle = probe_at<std::uint32_t>(game_static + game_party + 4 * k);
@@ -146,17 +159,20 @@ void probe_period(std::uint16_t frame)
 	probe_milestone(where, 4);
 }
 // ---- the two zone-load bridges (CALL replacements of argument-less cdecl getters; the site's return address stays)
+void hold_smart_update(); // follow-up 5, below
 void __cdecl zone_load_entry_notice()
 {
-	if (late_restart && restart.armed) { probe_epoch_late = true; probe_milestone("zone load entry", 1); }
-	segment_reseed("the zone load (CMap::LoadMap)");
+	if (late_restart && restart.armed) { probe_epoch_late = true; spawn_notes = 0; spawn_notes_dropped = 0; probe_milestone("zone load entry", 1); }
+	segment_reseed("the zone load (CMap::LoadMap or CMap::LoadZone)");
 	canonical_brain_ring();
+	hold_smart_update();
 	if (late_restart && restart.armed) snapshot("zone load epoch");
 }
 void __cdecl zone_start_entry_notice()
 {
 	if (late_restart && restart.armed) { probe_epoch_late = true; probe_milestone("zone start", 2); }
 	segment_reseed("the zone start (before the players are placed)");
+	hold_smart_update();
 	if (late_restart && restart.armed) snapshot("zone start epoch");
 }
 // ---- follow-up 3: the camera anchor of the zone-loaded finish ------------------------------------------------------
@@ -255,5 +271,108 @@ __declspec(naked) void zone_start_entry_bridge()
 		popad
 		popfd
 		jmp dword ptr [zone_start_entry_target_at]
+	}
+}
+// ---- follow-up 5: the dormant-entity respawn held until the first shared frame -----------------------------------
+// The zone loader puts a visited zone's dormant monsters (CSmartEntMgr records) back before the placement loop; the
+// manager's update (vt+4) respawns the ones inside a box around the camera, every game-update tick (0x46f2df), so the
+// ticks each peer spends waiting at the barrier before frame 0 - a different real time, with a camera that drifts
+// differently - place different entity sets (probe round 2: joiner +4 AI actors before frame 0, +2 at frame 0, never
+// matched by the host). While held, the call site gets a stand-in whose update does nothing; the frame-0 epoch
+// releases it and puts the real manager's round-robin cursor at 0 on every peer.
+__declspec(naked) void smart_update_held() { __asm { ret 4 } } // thiscall update(bool all): nothing
+alignas(16) std::uint32_t smart_stand_in_vtable[8]{};
+struct smart_stand_in_object { const void* vtable; std::uint32_t cursor; std::uint32_t pad[2]; };
+smart_stand_in_object smart_stand_in{};
+void* __cdecl smart_stand_in_getter() { ++smart_holds; return &smart_stand_in; }
+std::uint32_t smart_getter_at = smart_manager_getter; // what the site reaches: the real getter, or the stand-in's while held
+void hold_smart_update()
+{
+	if (!join_in_progress_core::smart_hold_wanted(restart_reset_enabled, late_restart, restart.armed) || smart_hold) return;
+	__try
+	{
+		if (!smart_stand_in.vtable)
+		{
+			// Retail's eight slots (guarded bytes) with the update replaced; the site only calls the update.
+			std::memcpy(smart_stand_in_vtable, reinterpret_cast<const void*>(smart_manager_vtable), sizeof smart_stand_in_vtable);
+			smart_stand_in_vtable[1] = reinterpret_cast<std::uint32_t>(&smart_update_held);
+			smart_stand_in.vtable = smart_stand_in_vtable;
+		}
+		smart_hold = true;
+		smart_holds = 0;
+		smart_getter_at = reinterpret_cast<std::uint32_t>(&smart_stand_in_getter);
+		logger::write("join in progress: canonical restart - the dormant-entity respawn (CSmartEntMgr update) is held from the zone load until the first shared frame on every peer");
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		logger::write_once("jip:smart-hold-fault", "join in progress: the dormant-entity respawn could not be held (vtable unreadable) - retail timing");
+	}
+}
+void release_smart_hold(const char* why)
+{
+	if (!smart_hold) return;
+	smart_hold = false;
+	smart_getter_at = smart_manager_getter_at;
+	__try
+	{
+		auto* manager = static_cast<std::uint8_t*>(fn<getter_t>(smart_manager_getter_at)());
+		const auto cursor = at<std::uint32_t>(manager, smart_cursor_at);
+		const auto count = fn<std::int32_t(__thiscall*)(void*)>(at<std::uint32_t>(at<void*>(manager, 0), smart_count_slot))(manager);
+		at<std::uint32_t>(manager, smart_cursor_at) = 0;
+		logger::write("join in progress: canonical restart - the dormant-entity respawn resumes at %s (%u update(s) held; %d dormant record(s), cursor %u -> 0 on every peer)",
+			why, smart_holds, count, cursor);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		logger::write_once("jip:smart-release-fault", "join in progress: the dormant-entity respawn resumed but the manager could not be read - its cursor stays");
+	}
+}
+// In place of `call 0x4b76f0` at 0x46f2df (the game update's manager getter before its vt+4 update; cdecl, no
+// arguments): the real getter, or the stand-in's while held. The site's return address stays on the stack.
+__declspec(naked) void smart_update_getter_bridge() { __asm { jmp dword ptr [smart_getter_at] } }
+// ---- the probe names every entity the zone spawns (0x4612e0: by definition / instance names) ----------------------
+struct spawn_note { std::uint32_t caller; const char* definition; const char* instance; float position[3]; };
+spawn_note last_spawn{};
+constexpr unsigned spawn_note_limit = 2048;
+void __cdecl note_spawn(const std::uint32_t* sp) // sp -> [the caller's return, definition, instance, position*, orientation*, flag]
+{
+	if (!probe_enabled || !probe_epoch_late) return;
+	__try
+	{
+		last_spawn.caller = sp[0];
+		last_spawn.definition = reinterpret_cast<const char*>(sp[1]);
+		last_spawn.instance = reinterpret_cast<const char*>(sp[2]);
+		const float* p = reinterpret_cast<const float*>(sp[3]);
+		for (int i = 0; i < 3; ++i) last_spawn.position[i] = p ? p[i] : 0.0f;
+		if (spawn_notes++ >= spawn_note_limit) { ++spawn_notes_dropped; return; }
+		char d[48]{}, n[48]{};
+		if (last_spawn.definition) std::strncpy(d, last_spawn.definition, sizeof d - 1);
+		if (last_spawn.instance) std::strncpy(n, last_spawn.instance, sizeof n - 1);
+		logger::write("jip spawn: phase=%u frame=%u n=%u caller=%08x def=%s inst=%s at=%d,%d,%d draws=%u", unsigned(draws ? draws->phase : 0),
+			unsigned(probe_at<std::uint16_t>(native_frame)), spawn_notes, last_spawn.caller, d, n, int(last_spawn.position[0]), int(last_spawn.position[1]), int(last_spawn.position[2]),
+			probe_at<std::uint32_t>(rng_count));
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write_once("jip:spawn-note-fault", "jip spawn: a note faulted (unreadable names)"); }
+}
+std::uint32_t spawn_resume_at = spawn_resume; // mutable for the owned native fixture only
+// In place of the first six bytes of 0x4612e0 (entered by JUMP: [esp] = the caller's return address, the five
+// arguments above it): the note under pushfd/pushad, then the displaced prologue and the rest of the function.
+__declspec(naked) void spawn_entry_bridge()
+{
+	__asm {
+		pushfd
+		pushad
+		lea eax, [esp+24h]
+		push eax
+		call note_spawn
+		add esp, 4
+		popad
+		popfd
+		push ecx
+		push ebx
+		push ebp
+		push esi
+		xor esi, esi
+		jmp dword ptr [spawn_resume_at]
 	}
 }

@@ -251,7 +251,31 @@ namespace join_in_progress_rules
 	// party list (game vt+0x11c, lockstep order) on every peer; otherwise the retail table.
 	constexpr std::uint32_t camera_anchor_table_load = 0x4868f4, game_party_list_slot = 0x11c, party_list_count_at = 0x14;
 	inline constexpr std::array<unsigned char, 5> camera_anchor_table_original{0xbb,0x14,0xb8,0x70,0x00};
-	inline constexpr std::array<guard, 115> guards{{
+	// Follow-up 5 (probe round 2: camera and rings canonical, the joiner still placed 4 more AI actors than the host at
+	// E1, brains 16 vs 12 at "zone started", and made the actor touch-nudge draws 0x42974d at E2). A visited zone is
+	// restored from its record by the zone loader (0x484ce0): the live actors through the dynamic list (0x465c50, the
+	// 7-draw groups of the zone-load phase, equal on both peers) and the dormant monsters its spawners stored as
+	// CSmartEntMgr records (0x48adc0 vt+0x7c; back into the manager before the placement loop). Those records are only
+	// respawned by the manager's update (vt+4 0x4b7100: the records inside a box around the CAMERA, 750 units ahead,
+	// 40 per call from a round-robin cursor at +4), whose one caller is the game update 0x46eef0 (game vt+0x16c) at
+	// 0x46f2df - every tick, including the ticks between the zone-loaded finish and the first shared frame, where each
+	// peer waits a different real time with a camera that drifts differently (the joiner spawned 4 more before frame 0
+	// and 2 more at frame 0 before the re-anchor; the host never spawned them later: outside the re-anchored box).
+	// During a late restart the call site hands the game update a stand-in whose update is a no-op from the zone load
+	// to the frame-0 epoch, where the hold ends and the cursor goes to 0 on every peer, so the first respawn runs in
+	// lockstep from the re-anchored camera. Only the one site calls vt+4 (xrefs of the getter: spawn 0x45fc51 and the
+	// spawner store 0x48af03 allocate, 0x466xxx and 0x4843a0/0x484642 reset or re-intern records).
+	constexpr std::uint32_t smart_update_call = 0x46f2df, smart_manager_getter = 0x4b76f0, smart_manager_vtable = 0x68e440,
+		smart_cursor_at = 0x4, smart_count_slot = 0x14;
+	inline constexpr std::array<unsigned char, 5> smart_update_original{0xe8,0x0c,0x84,0x04,0x00};
+	// The probe names every entity the zone spawns: the spawn-by-names entry 0x4612e0 (cdecl: definition, instance,
+	// position, orientation, flag) is entered by JUMP with its first six bytes displaced (push ecx/ebx/ebp/esi; xor esi,esi).
+	constexpr std::uint32_t spawn_entry = 0x4612e0, spawn_resume = 0x4612e6;
+	inline constexpr std::array<unsigned char, 6> spawn_entry_original{0x51,0x53,0x55,0x56,0x33,0xf6};
+	inline constexpr std::array<guard, 118> guards{{
+		{0x46f2d8,"7505c644241001e80c8404008b4c24108b10518bc8ff5204", "game update: the CSmartEntMgr getter call and its vt+4 update (all flag) every tick"},
+		{0x4612e0,"5153555633f6e8d5120000", "spawn by definition / instance names: entry prologue"},
+		{0x68e440,"d0764b0000714b0000704b00e0704b00c06f4b00b06f4b00f06f4b00c0754b00", "CSmartEntMgr vtable: destructor, update, allocate, reset, clear, count, at, append"},
 		{0x484069,"02889620020000e86b17fcff8b108bc8ff5204e88f750d", "CMap::LoadZone: loading bit 2, camera getter call, camera vt+4, clock getter"},
 		{0x4868f4,"bb14b8700033f6eb038d490083fefc7e0783fe10", "zone-loaded finish: the camera anchor walks the controller hero table from slot 0"},
 		{0x486968,"e873eefbff8b10578bc8ff5274", "zone-loaded finish: camera vt+0x74 init with the first resolved hero"},

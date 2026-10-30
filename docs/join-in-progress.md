@@ -379,3 +379,25 @@ What only a live round can prove: that the restored camera init and the frame-0
 epoch leave the first four checksum periods equal on both PCs with movement,
 and that the E2 AI-hero displacement (run 2 slot 3) was downstream of the same
 two terms.
+
+Follow-up 5 (probe round 2): with the camera and the rings canonical, the joiner
+still placed four more AI actors than the host at E1 (brains 16 vs 12 at "zone
+started", four extra 7-draw actor groups before frame 0 and two more at frame 0)
+and made the actor touch-nudge draws (`0x42974d`) at E2. A visited zone is
+restored from its record: the live actors through the dynamic list (equal on
+both peers) and the dormant monsters its spawners stored as CSmartEntMgr
+records, which only the manager's update (vt+4 `0x4b7100`: the records inside
+a box around the camera, 750 units ahead, 40 per call from a round-robin
+cursor) respawns - from the game update every tick (`0x46f2df`), including the
+ticks each peer spends waiting at the barrier before frame 0 with a camera that
+drifts differently. During a late restart the call site hands the game update
+a stand-in whose update does nothing, from the zone load to the frame-0 epoch,
+where the real manager's cursor goes to 0 on every peer and the first respawn
+runs in lockstep from the re-anchored camera. Logs: `the dormant-entity
+respawn (CSmartEntMgr update) is held from the zone load until the first shared
+frame` and `the dormant-entity respawn resumes at the first shared frame (N
+update(s) held; M dormant record(s), cursor C -> 0)`. The probe adds
+`smart=n: cursor: held:` to every snapshot and, from a jump at the spawn-by-
+names entry `0x4612e0`, one `jip spawn: phase= frame= n= caller= def= inst=
+at= draws=` line per entity the zone spawns (bounded, 2048 per epoch);
+`scripts/jip_components.py HOST.log GUEST.log --mode spawn` names the extras.
