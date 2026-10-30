@@ -30,6 +30,14 @@ __declspec(naked) void call_through_bridge() {
 // builds that frame (0x40 bytes filled with 0xee), enters the bridge through a thunk that pops its own return
 // address (so the bridge sees exactly a JMP entry), and the bridge's resume (0x6095aa in retail) is redirected to a
 // stub that jumps back behind the thunk call.
+unsigned getter_calls=0;unsigned char getter_object[16]{};
+void* __cdecl fake_getter() { ++getter_calls;return getter_object; }
+join_in_progress_core::draw_trace fixture_trace;
+__declspec(naked) void draw_resume_stub() { __asm { ret } }
+const void* draw_bridge_target=reinterpret_cast<const void*>(&join_in_progress::draw_trace_bridge);
+// `call dword ptr [draw_bridge_target]` is 6 bytes: the bridge's [esp] (the caller's return) is this function + 6.
+__declspec(naked) void draw_probe() { __asm { call dword ptr [draw_bridge_target]
+                                             ret } }
 const void* stamp_bridge_target=reinterpret_cast<const void*>(&join_in_progress::prepare_opcode_bridge);
 std::uint32_t stamp_return=0;
 unsigned char stamp_frame[0x40]{};unsigned stamp_eax=0;
@@ -146,6 +154,48 @@ void run() {
     join_in_progress::advance(s,true,nullptr);
     assert(!machine.find(remote) && drops==1);
     machine.reset();
+    // latejoin-residue P1: the two zone-load bridges, entered by CALL exactly as installed (their getters redirected
+    // to counters that return a fake object), take an epoch only while a late restart is armed, through the real
+    // retail 0x560150; the frame-0 epoch then ends the segment epochs.
+    join_in_progress::zone_load_entry_target_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_getter));
+    join_in_progress::zone_start_entry_target_at=unsigned(reinterpret_cast<std::uintptr_t>(&fake_getter));
+    const auto load_bridge=reinterpret_cast<void*(__cdecl*)()>(&join_in_progress::zone_load_entry_bridge);
+    const auto start_bridge=reinterpret_cast<void*(__cdecl*)()>(&join_in_progress::zone_start_entry_bridge);
+    join_in_progress::late_restart=false;join_in_progress::restart.disarm();
+    *seed=0x33333333u;*count=44;
+    assert(load_bridge()==&getter_object && getter_calls==1 && *seed==0x33333333u && *count==44); // not a late restart: untouched
+    join_in_progress::late_restart=true;join_in_progress::restart.arm();
+    assert(start_bridge()==&getter_object && getter_calls==2 && *seed==native_seed && *count==0);
+    *seed=0x44444444u;*count=5;
+    assert(load_bridge()==&getter_object && getter_calls==3 && *seed==native_seed && *count==0);
+    *frame=0;join_in_progress::frame_gate_reseed();
+    *seed=0x55555555u;*count=7;
+    assert(start_bridge()==&getter_object && getter_calls==4 && *seed==0x55555555u && *count==7); // after frame 0: no segment epoch
+    // latejoin-residue P2: the AI brain free ring on a synthetic stock pool: used ring -> identity through retail
+    // 0x522f70 when every brain is free; left alone with one brain allocated.
+    auto* pool=reinterpret_cast<unsigned char*>(brain_pool_stock);
+    put(pool,brain_ring_write,5);put(pool,brain_ring_read,5);put(pool,brain_ring_free,32);
+    for(unsigned i=0;i<32;++i) put(pool,0xc384+4*i,unsigned((i*7)%32));
+    join_in_progress::late_restart=true;join_in_progress::restart.arm();
+    join_in_progress::canonical_brain_ring();
+    assert(*reinterpret_cast<int*>(pool+brain_ring_write)==0 && *reinterpret_cast<int*>(pool+brain_ring_read)==0 && *reinterpret_cast<int*>(pool+brain_ring_free)==32);
+    for(unsigned i=0;i<32;++i) assert(*reinterpret_cast<unsigned*>(pool+0xc384+4*i)==i);
+    put(pool,brain_ring_write,3);put(pool,brain_ring_read,4);put(pool,brain_ring_free,31);put(pool,0xc384,9u);
+    join_in_progress::canonical_brain_ring();
+    assert(*reinterpret_cast<int*>(pool+brain_ring_read)==4 && *reinterpret_cast<unsigned*>(pool+0xc384)==9u); // one brain allocated: untouched
+    join_in_progress::late_restart=false;join_in_progress::restart.disarm();
+    // latejoin-residue P3: the draw bridge, entered through a CALL from the probe (the same frame shape as the JMP at
+    // 0x560090: [esp] = the caller's return address), notes the normalised caller and the count after the displaced
+    // increment, then resumes (redirected to a stub returning to the probe); the wrapper returns are normalised.
+    join_in_progress::probe_enabled=true;join_in_progress::draws=&fixture_trace;
+    join_in_progress::draw_resume_at=unsigned(reinterpret_cast<std::uintptr_t>(&draw_resume_stub));
+    *count=10;*frame=7;
+    draw_probe();
+    assert(*count==11 && fixture_trace.pending()==1);
+    assert(fixture_trace.ring[0].caller==unsigned(reinterpret_cast<std::uintptr_t>(&draw_probe))+6 && fixture_trace.ring[0].count==11 && fixture_trace.ring[0].frame==7);
+    join_in_progress::flush_draws("fixture");
+    assert(fixture_trace.pending()==0);
+    join_in_progress::probe_enabled=false;join_in_progress::draws=nullptr;
     std::cout<<"PASS canonical restart: construction image taken through the bridge, restored only for a late-join cohort restart (lobby START epoch and foreign vtable refused), retail 0x560150 reseeds the synchronized stream once at frame 0 through the frame-gate bridge, 0x47 stamp bridge entered by JUMP writes opcode 0x47 and tail 0/marker with no other byte touched, a given-up added seat is dropped natively (codes 0x10ce/0x10cf) and a pending one is not\n";
 }
 }

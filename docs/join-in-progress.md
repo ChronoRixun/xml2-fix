@@ -336,6 +336,32 @@ The fix:
    joiner gets the stock drop notice and can join again; a never-added pending seat is
    simply freed.
 
+6. **Zone-load RNG epochs (latejoin-residue P1).** Retail draws the synchronized
+   stream before frame 0 while the zone loads and starts (loading-screen chooser
+   `0x487000`, spawner store `0x48adc0`, the touched nudge `0x498ef0`, drops
+   `0x46e490`, AI), and a warm host and a cold joiner reach those draws from
+   different states. A late restart therefore takes an epoch at CMap::LoadMap entry
+   (`0x484108`, the `call 0x4457e0` after the loading bits) and at the zone-loaded
+   finish entry (`0x4867fe`, its first call `0x596890`): call-shape bridges that
+   keep the site's return address and tail-jump to the getter, gated on the late
+   restart being armed and frame 0 not yet taken. Lobby STARTs and ordinary zone
+   transitions never arm.
+7. **AI brain free ring (P2).** The AI system's 32-entry ring (`0x78ba14`
+   +0xc384[32], write/read/free at +0xc408/+0xc40c/+0xc410) is only ordered by the
+   constructor (`0x522f70`); at a late restart's zone load, with every brain free,
+   it goes back to identity through that retail init on the stock pool (a relocated
+   e4 pool is left to the e4 core). Brain and world generations are untouched.
+8. **Probe (P3, `[Dev] LateJoinProbe=1`, off by default).** `jip snapshot:
+   where=...` lines at every milestone (deferred start, mode-2 load, zone load
+   entry/epoch, zone start/epoch, zone started, frame 0 (+epoch), frame N samples)
+   with the native frame, session phases, clock, game time, both RNG streams, the
+   world and brain rings, the camera and each hero's handle/brain/controller/flags/
+   transform/health; and `jip rng: phase= frame= count= caller=` lines from a
+   bounded ring (8192) fed by a jump at the synchronized draw entry `0x560090`
+   (wrapper returns `0x5601bd`/`0x5601fb`/`0x56023f` normalised to the real
+   caller), flushed at the milestones off the draw path.
+   `scripts/jip_components.py HOST.log GUEST.log --mode snapshot|rng` pairs them.
+
 Logs: `the game constructed its camera; pristine image kept`, `canonical
 restart - synchronized RNG epoch armed`, `canonical restart (<role>) - the
 camera is back at its constructed state ... (was yaw ... mode ...)`, `first

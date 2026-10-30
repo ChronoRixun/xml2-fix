@@ -444,6 +444,28 @@ int main(int argc, char** argv)
 		check(!m.find(&r1) && !m.holding() && m.pending(&r2), "edge: the streaming joiner left - its seat is free, nothing held, the second still waits");
 		check(m.defer_add(&r3, 3, false, 50), "edge: a replacement can take the freed seat");
 	}
+	{
+		// latejoin-residue P1/P2/P3 decisions.
+		restart_reset r;
+		check(!r.should_reseed_segment(), "P1: no segment epoch unless the cohort load armed the restart");
+		r.arm();
+		check(r.should_reseed_segment() && r.should_reseed_segment() && r.segment_reseeds == 2, "P1: LoadMap entry and the zone start each take an epoch while armed");
+		check(r.should_reseed(0) && !r.should_reseed_segment(), "P1: after frame 0 took the final epoch no segment epoch follows");
+		check(brain_ring_reset_wanted(0, 32, 32) && !brain_ring_reset_wanted(0, 31, 32) && !brain_ring_reset_wanted(2, 32, 32) && !brain_ring_reset_wanted(0, 0, 0),
+		      "P2: the brain ring resets only on the stock pool with every brain free");
+		const std::uint32_t direct[4]{0x4990a5, 1, 2, 3}, wrapped_float[4]{0x5601bd, 0x4870c5, 2, 3}, wrapped_int[4]{0x5601fb, 0, 0, 0x48aea7}, wrapped_int_b[4]{0x56023f, 0, 0, 0x46e605};
+		check(normalise_draw_caller(direct, 0x5601bd, 0x5601fb, 0x56023f) == 0x4990a5, "P3: a tail-jumped bool draw names its caller directly");
+		check(normalise_draw_caller(wrapped_float, 0x5601bd, 0x5601fb, 0x56023f) == 0x4870c5, "P3: the float wrapper's caller is one frame up");
+		check(normalise_draw_caller(wrapped_int, 0x5601bd, 0x5601fb, 0x56023f) == 0x48aea7 && normalise_draw_caller(wrapped_int_b, 0x5601bd, 0x5601fb, 0x56023f) == 0x46e605,
+		      "P3: the int wrapper's caller is three frames up (esi/edi pushed)");
+		auto* trace = new draw_trace();
+		for (unsigned i = 0; i < draw_ring_size + 10; ++i) trace->note(i, i, std::uint16_t(i));
+		check(trace->pending() == draw_ring_size && trace->overflow == 10 && trace->ring[trace->flushed & (draw_ring_size - 1)].caller == 10,
+		      "P3: the draw ring is bounded; the oldest unflushed entries are dropped and counted");
+		delete trace;
+		auto guarded = [](std::uint32_t va) { return std::any_of(join_in_progress_rules::guards.begin(), join_in_progress_rules::guards.end(), [&](const auto& g) { return g.va == va; }); };
+		check(guarded(0x484101) && guarded(0x4867f8) && guarded(0x522f70) && guarded(0x560090), "P1-P3: the zone-load sites, the ring init and the draw entry are guarded");
+	}
 	std::printf("%d PASS / %d FAIL\n", passes, failures);
 	return failures ? 1 : 0;
 }

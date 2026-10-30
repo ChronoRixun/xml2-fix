@@ -296,6 +296,39 @@ namespace join_in_progress_core
 		}
 		// Before the native campaign start of a cohort restart: restore only with an image, only for a restart.
 		bool should_restore(bool cohort_restart) const { return snapshot && cohort_restart; }
+		// P1: inside a late restart's zone load, each deterministic segment (LoadMap entry, zone start) starts from the
+		// native seed: armed by the cohort load, before frame 0 took the final epoch.
+		unsigned segment_reseeds = 0;
+		bool should_reseed_segment() { if (!armed || reseeded) return false; ++segment_reseeds; return true; }
+	};
+	// P2: the AI brain free ring goes back to identity only on the stock pool (stage 0) and only when every brain is free.
+	inline bool brain_ring_reset_wanted(std::uint32_t stage, std::int32_t free_count, std::uint32_t controllers)
+	{
+		return stage == 0 && controllers != 0 && free_count == std::int32_t(controllers);
+	}
+	// P3: the synchronized-draw caller trace. The wrappers 0x560190 (tail jump), 0x5601b0 (call, returns 0x5601bd) and
+	// 0x5601e0 (call after push esi/edi, returns 0x5601fb or 0x56023f) are normalised to the code that asked for
+	// randomness: [sp] is the return address at 0x560090 entry, sp[1] / sp[3] the outer frames.
+	inline std::uint32_t normalise_draw_caller(const std::uint32_t* sp, std::uint32_t float_return, std::uint32_t int_return_a, std::uint32_t int_return_b)
+	{
+		const std::uint32_t ret = sp[0];
+		if (ret == float_return) return sp[1];
+		if (ret == int_return_a || ret == int_return_b) return sp[3];
+		return ret;
+	}
+	struct draw_entry_record { std::uint32_t caller = 0, count = 0; std::uint16_t frame = 0; std::uint8_t phase = 0; };
+	constexpr unsigned draw_ring_size = 8192; // power of two; ~128 KiB, static
+	struct draw_trace
+	{
+		std::array<draw_entry_record, draw_ring_size> ring{};
+		unsigned head = 0, flushed = 0, overflow = 0;
+		std::uint8_t phase = 0;
+		void note(std::uint32_t caller, std::uint32_t count, std::uint16_t frame)
+		{
+			if (head - flushed >= draw_ring_size) { ++overflow; ++flushed; } // the oldest unflushed entry is lost, counted
+			ring[head++ & (draw_ring_size - 1)] = {caller, count, frame, phase};
+		}
+		unsigned pending() const { return head - flushed; }
 	};
 	// The pristine image is only meaningful when taken right after construction: never from a running camera.
 	inline bool snapshot_wanted(bool constructed_before_the_fix) { return !constructed_before_the_fix; }

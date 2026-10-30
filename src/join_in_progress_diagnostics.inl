@@ -72,6 +72,7 @@ void __cdecl checksum_produced(const std::uint32_t* regs) {
         logger::write("jip checksum: epoch=%u sample=%u diagnostic read fault; native checksum unchanged", checksum_window.epoch, checksum_window.produced);
     }
     checksum_heroes = {}; checksum_camera_readable = false;
+    probe_period(std::uint16_t(regs[1] & 0xffff));
 }
 void __cdecl checksum_heads_observe(void* m) {
     if (!checksum_window.active(GetTickCount()) || checksum_window.compared >= join_in_progress_diagnostics::periods) return;

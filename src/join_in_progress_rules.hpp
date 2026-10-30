@@ -219,7 +219,31 @@ namespace join_in_progress_rules
 	// The host's native participant drop (thiscall session; record, notice code, removal reason, code, 0): the retail
 	// slow-player guard's call (0x55933c) with the same codes. A seat given up after its native add is released with it.
 	constexpr std::uint32_t participant_drop = 0x6133a0, drop_notice_code = 0x10ce, drop_removal_code = 0x10cf;
-	inline constexpr std::array<guard, 107> guards{{
+	// latejoin-residue P1/P2/P3 (O:/Projects/agent-work/latejoin-residue/RESULT.md): synchronized draws BEFORE frame 0
+	// make zone choices (loading-screen chooser 0x487000, spawner 0x48adc0, the touched nudge 0x498ef0, drops 0x46e490,
+	// AI), so a late restart reseeds at the start of each deterministic segment: CMap::LoadMap entry (0x484108, the
+	// `call 0x4457e0` after the loading bits) and the zone-loaded finish entry (0x4867fe, its first call 0x596890),
+	// both argument-less cdecl getters replaced by CALL-shape bridges that keep the site's return address. The AI
+	// system's 32-entry brain free ring (0x78ba14 +0xc384[32], write +0xc408, read +0xc40c, free +0xc410) is only
+	// initialised by the constructor (0x522f70, thiscall on the pool base); at a late restart's zone load, with every
+	// brain free, it goes back to identity order. The probe ([Dev] LateJoinProbe=1) jumps from the synchronized
+	// draw entry 0x560090 (`inc dword [0x7ad8b4]`, 6 bytes; resume 0x560096) into a bounded caller ring.
+	constexpr std::uint32_t zone_load_entry_call = 0x484108, zone_load_entry_target = 0x4457e0;
+	inline constexpr std::array<unsigned char, 5> zone_load_entry_original{0xe8,0xd3,0x16,0xfc,0xff};
+	constexpr std::uint32_t zone_start_entry_call = 0x4867fe, zone_start_entry_target = 0x596890;
+	inline constexpr std::array<unsigned char, 5> zone_start_entry_original{0xe8,0x8d,0x00,0x11,0x00};
+	constexpr std::uint32_t brain_ring_init = 0x522f70, brain_pool_stock = 0x78ba14, brain_ring_write = 0xc408, brain_ring_read = 0xc40c,
+		brain_ring_free = 0xc410, brain_ring_bitmap = 0xc414, brain_slots = 32;
+	constexpr std::uint32_t draw_entry = 0x560090, draw_resume = 0x560096, draw_wrapper_float_return = 0x5601bd,
+		draw_wrapper_int_return_a = 0x5601fb, draw_wrapper_int_return_b = 0x56023f;
+	inline constexpr std::array<unsigned char, 6> draw_entry_original{0xff,0x05,0xb4,0xd8,0x7a,0x00};
+	constexpr std::uint32_t world_static = 0x778b70, world_ring_write = 0x808, world_ring_read = 0x80c, world_ring_free = 0x810, world_live = 0x834;
+	inline constexpr std::array<guard, 112> guards{{
+		{0x484101,"808e2002000003e8d316fcff8b108bc8ff5204e8f7740d00", "CMap::LoadMap: loading bits, camera getter call, camera vt+4, clock getter"},
+		{0x4867f8,"535556578be9e88d0011008b106a018bc8ff5224e8cf74fe", "zone-loaded finish: prologue and its first call (CAutoMap getter) before players are placed"},
+		{0x522f70,"5633f65789b108c4000089b10cc4000089b110c4000033d2", "AI system free-ring init: write/read/free reset then 0..31 pushed"},
+		{0x522a10,"8bd18b820cc400008b848284c3000056", "AI brain alloc pops the free ring at the read index"},
+		{0x560090,"ff05b4d87a008b0d74086e00", "synchronized draw entry: count then seed"},
 		{0x6133a0,"568b74240885f6578bf974318bcee85d", "native participant drop: notice (index, codes) then the lost-participant removal"},
 		{0x60959a,"8d4c24188d4424106aff51c6442430478944242066c74424280800c644242e01", "0x47 prepare body (8 bytes, two unused tail bytes at body+6) and its opcode write at [esp+0x30]"},
 		{0x445804,"0905ac7671006a00b9d0717100c744240c00000000e8c2f1ffff", "camera singleton: guard bit 0x7176ac, this = 0x7171d0, the one-time constructor call"},

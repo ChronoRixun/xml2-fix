@@ -81,5 +81,72 @@ def main(argv):
     return 1 if bad else 0
 
 
+SNAPSHOT = re.compile(r'jip snapshot: where=(?P<where>[^ ]+(?: [^ ]+)*?) (?P<fields>(?:[a-z\[\]0-9_]+[:=]\S+ ?)+)$')
+RNG = re.compile(r'jip rng: phase=(?P<phase>\d+) frame=(?P<frame>\d+) count=(?P<count>\d+) caller=(?P<caller>[0-9a-f]{8})')
+
+
+def parse_snapshots(path):
+    out = {}
+    for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
+        if 'jip snapshot: where=' not in line:
+            continue
+        body = line.split('jip snapshot: ', 1)[1]
+        where, _, rest = body.partition(' frame=') if ' frame=' in body else body.partition(' hero[')
+        where = where[len('where='):]
+        key = where if 'hero[' not in body or ' frame=' in body else where + ' ' + rest.split('=')[0]
+        fields = {}
+        for tok in (('frame=' + rest) if ' frame=' in body else rest).split():
+            if '=' in tok:
+                k, v = tok.split('=', 1); fields[k] = v
+        out.setdefault(key, []).append(fields)
+    return out
+
+
+def snapshot_mode(host, guest):
+    h, g = parse_snapshots(host), parse_snapshots(guest)
+    bad = 0
+    for key in [k for k in h if k in g]:
+        for i, (a, b) in enumerate(zip(h[key], g[key])):
+            diff = {k: (a.get(k), b.get(k)) for k in sorted(set(a) | set(b)) if a.get(k) != b.get(k)}
+            # the clock's raw now/pause and the paused flag differ harmlessly (play-time accounting only)
+            harmless = {k: v for k, v in diff.items() if k.startswith('clock') or k == 'session'}
+            real = {k: v for k, v in diff.items() if k not in harmless}
+            print(f'{key} [{i}]: ' + ('AGREE' if not real else 'DIFFERS ' + ', '.join(f'{k} host {v[0]} guest {v[1]}' for k, v in real.items())) + (f' (harmless: {", ".join(harmless)})' if harmless else ''))
+            bad += bool(real)
+    print(f'{bad} differing snapshot(s)')
+    return 1 if bad else 0
+
+
+def parse_rng(path):
+    out = {}
+    for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
+        m = RNG.search(line)
+        if m:
+            out[(int(m['phase']), int(m['count']))] = (int(m['frame']), m['caller'])
+    return out
+
+
+def rng_mode(host, guest):
+    h, g = parse_rng(host), parse_rng(guest)
+    phases = sorted({k[0] for k in h} | {k[0] for k in g})
+    first = None
+    for ph in phases:
+        hk = sorted(k for k in h if k[0] == ph); gk = sorted(k for k in g if k[0] == ph)
+        print(f'phase {ph}: host {len(hk)} draw(s), guest {len(gk)} draw(s)')
+        for key in sorted(set(hk) | set(gk)):
+            a, b = h.get(key), g.get(key)
+            if a is None or b is None or a[1] != b[1]:
+                first = first or (key, a, b)
+                print(f'  first difference at phase {key[0]} count {key[1]}: host {a} guest {b}')
+                break
+    if first is None:
+        print('every synchronized draw agrees (phase, count, caller)')
+    return 1 if first else 0
+
+
+if __name__ == '__main__' and '--mode' in sys.argv:
+    mode = sys.argv[sys.argv.index('--mode') + 1]
+    sys.exit(snapshot_mode(sys.argv[1], sys.argv[2]) if mode == 'snapshot' else rng_mode(sys.argv[1], sys.argv[2]))
+
 if __name__ == '__main__':
     sys.exit(main(sys.argv))

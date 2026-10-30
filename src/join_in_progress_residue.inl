@@ -1,0 +1,178 @@
+// Included in join_in_progress's game-thread namespace, after frame_gate_run_bridge. latejoin-residue P1/P2/P3
+// (O:/Projects/agent-work/latejoin-residue/RESULT.md): canonical synchronized-RNG epochs inside a late restart's zone
+// load, the AI brain free ring back to identity order, and the development-only probe ([Dev] LateJoinProbe=1).
+
+// ---- P1: a synchronized-RNG epoch at the start of each deterministic segment of the zone load --------------------
+void segment_reseed(const char* segment)
+{
+	if (!restart_reset_enabled || !late_restart || !restart.should_reseed_segment()) return;
+	__try
+	{
+		const auto count = *reinterpret_cast<const std::uint32_t*>(rng_count), seed = *reinterpret_cast<const std::uint32_t*>(rng_seed);
+		fn<void(__cdecl*)(std::uint32_t, int)>(seed_setter)(native_seed, 1); // the synchronized stream: seed, count 0
+		logger::write("join in progress: canonical restart - synchronized RNG epoch at %s (this PC had drawn %u since the last epoch, seed %08x); every peer continues from %06x with count 0",
+			segment, count, seed, native_seed);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		logger::write_once("jip:segment-reseed-fault", "join in progress: the zone-load RNG epoch faulted - this segment keeps the running stream");
+	}
+}
+// ---- P2: the AI brain free ring back to identity order at a late restart's zone load --------------------------------
+void canonical_brain_ring()
+{
+	if (!restart_reset_enabled || !late_restart || !restart.armed) return;
+	const auto& d = actor_ai::installed();
+	const std::uint32_t stage = d.stage, controllers = d.controllers ? d.controllers : brain_slots;
+	auto* pool = reinterpret_cast<std::uint8_t*>(d.primary_base ? d.primary_base : brain_pool_stock);
+	__try
+	{
+		const auto free_count = at<std::int32_t>(pool, brain_ring_free), read = at<std::int32_t>(pool, brain_ring_read), write = at<std::int32_t>(pool, brain_ring_write);
+		if (!join_in_progress_core::brain_ring_reset_wanted(stage, free_count, controllers))
+		{
+			logger::write("join in progress: canonical restart - the AI brain free ring is left as it is (stage %u, %d of %u brains free, read %d write %d)",
+				stage, free_count, controllers, read, write);
+			return;
+		}
+		fn<void(__thiscall*)(void*)>(brain_ring_init)(pool); // retail 0x522f70: ring = 0..31, read = write = 0, free = 32
+		logger::write("join in progress: canonical restart - AI brain free ring back to identity order (was read %d write %d); brain generations untouched", read, write);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		logger::write_once("jip:brain-ring-fault", "join in progress: the AI brain ring reset faulted - left as it is");
+	}
+}
+// ---- P3: the probe ([Dev] LateJoinProbe=1): milestone snapshots and the synchronized-draw caller trace -------------
+bool probe_enabled = false;
+join_in_progress_core::draw_trace* draws = nullptr; // allocated once when the probe is on
+bool probe_read(std::uintptr_t address, void* out, std::size_t size)
+{
+	__try { std::memcpy(out, reinterpret_cast<const void*>(address), size); return true; }
+	__except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+template<class T> T probe_at(std::uintptr_t address) { T v{}; probe_read(address, &v, sizeof v); return v; }
+void snapshot(const char* where)
+{
+	if (!probe_enabled) return;
+	__try
+	{
+		const auto frame = probe_at<std::uint16_t>(native_frame);
+		const auto sess = reinterpret_cast<std::uintptr_t>(session());
+		const auto clock = reinterpret_cast<std::uintptr_t>(fn<getter_t>(clock_getter)());
+		const auto pause = reinterpret_cast<std::uintptr_t>(fn<getter_t>(pause_getter)());
+		const auto& d = actor_ai::installed();
+		const auto pool = d.primary_base ? std::uintptr_t(d.primary_base) : std::uintptr_t(brain_pool_stock);
+		char zone[zone_name_size + 1]{};
+		probe_read(zones_static + zones_name_at, zone, zone_name_size);
+		logger::write("jip snapshot: where=%s frame=%u session=phases:%08x/%08x/%02x clock=step:%08x%08x now:%08x%08x pause:%08x%08x paused:%u game=t:%08x dt:%08x mode:%u rng=%08x/%u/%08x world=w:%d r:%d f:%d live:%d brains=w:%d r:%d f:%d bits:%08x cam=yaw:%08x mode:%u hist:%08x/%08x flags:%08x pause=%u/%u zone=%s/%02x ai=%08x/%08x/%08x/%08x",
+			where, unsigned(frame), sess ? probe_at<std::uint32_t>(sess + 0x424) : 0, sess ? probe_at<std::uint32_t>(sess + 0x438) : 0, sess ? probe_at<std::uint8_t>(sess + 0x445) : 0,
+			probe_at<std::uint32_t>(clock + 0x34), probe_at<std::uint32_t>(clock + 0x30), probe_at<std::uint32_t>(clock + 0x3c), probe_at<std::uint32_t>(clock + 0x38),
+			probe_at<std::uint32_t>(clock + 0x14), probe_at<std::uint32_t>(clock + 0x10), probe_at<std::uint8_t>(clock + 0x20),
+			probe_at<std::uint32_t>(game_static + 0x3e8), probe_at<std::uint32_t>(game_static + 0x3ec), probe_at<std::uint8_t>(game_static + 0x268),
+			probe_at<std::uint32_t>(rng_seed), probe_at<std::uint32_t>(rng_count), probe_at<std::uint32_t>(0x7ad8b0),
+			probe_at<std::int32_t>(world_static + world_ring_write), probe_at<std::int32_t>(world_static + world_ring_read), probe_at<std::int32_t>(world_static + world_ring_free), probe_at<std::int32_t>(world_static + world_live),
+			probe_at<std::int32_t>(pool + brain_ring_write), probe_at<std::int32_t>(pool + brain_ring_read), probe_at<std::int32_t>(pool + brain_ring_free), probe_at<std::uint32_t>(pool + brain_ring_bitmap),
+			probe_at<std::uint32_t>(camera_object + camera_yaw_at), probe_at<std::uint32_t>(camera_object + camera_mode_at), probe_at<std::uint32_t>(camera_object + camera_yaw_history_at), probe_at<std::uint32_t>(camera_object + camera_yaw_history_at + 4), probe_at<std::uint32_t>(camera_object + camera_flags_at),
+			pause ? probe_at<std::uint8_t>(pause + 0x64) : 0, pause ? probe_at<std::uint8_t>(pause + 0x6c) : 0, zone, probe_at<std::uint8_t>(zones_static + zones_loading_at),
+			probe_at<std::uint32_t>(0x78a9e4), probe_at<std::uint32_t>(0x78a9f8), probe_at<std::uint32_t>(0x78aa04), probe_at<std::uint32_t>(0x78a9e8));
+		for (int k = 0; k < 4; ++k)
+		{
+			const std::uint32_t handle = probe_at<std::uint32_t>(game_static + game_party + 4 * k);
+			if (!handle) continue;
+			auto* actor = static_cast<std::uint8_t*>(fn<entity_of_t>(entity_of_handle)(&handle));
+			if (!actor) { logger::write("jip snapshot: where=%s hero[%d]=handle:%08x actor:none", where, k, handle); continue; }
+			const auto a = reinterpret_cast<std::uintptr_t>(actor);
+			logger::write("jip snapshot: where=%s hero[%d]=handle:%08x own:%08x brain:%08x ctl:%d ai:%08x xyz:%08x,%08x,%08x ang:%08x,%08x,%08x hp:%08x",
+				where, k, handle, probe_at<std::uint32_t>(a + 0x1c), probe_at<std::uint32_t>(a + 0x7dc), probe_at<std::int32_t>(a + actor_controller), probe_at<std::uint32_t>(a + hero_ai_flags),
+				probe_at<std::uint32_t>(a + 0x20), probe_at<std::uint32_t>(a + 0x24), probe_at<std::uint32_t>(a + 0x28), probe_at<std::uint32_t>(a + 0x2c), probe_at<std::uint32_t>(a + 0x30), probe_at<std::uint32_t>(a + 0x34), probe_at<std::uint32_t>(a + 0x27c));
+		}
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) { logger::write("jip snapshot: where=%s (read fault)", where); }
+}
+void __cdecl note_draw(const std::uint32_t* sp)
+{
+	if (!draws) return;
+	const auto caller = join_in_progress_core::normalise_draw_caller(sp, draw_wrapper_float_return, draw_wrapper_int_return_a, draw_wrapper_int_return_b);
+	draws->note(caller, *reinterpret_cast<const std::uint32_t*>(rng_count) + 1, *reinterpret_cast<const std::uint16_t*>(native_frame));
+}
+std::uint32_t draw_resume_at = draw_resume; // mutable for the owned native fixture only
+// In place of `inc dword ptr [0x7ad8b4]` at 0x560090 (the synchronized draw's entry; entered by JUMP, [esp] = the
+// caller's return address): the note, the displaced increment, then the rest of the draw.
+__declspec(naked) void draw_trace_bridge()
+{
+	__asm {
+		pushfd
+		pushad
+		lea eax, [esp+24h]
+		push eax
+		call note_draw
+		add esp, 4
+		popad
+		popfd
+		inc dword ptr ds:[0x7ad8b4]
+		jmp dword ptr [draw_resume_at]
+	}
+}
+// Off the draw path (the game thread, at the milestones): the entries since the last flush, one line each.
+void flush_draws(const char* where)
+{
+	if (!draws) return;
+	unsigned n = 0;
+	while (draws->flushed != draws->head && n++ < 4096)
+	{
+		const auto& e = draws->ring[draws->flushed++ & (join_in_progress_core::draw_ring_size - 1)];
+		logger::write("jip rng: phase=%u frame=%u count=%u caller=%08x", unsigned(e.phase), unsigned(e.frame), e.count, e.caller);
+	}
+	if (draws->overflow) { logger::write("jip rng: %s - %u draw(s) lost to the ring", where, draws->overflow); draws->overflow = 0; }
+}
+void probe_milestone(const char* where, std::uint8_t phase)
+{
+	if (!probe_enabled) return;
+	flush_draws(where);
+	if (draws) draws->phase = phase;
+	snapshot(where);
+}
+void probe_period(std::uint16_t frame)
+{
+	if (!probe_enabled || !probe_epoch_late) return;
+	char where[32];
+	std::snprintf(where, sizeof where, "frame %u", unsigned(frame));
+	probe_milestone(where, 4);
+}
+// ---- the two zone-load bridges (CALL replacements of argument-less cdecl getters; the site's return address stays)
+void __cdecl zone_load_entry_notice()
+{
+	if (late_restart && restart.armed) { probe_epoch_late = true; probe_milestone("zone load entry", 1); }
+	segment_reseed("the zone load (CMap::LoadMap)");
+	canonical_brain_ring();
+	if (late_restart && restart.armed) snapshot("zone load epoch");
+}
+void __cdecl zone_start_entry_notice()
+{
+	if (late_restart && restart.armed) probe_milestone("zone start", 2);
+	segment_reseed("the zone start (before the players are placed)");
+	if (late_restart && restart.armed) snapshot("zone start epoch");
+}
+std::uint32_t zone_load_entry_target_at = zone_load_entry_target, zone_start_entry_target_at = zone_start_entry_target; // mutable for the fixture only
+__declspec(naked) void zone_load_entry_bridge()
+{
+	__asm {
+		pushfd
+		pushad
+		call zone_load_entry_notice
+		popad
+		popfd
+		jmp dword ptr [zone_load_entry_target_at]
+	}
+}
+__declspec(naked) void zone_start_entry_bridge()
+{
+	__asm {
+		pushfd
+		pushad
+		call zone_start_entry_notice
+		popad
+		popfd
+		jmp dword ptr [zone_start_entry_target_at]
+	}
+}
