@@ -124,10 +124,12 @@ void party_tests(const script_functions_rules::func_entry* registration) {
         for(int p=1;p<=4;++p) assert(hidden("lc_p"+std::to_string(p)+"_kick") && off("lc_p"+std::to_string(p)+"_kick"));
     }
     if(mode=="r8-party-intents") {
-        // The authored usecmd path: only exact canonical commands; 68/70/75 stay native text and post nothing.
+        // Reserved 68/70 and unknown 76 stay native text. Host-only DROP-IN75
+        // is recognized but discarded by Party ownership, never replayed later.
         calls.clear();
-        queue_command("runscript lcOnlineIntent(68)");queue_command("runscript lcOnlineIntent(70)");queue_command("runscript lcOnlineIntent(75)");
-        assert(queued("runscript lcOnlineIntent(68)")==1 && queued("runscript lcOnlineIntent(70)")==1 && queued("runscript lcOnlineIntent(75)")==1);
+        queue_command("runscript lcOnlineIntent(68)");queue_command("runscript lcOnlineIntent(70)");queue_command("runscript lcOnlineIntent(75)");queue_command("runscript lcOnlineIntent(76)");
+        assert(queued("runscript lcOnlineIntent(68)")==1 && queued("runscript lcOnlineIntent(70)")==1 && queued("runscript lcOnlineIntent(75)")==0 && queued("runscript lcOnlineIntent(76)")==1);
+        tick(child.data(),nullptr);assert(hidden("lc_party_confirm_kick") && hidden("lc_party_confirm_leave_host") && party_removed.empty());
         calls.clear();
         queue_command("runscript lcOnlineIntent(72)");tick(child.data(),nullptr);
         assert(queued("runscript lcOnlineIntent(72)")==0 && shown("lc_party_confirm_kick") && texts["lc_kick_name"]=="Kitty" && shown("lc_party_leave_yes") && shown("lc_party_cancel") && shown("lc_p2_selected") && party_focused.back()=="lc_party_cancel");
